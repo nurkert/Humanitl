@@ -1,0 +1,28 @@
+# Allowed internal dependencies per workspace crate (CONVENTIONS.md 3.1,
+# docs/ARCHITECTURE.md 2). Direction points inward only. Adding an entry here
+# requires an ADR naming the concrete second adapter (ADR-015).
+#
+# Deviation from CONVENTIONS.md 3.1, agreed 2026-09-02: humanitl-proxy also
+# depends on humanitl-config because the hold limits (limits.*) live there
+# (ADR-005, HUM-016).
+
+[allow]
+humanitl-core = []
+humanitl-shim = []
+humanitl-config = ["humanitl-core"]
+humanitl-rules = ["humanitl-core"]
+humanitl-findings = ["humanitl-core"]
+humanitl-recorder = ["humanitl-core"]
+humanitl-audit = ["humanitl-core"]
+humanitl-catalog = ["humanitl-core"]
+humanitl-sandbox = ["humanitl-core", "humanitl-config"]
+humanitl-proxy = ["humanitl-core", "humanitl-config", "humanitl-rules", "humanitl-findings", "humanitl-recorder"]
+humanitl-ipc = [
+  "humanitl-core", "humanitl-config", "humanitl-rules", "humanitl-findings",
+  "humanitl-recorder", "humanitl-audit", "humanitl-sandbox", "humanitl-catalog",
+  "humanitl-proxy",
+]
+
+# Wiring-only crates: they may depend on anything, they must contain no domain logic.
+[exempt]
+crates = ["humanitld", "humanitl", "humanitl-xtask"]

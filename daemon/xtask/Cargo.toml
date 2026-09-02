@@ -1,0 +1,18 @@
+[package]
+name = "humanitl-xtask"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Helper crate: generates protobuf code and reference documentation.
+# Outside the dependency rules of CONVENTIONS.md 3.1 and never shipped.
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[dependencies]

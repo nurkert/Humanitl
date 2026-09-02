@@ -1,0 +1,4 @@
+# Intentionally minimal: -D warnings is applied by the Makefile and CI,
+# not forced on every local build.
+[alias]
+xtask = "run --package humanitl-xtask --"

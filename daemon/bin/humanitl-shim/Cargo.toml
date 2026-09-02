@@ -1,0 +1,18 @@
+[package]
+name = "humanitl-shim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# Deliberately NOT inheriting workspace lints: this crate needs `unsafe` for
+# prctl/seccomp and must stay free of tokio and of any workspace dependency.
+[lints.rust]
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[dependencies]
