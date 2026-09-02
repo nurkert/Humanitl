@@ -21,15 +21,50 @@ Issue-Nummer. Vor dem ersten Issue eines Sprints: `BACKLOG.md` Abschnitte 2 bis
    `STRICT=1`, also Code so schreiben, als liefen sie.
 4. **Vier-Augen-Prinzip vor jedem Commit.** Den Diff des Issues von beiden
    externen Reviewern read-only prüfen lassen, parallel:
-   - Antigravity über den Skill `antigravity:review` (Diff der Arbeitskopie)
-   - Codex über den Skill `codex:rescue` mit einem Review-Auftrag auf den Diff
+   - Antigravity über den Claude-Code-Skill `antigravity:ask` bzw.
+     `antigravity:review`; darunter läuft die CLI `agy -p "<Auftrag>"`.
+   - Codex über den Claude-Code-Skill `codex:rescue` mit Review-Auftrag;
+     darunter läuft `codex exec "<Auftrag>"`.
+   Die Skills sind Plugins der Claude-Code-Umgebung, nicht Dateien im Repo.
+   Fehlen sie, gehen die CLI-Aufrufe direkt.
+   Beide lesen `AGENTS.md` (Antigravity zusätzlich `GEMINI.md`, das darauf
+   verweist). Der Auftrag an sie nennt immer konkret, was zu prüfen ist, nach
+   dieser Vorlage:
+
+   > Read-only review of the working-tree diff for issue HUM-xxx "<Titel>".
+   > Specification: `backlog/sprint-N.md` heading `## HUM-xxx`. Check every
+   > acceptance criterion against the code, run build and tests, then report
+   > confirmed defects only, ranked blocking/major/minor, with file, line and
+   > concrete fix. Focus on: <die zwei bis drei heikelsten Punkte des Issues>.
+   > Do not modify files.
+
    Jeden Befund einzeln bewerten: zutreffend, teilweise, nicht zutreffend, mit
    einem Satz Begründung. Zutreffende Befunde vor dem Commit beheben, dann
    `make check` erneut. Nicht übernommene Befunde kurz im Commit-Body nennen,
    damit die Entscheidung nachvollziehbar bleibt.
+
+   Fällt einer der externen Reviewer aus (Usage-Limit, Auth, Netz), ersetzt
+   ein eigener, frischer Review-Subagent mit demselben Auftrag und `AGENTS.md`
+   als Briefing diesen Reviewer, damit kein Commit blockiert. Nur dann, und nur
+   bis der externe Reviewer wieder antwortet; die Ersatzquelle steht im
+   Commit-Body.
 5. Commit auf eigenem Branch `hum-xxx-kurztitel`, Merge mit `--no-ff` nach
    `main`, Push. `tools/commit-issue.sh` macht Branch, Commit und Merge in
-   einem Schritt. Ein Issue, ein Commit. Nie mehrere Issues in einem Commit.
+   einem Schritt; es braucht die Dateipfade als Argumente und den Commit-Body
+   auf stdin:
+
+   ```sh
+   tools/commit-issue.sh HUM-022 rules-engine "feat(rules): label glob matching" \
+     daemon/crates/rules backlog/CONVENTIONS.md <<'EOF'
+   Was gebaut wurde, in zwei bis vier Sätzen.
+
+   Review: Codex 2 Befunde (1 übernommen, 1 verworfen: ...), Antigravity 1 Befund (übernommen).
+   EOF
+   git push origin main
+   ```
+
+   Ein Issue, ein Implementierungs-Commit plus ein Merge-Commit. Nie mehrere
+   Issues in einem Commit.
 6. Nach dem Push: kurze Zusammenfassung an den Nutzer, was gebaut wurde, was
    die Reviewer fanden, was davon übernommen wurde.
 
@@ -41,6 +76,9 @@ Issue-Nummer. Vor dem ersten Issue eines Sprints: `BACKLOG.md` Abschnitte 2 bis
   zentral, Member-Crates referenzieren sie mit `dep.workspace = true`.
 - Parallel laufende Agenten bekommen disjunkte Pfade. Wo das nicht geht,
   laufen sie nacheinander.
+- Parallel laufende Reviewer bauen in eigene Zielverzeichnisse
+  (`CARGO_TARGET_DIR=daemon/target/review-<name>`), damit sie sich nicht das
+  Cargo-Lock streitig machen.
 
 ## Was der Compiler nicht prüft und wir deshalb selbst prüfen
 

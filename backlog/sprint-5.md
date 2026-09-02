@@ -10,6 +10,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-057 | Ressourcen-Limits und Backpressure | S | HUM-015, HUM-016, HUM-018, HUM-026, HUM-062 |
 | HUM-058 | Fehlerpfade im UI | M | HUM-063, HUM-019, HUM-040, HUM-041, HUM-042, HUM-045, HUM-068 |
 | HUM-059 | Dokumentation | M | alle vorherigen |
+| HUM-086 | Repository auf Englisch | M | HUM-059 |
 | HUM-060 | Release 0.1.0 | S | HUM-053, HUM-059 |
 | HUM-061 | Puffer | L | keine |
 
@@ -835,3 +836,54 @@ Manuelle Abnahme für 0.1.0. Ein Mensch geht die Liste in etwa 60 Minuten auf ei
 - Summe OK / FAIL / SKIP eintragen.
 - Jeder FAIL bekommt ein Issue oder einen Buffer-Log-Eintrag (HUM-061).
 - Protokoll signiert mit Datum, Maschine, Kernel-Version, bwrap-Version, Flutter-Version.
+
+
+## HUM-086 · Repository auf Englisch
+Sprint: 5 · Größe: M · Abhängigkeiten: HUM-059 · Blockiert: HUM-060
+
+### Kontext
+Die Planung entstand auf Deutsch, weil der Gründer so denkt. Ein Open-Source-Projekt mit Anspruch braucht eine englische Codebasis und Dokumentation, damit Beiträge von außen möglich sind. Die Übersetzung passiert einmal, am Ende, wenn die Texte stabil sind.
+
+### Ziel
+Jede Datei im Repository außer `app/l10n/app_de.arb` ist Englisch: `BACKLOG.md`, `backlog/*.md`, `docs/**`, `CLAUDE.md`, `CONTRIBUTING.md`, `AGENTS.md`, `README.md`, Code-Kommentare, Doc-Kommentare, Diagnostic-Texte (`title`, `why`) im Register, Fixture-Kommentare, Skript-Header. Deutsch existiert nur noch als Übersetzung in der ARB-Datei. Ein Lint verhindert Rückfall.
+
+### Nicht-Ziel
+Keine inhaltlichen Änderungen beim Übersetzen. Keine Umbenennung von Bezeichnern (die sind schon Englisch). Keine Übersetzung der git-Historie.
+
+### Betroffene Pfade
+- alle `*.md` außerhalb `app/l10n/`
+- alle `*.rs`, `*.dart`, `*.sh`, `*.py`, `*.toml`, `*.yaml` (Kommentare)
+- `daemon/crates/core-types/src/diagnostics/codes.rs` (Texte)
+- `scripts/ci/lint-docs.sh` (erweitern)
+
+### Spezifikation
+- Reihenfolge: erst Dokumente, dann Code-Kommentare, dann Diagnostics; pro Bereich ein Commit, damit Reviews lesbar bleiben.
+- Terminologie fest: held, allow, block, target (für Scope), rule, pseudonymise (britische Schreibung) durchgängig; Sandbox, Diagnostic, Finding unverändert.
+- `scripts/ci/lint-docs.sh` bekommt eine Stoppwortliste (`und`, `oder`, `nicht`, `wird`, `werden`, `ist`, `sind`, `mit`, `für`, `über`, `durch`, `Datei`, `Regel`, `Anfrage`) und prüft Markdown, Doc-Kommentare (`///`, `//!`) und Shell-/Python-Kommentare; Treffer in `app_de.arb` und in als `<!-- lang: de -->` markierten Blöcken sind erlaubt.
+- Abschnitt Sprache in `CLAUDE.md` wird zu: English only; German exists solely in `app_de.arb`.
+
+### Schritte
+1. Glossar in `docs/GLOSSARY.md` anlegen (en, de, Bedeutung), 30 bis 40 Einträge.
+2. Dokumente übersetzen, Lint schreiben, Lint grün.
+3. Code-Kommentare übersetzen, `cargo doc --no-deps` und `dart doc` bauen ohne Warnung.
+4. Diagnostics-Texte übersetzen, Snapshot-Tests aktualisieren.
+5. `CLAUDE.md`, `CONTRIBUTING.md`, `AGENTS.md` umstellen.
+
+### Tests
+- `scripts/ci/lint-docs.sh` grün, mit Negativtest (eine deutsche Zeile in einer Fixture-Datei bricht den Lint).
+- Diagnostics-Snapshot-Tests grün.
+- `cargo doc --no-deps --document-private-items` ohne Warnung.
+
+### Akzeptanzkriterien
+- [ ] `git grep -lE ' (und|oder|nicht|wird|werden) ' -- ':!app/l10n/app_de.arb' ':!*.lock'` liefert nichts.
+- [ ] Lint in CI aktiv.
+- [ ] Glossar existiert und wird von README verlinkt.
+- [ ] Kein inhaltlicher Unterschied: Stichprobe von zehn ADR-Absätzen gegen die deutsche Fassung im git-Verlauf.
+
+### Fallstricke
+- Maschinelle Übersetzung verwischt Fachbegriffe; das Glossar ist verbindlich, nicht optional.
+- Deutsche Umlaute in Bezeichnern gibt es nicht, aber in Fixture-Bodies (Kundennamen) absichtlich; die bleiben, der Lint ignoriert `fixtures/`.
+- Snapshot-Tests der Diagnostics brechen erwartet; nicht blind aktualisieren, sondern jede Änderung lesen.
+
+### Referenzen
+BACKLOG.md 1.3 Prinzip 2; CLAUDE.md Abschnitt Sprache.
