@@ -10,3 +10,12 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+humanitl-core.workspace = true
+humanitl-config.workspace = true
+serde.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# Nur im Test: prueft, dass `argv_line` wirklich von einer Shell zerlegbar ist.
+shlex.workspace = true
