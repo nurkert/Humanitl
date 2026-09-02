@@ -1,0 +1,56 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/core-types",
+  "crates/config",
+  "crates/rules",
+  "crates/findings",
+  "crates/recorder",
+  "crates/audit",
+  "crates/sandbox",
+  "crates/catalog",
+  "crates/proxy",
+  "crates/ipc",
+  "bin/humanitld",
+  "bin/humanitl",
+  "bin/humanitl-shim",
+  "xtask",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-only"
+repository = "https://github.com/nurkert/Humanitl"
+rust-version = "1.85"
+
+[workspace.dependencies]
+humanitl-core = { path = "crates/core-types" }
+humanitl-config = { path = "crates/config" }
+humanitl-rules = { path = "crates/rules" }
+humanitl-findings = { path = "crates/findings" }
+humanitl-recorder = { path = "crates/recorder" }
+humanitl-audit = { path = "crates/audit" }
+humanitl-sandbox = { path = "crates/sandbox" }
+humanitl-catalog = { path = "crates/catalog" }
+humanitl-proxy = { path = "crates/proxy" }
+humanitl-ipc = { path = "crates/ipc" }
+
+tokio = { version = "1", features = ["full"] }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v7", "serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+
+[workspace.lints.rust]
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+module_name_repetitions = "allow"

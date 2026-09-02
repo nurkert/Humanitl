@@ -1,0 +1,5 @@
+# Pinned for CI (rustup-managed). A local source-tarball toolchain without rustup
+# ignores this file; `make check` then skips fmt/clippy with a warning.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
