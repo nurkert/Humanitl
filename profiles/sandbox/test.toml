@@ -1,0 +1,80 @@
+# Das Sandbox-Profil der Escape-Tests (CONVENTIONS.md 3.11).
+#
+# Gleich dem Profil "default", mit genau zwei Unterschieden: die Skripte aus
+# `tests/escape/` sind unter `/tests/escape` nur lesbar eingehaengt, und
+# `HUMANITL_TEST=1` steht in der Umgebung, damit ein Skript merkt, dass es in
+# der Testsandbox laeuft. Es gibt keine Vererbung zwischen Profilen: eine
+# Ausnahme, die man nicht sieht, waere in einem Sicherheitsprofil die falsche
+# Sparsamkeit.
+#
+# Der Host-Pfad in `extra_ro` ist ein Platzhalter; der Testrunner (HUM-006)
+# ersetzt ihn durch das echte Verzeichnis des Arbeitsbaums.
+version = 1
+name = "test"
+description = "escape-test sandbox: like default, plus /tests/escape read-only"
+
+[sandbox]
+backend = "bwrap"
+hostname = "sandbox"
+unshare = ["user", "pid", "net", "ipc", "uts", "cgroup"]
+die_with_parent = true
+new_session = true
+min_bwrap_version = "0.8.0"
+
+[mounts]
+work = { dst = "/work", mode = "rw" }
+ro = ["/usr", "/etc/ssl", "/etc/alternatives", "/etc/ld.so.cache", "/etc/localtime"]
+symlinks = [["usr/lib", "/lib"], ["usr/lib64", "/lib64"], ["usr/bin", "/bin"], ["usr/sbin", "/sbin"]]
+tmpfs = ["/tmp", "/var/tmp", "/dev/shm", "/home/agent", "/work/.git/hooks", "/work/.vscode", "/work/.idea"]
+proc = "/proc"
+dev = "/dev"
+masked_files = ["/work/.envrc", "/work/.git/config"]
+extra_ro = ["/tests/escape"]
+extra_rw = []
+
+[network]
+proxy_socket_dst = "/run/humanitl/proxy.sock"
+proxy_port = 3128
+ca_cert_dst = "/etc/humanitl/ca.crt"
+shim_dst = "/usr/local/bin/humanitl-shim"
+bridges = [{ name = "proxy", dir = "in", listen = "127.0.0.1:3128", socket = "/run/humanitl/proxy.sock" }]
+
+[seccomp]
+allow_families = ["AF_INET", "AF_INET6"]
+allow_types = ["SOCK_STREAM"]
+deny_syscalls = [
+  "ptrace",
+  "io_uring_setup",
+  "io_uring_enter",
+  "io_uring_register",
+  "process_vm_readv",
+  "process_vm_writev",
+  "keyctl",
+  "add_key",
+  "request_key",
+]
+
+[env]
+HOME = "/home/agent"
+USER = "agent"
+TERM = "xterm-256color"
+LANG = "C.UTF-8"
+PATH = "/usr/local/bin:/usr/bin:/bin"
+HTTP_PROXY = "http://127.0.0.1:3128"
+HTTPS_PROXY = "http://127.0.0.1:3128"
+http_proxy = "http://127.0.0.1:3128"
+https_proxy = "http://127.0.0.1:3128"
+NO_PROXY = ""
+no_proxy = ""
+SSL_CERT_FILE = "/etc/humanitl/ca.crt"
+SSL_CERT_DIR = "/etc/ssl/certs"
+CURL_CA_BUNDLE = "/etc/humanitl/ca.crt"
+REQUESTS_CA_BUNDLE = "/etc/humanitl/ca.crt"
+NODE_EXTRA_CA_CERTS = "/etc/humanitl/ca.crt"
+DENO_CERT = "/etc/humanitl/ca.crt"
+GIT_SSL_CAINFO = "/etc/humanitl/ca.crt"
+CARGO_HTTP_CAINFO = "/etc/humanitl/ca.crt"
+PIP_CERT = "/etc/humanitl/ca.crt"
+NPM_CONFIG_CAFILE = "/etc/humanitl/ca.crt"
+NIX_SSL_CERT_FILE = "/etc/humanitl/ca.crt"
+HUMANITL_TEST = "1"
