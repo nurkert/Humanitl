@@ -1,0 +1,4 @@
+# Artefacts of `flutter test` and `flutter pub get` inside this package.
+.dart_tool/
+build/
+pubspec.lock
