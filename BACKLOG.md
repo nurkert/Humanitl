@@ -55,7 +55,7 @@ Professionelle (Designer, Entwickler, Berater), die Kundendaten verarbeiten und 
 
 ## 2. Entscheidungen (ADR-Kurzform)
 
-Jede Entscheidung bekommt später eine eigene Datei unter `docs/adr/`. Hier die Zusammenfassung mit Begründung. Das Architektur-Leitbild (Schichten, Ports, Code-Sparsamkeit, Agent-Bewusstsein) steht in `docs/ARCHITECTURE.md`. Die ausgearbeiteten Issue-Spezifikationen liegen unter `backlog/sprint-N.md`, die gemeinsamen Namen in `backlog/CONVENTIONS.md`.
+Jede Entscheidung hat eine eigene, ausformulierte Datei unter [`docs/adr/`](docs/adr/README.md) (Index dort). Hier die Zusammenfassung mit Begründung. Das Architektur-Leitbild (Schichten, Ports, Code-Sparsamkeit, Agent-Bewusstsein) steht in `docs/ARCHITECTURE.md`. Die ausgearbeiteten Issue-Spezifikationen liegen unter `backlog/sprint-N.md`, die gemeinsamen Namen in `backlog/CONVENTIONS.md`.
 
 ### ADR-001 Daemon in Rust auf hudsucker, nicht mitmproxy
 
@@ -513,7 +513,8 @@ Definition of Done für jedes Issue: Tests auf der passenden Ebene, neue Fehlerp
 | HUM-057 | Ressourcen-Limits | S | Dekompressions-Ratio-Limit, Body-Caps für Vorschau (8 MB), Timeouts, Backpressure-Test mit 1000 Flows in 10 s |
 | HUM-058 | Fehlerpfade im UI | M | Daemon weg ⇒ Setup-Screen, keine veralteten Daten als live; Sandbox-Start-Fehler inline; Timeout-Karte mit Retry-Hinweis; WebSocket-Upgrade-Karte mit ausgesprochener Einschränkung; Streaming-Response live |
 | HUM-059 | Dokumentation | M | README (Installation, drei Garantien, Screenshot), SECURITY.md final, THREAT-MODEL.md final, DESIGN.md, Regel-Referenz, Agent-Profile schreiben |
-| HUM-060 | Release 0.1 | S | Tag, Changelog, Release-Job baut deb + AppImage, Checksummen, Demo-Skripte M1–M4 grün |
+| HUM-086 | Repository auf Englisch | M | Alle Dokumente, Kommentare, ADRs, Backlog-Dateien, Diagnostics-Texte und Commit-Vorlagen ins Englische übersetzen; Deutsch bleibt nur in `app_de.arb`; `CLAUDE.md`, `CONTRIBUTING.md`, `AGENTS.md` auf English-only umstellen; Lint `scripts/ci/lint-docs.sh` prüft, dass keine deutschen Stoppwörter in Doku und Kommentaren stehen; erst nach HUM-059, vor HUM-060 |
+| HUM-060 | Release 0.1 | S | Tag `v0.1.0` bzw. Snapshot-Tag `v0.1.0-snapshot.N` per `git push origin <tag>`, tag-getriggerte Release-Action baut das versionierte `.deb` (Version aus dem Tag) und AppImage, prüft Signatur und Checksummen, hängt beides als GitHub Pre-Release an; Abnahme: frisches Debian, `.deb` aus dem Release installieren, App startet, Demo-Skripte M1–M4 grün |
 | HUM-061 | Puffer | L | Reserve für shadcn-Breakage, MITM-Randfälle, Wayland-Themen |
 
 ---
