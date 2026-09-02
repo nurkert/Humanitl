@@ -1,0 +1,61 @@
+// Negativ-Fixture für scripts/ci/lint-no-string-errors.sh: jede `pub fn` in
+// dieser Datei muss gemeldet werden, der Selbsttest zählt sie nach.
+// Endung .rs.txt, damit die Datei nicht mitkompiliert wird.
+
+pub fn load_profile(path: &str) -> Result<Profile, String> {
+    Err(format!("cannot read {path}"))
+}
+
+pub async fn connect(endpoint: &str) -> Result<Client, anyhow::Error> {
+    anyhow::bail!("no")
+}
+
+pub fn verify(chain: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
+}
+
+// Generischer Ok-Typ: ein zeilenweises grep mit `Result<[^,>]+,` sah hier
+// nichts, weil der Ok-Typ selbst eine spitze Klammer enthält.
+pub fn read_all(path: &str) -> Result<Vec<u8>, String> {
+    std::fs::read(path).map_err(|err| err.to_string())
+}
+
+pub fn first_byte(path: &str) -> Result<Option<u8>, anyhow::Error> {
+    Ok(std::fs::read(path)?.first().copied())
+}
+
+// Verschachtelte Generics im Ok-Typ.
+pub fn group_rows(rows: &[Row]) -> Result<HashMap<String, Vec<Row>>, String> {
+    Err("no rows".to_owned())
+}
+
+// Mehrzeilige Signatur, wie rustfmt lange Parameterlisten umbricht.
+pub fn parse_manifest(
+    path: &Path,
+    strict: bool,
+) -> Result<Manifest, String> {
+    Err(format!("cannot parse {}", path.display()))
+}
+
+// Weitere verbotene Fehlertypen.
+pub fn from_env(key: &str) -> Result<u16, &'static str> {
+    Err("not set")
+}
+
+pub fn boxed(input: &str) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+    Ok(())
+}
+
+pub fn reported(input: &str) -> Result<(), eyre::Report> {
+    Ok(())
+}
+
+// Das Alias versteckt denselben Fehlertyp.
+pub fn shorthand(input: &str) -> anyhow::Result<u16> {
+    Ok(0)
+}
+
+// Der Fehler steckt in einem umhüllenden Typ.
+pub fn spawn(input: &str) -> impl Future<Output = Result<(), String>> {
+    async { Ok(()) }
+}

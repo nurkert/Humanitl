@@ -1,0 +1,86 @@
+// Positiv-Fixture für scripts/ci/lint-no-string-errors.sh: nichts hiervon darf
+// gemeldet werden. Endung .rs.txt, damit die Datei nicht mitkompiliert wird.
+
+/// Ein Kommentar über eine alte Signatur:
+/// pub fn load_profile(path: &str) -> Result<Profile, String>
+pub fn load_profile(path: &str) -> Result<Profile, ProfileError> {
+    Err(ProfileError::Missing(path.to_owned()))
+}
+
+/* Auch im Blockkommentar: pub fn old() -> Result<(), String> */
+pub async fn connect(endpoint: &str) -> Result<Client, Diagnostic> {
+    Err(Diagnostic::new(LLM_001, Severity::Error).why(endpoint).build())
+}
+
+// Privat, also nicht Teil der öffentlichen Schnittstelle.
+fn helper(raw: &str) -> Result<u16, String> {
+    raw.parse().map_err(|_| "not a number".to_owned())
+}
+
+pub fn describe(&self) -> String {
+    self.title.clone()
+}
+
+// Generischer Ok-Typ mit typisiertem Fehler: kein Treffer.
+pub fn read_all(path: &str) -> Result<Vec<u8>, Diagnostic> {
+    std::fs::read(path).map_err(|err| Diagnostic::from(err))
+}
+
+// Mehrzeilig, verschachtelt, typisiert.
+pub fn parse_manifest(
+    path: &Path,
+    strict: bool,
+) -> Result<HashMap<String, Vec<Row>>, ManifestError> {
+    Err(ManifestError::Missing(path.to_owned()))
+}
+
+// Ein thiserror-Typ der Crate, der nur `Error` heißt, ist kein `Box<dyn Error>`.
+pub fn lookup(key: &str) -> Result<u16, Error> {
+    Err(Error::Missing(key.to_owned()))
+}
+
+// `std::io::Result<T>` trägt `io::Error`, einen typisierten Fehler.
+pub fn read_len(path: &Path) -> std::io::Result<usize> {
+    Ok(std::fs::read(path)?.len())
+}
+
+// Ein String als Ok-Typ ist erlaubt.
+pub fn render(&self) -> Result<String, Diagnostic> {
+    Ok(self.title.clone())
+}
+
+// Ein String im Parameter oder in der where-Klausel ist kein Fehlertyp.
+pub fn label<T>(value: T, fallback: String) -> Result<T, Diagnostic>
+where
+    T: Into<String>,
+{
+    Ok(value)
+}
+
+// Ein `->` in einem Closure-Parameter ist nicht der Rückgabetyp.
+pub fn with_hook(hook: impl Fn(&str) -> Result<(), String>) -> Result<(), Diagnostic> {
+    Ok(())
+}
+
+// Ein String im Standardwert eines Attributs ist kein Code.
+#[doc = "pub fn attr() -> Result<(), String>"]
+pub fn documented() -> Result<(), Diagnostic> {
+    Ok(())
+}
+
+// Testmodule dürfen alles.
+#[cfg(test)]
+mod tests {
+    pub fn fixture() -> Result<Vec<u8>, String> {
+        Ok(Vec::new())
+    }
+
+    pub async fn boxed() -> Result<(), Box<dyn std::error::Error>> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+pub fn test_helper(raw: &str) -> Result<u16, String> {
+    raw.parse().map_err(|_| "not a number".to_owned())
+}
