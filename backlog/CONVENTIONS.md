@@ -403,7 +403,7 @@ Entscheidungen, die beim Bauen fielen und ab jetzt gelten. Wo 3.x anderes sagt, 
 - Rust-Codegen über `protox` + `tonic-prost-build` nach `OUT_DIR`; `cargo xtask proto` schreibt nur `proto/descriptor.binpb` (committet, deterministisch). Dart-Codegen nur wenn `protoc` und `protoc-gen-dart` vorhanden; Plugin 25.x zu `protobuf` 6.x.
 - `FlowEvent` hat die Variante `Failed { flow_id, error, resolved_ip }`. `FlowEvent.Received` ist `{ summary, domain }`. `DecideRequest.block` ist `Block { note }`. `DecideResponse.created_rule` (volle Regel) ersetzt `created_rule_id`.
 - Konstanten `PROTO_MAJOR`, `PROTO_MINOR`, `TOKEN_METADATA_KEY` in `humanitl-ipc`.
-- `DecideRequest.allow_edited` ist `EditedRequest { method, method_raw, url, headers, body: bytes }` (Feld 7; Feld 3, das alte `HttpRequest`, ist `reserved`): die einzige Stelle, an der ein Body als Inhalt zum Daemon reist, und von `FlowEvent` aus unerreichbar (`proto_contract.rs` prüft das). Eine unlesbare Methode oder URL ist `IPC_002`, nie stillschweigend `allow`. `FlowDetail.body_preview` zeigt den Anfang des Request-Bodys als verlustbehaftetes UTF-8 mit höchstens 4096 Zeichen (Unicode-Skalare); Ereignisse tragen weiterhin nur `BodyRef`.
+- `DecideRequest.allow_edited` ist `EditedRequest { method, method_raw, url, headers, body: bytes }` (Feld 7; Feld 3, das alte `HttpRequest`, ist `reserved`): die einzige Stelle, an der ein Body als Inhalt zum Daemon reist, und von `FlowEvent` aus unerreichbar (`proto_contract.rs` prüft das). Eine unlesbare Methode oder URL ist `IPC_004` (bis zum 2026-09-03 `IPC_002`; siehe 4.12), nie stillschweigend `allow`. `FlowDetail.body_preview` zeigt den Anfang des Request-Bodys als verlustbehaftetes UTF-8 mit höchstens 4096 Zeichen (Unicode-Skalare); Ereignisse tragen weiterhin nur `BodyRef`.
 
 **Weitere Entscheidungen aus dem Fix-Durchgang (2026-09-02).**
 - Diagnostic-Register, Ergänzungen: `DAEMON_003` Socket bereits belegt, `DAEMON_004` Laufzeitverzeichnis oder Socket nicht anlegbar; `SANDBOX_010..012` sind Starter-Fehler (Argumentliste, Platzhalter, Kommandozeile), `SANDBOX_013..016` die Isolation-Check-Diagnostics (kein Bericht, Check 1 bis 3 fehlgeschlagen; HUM-041). Die Tabelle `AREAS` in `codes.rs` ist die verbindliche Liste der Bereiche, inklusive `IPC`, `PROXY`, `DOCTOR`, `CLI`.
@@ -456,3 +456,8 @@ Entscheidungen, die beim Bauen fielen und ab jetzt gelten. Wo 3.x oder 4.11 ande
 - Dateien der CA werden nie über einen Symlink angefasst: `symlink_metadata` beim Prüfen, `create_new` mit `O_NOFOLLOW` und unvorhersagbarem Namen beim Schreiben.
 - Scheitert ein einzelnes Leaf, ist das `TLS_005` ohne den Vorschlag, die CA zu löschen; der Vorschlag gehört nur zu einer wirklich unbrauchbaren CA.
 - Der PKCS#12-Truststore für die JVM ist aus M1 herausgenommen (siehe `backlog/sprint-1.md`, HUM-014).
+
+**IPC (HUM-018, Nachtrag 2026-09-03).**
+- `IPC_004 Decide-Anfrage ungültig` deckt jede unvollständige oder unlesbare `Decide`-Anfrage: keine Flow-Id, keine Entscheidung, unlesbare Flow-Id, unlesbare `EditedRequest`, Body über `limits.hold_body_cap_bytes`. `IPC_002` bleibt allein für `AllowEdited` mit mehr als einem Flow. Der Fake-Daemon meldet dieselben Codes wie der echte, damit die Oberfläche nicht gegen ein Verhalten übt, das der Daemon ablehnt; eine leere Entscheidung ist auch im Fake keine Freigabe.
+- `FlowRecord` führt `decision_source`, `response_bytes` und `finished`; `ListFlows` füllt `decision_source`, `response_size` und `duration` daraus und lässt leer, was der Daemon nicht weiß.
+

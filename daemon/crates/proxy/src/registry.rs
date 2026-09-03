@@ -44,8 +44,8 @@ use std::time::{Instant, SystemTime};
 use dashmap::DashMap;
 use humanitl_config::Limits;
 use humanitl_core::{
-    Authority, Decision, Flow, FlowEvent, FlowId, FlowState, HttpRequest, InvalidTransition,
-    Method, Scheme, SessionId, Transition, TransitionInput,
+    Authority, Decision, DecisionSource, Flow, FlowEvent, FlowId, FlowState, HttpRequest,
+    InvalidTransition, Method, Scheme, SessionId, Transition, TransitionInput,
 };
 use tokio::sync::broadcast;
 
@@ -78,8 +78,30 @@ pub struct FlowRecord {
     pub deadline: Option<Instant>,
     /// Die Entscheidung, sobald es eine gibt.
     pub decision: Option<Decision>,
+    /// Wer entschieden hat, sobald es eine Entscheidung gibt.
+    ///
+    /// Gefüllt aus [`FlowEvent::Decided`] und aus [`FlowEvent::TimedOut`]
+    /// (dann [`DecisionSource::Timeout`]). Vorher `None`, und `None` bleibt es
+    /// auch für einen Datensatz, der schon entschieden angelegt wurde: die
+    /// Herkunft steht nur im Ereignis, nicht im Zustand, und wird nicht
+    /// geraten.
+    pub decision_source: Option<DecisionSource>,
     /// Der Status der Antwort des Ziels, sobald er da ist.
     pub response_status: Option<u16>,
+    /// Wie viele Bytes des Antwortkörpers bisher durchgelaufen sind.
+    ///
+    /// Summe der [`FlowEvent::ResponseChunk`]; wächst, solange die Antwort
+    /// streamt, und steht still, sobald der Flow zu Ende ist. `0` heißt „noch
+    /// nichts gesehen", nicht „unbekannt": eine Antwort ohne Körper und eine
+    /// Anfrage ohne Antwort sind beide null Bytes.
+    pub response_bytes: u64,
+    /// Wann der Flow zu Ende war, sonst `None`.
+    ///
+    /// Der Zeitpunkt des [`FlowEvent::Recorded`], also des einzigen
+    /// Endzustands des Automaten ([`FlowState::Recorded`]). Ein Flow, der noch
+    /// läuft oder dessen Antwort noch streamt, hat kein Ende und deshalb auch
+    /// keine Dauer.
+    pub finished: Option<SystemTime>,
 }
 
 impl FlowRecord {
@@ -95,7 +117,10 @@ impl FlowRecord {
             created: flow.received_at,
             deadline: None,
             decision: None,
+            decision_source: None,
             response_status: None,
+            response_bytes: 0,
+            finished: None,
         };
         record.refresh_deadline();
         record
@@ -121,11 +146,27 @@ impl FlowRecord {
     }
 
     /// Übernimmt, was ein Ereignis über den Zustand hinaus festhält.
+    ///
+    /// Läuft auch für die Ereignisse ohne Übergang, weil
+    /// [`FlowEvent::ResponseChunk`] den Zustand nicht ändert, aber die einzige
+    /// Quelle für die Größe der Antwort ist.
     fn absorb(&mut self, event: &FlowEvent) {
         match event {
-            FlowEvent::Decided { decision, .. } => self.decision = Some(decision.clone()),
-            FlowEvent::TimedOut { .. } => self.decision = Some(Decision::TimedOut),
+            FlowEvent::Decided {
+                decision, source, ..
+            } => {
+                self.decision = Some(decision.clone());
+                self.decision_source = Some(*source);
+            }
+            FlowEvent::TimedOut { .. } => {
+                self.decision = Some(Decision::TimedOut);
+                self.decision_source = Some(DecisionSource::Timeout);
+            }
             FlowEvent::ResponseHeaders { status, .. } => self.response_status = Some(*status),
+            FlowEvent::ResponseChunk { len, .. } => {
+                self.response_bytes = self.response_bytes.saturating_add(*len);
+            }
+            FlowEvent::Recorded { at, .. } => self.finished = Some(*at),
             _ => {}
         }
         self.refresh_deadline();
@@ -321,17 +362,25 @@ impl FlowRegistry {
     ///
     /// Der Gegenweg zu [`FlowRegistry::transition`]: hier hat jemand anderes
     /// den Übergang bereits auf seinem [`Flow`] ausgeführt, die Registry zieht
-    /// nur nach. Ereignisse ohne Flow ([`FlowEvent::Lagged`]), ohne Übergang
-    /// ([`FlowEvent::ResponseChunk`], [`FlowEvent::Diagnostic`]) oder zu einem
-    /// unbekannten Flow ändern nichts.
+    /// nur nach. Ereignisse ohne Flow ([`FlowEvent::Lagged`]) oder zu einem
+    /// unbekannten Flow ändern nichts. Ereignisse ohne Übergang lassen den
+    /// Zustand stehen, tragen aber bei, was sie an Zahlen mitbringen: ein
+    /// [`FlowEvent::ResponseChunk`] erhöht [`FlowRecord::response_bytes`], ein
+    /// [`FlowEvent::Diagnostic`] ändert nichts.
     pub fn record(&self, event: &FlowEvent) {
-        let (Some(id), Some(input)) = (event.flow_id(), transition_input(event)) else {
+        let Some(id) = event.flow_id() else {
             return;
         };
         let Some(mut entry) = self.flows.get_mut(&id) else {
             return;
         };
         let record = entry.value_mut();
+        let Some(input) = transition_input(event) else {
+            // Kein Übergang, aber möglicherweise eine Zahl: ein
+            // `ResponseChunk` zählt zur Größe der Antwort.
+            record.absorb(event);
+            return;
+        };
         let at = event.at().unwrap_or_else(SystemTime::now);
         match record.state.clone().on(Transition::new(id, at, input)) {
             Ok((next, _mirrored)) => {
@@ -552,6 +601,98 @@ mod tests {
         let record = registry.get(flow.id).unwrap();
         assert_eq!(record.decision, Some(Decision::Allow));
         assert_eq!(record.deadline, None, "a decided flow has no deadline");
+    }
+
+    #[test]
+    fn record_keeps_the_source_the_size_and_the_end_of_a_flow() {
+        let registry = FlowRegistry::new(&Limits::default());
+        let session = SessionId::new();
+        let mut flow = analyzed(session, "example.com");
+        registry.insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+
+        // Vor der Entscheidung weiß der Datensatz nichts von alledem.
+        let fresh = registry.get(flow.id).unwrap();
+        assert_eq!(fresh.decision_source, None);
+        assert_eq!(fresh.response_bytes, 0);
+        assert_eq!(fresh.finished, None);
+
+        for input in [
+            TransitionInput::Hold {
+                deadline: Instant::now() + Duration::from_secs(30),
+                queue_bytes: 7,
+                queue_count: 1,
+            },
+            TransitionInput::Decide {
+                decision: Decision::Allow,
+                source: DecisionSource::User,
+            },
+            TransitionInput::Forward,
+            TransitionInput::Respond { status: 200 },
+        ] {
+            let event = flow.apply(input, SystemTime::now()).unwrap();
+            registry.record(&event);
+        }
+        // Zwei Stücke Antwortkörper; kein Übergang, aber die Größe der Antwort.
+        for len in [17_u64, 25] {
+            registry.record(&FlowEvent::ResponseChunk {
+                flow_id: flow.id,
+                at: SystemTime::now(),
+                len,
+            });
+        }
+        let streaming = registry.get(flow.id).unwrap();
+        assert_eq!(streaming.decision_source, Some(DecisionSource::User));
+        assert_eq!(streaming.response_bytes, 42);
+        assert_eq!(
+            streaming.finished, None,
+            "solange die Antwort läuft, hat der Flow kein Ende"
+        );
+
+        let end = SystemTime::now();
+        let recorded = flow.apply(TransitionInput::Record, end).unwrap();
+        registry.record(&recorded);
+        let done = registry.get(flow.id).unwrap();
+        assert_eq!(done.state, FlowState::Recorded);
+        assert_eq!(done.finished, Some(end));
+        assert_eq!(done.response_bytes, 42);
+    }
+
+    #[test]
+    fn a_timeout_names_its_own_source() {
+        let registry = FlowRegistry::new(&Limits::default());
+        let session = SessionId::new();
+        let mut flow = analyzed(session, "example.com");
+        registry.insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+        let held = flow
+            .apply(
+                TransitionInput::Hold {
+                    deadline: Instant::now() + Duration::from_secs(30),
+                    queue_bytes: 7,
+                    queue_count: 1,
+                },
+                SystemTime::now(),
+            )
+            .unwrap();
+        registry.record(&held);
+        let timed_out = flow
+            .apply(TransitionInput::Timeout, SystemTime::now())
+            .unwrap();
+        registry.record(&timed_out);
+
+        let record = registry.get(flow.id).unwrap();
+        assert_eq!(record.decision, Some(Decision::TimedOut));
+        assert_eq!(record.decision_source, Some(DecisionSource::Timeout));
+    }
+
+    #[test]
+    fn a_chunk_for_an_unknown_flow_changes_nothing() {
+        let registry = FlowRegistry::new(&Limits::default());
+        registry.record(&FlowEvent::ResponseChunk {
+            flow_id: FlowId::new(),
+            at: SystemTime::now(),
+            len: 9,
+        });
+        assert!(registry.is_empty());
     }
 
     #[test]

@@ -5,20 +5,22 @@ library;
 import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
+import '../../intercept/providers/flows.dart';
 import '../section.dart';
 
 /// The header.
-class HeaderBar extends StatelessWidget {
+///
+/// A consumer rather than a plain widget so that the hold badge rebuilds on
+/// its own: the count comes from [heldFlowsProvider], the very list the queue
+/// pane draws, and reading it in the shell would rebuild every section on
+/// every decision.
+class HeaderBar extends ConsumerWidget {
   /// Creates the header for [section].
-  const HeaderBar({
-    required this.section,
-    required this.onPalette,
-    this.heldCount = 0,
-    super.key,
-  });
+  const HeaderBar({required this.section, required this.onPalette, super.key});
 
   /// The shown section; its title sits next to the wordmark.
   final Section section;
@@ -26,13 +28,11 @@ class HeaderBar extends StatelessWidget {
   /// Opens the command palette.
   final VoidCallback onPalette;
 
-  /// Number of held requests, shown as a badge. HUM-020 supplies it.
-  final int heldCount;
-
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
+    final int heldCount = ref.watch(heldFlowsProvider).length;
     return SizedBox(
       height: tokens.sizes.headerBar,
       child: DecoratedBox(
@@ -55,6 +55,7 @@ class HeaderBar extends StatelessWidget {
               HBadge(text: l10n.shellInterceptOn, color: tokens.state.allowed),
               SizedBox(width: tokens.spacing.x2),
               HBadge(
+                key: const Key('header-held-badge'),
                 text: l10n.shellHeldCount(heldCount),
                 color: heldCount > 0 ? tokens.state.held : tokens.colors.fg1,
               ),
