@@ -41,15 +41,18 @@ impl Daemon {
         for name in ["run", "data", "config", "home"] {
             std::fs::create_dir(dir.path().join(name)).unwrap();
         }
-        let child = Command::new(env!("CARGO_BIN_EXE_humanitld"))
-            .env("XDG_RUNTIME_DIR", dir.path().join("run"))
-            .env("XDG_DATA_HOME", dir.path().join("data"))
-            .env("XDG_CONFIG_HOME", dir.path().join("config"))
-            .env("HOME", dir.path().join("home"))
-            .env("HUMANITL_HOLD__TIMEOUT_SECS", hold_timeout_secs.to_string())
-            .spawn()
-            .expect("the daemon binary must start");
+        let child = spawn(dir.path(), hold_timeout_secs);
         Self { dir, child }
+    }
+
+    /// Beendet den Daemon und startet einen neuen im selben Baum.
+    ///
+    /// Der zweite Prozess hat eine leere Registry und eine neue Sitzung; was er
+    /// über frühere Flows sagt, kann deshalb nur aus der Aufzeichnung kommen.
+    async fn restart(&mut self, hold_timeout_secs: u64) {
+        self.terminate();
+        self.child = spawn(self.dir.path(), hold_timeout_secs);
+        self.ready().await;
     }
 
     fn runtime(&self) -> PathBuf {
@@ -94,6 +97,18 @@ impl Drop for Daemon {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// Startet das gebaute Binary in diesem XDG-Baum.
+fn spawn(dir: &Path, hold_timeout_secs: u64) -> Child {
+    Command::new(env!("CARGO_BIN_EXE_humanitld"))
+        .env("XDG_RUNTIME_DIR", dir.join("run"))
+        .env("XDG_DATA_HOME", dir.join("data"))
+        .env("XDG_CONFIG_HOME", dir.join("config"))
+        .env("HOME", dir.join("home"))
+        .env("HUMANITL_HOLD__TIMEOUT_SECS", hold_timeout_secs.to_string())
+        .spawn()
+        .expect("the daemon binary must start")
 }
 
 /// Wartet höchstens zehn Sekunden auf eine Datei.
@@ -249,6 +264,167 @@ async fn a_second_daemon_refuses_and_leaves_the_first_one_alone() {
         grpc.get_info(()).await.is_ok(),
         "the first daemon serves on"
     );
+
+    drop(grpc);
+    daemon.terminate();
+}
+
+/// Der Body der Anfrage, die aufgezeichnet und danach wieder gelesen wird.
+const RECORDED_BODY: &str = "{\"secret\":false}";
+
+/// Schickt eine Anfrage mit Body, die niemand entscheidet, und wartet auf die
+/// Antwort nach der Frist.
+async fn post_and_time_out(daemon: &Daemon) {
+    let mut agent = UnixStream::connect(daemon.proxy_socket()).await.unwrap();
+    agent
+        .write_all(
+            format!(
+                "POST /notes HTTP/1.1\r\nHost: example.com\r\nContent-Type: application/json\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{RECORDED_BODY}",
+                RECORDED_BODY.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut raw = Vec::new();
+    tokio::time::timeout(Duration::from_secs(20), agent.read_to_end(&mut raw))
+        .await
+        .expect("the timeout must end the wait")
+        .unwrap();
+    let text = String::from_utf8_lossy(&raw);
+    assert!(text.starts_with("HTTP/1.1 504"), "{text}");
+}
+
+/// Die Zeile des aufgezeichneten Flows aus `ListFlows`.
+async fn recorded_row(grpc: &mut client::Client) -> v1::FlowSummary {
+    let page = grpc
+        .list_flows(v1::ListFlowsRequest::default())
+        .await
+        .unwrap()
+        .into_inner();
+    page.flows
+        .iter()
+        .find(|row| row.path == "/notes")
+        .expect("the recorded flow is in the history")
+        .clone()
+}
+
+/// Was der Daemon aufgezeichnet hat, überlebt ihn (HUM-026, HUM-027, HUM-031).
+///
+/// Der Beweis, dass `ListFlows`, `GetFlow` und `GetBody` aus der Aufzeichnung
+/// lesen und nicht aus dem Speicher: Der zweite Prozess hat eine leere
+/// Registry und eine neue Sitzung. Was er über den Flow von vorhin sagt, kann
+/// er nur aus der Datenbank haben.
+#[tokio::test]
+async fn the_recording_outlives_the_daemon() {
+    let mut daemon = Daemon::start(1);
+    daemon.ready().await;
+
+    let token = auth::read_token(&daemon.token_path()).unwrap();
+    let mut grpc = client::connect_at(&daemon.socket(), &token).await.unwrap();
+
+    // `Rules` ist kein `IPC_005` mehr: Der Daemon hat einen Regelspeicher
+    // (HUM-027). Wie viele Regeln er nennt, ist hier gleichgültig — der
+    // mitgelieferte Satz wird erst in HUM-038 gefüllt.
+    grpc.rules(v1::RulesRequest {
+        op: Some(v1::rules_request::Op::List(())),
+    })
+    .await
+    .expect("the daemon answers Rules from its rule store");
+
+    post_and_time_out(&daemon).await;
+    let row = recorded_row(&mut grpc).await;
+    assert_eq!(row.decision, v1::DecisionKind::TimedOut as i32);
+    assert_eq!(row.request_size, RECORDED_BODY.len() as u64);
+
+    let detail = grpc
+        .get_flow(v1::FlowRef {
+            flow_id: row.flow_id.clone(),
+        })
+        .await
+        .expect("GetFlow answers from the recording")
+        .into_inner();
+    assert_eq!(detail.body_preview, RECORDED_BODY, "{detail:?}");
+    assert!(!detail.findings_truncated, "the whole request was scanned");
+    let domain = detail.domain.as_ref().expect("the catalog answers");
+    assert_eq!(domain.apex, "example.com", "{domain:?}");
+    assert_eq!(domain.seen_count, 1, "one request, one observation");
+    let request = detail.request.as_ref().expect("the recorded request");
+    assert!(
+        request
+            .headers
+            .iter()
+            .any(|header| header.name.eq_ignore_ascii_case("content-type")),
+        "{:?}",
+        request.headers
+    );
+    let body_ref = request.body.clone().expect("the request has a body");
+    assert_eq!(body_ref.size, RECORDED_BODY.len() as u64);
+
+    let mut chunks = grpc
+        .get_body(body_ref)
+        .await
+        .expect("GetBody answers from the recording")
+        .into_inner();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = chunks.next().await {
+        bytes.extend_from_slice(&chunk.unwrap().data);
+    }
+    assert_eq!(String::from_utf8_lossy(&bytes), RECORDED_BODY);
+
+    // Und jetzt der eigentliche Punkt: neuer Prozess, leere Registry.
+    drop(grpc);
+    daemon.restart(1).await;
+    let token = auth::read_token(&daemon.token_path()).unwrap();
+    let mut grpc = client::connect_at(&daemon.socket(), &token).await.unwrap();
+
+    let after = recorded_row(&mut grpc).await;
+    assert_eq!(after.flow_id, row.flow_id, "the same flow, a new process");
+    assert_eq!(after.decision, v1::DecisionKind::TimedOut as i32);
+    assert_eq!(after.request_size, RECORDED_BODY.len() as u64);
+    assert_eq!(
+        after.authority.as_ref().unwrap().host,
+        "example.com",
+        "{after:?}"
+    );
+    let detail = grpc
+        .get_flow(v1::FlowRef {
+            flow_id: row.flow_id.clone(),
+        })
+        .await
+        .expect("GetFlow answers after the restart")
+        .into_inner();
+    assert_eq!(detail.body_preview, RECORDED_BODY, "{detail:?}");
+
+    drop(grpc);
+    daemon.terminate();
+}
+
+/// Ein Flow, den niemand kennt, ist `NOT_FOUND` und kein leeres Detail.
+#[tokio::test]
+async fn a_flow_that_never_existed_is_not_found() {
+    let mut daemon = Daemon::start(120);
+    daemon.ready().await;
+    let token = auth::read_token(&daemon.token_path()).unwrap();
+    let mut grpc = client::connect_at(&daemon.socket(), &token).await.unwrap();
+
+    let status = grpc
+        .get_flow(v1::FlowRef {
+            flow_id: "0199c0ff-ee00-7000-8000-000000000001".to_owned(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::NotFound, "{status}");
+
+    let status = grpc
+        .get_flow(v1::FlowRef {
+            flow_id: "not-a-flow-id".to_owned(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument, "{status}");
+    assert!(status.message().contains("IPC_004"), "{status}");
 
     drop(grpc);
     daemon.terminate();

@@ -596,13 +596,6 @@ async fn every_other_rpc_says_which_issue_brings_it() {
     let mut refusals = Vec::new();
     refusals.push(
         client
-            .get_flow(v1::FlowRef::default())
-            .await
-            .map(|_| ())
-            .unwrap_err(),
-    );
-    refusals.push(
-        client
             .audit(v1::AuditRequest::default())
             .await
             .map(|_| ())
@@ -616,18 +609,32 @@ async fn every_other_rpc_says_which_issue_brings_it() {
             .unwrap_err(),
     );
     refusals.push(client.doctor(()).await.map(|_| ()).unwrap_err());
-    refusals.push(
-        client
-            .get_body(v1::BodyRef::default())
-            .await
-            .map(|_| ())
-            .unwrap_err(),
-    );
 
     for error in refusals {
         assert_eq!(error.code(), Code::Unimplemented);
         assert!(error.message().contains("arrives in"), "{error}");
     }
+
+    // `GetFlow` und `GetBody` gibt es seit HUM-026. Dieser Daemon läuft ohne
+    // Aufzeichnung: Ein unbekannter Flow ist dann `NOT_FOUND`, und ein Body hat
+    // gar keinen Ort, was der Befund `RECORDER_001` sagt.
+    let unknown = client
+        .get_flow(v1::FlowRef {
+            flow_id: humanitl_core::FlowId::new().to_string(),
+        })
+        .await
+        .map(|_| ())
+        .unwrap_err();
+    assert_eq!(unknown.code(), Code::NotFound, "{unknown}");
+    let without_recording = client
+        .get_body(v1::BodyRef::default())
+        .await
+        .map(|_| ())
+        .unwrap_err();
+    assert!(
+        without_recording.message().contains("RECORDER_001"),
+        "{without_recording}"
+    );
 
     // `Rules` gibt es seit HUM-027. Dieser Daemon läuft nur ohne
     // Regelspeicher, und das sagt er, statt eine leere Liste zu liefern;

@@ -398,6 +398,20 @@ flow_show() {
     humanitl --json flows show "$1"
 }
 
+# flow_row ID — die Zeile eines Flows aus der Historie als JSON auf stdout.
+#
+# Seit HUM-026 beantwortet der Daemon `ListFlows` aus der Aufzeichnung, also
+# auch für Flows früherer Sitzungen. Kennt die Liste die Id nicht, ist das ein
+# Fehlschlag (Rückgabewert 1) und keine leere Zeile, die der Aufrufer für einen
+# Flow ohne Inhalt halten könnte.
+flow_row() {
+    flow_row_json=$(humanitl --json flows list 2> /dev/null) || return 1
+    flow_row_out=$(printf '%s' "$flow_row_json" |
+        jq -c --arg id "$1" '.flows[] | select(.flow_id == $id)' 2> /dev/null) || return 1
+    [ -n "$flow_row_out" ] || return 1
+    printf '%s\n' "$flow_row_out"
+}
+
 # flow_decide ID allow|block [NOTE] — einen wartenden Flow entscheiden.
 flow_decide() {
     if [ -n "${3:-}" ]; then

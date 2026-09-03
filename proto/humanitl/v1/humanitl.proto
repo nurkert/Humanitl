@@ -354,6 +354,18 @@ message FlowDetail {
   // gekuerzt ist, sagt `request.body.size`. Nur hier, nie in einem
   // FlowEvent (CONVENTIONS.md 3.6).
   string body_preview = 9;
+  // Wahr, wenn die Detektoren nicht die ganze Anfrage gesehen haben
+  // (`ScanReport::truncated`, HUM-025). Eine leere Fundliste zu einer nur
+  // teilweise durchsuchten Anfrage ist kein Freispruch, und die Oberflaeche
+  // muss den Unterschied zeigen koennen (CONVENTIONS.md 4.13). Der Befund,
+  // der die Luecke erklaert (`FINDINGS_002`), steht zusaetzlich als
+  // `FlowEvent.Diagnostic` am selben Flow.
+  //
+  // Der Daemon weiss das nur, solange der Flow in seiner Registry steht, also
+  // fuer die laufende Sitzung; die Aufzeichnung fuehrt die Spalte nicht. Fuer
+  // einen Flow aus einer frueheren Sitzung ist das Feld deshalb `false`, und
+  // `false` heisst hier "nicht als gekuerzt bekannt".
+  bool findings_truncated = 10;
 }
 
 // Abonnement des Ereignisstroms.
@@ -593,6 +605,23 @@ message RulesRequest {
     // geltenden Regeln in Kraft und die Befunde stehen in `diagnostics`.
     // Session-Regeln bleiben unberuehrt, sie stehen nie in der Datei.
     google.protobuf.Empty reload = 8;
+    // Fragt den geltenden Regelsatz, was er zu genau dieser Anfrage sagt.
+    Test test = 9;
+  }
+
+  // Eine Anfrage, wie sie der Proxy sehen wuerde, aber nur zum Fragen.
+  //
+  // Der Daemon wertet sie mit derselben Engine aus wie im Proxy-Pfad und
+  // aendert dabei nichts: kein Flow, keine Entscheidung, keine Aufzeichnung.
+  // Die RPC gibt es, damit CLI und Oberflaeche eine Regel pruefen koennen,
+  // ohne eine zweite Auswertung mitzubringen (ADR-018).
+  message Test {
+    Method method = 1;
+    // Vollstaendige URL: `scheme://host[:port]/path?query`, ohne Fragment.
+    // Fehlt der Port, gilt der Standard-Port des Schemas.
+    string url = 2;
+    // Optional. UPGRADE_WEBSOCKET trifft nur Regeln mit `upgrade: websocket`.
+    Upgrade upgrade = 3;
   }
 
   // Neue Reihenfolge, vollstaendig.
@@ -625,6 +654,29 @@ message RulesResponse {
   // Wie viele aufgezeichnete Flows der Probelauf geprueft hat. Nur bei
   // `dry_run` gesetzt; `dry_run_matches` ist die Teilmenge, die getroffen hat.
   uint32 dry_run_scanned = 5;
+  // Was der Regelsatz zu der geprueften Anfrage sagt. Nur bei `test` gesetzt.
+  RuleTest test = 6;
+}
+
+// Das Ergebnis von `RulesRequest.Test`.
+//
+// Es sagt, was mit dieser Anfrage geschaehe, wenn sie jetzt ankaeme, und
+// nichts darueber hinaus: Der Regelsatz kennt weder Findings noch die
+// Halte-Warteschlange, und ein `allow` hier heisst nicht, dass die Anfrage
+// auch hinausginge (ein Ziel im privaten Netz lehnt der Proxy weiter ab).
+message RuleTest {
+  // Die geltende Aktion. Ohne Treffer ist das RULE_ACTION_ASK: die Vorgabe des
+  // Vertrags, nicht die Entscheidung einer Regel (ADR-007).
+  RuleAction action = 1;
+  // Wahr, wenn eine Regel getroffen hat. Nur damit laesst sich ein `ask` aus
+  // einer Regel von der Vorgabe unterscheiden.
+  bool matched = 2;
+  // Die Regel, die getroffen hat; leer, wenn keine traf. Die ganze Regel steht
+  // in `rules` derselben Antwort.
+  string rule_id = 3;
+  // Platz der treffenden Regel in ihrer Gruppe, 1-basiert (siehe
+  // `Rule.position`); 0, wenn keine traf.
+  uint32 position = 4;
 }
 
 // ---------- Sandbox ----------

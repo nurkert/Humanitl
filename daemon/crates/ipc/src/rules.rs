@@ -91,6 +91,7 @@ impl RulesService {
     pub async fn apply(&self, request: v1::RulesRequest) -> Result<v1::RulesResponse, Diagnostic> {
         let mut diagnostics = Vec::new();
         let mut dry_run = None;
+        let mut test = None;
 
         match request.op {
             None => return Err(no_op()),
@@ -120,6 +121,9 @@ impl RulesService {
             Some(v1::rules_request::Op::Reload(())) => {
                 diagnostics = self.store.reload();
             }
+            Some(v1::rules_request::Op::Test(probe)) => {
+                test = Some(self.test(&probe)?);
+            }
             Some(v1::rules_request::Op::DryRun(request)) => {
                 let rule = request.rule.as_ref().ok_or_else(|| {
                     Diagnostic::builder(codes::IPC_005, Severity::Error)
@@ -131,7 +135,7 @@ impl RulesService {
             }
         }
 
-        Ok(self.response(&diagnostics, dry_run))
+        Ok(self.response(&diagnostics, dry_run, test))
     }
 
     /// Legt die Regel aus `DecideRequest.remember` an.
@@ -171,6 +175,7 @@ impl RulesService {
         &self,
         diagnostics: &[Diagnostic],
         dry_run: Option<(Vec<v1::FlowSummary>, u32)>,
+        test: Option<v1::RuleTest>,
     ) -> v1::RulesResponse {
         let (matches, scanned) = dry_run.unwrap_or_default();
         let wire: Vec<v1::Diagnostic> = diagnostics
@@ -188,7 +193,48 @@ impl RulesService {
             diagnostic: wire.first().cloned(),
             diagnostics: wire,
             dry_run_scanned: scanned,
+            test,
         }
+    }
+
+    /// Fragt den geltenden Regelsatz, was er zu einer Anfrage sagt.
+    ///
+    /// Dieselbe Auswertung wie im Proxy-Pfad, mit demselben `RuleSet` und
+    /// derselben Uhr; geändert wird nichts. Sie liegt hier und nicht in der
+    /// Kommandozeile, weil es genau eine Auswertung geben darf: Eine zweite
+    /// könnte anders antworten als die, die tatsächlich entscheidet (ADR-018).
+    ///
+    /// # Errors
+    ///
+    /// `IPC_005`, wenn Methode oder URL nicht lesbar sind. Geraten wird nichts:
+    /// Eine Probe, die auf eine andere Anfrage antwortet als die gemeinte, wäre
+    /// schlimmer als keine.
+    fn test(&self, probe: &v1::rules_request::Test) -> Result<v1::RuleTest, Diagnostic> {
+        let method = convert::method_from_proto(probe.method, "").map_err(|error| {
+            Diagnostic::builder(codes::IPC_005, Severity::Error)
+                .why(format!("the method of the probe is not readable: {error}"))
+                .build()
+        })?;
+        let (scheme, authority, path) = convert::split_url(&probe.url).map_err(|error| {
+            Diagnostic::builder(codes::IPC_005, Severity::Error)
+                .why(format!("{:?} is not a request url: {error}", probe.url))
+                .build()
+        })?;
+        let mut key = RequestKey::new(&authority.host, &method, &path, scheme, authority.port);
+        if v1::Upgrade::try_from(probe.upgrade) == Ok(v1::Upgrade::Websocket) {
+            key = key.with_upgrade(Upgrade::WebSocket);
+        }
+        let verdict = self
+            .store
+            .effective()
+            .evaluate(&key, chrono::Utc::now(), self.session());
+        let rule = verdict.rule().and_then(|id| self.store.get(id));
+        Ok(v1::RuleTest {
+            action: convert::action_to_proto(verdict.action()) as i32,
+            matched: matches!(verdict, Verdict::Matched { .. }),
+            rule_id: verdict.rule().map(|id| id.to_string()).unwrap_or_default(),
+            position: rule.map_or(0, |stored| stored.position),
+        })
     }
 
     /// Liest eine Regel von der Leitung.

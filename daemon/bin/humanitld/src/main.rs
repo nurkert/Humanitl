@@ -27,26 +27,30 @@ use std::io;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use clap::Parser;
+use humanitl_catalog::Catalog;
 use humanitl_config::{AskMode, Config, DIR_MODE, Paths as XdgPaths};
 use humanitl_core::diagnostics::codes;
-use humanitl_core::{Diagnostic, FixAction, SessionId, Severity};
+use humanitl_core::rule::Rule;
+use humanitl_core::{Diagnostic, FixAction, FlowEvent, SessionId, Severity};
 use humanitl_findings::FindingsSettings;
 use humanitl_ipc::fake::{FakeDaemon, FakeOptions, Session};
-use humanitl_ipc::{DaemonService, IpcServer, auth, bind_socket, v1};
+use humanitl_ipc::{DaemonService, DomainTable, IpcServer, auth, bind_socket, v1};
 use humanitl_proxy::ca::{CaStore, DEFAULT_LEAF_CAPACITY, LeafCache};
 use humanitl_proxy::egress::Direct;
 use humanitl_proxy::handler::ProxyLimits;
 use humanitl_proxy::pipeline::FlowPipeline;
+use humanitl_proxy::rules_store::RulesStore;
 use humanitl_proxy::upstream::ClientTls;
 use humanitl_proxy::{
-    AskPipeline, ConnectionContext, FlowHandler, FlowRegistry, HoldQueue, ProxyCore, RulesPipeline,
-    Scanner, SystemResolver, Tier1Scanner, Upstream,
+    AskPipeline, ConnectionContext, DomainSink, FlowHandler, FlowRegistry, HoldQueue, ProxyCore,
+    Resolver, ResolverPort, RulesPipeline, Scanner, Tier1Scanner, Upstream,
 };
-use humanitl_rules::{RuleSet, parse_rules_for_session};
+use humanitl_recorder::{Recorder, RecorderSettings, SessionMeta};
+use humanitl_rules::parse_rules_for_session;
 use tokio::net::UnixListener;
 // tonic bringt `tokio-stream` mit dem Feature `net` bereits mit (über sein
 // `server`-Feature); der Wrapper von dort erspart diesem Binary eine eigene
@@ -175,6 +179,12 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
 
     let config = load_config(&xdg)?;
 
+    // Die Aufzeichnung zuerst: Ohne sie hat der Daemon kein Gedächtnis, und
+    // eine Sitzung, die aufzeichnen soll und es nicht kann, startet nicht
+    // (`RECORDER_001`). Alles danach hängt an ihr.
+    let recorder = open_recorder(&xdg, &config)?;
+    let catalog = Arc::new(load_catalog(&xdg));
+
     let ca = Arc::new(CaStore::open(&xdg)?);
     tracing::info!(
         dir = %ca.dir().display(),
@@ -183,17 +193,41 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
         "certificate authority ready"
     );
 
+    let session = SessionId::new();
+    let domains = Arc::new(DomainTable::new(
+        Arc::clone(&catalog),
+        Some(recorder.clone()),
+    ));
     let registry = Arc::new(FlowRegistry::new(&config.limits));
-    let queue = Arc::new(HoldQueue::with_registry(&config.limits, registry));
+    let queue = Arc::new(
+        HoldQueue::with_registry(&config.limits, registry)
+            .recording(recorder.clone())
+            .with_domains(Arc::clone(&domains) as Arc<dyn DomainSink>),
+    );
+
+    // Die Sitzung steht in der Aufzeichnung, bevor der erste Flow kommt:
+    // `flows.session_id` ist ein Fremdschlüssel.
+    recorder.start_session(&session_meta(session, &config));
+    let watchers = Watchers::start(&recorder, &queue);
 
     let proxy = ProxyCore::new();
-    let session = SessionId::new();
     let rules = load_rules(&xdg, session);
     let scanner = build_scanner(&config)?;
+    // Ein Port fuer den ganzen Lauf: Der Zaehler, den `daemon status` zeigt,
+    // und der Zwischenspeicher gehoeren derselben Instanz (HUM-024).
+    let resolver = Arc::new(ResolverPort::from_config(&config.resolver)?);
     let proxy_socket = proxy.start_session(
         session,
         &xdg.proxy_socket(),
-        build_handler(&config, &queue, &ca, &rules, &scanner)?,
+        build_handler(
+            &config,
+            &queue,
+            &ca,
+            &rules,
+            &scanner,
+            &recorder,
+            Arc::clone(&resolver) as Arc<dyn Resolver>,
+        )?,
         ConnectionContext::plain(session),
     )?;
     tracing::info!(
@@ -202,14 +236,237 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
         "proxy session started"
     );
 
-    let server = IpcServer::new(Arc::clone(&queue), &config, Some(session));
+    let server = IpcServer::new(Arc::clone(&queue), &config, Some(session))
+        .with_rules(Arc::clone(&rules), Some(recorder.clone()))
+        .with_recorder(recorder.clone())
+        .with_domains(Arc::clone(&domains));
     let result = humanitl_ipc::serve(&paths.socket, &paths.token, server, shutdown()).await;
 
     // Erst die Sitzungen, dann zurückkehren: der Accept-Loop endet, und mit
     // ihm verschwindet der Socket, den die Sandbox eingehängt hätte.
     proxy.stop_session(session);
     tracing::info!(session = %session, "proxy session stopped");
+
+    // Der geordnete Abschied der Aufzeichnung: Ende der Sitzung eintragen,
+    // dann warten, bis alles Geschickte in der Datenbank steht. Ohne das
+    // `flush` verlöre der letzte Bündel-Zeitraum die jüngsten Flows.
+    watchers.stop();
+    recorder.end_session(session);
+    recorder.flush().await;
+    tracing::info!(session = %session, "recording flushed");
     result
+}
+
+/// Die laufenden Nebenaufgaben der Aufzeichnung.
+///
+/// Zwei, und beide enden mit dem Daemon: der Strom der Befunde des
+/// Schreib-Threads und der tägliche Aufräumlauf.
+struct Watchers {
+    diagnostics: tokio::task::JoinHandle<()>,
+    purge: tokio::task::JoinHandle<()>,
+}
+
+impl Watchers {
+    /// Startet beide Aufgaben.
+    fn start(recorder: &Recorder, queue: &Arc<HoldQueue>) -> Self {
+        Self {
+            diagnostics: tokio::spawn(report_recorder_diagnostics(
+                recorder.diagnostics(),
+                Arc::clone(queue),
+            )),
+            purge: tokio::spawn(purge_daily(recorder.clone())),
+        }
+    }
+
+    /// Beendet beide Aufgaben.
+    fn stop(self) {
+        self.diagnostics.abort();
+        self.purge.abort();
+    }
+}
+
+/// Hängt die Befunde der Aufzeichnung in den Ereignisstrom.
+///
+/// Ein Schreibfehler ist keine Zeile im Protokoll, die niemand liest: Er
+/// gehört dorthin, wo der Mensch die Flows sieht, denn er heißt, dass die
+/// History eine Lücke hat (`backlog/sprint-2.md` HUM-026,
+/// `backlog/CONVENTIONS.md` 4.13). Er gehört zu keinem Flow — der Schreiber
+/// meldet den Zustand seines Threads, nicht den einer Anfrage —, also trägt
+/// das Ereignis `flow_id: None`.
+async fn report_recorder_diagnostics(
+    mut diagnostics: tokio::sync::broadcast::Receiver<Diagnostic>,
+    queue: Arc<HoldQueue>,
+) {
+    loop {
+        match diagnostics.recv().await {
+            Ok(diagnostic) => {
+                tracing::error!(
+                    code = diagnostic.code.as_str(),
+                    why = %diagnostic.why,
+                    "recorder"
+                );
+                queue.publish(FlowEvent::Diagnostic {
+                    flow_id: None,
+                    at: SystemTime::now(),
+                    diagnostic: Box::new(diagnostic),
+                });
+            }
+            // Zu langsam mitgelesen: Die verlorenen Befunde stehen im
+            // Protokoll, und der Strom läuft weiter.
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                tracing::warn!(dropped = n, "recorder diagnostics were dropped");
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+        }
+    }
+}
+
+/// Räumt die Aufzeichnung auf: einmal beim Start, danach täglich.
+///
+/// Jeder Lauf erhebt zugleich die Statistiken des Abfrageplaners neu
+/// (`backlog/CONVENTIONS.md` 4.14). Ein Fehler beendet die Aufgabe nicht: Am
+/// nächsten Tag wird es wieder versucht, und der Befund steht schon im Strom.
+async fn purge_daily(recorder: Recorder) {
+    let mut every_day = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
+    loop {
+        // Der erste Tick kommt sofort; das ist der Lauf beim Start.
+        every_day.tick().await;
+        match recorder.purge_expired(SystemTime::now()).await {
+            Ok(report) if report == humanitl_recorder::PurgeReport::default() => {
+                tracing::debug!("nothing to purge");
+            }
+            Ok(report) => tracing::info!(
+                flows = report.flows,
+                messages = report.messages,
+                findings = report.findings,
+                sessions = report.sessions,
+                blobs = report.blobs,
+                "recording purged"
+            ),
+            Err(error) => tracing::warn!(why = %error, "the recording could not be purged"),
+        }
+    }
+}
+
+/// Öffnet die Aufzeichnung dieses Daemons.
+///
+/// Die Grenzen kommen aus der Konfiguration; `humanitl-recorder` kennt
+/// `humanitl-config` nicht und bekommt sie deshalb als Werte
+/// (`backlog/CONVENTIONS.md` 4.14).
+///
+/// # Errors
+///
+/// `RECORDER_001` oder `RECORDER_004`, wenn Datenbank oder Blob-Speicher nicht
+/// benutzbar sind. Das beendet den Start: Ein Daemon, der nicht aufzeichnen
+/// kann, ließe den Menschen entscheiden, ohne dass die Entscheidung irgendwo
+/// nachlesbar wäre (ADR-008).
+fn open_recorder(xdg: &XdgPaths, config: &Config) -> Result<Recorder, Diagnostic> {
+    let db = xdg.db_path();
+    let blobs = xdg.blobs_dir();
+    let recorder = Recorder::open(
+        &db,
+        &blobs,
+        RecorderSettings::new(
+            config.recorder.inline_max_bytes,
+            config.limits.recorder_max_body_bytes,
+            config.recorder.retention_days,
+        ),
+    )?;
+    tracing::info!(
+        db = %db.display(),
+        blobs = %blobs.display(),
+        inline_max_bytes = config.recorder.inline_max_bytes,
+        max_body_bytes = config.limits.recorder_max_body_bytes,
+        retention_days = config.recorder.retention_days,
+        "recording open"
+    );
+    Ok(recorder)
+}
+
+/// Die Kopfdaten dieser Sitzung, wie sie in der Aufzeichnung stehen.
+fn session_meta(session: SessionId, config: &Config) -> SessionMeta {
+    SessionMeta {
+        id: session,
+        started_at: SystemTime::now(),
+        sandbox_profile: config.sandbox.profile.clone(),
+        llm_endpoint: config.llm.endpoint.as_ref().map(ToString::to_string),
+        work_dir: config
+            .sandbox
+            .work_dir
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+            .display()
+            .to_string(),
+        agent: config.agent.adapter.clone(),
+    }
+}
+
+/// Wo der gebündelte Domain-Katalog zur Laufzeit liegt.
+///
+/// Gesucht wird in dieser Reihenfolge, und genommen wird das erste
+/// Verzeichnis, in dem `domains.yaml` steht:
+///
+/// 1. `$XDG_DATA_HOME/humanitl/catalog` — die Kopie des Nutzers. Sie steht
+///    vorn, damit ein Nutzer den Katalog ergänzen kann, ohne das Paket
+///    anzufassen (eigene Einträge sind M7).
+/// 2. `/usr/share/humanitl/catalog` — die Naht für das `.deb`. Der Pfad steht
+///    hier fest und nicht in der Konfiguration: Er gehört zum Paket, nicht zur
+///    Einstellung.
+/// 3. `<Verzeichnis des Binaries>/../share/humanitl/catalog` — dieselbe
+///    Installation, an einen anderen Ort entpackt.
+/// 4. Der Katalog im Arbeitsbaum, über [`REPO_CATALOG`] zur Bauzeit bekannt.
+///    Nur so finden Entwicklerlauf und `tests/e2e` ihn ohne Installation.
+///
+/// Findet sich keiner, gilt der Paketpfad, und [`Catalog::load_or_empty`]
+/// meldet ihn im Befund. Der Daemon läuft dann mit leerem Katalog weiter: Jede
+/// Domain ist unbekannt, und das steht auch so in der Oberfläche.
+fn catalog_dir(xdg: &XdgPaths) -> PathBuf {
+    let mut candidates = vec![
+        xdg.data_dir().join("catalog"),
+        PathBuf::from(PACKAGED_CATALOG),
+    ];
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent().and_then(Path::parent)
+    {
+        candidates.push(dir.join("share/humanitl/catalog"));
+    }
+    candidates.push(PathBuf::from(REPO_CATALOG));
+    candidates
+        .iter()
+        .find(|dir| dir.join(humanitl_catalog::DOMAINS_FILE).is_file())
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from(PACKAGED_CATALOG))
+}
+
+/// Wohin das `.deb` den Katalog legt.
+const PACKAGED_CATALOG: &str = "/usr/share/humanitl/catalog";
+
+/// Der Katalog im Arbeitsbaum, für den Lauf ohne Installation.
+const REPO_CATALOG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../catalog");
+
+/// Lädt den Domain-Katalog und meldet, was fehlte.
+///
+/// Ein fehlender Katalog ist kein Grund, die Sitzung nicht zu starten
+/// (`CATALOG_001`, `CATALOG_002` sind Warnungen). Er ist ein Grund, jede
+/// Domain als unbekannt zu zeigen.
+fn load_catalog(xdg: &XdgPaths) -> Catalog {
+    let dir = catalog_dir(xdg);
+    let (catalog, diagnostics) = Catalog::load_or_empty(&dir);
+    for diagnostic in &diagnostics {
+        tracing::warn!(
+            code = %diagnostic.code,
+            why = %diagnostic.why,
+            dir = %dir.display(),
+            "domain catalog"
+        );
+    }
+    tracing::info!(
+        dir = %dir.display(),
+        entries = catalog.entries().len(),
+        ranked_domains = catalog.ranked_domains(),
+        "domain catalog loaded"
+    );
+    catalog
 }
 
 /// Lädt die Konfiguration und meldet, was das Laden überlebt hat.
@@ -244,15 +501,20 @@ fn build_handler(
     config: &Config,
     queue: &Arc<HoldQueue>,
     ca: &Arc<CaStore>,
-    rules: &Arc<RwLock<RuleSet>>,
+    rules: &Arc<RulesStore>,
     scanner: &Arc<dyn Scanner>,
+    recorder: &Recorder,
+    resolver: Arc<dyn Resolver>,
 ) -> Result<FlowHandler, Diagnostic> {
     let client_tls = ClientTls::new(&[], config.experimental.h2_upstream)?;
     let upstream = Upstream::new(
         Arc::new(Direct::new(Duration::from_secs(
             config.limits.connect_timeout_secs,
         ))),
-        Arc::new(SystemResolver),
+        // Der Resolver-Port kappt, zwischenspeichert und zaehlt (HUM-024).
+        // Mit `SystemResolver` direkt gaebe es keinen Zaehler, keinen Cache
+        // und keine Ueberpruefung der Adressen, die eine Antwort mitbringt.
+        resolver,
         client_tls,
         config.resolver.prefer,
         Duration::from_secs(config.limits.header_timeout_secs),
@@ -265,18 +527,19 @@ fn build_handler(
     // die Detektoren laufen, dann entscheidet die Regel-Engine, und gehalten
     // wird nur, was `ask` ergibt. Ohne Regel fragt die Warteschlange.
     let ask: Arc<dyn FlowPipeline> = Arc::new(AskPipeline::new(Arc::clone(queue), timeout));
-    let pipeline: Arc<dyn FlowPipeline> = Arc::new(RulesPipeline::new(
-        Arc::clone(queue),
-        Arc::clone(rules),
-        ask,
-    ));
-    Ok(FlowHandler::with_findings(
+    // `snapshot()` ist die Naht zum Regelspeicher: dasselbe Handle bleibt über
+    // jede Änderung gültig, der Inhalt wird ersetzt. Der Proxy liest damit
+    // immer den geltenden Satz, ohne den Speicher zu kennen (HUM-027).
+    let pipeline: Arc<dyn FlowPipeline> =
+        Arc::new(RulesPipeline::new(Arc::clone(queue), rules.snapshot(), ask));
+    Ok(FlowHandler::with_recorder(
         Arc::clone(queue),
         pipeline,
         upstream,
         Arc::new(LeafCache::new(Arc::clone(ca), DEFAULT_LEAF_CAPACITY)),
         ProxyLimits::from_config(&config.limits, &config.recorder).with_hold(&config.hold),
         Arc::clone(scanner),
+        Some(recorder.clone()),
     ))
 }
 
@@ -320,60 +583,66 @@ fn build_scanner(config: &Config) -> Result<Arc<dyn Scanner>, Diagnostic> {
 /// leer, und ohne Regel wird gefragt.
 const BUNDLED_RULES: &str = include_str!("../../../../rules/default.yaml");
 
-/// Liest den Regelsatz für diese Sitzung: erst die Regeln des Nutzers, dann
-/// die mitgelieferten.
+/// Öffnet den Regelspeicher dieser Sitzung.
 ///
-/// Die Reihenfolge ist die Bedeutung: Die erste passende Regel gewinnt, und
-/// die Regeln des Nutzers stehen vor den mitgelieferten
-/// (`backlog/sprint-2.md` HUM-022). Fehlt die Datei des Nutzers, ist das kein
-/// Fehler; ist sie kaputt, gilt sie als leer, und dann wird gefragt statt
-/// erlaubt. Woher die Regeln zur Laufzeit kommen und wie sie sich ändern,
-/// klärt HUM-027.
-fn load_rules(xdg: &XdgPaths, session: SessionId) -> Arc<RwLock<RuleSet>> {
+/// Der Speicher hält drei Gruppen und wertet sie in dieser Reihenfolge aus:
+/// Sitzungsregeln, dauerhafte Regeln des Nutzers aus `rules.yaml`, dann die
+/// mitgelieferten (`backlog/CONVENTIONS.md` 4.5). Er ist zugleich die Quelle
+/// des `Rules`-RPC und die des Proxys: Der eine ändert, der andere liest, und
+/// beide halten dasselbe Handle (HUM-027).
+///
+/// Fehlt `rules.yaml`, ist das kein Fehler; lehnt die Engine sie ab, startet
+/// der Speicher ohne die Regeln des Nutzers und meldet die Befunde. Ohne Regel
+/// wird gefragt, nie erlaubt.
+fn load_rules(xdg: &XdgPaths, session: SessionId) -> Arc<RulesStore> {
     let path = xdg.rules_path();
-    let user = match fs::read_to_string(&path) {
-        Ok(yaml) => read_rules(&yaml, &path.display().to_string(), session),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            tracing::info!(path = %path.display(), "no rules file yet; every request is asked");
-            RuleSet::new()
-        }
-        Err(err) => {
-            tracing::warn!(
-                path = %path.display(),
-                %err,
-                "the rules file is unreadable; every request is asked"
-            );
-            RuleSet::new()
-        }
-    };
-    let bundled = read_rules(BUNDLED_RULES, "rules/default.yaml", session);
+    let bundled = read_bundled_rules(session);
+    let (store, diagnostics) = RulesStore::load(&path, &bundled, session);
+    for diagnostic in &diagnostics {
+        tracing::warn!(
+            code = %diagnostic.code,
+            why = %diagnostic.why,
+            path = %path.display(),
+            "rules"
+        );
+    }
+    let rules = store.list();
     tracing::info!(
-        user = user.len(),
+        path = %path.display(),
+        rules = rules.len(),
         bundled = bundled.len(),
-        "rule set loaded"
+        "rule store loaded"
     );
-    Arc::new(RwLock::new(RuleSet::from_rules(
-        user.iter().cloned().chain(bundled.iter().cloned()),
-    )))
+    Arc::new(store)
 }
 
-/// Liest einen Regelsatz und meldet, was dabei auffiel.
+/// Liest die mitgelieferten Regeln aus dem eingebundenen `rules/default.yaml`.
 ///
-/// Ein abgelehnter Regelsatz wird zum leeren Regelsatz: Eine kaputte Datei
-/// darf nie zu einer Freigabe führen, die niemand gegeben hat.
-fn read_rules(yaml: &str, source: &str, session: SessionId) -> RuleSet {
-    match parse_rules_for_session(yaml, session) {
+/// Ein abgelehnter Regelsatz wird zum leeren Regelsatz: Eine kaputte Datei darf
+/// nie zu einer Freigabe führen, die niemand gegeben hat.
+fn read_bundled_rules(session: SessionId) -> Vec<Rule> {
+    match parse_rules_for_session(BUNDLED_RULES, session) {
         Ok((set, diagnostics)) => {
             for diagnostic in &diagnostics {
-                tracing::warn!(code = %diagnostic.code, why = %diagnostic.why, source, "rules");
+                tracing::warn!(
+                    code = %diagnostic.code,
+                    why = %diagnostic.why,
+                    source = "rules/default.yaml",
+                    "rules"
+                );
             }
-            set
+            set.iter().cloned().collect()
         }
         Err(diagnostics) => {
             for diagnostic in &diagnostics {
-                tracing::error!(code = %diagnostic.code, why = %diagnostic.why, source, "rules");
+                tracing::error!(
+                    code = %diagnostic.code,
+                    why = %diagnostic.why,
+                    source = "rules/default.yaml",
+                    "rules"
+                );
             }
-            RuleSet::new()
+            Vec::new()
         }
     }
 }

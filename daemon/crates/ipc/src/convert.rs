@@ -34,8 +34,11 @@ use humanitl_core::{
 };
 use humanitl_proxy::registry::{FlowRecord, FlowRegistry};
 use humanitl_proxy::rules_store::StoredRule;
-use humanitl_recorder::FlowSummary as RecordedSummary;
+use humanitl_recorder::{
+    Dir, FindingRecord, FlowDetail as RecordedDetail, FlowSummary as RecordedSummary, MessageRecord,
+};
 
+use crate::domains::DomainTable;
 use crate::v1;
 
 /// Die Protokollfassung, die der Proxy in M1 beidseitig spricht (ADR-016).
@@ -122,15 +125,21 @@ pub fn fix_to_proto(fix: &FixAction) -> v1::FixAction {
     }
 }
 
-/// Übersetzt eine Regel in ihre Wire-Form.
+/// Übersetzt die Aktion einer Regel in ihre Wire-Form.
 #[must_use]
-pub fn rule_to_proto(rule: &Rule) -> v1::Rule {
-    let action = match rule.action {
+pub const fn action_to_proto(action: humanitl_core::rule::Action) -> v1::RuleAction {
+    match action {
         humanitl_core::rule::Action::Allow => v1::RuleAction::Allow,
         humanitl_core::rule::Action::Block => v1::RuleAction::Block,
         humanitl_core::rule::Action::Ask => v1::RuleAction::Ask,
         humanitl_core::rule::Action::Redact => v1::RuleAction::Redact,
-    };
+    }
+}
+
+/// Übersetzt eine Regel in ihre Wire-Form.
+#[must_use]
+pub fn rule_to_proto(rule: &Rule) -> v1::Rule {
+    let action = action_to_proto(rule.action);
     v1::Rule {
         rule_id: rule.id.to_string(),
         action: action as i32,
@@ -429,7 +438,16 @@ pub fn request_from_proto(request: &v1::EditedRequest) -> Result<HttpRequest, Ed
 }
 
 /// Die Methode aus Enum und Rohwert. Ein gesetzter Rohwert gilt.
-fn method_from_proto(method: i32, raw: &str) -> Result<Method, EditedRequestError> {
+/// Liest eine Methode von der Leitung.
+///
+/// `METHOD_UNSPECIFIED` und ein `METHOD_OTHER` ohne Rohwert sind ein Fehler:
+/// Eine Methode, die der Daemon nicht kennt, wird nicht zu `GET` ergänzt.
+///
+/// # Errors
+///
+/// [`EditedRequestError::Method`], wenn die Methode fehlt oder kein
+/// HTTP-Token ist.
+pub fn method_from_proto(method: i32, raw: &str) -> Result<Method, EditedRequestError> {
     let text = if raw.is_empty() {
         match v1::Method::try_from(method) {
             Ok(v1::Method::Unspecified | v1::Method::Other) | Err(_) => {
@@ -444,7 +462,13 @@ fn method_from_proto(method: i32, raw: &str) -> Result<Method, EditedRequestErro
 }
 
 /// Zerlegt `scheme://host[:port]/path?query` in Schema, Ziel und Pfad.
-fn split_url(url: &str) -> Result<(Scheme, Authority, String), EditedRequestError> {
+///
+/// # Errors
+///
+/// [`EditedRequestError`] mit der Stelle, an der die URL nicht las: Schema,
+/// Host, Port oder ein Fragment beziehungsweise Userinfo, das in einem
+/// Request-Ziel nichts zu suchen hat.
+pub fn split_url(url: &str) -> Result<(Scheme, Authority, String), EditedRequestError> {
     let (scheme, rest) = url.split_once("://").ok_or(EditedRequestError::Scheme)?;
     let scheme = Scheme::parse(scheme).ok_or(EditedRequestError::Scheme)?;
     if rest.contains('#') {
@@ -600,12 +624,34 @@ pub fn wall_clock(deadline: Instant) -> SystemTime {
         .unwrap_or_else(SystemTime::now)
 }
 
-/// Was der Katalog über die Ziel-Domain wüsste.
+/// Was der Domain-Katalog über ein Ziel sagt, in der Wire-Form.
 ///
-/// Bis `humanitl-catalog` (HUM-031) trägt die Antwort nur den Apex, den
-/// `apex_of` aus dem Hostnamen ableitet. Rang und Katalog-Eintrag bleiben
-/// „unbekannt" (0 und leer): eine erfundene Zahl sähe in der Oberfläche wie
-/// eine gemessene aus.
+/// Jedes `None` des Katalogs wird zum leeren Feld beziehungsweise zur Null,
+/// und beides heißt im Vertrag „unbekannt", nie „unbedenklich"
+/// (`proto/humanitl/v1/humanitl.proto`, `DomainInfo`). Das Feld heißt weiter
+/// `tranco_rank`, obwohl der Rust-Typ `popularity_rank` sagt; die Umbenennung
+/// ist ein eigener Chore (CONVENTIONS.md 4.13, HUM-031).
+#[must_use]
+pub fn domain_to_proto(info: &humanitl_catalog::DomainInfo) -> v1::DomainInfo {
+    v1::DomainInfo {
+        apex: info.apex.clone().unwrap_or_default(),
+        catalog_id: info.catalog_id.clone().unwrap_or_default(),
+        tranco_rank: info.popularity_rank.unwrap_or(0),
+        first_seen: info.first_seen.map(|at| prost_types::Timestamp {
+            seconds: at.timestamp(),
+            nanos: i32::try_from(at.timestamp_subsec_nanos()).unwrap_or(0),
+        }),
+        seen_count: info.seen_count,
+    }
+}
+
+/// Was ein Daemon ohne Katalog über die Ziel-Domain sagen kann.
+///
+/// Der Rückfall für den Fake (`humanitld --fake`), der keinen Katalog lädt:
+/// Die Antwort trägt nur den Apex, den `apex_of` aus dem Hostnamen ableitet.
+/// Rang und Katalog-Eintrag bleiben „unbekannt" (0 und leer): eine erfundene
+/// Zahl sähe in der Oberfläche wie eine gemessene aus. Der echte Daemon nimmt
+/// [`domain_to_proto`] über der [`DomainTable`].
 #[must_use]
 pub fn domain_of(authority: &Authority, first_seen: SystemTime) -> v1::DomainInfo {
     v1::DomainInfo {
@@ -720,6 +766,125 @@ pub fn record_to_detail(record: &FlowRecord) -> v1::FlowDetail {
         diagnostics: Vec::new(),
         domain: Some(domain_of(&record.request.authority, record.created)),
         body_preview: body_preview(record.request.body.inline.as_deref().unwrap_or_default()),
+        findings_truncated: record.findings_truncated,
+    }
+}
+
+/// Alles, was der Detail-Bereich zu einem aufgezeichneten Flow zeigt.
+///
+/// Die Zeile, die Nachrichten und die Funde kommen aus der Aufzeichnung; alles
+/// andere reicht der Aufrufer:
+///
+/// - `domain`, weil die Zähler der Sitzung im Prozess leben ([`DomainTable`]),
+/// - `findings_truncated`, weil nur die Registry der laufenden Sitzung weiß,
+///   ob der Scan die ganze Anfrage gesehen hat (die Tabelle `flows` führt die
+///   Spalte nicht); für einen Flow von gestern ist die Antwort `false`, und
+///   `false` heißt hier „nicht als gekürzt bekannt",
+/// - `body_preview`, weil der Anfang des Bodys aus dem Blob-Speicher kommen
+///   kann und dieser Weg `async` ist.
+#[must_use]
+pub fn recorded_detail_to_proto(
+    detail: &RecordedDetail,
+    domain: Option<v1::DomainInfo>,
+    findings_truncated: bool,
+    body_preview: String,
+) -> v1::FlowDetail {
+    let summary = recorded_summary_to_proto(&detail.summary);
+    let request = message_of(detail, Dir::Request);
+    let edited = message_of(detail, Dir::RequestEdited);
+    let response = message_of(detail, Dir::Response);
+    v1::FlowDetail {
+        request: Some(recorded_request_to_proto(&summary, request)),
+        edited_request: edited.map(|message| recorded_request_to_proto(&summary, Some(message))),
+        response: response.map(|message| v1::HttpResponseHead {
+            status: summary.status,
+            headers: recorded_headers_to_proto(message),
+            version: HTTP_VERSION.to_owned(),
+        }),
+        response_body: response.map(|message| body_to_proto(&message.body)),
+        findings: detail
+            .findings
+            .iter()
+            .map(recorded_finding_to_proto)
+            .collect(),
+        diagnostics: Vec::new(),
+        domain,
+        body_preview,
+        findings_truncated,
+        summary: Some(summary),
+    }
+}
+
+/// Die aufgezeichnete Nachricht einer Richtung.
+fn message_of(detail: &RecordedDetail, dir: Dir) -> Option<&MessageRecord> {
+    detail.messages.iter().find(|message| message.dir == dir)
+}
+
+/// Die Kopfzeilen einer aufgezeichneten Nachricht, in Originalreihenfolge.
+fn recorded_headers_to_proto(message: &MessageRecord) -> Vec<v1::Header> {
+    message
+        .headers
+        .iter()
+        .map(|(name, value)| v1::Header {
+            name: name.clone(),
+            value: value.clone().into_bytes(),
+        })
+        .collect()
+}
+
+/// Die Anfrage eines aufgezeichneten Flows.
+///
+/// Methode, Schema, Ziel und Pfad stehen in der Zeile des Flows, die
+/// Kopfzeilen und der Body-Verweis in der Nachricht. Fehlt die Nachricht (ein
+/// Flow, dessen Aufzeichnung eine Lücke hat), bleibt beides leer, statt die
+/// Anfrage ganz wegzulassen.
+fn recorded_request_to_proto(
+    summary: &v1::FlowSummary,
+    message: Option<&MessageRecord>,
+) -> v1::HttpRequest {
+    v1::HttpRequest {
+        method: summary.method,
+        method_raw: summary.method_raw.clone(),
+        scheme: summary.scheme,
+        authority: summary.authority.clone(),
+        path_and_query: summary.path.clone(),
+        headers: message.map(recorded_headers_to_proto).unwrap_or_default(),
+        body: message.map(|message| body_to_proto(&message.body)),
+        version: HTTP_VERSION.to_owned(),
+    }
+}
+
+/// Ein aufgezeichneter Fund in der Wire-Form.
+///
+/// Ort und Stufe stehen in der Datenbank als Text, damit ein Archiv auch eine
+/// Zeile lesen kann, die eine ältere Fassung geschrieben hat
+/// (`backlog/CONVENTIONS.md` 4.14). Ein Text, den diese Fassung nicht kennt,
+/// wird `UNSPECIFIED` und nicht geraten.
+#[must_use]
+pub fn recorded_finding_to_proto(finding: &FindingRecord) -> v1::Finding {
+    let (location, header_name) = match finding.location.split_once(':') {
+        Some(("header", name)) => (v1::FindingLocation::Header, name.to_owned()),
+        _ => match finding.location.as_str() {
+            "query" => (v1::FindingLocation::Query, String::new()),
+            "body" => (v1::FindingLocation::Body, String::new()),
+            _ => (v1::FindingLocation::Unspecified, String::new()),
+        },
+    };
+    v1::Finding {
+        kind: finding.kind.clone(),
+        location: location as i32,
+        header_name,
+        span_start: finding.span_start,
+        span_end: finding.span_end,
+        tier: match finding.tier.as_str() {
+            "checksum" => v1::FindingTier::Checksum,
+            "regex" => v1::FindingTier::Regex,
+            "user_term" => v1::FindingTier::UserTerm,
+            _ => v1::FindingTier::Unspecified,
+        } as i32,
+        value_hash: finding.value_hash.to_vec(),
+        display_prefix: finding.display_prefix.clone(),
+        resolved: finding.resolved.is_some(),
     }
 }
 
@@ -730,8 +895,18 @@ pub fn record_to_detail(record: &FlowRecord) -> v1::FlowDetail {
 /// Kennt sie den Flow noch nicht — `Received` wird veröffentlicht, bevor die
 /// Pipeline den Datensatz anlegt —, entsteht die Zeile aus der Anfrage im
 /// Ereignis selbst.
+///
+/// `domains` ist die Antwort des Katalogs, die der Proxy beim Eintreffen des
+/// Flows abgelegt hat ([`DomainTable`], HUM-031). Sie wird hier nur gelesen,
+/// nie erhoben: Diese Funktion läuft einmal je Zuhörer, und ein Zähler, der
+/// mit der Zahl der offenen Fenster stiege, wäre keine Beobachtung mehr.
+/// Ohne Katalog (Fake-Modus) bleibt der Rückfall [`domain_of`].
 #[must_use]
-pub fn flow_event_to_proto(event: &FlowEvent, registry: &FlowRegistry) -> v1::FlowEvent {
+pub fn flow_event_to_proto(
+    event: &FlowEvent,
+    registry: &FlowRegistry,
+    domains: Option<&DomainTable>,
+) -> v1::FlowEvent {
     use v1::flow_event::Event;
 
     let flow_id = event.flow_id().map(|id| id.to_string()).unwrap_or_default();
@@ -745,7 +920,12 @@ pub fn flow_event_to_proto(event: &FlowEvent, registry: &FlowRegistry) -> v1::Fl
                 || received_summary(*id, *at, request),
                 |r| record_to_summary(&r),
             )),
-            domain: Some(domain_of(&request.authority, *at)),
+            domain: Some(
+                domains
+                    .and_then(|domains| domains.get(*id))
+                    .as_ref()
+                    .map_or_else(|| domain_of(&request.authority, *at), domain_to_proto),
+            ),
         }),
         FlowEvent::Analyzed { findings, .. } => Event::Analyzed(v1::flow_event::Analyzed {
             flow_id,
@@ -1357,7 +1537,7 @@ mod tests {
         let registry = FlowRegistry::new(&Limits::default());
         let flow = flow(SessionId::new(), "api.example.com");
 
-        let event = flow_event_to_proto(&flow.received_event(), &registry);
+        let event = flow_event_to_proto(&flow.received_event(), &registry, None);
         let Some(v1::flow_event::Event::Received(received)) = event.event else {
             panic!("received");
         };
@@ -1392,7 +1572,7 @@ mod tests {
             )
             .unwrap();
 
-        let wire = flow_event_to_proto(&event, &registry);
+        let wire = flow_event_to_proto(&event, &registry, None);
         let Some(v1::flow_event::Event::Held(held)) = wire.event else {
             panic!("held");
         };
@@ -1416,7 +1596,7 @@ mod tests {
             error: UpstreamError::PrivateAddress(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5))),
         };
 
-        let wire = flow_event_to_proto(&event, &registry);
+        let wire = flow_event_to_proto(&event, &registry, None);
         let Some(v1::flow_event::Event::Failed(failed)) = wire.event else {
             panic!("failed");
         };
@@ -1427,7 +1607,8 @@ mod tests {
     #[test]
     fn a_lagged_event_keeps_its_count() {
         let registry = FlowRegistry::new(&Limits::default());
-        let wire = flow_event_to_proto(&humanitl_core::FlowEvent::Lagged { n: 12 }, &registry);
+        let wire =
+            flow_event_to_proto(&humanitl_core::FlowEvent::Lagged { n: 12 }, &registry, None);
         let Some(v1::flow_event::Event::Lagged(lagged)) = wire.event else {
             panic!("lagged");
         };

@@ -9,8 +9,15 @@
 //!
 //! [`TeeBody`] legt sich um die Antwort des Ziels: jedes Frame läuft
 //! unverändert zum Client, nebenbei entsteht ein
-//! [`FlowEvent::ResponseChunk`], und am Ende der Antwort — auch wenn der Client
-//! die Verbindung abbricht — wird der Flow mit `Record` abgeschlossen.
+//! [`FlowEvent::ResponseChunk`], jedes Stück geht durch den
+//! [`ResponseSink`] der Aufzeichnung, und am Ende der Antwort — auch wenn der
+//! Client die Verbindung abbricht — wird der Flow mit `Record` abgeschlossen.
+//!
+//! Der Unterschied zwischen „fertig" und „abgebrochen" bleibt dabei erhalten:
+//! Eine Antwort, die zu Ende lief, schließt mit [`ResponseSink::finish`], eine
+//! abgebrochene mit [`ResponseSink::abort`], und die Aufzeichnung vermerkt sie
+//! als gekürzt. Eine halbe Antwort, die wie eine ganze aussieht, wäre genau
+//! die stille Lücke, die `backlog/CONVENTIONS.md` 4.13 verbietet.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -21,6 +28,7 @@ use bytes::Bytes;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt as _, Full, Limited};
 use humanitl_core::{Flow, FlowEvent, TransitionInput};
+use humanitl_recorder::ResponseSink;
 use hyper::body::{Body, Frame, Incoming};
 
 use crate::hold::HoldQueue;
@@ -86,13 +94,26 @@ pub fn empty() -> ResponseBody {
 }
 
 /// Legt [`TeeBody`] um die Antwort des Ziels und boxt sie als [`ResponseBody`].
+///
+/// `sink` ist der Mitschnitt der Aufzeichnung, `status` der Status, mit dem er
+/// abgeschlossen wird. Ohne Aufzeichnung ist `sink` `None`, und der Tee tut,
+/// was er vor HUM-026 tat.
 #[must_use]
-pub fn tee(inner: Incoming, flow: Flow, queue: Arc<HoldQueue>) -> ResponseBody {
+pub fn tee(
+    inner: Incoming,
+    flow: Flow,
+    queue: Arc<HoldQueue>,
+    sink: Option<ResponseSink>,
+    status: u16,
+) -> ResponseBody {
     TeeBody {
         inner,
         flow: Some(flow),
         queue,
         finished: false,
+        sink,
+        status,
+        complete: false,
     }
     .map_err(BoxError::from)
     .boxed()
@@ -109,6 +130,12 @@ pub struct TeeBody {
     flow: Option<Flow>,
     queue: Arc<HoldQueue>,
     finished: bool,
+    /// Der Mitschnitt der Antwort, solange einer läuft.
+    sink: Option<ResponseSink>,
+    /// Der Status, mit dem der Mitschnitt abgeschlossen wird.
+    status: u16,
+    /// Wahr, sobald der Strom des Ziels regulär endete.
+    complete: bool,
 }
 
 impl TeeBody {
@@ -118,6 +145,24 @@ impl TeeBody {
             return;
         }
         self.finished = true;
+        // Erst der Mitschnitt, dann der Zustandswechsel: `Recorded` bedeutet
+        // „alles zu diesem Flow steht", und die Antwort gehört dazu.
+        if let Some(sink) = self.sink.take() {
+            let flow_id = self.flow.as_ref().map(|flow| flow.id);
+            let stored = if self.complete {
+                sink.finish(self.status)
+            } else {
+                sink.abort()
+            };
+            if let Err(err) = stored {
+                tracing::warn!(
+                    flow = ?flow_id,
+                    code = err.diagnostic().code.as_str(),
+                    why = %err.diagnostic().why,
+                    "the response body could not be recorded; the answer itself was delivered"
+                );
+            }
+        }
         if let Some(mut flow) = self.flow.take() {
             match flow.apply(TransitionInput::Record, SystemTime::now()) {
                 Ok(event) => self.queue.publish(event),
@@ -140,13 +185,18 @@ impl Body for TeeBody {
         let this = self.get_mut();
         match Pin::new(&mut this.inner).poll_frame(cx) {
             Poll::Ready(Some(Ok(frame))) => {
-                if let (Some(flow), Some(data)) = (this.flow.as_ref(), frame.data_ref()) {
-                    let len = data.len() as u64;
-                    this.queue.publish(FlowEvent::ResponseChunk {
-                        flow_id: flow.id,
-                        at: SystemTime::now(),
-                        len,
-                    });
+                if let Some(data) = frame.data_ref() {
+                    if let Some(sink) = this.sink.as_mut() {
+                        sink.chunk(data);
+                    }
+                    if let Some(flow) = this.flow.as_ref() {
+                        let len = data.len() as u64;
+                        this.queue.publish(FlowEvent::ResponseChunk {
+                            flow_id: flow.id,
+                            at: SystemTime::now(),
+                            len,
+                        });
+                    }
                 }
                 Poll::Ready(Some(Ok(frame)))
             }
@@ -155,6 +205,7 @@ impl Body for TeeBody {
                 Poll::Ready(Some(Err(err)))
             }
             Poll::Ready(None) => {
+                this.complete = true;
                 this.finish();
                 Poll::Ready(None)
             }
