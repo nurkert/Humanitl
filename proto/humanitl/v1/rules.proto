@@ -64,7 +64,11 @@ message Rule {
   bool bundled = 7;
   string note = 8;
   google.protobuf.Timestamp created_at = 9;
-  // Position in der effektiven Liste, vom Daemon gesetzt.
+  // Platz der Regel in ihrer eigenen Gruppe, 1-basiert: Session-Regeln,
+  // dauerhafte Regeln und mitgelieferte Regeln sind drei geordnete Listen, und
+  // eine Position zaehlt nur innerhalb einer davon (CONVENTIONS.md 4.5). In
+  // einer Antwort setzt der Daemon den Wert; in `RulesRequest.add` ist er der
+  // Wunsch des Clients, und 0 heisst "ans Ende".
   uint32 position = 10;
   // Wie oft die Regel seit dem Laden gegriffen hat.
   uint64 hit_count = 11;

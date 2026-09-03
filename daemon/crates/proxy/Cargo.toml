@@ -13,6 +13,15 @@ workspace = true
 libc.workspace = true
 humanitl-core.workspace = true
 humanitl-config.workspace = true
+# Die Regel-Engine (HUM-022) entscheidet im Proxy-Pfad, was ohne Menschen
+# entschieden wird (ADR-007, HUM-023); `tools/deps-allow.toml` erlaubt die
+# Kante. `chrono` kommt dazu, weil `RuleSet::evaluate` den Zeitpunkt für
+# `expires` braucht.
+humanitl-rules.workspace = true
+# Die Detektoren (HUM-025) laufen im Proxy-Pfad, bevor eine Regel greift;
+# `tools/deps-allow.toml` erlaubt die Kante.
+humanitl-findings.workspace = true
+chrono.workspace = true
 dashmap.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

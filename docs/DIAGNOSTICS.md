@@ -19,8 +19,9 @@ Entfernen eines Codes.
 | proxy | `PROXY` | 001 | 009 | Anfragen, Caps, Protokoll |
 | tls | `TLS` | 001 | 009 | CA, Zertifikate, Handschlag |
 | llm | `LLM` | 001 | 009 | LLM-Endpunkt und seine Antworten |
-| rules | `RULES` | 001 | 009 | Regeldatei und Muster |
+| rules | `RULES` | 001 | 019 | 001-008 Regeldatei und Muster, 009-011 Regelspeicher (HUM-027) |
 | findings | `FINDINGS` | 001 | 009 | Detektoren für Secrets und personenbezogene Daten |
+| catalog | `CATALOG` | 001 | 009 | Gebündelter Domain-Katalog und Rangliste |
 | terminal | `TERM` | 001 | 009 | Terminal-Anbindung des Agenten |
 | recorder | `RECORDER` | 001 | 009 | Datenbank und Blob-Speicher |
 | limits | `LIMIT` | 001 | 009 | Budgets und Zeitgrenzen |
@@ -65,6 +66,10 @@ Flow nicht mehr gehalten
 #### IPC_004
 
 Decide-Anfrage ungültig
+
+#### IPC_005
+
+Rules-Anfrage ungültig
 
 ### Bereich config
 
@@ -226,6 +231,18 @@ Doppelte Regel-Id
 
 Regel wirkt zu breit
 
+#### RULES_009
+
+Regel-Datei nicht schreibbar
+
+#### RULES_010
+
+Mitgelieferte Regel ist unveränderlich
+
+#### RULES_011
+
+Regelsatz neu geladen
+
 ### Bereich findings
 
 #### FINDINGS_001
@@ -236,11 +253,39 @@ Detektor-Regeln unbrauchbar
 
 Scan unvollständig
 
+### Bereich catalog
+
+#### CATALOG_001
+
+Domain-Katalog nicht lesbar
+
+#### CATALOG_002
+
+Rangliste nicht lesbar
+
 ### Bereich terminal
 
 #### TERM_001
 
 Zweiter schreibender Terminal-Client abgelehnt
+
+### Bereich recorder
+
+#### RECORDER_001
+
+Aufzeichnung nicht verfügbar
+
+#### RECORDER_002
+
+Filter ungültig
+
+#### RECORDER_003
+
+Aufzeichnung konnte nicht schreiben
+
+#### RECORDER_004
+
+Blob-Speicher nicht benutzbar
 
 ### Bereich audit
 

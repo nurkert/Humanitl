@@ -13,6 +13,13 @@ workspace = true
 humanitl-config.workspace = true
 humanitl-core.workspace = true
 humanitl-proxy.workspace = true
+# Der Regel-RPC (HUM-027) wertet eine Regel gegen aufgezeichnete Flows aus
+# (`dry_run`) und liest den Regelspeicher des Proxys; `tools/deps-allow.toml`
+# erlaubt beide Kanten.
+humanitl-recorder.workspace = true
+humanitl-rules.workspace = true
+
+chrono.workspace = true
 
 base64.workspace = true
 bytes.workspace = true
