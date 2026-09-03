@@ -32,15 +32,21 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::Engine as _;
+use bytes::Bytes;
+use dashmap::DashMap;
 use humanitl_config::Config;
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{
-    BlockReason, Decision, DecisionSource, Diagnostic, FlowEvent, FlowId, SessionId, Severity,
+    BlockReason, BodyRef, Decision, DecisionSource, Diagnostic, FlowEvent, FlowId, HostName,
+    SessionId, Severity,
 };
 use humanitl_proxy::hold::NotHeld;
 use humanitl_proxy::rules_store::RulesStore;
 use humanitl_proxy::{FlowFilter, FlowRegistry, HoldQueue};
-use humanitl_recorder::Recorder;
+use humanitl_recorder::{
+    Cursor, CursorKey, Dir, FlowDetail as RecordedDetail, FlowQuery, Recorder, SortKey,
+};
 use tokio::net::UnixListener;
 use tokio::sync::oneshot;
 use tokio_stream::StreamExt as _;
@@ -49,6 +55,7 @@ use tokio_stream::wrappers::{BroadcastStream, UnixListenerStream};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
+use crate::domains::DomainTable;
 use crate::rules::RulesService;
 use crate::server_stub::{BoxStream, diagnostic_to_status};
 use crate::{PROTO_MAJOR, PROTO_MINOR, auth, convert, rules, v1};
@@ -66,6 +73,12 @@ pub const DEFAULT_PAGE_LIMIT: usize = 200;
 
 /// Obergrenze für `ListFlowsRequest.limit`, wie im Vertrag beschrieben.
 pub const MAX_PAGE_LIMIT: u32 = 1000;
+
+/// So viele Bytes trägt ein Stück eines Bodys über die Leitung (`GetBody`).
+///
+/// Groß genug, damit ein Body von einigen Megabyte nicht in tausend Nachrichten
+/// zerfällt, klein genug, damit der erste Teil sofort beim Client ist.
+pub const BODY_CHUNK_BYTES: usize = 64 * 1024;
 
 /// So lange darf eine offene Verbindung den Abbau nach dem Signal aufhalten.
 ///
@@ -87,7 +100,26 @@ pub struct IpcServer {
     info: v1::Info,
     body_cap_bytes: u64,
     rules: Option<RulesService>,
+    recorder: Option<Recorder>,
+    domains: Option<Arc<DomainTable>>,
+    bodies: BodyIndex,
 }
+
+/// Wo ein Body liegt, den dieser Dienst schon einmal ausgeliefert hat.
+///
+/// `GetBody` bekommt nur einen [`v1::BodyRef`], also Prüfsumme und Größe. Ein
+/// großer Body steht damit fest: Er liegt unter seiner Prüfsumme im
+/// Blob-Speicher. Ein kleiner steht als Spalte in der Zeile seiner Nachricht,
+/// und die findet man ohne Flow und Richtung nicht wieder — die Aufzeichnung
+/// kennt keinen Weg von der Prüfsumme zur Nachricht (siehe Bericht zu
+/// HUM-026).
+///
+/// Deshalb merkt sich der Dienst beim Ausliefern eines `FlowDetail`, zu
+/// welchem Flow und welcher Richtung jede Prüfsumme gehört. Der Weg des
+/// Klienten ist ohnehin `GetFlow` und dann `GetBody`: Vorher kennt er keinen
+/// [`v1::BodyRef`], den er verlangen könnte. Gespeichert werden nur die
+/// Kennungen, nie Inhalt; ein Eintrag kostet gut fünfzig Bytes.
+type BodyIndex = DashMap<[u8; 32], (FlowId, Dir)>;
 
 impl IpcServer {
     /// Der Dienst über einer Warteschlange und ihrer Registry.
@@ -110,7 +142,39 @@ impl IpcServer {
             },
             body_cap_bytes: config.limits.hold_body_cap_bytes,
             rules: None,
+            recorder: None,
+            domains: None,
+            bodies: BodyIndex::new(),
         }
+    }
+
+    /// Derselbe Dienst, der aus der Aufzeichnung liest.
+    ///
+    /// Mit ihr beantworten `ListFlows`, `GetFlow` und `GetBody` aus der
+    /// Datenbank statt aus dem Speicher: Die Historie überlebt damit einen
+    /// Neustart, und die Oberfläche hält nie mehr als eine Seite (ADR-008).
+    /// Ohne sie bleibt es bei der Registry der laufenden Sitzung — der Weg,
+    /// den der Fake und die Tests gehen.
+    #[must_use]
+    pub fn with_recorder(mut self, recorder: Recorder) -> Self {
+        self.recorder = Some(recorder);
+        self
+    }
+
+    /// Derselbe Dienst mit dem Domain-Katalog (HUM-031).
+    ///
+    /// Dieselbe Tabelle, die der Proxy beim Eintreffen eines Flows füllt; hier
+    /// wird sie nur gelesen.
+    #[must_use]
+    pub fn with_domains(mut self, domains: Arc<DomainTable>) -> Self {
+        self.domains = Some(domains);
+        self
+    }
+
+    /// Die Aufzeichnung, sofern eine verdrahtet ist.
+    #[must_use]
+    pub const fn recorder(&self) -> Option<&Recorder> {
+        self.recorder.as_ref()
     }
 
     /// Derselbe Dienst mit einem Regelspeicher.
@@ -153,6 +217,7 @@ impl IpcServer {
         request: &v1::SubscribeRequest,
     ) -> BoxStream<Result<v1::FlowEvent, Status>> {
         let registry = Arc::clone(&self.registry);
+        let domains = self.domains.clone();
         let include_passthrough = request.include_passthrough;
         let live = BroadcastStream::new(self.registry.subscribe()).filter_map(move |item| {
             let event = match item {
@@ -170,7 +235,13 @@ impl IpcServer {
                         .get(id)
                         .is_some_and(|record| convert::record_to_summary(&record).passthrough)
                 });
-            (!hidden).then(|| Ok(convert::flow_event_to_proto(&event, &registry)))
+            (!hidden).then(|| {
+                Ok(convert::flow_event_to_proto(
+                    &event,
+                    &registry,
+                    domains.as_deref(),
+                ))
+            })
         });
         match self.rules.as_ref().map(RulesService::store) {
             None => Box::pin(tokio_stream::iter(self.backlog(request)).chain(live)),
@@ -270,6 +341,133 @@ impl IpcServer {
             next_cursor,
             total,
         }
+    }
+
+    /// Eine Seite der Flow-Historie aus der Aufzeichnung.
+    ///
+    /// Gefiltert, sortiert und geschnitten wird in `SQLite`; hier wird nur
+    /// übersetzt. Vor dem Lesen steht ein [`Recorder::flush`]: Der Schreiber
+    /// bündelt Schreibvorgänge, und eine Liste, die den gerade entschiedenen
+    /// Flow noch nicht kennt, wäre für den Menschen ein verschwundener Flow.
+    ///
+    /// `since_flow_id` wird auf der Seite angewandt, nicht in der Abfrage: Die
+    /// Aufzeichnung blättert nach Zeit, und der Anker ist eine Flow-Id. Weil
+    /// eine [`FlowId`] ein UUID der Fassung 7 ist, ist ihre Ordnung die der
+    /// Ankunft; die Zeilen davor fallen damit richtig weg. `total` bleibt die
+    /// Zahl, die der Filter trifft.
+    async fn recorded_page(
+        &self,
+        recorder: &Recorder,
+        request: &v1::ListFlowsRequest,
+    ) -> Result<v1::FlowPage, Diagnostic> {
+        let query = flow_query(request)?;
+        recorder.flush().await;
+        let page = recorder
+            .list_flows(&query)
+            .await
+            .map_err(humanitl_recorder::RecorderError::into_diagnostic)?;
+        let since = FlowId::parse(&request.since_flow_id).ok();
+        let flows = page
+            .rows
+            .iter()
+            .filter(|row| since.is_none_or(|anchor| row.id > anchor))
+            .map(convert::recorded_summary_to_proto)
+            .collect();
+        Ok(v1::FlowPage {
+            flows,
+            next_cursor: page.next.as_ref().map(encode_cursor).unwrap_or_default(),
+            total: page.total_estimate,
+        })
+    }
+
+    /// Ein Flow mit allem, was zu ihm aufgezeichnet wurde.
+    async fn recorded_detail(
+        &self,
+        recorder: &Recorder,
+        id: FlowId,
+    ) -> Result<Option<v1::FlowDetail>, Diagnostic> {
+        recorder.flush().await;
+        let Some(detail) = recorder
+            .get_flow(id)
+            .await
+            .map_err(humanitl_recorder::RecorderError::into_diagnostic)?
+        else {
+            return Ok(None);
+        };
+        for message in &detail.messages {
+            self.bodies.insert(message.body.sha256, (id, message.dir));
+        }
+        let preview = preview_of(recorder, &detail).await;
+        Ok(Some(convert::recorded_detail_to_proto(
+            &detail,
+            self.domain_of(id, &detail.summary.host),
+            // Nur die Registry der laufenden Sitzung weiß, ob der Scan die
+            // ganze Anfrage gesehen hat; die Tabelle `flows` führt die Spalte
+            // nicht (siehe Bericht zu HUM-026).
+            self.registry.get(id).is_some_and(|r| r.findings_truncated),
+            preview,
+        )))
+    }
+
+    /// Was der Katalog zu diesem Flow sagt.
+    ///
+    /// Für einen Flow dieser Sitzung die Antwort, die beim Eintreffen entstand;
+    /// für einen älteren dieselbe Auskunft ohne die Zähler, denn die gehören
+    /// dieser Sitzung. Ohne Katalog bleibt das Feld leer, statt einen Apex zu
+    /// raten.
+    fn domain_of(&self, id: FlowId, host: &str) -> Option<v1::DomainInfo> {
+        let domains = self.domains.as_ref()?;
+        let info = domains.get(id).or_else(|| {
+            HostName::parse(host)
+                .ok()
+                .map(|host| domains.describe(&host))
+        })?;
+        Some(convert::domain_to_proto(&info))
+    }
+
+    /// Die Bytes hinter einem [`v1::BodyRef`].
+    ///
+    /// Zwei Wege, und der erste ist der genaue: Kennt der Dienst die Nachricht,
+    /// zu der die Prüfsumme gehört ([`BodyIndex`]), liest er sie über deren
+    /// Verweis und bekommt damit auch einen Body, der in der Datenbank steht.
+    /// Sonst bleibt der Blob-Speicher, in dem jeder große Body unter seiner
+    /// Prüfsumme liegt.
+    async fn read_body(
+        &self,
+        recorder: &Recorder,
+        wire: &v1::BodyRef,
+    ) -> Result<Bytes, Diagnostic> {
+        let sha256 = body_hash(wire)?;
+        if let Some(entry) = self.bodies.get(&sha256) {
+            let (flow, dir) = *entry.value();
+            drop(entry);
+            recorder.flush().await;
+            let detail = recorder
+                .get_flow(flow)
+                .await
+                .map_err(humanitl_recorder::RecorderError::into_diagnostic)?;
+            if let Some(message) = detail
+                .as_ref()
+                .and_then(|detail| detail.messages.iter().find(|m| m.dir == dir))
+                && message.body.sha256 == sha256
+            {
+                return recorder
+                    .read_body(&message.body)
+                    .await
+                    .map_err(humanitl_recorder::RecorderError::into_diagnostic);
+            }
+        }
+        let body = BodyRef {
+            sha256,
+            size: wire.size,
+            inline: None,
+            content_type: (!wire.content_type.is_empty()).then(|| wire.content_type.clone()),
+            truncated: wire.truncated,
+        };
+        recorder
+            .read_body(&body)
+            .await
+            .map_err(humanitl_recorder::RecorderError::into_diagnostic)
     }
 
     /// Liest die Entscheidung aus der Anfrage.
@@ -406,6 +604,205 @@ fn rules_changed_stream(store: Arc<RulesStore>) -> BoxStream<Result<v1::FlowEven
     Box::pin(stream)
 }
 
+/// Die Anfrage an die Aufzeichnung, aus der Anfrage des Vertrags.
+///
+/// Der Filter wird durchgereicht, wie er ist: Seine Grammatik ist dieselbe für
+/// Oberfläche, `ListFlows` und Kommandozeile (`backlog/sprint-2.md` HUM-026),
+/// und ein unbekannter Schlüssel ist dort ein Befund mit `RECORDER_002`, nicht
+/// eine stillschweigend leere Liste. Ohne `include_passthrough` kommt
+/// `passthrough:false` dazu — derselbe Filter, den auch der Ereignisstrom legt.
+///
+/// # Errors
+///
+/// `IPC_005`, wenn `order_by` oder `cursor` nicht lesbar sind.
+fn flow_query(request: &v1::ListFlowsRequest) -> Result<FlowQuery, Diagnostic> {
+    let mut filter = request.filter.trim().to_owned();
+    if !request.include_passthrough {
+        if !filter.is_empty() {
+            filter.push(' ');
+        }
+        filter.push_str("passthrough:false");
+    }
+    let (sort, desc) = order_of(&request.order_by)?;
+    let cursor = if request.cursor.is_empty() {
+        None
+    } else {
+        Some(decode_cursor(&request.cursor)?)
+    };
+    Ok(FlowQuery {
+        filter,
+        sort,
+        desc,
+        limit: request.limit,
+        cursor,
+    })
+}
+
+/// Sortierschlüssel und Richtung aus `ListFlowsRequest.order_by`.
+///
+/// Leer heißt „nach Ankunft, neueste zuerst". Ein Schlüssel, den die
+/// Aufzeichnung nicht sortieren kann, wird abgelehnt und nicht durch einen
+/// anderen ersetzt: Eine Liste in einer Reihenfolge, die niemand verlangt hat,
+/// sähe aus wie die verlangte.
+///
+/// # Errors
+///
+/// `IPC_005` mit der Liste der gültigen Schlüssel.
+fn order_of(order_by: &str) -> Result<(SortKey, bool), Diagnostic> {
+    let lower = order_by.to_ascii_lowercase();
+    let mut words = lower.split_whitespace();
+    let sort = match words.next() {
+        None | Some("received_at" | "ts" | "time") => SortKey::Ts,
+        Some("host") => SortKey::Host,
+        Some("duration") => SortKey::Duration,
+        Some("size") => SortKey::Size,
+        Some(other) => {
+            return Err(Diagnostic::builder(codes::IPC_005, Severity::Error)
+                .why(format!(
+                    "{other:?} is not a sort key; list_flows sorts by received_at, host, \
+                     duration or size"
+                ))
+                .build());
+        }
+    };
+    let ascending = words.any(|word| word == "asc");
+    Ok((sort, !ascending))
+}
+
+/// Der Cursor der nächsten Seite als Text des Vertrags.
+///
+/// Er trägt genau die drei Felder, die die Aufzeichnung braucht
+/// (`backlog/CONVENTIONS.md` 4.14), und ist für den Klienten undurchsichtig:
+/// Er reicht ihn zurück, wie er ihn bekommen hat.
+fn encode_cursor(cursor: &Cursor) -> String {
+    let sort = match &cursor.sort {
+        None => String::new(),
+        Some(CursorKey::Int(value)) => format!("i{value}"),
+        Some(CursorKey::Text(value)) => format!("t{value}"),
+    };
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(format!("{}\u{1f}{}\u{1f}{sort}", cursor.ts, cursor.id))
+}
+
+/// Liest einen Cursor zurück.
+///
+/// # Errors
+///
+/// `IPC_005`, wenn der Text nicht von [`encode_cursor`] stammt. Geraten wird
+/// nichts: Ein halb gelesener Cursor lieferte eine Seite, die weder lückenlos
+/// noch doppelfrei wäre.
+fn decode_cursor(text: &str) -> Result<Cursor, Diagnostic> {
+    let refuse = || {
+        Diagnostic::builder(codes::IPC_005, Severity::Error)
+            .why(format!(
+                "{text:?} is not a cursor from this daemon; ask again without a cursor to \
+                 start at the first page"
+            ))
+            .build()
+    };
+    let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(text)
+        .map_err(|_error| refuse())?;
+    let decoded = String::from_utf8(raw).map_err(|_error| refuse())?;
+    let mut parts = decoded.split('\u{1f}');
+    let ts: i64 = parts
+        .next()
+        .ok_or_else(refuse)?
+        .parse()
+        .map_err(|_error| refuse())?;
+    let id = parts.next().ok_or_else(refuse)?.to_owned();
+    let sort = match parts.next().unwrap_or_default() {
+        "" => None,
+        rest => match rest.split_at(1) {
+            ("i", value) => Some(CursorKey::Int(value.parse().map_err(|_error| refuse())?)),
+            ("t", value) => Some(CursorKey::Text(value.to_owned())),
+            _ => return Err(refuse()),
+        },
+    };
+    if parts.next().is_some() {
+        return Err(refuse());
+    }
+    Ok(Cursor { ts, id, sort })
+}
+
+/// Die Prüfsumme aus einem [`v1::BodyRef`].
+///
+/// # Errors
+///
+/// `IPC_005`, wenn sie keine 32 Bytes hat. Ein gekürzter Hash zeigte auf einen
+/// anderen Inhalt oder auf keinen.
+fn body_hash(wire: &v1::BodyRef) -> Result<[u8; 32], Diagnostic> {
+    <[u8; 32]>::try_from(wire.sha256.as_slice()).map_err(|_error| {
+        Diagnostic::builder(codes::IPC_005, Severity::Error)
+            .why(format!(
+                "a body reference carries a sha256 of {} bytes, not 32",
+                wire.sha256.len()
+            ))
+            .build()
+    })
+}
+
+/// Der Anfang des Anfrage-Bodys für die Anzeige.
+///
+/// Steht der Body in der Datenbank, kommt er von dort; sonst aus dem
+/// Blob-Speicher. Scheitert das Lesen, bleibt die Vorschau leer und der Grund
+/// steht im Protokoll: Der vollständige Inhalt kommt ohnehin über `GetBody`,
+/// und eine erfundene Vorschau wäre schlimmer als keine.
+async fn preview_of(recorder: &Recorder, detail: &RecordedDetail) -> String {
+    let Some(message) = detail
+        .messages
+        .iter()
+        .find(|message| message.dir == Dir::Request)
+    else {
+        return String::new();
+    };
+    if let Some(inline) = message.body.inline.as_ref() {
+        return convert::body_preview(inline);
+    }
+    if message.body.size == 0 {
+        return String::new();
+    }
+    match recorder.read_body(&message.body).await {
+        Ok(bytes) => convert::body_preview(&bytes),
+        Err(error) => {
+            tracing::warn!(
+                flow = %detail.summary.id,
+                why = %error,
+                "the request body could not be read for the preview"
+            );
+            String::new()
+        }
+    }
+}
+
+/// Zerlegt einen Body in die Stücke, die `GetBody` streamt.
+///
+/// Auch ein leerer Body ergibt genau ein Stück mit `last = true`: Der Klient
+/// soll das Ende sehen und nicht auf ein nächstes warten.
+fn body_stream(bytes: &Bytes) -> BoxStream<Result<v1::BodyChunk, Status>> {
+    let total = bytes.len();
+    let chunks: Vec<Result<v1::BodyChunk, Status>> = if total == 0 {
+        vec![Ok(v1::BodyChunk {
+            data: Vec::new(),
+            offset: 0,
+            last: true,
+        })]
+    } else {
+        (0..total)
+            .step_by(BODY_CHUNK_BYTES)
+            .map(|offset| {
+                let end = (offset + BODY_CHUNK_BYTES).min(total);
+                Ok(v1::BodyChunk {
+                    data: bytes.slice(offset..end).to_vec(),
+                    offset: offset as u64,
+                    last: end == total,
+                })
+            })
+            .collect()
+    };
+    Box::pin(tokio_stream::iter(chunks))
+}
+
 /// Der Fehler einer RPC, die es noch nicht gibt.
 ///
 /// Kein [`Diagnostic`]: das hier ist kein Fehlschlag der Anfrage, sondern der
@@ -434,11 +831,22 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         Ok(Response::new(self.event_stream(&request.into_inner())))
     }
 
+    /// Eine Seite der Flow-Historie.
+    ///
+    /// Mit Aufzeichnung kommt sie aus der Datenbank und umfasst damit auch
+    /// frühere Sitzungen; ohne sie aus der Registry dieser Sitzung.
     async fn list_flows(
         &self,
         request: Request<v1::ListFlowsRequest>,
     ) -> Result<Response<v1::FlowPage>, Status> {
-        Ok(Response::new(self.page(&request.into_inner())))
+        let request = request.into_inner();
+        let Some(recorder) = self.recorder.as_ref() else {
+            return Ok(Response::new(self.page(&request)));
+        };
+        self.recorded_page(recorder, &request)
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
     }
 
     /// Entscheidet einen oder mehrere wartende Flows.
@@ -532,18 +940,64 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         }))
     }
 
+    /// Alles, was zu einem Flow aufgezeichnet wurde.
+    ///
+    /// Ohne Aufzeichnung bleibt der Datensatz der laufenden Sitzung; er trägt
+    /// die Anfrage, aber weder Antwort-Kopfzeilen noch Funde. Kennt weder die
+    /// Aufzeichnung noch die Registry den Flow, ist das `NOT_FOUND` und kein
+    /// leerer Erfolg: Ein leeres Detail sähe aus wie ein Flow ohne Inhalt.
     async fn get_flow(
         &self,
-        _request: Request<v1::FlowRef>,
+        request: Request<v1::FlowRef>,
     ) -> Result<Response<v1::FlowDetail>, Status> {
-        Err(unimplemented("GetFlow", "HUM-026 with the recorder"))
+        let request = request.into_inner();
+        let id = FlowId::parse(&request.flow_id).map_err(|error| {
+            diagnostic_to_status(&bad_request(format!(
+                "{:?} is not a flow id: {error}",
+                request.flow_id
+            )))
+        })?;
+        if let Some(recorder) = self.recorder.as_ref()
+            && let Some(detail) = self
+                .recorded_detail(recorder, id)
+                .await
+                .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?
+        {
+            return Ok(Response::new(detail));
+        }
+        self.registry
+            .get(id)
+            .map(|record| Response::new(convert::record_to_detail(&record)))
+            .ok_or_else(|| Status::not_found(format!("IPC_003 {}", NotHeld::Unknown { id })))
     }
 
+    /// Der Inhalt eines Bodys, in Stücken.
+    ///
+    /// Ohne Aufzeichnung gibt es keinen Ort, an dem ein Body läge: Der Proxy
+    /// hält ihn nur, solange die Anfrage läuft. Das ist dann kein
+    /// `UNIMPLEMENTED` — die RPC gibt es —, sondern der Befund, dass dieser
+    /// Daemon ohne Aufzeichnung läuft.
     async fn get_body(
         &self,
-        _request: Request<v1::BodyRef>,
+        request: Request<v1::BodyRef>,
     ) -> Result<Response<Self::GetBodyStream>, Status> {
-        Err(unimplemented("GetBody", "HUM-026 with the recorder"))
+        let wire = request.into_inner();
+        let recorder = self.recorder.as_ref().ok_or_else(|| {
+            diagnostic_to_status(
+                &Diagnostic::builder(codes::RECORDER_001, Severity::Error)
+                    .why(
+                        "this daemon runs without a recording; bodies are only kept while the \
+                         request is in flight"
+                            .to_owned(),
+                    )
+                    .build(),
+            )
+        })?;
+        let bytes = self
+            .read_body(recorder, &wire)
+            .await
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        Ok(Response::new(body_stream(&bytes)))
     }
 
     /// Liest oder ändert den Regelsatz.
@@ -806,16 +1260,6 @@ mod tests {
         let server = server(&queue);
         let codes = [
             server
-                .get_flow(Request::new(v1::FlowRef::default()))
-                .await
-                .err()
-                .map(|status| (status.code(), status.message().to_owned())),
-            server
-                .get_body(Request::new(v1::BodyRef::default()))
-                .await
-                .err()
-                .map(|status| (status.code(), status.message().to_owned())),
-            server
                 .sandbox(Request::new(v1::SandboxRequest::default()))
                 .await
                 .err()
@@ -851,6 +1295,54 @@ mod tests {
             assert_eq!(code, tonic::Code::Unimplemented);
             assert!(message.contains("arrives in"), "{message}");
         }
+    }
+
+    #[tokio::test]
+    async fn without_a_recording_a_flow_detail_is_not_found_and_a_body_says_why() {
+        // `GetFlow` und `GetBody` sind kein `UNIMPLEMENTED` mehr (HUM-026). Ohne
+        // Aufzeichnung antwortet der Dienst aus der Registry dieser Sitzung, und
+        // was auch die nicht kennt, ist `NOT_FOUND` — nie ein leeres Detail, das
+        // wie ein Flow ohne Inhalt aussähe.
+        let queue = queue();
+        let server = server(&queue);
+
+        let status = server
+            .get_flow(Request::new(v1::FlowRef {
+                flow_id: FlowId::new().to_string(),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(status.code(), tonic::Code::NotFound, "{status}");
+
+        // Ein Body dagegen hat ohne Aufzeichnung überhaupt keinen Ort: Der Proxy
+        // hält ihn nur, solange die Anfrage läuft. Das sagt der Befund.
+        let refused = server.get_body(Request::new(v1::BodyRef::default())).await;
+        let Err(status) = refused else {
+            panic!("a daemon without a recording has no body to hand out")
+        };
+        assert!(status.message().contains("RECORDER_001"), "{status}");
+    }
+
+    #[tokio::test]
+    async fn a_flow_of_this_session_is_answered_from_the_registry() {
+        let queue = queue();
+        let server = server(&queue);
+        let session = SessionId::new();
+        let flow = analyzed(session, "api.github.com");
+        let id = flow.id;
+        queue
+            .registry()
+            .insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+
+        let detail = server
+            .get_flow(Request::new(v1::FlowRef {
+                flow_id: id.to_string(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(detail.summary.expect("a summary").flow_id, id.to_string());
+        assert!(!detail.findings_truncated, "nothing was cut short");
     }
 
     #[tokio::test]

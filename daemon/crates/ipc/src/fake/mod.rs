@@ -25,6 +25,7 @@ use tokio_stream::StreamExt as _;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::{BroadcastStream, UnboundedReceiverStream};
 
+use crate::convert;
 use crate::convert::{
     after, before, diagnostic_to_proto, lagged_event, matches_filter, request_from_proto, timestamp,
 };
@@ -535,6 +536,7 @@ impl FakeDaemon {
     /// Führt eine Regel-Operation aus.
     fn apply_rules_op(&self, request: v1::RulesRequest) -> v1::RulesResponse {
         let mut dry_run_matches = Vec::new();
+        let mut test = None;
         match request.op {
             None | Some(v1::rules_request::Op::List(())) => {}
             Some(v1::rules_request::Op::Add(mut rule)) => {
@@ -573,6 +575,9 @@ impl FakeDaemon {
             Some(v1::rules_request::Op::DryRun(dry_run)) => {
                 dry_run_matches = self.dry_run(dry_run.rule.as_ref(), dry_run.limit);
             }
+            Some(v1::rules_request::Op::Test(probe)) => {
+                test = self.test(&probe);
+            }
             // Der Fake hat keine Datei: neu zu laden heißt hier, den Stand zu
             // melden, den er ohnehin hat. Ein `UNIMPLEMENTED` wäre falsch,
             // weil die Oberfläche gegen den Fake übt, was der Daemon kann.
@@ -586,7 +591,47 @@ impl FakeDaemon {
             dry_run_matches,
             diagnostic: None,
             diagnostics: Vec::new(),
+            test,
         }
+    }
+
+    /// Fragt den Regelsatz des Fakes, was er zu einer Anfrage sagt.
+    ///
+    /// Ausgewertet wird mit derselben Engine wie im Daemon: Die Oberfläche soll
+    /// gegen den Fake nichts üben, was der echte Daemon anders beantwortet
+    /// (`backlog/CONVENTIONS.md` 4.11). Eine Regel, die sich nicht lesen lässt,
+    /// wird übergangen; eine unlesbare Probe ergibt keinen Treffer, und ohne
+    /// Treffer gilt `ask` — nie `allow`.
+    fn test(&self, probe: &v1::rules_request::Test) -> Option<v1::RuleTest> {
+        let session = self.state.session().id;
+        let method = convert::method_from_proto(probe.method, "").ok()?;
+        let (scheme, authority, path) = convert::split_url(&probe.url).ok()?;
+        let rules = self.state.rules();
+        let set = humanitl_rules::RuleSet::from_rules(
+            rules
+                .iter()
+                .filter_map(|rule| convert::rule_from_proto(rule, session).ok()),
+        );
+        let mut key = humanitl_rules::RequestKey::new(
+            &authority.host,
+            &method,
+            &path,
+            scheme,
+            authority.port,
+        );
+        if v1::Upgrade::try_from(probe.upgrade) == Ok(v1::Upgrade::Websocket) {
+            key = key.with_upgrade(humanitl_core::Upgrade::WebSocket);
+        }
+        let verdict = set.evaluate(&key, chrono::Utc::now(), session);
+        let matching = verdict
+            .rule()
+            .and_then(|id| rules.iter().find(|rule| rule.rule_id == id.to_string()));
+        Some(v1::RuleTest {
+            action: convert::action_to_proto(verdict.action()) as i32,
+            matched: matches!(verdict, humanitl_rules::Verdict::Matched { .. }),
+            rule_id: verdict.rule().map(|id| id.to_string()).unwrap_or_default(),
+            position: matching.map_or(0, |rule| rule.position),
+        })
     }
 
     /// Probelauf einer Regel gegen die bekannten Flows.

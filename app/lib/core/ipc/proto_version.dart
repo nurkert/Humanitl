@@ -11,8 +11,11 @@ abstract final class ProtoVersion {
   /// Major version. Must equal `Info.proto_major`.
   static const int major = 1;
 
-  /// Minor version. Informational.
-  static const int minor = 0;
+  /// Minor version. Informational: minors are additive, so an app with an
+  /// older minor keeps working against a newer daemon and simply does not
+  /// read the newer fields. Raised to 1 with the rule test operation, the
+  /// truncated-findings flag and the domain info (HUM-023 to HUM-031).
+  static const int minor = 1;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';
