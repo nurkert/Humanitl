@@ -85,6 +85,12 @@ enum BlockReason {
 
   /// The target resolved to a private address without `allow_private`.
   privateAddress,
+
+  /// A secret with a matching checksum was found in the request and
+  /// `hold.hard_block_checksum_secrets` is on. Nobody was asked, so this is
+  /// not `user`: an answer naming a human who never decided would be untrue
+  /// (`backlog/CONVENTIONS.md` 4.13).
+  secret,
 }
 
 /// Who decided.
