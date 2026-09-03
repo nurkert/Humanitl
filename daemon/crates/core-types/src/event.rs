@@ -5,12 +5,16 @@
 //! später Plugins sind Zuhörer, niemand fragt den Proxy nach seinem Zustand
 //! (siehe `docs/ARCHITECTURE.md` 1).
 //!
-//! Zwei Varianten entstehen nicht im Automaten: [`FlowEvent::ResponseChunk`]
+//! Drei Varianten entstehen nicht im Automaten: [`FlowEvent::ResponseChunk`]
 //! schreibt der Proxy beim Durchreichen der Antwort, [`FlowEvent::Lagged`]
-//! meldet die IPC-Schicht, wenn ein Zuhörer zu langsam war.
+//! meldet die IPC-Schicht, wenn ein Zuhörer zu langsam war, und
+//! [`FlowEvent::Diagnostic`] trägt einen Befund in denselben Strom, damit die
+//! Oberfläche ihn an derselben Stelle sieht wie den Flow, um den es geht
+//! (`backlog/CONVENTIONS.md` 4.3).
 
 use std::time::{Instant, SystemTime};
 
+use crate::diagnostics::Diagnostic;
 use crate::finding::Finding;
 use crate::flow::{Decision, DecisionSource, UpstreamError};
 use crate::http::HttpRequest;
@@ -114,6 +118,20 @@ pub enum FlowEvent {
         /// Wie viele Ereignisse verloren gingen.
         n: u64,
     },
+    /// Ein Befund, der im Strom sichtbar sein muss; kein Zustandswechsel.
+    ///
+    /// Entsteht dort, wo etwas schiefgeht, das kein Zustand des Flows ist:
+    /// ein abgelehnter Übergang im Proxy (`PROXY_005`), eine sitzungsweite
+    /// TLS-Ablehnung. Gehört der Befund zu einem Flow, steht seine Id in
+    /// `flow_id`, sonst ist sie `None`.
+    Diagnostic {
+        /// Der Flow, falls der Befund zu einem gehört.
+        flow_id: Option<FlowId>,
+        /// Wann.
+        at: SystemTime,
+        /// Der Befund; geboxt, damit die Variante nicht alle anderen aufbläht.
+        diagnostic: Box<Diagnostic>,
+    },
 }
 
 impl FlowEvent {
@@ -132,10 +150,14 @@ impl FlowEvent {
             Self::TimedOut { .. } => "timed_out",
             Self::Recorded { .. } => "recorded",
             Self::Lagged { .. } => "lagged",
+            Self::Diagnostic { .. } => "diagnostic",
         }
     }
 
-    /// Der Flow, zu dem das Ereignis gehört. `None` nur bei [`FlowEvent::Lagged`].
+    /// Der Flow, zu dem das Ereignis gehört.
+    ///
+    /// `None` bei [`FlowEvent::Lagged`] und bei einem [`FlowEvent::Diagnostic`],
+    /// der die ganze Sitzung betrifft.
     #[must_use]
     pub const fn flow_id(&self) -> Option<FlowId> {
         match self {
@@ -149,6 +171,7 @@ impl FlowEvent {
             | Self::Failed { flow_id, .. }
             | Self::TimedOut { flow_id, .. }
             | Self::Recorded { flow_id, .. } => Some(*flow_id),
+            Self::Diagnostic { flow_id, .. } => *flow_id,
             Self::Lagged { .. } => None,
         }
     }
@@ -166,7 +189,8 @@ impl FlowEvent {
             | Self::ResponseChunk { at, .. }
             | Self::Failed { at, .. }
             | Self::TimedOut { at, .. }
-            | Self::Recorded { at, .. } => Some(*at),
+            | Self::Recorded { at, .. }
+            | Self::Diagnostic { at, .. } => Some(*at),
             Self::Lagged { .. } => None,
         }
     }
