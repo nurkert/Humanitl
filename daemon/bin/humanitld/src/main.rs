@@ -249,6 +249,7 @@ fn build_handler(
         Arc::new(SystemResolver),
         client_tls,
         config.resolver.prefer,
+        Duration::from_secs(config.limits.header_timeout_secs),
     );
     let timeout = match config.hold.ask_mode {
         AskMode::None => Duration::ZERO,

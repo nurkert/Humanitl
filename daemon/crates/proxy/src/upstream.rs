@@ -17,6 +17,7 @@
 //! geschieht.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
 use http_body_util::Full;
@@ -121,22 +122,31 @@ pub struct Upstream {
     resolver: Arc<dyn Resolver>,
     client_tls: ClientTls,
     prefer: IpPreference,
+    handshake_timeout: Duration,
 }
 
 impl Upstream {
     /// Ein Weiterleiter über `egress`, der Namen über `resolver` auflöst.
+    ///
+    /// `handshake_timeout` begrenzt den TLS-Handschlag, den HTTP-Handschlag und
+    /// das Senden der Anfrage bis zu den Antwort-Kopfzeilen, jeweils für sich.
+    /// Der TCP-Verbindungsaufbau hat seine eigene Grenze im Egress-Port; ohne
+    /// diese hier könnte ein Ziel, das nach dem Verbinden schweigt, die
+    /// Weiterleitung unbegrenzt festhalten.
     #[must_use]
     pub const fn new(
         egress: Arc<dyn Egress>,
         resolver: Arc<dyn Resolver>,
         client_tls: ClientTls,
         prefer: IpPreference,
+        handshake_timeout: Duration,
     ) -> Self {
         Self {
             egress,
             resolver,
             client_tls,
             prefer,
+            handshake_timeout,
         }
     }
 
@@ -188,9 +198,9 @@ impl Upstream {
         if request.scheme.is_secure() {
             let connector = TlsConnector::from(Arc::clone(&self.client_tls.config));
             let name = server_name(&authority.host)?;
-            let tls = connector
-                .connect(name, stream)
+            let tls = tokio::time::timeout(self.handshake_timeout, connector.connect(name, stream))
                 .await
+                .map_err(|_elapsed| UpstreamError::Timeout)?
                 .map_err(|_err| UpstreamError::Tls)?;
             self.send(request, body, tls).await
         } else {
@@ -208,9 +218,13 @@ impl Upstream {
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin + 'static,
     {
-        let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
-            .await
-            .map_err(|_err| UpstreamError::Connect)?;
+        let (mut sender, conn) = tokio::time::timeout(
+            self.handshake_timeout,
+            hyper::client::conn::http1::handshake(TokioIo::new(stream)),
+        )
+        .await
+        .map_err(|_elapsed| UpstreamError::Timeout)?
+        .map_err(|_err| UpstreamError::Connect)?;
         tokio::spawn(async move {
             if let Err(err) = conn.await {
                 tracing::debug!(%err, "upstream connection ended");
@@ -218,9 +232,9 @@ impl Upstream {
         });
 
         let outgoing = build_outgoing(request, body).map_err(|_err| UpstreamError::Connect)?;
-        sender
-            .send_request(outgoing)
+        tokio::time::timeout(self.handshake_timeout, sender.send_request(outgoing))
             .await
+            .map_err(|_elapsed| UpstreamError::Timeout)?
             .map_err(|_err| UpstreamError::Connect)
     }
 }
