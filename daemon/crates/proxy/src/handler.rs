@@ -253,10 +253,16 @@ impl FlowHandler {
         match decision {
             Decision::Allow => self.forward(flow, request, body_bytes, &meta).await,
             Decision::AllowEdited { request: edited } => {
-                // Die Konsistenz von Authority und SNI prüft HUM-023; hier wird
-                // die entschiedene Anfrage getreu weitergeleitet, mit ihrem
-                // eigenen (bearbeiteten) Body.
+                // Die Bearbeitung darf Methode, Pfad, Kopfzeilen und Body
+                // aendern, aber nie das Ziel: Entschieden wurde fuer genau
+                // diese Authority, und eine bearbeitete Anfrage an einen
+                // anderen Host waere ein Egress, den kein Mensch freigegeben
+                // hat. Die Konsistenz von Authority und SNI der eingehenden
+                // Verbindung prueft HUM-023; das hier ist die andere Richtung.
                 let edited = *edited;
+                if edited.authority != flow.request.authority {
+                    return self.revise_to_block(&mut flow, BlockReason::AuthorityMismatch);
+                }
                 let edited_body = edited
                     .body
                     .inline
@@ -364,6 +370,20 @@ impl FlowHandler {
         block_to_response(&block, flow.id)
     }
 
+    /// Verwandelt eine bereits getroffene Freigabe in eine Sperre (nur das
+    /// System darf das, und nur bevor etwas weitergeleitet wurde), schließt
+    /// den Flow ab und baut die Block-Antwort.
+    fn revise_to_block(&self, flow: &mut Flow, reason: BlockReason) -> Response<ResponseBody> {
+        let _ = self.apply(
+            flow,
+            TransitionInput::Decide {
+                decision: Decision::Block { reason, note: None },
+                source: DecisionSource::System,
+            },
+        );
+        self.record_block(flow, reason, None)
+    }
+
     /// Schließt einen gescheiterten Flow ab (`Record`) und baut die
     /// `502`-Antwort.
     fn record_failure(&self, flow: &mut Flow, error: UpstreamError) -> Response<ResponseBody> {
@@ -424,17 +444,33 @@ impl FlowHandler {
     /// nicht ein zweites Mal gemeldet wird.
     fn fail_closed(&self, flow: &mut Flow) -> Response<ResponseBody> {
         let reason = BlockReason::NoRoute;
-        if matches!(
-            flow.state,
-            FlowState::Analyzed { .. } | FlowState::Held { .. }
-        ) && let Ok(event) = flow.apply(
-            TransitionInput::Decide {
-                decision: Decision::Block { reason, note: None },
-                source: DecisionSource::System,
-            },
-            SystemTime::now(),
-        ) {
-            self.inner.queue.publish(event);
+        // `Record` ist nur aus `Decided(Block | TimedOut)`, `Responded` und
+        // `Failed` erlaubt. Der Flow wird deshalb erst auf dem legalen Weg in
+        // einen dieser Zustaende gebracht, je nachdem, wo er gerade steht;
+        // sonst bliebe er in der Registry fuer immer in `Received`,
+        // `Decided(Allow)` oder `Forwarded` haengen und `Recorded` kaeme nie.
+        let block = TransitionInput::Decide {
+            decision: Decision::Block { reason, note: None },
+            source: DecisionSource::System,
+        };
+        let steps: Vec<TransitionInput> = match &flow.state {
+            FlowState::Received => vec![
+                TransitionInput::Analyze {
+                    findings: Vec::new(),
+                },
+                block,
+            ],
+            FlowState::Analyzed { .. } | FlowState::Held { .. } => vec![block],
+            FlowState::Decided(Decision::Allow | Decision::AllowEdited { .. })
+            | FlowState::Forwarded => vec![TransitionInput::Fail {
+                error: UpstreamError::Connect,
+            }],
+            _ => Vec::new(),
+        };
+        for step in steps {
+            if let Ok(event) = flow.apply(step, SystemTime::now()) {
+                self.inner.queue.publish(event);
+            }
         }
         if let Ok(event) = flow.apply(TransitionInput::Record, SystemTime::now()) {
             self.inner.queue.publish(event);
