@@ -1,9 +1,4 @@
-![Humanitl banner](images/banner.jpeg)
-
-<p align="center">
-  <strong>Humanitl</strong><br>
-  Human-in-the-loop internet access for AI coding agents.
-</p>
+![Humanitl banner - Human-in-the-loop internet access for AI coding agents.](images/banner.jpeg)
 
 <p align="center">
   <a href="https://github.com/nurkert/Humanitl/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/nurkert/Humanitl/actions/workflows/ci.yml/badge.svg"></a>
