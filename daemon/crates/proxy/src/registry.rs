@@ -49,8 +49,8 @@ use humanitl_core::{
 };
 use tokio::sync::broadcast;
 
+use crate::connect::ConnectionContext;
 use crate::hold::MAX_EVENT_BUFFER;
-use crate::pipeline::ConnMeta;
 
 /// Der Ausgangszustand in [`InvalidTransition`], wenn es den Flow gar nicht gibt.
 const UNREGISTERED: &str = "unregistered";
@@ -58,7 +58,7 @@ const UNREGISTERED: &str = "unregistered";
 /// Alles, was die Registry über einen Flow weiß.
 ///
 /// Eine Kopie dessen, was der Handler in seinem [`Flow`] führt, ergänzt um die
-/// Verbindungsdaten ([`ConnMeta`]) und die Felder, die eine Liste braucht,
+/// Verbindungsdaten ([`ConnectionContext`]) und die Felder, die eine Liste braucht,
 /// ohne die Historie durchsuchen zu müssen.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FlowRecord {
@@ -71,7 +71,7 @@ pub struct FlowRecord {
     /// Die Anfrage, wie sie ankam.
     pub request: HttpRequest,
     /// Die Verbindung, aus der er stammt.
-    pub meta: ConnMeta,
+    pub meta: ConnectionContext,
     /// Wann die Anfrage ankam.
     pub created: SystemTime,
     /// Die Frist, solange der Flow gehalten wird; sonst `None`.
@@ -102,12 +102,22 @@ pub struct FlowRecord {
     /// läuft oder dessen Antwort noch streamt, hat kein Ende und deshalb auch
     /// keine Dauer.
     pub finished: Option<SystemTime>,
+    /// Wahr, wenn der Scan der Detektoren nicht die ganze Anfrage gesehen hat
+    /// (`ScanReport::truncated`, HUM-025).
+    ///
+    /// Der Ort, an dem die Oberfläche es abholt: Eine leere Fundliste zu einer
+    /// nur teilweise durchsuchten Anfrage ist kein Freispruch, und die Karte
+    /// muss den Unterschied zeigen können. Gesetzt wird das Feld vom Handler,
+    /// der als Einziger den Bericht des Scans in der Hand hat; die Befunde,
+    /// die die Lücke erklären (`FINDINGS_002`), stehen zusätzlich als
+    /// [`FlowEvent::Diagnostic`] am selben Flow.
+    pub findings_truncated: bool,
 }
 
 impl FlowRecord {
     /// Der Datensatz zu einem Flow, so wie er gerade steht.
     #[must_use]
-    pub fn new(flow: &Flow, meta: &ConnMeta) -> Self {
+    pub fn new(flow: &Flow, meta: &ConnectionContext) -> Self {
         let mut record = Self {
             id: flow.id,
             session: flow.session,
@@ -121,6 +131,7 @@ impl FlowRecord {
             response_status: None,
             response_bytes: 0,
             finished: None,
+            findings_truncated: false,
         };
         record.refresh_deadline();
         record
@@ -514,7 +525,7 @@ mod tests {
     };
 
     use super::{FlowFilter, FlowRecord, FlowRegistry, UNREGISTERED};
-    use crate::pipeline::ConnMeta;
+    use crate::connect::ConnectionContext;
 
     fn flow(session: SessionId, host: &str) -> Flow {
         let host = HostName::Dns(host.to_owned());
@@ -545,7 +556,7 @@ mod tests {
         let flow = flow(session, "example.com");
         let id = flow.id;
         let mut rx = registry.subscribe();
-        registry.insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+        registry.insert(FlowRecord::new(&flow, &ConnectionContext::plain(session)));
 
         let event = registry
             .transition(id, TransitionInput::Analyze { findings: vec![] })
@@ -573,7 +584,7 @@ mod tests {
         let registry = FlowRegistry::new(&Limits::default());
         let session = SessionId::new();
         let mut flow = analyzed(session, "example.com");
-        registry.insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+        registry.insert(FlowRecord::new(&flow, &ConnectionContext::plain(session)));
         let deadline = Instant::now() + Duration::from_secs(30);
         let held = flow
             .apply(
@@ -608,7 +619,7 @@ mod tests {
         let registry = FlowRegistry::new(&Limits::default());
         let session = SessionId::new();
         let mut flow = analyzed(session, "example.com");
-        registry.insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+        registry.insert(FlowRecord::new(&flow, &ConnectionContext::plain(session)));
 
         // Vor der Entscheidung weiß der Datensatz nichts von alledem.
         let fresh = registry.get(flow.id).unwrap();
@@ -662,7 +673,7 @@ mod tests {
         let registry = FlowRegistry::new(&Limits::default());
         let session = SessionId::new();
         let mut flow = analyzed(session, "example.com");
-        registry.insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+        registry.insert(FlowRecord::new(&flow, &ConnectionContext::plain(session)));
         let held = flow
             .apply(
                 TransitionInput::Hold {
@@ -700,7 +711,7 @@ mod tests {
         let registry = FlowRegistry::new(&Limits::default());
         let session = SessionId::new();
         let flow = flow(session, "example.com");
-        registry.insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+        registry.insert(FlowRecord::new(&flow, &ConnectionContext::plain(session)));
         registry.record(&FlowEvent::Forwarded {
             flow_id: flow.id,
             at: SystemTime::now(),
@@ -718,7 +729,7 @@ mod tests {
         let mut ids = Vec::new();
         for secs in [3_u64, 1, 2] {
             let mut flow = analyzed(session, "example.com");
-            registry.insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+            registry.insert(FlowRecord::new(&flow, &ConnectionContext::plain(session)));
             let held = flow
                 .apply(
                     TransitionInput::Hold {
@@ -734,7 +745,10 @@ mod tests {
         }
         // Ein entschiedener Flow steht hinter jedem gehaltenen.
         let mut decided = analyzed(session, "example.com");
-        registry.insert(FlowRecord::new(&decided, &ConnMeta::plain(session)));
+        registry.insert(FlowRecord::new(
+            &decided,
+            &ConnectionContext::plain(session),
+        ));
         let event = decided
             .apply(
                 TransitionInput::Decide {
@@ -770,7 +784,7 @@ mod tests {
         let b = flow(mine, "cdn.example.com");
         let c = flow(other, "api.example.com");
         for (flow, session) in [(&a, mine), (&b, mine), (&c, other)] {
-            registry.insert(FlowRecord::new(flow, &ConnMeta::plain(session)));
+            registry.insert(FlowRecord::new(flow, &ConnectionContext::plain(session)));
         }
 
         assert_eq!(registry.list(&FlowFilter::session(mine)).len(), 2);
