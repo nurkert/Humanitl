@@ -29,13 +29,17 @@ use std::time::{Duration, Instant};
 use humanitl_core::diagnostics::codes::SANDBOX_012;
 use humanitl_core::ids::SandboxId;
 use humanitl_core::{Diagnostic, Severity};
-use rustix::process::{Pid, Signal, kill_process};
+use rustix::process::{Pid, Signal, kill_process, kill_process_group};
 
 use crate::bridge_env::{CHECK_NAMES, ShimCheck};
 use crate::bwrap::{is_userns_failure, userns_diagnostic};
 
 /// Wie lange [`SandboxHandle::kill`] nach `SIGTERM` wartet, bevor `SIGKILL` folgt.
 pub const KILL_GRACE: Duration = Duration::from_secs(5);
+
+/// Wie lange [`SandboxHandle::interrupt`] nach `SIGINT` auf das Ende der
+/// Sandbox wartet, bevor der Aufrufer eskaliert.
+pub const INTERRUPT_GRACE: Duration = Duration::from_secs(5);
 
 /// Wie lange nach dem Ende von `bwrap` auf die letzte Zeile der Status-Pipe
 /// gewartet wird, bevor der Befund gefällt wird. Die Pipe schließt mit
@@ -374,6 +378,50 @@ impl SandboxHandle {
         self.terminate(KILL_GRACE);
     }
 
+    /// Bittet den Agenten mit `SIGINT`, selbst aufzuhören, und wartet
+    /// höchstens `grace` auf das Ende der Sandbox.
+    ///
+    /// Gibt `true` zurück, wenn die Sandbox in der Frist beendet ist; sonst
+    /// `false`, und der Aufrufer eskaliert mit [`SandboxHandle::kill`].
+    ///
+    /// Das Signal geht an die Prozessgruppe des Sandbox-Init, nicht an
+    /// `bwrap`. Das hat zwei Gründe, und beide sind gemessen:
+    ///
+    /// - `bwrap` selbst hat für `SIGINT` keinen Handler. Ein `SIGINT` an den
+    ///   `bwrap`-Prozess beendet ihn sofort, und mit `--die-with-parent`
+    ///   bekommt der Namensraum darunter ein `SIGKILL`. Der Agent käme nie
+    ///   dazu, aufzuräumen.
+    /// - Das Init des PID-Namensraums ist wieder `bwrap`
+    ///   ([`SandboxHandle::child_pid`]), und ein Signal mit Standardwirkung an
+    ///   ein Namensraum-Init verwirft der Kernel. Es trägt aber wegen
+    ///   `--new-session` die Sitzung und die Prozessgruppe der Sandbox, und
+    ///   der Agent hängt darin. `kill(-child_pid, SIGINT)` erreicht deshalb
+    ///   genau den Agenten, dessen `SIGINT` der Shim an sein Kind weiterreicht.
+    ///
+    /// Die eigene Prozessgruppe ist nie betroffen: das Sandbox-Init hat mit
+    /// `setsid` eine eigene aufgemacht. Kennt das Handle die PID des Init noch
+    /// nicht, ist nichts zu unterbrechen, und der Aufrufer eskaliert.
+    #[must_use]
+    pub fn interrupt(&self, grace: Duration) -> bool {
+        if self.try_wait().is_some() {
+            return true;
+        }
+        let Some(child) = self.child_pid() else {
+            return false;
+        };
+        let Some(pid) = Pid::from_raw(i32::try_from(child).unwrap_or(0)) else {
+            return false;
+        };
+        // ESRCH heißt: die Gruppe ist schon weg, und dann ist auch die Sandbox
+        // gleich weg; jeder andere Fehler wäre ein Recht, das wir bei einer
+        // selbst gestarteten Sandbox haben. In beiden Fällen entscheidet
+        // allein, ob der Prozess in der Frist endet.
+        if kill_process_group(pid, Signal::INT).is_err() {
+            return false;
+        }
+        self.shared.wait_exit(Some(grace)).is_some()
+    }
+
     /// Wie [`SandboxHandle::kill`], mit eigener Frist zwischen den Signalen.
     pub fn terminate(&self, grace: Duration) {
         if self.try_wait().is_some() {
@@ -506,6 +554,25 @@ mod tests {
 
         shared.close_report();
         assert!(handle.report().closed);
+    }
+
+    /// Ohne die PID des Sandbox-Init gibt es keine Prozessgruppe, an die die
+    /// Bitte gehen könnte; dann eskaliert der Aufrufer.
+    #[test]
+    fn an_interrupt_without_a_known_init_pid_leaves_the_escalation_to_the_caller() {
+        let shared = Arc::new(Shared::default());
+        let handle = SandboxHandle::new(SandboxId::nil(), 0, String::new(), Arc::clone(&shared));
+        assert!(handle.child_pid().is_none());
+        assert!(!handle.interrupt(Duration::from_millis(50)));
+    }
+
+    /// Eine Sandbox, die schon beendet ist, ist nichts mehr zu unterbrechen.
+    #[test]
+    fn an_interrupt_after_the_end_is_nothing_to_do() {
+        let shared = Arc::new(Shared::default());
+        let handle = SandboxHandle::new(SandboxId::nil(), 0, String::new(), Arc::clone(&shared));
+        shared.set_exit(ExitStatus::from_raw(0));
+        assert!(handle.interrupt(Duration::from_millis(50)));
     }
 
     #[test]

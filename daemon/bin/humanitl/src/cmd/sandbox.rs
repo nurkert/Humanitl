@@ -45,8 +45,9 @@ use humanitl_core::diagnostics::codes;
 use humanitl_core::ids::SessionId;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_sandbox::{
-    BwrapBackend, CheckResult, LaunchInputs, MIN_BWRAP_VERSION, MountPolicy, SANDBOX_SHELL,
-    SandboxBackend, SandboxHandle, SandboxProfile, SessionContext, StdioMode, shell_line,
+    BwrapBackend, CheckResult, INTERRUPT_GRACE, LaunchInputs, MIN_BWRAP_VERSION, MountPolicy,
+    SANDBOX_SHELL, SandboxBackend, SandboxHandle, SandboxProfile, SessionContext, StdioMode,
+    shell_line,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -104,7 +105,7 @@ const EXIT_INTERRUPTED: u8 = 130;
 pub async fn run(ctx: &Context, cmd: &SandboxCmd) -> Result<u8, Failure> {
     match cmd {
         SandboxCmd::Argv { cmd } => argv(ctx, cmd),
-        SandboxCmd::Run { cmd } => start(ctx, cmd).await,
+        SandboxCmd::Run { cmd, tests_dir } => start(ctx, cmd, tests_dir.as_deref()).await,
         SandboxCmd::Check => check(ctx),
     }
 }
@@ -186,7 +187,11 @@ fn argv(ctx: &Context, command: &[OsString]) -> Result<u8, Failure> {
 }
 
 /// `sandbox run`: starten, durchreichen, mit dem Code des Befehls enden.
-async fn start(ctx: &Context, command: &[OsString]) -> Result<u8, Failure> {
+async fn start(
+    ctx: &Context,
+    command: &[OsString],
+    tests_dir: Option<&Path>,
+) -> Result<u8, Failure> {
     let config = ctx.config()?.config;
 
     // Schritt 1 der Spezifikation: ohne Daemon kein Lauf. Er hält den
@@ -199,10 +204,13 @@ async fn start(ctx: &Context, command: &[OsString]) -> Result<u8, Failure> {
         .map_err(|status| Failure::new(status_diagnostic(&status, "GetInfo")))?;
 
     let setup = prepare(ctx, &config, Wiring::Daemon, command)?;
-    let plan = setup
+    let mut plan = setup
         .backend
         .plan(&setup.profile, &setup.session)
         .map_err(Failure::new)?;
+    if let Some(dir) = tests_dir {
+        bind_tests_dir(ctx, &mut plan.argv, dir)?;
+    }
     ctx.render.detail(&format!("argv: {}", plan.argv_line()));
 
     let handle = Arc::new(setup.backend.launch(&plan).map_err(Failure::new)?);
@@ -325,12 +333,87 @@ fn enforce_isolation(
     Err(check_failure(&results))
 }
 
+// --- Das Testverzeichnis ----------------------------------------------------
+//
+// `profiles/sandbox/test.toml` nennt in `mounts.extra_ro` den Pfad
+// `/tests/escape`. Der ist ein Platzhalter: er steht für den Ort in der
+// Sandbox, nicht für einen Ort auf dem Host. `--tests-dir DIR` zieht die
+// Quelle genau dieses einen Binds auf ein Verzeichnis des Arbeitsbaums, damit
+// die Escape-Tests nach `backlog/CONVENTIONS.md` 3.11 über
+// `humanitl sandbox run --profile test -- /tests/escape/esc-N-<name>.sh`
+// laufen und nicht über ein Ad-hoc-Skript.
+//
+// Das umgeht die Mount-Allowlist bewusst, genau wie das Projektverzeichnis:
+// beides kommt aus dem Aufruf, nicht aus dem Profil (siehe
+// [`MountPolicy`]). Derselbe Eingriff steht in
+// `daemon/crates/sandbox/src/bin/escape-launch.rs`; mit der `Sandbox`-RPC
+// (HUM-040) wandert er hinter sie, als Feld der Sitzung.
+
+/// Der Platzhalter, den `profiles/sandbox/test.toml` in `mounts.extra_ro` nennt.
+const TESTS_DIR_DST: &str = "/tests/escape";
+
+/// Zieht die Quelle des Binds nach [`TESTS_DIR_DST`] auf `dir`.
+///
+/// # Errors
+///
+/// `SANDBOX_010`, wenn das Profil den Platzhalter nicht nennt: dann zeigt
+/// `--tests-dir` auf nichts, und ein Lauf, der die Skripte nicht sieht,
+/// bewiese nichts.
+fn bind_tests_dir(ctx: &Context, argv: &mut [OsString], dir: &Path) -> Result<(), Failure> {
+    let src = if dir.is_absolute() {
+        dir.to_path_buf()
+    } else {
+        ctx.cwd.join(dir)
+    };
+    if !rebind_source(argv, Path::new(TESTS_DIR_DST), &src) {
+        return Err(Failure::new(
+            Diagnostic::builder(codes::SANDBOX_010, Severity::Blocking)
+                .why(format!(
+                    "the sandbox profile does not name {TESTS_DIR_DST} in mounts.extra_ro, so                      --tests-dir {} has nothing to point at",
+                    src.display()
+                ))
+                .fix(FixAction::ChangeSetting {
+                    key: "sandbox.profile".to_owned(),
+                    value: "test".to_owned(),
+                })
+                .build(),
+        ));
+    }
+    ctx.render
+        .detail(&format!("tests dir {} -> {TESTS_DIR_DST}", src.display()));
+    Ok(())
+}
+
+/// Setzt die Quelle des ersten Binds nach `dst` auf `src`; `false`, wenn es
+/// ihn nicht gibt.
+fn rebind_source(args: &mut [OsString], dst: &Path, src: &Path) -> bool {
+    let bind = std::ffi::OsStr::new("--bind");
+    let ro_bind = std::ffi::OsStr::new("--ro-bind");
+    for index in 0..args.len().saturating_sub(2) {
+        let flag = args[index].as_os_str();
+        if (flag == bind || flag == ro_bind) && Path::new(&args[index + 2]) == dst {
+            args[index + 1] = src.as_os_str().to_os_string();
+            return true;
+        }
+    }
+    false
+}
+
 /// Wartet auf das Ende der Sandbox und reicht `SIGINT` weiter.
 ///
-/// `bwrap` läuft mit `--new-session`, hat also kein steuerndes Terminal und
-/// bekommt das `SIGINT` der Tastatur nicht. Die Kommandozeile bekommt es, hält
-/// die Sandbox an und wartet auf ihr Ende, bevor sie selbst endet: ein
-/// halb beendeter Agent hinterließe Dateien im Projekt.
+/// Die Sandbox läuft mit `--new-session`, hat also kein steuerndes Terminal
+/// und bekommt das `SIGINT` der Tastatur nicht. Die Kommandozeile bekommt es
+/// und gibt es weiter, statt die Sandbox zu erschlagen: `SIGINT` ist die
+/// Bitte, selbst aufzuhören, und der Agent hat dafür eigene Handler, die
+/// aufräumen und mit einem eigenen Code enden. Deshalb endet der Lauf danach
+/// mit dem Code des Agenten und nicht pauschal mit 130.
+///
+/// Die Bitte ist befristet. Wer nach [`INTERRUPT_GRACE`] noch läuft, hat sie
+/// entweder nicht gehört oder ignoriert sie; dann folgt
+/// [`SandboxHandle::kill`] (`SIGTERM`, dann `SIGKILL`), und der Lauf endet mit
+/// [`EXIT_INTERRUPTED`]. In beiden Fällen wird auf das Ende gewartet, bevor
+/// die Kommandozeile selbst endet: ein halb beendeter Agent hinterließe
+/// Dateien im Projekt.
 async fn wait_or_interrupt(handle: Arc<SandboxHandle>) -> Result<u8, Failure> {
     let waiting = Arc::clone(&handle);
     let mut waiter = tokio::task::spawn_blocking(move || waiting.wait());
@@ -344,9 +427,23 @@ async fn wait_or_interrupt(handle: Arc<SandboxHandle>) -> Result<u8, Failure> {
                 return finish(waiter.await);
             }
             let stopping = Arc::clone(&handle);
-            let _ = tokio::task::spawn_blocking(move || stopping.kill()).await;
-            let _ = waiter.await;
-            Ok(EXIT_INTERRUPTED)
+            let stopped = tokio::task::spawn_blocking(move || {
+                let stopped = stopping.interrupt(INTERRUPT_GRACE);
+                if !stopped {
+                    stopping.kill();
+                }
+                stopped
+            })
+            .await;
+            let joined = waiter.await;
+            // Nur wer selbst aufgehört hat, hat einen eigenen Exit-Code.
+            // Nach `kill` ist der Status der des Signals, und der sagt über
+            // den Agenten nichts mehr aus.
+            if matches!(stopped, Ok(true)) {
+                finish(joined)
+            } else {
+                Ok(EXIT_INTERRUPTED)
+            }
         }
     }
 }
@@ -660,11 +757,14 @@ mod tests {
 
     use std::ffi::OsString;
     use std::os::unix::process::ExitStatusExt as _;
+    use std::path::Path;
     use std::process::ExitStatus;
 
     use humanitl_config::Config;
 
-    use super::{CHECK_COMMAND, agent_command, exit_code_of, placeholder};
+    use super::{
+        CHECK_COMMAND, TESTS_DIR_DST, agent_command, exit_code_of, placeholder, rebind_source,
+    };
 
     #[test]
     fn the_exit_code_is_the_one_of_the_command() {
@@ -693,6 +793,50 @@ mod tests {
         config.agent.command = None;
         assert_eq!(agent_command(&config, &[]), ["/bin/sh"]);
         assert_eq!(CHECK_COMMAND[0], "/bin/sh");
+    }
+
+    #[test]
+    fn the_tests_directory_moves_the_source_of_that_one_bind() {
+        let mut argv: Vec<OsString> = [
+            "bwrap",
+            "--ro-bind",
+            "/usr",
+            "/usr",
+            "--ro-bind",
+            TESTS_DIR_DST,
+            TESTS_DIR_DST,
+            "--bind",
+            "/home/agent/project",
+            "/work",
+        ]
+        .iter()
+        .map(OsString::from)
+        .collect();
+
+        assert!(rebind_source(
+            &mut argv,
+            Path::new(TESTS_DIR_DST),
+            Path::new("/src/tests/escape"),
+        ));
+        assert_eq!(argv[5], OsString::from("/src/tests/escape"));
+        assert_eq!(argv[6], OsString::from(TESTS_DIR_DST));
+        // Kein anderer Bind wurde angefasst.
+        assert_eq!(argv[2], OsString::from("/usr"));
+        assert_eq!(argv[8], OsString::from("/home/agent/project"));
+    }
+
+    #[test]
+    fn a_profile_without_the_placeholder_has_nothing_to_rebind() {
+        let mut argv: Vec<OsString> = ["bwrap", "--ro-bind", "/usr", "/usr"]
+            .iter()
+            .map(OsString::from)
+            .collect();
+
+        assert!(!rebind_source(
+            &mut argv,
+            Path::new(TESTS_DIR_DST),
+            Path::new("/src/tests/escape"),
+        ));
     }
 
     #[test]

@@ -273,8 +273,13 @@ registry! {
     /// Die Hash-Kette in `audit.jsonl` passt nicht mehr zusammen.
     AUDIT_001 => "audit", "Hash-Kette gebrochen", "#audit_001";
 
+    /// Der Daemon hat geantwortet, aber den Aufruf abgelehnt: der Aufruf
+    /// selbst passt nicht zum Zustand des Daemons.
+    CLI_001 => "cli", "Aufruf am Daemon abgelehnt", "#cli_001";
     /// `--ask terminal` verträgt sich nicht mit einem Vollbild-TUI-Agenten.
     CLI_002 => "cli", "Vollbild-TUI-Agent nicht mit --ask terminal", "#cli_002";
+    /// Das Unterkommando steht im Vertrag, aber noch nicht in diesem Binary.
+    CLI_003 => "cli", "Unterkommando noch nicht verfügbar", "#cli_003";
 }
 
 /// Sucht einen Code im Register.

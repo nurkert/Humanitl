@@ -191,6 +191,11 @@ impl Context {
 /// dem Register und weiß mehr als der gRPC-Code. Sonst wird der Code
 /// übersetzt; `what` benennt den Aufruf, damit im `why` steht, was
 /// fehlgeschlagen ist.
+///
+/// Nur `Unavailable` heißt „Daemon nicht erreichbar" (`DAEMON_001`, Exit 2),
+/// und `Unauthenticated` heißt „kein brauchbarer Daemon" (`IPC_001`, ebenfalls
+/// Exit 2). Jede andere Antwort kommt von einem laufenden Daemon und ist ein
+/// Fehler des Aufrufs: `CLI_001` mit Exit 1 (`backlog/CONVENTIONS.md` 3.8).
 #[must_use]
 pub fn status_diagnostic(status: &Status, what: &str) -> Diagnostic {
     if let Some(diagnostic) = diagnostic_from_status(status)
@@ -210,8 +215,13 @@ pub fn status_diagnostic(status: &Status, what: &str) -> Diagnostic {
             .why(format!("{what} failed: {}", status.message()))
             .fix(FixAction::CopyCommand("humanitld".to_owned()))
             .build(),
-        other => Diagnostic::builder(codes::DAEMON_001, Severity::Error)
-            .title("Aufruf am Daemon fehlgeschlagen")
+        // Der Daemon hat geantwortet, also ist er erreichbar. Ein
+        // `InvalidArgument` oder `FailedPrecondition` ist ein Fehler des
+        // Aufrufs, kein fehlender Dienst: `DAEMON_001` und damit
+        // [`EXIT_DAEMON`] wäre hier eine falsche Auskunft an jedes Skript, das
+        // auf den Daemon wartet. `DAEMON_001` bleibt `Unavailable` und dem
+        // Verbindungsaufbau vorbehalten.
+        other => Diagnostic::builder(codes::CLI_001, Severity::Error)
             .why(format!(
                 "{what} failed with {}: {}",
                 other.description(),
@@ -271,14 +281,34 @@ fn fix_from_proto(fix: &humanitl_ipc::v1::FixAction) -> Option<FixAction> {
     }
 }
 
-/// Ein Befund für ein Unterkommando, das es noch nicht gibt.
+/// Die Meldung für ein Unterkommando, das es noch nicht gibt.
 ///
-/// Kein [`Diagnostic`]: Wie im Daemon (`humanitl_ipc::server`) ist das kein
-/// Fehlschlag der Anfrage, sondern der Stand des Vertrags. Die Meldung nennt
-/// das Issue, damit klar ist, worauf man wartet.
+/// Sie nennt das Issue, damit klar ist, worauf man wartet.
 #[must_use]
 pub fn not_yet(what: &str, arrives: &str) -> String {
     format!("{what} arrives in {arrives}")
+}
+
+/// Ein Unterkommando, das der Vertrag kennt und dieses Binary noch nicht.
+///
+/// Ein [`Failure`] wie jeder andere, damit der Aufrufer denselben Weg
+/// bekommt wie bei jedem Fehlschlag: mit `--json` eine Zeile JSON auf
+/// `stdout`, sonst den Block auf `stderr`. Ein nackter Satz auf `stderr` wäre
+/// für ein Skript unsichtbar gewesen. `why` nennt das Kommando, `fix` das
+/// Issue, das es bringt; der Exit-Code ist [`EXIT_USER`], denn getan hat der
+/// Aufruf nichts.
+#[must_use]
+pub fn not_yet_failure(what: &str, arrives: &str) -> Failure {
+    Failure::with_exit(
+        Diagnostic::builder(codes::CLI_003, Severity::Error)
+            .why(not_yet(what, arrives))
+            .fix(FixAction::OpenUrl(format!(
+                "{}/issues?q={arrives}",
+                env!("CARGO_PKG_REPOSITORY")
+            )))
+            .build(),
+        EXIT_USER,
+    )
 }
 
 /// Prüft, ob ein Pfad auf eine ausführbare Datei zeigt.
@@ -332,8 +362,47 @@ mod tests {
         assert_eq!(exit_code(&gone), EXIT_DAEMON);
 
         let other = status_diagnostic(&Status::internal("boom"), "GetFlow");
-        assert_eq!(other.code.as_str(), "DAEMON_001");
-        assert_eq!(other.title, "Aufruf am Daemon fehlgeschlagen");
+        assert_eq!(other.code.as_str(), "CLI_001");
+        assert_eq!(other.title, "Aufruf am Daemon abgelehnt");
+    }
+
+    #[test]
+    fn a_daemon_that_answers_is_never_a_daemon_that_is_missing() {
+        // Der Daemon läuft und hat geantwortet; nur der Aufruf passt nicht.
+        // Exit 2 hieße „Daemon nicht erreichbar" und wäre gelogen.
+        for status in [
+            Status::failed_precondition("no session is running"),
+            Status::invalid_argument("hold.timeout_secs is not a number"),
+            Status::unimplemented("Sandbox arrives in HUM-040"),
+            Status::not_found("no flow with that id"),
+        ] {
+            let diagnostic = status_diagnostic(&status, "Sandbox");
+            assert_eq!(diagnostic.code.as_str(), "CLI_001", "{status:?}");
+            assert_eq!(exit_code(&diagnostic), EXIT_USER, "{status:?}");
+        }
+
+        // Und umgekehrt: nur diese beiden bleiben bei Exit 2.
+        for status in [
+            Status::unavailable("socket closed"),
+            Status::unauthenticated("no token"),
+        ] {
+            assert_eq!(
+                exit_code(&status_diagnostic(&status, "GetInfo")),
+                EXIT_DAEMON,
+                "{status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_subcommand_is_a_diagnostic_with_its_issue() {
+        let failure = super::not_yet_failure("humanitl run", "HUM-067");
+        assert_eq!(failure.exit, EXIT_USER);
+        assert_eq!(failure.diagnostic.code.as_str(), "CLI_003");
+        assert!(failure.diagnostic.why.contains("humanitl run"));
+        assert!(failure.diagnostic.why.contains("HUM-067"));
+        let fix = crate::render::fix_line(failure.diagnostic.fix.as_ref().expect("a fix"));
+        assert!(fix.contains("HUM-067"), "{fix}");
     }
 
     #[test]
