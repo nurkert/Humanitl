@@ -1,3 +1,5 @@
+![Humanitl banner](images/banner.jpeg)
+
 <p align="center">
   <strong>Humanitl</strong><br>
   Human-in-the-loop internet access for AI coding agents.
