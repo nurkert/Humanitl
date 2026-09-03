@@ -44,6 +44,35 @@ uuid = { version = "1", features = ["v7", "serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 
+# Shared third-party versions. Crates opt in with `dep.workspace = true`.
+# Add a new entry here, never a bare version in a member crate.
+http = "1.5"
+bytes = "1.12"
+chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
+url = "2.5"
+prost = "0.14"
+prost-types = "0.14"
+tonic = "0.14"
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
+protox = "0.9"
+schemars = "1.2"
+toml = "1.1"
+serde_yaml_ng = "0.10"
+globset = "0.4"
+regex = "1.13"
+idna = "1.1"
+psl = "2.1"
+sha2 = "0.11"
+hmac = "0.13"
+dashmap = "6.2"
+clap = { version = "4.6", features = ["derive", "env"] }
+aho-corasick = "1.1"
+tempfile = "3"
+base64 = "0.22"
+tokio-stream = { version = "0.1", features = ["sync", "net"] }
+shlex = "2"
+
 [workspace.lints.rust]
 missing_docs = "warn"
 
@@ -54,3 +83,7 @@ unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
 module_name_repetitions = "allow"
+# `Diagnostic` is the error type of this codebase by design (ADR-012); it is
+# larger than clippy's default threshold, and boxing every error would push
+# the design decision into every signature. Allowed once, here, on purpose.
+result_large_err = "allow"

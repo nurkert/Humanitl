@@ -64,7 +64,10 @@ impl Paths {
     #[must_use]
     pub fn home(&self) -> PathBuf {
         self.env.non_empty("HOME").map_or_else(
-            || self.tmp_base().join(format!("{APP_DIR}-{}-home", self.env.uid())),
+            || {
+                self.tmp_base()
+                    .join(format!("{APP_DIR}-{}-home", self.env.uid()))
+            },
             PathBuf::from,
         )
     }
@@ -196,7 +199,7 @@ impl Paths {
         }
 
         let path = self.tmp_base().join(format!("{APP_DIR}-{uid}"));
-        let diagnostic = Diagnostic::new(CONFIG_004, Severity::Info)
+        let diagnostic = Diagnostic::builder(CONFIG_004, Severity::Info)
             .why(format!(
                 "XDG_RUNTIME_DIR is unset and {} does not exist; using {} instead, \
                  which is shared and does not survive a reboot",
@@ -285,8 +288,14 @@ mod tests {
             ("XDG_RUNTIME_DIR", "/run/user/1000"),
         ]);
 
-        assert_eq!(paths.config_path(), PathBuf::from("/cfg/humanitl/config.toml"));
-        assert_eq!(paths.rules_path(), PathBuf::from("/cfg/humanitl/rules.yaml"));
+        assert_eq!(
+            paths.config_path(),
+            PathBuf::from("/cfg/humanitl/config.toml")
+        );
+        assert_eq!(
+            paths.rules_path(),
+            PathBuf::from("/cfg/humanitl/rules.yaml")
+        );
         assert_eq!(
             paths.profile_path("work"),
             PathBuf::from("/cfg/humanitl/profiles/work.toml")
@@ -296,7 +305,10 @@ mod tests {
             paths.audit_path(),
             PathBuf::from("/data/humanitl/audit/audit.jsonl")
         );
-        assert_eq!(paths.ca_key_path(), PathBuf::from("/data/humanitl/ca/ca.key"));
+        assert_eq!(
+            paths.ca_key_path(),
+            PathBuf::from("/data/humanitl/ca/ca.key")
+        );
         assert_eq!(
             paths.daemon_socket(),
             PathBuf::from("/run/user/1000/humanitl/daemon.sock")
@@ -371,7 +383,10 @@ mod tests {
             paths.blob_path("ab34cd"),
             PathBuf::from("/data/humanitl/blobs/ab/ab34cd")
         );
-        assert_eq!(paths.blob_path("a"), PathBuf::from("/data/humanitl/blobs/a/a"));
+        assert_eq!(
+            paths.blob_path("a"),
+            PathBuf::from("/data/humanitl/blobs/a/a")
+        );
     }
 
     #[test]

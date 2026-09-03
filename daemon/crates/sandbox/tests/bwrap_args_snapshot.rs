@@ -253,7 +253,10 @@ fn the_hard_floor_is_in_every_shipped_profile() {
             "--new-session",
             "--clearenv",
         ] {
-            assert!(args.iter().any(|arg| arg == flag), "{name}: {flag} is missing");
+            assert!(
+                args.iter().any(|arg| arg == flag),
+                "{name}: {flag} is missing"
+            );
         }
         for (flag, value) in [
             ("--cap-drop", "ALL"),
@@ -282,7 +285,11 @@ fn the_hard_floor_is_in_every_shipped_profile() {
         // Die Namensräume stehen vorn, bevor irgendetwas eingehängt wird.
         let first_mount = index_of(&args, "--ro-bind");
         for ns in Namespace::ALL {
-            assert!(index_of(&args, ns.flag()) < first_mount, "{name}: {} after a mount", ns.flag());
+            assert!(
+                index_of(&args, ns.flag()) < first_mount,
+                "{name}: {} after a mount",
+                ns.flag()
+            );
         }
     }
 }
@@ -337,9 +344,18 @@ fn extra_rw_renders_as_bind_with_the_same_path_twice() {
         .expect("every extra_rw entry renders");
     let ro = window_at(&args, &["--ro-bind", "/opt/toolchain", "/opt/toolchain"])
         .expect("extra_ro renders as --ro-bind src dst");
-    assert!(ro < data && data < cache, "profile order: extra_ro, then extra_rw in order: {args:?}");
-    assert!(index_of(&args, "--dev") < ro, "the extras come after /proc and /dev");
-    assert!(cache < index_of(&args, "/home/u/proj"), "the extras come before the work bind");
+    assert!(
+        ro < data && data < cache,
+        "profile order: extra_ro, then extra_rw in order: {args:?}"
+    );
+    assert!(
+        index_of(&args, "--dev") < ro,
+        "the extras come after /proc and /dev"
+    );
+    assert!(
+        cache < index_of(&args, "/home/u/proj"),
+        "the extras come before the work bind"
+    );
 
     // Ein `extra_rw` macht aus einer `ro`-Sitzung keine schreibende: nur die
     // Erweiterung selbst ist `--bind`.
@@ -379,10 +395,13 @@ fn mandatory_masks_survive_an_empty_masked_files() {
     let profile = probe("[mounts]\nmasked_files = [\"/work/.npmrc\"]\n");
     let args = strings(&profile.to_bwrap_args(&context(WorkMode::Rw)));
     let envrc = window_at(&args, &["--ro-bind", "/dev/null", "/work/.envrc"]).expect("mandatory");
-    let git = window_at(&args, &["--ro-bind", "/dev/null", "/work/.git/config"])
-        .expect("mandatory");
+    let git =
+        window_at(&args, &["--ro-bind", "/dev/null", "/work/.git/config"]).expect("mandatory");
     let npmrc = window_at(&args, &["--ro-bind", "/dev/null", "/work/.npmrc"]).expect("addition");
-    assert!(envrc < git && git < npmrc, "mandatory masks first, then the profile's: {args:?}");
+    assert!(
+        envrc < git && git < npmrc,
+        "mandatory masks first, then the profile's: {args:?}"
+    );
 }
 
 /// Die `--unshare-*`-Flags folgen `Namespace::ALL`, nicht dem Profil: ein

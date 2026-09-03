@@ -114,7 +114,10 @@ mod tests {
         let original = sorted.clone();
         sorted.sort_unstable();
         sorted.dedup();
-        assert_eq!(sorted, original, "ALIASES must be sorted and free of doubles");
+        assert_eq!(
+            sorted, original,
+            "ALIASES must be sorted and free of doubles"
+        );
     }
 
     #[test]

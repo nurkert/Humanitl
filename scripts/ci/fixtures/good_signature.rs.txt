@@ -9,7 +9,7 @@ pub fn load_profile(path: &str) -> Result<Profile, ProfileError> {
 
 /* Auch im Blockkommentar: pub fn old() -> Result<(), String> */
 pub async fn connect(endpoint: &str) -> Result<Client, Diagnostic> {
-    Err(Diagnostic::new(LLM_001, Severity::Error).why(endpoint).build())
+    Err(Diagnostic::builder(LLM_001, Severity::Error).why(endpoint).build())
 }
 
 // Privat, also nicht Teil der öffentlichen Schnittstelle.

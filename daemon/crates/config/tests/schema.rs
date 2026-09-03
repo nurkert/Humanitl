@@ -46,7 +46,10 @@ fn every_leaf_has_tier_and_description() {
     let mut leaves = 0_usize;
 
     walk(&schema, "", &mut |path, node, group| {
-        let description = node.get("description").and_then(Value::as_str).unwrap_or("");
+        let description = node
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         assert!(
             !description.trim().is_empty(),
             "{path} has no description; the settings screen would show an empty line"
@@ -70,7 +73,10 @@ fn every_leaf_has_tier_and_description() {
         }
     });
 
-    assert!(leaves >= 40, "only {leaves} leaves, that cannot be complete");
+    assert!(
+        leaves >= 40,
+        "only {leaves} leaves, that cannot be complete"
+    );
     assert_eq!(leaves, schema::leaves().len());
 }
 

@@ -224,11 +224,7 @@ mod tests {
             Some("Nutze PyPI statt GitHub"),
         );
         assert_eq!(response.body.lines().count(), 5);
-        assert!(
-            response
-                .body
-                .ends_with("note: Nutze PyPI statt GitHub\n")
-        );
+        assert!(response.body.ends_with("note: Nutze PyPI statt GitHub\n"));
         assert_eq!(response.note.as_deref(), Some("Nutze PyPI statt GitHub"));
         assert_eq!(
             response.header_note().as_deref(),
@@ -274,7 +270,11 @@ mod tests {
 
         let spaced = format!("{} {}", "a".repeat(499), "b".repeat(100));
         let sanitized = sanitize_note(&spaced);
-        assert_eq!(sanitized.chars().count(), 499, "no trailing blank after the cut");
+        assert_eq!(
+            sanitized.chars().count(),
+            499,
+            "no trailing blank after the cut"
+        );
         assert!(sanitized.ends_with('a'), "{sanitized}");
         assert!(sanitize_note(&"x".repeat(600)).chars().count() <= NOTE_MAX_CHARS);
     }

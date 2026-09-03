@@ -98,7 +98,13 @@ fn parses_default_profile() {
     assert_eq!(profile.mounts.symlinks.len(), 4);
     assert_eq!(profile.mounts.symlinks[0].target, "usr/lib");
     assert_eq!(profile.mounts.symlinks[0].link, PathBuf::from("/lib"));
-    for required in ["/tmp", "/dev/shm", "/work/.git/hooks", "/work/.vscode", "/work/.idea"] {
+    for required in [
+        "/tmp",
+        "/dev/shm",
+        "/work/.git/hooks",
+        "/work/.vscode",
+        "/work/.idea",
+    ] {
         assert!(
             profile.mounts.tmpfs.contains(&PathBuf::from(required)),
             "mounts.tmpfs misses {required}"
@@ -156,7 +162,10 @@ fn parses_test_profile() {
 
     assert_eq!(profile.name, "test");
     assert_eq!(profile.mounts.extra_ro, [PathBuf::from("/tests/escape")]);
-    assert_eq!(profile.env.get("HUMANITL_TEST").map(String::as_str), Some("1"));
+    assert_eq!(
+        profile.env.get("HUMANITL_TEST").map(String::as_str),
+        Some("1")
+    );
     profile
         .validate_with(&MountPolicy::new(HOME))
         .expect("the escape profile passes the allowlist");
@@ -255,9 +264,18 @@ fn forbidden_mount_sources() {
         ("/home/tester/.gitconfig", "the git credential helper"),
         ("/home/tester/.netrc", "credentials in plain text"),
         ("/home/tester/.config/humanitl", "Humanitl's own rules"),
-        ("/home/tester/.local/share/humanitl", "Humanitl's own database"),
-        ("/home/tester/projects/other", "another project of the same user"),
-        ("/home/tester/../tester/.ssh", "private keys behind a detour"),
+        (
+            "/home/tester/.local/share/humanitl",
+            "Humanitl's own database",
+        ),
+        (
+            "/home/tester/projects/other",
+            "another project of the same user",
+        ),
+        (
+            "/home/tester/../tester/.ssh",
+            "private keys behind a detour",
+        ),
         ("/run/dbus/system_bus_socket", "the D-Bus system bus"),
         ("/var/run/dbus", "the D-Bus system bus, old name"),
         ("/root", "the superuser's home"),
@@ -273,14 +291,24 @@ fn forbidden_mount_sources() {
             panic!("{path} ({why}) was accepted by the mount allowlist");
         };
         assert_eq!(err.code.as_str(), "SANDBOX_006", "{path} ({why})");
-        assert!(err.why.contains(path), "{path} ({why}) is not named: {}", err.why);
+        assert!(
+            err.why.contains(path),
+            "{path} ({why}) is not named: {}",
+            err.why
+        );
     }
 }
 
 #[test]
 fn allowed_mount_sources() {
     let home = Path::new(HOME);
-    for path in ["/usr", "/etc/ssl", "/opt/toolchain", "/srv/data", "/nix/store"] {
+    for path in [
+        "/usr",
+        "/etc/ssl",
+        "/opt/toolchain",
+        "/srv/data",
+        "/nix/store",
+    ] {
         with_extra_ro(path)
             .validate_with(&MountPolicy::new(home))
             .unwrap_or_else(|err| panic!("{path} must stay allowed: {err}"));
@@ -432,9 +460,16 @@ fn a_clean_directory_passes_and_symlinks_are_not_followed() {
 #[test]
 fn a_protected_dir_outside_home_is_forbidden_with_its_parents() {
     // $XDG_DATA_HOME on another disk: the CA key must stay unreachable there too.
-    let policy = MountPolicy::new(HOME)
-        .with_protected_dir("/mnt/data/xdg/humanitl", "Humanitl's own data, including the CA key");
-    for path in ["/mnt/data/xdg/humanitl", "/mnt/data/xdg/humanitl/ca", "/mnt/data/xdg", "/mnt"] {
+    let policy = MountPolicy::new(HOME).with_protected_dir(
+        "/mnt/data/xdg/humanitl",
+        "Humanitl's own data, including the CA key",
+    );
+    for path in [
+        "/mnt/data/xdg/humanitl",
+        "/mnt/data/xdg/humanitl/ca",
+        "/mnt/data/xdg",
+        "/mnt",
+    ] {
         let Err(err) = with_extra_ro(path).validate_with(&policy) else {
             panic!("{path} reaches the protected directory");
         };
@@ -540,8 +575,16 @@ fn load_validated_protects_the_xdg_directories_outside_home() {
 
     for (whence, source, expect) in [
         ("extra_ro", "/mnt/data/humanitl/ca", "data directory"),
-        ("extra_ro", "/mnt/cfg/humanitl/profiles", "configuration directory"),
-        ("extra_rw", "/var/lib/xdg-1000/humanitl", "runtime directory"),
+        (
+            "extra_ro",
+            "/mnt/cfg/humanitl/profiles",
+            "configuration directory",
+        ),
+        (
+            "extra_rw",
+            "/var/lib/xdg-1000/humanitl",
+            "runtime directory",
+        ),
     ] {
         let path = temp.path().join(format!("{whence}.toml"));
         std::fs::write(

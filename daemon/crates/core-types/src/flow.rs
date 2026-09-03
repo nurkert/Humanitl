@@ -683,10 +683,7 @@ impl Flow {
         input: TransitionInput,
         at: SystemTime,
     ) -> Result<FlowEvent, InvalidTransition> {
-        let (next, event) = self
-            .state
-            .clone()
-            .on(Transition::new(self.id, at, input))?;
+        let (next, event) = self.state.clone().on(Transition::new(self.id, at, input))?;
         self.history.push((at, next.name()));
         self.state = next;
         Ok(event)
@@ -727,10 +724,7 @@ mod tests {
     fn upstream_reasons_carry_the_prefix_and_never_collide_with_block_reasons() {
         for error in UPSTREAM_ERRORS {
             let reason = error.reason();
-            assert!(
-                reason.starts_with("upstream_"),
-                "{reason} must be prefixed"
-            );
+            assert!(reason.starts_with("upstream_"), "{reason} must be prefixed");
             assert!(
                 error.to_string().starts_with(reason),
                 "display of {error:?} must start with its reason"

@@ -141,12 +141,13 @@ impl Diagnostic {
     /// Debug-Build fällt er als `debug_assert` auf, im Release-Build wird der
     /// Code selbst zur Überschrift, damit die Meldung nicht leer ist.
     #[must_use]
-    pub fn new(code: DiagnosticCode, severity: Severity) -> DiagnosticBuilder<MissingWhy> {
+    pub fn builder(code: DiagnosticCode, severity: Severity) -> DiagnosticBuilder<MissingWhy> {
         debug_assert!(
             lookup(code).is_some(),
             "diagnostic code is not in the registry"
         );
-        let title = lookup(code).map_or_else(|| code.as_str().to_owned(), |info| info.title.to_owned());
+        let title =
+            lookup(code).map_or_else(|| code.as_str().to_owned(), |info| info.title.to_owned());
         DiagnosticBuilder {
             code,
             severity,
@@ -257,9 +258,11 @@ mod tests {
 
     #[test]
     fn builder_uses_registry_title() {
-        let diagnostic = Diagnostic::new(SANDBOX_001, Severity::Blocking)
+        let diagnostic = Diagnostic::builder(SANDBOX_001, Severity::Blocking)
             .why("bwrap not found in PATH=/usr/bin:/bin")
-            .fix(FixAction::CopyCommand("sudo apt install bubblewrap".to_owned()))
+            .fix(FixAction::CopyCommand(
+                "sudo apt install bubblewrap".to_owned(),
+            ))
             .build();
 
         assert_eq!(diagnostic.title, "bwrap nicht gefunden");
@@ -275,7 +278,7 @@ mod tests {
 
     #[test]
     fn display_carries_code_title_and_why() {
-        let diagnostic = Diagnostic::new(DAEMON_001, Severity::Error)
+        let diagnostic = Diagnostic::builder(DAEMON_001, Severity::Error)
             .why("no socket at /run/user/1000/humanitl/daemon.sock")
             .build();
         assert_eq!(
