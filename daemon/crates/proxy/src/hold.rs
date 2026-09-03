@@ -39,9 +39,14 @@
 //!
 //! # Was hier nicht ist
 //!
-//! Keine Regelauswertung (HUM-022), keine Findings (HUM-025), keine
-//! Persistenz (HUM-026). Die Liste aller Flows einer Sitzung steht nebenan in
-//! der [`FlowRegistry`]. Nach einem Neustart sind beide leer.
+//! Keine Regelauswertung (HUM-022), keine Findings (HUM-025). Die Liste aller
+//! Flows einer laufenden Sitzung steht nebenan in der [`FlowRegistry`]; nach
+//! einem Neustart ist sie leer.
+//!
+//! Was bleibt, schreibt die Aufzeichnung: [`HoldQueue::recording`] hängt einen
+//! [`Recorder`] in den Trichter, und jedes veröffentlichte Ereignis läuft
+//! durch [`Recorder::apply`] (HUM-026). Genauso hängt [`HoldQueue::with_domains`]
+//! den Domain-Katalog an, den diese Crate nicht kennen darf ([`DomainSink`]).
 
 use core::fmt;
 use std::future::Future;
@@ -53,9 +58,10 @@ use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
 use humanitl_config::Limits;
 use humanitl_core::{
-    BlockReason, Decision, DecisionSource, Flow, FlowEvent, FlowId, FlowState, InvalidTransition,
-    Transition, TransitionInput,
+    BlockReason, Decision, DecisionSource, Flow, FlowEvent, FlowId, FlowState, HostName,
+    InvalidTransition, Transition, TransitionInput,
 };
+use humanitl_recorder::Recorder;
 use tokio::sync::{broadcast, oneshot};
 
 use crate::registry::FlowRegistry;
@@ -127,6 +133,29 @@ struct Pending {
     deadline: Instant,
 }
 
+/// Wer den Domain-Katalog zu einem eingetroffenen Flow befragt.
+///
+/// Der Katalog selbst lebt in `humanitl-catalog`, und diese Crate darf ihn
+/// nicht kennen: `backlog/CONVENTIONS.md` 3.1 erlaubt `humanitl-proxy` nur
+/// `core`, `config`, `rules`, `findings` und `recorder`. Der Proxy weiß aber
+/// als Einziger, wann ein Flow ankommt, und gezählt werden darf genau einmal
+/// je Anfrage ([`Catalog::info`](https://docs.rs/), HUM-031). Deshalb diese
+/// eine Zeile Schnittstelle: Der Daemon hängt seine Umsetzung ein
+/// (`humanitl_ipc::domains::DomainTable`), der Proxy ruft sie im Trichter auf,
+/// und das Ergebnis liegt bereit, bevor das Ereignis in den Strom geht.
+///
+/// Kein Port im Sinne von ADR-015: hier wird kein Fremdsystem gekapselt und
+/// kein zweiter Adapter erwartet, sondern eine Abhängigkeitsrichtung
+/// eingehalten, die der Compiler sonst nicht prüfen könnte.
+pub trait DomainSink: Send + Sync {
+    /// Verbucht genau eine Beobachtung des Hosts dieses Flows.
+    ///
+    /// Wird aus [`HoldQueue::publish`] für jedes [`FlowEvent::Received`]
+    /// aufgerufen, synchron und vor dem Rundfunk, damit jeder Zuhörer die
+    /// Angaben zur Domain schon vorfindet.
+    fn observe(&self, flow: FlowId, host: &HostName, at: SystemTime);
+}
+
 /// Die Halte-Warteschlange, siehe Modulkommentar.
 ///
 /// Eine je Daemon, geteilt zwischen Proxy-Handlern (halten) und
@@ -139,6 +168,8 @@ pub struct HoldQueue {
     max_bytes: u64,
     registry: Arc<FlowRegistry>,
     events: broadcast::Sender<FlowEvent>,
+    recorder: Option<Recorder>,
+    domains: Option<Arc<dyn DomainSink>>,
 }
 
 impl fmt::Debug for HoldQueue {
@@ -149,6 +180,8 @@ impl fmt::Debug for HoldQueue {
             .field("held_bytes", &self.queue_bytes())
             .field("max_flows", &self.max_flows)
             .field("max_bytes", &self.max_bytes)
+            .field("recorder", &self.recorder.is_some())
+            .field("domains", &self.domains.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -184,7 +217,35 @@ impl HoldQueue {
             max_bytes: limits.hold_max_bytes,
             registry,
             events,
+            recorder: None,
+            domains: None,
         }
+    }
+
+    /// Dieselbe Warteschlange, die jedes Ereignis auch aufzeichnet.
+    ///
+    /// Ohne Aufzeichnung läuft der Proxy unverändert weiter; die Historie ist
+    /// dann leer, was sie vor HUM-026 immer war. Ein Fehler der Aufzeichnung
+    /// hält den Proxy nie an: Der Recorder meldet ihn als Befund in seinem
+    /// eigenen Strom, den der Daemon in den Ereignisstrom hängt.
+    #[must_use]
+    pub fn recording(mut self, recorder: Recorder) -> Self {
+        self.recorder = Some(recorder);
+        self
+    }
+
+    /// Dieselbe Warteschlange, die jeden eingetroffenen Flow dem Domain-Katalog
+    /// zeigt (siehe [`DomainSink`]).
+    #[must_use]
+    pub fn with_domains(mut self, domains: Arc<dyn DomainSink>) -> Self {
+        self.domains = Some(domains);
+        self
+    }
+
+    /// Die Aufzeichnung dieser Warteschlange, sofern eine verdrahtet ist.
+    #[must_use]
+    pub const fn recorder(&self) -> Option<&Recorder> {
+        self.recorder.as_ref()
     }
 
     /// Das Verzeichnis der Flows, mit dem sich die Warteschlange den
@@ -412,8 +473,35 @@ impl HoldQueue {
     /// niemand zuhört, gibt es nichts nachzuladen. Die [`FlowRegistry`]
     /// schreibt ihren Datensatz vorher fort, damit ein Zuhörer, der auf das
     /// Ereignis hin `ListFlows` ruft, den neuen Zustand schon vorfindet.
+    ///
+    /// Hier ist der eine Trichter, durch den jedes Ereignis geht, und deshalb
+    /// hängen hier auch Aufzeichnung und Domain-Katalog:
+    ///
+    /// 1. die [`FlowRegistry`], der Zustand dieser Sitzung im Speicher,
+    /// 2. [`Recorder::apply`], die dauerhafte Aufzeichnung (HUM-026),
+    /// 3. der [`DomainSink`], genau einmal je [`FlowEvent::Received`]
+    ///    (HUM-031),
+    /// 4. der Rundfunk an die Zuhörer.
+    ///
+    /// Die Reihenfolge ist Absicht: Die Aufzeichnung sieht die Zeile des
+    /// Flows, bevor der Katalog Apex und Kennung nachträgt, und beide sind
+    /// fertig, bevor ein Zuhörer das Ereignis bekommt.
     pub fn publish(&self, event: FlowEvent) {
         self.registry.record(&event);
+        if let Some(recorder) = &self.recorder {
+            recorder.apply(&event);
+        }
+        if let (
+            Some(domains),
+            FlowEvent::Received {
+                flow_id,
+                at,
+                request,
+            },
+        ) = (&self.domains, &event)
+        {
+            domains.observe(*flow_id, &request.authority.host, *at);
+        }
         let _ = self.events.send(event);
     }
 

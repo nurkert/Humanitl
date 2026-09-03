@@ -13,6 +13,7 @@
 //! - [`convert`] mit der Abbildung zwischen Kern-Typen und Wire-Form; jede
 //!   Übersetzung steht dort genau einmal,
 //! - [`auth`] mit dem Sitzungs-Token: erzeugen, ablegen, prüfen,
+//! - [`domains`] mit dem Domain-Katalog am Ereignisstrom (HUM-031),
 //! - [`server`] mit [`IpcServer`], dem Dienst des echten Daemons über
 //!   Registry und Halte-Warteschlange (HUM-018),
 //! - [`rules`] mit dem Regel-RPC über dem Regelspeicher des Proxys
@@ -30,7 +31,12 @@ pub const PROTO_MAJOR: u32 = 1;
 
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
-pub const PROTO_MINOR: u32 = 0;
+///
+/// `1` seit `FlowDetail.findings_truncated` (HUM-026, Feld 10). Die
+/// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
+/// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
+/// abzulehnen (`docs/PROTOCOL.md`).
+pub const PROTO_MINOR: u32 = 1;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
@@ -56,6 +62,7 @@ pub mod v1 {
 pub mod auth;
 pub mod client;
 pub mod convert;
+pub mod domains;
 pub mod fake;
 pub mod rules;
 pub mod server;
@@ -63,6 +70,7 @@ pub mod server_stub;
 
 pub use crate::client::connect;
 pub use crate::convert::diagnostic_to_proto;
+pub use crate::domains::DomainTable;
 pub use crate::rules::RulesService;
 pub use crate::server::{IpcServer, bind_socket, serve};
 pub use crate::server_stub::{

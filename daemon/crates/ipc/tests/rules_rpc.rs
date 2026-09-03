@@ -613,3 +613,73 @@ async fn the_order_of_the_persistent_rules_survives_a_reorder() {
 
     daemon.shutdown().await;
 }
+
+#[tokio::test]
+async fn test_answers_with_the_verdict_of_the_engine() {
+    // Der Regelsatz wird gefragt, nicht nachgebaut: Die Kommandozeile hat keine
+    // zweite Auswertung, und dieselbe Engine antwortet hier wie im Proxy-Pfad
+    // (ADR-018, HUM-065).
+    let bundled = core_rule("**.github.com", Action::Allow);
+    let mut daemon = Daemon::start(std::slice::from_ref(&bundled)).await;
+
+    let probe = |url: &str| v1::rules_request::Test {
+        method: v1::Method::Get as i32,
+        url: url.to_owned(),
+        upgrade: v1::Upgrade::None as i32,
+    };
+
+    let hit = daemon
+        .rules(v1::rules_request::Op::Test(probe(
+            "https://api.github.com/repos",
+        )))
+        .await
+        .expect("test")
+        .test
+        .expect("the answer carries the verdict");
+    assert_eq!(hit.action, v1::RuleAction::Allow as i32);
+    assert!(hit.matched, "a bundled rule matched");
+    assert_eq!(hit.rule_id, bundled.id.to_string());
+    assert_eq!(hit.position, 1, "positions are 1-based");
+
+    // Ohne Treffer gilt `ask`, und das ist die Vorgabe des Vertrags, nicht die
+    // Entscheidung einer Regel: `matched` unterscheidet beides.
+    let miss = daemon
+        .rules(v1::rules_request::Op::Test(probe("https://evil.example/x")))
+        .await
+        .expect("test")
+        .test
+        .expect("the answer carries the verdict");
+    assert_eq!(miss.action, v1::RuleAction::Ask as i32);
+    assert!(!miss.matched, "nothing matched");
+    assert!(miss.rule_id.is_empty());
+    assert_eq!(miss.position, 0);
+
+    // Eine Sitzungsregel überstimmt die mitgelieferte, weil sie vorn steht.
+    daemon
+        .rules(v1::rules_request::Op::Add(session_scoped(wire_rule(
+            "api.github.com",
+            v1::RuleAction::Block,
+        ))))
+        .await
+        .expect("add");
+    let now = daemon
+        .rules(v1::rules_request::Op::Test(probe(
+            "https://api.github.com/repos",
+        )))
+        .await
+        .expect("test")
+        .test
+        .expect("the answer carries the verdict");
+    assert_eq!(now.action, v1::RuleAction::Block as i32);
+    assert_ne!(now.rule_id, bundled.id.to_string());
+
+    // Eine URL, die keine ist, wird abgelehnt und nicht geraten.
+    let status = daemon
+        .rules(v1::rules_request::Op::Test(probe("not a url")))
+        .await
+        .expect_err("an unreadable probe is refused");
+    assert_eq!(status.code(), Code::InvalidArgument);
+    assert!(status.message().contains("IPC_005"), "{status}");
+
+    daemon.shutdown().await;
+}
