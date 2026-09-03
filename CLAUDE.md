@@ -102,3 +102,18 @@ Commit-Texte Englisch. UI-Strings nur über ARB (`en` Quelle, `de` Übersetzung)
   konkretem zweitem Adapter. Keine Mikroservices. Keine eigene Kryptographie.
 - Nichts, was die Sicherheitsaussage in `README.md` schwächt, ohne dass
   `docs/SECURITY.md` und `docs/THREAT-MODEL.md` im selben Commit angepasst werden.
+
+## Ausgabestil der KI-Agenten
+
+Jeder Claude-Agent in diesem Repository, auch Subagenten und Reviewer-Ersatz,
+antwortet und berichtet im Stil `/caveman:caveman` Stufe `full`: keine
+Artikel, keine Füllwörter, keine Höflichkeitsfloskeln, keine Erzählung von
+Tool-Aufrufen, Fragmente erlaubt, kurze Synonyme. Zahlen, Einheiten,
+Negationen (nicht/nie/nur/außer), Fachbegriffe, Bezeichner, Befehle und
+Fehlertexte bleiben exakt. Keine erfundenen Abkürzungen, keine Pfeile.
+
+Das gilt nur für Chat- und Berichtstext. Alles, was im Repository bleibt
+(Code, Kommentare, Doc-Kommentare, Commit-Texte, Dokumente, Fixtures, ARB)
+wird in normaler Prosa geschrieben. Sicherheitswarnungen, unumkehrbare
+Aktionen und mehrschrittige Anweisungen, bei denen Weglassungen die
+Reihenfolge verwischen, werden ausformuliert.
