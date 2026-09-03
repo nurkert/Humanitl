@@ -185,6 +185,26 @@ impl FlowHandler {
             .path_and_query()
             .map_or_else(|| "/".to_owned(), ToString::to_string);
 
+        // Anti-Fronting, erste Stufe (ESC-3 `host_mismatch_blocked`): Das Ziel,
+        // zu dem die Verbindung wirklich fuehrt, und der Host, den die Anfrage
+        // nennt, muessen dasselbe sein. Ein CONNECT nach github.com mit einem
+        // `Host: evil.io` darin ist keine Anfrage an evil.io, sondern ein
+        // Versuch, die Entscheidung fuer den einen Host auf den anderen zu
+        // uebertragen. Sie wird ohne Rueckfrage abgelehnt und verbucht, mit
+        // dem echten Ziel als Authority des Flows.
+        if let Some(actual) = authority_conflict(&req, &authority, &meta) {
+            let (parts, _incoming) = req.into_parts();
+            let request = Self::build_request(
+                parts.method,
+                scheme,
+                actual,
+                path_and_query,
+                parts.headers,
+                BodyRef::empty(),
+            );
+            return self.refuse_before_pipeline(&meta, request, BlockReason::AuthorityMismatch);
+        }
+
         let (parts, incoming) = req.into_parts();
         let cap = self.inner.limits.body_cap_bytes;
         let content_type =
@@ -540,6 +560,40 @@ fn connect_authority(uri: &hyper::Uri) -> Option<Authority> {
     let host = HostName::parse(authority.host()).ok()?;
     let port = authority.port_u16().unwrap_or(443);
     Some(Authority::new(host, port))
+}
+
+/// Das Ziel, das die Verbindung wirklich hat, wenn es dem widerspricht, was
+/// die Anfrage nennt; sonst `None`.
+///
+/// Zwei Faelle: In einem CONNECT-Tunnel zaehlt das Tunnelziel, und die innere
+/// Anfrage darf keinen anderen Host tragen. Ausserhalb eines Tunnels zaehlt die
+/// Absolut-Form der Anfragezeile, und die `Host`-Kopfzeile darf ihr nicht
+/// widersprechen. Ein fehlender Port ist der Standardport des Schemas, damit
+/// `example.com` und `example.com:443` nicht als Konflikt gelten.
+fn authority_conflict(
+    req: &Request<Incoming>,
+    named: &Authority,
+    meta: &ConnMeta,
+) -> Option<Authority> {
+    if let Some(tunnel) = &meta.connect_authority {
+        return (tunnel != named).then(|| tunnel.clone());
+    }
+    let uri = req.uri();
+    let line = uri.authority()?;
+    let host_header = header_string(req.headers(), hyper::header::HOST)?;
+    let (host_text, port) = split_host_port(host_header);
+    let host = HostName::parse(host_text).ok()?;
+    let scheme = uri
+        .scheme_str()
+        .and_then(Scheme::parse)
+        .unwrap_or(Scheme::Http);
+    let from_header = Authority::new(host, port.unwrap_or_else(|| scheme.default_port()));
+    let line_host = HostName::parse(line.host()).ok()?;
+    let from_line = Authority::new(
+        line_host,
+        line.port_u16().unwrap_or_else(|| scheme.default_port()),
+    );
+    (from_header != from_line).then_some(from_line)
 }
 
 /// Bestimmt Schema und Ziel einer gewöhnlichen Anfrage.
