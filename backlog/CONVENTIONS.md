@@ -442,3 +442,10 @@ Entscheidungen, die beim Bauen fielen und ab jetzt gelten. Wo 3.x oder 4.11 ande
 **Isolation-Check (HUM-011).**
 - `BwrapBackend::isolation_check` liest die Prüfzeilen des Shims aus dem `SandboxHandle` der laufenden Sandbox statt eine zweite Sandbox zu starten: `no_interfaces` ergibt `NoNetworkInterface`, `bridge_listening` ergibt `SingleSocket`, `seccomp_applied` zusammen mit `families` ergibt `SeccompActive`. Fehlt der Bericht, ist das `SANDBOX_013`; eine fehlgeschlagene Prüfung wird `SANDBOX_014`, `SANDBOX_015` oder `SANDBOX_016`.
 - Der Preis: `SingleSocket` bezeugt damit die gebundene Brücke, nicht mehr die Abwesenheit weiterer Sockets im Dateisystem. Diese stärkere Aussage trägt ESC-2 (`find / -xdev -type s` findet genau den Proxy-Socket) und die Mount-Prüfung aus HUM-010; die Laufzeitprüfung verweist darauf.
+
+**CA und Zertifikate (HUM-014).**
+- `CaStore::open` schreibt `ca-bundle.crt` bei jedem Start neu, damit Aktualisierungen der System-Wurzeln in der Sandbox ankommen. Der Launcher hängt genau diese Datei über `/etc/ssl/certs/ca-certificates.crt`; ohne diesen Bind lehnt jeder TLS-Client in der Sandbox das Leaf des Proxys ab.
+- Als System-Bundle gilt der erste Kandidat aus `SYSTEM_BUNDLE_CANDIDATES`, der mindestens ein gültiges Zertifikat enthält, nicht der erste lesbare. Ein abgeschnittenes Bundle wird übersprungen.
+- Dateien der CA werden nie über einen Symlink angefasst: `symlink_metadata` beim Prüfen, `create_new` mit `O_NOFOLLOW` und unvorhersagbarem Namen beim Schreiben.
+- Scheitert ein einzelnes Leaf, ist das `TLS_005` ohne den Vorschlag, die CA zu löschen; der Vorschlag gehört nur zu einer wirklich unbrauchbaren CA.
+- Der PKCS#12-Truststore für die JVM ist aus M1 herausgenommen (siehe `backlog/sprint-1.md`, HUM-014).

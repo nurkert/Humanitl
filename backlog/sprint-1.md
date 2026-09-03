@@ -403,7 +403,7 @@ Leaf-Zertifikat-Cache (HUM-015). Keyring-Unlock oder ephemere CA pro Session (Po
 
 ### Spezifikation
 
-**CA-Erzeugung** mit `rcgen`: `CertificateParams` mit `is_ca = IsCa::Ca(BasicConstraints::Unconstrained)`, `key_usages = [KeyCertSign, CrlSign]`, CN `Humanitl Local CA <kurz-id>`, Gültigkeit 10 Jahre, Schlüssel ECDSA P-256. `<kurz-id>` = 8 Hex aus `machine-id`-Hash, damit zwei Installationen unterscheidbar sind. Dateien: `$XDG_DATA_HOME/humanitl/ca/ca.key` (PEM, 0600), `ca.crt` (PEM, 0644), `ca-bundle.crt` (System-Bundle `/etc/ssl/certs/ca-certificates.crt` + `ca.crt`, wird bei jedem Daemon-Start neu erzeugt, damit System-Updates ankommen), `cacerts.p12` (PKCS#12-Truststore mit Passwort `changeit`, via `p12`-Crate oder Aufruf von `keytool` falls vorhanden; wenn beides fehlt: `JAVA_TOOL_OPTIONS` weglassen und `TLS_004` als Info-Diagnostic).
+**CA-Erzeugung** mit `rcgen`: `CertificateParams` mit `is_ca = IsCa::Ca(BasicConstraints::Unconstrained)`, `key_usages = [KeyCertSign, CrlSign]`, CN `Humanitl Local CA <kurz-id>`, Gültigkeit 10 Jahre, Schlüssel ECDSA P-256. `<kurz-id>` = 8 Hex aus `machine-id`-Hash, damit zwei Installationen unterscheidbar sind. Dateien: `$XDG_DATA_HOME/humanitl/ca/ca.key` (PEM, 0600), `ca.crt` (PEM, 0644), `ca-bundle.crt` (System-Bundle `/etc/ssl/certs/ca-certificates.crt` + `ca.crt`, wird bei jedem Daemon-Start neu erzeugt, damit System-Updates ankommen). Der PKCS#12-Truststore `cacerts.p12` für die JVM ist am 2026-09-03 aus M1 herausgenommen: Der Agent im MVP ist OpenCode auf Node und Bun, keine JVM, und ein Truststore, den niemand liest, wäre eine Datei mehr, die in die Sandbox eingehängt wird und deren Passwort in einer Umgebungsvariablen steht. Er kommt zurück, sobald ein Java-Adapter dazukommt; bis dahin entfallen `cacerts.p12`, `JAVA_TOOL_OPTIONS` und der zugehörige Bind.
 
 ```rust
 pub struct CaStore { pub key_pem: Zeroizing<String>, pub cert_pem: String, pub cert_path: PathBuf, pub bundle_path: PathBuf, pub p12_path: Option<PathBuf> }
@@ -432,15 +432,14 @@ impl CaStore {
 | `DENO_CERT` | Deno | `/etc/humanitl/ca.crt` |
 | `GIT_SSL_CAINFO` | git | `/etc/humanitl/ca.crt` |
 | `CARGO_HTTP_CAINFO` | cargo | `/etc/humanitl/ca.crt` |
-| `JAVA_TOOL_OPTIONS` | JVM | `-Djavax.net.ssl.trustStore=/etc/humanitl/cacerts.p12 -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit` (nur wenn `p12_path` vorhanden) |
 | `AWS_CA_BUNDLE` | AWS CLI/SDKs | `/etc/humanitl/ca.crt` |
 | `GOFLAGS` | Go | nicht setzen; Go nutzt `SSL_CERT_FILE` |
 | `HUMANITL_SESSION` | Agent-Tools, Diagnose | `<session-id>` |
 | `HUMANITL` | Erkennung „läuft in Humanitl" | `1` |
 
-Zusätzliche Binds (Argv-Builder): `--ro-bind <cacerts.p12> /etc/humanitl/cacerts.p12` wenn vorhanden.
+Zusätzliche Binds (Argv-Builder): `--ro-bind <ca-bundle.crt> /etc/ssl/certs/ca-certificates.crt`, damit die Humanitl-CA in der Sandbox als System-Wurzel gilt.
 
-Diagnostic-Codes: `TLS_001` Schreibfehler CA-Verzeichnis (fix: `CopyCommand("mkdir -p … && chmod 700 …")`), `TLS_002` CA-Dateien korrupt (fix: `CopyCommand("rm -r $XDG_DATA_HOME/humanitl/ca")` mit Warnung), `TLS_003` (reserviert für HUM-045: Handshake-Abbruch), `TLS_004` kein Java-Truststore erzeugbar (Info).
+Diagnostic-Codes (Stand nach dem Register in `codes.rs`, das hier vorgeht): `TLS_001` ist schon vergeben (Client hat die Humanitl-CA abgelehnt). Für dieses Issue gelten `TLS_004` Schreibfehler CA-Verzeichnis (fix: `CopyCommand("mkdir -p … && chmod 700 …")`) und `TLS_005` CA-Dateien unbrauchbar (fix: `CopyCommand("rm -r $XDG_DATA_HOME/humanitl/ca")` mit Warnung). Ein einzelnes Leaf, das nicht ausgestellt oder geprüft werden kann, ist ebenfalls `TLS_005`, aber ohne diesen Fix, weil die CA selbst dabei heil ist.
 
 ### Schritte
 1. `ca.rs`: Erzeugen, Laden, Bundle bauen, Fingerprint.
