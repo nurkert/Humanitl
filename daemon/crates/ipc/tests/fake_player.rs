@@ -317,7 +317,7 @@ async fn an_unreadable_edited_request_is_refused_not_allowed() {
     let flow_id = flow_of(&held);
 
     // Unlesbar heisst: die Methode oder die URL ergeben keine Anfrage. Beide
-    // Faelle enden mit `IPC_002` und dem Grund, nie mit einem `Allow`.
+    // Faelle enden mit `IPC_004` und dem Grund, nie mit einem `Allow`.
     let unreadable = [
         (
             "a url without a scheme",
@@ -354,7 +354,7 @@ async fn an_unreadable_edited_request_is_refused_not_allowed() {
             "{case}: nothing is let through: {result:?}"
         );
         let diagnostic = result.diagnostic.as_ref().expect("a diagnostic");
-        assert_eq!(diagnostic.code, "IPC_002", "{case}");
+        assert_eq!(diagnostic.code, "IPC_004", "{case}");
         assert!(
             diagnostic.why.contains("not readable"),
             "{case}: {}",

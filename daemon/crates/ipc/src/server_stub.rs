@@ -174,7 +174,7 @@ impl<T> DaemonService<T> {
 pub fn grpc_code(code: DiagnosticCode) -> Code {
     match code.as_str() {
         "IPC_001" => Code::Unauthenticated,
-        "IPC_002" | "CONFIG_002" | "CONFIG_003" => Code::InvalidArgument,
+        "IPC_002" | "IPC_004" | "CONFIG_002" | "CONFIG_003" => Code::InvalidArgument,
         "IPC_003" => Code::FailedPrecondition,
         "DAEMON_001" => Code::Unavailable,
         _ => Code::Internal,
@@ -416,6 +416,7 @@ mod tests {
     fn known_codes_map_to_grpc_codes() {
         assert_eq!(grpc_code(codes::IPC_001), Code::Unauthenticated);
         assert_eq!(grpc_code(codes::IPC_002), Code::InvalidArgument);
+        assert_eq!(grpc_code(codes::IPC_004), Code::InvalidArgument);
         assert_eq!(grpc_code(codes::IPC_003), Code::FailedPrecondition);
         assert_eq!(grpc_code(codes::TLS_001), Code::Internal);
     }
