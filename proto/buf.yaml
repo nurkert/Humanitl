@@ -1,0 +1,21 @@
+# Lint- und Kompatibilitaetsregeln der Proto (HUM-003).
+# `buf` ist nur in CI vorhanden; die Codegenerierung laeuft ohne buf und ohne
+# protoc ueber `scripts/gen-proto.sh`.
+version: v2
+modules:
+  - path: .
+lint:
+  use: [STANDARD]
+  except:
+    # v1 ist Verzeichnis und Paket-Suffix zugleich, die Regel greift ins Leere.
+    - PACKAGE_VERSION_SUFFIX
+    # Der Service heisst `Humanitl`, nicht `HumanitlService` (CONVENTIONS 3.6).
+    - SERVICE_SUFFIX
+    # Request- und Response-Namen folgen BACKLOG.md 3.3, nicht dem
+    # `<Rpc>Request`/`<Rpc>Response`-Schema; mehrere RPCs teilen sich
+    # `google.protobuf.Empty` als Eingabe.
+    - RPC_REQUEST_STANDARD_NAME
+    - RPC_RESPONSE_STANDARD_NAME
+    - RPC_REQUEST_RESPONSE_UNIQUE
+breaking:
+  use: [FILE]
