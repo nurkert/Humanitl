@@ -1,0 +1,41 @@
+# Der Regelsatz für Escape-Test 4 (BACKLOG.md 4.5, Test 4).
+#
+# Er ist so geschnitten, dass jede Probe von ESC-4 eine Regel hat, an der sie
+# scheitern könnte: eine breite Block-Regel vor einer engen Allow-Regel, eine
+# Adress-Regel neben den Namensmustern und eine Regel, die nur ein
+# WebSocket-Upgrade trifft. Die Datei wird über `include_str!` gelesen; die
+# Crate selbst öffnet keine Datei.
+version: 1
+rules:
+  # Erste passende Regel gewinnt: ein POST an einen GitHub-Host wird
+  # geblockt, obwohl die Allow-Regel darunter denselben Host trifft.
+  - action: block
+    match:
+      host: "**.github.com"
+      method: [POST]
+    note: "erste passende Regel gewinnt"
+
+  - action: allow
+    match:
+      host: "*.github.com"
+    note: "genau eine Subdomain-Ebene"
+
+  # Eine Adresse trifft nur eine Adress-Regel, nie ein Namensmuster.
+  - action: block
+    match:
+      host: "ip:140.82.112.3"
+    note: "IP-Literal braucht eine eigene Regel"
+
+  # Ein Upgrade trifft nur eine Regel, die es nennt.
+  - action: allow
+    match:
+      host: "ws.github.com"
+      upgrade: websocket
+    note: "WebSocket ist eine eigene Entscheidung"
+
+  # Der Host, an den ESC-4 einen Body über dem Cap schickt. Die Regel erlaubt
+  # ihn ausdrücklich: der Cap entscheidet trotzdem, und zwar vorher.
+  - action: allow
+    match:
+      host: "blocked.example"
+    note: "der Cap gilt auch für einen erlaubten Host"

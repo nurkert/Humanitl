@@ -52,13 +52,28 @@ erscheint im XML als `<error>`, eine durchgekommene Probe als `<failure>`.
 | `esc-1-sockets.sh` | ESC-1: Socket-Familien und -Typen, Interfaces, Routing, Capabilities, seccomp |
 | `esc-2-mounts.sh` | ESC-2: Mount-Oberfläche, genau ein Socket, eigene Namespaces, Maskierungen |
 | `esc-3-egress.sh` | ESC-3: kein Egress ohne Proxy, über den Proxy landet alles in der Warteschlange |
-| `esc-4-rules.sh` | ESC-4: Platzhalter, alle Fälle `skipped` (HUM-022) |
+| `esc-4-rules.sh` | ESC-4: die Regel-Tabelle, gegen die Regel-Engine aus HUM-022 und, für den Body-Cap, gegen den laufenden Proxy |
+| `body_cap.py` | die zwei Anfragen von `rule_body_over_cap`: eine über dem Cap, eine genau auf dem Cap, über den Proxy-Socket |
 | `esc-5-filesystem.sh` | ESC-5: Platzhalter, alle Fälle `skipped` (HUM-043/050/029) |
 | `humanitl sandbox run --profile test --tests-dir tests/escape -- …` | der Start jeder Suite: dieselbe Kommandozeile, die der Nutzer aufruft (CONVENTIONS.md 3.11) |
 
-ESC-1 bis ESC-3 laufen **in** der Sandbox, ESC-4 und ESC-5 als Platzhalter auf dem
-Host: ein `skip` braucht keine Isolation, und ein Platzhalter, der vom Start der
-Sandbox abhängt, verschwindet hinter dem ersten Startfehler.
+ESC-1 bis ESC-3 laufen **in** der Sandbox, ESC-4 und ESC-5 auf dem Host: die
+Regel-Engine entscheidet, bevor irgendetwas die Maschine verlässt, ein `skip`
+braucht ohnehin keine Isolation, und ein Fall, der vom Start der Sandbox
+abhängt, verschwindet hinter dem ersten Startfehler. Seit HUM-022 ruft ESC-4 zu
+jeder Probe den gleichnamigen Test aus
+`daemon/crates/rules/tests/escape_table.rs` auf, der `tests/fixtures/esc4.yaml`
+auswertet; die Crate ist rein, also gibt es bis `humanitl rules test URL`
+(HUM-065) kein Werkzeug, das eine Regel-Datei von der Kommandozeile aus
+befragt. Ohne `cargo` auf der Maschine sind die Fälle ein `skip`, nie ein Grün. Der
+achte Fall, `rule_body_over_cap`, hat zwei Hälften: die Engine erlaubt den Host
+per Regel, und der laufende Proxy antwortet auf einen Body über
+`limits.hold_body_cap_bytes` trotzdem mit `413` und `reason: body_cap`, während
+ein Body genau auf dem Cap gehalten wird und in die Zeitüberschreibung läuft.
+Deshalb laufen die Host-Suiten seit HUM-022 vor `stop_escape_daemon`, und
+`run.sh` reicht Socket und Cap dieses Laufs in `ESC_PROXY_SOCK` und
+`ESC_BODY_CAP` weiter (`limits.hold_body_cap_bytes` steht für den Lauf auf
+1024 Bytes, damit die Probe schnell bleibt).
 
 Seit HUM-064 startet jede Suite über `humanitl sandbox run --profile test`, nicht
 mehr über das Ad-hoc-Binary `escape-launch`. Darunter liegt derselbe
@@ -169,7 +184,8 @@ der Socket dort liegt, wo die Mount-Politik ihn erwartet. `start_daemon` in
 
 ## Erwartetes Ergebnis in Sprint 0
 
-Stand nach HUM-064: 97 Fälle, 82 grün, 0 rot, 15 übersprungen. Die Tabelle
+Stand nach HUM-022: 97 Fälle, 90 grün, 0 rot, 7 übersprungen (nach HUM-064
+waren es 82 grün und 15 übersprungen; ESC-4 hat alle acht Fälle eingelöst). Die Tabelle
 unten ist der Stand aus Sprint 0 und nennt zu jeder Probe das Issue, das sie
 grün gemacht hat; rot ist keine mehr. Übersprungen bleibt, was auf ein Issue
 späterer Sprints wartet, darunter `dns_not_before_decision`: dass die Sandbox
@@ -233,7 +249,6 @@ rot — sie ist der Grund, warum sie existiert.
 | Suite | Fälle | Wartet auf |
 |---|---|---|
 | ESC-3 | `dns_not_before_decision` | HUM-024 (Auflösung erst nach der Freigabe, ADR-006) plus ein host-seitiger DNS-Beobachter in `run.sh` |
-| ESC-4 | 8 Fälle der Regel-Tabelle | HUM-022, `rule_body_over_cap` HUM-016 |
 | ESC-5 | 6 Fälle Dateisystem, Terminal, Audit | HUM-043 (Symlinks, Maskierung), HUM-050 (OSC 52/8), HUM-029 (Hash-Kette) |
 
 ### Grün, und warum jetzt schon
