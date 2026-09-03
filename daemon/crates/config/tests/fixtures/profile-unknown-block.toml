@@ -1,0 +1,4 @@
+# Ein Profil mit Tippfehler im Blocknamen.
+name = "typo"
+[confg.hold]
+timeout_secs = 9
