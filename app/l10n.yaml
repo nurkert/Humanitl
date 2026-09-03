@@ -1,0 +1,9 @@
+# Konfiguration von `flutter gen-l10n` (HUM-019). Laeuft mit `flutter pub get`
+# (`generate: true` in pubspec.yaml). Quelle ist Englisch, Deutsch die
+# Uebersetzung; Schluessel sind camelCase mit Feature-Praefix (CONVENTIONS 4.11).
+arb-dir: l10n
+template-arb-file: app_en.arb
+output-dir: lib/l10n/generated
+output-localization-file: app_localizations.dart
+output-class: AppLocalizations
+nullable-getter: false
