@@ -40,6 +40,9 @@ Exit codes:
   10  rules test: the request would be blocked
   11  rules test: the request would be held for a decision
 
+10 and 11 do not occur yet: the contract has no operation that evaluates one
+URL against the rule set, and humanitl rules test says so instead of guessing.
+
 A failing command writes a diagnostic block to stderr, or with --json one line
 of JSON to stdout.";
 
@@ -107,8 +110,12 @@ pub enum Cmd {
         cmd: SandboxCmd,
     },
 
-    /// List, add, remove and test rules (arrives in HUM-065).
-    Rules(PlaceholderArgs),
+    /// List, add, change, reorder, dry-run and reload rules.
+    Rules {
+        /// Was mit den Regeln geschehen soll.
+        #[command(subcommand)]
+        cmd: RulesCmd,
+    },
 
     /// The flows of this and earlier sessions.
     Flows {
@@ -138,8 +145,8 @@ pub enum Cmd {
 /// Ein Unterkommando, das es noch nicht gibt.
 ///
 /// Es nimmt seine Argumente entgegen, statt sie als Tippfehler abzulehnen:
-/// wer `humanitl rules list` schreibt, soll erfahren, dass das Kommando noch
-/// nicht da ist, und nicht, dass `list` unbekannt sei.
+/// wer `humanitl audit verify` schreibt, soll erfahren, dass das Kommando noch
+/// nicht da ist, und nicht, dass `verify` unbekannt sei.
 #[derive(Debug, Args)]
 pub struct PlaceholderArgs {
     /// Alles, was hinter dem Unterkommando steht.
@@ -179,21 +186,44 @@ pub enum SandboxCmd {
 /// Die Unterkommandos von `humanitl flows`.
 #[derive(Debug, Subcommand)]
 pub enum FlowsCmd {
-    /// List flows, newest last.
+    /// List flows, newest first; --asc turns the order around.
+    ///
+    /// SIZE is request plus response in bytes, MS the duration in
+    /// milliseconds, PATH shortened in the middle to 40 characters. What the
+    /// daemon does not know stays a dash.
     List {
-        /// Der Filter, zum Beispiel `host:github.com state:blocked`.
+        /// Der Filter, zum Beispiel `host:github.com state:blocked`. Mehrere
+        /// Wörter werden mit einem Leerzeichen verbunden und unverändert an
+        /// den Dienst gereicht.
         #[arg(value_name = "FILTER")]
-        filter: Option<String>,
+        filter: Vec<String>,
         /// Wie viele Zeilen höchstens; 0 bedeutet die Vorgabe des Dienstes.
         #[arg(long, default_value_t = 0, value_name = "N")]
         limit: u32,
+        /// Wonach sortiert wird.
+        #[arg(
+            long,
+            default_value = "ts",
+            value_name = "KEY",
+            value_parser = ["ts", "host", "duration", "size"]
+        )]
+        sort: String,
+        /// Aufsteigend statt absteigend: die älteste Zeile zuerst.
+        #[arg(long)]
+        asc: bool,
     },
 
-    /// Show one flow.
+    /// Show one flow, or one of its bodies.
     Show {
         /// Die Id des Flows.
         #[arg(value_name = "ID")]
         id: String,
+        /// Statt der Felder einen der beiden Bodies ausgeben.
+        #[arg(long, value_name = "WHICH", value_parser = ["request", "response"])]
+        body: Option<String>,
+        /// Den Body Byte für Byte schreiben statt als Text.
+        #[arg(long, requires = "body")]
+        raw: bool,
     },
 
     /// Decide one waiting flow: allow it or block it.
@@ -213,6 +243,162 @@ pub enum FlowsCmd {
         #[arg(long, value_name = "TEXT")]
         note: Option<String>,
     },
+}
+
+/// Die Methoden, über die eine Regel geschrieben werden kann.
+///
+/// `METHOD_OTHER` steht nicht darunter: eine Regel über allem, was der Daemon
+/// nicht kennt, wäre eine Regel über etwas, das niemand nachlesen kann
+/// (`humanitl_ipc::convert::rule_from_proto`).
+pub const RULE_METHODS: [&str; 9] = [
+    "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE",
+];
+
+/// Die Unterkommandos von `humanitl rules`.
+///
+/// Jedes davon ist genau ein `Rules`-Aufruf am Daemon (ADR-018). Ob eine Regel
+/// gültig ist, entscheidet der Dienst; die Kommandozeile baut nur die
+/// Wire-Form und gibt den Befund wieder, den sie zurückbekommt.
+#[derive(Debug, Subcommand)]
+pub enum RulesCmd {
+    /// List the rules in the order in which they are evaluated.
+    List {
+        /// Auch mitgelieferte und abgelaufene Regeln zeigen.
+        #[arg(long)]
+        all: bool,
+    },
+
+    /// Add a rule. The daemon checks it and answers with the whole set.
+    Add {
+        /// Die Felder der neuen Regel; --action und --host sind Pflicht.
+        #[command(flatten)]
+        rule: RuleArgs,
+    },
+
+    /// Change one rule. What is not given stays as it is.
+    Update {
+        /// Die Id der Regel.
+        #[arg(value_name = "ID")]
+        id: String,
+        /// Die Felder, die sich ändern sollen.
+        #[command(flatten)]
+        rule: RuleArgs,
+    },
+
+    /// Remove one rule.
+    Remove {
+        /// Die Id der Regel.
+        #[arg(value_name = "ID")]
+        id: String,
+    },
+
+    /// Move one rule to another place inside its own group.
+    Reorder {
+        /// Die Id der Regel.
+        #[arg(value_name = "ID")]
+        id: String,
+        /// Der neue Platz, 1-basiert und innerhalb der Gruppe der Regel.
+        #[arg(value_name = "POSITION", value_parser = clap::value_parser!(u32).range(1..))]
+        position: u32,
+    },
+
+    /// Show which of the last recorded requests a rule would have matched.
+    #[command(name = "dry-run")]
+    DryRun {
+        /// Die Felder der Regel; --action und --host sind Pflicht.
+        #[command(flatten)]
+        rule: RuleArgs,
+        /// Wie viele der zuletzt aufgezeichneten Anfragen geprüft werden;
+        /// 0 bedeutet die Vorgabe des Dienstes.
+        #[arg(long, default_value_t = 0, value_name = "N")]
+        scan: u32,
+    },
+
+    /// Read rules.yaml again and report what changed.
+    Reload,
+
+    /// Evaluate one URL against the rule set (needs an RPC that is not there yet).
+    Test {
+        /// Die vollständige URL, zum Beispiel `https://api.github.com/repos/x`.
+        #[arg(value_name = "URL")]
+        url: String,
+        /// Die Methode der gedachten Anfrage.
+        #[arg(
+            long,
+            value_name = "M",
+            value_parser = PossibleValuesParser::new(RULE_METHODS),
+            ignore_case = true
+        )]
+        method: Option<String>,
+        /// Ob die gedachte Anfrage ein Upgrade trägt.
+        #[arg(long, value_name = "UPGRADE", value_parser = ["websocket"])]
+        upgrade: Option<String>,
+    },
+}
+
+/// Die Felder einer Regel, wie die Kommandozeile sie schreibt.
+///
+/// Dieselbe Struktur trägt bei `add` und `dry-run` eine vollständige Regel und
+/// bei `update` nur die Felder, die sich ändern sollen. Deshalb ist hier alles
+/// wahlfrei; dass `--action` und `--host` bei `add` und `dry-run` da sein
+/// müssen, prüft [`crate::cmd::rules`] und meldet es als Befund. Alles andere
+/// prüft der Daemon, und sein Befund nennt Zeile und Feld.
+#[derive(Debug, Clone, Args)]
+pub struct RuleArgs {
+    /// What happens to a matching request.
+    #[arg(long, value_name = "ACTION", value_parser = ["allow", "block", "ask", "redact"])]
+    pub action: Option<String>,
+
+    /// Host pattern: a label glob, `ip:ADDRESS` or `cidr:ADDRESS/LEN`.
+    #[arg(long, value_name = "PATTERN")]
+    pub host: Option<String>,
+
+    /// One HTTP method; repeat the flag for more. Without it, every method matches.
+    #[arg(
+        long,
+        value_name = "M",
+        value_parser = PossibleValuesParser::new(RULE_METHODS),
+        ignore_case = true
+    )]
+    pub method: Vec<String>,
+
+    /// Path glob, or a regular expression when it starts with `~`.
+    #[arg(long, value_name = "P")]
+    pub path: Option<String>,
+
+    /// Only requests with this scheme.
+    #[arg(long, value_name = "S", value_parser = ["http", "https", "ws", "wss"])]
+    pub scheme: Option<String>,
+
+    /// Only requests to this port.
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u16).range(1..))]
+    pub port: Option<u16>,
+
+    /// Only requests that carry this upgrade.
+    #[arg(long, value_name = "UPGRADE", value_parser = ["none", "websocket"])]
+    pub upgrade: Option<String>,
+
+    /// never, session, or a point in time in RFC 3339.
+    #[arg(long, value_name = "WHEN")]
+    pub expires: Option<String>,
+
+    /// Why the rule exists. It ends up in rules.yaml and in the window.
+    #[arg(long, value_name = "TEXT")]
+    pub note: Option<String>,
+
+    /// Place inside the group of the rule, 1-based; without it at the end.
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
+    pub position: Option<u32>,
+
+    /// Allow private destinations (RFC 1918, loopback, link-local, CGNAT).
+    #[arg(
+        long,
+        value_name = "BOOL",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true"
+    )]
+    pub allow_private: Option<bool>,
 }
 
 /// Die Unterkommandos von `humanitl config`.
@@ -423,7 +609,8 @@ mod tests {
     use humanitl_config::schema;
 
     use super::{
-        Cmd, ConfigCmd, EXIT_CODES_HELP, SHORT_FLAGS, SandboxCmd, command, flag_name, parse,
+        Cmd, ConfigCmd, EXIT_CODES_HELP, FlowsCmd, RulesCmd, SHORT_FLAGS, SandboxCmd, command,
+        flag_name, parse,
     };
 
     #[test]
@@ -633,10 +820,100 @@ mod tests {
 
     #[test]
     fn a_placeholder_subcommand_swallows_its_arguments() {
-        let invocation = parse(["humanitl", "rules", "list", "--json"]).expect("parses");
-        let Cmd::Rules(args) = invocation.cli.cmd else {
-            panic!("expected rules");
+        let invocation =
+            parse(["humanitl", "audit", "verify", "--since", "yesterday"]).expect("parses");
+        let Cmd::Audit(args) = invocation.cli.cmd else {
+            panic!("expected audit");
         };
-        assert_eq!(args.args, ["list", "--json"]);
+        assert_eq!(args.args, ["verify", "--since", "yesterday"]);
+    }
+
+    #[test]
+    fn a_rule_is_written_field_by_field() {
+        let invocation = parse([
+            "humanitl",
+            "rules",
+            "add",
+            "--action",
+            "allow",
+            "--host",
+            "**.github.com",
+            "--method",
+            "get",
+            "--method",
+            "POST",
+            "--port",
+            "8443",
+            "--expires",
+            "session",
+            "--allow-private",
+        ])
+        .expect("parses");
+
+        let Cmd::Rules {
+            cmd: RulesCmd::Add { rule },
+        } = invocation.cli.cmd
+        else {
+            panic!("expected rules add");
+        };
+        assert_eq!(rule.action.as_deref(), Some("allow"));
+        assert_eq!(rule.host.as_deref(), Some("**.github.com"));
+        // `ignore_case` lässt die Schreibweise des Nutzers stehen; die
+        // Übersetzung in die Wire-Form macht daraus GET und POST.
+        assert_eq!(rule.method, ["get", "POST"]);
+        assert_eq!(rule.port, Some(8443));
+        assert_eq!(rule.expires.as_deref(), Some("session"));
+        assert_eq!(rule.allow_private, Some(true));
+    }
+
+    #[test]
+    fn a_rule_only_takes_the_actions_and_methods_of_the_contract() {
+        assert!(parse(["humanitl", "rules", "add", "--action", "shout"]).is_err());
+        assert!(parse(["humanitl", "rules", "add", "--method", "PROPFIND"]).is_err());
+        assert!(parse(["humanitl", "rules", "add", "--port", "0"]).is_err());
+        assert!(parse(["humanitl", "rules", "reorder", "id", "0"]).is_err());
+    }
+
+    #[test]
+    fn a_filter_may_be_several_words_and_the_order_is_a_flag() {
+        let invocation = parse([
+            "humanitl",
+            "flows",
+            "list",
+            "host:github.com",
+            "findings:>0",
+            "--sort",
+            "size",
+            "--asc",
+        ])
+        .expect("parses");
+
+        let Cmd::Flows {
+            cmd:
+                FlowsCmd::List {
+                    filter,
+                    sort,
+                    asc,
+                    limit,
+                },
+        } = invocation.cli.cmd
+        else {
+            panic!("expected flows list");
+        };
+        assert_eq!(filter, ["host:github.com", "findings:>0"]);
+        assert_eq!(sort, "size");
+        assert!(asc);
+        assert_eq!(limit, 0);
+    }
+
+    #[test]
+    fn raw_needs_a_body() {
+        assert!(parse(["humanitl", "flows", "show", "id", "--raw"]).is_err());
+        assert!(
+            parse([
+                "humanitl", "flows", "show", "id", "--body", "response", "--raw"
+            ])
+            .is_ok()
+        );
     }
 }
