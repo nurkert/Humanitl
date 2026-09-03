@@ -1,0 +1,16 @@
+# Eine config.toml aus der Zeit vor der Gruppe [limits].
+[hold]
+body_cap_bytes = 4096
+
+[ipc]
+event_buffer = 64
+
+[preview]
+cap_bytes = 2048
+max_decompress_ratio = 7
+
+[recorder]
+max_body_bytes = 1048576
+
+[upstream]
+connect_timeout_secs = 5

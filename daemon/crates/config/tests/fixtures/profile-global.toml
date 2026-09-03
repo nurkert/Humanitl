@@ -1,0 +1,10 @@
+# Ein globales Profil. In Sprint 0 zaehlt nur der [config]-Block.
+[config.hold]
+timeout_secs = 120
+
+[config.ui]
+language = "de"
+
+# HUM-066 fuellt diesen Block; Sprint 0 uebergeht ihn.
+[rules]
+inherit = "default"

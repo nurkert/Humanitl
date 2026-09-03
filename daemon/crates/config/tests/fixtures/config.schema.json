@@ -1,0 +1,622 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Die vollständige Konfiguration eines Humanitl-Laufs.\n\n`deny_unknown_fields` zusammen mit `default` ist Absicht: fehlende Gruppen\nsind erlaubt, Tippfehler nicht.",
+  "properties": {
+    "agent": {
+      "additionalProperties": false,
+      "default": {
+        "adapter": "opencode",
+        "briefing": {
+          "enabled": true
+        },
+        "command": null
+      },
+      "description": "Welcher Agent in der Sandbox läuft.",
+      "properties": {
+        "adapter": {
+          "default": "opencode",
+          "description": "Kennung des Adapters, zum Beispiel `opencode`.",
+          "type": "string",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        },
+        "briefing": {
+          "additionalProperties": false,
+          "default": {
+            "enabled": true
+          },
+          "description": "Die Instruktionsdatei, die der Agent in der Sandbox vorfindet.",
+          "properties": {
+            "enabled": {
+              "default": true,
+              "description": "Legt die Instruktionsdatei des Agenten in der Sandbox an.",
+              "type": "boolean",
+              "x-project-scope": "allowed",
+              "x-tier": "advanced"
+            }
+          },
+          "type": "object",
+          "x-project-scope": "allowed",
+          "x-tier": "advanced"
+        },
+        "command": {
+          "default": null,
+          "description": "Ersetzt die Kommandozeile des Adapters vollständig. Leer bedeutet: die des Adapters.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ],
+          "x-project-scope": "denied",
+          "x-tier": "expert"
+        }
+      },
+      "type": "object",
+      "x-project-scope": "allowed",
+      "x-tier": "advanced"
+    },
+    "experimental": {
+      "additionalProperties": false,
+      "default": {
+        "h2_upstream": false,
+        "upstream_port_map": {},
+        "ws_hold": false
+      },
+      "description": "Schalter für unfertige Wege. Alles hier darf ohne Ankündigung wegfallen.",
+      "properties": {
+        "h2_upstream": {
+          "default": false,
+          "description": "Bietet dem Ziel HTTP/2 an. In M1 spricht der Proxy nach oben nur HTTP/1.1.",
+          "type": "boolean",
+          "x-project-scope": "denied",
+          "x-tier": "expert"
+        },
+        "upstream_port_map": {
+          "additionalProperties": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "default": {},
+          "description": "Lenkt einen Zielport auf einen anderen um, Schlüssel und Wert als Portnummer. Nur für Tests.",
+          "type": "object",
+          "x-project-scope": "denied",
+          "x-tier": "expert"
+        },
+        "ws_hold": {
+          "default": false,
+          "description": "Hält auch WebSocket-Upgrades an, statt sie über eine Regel zu entscheiden.",
+          "type": "boolean",
+          "x-project-scope": "denied",
+          "x-tier": "expert"
+        }
+      },
+      "type": "object",
+      "x-project-scope": "denied",
+      "x-tier": "expert"
+    },
+    "findings": {
+      "additionalProperties": false,
+      "default": {
+        "email_allow_domains": [],
+        "enabled": true,
+        "ignored_hashes": [],
+        "user_terms": []
+      },
+      "description": "Erkennung von Geheimnissen und persönlichen Daten.",
+      "properties": {
+        "email_allow_domains": {
+          "default": [],
+          "description": "Domains, deren Mailadressen kein Fund sind, zum Beispiel die eigene Firma.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        },
+        "enabled": {
+          "default": true,
+          "description": "Schaltet die Erkennung ganz ab. Aus bedeutet: keine Markierungen, keine Pseudonyme.",
+          "type": "boolean",
+          "x-project-scope": "denied",
+          "x-tier": "basic"
+        },
+        "ignored_hashes": {
+          "default": [],
+          "description": "Prüfsummen (SHA-256, hex) einzelner Werte, die nie wieder als Fund erscheinen.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-project-scope": "denied",
+          "x-tier": "expert"
+        },
+        "user_terms": {
+          "default": [],
+          "description": "Eigene Begriffe, die als Fund gelten, zum Beispiel ein Projektname oder ein Kundenname.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-project-scope": "allowed",
+          "x-tier": "basic"
+        }
+      },
+      "type": "object",
+      "x-project-scope": "allowed",
+      "x-tier": "basic"
+    },
+    "hold": {
+      "additionalProperties": false,
+      "default": {
+        "ask_mode": "ui",
+        "hard_block_checksum_secrets": false,
+        "timeout_secs": 300
+      },
+      "description": "Wie lange und auf welchem Weg gefragt wird, bevor eine Anfrage weiterläuft.",
+      "properties": {
+        "ask_mode": {
+          "default": "ui",
+          "description": "Wo gefragt wird: in der Oberfläche, im Terminal oder gar nicht.",
+          "oneOf": [
+            {
+              "const": "ui",
+              "description": "Die Oberfläche zeigt die Karte.",
+              "type": "string"
+            },
+            {
+              "const": "terminal",
+              "description": "Die Frage erscheint im Terminal des Agenten.",
+              "type": "string"
+            },
+            {
+              "const": "none",
+              "description": "Es wird nicht gefragt; jede Anfrage ohne Regel läuft in die Zeitüberschreitung.",
+              "type": "string"
+            }
+          ],
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        },
+        "hard_block_checksum_secrets": {
+          "default": false,
+          "description": "Blockt Anfragen mit prüfsummen-sicheren Geheimnissen sofort, ohne zu fragen.",
+          "type": "boolean",
+          "x-project-scope": "allowed",
+          "x-tier": "advanced"
+        },
+        "timeout_secs": {
+          "default": 300,
+          "description": "Sekunden, die eine angehaltene Anfrage auf eine Entscheidung wartet, bevor sie als Zeitüberschreitung endet.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "allowed",
+          "x-tier": "basic"
+        }
+      },
+      "type": "object",
+      "x-project-scope": "allowed",
+      "x-tier": "basic"
+    },
+    "limits": {
+      "additionalProperties": false,
+      "default": {
+        "body_timeout_secs": 300,
+        "connect_timeout_secs": 10,
+        "event_buffer": 1024,
+        "header_timeout_secs": 30,
+        "hold_body_cap_bytes": 33554432,
+        "hold_max_bytes": 268435456,
+        "hold_max_flows": 200,
+        "idle_timeout_secs": 90,
+        "max_decompress_ratio": 100,
+        "preview_cap_bytes": 8388608,
+        "recorder_max_body_bytes": 33554432
+      },
+      "description": "Alle Caps und Zeitgrenzen an einer Stelle.",
+      "properties": {
+        "body_timeout_secs": {
+          "default": 300,
+          "description": "Sekunden, in denen ein Body vollständig übertragen sein muss.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "allowed",
+          "x-tier": "expert"
+        },
+        "connect_timeout_secs": {
+          "default": 10,
+          "description": "Sekunden bis zum Aufbau der Verbindung zum Ziel.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "allowed",
+          "x-tier": "advanced"
+        },
+        "event_buffer": {
+          "default": 1024,
+          "description": "Länge der Ereignis-Warteschlange je Client. Läuft sie über, meldet der Daemon `Lagged`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "allowed",
+          "x-tier": "expert"
+        },
+        "header_timeout_secs": {
+          "default": 30,
+          "description": "Sekunden, in denen der Client seine Anfrage-Kopfzeilen gesendet haben muss.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "allowed",
+          "x-tier": "expert"
+        },
+        "hold_body_cap_bytes": {
+          "default": 33554432,
+          "description": "Größte Anfrage, deren Body für die Entscheidung im Speicher gehalten wird. Darüber antwortet der Proxy mit 413.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "allowed",
+          "x-tier": "advanced"
+        },
+        "hold_max_bytes": {
+          "default": 268435456,
+          "description": "Größte Summe der Bodies aller angehaltenen Flows. Darüber antwortet der Proxy mit 503.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "allowed",
+          "x-tier": "advanced"
+        },
+        "hold_max_flows": {
+          "default": 200,
+          "description": "Größte Zahl gleichzeitig angehaltener Flows. Darüber antwortet der Proxy mit 503.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "allowed",
+          "x-tier": "advanced"
+        },
+        "idle_timeout_secs": {
+          "default": 90,
+          "description": "Sekunden ohne Bytes, nach denen eine offene Verbindung geschlossen wird.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "allowed",
+          "x-tier": "expert"
+        },
+        "max_decompress_ratio": {
+          "default": 100,
+          "description": "Höchstes erlaubtes Verhältnis von entpackten zu gepackten Bytes einer Vorschau.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "allowed",
+          "x-tier": "expert"
+        },
+        "preview_cap_bytes": {
+          "default": 8388608,
+          "description": "Größte Menge Body, die die Oberfläche als Vorschau bekommt.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "allowed",
+          "x-tier": "expert"
+        },
+        "recorder_max_body_bytes": {
+          "default": 33554432,
+          "description": "Größter Body, den die Aufzeichnung als Blob ablegt. Alles darüber wird nur mit Prüfsumme vermerkt.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "allowed",
+          "x-tier": "expert"
+        }
+      },
+      "type": "object",
+      "x-project-scope": "allowed",
+      "x-tier": "advanced"
+    },
+    "llm": {
+      "additionalProperties": false,
+      "default": {
+        "endpoint": null,
+        "passthrough_paths": [
+          "/v1/",
+          "/api/"
+        ]
+      },
+      "description": "Der lokale LLM-Endpunkt und was als Passthrough gilt.",
+      "properties": {
+        "endpoint": {
+          "default": null,
+          "description": "OpenAI-kompatibler Endpunkt im LAN. Verkehr dorthin wird nicht angehalten, aber protokolliert.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-project-scope": "denied",
+          "x-tier": "basic"
+        },
+        "passthrough_paths": {
+          "default": [
+            "/v1/",
+            "/api/"
+          ],
+          "description": "Pfadpräfixe, die als LLM-Passthrough gelten.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        }
+      },
+      "type": "object",
+      "x-project-scope": "denied",
+      "x-tier": "basic"
+    },
+    "pseudonyms": {
+      "additionalProperties": false,
+      "default": {
+        "max_response_bytes": 8388608,
+        "translate_responses": true
+      },
+      "description": "Rücktausch von Pseudonymen in Antworten.",
+      "properties": {
+        "max_response_bytes": {
+          "default": 8388608,
+          "description": "Größte Antwort, die für den Rücktausch gepuffert wird. Alles darüber läuft unverändert durch.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "denied",
+          "x-tier": "expert"
+        },
+        "translate_responses": {
+          "default": true,
+          "description": "Ersetzt Pseudonyme in Text-Antworten wieder durch den Originalwert.",
+          "type": "boolean",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        }
+      },
+      "type": "object",
+      "x-project-scope": "denied",
+      "x-tier": "advanced"
+    },
+    "recorder": {
+      "additionalProperties": false,
+      "default": {
+        "inline_max_bytes": 262144,
+        "retention_days": 90
+      },
+      "description": "Aufzeichnung der Flows.",
+      "properties": {
+        "inline_max_bytes": {
+          "default": 262144,
+          "description": "Bodies bis zu dieser Größe stehen in der Datenbank, größere als Datei im Blob-Speicher.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "allowed",
+          "x-tier": "expert"
+        },
+        "retention_days": {
+          "default": 90,
+          "description": "Tage, die eine Aufzeichnung aufgehoben wird.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        }
+      },
+      "type": "object",
+      "x-project-scope": "allowed",
+      "x-tier": "advanced"
+    },
+    "resolver": {
+      "additionalProperties": false,
+      "default": {
+        "cache_ttl_secs": 300,
+        "nameserver": null,
+        "overrides": {},
+        "prefer": "ipv4",
+        "test_ca": null
+      },
+      "description": "Namensauflösung nach der Entscheidung.",
+      "properties": {
+        "cache_ttl_secs": {
+          "default": 300,
+          "description": "Sekunden, die eine Antwort im Zwischenspeicher bleibt.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "denied",
+          "x-tier": "expert"
+        },
+        "nameserver": {
+          "default": null,
+          "description": "Nameserver als `IP:Port`. Leer bedeutet: die Einstellung des Systems.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-project-scope": "denied",
+          "x-tier": "expert"
+        },
+        "overrides": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Feste Zuordnungen von Hostname zu Adresse, vor jeder Abfrage.",
+          "type": "object",
+          "x-project-scope": "denied",
+          "x-tier": "expert"
+        },
+        "prefer": {
+          "default": "ipv4",
+          "description": "Welche Adressfamilie bevorzugt wird, wenn beide vorliegen.",
+          "oneOf": [
+            {
+              "const": "ipv4",
+              "description": "IPv4 zuerst.",
+              "type": "string"
+            },
+            {
+              "const": "ipv6",
+              "description": "IPv6 zuerst.",
+              "type": "string"
+            }
+          ],
+          "x-project-scope": "denied",
+          "x-tier": "expert"
+        },
+        "test_ca": {
+          "default": null,
+          "description": "Zusätzliche CA für Tests. Nur in Testläufen setzen, nie im Alltag.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-project-scope": "denied",
+          "x-tier": "expert"
+        }
+      },
+      "type": "object",
+      "x-project-scope": "denied",
+      "x-tier": "expert"
+    },
+    "sandbox": {
+      "additionalProperties": false,
+      "default": {
+        "profile": "default",
+        "work_dir": null,
+        "work_mode": "rw"
+      },
+      "description": "Welches Sandbox-Profil mit welchem Arbeitsverzeichnis startet.",
+      "properties": {
+        "profile": {
+          "default": "default",
+          "description": "Name des Profils unter `profiles/sandbox/`, ohne Endung.",
+          "type": "string",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        },
+        "work_dir": {
+          "default": null,
+          "description": "Projektverzeichnis, das als `/work` eingehängt wird. Leer bedeutet: das aktuelle Verzeichnis.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-project-scope": "denied",
+          "x-tier": "basic"
+        },
+        "work_mode": {
+          "default": "rw",
+          "description": "Ob der Agent im Projektverzeichnis schreiben darf.",
+          "oneOf": [
+            {
+              "const": "ro",
+              "description": "Nur lesen.",
+              "type": "string"
+            },
+            {
+              "const": "rw",
+              "description": "Lesen und schreiben.",
+              "type": "string"
+            }
+          ],
+          "x-project-scope": "denied",
+          "x-tier": "basic"
+        }
+      },
+      "type": "object",
+      "x-project-scope": "denied",
+      "x-tier": "basic"
+    },
+    "ui": {
+      "additionalProperties": false,
+      "default": {
+        "language": "en",
+        "notifications": true,
+        "sound": false,
+        "theme": "dark"
+      },
+      "description": "Sprache, Erscheinungsbild und Meldungen der Oberfläche.",
+      "properties": {
+        "language": {
+          "default": "en",
+          "description": "Sprache der Oberfläche.",
+          "oneOf": [
+            {
+              "const": "en",
+              "description": "Englisch.",
+              "type": "string"
+            },
+            {
+              "const": "de",
+              "description": "Deutsch.",
+              "type": "string"
+            }
+          ],
+          "x-project-scope": "allowed",
+          "x-tier": "basic"
+        },
+        "notifications": {
+          "default": true,
+          "description": "Meldung des Systems, wenn eine Anfrage wartet und das Fenster nicht vorn ist.",
+          "type": "boolean",
+          "x-project-scope": "allowed",
+          "x-tier": "advanced"
+        },
+        "sound": {
+          "default": false,
+          "description": "Ton zur Meldung.",
+          "type": "boolean",
+          "x-project-scope": "allowed",
+          "x-tier": "advanced"
+        },
+        "theme": {
+          "default": "dark",
+          "description": "Erscheinungsbild der Oberfläche.",
+          "oneOf": [
+            {
+              "const": "dark",
+              "description": "Dunkel.",
+              "type": "string"
+            },
+            {
+              "const": "light",
+              "description": "Hell.",
+              "type": "string"
+            },
+            {
+              "const": "system",
+              "description": "Der Einstellung des Systems folgen.",
+              "type": "string"
+            }
+          ],
+          "x-project-scope": "allowed",
+          "x-tier": "advanced"
+        }
+      },
+      "type": "object",
+      "x-project-scope": "allowed",
+      "x-tier": "basic"
+    }
+  },
+  "title": "Config",
+  "type": "object"
+}

@@ -1,0 +1,8 @@
+[llm]
+passthrough_paths = ["/only/"]
+
+[findings]
+user_terms = ["projekt-nordlicht"]
+
+[resolver.overrides]
+"api.example.com" = "10.0.0.5"
