@@ -55,6 +55,11 @@ step "Lizenzen" make rust-deny
 # Wie im CI-Job escape-tests: eine rote Probe ist erlaubt, solange sie zu einem
 # Issue gehoert, das noch aussteht; eine Sandbox, die gar nicht startet, nicht.
 export ESCAPE_ALLOW_FAIL=1
+# Die Oberflaeche gehoert dazu: Ein geaendertes Proto erzeugt neuen Dart-Code,
+# und eine neue Variante im Kern fehlt der App, bis jemand sie nachtraegt. Ohne
+# diesen Schritt faellt das erst in der CI auf (so geschehen am 2026-09-03).
+step "Flutter" make flutter-analyze flutter-test
+
 step "Escape-Tests" bash tests/escape/run.sh
 
 if [[ "$fail" -ne 0 ]]; then
