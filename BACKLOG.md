@@ -229,7 +229,7 @@ humanitl/
     crates/sandbox/                   SandboxBackend-Trait, bwrap-Impl, seccomp (seccompiler)
     crates/proxy/                     hudsucker-Wrapper, Hold-Queue, Zustandsautomat
     crates/ipc/                       tonic-Server, Proto <-> Domain-Mapping
-    crates/catalog/                   Domain-Katalog, Public Suffix List, Tranco-Rank
+    crates/catalog/                   Domain-Katalog, Public Suffix List, Verbreitungsrang
     crates/config/                    Settings-Typen mit serde + schemars, Stufen basic/advanced/expert, Profile
     bin/humanitld/                    Verdrahtung, Config, tracing
     bin/humanitl/                     CLI: run, sandbox, rules, flows, audit, config, daemon

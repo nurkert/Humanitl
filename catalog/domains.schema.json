@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nurkert/Humanitl/blob/main/catalog/domains.schema.json",
+  "title": "Humanitl domain catalog",
+  "description": "Form von catalog/domains.yaml (HUM-031). Geprueft wird die Form; die Werte prueft humanitl-catalog beim Laden, unter anderem auf doppelte Kennungen und auf Host-Muster, die weder Name noch Label-Glob sind.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "entries"],
+  "properties": {
+    "version": {
+      "description": "Format-Version der Datei.",
+      "const": 1
+    },
+    "entries": {
+      "description": "Die Eintraege, in der Reihenfolge der Datei. Trifft mehr als ein Muster, gewinnt der erste Eintrag.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/entry" }
+    }
+  },
+  "$defs": {
+    "text": {
+      "description": "Ein Satz Text in beiden Sprachen der Oberflaeche. en ist die Quelle, de die Uebersetzung.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["en", "de"],
+      "properties": {
+        "en": { "type": "string", "minLength": 1 },
+        "de": { "type": "string", "minLength": 1 }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "hosts",
+        "category",
+        "description",
+        "typical",
+        "icon",
+        "homepage",
+        "source"
+      ],
+      "properties": {
+        "id": {
+          "description": "Stabiler Bezeichner. Er reist im Ereignisstrom als DomainInfo.catalog_id.",
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+        },
+        "name": {
+          "description": "Der Name, unter dem der Dienst sich selbst fuehrt.",
+          "type": "string",
+          "minLength": 1
+        },
+        "hosts": {
+          "description": "Host-Muster in der Schreibweise der Regeln (CONVENTIONS.md 3.3). Ein Name ohne Stern trifft exakt, * steht fuer genau ein Label, ** fuer ein oder mehr. Adressen sind nicht erlaubt.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(\\*{1,2}|[a-z0-9_-]+)(\\.(\\*{1,2}|[a-z0-9_-]+))*$"
+          }
+        },
+        "category": {
+          "description": "Wofuer der Dienst da ist. Keine Bewertung.",
+          "enum": [
+            "scm",
+            "registry",
+            "docs",
+            "ci",
+            "cloud",
+            "ai",
+            "cdn",
+            "search",
+            "os",
+            "other"
+          ]
+        },
+        "description": { "$ref": "#/$defs/text" },
+        "typical": {
+          "description": "Womit ein Agent hier landet, in seiner eigenen Schreibweise. Keine Prosa, keine Uebersetzung.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "icon": {
+          "description": "Dateiname unter catalog/icons/. Fehlt die Datei, zeigt die Oberflaeche den Globus.",
+          "type": "string",
+          "pattern": "^[a-z0-9-]+\\.svg$"
+        },
+        "homepage": {
+          "description": "Startseite des Dienstes.",
+          "type": "string",
+          "pattern": "^https?://"
+        },
+        "source": {
+          "description": "Wo die Beschreibung herkommt: eine Seite des Betreibers, auf der nachlesbar ist, was dieser Eintrag behauptet.",
+          "type": "string",
+          "pattern": "^https?://"
+        },
+        "risk_note": {
+          "description": "Was ein Mensch wissen sollte, bevor er hier etwas freigibt. Nur setzen, wo es etwas Konkretes zu sagen gibt.",
+          "$ref": "#/$defs/text"
+        }
+      }
+    }
+  }
+}
