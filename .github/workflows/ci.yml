@@ -58,6 +58,11 @@ jobs:
         run: make rust-fmt rust-clippy
       - name: Licenses, advisories, duplicate crates
         run: make rust-deny
+      - name: Install check-jsonschema
+        # scripts/ci/lint-docs.sh validates catalog/domains.yaml against its
+        # schema when the tool is there and reports a loud skip when it is not.
+        # A skip in CI would mean the bundled catalog is never validated.
+        run: pipx install check-jsonschema
       - name: Security documents (HUM-007)
         # Both documents complete, no TODO/TBD line, every referenced ESC-N is a
         # real escape test. Needs no toolchain, rides along in this job.
