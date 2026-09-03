@@ -97,8 +97,8 @@ pub static AREAS: &[AreaInfo] = &[
         area: "rules",
         prefix: "RULES",
         first: 1,
-        last: 9,
-        note: "Regeldatei und Muster",
+        last: 19,
+        note: "001-008 Regeldatei und Muster, 009-011 Regelspeicher (HUM-027)",
     },
     AreaInfo {
         area: "findings",
@@ -106,6 +106,13 @@ pub static AREAS: &[AreaInfo] = &[
         first: 1,
         last: 9,
         note: "Detektoren für Secrets und personenbezogene Daten",
+    },
+    AreaInfo {
+        area: "catalog",
+        prefix: "CATALOG",
+        first: 1,
+        last: 9,
+        note: "Gebündelter Domain-Katalog und Rangliste",
     },
     AreaInfo {
         area: "terminal",
@@ -198,6 +205,11 @@ registry! {
     /// Grund steht im Befund. Fehlt die Entscheidung, wird sie nie zu `Allow`
     /// ergänzt.
     IPC_004 => "ipc", "Decide-Anfrage ungültig", "#ipc_004";
+    /// Die `Rules`-Anfrage lässt sich so nicht ausführen: keine Operation, eine
+    /// fehlende oder unlesbare Regel, eine unbekannte Regel-Id, oder der Daemon
+    /// läuft ohne Regelspeicher. Eine abgelehnte Anfrage ändert nichts
+    /// (HUM-027).
+    IPC_005 => "ipc", "Rules-Anfrage ungültig", "#ipc_005";
 
     /// `config.toml` ließ sich nicht lesen.
     CONFIG_001 => "config", "Config-Datei ungültig", "#config_001";
@@ -298,6 +310,21 @@ registry! {
     /// weitere Einschränkung zusammen mit `action: allow` hebt die Moderation
     /// für jeden DNS-Host auf. Das ist eine Warnung, keine Ablehnung.
     RULES_008 => "rules", "Regel wirkt zu breit", "#rules_008";
+    /// `rules.yaml` ließ sich nicht schreiben: das Verzeichnis fehlt, die
+    /// Rechte reichen nicht, die Platte ist voll. Die Datei bleibt dabei
+    /// unangetastet, weil der Regelsatz erst in eine Nebendatei geht und dann
+    /// umbenannt wird; die Änderung gilt deshalb auch im Speicher nicht
+    /// (HUM-027).
+    RULES_009 => "rules", "Regel-Datei nicht schreibbar", "#rules_009";
+    /// Eine mitgelieferte Regel (`bundled: true`) soll gelöscht oder geändert
+    /// werden. Mitgelieferte Regeln gehören nicht dem Nutzer; wer sie
+    /// aufheben will, legt davor eine eigene Regel mit demselben Muster an
+    /// (HUM-027).
+    RULES_010 => "rules", "Mitgelieferte Regel ist unveränderlich", "#rules_010";
+    /// Der Regelsatz wurde aus `rules.yaml` neu geladen. Der Befund nennt,
+    /// was sich dabei geändert hat; er ist eine Information, kein Fehler
+    /// (HUM-027).
+    RULES_011 => "rules", "Regelsatz neu geladen", "#rules_011";
 
     /// Das eingebaute Regel-Set der Secret-Detektoren ließ sich nicht lesen
     /// oder eines seiner Muster nicht übersetzen. Das ist ein Fehler im
@@ -305,12 +332,44 @@ registry! {
     /// nach Secrets, und die Suche wird nicht stillschweigend übersprungen.
     FINDINGS_001 => "findings", "Detektor-Regeln unbrauchbar", "#findings_001";
     /// Die Anfrage wurde nur teilweise durchsucht: der Body liegt über
-    /// `limits.preview_cap_bytes` oder trägt eine Kodierung, für die der
-    /// Entpacker fehlt. Angezeigte Funde sind dann unvollständig.
+    /// `limits.preview_cap_bytes`, das Entpacken lief über
+    /// `limits.max_decompress_ratio`, oder der Body trägt eine Kodierung, für
+    /// die es keinen Entpacker gibt, beziehungsweise einen beschädigten Strom.
+    /// Angezeigte Funde sind dann unvollständig.
     FINDINGS_002 => "findings", "Scan unvollständig", "#findings_002";
+
+    /// `catalog/domains.yaml` fehlt oder lässt sich nicht als Katalog lesen:
+    /// unbekannte `version`, ungültiges YAML, doppelte `id`, ein Host-Muster,
+    /// das kein Name und kein Label-Glob ist. Der Daemon läuft dann mit einem
+    /// leeren Katalog weiter; jede Domain steht als unbekannt da, und keine
+    /// wird als bekannt ausgegeben (HUM-031).
+    CATALOG_001 => "catalog", "Domain-Katalog nicht lesbar", "#catalog_001";
+    /// `catalog/tranco-top100k.csv.gz` fehlt oder lässt sich nicht lesen:
+    /// beschädigter Gzip-Strom, eine Zeile ohne `rang,domain`, oder die Datei
+    /// überschreitet die Grenzen für entpackte Größe und Zeilenzahl. Der
+    /// Daemon läuft dann ohne Ränge weiter; das Panel zeigt „unranked" statt
+    /// einer geratenen Zahl (HUM-031).
+    CATALOG_002 => "catalog", "Rangliste nicht lesbar", "#catalog_002";
 
     /// Es gibt bereits einen schreibenden Terminal-Client.
     TERM_001 => "terminal", "Zweiter schreibender Terminal-Client abgelehnt", "#term_001";
+
+    /// Die Aufzeichnung ließ sich nicht öffnen: das Datenverzeichnis oder der
+    /// Blob-Speicher ist nicht anlegbar, die Datenbankdatei nicht lesbar oder
+    /// beschreibbar, oder eine Migration schlug fehl. Ohne Aufzeichnung gilt
+    /// die Zusage „alles wird aufgezeichnet" nicht mehr (HUM-026).
+    RECORDER_001 => "recorder", "Aufzeichnung nicht verfügbar", "#recorder_001";
+    /// Ein Filterausdruck für `ListFlows` ließ sich nicht lesen: unbekannter
+    /// Schlüssel, fehlender Wert, unbrauchbare Zahl oder Zeitangabe. Der Befund
+    /// nennt den beanstandeten Term und die gültigen Schlüssel (HUM-026).
+    RECORDER_002 => "recorder", "Filter ungültig", "#recorder_002";
+    /// Ein Schreibvorgang der Aufzeichnung schlug fehl. Der Schreib-Thread
+    /// lebt weiter, der betroffene Datensatz fehlt aber; der Befund geht in
+    /// den Ereignisstrom, damit die Lücke sichtbar ist (HUM-026).
+    RECORDER_003 => "recorder", "Aufzeichnung konnte nicht schreiben", "#recorder_003";
+    /// Ein Body ließ sich nicht in den Blob-Speicher schreiben oder von dort
+    /// lesen: fehlende Datei, falsche Rechte, volle Platte (HUM-026).
+    RECORDER_004 => "recorder", "Blob-Speicher nicht benutzbar", "#recorder_004";
 
     /// Die Hash-Kette in `audit.jsonl` passt nicht mehr zusammen.
     AUDIT_001 => "audit", "Hash-Kette gebrochen", "#audit_001";

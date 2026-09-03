@@ -96,6 +96,8 @@ enum BlockReason {
   BLOCK_REASON_HOLD_MAX_FLOWS = 8;
   BLOCK_REASON_CLIENT_TIMEOUT = 9;
   BLOCK_REASON_PRIVATE_ADDRESS = 10;
+  // Ein Geheimnis mit aufgehender Pruefsumme, hard_block_checksum_secrets an.
+  BLOCK_REASON_SECRET = 11;
 }
 
 // Wer entschieden hat.
@@ -245,14 +247,55 @@ message Diagnostic {
 }
 
 // Was der Katalog ueber die Ziel-Domain weiss (HUM-031).
+//
+// Alles darin kommt aus mitgelieferten Daten; zur Laufzeit wird nie etwas
+// geholt (ADR-006). Jedes Feld ist eine Beobachtung, keine Bewertung: es gibt
+// hier kein "vertrauenswuerdig" und keine Punktzahl, aus der die Oberflaeche
+// eines bauen koennte. Ein leeres Feld heisst immer "unbekannt", nie
+// "unbedenklich", und die Oberflaeche schreibt es auch so hin
+// (CONVENTIONS.md 4.13).
 message DomainInfo {
-  // Registrierbare Domain laut Public Suffix List.
+  // Registrierbare Domain laut Public Suffix List, zum Beispiel `github.com`
+  // fuer `api.github.com`. Leer bei einer IP-Adresse (das Panel zeigt dann
+  // "IP address") und bei einem Namen, dessen Suffix die Liste nicht kennt.
   string apex = 1;
-  // Eintrag im mitgelieferten Katalog, leer wenn unbekannt.
+  // Die `id` des Eintrags aus `catalog/domains.yaml`, dessen Host-Muster den
+  // Host trifft; leer, wenn keines trifft. Leer heisst "nicht im Katalog" und
+  // sonst nichts: der Katalog kennt heute einige Dutzend Dienste und waechst
+  // mit jedem Release. Name,
+  // Beschreibung, Quelle und Symbol schlaegt die Oberflaeche in ihrer eigenen
+  // Kopie derselben Datei nach; hier reist nur die Kennung.
+  //
+  // Ein Treffer ist keine Freigabe. Ueber `api.github.com` laeuft ein
+  // `git clone` und ein Datenabfluss (BACKLOG.md 4.3).
   string catalog_id = 2;
-  // Tranco-Rang des Apex, 0 wenn unbekannt.
+  // Verbreitungsrang des Apex (nicht des vollen Hosts), 0 wenn der Apex nicht
+  // in den vorderen 100 000 Raengen der gebuendelten Liste steht oder keine
+  // Liste geladen ist.
+  //
+  // Ausgeliefert wird ein Ausschnitt der Majestic Million (CC BY 3.0); der
+  // Rang misst dort, von wie vielen verschiedenen Netzen aus auf eine Domain
+  // verwiesen wird. Herkunft, Datum, Pruefsummen und Lizenz stehen in
+  // `catalog/RANKS-LICENSE`.
+  //
+  // Der Rang ist Reichweite, kein Urteil, und die Oberflaeche beschriftet ihn
+  // so. Ein niedriger Rang macht eine Anfrage nicht sicher, ein fehlender
+  // macht sie nicht verdaechtig.
+  //
+  // Der Feldname bleibt `tranco_rank`, obwohl keine Tranco-Daten mehr
+  // ausgeliefert werden: `humanitl-ipc` und `app/lib/core/domain/flow.dart`
+  // lesen ihn bereits, und ein Umbenennen waere eine quelltextbrechende
+  // Aenderung ueber drei Crates und die Oberflaeche hinweg. Der Rust-Typ
+  // `humanitl_catalog::DomainInfo` nennt das Feld `popularity_rank`; die
+  // Umbenennung hier gehoert in einen eigenen Commit (docs/PROTOCOL.md).
   uint32 tranco_rank = 3;
+  // Wann dieser Host in dieser Sitzung zum ersten Mal vorkam. Die Zaehler
+  // leben im Daemon-Prozess: "zum ersten Mal" heisst "zum ersten Mal in
+  // dieser Sitzung", nie "zum ersten Mal ueberhaupt".
   google.protobuf.Timestamp first_seen = 4;
+  // Wie oft dieser Host in dieser Sitzung vorkam, diese Anfrage
+  // eingeschlossen. In `FlowEvent.Received` immer mindestens 1. Saettigt bei
+  // 2^32-1, statt umzulaufen.
   uint32 seen_count = 5;
 }
 
@@ -345,6 +388,10 @@ message FlowEvent {
   // Ein neuer Flow ist eingetroffen.
   message Received {
     FlowSummary summary = 1;
+    // Der Domain-Kontext zu `summary.authority.host`, aus dem gebuendelten
+    // Katalog (HUM-031). Fehlt das Feld, weiss der Daemon nichts ueber die
+    // Domain; die Oberflaeche zeigt dann die Unbekannt-Karte und faellt nicht
+    // auf eine leere Zeile zurueck.
     DomainInfo domain = 2;
   }
 
@@ -542,6 +589,10 @@ message RulesRequest {
     DryRun dry_run = 6;
     // Regel-ID einer Session-Regel, die dauerhaft werden soll.
     string make_permanent = 7;
+    // Liest `rules.yaml` neu ein. Lehnt die Engine die Datei ab, bleiben die
+    // geltenden Regeln in Kraft und die Befunde stehen in `diagnostics`.
+    // Session-Regeln bleiben unberuehrt, sie stehen nie in der Datei.
+    google.protobuf.Empty reload = 8;
   }
 
   // Neue Reihenfolge, vollstaendig.
@@ -558,10 +609,22 @@ message RulesRequest {
 }
 
 // Antwort auf eine Regel-Operation.
+//
+// `rules` ist immer der vollstaendige Regelsatz nach der Operation, in der
+// Reihenfolge, in der ausgewertet wird: erst die Session-Regeln, dann die
+// dauerhaften des Nutzers, dann die mitgelieferten (CONVENTIONS.md 4.5).
 message RulesResponse {
   repeated Rule rules = 1;
   repeated FlowSummary dry_run_matches = 2;
+  // Spiegel des ersten Eintrags aus `diagnostics`, fuer Clients, die nur einen
+  // Befund anzeigen.
   Diagnostic diagnostic = 3;
+  // Alle Befunde der Operation. Ein `reload` legt hier ab, was sich geaendert
+  // hat (`RULES_011`) oder warum die Datei abgelehnt wurde.
+  repeated Diagnostic diagnostics = 4;
+  // Wie viele aufgezeichnete Flows der Probelauf geprueft hat. Nur bei
+  // `dry_run` gesetzt; `dry_run_matches` ist die Teilmenge, die getroffen hat.
+  uint32 dry_run_scanned = 5;
 }
 
 // ---------- Sandbox ----------

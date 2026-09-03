@@ -30,9 +30,11 @@ use humanitl_core::http::{
 use humanitl_core::rule::{Expiry, Rule};
 use humanitl_core::{
     BlockReason, Decision, DecisionSource, Diagnostic, Finding, FixAction, FlowEvent, FlowId,
-    FlowState, HostName, Severity, UpstreamError,
+    FlowState, HostName, RuleId, SessionId, Severity, UpstreamError,
 };
 use humanitl_proxy::registry::{FlowRecord, FlowRegistry};
+use humanitl_proxy::rules_store::StoredRule;
+use humanitl_recorder::FlowSummary as RecordedSummary;
 
 use crate::v1;
 
@@ -279,6 +281,7 @@ pub const fn block_reason_to_proto(reason: BlockReason) -> v1::BlockReason {
         Reason::HoldMaxFlows => v1::BlockReason::HoldMaxFlows,
         Reason::ClientTimeout => v1::BlockReason::ClientTimeout,
         Reason::PrivateAddress => v1::BlockReason::PrivateAddress,
+        Reason::Secret => v1::BlockReason::Secret,
     }
 }
 
@@ -893,6 +896,280 @@ pub fn state_name(state: i32) -> &'static str {
         .unwrap_or(v1::FlowState::Unspecified)
         .as_str_name()
         .trim_start_matches("FLOW_STATE_")
+}
+
+/// Warum eine Regel von der Leitung nicht lesbar war.
+///
+/// Der Daemon lehnt sie mit dem Befund ab, statt sie zu ergänzen: eine Regel,
+/// die anders gilt, als der Mensch sie geschrieben hat, ist schlimmer als
+/// keine (ADR-007).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RuleError {
+    /// `RULE_ACTION_UNSPECIFIED`; eine Regel ohne Aktion gibt es nicht.
+    #[error("the rule has no action")]
+    Action,
+    /// Die Bedingung fehlt ganz.
+    #[error("the rule has no matcher")]
+    Matcher,
+    /// Das Host-Muster ließ sich nicht lesen.
+    #[error("{0}")]
+    Host(#[from] humanitl_core::rule::HostPatternError),
+    /// Eine Methode ist unbekannt oder `METHOD_UNSPECIFIED`.
+    #[error("{0:?} is not one of the known http methods")]
+    Method(String),
+    /// Der Port liegt außerhalb von `1..=65535`.
+    #[error("{0} is not a port; the range is 1..=65535")]
+    Port(u32),
+    /// Eine Id (`rule_id`, `created_from_flow_id`) war kein UUID-Text.
+    #[error("{field} is not a valid id: {value:?}")]
+    Id {
+        /// Welches Feld.
+        field: &'static str,
+        /// Der abgelehnte Text.
+        value: String,
+    },
+    /// Der Zeitpunkt in `expires.at` liegt außerhalb dessen, was eine Uhr kennt.
+    #[error("the expiry timestamp is out of range")]
+    Expiry,
+}
+
+/// Liest eine Regel aus ihrer Wire-Form.
+///
+/// `session` ist die laufende Sitzung; `expires: session` gehört immer ihr.
+/// Was der Daemon selbst vergibt, wird nicht von der Leitung übernommen: eine
+/// leere `rule_id` wird erzeugt, `position`, `hit_count` und `created_at` sind
+/// Ausgabefelder, und `bundled` ist immer `false` — eine mitgelieferte Regel
+/// entsteht nur beim Laden von `rules/default.yaml`, sonst könnte sich ein
+/// Client eine unlöschbare Regel anlegen.
+///
+/// Die Notiz läuft durch [`humanitl_core::block::sanitize_note`], weil sie in
+/// `rules.yaml` und in der Oberfläche landet; unsichtbare Zeichen haben in
+/// beidem nichts zu suchen (HUM-072).
+///
+/// # Errors
+///
+/// [`RuleError`], wenn ein Feld nicht lesbar ist. Das Pfadmuster wird hier
+/// nicht übersetzt; das tut die Engine beim Speichern, mit `RULES_005`.
+pub fn rule_from_proto(proto: &v1::Rule, session: SessionId) -> Result<Rule, RuleError> {
+    use humanitl_core::rule::{Action, HostPattern, Matcher, PathPattern};
+
+    let action = match v1::RuleAction::try_from(proto.action).unwrap_or(v1::RuleAction::Unspecified)
+    {
+        v1::RuleAction::Allow => Action::Allow,
+        v1::RuleAction::Block => Action::Block,
+        v1::RuleAction::Ask => Action::Ask,
+        v1::RuleAction::Redact => Action::Redact,
+        v1::RuleAction::Unspecified => return Err(RuleError::Action),
+    };
+    let wire = proto.matcher.as_ref().ok_or(RuleError::Matcher)?;
+
+    let mut matcher = Matcher::host(HostPattern::parse(&wire.host)?);
+    if !wire.methods.is_empty() {
+        let mut methods = Vec::with_capacity(wire.methods.len());
+        for raw in &wire.methods {
+            methods.push(rule_method_from_proto(*raw)?);
+        }
+        matcher.methods = Some(methods);
+    }
+    if !wire.path.is_empty() {
+        matcher.path = Some(PathPattern::parse(&wire.path));
+    }
+    matcher.scheme = match v1::Scheme::try_from(wire.scheme).unwrap_or(v1::Scheme::Unspecified) {
+        v1::Scheme::Unspecified => None,
+        v1::Scheme::Http => Some(humanitl_core::http::Scheme::Http),
+        v1::Scheme::Https => Some(humanitl_core::http::Scheme::Https),
+        v1::Scheme::Ws => Some(humanitl_core::http::Scheme::Ws),
+        v1::Scheme::Wss => Some(humanitl_core::http::Scheme::Wss),
+    };
+    matcher.port = match wire.port {
+        0 => None,
+        port => Some(u16::try_from(port).map_err(|_| RuleError::Port(port))?),
+    };
+    matcher.upgrade = match v1::Upgrade::try_from(wire.upgrade).unwrap_or(v1::Upgrade::Unspecified)
+    {
+        v1::Upgrade::Websocket => Some(humanitl_core::http::Upgrade::WebSocket),
+        v1::Upgrade::Unspecified | v1::Upgrade::None => None,
+    };
+
+    let id = if proto.rule_id.is_empty() {
+        RuleId::new()
+    } else {
+        RuleId::parse(&proto.rule_id).map_err(|_| RuleError::Id {
+            field: "rule_id",
+            value: proto.rule_id.clone(),
+        })?
+    };
+    let mut rule = Rule::new(id, action, matcher)
+        .with_expiry(expiry_from_proto(proto.expires.as_ref(), session)?)
+        .with_stream(proto.stream)
+        .with_allow_private(proto.allow_private);
+    if !proto.created_from_flow_id.is_empty() {
+        rule.created_from =
+            Some(
+                FlowId::parse(&proto.created_from_flow_id).map_err(|_| RuleError::Id {
+                    field: "created_from_flow_id",
+                    value: proto.created_from_flow_id.clone(),
+                })?,
+            );
+    }
+    let note = humanitl_core::block::sanitize_note(&proto.note);
+    rule.note = (!note.is_empty()).then_some(note);
+    Ok(rule)
+}
+
+/// Liest die Methode einer Regel aus ihrer Wire-Form.
+///
+/// Anders als [`method_from_proto`] gibt es hier keinen Rohwert: eine Regel
+/// wird über bekannten Methoden geschrieben, und `METHOD_OTHER` wäre eine
+/// Regel über allem, was der Daemon nicht versteht (`humanitl_rules`
+/// `is_known_method`).
+fn rule_method_from_proto(raw: i32) -> Result<Method, RuleError> {
+    let wire = v1::Method::try_from(raw).unwrap_or(v1::Method::Unspecified);
+    let name = wire.as_str_name().trim_start_matches("METHOD_");
+    match wire {
+        v1::Method::Unspecified | v1::Method::Other => Err(RuleError::Method(name.to_owned())),
+        _ => Method::from_bytes(name.as_bytes()).map_err(|_| RuleError::Method(name.to_owned())),
+    }
+}
+
+/// Liest die Gültigkeit aus ihrer Wire-Form.
+///
+/// Ohne Angabe gilt `never`: eine Regel ohne Ablauf ist der Normalfall, und
+/// ein Client, der das Feld nicht kennt, soll keine Regel bekommen, die nach
+/// dem Neustart weg ist.
+fn expiry_from_proto(
+    expires: Option<&v1::RuleExpiry>,
+    session: SessionId,
+) -> Result<Expiry, RuleError> {
+    let Some(expiry) = expires.and_then(|wrapper| wrapper.expiry.as_ref()) else {
+        return Ok(Expiry::Never);
+    };
+    match expiry {
+        v1::rule_expiry::Expiry::Never(()) => Ok(Expiry::Never),
+        v1::rule_expiry::Expiry::Session(()) => Ok(Expiry::Session(session)),
+        v1::rule_expiry::Expiry::At(at) => {
+            chrono::DateTime::from_timestamp(at.seconds, u32::try_from(at.nanos).unwrap_or(0))
+                .map(Expiry::At)
+                .ok_or(RuleError::Expiry)
+        }
+    }
+}
+
+/// Die Wire-Form einer Regel samt Platz und Herkunft aus dem Speicher.
+///
+/// Die Herkunft steht nicht als eigenes Feld im Vertrag: `bundled` und
+/// `expires` sagen sie schon (`session` ⇒ Sitzungsregel, `bundled` ⇒
+/// mitgeliefert, sonst dauerhaft). Doppelt geführt liefen beide auseinander.
+#[must_use]
+pub fn stored_rule_to_proto(stored: &StoredRule) -> v1::Rule {
+    v1::Rule {
+        position: stored.position,
+        ..rule_to_proto(&stored.rule)
+    }
+}
+
+/// Die Zeilendarstellung einer aufgezeichneten Anfrage.
+///
+/// Was die Aufzeichnung nicht führt, bleibt leer statt geraten: `deadline`
+/// gehört zur laufenden Warteschlange, `origin_tool` kommt mit HUM-030,
+/// `decision_source` steht nicht in der Tabelle `flows` (nur `rule_id` verrät
+/// eine Regel, und `timed_out` seinen Ablauf).
+#[must_use]
+pub fn recorded_summary_to_proto(row: &RecordedSummary) -> v1::FlowSummary {
+    let method = Method::from_bytes(row.method.as_bytes()).unwrap_or(Method::GET);
+    let scheme = humanitl_core::http::Scheme::parse(&row.scheme)
+        .unwrap_or(humanitl_core::http::Scheme::Https);
+    let decision = row.decision.as_deref().unwrap_or_default();
+    v1::FlowSummary {
+        flow_id: row.id.to_string(),
+        session_id: row.session.to_string(),
+        received_at: Some(timestamp_from_millis(row.ts)),
+        method: method_to_proto(&method) as i32,
+        method_raw: method_raw(&method),
+        scheme: scheme_to_proto(scheme) as i32,
+        authority: Some(v1::Authority {
+            host: row.host.clone(),
+            port: u32::from(row.port),
+            is_ip_literal: row.host.parse::<std::net::IpAddr>().is_ok(),
+            display_host: row.host_display.clone(),
+        }),
+        path: row.path.clone(),
+        state: state_from_name(&row.state) as i32,
+        decision: decision_kind_from_name(decision) as i32,
+        decision_source: match decision {
+            "timed_out" => v1::DecisionSource::Timeout as i32,
+            _ if row.rule_id.is_some() => v1::DecisionSource::Rule as i32,
+            _ => v1::DecisionSource::Unspecified as i32,
+        },
+        block_reason: block_reason_from_name(row.block_reason.as_deref().unwrap_or_default())
+            as i32,
+        rule_id: row.rule_id.clone().unwrap_or_default(),
+        status: u32::from(row.status.unwrap_or(0)),
+        request_size: row.request_size,
+        response_size: row.response_size.unwrap_or(0),
+        duration: row.duration_ms.map(|ms| prost_types::Duration {
+            seconds: ms / 1_000,
+            nanos: i32::try_from((ms % 1_000) * 1_000_000).unwrap_or(0),
+        }),
+        finding_count: row.findings_count,
+        edited: row.edited,
+        passthrough: row.passthrough,
+        deadline: None,
+        origin_tool: String::new(),
+        upstream_error: 0,
+    }
+}
+
+/// Ein Zeitpunkt in Unix-Millisekunden als Wire-Zeitstempel.
+fn timestamp_from_millis(ms: i64) -> prost_types::Timestamp {
+    prost_types::Timestamp {
+        seconds: ms.div_euclid(1_000),
+        nanos: i32::try_from(ms.rem_euclid(1_000) * 1_000_000).unwrap_or(0),
+    }
+}
+
+/// Der Zustand hinter seinem Kurznamen ([`FlowState::name`]).
+fn state_from_name(name: &str) -> v1::FlowState {
+    match name {
+        "received" => v1::FlowState::Received,
+        "analyzed" => v1::FlowState::Analyzed,
+        "held" => v1::FlowState::Held,
+        "decided" => v1::FlowState::Decided,
+        "forwarded" => v1::FlowState::Forwarded,
+        "responded" => v1::FlowState::Responded,
+        "failed" => v1::FlowState::Failed,
+        "recorded" => v1::FlowState::Recorded,
+        _ => v1::FlowState::Unspecified,
+    }
+}
+
+/// Die Entscheidung hinter ihrem Kurznamen ([`Decision::as_str`]).
+fn decision_kind_from_name(name: &str) -> v1::DecisionKind {
+    match name {
+        "allow" => v1::DecisionKind::Allow,
+        "allow_edited" => v1::DecisionKind::AllowEdited,
+        "block" => v1::DecisionKind::Block,
+        "timed_out" => v1::DecisionKind::TimedOut,
+        _ => v1::DecisionKind::Unspecified,
+    }
+}
+
+/// Der Block-Grund hinter seinem Kurznamen ([`BlockReason::as_str`]).
+fn block_reason_from_name(name: &str) -> v1::BlockReason {
+    match name {
+        "user" => v1::BlockReason::User,
+        "rule" => v1::BlockReason::Rule,
+        "timeout" => v1::BlockReason::Timeout,
+        "body_cap" => v1::BlockReason::BodyCap,
+        "authority_mismatch" => v1::BlockReason::AuthorityMismatch,
+        "no_route" => v1::BlockReason::NoRoute,
+        "hold_memory" => v1::BlockReason::HoldMemory,
+        "hold_max_flows" => v1::BlockReason::HoldMaxFlows,
+        "client_timeout" => v1::BlockReason::ClientTimeout,
+        "private_address" => v1::BlockReason::PrivateAddress,
+        "secret" => v1::BlockReason::Secret,
+        _ => v1::BlockReason::Unspecified,
+    }
 }
 
 #[cfg(test)]

@@ -174,8 +174,15 @@ impl<T> DaemonService<T> {
 pub fn grpc_code(code: DiagnosticCode) -> Code {
     match code.as_str() {
         "IPC_001" => Code::Unauthenticated,
-        "IPC_002" | "IPC_004" | "CONFIG_002" | "CONFIG_003" => Code::InvalidArgument,
-        "IPC_003" => Code::FailedPrecondition,
+        "IPC_002" | "IPC_004" | "IPC_005" | "CONFIG_002" | "CONFIG_003" => Code::InvalidArgument,
+        // Eine Regel, die der Client so geschickt hat, wie die Engine sie
+        // nicht annimmt: dasselbe Urteil wie bei einer unlesbaren Anfrage.
+        "RULES_001" | "RULES_003" | "RULES_005" | "RULES_006" | "RULES_007" => {
+            Code::InvalidArgument
+        }
+        // Der Zustand verbietet es, nicht das Argument: die Regel ist
+        // mitgeliefert, der Flow wartet nicht mehr.
+        "IPC_003" | "RULES_010" => Code::FailedPrecondition,
         "DAEMON_001" => Code::Unavailable,
         _ => Code::Internal,
     }
