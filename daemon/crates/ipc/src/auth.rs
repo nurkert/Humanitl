@@ -102,6 +102,27 @@ pub fn write_token(path: &Path, token: &str) -> Result<(), Diagnostic> {
 /// [`Diagnostic`] mit `DAEMON_001`, wenn die Datei fehlt oder leer ist: dann
 /// läuft kein Daemon, dem dieses Token gehört.
 pub fn read_token(path: &Path) -> Result<String, Diagnostic> {
+    // Erst der Blick auf den Eintrag selbst, ohne einem Symlink zu folgen:
+    // Ein untergeschobener Link an dieser Stelle zeigte sonst auf eine fremde
+    // Datei, deren Inhalt als Token gelesen wuerde.
+    let meta = fs::symlink_metadata(path).map_err(|error| {
+        Diagnostic::builder(codes::DAEMON_001, Severity::Blocking)
+            .why(format!(
+                "cannot stat the session token {}: {error}",
+                path.display()
+            ))
+            .fix(FixAction::CopyCommand("humanitld".to_owned()))
+            .build()
+    })?;
+    if !meta.is_file() {
+        return Err(Diagnostic::builder(codes::DAEMON_001, Severity::Blocking)
+            .why(format!(
+                "the session token {} is not a regular file (a symlink here is refused, not followed)",
+                path.display()
+            ))
+            .fix(FixAction::CopyCommand("humanitld".to_owned()))
+            .build());
+    }
     let token = fs::read_to_string(path).map_err(|error| {
         Diagnostic::builder(codes::DAEMON_001, Severity::Blocking)
             .why(format!(
@@ -198,7 +219,10 @@ pub fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 ///
 /// [`Diagnostic`] mit `DAEMON_004`, wenn die Datei nicht lesbar ist.
 pub fn file_mode(path: &Path) -> Result<u32, Diagnostic> {
-    let metadata = fs::metadata(path).map_err(|error| io_diagnostic("stat", path, &error))?;
+    // Der Eintrag selbst, nicht sein Ziel: Rechte eines Symlinks sagen nichts
+    // ueber die Datei, auf die er zeigt, und die Pruefung soll den Link sehen.
+    let metadata =
+        fs::symlink_metadata(path).map_err(|error| io_diagnostic("stat", path, &error))?;
     Ok(metadata.permissions().mode() & 0o777)
 }
 
@@ -292,6 +316,21 @@ mod tests {
         let error = read_token(&empty).unwrap_err();
         assert_eq!(error.code.as_str(), "DAEMON_001");
         assert!(error.why.contains("empty"), "{}", error.why);
+    }
+
+    /// Ein Symlink an der Stelle des Tokens wird abgelehnt, nicht verfolgt:
+    /// sonst laese der Client eine fremde Datei als Token.
+    #[test]
+    fn a_symlinked_token_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("elsewhere");
+        write_token(&real, "cafe").unwrap();
+        let link = dir.path().join("token");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let error = read_token(&link).unwrap_err();
+        assert_eq!(error.code.as_str(), "DAEMON_001");
+        assert!(error.why.contains("not a regular file"), "{}", error.why);
     }
 
     #[test]

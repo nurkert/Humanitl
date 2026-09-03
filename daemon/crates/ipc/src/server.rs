@@ -126,12 +126,24 @@ impl IpcServer {
         request: &v1::SubscribeRequest,
     ) -> BoxStream<Result<v1::FlowEvent, Status>> {
         let registry = Arc::clone(&self.registry);
-        let live = BroadcastStream::new(self.registry.subscribe()).map(move |item| {
+        let include_passthrough = request.include_passthrough;
+        let live = BroadcastStream::new(self.registry.subscribe()).filter_map(move |item| {
             let event = match item {
                 Ok(event) => event,
                 Err(BroadcastStreamRecvError::Lagged(n)) => FlowEvent::Lagged { n },
             };
-            Ok(convert::flow_event_to_proto(&event, &registry))
+            // Ereignisse eines Durchreich-Flows (LLM-Passthrough) sieht nur,
+            // wer sie ausdruecklich verlangt; `ListFlows` und der Rueckstand
+            // filtern genauso. In M1 traegt noch kein Flow das Merkmal, der
+            // Filter steht trotzdem hier, damit HUM-024 nichts nachruesten
+            // muss und der Strom nicht stiller ist als die Liste.
+            let hidden = !include_passthrough
+                && event.flow_id().is_some_and(|id| {
+                    registry
+                        .get(id)
+                        .is_some_and(|record| convert::record_to_summary(&record).passthrough)
+                });
+            (!hidden).then(|| Ok(convert::flow_event_to_proto(&event, &registry)))
         });
         Box::pin(tokio_stream::iter(self.backlog(request)).chain(live))
     }
@@ -151,6 +163,7 @@ impl IpcServer {
         };
         self.summaries()
             .into_iter()
+            .filter(|summary| request.include_passthrough || !summary.passthrough)
             .filter(|summary| FlowId::parse(&summary.flow_id).is_ok_and(|id| id > since))
             .map(|summary| {
                 Ok(v1::FlowEvent {
