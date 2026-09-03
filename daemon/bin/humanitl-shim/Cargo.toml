@@ -5,14 +5,25 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+description = "Launcher inside the sandbox: bridges, seccomp filter, exec (HUM-012)"
 
 # Deliberately NOT inheriting workspace lints: this crate needs `unsafe` for
-# prctl/seccomp and must stay free of tokio and of any workspace dependency.
+# fork/prctl/seccomp and must stay free of tokio and of any workspace crate.
+# The deny list below mirrors the workspace one by hand.
 [lints.rust]
 missing_docs = "warn"
 unsafe_op_in_unsafe_fn = "deny"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+module_name_repetitions = "allow"
 
+# Only these two, ever (CONVENTIONS.md 3.1). The versions live centrally in
+# `[workspace.dependencies]`.
 [dependencies]
+libc.workspace = true
+seccompiler.workspace = true

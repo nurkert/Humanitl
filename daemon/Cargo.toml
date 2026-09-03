@@ -70,6 +70,8 @@ clap = { version = "4.6", features = ["derive", "env"] }
 aho-corasick = "1.1"
 tempfile = "3"
 base64 = "0.22"
+libc = "0.2"
+seccompiler = "0.5"
 tokio-stream = { version = "0.1", features = ["sync", "net"] }
 shlex = "2"
 
@@ -87,3 +89,25 @@ module_name_repetitions = "allow"
 # larger than clippy's default threshold, and boxing every error would push
 # the design decision into every signature. Allowed once, here, on purpose.
 result_large_err = "allow"
+
+# Das Profil, mit dem `humanitl-shim` ausgeliefert wird (HUM-012).
+#
+# Der Shim ist das einzige Binary, das in die Sandbox eingehaengt wird, und die
+# Sandbox hat keine Bibliotheken des Hosts: er muss statisch sein
+# (`ldd` sagt "not a dynamic executable") und klein bleiben (unter 2 MB). Ein
+# eigenes Profil statt `[profile.release]`, weil `opt-level = "z"`,
+# `lto = "fat"` und `panic = "abort"` fuer den Daemon und die Bibliotheken die
+# falschen Werte waeren; gebaut wird er mit
+#
+#   cargo rustc -p humanitl-shim --bin humanitl-shim --profile shim \
+#     -- -C target-feature=+crt-static -C relocation-model=static
+#
+# beziehungsweise mit `--target x86_64-unknown-linux-musl`, wenn die Toolchain
+# das Ziel hat. `tests/escape/run.sh` baut ihn genau so und prueft beides.
+[profile.shim]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
