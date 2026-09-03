@@ -1,0 +1,6 @@
+# Alter und neuer Name derselben Einstellung in einer Datei.
+[hold]
+body_cap_bytes = 4096
+
+[limits]
+hold_body_cap_bytes = 65536
