@@ -38,14 +38,14 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use http_body_util::{BodyExt as _, Full};
-use humanitl_config::{HoldConfig, IpPreference, Limits, RecorderConfig};
+use humanitl_config::{HoldConfig, Limits, RecorderConfig, ResolverConfig};
 use humanitl_core::{Authority, Decision, Diagnostic, FlowEvent, HttpRequest, SessionId};
 use humanitl_proxy::ca::{CaStore, LeafCache};
 use humanitl_proxy::hold::next_event;
 use humanitl_proxy::{
     AskPipeline, AsyncStream, ClientTls, ConnectionContext, Direct, Egress, FlowHandler,
     FlowPipeline, HoldQueue, PassthroughPipeline, ProxyCore, ProxyLimits, ResolveError, Resolver,
-    RulesPipeline, Scanner, Upstream,
+    ResolverPort, RulesPipeline, Scanner, Upstream,
 };
 use hyper::body::Incoming;
 use hyper::client::conn::http1::SendRequest;
@@ -68,30 +68,67 @@ pub const WAIT: Duration = Duration::from_secs(10);
 // Zählende Ports
 // ---------------------------------------------------------------------------
 
-/// Antwortet auf jeden Namen mit derselben Adresse und zählt die Aufrufe.
-pub struct CountingResolver {
+/// Der Resolver der Tests: schreibt jeden Namen auf, den er gefragt wird.
+///
+/// Er ist der Zeuge für ADR-006. Weil er jeden Aufruf mit Namen mitschreibt,
+/// beweist ein leeres [`MockResolver::hosts`] nach einer geblockten,
+/// abgelaufenen oder abgelehnten Anfrage, dass nichts gefragt wurde — und ein
+/// Eintrag verrät, welcher Name geleakt wäre.
+pub struct MockResolver {
     answer: IpAddr,
-    calls: AtomicUsize,
+    answers: std::collections::HashMap<String, Vec<IpAddr>>,
+    failing: std::collections::HashSet<String>,
+    calls: std::sync::Mutex<Vec<String>>,
 }
 
-impl CountingResolver {
+impl MockResolver {
+    /// Antwortet auf jeden Namen mit derselben Adresse.
     pub fn answering(answer: IpAddr) -> Self {
         Self {
             answer,
-            calls: AtomicUsize::new(0),
+            answers: std::collections::HashMap::new(),
+            failing: std::collections::HashSet::new(),
+            calls: std::sync::Mutex::new(Vec::new()),
         }
     }
 
+    /// Eine eigene Antwort für genau diesen Namen.
+    pub fn with_answer(mut self, host: &str, addrs: Vec<IpAddr>) -> Self {
+        self.answers.insert(host.to_owned(), addrs);
+        self
+    }
+
+    /// Dieser Name scheitert.
+    pub fn failing_for(mut self, host: &str) -> Self {
+        self.failing.insert(host.to_owned());
+        self
+    }
+
+    /// Wie oft überhaupt aufgelöst wurde.
     pub fn calls(&self) -> usize {
-        self.calls.load(Ordering::SeqCst)
+        self.hosts().len()
+    }
+
+    /// Welche Namen gefragt wurden, in Reihenfolge.
+    pub fn hosts(&self) -> Vec<String> {
+        self.calls.lock().unwrap().clone()
     }
 }
 
 #[async_trait]
-impl Resolver for CountingResolver {
-    async fn resolve(&self, _host: &str) -> Result<Vec<IpAddr>, ResolveError> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        Ok(vec![self.answer])
+impl Resolver for MockResolver {
+    async fn resolve(&self, host: &str) -> Result<Vec<IpAddr>, ResolveError> {
+        self.calls.lock().unwrap().push(host.to_owned());
+        if self.failing.contains(host) {
+            return Err(ResolveError::NotFound {
+                host: host.to_owned(),
+            });
+        }
+        Ok(self
+            .answers
+            .get(host)
+            .cloned()
+            .unwrap_or_else(|| vec![self.answer]))
     }
 }
 
@@ -139,6 +176,9 @@ pub struct ProxyBuilder {
     pipe: Pipe,
     allow_private: bool,
     resolve_to: IpAddr,
+    resolver_answers: Vec<(String, Vec<IpAddr>)>,
+    resolver_failing: Vec<String>,
+    resolver_config: ResolverConfig,
     extra_roots: Vec<CertificateDer<'static>>,
     rules: Option<String>,
     scanner: Option<Arc<dyn Scanner>>,
@@ -152,6 +192,14 @@ impl Default for ProxyBuilder {
             pipe: Pipe::Ask(Duration::from_secs(30)),
             allow_private: true,
             resolve_to: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            resolver_answers: Vec::new(),
+            resolver_failing: Vec::new(),
+            // Ohne Frist ist der Zwischenspeicher aus; ein Test, der ihn
+            // braucht, schaltet ihn ausdrücklich ein.
+            resolver_config: ResolverConfig {
+                cache_ttl_secs: 0,
+                ..ResolverConfig::default()
+            },
             extra_roots: Vec::new(),
             rules: None,
             scanner: None,
@@ -192,6 +240,24 @@ impl ProxyBuilder {
 
     pub fn resolve_to(mut self, ip: IpAddr) -> Self {
         self.resolve_to = ip;
+        self
+    }
+
+    /// Eine eigene Antwort des Mock-Resolvers für genau diesen Namen.
+    pub fn resolve_host(mut self, host: &str, addrs: Vec<IpAddr>) -> Self {
+        self.resolver_answers.push((host.to_owned(), addrs));
+        self
+    }
+
+    /// Dieser Name scheitert beim Auflösen.
+    pub fn resolve_fails(mut self, host: &str) -> Self {
+        self.resolver_failing.push(host.to_owned());
+        self
+    }
+
+    /// Die `resolver.*`-Einstellungen, mit denen der Stapel gebaut wird.
+    pub fn resolver_config(mut self, config: ResolverConfig) -> Self {
+        self.resolver_config = config;
         self
     }
 
@@ -245,16 +311,32 @@ impl ProxyBuilder {
                 ))
             }
         };
-        let resolver = Arc::new(CountingResolver::answering(self.resolve_to));
+        let mut mock = MockResolver::answering(self.resolve_to);
+        for (host, addrs) in &self.resolver_answers {
+            mock = mock.with_answer(host, addrs.clone());
+        }
+        for host in &self.resolver_failing {
+            mock = mock.failing_for(host);
+        }
+        let resolver = Arc::new(mock);
+        // Derselbe Stapel wie im Daemon (feste Zuordnungen, Zwischenspeicher,
+        // Zähler), nur mit dem Mock statt des Namensdienstes ganz unten.
+        let port = Arc::new(
+            ResolverPort::over(
+                Arc::clone(&resolver) as Arc<dyn Resolver>,
+                &self.resolver_config,
+            )
+            .unwrap(),
+        );
         let egress = Arc::new(CountingEgress::default());
         let mut roots = vec![ca.cert_der().clone()];
         roots.extend(self.extra_roots);
         let tls = ClientTls::new(&roots, false).unwrap();
         let upstream = Upstream::new(
             Arc::clone(&egress) as Arc<dyn Egress>,
-            Arc::clone(&resolver) as Arc<dyn Resolver>,
+            Arc::clone(&port) as Arc<dyn Resolver>,
             tls,
-            IpPreference::Ipv4,
+            self.resolver_config.prefer,
             Duration::from_secs(self.limits.header_timeout_secs),
         );
         let hold = HoldConfig {
@@ -290,6 +372,7 @@ impl ProxyBuilder {
             queue,
             ca,
             resolver,
+            port,
             egress,
             core,
             tmp,
@@ -303,7 +386,10 @@ pub struct Proxy {
     pub session: SessionId,
     pub queue: Arc<HoldQueue>,
     pub ca: Arc<CaStore>,
-    pub resolver: Arc<CountingResolver>,
+    /// Der Mock ganz unten im Stapel: Was er sah, hat den Rechner verlassen.
+    pub resolver: Arc<MockResolver>,
+    /// Der verdrahtete Stapel mit den Zählern, die der Daemon meldet.
+    pub port: Arc<ResolverPort>,
     pub egress: Arc<CountingEgress>,
     pub core: ProxyCore,
     tmp: TempDir,
