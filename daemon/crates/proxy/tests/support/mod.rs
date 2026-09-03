@@ -38,13 +38,14 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use http_body_util::{BodyExt as _, Full};
-use humanitl_config::{IpPreference, Limits, RecorderConfig};
+use humanitl_config::{HoldConfig, IpPreference, Limits, RecorderConfig};
 use humanitl_core::{Authority, Decision, Diagnostic, FlowEvent, HttpRequest, SessionId};
 use humanitl_proxy::ca::{CaStore, LeafCache};
 use humanitl_proxy::hold::next_event;
 use humanitl_proxy::{
-    AskPipeline, AsyncStream, ClientTls, ConnMeta, Direct, Egress, FlowHandler, FlowPipeline,
-    HoldQueue, PassthroughPipeline, ProxyCore, ProxyLimits, ResolveError, Resolver, Upstream,
+    AskPipeline, AsyncStream, ClientTls, ConnectionContext, Direct, Egress, FlowHandler,
+    FlowPipeline, HoldQueue, PassthroughPipeline, ProxyCore, ProxyLimits, ResolveError, Resolver,
+    RulesPipeline, Scanner, Upstream,
 };
 use hyper::body::Incoming;
 use hyper::client::conn::http1::SendRequest;
@@ -139,6 +140,9 @@ pub struct ProxyBuilder {
     allow_private: bool,
     resolve_to: IpAddr,
     extra_roots: Vec<CertificateDer<'static>>,
+    rules: Option<String>,
+    scanner: Option<Arc<dyn Scanner>>,
+    hard_block_checksum_secrets: bool,
 }
 
 impl Default for ProxyBuilder {
@@ -149,6 +153,9 @@ impl Default for ProxyBuilder {
             allow_private: true,
             resolve_to: IpAddr::V4(Ipv4Addr::LOCALHOST),
             extra_roots: Vec::new(),
+            rules: None,
+            scanner: None,
+            hard_block_checksum_secrets: false,
         }
     }
 }
@@ -195,14 +202,48 @@ impl ProxyBuilder {
         self
     }
 
+    /// Ein Regelsatz als YAML vor der gewählten Pipeline (HUM-023): Was eine
+    /// Regel entscheidet, wird nicht gehalten.
+    pub fn rules(mut self, yaml: &str) -> Self {
+        self.rules = Some(yaml.to_owned());
+        self
+    }
+
+    /// Die Detektoren, die im Pfad laufen (HUM-025). Ohne das läuft `NoScan`.
+    pub fn scanner(mut self, scanner: Arc<dyn Scanner>) -> Self {
+        self.scanner = Some(scanner);
+        self
+    }
+
+    /// `hold.hard_block_checksum_secrets`.
+    pub fn hard_block_checksum_secrets(mut self, on: bool) -> Self {
+        self.hard_block_checksum_secrets = on;
+        self
+    }
+
     pub async fn start(self) -> Proxy {
         let tmp = tempfile::tempdir().unwrap();
         let ca = Arc::new(CaStore::load_or_create(&tmp.path().join("ca")).unwrap());
         let leaves = Arc::new(LeafCache::new(Arc::clone(&ca), 16));
         let queue = Arc::new(HoldQueue::new(&self.limits));
-        let pipeline: Arc<dyn FlowPipeline> = match self.pipe {
+        let session = SessionId::new();
+        let inner: Arc<dyn FlowPipeline> = match self.pipe {
             Pipe::Ask(timeout) => Arc::new(AskPipeline::new(Arc::clone(&queue), timeout)),
             Pipe::Passthrough => Arc::new(PassthroughPipeline::new(Arc::clone(&queue))),
+        };
+        let pipeline: Arc<dyn FlowPipeline> = match &self.rules {
+            None => inner,
+            Some(yaml) => {
+                // `parse_rules_for_session` liefert `Err`, sobald ein Befund
+                // ein Fehler ist; was hier ankommt, sind Warnungen.
+                let (set, _warnings) =
+                    humanitl_rules::parse_rules_for_session(yaml, session).unwrap();
+                Arc::new(RulesPipeline::new(
+                    Arc::clone(&queue),
+                    Arc::new(std::sync::RwLock::new(set)),
+                    inner,
+                ))
+            }
         };
         let resolver = Arc::new(CountingResolver::answering(self.resolve_to));
         let egress = Arc::new(CountingEgress::default());
@@ -216,15 +257,30 @@ impl ProxyBuilder {
             IpPreference::Ipv4,
             Duration::from_secs(self.limits.header_timeout_secs),
         );
-        let limits = ProxyLimits::from_config(&self.limits, &RecorderConfig::default());
-        let handler = FlowHandler::new(Arc::clone(&queue), pipeline, upstream, leaves, limits);
+        let hold = HoldConfig {
+            hard_block_checksum_secrets: self.hard_block_checksum_secrets,
+            ..HoldConfig::default()
+        };
+        let limits =
+            ProxyLimits::from_config(&self.limits, &RecorderConfig::default()).with_hold(&hold);
+        let scanner = self
+            .scanner
+            .clone()
+            .unwrap_or_else(|| Arc::new(humanitl_proxy::NoScan) as Arc<dyn Scanner>);
+        let handler = FlowHandler::with_findings(
+            Arc::clone(&queue),
+            pipeline,
+            upstream,
+            leaves,
+            limits,
+            scanner,
+        );
 
-        let session = SessionId::new();
         let socket = tmp.path().join("proxy").join("proxy.sock");
         let core = ProxyCore::new();
-        let meta = ConnMeta {
+        let meta = ConnectionContext {
             allow_private: self.allow_private,
-            ..ConnMeta::plain(session)
+            ..ConnectionContext::plain(session)
         };
         core.start_session(session, &socket, handler, meta).unwrap();
 
@@ -336,6 +392,66 @@ impl Proxy {
             .connect(name, TokioIo::new(upgraded))
             .await
             .expect("the proxy's leaf must verify against the test CA");
+        let alpn = tls.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
+        let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(tls))
+            .await
+            .unwrap();
+        let inner = tokio::spawn(async move {
+            let _ = conn.await;
+        });
+        TlsClient {
+            client: Client {
+                sender,
+                _conn: inner,
+            },
+            alpn,
+            _outer: outer,
+        }
+    }
+
+    /// `CONNECT connect_host:port`, dann TLS mit einer frei gewählten SNI.
+    ///
+    /// Der Client prüft das Zertifikat des Proxys nicht. Genau so verhält sich
+    /// ein Client, der Fronting versucht: Das Leaf gilt für das CONNECT-Ziel,
+    /// und ein prüfender Client käme mit einer abweichenden SNI gar nicht bis
+    /// zur ersten Anfrage. Die Prüfung des Proxys darf sich darauf nicht
+    /// verlassen.
+    ///
+    /// `sni = None` schaltet die SNI ganz ab.
+    pub async fn tls_tunnel(&self, connect_host: &str, port: u16, sni: Option<&str>) -> TlsClient {
+        let stream = UnixStream::connect(&self.socket).await.unwrap();
+        let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+            .await
+            .unwrap();
+        let outer = tokio::spawn(async move {
+            let _ = conn.with_upgrades().await;
+        });
+        let connect = Request::builder()
+            .method(Method::CONNECT)
+            .uri(format!("{connect_host}:{port}"))
+            .body(Full::new(Bytes::new()))
+            .unwrap();
+        let response = sender.send_request(connect).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "CONNECT must be accepted"
+        );
+        let upgraded = hyper::upgrade::on(response).await.unwrap();
+
+        let mut config = ClientConfig::builder_with_provider(self.ca.provider())
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(TrustAnything(self.ca.provider())))
+            .with_no_client_auth();
+        config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        config.enable_sni = sni.is_some();
+        let name = ServerName::try_from(sni.unwrap_or(connect_host).to_owned()).unwrap();
+        let tls = TlsConnector::from(Arc::new(config))
+            .connect(name, TokioIo::new(upgraded))
+            .await
+            .expect("the proxy must finish the handshake even for a forged SNI");
         let alpn = tls.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
         let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(tls))
             .await
@@ -481,6 +597,55 @@ pub struct TlsClient {
     /// Das ALPN, das der Proxy dem Client gegenüber ausgehandelt hat.
     pub alpn: Option<Vec<u8>>,
     _outer: JoinHandle<()>,
+}
+
+/// Ein Zertifikatsprüfer, der alles annimmt: der feindselige Client.
+#[derive(Debug)]
+struct TrustAnything(Arc<rustls::crypto::CryptoProvider>);
+
+impl rustls::client::danger::ServerCertVerifier for TrustAnything {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
 }
 
 /// Der Ereignisstrom aus Sicht eines Tests.
