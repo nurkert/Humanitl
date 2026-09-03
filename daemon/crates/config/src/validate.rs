@@ -118,14 +118,14 @@ fn work_dir_is_a_directory(work_dir: &Path) -> Result<(), Diagnostic> {
 /// Endpunkt, sondern ein Weg an der Prüfung vorbei. Die Passthrough-Präfixe
 /// sind absolute Pfade, und mindestens einer muss da sein.
 fn llm_is_well_formed(llm: &LlmConfig) -> Result<(), Diagnostic> {
-    if let Some(endpoint) = &llm.endpoint {
-        if !matches!(endpoint.scheme(), "http" | "https") {
-            return Err(out_of_range(
-                "llm.endpoint",
-                &format!("{:?}", endpoint.as_str()),
-                "a URL with the scheme http or https",
-            ));
-        }
+    if let Some(endpoint) = &llm.endpoint
+        && !matches!(endpoint.scheme(), "http" | "https")
+    {
+        return Err(out_of_range(
+            "llm.endpoint",
+            &format!("{:?}", endpoint.as_str()),
+            "a URL with the scheme http or https",
+        ));
     }
     if llm.passthrough_paths.is_empty() {
         return Err(out_of_range(
