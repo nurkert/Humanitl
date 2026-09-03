@@ -12,10 +12,19 @@
 //! `GetFlow` ist in M1 noch `UNIMPLEMENTED` (HUM-026 bringt den Recorder).
 //! `flows show` fragt trotzdem zuerst danach und fällt erst dann auf die Zeile
 //! aus `ListFlows` zurück: sobald die RPC da ist, zeigt dasselbe Kommando ohne
-//! Änderung die vollständigen Angaben.
+//! Änderung die vollständigen Angaben. Nur `--body` kommt ohne `GetFlow` nicht
+//! aus; dort steht der Verweis auf den Body, und ohne ihn wird kein Byte
+//! erfunden.
+//!
+//! Was die Tabelle nicht führt, steht in `--json`: die Zeile ist die Übersicht,
+//! der JSON-Wert die Auskunft. `SIZE` zählt Anfrage und Antwort zusammen in
+//! Bytes, `MS` ist die Dauer in Millisekunden, und `PATH` wird in der Mitte auf
+//! 40 Zeichen gekürzt, damit die Spalten stehen bleiben.
+
+use std::io::Write as _;
 
 use humanitl_core::diagnostics::codes;
-use humanitl_core::{Diagnostic, Severity};
+use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_ipc::client::Client;
 use humanitl_ipc::convert::state_name;
 use humanitl_ipc::v1;
@@ -29,6 +38,15 @@ use crate::render::table;
 /// Wie viele Zeilen `flows show` höchstens durchsucht, wenn `GetFlow` fehlt.
 const SEARCH_LIMIT: u32 = 1000;
 
+/// Auf wie viele Zeichen `PATH` in der Tabelle gekürzt wird.
+const PATH_WIDTH: usize = 40;
+
+/// Die Spalten von `flows list` und des Probelaufs aus `rules dry-run`.
+pub const FLOW_HEADERS: [&str; 12] = [
+    "ID", "TIME", "STATE", "DECISION", "METHOD", "HOST", "PATH", "STATUS", "SIZE", "MS",
+    "FINDINGS", "RULE",
+];
+
 /// Führt `humanitl flows <cmd>` aus.
 ///
 /// # Errors
@@ -38,22 +56,33 @@ const SEARCH_LIMIT: u32 = 1000;
 pub async fn run(ctx: &Context, cmd: &FlowsCmd) -> Result<u8, Failure> {
     let client = ctx.connect().await?;
     match cmd {
-        FlowsCmd::List { filter, limit } => list(ctx, client, filter.as_deref(), *limit).await,
-        FlowsCmd::Show { id } => show(ctx, client, id).await,
+        FlowsCmd::List {
+            filter,
+            limit,
+            sort,
+            asc,
+        } => list(ctx, client, filter, *limit, sort, *asc).await,
+        FlowsCmd::Show { id, body, raw } => show(ctx, client, id, body.as_deref(), *raw).await,
         FlowsCmd::Decide { id, verdict, note } => {
             decide(ctx, client, id, verdict, note.as_deref()).await
         }
     }
 }
 
-/// `flows list [FILTER]`.
+/// `flows list [FILTER...]`.
+///
+/// Der Filter wird Wort für Wort so weitergereicht, wie er auf der
+/// Kommandozeile stand; gefiltert und sortiert wird im Dienst.
 async fn list(
     ctx: &Context,
     mut client: Client,
-    filter: Option<&str>,
+    filter: &[String],
     limit: u32,
+    sort: &str,
+    asc: bool,
 ) -> Result<u8, Failure> {
-    let page = fetch(&mut client, filter.unwrap_or_default(), limit).await?;
+    let filter = filter.join(" ");
+    let page = fetch(&mut client, &filter, limit, &order_by(sort, asc)).await?;
 
     if ctx.render.is_json() {
         ctx.render.value(&json!({
@@ -69,16 +98,7 @@ async fn list(
         return Ok(EXIT_OK);
     }
 
-    let rows: Vec<Vec<String>> = page.flows.iter().map(summary_row).collect();
-    print!(
-        "{}",
-        table(
-            &[
-                "ID", "TIME", "METHOD", "HOST", "PATH", "STATE", "DECISION", "STATUS"
-            ],
-            &rows
-        )
-    );
+    print_flows(&page.flows);
     if !page.next_cursor.is_empty() {
         ctx.render.note(&format!(
             "{} of {} flows; --limit 0 asks the daemon for its default page",
@@ -89,8 +109,28 @@ async fn list(
     Ok(EXIT_OK)
 }
 
-/// `flows show ID`.
-async fn show(ctx: &Context, mut client: Client, id: &str) -> Result<u8, Failure> {
+/// `flows show ID [--body request|response] [--raw]`.
+async fn show(
+    ctx: &Context,
+    mut client: Client,
+    id: &str,
+    body: Option<&str>,
+    raw: bool,
+) -> Result<u8, Failure> {
+    if raw && ctx.render.is_json() {
+        return Err(Failure::new(
+            Diagnostic::builder(codes::CLI_004, Severity::Error)
+                .why(
+                    "--raw writes the body byte for byte and --json writes one line of JSON;                      one call does one of the two"
+                        .to_owned(),
+                )
+                .fix(FixAction::CopyCommand(format!(
+                    "humanitl flows show {id} --body response --raw"
+                )))
+                .build(),
+        ));
+    }
+
     let detail = match client
         .get_flow(v1::FlowRef {
             flow_id: id.to_owned(),
@@ -101,6 +141,14 @@ async fn show(ctx: &Context, mut client: Client, id: &str) -> Result<u8, Failure
         // Der Vertrag kennt die RPC, dieser Daemon noch nicht: die Zeile aus
         // `ListFlows` trägt alles, was M1 über einen Flow weiß.
         Err(status) if status.code() == Code::Unimplemented => {
+            if let Some(which) = body {
+                // Ohne `GetFlow` gibt es keinen Verweis auf einen Body. Ein
+                // leerer Ausdruck sähe aus wie ein leerer Body.
+                return Err(Failure::new(status_diagnostic(
+                    &status,
+                    &format!("GetFlow, which --body {which} needs,"),
+                )));
+            }
             ctx.render.detail(&format!(
                 "GetFlow is not implemented yet ({}); showing the summary from ListFlows",
                 status.message()
@@ -109,6 +157,19 @@ async fn show(ctx: &Context, mut client: Client, id: &str) -> Result<u8, Failure
         }
         Err(status) => return Err(Failure::new(status_diagnostic(&status, "GetFlow"))),
     };
+
+    if let Some(which) = body {
+        let detail = detail.ok_or_else(|| {
+            Failure::new(
+                Diagnostic::builder(codes::IPC_003, Severity::Error)
+                    .why(format!(
+                        "the daemon answered GetFlow for {id} without a flow"
+                    ))
+                    .build(),
+            )
+        })?;
+        return show_body(ctx, &mut client, &detail, which, raw).await;
+    }
 
     let summary = match detail.as_ref().and_then(|detail| detail.summary.clone()) {
         Some(summary) => summary,
@@ -135,6 +196,111 @@ async fn show(ctx: &Context, mut client: Client, id: &str) -> Result<u8, Failure
         ctx.render.line(&detail.body_preview);
     }
     Ok(EXIT_OK)
+}
+
+/// `flows show ID --body request|response`.
+///
+/// Der Body kommt über `GetBody` und nicht aus der Vorschau: die Vorschau ist
+/// auf 4096 Zeichen gekürzt, und ein gekürzter Body, der wie der ganze
+/// aussieht, ist eine Unwahrheit (`backlog/CONVENTIONS.md` 4.13).
+async fn show_body(
+    ctx: &Context,
+    client: &mut Client,
+    detail: &v1::FlowDetail,
+    which: &str,
+    raw: bool,
+) -> Result<u8, Failure> {
+    let reference = if which == "request" {
+        detail
+            .request
+            .as_ref()
+            .and_then(|request| request.body.clone())
+    } else {
+        detail.response_body.clone()
+    };
+    let flow_id = detail
+        .summary
+        .as_ref()
+        .map_or_else(String::new, |summary| summary.flow_id.clone());
+
+    let Some(reference) = reference.filter(|body| body.size > 0) else {
+        if ctx.render.is_json() {
+            ctx.render.value(&json!({
+                "flow_id": flow_id,
+                "body": which,
+                "present": false,
+            }));
+        } else {
+            ctx.render
+                .note(&format!("the flow has no {which} body of its own"));
+        }
+        return Ok(EXIT_OK);
+    };
+
+    let bytes = body_bytes(client, &reference).await?;
+    let complete = u64::try_from(bytes.len()).unwrap_or(u64::MAX) == reference.size;
+    if !complete {
+        ctx.render.note(&format!(
+            "the daemon sent {} of {} bytes",
+            bytes.len(),
+            reference.size
+        ));
+    }
+    if reference.truncated {
+        ctx.render
+            .note("the recorder kept only the beginning of this body");
+    }
+
+    if raw {
+        let mut out = std::io::stdout().lock();
+        if let Err(error) = out.write_all(&bytes).and_then(|()| out.flush()) {
+            return Err(Failure::new(
+                Diagnostic::builder(codes::CLI_001, Severity::Error)
+                    .why(format!("the body could not be written: {error}"))
+                    .build(),
+            ));
+        }
+        return Ok(EXIT_OK);
+    }
+
+    let text = String::from_utf8_lossy(&bytes);
+    if ctx.render.is_json() {
+        ctx.render.value(&json!({
+            "flow_id": flow_id,
+            "body": which,
+            "present": true,
+            "bytes": bytes.len(),
+            "size": reference.size,
+            "truncated": reference.truncated,
+            "content_type": reference.content_type,
+            // Ob `text` Byte für Byte dem Body entspricht: ungültiges UTF-8
+            // wird zu U+FFFD, und wer vergleicht, muss das wissen.
+            "utf8": std::str::from_utf8(&bytes).is_ok(),
+            "text": text,
+        }));
+        return Ok(EXIT_OK);
+    }
+    print!("{text}");
+    Ok(EXIT_OK)
+}
+
+/// Holt einen Body über `GetBody`, Stück für Stück.
+async fn body_bytes(client: &mut Client, reference: &v1::BodyRef) -> Result<Vec<u8>, Failure> {
+    let mut stream = client
+        .get_body(reference.clone())
+        .await
+        .map(tonic::Response::into_inner)
+        .map_err(|status| Failure::new(status_diagnostic(&status, "GetBody")))?;
+
+    let mut out = Vec::new();
+    while let Some(chunk) = stream
+        .message()
+        .await
+        .map_err(|status| Failure::new(status_diagnostic(&status, "GetBody")))?
+    {
+        out.extend_from_slice(&chunk.data);
+    }
+    Ok(out)
 }
 
 /// `flows decide ID allow|block [--note TEXT]`.
@@ -215,15 +381,28 @@ async fn decide(
     Ok(EXIT_OK)
 }
 
+/// Die Sortierung, wie `ListFlows.order_by` sie erwartet.
+///
+/// Der Schlüssel ist einer der vier aus `humanitl_recorder::SortKey`; ohne
+/// `--asc` steht die jüngste Zeile oben.
+fn order_by(sort: &str, asc: bool) -> String {
+    format!("{sort} {}", if asc { "asc" } else { "desc" })
+}
+
 /// Eine Seite der Historie.
-async fn fetch(client: &mut Client, filter: &str, limit: u32) -> Result<v1::FlowPage, Failure> {
+async fn fetch(
+    client: &mut Client,
+    filter: &str,
+    limit: u32,
+    order_by: &str,
+) -> Result<v1::FlowPage, Failure> {
     client
         .list_flows(v1::ListFlowsRequest {
             filter: filter.to_owned(),
             since_flow_id: String::new(),
             cursor: String::new(),
             limit,
-            order_by: String::new(),
+            order_by: order_by.to_owned(),
             include_passthrough: false,
         })
         .await
@@ -233,7 +412,7 @@ async fn fetch(client: &mut Client, filter: &str, limit: u32) -> Result<v1::Flow
 
 /// Sucht einen Flow in der Historie, solange `GetFlow` fehlt.
 async fn find(client: &mut Client, id: &str) -> Result<v1::FlowSummary, Failure> {
-    let page = fetch(client, "", SEARCH_LIMIT).await?;
+    let page = fetch(client, "", SEARCH_LIMIT, &order_by("ts", false)).await?;
     page.flows
         .into_iter()
         .find(|summary| summary.flow_id == id)
@@ -248,22 +427,67 @@ async fn find(client: &mut Client, id: &str) -> Result<v1::FlowSummary, Failure>
         })
 }
 
+/// Die Tabelle einer Liste von Flows.
+///
+/// Auch der Probelauf aus `humanitl rules dry-run` zeigt seine Treffer so:
+/// dieselben Spalten, damit man beide Ausgaben nebeneinander lesen kann.
+pub fn print_flows(flows: &[v1::FlowSummary]) {
+    let rows: Vec<Vec<String>> = flows.iter().map(summary_row).collect();
+    print!("{}", table(&FLOW_HEADERS, &rows));
+}
+
 /// Eine Zeile der Liste.
+///
+/// Ein Strich steht für „der Daemon weiß es nicht", nie für eine Null
+/// (`backlog/CONVENTIONS.md` 4.13). `SIZE` ist die Summe aus Anfrage und
+/// Antwort in Bytes, `MS` die Dauer in Millisekunden.
 fn summary_row(summary: &v1::FlowSummary) -> Vec<String> {
     vec![
         short_id(&summary.flow_id),
         clock(summary.received_at.as_ref().map(|at| at.seconds)),
-        method_name(summary),
-        authority(summary.authority.as_ref()),
-        summary.path.clone(),
         state_name(summary.state).to_ascii_lowercase(),
         decision_name(summary.decision).to_owned(),
+        method_name(summary),
+        authority(summary.authority.as_ref()),
+        truncate_middle(&summary.path, PATH_WIDTH),
         if summary.status == 0 {
             "-".to_owned()
         } else {
             summary.status.to_string()
         },
+        (summary.request_size + summary.response_size).to_string(),
+        summary.duration.as_ref().map_or_else(
+            || "-".to_owned(),
+            |duration| {
+                let millis = duration.seconds * 1_000 + i64::from(duration.nanos) / 1_000_000;
+                millis.to_string()
+            },
+        ),
+        summary.finding_count.to_string(),
+        if summary.rule_id.is_empty() {
+            "-".to_owned()
+        } else {
+            short_id(&summary.rule_id)
+        },
     ]
+}
+
+/// Kürzt einen Text in der Mitte, damit Anfang und Ende lesbar bleiben.
+///
+/// Ein Pfad ist vorne und hinten aussagekräftig und in der Mitte selten; wer
+/// den ganzen sehen will, nimmt `flows show` oder `--json`.
+fn truncate_middle(text: &str, width: usize) -> String {
+    let count = text.chars().count();
+    if count <= width {
+        return text.to_owned();
+    }
+    // Ein Zeichen geht an das Auslassungszeichen.
+    let keep = width.saturating_sub(1);
+    let head = keep.div_ceil(2);
+    let tail = keep - head;
+    let front: String = text.chars().take(head).collect();
+    let back: String = text.chars().skip(count - tail).collect();
+    format!("{front}…{back}")
 }
 
 /// Die Felder eines einzelnen Flows.
@@ -315,13 +539,28 @@ fn detail_rows(summary: &v1::FlowSummary) -> Vec<Vec<String>> {
 }
 
 /// Ein Flow als JSON, mit denselben Feldern wie die Tabelle plus den Zahlen.
-fn summary_json(summary: &v1::FlowSummary) -> Value {
+///
+/// `host` bleibt die Anzeigeform mit Port, wie sie in der Tabelle steht;
+/// darunter steht `authority` mit dem Namen, über den entschieden wurde: dem
+/// A-Label, dem Port und der Anzeigeform daneben. Bei einem
+/// internationalisierten Namen sind die beiden nicht dasselbe, und ein Skript
+/// muss den vergleichen können, den der Daemon kennt.
+pub fn summary_json(summary: &v1::FlowSummary) -> Value {
     json!({
         "flow_id": summary.flow_id,
         "session_id": summary.session_id,
         "received_at": summary.received_at.as_ref().map(|at| at.seconds),
         "method": method_name(summary),
         "host": authority(summary.authority.as_ref()),
+        "authority": summary.authority.as_ref().map(|authority| json!({
+            "host": authority.host,
+            "display_host": authority.display_host,
+            "port": authority.port,
+            "is_ip_literal": authority.is_ip_literal,
+        })),
+        "duration_ms": summary.duration.as_ref().map(|duration| {
+            duration.seconds * 1_000 + i64::from(duration.nanos) / 1_000_000
+        }),
         "path": summary.path,
         "state": state_name(summary.state).to_ascii_lowercase(),
         "decision": decision_name(summary.decision),
@@ -404,7 +643,10 @@ mod tests {
 
     use humanitl_ipc::v1;
 
-    use super::{authority, decision_name, method_name, short_id, summary_row};
+    use super::{
+        FLOW_HEADERS, PATH_WIDTH, authority, decision_name, method_name, order_by, short_id,
+        summary_row, truncate_middle,
+    };
 
     fn summary() -> v1::FlowSummary {
         v1::FlowSummary {
@@ -440,16 +682,54 @@ mod tests {
     }
 
     #[test]
-    fn a_row_names_the_flow_the_host_and_the_state() {
+    fn a_row_carries_every_column_of_the_table() {
         let row = summary_row(&summary());
 
-        assert_eq!(row[0], "0199c0ff");
-        assert_eq!(row[2], "GET");
-        assert_eq!(row[3], "github.com");
-        assert_eq!(row[4], "/api/v3");
-        assert_eq!(row[5], "held");
-        assert_eq!(row[6], "-");
-        assert_eq!(row[7], "-");
+        assert_eq!(row.len(), FLOW_HEADERS.len());
+        assert_eq!(row[0], "0199c0ff", "ID");
+        assert_eq!(row[2], "held", "STATE");
+        assert_eq!(row[3], "-", "DECISION");
+        assert_eq!(row[4], "GET", "METHOD");
+        assert_eq!(row[5], "github.com", "HOST");
+        assert_eq!(row[6], "/api/v3", "PATH");
+        assert_eq!(row[7], "-", "STATUS");
+        assert_eq!(row[8], "12", "SIZE is request plus response in bytes");
+        assert_eq!(row[9], "-", "MS stays unknown without a duration");
+        assert_eq!(row[10], "0", "FINDINGS");
+        assert_eq!(row[11], "-", "RULE");
+    }
+
+    #[test]
+    fn a_known_duration_is_counted_in_milliseconds() {
+        let mut summary = summary();
+        summary.duration = Some(prost_types::Duration {
+            seconds: 1,
+            nanos: 250_000_000,
+        });
+        summary.response_size = 30;
+        let row = summary_row(&summary);
+
+        assert_eq!(row[8], "42", "12 up plus 30 down");
+        assert_eq!(row[9], "1250");
+    }
+
+    #[test]
+    fn a_long_path_is_shortened_in_the_middle() {
+        let long = "/repos/humanitl/humanitl/commits/0123456789abcdef/status/checks";
+        let short = truncate_middle(long, PATH_WIDTH);
+
+        assert_eq!(short.chars().count(), PATH_WIDTH);
+        assert!(short.starts_with("/repos/humanitl"), "{short}");
+        assert!(short.ends_with("status/checks"), "{short}");
+        assert!(short.contains('…'), "{short}");
+        // Was hineinpasst, bleibt unangetastet.
+        assert_eq!(truncate_middle("/api/v3", PATH_WIDTH), "/api/v3");
+    }
+
+    #[test]
+    fn the_order_is_the_key_and_the_direction() {
+        assert_eq!(order_by("ts", false), "ts desc");
+        assert_eq!(order_by("host", true), "host asc");
     }
 
     #[test]
