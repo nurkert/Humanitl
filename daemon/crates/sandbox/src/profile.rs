@@ -16,7 +16,7 @@
 //!
 //! Ein Profil, das `/var/run/docker.sock`, `$XDG_RUNTIME_DIR` oder `~/.ssh`
 //! einhängt, hebt die Isolation auf, ohne dass es jemandem auffällt. Deshalb
-//! prüft [`SandboxProfile::validate`] jede Host-Quelle gegen eine fest
+//! prüft [`SandboxProfile::validate_with`] jede Host-Quelle gegen eine fest
 //! verdrahtete Denylist ([`FORBIDDEN_MOUNTS`], [`FORBIDDEN_IN_HOME`]). Die Liste
 //! ist nicht konfigurierbar: eine Sicherheitsgrenze, die sich in derselben Datei
 //! abschalten lässt, die sie schützt, ist keine.
@@ -54,6 +54,19 @@
 //! `mounts.masked_files` vereinigt, ein Profil kann sie ergänzen, nicht
 //! streichen. Alles prüft [`SandboxProfile::parse`].
 //!
+//! Zwei Böden wirken in beide Richtungen, weil ein Profil sie sonst aufweichen
+//! könnte, statt sie nur zu verschärfen:
+//!
+//! - `seccomp.allow_families` und `seccomp.allow_types` sind genau
+//!   [`REQUIRED_SOCKET_FAMILIES`] und [`REQUIRED_SOCKET_TYPES`]. Ein Profil,
+//!   das `AF_UNIX` oder `SOCK_DGRAM` nennt, wird mit `CONFIG_003` abgelehnt;
+//!   die einzige Ausnahme ist [`SocketFloor::BrowserUnixIpc`], und die steht
+//!   im Rust-Code des Launchers, nicht in einer Datei (dritte Garantie).
+//! - `network.bridges` ist genau die Proxy-Bridge
+//!   ([`Bridge::proxy_on`]). Eine zweite Bridge wäre eine zweite Tür, auch
+//!   mit `dir = "in"`, denn der Shim öffnet jede, die er bekommt (zweite
+//!   Garantie).
+//!
 //! # Fehlercodes
 //!
 //! - `CONFIG_001` — Datei fehlt oder ist kein TOML.
@@ -74,7 +87,7 @@ use humanitl_core::diagnostics::codes::{
 };
 use humanitl_core::ids::SessionId;
 use humanitl_core::{Diagnostic, Severity};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Das Projektverzeichnis in der Sandbox.
 pub const WORK_DST: &str = "/work";
@@ -85,8 +98,30 @@ pub const PROXY_SOCKET_DST: &str = "/run/humanitl/proxy.sock";
 /// Das Zertifikat der eigenen CA in der Sandbox.
 pub const CA_CERT_DST: &str = "/etc/humanitl/ca.crt";
 
+/// Der System-Vertrauensspeicher in der Sandbox, den der Launcher überdeckt.
+///
+/// Die Sandbox sieht unter diesem Pfad nicht das Bundle des Hosts, sondern das
+/// erzeugte aus [`SessionContext::ca_bundle_src`]: die Wurzeln des Systems
+/// plus die eigene CA (HUM-014). Ohne diese Überdeckung lehnt jeder
+/// TLS-Client in der Sandbox das Leaf des Proxys ab, und die Sandbox hätte
+/// zwar eine Tür, aber keine, durch die etwas käme.
+///
+/// Nicht im Profil einstellbar: es ist der Pfad, den OpenSSL, `GnuTLS` und die
+/// Werkzeuge darüber lesen, und ein Profil, das ihn verschieben könnte, würde
+/// die Überdeckung unbemerkt abschalten. Der Bind kommt nach dem `--ro-bind`
+/// von `/etc/ssl` aus `mounts.ro`, sonst verdeckte ihn dieses wieder; der
+/// Mountpoint muss dort schon liegen, weil `bwrap` ihn in einem nur lesbaren
+/// Bind nicht anlegen kann (ein Host ohne `ca-certificates` hat ihn nicht).
+pub const CA_BUNDLE_DST: &str = "/etc/ssl/certs/ca-certificates.crt";
+
 /// Der Shim in der Sandbox.
-pub const SHIM_DST: &str = "/usr/local/bin/humanitl-shim";
+///
+/// Unter `/run/humanitl`, neben dem Proxy-Socket, und nicht unter `/usr`:
+/// `bwrap` legt den Mountpoint einer Datei erst beim Einhängen an, und in
+/// einem nur lesbaren Bind von `/usr` scheitert das mit `EROFS`. `/run` steht
+/// auf der Denylist, also ist `/run/humanitl` in jeder Sandbox das eigene
+/// tmpfs von `bwrap` und nie ein Host-Verzeichnis (HUM-011).
+pub const SHIM_DST: &str = "/run/humanitl/humanitl-shim";
 
 /// Der Port, auf dem die Bridge in der Sandbox lauscht.
 pub const PROXY_PORT: u16 = 3128;
@@ -133,14 +168,42 @@ pub const SOCKET_WALK_MAX_DEPTH: usize = 3;
 /// [`MountPolicy::check`].
 pub const SOCKET_WALK_MAX_ENTRIES: usize = 2000;
 
+/// Die Socket-Familien, die `socket(2)` in der Sandbox öffnen darf, in der
+/// Reihenfolge, in der der Launcher sie an den Shim reicht.
+///
+/// Der Boden wirkt in beide Richtungen: genau diese beiden, nicht weniger und
+/// nicht mehr. `AF_INET` und `AF_INET6` sind nötig, weil der Agent den Proxy
+/// über `127.0.0.1:3128` erreicht; alles andere, `AF_UNIX` voran, wäre eine
+/// zweite Tür, die der leere Netz-Namensraum nicht mehr auffangen kann
+/// (`docs/SECURITY.md` Satz 3). Die einzige Ausnahme ist
+/// [`SocketFloor::BrowserUnixIpc`].
+pub const REQUIRED_SOCKET_FAMILIES: &[SocketFamily] =
+    &[SocketFamily::AfInet, SocketFamily::AfInet6];
+
+/// Der einzige Socket-Typ, den `socket(2)` in der Sandbox öffnen darf.
+///
+/// Auch dieser Boden wirkt in beide Richtungen. `SOCK_DGRAM` und `SOCK_RAW`
+/// bleiben in jedem Profil gesperrt, auch im späteren `browser`: UDP wäre der
+/// Weg an der Aufzeichnung vorbei (DNS, QUIC), und dafür gibt es keinen
+/// Anwendungsfall, der die Garantie aufwöge.
+pub const REQUIRED_SOCKET_TYPES: &[SocketType] = &[SocketType::SockStream];
+
 /// Syscalls, die in keinem Profil erlaubt sind (`CONVENTIONS.md` 4.8).
 ///
 /// `ptrace` und `process_vm_*` lesen fremde Prozesse aus, `io_uring_*` führt
 /// Ein- und Ausgabe an seccomp vorbei, die `key`-Aufrufe erreichen den
-/// Schlüsselbund des Kernels. Die Liste ist der Boden: [`SandboxProfile::parse`]
+/// Schlüsselbund des Kernels. Danach folgt die Standard-Härtung aus der
+/// Tabelle von HUM-012 (`backlog/sprint-1.md`), dieselbe, die das
+/// Docker-Standardprofil verbietet: einen neuen Kern laden (`kexec_*`),
+/// Kernmodule tauschen (`*_module`), BPF-Programme laden (`bpf`), fremde
+/// Ereigniszähler öffnen (`perf_event_open`) und Seitenfehler im eigenen
+/// Adressraum selbst bedienen (`userfaultfd`).
+///
+/// Die Liste ist der Boden und deckt sich Zeile für Zeile mit `FLOOR` in
+/// `daemon/bin/humanitl-shim/src/seccomp.rs`: [`SandboxProfile::parse`]
 /// vereinigt sie mit `seccomp.deny_syscalls` des Profils, die Liste hier zuerst,
 /// dann die Ergänzungen des Profils, ohne Doppelungen. Ein Profil, das nur
-/// `["bpf"]` schreibt, verbietet damit zehn Syscalls, nicht einen.
+/// `["mount"]` schreibt, verbietet damit achtzehn Syscalls, nicht einen.
 pub const DEFAULT_DENY_SYSCALLS: &[&str] = &[
     "ptrace",
     "io_uring_setup",
@@ -151,6 +214,14 @@ pub const DEFAULT_DENY_SYSCALLS: &[&str] = &[
     "keyctl",
     "add_key",
     "request_key",
+    "kexec_load",
+    "kexec_file_load",
+    "init_module",
+    "finit_module",
+    "delete_module",
+    "bpf",
+    "perf_event_open",
+    "userfaultfd",
 ];
 
 /// Ein ganzes Profil, so wie es in der TOML-Datei steht.
@@ -404,7 +475,10 @@ impl Default for NetworkSection {
 }
 
 /// Eine Brücke zwischen einem TCP-Port in der Sandbox und einem Unix-Socket.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+///
+/// Serialisiert in genau dieser Feldreihenfolge nach JSON, weil der Launcher
+/// die Liste so an den Shim reicht ([`crate::bridge_env::ENV_BRIDGES`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Bridge {
     /// Der Name, unter dem Oberfläche und Protokoll sie nennen.
@@ -421,17 +495,31 @@ impl Bridge {
     /// Die Bridge des MVP: Sandbox-TCP 127.0.0.1:3128 auf den Proxy-Socket.
     #[must_use]
     pub fn proxy() -> Self {
+        Self::proxy_on(PROXY_PORT)
+    }
+
+    /// Dieselbe Bridge auf einem anderen Port.
+    ///
+    /// Die einzige Bridge, die ein Profil deklarieren darf: Name
+    /// [`PROXY_BRIDGE`], Richtung `in`, Adresse `127.0.0.1` mit
+    /// `network.proxy_port`, Ziel [`PROXY_SOCKET_DST`].
+    /// [`SandboxProfile::parse`] vergleicht `network.bridges` damit und lehnt
+    /// jede Abweichung ab: jede weitere Bridge wäre eine zweite Tür, weil der
+    /// Shim öffnet, was in der Liste steht (zweite Garantie,
+    /// `docs/SECURITY.md` Satz 2).
+    #[must_use]
+    pub fn proxy_on(port: u16) -> Self {
         Self {
             name: PROXY_BRIDGE.to_owned(),
             dir: BridgeDirection::In,
-            listen: SocketAddr::from(([127, 0, 0, 1], PROXY_PORT)),
+            listen: SocketAddr::from(([127, 0, 0, 1], port)),
             socket: PathBuf::from(PROXY_SOCKET_DST),
         }
     }
 }
 
 /// Die Richtung einer Bridge.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BridgeDirection {
     /// Die Sandbox verbindet sich nach draußen: TCP in der Sandbox, Unix-Socket auf dem Host.
@@ -458,9 +546,14 @@ impl BridgeDirection {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SeccompSection {
-    /// Erlaubte Socket-Familien für `socket` und `socketpair`.
+    /// Erlaubte Socket-Familien für `socket(2)`. Muss genau
+    /// [`REQUIRED_SOCKET_FAMILIES`] sein; nach dem Lesen steht hier immer
+    /// dieser Boden in kanonischer Reihenfolge. `socketpair(2)` bleibt vom
+    /// Filter unberührt: es kennt nur `AF_UNIX` und ist kein Egress
+    /// (CONVENTIONS.md 4.11).
     pub allow_families: Vec<SocketFamily>,
-    /// Erlaubte Socket-Typen; alles andere ist `EPERM`.
+    /// Erlaubte Socket-Typen; alles andere ist `EPERM`. Muss genau
+    /// [`REQUIRED_SOCKET_TYPES`] sein.
     pub allow_types: Vec<SocketType>,
     /// Syscalls, die immer `EPERM` liefern. Nach dem Lesen immer
     /// [`DEFAULT_DENY_SYSCALLS`] zuerst, dann die Ergänzungen des Profils.
@@ -470,8 +563,8 @@ pub struct SeccompSection {
 impl Default for SeccompSection {
     fn default() -> Self {
         Self {
-            allow_families: vec![SocketFamily::AfInet, SocketFamily::AfInet6],
-            allow_types: vec![SocketType::SockStream],
+            allow_families: REQUIRED_SOCKET_FAMILIES.to_vec(),
+            allow_types: REQUIRED_SOCKET_TYPES.to_vec(),
             deny_syscalls: DEFAULT_DENY_SYSCALLS
                 .iter()
                 .map(|name| (*name).to_owned())
@@ -488,7 +581,11 @@ pub enum SocketFamily {
     AfInet,
     /// IPv6. Nötig für den Loopback zur Bridge.
     AfInet6,
-    /// Unix-Sockets. Nur im Profil `browser` (Chromium-IPC).
+    /// Unix-Sockets. In keinem Profil erlaubt: der Wert existiert, damit ein
+    /// Profil, das ihn nennt, einen Befund mit seinem Namen bekommt und nicht
+    /// nur einen Parser-Fehler. Die einzige Stelle, die ihn zulässt, ist
+    /// [`SocketFloor::BrowserUnixIpc`] im Code des Launchers (M7,
+    /// Chromium-IPC).
     AfUnix,
 }
 
@@ -510,7 +607,10 @@ impl SocketFamily {
 pub enum SocketType {
     /// Strom, also TCP oder ein Unix-Stream-Socket.
     SockStream,
-    /// Datagramm. Nur im Profil `browser`.
+    /// Datagramm. In keinem Profil erlaubt, auch im späteren `browser` nicht:
+    /// UDP führte an der Aufzeichnung vorbei (DNS, QUIC). Der Wert existiert
+    /// nur, damit ein Profil, das ihn nennt, einen Befund mit seinem Namen
+    /// bekommt.
     SockDgram,
 }
 
@@ -522,6 +622,50 @@ impl SocketType {
             Self::SockStream => "SOCK_STREAM",
             Self::SockDgram => "SOCK_DGRAM",
         }
+    }
+}
+
+/// Der Boden der Socket-Politik, und die eine Ausnahme davon.
+///
+/// Der Filter des Shims ist die dritte Garantie. Ein Profil kann ihn
+/// verschärfen (`seccomp.deny_syscalls` wächst), aber nicht aufweichen: welche
+/// Familien und Typen `socket(2)` öffnen darf, steht in
+/// [`REQUIRED_SOCKET_FAMILIES`] und [`REQUIRED_SOCKET_TYPES`] und nicht in der
+/// Datei.
+///
+/// [`SocketFloor::BrowserUnixIpc`] ist die einzige vorgesehene Ausnahme, für
+/// das Profil `browser` aus M7, das Chromium seine IPC über `AF_UNIX` führen
+/// lassen muss (`docs/SECURITY.md`). Sie ist bewusst kein Schlüssel im Profil,
+/// sondern ein Argument von [`SandboxProfile::parse_with_floor`]: ein Profil
+/// liegt unter Umständen in einem geklonten Repository, und eine Grenze, die
+/// die bewachte Datei selbst verschieben kann, ist keine. Voreingestellt ist
+/// [`SocketFloor::Strict`]; [`SandboxProfile::load_validated`], der Einstieg
+/// des Launchers, kennt nichts anderes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SocketFloor {
+    /// Genau [`REQUIRED_SOCKET_FAMILIES`] mal [`REQUIRED_SOCKET_TYPES`].
+    #[default]
+    Strict,
+    /// Zusätzlich `AF_UNIX`, sonst wie [`SocketFloor::Strict`]. Noch von
+    /// keinem ausgelieferten Profil benutzt; reserviert für `browser` (M7).
+    BrowserUnixIpc,
+}
+
+impl SocketFloor {
+    /// Die Familien, die dieser Boden erlaubt, in kanonischer Reihenfolge.
+    #[must_use]
+    pub fn families(self) -> Vec<SocketFamily> {
+        let mut families = REQUIRED_SOCKET_FAMILIES.to_vec();
+        if self == Self::BrowserUnixIpc {
+            families.push(SocketFamily::AfUnix);
+        }
+        families
+    }
+
+    /// Die Typen, die dieser Boden erlaubt. Für jeden Boden dieselben.
+    #[must_use]
+    pub fn types(self) -> Vec<SocketType> {
+        REQUIRED_SOCKET_TYPES.to_vec()
     }
 }
 
@@ -542,8 +686,20 @@ pub struct SessionContext {
     pub proxy_socket_src: PathBuf,
     /// Das CA-Zertifikat auf dem Host.
     pub ca_cert_src: PathBuf,
+    /// Das erzeugte Bundle auf dem Host: die Wurzeln des Systems plus die
+    /// eigene CA (`humanitl_proxy::ca::CaStore::bundle_path`). Der Launcher
+    /// hängt es über [`CA_BUNDLE_DST`]; den Pfad reicht der Aufrufer herein,
+    /// genau wie [`SessionContext::ca_cert_src`], damit diese Crate nichts
+    /// über den Proxy wissen muss.
+    pub ca_bundle_src: PathBuf,
     /// Der Shim auf dem Host.
     pub shim_src: PathBuf,
+    /// Die Variablen der Sitzung, üblicherweise `humanitl_proxy::ca::env_kit`:
+    /// das Env-Kit samt `HUMANITL_SESSION`. Sie überschreiben gleichnamige
+    /// Einträge aus dem `[env]` des Profils und werden ihrerseits von den
+    /// Variablen des Shims überschrieben
+    /// ([`SandboxProfile::effective_env`]).
+    pub session_env: Vec<(String, String)>,
     /// Der Befehl, den der Shim nach seccomp startet.
     pub command: Vec<OsString>,
 }
@@ -1048,7 +1204,7 @@ fn resolve_existing_prefix(source: &Path) -> PathBuf {
 }
 
 /// Entfernt `.` und rechnet `..` heraus, ohne das Dateisystem zu befragen.
-fn normalize(path: &Path) -> PathBuf {
+pub(crate) fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {
@@ -1116,6 +1272,24 @@ impl SandboxProfile {
     /// - `CONFIG_003`, wenn ein Wert unzulässig ist oder einem anderen widerspricht,
     /// - `SANDBOX_007`, wenn eine Bridge nach außen zeigt.
     pub fn parse(text: &str, source: &Path) -> Result<Self, Diagnostic> {
+        Self::parse_with_floor(text, source, SocketFloor::Strict)
+    }
+
+    /// Wie [`SandboxProfile::parse`], mit einem anderen Socket-Boden.
+    ///
+    /// Die einzige Stelle, an der der Filter des Shims weiter wird als
+    /// [`SocketFloor::Strict`], und sie liegt im Code, nicht in einer Datei
+    /// (siehe [`SocketFloor`]). Aufrufer außerhalb des Profils `browser`
+    /// nehmen [`SandboxProfile::parse`].
+    ///
+    /// # Errors
+    ///
+    /// Wie [`SandboxProfile::parse`].
+    pub fn parse_with_floor(
+        text: &str,
+        source: &Path,
+        floor: SocketFloor,
+    ) -> Result<Self, Diagnostic> {
         let mut profile: Self = toml::from_str(text).map_err(|err: toml::de::Error| {
             // serde meldet `deny_unknown_fields` als "unknown field `x`, …";
             // das ist der Fall des Registers für `CONFIG_002`. Ändert sich der
@@ -1133,23 +1307,32 @@ impl SandboxProfile {
                 .build()
         })?;
         profile.seccomp.deny_syscalls = union_deny_syscalls(&profile.seccomp.deny_syscalls);
-        profile.check_consistency(source)?;
+        profile.check_consistency(source, floor)?;
+        // Nach der Prüfung sind die beiden Listen mengengleich mit dem Boden;
+        // hier bekommen sie zusätzlich dessen Reihenfolge, ohne Doppelungen,
+        // damit `HUMANITL_SECCOMP_FAMILIES` für dasselbe Profil immer gleich
+        // aussieht ([`crate::bridge_env::shim_env`]).
+        profile.seccomp.allow_families = floor.families();
+        profile.seccomp.allow_types = floor.types();
         Ok(profile)
     }
 
-    /// Prüft jede Host-Quelle des Profils gegen die Politik.
+    /// Prüft jede Host-Quelle des Profils gegen die Politik, und danach, dass
+    /// die drei Dateien der Sitzung einen Mountpoint bekommen können.
     ///
     /// Das Projektverzeichnis der Sitzung ist nicht dabei; der Launcher prüft es
     /// mit [`MountPolicy::check_work_dir`].
     ///
     /// # Errors
     ///
-    /// [`Diagnostic`] mit `SANDBOX_006` und dem beanstandeten Pfad.
+    /// [`Diagnostic`] mit `SANDBOX_006` und dem beanstandeten Pfad, oder mit
+    /// `CONFIG_003`, wenn Proxy-Socket, CA oder Shim unter einem Host-Bind
+    /// liegen, in dem `bwrap` den Mountpoint nicht anlegen kann.
     pub fn validate_with(&self, policy: &MountPolicy) -> Result<(), Diagnostic> {
         for (whence, source) in self.mount_sources() {
             policy.check(source, whence)?;
         }
-        Ok(())
+        self.check_session_mountpoints()
     }
 
     /// Jede Host-Quelle des Profils, mit dem Schlüssel, unter dem sie steht.
@@ -1210,9 +1393,9 @@ impl SandboxProfile {
         out
     }
 
-    fn check_consistency(&self, source: &Path) -> Result<(), Diagnostic> {
+    fn check_consistency(&self, source: &Path, floor: SocketFloor) -> Result<(), Diagnostic> {
         self.check_header(source)?;
-        self.check_floors(source)?;
+        self.check_floors(source, floor)?;
 
         let where_ = source.display();
         for (key, path) in self.sandbox_paths() {
@@ -1235,23 +1418,76 @@ impl SandboxProfile {
             }
         }
 
-        let Some(proxy) = self.proxy_bridge() else {
-            return Err(range(format!(
-                "{where_}: network.bridges has no bridge named {PROXY_BRIDGE:?}; nothing would reach the proxy"
-            )));
+        self.check_bridges(source)?;
+        Ok(())
+    }
+
+    /// Genau eine Bridge, und genau die Proxy-Bridge.
+    ///
+    /// Die zweite Garantie ist „genau eine Tür". Der Shim öffnet jede Bridge,
+    /// die in `HUMANITL_BRIDGES` steht ([`crate::bridge_env::shim_env`]), also
+    /// entscheidet diese Prüfung, wie viele Türen es gibt. Eine zweite Bridge
+    /// mit `dir = "in"` wäre ein zweiter Listener auf einen zweiten
+    /// Unix-Socket und damit ein Weg an der Aufzeichnung vorbei; `dir = "out"`
+    /// hat die Richtungsprüfung vorher schon abgelehnt (`SANDBOX_007`).
+    ///
+    /// Verglichen wird mit [`Bridge::proxy_on`]: Name, Richtung,
+    /// Loopback-Adresse mit `network.proxy_port` und
+    /// [`PROXY_SOCKET_DST`] als Ziel. Jede Abweichung ist `CONFIG_003` und
+    /// nennt Schlüssel und beanstandeten Wert.
+    fn check_bridges(&self, source: &Path) -> Result<(), Diagnostic> {
+        let where_ = source.display();
+        let expected = Bridge::proxy_on(self.network.proxy_port);
+
+        let bridge = match self.network.bridges.as_slice() {
+            [only] => only,
+            [] => {
+                return Err(range(format!(
+                    "{where_}: network.bridges is empty; it must hold exactly the bridge {PROXY_BRIDGE:?} on {}, nothing would reach the proxy",
+                    expected.listen
+                )));
+            }
+            many => {
+                let names: Vec<&str> = many.iter().map(|b| b.name.as_str()).collect();
+                return Err(range(format!(
+                    "{where_}: network.bridges has {} entries ({}); exactly one is allowed, the bridge {PROXY_BRIDGE:?}: every further bridge is a second door out of the sandbox",
+                    many.len(),
+                    names.join(", ")
+                )));
+            }
         };
-        if proxy.listen.port() != self.network.proxy_port {
+
+        if bridge.name != expected.name {
             return Err(range(format!(
-                "{where_}: bridge {PROXY_BRIDGE:?} listens on port {}, network.proxy_port is {}",
-                proxy.listen.port(),
-                self.network.proxy_port
+                "{where_}: network.bridges names the bridge {:?}; the only bridge this build serves is {PROXY_BRIDGE:?}",
+                bridge.name
             )));
         }
-        if proxy.socket != self.network.proxy_socket_dst {
+        if bridge.dir != expected.dir {
             return Err(range(format!(
-                "{where_}: bridge {PROXY_BRIDGE:?} serves {}, network.proxy_socket_dst is {}",
-                proxy.socket.display(),
-                self.network.proxy_socket_dst.display()
+                "{where_}: bridge {PROXY_BRIDGE:?} has dir = {:?}; it must be {:?}",
+                bridge.dir.as_str(),
+                expected.dir.as_str()
+            )));
+        }
+        if bridge.listen != expected.listen {
+            return Err(range(format!(
+                "{where_}: bridge {PROXY_BRIDGE:?} listens on {}; it must listen on {} (network.proxy_port = {})",
+                bridge.listen, expected.listen, self.network.proxy_port
+            )));
+        }
+        if bridge.socket != expected.socket {
+            return Err(range(format!(
+                "{where_}: bridge {PROXY_BRIDGE:?} serves {}; the one door of the sandbox is {}",
+                bridge.socket.display(),
+                expected.socket.display()
+            )));
+        }
+        if self.network.proxy_socket_dst != expected.socket {
+            return Err(range(format!(
+                "{where_}: network.proxy_socket_dst = {}; it must be {}, the path the bridge serves",
+                self.network.proxy_socket_dst.display(),
+                expected.socket.display()
             )));
         }
         Ok(())
@@ -1305,10 +1541,55 @@ impl SandboxProfile {
         Ok(())
     }
 
-    /// Die Untergrenzen: die Syscalls und tmpfs-Pfade, unter die kein Profil
-    /// fallen darf.
-    fn check_floors(&self, source: &Path) -> Result<(), Diagnostic> {
+    /// Die Böden: die Syscalls und tmpfs-Pfade, unter die kein Profil fallen
+    /// darf, und die Socket-Politik, die es weder unter- noch überschreiten
+    /// darf.
+    fn check_floors(&self, source: &Path, floor: SocketFloor) -> Result<(), Diagnostic> {
         let where_ = source.display();
+
+        // Die Socket-Politik ist der einzige Boden, der in beide Richtungen
+        // wirkt. `deny_syscalls` kann wachsen, ohne dass eine Garantie leidet;
+        // eine Familie oder ein Typ mehr ist dagegen genau die Aufweichung,
+        // die die dritte Garantie behauptet zu verhindern (`AF_UNIX` neben dem
+        // Proxy-Socket, `SOCK_DGRAM` für DNS und QUIC).
+        let families = floor.families();
+        for family in &self.seccomp.allow_families {
+            if !families.contains(family) {
+                return Err(range(format!(
+                    "{where_}: seccomp.allow_families names {:?}; the filter allows exactly {}, and no profile can widen that",
+                    family.as_str(),
+                    names(&families, SocketFamily::as_str)
+                )));
+            }
+        }
+        for required in &families {
+            if !self.seccomp.allow_families.contains(required) {
+                return Err(range(format!(
+                    "{where_}: seccomp.allow_families misses {:?}; the filter allows exactly {}, and no profile can narrow that either: without it the agent cannot reach the proxy",
+                    required.as_str(),
+                    names(&families, SocketFamily::as_str)
+                )));
+            }
+        }
+        let types = floor.types();
+        for kind in &self.seccomp.allow_types {
+            if !types.contains(kind) {
+                return Err(range(format!(
+                    "{where_}: seccomp.allow_types names {:?}; the filter allows exactly {}, and no profile can widen that",
+                    kind.as_str(),
+                    names(&types, SocketType::as_str)
+                )));
+            }
+        }
+        for required in &types {
+            if !self.seccomp.allow_types.contains(required) {
+                return Err(range(format!(
+                    "{where_}: seccomp.allow_types misses {:?}; the filter allows exactly {}",
+                    required.as_str(),
+                    names(&types, SocketType::as_str)
+                )));
+            }
+        }
 
         // Sicherheitsnetz: nach `union_deny_syscalls` kann hier nichts fehlen,
         // aber ein Profil, das ohne `parse` gebaut wurde, soll nicht durchrutschen.
@@ -1333,6 +1614,73 @@ impl SandboxProfile {
             {
                 return Err(range(format!(
                     "{where_}: mounts.tmpfs misses {required:?}; without it the sandbox sees the host's {required}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Die drei Dateien, die die Sitzung einhängt (Proxy-Socket, CA, Shim),
+    /// brauchen einen Mountpoint, den `bwrap` anlegen kann.
+    ///
+    /// Unter einem nur lesbaren Bind aus `mounts.ro` oder `mounts.extra_ro`
+    /// scheitert das mit `EROFS` (`/usr/local/bin/humanitl-shim` unter dem
+    /// `--ro-bind /usr`, gemessen mit bubblewrap 0.11); unter einem
+    /// beschreibbaren Bind aus `mounts.extra_rw` entstünde die leere Datei auf
+    /// dem Host. Beides ist `CONFIG_003`, es sei denn, ein `mounts.tmpfs`
+    /// unterhalb des Binds deckt den Ort ab; das tmpfs kommt in der Zeile nach
+    /// den Binds und ist beschreibbar. Deshalb liegen Shim und Socket unter
+    /// `/run/humanitl`, das nie vom Host kommt ([`SHIM_DST`]).
+    ///
+    /// Läuft in [`SandboxProfile::validate_with`], nach der Politik: ein
+    /// `extra_ro = ["/run"]` ist zuerst ein verbotener Mount (`SANDBOX_006`)
+    /// und erst dann ein unbrauchbarer Mountpoint.
+    fn check_session_mountpoints(&self) -> Result<(), Diagnostic> {
+        let targets = [
+            (
+                "network.proxy_socket_dst",
+                self.network.proxy_socket_dst.as_path(),
+            ),
+            ("network.ca_cert_dst", self.network.ca_cert_dst.as_path()),
+            ("network.shim_dst", self.network.shim_dst.as_path()),
+        ];
+        let binds = self
+            .mounts
+            .ro
+            .iter()
+            .map(|p| ("mounts.ro", "read-only: EROFS", p.as_path()))
+            .chain(
+                self.mounts
+                    .extra_ro
+                    .iter()
+                    .map(|p| ("mounts.extra_ro", "read-only: EROFS", p.as_path())),
+            )
+            .chain(self.mounts.extra_rw.iter().map(|p| {
+                (
+                    "mounts.extra_rw",
+                    "writable: an empty file would appear on the host",
+                    p.as_path(),
+                )
+            }));
+        for (whence, consequence, bind) in binds {
+            for (key, dst) in targets {
+                if !dst.starts_with(bind) {
+                    continue;
+                }
+                let covered = self
+                    .mounts
+                    .tmpfs
+                    .iter()
+                    .any(|tmpfs| tmpfs.starts_with(bind) && dst.starts_with(tmpfs));
+                if covered {
+                    continue;
+                }
+                return Err(range(format!(
+                    "profile {:?}: {key} = {} lies under the host bind {} from {whence}; bwrap cannot create the mount point there ({consequence}), and no mounts.tmpfs below {} covers it",
+                    self.name,
+                    dst.display(),
+                    bind.display(),
+                    bind.display()
                 )));
             }
         }
@@ -1384,6 +1732,15 @@ impl SandboxProfile {
     }
 }
 
+/// Eine Aufzählung für den Befund: `"AF_INET", "AF_INET6"`.
+fn names<T: Copy>(values: &[T], name: fn(T) -> &'static str) -> String {
+    values
+        .iter()
+        .map(|value| format!("{:?}", name(*value)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn range(why: String) -> Diagnostic {
     Diagnostic::builder(CONFIG_003, Severity::Blocking)
         .why(why)
@@ -1415,7 +1772,7 @@ mod tests {
 
     use super::{
         BridgeDirection, DEFAULT_DENY_SYSCALLS, MANDATORY_MASKED_FILES, MountPolicy, Namespace,
-        SandboxProfile, SocketFamily, SocketType, WorkMode, normalize,
+        SandboxProfile, SocketFamily, SocketFloor, SocketType, WorkMode, normalize,
     };
 
     const MINIMAL: &str = r#"
@@ -1440,7 +1797,10 @@ name = "minimal"
             vec![SocketFamily::AfInet, SocketFamily::AfInet6]
         );
         assert_eq!(profile.seccomp.allow_types, vec![SocketType::SockStream]);
-        assert_eq!(profile.seccomp.deny_syscalls.len(), 9);
+        assert_eq!(
+            profile.seccomp.deny_syscalls.len(),
+            DEFAULT_DENY_SYSCALLS.len()
+        );
     }
 
     #[test]
@@ -1481,15 +1841,18 @@ name = "minimal"
     fn deny_syscalls_cannot_fall_below_the_floor() {
         // Ein Profil, das nur eine Ergänzung nennt, erweitert die Liste, es
         // ersetzt sie nicht: erst der Boden, dann die Ergänzung.
-        let text = "version = 1\nname = \"x\"\n[seccomp]\ndeny_syscalls = [\"bpf\"]\n";
+        let text = "version = 1\nname = \"x\"\n[seccomp]\ndeny_syscalls = [\"mount\"]\n";
         let profile = parse(text).expect("an addition extends the floor");
-        assert_eq!(profile.seccomp.deny_syscalls.len(), 10);
+        assert_eq!(
+            profile.seccomp.deny_syscalls.len(),
+            DEFAULT_DENY_SYSCALLS.len() + 1
+        );
         let (floor, added) = profile
             .seccomp
             .deny_syscalls
             .split_at(DEFAULT_DENY_SYSCALLS.len());
         assert_eq!(floor, DEFAULT_DENY_SYSCALLS);
-        assert_eq!(added, ["bpf"]);
+        assert_eq!(added, ["mount"]);
 
         // Ein Teil des Bodens, wiederholt und umgeordnet, ändert nichts.
         let text = "version = 1\nname = \"x\"\n[seccomp]\ndeny_syscalls = [\"keyctl\", \"ptrace\", \"keyctl\"]\n";
@@ -1506,10 +1869,47 @@ name = "minimal"
         let mut profile = parse(MINIMAL).expect("minimal profile parses");
         profile.seccomp.deny_syscalls = vec!["ptrace".to_owned()];
         let err = profile
-            .check_consistency(Path::new("<test>"))
+            .check_consistency(Path::new("<test>"), SocketFloor::Strict)
             .expect_err("io_uring is not optional");
         assert_eq!(err.code.as_str(), "CONFIG_003");
         assert!(err.why.contains("io_uring_setup"), "{}", err.why);
+    }
+
+    /// Ein Mountpoint, den `bwrap` nicht anlegen kann, fällt beim Laden auf,
+    /// nicht erst beim Start mit `EROFS`.
+    #[test]
+    fn a_session_file_under_a_host_bind_needs_a_tmpfs() {
+        let text = concat!(
+            "version = 1\nname = \"x\"\n[mounts]\nro = [\"/usr\"]\n",
+            "[network]\nshim_dst = \"/usr/local/bin/humanitl-shim\"\n"
+        );
+        let policy = MountPolicy::new("/home/u");
+        let validate = |text: &str| parse(text).expect("parses").validate_with(&policy);
+        let err = validate(text).expect_err("bwrap cannot create a file under a read-only bind");
+        assert_eq!(err.code.as_str(), "CONFIG_003");
+        assert!(err.why.contains("network.shim_dst"), "{}", err.why);
+        assert!(err.why.contains("mounts.ro"), "{}", err.why);
+        assert!(err.why.contains("EROFS"), "{}", err.why);
+
+        let text = concat!(
+            "version = 1\nname = \"x\"\n[mounts]\nro = [\"/usr\"]\n",
+            "tmpfs = [\"/tmp\", \"/dev/shm\", \"/usr/local/bin\"]\n",
+            "[network]\nshim_dst = \"/usr/local/bin/humanitl-shim\"\n"
+        );
+        validate(text).expect("a tmpfs below the bind is a place bwrap can create the mount point");
+
+        let text = concat!(
+            "version = 1\nname = \"x\"\n[mounts]\nextra_rw = [\"/srv/data\"]\n",
+            "[network]\nca_cert_dst = \"/srv/data/ca.crt\"\n"
+        );
+        let err = validate(text).expect_err("a writable bind would get an empty file on the host");
+        assert_eq!(err.code.as_str(), "CONFIG_003");
+        assert!(err.why.contains("network.ca_cert_dst"), "{}", err.why);
+        assert!(err.why.contains("on the host"), "{}", err.why);
+
+        // Die ausgelieferten Ziele liegen unter /run und /etc/humanitl, die
+        // nie vom Host kommen.
+        validate(MINIMAL).expect("the defaults need no tmpfs");
     }
 
     #[test]

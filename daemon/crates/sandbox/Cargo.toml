@@ -13,7 +13,15 @@ workspace = true
 humanitl-core.workspace = true
 humanitl-config.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 toml.workspace = true
+# Sichere Huellen um memfd_create(2), fcntl(2) und kill(2): der Launcher legt
+# die Maskendatei als versiegeltes memfd an, vererbt Deskriptoren ohne
+# CLOEXEC an bwrap und beendet die Sandbox mit SIGTERM. Ohne rustix braeuchte
+# das `unsafe`, und diese Crate verbietet es (`#![forbid(unsafe_code)]`).
+# Noch nicht unter [workspace.dependencies]; der Parent traegt die Version dort
+# ein (Handoff HUM-011).
+rustix = { version = "1.1", features = ["fs", "process"] }
 
 [dev-dependencies]
 tempfile.workspace = true

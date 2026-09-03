@@ -145,6 +145,11 @@ pub enum Error {
     SelfConnect(String, SocketAddr, io::Error),
     /// `--proxy-port` names a port no `in` bridge listens on.
     NoBridgeForProxyPort(u16),
+    /// More than one bridge: every one of them is a door out of the sandbox,
+    /// and the guarantee is exactly one (`docs/SECURITY.md` Satz 2). The
+    /// launcher already refuses such a profile (`CONFIG_003`); this is the
+    /// second layer, in the process that would open them.
+    TooManyBridges(usize),
 }
 
 impl fmt::Display for Error {
@@ -194,6 +199,12 @@ impl fmt::Display for Error {
                 write!(
                     f,
                     "no bridge with direction in listens on --proxy-port {port}"
+                )
+            }
+            Self::TooManyBridges(count) => {
+                write!(
+                    f,
+                    "HUMANITL_BRIDGES: {count} bridges; the sandbox has exactly one door"
                 )
             }
         }
@@ -277,13 +288,22 @@ pub fn parse(text: &str) -> Result<Vec<Bridge>, Error> {
 }
 
 /// Checks the list before anything is bound: no bridge may point `out`
-/// (`SANDBOX_007`), and `port` (the `--proxy-port` from the command line)
-/// must be served by an `in` bridge, because the agent's `HTTP_PROXY` points
-/// there and a mismatch between two renderings of the same profile is a
-/// launcher bug.
+/// (`SANDBOX_007`), there is at most one bridge, and `port` (the
+/// `--proxy-port` from the command line) must be served by an `in` bridge,
+/// because the agent's `HTTP_PROXY` points there and a mismatch between two
+/// renderings of the same profile is a launcher bug.
+///
+/// The count is the second guarantee: the shim opens every bridge it is
+/// given, so a list with two entries would put two listeners into the sandbox,
+/// each with its own Unix socket. The launcher refuses such a profile already
+/// (`humanitl_sandbox::SandboxProfile::parse`); refusing it here as well means
+/// no path into this process opens a second door.
 pub fn validate(bridges: &[Bridge], port: u16) -> Result<(), Error> {
     if let Some(out) = bridges.iter().find(|bridge| bridge.dir == Direction::Out) {
         return Err(Error::OutNotSupported(out.name.clone()));
+    }
+    if bridges.len() > 1 {
+        return Err(Error::TooManyBridges(bridges.len()));
     }
     if bridges
         .iter()
@@ -732,6 +752,18 @@ mod tests {
             validate(&[], 3128),
             Err(Error::NoBridgeForProxyPort(3128))
         ));
+    }
+
+    /// A second bridge is a second door, and the shim would open it; it stops
+    /// at the list instead (`docs/SECURITY.md` Satz 2).
+    #[test]
+    fn more_than_one_bridge_is_refused() {
+        let two = r#"[{"name":"proxy","dir":"in","listen":"127.0.0.1:3128","socket":"/run/humanitl/proxy.sock"},{"name":"side","dir":"in","listen":"127.0.0.1:9222","socket":"/run/humanitl/side.sock"}]"#;
+        let bridges = parse(two).unwrap();
+        assert_eq!(bridges.len(), 2);
+        let err = validate(&bridges, 3128).unwrap_err();
+        assert!(matches!(err, Error::TooManyBridges(2)), "{err}");
+        assert!(err.to_string().contains("exactly one door"), "{err}");
     }
 
     #[test]

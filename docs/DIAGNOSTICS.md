@@ -155,6 +155,14 @@ Body über Cap
 
 Authority-Mismatch
 
+#### PROXY_003
+
+Upstream-Verbindung fehlgeschlagen
+
+#### PROXY_005
+
+Ungültiger Übergang im Flow
+
 #### PROXY_007
 
 HTTP/2 nicht verfügbar
@@ -164,6 +172,14 @@ HTTP/2 nicht verfügbar
 #### TLS_001
 
 Client hat Humanitl-CA abgelehnt
+
+#### TLS_004
+
+CA-Verzeichnis nicht beschreibbar
+
+#### TLS_005
+
+CA-Dateien unbrauchbar
 
 ### Bereich llm
 
