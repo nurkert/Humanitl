@@ -171,6 +171,13 @@ void main() {
     await pumpIntercept(tester, client: client);
     await playScript(tester);
 
+    // Block ist die destruktive Entscheidung und traegt deshalb `danger`,
+    // die einzige zerstoererische Rolle des Buttons (sprint-1.md, HUM-020).
+    final HButton block = tester.widget<HButton>(
+      find.byKey(const Key('intercept-block')),
+    );
+    expect(block.variant, HButtonVariant.danger);
+
     await tester.tap(find.byKey(const Key('intercept-block')));
     await tester.pump();
 

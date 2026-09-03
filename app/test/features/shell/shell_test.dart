@@ -4,9 +4,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/shortcuts/intents.dart';
 import 'package:humanitl/core/ui/ui.dart';
+import 'package:humanitl/features/intercept/providers/flows.dart';
 import 'package:humanitl/features/setup/setup_screen.dart';
 import 'package:humanitl/features/shell/providers/navigation.dart';
 import 'package:humanitl/features/shell/providers/theme.dart';
@@ -19,6 +21,14 @@ import '../../harness/app_harness.dart';
 
 String headerTitle(WidgetTester tester) =>
     tester.widget<Text>(find.byKey(const Key('header-section-title'))).data!;
+
+/// Die Beschriftung des Halte-Badges im Header.
+String heldBadge(WidgetTester tester) =>
+    tester.widget<HBadge>(find.byKey(const Key('header-held-badge'))).text;
+
+/// Die Farbe des Halte-Badges im Header.
+Color? heldBadgeColor(WidgetTester tester) =>
+    tester.widget<HBadge>(find.byKey(const Key('header-held-badge'))).color;
 
 void main() {
   testWidgets('shell_renders_rail_and_sections', (WidgetTester tester) async {
@@ -166,6 +176,38 @@ void main() {
     container.read(themeModeProvider.notifier).toggle(Brightness.light);
     await tester.pump();
     expect(tokens().brightness, Brightness.dark);
+  });
+
+  testWidgets('the header badge counts what the queue holds', (
+    WidgetTester tester,
+  ) async {
+    // Der Zaehler haengt am selben Provider wie die Queue-Spalte des
+    // Intercept-Screens, nicht an einer festen Null.
+    final FakeDaemonClient client = FakeDaemonClient.burst(
+      count: 3,
+      spacing: const Duration(milliseconds: 20),
+    );
+    await pumpApp(tester, client: client);
+    final HTokens tokens = HTheme.of(tester.element(find.byType(IconRail)));
+    expect(heldBadge(tester), '0 held');
+    expect(heldBadgeColor(tester), tokens.colors.fg1);
+
+    // Drei Anfragen laufen ein und werden gehalten.
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump();
+    await tester.pump();
+    expect(heldBadge(tester), '3 held');
+    expect(heldBadgeColor(tester), tokens.state.held);
+
+    // Eine Entscheidung nimmt eine aus der Queue, und der Zaehler folgt.
+    final ProviderContainer container = ProviderScope.containerOf(
+      tester.element(find.byType(ShellScreen)),
+    );
+    final FlowId first = container.read(heldFlowsProvider).first.id;
+    await client.decide(first, const Decision.allow());
+    await tester.pump();
+    await tester.pump();
+    expect(heldBadge(tester), '2 held');
   });
 
   testWidgets('status bar shows daemon version and fake tag', (

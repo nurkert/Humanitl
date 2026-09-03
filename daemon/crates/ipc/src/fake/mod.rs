@@ -476,7 +476,7 @@ impl FakeDaemon {
                     Err(error) => {
                         return refused(
                             text,
-                            &Diagnostic::builder(codes::IPC_002, Severity::Error)
+                            &Diagnostic::builder(codes::IPC_004, Severity::Error)
                                 .why(format!("the edited request is not readable: {error}"))
                                 .build(),
                         );
@@ -487,7 +487,20 @@ impl FakeDaemon {
                     request: Box::new(request),
                 }
             }
-            _ => Decision::Allow,
+            Some(v1::decide_request::Decision::Allow(())) => Decision::Allow,
+            // Keine Entscheidung ist keine Freigabe. Der Fake steht in Tests an
+            // der Stelle des Daemons; liesse er eine leere Anfrage als `Allow`
+            // durch, uebte die Oberflaeche gegen ein Verhalten, das der echte
+            // Daemon mit `IPC_004` ablehnt, und der Unterschied fiele erst im
+            // Betrieb auf.
+            None => {
+                return refused(
+                    text,
+                    &Diagnostic::builder(codes::IPC_004, Severity::Error)
+                        .why("the decide request carries no decision".to_owned())
+                        .build(),
+                );
+            }
         };
         let allow = decision.is_allow();
         if self
