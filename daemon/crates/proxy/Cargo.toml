@@ -10,3 +10,45 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+libc.workspace = true
+humanitl-core.workspace = true
+humanitl-config.workspace = true
+dashmap.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+base64.workspace = true
+sha2.workspace = true
+http.workspace = true
+bytes.workspace = true
+# CA und Leaf-Zertifikate (HUM-014). hudsucker 0.24 verlangt dieselben
+# Fassungen (rcgen ^0.14 mit x509-parser, rustls 0.23 via tokio-rustls ^0.26,
+# time ^0.3); die Versionen wandern nach daemon/Cargo.toml (Handoff).
+rcgen = { version = "0.14", features = ["x509-parser"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+time = { version = "0.3", default-features = false, features = ["std"] }
+zeroize = "1"
+# MITM-Proxy-Kern (HUM-015). Eigener Accept-Loop auf hyper 1 statt hudsucker
+# (Spike: hudsucker 0.24.1 nimmt nur einen `TcpListener`, keinen
+# `UnixListener`; sein Client und seine CA werden ohnehin ersetzt). Diese
+# Fassungen wandern nach daemon/Cargo.toml (Handoff).
+hyper = { version = "1.11", features = ["server", "client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+webpki-roots = "1"
+async-trait = "0.1"
+
+[dev-dependencies]
+tempfile.workspace = true
+# Nur im Test: `start_paused` für die Timer der Halte-Warteschlange (HUM-016).
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+# Nur im Test: liest `[env]` aus profiles/sandbox/*.toml, um das Env-Kit abzugleichen.
+toml.workspace = true
+# Fake-Upstream und Clients der Integrationstests (HUM-015/HUM-017).
+axum = "0.8"
+hyper = { version = "1.11", features = ["server", "client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "server-graceful"] }
+http-body-util = "0.1"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+tokio-stream.workspace = true
