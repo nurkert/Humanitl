@@ -4,7 +4,8 @@
 # Es beweist in einem Lauf die drei Sätze, mit denen M1 steht oder fällt
 # (BACKLOG.md 7 und 8):
 #
-#   1. Die Sandbox ist dicht. Der Starter belegt die drei Garantien aus der
+#   1. Die Sandbox ist dicht. `humanitl sandbox check` zeigt die drei
+#      Garantien, `humanitl sandbox run` belegt sie noch einmal aus der
 #      laufenden Sandbox, und ein Prozess, der die Proxy-Umgebung ignoriert
 #      (`env -i`), kommt weder an ein Ziel, das vom Host aus nachweislich
 #      antwortet, noch an einen Namen.
@@ -14,6 +15,10 @@
 #      Klienten als 403 mit dem verabredeten Body, eine Freigabe als die
 #      Antwort des Ziels, und was niemand entscheidet, läuft in die
 #      Zeitüberschreitung.
+#
+# Gefahren wird alles über die Kommandozeile `humanitl`, nicht über ein
+# Ad-hoc-Skript: Das Demo soll dieselben Codepfade nehmen, die später beim
+# Nutzer laufen (HUM-064, CONVENTIONS.md 3.11).
 #
 # Der ganze Lauf liegt in einem eigenen Nutzer- und Netz-Namensraum
 # (`e2e_enter_namespace`). Das hat zwei Gründe. Erstens braucht Schritt 3 ein
@@ -93,12 +98,25 @@ e2e_expect_match "the daemon serves GetInfo and runs a proxy session" \
 
 e2e_step "1. the sandbox is sealed"
 
-# `escape-launch` läuft fail-closed: Es startet den Befehl nur, wenn alle drei
-# Garantien aus der laufenden Sandbox belegt sind, und schreibt je eine Zeile
-# `check <name> pass|FAIL: <evidence>` nach stderr (HUM-011, CONVENTIONS 4.12).
+# `humanitl sandbox check` startet eine kurzlebige Sandbox im ausgelieferten
+# Profil und zeigt die drei Garantien als Tabelle mit ✓ (HUM-064). Es braucht
+# den Daemon nicht: Socket und CA sind Platzhalter in einem eigenen
+# Verzeichnis, damit ein Selbsttest dem laufenden Daemon nichts wegnimmt.
+selftest=$(humanitl sandbox check 2>&1) ||
+    e2e_die "humanitl sandbox check failed: $selftest"
+printf '%s\n' "$selftest" | sed 's/^/  /'
+for guarantee in no_network_interface single_socket seccomp_active; do
+    e2e_expect_match "sandbox check proves $guarantee" "✓ +$guarantee" "$selftest"
+done
+
+# Und dasselbe noch einmal für die Sandbox, in der der Rest des Demos läuft:
+# `humanitl sandbox run` läuft fail-closed, startet den Befehl also nur, wenn
+# alle drei Garantien aus der laufenden Sandbox belegt sind, und schreibt mit
+# `-v` je eine Zeile `check <name> pass|FAIL: <evidence>` nach stderr
+# (HUM-011, HUM-064, CONVENTIONS 4.12).
 isolation=$(sandbox_run /bin/true 2>&1 > /dev/null || e2e_die "the sandbox did not start")
 printf '%s\n' "$isolation" | sed 's/^/  /'
-checks=$(printf '%s\n' "$isolation" | grep -c 'escape-launch: check .* pass:' || true)
+checks=$(printf '%s\n' "$isolation" | grep -c 'check .* pass:' || true)
 e2e_expect "three isolation guarantees are proven from inside the sandbox" 3 "$checks"
 e2e_expect_match "no interface but lo" 'check no_network_interface pass' "$isolation"
 e2e_expect_match "exactly one socket, and it is the proxy" 'check single_socket pass' "$isolation"
@@ -127,19 +145,25 @@ e2e_expect_match "no name is resolved inside the sandbox" \
 
 e2e_step "3. a request is held and a human blocks it"
 
+# Das Ziel ist der Fake-Upstream auf einem eigenen Pfad, nicht ein Name im
+# Internet. Nur so lässt sich am Ende beides zugleich belegen: dass die
+# freigegebene Anfrage ankam und dass die geblockte dasselbe Ziel nie erreicht
+# hat. Ein Ziel, das gar nicht antwortet, bewiese das zweite nicht.
 sandbox_run /usr/bin/curl -sS --max-time 60 -o /work/out.txt -w '%{http_code}' \
-    http://example.com/ > "$E2E_WORKDIR/out/code.txt" 2> "$E2E_WORKDIR/out/blocked.log" &
+    "http://$E2E_FAKE_ADDR:$FAKE_HTTP/blocked" \
+    > "$E2E_WORKDIR/out/code.txt" 2> "$E2E_WORKDIR/out/blocked.log" &
 blocked_pid=$!
 
-flow=$(wait_for_held 20 example.com) ||
-    e2e_die "no held flow for example.com within twenty seconds"
+flow=$(wait_for_held 20 /blocked) ||
+    e2e_die "no held flow for /blocked within twenty seconds"
 e2e_say "held flow $flow"
 detail=$(flow_show "$flow")
 e2e_expect "the held flow names the host the agent asked for" \
-    example.com "$(printf '%s' "$detail" | jq -r .host)"
+    "$E2E_FAKE_ADDR:$FAKE_HTTP" "$(printf '%s' "$detail" | jq -r .host)"
+e2e_expect "and the path it asked for" /blocked "$(printf '%s' "$detail" | jq -r .path)"
 e2e_expect "and it is really waiting" held "$(printf '%s' "$detail" | jq -r .state)"
 
-grpc_decide "$flow" block "nicht in diesem Lauf" ||
+flow_decide "$flow" block "nicht in diesem Lauf" ||
     e2e_die "the daemon refused the block"
 wait "$blocked_pid" || true
 
@@ -148,7 +172,9 @@ body=$(cat "$E2E_WORKDIR/work/out.txt")
 e2e_expect_match "the body is the agreed block answer" '^Blocked by Humanitl\.$' "$body"
 e2e_expect_match "and names the human as the reason" '^reason: user$' "$body"
 e2e_expect_match "and the flow the answer belongs to" "^flow: $flow\$" "$body"
-e2e_expect_match "and the host that was asked for" '^host: example\.com$' "$body"
+# Der Body nennt den Host ohne Port; `flows show` nennt ihn mit, weil dort die
+# Authority steht, wie sie in einer URL stünde.
+e2e_expect_match "and the host that was asked for" "^host: $E2E_FAKE_ADDR\$" "$body"
 e2e_expect_match "and carries the note of the human" '^note: nicht in diesem Lauf$' "$body"
 
 # --- 4. Gehalten und erlaubt -------------------------------------------------
@@ -160,10 +186,10 @@ sandbox_run /usr/bin/curl -sS --max-time 60 -o /work/out2.txt -w '%{http_code}' 
     > "$E2E_WORKDIR/out/code2.txt" 2> "$E2E_WORKDIR/out/allowed.log" &
 allowed_pid=$!
 
-flow=$(wait_for_held 20 "$E2E_FAKE_ADDR") ||
-    e2e_die "no held flow for $E2E_FAKE_ADDR within twenty seconds"
+flow=$(wait_for_held 20 /echo) ||
+    e2e_die "no held flow for /echo within twenty seconds"
 e2e_say "held flow $flow"
-grpc_decide "$flow" allow || e2e_die "the daemon refused the allow"
+flow_decide "$flow" allow || e2e_die "the daemon refused the allow"
 wait "$allowed_pid" || true
 
 e2e_expect "the released client gets 200" 200 "$(cat "$E2E_WORKDIR/out/code2.txt")"
@@ -193,11 +219,21 @@ e2e_expect_match "and the body names the timeout" '^reason: timeout$' "$timed_ou
 
 e2e_step "what the target itself saw"
 
-# Die Gegenprobe zu allem: Das Ziel hat genau die eine Anfrage bedient, die ein
-# Mensch freigegeben hat. Schritt 2 (am Proxy vorbei), Schritt 3 (geblockt) und
-# Schritt 5 (Zeitüberschreitung) sind nie bei ihm angekommen.
+# Die Gegenprobe zu allem, und zwar am selben Ziel: Schritt 3 (geblockt),
+# Schritt 4 (freigegeben) und Schritt 5 (Zeitüberschreitung) haben alle den
+# Fake-Upstream gemeint, jeder auf seinem Pfad. Bedient hat er genau eine
+# Anfrage, die aus Schritt 4. `/blocked` steht in seinem Protokoll null mal:
+# Was ein Mensch verboten hat, ist nie bei ihm angekommen, und Schritt 2 (am
+# Proxy vorbei) und Schritt 5 (nie entschieden) ebenso wenig.
 served=$(grep -c ' /echo ' "$E2E_WORKDIR/out/upstream.log" || true)
 e2e_expect "the target served exactly the one request a human allowed" 1 "$served"
+blocked_served=$(grep -c ' /blocked ' "$E2E_WORKDIR/out/upstream.log" || true)
+e2e_expect "and never the one a human forbade" 0 "$blocked_served"
+
+# Das dritte Kriterium aus der Spezifikation, „null aufgelöste Namen in der
+# Sandbox", zählt HUM-024: Erst der Resolver des Daemons führt Buch darüber,
+# wer welchen Namen aufgelöst hat. Bis dahin belegt Schritt 2 dasselbe von der
+# anderen Seite: In der Sandbox scheitert jede Auflösung.
 
 # --- Der geordnete Abschied --------------------------------------------------
 

@@ -3,27 +3,33 @@
 #
 #   ./tests/escape/run.sh                 run everything, fail on a red probe
 #   ESCAPE_ALLOW_FAIL=1 ./tests/escape/run.sh   report, but do not fail the build
-#   ESCAPE_SKIP_BUILD=1 ./tests/escape/run.sh   use the escape-launch binary as built
+#   ESCAPE_SKIP_BUILD=1 ./tests/escape/run.sh   use the binaries as they are
 #
-# The launcher and the shim are built with cargo and read back from the same
-# target directory: CARGO_TARGET_DIR when it is set (a relative one counts
-# from daemon/, where cargo runs), daemon/target otherwise. The launcher is a
-# debug build; the shim is built the way it ships, with the `shim` profile and
-# statically linked, and handed to escape-launch with --shim. escape-launch
-# uses it only when it speaks the contract (exit 125 without arguments,
-# HUM-012); a stub is ignored, with a line on stderr, and every seccomp probe
-# stays red. Two cases in the report, harness/shim_static and
-# harness/shim_size, hold the shim to the acceptance criteria of HUM-012:
-# `ldd` says "not a dynamic executable", and the binary is under 2 MB.
+# The command line, the daemon and the shim are built with cargo and read back
+# from the same target directory: CARGO_TARGET_DIR when it is set (a relative
+# one counts from daemon/, where cargo runs), daemon/target otherwise. The
+# command line and the daemon are debug builds; the shim is built the way it
+# ships, with the `shim` profile and statically linked, and then copied next to
+# `humanitl`, which is where the command line looks for it (there is no --shim
+# flag; a package puts it next to the binary or into /usr/lib/humanitl). Two
+# cases in the report, harness/shim_static and harness/shim_size, hold the shim
+# to the acceptance criteria of HUM-012: `ldd` says "not a dynamic executable",
+# and the binary is under 2 MB.
 #
-# The launcher (HUM-011) runs the sandbox through the real BwrapBackend, and
-# since HUM-021 the socket it mounts belongs to a real daemon that this script
-# starts (see "The proxy behind the socket" below): ESC-3 then measures what
-# the proxy ANSWERS, not whether one exists. What is still red afterwards needs
-# a check the proxy does not have yet; tests/escape/README.md names the issue
-# that turns each probe green. Since HUM-021 CI runs without ESCAPE_ALLOW_FAIL:
-# a red probe fails the build. The switch stays for local runs that want the
-# report without the verdict.
+# Since HUM-064 the suites start through `humanitl sandbox run --profile test`
+# and no longer through the ad-hoc launcher `escape-launch`, as CONVENTIONS.md
+# 3.11 asks: the escape tests must run the code paths the user runs. Under the
+# command line sits the same BwrapBackend, and it is fail-closed in the same
+# way — a sandbox whose three guarantees are not proven is killed and the run
+# ends with exit 3 rather than executing the probe.
+#
+# Since HUM-021 the socket the sandbox gets belongs to a real daemon that this
+# script starts (see "The proxy behind the socket" below): ESC-3 then measures
+# what the proxy ANSWERS, not whether one exists. What is still red afterwards
+# needs a check the proxy does not have yet; tests/escape/README.md names the
+# issue that turns each probe green. Since HUM-021 CI runs without
+# ESCAPE_ALLOW_FAIL: a red probe fails the build. The switch stays for local
+# runs that want the report without the verdict.
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -41,8 +47,14 @@ case "${CARGO_TARGET_DIR:-}" in
 /*) TARGET_DIR="$CARGO_TARGET_DIR" ;;
 *)  TARGET_DIR="$ROOT/daemon/$CARGO_TARGET_DIR" ;;
 esac
-LAUNCH="$TARGET_DIR/debug/escape-launch"
-PROFILE="$ROOT/profiles/sandbox/test.toml"
+CLI="$TARGET_DIR/debug/humanitl"
+# The profile is named, not pointed at: `humanitl` refuses a path in
+# sandbox.profile so that a cloned repository cannot bring the policy of the
+# sandbox with it. The first place it looks is
+# $XDG_CONFIG_HOME/humanitl/profiles/sandbox/<name>.toml, and that is where
+# this run puts the profiles of the working tree.
+PROFILE_NAME=test
+PROFILE_SRC="$ROOT/profiles/sandbox"
 RESULTS="$OUT/results.txt"
 
 # The shim is built the way it ships (HUM-012): the `shim` profile of
@@ -134,13 +146,13 @@ if ! sh "$HERE/selftest.sh"; then
     exit 2
 fi
 
-echo "== building the launcher and the shim =="
+echo "== building the command line, the daemon and the shim =="
 if [ "${ESCAPE_SKIP_BUILD:-0}" != 1 ]; then
     # The same directory the binaries are read from, passed explicitly so that
     # the build and the run cannot disagree on where they went.
     if ! (cd "$ROOT/daemon" && CARGO_TARGET_DIR="$TARGET_DIR" cargo build \
-        -p humanitl-sandbox -p humanitld --bin escape-launch --bin humanitld); then
-        record_error harness build "cargo build of escape-launch and humanitld failed"
+        -p humanitl -p humanitld --bin humanitl --bin humanitld); then
+        record_error harness build "cargo build of humanitl and humanitld failed"
         sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
         exit 2
     fi
@@ -162,8 +174,8 @@ if [ "${ESCAPE_SKIP_BUILD:-0}" != 1 ]; then
         exit 2
     fi
 fi
-if [ ! -x "$LAUNCH" ]; then
-    record_error harness launcher "no escape-launch binary at $LAUNCH"
+if [ ! -x "$CLI" ]; then
+    record_error harness command_line "no humanitl binary at $CLI"
     sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
     exit 2
 fi
@@ -196,6 +208,19 @@ else
     record_case harness shim_size fail "$shim_bytes bytes, limit $SHIM_MAX_BYTES"
 fi
 
+# The shim goes where the command line looks for it: next to the binary, the
+# way a package installs it. `humanitl sandbox run` has no --shim; the shipped,
+# statically linked build is copied over rather than rebuilt, so that the
+# suites measure the binary that ships and not a debug one.
+# Remove before copying: cargo hardlinks debug/humanitl-shim to its own copy
+# under debug/deps, and a `cp` over it would write through both.
+rm -f "$TARGET_DIR/debug/humanitl-shim"
+if ! cp "$SHIM" "$TARGET_DIR/debug/humanitl-shim"; then
+    record_error harness shim_install "cannot put the shim next to $CLI"
+    sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
+    exit 2
+fi
+
 # The proxy behind the socket (HUM-021).
 #
 # Until this issue the launcher bound a placeholder there: a socket nobody
@@ -220,9 +245,18 @@ DAEMON="$TARGET_DIR/debug/humanitld"
 DAEMON_XDG="$OUT/daemon"
 DAEMON_RUNTIME="$STATE/runtime/humanitl"
 DAEMON_PROXY_SOCK="$DAEMON_RUNTIME/proxy/proxy.sock"
-DAEMON_CA_CERT="$DAEMON_XDG/data/humanitl/ca/ca.crt"
-DAEMON_CA_BUNDLE="$DAEMON_XDG/data/humanitl/ca/ca-bundle.crt"
-mkdir -p "$STATE/runtime" "$DAEMON_XDG/data" "$DAEMON_XDG/config" "$DAEMON_XDG/home"
+mkdir -p "$STATE/runtime" "$DAEMON_XDG/data" "$DAEMON_XDG/config" "$DAEMON_XDG/home" \
+    "$DAEMON_XDG/config/humanitl/profiles/sandbox"
+
+# The command line finds the proxy socket, the token and the CA through
+# humanitl_config::Paths, so it runs in exactly the XDG tree of this daemon.
+# Nothing of the developer's own tree is touched, and nothing of this run
+# survives it.
+if ! cp -f "$PROFILE_SRC/"*.toml "$DAEMON_XDG/config/humanitl/profiles/sandbox/"; then
+    record_error harness profile_install "cannot copy the sandbox profiles of the working tree"
+    sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
+    exit 2
+fi
 
 daemon_pid=""
 stop_escape_daemon() {
@@ -269,15 +303,14 @@ for n in 1 2 3; do
     # Redirection, not `| tee`: a pipeline hands back the exit code of its last
     # element, and the one that matters here is the launcher's.
     set +e
-    "$LAUNCH" \
-        --profile "$PROFILE" \
-        --tests-dir "$HERE" \
+    XDG_RUNTIME_DIR="$STATE/runtime" \
+        XDG_DATA_HOME="$DAEMON_XDG/data" \
+        XDG_CONFIG_HOME="$DAEMON_XDG/config" \
+        HOME="$DAEMON_XDG/home" \
+        "$CLI" -v sandbox run \
+        --profile "$PROFILE_NAME" \
         --work "$WORK" \
-        --state "$STATE" \
-        --shim "$SHIM" \
-        --proxy-socket "$DAEMON_PROXY_SOCK" \
-        --ca-cert "$DAEMON_CA_CERT" \
-        --ca-bundle "$DAEMON_CA_BUNDLE" \
+        --tests-dir "$HERE" \
         -- /bin/sh "/tests/escape/$script" > "$OUT/$suite.log" 2>&1
     launch_code=$?
     set -e
@@ -286,7 +319,7 @@ for n in 1 2 3; do
     file="$WORK/results/$suite.txt"
     if [ ! -f "$file" ]; then
         record_error "$suite" sandbox_not_started \
-            "escape-launch exited $launch_code and left no result file; see target/escape/$suite.log"
+            "humanitl sandbox run exited $launch_code and left no result file; see target/escape/$suite.log"
         continue
     fi
     if ! grep -q "^SUITE-DONE $suite " "$file"; then
