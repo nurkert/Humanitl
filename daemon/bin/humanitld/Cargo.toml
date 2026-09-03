@@ -10,3 +10,16 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+humanitl-config.workspace = true
+humanitl-core.workspace = true
+humanitl-ipc.workspace = true
+
+clap.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
