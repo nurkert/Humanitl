@@ -15,6 +15,8 @@
 //! - [`auth`] mit dem Sitzungs-Token: erzeugen, ablegen, prüfen,
 //! - [`server`] mit [`IpcServer`], dem Dienst des echten Daemons über
 //!   Registry und Halte-Warteschlange (HUM-018),
+//! - [`rules`] mit dem Regel-RPC über dem Regelspeicher des Proxys
+//!   (HUM-027),
 //! - [`client`] mit dem Gegenstück für CLI, Oberfläche und Tests,
 //! - [`server_stub`] mit dem Port [`DaemonApi`] und dem tonic-Dienst darüber,
 //! - [`fake`] mit einem Daemon, der statt eines Proxys eine aufgezeichnete
@@ -55,11 +57,13 @@ pub mod auth;
 pub mod client;
 pub mod convert;
 pub mod fake;
+pub mod rules;
 pub mod server;
 pub mod server_stub;
 
 pub use crate::client::connect;
 pub use crate::convert::diagnostic_to_proto;
+pub use crate::rules::RulesService;
 pub use crate::server::{IpcServer, bind_socket, serve};
 pub use crate::server_stub::{
     BoxStream, DaemonApi, DaemonService, diagnostic_from_status, diagnostic_to_status,

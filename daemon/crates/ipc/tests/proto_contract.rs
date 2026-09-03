@@ -496,6 +496,21 @@ fn extension_fields_from_conventions_43_exist() {
         field_of("RulesRequest", "make_permanent").r#type(),
         Type::String
     );
+    // HUM-027: `reload` liest `rules.yaml` neu ein, `diagnostics` traegt die
+    // Befunde dazu, `dry_run_scanned` sagt, wie viele Flows der Probelauf
+    // wirklich geprueft hat.
+    assert_eq!(
+        field_of("RulesRequest", "reload").type_name(),
+        ".google.protobuf.Empty"
+    );
+    assert_eq!(
+        field_of("RulesResponse", "diagnostics").type_name(),
+        ".humanitl.v1.Diagnostic"
+    );
+    assert_eq!(
+        field_of("RulesResponse", "dry_run_scanned").r#type(),
+        Type::Uint32
+    );
     assert_eq!(
         field_of("SandboxRequest", "argv").type_name(),
         ".google.protobuf.Empty"

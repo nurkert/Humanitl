@@ -603,13 +603,6 @@ async fn every_other_rpc_says_which_issue_brings_it() {
     );
     refusals.push(
         client
-            .rules(v1::RulesRequest::default())
-            .await
-            .map(|_| ())
-            .unwrap_err(),
-    );
-    refusals.push(
-        client
             .audit(v1::AuditRequest::default())
             .await
             .map(|_| ())
@@ -635,6 +628,22 @@ async fn every_other_rpc_says_which_issue_brings_it() {
         assert_eq!(error.code(), Code::Unimplemented);
         assert!(error.message().contains("arrives in"), "{error}");
     }
+
+    // `Rules` gibt es seit HUM-027. Dieser Daemon läuft nur ohne
+    // Regelspeicher, und das sagt er, statt eine leere Liste zu liefern;
+    // `tests/rules_rpc.rs` prüft den Fall mit Speicher.
+    let without_store = client
+        .rules(v1::RulesRequest {
+            op: Some(v1::rules_request::Op::List(())),
+        })
+        .await
+        .map(|_| ())
+        .unwrap_err();
+    assert_eq!(without_store.code(), Code::InvalidArgument);
+    assert!(
+        without_store.message().contains("rule store"),
+        "{without_store}"
+    );
 
     drop(client);
     daemon.shutdown().await;
