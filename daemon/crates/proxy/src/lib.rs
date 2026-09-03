@@ -15,10 +15,19 @@
 //!   TLS mit einem Leaf aus der eigenen CA; puffert den Request-Body bis
 //!   `limits.hold_body_cap_bytes`; treibt den Zustandsautomaten des Kerns.
 //! - [`pipeline`]: [`FlowPipeline`] entscheidet über einen analysierten Flow;
-//!   [`AskPipeline`] hält ihn über die [`HoldQueue`].
+//!   [`RulesPipeline`] wertet den Regelsatz aus, [`AskPipeline`] hält alles,
+//!   was `ask` ergibt, über die [`HoldQueue`].
 //! - [`upstream`]: nach `Allow` auflösen ([`Resolver`]-Port), Adresse
 //!   anheften, über den [`Egress`]-Port verbinden, HTTP/1.1 sprechen.
+//! - [`connect`], [`tls`]: der [`ConnectionContext`] einer Verbindung und die
+//!   Prüfung, dass CONNECT-Ziel, SNI und `Host` dasselbe Ziel meinen
+//!   (HUM-023). Nur ihr Ergebnis wird ausgewertet, nie das CONNECT-Ziel
+//!   allein.
+//! - [`findings`]: der Port für die Detektoren (HUM-025).
 //! - [`ca`], [`hold`]: CA und Halte-Warteschlange (HUM-014, HUM-016).
+//! - [`rules_store`]: [`RulesStore`] hält den geltenden Regelsatz aus
+//!   `rules.yaml`, den Sitzungsregeln und den mitgelieferten Regeln und
+//!   schreibt Änderungen atomar zurück (HUM-027).
 //! - [`registry`]: [`FlowRegistry`] hält je Flow einen [`FlowRecord`] und
 //!   beantwortet `ListFlows`; sie teilt sich den Ereignisstrom mit der
 //!   [`HoldQueue`] (HUM-016).
@@ -27,22 +36,31 @@
 
 pub mod body;
 pub mod ca;
+pub mod connect;
 pub mod core;
 pub mod egress;
+pub mod findings;
 pub mod handler;
 pub mod hold;
 pub mod listener;
 pub mod pipeline;
 pub mod registry;
 pub mod resolver;
+pub mod rules_store;
+pub mod tls;
 pub mod upstream;
 
+pub use crate::connect::{
+    AuthorityError, AuthorityRefusal, ConnMeta, ConnectionContext, RequestTarget, check_authority,
+};
 pub use crate::core::ProxyCore;
 pub use crate::egress::{AsyncStream, Direct, Egress};
+pub use crate::findings::{NoScan, Scanner, Tier1Scanner};
 pub use crate::handler::{FlowHandler, ProxyLimits};
 pub use crate::hold::HoldQueue;
 pub use crate::listener::SessionSocket;
-pub use crate::pipeline::{AskPipeline, ConnMeta, FlowPipeline, PassthroughPipeline};
+pub use crate::pipeline::{AskPipeline, FlowPipeline, PassthroughPipeline, RulesPipeline};
 pub use crate::registry::{FlowFilter, FlowRecord, FlowRegistry, FlowSummary};
 pub use crate::resolver::{ResolveError, Resolver, SystemResolver};
+pub use crate::rules_store::{Origin, ReloadReport, RulesStore, StoredRule};
 pub use crate::upstream::{ClientTls, Upstream};

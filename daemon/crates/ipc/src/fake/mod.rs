@@ -573,11 +573,19 @@ impl FakeDaemon {
             Some(v1::rules_request::Op::DryRun(dry_run)) => {
                 dry_run_matches = self.dry_run(dry_run.rule.as_ref(), dry_run.limit);
             }
+            // Der Fake hat keine Datei: neu zu laden heißt hier, den Stand zu
+            // melden, den er ohnehin hat. Ein `UNIMPLEMENTED` wäre falsch,
+            // weil die Oberfläche gegen den Fake übt, was der Daemon kann.
+            Some(v1::rules_request::Op::Reload(())) => {
+                self.state.emit_rules_changed(SystemTime::now());
+            }
         }
         v1::RulesResponse {
             rules: self.state.rules(),
+            dry_run_scanned: u32::try_from(self.state.summaries().len()).unwrap_or(u32::MAX),
             dry_run_matches,
             diagnostic: None,
+            diagnostics: Vec::new(),
         }
     }
 

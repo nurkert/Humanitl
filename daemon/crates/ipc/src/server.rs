@@ -38,7 +38,9 @@ use humanitl_core::{
     BlockReason, Decision, DecisionSource, Diagnostic, FlowEvent, FlowId, SessionId, Severity,
 };
 use humanitl_proxy::hold::NotHeld;
+use humanitl_proxy::rules_store::RulesStore;
 use humanitl_proxy::{FlowFilter, FlowRegistry, HoldQueue};
+use humanitl_recorder::Recorder;
 use tokio::net::UnixListener;
 use tokio::sync::oneshot;
 use tokio_stream::StreamExt as _;
@@ -47,8 +49,9 @@ use tokio_stream::wrappers::{BroadcastStream, UnixListenerStream};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
+use crate::rules::RulesService;
 use crate::server_stub::{BoxStream, diagnostic_to_status};
-use crate::{PROTO_MAJOR, PROTO_MINOR, auth, convert, v1};
+use crate::{PROTO_MAJOR, PROTO_MINOR, auth, convert, rules, v1};
 
 /// Was dieser Daemon in M1 kann.
 ///
@@ -83,6 +86,7 @@ pub struct IpcServer {
     queue: Arc<HoldQueue>,
     info: v1::Info,
     body_cap_bytes: u64,
+    rules: Option<RulesService>,
 }
 
 impl IpcServer {
@@ -105,7 +109,30 @@ impl IpcServer {
                 session_id: session.map(|id| id.to_string()).unwrap_or_default(),
             },
             body_cap_bytes: config.limits.hold_body_cap_bytes,
+            rules: None,
         }
+    }
+
+    /// Derselbe Dienst mit einem Regelspeicher.
+    ///
+    /// Ohne ihn antwortet `Rules` mit `IPC_005` und `Decide` lehnt ein
+    /// `remember` ab, statt es stillschweigend zu verwerfen. Der Recorder ist
+    /// die Quelle des Probelaufs; fehlt er, prüft `dry_run` null Flows.
+    #[must_use]
+    pub fn with_rules(mut self, store: Arc<RulesStore>, recorder: Option<Recorder>) -> Self {
+        self.rules = Some(RulesService::new(store, recorder));
+        self
+    }
+
+    /// Der Regel-Dienst, sobald einer verdrahtet ist.
+    #[must_use]
+    pub const fn rules_service(&self) -> Option<&RulesService> {
+        self.rules.as_ref()
+    }
+
+    /// Der Regel-Dienst oder der Befund, dass dieser Daemon keinen hat.
+    fn rules_or_refuse(&self) -> Result<&RulesService, Diagnostic> {
+        self.rules.as_ref().ok_or_else(rules::no_store)
     }
 
     /// Die Selbstauskunft, die `GetInfo` liefert.
@@ -145,7 +172,13 @@ impl IpcServer {
                 });
             (!hidden).then(|| Ok(convert::flow_event_to_proto(&event, &registry)))
         });
-        Box::pin(tokio_stream::iter(self.backlog(request)).chain(live))
+        match self.rules.as_ref().map(RulesService::store) {
+            None => Box::pin(tokio_stream::iter(self.backlog(request)).chain(live)),
+            Some(store) => {
+                let changes = rules_changed_stream(Arc::clone(store));
+                Box::pin(tokio_stream::iter(self.backlog(request)).chain(live.merge(changes)))
+            }
+        }
     }
 
     /// Was ein Abonnent vor dem Strom nachgeliefert bekommt.
@@ -348,6 +381,31 @@ fn refused(flow_id: &str, diagnostic: Diagnostic) -> (v1::DecideResult, Option<D
     (result, Some(diagnostic))
 }
 
+/// Der Strom der Regeländerungen als Ereignis des Vertrags.
+///
+/// Eine Regeländerung ist kein Flow-Ereignis; sie hat weder Flow noch Zustand.
+/// Sie reist trotzdem im selben Strom, damit ein Client genau ein Abonnement
+/// braucht (`backlog/sprint-2.md`, HUM-027). Der Inhalt ist nur die Revision:
+/// Wer sie sieht, lädt die Liste über `Rules{list}` nach.
+///
+/// Fällt ein Zuhörer zurück, bekommt er statt der verpassten Zwischenstände
+/// den aktuellen Stand — mehr braucht er nicht, weil er ohnehin nachlädt.
+fn rules_changed_stream(store: Arc<RulesStore>) -> BoxStream<Result<v1::FlowEvent, Status>> {
+    let stream = BroadcastStream::new(store.subscribe()).map(move |item| {
+        let revision = match item {
+            Ok(revision) => revision,
+            Err(BroadcastStreamRecvError::Lagged(_)) => store.revision(),
+        };
+        Ok(v1::FlowEvent {
+            at: Some(convert::timestamp(std::time::SystemTime::now())),
+            event: Some(v1::flow_event::Event::RulesChanged(
+                v1::flow_event::RulesChanged { revision },
+            )),
+        })
+    });
+    Box::pin(stream)
+}
+
 /// Der Fehler einer RPC, die es noch nicht gibt.
 ///
 /// Kein [`Diagnostic`]: das hier ist kein Fehlschlag der Anfrage, sondern der
@@ -423,6 +481,24 @@ impl v1::humanitl_server::Humanitl for IpcServer {
             }));
         }
 
+        // Erst die Regel, dann die Entscheidung: scheitert das Anlegen, wird
+        // nichts entschieden (`backlog/sprint-2.md`, HUM-027). Der umgekehrte
+        // Weg hinterließe einen freigegebenen Flow und einen Menschen, der
+        // glaubt, die Freigabe gelte ab jetzt für alle.
+        let created = match request.remember.as_ref() {
+            None => None,
+            Some(rule) => {
+                let service = self
+                    .rules_or_refuse()
+                    .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+                Some(
+                    service
+                        .remember(rule)
+                        .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?,
+                )
+            }
+        };
+
         let (results, refusals): (Vec<v1::DecideResult>, Vec<Option<Diagnostic>>) = request
             .flow_ids
             .iter()
@@ -430,6 +506,14 @@ impl v1::humanitl_server::Humanitl for IpcServer {
             .unzip();
 
         if results.iter().all(|result| !result.applied) {
+            // Nichts entschieden heißt: die Anfrage hat nichts bewirkt. Die
+            // Regel, die nur zu dieser Entscheidung gehörte, wird deshalb
+            // wieder zurückgenommen.
+            if let (Some(rule), Some(service)) = (created.as_ref(), self.rules.as_ref())
+                && let Ok(id) = humanitl_core::RuleId::parse(&rule.rule_id)
+            {
+                service.forget(id);
+            }
             let first = refusals
                 .into_iter()
                 .flatten()
@@ -438,14 +522,13 @@ impl v1::humanitl_server::Humanitl for IpcServer {
             return Err(diagnostic_to_status(&first));
         }
 
-        // `remember` wird angenommen und noch nicht ausgewertet: der Regelsatz
-        // kommt mit HUM-027. Eine Regel stillschweigend zu verwerfen wäre
-        // falsch, sie hier zu erfinden ebenso; der Client sieht an dem leeren
-        // `created_rule`, dass keine entstanden ist.
         Ok(Response::new(v1::DecideResponse {
             results,
-            created_rule_id: String::new(),
-            created_rule: None,
+            created_rule_id: created
+                .as_ref()
+                .map(|rule| rule.rule_id.clone())
+                .unwrap_or_default(),
+            created_rule: created,
         }))
     }
 
@@ -463,11 +546,24 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         Err(unimplemented("GetBody", "HUM-026 with the recorder"))
     }
 
+    /// Liest oder ändert den Regelsatz.
+    ///
+    /// Jede Antwort trägt den vollständigen Regelsatz danach. Was die Anfrage
+    /// nicht ausführen konnte, ist ein Fehler des Aufrufs, kein Erfolg mit
+    /// leerem Inhalt; nur `reload` legt seine Befunde in die Antwort, weil
+    /// dabei die alten Regeln in Kraft bleiben und der Client sie sehen soll.
     async fn rules(
         &self,
-        _request: Request<v1::RulesRequest>,
+        request: Request<v1::RulesRequest>,
     ) -> Result<Response<v1::RulesResponse>, Status> {
-        Err(unimplemented("Rules", "HUM-027 with the rules engine"))
+        let service = self
+            .rules_or_refuse()
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        service
+            .apply(request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
     }
 
     async fn sandbox(
@@ -720,11 +816,6 @@ mod tests {
                 .err()
                 .map(|status| (status.code(), status.message().to_owned())),
             server
-                .rules(Request::new(v1::RulesRequest::default()))
-                .await
-                .err()
-                .map(|status| (status.code(), status.message().to_owned())),
-            server
                 .sandbox(Request::new(v1::SandboxRequest::default()))
                 .await
                 .err()
@@ -760,6 +851,23 @@ mod tests {
             assert_eq!(code, tonic::Code::Unimplemented);
             assert!(message.contains("arrives in"), "{message}");
         }
+    }
+
+    #[tokio::test]
+    async fn rules_without_a_store_name_the_reason_instead_of_answering_empty() {
+        // `Rules` ist kein `UNIMPLEMENTED` mehr (HUM-027). Ein Daemon ohne
+        // Regelspeicher sagt das; eine leere Liste sähe aus wie „keine Regeln".
+        let queue = queue();
+        let server = server(&queue);
+        let status = server
+            .rules(Request::new(v1::RulesRequest {
+                op: Some(v1::rules_request::Op::List(())),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert!(status.message().contains("IPC_005"), "{status}");
+        assert!(status.message().contains("rule store"), "{status}");
     }
 
     #[tokio::test]
