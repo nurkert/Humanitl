@@ -623,7 +623,7 @@ pub fn domain_of(authority: &Authority, first_seen: SystemTime) -> v1::DomainInf
 ///   [`humanitl_core::FlowEvent::Decided`] oder ein
 ///   [`humanitl_core::FlowEvent::TimedOut`] durch die Registry gelaufen ist.
 ///   Für einen Datensatz, der schon entschieden angelegt wurde, bleibt nur,
-///   was die Entscheidung selbst über ihre Herkunft sagt ([`implied_source`]);
+///   was die Entscheidung selbst über ihre Herkunft sagt (`implied_source`);
 ///   ist auch das nichts, bleibt das Feld leer.
 /// - `duration` ist gesetzt, sobald der Flow sein `Recorded` erreicht hat,
 ///   also die Spanne von der Ankunft bis zum Ende. Solange die Antwort noch
