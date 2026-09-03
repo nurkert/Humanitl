@@ -866,7 +866,7 @@ pub fn before(summary: &v1::FlowSummary, anchor: Option<FlowId>) -> bool {
 
 /// Ob ein Flow zum Filtertext passt.
 ///
-/// Unterstützt `host:<text>` und `state:<name>`; alles andere ist eine
+/// Unterstützt `host:<text>`, `state:<name>` und `session:<id>`; alles andere ist eine
 /// Teilzeichenkette über Host und Pfad. Die vollständige Filtersprache des
 /// History-Screens baut HUM-030.
 #[must_use]
@@ -880,6 +880,7 @@ pub fn matches_filter(summary: &v1::FlowSummary, filter: &str) -> bool {
         match token.split_once(':') {
             Some(("host", value)) => host.contains(value),
             Some(("state", value)) => state_name(summary.state).eq_ignore_ascii_case(value),
+            Some(("session", value)) => summary.session_id.contains(value),
             _ => host.contains(token) || summary.path.contains(token),
         }
     })
@@ -908,7 +909,9 @@ mod tests {
     use humanitl_proxy::ConnMeta;
     use humanitl_proxy::registry::{FlowRecord, FlowRegistry};
 
-    use super::{flow_event_to_proto, record_to_detail, record_to_summary, wall_clock};
+    use super::{
+        flow_event_to_proto, matches_filter, record_to_detail, record_to_summary, wall_clock,
+    };
     use crate::v1;
 
     fn flow(session: SessionId, host: &str) -> Flow {
@@ -938,6 +941,23 @@ mod tests {
             .unwrap_or_else(Instant::now);
         let past = wall_clock(elapsed);
         assert!(past.duration_since(now).unwrap() < Duration::from_secs(1));
+    }
+
+    /// Der Filter kennt `session:`, `host:` und `state:`; ein Text ohne
+    /// Praefix sucht in Host und Pfad.
+    #[test]
+    fn the_filter_knows_session_host_and_state() {
+        let session = SessionId::new();
+        let flow = flow(session, "api.example.com");
+        let row = record_to_summary(&FlowRecord::new(&flow, &ConnMeta::plain(session)));
+        let id = session.to_string();
+
+        assert!(matches_filter(&row, &format!("session:{id}")));
+        assert!(!matches_filter(&row, "session:nobody"));
+        assert!(matches_filter(&row, "host:example state:received"));
+        assert!(!matches_filter(&row, "host:example state:held"));
+        assert!(matches_filter(&row, "chat"));
+        assert!(!matches_filter(&row, "nothing-like-this"));
     }
 
     #[test]

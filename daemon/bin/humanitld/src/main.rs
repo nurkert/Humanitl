@@ -485,7 +485,10 @@ const ADVICE_PROXY_SOCKET: &str = "stop the running daemon before starting anoth
 /// Socket-Datei bleibt liegen, wenn ein Daemon abstürzt, und eine PID-Datei
 /// wäre eine zweite Wahrheit. `advice` sagt, was für diesen Socket zu tun ist.
 fn free_socket(path: &Path, advice: &str) -> Result<(), Diagnostic> {
-    if !path.exists() {
+    // `symlink_metadata`, nicht `exists`: `exists` folgt einem Symlink und
+    // meldet fuer einen haengenden Link "nicht da", der Eintrag bliebe liegen
+    // und der Bind darauf schluege fehl.
+    if fs::symlink_metadata(path).is_err() {
         return Ok(());
     }
     if std::os::unix::net::UnixStream::connect(path).is_ok() {
