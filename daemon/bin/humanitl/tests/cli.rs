@@ -753,7 +753,11 @@ fn sigint_reaches_the_agent_and_keeps_its_exit_code() {
             "--",
             "sh",
             "-c",
-            "trap 'exit 42' INT; sleep 60",
+            // Der Handler steht, bevor die Markierung erscheint: Erst dann darf
+            // das Signal kommen, sonst trifft es eine Shell ohne Handler und
+            // das Ergebnis haengt davon ab, wie schnell die Sandbox unter Last
+            // hochkommt (so ist der Test in einer vollen Pruefung gekippt).
+            "trap 'exit 42' INT; : > /work/ready; sleep 60",
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -761,7 +765,18 @@ fn sigint_reaches_the_agent_and_keeps_its_exit_code() {
         .spawn()
         .expect("the binary starts");
 
-    std::thread::sleep(Duration::from_millis(1500));
+    let ready = harness.path("work").join("ready");
+    let waiting = Instant::now();
+    while !ready.exists() {
+        assert!(
+            waiting.elapsed() < PATIENCE,
+            "the agent did not install its handler within {PATIENCE:?}"
+        );
+        if let Some(status) = child.try_wait().expect("the child is waitable") {
+            panic!("the sandbox ended before the handler was installed: {status}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
     let pid = child.id();
     let signalled = Command::new("kill")
         .args(["-INT", &pid.to_string()])
