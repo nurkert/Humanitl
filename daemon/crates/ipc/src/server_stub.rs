@@ -1,0 +1,625 @@
+//! Der Port [`DaemonApi`] und der generische tonic-Dienst darüber.
+//!
+//! Der Daemon hat genau eine öffentliche Schnittstelle, und sie hat genau eine
+//! Implementierung der Verdrahtung: [`DaemonService`]. Wer den Daemon spielt —
+//! der echte Dienst aus HUM-018 oder der Fake aus [`crate::fake`] — schreibt
+//! keinen tonic-Code, sondern erfüllt [`DaemonApi`]. Damit sind Token-Prüfung,
+//! die Abbildung von [`Diagnostic`] auf [`Status`] und das Verpacken der
+//! Ströme an einer Stelle beschrieben und für beide gleich; die Oberfläche
+//! kann den Unterschied nicht sehen.
+//!
+//! Die Grenze verläuft bei den Wire-Typen: [`DaemonApi`] nimmt und liefert
+//! Protobuf-Nachrichten aus [`crate::v1`]. Nur dort, wo der Kern eine
+//! Invariante hält, stehen Kern-Typen in der Signatur ([`FlowId`],
+//! [`Diagnostic`]).
+
+use core::pin::Pin;
+use core::task::{Context, Poll};
+use std::sync::Arc;
+
+use bytes::Bytes;
+use humanitl_core::diagnostics::codes;
+use humanitl_core::rule::{Expiry, Rule};
+use humanitl_core::{Diagnostic, DiagnosticCode, FixAction, FlowId, Severity};
+use prost::Message as _;
+use tokio::sync::mpsc;
+use tokio_stream::Stream;
+use tokio_stream::wrappers::ReceiverStream;
+use tonic::{Code, Request, Response, Status};
+
+use crate::TOKEN_METADATA_KEY;
+use crate::v1;
+
+/// Ein Strom, der irgendwo auf dem Heap liegt und über Aufrufgrenzen reist.
+///
+/// Immer `'static` und `Send`: ein Strom aus [`DaemonApi`] wird an tonic
+/// weitergereicht und dort auf einem beliebigen Worker abgespult.
+pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send + 'static>>;
+
+/// Alles, was der Daemon kann, ohne ein Wort über gRPC zu verlieren.
+///
+/// Die Methoden entsprechen eins zu eins den RPCs aus
+/// `proto/humanitl/v1/humanitl.proto`. Fehler sind [`Diagnostic`], nie
+/// [`Status`]: die Abbildung auf einen gRPC-Code gehört in die Verdrahtung,
+/// nicht in die Fachlichkeit.
+#[tonic::async_trait]
+pub trait DaemonApi: Send + Sync + 'static {
+    /// Version und Fähigkeiten des Daemons.
+    async fn info(&self) -> v1::Info;
+
+    /// Der Ereignisstrom. Ein zu langsamer Zuhörer bekommt
+    /// [`v1::flow_event::Event::Lagged`], nie einen Abbruch.
+    fn subscribe(&self, request: v1::SubscribeRequest) -> BoxStream<v1::FlowEvent>;
+
+    /// Eine Seite der Flow-Historie.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`], wenn Filter oder Cursor nicht lesbar sind.
+    async fn list_flows(&self, request: v1::ListFlowsRequest) -> Result<v1::FlowPage, Diagnostic>;
+
+    /// Alles, was über einen Flow bekannt ist.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`] mit `IPC_003`, wenn es den Flow nicht gibt.
+    async fn get_flow(&self, id: FlowId) -> Result<v1::FlowDetail, Diagnostic>;
+
+    /// Der Inhalt eines Bodys, in Stücken. Das letzte Stück trägt `last`.
+    fn get_body(&self, body: v1::BodyRef) -> BoxStream<v1::BodyChunk>;
+
+    /// Entscheidet einen oder mehrere gehaltene Flows.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`], wenn die Anfrage als Ganzes nicht gilt. Ein Fehler an
+    /// einem einzelnen Flow steht dagegen in `DecideResult.diagnostic`.
+    async fn decide(&self, request: v1::DecideRequest) -> Result<v1::DecideResponse, Diagnostic>;
+
+    /// Liest oder ändert den Regelsatz.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`], wenn die Operation fehlt oder eine Regel ungültig ist.
+    async fn rules(&self, request: v1::RulesRequest) -> Result<v1::RulesResponse, Diagnostic>;
+
+    /// Startet, stoppt oder beobachtet die Sandbox.
+    fn sandbox(&self, request: v1::SandboxRequest) -> BoxStream<v1::SandboxEvent>;
+
+    /// Verbindet ein Terminal mit der Sandbox.
+    fn terminal(&self, input: BoxStream<v1::TerminalInput>) -> BoxStream<v1::TerminalOutput>;
+
+    /// Prüft oder exportiert das Audit-Log.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`], wenn der Export nicht geschrieben werden kann.
+    async fn audit(&self, request: v1::AuditRequest) -> Result<v1::AuditResponse, Diagnostic>;
+
+    /// Die effektive Konfiguration samt Herkunft je Feld.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`], wenn die Konfiguration nicht gelesen werden kann.
+    async fn get_config(
+        &self,
+        request: v1::GetConfigRequest,
+    ) -> Result<v1::ConfigSnapshot, Diagnostic>;
+
+    /// Setzt genau einen Konfigurationsschlüssel.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`] mit `CONFIG_002`, wenn der Schlüssel nicht im Schema steht.
+    async fn set_config(
+        &self,
+        request: v1::SetConfigRequest,
+    ) -> Result<v1::ConfigSnapshot, Diagnostic>;
+
+    /// Der Selbsttest der Installation.
+    ///
+    /// Nicht in der Auflistung von HUM-005, aber Teil des Vertrags: der
+    /// generierte tonic-Trait verlangt jeden RPC.
+    async fn doctor(&self) -> v1::DoctorReport;
+
+    /// Die LAN-Suche nach LLM-Servern.
+    fn discover_llm(&self, request: v1::DiscoverRequest) -> BoxStream<v1::DiscoverResult>;
+}
+
+/// Der tonic-Dienst über einem beliebigen [`DaemonApi`].
+///
+/// Hier steht alles, was für jeden RPC gleich ist: das Token aus
+/// `x-humanitl-token` prüfen, [`Diagnostic`] in [`Status`] übersetzen, Ströme
+/// in `Result` verpacken.
+pub struct DaemonService<T> {
+    api: Arc<T>,
+    token: String,
+}
+
+impl<T> DaemonService<T> {
+    /// Baut den Dienst über einer Implementierung und dem erwarteten Token.
+    ///
+    /// Das Token ist der Inhalt von `$XDG_RUNTIME_DIR/humanitl/token`. Ein
+    /// leeres Token gibt es nicht: dann könnte jeder Prozess mitlesen.
+    #[must_use]
+    pub fn new(api: Arc<T>, token: impl Into<String>) -> Self {
+        Self {
+            api,
+            token: token.into(),
+        }
+    }
+
+    /// Die Implementierung, über der dieser Dienst liegt.
+    #[must_use]
+    pub fn api(&self) -> &Arc<T> {
+        &self.api
+    }
+
+    /// Prüft das Token einer Anfrage.
+    ///
+    /// # Errors
+    ///
+    /// [`Status`] mit [`Code::Unauthenticated`] und `IPC_001` in den Details,
+    /// wenn der Metadata-Schlüssel fehlt oder nicht passt.
+    fn check_token<R>(&self, request: &Request<R>) -> Result<(), Status> {
+        let presented = request
+            .metadata()
+            .get(TOKEN_METADATA_KEY)
+            .map(tonic::metadata::MetadataValue::as_encoded_bytes);
+
+        let ok = presented.is_some_and(|value| constant_time_eq(value, self.token.as_bytes()));
+        if ok {
+            return Ok(());
+        }
+
+        let why = if presented.is_none() {
+            format!("metadata key {TOKEN_METADATA_KEY} is missing")
+        } else {
+            format!("metadata key {TOKEN_METADATA_KEY} does not match the session token")
+        };
+        Err(diagnostic_to_status(
+            &Diagnostic::builder(codes::IPC_001, Severity::Error)
+                .why(why)
+                .build(),
+        ))
+    }
+}
+
+/// Vergleicht zwei Byte-Folgen in Zeit, die nicht vom Inhalt abhängt.
+///
+/// Das Token liegt lokal und ist kurzlebig; trotzdem gibt es keinen Grund, an
+/// dieser Stelle einen Zeitkanal offenzulassen.
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (a, b) in left.iter().zip(right.iter()) {
+        diff |= a ^ b;
+    }
+    diff == 0
+}
+
+/// Der gRPC-Code, mit dem ein Befund beim Client ankommt.
+///
+/// Die Zuordnung ist bewusst klein: der Code aus dem Register trägt die
+/// Bedeutung, der gRPC-Code sagt dem Client nur, ob er es erneut versuchen
+/// darf.
+#[must_use]
+pub fn grpc_code(code: DiagnosticCode) -> Code {
+    match code.as_str() {
+        "IPC_001" => Code::Unauthenticated,
+        "IPC_002" | "CONFIG_002" | "CONFIG_003" => Code::InvalidArgument,
+        "IPC_003" => Code::FailedPrecondition,
+        "DAEMON_001" => Code::Unavailable,
+        _ => Code::Internal,
+    }
+}
+
+/// Übersetzt einen Befund in einen gRPC-Fehler.
+///
+/// Der Befund reist vollständig als Protobuf in den Details mit, damit die
+/// Oberfläche `code`, `why` und `fix` zeigen kann statt einer Textzeile.
+#[must_use]
+pub fn diagnostic_to_status(diagnostic: &Diagnostic) -> Status {
+    let details = Bytes::from(diagnostic_to_proto(diagnostic).encode_to_vec());
+    Status::with_details(grpc_code(diagnostic.code), diagnostic.to_string(), details)
+}
+
+/// Liest einen Befund aus den Details eines gRPC-Fehlers zurück.
+///
+/// Gedacht für Clients und Tests. Ein Fehler ohne Details oder mit fremden
+/// Bytes liefert `None`.
+#[must_use]
+pub fn diagnostic_from_status(status: &Status) -> Option<v1::Diagnostic> {
+    if status.details().is_empty() {
+        return None;
+    }
+    v1::Diagnostic::decode(status.details()).ok()
+}
+
+/// Übersetzt einen Befund in seine Wire-Form.
+#[must_use]
+pub fn diagnostic_to_proto(diagnostic: &Diagnostic) -> v1::Diagnostic {
+    v1::Diagnostic {
+        code: diagnostic.code.as_str().to_owned(),
+        severity: severity_to_proto(diagnostic.severity) as i32,
+        title: diagnostic.title.clone(),
+        why: diagnostic.why.clone(),
+        fix: diagnostic.fix.as_ref().map(fix_to_proto),
+        docs_url: diagnostic.docs.clone().unwrap_or_default(),
+    }
+}
+
+/// Übersetzt eine Dringlichkeit in ihre Wire-Form.
+#[must_use]
+pub const fn severity_to_proto(severity: Severity) -> v1::Severity {
+    match severity {
+        Severity::Info => v1::Severity::Info,
+        Severity::Warning => v1::Severity::Warning,
+        Severity::Error => v1::Severity::Error,
+        Severity::Blocking => v1::Severity::Blocking,
+    }
+}
+
+/// Übersetzt einen Behebungsvorschlag in seine Wire-Form.
+#[must_use]
+pub fn fix_to_proto(fix: &FixAction) -> v1::FixAction {
+    use v1::fix_action::Action;
+
+    let action = match fix {
+        FixAction::SetEnv { key, value } => Action::SetEnv(v1::fix_action::SetEnv {
+            key: key.clone(),
+            value: value.clone(),
+        }),
+        FixAction::AddRule(rule) => Action::AddRule(rule_to_proto(rule)),
+        FixAction::InstallService => Action::InstallService(()),
+        FixAction::ChangeSetting { key, value } => {
+            Action::ChangeSetting(v1::fix_action::ChangeSetting {
+                key: key.clone(),
+                value: value.clone(),
+            })
+        }
+        FixAction::CopyCommand(command) => Action::CopyCommand(command.clone()),
+        FixAction::OpenUrl(url) => Action::OpenUrl(url.clone()),
+        FixAction::RemountReadOnly(path) => {
+            Action::RemountReadOnly(path.to_string_lossy().into_owned())
+        }
+    };
+    v1::FixAction {
+        action: Some(action),
+    }
+}
+
+/// Übersetzt eine Regel in ihre Wire-Form.
+#[must_use]
+pub fn rule_to_proto(rule: &Rule) -> v1::Rule {
+    let action = match rule.action {
+        humanitl_core::rule::Action::Allow => v1::RuleAction::Allow,
+        humanitl_core::rule::Action::Block => v1::RuleAction::Block,
+        humanitl_core::rule::Action::Ask => v1::RuleAction::Ask,
+        humanitl_core::rule::Action::Redact => v1::RuleAction::Redact,
+    };
+    v1::Rule {
+        rule_id: rule.id.to_string(),
+        action: action as i32,
+        matcher: Some(matcher_to_proto(&rule.matcher)),
+        expires: Some(expiry_to_proto(rule.expires)),
+        stream: rule.stream,
+        created_from_flow_id: rule
+            .created_from
+            .map_or_else(String::new, |id| id.to_string()),
+        bundled: rule.bundled,
+        note: rule.note.clone().unwrap_or_default(),
+        created_at: None,
+        position: 0,
+        hit_count: 0,
+        allow_private: rule.allow_private,
+    }
+}
+
+/// Übersetzt die Bedingung einer Regel in ihre Wire-Form.
+fn matcher_to_proto(matcher: &humanitl_core::rule::Matcher) -> v1::RuleMatcher {
+    v1::RuleMatcher {
+        host: matcher.host.to_string(),
+        methods: matcher
+            .methods
+            .as_ref()
+            .map(|methods| methods.iter().map(|m| method_to_proto(m) as i32).collect())
+            .unwrap_or_default(),
+        path: matcher
+            .path
+            .as_ref()
+            .map_or_else(String::new, ToString::to_string),
+        scheme: matcher
+            .scheme
+            .map_or(0, |scheme| scheme_to_proto(scheme) as i32),
+        port: u32::from(matcher.port.unwrap_or(0)),
+        upgrade: match matcher.upgrade {
+            Some(humanitl_core::http::Upgrade::WebSocket) => v1::Upgrade::Websocket as i32,
+            None => v1::Upgrade::None as i32,
+        },
+    }
+}
+
+/// Übersetzt die Gültigkeit einer Regel in ihre Wire-Form.
+fn expiry_to_proto(expiry: Expiry) -> v1::RuleExpiry {
+    let expiry = match expiry {
+        Expiry::Never => v1::rule_expiry::Expiry::Never(()),
+        Expiry::Session(_) => v1::rule_expiry::Expiry::Session(()),
+        Expiry::At(at) => v1::rule_expiry::Expiry::At(prost_types::Timestamp {
+            seconds: at.timestamp(),
+            nanos: i32::try_from(at.timestamp_subsec_nanos().min(999_999_999)).unwrap_or(0),
+        }),
+    };
+    v1::RuleExpiry {
+        expiry: Some(expiry),
+    }
+}
+
+/// Übersetzt eine HTTP-Methode in ihre Wire-Form.
+#[must_use]
+pub fn method_to_proto(method: &humanitl_core::http::Method) -> v1::Method {
+    match *method {
+        humanitl_core::http::Method::GET => v1::Method::Get,
+        humanitl_core::http::Method::HEAD => v1::Method::Head,
+        humanitl_core::http::Method::POST => v1::Method::Post,
+        humanitl_core::http::Method::PUT => v1::Method::Put,
+        humanitl_core::http::Method::PATCH => v1::Method::Patch,
+        humanitl_core::http::Method::DELETE => v1::Method::Delete,
+        humanitl_core::http::Method::OPTIONS => v1::Method::Options,
+        humanitl_core::http::Method::CONNECT => v1::Method::Connect,
+        humanitl_core::http::Method::TRACE => v1::Method::Trace,
+        _ => v1::Method::Other,
+    }
+}
+
+/// Übersetzt ein Schema in seine Wire-Form.
+#[must_use]
+pub const fn scheme_to_proto(scheme: humanitl_core::http::Scheme) -> v1::Scheme {
+    match scheme {
+        humanitl_core::http::Scheme::Http => v1::Scheme::Http,
+        humanitl_core::http::Scheme::Https => v1::Scheme::Https,
+        humanitl_core::http::Scheme::Ws => v1::Scheme::Ws,
+        humanitl_core::http::Scheme::Wss => v1::Scheme::Wss,
+    }
+}
+
+/// Hängt an jedes Element eines Stroms ein `Ok`.
+///
+/// tonic will `Result<T, Status>`; [`DaemonApi`] liefert `T`, weil ein
+/// Ereignisstrom keinen Fehlerpfad hat: was schiefgeht, ist selbst ein
+/// Ereignis.
+struct OkStream<T> {
+    inner: BoxStream<T>,
+}
+
+impl<T> Stream for OkStream<T> {
+    type Item = Result<T, Status>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        this.inner.as_mut().poll_next(cx).map(|item| item.map(Ok))
+    }
+}
+
+/// Verpackt einen Strom für tonic.
+fn ok_stream<T: Send + 'static>(inner: BoxStream<T>) -> BoxStream<Result<T, Status>> {
+    Box::pin(OkStream { inner })
+}
+
+/// Reicht einen eingehenden tonic-Strom als reinen Wert-Strom weiter.
+///
+/// Ein Fehler auf dem Eingangsstrom beendet ihn; für das Terminal heißt das:
+/// der Client ist weg, also schließt die Verbindung.
+fn plain_stream<T: Send + 'static>(mut inner: tonic::Streaming<T>) -> BoxStream<T> {
+    let (tx, rx) = mpsc::channel(16);
+    tokio::spawn(async move {
+        while let Ok(Some(item)) = inner.message().await {
+            if tx.send(item).await.is_err() {
+                break;
+            }
+        }
+    });
+    Box::pin(ReceiverStream::new(rx))
+}
+
+#[tonic::async_trait]
+impl<T: DaemonApi> v1::humanitl_server::Humanitl for DaemonService<T> {
+    type SubscribeStream = BoxStream<Result<v1::FlowEvent, Status>>;
+    type GetBodyStream = BoxStream<Result<v1::BodyChunk, Status>>;
+    type SandboxStream = BoxStream<Result<v1::SandboxEvent, Status>>;
+    type TerminalStream = BoxStream<Result<v1::TerminalOutput, Status>>;
+    type DiscoverLlmStream = BoxStream<Result<v1::DiscoverResult, Status>>;
+
+    async fn get_info(&self, request: Request<()>) -> Result<Response<v1::Info>, Status> {
+        self.check_token(&request)?;
+        Ok(Response::new(self.api.info().await))
+    }
+
+    async fn subscribe(
+        &self,
+        request: Request<v1::SubscribeRequest>,
+    ) -> Result<Response<Self::SubscribeStream>, Status> {
+        self.check_token(&request)?;
+        Ok(Response::new(ok_stream(
+            self.api.subscribe(request.into_inner()),
+        )))
+    }
+
+    async fn list_flows(
+        &self,
+        request: Request<v1::ListFlowsRequest>,
+    ) -> Result<Response<v1::FlowPage>, Status> {
+        self.check_token(&request)?;
+        self.api
+            .list_flows(request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
+    }
+
+    async fn get_flow(
+        &self,
+        request: Request<v1::FlowRef>,
+    ) -> Result<Response<v1::FlowDetail>, Status> {
+        self.check_token(&request)?;
+        let reference = request.into_inner();
+        let id = FlowId::parse(&reference.flow_id).map_err(|err| {
+            diagnostic_to_status(
+                &Diagnostic::builder(codes::IPC_003, Severity::Error)
+                    .why(err.to_string())
+                    .build(),
+            )
+        })?;
+        self.api
+            .get_flow(id)
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
+    }
+
+    async fn get_body(
+        &self,
+        request: Request<v1::BodyRef>,
+    ) -> Result<Response<Self::GetBodyStream>, Status> {
+        self.check_token(&request)?;
+        Ok(Response::new(ok_stream(
+            self.api.get_body(request.into_inner()),
+        )))
+    }
+
+    async fn decide(
+        &self,
+        request: Request<v1::DecideRequest>,
+    ) -> Result<Response<v1::DecideResponse>, Status> {
+        self.check_token(&request)?;
+        self.api
+            .decide(request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
+    }
+
+    async fn rules(
+        &self,
+        request: Request<v1::RulesRequest>,
+    ) -> Result<Response<v1::RulesResponse>, Status> {
+        self.check_token(&request)?;
+        self.api
+            .rules(request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
+    }
+
+    async fn sandbox(
+        &self,
+        request: Request<v1::SandboxRequest>,
+    ) -> Result<Response<Self::SandboxStream>, Status> {
+        self.check_token(&request)?;
+        Ok(Response::new(ok_stream(
+            self.api.sandbox(request.into_inner()),
+        )))
+    }
+
+    async fn terminal(
+        &self,
+        request: Request<tonic::Streaming<v1::TerminalInput>>,
+    ) -> Result<Response<Self::TerminalStream>, Status> {
+        self.check_token(&request)?;
+        let input = plain_stream(request.into_inner());
+        Ok(Response::new(ok_stream(self.api.terminal(input))))
+    }
+
+    async fn audit(
+        &self,
+        request: Request<v1::AuditRequest>,
+    ) -> Result<Response<v1::AuditResponse>, Status> {
+        self.check_token(&request)?;
+        self.api
+            .audit(request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
+    }
+
+    async fn get_config(
+        &self,
+        request: Request<v1::GetConfigRequest>,
+    ) -> Result<Response<v1::ConfigSnapshot>, Status> {
+        self.check_token(&request)?;
+        self.api
+            .get_config(request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
+    }
+
+    async fn set_config(
+        &self,
+        request: Request<v1::SetConfigRequest>,
+    ) -> Result<Response<v1::ConfigSnapshot>, Status> {
+        self.check_token(&request)?;
+        self.api
+            .set_config(request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
+    }
+
+    async fn doctor(&self, request: Request<()>) -> Result<Response<v1::DoctorReport>, Status> {
+        self.check_token(&request)?;
+        Ok(Response::new(self.api.doctor().await))
+    }
+
+    async fn discover_llm(
+        &self,
+        request: Request<v1::DiscoverRequest>,
+    ) -> Result<Response<Self::DiscoverLlmStream>, Status> {
+        self.check_token(&request)?;
+        Ok(Response::new(ok_stream(
+            self.api.discover_llm(request.into_inner()),
+        )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use humanitl_core::diagnostics::codes;
+    use humanitl_core::{Diagnostic, Severity};
+    use tonic::Code;
+
+    use super::{constant_time_eq, diagnostic_from_status, diagnostic_to_status, grpc_code};
+
+    #[test]
+    fn constant_time_eq_compares_content_and_length() {
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        assert!(!constant_time_eq(b"abc", b"ab"));
+        assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn known_codes_map_to_grpc_codes() {
+        assert_eq!(grpc_code(codes::IPC_001), Code::Unauthenticated);
+        assert_eq!(grpc_code(codes::IPC_002), Code::InvalidArgument);
+        assert_eq!(grpc_code(codes::IPC_003), Code::FailedPrecondition);
+        assert_eq!(grpc_code(codes::TLS_001), Code::Internal);
+    }
+
+    #[test]
+    fn status_carries_the_diagnostic_in_its_details() {
+        let diagnostic = Diagnostic::builder(codes::IPC_002, Severity::Error)
+            .why("two flow ids")
+            .build();
+        let status = diagnostic_to_status(&diagnostic);
+        assert_eq!(status.code(), Code::InvalidArgument);
+        let decoded = diagnostic_from_status(&status).expect("details must decode");
+        assert_eq!(decoded.code, "IPC_002");
+        assert_eq!(decoded.why, "two flow ids");
+        assert_eq!(decoded.title, "AllowEdited nur für genau einen Flow");
+    }
+}
