@@ -2,12 +2,11 @@
 # ESC-2 — the mount surface: what is reachable from inside, and nothing else.
 # Runs INSIDE the sandbox: humanitl sandbox run --profile test -- /tests/escape/esc-2-mounts.sh
 #
-# RED IS THE CORRECT STATE UNTIL SPRINT 1 CLOSES. Most of this suite already
-# holds today, because the mount surface is decided by the profile (HUM-010) and
-# not by the shim. The two socket cases stay red until the daemon actually hands
-# the launcher a proxy socket (HUM-013): without one, escape-launch binds an
-# empty directory over the socket path on purpose, so that "one socket, and it
-# is the proxy" is measured and not assumed.
+# The mount surface is decided by the profile (HUM-010) and rendered by the
+# launcher (HUM-011). Until the proxy exists (HUM-015), escape-launch binds a
+# placeholder socket, bound and unused, at the host path the daemon will use
+# (HUM-013), so that "one socket, and it is the proxy" is measured against a
+# real socket file and not assumed.
 #
 # The claim under test (SECURITY.md, THREAT-MODEL K-03, K-05, K-06, K-07):
 # exactly one Unix socket exists in the sandbox and it is the proxy; no host
@@ -40,16 +39,21 @@ probe no_machine_id  sh -c 'test -s /etc/machine-id'
 #
 # esc_find_sockets in lib.sh is the probe (-xtype, no -xdev; the comment there
 # says why), and selftest.sh proves it sees a socket, plain and bind-mounted,
-# before run.sh trusts it with a sandbox. Without --proxy-socket escape-launch
-# binds an empty directory over the socket path, so the list is empty today and
-# both cases are red because the sandbox has no socket, not because the probe
-# cannot see one. /dev/shm is part of the list: it is the one writable tmpfs
-# under /dev, and the probe does not prune it with the rest of /dev.
+# before run.sh trusts it with a sandbox. The launcher mounts exactly one
+# socket FILE, never its directory (HUM-013); the shim binary sits next to it
+# under /run/humanitl and is a regular file. /dev/shm is part of the list: it
+# is the one writable tmpfs under /dev, and the probe does not prune it with
+# the rest of /dev.
 #
 # Leading blanks in the pattern: some wc implementations pad the count.
 esc_socket_count() { esc_find_sockets / | wc -l; }
 expect_output exactly_one_socket '^[[:space:]]*1$' esc_socket_count
 expect_only   socket_is_proxy '^/run/humanitl/proxy\.sock$' esc_find_sockets /
+# HUM-013: the door is a socket FILE, and the daemon's control socket and
+# token, which live next to the proxy directory on the host, are not here.
+expect_ok     proxy_is_socket_file test -S /run/humanitl/proxy.sock
+probe         no_daemon_socket sh -c 'test -e /run/humanitl/daemon.sock -o -e /run/humanitl/token'
+probe         proxy_socket_dir_is_not_host sh -c 'ls /run/humanitl | grep -vxE "proxy\.sock|humanitl-shim" | grep -q .'
 
 # --- the host environment did not come along ----------------------------------
 #

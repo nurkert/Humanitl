@@ -129,7 +129,14 @@ hostname                                            # "sandbox"
 
 **Automatisiert.** `tests/escape/esc-2-mounts.sh` (ESC-2). Zur Laufzeit
 `IsolationCheck::SingleSocket`, dessen Beweis aus der Sandbox stammt und nicht vom Host behauptet
-wird.
+wird: Der Shim durchsucht vor dem `exec` das Dateisystem der Sandbox nach Unix-Sockets und meldet
+jeden gefundenen (`CHECK single_socket`), zusätzlich zur Zeile `CHECK bridge_listening`, die zeigt,
+dass die eine Tür offen ist und antwortet. Beide zusammen sind der zweite Satz; bis zum Review vom
+2026-09-03 trug die zweite Zeile ihn allein und behauptete damit mehr, als sie belegte. Der
+Suchlauf ist eine Prüfung mit Budget (ohne `/proc`, `/sys` und `/dev` außer `/dev/shm`, ohne
+Symlinks zu folgen, Tiefe 3, 2000 Einträge; griff eine Schranke, steht das in der Evidenz). Der
+erschöpfende Beweis bleibt der `find`-Befehl oben und ESC-2. Ist eine der drei Prüfungen rot, wird
+die Sandbox beendet, statt den Agenten laufen zu lassen.
 
 **Was ein Angreifer versuchen würde.** Den D-Bus- oder Docker-Socket suchen — nicht vorhanden.
 Über `/proc/<pid>/root` in ein anderes Mount-Namespace greifen — im eigenen PID-Namespace sind nur
@@ -169,8 +176,13 @@ jeder Prozess in der Sandbox einen Filter (ESC-1 `seccomp_every_process`). Was d
 Agenten bedeutet, steht in [`THREAT-MODEL.md`](THREAT-MODEL.md) K-04.
 
 Der Filter erlaubt `socket()` ausschließlich für die Familien aus `allow_families` (`AF_INET`,
-`AF_INET6`; im Profil `browser` zusätzlich `AF_UNIX` für die Chromium-IPC) mit den Typen aus
-`allow_types` (`SOCK_STREAM`). Das Typ-Argument wird mit `0xff` maskiert, damit `SOCK_NONBLOCK`
+`AF_INET6`) mit den Typen aus `allow_types` (`SOCK_STREAM`). Beide Listen sind keine Einstellung,
+sondern ein Boden in beide Richtungen: ein Profil, das `AF_UNIX` oder `SOCK_DGRAM` nennt, wird beim
+Laden mit `CONFIG_003` abgelehnt, und der Launcher reicht an den Shim genau diesen Boden weiter.
+Die eine vorgesehene Ausnahme ist das spätere Profil `browser` (M7), das `AF_UNIX` für die
+Chromium-IPC braucht; sie heißt `SocketFloor::BrowserUnixIpc`, steht im Code des Launchers
+(`SandboxProfile::parse_with_floor`) und lässt sich aus keiner Profildatei setzen, weil eine solche
+Datei aus einem geklonten Repository stammen kann. `SOCK_DGRAM` bleibt auch dort gesperrt. Das Typ-Argument wird mit `0xff` maskiert, damit `SOCK_NONBLOCK`
 und `SOCK_CLOEXEC` durchgehen. Alles andere — `AF_UNIX`, `AF_NETLINK`, `AF_PACKET`, `AF_VSOCK`,
 `SOCK_DGRAM`, `SOCK_RAW` — bekommt `EPERM`. `socketpair()` bleibt vom seccomp-Filter unberührt und ist erlaubt: es kennt nur `AF_UNIX`,
 verbindet zwei Deskriptoren desselben Prozessbaums und bietet keinen Egress (nötig für die

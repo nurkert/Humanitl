@@ -38,7 +38,8 @@
 //! - `HUMANITL_REPORT_FD`: optional descriptor number, the inherited write
 //!   end of a pipe, on which the shim writes one line per check before
 //!   `exec`: `CHECK <name> <ok|fail> <evidence>` for `bridge_listening`,
-//!   `no_interfaces`, `seccomp_applied`, `families` (HUM-041). Absent means
+//!   `no_interfaces`, `single_socket`, `seccomp_applied`, `families`
+//!   (HUM-041). Absent means
 //!   no report. The descriptor is opened before anything that can fail, so
 //!   that a setup failure is a failed check line and not only a message on
 //!   stderr: an unreadable policy or bridge list, a port that is taken, a
@@ -51,9 +52,11 @@
 //! 1. Parse the command line, then open the report.
 //! 2. Read the environment. For every `in` bridge, bind the TCP listener in the parent and
 //!    connect to it once (`bridge_listening`); read the interface list
-//!    (`no_interfaces`, reported, not enforced: the shim cannot remove an
-//!    interface, bwrap's `--unshare-net` is the guarantee and the launcher's
-//!    isolation check the enforcement point).
+//!    (`no_interfaces`); walk the filesystem for Unix sockets that are not a
+//!    bridge's (`single_socket`). The last two are reported, not enforced: the
+//!    shim can neither remove an interface nor unmount a socket, bwrap's
+//!    `--unshare-net` and the profile's mounts are the guarantee, and the
+//!    launcher's isolation check is the enforcement point.
 //! 3. Fork. The child dies with the parent (`PR_SET_PDEATHSIG`), closes
 //!    every inherited descriptor but 0, 1, 2 and the report, sets
 //!    `PR_SET_NO_NEW_PRIVS`, installs the filter with `TSYNC`, proves it
@@ -234,12 +237,63 @@ fn prepare(cli: &Cli, report: &Report) -> Result<Prepared, SetupError> {
         Err(err) => report.check(Check::NoInterfaces, false, &format!("unreadable:{err}")),
     }
 
+    check_single_socket(&bound, report);
+
     Ok(Prepared {
         policy,
         agent_program,
         bridge_program,
         bound,
     })
+}
+
+/// The second guarantee, measured instead of assumed: no Unix socket in the
+/// sandbox's filesystem but the ones the bridges serve.
+///
+/// `bridge_listening` proves the one door is open and answers; it says nothing
+/// about a second one. So the shim walks the filesystem before the agent
+/// exists ([`report::sockets`]) and names everything it found. A socket that
+/// is not a bridge's is a `fail`: it is reported and warned about, not
+/// enforced, the same way `no_interfaces` is. The launcher turns the failed
+/// line into `SANDBOX_015` and refuses to let the run continue (HUM-011); the
+/// shim's job is the evidence, the decision belongs to the host.
+fn check_single_socket(bound: &[Bound], report: &Report) {
+    let walk = report::sockets();
+    let expected: Vec<String> = bound
+        .iter()
+        .map(|listener| listener.bridge().socket.to_string_lossy().into_owned())
+        .collect();
+    let unexpected: Vec<&str> = walk
+        .sockets
+        .iter()
+        .filter(|found| !expected.iter().any(|path| path == *found))
+        .map(String::as_str)
+        .collect();
+    let evidence = format!(
+        "sockets={};unexpected={};entries={};limit={}",
+        list(walk.sockets.iter().map(String::as_str)),
+        list(unexpected.iter().copied()),
+        walk.entries,
+        walk.limit.unwrap_or("none"),
+    );
+    report.check(Check::SingleSocket, unexpected.is_empty(), &evidence);
+    if !unexpected.is_empty() {
+        say(&format!(
+            "humanitl-shim: warning: unix sockets besides the bridge: {}\n",
+            list(unexpected.into_iter())
+        ));
+    }
+}
+
+/// A comma list for one field of the evidence; never empty, never with a space
+/// in it, because a reader splits the line on spaces.
+fn list<'a>(values: impl Iterator<Item = &'a str>) -> String {
+    let joined = values.collect::<Vec<_>>().join(",");
+    if joined.is_empty() {
+        "none".to_owned()
+    } else {
+        joined
+    }
 }
 
 /// Step 3 and 4: fork, and each side's life.

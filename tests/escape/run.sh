@@ -5,16 +5,23 @@
 #   ESCAPE_ALLOW_FAIL=1 ./tests/escape/run.sh   report, but do not fail the build
 #   ESCAPE_SKIP_BUILD=1 ./tests/escape/run.sh   use the escape-launch binary as built
 #
-# The launcher is built with cargo and read back from the same target
-# directory: CARGO_TARGET_DIR when it is set (a relative one counts from
-# daemon/, where cargo runs), daemon/target otherwise.
+# The launcher and the shim are built with cargo and read back from the same
+# target directory: CARGO_TARGET_DIR when it is set (a relative one counts
+# from daemon/, where cargo runs), daemon/target otherwise. The launcher is a
+# debug build; the shim is built the way it ships, with the `shim` profile and
+# statically linked, and handed to escape-launch with --shim. escape-launch
+# uses it only when it speaks the contract (exit 125 without arguments,
+# HUM-012); a stub is ignored, with a line on stderr, and every seccomp probe
+# stays red. Two cases in the report, harness/shim_static and
+# harness/shim_size, hold the shim to the acceptance criteria of HUM-012:
+# `ldd` says "not a dynamic executable", and the binary is under 2 MB.
 #
-# RED IS THE CORRECT STATE UNTIL SPRINT 1 CLOSES. The harness is written before
-# the thing it guards (BACKLOG.md 4.5, risk 1): the launcher (HUM-011), the shim
-# with its seccomp filter (HUM-012) and the proxy (HUM-013/015) do not exist yet.
-# Every probe that depends on them fails here with the evidence that made it
-# fail, and tests/escape/README.md names the issue that turns each one green.
-# CI therefore runs this job with ESCAPE_ALLOW_FAIL=1 until HUM-021.
+# The launcher (HUM-011) runs the sandbox through the real BwrapBackend with
+# a bound placeholder socket in place of the proxy. What still turns red
+# depends on the shim's seccomp filter (HUM-012) and on the proxy
+# (HUM-013/015); tests/escape/README.md names the issue that turns each
+# probe green. CI therefore runs this job with ESCAPE_ALLOW_FAIL=1 until
+# HUM-021.
 #
 # Exit codes, and the difference matters:
 #
@@ -50,6 +57,28 @@ LAUNCH="$TARGET_DIR/debug/escape-launch"
 PROFILE="$ROOT/profiles/sandbox/test.toml"
 RESULTS="$OUT/results.txt"
 
+# The shim is built the way it ships (HUM-012): the `shim` profile of
+# daemon/Cargo.toml, statically linked, so that the sandbox needs no library of
+# the host under /usr. The musl target is the first choice; without it the
+# glibc target with +crt-static does the same job. `-C relocation-model=static`
+# makes the result an ET_EXEC rather than a static PIE, which is what lets
+# `ldd` answer "not a dynamic executable", the acceptance criterion of the
+# issue. A debug shim would be dynamic and three times the size, and the
+# suite would then measure a binary nobody ships.
+MUSL_TARGET="$(uname -m)-unknown-linux-musl"
+if [ -d "$(rustc --print target-libdir --target "$MUSL_TARGET" 2> /dev/null || true)" ]; then
+    SHIM_TARGET="$MUSL_TARGET"
+else
+    SHIM_TARGET=""
+fi
+if [ -n "$SHIM_TARGET" ]; then
+    SHIM="$TARGET_DIR/$SHIM_TARGET/shim/humanitl-shim"
+else
+    SHIM="$TARGET_DIR/shim/humanitl-shim"
+fi
+# Under 2 MB, measured in bytes, as the acceptance criterion says.
+SHIM_MAX_BYTES=2097152
+
 rm -rf "$OUT"
 mkdir -p "$OUT" "$WORK" "$STATE"
 : > "$RESULTS"
@@ -61,6 +90,21 @@ record_error() {
     printf 'RESULT %s %s error %s\n' "$1" "$2" "$3" >> "$RESULTS"
     printf '  %-5s %-28s %s\n' error "$1/$2" "$3"
     harness_error=1
+}
+
+# record_case SUITE NAME STATUS DETAIL — a case the host decides, in the same
+# fixed format the suites inside the sandbox write. Used for the two
+# properties of the shipped shim that can only be measured outside: that it is
+# statically linked and that it stays under 2 MB.
+#
+# The detail is squeezed onto one line and cut, exactly as esc_record in
+# lib.sh does it: `ldd` answers a dynamic binary with one line per library,
+# and a result line that grew a second line would be read as a case that never
+# ran.
+record_case() {
+    case_detail=$(printf '%s' "$4" | tr '\n\r\t' '   ' | cut -c 1-400)
+    printf 'RESULT %s %s %s %s\n' "$1" "$2" "$3" "$case_detail" >> "$RESULTS"
+    printf '  %-5s %-28s %s\n' "$3" "$1/$2" "$case_detail"
 }
 
 # Ubuntu 24.04 ships an AppArmor restriction that makes an unprivileged bwrap
@@ -102,12 +146,29 @@ if ! sh "$HERE/selftest.sh"; then
     exit 2
 fi
 
-echo "== building the launcher =="
+echo "== building the launcher and the shim =="
 if [ "${ESCAPE_SKIP_BUILD:-0}" != 1 ]; then
-    # The same directory the binary is read from, passed explicitly so that
-    # the build and the run cannot disagree on where it went.
+    # The same directory the binaries are read from, passed explicitly so that
+    # the build and the run cannot disagree on where they went.
     if ! (cd "$ROOT/daemon" && CARGO_TARGET_DIR="$TARGET_DIR" cargo build -p humanitl-sandbox --bin escape-launch); then
         record_error harness build "cargo build -p humanitl-sandbox --bin escape-launch failed"
+        sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
+        exit 2
+    fi
+    # The shim as it ships: static, small, its own profile. Two rustc flags
+    # rather than a target when the musl target is not installed; the escape
+    # suite must not depend on a rustup component that a developer machine may
+    # not have.
+    set -- cargo rustc -p humanitl-shim --bin humanitl-shim --profile shim
+    if [ -n "$SHIM_TARGET" ]; then
+        set -- "$@" --target "$SHIM_TARGET"
+        echo "escape: building the shim for $SHIM_TARGET"
+    else
+        echo "escape: $MUSL_TARGET is not installed, building with +crt-static instead"
+    fi
+    set -- "$@" -- -C target-feature=+crt-static -C relocation-model=static
+    if ! (cd "$ROOT/daemon" && CARGO_TARGET_DIR="$TARGET_DIR" "$@"); then
+        record_error harness shim_build "the static build of humanitl-shim failed"
         sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
         exit 2
     fi
@@ -116,6 +177,34 @@ if [ ! -x "$LAUNCH" ]; then
     record_error harness launcher "no escape-launch binary at $LAUNCH"
     sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
     exit 2
+fi
+
+# The two properties of the shipped shim that only the host can measure
+# (HUM-012 acceptance criteria): statically linked, and under 2 MB. They are
+# cases in the report, not a silent build step, because a shim that turned
+# dynamic would only show up in the sandbox as "no such file or directory"
+# for a library nobody mounted.
+if [ ! -x "$SHIM" ]; then
+    record_error harness shim_binary "no shim binary at $SHIM"
+    sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
+    exit 2
+fi
+if command -v ldd > /dev/null 2>&1; then
+    shim_ldd=$(ldd "$SHIM" 2>&1 || true)
+    case "$shim_ldd" in
+    *"not a dynamic executable"*)
+        record_case harness shim_static pass "ldd: $shim_ldd" ;;
+    *)
+        record_case harness shim_static fail "the shim is not static, ldd says: $shim_ldd" ;;
+    esac
+else
+    record_case harness shim_static skip "no ldd on this machine; the linkage cannot be measured"
+fi
+shim_bytes=$(wc -c < "$SHIM" | tr -d ' ')
+if [ "$shim_bytes" -lt "$SHIM_MAX_BYTES" ]; then
+    record_case harness shim_size pass "$shim_bytes bytes, limit $SHIM_MAX_BYTES"
+else
+    record_case harness shim_size fail "$shim_bytes bytes, limit $SHIM_MAX_BYTES"
 fi
 
 # ESC-1 to ESC-3 run inside the sandbox, one bwrap per suite so that a suite
@@ -132,6 +221,7 @@ for n in 1 2 3; do
         --tests-dir "$HERE" \
         --work "$WORK" \
         --state "$STATE" \
+        --shim "$SHIM" \
         -- /bin/sh "/tests/escape/$script" > "$OUT/$suite.log" 2>&1
     launch_code=$?
     set -e

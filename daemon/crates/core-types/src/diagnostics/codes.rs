@@ -232,11 +232,24 @@ registry! {
     PROXY_001 => "proxy", "Body über Cap", "#proxy_001";
     /// Der `Host`-Header widerspricht dem Ziel des TLS-Handschlags.
     PROXY_002 => "proxy", "Authority-Mismatch", "#proxy_002";
+    /// Die Verbindung zum Ziel scheiterte (Auflösung, TCP, TLS, private Adresse
+    /// oder Zeitüberschreitung); der Proxy antwortet dem Client mit `502` und
+    /// verbucht den Flow als `Failed` (HUM-015, HUM-024).
+    PROXY_003 => "proxy", "Upstream-Verbindung fehlgeschlagen", "#proxy_003";
+    /// Der Zustandsautomat hat einen Übergang abgelehnt, den der Proxy versucht
+    /// hat: ein Fehler im Daemon, kein Zustand des Clients. Der Flow wird
+    /// fail-closed mit `Block` beendet und der Befund geht in den Ereignisstrom
+    /// (HUM-016).
+    PROXY_005 => "proxy", "Ungültiger Übergang im Flow", "#proxy_005";
     /// Der Client verlangt HTTP/2; in M1 bietet der Proxy nur `http/1.1` an.
     PROXY_007 => "proxy", "HTTP/2 nicht verfügbar", "#proxy_007";
 
     /// Der Client vertraut der mitgelieferten CA nicht.
     TLS_001 => "tls", "Client hat Humanitl-CA abgelehnt", "#tls_001";
+    /// Das CA-Verzeichnis oder eine Datei darin ließ sich nicht anlegen, schreiben oder umbenennen (HUM-014).
+    TLS_004 => "tls", "CA-Verzeichnis nicht beschreibbar", "#tls_004";
+    /// `ca.key` oder `ca.crt` fehlt, ist unlesbar, passt nicht zusammen oder hat unsichere Rechte (HUM-014).
+    TLS_005 => "tls", "CA-Dateien unbrauchbar", "#tls_005";
 
     /// Der LLM-Endpunkt aus `llm.endpoint` antwortet nicht.
     LLM_001 => "llm", "LLM-Endpoint nicht erreichbar", "#llm_001";

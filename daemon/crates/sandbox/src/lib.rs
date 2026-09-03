@@ -3,27 +3,38 @@
 //! Siehe `docs/ARCHITECTURE.md` für die Schichtung und `backlog/CONVENTIONS.md`
 //! Abschnitt 3.1 für die erlaubten Abhängigkeiten dieser Crate.
 //!
-//! In Sprint 0 steht hier das Format, nicht der Start (ADR-002): ein Profil wird
-//! gelesen, geprüft und in die vollständige `bwrap`-Kommandozeile übersetzt.
-//! Ausgeführt wird sie erst von HUM-011, der Filter des Shims kommt mit HUM-012.
-//! Damit ist die Politik der Sandbox eine Datei, die man lesen kann, und die
-//! Zeile darunter ist ihre einzige Übersetzung.
+//! Die Politik der Sandbox ist eine Datei, die man lesen kann (ADR-002): ein
+//! Profil wird gelesen, geprüft und in die vollständige `bwrap`-Kommandozeile
+//! übersetzt; die Zeile darunter ist ihre einzige Übersetzung, und was die
+//! Oberfläche unter „Sandbox" zeigt, ist Argument für Argument das, was
+//! startet.
 //!
 //! Aufbau:
 //!
 //! - [`profile`] die Typen des Profils, das Laden und die Mount-Allowlist
+//!   (HUM-010)
 //! - [`bwrap_args`] die Übersetzung in die Argumentliste
+//! - [`bridge_env`] der Vertrag zwischen Launcher und Shim: Umgebung,
+//!   Bericht, Exit-Codes (HUM-011, HUM-012, HUM-013)
+//! - [`launcher`] der Port [`SandboxBackend`] mit [`LaunchPlan`],
+//!   [`CheckResult`] und [`IsolationCheck`]
+//! - [`bwrap`] das Backend [`BwrapBackend`]: findet `bwrap`, prüft, plant,
+//!   startet mit leerer Umgebung
+//! - [`handle`] die laufende Sandbox: [`SandboxHandle`] mit `wait`, `kill`
+//!   und dem Bericht des Shims
 //!
 //! Wer ein Profil startet und nicht nur anzeigt, lädt es mit
-//! [`SandboxProfile::load_validated`] gegen eine [`MountPolicy`], die der
-//! Launcher (HUM-011) mit [`MountPolicy::from_paths`] aus
-//! `humanitl_config::Paths` baut; nur so sind `$XDG_RUNTIME_DIR`,
-//! `$XDG_CONFIG_HOME/humanitl` und `$XDG_DATA_HOME/humanitl` auch außerhalb von
-//! `/run` und `$HOME` geschützt.
+//! [`SandboxProfile::load_validated`] gegen eine [`MountPolicy`] aus
+//! [`MountPolicy::from_paths`] und `humanitl_config::Paths`; nur so sind
+//! `$XDG_RUNTIME_DIR`, `$XDG_CONFIG_HOME/humanitl` und
+//! `$XDG_DATA_HOME/humanitl` auch außerhalb von `/run` und `$HOME`
+//! geschützt. Dieselben `Paths` bekommt das Backend
+//! ([`BwrapBackend::detect`]); [`SandboxBackend::plan`] prüft damit auch das
+//! Projektverzeichnis und den Proxy-Socket.
 //!
 //! ```
 //! use std::path::Path;
-//! use humanitl_sandbox::{MountPolicy, SandboxProfile, SessionContext};
+//! use humanitl_sandbox::{LaunchInputs, MountPolicy, SandboxProfile, SessionContext};
 //! use humanitl_config::{Env, WorkMode};
 //! use humanitl_core::ids::SessionId;
 //!
@@ -39,26 +50,54 @@
 //!     work_mode: WorkMode::Rw,
 //!     proxy_socket_src: "/run/user/1000/humanitl/proxy/proxy.sock".into(),
 //!     ca_cert_src: "/home/u/.local/share/humanitl/ca/ca.crt".into(),
+//!     ca_bundle_src: "/home/u/.local/share/humanitl/ca/ca-bundle.crt".into(),
 //!     shim_src: "/usr/lib/humanitl/humanitl-shim".into(),
+//!     // Aus `humanitl_proxy::ca::env_kit(session)`; das Profil kennt die
+//!     // Sitzung nicht.
+//!     session_env: vec![("HUMANITL_SESSION".to_owned(), SessionId::nil().to_string())],
 //!     command: vec!["opencode".into()],
 //! };
 //!
-//! let argv = profile.to_bwrap_args(&ctx);
+//! // Die Vorschau: feste Deskriptornummern, alles unter /work als vorhanden.
+//! let argv = profile.to_bwrap_args(&ctx, &LaunchInputs::preview());
 //! assert_eq!(argv[0], "--unshare-user");
-//! assert!(profile.argv_line(&ctx).contains("--unshare-net"));
+//! assert!(profile.argv_line(&ctx, &LaunchInputs::preview()).contains("--unshare-net"));
 //! # Ok::<(), humanitl_core::Diagnostic>(())
 //! ```
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod bridge_env;
+pub mod bwrap;
 pub mod bwrap_args;
+pub mod handle;
+pub mod launcher;
 pub mod profile;
 
+pub use crate::bridge_env::{
+    CHECK_BRIDGE_LISTENING, CHECK_FAMILIES, CHECK_NAMES, CHECK_NO_INTERFACES, CHECK_PREFIX,
+    CHECK_SECCOMP_APPLIED, CHECK_SINGLE_SOCKET, ENV_BRIDGES, ENV_REPORT_FD, ENV_SECCOMP_DENY,
+    ENV_SECCOMP_FAMILIES, ENV_SECCOMP_TYPES, EXIT_EXEC, EXIT_SETUP, EXIT_USAGE, RESERVED_ENV,
+    ShimCheck, bridges_json, parse_check_line, shim_env,
+};
+pub use crate::bwrap::{
+    BwrapBackend, EARLY_EXIT_WINDOW, INSTALL_COMMAND, MIN_BWRAP_VERSION, REPORT_TIMEOUT,
+    USERNS_DOCS_URL, USERNS_SYSCTL_COMMAND, Version, is_userns_failure,
+};
+pub use crate::bwrap_args::{
+    DEFAULT_HOME, DEFAULT_USER, GROUP_DST, HOSTS_DST, IdentityFds, IdentityFiles, LaunchInputs,
+    MaskFds, PASSWD_DST, PREVIEW_MASK_FD_FIRST, SANDBOX_SHELL, shell_line, shell_quote,
+};
+pub use crate::handle::{
+    CAPTURE_MAX_BYTES, CapturedOutput, KILL_GRACE, ReportSnapshot, STATUS_DRAIN,
+    STDERR_EXCERPT_BYTES, SandboxHandle, StatusSnapshot,
+};
+pub use crate::launcher::{CheckResult, IsolationCheck, LaunchPlan, SandboxBackend, StdioMode};
 pub use crate::profile::{
     Bridge, BridgeDirection, CA_CERT_DST, DEFAULT_DENY_SYSCALLS, FORBIDDEN_IN_HOME,
     FORBIDDEN_MOUNTS, HOSTNAME, MANDATORY_MASKED_FILES, MountPolicy, MountRule, MountSection,
     Namespace, NetworkSection, PROFILE_VERSION, PROXY_BRIDGE, PROXY_PORT, PROXY_SOCKET_DST,
-    REQUIRED_TMPFS, SHIM_DST, SOCKET_WALK_MAX_DEPTH, SOCKET_WALK_MAX_ENTRIES, SandboxProfile,
-    SandboxSection, SeccompSection, SessionContext, SocketFamily, SocketType, Symlink, WORK_DST,
-    WorkMount,
+    REQUIRED_SOCKET_FAMILIES, REQUIRED_SOCKET_TYPES, REQUIRED_TMPFS, SHIM_DST,
+    SOCKET_WALK_MAX_DEPTH, SOCKET_WALK_MAX_ENTRIES, SandboxProfile, SandboxSection, SeccompSection,
+    SessionContext, SocketFamily, SocketFloor, SocketType, Symlink, WORK_DST, WorkMount,
 };

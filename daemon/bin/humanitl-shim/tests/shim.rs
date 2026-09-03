@@ -79,6 +79,17 @@ fn socket_path(tag: &str) -> PathBuf {
     }
 }
 
+/// A socket path directly under `/tmp`, whatever `TMPDIR` says: the shim's
+/// socket walk looks three levels deep, and a temporary directory further down
+/// would sit outside it.
+fn shallow_socket_path(tag: &str) -> PathBuf {
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    PathBuf::from("/tmp").join(format!(
+        "humanitl-shim-it-{}-{tag}-{n}.sock",
+        std::process::id()
+    ))
+}
+
 /// Serves `path` with an upper-casing echo: a reply in capitals can only
 /// have come through the Unix socket.
 fn shouting_server(path: &Path) {
@@ -441,7 +452,7 @@ fn agent_inherits_no_descriptors_and_none_of_the_shim_variables() {
         "other variables pass: {stdout}"
     );
     // The report descriptor was used before it was closed.
-    assert_eq!(read_report(read_end).len(), 4);
+    assert_eq!(read_report(read_end).len(), 5);
 }
 
 // ---- the report -----------------------------------------------------------------
@@ -455,7 +466,7 @@ fn report_has_one_line_per_check() {
     drop(write_end);
     assert_eq!(code(status), 0);
     let lines = read_report(read_end);
-    assert_eq!(lines.len(), 4, "{lines:?}");
+    assert_eq!(lines.len(), 5, "{lines:?}");
     assert!(
         lines[0].starts_with("CHECK bridge_listening ok proxy=127.0.0.1:"),
         "{}",
@@ -472,8 +483,19 @@ fn report_has_one_line_per_check() {
         "{}",
         lines[1]
     );
-    assert_eq!(lines[2], "CHECK seccomp_applied ok Seccomp:2;NoNewPrivs:1");
-    assert!(lines[3].starts_with("CHECK families ok "), "{}", lines[3]);
+    // On the host the walk finds the machine's own sockets, so only the shape
+    // is fixed here; that the line answers the question is
+    // `single_socket_names_every_socket_the_bridges_do_not_serve`.
+    assert!(
+        lines[2].starts_with("CHECK single_socket ok sockets=")
+            || lines[2].starts_with("CHECK single_socket fail sockets="),
+        "{}",
+        lines[2]
+    );
+    assert!(lines[2].contains(";entries="), "{}", lines[2]);
+    assert!(lines[2].contains(";limit="), "{}", lines[2]);
+    assert_eq!(lines[3], "CHECK seccomp_applied ok Seccomp:2;NoNewPrivs:1");
+    assert!(lines[4].starts_with("CHECK families ok "), "{}", lines[4]);
     for needle in [
         "socket(AF_UNIX,SOCK_STREAM)=EPERM",
         "socket(AF_INET,SOCK_DGRAM)=EPERM",
@@ -482,9 +504,9 @@ fn report_has_one_line_per_check() {
         "socket(AF_INET,SOCK_STREAM)=ok",
     ] {
         assert!(
-            lines[3].contains(needle),
+            lines[4].contains(needle),
             "{needle} missing in {}",
-            lines[3]
+            lines[4]
         );
     }
     for line in &lines {
@@ -494,6 +516,57 @@ fn report_has_one_line_per_check() {
             "evidence carries no spaces: {line}"
         );
     }
+}
+
+/// The second guarantee, measured: the shim names every Unix socket it finds
+/// and marks the line `fail` when one of them is not a bridge's.
+///
+/// `bridge_listening` only shows that the one door is open; the walk is what
+/// shows there is no second one (Review-Befund vom 2026-09-03). It runs on the
+/// host here, where the machine's own sockets are in the way, so the test
+/// plants a socket of its own and asks two questions of the line: does it name
+/// the intruder, and does it leave the bridge's own socket out of
+/// `unexpected`.
+#[test]
+fn single_socket_names_every_socket_the_bridges_do_not_serve() {
+    // Beide direkt unter /tmp: der Suchlauf des Shims reicht drei Ebenen tief,
+    // und ein TMPDIR weiter unten im Dateisystem läge außerhalb.
+    let served = shallow_socket_path("walkserved");
+    shouting_server(&served);
+    let intruder = shallow_socket_path("walkintruder");
+    let _ = fs::remove_file(&intruder);
+    let _listener = UnixListener::bind(&intruder).unwrap();
+
+    let mut command = shim_with_bridge(&served, &["true"]);
+    let (read_end, write_end) = report_pipe(&mut command);
+    let status = command.status().unwrap();
+    drop(write_end);
+    assert_eq!(code(status), 0);
+
+    let lines = read_report(read_end);
+    let line = lines
+        .iter()
+        .find(|line| line.starts_with("CHECK single_socket "))
+        .unwrap_or_else(|| panic!("no single_socket line: {lines:?}"));
+    assert!(line.starts_with("CHECK single_socket fail "), "{line}");
+    let unexpected = line
+        .split(';')
+        .find(|field| field.starts_with("unexpected="))
+        .unwrap_or_else(|| panic!("no unexpected field: {line}"));
+    assert!(
+        unexpected.contains(intruder.to_str().unwrap()),
+        "the socket nobody serves is named: {line}"
+    );
+    assert!(
+        !unexpected.contains(served.to_str().unwrap()),
+        "the bridge's own socket is expected: {line}"
+    );
+    assert!(
+        line.contains(served.to_str().unwrap()),
+        "the evidence names every socket found, the bridge's included: {line}"
+    );
+    let _ = fs::remove_file(&intruder);
+    let _ = fs::remove_file(&served);
 }
 
 /// Runs a shim that is expected to fail during setup and returns its exit
