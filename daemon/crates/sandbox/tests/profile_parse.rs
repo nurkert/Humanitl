@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use humanitl_config::{Env, WorkMode};
 use humanitl_sandbox::{
     BridgeDirection, MountPolicy, Namespace, SOCKET_WALK_MAX_DEPTH, SandboxProfile, SocketFamily,
-    SocketType,
+    SocketFloor, SocketType,
 };
 
 /// Das Heimatverzeichnis, gegen das die Tabelle prüft.
@@ -130,7 +130,7 @@ fn parses_default_profile() {
     );
     assert_eq!(
         profile.network.shim_dst,
-        PathBuf::from("/usr/local/bin/humanitl-shim")
+        PathBuf::from("/run/humanitl/humanitl-shim")
     );
 
     let bridge = profile.proxy_bridge().expect("the proxy bridge exists");
@@ -521,6 +521,174 @@ fn bridge_direction_out_is_not_supported_yet() {
         err.why
     );
     assert!(err.why.contains("cdp"), "{}", err.why);
+}
+
+/// Ein Profil kann den Socket-Boden nicht aufweichen: `AF_UNIX` neben dem
+/// Proxy-Socket wäre eine zweite Tür, die der leere Netz-Namensraum nicht mehr
+/// auffängt (dritte Garantie, Review-Befund vom 2026-09-03).
+#[test]
+fn a_profile_cannot_widen_the_socket_families() {
+    let text = concat!(
+        "version = 1\nname = \"x\"\n[seccomp]\n",
+        "allow_families = [\"AF_INET\", \"AF_INET6\", \"AF_UNIX\"]\n"
+    );
+    let err = SandboxProfile::parse(text, Path::new("<probe>"))
+        .expect_err("AF_UNIX is not a profile's decision");
+    assert_eq!(err.code.as_str(), "CONFIG_003");
+    assert!(err.why.contains("seccomp.allow_families"), "{}", err.why);
+    assert!(err.why.contains("AF_UNIX"), "{}", err.why);
+    assert!(err.why.contains("<probe>"), "{}", err.why);
+}
+
+/// Auch enger darf ein Profil die Liste nicht machen: ohne `AF_INET6` erreichte
+/// der Agent den Proxy auf einer IPv6-Loopback-Adresse nicht mehr, und die
+/// Abweichung fiele erst zur Laufzeit auf.
+#[test]
+fn a_profile_cannot_narrow_the_socket_families() {
+    let text = concat!(
+        "version = 1\nname = \"x\"\n[seccomp]\n",
+        "allow_families = [\"AF_INET\"]\n"
+    );
+    let err = SandboxProfile::parse(text, Path::new("<probe>"))
+        .expect_err("the floor holds in both directions");
+    assert_eq!(err.code.as_str(), "CONFIG_003");
+    assert!(err.why.contains("AF_INET6"), "{}", err.why);
+}
+
+/// `SOCK_DGRAM` bleibt in jedem Profil gesperrt: UDP wäre DNS und QUIC an der
+/// Aufzeichnung vorbei.
+#[test]
+fn a_profile_cannot_widen_the_socket_types() {
+    let text = concat!(
+        "version = 1\nname = \"x\"\n[seccomp]\n",
+        "allow_types = [\"SOCK_STREAM\", \"SOCK_DGRAM\"]\n"
+    );
+    let err = SandboxProfile::parse(text, Path::new("<probe>"))
+        .expect_err("SOCK_DGRAM is not a profile's decision");
+    assert_eq!(err.code.as_str(), "CONFIG_003");
+    assert!(err.why.contains("seccomp.allow_types"), "{}", err.why);
+    assert!(err.why.contains("SOCK_DGRAM"), "{}", err.why);
+}
+
+/// Die eine Ausnahme steht im Code, nicht in der Datei: derselbe Text, den
+/// [`SandboxProfile::parse`] ablehnt, geht mit
+/// `SocketFloor::BrowserUnixIpc` durch, und der Typ bleibt auch dort
+/// `SOCK_STREAM`.
+#[test]
+fn the_browser_escape_hatch_is_the_only_way_to_af_unix() {
+    let text = concat!(
+        "version = 1\nname = \"browser\"\n[seccomp]\n",
+        "allow_families = [\"AF_INET\", \"AF_INET6\", \"AF_UNIX\"]\n"
+    );
+    let profile =
+        SandboxProfile::parse_with_floor(text, Path::new("<probe>"), SocketFloor::BrowserUnixIpc)
+            .expect("the hatch is what the browser profile will use");
+    assert_eq!(
+        profile.seccomp.allow_families,
+        vec![
+            SocketFamily::AfInet,
+            SocketFamily::AfInet6,
+            SocketFamily::AfUnix
+        ]
+    );
+    assert_eq!(profile.seccomp.allow_types, vec![SocketType::SockStream]);
+
+    let dgram = concat!(
+        "version = 1\nname = \"browser\"\n[seccomp]\n",
+        "allow_types = [\"SOCK_STREAM\", \"SOCK_DGRAM\"]\n"
+    );
+    let err =
+        SandboxProfile::parse_with_floor(dgram, Path::new("<probe>"), SocketFloor::BrowserUnixIpc)
+            .expect_err("the hatch is one family, not a free pass");
+    assert_eq!(err.code.as_str(), "CONFIG_003");
+}
+
+/// Der Boden steht auch dann in der Datei, wenn das Profil ihn in anderer
+/// Reihenfolge oder doppelt schreibt: der Launcher reicht immer dieselbe
+/// Kommaliste an den Shim.
+#[test]
+fn the_socket_lists_come_back_canonical() {
+    let text = concat!(
+        "version = 1\nname = \"x\"\n[seccomp]\n",
+        "allow_families = [\"AF_INET6\", \"AF_INET\", \"AF_INET6\"]\n"
+    );
+    let profile = SandboxProfile::parse(text, Path::new("<probe>")).expect("order does not matter");
+    assert_eq!(
+        profile.seccomp.allow_families,
+        vec![SocketFamily::AfInet, SocketFamily::AfInet6]
+    );
+}
+
+/// Zweite Garantie: genau eine Tür. Eine zweite Bridge mit `dir = "in"` wäre
+/// ein zweiter Listener auf einen zweiten Unix-Socket; der Shim öffnet jede
+/// Bridge, die er bekommt (Review-Befund vom 2026-09-03).
+#[test]
+fn a_second_bridge_is_a_second_door() {
+    let text = concat!(
+        "version = 1\nname = \"x\"\n[network]\n",
+        "bridges = [{ name = \"proxy\", dir = \"in\", listen = \"127.0.0.1:3128\", ",
+        "socket = \"/run/humanitl/proxy.sock\" },\n",
+        "{ name = \"side\", dir = \"in\", listen = \"127.0.0.1:9222\", ",
+        "socket = \"/run/humanitl/side.sock\" }]\n"
+    );
+    let err =
+        SandboxProfile::parse(text, Path::new("<probe>")).expect_err("two doors are one too many");
+    assert_eq!(err.code.as_str(), "CONFIG_003");
+    assert!(err.why.contains("network.bridges"), "{}", err.why);
+    assert!(err.why.contains("side"), "{}", err.why);
+}
+
+/// Auch die eine Bridge muss die Proxy-Bridge sein: ein anderer Name, ein
+/// anderes Ziel oder eine andere Adresse ist eine andere Tür.
+#[test]
+fn the_only_bridge_must_be_the_proxy_bridge() {
+    let cases: [(&str, &str); 3] = [
+        (
+            concat!(
+                "bridges = [{ name = \"cdp\", dir = \"in\", listen = \"127.0.0.1:3128\", ",
+                "socket = \"/run/humanitl/proxy.sock\" }]\n"
+            ),
+            "cdp",
+        ),
+        (
+            concat!(
+                "bridges = [{ name = \"proxy\", dir = \"in\", listen = \"127.0.0.1:3128\", ",
+                "socket = \"/work/proxy.sock\" }]\n"
+            ),
+            "/work/proxy.sock",
+        ),
+        (
+            concat!(
+                "bridges = [{ name = \"proxy\", dir = \"in\", listen = \"0.0.0.0:3128\", ",
+                "socket = \"/run/humanitl/proxy.sock\" }]\n"
+            ),
+            "0.0.0.0:3128",
+        ),
+    ];
+    for (bridges, needle) in cases {
+        let text = format!("version = 1\nname = \"x\"\n[network]\n{bridges}");
+        let err = SandboxProfile::parse(&text, Path::new("<probe>"))
+            .expect_err("a bridge that is not the proxy bridge must not pass");
+        assert_eq!(err.code.as_str(), "CONFIG_003", "{bridges}");
+        assert!(err.why.contains(needle), "{bridges}: {}", err.why);
+    }
+}
+
+/// Das Ziel der Bridge und `network.proxy_socket_dst` sind derselbe Pfad, und
+/// dieser Pfad ist fest: der Launcher hängt genau dorthin die Socket-Datei der
+/// Sitzung (HUM-013).
+#[test]
+fn the_proxy_socket_destination_is_fixed() {
+    let text = concat!(
+        "version = 1\nname = \"x\"\n[network]\n",
+        "proxy_socket_dst = \"/run/humanitl/other.sock\"\n",
+        "bridges = [{ name = \"proxy\", dir = \"in\", listen = \"127.0.0.1:3128\", ",
+        "socket = \"/run/humanitl/other.sock\" }]\n"
+    );
+    let err =
+        SandboxProfile::parse(text, Path::new("<probe>")).expect_err("the one door has one path");
+    assert_eq!(err.code.as_str(), "CONFIG_003");
+    assert!(err.why.contains("/run/humanitl/proxy.sock"), "{}", err.why);
 }
 
 #[test]

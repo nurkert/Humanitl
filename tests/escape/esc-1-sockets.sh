@@ -198,14 +198,40 @@ else:
 #                      consulted (kernel.io_uring_disabled only guards setup).
 #                      Not fd -1: a 7.x kernel answers that with EINVAL for
 #                      io_uring_register, and EINVAL is the skip bucket.
+#   kexec_load         no segments and an architecture value the kernel does
+#   kexec_file_load    not know, respectively descriptor -1 and an undefined
+#                      flag: the capability check (CAP_SYS_BOOT) comes first,
+#                      so an unprivileged caller never reaches the arguments,
+#                      and a privileged one gets EINVAL. Nothing here can load
+#                      a kernel.
+#   init_module        a NULL image of length zero, descriptor -1, and a module
+#   finit_module       name nothing has ever registered: the capability check
+#   delete_module      (CAP_SYS_MODULE) comes first, and behind it EFAULT,
+#                      EBADF and ENOENT. Nothing here can load or drop a module.
+#   bpf                BPF_MAP_CREATE with a NULL attribute of length zero:
+#                      EPERM where unprivileged BPF is off, EINVAL otherwise.
+#   perf_event_open    a software CPU clock on this process (see perf_attr
+#                      below). A bare kernel at perf_event_paranoid <= 2 hands
+#                      out a descriptor and a stricter one answers EACCES;
+#                      neither is EPERM, so only the filter makes this case
+#                      green.
+#   userfaultfd        flags zero: a bare kernel with
+#                      vm.unprivileged_userfaultfd = 1 hands out a descriptor,
+#                      which is exactly the leak the filter closes.
 esc_syscall() {
     python3 -c '
 import ctypes, errno, os, sys
 GENERIC = {"ptrace": 117, "process_vm_readv": 270, "process_vm_writev": 271,
-           "add_key": 217, "request_key": 218, "keyctl": 219}
+           "add_key": 217, "request_key": 218, "keyctl": 219,
+           "kexec_load": 104, "kexec_file_load": 294, "init_module": 105,
+           "finit_module": 273, "delete_module": 106, "bpf": 280,
+           "perf_event_open": 241, "userfaultfd": 282}
 TABLE = {
     "x86_64": {"ptrace": 101, "process_vm_readv": 310, "process_vm_writev": 311,
-               "add_key": 248, "request_key": 249, "keyctl": 250},
+               "add_key": 248, "request_key": 249, "keyctl": 250,
+               "kexec_load": 246, "kexec_file_load": 320, "init_module": 175,
+               "finit_module": 313, "delete_module": 176, "bpf": 321,
+               "perf_event_open": 298, "userfaultfd": 323},
     "aarch64": GENERIC,
     "riscv64": GENERIC,
 }
@@ -230,6 +256,17 @@ KEYCTL_GET_KEYRING_ID = 0
 KEY_SPEC_PROCESS_KEYRING = -2
 IORING_REGISTER_PROBE = 8
 not_a_ring, _ = os.pipe()
+# A perf_event_attr the kernel accepts: type PERF_TYPE_SOFTWARE, config
+# PERF_COUNT_SW_CPU_CLOCK, size 128 (PERF_ATTR_SIZE_VER5), everything else
+# zero. With pid 0 (this process) and cpu -1 a bare kernel at
+# perf_event_paranoid <= 2 hands out a descriptor; a stricter sysctl answers
+# EACCES. Neither answer is EPERM, so the case measures the filter.
+perf_attr = ctypes.create_string_buffer(128)
+ctypes.memmove(perf_attr, (1).to_bytes(4, "little"), 4)
+ctypes.memmove(ctypes.byref(perf_attr, 4), (128).to_bytes(4, "little"), 4)
+O_NONBLOCK = 0x800
+KEXEC_BOGUS_ARCH = 0x0F000000
+KEXEC_FILE_BOGUS_FLAG = 0x40
 CALLS = {
     "ptrace": (PTRACE_TRACEME, 0, 0, 0),
     "process_vm_readv": (os.getpid(), ctypes.byref(local), 1, ctypes.byref(remote), 1, 0),
@@ -239,6 +276,14 @@ CALLS = {
     "request_key": (b"user", b"humanitl-escape-missing", None, 0),
     "io_uring_enter": (not_a_ring, 0, 0, 0, None, 0),
     "io_uring_register": (not_a_ring, IORING_REGISTER_PROBE, None, 0),
+    "kexec_load": (0, 0, None, KEXEC_BOGUS_ARCH),
+    "kexec_file_load": (-1, -1, 0, None, KEXEC_FILE_BOGUS_FLAG),
+    "init_module": (None, 0, b""),
+    "finit_module": (-1, b"", 0),
+    "delete_module": (b"humanitl_escape_missing", O_NONBLOCK),
+    "bpf": (0, None, 0),
+    "perf_event_open": (ctypes.byref(perf_attr), 0, -1, -1, 0),
+    "userfaultfd": (0,),
 }
 args = CALLS.get(name)
 if args is None:
@@ -383,6 +428,30 @@ denied_syscall add_key              add_key
 denied_syscall request_key          request_key
 denied_syscall io_uring_enter       io_uring_enter
 denied_syscall io_uring_register    io_uring_register
+
+# The hardening list of the specification (backlog/sprint-1.md, the table of
+# HUM-012), the same names the Docker default profile refuses: a new kernel,
+# kernel modules, BPF programs, other processes' event counters, and page
+# faults served from user space. They are part of seccomp::FLOOR, so no
+# profile can drop them.
+#
+# Read these verdicts with the same care as the ones above: a kernel answers
+# most of them with EPERM by itself as soon as the caller has no capability,
+# and inside the sandbox nobody has one (CapEff is empty, see above). The
+# probes therefore cannot tell "the filter refused" from "the capability was
+# missing" - they hold the line at the point where a capability would ever be
+# granted again. The two that do measure the filter alone are perf_event_open,
+# which an unprivileged caller is allowed to point at itself (or is refused
+# with EACCES, which is red here), and userfaultfd, which a kernel with
+# vm.unprivileged_userfaultfd = 1 hands out.
+denied_syscall kexec_load           kexec_load
+denied_syscall kexec_file_load      kexec_file_load
+denied_syscall init_module          init_module
+denied_syscall finit_module         finit_module
+denied_syscall delete_module        delete_module
+denied_syscall bpf                  bpf
+denied_syscall perf_event_open      perf_event_open
+denied_syscall userfaultfd          userfaultfd
 
 # --- no capabilities, no way to gain one --------------------------------------
 #
