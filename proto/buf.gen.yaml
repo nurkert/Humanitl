@@ -1,0 +1,10 @@
+# Dart-Codegenerierung. Braucht `protoc` und `protoc-gen-dart` im PATH, das
+# Plugin in genau der Version aus `scripts/gen-proto.sh` (PLUGIN_VERSION):
+#   dart pub global activate protoc_plugin 25.0.0
+# `scripts/gen-proto.sh` ruft protoc direkt auf und erzeugt dasselbe Ergebnis;
+# diese Datei existiert fuer `buf generate` aus dem Verzeichnis `proto/`.
+version: v2
+plugins:
+  - local: protoc-gen-dart
+    out: ../app/lib/core/ipc/generated
+    opt: [grpc]

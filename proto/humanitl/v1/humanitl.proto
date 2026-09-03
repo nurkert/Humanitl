@@ -1,0 +1,810 @@
+// Der einzige Vertrag zwischen Daemon, UI und CLI (ADR-003, ARCHITECTURE 1.3).
+//
+// Aenderungen sind additiv: Feldnummern werden nie recycelt, Enums bekommen
+// neue Werte hinten. Wie man die Datei aendert, steht in `docs/PROTOCOL.md`.
+syntax = "proto3";
+
+package humanitl.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+import "humanitl/v1/common.proto";
+import "humanitl/v1/rules.proto";
+
+option java_multiple_files = true;
+
+// ---------- Service ----------
+
+// Alle Faehigkeiten des Daemons. UI und CLI sind gleichberechtigte Clients;
+// es gibt keinen zweiten Weg in den Daemon (ARCHITECTURE 3b).
+service Humanitl {
+  // Version und Faehigkeiten des Daemons. UI verweigert hoehere Proto-Major.
+  rpc GetInfo(google.protobuf.Empty) returns (Info);
+  // Ereignisstrom. Bei Lagged: Client synchronisiert ueber ListFlows(since).
+  rpc Subscribe(SubscribeRequest) returns (stream FlowEvent);
+  rpc ListFlows(ListFlowsRequest) returns (FlowPage);
+  rpc GetFlow(FlowRef) returns (FlowDetail);
+  rpc GetBody(BodyRef) returns (stream BodyChunk);
+  // Entscheidet einen oder mehrere gehaltene Flows. `allow_edited` mit mehr
+  // als einer Flow-ID ist ein Fehler: der Server antwortet je Flow mit
+  // `DecideResult.diagnostic` und dem Code `IPC_002`.
+  rpc Decide(DecideRequest) returns (DecideResponse);
+  rpc Rules(RulesRequest) returns (RulesResponse);
+  rpc Sandbox(SandboxRequest) returns (stream SandboxEvent);
+  rpc Terminal(stream TerminalInput) returns (stream TerminalOutput);
+  rpc Audit(AuditRequest) returns (AuditResponse);
+  rpc GetConfig(GetConfigRequest) returns (ConfigSnapshot);
+  rpc SetConfig(SetConfigRequest) returns (ConfigSnapshot);
+  // Maschinenpruefung wie `flutter doctor` (HUM-075).
+  rpc Doctor(google.protobuf.Empty) returns (DoctorReport);
+  // LAN-Suche nach LLM-Servern, nur auf ausdruecklichen Wunsch (HUM-076).
+  rpc DiscoverLlm(DiscoverRequest) returns (stream DiscoverResult);
+}
+
+// ---------- Info ----------
+
+// Selbstauskunft des Daemons.
+message Info {
+  // Semver des Daemons.
+  string daemon_version = 1;
+  // Major der Proto. Aktuell 1.
+  uint32 proto_major = 2;
+  // Minor der Proto. Steigt bei additiven Aenderungen.
+  uint32 proto_minor = 3;
+  // Zum Beispiel `sandbox.bwrap`, `proxy.h1`, `proxy.h2`, `findings.regex`.
+  repeated string capabilities = 4;
+  // Aktuelle Session, leer wenn keine laeuft.
+  string session_id = 5;
+}
+
+// ---------- Kern ----------
+
+// Lebenszyklus eines Flows (CONVENTIONS.md 3.2).
+enum FlowState {
+  FLOW_STATE_UNSPECIFIED = 0;
+  FLOW_STATE_RECEIVED = 1;
+  FLOW_STATE_ANALYZED = 2;
+  FLOW_STATE_HELD = 3;
+  FLOW_STATE_DECIDED = 4;
+  FLOW_STATE_FORWARDED = 5;
+  FLOW_STATE_RESPONDED = 6;
+  FLOW_STATE_RECORDED = 7;
+  // Upstream-Fehler nach Allow oder Forwarded, siehe UpstreamError.
+  FLOW_STATE_FAILED = 8;
+}
+
+// Art der getroffenen Entscheidung.
+enum DecisionKind {
+  DECISION_KIND_UNSPECIFIED = 0;
+  DECISION_KIND_ALLOW = 1;
+  DECISION_KIND_ALLOW_EDITED = 2;
+  DECISION_KIND_BLOCK = 3;
+  DECISION_KIND_TIMED_OUT = 4;
+}
+
+// Warum blockiert wurde. Der HTTP-Status je Grund steht in CONVENTIONS.md 3.2.
+enum BlockReason {
+  BLOCK_REASON_UNSPECIFIED = 0;
+  BLOCK_REASON_USER = 1;
+  BLOCK_REASON_RULE = 2;
+  BLOCK_REASON_TIMEOUT = 3;
+  BLOCK_REASON_BODY_CAP = 4;
+  BLOCK_REASON_AUTHORITY_MISMATCH = 5;
+  BLOCK_REASON_NO_ROUTE = 6;
+  BLOCK_REASON_HOLD_MEMORY = 7;
+  BLOCK_REASON_HOLD_MAX_FLOWS = 8;
+  BLOCK_REASON_CLIENT_TIMEOUT = 9;
+  BLOCK_REASON_PRIVATE_ADDRESS = 10;
+}
+
+// Wer entschieden hat.
+enum DecisionSource {
+  DECISION_SOURCE_UNSPECIFIED = 0;
+  DECISION_SOURCE_USER = 1;
+  DECISION_SOURCE_RULE = 2;
+  DECISION_SOURCE_TIMEOUT = 3;
+  DECISION_SOURCE_PASSTHROUGH = 4;
+  DECISION_SOURCE_SYSTEM = 5;
+}
+
+// Grund, warum eine erlaubte Anfrage den Upstream nicht erreicht hat
+// (CONVENTIONS.md 3.2, 4.10). Nie als `Responded` mit Status 502 verbuchen.
+enum UpstreamError {
+  UPSTREAM_ERROR_UNSPECIFIED = 0;
+  UPSTREAM_ERROR_DNS = 1;
+  UPSTREAM_ERROR_CONNECT = 2;
+  UPSTREAM_ERROR_TLS = 3;
+  UPSTREAM_ERROR_PRIVATE_ADDRESS = 4;
+  UPSTREAM_ERROR_TIMEOUT = 5;
+}
+
+// Ein HTTP-Header. Der Wert ist `bytes`, weil Header nicht garantiert UTF-8
+// sind und der Decoder sonst scheitert.
+message Header {
+  string name = 1;
+  bytes value = 2;
+}
+
+// Verweis auf einen Body. Bodies reisen nie inline in Ereignissen; der Inhalt
+// kommt ueber GetBody.
+message BodyRef {
+  bytes sha256 = 1;
+  uint64 size = 2;
+  // Der Recorder hat nur einen Praefix gespeichert.
+  bool truncated = 3;
+  string content_type = 4;
+}
+
+// Ziel einer Anfrage, normalisiert (A-Label, lowercase, ohne trailing dot).
+message Authority {
+  string host = 1;
+  uint32 port = 2;
+  bool is_ip_literal = 3;
+  // U-Label fuer die Anzeige, kann vom `host` abweichen.
+  string display_host = 4;
+}
+
+// Eine vollstaendige HTTP-Anfrage ohne Body-Inhalt.
+message HttpRequest {
+  Method method = 1;
+  // Rohwert bei METHOD_OTHER.
+  string method_raw = 2;
+  Scheme scheme = 3;
+  Authority authority = 4;
+  string path_and_query = 5;
+  repeated Header headers = 6;
+  BodyRef body = 7;
+  // Zum Beispiel `HTTP/1.1` oder `HTTP/2`.
+  string version = 8;
+}
+
+// Statuszeile und Header einer Antwort.
+message HttpResponseHead {
+  uint32 status = 1;
+  repeated Header headers = 2;
+  string version = 3;
+}
+
+// Wie sicher ein Fund ist.
+enum FindingTier {
+  FINDING_TIER_UNSPECIFIED = 0;
+  FINDING_TIER_CHECKSUM = 1;
+  FINDING_TIER_REGEX = 2;
+  FINDING_TIER_USER_TERM = 3;
+}
+
+// Wo im Request ein Fund liegt.
+enum FindingLocation {
+  FINDING_LOCATION_UNSPECIFIED = 0;
+  FINDING_LOCATION_HEADER = 1;
+  FINDING_LOCATION_QUERY = 2;
+  FINDING_LOCATION_BODY = 3;
+}
+
+// Ein moeglicher Geheimnisfund im Request.
+message Finding {
+  // Zum Beispiel `api_key.github`, `email`, `iban`, `user_term`.
+  string kind = 1;
+  FindingLocation location = 2;
+  // Nur bei FINDING_LOCATION_HEADER gesetzt.
+  string header_name = 3;
+  uint64 span_start = 4;
+  uint64 span_end = 5;
+  FindingTier tier = 6;
+  bytes value_hash = 7;
+  // Gekuerzte Anzeige, zum Beispiel `ghp_ab...`.
+  string display_prefix = 8;
+  // Der Nutzer hat den Fund bearbeitet oder bewusst quittiert.
+  bool resolved = 9;
+}
+
+// Wie dringend ein Diagnostic ist.
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_INFO = 1;
+  SEVERITY_WARNING = 2;
+  SEVERITY_ERROR = 3;
+  SEVERITY_BLOCKING = 4;
+}
+
+// Was der Nutzer tun kann, um die Ursache zu beheben.
+message FixAction {
+  oneof action {
+    SetEnv set_env = 1;
+    Rule add_rule = 2;
+    google.protobuf.Empty install_service = 3;
+    ChangeSetting change_setting = 4;
+    string copy_command = 5;
+    string open_url = 6;
+    string remount_read_only = 7;
+  }
+
+  // Umgebungsvariable setzen.
+  message SetEnv {
+    string key = 1;
+    string value = 2;
+  }
+
+  // Konfigurationsschluessel aendern.
+  message ChangeSetting {
+    string key = 1;
+    string value = 2;
+  }
+}
+
+// Ein Befund mit Ursache und Vorschlag. Jeder Fehlerpfad liefert einen.
+message Diagnostic {
+  // Register `BEREICH_NNN`, zum Beispiel `SANDBOX_001` (CONVENTIONS.md 4.6).
+  string code = 1;
+  Severity severity = 2;
+  string title = 3;
+  string why = 4;
+  FixAction fix = 5;
+  string docs_url = 6;
+}
+
+// Was der Katalog ueber die Ziel-Domain weiss (HUM-031).
+message DomainInfo {
+  // Registrierbare Domain laut Public Suffix List.
+  string apex = 1;
+  // Eintrag im mitgelieferten Katalog, leer wenn unbekannt.
+  string catalog_id = 2;
+  // Tranco-Rang des Apex, 0 wenn unbekannt.
+  uint32 tranco_rank = 3;
+  google.protobuf.Timestamp first_seen = 4;
+  uint32 seen_count = 5;
+}
+
+// ---------- Flows ----------
+
+// Verweis auf einen Flow.
+message FlowRef {
+  string flow_id = 1;
+}
+
+// Zeilendarstellung eines Flows, wie sie Liste und Queue brauchen.
+message FlowSummary {
+  string flow_id = 1;
+  string session_id = 2;
+  google.protobuf.Timestamp received_at = 3;
+  Method method = 4;
+  string method_raw = 5;
+  Scheme scheme = 6;
+  Authority authority = 7;
+  string path = 8;
+  FlowState state = 9;
+  DecisionKind decision = 10;
+  DecisionSource decision_source = 11;
+  BlockReason block_reason = 12;
+  string rule_id = 13;
+  uint32 status = 14;
+  uint64 request_size = 15;
+  uint64 response_size = 16;
+  google.protobuf.Duration duration = 17;
+  uint32 finding_count = 18;
+  bool edited = 19;
+  bool passthrough = 20;
+  // Nur bei FLOW_STATE_HELD gesetzt.
+  google.protobuf.Timestamp deadline = 21;
+  // Optional, zum Beispiel `webfetch` oder `curl`; leer wenn unbekannt.
+  string origin_tool = 22;
+  // Nur bei FLOW_STATE_FAILED gesetzt.
+  UpstreamError upstream_error = 23;
+}
+
+// Alles, was der Detail-Bereich zu einem Flow zeigt.
+message FlowDetail {
+  FlowSummary summary = 1;
+  HttpRequest request = 2;
+  // Nur bei DECISION_KIND_ALLOW_EDITED gesetzt.
+  HttpRequest edited_request = 3;
+  HttpResponseHead response = 4;
+  BodyRef response_body = 5;
+  repeated Finding findings = 6;
+  repeated Diagnostic diagnostics = 7;
+  DomainInfo domain = 8;
+  // Anfang des Request-Bodys (`request.body`) fuer die Anzeige: UTF-8,
+  // verlustbehaftet (ungueltige Bytes werden zu U+FFFD), hoechstens 4096
+  // Zeichen (Unicode-Skalare, nicht Bytes). Leer bei leerem Body. Der
+  // vollstaendige Inhalt kommt ueber GetBody(request.body); ob die Vorschau
+  // gekuerzt ist, sagt `request.body.size`. Nur hier, nie in einem
+  // FlowEvent (CONVENTIONS.md 3.6).
+  string body_preview = 9;
+}
+
+// Abonnement des Ereignisstroms.
+message SubscribeRequest {
+  // Ab welchem Flow nachgeliefert wird. Leer bedeutet: ab jetzt.
+  string since_flow_id = 1;
+  bool include_passthrough = 2;
+}
+
+// Ein Ereignis des Stroms. Bodies reisen nie mit.
+message FlowEvent {
+  google.protobuf.Timestamp at = 1;
+
+  oneof event {
+    Received received = 2;
+    Analyzed analyzed = 3;
+    Held held = 4;
+    Decided decided = 5;
+    FlowRef forwarded = 6;
+    ResponseHeaders response_headers = 7;
+    ResponseChunk response_chunk = 8;
+    FlowRef recorded = 9;
+    FlowRef timed_out = 10;
+    Lagged lagged = 11;
+    // Sessionweite Diagnostics, zum Beispiel eine TLS-Ablehnung.
+    Diagnostic diagnostic = 12;
+    RulesChanged rules_changed = 13;
+    AgentAsk agent_ask = 14;
+    Failed failed = 15;
+  }
+
+  // Ein neuer Flow ist eingetroffen.
+  message Received {
+    FlowSummary summary = 1;
+    DomainInfo domain = 2;
+  }
+
+  // Die Findings-Analyse ist fertig.
+  message Analyzed {
+    string flow_id = 1;
+    repeated Finding findings = 2;
+  }
+
+  // Der Flow wartet auf eine Entscheidung.
+  message Held {
+    string flow_id = 1;
+    google.protobuf.Timestamp deadline = 2;
+    // Belegter Hold-Puffer in Bytes ueber alle wartenden Flows (HUM-057).
+    uint64 queue_bytes = 3;
+    // Anzahl wartender Flows (HUM-057).
+    uint32 queue_count = 4;
+  }
+
+  // Es wurde entschieden.
+  message Decided {
+    string flow_id = 1;
+    DecisionKind kind = 2;
+    DecisionSource source = 3;
+    BlockReason block_reason = 4;
+    string rule_id = 5;
+    // Notiz des Nutzers, erscheint im 403-Body und im Header
+    // `X-Humanitl-Note` (ARCHITECTURE 8.2). Hoechstens 500 Zeichen; CR und
+    // LF werden zu Leerzeichen, andere Steuerzeichen (< 0x20 ausser Tab)
+    // entfernt, bevor der Text in den Header geht (HUM-072).
+    string note = 6;
+  }
+
+  // Die Antwort-Header sind da.
+  message ResponseHeaders {
+    string flow_id = 1;
+    HttpResponseHead head = 2;
+    bool streaming = 3;
+  }
+
+  // Fortschritt einer Antwort. Traegt keine Daten, nur den Zaehler.
+  message ResponseChunk {
+    string flow_id = 1;
+    uint64 bytes_so_far = 2;
+  }
+
+  // Der Client war zu langsam, Ereignisse sind verloren. Der Client holt
+  // sich den Zustand ueber ListFlows(since) zurueck.
+  message Lagged {
+    uint64 dropped = 1;
+  }
+
+  // Die erlaubte Anfrage hat das Ziel nicht erreicht: DNS, Connect, TLS,
+  // private Adresse oder Timeout nach Allow oder Forwarded. Der Client
+  // bekommt 502; der Flow ist FLOW_STATE_FAILED, nie FLOW_STATE_RESPONDED
+  // (CONVENTIONS.md 3.2, 4.10).
+  message Failed {
+    string flow_id = 1;
+    UpstreamError error = 2;
+    // Aufgeloeste Adresse als Text, nur bei UPSTREAM_ERROR_PRIVATE_ADDRESS;
+    // sonst leer. Traegt `UpstreamError::PrivateAddress(IpAddr)` ueber die
+    // Leitung.
+    string resolved_ip = 3;
+  }
+
+  // Der Regelsatz hat sich geaendert, Clients laden ihn neu (HUM-035).
+  message RulesChanged {
+    // Monoton steigend, damit Clients doppelte Ereignisse erkennen.
+    uint64 revision = 1;
+  }
+
+  // Der Agent hat ueber `POST http://humanitl.internal/ask` um etwas
+  // gebeten (HUM-073). Eine Bitte, keine Aktion.
+  message AgentAsk {
+    string ask_id = 1;
+    // Freitext, hoechstens 2 KiB.
+    string text = 2;
+    // Host aus einer URL im Text, falls eine erkennbar war.
+    string suggested_host = 3;
+  }
+}
+
+// Abfrage der Flow-Historie.
+message ListFlowsRequest {
+  // Syntax wie im History-Screen, zum Beispiel `host:github.com state:blocked`.
+  string filter = 1;
+  string since_flow_id = 2;
+  string cursor = 3;
+  // Default 200, Maximum 1000.
+  uint32 limit = 4;
+  // Zum Beispiel `received_at desc`.
+  string order_by = 5;
+  bool include_passthrough = 6;
+}
+
+// Eine Seite der Flow-Historie.
+message FlowPage {
+  repeated FlowSummary flows = 1;
+  string next_cursor = 2;
+  uint64 total = 3;
+}
+
+// Ein Stueck eines Bodys.
+message BodyChunk {
+  bytes data = 1;
+  uint64 offset = 2;
+  bool last = 3;
+}
+
+// ---------- Decide ----------
+
+// Eine vom Menschen bearbeitete Anfrage, so wie sie hinausgehen soll.
+//
+// Anders als `HttpRequest` traegt sie den Body selbst, nicht nur einen
+// `BodyRef`: der Daemon kennt den bearbeiteten Inhalt sonst nirgends. Das
+// ist die einzige Stelle des Vertrags, an der ein Body in Richtung Daemon
+// reist. Sie ist von `FlowEvent` aus unerreichbar; `proto_contract.rs`
+// prueft das, damit die Regel "Bodies nie in Ereignissen" (CONVENTIONS.md
+// 3.6) unberuehrt bleibt.
+message EditedRequest {
+  Method method = 1;
+  // Rohwert bei METHOD_OTHER; ist er gesetzt, gilt er.
+  string method_raw = 2;
+  // Vollstaendige URL: `scheme://host[:port]/path?query`, ohne Fragment.
+  // Fehlt der Port, gilt der Standard-Port des Schemas.
+  string url = 3;
+  repeated Header headers = 4;
+  // Der vollstaendige Body, so wie er hinausgeht.
+  bytes body = 5;
+}
+
+// Entscheidung ueber einen oder mehrere gehaltene Flows.
+message DecideRequest {
+  // Batch moeglich; `allow_edited` verlangt genau eine ID.
+  repeated string flow_ids = 1;
+
+  // Feld 3 trug `allow_edited` als `HttpRequest`, das den Body nur als
+  // `BodyRef` kennt; eine bearbeitete Anfrage konnte ihren Body nicht
+  // uebertragen. Die Nummer wird nicht wiederverwendet (docs/PROTOCOL.md 4).
+  reserved 3;
+
+  oneof decision {
+    google.protobuf.Empty allow = 2;
+    // Nur bei genau einer flow_id, sonst Diagnostic `IPC_002`. Traegt die
+    // ganze Anfrage samt Body; eine unlesbare Anfrage (Methode, URL) wird
+    // mit `IPC_002` abgelehnt, nie stillschweigend zu `allow`.
+    EditedRequest allow_edited = 7;
+    Block block = 4;
+  }
+
+  // Optionale Regel, die vor dem Fortsetzen angelegt wird. Scheitert das
+  // Anlegen, wird nicht entschieden.
+  Rule remember = 5;
+  // Der Nutzer hat offene Findings gesehen.
+  bool acknowledge_findings = 6;
+
+  // Blockieren mit optionaler Begruendung fuer den Agenten.
+  message Block {
+    // Erscheint im 403-Body unter `note:` und im Header `X-Humanitl-Note`.
+    // Hoechstens 500 Zeichen; der Server ersetzt CR und LF durch
+    // Leerzeichen, entfernt andere Steuerzeichen (< 0x20 ausser Tab) und
+    // beschraenkt den Header-Wert auf sichtbares ASCII; Nicht-ASCII bleibt
+    // nur im Body (HUM-072).
+    string note = 1;
+  }
+}
+
+// Ergebnis einer Entscheidung.
+message DecideResponse {
+  repeated DecideResult results = 1;
+  // Spiegel von `created_rule.rule_id` fuer Clients, die nur die ID brauchen.
+  string created_rule_id = 2;
+  // Die aus `remember` angelegte Regel, mit vom Daemon gesetzter ID.
+  Rule created_rule = 3;
+}
+
+// Ergebnis pro Flow.
+message DecideResult {
+  string flow_id = 1;
+  bool applied = 2;
+  Diagnostic diagnostic = 3;
+}
+
+// ---------- Rules ----------
+
+// Eine Operation auf dem Regelsatz.
+message RulesRequest {
+  oneof op {
+    google.protobuf.Empty list = 1;
+    Rule add = 2;
+    Rule update = 3;
+    // Regel-ID.
+    string remove = 4;
+    Reorder reorder = 5;
+    DryRun dry_run = 6;
+    // Regel-ID einer Session-Regel, die dauerhaft werden soll.
+    string make_permanent = 7;
+  }
+
+  // Neue Reihenfolge, vollstaendig.
+  message Reorder {
+    repeated string rule_ids_in_order = 1;
+  }
+
+  // Probelauf gegen die zuletzt aufgezeichneten Flows.
+  message DryRun {
+    Rule rule = 1;
+    // Wie viele Flows geprueft werden. Default 500.
+    uint32 limit = 2;
+  }
+}
+
+// Antwort auf eine Regel-Operation.
+message RulesResponse {
+  repeated Rule rules = 1;
+  repeated FlowSummary dry_run_matches = 2;
+  Diagnostic diagnostic = 3;
+}
+
+// ---------- Sandbox ----------
+
+// Zustand der Sandbox.
+enum SandboxState {
+  SANDBOX_STATE_UNSPECIFIED = 0;
+  SANDBOX_STATE_STOPPED = 1;
+  SANDBOX_STATE_STARTING = 2;
+  SANDBOX_STATE_RUNNING = 3;
+  SANDBOX_STATE_STOPPING = 4;
+  SANDBOX_STATE_FAILED = 5;
+}
+
+// Die drei Garantien, die nach dem Start geprueft werden.
+enum IsolationCheck {
+  ISOLATION_CHECK_UNSPECIFIED = 0;
+  ISOLATION_CHECK_NO_NETWORK_INTERFACE = 1;
+  ISOLATION_CHECK_SINGLE_SOCKET = 2;
+  ISOLATION_CHECK_SECCOMP_ACTIVE = 3;
+}
+
+// Eine Operation auf der Sandbox.
+message SandboxRequest {
+  oneof op {
+    Start start = 1;
+    google.protobuf.Empty stop = 2;
+    google.protobuf.Empty status = 3;
+    google.protobuf.Empty isolation_check = 4;
+    // Liefert die vollstaendige Kommandozeile, ohne zu starten.
+    google.protobuf.Empty argv = 5;
+  }
+
+  // Start einer Sandbox-Session.
+  message Start {
+    string profile = 1;
+    string work_dir = 2;
+    // `ro` oder `rw`.
+    string work_mode = 3;
+    repeated string command = 4;
+  }
+}
+
+// Ergebnis einer Isolationspruefung.
+message CheckResult {
+  IsolationCheck check = 1;
+  bool passed = 2;
+  string evidence = 3;
+  Diagnostic diagnostic = 4;
+}
+
+// Ein Ereignis der Sandbox.
+message SandboxEvent {
+  oneof event {
+    Status status = 1;
+    CheckResult check = 2;
+    // Eine Zeile der Kommandozeile, wie sie das UI anzeigt.
+    string argv_line = 3;
+    Diagnostic diagnostic = 4;
+    LogLine log = 5;
+  }
+
+  // Momentaufnahme der Sandbox.
+  message Status {
+    SandboxState state = 1;
+    string sandbox_id = 2;
+    string session_id = 3;
+    string backend = 4;
+    string llm_endpoint = 5;
+    string work_dir = 6;
+    string work_mode = 7;
+  }
+
+  // Eine Zeile aus dem Log der Sandbox.
+  message LogLine {
+    google.protobuf.Timestamp at = 1;
+    string line = 2;
+  }
+}
+
+// ---------- Terminal ----------
+
+// Eingabe an das Terminal der Sandbox. Genau ein Client darf schreiben.
+message TerminalInput {
+  oneof input {
+    Open open = 1;
+    bytes data = 2;
+    Resize resize = 3;
+    google.protobuf.Empty close = 4;
+  }
+
+  // Verbindungsaufbau.
+  message Open {
+    string sandbox_id = 1;
+    uint32 cols = 2;
+    uint32 rows = 3;
+    // Nur lesen. Mehrere Leser sind erlaubt, ein zweiter Schreiber nicht
+    // (Diagnostic `TERM_001`).
+    bool read_only = 4;
+  }
+
+  // Neue Geometrie des Schreibers.
+  message Resize {
+    uint32 cols = 1;
+    uint32 rows = 2;
+  }
+}
+
+// Ausgabe des Terminals.
+message TerminalOutput {
+  oneof output {
+    bytes data = 1;
+    Exit exit = 2;
+    Diagnostic diagnostic = 3;
+    // Geometrie des Schreibers; Leser rendern letterboxed.
+    Resize resize = 4;
+  }
+
+  // Der Prozess ist beendet.
+  message Exit {
+    int32 code = 1;
+  }
+
+  // Neue Geometrie.
+  message Resize {
+    uint32 cols = 1;
+    uint32 rows = 2;
+  }
+}
+
+// ---------- Audit ----------
+
+// Eine Operation auf dem Audit-Log.
+message AuditRequest {
+  oneof op {
+    google.protobuf.Empty verify = 1;
+    Export export = 2;
+    google.protobuf.Empty head = 3;
+  }
+
+  // Export des Logs.
+  message Export {
+    // `jsonl` oder `csv`.
+    string format = 1;
+    string out_path = 2;
+    bool redact_hosts = 3;
+  }
+}
+
+// Antwort auf eine Audit-Operation.
+message AuditResponse {
+  bool ok = 1;
+  uint64 entries = 2;
+  bytes head_hash = 3;
+  // Erster Eintrag, dessen Hash nicht passt. Nur wenn `ok` falsch ist.
+  uint64 first_bad_seq = 4;
+  string out_path = 5;
+  Diagnostic diagnostic = 6;
+}
+
+// ---------- Config ----------
+
+// Abfrage der effektiven Konfiguration.
+message GetConfigRequest {
+  bool include_schema = 1;
+}
+
+// Die effektive Konfiguration samt Herkunft je Feld.
+message ConfigSnapshot {
+  // Effektive Config als TOML.
+  string toml = 1;
+  // JSON-Schema, nur wenn `include_schema` gesetzt war.
+  string json_schema = 2;
+  repeated FieldOrigin origins = 3;
+  repeated Diagnostic diagnostics = 4;
+}
+
+// Woher der Wert eines Feldes stammt.
+message FieldOrigin {
+  string key = 1;
+  // `default`, `global`, `profile:global`, `profile:project`, `env` oder `cli`.
+  string origin = 2;
+}
+
+// Setzt genau einen Konfigurationsschluessel.
+message SetConfigRequest {
+  string key = 1;
+  string value = 2;
+}
+
+// ---------- Doctor ----------
+
+// Ergebnis einer einzelnen Maschinenpruefung.
+enum CheckStatus {
+  CHECK_STATUS_UNSPECIFIED = 0;
+  CHECK_STATUS_OK = 1;
+  CHECK_STATUS_WARN = 2;
+  CHECK_STATUS_FAIL = 3;
+}
+
+// Eine Zeile der Doctor-Ausgabe.
+message DoctorCheck {
+  // Stabiler Bezeichner, zum Beispiel `bwrap` oder `userns`.
+  string id = 1;
+  CheckStatus status = 2;
+  // Was gemessen wurde, zum Beispiel `bubblewrap 0.11.0`.
+  string evidence = 3;
+  // Gesetzt, sobald der Status nicht CHECK_STATUS_OK ist.
+  Diagnostic diagnostic = 4;
+}
+
+// Die vollstaendige Doctor-Ausgabe, in Anzeigereihenfolge.
+message DoctorReport {
+  repeated DoctorCheck checks = 1;
+}
+
+// ---------- LLM-Suche ----------
+
+// Erkanntes Produkt hinter einem offenen Port.
+enum LlmProduct {
+  LLM_PRODUCT_UNSPECIFIED = 0;
+  LLM_PRODUCT_OLLAMA = 1;
+  LLM_PRODUCT_OPENAI_COMPATIBLE = 2;
+  LLM_PRODUCT_UNKNOWN = 3;
+}
+
+// Auftrag fuer die LAN-Suche. Laeuft nur auf ausdruecklichen Wunsch.
+message DiscoverRequest {
+  // Zu durchsuchendes Netz in CIDR-Notation. Leer bedeutet: aus der
+  // Default-Route ableiten.
+  string subnet = 1;
+  // Zu pruefende Ports. Leer bedeutet die Voreinstellung
+  // 11434, 1234, 8000, 8080.
+  repeated uint32 ports = 2;
+}
+
+// Ein gefundener Server. Wird gestreamt, sobald er antwortet.
+message DiscoverResult {
+  string host = 1;
+  uint32 port = 2;
+  LlmProduct product = 3;
+  repeated string models = 4;
+  uint32 latency_ms = 5;
+  // Der Endpunkt antwortete mit 401. Modelle bleiben dann leer.
+  bool auth_required = 6;
+}
