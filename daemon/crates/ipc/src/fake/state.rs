@@ -11,48 +11,23 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
 use bytes::Bytes;
-use humanitl_core::http::{
-    Authority, BodyRef, HeaderMap, HeaderName, HeaderValue, HttpRequest, Method, Scheme,
-};
+use humanitl_core::http::{BodyRef, HeaderMap, HttpRequest};
 use humanitl_core::{
-    BlockReason, Decision, DecisionSource, Diagnostic, Finding, Flow, FlowEvent, FlowId, FlowState,
-    HostName, InvalidTransition, SandboxId, SessionId, TransitionInput, UpstreamError,
+    Decision, DecisionSource, Diagnostic, Finding, Flow, FlowEvent, FlowId, FlowState,
+    InvalidTransition, SandboxId, SessionId, TransitionInput, UpstreamError,
 };
 use tokio::sync::broadcast;
 
-use crate::server_stub::{diagnostic_to_proto, method_to_proto, scheme_to_proto};
+use crate::convert::{
+    apex_of, authority_to_proto, block_note, body_preview, body_to_proto, decision_fields,
+    diagnostic_to_proto, duration_between, finding_to_proto, flow_state_to_proto, headers_to_proto,
+    method_raw, method_to_proto, request_to_proto, scheme_to_proto, source_to_proto, timestamp,
+    upstream_error_to_proto,
+};
 use crate::v1;
 
 /// So viele Bytes trägt ein Stück aus `GetBody`.
 pub const BODY_CHUNK_BYTES: usize = 64 * 1024;
-
-/// So viele Zeichen trägt `FlowDetail.body_preview` höchstens (docs/PROTOCOL.md 4).
-pub const BODY_PREVIEW_CHARS: usize = 4096;
-
-/// Warum eine `EditedRequest` nicht lesbar war.
-///
-/// Der Fake lehnt eine unlesbare Anfrage mit `IPC_002` ab, statt sie
-/// stillschweigend zu `Allow` zu machen; der Grund steht im Diagnostic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum EditedRequestError {
-    /// `METHOD_UNSPECIFIED`, `METHOD_OTHER` ohne `method_raw`, oder der
-    /// Rohwert ist kein HTTP-Token.
-    #[error("the method is not a valid http method")]
-    Method,
-    /// Die URL hat kein bekanntes Schema (`http`, `https`, `ws`, `wss`).
-    #[error("the url has no known scheme")]
-    Scheme,
-    /// Der Host ist leer, kein gültiger Name und keine IP-Adresse.
-    #[error("the url has no valid host")]
-    Host,
-    /// Der Port ist keine Zahl von 1 bis 65535.
-    #[error("the url has no valid port")]
-    Port,
-    /// Die URL trägt ein Fragment oder Userinfo; beides ist kein Request-Ziel,
-    /// und der Fake ändert nicht stillschweigend, was der Mensch geschrieben hat.
-    #[error("the url carries a fragment or userinfo")]
-    Target,
-}
 
 /// So viele Flows behält der Fake höchstens.
 ///
@@ -749,363 +724,13 @@ pub fn event_to_proto(event: &FlowEvent, flow: &FakeFlow) -> v1::FlowEvent {
         FlowEvent::TimedOut { .. } => Event::TimedOut(v1::FlowRef { flow_id }),
         FlowEvent::Recorded { .. } => Event::Recorded(v1::FlowRef { flow_id }),
         FlowEvent::Lagged { n } => Event::Lagged(v1::flow_event::Lagged { dropped: *n }),
+        FlowEvent::Diagnostic { diagnostic, .. } => {
+            Event::Diagnostic(diagnostic_to_proto(diagnostic))
+        }
     };
     v1::FlowEvent {
         at: Some(timestamp(event.at().unwrap_or(flow.last_at))),
         event: Some(wire),
-    }
-}
-
-/// Das Ereignis, mit dem ein verpasster Rundfunk-Abschnitt gemeldet wird.
-#[must_use]
-pub fn lagged_event(dropped: u64) -> v1::FlowEvent {
-    v1::FlowEvent {
-        at: Some(timestamp(SystemTime::now())),
-        event: Some(v1::flow_event::Event::Lagged(v1::flow_event::Lagged {
-            dropped,
-        })),
-    }
-}
-
-/// Entscheidung, Blockgrund und Regel-Id in ihrer Wire-Form.
-fn decision_fields(
-    decision: Option<&Decision>,
-    source: Option<DecisionSource>,
-) -> (v1::DecisionKind, v1::BlockReason, String) {
-    let rule_id = match (decision, source) {
-        (
-            Some(Decision::Block {
-                reason: BlockReason::Rule(id),
-                ..
-            }),
-            _,
-        ) => id.to_string(),
-        (_, Some(DecisionSource::Rule(id))) => id.to_string(),
-        _ => String::new(),
-    };
-    let kind = match decision {
-        None => v1::DecisionKind::Unspecified,
-        Some(Decision::Allow) => v1::DecisionKind::Allow,
-        Some(Decision::AllowEdited { .. }) => v1::DecisionKind::AllowEdited,
-        Some(Decision::Block { .. }) => v1::DecisionKind::Block,
-        Some(Decision::TimedOut) => v1::DecisionKind::TimedOut,
-    };
-    let reason = match decision {
-        Some(Decision::Block { reason, .. }) => block_reason_to_proto(*reason),
-        Some(Decision::TimedOut) => v1::BlockReason::Timeout,
-        _ => v1::BlockReason::Unspecified,
-    };
-    (kind, reason, rule_id)
-}
-
-/// Die Notiz einer Block-Entscheidung, sonst leer.
-fn block_note(decision: &Decision) -> String {
-    match decision {
-        Decision::Block { note, .. } => note.clone().unwrap_or_default(),
-        _ => String::new(),
-    }
-}
-
-/// Übersetzt einen Blockgrund in seine Wire-Form.
-#[must_use]
-pub const fn block_reason_to_proto(reason: BlockReason) -> v1::BlockReason {
-    use humanitl_core::BlockReason as Reason;
-    match reason {
-        Reason::User => v1::BlockReason::User,
-        Reason::Rule(_) => v1::BlockReason::Rule,
-        Reason::Timeout => v1::BlockReason::Timeout,
-        Reason::BodyCap => v1::BlockReason::BodyCap,
-        Reason::AuthorityMismatch => v1::BlockReason::AuthorityMismatch,
-        Reason::NoRoute => v1::BlockReason::NoRoute,
-        Reason::HoldMemory => v1::BlockReason::HoldMemory,
-        Reason::HoldMaxFlows => v1::BlockReason::HoldMaxFlows,
-        Reason::ClientTimeout => v1::BlockReason::ClientTimeout,
-        Reason::PrivateAddress => v1::BlockReason::PrivateAddress,
-    }
-}
-
-/// Übersetzt die Herkunft einer Entscheidung in ihre Wire-Form.
-#[must_use]
-pub const fn source_to_proto(source: DecisionSource) -> v1::DecisionSource {
-    match source {
-        DecisionSource::User => v1::DecisionSource::User,
-        DecisionSource::Rule(_) => v1::DecisionSource::Rule,
-        DecisionSource::Timeout => v1::DecisionSource::Timeout,
-        DecisionSource::Passthrough => v1::DecisionSource::Passthrough,
-        DecisionSource::System => v1::DecisionSource::System,
-    }
-}
-
-/// Übersetzt einen Upstream-Fehler in seine Wire-Form.
-#[must_use]
-pub const fn upstream_error_to_proto(error: UpstreamError) -> v1::UpstreamError {
-    match error {
-        UpstreamError::Dns => v1::UpstreamError::Dns,
-        UpstreamError::Connect => v1::UpstreamError::Connect,
-        UpstreamError::Tls => v1::UpstreamError::Tls,
-        UpstreamError::PrivateAddress(_) => v1::UpstreamError::PrivateAddress,
-        UpstreamError::Timeout => v1::UpstreamError::Timeout,
-    }
-}
-
-/// Übersetzt einen Flow-Zustand in seine Wire-Form.
-#[must_use]
-pub const fn flow_state_to_proto(state: &FlowState) -> v1::FlowState {
-    match state {
-        FlowState::Received => v1::FlowState::Received,
-        FlowState::Analyzed { .. } => v1::FlowState::Analyzed,
-        FlowState::Held { .. } => v1::FlowState::Held,
-        FlowState::Decided(_) => v1::FlowState::Decided,
-        FlowState::Forwarded => v1::FlowState::Forwarded,
-        FlowState::Responded { .. } => v1::FlowState::Responded,
-        FlowState::Failed { .. } => v1::FlowState::Failed,
-        FlowState::Recorded => v1::FlowState::Recorded,
-    }
-}
-
-/// Der Rohwert einer Methode, aber nur bei einer unbekannten.
-fn method_raw(method: &humanitl_core::http::Method) -> String {
-    if method_to_proto(method) == v1::Method::Other {
-        method.as_str().to_owned()
-    } else {
-        String::new()
-    }
-}
-
-/// Übersetzt ein Ziel in seine Wire-Form.
-#[must_use]
-pub fn authority_to_proto(authority: &Authority) -> v1::Authority {
-    v1::Authority {
-        host: authority.host.to_string(),
-        port: u32::from(authority.port),
-        is_ip_literal: matches!(authority.host, HostName::Ip(_)),
-        display_host: authority.host.display(),
-    }
-}
-
-/// Übersetzt Kopfzeilen in ihre Wire-Form.
-#[must_use]
-pub fn headers_to_proto(headers: &HeaderMap) -> Vec<v1::Header> {
-    headers
-        .iter()
-        .map(|(name, value)| v1::Header {
-            name: name.as_str().to_owned(),
-            value: value.as_bytes().to_vec(),
-        })
-        .collect()
-}
-
-/// Liest Kopfzeilen aus ihrer Wire-Form.
-///
-/// Eine Kopfzeile, deren Name oder Wert HTTP nicht erlaubt, fällt weg; der
-/// Fake soll an einer kaputten Eingabe nicht sterben.
-#[must_use]
-pub fn headers_from_proto(headers: &[v1::Header]) -> HeaderMap {
-    let mut map = HeaderMap::new();
-    for header in headers {
-        let Ok(name) = HeaderName::from_bytes(header.name.as_bytes()) else {
-            continue;
-        };
-        let Ok(value) = HeaderValue::from_bytes(&header.value) else {
-            continue;
-        };
-        map.append(name, value);
-    }
-    map
-}
-
-/// Übersetzt einen Body-Verweis in seine Wire-Form.
-#[must_use]
-pub fn body_to_proto(body: &BodyRef) -> v1::BodyRef {
-    v1::BodyRef {
-        sha256: body.sha256.to_vec(),
-        size: body.size,
-        truncated: body.truncated,
-        content_type: body.content_type.clone().unwrap_or_default(),
-    }
-}
-
-/// Übersetzt eine Anfrage in ihre Wire-Form.
-#[must_use]
-pub fn request_to_proto(request: &HttpRequest) -> v1::HttpRequest {
-    v1::HttpRequest {
-        method: method_to_proto(&request.method) as i32,
-        method_raw: method_raw(&request.method),
-        scheme: scheme_to_proto(request.scheme) as i32,
-        authority: Some(authority_to_proto(&request.authority)),
-        path_and_query: request.path_and_query.clone(),
-        headers: headers_to_proto(&request.headers),
-        body: Some(body_to_proto(&request.body)),
-        version: "HTTP/1.1".to_owned(),
-    }
-}
-
-/// Liest die bearbeitete Anfrage aus ihrer Wire-Form.
-///
-/// Anders als `HttpRequest` trägt `EditedRequest` den Body selbst; er bleibt
-/// inline, damit [`FakeState::set_edited`] ihn für `GetBody` ablegen kann.
-/// Die URL wird ohne die `url`-Crate zerlegt: `scheme://host[:port]/path?query`.
-/// Fehlt der Port, gilt der des Schemas; fehlt der Pfad, gilt `/`. Der
-/// `Content-Type` des Bodys kommt aus den Kopfzeilen.
-///
-/// # Errors
-///
-/// [`EditedRequestError`] nennt, was unlesbar war. Der Aufrufer lehnt dann
-/// ab; er macht aus der Anfrage nie ein `Allow`.
-pub fn request_from_proto(request: &v1::EditedRequest) -> Result<HttpRequest, EditedRequestError> {
-    let method = method_from_proto(request.method, &request.method_raw)?;
-    let (scheme, authority, path_and_query) = split_url(&request.url)?;
-    let headers = headers_from_proto(&request.headers);
-    let content_type = headers
-        .get("content-type")
-        .and_then(|value| value.to_str().ok())
-        .map(ToOwned::to_owned);
-    let mut body = BodyRef::from_bytes(Bytes::copy_from_slice(&request.body));
-    body.content_type = content_type;
-    Ok(HttpRequest::new(method, scheme, authority, path_and_query)
-        .with_headers(headers)
-        .with_body(body))
-}
-
-/// Die Methode aus Enum und Rohwert. Ein gesetzter Rohwert gilt.
-fn method_from_proto(method: i32, raw: &str) -> Result<Method, EditedRequestError> {
-    let text = if raw.is_empty() {
-        match v1::Method::try_from(method) {
-            Ok(v1::Method::Unspecified | v1::Method::Other) | Err(_) => {
-                return Err(EditedRequestError::Method);
-            }
-            Ok(known) => known.as_str_name().trim_start_matches("METHOD_").to_owned(),
-        }
-    } else {
-        raw.to_owned()
-    };
-    Method::from_bytes(text.as_bytes()).map_err(|_| EditedRequestError::Method)
-}
-
-/// Zerlegt `scheme://host[:port]/path?query` in Schema, Ziel und Pfad.
-fn split_url(url: &str) -> Result<(Scheme, Authority, String), EditedRequestError> {
-    let (scheme, rest) = url.split_once("://").ok_or(EditedRequestError::Scheme)?;
-    let scheme = Scheme::parse(scheme).ok_or(EditedRequestError::Scheme)?;
-    if rest.contains('#') {
-        return Err(EditedRequestError::Target);
-    }
-    let (authority, path) = match rest.find(['/', '?']) {
-        Some(index) => (&rest[..index], &rest[index..]),
-        None => (rest, "/"),
-    };
-    let path_and_query = if path.starts_with('?') {
-        format!("/{path}")
-    } else {
-        path.to_owned()
-    };
-    if authority.contains('@') {
-        return Err(EditedRequestError::Target);
-    }
-    let (host, port) = split_host_port(authority)?;
-    let host = HostName::parse(host).map_err(|_| EditedRequestError::Host)?;
-    let port = match port {
-        Some(text) => text
-            .parse::<u16>()
-            .ok()
-            .filter(|port| *port != 0)
-            .ok_or(EditedRequestError::Port)?,
-        None => scheme.default_port(),
-    };
-    Ok((scheme, Authority::new(host, port), path_and_query))
-}
-
-/// `host`, `host:port`, `[v6]`, `[v6]:port`.
-fn split_host_port(authority: &str) -> Result<(&str, Option<&str>), EditedRequestError> {
-    if authority.is_empty() {
-        return Err(EditedRequestError::Host);
-    }
-    if authority.starts_with('[') {
-        let end = authority.find(']').ok_or(EditedRequestError::Host)?;
-        let (host, after) = authority.split_at(end + 1);
-        return match after.strip_prefix(':') {
-            Some(port) => Ok((host, Some(port))),
-            None if after.is_empty() => Ok((host, None)),
-            None => Err(EditedRequestError::Host),
-        };
-    }
-    Ok(authority
-        .rsplit_once(':')
-        .map_or((authority, None), |(host, port)| (host, Some(port))))
-}
-
-/// Die Vorschau eines Bodys für `FlowDetail.body_preview`: die ersten
-/// [`BODY_PREVIEW_CHARS`] Zeichen als UTF-8, ungültige Bytes als U+FFFD.
-///
-/// Gelesen werden höchstens `4 * BODY_PREVIEW_CHARS` Bytes, denn länger sind
-/// so viele Zeichen in UTF-8 nie. Ein am Schnitt zerteiltes Zeichen läge
-/// damit immer hinter dem letzten gezeigten und fällt weg.
-#[must_use]
-pub fn body_preview(body: &[u8]) -> String {
-    let scan = body.len().min(BODY_PREVIEW_CHARS * 4);
-    String::from_utf8_lossy(&body[..scan])
-        .chars()
-        .take(BODY_PREVIEW_CHARS)
-        .collect()
-}
-
-/// Übersetzt einen Fund in seine Wire-Form.
-#[must_use]
-pub fn finding_to_proto(finding: &Finding) -> v1::Finding {
-    let (location, header_name) = match &finding.location {
-        humanitl_core::FindingLocation::Header(name) => {
-            (v1::FindingLocation::Header, name.as_str().to_owned())
-        }
-        humanitl_core::FindingLocation::Query => (v1::FindingLocation::Query, String::new()),
-        humanitl_core::FindingLocation::Body => (v1::FindingLocation::Body, String::new()),
-    };
-    let tier = match finding.tier {
-        humanitl_core::Tier::Checksum => v1::FindingTier::Checksum,
-        humanitl_core::Tier::Regex => v1::FindingTier::Regex,
-        humanitl_core::Tier::UserTerm => v1::FindingTier::UserTerm,
-    };
-    v1::Finding {
-        kind: finding_kind_text(&finding.kind),
-        location: location as i32,
-        header_name,
-        span_start: u64::try_from(finding.span.start).unwrap_or(u64::MAX),
-        span_end: u64::try_from(finding.span.end).unwrap_or(u64::MAX),
-        tier: tier as i32,
-        value_hash: finding.value_hash.to_vec(),
-        display_prefix: finding.display_prefix.clone(),
-        resolved: false,
-    }
-}
-
-/// Der Wire-Name einer Fundart, zum Beispiel `api_key.github`.
-fn finding_kind_text(kind: &humanitl_core::FindingKind) -> String {
-    use humanitl_core::FindingKind as Kind;
-    match kind {
-        Kind::ApiKey(name) | Kind::UserTerm(name) | Kind::Custom(name) => {
-            format!("{}.{name}", kind.as_str())
-        }
-        other => other.as_str().to_owned(),
-    }
-}
-
-/// Ein Zeitpunkt in der Wire-Form.
-#[must_use]
-pub fn timestamp(at: SystemTime) -> prost_types::Timestamp {
-    at.duration_since(SystemTime::UNIX_EPOCH).map_or_else(
-        |_| prost_types::Timestamp::default(),
-        |since| prost_types::Timestamp {
-            seconds: i64::try_from(since.as_secs()).unwrap_or(i64::MAX),
-            nanos: i32::try_from(since.subsec_nanos()).unwrap_or_default(),
-        },
-    )
-}
-
-/// Die Spanne zwischen zwei Zeitpunkten in der Wire-Form.
-#[must_use]
-pub fn duration_between(from: SystemTime, to: SystemTime) -> prost_types::Duration {
-    let span = to.duration_since(from).unwrap_or(Duration::ZERO);
-    prost_types::Duration {
-        seconds: i64::try_from(span.as_secs()).unwrap_or(i64::MAX),
-        nanos: i32::try_from(span.subsec_nanos()).unwrap_or_default(),
     }
 }
 
@@ -1122,21 +747,6 @@ pub fn deadline_instant(timeout: Duration) -> Instant {
         .unwrap_or_else(Instant::now)
 }
 
-/// Der registrierbare Teil eines Hostnamens, grob geschätzt.
-fn apex_of(host: &HostName) -> String {
-    match host {
-        HostName::Ip(ip) => ip.to_string(),
-        HostName::Dns(name) => {
-            let labels: Vec<&str> = name.split('.').collect();
-            if labels.len() <= 2 {
-                name.clone()
-            } else {
-                labels[labels.len() - 2..].join(".")
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -1151,9 +761,10 @@ mod tests {
         UpstreamError,
     };
 
-    use super::{
-        BODY_PREVIEW_CHARS, EditedRequestError, FakeFlow, FakeState, SessionMeta, apex_of,
-        body_preview, deadline_instant, event_to_proto, request_from_proto, timestamp,
+    use super::{FakeFlow, FakeState, SessionMeta, deadline_instant, event_to_proto};
+    use crate::convert::{
+        BODY_PREVIEW_CHARS, EditedRequestError, apex_of, body_preview, request_from_proto,
+        timestamp,
     };
     use crate::v1;
 

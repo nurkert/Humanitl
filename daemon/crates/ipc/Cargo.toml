@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 humanitl-config.workspace = true
 humanitl-core.workspace = true
+humanitl-proxy.workspace = true
 
 base64.workspace = true
 bytes.workspace = true
@@ -36,4 +37,5 @@ tonic-prost-build.workspace = true
 # `tests/proto_contract.rs` uebersetzt die `.proto`-Dateien selbst und
 # vergleicht das Ergebnis mit dem eingecheckten `proto/descriptor.binpb`.
 protox.workspace = true
+tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

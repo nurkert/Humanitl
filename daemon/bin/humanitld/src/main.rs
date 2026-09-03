@@ -1,10 +1,20 @@
 //! Hintergrunddienst: Proxy, Sandbox-Verwaltung, Aufzeichnung, gRPC-Server. Nur Verdrahtung, keine Fachlogik.
 //!
-//! Bis HUM-018 den echten Dienst bringt, kann dieses Binary genau eine Sache:
-//! eine aufgezeichnete Sitzung spielen. `humanitld --fake <session.jsonl>`
-//! öffnet den normalen Socket, schreibt die normale Token-Datei und bedient
-//! die normale Schnittstelle — die Oberfläche merkt den Unterschied nicht
-//! (HUM-005, `fixtures/sessions/README.md`).
+//! Zwei Betriebsarten, eine Schnittstelle:
+//!
+//! - Ohne Argumente der echte Daemon (HUM-018): Konfiguration laden, CA
+//!   öffnen, Registry und Halte-Warteschlange anlegen, eine Proxy-Sitzung auf
+//!   `$XDG_RUNTIME_DIR/humanitl/proxy/proxy.sock` starten und den gRPC-Dienst
+//!   auf `daemon.sock` bedienen, bis `SIGTERM` oder `SIGINT` kommt.
+//! - Mit `--fake <session.jsonl>` derselbe Socket, dieselbe Token-Datei,
+//!   dieselbe Schnittstelle, aber eine aufgezeichnete Sitzung statt eines
+//!   Proxys — die Oberfläche merkt den Unterschied nicht (HUM-005,
+//!   `fixtures/sessions/README.md`).
+//!
+//! Die Reihenfolge beim Start ist festgelegt und wichtig: Pfade, Konfiguration,
+//! `tracing`, CA, Registry und Warteschlange, Proxy, gRPC-Dienst. Was danach
+//! kommt, ist das Warten auf das Signal; danach werden die Sitzungen gestoppt
+//! und Socket und Token entfernt.
 //!
 //! Jeder Fehlerpfad hier ist ein [`Diagnostic`]: Code, Überschrift, Grund und,
 //! wo es einen gibt, ein Vorschlag zur Behebung. `main` schreibt ihn als eine
@@ -12,9 +22,8 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-use std::fmt::Write as _;
-use std::fs::{self, File, Permissions};
-use std::io::{self, Read as _};
+use std::fs::{self, Permissions};
+use std::io;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -22,11 +31,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
-use humanitl_config::{DIR_MODE, FILE_MODE, Paths as XdgPaths};
+use humanitl_config::{AskMode, Config, DIR_MODE, Paths as XdgPaths};
 use humanitl_core::diagnostics::codes;
-use humanitl_core::{Diagnostic, FixAction, Severity};
+use humanitl_core::{Diagnostic, FixAction, SessionId, Severity};
 use humanitl_ipc::fake::{FakeDaemon, FakeOptions, Session};
-use humanitl_ipc::{DaemonService, v1};
+use humanitl_ipc::{DaemonService, IpcServer, auth, bind_socket, v1};
+use humanitl_proxy::ca::{CaStore, DEFAULT_LEAF_CAPACITY, LeafCache};
+use humanitl_proxy::egress::Direct;
+use humanitl_proxy::handler::ProxyLimits;
+use humanitl_proxy::pipeline::FlowPipeline;
+use humanitl_proxy::upstream::ClientTls;
+use humanitl_proxy::{
+    AskPipeline, ConnMeta, FlowHandler, FlowRegistry, HoldQueue, ProxyCore, SystemResolver,
+    Upstream,
+};
 use tokio::net::UnixListener;
 // tonic bringt `tokio-stream` mit dem Feature `net` bereits mit (über sein
 // `server`-Feature); der Wrapper von dort erspart diesem Binary eine eigene
@@ -112,19 +130,143 @@ fn fix_hint(fix: Option<&FixAction>) -> Option<String> {
     })
 }
 
+/// Schaltet `tracing` auf JSON nach `stderr`.
+///
+/// Eine Zeile je Ereignis, damit `journald` und `humanitl doctor` sie ohne
+/// Zwischenschritt lesen können. Die Stufe kommt aus `RUST_LOG`, sonst `info`.
+fn init_tracing() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let _ = tracing_subscriber::fmt()
+        .json()
+        .with_env_filter(filter)
+        .with_writer(io::stderr)
+        .try_init();
+}
+
 /// Der Lauf selbst; jeder Fehler kommt als Befund zurück.
 async fn run() -> Result<(), Diagnostic> {
-    let _ = tracing_subscriber::fmt().with_target(false).try_init();
     let cli = Cli::parse();
+    init_tracing();
+    match cli.fake.clone() {
+        Some(path) => run_fake(&cli, &path).await,
+        None => run_daemon(&cli).await,
+    }
+}
 
-    let Some(path) = cli.fake.clone() else {
-        println!("humanitld {}", env!("CARGO_PKG_VERSION"));
-        println!("no mode selected; the real daemon arrives with HUM-018");
-        println!("try: humanitld --fake fixtures/sessions/mixed.jsonl");
-        return Ok(());
+/// Der echte Daemon (HUM-018).
+///
+/// Reihenfolge wie im Modul-Kommentar. Der Proxy startet vor dem gRPC-Dienst,
+/// damit ein Client, der auf `GetInfo` antwortet bekommt, auch eine Sitzung
+/// vorfindet; der gRPC-Dienst räumt am Ende Socket und Token weg, diese
+/// Funktion die Proxy-Sitzung.
+async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
+    let xdg = XdgPaths::from_process();
+
+    // Zuerst die Frage, ob hier schon ein Daemon läuft, und erst dann alles,
+    // was Dateien anlegt. Ein zweiter Start darf dem ersten nichts wegnehmen:
+    // der Proxy-Socket wird beim Binden ersetzt, und ein später abgebrochener
+    // zweiter Lauf hätte dem ersten damit den Weg in die Sandbox abgeschnitten.
+    let paths = Runtime::resolve(cli.socket.clone())?;
+    free_socket(&paths.socket, ADVICE_DAEMON_SOCKET)?;
+    free_socket(&xdg.proxy_socket(), ADVICE_PROXY_SOCKET)?;
+
+    let config = load_config(&xdg)?;
+
+    let ca = Arc::new(CaStore::open(&xdg)?);
+    tracing::info!(
+        dir = %ca.dir().display(),
+        fingerprint = %ca.fingerprint_sha256(),
+        created = ca.was_created(),
+        "certificate authority ready"
+    );
+
+    let registry = Arc::new(FlowRegistry::new(&config.limits));
+    let queue = Arc::new(HoldQueue::with_registry(&config.limits, registry));
+
+    let proxy = ProxyCore::new();
+    let session = SessionId::new();
+    let proxy_socket = proxy.start_session(
+        session,
+        &xdg.proxy_socket(),
+        build_handler(&config, &queue, &ca)?,
+        ConnMeta::plain(session),
+    )?;
+    tracing::info!(
+        socket = %proxy_socket.display(),
+        session = %session,
+        "proxy session started"
+    );
+
+    let server = IpcServer::new(Arc::clone(&queue), &config, Some(session));
+    let result = humanitl_ipc::serve(&paths.socket, &paths.token, server, shutdown()).await;
+
+    // Erst die Sitzungen, dann zurückkehren: der Accept-Loop endet, und mit
+    // ihm verschwindet der Socket, den die Sandbox eingehängt hätte.
+    proxy.stop_session(session);
+    tracing::info!(session = %session, "proxy session stopped");
+    result
+}
+
+/// Lädt die Konfiguration und meldet, was das Laden überlebt hat.
+fn load_config(xdg: &XdgPaths) -> Result<Config, Diagnostic> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let sources = humanitl_config::discover_with(xdg.env(), &cwd, None);
+    let resolved = humanitl_config::load(&sources)?;
+    for diagnostic in &resolved.diagnostics {
+        tracing::warn!(
+            code = %diagnostic.code,
+            why = %diagnostic.why,
+            "configuration"
+        );
+    }
+    if let Some(diagnostic) = xdg.runtime_dir().diagnostic {
+        tracing::info!(code = %diagnostic.code, why = %diagnostic.why, "runtime directory");
+    }
+    if resolved.config.resolver.test_ca.is_some() {
+        tracing::warn!("resolver.test_ca is set but the daemon does not read it yet (HUM-024)");
+    }
+    Ok(resolved.config)
+}
+
+/// Baut den Handler, der jede Verbindung der Sitzung bedient.
+///
+/// Die Ports kommen aus der Konfiguration: `Direct` als Egress (ADR-017),
+/// der System-Resolver, die eigene CA für die Leaf-Zertifikate und die
+/// Halte-Warteschlange als Pipeline. Ohne Frage (`hold.ask_mode = none`) ist
+/// die Frist null, und die Warteschlange blockt jede Anfrage sofort — sie
+/// lässt nie etwas ungefragt durch.
+fn build_handler(
+    config: &Config,
+    queue: &Arc<HoldQueue>,
+    ca: &Arc<CaStore>,
+) -> Result<FlowHandler, Diagnostic> {
+    let client_tls = ClientTls::new(&[], config.experimental.h2_upstream)?;
+    let upstream = Upstream::new(
+        Arc::new(Direct::new(Duration::from_secs(
+            config.limits.connect_timeout_secs,
+        ))),
+        Arc::new(SystemResolver),
+        client_tls,
+        config.resolver.prefer,
+    );
+    let timeout = match config.hold.ask_mode {
+        AskMode::None => Duration::ZERO,
+        AskMode::Ui | AskMode::Terminal => Duration::from_secs(config.hold.timeout_secs),
     };
+    let pipeline: Arc<dyn FlowPipeline> = Arc::new(AskPipeline::new(Arc::clone(queue), timeout));
+    Ok(FlowHandler::new(
+        Arc::clone(queue),
+        pipeline,
+        upstream,
+        Arc::new(LeafCache::new(Arc::clone(ca), DEFAULT_LEAF_CAPACITY)),
+        ProxyLimits::from_config(&config.limits, &config.recorder),
+    ))
+}
 
-    let session = Session::load(&path).map_err(|error| error.diagnostic())?;
+/// Der Abspieler einer aufgezeichneten Sitzung (HUM-005).
+async fn run_fake(cli: &Cli, path: &Path) -> Result<(), Diagnostic> {
+    let session = Session::load(path).map_err(|error| error.diagnostic())?;
     tracing::info!(
         file = %path.display(),
         lines = session.lines().len(),
@@ -326,39 +468,29 @@ fn io_diagnostic(what: &str, path: &Path, error: &io::Error) -> Diagnostic {
         .build()
 }
 
-/// Ein Token, das nur dieser Lauf kennt: 32 Bytes aus `/dev/urandom`, hex.
-fn new_token() -> Result<String, Diagnostic> {
-    let source = Path::new("/dev/urandom");
-    let mut bytes = [0u8; 32];
-    File::open(source)
-        .and_then(|mut file| file.read_exact(&mut bytes))
-        .map_err(|error| io_diagnostic("read", source, &error))?;
-    let mut token = String::with_capacity(64);
-    for byte in bytes {
-        // Schreiben in einen `String` schlägt nie fehl; das `Result` gehört
-        // dem Trait, nicht diesem Aufruf.
-        let _ = write!(token, "{byte:02x}");
-    }
-    Ok(token)
-}
+/// Was ein belegter gRPC-Socket dem Nutzer rät.
+const ADVICE_DAEMON_SOCKET: &str = "stop it or pass --socket with another path";
 
-/// Schreibt die Token-Datei mit `0600`.
-fn write_token(path: &Path, token: &str) -> Result<(), Diagnostic> {
-    fs::write(path, token).map_err(|error| io_diagnostic("write the token file", path, &error))?;
-    fs::set_permissions(path, Permissions::from_mode(FILE_MODE))
-        .map_err(|error| io_diagnostic("set 0600 on the token file", path, &error))
-}
+/// Was ein belegter Proxy-Socket dem Nutzer rät.
+///
+/// Für ihn gibt es keinen zweiten Pfad: er ist der eine Socket, den der
+/// Launcher in die Sandbox einhängt (HUM-011).
+const ADVICE_PROXY_SOCKET: &str = "stop the running daemon before starting another one";
 
 /// Räumt einen verwaisten Socket weg, weigert sich aber bei einem lebenden
 /// (`DAEMON_003`).
-fn free_socket(path: &Path) -> Result<(), Diagnostic> {
+///
+/// Der Verbindungsversuch ist die einzige verlässliche Prüfung: eine
+/// Socket-Datei bleibt liegen, wenn ein Daemon abstürzt, und eine PID-Datei
+/// wäre eine zweite Wahrheit. `advice` sagt, was für diesen Socket zu tun ist.
+fn free_socket(path: &Path, advice: &str) -> Result<(), Diagnostic> {
     if !path.exists() {
         return Ok(());
     }
     if std::os::unix::net::UnixStream::connect(path).is_ok() {
         return Err(Diagnostic::builder(codes::DAEMON_003, Severity::Blocking)
             .why(format!(
-                "a daemon is already listening on {}; stop it or pass --socket with another path",
+                "a daemon is already listening on {}; {advice}",
                 path.display()
             ))
             .build());
@@ -375,9 +507,9 @@ fn free_socket(path: &Path) -> Result<(), Diagnostic> {
 /// ein Schlüssel zu einem Dienst, den es nicht gibt; darum verschwindet sie
 /// auch, wenn der Start nach ihr scheitert.
 async fn serve(daemon: FakeDaemon, paths: &Runtime) -> Result<(), Diagnostic> {
-    free_socket(&paths.socket)?;
-    let token = new_token()?;
-    write_token(&paths.token, &token)?;
+    free_socket(&paths.socket, ADVICE_DAEMON_SOCKET)?;
+    let token = auth::new_token()?;
+    auth::write_token(&paths.token, &token)?;
     let result = serve_bound(daemon, paths, token).await;
     let _ = fs::remove_file(&paths.token);
     tracing::info!("fake daemon stopped, socket and token removed");
@@ -396,19 +528,6 @@ async fn serve_bound(daemon: FakeDaemon, paths: &Runtime, token: String) -> Resu
     let result = serve_listener(daemon, paths, listener, token).await;
     let _ = fs::remove_file(&paths.socket);
     result
-}
-
-/// Bindet den Socket mit `0600`. Scheitert das Setzen der Rechte, bleibt kein
-/// offener Socket zurück.
-fn bind_socket(path: &Path) -> Result<UnixListener, Diagnostic> {
-    let listener =
-        UnixListener::bind(path).map_err(|error| io_diagnostic("bind the socket", path, &error))?;
-    if let Err(error) = fs::set_permissions(path, Permissions::from_mode(FILE_MODE)) {
-        drop(listener);
-        let _ = fs::remove_file(path);
-        return Err(io_diagnostic("set 0600 on the socket", path, &error));
-    }
-    Ok(listener)
 }
 
 /// Der Dienst selbst auf einem gebundenen Socket.
@@ -467,7 +586,10 @@ mod tests {
 
     use humanitl_core::FixAction;
 
-    use super::{DirOwner, Runtime, check_private_dir, fix_hint, free_socket, parse_speed};
+    use super::{
+        ADVICE_DAEMON_SOCKET, DirOwner, Runtime, check_private_dir, fix_hint, free_socket,
+        parse_speed,
+    };
 
     fn mode_of(path: &Path) -> u32 {
         fs::metadata(path).unwrap().permissions().mode() & 0o777
@@ -598,10 +720,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("d.sock");
 
-        assert!(free_socket(&socket).is_ok(), "nothing there, nothing to do");
+        assert!(
+            free_socket(&socket, ADVICE_DAEMON_SOCKET).is_ok(),
+            "nothing there, nothing to do"
+        );
 
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
-        let error = free_socket(&socket).unwrap_err();
+        let error = free_socket(&socket, ADVICE_DAEMON_SOCKET).unwrap_err();
         assert_eq!(error.code.as_str(), "DAEMON_003");
         assert_eq!(error.title, "Socket bereits belegt");
         assert!(error.why.contains("--socket"), "{}", error.why);
@@ -610,7 +735,7 @@ mod tests {
         drop(listener);
         // Die Datei bleibt nach dem Schließen liegen; niemand hört mehr zu.
         assert!(socket.exists());
-        assert!(free_socket(&socket).is_ok());
+        assert!(free_socket(&socket, ADVICE_DAEMON_SOCKET).is_ok());
         assert!(!socket.exists(), "a stale socket is removed");
     }
 

@@ -8,8 +8,14 @@
 //! Quellbaum; er ist niemals von Hand zu ändern. Wie man den Vertrag ändert,
 //! steht in `docs/PROTOCOL.md`.
 //!
-//! Von Hand geschrieben sind zwei Dinge:
+//! Von Hand geschrieben ist der Rest:
 //!
+//! - [`convert`] mit der Abbildung zwischen Kern-Typen und Wire-Form; jede
+//!   Übersetzung steht dort genau einmal,
+//! - [`auth`] mit dem Sitzungs-Token: erzeugen, ablegen, prüfen,
+//! - [`server`] mit [`IpcServer`], dem Dienst des echten Daemons über
+//!   Registry und Halte-Warteschlange (HUM-018),
+//! - [`client`] mit dem Gegenstück für CLI, Oberfläche und Tests,
 //! - [`server_stub`] mit dem Port [`DaemonApi`] und dem tonic-Dienst darüber,
 //! - [`fake`] mit einem Daemon, der statt eines Proxys eine aufgezeichnete
 //!   Sitzung spielt (`humanitld --fake`, HUM-005).
@@ -45,10 +51,16 @@ pub mod v1 {
     include!(concat!(env!("OUT_DIR"), "/humanitl.v1.rs"));
 }
 
+pub mod auth;
+pub mod client;
+pub mod convert;
 pub mod fake;
+pub mod server;
 pub mod server_stub;
 
+pub use crate::client::connect;
+pub use crate::convert::diagnostic_to_proto;
+pub use crate::server::{IpcServer, bind_socket, serve};
 pub use crate::server_stub::{
-    BoxStream, DaemonApi, DaemonService, diagnostic_from_status, diagnostic_to_proto,
-    diagnostic_to_status,
+    BoxStream, DaemonApi, DaemonService, diagnostic_from_status, diagnostic_to_status,
 };
