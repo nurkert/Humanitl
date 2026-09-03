@@ -41,7 +41,7 @@ use rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
 use crate::egress::Egress;
-use crate::resolver::{self, Resolver};
+use crate::resolver::{self, AddressRefusal, Resolver};
 
 /// Kopfzeilen von Verbindungsrang (RFC 9110 §7.6.1); sie gehören der einen
 /// Verbindung und werden weder zum Ziel noch zurück zum Client durchgereicht.
@@ -180,20 +180,35 @@ impl Upstream {
     ) -> Result<Response<Incoming>, UpstreamError> {
         let authority = &request.authority;
         let ip = match &authority.host {
-            HostName::Ip(ip) => *ip,
+            // Ein IP-Literal wird nicht aufgelöst: Es steht schon da, und
+            // entschieden wurde für genau diese Adresse (ADR-007: IP-Literale
+            // matchen nie eine Host-Regel).
+            HostName::Ip(ip) => {
+                if ip_is_private(*ip) && !allow_private {
+                    return Err(UpstreamError::PrivateAddress(*ip));
+                }
+                *ip
+            }
+            // Erst hier, nach `Decided(Allow | AllowEdited)`, verlässt eine
+            // Frage den Rechner (ADR-006).
             HostName::Dns(name) => {
-                let addrs = self
-                    .resolver
-                    .resolve(name)
-                    .await
-                    .map_err(|_err| UpstreamError::Dns)?;
-                resolver::pick(&addrs, self.prefer).ok_or(UpstreamError::Dns)?
+                let addrs = self.resolver.resolve(name).await.map_err(|err| {
+                    tracing::debug!(%err, "resolving the target failed");
+                    UpstreamError::Dns
+                })?;
+                match resolver::select(&addrs, self.prefer, allow_private) {
+                    Ok(ip) => ip,
+                    Err(AddressRefusal::Private(ip)) => {
+                        return Err(UpstreamError::PrivateAddress(ip));
+                    }
+                    // Nichts Verbindbares in der Antwort. Kein zweiter Versuch
+                    // mit einem anderen Resolver: Ein Rückfall auf das
+                    // System-DNS wäre genau die Abfrage, die niemand erlaubt
+                    // hat (HUM-024, Fallstricke).
+                    Err(AddressRefusal::NoUsable) => return Err(UpstreamError::Dns),
+                }
             }
         };
-
-        if ip_is_private(ip) && !allow_private {
-            return Err(UpstreamError::PrivateAddress(ip));
-        }
 
         let stream = self
             .egress

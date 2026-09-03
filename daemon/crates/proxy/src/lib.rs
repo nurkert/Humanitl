@@ -19,12 +19,19 @@
 //!   was `ask` ergibt, über die [`HoldQueue`].
 //! - [`upstream`]: nach `Allow` auflösen ([`Resolver`]-Port), Adresse
 //!   anheften, über den [`Egress`]-Port verbinden, HTTP/1.1 sprechen.
+//! - [`resolver`]: der eine Ort, an dem ein Name zu einer Adresse wird
+//!   (HUM-024, ADR-006). [`ResolverPort`] ist der verdrahtete Stapel aus festen
+//!   Zuordnungen, Zwischenspeicher und Namensdienst; [`ResolverPort::stats`]
+//!   liefert die Zähler, die `daemon status --json` zeigt.
 //! - [`connect`], [`tls`]: der [`ConnectionContext`] einer Verbindung und die
 //!   Prüfung, dass CONNECT-Ziel, SNI und `Host` dasselbe Ziel meinen
 //!   (HUM-023). Nur ihr Ergebnis wird ausgewertet, nie das CONNECT-Ziel
 //!   allein.
 //! - [`findings`]: der Port für die Detektoren (HUM-025).
-//! - [`ca`], [`hold`]: CA und Halte-Warteschlange (HUM-014, HUM-016).
+//! - [`ca`], [`hold`]: CA und Halte-Warteschlange (HUM-014, HUM-016). Die
+//!   Warteschlange ist zugleich der eine Trichter, durch den jedes Ereignis
+//!   geht: dort hängen die Aufzeichnung ([`HoldQueue::recording`], HUM-026)
+//!   und der Domain-Katalog ([`DomainSink`], HUM-031).
 //! - [`rules_store`]: [`RulesStore`] hält den geltenden Regelsatz aus
 //!   `rules.yaml`, den Sitzungsregeln und den mitgelieferten Regeln und
 //!   schreibt Änderungen atomar zurück (HUM-027).
@@ -57,10 +64,13 @@ pub use crate::core::ProxyCore;
 pub use crate::egress::{AsyncStream, Direct, Egress};
 pub use crate::findings::{NoScan, Scanner, Tier1Scanner};
 pub use crate::handler::{FlowHandler, ProxyLimits};
-pub use crate::hold::HoldQueue;
+pub use crate::hold::{DomainSink, HoldQueue};
 pub use crate::listener::SessionSocket;
 pub use crate::pipeline::{AskPipeline, FlowPipeline, PassthroughPipeline, RulesPipeline};
 pub use crate::registry::{FlowFilter, FlowRecord, FlowRegistry, FlowSummary};
-pub use crate::resolver::{ResolveError, Resolver, SystemResolver};
+pub use crate::resolver::{
+    AddressRefusal, CachingResolver, OverrideResolver, ResolveError, Resolver, ResolverMetrics,
+    ResolverPort, ResolverStats, SystemResolver,
+};
 pub use crate::rules_store::{Origin, ReloadReport, RulesStore, StoredRule};
 pub use crate::upstream::{ClientTls, Upstream};

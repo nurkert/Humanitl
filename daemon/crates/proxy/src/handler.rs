@@ -28,9 +28,10 @@ use humanitl_config::{HoldConfig, Limits, RecorderConfig};
 use humanitl_core::diagnostics::codes::PROXY_005;
 use humanitl_core::{
     Authority, BlockReason, BodyRef, Decision, DecisionSource, Diagnostic, Finding, Flow,
-    FlowEvent, FlowId, FlowState, HostName, HttpRequest, InvalidTransition, Method, Scheme,
-    Severity, Tier, TransitionInput, UpstreamError, block_response, failed_response,
+    FlowEvent, FlowId, FlowState, HeaderMap, HostName, HttpRequest, InvalidTransition, Method,
+    Scheme, Severity, Tier, TransitionInput, UpstreamError, block_response, failed_response,
 };
+use humanitl_recorder::{Dir, Recorder};
 use hyper::body::Incoming;
 use hyper::header::{HeaderName, HeaderValue};
 use hyper::service::service_fn;
@@ -99,6 +100,7 @@ struct Inner {
     leaves: Arc<LeafCache>,
     limits: ProxyLimits,
     scanner: Arc<dyn Scanner>,
+    recorder: Option<Recorder>,
 }
 
 /// Bedient eine Verbindung: liest Anfragen, entscheidet, leitet weiter.
@@ -125,6 +127,7 @@ impl FlowHandler {
                 leaves,
                 limits,
                 scanner: Arc::new(NoScan),
+                recorder: None,
             }),
         }
     }
@@ -142,6 +145,31 @@ impl FlowHandler {
         limits: ProxyLimits,
         scanner: Arc<dyn Scanner>,
     ) -> Self {
+        Self::with_recorder(queue, pipeline, upstream, leaves, limits, scanner, None)
+    }
+
+    /// Derselbe Handler mit der Aufzeichnung aus HUM-026.
+    ///
+    /// Der Handler ist die eine Stelle, die die Bytes in der Hand hält:
+    /// den gepufferten Anfrage-Body, die bearbeitete Anfrage und die Antwort,
+    /// während sie streamt. Deshalb schreibt er sie auch auf. Alles, was ein
+    /// Ereignis sagt, schreibt dagegen die Warteschlange
+    /// ([`HoldQueue::recording`]).
+    ///
+    /// Ein Fehler der Aufzeichnung hält den Proxy nie an: Er wird als
+    /// [`FlowEvent::Diagnostic`] an denselben Flow gehängt, und die Anfrage
+    /// läuft weiter. Eine Anfrage zu blocken, weil die Festplatte voll ist,
+    /// wäre eine Entscheidung, die niemand getroffen hat.
+    #[must_use]
+    pub fn with_recorder(
+        queue: Arc<HoldQueue>,
+        pipeline: Arc<dyn FlowPipeline>,
+        upstream: Upstream,
+        leaves: Arc<LeafCache>,
+        limits: ProxyLimits,
+        scanner: Arc<dyn Scanner>,
+        recorder: Option<Recorder>,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 queue,
@@ -150,6 +178,7 @@ impl FlowHandler {
                 leaves,
                 limits,
                 scanner,
+                recorder,
             }),
         }
     }
@@ -312,6 +341,12 @@ impl FlowHandler {
             request.clone(),
         );
         self.inner.queue.publish(flow.received_event());
+        // Der Body ist gepuffert und die Zeile des Flows steht (das `Received`
+        // oben ging durch die Aufzeichnung): jetzt, und nicht später, wird die
+        // Anfrage aufgezeichnet. Später hieße: nach einer Entscheidung, und
+        // dann fehlte gerade die Anfrage, die jemand abgelehnt hat.
+        self.record_message(flow.id, Dir::Request, &request.headers, body_bytes.clone())
+            .await;
         if let Err(response) = self.analyze(&mut flow, &meta, &request, &body_bytes) {
             return response;
         }
@@ -340,6 +375,16 @@ impl FlowHandler {
                     .inline
                     .clone()
                     .unwrap_or_else(|| body_bytes.clone());
+                // Die bearbeitete Anfrage steht neben der ursprünglichen, nicht
+                // an ihrer Stelle: Die History zeigt beide, sonst ließe sich
+                // nicht mehr sehen, was der Mensch geändert hat.
+                self.record_message(
+                    flow.id,
+                    Dir::RequestEdited,
+                    &edited.headers,
+                    edited_body.clone(),
+                )
+                .await;
                 self.forward(flow, edited, edited_body, &meta).await
             }
             Decision::Block { reason, note } => {
@@ -375,6 +420,13 @@ impl FlowHandler {
             .iter()
             .any(|finding| finding.tier == Tier::Checksum);
         log_findings(flow, &report.findings, truncated);
+        // Ohne Fund gibt es nichts aufzuschreiben: Die Zahl der Funde trägt
+        // die Zeile des Flows ohnehin, und sie ist dann null.
+        if let Some(recorder) = self.inner.recorder.as_ref()
+            && !report.findings.is_empty()
+        {
+            recorder.store_findings(flow.id, &report.findings);
+        }
         if self
             .apply(
                 flow,
@@ -442,6 +494,29 @@ impl FlowHandler {
         self.record_block(flow, reason, Some(note))
     }
 
+    /// Zeichnet eine vollständig gepufferte Nachricht auf.
+    ///
+    /// Ohne Aufzeichnung geschieht nichts. Scheitert sie, ist das ein Befund am
+    /// Flow und kein Grund, die Anfrage anzuhalten: Der Mensch sieht die Lücke
+    /// an derselben Stelle wie den Flow, um den es geht
+    /// (`backlog/CONVENTIONS.md` 4.13).
+    async fn record_message(&self, flow: FlowId, dir: Dir, headers: &HeaderMap, body: Bytes) {
+        let Some(recorder) = self.inner.recorder.as_ref() else {
+            return;
+        };
+        if let Err(error) = recorder.store_message(flow, dir, headers, body).await {
+            let diagnostic = error.into_diagnostic();
+            tracing::warn!(
+                %flow,
+                dir = dir.as_str(),
+                code = diagnostic.code.as_str(),
+                why = %diagnostic.why,
+                "the request could not be recorded; it is handled anyway"
+            );
+            self.publish_diagnostic(flow, diagnostic);
+        }
+    }
+
     /// Hängt einen Befund an einen Flow.
     fn publish_diagnostic(&self, flow_id: FlowId, diagnostic: Diagnostic) {
         self.inner.queue.publish(FlowEvent::Diagnostic {
@@ -495,7 +570,9 @@ impl FlowHandler {
         match self
             .inner
             .upstream
-            .forward(&request, body, meta.allow_private)
+            // Die Verbindung darf private Ziele erlauben (Test-Hook), und die
+            // Regel darf es auch (ADR-006). Beides zusammen entscheidet.
+            .forward(&request, body, meta.allow_private || flow.allow_private)
             .await
         {
             Ok(upstream) => {
@@ -508,9 +585,19 @@ impl FlowHandler {
                 }
                 let (mut parts, incoming) = upstream.into_parts();
                 upstream::strip_hop_by_hop(&mut parts.headers);
-                // Der Tee reicht die Antwort ungepuffert durch und schließt den
-                // Flow beim letzten Frame mit `Record` ab.
-                let body = body::tee(incoming, flow, Arc::clone(&self.inner.queue));
+                // Aufgezeichnet werden die Kopfzeilen, die der Agent zu sehen
+                // bekommt, also die nach dem Entfernen der Hop-by-Hop-Zeilen:
+                // Die History soll zeigen, was ankam, nicht was auf der
+                // Leitung zwischen Proxy und Ziel stand.
+                let sink = self
+                    .inner
+                    .recorder
+                    .as_ref()
+                    .map(|recorder| recorder.begin_response(flow.id, &parts.headers));
+                // Der Tee reicht die Antwort ungepuffert durch, schiebt jedes
+                // Stück in den Mitschnitt und schließt den Flow beim letzten
+                // Frame mit `Record` ab.
+                let body = body::tee(incoming, flow, Arc::clone(&self.inner.queue), sink, status);
                 Response::from_parts(parts, body)
             }
             Err(error) => self.record_failure(&mut flow, error),
