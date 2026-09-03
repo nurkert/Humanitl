@@ -36,6 +36,27 @@ if [[ -d app/lib/features ]]; then
       fail=1
     fi
   done < <(grep -rn "import .*features/" app/lib/features --include='*.dart' 2>/dev/null || true)
+  # Auch der relative Weg zaehlt: aus `features/a/x/y.dart` fuehrt
+  # `../../b/...` in ein anderes Feature, ohne dass "features/" im Text steht.
+  while IFS= read -r hit; do
+    file="${hit%%:*}"
+    src_feature=$(sed -E 's#^app/lib/features/([^/]+)/.*#\1#' <<<"$file")
+    # Die Shell ist der Rahmen, der die Features einhaengt (ARCHITECTURE 5):
+    # sie darf deren Einstiegs-Screens importieren, sonst niemand.
+    [[ "$src_feature" == "shell" ]] && continue
+    rel=$(sed -E "s#.*import '([^']+)'.*#\1#" <<<"${hit#*:}")
+    target=$(cd "$(dirname "$file")" && realpath -m --relative-to=. "$rel" 2>/dev/null || true)
+    target=$(realpath -m --relative-to="$PWD" "$(dirname "$file")/$rel" 2>/dev/null || true)
+    case "$target" in
+      app/lib/features/*)
+        dst_feature=$(sed -E 's#^app/lib/features/([^/]+)/.*#\1#' <<<"$target")
+        if [[ -n "$dst_feature" && "$src_feature" != "$dst_feature" ]]; then
+          echo "feature imports another feature: $hit" >&2
+          fail=1
+        fi
+        ;;
+    esac
+  done < <(grep -rn "^import '\.\./" app/lib/features --include='*.dart' 2>/dev/null || true)
 fi
 
 exit "$fail"

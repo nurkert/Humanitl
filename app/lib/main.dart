@@ -3,10 +3,17 @@ library;
 
 import 'dart:io' show Platform;
 
+import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:window_manager/window_manager.dart';
 
-import 'core/ui/ui.dart';
+import 'app.dart';
+import 'core/ipc/client_providers.dart';
+import 'core/ipc/launch_options.dart';
 import 'features/settings/gallery_screen.dart';
+
+export 'app.dart' show HumanitlApp;
 
 /// Environment variable that opens the design gallery instead of the shell.
 const String galleryEnvironmentVariable = 'HUMANITL_GALLERY';
@@ -14,9 +21,41 @@ const String galleryEnvironmentVariable = 'HUMANITL_GALLERY';
 /// Command line flag that opens the design gallery instead of the shell.
 const String galleryFlag = '--gallery';
 
+/// The window title. The product name is the same in every language
+/// (`appTitle` in the ARB files); it is set here, before any `BuildContext`
+/// exists, because the Linux runner names the window from native code.
+const String windowTitle = 'Humanitl';
+
+/// The smallest window the three-pane layout fits into (HUM-019 Schritt 7).
+const Size windowMinimumSize = Size(1100, 700);
+
 /// Starts the application, or the design gallery when it was asked for.
-void main(List<String> args) {
-  runApp(galleryRequested(args) ? const GalleryScreen() : const HumanitlApp());
+Future<void> main(List<String> args) async {
+  if (galleryRequested(args)) {
+    runApp(const GalleryScreen());
+    return;
+  }
+  WidgetsFlutterBinding.ensureInitialized();
+  await configureWindow();
+  final LaunchOptions options = LaunchOptions.resolve(args);
+  runApp(
+    ProviderScope(
+      overrides: [launchOptionsProvider.overrideWithValue(options)],
+      child: const HumanitlApp(),
+    ),
+  );
+}
+
+/// Title and minimum size of the window, after `ensureInitialized` (HUM-019
+/// Fallstricke). Quietly does nothing where the plugin is absent (tests).
+Future<void> configureWindow() async {
+  try {
+    await windowManager.ensureInitialized();
+    await windowManager.setTitle(windowTitle);
+    await windowManager.setMinimumSize(windowMinimumSize);
+  } on MissingPluginException {
+    // No native window: a test binding or an unsupported platform.
+  }
 }
 
 /// True when [args] or [environment] ask for the design gallery.
@@ -28,18 +67,8 @@ bool galleryRequested(List<String> args, {Map<String, String>? environment}) {
     return true;
   }
   final Map<String, String> env = environment ?? Platform.environment;
-  final String value =
-      (env[galleryEnvironmentVariable] ?? '').trim().toLowerCase();
+  final String value = (env[galleryEnvironmentVariable] ?? '')
+      .trim()
+      .toLowerCase();
   return value.isNotEmpty && value != '0' && value != 'false';
-}
-
-/// Placeholder root widget; replaced by the real shell in HUM-019.
-class HumanitlApp extends StatelessWidget {
-  /// Creates the placeholder root widget.
-  const HumanitlApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return const ColoredBox(color: HColors.bg0);
-  }
 }
