@@ -58,11 +58,18 @@ fn defaults_when_nothing_set() {
     assert_eq!(resolved.config.limits.max_decompress_ratio, 100);
     assert_eq!(resolved.config.limits.connect_timeout_secs, 10);
     assert_eq!(resolved.config.recorder.inline_max_bytes, 256 * 1024);
-    assert_eq!(resolved.config.pseudonyms.max_response_bytes, 8 * 1024 * 1024);
+    assert_eq!(
+        resolved.config.pseudonyms.max_response_bytes,
+        8 * 1024 * 1024
+    );
     assert_eq!(resolved.config.hold.ask_mode, AskMode::Ui);
     assert_eq!(resolved.config.ui.language, Language::En);
 
-    assert!(resolved.diagnostics.is_empty(), "{:?}", resolved.diagnostics);
+    assert!(
+        resolved.diagnostics.is_empty(),
+        "{:?}",
+        resolved.diagnostics
+    );
     assert!(!resolved.origins.is_empty());
     for (path, origin) in &resolved.origins {
         assert_eq!(*origin, Origin::Default, "{path} is not a default");
@@ -141,7 +148,11 @@ fn only_the_config_block_of_a_profile_counts() {
     let resolved = expect_ok(&all_files());
     // profile-global.toml hat einen [rules]-Block; HUM-066 liest ihn, hier ist
     // er kein unbekannter Schlüssel und landet in keinem Feld.
-    assert!(resolved.diagnostics.is_empty(), "{:?}", resolved.diagnostics);
+    assert!(
+        resolved.diagnostics.is_empty(),
+        "{:?}",
+        resolved.diagnostics
+    );
 }
 
 #[test]
@@ -180,15 +191,15 @@ fn the_whole_ladder_in_one_go() {
     let ladder = [
         ("recorder.retention_days", Origin::Default),
         ("ui.theme", Origin::Global),
-        ("ui.language", Origin::ProfileGlobal("profile-global".to_owned())),
+        (
+            "ui.language",
+            Origin::ProfileGlobal("profile-global".to_owned()),
+        ),
         (
             "findings.user_terms",
             Origin::ProfileProject(fixture("profile-project.toml")),
         ),
-        (
-            "ui.sound",
-            Origin::Env("HUMANITL_UI__SOUND".to_owned()),
-        ),
+        ("ui.sound", Origin::Env("HUMANITL_UI__SOUND".to_owned())),
         ("limits.event_buffer", Origin::Cli),
     ];
     for (path, origin) in ladder {
@@ -404,8 +415,16 @@ fn the_override_table_names_every_group_of_the_schema() {
             row.path,
             row.group
         );
-        assert!(leaves.contains(row.path), "{} is not a leaf of the schema", row.path);
-        assert_ne!(row.after_lower, row.after_higher, "{}: both layers look alike", row.path);
+        assert!(
+            leaves.contains(row.path),
+            "{} is not a leaf of the schema",
+            row.path
+        );
+        assert_ne!(
+            row.after_lower, row.after_higher,
+            "{}: both layers look alike",
+            row.path
+        );
     }
 }
 
@@ -436,7 +455,10 @@ fn env_value_types() {
         vec!["/v1/".to_owned(), "/chat/".to_owned()]
     );
     assert_eq!(resolved.config.agent.adapter, "2024");
-    assert_eq!(resolved.config.resolver.nameserver.as_deref(), Some("1.1.1.1:53"));
+    assert_eq!(
+        resolved.config.resolver.nameserver.as_deref(),
+        Some("1.1.1.1:53")
+    );
     assert_eq!(
         resolved.config.findings.user_terms,
         vec!["true".to_owned(), "42".to_owned()]
@@ -466,7 +488,11 @@ fn env_variables_of_other_programs_are_ignored() {
     ]));
     let resolved = expect_ok(&sources);
     assert_eq!(resolved.config.hold.timeout_secs, 42);
-    assert!(resolved.diagnostics.is_empty(), "{:?}", resolved.diagnostics);
+    assert!(
+        resolved.diagnostics.is_empty(),
+        "{:?}",
+        resolved.diagnostics
+    );
 }
 
 #[test]
@@ -479,14 +505,25 @@ fn an_unknown_env_key_is_a_diagnostic_not_a_failure() {
 
     assert_eq!(resolved.config.hold.timeout_secs, 300);
     let [diagnostic] = resolved.diagnostics.as_slice() else {
-        panic!("expected exactly one diagnostic, got {:?}", resolved.diagnostics);
+        panic!(
+            "expected exactly one diagnostic, got {:?}",
+            resolved.diagnostics
+        );
     };
     assert_eq!(diagnostic.code.as_str(), "CONFIG_002");
     // Nie `Error`: ein Fehler in `diagnostics` saehe aus wie ein gescheiterter
     // Start, obwohl der Daemon laeuft (`backlog/CONVENTIONS.md` 4.11).
     assert_eq!(diagnostic.severity, Severity::Warning);
-    assert!(diagnostic.why.contains("hold.timeoutt_secs"), "{}", diagnostic.why);
-    assert!(diagnostic.why.contains("hold.timeout_secs"), "{}", diagnostic.why);
+    assert!(
+        diagnostic.why.contains("hold.timeoutt_secs"),
+        "{}",
+        diagnostic.why
+    );
+    assert!(
+        diagnostic.why.contains("hold.timeout_secs"),
+        "{}",
+        diagnostic.why
+    );
 }
 
 #[test]
@@ -513,7 +550,11 @@ fn an_unknown_cli_key_is_config_002() {
     let sources = Sources::empty().with_cli([("hold.nonsense", "1")]);
     let diagnostic = expect_err(&sources);
     assert_eq!(diagnostic.code.as_str(), "CONFIG_002");
-    assert!(diagnostic.why.contains("command line"), "{}", diagnostic.why);
+    assert!(
+        diagnostic.why.contains("command line"),
+        "{}",
+        diagnostic.why
+    );
 }
 
 #[test]
@@ -521,7 +562,11 @@ fn a_group_used_as_a_value_is_config_002() {
     let sources = Sources::empty().with_cli([("hold", "5")]);
     let diagnostic = expect_err(&sources);
     assert_eq!(diagnostic.code.as_str(), "CONFIG_002");
-    assert!(diagnostic.why.contains("group of settings"), "{}", diagnostic.why);
+    assert!(
+        diagnostic.why.contains("group of settings"),
+        "{}",
+        diagnostic.why
+    );
 }
 
 #[test]
@@ -534,7 +579,11 @@ fn a_group_outside_the_config_block_of_a_profile_is_config_002() {
     };
     let diagnostic = expect_err(&sources);
     assert_eq!(diagnostic.code.as_str(), "CONFIG_002");
-    assert!(diagnostic.why.contains("[config.hold]"), "{}", diagnostic.why);
+    assert!(
+        diagnostic.why.contains("[config.hold]"),
+        "{}",
+        diagnostic.why
+    );
     assert!(
         diagnostic.why.contains("profile-misplaced-group.toml"),
         "{}",
@@ -563,7 +612,11 @@ fn zero_timeout_is_config_003() {
     let diagnostic = expect_err(&sources);
 
     assert_eq!(diagnostic.code.as_str(), "CONFIG_003");
-    assert!(diagnostic.why.contains("hold.timeout_secs"), "{}", diagnostic.why);
+    assert!(
+        diagnostic.why.contains("hold.timeout_secs"),
+        "{}",
+        diagnostic.why
+    );
     assert!(diagnostic.why.contains("default 300"), "{}", diagnostic.why);
 }
 
@@ -573,9 +626,17 @@ fn a_wrong_type_is_config_003_with_path_and_origin() {
     let diagnostic = expect_err(&sources);
 
     assert_eq!(diagnostic.code.as_str(), "CONFIG_003");
-    assert!(diagnostic.why.contains("hold.timeout_secs"), "{}", diagnostic.why);
+    assert!(
+        diagnostic.why.contains("hold.timeout_secs"),
+        "{}",
+        diagnostic.why
+    );
     assert!(diagnostic.why.contains("integer"), "{}", diagnostic.why);
-    assert!(diagnostic.why.contains("command line"), "{}", diagnostic.why);
+    assert!(
+        diagnostic.why.contains("command line"),
+        "{}",
+        diagnostic.why
+    );
 }
 
 #[test]
@@ -587,7 +648,11 @@ fn a_value_outside_an_enum_is_config_003() {
     let diagnostic = expect_err(&sources);
 
     assert_eq!(diagnostic.code.as_str(), "CONFIG_003");
-    assert!(diagnostic.why.contains("ui | terminal | none"), "{}", diagnostic.why);
+    assert!(
+        diagnostic.why.contains("ui | terminal | none"),
+        "{}",
+        diagnostic.why
+    );
 }
 
 #[test]
@@ -598,7 +663,11 @@ fn a_missing_file_is_config_001() {
     };
     let diagnostic = expect_err(&sources);
     assert_eq!(diagnostic.code.as_str(), "CONFIG_001");
-    assert!(diagnostic.why.contains("does-not-exist.toml"), "{}", diagnostic.why);
+    assert!(
+        diagnostic.why.contains("does-not-exist.toml"),
+        "{}",
+        diagnostic.why
+    );
 }
 
 #[test]
@@ -620,13 +689,21 @@ fn lists_replace_and_do_not_grow() {
     };
     let resolved = expect_ok(&sources);
 
-    assert_eq!(resolved.config.llm.passthrough_paths, vec!["/only/".to_owned()]);
+    assert_eq!(
+        resolved.config.llm.passthrough_paths,
+        vec!["/only/".to_owned()]
+    );
     assert_eq!(
         resolved.config.findings.user_terms,
         vec!["projekt-nordlicht".to_owned()]
     );
     assert_eq!(
-        resolved.config.resolver.overrides.get("api.example.com").map(String::as_str),
+        resolved
+            .config
+            .resolver
+            .overrides
+            .get("api.example.com")
+            .map(String::as_str),
         Some("10.0.0.5")
     );
     assert_eq!(resolved.origin("resolver.overrides"), Some(&Origin::Global));
@@ -642,7 +719,13 @@ fn a_free_table_is_replaced_as_a_whole() {
     let resolved = expect_ok(&sources);
 
     assert_eq!(resolved.config.resolver.overrides.len(), 1);
-    assert!(resolved.config.resolver.overrides.contains_key("other.example"));
+    assert!(
+        resolved
+            .config
+            .resolver
+            .overrides
+            .contains_key("other.example")
+    );
     assert_eq!(resolved.origin("resolver.overrides"), Some(&Origin::Cli));
 }
 
@@ -704,7 +787,11 @@ fn the_current_name_beats_the_alias_in_the_same_file() {
     assert_eq!(diagnostic.code.as_str(), "CONFIG_006");
     assert_eq!(diagnostic.severity, Severity::Warning);
     assert_eq!(diagnostic.title, "Alter und neuer Schlüssel gesetzt");
-    assert!(diagnostic.why.contains("hold.body_cap_bytes"), "{}", diagnostic.why);
+    assert!(
+        diagnostic.why.contains("hold.body_cap_bytes"),
+        "{}",
+        diagnostic.why
+    );
     assert!(
         diagnostic.why.contains("limits.hold_body_cap_bytes wins"),
         "the message must name the winner: {}",
@@ -740,7 +827,11 @@ fn an_alias_in_a_higher_layer_still_wins_over_a_lower_layer() {
         "{}",
         warning.why
     );
-    assert!(warning.why.contains("HUMANITL_HOLD__BODY_CAP_BYTES"), "{}", warning.why);
+    assert!(
+        warning.why.contains("HUMANITL_HOLD__BODY_CAP_BYTES"),
+        "{}",
+        warning.why
+    );
 }
 
 #[test]
@@ -748,7 +839,11 @@ fn discover_finds_the_files_of_a_home_and_a_project() {
     let home = tempfile::tempdir().expect("tempdir");
     let config_dir = home.path().join("cfg/humanitl");
     std::fs::create_dir_all(config_dir.join("profiles")).expect("mkdir");
-    std::fs::write(config_dir.join("config.toml"), "[hold]\ntimeout_secs = 11\n").expect("write");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        "[hold]\ntimeout_secs = 11\n",
+    )
+    .expect("write");
     std::fs::write(
         config_dir.join("profiles/work.toml"),
         "[config.hold]\ntimeout_secs = 12\n",
@@ -765,7 +860,10 @@ fn discover_finds_the_files_of_a_home_and_a_project() {
 
     let env = Env::from_pairs([
         ("HOME", home.path().display().to_string()),
-        ("XDG_CONFIG_HOME", home.path().join("cfg").display().to_string()),
+        (
+            "XDG_CONFIG_HOME",
+            home.path().join("cfg").display().to_string(),
+        ),
     ]);
     let sources = humanitl_config::discover_with(&env, &project, Some("work"));
 
@@ -793,5 +891,8 @@ fn discover_is_content_with_nothing() {
     assert_eq!(sources.global_toml, None);
     assert_eq!(sources.profile_global, None);
     assert_eq!(sources.profile_project, None);
-    assert_eq!(expect_ok(&sources).config, humanitl_config::Config::default());
+    assert_eq!(
+        expect_ok(&sources).config,
+        humanitl_config::Config::default()
+    );
 }

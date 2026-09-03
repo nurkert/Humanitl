@@ -49,7 +49,12 @@ fn request() -> HttpRequest {
 fn states() -> Vec<(&'static str, FlowState)> {
     vec![
         ("received", FlowState::Received),
-        ("analyzed", FlowState::Analyzed { findings: Vec::new() }),
+        (
+            "analyzed",
+            FlowState::Analyzed {
+                findings: Vec::new(),
+            },
+        ),
         (
             "held",
             FlowState::Held {
@@ -128,16 +133,14 @@ fn state_named(name: &str) -> FlowState {
     states()
         .into_iter()
         .find(|(key, _)| *key == name)
-        .map(|(_, state)| state)
-        .unwrap_or_else(|| panic!("unknown state key {name}"))
+        .map_or_else(|| panic!("unknown state key {name}"), |(_, state)| state)
 }
 
 fn input_named(name: &str) -> TransitionInput {
     inputs()
         .into_iter()
         .find(|(key, _)| *key == name)
-        .map(|(_, input)| input)
-        .unwrap_or_else(|| panic!("unknown input key {name}"))
+        .map_or_else(|| panic!("unknown input key {name}"), |(_, input)| input)
 }
 
 #[test]
@@ -152,7 +155,11 @@ fn allowed_transitions_table() {
         let Ok((next, produced)) = result else {
             panic!("{from} + {input} must be allowed");
         };
-        assert_eq!(next.name(), *to, "{from} + {input} lands in the wrong state");
+        assert_eq!(
+            next.name(),
+            *to,
+            "{from} + {input} lands in the wrong state"
+        );
         assert_eq!(
             produced.name(),
             *event,
@@ -247,8 +254,13 @@ fn the_system_may_refuse_but_never_allow() {
         note: None,
     };
     assert!(
-        held.on(Transition::decide(flow, at, client_gone, DecisionSource::System))
-            .is_ok()
+        held.on(Transition::decide(
+            flow,
+            at,
+            client_gone,
+            DecisionSource::System
+        ))
+        .is_ok()
     );
 
     let held = FlowState::Held {
@@ -293,7 +305,10 @@ fn a_failed_upstream_never_becomes_a_response() {
     assert_eq!(event.name(), "failed");
 
     assert!(
-        state.clone().on(Transition::respond(flow, at, 502)).is_err(),
+        state
+            .clone()
+            .on(Transition::respond(flow, at, 502))
+            .is_err(),
         "a failed flow cannot answer"
     );
     assert!(
@@ -326,12 +341,7 @@ fn hold_timeout_decides_timed_out() {
 #[test]
 fn flow_apply_appends_history() {
     let received_at = SystemTime::now();
-    let mut flow = Flow::new(
-        FlowId::new(),
-        SessionId::new(),
-        received_at,
-        request(),
-    );
+    let mut flow = Flow::new(FlowId::new(), SessionId::new(), received_at, request());
     assert_eq!(flow.history.len(), 1);
     assert_eq!(flow.received_event().name(), "received");
 
@@ -377,5 +387,9 @@ fn flow_apply_appends_history() {
         .apply(TransitionInput::Record, received_at)
         .expect_err("recorded is terminal");
     assert_eq!(err.from, "recorded");
-    assert_eq!(flow.history.len(), 7, "a rejected transition changes nothing");
+    assert_eq!(
+        flow.history.len(),
+        7,
+        "a rejected transition changes nothing"
+    );
 }

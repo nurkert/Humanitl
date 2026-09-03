@@ -159,7 +159,10 @@ mod tests {
 
     #[test]
     fn nil_is_stable() {
-        assert_eq!(FlowId::nil().to_string(), "00000000-0000-0000-0000-000000000000");
+        assert_eq!(
+            FlowId::nil().to_string(),
+            "00000000-0000-0000-0000-000000000000"
+        );
     }
 
     #[test]

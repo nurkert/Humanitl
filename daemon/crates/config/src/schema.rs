@@ -112,7 +112,10 @@ pub fn known_paths() -> BTreeSet<&'static str> {
 /// Die Pfade der Blattfelder.
 #[must_use]
 pub fn leaf_paths() -> BTreeSet<&'static str> {
-    leaves().into_iter().map(|field| field.path.as_str()).collect()
+    leaves()
+        .into_iter()
+        .map(|field| field.path.as_str())
+        .collect()
 }
 
 /// Die Pfade der freien Tabellen, deren Schlüssel nicht im Schema stehen.
@@ -205,7 +208,10 @@ fn types_of(node: &Value) -> Vec<String> {
 }
 
 fn is_free_table(node: &Value) -> bool {
-    has_type(node, "object") && node.get("additionalProperties").is_some_and(Value::is_object)
+    has_type(node, "object")
+        && node
+            .get("additionalProperties")
+            .is_some_and(Value::is_object)
 }
 
 fn has_type(node: &Value, wanted: &str) -> bool {

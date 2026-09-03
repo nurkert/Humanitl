@@ -258,9 +258,13 @@ impl Namespace {
     pub const fn why_required(self) -> &'static str {
         match self {
             Self::User => "without it an unprivileged bwrap cannot mount anything",
-            Self::Pid => "without it the fresh /proc shows the host's processes and their environment",
+            Self::Pid => {
+                "without it the fresh /proc shows the host's processes and their environment"
+            }
             Self::Net => "without it the sandbox keeps the host's network interfaces",
-            Self::Ipc => "without it the sandbox shares System V memory and message queues with the host",
+            Self::Ipc => {
+                "without it the sandbox shares System V memory and message queues with the host"
+            }
             Self::Uts => "without it bwrap refuses --hostname",
             Self::Cgroup => "without it /proc/self/cgroup names the host's control groups",
         }
@@ -987,7 +991,7 @@ fn deny(whence: &str, source: &Path, candidate: &Path, reason: &str) -> Diagnost
     } else {
         format!(" (resolves to {})", candidate.display())
     };
-    Diagnostic::new(SANDBOX_006, Severity::Blocking)
+    Diagnostic::builder(SANDBOX_006, Severity::Blocking)
         .why(format!(
             "{whence} names {}{resolved}: {reason}",
             source.display()
@@ -1077,7 +1081,7 @@ impl SandboxProfile {
     /// wenn ein Wert in sich unstimmig ist (siehe [`SandboxProfile::parse`]).
     pub fn load(path: &Path) -> Result<Self, Diagnostic> {
         let text = std::fs::read_to_string(path).map_err(|err| {
-            Diagnostic::new(CONFIG_001, Severity::Blocking)
+            Diagnostic::builder(CONFIG_001, Severity::Blocking)
                 .why(format!("cannot read {}: {err}", path.display()))
                 .build()
         })?;
@@ -1121,8 +1125,11 @@ impl SandboxProfile {
             } else {
                 CONFIG_001
             };
-            Diagnostic::new(code, Severity::Blocking)
-                .why(format!("{} is not a valid profile: {err}", source.display()))
+            Diagnostic::builder(code, Severity::Blocking)
+                .why(format!(
+                    "{} is not a valid profile: {err}",
+                    source.display()
+                ))
                 .build()
         })?;
         profile.seccomp.deny_syscalls = union_deny_syscalls(&profile.seccomp.deny_syscalls);
@@ -1150,20 +1157,19 @@ impl SandboxProfile {
     /// Das Projektverzeichnis steht nicht dabei: es kommt aus dem
     /// [`SessionContext`], nicht aus dem Profil. Wer es prüfen will, ruft
     /// [`MountPolicy::check`] selbst auf.
-    #[must_use]
     pub fn mount_sources(&self) -> impl Iterator<Item = (&'static str, &Path)> {
         let ro = self.mounts.ro.iter().map(|p| ("mounts.ro", p.as_path()));
-        let extra_ro = self
+        let extra_read_only = self
             .mounts
             .extra_ro
             .iter()
             .map(|p| ("mounts.extra_ro", p.as_path()));
-        let extra_rw = self
+        let extra_writable = self
             .mounts
             .extra_rw
             .iter()
             .map(|p| ("mounts.extra_rw", p.as_path()));
-        ro.chain(extra_ro).chain(extra_rw)
+        ro.chain(extra_read_only).chain(extra_writable)
     }
 
     /// Der Modus, mit dem `/work` eingehängt wird: der strengere der beiden.
@@ -1205,6 +1211,55 @@ impl SandboxProfile {
     }
 
     fn check_consistency(&self, source: &Path) -> Result<(), Diagnostic> {
+        self.check_header(source)?;
+        self.check_floors(source)?;
+
+        let where_ = source.display();
+        for (key, path) in self.sandbox_paths() {
+            if !path.is_absolute() {
+                return Err(range(format!(
+                    "{key} = {} is not an absolute path in the sandbox",
+                    path.display()
+                )));
+            }
+        }
+
+        for bridge in &self.network.bridges {
+            if bridge.dir == BridgeDirection::Out {
+                return Err(Diagnostic::builder(SANDBOX_007, Severity::Blocking)
+                    .why(format!(
+                        "{where_}: bridge {:?}: direction out not supported yet",
+                        bridge.name
+                    ))
+                    .build());
+            }
+        }
+
+        let Some(proxy) = self.proxy_bridge() else {
+            return Err(range(format!(
+                "{where_}: network.bridges has no bridge named {PROXY_BRIDGE:?}; nothing would reach the proxy"
+            )));
+        };
+        if proxy.listen.port() != self.network.proxy_port {
+            return Err(range(format!(
+                "{where_}: bridge {PROXY_BRIDGE:?} listens on port {}, network.proxy_port is {}",
+                proxy.listen.port(),
+                self.network.proxy_port
+            )));
+        }
+        if proxy.socket != self.network.proxy_socket_dst {
+            return Err(range(format!(
+                "{where_}: bridge {PROXY_BRIDGE:?} serves {}, network.proxy_socket_dst is {}",
+                proxy.socket.display(),
+                self.network.proxy_socket_dst.display()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Die festen Angaben: Version, Name und die Schalter der Sandbox, die
+    /// kein Profil umlegen darf.
+    fn check_header(&self, source: &Path) -> Result<(), Diagnostic> {
         let where_ = source.display();
 
         if self.version != PROFILE_VERSION {
@@ -1247,61 +1302,39 @@ impl SandboxProfile {
                 )));
             }
         }
+        Ok(())
+    }
+
+    /// Die Untergrenzen: die Syscalls und tmpfs-Pfade, unter die kein Profil
+    /// fallen darf.
+    fn check_floors(&self, source: &Path) -> Result<(), Diagnostic> {
+        let where_ = source.display();
+
         // Sicherheitsnetz: nach `union_deny_syscalls` kann hier nichts fehlen,
         // aber ein Profil, das ohne `parse` gebaut wurde, soll nicht durchrutschen.
         for required in DEFAULT_DENY_SYSCALLS {
-            if !self.seccomp.deny_syscalls.iter().any(|name| name == required) {
+            if !self
+                .seccomp
+                .deny_syscalls
+                .iter()
+                .any(|name| name == required)
+            {
                 return Err(range(format!(
                     "{where_}: seccomp.deny_syscalls misses {required:?}; the list can grow but not fall below the built-in floor"
                 )));
             }
         }
         for required in REQUIRED_TMPFS {
-            if !self.mounts.tmpfs.iter().any(|path| path == Path::new(required)) {
+            if !self
+                .mounts
+                .tmpfs
+                .iter()
+                .any(|path| path == Path::new(required))
+            {
                 return Err(range(format!(
                     "{where_}: mounts.tmpfs misses {required:?}; without it the sandbox sees the host's {required}"
                 )));
             }
-        }
-
-        for (key, path) in self.sandbox_paths() {
-            if !path.is_absolute() {
-                return Err(range(format!(
-                    "{key} = {} is not an absolute path in the sandbox",
-                    path.display()
-                )));
-            }
-        }
-
-        for bridge in &self.network.bridges {
-            if bridge.dir == BridgeDirection::Out {
-                return Err(Diagnostic::new(SANDBOX_007, Severity::Blocking)
-                    .why(format!(
-                        "{where_}: bridge {:?}: direction out not supported yet",
-                        bridge.name
-                    ))
-                    .build());
-            }
-        }
-
-        let Some(proxy) = self.proxy_bridge() else {
-            return Err(range(format!(
-                "{where_}: network.bridges has no bridge named {PROXY_BRIDGE:?}; nothing would reach the proxy"
-            )));
-        };
-        if proxy.listen.port() != self.network.proxy_port {
-            return Err(range(format!(
-                "{where_}: bridge {PROXY_BRIDGE:?} listens on port {}, network.proxy_port is {}",
-                proxy.listen.port(),
-                self.network.proxy_port
-            )));
-        }
-        if proxy.socket != self.network.proxy_socket_dst {
-            return Err(range(format!(
-                "{where_}: bridge {PROXY_BRIDGE:?} serves {}, network.proxy_socket_dst is {}",
-                proxy.socket.display(),
-                self.network.proxy_socket_dst.display()
-            )));
         }
         Ok(())
     }
@@ -1318,7 +1351,10 @@ impl SandboxProfile {
                 "network.ca_cert_dst".to_owned(),
                 self.network.ca_cert_dst.as_path(),
             ),
-            ("network.shim_dst".to_owned(), self.network.shim_dst.as_path()),
+            (
+                "network.shim_dst".to_owned(),
+                self.network.shim_dst.as_path(),
+            ),
         ];
         out.extend(
             self.mounts
@@ -1349,7 +1385,9 @@ impl SandboxProfile {
 }
 
 fn range(why: String) -> Diagnostic {
-    Diagnostic::new(CONFIG_003, Severity::Blocking).why(why).build()
+    Diagnostic::builder(CONFIG_003, Severity::Blocking)
+        .why(why)
+        .build()
 }
 
 /// [`DEFAULT_DENY_SYSCALLS`] zuerst, dann die Ergänzungen des Profils in ihrer
@@ -1446,7 +1484,10 @@ name = "minimal"
         let text = "version = 1\nname = \"x\"\n[seccomp]\ndeny_syscalls = [\"bpf\"]\n";
         let profile = parse(text).expect("an addition extends the floor");
         assert_eq!(profile.seccomp.deny_syscalls.len(), 10);
-        let (floor, added) = profile.seccomp.deny_syscalls.split_at(DEFAULT_DENY_SYSCALLS.len());
+        let (floor, added) = profile
+            .seccomp
+            .deny_syscalls
+            .split_at(DEFAULT_DENY_SYSCALLS.len());
         assert_eq!(floor, DEFAULT_DENY_SYSCALLS);
         assert_eq!(added, ["bpf"]);
 
@@ -1486,7 +1527,8 @@ name = "minimal"
         let err = parse(text).expect_err("a sandbox must die with the daemon");
         assert_eq!(err.code.as_str(), "CONFIG_003");
         assert!(
-            err.why.contains("sandbox.die_with_parent must not be false"),
+            err.why
+                .contains("sandbox.die_with_parent must not be false"),
             "{}",
             err.why
         );
@@ -1514,7 +1556,8 @@ name = "minimal"
         assert_eq!(err.code.as_str(), "CONFIG_003");
         assert!(err.why.contains("/tmp"), "{}", err.why);
 
-        let text = "version = 1\nname = \"x\"\n[mounts]\ntmpfs = [\"/dev/shm\", \"/tmp\", \"/var/tmp\"]\n";
+        let text =
+            "version = 1\nname = \"x\"\n[mounts]\ntmpfs = [\"/dev/shm\", \"/tmp\", \"/var/tmp\"]\n";
         parse(text).expect("both present, in any order, with company");
     }
 
@@ -1524,7 +1567,10 @@ name = "minimal"
         let profile = parse(text).expect("an empty list parses");
         assert_eq!(
             profile.effective_masked_files(),
-            MANDATORY_MASKED_FILES.iter().map(PathBuf::from).collect::<Vec<_>>()
+            MANDATORY_MASKED_FILES
+                .iter()
+                .map(PathBuf::from)
+                .collect::<Vec<_>>()
         );
 
         let text = "version = 1\nname = \"x\"\n[mounts]\nmasked_files = [\"/work/.npmrc\", \"/work/.envrc\"]\n";

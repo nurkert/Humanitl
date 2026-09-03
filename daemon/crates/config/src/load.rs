@@ -203,7 +203,10 @@ pub fn load(sources: &Sources) -> Result<Resolved, Diagnostic> {
 
     if let Some(path) = &sources.global_toml {
         let table = read_table(path, None)?;
-        layers.push((entries_from_table(&table, &Origin::Global, &free_tables), true));
+        layers.push((
+            entries_from_table(&table, &Origin::Global, &free_tables),
+            true,
+        ));
     }
     if let Some(path) = &sources.profile_global {
         let table = read_table(path, Some(PROFILE_SECTION))?;
@@ -240,11 +243,15 @@ pub fn load(sources: &Sources) -> Result<Resolved, Diagnostic> {
     diagnostics.extend(alias_diagnostics(&alias_uses, &canonical_uses));
 
     let table = nest(&flat)?;
-    let config: Config = TomlValue::Table(table).try_into().map_err(|err: toml::de::Error| {
-        Diagnostic::new(CONFIG_003, Severity::Error)
-            .why(format!("the merged configuration does not fit the schema: {err}"))
-            .build()
-    })?;
+    let config: Config = TomlValue::Table(table)
+        .try_into()
+        .map_err(|err: toml::de::Error| {
+            Diagnostic::builder(CONFIG_003, Severity::Error)
+                .why(format!(
+                    "the merged configuration does not fit the schema: {err}"
+                ))
+                .build()
+        })?;
     config.validate()?;
 
     Ok(Resolved {
@@ -256,12 +263,12 @@ pub fn load(sources: &Sources) -> Result<Resolved, Diagnostic> {
 
 fn read_table(path: &Path, section: Option<&str>) -> Result<toml::Table, Diagnostic> {
     let text = std::fs::read_to_string(path).map_err(|err| {
-        Diagnostic::new(CONFIG_001, Severity::Error)
+        Diagnostic::builder(CONFIG_001, Severity::Error)
             .why(format!("cannot read {}: {err}", path.display()))
             .build()
     })?;
     let table: toml::Table = text.parse().map_err(|err: toml::de::Error| {
-        Diagnostic::new(CONFIG_001, Severity::Error)
+        Diagnostic::builder(CONFIG_001, Severity::Error)
             .why(format!("{} is not valid TOML: {err}", path.display()))
             .build()
     })?;
@@ -285,12 +292,14 @@ fn read_table(path: &Path, section: Option<&str>) -> Result<toml::Table, Diagnos
                 path.display()
             )
         };
-        return Err(Diagnostic::new(CONFIG_002, Severity::Error).why(why).build());
+        return Err(Diagnostic::builder(CONFIG_002, Severity::Error)
+            .why(why)
+            .build());
     }
     match table.get(section) {
         None => Ok(toml::Table::new()),
         Some(TomlValue::Table(inner)) => Ok(inner.clone()),
-        Some(other) => Err(Diagnostic::new(CONFIG_001, Severity::Error)
+        Some(other) => Err(Diagnostic::builder(CONFIG_001, Severity::Error)
             .why(format!(
                 "[{section}] in {} must be a table, found {}",
                 path.display(),
@@ -559,7 +568,7 @@ fn project_scope_denied(entry: &Entry) -> Diagnostic {
     } else {
         entry.path.clone()
     };
-    Diagnostic::new(CONFIG_003, Severity::Error)
+    Diagnostic::builder(CONFIG_003, Severity::Error)
         .why(format!(
             "{key} (from {}) may not be set by a project profile: the file is part of the \
              repository and cannot decide trust-relevant settings; move this setting to the \
@@ -577,14 +586,14 @@ fn unknown_key(entry: &Entry, severity: Severity) -> Diagnostic {
             entry.written_as, entry.origin
         )
     } else {
-        let hint = nearest(&entry.path)
-            .map_or_else(String::new, |near| format!("; did you mean {near}?"));
+        let hint =
+            nearest(&entry.path).map_or_else(String::new, |near| format!("; did you mean {near}?"));
         format!(
             "{} (from {}) is not a key of the schema{hint}",
             entry.written_as, entry.origin
         )
     };
-    let mut builder = Diagnostic::new(CONFIG_002, severity).why(why);
+    let mut builder = Diagnostic::builder(CONFIG_002, severity).why(why);
     if let Some(near) = nearest(&entry.path) {
         builder = builder.fix(FixAction::ChangeSetting {
             key: near.to_owned(),
@@ -654,8 +663,7 @@ fn check_value(field: &Field, entry: &Entry) -> Result<(), Diagnostic> {
     }
 
     if let Some(int) = entry.value.as_integer() {
-        if field.minimum.is_some_and(|min| int < min)
-            || field.maximum.is_some_and(|max| int > max)
+        if field.minimum.is_some_and(|min| int < min) || field.maximum.is_some_and(|max| int > max)
         {
             let range = match (field.minimum, field.maximum) {
                 (Some(min), Some(max)) => format!("{min} to {max}"),
@@ -671,7 +679,7 @@ fn check_value(field: &Field, entry: &Entry) -> Result<(), Diagnostic> {
 }
 
 fn bad_value(entry: &Entry, expected: &str, found: &str) -> Diagnostic {
-    Diagnostic::new(CONFIG_003, Severity::Error)
+    Diagnostic::builder(CONFIG_003, Severity::Error)
         .why(format!(
             "{} (from {}) expects {expected}, found {found}",
             entry.written_as, entry.origin
@@ -679,7 +687,7 @@ fn bad_value(entry: &Entry, expected: &str, found: &str) -> Diagnostic {
         .fix(FixAction::ChangeSetting {
             key: entry.path.clone(),
             value: schema::field(&entry.path)
-                .map_or_else(|| "-".to_owned(), |field| field.default_literal()),
+                .map_or_else(|| "-".to_owned(), schema::Field::default_literal),
         })
         .build()
 }
@@ -708,7 +716,7 @@ fn alias_diagnostics(
         };
         let Some(canonical) = canonical_uses.get(path).and_then(|places| places.last()) else {
             out.push(
-                Diagnostic::new(CONFIG_005, Severity::Info)
+                Diagnostic::builder(CONFIG_005, Severity::Info)
                     .why(format!(
                         "{written_as} (from {origin}) is the old name of {path} and still works; \
                          rename it."
@@ -733,7 +741,7 @@ fn alias_diagnostics(
             )
         };
         out.push(
-            Diagnostic::new(CONFIG_006, Severity::Warning)
+            Diagnostic::builder(CONFIG_006, Severity::Warning)
                 .why(why)
                 .build(),
         );
@@ -755,8 +763,10 @@ fn nest(flat: &BTreeMap<String, TomlValue>) -> Result<toml::Table, Diagnostic> {
                 .entry(segment.to_owned())
                 .or_insert_with(|| TomlValue::Table(toml::Table::new()));
             let TomlValue::Table(inner) = next else {
-                return Err(Diagnostic::new(CONFIG_002, Severity::Error)
-                    .why(format!("{path} passes through {segment}, which holds a value"))
+                return Err(Diagnostic::builder(CONFIG_002, Severity::Error)
+                    .why(format!(
+                        "{path} passes through {segment}, which holds a value"
+                    ))
                     .build());
             };
             table = inner;

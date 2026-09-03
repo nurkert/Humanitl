@@ -19,14 +19,20 @@ use std::path::{Component, Path};
 use humanitl_core::diagnostics::codes::CONFIG_003;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
-use crate::model::{Config, FindingsConfig, LlmConfig};
+use crate::model::{
+    AgentRef, Config, Experimental, FindingsConfig, Limits, LlmConfig, RecorderConfig,
+    ResolverConfig, SandboxRef,
+};
 use crate::schema;
+
+/// Ein Tag in Sekunden: die Obergrenze der langen Fristen.
+const DAY: u64 = 86_400;
 
 /// Ein Verstoß gegen einen Wertebereich.
 fn out_of_range(key: &str, found: &str, allowed: &str) -> Diagnostic {
     let suggestion =
-        schema::field(key).map_or_else(|| "-".to_owned(), |field| field.default_literal());
-    Diagnostic::new(CONFIG_003, Severity::Error)
+        schema::field(key).map_or_else(|| "-".to_owned(), schema::Field::default_literal);
+    Diagnostic::builder(CONFIG_003, Severity::Error)
         .why(format!(
             "{key} = {found} is out of range; allowed is {allowed} (default {suggestion})"
         ))
@@ -39,7 +45,11 @@ fn out_of_range(key: &str, found: &str, allowed: &str) -> Diagnostic {
 
 fn at_least(key: &str, value: u64, min: u64) -> Result<(), Diagnostic> {
     if value < min {
-        return Err(out_of_range(key, &value.to_string(), &format!("{min} or more")));
+        return Err(out_of_range(
+            key,
+            &value.to_string(),
+            &format!("{min} or more"),
+        ));
     }
     Ok(())
 }
@@ -82,7 +92,7 @@ fn work_dir_is_a_directory(work_dir: &Path) -> Result<(), Diagnostic> {
     let canonical = match std::fs::canonicalize(work_dir) {
         Ok(canonical) => canonical,
         Err(err) => {
-            return Err(Diagnostic::new(CONFIG_003, Severity::Error)
+            return Err(Diagnostic::builder(CONFIG_003, Severity::Error)
                 .why(format!(
                     "{KEY} = {shown} cannot be resolved ({err}); it must be an existing directory"
                 ))
@@ -166,6 +176,144 @@ fn shell_word(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
 }
 
+/// Die Obergrenzen und Fristen des Proxys.
+fn limits_are_well_formed(limits: &Limits) -> Result<(), Diagnostic> {
+    at_least(
+        "limits.hold_body_cap_bytes",
+        limits.hold_body_cap_bytes,
+        1024,
+    )?;
+    at_least("limits.preview_cap_bytes", limits.preview_cap_bytes, 1024)?;
+    at_least(
+        "limits.event_buffer",
+        u64::try_from(limits.event_buffer).unwrap_or(u64::MAX),
+        1,
+    )?;
+    at_least(
+        "limits.max_decompress_ratio",
+        u64::from(limits.max_decompress_ratio),
+        1,
+    )?;
+    at_least("limits.hold_max_flows", u64::from(limits.hold_max_flows), 1)?;
+    at_least("limits.hold_max_bytes", limits.hold_max_bytes, 1024)?;
+    between(
+        "limits.connect_timeout_secs",
+        limits.connect_timeout_secs,
+        1,
+        600,
+    )?;
+    between(
+        "limits.header_timeout_secs",
+        limits.header_timeout_secs,
+        1,
+        3600,
+    )?;
+    between("limits.body_timeout_secs", limits.body_timeout_secs, 1, DAY)?;
+    between("limits.idle_timeout_secs", limits.idle_timeout_secs, 1, DAY)?;
+    at_least(
+        "limits.recorder_max_body_bytes",
+        limits.recorder_max_body_bytes,
+        1024,
+    )?;
+
+    if limits.hold_max_bytes < limits.hold_body_cap_bytes {
+        return Err(out_of_range(
+            "limits.hold_max_bytes",
+            &limits.hold_max_bytes.to_string(),
+            &format!(
+                "at least limits.hold_body_cap_bytes ({}), otherwise not a single body fits \
+                 into the hold budget",
+                limits.hold_body_cap_bytes
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Der Recorder, gemessen an den Grenzen des Proxys.
+fn recorder_is_well_formed(recorder: &RecorderConfig, limits: &Limits) -> Result<(), Diagnostic> {
+    at_least("recorder.inline_max_bytes", recorder.inline_max_bytes, 1)?;
+    if recorder.inline_max_bytes > limits.recorder_max_body_bytes {
+        return Err(out_of_range(
+            "recorder.inline_max_bytes",
+            &recorder.inline_max_bytes.to_string(),
+            &format!(
+                "at most limits.recorder_max_body_bytes ({})",
+                limits.recorder_max_body_bytes
+            ),
+        ));
+    }
+    between(
+        "recorder.retention_days",
+        u64::from(recorder.retention_days),
+        1,
+        3650,
+    )
+}
+
+/// Der Resolver: die Frist des Caches und die festen Adressen.
+fn resolver_is_well_formed(resolver: &ResolverConfig) -> Result<(), Diagnostic> {
+    between("resolver.cache_ttl_secs", resolver.cache_ttl_secs, 0, DAY)?;
+    for (host, address) in &resolver.overrides {
+        if address.parse::<std::net::IpAddr>().is_err() {
+            return Err(out_of_range(
+                "resolver.overrides",
+                &format!("{host} = {address:?}"),
+                "an IPv4 or IPv6 address",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Die Sandbox: ein Profilname ohne Pfad, ein Arbeitsverzeichnis, das es gibt.
+fn sandbox_is_well_formed(sandbox: &SandboxRef) -> Result<(), Diagnostic> {
+    if sandbox.profile.is_empty() || sandbox.profile.contains('/') {
+        return Err(out_of_range(
+            "sandbox.profile",
+            &format!("{:?}", sandbox.profile),
+            "a profile name without a path separator",
+        ));
+    }
+    if let Some(work_dir) = &sandbox.work_dir {
+        work_dir_is_a_directory(work_dir)?;
+    }
+    Ok(())
+}
+
+/// Der Agent: ein Adapter und, falls gesetzt, ein Befehl mit einem Programm.
+fn agent_is_well_formed(agent: &AgentRef) -> Result<(), Diagnostic> {
+    if agent.adapter.is_empty() {
+        return Err(out_of_range(
+            "agent.adapter",
+            "\"\"",
+            "the id of an adapter",
+        ));
+    }
+    if agent.command.as_ref().is_some_and(Vec::is_empty) {
+        return Err(out_of_range(
+            "agent.command",
+            "[]",
+            "at least the program to run, or nothing at all",
+        ));
+    }
+    Ok(())
+}
+
+/// Die Versuchsfelder: Portnummern als Schlüssel.
+fn experimental_is_well_formed(experimental: &Experimental) -> Result<(), Diagnostic> {
+    for (from, to) in &experimental.upstream_port_map {
+        if from.parse::<u16>().is_err() {
+            return Err(out_of_range(
+                "experimental.upstream_port_map",
+                &format!("{from:?} = {to}"),
+                "a port number as the key",
+            ));
+        }
+    }
+    Ok(())
+}
+
 impl Config {
     /// Prüft alle Wertebereiche und Beziehungen zwischen Feldern.
     ///
@@ -178,107 +326,20 @@ impl Config {
     /// [`Diagnostic`] mit `CONFIG_003`, sobald ein Wert außerhalb seines
     /// Bereichs liegt oder zwei Werte einander widersprechen.
     pub fn validate(&self) -> Result<(), Diagnostic> {
-        const DAY: u64 = 86_400;
-
         between("hold.timeout_secs", self.hold.timeout_secs, 1, DAY)?;
-
-        at_least("limits.hold_body_cap_bytes", self.limits.hold_body_cap_bytes, 1024)?;
-        at_least("limits.preview_cap_bytes", self.limits.preview_cap_bytes, 1024)?;
+        limits_are_well_formed(&self.limits)?;
+        recorder_is_well_formed(&self.recorder, &self.limits)?;
+        resolver_is_well_formed(&self.resolver)?;
         at_least(
-            "limits.event_buffer",
-            u64::try_from(self.limits.event_buffer).unwrap_or(u64::MAX),
-            1,
-        )?;
-        at_least(
-            "limits.max_decompress_ratio",
-            u64::from(self.limits.max_decompress_ratio),
-            1,
-        )?;
-        at_least("limits.hold_max_flows", u64::from(self.limits.hold_max_flows), 1)?;
-        at_least("limits.hold_max_bytes", self.limits.hold_max_bytes, 1024)?;
-        between("limits.connect_timeout_secs", self.limits.connect_timeout_secs, 1, 600)?;
-        between("limits.header_timeout_secs", self.limits.header_timeout_secs, 1, 3600)?;
-        between("limits.body_timeout_secs", self.limits.body_timeout_secs, 1, DAY)?;
-        between("limits.idle_timeout_secs", self.limits.idle_timeout_secs, 1, DAY)?;
-        at_least(
-            "limits.recorder_max_body_bytes",
-            self.limits.recorder_max_body_bytes,
+            "pseudonyms.max_response_bytes",
+            self.pseudonyms.max_response_bytes,
             1024,
         )?;
-
-        if self.limits.hold_max_bytes < self.limits.hold_body_cap_bytes {
-            return Err(out_of_range(
-                "limits.hold_max_bytes",
-                &self.limits.hold_max_bytes.to_string(),
-                &format!(
-                    "at least limits.hold_body_cap_bytes ({}), otherwise not a single body fits \
-                     into the hold budget",
-                    self.limits.hold_body_cap_bytes
-                ),
-            ));
-        }
-
-        at_least("recorder.inline_max_bytes", self.recorder.inline_max_bytes, 1)?;
-        if self.recorder.inline_max_bytes > self.limits.recorder_max_body_bytes {
-            return Err(out_of_range(
-                "recorder.inline_max_bytes",
-                &self.recorder.inline_max_bytes.to_string(),
-                &format!(
-                    "at most limits.recorder_max_body_bytes ({})",
-                    self.limits.recorder_max_body_bytes
-                ),
-            ));
-        }
-        between("recorder.retention_days", u64::from(self.recorder.retention_days), 1, 3650)?;
-
-        between("resolver.cache_ttl_secs", self.resolver.cache_ttl_secs, 0, DAY)?;
-        for (host, address) in &self.resolver.overrides {
-            if address.parse::<std::net::IpAddr>().is_err() {
-                return Err(out_of_range(
-                    "resolver.overrides",
-                    &format!("{host} = {address:?}"),
-                    "an IPv4 or IPv6 address",
-                ));
-            }
-        }
-
-        at_least("pseudonyms.max_response_bytes", self.pseudonyms.max_response_bytes, 1024)?;
-
         llm_is_well_formed(&self.llm)?;
         findings_are_well_formed(&self.findings)?;
-
-        if self.sandbox.profile.is_empty() || self.sandbox.profile.contains('/') {
-            return Err(out_of_range(
-                "sandbox.profile",
-                &format!("{:?}", self.sandbox.profile),
-                "a profile name without a path separator",
-            ));
-        }
-        if let Some(work_dir) = &self.sandbox.work_dir {
-            work_dir_is_a_directory(work_dir)?;
-        }
-        if self.agent.adapter.is_empty() {
-            return Err(out_of_range("agent.adapter", "\"\"", "the id of an adapter"));
-        }
-        if self.agent.command.as_ref().is_some_and(Vec::is_empty) {
-            return Err(out_of_range(
-                "agent.command",
-                "[]",
-                "at least the program to run, or nothing at all",
-            ));
-        }
-
-        for (from, to) in &self.experimental.upstream_port_map {
-            if from.parse::<u16>().is_err() {
-                return Err(out_of_range(
-                    "experimental.upstream_port_map",
-                    &format!("{from:?} = {to}"),
-                    "a port number as the key",
-                ));
-            }
-        }
-
-        Ok(())
+        sandbox_is_well_formed(&self.sandbox)?;
+        agent_is_well_formed(&self.agent)?;
+        experimental_is_well_formed(&self.experimental)
     }
 }
 

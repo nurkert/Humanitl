@@ -42,10 +42,7 @@ use crate::profile::{Namespace, SandboxProfile, SessionContext};
 /// Anführungszeichen auskommen.
 fn is_safe(c: char) -> bool {
     c.is_ascii_alphanumeric()
-        || matches!(
-            c,
-            '_' | '@' | '%' | '+' | '=' | ':' | ',' | '.' | '/' | '-'
-        )
+        || matches!(c, '_' | '@' | '%' | '+' | '=' | ':' | ',' | '.' | '/' | '-')
 }
 
 impl SandboxProfile {
@@ -247,7 +244,10 @@ mod tests {
     fn quoting_leaves_ordinary_words_alone() {
         assert_eq!(shell_quote("--ro-bind"), "--ro-bind");
         assert_eq!(shell_quote("/etc/ssl"), "/etc/ssl");
-        assert_eq!(shell_quote("http://127.0.0.1:3128"), "http://127.0.0.1:3128");
+        assert_eq!(
+            shell_quote("http://127.0.0.1:3128"),
+            "http://127.0.0.1:3128"
+        );
     }
 
     #[test]

@@ -12,13 +12,18 @@ help: ## List targets
 
 check: rust-fmt rust-clippy rust-build rust-test deps-lint docs-lint typed-errors-lint flutter-analyze flutter-test flutter-build ## Full local gate (same steps as CI)
 
+# A rustup toolchain may exist without rustup on PATH (this machine): put its
+# bin directory first so `cargo fmt` and `cargo clippy` find their components.
+RUSTUP_BIN := $(firstword $(wildcard $(HOME)/.rustup/toolchains/*/bin))
+TOOLS_PATH := $(if $(RUSTUP_BIN),$(RUSTUP_BIN):)$(PATH)
+
 rust-fmt: ## cargo fmt --check (skipped when rustfmt is absent)
-	@if cd daemon && cargo fmt --version >/dev/null 2>&1; then cargo fmt --all -- --check; \
+	@export PATH="$(TOOLS_PATH)"; if cd daemon && cargo fmt --version >/dev/null 2>&1; then cargo fmt --all -- --check; \
 	elif [[ -n "$$STRICT" ]]; then echo "rustfmt missing and STRICT set" >&2; exit 1; \
 	else echo "SKIP rust-fmt: rustfmt component not installed (rustup component add rustfmt)"; fi
 
 rust-clippy: ## cargo clippy -D warnings (skipped when clippy is absent)
-	@if cd daemon && cargo clippy --version >/dev/null 2>&1; then cargo clippy --workspace --all-targets -- -D warnings; \
+	@export PATH="$(TOOLS_PATH)"; if cd daemon && cargo clippy --version >/dev/null 2>&1; then cargo clippy --workspace --all-targets -- -D warnings; \
 	elif [[ -n "$$STRICT" ]]; then echo "clippy missing and STRICT set" >&2; exit 1; \
 	else echo "SKIP rust-clippy: clippy component not installed (rustup component add clippy)"; fi
 

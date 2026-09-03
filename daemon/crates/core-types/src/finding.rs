@@ -197,7 +197,9 @@ pub fn display_prefix(value: &str) -> String {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-    use super::{DISPLAY_PREFIX_CHARS, Finding, FindingKind, FindingLocation, Tier, display_prefix};
+    use super::{
+        DISPLAY_PREFIX_CHARS, Finding, FindingKind, FindingLocation, Tier, display_prefix,
+    };
     use crate::http::HeaderName;
 
     #[test]

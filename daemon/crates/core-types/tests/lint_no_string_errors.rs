@@ -15,11 +15,7 @@ fn script_path() -> PathBuf {
 #[test]
 fn the_lint_script_detects_its_fixtures() {
     let script = script_path();
-    assert!(
-        script.exists(),
-        "{} is missing (HUM-063)",
-        script.display()
-    );
+    assert!(script.exists(), "{} is missing (HUM-063)", script.display());
 
     let output = Command::new("sh")
         .arg(&script)
