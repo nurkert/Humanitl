@@ -15,7 +15,9 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use http_body_util::BodyExt as _;
-use humanitl_core::{BlockReason, Decision, FlowEvent, HostName, Scheme};
+use humanitl_core::{
+    Authority, BlockReason, BodyRef, Decision, FlowEvent, HostName, HttpRequest, Method, Scheme,
+};
 use humanitl_proxy::ClientTls;
 use hyper::{Request, StatusCode};
 
@@ -532,4 +534,73 @@ fn h2_upstream_flag_switches_the_alpn_offer() {
     assert_eq!(h1.alpn(), vec![b"http/1.1".to_vec()]);
     let h2 = ClientTls::new(&[], true).unwrap();
     assert_eq!(h2.alpn(), vec![b"h2".to_vec(), b"http/1.1".to_vec()]);
+}
+
+/// Eine bearbeitete Freigabe nimmt den neuen Body; das Ziel darf sie nicht
+/// aendern (HUM-015 `allow_edited_changes_body`).
+fn edited_post(authority: Authority, body: &'static str) -> HttpRequest {
+    HttpRequest::new(Method::POST, Scheme::Http, authority, "/echo")
+        .with_body(BodyRef::from_bytes(Bytes::from_static(body.as_bytes())))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn allow_edited_changes_body() {
+    let upstream = FakeUpstream::plain().await;
+    let proxy = ProxyBuilder::new().start().await;
+    let mut events = proxy.events();
+    let authority = Authority {
+        host: HostName::parse("127.0.0.1").unwrap(),
+        port: upstream.port(),
+    };
+    let _decider = proxy.decide_with(Decision::AllowEdited {
+        request: Box::new(edited_post(authority, "edited body")),
+    });
+
+    let mut client = proxy.client().await;
+    let response = client
+        .send(post(
+            &format!("http://127.0.0.1:{}/echo", upstream.port()),
+            "original body",
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_string(response.into_body()).await,
+        "edited body",
+        "the upstream must see the edited body, not the original"
+    );
+    events.wait_for("recorded").await;
+    assert_eq!(upstream.hits(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn allow_edited_cannot_change_the_authority() {
+    let upstream = FakeUpstream::plain().await;
+    let proxy = ProxyBuilder::new().start().await;
+    let mut events = proxy.events();
+    // Ein anderes Ziel als das, fuer das entschieden wurde: derselbe Host,
+    // ein anderer Port genuegt, um die Pruefung zu treffen.
+    let elsewhere = Authority {
+        host: HostName::parse("127.0.0.1").unwrap(),
+        port: upstream.port().wrapping_add(1).max(1),
+    };
+    let _decider = proxy.decide_with(Decision::AllowEdited {
+        request: Box::new(edited_post(elsewhere, "edited body")),
+    });
+
+    let mut client = proxy.client().await;
+    let response = client
+        .send(post(
+            &format!("http://127.0.0.1:{}/echo", upstream.port()),
+            "original body",
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = body_string(response.into_body()).await;
+    assert!(
+        body.contains("reason: authority_mismatch"),
+        "the block names the reason: {body}"
+    );
+    events.wait_for("recorded").await;
+    assert_eq!(upstream.hits(), 0, "nothing may reach any upstream");
 }

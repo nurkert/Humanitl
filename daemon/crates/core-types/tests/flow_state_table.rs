@@ -393,3 +393,64 @@ fn flow_apply_appends_history() {
         "a rejected transition changes nothing"
     );
 }
+
+/// Das System darf eine Freigabe vor dem Weiterleiten in eine Sperre
+/// verwandeln, nie umgekehrt und nie von einer anderen Quelle aus: Der Proxy
+/// nutzt das, wenn eine bearbeitete Anfrage ein anderes Ziel traegt als das,
+/// fuer das entschieden wurde.
+#[test]
+fn the_system_may_turn_an_allow_into_a_block_before_forwarding() {
+    let flow = FlowId::new();
+    let at = SystemTime::now();
+    let block = Decision::Block {
+        reason: BlockReason::AuthorityMismatch,
+        note: None,
+    };
+    for allowed in [
+        FlowState::Decided(Decision::Allow),
+        FlowState::Decided(Decision::AllowEdited {
+            request: Box::new(request()),
+        }),
+    ] {
+        let (state, event) = allowed
+            .clone()
+            .on(Transition::decide(
+                flow,
+                at,
+                block.clone(),
+                DecisionSource::System,
+            ))
+            .expect("the system may tighten an allow into a block");
+        assert_eq!(state, FlowState::Decided(block.clone()));
+        assert!(matches!(event, humanitl_core::FlowEvent::Decided { .. }));
+        assert!(
+            allowed
+                .clone()
+                .on(Transition::decide(
+                    flow,
+                    at,
+                    block.clone(),
+                    DecisionSource::User
+                ))
+                .is_err(),
+            "only the system may revise a decision after the fact"
+        );
+        assert!(
+            allowed
+                .on(Transition::decide(
+                    flow,
+                    at,
+                    Decision::Allow,
+                    DecisionSource::System
+                ))
+                .is_err(),
+            "a second allow is not a revision"
+        );
+    }
+    assert!(
+        FlowState::Forwarded
+            .on(Transition::decide(flow, at, block, DecisionSource::System))
+            .is_err(),
+        "once bytes left, nothing is revised"
+    );
+}
