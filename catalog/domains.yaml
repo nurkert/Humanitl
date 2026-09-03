@@ -1,0 +1,453 @@
+# Der gebündelte Domain-Katalog (HUM-031).
+#
+# Jeder Eintrag ist eine Behauptung über einen Dienst, und jede Behauptung
+# nennt unter `source` die Seite des Betreibers, auf der sie nachlesbar ist.
+# Ein Eintrag sagt, was hinter einem Namen steckt. Er sagt nicht, dass eine
+# Anfrage dorthin in Ordnung ist: derselbe Host trägt ein `git clone` und einen
+# Datenabfluss (BACKLOG.md 4.3).
+#
+# `hosts` benutzt die Glob-Semantik der Regeln (CONVENTIONS.md 3.3): ein Name
+# ohne Stern trifft exakt, `*` steht für genau ein Label, `**` für ein oder
+# mehr, und `**.example.com` schließt `example.com` selbst ein. Verglichen
+# werden ganze Labels, nie Zeichenketten; `**.github.com` trifft deshalb weder
+# `evil-github.com` noch `github.com.evil.io`.
+#
+# Trifft mehr als ein Muster, gewinnt der erste Eintrag dieser Datei.
+#
+# Die Form prüft `catalog/domains.schema.json`; die Werte prüft
+# `humanitl-catalog` beim Laden. Diese Fassung deckt die Ziele ab, bei denen
+# ein Coding-Agent im Alltag landet; auf ungefähr zweihundert Einträge wächst
+# der Katalog in HUM-059.
+version: 1
+entries:
+  - id: github
+    name: GitHub
+    hosts: ["github.com", "**.github.com", "**.githubusercontent.com"]
+    category: scm
+    description:
+      en: "Source hosting with issues, releases and the REST and GraphQL API."
+      de: "Quellcode-Hosting mit Issues, Releases und der REST- und GraphQL-API."
+    typical: ["git clone", "git push", "gh api", "release download"]
+    icon: scm.svg
+    homepage: https://github.com
+    source: https://docs.github.com/en/rest
+    risk_note:
+      en: "A push, a gist or a release upload sends data out; from the outside it looks like a fetch."
+      de: "Ein Push, ein Gist oder ein Release-Upload schickt Daten nach außen und sieht dabei aus wie ein Abruf."
+
+  - id: gitlab
+    name: GitLab
+    hosts: ["gitlab.com", "**.gitlab.com"]
+    category: scm
+    description:
+      en: "Source hosting with issues, CI pipelines and a REST API."
+      de: "Quellcode-Hosting mit Issues, CI-Pipelines und einer REST-API."
+    typical: ["git clone", "git push", "glab api"]
+    icon: scm.svg
+    homepage: https://gitlab.com
+    source: https://docs.gitlab.com/ee/api/rest/
+    risk_note:
+      en: "A push sends data out; from the outside it looks like a fetch."
+      de: "Ein Push schickt Daten nach außen und sieht dabei aus wie ein Abruf."
+
+  - id: npm
+    name: npm registry
+    hosts: ["registry.npmjs.org", "**.npmjs.org", "**.npmjs.com"]
+    category: registry
+    description:
+      en: "Package registry for Node.js; npm, pnpm, yarn and npx read it."
+      de: "Paket-Registry für Node.js; npm, pnpm, yarn und npx lesen von hier."
+    typical: ["npm install", "pnpm add", "npx"]
+    icon: registry.svg
+    homepage: https://www.npmjs.com
+    source: https://docs.npmjs.com/cli/v10/using-npm/registry
+
+  - id: pypi
+    name: PyPI
+    hosts: ["pypi.org", "**.pypi.org", "files.pythonhosted.org"]
+    category: registry
+    description:
+      en: "Package index for Python; the archives themselves come from files.pythonhosted.org."
+      de: "Paket-Index für Python; die Archive selbst liegen auf files.pythonhosted.org."
+    typical: ["pip install", "uv add", "poetry install"]
+    icon: registry.svg
+    homepage: https://pypi.org
+    source: https://docs.pypi.org/api/
+
+  - id: crates-io
+    name: crates.io
+    hosts: ["crates.io", "static.crates.io", "index.crates.io"]
+    category: registry
+    description:
+      en: "Package registry for Rust; cargo reads the index from index.crates.io and the archives from static.crates.io."
+      de: "Paket-Registry für Rust; cargo liest den Index von index.crates.io und die Archive von static.crates.io."
+    typical: ["cargo build", "cargo add", "cargo publish"]
+    icon: registry.svg
+    homepage: https://crates.io
+    source: https://doc.rust-lang.org/cargo/reference/registry-index.html
+
+  - id: rubygems
+    name: RubyGems
+    hosts: ["rubygems.org", "**.rubygems.org"]
+    category: registry
+    description:
+      en: "Package registry for Ruby gems."
+      de: "Paket-Registry für Ruby-Gems."
+    typical: ["bundle install", "gem install"]
+    icon: registry.svg
+    homepage: https://rubygems.org
+    source: https://guides.rubygems.org/rubygems-org-api/
+
+  - id: packagist
+    name: Packagist
+    hosts: ["packagist.org", "repo.packagist.org"]
+    category: registry
+    description:
+      en: "Package registry for PHP; Composer resolves dependencies against it."
+      de: "Paket-Registry für PHP; Composer löst seine Abhängigkeiten dagegen auf."
+    typical: ["composer install", "composer update"]
+    icon: registry.svg
+    homepage: https://packagist.org
+    source: https://packagist.org/apidoc
+
+  - id: maven-central
+    name: Maven Central
+    hosts: ["repo1.maven.org", "repo.maven.apache.org", "**.maven.org"]
+    category: registry
+    description:
+      en: "Package registry for the JVM; Maven and Gradle download artefacts from it."
+      de: "Paket-Registry für die JVM; Maven und Gradle laden ihre Artefakte von hier."
+    typical: ["mvn package", "gradle build"]
+    icon: registry.svg
+    homepage: https://central.sonatype.com
+    source: https://central.sonatype.org/consume/consume-apache-maven/
+
+  - id: nuget
+    name: NuGet
+    hosts: ["api.nuget.org", "**.nuget.org"]
+    category: registry
+    description:
+      en: "Package registry for .NET."
+      de: "Paket-Registry für .NET."
+    typical: ["dotnet restore", "nuget install"]
+    icon: registry.svg
+    homepage: https://www.nuget.org
+    source: https://learn.microsoft.com/en-us/nuget/api/overview
+
+  - id: go-modules
+    name: Go module proxy
+    hosts: ["proxy.golang.org", "sum.golang.org"]
+    category: registry
+    description:
+      en: "Module proxy and checksum database of the Go toolchain."
+      de: "Modul-Proxy und Prüfsummen-Datenbank der Go-Toolchain."
+    typical: ["go build", "go get", "go mod tidy"]
+    icon: registry.svg
+    homepage: https://proxy.golang.org
+    source: https://go.dev/ref/mod
+
+  - id: pub-dev
+    name: pub.dev
+    hosts: ["pub.dev", "**.pub.dev", "pub.dartlang.org"]
+    category: registry
+    description:
+      en: "Package registry for Dart and Flutter."
+      de: "Paket-Registry für Dart und Flutter."
+    typical: ["dart pub get", "flutter pub get"]
+    icon: registry.svg
+    homepage: https://pub.dev
+    source: https://dart.dev/tools/pub/glossary
+
+  - id: dockerhub
+    name: Docker Hub
+    hosts: ["hub.docker.com", "**.docker.io", "**.docker.com"]
+    category: registry
+    description:
+      en: "Container image registry; a pull first fetches a token from auth.docker.io."
+      de: "Registry für Container-Images; ein Pull holt zuerst ein Token von auth.docker.io."
+    typical: ["docker pull", "docker build"]
+    icon: registry.svg
+    homepage: https://hub.docker.com
+    source: https://docs.docker.com/docker-hub/
+
+  - id: ghcr
+    name: GitHub Container Registry
+    hosts: ["ghcr.io", "**.ghcr.io"]
+    category: registry
+    description:
+      en: "Container image registry operated by GitHub."
+      de: "Registry für Container-Images, betrieben von GitHub."
+    typical: ["docker pull ghcr.io/…", "podman pull"]
+    icon: registry.svg
+    homepage: https://ghcr.io
+    source: https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry
+
+  - id: quay
+    name: Quay.io
+    hosts: ["quay.io", "**.quay.io"]
+    category: registry
+    description:
+      en: "Container image registry operated by Red Hat."
+      de: "Registry für Container-Images, betrieben von Red Hat."
+    typical: ["podman pull", "docker pull quay.io/…"]
+    icon: registry.svg
+    homepage: https://quay.io
+    source: https://docs.projectquay.io/
+
+  - id: debian
+    name: Debian archive
+    hosts: ["deb.debian.org", "security.debian.org", "**.debian.org"]
+    category: os
+    description:
+      en: "Package archive of the Debian distribution, including its security updates."
+      de: "Paketarchiv der Distribution Debian, samt ihrer Sicherheitsaktualisierungen."
+    typical: ["apt-get update", "apt-get install"]
+    icon: os.svg
+    homepage: https://www.debian.org
+    source: https://www.debian.org/distrib/packages
+
+  - id: ubuntu
+    name: Ubuntu archive
+    hosts: ["archive.ubuntu.com", "security.ubuntu.com", "**.ubuntu.com"]
+    category: os
+    description:
+      en: "Package archive of the Ubuntu distribution, including its security updates."
+      de: "Paketarchiv der Distribution Ubuntu, samt ihrer Sicherheitsaktualisierungen."
+    typical: ["apt-get update", "apt-get install"]
+    icon: os.svg
+    homepage: https://ubuntu.com
+    source: https://help.ubuntu.com/community/Repositories/Ubuntu
+
+  - id: alpine
+    name: Alpine Linux
+    hosts: ["dl-cdn.alpinelinux.org", "**.alpinelinux.org"]
+    category: os
+    description:
+      en: "Package archive of Alpine Linux, the base of many container images."
+      de: "Paketarchiv von Alpine Linux, der Grundlage vieler Container-Images."
+    typical: ["apk add", "docker build"]
+    icon: os.svg
+    homepage: https://alpinelinux.org
+    source: https://wiki.alpinelinux.org/wiki/Repositories
+
+  - id: rust-toolchain
+    name: Rust toolchain
+    hosts: ["static.rust-lang.org", "sh.rustup.rs"]
+    category: other
+    description:
+      en: "Download server for rustup, the Rust compiler and its components."
+      de: "Download-Server für rustup, den Rust-Compiler und seine Komponenten."
+    typical: ["rustup update", "rustup toolchain install"]
+    icon: other.svg
+    homepage: https://www.rust-lang.org
+    source: https://rust-lang.github.io/rustup/installation/index.html
+
+  - id: nodejs
+    name: Node.js downloads
+    hosts: ["nodejs.org", "**.nodejs.org"]
+    category: other
+    description:
+      en: "Download server for the Node.js runtime; nvm and fnm read their versions from it."
+      de: "Download-Server für die Node.js-Laufzeit; nvm und fnm holen ihre Versionen von hier."
+    typical: ["nvm install", "fnm install"]
+    icon: other.svg
+    homepage: https://nodejs.org
+    source: https://nodejs.org/en/download
+
+  - id: huggingface
+    name: Hugging Face
+    hosts: ["huggingface.co", "**.huggingface.co", "**.hf.co"]
+    category: ai
+    description:
+      en: "Hub for models, datasets and spaces, with a REST API and a Git interface."
+      de: "Hub für Modelle, Datensätze und Spaces, mit REST-API und Git-Schnittstelle."
+    typical: ["model download", "datasets load", "huggingface-cli"]
+    icon: ai.svg
+    homepage: https://huggingface.co
+    source: https://huggingface.co/docs/hub/index
+    risk_note:
+      en: "Downloads can be gigabytes; an upload of a model or dataset would take your data with it."
+      de: "Downloads gehen in die Gigabyte; ein Upload von Modell oder Datensatz nähme Daten mit."
+
+  - id: ollama
+    name: Ollama library
+    hosts: ["ollama.com", "**.ollama.com", "registry.ollama.ai"]
+    category: ai
+    description:
+      en: "Model registry of Ollama; `ollama pull` fetches the weights from it."
+      de: "Modell-Registry von Ollama; `ollama pull` holt die Gewichte von hier."
+    typical: ["ollama pull", "ollama run"]
+    icon: ai.svg
+    homepage: https://ollama.com
+    source: https://github.com/ollama/ollama/blob/main/docs/api.md
+
+  - id: models-dev
+    name: models.dev
+    hosts: ["models.dev", "**.models.dev"]
+    category: ai
+    description:
+      en: "Open catalog of language models with their context sizes and prices."
+      de: "Offener Katalog von Sprachmodellen mit ihren Kontextgrößen und Preisen."
+    typical: ["OpenCode startup"]
+    icon: ai.svg
+    homepage: https://models.dev
+    source: https://models.dev
+    risk_note:
+      en: "OpenCode fetches this list at every start, before you have decided anything."
+      de: "OpenCode holt diese Liste bei jedem Start, bevor irgendetwas entschieden ist."
+
+  - id: openai
+    name: OpenAI API
+    hosts: ["api.openai.com", "**.openai.com"]
+    category: ai
+    description:
+      en: "Cloud API for the GPT models, including chat completions and embeddings."
+      de: "Cloud-API der GPT-Modelle, unter anderem für Chat-Completions und Embeddings."
+    typical: ["chat completions", "embeddings"]
+    icon: ai.svg
+    homepage: https://openai.com
+    source: https://platform.openai.com/docs/api-reference
+    risk_note:
+      en: "Cloud model: the whole prompt leaves your machine, including whatever the agent put into it."
+      de: "Cloud-Modell: der ganze Prompt verlässt den Rechner, mitsamt allem, was der Agent hineingeschrieben hat."
+
+  - id: anthropic
+    name: Anthropic API
+    hosts: ["api.anthropic.com", "**.anthropic.com"]
+    category: ai
+    description:
+      en: "Cloud API for the Claude models, including the Messages endpoint."
+      de: "Cloud-API der Claude-Modelle, unter anderem für den Messages-Endpunkt."
+    typical: ["messages", "tool use"]
+    icon: ai.svg
+    homepage: https://www.anthropic.com
+    source: https://docs.anthropic.com/en/api/messages
+    risk_note:
+      en: "Cloud model: the whole prompt leaves your machine, including whatever the agent put into it."
+      de: "Cloud-Modell: der ganze Prompt verlässt den Rechner, mitsamt allem, was der Agent hineingeschrieben hat."
+
+  - id: google-ai
+    name: Google AI API
+    hosts: ["generativelanguage.googleapis.com", "aiplatform.googleapis.com"]
+    category: ai
+    description:
+      en: "Cloud API for the Gemini models, as Google AI Studio and as Vertex AI."
+      de: "Cloud-API der Gemini-Modelle, als Google AI Studio und als Vertex AI."
+    typical: ["generateContent", "streamGenerateContent"]
+    icon: ai.svg
+    homepage: https://ai.google.dev
+    source: https://ai.google.dev/api
+    risk_note:
+      en: "Cloud model: the whole prompt leaves your machine, including whatever the agent put into it."
+      de: "Cloud-Modell: der ganze Prompt verlässt den Rechner, mitsamt allem, was der Agent hineingeschrieben hat."
+
+  - id: openrouter
+    name: OpenRouter
+    hosts: ["openrouter.ai", "**.openrouter.ai"]
+    category: ai
+    description:
+      en: "Broker that passes requests on to models of many providers under one API."
+      de: "Vermittler, der Anfragen unter einer API an Modelle vieler Anbieter weiterreicht."
+    typical: ["chat completions"]
+    icon: ai.svg
+    homepage: https://openrouter.ai
+    source: https://openrouter.ai/docs/api-reference/overview
+    risk_note:
+      en: "The prompt leaves your machine twice: to OpenRouter, and from there to the provider it picks."
+      de: "Der Prompt verlässt den Rechner zweimal: zu OpenRouter und von dort zum ausgewählten Anbieter."
+
+  - id: docs-rs
+    name: docs.rs
+    hosts: ["docs.rs", "**.docs.rs"]
+    category: docs
+    description:
+      en: "Rendered API documentation of every crate published on crates.io."
+      de: "Gerenderte API-Dokumentation jeder auf crates.io veröffentlichten Crate."
+    typical: ["webfetch"]
+    icon: docs.svg
+    homepage: https://docs.rs
+    source: https://docs.rs/about
+
+  - id: mdn
+    name: MDN Web Docs
+    hosts: ["developer.mozilla.org"]
+    category: docs
+    description:
+      en: "Reference for the web platform, kept by Mozilla."
+      de: "Referenz der Web-Plattform, gepflegt von Mozilla."
+    typical: ["webfetch"]
+    icon: docs.svg
+    homepage: https://developer.mozilla.org
+    source: https://developer.mozilla.org/en-US/about
+
+  - id: stackoverflow
+    name: Stack Overflow
+    hosts: ["stackoverflow.com", "**.stackoverflow.com", "**.stackexchange.com"]
+    category: docs
+    description:
+      en: "Question and answer site for programming, part of the Stack Exchange network."
+      de: "Frage-und-Antwort-Seite für Programmierung, Teil des Netzwerks Stack Exchange."
+    typical: ["webfetch", "websearch result"]
+    icon: docs.svg
+    homepage: https://stackoverflow.com
+    source: https://stackoverflow.com/help
+
+  - id: wikipedia
+    name: Wikipedia
+    hosts: ["**.wikipedia.org", "**.wikimedia.org"]
+    category: docs
+    description:
+      en: "Encyclopedia of the Wikimedia Foundation, with the MediaWiki API underneath."
+      de: "Enzyklopädie der Wikimedia Foundation, darunter die MediaWiki-API."
+    typical: ["webfetch", "websearch result"]
+    icon: docs.svg
+    homepage: https://www.wikipedia.org
+    source: https://www.mediawiki.org/wiki/API:Main_page
+
+  - id: jsdelivr
+    name: jsDelivr
+    hosts: ["cdn.jsdelivr.net", "**.jsdelivr.net"]
+    category: cdn
+    description:
+      en: "Content delivery network that serves files from npm and from GitHub."
+      de: "Auslieferungsnetz, das Dateien aus npm und von GitHub ausliefert."
+    typical: ["asset fetch", "script tag"]
+    icon: cdn.svg
+    homepage: https://www.jsdelivr.com
+    source: https://www.jsdelivr.com/documentation
+
+  - id: unpkg
+    name: unpkg
+    hosts: ["unpkg.com"]
+    category: cdn
+    description:
+      en: "Content delivery network that serves any file of any package on npm."
+      de: "Auslieferungsnetz, das jede Datei jedes npm-Pakets ausliefert."
+    typical: ["asset fetch", "script tag"]
+    icon: cdn.svg
+    homepage: https://unpkg.com
+    source: https://unpkg.com
+
+  - id: google-search
+    name: Google Search
+    hosts: ["google.com", "www.google.com"]
+    category: search
+    description:
+      en: "Web search by Google."
+      de: "Websuche von Google."
+    typical: ["websearch"]
+    icon: search.svg
+    homepage: https://www.google.com
+    source: https://developers.google.com/search/docs
+
+  - id: duckduckgo
+    name: DuckDuckGo
+    hosts: ["duckduckgo.com", "**.duckduckgo.com"]
+    category: search
+    description:
+      en: "Web search by DuckDuckGo."
+      de: "Websuche von DuckDuckGo."
+    typical: ["websearch"]
+    icon: search.svg
+    homepage: https://duckduckgo.com
+    source: https://duckduckgo.com/duckduckgo-help-pages/

@@ -10,3 +10,15 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+humanitl-core.workspace = true
+
+chrono.workspace = true
+dashmap.workspace = true
+flate2.workspace = true
+psl.workspace = true
+serde.workspace = true
+serde_yaml_ng.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true
+tempfile.workspace = true

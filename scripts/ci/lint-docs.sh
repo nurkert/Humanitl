@@ -59,6 +59,33 @@ if ((fail == 0)); then
   fi
 fi
 
+# Der gebuendelte Domain-Katalog gegen sein Schema (HUM-031). Die Datei wird
+# von zwei Seiten gelesen, vom Daemon und als Asset von der Oberflaeche; ein
+# Tippfehler darin faellt sonst erst im Panel auf.
+#
+# `check-jsonschema` ist optional wie rustfmt und clippy im Makefile: fehlt es,
+# sagt das Skript das laut und laeuft weiter. Ein stiller Durchlauf waere
+# schlimmer als eine Luecke, die man sieht. Damit die Pruefung in CI wirklich
+# bindet, muss der Workflow das Werkzeug installieren
+# (`pipx install check-jsonschema`); bis dahin steht dort der Hinweis.
+CATALOG_SCHEMA="catalog/domains.schema.json"
+CATALOG_FILE="catalog/domains.yaml"
+if [[ -f "$CATALOG_SCHEMA" && -f "$CATALOG_FILE" ]]; then
+  if command -v check-jsonschema >/dev/null 2>&1; then
+    if check-jsonschema --schemafile "$CATALOG_SCHEMA" "$CATALOG_FILE"; then
+      echo "lint-docs: $CATALOG_FILE matches $CATALOG_SCHEMA"
+    else
+      echo "lint-docs: $CATALOG_FILE does not match $CATALOG_SCHEMA" >&2
+      fail=1
+    fi
+  else
+    echo "SKIP lint-docs catalog schema: check-jsonschema not found (pipx install check-jsonschema); $CATALOG_FILE was NOT validated"
+    if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+      echo "::notice::lint-docs skipped the catalog schema check: check-jsonschema is not installed on this runner"
+    fi
+  fi
+fi
+
 if ((fail == 0)); then
   echo "lint-docs: ok (${#DOCS[@]} documents)"
 fi

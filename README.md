@@ -246,4 +246,4 @@ the [OpenAI Codex CLI](https://github.com/openai/codex). The proxy is built on
 [bubblewrap](https://github.com/containers/bubblewrap). The interception
 workflow borrows from Burp Suite, OWASP ZAP and Little Snitch; the domain data
 from the [Public Suffix List](https://publicsuffix.org/) and
-[Tranco](https://tranco-list.eu/).
+der [Majestic Million](https://majestic.com/reports/majestic-million) unter CC BY 3.0 (`catalog/RANKS-LICENSE`).

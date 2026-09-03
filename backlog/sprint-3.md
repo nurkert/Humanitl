@@ -1379,7 +1379,7 @@ Prompt-Format `--ask terminal` (wird auf stderr geschrieben, während stdout wei
 │ from: opencode · webfetch                                                      │
 │ size: 2.1 KB · json                                                            │
 │ findings: 1 · GITHUB_TOKEN in header Authorization                             │
-│ catalog: GitHub API · source hosting · Tranco #37                              │
+│ catalog: GitHub API · source hosting · Rang #37                              │
 │                                                                                │
 │ [a] allow once   [s] allow this session   [b] block   [r] rule…   [e] edit…   │
 │ [v] view body    [n] next                                                      │
