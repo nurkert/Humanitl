@@ -476,3 +476,62 @@ Entscheidungen, die beim Bauen fielen und ab jetzt gelten. Wo 3.x oder 4.11 ande
 **CLI (HUM-064).**
 - `humanitl sandbox run`, `sandbox argv` und `sandbox check` laufen in M1 im Prozess der CLI gegen die Sandbox-Crate, nicht über den Daemon: Der `Sandbox`-RPC kommt erst in Sprint 3. Das ist eine bewusste, auf genau diese drei Unterkommandos begrenzte Abweichung von ADR-018; die Naht ist in `daemon/bin/humanitl/src/cmd/sandbox.rs` markiert, und mit dem RPC wandert die Logik hinter ihn, ohne dass sich die Kommandozeile ändert. `daemon status`, `flows list|show|decide` und `config get|schema` gehen schon jetzt über den gRPC-Client.
 - `flows decide ID allow|block [--note TEXT]` bleibt im Produkt: Es ist der Vorläufer von `--ask terminal` (HUM-067) und das Werkzeug, mit dem das Demoskript und die Escape-Tests entscheiden.
+
+**Oberfläche, Nachtrag 2026-09-03.**
+- `shadcn_flutter` ist noch nicht in `app/pubspec.yaml`. `packages/ui` steht auf reinem `package:flutter/widgets.dart`, entgegen 4.11 („shadcn_flutter kommt mit HUM-019"). Das ist bisher kein Schaden, weil der Wrapper genau dafür da ist; HUM-035 entscheidet auf diesem tatsächlichen Stand, nicht auf der Annahme, das Paket sei schon drin.
+- Bewegung erklärt oder entfällt. Ein geteilter Übergang (`Hero`) wird nicht erzwungen: Er gehört an die zwei Stellen, an denen der Blick sonst springt, nämlich von der Karte in der Warteschlange in die Detailansicht und von einem entschiedenen Fluss in die History. Überall sonst genügen die Tokens aus `HMotion`. Eine Animation, die keine Frage des Nutzers beantwortet, ist ein Fehler, kein Schmuck.
+
+### 4.13 Vertrauen als Gestaltungsauftrag (2026-09-03)
+
+Humanitl entscheidet mit dem Nutzer darüber, was sein Rechner verlässt. Wer so
+etwas benutzt, muss dem Werkzeug glauben können, und zwar ab der ersten Minute
+der ersten Fassung. Ein Werkzeug wirkt nicht seriös, weil es das behauptet,
+sondern weil jede Kleinigkeit dieselbe Sorgfalt zeigt. Die folgenden Punkte
+sind deshalb Akzeptanzkriterien jedes UI-Issues, nicht Geschmack.
+
+**Nie mehr behaupten als bewiesen ist.** Jede grüne Aussage der Oberfläche
+zeigt auf einen Beleg, den man anschauen kann; die drei Isolationsprüfungen
+tun das bereits mit ihrer `evidence`-Zeile. Was der Daemon nicht weiß, steht
+als unbekannt da, nie als grün und nie als Strich, hinter dem man Grün vermuten
+könnte. Eine Zahl, die geschätzt ist, wird als geschätzt gekennzeichnet.
+
+**Genauigkeit, wo sie zählt.** Zeitpunkte, Größen und Zähler stehen exakt, mit
+Einheit; „vor ein paar Sekunden" ist erlaubt, wo die Zeit nur Kontext ist, und
+verboten, wo sie Teil des Belegs ist. Bytes und Hashes stehen in Monospace,
+damit man sie vergleichen kann.
+
+**Zurückhaltung.** Farbe bedeutet Zustand, sonst nichts. Kein Emoji, kein
+Ausrufezeichen, keine Werbesprache im Produkt. Kein Verlauf, kein Schlagschatten
+als Dekor, keine Animation ohne Aussage (4.12). Der Rahmen tritt zurück, der
+Inhalt trägt.
+
+**Vorhersagbarkeit.** Dieselbe Handlung liegt immer an derselben Stelle. Nichts
+verschiebt sich unter dem Zeiger. Ein Bildschirm, der lädt, behält sein Gerüst,
+statt zu springen. Was der Nutzer gerade liest, wird nicht animiert.
+
+**Keine dunklen Muster, in beide Richtungen.** Freigeben darf nie leichter aus
+Versehen passieren als Blocken. Eine Entscheidung, die man nicht zurücknehmen
+kann, sagt das vorher. Voreinstellungen stehen auf der sicheren Seite, und wo
+eine Einstellung Sicherheit kostet, sagt der Text das in einem Satz.
+
+**Fehler sind Teil der Oberfläche.** Jeder nicht-grüne Zustand nennt Grund und
+Abhilfe (`Diagnostic` mit `why` und `fix`), in der Sprache des Nutzers, nie nur
+einen Code. Ein leerer Bildschirm erklärt, was als Nächstes passieren wird.
+
+**Handwerk sichtbar machen.** Grundlinien liegen auf einem Raster, Radien und
+Haarlinien sind überall gleich, Symbole haben eine optische Größe statt einer
+gemessenen. Ein Bildschirm, der ruckelt, wirkt unfertig: die Budgets aus
+`docs/UX.md` sind deshalb Teil dieser Aussage und nicht nur Technik.
+
+Die Prüffrage vor jedem „fertig": Würde ein Sicherheitsverantwortlicher, der
+dieses Fenster zum ersten Mal sieht, ihm die Entscheidung über seinen
+Netzverkehr anvertrauen? Wenn eine Stelle daran zweifeln lässt, ist sie der
+nächste Arbeitsschritt.
+
+**Testdaten der Findings-Detektoren (2026-09-03).** Ein Detektor für Geheimnisse
+lässt sich nur an echt geformten Werten prüfen, und genau diese Form blockiert
+der Push-Schutz von GitHub im Quelltext. Solche Werte werden deshalb zur
+Laufzeit aus zwei Teilen zusammengesetzt (`"ghp" + "_0123…"`), mit einem
+Kommentar an der Stelle. Ein Wert nachträglich freizuschalten wäre der falsche
+Weg: Der Schutz soll anschlagen, wenn wirklich einmal ein Schlüssel in einen
+Commit rutscht.
