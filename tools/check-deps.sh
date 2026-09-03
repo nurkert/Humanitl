@@ -26,6 +26,16 @@ if grep -rn 'TcpStream::connect' daemon/crates daemon/bin --include='*.rs' 2>/de
   fail=1
 fi
 
+# Ein Skript mit Shebang, das jemand direkt aufruft, braucht das Ausfuehrungsbit;
+# die CI ruft ./tests/e2e/run.sh und ./tests/escape/run.sh so auf. Lokal faellt
+# das nie auf, weil man `bash skript` tippt; auf dem Runner ist es Exit 126.
+while IFS= read -r script; do
+  if head -c2 "$script" | grep -q '^#!' && [[ ! -x "$script" ]]; then
+    echo "script has a shebang but no executable bit: $script" >&2
+    fail=1
+  fi
+done < <(git ls-files 'tests/*.sh' 'tests/*.py' 'scripts/*.sh' 'tools/*.sh' 2>/dev/null)
+
 # No feature imports another feature; they talk through core only (ARCHITECTURE 5).
 if [[ -d app/lib/features ]]; then
   while IFS= read -r hit; do
