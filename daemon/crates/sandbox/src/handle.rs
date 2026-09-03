@@ -416,6 +416,11 @@ impl SandboxHandle {
         // gleich weg; jeder andere Fehler wäre ein Recht, das wir bei einer
         // selbst gestarteten Sandbox haben. In beiden Fällen entscheidet
         // allein, ob der Prozess in der Frist endet.
+        // `child_pid` wird von bwrap gereapt, nicht von uns: Zwischen dem Ende
+        // des Init und dem Ende von bwrap koennte die Nummer theoretisch neu
+        // vergeben sein. Das Fenster ist Millisekunden gross und braucht einen
+        // vollen Umlauf des PID-Zaehlers; ein Signal an eine fremde Gruppe waere
+        // dann SIGINT an einen Prozess desselben Nutzers, keine Eskalation.
         if kill_process_group(pid, Signal::INT).is_err() {
             return false;
         }

@@ -22,6 +22,8 @@ mod render;
 use std::process::ExitCode;
 
 use clap::error::ErrorKind;
+use humanitl_core::diagnostics::codes;
+use humanitl_core::{Diagnostic, FixAction, Severity};
 
 use crate::cli::{Cmd, Invocation};
 use crate::cmd::{Context, EXIT_OK, EXIT_USER, Failure, not_yet_failure};
@@ -39,18 +41,40 @@ async fn main() -> ExitCode {
 /// Meldet, was `clap` beim Lesen der Kommandozeile gefunden hat.
 ///
 /// `--help` und `--version` sind kein Fehler: sie gehen nach `stdout` und
-/// enden mit 0. Alles andere ist ein Fehler des Aufrufers und endet mit 1,
-/// nicht mit der 2 von `clap`: die 2 gehört hier dem nicht erreichbaren
-/// Daemon (`backlog/CONVENTIONS.md` 3.8).
+/// enden mit 0. Alles andere ist ein Fehler des Aufrufers und wird ein
+/// Diagnostic wie jeder andere Fehler der CLI, mit `--json` als eine Zeile auf
+/// stdout; Exit 1, nicht die 2 von `clap`: die 2 gehört hier dem nicht
+/// erreichbaren Daemon (`backlog/CONVENTIONS.md` 3.8). Ob `--json` gesetzt war,
+/// muss aus den rohen Argumenten kommen, weil das Parsen gerade gescheitert ist.
 fn report_usage(error: &clap::Error) -> ExitCode {
-    let _ = error.print();
-    match error.kind() {
-        // Wer nach der Hilfe fragt, bekommt sie und keinen Fehler.
-        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => ExitCode::from(EXIT_OK),
-        // Ein Aufruf ohne Unterkommando zeigt die Hilfe und hat trotzdem
-        // nichts getan.
-        _ => ExitCode::from(EXIT_USER),
+    if matches!(
+        error.kind(),
+        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+    ) {
+        let _ = error.print();
+        return ExitCode::from(EXIT_OK);
     }
+    let json = std::env::args_os().any(|arg| arg == "--json");
+    Renderer::new(json, 0, false).diagnostic(&usage_diagnostic(error));
+    ExitCode::from(EXIT_USER)
+}
+
+/// Der Parse-Fehler von `clap` als Diagnostic: die erste nicht leere Zeile
+/// der Meldung als Grund, `humanitl --help` als Abhilfe.
+fn usage_diagnostic(error: &clap::Error) -> Diagnostic {
+    let why = error
+        .to_string()
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map_or_else(
+            || "the command line could not be read".to_owned(),
+            |line| line.trim_start_matches("error: ").to_owned(),
+        );
+    Diagnostic::builder(codes::CLI_004, Severity::Error)
+        .why(why)
+        .fix(FixAction::CopyCommand("humanitl --help".to_owned()))
+        .build()
 }
 
 /// Führt das Unterkommando aus und macht aus seinem Ergebnis einen Exit-Code.
