@@ -1,0 +1,119 @@
+# Composite action: the Flutter half of every CI job.
+#
+# The SDK version is read from `app/.fvmrc`, the single pin (HUM-001). A
+# composite action cannot read workflow-level `env`, hence the file read instead
+# of a `FLUTTER_VERSION` variable; the `flutter-version` input exists only as an
+# override for experiments.
+#
+# Every action is pinned to a commit SHA; the release tag in the trailing
+# comment is documentation. Bump both together.
+name: Setup Flutter
+description: >-
+  Install the Flutter SDK pinned in app/.fvmrc, restore the SDK and pub caches,
+  and optionally install the Linux desktop toolchain and the Dart protoc plugin.
+
+inputs:
+  flutter-version:
+    description: "Override the pin in app/.fvmrc. Empty means: use the pin."
+    required: false
+    default: ""
+  linux-desktop:
+    description: 'Install the GTK toolchain needed by `flutter build linux` ("true" or "false").'
+    required: false
+    default: "false"
+  protoc-plugin:
+    description: 'Install protoc_plugin so protoc-gen-dart is on PATH ("true" or "false").'
+    required: false
+    default: "false"
+  protoc-plugin-version:
+    # The pin is PLUGIN_VERSION in scripts/gen-proto.sh, paired with protobuf
+    # in app/pubspec.yaml (CONVENTIONS.md 4.11). The script refuses to generate
+    # under CI when the active plugin differs, so a second copy of the number
+    # here would only be one more place to forget.
+    description: "Override the pin in scripts/gen-proto.sh. Empty means: use the pin."
+    required: false
+    default: ""
+
+outputs:
+  flutter-version:
+    description: "The SDK version that was installed."
+    value: ${{ steps.pin.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Read the Flutter pin
+      id: pin
+      shell: bash
+      env:
+        # Via env, never interpolated straight into the script body.
+        VERSION_OVERRIDE: ${{ inputs.flutter-version }}
+      run: |
+        set -euo pipefail
+        override="$VERSION_OVERRIDE"
+        if [[ -n "$override" ]]; then
+          version="$override"
+          origin="the flutter-version input"
+        else
+          version="$(python3 -c 'import json; print(json.load(open("app/.fvmrc"))["flutter"])')"
+          origin="app/.fvmrc"
+        fi
+        if [[ -z "$version" ]]; then
+          echo "::error file=app/.fvmrc::no flutter version found"
+          exit 1
+        fi
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "flutter pin: $version (from $origin)"
+
+    - name: Install the Linux desktop toolchain
+      if: inputs.linux-desktop == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y libgtk-3-dev ninja-build clang cmake pkg-config
+
+    - name: Install Flutter
+      # cache-key carries the version: `cache: true` with a changing version
+      # otherwise keeps handing back a stale SDK (HUM-002 Fallstricke).
+      # `cache` covers the SDK only; the pub cache has its own switch.
+      # pub-cache-key is keyed on the pubspec files, not on pubspec.lock, because
+      # the lock file is gitignored in this repository.
+      uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+      with:
+        flutter-version: ${{ steps.pin.outputs.version }}
+        channel: stable
+        cache: true
+        cache-key: flutter-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.version }}
+        pub-cache: true
+        pub-cache-key: pub-${{ runner.os }}-${{ steps.pin.outputs.version }}-${{ hashFiles('app/pubspec.yaml', 'app/packages/ui/pubspec.yaml') }}
+
+    - name: Install protoc_plugin
+      if: inputs.protoc-plugin == 'true'
+      shell: bash
+      env:
+        # Via env, never interpolated straight into the script body.
+        VERSION_OVERRIDE: ${{ inputs.protoc-plugin-version }}
+      run: |
+        set -euo pipefail
+        pin_file=scripts/gen-proto.sh
+        version="$VERSION_OVERRIDE"
+        origin="the protoc-plugin-version input"
+        if [[ -z "$version" ]]; then
+          version="$(sed -n 's/^PLUGIN_VERSION="\([^"]*\)".*/\1/p' "$pin_file" | head -n 1)"
+          origin="$pin_file"
+        fi
+        if [[ -z "$version" ]]; then
+          echo "::error file=$pin_file::no PLUGIN_VERSION found"
+          exit 1
+        fi
+        echo "protoc_plugin pin: $version (from $origin)"
+        dart pub global activate protoc_plugin "$version"
+        echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
+
+    - name: Report versions
+      shell: bash
+      run: |
+        set -euo pipefail
+        flutter --version
+        dart --version

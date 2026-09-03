@@ -1,0 +1,105 @@
+# Release skeleton.
+#
+# The job graph is the deliverable, not the content: guard -> check -> package ->
+# draft-release. Packaging (HUM-053) and asset upload (HUM-060) fill in `package`
+# and hang files on the draft. Until then the workflow produces a draft release
+# without assets, which is honest about what exists.
+#
+# Every action is pinned to a commit SHA with the release tag as a trailing
+# comment, as in ci.yml.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Never two releases for the same tag at once, and never cancel one halfway.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  RUST_BACKTRACE: "1"
+  CARGO_INCREMENTAL: "0"
+  STRICT: "1"
+
+jobs:
+  guard:
+    name: guard
+    runs-on: ubuntu-24.04
+    # A fork or a mirror that pushes a v* tag must not cut a release in its own
+    # name, and must never reach the job that holds contents: write. The test
+    # is the repository name, not `github.event.repository.fork`: a mirror is
+    # not a fork, and a skipped guard takes every `needs: guard` job with it.
+    if: github.repository == 'nurkert/Humanitl'
+    steps:
+      - name: Refuse malformed tags
+        run: |
+          set -euo pipefail
+          case "${GITHUB_REF}" in
+            refs/tags/v*) echo "releasing ${GITHUB_REF_NAME}" ;;
+            *) echo "::error::not a v* tag: ${GITHUB_REF}"; exit 1 ;;
+          esac
+
+  check:
+    name: check
+    needs: guard
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          cargo-deny: "true"
+          cache-key: release
+      - uses: ./.github/actions/setup-flutter
+        with:
+          linux-desktop: "true"
+          protoc-plugin: "true"
+      - name: Install protoc
+        # `make check` regenerates app/lib/core/ipc/generated before flutter
+        # analyze (HUM-003); with STRICT=1 a missing protoc is a failure.
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "27.x"
+          repo-token: ${{ github.token }}
+      - name: Full gate
+        run: make check
+
+  package:
+    name: package
+    needs: check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Build the packages
+        # HUM-053 replaces this with the deb, AppImage and systemd unit build.
+        run: |
+          set -euo pipefail
+          echo "::notice::packaging not yet implemented (HUM-053)"
+          {
+            echo "### package: skipped"
+            echo
+            echo "Packaging arrives with HUM-053. No artefacts were built."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  draft-release:
+    name: draft-release
+    needs: [check, package]
+    runs-on: ubuntu-24.04
+    permissions:
+      # The only place in the repository that writes. Assets follow in HUM-060.
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          draft: true
+          generate_release_notes: true
+          name: ${{ github.ref_name }}
