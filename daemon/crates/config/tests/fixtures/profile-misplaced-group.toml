@@ -1,0 +1,3 @@
+# Ein Profil, das [config] vergessen hat: [hold] liegt auf der obersten Ebene.
+[hold]
+timeout_secs = 9

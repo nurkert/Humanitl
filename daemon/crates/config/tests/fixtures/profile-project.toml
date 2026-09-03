@@ -1,0 +1,8 @@
+# Das Profil eines Projekts, <projekt>/.humanitl/profile.toml.
+# Nur Schlüssel mit `x-project-scope = "allowed"`; `sandbox.*` wäre CONFIG_003,
+# siehe tests/project_scope.rs.
+[config.hold]
+timeout_secs = 180
+
+[config.findings]
+user_terms = ["projekt-nordlicht"]
