@@ -78,8 +78,83 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           cache-key: rust-test
+      - name: Install the clients of the conformance matrix (HUM-017)
+        # daemon/crates/proxy/tests/conformance.rs drives real clients through
+        # the proxy. Every row skips itself when its client is missing, so a
+        # missing package would turn the matrix green without testing anything;
+        # here all of them have to be present.
+        #
+        # curl, git, python3 and node are already on the runner image. The
+        # python module requests (row 15) is not. websocat (row 11) and grpcurl
+        # (rows 12 and 13) are packaged neither in Debian nor in Ubuntu; they
+        # come from their upstream releases, pinned to a version and verified
+        # against a SHA-256, in the same spirit as the commit-pinned actions.
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            curl git python3 python3-requests
+
+          websocat_sha=66f8dd3a0394761556339117f8bb5123bddefd44e087af2a72ec22b0bd08d514
+          curl -fsSL -o /tmp/websocat \
+            https://github.com/vi/websocat/releases/download/v1.14.1/websocat.x86_64-unknown-linux-musl
+          echo "${websocat_sha}  /tmp/websocat" | sha256sum -c -
+          sudo install -m 0755 /tmp/websocat /usr/local/bin/websocat
+
+          grpcurl_sha=97e13d58d2733a0e62cd2571d1d5f0c02823f0d25282f08bddedf1ad9c5d1736
+          curl -fsSL -o /tmp/grpcurl.tar.gz \
+            https://github.com/fullstorydev/grpcurl/releases/download/v1.9.4/grpcurl_1.9.4_linux_x86_64.tar.gz
+          echo "${grpcurl_sha}  /tmp/grpcurl.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/grpcurl.tar.gz -C /tmp grpcurl
+          sudo install -m 0755 /tmp/grpcurl /usr/local/bin/grpcurl
+
+          missing=0
+          for tool in curl websocat grpcurl python3 node git; do
+            if ! command -v "$tool" >/dev/null; then
+              echo "::error::$tool is missing, rows of the conformance matrix would skip"
+              missing=1
+            fi
+          done
+          python3 -c 'import requests' || {
+            echo "::error::the python module requests is missing, row 15 would skip"
+            missing=1
+          }
+          exit "$missing"
       - name: Build and test the workspace
         run: make rust-build rust-test
+      - name: The shim is static and under 2 MB (HUM-012)
+        # The shim is the only binary that is mounted into the sandbox, and the
+        # sandbox has none of the host's libraries: it must be statically
+        # linked. musl is the first choice; without the target the glibc one
+        # with +crt-static does the same job. -C relocation-model=static makes
+        # the result an ET_EXEC instead of a static PIE, which is what lets ldd
+        # answer "not a dynamic executable". tests/escape/run.sh builds it the
+        # same way and reports the same two properties as cases.
+        run: |
+          set -euo pipefail
+          cd daemon
+          musl="$(uname -m)-unknown-linux-musl"
+          target_flag=()
+          out="target/shim/humanitl-shim"
+          if rustup target add "$musl" > /dev/null 2>&1; then
+            target_flag=(--target "$musl")
+            out="target/$musl/shim/humanitl-shim"
+          else
+            echo "::notice::$musl is not available, building with +crt-static"
+          fi
+          cargo rustc -p humanitl-shim --bin humanitl-shim --profile shim \
+            "${target_flag[@]}" -- -C target-feature=+crt-static -C relocation-model=static
+          linkage="$(ldd "$out" 2>&1 || true)"
+          bytes="$(wc -c < "$out")"
+          echo "shim: $out, $bytes bytes, ldd: $linkage"
+          case "$linkage" in
+            *"not a dynamic executable"*) ;;
+            *) echo "::error::the shim is not statically linked: $linkage"; exit 1 ;;
+          esac
+          if [[ "$bytes" -ge 2097152 ]]; then
+            echo "::error::the shim is $bytes bytes, the limit is 2097152"
+            exit 1
+          fi
       - name: Documentation builds without warnings
         # missing_docs is denied in every library crate, so a public item without
         # a doc comment fails here (CONVENTIONS.md 3.12).
