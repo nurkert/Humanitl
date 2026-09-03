@@ -134,6 +134,8 @@ e2e_expect_match "no route to the target that answers on the host" \
     'Network is unreachable|Failed to connect|Couldn.t connect|Connection refused' "$no_proxy_ip"
 if printf '%s\n' "$no_proxy_ip" | grep -q '"path"'; then
     e2e_check "the target answered a request that bypassed the proxy" no "$no_proxy_ip"
+else
+    e2e_check "the target did not answer a request that bypassed the proxy" ok
 fi
 
 no_proxy_dns=$(sandbox_run /usr/bin/env -i \

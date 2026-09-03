@@ -909,7 +909,7 @@ enum DaemonCmd { Status }
 Config-Flags: `humanitl-config` liefert `clap::Command`-Argumente generiert aus dem Schema (`--hold-timeout-secs`, `--llm-endpoint`, …) über `Config::clap_args()`; Werte werden mit Präzedenz CLI > Env > Profil > Datei > Default aufgelöst (`Config::resolve(sources)`).
 
 Verhalten `sandbox run`:
-1. Daemon-Verbindung (`client::connect`); Fehler ⇒ Diagnostic `DAEMON_002` „Daemon nicht erreichbar" mit fix `CopyCommand("systemctl --user start humanitld")`, Exit 2.
+1. Daemon-Verbindung (`client::connect`); Fehler ⇒ Diagnostic `DAEMON_001` „Daemon nicht erreichbar" mit fix `CopyCommand("systemctl --user start humanitld")`, Exit 2.
 2. `Sandbox(Start { work_dir: cwd oder --work, … , agent_argv: cmd })` ⇒ `SandboxEvent`-Stream: `Started { sandbox_id, argv_display }`, `Check { results }`, `Output { bytes }` (stdout/stderr des Agenten, bis HUM-042 ohne PTY), `Exited { code }`.
 3. Ist ein `Check` mit `passed = false` dabei ⇒ Diagnostic anzeigen, Exit 3; der Daemon startet den Agenten in diesem Fall nicht (Server-seitig: Check läuft vor Agent-Start, Pflicht).
 4. `SIGINT` ⇒ `Sandbox(Stop)`; Exit mit `Exited.code`.
@@ -937,7 +937,7 @@ Mit `--json`: Diagnostic als JSON auf stdout, eine Zeile.
 
 ### Tests
 - `cli_help_snapshot`: `humanitl --help` und je Subkommando, Snapshot.
-- `cli_json_diagnostic`: Daemon aus ⇒ `humanitl --json daemon status` ⇒ JSON mit `code: "DAEMON_002"`, Exit 2.
+- `cli_json_diagnostic`: Daemon aus ⇒ `humanitl --json daemon status` ⇒ JSON mit `code: "DAEMON_001"`, Exit 2 (im Register ist `DAEMON_002` die Proto-Version).
 - `sandbox_run_exit_code` (Integration): `humanitl sandbox run -- sh -c 'exit 5'` ⇒ Exit 5.
 - `sandbox_run_check_fails_blocks_start`: Daemon mit `--test-fail-check` (Test-Flag) ⇒ Exit 3, Agent nie gestartet (Marker-Datei fehlt).
 - `sandbox_argv_matches_plan`: Ausgabe gleicht `LaunchPlan.argv_display` aus HUM-011-Snapshot.

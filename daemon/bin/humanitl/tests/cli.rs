@@ -48,6 +48,19 @@ impl Harness {
         for sub in ["home", "config", "data", "run", "work"] {
             std::fs::create_dir_all(dir.path().join(sub)).expect("a subdirectory");
         }
+        // Die Profile liegen dort, wo humanitl sie beim Nutzer sucht, statt
+        // relativ zum Binary: so laufen die Tests auch mit einem
+        // CARGO_TARGET_DIR ausserhalb des Repositories.
+        let profiles = dir.path().join("config/humanitl/profiles/sandbox");
+        std::fs::create_dir_all(&profiles).expect("the profile directory");
+        let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../profiles/sandbox");
+        for entry in std::fs::read_dir(&shipped).expect("the shipped profiles") {
+            let entry = entry.expect("a profile entry");
+            if entry.path().extension().is_some_and(|ext| ext == "toml") {
+                std::fs::copy(entry.path(), profiles.join(entry.file_name()))
+                    .expect("a copied profile");
+            }
+        }
         Self { dir }
     }
 
@@ -370,6 +383,32 @@ fn a_placeholder_subcommand_is_a_diagnostic_block_and_exit_one() {
             "{command:?}: stdout must stay clean"
         );
     }
+}
+
+/// Ein Aufruf, den clap nicht lesen kann, ist ein Diagnostic wie jeder andere
+/// Fehler: Block auf stderr, Exit 1, mit --json eine Zeile auf stdout.
+#[test]
+fn an_unreadable_command_line_is_a_diagnostic_not_bare_clap_text() {
+    let harness = Harness::new();
+    let output = harness.run(["sandbox", "bogus"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.starts_with("error[CLI_004]: "), "{text}");
+    assert!(
+        text.contains("humanitl --help"),
+        "the fix names the help: {text}"
+    );
+    assert!(stdout(&output).is_empty(), "stdout must stay clean");
+
+    let output = harness.run(["--json", "sandbox", "bogus"]);
+    let text = stdout(&output);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert_eq!(text.lines().count(), 1, "{text}");
+    let value: serde_json::Value = serde_json::from_str(text.trim()).expect("one JSON value");
+    assert_eq!(value["code"], "CLI_004");
+
+    let output = harness.run(["--help"]);
+    assert_eq!(code(&output), 0, "help is not an error");
 }
 
 #[test]

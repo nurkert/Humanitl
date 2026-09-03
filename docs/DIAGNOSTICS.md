@@ -20,6 +20,7 @@ Entfernen eines Codes.
 | tls | `TLS` | 001 | 009 | CA, Zertifikate, Handschlag |
 | llm | `LLM` | 001 | 009 | LLM-Endpunkt und seine Antworten |
 | rules | `RULES` | 001 | 009 | Regeldatei und Muster |
+| findings | `FINDINGS` | 001 | 009 | Detektoren für Secrets und personenbezogene Daten |
 | terminal | `TERM` | 001 | 009 | Terminal-Anbindung des Agenten |
 | recorder | `RECORDER` | 001 | 009 | Datenbank und Blob-Speicher |
 | limits | `LIMIT` | 001 | 009 | Budgets und Zeitgrenzen |
@@ -205,6 +206,36 @@ Regel-Datei ungültig
 
 Host-Muster verdächtig (xn--, IP in Host-Glob)
 
+#### RULES_003
+
+Host-Muster ungültig
+
+#### RULES_005
+
+Pfadmuster ungültig
+
+#### RULES_006
+
+Version der Regel-Datei unbekannt
+
+#### RULES_007
+
+Doppelte Regel-Id
+
+#### RULES_008
+
+Regel wirkt zu breit
+
+### Bereich findings
+
+#### FINDINGS_001
+
+Detektor-Regeln unbrauchbar
+
+#### FINDINGS_002
+
+Scan unvollständig
+
 ### Bereich terminal
 
 #### TERM_001
@@ -230,4 +261,8 @@ Vollbild-TUI-Agent nicht mit --ask terminal
 #### CLI_003
 
 Unterkommando noch nicht verfügbar
+
+#### CLI_004
+
+Aufruf ungültig
 

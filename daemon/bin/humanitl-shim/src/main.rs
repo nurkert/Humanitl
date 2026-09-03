@@ -667,7 +667,24 @@ extern "C" fn relay(signal: c_int) {
 }
 
 fn forward_signals() {
-    for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+    // SIGINT fehlt hier mit Absicht: Ein Terminal schickt es an die ganze
+    // Vordergrund-Prozessgruppe, und der Launcher (SandboxHandle::interrupt)
+    // an die Prozessgruppe der Sandbox; der Agent hat es dann schon. Reichte
+    // der Shim es zusaetzlich weiter, bekaeme der Agent zwei SIGINT wenige
+    // Millisekunden hintereinander, und viele Agenten deuten das zweite als
+    // "sofort abbrechen". SIGTERM und SIGHUP kommen meist an den Shim allein
+    // (systemd, kill <pid>) und werden deshalb weitergereicht.
+    // Der Shim selbst darf an SIGINT nicht sterben: Es kommt an die ganze
+    // Gruppe, und ein toter Shim hiesse ein totes bwrap mit Exit 130, bevor
+    // der Agent seinen Handler ausfuehren konnte. Nur der Elternprozess
+    // ignoriert es; das Kind hat die Vorgabe geerbt, weil dies nach dem Fork
+    // geschieht.
+    // SAFETY: SIG_IGN fuer ein Signal des eigenen Prozesses zu setzen hat
+    // keine Vorbedingungen.
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_IGN);
+    }
+    for signal in [libc::SIGTERM, libc::SIGHUP] {
         // SAFETY: sigaction is plain data; the handler is an extern "C" fn
         // that calls only kill(2).
         unsafe {
