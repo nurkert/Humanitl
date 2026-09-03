@@ -319,6 +319,15 @@ fn every_subcommand_has_a_help_of_its_own() {
         vec!["flows", "--help"],
         vec!["flows", "list", "--help"],
         vec!["flows", "show", "--help"],
+        vec!["rules", "--help"],
+        vec!["rules", "list", "--help"],
+        vec!["rules", "add", "--help"],
+        vec!["rules", "update", "--help"],
+        vec!["rules", "remove", "--help"],
+        vec!["rules", "reorder", "--help"],
+        vec!["rules", "dry-run", "--help"],
+        vec!["rules", "reload", "--help"],
+        vec!["rules", "test", "--help"],
         vec!["config", "--help"],
         vec!["config", "get", "--help"],
         vec!["config", "schema", "--help"],
@@ -365,7 +374,6 @@ fn a_placeholder_subcommand_is_a_diagnostic_block_and_exit_one() {
     let harness = Harness::new();
     for (command, issue) in [
         (vec!["run"], "HUM-067"),
-        (vec!["rules", "list"], "HUM-065"),
         (vec!["audit", "verify"], "HUM-070"),
     ] {
         let output = harness.run(command.clone());
@@ -523,7 +531,6 @@ fn a_subcommand_that_does_not_exist_yet_names_its_issue_and_exits_one() {
     let harness = Harness::new();
     for (command, issue) in [
         (vec!["run", "--", "opencode"], "HUM-067"),
-        (vec!["rules", "list"], "HUM-065"),
         (vec!["audit", "verify"], "HUM-070"),
     ] {
         let output = harness.run(command.clone());
@@ -677,6 +684,384 @@ fn flows_show_falls_back_to_the_summary_and_reports_an_unknown_id() {
         stderr(&missing).contains("[IPC_003]"),
         "{}",
         stderr(&missing)
+    );
+}
+
+/// Wartet, bis der Abspieler des Fakes wenigstens einen Flow gemeldet hat.
+///
+/// Sortiert wird aufsteigend, damit die erste Zeile die erste Anfrage der
+/// aufgezeichneten Sitzung ist und ein Test sich auf sie beziehen kann.
+fn wait_for_flows(harness: &Harness) -> Vec<serde_json::Value> {
+    let deadline = Instant::now() + PATIENCE;
+    let mut flows = Vec::new();
+    while Instant::now() < deadline && flows.is_empty() {
+        let output = harness.run(["--json", "flows", "list", "--asc"]);
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+        let page: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("JSON");
+        flows = page["flows"].as_array().cloned().unwrap_or_default();
+        if flows.is_empty() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    assert!(!flows.is_empty(), "the recorded session produced no flow");
+    flows
+}
+
+/// Der JSON-Wert, den ein Aufruf mit `--json` auf stdout schreibt.
+fn json_of(output: &Output) -> serde_json::Value {
+    let text = stdout(output);
+    assert_eq!(text.lines().count(), 1, "not one line of JSON: {text}");
+    serde_json::from_str(text.trim()).expect("one JSON value")
+}
+
+/// `rules test` gibt es im Vertrag nicht; es sagt, was fehlt, und nicht, dass
+/// es keinen Daemon gäbe.
+#[test]
+fn rules_test_names_the_operation_the_contract_does_not_have() {
+    let harness = Harness::new();
+    let output = harness.run(["rules", "test", "https://evil.example"]);
+    let text = stderr(&output);
+
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.starts_with("error[CLI_003]: "), "{text}");
+    assert!(text.contains("Rules RPC"), "{text}");
+    assert!(text.contains("https://evil.example"), "{text}");
+    assert!(stdout(&output).is_empty(), "stdout must stay clean");
+}
+
+#[test]
+fn rules_without_a_daemon_is_daemon_001_and_exit_two() {
+    let harness = Harness::new();
+    for command in [
+        vec!["rules", "list"],
+        vec!["rules", "reload"],
+        vec!["rules", "remove", "018f0001-0000-7000-8000-000000000001"],
+    ] {
+        let output = harness.run(command.clone());
+        assert_eq!(code(&output), 2, "{command:?}: {}", stderr(&output));
+        assert!(
+            stderr(&output).starts_with("blocking[DAEMON_001]: "),
+            "{command:?}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+/// Eine Regel ohne Aktion wird gemeldet, bevor irgendjemand gefragt wird.
+#[test]
+fn a_rule_without_action_or_host_is_cli_004_without_a_daemon() {
+    let harness = Harness::new();
+    for command in [
+        vec!["rules", "add", "--host", "api.github.com"],
+        vec!["rules", "add", "--action", "allow"],
+        vec!["rules", "dry-run", "--host", "api.github.com"],
+    ] {
+        let output = harness.run(command.clone());
+        let text = stderr(&output);
+        assert_eq!(code(&output), 1, "{command:?}: {text}");
+        assert!(text.starts_with("error[CLI_004]: "), "{command:?}: {text}");
+        assert!(text.contains("humanitl rules add --help"), "{text}");
+    }
+}
+
+#[test]
+fn rules_list_hides_the_bundled_rules_until_all() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+
+    let plain = harness.run(["rules", "list"]);
+    assert_eq!(code(&plain), 0, "{}", stderr(&plain));
+    assert!(stdout(&plain).is_empty(), "{}", stdout(&plain));
+    assert!(stderr(&plain).contains("--all"), "{}", stderr(&plain));
+
+    let all = harness.run(["rules", "list", "--all"]);
+    let text = stdout(&all);
+    assert_eq!(code(&all), 0, "{}", stderr(&all));
+    for column in [
+        "POS", "ACTION", "HOST", "METHODS", "PATH", "EXPIRES", "ORIGIN", "ID",
+    ] {
+        assert!(text.contains(column), "{column} is missing:\n{text}");
+    }
+    assert!(text.contains("bundled"), "{text}");
+    assert!(text.contains("models.dev"), "{text}");
+    assert!(
+        text.lines().all(|line| !line.ends_with(' ')),
+        "the table must not pad the last column:\n{text}"
+    );
+
+    let json = harness.run(["--json", "rules", "list", "--all"]);
+    assert_eq!(code(&json), 0, "{}", stderr(&json));
+    let value = json_of(&json);
+    let rules = value["rules"].as_array().expect("an array of rules");
+    assert!(
+        rules
+            .iter()
+            .any(|rule| rule["origin"] == "bundled" && rule["action"] == "block"),
+        "{value}"
+    );
+}
+
+#[test]
+fn a_rule_is_added_changed_moved_and_removed_over_the_rpc() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+
+    let added = harness.run([
+        "--json",
+        "rules",
+        "add",
+        "--action",
+        "allow",
+        "--host",
+        "**.github.com",
+        "--method",
+        "get",
+        "--expires",
+        "session",
+        "--note",
+        "npm install",
+    ]);
+    assert_eq!(code(&added), 0, "{}", stderr(&added));
+    let value = json_of(&added);
+    let rule = &value["added"];
+    let id = rule["rule_id"].as_str().expect("an id").to_owned();
+    assert_eq!(rule["action"], "allow", "{value}");
+    assert_eq!(rule["origin"], "session", "{value}");
+    assert_eq!(rule["host"], "**.github.com", "{value}");
+    assert_eq!(rule["methods"][0], "GET", "{value}");
+    assert_eq!(rule["expires"]["kind"], "session", "{value}");
+    assert_eq!(rule["note"], "npm install", "{value}");
+
+    // Was nicht genannt wird, bleibt stehen.
+    let updated = harness.run(["--json", "rules", "update", &id, "--action", "block"]);
+    assert_eq!(code(&updated), 0, "{}", stderr(&updated));
+    let value = json_of(&updated);
+    assert_eq!(value["updated"]["action"], "block", "{value}");
+    assert_eq!(value["updated"]["host"], "**.github.com", "{value}");
+    assert_eq!(value["updated"]["note"], "npm install", "{value}");
+
+    // Geprüft wird die Reihenfolge, in der der Daemon danach auswertet, nicht
+    // die Zahl in `position`: die vergibt der Dienst, und die Kommandozeile
+    // schreibt sie hin, statt sie zu behaupten.
+    let moved = harness.run(["--json", "rules", "reorder", &id, "1"]);
+    assert_eq!(code(&moved), 0, "{}", stderr(&moved));
+    let value = json_of(&moved);
+    assert_eq!(value["moved"]["rule_id"], id.as_str(), "{value}");
+    assert_eq!(value["rules"][0]["rule_id"], id.as_str(), "{value}");
+
+    let removed = harness.run(["rules", "remove", &id]);
+    assert_eq!(code(&removed), 0, "{}", stderr(&removed));
+    assert!(stdout(&removed).contains(&id), "{}", stdout(&removed));
+
+    let listed = harness.run(["--json", "rules", "list", "--all"]);
+    let value = json_of(&listed);
+    assert!(
+        !value["rules"]
+            .as_array()
+            .expect("an array")
+            .iter()
+            .any(|rule| rule["rule_id"] == id.as_str()),
+        "{value}"
+    );
+
+    // Ein zweites Mal löschen behauptet nichts, sondern sagt, dass es die
+    // Regel nicht gibt.
+    let again = harness.run(["rules", "remove", &id]);
+    assert_eq!(code(&again), 1, "{}", stderr(&again));
+    assert!(stderr(&again).contains("[IPC_005]"), "{}", stderr(&again));
+}
+
+/// Eine mitgelieferte Regel gehört nicht dem Nutzer.
+#[test]
+fn a_bundled_rule_is_not_moved_and_says_why() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+
+    let listed = harness.run(["--json", "rules", "list", "--all"]);
+    let value = json_of(&listed);
+    let bundled = value["rules"]
+        .as_array()
+        .expect("an array")
+        .iter()
+        .find(|rule| rule["bundled"] == true)
+        .expect("the fake ships bundled rules")
+        .clone();
+    let id = bundled["rule_id"].as_str().expect("an id").to_owned();
+
+    let output = harness.run(["rules", "reorder", &id, "1"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.starts_with("error[RULES_010]: "), "{text}");
+    assert!(text.contains("\n  fix: humanitl rules add "), "{text}");
+}
+
+#[test]
+fn a_dry_run_says_how_many_of_how_many() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+    let flows = wait_for_flows(&harness);
+    let host = flows[0]["authority"]["host"]
+        .as_str()
+        .expect("a host")
+        .to_owned();
+
+    let text_run = harness.run(["rules", "dry-run", "--action", "block", "--host", &host]);
+    let text = stdout(&text_run);
+    assert_eq!(code(&text_run), 0, "{}", stderr(&text_run));
+    assert!(
+        text.contains("recorded requests would have matched"),
+        "{text}"
+    );
+
+    let output = harness.run([
+        "--json", "rules", "dry-run", "--action", "block", "--host", &host, "--scan", "50",
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let value = json_of(&output);
+    assert!(value["scanned"].as_u64().is_some(), "{value}");
+    let matches = value["matches"].as_array().expect("an array of matches");
+    assert!(
+        matches
+            .iter()
+            .all(|flow| flow["authority"]["host"] == host.as_str()),
+        "{value}"
+    );
+
+    // Ein Probelauf ändert nichts.
+    let after = json_of(&harness.run(["--json", "rules", "list", "--all"]));
+    assert_eq!(
+        after["rules"].as_array().map(Vec::len),
+        value["rules"].as_array().map(Vec::len)
+    );
+}
+
+/// Ein Probelauf ohne Treffer ist eine Null und kein Absturz.
+#[test]
+fn a_dry_run_without_a_hit_is_still_a_number() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+
+    let output = harness.run([
+        "--json",
+        "rules",
+        "dry-run",
+        "--action",
+        "ask",
+        "--host",
+        "nothing.invalid",
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let value = json_of(&output);
+    assert_eq!(
+        value["matches"].as_array().map(Vec::len),
+        Some(0),
+        "{value}"
+    );
+}
+
+#[test]
+fn a_reload_reports_what_the_daemon_reported_and_nothing_else() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+
+    let output = harness.run(["rules", "reload"]);
+    let text = stdout(&output);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    // Der Fake hat keine Regel-Datei und meldet deshalb keinen RULES_011. Die
+    // Zeile behauptet dann keine Änderung.
+    assert!(
+        text.contains("without a report of what changed") || text.contains("[RULES_011]"),
+        "{text}"
+    );
+
+    let json = harness.run(["--json", "rules", "reload"]);
+    assert_eq!(code(&json), 0, "{}", stderr(&json));
+    let value = json_of(&json);
+    assert!(value["diagnostics"].is_array(), "{value}");
+    assert!(value["rules"].is_array(), "{value}");
+}
+
+#[test]
+fn flows_list_hands_the_filter_over_and_survives_an_empty_result() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+    let flows = wait_for_flows(&harness);
+    let host = flows[0]["authority"]["host"]
+        .as_str()
+        .expect("a host")
+        .to_owned();
+
+    // Das Akzeptanzkriterium: ein Filter in einem Wort, ein leeres Ergebnis,
+    // keine Panik.
+    let empty = harness.run(["flows", "list", "host:nothing.invalid findings:>0"]);
+    assert_eq!(code(&empty), 0, "{}", stderr(&empty));
+    assert!(stdout(&empty).is_empty(), "{}", stdout(&empty));
+    assert!(stderr(&empty).contains("no flows"), "{}", stderr(&empty));
+
+    // Und derselbe Filter in mehreren Wörtern.
+    let split = harness.run(["flows", "list", "host:nothing.invalid", "findings:>0"]);
+    assert_eq!(code(&split), 0, "{}", stderr(&split));
+
+    let hit = harness.run(["--json", "flows", "list", &format!("host:{host}")]);
+    assert_eq!(code(&hit), 0, "{}", stderr(&hit));
+    let value = json_of(&hit);
+    let rows = value["flows"].as_array().expect("an array of flows");
+    assert!(!rows.is_empty(), "{value}");
+    assert!(
+        rows.iter()
+            .all(|flow| flow["authority"]["host"] == host.as_str()),
+        "{value}"
+    );
+
+    let sorted = harness.run(["flows", "list", "--sort", "host", "--asc", "--limit", "5"]);
+    let text = stdout(&sorted);
+    assert_eq!(code(&sorted), 0, "{}", stderr(&sorted));
+    for column in ["ID", "TIME", "STATE", "SIZE", "MS", "FINDINGS", "RULE"] {
+        assert!(text.contains(column), "{column} is missing:\n{text}");
+    }
+    // PATH wird in der Mitte gekürzt, die Spalten bleiben schmal.
+    assert!(
+        text.lines().all(|line| line.chars().count() < 200),
+        "{text}"
+    );
+}
+
+#[test]
+fn flows_show_prints_a_body_and_refuses_raw_together_with_json() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+
+    let deadline = Instant::now() + PATIENCE;
+    let mut with_body = None;
+    while Instant::now() < deadline && with_body.is_none() {
+        with_body = wait_for_flows(&harness)
+            .into_iter()
+            .find(|flow| flow["request_size"].as_u64().unwrap_or(0) > 0);
+        if with_body.is_none() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    let flow = with_body.expect("the recorded session has a request with a body");
+    let id = flow["flow_id"].as_str().expect("a flow id").to_owned();
+
+    let clash = harness.run(["--json", "flows", "show", &id, "--body", "request", "--raw"]);
+    assert_eq!(code(&clash), 1, "{}", stderr(&clash));
+    assert_eq!(json_of(&clash)["code"], "CLI_004");
+
+    let body = harness.run(["--json", "flows", "show", &id, "--body", "request"]);
+    assert_eq!(code(&body), 0, "{}", stderr(&body));
+    let value = json_of(&body);
+    assert_eq!(value["body"], "request", "{value}");
+    assert_eq!(value["present"], true, "{value}");
+    assert_eq!(value["utf8"], true, "{value}");
+    assert!(value["bytes"].as_u64().is_some_and(|n| n > 0), "{value}");
+
+    let raw = harness.run(["flows", "show", &id, "--body", "request", "--raw"]);
+    assert_eq!(code(&raw), 0, "{}", stderr(&raw));
+    assert!(!raw.stdout.is_empty());
+    assert_eq!(
+        raw.stdout.len(),
+        usize::try_from(value["bytes"].as_u64().expect("a size")).expect("a size that fits")
     );
 }
 

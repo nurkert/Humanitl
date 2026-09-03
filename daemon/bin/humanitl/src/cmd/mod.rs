@@ -6,14 +6,16 @@
 //! (`backlog/CONVENTIONS.md` 3.8); die Zuordnung steht an genau einer Stelle,
 //! [`exit_code`], damit derselbe Befund überall dieselbe Zahl ergibt.
 //!
-//! Fachlogik steht hier nicht (ADR-018): `daemon status`, `flows list` und
-//! `flows show` sind gRPC-Aufrufe, `config get` und `config schema` lesen die
-//! Konfiguration, und die drei `sandbox`-Kommandos rufen `humanitl-sandbox`
-//! auf, bis die `Sandbox`-RPC sie ablöst (siehe [`sandbox`]).
+//! Fachlogik steht hier nicht (ADR-018): `daemon status`, `flows list`,
+//! `flows show` und die sieben `rules`-Kommandos sind gRPC-Aufrufe, `config
+//! get` und `config schema` lesen die Konfiguration, und die drei
+//! `sandbox`-Kommandos rufen `humanitl-sandbox` auf, bis die `Sandbox`-RPC sie
+//! ablöst (siehe [`sandbox`]).
 
 pub mod config;
 pub mod daemon;
 pub mod flows;
+pub mod rules;
 pub mod sandbox;
 
 use std::path::{Path, PathBuf};
@@ -259,8 +261,10 @@ pub fn from_proto(diagnostic: &humanitl_ipc::v1::Diagnostic) -> Option<Diagnosti
 
 /// Der Behebungsvorschlag aus der Wire-Form, soweit er ohne Regel auskommt.
 ///
-/// `add_rule` bleibt aus: eine Regel gehört zu `humanitl rules` (HUM-065), und
-/// sie hier halb zu übersetzen wäre schlechter als sie wegzulassen.
+/// `add_rule` bleibt aus: der Vorschlag trägt eine ganze Regel, und die gehört
+/// in eine Zeile, die man abtippen kann. Sie hier halb zu übersetzen wäre
+/// schlechter, als sie wegzulassen; wer die Regel sehen will, liest sie mit
+/// `--json` aus dem Befund.
 fn fix_from_proto(fix: &humanitl_ipc::v1::FixAction) -> Option<FixAction> {
     use humanitl_ipc::v1::fix_action::Action;
 
