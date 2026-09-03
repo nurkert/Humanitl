@@ -106,7 +106,7 @@ Jede Entscheidung hat eine eigene, ausformulierte Datei unter [`docs/adr/`](docs
 
 - Geordnete Liste, first match wins, Default `ask`.
 - Aktionen: `allow`, `block`, `ask`, `redact` (Pseudonymisierer laufen lassen, dann `allow` oder `ask`).
-- Schlüssel: `host` (Glob auf Labels, nicht Substring: `*` = genau ein Label, `**` = ein oder mehr, blanker Host = exakt), `method`, `path` (Glob oder `~regex`), `scheme`, `port`. `expires`: `once` | `session` | Zeitstempel | `never`. `session` ist an die Sandbox-Instanz gebunden, nicht an die Uhrzeit.
+- Schlüssel: `host` (Glob auf Labels, nicht Substring: `*` = genau ein Label, `**` = ein oder mehr, blanker Host = exakt), `method`, `path` (Glob oder `~regex`), `scheme`, `port`. `expires`: `session` | Zeitstempel | `never`. `session` ist an die Sandbox-Instanz gebunden, nicht an die Uhrzeit. Einmaliges Erlauben ist keine Regel, sondern eine Entscheidung ohne Merken; deshalb gibt es kein `once`.
 - Hostnamen werden auf A-Label (Punycode) normalisiert, lowercase, ohne trailing dot. IP-Literale matchen nie eine Host-Regel; private Bereiche und `169.254.169.254` brauchen eine explizite Regel.
 - Nach TLS-Terminierung wird pro Request `Host`/`:authority` gegen das CONNECT-Ziel und SNI geprüft. Mismatch = block ohne Nachfrage (Domain Fronting).
 - `allow_private: true` erlaubt private Zieladressen (siehe ADR-006); ohne das Flag werden sie geblockt.
@@ -297,9 +297,9 @@ Vollständige Fassung nach Sprint 0 in `docs/SECURITY.md` und `docs/THREAT-MODEL
 
 ### 4.1 Die drei Garantien (live prüfbar im UI)
 
-1. **Kein Netzwerk-Interface.** `bwrap --unshare-all`. In der Sandbox existiert nur `lo`. Keine IP, kein DNS, kein ICMP, kein QUIC, keine Raw Sockets. Prüfung: `ip link` zeigt nur `lo`.
-2. **Genau eine Tür.** Der Proxy-Socket des Daemons wird als einzelne Datei in die Sandbox gebunden. Prüfung: `find / -type s` liefert genau eine Datei.
-3. **Keine neuen Türen.** Der Shim hält die Bridge selbst (kein socat), setzt vor `exec` des Agenten einen seccomp-Filter, der `socket()` nur noch für `AF_INET`/`AF_INET6` mit Typ `SOCK_STREAM` erlaubt (nötig für Loopback zum Proxy; im Namespace existiert nur `lo`, Routing-Tabelle leer, alle Capabilities gedroppt) und alle anderen Familien (`AF_UNIX`, `AF_NETLINK`, `AF_PACKET`, `AF_VSOCK`, …) sowie `SOCK_RAW`/`SOCK_DGRAM` mit `EPERM` ablehnt; zusätzlich `ptrace`, `io_uring_*`, `process_vm_*`, `keyctl` und alle x32-Syscalls (Bit `0x40000000`). Prüfung: `Seccomp: 2` in `/proc/<agent>/status`, `socket(AF_UNIX)` und `socket(AF_INET, SOCK_DGRAM)` liefern `EPERM`, `socket(AF_INET, SOCK_STREAM)` gelingt, `connect` an eine LAN-Adresse scheitert mit `ENETUNREACH`.
+1. **Kein Netzwerk-Interface. Es gibt keinen Weg nach draußen.** `bwrap --unshare-all --cap-drop ALL`. In der Sandbox existiert nur `lo`. Keine IP, kein DNS, kein ICMP, kein QUIC, keine Raw Sockets. Prüfung: `ip link` zeigt nur `lo`.
+2. **Genau eine Tür: ein Socket, der zu Humanitl führt.** Der Proxy-Socket des Daemons wird als einzelne Datei in die Sandbox gebunden. Prüfung: `find / -type s` liefert genau eine Datei.
+3. **Der Kernel öffnet keine neue Tür (seccomp).** Der Shim hält die Bridge selbst (kein socat), setzt vor `exec` des Agenten einen seccomp-Filter, der `socket()` nur noch für `AF_INET`/`AF_INET6` mit Typ `SOCK_STREAM` erlaubt (nötig für Loopback zum Proxy; im Namespace existiert nur `lo`, Routing-Tabelle leer, alle Capabilities gedroppt) und alle anderen Familien (`AF_UNIX`, `AF_NETLINK`, `AF_PACKET`, `AF_VSOCK`, …) sowie `SOCK_RAW`/`SOCK_DGRAM` mit `EPERM` ablehnt; zusätzlich `ptrace`, `io_uring_*`, `process_vm_*`, `keyctl` und alle x32-Syscalls (Bit `0x40000000`). Prüfung: `Seccomp: 2` in `/proc/<agent>/status`, `socket(AF_UNIX)` und `socket(AF_INET, SOCK_DGRAM)` liefern `EPERM`, `socket(AF_INET, SOCK_STREAM)` gelingt, `connect` an eine LAN-Adresse scheitert mit `ENETUNREACH`.
 
 Zusätzlich: `--unshare-pid --unshare-ipc --unshare-uts`, eigenes `/proc`, `--tmpfs /dev/shm`, `--new-session`, `--die-with-parent`, Mount-Allowlist (nie `$XDG_RUNTIME_DIR`, `/tmp`, `/run`, `~/.ssh`, `~/.gitconfig`, `~/.netrc`, X11/Wayland/dbus/docker-Sockets).
 

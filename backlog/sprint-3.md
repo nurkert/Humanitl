@@ -462,6 +462,9 @@ BACKLOG.md 4.2, 4.3, ADR-005, ADR-006, Abschnitt 5 (Usability §1 LLM-Feld); CON
 ---
 
 ## HUM-066 · Profile
+
+> **Abgleich 2026-09-02**: Das Profil-Format ist durch HUM-062 festgelegt: `name`, `description`, `[config.<gruppe>]` für Konfigurationswerte, daneben `[rules]` und `[agent]`. Flache Blöcke wie `[hold]` auf der obersten Ebene, wie sie unten skizziert sind, lehnt der Loader mit `CONFIG_002` ab; die Beispiele in diesem Issue sind entsprechend zu lesen (`[config.hold]`).
+
 Sprint: 3 · Größe: M · Abhängigkeiten: HUM-062, HUM-010, HUM-037, HUM-039 · Blockiert: HUM-040, HUM-067
 
 ### Kontext
@@ -739,7 +742,7 @@ Ablauf im Shim (`humanitl-shim`, kein tokio, nur `libc`/`nix`):
 4. **Check 2 `SingleSocket`:** Liest `/proc/net/unix`, zählt Zeilen mit Pfad (Spalte 8, nicht leer, nicht mit `@` beginnend). Erlaubt: genau die Pfade aus `--proxy-sock` und `--extra-bridge`. Zusätzlich `walk /` mit `nftw`, zählt `S_IFSOCK`-Einträge (max. Tiefe 8, `/proc` und `/sys` ausgelassen). Bestanden, wenn beide Mengen ⊆ erlaubte Pfade. Evidence: `"sockets: /run/humanitl/proxy.sock"`. Prüft außerdem, dass `/run/humanitl/daemon.sock` und `$XDG_RUNTIME_DIR` nicht existieren.
 5. Schreibt Ergebnis von Check 1 und 2 als eine Zeile JSON pro Check auf `--report-fd`: `{"check":"NoNetworkInterface","passed":true,"evidence":"interfaces: lo"}`.
 6. Setzt seccomp-Filter (HUM-012). Danach:
-7. **Check 3 `SeccompActive`:** Liest `/proc/self/status`, Zeile `Seccomp:`, erwartet `2`. Ruft `socket(AF_INET, SOCK_STREAM, 0)` auf und erwartet `-1` mit `errno == EPERM`; ebenso `AF_UNIX` und `socketpair`. Evidence: `"seccomp: 2, socket(AF_INET)=EPERM, socket(AF_UNIX)=EPERM, socketpair=EPERM"`. Schreibt Zeile auf Report-FD.
+7. **Check 3 `SeccompActive`:** Liest `/proc/self/status`, Zeile `Seccomp:`, erwartet `2`. Ruft `socket(AF_INET, SOCK_STREAM, 0)` auf und erwartet Erfolg (Loopback zum Proxy ist erlaubt); `socket(AF_UNIX, SOCK_STREAM, 0)` und `socket(AF_INET, SOCK_DGRAM, 0)` erwarten `-1` mit `errno == EPERM`; `socketpair(AF_UNIX)` bleibt erlaubt (kein Egress, CONVENTIONS 4.11). Gelesen wird `/proc/self/status` eines gefilterten Kindes, nie `/proc/1/status` (PID 1 ist bwraps Init). Evidence: `"seccomp: 2, socket(AF_INET,SOCK_STREAM)=ok, socket(AF_UNIX)=EPERM, socket(AF_INET,SOCK_DGRAM)=EPERM, socketpair=ok"`. Fehlschlag ⇒ `SANDBOX_016`; kein Bericht ⇒ `SANDBOX_013`; Check 1 ⇒ `SANDBOX_014`; Check 2 ⇒ `SANDBOX_015`. Schreibt Zeile auf Report-FD.
 8. Schließt Report-FD (EOF ist das Signal „Checks fertig"). Wenn ein Check fehlgeschlagen ist: `exit(3)` ohne `exec`. Sonst `execvp(agent argv)`.
 
 Daemon-Seite (`isolation.rs`): liest die Report-Pipe bis EOF, parst die drei Zeilen, streamt je ein `SandboxEvent::IsolationResult`. Fehlt eine Zeile (Shim abgestürzt) ⇒ alle fehlenden Checks `passed: false`, Evidence `"no report from shim"`, Diagnostic `SANDBOX_010`. Danach:
