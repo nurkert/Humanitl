@@ -34,6 +34,22 @@ rm -rf "$tree"
 git worktree add -q --detach "$tree" "$commit"
 echo "verify-commit: $(git -C "$tree" rev-parse --short HEAD) in $tree"
 
+# Werkzeuge, die nicht im Systempfad stehen, aber jeder Schritt braucht:
+# rustfmt und clippy liegen in der Toolchain, protoc und protoc-gen-dart holt
+# sich `scripts/gen-proto.sh`, und mit STRICT=1 ist ein fehlendes protoc ein
+# Fehler statt eines Ueberspringens. Fehlt eines davon, sagt das Skript es,
+# statt den Schritt still scheitern zu lassen.
+for dir in \
+  "$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin" \
+  "$HOME/.pub-cache/bin" \
+  "${HUMANITL_PROTOC_BIN:-}"; do
+  [[ -n "$dir" && -d "$dir" ]] && PATH="$dir:$PATH"
+done
+export PATH
+for tool in cargo rustfmt protoc protoc-gen-dart flutter; do
+  command -v "$tool" > /dev/null || echo "verify-commit: $tool fehlt im PATH; der zugehoerige Schritt wird scheitern" >&2
+done
+
 fail=0
 step() {
   local name="$1"; shift
