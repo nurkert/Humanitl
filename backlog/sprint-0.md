@@ -1769,7 +1769,7 @@ Sprint: 0 · Größe: S · Abhängigkeiten: keine · Blockiert: keine
 BACKLOG.md 2 sagt: jede Entscheidung bekommt eine eigene Datei. ADRs sind der Ort, an dem spätere Änderungen begründet werden, ohne den Backlog umzuschreiben.
 
 ### Ziel
-`docs/adr/` enthält 0001 bis 0013 aus BACKLOG.md 2 als eigene Dateien im MADR-Format plus ein Template und einen Index.
+`docs/adr/` enthält 0001 bis 0018 aus BACKLOG.md 2 als eigene Dateien im MADR-Format plus ein Template und einen Index.
 
 ### Nicht-Ziel
 Keine neuen Entscheidungen.
@@ -1777,7 +1777,7 @@ Keine neuen Entscheidungen.
 ### Betroffene Pfade
 - `docs/adr/README.md` (neu, Index)
 - `docs/adr/0000-template.md` (neu)
-- `docs/adr/0001-rust-hudsucker.md` … `docs/adr/0013-cli-headless.md` (neu)
+- `docs/adr/0001-rust-hudsucker.md` … `docs/adr/0018-rpc-parity.md` (neu)
 
 ### Spezifikation
 
@@ -1796,7 +1796,7 @@ Datum: 2026-09-02
 ## Betroffene Issues
 ```
 
-Dateinamen: `0001-rust-hudsucker`, `0002-bwrap-first`, `0003-grpc-uds`, `0004-flow-state-machine`, `0005-buffer-request-body`, `0006-dns-after-allow`, `0007-rule-model`, `0008-storage`, `0009-ui-stack`, `0010-packaging`, `0011-single-config-source`, `0012-diagnostics-as-type`, `0013-cli-headless`. Inhalt jeweils aus BACKLOG.md 2, ausformuliert, „Betroffene Issues" mit HUM-IDs.
+Dateinamen: `0001-rust-hudsucker`, `0002-bwrap-first`, `0003-grpc-uds`, `0004-flow-state-machine`, `0005-buffer-request-body`, `0006-dns-after-allow`, `0007-rule-model`, `0008-storage`, `0009-ui-stack`, `0010-packaging`, `0011-single-config-source`, `0012-diagnostics-as-type`, `0013-cli-headless`, `0014-agent-awareness`, `0015-ports-and-adapters`, `0016-browser-cdp`, `0017-egress-port`, `0018-rpc-parity`. Inhalt jeweils aus BACKLOG.md 2, ausformuliert, „Betroffene Issues" mit HUM-IDs.
 
 ### Schritte
 1. Template und Index.

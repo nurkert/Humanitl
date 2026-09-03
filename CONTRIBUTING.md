@@ -10,8 +10,16 @@
 | socat | not required | the shim carries its own bridge |
 
 A local toolchain installed without `rustup` has no `rustfmt` and no `clippy`.
-`make check` then skips those two steps and says so. Continuous integration
-installs both and runs with `STRICT=1`, so nothing merges unformatted.
+If a rustup toolchain exists under `~/.rustup/toolchains/` (even without
+`rustup` itself on PATH), the Makefile puts its `bin` directory first for the
+fmt and clippy targets. Otherwise `make check` skips those two steps and says
+so. Continuous integration installs both and runs with `STRICT=1`, so nothing
+merges unformatted or with clippy warnings.
+
+`make proto` generates the Dart side of the contract only when `protoc` and
+`protoc-gen-dart` (`dart pub global activate protoc_plugin`, exact version
+pinned in `scripts/gen-proto.sh`) are on PATH; without them the Flutter gate
+cannot resolve the generated code. Add `~/.pub-cache/bin` to PATH.
 
 Optional: `cargo install cargo-deny` for `make rust-deny`.
 

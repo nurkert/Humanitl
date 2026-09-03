@@ -222,7 +222,7 @@ pub struct LimitsConfig {
     /// Gesamtspeicher für gleichzeitig gehaltene Request-Bodies. Wird er erreicht, werden neue Requests geblockt (BlockReason::HoldMemory).
     #[humanitl(tier = "expert")] #[serde(default = "d_hold_mem")] pub hold_memory_cap_bytes: u64,          // 256 MiB
     /// Maximale Anzahl gleichzeitig gehaltener Requests.
-    #[humanitl(tier = "expert")] #[serde(default = "d_hold_max")] pub hold_max_flows: u32,                 // 500
+    #[humanitl(tier = "expert")] #[serde(default = "d_hold_max")] pub hold_max_flows: u32,                 // 200
     /// Timeout für den TCP/TLS-Verbindungsaufbau zum Upstream.
     #[humanitl(tier = "expert")] #[serde(default = "d_connect")] pub upstream_connect_timeout_secs: u32,   // 10
     /// Timeout, bis der Client alle Request-Header gesendet hat.
@@ -372,7 +372,7 @@ Zustandstabelle (verbindlich, jede Zeile ist ein Akzeptanzkriterium):
 | 13 | Nutzer war weg | App-Fenster verliert Fokus während Queue > 0, oder Queue geht 0 → 1 bei unfokussiertem Fenster | Tray-Badge mit Zähler, Desktop-Notification (HUM-034), bei Rückkehr Banner oben „Der Agent wartet seit 4 min · 3 Anfragen" mit Klick auf älteste Karte; Banner verschwindet, wenn Queue leer | Intercept, Tray | keiner | `waiting_banner_test: shows_on_focus_return` |
 | 14 | TLS vom Tool abgelehnt | Daemon-Diagnostic `TLS_001` (HUM-045) | Karte im Intercept-Feed (nicht in der Queue, sie hält nichts) mit Fix `SetEnv` | Intercept-Feed | `TLS_001` | HUM-045 deckt ab; Golden `states/tls_rejected` |
 | 15 | LLM-Server unerreichbar | Passthrough-Flow scheitert mit Connect-Fehler | Isolation-Panel-Zeile „LLM" wird rot mit `LLM_001`, Fix `ChangeSetting{llm.endpoint}`, Intercept-Feed zeigt Flow mit `Responded{502}` | Sandbox, Feed | `LLM_001` | `sandbox_screen_test: llm_unreachable_row` |
-| 16 | Queue-Auslastung hoch | `Held.queue_count > 0.8 * hold_max_flows` oder `queue_bytes > 0.8 * cap` | Statusleiste zeigt Auslastung amber „Queue 412/500 · 210 MB", ab 100 % rot mit `LIMIT_002` compact | Statusleiste | `LIMIT_002` | `status_bar_test: queue_pressure_colors` |
+| 16 | Queue-Auslastung hoch | `Held.queue_count > 0.8 * hold_max_flows` oder `queue_bytes > 0.8 * cap` | Statusleiste zeigt Auslastung amber „Queue 412/200 · 210 MB", ab 100 % rot mit `LIMIT_002` compact | Statusleiste | `LIMIT_002` | `status_bar_test: queue_pressure_colors` |
 | 17 | Regel-Konflikt beim Anlegen | Nutzer legt Regel an, die durch frühere Regel nie erreicht wird | Regel-Sheet zeigt vor dem Speichern amber „Wird von Regel #3 (`block **.example.com`) überdeckt", Speichern erlaubt | Regel-Sheet | `RULES_001` | `rule_sheet_test: shadowed_rule_warning` |
 | 18 | Findings ungelöst beim Senden | Nutzer drückt Allow bei Findings > 0 | Inline-Pause (HUM-049), kein Modal | Aktionsleiste | keiner | HUM-049 deckt ab |
 | 19 | Terminal-Stream abgerissen | `Terminal`-Stream endet ohne Sandbox-Stop | Terminal zeigt letzte Zeile „[Humanitl] Verbindung zum Terminal verloren, verbinde neu …" in fg-2, Reconnect mit Resize, Puffer bleibt | Terminal | `TERM_001` | `terminal_test: reconnect_keeps_buffer` |

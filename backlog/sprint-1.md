@@ -30,6 +30,9 @@ Leseanweisung für die Umsetzung: `BACKLOG.md` Abschnitte 2 bis 6, dann `backlog
 > **Abgleich 2026-09-02**: Der Shim startet eine *Liste* von Bridges aus `[network].bridges` des Profils (MVP: genau eine, Richtung `in`, Proxy); Richtung `out` (Host verbindet in die Sandbox, später Browser-CDP, ADR-016) ist als Enum-Variante vorgesehen, aber nicht gebaut. seccomp-Familien kommen aus `[seccomp].allow_families` (Default `AF_INET`, `AF_INET6`). Der Proxy öffnet Upstream-Verbindungen ausschließlich über den Port `Egress` (`Egress::Direct` im MVP, ADR-017); `TcpStream::connect` außerhalb `proxy/src/egress/` bricht `tools/check-deps.sh`. Escape-Test-Dateien heißen `esc-1-sockets.sh`, `esc-2-mounts.sh`, `esc-3-egress.sh`.
 
 ## HUM-011 · bwrap-Launcher
+
+> **Register-Abgleich 2026-09-02**: Die SANDBOX-Codes in dieser Spezifikation sind durch das Register in `daemon/crates/core-types/src/diagnostics/codes.rs` überholt. Verbindlich: verbotener Mount ⇒ `SANDBOX_006` (nicht 004), Projektordner nicht beschreibbar ⇒ `SANDBOX_005` (nicht 006), Bridge-Richtung `out` ⇒ `SANDBOX_007`, Proxy-Socket-Datei oder Shim-Binary fehlt ⇒ `SANDBOX_011` (Platzhalter nicht anlegbar) mit dem Pfad im Befund, `work_src` fehlt ⇒ `SANDBOX_005` mit eigener `why`-Zeile. Die Mount-Verbotsliste wird nicht hier, sondern in `humanitl-sandbox::MountPolicy` (HUM-010, `load_validated`) geprüft; der Launcher ruft sie auf. Zusätzlich aus HUM-010: maskierte Dateien nicht per `--ro-bind /dev/null`, sondern per `--ro-bind-data <FD>` aus einem leeren memfd (der /dev/null-Bind liegt auf einem nodev-Mount und liefert EACCES); bwrap mit gesäuberter Umgebung starten, weil `/proc/1/environ` sonst die Host-Umgebung zeigt (ESC-2-Befund); `--cap-drop ALL` kommt aus dem Profil-Renderer, `--disable-userns` ab bwrap 0.6 zusätzlich.
+
 Sprint: 1 · Größe: M · Abhängigkeiten: HUM-004, HUM-010, HUM-063 · Blockiert: HUM-012, HUM-013, HUM-014
 
 ### Kontext
