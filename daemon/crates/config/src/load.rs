@@ -438,19 +438,18 @@ fn scalar(raw: &str) -> TomlValue {
         if let Ok(int) = raw.parse::<i64>() {
             return TomlValue::Integer(int);
         }
-        if let Ok(float) = raw.parse::<f64>() {
-            if float.is_finite() {
-                return TomlValue::Float(float);
-            }
+        if let Ok(float) = raw.parse::<f64>()
+            && float.is_finite()
+        {
+            return TomlValue::Float(float);
         }
     }
 
-    if raw.starts_with('[') || raw.starts_with('{') {
-        if let Ok(table) = format!("value = {raw}").parse::<toml::Table>() {
-            if let Some(value) = table.get("value") {
-                return value.clone();
-            }
-        }
+    if (raw.starts_with('[') || raw.starts_with('{'))
+        && let Ok(table) = format!("value = {raw}").parse::<toml::Table>()
+        && let Some(value) = table.get("value")
+    {
+        return value.clone();
     }
 
     TomlValue::String(raw.to_owned())
@@ -662,17 +661,17 @@ fn check_value(field: &Field, entry: &Entry) -> Result<(), Diagnostic> {
         }
     }
 
-    if let Some(int) = entry.value.as_integer() {
-        if field.minimum.is_some_and(|min| int < min) || field.maximum.is_some_and(|max| int > max)
-        {
-            let range = match (field.minimum, field.maximum) {
-                (Some(min), Some(max)) => format!("{min} to {max}"),
-                (Some(min), None) => format!("{min} or more"),
-                (None, Some(max)) => format!("{max} or less"),
-                (None, None) => "a number".to_owned(),
-            };
-            return Err(bad_value(entry, &range, &int.to_string()));
-        }
+    if let Some(int) = entry.value.as_integer()
+        && (field.minimum.is_some_and(|min| int < min)
+            || field.maximum.is_some_and(|max| int > max))
+    {
+        let range = match (field.minimum, field.maximum) {
+            (Some(min), Some(max)) => format!("{min} to {max}"),
+            (Some(min), None) => format!("{min} or more"),
+            (None, Some(max)) => format!("{max} or less"),
+            (None, None) => "a number".to_owned(),
+        };
+        return Err(bad_value(entry, &range, &int.to_string()));
     }
 
     Ok(())
