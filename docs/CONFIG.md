@@ -87,7 +87,7 @@ Erkennung von Geheimnissen und persönlichen Daten.
 | Schlüssel | Typ | Vorgabe | Stufe | Projekt | Beschreibung |
 |---|---|---|---|---|---|
 | `findings.email_allow_domains` | list of string | `[]` | advanced | denied | Domains, deren Mailadressen kein Fund sind, zum Beispiel die eigene Firma. |
-| `findings.enabled` | boolean | `true` | basic | denied | Schaltet die Erkennung ganz ab. Aus bedeutet: keine Markierungen, keine Pseudonyme. |
+| `findings.enabled` | boolean | `true` | advanced | denied | Schaltet die Erkennung ganz ab. Aus bedeutet: keine Markierungen, keine Pseudonyme. |
 | `findings.ignored_hashes` | list of string | `[]` | expert | denied | Prüfsummen (SHA-256, hex) einzelner Werte, die nie wieder als Fund erscheinen. |
 | `findings.user_terms` | list of string | `[]` | basic | allowed | Eigene Begriffe, die als Fund gelten, zum Beispiel ein Projektname oder ein Kundenname. |
 

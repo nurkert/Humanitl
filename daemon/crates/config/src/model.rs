@@ -236,7 +236,7 @@ pub enum IpPreference {
 #[serde(default, deny_unknown_fields)]
 pub struct FindingsConfig {
     /// Schaltet die Erkennung ganz ab. Aus bedeutet: keine Markierungen, keine Pseudonyme.
-    #[schemars(extend("x-tier" = "basic", "x-project-scope" = "denied"))]
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub enabled: bool,
     /// Eigene Begriffe, die als Fund gelten, zum Beispiel ein Projektname oder ein Kundenname.
     #[schemars(extend("x-tier" = "basic", "x-project-scope" = "allowed"))]
