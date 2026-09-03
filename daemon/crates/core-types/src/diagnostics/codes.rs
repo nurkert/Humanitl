@@ -101,6 +101,13 @@ pub static AREAS: &[AreaInfo] = &[
         note: "Regeldatei und Muster",
     },
     AreaInfo {
+        area: "findings",
+        prefix: "FINDINGS",
+        first: 1,
+        last: 9,
+        note: "Detektoren für Secrets und personenbezogene Daten",
+    },
+    AreaInfo {
         area: "terminal",
         prefix: "TERM",
         first: 1,
@@ -262,10 +269,45 @@ registry! {
     /// Der LLM-Endpunkt antwortet, aber nicht wie eine OpenAI-kompatible API.
     LLM_002 => "llm", "LLM-Endpoint antwortet nicht als OpenAI-kompatible API", "#llm_002";
 
-    /// `rules.yaml` ließ sich nicht lesen.
+    /// `rules.yaml` ließ sich nicht lesen: die Datei fehlt, ist nicht lesbar,
+    /// ist kein gültiges YAML oder passt nicht zum Schema. Der Befund nennt
+    /// `Zeile:Spalte` und den Feldpfad.
     RULES_001 => "rules", "Regel-Datei ungültig", "#rules_001";
-    /// Ein Host-Muster sieht nach einem Fehler oder nach Täuschung aus.
+    /// Ein Host-Muster sieht nach einem Fehler oder nach Täuschung aus: ein
+    /// Punycode-Literal (`xn--`), das ein anderer Name sein könnte als der
+    /// gemeinte, oder eine IP-Adresse an der Stelle eines Host-Globs. Das ist
+    /// eine Warnung; die Regel bleibt gültig (HUM-022).
     RULES_002 => "rules", "Host-Muster verdächtig (xn--, IP in Host-Glob)", "#rules_002";
+    // RULES_004 bleibt frei: `backlog/sprint-2.md` führt darunter die Warnung
+    // vor einem Punycode-Literal, die dieses Register seit HUM-063 unter
+    // RULES_002 kennt. Eine Nummer zweimal zu vergeben wäre schlimmer als eine
+    // Lücke, und eine Nummer wird nie wiederverwendet.
+    /// Ein Host-Muster ließ sich nicht lesen: ein Stern steht nicht als ganzes
+    /// Label (`*foo.com`), ein Label ist leer (`foo..com`) oder das Muster ist
+    /// kein Host, kein Glob und keine Adresse (HUM-022).
+    RULES_003 => "rules", "Host-Muster ungültig", "#rules_003";
+    /// Ein Pfadmuster ließ sich nicht übersetzen: der reguläre Ausdruck hinter
+    /// `~` ist ungültig oder überschreitet die Größengrenze, oder der Glob ist
+    /// kein gültiges Muster (HUM-022).
+    RULES_005 => "rules", "Pfadmuster ungültig", "#rules_005";
+    /// `version` fehlt in `rules.yaml` oder ist nicht `1`.
+    RULES_006 => "rules", "Version der Regel-Datei unbekannt", "#rules_006";
+    /// Zwei Regeln tragen dieselbe `id`.
+    RULES_007 => "rules", "Doppelte Regel-Id", "#rules_007";
+    /// Eine Regel erlaubt mehr, als sie vermutlich soll: `host: "**"` ohne
+    /// weitere Einschränkung zusammen mit `action: allow` hebt die Moderation
+    /// für jeden DNS-Host auf. Das ist eine Warnung, keine Ablehnung.
+    RULES_008 => "rules", "Regel wirkt zu breit", "#rules_008";
+
+    /// Das eingebaute Regel-Set der Secret-Detektoren ließ sich nicht lesen
+    /// oder eines seiner Muster nicht übersetzen. Das ist ein Fehler im
+    /// Daemon, kein Zustand der Anfrage: ohne Regel-Set gibt es keine Suche
+    /// nach Secrets, und die Suche wird nicht stillschweigend übersprungen.
+    FINDINGS_001 => "findings", "Detektor-Regeln unbrauchbar", "#findings_001";
+    /// Die Anfrage wurde nur teilweise durchsucht: der Body liegt über
+    /// `limits.preview_cap_bytes` oder trägt eine Kodierung, für die der
+    /// Entpacker fehlt. Angezeigte Funde sind dann unvollständig.
+    FINDINGS_002 => "findings", "Scan unvollständig", "#findings_002";
 
     /// Es gibt bereits einen schreibenden Terminal-Client.
     TERM_001 => "terminal", "Zweiter schreibender Terminal-Client abgelehnt", "#term_001";
@@ -280,6 +322,8 @@ registry! {
     CLI_002 => "cli", "Vollbild-TUI-Agent nicht mit --ask terminal", "#cli_002";
     /// Das Unterkommando steht im Vertrag, aber noch nicht in diesem Binary.
     CLI_003 => "cli", "Unterkommando noch nicht verfügbar", "#cli_003";
+    /// Die Kommandozeile ließ sich nicht lesen: unbekanntes Unterkommando, fehlendes oder unlesbares Argument (HUM-064).
+    CLI_004 => "cli", "Aufruf ungültig", "#cli_004";
 }
 
 /// Sucht einen Code im Register.

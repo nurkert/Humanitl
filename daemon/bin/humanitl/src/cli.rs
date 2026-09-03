@@ -156,9 +156,7 @@ pub struct PlaceholderArgs {
 pub enum SandboxCmd {
     /// Start a sandbox with CMD as the agent and exit with its exit code.
     Run {
-        /// Das Verzeichnis des Hosts hinter dem Platzhalter `/tests/escape`
-        /// des Profils `test` (`cmd::sandbox`, Abschnitt „Das
-        /// Testverzeichnis").
+        /// Host directory mounted at /tests/escape of the `test` profile.
         #[arg(long, value_name = "DIR")]
         tests_dir: Option<PathBuf>,
         /// Der Befehl in der Sandbox, hinter `--`.
