@@ -126,6 +126,12 @@ export HUMANITL_ESCAPE_MARKER
 # gets to read the 403 body instead of waiting out the default five minutes.
 HUMANITL_HOLD__TIMEOUT_SECS=2
 export HUMANITL_HOLD__TIMEOUT_SECS
+# The body cap of this run. ESC-4 sends one byte more than this and expects the
+# 413 of `BlockReason::BodyCap`; the default of 32 MiB would only make the probe
+# slow, not stronger.
+ESCAPE_BODY_CAP=1024
+HUMANITL_LIMITS__HOLD_BODY_CAP_BYTES=$ESCAPE_BODY_CAP
+export HUMANITL_LIMITS__HOLD_BODY_CAP_BYTES
 
 # Seed the project directory with a canary in every path the profile masks or
 # covers with a tmpfs. ESC-2 greps for it: reading it inside means the mask did
@@ -329,17 +335,22 @@ for n in 1 2 3; do
     grep '^RESULT ' "$file" >> "$RESULTS" || true
 done
 
-stop_escape_daemon
-
-# ESC-4 and ESC-5 are placeholders whose every case is skipped. They run on the
-# host: a skip needs no isolation, and making a placeholder depend on the very
-# launcher it waits for would hide it behind the first sandbox failure.
+# ESC-4 and ESC-5 run on the host, and before the daemon is stopped. ESC-4 asks
+# the rule engine (HUM-022), which decides before anything leaves the machine
+# and needs no isolation to be measured, and it asks the running proxy what it
+# answers to a body over the cap — over the same socket the bridge in the
+# sandbox carries, with the same bytes curl would send. ESC-5 is still a
+# placeholder whose every case is skipped. Neither depends on the launcher, so
+# neither disappears behind a sandbox failure.
 for n in 4 5; do
     suite="esc-$n"
     script=$(ls "$HERE/$suite-"*.sh)
-    echo "== $suite (placeholder, on the host) =="
+    echo "== $suite (on the host) =="
     set +e
-    ESC_OUT_DIR="$WORK/results" ESC_RESULTS= sh "$script"
+    ESC_OUT_DIR="$WORK/results" ESC_RESULTS= \
+        ESC_PROXY_SOCK="$DAEMON_PROXY_SOCK" \
+        ESC_BODY_CAP="$ESCAPE_BODY_CAP" \
+        sh "$script"
     set -e
     file="$WORK/results/$suite.txt"
     if [ -f "$file" ]; then
@@ -348,6 +359,8 @@ for n in 4 5; do
         record_error "$suite" placeholder_not_run "$script wrote no result file"
     fi
 done
+
+stop_escape_daemon
 
 sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
 
