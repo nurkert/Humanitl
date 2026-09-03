@@ -63,9 +63,11 @@ void main() {
       ..allowEdited = (EditedRequest()
         ..method = Method.METHOD_POST
         ..url = 'https://api.github.com/repos'
-        ..headers.add(Header()
-          ..name = 'content-type'
-          ..value = [0x61, 0x2f, 0x62])
+        ..headers.add(
+          Header()
+            ..name = 'content-type'
+            ..value = [0x61, 0x2f, 0x62],
+        )
         ..body = [0x00, 0xff, 0x7b]);
 
     final decoded = DecideRequest.fromBuffer(request.writeToBuffer());

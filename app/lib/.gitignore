@@ -1,0 +1,7 @@
+# Erzeugter Code ist kein Quellcode (ARCHITECTURE 4): riverpod, freezed und
+# json_serializable schreiben neben die Quelle, `flutter gen-l10n` nach
+# l10n/generated. Alles entsteht mit `dart run build_runner build` und
+# `flutter pub get`; core/ipc/generated steht in der .gitignore des Repos.
+*.g.dart
+*.freezed.dart
+l10n/generated/
