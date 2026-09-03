@@ -446,11 +446,31 @@ pub struct Client {
 }
 
 impl Client {
+    /// Sendet eine Anfrage und liefert die Antwort.
+    ///
+    /// Vor dem Senden wartet [`SendRequest::ready`], bis die Verbindung eine
+    /// weitere Anfrage annimmt. Das ist bei hypers Verbindungs-API Pflicht und
+    /// nicht bloß Vorsicht: `SendRequest` darf genau eine Anfrage puffern,
+    /// bevor die Verbindungs-Task das erste Mal signalisiert, dass sie eine
+    /// will (`hyper::client::dispatch::Sender::can_send`). Jede weitere
+    /// Anfrage lehnt `send_request` ohne dieses Signal sofort mit
+    /// `Canceled("connection was not ready")` ab, ohne ein Byte zu senden. Auf
+    /// einer Keep-Alive-Verbindung fehlt das Signal genau so lange, bis die
+    /// Verbindungs-Task nach der vorigen Antwort wieder an der Reihe war; das
+    /// ist ein Rennen zwischen zwei Tasks des Tests und sagt nichts über den
+    /// Proxy aus.
+    ///
+    /// Ein echter Abbruch bleibt sichtbar: hat die Gegenseite die Verbindung
+    /// geschlossen, liefert `ready` einen Fehler, und die Frist [`WAIT`]
+    /// umschließt weiterhin Warten und Senden zusammen.
     pub async fn send(&mut self, request: Request<Full<Bytes>>) -> hyper::Response<Incoming> {
-        tokio::time::timeout(WAIT, self.sender.send_request(request))
-            .await
-            .expect("the proxy answers in time")
-            .expect("the proxy answers")
+        tokio::time::timeout(WAIT, async {
+            self.sender.ready().await?;
+            self.sender.send_request(request).await
+        })
+        .await
+        .expect("the proxy answers in time")
+        .expect("the proxy answers")
     }
 }
 
