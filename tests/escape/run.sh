@@ -16,26 +16,14 @@
 # harness/shim_size, hold the shim to the acceptance criteria of HUM-012:
 # `ldd` says "not a dynamic executable", and the binary is under 2 MB.
 #
-# The launcher (HUM-011) runs the sandbox through the real BwrapBackend with
-# a bound placeholder socket in place of the proxy. What still turns red
-# depends on the shim's seccomp filter (HUM-012) and on the proxy
-# (HUM-013/015); tests/escape/README.md names the issue that turns each
-# probe green. CI therefore runs this job with ESCAPE_ALLOW_FAIL=1 until
-# HUM-021.
-#
-# Exit codes, and the difference matters:
-#
-#   0  every case passed or was skipped (or ESCAPE_ALLOW_FAIL=1 was set)
-#   1  the sandbox started and at least one probe came back red
-#   2  the sandbox could not be started at all, or the harness selftest failed
-#
-# A 2 is never tolerated by ESCAPE_ALLOW_FAIL. "No bwrap on this machine" is a
-# statement about the machine, not about the guarantee, and reporting it as a
-# probe failure would be a lie in the other direction.
-#
-# Needs no root. The AppArmor sysctl below is attempted with `sudo -n` and
-# skipped without one; on a machine that restricts unprivileged user namespaces
-# and grants no sudo, bwrap fails and the run ends in exit 2, which says so.
+# The launcher (HUM-011) runs the sandbox through the real BwrapBackend, and
+# since HUM-021 the socket it mounts belongs to a real daemon that this script
+# starts (see "The proxy behind the socket" below): ESC-3 then measures what
+# the proxy ANSWERS, not whether one exists. What is still red afterwards needs
+# a check the proxy does not have yet; tests/escape/README.md names the issue
+# that turns each probe green. Since HUM-021 CI runs without ESCAPE_ALLOW_FAIL:
+# a red probe fails the build. The switch stays for local runs that want the
+# report without the verdict.
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -150,8 +138,9 @@ echo "== building the launcher and the shim =="
 if [ "${ESCAPE_SKIP_BUILD:-0}" != 1 ]; then
     # The same directory the binaries are read from, passed explicitly so that
     # the build and the run cannot disagree on where they went.
-    if ! (cd "$ROOT/daemon" && CARGO_TARGET_DIR="$TARGET_DIR" cargo build -p humanitl-sandbox --bin escape-launch); then
-        record_error harness build "cargo build -p humanitl-sandbox --bin escape-launch failed"
+    if ! (cd "$ROOT/daemon" && CARGO_TARGET_DIR="$TARGET_DIR" cargo build \
+        -p humanitl-sandbox -p humanitld --bin escape-launch --bin humanitld); then
+        record_error harness build "cargo build of escape-launch and humanitld failed"
         sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
         exit 2
     fi
@@ -207,6 +196,70 @@ else
     record_case harness shim_size fail "$shim_bytes bytes, limit $SHIM_MAX_BYTES"
 fi
 
+# The proxy behind the socket (HUM-021).
+#
+# Until this issue the launcher bound a placeholder there: a socket nobody
+# listens on. Every ESC-3 case that asks what the proxy ANSWERS therefore came
+# back with "connection refused" instead of the block body, and the suite could
+# not tell "the proxy let it through" from "there is no proxy". The suites now
+# run against the real daemon.
+#
+# It is a daemon of this run and of nobody else: its own XDG tree under
+# target/escape, and XDG_RUNTIME_DIR pointed at STATE/runtime, because the
+# launcher only mounts a socket that lies under the runtime directory it
+# derives from --state (`SANDBOX_006` otherwise). HUMANITL_HOLD__TIMEOUT_SECS
+# is the two seconds set above, so a held request turns into a timeout-block
+# while curl is still reading.
+#
+# A daemon that will not start is an error, never a red probe: without it ESC-3
+# would measure the absence of a proxy again, and that is a run without a
+# verdict. The same start is available to the demo script as `start_daemon` in
+# tests/e2e/lib.sh; it is spelled out here so that the escape harness keeps its
+# own error model (record_error and exit 2).
+DAEMON="$TARGET_DIR/debug/humanitld"
+DAEMON_XDG="$OUT/daemon"
+DAEMON_RUNTIME="$STATE/runtime/humanitl"
+DAEMON_PROXY_SOCK="$DAEMON_RUNTIME/proxy/proxy.sock"
+DAEMON_CA_CERT="$DAEMON_XDG/data/humanitl/ca/ca.crt"
+DAEMON_CA_BUNDLE="$DAEMON_XDG/data/humanitl/ca/ca-bundle.crt"
+mkdir -p "$STATE/runtime" "$DAEMON_XDG/data" "$DAEMON_XDG/config" "$DAEMON_XDG/home"
+
+daemon_pid=""
+stop_escape_daemon() {
+    if [ -n "$daemon_pid" ]; then
+        # SIGTERM, not SIGKILL: only the orderly end removes the socket and the
+        # token, and the next run would otherwise find a stale one.
+        kill -TERM "$daemon_pid" 2> /dev/null || true
+        wait "$daemon_pid" 2> /dev/null || true
+        daemon_pid=""
+    fi
+}
+trap stop_escape_daemon EXIT INT TERM
+
+if [ ! -x "$DAEMON" ]; then
+    record_error harness daemon_binary "no humanitld binary at $DAEMON"
+    sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
+    exit 2
+fi
+XDG_RUNTIME_DIR="$STATE/runtime" \
+    XDG_DATA_HOME="$DAEMON_XDG/data" \
+    XDG_CONFIG_HOME="$DAEMON_XDG/config" \
+    HOME="$DAEMON_XDG/home" \
+    "$DAEMON" > "$OUT/daemon.log" 2>&1 &
+daemon_pid=$!
+daemon_waited=0
+while [ ! -S "$DAEMON_PROXY_SOCK" ] && [ "$daemon_waited" -lt 400 ]; do
+    sleep 0.05
+    daemon_waited=$((daemon_waited + 1))
+done
+if [ ! -S "$DAEMON_PROXY_SOCK" ]; then
+    record_error harness daemon_start \
+        "no proxy socket at $DAEMON_PROXY_SOCK within twenty seconds; see target/escape/daemon.log"
+    sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
+    exit 2
+fi
+echo "escape: daemon up (pid $daemon_pid), proxy socket $DAEMON_PROXY_SOCK"
+
 # ESC-1 to ESC-3 run inside the sandbox, one bwrap per suite so that a suite
 # that kills its shell cannot take the others with it.
 for n in 1 2 3; do
@@ -222,6 +275,9 @@ for n in 1 2 3; do
         --work "$WORK" \
         --state "$STATE" \
         --shim "$SHIM" \
+        --proxy-socket "$DAEMON_PROXY_SOCK" \
+        --ca-cert "$DAEMON_CA_CERT" \
+        --ca-bundle "$DAEMON_CA_BUNDLE" \
         -- /bin/sh "/tests/escape/$script" > "$OUT/$suite.log" 2>&1
     launch_code=$?
     set -e
@@ -239,6 +295,8 @@ for n in 1 2 3; do
     fi
     grep '^RESULT ' "$file" >> "$RESULTS" || true
 done
+
+stop_escape_daemon
 
 # ESC-4 and ESC-5 are placeholders whose every case is skipped. They run on the
 # host: a skip needs no isolation, and making a placeholder depend on the very

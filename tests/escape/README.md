@@ -24,7 +24,9 @@ abhängt, ist heute rot — mit dem Beleg, der sie rot macht, in der Ausgabe. Da
 der Sinn der Übung: die Aussage ist ab der ersten Zeile des Filters messbar, und
 niemand muss dem Filter glauben.
 
-Deshalb setzt der CI-Job `escape-tests` bis HUM-021 `ESCAPE_ALLOW_FAIL=1`.
+Seit HUM-021 läuft der CI-Job `escape-tests` ohne `ESCAPE_ALLOW_FAIL`: Eine rote
+Probe färbt den Build rot. Der Schalter bleibt für lokale Läufe, die den Bericht
+ohne das Urteil wollen.
 
 ## Exit-Codes
 
@@ -144,14 +146,20 @@ ein tmpfs eingehängt, wie `escape-launch` es mit dem Proxy-Socket tut, neben
 einem Verzeichnis-Bind auf einem anderen Dateisystem, wie `/work` einer ist.
 Alle müssen auftauchen, bevor `run.sh` dem Harness eine Sandbox anvertraut.
 
-Bis HUM-013 einen Proxy-Socket hergibt, bindet `escape-launch` ein leeres
-Verzeichnis über den Socket-Pfad: die Liste ist leer, `exactly_one_socket` und
-`socket_is_proxy` sind rot, weil die Sandbox keinen Socket hat, nicht weil die
-Probe keinen sehen könnte.
+Seit HUM-021 startet `run.sh` vor den Suiten einen echten `humanitld` in einem
+eigenen XDG-Baum unter `target/escape` und reicht dessen Proxy-Socket und CA an
+`escape-launch` weiter. Davor band der Starter dort einen Platzhalter ein, einen
+gebundenen Socket, hinter dem niemand antwortet; jede ESC-3-Probe, die nach der
+**Antwort** des Proxys fragt, bekam deshalb „connection refused" statt des
+Block-Bodys. Damit der Daemon-Socket dort liegt, wo die Mount-Politik des
+Starters ihn erwartet, läuft der Daemon mit `XDG_RUNTIME_DIR=<state>/runtime`;
+`start_daemon` in `tests/e2e/lib.sh` macht für das Demoskript dasselbe.
 
 ## Erwartetes Ergebnis in Sprint 0
 
-Stand: 84 Fälle, 43 grün, 26 rot, 15 übersprungen.
+Stand nach HUM-021: 97 Fälle, 81 grün, 1 rot, 15 übersprungen. Die Tabelle
+unten ist der Stand aus Sprint 0 und nennt zu jeder Probe das Issue, das sie
+grün gemacht hat; offen ist nur noch die letzte Zeile.
 
 ### Rot, und was sie grün macht
 
@@ -177,12 +185,12 @@ Stand: 84 Fälle, 43 grün, 26 rot, 15 übersprungen.
 | ESC-2 | `exactly_one_socket` | null Sockets | HUM-011/013 (Daemon reicht den Proxy-Socket durch) |
 | ESC-2 | `socket_is_proxy` | kein Socket zu benennen | HUM-011/013 |
 | ESC-2 | `no_marker_leak` | `/proc/1/environ` trägt die Host-Umgebung | HUM-011 (siehe unten) |
-| ESC-3 | `via_proxy_held` | keine Antwort, kein Proxy | HUM-013/015 |
-| ESC-3 | `via_proxy_private_held` | keine Antwort | HUM-013/015, HUM-024 (`PrivateAddress`) |
-| ESC-3 | `via_proxy_metadata_held` | keine Antwort | HUM-013/015, HUM-024 |
-| ESC-3 | `via_proxy_idn_held` | keine Antwort | HUM-013/015 |
-| ESC-3 | `via_proxy_reason_line` | keine Antwort | HUM-013/015 (Body-Format CONVENTIONS 3.5) |
-| ESC-3 | `host_mismatch_blocked` | keine Antwort | HUM-019 (`PROXY_002` Authority-Mismatch) |
+| ESC-3 | `via_proxy_held` | keine Antwort, kein Proxy | HUM-013/015 plus HUM-021 (der Daemon hinter dem Socket) |
+| ESC-3 | `via_proxy_private_held` | keine Antwort | wie oben; als `PrivateAddress` statt als Zeitüberschreitung mit HUM-024 |
+| ESC-3 | `via_proxy_metadata_held` | keine Antwort | wie oben |
+| ESC-3 | `via_proxy_idn_held` | keine Antwort | wie oben |
+| ESC-3 | `via_proxy_reason_line` | keine Antwort | wie oben (Body-Format CONVENTIONS 3.5) |
+| ESC-3 | `host_mismatch_blocked` | grün seit HUM-021: ein `Host`, der dem CONNECT-Ziel oder der Anfragezeile widerspricht, wird ohne Rückfrage als `authority_mismatch` geblockt | HUM-023 ergänzt die SNI-Prüfung |
 
 ### Befund für HUM-011: `/proc/1/environ`
 
