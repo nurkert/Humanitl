@@ -141,15 +141,18 @@ nach dem Filter ist `AF_UNIX` ohnehin gesperrt.
 
 **Mechanismus.** Der `humanitl-shim` ist ein kleines Programm ohne Laufzeitumgebung (nur `libc`
 und `seccompiler`), das in der Sandbox unter bwraps Init-Prozess startet. Sein Prozessmodell ist der
-eigentliche Trick (HUM-012, „Variante B", verbindlich): Die Brücke lebt im Elternprozess ohne
-Filter, der Agent ist ein Kind mit Filter vor `exec`.
+eigentliche Trick (HUM-012, „Variante B", verbindlich): Die Brücke lebt im Elternprozess, der
+Agent ist ein Kind mit Filter vor `exec`. Beide tragen einen Filter; der des Elternprozesses ist
+um genau eine Familie weiter, weil die Brücke `AF_UNIX` braucht.
 
 1. Er öffnet die im Profil deklarierten Brücken selbst, ohne `socat`: Richtung „in" lauscht auf
    `127.0.0.1:3128` und reicht jede TCP-Verbindung an den gebundenen Unix-Socket weiter. Der
    Listener entsteht vor dem Fork, damit der Agent nie `ECONNREFUSED` sieht, und trägt
    `CLOEXEC`, damit der Agent ihn nicht erbt.
-2. Er forkt. Der Elternprozess bleibt als ungefilterte Brücke stehen, wartet auf das Kind und
-   endet mit dessen Exit-Code. Alles Weitere passiert im Kind.
+2. Er forkt. Der Elternprozess bleibt als Brücke stehen, wartet auf das Kind und endet mit
+   dessen Exit-Code. Sobald das Kind läuft, legt auch er einen Filter an: dieselbe Politik wie
+   für den Agenten, nur zusätzlich mit `AF_UNIX`, weil er für jede angenommene Verbindung den
+   Proxy-Socket öffnet. Alles Weitere passiert im Kind.
 3. Das Kind schließt alle geerbten Deskriptoren außer 0, 1, 2 und setzt `PR_SET_NO_NEW_PRIVS`.
    Damit kann kein späterer `exec` mehr Rechte gewinnen, etwa über ein setuid-Programm — ohne
    dieses Flag darf ein unprivilegierter Prozess gar keinen seccomp-Filter setzen.
@@ -158,9 +161,12 @@ Filter, der Agent ist ein Kind mit Filter vor `exec`.
 5. Erst dann `execvp` auf den Agenten. Der Agent erbt den Filter und kann ihn nicht ablegen; jeder
    Prozess, den er startet, erbt ihn ebenfalls.
 
-Der Elternprozess trägt den Filter absichtlich nicht: Er braucht `AF_UNIX`, um den Proxy-Socket
-zu erreichen, und `TSYNC` erfasst Threads, keine Kinder. Was das für den Agenten bedeutet, steht
-in [`THREAT-MODEL.md`](THREAT-MODEL.md) K-04.
+Der Elternprozess trägt eine eigene Fassung desselben Filters, weil `TSYNC` Threads erfasst,
+keine Kinder: Der Agent kann seinen Filter nicht an den Elternprozess weiterreichen, und der
+Elternprozess kann den engeren Filter des Agenten nicht selbst tragen, weil er `AF_UNIX`
+braucht. Beide Filter sperren dieselben Systemaufrufe; unter bwraps Init-Prozess trägt damit
+jeder Prozess in der Sandbox einen Filter (ESC-1 `seccomp_every_process`). Was das für den
+Agenten bedeutet, steht in [`THREAT-MODEL.md`](THREAT-MODEL.md) K-04.
 
 Der Filter erlaubt `socket()` ausschließlich für die Familien aus `allow_families` (`AF_INET`,
 `AF_INET6`; im Profil `browser` zusätzlich `AF_UNIX` für die Chromium-IPC) mit den Typen aus
@@ -171,7 +177,10 @@ verbindet zwei Deskriptoren desselben Prozessbaums und bietet keinen Egress (nö
 Kindprozess-IPC von Node und Bun, `CONVENTIONS.md` 4.11). ESC-1 und HUM-041 Check 3 prüfen, dass
 `socketpair` gelingt. Zusätzlich verweigert werden `ptrace`, `io_uring_setup`,
 `io_uring_enter`, `io_uring_register`,
-`process_vm_readv`, `process_vm_writev`, `keyctl`, `add_key`, `request_key` sowie **alle**
+`process_vm_readv`, `process_vm_writev`, `keyctl`, `add_key`, `request_key`, dazu die
+Standard-Härtung `kexec_load`, `kexec_file_load`, `init_module`, `finit_module`,
+`delete_module`, `bpf`, `perf_event_open`, `userfaultfd` (dieselben Namen, die das
+Docker-Standardprofil sperrt), sowie **alle**
 x32-Syscalls (Nummern mit gesetztem Bit `0x40000000`, abgefangen von einem handgeschriebenen
 BPF-Präludium vor dem erzeugten Programm). Ein Architektur-Mismatch führt nicht zu `EPERM`,
 sondern zu `KillProcess`.
@@ -185,8 +194,8 @@ die Datei.
 ```sh
 grep Seccomp /proc/self/status                       # "Seccomp: 2" (Filter-Modus)
 grep NoNewPrivs /proc/self/status                    # "NoNewPrivs: 1"
-# PID 1 ist bwraps Init-Prozess, darunter der Shim; beide sind absichtlich ohne Filter. Der Beweis
-# liest deshalb ein gefiltertes Kind des Shims (den Agenten), nie /proc/1/status:
+# PID 1 ist bwraps Init-Prozess und trägt keinen Filter. Der Shim darunter trägt den weiteren
+# Brücken-Filter, der Agent den engeren. Der Beweis liest deshalb den Agenten, nie /proc/1/status:
 grep Seccomp /proc/$(pgrep -n -P "$(pgrep -o humanitl-shim)")/status   # "Seccomp: 2"
 python3 -c 'import socket; socket.socket(socket.AF_UNIX)'                 # PermissionError
 python3 -c 'import socket; socket.socket(socket.AF_INET, socket.SOCK_DGRAM)'  # PermissionError
@@ -195,20 +204,21 @@ python3 -c 'import socket; socket.create_connection(("10.0.0.1",80),2)'   # ENET
 ```
 
 **Automatisiert.** ESC-1 deckt genau diese Proben ab, einschließlich `io_uring_setup` und eines
-x32-Syscalls. Zur Laufzeit `IsolationCheck::SeccompActive`: `humanitl-shim --check` forkt ein
-Kind, das den Filter trägt, versucht dort `socket(AF_UNIX)` und liest dessen `Seccomp:`-Zeile;
-erwartet wird `EPERM` und `2`. Der Beweis stammt also aus einem gefilterten Prozess, nicht aus
-der Brücke.
+x32-Syscalls. Zur Laufzeit `IsolationCheck::SeccompActive`: Der Shim meldet beim Start auf einem
+eigenen Deskriptor (`HUMANITL_REPORT_FD`) Prüfzeilen aus der laufenden Sandbox, unter anderem
+dass der Filter geladen ist und welche Familien er erlaubt; der Launcher liest sie und macht
+daraus die drei Ergebnisse. Der Beweis stammt damit aus der Sandbox, in der der Agent wirklich
+läuft, und nicht aus einer zweiten, nur zu Prüfzwecken gestarteten.
 
 **Was ein Angreifer versuchen würde.** Ein setuid-Programm ausführen, um den Filter loszuwerden —
 `NO_NEW_PRIVS` verhindert es. Einen Nachbarprozess mit `ptrace` übernehmen — `EPERM`. Über
 `io_uring` Systemaufrufe an der Filterung vorbei einreihen — die drei `io_uring_*`-Aufrufe sind
 gesperrt. Denselben Syscall unter der x32-Nummer aufrufen, ein klassischer Filter-Bypass — das
 Präludium fängt ihn ab. Einen Thread starten, der den Filter nicht hat — `TSYNC` sorgt dafür, dass
-es keinen solchen Thread gibt. Den Elternprozess des Shims kapern, der die Brücke hält und
-deshalb keinen Filter trägt — siehe die ehrliche Einschränkung in
-[`THREAT-MODEL.md`](THREAT-MODEL.md) K-04; gewonnen ist damit nichts, weil die Brücke genau ein
-Ziel kennt, den aufzeichnenden Proxy.
+es keinen solchen Thread gibt. Den Elternprozess des Shims kapern, der die Brücke hält — siehe
+die ehrliche Einschränkung in [`THREAT-MODEL.md`](THREAT-MODEL.md) K-04; gewonnen ist damit
+nichts, weil auch er einen Filter trägt und die Brücke genau ein Ziel kennt, den aufzeichnenden
+Proxy.
 
 ---
 

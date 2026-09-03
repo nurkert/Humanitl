@@ -143,7 +143,7 @@ Diagnostic-Codes:
 2. `plan.rs`: `ArgvBuilder` mit Methoden je Tabellenzeile; `build(profile, ctx) -> Result<LaunchPlan, Diagnostic>`; Blockliste prüfen; Existenzprüfungen für tmpfs/masked; `argv_display` via `shell_escape::unix::escape`. Kompiliert, Snapshot-Test für `default.toml` grün.
 3. `bwrap.rs`: `which bwrap`, Versionsprüfung (`bwrap --version` ⇒ `bubblewrap 0.11.0`), `BwrapBackend::plan` ruft Builder; `launch` spawnt mit `tokio::process::Command`, `pre_exec` dup2 der memfds, stdin/stdout/stderr als `Stdio` aus Kontext (Default `inherit` für CLI, `piped` für Daemon), nach Spawn 500 ms auf frühen Exit warten ⇒ `SANDBOX_009`.
 4. `handle.rs`: `wait`, `kill` mit SIGTERM ⇒ 5 s ⇒ SIGKILL.
-5. `isolation_check` liefert im MVP drei Ergebnisse durch Ausführen von Prüfbefehlen in einer zweiten, identischen Sandbox (gleicher Plan, `agent_argv = ["/usr/local/bin/humanitl-shim", "--check"]`, Ausgabe JSON auf stdout; `--check` implementiert HUM-012). Bis HUM-012 fertig ist: Stub, der `passed: false, evidence: "not implemented"` liefert.
+5. `isolation_check` liefert im MVP drei Ergebnisse aus den Prüfzeilen, die der Shim beim Start auf `HUMANITL_REPORT_FD` schreibt (`CHECK <name> ok|fail <evidence>`). Der Launcher liest sie aus dem `SandboxHandle` der laufenden Sandbox und bildet sie auf `NoNetworkInterface`, `SingleSocket` und `SeccompActive` ab; fehlt der Bericht, ist das `SANDBOX_013`. Entschieden am 2026-09-03 gegen die ursprünglich geplante zweite Sandbox mit `humanitl-shim --check`: Der Bericht stammt aus genau der Sandbox, in der der Agent läuft, kostet keinen zweiten Start und hat keinen eigenen Code-Pfad, der auseinanderlaufen könnte. Der Preis steht in den Fallstricken.
 6. Profile `default.toml` (CONVENTIONS 3.4) und `test.toml` (identisch, aber `work` als `rw` auf ein tmp-Verzeichnis, für Escape-Tests) anlegen.
 
 ### Tests
@@ -188,7 +188,7 @@ Sprint: 1 · Größe: M · Abhängigkeiten: HUM-011 · Blockiert: HUM-013, HUM-0
 Setzt die dritte Garantie aus BACKLOG.md 4.1 um („keine neuen Türen"). Der Agent braucht eine TCP-Verbindung zu `127.0.0.1:3128`, die auf den bind-gemounteten Unix-Socket weitergeleitet wird. Diese Brücke darf selbst Sockets öffnen, der Agent danach nur noch Loopback-TCP. Das Sicherheitsreview hat die Lücke „seccomp nach socat" benannt: Wird der Filter vor der Brücke gesetzt, kann die Brücke nicht starten; wird er zu spät gesetzt, läuft der Agent kurz ungefiltert. Der Shim löst das durch Prozesstrennung: Die Brücke lebt im Elternprozess ohne Filter, der Agent ist ein Kind mit Filter vor `exec`.
 
 ### Ziel
-`humanitl-shim` ist ein statisches Binary (kein tokio, nur `std`, `libc`, `seccompiler`), das in der Sandbox als erster Prozess läuft: Es öffnet den Listener `127.0.0.1:3128`, forkt den Agenten mit seccomp-Filter, leitet jede TCP-Verbindung auf `/run/humanitl/proxy.sock` weiter, wartet auf das Kind und endet mit dessen Exit-Code. Zusätzlich liefert `humanitl-shim --check` die drei Isolationsprüfungen als JSON.
+`humanitl-shim` ist ein statisches Binary (kein tokio, nur `std`, `libc`, `seccompiler`), das in der Sandbox als erster Prozess läuft: Es öffnet den Listener `127.0.0.1:3128`, forkt den Agenten mit seccomp-Filter, leitet jede TCP-Verbindung auf `/run/humanitl/proxy.sock` weiter, wartet auf das Kind und endet mit dessen Exit-Code. Auf `HUMANITL_REPORT_FD` schreibt er dabei die Prüfzeilen, aus denen der Launcher die drei Isolationsprüfungen macht.
 
 ### Nicht-Ziel
 Kein socat-Abhängigkeit (Variante A unten ist Fallback, wird nicht gebaut). Kein PTY-Handling (HUM-042). Keine Signalweiterleitung vom Host über bwrap hinaus (HUM-067 behandelt `humanitl run`).
@@ -204,7 +204,7 @@ Kein socat-Abhängigkeit (Variante A unten ist Fallback, wird nicht gebaut). Kei
 
 ### Spezifikation
 
-**Aufruf:** `humanitl-shim [--proxy-sock PATH] [--listen ADDR] -- AGENT ARGS...` mit Defaults `/run/humanitl/proxy.sock` und `127.0.0.1:3128`. `humanitl-shim --check` ohne Agent.
+**Aufruf:** `humanitl-shim --proxy-port PORT -- AGENT ARGS...`. Die Brücken selbst kommen als JSON in `HUMANITL_BRIDGES`, die Filtertabelle in `HUMANITL_SECCOMP_FAMILIES`, `HUMANITL_SECCOMP_TYPES` und `HUMANITL_SECCOMP_DENY`; so steht keine Sicherheitsentscheidung in der Kommandozeile, die in `/proc` für jeden lesbar wäre. `humanitl-shim --rules` gibt die Tabelle ohne Agent aus.
 
 **Prozessmodell (Variante B, verbindlich):**
 
@@ -269,26 +269,25 @@ pub fn build_filter() -> Result<BpfProgram, seccompiler::Error> {
 
 Prüfen, ob eine leere Regelliste in seccompiler „matcht immer" bedeutet; falls nicht, eine Bedingung `arg0 >= 0` (immer wahr) einsetzen. Test `esc-1` entscheidet.
 
-**`--check` (JSON auf stdout, Exit 0 wenn alle drei bestanden, sonst 3):**
+**Prüfzeilen auf `HUMANITL_REPORT_FD`** (eine Zeile je Prüfung, vor `exec` geschrieben):
 
-```json
-{"checks":[
- {"check":"NoNetworkInterface","passed":true,"evidence":"/sys/class/net: lo"},
- {"check":"SingleSocket","passed":true,"evidence":"sockets: /run/humanitl/proxy.sock"},
- {"check":"SeccompActive","passed":true,"evidence":"child Seccomp: 2; socket(AF_UNIX) -> EPERM"}
-]}
+```
+CHECK no_interfaces ok /sys/class/net: lo
+CHECK bridge_listening ok 127.0.0.1:3128 -> /run/humanitl/proxy.sock
+CHECK seccomp_applied ok filter loaded, NoNewPrivs: 1
+CHECK families ok AF_INET, AF_INET6
 ```
 
-Implementierung: `NoNetworkInterface` liest `/sys/class/net` und erwartet genau `lo`. `SingleSocket` läuft `walkdir` über `/` (ohne `/proc`, `/sys`) und sammelt `S_IFSOCK`-Einträge; erwartet genau den Proxy-Pfad. `SeccompActive` forkt ein Kind mit Filter, das `socket(AF_UNIX, SOCK_STREAM, 0)` aufruft und `errno` sowie `/proc/self/status`-Zeile `Seccomp:` ausgibt; erwartet `EPERM` und `2`.
+Implementierung: `no_interfaces` liest `/sys/class/net` und erwartet genau `lo`. `bridge_listening` meldet jede gebundene Brücke mit Ziel-Socket. `seccomp_applied` und `families` melden den geladenen Filter und die erlaubten Familien. Der Launcher (HUM-011) macht daraus die drei Ergebnisse. `--check` als eigener Modus des Shims entfällt damit; `--rules` gibt die Filtertabelle für Menschen aus.
 
 ### Schritte
 1. Crate mit musl-Target, `cargo build --release --target x86_64-unknown-linux-musl`, Binary < 2 MB. `main.rs` mit Arg-Parsing ohne clap (manuell, um Größe klein zu halten).
 2. `bridge.rs` und Listener; Test außerhalb der Sandbox: `humanitl-shim --proxy-sock /tmp/x.sock -- sh -c 'curl -x 127.0.0.1:3128 http://example/'` gegen einen Test-UDS-Echo-Server.
 3. `seccomp.rs`; Test: Kind mit Filter, `socket(AF_UNIX)` ⇒ `EPERM`, `socket(AF_INET)` ⇒ ok, `socketpair` ⇒ ok, `io_uring_setup` ⇒ `EPERM`.
 4. Fork/exec-Ablauf mit `PDEATHSIG`, `close_range`, Signalweiterleitung, Exit-Code.
-5. `check.rs` und `--check`.
+5. Prüfzeilen `CHECK <name> ok|fail <evidence>` auf `HUMANITL_REPORT_FD` vor dem `exec`.
 6. `esc-1.sh`, `esc-2.sh` in `tests/escape/` gegen CONVENTIONS 3.11; Harness aus HUM-006 anbinden.
-7. `BwrapBackend::isolation_check` (HUM-011 Schritt 5) auf `--check` umstellen.
+7. `BwrapBackend::isolation_check` (HUM-011 Schritt 5) auf die Prüfzeilen umstellen.
 
 ### Tests
 - `bridge_roundtrip`: UDS-Echo, 1 MB Zufallsdaten hin und zurück, byteidentisch.
@@ -302,7 +301,7 @@ Implementierung: `NoNetworkInterface` liest `/sys/class/net` und erwartet genau 
 
 ### Akzeptanzkriterien
 - [ ] `humanitl-shim` ist statisch (`ldd` ⇒ „not a dynamic executable"), < 2 MB.
-- [ ] Der Agent-Prozess hat `Seccomp: 2` und `NoNewPrivs: 1` in `/proc/<pid>/status`; der Shim-Prozess hat `Seccomp: 0`.
+- [ ] Der Agent-Prozess hat `Seccomp: 2` und `NoNewPrivs: 1` in `/proc/<pid>/status`. Der Shim-Prozess trägt seit dem 2026-09-03 ebenfalls einen Filter (`Seccomp: 2`), dieselbe Sperrliste, nur zusätzlich `AF_UNIX` für die Brücke; damit trägt jeder Prozess unter bwraps Init einen Filter (ESC-1 `seccomp_every_process`).
 - [ ] `esc-1.sh` und `esc-2.sh` grün im CI-Job `escape-tests`.
 - [ ] `curl -x http://127.0.0.1:3128 http://example.com/` aus der Sandbox erreicht den Daemon-Socket (sichtbar im Daemon-Log), bevor HUM-015 antwortet.
 - [ ] Exit-Code des Agenten kommt beim Aufrufer an.
@@ -915,7 +914,7 @@ Verhalten `sandbox run`:
 3. Ist ein `Check` mit `passed = false` dabei ⇒ Diagnostic anzeigen, Exit 3; der Daemon startet den Agenten in diesem Fall nicht (Server-seitig: Check läuft vor Agent-Start, Pflicht).
 4. `SIGINT` ⇒ `Sandbox(Stop)`; Exit mit `Exited.code`.
 
-`sandbox argv`: gibt `argv_display` für das aktuelle Profil und cwd aus, ohne zu starten (`Sandbox(Plan)`-RPC, nur Argv). `sandbox check`: startet eine Sandbox mit `humanitl-shim --check` und rendert die drei Prüfungen als Tabelle mit ✓/✗ und `evidence`.
+`sandbox argv`: gibt `argv_display` für das aktuelle Profil und cwd aus, ohne zu starten (`Sandbox(Plan)`-RPC, nur Argv). `sandbox check`: startet eine kurzlebige Sandbox nach demselben Plan, liest die Prüfzeilen des Shims und rendert die drei Prüfungen als Tabelle mit ✓/✗ und `evidence`.
 
 `render.rs`: Diagnostic-Format auf stderr:
 

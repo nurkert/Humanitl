@@ -196,15 +196,18 @@ Namespace: darin existiert nur `lo`, die Routing-Tabelle ist leer, alle Capabili
 gedroppt (`--cap-drop ALL`), also gibt es keine Adresse, zu der eine TCP-Verbindung aufgebaut
 werden könnte, außer der Loopback-Adresse. Ein `connect()` auf eine LAN-Adresse endet in
 `ENETUNREACH`. Zusätzlich sperrt der Filter `ptrace`, `io_uring_*`, `process_vm_*`, `keyctl`,
-`add_key`, `request_key` und alle x32-Syscalls und setzt `PR_SET_NO_NEW_PRIVS` vor der Anwendung.
+`add_key`, `request_key`, die Standard-Härtung `kexec_load`, `kexec_file_load`, `init_module`,
+`finit_module`, `delete_module`, `bpf`, `perf_event_open`, `userfaultfd` und alle x32-Syscalls
+und setzt `PR_SET_NO_NEW_PRIVS` vor der Anwendung.
 
 *Restrisiko.* Zwei benannte Punkte. Erstens: Der Elternprozess des Shims, der die Brücke hält,
-trägt keinen Filter und darf Unix-Sockets öffnen; ein seccomp-Filter gilt nur für den setzenden
-Prozess und dessen spätere Kinder, und der Agent ist das Kind, nicht der Elternprozess. Der Agent
-kann ihn nicht per `ptrace` übernehmen, aber `/proc/<pid>/mem` unterliegt der Kernel-Prüfung
-`ptrace_may_access` und nicht dem Filter; bei gleicher UID und `kernel.yama.ptrace_scope = 0` ist
-ein Zugriff denkbar. Gewonnen ist
-damit nichts: die Bridge kennt genau einen Zielsocket, den Proxy, und der zeichnet auf. Zweitens:
+darf als einziger Prozess in der Sandbox `AF_UNIX` öffnen; sonst käme er nicht an den
+Proxy-Socket. Er trägt seit HUM-012 selbst einen Filter mit derselben Sperrliste, um genau diese
+eine Familie weiter (`SandboxSeccomp::for_bridge`), denn `TSYNC` erfasst Threads und keine
+Kinder. Der Agent kann ihn nicht per `ptrace` übernehmen, aber `/proc/<pid>/mem` unterliegt der
+Kernel-Prüfung `ptrace_may_access` und nicht dem Filter; bei gleicher UID und
+`kernel.yama.ptrace_scope = 0` ist ein Zugriff denkbar. Gewonnen ist damit nichts: die Bridge
+kennt genau einen Zielsocket, den Proxy, und der zeichnet auf. Zweitens:
 ein Loopback-Dienst, den der Agent selbst in der Sandbox startet, ist für ihn erreichbar. Das ist
 kein Egress, sondern nur Kommunikation zwischen zwei Prozessen, die ohnehin beide dem Angreifer
 gehören.
