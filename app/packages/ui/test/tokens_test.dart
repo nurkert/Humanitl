@@ -561,6 +561,110 @@ void main() {
       expect(HMotion.holdToConfirm.inMilliseconds, 400);
     });
 
+    test('motion vocabulary of docs/UX.md', () {
+      // Leaving must read as a longer travel than arriving.
+      expect(HMotion.arriveOffset, 8);
+      expect(HMotion.leaveOffset, 12);
+      expect(HMotion.leaveOffset, HMotion.arriveOffset * 1.5);
+      // A burst of arrivals is fully in place after five staggered rows.
+      expect(HMotion.stagger.inMilliseconds, 30);
+      expect(HMotion.staggerMax, 5);
+      expect(
+        HMotion.stagger * HMotion.staggerMax,
+        const Duration(milliseconds: 150),
+      );
+      // The two phases of an exit overlap; together they cover more than one.
+      expect(HMotion.leaveGlideFraction, 0.6);
+      expect(HMotion.leaveGlideFraction * 2, greaterThan(1.0));
+      // Deliberateness scales with reach, so a single block holds shorter than
+      // the release valve.
+      expect(HMotion.holdToBlock.inMilliseconds, 250);
+      expect(HMotion.holdToBlock, lessThan(HMotion.holdToConfirm));
+      // Policy windows.
+      expect(HMotion.confirm, const Duration(seconds: 3));
+      expect(HMotion.undoWindow, const Duration(seconds: 10));
+      expect(HMotion.freezeAfterKey, const Duration(seconds: 2));
+      expect(HMotion.freezeAfterPointer, const Duration(milliseconds: 500));
+      expect(HMotion.clockTick, const Duration(seconds: 1));
+      // Erlauben ist unumkehrbar und wird deshalb neu armiert, Blockieren
+      // nicht; die Frist bleibt unter der Halte-Bestaetigung.
+      expect(HMotion.rearm, const Duration(milliseconds: 350));
+      expect(HMotion.rearm, lessThan(HMotion.holdToConfirm));
+      // Warten: erst zugeben, dann lange genug stehen bleiben.
+      expect(HMotion.waitVisible, const Duration(milliseconds: 150));
+      expect(HMotion.waitMinVisible, const Duration(milliseconds: 400));
+      expect(HMotion.waitVisible, lessThan(HMotion.waitMinVisible));
+      // Der Ring bekommt erst unter einer Minute einen eigenen Controller.
+      expect(HMotion.ringSmoothBelow, const Duration(seconds: 60));
+      expect(HMotion.ringSmoothBelow, greaterThan(HMotion.clockTick));
+      // The breath is bounded, brightening, and never hides the glyph.
+      expect(HMotion.breatheBelow, 0.2);
+      expect(HMotion.breatheBelowUrgent, 0.05);
+      expect(HMotion.breatheBelowUrgent, lessThan(HMotion.breatheBelow));
+      expect(HMotion.breatheCycles, 3);
+      expect(HMotion.breatheMinOpacity, 0.72);
+      expect(HMotion.reducedRingAlpha, 0.4);
+    });
+
+    testWidgets('reduced motion drops travel and keeps feedback', (
+      WidgetTester tester,
+    ) async {
+      late BuildContext moving;
+      late BuildContext still;
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: Column(
+            children: <Widget>[
+              MediaQuery(
+                data: const MediaQueryData(),
+                child: Builder(
+                  builder: (BuildContext context) {
+                    moving = context;
+                    return const SizedBox.shrink();
+                  },
+                ),
+              ),
+              MediaQuery(
+                data: const MediaQueryData(disableAnimations: true),
+                child: Builder(
+                  builder: (BuildContext context) {
+                    still = context;
+                    return const SizedBox.shrink();
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+
+      expect(HReducedMotion.of(moving), isFalse);
+      expect(HReducedMotion.of(still), isTrue);
+
+      expect(HReducedMotion.distance(moving, HMotion.leaveOffset), 12);
+      expect(HReducedMotion.distance(still, HMotion.leaveOffset), 0);
+      expect(HReducedMotion.displace(moving, HMotion.leave), HMotion.leave);
+      expect(HReducedMotion.displace(still, HMotion.leave), Duration.zero);
+      expect(HReducedMotion.cycles(moving, HMotion.breatheCycles), 3);
+      expect(HReducedMotion.cycles(still, HMotion.breatheCycles), 0);
+    });
+
+    testWidgets('reduced motion without a MediaQuery is off', (
+      WidgetTester tester,
+    ) async {
+      late BuildContext bare;
+      await tester.pumpWidget(
+        Builder(
+          builder: (BuildContext context) {
+            bare = context;
+            return const SizedBox.shrink();
+          },
+        ),
+      );
+      expect(HReducedMotion.of(bare), isFalse);
+    });
+
     test('theme mode resolves the platform brightness', () {
       expect(HThemeMode.dark.resolve(Brightness.light), HTokens.dark);
       expect(HThemeMode.light.resolve(Brightness.dark), HTokens.light);
