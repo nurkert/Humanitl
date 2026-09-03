@@ -472,3 +472,7 @@ Entscheidungen, die beim Bauen fielen und ab jetzt gelten. Wo 3.x oder 4.11 ande
 - `Subscribe` filtert Durchreich-Flows (LLM-Passthrough) genauso wie `ListFlows`: nur wer `include_passthrough` setzt, sieht sie, im Rückstand wie im laufenden Strom. In M1 trägt noch kein Flow das Merkmal; der Filter steht trotzdem, damit HUM-024 nichts nachrüsten muss.
 - `ListFlows.filter` kennt `session:<id>`, `host:<text>` und `state:<name>`.
 - Der Test `subscribe_filters_session` aus der Spezifikation entfällt in M1: `SubscribeRequest` trägt keine Session, weil der Daemon genau eine Sitzung hat. Er kommt mit der zweiten Sitzung (Sprint 3) zurück, zusammen mit dem Feld in der Proto.
+
+**CLI (HUM-064).**
+- `humanitl sandbox run`, `sandbox argv` und `sandbox check` laufen in M1 im Prozess der CLI gegen die Sandbox-Crate, nicht über den Daemon: Der `Sandbox`-RPC kommt erst in Sprint 3. Das ist eine bewusste, auf genau diese drei Unterkommandos begrenzte Abweichung von ADR-018; die Naht ist in `daemon/bin/humanitl/src/cmd/sandbox.rs` markiert, und mit dem RPC wandert die Logik hinter ihn, ohne dass sich die Kommandozeile ändert. `daemon status`, `flows list|show|decide` und `config get|schema` gehen schon jetzt über den gRPC-Client.
+- `flows decide ID allow|block [--note TEXT]` bleibt im Produkt: Es ist der Vorläufer von `--ask terminal` (HUM-067) und das Werkzeug, mit dem das Demoskript und die Escape-Tests entscheiden.
