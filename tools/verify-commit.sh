@@ -46,6 +46,9 @@ step() {
 
 step "Format und Lints" make rust-fmt rust-clippy
 step "Bau und Tests" make rust-build rust-test
+# Wie der CI-Job rust-test: ohne private Items, damit ein oeffentlicher
+# Doc-Kommentar, der auf ein privates Item verweist, hier auffaellt.
+step "Dokumentation" env RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --manifest-path daemon/Cargo.toml
 step "Abhängigkeiten" make deps-lint
 step "Dokumente" make docs-lint
 step "Lizenzen" make rust-deny
