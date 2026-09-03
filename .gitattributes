@@ -1,6 +1,6 @@
 * text=auto eol=lf
 *.arb linguist-language=JSON
 app/lib/core/ipc/generated/** linguist-generated
-daemon/crates/ipc/src/generated/** linguist-generated
 *.png binary
 *.jpg binary
+*.binpb binary

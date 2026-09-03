@@ -1,0 +1,44 @@
+// Gemeinsame Werttypen des Vertrags `humanitl.v1`.
+//
+// Diese Datei enthaelt nur Enums, die sowohl `rules.proto` als auch
+// `humanitl.proto` brauchen. Sie importiert nichts und bricht damit den
+// Import-Zyklus, der entstuende, wenn `RuleMatcher` seine Methode aus
+// `humanitl.proto` beziehen muesste.
+syntax = "proto3";
+
+package humanitl.v1;
+
+option java_multiple_files = true;
+
+// HTTP-Methode. Unbekannte Methoden werden METHOD_OTHER; der Rohwert steht
+// daneben in `method_raw`, damit nichts verloren geht.
+enum Method {
+  METHOD_UNSPECIFIED = 0;
+  METHOD_GET = 1;
+  METHOD_HEAD = 2;
+  METHOD_POST = 3;
+  METHOD_PUT = 4;
+  METHOD_PATCH = 5;
+  METHOD_DELETE = 6;
+  METHOD_OPTIONS = 7;
+  METHOD_CONNECT = 8;
+  METHOD_TRACE = 9;
+  METHOD_OTHER = 10;
+}
+
+// Schema der Ziel-URL.
+enum Scheme {
+  SCHEME_UNSPECIFIED = 0;
+  SCHEME_HTTP = 1;
+  SCHEME_HTTPS = 2;
+  SCHEME_WS = 3;
+  SCHEME_WSS = 4;
+}
+
+// Protokoll-Upgrade eines Requests. UPGRADE_NONE ist der Normalfall;
+// UPGRADE_WEBSOCKET matcht nur Regeln, die `upgrade: websocket` setzen.
+enum Upgrade {
+  UPGRADE_UNSPECIFIED = 0;
+  UPGRADE_NONE = 1;
+  UPGRADE_WEBSOCKET = 2;
+}
