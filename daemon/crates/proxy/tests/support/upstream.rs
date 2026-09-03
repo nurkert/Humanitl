@@ -173,7 +173,34 @@ impl FakeUpstream {
             .unwrap()
     }
 
+    /// Wie [`FakeUpstream::tls`], aber mit einem Leaf für `name` statt für
+    /// `localhost`.
+    ///
+    /// Der Server lauscht trotzdem auf `127.0.0.1`. Damit lässt sich prüfen,
+    /// dass der Proxy zu einer angehefteten Adresse verbindet und das
+    /// Zertifikat gegen den **Namen** prüft, nicht gegen die Adresse
+    /// (HUM-024).
+    pub async fn tls_named(ca: &CaStore, name: &str) -> Self {
+        Self::bind_named(
+            Routes::Legacy,
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            Some(ca),
+            name,
+        )
+        .await
+        .unwrap()
+    }
+
     async fn bind(routes: Routes, ip: IpAddr, ca: Option<&CaStore>) -> io::Result<Self> {
+        Self::bind_named(routes, ip, ca, "localhost").await
+    }
+
+    async fn bind_named(
+        routes: Routes,
+        ip: IpAddr,
+        ca: Option<&CaStore>,
+        name: &str,
+    ) -> io::Result<Self> {
         let hits = Arc::new(AtomicUsize::new(0));
         let alpn = Arc::new(Mutex::new(None));
         let listener = TcpListener::bind(SocketAddr::new(ip, 0)).await?;
@@ -186,7 +213,7 @@ impl FakeUpstream {
             Some(ca) => {
                 let tls = TlsListener {
                     inner: listener,
-                    acceptor: TlsAcceptor::from(Arc::new(server_config(ca))),
+                    acceptor: TlsAcceptor::from(Arc::new(server_config(ca, name))),
                     alpn: Arc::clone(&alpn),
                 };
                 tokio::spawn(async move {
@@ -224,12 +251,10 @@ impl Drop for FakeUpstream {
     }
 }
 
-/// Die rustls-Serverkonfiguration des Fake-Upstreams: Leaf für `localhost`
-/// aus `ca`, ALPN `h2` und `http/1.1`.
-fn server_config(ca: &CaStore) -> ServerConfig {
-    let leaf = ca
-        .issue_leaf(&HostName::Dns("localhost".to_owned()))
-        .unwrap();
+/// Die rustls-Serverkonfiguration des Fake-Upstreams: Leaf für `name` aus
+/// `ca`, ALPN `h2` und `http/1.1`.
+fn server_config(ca: &CaStore, name: &str) -> ServerConfig {
+    let leaf = ca.issue_leaf(&HostName::Dns(name.to_owned())).unwrap();
     let mut config = ServerConfig::builder_with_provider(ca.provider())
         .with_safe_default_protocol_versions()
         .unwrap()

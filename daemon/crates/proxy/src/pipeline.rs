@@ -37,7 +37,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
 use humanitl_core::rule::Action;
-use humanitl_core::{BlockReason, Decision, DecisionSource, Flow, FlowState};
+use humanitl_core::{BlockReason, Decision, DecisionSource, Flow, FlowState, RuleId};
 use humanitl_rules::{RequestKey, RuleSet, Verdict};
 
 use crate::connect::requested_upgrade;
@@ -243,6 +243,17 @@ impl RulesPipeline {
     }
 
     /// Wendet eine Entscheidung an, die eine Regel getroffen hat.
+    /// Ob die Regel mit dieser Kennung private Zieladressen erlaubt.
+    ///
+    /// Der Schnappschuss wird nur gelesen; ist die Regel im Augenblick der
+    /// Entscheidung schon weg (Neuladen zwischen Auswertung und Abfrage),
+    /// gilt `false`, also die sichere Seite.
+    fn rule_allows_private(&self, rule: RuleId) -> bool {
+        self.rules
+            .read()
+            .is_ok_and(|set| set.get(rule).is_some_and(|found| found.allow_private))
+    }
+
     fn decide_by_rule(
         &self,
         flow: &mut Flow,
@@ -276,7 +287,15 @@ impl FlowPipeline for RulesPipeline {
             return self.inner.decide(flow, meta).await;
         };
         match action {
-            Action::Allow => self.decide_by_rule(flow, Decision::Allow, DecisionSource::Rule(rule)),
+            Action::Allow => {
+                // Die Erlaubnis fuer private Ziele haengt an der Regel, nicht
+                // an der Verbindung: Ohne diese Zeile faellt sie zwischen
+                // Entscheidung und Verbindung heraus, und die Durchreichregel
+                // zum lokalen Sprachmodell auf der Schleife greift nie
+                // (ADR-006).
+                flow.allow_private |= self.rule_allows_private(rule);
+                self.decide_by_rule(flow, Decision::Allow, DecisionSource::Rule(rule))
+            }
             Action::Block => self.decide_by_rule(
                 flow,
                 Decision::Block {
