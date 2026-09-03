@@ -1,0 +1,26 @@
+# Der mitgelieferte Regelsatz.
+#
+# Er ist bewusst leer: ohne Regel wird jede Anfrage gehalten und der Mensch
+# entscheidet (ADR-007, Default `ask`). Gefüllt wird die Datei in HUM-038 mit
+# den gebündelten Regeln, die niemand einzeln bestätigen will.
+#
+# Aufbau einer Regel (`backlog/CONVENTIONS.md` 3.3):
+#
+#   - id: 018f6c1e-7a2b-7c3d-8e4f-0123456789ab   # optional, wird sonst erzeugt
+#     action: allow                              # allow | block | ask | redact
+#     match:
+#       host: "**.npmjs.org"                     # Label-Glob, `ip:` oder `cidr:`
+#       method: [GET, HEAD]                      # optional
+#       path: "/**"                              # optional, Glob oder `~regex`
+#       scheme: https                            # optional
+#       port: 443                                # optional
+#       upgrade: websocket                       # optional, nur WebSocket
+#     expires: never                             # never | session | Zeitstempel
+#     stream: false
+#     allow_private: false
+#     bundled: false
+#     note: "wofür die Regel da ist"
+#
+# Die erste passende Regel gewinnt, Sitzungsregeln vor dauerhaften.
+version: 1
+rules: []

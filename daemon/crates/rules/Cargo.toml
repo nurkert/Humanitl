@@ -10,3 +10,11 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+humanitl-core.workspace = true
+
+chrono.workspace = true
+globset.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_yaml_ng.workspace = true
+thiserror.workspace = true
