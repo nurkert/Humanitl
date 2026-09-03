@@ -21,6 +21,10 @@ humanitl-rules.workspace = true
 # Die Detektoren (HUM-025) laufen im Proxy-Pfad, bevor eine Regel greift;
 # `tools/deps-allow.toml` erlaubt die Kante.
 humanitl-findings.workspace = true
+# Die Aufzeichnung (HUM-026) haengt im Trichter der Halte-Warteschlange und im
+# Handler, der als Einziger die Bytes in der Hand haelt;
+# `tools/deps-allow.toml` erlaubt die Kante.
+humanitl-recorder.workspace = true
 chrono.workspace = true
 dashmap.workspace = true
 thiserror.workspace = true

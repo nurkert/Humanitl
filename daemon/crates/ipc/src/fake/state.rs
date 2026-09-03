@@ -172,6 +172,9 @@ impl FakeFlow {
             body_preview: body_preview(
                 self.flow.request.body.inline.as_deref().unwrap_or_default(),
             ),
+            // Eine aufgezeichnete Sitzung kennt keinen Scan, der abgebrochen
+            // wäre: Die Funde stehen in der Datei, wie sie dort stehen.
+            findings_truncated: false,
         }
     }
 
@@ -643,10 +646,15 @@ fn apply_side_effects(flow: &mut FakeFlow, event: &FlowEvent) {
     }
 }
 
-/// Nummeriert die Regeln nach ihrer Position durch.
+/// Nummeriert die Regeln nach ihrer Position durch, 1-basiert.
+///
+/// Der Vertrag zählt Positionen ab eins (`proto/humanitl/v1/rules.proto`,
+/// `Rule.position`); `0` heißt dort „ans Ende". Der Fake zählte bis zum
+/// 2026-09-03 ab null, und die Kommandozeile zeigte deshalb für die erste
+/// Regel einen Strich und meldete nach einem `reorder` die Position `0`.
 fn renumber(rules: &mut [v1::Rule]) {
     for (index, rule) in rules.iter_mut().enumerate() {
-        rule.position = u32::try_from(index).unwrap_or(u32::MAX);
+        rule.position = u32::try_from(index.saturating_add(1)).unwrap_or(u32::MAX);
     }
 }
 

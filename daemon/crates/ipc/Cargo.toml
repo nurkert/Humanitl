@@ -10,6 +10,7 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+humanitl-catalog.workspace = true
 humanitl-config.workspace = true
 humanitl-core.workspace = true
 humanitl-proxy.workspace = true
@@ -22,6 +23,7 @@ humanitl-rules.workspace = true
 chrono.workspace = true
 
 base64.workspace = true
+dashmap.workspace = true
 bytes.workspace = true
 prost.workspace = true
 prost-types.workspace = true

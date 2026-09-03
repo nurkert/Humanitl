@@ -922,7 +922,14 @@ async fn rules_list_the_bundled_ones_and_accept_a_new_one() {
     assert_eq!(added.rules.len(), 3);
     let new_rule = added.rules.last().expect("the new rule");
     assert!(!new_rule.rule_id.is_empty(), "the daemon hands out the id");
-    assert_eq!(new_rule.position, 2);
+    // Positionen zählen ab eins (`proto/humanitl/v1/rules.proto`,
+    // `Rule.position`); die dritte Regel steht also auf Platz 3.
+    assert_eq!(new_rule.position, 3);
+    assert_eq!(
+        added.rules.first().expect("the first rule").position,
+        1,
+        "the first rule is at position 1, not 0"
+    );
 }
 
 #[tokio::test]

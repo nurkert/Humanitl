@@ -165,6 +165,7 @@ e2e_expect "the held flow names the host the agent asked for" \
 e2e_expect "and the path it asked for" /blocked "$(printf '%s' "$detail" | jq -r .path)"
 e2e_expect "and it is really waiting" held "$(printf '%s' "$detail" | jq -r .state)"
 
+blocked_flow="$flow"
 flow_decide "$flow" block "nicht in diesem Lauf" ||
     e2e_die "the daemon refused the block"
 wait "$blocked_pid" || true
@@ -201,6 +202,44 @@ printf '%s' "$answer" | jq -e '.path == "/echo"' > /dev/null ||
     e2e_check "the answer of the target reaches the agent unchanged" no "$answer"
 e2e_check "the answer of the target reaches the agent unchanged" ok
 
+allowed_flow="$flow"
+
+# --- 4b. Was der Daemon aufgeschrieben hat -----------------------------------
+
+e2e_step "4b. the daemon recorded what happened"
+
+# `flows list` liest seit HUM-026 aus der Aufzeichnung, nicht mehr aus dem
+# Speicher. Sichtbar wird das an den Zahlen: Die Größe der Antwort kennt nur,
+# wer die Antwort mitgeschrieben hat, während sie durchlief.
+row=$(flow_row "$allowed_flow") ||
+    e2e_die "the allowed flow is not in the history"
+e2e_expect "the allowed flow is closed" recorded "$(printf '%s' "$row" | jq -r .state)"
+e2e_expect "and carries the status of the target" 200 "$(printf '%s' "$row" | jq -r .status)"
+size=$(printf '%s' "$row" | jq -r .response_size)
+if [ "$size" -gt 0 ] 2> /dev/null; then
+    e2e_check "and the size of the answer, in bytes ($size)" ok
+else
+    e2e_check "and the size of the answer, in bytes" no "response_size is $size"
+fi
+e2e_expect "the blocked flow is recorded too" block \
+    "$(flow_row "$blocked_flow" | jq -r .decision)"
+e2e_expect "and the target never saw its body" 0 \
+    "$(flow_row "$blocked_flow" | jq -r .response_size)"
+
+# Und die Regeln: `Rules` ist kein `IPC_005` mehr, seit der Daemon einen
+# Regelspeicher hat (HUM-027). Der mitgelieferte Satz ist bis HUM-038 leer;
+# geprüft wird deshalb, dass der Dienst antwortet und nicht, wie viele Regeln
+# er nennt.
+if rules_out=$(humanitl rules list 2>&1); then
+    printf '%s\n' "$rules_out" | sed 's/^/  /'
+    if printf '%s\n' "$rules_out" | grep -q 'IPC_005'; then
+        e2e_check "the daemon answers Rules from its rule store" no "$rules_out"
+    fi
+    e2e_check "the daemon answers Rules from its rule store" ok
+else
+    e2e_say "humanitl rules is not wired yet (HUM-065); the daemon side is covered by daemon_end_to_end.rs"
+fi
+
 # --- 5. Was niemand entscheidet ----------------------------------------------
 
 e2e_step "5. what nobody decides runs into the hold timeout"
@@ -236,6 +275,26 @@ e2e_expect "and never the one a human forbade" 0 "$blocked_served"
 # Sandbox", zählt HUM-024: Erst der Resolver des Daemons führt Buch darüber,
 # wer welchen Namen aufgelöst hat. Bis dahin belegt Schritt 2 dasselbe von der
 # anderen Seite: In der Sandbox scheitert jede Auflösung.
+
+# --- Was einen Neustart überlebt ---------------------------------------------
+
+e2e_step "the recording outlives the daemon"
+
+# Der Beweis, dass die Historie aus der Aufzeichnung kommt und nicht aus dem
+# Speicher: Derselbe Baum, ein neuer Daemon, eine neue Sitzung — und die Flows
+# von eben stehen noch da, mit Status und Größe.
+stop_daemon
+start_daemon "$E2E_WORKDIR/state" "$E2E_WORKDIR" 10
+row=$(flow_row "$allowed_flow") ||
+    e2e_die "the allowed flow is gone after the restart"
+e2e_expect "the allowed flow survives a restart" 200 \
+    "$(printf '%s' "$row" | jq -r .status)"
+e2e_expect "with the size of the answer" "$size" \
+    "$(printf '%s' "$row" | jq -r .response_size)"
+e2e_expect "and its host" "$E2E_FAKE_ADDR:$FAKE_HTTP" \
+    "$(printf '%s' "$row" | jq -r .host)"
+e2e_expect "the flow detail comes from the recording as well" /echo \
+    "$(flow_show "$allowed_flow" | jq -r .path)"
 
 # --- Der geordnete Abschied --------------------------------------------------
 
