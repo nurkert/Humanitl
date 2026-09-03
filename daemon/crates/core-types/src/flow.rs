@@ -65,6 +65,12 @@ pub enum BlockReason {
     /// Das Ziel liegt nach der Auflösung in einem privaten Netz und die Regel
     /// erlaubt das nicht.
     PrivateAddress,
+    /// Die Anfrage trägt ein Geheimnis, dessen Prüfsumme aufgeht, und
+    /// `hold.hard_block_checksum_secrets` steht an. Das System blockt ohne
+    /// Rückfrage; niemand wurde gefragt, also darf hier auch nicht `user`
+    /// stehen (`backlog/CONVENTIONS.md` 4.13: nie mehr behaupten als
+    /// bewiesen ist).
+    Secret,
 }
 
 impl BlockReason {
@@ -82,6 +88,7 @@ impl BlockReason {
             Self::HoldMaxFlows => "hold_max_flows",
             Self::ClientTimeout => "client_timeout",
             Self::PrivateAddress => "private_address",
+            Self::Secret => "secret",
         }
     }
 
@@ -107,7 +114,11 @@ impl BlockReason {
     #[must_use]
     pub const fn http_status(self) -> u16 {
         match self {
-            Self::User | Self::Rule(_) | Self::AuthorityMismatch | Self::PrivateAddress => 403,
+            Self::User
+            | Self::Rule(_)
+            | Self::AuthorityMismatch
+            | Self::PrivateAddress
+            | Self::Secret => 403,
             Self::BodyCap => 413,
             Self::Timeout => 504,
             Self::HoldMemory | Self::HoldMaxFlows => 503,

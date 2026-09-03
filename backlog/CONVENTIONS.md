@@ -338,7 +338,7 @@ Die Sprint-Files wurden parallel geschrieben und haben an einigen Stellen die Ab
 - `match.upgrade: websocket` ist Teil des Schemas.
 
 ### 4.6 Diagnostic-Register
-Datei `daemon/crates/core-types/src/diagnostics/codes.rs` hält alle Codes als Konstanten mit Doc-Kommentar. Reservierte Bereiche: `DAEMON_001..019`, `SANDBOX_001..029` (001–006 Launcher/Profil, 007 Bridge-Richtung, 010–012 Start-Fehler), `TLS_001..009`, `LLM_001..009`, `RULES_001..009`, `TERM_001..009`, `RECORDER_001..009`, `LIMIT_001..009`, `AUDIT_001..009`, `CONFIG_001..009`. Ein Code wird nie wiederverwendet; entfernte Codes bleiben als `#[deprecated]` stehen. CI-Test: jeder im Code verwendete Code ist im Register.
+Datei `daemon/crates/core-types/src/diagnostics/codes.rs` hält alle Codes als Konstanten mit Doc-Kommentar. Reservierte Bereiche: `DAEMON_001..019`, `SANDBOX_001..029` (001–006 Launcher/Profil, 007 Bridge-Richtung, 010–012 Start-Fehler), `TLS_001..009`, `LLM_001..009`, `RULES_001..019` (001–008 Datei und Muster, 009–011 Regelspeicher aus HUM-027), `TERM_001..009`, `RECORDER_001..009`, `LIMIT_001..009`, `AUDIT_001..009`, `CONFIG_001..009`. Ein Code wird nie wiederverwendet; entfernte Codes bleiben als `#[deprecated]` stehen. CI-Test: jeder im Code verwendete Code ist im Register.
 
 ### 4.7 Fake-Modus
 - Daemon: `humanitld --fake <session.jsonl> [--speed N]`.
@@ -535,3 +535,79 @@ Laufzeit aus zwei Teilen zusammengesetzt (`"ghp" + "_0123…"`), mit einem
 Kommentar an der Stelle. Ein Wert nachträglich freizuschalten wäre der falsche
 Weg: Der Schutz soll anschlagen, wenn wirklich einmal ein Schlüssel in einen
 Commit rutscht.
+
+### 4.14 Aus der Umsetzung des Recorders (HUM-026, 2026-09-03)
+
+Abweichungen von `backlog/sprint-2.md`, die dauerhaft gelten. Wo die
+Spezifikation anderes sagt, gilt dieser Abschnitt.
+
+**Migrationen ohne `refinery`.** Die Spezifikation nennt `refinery`; die Crate
+steht nicht in `[workspace.dependencies]`, und ein Subagent trägt keine nackte
+Version ein (4.11). `daemon/crates/recorder/src/schema.rs` führt den Stand
+stattdessen in `PRAGMA user_version` und wendet die Dateien aus `migrations/`
+der Reihe nach an, jede in einer Transaktion zusammen mit dem Fortschreiben des
+Standes. Verzeichnis und Dateinamen sind genau die, die `refinery` erwartet
+(`V<n>__<name>.sql`), damit ein späterer Wechsel dieses eine Modul betrifft und
+nicht das Schema. Eine Datenbank, deren `user_version` höher ist als das Binary
+kennt, wird abgelehnt (`RECORDER_001`), nie halb gelesen.
+
+**`V1__init.sql` bleibt wortgleich, Änderungen kommen als neue Migration.** Das
+Akzeptanzkriterium verlangt, dass die Schema-Datei exakt dem `SQL` der
+Spezifikation entspricht. Was danach nötig wurde, steht deshalb in
+`V3__host_suffix.sql`: die Spalte `flows.host_rev` samt Index (der Filter
+`host:` ist ein Suffix-Vergleich, und den kann kein Index beantworten; umgekehrt
+geschriebene Labels machen daraus einen Bereich), `flows_ts` neu als
+`(ts DESC, id DESC)` statt `(ts DESC, id)` (sonst legt `SQLite` für die zweite
+Spalte einen temporären B-Baum an) und drei Indizes für die Sortierung nach
+Host, Dauer und Größe. Bestandszeilen bekommen ihren `host_rev` beim nächsten
+Start nachgetragen (`schema::backfill_host_rev`), weil eine Migration die
+Umkehrung der Labels nicht ausdrücken kann; ohne das Nachtragen verschwänden
+ältere Flows aus jedem `host:`-Filter.
+
+**`state = 'failed'`.** Der Spaltenkommentar in `V1__init.sql` zählt sieben
+Zustände auf und stammt wortgleich aus der Spezifikation. `FlowState::Failed`
+kam mit 4.10 dazu und wird geschrieben wie jeder andere Zustand; `failed` ist
+damit ein gültiger Wert der Spalte und ein gültiger Wert für den Filter
+`state:`. Der Kommentar bleibt, wie er ist, die Aufzählung steht im
+Doc-Kommentar von `FlowSummary::state`.
+
+**`Cursor` trägt drei Felder.** Die Skizze der Spezifikation hat `{ ts, id }`.
+Damit lässt sich nur nach Zeit blättern; nach Host, Dauer oder Größe sortiert
+wären die Seiten lückenhaft. `Cursor` hat deshalb zusätzlich
+`sort: Option<CursorKey>`, das bei `SortKey::Ts` leer bleibt. Ein Cursor, der
+nicht zur Sortierung passt, wird abgelehnt (`RECORDER_002`), statt still falsche
+Seiten zu liefern.
+
+**Grenzen kommen als eigener Typ, nicht als `RecorderConfig`.** `humanitl-recorder`
+darf nur von `humanitl-core` abhängen (3.1). Die Signatur `Recorder::open(db,
+blobs, &RecorderConfig)` aus der Spezifikation ist deshalb
+`Recorder::open(db, blobs, RecorderSettings)`; der Daemon rechnet
+`recorder.inline_max_bytes`, `limits.recorder_max_body_bytes` und
+`recorder.retention_days` beim Start um. Aus demselben Grund nimmt
+`snapshot_rule` die Regel als `YAML`-Text und nicht als `Rule`, und Apex sowie
+Katalog-Kennung kommen über `set_domain` von außen.
+
+**Jeder Weg, der Bytes annimmt, gibt ein `Result` zurück.** `store_message` und
+`ResponseSink::finish` liefern in der Skizze `BodyRef` beziehungsweise nichts.
+Beide können am Blob-Speicher scheitern, und ein verlorener Body ist genau die
+Art stiller Lücke, die 4.13 verbietet; sie liefern deshalb
+`Result<BodyRef, RecorderError>`. Ein `ResponseSink`, den niemand abschließt,
+schreibt beim Fallenlassen selbst, was bis dahin durchlief, mit `truncated = 1`.
+
+**Gezählte Zahlen sagen, wenn sie geschätzt sind.** `FlowPage::total_estimate`
+zählt höchstens bis 10 000. Ob die Zahl exakt ist, steht in
+`FlowPage::capped`; `FlowPage::total_text` schreibt `10000+`, wo sie nur eine
+Untergrenze ist (4.13).
+
+**`ANALYZE` gehört zum Aufräumen.** Das gebündelte `SQLite` ist mit
+`SQLITE_ENABLE_STAT4` übersetzt. Erst mit Stichproben unterscheidet der Planer
+beim Filter `host:` den häufigen Host vom seltenen; ohne sie ist einer der
+beiden Fälle um ein Vielfaches langsamer. Jeder Aufbewahrungslauf
+(`Recorder::purge_expired`) erhebt die Statistiken deshalb neu.
+
+**Proxy, Nachtrag aus HUM-023 (2026-09-03).**
+- Das Schema der Anfrage muss zum Schema der Verbindung passen: im CONNECT-Tunnel `https`, ohne Tunnel `http`. Beides andere ist `403 authority_mismatch`. Ohne diese Prüfung konnte ein Client im Tunnel eine Anfrage mit `http://` schicken, und der Proxy hätte sie im Klartext weitergeleitet, obwohl der Mensch über eine TLS-Verbindung entschieden hat.
+- Genau ein Fall bleibt `400` statt `403`: Origin-Form ohne Tunnel und ohne `Host`. Dort ist kein Ziel bekannt; ein Flow bräuchte eine erfundene Authority, und der Block-Body müsste `host: unknown` behaupten. Weitergeleitet wird auch dann nichts.
+- `AllowEdited` darf weder Authority noch Schema ändern (4.12 nannte bisher nur die Authority).
+- `BlockReason::Secret` (kurz `secret`, HTTP 403) gehört zu `hold.hard_block_checksum_secrets`. Vorher stand dort `user`, und eine Antwort, die einen Menschen nennt, den es nicht gab, ist eine Unwahrheit gegenüber dem Agenten und dem Protokoll (4.13).
+- Der Flow-Datensatz trägt `findings_truncated`. Ein nur teilweise durchsuchter Body darf in der Oberfläche nie wie eine leere Fundliste aussehen; zusätzlich steht `FINDINGS_002` als Diagnostic im Ereignisstrom.
