@@ -2,5 +2,53 @@
 //!
 //! Siehe `docs/ARCHITECTURE.md` für die Schichtung und `backlog/CONVENTIONS.md`
 //! Abschnitt 3.1 für die erlaubten Abhängigkeiten dieser Crate.
+//!
+//! Der Vertrag selbst steht in `proto/humanitl/v1/`. Der Rust-Code dazu wird
+//! bei jedem Build von `build.rs` erzeugt und liegt in `OUT_DIR`, nie im
+//! Quellbaum; er ist niemals von Hand zu ändern. Wie man den Vertrag ändert,
+//! steht in `docs/PROTOCOL.md`.
+//!
+//! Von Hand geschrieben sind zwei Dinge:
+//!
+//! - [`server_stub`] mit dem Port [`DaemonApi`] und dem tonic-Dienst darüber,
+//! - [`fake`] mit einem Daemon, der statt eines Proxys eine aufgezeichnete
+//!   Sitzung spielt (`humanitld --fake`, HUM-005).
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
+
+/// Major-Version des Vertrags. Ein Client mit kleinerer Major verweigert die
+/// Verbindung (`Info.proto_major`).
+pub const PROTO_MAJOR: u32 = 1;
+
+/// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
+/// (`Info.proto_minor`).
+pub const PROTO_MINOR: u32 = 0;
+
+/// Metadata-Schlüssel für das Session-Token aus
+/// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
+pub const TOKEN_METADATA_KEY: &str = "x-humanitl-token";
+
+/// Der erzeugte Vertrag `humanitl.v1`: Nachrichten, Client und Server.
+///
+/// Der Inhalt ist generiert, deshalb sind die Lints hier abgeschaltet. Alles,
+/// was von Hand geschrieben wird, gehört in ein Nachbarmodul, nicht hierher.
+#[allow(
+    missing_docs,
+    clippy::all,
+    clippy::pedantic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::doc_markdown
+)]
+pub mod v1 {
+    include!(concat!(env!("OUT_DIR"), "/humanitl.v1.rs"));
+}
+
+pub mod fake;
+pub mod server_stub;
+
+pub use crate::server_stub::{
+    BoxStream, DaemonApi, DaemonService, diagnostic_from_status, diagnostic_to_proto,
+    diagnostic_to_status,
+};

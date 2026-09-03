@@ -16,3 +16,4 @@ missing_docs = "warn"
 all = { level = "warn", priority = -1 }
 
 [dependencies]
+protox.workspace = true

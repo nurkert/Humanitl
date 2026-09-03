@@ -14,6 +14,11 @@ dependencies:
     sdk: flutter
   humanitl_ui:
     path: packages/ui
+  # gRPC-Client und Laufzeit fuer den erzeugten Proto-Code (HUM-003).
+  # Die Version von `protobuf` (6.x) gehoert zur Version des Codegenerators
+  # `protoc_plugin` (25.x); siehe docs/PROTOCOL.md.
+  grpc: ^5.1.0
+  protobuf: ^6.0.0
 
 dev_dependencies:
   flutter_test:
