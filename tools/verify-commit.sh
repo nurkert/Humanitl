@@ -38,7 +38,7 @@ fail=0
 step() {
   local name="$1"; shift
   echo "verify-commit: $name"
-  if ! (cd "$tree" && CARGO_TARGET_DIR="$target" STRICT=1 "$@"); then
+  if ! (cd "$tree" && CARGO_TARGET_DIR="$target" STRICT=1 ESCAPE_ALLOW_FAIL="${ESCAPE_ALLOW_FAIL:-}" "$@"); then
     echo "verify-commit: $name schlug fehl" >&2
     fail=1
   fi
@@ -49,6 +49,9 @@ step "Bau und Tests" make rust-build rust-test
 step "Abhängigkeiten" make deps-lint
 step "Dokumente" make docs-lint
 step "Lizenzen" make rust-deny
+# Wie im CI-Job escape-tests: eine rote Probe ist erlaubt, solange sie zu einem
+# Issue gehoert, das noch aussteht; eine Sandbox, die gar nicht startet, nicht.
+export ESCAPE_ALLOW_FAIL=1
 step "Escape-Tests" bash tests/escape/run.sh
 
 if [[ "$fail" -ne 0 ]]; then
