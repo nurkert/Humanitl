@@ -156,6 +156,11 @@ pub struct PlaceholderArgs {
 pub enum SandboxCmd {
     /// Start a sandbox with CMD as the agent and exit with its exit code.
     Run {
+        /// Das Verzeichnis des Hosts hinter dem Platzhalter `/tests/escape`
+        /// des Profils `test` (`cmd::sandbox`, Abschnitt „Das
+        /// Testverzeichnis").
+        #[arg(long, value_name = "DIR")]
+        tests_dir: Option<PathBuf>,
         /// Der Befehl in der Sandbox, hinter `--`.
         #[arg(last = true, value_name = "CMD", required = true)]
         cmd: Vec<OsString>,
@@ -415,6 +420,8 @@ fn value_name(field: &schema::Field) -> String {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+    use std::path::Path;
+
     use humanitl_config::schema;
 
     use super::{
@@ -516,12 +523,37 @@ mod tests {
             "--json after -- is the agent's"
         );
         let Cmd::Sandbox {
-            cmd: SandboxCmd::Run { cmd },
+            cmd: SandboxCmd::Run { cmd, tests_dir },
         } = invocation.cli.cmd
         else {
             panic!("expected sandbox run");
         };
         assert_eq!(cmd, ["sh", "-c", "exit 5", "--json"]);
+        assert!(tests_dir.is_none());
+    }
+
+    #[test]
+    fn the_tests_directory_is_a_flag_of_sandbox_run() {
+        let invocation = parse([
+            "humanitl",
+            "sandbox",
+            "run",
+            "--tests-dir",
+            "tests/escape",
+            "--",
+            "/bin/sh",
+            "/tests/escape/esc-1-sockets.sh",
+        ])
+        .expect("the command parses");
+
+        let Cmd::Sandbox {
+            cmd: SandboxCmd::Run { cmd, tests_dir },
+        } = invocation.cli.cmd
+        else {
+            panic!("expected sandbox run");
+        };
+        assert_eq!(tests_dir.as_deref(), Some(Path::new("tests/escape")));
+        assert_eq!(cmd, ["/bin/sh", "/tests/escape/esc-1-sockets.sh"]);
     }
 
     #[test]

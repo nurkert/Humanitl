@@ -89,7 +89,7 @@ pub use crate::bwrap_args::{
     MaskFds, PASSWD_DST, PREVIEW_MASK_FD_FIRST, SANDBOX_SHELL, shell_line, shell_quote,
 };
 pub use crate::handle::{
-    CAPTURE_MAX_BYTES, CapturedOutput, KILL_GRACE, ReportSnapshot, STATUS_DRAIN,
+    CAPTURE_MAX_BYTES, CapturedOutput, INTERRUPT_GRACE, KILL_GRACE, ReportSnapshot, STATUS_DRAIN,
     STDERR_EXCERPT_BYTES, SandboxHandle, StatusSnapshot,
 };
 pub use crate::launcher::{CheckResult, IsolationCheck, LaunchPlan, SandboxBackend, StdioMode};
