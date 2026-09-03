@@ -136,11 +136,15 @@ jobs:
           musl="$(uname -m)-unknown-linux-musl"
           target_flag=()
           out="target/shim/humanitl-shim"
-          if rustup target add "$musl" > /dev/null 2>&1; then
+          # The musl target needs a musl linker as well; without musl-tools the
+          # target installs fine and the link step then fails on crt1.o. Only
+          # take that road when both halves are there.
+          sudo apt-get install -y --no-install-recommends musl-tools > /dev/null 2>&1 || true
+          if command -v musl-gcc > /dev/null && rustup target add "$musl" > /dev/null 2>&1; then
             target_flag=(--target "$musl")
             out="target/$musl/shim/humanitl-shim"
           else
-            echo "::notice::$musl is not available, building with +crt-static"
+            echo "::notice::$musl or its linker is not available, building with +crt-static"
           fi
           cargo rustc -p humanitl-shim --bin humanitl-shim --profile shim \
             "${target_flag[@]}" -- -C target-feature=+crt-static -C relocation-model=static
