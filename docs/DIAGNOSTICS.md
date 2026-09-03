@@ -219,7 +219,15 @@ Hash-Kette gebrochen
 
 ### Bereich cli
 
+#### CLI_001
+
+Aufruf am Daemon abgelehnt
+
 #### CLI_002
 
 Vollbild-TUI-Agent nicht mit --ask terminal
+
+#### CLI_003
+
+Unterkommando noch nicht verfügbar
 

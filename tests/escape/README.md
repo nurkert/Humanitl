@@ -45,7 +45,7 @@ erscheint im XML als `<error>`, eine durchgekommene Probe als `<failure>`.
 
 | Datei | Rolle |
 |---|---|
-| `run.sh` | Einstieg, was `make escape` aufruft: baut den Starter, fährt die Suiten, schreibt das XML. Der Starter wird aus `${CARGO_TARGET_DIR:-daemon/target}/debug/` gelesen, demselben Verzeichnis, in das `cargo build` ihn legt (ein relatives `CARGO_TARGET_DIR` zählt ab `daemon/`) |
+| `run.sh` | Einstieg, was `make escape` aufruft: baut Kommandozeile, Daemon und Shim, fährt die Suiten, schreibt das XML. Die Binaries werden aus `${CARGO_TARGET_DIR:-daemon/target}/debug/` gelesen, demselben Verzeichnis, in das `cargo build` sie legt (ein relatives `CARGO_TARGET_DIR` zählt ab `daemon/`) |
 | `lib.sh` | die Proben-Helfer, in Sandbox und auf dem Host dieselben |
 | `junit.sh` | aus den `RESULT`-Zeilen wird JUnit-XML |
 | `selftest.sh` | prüft `lib.sh` und `junit.sh` gegen `true` und `false`, und die Socket-Probe gegen echte Sockets (schlicht, unter `dev/shm`, per Bind-Mount) |
@@ -54,11 +54,22 @@ erscheint im XML als `<error>`, eine durchgekommene Probe als `<failure>`.
 | `esc-3-egress.sh` | ESC-3: kein Egress ohne Proxy, über den Proxy landet alles in der Warteschlange |
 | `esc-4-rules.sh` | ESC-4: Platzhalter, alle Fälle `skipped` (HUM-022) |
 | `esc-5-filesystem.sh` | ESC-5: Platzhalter, alle Fälle `skipped` (HUM-043/050/029) |
-| `daemon/crates/sandbox/src/bin/escape-launch.rs` | Starter: Profil lesen, Argv nach HUM-010 bauen, `bwrap` starten |
+| `humanitl sandbox run --profile test --tests-dir tests/escape -- …` | der Start jeder Suite: dieselbe Kommandozeile, die der Nutzer aufruft (CONVENTIONS.md 3.11) |
 
 ESC-1 bis ESC-3 laufen **in** der Sandbox, ESC-4 und ESC-5 als Platzhalter auf dem
-Host: ein `skip` braucht keine Isolation, und ein Platzhalter, der vom Launcher
-abhängt, verschwindet hinter dem ersten Startfehler.
+Host: ein `skip` braucht keine Isolation, und ein Platzhalter, der vom Start der
+Sandbox abhängt, verschwindet hinter dem ersten Startfehler.
+
+Seit HUM-064 startet jede Suite über `humanitl sandbox run --profile test`, nicht
+mehr über das Ad-hoc-Binary `escape-launch`. Darunter liegt derselbe
+`BwrapBackend`; der Unterschied ist, dass die Escape-Tests damit genau den
+Codepfad prüfen, den später auch der Nutzer nimmt. Das Profil wird beim Namen
+genannt und dafür vor dem Lauf nach
+`$XDG_CONFIG_HOME/humanitl/profiles/sandbox/` kopiert, der Shim neben das
+Binary `humanitl` gelegt: `sandbox run` kennt weder `--profile <pfad>` noch
+`--shim`, weil ein geklontes Repository die Politik der Sandbox nicht stellen
+darf. Nur `--tests-dir` bleibt ein eigenes Flag; es zieht die Quelle des Binds
+nach `/tests/escape` auf das Verzeichnis dieser Skripte.
 
 ### Die Helfer in `lib.sh`
 
@@ -147,19 +158,22 @@ einem Verzeichnis-Bind auf einem anderen Dateisystem, wie `/work` einer ist.
 Alle müssen auftauchen, bevor `run.sh` dem Harness eine Sandbox anvertraut.
 
 Seit HUM-021 startet `run.sh` vor den Suiten einen echten `humanitld` in einem
-eigenen XDG-Baum unter `target/escape` und reicht dessen Proxy-Socket und CA an
-`escape-launch` weiter. Davor band der Starter dort einen Platzhalter ein, einen
-gebundenen Socket, hinter dem niemand antwortet; jede ESC-3-Probe, die nach der
-**Antwort** des Proxys fragt, bekam deshalb „connection refused" statt des
-Block-Bodys. Damit der Daemon-Socket dort liegt, wo die Mount-Politik des
-Starters ihn erwartet, läuft der Daemon mit `XDG_RUNTIME_DIR=<state>/runtime`;
-`start_daemon` in `tests/e2e/lib.sh` macht für das Demoskript dasselbe.
+eigenen XDG-Baum unter `target/escape`. Davor band der Starter dort einen
+Platzhalter ein, einen gebundenen Socket, hinter dem niemand antwortet; jede
+ESC-3-Probe, die nach der **Antwort** des Proxys fragt, bekam deshalb
+„connection refused" statt des Block-Bodys. Proxy-Socket, CA und Token findet
+die Kommandozeile selbst über `humanitl_config::Paths`; sie läuft dafür in
+genau dem XDG-Baum dieses Daemons, mit `XDG_RUNTIME_DIR=<state>/runtime`, damit
+der Socket dort liegt, wo die Mount-Politik ihn erwartet. `start_daemon` in
+`tests/e2e/lib.sh` macht für das Demoskript dasselbe.
 
 ## Erwartetes Ergebnis in Sprint 0
 
-Stand nach HUM-021: 97 Fälle, 81 grün, 1 rot, 15 übersprungen. Die Tabelle
+Stand nach HUM-064: 97 Fälle, 82 grün, 0 rot, 15 übersprungen. Die Tabelle
 unten ist der Stand aus Sprint 0 und nennt zu jeder Probe das Issue, das sie
-grün gemacht hat; offen ist nur noch die letzte Zeile.
+grün gemacht hat; rot ist keine mehr. Übersprungen bleibt, was auf ein Issue
+späterer Sprints wartet, darunter `dns_not_before_decision`: dass die Sandbox
+keinen Namen auflöst, zählt erst der Resolver aus HUM-024.
 
 ### Rot, und was sie grün macht
 

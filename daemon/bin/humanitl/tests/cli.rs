@@ -8,6 +8,10 @@
 //! von beiden, meldet der Test das und endet grün, statt eine Umgebung zu
 //! verlangen, die eine Entwicklermaschine nicht haben muss (dieselbe Regel wie
 //! in `tests/escape/`).
+//!
+//! Unter CI gilt das nicht: dort ist die Umgebung zugesagt, und
+//! [`sandbox_required`] macht aus dem stillen Überspringen einen Fehlschlag
+//! mit der Zeile, die sagt, was zu installieren ist.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -204,12 +208,43 @@ fn shim() -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
+/// Ob `bwrap` im Pfad liegt.
+fn bwrap_available() -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join("bwrap").is_file()))
+}
+
 /// Ob eine Sandbox in diesem Lauf überhaupt starten kann.
 fn sandbox_available() -> Option<PathBuf> {
     let shim = shim()?;
-    let found = std::env::var_os("PATH")
-        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join("bwrap").is_file()));
-    found.then_some(shim)
+    bwrap_available().then_some(shim)
+}
+
+/// Wie [`sandbox_available`], aber unter CI eine Forderung.
+///
+/// Auf einer Entwicklermaschine darf `bwrap` fehlen, und der Test endet grün,
+/// statt eine Umgebung zu verlangen, die niemand versprochen hat. Auf dem
+/// CI-Runner ist das Fehlen ein Fehler: `humanitl sandbox check` soll dort
+/// drei grüne Zeilen zeigen (HUM-064, Akzeptanzkriterium 1), und ein Test, der
+/// genau diese Zusage still überspringt, prüft sie nie.
+fn sandbox_required() -> Option<PathBuf> {
+    if let Some(shim) = sandbox_available() {
+        return Some(shim);
+    }
+    assert!(
+        std::env::var_os("CI").is_none(),
+        "under CI this test must run: {}",
+        if bwrap_available() {
+            "humanitl-shim is missing next to the test binary; build the workspace \
+             (cargo build --workspace) before running the tests"
+        } else {
+            "bwrap is missing; install it (apt-get install -y bubblewrap) \
+             and allow unprivileged user namespaces \
+             (sysctl -w kernel.apparmor_restrict_unprivileged_userns=0)"
+        }
+    );
+    eprintln!("skip: no bwrap or no humanitl-shim next to the binary");
+    None
 }
 
 /// `stdout` als Text.
@@ -309,6 +344,56 @@ fn a_missing_daemon_with_json_is_one_line_on_stdout() {
     assert_eq!(value["code"], "DAEMON_001");
     assert_eq!(value["severity"], "blocking");
     assert!(value["why"].as_str().is_some_and(|why| !why.is_empty()));
+    assert!(stderr(&output).is_empty(), "stderr must stay clean");
+}
+
+#[test]
+fn a_placeholder_subcommand_is_a_diagnostic_block_and_exit_one() {
+    let harness = Harness::new();
+    for (command, issue) in [
+        (vec!["run"], "HUM-067"),
+        (vec!["rules", "list"], "HUM-065"),
+        (vec!["audit", "verify"], "HUM-070"),
+    ] {
+        let output = harness.run(command.clone());
+        let text = stderr(&output);
+
+        assert_eq!(code(&output), 1, "{command:?}: {text}");
+        assert!(text.starts_with("error[CLI_003]: "), "{command:?}: {text}");
+        assert!(
+            text.contains(&format!("arrives in {issue}")),
+            "{command:?}: {text}"
+        );
+        assert!(text.contains("\n  fix: "), "{command:?}: {text}");
+        assert!(
+            stdout(&output).is_empty(),
+            "{command:?}: stdout must stay clean"
+        );
+    }
+}
+
+#[test]
+fn a_placeholder_subcommand_with_json_is_one_line_on_stdout() {
+    let harness = Harness::new();
+    let output = harness.run(["--json", "run"]);
+    let text = stdout(&output);
+
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert_eq!(text.lines().count(), 1, "{text}");
+    let value: serde_json::Value = serde_json::from_str(text.trim()).expect("one JSON value");
+    assert_eq!(value["code"], "CLI_003");
+    assert!(
+        value["why"]
+            .as_str()
+            .is_some_and(|why| why.contains("humanitl run") && why.contains("HUM-067")),
+        "{value}"
+    );
+    assert!(
+        value["fix"]["command"]
+            .as_str()
+            .is_some_and(|fix| fix.contains("HUM-067")),
+        "{value}"
+    );
     assert!(stderr(&output).is_empty(), "stderr must stay clean");
 }
 
@@ -558,8 +643,7 @@ fn flows_show_falls_back_to_the_summary_and_reports_an_unknown_id() {
 
 #[test]
 fn sandbox_check_shows_the_three_guarantees() {
-    let Some(_shim) = sandbox_available() else {
-        eprintln!("skip: no bwrap or no humanitl-shim next to the binary");
+    let Some(_shim) = sandbox_required() else {
         return;
     };
     let harness = Harness::new();
@@ -647,4 +731,59 @@ fn sigint_stops_the_sandbox_and_ends_with_130() {
     assert_eq!(status.code(), Some(130), "SIGINT must end with 130");
     let mut out = std::io::stderr();
     let _ = writeln!(out, "sigint took {:?}", started.elapsed());
+}
+
+/// `SIGINT` ist eine Bitte, kein Schlag: Der Agent hört sie, räumt auf und
+/// endet mit seinem eigenen Code, und der ist der Code der Kommandozeile.
+#[test]
+fn sigint_reaches_the_agent_and_keeps_its_exit_code() {
+    let Some(_shim) = sandbox_available() else {
+        eprintln!("skip: no bwrap or no humanitl-shim next to the binary");
+        return;
+    };
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+    let _socket = harness.wire_daemon_files();
+
+    let mut child = harness
+        .command()
+        .args([
+            "sandbox",
+            "run",
+            "--",
+            "sh",
+            "-c",
+            "trap 'exit 42' INT; sleep 60",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the binary starts");
+
+    std::thread::sleep(Duration::from_millis(1500));
+    let pid = child.id();
+    let signalled = Command::new("kill")
+        .args(["-INT", &pid.to_string()])
+        .status()
+        .expect("kill runs");
+    assert!(signalled.success(), "cannot send SIGINT to {pid}");
+
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("the child is waitable") {
+            break status;
+        }
+        assert!(
+            started.elapsed() < PATIENCE,
+            "the command did not stop within {PATIENCE:?}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+
+    assert_eq!(
+        status.code(),
+        Some(42),
+        "the handler of the agent must decide the exit code, not the escalation"
+    );
 }

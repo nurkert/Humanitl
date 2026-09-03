@@ -93,7 +93,13 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            curl git python3 python3-requests
+            curl git python3 python3-requests bubblewrap
+          # `humanitl sandbox check` must show three green lines on this runner
+          # (HUM-064, acceptance criterion 1). The test in bin/humanitl fails
+          # loudly under CI when bwrap is missing instead of skipping.
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
 
           websocat_sha=66f8dd3a0394761556339117f8bb5123bddefd44e087af2a72ec22b0bd08d514
           curl -fsSL -o /tmp/websocat \
@@ -424,7 +430,7 @@ jobs:
           elif [[ "${ESCAPE_ALLOW_FAIL:-0}" == 1 ]]; then
             verdict="skipped"
             note="$fail red probe(s) tolerated by ESCAPE_ALLOW_FAIL; nothing was enforced. See tests/escape/README.md for the issue behind each one."
-            echo "::notice::escape tests not fully enforced (host_mismatch_blocked waits for HUM-023)"
+            echo "::notice::escape tests not fully enforced; see tests/escape/README.md"
           else
             verdict="failed"
             note="$fail red probe(s); see tests/escape/README.md."
@@ -472,7 +478,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            bubblewrap curl jq python3 iproute2 util-linux
+            bubblewrap curl jq python3 iproute2 util-linux musl-tools
       - name: Allow unprivileged user namespaces
         # Ubuntu 24.04 restricts them through AppArmor (HUM-002). Without this
         # neither bwrap nor `unshare -rn` starts; the demo says so and fails,
@@ -494,7 +500,7 @@ jobs:
         if: always()
         with:
           name: e2e-m1-logs
-          # The daemon log of the run, the launcher's isolation report per step,
+          # The daemon log of the run, the isolation report of `humanitl sandbox run -v`,
           # the access log of the target and the answers the agent received.
           path: target/e2e
           if-no-files-found: ignore

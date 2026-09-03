@@ -24,7 +24,7 @@ use std::process::ExitCode;
 use clap::error::ErrorKind;
 
 use crate::cli::{Cmd, Invocation};
-use crate::cmd::{Context, EXIT_OK, EXIT_USER, Failure, not_yet};
+use crate::cmd::{Context, EXIT_OK, EXIT_USER, Failure, not_yet_failure};
 use crate::render::Renderer;
 
 #[tokio::main]
@@ -75,28 +75,21 @@ async fn run(ctx: &Context, command: Cmd) -> Result<u8, Failure> {
         Cmd::Daemon { cmd } => cmd::daemon::run(ctx, &cmd).await,
         Cmd::Flows { cmd } => cmd::flows::run(ctx, &cmd).await,
         Cmd::Config { cmd } => cmd::config::run(ctx, &cmd),
-        Cmd::Run(_) => Ok(unimplemented("humanitl run", "HUM-067")),
-        Cmd::Rules(_) => Ok(unimplemented("humanitl rules", "HUM-065")),
-        Cmd::Audit(_) => Ok(unimplemented("humanitl audit", "HUM-070")),
+        // Ein Platzhalter ist ein Fehlschlag wie jeder andere und geht
+        // deshalb denselben Weg: [`Renderer::diagnostic`] macht daraus mit
+        // `--json` eine Zeile JSON auf `stdout` und sonst den Block auf
+        // `stderr`.
+        Cmd::Run(_) => Err(not_yet_failure("humanitl run", "HUM-067")),
+        Cmd::Rules(_) => Err(not_yet_failure("humanitl rules", "HUM-065")),
+        Cmd::Audit(_) => Err(not_yet_failure("humanitl audit", "HUM-070")),
     }
-}
-
-/// Ein Unterkommando, das der Vertrag kennt und dieses Binary noch nicht.
-///
-/// Kein [`humanitl_core::Diagnostic`]: wie im Daemon ist das kein Fehlschlag
-/// der Anfrage, sondern der Stand der Umsetzung. Die Meldung nennt das Issue,
-/// damit klar ist, worauf man wartet. Der Exit-Code ist trotzdem 1, denn
-/// getan hat der Aufruf nichts.
-fn unimplemented(what: &str, arrives: &str) -> u8 {
-    eprintln!("humanitl: {}", not_yet(what, arrives));
-    EXIT_USER
 }
 
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-    use crate::cmd::not_yet;
+    use crate::cmd::{EXIT_USER, not_yet, not_yet_failure};
 
     #[test]
     fn a_missing_subcommand_names_its_issue() {
@@ -104,5 +97,12 @@ mod tests {
             not_yet("humanitl run", "HUM-067"),
             "humanitl run arrives in HUM-067"
         );
+    }
+
+    #[test]
+    fn a_missing_subcommand_ends_with_one_and_a_diagnostic() {
+        let failure = not_yet_failure("humanitl audit", "HUM-070");
+        assert_eq!(failure.exit, EXIT_USER);
+        assert_eq!(failure.diagnostic.code.as_str(), "CLI_003");
     }
 }
