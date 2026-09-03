@@ -214,6 +214,7 @@ impl ProxyBuilder {
             Arc::clone(&resolver) as Arc<dyn Resolver>,
             tls,
             IpPreference::Ipv4,
+            Duration::from_secs(self.limits.header_timeout_secs),
         );
         let limits = ProxyLimits::from_config(&self.limits, &RecorderConfig::default());
         let handler = FlowHandler::new(Arc::clone(&queue), pipeline, upstream, leaves, limits);

@@ -20,6 +20,7 @@
 //! | `Analyzed` | `Decide` (Regel, Passthrough oder System-Ablehnung) | `Decided` | `Decided` |
 //! | `Held` | `Decide` (Nutzer, Regel oder System-Ablehnung) | `Decided` | `Decided` |
 //! | `Held` | `Timeout` | `Decided(TimedOut)` | `TimedOut` |
+//! | `Decided(Allow\|AllowEdited)` | `Decide` (nur System, nur `Block`) | `Decided(Block)` | `Decided` |
 //! | `Decided(Allow\|AllowEdited)` | `Forward` | `Forwarded` | `Forwarded` |
 //! | `Decided(Allow\|AllowEdited)` | `Fail` | `Failed` | `Failed` |
 //! | `Decided(Block\|TimedOut)` | `Record` | `Recorded` | `Recorded` |
@@ -346,6 +347,25 @@ impl FlowState {
         matches!(self, Self::Recorded)
     }
 
+    /// Der gemeinsame Ausgang jeder Entscheidung: der neue Zustand und das
+    /// Ereignis, das ihn trägt.
+    fn decided(
+        decision: Decision,
+        source: DecisionSource,
+        flow_id: FlowId,
+        at: SystemTime,
+    ) -> (Self, FlowEvent) {
+        (
+            Self::Decided(decision.clone()),
+            FlowEvent::Decided {
+                flow_id,
+                at,
+                decision,
+                source,
+            },
+        )
+    }
+
     /// Führt einen Übergang aus.
     ///
     /// Gibt den Folgezustand und das Ereignis zurück, das dabei entsteht. Die
@@ -394,33 +414,30 @@ impl FlowState {
             (Self::Analyzed { .. }, TransitionInput::Decide { decision, source })
                 if may_decide(false, source, &decision) =>
             {
-                Ok((
-                    Self::Decided(decision.clone()),
-                    FlowEvent::Decided {
-                        flow_id,
-                        at,
-                        decision,
-                        source,
-                    },
-                ))
+                Ok(Self::decided(decision, source, flow_id, at))
             }
             (Self::Held { .. }, TransitionInput::Decide { decision, source })
                 if may_decide(true, source, &decision) =>
             {
-                Ok((
-                    Self::Decided(decision.clone()),
-                    FlowEvent::Decided {
-                        flow_id,
-                        at,
-                        decision,
-                        source,
-                    },
-                ))
+                Ok(Self::decided(decision, source, flow_id, at))
             }
             (Self::Held { .. }, TransitionInput::Timeout) => Ok((
                 Self::Decided(Decision::TimedOut),
                 FlowEvent::TimedOut { flow_id, at },
             )),
+            // Das System darf eine Freigabe vor dem Weiterleiten noch in eine
+            // Sperre verwandeln, nie umgekehrt: Stellt der Proxy nach der
+            // Entscheidung fest, dass die freigegebene Anfrage nicht die ist,
+            // fuer die entschieden wurde (etwa eine bearbeitete Anfrage mit
+            // anderem Ziel), endet der Flow als Sperre und nicht als
+            // erfundener Upstream-Fehler.
+            (
+                Self::Decided(Decision::Allow | Decision::AllowEdited { .. }),
+                TransitionInput::Decide {
+                    decision: decision @ Decision::Block { .. },
+                    source: DecisionSource::System,
+                },
+            ) => Ok(Self::decided(decision, DecisionSource::System, flow_id, at)),
             (
                 Self::Decided(Decision::Allow | Decision::AllowEdited { .. }),
                 TransitionInput::Forward,

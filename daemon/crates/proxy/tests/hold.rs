@@ -992,6 +992,7 @@ async fn invalid_transition_blocks() {
         Arc::new(NoResolver) as Arc<dyn Resolver>,
         ClientTls::new(&[], false).unwrap(),
         IpPreference::Ipv4,
+        Duration::from_secs(10),
     );
     let handler = FlowHandler::new(
         Arc::clone(&queue),
