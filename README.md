@@ -161,7 +161,7 @@ make check          # builds and tests both toolchains
 make help           # every target
 ```
 
-Toolchain: Rust 1.85 or newer, Flutter 3.44 or newer. See
+Toolchain: Rust 1.88 or newer, Flutter 3.44 or newer. See
 [`CONTRIBUTING.md`](CONTRIBUTING.md) for the details, including how the local
 gate behaves when `rustfmt` or `clippy` are absent.
 
