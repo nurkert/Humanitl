@@ -17,8 +17,11 @@ for lib in daemon/crates/*/src/lib.rs; do
 done
 
 # Every upstream connection goes through the Egress port (ADR-017).
+# The shim is exempt: it is the loopback bridge inside the sandbox, has no
+# access to the network namespace of the host and never talks to an upstream.
 if grep -rn 'TcpStream::connect' daemon/crates daemon/bin --include='*.rs' 2>/dev/null \
-    | grep -v 'crates/proxy/src/egress/' | grep -v '/tests/' | grep -v '#\[cfg(test)\]'; then
+    | grep -v 'crates/proxy/src/egress/' | grep -v 'bin/humanitl-shim/' \
+    | grep -v '/tests/' | grep -v '#\[cfg(test)\]'; then
   echo "TcpStream::connect outside crates/proxy/src/egress/" >&2
   fail=1
 fi
