@@ -98,13 +98,13 @@ async fn run(ctx: &Context, command: Cmd) -> Result<u8, Failure> {
         Cmd::Sandbox { cmd } => cmd::sandbox::run(ctx, &cmd).await,
         Cmd::Daemon { cmd } => cmd::daemon::run(ctx, &cmd).await,
         Cmd::Flows { cmd } => cmd::flows::run(ctx, &cmd).await,
+        Cmd::Rules { cmd } => cmd::rules::run(ctx, &cmd).await,
         Cmd::Config { cmd } => cmd::config::run(ctx, &cmd),
         // Ein Platzhalter ist ein Fehlschlag wie jeder andere und geht
         // deshalb denselben Weg: [`Renderer::diagnostic`] macht daraus mit
         // `--json` eine Zeile JSON auf `stdout` und sonst den Block auf
         // `stderr`.
         Cmd::Run(_) => Err(not_yet_failure("humanitl run", "HUM-067")),
-        Cmd::Rules(_) => Err(not_yet_failure("humanitl rules", "HUM-065")),
         Cmd::Audit(_) => Err(not_yet_failure("humanitl audit", "HUM-070")),
     }
 }

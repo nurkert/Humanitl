@@ -17,6 +17,9 @@ humanitl-sandbox.workspace = true
 
 chrono.workspace = true
 clap.workspace = true
+# `rules add --expires <RFC 3339>` baut einen `google.protobuf.Timestamp`; die
+# Wire-Form kennt keinen anderen Weg, einen Zeitpunkt zu schreiben.
+prost-types.workspace = true
 serde_json.workspace = true
 # `sandbox check` legt seinen Platzhalter-Socket und die Platzhalter-Dateien
 # der CA in einem eigenen Verzeichnis an, das mit dem Prozess verschwindet:
