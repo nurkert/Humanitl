@@ -1,0 +1,1114 @@
+//! Die Abbildung zwischen den Kern-Typen und der Wire-Form aus [`crate::v1`].
+//!
+//! Hier steht jede Übersetzung genau einmal. Der Fake ([`crate::fake`]) und der
+//! echte Dienst ([`crate::server`]) benutzen dieselben Funktionen; wo beide
+//! dasselbe Feld füllen, kann es nicht auseinanderlaufen, und die Oberfläche
+//! sieht zwischen Fake und Daemon keinen Unterschied (HUM-005, HUM-018).
+//!
+//! Zwei Regeln des Vertrags gelten hier und sind der Grund, warum die
+//! Übersetzung eine eigene Datei ist:
+//!
+//! - Bodies reisen nie in einem Ereignis, nur als [`v1::BodyRef`]
+//!   (`backlog/CONVENTIONS.md` 3.6). Der einzige Body in Richtung Daemon ist
+//!   [`v1::EditedRequest`], und der wird in [`request_from_proto`] gelesen.
+//! - Ein Enum mit `_UNSPECIFIED = 0` wird nie geraten. Wo die Gegenrichtung
+//!   ein Enum liest, ist `Unspecified` ein Fehler ([`EditedRequestError`]),
+//!   nie stillschweigend ein Vorgabewert.
+//!
+//! Fristen sind im Kern ein [`Instant`] (die Uhr, an der die Warteschlange
+//! hängt), im Vertrag ein `Timestamp`. [`wall_clock`] rechnet um; die
+//! Umrechnung geschieht beim Bauen des Ereignisses, damit die Frist, die die
+//! Oberfläche anzeigt, dieselbe ist, die die Warteschlange meint
+//! (`backlog/sprint-1.md`, HUM-019).
+
+use std::time::{Duration, Instant, SystemTime};
+
+use bytes::Bytes;
+use humanitl_core::http::{
+    Authority, BodyRef, HeaderMap, HeaderName, HeaderValue, HttpRequest, Method, Scheme,
+};
+use humanitl_core::rule::{Expiry, Rule};
+use humanitl_core::{
+    BlockReason, Decision, DecisionSource, Diagnostic, Finding, FixAction, FlowEvent, FlowId,
+    FlowState, HostName, Severity, UpstreamError,
+};
+use humanitl_proxy::registry::{FlowRecord, FlowRegistry};
+
+use crate::v1;
+
+/// Die Protokollfassung, die der Proxy in M1 beidseitig spricht (ADR-016).
+pub const HTTP_VERSION: &str = "HTTP/1.1";
+
+/// So viele Zeichen trägt `FlowDetail.body_preview` höchstens (docs/PROTOCOL.md 4).
+pub const BODY_PREVIEW_CHARS: usize = 4096;
+
+/// Warum eine `EditedRequest` nicht lesbar war.
+///
+/// Der Daemon lehnt eine unlesbare Anfrage mit `IPC_002` ab, statt sie
+/// stillschweigend zu `Allow` zu machen; der Grund steht im Diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum EditedRequestError {
+    /// `METHOD_UNSPECIFIED`, `METHOD_OTHER` ohne `method_raw`, oder der
+    /// Rohwert ist kein HTTP-Token.
+    #[error("the method is not a valid http method")]
+    Method,
+    /// Die URL hat kein bekanntes Schema (`http`, `https`, `ws`, `wss`).
+    #[error("the url has no known scheme")]
+    Scheme,
+    /// Der Host ist leer, kein gültiger Name und keine IP-Adresse.
+    #[error("the url has no valid host")]
+    Host,
+    /// Der Port ist keine Zahl von 1 bis 65535.
+    #[error("the url has no valid port")]
+    Port,
+    /// Die URL trägt ein Fragment oder Userinfo; beides ist kein Request-Ziel,
+    /// und der Fake ändert nicht stillschweigend, was der Mensch geschrieben hat.
+    #[error("the url carries a fragment or userinfo")]
+    Target,
+}
+
+/// Übersetzt einen Befund in seine Wire-Form.
+#[must_use]
+pub fn diagnostic_to_proto(diagnostic: &Diagnostic) -> v1::Diagnostic {
+    v1::Diagnostic {
+        code: diagnostic.code.as_str().to_owned(),
+        severity: severity_to_proto(diagnostic.severity) as i32,
+        title: diagnostic.title.clone(),
+        why: diagnostic.why.clone(),
+        fix: diagnostic.fix.as_ref().map(fix_to_proto),
+        docs_url: diagnostic.docs.clone().unwrap_or_default(),
+    }
+}
+
+/// Übersetzt eine Dringlichkeit in ihre Wire-Form.
+#[must_use]
+pub const fn severity_to_proto(severity: Severity) -> v1::Severity {
+    match severity {
+        Severity::Info => v1::Severity::Info,
+        Severity::Warning => v1::Severity::Warning,
+        Severity::Error => v1::Severity::Error,
+        Severity::Blocking => v1::Severity::Blocking,
+    }
+}
+
+/// Übersetzt einen Behebungsvorschlag in seine Wire-Form.
+#[must_use]
+pub fn fix_to_proto(fix: &FixAction) -> v1::FixAction {
+    use v1::fix_action::Action;
+
+    let action = match fix {
+        FixAction::SetEnv { key, value } => Action::SetEnv(v1::fix_action::SetEnv {
+            key: key.clone(),
+            value: value.clone(),
+        }),
+        FixAction::AddRule(rule) => Action::AddRule(rule_to_proto(rule)),
+        FixAction::InstallService => Action::InstallService(()),
+        FixAction::ChangeSetting { key, value } => {
+            Action::ChangeSetting(v1::fix_action::ChangeSetting {
+                key: key.clone(),
+                value: value.clone(),
+            })
+        }
+        FixAction::CopyCommand(command) => Action::CopyCommand(command.clone()),
+        FixAction::OpenUrl(url) => Action::OpenUrl(url.clone()),
+        FixAction::RemountReadOnly(path) => {
+            Action::RemountReadOnly(path.to_string_lossy().into_owned())
+        }
+    };
+    v1::FixAction {
+        action: Some(action),
+    }
+}
+
+/// Übersetzt eine Regel in ihre Wire-Form.
+#[must_use]
+pub fn rule_to_proto(rule: &Rule) -> v1::Rule {
+    let action = match rule.action {
+        humanitl_core::rule::Action::Allow => v1::RuleAction::Allow,
+        humanitl_core::rule::Action::Block => v1::RuleAction::Block,
+        humanitl_core::rule::Action::Ask => v1::RuleAction::Ask,
+        humanitl_core::rule::Action::Redact => v1::RuleAction::Redact,
+    };
+    v1::Rule {
+        rule_id: rule.id.to_string(),
+        action: action as i32,
+        matcher: Some(matcher_to_proto(&rule.matcher)),
+        expires: Some(expiry_to_proto(rule.expires)),
+        stream: rule.stream,
+        created_from_flow_id: rule
+            .created_from
+            .map_or_else(String::new, |id| id.to_string()),
+        bundled: rule.bundled,
+        note: rule.note.clone().unwrap_or_default(),
+        created_at: None,
+        position: 0,
+        hit_count: 0,
+        allow_private: rule.allow_private,
+    }
+}
+
+/// Übersetzt die Bedingung einer Regel in ihre Wire-Form.
+fn matcher_to_proto(matcher: &humanitl_core::rule::Matcher) -> v1::RuleMatcher {
+    v1::RuleMatcher {
+        host: matcher.host.to_string(),
+        methods: matcher
+            .methods
+            .as_ref()
+            .map(|methods| methods.iter().map(|m| method_to_proto(m) as i32).collect())
+            .unwrap_or_default(),
+        path: matcher
+            .path
+            .as_ref()
+            .map_or_else(String::new, ToString::to_string),
+        scheme: matcher
+            .scheme
+            .map_or(0, |scheme| scheme_to_proto(scheme) as i32),
+        port: u32::from(matcher.port.unwrap_or(0)),
+        upgrade: match matcher.upgrade {
+            Some(humanitl_core::http::Upgrade::WebSocket) => v1::Upgrade::Websocket as i32,
+            None => v1::Upgrade::None as i32,
+        },
+    }
+}
+
+/// Übersetzt die Gültigkeit einer Regel in ihre Wire-Form.
+fn expiry_to_proto(expiry: Expiry) -> v1::RuleExpiry {
+    let expiry = match expiry {
+        Expiry::Never => v1::rule_expiry::Expiry::Never(()),
+        Expiry::Session(_) => v1::rule_expiry::Expiry::Session(()),
+        Expiry::At(at) => v1::rule_expiry::Expiry::At(prost_types::Timestamp {
+            seconds: at.timestamp(),
+            nanos: i32::try_from(at.timestamp_subsec_nanos().min(999_999_999)).unwrap_or(0),
+        }),
+    };
+    v1::RuleExpiry {
+        expiry: Some(expiry),
+    }
+}
+
+/// Übersetzt eine HTTP-Methode in ihre Wire-Form.
+#[must_use]
+pub fn method_to_proto(method: &humanitl_core::http::Method) -> v1::Method {
+    match *method {
+        humanitl_core::http::Method::GET => v1::Method::Get,
+        humanitl_core::http::Method::HEAD => v1::Method::Head,
+        humanitl_core::http::Method::POST => v1::Method::Post,
+        humanitl_core::http::Method::PUT => v1::Method::Put,
+        humanitl_core::http::Method::PATCH => v1::Method::Patch,
+        humanitl_core::http::Method::DELETE => v1::Method::Delete,
+        humanitl_core::http::Method::OPTIONS => v1::Method::Options,
+        humanitl_core::http::Method::CONNECT => v1::Method::Connect,
+        humanitl_core::http::Method::TRACE => v1::Method::Trace,
+        _ => v1::Method::Other,
+    }
+}
+
+/// Übersetzt ein Schema in seine Wire-Form.
+#[must_use]
+pub const fn scheme_to_proto(scheme: humanitl_core::http::Scheme) -> v1::Scheme {
+    match scheme {
+        humanitl_core::http::Scheme::Http => v1::Scheme::Http,
+        humanitl_core::http::Scheme::Https => v1::Scheme::Https,
+        humanitl_core::http::Scheme::Ws => v1::Scheme::Ws,
+        humanitl_core::http::Scheme::Wss => v1::Scheme::Wss,
+    }
+}
+
+/// Das Ereignis, mit dem ein verpasster Rundfunk-Abschnitt gemeldet wird.
+#[must_use]
+pub fn lagged_event(dropped: u64) -> v1::FlowEvent {
+    v1::FlowEvent {
+        at: Some(timestamp(SystemTime::now())),
+        event: Some(v1::flow_event::Event::Lagged(v1::flow_event::Lagged {
+            dropped,
+        })),
+    }
+}
+
+/// Entscheidung, Blockgrund und Regel-Id in ihrer Wire-Form.
+pub(crate) fn decision_fields(
+    decision: Option<&Decision>,
+    source: Option<DecisionSource>,
+) -> (v1::DecisionKind, v1::BlockReason, String) {
+    let rule_id = match (decision, source) {
+        (
+            Some(Decision::Block {
+                reason: BlockReason::Rule(id),
+                ..
+            }),
+            _,
+        ) => id.to_string(),
+        (_, Some(DecisionSource::Rule(id))) => id.to_string(),
+        _ => String::new(),
+    };
+    let kind = match decision {
+        None => v1::DecisionKind::Unspecified,
+        Some(Decision::Allow) => v1::DecisionKind::Allow,
+        Some(Decision::AllowEdited { .. }) => v1::DecisionKind::AllowEdited,
+        Some(Decision::Block { .. }) => v1::DecisionKind::Block,
+        Some(Decision::TimedOut) => v1::DecisionKind::TimedOut,
+    };
+    let reason = match decision {
+        Some(Decision::Block { reason, .. }) => block_reason_to_proto(*reason),
+        Some(Decision::TimedOut) => v1::BlockReason::Timeout,
+        _ => v1::BlockReason::Unspecified,
+    };
+    (kind, reason, rule_id)
+}
+
+/// Die Notiz einer Block-Entscheidung, sonst leer.
+pub(crate) fn block_note(decision: &Decision) -> String {
+    match decision {
+        Decision::Block { note, .. } => note.clone().unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+/// Übersetzt einen Blockgrund in seine Wire-Form.
+#[must_use]
+pub const fn block_reason_to_proto(reason: BlockReason) -> v1::BlockReason {
+    use humanitl_core::BlockReason as Reason;
+    match reason {
+        Reason::User => v1::BlockReason::User,
+        Reason::Rule(_) => v1::BlockReason::Rule,
+        Reason::Timeout => v1::BlockReason::Timeout,
+        Reason::BodyCap => v1::BlockReason::BodyCap,
+        Reason::AuthorityMismatch => v1::BlockReason::AuthorityMismatch,
+        Reason::NoRoute => v1::BlockReason::NoRoute,
+        Reason::HoldMemory => v1::BlockReason::HoldMemory,
+        Reason::HoldMaxFlows => v1::BlockReason::HoldMaxFlows,
+        Reason::ClientTimeout => v1::BlockReason::ClientTimeout,
+        Reason::PrivateAddress => v1::BlockReason::PrivateAddress,
+    }
+}
+
+/// Übersetzt die Herkunft einer Entscheidung in ihre Wire-Form.
+#[must_use]
+pub const fn source_to_proto(source: DecisionSource) -> v1::DecisionSource {
+    match source {
+        DecisionSource::User => v1::DecisionSource::User,
+        DecisionSource::Rule(_) => v1::DecisionSource::Rule,
+        DecisionSource::Timeout => v1::DecisionSource::Timeout,
+        DecisionSource::Passthrough => v1::DecisionSource::Passthrough,
+        DecisionSource::System => v1::DecisionSource::System,
+    }
+}
+
+/// Übersetzt einen Upstream-Fehler in seine Wire-Form.
+#[must_use]
+pub const fn upstream_error_to_proto(error: UpstreamError) -> v1::UpstreamError {
+    match error {
+        UpstreamError::Dns => v1::UpstreamError::Dns,
+        UpstreamError::Connect => v1::UpstreamError::Connect,
+        UpstreamError::Tls => v1::UpstreamError::Tls,
+        UpstreamError::PrivateAddress(_) => v1::UpstreamError::PrivateAddress,
+        UpstreamError::Timeout => v1::UpstreamError::Timeout,
+    }
+}
+
+/// Übersetzt einen Flow-Zustand in seine Wire-Form.
+#[must_use]
+pub const fn flow_state_to_proto(state: &FlowState) -> v1::FlowState {
+    match state {
+        FlowState::Received => v1::FlowState::Received,
+        FlowState::Analyzed { .. } => v1::FlowState::Analyzed,
+        FlowState::Held { .. } => v1::FlowState::Held,
+        FlowState::Decided(_) => v1::FlowState::Decided,
+        FlowState::Forwarded => v1::FlowState::Forwarded,
+        FlowState::Responded { .. } => v1::FlowState::Responded,
+        FlowState::Failed { .. } => v1::FlowState::Failed,
+        FlowState::Recorded => v1::FlowState::Recorded,
+    }
+}
+
+/// Der Rohwert einer Methode, aber nur bei einer unbekannten.
+pub(crate) fn method_raw(method: &Method) -> String {
+    if method_to_proto(method) == v1::Method::Other {
+        method.as_str().to_owned()
+    } else {
+        String::new()
+    }
+}
+
+/// Übersetzt ein Ziel in seine Wire-Form.
+#[must_use]
+pub fn authority_to_proto(authority: &Authority) -> v1::Authority {
+    v1::Authority {
+        host: authority.host.to_string(),
+        port: u32::from(authority.port),
+        is_ip_literal: matches!(authority.host, HostName::Ip(_)),
+        display_host: authority.host.display(),
+    }
+}
+
+/// Übersetzt Kopfzeilen in ihre Wire-Form.
+#[must_use]
+pub fn headers_to_proto(headers: &HeaderMap) -> Vec<v1::Header> {
+    headers
+        .iter()
+        .map(|(name, value)| v1::Header {
+            name: name.as_str().to_owned(),
+            value: value.as_bytes().to_vec(),
+        })
+        .collect()
+}
+
+/// Liest Kopfzeilen aus ihrer Wire-Form.
+///
+/// Eine Kopfzeile, deren Name oder Wert HTTP nicht erlaubt, fällt weg; an
+/// einer kaputten Eingabe stirbt der Daemon nicht.
+#[must_use]
+pub fn headers_from_proto(headers: &[v1::Header]) -> HeaderMap {
+    let mut map = HeaderMap::new();
+    for header in headers {
+        let Ok(name) = HeaderName::from_bytes(header.name.as_bytes()) else {
+            continue;
+        };
+        let Ok(value) = HeaderValue::from_bytes(&header.value) else {
+            continue;
+        };
+        map.append(name, value);
+    }
+    map
+}
+
+/// Übersetzt einen Body-Verweis in seine Wire-Form.
+#[must_use]
+pub fn body_to_proto(body: &BodyRef) -> v1::BodyRef {
+    v1::BodyRef {
+        sha256: body.sha256.to_vec(),
+        size: body.size,
+        truncated: body.truncated,
+        content_type: body.content_type.clone().unwrap_or_default(),
+    }
+}
+
+/// Übersetzt eine Anfrage in ihre Wire-Form.
+#[must_use]
+pub fn request_to_proto(request: &HttpRequest) -> v1::HttpRequest {
+    v1::HttpRequest {
+        method: method_to_proto(&request.method) as i32,
+        method_raw: method_raw(&request.method),
+        scheme: scheme_to_proto(request.scheme) as i32,
+        authority: Some(authority_to_proto(&request.authority)),
+        path_and_query: request.path_and_query.clone(),
+        headers: headers_to_proto(&request.headers),
+        body: Some(body_to_proto(&request.body)),
+        version: HTTP_VERSION.to_owned(),
+    }
+}
+
+/// Liest die bearbeitete Anfrage aus ihrer Wire-Form.
+///
+/// Anders als `HttpRequest` trägt `EditedRequest` den Body selbst; er bleibt
+/// inline, damit der Aufrufer ihn weiterreichen oder ablegen kann.
+/// Die URL wird ohne die `url`-Crate zerlegt: `scheme://host[:port]/path?query`.
+/// Fehlt der Port, gilt der des Schemas; fehlt der Pfad, gilt `/`. Der
+/// `Content-Type` des Bodys kommt aus den Kopfzeilen.
+///
+/// # Errors
+///
+/// [`EditedRequestError`] nennt, was unlesbar war. Der Aufrufer lehnt dann
+/// ab; er macht aus der Anfrage nie ein `Allow`.
+pub fn request_from_proto(request: &v1::EditedRequest) -> Result<HttpRequest, EditedRequestError> {
+    let method = method_from_proto(request.method, &request.method_raw)?;
+    let (scheme, authority, path_and_query) = split_url(&request.url)?;
+    let headers = headers_from_proto(&request.headers);
+    let content_type = headers
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned);
+    let mut body = BodyRef::from_bytes(Bytes::copy_from_slice(&request.body));
+    body.content_type = content_type;
+    Ok(HttpRequest::new(method, scheme, authority, path_and_query)
+        .with_headers(headers)
+        .with_body(body))
+}
+
+/// Die Methode aus Enum und Rohwert. Ein gesetzter Rohwert gilt.
+fn method_from_proto(method: i32, raw: &str) -> Result<Method, EditedRequestError> {
+    let text = if raw.is_empty() {
+        match v1::Method::try_from(method) {
+            Ok(v1::Method::Unspecified | v1::Method::Other) | Err(_) => {
+                return Err(EditedRequestError::Method);
+            }
+            Ok(known) => known.as_str_name().trim_start_matches("METHOD_").to_owned(),
+        }
+    } else {
+        raw.to_owned()
+    };
+    Method::from_bytes(text.as_bytes()).map_err(|_| EditedRequestError::Method)
+}
+
+/// Zerlegt `scheme://host[:port]/path?query` in Schema, Ziel und Pfad.
+fn split_url(url: &str) -> Result<(Scheme, Authority, String), EditedRequestError> {
+    let (scheme, rest) = url.split_once("://").ok_or(EditedRequestError::Scheme)?;
+    let scheme = Scheme::parse(scheme).ok_or(EditedRequestError::Scheme)?;
+    if rest.contains('#') {
+        return Err(EditedRequestError::Target);
+    }
+    let (authority, path) = match rest.find(['/', '?']) {
+        Some(index) => (&rest[..index], &rest[index..]),
+        None => (rest, "/"),
+    };
+    let path_and_query = if path.starts_with('?') {
+        format!("/{path}")
+    } else {
+        path.to_owned()
+    };
+    if authority.contains('@') {
+        return Err(EditedRequestError::Target);
+    }
+    let (host, port) = split_host_port(authority)?;
+    let host = HostName::parse(host).map_err(|_| EditedRequestError::Host)?;
+    let port = match port {
+        Some(text) => text
+            .parse::<u16>()
+            .ok()
+            .filter(|port| *port != 0)
+            .ok_or(EditedRequestError::Port)?,
+        None => scheme.default_port(),
+    };
+    Ok((scheme, Authority::new(host, port), path_and_query))
+}
+
+/// `host`, `host:port`, `[v6]`, `[v6]:port`.
+fn split_host_port(authority: &str) -> Result<(&str, Option<&str>), EditedRequestError> {
+    if authority.is_empty() {
+        return Err(EditedRequestError::Host);
+    }
+    if authority.starts_with('[') {
+        let end = authority.find(']').ok_or(EditedRequestError::Host)?;
+        let (host, after) = authority.split_at(end + 1);
+        return match after.strip_prefix(':') {
+            Some(port) => Ok((host, Some(port))),
+            None if after.is_empty() => Ok((host, None)),
+            None => Err(EditedRequestError::Host),
+        };
+    }
+    Ok(authority
+        .rsplit_once(':')
+        .map_or((authority, None), |(host, port)| (host, Some(port))))
+}
+
+/// Die Vorschau eines Bodys für `FlowDetail.body_preview`: die ersten
+/// [`BODY_PREVIEW_CHARS`] Zeichen als UTF-8, ungültige Bytes als U+FFFD.
+///
+/// Gelesen werden höchstens `4 * BODY_PREVIEW_CHARS` Bytes, denn länger sind
+/// so viele Zeichen in UTF-8 nie. Ein am Schnitt zerteiltes Zeichen läge
+/// damit immer hinter dem letzten gezeigten und fällt weg.
+#[must_use]
+pub fn body_preview(body: &[u8]) -> String {
+    let scan = body.len().min(BODY_PREVIEW_CHARS * 4);
+    String::from_utf8_lossy(&body[..scan])
+        .chars()
+        .take(BODY_PREVIEW_CHARS)
+        .collect()
+}
+
+/// Übersetzt einen Fund in seine Wire-Form.
+#[must_use]
+pub fn finding_to_proto(finding: &Finding) -> v1::Finding {
+    let (location, header_name) = match &finding.location {
+        humanitl_core::FindingLocation::Header(name) => {
+            (v1::FindingLocation::Header, name.as_str().to_owned())
+        }
+        humanitl_core::FindingLocation::Query => (v1::FindingLocation::Query, String::new()),
+        humanitl_core::FindingLocation::Body => (v1::FindingLocation::Body, String::new()),
+    };
+    let tier = match finding.tier {
+        humanitl_core::Tier::Checksum => v1::FindingTier::Checksum,
+        humanitl_core::Tier::Regex => v1::FindingTier::Regex,
+        humanitl_core::Tier::UserTerm => v1::FindingTier::UserTerm,
+    };
+    v1::Finding {
+        kind: finding_kind_text(&finding.kind),
+        location: location as i32,
+        header_name,
+        span_start: u64::try_from(finding.span.start).unwrap_or(u64::MAX),
+        span_end: u64::try_from(finding.span.end).unwrap_or(u64::MAX),
+        tier: tier as i32,
+        value_hash: finding.value_hash.to_vec(),
+        display_prefix: finding.display_prefix.clone(),
+        resolved: false,
+    }
+}
+
+/// Der Wire-Name einer Fundart, zum Beispiel `api_key.github`.
+fn finding_kind_text(kind: &humanitl_core::FindingKind) -> String {
+    use humanitl_core::FindingKind as Kind;
+    match kind {
+        Kind::ApiKey(name) | Kind::UserTerm(name) | Kind::Custom(name) => {
+            format!("{}.{name}", kind.as_str())
+        }
+        other => other.as_str().to_owned(),
+    }
+}
+
+/// Ein Zeitpunkt in der Wire-Form.
+#[must_use]
+pub fn timestamp(at: SystemTime) -> prost_types::Timestamp {
+    at.duration_since(SystemTime::UNIX_EPOCH).map_or_else(
+        |_| prost_types::Timestamp::default(),
+        |since| prost_types::Timestamp {
+            seconds: i64::try_from(since.as_secs()).unwrap_or(i64::MAX),
+            nanos: i32::try_from(since.subsec_nanos()).unwrap_or_default(),
+        },
+    )
+}
+
+/// Die Spanne zwischen zwei Zeitpunkten in der Wire-Form.
+#[must_use]
+pub fn duration_between(from: SystemTime, to: SystemTime) -> prost_types::Duration {
+    let span = to.duration_since(from).unwrap_or(Duration::ZERO);
+    prost_types::Duration {
+        seconds: i64::try_from(span.as_secs()).unwrap_or(i64::MAX),
+        nanos: i32::try_from(span.subsec_nanos()).unwrap_or_default(),
+    }
+}
+
+/// Der registrierbare Teil eines Hostnamens, grob geschätzt.
+pub(crate) fn apex_of(host: &HostName) -> String {
+    match host {
+        HostName::Ip(ip) => ip.to_string(),
+        HostName::Dns(name) => {
+            let labels: Vec<&str> = name.split('.').collect();
+            if labels.len() <= 2 {
+                name.clone()
+            } else {
+                labels[labels.len() - 2..].join(".")
+            }
+        }
+    }
+}
+
+/// Rechnet eine Frist des Kerns in die Wanduhrzeit des Vertrags um.
+///
+/// Der Kern misst Fristen als [`Instant`], weil nur diese Uhr monoton ist und
+/// weil die Warteschlange ihren Zeitgeber daran hängt. Der Vertrag überträgt
+/// einen `Timestamp`, denn der Client rechnet keine fremde Laufzeituhr um.
+/// Beide beschreiben denselben Augenblick: die verbleibende Dauer wird auf die
+/// Kalenderuhr addiert. Eine Frist, die schon abgelaufen ist, ergibt „jetzt".
+#[must_use]
+pub fn wall_clock(deadline: Instant) -> SystemTime {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    SystemTime::now()
+        .checked_add(remaining)
+        .unwrap_or_else(SystemTime::now)
+}
+
+/// Was der Katalog über die Ziel-Domain wüsste.
+///
+/// Bis `humanitl-catalog` (HUM-031) trägt die Antwort nur den Apex, den
+/// `apex_of` aus dem Hostnamen ableitet. Rang und Katalog-Eintrag bleiben
+/// „unbekannt" (0 und leer): eine erfundene Zahl sähe in der Oberfläche wie
+/// eine gemessene aus.
+#[must_use]
+pub fn domain_of(authority: &Authority, first_seen: SystemTime) -> v1::DomainInfo {
+    v1::DomainInfo {
+        apex: apex_of(&authority.host),
+        catalog_id: String::new(),
+        tranco_rank: 0,
+        first_seen: Some(timestamp(first_seen)),
+        seen_count: 1,
+    }
+}
+
+/// Die Zeilendarstellung eines Datensatzes der Registry.
+///
+/// Was die Registry nicht führt, bleibt leer, statt geraten zu werden
+/// (`docs/ARCHITECTURE.md` 1.3, HUM-016):
+///
+/// - `decision_source` ist nur dort gesetzt, wo die Entscheidung selbst die
+///   Herkunft nennt (Ablauf, Regel). Der [`FlowRecord`] merkt sich die
+///   Herkunft nicht; im Ereignisstrom steht sie vollständig
+///   ([`v1::flow_event::Decided`]).
+/// - `duration` bleibt leer, weil die Registry keinen Endzeitpunkt führt; der
+///   Recorder (HUM-026) trägt ihn nach.
+/// - `finding_count` zählt nur, solange der Flow in [`FlowState::Analyzed`]
+///   steht; danach hält der Zustand die Funde nicht mehr.
+/// - `response_size`, `origin_tool` und `passthrough` sind in M1 unbekannt.
+#[must_use]
+pub fn record_to_summary(record: &FlowRecord) -> v1::FlowSummary {
+    let request = &record.request;
+    let (kind, block_reason, rule_id) = decision_fields(record.decision.as_ref(), None);
+    v1::FlowSummary {
+        flow_id: record.id.to_string(),
+        session_id: record.session.to_string(),
+        received_at: Some(timestamp(record.created)),
+        method: method_to_proto(&request.method) as i32,
+        method_raw: method_raw(&request.method),
+        scheme: scheme_to_proto(request.scheme) as i32,
+        authority: Some(authority_to_proto(&request.authority)),
+        path: request.path_and_query.clone(),
+        state: flow_state_to_proto(&record.state) as i32,
+        decision: kind as i32,
+        decision_source: implied_source(record.decision.as_ref()) as i32,
+        block_reason: block_reason as i32,
+        rule_id,
+        status: u32::from(record.response_status.unwrap_or(0)),
+        request_size: request.body.size,
+        response_size: 0,
+        duration: None,
+        finding_count: match &record.state {
+            FlowState::Analyzed { findings } => u32::try_from(findings.len()).unwrap_or(u32::MAX),
+            _ => 0,
+        },
+        edited: matches!(record.decision, Some(Decision::AllowEdited { .. })),
+        passthrough: false,
+        deadline: record.deadline.map(|at| timestamp(wall_clock(at))),
+        origin_tool: String::new(),
+        upstream_error: match &record.state {
+            FlowState::Failed { error } => upstream_error_to_proto(*error) as i32,
+            _ => 0,
+        },
+    }
+}
+
+/// Die Herkunft, soweit die Entscheidung selbst sie nennt.
+///
+/// Siehe [`record_to_summary`]: der [`FlowRecord`] speichert die Herkunft
+/// nicht, und geraten wird sie nicht.
+const fn implied_source(decision: Option<&Decision>) -> v1::DecisionSource {
+    match decision {
+        Some(Decision::TimedOut) => v1::DecisionSource::Timeout,
+        Some(Decision::Block {
+            reason: BlockReason::Rule(_),
+            ..
+        }) => v1::DecisionSource::Rule,
+        _ => v1::DecisionSource::Unspecified,
+    }
+}
+
+/// Alles, was der Detail-Bereich zu einem Flow zeigt.
+///
+/// Die Vorschau des Bodys steht nur hier, nie in einem Ereignis
+/// (`backlog/CONVENTIONS.md` 3.6). Antwort-Kopfzeilen und Funde führt die
+/// Registry nicht; sie kommen mit dem Recorder (HUM-026).
+#[must_use]
+pub fn record_to_detail(record: &FlowRecord) -> v1::FlowDetail {
+    v1::FlowDetail {
+        summary: Some(record_to_summary(record)),
+        request: Some(request_to_proto(&record.request)),
+        edited_request: None,
+        response: record.response_status.map(|status| v1::HttpResponseHead {
+            status: u32::from(status),
+            headers: Vec::new(),
+            version: HTTP_VERSION.to_owned(),
+        }),
+        response_body: None,
+        findings: match &record.state {
+            FlowState::Analyzed { findings } => findings.iter().map(finding_to_proto).collect(),
+            _ => Vec::new(),
+        },
+        diagnostics: Vec::new(),
+        domain: Some(domain_of(&record.request.authority, record.created)),
+        body_preview: body_preview(record.request.body.inline.as_deref().unwrap_or_default()),
+    }
+}
+
+/// Übersetzt ein Ereignis des echten Daemons in seine Wire-Form.
+///
+/// Die Registry liefert dazu, was das Ereignis nicht selbst trägt: die
+/// Zeilendarstellung für `Received` und die Sitzung, zu der der Flow gehört.
+/// Kennt sie den Flow noch nicht — `Received` wird veröffentlicht, bevor die
+/// Pipeline den Datensatz anlegt —, entsteht die Zeile aus der Anfrage im
+/// Ereignis selbst.
+#[must_use]
+pub fn flow_event_to_proto(event: &FlowEvent, registry: &FlowRegistry) -> v1::FlowEvent {
+    use v1::flow_event::Event;
+
+    let flow_id = event.flow_id().map(|id| id.to_string()).unwrap_or_default();
+    let wire = match event {
+        FlowEvent::Received {
+            flow_id: id,
+            at,
+            request,
+        } => Event::Received(v1::flow_event::Received {
+            summary: Some(registry.get(*id).map_or_else(
+                || received_summary(*id, *at, request),
+                |r| record_to_summary(&r),
+            )),
+            domain: Some(domain_of(&request.authority, *at)),
+        }),
+        FlowEvent::Analyzed { findings, .. } => Event::Analyzed(v1::flow_event::Analyzed {
+            flow_id,
+            findings: findings.iter().map(finding_to_proto).collect(),
+        }),
+        FlowEvent::Held {
+            deadline,
+            queue_bytes,
+            queue_count,
+            ..
+        } => Event::Held(v1::flow_event::Held {
+            flow_id,
+            deadline: Some(timestamp(wall_clock(*deadline))),
+            queue_bytes: *queue_bytes,
+            queue_count: *queue_count,
+        }),
+        FlowEvent::Decided {
+            decision, source, ..
+        } => {
+            let (kind, reason, rule_id) = decision_fields(Some(decision), Some(*source));
+            Event::Decided(v1::flow_event::Decided {
+                flow_id,
+                kind: kind as i32,
+                source: source_to_proto(*source) as i32,
+                block_reason: reason as i32,
+                rule_id,
+                note: block_note(decision),
+            })
+        }
+        FlowEvent::Forwarded { .. } => Event::Forwarded(v1::FlowRef { flow_id }),
+        FlowEvent::ResponseHeaders { status, .. } => {
+            Event::ResponseHeaders(v1::flow_event::ResponseHeaders {
+                flow_id,
+                head: Some(v1::HttpResponseHead {
+                    status: u32::from(*status),
+                    headers: Vec::new(),
+                    version: HTTP_VERSION.to_owned(),
+                }),
+                streaming: false,
+            })
+        }
+        FlowEvent::ResponseChunk { len, .. } => {
+            Event::ResponseChunk(v1::flow_event::ResponseChunk {
+                flow_id,
+                bytes_so_far: *len,
+            })
+        }
+        FlowEvent::Failed { error, .. } => Event::Failed(v1::flow_event::Failed {
+            flow_id,
+            error: upstream_error_to_proto(*error) as i32,
+            resolved_ip: match error {
+                UpstreamError::PrivateAddress(ip) => ip.to_string(),
+                UpstreamError::Dns
+                | UpstreamError::Connect
+                | UpstreamError::Tls
+                | UpstreamError::Timeout => String::new(),
+            },
+        }),
+        FlowEvent::TimedOut { .. } => Event::TimedOut(v1::FlowRef { flow_id }),
+        FlowEvent::Recorded { .. } => Event::Recorded(v1::FlowRef { flow_id }),
+        FlowEvent::Lagged { n } => Event::Lagged(v1::flow_event::Lagged { dropped: *n }),
+        FlowEvent::Diagnostic { diagnostic, .. } => {
+            Event::Diagnostic(diagnostic_to_proto(diagnostic))
+        }
+    };
+    v1::FlowEvent {
+        at: Some(timestamp(event.at().unwrap_or_else(SystemTime::now))),
+        event: Some(wire),
+    }
+}
+
+/// Die Zeile eines Flows, den die Registry noch nicht kennt.
+///
+/// `Received` entsteht im Handler, bevor die Pipeline den Datensatz anlegt.
+/// Was nur die Registry wüsste — die Sitzung —, bleibt hier leer; der Zustand
+/// ist der eines gerade angekommenen Flows.
+fn received_summary(id: FlowId, at: SystemTime, request: &HttpRequest) -> v1::FlowSummary {
+    v1::FlowSummary {
+        flow_id: id.to_string(),
+        session_id: String::new(),
+        received_at: Some(timestamp(at)),
+        method: method_to_proto(&request.method) as i32,
+        method_raw: method_raw(&request.method),
+        scheme: scheme_to_proto(request.scheme) as i32,
+        authority: Some(authority_to_proto(&request.authority)),
+        path: request.path_and_query.clone(),
+        state: v1::FlowState::Received as i32,
+        request_size: request.body.size,
+        ..v1::FlowSummary::default()
+    }
+}
+
+// ---------- Auswahl auf der Wire-Form ----------
+//
+// Filter, Anker und Seiten arbeiten auf [`v1::FlowSummary`], nicht auf den
+// Kern-Typen: der Fake hat keine Registry, der echte Dienst keine Sitzungsdatei,
+// aber beide beantworten `ListFlows` und `Subscribe(since_flow_id)`. Die
+// Auswahl steht deshalb hier, damit sie für beide dieselbe ist und die
+// Oberfläche keinen Unterschied sieht.
+
+/// Ob ein Flow hinter einem Anker liegt.
+///
+/// Ohne Anker passt jeder Flow. [`FlowId`] ist ein UUID der Fassung 7; die Ordnung der Ids
+/// ist die Ordnung der Ankunft.
+#[must_use]
+pub fn after(summary: &v1::FlowSummary, anchor: Option<FlowId>) -> bool {
+    match anchor {
+        None => true,
+        Some(anchor) => FlowId::parse(&summary.flow_id).is_ok_and(|id| id > anchor),
+    }
+}
+
+/// Gegenstück zu [`after`] für absteigende Seiten: nur Flows vor dem Anker.
+#[must_use]
+pub fn before(summary: &v1::FlowSummary, anchor: Option<FlowId>) -> bool {
+    match anchor {
+        None => true,
+        Some(anchor) => FlowId::parse(&summary.flow_id).is_ok_and(|id| id < anchor),
+    }
+}
+
+/// Ob ein Flow zum Filtertext passt.
+///
+/// Unterstützt `host:<text>` und `state:<name>`; alles andere ist eine
+/// Teilzeichenkette über Host und Pfad. Die vollständige Filtersprache des
+/// History-Screens baut HUM-030.
+#[must_use]
+pub fn matches_filter(summary: &v1::FlowSummary, filter: &str) -> bool {
+    filter.split_whitespace().all(|token| {
+        let host = summary
+            .authority
+            .as_ref()
+            .map(|authority| authority.host.clone())
+            .unwrap_or_default();
+        match token.split_once(':') {
+            Some(("host", value)) => host.contains(value),
+            Some(("state", value)) => state_name(summary.state).eq_ignore_ascii_case(value),
+            _ => host.contains(token) || summary.path.contains(token),
+        }
+    })
+}
+
+/// Der Kurzname eines Zustands, wie ihn der Filter erwartet.
+#[must_use]
+pub fn state_name(state: i32) -> &'static str {
+    v1::FlowState::try_from(state)
+        .unwrap_or(v1::FlowState::Unspecified)
+        .as_str_name()
+        .trim_start_matches("FLOW_STATE_")
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use std::time::{Duration, Instant, SystemTime};
+
+    use humanitl_config::Limits;
+    use humanitl_core::{
+        Authority, BodyRef, Decision, DecisionSource, Flow, FlowId, FlowState, HostName,
+        HttpRequest, Method, Scheme, SessionId, TransitionInput, UpstreamError,
+    };
+    use humanitl_proxy::ConnMeta;
+    use humanitl_proxy::registry::{FlowRecord, FlowRegistry};
+
+    use super::{flow_event_to_proto, record_to_detail, record_to_summary, wall_clock};
+    use crate::v1;
+
+    fn flow(session: SessionId, host: &str) -> Flow {
+        let request = HttpRequest::new(
+            Method::POST,
+            Scheme::Https,
+            Authority::with_scheme(HostName::Dns(host.to_owned()), Scheme::Https),
+            "/v1/chat?stream=true",
+        )
+        .with_body(BodyRef::detached([7; 32], 42));
+        Flow::new(FlowId::new(), session, SystemTime::now(), request)
+    }
+
+    #[test]
+    fn a_deadline_becomes_a_wall_clock_time_in_the_future() {
+        let now = SystemTime::now();
+        let at = wall_clock(Instant::now() + Duration::from_secs(30));
+        let ahead = at.duration_since(now).unwrap();
+        assert!(
+            ahead > Duration::from_secs(29) && ahead < Duration::from_secs(31),
+            "{ahead:?}"
+        );
+
+        // Eine abgelaufene Frist liegt nicht in der Vergangenheit, sondern jetzt.
+        let elapsed = Instant::now()
+            .checked_sub(Duration::from_secs(30))
+            .unwrap_or_else(Instant::now);
+        let past = wall_clock(elapsed);
+        assert!(past.duration_since(now).unwrap() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_record_becomes_a_row_without_inventing_anything() {
+        let session = SessionId::new();
+        let flow = flow(session, "api.example.com");
+        let record = FlowRecord::new(&flow, &ConnMeta::plain(session));
+
+        let row = record_to_summary(&record);
+        assert_eq!(row.flow_id, flow.id.to_string());
+        assert_eq!(row.session_id, session.to_string());
+        assert_eq!(row.method, v1::Method::Post as i32);
+        assert_eq!(row.scheme, v1::Scheme::Https as i32);
+        assert_eq!(row.path, "/v1/chat?stream=true");
+        assert_eq!(row.state, v1::FlowState::Received as i32);
+        assert_eq!(row.request_size, 42);
+        assert_eq!(row.authority.unwrap().host, "api.example.com");
+        assert_eq!(row.decision, v1::DecisionKind::Unspecified as i32);
+        assert_eq!(row.decision_source, v1::DecisionSource::Unspecified as i32);
+        assert!(row.deadline.is_none(), "nothing is held here");
+        assert!(row.duration.is_none(), "the registry has no end time");
+        assert_eq!(row.status, 0);
+        assert!(row.origin_tool.is_empty());
+    }
+
+    #[test]
+    fn a_detail_shows_the_request_and_the_apex_but_no_body() {
+        let session = SessionId::new();
+        let flow = flow(session, "cdn.api.example.com");
+        let record = FlowRecord::new(&flow, &ConnMeta::plain(session));
+
+        let detail = record_to_detail(&record);
+        assert_eq!(detail.domain.unwrap().apex, "example.com");
+        let request = detail.request.unwrap();
+        assert_eq!(request.body.unwrap().size, 42);
+        assert!(
+            detail.body_preview.is_empty(),
+            "a detached body has nothing to preview"
+        );
+        assert!(detail.response.is_none());
+    }
+
+    #[test]
+    fn the_state_of_a_record_reaches_the_row() {
+        let session = SessionId::new();
+        let mut flow = flow(session, "api.example.com");
+        let registry = FlowRegistry::new(&Limits::default());
+        registry.insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+
+        for input in [
+            TransitionInput::Analyze { findings: vec![] },
+            TransitionInput::Hold {
+                deadline: Instant::now() + Duration::from_secs(30),
+                queue_bytes: 42,
+                queue_count: 1,
+            },
+            TransitionInput::Decide {
+                decision: Decision::Allow,
+                source: DecisionSource::User,
+            },
+            TransitionInput::Forward,
+        ] {
+            let event = flow.apply(input, SystemTime::now()).unwrap();
+            registry.record(&event);
+        }
+
+        let row = record_to_summary(&registry.get(flow.id).unwrap());
+        assert_eq!(row.state, v1::FlowState::Forwarded as i32);
+        assert_eq!(row.decision, v1::DecisionKind::Allow as i32);
+        assert!(!row.edited);
+    }
+
+    #[test]
+    fn received_translates_even_before_the_registry_knows_the_flow() {
+        let registry = FlowRegistry::new(&Limits::default());
+        let flow = flow(SessionId::new(), "api.example.com");
+
+        let event = flow_event_to_proto(&flow.received_event(), &registry);
+        let Some(v1::flow_event::Event::Received(received)) = event.event else {
+            panic!("received");
+        };
+        let summary = received.summary.unwrap();
+        assert_eq!(summary.flow_id, flow.id.to_string());
+        assert_eq!(summary.state, v1::FlowState::Received as i32);
+        assert!(
+            summary.session_id.is_empty(),
+            "the session is only known to the registry"
+        );
+        assert_eq!(received.domain.unwrap().apex, "example.com");
+    }
+
+    #[test]
+    fn a_held_event_carries_the_deadline_and_the_queue_counters() {
+        let registry = FlowRegistry::new(&Limits::default());
+        let session = SessionId::new();
+        let mut flow = flow(session, "api.example.com");
+        flow.apply(
+            TransitionInput::Analyze { findings: vec![] },
+            SystemTime::now(),
+        )
+        .unwrap();
+        let event = flow
+            .apply(
+                TransitionInput::Hold {
+                    deadline: Instant::now() + Duration::from_secs(60),
+                    queue_bytes: 42,
+                    queue_count: 1,
+                },
+                SystemTime::now(),
+            )
+            .unwrap();
+
+        let wire = flow_event_to_proto(&event, &registry);
+        let Some(v1::flow_event::Event::Held(held)) = wire.event else {
+            panic!("held");
+        };
+        assert_eq!(held.queue_bytes, 42);
+        assert_eq!(held.queue_count, 1);
+        let deadline = held.deadline.unwrap();
+        assert!(
+            deadline.seconds > 0,
+            "an absolute timestamp, not a duration"
+        );
+    }
+
+    #[test]
+    fn a_failed_event_names_the_private_address_it_refused() {
+        use std::net::{IpAddr, Ipv4Addr};
+
+        let registry = FlowRegistry::new(&Limits::default());
+        let event = humanitl_core::FlowEvent::Failed {
+            flow_id: FlowId::new(),
+            at: SystemTime::now(),
+            error: UpstreamError::PrivateAddress(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5))),
+        };
+
+        let wire = flow_event_to_proto(&event, &registry);
+        let Some(v1::flow_event::Event::Failed(failed)) = wire.event else {
+            panic!("failed");
+        };
+        assert_eq!(failed.error, v1::UpstreamError::PrivateAddress as i32);
+        assert_eq!(failed.resolved_ip, "10.0.0.5");
+    }
+
+    #[test]
+    fn a_lagged_event_keeps_its_count() {
+        let registry = FlowRegistry::new(&Limits::default());
+        let wire = flow_event_to_proto(&humanitl_core::FlowEvent::Lagged { n: 12 }, &registry);
+        let Some(v1::flow_event::Event::Lagged(lagged)) = wire.event else {
+            panic!("lagged");
+        };
+        assert_eq!(lagged.dropped, 12);
+    }
+
+    #[test]
+    fn a_failed_flow_shows_its_error_in_the_row() {
+        let session = SessionId::new();
+        let mut flow = flow(session, "api.example.com");
+        let registry = FlowRegistry::new(&Limits::default());
+        registry.insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+        for input in [
+            TransitionInput::Analyze { findings: vec![] },
+            TransitionInput::Hold {
+                deadline: Instant::now() + Duration::from_secs(30),
+                queue_bytes: 42,
+                queue_count: 1,
+            },
+            TransitionInput::Decide {
+                decision: Decision::Allow,
+                source: DecisionSource::User,
+            },
+            TransitionInput::Forward,
+            TransitionInput::Fail {
+                error: UpstreamError::Dns,
+            },
+        ] {
+            let event = flow.apply(input, SystemTime::now()).unwrap();
+            registry.record(&event);
+        }
+
+        let record = registry.get(flow.id).unwrap();
+        assert!(matches!(record.state, FlowState::Failed { .. }));
+        let row = record_to_summary(&record);
+        assert_eq!(row.state, v1::FlowState::Failed as i32);
+        assert_eq!(row.upstream_error, v1::UpstreamError::Dns as i32);
+    }
+}

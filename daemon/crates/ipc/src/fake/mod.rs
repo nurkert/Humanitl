@@ -25,14 +25,18 @@ use tokio_stream::StreamExt as _;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::{BroadcastStream, UnboundedReceiverStream};
 
+use crate::convert::{
+    after, before, diagnostic_to_proto, lagged_event, matches_filter, request_from_proto, timestamp,
+};
 use crate::server_stub::{BoxStream, DaemonApi};
 use crate::v1;
 use crate::{PROTO_MAJOR, PROTO_MINOR};
 
+pub use crate::convert::EditedRequestError;
 pub use player::{PlayerOptions, Session, SessionError};
-pub use state::{EditedRequestError, FakeFlow, FakeState, SessionMeta, StoredResponse};
+pub use state::{FakeFlow, FakeState, SessionMeta, StoredResponse};
 
-use state::{BODY_CHUNK_BYTES, request_from_proto, timestamp};
+use state::BODY_CHUNK_BYTES;
 
 /// Die mitgelieferte Regel, die `models.dev` blockt.
 ///
@@ -203,9 +207,7 @@ impl DaemonApi for FakeDaemon {
             BroadcastStream::new(self.state.subscribe()).filter_map(move |item| match item {
                 Ok(event) if keeps(&state, &event, include_passthrough) => Some(event),
                 Ok(_) => None,
-                Err(BroadcastStreamRecvError::Lagged(dropped)) => {
-                    Some(state::lagged_event(dropped))
-                }
+                Err(BroadcastStreamRecvError::Lagged(dropped)) => Some(lagged_event(dropped)),
             });
         let backlog = self.backlog(&request);
         Box::pin(tokio_stream::iter(backlog).chain(live))
@@ -681,7 +683,7 @@ impl FakeDaemon {
             diagnostics: resolved
                 .diagnostics
                 .iter()
-                .map(crate::server_stub::diagnostic_to_proto)
+                .map(diagnostic_to_proto)
                 .collect(),
         })
     }
@@ -692,7 +694,7 @@ fn refused(flow_id: &str, diagnostic: &Diagnostic) -> v1::DecideResult {
     v1::DecideResult {
         flow_id: flow_id.to_owned(),
         applied: false,
-        diagnostic: Some(crate::server_stub::diagnostic_to_proto(diagnostic)),
+        diagnostic: Some(diagnostic_to_proto(diagnostic)),
     }
 }
 
@@ -728,50 +730,6 @@ fn event_flow_id(event: &v1::FlowEvent) -> Option<FlowId> {
         }
     };
     FlowId::parse(text).ok()
-}
-
-/// Ob ein Flow hinter einem Anker liegt.
-fn after(summary: &v1::FlowSummary, anchor: Option<FlowId>) -> bool {
-    match anchor {
-        None => true,
-        Some(anchor) => FlowId::parse(&summary.flow_id).is_ok_and(|id| id > anchor),
-    }
-}
-
-/// Gegenstück zu [`after`] für absteigende Seiten: nur Flows vor dem Anker.
-fn before(summary: &v1::FlowSummary, anchor: Option<FlowId>) -> bool {
-    match anchor {
-        None => true,
-        Some(anchor) => FlowId::parse(&summary.flow_id).is_ok_and(|id| id < anchor),
-    }
-}
-
-/// Ob ein Flow zum Filtertext passt.
-///
-/// Unterstützt `host:<text>` und `state:<name>`; alles andere ist eine
-/// Teilzeichenkette über Host und Pfad. Die vollständige Filtersprache des
-/// History-Screens baut HUM-030.
-fn matches_filter(summary: &v1::FlowSummary, filter: &str) -> bool {
-    filter.split_whitespace().all(|token| {
-        let host = summary
-            .authority
-            .as_ref()
-            .map(|authority| authority.host.clone())
-            .unwrap_or_default();
-        match token.split_once(':') {
-            Some(("host", value)) => host.contains(value),
-            Some(("state", value)) => state_name(summary.state).eq_ignore_ascii_case(value),
-            _ => host.contains(token) || summary.path.contains(token),
-        }
-    })
-}
-
-/// Der Kurzname eines Zustands, wie ihn der Filter erwartet.
-fn state_name(state: i32) -> &'static str {
-    v1::FlowState::try_from(state)
-        .unwrap_or(v1::FlowState::Unspecified)
-        .as_str_name()
-        .trim_start_matches("FLOW_STATE_")
 }
 
 /// Ob ein Host zu einem Muster passt, grob.
