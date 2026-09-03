@@ -54,6 +54,13 @@ flutter-get: ## Fetch Dart packages (app and packages/ui)
 	cd app && flutter pub get
 	cd app/packages/ui && flutter pub get
 
+flutter-codegen: flutter-get proto ## Generated Dart code: riverpod, freezed, ARB
+	@if grep -qE '^[[:space:]]*build_runner[[:space:]]*:' app/pubspec.yaml; then \
+	  cd app && dart run build_runner build --delete-conflicting-outputs; \
+	else \
+	  echo "no build_runner dependency yet, nothing to generate"; \
+	fi
+
 flutter-analyze: flutter-get proto ## Static analysis of the Flutter app and packages/ui
 	cd app && flutter analyze
 	cd app/packages/ui && flutter analyze

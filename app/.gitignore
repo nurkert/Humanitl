@@ -43,3 +43,7 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Alchemist legt die Bilder eines fehlgeschlagenen Golden-Laufs hier ab. Sie
+# gehoeren nicht ins Repository: Sie beschreiben einen Lauf, nicht den Sollwert.
+test/goldens/failures/

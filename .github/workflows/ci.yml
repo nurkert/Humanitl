@@ -320,9 +320,29 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-rust
+        # scripts/gen-proto.sh refreshes proto/descriptor.binpb through
+        # `cargo xtask proto` before it writes the Dart half.
+        with:
+          cache-key: goldens
       - uses: ./.github/actions/setup-flutter
-      - name: Fetch packages
-        run: make flutter-get
+        with:
+          protoc-plugin: "true"
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "27.x"
+          repo-token: ${{ github.token }}
+      - name: Prepare the app
+        # The goldens render the real screens, and those import generated code:
+        # the Dart side of the proto, riverpod, freezed and the ARB messages.
+        # Fetching packages alone leaves the app uncompilable here, while the
+        # analyze job generates and therefore stays green.
+        run: |
+          set -euo pipefail
+          make flutter-get
+          ./scripts/gen-proto.sh
+          make flutter-codegen
       - name: Golden tests
         # Explicit skip until HUM-054 adds the first golden. See the script.
         run: ./scripts/ci/goldens-placeholder.sh
