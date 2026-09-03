@@ -295,14 +295,26 @@ impl IpcServer {
     }
 }
 
-/// Ein Befund für eine Anfrage, die so nicht gilt (`InvalidArgument`).
+/// Ein Befund für eine `Decide`-Anfrage, die so nicht gilt (`InvalidArgument`).
 ///
-/// Das Register kennt im Bereich `ipc` bisher nur `IPC_002` für eine ungültige
-/// `Decide`-Anfrage; sein Titel nennt den häufigsten Fall, der Grund nennt den
-/// vorliegenden.
+/// `IPC_004` deckt jede Anfrage ab, die der Daemon nicht ausführen kann: keine
+/// Flow-Id, keine Entscheidung, eine unlesbare Flow-Id, eine bearbeitete
+/// Anfrage, die sich nicht lesen lässt oder über `limits.hold_body_cap_bytes`
+/// liegt. Der Grund nennt den vorliegenden Fall. Der einzige Sonderfall mit
+/// eigenem Code ist [`edited_for_many`].
 fn bad_request(why: String) -> Diagnostic {
-    Diagnostic::builder(codes::IPC_002, Severity::Error)
+    Diagnostic::builder(codes::IPC_004, Severity::Error)
         .why(why)
+        .build()
+}
+
+/// Ein Befund für `AllowEdited` mit mehr als einem Flow (`InvalidArgument`).
+///
+/// `IPC_002` bleibt genau diesem Fall vorbehalten, so wie sein Titel ihn nennt:
+/// eine bearbeitete Anfrage gilt immer genau einem Flow.
+fn edited_for_many(count: usize) -> Diagnostic {
+    Diagnostic::builder(codes::IPC_002, Severity::Error)
+        .why(format!("allow_edited came with {count} flow ids"))
         .build()
 }
 
@@ -389,13 +401,7 @@ impl v1::humanitl_server::Humanitl for IpcServer {
             let results = request
                 .flow_ids
                 .iter()
-                .map(|text| {
-                    refused(
-                        text,
-                        bad_request(format!("allow_edited came with {count} flow ids")),
-                    )
-                    .0
-                })
+                .map(|text| refused(text, edited_for_many(count)).0)
                 .collect();
             return Ok(Response::new(v1::DecideResponse {
                 results,
@@ -756,6 +762,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(status.code(), tonic::Code::InvalidArgument);
         assert!(status.message().contains("never an allow"), "{status}");
+        assert!(status.message().contains("IPC_004"), "{status}");
     }
 
     #[tokio::test]

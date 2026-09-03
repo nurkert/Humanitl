@@ -18,8 +18,11 @@ enum HButtonVariant {
   /// A quiet action: no surface until hovered.
   ghost,
 
-  /// A destructive action, in the blocked hue. Never for "Block" itself —
-  /// blocking is a normal decision, not a destructive one.
+  /// A destructive action, in the blocked hue. "Block" is one of them: it is
+  /// the decision that stops a request, it is drawn in the state colour of a
+  /// blocked flow, and the action bar of the intercept screen asks for exactly
+  /// this variant (backlog/sprint-1.md, HUM-020). There is no separate
+  /// `destructive` role; this is it.
   danger,
 }
 

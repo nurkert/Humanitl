@@ -185,6 +185,12 @@ registry! {
     IPC_002 => "ipc", "AllowEdited nur für genau einen Flow", "#ipc_002";
     /// Der Flow wartet nicht mehr; die Entscheidung kommt zu spät.
     IPC_003 => "ipc", "Flow nicht mehr gehalten", "#ipc_003";
+    /// Die `Decide`-Anfrage lässt sich so nicht ausführen: keine Flow-Id, keine
+    /// Entscheidung, eine unlesbare Flow-Id oder eine bearbeitete Anfrage, die
+    /// sich nicht lesen lässt oder über `limits.hold_body_cap_bytes` liegt. Der
+    /// Grund steht im Befund. Fehlt die Entscheidung, wird sie nie zu `Allow`
+    /// ergänzt.
+    IPC_004 => "ipc", "Decide-Anfrage ungültig", "#ipc_004";
 
     /// `config.toml` ließ sich nicht lesen.
     CONFIG_001 => "config", "Config-Datei ungültig", "#config_001";

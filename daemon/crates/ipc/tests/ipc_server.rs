@@ -409,6 +409,45 @@ async fn decide_for_a_flow_that_is_not_held_is_failed_precondition() {
 }
 
 #[tokio::test]
+async fn a_decide_without_a_decision_or_a_flow_id_is_ipc_004() {
+    let daemon = Daemon::new().await;
+    let mut client = daemon.client().await;
+
+    // Fehlende Entscheidung: wird nie zu `Allow` ergaenzt.
+    let error = client
+        .decide(v1::DecideRequest {
+            flow_ids: vec![FlowId::new().to_string()],
+            decision: None,
+            ..v1::DecideRequest::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::InvalidArgument);
+    let diagnostic = humanitl_ipc::diagnostic_from_status(&error).expect("details");
+    assert_eq!(diagnostic.code, "IPC_004");
+    assert!(
+        diagnostic.why.contains("without a decision"),
+        "{diagnostic:?}"
+    );
+
+    // Keine Flow-Id: die Anfrage meint niemanden.
+    let error = client
+        .decide(v1::DecideRequest {
+            flow_ids: Vec::new(),
+            decision: Some(v1::decide_request::Decision::Allow(())),
+            ..v1::DecideRequest::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::InvalidArgument);
+    let diagnostic = humanitl_ipc::diagnostic_from_status(&error).expect("details");
+    assert_eq!(diagnostic.code, "IPC_004");
+
+    drop(client);
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
 async fn an_edited_request_over_the_body_cap_is_invalid_argument() {
     let limits = Limits {
         hold_body_cap_bytes: 32,
@@ -435,7 +474,7 @@ async fn an_edited_request_over_the_body_cap_is_invalid_argument() {
 
     assert_eq!(error.code(), Code::InvalidArgument);
     let diagnostic = humanitl_ipc::diagnostic_from_status(&error).expect("details");
-    assert_eq!(diagnostic.code, "IPC_002");
+    assert_eq!(diagnostic.code, "IPC_004");
     assert!(
         diagnostic.why.contains("hold_body_cap_bytes"),
         "{diagnostic:?}"
@@ -466,6 +505,8 @@ async fn an_unreadable_edited_request_is_refused_not_turned_into_an_allow() {
         .unwrap_err();
 
     assert_eq!(error.code(), Code::InvalidArgument);
+    let diagnostic = humanitl_ipc::diagnostic_from_status(&error).expect("details");
+    assert_eq!(diagnostic.code, "IPC_004");
     drop(client);
     daemon.shutdown().await;
 }

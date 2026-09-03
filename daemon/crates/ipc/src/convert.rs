@@ -44,7 +44,7 @@ pub const BODY_PREVIEW_CHARS: usize = 4096;
 
 /// Warum eine `EditedRequest` nicht lesbar war.
 ///
-/// Der Daemon lehnt eine unlesbare Anfrage mit `IPC_002` ab, statt sie
+/// Der Daemon lehnt eine unlesbare Anfrage mit `IPC_004` ab, statt sie
 /// stillschweigend zu `Allow` zu machen; der Grund steht im Diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum EditedRequestError {
@@ -619,15 +619,21 @@ pub fn domain_of(authority: &Authority, first_seen: SystemTime) -> v1::DomainInf
 /// Was die Registry nicht führt, bleibt leer, statt geraten zu werden
 /// (`docs/ARCHITECTURE.md` 1.3, HUM-016):
 ///
-/// - `decision_source` ist nur dort gesetzt, wo die Entscheidung selbst die
-///   Herkunft nennt (Ablauf, Regel). Der [`FlowRecord`] merkt sich die
-///   Herkunft nicht; im Ereignisstrom steht sie vollständig
-///   ([`v1::flow_event::Decided`]).
-/// - `duration` bleibt leer, weil die Registry keinen Endzeitpunkt führt; der
-///   Recorder (HUM-026) trägt ihn nach.
+/// - `decision_source` kommt aus dem Datensatz, sobald ein
+///   [`humanitl_core::FlowEvent::Decided`] oder ein
+///   [`humanitl_core::FlowEvent::TimedOut`] durch die Registry gelaufen ist.
+///   Für einen Datensatz, der schon entschieden angelegt wurde, bleibt nur,
+///   was die Entscheidung selbst über ihre Herkunft sagt ([`implied_source`]);
+///   ist auch das nichts, bleibt das Feld leer.
+/// - `duration` ist gesetzt, sobald der Flow sein `Recorded` erreicht hat,
+///   also die Spanne von der Ankunft bis zum Ende. Solange die Antwort noch
+///   streamt, gibt es kein Ende und deshalb keine Dauer.
+/// - `response_size` ist die Summe der bisher gesehenen
+///   [`humanitl_core::FlowEvent::ResponseChunk`]; bis zur ersten Antwort ist
+///   das null Bytes.
 /// - `finding_count` zählt nur, solange der Flow in [`FlowState::Analyzed`]
 ///   steht; danach hält der Zustand die Funde nicht mehr.
-/// - `response_size`, `origin_tool` und `passthrough` sind in M1 unbekannt.
+/// - `origin_tool` und `passthrough` sind in M1 unbekannt.
 #[must_use]
 pub fn record_to_summary(record: &FlowRecord) -> v1::FlowSummary {
     let request = &record.request;
@@ -643,13 +649,18 @@ pub fn record_to_summary(record: &FlowRecord) -> v1::FlowSummary {
         path: request.path_and_query.clone(),
         state: flow_state_to_proto(&record.state) as i32,
         decision: kind as i32,
-        decision_source: implied_source(record.decision.as_ref()) as i32,
+        decision_source: record
+            .decision_source
+            .map_or_else(|| implied_source(record.decision.as_ref()), source_to_proto)
+            as i32,
         block_reason: block_reason as i32,
         rule_id,
         status: u32::from(record.response_status.unwrap_or(0)),
         request_size: request.body.size,
-        response_size: 0,
-        duration: None,
+        response_size: record.response_bytes,
+        duration: record
+            .finished
+            .map(|at| duration_between(record.created, at)),
         finding_count: match &record.state {
             FlowState::Analyzed { findings } => u32::try_from(findings.len()).unwrap_or(u32::MAX),
             _ => 0,
@@ -667,8 +678,10 @@ pub fn record_to_summary(record: &FlowRecord) -> v1::FlowSummary {
 
 /// Die Herkunft, soweit die Entscheidung selbst sie nennt.
 ///
-/// Siehe [`record_to_summary`]: der [`FlowRecord`] speichert die Herkunft
-/// nicht, und geraten wird sie nicht.
+/// Der Rückfall für einen [`FlowRecord`], der keine Herkunft mitbekommen hat,
+/// weil er schon entschieden angelegt wurde. Geraten wird nichts: nur ein
+/// Ablauf und eine Regel-Blockade nennen ihre Herkunft in der Entscheidung
+/// selbst.
 const fn implied_source(decision: Option<&Decision>) -> v1::DecisionSource {
     match decision {
         Some(Decision::TimedOut) => v1::DecisionSource::Timeout,
@@ -889,7 +902,7 @@ mod tests {
 
     use humanitl_config::Limits;
     use humanitl_core::{
-        Authority, BodyRef, Decision, DecisionSource, Flow, FlowId, FlowState, HostName,
+        Authority, BodyRef, Decision, DecisionSource, Flow, FlowEvent, FlowId, FlowState, HostName,
         HttpRequest, Method, Scheme, SessionId, TransitionInput, UpstreamError,
     };
     use humanitl_proxy::ConnMeta;
@@ -945,9 +958,54 @@ mod tests {
         assert_eq!(row.decision, v1::DecisionKind::Unspecified as i32);
         assert_eq!(row.decision_source, v1::DecisionSource::Unspecified as i32);
         assert!(row.deadline.is_none(), "nothing is held here");
-        assert!(row.duration.is_none(), "the registry has no end time");
+        assert!(row.duration.is_none(), "the flow has not ended yet");
+        assert_eq!(row.response_size, 0, "no chunk has passed yet");
         assert_eq!(row.status, 0);
         assert!(row.origin_tool.is_empty());
+    }
+
+    #[test]
+    fn a_finished_flow_carries_its_source_its_size_and_its_duration() {
+        let session = SessionId::new();
+        let mut flow = flow(session, "api.example.com");
+        let registry = FlowRegistry::new(&Limits::default());
+        registry.insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+
+        for input in [
+            TransitionInput::Analyze { findings: vec![] },
+            TransitionInput::Hold {
+                deadline: Instant::now() + Duration::from_secs(30),
+                queue_bytes: 42,
+                queue_count: 1,
+            },
+            TransitionInput::Decide {
+                decision: Decision::Allow,
+                source: DecisionSource::User,
+            },
+            TransitionInput::Forward,
+            TransitionInput::Respond { status: 200 },
+        ] {
+            let event = flow.apply(input, SystemTime::now()).unwrap();
+            registry.record(&event);
+        }
+        registry.record(&FlowEvent::ResponseChunk {
+            flow_id: flow.id,
+            at: SystemTime::now(),
+            len: 1024,
+        });
+        let end = flow
+            .received_at
+            .checked_add(Duration::from_millis(250))
+            .unwrap();
+        let recorded = flow.apply(TransitionInput::Record, end).unwrap();
+        registry.record(&recorded);
+
+        let row = record_to_summary(&registry.get(flow.id).unwrap());
+        assert_eq!(row.decision_source, v1::DecisionSource::User as i32);
+        assert_eq!(row.response_size, 1024);
+        let duration = row.duration.expect("the flow has ended");
+        assert_eq!(duration.seconds, 0);
+        assert_eq!(duration.nanos, 250_000_000);
     }
 
     #[test]

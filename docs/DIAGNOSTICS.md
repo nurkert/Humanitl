@@ -61,6 +61,10 @@ AllowEdited nur für genau einen Flow
 
 Flow nicht mehr gehalten
 
+#### IPC_004
+
+Decide-Anfrage ungültig
+
 ### Bereich config
 
 #### CONFIG_001
