@@ -10,3 +10,22 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+humanitl-config.workspace = true
+humanitl-core.workspace = true
+humanitl-ipc.workspace = true
+humanitl-sandbox.workspace = true
+
+chrono.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+# `sandbox check` legt seinen Platzhalter-Socket und die Platzhalter-Dateien
+# der CA in einem eigenen Verzeichnis an, das mit dem Prozess verschwindet:
+# der Selbsttest darf dem laufenden Daemon nichts wegnehmen.
+tempfile.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+
+[dev-dependencies]
+# Der Integrationstest startet einen echten gRPC-Dienst (den Fake-Daemon aus
+# HUM-005) auf einem eigenen Socket und ruft das gebaute Binary dagegen auf.
+shlex.workspace = true
