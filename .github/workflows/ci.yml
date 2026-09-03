@@ -1,0 +1,396 @@
+# Humanitl continuous integration.
+#
+# Every gate that runs here is reachable from the Makefile, so a developer can
+# reproduce it locally with one command. The difference is STRICT=1: locally the
+# Makefile skips rustfmt and clippy when the toolchain was installed without
+# rustup, here it must not.
+#
+# Jobs whose content arrives in a later issue are explicit skips. They print a
+# notice and a line in the job summary naming the issue that fills them in. A
+# placeholder that quietly reports success would be a green lie, and the sprint
+# rule in BACKLOG.md 8 rests on the pipeline telling the truth.
+#
+# Branch protection (configured manually on the repository): `main` requires
+# rust-check, rust-test, proto-lint-and-gen, flutter-analyze-test, goldens,
+# escape-tests, e2e-xvfb, deps-lint and parity-check to pass.
+#
+# Every action is pinned to a commit SHA; the release tag in the trailing
+# comment is documentation. Bump both together, here and in .github/actions.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# One run per ref. A new push supersedes the one in flight.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: nothing here writes to the repository. Jobs that need more
+# raise it locally; none currently do.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # -D warnings is a CI-only tightening. Locally `make check` stays warning
+  # tolerant so that work in progress still compiles.
+  RUSTFLAGS: "-D warnings"
+  RUST_BACKTRACE: "1"
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "10"
+  STRICT: "1"
+
+jobs:
+  rust-check:
+    name: rust-check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          cargo-deny: "true"
+          cache-key: rust-check
+      - name: Format and lints
+        run: make rust-fmt rust-clippy
+      - name: Licenses, advisories, duplicate crates
+        run: make rust-deny
+      - name: Security documents (HUM-007)
+        # Both documents complete, no TODO/TBD line, every referenced ESC-N is a
+        # real escape test. Needs no toolchain, rides along in this job.
+        run: make docs-lint
+      - name: Typed errors in public signatures (HUM-063)
+        # Public functions of the library crates return Diagnostic or a
+        # thiserror type, never String, anyhow::Error or Box<dyn Error>. The
+        # script checks its own fixtures first, then the crates.
+        run: |
+          scripts/ci/lint-no-string-errors.sh --self-test
+          scripts/ci/lint-no-string-errors.sh
+
+  rust-test:
+    name: rust-test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: rust-test
+      - name: Build and test the workspace
+        run: make rust-build rust-test
+      - name: Documentation builds without warnings
+        # missing_docs is denied in every library crate, so a public item without
+        # a doc comment fails here (CONVENTIONS.md 3.12).
+        run: cd daemon && cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
+  deps-lint:
+    name: deps-lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: deps-lint
+      - name: Dependency direction, missing_docs, single egress point
+        # tools/check-deps.sh reads `cargo metadata`, hence the Rust setup.
+        run: make deps-lint
+
+  proto-lint-and-gen:
+    name: proto-lint-and-gen
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # buf breaking compares against the proto on main.
+          fetch-depth: 0
+      - name: Look for the proto sources
+        id: sources
+        run: |
+          set -euo pipefail
+          if [[ -f proto/buf.yaml && -x scripts/gen-proto.sh ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::proto contract not present yet, skipping lint and drift check (HUM-003)"
+            {
+              echo "### proto-lint-and-gen: skipped"
+              echo
+              echo "\`proto/buf.yaml\` or \`scripts/gen-proto.sh\` does not exist yet."
+              echo "The job turns itself on as soon as HUM-003 lands. Nothing was verified."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
+        if: steps.sources.outputs.ready == 'true'
+        with:
+          setup_only: true
+      - uses: ./.github/actions/setup-rust
+        if: steps.sources.outputs.ready == 'true'
+        with:
+          cache-key: proto
+      - uses: ./.github/actions/setup-flutter
+        if: steps.sources.outputs.ready == 'true'
+        with:
+          protoc-plugin: "true"
+      - name: Install protoc
+        # Rust generation is protoc-free (protox). Only the Dart half needs a
+        # protoc binary, together with protoc-gen-dart from the setup above;
+        # scripts/gen-proto.sh skips Dart when either is missing.
+        if: steps.sources.outputs.ready == 'true'
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "27.x"
+          repo-token: ${{ github.token }}
+      - name: buf lint
+        if: steps.sources.outputs.ready == 'true'
+        run: buf lint proto
+      - name: buf breaking against main
+        # continue-on-error until HUM-003 is merged to main: before that there is
+        # no proto on main to compare against. Remove the flag afterwards.
+        if: steps.sources.outputs.ready == 'true' && github.event_name == 'pull_request'
+        continue-on-error: true
+        run: buf breaking proto --against '.git#branch=main,subdir=proto'
+      - name: Regenerate
+        if: steps.sources.outputs.ready == 'true'
+        run: ./scripts/gen-proto.sh
+      - name: Fail on generated drift
+        # The generated Dart directory is gitignored, so what moves here is
+        # proto/generated.sha256, proto/descriptor.binpb and any tracked
+        # generated file (HUM-003). `git add -N` first: `git diff` is blind to
+        # untracked files, and a freshly written hash that nobody committed
+        # would be a watchdog that never barks.
+        if: steps.sources.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          git add -N -- proto daemon/crates/ipc app/lib/core/ipc
+          git diff --exit-code -- proto daemon/crates/ipc app/lib/core/ipc || {
+            git status --porcelain -- proto daemon/crates/ipc app/lib/core/ipc
+            echo "::error::generated code drifted, run make proto and commit the result"
+            exit 1
+          }
+
+  flutter-analyze-test:
+    name: flutter-analyze-test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-rust
+        # scripts/gen-proto.sh refreshes proto/descriptor.binpb through
+        # `cargo xtask proto` before it writes the Dart half, so the job needs
+        # cargo even though nothing Rust is tested here.
+        with:
+          cache-key: flutter
+      - uses: ./.github/actions/setup-flutter
+        with:
+          linux-desktop: "true"
+          protoc-plugin: "true"
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "27.x"
+          repo-token: ${{ github.token }}
+      - name: Fetch packages
+        run: make flutter-get
+      - name: Generate the Dart proto code
+        # app/lib/core/ipc/generated/ is gitignored (HUM-003) and both analyze
+        # and test import it, so it has to exist before either runs. STRICT
+        # turns a missing protoc or protoc-gen-dart into a failure, not a skip.
+        env:
+          STRICT: "1"
+        run: ./scripts/gen-proto.sh
+      - name: Code generation
+        # riverpod, freezed and json_serializable arrive later; until build_runner
+        # is a dev dependency there is nothing to generate.
+        run: |
+          set -euo pipefail
+          if grep -qE '^\s*build_runner\s*:' app/pubspec.yaml; then
+            cd app && dart run build_runner build --delete-conflicting-outputs
+          else
+            echo "::notice::no build_runner dependency yet, skipping code generation"
+            echo "### flutter code generation: skipped (no build_runner dependency)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Analyze
+        # --fatal-infos is the Dart counterpart of RUSTFLAGS=-D warnings: strict
+        # here, not enforced by `make flutter-analyze` locally.
+        run: cd app && flutter analyze --fatal-infos
+      - name: Test
+        run: cd app && flutter test --coverage
+      - name: Design system package
+        # `flutter test` in app/ does not descend into the path dependency, so
+        # the tokens and widgets of packages/ui (HUM-005) get the same gate here.
+        run: |
+          set -euo pipefail
+          cd app/packages/ui
+          flutter pub get
+          flutter analyze --fatal-infos
+          flutter test
+      - name: Build the Linux bundle
+        run: cd app && flutter build linux --debug
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: flutter-coverage
+          path: app/coverage/lcov.info
+          if-no-files-found: ignore
+
+  goldens:
+    name: goldens
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-flutter
+      - name: Fetch packages
+        run: make flutter-get
+      - name: Golden tests
+        # Explicit skip until HUM-054 adds the first golden. See the script.
+        run: ./scripts/ci/goldens-placeholder.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: golden-failures
+          path: app/test/goldens/failures
+          if-no-files-found: ignore
+
+  escape-tests:
+    name: escape-tests
+    runs-on: ubuntu-24.04
+    env:
+      # ESCAPE_ALLOW_FAIL tolerates a red probe, never a sandbox that would not
+      # start: run.sh exits 1 for the first and 2 for the second, and only the 1
+      # is swallowed. Sprint 0 is expected to be red, because the launcher
+      # (HUM-011), the shim (HUM-012) and the proxy (HUM-013/015) do not exist
+      # yet; tests/escape/README.md names the issue behind every red probe. The
+      # verdict step below reports a tolerated red run as a skip, so the job
+      # never ends green without saying what it did not enforce.
+      # remove in HUM-021
+      ESCAPE_ALLOW_FAIL: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: escape
+      - name: Install the sandbox tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat python3
+      - name: Allow unprivileged user namespaces
+        # Ubuntu 24.04 ships an AppArmor restriction that makes bwrap fail with
+        # "Permission denied" (HUM-002 Fallstricke, needed from HUM-006 on).
+        run: |
+          set -euo pipefail
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: bwrap is usable
+        run: bwrap --version
+      - name: Escape tests
+        # The harness is the real thing (HUM-006). scripts/ci/escape-placeholder.sh
+        # stands in only while tests/escape/run.sh does not exist, and reports a
+        # skip, never a pass.
+        run: |
+          set -euo pipefail
+          if [[ -x tests/escape/run.sh ]]; then
+            ./tests/escape/run.sh
+          else
+            ./scripts/ci/escape-placeholder.sh
+          fi
+      - name: Escape verdict
+        # Says out loud what the step above tolerated: a run without red probes
+        # is a pass, a red run that ESCAPE_ALLOW_FAIL let through is a skip, a
+        # run without a verdict is a failure. The counts come from field 4 of
+        # the fixed-format RESULT lines, never from a substring: the detail
+        # behind the status is captured command output, and a passing probe
+        # whose evidence says "fail" must not change the count.
+        if: always()
+        run: |
+          set -euo pipefail
+          # The placeholder writes its own summary block.
+          [[ -x tests/escape/run.sh ]] || exit 0
+          results=target/escape/results.txt
+          if [[ ! -f "$results" ]]; then
+            {
+              echo "### escape-tests: failed (no verdict)"
+              echo
+              echo "No results file: the suite did not get as far as writing one."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          count() { awk -v s="$1" '$1 == "RESULT" && $4 == s { n++ } END { print n + 0 }' "$results"; }
+          total=$(awk '$1 == "RESULT" { n++ } END { print n + 0 }' "$results")
+          pass=$(count pass); fail=$(count fail); skip=$(count skip); error=$(count error)
+          if (( total == 0 || error > 0 )); then
+            verdict="failed (no verdict)"
+            note="A suite did not start or did not run to its end. ESCAPE_ALLOW_FAIL does not cover this; the job is red."
+          elif (( fail == 0 )); then
+            verdict="passed"
+            note="Every probe passed or was skipped."
+          elif [[ "${ESCAPE_ALLOW_FAIL:-0}" == 1 ]]; then
+            verdict="skipped"
+            note="$fail red probe(s) tolerated by ESCAPE_ALLOW_FAIL; nothing was enforced. Red is the expected state until HUM-021, see tests/escape/README.md."
+            echo "::notice::escape tests not yet enforced (HUM-011/HUM-012 pending)"
+          else
+            verdict="failed"
+            note="$fail red probe(s); see tests/escape/README.md."
+          fi
+          {
+            echo "### escape-tests: $verdict"
+            echo
+            echo "| status | cases |"
+            echo "|---|---|"
+            printf '| %s | %s |\n' pass "$pass" fail "$fail" skip "$skip" error "$error"
+            echo
+            echo "$note"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # The summary never softens the verdict: a failed run stays red.
+          case "$verdict" in
+            failed*) exit 1 ;;
+          esac
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: escape-junit
+          path: |
+            target/escape/*.xml
+            target/escape/results.txt
+            target/escape/*.log
+          if-no-files-found: ignore
+
+  e2e-xvfb:
+    name: e2e-xvfb
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: e2e
+      - uses: ./.github/actions/setup-flutter
+        with:
+          linux-desktop: "true"
+      - name: Install the runtime tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb bubblewrap socat
+      - name: End-to-end walkthrough
+        # From HUM-021 on: xvfb-run -a ./tests/e2e/run.sh
+        run: ./scripts/ci/e2e-placeholder.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: e2e-artifacts
+          path: target/e2e
+          if-no-files-found: ignore
+
+  parity-check:
+    name: parity-check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: parity
+      - name: UI and CLI parity
+        # Explicit skip until HUM-078 generates docs/reference/parity.md.
+        run: ./scripts/ci/parity-placeholder.sh

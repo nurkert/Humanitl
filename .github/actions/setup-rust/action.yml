@@ -1,0 +1,78 @@
+# Composite action: the Rust half of every CI job.
+#
+# The toolchain version is NOT hardcoded here. It is read from
+# `daemon/rust-toolchain.toml`, which is the single pin for developers and CI
+# alike (HUM-001). A second copy of "1.95.0" in this file would be one more
+# place to forget.
+#
+# Every action is pinned to a commit SHA; the release tag in the trailing
+# comment is documentation. Bump both together.
+name: Setup Rust
+description: >-
+  Install the toolchain pinned in daemon/rust-toolchain.toml including rustfmt
+  and clippy, restore the cargo registry and target cache, and optionally
+  install cargo-deny.
+
+inputs:
+  cargo-deny:
+    description: 'Install cargo-deny ("true" or "false"). Only rust-check needs it.'
+    required: false
+    default: "false"
+  cache-key:
+    description: "Extra discriminator for the cargo cache, usually the job name."
+    required: false
+    default: ""
+
+outputs:
+  toolchain:
+    description: "The channel that was installed, as read from daemon/rust-toolchain.toml."
+    value: ${{ steps.pin.outputs.channel }}
+
+runs:
+  using: composite
+  steps:
+    - name: Read the toolchain pin
+      id: pin
+      shell: bash
+      run: |
+        set -euo pipefail
+        pin_file=daemon/rust-toolchain.toml
+        channel="$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$pin_file" | head -n 1)"
+        if [[ -z "$channel" ]]; then
+          echo "::error file=$pin_file::no [toolchain] channel found"
+          exit 1
+        fi
+        echo "channel=$channel" >> "$GITHUB_OUTPUT"
+        echo "toolchain pin: $channel (from $pin_file)"
+
+    - name: Install the toolchain
+      shell: bash
+      env:
+        # Via env, never interpolated straight into the script body.
+        CHANNEL: ${{ steps.pin.outputs.channel }}
+      run: |
+        set -euo pipefail
+        channel="$CHANNEL"
+        # GitHub runners ship rustup; rustfmt and clippy are the two components
+        # a source-tarball toolchain lacks, which is why `make check` skips them
+        # locally and runs them here with STRICT=1.
+        rustup toolchain install "$channel" --profile minimal --component rustfmt --component clippy
+        rustup default "$channel"
+        rustc --version
+        cargo --version
+        cargo fmt --version
+        cargo clippy --version
+
+    - name: Cache cargo registry and target directory
+      # Keyed on daemon/Cargo.lock (tracked) plus the toolchain channel, so a
+      # version bump does not resurrect stale artefacts.
+      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        workspaces: daemon
+        key: ${{ steps.pin.outputs.channel }}-${{ inputs.cache-key }}
+
+    - name: Install cargo-deny
+      if: inputs.cargo-deny == 'true'
+      uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+      with:
+        tool: cargo-deny
