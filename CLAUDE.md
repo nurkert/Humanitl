@@ -63,6 +63,14 @@ Issue-Nummer. Vor dem ersten Issue eines Sprints: `BACKLOG.md` Abschnitte 2 bis
    git push origin main
    ```
 
+   **Vor jedem Push den Commit-Zustand prüfen, nicht den Arbeitsbaum.**
+   `tools/verify-commit.sh` checkt den Commit in einen eigenen leeren Baum aus
+   und fährt dort dieselben Schritte wie die CI. Der Arbeitsbaum enthält beim
+   Entwickeln fast immer mehr als der Commit, etwa Register-Einträge oder
+   Profile, die zu einem anderen Issue gehören; `make check` ist dann grün,
+   während derselbe Stand auf `main` nicht baut. Genau so ist die Pipeline am
+   2026-09-03 dreimal rot geworden.
+
    Ein Issue, ein Implementierungs-Commit plus ein Merge-Commit. Nie mehrere
    Issues in einem Commit.
 6. Nach dem Push: kurze Zusammenfassung an den Nutzer, was gebaut wurde, was
