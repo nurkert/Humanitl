@@ -24,26 +24,28 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
-use humanitl_config::{Limits, RecorderConfig};
+use humanitl_config::{HoldConfig, Limits, RecorderConfig};
 use humanitl_core::diagnostics::codes::PROXY_005;
 use humanitl_core::{
-    Authority, BlockReason, BodyRef, Decision, DecisionSource, Diagnostic, Flow, FlowEvent, FlowId,
-    FlowState, HostName, HttpRequest, InvalidTransition, Method, Scheme, Severity, TransitionInput,
-    UpstreamError, block_response, failed_response,
+    Authority, BlockReason, BodyRef, Decision, DecisionSource, Diagnostic, Finding, Flow,
+    FlowEvent, FlowId, FlowState, HostName, HttpRequest, InvalidTransition, Method, Scheme,
+    Severity, Tier, TransitionInput, UpstreamError, block_response, failed_response,
 };
 use hyper::body::Incoming;
 use hyper::header::{HeaderName, HeaderValue};
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode, Version};
 use hyper_util::rt::{TokioIo, TokioTimer};
-use tokio_rustls::TlsAcceptor;
 
 use crate::body::{self, BufferError, ResponseBody};
 use crate::ca::LeafCache;
+use crate::connect::{AuthorityError, AuthorityRefusal, ConnectionContext, RequestTarget};
+use crate::findings::{NoScan, Scanner};
 use crate::hold::HoldQueue;
-use crate::pipeline::{ConnMeta, FlowPipeline};
+use crate::pipeline::FlowPipeline;
 use crate::registry::FlowRecord;
 use crate::upstream::{self, Upstream};
+use crate::{connect, tls};
 
 /// Die Caps und Fristen, die der Handler pro Verbindung und Anfrage kennt.
 #[derive(Debug, Clone, Copy)]
@@ -57,6 +59,9 @@ pub struct ProxyLimits {
     /// (`limits.header_timeout_secs`). Auf einer Keep-Alive-Verbindung ist
     /// das zugleich die Frist bis zur nächsten Anfrage.
     pub header_timeout: Duration,
+    /// Blockt eine Anfrage sofort, wenn der Scan ein prüfsummen-sicheres
+    /// Geheimnis findet (`hold.hard_block_checksum_secrets`).
+    pub hard_block_checksum_secrets: bool,
 }
 
 impl ProxyLimits {
@@ -67,7 +72,15 @@ impl ProxyLimits {
             body_cap_bytes: limits.hold_body_cap_bytes,
             inline_max_bytes: recorder.inline_max_bytes,
             header_timeout: Duration::from_secs(limits.header_timeout_secs),
+            hard_block_checksum_secrets: false,
         }
+    }
+
+    /// Dieselben Grenzen mit dem Schalter aus `hold`.
+    #[must_use]
+    pub const fn with_hold(mut self, hold: &HoldConfig) -> Self {
+        self.hard_block_checksum_secrets = hold.hard_block_checksum_secrets;
+        self
     }
 }
 
@@ -85,6 +98,7 @@ struct Inner {
     upstream: Upstream,
     leaves: Arc<LeafCache>,
     limits: ProxyLimits,
+    scanner: Arc<dyn Scanner>,
 }
 
 /// Bedient eine Verbindung: liest Anfragen, entscheidet, leitet weiter.
@@ -110,12 +124,42 @@ impl FlowHandler {
                 upstream,
                 leaves,
                 limits,
+                scanner: Arc::new(NoScan),
+            }),
+        }
+    }
+
+    /// Derselbe Handler mit den Detektoren aus HUM-025.
+    ///
+    /// Ohne diesen Weg läuft [`NoScan`]: Der Scan gehört in den Pfad, die
+    /// Detektoren kennt der Proxy nicht (`docs/ARCHITECTURE.md` 2).
+    #[must_use]
+    pub fn with_findings(
+        queue: Arc<HoldQueue>,
+        pipeline: Arc<dyn FlowPipeline>,
+        upstream: Upstream,
+        leaves: Arc<LeafCache>,
+        limits: ProxyLimits,
+        scanner: Arc<dyn Scanner>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                queue,
+                pipeline,
+                upstream,
+                leaves,
+                limits,
+                scanner,
             }),
         }
     }
 
     /// Nimmt eine einzelne Anfrage entgegen und liefert die Antwort.
-    async fn handle(&self, req: Request<Incoming>, meta: ConnMeta) -> Response<ResponseBody> {
+    async fn handle(
+        &self,
+        req: Request<Incoming>,
+        meta: ConnectionContext,
+    ) -> Response<ResponseBody> {
         if req.method() == Method::CONNECT {
             return self.handle_connect(req, &meta);
         }
@@ -125,10 +169,20 @@ impl FlowHandler {
     /// `CONNECT`: mit `200` bestätigen, dann die Verbindung übernehmen, TLS mit
     /// dem Leaf des Ziels terminieren und die entschlüsselte Verbindung erneut
     /// bedienen.
+    ///
+    /// Der Tunnel baut nichts nach oben auf: Der `CONNECT` endet am lokalen
+    /// TLS-Endpunkt des Proxys. Erst eine erlaubte Anfrage darin löst einen
+    /// Namen auf und verbindet (ADR-006, HUM-024); vorher darf nicht einmal
+    /// der TCP-Verbindungsaufbau verraten, wohin es ginge.
+    ///
+    /// Der Name aus dem `ClientHello` wandert in den
+    /// [`ConnectionContext`] der entschlüsselten Verbindung; dort vergleicht
+    /// ihn [`check_authority`](crate::connect::check_authority) mit Tunnelziel
+    /// und `Host`.
     fn handle_connect(
         &self,
         mut req: Request<Incoming>,
-        meta: &ConnMeta,
+        meta: &ConnectionContext,
     ) -> Response<ResponseBody> {
         let Some(authority) = connect_authority(req.uri()) else {
             return text_response(StatusCode::BAD_REQUEST, "missing host");
@@ -142,21 +196,19 @@ impl FlowHandler {
         };
 
         let handler = self.clone();
-        let inner_meta = ConnMeta {
-            connect_authority: Some(authority),
-            tls: true,
-            ..meta.clone()
-        };
+        let meta = meta.clone();
         tokio::spawn(async move {
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
-                    let acceptor = TlsAcceptor::from(server_config);
-                    match acceptor.accept(TokioIo::new(upgraded)).await {
-                        Ok(tls) => serve_connection(handler, tls, inner_meta).await,
-                        // Der Client hat unsere CA nicht akzeptiert oder ein
-                        // anderes SNI gesendet als das CONNECT-Ziel — beides
-                        // ist gewollt fail-closed (kein Fronting), sichtbar
-                        // wird es als TLS_003 in HUM-045.
+                    match tls::accept(server_config, TokioIo::new(upgraded)).await {
+                        Ok((stream, sni)) => {
+                            let inner_meta = meta.tunnel(authority, sni);
+                            serve_connection(handler, stream, inner_meta).await;
+                        }
+                        // Der Client hat unsere CA nicht akzeptiert oder eine
+                        // unbrauchbare SNI geschickt — beides ist gewollt
+                        // fail-closed, sichtbar wird es als TLS_003 in
+                        // HUM-045.
                         Err(err) => tracing::debug!(%err, "tls handshake with the client failed"),
                     }
                 }
@@ -169,41 +221,39 @@ impl FlowHandler {
         response
     }
 
-    /// Eine gewöhnliche Anfrage (Origin- oder Absolut-Form): Ziel bestimmen,
-    /// Body puffern, entscheiden, weiterleiten oder blocken.
+    /// Eine gewöhnliche Anfrage (Origin- oder Absolut-Form): Ziel prüfen,
+    /// Body puffern, Detektoren laufen lassen, entscheiden, weiterleiten oder
+    /// blocken.
+    ///
+    /// Die Reihenfolge ist die aus `backlog/sprint-2.md` HUM-023 und nicht
+    /// verhandelbar: Erst die Konsistenz von CONNECT-Ziel, SNI und Authority,
+    /// dann der Body, dann die Detektoren, dann die Regeln, und gehalten wird
+    /// nur, was `ask` ergibt. Jede Stufe davor darf ohne Rückfrage ablehnen;
+    /// keine darf ohne Regel oder Menschen erlauben.
     async fn handle_request(
         &self,
         req: Request<Incoming>,
-        meta: ConnMeta,
+        meta: ConnectionContext,
     ) -> Response<ResponseBody> {
-        let (scheme, authority) = match request_target(&req, &meta) {
+        // Anti-Fronting (ESC-3, ADR-007): Das Ziel, zu dem die Verbindung
+        // wirklich führt, und der Host, den die Anfrage nennt, müssen dasselbe
+        // sein. Ein CONNECT nach github.com mit einem `Host: evil.io` darin
+        // ist keine Anfrage an evil.io, sondern der Versuch, die Entscheidung
+        // für den einen Host auf den anderen zu übertragen. Sie wird ohne
+        // Rückfrage abgelehnt und mit dem echten Ziel als Authority verbucht.
+        let RequestTarget { scheme, authority } = match connect::check_authority(&meta, &req) {
             Ok(target) => target,
-            Err(reason) => return text_response(StatusCode::BAD_REQUEST, reason),
+            Err(AuthorityError::NoTarget(reason)) => {
+                return text_response(StatusCode::BAD_REQUEST, reason);
+            }
+            Err(AuthorityError::Mismatch(refusal)) => {
+                return self.refuse_authority(&meta, req, &refusal);
+            }
         };
         let path_and_query = req
             .uri()
             .path_and_query()
             .map_or_else(|| "/".to_owned(), ToString::to_string);
-
-        // Anti-Fronting, erste Stufe (ESC-3 `host_mismatch_blocked`): Das Ziel,
-        // zu dem die Verbindung wirklich fuehrt, und der Host, den die Anfrage
-        // nennt, muessen dasselbe sein. Ein CONNECT nach github.com mit einem
-        // `Host: evil.io` darin ist keine Anfrage an evil.io, sondern ein
-        // Versuch, die Entscheidung fuer den einen Host auf den anderen zu
-        // uebertragen. Sie wird ohne Rueckfrage abgelehnt und verbucht, mit
-        // dem echten Ziel als Authority des Flows.
-        if let Some(actual) = authority_conflict(&req, &authority, &meta) {
-            let (parts, _incoming) = req.into_parts();
-            let request = Self::build_request(
-                parts.method,
-                scheme,
-                actual,
-                path_and_query,
-                parts.headers,
-                BodyRef::empty(),
-            );
-            return self.refuse_before_pipeline(&meta, request, BlockReason::AuthorityMismatch);
-        }
 
         let (parts, incoming) = req.into_parts();
         let cap = self.inner.limits.body_cap_bytes;
@@ -224,7 +274,7 @@ impl FlowHandler {
                 parts.headers,
                 placeholder_body(declared, content_type.as_deref()),
             );
-            return self.refuse_before_pipeline(&meta, request, BlockReason::BodyCap);
+            return self.refuse_before_pipeline(&meta, request, BlockReason::BodyCap, None);
         }
 
         let body_bytes = match body::buffer(incoming, cap).await {
@@ -238,7 +288,7 @@ impl FlowHandler {
                     parts.headers,
                     placeholder_body(cap, content_type.as_deref()),
                 );
-                return self.refuse_before_pipeline(&meta, request, BlockReason::BodyCap);
+                return self.refuse_before_pipeline(&meta, request, BlockReason::BodyCap, None);
             }
             Err(BufferError::Read) => {
                 return text_response(StatusCode::BAD_REQUEST, "request body read error");
@@ -262,11 +312,8 @@ impl FlowHandler {
             request.clone(),
         );
         self.inner.queue.publish(flow.received_event());
-        if self
-            .apply(&mut flow, TransitionInput::Analyze { findings: vec![] })
-            .is_err()
-        {
-            return self.fail_closed(&mut flow);
+        if let Err(response) = self.analyze(&mut flow, &meta, &request, &body_bytes) {
+            return response;
         }
 
         let decision = self.inner.pipeline.decide(&mut flow, &meta).await;
@@ -275,12 +322,17 @@ impl FlowHandler {
             Decision::AllowEdited { request: edited } => {
                 // Die Bearbeitung darf Methode, Pfad, Kopfzeilen und Body
                 // aendern, aber nie das Ziel: Entschieden wurde fuer genau
-                // diese Authority, und eine bearbeitete Anfrage an einen
-                // anderen Host waere ein Egress, den kein Mensch freigegeben
-                // hat. Die Konsistenz von Authority und SNI der eingehenden
-                // Verbindung prueft HUM-023; das hier ist die andere Richtung.
+                // diese Authority unter genau diesem Schema, und eine
+                // bearbeitete Anfrage an einen anderen Host waere ein Egress,
+                // den kein Mensch freigegeben hat. Das Schema gehoert zum
+                // Ziel: `https` nach `http` umgeschrieben ginge an denselben
+                // Host, aber im Klartext, und niemand hat einer Herabstufung
+                // zugestimmt. Das ist dieselbe Aussage wie die Pruefung der
+                // eingehenden Verbindung, nur in die andere Richtung.
                 let edited = *edited;
-                if edited.authority != flow.request.authority {
+                if edited.authority != flow.request.authority
+                    || edited.scheme != flow.request.scheme
+                {
                     return self.revise_to_block(&mut flow, BlockReason::AuthorityMismatch);
                 }
                 let edited_body = edited
@@ -297,13 +349,143 @@ impl FlowHandler {
         }
     }
 
+    /// Der Scan und alles, was aus ihm folgt: `Analyzed`, die Befunde, der
+    /// Datensatz, und der harte Block.
+    ///
+    /// Der Scan läuft über die vollständige Anfrage und vor jeder Regel: Was
+    /// gefunden wurde, steht in `Analyzed` und damit vor dem Menschen, bevor
+    /// irgendetwas entschieden ist.
+    ///
+    /// # Errors
+    ///
+    /// Die fertige Antwort, wenn der Flow hier schon endet: fail-closed nach
+    /// einem abgelehnten Übergang, oder der harte Block auf ein
+    /// prüfsummen-sicheres Geheimnis.
+    fn analyze(
+        &self,
+        flow: &mut Flow,
+        meta: &ConnectionContext,
+        request: &HttpRequest,
+        body: &[u8],
+    ) -> Result<(), Response<ResponseBody>> {
+        let report = self.inner.scanner.scan(request, body);
+        let truncated = report.truncated;
+        let checksum_secret = report
+            .findings
+            .iter()
+            .any(|finding| finding.tier == Tier::Checksum);
+        log_findings(flow, &report.findings, truncated);
+        if self
+            .apply(
+                flow,
+                TransitionInput::Analyze {
+                    findings: report.findings,
+                },
+            )
+            .is_err()
+        {
+            return Err(self.fail_closed(flow));
+        }
+        // Erst `Analyzed`, dann die Befunde des Scans: Sie erklären eine Lücke
+        // in der Suche (`FINDINGS_002`) und gehören deshalb an den Fund, nicht
+        // davor.
+        for diagnostic in report.diagnostics {
+            self.publish_diagnostic(flow.id, diagnostic);
+        }
+
+        // Der Datensatz entsteht hier, an der einen Stelle, die den Bericht
+        // des Scans kennt: Er trägt `findings_truncated`, und er steht in der
+        // Registry, bevor irgendein `Held` veröffentlicht wird.
+        let mut record = FlowRecord::new(flow, meta);
+        record.findings_truncated = truncated;
+        self.inner.queue.registry().insert(record);
+
+        // `hold.hard_block_checksum_secrets`: Ein Fund, den eine Prüfsumme
+        // bestätigt, ist kein Verdacht. Wer den Schalter setzt, hat im Voraus
+        // entschieden, dass so etwas den Rechner nicht verlässt; gefragt wird
+        // dann nicht mehr.
+        if self.inner.limits.hard_block_checksum_secrets && checksum_secret {
+            return Err(self.block_checksum_secret(flow));
+        }
+        Ok(())
+    }
+
+    /// Blockt einen Flow, in dem ein prüfsummen-sicheres Geheimnis steckt
+    /// (`hold.hard_block_checksum_secrets`).
+    ///
+    /// Das System entscheidet, ohne zu fragen; erlaubt darf es nie, und hier
+    /// lehnt es ab. Der Grund heißt `secret` und nicht `user`: Es hat niemand
+    /// entschieden, und eine Antwort, die einen Menschen nennt, den es nicht
+    /// gab, wäre eine Unwahrheit gegenüber dem Agenten und dem Protokoll
+    /// (`backlog/CONVENTIONS.md` 4.13). Die Notiz sagt, was passiert ist, ohne
+    /// den Wert zu nennen — der steht in keiner Meldung, nur sein Hash.
+    fn block_checksum_secret(&self, flow: &mut Flow) -> Response<ResponseBody> {
+        let reason = BlockReason::Secret;
+        let note = "a checksum-confirmed secret was found in this request and \
+                    hold.hard_block_checksum_secrets is on";
+        let decision = Decision::Block {
+            reason,
+            note: Some(note.to_owned()),
+        };
+        if self
+            .apply(
+                flow,
+                TransitionInput::Decide {
+                    decision,
+                    source: DecisionSource::System,
+                },
+            )
+            .is_err()
+        {
+            return self.fail_closed(flow);
+        }
+        self.record_block(flow, reason, Some(note))
+    }
+
+    /// Hängt einen Befund an einen Flow.
+    fn publish_diagnostic(&self, flow_id: FlowId, diagnostic: Diagnostic) {
+        self.inner.queue.publish(FlowEvent::Diagnostic {
+            flow_id: Some(flow_id),
+            at: SystemTime::now(),
+            diagnostic: Box::new(diagnostic),
+        });
+    }
+
+    /// Lehnt eine Anfrage ab, deren Angaben zum Ziel sich widersprechen.
+    ///
+    /// Der Body wird nicht gelesen und nichts wird weitergeleitet; der Flow
+    /// trägt das echte Ziel, und der Befund [`PROXY_002`](humanitl_core::diagnostics::codes::PROXY_002)
+    /// nennt beide Seiten des Widerspruchs im Ereignisstrom.
+    fn refuse_authority(
+        &self,
+        meta: &ConnectionContext,
+        req: Request<Incoming>,
+        refusal: &AuthorityRefusal,
+    ) -> Response<ResponseBody> {
+        let path_and_query = req
+            .uri()
+            .path_and_query()
+            .map_or_else(|| "/".to_owned(), ToString::to_string);
+        let (parts, _incoming) = req.into_parts();
+        let request = Self::build_request(
+            parts.method,
+            refusal.target.scheme,
+            refusal.target.authority.clone(),
+            path_and_query,
+            parts.headers,
+            BodyRef::empty(),
+        );
+        let reason = refusal.reason();
+        self.refuse_before_pipeline(meta, request, reason, Some(refusal.diagnostic()))
+    }
+
     /// Leitet eine erlaubte Anfrage weiter und streamt die Antwort zurück.
     async fn forward(
         &self,
         mut flow: Flow,
         request: HttpRequest,
         body: Bytes,
-        meta: &ConnMeta,
+        meta: &ConnectionContext,
     ) -> Response<ResponseBody> {
         // Fail-closed vor dem Egress: kann der Flow nicht nach `Forwarded`, geht
         // die Anfrage nicht hinaus.
@@ -336,17 +518,19 @@ impl FlowHandler {
     }
 
     /// Baut einen [`Flow`] für eine schon vor der Pipeline abgelehnte Anfrage
-    /// (Body über Cap): Received, Analyzed, Decided(Block) durch das System,
-    /// dann die `413`-Antwort samt `Recorded`.
+    /// (Body über Cap, widersprüchliche Authority): Received, optional der
+    /// Befund, Analyzed, Decided(Block) durch das System, dann die Antwort
+    /// samt `Recorded`.
     ///
     /// Dieser Flow erreicht keine Pipeline und trägt sich deshalb selbst in die
     /// [`FlowRegistry`](crate::registry::FlowRegistry) ein; sonst fehlte er in
     /// `ListFlows`.
     fn refuse_before_pipeline(
         &self,
-        meta: &ConnMeta,
+        meta: &ConnectionContext,
         request: HttpRequest,
         reason: BlockReason,
+        diagnostic: Option<Diagnostic>,
     ) -> Response<ResponseBody> {
         let mut flow = Flow::new(FlowId::new(), meta.session, SystemTime::now(), request);
         self.inner
@@ -354,6 +538,9 @@ impl FlowHandler {
             .registry()
             .insert(FlowRecord::new(&flow, meta));
         self.inner.queue.publish(flow.received_event());
+        if let Some(diagnostic) = diagnostic {
+            self.publish_diagnostic(flow.id, diagnostic);
+        }
         if self
             .apply(&mut flow, TransitionInput::Analyze { findings: vec![] })
             .is_err()
@@ -529,8 +716,8 @@ impl FlowHandler {
 /// Bedient eine ganze Verbindung, bis sie endet.
 ///
 /// Für die entschlüsselte Verbindung nach einem `CONNECT` ruft der Handler
-/// sich selbst rekursiv mit `meta.tls = true` auf.
-pub async fn serve_connection<I>(handler: FlowHandler, io: I, meta: ConnMeta)
+/// sich selbst rekursiv auf, mit dem Kontext des Tunnels (Ziel und SNI).
+pub async fn serve_connection<I>(handler: FlowHandler, io: I, meta: ConnectionContext)
 where
     I: crate::egress::AsyncStream + 'static,
 {
@@ -560,104 +747,6 @@ fn connect_authority(uri: &hyper::Uri) -> Option<Authority> {
     let host = HostName::parse(authority.host()).ok()?;
     let port = authority.port_u16().unwrap_or(443);
     Some(Authority::new(host, port))
-}
-
-/// Das Ziel, das die Verbindung wirklich hat, wenn es dem widerspricht, was
-/// die Anfrage nennt; sonst `None`.
-///
-/// Zwei Faelle: In einem CONNECT-Tunnel zaehlt das Tunnelziel, und die innere
-/// Anfrage darf keinen anderen Host tragen. Ausserhalb eines Tunnels zaehlt die
-/// Absolut-Form der Anfragezeile, und die `Host`-Kopfzeile darf ihr nicht
-/// widersprechen. Ein fehlender Port ist der Standardport des Schemas, damit
-/// `example.com` und `example.com:443` nicht als Konflikt gelten.
-fn authority_conflict(
-    req: &Request<Incoming>,
-    named: &Authority,
-    meta: &ConnMeta,
-) -> Option<Authority> {
-    if let Some(tunnel) = &meta.connect_authority {
-        return (tunnel != named).then(|| tunnel.clone());
-    }
-    let uri = req.uri();
-    let line = uri.authority()?;
-    let host_header = header_string(req.headers(), hyper::header::HOST)?;
-    let (host_text, port) = split_host_port(host_header);
-    let host = HostName::parse(host_text).ok()?;
-    let scheme = uri
-        .scheme_str()
-        .and_then(Scheme::parse)
-        .unwrap_or(Scheme::Http);
-    let from_header = Authority::new(host, port.unwrap_or_else(|| scheme.default_port()));
-    let line_host = HostName::parse(line.host()).ok()?;
-    let from_line = Authority::new(
-        line_host,
-        line.port_u16().unwrap_or_else(|| scheme.default_port()),
-    );
-    (from_header != from_line).then_some(from_line)
-}
-
-/// Bestimmt Schema und Ziel einer gewöhnlichen Anfrage.
-///
-/// Absolut-Form (Klartext-Proxy) gewinnt mit ihrer URI; sonst kommt der Host
-/// aus dem `Host`-Kopf oder, im Tunnel, aus dem CONNECT-Ziel. Das Schema folgt
-/// der URI, sonst dem TLS-Zustand der Verbindung.
-fn request_target(
-    req: &Request<Incoming>,
-    meta: &ConnMeta,
-) -> Result<(Scheme, Authority), &'static str> {
-    let uri = req.uri();
-    let scheme = match uri.scheme_str() {
-        Some(text) => Scheme::parse(text).ok_or("unsupported scheme")?,
-        None if meta.tls => Scheme::Https,
-        None => Scheme::Http,
-    };
-
-    if let Some(authority) = uri.authority() {
-        let host = HostName::parse(authority.host()).map_err(|_err| "invalid host")?;
-        let port = authority
-            .port_u16()
-            .unwrap_or_else(|| scheme.default_port());
-        return Ok((scheme, Authority::new(host, port)));
-    }
-
-    if let Some(host_header) = header_string(req.headers(), hyper::header::HOST) {
-        let (host_text, port) = split_host_port(host_header);
-        let host = HostName::parse(host_text).map_err(|_err| "invalid host")?;
-        let port = port.unwrap_or_else(|| scheme.default_port());
-        return Ok((scheme, Authority::new(host, port)));
-    }
-
-    if let Some(tunnel) = &meta.connect_authority {
-        return Ok((scheme, tunnel.clone()));
-    }
-
-    Err("missing host")
-}
-
-/// Zerlegt einen `Host`-Kopf in Host und optionalen Port; `IPv6` in eckigen
-/// Klammern wird korrekt behandelt.
-fn split_host_port(value: &str) -> (&str, Option<u16>) {
-    if let Some(rest) = value.strip_prefix('[') {
-        if let Some((inner, tail)) = rest.split_once(']') {
-            let port = tail.strip_prefix(':').and_then(|p| p.parse().ok());
-            // Host mit Klammern zurückgeben, damit `HostName::parse` das
-            // IPv6-Literal erkennt.
-            let end = 1 + inner.len() + 1;
-            return (&value[..end], port);
-        }
-        return (value, None);
-    }
-    match value.rsplit_once(':') {
-        // Nur trennen, wenn der Rest kein weiteres `:` trägt (also keine
-        // bracketlose IPv6-Adresse ist) und der Port eine Zahl ist.
-        Some((host, port)) if !host.contains(':') && !port.is_empty() => {
-            match port.parse::<u16>() {
-                Ok(port) => (host, Some(port)),
-                Err(_) => (value, None),
-            }
-        }
-        _ => (value, None),
-    }
 }
 
 /// Der Wert eines Kopfes als `&str`, falls vorhanden und gültiges UTF-8.
@@ -728,4 +817,34 @@ fn text_response(status: StatusCode, message: &str) -> Response<ResponseBody> {
     );
     headers.insert(hyper::header::CONNECTION, HeaderValue::from_static("close"));
     response
+}
+
+/// Schreibt in den Trace, was gefunden wurde — ohne den Wert.
+///
+/// Ein Fund trägt Art, Ort, Bereich und den SHA-256 des Werts. Der Wert selbst
+/// steht in keiner Zeile: Ein Protokoll, das Geheimnisse mitschreibt, ist
+/// selbst das Leck, das diese Suche verhindern soll.
+fn log_findings(flow: &Flow, findings: &[Finding], truncated: bool) {
+    if findings.is_empty() && !truncated {
+        return;
+    }
+    for finding in findings {
+        tracing::debug!(
+            flow = %flow.id,
+            kind = %finding.kind,
+            location = %finding.location,
+            tier = finding.tier.as_str(),
+            span_start = finding.span.start,
+            span_end = finding.span.end,
+            value_hash = %finding.value_hash_hex(),
+            "finding"
+        );
+    }
+    if truncated {
+        tracing::debug!(
+            flow = %flow.id,
+            findings = findings.len(),
+            "the request was only searched in part; the result is not an all-clear"
+        );
+    }
 }

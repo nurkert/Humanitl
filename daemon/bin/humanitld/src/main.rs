@@ -27,13 +27,14 @@ use std::io;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use clap::Parser;
 use humanitl_config::{AskMode, Config, DIR_MODE, Paths as XdgPaths};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, SessionId, Severity};
+use humanitl_findings::FindingsSettings;
 use humanitl_ipc::fake::{FakeDaemon, FakeOptions, Session};
 use humanitl_ipc::{DaemonService, IpcServer, auth, bind_socket, v1};
 use humanitl_proxy::ca::{CaStore, DEFAULT_LEAF_CAPACITY, LeafCache};
@@ -42,9 +43,10 @@ use humanitl_proxy::handler::ProxyLimits;
 use humanitl_proxy::pipeline::FlowPipeline;
 use humanitl_proxy::upstream::ClientTls;
 use humanitl_proxy::{
-    AskPipeline, ConnMeta, FlowHandler, FlowRegistry, HoldQueue, ProxyCore, SystemResolver,
-    Upstream,
+    AskPipeline, ConnectionContext, FlowHandler, FlowRegistry, HoldQueue, ProxyCore, RulesPipeline,
+    Scanner, SystemResolver, Tier1Scanner, Upstream,
 };
+use humanitl_rules::{RuleSet, parse_rules_for_session};
 use tokio::net::UnixListener;
 // tonic bringt `tokio-stream` mit dem Feature `net` bereits mit (über sein
 // `server`-Feature); der Wrapper von dort erspart diesem Binary eine eigene
@@ -186,11 +188,13 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
 
     let proxy = ProxyCore::new();
     let session = SessionId::new();
+    let rules = load_rules(&xdg, session);
+    let scanner = build_scanner(&config)?;
     let proxy_socket = proxy.start_session(
         session,
         &xdg.proxy_socket(),
-        build_handler(&config, &queue, &ca)?,
-        ConnMeta::plain(session),
+        build_handler(&config, &queue, &ca, &rules, &scanner)?,
+        ConnectionContext::plain(session),
     )?;
     tracing::info!(
         socket = %proxy_socket.display(),
@@ -240,6 +244,8 @@ fn build_handler(
     config: &Config,
     queue: &Arc<HoldQueue>,
     ca: &Arc<CaStore>,
+    rules: &Arc<RwLock<RuleSet>>,
+    scanner: &Arc<dyn Scanner>,
 ) -> Result<FlowHandler, Diagnostic> {
     let client_tls = ClientTls::new(&[], config.experimental.h2_upstream)?;
     let upstream = Upstream::new(
@@ -255,14 +261,121 @@ fn build_handler(
         AskMode::None => Duration::ZERO,
         AskMode::Ui | AskMode::Terminal => Duration::from_secs(config.hold.timeout_secs),
     };
-    let pipeline: Arc<dyn FlowPipeline> = Arc::new(AskPipeline::new(Arc::clone(queue), timeout));
-    Ok(FlowHandler::new(
+    // Reihenfolge des Pfads (HUM-023): Der Handler prüft Authority und lässt
+    // die Detektoren laufen, dann entscheidet die Regel-Engine, und gehalten
+    // wird nur, was `ask` ergibt. Ohne Regel fragt die Warteschlange.
+    let ask: Arc<dyn FlowPipeline> = Arc::new(AskPipeline::new(Arc::clone(queue), timeout));
+    let pipeline: Arc<dyn FlowPipeline> = Arc::new(RulesPipeline::new(
+        Arc::clone(queue),
+        Arc::clone(rules),
+        ask,
+    ));
+    Ok(FlowHandler::with_findings(
         Arc::clone(queue),
         pipeline,
         upstream,
         Arc::new(LeafCache::new(Arc::clone(ca), DEFAULT_LEAF_CAPACITY)),
-        ProxyLimits::from_config(&config.limits, &config.recorder),
+        ProxyLimits::from_config(&config.limits, &config.recorder).with_hold(&config.hold),
+        Arc::clone(scanner),
     ))
+}
+
+/// Baut die Detektoren aus der Konfiguration, einmal beim Start.
+///
+/// Die Einstellungen ändern sich innerhalb einer Sitzung nicht, und die
+/// Übersetzung der Muster ist die teure Hälfte; sie geschieht deshalb genau
+/// einmal. Ein unbrauchbares Regel-Set (`FINDINGS_001`) beendet den Start:
+/// Eine Suche nach Geheimnissen, die stillschweigend ausfällt, wäre schlimmer
+/// als gar keine, weil ein leeres Ergebnis wie ein sauberes aussähe.
+///
+/// # Errors
+///
+/// `FINDINGS_001` aus [`Tier1Scanner::new`], und der Befund aus
+/// [`FindingsSettings::with_ignored_hashes_hex`], wenn in
+/// `findings.ignored_hashes` etwas steht, das kein SHA-256 in Hex ist.
+fn build_scanner(config: &Config) -> Result<Arc<dyn Scanner>, Diagnostic> {
+    let cap_bytes = usize::try_from(config.limits.preview_cap_bytes)
+        .unwrap_or(humanitl_findings::settings::DEFAULT_CAP_BYTES);
+    let settings = FindingsSettings::default()
+        .with_enabled(config.findings.enabled)
+        .with_user_terms(config.findings.user_terms.iter())
+        .with_email_allow_domains(config.findings.email_allow_domains.iter())
+        .with_ignored_hashes_hex(config.findings.ignored_hashes.iter())?
+        .with_limits(cap_bytes, config.limits.max_decompress_ratio);
+    let scanner = Tier1Scanner::new(&settings)?;
+    tracing::info!(
+        enabled = config.findings.enabled,
+        detectors = ?scanner.detector_ids(),
+        cap_bytes,
+        "detectors ready"
+    );
+    Ok(Arc::new(scanner))
+}
+
+/// Der mitgelieferte Regelsatz.
+///
+/// Er liegt als Datei im Baum, damit `docs/reference/rules.md` und die Tests
+/// dieselbe Quelle lesen, und wird ins Binary gebunden, damit ein installierter
+/// Daemon ihn ohne das Repository hat. HUM-038 füllt ihn; bis dahin ist er
+/// leer, und ohne Regel wird gefragt.
+const BUNDLED_RULES: &str = include_str!("../../../../rules/default.yaml");
+
+/// Liest den Regelsatz für diese Sitzung: erst die Regeln des Nutzers, dann
+/// die mitgelieferten.
+///
+/// Die Reihenfolge ist die Bedeutung: Die erste passende Regel gewinnt, und
+/// die Regeln des Nutzers stehen vor den mitgelieferten
+/// (`backlog/sprint-2.md` HUM-022). Fehlt die Datei des Nutzers, ist das kein
+/// Fehler; ist sie kaputt, gilt sie als leer, und dann wird gefragt statt
+/// erlaubt. Woher die Regeln zur Laufzeit kommen und wie sie sich ändern,
+/// klärt HUM-027.
+fn load_rules(xdg: &XdgPaths, session: SessionId) -> Arc<RwLock<RuleSet>> {
+    let path = xdg.rules_path();
+    let user = match fs::read_to_string(&path) {
+        Ok(yaml) => read_rules(&yaml, &path.display().to_string(), session),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            tracing::info!(path = %path.display(), "no rules file yet; every request is asked");
+            RuleSet::new()
+        }
+        Err(err) => {
+            tracing::warn!(
+                path = %path.display(),
+                %err,
+                "the rules file is unreadable; every request is asked"
+            );
+            RuleSet::new()
+        }
+    };
+    let bundled = read_rules(BUNDLED_RULES, "rules/default.yaml", session);
+    tracing::info!(
+        user = user.len(),
+        bundled = bundled.len(),
+        "rule set loaded"
+    );
+    Arc::new(RwLock::new(RuleSet::from_rules(
+        user.iter().cloned().chain(bundled.iter().cloned()),
+    )))
+}
+
+/// Liest einen Regelsatz und meldet, was dabei auffiel.
+///
+/// Ein abgelehnter Regelsatz wird zum leeren Regelsatz: Eine kaputte Datei
+/// darf nie zu einer Freigabe führen, die niemand gegeben hat.
+fn read_rules(yaml: &str, source: &str, session: SessionId) -> RuleSet {
+    match parse_rules_for_session(yaml, session) {
+        Ok((set, diagnostics)) => {
+            for diagnostic in &diagnostics {
+                tracing::warn!(code = %diagnostic.code, why = %diagnostic.why, source, "rules");
+            }
+            set
+        }
+        Err(diagnostics) => {
+            for diagnostic in &diagnostics {
+                tracing::error!(code = %diagnostic.code, why = %diagnostic.why, source, "rules");
+            }
+            RuleSet::new()
+        }
+    }
 }
 
 /// Der Abspieler einer aufgezeichneten Sitzung (HUM-005).

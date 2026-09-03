@@ -26,9 +26,9 @@ use dashmap::DashMap;
 use humanitl_core::{Diagnostic, SessionId};
 use tokio::task::JoinHandle;
 
+use crate::connect::ConnectionContext;
 use crate::handler::{FlowHandler, serve_connection};
 use crate::listener::SessionSocket;
-use crate::pipeline::ConnMeta;
 
 /// Alle laufenden Sitzungen eines Daemons.
 ///
@@ -73,7 +73,7 @@ impl ProxyCore {
         session: SessionId,
         socket_path: &Path,
         handler: FlowHandler,
-        meta: ConnMeta,
+        meta: ConnectionContext,
     ) -> Result<PathBuf, Diagnostic> {
         let socket = SessionSocket::bind(socket_path)?;
         let socket_path = socket.path().to_owned();
@@ -131,7 +131,7 @@ impl Drop for ProxyCore {
 /// Nimmt Verbindungen an, bis der Socket schließt oder die Task abgebrochen
 /// wird. Der Socket lebt in dieser Task; endet sie, räumt sein `Drop` die Datei
 /// weg.
-async fn accept_loop(socket: SessionSocket, handler: FlowHandler, meta: ConnMeta) {
+async fn accept_loop(socket: SessionSocket, handler: FlowHandler, meta: ConnectionContext) {
     loop {
         match socket.listener().accept().await {
             Ok((stream, _addr)) => {

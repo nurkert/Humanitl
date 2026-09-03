@@ -320,8 +320,8 @@ Vergleichsregeln (Funktion `check_authority(ctx: &ConnectionContext, req: &HttpR
 Pipeline-Reihenfolge in `pipeline.rs` (pro Request):
 
 1. `FlowEvent::Received` emittieren (mit `DomainInfo`, siehe HUM-031).
-2. `check_authority`; bei `Err(reason)` → `Decided(Block{reason})` → 403-Antwort (Format CONVENTIONS 3.5) → `Recorded`. Zusätzlich Diagnostic PROXY_003 (Warning, `why` = „Client sent Host `evil.io` inside a tunnel to `github.com`") am Flow.
-3. Body vollständig lesen bis `hold.body_cap_bytes`; darüber → `Decided(Block{BodyCap})`, außer eine Regel mit `stream: true` matcht (dann Header-only-Hold; im MVP ausschließlich für den LLM-Passthrough relevant, HUM-039).
+2. `check_authority`; bei `Err(reason)` → `Decided(Block{reason})` → 403-Antwort (Format CONVENTIONS 3.5) → `Recorded`. Ein Sonderfall bleibt 400 statt 403: Origin-Form ohne Tunnel und ohne `Host`. Dort ist kein Ziel bekannt, ein Flow bräuchte eine erfundene Authority, und der 403-Body müsste `host: unknown` behaupten; RFC 9110 §7.2 verlangt hier ohnehin 400. Weitergeleitet wird auch dann nichts. Ebenfalls 403: ein Schema, das nicht zur Verbindung passt, also `http://` im Tunnel und `https://` ohne Tunnel. Zusätzlich Diagnostic PROXY_003 (Warning, `why` = „Client sent Host `evil.io` inside a tunnel to `github.com`") am Flow.
+3. Body vollständig lesen bis `hold.body_cap_bytes`; darüber → `Decided(Block{BodyCap})` mit **413** (das Register in CONVENTIONS 3.2 und der Test aus HUM-015 gehen hier vor; die 403 aus dem Fließtext dieses Issues ist überholt), außer eine Regel mit `stream: true` matcht (dann Header-only-Hold; im MVP ausschließlich für den LLM-Passthrough relevant, HUM-039).
 4. Findings-Scan (HUM-025) → `FlowEvent::Analyzed`.
 5. `RuleSet::evaluate(RequestKey{...}, now, session)`:
    - `Matched{Allow}` → `Decided(Allow)` mit `rule_id`, weiter zu Forward (HUM-024).
@@ -1211,17 +1211,19 @@ BACKLOG.md 3.5 (Isolates), Abschnitt 5 (Typo, Farben); CONVENTIONS.md 3.9; two_d
 Sprint: 2 · Größe: M · Abhängigkeiten: HUM-004, HUM-023 (Received-Event), HUM-020 · Blockiert: HUM-029, HUM-036
 
 ### Kontext
+**Entscheidung 2026-09-03, Rangliste:** Nicht Tranco. Die Standardliste dort mischt fuenf Quellen, darunter Cloudflare Radar unter CC BY-NC 4.0. Eine Nicht-kommerziell-Klausel ist genau die zusaetzliche Beschraenkung, die die GPL der Weitergabe verbietet; ein Hinweis daneben aendert daran nichts. Geliefert wird deshalb ein Ausschnitt der Majestic Million unter CC BY 3.0, mit Namensnennung und Aenderungsliste in `catalog/RANKS-LICENSE`. Das Proto-Feld heisst weiterhin `tranco_rank`, weil ein Umbenennen zwei Crates und die Oberflaeche braeuchte; ein eigener Chore zieht es auf `popularity_rank` nach.
+
 Der Domain-Kontext ist der „De-Panicker": erkannter Dienst plus null Findings heißt „sicher zu batchen". Alles kommt aus gebündelten Daten; es gibt keinen automatischen Fetch (ADR-006).
 
 ### Ziel
-Die Crate `humanitl-catalog` liefert `DomainInfo` (Apex, Katalogeintrag, Tranco-Rang, Zähler) und hängt es an `FlowEvent::Received`. Das UI zeigt rechts die Katalog-Karte oder die Unbekannt-Karte mit Schnellregeln.
+Die Crate `humanitl-catalog` liefert `DomainInfo` (Apex, Katalogeintrag, Verbreitungsrang, Zähler) und hängt es an `FlowEvent::Received`. Das UI zeigt rechts die Katalog-Karte oder die Unbekannt-Karte mit Schnellregeln.
 
 ### Nicht-Ziel
 Live-Favicon/og:title-Fetch (M9), Screenshots (M9), Nutzer-Kataloge (M7), mehr als ~30 Einträge (Rest bis 200 in HUM-059 Doku-Sprint ergänzt).
 
 ### Betroffene Pfade
-- `daemon/crates/catalog/src/{lib,psl,tranco,store}.rs` (neu)
-- `catalog/domains.yaml` (neu), `catalog/icons/*.svg` (neu), `catalog/tranco-top100k.csv.gz` (neu, mit `catalog/TRANCO-LICENSE`)
+- `daemon/crates/catalog/src/{lib,psl,ranks,store}.rs` (neu)
+- `catalog/domains.yaml` (neu), `catalog/icons/*.svg` (neu), `catalog/ranks-top100k.csv.gz` (neu, mit `catalog/RANKS-LICENSE`)
 - `proto/humanitl/v1/humanitl.proto` (ändern: `DomainInfo`)
 - `app/lib/features/intercept/widgets/domain_panel.dart` (neu), `catalog_card.dart`, `unknown_domain_card.dart`
 - `app/lib/features/intercept/providers/catalog_provider.dart` (neu; nur Icons/Beschreibung, Daten kommen vom Daemon)
@@ -1270,20 +1272,20 @@ entries:
 `hosts` verwenden dieselbe Glob-Semantik wie Regeln (`HostPattern`). Icons: SVG, monochrom oder Original, 20 × 20 gerendert; fehlt die Datei, wird `lucide.globe` gezeigt. Lizenzen der Icons in `catalog/icons/LICENSES.md`.
 
 ```rust
-pub struct Catalog { entries: Vec<CatalogEntry>, patterns: Vec<(HostPattern, usize)>, tranco: HashMap<String, u32>, seen: DashMap<String, SeenStats> }
-pub struct DomainInfo { pub apex: Option<String>, pub catalog_id: Option<String>, pub tranco_rank: Option<u32>, pub first_seen: Option<DateTime<Utc>>, pub seen_count: u32 }
+pub struct Catalog { entries: Vec<CatalogEntry>, patterns: Vec<(HostPattern, usize)>, ranks: HashMap<String, u32>, seen: DashMap<String, SeenStats> }
+pub struct DomainInfo { pub apex: Option<String>, pub catalog_id: Option<String>, pub popularity_rank: Option<u32>, pub first_seen: Option<DateTime<Utc>>, pub seen_count: u32 }
 impl Catalog {
     pub fn load(dir: &Path) -> Result<Self, Diagnostic>;     // CATALOG_001 bei Fehler; Daemon läuft dann mit leerem Katalog weiter (Warning)
-    pub fn info(&self, host: &HostName) -> DomainInfo;       // apex via `psl::domain_str`, tranco lookup auf apex, seen++ 
+    pub fn info(&self, host: &HostName) -> DomainInfo;       // apex via `psl::domain_str`, Rang-Lookup auf apex, seen++ 
 }
 ```
 
-Tranco: `tranco-top100k.csv.gz`, Zeilenformat `rank,domain`, beim Start in `HashMap<String, u32>` (ca. 5 MB RAM). Lookup auf dem Apex. Datei mit Datum im Namen des Commits dokumentieren; Aktualisierung ist ein `chore`-Issue pro Release.
+Rangliste: `ranks-top100k.csv.gz`, Zeilenformat `rank,domain`, beim Start in `HashMap<String, u32>` (gemessen 6,53 MiB Resident, nicht die geschaetzten 5 MB). Lookup auf dem Apex. Datei mit Datum im Namen des Commits dokumentieren; Aktualisierung ist ein `chore`-Issue pro Release.
 
 Proto:
 
 ```proto
-message DomainInfo { string apex = 1; string catalog_id = 2; uint32 tranco_rank = 3; google.protobuf.Timestamp first_seen = 4; uint32 seen_count = 5; }
+message DomainInfo { string apex = 1; string catalog_id = 2; uint32 tranco_rank = 3;  // Feldname aus HUM-003, Inhalt ist der Verbreitungsrang google.protobuf.Timestamp first_seen = 4; uint32 seen_count = 5; }
 // in FlowEvent.Received: DomainInfo domain = N;
 ```
 
@@ -1293,7 +1295,7 @@ UI `DomainPanel` (rechtes Pane, 28 %):
 - Ohne selektierten Flow: Panel zeigt Session-Zusammenfassung: Anzahl Hosts, Top 5 Hosts nach Requests.
 
 ### Schritte
-1. `humanitl-catalog`: Laden, Pattern-Index, PSL-Apex, Tranco; Tests.
+1. `humanitl-catalog`: Laden, Pattern-Index, PSL-Apex, Rangliste; Tests.
 2. `DomainInfo` in Proto und `Received`-Event; `Catalog` im Proxy-State.
 3. `catalog/domains.yaml` mit den 25 Einträgen oben plus Icons (mindestens Platzhalter-SVGs).
 4. Flutter: Dart-Modell `DomainInfo`, Katalog-Metadaten (Name, Beschreibung, Icon) werden zusätzlich als Asset gebündelt (`app/assets/catalog/domains.yaml` = Symlink/Kopie im Build, `catalogProvider` parst sie), damit das UI Icons und Texte ohne RPC hat; Daemon liefert nur `catalog_id`.
@@ -1302,7 +1304,7 @@ UI `DomainPanel` (rechtes Pane, 28 %):
 ### Tests
 - `catalog_pattern_match`: `api.github.com` → `github`; `evil-github.com` → None.
 - `apex_psl`: `a.b.github.io` → Apex `b.github.io` (PSL private section), `api.github.com` → `github.com`.
-- `tranco_lookup_on_apex`: `api.github.com` → Rang von `github.com`.
+- `rank_lookup_on_apex`: `api.github.com` → Rang von `github.com`.
 - `seen_count_increments`.
 - `catalog_load_error_is_warning`: fehlende Datei → Diagnostic CATALOG_001 Warning, `info()` liefert trotzdem Apex.
 - Flutter: `domain_panel_known`, `domain_panel_unknown`, `domain_panel_session_summary` Goldens; `quick_rule_calls_rules_add`.
@@ -1311,7 +1313,7 @@ UI `DomainPanel` (rechtes Pane, 28 %):
 - [ ] Tests und Goldens grün.
 - [ ] `catalog/domains.yaml` validiert gegen ein JSON-Schema (`catalog/domains.schema.json`, in CI mit `check-jsonschema`).
 - [ ] Kein Netzwerkzugriff aus `humanitl-catalog` (Crate hat keine Abhängigkeit auf hyper/reqwest/tokio-net; `cargo tree` in CI geprüft).
-- [ ] Tranco-Lizenzhinweis in `catalog/TRANCO-LICENSE` und in der About-Ansicht (ARB `about_tranco`).
+- [ ] Lizenzhinweis in `catalog/RANKS-LICENSE` und in der About-Ansicht (ARB `aboutRanks`).
 
 ### Fallstricke
 - `psl`-Crate hat die Liste einkompiliert; Version pinnen und im Changelog erwähnen, da sich die PSL ändert.

@@ -7,6 +7,15 @@
 //! wird angeheftet, private Ziele werden abgelehnt, und nach oben wird in M1
 //! ausschließlich HTTP/1.1 gesprochen (ALPN bietet dem Ziel nur `http/1.1`).
 //!
+//! Verbindungen werden nie über Authorities hinweg wiederverwendet: Jede
+//! erlaubte Anfrage bekommt ihre eigene Verbindung zu genau der
+//! [`Authority`](humanitl_core::Authority), für die entschieden wurde. Ein Pool,
+//! der `github.com` und `evil.io` auf derselben Verbindung bedient, weil beide
+//! auf dieselbe Adresse zeigen, würde die Entscheidung für den einen Host
+//! stillschweigend auf den anderen ausdehnen (HUM-023). Ein Pool je
+//! `(scheme, host, port)` kann später dazukommen; ein Pool über Authorities
+//! hinweg nie.
+//!
 //! Ein Scheitern auf diesem Weg ist ein [`UpstreamError`], kein Block: der
 //! Handler verbucht ihn als [`FlowState::Failed`](humanitl_core::FlowState::Failed)
 //! und antwortet dem Client mit `502` (ADR-004, `backlog/CONVENTIONS.md`
