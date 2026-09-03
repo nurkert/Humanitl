@@ -19,15 +19,14 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use humanitl_core::diagnostics::codes;
-use humanitl_core::rule::{Expiry, Rule};
-use humanitl_core::{Diagnostic, DiagnosticCode, FixAction, FlowId, Severity};
+use humanitl_core::{Diagnostic, DiagnosticCode, FlowId, Severity};
 use prost::Message as _;
 use tokio::sync::mpsc;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Code, Request, Response, Status};
 
-use crate::TOKEN_METADATA_KEY;
+use crate::convert::diagnostic_to_proto;
 use crate::v1;
 
 /// Ein Strom, der irgendwo auf dem Heap liegt und über Aufrufgrenzen reist.
@@ -162,42 +161,8 @@ impl<T> DaemonService<T> {
     /// [`Status`] mit [`Code::Unauthenticated`] und `IPC_001` in den Details,
     /// wenn der Metadata-Schlüssel fehlt oder nicht passt.
     fn check_token<R>(&self, request: &Request<R>) -> Result<(), Status> {
-        let presented = request
-            .metadata()
-            .get(TOKEN_METADATA_KEY)
-            .map(tonic::metadata::MetadataValue::as_encoded_bytes);
-
-        let ok = presented.is_some_and(|value| constant_time_eq(value, self.token.as_bytes()));
-        if ok {
-            return Ok(());
-        }
-
-        let why = if presented.is_none() {
-            format!("metadata key {TOKEN_METADATA_KEY} is missing")
-        } else {
-            format!("metadata key {TOKEN_METADATA_KEY} does not match the session token")
-        };
-        Err(diagnostic_to_status(
-            &Diagnostic::builder(codes::IPC_001, Severity::Error)
-                .why(why)
-                .build(),
-        ))
+        crate::auth::check_token(request.metadata(), &self.token)
     }
-}
-
-/// Vergleicht zwei Byte-Folgen in Zeit, die nicht vom Inhalt abhängt.
-///
-/// Das Token liegt lokal und ist kurzlebig; trotzdem gibt es keinen Grund, an
-/// dieser Stelle einen Zeitkanal offenzulassen.
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    if left.len() != right.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (a, b) in left.iter().zip(right.iter()) {
-        diff |= a ^ b;
-    }
-    diff == 0
 }
 
 /// Der gRPC-Code, mit dem ein Befund beim Client ankommt.
@@ -236,153 +201,6 @@ pub fn diagnostic_from_status(status: &Status) -> Option<v1::Diagnostic> {
         return None;
     }
     v1::Diagnostic::decode(status.details()).ok()
-}
-
-/// Übersetzt einen Befund in seine Wire-Form.
-#[must_use]
-pub fn diagnostic_to_proto(diagnostic: &Diagnostic) -> v1::Diagnostic {
-    v1::Diagnostic {
-        code: diagnostic.code.as_str().to_owned(),
-        severity: severity_to_proto(diagnostic.severity) as i32,
-        title: diagnostic.title.clone(),
-        why: diagnostic.why.clone(),
-        fix: diagnostic.fix.as_ref().map(fix_to_proto),
-        docs_url: diagnostic.docs.clone().unwrap_or_default(),
-    }
-}
-
-/// Übersetzt eine Dringlichkeit in ihre Wire-Form.
-#[must_use]
-pub const fn severity_to_proto(severity: Severity) -> v1::Severity {
-    match severity {
-        Severity::Info => v1::Severity::Info,
-        Severity::Warning => v1::Severity::Warning,
-        Severity::Error => v1::Severity::Error,
-        Severity::Blocking => v1::Severity::Blocking,
-    }
-}
-
-/// Übersetzt einen Behebungsvorschlag in seine Wire-Form.
-#[must_use]
-pub fn fix_to_proto(fix: &FixAction) -> v1::FixAction {
-    use v1::fix_action::Action;
-
-    let action = match fix {
-        FixAction::SetEnv { key, value } => Action::SetEnv(v1::fix_action::SetEnv {
-            key: key.clone(),
-            value: value.clone(),
-        }),
-        FixAction::AddRule(rule) => Action::AddRule(rule_to_proto(rule)),
-        FixAction::InstallService => Action::InstallService(()),
-        FixAction::ChangeSetting { key, value } => {
-            Action::ChangeSetting(v1::fix_action::ChangeSetting {
-                key: key.clone(),
-                value: value.clone(),
-            })
-        }
-        FixAction::CopyCommand(command) => Action::CopyCommand(command.clone()),
-        FixAction::OpenUrl(url) => Action::OpenUrl(url.clone()),
-        FixAction::RemountReadOnly(path) => {
-            Action::RemountReadOnly(path.to_string_lossy().into_owned())
-        }
-    };
-    v1::FixAction {
-        action: Some(action),
-    }
-}
-
-/// Übersetzt eine Regel in ihre Wire-Form.
-#[must_use]
-pub fn rule_to_proto(rule: &Rule) -> v1::Rule {
-    let action = match rule.action {
-        humanitl_core::rule::Action::Allow => v1::RuleAction::Allow,
-        humanitl_core::rule::Action::Block => v1::RuleAction::Block,
-        humanitl_core::rule::Action::Ask => v1::RuleAction::Ask,
-        humanitl_core::rule::Action::Redact => v1::RuleAction::Redact,
-    };
-    v1::Rule {
-        rule_id: rule.id.to_string(),
-        action: action as i32,
-        matcher: Some(matcher_to_proto(&rule.matcher)),
-        expires: Some(expiry_to_proto(rule.expires)),
-        stream: rule.stream,
-        created_from_flow_id: rule
-            .created_from
-            .map_or_else(String::new, |id| id.to_string()),
-        bundled: rule.bundled,
-        note: rule.note.clone().unwrap_or_default(),
-        created_at: None,
-        position: 0,
-        hit_count: 0,
-        allow_private: rule.allow_private,
-    }
-}
-
-/// Übersetzt die Bedingung einer Regel in ihre Wire-Form.
-fn matcher_to_proto(matcher: &humanitl_core::rule::Matcher) -> v1::RuleMatcher {
-    v1::RuleMatcher {
-        host: matcher.host.to_string(),
-        methods: matcher
-            .methods
-            .as_ref()
-            .map(|methods| methods.iter().map(|m| method_to_proto(m) as i32).collect())
-            .unwrap_or_default(),
-        path: matcher
-            .path
-            .as_ref()
-            .map_or_else(String::new, ToString::to_string),
-        scheme: matcher
-            .scheme
-            .map_or(0, |scheme| scheme_to_proto(scheme) as i32),
-        port: u32::from(matcher.port.unwrap_or(0)),
-        upgrade: match matcher.upgrade {
-            Some(humanitl_core::http::Upgrade::WebSocket) => v1::Upgrade::Websocket as i32,
-            None => v1::Upgrade::None as i32,
-        },
-    }
-}
-
-/// Übersetzt die Gültigkeit einer Regel in ihre Wire-Form.
-fn expiry_to_proto(expiry: Expiry) -> v1::RuleExpiry {
-    let expiry = match expiry {
-        Expiry::Never => v1::rule_expiry::Expiry::Never(()),
-        Expiry::Session(_) => v1::rule_expiry::Expiry::Session(()),
-        Expiry::At(at) => v1::rule_expiry::Expiry::At(prost_types::Timestamp {
-            seconds: at.timestamp(),
-            nanos: i32::try_from(at.timestamp_subsec_nanos().min(999_999_999)).unwrap_or(0),
-        }),
-    };
-    v1::RuleExpiry {
-        expiry: Some(expiry),
-    }
-}
-
-/// Übersetzt eine HTTP-Methode in ihre Wire-Form.
-#[must_use]
-pub fn method_to_proto(method: &humanitl_core::http::Method) -> v1::Method {
-    match *method {
-        humanitl_core::http::Method::GET => v1::Method::Get,
-        humanitl_core::http::Method::HEAD => v1::Method::Head,
-        humanitl_core::http::Method::POST => v1::Method::Post,
-        humanitl_core::http::Method::PUT => v1::Method::Put,
-        humanitl_core::http::Method::PATCH => v1::Method::Patch,
-        humanitl_core::http::Method::DELETE => v1::Method::Delete,
-        humanitl_core::http::Method::OPTIONS => v1::Method::Options,
-        humanitl_core::http::Method::CONNECT => v1::Method::Connect,
-        humanitl_core::http::Method::TRACE => v1::Method::Trace,
-        _ => v1::Method::Other,
-    }
-}
-
-/// Übersetzt ein Schema in seine Wire-Form.
-#[must_use]
-pub const fn scheme_to_proto(scheme: humanitl_core::http::Scheme) -> v1::Scheme {
-    match scheme {
-        humanitl_core::http::Scheme::Http => v1::Scheme::Http,
-        humanitl_core::http::Scheme::Https => v1::Scheme::Https,
-        humanitl_core::http::Scheme::Ws => v1::Scheme::Ws,
-        humanitl_core::http::Scheme::Wss => v1::Scheme::Wss,
-    }
 }
 
 /// Hängt an jedes Element eines Stroms ein `Ok`.
@@ -592,15 +410,7 @@ mod tests {
     use humanitl_core::{Diagnostic, Severity};
     use tonic::Code;
 
-    use super::{constant_time_eq, diagnostic_from_status, diagnostic_to_status, grpc_code};
-
-    #[test]
-    fn constant_time_eq_compares_content_and_length() {
-        assert!(constant_time_eq(b"abc", b"abc"));
-        assert!(!constant_time_eq(b"abc", b"abd"));
-        assert!(!constant_time_eq(b"abc", b"ab"));
-        assert!(constant_time_eq(b"", b""));
-    }
+    use super::{diagnostic_from_status, diagnostic_to_status, grpc_code};
 
     #[test]
     fn known_codes_map_to_grpc_codes() {

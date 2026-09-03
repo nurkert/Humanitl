@@ -13,6 +13,7 @@ workspace = true
 humanitl-config.workspace = true
 humanitl-core.workspace = true
 humanitl-ipc.workspace = true
+humanitl-proxy.workspace = true
 
 clap.workspace = true
 thiserror.workspace = true
@@ -22,4 +23,8 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+# Der End-to-End-Test schickt dem gestarteten Binary ein `SIGTERM`; nur der
+# geordnete Weg raeumt Socket und Token weg.
+libc.workspace = true
 tempfile.workspace = true
+tokio-stream.workspace = true
