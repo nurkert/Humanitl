@@ -604,3 +604,57 @@ async fn allow_edited_cannot_change_the_authority() {
     events.wait_for("recorded").await;
     assert_eq!(upstream.hits(), 0, "nothing may reach any upstream");
 }
+
+/// Ein CONNECT nach A mit `Host: B` darin ist keine Anfrage an B: Der Proxy
+/// lehnt sie ohne Rueckfrage ab und verbucht sie mit dem Tunnelziel als
+/// Authority (ESC-3 `host_mismatch_blocked`, Vorstufe von HUM-023).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_host_header_that_contradicts_the_tunnel_is_refused_unasked() {
+    let proxy = ProxyBuilder::new().start().await;
+    let upstream = FakeUpstream::tls(&proxy.ca).await;
+    let mut events = proxy.events();
+    let _decider = proxy.decide_with(Decision::Allow);
+
+    let mut tunnel = proxy.tls_client("localhost", upstream.port()).await;
+    let request = Request::builder()
+        .uri("/echo")
+        .header("host", "evil.test")
+        .body(http_body_util::Full::new(Bytes::new()))
+        .unwrap();
+    let response = tunnel.client.send(request).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = body_string(response.into_body()).await;
+    assert!(body.contains("reason: authority_mismatch"), "{body}");
+    assert!(
+        body.contains("host: localhost"),
+        "the block names the real target: {body}"
+    );
+    events.wait_for("recorded").await;
+    assert_eq!(
+        events.count("held"),
+        0,
+        "nobody is asked about a forged host"
+    );
+    assert_eq!(upstream.hits(), 0);
+}
+
+/// Dasselbe ohne Tunnel: Absolut-Form und `Host` muessen zusammenpassen.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_host_header_that_contradicts_the_request_line_is_refused_unasked() {
+    let upstream = FakeUpstream::plain().await;
+    let proxy = ProxyBuilder::new().start().await;
+    let mut events = proxy.events();
+    let mut client = proxy.client().await;
+    let request = Request::builder()
+        .uri(format!("http://127.0.0.1:{}/echo", upstream.port()))
+        .header("host", "evil.test")
+        .body(http_body_util::Full::new(Bytes::new()))
+        .unwrap();
+    let response = client.send(request).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = body_string(response.into_body()).await;
+    assert!(body.contains("reason: authority_mismatch"), "{body}");
+    events.wait_for("recorded").await;
+    assert_eq!(events.count("held"), 0);
+    assert_eq!(upstream.hits(), 0);
+}

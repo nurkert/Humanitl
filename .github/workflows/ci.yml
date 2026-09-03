@@ -12,7 +12,7 @@
 #
 # Branch protection (configured manually on the repository): `main` requires
 # rust-check, rust-test, proto-lint-and-gen, flutter-analyze-test, goldens,
-# escape-tests, e2e-xvfb, deps-lint and parity-check to pass.
+# escape-tests, e2e, e2e-xvfb, deps-lint and parity-check to pass.
 #
 # Every action is pinned to a commit SHA; the release tag in the trailing
 # comment is documentation. Bump both together, here and in .github/actions.
@@ -356,16 +356,11 @@ jobs:
   escape-tests:
     name: escape-tests
     runs-on: ubuntu-24.04
-    env:
-      # ESCAPE_ALLOW_FAIL tolerates a red probe, never a sandbox that would not
-      # start: run.sh exits 1 for the first and 2 for the second, and only the 1
-      # is swallowed. Sprint 0 is expected to be red, because the launcher
-      # (HUM-011), the shim (HUM-012) and the proxy (HUM-013/015) do not exist
-      # yet; tests/escape/README.md names the issue behind every red probe. The
-      # verdict step below reports a tolerated red run as a skip, so the job
-      # never ends green without saying what it did not enforce.
-      # remove in HUM-021
-      ESCAPE_ALLOW_FAIL: "1"
+    # Since HUM-021 every probe of Sprint 1 is green, so nothing is tolerated
+    # any more: run.sh exits 1 for a red probe and 2 for a sandbox that would
+    # not start, and both fail this job. A probe that a later issue turns
+    # green is recorded as skip, never as red; tests/escape/README.md names the
+    # issue behind each skip.
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/setup-rust
@@ -428,8 +423,8 @@ jobs:
             note="Every probe passed or was skipped."
           elif [[ "${ESCAPE_ALLOW_FAIL:-0}" == 1 ]]; then
             verdict="skipped"
-            note="$fail red probe(s) tolerated by ESCAPE_ALLOW_FAIL; nothing was enforced. Red is the expected state until HUM-021, see tests/escape/README.md."
-            echo "::notice::escape tests not yet enforced (HUM-011/HUM-012 pending)"
+            note="$fail red probe(s) tolerated by ESCAPE_ALLOW_FAIL; nothing was enforced. See tests/escape/README.md for the issue behind each one."
+            echo "::notice::escape tests not fully enforced (host_mismatch_blocked waits for HUM-023)"
           else
             verdict="failed"
             note="$fail red probe(s); see tests/escape/README.md."
@@ -455,6 +450,53 @@ jobs:
             target/escape/*.xml
             target/escape/results.txt
             target/escape/*.log
+          if-no-files-found: ignore
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-24.04
+    # The demo is under fifteen seconds of running once the binaries are there;
+    # the rest of the budget is the build. A job that hangs instead of failing
+    # would hide exactly the kind of defect this gate exists for.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: e2e-m1
+      - name: Install the runtime tooling
+        # bubblewrap starts the sandbox, curl is the agent inside it, jq reads
+        # the answers, python3 is the target the demo allows, iproute2 gives the
+        # target its address in the run's own network namespace, and util-linux
+        # brings unshare, which creates that namespace.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bubblewrap curl jq python3 iproute2 util-linux
+      - name: Allow unprivileged user namespaces
+        # Ubuntu 24.04 restricts them through AppArmor (HUM-002). Without this
+        # neither bwrap nor `unshare -rn` starts; the demo says so and fails,
+        # it does not hang.
+        run: |
+          set -euo pipefail
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: bwrap is usable
+        run: bwrap --version
+      - name: M1 demo (sealed box, held request, human decision)
+        # E2E_TRACE=1 adds `set -x`, so every failing assertion has its step in
+        # the log, as the acceptance criteria of HUM-021 ask.
+        env:
+          E2E_TRACE: "1"
+        run: ./tests/e2e/run.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: e2e-m1-logs
+          # The daemon log of the run, the launcher's isolation report per step,
+          # the access log of the target and the answers the agent received.
+          path: target/e2e
           if-no-files-found: ignore
 
   e2e-xvfb:
