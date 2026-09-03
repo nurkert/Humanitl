@@ -550,12 +550,16 @@ async fn allow_edited_cannot_downgrade_the_scheme() {
 #[tokio::test(flavor = "multi_thread")]
 async fn body_cap_blocks() {
     let upstream = FakeUpstream::plain().await;
-    let proxy = ProxyBuilder::new().start().await;
+    // Ein kleiner Cap statt der Vorgabe von 32 MiB. Der Proxy antwortet auf ein
+    // angekuendigtes Content-Length ueber dem Cap sofort mit 413, ohne den Body
+    // zu lesen; schickt der Test dann noch Dutzende MiB hinterher, bricht die
+    // Leitung mitten im Schreiben, und der Fehlschlag haengt am Zeitablauf
+    // statt an der Aussage. Mit 64 KiB Cap ist der Body in einem Rutsch weg.
+    let proxy = ProxyBuilder::new().body_cap(64 * 1024).start().await;
     let mut events = proxy.events();
     let _decider = proxy.decide_with(Decision::Allow);
 
-    // 33 MiB gegen den Vorgabe-Cap von 32 MiB.
-    let oversized = vec![b'x'; 33 * 1024 * 1024];
+    let oversized = vec![b'x'; 64 * 1024 + 1];
     let mut client = proxy.client().await;
     let response = client
         .send(post(
