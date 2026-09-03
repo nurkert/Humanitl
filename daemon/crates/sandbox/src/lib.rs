@@ -94,7 +94,7 @@ pub use crate::handle::{
 };
 pub use crate::launcher::{CheckResult, IsolationCheck, LaunchPlan, SandboxBackend, StdioMode};
 pub use crate::profile::{
-    Bridge, BridgeDirection, CA_CERT_DST, DEFAULT_DENY_SYSCALLS, FORBIDDEN_IN_HOME,
+    Bridge, BridgeDirection, CA_BUNDLE_DST, CA_CERT_DST, DEFAULT_DENY_SYSCALLS, FORBIDDEN_IN_HOME,
     FORBIDDEN_MOUNTS, HOSTNAME, MANDATORY_MASKED_FILES, MountPolicy, MountRule, MountSection,
     Namespace, NetworkSection, PROFILE_VERSION, PROXY_BRIDGE, PROXY_PORT, PROXY_SOCKET_DST,
     REQUIRED_SOCKET_FAMILIES, REQUIRED_SOCKET_TYPES, REQUIRED_TMPFS, SHIM_DST,
