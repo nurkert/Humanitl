@@ -72,6 +72,12 @@ tempfile = "3"
 base64 = "0.22"
 libc = "0.2"
 seccompiler = "0.5"
+# Entpacken gepackter Bodies fuer die Findings (HUM-025), mit Cap und Ratio.
+flate2 = "1"
+brotli = "8"
+# Aufzeichnung (HUM-026): SQLite eingebettet gebaut, damit kein System-SQLite
+# mit anderer Version die Migrationen ueberrascht.
+rusqlite = { version = "0.32", features = ["bundled"] }
 tokio-stream = { version = "0.1", features = ["sync", "net"] }
 shlex = "2"
 

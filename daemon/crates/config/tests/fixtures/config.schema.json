@@ -124,7 +124,7 @@
           "description": "Schaltet die Erkennung ganz ab. Aus bedeutet: keine Markierungen, keine Pseudonyme.",
           "type": "boolean",
           "x-project-scope": "denied",
-          "x-tier": "basic"
+          "x-tier": "advanced"
         },
         "ignored_hashes": {
           "default": [],
