@@ -669,6 +669,16 @@ pub struct Flow {
     pub state: FlowState,
     /// Alle bisherigen Zustände mit Zeitpunkt, beginnend bei `received`.
     pub history: Vec<(SystemTime, &'static str)>,
+    /// Ob die Regel, die diesen Flow freigegeben hat, private Zieladressen
+    /// erlaubt (`allow_private`, ADR-006).
+    ///
+    /// Kein Zustand, sondern eine Eigenschaft der Entscheidung: Die
+    /// Regel-Engine setzt es beim Freigeben, der Upstream liest es nach der
+    /// Auflösung. Ohne dieses Feld fällt die Erlaubnis zwischen Entscheidung
+    /// und Verbindung heraus, und die Durchreichregel zum lokalen
+    /// Sprachmodell auf der Schleife kann nie greifen. Vorgabe ist `false`:
+    /// Wer nichts sagt, erlaubt kein privates Ziel.
+    pub allow_private: bool,
 }
 
 impl Flow {
@@ -687,6 +697,7 @@ impl Flow {
             request,
             state: FlowState::Received,
             history: vec![(received_at, "received")],
+            allow_private: false,
         }
     }
 
