@@ -4,13 +4,13 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
-.PHONY: help check rust-fmt rust-clippy rust-build rust-test rust-deny typed-errors-lint \
+.PHONY: help check rust-fmt rust-clippy rust-build rust-test rust-doc rust-deny typed-errors-lint \
         flutter-get flutter-analyze flutter-test flutter-build proto escape e2e deps-lint docs-lint clean
 
 help: ## List targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | sort | awk -F':.*?## ' '{printf "  %-18s %s\n", $$1, $$2}'
 
-check: rust-fmt rust-clippy rust-build rust-test deps-lint docs-lint typed-errors-lint flutter-analyze flutter-test flutter-build ## Full local gate (same steps as CI)
+check: rust-fmt rust-clippy rust-build rust-test rust-doc deps-lint docs-lint typed-errors-lint flutter-analyze flutter-test flutter-build ## Full local gate (same steps as CI)
 
 # A rustup toolchain may exist without rustup on PATH (this machine): put its
 # bin directory first so `cargo fmt` and `cargo clippy` find their components.
@@ -32,6 +32,9 @@ rust-build: ## Build the whole daemon workspace
 
 rust-test: ## Run all Rust tests
 	cd daemon && cargo test --workspace
+
+rust-doc: ## Documentation builds without warnings (CI parity)
+	cd daemon && RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
 rust-deny: ## License and advisory audit (needs cargo-deny)
 	cd daemon && cargo deny check

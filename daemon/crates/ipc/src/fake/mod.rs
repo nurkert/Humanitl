@@ -311,7 +311,7 @@ impl DaemonApi for FakeDaemon {
     ///
     /// Host und Port kommen aus der Kopfzeile der Datei. Die Modelle hat
     /// niemand abgefragt, darum tragen sie den Vermerk aus
-    /// [`NOTHING_MEASURED`]; die Latenz ist 0, denn eine Zahl sähe in einem
+    /// `NOTHING_MEASURED`; die Latenz ist 0, denn eine Zahl sähe in einem
     /// Screenshot wie eine Messung aus.
     fn discover_llm(&self, _request: v1::DiscoverRequest) -> BoxStream<v1::DiscoverResult> {
         let endpoint = self.state.session().llm_endpoint;
