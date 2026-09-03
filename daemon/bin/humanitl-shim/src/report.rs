@@ -380,13 +380,24 @@ mod tests {
             Err(Error::Reserved(2))
         ));
         let (reader, writer) = pipe();
-        let closed = writer.as_raw_fd();
-        drop(writer);
+        // Die geschlossene Nummer muss hoch liegen. Linux vergibt immer die
+        // kleinste freie: Gaebe dieser Test eine niedrige Nummer frei, bekaeme
+        // sie ein Test, der nebenher laeuft, sofort wieder, `from_env` faende
+        // sie offen und uebernaehme einen fremden Deskriptor. Beim Aufraeumen
+        // stuerzte der ganze Testprozess mit "IO Safety violation" ab.
+        // SAFETY: F_DUPFD_CLOEXEC dupliziert einen offenen Deskriptor auf die
+        // kleinste freie Nummer ab 900; danach wird genau diese Kopie wieder
+        // geschlossen, und niemand sonst haelt sie.
+        let closed = unsafe { libc::fcntl(writer.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 900) };
+        assert!(closed >= 900, "F_DUPFD_CLOEXEC failed: {closed}");
+        // SAFETY: die Kopie von eben, die dieser Test allein besitzt.
+        unsafe { libc::close(closed) };
         let value = OsString::from(closed.to_string());
         assert!(matches!(
             Report::from_env(Some(&value)),
             Err(Error::NotOpen(fd, _)) if fd == closed
         ));
+        drop(writer);
         drop(reader);
     }
 
