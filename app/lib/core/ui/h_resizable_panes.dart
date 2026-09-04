@@ -6,6 +6,7 @@ library;
 import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import 'ui.dart';
@@ -76,6 +77,11 @@ List<double> resolvePaneWidths(
 ///
 /// The widget owns no state: [ratios] come in and [onRatiosChanged] reports
 /// every drag, so the owner can persist them.
+///
+/// Jeder Splitter ist ein Fokusstopp, und die Pfeiltasten verschieben ihn um
+/// [HSize.splitterStep]: jeder Zeigerweg hat eine Taste, und ein Ziehen ist
+/// keine Ausnahme (`docs/UX.md` 5.1). Ohne das ist die Aufteilung des
+/// Bildschirms ohne Maus nicht erreichbar.
 class HResizablePanes extends StatefulWidget {
   /// Creates panes; [children], [ratios] and [minWidths] have equal length.
   const HResizablePanes({
@@ -83,11 +89,11 @@ class HResizablePanes extends StatefulWidget {
     required this.ratios,
     required this.minWidths,
     required this.onRatiosChanged,
-    this.splitterWidth = 7,
+    this.splitterWidth = HSize.splitter,
+    this.splitterSemanticsLabel,
     super.key,
   }) : assert(
-         children.length == ratios.length &&
-             ratios.length == minWidths.length,
+         children.length == ratios.length && ratios.length == minWidths.length,
          'one ratio and one minimum per child',
        );
 
@@ -104,7 +110,16 @@ class HResizablePanes extends StatefulWidget {
   final ValueChanged<List<double>> onRatiosChanged;
 
   /// Width of the drag handle; a 1 px hairline sits in its middle.
+  ///
+  /// [HSize.splitter] by default; no literal, and odd on purpose so the
+  /// hairline lands on a whole pixel (`docs/UX.md` 2.1).
   final double splitterWidth;
+
+  /// Screen-reader label of every splitter, already localised.
+  ///
+  /// Null leaves the splitter unnamed; a caller that has a string for it
+  /// passes it in, because this layer holds no user-visible text.
+  final String? splitterSemanticsLabel;
 
   @override
   State<HResizablePanes> createState() => _HResizablePanesState();
@@ -162,6 +177,7 @@ class _HResizablePanesState extends State<HResizablePanes> {
                   color: _dragging == i
                       ? tokens.colors.accent
                       : tokens.colors.line,
+                  semanticsLabel: widget.splitterSemanticsLabel,
                   onStart: () => setState(() => _dragging = i),
                   onUpdate: (double delta) => _drag(i, delta, available),
                   onEnd: () => setState(() => _dragging = null),
@@ -174,11 +190,20 @@ class _HResizablePanesState extends State<HResizablePanes> {
   }
 }
 
-class _Splitter extends StatelessWidget {
+/// Verschiebt einen fokussierten Splitter um einen Schritt.
+class _NudgeIntent extends Intent {
+  const _NudgeIntent(this.direction);
+
+  /// -1 nach links, 1 nach rechts.
+  final double direction;
+}
+
+class _Splitter extends StatefulWidget {
   const _Splitter({
     required this.width,
     required this.active,
     required this.color,
+    required this.semanticsLabel,
     required this.onStart,
     required this.onUpdate,
     required this.onEnd,
@@ -187,27 +212,70 @@ class _Splitter extends StatelessWidget {
   final double width;
   final bool active;
   final Color color;
+  final String? semanticsLabel;
   final VoidCallback onStart;
   final ValueChanged<double> onUpdate;
   final VoidCallback onEnd;
 
   @override
+  State<_Splitter> createState() => _SplitterState();
+}
+
+class _SplitterState extends State<_Splitter> {
+  bool _focused = false;
+
+  /// Ein Tastendruck ist ein vollständiger Zug: anfassen, verschieben,
+  /// loslassen. Ohne das Loslassen bliebe der Splitter im Zustand „wird
+  /// gezogen" stehen, sobald jemand einmal eine Pfeiltaste gedrückt hat.
+  void _nudge(double direction) {
+    widget
+      ..onStart()
+      ..onUpdate(direction * HSize.splitterStep)
+      ..onEnd();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.resizeColumn,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        dragStartBehavior: DragStartBehavior.down,
-        onHorizontalDragStart: (DragStartDetails _) => onStart(),
-        onHorizontalDragUpdate: (DragUpdateDetails d) => onUpdate(d.delta.dx),
-        onHorizontalDragEnd: (DragEndDetails _) => onEnd(),
-        onHorizontalDragCancel: onEnd,
-        child: SizedBox(
-          width: width,
-          child: Center(
+    final bool marked = widget.active || _focused;
+    return Semantics(
+      label: widget.semanticsLabel,
+      child: FocusableActionDetector(
+        mouseCursor: SystemMouseCursors.resizeColumn,
+        onFocusChange: (bool value) => setState(() => _focused = value),
+        shortcuts: <ShortcutActivator, Intent>{
+          const SingleActivator(LogicalKeyboardKey.arrowLeft):
+              const _NudgeIntent(-1),
+          const SingleActivator(LogicalKeyboardKey.arrowRight):
+              const _NudgeIntent(1),
+        },
+        actions: <Type, Action<Intent>>{
+          _NudgeIntent: CallbackAction<_NudgeIntent>(
+            onInvoke: (_NudgeIntent intent) {
+              _nudge(intent.direction);
+              return null;
+            },
+          ),
+        },
+        child: HFocusRing.inline(
+          visible: _focused,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            dragStartBehavior: DragStartBehavior.down,
+            onHorizontalDragStart: (DragStartDetails _) => widget.onStart(),
+            onHorizontalDragUpdate: (DragUpdateDetails d) =>
+                widget.onUpdate(d.delta.dx),
+            onHorizontalDragEnd: (DragEndDetails _) => widget.onEnd(),
+            onHorizontalDragCancel: widget.onEnd,
             child: SizedBox(
-              width: active ? 2 : HSize.hairline,
-              child: ColoredBox(color: color),
+              width: widget.width,
+              child: Center(
+                child: SizedBox(
+                  // Kein Literal: die gezogene Linie ist doppelt so breit wie
+                  // die ruhende Haarlinie (`docs/UX.md` 2.1).
+                  width: marked ? HSize.splitterActive : HSize.hairline,
+                  child: ColoredBox(color: widget.color),
+                ),
+              ),
             ),
           ),
         ),

@@ -78,6 +78,16 @@ Issue-Nummer. Vor dem ersten Issue eines Sprints: `BACKLOG.md` Abschnitte 2 bis
 
 ## Regeln für Subagenten
 
+**Gemeinsam genutzte Dateien.** Wo mehrere Agenten dieselbe Datei berühren
+müssen (`app/lib/core/ipc/fake_daemon_client.dart`, `app/l10n/*.arb`,
+`daemon/crates/core-types/src/diagnostics/codes.rs`), gilt: nur den eigenen
+Abschnitt ändern, neue Einträge ans Ende anhängen, die Datei unmittelbar vor
+jedem Schreiben neu einlesen, und niemals die Datei als Ganzes neu schreiben
+oder ihr Ende abschneiden. Am 2026-09-04 hat ein Agent so 540 Zeilen eines
+anderen gelöscht; 351 Zeilen kamen aus einer Zwischenkopie zurück, der Rest
+musste nachgebaut werden. Wer eine strukturelle Änderung an einer solchen
+Datei braucht, meldet das und bekommt sie, wenn sonst niemand darin arbeitet.
+
 - Subagenten arbeiten nur an den Dateien ihres Issues und führen keine
   git-Befehle aus, die den Zustand ändern. Committet wird zentral.
 - Sie editieren nie `daemon/Cargo.toml`; gemeinsame Abhängigkeiten stehen dort

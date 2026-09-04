@@ -398,7 +398,8 @@ pub struct UiConfig {
     /// Meldung des Systems, wenn eine Anfrage wartet und das Fenster nicht vorn ist.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
     pub notifications: bool,
-    /// Ton zur Meldung.
+    /// Ton zur Meldung. Im MVP ohne Wirkung: der Schlüssel wird gelesen, aber
+    /// kein Ton gespielt (HUM-034).
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
     pub sound: bool,
 }

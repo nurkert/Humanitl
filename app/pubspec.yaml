@@ -35,6 +35,20 @@ dependencies:
   intl: 0.20.2
   # Fenstertitel und Mindestgroesse (nur nach `ensureInitialized`).
   window_manager: 0.5.2
+  # Speichern-Dialog des History-Exports (HUM-032). Exakt gepinnt: der Picker
+  # ist ein foederiertes Plugin, und die Linux-Fassung bindet den
+  # XDG-Desktop-Portal ueber D-Bus ein, also entscheidet die Version, welcher
+  # Dialog erscheint. Der Export schreibt die Datei selbst; `saveFile` liefert
+  # nur den Pfad (CONVENTIONS 3.9, HUM-032 Fallstricke).
+  file_picker: 12.2.0
+  # Tray und Desktop-Notification sprechen unter Linux D-Bus, und `dbus` ist
+  # eine reine Dart-Bibliothek: kein Plugin, also kein Eintrag in
+  # `linux/flutter/generated_plugin_registrant.cc` und keine zusaetzliche
+  # Systembibliothek zur Bauzeit. Die naheliegenden Pakete kosten beides --
+  # `tray_manager` verlangt `libayatana-appindicator3-dev`, ohne die schon
+  # `flutter build linux` scheitert, und `flutter_local_notifications` bringt
+  # denselben D-Bus-Verkehr hinter einem Plugin mit. Siehe HUM-034.
+  dbus: 0.7.15
 
 dev_dependencies:
   flutter_test:

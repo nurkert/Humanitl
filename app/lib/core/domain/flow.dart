@@ -99,6 +99,7 @@ abstract class Flow with _$Flow {
     DateTime? deadline,
     @Default('') String originTool,
     UpstreamError? upstreamError,
+
     /// When the daemon started holding the flow (the `Held` event); client
     /// side, drives the countdown ring together with [deadline].
     DateTime? heldAt,
@@ -111,8 +112,7 @@ abstract class Flow with _$Flow {
   const Flow._();
 
   /// The full URL of the request, as the card shows it.
-  String get url =>
-      '${scheme.name}://${authority.display(scheme)}$path';
+  String get url => '${scheme.name}://${authority.display(scheme)}$path';
 
   /// Time left until [deadline] at [now], never negative; zero without a
   /// deadline.
@@ -184,12 +184,27 @@ abstract class FlowPage with _$FlowPage {
     @Default(<Flow>[]) List<Flow> flows,
     @Default('') String nextCursor,
     @Default(0) int total,
+
+    /// True when [total] is only a lower bound.
+    ///
+    /// The recorder stops counting at its ceiling so that a long history does
+    /// not block a query; from there on `total` means "at least this many"
+    /// and the surface has to say so (`backlog/CONVENTIONS.md` 4.13 and
+    /// 4.14). The daemon fills the flag from `FlowPage::capped`, so nobody
+    /// has to guess it from the value.
+    @Default(false) bool capped,
   }) = _FlowPage;
 
   const FlowPage._();
 
   /// True when another page follows.
   bool get hasMore => nextCursor.isNotEmpty;
+
+  /// [total] as text, with a `+` where it is only a lower bound.
+  ///
+  /// The counterpart of `FlowPage::total_text` in the recorder. The digits
+  /// are grouped by the caller, which knows the language; this is the shape.
+  String totalText(String grouped) => capped ? '$grouped+' : grouped;
 }
 
 /// What `ListFlows` should return.

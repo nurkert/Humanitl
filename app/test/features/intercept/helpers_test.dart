@@ -85,6 +85,20 @@ void main() {
     expect(registrableDomain('github.com'), 'github.com');
     expect(registrableDomain('foo.bar.co.uk'), 'bar.co.uk');
     expect(registrableDomain('a.b.c.pages.dev'), 'c.pages.dev');
+    // Ein dreiteiliges Suffix wird geprüft, bevor das zweiteilige greift;
+    // sonst gruppierten fremde Buckets unter `amazonaws.com`.
+    expect(
+      registrableDomain('my-bucket.s3.amazonaws.com'),
+      'my-bucket.s3.amazonaws.com',
+    );
+    expect(registrableDomain('eu.amazonaws.com'), 'amazonaws.com');
+    // Stehen beide Längen in der Tabelle, gewinnt die längere; mit der
+    // umgekehrten Reihenfolge käme `foo.com.pl` heraus, also die Domain eines
+    // fremden Registranten.
+    const Set<String> both = <String>{'com.pl', 'foo.com.pl'};
+    expect(registrableDomain('a.foo.com.pl', suffixes: both), 'a.foo.com.pl');
+    expect(registrableDomain('x.com.pl', suffixes: both), 'x.com.pl');
+    expect(suffixLengths(both), <int>[3, 2]);
     expect(
       registrableDomain('192.168.1.50', isIpLiteral: true),
       '192.168.1.50',

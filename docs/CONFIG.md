@@ -178,7 +178,7 @@ Sprache, Erscheinungsbild und Meldungen der Oberfläche.
 |---|---|---|---|---|---|
 | `ui.language` | en \| de | `"en"` | basic | allowed | Sprache der Oberfläche. |
 | `ui.notifications` | boolean | `true` | advanced | allowed | Meldung des Systems, wenn eine Anfrage wartet und das Fenster nicht vorn ist. |
-| `ui.sound` | boolean | `false` | advanced | allowed | Ton zur Meldung. |
+| `ui.sound` | boolean | `false` | advanced | allowed | Ton zur Meldung. Im MVP ohne Wirkung: der Schlüssel wird gelesen, aber kein Ton gespielt (HUM-034). |
 | `ui.theme` | dark \| light \| system | `"dark"` | advanced | allowed | Erscheinungsbild der Oberfläche. |
 
 ## Alte Namen

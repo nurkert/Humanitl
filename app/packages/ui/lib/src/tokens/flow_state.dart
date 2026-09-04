@@ -70,6 +70,23 @@ enum HGlyph {
 
   /// Lucide `x`: dismiss a sheet or a modal.
   close,
+
+  /// Lucide `grip-vertical`: der Griff, an dem eine Zeile gezogen wird.
+  grip,
+
+  /// Lucide `trash-2`: etwas löschen.
+  trash,
+
+  /// Lucide `plus`: etwas anlegen.
+  plus,
+
+  /// Lucide `lock`: mitgeliefert, unveränderlich.
+  lock,
+
+  /// Ein Schwärzungsbalken: die Handlung, die eine Anfrage mit geschwärzten
+  /// Fundstellen durchlässt. Lucide hat dafür keine Form, und `eye-off` sagt
+  /// „versteckt", was etwas anderes ist.
+  redactBar,
 }
 
 /// The eight state colours of one theme.
@@ -113,6 +130,49 @@ class HStateColors {
     passthroughLlm: HColorDerivation.lightState(HColors.passthrough),
     error: HColorDerivation.lightState(HColors.secret),
   );
+
+  /// Die dunkle Palette, die ein Wort tragen darf.
+  ///
+  /// Die Flächenpalette [dark] ist auf 3:1 geklemmt; das reicht für eine Rail
+  /// und für einen Bogen, nicht für einen Satz. Diese hier ist dieselbe Farbe,
+  /// von den dunklen Flächen weg aufgehellt, bis sie auf jeder Fläche aus
+  /// [HColorDerivation.textBackgrounds] 4,5:1 erreicht — also auch auf ihrer
+  /// eigenen Tönung und auf ihrer eigenen Füllung (`docs/UX.md` 6).
+  ///
+  /// Die Flächen bleiben, wo sie sind: nur Text wechselt auf diese Palette.
+  static final HStateColors darkText = _textOf(
+    dark,
+    HColorDerivation.darkSurfaces,
+  );
+
+  /// Die helle Palette, die ein Wort tragen darf.
+  ///
+  /// Der Grund, aus dem es sie gibt: [light] wird von
+  /// [HColorDerivation.lightState] auf 3:1 geklemmt, und damit konnte im
+  /// hellen Theme keine Zustandsfarbe legal Text tragen. Zwei Screens haben
+  /// das umgangen, indem sie das Wort auf `fg0` umgeschaltet haben, sobald
+  /// eine Füllung darunter lief. Diese Palette ist die Farbe selbst,
+  /// abgedunkelt bis 4,5:1 (`docs/UX.md` 6 und 9, Punkt 24).
+  static final HStateColors lightText = _textOf(
+    light,
+    HColorDerivation.lightSurfaces,
+  );
+
+  /// Leitet aus einer Flächenpalette die Textpalette über [surfaces] ab.
+  static HStateColors _textOf(HStateColors area, List<Color> surfaces) {
+    Color text(HFlowState state) =>
+        HColorDerivation.textVariant(area.resolve(state), surfaces: surfaces);
+    return HStateColors(
+      held: text(HFlowState.held),
+      allowed: text(HFlowState.allowed),
+      allowedEdited: text(HFlowState.allowedEdited),
+      blocked: text(HFlowState.blocked),
+      timedOut: text(HFlowState.timedOut),
+      autoRule: text(HFlowState.autoRule),
+      passthroughLlm: text(HFlowState.passthroughLlm),
+      error: text(HFlowState.error),
+    );
+  }
 
   /// Waiting for a decision.
   final Color held;
@@ -168,12 +228,30 @@ abstract final class FlowStateColor {
   /// The whole palette of [brightness].
   static HStateColors palette(Brightness brightness) =>
       brightness == Brightness.dark ? HStateColors.dark : HStateColors.light;
+
+  /// Die Farbe, in der [state] als *Text* stehen darf, für [brightness].
+  ///
+  /// Eine Fläche darf 3:1 messen, ein Wort nicht (`docs/UX.md` 6).
+  static Color text(
+    HFlowState state, [
+    Brightness brightness = Brightness.dark,
+  ]) => textPalette(brightness).resolve(state);
+
+  /// Die ganze Textpalette von [brightness].
+  static HStateColors textPalette(Brightness brightness) =>
+      brightness == Brightness.dark
+      ? HStateColors.darkText
+      : HStateColors.lightText;
 }
 
 /// Reading a state's appearance from the state itself.
 extension HFlowStateColor on HFlowState {
   /// The colour of this state for [brightness].
   Color color(Brightness brightness) => FlowStateColor.of(this, brightness);
+
+  /// Die Farbe, in der dieser Zustand als Text stehen darf.
+  Color textColor(Brightness brightness) =>
+      FlowStateColor.text(this, brightness);
 
   /// The glyph that stands for this state.
   HGlyph get glyph => switch (this) {

@@ -94,6 +94,7 @@ void main() {
       Object? error;
       client.decide(id, const Decision.block()).catchError((Object e) {
         error = e;
+        return null;
       });
       async.flushMicrotasks();
       expect(error, isA<DaemonException>());
