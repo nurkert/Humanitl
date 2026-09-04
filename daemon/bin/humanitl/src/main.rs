@@ -26,7 +26,7 @@ use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
 use crate::cli::{Cmd, Invocation};
-use crate::cmd::{Context, EXIT_OK, EXIT_USER, Failure, not_yet_failure};
+use crate::cmd::{Context, EXIT_OK, EXIT_USER, Failure, ProfileMeaning, not_yet_failure};
 use crate::render::Renderer;
 
 #[tokio::main]
@@ -81,7 +81,13 @@ fn usage_diagnostic(error: &clap::Error) -> Diagnostic {
 async fn dispatch(invocation: Invocation) -> u8 {
     let global = invocation.cli.global;
     let render = Renderer::new(global.json, global.verbose, global.quiet);
-    let ctx = Context::new(invocation.config, global.config, render);
+    let ctx = Context::new(
+        invocation.config,
+        global.config,
+        global.profile,
+        profile_means(&invocation.cli.cmd),
+        render,
+    );
 
     match run(&ctx, invocation.cli.cmd).await {
         Ok(code) => code,
@@ -89,6 +95,21 @@ async fn dispatch(invocation: Invocation) -> u8 {
             ctx.render.diagnostic(&failure.diagnostic);
             failure.exit
         }
+    }
+}
+
+/// Was `--profile` in diesem Aufruf benennt.
+///
+/// Eine Regel je Unterkommando, nicht eine, die von der Platte abhängt: Unter
+/// `humanitl sandbox` meint `--profile` das bwrap-Profil unter
+/// `profiles/sandbox/` (so rufen die Escape-Tests und `tests/e2e` es auf),
+/// überall sonst das Profil der Sitzung. Wer unter `sandbox` das Sitzungsprofil
+/// meint, setzt es über seine Konfigurations-Flags; wer unter `run` das
+/// bwrap-Profil meint, schreibt `--sandbox-profile`.
+const fn profile_means(cmd: &Cmd) -> ProfileMeaning {
+    match cmd {
+        Cmd::Sandbox { .. } => ProfileMeaning::Sandbox,
+        _ => ProfileMeaning::Session,
     }
 }
 
@@ -104,7 +125,7 @@ async fn run(ctx: &Context, command: Cmd) -> Result<u8, Failure> {
         // deshalb denselben Weg: [`Renderer::diagnostic`] macht daraus mit
         // `--json` eine Zeile JSON auf `stdout` und sonst den Block auf
         // `stderr`.
-        Cmd::Run(_) => Err(not_yet_failure("humanitl run", "HUM-067")),
+        Cmd::Run(args) => cmd::run::run(ctx, &args),
         Cmd::Audit(_) => Err(not_yet_failure("humanitl audit", "HUM-070")),
     }
 }

@@ -1,13 +1,17 @@
-//! Das Laden: sechs Ebenen, eine Reihenfolge, eine Herkunft je Feld.
+//! Das Laden: sieben Ebenen, eine Reihenfolge, eine Herkunft je Feld.
 //!
-//! Reihenfolge von unten nach oben (`backlog/CONVENTIONS.md` 4.4):
+//! Reihenfolge von unten nach oben (`backlog/CONVENTIONS.md` 4.4 und 4.23):
 //!
 //! 1. die eingebauten Vorgabewerte aus `impl Default`,
 //! 2. die globale `config.toml`,
-//! 3. das globale Profil,
-//! 4. das Profil des Projekts,
-//! 5. Umgebungsvariablen `HUMANITL_*` mit `__` als Trenner der Ebenen,
-//! 6. Argumente der Kommandozeile.
+//! 3. das Profil `default`, als Datei oder eingebettet,
+//! 4. das gewählte Profil, falls es nicht `default` ist,
+//! 5. das Profil des Projekts,
+//! 6. Umgebungsvariablen `HUMANITL_*` mit `__` als Trenner der Ebenen,
+//! 7. Argumente der Kommandozeile.
+//!
+//! Welche Profile die Ebenen 3 und 4 besetzen, entscheidet [`mod@crate::resolve`];
+//! hier stehen sie schon als Liste in [`Sources::profiles`].
 //!
 //! Gemischt wird nicht auf Tabellen, sondern auf Blattpfaden: jede Ebene wird
 //! flach gemacht (`hold.timeout_secs = 42`), und die höhere Ebene ersetzt den
@@ -35,7 +39,7 @@
 //! `sandbox.profile` ein Name. Nur wo das Feld keinen Text nimmt, entscheidet
 //! die Form des Wertes (`scalar`).
 //!
-//! Das Projekt-Profil (Ebene 4) liegt im geklonten Repository und ist damit
+//! Das Projekt-Profil (Ebene 5) liegt im geklonten Repository und ist damit
 //! Angreifer-beeinflusst. Ein Schlüssel, den das Schema mit
 //! `x-project-scope = "denied"` führt (siehe [`crate::scope`]), ist aus dieser
 //! Ebene ein Fehler (`CONFIG_003`), auch unter seinem alten Namen; aus jeder
@@ -45,7 +49,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use humanitl_core::diagnostics::codes::{
-    CONFIG_001, CONFIG_002, CONFIG_003, CONFIG_005, CONFIG_006,
+    CONFIG_001, CONFIG_002, CONFIG_003, CONFIG_005, CONFIG_006, CONFIG_007, CONFIG_008, CONFIG_009,
 };
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use toml::Value as TomlValue;
@@ -54,7 +58,7 @@ use crate::alias;
 use crate::env::Env;
 use crate::model::Config;
 use crate::origin::{Origin, Resolved};
-use crate::paths::Paths;
+use crate::profile::{ConfigOverlay, Profile, ProfileSource, builtin_text};
 use crate::schema::{self, Field};
 use crate::scope::ProjectScope;
 
@@ -66,24 +70,21 @@ pub const ENV_SEPARATOR: &str = "__";
 
 /// Der Block, den ein Profil für die Konfiguration benutzt.
 ///
-/// In Sprint 0 ist das der einzige Block, den ein Profil hat. `[rules]` und
-/// `[agent]` kommen mit HUM-066 und werden hier bis dahin übergangen.
+/// Konfigurationswerte stehen in einem Profil ausschließlich unter
+/// `[config.<gruppe>]` (`backlog/CONVENTIONS.md` 4.11). Was ein Profil sonst
+/// haben darf, steht in [`crate::profile::PROFILE_KEYS`].
 pub const PROFILE_SECTION: &str = "config";
-
-/// Die Blöcke, die ein Profil neben [`PROFILE_SECTION`] haben darf, ohne dass
-/// diese Crate sie liest: Name und Beschreibung des Profils sowie die Blöcke,
-/// die HUM-066 füllt. Jeder andere Block auf der obersten Ebene ist ein
-/// Tippfehler oder eine Gruppe, die unter `[config]` gehört; beides ist
-/// `CONFIG_002`, sonst bliebe ein Profil ohne Wirkung und ohne Meldung.
-pub const PROFILE_PASSTHROUGH: &[&str] = &["name", "description", "rules", "agent"];
 
 /// Die Quellen, aus denen eine Konfiguration entsteht.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sources {
     /// Die globale `config.toml`.
     pub global_toml: Option<PathBuf>,
-    /// Das globale Profil aus `profiles/<name>.toml`.
-    pub profile_global: Option<PathBuf>,
+    /// Die Profil-Ebenen, von der niedrigsten zur höchsten.
+    ///
+    /// Normalerweise sind das zwei: das Profil `default` und darüber das
+    /// gewählte. [`crate::resolve::profile_layers`] stellt sie zusammen.
+    pub profiles: Vec<ProfileSource>,
     /// Das Profil des Projekts, `<projekt>/.humanitl/profile.toml`.
     pub profile_project: Option<PathBuf>,
     /// Das Präfix der Umgebungsvariablen, normalerweise [`DEFAULT_ENV_PREFIX`].
@@ -99,7 +100,7 @@ impl Default for Sources {
     fn default() -> Self {
         Self {
             global_toml: None,
-            profile_global: None,
+            profiles: Vec::new(),
             profile_project: None,
             env_prefix: DEFAULT_ENV_PREFIX,
             env: Env::default(),
@@ -122,6 +123,13 @@ impl Sources {
         self
     }
 
+    /// Setzt die Profil-Ebenen, von der niedrigsten zur höchsten.
+    #[must_use]
+    pub fn with_profiles<I: IntoIterator<Item = ProfileSource>>(mut self, profiles: I) -> Self {
+        self.profiles = profiles.into_iter().collect();
+        self
+    }
+
     /// Setzt die Paare der Kommandozeile.
     #[must_use]
     pub fn with_cli<K, V, I>(mut self, pairs: I) -> Self
@@ -135,38 +143,6 @@ impl Sources {
             .map(|(key, value)| (key.into(), value.into()))
             .collect();
         self
-    }
-}
-
-/// Sucht die Quellen im Dateisystem: XDG plus `<cwd>/.humanitl/profile.toml`.
-///
-/// Nur Dateien, die es gibt, landen in den Quellen; ein fehlendes Profil ist
-/// kein Fehler. Wer einen Pfad ausdrücklich angibt, bekommt dagegen einen
-/// Fehler, wenn er nicht existiert — dann war es ein Tippfehler, kein Zufall.
-#[must_use]
-pub fn discover(cwd: &Path) -> Sources {
-    discover_with(&Env::from_process(), cwd, None)
-}
-
-/// Wie [`discover`], aber mit übergebener Umgebung und Profilnamen.
-///
-/// Ohne Namen gilt das Profil `default`. `sandbox.profile` ist hier keine
-/// Quelle: es benennt das Sandbox-Profil unter `profiles/sandbox/` (HUM-010),
-/// nicht das Konfigurationsprofil unter `$XDG_CONFIG_HOME/humanitl/profiles/`.
-#[must_use]
-pub fn discover_with(env: &Env, cwd: &Path, profile: Option<&str>) -> Sources {
-    let paths = Paths::new(env.clone());
-    let global = paths.config_path();
-    let profile_file = paths.profile_path(profile.unwrap_or("default"));
-    let project = paths.project_profile_path(cwd);
-
-    Sources {
-        global_toml: global.is_file().then_some(global),
-        profile_global: profile_file.is_file().then_some(profile_file),
-        profile_project: project.is_file().then_some(project),
-        env_prefix: DEFAULT_ENV_PREFIX,
-        env: env.clone(),
-        cli: Vec::new(),
     }
 }
 
@@ -185,8 +161,10 @@ struct Entry {
 /// Was das Laden überlebt, steht als Befund in [`Resolved::diagnostics`]:
 /// `CONFIG_005` (Info) für einen veralteten Schlüssel, `CONFIG_006` (Warning),
 /// wenn alter und neuer Schlüssel nebeneinander stehen, `CONFIG_002` (Warning)
-/// für einen unbekannten Schlüssel in der Umgebung. Nur eine Datei oder die
-/// Kommandozeile macht daraus einen Fehler, siehe unten.
+/// für einen unbekannten Schlüssel in der Umgebung, `CONFIG_007` (Warning) für
+/// ein Projekt-Profil aus fremdem Besitz und `CONFIG_008` (Info), wenn eine
+/// eigene Profildatei ein mitgeliefertes Profil verdeckt. Nur eine Datei oder
+/// die Kommandozeile macht daraus einen Fehler, siehe unten.
 ///
 /// # Errors
 ///
@@ -200,46 +178,56 @@ pub fn load(sources: &Sources) -> Result<Resolved, Diagnostic> {
     let free_tables = schema::free_table_paths();
     let mut merge = Merge::new();
     let mut layers: Vec<(Vec<Entry>, bool)> = Vec::new();
+    let mut profiles: Vec<Profile> = Vec::new();
 
     if let Some(path) = &sources.global_toml {
-        let table = read_table(path, None)?;
+        let table = read_table(path)?;
         layers.push((
             entries_from_table(&table, &Origin::Global, &free_tables),
             true,
         ));
     }
-    if let Some(path) = &sources.profile_global {
-        let table = read_table(path, Some(PROFILE_SECTION))?;
-        let name = path.file_stem().map_or_else(
-            || path.display().to_string(),
-            |stem| stem.to_string_lossy().into_owned(),
-        );
-        layers.push((
-            entries_from_table(&table, &Origin::ProfileGlobal(name), &free_tables),
-            true,
-        ));
+    let mut notes: Vec<Diagnostic> = Vec::new();
+    for source in &sources.profiles {
+        if let ProfileSource::File(path) = source
+            && let Some(note) = shadowed_builtin(path)
+        {
+            notes.push(note);
+        }
+        profiles.push(source.load()?);
     }
     if let Some(path) = &sources.profile_project {
-        let table = read_table(path, Some(PROFILE_SECTION))?;
+        if let Some(note) = foreign_owner(path, sources.env.uid()) {
+            notes.push(note);
+        }
+        let project = ProfileSource::Project(path.clone()).load()?;
+        if let Some(note) = ignored_project_choice(&project, &sources.profiles) {
+            notes.push(note);
+        }
+        profiles.push(project);
+    }
+    for profile in &profiles {
         layers.push((
-            entries_from_table(&table, &Origin::ProfileProject(path.clone()), &free_tables),
+            entries_from_overlay(&profile.overlay, &profile.source.origin()),
             true,
         ));
     }
     layers.push((env_entries(&sources.env, sources.env_prefix), false));
     layers.push((cli_entries(&sources.cli), true));
 
-    for (entries, hard) in layers {
-        merge.apply(entries, hard)?;
+    for (layer, (entries, hard)) in layers.into_iter().enumerate() {
+        merge.apply(entries, hard, layer)?;
     }
     let Merge {
         flat,
         origins,
-        mut diagnostics,
+        diagnostics: merged,
         alias_uses,
         canonical_uses,
     } = merge;
 
+    let mut diagnostics = notes;
+    diagnostics.extend(merged);
     diagnostics.extend(alias_diagnostics(&alias_uses, &canonical_uses));
 
     let table = nest(&flat)?;
@@ -257,56 +245,34 @@ pub fn load(sources: &Sources) -> Result<Resolved, Diagnostic> {
     Ok(Resolved {
         config,
         origins,
+        profiles,
         diagnostics,
     })
 }
 
-fn read_table(path: &Path, section: Option<&str>) -> Result<toml::Table, Diagnostic> {
+fn read_table(path: &Path) -> Result<toml::Table, Diagnostic> {
     let text = std::fs::read_to_string(path).map_err(|err| {
         Diagnostic::builder(CONFIG_001, Severity::Error)
             .why(format!("cannot read {}: {err}", path.display()))
             .build()
     })?;
-    let table: toml::Table = text.parse().map_err(|err: toml::de::Error| {
+    text.parse().map_err(|err: toml::de::Error| {
         Diagnostic::builder(CONFIG_001, Severity::Error)
             .why(format!("{} is not valid TOML: {err}", path.display()))
             .build()
-    })?;
+    })
+}
 
-    let Some(section) = section else {
-        return Ok(table);
-    };
-    for key in table.keys() {
-        if key == section || PROFILE_PASSTHROUGH.contains(&key.as_str()) {
-            continue;
-        }
-        let why = if schema::field(key).is_some_and(|field| field.group) {
-            format!(
-                "[{key}] in {} is a group of settings; in a profile it belongs under \
-                 [{section}.{key}]",
-                path.display()
-            )
-        } else {
-            format!(
-                "[{key}] in {} is not a block of a profile; settings go under [{section}]",
-                path.display()
-            )
-        };
-        return Err(Diagnostic::builder(CONFIG_002, Severity::Error)
-            .why(why)
-            .build());
-    }
-    match table.get(section) {
-        None => Ok(toml::Table::new()),
-        Some(TomlValue::Table(inner)) => Ok(inner.clone()),
-        Some(other) => Err(Diagnostic::builder(CONFIG_001, Severity::Error)
-            .why(format!(
-                "[{section}] in {} must be a table, found {}",
-                path.display(),
-                other.type_str()
-            ))
-            .build()),
-    }
+/// Die Blattpfade einer Tabelle, wie sie dastehen, mit ihren Werten.
+///
+/// Der Einstieg für [`crate::profile::ConfigOverlay`]: dieselbe Zerlegung wie
+/// beim Mischen, damit ein Profil feldweise wirkt und eine freie Tabelle ein
+/// einziges Blatt bleibt.
+pub(crate) fn overlay_from_table(table: &toml::Table) -> BTreeMap<String, TomlValue> {
+    let free_tables = schema::free_table_paths();
+    let mut leaves = Vec::new();
+    flatten(table, "", &free_tables, &mut leaves);
+    leaves.into_iter().collect()
 }
 
 fn entries_from_table(
@@ -319,6 +285,15 @@ fn entries_from_table(
     leaves
         .into_iter()
         .map(|(written_as, value)| entry_from_value(written_as, value, origin.clone()))
+        .collect()
+}
+
+fn entries_from_overlay(overlay: &ConfigOverlay, origin: &Origin) -> Vec<Entry> {
+    overlay
+        .iter()
+        .map(|(written_as, value)| {
+            entry_from_value(written_as.to_owned(), value.clone(), origin.clone())
+        })
         .collect()
 }
 
@@ -460,6 +435,10 @@ struct AliasUse {
     written_as: String,
     origin: Origin,
     value: TomlValue,
+    /// Der Index der Ebene, in der er stand. Nur er entscheidet, welche von
+    /// zwei Stellen höher liegt; [`Origin::rank`] fasst nur Bänder zusammen
+    /// und stellte zwei Profil-Ebenen falsch gegeneinander.
+    layer: usize,
 }
 
 /// Der Stand des Mischens: Werte, Herkunft, Befunde, und wer welchen Namen
@@ -469,7 +448,7 @@ struct Merge {
     origins: BTreeMap<String, Origin>,
     diagnostics: Vec<Diagnostic>,
     alias_uses: BTreeMap<String, Vec<AliasUse>>,
-    canonical_uses: BTreeMap<String, Vec<Origin>>,
+    canonical_uses: BTreeMap<String, Vec<(usize, Origin)>>,
 }
 
 impl Merge {
@@ -492,7 +471,12 @@ impl Merge {
     /// das Laden abbricht oder nur einen Befund erzeugt. Ein Befund, der das
     /// Laden nicht abbricht, ist eine Warnung (heute: die Umgebung), nie ein
     /// Fehler; ein `Error` in `diagnostics` sähe aus wie ein gescheiterter Start.
-    fn apply(&mut self, mut entries: Vec<Entry>, hard: bool) -> Result<(), Diagnostic> {
+    fn apply(
+        &mut self,
+        mut entries: Vec<Entry>,
+        hard: bool,
+        layer: usize,
+    ) -> Result<(), Diagnostic> {
         let severity = if hard {
             Severity::Error
         } else {
@@ -503,6 +487,15 @@ impl Merge {
         entries.sort_by_key(|entry| u8::from(!entry.via_alias));
 
         for entry in entries {
+            // Vor allem anderen: Ein Projekt-Profil, das Host-Pfade einhängen
+            // will, wird als das abgelehnt, was es ist. Die Schlüssel gibt es
+            // im Schema nicht — Einhängungen stehen im Sandbox-Profil, nicht in
+            // der Konfiguration —, und ein „unbekannter Schlüssel, meintest du
+            // sandbox.profile?" wäre hier die irreführendste aller Antworten.
+            if matches!(entry.origin, Origin::ProfileProject(_)) && is_mount_key(&entry.path) {
+                return Err(project_mount_refused(&entry));
+            }
+
             let Some(field) = schema::field(&entry.path).filter(|field| !field.group) else {
                 let diagnostic = unknown_key(&entry, severity);
                 if hard {
@@ -539,12 +532,13 @@ impl Merge {
                         written_as: entry.written_as.clone(),
                         origin: entry.origin.clone(),
                         value: entry.value.clone(),
+                        layer,
                     });
             } else {
                 self.canonical_uses
                     .entry(entry.path.clone())
                     .or_default()
-                    .push(entry.origin.clone());
+                    .push((layer, entry.origin.clone()));
             }
 
             self.origins.insert(entry.path.clone(), entry.origin);
@@ -552,6 +546,119 @@ impl Merge {
         }
         Ok(())
     }
+}
+
+/// Der Hinweis, wenn eine eigene Profildatei ein mitgeliefertes Profil verdeckt.
+///
+/// Nur, wenn sie sich vom mitgelieferten Text unterscheidet: eine wortgleiche
+/// Kopie ändert nichts und muss niemandem gemeldet werden. Unterscheiden sie
+/// sich, gewinnt die Datei — und das soll man erfahren, statt es sich an einer
+/// überraschenden Sandbox zusammenzureimen. Ein stiller Vorzug für eine der
+/// beiden Seiten wäre die schlechtere Antwort.
+fn shadowed_builtin(path: &Path) -> Option<Diagnostic> {
+    let name = path.file_stem()?.to_str()?;
+    let bundled = builtin_text(name)?;
+    let own = std::fs::read_to_string(path).ok()?;
+    if own == bundled {
+        return None;
+    }
+    Some(
+        Diagnostic::builder(CONFIG_008, Severity::Info)
+            .why(format!(
+                "{} replaces the bundled profile {name} and differs from it; the file decides, \
+                 the bundled version is not used",
+                path.display()
+            ))
+            .fix(FixAction::CopyCommand(
+                "humanitl config schema --profiles".to_owned(),
+            ))
+            .build(),
+    )
+}
+
+/// Der Befund, wenn der Profilwunsch des Projekts nicht gilt.
+///
+/// Zwei Gründe, warum das vorkommt, und beide gehören dem Nutzer gesagt: Die
+/// Kommandozeile hat ein anderes Profil genannt, oder der Wunsch war keines der
+/// mitgelieferten und wurde deshalb übergangen (`crate::resolve`). Still zu
+/// bleiben hieße, jemanden ein Profil pflegen zu lassen, das nie gilt.
+fn ignored_project_choice(project: &Profile, layers: &[ProfileSource]) -> Option<Diagnostic> {
+    let wish = project.declared_name.as_deref()?;
+    if layers.iter().any(|source| source.name() == wish) {
+        return None;
+    }
+    let applied = layers
+        .iter()
+        .map(ProfileSource::name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(
+        Diagnostic::builder(CONFIG_009, Severity::Warning)
+            .why(format!(
+                "the project profile asks for the profile {wish}, and it does not apply; {applied} \
+                 applies instead. A project may only choose a bundled profile, and a name on the \
+                 command line goes first."
+            ))
+            .fix(FixAction::CopyCommand(format!(
+                "humanitl run --profile {wish}"
+            )))
+            .build(),
+    )
+}
+
+/// Der Befund für ein Projekt-Profil, das einem anderen Konto gehört.
+///
+/// Das Projekt-Profil ist ohnehin Angreifer-beeinflusst und darf deshalb nur
+/// Schlüssel mit `x-project-scope = "allowed"` setzen. Gehört die Datei einem
+/// anderen Konto, hat sie nicht einmal derjenige geschrieben, der das
+/// Repository ausgecheckt hat. Das ist eine Warnung wert, aber keine
+/// Ablehnung: Die Grenze hält die Datei ohnehin, und ein Start, der daran
+/// scheiterte, wäre auf einem geteilten Rechner nicht zu gebrauchen.
+fn foreign_owner(path: &Path, uid: u32) -> Option<Diagnostic> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let owner = std::fs::metadata(path).ok()?.uid();
+    if owner == uid {
+        return None;
+    }
+    Some(
+        Diagnostic::builder(CONFIG_007, Severity::Warning)
+            .why(format!(
+                "the project profile {} belongs to uid {owner}, not to you (uid {uid}); it may \
+                 still set only the keys that x-project-scope allows, but check who put it there",
+                path.display()
+            ))
+            .build(),
+    )
+}
+
+/// Der Pfad, unter dem ein Profil Einhängungen zu nennen versuchen könnte.
+///
+/// Es gibt ihn im Schema nicht: Einhängungen stehen im Sandbox-Profil unter
+/// `profiles/sandbox/` und werden dort gegen die [`crate::scope`]-Grenze
+/// geprüft (HUM-010). Der Name wird hier trotzdem erkannt, damit die Absicht
+/// aus einem Projekt-Profil eine klare Antwort bekommt.
+const MOUNT_PREFIX: &str = "sandbox.mounts";
+
+/// Ob ein Pfad eine Einhängung meint.
+fn is_mount_key(path: &str) -> bool {
+    path == MOUNT_PREFIX || path.starts_with(&format!("{MOUNT_PREFIX}."))
+}
+
+/// Ein Projekt-Profil, das Host-Pfade in die Sandbox holen will.
+///
+/// Ohne `FixAction`, aus demselben Grund wie [`project_scope_denied`]: ein Knopf
+/// trüge den Wunsch des Angreifers mit einem Klick in die globale
+/// Konfiguration.
+fn project_mount_refused(entry: &Entry) -> Diagnostic {
+    Diagnostic::builder(CONFIG_003, Severity::Error)
+        .why(format!(
+            "{} (from {}) tries to mount host paths from a project profile. Only global \
+             profiles may do that: mounts live in the sandbox profile under profiles/sandbox/, \
+             and a cloned repository does not get to bring host paths into the sandbox.",
+            entry.written_as, entry.origin
+        ))
+        .build()
 }
 
 /// Ein gesperrter Schlüssel aus dem Projekt-Profil (`backlog/CONVENTIONS.md`
@@ -697,11 +804,14 @@ fn bad_value(entry: &Entry, expected: &str, found: &str) -> Diagnostic {
 ///
 /// Wer gewonnen hat, steht in der Meldung, und zwar richtig: innerhalb einer
 /// Ebene der neue Name, über Ebenen hinweg die höhere Ebene, auch wenn dort
-/// der alte Name steht. Die Ebenen kommen in Rangfolge, darum ist der letzte
-/// Eintrag je Liste der höchste.
+/// der alte Name steht. Verglichen wird der Index der Ebene, nicht
+/// [`Origin::rank`]: der Rang fasst die beiden Profil-Ebenen zu einem Band
+/// zusammen und benennte in der Mischung „eigenes `default.toml` plus
+/// eingebettetes `llm-only`" den falschen Gewinner. Die Ebenen werden in
+/// Reihenfolge aufgelegt, darum ist der letzte Eintrag je Liste der höchste.
 fn alias_diagnostics(
     alias_uses: &BTreeMap<String, Vec<AliasUse>>,
-    canonical_uses: &BTreeMap<String, Vec<Origin>>,
+    canonical_uses: &BTreeMap<String, Vec<(usize, Origin)>>,
 ) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     for (path, uses) in alias_uses {
@@ -709,11 +819,14 @@ fn alias_diagnostics(
             written_as,
             origin,
             value,
+            layer,
         }) = uses.last()
         else {
             continue;
         };
-        let Some(canonical) = canonical_uses.get(path).and_then(|places| places.last()) else {
+        let Some((canonical_layer, canonical)) =
+            canonical_uses.get(path).and_then(|places| places.last())
+        else {
             out.push(
                 Diagnostic::builder(CONFIG_005, Severity::Info)
                     .why(format!(
@@ -728,7 +841,7 @@ fn alias_diagnostics(
             );
             continue;
         };
-        let why = if origin.rank() > canonical.rank() {
+        let why = if layer > canonical_layer {
             format!(
                 "{written_as} (from {origin}) and {path} (from {canonical}) name the same \
                  setting; {written_as} wins because {origin} ranks higher. Rename it to {path}."
@@ -778,9 +891,12 @@ fn nest(flat: &BTreeMap<String, TomlValue>) -> Result<toml::Table, Diagnostic> {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+    use std::collections::BTreeMap;
+
     use toml::Value as TomlValue;
 
-    use super::{nearest, scalar};
+    use super::{AliasUse, alias_diagnostics, nearest, scalar};
+    use crate::origin::Origin;
 
     #[test]
     fn scalars_are_read_without_toml() {
@@ -797,6 +913,60 @@ mod tests {
         assert_eq!(
             scalar("[\"/v1/\"]"),
             TomlValue::Array(vec![TomlValue::String("/v1/".to_owned())])
+        );
+    }
+
+    /// Welche von zwei Ebenen gewonnen hat, sagt der Ebenen-Index, nicht
+    /// [`Origin::rank`].
+    ///
+    /// Die Mischung: ein eigenes `default.toml` auf Ebene 3 und ein
+    /// eingebettetes `llm-only` auf Ebene 4. Der Rang fasst beide zu einem
+    /// Band zusammen und könnte hier nur raten; die Meldung muss trotzdem den
+    /// richtigen Gewinner nennen, denn sie sagt dem Nutzer, welche Zeile er
+    /// löschen soll.
+    #[test]
+    fn the_layer_index_names_the_winner_between_two_profile_layers() {
+        let alias_uses = BTreeMap::from([(
+            "limits.hold_body_cap_bytes".to_owned(),
+            vec![AliasUse {
+                written_as: "hold.body_cap_bytes".to_owned(),
+                origin: Origin::ProfileBuiltin("llm-only".to_owned()),
+                value: TomlValue::Integer(4096),
+                layer: 3,
+            }],
+        )]);
+        let canonical_uses = BTreeMap::from([(
+            "limits.hold_body_cap_bytes".to_owned(),
+            vec![(2, Origin::ProfileGlobal("default".to_owned()))],
+        )]);
+
+        let out = alias_diagnostics(&alias_uses, &canonical_uses);
+        assert_eq!(out.len(), 1);
+        assert!(
+            out[0].why.contains("hold.body_cap_bytes wins"),
+            "the higher layer wins, whatever the band says: {}",
+            out[0].why
+        );
+
+        // Und umgekehrt, mit denselben Bändern und getauschten Ebenen.
+        let alias_uses = BTreeMap::from([(
+            "limits.hold_body_cap_bytes".to_owned(),
+            vec![AliasUse {
+                written_as: "hold.body_cap_bytes".to_owned(),
+                origin: Origin::ProfileGlobal("default".to_owned()),
+                value: TomlValue::Integer(4096),
+                layer: 2,
+            }],
+        )]);
+        let canonical_uses = BTreeMap::from([(
+            "limits.hold_body_cap_bytes".to_owned(),
+            vec![(3, Origin::ProfileBuiltin("llm-only".to_owned()))],
+        )]);
+        let out = alias_diagnostics(&alias_uses, &canonical_uses);
+        assert!(
+            out[0].why.contains("limits.hold_body_cap_bytes wins"),
+            "{}",
+            out[0].why
         );
     }
 
