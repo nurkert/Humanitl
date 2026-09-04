@@ -12,7 +12,7 @@
 //! Hälfte fehlt. Warnungen kommen mit dem Regelsatz zusammen zurück.
 
 use chrono::{DateTime, Utc};
-use humanitl_core::diagnostics::codes::{RULES_001, RULES_006, RULES_007, RULES_008};
+use humanitl_core::diagnostics::codes::{RULES_001, RULES_005, RULES_006, RULES_007, RULES_008};
 use humanitl_core::rule::{Action, Expiry, HostPattern, Matcher, PathPattern, Rule};
 use humanitl_core::{Diagnostic, FlowId, Method, RuleId, Scheme, SessionId, Severity, Upgrade};
 use serde::{Deserialize, Serialize};
@@ -99,9 +99,7 @@ pub fn parse_rules_for_session(
                         .build(),
                 );
             }
-            if let Some(warning) = too_broad(index, &rule) {
-                diagnostics.push(warning);
-            }
+            diagnostics.extend(too_broad(index, &rule));
             rules.push(rule);
         }
     }
@@ -265,25 +263,61 @@ fn schema_error(index: usize, field: &str, line: Option<usize>, detail: &str) ->
 /// Jede weitere Bedingung schränkt ein, auch `upgrade: websocket`: eine Regel,
 /// die nur WebSocket-Upgrades trifft, hebt die Moderation für gewöhnliche
 /// Anfragen nicht auf.
-fn too_broad(index: usize, rule: &Rule) -> Option<Diagnostic> {
+fn too_broad(index: usize, rule: &Rule) -> Vec<Diagnostic> {
     let matcher = &rule.matcher;
+    let mut diagnostics = Vec::new();
+    let warn = |why: String| {
+        Diagnostic::builder(RULES_008, Severity::Warning)
+            .why(why)
+            .build()
+    };
+
+    // Die Durchreiche ist die eine erklärte Ausnahme davon, dass nichts
+    // ungefragt hinausgeht (BACKLOG.md 4.2). Sie darf deshalb genau ein Ziel
+    // meinen: einen Host, einen Port, ein Schema. Fehlt eine dieser Grenzen,
+    // deckt sie mehr, als der Mensch beim Hinschreiben gemeint haben dürfte —
+    // und das Ergebnis ist ungehalten und in der voreingestellten Ansicht
+    // unsichtbar. Beides bleibt eine Warnung und keine Ablehnung: Wer es
+    // hinschreibt, darf es meinen, sichtbar muss es sein (HUM-039).
+    if rule.passthrough_llm {
+        let mut missing = Vec::new();
+        // Ein Glob nennt keinen Host, sondern eine Menge. `**` deckt jeden
+        // Host der Welt, und die Regel reichte ihn ungehalten durch.
+        if matcher.host.is_glob() {
+            missing.push("a single host");
+        }
+        if matcher.port.is_none() {
+            missing.push("a port");
+        }
+        if matcher.scheme.is_none() {
+            missing.push("a scheme");
+        }
+        if matcher.path.is_none() && matcher.path_prefixes.is_empty() {
+            missing.push("a path condition");
+        }
+        if !missing.is_empty() {
+            diagnostics.push(warn(format!(
+                "rules[{index}] passes traffic through to the language model without naming {}; \
+                 everything it covers goes out unheld and stays out of the default view",
+                missing.join(", ")
+            )));
+        }
+    }
+
     let everything = matches!(&matcher.host, HostPattern::Glob(glob) if glob == "**")
         && matcher.methods.is_none()
         && matcher.path.is_none()
+        && matcher.path_prefixes.is_empty()
         && matcher.scheme.is_none()
         && matcher.port.is_none()
         && matcher.upgrade.is_none();
     if rule.action == Action::Allow && everything {
-        return Some(
-            Diagnostic::builder(RULES_008, Severity::Warning)
-                .why(format!(
-                    "rules[{index}] allows every host without any further condition; \
-                     the moderation is off for everything below it"
-                ))
-                .build(),
-        );
+        diagnostics.push(warn(format!(
+            "rules[{index}] allows every host without any further condition; \
+             the moderation is off for everything below it"
+        )));
     }
-    None
+    diagnostics
 }
 
 #[derive(Debug, Deserialize)]
@@ -303,6 +337,10 @@ struct RulesFile {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+// Die Struktur bildet `rules.yaml` eins zu eins ab; jeder Wahrheitswert ist ein
+// eigener Schlüssel der Datei (`backlog/CONVENTIONS.md` 3.3). Dieselbe
+// Begründung wie an `humanitl_core::rule::Rule`.
+#[allow(clippy::struct_excessive_bools)]
 struct RawRule {
     #[serde(default)]
     id: Option<String>,
@@ -320,6 +358,8 @@ struct RawRule {
     #[serde(default)]
     bundled: bool,
     #[serde(default)]
+    passthrough_llm: bool,
+    #[serde(default)]
     note: Option<String>,
 }
 
@@ -331,6 +371,8 @@ struct RawMatch {
     method: Option<Vec<String>>,
     #[serde(default)]
     path: Option<String>,
+    #[serde(default)]
+    path_prefixes: Vec<String>,
     #[serde(default)]
     scheme: Option<String>,
     #[serde(default)]
@@ -412,6 +454,19 @@ impl RawRule {
             }
         };
 
+        if self.passthrough_llm && self.action != Action::Allow {
+            diagnostics.push(schema_error(
+                index,
+                "passthrough_llm",
+                source.field(index, "passthrough_llm"),
+                &format!(
+                    "passthrough_llm goes with `action: allow` only; this rule says `action: {}`",
+                    self.action
+                ),
+            ));
+            failed = true;
+        }
+
         let matcher = matcher?;
         if failed {
             return None;
@@ -421,7 +476,8 @@ impl RawRule {
             .with_expiry(expires)
             .with_stream(self.stream)
             .with_allow_private(self.allow_private)
-            .bundled(self.bundled);
+            .bundled(self.bundled)
+            .passthrough_llm(self.passthrough_llm);
         rule.created_from = created_from;
         rule.note = self.note;
         Some(rule)
@@ -472,6 +528,9 @@ impl RawMatch {
                 }
             }
         };
+
+        let path_prefixes =
+            parse_path_prefixes(index, &self.path_prefixes, source, diagnostics, &mut failed);
 
         let scheme = match self.scheme.as_deref() {
             None => None,
@@ -532,11 +591,45 @@ impl RawMatch {
         let mut matcher = Matcher::host(host);
         matcher.methods = methods;
         matcher.path = path;
+        matcher.path_prefixes = path_prefixes;
         matcher.scheme = scheme;
         matcher.port = port;
         matcher.upgrade = upgrade;
         Some(matcher)
     }
+}
+
+/// Liest die Pfadpräfixe: jeder muss eine Grenze ziehen können.
+///
+/// Ein unbrauchbarer Präfix wird nicht stillschweigend weggelassen, sondern
+/// lehnt die Datei ab. `""` und `/` träfen jeden Pfad; eine Regel, die dadurch
+/// breiter würde, als sie dasteht, ist schlimmer als keine (HUM-039).
+fn parse_path_prefixes(
+    index: usize,
+    raw: &[String],
+    source: &Source<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+    failed: &mut bool,
+) -> Vec<String> {
+    let mut prefixes = Vec::with_capacity(raw.len());
+    for prefix in raw {
+        if humanitl_core::path_prefix_is_valid(prefix) {
+            prefixes.push(prefix.clone());
+        } else {
+            let line = source.field(index, "path_prefixes");
+            diagnostics.push(
+                Diagnostic::builder(RULES_005, Severity::Error)
+                    .why(format!(
+                        "{}: {prefix:?} is not a path prefix; it has to start with `/` and be at \
+                         least two characters long, otherwise it matches every path",
+                        at(index, "match.path_prefixes", line)
+                    ))
+                    .build(),
+            );
+            *failed = true;
+        }
+    }
+    prefixes
 }
 
 /// Liest die Methodenliste: unabhängig von Groß- und Kleinschreibung, intern
@@ -607,6 +700,7 @@ struct OutFile {
 }
 
 #[derive(Debug, Serialize)]
+#[allow(clippy::struct_excessive_bools)]
 struct OutRule {
     id: String,
     action: Action,
@@ -618,8 +712,18 @@ struct OutRule {
     #[serde(skip_serializing_if = "Option::is_none")]
     created_from: Option<String>,
     bundled: bool,
+    /// Nur bei der Durchreichregel wahr; sonst weggelassen, damit eine
+    /// gewöhnliche `rules.yaml` so aussieht wie bisher.
+    #[serde(skip_serializing_if = "is_false")]
+    passthrough_llm: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     note: Option<String>,
+}
+
+/// Für `skip_serializing_if`: ein `false` steht nicht in der Datei.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Serialize)]
@@ -629,6 +733,8 @@ struct OutMatch {
     method: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    path_prefixes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     scheme: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -650,6 +756,7 @@ impl OutRule {
                     .as_ref()
                     .map(|methods| methods.iter().map(|m| m.as_str().to_owned()).collect()),
                 path: rule.matcher.path.as_ref().map(ToString::to_string),
+                path_prefixes: rule.matcher.path_prefixes.clone(),
                 scheme: rule.matcher.scheme.map(|s| s.as_str().to_owned()),
                 port: rule.matcher.port,
                 upgrade: rule.matcher.upgrade.map(|u| u.as_str().to_owned()),
@@ -663,6 +770,7 @@ impl OutRule {
             allow_private: rule.allow_private,
             created_from: rule.created_from.map(|flow| flow.to_string()),
             bundled: rule.bundled,
+            passthrough_llm: rule.passthrough_llm,
             note: rule.note.clone(),
         }
     }

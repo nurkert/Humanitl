@@ -88,7 +88,7 @@ Abschnitt 4. Die Spalte „Escape-Test" nennt den automatisierten Test, der den 
 | ID | Kanal | a | b | c | d | Gestoppt durch | Restrisiko | Escape-Test |
 |---|---|:-:|:-:|:-:|:-:|---|---|---|
 | K-01 | Projektverzeichnis `/work` | • | • | • | | nichts — der Kanal ist gewollt offen | vollständig: was der Agent schreibt, steht auf der Platte | ESC-5 |
-| K-02 | LLM-Passthrough | • | • | • | | enge Regel (Host, Port, Pfadpräfix, POST), vollständige Aufzeichnung | vollständig: der Modell-Host sieht jeden Prompt | — |
+| K-02 | LLM-Passthrough | • | • | • | | enge Regel (Host, Port, Schema, Pfadpräfixe der Inferenz, POST und GET), vollständige Aufzeichnung | vollständig: der Modell-Host sieht jeden Prompt | — |
 | K-03 | Socket-Verzeichnis des Proxys | | • | | | Bind der Socket-**Datei**, nie des Verzeichnisses | Fehler im Proxy selbst | ESC-2 |
 | K-04 | Von seccomp erlaubte TCP-Sockets | | • | | | leeres Netz-Namespace, leere Routing-Tabelle | Loopback-Dienste innerhalb der Sandbox | ESC-1 |
 | K-05 | Unix-Sockets des Hosts (X11, Wayland, D-Bus, Docker) | | • | | | Mount-Allowlist im Profil | eine falsche Zeile im Profil öffnet ihn | ESC-2 |
@@ -146,15 +146,29 @@ Modell-Host der zweite offene Kanal — und, anders als `/work`, ein Kanal über
 *Schwere.* Hoch. Wer den Modell-Host kontrolliert, sieht alles, was der Agent ihm zeigt.
 
 *Minderung im MVP.* Die Passthrough-Regel ist so eng wie möglich: exakt ein Host, ein Port, ein
-Pfadpräfix (Default `/v1/`, `/api/`) und die Methode `POST`. Alles andere an denselben Host wird
+Schema, die Methoden `POST` und `GET` und eine Liste von Pfadpräfixen, die im Default nur die
+Inferenz deckt. Aufgezählt werden dort dreizehn Endpunkte (`/v1/chat/completions`,
+`/v1/completions`, `/v1/responses`, `/v1/embeddings`, `/v1/models`, `/api/chat`, `/api/generate`,
+`/api/embed`, `/api/embeddings`, `/api/tags`, `/api/show`, `/api/ps`, `/api/version`); die nackten
+Flächen `/api/` und `/v1/` fehlen mit Absicht, weil sie auch `POST /api/pull`, `DELETE /api/delete`,
+`POST /v1/files` und `POST /v1/load_lora_adapter` deckten und einen Agenten ungefragt am Bestand
+des Servers arbeiten ließen. Alles andere an denselben Host wird
 normal gehalten. Der Verkehr wird vollständig aufgezeichnet und durch die Findings-Detektoren
-geschickt; ein Treffer erzeugt eine Warnung, hält aber nicht an. Im Isolations-Panel steht der
-Kanal als vierte, bernsteinfarbene Zeile mit dem konkreten Endpunkt.
+geschickt; ein Treffer erzeugt eine Warnung (`LLM_005`), hält aber nicht an. Im Isolations-Panel
+steht der Kanal als vierte, bernsteinfarbene Zeile mit dem konkreten Endpunkt.
 
 *Restrisiko.* Vollständig. Ein Angreifer, der über Prompt Injection den Agenten steuert, kann
 Projektinhalte in einen Prompt packen; der Prompt geht an den Modell-Host, ohne Rückfrage. Der
 Satz „der LLM-Host ist Teil der Vertrauensbasis" ist keine Floskel, sondern die Bedingung, unter
 der das restliche Modell gilt.
+
+Dazu kommt der Name. Steht in `llm.endpoint` ein DNS-Name, entscheidet der Resolver bei jeder
+Anfrage neu, wohin die Durchreiche führt. Wer diesen einen Namen kontrolliert, lenkt sie zwischen
+zwei Anfragen auf einen anderen Rechner — und weil die Regel `allow_private` trägt, ist auch der
+Router oder `169.254.169.254` ein gültiges Ziel; die Prüfung auf private Adressen ist für genau
+diese Regel ausgeschaltet. Das ist DNS-Rebinding an der einen Stelle, an der ADR-0006 es nicht
+verhindern kann, weil dort niemand gefragt wird. Abhilfe: eine IP-Adresse statt eines Namens, oder
+ein fester Eintrag unter `resolver.overrides`, der vor jeder Abfrage greift.
 
 *Status.* Offen (deklariert). Findings-basiertes Halten und Ratenbegrenzung sind nach dem MVP
 vorgesehen.

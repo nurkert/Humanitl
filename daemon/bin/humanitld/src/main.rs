@@ -51,6 +51,7 @@ use humanitl_proxy::{
 };
 use humanitl_recorder::{Recorder, RecorderSettings, SessionMeta};
 use humanitl_rules::parse_rules_for_session;
+use humanitl_sandbox::AdapterRegistry;
 use tokio::net::UnixListener;
 // tonic bringt `tokio-stream` mit dem Feature `net` bereits mit (über sein
 // `server`-Feature); der Wrapper von dort erspart diesem Binary eine eigene
@@ -211,7 +212,7 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
     let watchers = Watchers::start(&recorder, &queue);
 
     let proxy = ProxyCore::new();
-    let rules = load_rules(&xdg, session);
+    let rules = load_rules(&xdg, &config, session);
     let scanner = build_scanner(&config)?;
     // Ein Port fuer den ganzen Lauf: Der Zaehler, den `daemon status` zeigt,
     // und der Zwischenspeicher gehoeren derselben Instanz (HUM-024).
@@ -594,9 +595,14 @@ const BUNDLED_RULES: &str = include_str!("../../../../rules/default.yaml");
 /// Fehlt `rules.yaml`, ist das kein Fehler; lehnt die Engine sie ab, startet
 /// der Speicher ohne die Regeln des Nutzers und meldet die Befunde. Ohne Regel
 /// wird gefragt, nie erlaubt.
-fn load_rules(xdg: &XdgPaths, session: SessionId) -> Arc<RulesStore> {
+fn load_rules(xdg: &XdgPaths, config: &Config, session: SessionId) -> Arc<RulesStore> {
     let path = xdg.rules_path();
-    let bundled = read_bundled_rules(session);
+    let mut bundled = Vec::new();
+    // Die Durchreiche steht vor allem anderen (`backlog/sprint-3.md` HUM-037
+    // Schritt 6): Sie ist die engste Regel des Satzes, und eine Blockregel des
+    // Profils `llm-only` (`host: "**"`) stünde sonst davor.
+    bundled.extend(llm_passthrough_rule(config));
+    bundled.extend(read_bundled_rules(session));
     let (store, diagnostics) = RulesStore::load(&path, &bundled, session);
     for diagnostic in &diagnostics {
         tracing::warn!(
@@ -614,6 +620,38 @@ fn load_rules(xdg: &XdgPaths, session: SessionId) -> Arc<RulesStore> {
         "rule store loaded"
     );
     Arc::new(store)
+}
+
+/// Die Durchreichregel zum Sprachmodell, falls es einen Endpunkt gibt.
+///
+/// Ohne sie hielte der Proxy jede Inferenz an, und `DecisionSource::Passthrough`
+/// wie `LLM_005` blieben toter Code (HUM-039). Sie entsteht im Agent-Adapter,
+/// weil nur er weiß, welche Pfade sein Agent für Inferenz braucht; welcher
+/// Adapter gefragt wird, sagt `agent.adapter`.
+///
+/// `None` heißt in jedem Fall: es wird gefragt. Ohne `llm.endpoint` gibt es
+/// nichts durchzulassen, und ein unbekannter Adapter bekommt keine erfundene
+/// Regel — er bekommt einen Hinweis im Protokoll.
+fn llm_passthrough_rule(config: &Config) -> Option<Rule> {
+    config.llm.endpoint.as_ref()?;
+    let registry = AdapterRegistry::builtin();
+    let Some(adapter) = registry.get(&config.agent.adapter) else {
+        tracing::warn!(
+            adapter = %config.agent.adapter,
+            known = ?registry.ids(),
+            "no adapter of that name; the LLM endpoint gets no passthrough rule and \
+             every inference will be held"
+        );
+        return None;
+    };
+    let rule = adapter.llm_passthrough(&config.llm)?;
+    tracing::info!(
+        rule = %rule.id,
+        host = %rule.matcher.host,
+        prefixes = ?rule.matcher.path_prefixes,
+        "llm passthrough rule installed"
+    );
+    Some(rule)
 }
 
 /// Liest die mitgelieferten Regeln aus dem eingebundenen `rules/default.yaml`.

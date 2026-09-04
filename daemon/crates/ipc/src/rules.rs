@@ -135,7 +135,7 @@ impl RulesService {
                         .build()
                 })?;
                 let rule = self.read_rule(rule)?;
-                dry_run = Some(self.dry_run(&rule, request.limit).await);
+                dry_run = Some(self.dry_run(&rule, request.limit, &mut diagnostics).await);
             }
         }
 
@@ -259,8 +259,21 @@ impl RulesService {
     /// Liefert die Treffer und die Zahl der geprüften Flows. Ohne Aufzeichnung
     /// sind beide leer beziehungsweise null: was der Daemon nicht weiß, wird
     /// nicht geschätzt (`backlog/CONVENTIONS.md` 4.13).
-    async fn dry_run(&self, rule: &Rule, limit: u32) -> (Vec<v1::FlowSummary>, u32) {
+    async fn dry_run(
+        &self,
+        rule: &Rule,
+        limit: u32,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> (Vec<v1::FlowSummary>, u32) {
         let Some(recorder) = self.recorder.as_ref() else {
+            diagnostics.push(
+                Diagnostic::builder(codes::RULES_012, Severity::Info)
+                    .why(
+                        "This session records nothing, so there is no traffic to try the rule against."
+                            .to_owned(),
+                    )
+                    .build(),
+            );
             return (Vec::new(), 0);
         };
         let query = FlowQuery {
@@ -274,6 +287,13 @@ impl RulesService {
             Ok(page) => page,
             Err(error) => {
                 tracing::warn!(why = %error, "dry run could not read the recorded flows");
+                diagnostics.push(
+                    Diagnostic::builder(codes::RULES_012, Severity::Warning)
+                        .why(format!(
+                            "The recorded requests could not be read, so the rule was tried against nothing: {error}"
+                        ))
+                        .build(),
+                );
                 return (Vec::new(), 0);
             }
         };

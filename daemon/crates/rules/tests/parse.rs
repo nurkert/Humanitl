@@ -438,3 +438,172 @@ fn a_file_without_disabled_bundled_writes_none() {
     let (set, _) = ok("version: 1\nrules: []\n");
     assert!(!serialize_rules(&set).contains("disabled_bundled"));
 }
+
+// --- Pfadpräfixe und die Durchreiche zum Sprachmodell (HUM-039) -------------
+
+/// `path_prefixes` und `passthrough_llm` überleben Schreiben und Lesen.
+#[test]
+fn a_passthrough_rule_round_trips_through_the_file() {
+    let yaml = "version: 1
+rules:
+  - id: 01920000-0000-7000-8000-0000000000ff
+    action: allow
+    match:
+      host: \"ip:192.168.1.50\"
+      method: [POST, GET]
+      scheme: http
+      port: 11434
+      path_prefixes: [\"/v1/\", \"/api/chat\"]
+    allow_private: true
+    bundled: true
+    passthrough_llm: true
+    note: \"LLM passthrough. Logged, never held.\"
+";
+    let (first, warnings) =
+        parse_rules(yaml).unwrap_or_else(|diagnostics| panic!("must parse: {diagnostics:?}"));
+    assert!(warnings.is_empty(), "{warnings:?}");
+
+    let rule = first.iter().next().expect("one rule");
+    assert!(rule.passthrough_llm);
+    assert_eq!(
+        rule.matcher.path_prefixes,
+        vec!["/v1/".to_owned(), "/api/chat".to_owned()]
+    );
+
+    let written = serialize_rules(&first);
+    let (second, _) = parse_rules(&written)
+        .unwrap_or_else(|diagnostics| panic!("the written file must parse: {diagnostics:?}"));
+    assert_eq!(first, second, "written file:\n{written}");
+    assert!(written.contains("passthrough_llm: true"));
+    assert!(written.contains("path_prefixes:"));
+}
+
+/// Eine gewöhnliche Regel schreibt die neuen Felder nicht mit.
+#[test]
+fn an_ordinary_rule_carries_no_passthrough_key() {
+    let yaml = "version: 1\nrules:\n  - action: block\n    match:\n      host: \"evil.io\"\n";
+    let (set, _) = parse_rules(yaml).unwrap_or_else(|d| panic!("{d:?}"));
+    let written = serialize_rules(&set);
+    assert!(
+        !written.contains("passthrough_llm") && !written.contains("path_prefixes"),
+        "a file without the exception looks like it always did:\n{written}"
+    );
+}
+
+/// Ein Präfix ohne führenden `/` oder mit nur einem Zeichen wird abgelehnt.
+///
+/// Nicht stillschweigend weggelassen: Ein Präfix, das jeden Pfad trifft, hebt
+/// die Grenze auf, um die es geht (HUM-039, Fallstricke).
+#[test]
+fn rules_005_rejects_a_path_prefix_that_is_no_boundary() {
+    for prefix in ["\"\"", "\"/\"", "\"v1/\""] {
+        let yaml = format!(
+            "version: 1\nrules:\n  - action: allow\n    match:\n      host: \"x.io\"\n      \
+             path_prefixes: [{prefix}]\n"
+        );
+        let diagnostics = parse_rules(&yaml).expect_err("must be refused");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == RULES_005),
+            "{prefix}: {diagnostics:?}"
+        );
+    }
+}
+
+/// `passthrough_llm` gehört zu `action: allow`; alles andere ist ein Fehler.
+#[test]
+fn passthrough_llm_only_goes_with_allow() {
+    let yaml = "version: 1
+rules:
+  - action: block
+    match:
+      host: \"x.io\"
+    passthrough_llm: true
+";
+    let diagnostics = parse_rules(yaml).expect_err("must be refused");
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.why.contains("passthrough_llm")),
+        "{diagnostics:?}"
+    );
+}
+
+/// Eine Durchreiche muss genau ein Ziel nennen: einen Host, einen Port, ein
+/// Schema und eine Pfadgrenze. Fehlt eine davon, warnt `RULES_008`.
+///
+/// Der Host wiegt am schwersten: Eine Durchreiche mit `host: "**"` reicht jeden
+/// Host der Welt ungehalten durch und bleibt dabei aus der voreingestellten
+/// Ansicht heraus. Genau diese Regel schwieg vor HUM-039, weil die Prüfung auf
+/// die Pfadgrenze vorher mit einem `return` endete.
+#[test]
+fn rules_008_warns_about_a_passthrough_that_does_not_name_one_target() {
+    let complete = "version: 1
+rules:
+  - action: allow
+    match:
+      host: \"ip:192.168.1.50\"
+      port: 11434
+      scheme: http
+      path_prefixes: [\"/v1/chat/completions\"]
+    passthrough_llm: true
+";
+    let (_set, warnings) = parse_rules(complete).unwrap_or_else(|d| panic!("{d:?}"));
+    assert!(
+        warnings.is_empty(),
+        "a passthrough that names exactly one target is fine: {warnings:?}"
+    );
+
+    for (what, matcher) in [
+        (
+            "a host glob",
+            "host: \"**\"\n      port: 11434\n      scheme: http\n      \
+             path_prefixes: [\"/v1/chat/completions\"]",
+        ),
+        (
+            "no port",
+            "host: \"ip:192.168.1.50\"\n      scheme: http\n      \
+             path_prefixes: [\"/v1/chat/completions\"]",
+        ),
+        (
+            "no scheme",
+            "host: \"ip:192.168.1.50\"\n      port: 11434\n      \
+             path_prefixes: [\"/v1/chat/completions\"]",
+        ),
+        (
+            "no path condition",
+            "host: \"ip:192.168.1.50\"\n      port: 11434\n      scheme: http",
+        ),
+    ] {
+        let yaml = format!(
+            "version: 1\nrules:\n  - action: allow\n    match:\n      {matcher}\n    passthrough_llm: true\n"
+        );
+        let (_set, warnings) = parse_rules(&yaml).unwrap_or_else(|d| panic!("{what}: {d:?}"));
+        assert!(
+            warnings.iter().any(|warning| warning.code == RULES_008),
+            "{what} must warn: {warnings:?}"
+        );
+    }
+}
+
+/// Eine Durchreiche mit Host-Glob warnt, auch wenn sie ein Pfadpräfix trägt.
+///
+/// Ohne diese Zeile schwieg `too_broad`: die Pfadprüfung war zufrieden, und der
+/// frühe `return` übersprang die Prüfung auf „alles".
+#[test]
+fn rules_008_warns_about_a_passthrough_over_every_host() {
+    let yaml = "version: 1
+rules:
+  - action: allow
+    match:
+      host: \"**\"
+      path_prefixes: [\"/v1/chat/completions\"]
+    passthrough_llm: true
+";
+    let (_set, warnings) = parse_rules(yaml).unwrap_or_else(|d| panic!("{d:?}"));
+    let Some(warning) = warnings.iter().find(|warning| warning.code == RULES_008) else {
+        panic!("a passthrough over every host must warn: {warnings:?}");
+    };
+    assert!(warning.why.contains("a single host"), "{}", warning.why);
+}

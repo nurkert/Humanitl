@@ -40,6 +40,8 @@ service Humanitl {
   rpc Doctor(google.protobuf.Empty) returns (DoctorReport);
   // LAN-Suche nach LLM-Servern, nur auf ausdruecklichen Wunsch (HUM-076).
   rpc DiscoverLlm(DiscoverRequest) returns (stream DiscoverResult);
+  // Prueft genau einen Endpunkt, host-seitig, nur lesend (HUM-039).
+  rpc ProbeLlm(ProbeLlmRequest) returns (ProbeLlmResponse);
 }
 
 // ---------- Info ----------
@@ -401,11 +403,18 @@ message FlowEvent {
     FlowRef recorded = 9;
     FlowRef timed_out = 10;
     Lagged lagged = 11;
-    // Sessionweite Diagnostics, zum Beispiel eine TLS-Ablehnung.
+    // Sessionweite Diagnostics, zum Beispiel eine TLS-Ablehnung ohne SNI, die
+    // noch keinem Flow zuzuordnen ist.
     Diagnostic diagnostic = 12;
     RulesChanged rules_changed = 13;
     AgentAsk agent_ask = 14;
     Failed failed = 15;
+    // Diagnostics, die zu genau einem Flow gehoeren: LLM_005 an einer
+    // durchgereichten Anfrage, FINDINGS_002 an einem unvollstaendigen Scan,
+    // PROXY_005 an einem abgelehnten Uebergang. Der Strom ist sessionweit, es
+    // gibt also keinen impliziten Kontext; ohne `flow_id` koennte kein Client
+    // die Meldung ihrem Flow zuordnen (HUM-039).
+    FlowDiagnostic flow_diagnostic = 16;
   }
 
   // Ein neuer Flow ist eingetroffen.
@@ -494,6 +503,12 @@ message FlowEvent {
     string text = 2;
     // Host aus einer URL im Text, falls eine erkennbar war.
     string suggested_host = 3;
+  }
+
+  // Ein Diagnostic, das zu genau einem Flow gehoert.
+  message FlowDiagnostic {
+    string flow_id = 1;
+    Diagnostic diagnostic = 2;
   }
 }
 
@@ -949,4 +964,37 @@ message DiscoverResult {
   uint32 latency_ms = 5;
   // Der Endpunkt antwortete mit 401. Modelle bleiben dann leer.
   bool auth_required = 6;
+}
+
+// ---------- Endpunkt-Probe ----------
+
+// Auftrag fuer die Probe eines einzelnen Endpunkts. Der Daemon fragt ihn
+// host-seitig mit zwei GET (`/api/tags`, dann `/v1/models`), folgt keiner
+// Weiterleitung und schickt keine Zugangsdaten. Nichts davon geht durch die
+// Sandbox, und nichts davon aendert etwas am Server.
+message ProbeLlmRequest {
+  // Die Adresse, wie sie in `llm.endpoint` stehen wuerde. Nur http und https.
+  string endpoint = 1;
+  // Frist fuer die ganze Probe. 0 bedeutet die Voreinstellung 3000 ms.
+  uint32 timeout_ms = 2;
+}
+
+// Was die Probe gemessen hat. Ein leeres `models` bei `flavor = UNKNOWN` ist
+// eine Aussage und keine Luecke: Es hat sich nichts gemeldet, was Humanitl
+// kennt.
+message ProbeLlmResponse {
+  // Die Modelle in der Reihenfolge, in der der Server sie nennt.
+  repeated string models = 1;
+  // Welche API geantwortet hat.
+  LlmProduct flavor = 2;
+  // Der erste Befund, falls es einen gibt; fuer Clients, die nur einen zeigen.
+  Diagnostic diagnostic = 3;
+  // Wie lange die Probe gebraucht hat.
+  uint32 latency_ms = 4;
+  // Alle Befunde: LLM_003, wenn keine bekannte API antwortete, LLM_006, wenn
+  // der Endpunkt nicht in einem privaten Netz liegt.
+  repeated Diagnostic diagnostics = 5;
+  // Wahr, wenn der Endpunkt im eigenen Netz liegt (RFC 1918, Loopback,
+  // Link-Local, CGNAT, oder ein Name unter .local/.lan/.home.arpa/.internal).
+  bool endpoint_is_private = 6;
 }
