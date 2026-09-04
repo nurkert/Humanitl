@@ -1,153 +1,35 @@
-/// The queue: the event stream, the flows it produces, the selection and the
-/// decision that leaves again (CONVENTIONS 3.9, HUM-020).
+/// The queue: the event stream, the flows it produces and the selection
+/// (CONVENTIONS 3.9, HUM-020).
 ///
 /// State flows in one direction (ARCHITECTURE 5): `Subscribe` feeds
 /// [flowEventsProvider], [Flows] folds the events into a map, everything else
 /// is derived from that map. Widgets never call the client; they call the
-/// notifiers here.
+/// notifiers here. The decision itself lives next door in `decision.dart`.
+///
+/// The stream itself is not here but in `core/ipc/flow_events.dart`: the
+/// history and the tray are projections of the same subscription, and a
+/// feature may not import another feature (ARCHITECTURE 5).
 
 library;
 
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/domain/domain.dart';
-import '../../../core/ipc/client_diagnostics.dart';
-import '../../../core/ipc/daemon_client.dart';
 import '../../../core/ipc/client_providers.dart';
+import '../../../core/ipc/flow_events.dart';
 import 'now.dart';
 
-part 'flows.freezed.dart';
 part 'flows.g.dart';
 
 /// How long a decided flow stays in the queue so that the outcome can be seen
 /// and the exit animation has something to animate.
 const Duration queueExitWindow = Duration(seconds: 3);
 
-/// The longest wait between two reconnect attempts.
-const Duration maxReconnectBackoff = Duration(seconds: 30);
-
 /// The filter that reloads the queue after a gap in the stream.
 const FlowFilter heldFlowsFilter = FlowFilter(query: 'state:held');
-
-/// The first wait after the event stream failed; it doubles up to
-/// [maxReconnectBackoff]. Tests override it to keep themselves short.
-@Riverpod(keepAlive: true)
-Duration reconnectBackoff(Ref ref) => const Duration(seconds: 1);
-
-/// `Subscribe`, kept alive across daemon restarts.
-///
-/// A broken stream is retried with 1 s, 2 s, 4 s ... up to
-/// [maxReconnectBackoff]. Every reconnect starts with a synthetic
-/// [FlowEvent.lagged], because everything that happened while the app was not
-/// listening is exactly what `Lagged` means; [Flows] answers it with the same
-/// `ListFlows` resync it uses for a real gap.
-///
-/// Written with an explicit subscription rather than as an `async*` generator
-/// so that `ref.onDispose` can cancel the source at once: a generator is only
-/// cancelled when it next resumes, which leaves the daemon -- or the fake --
-/// holding a timer nobody waits for.
-@Riverpod(keepAlive: true)
-Stream<FlowEvent> flowEvents(Ref ref) {
-  final DaemonClient client = ref.watch(daemonClientProvider);
-  final Duration base = ref.watch(reconnectBackoffProvider);
-  final StreamController<FlowEvent> events = StreamController<FlowEvent>();
-  StreamSubscription<FlowEvent>? source;
-  Timer? retry;
-  Duration wait = base;
-  bool disposed = false;
-
-  void scheduleReconnect() {
-    source = null;
-    if (disposed || events.isClosed) {
-      return;
-    }
-    retry?.cancel();
-    retry = Timer(wait, () {
-      retry = null;
-      final Duration doubled = wait * 2;
-      wait = doubled > maxReconnectBackoff ? maxReconnectBackoff : doubled;
-      connectFlowEvents(
-        client: client,
-        events: events,
-        afterGap: true,
-        onEvent: () => wait = base,
-        onBroken: scheduleReconnect,
-        attach: (StreamSubscription<FlowEvent> subscription) =>
-            source = subscription,
-        isDisposed: () => disposed,
-      );
-    });
-  }
-
-  ref.onDispose(() {
-    disposed = true;
-    retry?.cancel();
-    unawaited(source?.cancel());
-    unawaited(events.close());
-  });
-
-  connectFlowEvents(
-    client: client,
-    events: events,
-    afterGap: false,
-    onEvent: () => wait = base,
-    onBroken: scheduleReconnect,
-    attach: (StreamSubscription<FlowEvent> subscription) =>
-        source = subscription,
-    isDisposed: () => disposed,
-  );
-  return events.stream;
-}
-
-/// Subscribes [client] and pipes its events into [events].
-///
-/// Split out of [flowEvents] so that the first attempt and every retry take
-/// exactly the same path. [onBroken] runs when the stream fails, [onEvent]
-/// when it delivers, and [attach] receives the live subscription so the
-/// provider can cancel it.
-void connectFlowEvents({
-  required DaemonClient client,
-  required StreamController<FlowEvent> events,
-  required bool afterGap,
-  required VoidCallback onEvent,
-  required VoidCallback onBroken,
-  required void Function(StreamSubscription<FlowEvent> subscription) attach,
-  required bool Function() isDisposed,
-}) {
-  if (isDisposed() || events.isClosed) {
-    return;
-  }
-  if (afterGap) {
-    events.add(FlowEvent.lagged(at: DateTime.now(), dropped: 0));
-  }
-  try {
-    attach(
-      client.subscribe().listen(
-        (FlowEvent event) {
-          onEvent();
-          if (!events.isClosed) {
-            events.add(event);
-          }
-        },
-        // Why the stream broke is the connection gate's business; the queue
-        // only has to come back.
-        onError: (Object error, StackTrace stack) => onBroken(),
-        onDone: () {
-          if (!isDisposed() && !events.isClosed) {
-            events.close();
-          }
-        },
-        cancelOnError: true,
-      ),
-    );
-  } on Object {
-    onBroken();
-  }
-}
 
 /// Every flow the app has heard of, by id.
 ///
@@ -409,8 +291,50 @@ class SelectedFlowId extends _$SelectedFlowId {
     return queue.isEmpty ? null : queue.first.id;
   }
 
+  /// True while a decision key is still down; the selection waits for it.
+  bool _keyDown = false;
+
+  /// True when the queue wanted to hand the selection on while [_keyDown].
+  bool _deferred = false;
+
   /// Selects [id]; a click, or the queue handing over.
   void select(FlowId id) => state = id;
+
+  /// Tells the selection that a decision key is down, or was released.
+  ///
+  /// While a key is down the selection stays where it is, even after a
+  /// decision: the arming of `docs/UX.md` 5.4 measures how long the URL of a
+  /// new selection has been readable, and a selection that moves under a
+  /// finger which never came up would arm against nobody. On release the
+  /// deferred hand-over happens at once.
+  void setDecisionKeyDown(bool down) {
+    if (_keyDown == down) {
+      return;
+    }
+    _keyDown = down;
+    if (!down && _deferred) {
+      _deferred = false;
+      _advance();
+    }
+  }
+
+  /// Hands the selection to the next held flow, from wherever it stands now.
+  void _advance() {
+    final List<Flow> flows = ref.read(visibleQueueFlowsProvider).flows;
+    if (flows.isEmpty) {
+      state = null;
+      return;
+    }
+    final int index = flows.indexWhere((Flow flow) => flow.id == state);
+    if (index < 0) {
+      state = flows.first.id;
+      return;
+    }
+    final Flow? successor = _nextHeld(flows, index);
+    if (successor != null) {
+      state = successor.id;
+    }
+  }
 
   /// Selects the next row of the queue.
   void next() => _step(1);
@@ -445,6 +369,10 @@ class SelectedFlowId extends _$SelectedFlowId {
     if (index >= 0) {
       final Flow selected = flows[index];
       if (selected.isHeld || selected.decisionSource != DecisionSource.user) {
+        return;
+      }
+      if (_keyDown) {
+        _deferred = true;
         return;
       }
       final Flow? successor = _nextHeld(flows, index);
@@ -490,75 +418,3 @@ Flow? selectedFlow(Ref ref) {
 @riverpod
 Future<FlowDetail> flowDetail(Ref ref, FlowId id) =>
     ref.watch(daemonClientProvider).getFlow(id);
-
-/// What the action bar is doing.
-@freezed
-sealed class DecisionProgress with _$DecisionProgress {
-  /// Nothing is in flight.
-  const factory DecisionProgress.idle() = DecisionIdle;
-
-  /// `Decide` is in flight for [flowId].
-  const factory DecisionProgress.sending({
-    required FlowId flowId,
-    required DecisionKind kind,
-  }) = DecisionSending;
-
-  /// The daemon refused; the card under the bar says why.
-  const factory DecisionProgress.failed({
-    required FlowId flowId,
-    required Diagnostic diagnostic,
-  }) = DecisionFailed;
-
-  const DecisionProgress._();
-
-  /// True while a decision waits for the daemon.
-  bool get isSending => this is DecisionSending;
-}
-
-/// Sends decisions and remembers what came back.
-///
-/// The only mutation the intercept screen performs. Errors become a
-/// [Diagnostic] and are shown inline; nothing here opens a modal.
-@Riverpod(keepAlive: true)
-class InterceptDecision extends _$InterceptDecision {
-  @override
-  DecisionProgress build() => const DecisionProgress.idle();
-
-  /// Decides [id]. Does nothing while another decision is in flight.
-  Future<void> send(FlowId id, Decision decision) async {
-    if (state.isSending) {
-      return;
-    }
-    state = DecisionProgress.sending(flowId: id, kind: decision.kind);
-    try {
-      await ref.read(daemonClientProvider).decide(id, decision);
-      if (ref.mounted) {
-        state = const DecisionProgress.idle();
-      }
-    } on DaemonException catch (error) {
-      if (ref.mounted) {
-        state = DecisionProgress.failed(
-          flowId: id,
-          diagnostic: error.diagnostic,
-        );
-      }
-    } on Object catch (error) {
-      if (ref.mounted) {
-        state = DecisionProgress.failed(
-          flowId: id,
-          diagnostic: ClientDiagnostics.daemonUnreachable(
-            socketPath: '?',
-            detail: error.toString(),
-          ),
-        );
-      }
-    }
-  }
-
-  /// Forgets a failure, so the next selection starts clean.
-  void clear() {
-    if (!state.isSending) {
-      state = const DecisionProgress.idle();
-    }
-  }
-}

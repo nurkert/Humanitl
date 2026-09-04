@@ -37,6 +37,33 @@ const Map<HFlowState, int> frozenLightStates = <HFlowState, int>{
   HFlowState.error: 0xFFEB4D17,
 };
 
+/// Die Textpalette, wie sie sich *erwartungsgemäß* ableitet. Eingefroren wie
+/// [frozenLightStates]: die Ableitung ist der einzige Erzeuger dieser Werte,
+/// also könnte ein Test, der sie nachrechnet, nicht fehlschlagen. Eine
+/// geänderte Ableitung erscheint hier als Diff, den jemand ansieht.
+const Map<HFlowState, int> frozenDarkStateText = <HFlowState, int>{
+  HFlowState.held: 0xFFE0B24A,
+  HFlowState.allowed: 0xFF56C291,
+  HFlowState.allowedEdited: 0xFF62BEA5,
+  HFlowState.blocked: 0xFFEB878F,
+  HFlowState.timedOut: 0xFFA4A8B6,
+  HFlowState.autoRule: 0x99ECF8F3,
+  HFlowState.passthroughLlm: 0xFFC09CF2,
+  HFlowState.error: 0xFFF28E6B,
+};
+
+/// Dasselbe für das helle Theme.
+const Map<HFlowState, int> frozenLightStateText = <HFlowState, int>{
+  HFlowState.held: 0xFF735613,
+  HFlowState.allowed: 0xFF26684A,
+  HFlowState.allowedEdited: 0xFF2B6656,
+  HFlowState.blocked: 0xFFA81C27,
+  HFlowState.timedOut: 0xFF565B6B,
+  HFlowState.autoRule: 0x99020705,
+  HFlowState.passthroughLlm: 0xFF7122E3,
+  HFlowState.error: 0xFFA2340E,
+};
+
 /// WCAG 2.1 contrast, written out here so the test does not lean on the
 /// package's own implementation of the formula.
 double wcagContrast(Color foreground, Color background) {
@@ -225,6 +252,382 @@ void main() {
     });
   });
 
+  group('contrast', () {
+    // Jede Fläche, auf der eine Zustands- oder Methodenfarbe als Text stehen
+    // kann: die vier Flächen der Leiter, dieselben vier mit der Zehn-Prozent-
+    // Tönung derselben Farbe, und dieselben vier mit der Hover-, der Druck-
+    // und der Haltefüllung eines Controls (`docs/UX.md` 6). Die Liste steht
+    // hier ausgeschrieben und nicht als Verweis auf
+    // `HColorDerivation.fillAlphas`, damit sie nicht mit der Palette
+    // mitwandert; ein eigener Test hält die beiden Listen gleich.
+    const List<double> alphas = <double>[
+      0,
+      HColors.tintAlpha,
+      HColors.fillHoverAlpha,
+      HColors.fillPressedAlpha,
+      HColors.fillHoldAlpha,
+    ];
+    List<Color> backgrounds(Color area, List<Color> surfaces) {
+      final List<Color> out = <Color>[];
+      for (final Color surface in surfaces) {
+        for (final double alpha in alphas) {
+          out.add(
+            alpha == 0
+                ? surface
+                : Color.alphaBlend(area.withValues(alpha: alpha), surface),
+          );
+        }
+      }
+      return out;
+    }
+
+    double worstText(Color text, Color area, List<Color> surfaces) =>
+        worstOf(text, backgrounds(area, surfaces));
+
+    test('the area palette is exactly what it claims: 3:1, not 4.5:1', () {
+      // Der Grund, aus dem es die Textpalette gibt. Ohne diese Zeile liest
+      // sich der Rest der Gruppe wie eine Verdopplung.
+      final Map<HFlowState, double> lightArea = <HFlowState, double>{
+        for (final HFlowState state in HFlowState.values)
+          state: worstText(
+            HStateColors.light.resolve(state),
+            HStateColors.light.resolve(state),
+            lightSurfaces,
+          ),
+      };
+      for (final MapEntry<HFlowState, double> entry in lightArea.entries) {
+        expect(
+          entry.value,
+          greaterThanOrEqualTo(2.4),
+          reason: '${entry.key.name} is ${entry.value.toStringAsFixed(2)}',
+        );
+        expect(
+          entry.value,
+          lessThan(4.5),
+          reason:
+              'if ${entry.key.name} reached 4.5:1 as an area, the text '
+              'palette would be pointless',
+        );
+      }
+      // Die gemessenen Zahlen, damit ein Rückschritt hier auffällt und nicht
+      // erst auf dem Schirm. Der schlechteste Fall ist seit der Aufnahme der
+      // Haltefüllung in `fillAlphas` diese Füllung: `held` misst auf ihr
+      // 2,49:1 statt der 2,54:1 auf der Tönung (`docs/UX.md` 6).
+      expect(lightArea[HFlowState.held]!, closeTo(2.49, 0.01));
+      expect(lightArea[HFlowState.blocked]!, closeTo(2.95, 0.01));
+      expect(lightArea[HFlowState.error]!, closeTo(2.49, 0.01));
+    });
+
+    test('every fill of the system is a fill the derivation saw', () {
+      // Die vierte Füllung, die niemand misst, ist der Fehler, den dieser
+      // Test verhindert: `HoldToConfirm` malte 20 % Zustandsfarbe, und die
+      // Textableitung wusste nichts davon (`docs/UX.md` 6).
+      expect(HColorDerivation.fillAlphas, alphas);
+      expect(HColors.fillHoldAlpha, 0.20);
+      // Die Haltefüllung ist die dunkelste Fläche, also der strenge Fall.
+      expect(HColors.fillHoldAlpha, greaterThan(HColors.fillPressedAlpha));
+      expect(HColors.fillPressedAlpha, greaterThan(HColors.fillHoverAlpha));
+      expect(HColors.fillHoverAlpha, greaterThan(HColors.tintAlpha));
+      // Und sie trägt Text: ohne die Aufnahme in `fillAlphas` misst die
+      // Textvariante von `error` dunkel 4,44:1 auf ihr.
+      for (final Brightness brightness in Brightness.values) {
+        final HTokens tokens = HTokens.forBrightness(brightness);
+        for (final HFlowState state in HFlowState.values) {
+          final Color area = tokens.stateColor(state);
+          final Color text = tokens.stateTextColor(state);
+          for (final Color surface in tokens.colors.ladder) {
+            final Color hold = Color.alphaBlend(
+              area.withValues(alpha: HColors.fillHoldAlpha),
+              surface,
+            );
+            final double ratio = wcagContrast(text, hold);
+            expect(
+              ratio,
+              greaterThanOrEqualTo(HColorDerivation.textMinContrast),
+              reason:
+                  '${brightness.name} ${state.name} on its hold fill is '
+                  '${ratio.toStringAsFixed(2)}',
+            );
+          }
+        }
+      }
+    });
+
+    test('the accent carries text and fills at 4.5:1 in both themes', () {
+      for (final Brightness brightness in Brightness.values) {
+        final HTokens tokens = HTokens.forBrightness(brightness);
+        final HSurfaceColors c = tokens.colors;
+        // Die Fläche bleibt eine Fläche: 3:1, nicht mehr.
+        expect(
+          worstOf(c.accent, tokens.colors.ladder),
+          greaterThanOrEqualTo(HColorDerivation.areaMinContrast),
+        );
+        // Das Wort darauf erreicht 4,5:1, auch auf der eigenen Tönung und auf
+        // jeder Füllung (`docs/UX.md` 6).
+        final double text = worstText(c.accentText, c.accent, c.ladder);
+        expect(
+          text,
+          greaterThanOrEqualTo(HColorDerivation.textMinContrast),
+          reason: '${brightness.name} accentText is ${text.toStringAsFixed(2)}',
+        );
+        // Und der Akzent selbst trägt keines: das ist der Grund, aus dem es
+        // die Variante gibt.
+        if (brightness == Brightness.light) {
+          expect(
+            worstText(c.accent, c.accent, c.ladder),
+            lessThan(HColorDerivation.textMinContrast),
+          );
+        }
+        // Die gefüllte Variante: das Wort auf ihr erreicht 4,5:1.
+        expect(
+          wcagContrast(c.onAccent, c.accentFill),
+          greaterThanOrEqualTo(HColorDerivation.textMinContrast),
+        );
+        // Und sie bleibt eine Fläche, die man auf jedem Untergrund sieht.
+        expect(
+          worstOf(c.accentFill, c.ladder),
+          greaterThanOrEqualTo(HColorDerivation.areaMinContrast),
+        );
+      }
+      // Hell weicht die Füllung zurück, dunkel steht sie schon weit genug.
+      expect(HTokens.dark.colors.accentFill, HColors.accent);
+      expect(HTokens.light.colors.accentFill, isNot(HColors.lAccent));
+      expect(
+        wcagContrast(HColors.lBg1, HColors.lAccent),
+        lessThan(HColorDerivation.textMinContrast),
+      );
+    });
+
+    test('stateTextOf resolves an area colour of either theme', () {
+      final HTokens light = HTokens.light;
+      final HTokens dark = HTokens.dark;
+      for (final HFlowState state in HFlowState.values) {
+        // Die eigene Palette.
+        expect(
+          light.stateTextOf(light.stateColor(state)),
+          light.stateTextColor(state),
+          reason: state.name,
+        );
+        // Und die des anderen Themes: wer `HColors.held` schreibt statt
+        // `tokens.state.held`, bekam vorher seine Farbe unverändert zurück
+        // und malte bei rund 2,5:1.
+        expect(
+          light.stateTextOf(dark.stateColor(state)),
+          light.stateTextColor(state),
+          reason: state.name,
+        );
+        expect(
+          dark.stateTextOf(light.stateColor(state)),
+          dark.stateTextColor(state),
+          reason: state.name,
+        );
+      }
+      // Der Akzent ist eine Fläche wie die Zustandsfarben.
+      expect(light.stateTextOf(HColors.lAccent), light.colors.accentText);
+      expect(light.stateTextOf(HColors.accent), light.colors.accentText);
+      expect(dark.stateTextOf(HColors.accent), dark.colors.accentText);
+      // Die Textleiter kommt unverändert zurück.
+      expect(light.stateTextOf(HColors.lFg1), HColors.lFg1);
+      expect(dark.stateTextOf(HColors.fg0), HColors.fg0);
+    });
+
+    test('a derivation that cannot reach its floor fails loudly', () {
+      // Beide Schleifen enden am Rand der Leiter. Ohne Zusicherung käme von
+      // dort eine Farbe zurück, die die Grenze verfehlt, und niemand merkte
+      // es (`docs/UX.md` 9).
+      expect(
+        () => HColorDerivation.textVariant(
+          const Color(0xFFFFFFFF),
+          surfaces: const <Color>[Color(0xFFFFFFFF)],
+          minContrast: 21,
+        ),
+        throwsAssertionError,
+      );
+      expect(
+        () => HColorDerivation.readableFill(
+          const Color(0xFFFFFFFF),
+          const Color(0xFFFFFFFF),
+          minContrast: 21,
+        ),
+        throwsAssertionError,
+      );
+      // Der erreichbare Fall kommt durch und erreicht die Grenze wirklich.
+      final Color fill = HColorDerivation.readableFill(
+        HColors.lAccent,
+        HColors.lBg1,
+      );
+      expect(
+        wcagContrast(HColors.lBg1, fill),
+        greaterThanOrEqualTo(HColorDerivation.textMinContrast),
+      );
+      // Ton und Sättigung bleiben; nur die Helligkeit weicht.
+      final HSLColor before = HSLColor.fromColor(HColors.lAccent);
+      final HSLColor after = HSLColor.fromColor(fill);
+      expect(after.hue, closeTo(before.hue, 2.0));
+      expect(after.lightness, lessThan(before.lightness));
+    });
+
+    test('every state colour carries text at 4.5:1 in both themes', () {
+      for (final Brightness brightness in Brightness.values) {
+        final HTokens tokens = HTokens.forBrightness(brightness);
+        final List<Color> surfaces = tokens.colors.ladder;
+        for (final HFlowState state in HFlowState.values) {
+          final Color area = tokens.stateColor(state);
+          final Color text = tokens.stateTextColor(state);
+          final double ratio = worstText(text, area, surfaces);
+          expect(
+            ratio,
+            greaterThanOrEqualTo(HColorDerivation.textMinContrast),
+            reason:
+                '${brightness.name} ${state.name} text is '
+                '${ratio.toStringAsFixed(2)}:1 on '
+                '${HColorDerivation.toHex(area)}',
+          );
+        }
+      }
+    });
+
+    test('every method hue carries its verb at 4.5:1 in both themes', () {
+      const List<String> methods = <String>[
+        'GET',
+        'HEAD',
+        'POST',
+        'PUT',
+        'PATCH',
+        'DELETE',
+        'PROPFIND',
+      ];
+      for (final Brightness brightness in Brightness.values) {
+        final HTokens tokens = HTokens.forBrightness(brightness);
+        final List<Color> surfaces = tokens.colors.ladder;
+        for (final String method in methods) {
+          final Color area = tokens.method.of(method);
+          final Color text = tokens.methodTextColor(method);
+          final double ratio = worstText(text, area, surfaces);
+          expect(
+            ratio,
+            greaterThanOrEqualTo(HColorDerivation.textMinContrast),
+            reason:
+                '${brightness.name} $method is '
+                '${ratio.toStringAsFixed(2)}:1',
+          );
+        }
+      }
+    });
+
+    test('the area palette is untouched by the text palette', () {
+      // Flächen bleiben, wo sie sind: die Rail, der Bogen und die Tönung
+      // hätten von 4,5:1 nichts, und `held` bei voller Sättigung wäre eine
+      // andere Farbe.
+      for (final HFlowState state in HFlowState.values) {
+        expect(
+          HStateColors.dark.resolve(state).toARGB32(),
+          state == HFlowState.autoRule
+              ? HColors.autoRule.toARGB32()
+              : isNotNull,
+          reason: state.name,
+        );
+        expect(
+          HStateColors.light.resolve(state).toARGB32(),
+          frozenLightStates[state],
+          reason: state.name,
+        );
+      }
+    });
+
+    test('the text palettes match the frozen tables', () {
+      for (final HFlowState state in HFlowState.values) {
+        expect(
+          HStateColors.darkText.resolve(state).toARGB32(),
+          frozenDarkStateText[state],
+          reason:
+              '${state.name} derived to '
+              '${HColorDerivation.toHex(HStateColors.darkText.resolve(state))}',
+        );
+        expect(
+          HStateColors.lightText.resolve(state).toARGB32(),
+          frozenLightStateText[state],
+          reason:
+              '${state.name} derived to '
+              '${HColorDerivation.toHex(HStateColors.lightText.resolve(state))}',
+        );
+      }
+    });
+
+    test('the text variant keeps hue, saturation and alpha', () {
+      for (final Brightness brightness in Brightness.values) {
+        final HTokens tokens = HTokens.forBrightness(brightness);
+        for (final HFlowState state in HFlowState.values) {
+          final Color area = tokens.stateColor(state);
+          final Color text = tokens.stateTextColor(state);
+          expect(text.a, closeTo(area.a, 1e-6), reason: state.name);
+          final HSLColor areaHsl = HSLColor.fromColor(area);
+          final HSLColor textHsl = HSLColor.fromColor(text);
+          // Der Ton bleibt, solange die Farbe ihn tragen kann. Nahe an
+          // Schwarz oder Weiß tut sie das nicht mehr: `autoRule` hat 60 %
+          // Deckkraft, und die einzige Helligkeit, mit der es hell 4,5:1
+          // erreicht, liegt so dicht an Schwarz, dass das Runden auf acht Bit
+          // je Kanal den Ton verschiebt. Das ist der Preis dafür, dass die
+          // Textvariante das Alpha behält, statt eine zweite Farbe zu
+          // erfinden.
+          if (areaHsl.saturation > 0.05 &&
+              textHsl.lightness > 0.1 &&
+              textHsl.lightness < 0.9) {
+            expect(textHsl.hue, closeTo(areaHsl.hue, 2.0), reason: state.name);
+          }
+          // Von den Flächen weg: im hellen Theme dunkler, im dunklen heller.
+          if (brightness == Brightness.light) {
+            expect(
+              textHsl.lightness,
+              lessThanOrEqualTo(areaHsl.lightness),
+              reason: state.name,
+            );
+          } else {
+            expect(
+              textHsl.lightness,
+              greaterThanOrEqualTo(areaHsl.lightness),
+              reason: state.name,
+            );
+          }
+        }
+      }
+    });
+
+    test('the countdown arc reaches 3:1 on every surface it lies on', () {
+      // Die Entscheidung aus `docs/UX.md` 9, Punkt 6: die verbrauchte Zeit
+      // ist eine Lücke, keine Spur. Eine Spur bräuchte eine eigene Farbe, die
+      // auf jeder Panelfläche zu sehen ist — die Haarlinie war das nicht, sie
+      // misst hell 1,01:1 bis 1,19:1 gegen die vier Flächen — und gegen die
+      // der Bogen trotzdem 3:1 erreicht. Der Bogen allein schafft seine 3:1
+      // auf jeder Fläche, und die Lücke braucht kein Token.
+      for (final Color surface in lightSurfaces) {
+        expect(
+          wcagContrast(HColors.lLine, surface),
+          lessThan(1.27),
+          reason:
+              'die alte Spur war auf ${HColorDerivation.toHex(surface)} '
+              'nicht zu sehen',
+        );
+      }
+      for (final Brightness brightness in Brightness.values) {
+        final HTokens tokens = HTokens.forBrightness(brightness);
+        for (final HFlowState state in HFlowState.values) {
+          final double ratio = worstOf(
+            tokens.stateColor(state),
+            tokens.colors.ladder,
+          );
+          expect(
+            ratio,
+            greaterThanOrEqualTo(HColorDerivation.areaMinContrast),
+            reason:
+                '${brightness.name} ${state.name} arc is '
+                '${ratio.toStringAsFixed(2)}',
+          );
+        }
+      }
+    });
+  });
+
   group('token tables', () {
     test('BACKLOG hexes are literal', () {
       expect(HColors.bg0.toARGB32(), 0xFF0F1115);
@@ -254,6 +657,9 @@ void main() {
       expect(HColors.lFg2.toARGB32(), 0xFF7C8294);
       expect(HColors.lAccent.toARGB32(), 0xFF5B7FE6);
       expect(HColors.tintAlpha, 0.10);
+      expect(HColors.fillHoverAlpha, 0.14);
+      expect(HColors.fillPressedAlpha, 0.18);
+      expect(HColors.fillHoldAlpha, 0.20);
     });
 
     test('tokens differ between light and dark', () {
@@ -532,7 +938,12 @@ void main() {
         HSize.statusBar,
         HSize.row,
         HSize.rowSelected,
+        HSize.rowHistory,
+        HSize.rowBody,
+        HSize.rowActionSlot,
         HSize.hitMin,
+        HSize.hitDecision.width,
+        HSize.hitDecision.height,
       ]) {
         expect(step % HSpace.unit, 0, reason: '$step is not on the grid');
       }
@@ -544,6 +955,21 @@ void main() {
       expect(HSize.rowSelected, 56);
       expect(HSize.headerBar, 40);
       expect(HSize.statusBar, 24);
+      // Die drei Dichten von `docs/UX.md` 3.2, jede als eigenes Token, damit
+      // kein Screen eine 28 in eine Feature-Datei schreibt.
+      expect(HSize.row, 36);
+      expect(HSize.rowHistory, 28);
+      expect(HSize.rowBody, 24);
+      expect(HSize.rowActionSlot, 28);
+      expect(HSize.rowActionSlot, HSize.hitMin);
+      expect(HSize.hitDecision, const Size(120, 32));
+      // Das Maß ist eine Zeichenzahl, keine Pixelbreite.
+      expect(HSize.measureChars, 90);
+      expect(HSize.measureWidth(12), closeTo(90 * 0.6 * 12, 1e-9));
+      expect(HTokens.dark.sizes.measureChars, 90);
+      expect(HTokens.dark.sizes.rowHistory, HSize.rowHistory);
+      expect(HTokens.dark.sizes.rowBody, HSize.rowBody);
+      expect(HTokens.dark.sizes.rowActionSlot, HSize.rowActionSlot);
       expect(HSize.paneRatio, (28, 44, 28));
       expect(HSize.paneRatio.$1 + HSize.paneRatio.$2 + HSize.paneRatio.$3, 100);
     });
@@ -586,6 +1012,10 @@ void main() {
       expect(HMotion.freezeAfterKey, const Duration(seconds: 2));
       expect(HMotion.freezeAfterPointer, const Duration(milliseconds: 500));
       expect(HMotion.clockTick, const Duration(seconds: 1));
+      // Die beiden Fristen, die vorher als Literale in `core/ui` standen
+      // (`docs/UX.md` 2.1 und 9).
+      expect(HMotion.hoverLabel, const Duration(milliseconds: 350));
+      expect(HMotion.copyFeedback, const Duration(seconds: 2));
       // Erlauben ist unumkehrbar und wird deshalb neu armiert, Blockieren
       // nicht; die Frist bleibt unter der Halte-Bestaetigung.
       expect(HMotion.rearm, const Duration(milliseconds: 350));
@@ -604,6 +1034,14 @@ void main() {
       expect(HMotion.breatheCycles, 3);
       expect(HMotion.breatheMinOpacity, 0.72);
       expect(HMotion.reducedRingAlpha, 0.4);
+    });
+
+    test('the splitter has a width and a keyboard step', () {
+      // Kein Literal mehr im Splitter, und ein Schritt, den man sieht
+      // (`docs/UX.md` 2.1 und 5.1).
+      expect(HSize.splitterActive, HSize.hairline * 2);
+      expect(HSize.splitterStep, HSpace.x2);
+      expect(HSize.splitterStep % HSpace.unit, 0);
     });
 
     testWidgets('reduced motion drops travel and keeps feedback', (

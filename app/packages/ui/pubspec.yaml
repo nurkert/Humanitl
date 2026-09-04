@@ -1,5 +1,5 @@
 name: humanitl_ui
-description: "Design tokens and thin wrappers around the component library."
+description: "Design tokens and the widget vocabulary of the application (ADR-0009)."
 publish_to: "none"
 version: 0.0.0
 

@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import '../theme/h_theme.dart';
@@ -11,6 +12,12 @@ import '../tokens/typography.dart';
 /// Modals are reserved for destructive confirmations — blocking more than five
 /// flows at once, deleting a forever rule, stopping a running sandbox. A modal
 /// is never used to make a normal decision; that happens in the queue.
+///
+/// Der Modal fängt den Fokus ein und gibt ihn beim Schließen zurück, und
+/// `Escape` verwirft ihn, sofern [onDismiss] gesetzt ist. Ohne beides ist ein
+/// Modal für die Tastatur eine Sackgasse: `Tab` liefe durch den Screen
+/// dahinter, über den man gerade nicht entscheiden soll
+/// (`docs/UX.md` 5.1 und 9, Punkt 16).
 class HModal extends StatelessWidget {
   /// Creates a modal.
   const HModal({
@@ -44,6 +51,29 @@ class HModal extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
+    final VoidCallback? dismiss = onDismiss;
+    return Shortcuts(
+      shortcuts: <ShortcutActivator, Intent>{
+        if (dismiss != null)
+          const SingleActivator(LogicalKeyboardKey.escape):
+              const DismissIntent(),
+      },
+      child: Actions(
+        actions: <Type, Action<Intent>>{
+          if (dismiss != null)
+            DismissIntent: CallbackAction<DismissIntent>(
+              onInvoke: (DismissIntent intent) {
+                dismiss();
+                return null;
+              },
+            ),
+        },
+        child: FocusScope(autofocus: true, child: _card(context, tokens)),
+      ),
+    );
+  }
+
+  Widget _card(BuildContext context, HTokens tokens) {
     return Stack(
       fit: StackFit.expand,
       children: <Widget>[

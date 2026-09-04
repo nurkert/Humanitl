@@ -20,6 +20,9 @@ import 'client_diagnostics.dart';
 import 'convert.dart';
 import 'daemon_client.dart';
 import 'generated/humanitl/v1/humanitl.pbgrpc.dart' as pb;
+// `Rule` and its parts live in their own wire file, and `humanitl.pb.dart`
+// imports it without re-exporting it. Same prefix, one vocabulary.
+import 'generated/humanitl/v1/rules.pb.dart' as pb;
 import 'proto_version.dart';
 
 /// The trailer in which tonic ships a `Diagnostic` with a failed call.
@@ -100,7 +103,7 @@ class GrpcDaemonClient implements DaemonClient {
   }
 
   @override
-  Future<void> decide(FlowId id, Decision decision, {Rule? remember}) async {
+  Future<Rule?> decide(FlowId id, Decision decision, {Rule? remember}) async {
     final pb.DecideResponse response = await _unary(
       (CallOptions options) => _stub.decide(
         decision.toProto(id, remember: remember),
@@ -112,6 +115,93 @@ class GrpcDaemonClient implements DaemonClient {
         throw DaemonException(result.diagnostic.toDomain());
       }
     }
+    return response.hasCreatedRule() ? response.createdRule.toDomain() : null;
+  }
+
+  @override
+  Future<void> removeRule(RuleId id) async {
+    final pb.RulesResponse response = await _unary(
+      (CallOptions options) =>
+          _stub.rules(pb.RulesRequest()..remove = id.value, options: options),
+    );
+    if (response.hasDiagnostic()) {
+      throw DaemonException(response.diagnostic.toDomain());
+    }
+  }
+
+  @override
+  Future<RuleSet> listRules() => _rules(pb.RulesRequest()..list = Empty());
+
+  @override
+  Future<RuleSet> addRule(Rule rule) =>
+      _rules(pb.RulesRequest()..add = rule.toProto());
+
+  @override
+  Future<RuleSet> updateRule(Rule rule) =>
+      _rules(pb.RulesRequest()..update = rule.toProto());
+
+  @override
+  Future<RuleSet> reorderRules(List<RuleId> order) => _rules(
+    pb.RulesRequest()
+      ..reorder = (pb.RulesRequest_Reorder()
+        ..ruleIdsInOrder.addAll(order.map((RuleId id) => id.value))),
+  );
+
+  @override
+  Future<RuleSet> makeRulePermanent(RuleId id) =>
+      _rules(pb.RulesRequest()..makePermanent = id.value);
+
+  /// A reload never throws on the findings it carries: a refused file leaves
+  /// the rules that were in force in force, and the findings are the answer,
+  /// not an error (`daemon/crates/ipc/src/rules.rs`).
+  @override
+  Future<RuleSet> reloadRules() =>
+      _rules(pb.RulesRequest()..reload = Empty(), raiseFirst: false);
+
+  @override
+  Future<DryRun> dryRunRule(Rule rule, {int limit = dryRunScanDefault}) async {
+    final pb.RulesResponse response = await _unary(
+      (CallOptions options) => _stub.rules(
+        pb.RulesRequest()
+          ..dryRun = (pb.RulesRequest_DryRun()
+            ..rule = rule.toProto()
+            ..limit = limit),
+        options: options,
+      ),
+    );
+    return DryRun(
+      matches: List<Flow>.unmodifiable(
+        response.dryRunMatches.map(
+          (pb.FlowSummary summary) => summary.toDomain(),
+        ),
+      ),
+      scanned: response.dryRunScanned,
+    );
+  }
+
+  /// One `Rules` call, translated.
+  ///
+  /// With [raiseFirst] a diagnostic in the answer is thrown: the operation
+  /// reported something it could not do, and the caller asked for an outcome,
+  /// not for a report.
+  Future<RuleSet> _rules(
+    pb.RulesRequest request, {
+    bool raiseFirst = true,
+  }) async {
+    final pb.RulesResponse response = await _unary(
+      (CallOptions options) => _stub.rules(request, options: options),
+    );
+    if (raiseFirst && response.hasDiagnostic()) {
+      throw DaemonException(response.diagnostic.toDomain());
+    }
+    return RuleSet(
+      rules: List<Rule>.unmodifiable(
+        response.rules.map((pb.Rule rule) => rule.toDomain()),
+      ),
+      diagnostics: List<Diagnostic>.unmodifiable(
+        response.diagnostics.map((pb.Diagnostic d) => d.toDomain()),
+      ),
+    );
   }
 
   @override

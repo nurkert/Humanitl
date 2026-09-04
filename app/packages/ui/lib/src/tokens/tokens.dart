@@ -21,11 +21,16 @@ class HSurfaceColors {
     required this.fg1,
     required this.fg2,
     required this.accent,
+    required this.accentText,
+    required this.accentFill,
     required this.onAccent,
   });
 
   /// The dark ladder of BACKLOG.md 5.
-  static const HSurfaceColors dark = HSurfaceColors(
+  ///
+  /// Nicht mehr `const`: [accentText] und [accentFill] werden abgeleitet, wie
+  /// die Textvariante jeder Zustandsfarbe (`docs/UX.md` 6).
+  static final HSurfaceColors dark = HSurfaceColors(
     bg0: HColors.bg0,
     bg1: HColors.bg1,
     bg2: HColors.bg2,
@@ -36,11 +41,16 @@ class HSurfaceColors {
     fg1: HColors.fg1,
     fg2: HColors.fg2,
     accent: HColors.accent,
+    accentText: HColorDerivation.textVariant(
+      HColors.accent,
+      surfaces: HColorDerivation.darkSurfaces,
+    ),
+    accentFill: HColorDerivation.readableFill(HColors.accent, HColors.bg0),
     onAccent: HColors.bg0,
   );
 
   /// The light ladder: the dark one inverted.
-  static const HSurfaceColors light = HSurfaceColors(
+  static final HSurfaceColors light = HSurfaceColors(
     bg0: HColors.lBg0,
     bg1: HColors.lBg1,
     bg2: HColors.lBg2,
@@ -51,6 +61,11 @@ class HSurfaceColors {
     fg1: HColors.lFg1,
     fg2: HColors.lFg2,
     accent: HColors.lAccent,
+    accentText: HColorDerivation.textVariant(
+      HColors.lAccent,
+      surfaces: HColorDerivation.lightSurfaces,
+    ),
+    accentFill: HColorDerivation.readableFill(HColors.lAccent, HColors.lBg1),
     onAccent: HColors.lBg1,
   );
 
@@ -81,10 +96,28 @@ class HSurfaceColors {
   /// Tertiary text.
   final Color fg2;
 
-  /// The single accent.
+  /// The single accent: focus ring, selection, the fill of the one primary
+  /// control. Eine Fläche, keine Textfarbe.
   final Color accent;
 
-  /// Text and glyphs drawn on top of [accent].
+  /// Der Akzent, wie er ein Wort tragen darf.
+  ///
+  /// [accent] ist auf 3:1 geklemmt wie jede Fläche: hell misst er 3,16:1 bis
+  /// 3,73:1 auf den vier Flächen und 2,63:1 auf seiner eigenen Tönung. Ein
+  /// Link, ein Pfad in einer Diagnose und die Beschriftung eines Fix-Controls
+  /// stehen deshalb in dieser Farbe hier, die auf allen Flächen und auf jeder
+  /// Füllung aus [HColorDerivation.fillAlphas] 4,5:1 erreicht
+  /// (`docs/UX.md` 6).
+  final Color accentText;
+
+  /// Der Akzent als Füllung eines Controls, das [onAccent] darauf schreibt.
+  ///
+  /// Weiß auf dem hellen Akzent misst 3,73:1; die Füllung weicht deshalb
+  /// zurück, bis das Wort 4,5:1 erreicht. Im dunklen Theme ist sie der Akzent
+  /// selbst, weil [onAccent] dort schon 7,14:1 misst.
+  final Color accentFill;
+
+  /// Text and glyphs drawn on top of [accentFill].
   final Color onAccent;
 
   /// The ladder from [bg0] to [bg3], darkest surface first in dark mode.
@@ -135,6 +168,36 @@ class HMethodColors {
     unknown: HColors.lFg2,
   );
 
+  /// Die dunkle Methodentabelle, wie sie ein Wort tragen darf.
+  ///
+  /// Ein Method-Badge zeichnet sein Kürzel auf die eigene Tönung; auf ihr
+  /// misst `DELETE` dunkel 2,65:1, und damit trägt keine Methodenfarbe legal
+  /// Text. Fläche und Label werden deshalb getrennt geführt: die Tönung bleibt
+  /// die Tabellenfarbe, das Kürzel steht in dieser hier
+  /// (`docs/UX.md` 9, Punkt 5).
+  static final HMethodColors darkText = _textOf(
+    dark,
+    HColorDerivation.darkSurfaces,
+  );
+
+  /// Die helle Methodentabelle, wie sie ein Wort tragen darf.
+  static final HMethodColors lightText = _textOf(
+    light,
+    HColorDerivation.lightSurfaces,
+  );
+
+  static HMethodColors _textOf(HMethodColors area, List<Color> surfaces) {
+    Color text(Color color) =>
+        HColorDerivation.textVariant(color, surfaces: surfaces);
+    return HMethodColors(
+      get: text(area.get),
+      post: text(area.post),
+      putPatch: text(area.putPatch),
+      delete: text(area.delete),
+      unknown: text(area.unknown),
+    );
+  }
+
   /// `GET` and `HEAD`.
   final Color get;
 
@@ -176,6 +239,8 @@ class HTokens {
     required this.colors,
     required this.state,
     required this.method,
+    required this.stateText,
+    required this.methodText,
     this.typography = HTypography.standard,
     this.spacing = HSpacingTokens.standard,
     this.radii = HRadiusTokens.standard,
@@ -184,11 +249,16 @@ class HTokens {
   });
 
   /// The dark theme, which the design is drawn for.
-  static const HTokens dark = HTokens(
+  ///
+  /// Nicht mehr `const`: [stateText] und [methodText] werden abgeleitet, damit
+  /// niemand eine zweite Farbe von Hand schreibt (`docs/UX.md` 6).
+  static final HTokens dark = HTokens(
     brightness: Brightness.dark,
     colors: HSurfaceColors.dark,
     state: HStateColors.dark,
     method: HMethodColors.dark,
+    stateText: HStateColors.darkText,
+    methodText: HMethodColors.darkText,
   );
 
   /// The light theme, derived from the dark one.
@@ -197,6 +267,8 @@ class HTokens {
     colors: HSurfaceColors.light,
     state: HStateColors.light,
     method: HMethodColors.light,
+    stateText: HStateColors.lightText,
+    methodText: HMethodColors.lightText,
   );
 
   /// The token set of [brightness].
@@ -215,6 +287,16 @@ class HTokens {
   /// The method hues.
   final HMethodColors method;
 
+  /// Die acht Zustandsfarben, wie sie ein Wort tragen dürfen.
+  ///
+  /// [state] ist die Fläche und auf 3:1 geklemmt; alles, was gelesen wird,
+  /// nimmt diese Palette und erreicht 4,5:1 — auch auf einer Tönung und auf
+  /// einer Füllung derselben Farbe (`docs/UX.md` 6).
+  final HStateColors stateText;
+
+  /// Die Methodenfarben, wie sie ein Kürzel tragen dürfen.
+  final HMethodColors methodText;
+
   /// The type scale.
   final HTypography typography;
 
@@ -232,6 +314,53 @@ class HTokens {
 
   /// The colour of [flowState] in this theme.
   Color stateColor(HFlowState flowState) => state.resolve(flowState);
+
+  /// Die Farbe, in der [flowState] als Text stehen darf.
+  ///
+  /// Für jede Fläche, jede Rail, jeden Bogen und jedes Glyph gilt
+  /// [stateColor]; für jedes Wort und jede Ziffer gilt diese hier. Ein Glyph
+  /// steht bewusst auf der anderen Seite: es ist eine Grafik, seine Grenze
+  /// ist die 3:1 aus `docs/UX.md` 6, und die Flächenpalette hält sie auf
+  /// jeder Fläche beider Leitern. Nähme es die Textvariante, verlöre
+  /// ausgerechnet `autoRule` seinen Ton — die Farbe trägt 60 % Deckkraft, und
+  /// 4,5:1 erreicht sie nur dicht an Weiß oder Schwarz —, und das Glyph ist
+  /// der Kanal, der die Farbe für Farbenblinde verdoppelt (3.3).
+  Color stateTextColor(HFlowState flowState) => stateText.resolve(flowState);
+
+  /// Die Farbe, in der das Kürzel von [method] stehen darf.
+  Color methodTextColor(String method) => methodText.of(method);
+
+  /// Die Textvariante von [color], falls [color] eine Flächenfarbe ist; sonst
+  /// [color] selbst.
+  ///
+  /// Damit trägt ein Control, dem jemand eine Zustandsfarbe reicht, das Wort
+  /// von selbst in der Farbe, die 4,5:1 erreicht, ohne dass jeder Aufrufer an
+  /// zwei Farben denken muss. Eine Nachschlagetabelle über acht Farben und den
+  /// Akzent, keine Ableitung zur Laufzeit: die Ableitung kostet einen
+  /// Suchlauf, und dieser Aufruf steht in jeder Zeile einer zehntausend Zeilen
+  /// langen Liste.
+  ///
+  /// Gesucht wird in **beiden** Paletten, nicht nur in der des laufenden
+  /// Themes. Wer im hellen Theme eine dunkle Konstante reicht — und ein
+  /// Aufrufer, der `HColors.held` schreibt statt `tokens.state.held`, tut das
+  /// —, bekäme sonst seine Farbe unverändert zurück und malte bei rund 2,5:1,
+  /// ohne dass etwas fehlschlägt. Die `fg`-Leiter kommt unverändert zurück:
+  /// sie ist bereits eine Textleiter.
+  Color stateTextOf(Color color) {
+    for (final HFlowState flowState in HFlowState.values) {
+      if (state.resolve(flowState) == color ||
+          HStateColors.dark.resolve(flowState) == color ||
+          HStateColors.light.resolve(flowState) == color) {
+        return stateText.resolve(flowState);
+      }
+    }
+    if (color == colors.accent ||
+        color == HColors.accent ||
+        color == HColors.lAccent) {
+      return colors.accentText;
+    }
+    return color;
+  }
 
   /// [color] as an area tint, capped at [HColors.tintAlpha].
   Color tint(Color color) => HColorDerivation.tint(color);

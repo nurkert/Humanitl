@@ -16,6 +16,7 @@ import '../../../core/ui/flow_visual_state.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../format.dart';
+import '../providers/decision.dart';
 import '../providers/flows.dart';
 import '../providers/now.dart';
 import 'countdown_ring.dart';
@@ -120,7 +121,9 @@ class _CardHeader extends ConsumerWidget {
             key: const Key('intercept-card-url'),
             text: flow.url,
             maxLines: 2,
-            style: tokens.typography.mono13.tinted(tokens.colors.fg0),
+            // The largest type of the screen belongs to what the screen is
+            // about: the URL that is being decided (`docs/UX.md` 3.1).
+            style: tokens.typography.mono14.tinted(tokens.colors.fg0),
           ),
         ),
         SizedBox(width: tokens.spacing.x3),

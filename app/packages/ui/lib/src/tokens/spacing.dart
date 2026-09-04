@@ -74,11 +74,44 @@ abstract final class HSize {
   /// Height of a collapsed queue row.
   static const double row = 36;
 
-  /// Height of a selected queue row, which carries a second line.
+  /// Höhe der Detailzeile in der History.
+  ///
+  /// Früher die Höhe einer ausgewählten Queue-Zeile mit Zweitzeile. Die
+  /// Queue-Zeile wächst nicht mehr mit ihrem Zustand — 36 px in jedem Zustand,
+  /// Mindesthöhe, keine feste (`docs/UX.md` 3.4) —, also ist der Wert auf die
+  /// zweizeilige Detailzeile der History umgewidmet (`docs/UX.md` 9, Punkt 1).
   static const double rowSelected = 56;
+
+  /// Zeilenhöhe der History-Tabelle.
+  ///
+  /// Eine der drei Dichten aus `docs/UX.md` 3.2 und wie die anderen beiden
+  /// eine Mindesthöhe: bei `TextScaler.linear(2.0)` wächst die Zeile mit der
+  /// Schrift. Ohne das Token schreibt der erste History-Screen eine 28 in eine
+  /// Feature-Datei, und die Regel gegen Literale bricht an dem Dokument, das
+  /// sie aufgestellt hat.
+  static const double rowHistory = 28;
+
+  /// Zeilenhöhe der Body- und Hex-Ansichten, die dichteste der drei Dichten.
+  static const double rowBody = 24;
+
+  /// Breite des Aktionsslots am rechten Rand einer Zeile.
+  ///
+  /// Immer reserviert, bei Ruhe leer; Hover **und** Fokus blenden dort die
+  /// Aktion ein, ohne etwas zu verschieben (`docs/UX.md` 3.4). Ein eigenes
+  /// Token, weil der Slot sich bisher [hitMin] borgt und das etwas anderes
+  /// bedeutet: [hitMin] ist eine Untergrenze, der Slot eine feste Breite.
+  static const double rowActionSlot = 28;
 
   /// The smallest hit target the design allows.
   static const double hitMin = 28;
+
+  /// Die kleinste Fläche der beiden Entscheidungen: 120 px breit, 32 px hoch.
+  ///
+  /// [hitMin] ist die Untergrenze für Nebensächliches. Erlauben und Blockieren
+  /// stehen darüber, weil ein 28-px-Ziel neben einem anderen 28-px-Ziel genau
+  /// die Geometrie ist, in der ein hastiger Klick daneben geht — und daneben
+  /// liegt hier die unumkehrbare Handlung (`docs/UX.md` 5.4 und 9).
+  static const Size hitDecision = Size(120, 32);
 
   /// Minimum width of the queue pane.
   static const double paneMinQueue = 280;
@@ -95,17 +128,65 @@ abstract final class HSize {
   /// Width of the state rail on the left edge of a row.
   static const double stateRail = 4;
 
-  /// Width of the selection rail that replaces the state rail when selected.
+  /// Breite der zwei Pixel, die in der Icon-Rail die aktive Sektion markieren.
+  ///
+  /// Nicht mehr die Rail einer Zeile: dort **ersetzt** die Auswahl die
+  /// Zustands-Rail über die vollen [stateRail] Pixel, statt ihre linke Hälfte
+  /// zu überlagern (`docs/UX.md` 3.4 und 9, Punkt 2).
   static const double selectionRail = 2;
 
   /// Thickness of a hairline.
   static const double hairline = 1;
+
+  /// Breite des Griffs eines Splitters.
+  ///
+  /// Ungerade und damit ausdrücklich nicht auf dem Vierer-Raster: das Raster
+  /// ordnet Abstände, und dieser Wert ist eine Griff-Geometrie. Bei sieben
+  /// Pixeln liegt die [hairline] in der Mitte auf einem ganzen Pixel; bei
+  /// acht liefe sie über eine halbe Pixelgrenze und wäre auf einem Schirm
+  /// ohne Skalierung sichtbar weicher als jede andere Haarlinie des Systems.
+  static const double splitter = 7;
+
+  /// Breite der Linie eines Splitters, während er gezogen wird.
+  ///
+  /// Ein Splitter ruht als Haarlinie und wird beim Ziehen doppelt so breit,
+  /// damit der Griff unter dem Zeiger sichtbar bleibt. Ein Token, weil sonst
+  /// jede zweite Achse (`docs/UX.md` 9, Punkt 30) ihre eigene 2 schreibt.
+  static const double splitterActive = hairline * 2;
+
+  /// Wie weit eine Pfeiltaste einen fokussierten Splitter verschiebt.
+  ///
+  /// Jeder Zeigerweg hat eine Taste (`docs/UX.md` 5.1); ein Ziehen um ein
+  /// Pixel je Druck wäre keine. Zwei Rastereinheiten sind der kleinste
+  /// Schritt, den man auf dem Schirm auch sieht.
+  static const double splitterStep = HSpace.x2;
 
   /// Diameter of the state glyph in a row.
   static const double glyph = 16;
 
   /// Stroke width of the countdown ring around a state glyph.
   static const double ringStroke = 1.5;
+
+  /// Das Textmaß: höchstens neunzig Monospace-Zeichen je Zeile.
+  ///
+  /// Eine Zeichenzahl und keine Pixelbreite, weil die Breite von der
+  /// installierten Schrift abhängt (`docs/UX.md` 3.2 und 9, Punkt 7).
+  /// Überschüssige Panebreite wird Rinne, nie Zeilenlänge; bei 2560 px liefe
+  /// eine URL sonst über 137 Zeichen, und das Auge sucht den nächsten
+  /// Zeilenanfang. Code, Hex und Tabellen bekommen kein Maß: sie scrollen
+  /// waagerecht und brechen nie um.
+  static const int measureChars = 90;
+
+  /// Der Vorschub eines Monospace-Zeichens als Anteil der Schriftgröße.
+  ///
+  /// Illustration, nicht Norm: JetBrains Mono und jeder Fallback der Kette
+  /// laufen auf rund 0,6 em. Wer aus [measureChars] eine Pixelbreite braucht,
+  /// rechnet damit; normativ bleibt die Zeichenzahl (`docs/UX.md` 3.2).
+  static const double monoAdvance = 0.6;
+
+  /// [measureChars] in logischen Pixeln bei Schriftgröße [fontSize].
+  static double measureWidth(double fontSize) =>
+      measureChars * monoAdvance * fontSize;
 }
 
 /// Spacing as instance data, reachable from `HTokens.spacing`.
@@ -191,7 +272,12 @@ class HSizeTokens {
     this.statusBar = HSize.statusBar,
     this.row = HSize.row,
     this.rowSelected = HSize.rowSelected,
+    this.rowHistory = HSize.rowHistory,
+    this.rowBody = HSize.rowBody,
+    this.rowActionSlot = HSize.rowActionSlot,
+    this.measureChars = HSize.measureChars,
     this.hitMin = HSize.hitMin,
+    this.hitDecision = HSize.hitDecision,
     this.paneMinQueue = HSize.paneMinQueue,
     this.paneMinInspector = HSize.paneMinInspector,
     this.paneMinContext = HSize.paneMinContext,
@@ -210,11 +296,26 @@ class HSizeTokens {
   /// Height of a collapsed row.
   final double row;
 
-  /// Height of a selected row.
+  /// Höhe der zweizeiligen Detailzeile der History.
   final double rowSelected;
+
+  /// Zeilenhöhe der History-Tabelle, eine Mindesthöhe.
+  final double rowHistory;
+
+  /// Zeilenhöhe der Body-Ansichten, eine Mindesthöhe.
+  final double rowBody;
+
+  /// Breite des Aktionsslots am rechten Rand einer Zeile.
+  final double rowActionSlot;
+
+  /// Das Textmaß in Monospace-Zeichen.
+  final int measureChars;
 
   /// Smallest allowed hit target.
   final double hitMin;
+
+  /// Kleinste Fläche der beiden Entscheidungen.
+  final Size hitDecision;
 
   /// Minimum width of the queue pane.
   final double paneMinQueue;

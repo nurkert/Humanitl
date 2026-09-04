@@ -35,7 +35,7 @@ class HTheme extends StatelessWidget {
   const HTheme({required this.tokens, required this.child, super.key});
 
   /// Publishes the dark tokens.
-  const HTheme.dark({required this.child, super.key}) : tokens = HTokens.dark;
+  HTheme.dark({required this.child, super.key}) : tokens = HTokens.dark;
 
   /// Publishes the light tokens.
   HTheme.light({required this.child, super.key}) : tokens = HTokens.light;

@@ -154,10 +154,12 @@
     "description": "Badge next to the queue heading with the number of held requests.",
     "placeholders": {"count": {"type": "int"}}
   },
-  "interceptEmptyTitle": "No request is waiting",
-  "@interceptEmptyTitle": {"description": "Empty state of the queue, first line."},
-  "interceptEmptyHint": "The agent works without a network. As soon as it asks for something, it appears here.",
+  "interceptEmptyTitle": "The queue is open",
+  "@interceptEmptyTitle": {"description": "Empty state of the queue, first line. Names the next event, never the absence of one (docs/UX.md 4.1)."},
+  "interceptEmptyHint": "Every request the agent makes appears here.",
   "@interceptEmptyHint": {"description": "Empty state of the queue, second line."},
+  "interceptEmptyKeys": "`B` block · `Enter` send (final) · `J`/`K` move",
+  "@interceptEmptyKeys": {"description": "Empty state of the queue, third line: the three keys, taught once. Starts with the reversible key; Enter names its consequence (docs/UX.md 4.1)."},
   "interceptRowMeta": "{size} · {contentType} · held for {elapsed}",
   "@interceptRowMeta": {
     "description": "Second line of the selected queue row: request size, content type and how long it has been waiting.",
@@ -175,9 +177,9 @@
     "description": "Screen-reader label of the countdown ring; the ring itself shows mm:ss.",
     "placeholders": {"time": {"type": "String"}}
   },
-  "interceptCardEmptyTitle": "Nothing selected",
+  "interceptCardEmptyTitle": "Pick a request",
   "@interceptCardEmptyTitle": {"description": "Middle pane when no request is selected, first line."},
-  "interceptCardEmptyHint": "Choose a request in the queue to see it here.",
+  "interceptCardEmptyHint": "The request you choose in the queue is shown here.",
   "@interceptCardEmptyHint": {"description": "Middle pane when no request is selected, second line."},
   "interceptSectionQuery": "Query ({count})",
   "@interceptSectionQuery": {
@@ -218,8 +220,90 @@
   "@interceptAllowButton": {"description": "Action bar: send the request on unchanged. Enter, A or Ctrl+F."},
   "interceptBlockButton": "Block",
   "@interceptBlockButton": {"description": "Action bar: refuse the request. B or Ctrl+L."},
-  "interceptHoldReason": "Held because no rule matches · Default: ask",
-  "@interceptHoldReason": {"description": "Neutral text between Block and Allow; the two are never adjacent."},
+  "interceptAllowForSession": "Allow for session",
+  "@interceptAllowForSession": {"description": "Label of the release valve while it is held down, and while the remembered duration is the session: the request goes out and a rule is created."},
+  "interceptAllowForHour": "Allow for 1 hour",
+  "@interceptAllowForHour": {"description": "Label of the release valve while the remembered duration is one hour."},
+  "interceptAllowAlways": "Allow always",
+  "@interceptAllowAlways": {"description": "Label of the release valve while the remembered duration is forever."},
+  "interceptAllowOptions": "Duration and scope of the rule",
+  "@interceptAllowOptions": {"description": "Screen-reader label of the chevron half of the release valve, which opens the remember grid."},
+  "interceptEditAllow": "Edit + Allow",
+  "@interceptEditAllow": {"description": "Action bar: change the request before it is sent."},
+  "interceptEditAllowPending": "Edit the request before sending it",
+  "@interceptEditAllowPending": {"description": "Hover label of the Edit + Allow control while the editor is not built yet: it says what the control will do, never which sprint builds it."},
+  "interceptHoldToBlock": "Hold to block",
+  "@interceptHoldToBlock": {"description": "Hint beside Block: the decision needs a short hold, so that a hurried click cannot take it."},
+  "interceptKeyAllow": "Enter",
+  "@interceptKeyAllow": {"description": "Key that allows the selected request, shown on the control itself."},
+  "interceptKeyBlock": "B",
+  "@interceptKeyBlock": {"description": "Key that blocks the selected request, shown on the control itself."},
+  "interceptRemember": "Remember",
+  "@interceptRemember": {"description": "Heading of the two segmented controls that turn one decision into a rule."},
+  "interceptRememberDuration": "How long the rule holds",
+  "@interceptRememberDuration": {"description": "Screen-reader label of the duration segments."},
+  "interceptRememberTarget": "What the rule covers",
+  "@interceptRememberTarget": {"description": "Screen-reader label of the scope segments."},
+  "interceptDurationOnce": "Once",
+  "@interceptDurationOnce": {"description": "Duration segment: decide this one request, create no rule."},
+  "interceptDurationSession": "Session",
+  "@interceptDurationSession": {"description": "Duration segment: the rule holds while this session runs. The default."},
+  "interceptDurationHour": "1 h",
+  "@interceptDurationHour": {"description": "Duration segment: the rule expires one hour from now."},
+  "interceptDurationForever": "Forever",
+  "@interceptDurationForever": {"description": "Duration segment: the rule is written to the rule file."},
+  "interceptTargetUrl": "URL",
+  "@interceptTargetUrl": {"description": "Scope segment: the rule matches this method, host and path."},
+  "interceptTargetHost": "Host",
+  "@interceptTargetHost": {"description": "Scope segment: the rule matches every request to this host. The default."},
+  "interceptTargetApex": "Domain",
+  "@interceptTargetApex": {"description": "Scope segment: the rule matches the registrable domain and everything under it."},
+  "interceptTargetHostMethod": "Host + method",
+  "@interceptTargetHostMethod": {"description": "Scope segment: the rule matches this host with this method only."},
+  "interceptHoldReason": "Held: no rule matches · default: ask",
+  "@interceptHoldReason": {"description": "Why this request waits: nothing in the rule list has an opinion about it."},
+  "interceptHoldReasonRule": "Held: rule {rule} says ask",
+  "@interceptHoldReasonRule": {
+    "description": "Why this request waits: a rule matched and its action is `ask`.",
+    "placeholders": {"rule": {"type": "String"}}
+  },
+  "interceptHoldReasonFindings": "{count, plural, =1{Held: one finding in the request} other{Held: {count} findings in the request}}",
+  "@interceptHoldReasonFindings": {
+    "description": "Why this request waits: the detectors found something in it.",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "interceptAutoBlocksIn": "{host} auto-blocks in {time}",
+  "@interceptAutoBlocksIn": {
+    "description": "Warning near the end of the hold budget: the consequence is named, never a bare mm:ss (docs/UX.md 4.3, 4.8).",
+    "placeholders": {"host": {"type": "String"}, "time": {"type": "String"}}
+  },
+  "interceptSentTo": "Sent to {host} · {size}",
+  "@interceptSentTo": {
+    "description": "Confirmation strip of an allowed request: the consequence, in the perfect tense, with target and size.",
+    "placeholders": {"host": {"type": "String"}, "size": {"type": "String"}}
+  },
+  "interceptBlockedRetry": "Blocked. The agent may retry.",
+  "@interceptBlockedRetry": {"description": "Confirmation strip of a blocked request."},
+  "interceptBlockedTimedOut": "Blocked (timed out)",
+  "@interceptBlockedTimedOut": {"description": "Confirmation strip of a request nobody decided in time."},
+  "interceptRuleSaved": "Rule saved · the request is already out",
+  "@interceptRuleSaved": {"description": "Strip under the action bar after a decision that created a rule. Undo takes back the rule, never the request (docs/UX.md 4.5)."},
+  "interceptRuleSavedBlock": "Rule saved · the request stays blocked",
+  "@interceptRuleSavedBlock": {"description": "Strip under the action bar after a block that created a rule."},
+  "interceptUndo": "Undo",
+  "@interceptUndo": {"description": "Removes the rule that was just created. The request is not affected."},
+  "interceptUndoDone": "Rule removed",
+  "@interceptUndoDone": {"description": "Shown in place of the undo strip once the rule is gone."},
+  "interceptUndoFailedTitle": "Rule not removed",
+  "@interceptUndoFailedTitle": {"description": "Title of the inline card when removing the rule failed."},
+  "interceptRefusedNotArmed": "The request has just changed · read it, then send",
+  "@interceptRefusedNotArmed": {"description": "Why a keypress did nothing: the selected URL has not been on screen long enough for anyone to have read it (docs/UX.md 5.4)."},
+  "interceptRefusedKeyHeld": "Release the key, then decide again",
+  "@interceptRefusedKeyHeld": {"description": "Why a keypress did nothing: the same key is still down from the decision before."},
+  "interceptRefusedSending": "A decision is already on its way",
+  "@interceptRefusedSending": {"description": "Why a keypress did nothing: the daemon has not answered the previous decision yet."},
+  "interceptRefusedNoFlow": "Pick a request first",
+  "@interceptRefusedNoFlow": {"description": "Why a keypress did nothing: nothing is selected."},
   "interceptTimedOutBanner": "Held, then blocked (timeout)",
   "@interceptTimedOutBanner": {"description": "Banner on the card of a request nobody decided in time."},
   "interceptDecidedBanner": "{state} · this request has left the queue",
@@ -229,8 +313,6 @@
   },
   "interceptDecisionFailedTitle": "Decision not accepted",
   "@interceptDecisionFailedTitle": {"description": "Title of the inline card below the action bar when Decide failed."},
-  "interceptDecisionFailedWhy": "The daemon did not take the decision. If the request timed out in the meantime, it is already blocked; the detail line says what the daemon reported.",
-  "@interceptDecisionFailedWhy": {"description": "Explanation of the inline card below the action bar."},
   "interceptDomainTitle": "Domain",
   "@interceptDomainTitle": {"description": "Heading of the right pane."},
   "interceptDomainApex": "Registrable domain",
@@ -244,5 +326,863 @@
   "interceptDomainCatalogButton": "Open catalog entry",
   "@interceptDomainCatalogButton": {"description": "Disabled button in the domain pane; the catalog arrives in sprint 2."},
   "interceptDomainSoon": "Available from sprint 2",
-  "@interceptDomainSoon": {"description": "Hover label of the disabled buttons in the domain pane."}
+  "@interceptDomainSoon": {"description": "Hover label of the disabled buttons in the domain pane."},
+
+  "historyFilterHint": "host:github.com decision:block since:1h",
+  "@historyFilterHint": {"description": "Placeholder of the filter field: three terms of the recorder's filter grammar, so the syntax is visible before anything is typed."},
+  "historyFilterLabel": "Filter",
+  "@historyFilterLabel": {"description": "Screen-reader label of the filter field."},
+  "historyFilterInvalidTitle": "The filter cannot be read",
+  "@historyFilterInvalidTitle": {"description": "Title of the diagnostic under the filter field. The cause comes from the daemon and names every valid key."},
+  "historyFilterReset": "Reset filter",
+  "@historyFilterReset": {"description": "Control that clears the filter and shows everything again."},
+  "historyChipHeld": "Held",
+  "@historyChipHeld": {"description": "Quick filter: requests still waiting for a decision."},
+  "historyChipBlocked": "Blocked",
+  "@historyChipBlocked": {"description": "Quick filter: requests somebody or something refused."},
+  "historyChipFindings": "With findings",
+  "@historyChipFindings": {"description": "Quick filter: requests the detectors found something in."},
+  "historyChipEdited": "Edited",
+  "@historyChipEdited": {"description": "Quick filter: requests that went out changed."},
+  "historyChipPassthroughHidden": "LLM traffic hidden",
+  "@historyChipPassthroughHidden": {"description": "State of the passthrough chip while traffic to the configured model endpoint is left out. It says what is hidden, so nobody wonders where the model calls went."},
+  "historyChipPassthroughShown": "LLM traffic shown",
+  "@historyChipPassthroughShown": {"description": "State of the passthrough chip while traffic to the configured model endpoint is listed."},
+  "historyColumnTime": "Time",
+  "@historyColumnTime": {"description": "Table column: arrival time, HH:mm:ss."},
+  "historyColumnState": "State",
+  "@historyColumnState": {"description": "Table column: the state glyph."},
+  "historyColumnMethod": "Method",
+  "@historyColumnMethod": {"description": "Table column: the HTTP method."},
+  "historyColumnHost": "Host",
+  "@historyColumnHost": {"description": "Table column: the target host."},
+  "historyColumnPath": "Path",
+  "@historyColumnPath": {"description": "Table column: path and query."},
+  "historyColumnStatus": "Status",
+  "@historyColumnStatus": {"description": "Table column: the response status code."},
+  "historyColumnSize": "Size",
+  "@historyColumnSize": {"description": "Table column: request and response size."},
+  "historyColumnDuration": "ms",
+  "@historyColumnDuration": {"description": "Table column: duration in milliseconds. The unit is the heading, so the cells carry bare numbers."},
+  "historyColumnFindings": "Findings",
+  "@historyColumnFindings": {"description": "Table column: how many findings the detectors reported."},
+  "historyColumnRule": "Decided by",
+  "@historyColumnRule": {"description": "Table column: what decided the request."},
+  "historyColumnEdited": "Edited",
+  "@historyColumnEdited": {"description": "Table column: whether the request went out changed."},
+  "historySortedAscending": "{column}, ascending",
+  "@historySortedAscending": {
+    "description": "Screen-reader label of a header the table is sorted by, smallest first.",
+    "placeholders": {"column": {"type": "String"}}
+  },
+  "historySortedDescending": "{column}, descending",
+  "@historySortedDescending": {
+    "description": "Screen-reader label of a header the table is sorted by, largest first.",
+    "placeholders": {"column": {"type": "String"}}
+  },
+  "historySortBy": "Sort by {column}",
+  "@historySortBy": {
+    "description": "Screen-reader label of a header that can be sorted by but is not.",
+    "placeholders": {"column": {"type": "String"}}
+  },
+  "historyUnknownValue": "—",
+  "@historyUnknownValue": {"description": "Stands in a numeric cell the daemon has no value for. The screen reader says historyUnknownSemantics instead, so an em dash is never mistaken for a zero."},
+  "historyUnknownSemantics": "unknown",
+  "@historyUnknownSemantics": {"description": "What a screen reader reads where the table prints an em dash."},
+  "historyDeciderRule": "rule {id}",
+  "@historyDeciderRule": {
+    "description": "Rule column: a rule decided, with the short form of its id.",
+    "placeholders": {"id": {"type": "String"}}
+  },
+  "historyDeciderManual": "manual",
+  "@historyDeciderManual": {"description": "Rule column: a person decided."},
+  "historyDeciderTimeout": "timeout",
+  "@historyDeciderTimeout": {"description": "Rule column: the hold budget ran out."},
+  "historyDeciderPassthrough": "passthrough",
+  "@historyDeciderPassthrough": {"description": "Rule column: the request went to the configured model endpoint."},
+  "historyDeciderPending": "waiting",
+  "@historyDeciderPending": {"description": "Rule column: nobody has decided yet."},
+  "historyEditedMark": "edited",
+  "@historyEditedMark": {"description": "Screen-reader label of the pencil dot in the edited column."},
+  "historyRowSemantics": "{state}, {method} {host}{path}",
+  "@historyRowSemantics": {
+    "description": "Screen-reader label of a table row. Position and total come from the list itself, so they are not repeated here.",
+    "placeholders": {"state": {"type": "String"}, "method": {"type": "String"}, "host": {"type": "String"}, "path": {"type": "String"}}
+  },
+  "historyFindingsSemantics": "{count, plural, =0{no findings} =1{1 finding} other{{count} findings}}",
+  "@historyFindingsSemantics": {
+    "description": "Screen-reader label of the findings cell.",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "historyLoadedOf": "{loaded} of {total} loaded",
+  "@historyLoadedOf": {
+    "description": "Footer of the table. The total is already written out and carries a plus where the daemon only counted to its ceiling.",
+    "placeholders": {"loaded": {"type": "String"}, "total": {"type": "String"}}
+  },
+  "historyWindowFull": "{loaded} of {total} loaded · narrow the filter to reach the rest",
+  "@historyWindowFull": {
+    "description": "Footer once the screen holds as many rows as it keeps at once. It names the way forward instead of loading on silently.",
+    "placeholders": {"loaded": {"type": "String"}, "total": {"type": "String"}}
+  },
+  "historyTotalAtLeast": "{count}+",
+  "@historyTotalAtLeast": {
+    "description": "A count the daemon stopped counting at: it means at least this many, never exactly this many.",
+    "placeholders": {"count": {"type": "int", "format": "decimalPattern"}}
+  },
+  "historyTotalExact": "{count}",
+  "@historyTotalExact": {
+    "description": "A count the daemon counted to the end.",
+    "placeholders": {"count": {"type": "int", "format": "decimalPattern"}}
+  },
+  "historyNewPill": "{count, plural, =1{1 new · refresh} other{{count} new · refresh}}",
+  "@historyNewPill": {
+    "description": "Pill above the first row: requests arrived while the list was scrolled away from its head. It merges them on activation.",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "historyEmptyTitle": "The record is open",
+  "@historyEmptyTitle": {"description": "Empty history: names the next event instead of the absence (docs/UX.md 4.1)."},
+  "historyEmptyHint": "Every request the agent makes appears here, with what was decided about it.",
+  "@historyEmptyHint": {"description": "Second line of the empty history."},
+  "historyEmptyFiltered": "{filter} matches 0 of {total} requests",
+  "@historyEmptyFiltered": {
+    "description": "A filter that matches nothing: the filter, the hit count and, next to it, the way back (docs/UX.md 4.1).",
+    "placeholders": {"filter": {"type": "String"}, "total": {"type": "String"}}
+  },
+  "historyEmptyFilteredUnknownTotal": "{filter} matches 0 requests",
+  "@historyEmptyFilteredUnknownTotal": {
+    "description": "The same sentence where the daemon could not say how many requests there are in total. A number nobody counted is not written down (CONVENTIONS 4.13).",
+    "placeholders": {"filter": {"type": "String"}}
+  },
+  "historyLoadFailedTitle": "The history could not be loaded",
+  "@historyLoadFailedTitle": {"description": "Title of the banner over the table when ListFlows failed."},
+  "historyReload": "Reload",
+  "@historyReload": {"description": "Control on the banner over the table: asks for the page again."},
+  "historyTableLabel": "Recorded requests",
+  "@historyTableLabel": {"description": "Screen-reader label of the table."},
+  "historySplitterLabel": "Resize the detail area",
+  "@historySplitterLabel": {"description": "Screen-reader label of the splitter between table and detail."},
+  "historyDetailEmptyTitle": "Pick a request",
+  "@historyDetailEmptyTitle": {"description": "The detail area before a row is selected."},
+  "historyDetailTabRequest": "Request",
+  "@historyDetailTabRequest": {"description": "Detail tab: the request as it arrived."},
+  "historyDetailTabResponse": "Response",
+  "@historyDetailTabResponse": {"description": "Detail tab: the answer that came back."},
+  "historyDetailTabEdited": "Edited",
+  "@historyDetailTabEdited": {"description": "Detail tab: the request as the person changed it before sending."},
+  "historyDetailHeaders": "Headers",
+  "@historyDetailHeaders": {"description": "Heading of the header table in the detail area."},
+  "historyDetailBody": "Body",
+  "@historyDetailBody": {"description": "Heading of the body view in the detail area."},
+  "historyDetailCopy": "Copy",
+  "@historyDetailCopy": {"description": "Copies the headers as text to the clipboard."},
+  "historyDetailCopied": "Copied",
+  "@historyDetailCopied": {"description": "Shown in place of the copy control for a moment after copying."},
+  "historyDetailNoHeaders": "No headers.",
+  "@historyDetailNoHeaders": {"description": "A statement about a finished request, not an empty state: this request carried none."},
+  "historyDetailNoBody": "No body.",
+  "@historyDetailNoBody": {"description": "A statement about a finished request: this request carried none."},
+  "historyDetailNoResponse": "No answer came back.",
+  "@historyDetailNoResponse": {"description": "A statement about a blocked or failed request: the target was never reached."},
+  "historyDetailBinaryBody": "{size} of binary content. The export carries the bytes.",
+  "@historyDetailBinaryBody": {
+    "description": "Body view of a body that is not text.",
+    "placeholders": {"size": {"type": "String"}}
+  },
+  "historyDetailBodyTruncated": "The recorder stopped after {size}.",
+  "@historyDetailBodyTruncated": {
+    "description": "Body view of a body the recorder did not store to the end. An incomplete body must never look complete (CONVENTIONS 4.13).",
+    "placeholders": {"size": {"type": "String"}}
+  },
+  "historyDetailReceived": "Received",
+  "@historyDetailReceived": {"description": "Label in the detail head: the exact arrival time."},
+  "historyDetailDecision": "Decision",
+  "@historyDetailDecision": {"description": "Label in the detail head."},
+  "historyDetailDuration": "Duration",
+  "@historyDetailDuration": {"description": "Label in the detail head."},
+  "historyDetailFindings": "Findings",
+  "@historyDetailFindings": {"description": "Label in the detail head."},
+  "historyDetailRule": "Decided by",
+  "@historyDetailRule": {"description": "Label in the detail head."},
+  "historyDetailSize": "Size",
+  "@historyDetailSize": {"description": "Label in the detail head: request and response size."},
+  "historyDetailFailedTitle": "The request could not be loaded",
+  "@historyDetailFailedTitle": {"description": "Title of the diagnostic in the detail area when GetFlow or GetBody failed."},
+  "historyDetailStreaming": "still arriving",
+  "@historyDetailStreaming": {"description": "Next to the response size while the answer is still coming in."},
+  "historySheetTitle": "{method} {host}",
+  "@historySheetTitle": {
+    "description": "Heading of the detail sheet a double click opens.",
+    "placeholders": {"method": {"type": "String"}, "host": {"type": "String"}}
+  },
+  "historySheetClose": "Close",
+  "@historySheetClose": {"description": "Screen-reader label of the close affordance of the detail sheet."},
+
+  "rulesTabSaved": "Saved ({n})",
+  "@rulesTabSaved": {
+    "description": "Tab of the rules screen: the rules in rules.yaml, bundled ones included.",
+    "placeholders": {"n": {"type": "int"}}
+  },
+  "rulesTabTemporary": "Temporary ({n})",
+  "@rulesTabTemporary": {
+    "description": "Tab of the rules screen: the rules that end with the session.",
+    "placeholders": {"n": {"type": "int"}}
+  },
+  "rulesSearchLabel": "Filter the rules",
+  "@rulesSearchLabel": {"description": "Screen-reader label of the filter field on the rules screen."},
+  "rulesSearchHint": "Filter host or note",
+  "@rulesSearchHint": {"description": "Placeholder of the filter field on the rules screen."},
+  "rulesNewRule": "New rule",
+  "@rulesNewRule": {"description": "Button that opens an empty rule form."},
+  "rulesReload": "Reload",
+  "@rulesReload": {"description": "Button that makes the daemon read rules.yaml again."},
+  "rulesBannerDismiss": "Dismiss",
+  "@rulesBannerDismiss": {"description": "Button that takes the findings banner off the rules screen."},
+  "rulesBannerMore": "{n, plural, =1{1 more finding} other{{n} more findings}}",
+  "@rulesBannerMore": {
+    "description": "How many findings the banner does not show.",
+    "placeholders": {"n": {"type": "int"}}
+  },
+  "rulesCannotReadTitle": "Rules not readable",
+  "@rulesCannotReadTitle": {"description": "Title of the card that replaces the list when the rule set cannot be read at all."},
+  "rulesActionAllow": "allow",
+  "@rulesActionAllow": {"description": "The action of a rule. The rule names the policy, not the single act; the control that decides one request says Allow (docs/UX.md 4.6)."},
+  "rulesActionBlock": "block",
+  "@rulesActionBlock": {"description": "The action of a rule: the request is refused."},
+  "rulesActionAsk": "ask",
+  "@rulesActionAsk": {"description": "The action of a rule: the request is held for a person."},
+  "rulesActionRedact": "redact",
+  "@rulesActionRedact": {"description": "The action of a rule: the request goes out with its findings blacked out."},
+  "rulesAnyMethod": "∗",
+  "@rulesAnyMethod": {"description": "Stands for every HTTP method in the match summary of a rule."},
+  "rulesUpgradeWebsocketShort": "websocket",
+  "@rulesUpgradeWebsocketShort": {"description": "Suffix of the match summary of a rule that matches only WebSocket upgrades."},
+  "rulesExpiryAlways": "always",
+  "@rulesExpiryAlways": {"description": "Lifetime of a rule that never ends."},
+  "rulesExpirySession": "this session",
+  "@rulesExpirySession": {"description": "Lifetime of a rule that lives only while the session runs."},
+  "rulesExpired": "expired",
+  "@rulesExpired": {"description": "Lifetime of a rule whose end time has passed."},
+  "rulesExpiresInMinutes": "expires in {n} min",
+  "@rulesExpiresInMinutes": {
+    "description": "How long a rule still holds, counted in minutes. The exact end time stands in the semantics value.",
+    "placeholders": {"n": {"type": "int"}}
+  },
+  "rulesExpiresInHours": "expires in {n} h",
+  "@rulesExpiresInHours": {
+    "description": "How long a rule still holds, counted in hours.",
+    "placeholders": {"n": {"type": "int"}}
+  },
+  "rulesExpiresInDays": "expires in {n} d",
+  "@rulesExpiresInDays": {
+    "description": "How long a rule still holds, counted in days.",
+    "placeholders": {"n": {"type": "int"}}
+  },
+  "rulesExpiresAtExact": "ends {date} at {time}",
+  "@rulesExpiresAtExact": {
+    "description": "The exact end of a rule, for the tooltip and the semantics value.",
+    "placeholders": {
+      "date": {"type": "DateTime", "format": "yMMMd"},
+      "time": {"type": "DateTime", "format": "Hm"}
+    }
+  },
+  "rulesRowSemantics": "Rule {position} of {total}: {action}, {match}",
+  "@rulesRowSemantics": {
+    "description": "What a screen reader says on a rule row: the place in the chain, then the rule.",
+    "placeholders": {
+      "position": {"type": "int"},
+      "total": {"type": "int"},
+      "action": {"type": "String"},
+      "match": {"type": "String"}
+    }
+  },
+  "rulesDragHandle": "Move rule {position}",
+  "@rulesDragHandle": {
+    "description": "Screen-reader label of the drag handle; the keyboard does the same with Alt and an arrow key.",
+    "placeholders": {"position": {"type": "int"}}
+  },
+  "rulesDelete": "Delete rule",
+  "@rulesDelete": {"description": "Screen-reader label of the delete affordance in a rule row."},
+  "rulesOriginBundled": "bundled",
+  "@rulesOriginBundled": {"description": "Where a rule comes from: it ships with the product."},
+  "rulesOriginFlow": "from {id}",
+  "@rulesOriginFlow": {
+    "description": "Where a rule comes from: the last part of the id of the request it was made from.",
+    "placeholders": {"id": {"type": "String"}}
+  },
+  "rulesOriginFlowSemantics": "Created from request {id}",
+  "@rulesOriginFlowSemantics": {
+    "description": "The same, with the whole id, for a screen reader.",
+    "placeholders": {"id": {"type": "String"}}
+  },
+  "rulesChainSessionFirst": "{n, plural, =1{1 temporary rule is evaluated before these.} other{{n} temporary rules are evaluated before these.}}",
+  "@rulesChainSessionFirst": {
+    "description": "Head of the saved tab: the chain starts in the other tab.",
+    "placeholders": {"n": {"type": "int"}}
+  },
+  "rulesChainThenSaved": "{n, plural, =1{Then the 1 rule of the Saved tab.} other{Then the {n} rules of the Saved tab.}}",
+  "@rulesChainThenSaved": {
+    "description": "Foot of the temporary tab: where the chain goes on.",
+    "placeholders": {"n": {"type": "int"}}
+  },
+  "rulesChainDefault": "Otherwise · ask",
+  "@rulesChainDefault": {"description": "The last link of the chain: what the contract does when no rule matched (ADR-007)."},
+  "rulesChainDefaultWhy": "A request that no rule matches is held for you.",
+  "@rulesChainDefaultWhy": {"description": "Why the chain ends the way it does."},
+  "rulesBundledTitle": "Bundled rules",
+  "@rulesBundledTitle": {"description": "Heading of the block of rules that ship with the product."},
+  "rulesBundledWhy": "They ship with Humanitl and can be neither changed nor removed. A rule of your own above them wins.",
+  "@rulesBundledWhy": {"description": "Why bundled rules cannot be touched, and what to do instead."},
+  "rulesEmptySavedTitle": "Saved rules appear here",
+  "@rulesEmptySavedTitle": {"description": "Empty state of the saved tab: the next event, never the absence (docs/UX.md 4.1)."},
+  "rulesEmptySavedHint": "A rule appears as soon as you keep a decision with Remember, or write one with New rule.",
+  "@rulesEmptySavedHint": {"description": "What fills the saved tab."},
+  "rulesEmptyTemporaryTitle": "Rules for this session appear here",
+  "@rulesEmptyTemporaryTitle": {"description": "Empty state of the temporary tab."},
+  "rulesEmptyTemporaryHint": "A decision you keep for the session becomes a rule here, and it ends with the session.",
+  "@rulesEmptyTemporaryHint": {"description": "What fills the temporary tab."},
+  "rulesFilterEmpty": "{query} matches 0 of {total} rules",
+  "@rulesFilterEmpty": {
+    "description": "Empty state of a filter: the filter, the count and, beside it, the way back (docs/UX.md 4.1).",
+    "placeholders": {
+      "query": {"type": "String"},
+      "total": {"type": "int", "format": "decimalPattern"}
+    }
+  },
+  "rulesFilterReset": "Reset filter",
+  "@rulesFilterReset": {"description": "The way back out of a filter that matches nothing."},
+  "rulesEditorNewTitle": "New rule",
+  "@rulesEditorNewTitle": {"description": "Heading of the editor while a rule is being written."},
+  "rulesEditorTitle": "Rule",
+  "@rulesEditorTitle": {"description": "Heading of the editor while a rule is being changed."},
+  "rulesEditorBundledTitle": "Bundled rule",
+  "@rulesEditorBundledTitle": {"description": "Heading of the editor for a rule that ships with the product."},
+  "rulesEditorClosed": "Pick a rule to read it, or write one with New rule.",
+  "@rulesEditorClosed": {"description": "What the editor pane says while no rule is open."},
+  "rulesFieldAction": "Action",
+  "@rulesFieldAction": {"description": "Form label: what happens to a matching request."},
+  "rulesFieldHost": "Host",
+  "@rulesFieldHost": {"description": "Form label: which hosts the rule matches."},
+  "rulesFieldMethods": "Methods",
+  "@rulesFieldMethods": {"description": "Form label: which HTTP methods the rule matches."},
+  "rulesFieldPath": "Path",
+  "@rulesFieldPath": {"description": "Form label: which paths the rule matches."},
+  "rulesFieldScheme": "Scheme",
+  "@rulesFieldScheme": {"description": "Form label: which scheme the rule matches."},
+  "rulesFieldPort": "Port",
+  "@rulesFieldPort": {"description": "Form label: which port the rule matches."},
+  "rulesFieldUpgrade": "Upgrade",
+  "@rulesFieldUpgrade": {"description": "Form label: whether the rule matches only WebSocket upgrades."},
+  "rulesFieldExpires": "Lifetime",
+  "@rulesFieldExpires": {"description": "Form label: how long the rule holds."},
+  "rulesFieldNote": "Note",
+  "@rulesFieldNote": {"description": "Form label: why the rule exists."},
+  "rulesHostPlaceholder": "**.example.com",
+  "@rulesHostPlaceholder": {"description": "Placeholder of the host field."},
+  "rulesHostHelp": "`*` stands for one label, `**` for one or more. Addresses are written `ip:192.168.1.50` or `cidr:192.168.0.0/16`.",
+  "@rulesHostHelp": {"description": "How a host pattern is written."},
+  "rulesMethodsHelp": "Without a choice the rule matches every method.",
+  "@rulesMethodsHelp": {"description": "What an empty method list means."},
+  "rulesPathPlaceholder": "/**",
+  "@rulesPathPlaceholder": {"description": "Placeholder of the path field."},
+  "rulesSchemeAny": "any",
+  "@rulesSchemeAny": {"description": "Scheme segment: the rule matches every scheme."},
+  "rulesPortPlaceholder": "any",
+  "@rulesPortPlaceholder": {"description": "Placeholder of the port field: an empty field matches every port."},
+  "rulesUpgradeWebsocket": "WebSocket only",
+  "@rulesUpgradeWebsocket": {"description": "Checkbox: the rule matches only requests that upgrade to a WebSocket."},
+  "rulesUpgradeHelp": "The rule then matches only requests that switch to a WebSocket.",
+  "@rulesUpgradeHelp": {"description": "What the upgrade checkbox does."},
+  "rulesExpiresSession": "session",
+  "@rulesExpiresSession": {"description": "Lifetime segment: the rule ends with the session."},
+  "rulesExpiresAt": "until",
+  "@rulesExpiresAt": {"description": "Lifetime segment: the rule ends at a time."},
+  "rulesExpiresNever": "always",
+  "@rulesExpiresNever": {"description": "Lifetime segment: the rule holds until it is deleted, and stands in rules.yaml."},
+  "rulesEndsAtPlaceholder": "2026-09-04T18:00",
+  "@rulesEndsAtPlaceholder": {"description": "Placeholder of the end-time field."},
+  "rulesEndsAtInvalid": "A time is written as 2026-09-04T18:00.",
+  "@rulesEndsAtInvalid": {"description": "Why the end time cannot be read."},
+  "rulesNoteHelp": "Why this rule exists. It stands in the list and in the audit log.",
+  "@rulesNoteHelp": {"description": "What the note is for."},
+  "rulesPreviewTitle": "The rule",
+  "@rulesPreviewTitle": {"description": "Heading above the sentence the form makes; it says what gets saved (docs/UX.md 4.6)."},
+  "rulesSave": "Save",
+  "@rulesSave": {"description": "Button that creates or changes the rule."},
+  "rulesCancel": "Cancel",
+  "@rulesCancel": {"description": "Button that closes the form without saving."},
+  "rulesClose": "Close",
+  "@rulesClose": {"description": "Button and screen-reader label that closes the editor."},
+  "rulesMakePermanent": "Make permanent",
+  "@rulesMakePermanent": {"description": "Button that drops the end of a rule so that it stands in rules.yaml."},
+  "rulesOverrideBundled": "Override with an ask rule",
+  "@rulesOverrideBundled": {"description": "Button on a bundled rule: it opens a new ask rule with the same match, to stand in front of it."},
+  "rulesSaveFailedTitle": "Rule not saved",
+  "@rulesSaveFailedTitle": {"description": "Title of the card under the form when the daemon refused the rule; the cause is the daemon's own sentence."},
+  "rulesUndoRemoved": "Rule removed",
+  "@rulesUndoRemoved": {"description": "Strip above the list after a rule was deleted."},
+  "rulesUndoPermanent": "Now permanent",
+  "@rulesUndoPermanent": {"description": "Strip above the list after a rule lost its end."},
+  "rulesUndo": "Undo",
+  "@rulesUndo": {"description": "Takes the rule back, never a request that already went out (docs/UX.md 4.5)."},
+  "rulesDryRunTitle": "Dry run",
+  "@rulesDryRunTitle": {"description": "Heading of the panel that compares the rule with recorded requests."},
+  "rulesDryRunWaiting": "The dry run starts as soon as the host can be read.",
+  "@rulesDryRunWaiting": {"description": "What the dry run panel says while the pattern cannot be used."},
+  "rulesDryRunResult": "Would have matched {matched} of the last {scanned} recorded requests",
+  "@rulesDryRunResult": {
+    "description": "The result of the dry run. It counts matches, it does not decide anything.",
+    "placeholders": {
+      "matched": {"type": "int", "format": "decimalPattern"},
+      "scanned": {"type": "int", "format": "decimalPattern"}
+    }
+  },
+  "rulesDryRunOnlyThisRule": "Only this rule was tested. A rule above it can still win.",
+  "@rulesDryRunOnlyThisRule": {"description": "What the dry run does not say: it is not a decision (CONVENTIONS 4.13)."},
+  "rulesDryRunNothingRecorded": "Recorded requests appear here as soon as the session has some.",
+  "@rulesDryRunNothingRecorded": {"description": "What the dry run says while the session has recorded nothing to compare with."},
+  "rulesDryRunNoMatch": "None of them matched.",
+  "@rulesDryRunNoMatch": {"description": "A statement about a finished comparison, not an empty state."},
+  "rulesDryRunMore": "{n, plural, =1{1 more} other{{n} more}}",
+  "@rulesDryRunMore": {
+    "description": "How many matches the panel does not list.",
+    "placeholders": {"n": {"type": "int"}}
+  },
+  "rulesDryRunTime": "{time}",
+  "@rulesDryRunTime": {
+    "description": "When a matched request was recorded.",
+    "placeholders": {"time": {"type": "DateTime", "format": "Hms"}}
+  },
+  "rulesHostEmpty": "A rule needs a host. `**` matches every host.",
+  "@rulesHostEmpty": {"description": "Pre-check of the host field: the field is empty."},
+  "rulesHostWildcard": "A wildcard is a whole label: `*.example.com`, not `*example.com`.",
+  "@rulesHostWildcard": {"description": "Pre-check of the host field: a wildcard shares its label with text."},
+  "rulesHostEmptyLabel": "Two dots in a row leave a label empty.",
+  "@rulesHostEmptyLabel": {"description": "Pre-check of the host field: an empty label."},
+  "rulesHostAddress": "`ip:` needs an address, `cidr:` an address and a prefix length.",
+  "@rulesHostAddress": {"description": "Pre-check of the host field: an address that cannot be read."},
+  "rulesHostLabel": "A label holds no space, no slash and no colon.",
+  "@rulesHostLabel": {"description": "Pre-check of the host field: a label that is not a label."},
+  "rulesPathRegex": "A path that starts with `~` is a regular expression, and this one cannot be built.",
+  "@rulesPathRegex": {"description": "Pre-check of the path field: an invalid regular expression."},
+  "rulesDragHint": "Drag · Alt+Up / Alt+Down",
+  "@rulesDragHint": {"description": "Hover label of the drag handle: the pointer gesture and the key that does the same (docs/UX.md 5.1)."},
+
+  "interceptNoteHint": "Note for the agent, optional",
+  "@interceptNoteHint": {"description": "Placeholder and screen-reader label of the note field that opens with `N` (HUM-072). The note travels in the 403 body and in the x-humanitl-note header."},
+  "interceptNoteAdd": "Note",
+  "@interceptNoteAdd": {"description": "The control beside Block that opens the note field for a pointer; the key that does the same is N (docs/UX.md 5.1)."},
+  "interceptNoteOpen": "Write a note for the agent",
+  "@interceptNoteOpen": {"description": "Screen-reader label of the control that opens the note field."},
+  "interceptKeyNote": "N",
+  "@interceptKeyNote": {"description": "The key that opens the note field, shown on the control that does the same."},
+  "interceptNoteKeys": "`Ctrl+Enter` block with note · `Esc` close",
+  "@interceptNoteKeys": {"description": "The two keys of the note field, shown under it while it is empty."},
+  "interceptNoteCounter": "{used} of {max} characters",
+  "@interceptNoteCounter": {
+    "description": "How much of the note is written and how much a note may hold; the daemon cuts at the same number.",
+    "placeholders": {
+      "used": {"type": "int", "format": "decimalPattern"},
+      "max": {"type": "int", "format": "decimalPattern"}
+    }
+  },
+  "interceptNoteAgentReads": "The agent reads: {line}",
+  "@interceptNoteAgentReads": {
+    "description": "The line of the 403 body the note becomes, sanitised the way the daemon sanitises it. Shows what the agent gets, not what was typed (CONVENTIONS 4.13).",
+    "placeholders": {"line": {"type": "String"}}
+  },
+  "interceptNoteAsciiOnly": "Only visible ASCII travels in {header}; the rest of the note stays in the body.",
+  "@interceptNoteAsciiOnly": {
+    "description": "Said only when the note holds characters a header field value may not carry (RFC 9110 §5.5).",
+    "placeholders": {"header": {"type": "String"}}
+  },
+  "interceptBlockWithNote": "Block with note",
+  "@interceptBlockWithNote": {"description": "Label of the block control while the note field holds text (HUM-072)."},
+
+  "interceptGroupSummary": "{name} · {count, plural, =1{1 request} other{{count} requests}} · {methods} · {findings}",
+  "@interceptGroupSummary": {
+    "description": "The group of held requests as one sentence: what the header line says, and what a screen reader hears (HUM-029).",
+    "placeholders": {
+      "name": {"type": "String"},
+      "count": {"type": "int"},
+      "methods": {"type": "String"},
+      "findings": {"type": "String"}
+    }
+  },
+  "interceptGroupCount": "{count, plural, =1{1 request} other{{count} requests}}",
+  "@interceptGroupCount": {
+    "description": "Screen-reader label of the counter chip in a group header; the chip itself shows the digits.",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "interceptGroupMethod": "{count}× {method}",
+  "@interceptGroupMethod": {
+    "description": "One part of the method mix of a group, for example `12× GET`.",
+    "placeholders": {
+      "count": {"type": "int", "format": "decimalPattern"},
+      "method": {"type": "String"}
+    }
+  },
+  "interceptGroupSeparator": " · ",
+  "@interceptGroupSeparator": {"description": "What stands between two parts of the method mix."},
+  "interceptGroupFindings": "{count, plural, =0{0 findings} =1{1 finding} other{{count} findings}}",
+  "@interceptGroupFindings": {
+    "description": "The findings of a group or of a request. Zero is a statement about a finished request, not an empty state (docs/UX.md 4.1).",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "interceptGroupToggle": "Show or hide the requests to {name}",
+  "@interceptGroupToggle": {
+    "description": "Screen-reader label of the chevron in a group header; the arrow keys do the same.",
+    "placeholders": {"name": {"type": "String"}}
+  },
+  "interceptBlockGroup": "Block {count}",
+  "@interceptBlockGroup": {
+    "description": "The only decision a group header offers, and the confirming button of the modal (docs/UX.md 3.5).",
+    "placeholders": {"count": {"type": "int", "format": "decimalPattern"}}
+  },
+  "interceptAllowGroup": "Send {count}",
+  "@interceptAllowGroup": {
+    "description": "The confirming button of the modal that sends a whole group. The control names the action at the object (docs/UX.md 4.6).",
+    "placeholders": {"count": {"type": "int", "format": "decimalPattern"}}
+  },
+  "interceptAllowSelected": "Allow {count} selected",
+  "@interceptAllowSelected": {
+    "description": "The release valve while more than one request is selected; it stays the one filled control of the screen (docs/UX.md 3.5).",
+    "placeholders": {"count": {"type": "int", "format": "decimalPattern"}}
+  },
+  "interceptBlockSelected": "Block {count} selected",
+  "@interceptBlockSelected": {
+    "description": "The block control while more than one request is selected.",
+    "placeholders": {"count": {"type": "int", "format": "decimalPattern"}}
+  },
+  "interceptSelectionTitle": "{count} requests selected",
+  "@interceptSelectionTitle": {
+    "description": "Heading of the card that shows what a decision over several requests covers.",
+    "placeholders": {"count": {"type": "int", "format": "decimalPattern"}}
+  },
+  "interceptNewSinceReading": "+{count} new",
+  "@interceptNewSinceReading": {
+    "description": "The pill over the top of the queue: how many requests arrived while the order was frozen (docs/UX.md 2.8).",
+    "placeholders": {"count": {"type": "int", "format": "decimalPattern"}}
+  },
+  "interceptNewSinceHint": "Jump to the {count} new requests",
+  "@interceptNewSinceHint": {
+    "description": "Screen-reader label of the pill; Shift+J does the same.",
+    "placeholders": {"count": {"type": "int", "format": "decimalPattern"}}
+  },
+  "interceptKeyMergeArrivals": "Shift+J",
+  "@interceptKeyMergeArrivals": {"description": "The key that takes the waiting arrivals into the list, shown on the pill."},
+  "interceptArrivals": "{count} new, oldest {method} {host}",
+  "@interceptArrivals": {
+    "description": "What a screen reader hears when requests arrive; bundled, at most one announcement every two seconds (docs/UX.md 6).",
+    "placeholders": {
+      "count": {"type": "int", "format": "decimalPattern"},
+      "method": {"type": "String"},
+      "host": {"type": "String"}
+    }
+  },
+  "interceptBlockManyTitle": "Block {count} requests to {host}?",
+  "@interceptBlockManyTitle": {
+    "description": "Title of the modal above five requests; below that the 250 ms hold is the protection (docs/UX.md 5.4).",
+    "placeholders": {
+      "count": {"type": "int", "format": "decimalPattern"},
+      "host": {"type": "String"}
+    }
+  },
+  "interceptBlockManyBody": "The agent receives 403 for each of them and may retry.",
+  "@interceptBlockManyBody": {"description": "What blocking a whole group means for the agent."},
+  "interceptAllowManyTitle": "Send {count} requests to {host}?",
+  "@interceptAllowManyTitle": {
+    "description": "Title of the modal that sends a whole group; sending cannot be taken back (docs/UX.md 4.5).",
+    "placeholders": {
+      "count": {"type": "int", "format": "decimalPattern"},
+      "host": {"type": "String"}
+    }
+  },
+  "interceptAllowManyBody": "Every one of them leaves the machine. This cannot be taken back.",
+  "@interceptAllowManyBody": {"description": "What sending a whole group means; the widest-reaching decision of this screen."},
+  "interceptBatchMore": "{count, plural, =1{1 more} other{{count} more}}",
+  "@interceptBatchMore": {
+    "description": "How many requests the modal does not list by path.",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "interceptCancel": "Cancel",
+  "@interceptCancel": {"description": "Closes the modal without deciding anything; it carries the focus when the modal opens."},
+  "interceptSentMany": "{count} sent to {host}",
+  "@interceptSentMany": {
+    "description": "What a screen reader hears after a group was sent; the strip in each row says the same for its own request.",
+    "placeholders": {
+      "count": {"type": "int", "format": "decimalPattern"},
+      "host": {"type": "String"}
+    }
+  },
+  "interceptBlockedMany": "{count} blocked. The agent may retry.",
+  "@interceptBlockedMany": {
+    "description": "What a screen reader hears after a group was blocked.",
+    "placeholders": {"count": {"type": "int", "format": "decimalPattern"}}
+  },
+
+  "interceptHoldReasonFinding": "Held: {what} was found {where}",
+  "@interceptHoldReasonFinding": {
+    "description": "Why a request waits when a detector found something. Names the translated kind and the place; the `kind` identifier of the daemon never reaches the screen (docs/UX.md 4.2, 4.3).",
+    "placeholders": {"what": {"type": "String"}, "where": {"type": "String"}}
+  },
+  "interceptFindingGoesTo": "Sending sends {what} to {host}.",
+  "@interceptFindingGoesTo": {
+    "description": "What sending costs while a finding is unresolved. Whoever knows what goes where holds the control down (docs/UX.md 4.7).",
+    "placeholders": {"what": {"type": "String"}, "host": {"type": "String"}}
+  },
+  "interceptSendWithFindings": "{count, plural, =1{Send with 1 finding} other{Send with {count} findings}}",
+  "@interceptSendWithFindings": {
+    "description": "The release valve while findings are unresolved; it turns amber and asks for the same hold as blocking (docs/UX.md 4.7).",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "interceptHoldToSend": "Hold to send: a finding is unresolved",
+  "@interceptHoldToSend": {"description": "Why a click on the release valve did nothing while a finding is unresolved (docs/UX.md 5.3, 4.7)."},
+  "interceptRefusedApexUnknown": "The registrable domain is not known yet · the rule can cover the host",
+  "@interceptRefusedApexUnknown": {"description": "Why the domain scope did nothing: the public suffix list lives in the daemon's catalog, and the app never guesses one (CONVENTIONS 4.13)."},
+  "interceptDomainApexUnknown": "not known yet",
+  "@interceptDomainApexUnknown": {"description": "Stands where the registrable domain would, while the catalog has not answered. Never a guessed domain."},
+  "interceptForeverTitle": "Save a permanent rule for {host}?",
+  "@interceptForeverTitle": {
+    "description": "Title of the modal in front of a rule that outlives the session (docs/UX.md 5.4).",
+    "placeholders": {"host": {"type": "String"}}
+  },
+  "interceptForeverBody": "It stays in rules.yaml until you delete it in Rules. Every request it matches is decided without asking.",
+  "@interceptForeverBody": {"description": "What a permanent rule means; the reach that makes it worth a modal."},
+  "interceptForeverConfirm": "Save rule and send",
+  "@interceptForeverConfirm": {"description": "Confirming button of the modal in front of a permanent allow rule."},
+  "interceptForeverConfirmBlock": "Save rule and block",
+  "@interceptForeverConfirmBlock": {"description": "Confirming button of the modal in front of a permanent block rule."},
+  "findingApiKey": "an API key",
+  "@findingApiKey": {"description": "Name of a finding of kind `api_key` without a named provider. Lowercase: it stands inside a sentence (docs/UX.md 4.3)."},
+  "findingApiKeyOf": "a {provider} API key",
+  "@findingApiKeyOf": {
+    "description": "Name of a finding of kind `api_key` with a provider, for example `github`.",
+    "placeholders": {"provider": {"type": "String"}}
+  },
+  "findingJwt": "a JSON Web Token",
+  "@findingJwt": {"description": "Name of a finding of kind `jwt`."},
+  "findingEmail": "an email address",
+  "@findingEmail": {"description": "Name of a finding of kind `email`."},
+  "findingIban": "an IBAN",
+  "@findingIban": {"description": "Name of a finding of kind `iban`."},
+  "findingCreditCard": "a card number",
+  "@findingCreditCard": {"description": "Name of a finding of kind `credit_card`."},
+  "findingPhone": "a phone number",
+  "@findingPhone": {"description": "Name of a finding of kind `phone`."},
+  "findingIpv4": "an IP address",
+  "@findingIpv4": {"description": "Name of a finding of kind `ipv4`."},
+  "findingUserTerm": "a term you listed",
+  "@findingUserTerm": {"description": "Name of a finding of kind `user_term`; the term itself is not repeated on the screen."},
+  "findingSecret": "a secret",
+  "@findingSecret": {"description": "Name of a finding whose kind the app does not know; the identifier of the kind is internal vocabulary and never shown (docs/UX.md 4.2)."},
+  "findingSecretCount": "{count, plural, =1{a secret} other{{count} secrets}}",
+  "@findingSecretCount": {
+    "description": "Stands in the consequence sentence while the daemon has not described the findings yet.",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "findingInBody": "in the body",
+  "@findingInBody": {"description": "Where a finding sits, for the sentence of docs/UX.md 4.3."},
+  "findingInQuery": "in the query",
+  "@findingInQuery": {"description": "Where a finding sits."},
+  "findingInHeader": "in a header",
+  "@findingInHeader": {"description": "Where a finding sits, when the daemon did not name the header."},
+  "findingInNamedHeader": "in the {header} header",
+  "@findingInNamedHeader": {
+    "description": "Where a finding sits, with the name of the header.",
+    "placeholders": {"header": {"type": "String"}}
+  },
+
+  "trayTooltipIdle": "The queue is open",
+  "@trayTooltipIdle": {"description": "Tray tooltip and menu line while nothing waits; the same sentence the empty queue uses (docs/UX.md 4.1)."},
+  "trayTooltipHeld": "{count, plural, =1{1 request held} other{{count} requests held}}",
+  "@trayTooltipHeld": {
+    "description": "Tray tooltip and menu line: what the number in the icon counts. The icon can only carry a digit, so the word lives here (docs/UX.md 4.9).",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "trayTooltipTimedOut": "{count, plural, =1{1 request was blocked after its time ran out} other{{count} requests were blocked after their time ran out}}",
+  "@trayTooltipTimedOut": {
+    "description": "Second tray tooltip line while the icon shows the alert state: what happened without anybody deciding (docs/UX.md 4.8).",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "trayTooltipOffline": "The daemon does not answer",
+  "@trayTooltipOffline": {"description": "Tray tooltip while the connection is gone; the icon shows no number because there is none to show."},
+  "trayTooltipOfflineDetail": "How many requests are held is unknown until it answers again.",
+  "@trayTooltipOfflineDetail": {"description": "Second tray tooltip line while the connection is gone: says that the number is unknown rather than zero (CONVENTIONS 4.13)."},
+  "trayMenuShow": "Show Humanitl",
+  "@trayMenuShow": {"description": "Tray menu entry that brings the window forward."},
+  "trayMenuQuit": "Quit",
+  "@trayMenuQuit": {"description": "Tray menu entry that ends the program."},
+  "trayWindowTitle": "({count}) {title}",
+  "@trayWindowTitle": {
+    "description": "Window title while requests wait; the digit jumps, it never animates (docs/UX.md 2.9).",
+    "placeholders": {"count": {"type": "int"}, "title": {"type": "String"}}
+  },
+  "trayNotifyDetail": "{method} {path}",
+  "@trayNotifyDetail": {
+    "description": "Second line of the notification: what the named request is, below the host.",
+    "placeholders": {"method": {"type": "String"}, "path": {"type": "String"}}
+  },
+  "trayNotifyMore": "{count, plural, =1{+ 1 more request} other{+ {count} more requests}}",
+  "@trayNotifyMore": {
+    "description": "How many requests arrived besides the one the notification names; several arrivals update one message instead of stacking (docs/UX.md 4.9).",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "trayNotifyFindings": "{count, plural, =1{1 finding · decide in the window} other{{count} findings · decide in the window}}",
+  "@trayNotifyFindings": {
+    "description": "Shown instead of the Allow button when the named request carries findings: sending a secret asks for the held confirmation and a sentence, and neither fits in a notification (docs/UX.md 4.7).",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "trayRemainingUnderMinute": "less than a minute left",
+  "@trayRemainingUnderMinute": {"description": "The remaining hold budget as a word. A notification is a still image; a digit in it is wrong from the first second (docs/UX.md 4.9)."},
+  "trayRemainingMinutes": "{count, plural, =1{about a minute left} other{about {count} minutes left}}",
+  "@trayRemainingMinutes": {
+    "description": "The remaining hold budget as a word, in minutes.",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "trayRemainingHours": "{count, plural, =1{about an hour left} other{about {count} hours left}}",
+  "@trayRemainingHours": {
+    "description": "The remaining hold budget as a word, in hours.",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "trayActionAllow": "Allow",
+  "@trayActionAllow": {"description": "Notification button that sends the named request on. A control names the action at the object (docs/UX.md 4.6)."},
+  "trayActionBlock": "Block",
+  "@trayActionBlock": {"description": "Notification button that refuses the named request."},
+  "trayActionShow": "Show",
+  "@trayActionShow": {"description": "Notification button that brings the window forward on the named request."},
+  "traySeparator": " · ",
+  "@traySeparator": {"description": "Separator between the parts of a notification line."},
+  "trayReturnMinutes": "{count, plural, =1{The agent has been waiting a minute} other{The agent has been waiting {count} minutes}}",
+  "@trayReturnMinutes": {
+    "description": "The return banner: what happened while the window was away, in minutes (docs/UX.md 4.9).",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "trayReturnHours": "{count, plural, =1{The agent has been waiting an hour} other{The agent has been waiting {count} hours}}",
+  "@trayReturnHours": {
+    "description": "The return banner, in hours.",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "trayReturnJump": "Jump to oldest",
+  "@trayReturnJump": {"description": "Button of the return banner: selects the request that has waited longest."},
+  "trayDismiss": "Dismiss",
+  "@trayDismiss": {"description": "Closes the return banner or the tray notice without doing anything else."},
+  "trayNoticeNoTrayTitle": "This desktop has no tray",
+  "@trayNoticeNoTrayTitle": {"description": "Title of the one notice a desktop without a StatusNotifier host gets; the count still stands in the window title."},
+  "trayNoticeDecidedTitle": "The request was decided already",
+  "@trayNoticeDecidedTitle": {"description": "Title of the notice after a notification button was pressed for a request that had left the queue."},
+  "trayNoticeDecidedWhy": "It left the queue before the notification was answered, so nothing was decided.",
+  "@trayNoticeDecidedWhy": {"description": "Cause of that notice: what was named is gone, and no other request was decided in its place."},
+  "trayNoticeNoTrayWhy": "No tray host answers on this desktop, so the number of held requests stands in the window title instead.",
+  "@trayNoticeNoTrayWhy": {"description": "Cause of the tray notice: what is missing and where the number is instead. The program keeps working."},
+  "trayNoticeFindingsTitle": "The request carries a finding",
+  "@trayNoticeFindingsTitle": {"description": "Title of the notice after Allow was pressed on a message for a request that carries a finding; nothing was sent (docs/UX.md 4.7)."},
+  "trayNoticeFindingsWhy": "The finding arrived after the message went out. Sending a request that carries one needs the confirmation in the window, so nothing was sent.",
+  "@trayNoticeFindingsWhy": {"description": "Cause of that notice: why the button did not decide, and where the decision belongs instead."},
+  "rulesFieldStream": "Large bodies",
+  "@rulesFieldStream": {"description": "Form label: what happens to a body above the cap."},
+  "rulesStream": "Stream a body over the cap instead of holding it",
+  "@rulesStream": {"description": "Label of the stream checkbox of a rule. Hidden until a tier guards it (CONVENTIONS 4.16); the key stays for HUM-069."},
+  "rulesStreamHelp": "A body larger than the cap then goes out unread: nobody sees it, and no finding can be found in it. Leave it off unless a tool needs it.",
+  "@rulesStreamHelp": {"description": "Why the stream checkbox costs something: it is the one control of this screen that lets a body leave unread. Hidden until a tier guards it (CONVENTIONS 4.16); the key stays for HUM-069."},
+
+  "historyOpenRow": "Open",
+  "@historyOpenRow": {"description": "Affordance in the action slot of a history row, uncovered by hover and by focus: it does what a double click does."},
+  "historyExport": "Export",
+  "@historyExport": {"description": "Opens the export menu above the table."},
+  "historyExportTitle": "Export requests",
+  "@historyExportTitle": {"description": "Heading of the export modal."},
+  "historyExportScope": "What",
+  "@historyExportScope": {"description": "Label of the choice between the selected request and the whole filtered set."},
+  "historyExportScopeSelected": "The selected request",
+  "@historyExportScopeSelected": {"description": "Export scope: exactly one flow, the one the table has selected."},
+  "historyExportScopeFiltered": "{count} matching requests",
+  "@historyExportScopeFiltered": {
+    "description": "Export scope: everything the current filter matches. The count is already written out and carries a plus where the daemon only counted to its ceiling.",
+    "placeholders": {"count": {"type": "String"}}
+  },
+  "historyExportFormat": "Format",
+  "@historyExportFormat": {"description": "Label of the format choice."},
+  "historyExportCap": "An export covers at most {limit} requests. Narrow the filter, or take the newest {limit}.",
+  "@historyExportCap": {
+    "description": "Shown before the job starts when the filtered set is larger than one export can carry. The cap is said out loud instead of truncating silently (CONVENTIONS 4.13).",
+    "placeholders": {"limit": {"type": "int", "format": "decimalPattern"}}
+  },
+  "historyExportSave": "Save…",
+  "@historyExportSave": {"description": "Starts the export and opens the save dialog of the desktop."},
+  "historyExportCancel": "Cancel",
+  "@historyExportCancel": {"description": "Closes the export modal without exporting."},
+  "historyExportClose": "Close",
+  "@historyExportClose": {"description": "Closes the export modal after a file was written."},
+  "historyExportCollecting": "Collecting requests · {done} of {total}",
+  "@historyExportCollecting": {
+    "description": "Progress while the flows and their bodies are read. Rows, not a spinner: the number is known (docs/UX.md 2.11).",
+    "placeholders": {"done": {"type": "String"}, "total": {"type": "String"}}
+  },
+  "historyExportWriting": "Writing {count} requests",
+  "@historyExportWriting": {
+    "description": "Progress while the bytes are encoded and written.",
+    "placeholders": {"count": {"type": "String"}}
+  },
+  "historyExportWrote": "Written: {paths}",
+  "@historyExportWrote": {
+    "description": "Names every file the export created, with its full path, so nobody has to guess where it went (CONVENTIONS 4.13, precision where it counts).",
+    "placeholders": {"paths": {"type": "String"}}
+  },
+  "historyExportCancelled": "The dialog was closed. No file was written.",
+  "@historyExportCancelled": {"description": "Shown when the person dismissed the save dialog: what did not happen is said, so nobody looks for a file that is not there."},
+  "historyExportFailedTitle": "The export was not written",
+  "@historyExportFailedTitle": {"description": "Title of the diagnostic in the export modal."},
+  "historyExportDialogTitle": "Save the export",
+  "@historyExportDialogTitle": {"description": "Title of the save dialog of the desktop."},
+
+  "interceptSeveralHosts": "{count, plural, =1{1 host} other{{count} hosts}}",
+  "@interceptSeveralHosts": {
+    "description": "Stands where a single host would, when a decision covers several. The domain under them is the daemon's answer, never a guess of the app (CONVENTIONS 4.13).",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "interceptGroupHosts": "{host} and {count, plural, =1{1 more host} other{{count} more hosts}}",
+  "@interceptGroupHosts": {
+    "description": "The name of a group that spans several hosts. It names the first and counts the rest instead of naming a registrable domain nobody confirmed.",
+    "placeholders": {"host": {"type": "String"}, "count": {"type": "int"}}
+  },
+  "interceptBlockSelectedWithNote": "Block {count} selected with note",
+  "@interceptBlockSelectedWithNote": {
+    "description": "The block control while several requests are selected and the note field holds text: the note travels with every one of them (HUM-072).",
+    "placeholders": {"count": {"type": "int", "format": "decimalPattern"}}
+  },
+  "paletteQueueAllowAll": "Queue: allow all…",
+  "@paletteQueueAllowAll": {"description": "The one command that offers every held request at once. It opens the modal with the hosts and the list; nothing is sent from the palette itself (HUM-029)."},
+
+  "rulesDryRunCounting": "Counting the recorded requests…",
+  "@rulesDryRunCounting": {"description": "Stands where the count will stand while the dry run is still on its way. Never a zero: a count nobody has made yet would read as `checked, harmless` (CONVENTIONS 4.13)."},
+  "rulesOriginOpen": "Open the request",
+  "@rulesOriginOpen": {"description": "Hover label of the origin badge of a rule: the click asks the shell to show the request the rule was made from."},
+  "rulesMakePermanentDirty": "Save the change first: this works on the saved rule.",
+  "@rulesMakePermanentDirty": {"description": "Why `Make permanent` is disabled while the form holds unsaved changes. The daemon is given the id, so it changes the saved rule, not what stands in the form."},
+  "rulesMoveRefusedFiltered": "The order cannot be changed while a filter is set. Reset the filter to move a rule.",
+  "@rulesMoveRefusedFiltered": {"description": "The quiet refusal after Alt and an arrow key in a filtered list: the row above the gap is not the rule the order would put there (docs/UX.md 5.3)."},
+  "rulesEndsAtPast": "That time has passed. A rule that ends in the past decides nothing.",
+  "@rulesEndsAtPast": {"description": "Why an end time in the past is refused: the engine skips a rule whose end has passed, so a block rule with such a time would block nothing."},
+  "rulesDryRunFailedTitle": "Dry run not run",
+  "@rulesDryRunFailedTitle": {"description": "Title over the daemon's own words when the dry run itself failed. Without it the panel would keep saying it is counting while nothing counts (docs/UX.md 4.4)."},
+
+  "historyDetailLinesCapped": "The first {lines} lines are shown. The export carries the whole body.",
+  "@historyDetailLinesCapped": {
+    "description": "The view stopped drawing, not the recorder: two causes need two sentences, and this one names the way to the rest.",
+    "placeholders": {"lines": {"type": "String"}}
+  },
+  "historyExportContents": "The file carries hosts, full paths with their query, all headers and both bodies, in clear text.",
+  "@historyExportContents": {"description": "Said in the export modal before anything is written: whoever passes the file on has to know what is in it beforehand, not afterwards. There is no redaction yet (docs/SECURITY.md)."},
+  "historyOpenRowInQueue": "Open in Intercept",
+  "@historyOpenRowInQueue": {"description": "The affordance in the action slot of a row that is still held: it hands the request to the screen where it can be decided."},
+
+  "historyEmptyPassthroughOnly": "Every request of this session went to the model endpoint, and that traffic is hidden.",
+  "@historyEmptyPassthroughOnly": {"description": "The record is not empty, only the passthrough filter hides all of it. The agent calls the model first, so this is the ordinary case, and the chip is the way back."},
+  "historyExportBesideFile": "A second file, {name}, is written beside it; the command reads the body from there.",
+  "@historyExportBesideFile": {
+    "description": "Said before the export runs, not after: the curl format writes two files, and an irreversible action says so beforehand.",
+    "placeholders": {"name": {"type": "String"}}
+  },
+  "historyExportNothing": "Nothing matched, so nothing was written.",
+  "@historyExportNothing": {"description": "The set to export turned out to be empty; no dialog was ever opened, so the sentence must not claim one was closed."}
 }

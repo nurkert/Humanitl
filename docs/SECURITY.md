@@ -246,12 +246,24 @@ jede Inferenz gehalten, müsste ein Mensch pro Minute mehrfach bestätigen; das 
 durch, und nach zwei Stunden klickt er alles blind weg.
 
 *Was Humanitl tut.* Der Passthrough ist eine Regel, keine Lücke im Filter: exakt ein Host, ein
-Port, ein Pfadpräfix (Default `/v1/`, `/api/`) und die Methode `POST`. Jede andere Anfrage an
-denselben Host wird normal gehalten. Der Verkehr wird vollständig aufgezeichnet und durch die
-Findings-Detektoren geschickt; ein Treffer erzeugt eine Warnung, hält aber nicht an. Weil das
+Port, ein Schema, die Methoden `POST` und `GET` (die Modellliste ist ein `GET`) und eine Liste von
+Pfadpräfixen. Der Default deckt nur, was Inferenz ist: `/v1/` für die OpenAI-kompatible Oberfläche
+und die einzelnen Ollama-Endpunkte `/api/chat`, `/api/generate`, `/api/embed`, `/api/embeddings`,
+`/api/tags`, `/api/show`, `/api/ps`, `/api/version`. Das nackte `/api/` steht bewusst **nicht**
+darin: Darunter lägen auch `POST /api/pull`, `POST /api/create` und `DELETE /api/delete`, mit denen
+ein Agent ungefragt Modelle nachladen und löschen könnte. Genauso wenig trifft ein Pfad mit einem
+`..`-Segment ein Präfix, denn erst der Server löst es auf. Jede andere Anfrage an denselben Host
+wird normal gehalten, also einem Menschen gezeigt. Wer eine davon ohne Rückfrage braucht, schreibt
+ihren Pfad selbst in `llm.passthrough_paths`.
+
+Der Verkehr wird vollständig aufgezeichnet und durch die
+Findings-Detektoren geschickt; ein Treffer erzeugt eine Warnung (`LLM_005`, eine je Anfrage, mit
+Zahl und Host und nie mit dem gefundenen Wert), hält aber nicht an. Weil das
 Modell typischerweise im eigenen Netz steht, trägt die Regel `allow_private: true` — sie ist
-damit die einzige Regel, die absichtlich in private Adressbereiche zeigt. Im Isolations-Panel
-erscheint der Kanal als vierte, bernsteinfarbene Zeile mit dem konkreten Endpunkt.
+damit die einzige Regel, die absichtlich in private Adressbereiche zeigt. Das Recht hängt an dieser
+einen Regel und an dieser einen Anfrage: Die nächste Anfrage derselben Verbindung fängt wieder ohne
+es an. Im Isolations-Panel erscheint der Kanal als vierte, bernsteinfarbene Zeile mit dem konkreten
+Endpunkt.
 
 *Was der Nutzer tun sollte.* Nur eine Maschine eintragen, die er selbst kontrolliert. Kein
 geteilter Ollama-Server ohne Authentifizierung im Firmennetz. Wer das nicht hat, schaltet den
@@ -295,11 +307,16 @@ dessen Rest hinter Leerzeichen und einem Zeilenumbruch steht.
 der Agent versucht hat.
 
 *Was Humanitl tut.* Die Aufzeichnung liegt lokal unter `$XDG_DATA_HOME/humanitl`, nichts wird
-hochgeladen. Der Export kennt eine optionale Host-Redaktion für den Fall, dass eine Historie
-weitergegeben wird.
+hochgeladen. Der Export schreibt heute alles mit, was aufgezeichnet wurde: Host, vollständigen Pfad
+samt Query, sämtliche Kopfzeilen und beide Rümpfe im Klartext. Das Export-Fenster sagt das in einem
+Satz, bevor die Datei geschrieben wird. Eine optionale Host-Redaktion wird es geben; sie ist nach
+dem MVP eingeplant und hat noch kein eigenes Issue — `backlog/sprint-4.md` nennt sie bisher nur im
+Nebensatz zum Audit-Log („Im Export mit Host-Redaktion (nach MVP) wird auch die IP redigiert"). Wer
+sie baut, legt das Issue an und streicht diesen Absatz.
 
-*Was der Nutzer tun sollte.* Vor dem Weitergeben eines Exports die Redaktion einschalten. Daran
-denken, dass die Hostnamen selbst Kundenprojekte verraten können.
+*Was der Nutzer tun sollte.* Einen Export wie die Anfragen selbst behandeln: Er trägt Tokens in
+Kopfzeilen und Geheimnisse in Rümpfen, solange es keine Redaktion gibt. Daran denken, dass schon die
+Hostnamen Kundenprojekte verraten können.
 
 ### 3.5 Package-Caches
 

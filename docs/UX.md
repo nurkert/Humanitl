@@ -518,32 +518,87 @@ Damit die Abweichung prüfbar bleibt, steht sie hier und nicht zwischen den Zeil
 
 ## 9. Was das Designsystem noch braucht
 
-Ergänzt wurde bisher nur `app/packages/ui/lib/src/tokens/motion.dart`: `leaveOffset`, `stagger`, `staggerMax`, `leaveGlideFraction`, `holdToBlock`, `rearm`, `confirm`, `undoWindow`, `freezeAfterKey`, `freezeAfterPointer`, `clockTick`, `waitVisible`, `waitMinVisible`, `ringSmoothBelow`, `breatheBelowUrgent`, `breatheCycles`, `breatheMinOpacity`, `reducedRingAlpha` sowie `HReducedMotion`. Alles Folgende ist offen und wird in eigenen Issues entschieden, nie beiläufig.
+> **Stand 2026-09-04.** Ein eigener Durchgang hat den grössten Teil dieser
+> Liste geschlossen: `HRow` mit Zustands-Glyph, Fokus und Aktions-Slot,
+> `HFocusRing`, `HSkeleton` und `HWait`, `HTextField`, `HSegmented`,
+> `HCheckbox`, die fehlenden Grössen-Tokens, fünf Glyphen, und vor allem der
+> Kontrastfehler: Zustandsfarben haben jetzt eine eigene Textvariante, die auf
+> allen vier Flächen beider Leitern und auf Tint, Hover- und Druckfüllung
+> 4,5:1 erreicht, während die Flächenfarben bleiben, wie sie waren. Was hier
+> unten noch steht und nicht als geschlossen markiert ist, gilt weiter.
+>
+> **Nachtrag 2026-09-04, zweiter Durchgang.** Zwei Reviews haben neunzehn
+> Befunde gebracht; sie sind behoben, und jeder hat einen Test, der ohne ihn
+> rot wird. Der Atem endet wieder bei voller Deckkraft (`repeat(count:)`
+> zählt Halbdurchläufe), die geteilte Pille malt Wort und Chevron in der
+> Textvariante ihrer Fläche, der Akzent hat mit `accentText` und `accentFill`
+> dieselbe Trennung von Fläche und Wort wie jede Zustandsfarbe, der Fokusring
+> hält zwei Pixel Fläche frei, wo er sonst auf einer Füllung läge, die von ihm
+> selbst nicht zu unterscheiden ist — beim Primärbutton also, gemessen und
+> nicht aufgezählt (`HFocusRing.needsGap`) —, die Haltefüllung ist ein
+> Token (`HColors.fillHoldAlpha`) und steht in der Liste, gegen die die
+> Textableitung rechnet, `HSheet` fängt den Fokus und schließt auf `Escape`,
+> die Kopfzeile eines Klappabschnitts und der Splitter der Panes sind
+> Fokusstopps mit Tastenbedienung, und `HMotion` hat die beiden Fristen
+> aufgenommen, die vorher als Literale in `core/ui` standen. Die
+> Haltefüllung in der Textableitung verschiebt die Textpalette leicht; die
+> eingefrorenen Tabellen in `tokens_test.dart` sind entsprechend neu.
+>
+> **Nachtrag 2026-09-04, dritter Durchgang.** Zehn weitere Befunde, ebenfalls
+> je mit einem Test, der ohne die Sicherung rot wird. Die Haltefüllung der
+> Pille liegt auf deren eigener Tönung und komponierte zu 0,248 statt 0,20;
+> ihr Alpha wird jetzt zurückgerechnet (`HColorDerivation.alphaOver`), und
+> `holdFill` in `core/ui` nimmt denselben Weg. Ein deaktiviertes Kästchen und
+> ein deaktiviertes Segment tragen `fg2` statt `fg0` und keinen Akzent mehr;
+> das Kästchen füllt mit `accentFill` wie der Primärbutton. Die Tastenfüllung
+> behält ihre 120 ms auch bei abgeschalteten Animationen: `AnimatedContainer`
+> baut seinen Controller ohne `animationBehavior`, also übernimmt
+> `HAnimatedFill` die Farbe von Button, Zeile und Segment. Die gemerkte
+> Variante der Pille hat einen Tastenweg (`Enter` oder Leertaste gehalten),
+> der Rahmen der Pille trägt denselben Ton wie ihr Wort, die
+> Kopfzeile eines Klappabschnitts hat eine Mindesthöhe statt einer Höhe und
+> ihre Kurve als Feld statt als Ausdruck in `build`, und die Breite des
+> Splitter-Griffs ist ein Token (`HSize.splitter`, ungerade, damit die
+> Haarlinie auf einem ganzen Pixel liegt). `core/ui` hat seitdem einen
+> eigenen Test bei doppelter Textskalierung; er hat den Kopf der
+> Diagnose-Karte gefunden, der jetzt umbricht statt abzuschneiden.
+>
+> Eine Entscheidung dieses Durchgangs steht gegen den ersten Anschein: das
+> Zustands-Glyph behält die **Flächenfarbe**. Der Doc-Kommentar von
+> `stateTextColor` zählte es zu dem, was die Textvariante nimmt, und der Code
+> tat es nicht; richtiggestellt wurde der Kommentar. Ein Glyph ist eine
+> Grafik, seine Grenze ist die 3:1 aus Abschnitt 6, und die hält die
+> Flächenpalette auf jeder Fläche beider Leitern. Mit der Textvariante
+> verlöre ausgerechnet `autoRule` seinen Ton — die Farbe trägt 60 % Deckkraft,
+> 4,5:1 erreicht sie nur dicht an Weiß (dunkel) oder Schwarz (hell) —, und das
+> Glyph ist der Kanal, der die Farbe für Farbenblinde verdoppelt (3.3).
+
+Gewachsen sind `motion.dart` (`leaveOffset`, `stagger`, `staggerMax`, `leaveGlideFraction`, `holdToBlock`, `rearm`, `confirm`, `undoWindow`, `freezeAfterKey`, `freezeAfterPointer`, `clockTick`, `waitVisible`, `waitMinVisible`, `ringSmoothBelow`, `breatheBelowUrgent`, `breatheCycles`, `breatheMinOpacity`, `reducedRingAlpha`, `hoverLabel`, `copyFeedback` sowie `HReducedMotion`), `colors.dart` (`fillHoverAlpha`, `fillPressedAlpha`, `fillHoldAlpha`, `textMinContrast`, `areaMinContrast`, `fillAlphas`, `textBackgrounds`, `textVariant`, `readableFill`), `spacing.dart` (`rowHistory`, `rowBody`, `rowActionSlot`, `hitDecision`, `measureChars`, `splitterActive`, `splitterStep`), `flow_state.dart` (Glyph und ARB-Schlüssel je Zustand) und `tokens.dart` (`stateText`, `methodText`, `accentText`, `accentFill`, `stateTextOf`). Alles Folgende ist offen und wird in eigenen Issues entschieden, nie beiläufig.
 
 **Token:**
 
-1. `HSize.rowSelected` (56) benutzt nach 3.4 keine Zeile mehr. Entweder streichen oder auf die History-Detailzeile umwidmen.
-2. `HSize.selectionRail` (2) entfällt, sobald die Auswahl die Zustands-Rail ersetzt statt sie zu überlagern.
-3. Die drei Zeilendichten aus 3.2 brauchen drei Token: `HSize.rowHistory` (28), `HSize.rowBody` (24) und `HSize.rowActionSlot` (28). Der Aktionsslot borgt sich heute `hitMin`, das etwas anderes bedeutet. Ohne diese Token schreibt der erste History-Screen eine 28 in eine Feature-Datei, und die Regel gegen Literale aus 2.1 bricht an dem Dokument, das sie aufgestellt hat.
-4. Eine eigene Untergrenze für die beiden Entscheidungen: `HSize.hitDecision` (32 px Höhe, 120 px Breite) neben `HSize.hitMin` (5.4).
-5. Die Methoden-Hues erreichen als Text auf ihrem eigenen Tint keine 4,5:1 (DELETE dunkel 2,65:1). Entweder Label- und Flächenfarbe getrennt führen oder die Hues nachziehen.
-6. Der Countdown-Ring nimmt `tokens.colors.line` als Spur; im hellen Theme misst der Bogen dagegen 2,84:1. Ein neues Token `ringTrack` wäre eine Lösung; die verbrauchte Strecke als Lücke statt als Spur zu zeichnen ist die andere und braucht kein Token — deshalb der Vorschlag.
-7. Für die Maß-Obergrenze aus 3.2 gibt es kein Token. Vorschlag: eine Zeichenzahl (90), keine Pixelbreite, weil die Breite von der installierten Schrift abhängt.
+1. ~~`HSize.rowSelected` (56) benutzt nach 3.4 keine Zeile mehr. Entweder streichen oder auf die History-Detailzeile umwidmen.~~ Geschlossen am 2026-09-04: auf die zweizeilige Detailzeile der History umgewidmet.
+2. ~~`HSize.selectionRail` (2) entfällt, sobald die Auswahl die Zustands-Rail ersetzt statt sie zu überlagern.~~ Geschlossen am 2026-09-04: die Auswahl ersetzt die Rail über alle vier Pixel, und das Token markiert jetzt die aktive Sektion der Icon-Rail.
+3. ~~Die drei Zeilendichten aus 3.2 brauchen drei Token: `HSize.rowHistory` (28), `HSize.rowBody` (24) und `HSize.rowActionSlot` (28).~~ Geschlossen am 2026-09-04: alle drei stehen in `spacing.dart`, der Aktionsslot borgt sich `hitMin` nicht mehr.
+4. ~~Eine eigene Untergrenze für die beiden Entscheidungen: `HSize.hitDecision` (32 px Höhe, 120 px Breite) neben `HSize.hitMin` (5.4).~~ Geschlossen am 2026-09-04.
+5. ~~Die Methoden-Hues erreichen als Text auf ihrem eigenen Tint keine 4,5:1 (DELETE dunkel 2,65:1). Entweder Label- und Flächenfarbe getrennt führen oder die Hues nachziehen.~~ Geschlossen am 2026-09-04: `HMethodColors.darkText` und `lightText` führen das Kürzel getrennt von der Fläche, abgeleitet über `HColorDerivation.textVariant`.
+6. ~~Der Countdown-Ring nimmt `tokens.colors.line` als Spur; im hellen Theme misst der Bogen dagegen 2,84:1.~~ Entschieden am 2026-09-04, und zwar für die Lücke: der Ring zeichnet nur noch den verbleibenden Bogen, die verbrauchte Strecke bleibt Fläche. Eine Spur hätte zwei Bedingungen zugleich erfüllen müssen — auf jeder Panelfläche sichtbar sein und dem Bogen 3:1 lassen —, und die abgeleitete helle Spur erfüllte die erste nicht: sie maß gegen die vier hellen Flächen 1,01:1 bis 1,26:1 und war auf keinem Panel zu sehen. Der Bogen allein erreicht als Zustandsfarbe auf jeder Fläche beider Leitern seine 3:1. Das Token `ringTrack` ist damit wieder weg.
+7. ~~Für die Maß-Obergrenze aus 3.2 gibt es kein Token. Vorschlag: eine Zeichenzahl (90), keine Pixelbreite.~~ Geschlossen am 2026-09-04: `HSize.measureChars` (90) und `HSize.measureWidth`.
 8. Eine Rail, die 3:1 erreicht, bräuchte ein eigenes Alpha-Token weit oberhalb von `HColors.tintAlpha`. Dieses Dokument will sie nicht (3.3, Regel 10); wer sie doch will, führt das Token ein und darf `tint()` nicht dafür missbrauchen.
 
 **Widgets in `packages/ui`:**
 
-9. Eine gehende Zeile braucht ein eigenes Widget ohne `ref`: `QueueRowSnapshot` (oder `HRow.frozen`) nimmt aufgelöste Werte — Zustand, Glyph, Methode, Host, Pfad, Restzeit als Zeichenkette — und beobachtet nichts. Der Abgang zeichnet dieses Widget, nie die lebende Zeile (2.4).
-10. `HRow` malt Hover und Auswahl beide `bg3`, mit einem Kommentar, der das begründet. Hover muss `bg2` werden (3.4).
-11. `HRow` benutzt `HMotion.sweep` für Hover-Tönung und Höhe. Hover gehört `HMotion.press`, die Höhe animiert nicht.
-12. `HRow` hat keinen Slot für ein Zustands-Glyph und ist nicht fokussierbar. Beides braucht 3.4 und 5.1. Dazu ein Slot für die Mehrfachauswahl-Rail (3.5).
-13. `HMethodBadge` braucht eine neutrale Variante (`fg1` auf `bg2`) für Listen; die farbige bleibt dem Kartenkopf.
-14. `HButton` zeichnet Fokus durch Umfärben des vorhandenen 1-px-Rahmens. Gebraucht wird ein 2-px-Akzentring außerhalb; zwei `BoxDecoration` reichen dafür, ein neues Token nicht.
-15. `HStateGlyph` atmet linear, endlos und bis 0,45 Deckkraft. Gebraucht: `easeInOut`, Untergrenze `HMotion.breatheMinOpacity`, `HMotion.breatheCycles` je Schwelle, Phase aus der Uhrzeit modulo `HMotion.breathe` mit eigenem Start bei voller Deckkraft (2.7) und der ruhende Ersatzring unter reduzierter Bewegung.
-16. `HModal` hat weder `FocusScope` noch `Escape`-Bindung.
-17. `HPill`, `HIconButton`, `HRow` und `HBadge` mit `onTap` sind nicht fokussierbar; `HButton` ist heute das einzige fokussierbare Control im System.
-18. `HBadge.chipHeight` und `HButtonSize` sind feste Höhen und laufen bei `TextScaler` 2.0 über. Mindesthöhen statt Höhen.
-19. Ein Skelett-Widget für 2.11: Haarlinien in der Höhe einer Zieldichte, `fg2`, ohne Bewegung, mit den beiden Schwellen `waitVisible` und `waitMinVisible` eingebaut, damit sie nicht in jedem Screen neu erfunden werden.
+9. ~~Eine gehende Zeile braucht ein eigenes Widget ohne `ref`: `QueueRowSnapshot` (oder `HRow.frozen`).~~ Geschlossen am 2026-09-04, und zwar ohne zweites Widget: `HRow` beobachtet nichts und nimmt ausschließlich aufgelöste Werte — Zustand, Glyph, Methode, Host, Pfad, Restzeit als Zeichenkette. Damit taugt dieselbe Klasse für die lebende und für die gehende Zeile, und der Abgang zeichnet ein eingefrorenes Abbild mit stehendem Countdown (2.4). Der Doc-Kommentar von `HRow` sagt dasselbe; die beiden Texte widersprachen sich, bis dieser hier nachgezogen wurde.
+10. ~~`HRow` malt Hover und Auswahl beide `bg3`. Hover muss `bg2` werden (3.4).~~ Geschlossen am 2026-09-04.
+11. ~~`HRow` benutzt `HMotion.sweep` für Hover-Tönung und Höhe. Hover gehört `HMotion.press`, die Höhe animiert nicht.~~ Geschlossen am 2026-09-04.
+12. ~~`HRow` hat keinen Slot für ein Zustands-Glyph und ist nicht fokussierbar. Dazu ein Slot für die Mehrfachauswahl-Rail (3.5).~~ Geschlossen am 2026-09-04; die Kopfzeile dieses Abschnitts sagt dasselbe.
+13. ~~`HMethodBadge` braucht eine neutrale Variante (`fg1` auf `bg2`) für Listen; die farbige bleibt dem Kartenkopf.~~ Geschlossen am 2026-09-04.
+14. ~~`HButton` zeichnet Fokus durch Umfärben des vorhandenen 1-px-Rahmens. Gebraucht wird ein 2-px-Akzentring außerhalb; zwei `BoxDecoration` reichen dafür, ein neues Token nicht.~~ Geschlossen am 2026-09-04: `HFocusRing` zeichnet den Ring außerhalb, `HFocusRing.inline` auf der Kante der geteilten Pille.
+15. `HStateGlyph`: `easeInOut`, die Untergrenze `HMotion.breatheMinOpacity`, `HMotion.breatheCycles` je Schwelle, der Start bei voller Deckkraft und der ruhende Ersatzring unter reduzierter Bewegung stehen seit 2026-09-04; das Ende des Atems ebenfalls (`repeat(reverse: true, count:)` zählt Halbdurchläufe, eine ungerade Zahl endet auf der geringsten Deckkraft). Offen bleibt nur die Phase: das Glyph hat einen eigenen Controller, statt seine Phase aus der Uhrzeit modulo `HMotion.breathe` zu nehmen. Zwei Zeilen, die im selben Moment unter die Schwelle fallen, atmen deshalb im Gleichschritt, zwei aus verschiedenen Momenten nicht.
+16. ~~`HModal` hat weder `FocusScope` noch `Escape`-Bindung.~~ Geschlossen am 2026-09-04: `FocusScope` mit `autofocus`, `Escape` über `DismissIntent`. `HSheet` hatte dieselbe Lücke und hat seit dem 2026-09-04 dieselbe Behandlung; ohne sie lief `Tab` durch den Bildschirm, den das Blatt gerade verdeckt.
+17. ~~`HPill`, `HIconButton`, `HRow` und `HBadge` mit `onTap` sind nicht fokussierbar; `HButton` ist heute das einzige fokussierbare Control im System.~~ Geschlossen am 2026-09-04: zehn der 21 Widgets tragen eigene Fokus-Behandlung, darunter alle vier.
+18. ~~`HBadge.chipHeight` und `HButtonSize` sind feste Höhen und laufen bei `TextScaler` 2.0 über. Mindesthöhen statt Höhen.~~ Geschlossen am 2026-09-04; der Test bei doppelter Skalierung deckt seit demselben Tag auch `HPill`, `HSegmented`, `HIconButton` und `HModal` ab.
+19. ~~Ein Skelett-Widget für 2.11: Haarlinien in der Höhe einer Zieldichte, `fg2`, ohne Bewegung, mit den beiden Schwellen `waitVisible` und `waitMinVisible` eingebaut.~~ Geschlossen am 2026-09-04: `HSkeleton` und `HWait`.
 
 **In `app/lib`, außerhalb dieses Dokuments zu entscheiden:**
 
@@ -554,10 +609,39 @@ Ergänzt wurde bisher nur `app/packages/ui/lib/src/tokens/motion.dart`: `leaveOf
 
 **Tests:**
 
-24. Der Kontrast-Test prüft Farbe-auf-Fläche mit 3:1. Er braucht Text-auf-Tint und Text-auf-Füllung mit 4,5:1, sonst rutscht jedes Badge-Label wieder unter AA durch. Die Ausnahme aus 3.3 Regel 10 steht namentlich im Test, nicht als aufgeweichte Schwelle.
-25. Es gibt keinen Test, der belegt, dass jede Zustandsfarbe von Glyph und Label begleitet ist, und keinen bei `TextScaler` 2.0.
+24. ~~Der Kontrast-Test prüft Farbe-auf-Fläche mit 3:1. Er braucht Text-auf-Tint und Text-auf-Füllung mit 4,5:1.~~ Geschlossen am 2026-09-04: `every state colour carries text at 4.5:1 in both themes`, `every method hue carries its verb at 4.5:1 in both themes` und `every fill of the system is a fill the derivation saw` in `packages/ui/test/tokens_test.dart`; die Ausnahme aus 3.3 Regel 10 steht namentlich im Test `the area palette is exactly what it claims`.
+25. Es gibt keinen Test, der belegt, dass jede Zustandsfarbe von Glyph **und** Label begleitet ist. (Die zweite Hälfte dieses Punktes — ein Test bei `TextScaler` 2.0 — ist mit Punkt 18 erledigt: `packages/ui` prüft die Skalierung seit dem 2026-09-04 für zehn Controls, `app/lib/core/ui` seit demselben Tag für seine drei.)
 26. Ein ARB-Lint prüft die Verbotswörter aus 4.1 in beiden Sprachen und kennt die drei Aussage-Schlüssel als Ausnahme.
 27. Ein Widget-Test hält `Enter` 500 ms gedrückt und erwartet genau ein `Decide` (5.4).
+
+**Was keine Bibliothek mehr liefert (ADR-0009, „Entscheidung nach Sprint 2", 2026-09-04):**
+
+ADR-0009 hat ursprünglich Resizable, Command Palette, Sheet, Toast, ContextMenu
+und Menubar von `shadcn_flutter` erwartet. HUM-035 hat am 2026-09-04 gegen
+`shadcn_flutter` und gegen forui entschieden; was von dieser Liste fehlt, baut
+das Designsystem selbst. Toast und Menubar entfallen dabei ganz: Ein Toast
+widerspricht 2.11, 4.6 und 4.8, und die beiden Wege zu jeder Handlung sind die
+Icon-Rail und die Command Palette (5.1), nicht eine Menüleiste.
+
+28. Ein Kontextmenü fehlt. Gebraucht wird es zweimal: „Copy value" und „Copy
+    path" im JSON-Baum und Copy/Paste im Terminal. Es gehört nach `packages/ui`
+    und nicht in eines der beiden Features, weil beide dieselbe Tastenführung
+    und denselben Fokusring brauchen. Geschätzt ein Tag.
+29. Ein Datum-Zeit-Wähler fehlt. Der Zeitraum-Filter des Audit-Screens braucht
+    ihn, und die Uhrzeit gehört dort in Monospace, weil sie Teil des Belegs ist
+    (`backlog/CONVENTIONS.md` 4.13). Geschätzt zwei Tage.
+30. `HResizablePanes` kennt nur die waagerechte Achse. Die senkrechte fehlt,
+    sobald ein Pane über einem anderen liegt. Geschätzt ein halber Tag.
+31. `FocusRing` in `app/lib/core/ui` und `HFocusRing` in `packages/ui` sind
+    dieselbe Sache zweimal. Der Kommentar, der das mit einem Zustand begründete,
+    den Punkt 14 aufgehoben hat, ist am 2026-09-04 richtiggestellt; die Datei
+    bleibt, weil fünf Controls der Aktionsleiste und der History sie benutzen
+    (`block_button`, `note_field`, `release_valve`, `remember_grid`,
+    `history_table`). Bis zum Umzug liest sie ihre Geometrie aus `HFocusRing`,
+    damit die beiden Ringe nicht auseinanderlaufen; ein Test hält die beiden
+    Abstände gleich. Beim Umzug der Handoff-Widgets bleibt eine der beiden.
+32. `HPill` und `HPanel` hat kein Bildschirm je aufgerufen; sie stehen nur in
+    der Galerie. Entweder sie bekommen einen Aufrufer oder sie fallen weg.
 
 ---
 

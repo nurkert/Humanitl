@@ -9,6 +9,8 @@ import 'package:humanitl/app.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/ui.dart';
+import 'package:humanitl/features/intercept/widgets/block_button.dart';
+import 'package:humanitl/features/intercept/widgets/release_valve.dart';
 import 'package:flutter_riverpod/misc.dart';
 import 'package:humanitl/features/intercept/intercept_screen.dart';
 import 'package:humanitl/features/intercept/providers/flows.dart';
@@ -57,11 +59,35 @@ ProviderContainer containerOf(WidgetTester tester) =>
 /// Lässt das Skript des Fakes ablaufen und die Antworten auf `getFlow`
 /// eintreffen: ein Frame für die Ereignisse, zwei für die Provider, die
 /// darauf erst im nächsten Frame neu bauen.
+///
+/// Die Vorgabedauer liegt über `HMotion.rearm`, damit die Auswahl scharf ist:
+/// Erlauben feuert erst, wenn die URL lange genug stand (docs/UX.md 5.4).
 Future<void> playScript(
   WidgetTester tester, [
   Duration duration = const Duration(milliseconds: 400),
 ]) async {
   await tester.pump(duration);
+  await tester.pump();
+  await tester.pump();
+}
+
+/// Wartet, bis Erlauben wieder feuert (`HMotion.rearm` plus ein Frame).
+Future<void> rearm(WidgetTester tester) async {
+  await tester.pump(HMotion.rearm + const Duration(milliseconds: 50));
+  await tester.pump();
+}
+
+/// Hält [finder] für [duration] gedrückt: die Halte-Bestätigung des
+/// Blockierens (250 ms) und der Release Valve (400 ms).
+Future<void> hold(WidgetTester tester, Finder finder, Duration duration) async {
+  final TestGesture gesture = await tester.startGesture(
+    tester.getCenter(finder),
+  );
+  // Ein Frame startet den Ticker, erst der nächste bewegt ihn: ohne diesen
+  // Frame misst der Controller die ganze Haltezeit als null.
+  await tester.pump();
+  await tester.pump(duration);
+  await gesture.up();
   await tester.pump();
   await tester.pump();
 }
@@ -164,25 +190,28 @@ void main() {
     expect(client.decisions, hasLength(1));
   });
 
-  testWidgets('block from the action bar sends a block', (
+  testWidgets('block from the action bar needs the hold', (
     WidgetTester tester,
   ) async {
     final FakeDaemonClient client = fake(holdScript(<FlowDetail>[github()]));
     await pumpIntercept(tester, client: client);
     await playScript(tester);
 
-    // Block ist die destruktive Entscheidung und traegt deshalb `danger`,
-    // die einzige zerstoererische Rolle des Buttons (sprint-1.md, HUM-020).
-    final HButton block = tester.widget<HButton>(
-      find.byKey(const Key('intercept-block')),
+    final Finder block = find.byKey(const Key('intercept-block'));
+    // Ein kurzer Klick entscheidet nicht, er nennt den Grund (docs/UX.md 5.3).
+    await hold(tester, block, const Duration(milliseconds: 100));
+    expect(client.decisions, isEmpty);
+    expect(find.text('Hold to block'), findsOneWidget);
+
+    await hold(
+      tester,
+      block,
+      HMotion.holdToBlock + const Duration(milliseconds: 50),
     );
-    expect(block.variant, HButtonVariant.danger);
-
-    await tester.tap(find.byKey(const Key('intercept-block')));
-    await tester.pump();
-
     expect(client.decisions, hasLength(1));
     expect(client.decisions.single.decision, const Decision.block());
+    // Ohne Raster wird keine Regel angelegt.
+    expect(client.decisions.single.remember, isNull);
   });
 
   testWidgets('j and k move the selection', (WidgetTester tester) async {
@@ -243,14 +272,14 @@ void main() {
     expect(banner, findsOneWidget);
     expect(tester.widget<Text>(banner).data, 'Held, then blocked (timeout)');
 
-    final HButton allow = tester.widget<HButton>(
+    final ReleaseValve allow = tester.widget<ReleaseValve>(
       find.byKey(const Key('intercept-allow')),
     );
-    final HButton block = tester.widget<HButton>(
+    final BlockButton block = tester.widget<BlockButton>(
       find.byKey(const Key('intercept-block')),
     );
-    expect(allow.onPressed, isNull);
-    expect(block.onPressed, isNull);
+    expect(allow.enabled, isFalse);
+    expect(block.enabled, isFalse);
   });
 
   testWidgets('the empty queue says so without a spinner', (
@@ -259,7 +288,7 @@ void main() {
     await pumpIntercept(tester, client: fake(const <ScriptedEvent>[]));
     await playScript(tester, const Duration(milliseconds: 200));
 
-    expect(find.text('No request is waiting'), findsOneWidget);
+    expect(find.text('The queue is open'), findsOneWidget);
     expect(find.byType(QueueRow), findsNothing);
   });
 
@@ -295,7 +324,8 @@ void main() {
         testFlowId(i): heldFlow(
           n: i,
           deadline: testStart.add(Duration(seconds: 60 + i)),
-          host: 'host$i.example.org',
+          // Eigene Domain je Flow: 200 flache Zeilen statt einer Gruppe.
+          host: 'host$i.example$i.org',
         ),
     };
     await pumpIntercept(
