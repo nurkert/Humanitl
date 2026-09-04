@@ -1,8 +1,9 @@
 # shellcheck shell=sh
-# Die Helfer des Demoskripts (HUM-021, CONVENTIONS.md 3.11).
+# Die Helfer der Demoskripte (HUM-021, HUM-036, CONVENTIONS.md 3.11).
 #
-# Die Datei gehört dem Demoskript `m1_sealed_box.sh`. Sie bleibt POSIX-sh, ohne
-# `local`, ohne Arrays, ohne `[[`: `tests/escape/run.sh` startet denselben
+# Die Datei gehört den Demoskripten `m1_sealed_box.sh` und
+# `m2_first_decision/run.sh`; wer sie ändert, prüft beide. Sie bleibt POSIX-sh,
+# ohne `local`, ohne Arrays, ohne `[[`: `tests/escape/run.sh` startet denselben
 # Daemon auf demselben Weg, buchstabiert ihn aber selbst aus, weil es ein
 # eigenes Fehlermodell hat (`record_error` und Exit 2).
 #
@@ -91,12 +92,39 @@ e2e_die() {
     exit 1
 }
 
+# --- Aufräumen ---------------------------------------------------------------
+
+# e2e_trap CLEANUP — CLEANUP an Beenden und an einen Abbruch hängen.
+#
+# `trap CLEANUP EXIT` allein genügt nicht. Ein Demoskript verbringt die meiste
+# Zeit in `wait` auf einen Hintergrundprozess; trifft `SIGINT` die Shell dort
+# und ist kein eigener Handler gesetzt, bricht nur der Wartelauf ab, und das
+# Skript läuft weiter. Wer abgebrochen hat, bekäme am Ende einen grünen Bericht
+# über einen Lauf, den er beendet zu haben glaubte — und ein hartes Töten
+# hinterließe Daemon, Ziel, Sandbox-Baum und die privaten Schlüssel des Laufs.
+#
+# Der Handler räumt deshalb selbst auf, nimmt vorher den `EXIT`-Trap weg, damit
+# nicht zweimal aufgeräumt wird, und endet mit 130 (dem verabredeten Code für
+# einen Abbruch durch ein Signal, 128 + SIGINT).
+e2e_trap() {
+    trap "$1" EXIT
+    trap "printf 'e2e: interrupted\\n' >&2; trap - EXIT; $1; exit 130" INT TERM HUP
+}
+
+# Wie viele Behauptungen dieser Lauf geprüft hat, gehalten oder nicht.
+#
+# Ein Demoskript, das grün ist, weil ein Zweig übersprungen wurde, ist
+# schlimmer als keines. Der Zähler ist die Grundlage der Selbstprüfung am Ende
+# eines Laufs; er wächst in `e2e_check`, durch das jede Behauptung geht.
+E2E_ASSERTIONS=0
+
 # e2e_check DESCRIPTION CONDITION-RESULT — eine Behauptung, die halten muss.
 #
 # Der Aufrufer prüft selbst und übergibt `ok` oder alles andere; der Helfer
 # schreibt in beiden Fällen eine Zeile, damit im Protokoll steht, was geprüft
 # wurde und nicht nur, was schiefging.
 e2e_check() {
+    E2E_ASSERTIONS=$((E2E_ASSERTIONS + 1))
     e2e_check_what="$1"
     shift
     if [ "$1" = ok ]; then
