@@ -14,8 +14,10 @@ abstract final class ProtoVersion {
   /// Minor version. Informational: minors are additive, so an app with an
   /// older minor keeps working against a newer daemon and simply does not
   /// read the newer fields. Raised to 1 with the rule test operation, the
-  /// truncated-findings flag and the domain info (HUM-023 to HUM-031).
-  static const int minor = 1;
+  /// truncated-findings flag and the domain info (HUM-023 to HUM-031), to 2
+  /// with the endpoint probe (HUM-039) and to 3 with the sandbox snapshot:
+  /// mounts, environment, command line and the `Plan` operation (HUM-040).
+  static const int minor = 3;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

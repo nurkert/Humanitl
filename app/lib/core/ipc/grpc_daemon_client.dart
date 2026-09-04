@@ -246,6 +246,88 @@ class GrpcDaemonClient implements DaemonClient {
   }
 
   @override
+  Stream<SandboxUpdate> sandboxStatus() =>
+      _sandbox(pb.SandboxRequest()..status = Empty());
+
+  @override
+  Stream<SandboxUpdate> planSandbox({
+    String? profile,
+    String? workDir,
+    WorkMode? workMode,
+  }) => _sandbox(pb.SandboxRequest()..plan = _plan(profile, workDir, workMode));
+
+  @override
+  Stream<SandboxUpdate> startSandbox({
+    String? profile,
+    String? workDir,
+    WorkMode? workMode,
+  }) {
+    final pb.SandboxRequest_Plan plan = _plan(profile, workDir, workMode);
+    return _sandbox(
+      pb.SandboxRequest()
+        ..start = (pb.SandboxRequest_Start()
+          ..profile = plan.profile
+          ..workDir = plan.workDir
+          ..workMode = plan.workMode),
+    );
+  }
+
+  @override
+  Stream<SandboxUpdate> stopSandbox() =>
+      _sandbox(pb.SandboxRequest()..stop = Empty());
+
+  /// The wish of the caller; an argument left out stays empty, and the daemon
+  /// reads empty as "keep what you have".
+  pb.SandboxRequest_Plan _plan(
+    String? profile,
+    String? workDir,
+    WorkMode? workMode,
+  ) => pb.SandboxRequest_Plan()
+    ..profile = profile ?? ''
+    ..workDir = workDir ?? ''
+    ..workMode = workMode?.wire ?? '';
+
+  /// One `Sandbox` call, translated event by event.
+  ///
+  /// No deadline: a start waits for `bwrap`, and a client that gave up after
+  /// five seconds would leave a sandbox running that nobody is watching.
+  Stream<SandboxUpdate> _sandbox(pb.SandboxRequest request) async* {
+    final CallOptions options = await _options(timeout: null);
+    try {
+      await for (final pb.SandboxEvent event in _stub.sandbox(
+        request,
+        options: options,
+      )) {
+        switch (event.whichEvent()) {
+          case pb.SandboxEvent_Event.status:
+            yield SandboxUpdate.status(event.status.toDomain());
+          case pb.SandboxEvent_Event.diagnostic:
+            yield SandboxUpdate.diagnostic(event.diagnostic.toDomain());
+          case pb.SandboxEvent_Event.log:
+            yield SandboxUpdate.log(
+              SandboxLogLine(
+                at: event.log.at.toDateTime(toLocal: true),
+                text: event.log.line,
+              ),
+            );
+          case pb.SandboxEvent_Event.argvLine:
+            yield SandboxUpdate.argvLine(event.argvLine);
+          // The isolation results arrive as `check`; they are read by the
+          // panel of HUM-041, and repeating them here as something else would
+          // be an invented answer.
+          case pb.SandboxEvent_Event.check_2:
+          case pb.SandboxEvent_Event.notSet:
+            break;
+        }
+      }
+    } on GrpcError catch (error) {
+      throw DaemonException(_translate(error));
+    } on IOException catch (error) {
+      throw DaemonException(_unreachable('$error'));
+    }
+  }
+
+  @override
   Future<void> close() => _channel.shutdown();
 
   Future<T> _unary<T>(Future<T> Function(CallOptions options) call) async {

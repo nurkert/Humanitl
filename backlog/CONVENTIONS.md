@@ -1828,3 +1828,150 @@ Satz des Daemons im Blatt und der Entwurf bleibt stehen. Ein still gescheitertes
 Anlegen ist schlimmer als eines, das nie versucht wurde: Der Mensch geht in dem
 Glauben weg, die Regel gebe es. Der Host wird vorher mit `hostPatternProblem`
 geprüft, damit ein untauglicher Vorschlag gar nicht erst hinausgeht.
+
+### 4.17 Aus der Umsetzung des Sandbox-Bildschirms (HUM-040, 2026-09-04)
+
+Abweichungen von `backlog/sprint-3.md`, die dauerhaft gelten. Wo die
+Spezifikation anderes sagt, gilt dieser Abschnitt.
+
+**Die Einhängetabelle wird aus der Kommandozeile gelesen, nicht daneben
+geführt.** `daemon/crates/ipc/src/sandbox.rs` baut den Argumentvektor mit
+`SandboxProfile::to_bwrap_args` und liest die Tabelle anschließend aus genau
+diesem Vektor (`--ro-bind`, `--bind`, `--ro-bind-data`, `--tmpfs`, `--proc`,
+`--dev`, `--symlink`, bis zum ersten `--`). Eine zweite Buchführung aus den
+Abschnitten des Profils wäre die naheliegende Umsetzung und hätte den Fehler,
+den dieser Bildschirm nicht haben darf: Sie könnte von der Zeile abweichen, die
+wirklich startet. So ist ein Mount, der in der Zeile steht, zwangsläufig auch in
+der Tabelle. Die Spalte „Woher" ist die einzige Ableitung daneben; sie ist eine
+Zuordnung des Ziels und keine zweite Quelle.
+
+**Werte der Umgebung gehen nach einer Erlaubnisliste, nicht nach einer Liste
+verdächtiger Namen.** Die Spezifikation sieht einen Reveal-Toggle vor, der den
+maskierten Wert zeigt, und nennt als Regel die Endungen `_TOKEN`, `_KEY`,
+`_SECRET`, `PASSWORD`. Beides gilt nicht mehr.
+
+Die Endungsregel ist fail-open, und ihre Lücken sind die gefährlichen:
+`AWS_ACCESS_KEY_ID` endet auf `_ID`, `DATABASE_URL` trägt das Passwort in der
+URL, `GH_PAT`, `AUTHORIZATION` und `APIKEY` heißen nach gar nichts. Sie wäre
+auch nicht zu schließen: Zwei der drei Quellen der Umgebung sind offen und vom
+Menschen geschrieben — das `[env]` eines eigenen Profils und `sandbox.env` aus
+`config.toml`, und genau dort landet später die Zugangsdaten-Injektion. Über
+einem offenen Namensraum kann keine Namensregel vollständig sein.
+
+`humanitl_ipc::sandbox::VISIBLE_ENV` dreht die Richtung um: Gezeigt wird nur,
+was der Bildschirm als Beleg braucht — wohin der Agent darf (Proxy), wem er
+glaubt (Zertifikate), wo er steht (Pfade, Sprache, XDG) und was ihn steuert (die
+fünf Variablen des Shims, `HUMANITL_SESSION`, die zehn des Adapters). Jeder
+andere Wert bleibt zurück, auch ein harmloser. Damit ist eine neue Variable
+stumm statt versehentlich sichtbar, und die Vorgabe steht auf der sicheren Seite
+(4.13). Die Namen des Shims und des Adapters stehen als Konstanten und nicht als
+Text; wer eine umbenennt, bricht den Bau, statt sie still von der Liste zu
+nehmen. Kein Präfix: `OPENCODE_*` als Muster hieße, dass ein künftiges
+`OPENCODE_API_KEY` von selbst sichtbar wäre. Das Feld heißt deshalb
+`EnvVar.withheld` und nicht `secret`: Der Daemon behauptet nicht, den Wert
+beurteilt zu haben; er hat ihn nur nicht gebraucht.
+
+Aufgedeckt wird nichts. Die Oberfläche hat den Wert gar nicht, und ein Control,
+das es verspräche, wäre eine Lüge auf dem einen Bildschirm, der geglaubt werden
+muss. Die Hälfte der Zusage, die bleibt, ist die wichtigere: Ein
+zurückgehaltener Wert sieht nie aus wie ein leerer. Er steht als Punkte plus das
+Wort dafür in der Fehlerfarbe, eine wirklich leere Variable sagt „leer" im
+Klartext, und ein Satz über der Tabelle sagt, wonach gezeigt wird. Wer den Wert
+prüfen will, prüft ihn dort, wo er herkommt.
+
+**Die angezeigte Kommandozeile schwärzt dieselben Werte wie die Tabelle.** Die
+Zeile enthält `--setenv <KEY> <VALUE>` für jede Variable der Sandbox; ein
+Geheimnis, das die Umgebungstabelle zurückhält und die Zeile daneben
+ausschreibt, wäre zurückgehalten nur dem Namen nach — und die Zeile ist genau
+das Stück dieses Bildschirms, das ein Mensch in die Zwischenablage legt.
+`redact_hidden_values` setzt deshalb `<withheld>` an die Stelle jedes Werts, den
+auch die Tabelle zurückhält — dieselbe Regel und keine zweite daneben, sonst
+zeigte die Tabelle Punkte und die Zeile den Wert. Das ist zulässig, weil die
+Zeile Anzeige und
+nie Ausführung ist: Gestartet wird die Liste, die der Launcher beim Start selbst
+baut (`SandboxProfile::to_bwrap_args`). Die Einhängetabelle bleibt unberührt,
+weil `--setenv` hinter `--clearenv` steht und damit hinter allem, was sie liest.
+Gefunden hat das der Test `a_value_whose_name_ends_in_token_never_leaves_the_daemon`.
+
+**Ein erlaubter Name sagt nichts über den Wert darunter; die Herkunft
+entscheidet mit.** Die Erlaubnisliste allein löst nur die eine Hälfte: neue
+Namen sind stumm. Die andere Hälfte ist, dass `HTTP_PROXY` auf der Liste steht
+und in `sandbox.env` trotzdem `http://nutzer:passwort@host` lauten kann. Der
+Dienst führt deshalb die Herkunft durch die Zusammenführung mit — mitgeliefertes
+Profil, Adapter, Sitzung, und `User` für alles, was ein Mensch geschrieben hat
+(`[env]` eines eigenen Profils, `sandbox.env`) — in genau der Reihenfolge, in
+der `effective_env` zusammenführt, letzter Schreiber gewinnt. Gezeigt wird ein
+Wert nur, wenn **beides** gilt: Name auf der Liste **und** Herkunft nicht
+`User`. Eine Herkunft, die sich nicht zuordnen ließ, zählt als `User`; eine
+unbekannte Quelle ist der Fall, in dem die Vorgabe zurückhalten muss. Folge, die
+man kennen muss: Wer ein eigenes Sandbox-Profil schreibt, sieht dessen Werte
+nicht mehr im Bildschirm — Namen und Herkunft stehen weiter da. Das ist gewollt;
+sein Profil ist die Quelle, die er selbst lesen kann.
+
+**Was über den Socket hereinkommt, wird geprüft, bevor es irgendwo landet.**
+`Plan` und `Start` tragen Profilname und Projektverzeichnis. Beides bestimmt,
+was die Sandbox einhängt; der Socket ist die Vertrauensgrenze, nicht die
+Oberfläche.
+
+- **Der Profilname ist ein Name, kein Pfad.** Ohne Prüfung machte
+  `format!("{name}.toml")` aus `/tmp/evil` den Pfad `/tmp/evil.toml`, denn
+  `Path::join` ersetzt die Basis, sobald das Angehängte absolut ist, und `..`
+  liefe aus dem Suchpfad heraus. Geprüft wird mit
+  `humanitl_config::profile::check_name`, derselben Regel wie für die Profile
+  der Sitzung, und an der Stelle, die aus dem Namen einen Pfad macht.
+- **Das Projektverzeichnis kommt aus dem Heimatverzeichnis.** Drei Stufen: es
+  ist absolut, ohne `..`, vorhanden und nach dem Auflösen der Symlinks ein
+  Verzeichnis; es besteht `MountPolicy::check_work_dir`; und es liegt unter
+  `$HOME` oder ist genau das Verzeichnis aus `sandbox.work_dir`. Die dritte
+  Stufe ist nötig, weil die Denylist `/etc`, `/usr` und `/var/lib` nicht kennt —
+  ein Bildschirm, der „der Agent sieht nur dein Projekt" verspricht und `/etc`
+  zeigt, hat die Zusage gebrochen. Wer ein Projekt außerhalb des
+  Heimatverzeichnisses hat, schreibt es in `config.toml`; dort steht die
+  Erklärung eines Menschen und nicht der Wunsch eines Clients.
+- **Gemerkt wird nur ein Wunsch, der ganz durchkommt.** Ein halb übernommener
+  hinterließe einen Zustand, den niemand gewählt hat, und die Momentaufnahme
+  nach einem abgelehnten Wunsch zeigt den alten Stand, nie den abgelehnten.
+
+**Der Zustand kommt vom gehaltenen Handle, `agent_running` von der Lebendigkeit
+des Kindes.** Eine Sitzung, deren Agent sich beendet hat, läuft weiter: Sie hat
+eine Kennung, eine Startzeit und einen Stopp, der noch etwas tut. Beides zu
+vermengen meldete `stopped` mit einer Startzeit daneben.
+
+**Das Ziel eines Verweises ist kein Wirtspfad.** `Mount.src` heißt in der
+Oberfläche „auf diesem Rechner"; bei `--symlink` stand dort das Sprungziel, also
+ein Pfad **in** der Sandbox. `Mount.link_target` (Feld 5) trägt es jetzt, `src`
+bleibt leer, und die Tabelle schreibt „Verweis auf {target}" in die Spalte, die
+die Art nennt.
+
+**Der gewählte Projektordner gilt für die Sitzung, nicht für `config.toml`.**
+Die Spezifikation schreibt ihn über `configProvider.set(...)` fest. `SetConfig`
+antwortet bis HUM-069 mit `UNIMPLEMENTED`, und ein zweiter Schreibweg neben dem
+Einstellungs-Bildschirm wäre teurer als die Abweichung. Der Wunsch reist
+stattdessen in `SandboxRequest.Plan` und `SandboxRequest.Start` mit; der Dienst
+merkt ihn sich für die laufende Sitzung, und die Rangfolge ist: was läuft, vor
+dem, was gewählt wurde, vor dem, was konfiguriert ist. Mit HUM-069 wandert die
+Wahl in die Konfiguration, und diese Merkstelle entfällt.
+
+**`Sandbox(Plan)` ist die neue Operation, mit der die Oberfläche fragt, bevor
+sie handelt.** Sie liefert dieselbe Momentaufnahme wie `Status` — Einhängungen,
+Umgebung, Kommandozeile —, aber für ein Projektverzeichnis, das noch nicht gilt.
+Ohne sie müsste die Oberfläche den Satz „Der Agent sieht nur `/work` = …" selbst
+zusammensetzen, also genau die Fachlogik führen, die ADR-018 im Daemon haben
+will.
+
+**Der Isolations-Reiter und das Terminal sind erklärte Platzhalter.** Beide
+sagen, was dort stehen wird und was bis dahin an ihrer Stelle den Beleg trägt
+(die Kommandozeile). Ein leerer Kasten liest sich als Fehler, und ein halbes
+Terminal wäre schlimmer als keines (HUM-041, HUM-042).
+
+**Der geteilte Aufteiler zwischen Terminal und Reitern entfällt vorerst.**
+`HResizablePanes` teilt nur waagerecht; ein senkrechter Aufteiler gehört in
+`app/packages/ui` und nicht in dieses Feature. Die Aufteilung steht deshalb fest
+bei 60 zu 40 — derselben Aufteilung, die die Spezifikation als Startwert nennt,
+damit die Panes nicht springen, sobald HUM-042 das Terminal füllt.
+
+**Was `app/packages/ui` für diesen Bildschirm fehlt.** Ein Reiter-Streifen, eine
+Tabelle, ein Zustandspunkt, ein senkrechter Aufteiler und markierbarer Text ohne
+Material. Alle fünf stehen vorerst in `app/lib/features/sandbox`, gebaut aus den
+Teilen des Pakets (`HButton`, `HAnimatedFill`, `HHairline`, die Token) und ohne
+einen einzigen Import von `package:shadcn_flutter`.

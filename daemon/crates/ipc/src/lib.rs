@@ -18,6 +18,8 @@
 //!   Registry und Halte-Warteschlange (HUM-018),
 //! - [`rules`] mit dem Regel-RPC über dem Regelspeicher des Proxys
 //!   (HUM-027),
+//! - [`sandbox`] mit der `Sandbox`-RPC: Einhängungen, Umgebung,
+//!   Kommandozeile, Start und Stopp (HUM-040),
 //! - [`client`] mit dem Gegenstück für CLI, Oberfläche und Tests,
 //! - [`server_stub`] mit dem Port [`DaemonApi`] und dem tonic-Dienst darüber,
 //! - [`fake`] mit einem Daemon, der statt eines Proxys eine aufgezeichnete
@@ -39,13 +41,15 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `2` seit `ProbeLlm` samt `Rule.passthrough_llm` und
+/// `3` seit der Sandbox-Momentaufnahme mit `Mount`, `EnvVar`, `argv_preview`
+/// und `agent_running` samt der Operation `SandboxRequest.Plan` (HUM-040);
+/// `2` war `ProbeLlm` samt `Rule.passthrough_llm` und
 /// `RuleMatcher.path_prefixes` (HUM-039); `1` war `FlowDetail.findings_truncated`
 /// (HUM-026, Feld 10). Die
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 2;
+pub const PROTO_MINOR: u32 = 3;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
@@ -74,6 +78,7 @@ pub mod convert;
 pub mod domains;
 pub mod fake;
 pub mod rules;
+pub mod sandbox;
 pub mod server;
 pub mod server_stub;
 pub mod validate;
@@ -82,6 +87,7 @@ pub use crate::client::connect;
 pub use crate::convert::diagnostic_to_proto;
 pub use crate::domains::DomainTable;
 pub use crate::rules::RulesService;
+pub use crate::sandbox::SandboxService;
 pub use crate::server::{IpcServer, bind_socket, serve};
 pub use crate::server_stub::{
     BoxStream, DaemonApi, DaemonService, diagnostic_from_status, diagnostic_to_status,
