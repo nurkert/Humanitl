@@ -1026,13 +1026,7 @@ pub fn flow_event_to_proto(
         FlowEvent::Failed { error, .. } => Event::Failed(v1::flow_event::Failed {
             flow_id,
             error: upstream_error_to_proto(*error) as i32,
-            resolved_ip: match error {
-                UpstreamError::PrivateAddress(ip) => ip.to_string(),
-                UpstreamError::Dns
-                | UpstreamError::Connect
-                | UpstreamError::Tls
-                | UpstreamError::Timeout => String::new(),
-            },
+            resolved_ip: resolved_ip(*error),
         }),
         FlowEvent::TimedOut { .. } => Event::TimedOut(v1::FlowRef { flow_id }),
         FlowEvent::Recorded { .. } => Event::Recorded(v1::FlowRef { flow_id }),
@@ -1054,10 +1048,55 @@ pub fn flow_event_to_proto(
         FlowEvent::Diagnostic { diagnostic, .. } => {
             Event::Diagnostic(diagnostic_to_proto(diagnostic))
         }
+        // Die Bitte des Agenten gehört zu keinem Flow: Sie hat ihre eigene
+        // Kennung, und `flow_id` bleibt leer (HUM-073).
+        FlowEvent::AgentAsk { .. } => Event::AgentAsk(agent_ask_to_proto(event)),
     };
     v1::FlowEvent {
         at: Some(timestamp(event.at().unwrap_or_else(SystemTime::now))),
         event: Some(wire),
+    }
+}
+
+/// Die aufgelöste Adresse eines gescheiterten Flows, als Text.
+///
+/// Nur [`UpstreamError::PrivateAddress`] trägt eine; jeder andere Fehler lässt
+/// das Feld leer, statt eine Adresse zu erfinden, die niemand gesehen hat.
+fn resolved_ip(error: UpstreamError) -> String {
+    match error {
+        UpstreamError::PrivateAddress(ip) => ip.to_string(),
+        UpstreamError::Dns
+        | UpstreamError::Connect
+        | UpstreamError::Tls
+        | UpstreamError::Timeout => String::new(),
+    }
+}
+
+/// Die Wire-Form einer Bitte des Agenten (HUM-073).
+///
+/// Der Text ist im Proxy schon gesäubert (`sanitize_note`); hier wird nichts
+/// mehr daran geändert, damit es nur eine Stelle gibt, die das tut. Ein
+/// fehlender Vorschlag reist als leere Zeichenkette: `proto3` kennt kein
+/// `optional string` ohne zusätzliche Kennzeichnung, und leer heißt hier „es
+/// stand keine URL im Text".
+fn agent_ask_to_proto(event: &FlowEvent) -> v1::flow_event::AgentAsk {
+    let FlowEvent::AgentAsk {
+        ask_id,
+        text,
+        suggested_host,
+        suggested_path,
+        ..
+    } = event
+    else {
+        // Der Aufrufer prüft die Variante; ein anderes Ereignis kommt hier
+        // nicht an, und eine leere Bitte ist die harmlose Antwort darauf.
+        return v1::flow_event::AgentAsk::default();
+    };
+    v1::flow_event::AgentAsk {
+        ask_id: ask_id.to_string(),
+        text: text.clone(),
+        suggested_host: suggested_host.clone().unwrap_or_default(),
+        suggested_path: suggested_path.clone().unwrap_or_default(),
     }
 }
 

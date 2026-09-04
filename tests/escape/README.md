@@ -249,6 +249,7 @@ rot — sie ist der Grund, warum sie existiert.
 | Suite | Fälle | Wartet auf |
 |---|---|---|
 | ESC-3 | `dns_not_before_decision` | HUM-024 (Auflösung erst nach der Freigabe, ADR-006) plus ein host-seitiger DNS-Beobachter in `run.sh` |
+| ESC-3 | `meta_no_dns_lookup` | denselben DNS-Beobachter; dass der reservierte Name `humanitl.internal` nie aufgelöst wird, zählt bis dahin der Mock-Resolver in `daemon/crates/proxy/tests/meta.rs` (HUM-073) |
 | ESC-5 | 6 Fälle Dateisystem, Terminal, Audit | HUM-043 (Symlinks, Maskierung), HUM-050 (OSC 52/8), HUM-029 (Hash-Kette) |
 
 ### Grün, und warum jetzt schon

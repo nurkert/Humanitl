@@ -578,9 +578,15 @@ impl Writer {
                     rusqlite::params![flow_id.to_string(), millis(*at)],
                 )
             }
+            // Nichts davon gehört zu einer Zeile in `flows`: Der Zähler
+            // eines Antwortstücks steht dort schon, ein Rückstand ist kein
+            // Zustand, ein Befund hat seine eigene Tabelle, und die Bitte des
+            // Agenten aus `humanitl.internal/ask` ist gar kein Flow
+            // (HUM-073).
             FlowEvent::ResponseChunk { .. }
             | FlowEvent::Lagged { .. }
-            | FlowEvent::Diagnostic { .. } => Ok(()),
+            | FlowEvent::Diagnostic { .. }
+            | FlowEvent::AgentAsk { .. } => Ok(()),
         }
     }
 

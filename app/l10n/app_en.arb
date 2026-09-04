@@ -1184,5 +1184,52 @@
     "placeholders": {"name": {"type": "String"}}
   },
   "historyExportNothing": "Nothing matched, so nothing was written.",
-  "@historyExportNothing": {"description": "The set to export turned out to be empty; no dialog was ever opened, so the sentence must not claim one was closed."}
+  "@historyExportNothing": {"description": "The set to export turned out to be empty; no dialog was ever opened, so the sentence must not claim one was closed."},
+  "interceptAgentAskTitle": "The agent is asking for something",
+  "@interceptAgentAskTitle": {"description": "Headline of the card above the queue (HUM-073, ADR-014). A request through humanitl.internal/ask, never an action: it holds nothing up and creates no rule."},
+  "interceptAgentAskFrom": "Agent",
+  "@interceptAgentAskFrom": {"description": "Badge on the agent's card, in the violet of the passthrough rail. It says who wrote the text below, so a request can never be read as a message from Humanitl itself."},
+  "interceptAgentAskDismiss": "Dismiss the request",
+  "@interceptAgentAskDismiss": {"description": "Screen-reader label of the close affordance on the agent's card. Dismissing answers nothing and changes nothing in the daemon; it takes the card off this screen."},
+  "interceptAgentAskCreateRule": "Create rule",
+  "@interceptAgentAskCreateRule": {"description": "Opens the rule sheet with the host prefilled where one was found in the text. It opens a form, it does not write a rule."},
+  "interceptAgentAskSemantics": "The agent asks: {text}",
+  "@interceptAgentAskSemantics": {
+    "description": "What a screen reader says for the whole card. The prefix names the source before the words themselves are read out, so text written by the agent is never heard as text of the application.",
+    "placeholders": {"text": {"type": "String"}}
+  },
+  "interceptAgentAskRuleTitle": "Rule from the request",
+  "@interceptAgentAskRuleTitle": {"description": "Title of the sheet the agent's card opens. Everything in it is a draft until the button is pressed."},
+  "interceptAgentAskRuleClose": "Close the sheet",
+  "@interceptAgentAskRuleClose": {"description": "Screen-reader label of the close affordance of the rule sheet."},
+  "interceptAgentAskRuleHost": "Host",
+  "@interceptAgentAskRuleHost": {"description": "Label of the host field. It is prefilled from the request when the daemon found a URL in it, and it stays editable: the suggestion comes from text the agent wrote."},
+  "interceptAgentAskRuleAllow": "Allow",
+  "@interceptAgentAskRuleAllow": {"description": "The rule lets matching requests through without asking."},
+  "interceptAgentAskRuleBlock": "Block",
+  "@interceptAgentAskRuleBlock": {"description": "The rule refuses matching requests without asking."},
+  "interceptAgentAskRuleSession": "This session",
+  "@interceptAgentAskRuleSession": {"description": "The rule ends with the session and is never written to rules.yaml."},
+  "interceptAgentAskRuleForever": "Permanently",
+  "@interceptAgentAskRuleForever": {"description": "The rule is written to rules.yaml and outlives the session."},
+  "interceptAgentAskRuleCreate": "Create rule",
+  "@interceptAgentAskRuleCreate": {"description": "Writes the rule and takes the request off the queue. The only step of this sheet that changes anything."},
+  "interceptAgentAskRuleCancel": "Cancel",
+  "@interceptAgentAskRuleCancel": {"description": "Closes the sheet and writes nothing. The request stays on the queue."},
+  "interceptAgentAskRulePath": "Path",
+  "@interceptAgentAskRulePath": {"description": "Label of the path field of the rule sheet. It is prefilled from the URL the agent named, so the rule stays as narrow as the request was; empty means every path."},
+  "interceptAgentAskRuleAction": "What the rule does",
+  "@interceptAgentAskRuleAction": {"description": "Caption over the action choice. Nothing is preselected: the field that decides whether traffic flows is picked by hand, because the request it came from was written by a program nobody trusts."},
+  "interceptAgentAskRuleChoose": "Choose allow or block before the rule can be created.",
+  "@interceptAgentAskRuleChoose": {"description": "Why the create button is off: no action has been chosen yet."},
+  "interceptAgentAskRuleWholeHost": "Without a path this rule covers every method and every path of {host}.",
+  "@interceptAgentAskRuleWholeHost": {
+    "description": "Warning in the rule sheet while the path field is empty. The agent asked for one address; a rule without a path is much wider than the request, and that has to be read before it is created.",
+    "placeholders": {"host": {"type": "String"}}
+  },
+  "interceptAgentAskRuleFailed": "The rule was not created: {why}",
+  "@interceptAgentAskRuleFailed": {
+    "description": "The daemon refused to write the rule. Its own sentence is shown, because a rule that silently fails to appear leaves the human believing it exists.",
+    "placeholders": {"why": {"type": "String"}}
+  }
 }
