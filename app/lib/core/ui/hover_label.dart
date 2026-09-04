@@ -18,7 +18,7 @@ class HoverLabel extends StatefulWidget {
   const HoverLabel({
     required this.label,
     required this.child,
-    this.delay = const Duration(milliseconds: 350),
+    this.delay = HMotion.hoverLabel,
     super.key,
   });
 
@@ -29,6 +29,9 @@ class HoverLabel extends StatefulWidget {
   final Widget child;
 
   /// How long the pointer has to rest before the label appears.
+  ///
+  /// [HMotion.hoverLabel] by default; a duration never comes from a literal
+  /// (`docs/UX.md` 2.1).
   final Duration delay;
 
   @override

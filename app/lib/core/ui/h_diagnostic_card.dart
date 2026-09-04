@@ -89,10 +89,15 @@ class HDiagnosticCard extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         mainAxisSize: MainAxisSize.min,
                         children: <Widget>[
-                          Row(
+                          // `Wrap` und nicht `Row`: bei doppelter
+                          // Textskalierung passen Code und Schweregrad nicht
+                          // mehr nebeneinander, und eine Zeile schnitte sie
+                          // ab, statt umzubrechen (`docs/UX.md` 6).
+                          Wrap(
+                            spacing: tokens.spacing.x2,
+                            runSpacing: tokens.spacing.x1,
                             children: <Widget>[
                               HBadge(text: code, color: color, mono: true),
-                              SizedBox(width: tokens.spacing.x2),
                               HBadge(text: severityLabel, color: color),
                             ],
                           ),
@@ -143,8 +148,10 @@ class HDiagnosticCard extends StatelessWidget {
                             SizedBox(height: tokens.spacing.x3),
                             Text(
                               docsUrl,
+                              // Der Akzent ist eine Fläche; ein Wort darauf
+                              // nimmt seine Textvariante (`docs/UX.md` 6).
                               style: tokens.typography.mono12.tinted(
-                                tokens.colors.accent,
+                                tokens.colors.accentText,
                               ),
                             ),
                           ],

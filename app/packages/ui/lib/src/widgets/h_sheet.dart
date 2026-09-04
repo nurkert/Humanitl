@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import '../theme/h_theme.dart';
@@ -14,6 +15,12 @@ import 'h_icon_button.dart';
 /// A sheet never asks a question that would block the queue — that is what the
 /// inspector pane is for. It is a widget, not a route, so the shell decides how
 /// it is mounted.
+///
+/// Das Blatt hält den Fokus bei sich und schließt auf `Escape`, sobald
+/// [onClose] gesetzt ist. Ohne beides ist es für die Tastatur eine Sackgasse:
+/// `Tab` liefe durch den Bildschirm dahinter, den das Blatt gerade verdeckt,
+/// und der einzige Weg heraus wäre das Schließkreuz mit der Maus
+/// (`docs/UX.md` 5.1). Denselben Weg geht `HModal`.
 class HSheet extends StatelessWidget {
   /// Creates a sheet.
   const HSheet({
@@ -47,6 +54,29 @@ class HSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final VoidCallback? close = onClose;
+    return Shortcuts(
+      shortcuts: <ShortcutActivator, Intent>{
+        if (close != null)
+          const SingleActivator(LogicalKeyboardKey.escape):
+              const DismissIntent(),
+      },
+      child: Actions(
+        actions: <Type, Action<Intent>>{
+          if (close != null)
+            DismissIntent: CallbackAction<DismissIntent>(
+              onInvoke: (DismissIntent intent) {
+                close();
+                return null;
+              },
+            ),
+        },
+        child: FocusScope(autofocus: true, child: _panel(context)),
+      ),
+    );
+  }
+
+  Widget _panel(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     final VoidCallback? onClose = this.onClose;
     return SizedBox(

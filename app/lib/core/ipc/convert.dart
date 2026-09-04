@@ -250,6 +250,7 @@ extension FlowPageToDomain on pb.FlowPage {
     flows: List<Flow>.unmodifiable(flows.map((f) => f.toDomain())),
     nextCursor: nextCursor,
     total: total.toInt(),
+    capped: capped,
   );
 }
 

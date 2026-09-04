@@ -9,6 +9,8 @@ import '../tokens/tokens.dart';
 import '../tokens/typography.dart';
 import '../widgets/h_badge.dart';
 import '../widgets/h_button.dart';
+import '../widgets/h_checkbox.dart';
+import '../widgets/h_focus_ring.dart';
 import '../widgets/h_glyph.dart';
 import '../widgets/h_hairline.dart';
 import '../widgets/h_icon_button.dart';
@@ -17,8 +19,11 @@ import '../widgets/h_modal.dart';
 import '../widgets/h_panel.dart';
 import '../widgets/h_pill.dart';
 import '../widgets/h_row.dart';
+import '../widgets/h_segmented.dart';
 import '../widgets/h_sheet.dart';
+import '../widgets/h_skeleton.dart';
 import '../widgets/h_state_glyph.dart';
+import '../widgets/h_text_field.dart';
 
 /// Every token and every wrapper of this package on one page, in both themes.
 ///
@@ -42,6 +47,21 @@ class _HGalleryPageState extends State<HGalleryPage> {
   bool _modalVisible = false;
   bool _sheetVisible = true;
   int _taps = 0;
+  bool _loading = true;
+  bool _checked = true;
+  String _segment = 'allow';
+  final Set<String> _chips = <String>{'GET'};
+  final TextEditingController _text = TextEditingController(
+    text: '**.npmjs.org',
+  );
+  final TextEditingController _empty = TextEditingController();
+
+  @override
+  void dispose() {
+    _text.dispose();
+    _empty.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -135,12 +155,18 @@ class _HGalleryPageState extends State<HGalleryPage> {
         children: <Widget>[
           _section(tokens, 'Neutral ladder', _neutralSwatches(tokens)),
           _section(tokens, 'State colours', _stateSwatches(tokens)),
+          _section(tokens, 'State colours as text', _stateTextRows(tokens)),
           _section(tokens, 'Type scale', _typeScale(tokens)),
           _section(tokens, 'Buttons', _buttons(tokens)),
           _section(tokens, 'Release valve', _pills(tokens)),
           _section(tokens, 'Badges', _badges(tokens)),
           _section(tokens, 'State glyphs', _glyphs(tokens)),
           _section(tokens, 'Rows', _rows(tokens)),
+          _section(tokens, 'Row densities and slots', _rowVariants(tokens)),
+          _section(tokens, 'Focus ring', _focusRings(tokens)),
+          _section(tokens, 'Form controls', _formControls(tokens)),
+          _section(tokens, 'Waiting', _waiting(tokens)),
+          _section(tokens, 'Glyphs', _allGlyphs(tokens)),
           _section(tokens, 'Panel', _panel(tokens)),
           _section(tokens, 'Sheet and modal', _overlays(tokens)),
         ],
@@ -383,6 +409,40 @@ class _HGalleryPageState extends State<HGalleryPage> {
               HMethodBadge(method: method),
           ],
         ),
+        const SizedBox(height: HSpace.x2),
+        Text(
+          'neutral, for lists: fg1 on bg2 (docs/UX.md 3.3, rule 4)',
+          style: tokens.typography.mono11.tinted(tokens.colors.fg2),
+        ),
+        const SizedBox(height: HSpace.x1),
+        Wrap(
+          spacing: HSpace.x2,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: <Widget>[
+            for (final String method in <String>[
+              'GET',
+              'POST',
+              'PUT',
+              'DELETE',
+              'PROPFIND',
+            ])
+              HMethodBadge(method: method, neutral: true),
+          ],
+        ),
+        const SizedBox(height: HSpace.x3),
+        Wrap(
+          spacing: HSpace.x2,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: <Widget>[
+            HBadge(
+              text: '3 findings',
+              color: tokens.state.error,
+              onTap: () => setState(() => _taps++),
+              semanticsLabel: 'three findings, open them',
+            ),
+            const HBadge(text: 'tls 1.3', mono: true),
+          ],
+        ),
       ],
     );
   }
@@ -431,6 +491,399 @@ class _HGalleryPageState extends State<HGalleryPage> {
               ),
           ],
         ),
+      ],
+    );
+  }
+
+  /// Fläche gegen Text: dieselbe Zustandsfarbe zweimal, links als Tönung mit
+  /// dem Wort darauf, rechts als Fläche. Die Zahl darunter ist der gemessene
+  /// Kontrast des Wortes auf seiner eigenen Tönung.
+  Widget _stateTextRows(HTokens tokens) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        for (final HFlowState state in HFlowState.values)
+          Padding(
+            padding: const EdgeInsets.only(bottom: HSpace.x2),
+            child: Row(
+              children: <Widget>[
+                SizedBox(
+                  width: 132,
+                  child: Text(
+                    state.name,
+                    style: tokens.typography.mono11.tinted(tokens.colors.fg2),
+                  ),
+                ),
+                HBadge(
+                  text: state.name,
+                  color: tokens.stateColor(state),
+                  textColor: tokens.stateTextColor(state),
+                ),
+                const SizedBox(width: HSpace.x3),
+                Text(
+                  'area ${HColorDerivation.toHex(tokens.stateColor(state))} · '
+                  'text ${HColorDerivation.toHex(tokens.stateTextColor(state))}'
+                  ' · '
+                  '${HColorDerivation.worstTextContrast(tokens.stateTextColor(state), tokens.stateColor(state), tokens.colors.ladder).toStringAsFixed(2)}:1',
+                  style: tokens.typography.mono11.tinted(tokens.colors.fg1),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// Die drei Dichten, der Aktionsslot, das Zustands-Glyph, die getönte Rail
+  /// und die Mehrfachauswahl.
+  Widget _rowVariants(HTokens tokens) {
+    Widget labelled(String label, Widget row) => Padding(
+      padding: const EdgeInsets.only(bottom: HSpace.x2),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            label,
+            style: tokens.typography.mono11.tinted(tokens.colors.fg2),
+          ),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              border: Border.all(color: tokens.colors.line),
+            ),
+            child: row,
+          ),
+        ],
+      ),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        labelled(
+          'row 36 · state glyph · tinted rail · action slot',
+          HRow(
+            state: HFlowState.held,
+            tintedRail: true,
+            onTap: () => setState(() => _taps++),
+            stateGlyph: const HStateGlyph(
+              state: HFlowState.held,
+              progress: 0.4,
+            ),
+            leading: const HMethodBadge(method: 'GET', neutral: true),
+            title: const Text('registry.npmjs.org'),
+            trailing: const HBadge(text: '1:47'),
+            actionSlot: HIconButton(
+              glyph: HGlyph.shieldX,
+              onPressed: () => setState(() => _taps++),
+              semanticsLabel: 'block',
+            ),
+            semanticsLabel: 'held flow',
+            semanticsValue: '1:47 left',
+          ),
+        ),
+        labelled(
+          'rowHistory 28 · full saturation',
+          HRow(
+            state: HFlowState.blocked,
+            minHeight: HSize.rowHistory,
+            onTap: () => setState(() => _taps++),
+            stateGlyph: const HStateGlyph(state: HFlowState.blocked),
+            leading: const HMethodBadge(method: 'DELETE', neutral: true),
+            title: const Text('telemetry.example.com'),
+            semanticsLabel: 'blocked flow',
+          ),
+        ),
+        labelled(
+          'rowBody 24',
+          HRow(
+            state: HFlowState.allowed,
+            minHeight: HSize.rowBody,
+            title: Text(
+              '{"token": "…"}',
+              style: tokens.typography.mono12.tinted(tokens.colors.fg1),
+            ),
+            semanticsLabel: 'body line',
+          ),
+        ),
+        labelled(
+          'in a multi selection, without the cursor',
+          Column(
+            children: <Widget>[
+              HRow(
+                state: HFlowState.held,
+                inSelection: true,
+                tintedRail: true,
+                onTap: () => setState(() => _taps++),
+                stateGlyph: const HStateGlyph(state: HFlowState.held),
+                title: const Text('api.github.com'),
+                semanticsLabel: 'member of the selection',
+              ),
+              HRow(
+                state: HFlowState.held,
+                inSelection: true,
+                selected: true,
+                tintedRail: true,
+                onTap: () => setState(() => _taps++),
+                stateGlyph: const HStateGlyph(state: HFlowState.held),
+                title: const Text('api.github.com'),
+                semanticsLabel: 'member carrying the cursor',
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Der Fokusring an jeder Form, die es gibt: reservierter Platz um ein
+  /// Control, auf der Kante einer Zeile.
+  Widget _focusRings(HTokens tokens) {
+    return Wrap(
+      spacing: HSpace.x4,
+      runSpacing: HSpace.x3,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: <Widget>[
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              'button, focused',
+              style: tokens.typography.mono11.tinted(tokens.colors.fg2),
+            ),
+            HButton(
+              variant: HButtonVariant.primary,
+              preview: HButtonPreview.focused,
+              onPressed: () => setState(() => _taps++),
+              child: const Text('Send'),
+            ),
+          ],
+        ),
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              'ring around a control',
+              style: tokens.typography.mono11.tinted(tokens.colors.fg2),
+            ),
+            HFocusRing(
+              visible: true,
+              radius: tokens.radii.control,
+              child: HBadge(text: 'chip', color: tokens.colors.fg1),
+            ),
+          ],
+        ),
+        SizedBox(
+          width: 260,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text(
+                'ring on the edge of a row',
+                style: tokens.typography.mono11.tinted(tokens.colors.fg2),
+              ),
+              HFocusRing.inline(
+                visible: true,
+                child: HRow(
+                  state: HFlowState.allowed,
+                  title: const Text('api.github.com'),
+                  semanticsLabel: 'focused row',
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Eingabefeld, Segmente, Chips und Kästchen, jeweils in jedem Zustand.
+  Widget _formControls(HTokens tokens) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        SizedBox(
+          width: 320,
+          child: HTextField(controller: _text, semanticsLabel: 'host pattern'),
+        ),
+        const SizedBox(height: HSpace.x2),
+        SizedBox(
+          width: 320,
+          child: HTextField(
+            controller: _empty,
+            semanticsLabel: 'port',
+            hint: '443',
+            digitsOnly: true,
+          ),
+        ),
+        const SizedBox(height: HSpace.x2),
+        SizedBox(
+          width: 320,
+          child: HTextField(
+            controller: _text,
+            semanticsLabel: 'bundled rule',
+            enabled: false,
+          ),
+        ),
+        const SizedBox(height: HSpace.x3),
+        HSegmented<String>(
+          selected: _segment,
+          onSelect: (String value) => setState(() => _segment = value),
+          options: <HSegmentOption<String>>[
+            HSegmentOption<String>(
+              value: 'allow',
+              label: 'allow',
+              leading: HGlyphIcon(
+                HGlyph.arrowUpRight,
+                size: 12,
+                color: tokens.stateTextColor(HFlowState.allowed),
+              ),
+            ),
+            HSegmentOption<String>(
+              value: 'block',
+              label: 'block',
+              leading: HGlyphIcon(
+                HGlyph.shieldX,
+                size: 12,
+                color: tokens.stateTextColor(HFlowState.blocked),
+              ),
+            ),
+            HSegmentOption<String>(
+              value: 'redact',
+              label: 'redact',
+              leading: HGlyphIcon(
+                HGlyph.redactBar,
+                size: 12,
+                color: tokens.stateTextColor(HFlowState.passthroughLlm),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: HSpace.x2),
+        HSegmented<String>(
+          selected: _segment,
+          enabled: false,
+          onSelect: (String value) => setState(() => _segment = value),
+          options: const <HSegmentOption<String>>[
+            HSegmentOption<String>(value: 'allow', label: 'allow'),
+            HSegmentOption<String>(value: 'block', label: 'block'),
+          ],
+        ),
+        const SizedBox(height: HSpace.x3),
+        HChoiceChips<String>(
+          selected: _chips,
+          onToggle: (String value) => setState(() {
+            if (!_chips.remove(value)) {
+              _chips.add(value);
+            }
+          }),
+          options: const <HSegmentOption<String>>[
+            HSegmentOption<String>(value: 'GET', label: 'GET'),
+            HSegmentOption<String>(value: 'POST', label: 'POST'),
+            HSegmentOption<String>(value: 'DELETE', label: 'DELETE'),
+          ],
+        ),
+        const SizedBox(height: HSpace.x3),
+        SizedBox(
+          width: 420,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              HCheckbox(
+                label: 'Remember for this session',
+                value: _checked,
+                onChanged: (bool value) => setState(() => _checked = value),
+              ),
+              HCheckbox(
+                label: 'Keep the rule after the session ends',
+                hint:
+                    'A rule that outlives the session is one nobody sees '
+                    'again.',
+                value: !_checked,
+                onChanged: (bool value) => setState(() => _checked = !value),
+              ),
+              HCheckbox(
+                label: 'Bundled rule',
+                value: true,
+                enabled: false,
+                onChanged: (bool value) {},
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Das Skelett in den drei Dichten und der Wartezustand darüber.
+  Widget _waiting(HTokens tokens) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        HButton(
+          onPressed: () => setState(() => _loading = !_loading),
+          child: Text(_loading ? 'Answer arrives' : 'Wait again'),
+        ),
+        const SizedBox(height: HSpace.x3),
+        SizedBox(
+          width: 360,
+          child: HWait(
+            loading: _loading,
+            skeleton: const HSkeleton(rows: 3),
+            child: Text(
+              'three rules matched',
+              style: tokens.typography.ui13.tinted(tokens.colors.fg0),
+            ),
+          ),
+        ),
+        const SizedBox(height: HSpace.x3),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            for (final (String label, double height) in <(String, double)>[
+              ('row 36', HSize.row),
+              ('rowHistory 28', HSize.rowHistory),
+              ('rowBody 24', HSize.rowBody),
+            ])
+              SizedBox(
+                width: 200,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      label,
+                      style: tokens.typography.mono11.tinted(tokens.colors.fg2),
+                    ),
+                    HSkeleton(rows: 3, rowHeight: height),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  /// Jedes Glyph des Systems, auch die fünf, die die Screens bisher selbst
+  /// gemalt haben.
+  Widget _allGlyphs(HTokens tokens) {
+    return Wrap(
+      spacing: HSpace.x4,
+      runSpacing: HSpace.x3,
+      children: <Widget>[
+        for (final HGlyph glyph in HGlyph.values)
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              HGlyphIcon(glyph, size: 20, color: tokens.colors.fg1),
+              const SizedBox(height: HSpace.x1),
+              Text(
+                glyph.name,
+                style: tokens.typography.mono11.tinted(tokens.colors.fg2),
+              ),
+            ],
+          ),
       ],
     );
   }

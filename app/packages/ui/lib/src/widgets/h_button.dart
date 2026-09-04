@@ -2,10 +2,13 @@ import 'package:flutter/widgets.dart';
 
 import '../theme/h_theme.dart';
 import '../tokens/colors.dart';
+import '../tokens/flow_state.dart';
 import '../tokens/motion.dart';
 import '../tokens/spacing.dart';
 import '../tokens/tokens.dart';
 import '../tokens/typography.dart';
+import 'h_animated_fill.dart';
+import 'h_focus_ring.dart';
 
 /// The four button roles. There is no fifth.
 enum HButtonVariant {
@@ -26,7 +29,11 @@ enum HButtonVariant {
   danger,
 }
 
-/// Button heights. Both clear the 28 px hit-target minimum.
+/// Button-Mindesthöhen. Beide erreichen das 28-px-Ziel des Designs.
+///
+/// Mindesthöhen und keine festen Höhen: bei `TextScaler.linear(2.0)` misst
+/// `ui13` allein 40 px Zeilenhöhe, und eine feste Höhe schluckte den Überlauf
+/// still (`docs/UX.md` 6 und 9, Punkt 18).
 enum HButtonSize {
   /// 28 px, the density of a row or a toolbar.
   sm,
@@ -34,8 +41,9 @@ enum HButtonSize {
   /// 32 px, for a standalone action.
   md;
 
-  /// Height in logical pixels.
-  double get height => this == HButtonSize.sm ? HSize.hitMin : 32;
+  /// Mindesthöhe in logischen Pixeln.
+  double get minHeight =>
+      this == HButtonSize.sm ? HSize.hitMin : HSize.hitDecision.height;
 
   /// Horizontal padding.
   double get padding => this == HButtonSize.sm ? HSpace.x2 + 2 : HSpace.x3;
@@ -67,15 +75,17 @@ const double _dangerRestAlpha = HColors.tintAlpha;
 /// the same fill. The steps are as small as they can be while still visible:
 /// the label, drawn in the blocked hue, has to keep 3:1 over the fill on every
 /// surface of both ladders, and the light pressed fill is the tight case.
-const double _dangerHoverAlpha = 0.14;
+const double _dangerHoverAlpha = HColors.fillHoverAlpha;
 
 /// Area alpha of the blocked hue behind a pressed danger button.
-const double _dangerPressedAlpha = 0.18;
+const double _dangerPressedAlpha = HColors.fillPressedAlpha;
 
 /// A button.
 ///
 /// Hover, press and focus are all rendered; the press fill takes
 /// [HMotion.press], which is the only feedback the design allows itself.
+/// Der Fokus kommt als [HFocusRing]: zwei Pixel Akzent außerhalb des eigenen
+/// Rahmens, in einem Frame, nie als umgefärbter Rahmen (`docs/UX.md` 6).
 class HButton extends StatefulWidget {
   /// Creates a button whose label is [child].
   const HButton({
@@ -161,12 +171,18 @@ class _HButtonState extends State<HButton> {
         final double hoverStep = tokens.brightness == Brightness.dark
             ? -0.04
             : 0.04;
+        // Nicht [HSurfaceColors.accent], sondern die Füllung: Weiß auf dem
+        // hellen Akzent misst 3,73:1, und der Ruhezustand ist der Normalfall
+        // des einen gefüllten Controls je Bildschirm. Die Füllung weicht
+        // zurück, bis [HSurfaceColors.onAccent] 4,5:1 erreicht; im dunklen
+        // Theme ist sie der Akzent selbst (`docs/UX.md` 6).
+        final Color fill = c.accentFill;
         return _HButtonPalette(
-          background: c.accent,
-          hover: HColorDerivation.darken(c.accent, hoverStep),
-          pressed: HColorDerivation.darken(c.accent, 0.06),
+          background: fill,
+          hover: HColorDerivation.darken(fill, hoverStep),
+          pressed: HColorDerivation.darken(fill, 0.06),
           foreground: c.onAccent,
-          border: c.accent,
+          border: fill,
         );
       case HButtonVariant.secondary:
         return _HButtonPalette(
@@ -186,12 +202,15 @@ class _HButtonState extends State<HButton> {
         );
       case HButtonVariant.danger:
         // Three distinct fills of the same hue; see the alpha constants above.
+        // Fläche und Beschriftung werden getrennt geführt: die Füllung ist die
+        // Zustandsfarbe, das Wort die Textvariante, die auf jeder der drei
+        // Füllungen 4,5:1 erreicht (`docs/UX.md` 6).
         final Color blocked = tokens.state.blocked;
         return _HButtonPalette(
           background: HColorDerivation.tint(blocked, _dangerRestAlpha),
           hover: blocked.withValues(alpha: _dangerHoverAlpha),
           pressed: blocked.withValues(alpha: _dangerPressedAlpha),
-          foreground: blocked,
+          foreground: tokens.stateTextColor(HFlowState.blocked),
           border: HColorDerivation.fade(blocked, 0.4),
         );
     }
@@ -238,19 +257,41 @@ class _HButtonState extends State<HButton> {
 
     // The button shrink-wraps its label; giving the container an alignment
     // would make it fill whatever column it is dropped into.
-    Widget button = AnimatedContainer(
-      duration: HMotion.press,
-      curve: HMotion.enter,
-      height: widget.size.height,
-      padding: EdgeInsets.symmetric(horizontal: widget.size.padding),
-      decoration: BoxDecoration(
-        color: background,
-        borderRadius: HRadius.controlRadius,
-        border: Border.all(
-          color: focused ? tokens.colors.accent : palette.border,
+    // Eine Mindesthöhe, keine Höhe: bei doppelter Textskalierung wächst der
+    // Button mit seiner Beschriftung, statt sie abzuschneiden
+    // (`docs/UX.md` 6).
+    // Kein `AnimatedContainer`: der baut seinen Controller ohne
+    // `animationBehavior` und verlöre die 120 ms der Tastenfüllung, sobald
+    // die Plattform `disableAnimations` meldet (`docs/UX.md` 2.10).
+    Widget button = HAnimatedFill(
+      color: background,
+      builder: (BuildContext context, Color fill) => Container(
+        constraints: BoxConstraints(minHeight: widget.size.minHeight),
+        padding: EdgeInsets.symmetric(
+          horizontal: widget.size.padding,
+          vertical: tokens.spacing.x1,
         ),
+        decoration: BoxDecoration(
+          color: fill,
+          borderRadius: HRadius.controlRadius,
+          // Der Rahmen bleibt der Rahmen. Fokus zeigt der Ring außerhalb.
+          border: Border.all(color: palette.border),
+        ),
+        // heightFactor: 1: der Button schrumpft auf seine Beschriftung, auch
+        // wenn er in einer Spalte ohne feste Höhe steht.
+        child: Center(widthFactor: 1, heightFactor: 1, child: content),
       ),
-      child: Center(widthFactor: 1, child: content),
+    );
+    // Der Ring liegt außerhalb des Rahmens und erscheint in einem Frame; sein
+    // Platz ist immer reserviert, also verschiebt der Fokus nichts.
+    button = HFocusRing(
+      visible: focused && enabled,
+      radius: tokens.radii.control,
+      // Der Primärbutton ist mit dem Akzent gefüllt, und der Ring ist der
+      // Akzent: ohne die zwei Pixel Fläche dazwischen stünde er bei 1,00:1
+      // gegen seine eigene Füllung (`docs/UX.md` 6).
+      over: background,
+      child: button,
     );
     if (!enabled) {
       button = Opacity(opacity: 0.45, child: button);

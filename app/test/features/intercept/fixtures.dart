@@ -46,14 +46,38 @@ Flow heldFlow({
   );
 }
 
+/// Ein Fund, wie ihn der Daemon meldet: `kind` trägt Art und Parameter.
+Finding testFinding({
+  String kind = 'api_key:github',
+  FindingLocation location = FindingLocation.body,
+  String headerName = '',
+  bool resolved = false,
+}) => Finding(
+  kind: kind,
+  location: location,
+  headerName: headerName,
+  spanStart: 0,
+  spanEnd: 8,
+  tier: FindingTier.checksum,
+  resolved: resolved,
+);
+
 /// Das Detail zu [flow], mit [headers] und [bodyPreview].
+///
+/// [apex] ist die registrierbare Domain, die der Katalog des Daemons kennt;
+/// die Oberfläche rät sie nie (CONVENTIONS 4.13). [findings] sind die Funde,
+/// die der Detektor gemeldet hat.
 FlowDetail detailFor(
   Flow flow, {
   List<Header> headers = const <Header>[],
   String bodyPreview = '',
   String contentType = '',
+  String apex = '',
+  List<Finding> findings = const <Finding>[],
 }) => FlowDetail(
   summary: flow,
+  findings: findings,
+  domain: apex.isEmpty ? null : DomainInfo(apex: apex),
   request: HttpRequest(
     method: flow.method,
     scheme: flow.scheme,
@@ -89,6 +113,12 @@ class TestDaemonClient implements DaemonClient {
 
   /// Jede angenommene Entscheidung, älteste zuerst.
   final List<(FlowId, Decision)> decisions = <(FlowId, Decision)>[];
+
+  /// Jede Regel, die `decide` anlegen sollte, älteste zuerst.
+  final List<Rule> remembered = <Rule>[];
+
+  /// Jede Regel-Id, die `removeRule` löschen sollte.
+  final List<RuleId> removed = <RuleId>[];
 
   /// Wie oft `listFlows` aufgerufen wurde.
   int listFlowsCalls = 0;
@@ -129,12 +159,27 @@ class TestDaemonClient implements DaemonClient {
   }
 
   @override
-  Future<void> decide(FlowId id, Decision decision, {Rule? remember}) async {
+  Future<Rule?> decide(FlowId id, Decision decision, {Rule? remember}) async {
     final Diagnostic? failure = decideFailure;
     if (failure != null) {
       throw DaemonException(failure);
     }
     decisions.add((id, decision));
+    if (remember == null) {
+      return null;
+    }
+    final Rule created = remember.copyWith(
+      id: RuleId(
+        '018f0030-0000-7000-8000-${remembered.length.toString().padLeft(12, '0')}',
+      ),
+    );
+    remembered.add(created);
+    return created;
+  }
+
+  @override
+  Future<void> removeRule(RuleId id) async {
+    removed.add(id);
   }
 
   @override
@@ -164,6 +209,35 @@ class TestDaemonClient implements DaemonClient {
 
   @override
   Stream<Uint8List> getBody(BodyRef ref) => const Stream<Uint8List>.empty();
+
+  // Der Regel-Teil des Ports (HUM-033). Diese Tests fahren ihn nicht; die
+  // Antworten sind der leere Regelsatz, damit nichts behauptet wird, was
+  // dieser Doppelgänger nicht weiß.
+
+  @override
+  Future<RuleSet> listRules() async => RuleSet.empty;
+
+  @override
+  Future<RuleSet> addRule(Rule rule) async {
+    remembered.add(rule);
+    return RuleSet(rules: <Rule>[rule]);
+  }
+
+  @override
+  Future<RuleSet> updateRule(Rule rule) async => RuleSet(rules: <Rule>[rule]);
+
+  @override
+  Future<RuleSet> reorderRules(List<RuleId> order) async => RuleSet.empty;
+
+  @override
+  Future<RuleSet> makeRulePermanent(RuleId id) async => RuleSet.empty;
+
+  @override
+  Future<RuleSet> reloadRules() async => RuleSet.empty;
+
+  @override
+  Future<DryRun> dryRunRule(Rule rule, {int limit = dryRunScanDefault}) async =>
+      DryRun.empty;
 
   @override
   Future<void> close() async {

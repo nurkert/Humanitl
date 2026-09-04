@@ -605,7 +605,7 @@
         },
         "sound": {
           "default": false,
-          "description": "Ton zur Meldung.",
+          "description": "Ton zur Meldung. Im MVP ohne Wirkung: der Schlüssel wird gelesen, aber\nkein Ton gespielt (HUM-034).",
           "type": "boolean",
           "x-project-scope": "allowed",
           "x-tier": "advanced"

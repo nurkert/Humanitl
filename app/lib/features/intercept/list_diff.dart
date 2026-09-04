@@ -7,8 +7,6 @@ library;
 
 import 'package:flutter/foundation.dart';
 
-import '../../core/domain/domain.dart';
-
 /// What a [QueueEdit] does.
 enum QueueEditKind {
   /// A row appeared at the index.
@@ -49,11 +47,14 @@ class QueueEdit {
 /// deadline does not move, so a reorder among held rows does not happen. The
 /// list still ends with the right number of rows, which is what
 /// `AnimatedList` insists on.
-List<QueueEdit> listDiff(List<FlowId> before, List<FlowId> after) {
-  final Set<FlowId> kept = after.toSet();
-  final Set<FlowId> known = before.toSet();
+/// The keys are flow ids in a flat queue and item keys once the queue groups
+/// (HUM-029); the function only ever compares them, so it takes whatever key
+/// the caller can compare with `==`.
+List<QueueEdit> listDiff<T>(List<T> before, List<T> after) {
+  final Set<T> kept = after.toSet();
+  final Set<T> known = before.toSet();
   final List<QueueEdit> edits = <QueueEdit>[];
-  final List<FlowId> working = List<FlowId>.of(before);
+  final List<T> working = List<T>.of(before);
   for (int i = working.length - 1; i >= 0; i--) {
     if (!kept.contains(working[i])) {
       edits.add(QueueEdit(QueueEditKind.remove, i));

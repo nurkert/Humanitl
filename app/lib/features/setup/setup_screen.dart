@@ -4,11 +4,11 @@
 /// "Reconnect".
 library;
 
-import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import '../../core/domain/domain.dart';
 import '../../core/ui/h_diagnostic_card.dart';
+import '../../core/ui/fix_control.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
 
@@ -122,84 +122,4 @@ class SetupScreen extends StatelessWidget {
         Severity.warning => tokens.state.held,
         Severity.error || Severity.blocking => tokens.state.error,
       };
-}
-
-/// The control for a [FixAction]: a button for what the client can do today
-/// (copy a command or a link), a chip naming the action for what HUM-044
-/// wires up later.
-class FixControl extends StatefulWidget {
-  /// Creates the control for [fix]; renders nothing for null.
-  const FixControl({required this.fix, super.key});
-
-  /// The proposed fix.
-  final FixAction? fix;
-
-  @override
-  State<FixControl> createState() => _FixControlState();
-}
-
-class _FixControlState extends State<FixControl> {
-  bool _copied = false;
-
-  Future<void> _copy(String text) async {
-    await Clipboard.setData(ClipboardData(text: text));
-    if (!mounted) {
-      return;
-    }
-    setState(() => _copied = true);
-    await Future<void>.delayed(const Duration(seconds: 2));
-    if (mounted) {
-      setState(() => _copied = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final HTokens tokens = HTheme.of(context);
-    final AppLocalizations l10n = context.l10n;
-    final TextStyle mono = tokens.typography.mono12.tinted(tokens.colors.fg1);
-    return switch (widget.fix) {
-      null => const SizedBox.shrink(),
-      FixActionCopyCommand(:final command) => _copyRow(
-        tokens,
-        label: _copied ? l10n.setupFixCopied : l10n.setupFixCopyCommand,
-        text: command,
-        style: mono,
-      ),
-      FixActionOpenUrl(:final url) => _copyRow(
-        tokens,
-        label: _copied ? l10n.setupFixCopied : l10n.setupFixCopyLink,
-        text: url,
-        style: tokens.typography.mono12.tinted(tokens.colors.accent),
-      ),
-      FixActionSetEnv(:final key) => HBadge(text: l10n.setupFixSetEnv(key)),
-      FixActionChangeSetting(:final key) => HBadge(
-        text: l10n.setupFixChangeSetting(key),
-      ),
-      FixActionInstallService() => HBadge(text: l10n.setupFixInstallService),
-      FixActionAddRule() => HBadge(text: l10n.setupFixAddRule),
-      FixActionRemountReadOnly() => HBadge(text: l10n.setupFixRemountReadOnly),
-    };
-  }
-
-  Widget _copyRow(
-    HTokens tokens, {
-    required String label,
-    required String text,
-    required TextStyle style,
-  }) {
-    return Row(
-      children: <Widget>[
-        HButton(
-          key: const Key('setup-fix-copy'),
-          onPressed: () => _copy(text),
-          child: Text(label),
-        ),
-        SizedBox(width: tokens.spacing.x3),
-        Expanded(
-          child: Text(text, style: style, overflow: TextOverflow.ellipsis),
-        ),
-      ],
-    );
-  }
 }

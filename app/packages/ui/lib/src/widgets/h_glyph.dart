@@ -80,6 +80,9 @@ class _HGlyphPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..color = color;
+    final Paint fill = Paint()
+      ..style = PaintingStyle.fill
+      ..color = color;
     switch (glyph) {
       case HGlyph.hourglass:
         canvas
@@ -211,6 +214,61 @@ class _HGlyphPainter extends CustomPainter {
         canvas
           ..drawLine(const Offset(6, 6), const Offset(18, 18), stroke)
           ..drawLine(const Offset(18, 6), const Offset(6, 18), stroke);
+      case HGlyph.grip:
+        for (final double x in const <double>[9, 15]) {
+          for (final double y in const <double>[5, 12, 19]) {
+            canvas.drawCircle(Offset(x, y), 1.4, fill);
+          }
+        }
+      case HGlyph.trash:
+        canvas
+          ..drawLine(const Offset(3, 6), const Offset(21, 6), stroke)
+          ..drawPath(
+            _polyline(const <Offset>[
+              Offset(5, 6),
+              Offset(5, 20),
+              Offset(19, 20),
+              Offset(19, 6),
+            ]),
+            stroke,
+          )
+          ..drawPath(
+            _polyline(const <Offset>[
+              Offset(9, 6),
+              Offset(9, 3),
+              Offset(15, 3),
+              Offset(15, 6),
+            ]),
+            stroke,
+          );
+      case HGlyph.plus:
+        canvas
+          ..drawLine(const Offset(12, 5), const Offset(12, 19), stroke)
+          ..drawLine(const Offset(5, 12), const Offset(19, 12), stroke);
+      case HGlyph.lock:
+        canvas
+          ..drawRRect(
+            RRect.fromRectAndRadius(
+              const Rect.fromLTWH(4, 11, 16, 10),
+              const Radius.circular(2),
+            ),
+            stroke,
+          )
+          ..drawPath(
+            _polyline(const <Offset>[
+              Offset(8, 11),
+              Offset(8, 7),
+              Offset(12, 4),
+              Offset(16, 7),
+              Offset(16, 11),
+            ]),
+            stroke,
+          );
+      case HGlyph.redactBar:
+        canvas
+          ..drawLine(const Offset(4, 6), const Offset(20, 6), stroke)
+          ..drawRect(const Rect.fromLTWH(4, 10, 16, 5), fill)
+          ..drawLine(const Offset(4, 19), const Offset(14, 19), stroke);
     }
     canvas.restore();
   }
