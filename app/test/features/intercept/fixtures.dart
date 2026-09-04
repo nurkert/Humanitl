@@ -239,6 +239,28 @@ class TestDaemonClient implements DaemonClient {
   Future<DryRun> dryRunRule(Rule rule, {int limit = dryRunScanDefault}) async =>
       DryRun.empty;
 
+  // Der Sandbox-Teil des Ports (HUM-040). Diese Tests fahren ihn nicht; der
+  // Sandbox-Bildschirm hat sein eigenes Gerüst mit dem FakeDaemonClient.
+  @override
+  Stream<SandboxUpdate> sandboxStatus() => const Stream<SandboxUpdate>.empty();
+
+  @override
+  Stream<SandboxUpdate> planSandbox({
+    String? profile,
+    String? workDir,
+    WorkMode? workMode,
+  }) => const Stream<SandboxUpdate>.empty();
+
+  @override
+  Stream<SandboxUpdate> startSandbox({
+    String? profile,
+    String? workDir,
+    WorkMode? workMode,
+  }) => const Stream<SandboxUpdate>.empty();
+
+  @override
+  Stream<SandboxUpdate> stopSandbox() => const Stream<SandboxUpdate>.empty();
+
   @override
   Future<void> close() async {
     for (final StreamController<FlowEvent> controller in streams) {

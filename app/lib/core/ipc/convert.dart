@@ -519,3 +519,79 @@ extension DecisionToProto on Decision {
     return out;
   }
 }
+
+/// `SandboxState` to [SandboxState].
+extension SandboxStateToDomain on pb.SandboxState {
+  /// The domain form; an unknown value counts as [SandboxState.stopped].
+  ///
+  /// Stopped is the least harmful guess: it never claims a sandbox is up, and
+  /// it leaves the start control enabled rather than a stop that stops
+  /// nothing.
+  SandboxState toDomain() =>
+      enumFromWire(SandboxState.values, value) ?? SandboxState.stopped;
+}
+
+/// `MountMode` to [MountMode].
+extension MountModeToDomain on pb.MountMode {
+  /// The domain form; an unknown value counts as [MountMode.ro].
+  ///
+  /// A mount from a newer daemon is still a mount and belongs in the table;
+  /// read-only is the narrower of the two bind modes, so an unknown one is
+  /// never shown as writable.
+  MountMode toDomain() => enumFromWire(MountMode.values, value) ?? MountMode.ro;
+}
+
+/// `ValueOrigin` to [ValueOrigin].
+extension ValueOriginToDomain on pb.ValueOrigin {
+  /// The domain form; an unknown origin counts as [ValueOrigin.profile].
+  ValueOrigin toDomain() =>
+      enumFromWire(ValueOrigin.values, value) ?? ValueOrigin.profile;
+}
+
+/// `Mount` to [MountEntry].
+extension MountToDomain on pb.Mount {
+  /// The domain form.
+  MountEntry toDomain() => MountEntry(
+    dst: dst,
+    src: src,
+    mode: mode.toDomain(),
+    origin: origin.toDomain(),
+    linkTarget: linkTarget,
+  );
+}
+
+/// `EnvVar` to [EnvEntry].
+extension EnvVarToDomain on pb.EnvVar {
+  /// The domain form. A withheld value arrives empty and stays that way.
+  EnvEntry toDomain() => EnvEntry(
+    key: key,
+    value: value,
+    origin: origin.toDomain(),
+    withheld: withheld,
+  );
+}
+
+/// `SandboxEvent.Status` to [SandboxStatus].
+extension SandboxStatusToDomain on pb.SandboxEvent_Status {
+  /// The domain form, without diagnostics: those arrive as their own events
+  /// and are collected by the provider that reads the stream.
+  SandboxStatus toDomain() => SandboxStatus(
+    state: state.toDomain(),
+    sessionId: sessionId.isEmpty ? null : SessionId(sessionId),
+    sandboxId: sandboxId.isEmpty ? null : SandboxId(sandboxId),
+    startedAt: hasStartedAt() ? _dateTime(startedAt) : null,
+    profile: profile,
+    backend: backend,
+    llmEndpoint: llmEndpoint,
+    workDirHost: workDir.isEmpty ? null : workDir,
+    workMode: WorkMode.fromWire(workMode),
+    mounts: List<MountEntry>.unmodifiable(
+      mounts.map((pb.Mount mount) => mount.toDomain()),
+    ),
+    env: List<EnvEntry>.unmodifiable(
+      env.map((pb.EnvVar entry) => entry.toDomain()),
+    ),
+    argvPreview: argvPreview,
+    agentRunning: agentRunning,
+  );
+}

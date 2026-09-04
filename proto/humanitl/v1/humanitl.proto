@@ -755,6 +755,8 @@ message SandboxRequest {
     google.protobuf.Empty isolation_check = 4;
     // Liefert die vollstaendige Kommandozeile, ohne zu starten.
     google.protobuf.Empty argv = 5;
+    // Wie `status`, aber fuer ein Projektverzeichnis, das noch nicht gilt.
+    Plan plan = 6;
   }
 
   // Start einer Sandbox-Session.
@@ -765,6 +767,89 @@ message SandboxRequest {
     string work_mode = 3;
     repeated string command = 4;
   }
+
+  // Der Schnappschuss, den ein Start mit diesen Angaben haette, ohne dass
+  // etwas startet. Leere Felder bedeuten: nimm den Wert der Konfiguration.
+  // Damit sieht der Mensch die Mounts, die Umgebung und die Kommandozeile
+  // eines Projektverzeichnisses, bevor er es einhaengt (HUM-040).
+  message Plan {
+    string profile = 1;
+    string work_dir = 2;
+    // `ro` oder `rw`.
+    string work_mode = 3;
+  }
+}
+
+// Wie ein Pfad in der Sandbox eingehaengt ist. Die Mode-Angabe kommt aus der
+// Kommandozeile selbst, nicht aus einer zweiten Buchfuehrung daneben.
+enum MountMode {
+  MOUNT_MODE_UNSPECIFIED = 0;
+  // `--ro-bind`: der Host-Pfad, nur lesbar.
+  MOUNT_MODE_RO = 1;
+  // `--bind`: der Host-Pfad, schreibbar.
+  MOUNT_MODE_RW = 2;
+  // `--tmpfs`: leeres Dateisystem im Speicher, nichts vom Host.
+  MOUNT_MODE_TMPFS = 3;
+  // `--ro-bind-data`: eine Datei aus dem Speicher des Daemons, meist leer;
+  // so werden Pfade maskiert und die Dateien des Agenten gelegt.
+  MOUNT_MODE_MASKED = 4;
+  // `--proc`: eine eigene `procfs`-Instanz dieses PID-Namensraums.
+  MOUNT_MODE_PROC = 5;
+  // `--dev`: das minimale `devtmpfs` von bubblewrap.
+  MOUNT_MODE_DEV = 6;
+  // `--symlink`: ein Verweis, kein Mount.
+  MOUNT_MODE_SYMLINK = 7;
+}
+
+// Woher ein Mount oder eine Umgebungsvariable stammt.
+enum ValueOrigin {
+  VALUE_ORIGIN_UNSPECIFIED = 0;
+  // Aus dem Sandbox-Profil.
+  VALUE_ORIGIN_PROFILE = 1;
+  // Vom Agent-Adapter beigesteuert.
+  VALUE_ORIGIN_ADAPTER = 2;
+  // Aus der Sitzung: Projektverzeichnis, Proxy-Socket, CA, Shim.
+  VALUE_ORIGIN_SESSION = 3;
+  // Aus den Erweiterungen des Nutzers im Profil (`mounts.extra_ro`,
+  // `mounts.extra_rw`). Sie stehen getrennt, weil der Satz im
+  // Einhaenge-Reiter genau sie als Ausnahme nennen muss: alles, was ausser
+  // dem Projektverzeichnis vom Rechner des Nutzers hineinreicht.
+  VALUE_ORIGIN_USER = 4;
+}
+
+// Ein Pfad, den der Agent in der Sandbox sieht.
+message Mount {
+  // Der Pfad in der Sandbox.
+  string dst = 1;
+  // Der Pfad **auf dem Host**; leer, wo es keinen gibt (tmpfs, proc, dev, und
+  // ein Verweis) oder wo der Inhalt aus dem Speicher des Daemons kommt. Die
+  // Oberflaeche beschriftet jedes nichtleere `src` mit „auf diesem Rechner";
+  // was dort steht, muss deshalb wirklich ein Wirtspfad sein.
+  string src = 2;
+  MountMode mode = 3;
+  ValueOrigin origin = 4;
+  // Wohin ein `MOUNT_MODE_SYMLINK` zeigt, in der Sandbox. Leer bei jedem
+  // anderen Modus. Ein eigenes Feld, weil das Ziel eines Verweises innerhalb
+  // der Sandbox liegt und kein Wirtspfad ist.
+  string link_target = 5;
+}
+
+// Eine Umgebungsvariable, die die Sandbox setzt.
+message EnvVar {
+  string key = 1;
+  // Der Wert. Leer, wenn `withheld` gilt.
+  string value = 2;
+  ValueOrigin origin = 3;
+  // Der Wert wurde zurueckgehalten und ist gar nicht erst auf der Leitung.
+  //
+  // Zurueckgehalten wird nach einer Erlaubnisliste, nicht nach einer Liste
+  // verdaechtiger Namen: gezeigt werden nur die Werte, die belegen, wohin der
+  // Agent darf (Proxy, Zertifikate, Pfade, Sprache) und die der Adapter zur
+  // Steuerung setzt. Jeder andere Wert bleibt zurueck. Eine Namensliste fuer
+  // Geheimnisse waere prinzipiell unvollstaendig — `AWS_ACCESS_KEY_ID` und
+  // `DATABASE_URL` heissen nicht danach und tragen doch eines —, und die
+  // Vorgabe muss auf der sicheren Seite stehen (HUM-040).
+  bool withheld = 4;
 }
 
 // Ergebnis einer Isolationspruefung.
@@ -795,6 +880,22 @@ message SandboxEvent {
     string llm_endpoint = 5;
     string work_dir = 6;
     string work_mode = 7;
+    // Wann die laufende Sandbox gestartet wurde; fehlt, solange keine laeuft.
+    google.protobuf.Timestamp started_at = 8;
+    // Name des Sandbox-Profils, zum Beispiel `default`.
+    string profile = 9;
+    // Jeder Pfad, den der Agent sieht, in der Reihenfolge der Kommandozeile.
+    repeated Mount mounts = 10;
+    // Jede Umgebungsvariable, die die Sandbox setzt, alphabetisch.
+    repeated EnvVar env = 11;
+    // Die vollstaendige Kommandozeile als eine Zeile, so wie eine Shell sie
+    // liest. Der Beleg, an dem sich alles Uebrige nachpruefen laesst.
+    string argv_preview = 12;
+    // Ob in der Sandbox noch ein Prozess laeuft. Eine Sitzung, deren Agent
+    // sich beendet hat, steht noch als `running`, hat aber niemanden mehr,
+    // den ein Stopp unterbrechen koennte; die Oberflaeche fragt dann nicht
+    // nach (HUM-040).
+    bool agent_running = 13;
   }
 
   // Eine Zeile aus dem Log der Sandbox.
