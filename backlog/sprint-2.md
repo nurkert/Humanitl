@@ -1554,13 +1554,13 @@ Sprint: 2 · Größe: S · Abhängigkeiten: HUM-020, HUM-028, HUM-032 · Blockie
 ADR-009 wählt shadcn_flutter unter Vorbehalt: pre-1.0, Breaking Changes fast jede Release. Nach dem ersten echten Intercept-Screen, der Aktionsleiste und der History-Tabelle gibt es genug Erfahrung für eine belastbare Entscheidung. Der Wrapper `packages/ui` macht einen Wechsel lokal.
 
 ### Ziel
-Ein ADR-Nachtrag (`docs/adr/0009-ui-kit.md`, Abschnitt „Entscheidung nach Sprint 2") mit ausgefüllter Bewertungsmatrix und klarer Entscheidung: bleiben oder auf forui wechseln. Bei Wechsel: Issue-Liste für die Migration (nur `packages/ui` betroffen) und Aufwandsschätzung.
+Ein ADR-Nachtrag (`docs/adr/0009-ui-stack.md`, Abschnitt „Entscheidung nach Sprint 2") mit ausgefüllter Bewertungsmatrix und klarer Entscheidung: bleiben oder auf forui wechseln. Bei Wechsel: Issue-Liste für die Migration (nur `packages/ui` betroffen) und Aufwandsschätzung.
 
 ### Nicht-Ziel
 Die Migration selbst (falls nötig, eigenes Issue HUM-035b in Sprint 3 mit Größe M).
 
 ### Betroffene Pfade
-- `docs/adr/0009-ui-kit.md` (ändern)
+- `docs/adr/0009-ui-stack.md` (ändern)
 
 ### Spezifikation
 
@@ -1578,11 +1578,11 @@ Bewertungsmatrix, jede Zeile 0–3 Punkte, gewichtet:
 | Lizenz | 1 | beide BSD/MIT-artig |
 | Wechselaufwand (nur relevant für forui) | 2 | Tage geschätzt |
 
-Vorgehen: Prototyp-Branch `spike/forui` mit `packages/ui` gegen forui, mindestens `HButton`, `HPill`, `HPanel`, `ResizablePanel`, Sheet und Command-Ersatz; Intercept-Screen muss laufen. Zeitbox 1 Tag. Entscheidungsregel: bleiben, wenn shadcn ≥ 75 % der gewichteten Punkte und kein Kriterium mit Gewicht 3 unter 1 Punkt; sonst wechseln.
+Vorgehen, nachgezogen am 2026-09-04: **kein Prototyp-Branch.** Vorgesehen war ein Branch `spike/forui` mit `packages/ui` gegen forui, mindestens `HButton`, `HPill`, `HPanel`, `ResizablePanel`, Sheet und Command-Ersatz, Zeitbox 1 Tag. Er entfällt, weil die Bedingung, an der die Entscheidung hängt, ohne ihn feststeht: `shadcn_flutter` 0.0.54 und forui 0.26.0 verlangen Flutter ≥ 3.47.0, der Pin in `app/.fvmrc` steht auf 3.44.0, und die Zeitbox wäre für diese Anhebung draufgegangen, bevor die erste Zeile Port geschrieben ist. Der Preis der Abweichung steht im ADR: Die vier Kriterien 2, 4, 5 und 6, zusammen 11 der 20 Gewichtspunkte, bleiben für beide Bibliotheken Schätzung statt Messung, und der ADR nennt, woran ein Fehlurteil auffiele. Protokolliert in `backlog/CONVENTIONS.md` 4.20. Entscheidungsregel unverändert: bleiben, wenn shadcn ≥ 75 % der gewichteten Punkte und kein Kriterium mit Gewicht 3 unter 1 Punkt; sonst wechseln.
 
 ### Schritte
 1. Matrix ausfüllen für shadcn aus dem Ist-Stand.
-2. Spike-Branch, Matrix für forui.
+2. Matrix für forui aus Changelog, öffentlichen Registern und dem eigenen Code; kein Spike-Branch (siehe Vorgehen).
 3. ADR-Nachtrag schreiben, Entscheidung, ggf. HUM-035b anlegen.
 
 ### Tests
@@ -1591,10 +1591,10 @@ keine (Dokument).
 ### Akzeptanzkriterien
 - [ ] ADR-Nachtrag enthält beide ausgefüllten Matrizen mit Datum und Versionsnummern.
 - [ ] Entscheidung ist ein Satz; Begründung ≤ 10 Zeilen.
-- [ ] Spike-Branch ist gepusht oder gelöscht mit Vermerk.
+- [ ] Kein Spike-Branch. Die Abweichung ist im ADR unter „Entschieden ohne Prototyp" und in `backlog/CONVENTIONS.md` 4.20 begründet, und der ADR nennt, was ohne Messung offen bleibt und woran ein Fehlurteil auffiele.
 
 ### Fallstricke
-- Nicht nach Gefühl entscheiden; die Matrix ist verbindlich.
+- Nicht nach Gefühl entscheiden; die Matrix ist verbindlich. Sie braucht dafür einen Punkte-Maßstab: Der ADR legt je Kriterium Schwellen für 0 bis 3 Punkte fest, sonst ist jede Einzelwertung ein Prosa-Urteil.
 - Zeitbox einhalten; ein halbfertiger forui-Port ist kein Argument.
 
 ### Referenzen
