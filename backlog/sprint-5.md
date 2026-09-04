@@ -989,3 +989,162 @@ Die Demoskripte sind der Test; geprüft wird von außen, mit einem Blick nach `/
 
 ### Referenzen
 `tests/e2e/lib.sh` 10-13 (die Zusage), 206-227 (`unshare -rn`, kein Mount-Namensraum) und 231-243; `tests/e2e/m1_sealed_box.sh` 69-81 und der Schlussschritt `the daemon leaves nothing behind`; `tests/e2e/m2_first_decision/run.sh` 125-145; `.github/workflows/ci.yml`, Artefakt-Pfad `target/e2e`; CONVENTIONS.md 3.11; HUM-021, HUM-036.
+
+
+## HUM-098 · Der Ereignis-Reduzierer steht zweimal in der Anwendung
+Sprint: 5 · Größe: M · Abhängigkeiten: HUM-020, HUM-031 · Blockiert: —
+
+### Kontext
+`FlowEvent` ist der einzige Weg, auf dem der Zustand eines Flusses in der Anwendung fortschreibt. Zwei Stellen wenden dieselben Ereignisse auf dieselbe Domäne an: `app/lib/features/intercept/providers/flows.dart:54` (`_apply`) und `app/lib/features/history/providers/history_page.dart:460` (`_apply`). Beide führen dieselbe `switch`-Kette über dieselben Varianten und dieselben `copyWith`-Ketten. `app/lib/features/shell/widgets/tray_host.dart:111` hört auf denselben Strom, reagiert aber nur auf `FlowEventTimedOut` und `FlowEventLagged`; er ist ein Beobachter, kein dritter Reduzierer.
+
+Die beiden Reduzierer sind bereits auseinandergelaufen. Der Review vom 2026-09-04 hat sechs Unterschiede gezählt. Drei davon gehören dem Aufrufer und sollen ihm bleiben: das `_ready`-Tor der Historie vor ihrem `_apply`, `_arrived(flow)` gegen das direkte Einfügen in die Karte bei `FlowEventReceived`, und `_resync()` gegen `reload(keepSelection: true)` bei `FlowEventLagged`. Drei sind Divergenz im Übergang selbst, und jede ist ein eigener Fehler:
+
+1. `FlowEventDecided` setzt in der Historie zusätzlich `deadline: null`, in der Warteschlange nicht.
+2. `FlowEventTimedOut` ebenso: die Historie löscht die Frist, die Warteschlange behält sie.
+3. `FlowEventResponseChunk` schreibt in der Historie `responseSize` fort; in der Warteschlange steht die Variante in der Gruppe, die nichts tut. Die Warteschlange zeigt die anwachsende Antwortgröße also nie, obwohl das Ereignis dafür ankommt.
+
+Die ersten beiden sind sichtbar: `visibleQueueFlows` (`flows.dart:226`) zeigt entschiedene und abgelaufene Flüsse noch für die Dauer von `queueExitWindow` und sortiert die Liste mit `compareByDeadline` (`flows.dart:254`). Eine solche Zeile sortiert deshalb weiter nach ihrer Frist, mitten unter die wartenden, statt hinter sie. Der Countdown-Ring läuft dabei nicht weiter — `CountdownRing` (`countdown_ring.dart:50`) setzt den Fortschritt nur für `flow.isHeld` —, wohl aber der Text daneben: `request_card.dart:132` ruft `flow.remainingAt(now)` ohne diese Bedingung und zählt damit auf einer bereits entschiedenen Zeile weiter herunter.
+
+Das Muster ist das gleiche wie bei HUM-092: Fachlogik, die zweimal existiert, driftet, und die Tests der einen Seite belegen nichts über die andere.
+
+### Ziel
+Ein Reduzierer, der aus einem `Flow` und einem `FlowEvent` den nächsten `Flow` berechnet, als reine Funktion ohne Riverpod und ohne Bildschirmbezug. Beide Provider rufen ihn und behalten nur, was wirklich ihres ist: die Warteschlange ihr Sichtbarkeitsfenster, ihre Sortierung und ihr `_resync`, die Historie ihr Seitenmodell, ihr `_ready`-Tor und ihr `reload`.
+
+### Nicht-Ziel
+Keine Änderung an `FlowEvent`, an der Proto oder am Daemon. Keine Zusammenlegung der beiden Provider — sie haben verschiedene Lebensdauern und verschiedene Quellen. Kein neues Zustandsverwaltungs-Paket.
+
+### Betroffene Pfade
+- `app/lib/core/domain/flow_reducer.dart` (neu): `Flow applyFlowEvent(Flow flow, FlowEvent event)`
+- `app/lib/features/intercept/providers/flows.dart`: `_apply` ruft den Reduzierer
+- `app/lib/features/history/providers/history_page.dart`: dito
+- `app/lib/features/intercept/widgets/request_card.dart`: der Countdown-Text bekommt dieselbe Bedingung wie der Ring
+- `app/test/core/domain/flow_reducer_test.dart` (neu)
+
+### Spezifikation
+Der Reduzierer ist total über die Varianten von `FlowEvent`: jede Variante hat einen Fall, geprüft über eine erschöpfende `switch` auf der versiegelten Klasse, damit eine neue Variante den Übersetzer rot macht und nicht stillschweigend nichts tut.
+
+Die drei Divergenzen werden zugunsten der Historie aufgelöst. `FlowEventDecided` und `FlowEventTimedOut` löschen die Frist: ein entschiedener oder abgelaufener Fluss hat keine mehr, und was die Warteschlange während des Ausstiegsfensters zeigen will, holt sie sich aus `decidedAt`. `compareByDeadline` sortiert Flüsse ohne Frist ans Ende, also fällt die ausscheidende Zeile genau dorthin, wo sie hingehört. `FlowEventResponseChunk` schreibt `responseSize` fort, auch für die Warteschlange; der Zähler ist kumulativ, wird also gesetzt und nicht addiert.
+
+`FlowEventReceived` liefert einen ganzen `Flow` und keinen Übergang. Er bleibt beim Aufrufer, weil beide Seiten dort verschiedene Dinge tun, die nichts mit dem Zustand eines vorhandenen Flusses zu tun haben.
+
+Ereignisse zu einem unbekannten Fluss ändern nichts und werfen nicht; das entscheidet weiterhin der Aufrufer über sein `_update`.
+
+### Tests
+- `flow_reducer_test.dart`: je ein Fall pro `FlowEvent`-Variante, mit dem erwarteten `Flow` als Ganzem verglichen, nicht feldweise.
+- Je ein Test für die drei aufgelösten Divergenzen: nach `FlowEventDecided` und nach `FlowEventTimedOut` ist `deadline` null, `remainingAt` null Sekunden, `holdBudget` null; nach `FlowEventResponseChunk` trägt der Fluss die Größe aus dem Ereignis.
+- Ein Test in `flows_test.dart`: eine entschiedene Zeile im Ausstiegsfenster steht in `visibleQueueFlows` hinter jeder wartenden.
+- Ein Widget-Test: die Karte einer entschiedenen Zeile zeigt keinen laufenden Countdown-Text mehr.
+- Mutationsprobe: den Reduzierer in einem der beiden Provider zurück auf die eigene Kette drehen, dann muss mindestens ein Test rot werden.
+
+### Akzeptanzkriterien
+- [ ] `grep -c 'case FlowEventDecided' app/lib` findet außerhalb der Tests genau einen Treffer.
+- [ ] Beide Provider rufen `applyFlowEvent`; keiner hat noch eine eigene `switch` über den Übergang.
+- [ ] Eine neue `FlowEvent`-Variante macht die Übersetzung rot, ohne dass jemand daran gedacht hat.
+- [ ] Die drei genannten Divergenzen sind weg und je durch einen Test festgehalten.
+- [ ] `make flutter-analyze` und `make flutter-test` grün.
+
+### Fallstricke
+- Das `_ready`-Tor der Historie bleibt beim Aufrufer, sonst verschluckt der Reduzierer Ereignisse aus einer Phase, die er nicht kennt.
+- `FlowEventResponseChunk` trägt einen kumulativen Zähler. Setzen, nie addieren — sonst zählt eine Wiederaufnahme des Stroms doppelt.
+
+## HUM-099 · Die Filtersprache wird an drei Stellen verschieden verstanden
+Sprint: 5 · Größe: M · Abhängigkeiten: HUM-031 · Blockiert: —
+
+### Kontext
+Die Filtersprache der Historie (`host:`, `decision:`, `findings:>0`, `since:10m`, Anführungszeichen, Vergleiche) wird an drei Stellen ausgelegt:
+
+1. `daemon/crates/recorder/src/filter.rs`, Einstieg `parse(input, now_ms)`: die vollständige Sprache, übersetzt nach SQL. Das ist die Wahrheit.
+2. `daemon/crates/ipc/src/convert.rs:1134`, `matches_filter`: eine bewusst kleinere Lesart für den Serverpfad ohne Recorder und für den Rust-Fake. Ihr Doc-Kommentar sagt selbst, sie kenne nur `host:`, `state:` und `session:` und behandle alles Übrige als Teilzeichenkette. Sie ist keine versehentliche Kopie, aber sie beantwortet dieselbe Eingabe anders, und der Mensch, der sie tippt, sieht dem Ergebnis nicht an, welcher Pfad geantwortet hat.
+3. `FakeFlowFilter` in `app/lib/core/ipc/fake_daemon_client.dart:1561`, mit eigenem `_tokenize`, eigenem `_translate` und eigener Entscheidung, wann `RECORDER_002` fliegt.
+
+Kein Test vergleicht die drei. `daemon/crates/ipc/tests/fake_parity.rs` stellt den Rust-Fake gegen den echten Rust-Dienst; über den Dart-Fake sagt er nichts. Jeder Widget- und Provider-Test der Historie beweist damit nur, dass die Oberfläche zur Lesart des Dart-Fakes passt.
+
+Eine Divergenz ist belegt, und sie zeigt, dass hier nicht nur Doppelung liegt, sondern ein Fehler auf jeder der beiden Seiten: die Eingabe `upgrade:none`.
+
+- Der Recorder baut daraus `upgrade = 'none'` (`filter.rs:222`). Die Spalte hält aber `NULL` oder `'websocket'` (`migrations/V1__init.sql:22`, `writer.rs:953`). Der Ausdruck trifft deshalb nie eine Zeile, obwohl er genau die Zeilen meinen soll, die keine Aufwertung tragen.
+- Der Dart-Fake gibt `lower == 'none'` zurück und sieht den Fluss gar nicht an (`fake_daemon_client.dart:1667`). `upgrade:none` lässt dort also **alles** durch und `upgrade:websocket` **nichts**. Der Kommentar daneben erklärt es als Absicht für M1.
+
+Dieselbe Eingabe bedeutet an einer Stelle „nichts" und an der anderen „alles". Beide Antworten sind falsch.
+
+Dieselbe Datei trägt außerdem sechs weitere Rollen auf 2253 Zeilen: den Client selbst (`FakeDaemonClient`, Zeilen 76 bis 1223), die Abspielung eines Skripts (`ScriptedEvent`, `_ScriptedFlow`), eine abbrechbare Verzögerung (`_CancellableDelay`), die Sortierschlüssel (`FakeSortKey`), den Filter und die Startdaten (`_SeededFlow`). Dreißig Dateien importieren sie.
+
+### Ziel
+Die Sprache hat einen Datensatz, der sagt, was sie bedeutet, und alle drei Stellen werden gegen ihn geprüft. Wo eine Stelle die Sprache nur teilweise kennt, steht das im Datensatz und nicht nur in einem Kommentar. `upgrade:none` ist auf beiden Seiten repariert.
+
+### Nicht-Ziel
+Kein Filtern im Daemon für den Fake (er läuft ohne Daemon, das ist sein Zweck). Keine Übersetzung der Rust-Implementierung nach Dart durch einen Codegenerator. Keine Erweiterung der Sprache. Kein Ausbau von `matches_filter` zur vollen Sprache — es bleibt die kleine Lesart, aber der Datensatz sagt, welche Terme sie kennt, und ein Test hält sie darauf fest.
+
+### Betroffene Pfade
+- `tests/fixtures/filter-language.json` (neu): Flüsse, Eingaben, erwartetes Ergebnis je Stelle, erwarteter Diagnostic-Code
+- `daemon/crates/recorder/tests/filter_language.rs` (neu)
+- `daemon/crates/ipc/tests/filter_language.rs` (neu): prüft `matches_filter` gegen die Spalte „kennt diesen Term"
+- `app/test/core/ipc/filter_language_test.dart` (neu)
+- `daemon/crates/recorder/src/filter.rs`: `upgrade:none` wird zu `upgrade IS NULL`
+- `app/lib/core/ipc/fake_daemon_client.dart`: `upgrade` sieht den Fluss an
+- `app/lib/core/ipc/fake/` (neu): Aufteilung auf eine Rolle je Datei; `fake_daemon_client.dart` bleibt als Sammel-Export, damit kein Importeur angefasst wird
+
+### Spezifikation
+Die Tabelle ist die Spezifikation der Sprache. Für jede Eingabe steht darin entweder die Menge der Flüsse, die durchkommen, oder der Diagnostic-Code, mit dem die Eingabe abgelehnt wird — und zwar je Stelle, denn `matches_filter` darf weniger können. Der Satz der Flüsse steht in derselben Datei, in einer Form, die alle drei Seiten aufbauen können.
+
+Neue Terme kommen erst in die Tabelle, dann in die Implementierungen. Eine Zeile, die eine Stelle nicht erfüllt, ist ein Fehler dieser Stelle und keine erlaubte Abweichung.
+
+Die Aufteilung der Fake-Datei ist mechanisch: eine Datei je Rolle, kein Umbenennen öffentlicher Namen, keine neue Abstraktion.
+
+### Tests
+- Alle drei Tabellenläufe grün, mit derselben Datei als Quelle.
+- Mutationsprobe: eine Zeile der Tabelle ändern, dann müssen die betroffenen Läufe rot werden — sonst liest einer die Tabelle nicht wirklich.
+- `upgrade:none` und `upgrade:websocket` stehen als eigene Zeilen mit dem Verhalten, das sie haben sollen.
+
+### Akzeptanzkriterien
+- [ ] `tests/fixtures/filter-language.json` wird von allen drei Stellen gelesen; keine hat ihre eigene Erwartungstabelle.
+- [ ] `upgrade:none` trifft im Recorder genau die Flüsse ohne Aufwertung und im Dart-Fake dieselben.
+- [ ] Keine Datei unter `app/lib/core/ipc/fake/` ist länger als 500 Zeilen.
+- [ ] Kein Importeur von `fake_daemon_client.dart` wurde angefasst.
+- [ ] `make flutter-analyze`, `make flutter-test`, `cargo test -p humanitl-recorder` und `cargo test -p humanitl-ipc` grün.
+
+### Fallstricke
+- `since:10m` hängt an einer Uhr; die Tabelle nennt den Bezugspunkt ausdrücklich, und keine Seite liest die Wanduhr.
+- Die Tabelle arbeitet in Millisekunden seit der Epoche, nicht in lokalen Zeitstempeln.
+- `upgrade IS NULL` lässt sich nicht mit einem Platzhalter parametrisieren wie `= ?`; der Fall braucht einen eigenen Zweig im Bau des SQL.
+
+## HUM-100 · `sandbox/profile.rs` trägt Modell und sicherheitskritische Pfadauflösung zugleich
+Sprint: 5 · Größe: M · Abhängigkeiten: HUM-011 · Blockiert: —
+
+### Kontext
+`daemon/crates/sandbox/src/profile.rs` hat 2190 Zeilen; die Tests beginnen bei Zeile 1797, davor liegen rund 1795 Zeilen Produktionscode. Sie tragen drei Verantwortungen, die nichts voneinander wissen müssen:
+
+1. Das Profilmodell mit seiner Serde-Abbildung und den Vorgaben, Zeilen 230 bis 714: `SandboxProfile`, `SandboxSection`, `Namespace`, `MountSection`, `WorkMount`, `Symlink`, `NetworkSection`, `Bridge`, `BridgeDirection`, `SeccompSection`, `SocketFamily`, `SocketType`, `SocketFloor` und `SessionContext` (das bei 678 beginnt und bis 714 reicht).
+2. Die Einhänge-Politik samt Pfadauflösung, Zeilen 718 bis 1234: `MountRule`, `MountPolicy`, `Scope` und die freien Funktionen `is_meaningful_base`, `is_socket`, `find_socket_below`, `deny`, `spellings`, `resolve_candidates`, `resolve_existing_prefix`.
+3. Das Laden, Zusammenführen und Prüfen eines Profils sowie den Bau der bwrap-Argumente: `impl SandboxProfile`, Zeilen 1236 bis 1764, dahinter die freien Helfer `names`, `range` und `union_deny_syscalls` bis 1795.
+
+Der zweite Block ist die Stelle, an der entschieden wird, welcher Pfad des Wirts in der Sandbox sichtbar wird. Er entscheidet über Symlinks, über Schreibweisen desselben Pfades und darüber, ob ein Socket unterhalb eines Verzeichnisses gefunden wird. Er trägt damit die erste der drei Sandbox-Garantien mit. Dass er im selben Modul steht wie die Vorgabewerte der Serde-Abbildung, macht ihn schwerer zu lesen, schwerer zu prüfen und schwerer allein zu testen. `backlog/CONVENTIONS.md` 3.4 beschreibt das Profil, sagt aber nichts darüber, wo die Auflösung wohnt.
+
+### Ziel
+Drei Module statt eines, mit derselben öffentlichen Schnittstelle nach außen: `profile/model.rs` (Modell, Serde, `SessionContext`), `profile/mounts.rs` (Politik und Auflösung), `profile/build.rs` (Laden, Zusammenführen, Prüfen, Argumentbau, samt der drei freien Helfer). `profile.rs` wird zu `profile/mod.rs` und exportiert weiter, was heute exportiert wird.
+
+### Nicht-Ziel
+Keine Verhaltensänderung, keine neue Prüfung, keine geänderten Diagnostics. Kein Umbenennen öffentlicher Typen. Keine Aufteilung von `daemon/bin/humanitl-shim/src/seccomp.rs` — dort liegt der Filter selbst, und er wird in einem eigenen Issue betrachtet, wenn er wieder wächst.
+
+### Betroffene Pfade
+- `daemon/crates/sandbox/src/profile/mod.rs`, `model.rs`, `mounts.rs`, `build.rs`
+- Die Tests wandern mit ihrem Gegenstand; `#[cfg(test)] mod tests` wird auf die drei Module aufgeteilt
+
+### Spezifikation
+Die Aufteilung ist mechanisch. Was heute privat ist, bleibt privat, soweit es innerhalb eines Moduls bleibt; was über eine Modulgrenze hinweg gebraucht wird, wird `pub(crate)` und nicht `pub`. Ein Test, der heute grün ist, ist danach grün, und kein Test wird umgeschrieben, um die Aufteilung zu ermöglichen.
+
+Am Kopf von `mounts.rs` steht ein Doc-Kommentar, der sagt, was dieses Modul trägt und warum es allein steht: es entscheidet, welcher Pfad des Wirts in der Sandbox sichtbar wird, und ist Teil der ersten Garantie aus `README.md`.
+
+### Tests
+- `cargo test -p humanitl-sandbox` grün, mit derselben Anzahl Testfälle wie vorher; die Zahl steht im Commit-Text.
+- `tests/escape/` bleibt grün.
+- Mutationsprobe an einer Stelle in `mounts.rs` (etwa `spellings` um eine Schreibweise kürzen), die einen Test rot macht — der Beleg, dass die Tests mitgewandert und nicht verwaist sind.
+
+### Akzeptanzkriterien
+- [ ] Keine der vier Dateien ist länger als 800 Zeilen.
+- [ ] `git diff --stat` zeigt außerhalb von `daemon/crates/sandbox/src/profile*` keine Änderung an Rust-Dateien.
+- [ ] Ein `grep` über die `pub`-Zeilen belegt: die öffentliche Schnittstelle der Crate ist unverändert.
+- [ ] `make check`, clippy mit `-D warnings` und `cargo fmt --all -- --check` grün.
+
+### Fallstricke
+- `include_bytes!` und andere pfadbezogene Makros hängen an der Datei, in der sie stehen; nach dem Verschieben stimmen relative Pfade nicht mehr.
+- Die Testmodule teilen heute Hilfsfunktionen; die wandern in ein gemeinsames `#[cfg(test)] mod testing` unter `profile/`, nicht in drei Kopien.
