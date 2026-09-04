@@ -400,23 +400,187 @@ fn find<'a>(response: &'a v1::RulesResponse, id: &str) -> Option<&'a v1::Rule> {
     response.rules.iter().find(|rule| rule.rule_id == id)
 }
 
-/// Die Tabelle der Regeln, gefiltert wie `--all` es sagt.
-fn print_rules(ctx: &Context, rules: &[v1::Rule], all: bool) {
-    let now = Utc::now();
-    let rows: Vec<Vec<String>> = rules
-        .iter()
-        .filter(|rule| all || (!rule.bundled && !is_expired(rule, now)))
-        .map(|rule| rule_row(rule, now))
-        .collect();
-    if rows.is_empty() {
-        ctx.render.note(if all {
-            "no rules"
-        } else {
-            "no rules of your own; --all also shows the bundled ones"
-        });
-        return;
+/// Was `rules list` zeigt und was es verschweigt.
+///
+/// Der Aufbau ist eine reine Funktion, damit die Tests ihn ganz sehen und
+/// nicht nur einen Teilschritt davon. `print_rules` schreibt danach nur noch,
+/// was hier steht.
+struct RulesView {
+    /// Die Zeilen der Tabelle, schon gerendert. Leer heißt: keine Tabelle.
+    rows: Vec<Vec<String>>,
+    /// Die Zeilen unter der Tabelle, in dieser Reihenfolge.
+    notes: Vec<String>,
+}
+
+/// Die verborgenen Regeln, gezählt nach dem, was sie noch tun.
+///
+/// Jede verborgene Regel fällt in genau einen Topf. Nur so stimmt die Summe
+/// mit dem überein, was `--all` zusätzlich zeigt, und genau das prüft ein
+/// Test: eine Fußzeile, die eine Regel doppelt zählt, nennt eine Zahl, die
+/// niemand nachrechnen kann.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Hidden {
+    /// Mitgeliefert, gültig, nicht abgeschaltet: entscheidet mit.
+    bundled: usize,
+    /// Die Durchreiche zum Sprachmodell, gültig und an.
+    passthrough: usize,
+    /// Vom Nutzer abgeschaltet (`disabled_bundled`): entscheidet nichts.
+    switched_off: usize,
+    /// Abgelaufen: entscheidet nichts mehr.
+    expired: usize,
+}
+
+impl Hidden {
+    /// Wie viele Regeln die Tabelle nicht zeigt.
+    const fn total(self) -> usize {
+        self.bundled + self.passthrough + self.switched_off + self.expired
     }
-    print!("{}", table(&HEADERS, &rows));
+
+    /// Der Satz unter der Tabelle. `None`, wenn nichts fehlt.
+    ///
+    /// Mitgeliefert und Durchreiche stehen getrennt, weil sie Verschiedenes
+    /// tun: die einen blocken und fragen, die andere ist der erklärte
+    /// Seitenkanal zum Sprachmodell (BACKLOG.md 4.2). Was abgeschaltet oder
+    /// abgelaufen ist, steht nicht unter „gilt auch": eine Zeile, die eine
+    /// abgeschaltete Regel für wirksam erklärt, wäre derselbe Fehler, den
+    /// diese Fußzeile beheben soll (`backlog/CONVENTIONS.md` 4.13).
+    fn note(self) -> Option<String> {
+        if self.total() == 0 {
+            return None;
+        }
+
+        let mut applies = Vec::new();
+        if self.bundled > 0 {
+            applies.push(plural(self.bundled, "bundled"));
+        }
+        if self.passthrough > 0 {
+            applies.push(plural(self.passthrough, "passthrough"));
+        }
+
+        let mut parts = Vec::new();
+        if !applies.is_empty() {
+            let verb = if self.bundled + self.passthrough == 1 {
+                "applies"
+            } else {
+                "apply"
+            };
+            let list = join_and(&applies);
+            parts.push(format!("{list} also {verb}"));
+        }
+        if self.switched_off > 0 {
+            let verb = if self.switched_off == 1 { "is" } else { "are" };
+            let count = plural(self.switched_off, "");
+            parts.push(format!("{count} {verb} switched off"));
+        }
+        if self.expired > 0 {
+            let verb = if self.expired == 1 { "has" } else { "have" };
+            let count = plural(self.expired, "");
+            parts.push(format!("{count} {verb} expired"));
+        }
+        let text = parts.join(", ");
+        Some(format!("{text}; humanitl rules list --all shows them"))
+    }
+}
+
+/// Die Tabelle der Regeln, gefiltert wie `--all` es sagt, samt Fußzeile.
+///
+/// Was der Filter wegnimmt, wird gezählt und darunter genannt. Die Hilfe des
+/// Unterkommandos verspricht die Regeln „in the order in which they are
+/// evaluated"; eine Tabelle mit einer Zeile, die über zehn mitgelieferte
+/// Regeln und die Durchreiche zum Sprachmodell schweigt, hielte das nicht ein
+/// (`backlog/CONVENTIONS.md` 4.13). Gezählt wird in derselben Antwort, die
+/// schon da ist, also ohne zweiten Aufruf.
+fn rules_view(rules: &[v1::Rule], all: bool, now: DateTime<Utc>) -> RulesView {
+    let shown: Vec<&v1::Rule> = rules
+        .iter()
+        .filter(|rule| in_table(rule, all, now))
+        .collect();
+    let counts = hidden_counts(rules, all, now);
+
+    let mut notes = Vec::new();
+    if shown.is_empty() {
+        notes.push(
+            if all {
+                "no rules"
+            } else {
+                "no rules of your own"
+            }
+            .to_owned(),
+        );
+    }
+    notes.extend(counts.note());
+
+    RulesView {
+        rows: shown.iter().map(|rule| rule_row(rule, now)).collect(),
+        notes,
+    }
+}
+
+/// Steht die Regel in der Tabelle?
+///
+/// Die eine Stelle, die den Filter kennt. Weil [`hidden_counts`] dieselbe
+/// Frage negiert stellt, kann keine Regel in beiden Töpfen landen und keine
+/// in gar keinem.
+fn in_table(rule: &v1::Rule, all: bool, now: DateTime<Utc>) -> bool {
+    all || (!rule.bundled && !is_expired(rule, now))
+}
+
+/// Zählt, was die Tabelle nicht zeigt.
+///
+/// Die Reihenfolge der Prüfung ist festgelegt, damit jede verborgene Regel
+/// genau einmal zählt: abgelaufen, dann abgeschaltet, dann Durchreiche, dann
+/// mitgeliefert. Abgelaufen steht vorn, weil eine abgelaufene Regel auch dann
+/// nichts mehr entscheidet, wenn jemand sie wieder anschaltet; abgeschaltet
+/// vor den beiden letzten, weil `disabled` sagt, dass die Regel nicht gilt,
+/// und nicht, was sie täte.
+fn hidden_counts(rules: &[v1::Rule], all: bool, now: DateTime<Utc>) -> Hidden {
+    let mut counts = Hidden::default();
+    for rule in rules.iter().filter(|rule| !in_table(rule, all, now)) {
+        if is_expired(rule, now) {
+            counts.expired += 1;
+        } else if rule.disabled {
+            counts.switched_off += 1;
+        } else if rule.passthrough_llm {
+            counts.passthrough += 1;
+        } else {
+            counts.bundled += 1;
+        }
+    }
+    counts
+}
+
+/// Schreibt, was [`rules_view`] aufgebaut hat.
+fn print_rules(ctx: &Context, rules: &[v1::Rule], all: bool) {
+    let view = rules_view(rules, all, Utc::now());
+    if !view.rows.is_empty() {
+        print!("{}", table(&HEADERS, &view.rows));
+    }
+    for note in &view.notes {
+        ctx.render.note(note);
+    }
+}
+
+/// `1 bundled rule`, `10 bundled rules`, mit leerem `what` `1 rule`.
+fn plural(count: usize, what: &str) -> String {
+    let kind = if what.is_empty() {
+        String::new()
+    } else {
+        format!("{what} ")
+    };
+    if count == 1 {
+        format!("1 {kind}rule")
+    } else {
+        format!("{count} {kind}rules")
+    }
+}
+
+/// `a`, `a and b`, `a, b and c`.
+fn join_and(parts: &[String]) -> String {
+    match parts.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, head)) => format!("{} and {last}", head.join(", ")),
+    }
 }
 
 /// Eine Zeile der Regel-Tabelle.
@@ -936,7 +1100,8 @@ mod tests {
     use humanitl_ipc::v1;
 
     use super::{
-        expires_cell, order_with, origin, rule_from_args, rule_json, rule_row, test_not_yet,
+        expires_cell, hidden_counts, order_with, origin, rule_from_args, rule_json, rule_row,
+        rules_view, test_not_yet,
     };
     use crate::cli::RuleArgs;
     use crate::cmd::EXIT_USER;
@@ -1136,5 +1301,206 @@ mod tests {
         assert!(failure.diagnostic.why.contains("https://evil.example"));
         assert!(failure.diagnostic.why.contains("--method GET"));
         assert!(failure.diagnostic.why.contains("Rules RPC"));
+    }
+
+    // --- Die Fußzeile unter der Tabelle (HUM-038) --------------------------
+
+    /// Ein fester Zeitpunkt, damit „abgelaufen" nicht von der Uhr abhängt.
+    fn now() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::from_timestamp(1_800_000_000, 0).expect("a valid instant")
+    }
+
+    /// Eine mitgelieferte Regel, gültig für immer.
+    fn bundled_rule(n: usize) -> v1::Rule {
+        let mut rule = rule(
+            &format!("01920000-0000-7000-8000-00000000000{n}"),
+            None,
+            true,
+        );
+        rule.expires = Some(v1::RuleExpiry {
+            expiry: Some(v1::rule_expiry::Expiry::Never(())),
+        });
+        rule
+    }
+
+    /// Eine Regel, deren Frist vor [`now`] lag.
+    fn expired_rule(id: &str, bundled: bool) -> v1::Rule {
+        rule(
+            id,
+            Some(v1::rule_expiry::Expiry::At(prost_types::Timestamp {
+                seconds: 1_000,
+                nanos: 0,
+            })),
+            bundled,
+        )
+    }
+
+    /// Die Fußzeile eines Aufrufs, oder `None`, wenn keine kommt.
+    fn footer(rules: &[v1::Rule], all: bool) -> Option<String> {
+        rules_view(rules, all, now())
+            .notes
+            .into_iter()
+            .find(|note| note.contains("--all"))
+    }
+
+    /// Die Tabelle schweigt sonst über Regeln, die mitentscheiden.
+    ///
+    /// Ohne diese Zeile zeigte `humanitl rules list` bei einer eigenen Regel
+    /// eine Tabelle mit einer Zeile, während elf weitere Regeln entscheiden —
+    /// und die Hilfe verspricht die Regeln „in the order in which they are
+    /// evaluated" (CONVENTIONS 4.13).
+    #[test]
+    fn the_footer_counts_what_the_table_does_not_show() {
+        let mut rules: Vec<v1::Rule> = (0..10).map(bundled_rule).collect();
+        let mut passthrough = bundled_rule(10);
+        passthrough.rule_id = "01920000-0000-7000-8000-0000000000ff".to_owned();
+        passthrough.passthrough_llm = true;
+        rules.push(passthrough);
+        rules.push(rule("018f0001-0000-7000-8000-000000000001", None, false));
+
+        let view = rules_view(&rules, false, now());
+        assert_eq!(view.rows.len(), 1, "only the rule of the person is shown");
+        assert_eq!(
+            view.notes,
+            vec![
+                "10 bundled rules and 1 passthrough rule also apply; \
+                 humanitl rules list --all shows them"
+            ]
+        );
+    }
+
+    /// Eine abgeschaltete mitgelieferte Regel entscheidet nichts.
+    ///
+    /// Sie unter „also apply" zu zählen wäre dieselbe Falschaussage, die die
+    /// Fußzeile beheben soll: `RULES_010` gibt es, damit „aus" wirklich aus
+    /// heißt.
+    #[test]
+    fn a_switched_off_bundled_rule_does_not_apply() {
+        let mut rules: Vec<v1::Rule> = (0..3).map(bundled_rule).collect();
+        rules[0].disabled = true;
+        rules[1].disabled = true;
+
+        assert_eq!(
+            footer(&rules, false),
+            Some(
+                "1 bundled rule also applies, 2 rules are switched off; \
+                 humanitl rules list --all shows them"
+                    .to_owned()
+            )
+        );
+    }
+
+    /// Auch eine abgeschaltete Durchreiche zählt nicht als wirksam.
+    #[test]
+    fn a_switched_off_passthrough_does_not_apply_either() {
+        let mut passthrough = bundled_rule(0);
+        passthrough.passthrough_llm = true;
+        passthrough.disabled = true;
+
+        let note = footer(&[passthrough], false).expect("one hidden rule");
+        assert!(!note.contains("passthrough"), "{note}");
+        assert!(note.starts_with("1 rule is switched off;"), "{note}");
+    }
+
+    /// Eine abgelaufene mitgelieferte Regel steht bei den abgelaufenen.
+    ///
+    /// Der frühere Zähler sah nur die nicht-mitgelieferten an und hätte sie
+    /// als wirksam gemeldet.
+    #[test]
+    fn an_expired_bundled_rule_does_not_apply() {
+        let rules = [
+            bundled_rule(0),
+            expired_rule("01920000-0000-7000-8000-00000000000a", true),
+        ];
+
+        assert_eq!(
+            footer(&rules, false),
+            Some(
+                "1 bundled rule also applies, 1 rule has expired; \
+                 humanitl rules list --all shows them"
+                    .to_owned()
+            )
+        );
+    }
+
+    /// Jede verborgene Regel zählt genau einmal, und die Summe stimmt.
+    ///
+    /// Der Fall, der das früher brach: eine abgelaufene Regel mit
+    /// `passthrough_llm` und `bundled: false` wurde einmal als Durchreiche und
+    /// einmal als abgelaufen gezählt. Geprüft wird die Aussage, die wirklich
+    /// gilt: was die Tabelle zeigt plus was die Fußzeile zählt ist das, was
+    /// `--all` zeigt.
+    #[test]
+    fn every_hidden_rule_is_counted_exactly_once() {
+        let mut expired_passthrough = expired_rule("018f0001-0000-7000-8000-0000000000fe", false);
+        expired_passthrough.passthrough_llm = true;
+
+        let mut switched_off = bundled_rule(1);
+        switched_off.disabled = true;
+
+        let mut passthrough = bundled_rule(2);
+        passthrough.passthrough_llm = true;
+
+        let rules = [
+            rule("018f0001-0000-7000-8000-000000000001", None, false),
+            bundled_rule(0),
+            switched_off,
+            passthrough,
+            expired_passthrough,
+            expired_rule("018f0001-0000-7000-8000-000000000002", false),
+        ];
+
+        let plain = rules_view(&rules, false, now());
+        let all = rules_view(&rules, true, now());
+        let hidden = hidden_counts(&rules, false, now());
+        assert_eq!(
+            plain.rows.len() + hidden.total(),
+            all.rows.len(),
+            "the footer counts exactly what --all adds: {hidden:?}"
+        );
+        assert_eq!(hidden.bundled, 1);
+        assert_eq!(hidden.passthrough, 1);
+        assert_eq!(hidden.switched_off, 1);
+        assert_eq!(hidden.expired, 2);
+    }
+
+    /// `--all` zeigt alles, also gibt es nichts zu melden.
+    #[test]
+    fn all_shows_everything_and_says_nothing_underneath() {
+        let rules: Vec<v1::Rule> = (0..3).map(bundled_rule).collect();
+
+        let view = rules_view(&rules, true, now());
+        assert_eq!(view.rows.len(), 3);
+        assert_eq!(hidden_counts(&rules, true, now()).total(), 0);
+        assert_eq!(view.notes, Vec::<String>::new());
+    }
+
+    /// Ohne `llm.endpoint` gibt es keine Durchreiche, und die Zeile erfindet
+    /// keine.
+    #[test]
+    fn without_an_endpoint_the_footer_names_no_passthrough() {
+        let rules: Vec<v1::Rule> = (0..10).map(bundled_rule).collect();
+
+        let note = footer(&rules, false).expect("ten hidden rules");
+        assert_eq!(
+            note,
+            "10 bundled rules also apply; humanitl rules list --all shows them"
+        );
+    }
+
+    /// Ohne eigene Regel steht der Hinweis über der Fußzeile, nicht statt ihr.
+    #[test]
+    fn an_empty_table_still_names_what_decides() {
+        let rules: Vec<v1::Rule> = (0..2).map(bundled_rule).collect();
+
+        let view = rules_view(&rules, false, now());
+        assert!(view.rows.is_empty());
+        assert_eq!(
+            view.notes,
+            vec![
+                "no rules of your own".to_owned(),
+                "2 bundled rules also apply; humanitl rules list --all shows them".to_owned(),
+            ]
+        );
     }
 }

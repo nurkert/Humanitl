@@ -490,3 +490,141 @@ fn a_path_pattern_and_prefixes_both_have_to_match() {
         );
     }
 }
+
+// --- Abgeschaltete und mitgelieferte Regeln (HUM-038) -----------------------
+
+/// Eine abgeschaltete Regel entscheidet nichts, und die nächste kommt dran.
+///
+/// Der Fall ist der Grund, warum es das Feld gibt: Wer eine mitgelieferte
+/// Blockregel abschaltet, will die Anfrage sehen, nicht sie stillschweigend
+/// erlaubt bekommen. Deshalb steht hinter der abgeschalteten Regel hier eine
+/// zweite, und der Test hält fest, dass sie greift.
+#[test]
+fn a_disabled_rule_decides_nothing() {
+    let off = rule(Action::Block, "**.github.com").disabled(true);
+    let after = rule(Action::Ask, "api.github.com");
+    let asked = after.id;
+    let rules = RuleSet::from_rules([off, after]);
+
+    let target = host("api.github.com");
+    let key = RequestKey::new(&target, &Method::GET, "/", Scheme::Https, 443);
+    assert_eq!(
+        rules.evaluate(&key, now(), SessionId::new()),
+        Verdict::Matched {
+            rule: asked,
+            action: Action::Ask
+        }
+    );
+}
+
+/// Ohne eine zweite Regel bleibt es bei der Vorgabe, also `ask`.
+#[test]
+fn the_last_disabled_rule_falls_through_to_ask() {
+    let off = rule(Action::Allow, "api.github.com").disabled(true);
+    let rules = RuleSet::from_rules([off]);
+
+    let target = host("api.github.com");
+    let key = RequestKey::new(&target, &Method::GET, "/", Scheme::Https, 443);
+    assert_eq!(
+        rules.evaluate(&key, now(), SessionId::new()),
+        Verdict::Default
+    );
+}
+
+/// `set_disabled` schaltet eine Regel ab und wieder an.
+#[test]
+fn set_disabled_toggles_a_rule_by_id() {
+    let one = rule(Action::Block, "api.github.com");
+    let id = one.id;
+    let mut rules = RuleSet::from_rules([one]);
+
+    let target = host("api.github.com");
+    let key = RequestKey::new(&target, &Method::GET, "/", Scheme::Https, 443);
+
+    rules
+        .set_disabled(id, true)
+        .expect("the rule is in the set");
+    assert_eq!(
+        rules.evaluate(&key, now(), SessionId::new()),
+        Verdict::Default
+    );
+
+    rules
+        .set_disabled(id, false)
+        .expect("the rule is in the set");
+    assert_eq!(
+        rules.evaluate(&key, now(), SessionId::new()),
+        Verdict::Matched {
+            rule: id,
+            action: Action::Block
+        }
+    );
+
+    assert!(
+        rules.set_disabled(RuleId::new(), true).is_err(),
+        "an id no rule carries is an error, not a silent no-op"
+    );
+}
+
+/// `prepend_bundled` erzwingt `bundled` und übernimmt die Abschaltliste.
+///
+/// Beides ist die Zusage des Aufrufs: Was auf diesem Weg hereinkommt, gehört
+/// nicht dem Nutzer, auch wenn die Datei etwas anderes behauptet, und die
+/// Entscheidung des Nutzers aus seiner `rules.yaml` wirkt auch dann, wenn er
+/// sie vor dieser Fassung des Regelsatzes getroffen hat.
+#[test]
+fn prepend_bundled_forces_bundled_and_honours_the_disable_list() {
+    let off = rule(Action::Block, "models.dev");
+    let on = rule(Action::Block, "**.sentry.io");
+    let (off_id, on_id) = (off.id, on.id);
+
+    let mut rules = RuleSet::new();
+    rules.set_disabled_bundled([off_id]);
+    rules.prepend_bundled([off, on]);
+
+    assert!(
+        rules.iter().all(|rule| rule.bundled),
+        "everything that comes in this way is bundled"
+    );
+    let disabled: Vec<bool> = rules.iter().map(|rule| rule.disabled).collect();
+    assert_eq!(disabled, vec![true, false]);
+
+    let blocked = host("eu.sentry.io");
+    let key = RequestKey::new(&blocked, &Method::GET, "/", Scheme::Https, 443);
+    assert_eq!(
+        rules.evaluate(&key, now(), SessionId::new()),
+        Verdict::Matched {
+            rule: on_id,
+            action: Action::Block
+        }
+    );
+
+    let disabled_host = host("models.dev");
+    let key = RequestKey::new(
+        &disabled_host,
+        &Method::GET,
+        "/api.json",
+        Scheme::Https,
+        443,
+    );
+    assert_eq!(
+        rules.evaluate(&key, now(), SessionId::new()),
+        Verdict::Default
+    );
+}
+
+/// Die mitgelieferten Regeln behalten ihre Reihenfolge und stehen vorne.
+#[test]
+fn prepend_bundled_keeps_its_order_in_front_of_what_was_there() {
+    let mine = rule(Action::Allow, "example.com");
+    let mine_id = mine.id;
+    let first = rule(Action::Block, "models.dev");
+    let second = rule(Action::Ask, "registry.npmjs.org");
+    let (first_id, second_id) = (first.id, second.id);
+
+    let mut rules = RuleSet::from_rules([mine]);
+    rules.prepend_bundled([first, second]);
+
+    let order: Vec<RuleId> = rules.iter().map(|rule| rule.id).collect();
+    assert_eq!(order, vec![first_id, second_id, mine_id]);
+}
