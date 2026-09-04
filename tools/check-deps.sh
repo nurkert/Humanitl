@@ -80,4 +80,24 @@ if [[ -d app/lib ]]; then
   done < <(grep -rn "package:shadcn_flutter" app/lib app/test app/integration_test --include='*.dart' 2>/dev/null || true)
 fi
 
+# Und die Naht ist auch in der oeffentlichen Schnittstelle des Pakets zu:
+# `shadcn_theme.dart` und `h_control.dart` fuehren Typen der Bibliothek in
+# ihren Signaturen. Wuerde `humanitl_ui.dart` sie exportieren, koennte ein
+# Feature sie benutzen, ohne je `package:shadcn_flutter` zu schreiben — und
+# genau nach diesem Import sucht die Pruefung darueber.
+barrel=app/packages/ui/lib/humanitl_ui.dart
+if [[ -f "$barrel" ]]; then
+  while IFS= read -r hit; do
+    echo "the barrel exports a file that carries library types: $hit" >&2
+    fail=1
+  done < <(grep -n "^export 'src/theme/shadcn_theme.dart'\|^export 'src/widgets/h_control.dart'" "$barrel" || true)
+fi
+
+# Und sie steht in `app/packages/ui/pubspec.yaml`, nicht im Wurzel-Pubspec:
+# ein Eintrag dort machte sie fuer jedes Feature aufloesbar.
+if [[ -f app/pubspec.yaml ]] && grep -q '^\s*shadcn_flutter:' app/pubspec.yaml; then
+  echo "shadcn_flutter belongs in app/packages/ui/pubspec.yaml, not app/pubspec.yaml" >&2
+  fail=1
+fi
+
 exit "$fail"

@@ -155,6 +155,40 @@ void main() {
     expect(client.decisions, isEmpty);
   });
 
+  testWidgets('eine Entscheidungstaste bricht nicht, wenn ein Control steht', (
+    WidgetTester tester,
+  ) async {
+    // `Clickable` aus `shadcn_flutter` legt seine Aktion als
+    // `CallbackAction<Intent>` ab. `Actions.maybeFind<ActivateIntent>` kann
+    // die nicht werfen: im Entwicklungsbau bricht es in einer Zusicherung ab,
+    // im Auslieferungsbau gibt es still `null` zurück — und dann gälte `a`
+    // als frei, während der Fokus auf „Blockieren" steht. `a` ist
+    // unumkehrbar (`docs/UX.md` 5.2).
+    final FakeDaemonClient client = fake(holdScript(<FlowDetail>[github()]));
+    await pumpIntercept(tester, client: client);
+    await playScript(tester);
+
+    // Auf ein Control der Schicht fokussieren, egal welches.
+    bool onControl = false;
+    for (int i = 0; i < 16 && !onControl; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      final BuildContext? focused = FocusManager.instance.primaryFocus?.context;
+      onControl =
+          focused != null &&
+          Actions.maybeFind<Intent>(focused, intent: const ActivateIntent()) !=
+              null;
+    }
+    expect(onControl, isTrue, reason: 'ein Control nimmt den Fokus');
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyJ);
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('single_keys_ignored_in_textfield', (WidgetTester tester) async {
     final FakeDaemonClient client = fake(holdScript(<FlowDetail>[github()]));
     await pumpIntercept(tester, client: client);

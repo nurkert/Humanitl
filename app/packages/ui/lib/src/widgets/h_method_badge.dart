@@ -6,6 +6,11 @@ import 'h_badge.dart';
 
 /// The HTTP method of a request, as an uppercase monospace badge.
 ///
+/// **Ohne Entsprechung in der Bibliothek** — ein Badge, dessen Ton eine
+/// Bedeutung trägt, kennt sie nicht. Er steht deshalb auf [HBadge] und damit
+/// mittelbar auf ihrem Badge; die Tabelle der Töne ist [HMethodColors] und
+/// keine zweite Palette.
+///
 /// Method hues are deliberately *not* state colours: a `DELETE` is not a block.
 /// `DELETE` therefore borrows the blocked hue at seventy percent, which reads as
 /// a warning without claiming a decision was made. The table itself lives in
