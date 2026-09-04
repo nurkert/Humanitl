@@ -335,15 +335,17 @@ class _SingleKeyAction<T extends Intent> extends Action<T> {
   @override
   bool get isActionEnabled => !isTextInputFocused() && !_focusTakesActivate();
 
+  /// Der Typparameter ist `Intent` und nicht `ActivateIntent`: `Clickable` aus
+  /// `shadcn_flutter` legt seine Aktion als `CallbackAction<Intent>` ab, und
+  /// `maybeFind<ActivateIntent>` bricht darauf im Entwicklungsbau ab und gibt
+  /// im Auslieferungsbau still `null` zurück — die Bildschirmtaste feuerte
+  /// dann, obwohl ein Control den Fokus hält (flutter/flutter#180871).
   static bool _focusTakesActivate() {
     final BuildContext? context = FocusManager.instance.primaryFocus?.context;
     if (context == null) {
       return false;
     }
-    return Actions.maybeFind<ActivateIntent>(
-          context,
-          intent: const ActivateIntent(),
-        ) !=
+    return Actions.maybeFind<Intent>(context, intent: const ActivateIntent()) !=
         null;
   }
 

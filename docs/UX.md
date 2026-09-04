@@ -544,6 +544,7 @@ Damit die Abweichung prüfbar bleibt, steht sie hier und nicht zwischen den Zeil
 - **HUM-049:** Erlauben verlangt bei mindestens einem ungelösten Finding dieselbe Halte-Bestätigung wie Blockieren, plus einen Satz, der Secret-Typ und Zielhost benennt — aber kein Modal (4.7).
 - **`BACKLOG.md` 5:** Das Glyph atmet begrenzt (zwei Schwellen, je drei Züge) statt dauerhaft, es hellt auf, statt zu verblassen, und ein Glyph, das eine Schwelle überschreitet, startet seinen ersten Zug bei voller Deckkraft (2.7).
 - **`packages/ui`:** Die ruhende `held`-Rail in der Queue ist namentlich von der 3:1-Regel ausgenommen (3.3, Regel 10). Jede andere Fläche und jede andere Rail erreicht sie.
+- **2.9 und `HTextField`:** Der Fokusring dieses **einen** Controls blendet über 150 ms ein und reserviert keinen Platz, sondern zeichnet über die eigene Kante hinaus. 2.9 verlangt einen Ring in einem Frame, weil ein einblendender sich als Eingabeverzögerung liest. Das Eingabefeld steht seit der Revision von ADR-0009 auf dem `TextField` von `shadcn_flutter`, und das hängt seinen `FocusOutline` fest ein — ohne Schalter. Zwei Ringe übereinander wären einer zu viel, also ist es ihrer. Seine Maße sind unsere: zwei Pixel Akzent, zwei Pixel Abstand, gesetzt über `FocusOutlineTheme` aus `HFocusRingMetrics`. Jedes andere Control trägt weiterhin `HFocusRing`, der seinen Platz reserviert und nicht animiert. Unter reduzierter Bewegung fällt die Einblendung des Bibliotheksrings auf 7,5 ms, weil deren Animationsprimitive ohne `animationBehavior` gebaut ist; sichtbar ist das Ergebnis dann wieder ein Frame.
 
 ---
 
@@ -660,15 +661,19 @@ gedrückten Zustand. Was davon im MVP trotzdem gilt, steht im ADR: die
 Haltedauer behält ihre Zeit, Text bleibt über etwa 3:1, und ein Klick zeigt
 eine Reaktion. Der Rest ist bis 1.0.0 vertagt.
 
-28. Ein Kontextmenü fehlt. Gebraucht wird es zweimal: „Copy value" und „Copy
-    path" im JSON-Baum und Copy/Paste im Terminal. Es gehört nach `packages/ui`
-    und nicht in eines der beiden Features, weil beide dieselbe Tastenführung
-    und denselben Fokusring brauchen. Geschätzt ein Tag.
-29. Ein Datum-Zeit-Wähler fehlt. Der Zeitraum-Filter des Audit-Screens braucht
-    ihn, und die Uhrzeit gehört dort in Monospace, weil sie Teil des Belegs ist
-    (`backlog/CONVENTIONS.md` 4.13). Geschätzt zwei Tage.
-30. `HResizablePanes` kennt nur die waagerechte Achse. Die senkrechte fehlt,
-    sobald ein Pane über einem anderen liegt. Geschätzt ein halber Tag.
+28. ~~Ein Kontextmenü fehlt.~~ Geschlossen am 2026-09-04: `shadcn_flutter`
+    bringt eines mit. Gebraucht wird es zweimal, „Copy value" und „Copy path" im
+    JSON-Baum und Copy/Paste im Terminal; es wird in `packages/ui` gewickelt,
+    nicht in einem der beiden Features, weil beide dieselbe Tastenführung und
+    denselben Fokusring brauchen.
+29. ~~Ein Datum-Zeit-Wähler fehlt.~~ Geschlossen am 2026-09-04: die Bibliothek
+    bringt einen mit. Beim Wickeln gilt weiterhin, dass die Uhrzeit im
+    Zeitraum-Filter des Audit-Screens in Monospace steht, weil sie Teil des
+    Belegs ist (`backlog/CONVENTIONS.md` 4.13).
+30. ~~`HResizablePanes` kennt nur die waagerechte Achse.~~ Geschlossen am
+    2026-09-04: die Bibliothek kennt beide Achsen. Ihre zwei offenen Fehler zur
+    senkrechten Achse (#427, #428) waren der Grund, warum HUM-035 sie als Risiko
+    führte; beim Wickeln ist zu prüfen, ob sie uns treffen.
 31. `FocusRing` in `app/lib/core/ui` und `HFocusRing` in `packages/ui` sind
     dieselbe Sache zweimal. Der Kommentar, der das mit einem Zustand begründete,
     den Punkt 14 aufgehoben hat, ist am 2026-09-04 richtiggestellt; die Datei

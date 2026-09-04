@@ -1,11 +1,11 @@
 import 'package:flutter/widgets.dart';
+import 'package:shadcn_flutter/shadcn_flutter.dart' as shad;
 
 import '../theme/h_theme.dart';
+import '../theme/shadcn_theme.dart';
 import '../tokens/spacing.dart';
 import '../tokens/tokens.dart';
-import '../tokens/typography.dart';
-import 'h_animated_fill.dart';
-import 'h_focus_ring.dart';
+import 'h_control.dart';
 import 'h_hairline.dart';
 
 /// Eine Wahlmöglichkeit in [HSegmented] oder [HChoiceChips].
@@ -38,8 +38,12 @@ class HSegmentOption<T> {
 /// Die gewählte trägt die höchste Fläche und den Primärtext, nie die
 /// Akzentfüllung: der Akzent gehört der einen Handlung des Screens, und ein
 /// Formular mit vier gefüllten Segmenten hätte fünf (`docs/UX.md` 3.1).
-/// Jedes Segment ist ein eigener Fokusstopp mit dem Ring von [HFocusRing] und
+/// Jedes Segment ist ein eigener Fokusstopp mit dem Ring von `HFocusRing` und
 /// mindestens [HSize.hitMin] hoch (5.1, 6).
+///
+/// Der Rahmen um die Reihe ist ein `OutlinedContainer` der Bibliothek: er
+/// bringt Fläche, Rahmen, Ecke und das Beschneiden mit, damit die Füllung
+/// eines Segments an der Ecke nicht über den Rahmen läuft.
 class HSegmented<T> extends StatelessWidget {
   /// Creates a segmented control.
   const HSegmented({
@@ -64,25 +68,23 @@ class HSegmented<T> extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final HTokens tokens = HTheme.of(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: HRadius.controlRadius,
-        border: Border.all(color: tokens.colors.line),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          for (int i = 0; i < options.length; i++) ...<Widget>[
-            if (i > 0) const HHairline(vertical: true, length: HSize.hitMin),
-            HSegment<T>(
-              option: options[i],
-              selected: options[i].value == selected,
-              enabled: enabled,
-              onSelect: onSelect,
-            ),
+    return HTheme.host(
+      context,
+      _HSegmentFrame(
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            for (int i = 0; i < options.length; i++) ...<Widget>[
+              if (i > 0) const HHairline(vertical: true, length: HSize.hitMin),
+              HSegment<T>(
+                option: options[i],
+                selected: options[i].value == selected,
+                enabled: enabled,
+                onSelect: onSelect,
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -114,31 +116,49 @@ class HChoiceChips<T> extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
-    return Wrap(
-      spacing: tokens.spacing.x1,
-      runSpacing: tokens.spacing.x1,
-      children: <Widget>[
-        for (final HSegmentOption<T> option in options)
-          DecoratedBox(
-            decoration: BoxDecoration(
-              borderRadius: HRadius.controlRadius,
-              border: Border.all(color: tokens.colors.line),
+    return HTheme.host(
+      context,
+      Wrap(
+        spacing: tokens.spacing.x1,
+        runSpacing: tokens.spacing.x1,
+        children: <Widget>[
+          for (final HSegmentOption<T> option in options)
+            _HSegmentFrame(
+              child: HSegment<T>(
+                option: option,
+                selected: selected.contains(option.value),
+                enabled: enabled,
+                onSelect: onToggle,
+              ),
             ),
-            child: HSegment<T>(
-              option: option,
-              selected: selected.contains(option.value),
-              enabled: enabled,
-              onSelect: onToggle,
-            ),
-          ),
-      ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Der Rahmen um eine Reihe von Segmenten oder um einen einzelnen Chip.
+class _HSegmentFrame extends StatelessWidget {
+  const _HSegmentFrame({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final HTokens tokens = HTheme.of(context);
+    return shad.OutlinedContainer(
+      backgroundColor: const Color(0x00000000),
+      borderColor: tokens.colors.line,
+      borderWidth: HSize.hairline,
+      borderRadius: HRadius.controlRadius,
+      child: child,
     );
   }
 }
 
 /// Ein einzelnes Segment. Öffentlich, weil [HSegmented] und [HChoiceChips]
 /// dasselbe Verhalten teilen und eine Kopie davon sofort auseinanderliefe.
-class HSegment<T> extends StatefulWidget {
+class HSegment<T> extends StatelessWidget {
   /// Creates one segment.
   const HSegment({
     required this.option,
@@ -161,81 +181,34 @@ class HSegment<T> extends StatefulWidget {
   final ValueChanged<T> onSelect;
 
   @override
-  State<HSegment<T>> createState() => _HSegmentState<T>();
-}
-
-class _HSegmentState<T> extends State<HSegment<T>> {
-  bool _focused = false;
-  bool _hovered = false;
-
-  @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
-    final HSegmentOption<T> option = widget.option;
-    final Color fill = widget.selected
-        ? tokens.colors.bg3
-        : _hovered
-        ? tokens.colors.bg2
-        : const Color(0x00000000);
     final Widget? leading = option.leading;
     return Semantics(
       button: true,
-      selected: widget.selected,
-      enabled: widget.enabled,
+      selected: selected,
+      enabled: enabled,
       label: option.semanticsLabel ?? option.label,
       excludeSemantics: true,
-      child: FocusableActionDetector(
-        enabled: widget.enabled,
-        mouseCursor: widget.enabled
-            ? SystemMouseCursors.click
-            : MouseCursor.defer,
-        onShowHoverHighlight: (bool value) => setState(() => _hovered = value),
-        onFocusChange: (bool value) => setState(() => _focused = value),
-        actions: <Type, Action<Intent>>{
-          ActivateIntent: CallbackAction<ActivateIntent>(
-            onInvoke: (ActivateIntent intent) {
-              widget.onSelect(option.value);
-              return null;
-            },
-          ),
-        },
-        child: HFocusRing(
-          visible: _focused && widget.enabled,
-          radius: tokens.radii.control,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: widget.enabled ? () => widget.onSelect(option.value) : null,
-            child: HAnimatedFill(
-              color: fill,
-              builder: (BuildContext context, Color animated) => Container(
-                constraints: BoxConstraints(minHeight: tokens.sizes.hitMin),
-                padding: EdgeInsets.symmetric(horizontal: tokens.spacing.x2),
-                color: animated,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    if (leading != null) ...<Widget>[
-                      leading,
-                      SizedBox(width: tokens.spacing.x1),
-                    ],
-                    Text(
-                      option.label,
-                      // Deaktiviert heißt sichtbar deaktiviert: `fg2` ist die
-                      // Stufe, die `docs/UX.md` 6 dafür freihält.
-                      style: tokens.typography.ui12.medium.tinted(
-                        !widget.enabled
-                            ? tokens.colors.fg2
-                            : widget.selected
-                            ? tokens.colors.fg0
-                            : tokens.colors.fg1,
-                      ),
-                    ),
-                  ],
-                ),
+      child: HControl(
+        enabled: enabled,
+        onPressed: enabled ? () => onSelect(option.value) : null,
+        radius: tokens.radii.control,
+        leading: leading,
+        leadingGap: tokens.spacing.x1,
+        fill: (HTokens tokens, Set<WidgetState> states) =>
+            HShadcnButtonStyle.segmentFill(tokens, states, selected: selected),
+        style: (HTokens tokens, Color fill) =>
+            HShadcnButtonStyle.segment(tokens, selected: selected, fill: fill),
+        builder: (BuildContext context, Set<WidgetState> states, Color fill) =>
+            ConstrainedBox(
+              constraints: BoxConstraints(minHeight: tokens.sizes.hitMin),
+              child: Center(
+                widthFactor: 1,
+                heightFactor: 1,
+                child: Text(option.label),
               ),
             ),
-          ),
-        ),
       ),
     );
   }

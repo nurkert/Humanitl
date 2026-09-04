@@ -1,14 +1,10 @@
 import 'package:flutter/widgets.dart';
 
 import '../theme/h_theme.dart';
-import '../tokens/colors.dart';
-import '../tokens/flow_state.dart';
-import '../tokens/motion.dart';
+import '../theme/shadcn_theme.dart';
 import '../tokens/spacing.dart';
 import '../tokens/tokens.dart';
-import '../tokens/typography.dart';
-import 'h_animated_fill.dart';
-import 'h_focus_ring.dart';
+import 'h_control.dart';
 
 /// The four button roles. There is no fifth.
 enum HButtonVariant {
@@ -29,6 +25,31 @@ enum HButtonVariant {
   danger,
 }
 
+/// Die Rolle, unter der [HShadcnButtonStyle] eine Variante kennt.
+///
+/// Eine Funktion und kein Getter auf [HButtonVariant]: die Rolle und der
+/// Stil, den sie in der Bibliothek trägt, sind Sache dieses Pakets. Stünde
+/// sie als öffentliches Glied der Aufzählung, führte die öffentliche
+/// Schnittstelle einen Typ, den `humanitl_ui.dart` nicht exportiert — und der
+/// nächste Schritt wäre ein Feature, das ihn benutzt. Die Zuordnung zu den
+/// Varianzen der Bibliothek — `primary`, `secondary`, `ghost`, `destructive` —
+/// steht in [HShadcnTheme] und wird von dort in deren `ButtonTheme`-Einträge
+/// gelegt.
+HShadcnButtonRole _roleOf(HButtonVariant variant) => switch (variant) {
+  HButtonVariant.primary => HShadcnButtonRole.primary,
+  HButtonVariant.secondary => HShadcnButtonRole.secondary,
+  HButtonVariant.ghost => HShadcnButtonRole.ghost,
+  HButtonVariant.danger => HShadcnButtonRole.danger,
+};
+
+/// Dieselbe Vorschau, wie [HControl] sie kennt.
+HControlPreview? _previewOf(HButtonPreview? preview) => switch (preview) {
+  null => null,
+  HButtonPreview.hovered => HControlPreview.hovered,
+  HButtonPreview.pressed => HControlPreview.pressed,
+  HButtonPreview.focused => HControlPreview.focused,
+};
+
 /// Button-Mindesthöhen. Beide erreichen das 28-px-Ziel des Designs.
 ///
 /// Mindesthöhen und keine festen Höhen: bei `TextScaler.linear(2.0)` misst
@@ -47,6 +68,17 @@ enum HButtonSize {
 
   /// Horizontal padding.
   double get padding => this == HButtonSize.sm ? HSpace.x2 + 2 : HSpace.x3;
+
+  /// Vertical padding.
+  double get verticalPadding => HSpace.x1;
+
+  /// Die Mindesthöhe der Beschriftung, damit der Kasten [minHeight] erreicht.
+  ///
+  /// Der Kasten ist Beschriftung plus zweimal [verticalPadding]; der Rahmen
+  /// zählt nicht dazu, weil die Bibliothek ihn in die Fläche malt statt ihn
+  /// davorzulegen. Die Untergrenze steht innen und nicht außen, weil die
+  /// Beschriftung sonst am oberen Rand klebte, sobald die Untergrenze greift.
+  double get innerMinHeight => minHeight - 2 * verticalPadding;
 }
 
 /// An interaction state a button can be shown in without a pointer.
@@ -64,29 +96,14 @@ enum HButtonPreview {
   focused,
 }
 
-/// Area alpha of the blocked hue behind a danger button at rest: the tint cap
-/// of the design, [HColors.tintAlpha].
-const double _dangerRestAlpha = HColors.tintAlpha;
-
-/// Area alpha of the blocked hue behind a hovered danger button.
-///
-/// Hover and press step above the resting tint the way the secondary variant
-/// steps from `bg2` to `bg3`; without the step the three states are one and
-/// the same fill. The steps are as small as they can be while still visible:
-/// the label, drawn in the blocked hue, has to keep 3:1 over the fill on every
-/// surface of both ladders, and the light pressed fill is the tight case.
-const double _dangerHoverAlpha = HColors.fillHoverAlpha;
-
-/// Area alpha of the blocked hue behind a pressed danger button.
-const double _dangerPressedAlpha = HColors.fillPressedAlpha;
-
 /// A button.
 ///
-/// Hover, press and focus are all rendered; the press fill takes
-/// [HMotion.press], which is the only feedback the design allows itself.
-/// Der Fokus kommt als [HFocusRing]: zwei Pixel Akzent außerhalb des eigenen
-/// Rahmens, in einem Frame, nie als umgefärbter Rahmen (`docs/UX.md` 6).
-class HButton extends StatefulWidget {
+/// Steht über [HControl] auf `Clickable` aus `shadcn_flutter`, der Schicht,
+/// aus der auch deren `Button` gemacht ist. Die Farben kommen aus [HTokens]
+/// über [HShadcnButtonStyle], dieselbe Ableitung, die `HTheme` in die
+/// `ButtonTheme`-Einträge der Bibliothek legt: was dieses Widget malt und was
+/// ein Button der Bibliothek malt, kommt damit aus einer Quelle.
+class HButton extends StatelessWidget {
   /// Creates a button whose label is [child].
   const HButton({
     required this.child,
@@ -135,213 +152,41 @@ class HButton extends StatefulWidget {
   bool get enabled => onPressed != null;
 
   @override
-  State<HButton> createState() => _HButtonState();
-}
-
-class _HButtonState extends State<HButton> {
-  bool _hovered = false;
-  bool _pressed = false;
-  bool _focused = false;
-
-  void _setHovered(bool value) {
-    if (_hovered != value) {
-      setState(() => _hovered = value);
-    }
-  }
-
-  void _setFocused(bool value) {
-    if (_focused != value) {
-      setState(() => _focused = value);
-    }
-  }
-
-  void _setPressed(bool value) {
-    if (_pressed != value) {
-      setState(() => _pressed = value);
-    }
-  }
-
-  _HButtonPalette _palette(HTokens tokens) {
-    final HSurfaceColors c = tokens.colors;
-    switch (widget.variant) {
-      case HButtonVariant.primary:
-        // Hover steps the accent away from the surface it sits on: lighter in
-        // the dark theme, darker in the light one. Lightening the light accent
-        // would drop it below 3:1 on the highest light surface.
-        final double hoverStep = tokens.brightness == Brightness.dark
-            ? -0.04
-            : 0.04;
-        // Nicht [HSurfaceColors.accent], sondern die Füllung: Weiß auf dem
-        // hellen Akzent misst 3,73:1, und der Ruhezustand ist der Normalfall
-        // des einen gefüllten Controls je Bildschirm. Die Füllung weicht
-        // zurück, bis [HSurfaceColors.onAccent] 4,5:1 erreicht; im dunklen
-        // Theme ist sie der Akzent selbst (`docs/UX.md` 6).
-        final Color fill = c.accentFill;
-        return _HButtonPalette(
-          background: fill,
-          hover: HColorDerivation.darken(fill, hoverStep),
-          pressed: HColorDerivation.darken(fill, 0.06),
-          foreground: c.onAccent,
-          border: fill,
-        );
-      case HButtonVariant.secondary:
-        return _HButtonPalette(
-          background: c.bg2,
-          hover: c.bg3,
-          pressed: c.bg3,
-          foreground: c.fg0,
-          border: c.line,
-        );
-      case HButtonVariant.ghost:
-        return _HButtonPalette(
-          background: const Color(0x00000000),
-          hover: c.bg2,
-          pressed: c.bg3,
-          foreground: c.fg1,
-          border: const Color(0x00000000),
-        );
-      case HButtonVariant.danger:
-        // Three distinct fills of the same hue; see the alpha constants above.
-        // Fläche und Beschriftung werden getrennt geführt: die Füllung ist die
-        // Zustandsfarbe, das Wort die Textvariante, die auf jeder der drei
-        // Füllungen 4,5:1 erreicht (`docs/UX.md` 6).
-        final Color blocked = tokens.state.blocked;
-        return _HButtonPalette(
-          background: HColorDerivation.tint(blocked, _dangerRestAlpha),
-          hover: blocked.withValues(alpha: _dangerHoverAlpha),
-          pressed: blocked.withValues(alpha: _dangerPressedAlpha),
-          foreground: tokens.stateTextColor(HFlowState.blocked),
-          border: HColorDerivation.fade(blocked, 0.4),
-        );
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
+    final HShadcnButtonRole role = _roleOf(variant);
     final HTokens tokens = HTheme.of(context);
-    final _HButtonPalette palette = _palette(tokens);
-    final bool enabled = widget.enabled;
-    final HButtonPreview? preview = widget.preview;
-    final bool hovered = preview == null
-        ? _hovered
-        : preview == HButtonPreview.hovered;
-    final bool pressed = preview == null
-        ? _pressed
-        : preview == HButtonPreview.pressed;
-    final bool focused = preview == null
-        ? _focused
-        : preview == HButtonPreview.focused;
-    final Color background = !enabled
-        ? palette.background
-        : pressed
-        ? palette.pressed
-        : hovered
-        ? palette.hover
-        : palette.background;
-
-    Widget content = DefaultTextStyle(
-      style: tokens.typography.ui13.medium.tinted(palette.foreground),
-      child: widget.child,
-    );
-    final Widget? leading = widget.leading;
-    if (leading != null) {
-      content = Row(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          leading,
-          SizedBox(width: tokens.spacing.x2),
-          content,
-        ],
-      );
-    }
-
-    // The button shrink-wraps its label; giving the container an alignment
-    // would make it fill whatever column it is dropped into.
-    // Eine Mindesthöhe, keine Höhe: bei doppelter Textskalierung wächst der
-    // Button mit seiner Beschriftung, statt sie abzuschneiden
-    // (`docs/UX.md` 6).
-    // Kein `AnimatedContainer`: der baut seinen Controller ohne
-    // `animationBehavior` und verlöre die 120 ms der Tastenfüllung, sobald
-    // die Plattform `disableAnimations` meldet (`docs/UX.md` 2.10).
-    Widget button = HAnimatedFill(
-      color: background,
-      builder: (BuildContext context, Color fill) => Container(
-        constraints: BoxConstraints(minHeight: widget.size.minHeight),
-        padding: EdgeInsets.symmetric(
-          horizontal: widget.size.padding,
-          vertical: tokens.spacing.x1,
-        ),
-        decoration: BoxDecoration(
-          color: fill,
-          borderRadius: HRadius.controlRadius,
-          // Der Rahmen bleibt der Rahmen. Fokus zeigt der Ring außerhalb.
-          border: Border.all(color: palette.border),
-        ),
-        // heightFactor: 1: der Button schrumpft auf seine Beschriftung, auch
-        // wenn er in einer Spalte ohne feste Höhe steht.
-        child: Center(widthFactor: 1, heightFactor: 1, child: content),
-      ),
-    );
-    // Der Ring liegt außerhalb des Rahmens und erscheint in einem Frame; sein
-    // Platz ist immer reserviert, also verschiebt der Fokus nichts.
-    button = HFocusRing(
-      visible: focused && enabled,
-      radius: tokens.radii.control,
-      // Der Primärbutton ist mit dem Akzent gefüllt, und der Ring ist der
-      // Akzent: ohne die zwei Pixel Fläche dazwischen stünde er bei 1,00:1
-      // gegen seine eigene Füllung (`docs/UX.md` 6).
-      over: background,
-      child: button,
-    );
-    if (!enabled) {
-      button = Opacity(opacity: 0.45, child: button);
-    }
-
     return Semantics(
       button: true,
       enabled: enabled,
-      label: widget.semanticsLabel,
-      child: FocusableActionDetector(
-        enabled: enabled,
-        autofocus: widget.autofocus,
-        focusNode: widget.focusNode,
-        mouseCursor: enabled ? SystemMouseCursors.click : MouseCursor.defer,
-        onShowHoverHighlight: _setHovered,
-        onShowFocusHighlight: _setFocused,
-        actions: <Type, Action<Intent>>{
-          ActivateIntent: CallbackAction<ActivateIntent>(
-            onInvoke: (ActivateIntent intent) {
-              widget.onPressed?.call();
-              return null;
-            },
+      label: semanticsLabel,
+      child: HControl(
+        onPressed: onPressed,
+        focusNode: focusNode,
+        autofocus: autofocus,
+        preview: _previewOf(preview),
+        leading: leading,
+        leadingGap: HSpace.x2,
+        radius: tokens.radii.control,
+        fill: (HTokens tokens, Set<WidgetState> states) =>
+            HShadcnButtonStyle.fillOf(tokens, role, states),
+        style: (HTokens tokens, Color fill) => HShadcnButtonStyle.of(
+          tokens,
+          role,
+          padding: EdgeInsets.symmetric(
+            horizontal: size.padding,
+            vertical: size.verticalPadding,
           ),
-        },
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: enabled ? widget.onPressed : null,
-          onTapDown: enabled ? (TapDownDetails _) => _setPressed(true) : null,
-          onTapUp: enabled ? (TapUpDetails _) => _setPressed(false) : null,
-          onTapCancel: enabled ? () => _setPressed(false) : null,
-          child: button,
+          fill: fill,
         ),
+        builder: (BuildContext context, Set<WidgetState> states, Color fill) =>
+            ConstrainedBox(
+              constraints: BoxConstraints(minHeight: size.innerMinHeight),
+              // widthFactor und heightFactor 1: der Button schrumpft auf seine
+              // Beschriftung, auch wenn er in einer Spalte ohne feste Höhe
+              // steht.
+              child: Center(widthFactor: 1, heightFactor: 1, child: child),
+            ),
       ),
     );
   }
-}
-
-@immutable
-class _HButtonPalette {
-  const _HButtonPalette({
-    required this.background,
-    required this.hover,
-    required this.pressed,
-    required this.foreground,
-    required this.border,
-  });
-
-  final Color background;
-  final Color hover;
-  final Color pressed;
-  final Color foreground;
-  final Color border;
 }

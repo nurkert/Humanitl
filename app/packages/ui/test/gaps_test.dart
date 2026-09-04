@@ -6,6 +6,12 @@ import 'package:humanitl_ui/humanitl_ui.dart';
 
 import 'harness.dart';
 
+/// Ein Intent, den nur der Bildschirm bindet — die Sonde für die Frage, ob
+/// eine Pfeiltaste an einem fokussierten Control vorbeikommt.
+class _ScreenIntent extends Intent {
+  const _ScreenIntent();
+}
+
 /// Die Lücken, die `docs/UX.md` 9 aufzählt, als Verhalten geprüft.
 ///
 /// Was hier steht, hat je einen Screen dazu gebracht, sich ein eigenes Widget
@@ -443,6 +449,152 @@ void main() {
     });
   });
 
+  group('ein Zustandsspeicher', () {
+    testWidgets(
+      'der Ring kommt vom Knoten, auch ohne Tasten- oder Mausereignis',
+      (WidgetTester tester) async {
+        // `Clickable` meldet den Fokus über den Highlight-Modus von Flutter,
+        // und der steht bis zum ersten Tasten- oder Mausereignis der Sitzung
+        // auf `touch`. Käme der Ring von dort, bliebe er hier aus. Auf dem
+        // Desktop ist er nie optional (`docs/UX.md` 6).
+        final FocusNode node = FocusNode(debugLabel: 'button');
+        addTearDown(node.dispose);
+        await tester.pumpWidget(
+          harness(
+            HButton(
+              focusNode: node,
+              onPressed: () {},
+              child: const Text('Send'),
+            ),
+          ),
+        );
+        expect(
+          tester.widget<HFocusRing>(find.byType(HFocusRing)).visible,
+          isFalse,
+        );
+        node.requestFocus();
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<HFocusRing>(find.byType(HFocusRing)).visible,
+          isTrue,
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets('ein Control, das erlischt, baut nicht mitten im Aufbau neu', (
+      WidgetTester tester,
+    ) async {
+      // `Clickable` trägt `disabled` in seinem `initState` und in seinem
+      // `didUpdateWidget` in den geteilten Zustandsspeicher — beides läuft
+      // mitten im Aufbau des Baumes. Ein Hörer, der daraufhin `setState`
+      // ruft, bricht dort ab. Deshalb liest dieses Paket `disabled` aus
+      // seinem eigenen Feld und baut nur neu, wenn sich die gezeichnete
+      // Menge wirklich ändert.
+      Widget build({required bool enabled}) => harness(
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            HButton(
+              onPressed: enabled ? () {} : null,
+              child: const Text('Send'),
+            ),
+            HIconButton(
+              glyph: HGlyph.close,
+              onPressed: enabled ? () {} : null,
+              semanticsLabel: 'close',
+            ),
+            HCheckbox(
+              label: 'keep',
+              value: true,
+              enabled: enabled,
+              onChanged: (bool value) {},
+            ),
+          ],
+        ),
+      );
+      await tester.pumpWidget(build(enabled: true));
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(build(enabled: false));
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(build(enabled: true));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('die Pfeiltasten gehören dem Bildschirm', () {
+    testWidgets(
+      'eine fokussierte Zeile und ein fokussierter Knopf lassen sie durch',
+      (WidgetTester tester) async {
+        // `Clickable` bindet unter jedem Control vier Pfeiltasten auf
+        // `DirectionalFocusIntent`, und das innerste `Shortcuts` gewinnt. Ohne
+        // die Gegenbindung erreichte `ArrowDown` den Bildschirm nie, solange
+        // eine Zeile oder ein Knopf den Fokus hält — und die Warteschlange ist
+        // ein einziger Fokusstopp mit Navigation darin (`docs/UX.md` 5.2).
+        int reached = 0;
+        final FocusNode row = FocusNode(debugLabel: 'row');
+        addTearDown(row.dispose);
+        final FocusNode button = FocusNode(debugLabel: 'button');
+        addTearDown(button.dispose);
+        await tester.pumpWidget(
+          harness(
+            keyboard(
+              Shortcuts(
+                shortcuts: const <ShortcutActivator, Intent>{
+                  SingleActivator(LogicalKeyboardKey.arrowDown):
+                      _ScreenIntent(),
+                },
+                child: Actions(
+                  actions: <Type, Action<Intent>>{
+                    _ScreenIntent: CallbackAction<_ScreenIntent>(
+                      onInvoke: (_ScreenIntent intent) {
+                        reached++;
+                        return null;
+                      },
+                    ),
+                  },
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      HRow(
+                        state: HFlowState.held,
+                        focusNode: row,
+                        onTap: () {},
+                        title: const Text('api.github.com'),
+                        semanticsLabel: 'flow',
+                      ),
+                      HButton(
+                        focusNode: button,
+                        onPressed: () {},
+                        child: const Text('Allow'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+
+        row.requestFocus();
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pump();
+        expect(reached, 1, reason: 'die Zeile hält die Taste fest');
+
+        button.requestFocus();
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pump();
+        expect(reached, 2, reason: 'der Knopf hält die Taste fest');
+        expect(tester.takeException(), isNull);
+      },
+    );
+  });
+
   group('form controls', () {
     testWidgets('HTextField edits, shows its hint and rings on focus', (
       WidgetTester tester,
@@ -454,6 +606,7 @@ void main() {
       String? changed;
       await tester.pumpWidget(
         harness(
+          overlay: true,
           keyboard(
             SizedBox(
               width: 240,
@@ -469,17 +622,20 @@ void main() {
         ),
       );
       expect(find.text('**.npmjs.org'), findsOneWidget);
+      expect(placeholderVisible(tester, '**.npmjs.org'), isTrue);
       node.requestFocus();
       await tester.pumpAndSettle();
-      expect(
-        tester.widget<HFocusRing>(find.byType(HFocusRing)).visible,
-        isTrue,
-      );
+      // Der Ring dieses einen Controls kommt aus der Bibliothek: `TextField`
+      // bringt ihn fest eingebaut mit, und zwei Ringe übereinander sind einer
+      // zu viel. Seine Maße sind unsere (`HTheme`, `FocusOutlineTheme`).
+      expect(libraryFocusRing(tester, find.byType(HTextField)), isTrue);
       await tester.enterText(find.byType(EditableText), 'api.github.com');
       await tester.pump();
       expect(changed, 'api.github.com');
-      // Der Platzhalter weicht dem ersten Zeichen.
-      expect(find.text('**.npmjs.org'), findsNothing);
+      // Der Platzhalter weicht dem ersten Zeichen. Die Bibliothek lässt ihn
+      // im Baum stehen und blendet ihn aus, damit das Feld beim ersten
+      // Zeichen nicht seine Höhe wechselt.
+      expect(placeholderVisible(tester, '**.npmjs.org'), isFalse);
       expect(tester.takeException(), isNull);
     });
 
@@ -601,12 +757,8 @@ void main() {
         );
         await tester.pumpAndSettle();
         for (final String text in <String>['off', 'costs nothing', 'session']) {
-          final Color? colour = tester
-              .widget<Text>(find.text(text))
-              .style
-              ?.color;
           expect(
-            colour,
+            paintedTextColor(tester, text),
             tokens.colors.fg2,
             reason: '${tokens.brightness.name} $text',
           );
@@ -667,6 +819,69 @@ void main() {
     });
   });
 
+  group('das Kästchen', () {
+    testWidgets('malt seinen Rahmen in vier Zuständen aus unseren Token', (
+      WidgetTester tester,
+    ) async {
+      // Die Komponente der Bibliothek rechnet
+      // `enabled ?? onChanged != null`. Weil hier niemand entscheidet —
+      // `IgnorePointer` und `ExcludeFocus` liegen darum —, ergäbe das ohne
+      // ausdrückliches `enabled: true` immer `false`, und sie malte den Zweig
+      // `!enabled ? colorScheme.muted`: **jedes** nicht angehakte Kästchen
+      // stünde dann in `bg2`, also in der Farbe eines toten. Geprüft wird
+      // deshalb die gemalte Rahmenfarbe und nicht, dass es das Widget gibt.
+      BoxDecoration tick() =>
+          tester
+                  .widget<DecoratedBox>(
+                    find
+                        .descendant(
+                          of: find.byType(HCheckbox),
+                          matching: find.byType(DecoratedBox),
+                        )
+                        .first,
+                  )
+                  .decoration
+              as BoxDecoration;
+
+      for (final HTokens tokens in <HTokens>[HTokens.dark, HTokens.light]) {
+        for (final bool enabled in <bool>[true, false]) {
+          for (final bool value in <bool>[false, true]) {
+            await tester.pumpWidget(
+              harness(
+                brightness: tokens.brightness,
+                HCheckbox(
+                  label: 'keep',
+                  value: value,
+                  enabled: enabled,
+                  onChanged: (bool next) {},
+                ),
+              ),
+            );
+            await tester.pumpAndSettle();
+            final Color border = tick().border!.top.color;
+            final String where =
+                '${tokens.brightness.name} enabled=$enabled value=$value';
+            if (!enabled) {
+              // Deaktiviert heißt sichtbar deaktiviert: `fg2`, die Stufe, die
+              // `docs/UX.md` 6 dafür freihält.
+              expect(border, tokens.colors.fg2, reason: where);
+            } else if (value) {
+              expect(border, tokens.colors.accentFill, reason: where);
+            } else {
+              expect(border, tokens.colors.lineStrong, reason: where);
+            }
+            expect(
+              border,
+              isNot(tokens.colors.bg2),
+              reason: '$where: ein lebendes Kästchen sieht nicht tot aus',
+            );
+          }
+        }
+      }
+      expect(tester.takeException(), isNull);
+    });
+  });
+
   group('reduzierte Bewegung', () {
     testWidgets('a fill keeps its duration when animations are off', (
       WidgetTester tester,
@@ -683,17 +898,7 @@ void main() {
       Widget button(HButtonPreview? preview) => harness(
         HButton(preview: preview, onPressed: () {}, child: const Text('Send')),
       );
-      Color painted() =>
-          (tester
-                      .widget<Container>(
-                        find.descendant(
-                          of: find.byType(HButton),
-                          matching: find.byType(Container),
-                        ),
-                      )
-                      .decoration!
-                  as BoxDecoration)
-              .color!;
+      Color painted() => paintedFill(tester, find.byType(HButton));
 
       await tester.pumpWidget(button(null));
       await tester.pumpAndSettle();
@@ -703,11 +908,11 @@ void main() {
       await tester.pump(HMotion.press ~/ 10);
       expect(
         painted(),
-        isNot(tokens.colors.bg3),
+        isNot(tokens.colors.lineStrong),
         reason: 'nach 12 ms ist die Füllung unterwegs, nicht angekommen',
       );
       await tester.pump(HMotion.press);
-      expect(painted(), tokens.colors.bg3);
+      expect(painted(), tokens.colors.lineStrong);
       expect(tester.takeException(), isNull);
     });
   });
@@ -939,6 +1144,61 @@ void main() {
       expect(find.byType(HGlyphIcon), findsNWidgets(HGlyph.values.length));
       expect(tester.takeException(), isNull);
     });
+  });
+
+  group('ein Glyph vor der Beschriftung', () {
+    testWidgets(
+      'bindet den Inhalt, statt ihn aus dem Kasten laufen zu lassen',
+      (WidgetTester tester) async {
+        // Ein blankes `Row` mit `MainAxisSize.min` gibt einem flexlosen Kind
+        // waagerecht unbeschränkte Constraints: die Beschriftung bricht dann
+        // nicht um, sondern läuft über. Die Bibliothek bindet ihre
+        // `leading`-Reihe deshalb in `IntrinsicWidth`/`IntrinsicHeight` mit
+        // einem `Expanded`, und dieses Paket tut es genauso.
+        const String long =
+            'Regel für registry.npmjs.org anlegen und dauerhaft merken';
+        for (final TextScaler scaler in <TextScaler>[
+          TextScaler.noScaling,
+          const TextScaler.linear(2),
+        ]) {
+          await tester.pumpWidget(
+            Directionality(
+              textDirection: TextDirection.ltr,
+              child: MediaQuery(
+                data: MediaQueryData(textScaler: scaler),
+                child: HTheme(
+                  tokens: HTokens.dark,
+                  child: Align(
+                    alignment: Alignment.topLeft,
+                    child: SizedBox(
+                      width: 160,
+                      child: SingleChildScrollView(
+                        child: HButton(
+                          leading: const HGlyphIcon(HGlyph.lock),
+                          onPressed: () {},
+                          child: const Text(long),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(
+            tester.takeException(),
+            isNull,
+            reason: 'Überlauf bei $scaler',
+          );
+          expect(
+            tester.getSize(find.byType(HButton)).width,
+            lessThanOrEqualTo(160),
+            reason: 'der Knopf bleibt in seinem Kasten bei $scaler',
+          );
+        }
+      },
+    );
   });
 
   group('text scale 2.0', () {

@@ -1,5 +1,6 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
+import 'package:shadcn_flutter/shadcn_flutter.dart' as shad;
 
 import '../theme/h_theme.dart';
 import '../tokens/flow_state.dart';
@@ -8,6 +9,7 @@ import '../tokens/spacing.dart';
 import '../tokens/tokens.dart';
 import '../tokens/typography.dart';
 import 'h_animated_fill.dart';
+import 'h_control.dart';
 import 'h_focus_ring.dart';
 
 /// Eine Zeile der Queue, der Regelliste oder der History.
@@ -48,6 +50,12 @@ import 'h_focus_ring.dart';
 /// zeichnet ein eingefrorenes Abbild mit stehendem Countdown, und dafür
 /// braucht es kein zweites Widget, sondern nur aufgelöste Argumente
 /// (2.4, 9, Punkt 9).
+///
+/// Unter der Zeile liegt `Clickable` aus `shadcn_flutter`: dieselbe
+/// Verhaltensschicht wie unter jedem Button des Systems, mit derselben
+/// Tastenmenge, demselben Cursor und derselben Zustandsmenge. Eine
+/// Listenzeile hat in der Bibliothek keine eigene Komponente; ihre
+/// Verhaltensschicht hat sie.
 class HRow extends StatefulWidget {
   /// Creates a row.
   const HRow({
@@ -147,6 +155,68 @@ class HRow extends StatefulWidget {
 class _HRowState extends State<HRow> {
   bool _hovered = false;
   bool _focused = false;
+  FocusNode? _owned;
+
+  /// Der Knoten, an dem [_syncFocus] gerade hängt.
+  ///
+  /// Nicht `widget.focusNode`: fällt der von einem Knoten auf null, ist
+  /// [_focus] schon der eigene, und ein Abmelden am alten plus ein Anmelden
+  /// am neuen hinge den Hörer ein zweites Mal an denselben eigenen Knoten.
+  FocusNode? _listening;
+
+  FocusNode get _focus =>
+      widget.focusNode ?? (_owned ??= FocusNode(debugLabel: 'HRow'));
+
+  @override
+  void initState() {
+    super.initState();
+    // Der Fokus kommt vom Knoten und nicht aus dem Zustand, den `Clickable`
+    // führt: dessen Rückruf hängt am Highlight-Modus von Flutter, und der
+    // steht bis zum ersten Tasten- oder Mausereignis auf `touch`. Auf dem
+    // Desktop ist der Ring aber nie optional (`docs/UX.md` 6).
+    _attachFocus();
+    if (widget.autofocus) {
+      // `Clickable` kennt kein `autofocus`; die Zeile holt sich den Fokus
+      // nach dem ersten Frame und nur, wenn im Fokusbereich noch niemand
+      // steht — die Bedeutung, die `autofocus` in Flutter hat.
+      WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+        if (!mounted || widget.onTap == null) {
+          return;
+        }
+        final FocusScopeNode scope = FocusScope.of(context);
+        if (scope.focusedChild == null) {
+          _focus.requestFocus();
+        }
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(HRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _attachFocus();
+  }
+
+  @override
+  void dispose() {
+    _listening?.removeListener(_syncFocus);
+    _owned?.dispose();
+    super.dispose();
+  }
+
+  /// Hängt [_syncFocus] an den Knoten, der gerade gilt, und liest ihn.
+  void _attachFocus() {
+    final FocusNode next = _focus;
+    if (identical(_listening, next)) {
+      return;
+    }
+    _listening?.removeListener(_syncFocus);
+    _listening = next;
+    next.addListener(_syncFocus);
+    _syncFocus();
+  }
+
+  void _syncFocus() => _setFocused(_focus.hasFocus);
 
   void _setHovered(bool value) {
     if (_hovered == value) {
@@ -182,6 +252,7 @@ class _HRowState extends State<HRow> {
         ? tokens.colors.bg2
         : const Color(0x00000000);
     final bool revealed = _hovered || _focused;
+    final bool enabled = widget.onTap != null;
 
     final Widget lines = Column(
       // MainAxisSize.min, sonst nimmt die Spalte die volle verfügbare Höhe und
@@ -206,96 +277,107 @@ class _HRowState extends State<HRow> {
       ],
     );
 
-    // Keine animierte Höhe: nur die Füllung wechselt, und sie wechselt mit
-    // HMotion.press (`docs/UX.md` 2.9 und 9, Punkt 11).
-    //
     // Die Rail liegt im Stack und nicht in der Zeile, damit sie die volle
     // Höhe trägt, auch wenn die Textskalierung die Zeile höher macht als
     // ihre Mindesthöhe.
-    final Widget row = HAnimatedFill(
-      color: background,
-      builder: (BuildContext context, Color fill) => Container(
-        constraints: BoxConstraints(minHeight: widget.minHeight),
-        // `decoration` und nicht `color`: die einzige `ColoredBox` der Zeile
-        // bleibt so die Zustands-Rail, und ein Test, der nach ihr sucht,
-        // findet nicht den Hintergrund.
-        decoration: BoxDecoration(color: fill),
-        child: Stack(
-          children: <Widget>[
-            Positioned(
-              left: 0,
-              top: 0,
-              bottom: 0,
-              width: HSize.stateRail,
-              child: ColoredBox(color: rail),
-            ),
-            Padding(
-              padding: const EdgeInsets.only(left: HSize.stateRail),
-              child: Row(
-                children: <Widget>[
+    final Widget content = ConstrainedBox(
+      constraints: BoxConstraints(minHeight: widget.minHeight),
+      child: Stack(
+        children: <Widget>[
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: HSize.stateRail,
+            child: ColoredBox(color: rail),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: HSize.stateRail),
+            child: Row(
+              children: <Widget>[
+                SizedBox(width: tokens.spacing.x2),
+                if (widget.stateGlyph != null) ...<Widget>[
+                  widget.stateGlyph!,
                   SizedBox(width: tokens.spacing.x2),
-                  if (widget.stateGlyph != null) ...<Widget>[
-                    widget.stateGlyph!,
-                    SizedBox(width: tokens.spacing.x2),
-                  ],
-                  if (widget.leading != null) ...<Widget>[
-                    widget.leading!,
-                    SizedBox(width: tokens.spacing.x2),
-                  ],
-                  Expanded(child: lines),
-                  if (widget.trailing != null) ...<Widget>[
-                    SizedBox(width: tokens.spacing.x2),
-                    widget.trailing!,
-                  ],
-                  if (widget.actionSlot != null) ...<Widget>[
-                    SizedBox(width: tokens.spacing.x2),
-                    SizedBox(
-                      width: HSize.rowActionSlot,
-                      child: revealed ? widget.actionSlot : null,
-                    ),
-                  ],
-                  SizedBox(width: tokens.spacing.x3),
                 ],
-              ),
+                if (widget.leading != null) ...<Widget>[
+                  widget.leading!,
+                  SizedBox(width: tokens.spacing.x2),
+                ],
+                Expanded(child: lines),
+                if (widget.trailing != null) ...<Widget>[
+                  SizedBox(width: tokens.spacing.x2),
+                  widget.trailing!,
+                ],
+                if (widget.actionSlot != null) ...<Widget>[
+                  SizedBox(width: tokens.spacing.x2),
+                  SizedBox(
+                    width: HSize.rowActionSlot,
+                    child: revealed ? widget.actionSlot : null,
+                  ),
+                ],
+                SizedBox(width: tokens.spacing.x3),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
 
-    return Semantics(
-      selected: widget.selected,
-      button: widget.onTap != null,
-      label: widget.semanticsLabel,
-      value: widget.semanticsValue,
-      child: FocusableActionDetector(
-        enabled: widget.onTap != null,
-        focusNode: widget.focusNode,
-        autofocus: widget.autofocus,
-        onFocusChange: _setFocused,
-        actions: <Type, Action<Intent>>{
-          ActivateIntent: CallbackAction<ActivateIntent>(
-            onInvoke: (ActivateIntent intent) {
-              widget.onTap?.call();
-              return null;
-            },
-          ),
-        },
-        // Hover kommt aus einer MouseRegion und nicht aus
-        // onShowHoverHighlight: der Rückruf wartet, bis der Highlight-Modus
-        // "traditional" ist, und bis zum ersten Tasten- oder Mausereignis der
-        // Sitzung ist er es nicht. Die Affordanz im Aktionsslot darf davon
-        // nicht abhängen.
+    // Keine animierte Höhe: nur die Füllung wechselt, und sie wechselt mit
+    // HMotion.press (`docs/UX.md` 2.9 und 9, Punkt 11). Den Übergang macht
+    // [HAnimatedFill] und nicht `Clickable`: dessen Übergang liefe über die
+    // Animationsprimitive der Bibliothek, die ohne `animationBehavior` gebaut
+    // ist und bei abgeschalteten Animationen auf fünf Prozent kollabiert.
+    return HTheme.host(
+      context,
+      Semantics(
+        selected: widget.selected,
+        button: enabled,
+        label: widget.semanticsLabel,
+        value: widget.semanticsValue,
+        // Hover kommt aus einer MouseRegion und nicht aus dem Zustand, den
+        // `Clickable` selbst führt: dessen Rückruf wartet, bis der
+        // Highlight-Modus "traditional" ist, und bis zum ersten Tasten- oder
+        // Mausereignis der Sitzung ist er es nicht. Die Affordanz im
+        // Aktionsslot darf davon nicht abhängen. `Clickable` bekommt deshalb
+        // `disableHoverEffect` und führt den Zustand gar nicht erst mit.
         child: MouseRegion(
           onEnter: (PointerEnterEvent _) => _setHovered(true),
           onExit: (PointerExitEvent _) => _setHovered(false),
-          cursor: widget.onTap == null
-              ? MouseCursor.defer
-              : SystemMouseCursors.click,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: widget.onTap,
-            child: HFocusRing.inline(visible: _focused, child: row),
+          child: HFocusRing.inline(
+            visible: _focused,
+            child: HAnimatedFill(
+              color: background,
+              builder: (BuildContext context, Color fill) => shad.Clickable(
+                enabled: enabled,
+                focusNode: _focus,
+                onPressed: widget.onTap,
+                behavior: HitTestBehavior.opaque,
+                disableTransition: true,
+                // Der Hover gehört der `MouseRegion` darüber und nur ihr:
+                // zwei Schreiber auf denselben Zustand sind einer zu viel,
+                // und gelesen wird ohnehin nur `_hovered`. Dekoration und
+                // Zeiger sind hier feste Werte, also braucht diese Zeile
+                // keinen Zustandsspeicher.
+                disableHoverEffect: true,
+                // Die Pfeiltasten gehören dem Bildschirm: die Warteschlange
+                // ist ein einziger Fokusstopp mit Navigation darin
+                // (`docs/UX.md` 5.2, und [HPassThroughIntent]).
+                shortcuts: hArrowsToScreen,
+                // Eine Zeile von Rand zu Rand hat kein Außen, in das ein Ring
+                // passte; ihren zeichnet [HFocusRing.inline] auf der eigenen
+                // Kante.
+                disableFocusOutline: true,
+                mouseCursor: WidgetStatePropertyAll<MouseCursor>(
+                  enabled ? SystemMouseCursors.click : MouseCursor.defer,
+                ),
+                decoration: WidgetStatePropertyAll<Decoration>(
+                  BoxDecoration(color: fill),
+                ),
+                child: content,
+              ),
+            ),
           ),
         ),
       ),

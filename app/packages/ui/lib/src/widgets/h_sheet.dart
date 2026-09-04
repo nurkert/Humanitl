@@ -21,6 +21,16 @@ import 'h_icon_button.dart';
 /// `Tab` liefe durch den Bildschirm dahinter, den das Blatt gerade verdeckt,
 /// und der einzige Weg heraus wäre das Schließkreuz mit der Maus
 /// (`docs/UX.md` 5.1). Denselben Weg geht `HModal`.
+///
+/// **Warum die Bibliothek hier nur die Teile liefert.** `shadcn_flutter` hat
+/// ein Blatt, aber als Route: `SheetWrapper` verlangt einen `stackIndex` und
+/// eine `DrawerLayerData` aus einem `DrawerOverlay` und ist damit an das
+/// Overlay-Werk der Bibliothek gebunden. Dieses Blatt ist ein Widget, weil die
+/// Shell entscheidet, wo es hängt, und weil eine Entscheidung nie in einem
+/// Modal fällt. Es steht deshalb auf den Teilen: die Kante und die Linie unter
+/// der Kopfzeile sind `HHairline` und damit `Divider` der Bibliothek, das
+/// Schließkreuz ist `HIconButton` und damit ihr `Button`, und die Fläche kommt
+/// aus den Token.
 class HSheet extends StatelessWidget {
   /// Creates a sheet.
   const HSheet({
@@ -71,7 +81,10 @@ class HSheet extends StatelessWidget {
               },
             ),
         },
-        child: FocusScope(autofocus: true, child: _panel(context)),
+        child: HTheme.host(
+          context,
+          FocusScope(autofocus: true, child: _panel(context)),
+        ),
       ),
     );
   }
@@ -81,50 +94,55 @@ class HSheet extends StatelessWidget {
     final VoidCallback? onClose = this.onClose;
     return SizedBox(
       width: width,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: tokens.colors.bg1,
-          border: Border(left: BorderSide(color: tokens.colors.line)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                HSpace.panelPadding,
-                HSpace.x2,
-                HSpace.x2,
-                HSpace.x2,
-              ),
-              child: Row(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          const HHairline(vertical: true),
+          Expanded(
+            child: ColoredBox(
+              color: tokens.colors.bg1,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
-                  Expanded(
-                    child: DefaultTextStyle(
-                      style: tokens.typography.ui16.semibold.tinted(
-                        tokens.colors.fg0,
-                      ),
-                      child: title,
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      HSpace.panelPadding,
+                      HSpace.x2,
+                      HSpace.x2,
+                      HSpace.x2,
+                    ),
+                    child: Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: DefaultTextStyle(
+                            style: tokens.typography.ui16.semibold.tinted(
+                              tokens.colors.fg0,
+                            ),
+                            child: title,
+                          ),
+                        ),
+                        ...actions,
+                        if (onClose != null)
+                          HIconButton(
+                            glyph: HGlyph.close,
+                            onPressed: onClose,
+                            semanticsLabel: closeSemanticsLabel,
+                          ),
+                      ],
                     ),
                   ),
-                  ...actions,
-                  if (onClose != null)
-                    HIconButton(
-                      glyph: HGlyph.close,
-                      onPressed: onClose,
-                      semanticsLabel: closeSemanticsLabel,
+                  const HHairline(),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.all(HSpace.panelPadding),
+                      child: child,
                     ),
+                  ),
                 ],
               ),
             ),
-            const HHairline(),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.all(HSpace.panelPadding),
-                child: child,
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

@@ -128,8 +128,19 @@ void main() {
     );
     await tester.pump();
 
-    // Kein Transform, also kein Weg; das Einblenden bleibt (`docs/UX.md` 2.10).
-    expect(find.byType(Transform), findsNothing);
+    // Kein Weg, aber das Einblenden bleibt (`docs/UX.md` 2.10). Geprüft wird
+    // die Matrix und nicht mehr die Abwesenheit eines `Transform`: `Clickable`
+    // aus `shadcn_flutter` legt unter jedes Control einen Transform, der die
+    // Einheitsmatrix trägt, solange nichts gedrückt ist.
+    final List<Transform> transforms = tester
+        .widgetList<Transform>(find.byType(Transform))
+        .toList();
+    // Ohne diese Zeile liefe die Schleife leer durch, sobald `Clickable`
+    // seinen Transform einmal nicht mehr legt — und der Test bewiese nichts.
+    expect(transforms, isNotEmpty);
+    for (final Transform transform in transforms) {
+      expect(transform.transform, Matrix4.identity());
+    }
     expect(find.byType(FadeTransition), findsOneWidget);
   });
 }
