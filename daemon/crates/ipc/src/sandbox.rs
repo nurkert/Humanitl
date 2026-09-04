@@ -36,18 +36,54 @@
 //!
 //! # Was dieses Modul nicht tut
 //!
-//! Es prüft die drei Garantien nicht (HUM-041), es hängt kein Terminal an
-//! (HUM-042) und es schreibt keine Konfiguration (`SetConfig`, HUM-069). Das
-//! Projektverzeichnis, das die Oberfläche wählt, reist deshalb in
-//! [`v1::sandbox_request::Plan`] und in [`v1::sandbox_request::Start`] mit und
-//! gilt für die laufende Sitzung; dauerhaft wird es erst mit dem
-//! Einstellungs-Bildschirm.
+//! Es hängt kein Terminal an (HUM-042) und es schreibt keine Konfiguration
+//! (`SetConfig`, HUM-069). Das Projektverzeichnis, das die Oberfläche wählt,
+//! reist deshalb in [`v1::sandbox_request::Plan`] und in
+//! [`v1::sandbox_request::Start`] mit und gilt für die laufende Sitzung;
+//! dauerhaft wird es erst mit dem Einstellungs-Bildschirm.
+//!
+//! # Die drei Garantien
+//!
+//! Gemessen wird in der Sandbox, die läuft: Der Shim schreibt seine Prüfzeilen
+//! von innen, [`BwrapBackend::isolation_check`] faltet sie zu den drei
+//! Garantien, und dieses Modul reicht sie als [`v1::CheckResult`] weiter. Es
+//! prüft nichts selbst; eine zweite Prüfpipeline neben der vorhandenen wäre
+//! eine zweite Wahrheit über dieselbe Sandbox.
+//!
+//! Fail-closed: Ist eine Garantie rot oder fehlt der Bericht, wird die Sandbox
+//! beendet und der Zustand ist `failed` — wie `enforce_isolation` es auf der
+//! Kommandozeile tut (HUM-041).
+//!
+//! **Was das nicht heißt.** Der Shim erzwingt nichts: Er schreibt seine fünf
+//! Zeilen und `exec`t den Agenten unmittelbar danach (HUM-012, CONVENTIONS
+//! 4.12). Der Wirt liest den Bericht erst danach. Zwischen dem `exec` und dem
+//! `SIGKILL` liegt deshalb ein Fenster, in dem der Agent läuft, die Brücke
+//! steht und der Proxy annimmt — Millisekunden im Normalfall, im Fall
+//! `SANDBOX_015` mit genau dem zweiten Socket, den die Prüfung beanstandet.
+//! Die obere Schranke ist die Summe zweier Fristen: `REPORT_TIMEOUT` (5 s),
+//! bis ein ausbleibender Bericht als ausgeblieben gilt, plus `KILL_GRACE`
+//! (5 s), die `terminate` nach dem `SIGKILL` auf das Einsammeln wartet —
+//! zusammen **bis zu 10 s**.
+//!
+//! Das Fenster wird hier so klein wie möglich gehalten (der Dienst tötet ohne
+//! Gnadenfrist und wartet nur einmal), aber es wird hier nicht geschlossen:
+//! Dazu müsste der Proxy Verbindungen ablehnen, solange die Isolation nicht
+//! belegt ist, und `humanitl-proxy` liegt innerhalb dieser Crate
+//! (Abhängigkeitsrichtung, `tools/deps-allow.toml`). Es steht als eigenes
+//! Issue offen und ist in `docs/SECURITY.md` und `docs/THREAT-MODEL.md`
+//! benannt.
+//!
+//! **Derselbe Bau steht auf jedem Weg in die Sandbox.** `humanitl sandbox
+//! run` und `escape-launch` starten ebenso erst und prüfen danach; sie töten
+//! sogar mit Gnadenfrist (`SandboxHandle::kill`), ihre Schranke ist also
+//! 5 s + 5 s + 5 s = bis zu 15 s. Keiner der drei Wege ist fail-closed in dem
+//! Sinn, dass der Befehl nicht liefe.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use humanitl_config::{Config, WorkMode};
 use humanitl_core::Severity as CoreSeverity;
@@ -56,9 +92,9 @@ use humanitl_core::ids::SessionId;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_sandbox::agent::opencode;
 use humanitl_sandbox::{
-    AdapterRegistry, AgentContext, BwrapBackend, KILL_GRACE, LaunchInputs, MIN_BWRAP_VERSION,
-    MountPolicy, SANDBOX_SHELL, SandboxBackend, SandboxFile, SandboxHandle, SandboxProfile,
-    SessionContext, StdioMode, shell_line,
+    AdapterRegistry, AgentContext, BwrapBackend, CheckResult, IsolationCheck, KILL_GRACE,
+    LaunchInputs, MIN_BWRAP_VERSION, MountPolicy, SANDBOX_SHELL, SandboxBackend, SandboxFile,
+    SandboxHandle, SandboxProfile, SessionContext, StdioMode, shell_line,
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -230,6 +266,15 @@ pub fn shows_env_value(key: &str, origin: v1::ValueOrigin) -> bool {
 #[derive(Debug)]
 struct Running {
     handle: Arc<SandboxHandle>,
+    /// Das Backend, das diese Sandbox gestartet hat.
+    ///
+    /// Es wird gehalten und nicht neu gesucht, weil die Isolationsprüfung an
+    /// derselben Instanz hängt, die auch gestartet hat: In ihr steht die
+    /// Frist, innerhalb deren der Bericht des Shims eintreffen muss
+    /// (`BwrapBackend::with_report_timeout`). Ein zweites, frisch gefundenes
+    /// Backend hätte eine andere Frist und prüfte damit unter anderen
+    /// Bedingungen als es gestartet hat.
+    backend: BwrapBackend,
     started_at: SystemTime,
     profile: String,
     work_dir: PathBuf,
@@ -308,10 +353,12 @@ impl SandboxService {
             Some(Op::Plan(plan)) => {
                 tokio::task::spawn_blocking(move || inner.snapshot_or_diagnostic(&plan, &tx));
             }
-            // `isolation_check` und `status` beantworten beide den
-            // Schnappschuss; die drei Garantien kommen mit HUM-041 als eigene
-            // Ereignisse dazu, und bis dahin ist eine leere Antwort ehrlicher
-            // als ein erfundenes Ergebnis.
+            // Die drei Garantien werden an der laufenden Sandbox gemessen.
+            // Das ist blockierende Arbeit — der Bericht des Shims wird mit
+            // Frist gelesen — und gehört deshalb auf einen eigenen Faden.
+            Some(Op::IsolationCheck(())) => {
+                tokio::task::spawn_blocking(move || inner.isolation_check(&tx));
+            }
             _ => {
                 tokio::task::spawn_blocking(move || {
                     inner.snapshot_or_diagnostic(&v1::sandbox_request::Plan::default(), &tx);
@@ -583,6 +630,9 @@ impl Inner {
                 if let Some(line) = self.started_line() {
                     let _ = tx.send(log_event(line)).await;
                 }
+                if !self.check_isolation_or_kill(&plan, &tx).await {
+                    return;
+                }
                 let this = Arc::clone(&self);
                 let plan = plan.clone();
                 let running = tokio::task::spawn_blocking(move || this.snapshot(&plan)).await;
@@ -601,6 +651,154 @@ impl Inner {
                 let _ = tx.send(diagnostic_event(&diagnostic)).await;
             }
         }
+    }
+
+    /// Misst die drei Garantien der gerade gestarteten Sandbox, sendet sie und
+    /// sagt, ob der Start weitergehen darf.
+    ///
+    /// Die drei Ereignisse stehen zwischen `Status(starting)` und
+    /// `Status(running)`: Wer `running` sieht, hat die drei Ergebnisse schon
+    /// gesehen. Ist eines rot oder fehlt der Bericht, endet der Start hier —
+    /// die Sandbox wird beendet, der Befund reist als eigenes Ereignis, und
+    /// der Zustand ist `failed`. Ein „trotzdem starten" gibt es nicht
+    /// (BACKLOG.md 4.1, `docs/SECURITY.md` Abschnitt 1); dieselbe Regel wie
+    /// `enforce_isolation` auf der Kommandozeile. Zum Fenster zwischen `exec`
+    /// und `SIGKILL` siehe die Modulbeschreibung.
+    ///
+    /// Antwortet `false`, wenn der Aufrufer nichts mehr senden soll.
+    async fn check_isolation_or_kill(
+        self: &Arc<Self>,
+        plan: &v1::sandbox_request::Plan,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) -> bool {
+        let this = Arc::clone(self);
+        let measured = tokio::task::spawn_blocking(move || this.measure_isolation()).await;
+        let results = match measured {
+            // Zwischen Start und Messung hat jemand gestoppt. Der Stopp hat
+            // seinen eigenen Zustand gesendet; daraus einen blockierenden
+            // Befund zu machen hieße, dem Menschen einen Fehler zu melden,
+            // den er selbst ausgelöst hat.
+            Ok(None) => return false,
+            Ok(Some(results)) => results,
+            // Der Faden selbst kam nicht durch. Gemessen ist damit nichts, und
+            // nichts gemessen heißt hier nicht bestanden.
+            Err(error) => {
+                self.stop_after_failed_check(plan, &joined_failed(&error), tx)
+                    .await;
+                return false;
+            }
+        };
+        for result in &results {
+            if tx.send(check_event(result)).await.is_err() {
+                return false;
+            }
+        }
+        let Some(diagnostic) = first_failure(&results) else {
+            return true;
+        };
+        self.stop_after_failed_check(plan, &diagnostic, tx).await;
+        false
+    }
+
+    /// Beendet die Sandbox nach einer roten Prüfung und meldet den Befund.
+    async fn stop_after_failed_check(
+        self: &Arc<Self>,
+        plan: &v1::sandbox_request::Plan,
+        diagnostic: &Diagnostic,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) {
+        let this = Arc::clone(self);
+        let owned_plan = plan.clone();
+        let owned_diagnostic = diagnostic.clone();
+        let closed =
+            tokio::task::spawn_blocking(move || this.kill_and_fail(&owned_plan, &owned_diagnostic))
+                .await;
+        // Erst der Befund, dann der Zustand: Der Client trägt die Befunde des
+        // laufenden Vorgangs am Zustand mit.
+        let _ = tx.send(diagnostic_event(diagnostic)).await;
+        match closed {
+            Ok((stopped, status)) => {
+                if let Some(line) = stopped {
+                    let _ = tx.send(log_event(line)).await;
+                }
+                let _ = tx.send(status_event(status)).await;
+            }
+            Err(_) => {
+                let _ = tx
+                    .send(status_event(self.failed_status(plan, diagnostic)))
+                    .await;
+            }
+        }
+    }
+
+    /// Beendet die Sandbox und liefert ihre Protokollzeile und den Zustand
+    /// `failed` dazu.
+    ///
+    /// Der Zustand behält Einhängungen, Umgebung und Kommandozeile: Sie kommen
+    /// aus dem Profil und nicht aus dem toten Prozess, und genau sie braucht,
+    /// wer verstehen will, warum eine Garantie nicht galt. Erst wenn sich das
+    /// Profil nicht mehr lesen lässt, bleibt der karge Zustand aus
+    /// [`Inner::failed_status`].
+    fn kill_and_fail(
+        &self,
+        plan: &v1::sandbox_request::Plan,
+        diagnostic: &Diagnostic,
+    ) -> (Option<String>, v1::sandbox_event::Status) {
+        if let Some(handle) = self.running_handle() {
+            // Ohne Gnadenfrist. `kill()` schickt `SIGTERM` und wartet
+            // [`KILL_GRACE`] auf ein geordnetes Ende — fünf Sekunden, in denen
+            // der Agent weiterläuft, die Brücke steht und der Proxy annimmt.
+            // Eine Sandbox, deren Isolation nicht belegt ist, hat nichts
+            // aufzuräumen, das diese Zeit wert wäre; `terminate(ZERO)`
+            // eskaliert sofort auf `SIGKILL`.
+            // Und nur einmal warten: `terminate` kehrt zurück, wenn der
+            // Prozess weg ist oder [`KILL_GRACE`] nach dem `SIGKILL`
+            // abgelaufen ist. Ein zweites, unbegrenztes `wait()` verdoppelte
+            // die obere Schranke des Fensters und nähme dem Client bei einem
+            // Prozess im D-Zustand auch noch den Befund.
+            handle.terminate(Duration::ZERO);
+        }
+        let stopped = self.stopped_line();
+        self.clear_running();
+        let status = self
+            .snapshot_with(plan, Some(v1::SandboxState::Failed))
+            .unwrap_or_else(|_| self.failed_status(plan, diagnostic));
+        (stopped, status)
+    }
+
+    /// `Op::IsolationCheck`: die drei Garantien der laufenden Sandbox.
+    ///
+    /// Gemessen wird in der Sandbox, die läuft, und nicht auf dem Wirt: Die
+    /// Prüfzeilen schreibt der Shim von innen, `BwrapBackend::isolation_check`
+    /// faltet sie zu den drei Garantien.
+    ///
+    /// Läuft keine Sandbox, sendet dieser Zweig **kein** Ergebnis, sondern den
+    /// Zustand. Drei graue Ergebnisse zu schicken hieße, „nicht gemessen" als
+    /// Messung auszugeben, und die Oberfläche sähe den Unterschied zu einem
+    /// bestandenen Durchlauf nicht mehr (CONVENTIONS 4.13, „Nie mehr behaupten
+    /// als bewiesen ist").
+    fn isolation_check(&self, tx: &mpsc::Sender<v1::SandboxEvent>) {
+        let Some((backend, handle)) = self.running_parts() else {
+            self.snapshot_or_diagnostic(&v1::sandbox_request::Plan::default(), tx);
+            return;
+        };
+        for result in &backend.isolation_check(&handle) {
+            if tx.blocking_send(check_event(result)).is_err() {
+                return;
+            }
+        }
+    }
+
+    /// Die drei Garantien der laufenden Sandbox, oder `None`, wenn keine mehr
+    /// gehalten wird.
+    ///
+    /// `None` und nicht die leere Liste: Die leere Liste heißt „gemessen und
+    /// nichts bekommen" und ist [`first_failure`] ein Grund, den Start zu
+    /// beenden. Dass zwischen Start und Messung jemand gestoppt hat, ist
+    /// etwas anderes und darf nicht als Fehlschlag der Sandbox erscheinen.
+    fn measure_isolation(&self) -> Option<Vec<CheckResult>> {
+        self.running_parts()
+            .map(|(backend, handle)| backend.isolation_check(&handle))
     }
 
     /// Beendet die laufende Sandbox und meldet `stopping`, dann `stopped`.
@@ -656,6 +854,7 @@ impl Inner {
         let mut running = lock(&self.running);
         *running = Some(Running {
             handle: Arc::new(handle),
+            backend,
             started_at: SystemTime::now(),
             profile: prepared.profile.name.clone(),
             work_dir: prepared.session.work_src.clone(),
@@ -812,6 +1011,13 @@ impl Inner {
         lock(&self.running)
             .as_ref()
             .map(|running| Arc::clone(&running.handle))
+    }
+
+    /// Das Backend, das gestartet hat, und sein Handle; beides oder nichts.
+    fn running_parts(&self) -> Option<(BwrapBackend, Arc<SandboxHandle>)> {
+        lock(&self.running)
+            .as_ref()
+            .map(|running| (running.backend.clone(), Arc::clone(&running.handle)))
     }
 
     fn clear_running(&self) {
@@ -1359,6 +1565,13 @@ fn shim_path() -> PathBuf {
         && let Some(dir) = exe.parent()
     {
         candidates.push(dir.join(SHIM_BINARY));
+        // Und ein Verzeichnis darüber. Ein Cargo-Testbinary liegt in
+        // `target/<profil>/deps/`, der Shim daneben in `target/<profil>/`;
+        // ohne diesen Kandidaten findet ein Integrationstest den Shim nie und
+        // könnte den Start nur gegen einen erfundenen prüfen.
+        if let Some(up) = dir.parent() {
+            candidates.push(up.join(SHIM_BINARY));
+        }
     }
     candidates.extend(SHIM_DIRS.iter().map(|dir| Path::new(dir).join(SHIM_BINARY)));
     candidates
@@ -1411,6 +1624,76 @@ fn diagnostic_event(diagnostic: &Diagnostic) -> v1::SandboxEvent {
         event: Some(v1::sandbox_event::Event::Diagnostic(
             crate::convert::diagnostic_to_proto(diagnostic),
         )),
+    }
+}
+
+/// Ein Ergebnis einer Isolationsprüfung als Ereignis.
+fn check_event(result: &CheckResult) -> v1::SandboxEvent {
+    v1::SandboxEvent {
+        event: Some(v1::sandbox_event::Event::Check(
+            crate::convert::check_result_to_proto(result),
+        )),
+    }
+}
+
+/// Der Befund, der einen Start beendet, oder `None`, wenn alle drei Garantien
+/// belegt sind.
+///
+/// **Kein Ergebnis ist nicht dasselbe wie ein gutes Ergebnis.** Eine leere
+/// Liste heißt, dass nichts gemessen wurde — keine laufende Sandbox, kein
+/// Bericht —, und das ist `SANDBOX_013` und kein Durchlauf.
+///
+/// Ein rotes Ergebnis ohne eigenen `Diagnostic` bleibt rot.
+/// [`BwrapBackend::isolation_check`] legt zu jedem roten Ergebnis einen an;
+/// ein zweites Backend (ADR-005 nennt Docker als späteren Kandidaten) muss das
+/// nicht tun, und diese Stelle darf aus einem fehlenden Befund keinen
+/// bestandenen Start machen. Geprüft wird deshalb `passed`, nie das
+/// Vorhandensein des Befunds.
+fn first_failure(results: &[CheckResult]) -> Option<Diagnostic> {
+    let missing: Vec<&str> = IsolationCheck::ALL
+        .iter()
+        .filter(|check| !results.iter().any(|result| result.check == **check))
+        .map(|check| check.as_str())
+        .collect();
+    if !missing.is_empty() {
+        return Some(
+            Diagnostic::builder(codes::SANDBOX_013, Severity::Blocking)
+                .why(format!(
+                    "the sandbox reported no result for {}; nothing about {} is proven",
+                    missing.join(", "),
+                    if missing.len() == IsolationCheck::ALL.len() {
+                        "its isolation"
+                    } else {
+                        "those guarantees"
+                    }
+                ))
+                .build(),
+        );
+    }
+    results.iter().find(|result| !result.passed).map(|result| {
+        result.diagnostic.clone().unwrap_or_else(|| {
+            Diagnostic::builder(code_of(result.check), Severity::Blocking)
+                .why(format!(
+                    "{}: {} (the backend reported no diagnostic of its own)",
+                    result.check.as_str(),
+                    result.evidence
+                ))
+                .build()
+        })
+    })
+}
+
+/// Der Diagnostic-Code einer Garantie, als Boden für ein Backend, das keinen
+/// eigenen Befund mitschickt.
+///
+/// Die Zuordnung steht in `daemon/crates/sandbox/src/bwrap.rs` und in
+/// `codes.rs`; hier steht sie nur, damit ein rotes Ergebnis auch ohne Befund
+/// den Code trägt, der zu seiner Garantie gehört (CONVENTIONS 4.11).
+const fn code_of(check: IsolationCheck) -> humanitl_core::DiagnosticCode {
+    match check {
+        IsolationCheck::NoNetworkInterface => codes::SANDBOX_014,
+        IsolationCheck::SingleSocket => codes::SANDBOX_015,
+        IsolationCheck::SeccompActive => codes::SANDBOX_016,
     }
 }
 
@@ -1630,6 +1913,148 @@ mod tests {
         assert_eq!(
             origin("/run/humanitl/proxy.sock"),
             v1::ValueOrigin::Session as i32
+        );
+    }
+
+    /// Ein Ergebnis der Isolationsprüfung, wie es vom Backend käme.
+    fn result(check: IsolationCheck, passed: bool) -> CheckResult {
+        CheckResult {
+            check,
+            passed,
+            evidence: format!("{} evidence", check.as_str()),
+            diagnostic: (!passed).then(|| {
+                Diagnostic::builder(code_of(check), Severity::Blocking)
+                    .why(format!("{} failed", check.as_str()))
+                    .build()
+            }),
+        }
+    }
+
+    /// Alle drei Garantien belegt: der Start darf weitergehen.
+    #[test]
+    fn three_green_checks_let_the_start_through() {
+        let green: Vec<CheckResult> = IsolationCheck::ALL
+            .iter()
+            .map(|&check| result(check, true))
+            .collect();
+        assert!(first_failure(&green).is_none());
+    }
+
+    /// **Kein Ergebnis ist nicht dasselbe wie ein gutes Ergebnis.**
+    ///
+    /// Die Mutationsprobe dazu: Wer `first_failure` so schriebe, dass es über
+    /// eine leere Liste iteriert und `None` findet, liefe hier auf. Eine
+    /// Sandbox ohne Bericht startete dann mit drei unbelegten Garantien.
+    #[test]
+    fn a_report_that_never_arrived_is_never_a_pass() {
+        let diagnostic = first_failure(&[]).expect("no measurement is not a pass");
+        assert_eq!(diagnostic.code, codes::SANDBOX_013);
+        assert_eq!(diagnostic.severity, Severity::Blocking);
+        assert!(!diagnostic.why.is_empty(), "a finding without a why");
+    }
+
+    /// Zwei grüne Ergebnisse sind kein Durchlauf.
+    ///
+    /// Der Start prüft drei Garantien, nicht „so viele, wie ankamen". Ein
+    /// abgerissener Strom oder ein Backend, das eine Zeile verschluckt, darf
+    /// nicht als bestandener Start enden — gezählt wird gegen
+    /// [`IsolationCheck::ALL`], nie gegen die Länge der Liste.
+    #[test]
+    fn two_green_results_out_of_three_are_not_a_pass() {
+        for missing in IsolationCheck::ALL {
+            let results: Vec<CheckResult> = IsolationCheck::ALL
+                .iter()
+                .filter(|check| *check != &missing)
+                .map(|&check| result(check, true))
+                .collect();
+            assert_eq!(results.len(), 2);
+            let diagnostic = first_failure(&results)
+                .unwrap_or_else(|| panic!("{} was never measured", missing.as_str()));
+            assert_eq!(diagnostic.code, codes::SANDBOX_013);
+            assert!(
+                diagnostic.why.contains(missing.as_str()),
+                "the finding names the guarantee nobody measured: {}",
+                diagnostic.why
+            );
+        }
+    }
+
+    /// Der erste rote Befund ist der, der den Start beendet, und er trägt den
+    /// Code seiner Garantie.
+    #[test]
+    fn the_first_red_check_is_the_reason_the_start_ends() {
+        let results = vec![
+            result(IsolationCheck::NoNetworkInterface, true),
+            result(IsolationCheck::SingleSocket, false),
+            result(IsolationCheck::SeccompActive, false),
+        ];
+        let diagnostic = first_failure(&results).expect("a red check stops the start");
+        assert_eq!(diagnostic.code, codes::SANDBOX_015);
+    }
+
+    /// Die zweite Mutationsprobe: Rot bleibt rot, auch ohne Befund daneben.
+    ///
+    /// Wer `passed` gegen `diagnostic.is_some()` tauschte — naheliegend, weil
+    /// [`BwrapBackend::isolation_check`] zu jedem roten Ergebnis einen Befund
+    /// legt —, ließe ein Backend, das keinen mitschickt, mit einer roten
+    /// Garantie durchstarten.
+    #[test]
+    fn a_red_check_without_a_diagnostic_still_stops_the_start() {
+        let results = vec![
+            result(IsolationCheck::NoNetworkInterface, true),
+            result(IsolationCheck::SingleSocket, true),
+            CheckResult {
+                check: IsolationCheck::SeccompActive,
+                passed: false,
+                evidence: "seccomp_applied FAIL: Seccomp:0".to_owned(),
+                diagnostic: None,
+            },
+        ];
+        let diagnostic = first_failure(&results).expect("passed decides, not the diagnostic");
+        assert_eq!(diagnostic.code, codes::SANDBOX_016);
+        assert_eq!(diagnostic.severity, Severity::Blocking);
+    }
+
+    /// Jede Garantie hat ihren eigenen Code; zwei Garantien teilen sich keinen.
+    #[test]
+    fn every_guarantee_has_its_own_code() {
+        let codes: Vec<&str> = IsolationCheck::ALL
+            .iter()
+            .map(|&check| code_of(check).as_str())
+            .collect();
+        assert_eq!(codes, vec!["SANDBOX_014", "SANDBOX_015", "SANDBOX_016"]);
+    }
+
+    /// Ohne laufende Sandbox ist nichts gemessen — und nichts gemessen wird
+    /// nicht als Ergebnis gesendet.
+    ///
+    /// Drei graue `CheckResult` wären auf der Leitung nicht von drei
+    /// gemessenen zu unterscheiden; die Oberfläche bekommt stattdessen den
+    /// Zustand, der sagt, dass nichts läuft (CONVENTIONS 4.13).
+    #[tokio::test]
+    async fn isolation_check_without_a_running_sandbox_reports_no_result() {
+        use tokio_stream::StreamExt as _;
+
+        let paths =
+            humanitl_config::Paths::new(humanitl_config::Env::from_pairs([("HOME", "/home/u")]));
+        let service = SandboxService::new(Config::default(), paths, SessionId::nil());
+        let events: Vec<v1::SandboxEvent> = service
+            .stream(v1::SandboxRequest {
+                op: Some(v1::sandbox_request::Op::IsolationCheck(())),
+            })
+            .collect()
+            .await;
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event.event, Some(v1::sandbox_event::Event::Check(_)))),
+            "no sandbox ran, so nothing was measured: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event.event, Some(v1::sandbox_event::Event::Status(_)))),
+            "the answer says what the state is: {events:?}"
         );
     }
 }

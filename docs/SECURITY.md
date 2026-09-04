@@ -85,7 +85,9 @@ capsh --print           # Current: = (leer)
 
 **Automatisiert.** `tests/escape/esc-1-sockets.sh` (ESC-1) und `esc-3-egress.sh` (ESC-3).
 Zur Laufzeit prüft der Shim dasselbe und meldet es als `IsolationCheck::NoNetworkInterface`
-(HUM-041); schlägt es fehl, startet der Agent nicht.
+(HUM-041); schlägt es fehl, beendet der Wirt die Sandbox, meldet `SANDBOX_014` und lässt
+sie nicht als laufend gelten. **Das ist kein „der Agent startet nicht":** siehe den Abschnitt
+„Das Fenster zwischen `exec` und `SIGKILL`" weiter unten.
 
 **Was ein Angreifer versuchen würde.** Ein `veth`-Paar oder ein TUN-Gerät anlegen — scheitert ohne
 `CAP_NET_ADMIN`. Ein UDP-Paket an einen DNS-Server senden — scheitert schon am Filter, spätestens
@@ -136,7 +138,8 @@ dass die eine Tür offen ist und antwortet. Beide zusammen sind der zweite Satz;
 Suchlauf ist eine Prüfung mit Budget (ohne `/proc`, `/sys` und `/dev` außer `/dev/shm`, ohne
 Symlinks zu folgen, Tiefe 3, 2000 Einträge; griff eine Schranke, steht das in der Evidenz). Der
 erschöpfende Beweis bleibt der `find`-Befehl oben und ESC-2. Ist eine der drei Prüfungen rot, wird
-die Sandbox beendet, statt den Agenten laufen zu lassen.
+die Sandbox beendet — **nachdem** der Agent schon gestartet ist, denn der Shim meldet nur und
+erzwingt nicht. Was das genau heißt, steht in Abschnitt 10, Punkt 6b.
 
 **Was ein Angreifer versuchen würde.** Den D-Bus- oder Docker-Socket suchen — nicht vorhanden.
 Über `/proc/<pid>/root` in ein anderes Mount-Namespace greifen — im eigenen PID-Namespace sind nur
@@ -186,8 +189,10 @@ Datei aus einem geklonten Repository stammen kann. `SOCK_DGRAM` bleibt auch dort
 und `SOCK_CLOEXEC` durchgehen. Alles andere — `AF_UNIX`, `AF_NETLINK`, `AF_PACKET`, `AF_VSOCK`,
 `SOCK_DGRAM`, `SOCK_RAW` — bekommt `EPERM`. `socketpair()` bleibt vom seccomp-Filter unberührt und ist erlaubt: es kennt nur `AF_UNIX`,
 verbindet zwei Deskriptoren desselben Prozessbaums und bietet keinen Egress (nötig für die
-Kindprozess-IPC von Node und Bun, `CONVENTIONS.md` 4.11). ESC-1 und HUM-041 Check 3 prüfen, dass
-`socketpair` gelingt. Zusätzlich verweigert werden `ptrace`, `io_uring_setup`,
+Kindprozess-IPC von Node und Bun, `CONVENTIONS.md` 4.11). Belegt wird das von
+`filter_allows_socketpair` in `daemon/bin/humanitl-shim/src/seccomp.rs` und von ESC-1; die
+Familien-Probe des Shims (`probe_families`) prüft es **nicht**, und Check 3 von HUM-041 sagt
+darüber nichts. Zusätzlich verweigert werden `ptrace`, `io_uring_setup`,
 `io_uring_enter`, `io_uring_register`,
 `process_vm_readv`, `process_vm_writev`, `keyctl`, `add_key`, `request_key`, dazu die
 Standard-Härtung `kexec_load`, `kexec_file_load`, `init_module`, `finit_module`,
@@ -561,8 +566,10 @@ humanitl sandbox check --json    # dasselbe maschinenlesbar
 ```
 
 Die Prüfungen lesen `/sys/class/net`, `/proc/net/dev` und `/proc/net/unix` **in** der Sandbox
-und die `Seccomp:`-Zeile aus einem Kindprozess, der den Filter trägt. Ein Beweis, den der Host über sich selbst behauptet, wäre keiner. Schlägt eine
-Prüfung fehl, startet der Agent nicht; es gibt kein „trotzdem starten".
+und die `Seccomp:`-Zeile aus einem Kindprozess, der den Filter trägt. Ein Beweis, den der Host über
+sich selbst behauptet, wäre keiner. Schlägt eine Prüfung fehl, wird die Sitzung beendet und der
+Zustand ist `failed`; es gibt kein „trotzdem starten". Beendet, nicht verhindert — der Agent läuft
+zu diesem Zeitpunkt schon, siehe Abschnitt 10, Punkt 6b.
 
 **3. Die Escape-Tests laufen lassen.**
 
@@ -606,6 +613,32 @@ Ehrliche Liste dessen, was heute fehlt oder schwächer ist, als man annehmen kö
    Fälle (`CONVENTIONS.md` 4.10). Offen ist nur der Ausgang des Spikes, nicht die Angriffsfläche.
 6. **Kein wiederholter Isolations-Check.** Die drei Prüfungen laufen beim Start. Ein regelmäßiger
    Nachlauf während der Sitzung ist Post-MVP.
+6b. **Das Fenster zwischen `exec` und `SIGKILL`.** Der Shim erzwingt nichts. Er schreibt seine fünf
+   `CHECK`-Zeilen und startet den Agenten unmittelbar danach; erzwungen wird auf dem Wirt
+   (`CONVENTIONS.md` 4.12). Der Wirt liest den Bericht also erst, wenn der Agent schon läuft, und
+   beendet die Sandbox danach. Dazwischen liegt ein Fenster, in dem die Brücke steht, der Proxy
+   annimmt und eine `allow`-Regel ohne Menschen weiterleitet. Im Fall `SANDBOX_015` ist der
+   beanstandete zweite Socket in diesem Fenster benutzbar.
+
+   Im Normalfall sind das Millisekunden. Die **obere Schranke** ist die Summe der Fristen, und sie
+   ist größer als eine einzelne davon:
+
+   | Weg | Bericht bleibt aus | Beenden | Schranke |
+   |---|---|---|---|
+   | Daemon (`SandboxService`) | `REPORT_TIMEOUT` 5 s | `SIGKILL` sofort, `KILL_GRACE` 5 s zum Einsammeln | **10 s** |
+   | `humanitl sandbox run`, `escape-launch` | `REPORT_TIMEOUT` 5 s | `SIGTERM`, `KILL_GRACE` 5 s, dann `SIGKILL`, `KILL_GRACE` 5 s | **15 s** |
+
+   **Kein Weg in die Sandbox ist davon ausgenommen.** `humanitl sandbox run` und `escape-launch`
+   starten ebenso erst und prüfen danach; sie beenden sogar mit Gnadenfrist. Wer die Escape-Tests
+   als Beleg dafür liest, dass ein roter Check den Befehl verhindert, liest sie falsch: Sie messen
+   von innen, in genau dieser Sandbox, und das ist ihre Aufgabe — über das Fenster sagen sie
+   nichts.
+
+   Der Daemon hält das Fenster so klein wie möglich: Er beendet ohne Gnadenfrist und wartet nur
+   einmal. Geschlossen ist es damit nicht. Es zu schließen heißt, dass der Proxy Verbindungen
+   ablehnt, solange die Isolation der laufenden Sitzung nicht belegt ist; das ist ein eigenes Issue
+   und noch nicht gebaut. Bis dahin gilt überall derselbe Satz: Ein roter Isolations-Check
+   **beendet** die Sitzung, er **verhindert** sie nicht.
 7. **Vollständige Aufzeichnung ab M1+.** Der Satz „alles wird aufgezeichnet" gilt, sobald der
    Recorder existiert (HUM-026). Vorher zeigt Humanitl den Verkehr, speichert ihn aber nicht
    dauerhaft.

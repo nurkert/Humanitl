@@ -1422,8 +1422,6 @@
   "@sandboxTerminalTitle": {"description": "Heading of the upper half, where the agent's terminal will live."},
   "sandboxTerminalPlaceholder": "The agent's terminal belongs here. It is not built yet, so the sandbox starts without a screen of its own; what the daemon logs about it stands under Log.",
   "@sandboxTerminalPlaceholder": {"description": "Says what is coming and what happens meanwhile. An empty pane that explains nothing would read as a fault."},
-  "sandboxIsolationPlaceholder": "At every start the daemon checks the three guarantees inside the running sandbox -- no network interface, exactly one socket, seccomp active -- and each check will stand here with the evidence it produced. Until then the exact command below is the evidence.",
-  "@sandboxIsolationPlaceholder": {"description": "Says what the isolation tab will show and what stands in for it meanwhile."},
   "sandboxLogEmpty": "Nothing logged yet. A start and a stop each write a line here.",
   "@sandboxLogEmpty": {"description": "Empty state of the log tab; it names the next event instead of saying nothing."},
   "sandboxLogFollow": "Follow",
@@ -1480,5 +1478,49 @@
   "@interceptBodyFindingsNotPlaced": {
     "description": "Shown when the bytes on screen are not the bytes the daemon searched. The findings keep their names and lose their places; a marker in the wrong byte space points at a value that was never there.",
     "placeholders": {"count": {"type": "int"}}
+  },
+  "isolationIntro": "Each line below was measured inside the running sandbox, not on this machine, and carries the evidence it produced.",
+  "@isolationIntro": {"description": "Heading of the isolation tab: says where the three answers come from, so that a green dot is an argument and not decoration."},
+  "isolationCheck1": "No network interface. There is nowhere for traffic to go.",
+  "@isolationCheck1": {"description": "Guarantee 1, word for word as in docs/SECURITY.md section 1 and BACKLOG.md 4.1."},
+  "isolationCheck2": "Exactly one door: a socket that leads to Humanitl.",
+  "@isolationCheck2": {"description": "Guarantee 2, word for word as in docs/SECURITY.md section 1 and BACKLOG.md 4.1."},
+  "isolationCheck3": "The kernel opens no new door (seccomp).",
+  "@isolationCheck3": {"description": "Guarantee 3, word for word as in docs/SECURITY.md section 1 and BACKLOG.md 4.1."},
+  "isolationStatePassed": "proven",
+  "@isolationStatePassed": {"description": "State of one guarantee, next to its dot. Colour alone never carries the state."},
+  "isolationStateFailed": "does not hold",
+  "@isolationStateFailed": {"description": "State of one guarantee that was measured and failed."},
+  "isolationStateRunning": "measuring",
+  "@isolationStateRunning": {"description": "State of one guarantee while the sandbox starts and the result has not arrived."},
+  "isolationStateUnknown": "not measured",
+  "@isolationStateUnknown": {"description": "State of one guarantee for which no result arrived. Never the same word, never the same colour as a passed one."},
+  "isolationNotMeasured": "No result arrived for this check, so nothing about this guarantee is proven. It is not a pass.",
+  "@isolationNotMeasured": {"description": "Stands under a line whose result is missing. The whole point is that a missing result never reads as a good one."},
+  "isolationWalkStopped": "The search for sockets stopped at its budget ({entries} entries, {depth} levels deep) before it was finished. What it found is true; that it found everything is not proven here. The exhaustive proof is the escape test ESC-2.",
+  "@isolationWalkStopped": {
+    "description": "Shown when the shim's socket walk reports limit=entries or limit=depth. Never claim more than was proven (CONVENTIONS 4.13).",
+    "placeholders": {"entries": {"type": "int"}, "depth": {"type": "int"}}
+  },
+  "isolationException": "Exception: LLM at {endpoint} -- passthrough, logged, never held.",
+  "@isolationException": {
+    "description": "The fourth line of the panel. It is not a check: it names the one declared data path that leaves without being held (BACKLOG.md 4.2).",
+    "placeholders": {"endpoint": {"type": "String"}}
+  },
+  "isolationExceptionNone": "No LLM exception configured.",
+  "@isolationExceptionNone": {"description": "The fourth line when no LLM endpoint is set: then there is no exception, and the line says so in grey."},
+  "isolationShowArgv": "Show the exact sandbox command",
+  "@isolationShowArgv": {"description": "Opens the command line the daemon built. It is the fourth piece of evidence on this tab."},
+  "isolationEmpty": "Nothing runs, so nothing is measured. The three guarantees are checked inside the sandbox at every start, and each one stands here afterwards with its evidence.",
+  "@isolationEmpty": {"description": "Empty state of the isolation tab while no sandbox is up."},
+  "shellIsolationPassed": "{passed}/{total} isolation checks passed",
+  "@shellIsolationPassed": {
+    "description": "Tooltip and screen-reader label of the isolation ring while every measured guarantee holds.",
+    "placeholders": {"passed": {"type": "int"}, "total": {"type": "int"}}
+  },
+  "shellIsolationFailed": "Isolation check failed: {title}",
+  "@shellIsolationFailed": {
+    "description": "Tooltip and screen-reader label of the isolation ring when a guarantee does not hold.",
+    "placeholders": {"title": {"type": "String"}}
   }
 }

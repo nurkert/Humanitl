@@ -54,4 +54,19 @@ abstract final class DiagnosticCodes {
   /// This desktop has no tray to register with. Information, not a failure:
   /// the count still stands in the window title.
   static const String noTray = 'UI_002';
+
+  /// The shim reported no isolation check at all. Every guarantee stands
+  /// unproven, and the daemon stops the sandbox rather than let it run
+  /// (HUM-041).
+  static const String isolationNoReport = 'SANDBOX_013';
+
+  /// Guarantee 1 does not hold: an interface other than `lo` exists.
+  static const String isolationNoNetworkInterface = 'SANDBOX_014';
+
+  /// Guarantee 2 does not hold: more than one door out of the sandbox.
+  static const String isolationSingleSocket = 'SANDBOX_015';
+
+  /// Guarantee 3 does not hold: seccomp is not in force, or a family the
+  /// filter must refuse was allowed.
+  static const String isolationSeccompActive = 'SANDBOX_016';
 }

@@ -294,6 +294,18 @@ class FakeDaemonClient implements DaemonClient {
   /// Was ein Start meldet, statt zu laufen. `null` heisst: er laeuft.
   Diagnostic? sandboxStartFailure;
 
+  /// Die drei Garantien, die ein Start und `IsolationCheck` melden.
+  ///
+  /// Voreingestellt sind die drei gruenen des Rust-Fakes, jede mit einem
+  /// Beleg, der ausdruecklich sagt, dass nichts gemessen wurde
+  /// (CONVENTIONS 4.7). Ein Test setzt hier eine rote Pruefung ein oder
+  /// [fakeIsolationNoReport]: **drei rote Ergebnisse mit `SANDBOX_013`**, was
+  /// der echte Daemon bei ausgebliebenem Bericht schickt
+  /// (`BwrapBackend::isolation_check`). Er schickt nie null Ereignisse und nie
+  /// zwei von drei; ein Fake, der das taete, uebte die Oberflaeche auf eine
+  /// Form, die es nicht gibt.
+  List<IsolationCheckResult> isolationChecks = fakeIsolationChecks();
+
   /// The rules the person created, session rules first. `Decide.remember`
   /// adds to it, `Rules(remove)` takes from it.
   List<Rule> get rules => <Rule>[...sessionRules, ...savedRules];
@@ -983,6 +995,23 @@ class FakeDaemonClient implements DaemonClient {
       yield SandboxUpdate.status(sandbox);
       return;
     }
+    // Wie beim echten Daemon: die drei Garantien stehen zwischen `starting`
+    // und `running`, sie reisen als eigene Ereignisse und nicht in der
+    // Momentaufnahme, und eine rote beendet den Start (HUM-041).
+    for (final IsolationCheckResult result in isolationChecks) {
+      yield SandboxUpdate.check(result);
+    }
+    final Diagnostic? isolationFailure = _isolationFailure();
+    if (isolationFailure != null) {
+      sandbox = sandbox.copyWith(
+        state: SandboxState.failed,
+        agentRunning: false,
+        diagnostics: <Diagnostic>[...sandbox.diagnostics, isolationFailure],
+      );
+      yield SandboxUpdate.diagnostic(isolationFailure);
+      yield SandboxUpdate.status(sandbox);
+      return;
+    }
     sandbox = sandbox.copyWith(
       state: SandboxState.running,
       agentRunning: true,
@@ -1010,6 +1039,52 @@ class FakeDaemonClient implements DaemonClient {
       SandboxLogLine(at: _clock(), text: 'sandbox stopped (fake)'),
     );
     yield SandboxUpdate.status(sandbox);
+  }
+
+  @override
+  Stream<SandboxUpdate> checkIsolation() async* {
+    _check();
+    // Wie beim echten Daemon: ohne laufende Sandbox ist nichts gemessen, und
+    // was nicht gemessen wurde, wird nicht als Ergebnis gesendet.
+    if (sandbox.state != SandboxState.running) {
+      yield SandboxUpdate.status(sandbox);
+      return;
+    }
+    for (final IsolationCheckResult result in isolationChecks) {
+      yield SandboxUpdate.check(result);
+    }
+  }
+
+  /// Der Befund, der einen Start beendet, oder `null`, wenn alle drei
+  /// Garantien belegt sind. Eine leere Liste ist kein Durchlauf.
+  Diagnostic? _isolationFailure() {
+    if (isolationChecks.isEmpty) {
+      return const Diagnostic(
+        code: DiagnosticCodes.isolationNoReport,
+        severity: Severity.blocking,
+        title: 'Isolation check without a report',
+        why:
+            'the sandbox reported no isolation check at all; nothing about '
+            'its isolation is proven',
+      );
+    }
+    for (final IsolationCheckResult result in isolationChecks) {
+      if (!result.passed) {
+        // Rot bleibt rot, auch ohne Befund daneben: geprueft wird `passed`,
+        // nie das Vorhandensein des Befunds. Derselbe Boden wie `code_of` im
+        // Daemon (`daemon/crates/ipc/src/sandbox.rs`).
+        return result.diagnostic ??
+            Diagnostic(
+              code: _isolationCodeOf(result.check),
+              severity: Severity.blocking,
+              title: 'Isolation check failed',
+              why:
+                  '${result.check.name}: ${result.evidence} '
+                  '(no finding came with it)',
+            );
+      }
+    }
+    return null;
   }
 
   @override
@@ -2461,6 +2536,67 @@ SandboxStatus defaultSandbox_() => SandboxStatus(
     workMode: WorkMode.rw,
   ),
 );
+
+/// Was der Daemon meldet, wenn der Shim keinen Bericht geliefert hat.
+///
+/// Drei rote Ergebnisse, jedes mit `SANDBOX_013` und derselben Evidenz --
+/// genau die Form aus `BwrapBackend::isolation_check`. Der Daemon schickt
+/// niemals gar nichts: „kein Bericht" ist selbst ein Ergebnis, und es ist rot.
+List<IsolationCheckResult> fakeIsolationNoReport() => <IsolationCheckResult>[
+  for (final IsolationCheck check in IsolationCheck.values)
+    IsolationCheckResult(
+      check: check,
+      passed: false,
+      evidence: _fakeNoReportEvidence,
+      diagnostic: Diagnostic(
+        code: DiagnosticCodes.isolationNoReport,
+        severity: Severity.blocking,
+        title: 'Isolation check without a report',
+        why: '${check.name}: $_fakeNoReportEvidence',
+      ),
+    ),
+];
+
+/// Dieselbe Evidenz, die `bwrap.rs` bei ausgebliebenem Bericht schreibt.
+const String _fakeNoReportEvidence =
+    'no CHECK line from the shim within 5s; the report pipe is closed';
+
+/// Der registrierte Code einer Garantie, als Boden fuer ein Ergebnis ohne
+/// eigenen Befund. Die Zuordnung steht im Daemon (`codes.rs`, `bwrap.rs`).
+String _isolationCodeOf(IsolationCheck check) => switch (check) {
+  IsolationCheck.noNetworkInterface =>
+    DiagnosticCodes.isolationNoNetworkInterface,
+  IsolationCheck.singleSocket => DiagnosticCodes.isolationSingleSocket,
+  IsolationCheck.seccompActive => DiagnosticCodes.isolationSeccompActive,
+};
+
+/// Die drei Garantien, wie der Rust-Fake sie meldet
+/// (`daemon/crates/ipc/src/fake/mod.rs`, `isolation_checks`).
+///
+/// Gruen, und jede Evidenz sagt ausdruecklich, dass nichts gemessen wurde und
+/// welcher Befehl es messen wuerde. Ein Fake, der einen Beleg vortaeuschte,
+/// waere genau die Luege, die dieser Bildschirm nicht haben darf.
+List<IsolationCheckResult> fakeIsolationChecks() => <IsolationCheckResult>[
+  const IsolationCheckResult(
+    check: IsolationCheck.noNetworkInterface,
+    passed: true,
+    evidence: '$_fakeNothingMeasured (would run: ip link)',
+  ),
+  const IsolationCheckResult(
+    check: IsolationCheck.singleSocket,
+    passed: true,
+    evidence: '$_fakeNothingMeasured (would run: ss -x)',
+  ),
+  const IsolationCheckResult(
+    check: IsolationCheck.seccompActive,
+    passed: true,
+    evidence:
+        '$_fakeNothingMeasured (would run: grep Seccomp /proc/<agent>/status)',
+  ),
+];
+
+/// Derselbe Satz wie `NOTHING_MEASURED` im Rust-Fake.
+const String _fakeNothingMeasured = 'fake daemon: nothing was measured';
 
 /// Jeder Pfad, den der Agent in der gespielten Sandbox saehe.
 List<MountEntry> fakeSandboxMounts({
