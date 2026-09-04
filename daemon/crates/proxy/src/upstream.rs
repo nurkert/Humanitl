@@ -178,8 +178,34 @@ impl Upstream {
         body: Bytes,
         allow_private: bool,
     ) -> Result<Response<Incoming>, UpstreamError> {
-        let authority = &request.authority;
-        let ip = match &authority.host {
+        let ip = self.resolve(&request.authority, allow_private).await?;
+        self.forward_to(request, body, ip).await
+    }
+
+    /// Löst die Authority auf und prüft die Adresse.
+    ///
+    /// Der eine Ort, an dem aus einem Namen eine Adresse wird (ADR-006). Ein
+    /// IP-Literal wird nicht aufgelöst, sondern nur geprüft. `allow_private`
+    /// entscheidet, ob eine Adresse aus RFC 1918, Loopback, Link-Local oder
+    /// CGNAT durchgeht.
+    ///
+    /// Die Adresse kommt zurück, statt gleich verbunden zu werden, damit ein
+    /// Aufrufer sie kennt, der mehr über sie wissen muss als der
+    /// Weiterleitungspfad — die Endpunkt-Probe (`crate::llm_probe`) sagt
+    /// darüber, ob der Endpunkt in einem privaten Netz liegt, und darf dafür
+    /// kein zweites Mal fragen.
+    ///
+    /// # Errors
+    ///
+    /// [`UpstreamError::Dns`], wenn nichts auflöst oder nichts Verbindbares
+    /// zurückkommt; [`UpstreamError::PrivateAddress`], wenn die Adresse privat
+    /// ist und nicht erlaubt.
+    pub async fn resolve(
+        &self,
+        authority: &humanitl_core::Authority,
+        allow_private: bool,
+    ) -> Result<std::net::IpAddr, UpstreamError> {
+        match &authority.host {
             // Ein IP-Literal wird nicht aufgelöst: Es steht schon da, und
             // entschieden wurde für genau diese Adresse (ADR-007: IP-Literale
             // matchen nie eine Host-Regel).
@@ -187,7 +213,7 @@ impl Upstream {
                 if ip_is_private(*ip) && !allow_private {
                     return Err(UpstreamError::PrivateAddress(*ip));
                 }
-                *ip
+                Ok(*ip)
             }
             // Erst hier, nach `Decided(Allow | AllowEdited)`, verlässt eine
             // Frage den Rechner (ADR-006).
@@ -197,19 +223,35 @@ impl Upstream {
                     UpstreamError::Dns
                 })?;
                 match resolver::select(&addrs, self.prefer, allow_private) {
-                    Ok(ip) => ip,
-                    Err(AddressRefusal::Private(ip)) => {
-                        return Err(UpstreamError::PrivateAddress(ip));
-                    }
+                    Ok(ip) => Ok(ip),
+                    Err(AddressRefusal::Private(ip)) => Err(UpstreamError::PrivateAddress(ip)),
                     // Nichts Verbindbares in der Antwort. Kein zweiter Versuch
                     // mit einem anderen Resolver: Ein Rückfall auf das
                     // System-DNS wäre genau die Abfrage, die niemand erlaubt
                     // hat (HUM-024, Fallstricke).
-                    Err(AddressRefusal::NoUsable) => return Err(UpstreamError::Dns),
+                    Err(AddressRefusal::NoUsable) => Err(UpstreamError::Dns),
                 }
             }
-        };
+        }
+    }
 
+    /// Leitet `request` an eine schon aufgelöste und geprüfte Adresse.
+    ///
+    /// Die Adresse ist damit angeheftet: Zwischen der Prüfung in
+    /// [`Upstream::resolve`] und dem Verbinden kommt keine zweite Auflösung
+    /// dazwischen, und ein Name, der beim zweiten Mal anders antwortet
+    /// (Rebinding), erreicht das Ziel nicht (ADR-006, ADR-017).
+    ///
+    /// # Errors
+    ///
+    /// Wie [`Upstream::forward`], ohne `Dns` und `PrivateAddress`.
+    pub async fn forward_to(
+        &self,
+        request: &HttpRequest,
+        body: Bytes,
+        ip: std::net::IpAddr,
+    ) -> Result<Response<Incoming>, UpstreamError> {
+        let authority = &request.authority;
         let stream = self
             .egress
             .connect(authority, Some(ip))

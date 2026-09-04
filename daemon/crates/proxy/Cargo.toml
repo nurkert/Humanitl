@@ -27,6 +27,10 @@ humanitl-findings.workspace = true
 humanitl-recorder.workspace = true
 chrono.workspace = true
 dashmap.workspace = true
+# Die Endpunkt-Probe (HUM-039) liest die Modelllisten von Ollama und einer
+# OpenAI-kompatiblen API und nimmt `llm.endpoint` als `Url` entgegen.
+serde_json.workspace = true
+url.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true

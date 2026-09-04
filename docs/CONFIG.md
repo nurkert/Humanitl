@@ -127,7 +127,7 @@ Der lokale LLM-Endpunkt und was als Passthrough gilt.
 |---|---|---|---|---|---|
 | `llm.endpoint` | string, optional | `-` | basic | denied | OpenAI-kompatibler Endpunkt im LAN. Verkehr dorthin wird nicht angehalten, aber protokolliert. |
 | `llm.models` | list of string | `[]` | basic | denied | Modelle, die der Endpunkt anbietet. Leer heißt: der Agent bekommt ein Platzhalter-Modell und eine Warnung. |
-| `llm.passthrough_paths` | list of string | `["/v1/","/api/"]` | advanced | denied | Pfadpräfixe, die als LLM-Passthrough gelten. |
+| `llm.passthrough_paths` | list of string | `["/v1/","/api/"]` | advanced | denied | Pfadpräfixe, die als LLM-Passthrough gelten. Ein Präfix soll einen Endpunkt benennen, keine ganze API-Fläche: Der Agent-Adapter ersetzt `/v1/` und `/api/` deshalb durch die Endpunkte, die Inferenz machen, damit `POST /api/pull` und `POST /v1/files` nicht ungefragt hinausgehen. Ein Pfad, der mehr nennt, bleibt stehen, wie er hier steht. |
 
 ### `pseudonyms`
 

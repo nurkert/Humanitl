@@ -28,6 +28,9 @@
 //!   (HUM-023). Nur ihr Ergebnis wird ausgewertet, nie das CONNECT-Ziel
 //!   allein.
 //! - [`findings`]: der Port für die Detektoren (HUM-025).
+//! - [`llm_probe`]: die host-seitige Probe des LLM-Endpunkts (HUM-039). Sie
+//!   liegt hier, weil sie denselben [`Upstream`] benutzt wie der Proxy und
+//!   damit dasselbe Auflösungs- und Verbindungsverhalten hat.
 //! - [`ca`], [`hold`]: CA und Halte-Warteschlange (HUM-014, HUM-016). Die
 //!   Warteschlange ist zugleich der eine Trichter, durch den jedes Ereignis
 //!   geht: dort hängen die Aufzeichnung ([`HoldQueue::recording`], HUM-026)
@@ -52,6 +55,7 @@ pub mod findings;
 pub mod handler;
 pub mod hold;
 pub mod listener;
+pub mod llm_probe;
 pub mod pipeline;
 pub mod registry;
 pub mod resolver;
@@ -69,6 +73,7 @@ pub use crate::findings::{NoScan, Scanner, Tier1Scanner};
 pub use crate::handler::{FlowHandler, ProxyLimits};
 pub use crate::hold::{DomainSink, HoldQueue};
 pub use crate::listener::SessionSocket;
+pub use crate::llm_probe::{LlmFlavor, LlmProbe, ProbeResult};
 pub use crate::pipeline::{AskPipeline, FlowPipeline, PassthroughPipeline, RulesPipeline};
 pub use crate::registry::{FlowFilter, FlowRecord, FlowRegistry, FlowSummary};
 pub use crate::resolver::{

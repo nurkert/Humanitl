@@ -34,6 +34,11 @@ struct Daemon {
 impl Daemon {
     /// Startet das gebaute Binary und wartet, bis beide Sockets stehen.
     fn start(hold_timeout_secs: u64) -> Self {
+        Self::start_with(hold_timeout_secs, None)
+    }
+
+    /// Wie [`Daemon::start`], aber mit einem gesetzten `llm.endpoint`.
+    fn start_with(hold_timeout_secs: u64, llm_endpoint: Option<&str>) -> Self {
         let dir = tempfile::Builder::new()
             .prefix("hum")
             .tempdir_in("/tmp")
@@ -41,7 +46,7 @@ impl Daemon {
         for name in ["run", "data", "config", "home"] {
             std::fs::create_dir(dir.path().join(name)).unwrap();
         }
-        let child = spawn(dir.path(), hold_timeout_secs);
+        let child = spawn(dir.path(), hold_timeout_secs, llm_endpoint);
         Self { dir, child }
     }
 
@@ -51,7 +56,7 @@ impl Daemon {
     /// über frühere Flows sagt, kann deshalb nur aus der Aufzeichnung kommen.
     async fn restart(&mut self, hold_timeout_secs: u64) {
         self.terminate();
-        self.child = spawn(self.dir.path(), hold_timeout_secs);
+        self.child = spawn(self.dir.path(), hold_timeout_secs, None);
         self.ready().await;
     }
 
@@ -100,15 +105,18 @@ impl Drop for Daemon {
 }
 
 /// Startet das gebaute Binary in diesem XDG-Baum.
-fn spawn(dir: &Path, hold_timeout_secs: u64) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_humanitld"))
+fn spawn(dir: &Path, hold_timeout_secs: u64, llm_endpoint: Option<&str>) -> Child {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_humanitld"));
+    command
         .env("XDG_RUNTIME_DIR", dir.join("run"))
         .env("XDG_DATA_HOME", dir.join("data"))
         .env("XDG_CONFIG_HOME", dir.join("config"))
         .env("HOME", dir.join("home"))
-        .env("HUMANITL_HOLD__TIMEOUT_SECS", hold_timeout_secs.to_string())
-        .spawn()
-        .expect("the daemon binary must start")
+        .env("HUMANITL_HOLD__TIMEOUT_SECS", hold_timeout_secs.to_string());
+    if let Some(endpoint) = llm_endpoint {
+        command.env("HUMANITL_LLM__ENDPOINT", endpoint);
+    }
+    command.spawn().expect("the daemon binary must start")
 }
 
 /// Wartet höchstens zehn Sekunden auf eine Datei.
@@ -427,5 +435,97 @@ async fn a_flow_that_never_existed_is_not_found() {
     assert!(status.message().contains("IPC_004"), "{status}");
 
     drop(grpc);
+    daemon.terminate();
+}
+
+/// Der konfigurierte LLM-Endpunkt wird zu einer Regel im laufenden Daemon
+/// (HUM-039, HUM-037 Schritt 6).
+///
+/// Ohne diese Verdrahtung hält der Proxy jede Inferenz an, und der
+/// Durchreich-Zweig samt `LLM_005` bleibt toter Code — grün getestet in den
+/// Crate-Tests, wirkungslos im Programm. Der Test fragt deshalb den Daemon
+/// selbst, nicht den Adapter: Er liest den Regelsatz über die `Rules`-RPC und
+/// erwartet die Regel an erster Stelle, weil eine breite Blockregel sonst vor
+/// ihr stünde.
+#[tokio::test]
+async fn the_configured_llm_endpoint_becomes_a_passthrough_rule() {
+    let mut daemon = Daemon::start_with(120, Some("http://192.168.1.50:11434"));
+    daemon.ready().await;
+
+    let token = auth::read_token(&daemon.token_path()).unwrap();
+    let mut grpc = client::connect_at(&daemon.socket(), &token).await.unwrap();
+
+    let response = grpc
+        .rules(v1::RulesRequest {
+            op: Some(v1::rules_request::Op::List(())),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let rule = response
+        .rules
+        .first()
+        .expect("the rule set is not empty")
+        .clone();
+    assert!(
+        rule.passthrough_llm,
+        "the passthrough comes first; the bundled block rules must not shadow it: {:?}",
+        response
+            .rules
+            .iter()
+            .map(|r| (r.passthrough_llm, r.note.clone()))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(rule.rule_id, "01920000-0000-7000-8000-0000000000ff");
+    assert!(rule.bundled);
+    assert!(rule.allow_private, "the model lives on a private address");
+    assert_eq!(rule.action, v1::RuleAction::Allow as i32);
+
+    let matcher = rule.matcher.expect("a matcher");
+    // `HostPattern::Exact(HostName::Ip(..))`, nicht `HostPattern::Ip`: die
+    // Spezifikation nennt genau diese Form, und sie schreibt sich ohne
+    // Präfix (`backlog/sprint-3.md` HUM-039).
+    assert_eq!(matcher.host, "192.168.1.50");
+    assert_eq!(matcher.port, 11434);
+    assert!(
+        matcher.path_prefixes.iter().any(|p| p == "/api/chat"),
+        "{:?}",
+        matcher.path_prefixes
+    );
+    assert!(
+        !matcher
+            .path_prefixes
+            .iter()
+            .any(|p| "/api/pull".starts_with(p)),
+        "pulling a model is not inference: {:?}",
+        matcher.path_prefixes
+    );
+
+    daemon.terminate();
+}
+
+/// Ohne `llm.endpoint` gibt es keine Durchreiche — es wird gefragt.
+#[tokio::test]
+async fn without_an_endpoint_there_is_no_passthrough_rule() {
+    let mut daemon = Daemon::start(120);
+    daemon.ready().await;
+
+    let token = auth::read_token(&daemon.token_path()).unwrap();
+    let mut grpc = client::connect_at(&daemon.socket(), &token).await.unwrap();
+
+    let response = grpc
+        .rules(v1::RulesRequest {
+            op: Some(v1::rules_request::Op::List(())),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(
+        !response.rules.iter().any(|rule| rule.passthrough_llm),
+        "no endpoint, no exception"
+    );
+
     daemon.terminate();
 }

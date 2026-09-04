@@ -34,6 +34,12 @@ message RuleMatcher {
   // 0 bedeutet "jeder Port".
   uint32 port = 5;
   Upgrade upgrade = 6;
+  // Pfadpraefixe; eine leere Liste bedeutet "egal". Treffer, wenn der Pfad
+  // (ohne Query) mit einem der Praefixe beginnt. Jeder Praefix beginnt mit `/`
+  // und ist mindestens zwei Zeichen lang; ein Pfad mit einem `..`-Segment
+  // trifft nie einen Praefix. Steht daneben auch `path`, muessen beide
+  // zutreffen (HUM-039).
+  repeated string path_prefixes = 7;
 }
 
 // Lebensdauer einer Regel.
@@ -80,4 +86,11 @@ message Rule {
   // man. Der Zustand steht in der `rules.yaml` des Nutzers als Liste
   // `disabled_bundled` (HUM-038).
   bool disabled = 13;
+  // Die erklaerte Durchreiche zum Sprachmodell: nicht gehalten, vollstaendig
+  // aufgezeichnet, Funde warnen statt aufzuhalten (LLM_005). Nur zum Lesen.
+  // Der Daemon setzt das Feld aus dem Agent-Adapter oder aus `rules.yaml`; in
+  // einer Anfrage wird es ignoriert, denn ein Client, der sich eine
+  // Durchreichregel anlegen koennte, koennte Verkehr an der Warteschlange und
+  // an der voreingestellten Ansicht vorbeifuehren (HUM-039).
+  bool passthrough_llm = 14;
 }

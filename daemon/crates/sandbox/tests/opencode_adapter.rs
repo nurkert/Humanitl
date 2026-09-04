@@ -12,11 +12,12 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 
 use humanitl_config::LlmConfig;
-use humanitl_core::rule::{Action, HostPattern, PathPattern};
+use humanitl_core::rule::{Action, HostPattern};
 use humanitl_core::{HostName, Method, Scheme, SessionId, Severity};
 use humanitl_rules::{RequestKey, RuleSet, Verdict};
 use humanitl_sandbox::agent::opencode::{
-    CONFIG_DST, MANAGED_CONFIG_DST, MODELS_DST, PLACEHOLDER_MODEL, home_config_dst, home_keep_dst,
+    CONFIG_DST, MANAGED_CONFIG_DST, MODELS_DST, OLLAMA_INFERENCE_PATHS, OPENAI_INFERENCE_PATHS,
+    PLACEHOLDER_MODEL, home_config_dst, home_keep_dst,
 };
 use humanitl_sandbox::agent::opencode_models::PROVIDER_ID;
 use humanitl_sandbox::{
@@ -356,9 +357,22 @@ fn opencode_passthrough_rule_matches_only_the_endpoint() {
     );
     assert_eq!(rule.matcher.port, Some(11434));
     assert_eq!(rule.matcher.scheme, Some(Scheme::Http));
+    assert!(
+        rule.passthrough_llm,
+        "the proxy recognises the declared exception by this flag, not by the id"
+    );
     assert_eq!(
-        rule.matcher.path,
-        Some(PathPattern::Regex("^(?:/v1/|/api/)".to_owned()))
+        rule.matcher.path, None,
+        "the boundary is the prefix list, not a regex"
+    );
+    assert_eq!(
+        rule.matcher.path_prefixes,
+        OPENAI_INFERENCE_PATHS
+            .iter()
+            .chain(OLLAMA_INFERENCE_PATHS)
+            .map(|path| (*path).to_owned())
+            .collect::<Vec<_>>(),
+        "both surface prefixes of llm.passthrough_paths are narrowed to inference endpoints"
     );
 
     let set = RuleSet::from_rules([rule]);
@@ -372,6 +386,39 @@ fn opencode_passthrough_rule_matches_only_the_endpoint() {
         (&endpoint, Method::GET, "/v1/models", 11434, true),
         (&endpoint, Method::POST, "/api/chat", 11434, true),
         (&endpoint, Method::POST, "/admin", 11434, false),
+        // Modelle nachladen, anlegen und löschen ändern den Server. Sie
+        // gehören nicht in die eine Regel, die nicht gehalten wird.
+        (&endpoint, Method::POST, "/api/pull", 11434, false),
+        (&endpoint, Method::POST, "/api/create", 11434, false),
+        (&endpoint, Method::DELETE, "/api/delete", 11434, false),
+        (
+            &endpoint,
+            Method::POST,
+            "/api/blobs/sha256:aa",
+            11434,
+            false,
+        ),
+        // Dasselbe unter `/v1/`: Dateien ablegen, Vektorspeicher anlegen,
+        // feinabstimmen und LoRA-Adapter laden sind keine Inferenz.
+        (&endpoint, Method::POST, "/v1/files", 11434, false),
+        (&endpoint, Method::POST, "/v1/vector_stores", 11434, false),
+        (
+            &endpoint,
+            Method::POST,
+            "/v1/fine_tuning/jobs",
+            11434,
+            false,
+        ),
+        (
+            &endpoint,
+            Method::POST,
+            "/v1/load_lora_adapter",
+            11434,
+            false,
+        ),
+        (&endpoint, Method::POST, "/v1/models/../files", 11434, false),
+        // Und auch nicht über einen Umweg, den erst der Server auflöst.
+        (&endpoint, Method::POST, "/api/chat/../pull", 11434, false),
         (&endpoint, Method::POST, "/v1/x", 8080, false),
         (&other_host, Method::POST, "/v1/x", 11434, false),
         (&endpoint, Method::DELETE, "/v1/x", 11434, false),

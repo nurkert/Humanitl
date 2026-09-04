@@ -392,3 +392,101 @@ fn property_one_star_means_exactly_one_label() {
         );
     }
 }
+
+// --- Pfadpräfixe und die Durchreiche zum Sprachmodell (HUM-039) -------------
+
+/// Baut die Bedingung der Durchreichregel: Host, Port, Methoden, Präfixe.
+fn passthrough_matcher(prefixes: &[&str]) -> Matcher {
+    Matcher::host(pattern("ip:192.168.1.50"))
+        .with_methods(vec![Method::POST, Method::GET])
+        .with_path_prefixes(prefixes.iter().map(|p| (*p).to_owned()).collect())
+        .with_scheme(Scheme::Http)
+        .with_port(11434)
+}
+
+/// Die Tabelle aus HUM-039: die Durchreiche trifft den Endpunkt und nichts
+/// daneben.
+#[test]
+fn passthrough_rule_matches_only_endpoint() {
+    let id = RuleId::new();
+    let mut rule = Rule::new(
+        id,
+        Action::Allow,
+        passthrough_matcher(&["/v1/", "/api/chat", "/api/tags"]),
+    );
+    rule = rule
+        .with_allow_private(true)
+        .bundled(true)
+        .passthrough_llm(true);
+    let rules = RuleSet::from_rules([rule]);
+
+    let endpoint = host("192.168.1.50");
+    let neighbour = host("192.168.1.51");
+    for (target, method, path, port, allowed) in [
+        (&endpoint, Method::POST, "/v1/chat/completions", 11434, true),
+        (&endpoint, Method::GET, "/v1/models", 11434, true),
+        (&endpoint, Method::POST, "/api/chat", 11434, true),
+        (&endpoint, Method::POST, "/admin", 11434, false),
+        (&endpoint, Method::POST, "/api/pull", 11434, false),
+        (&endpoint, Method::POST, "/v1/x", 8080, false),
+        (&neighbour, Method::POST, "/v1/x", 11434, false),
+        (&endpoint, Method::DELETE, "/v1/x", 11434, false),
+    ] {
+        let key = RequestKey::new(target, &method, path, Scheme::Http, port);
+        let verdict = rules.evaluate(&key, now(), SessionId::new());
+        assert_eq!(
+            matches!(
+                verdict,
+                Verdict::Matched {
+                    action: Action::Allow,
+                    ..
+                }
+            ),
+            allowed,
+            "{method} http://{target}:{port}{path} came out as {verdict:?}"
+        );
+    }
+    assert!(rules.is_passthrough_llm(id));
+    assert!(
+        !rules.is_passthrough_llm(RuleId::new()),
+        "a rule the set does not know is not a passthrough"
+    );
+}
+
+/// Eine Regel, deren Präfixe alle unbrauchbar sind, trifft nichts.
+///
+/// Fail closed: Wer eine Grenze schreibt und dabei nur `""` und `/` hinschreibt,
+/// bekommt keine Regel, die alles trifft.
+#[test]
+fn a_rule_whose_prefixes_are_all_unusable_matches_nothing() {
+    let rules = RuleSet::from_rules([Rule::new(
+        RuleId::new(),
+        Action::Allow,
+        passthrough_matcher(&["", "/"]),
+    )]);
+    let endpoint = host("192.168.1.50");
+    let key = RequestKey::new(&endpoint, &Method::POST, "/v1/chat", Scheme::Http, 11434);
+    assert_eq!(
+        rules.evaluate(&key, now(), SessionId::new()),
+        Verdict::Default
+    );
+}
+
+/// Pfadmuster und Präfixe stehen nebeneinander und schränken beide ein.
+#[test]
+fn a_path_pattern_and_prefixes_both_have_to_match() {
+    let mut matcher = passthrough_matcher(&["/v1/"]);
+    matcher.path = Some(PathPattern::Glob("/v1/chat/**".to_owned()));
+    let rules = RuleSet::from_rules([Rule::new(RuleId::new(), Action::Allow, matcher)]);
+
+    let endpoint = host("192.168.1.50");
+    for (path, allowed) in [("/v1/chat/completions", true), ("/v1/models", false)] {
+        let key = RequestKey::new(&endpoint, &Method::POST, path, Scheme::Http, 11434);
+        let verdict = rules.evaluate(&key, now(), SessionId::new());
+        assert_eq!(
+            matches!(verdict, Verdict::Matched { .. }),
+            allowed,
+            "{path} came out as {verdict:?}"
+        );
+    }
+}

@@ -331,6 +331,52 @@ impl DaemonApi for FakeDaemon {
             auth_required: false,
         }]))
     }
+
+    /// Antwortet, ohne den Endpunkt zu fragen — der Fake fasst kein Netz an.
+    ///
+    /// Die Modellnamen tragen deshalb den Vermerk `NOTHING_MEASURED`, und
+    /// die Latenz bleibt 0: Eine Zahl sähe in einem Screenshot wie eine
+    /// Messung aus, und der Fake misst nichts. Was er liefert, ist die Form
+    /// der Antwort, damit die Oberfläche sie zeichnen kann.
+    async fn probe_llm(
+        &self,
+        request: v1::ProbeLlmRequest,
+    ) -> Result<v1::ProbeLlmResponse, Diagnostic> {
+        let endpoint = if request.endpoint.is_empty() {
+            self.state.session().llm_endpoint
+        } else {
+            request.endpoint
+        };
+        // Ob der Endpunkt privat ist, wird am Namen entschieden und nicht
+        // geraten: Ein `api.openai.com` als privat auszuweisen wäre eine
+        // Behauptung über die Welt, und der Fake misst nichts
+        // (`backlog/CONVENTIONS.md` 4.13). Ohne Auflösung bleibt der Name als
+        // Beleg, und alles andere zählt als nicht privat — die vorsichtige
+        // Seite, denn nur dann warnt die Oberfläche mit `LLM_006`.
+        let endpoint_is_private = looks_private(&endpoint);
+        let mut diagnostics = Vec::new();
+        if !endpoint_is_private && !endpoint.is_empty() {
+            diagnostics.push(diagnostic_to_proto(
+                &Diagnostic::builder(codes::LLM_006, Severity::Info)
+                    .why(format!(
+                        "{endpoint} is not on a private network. Traffic to this address \
+                         bypasses the queue, so only put a machine you control here."
+                    ))
+                    .build(),
+            ));
+        }
+        Ok(v1::ProbeLlmResponse {
+            models: ["qwen2.5-coder:14b", "llama3.1:8b"]
+                .into_iter()
+                .map(|model| format!("{NOTHING_MEASURED}: {model}"))
+                .collect(),
+            flavor: v1::LlmProduct::Ollama as i32,
+            diagnostic: diagnostics.first().cloned(),
+            latency_ms: 0,
+            diagnostics,
+            endpoint_is_private,
+        })
+    }
 }
 
 impl FakeDaemon {
@@ -785,11 +831,47 @@ fn refused(flow_id: &str, diagnostic: &Diagnostic) -> v1::DecideResult {
 /// Ohne `include_passthrough` fällt der gesamte Verkehr zum Sprachmodell weg,
 /// nicht nur sein `Received`: sonst bekäme die Oberfläche Ereignisse zu einem
 /// Flow, den sie nie gesehen hat.
+///
+/// Ein Befund bleibt trotzdem, auch am durchgereichten Flow. `LLM_005` warnt
+/// vor genau der Anfrage, die der Filter versteckt; sie mitzuverstecken
+/// nähme dem Menschen die einzige Meldung, die er dazu bekommt (HUM-039). Der
+/// echte Daemon macht es genauso (`IpcServer::event_stream`).
 fn keeps(state: &FakeState, event: &v1::FlowEvent, include_passthrough: bool) -> bool {
-    if include_passthrough {
+    if include_passthrough || is_diagnostic(event) {
         return true;
     }
     event_flow_id(event).is_none_or(|id| !state.is_passthrough(id))
+}
+
+/// Ob eine Adresse nach dem eigenen Netz aussieht, allein nach dem Namen.
+///
+/// Dieselben Namensräume wie in `humanitl_proxy::llm_probe`, nur ohne die
+/// Auflösung: Der Fake fasst kein Netz an, also kann er die Adresse hinter
+/// einem Namen nicht kennen. Ein IP-Literal aus RFC 1918, Loopback,
+/// Link-Local oder CGNAT zählt trotzdem, weil es sich selbst beantwortet.
+fn looks_private(endpoint: &str) -> bool {
+    let Ok(url) = url::Url::parse(endpoint) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return humanitl_core::ip_is_private(ip);
+    }
+    let host = host.to_ascii_lowercase();
+    host == "localhost"
+        || [".local", ".lan", ".home.arpa", ".internal"]
+            .iter()
+            .any(|suffix| host.ends_with(suffix))
+}
+
+/// Ob ein Wire-Ereignis ein Befund ist, mit oder ohne Flow.
+fn is_diagnostic(event: &v1::FlowEvent) -> bool {
+    matches!(
+        event.event.as_ref(),
+        Some(v1::flow_event::Event::Diagnostic(_) | v1::flow_event::Event::FlowDiagnostic(_))
+    )
 }
 
 /// Der Flow, zu dem ein Wire-Ereignis gehört.
@@ -807,6 +889,7 @@ fn event_flow_id(event: &v1::FlowEvent) -> Option<FlowId> {
         Event::Forwarded(reference) | Event::Recorded(reference) | Event::TimedOut(reference) => {
             reference.flow_id.as_str()
         }
+        Event::FlowDiagnostic(diagnostic) => diagnostic.flow_id.as_str(),
         Event::Lagged(_) | Event::Diagnostic(_) | Event::RulesChanged(_) | Event::AgentAsk(_) => {
             return None;
         }

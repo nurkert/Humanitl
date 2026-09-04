@@ -273,6 +273,18 @@ impl fmt::Display for PathPattern {
     }
 }
 
+/// Wahr, wenn dieser Text als Pfadpräfix einer Regel taugt.
+///
+/// Ein Präfix muss mit `/` beginnen und mindestens zwei Zeichen lang sein.
+/// Beides zusammen schließt genau die zwei Fälle aus, die eine
+/// Präfix-Bedingung wirkungslos machen: die leere Zeichenkette und `/`. Sie
+/// träfen jeden Pfad, und eine Regel, die alles trifft, ist keine Grenze
+/// (HUM-039, Fallstricke).
+#[must_use]
+pub fn path_prefix_is_valid(prefix: &str) -> bool {
+    prefix.starts_with('/') && prefix.chars().count() >= 2
+}
+
 /// Bedingung einer Regel.
 ///
 /// Ein Feld auf `None` heißt „egal". Der Host ist immer gesetzt: eine Regel
@@ -285,6 +297,19 @@ pub struct Matcher {
     pub methods: Option<Vec<Method>>,
     /// Muster für Pfad und Query.
     pub path: Option<PathPattern>,
+    /// Pfadpräfixe; eine leere Liste heißt „egal".
+    ///
+    /// Die Bedingung ist erfüllt, wenn der Pfad (ohne Query) mit einem der
+    /// Präfixe beginnt. Steht daneben auch `path`, müssen beide zutreffen: Jede
+    /// weitere Bedingung schränkt ein, keine erweitert.
+    ///
+    /// Jeder Präfix beginnt mit `/` und ist mindestens zwei Zeichen lang
+    /// ([`path_prefix_is_valid`]). Ein leeres Präfix träfe jeden Pfad und höbe
+    /// damit genau die Grenze auf, die die Liste ziehen soll; die Regel, die
+    /// dieses Feld eingeführt hat, ist die Durchreichregel zum Sprachmodell,
+    /// und sie ist die einzige erklärte Ausnahme davon, dass nichts ungefragt
+    /// hinausgeht (HUM-039, BACKLOG.md 4.2).
+    pub path_prefixes: Vec<String>,
     /// Verlangtes Schema.
     pub scheme: Option<Scheme>,
     /// Verlangter Port.
@@ -301,6 +326,7 @@ impl Matcher {
             host,
             methods: None,
             path: None,
+            path_prefixes: Vec::new(),
             scheme: None,
             port: None,
             upgrade: None,
@@ -318,6 +344,17 @@ impl Matcher {
     #[must_use]
     pub fn with_path(mut self, path: PathPattern) -> Self {
         self.path = Some(path);
+        self
+    }
+
+    /// Schränkt auf diese Pfadpräfixe ein.
+    ///
+    /// Unbrauchbare Präfixe werden hier nicht aussortiert; das tut die
+    /// Auswertung in `humanitl-rules`, und zwar zur sicheren Seite hin: Bleibt
+    /// kein gültiges Präfix übrig, trifft die Regel nichts.
+    #[must_use]
+    pub fn with_path_prefixes(mut self, prefixes: Vec<String>) -> Self {
+        self.path_prefixes = prefixes;
         self
     }
 
@@ -345,8 +382,9 @@ impl Matcher {
 
 /// Eine Regel: Bedingung, Aktion, Gültigkeit, Herkunft.
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Vier Wahrheitswerte, und clippy schlägt einen Zustandstyp vor. Er wäre hier
-// falsch: `stream`, `allow_private`, `bundled` und `disabled` sind vier
+// Fünf Wahrheitswerte, und clippy schlägt einen Zustandstyp vor. Er wäre hier
+// falsch: `stream`, `allow_private`, `bundled`, `passthrough_llm` und
+// `disabled` sind fünf
 // unabhängige Eigenschaften derselben Regel, jede mit ihrem eigenen Schlüssel
 // in `rules.yaml` (`backlog/CONVENTIONS.md` 3.3). Ein Aufzählungstyp behauptete
 // eine Ordnung oder einen Ausschluss zwischen ihnen, den es nicht gibt, und die
@@ -373,6 +411,21 @@ pub struct Rule {
     pub created_from: Option<FlowId>,
     /// Ob die Regel mitgeliefert wurde statt vom Nutzer angelegt.
     pub bundled: bool,
+    /// Ob diese Regel die erklärte Durchreiche zum Sprachmodell ist.
+    ///
+    /// Eine Anfrage, die sie trifft, wird nicht gehalten, sondern sofort
+    /// weitergeleitet und dabei vollständig aufgezeichnet; Funde in ihr
+    /// erzeugen eine Warnung (`LLM_005`), halten sie aber nicht auf. Das ist
+    /// die einzige erklärte Ausnahme von der Regel, dass nichts ungefragt
+    /// hinausgeht (BACKLOG.md 4.2, ADR-006), und deshalb hängt das Merkmal an
+    /// genau einer Regel und nicht an einer Einstellung.
+    ///
+    /// Der Wert kommt aus dem Agent-Adapter, der die Regel aus `llm.endpoint`
+    /// baut, oder aus der `rules.yaml`. Über den Draht kommt er nie: Ein
+    /// Client, der sich eine Durchreichregel anlegen könnte, könnte damit
+    /// Verkehr an der Warteschlange und an der voreingestellten Ansicht
+    /// vorbeiführen (`humanitl_ipc::convert::rule_from_proto`).
+    pub passthrough_llm: bool,
     /// Ob die Regel abgeschaltet ist.
     ///
     /// Eine abgeschaltete Regel bleibt im Regelsatz stehen und wird bei der
@@ -399,6 +452,7 @@ impl Rule {
             allow_private: false,
             created_from: None,
             bundled: false,
+            passthrough_llm: false,
             disabled: false,
             note: None,
         }
@@ -439,6 +493,13 @@ impl Rule {
         self
     }
 
+    /// Markiert die Regel als die Durchreiche zum Sprachmodell.
+    #[must_use]
+    pub const fn passthrough_llm(mut self, passthrough: bool) -> Self {
+        self.passthrough_llm = passthrough;
+        self
+    }
+
     /// Schaltet die Regel ab oder wieder an.
     #[must_use]
     pub const fn disabled(mut self, disabled: bool) -> Self {
@@ -466,7 +527,7 @@ mod tests {
 
     use chrono::{TimeZone, Utc};
 
-    use super::{Action, Expiry, HostPattern, Matcher, PathPattern, Rule};
+    use super::{Action, Expiry, HostPattern, Matcher, PathPattern, Rule, path_prefix_is_valid};
     use crate::ids::{RuleId, SessionId};
 
     #[test]
@@ -533,6 +594,19 @@ mod tests {
     }
 
     #[test]
+    fn a_path_prefix_needs_a_slash_and_a_second_character() {
+        for good in ["/v1/", "/api/chat", "/a", "/v1/models"] {
+            assert!(path_prefix_is_valid(good), "{good} should be usable");
+        }
+        for bad in ["", "/", "v1/", "api", " /v1/"] {
+            assert!(
+                !path_prefix_is_valid(bad),
+                "{bad:?} would not draw a boundary"
+            );
+        }
+    }
+
+    #[test]
     fn rule_defaults_are_conservative() {
         let Ok(pattern) = HostPattern::parse("**.github.com") else {
             panic!("pattern must parse");
@@ -541,6 +615,14 @@ mod tests {
         assert!(!rule.stream);
         assert!(!rule.allow_private);
         assert!(!rule.bundled);
+        assert!(
+            !rule.passthrough_llm,
+            "the declared exception is never the default"
+        );
+        assert!(
+            rule.matcher.path_prefixes.is_empty(),
+            "a matcher without prefixes has no prefix condition"
+        );
         assert_eq!(rule.expires, Expiry::Never);
         assert_eq!(rule.note, None);
         let rule = rule.with_allow_private(true).with_note("LLM passthrough");
