@@ -25,13 +25,14 @@
 //! (Aider, Codex, Claude Code) kommen nach dem MVP und berühren diesen Kern
 //! nicht.
 
+pub mod briefing;
 pub mod opencode;
 pub mod opencode_models;
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
-use humanitl_config::{Language, LlmConfig};
+use humanitl_config::{AgentBriefing, HoldConfig, Language, LlmConfig};
 use humanitl_core::rule::Rule;
 use humanitl_core::{Diagnostic, SessionId};
 
@@ -115,6 +116,16 @@ pub struct AgentContext {
     pub ca_path_sandbox: PathBuf,
     /// Die Sprache des Nutzers, für Texte, die der Agent zu sehen bekommt.
     pub language: Language,
+    /// Wie eine Anfrage angehalten und beantwortet wird (`hold`).
+    ///
+    /// Das Briefing nennt die Frist (`hold.timeout_secs`) und den Ask-Modus
+    /// (`hold.ask_mode`), und beide Angaben müssen die sein, nach denen der
+    /// Proxy tatsächlich arbeitet: ein Agent, dem eine falsche Frist genannt
+    /// wird, bricht zu früh ab oder wartet auf eine Frage, die niemand stellt
+    /// (HUM-071).
+    pub hold: HoldConfig,
+    /// Ob die Instruktionsdatei angelegt wird (`agent.briefing`).
+    pub briefing: AgentBriefing,
     /// Der Suchpfad des Hosts (`$PATH`), aus dem [`AgentAdapter::preflight`]
     /// das Kommando sucht.
     ///
@@ -136,6 +147,20 @@ pub struct AgentContext {
     /// darauf und legt seine zweite Kopie der Konfiguration darunter ab; ein
     /// anderes `HOME` im Profil liefe sonst ins Leere.
     pub home: PathBuf,
+    /// Das Konfigurationsverzeichnis, das der Agent wirklich sieht.
+    ///
+    /// `None` heißt: aus [`AgentContext::home`] abgeleitet, also
+    /// `<home>/.config`. Etwas anderes steht hier, wenn `sandbox.env` ein
+    /// eigenes `XDG_CONFIG_HOME` setzt — und das ist kein Sonderfall, sondern
+    /// der Fall, der sonst still schiefgeht: `sandbox.env` wird **nach** dem
+    /// Beitrag des Adapters in die Umgebung gelegt und gewinnt. Der Agent
+    /// suchte seine Konfiguration und seine Einweisung dann in einem
+    /// Verzeichnis, in das die Sandbox nichts eingehängt hat; die Dateien
+    /// lägen da, würden aber nie gelesen, und niemand merkte es. Deshalb
+    /// entscheidet dieser Wert, wohin [`AgentAdapter::files`] schreibt.
+    ///
+    /// Lies ihn über [`AgentContext::config_home`], nicht aus dem Feld.
+    pub config_home: Option<PathBuf>,
     /// Host-Pfade, die die Sandbox unter demselben Pfad nur lesbar einhängt.
     ///
     /// Aus `[mounts].ro` und `[mounts].extra_ro` des Profils. Ein Programm des
@@ -163,7 +188,10 @@ impl AgentContext {
             proxy_port: crate::profile::PROXY_PORT,
             ca_path_sandbox: PathBuf::from(crate::profile::CA_CERT_DST),
             language: Language::En,
+            hold: HoldConfig::default(),
+            briefing: AgentBriefing::default(),
             home: PathBuf::from(AGENT_HOME),
+            config_home: None,
             host_path: None,
             sandbox_ro_paths: Vec::new(),
         }
@@ -197,6 +225,21 @@ impl AgentContext {
         self
     }
 
+    /// Setzt die Halte-Einstellungen, aus denen das Briefing Frist und
+    /// Ask-Modus nimmt.
+    #[must_use]
+    pub fn with_hold(mut self, hold: HoldConfig) -> Self {
+        self.hold = hold;
+        self
+    }
+
+    /// Setzt die Einstellungen der Instruktionsdatei (`agent.briefing`).
+    #[must_use]
+    pub fn with_briefing(mut self, briefing: AgentBriefing) -> Self {
+        self.briefing = briefing;
+        self
+    }
+
     /// Setzt das Heimatverzeichnis des Agenten in der Sandbox.
     ///
     /// Ein leerer oder relativer Pfad wird abgelehnt und [`AGENT_HOME`]
@@ -208,6 +251,25 @@ impl AgentContext {
             self.home = home;
         }
         self
+    }
+
+    /// Setzt das Konfigurationsverzeichnis, das der Agent wirklich sieht.
+    ///
+    /// Ein relativer Pfad wird verworfen und der abgeleitete beibehalten: in
+    /// der Sandbox gibt es kein Arbeitsverzeichnis, auf das sich ein relativer
+    /// `XDG_CONFIG_HOME` verlässlich bezöge.
+    #[must_use]
+    pub fn with_config_home(mut self, config_home: Option<PathBuf>) -> Self {
+        self.config_home = config_home.filter(|path| path.is_absolute());
+        self
+    }
+
+    /// Das Konfigurationsverzeichnis des Agenten, abgeleitet oder gesetzt.
+    #[must_use]
+    pub fn config_home(&self) -> PathBuf {
+        self.config_home
+            .clone()
+            .unwrap_or_else(|| self.home.join(".config"))
     }
 
     /// Setzt die Host-Pfade, die die Sandbox nur lesbar einhängt.
