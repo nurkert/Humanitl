@@ -689,6 +689,14 @@ const FLOW_EVENT_FIELDS: &FieldTable = &[
         Some("event"),
     ),
     ("failed", 15, ".humanitl.v1.FlowEvent.Failed", Some("event")),
+    // HUM-039: ein Befund, der zu genau einem Flow gehoert. `diagnostic` (12)
+    // bleibt fuer sessionweite Befunde, die noch keinem Flow gehoeren.
+    (
+        "flow_diagnostic",
+        16,
+        ".humanitl.v1.FlowEvent.FlowDiagnostic",
+        Some("event"),
+    ),
 ];
 
 /// `DecideRequest` vollstaendig, vor allem die drei Entscheidungen in
@@ -878,6 +886,16 @@ const EXPECTED_RPCS: &[(&str, &str, &str, bool, bool)] = &[
         ".humanitl.v1.DiscoverResult",
         false,
         true,
+    ),
+    // HUM-039: die Probe eines einzelnen Endpunkts, host-seitig und nur
+    // lesend. Nicht in BACKLOG.md 3.3, aber Teil des Vertrags, seit der
+    // Setup-Bildschirm sie braucht.
+    (
+        "ProbeLlm",
+        ".humanitl.v1.ProbeLlmRequest",
+        ".humanitl.v1.ProbeLlmResponse",
+        false,
+        false,
     ),
 ];
 

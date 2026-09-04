@@ -80,6 +80,13 @@ pub enum Routes {
     Legacy,
     /// Die Karte der Konformitäts-Matrix aus HUM-017.
     Matrix,
+    /// Ein Ollama-Server (HUM-039): `/api/tags`, `/api/chat`, `/api/pull` und
+    /// die OpenAI-kompatible Oberfläche, die Ollama ebenfalls anbietet.
+    Ollama,
+    /// Ein Server mit nur der OpenAI-kompatiblen Oberfläche (HUM-039).
+    OpenAi,
+    /// Ein Server, der auf beiden Modell-Pfaden `401` sagt (HUM-039).
+    NeedsAuth,
 }
 
 /// Eine eigene CA für den Fake-Upstream, getrennt von der Humanitl-CA des
@@ -169,6 +176,27 @@ impl FakeUpstream {
     /// Wie [`FakeUpstream::tls`], aber mit der Karte [`Routes::Matrix`].
     pub async fn matrix_tls(ca: &CaStore) -> Self {
         Self::bind(Routes::Matrix, IpAddr::V4(Ipv4Addr::LOCALHOST), Some(ca))
+            .await
+            .unwrap()
+    }
+
+    /// Klartext-HTTP mit der Karte [`Routes::Ollama`] auf `127.0.0.1`.
+    pub async fn ollama() -> Self {
+        Self::bind(Routes::Ollama, IpAddr::V4(Ipv4Addr::LOCALHOST), None)
+            .await
+            .unwrap()
+    }
+
+    /// Klartext-HTTP mit der Karte [`Routes::OpenAi`] auf `127.0.0.1`.
+    pub async fn openai() -> Self {
+        Self::bind(Routes::OpenAi, IpAddr::V4(Ipv4Addr::LOCALHOST), None)
+            .await
+            .unwrap()
+    }
+
+    /// Klartext-HTTP mit der Karte [`Routes::NeedsAuth`] auf `127.0.0.1`.
+    pub async fn needs_auth() -> Self {
+        Self::bind(Routes::NeedsAuth, IpAddr::V4(Ipv4Addr::LOCALHOST), None)
             .await
             .unwrap()
     }
@@ -281,6 +309,18 @@ fn router(hits: Arc<AtomicUsize>, routes: Routes) -> Router {
             .route("/echo", route_get(echo_get).post(echo_post))
             .route("/stream", route_get(stream)),
         Routes::Matrix => Router::new().route("/echo", route_get(json_echo).post(json_echo)),
+        Routes::Ollama => Router::new()
+            .route("/api/tags", route_get(ollama_tags))
+            .route("/api/chat", route_post(llm_stream))
+            .route("/api/pull", route_post(ollama_pull))
+            .route("/v1/models", route_get(openai_models))
+            .route("/v1/chat/completions", route_post(llm_stream)),
+        Routes::OpenAi => Router::new()
+            .route("/v1/models", route_get(openai_models))
+            .route("/v1/chat/completions", route_post(llm_stream)),
+        Routes::NeedsAuth => Router::new()
+            .route("/api/tags", route_get(unauthorized))
+            .route("/v1/models", route_get(unauthorized)),
     };
     shared.merge(menu).with_state(hits)
 }
@@ -503,6 +543,80 @@ async fn git_info_refs(State(hits): State<Arc<AtomicUsize>>) -> Response {
         body,
     )
         .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Karten Ollama, OpenAi und NeedsAuth (HUM-039)
+// ---------------------------------------------------------------------------
+
+/// `GET /api/tags`: die Modellliste in der Form, die Ollama liefert.
+async fn ollama_tags(State(hits): State<Arc<AtomicUsize>>) -> Response {
+    hits.fetch_add(1, Ordering::SeqCst);
+    (
+        StatusCode::OK,
+        [(CONTENT_TYPE, "application/json")],
+        r#"{"models":[{"name":"qwen2.5-coder:14b"},{"name":"llama3.1:8b"}]}"#,
+    )
+        .into_response()
+}
+
+/// `GET /v1/models`: die Modellliste in der Form der OpenAI-kompatiblen API.
+async fn openai_models(State(hits): State<Arc<AtomicUsize>>) -> Response {
+    hits.fetch_add(1, Ordering::SeqCst);
+    (
+        StatusCode::OK,
+        [(CONTENT_TYPE, "application/json")],
+        r#"{"object":"list","data":[{"id":"gpt-oss:20b"},{"id":"phi-4"}]}"#,
+    )
+        .into_response()
+}
+
+/// `POST /api/pull`: was ein Modell nachlädt. Ein Test, der hier ankommt, hat
+/// bewiesen, dass die Durchreiche zu weit war.
+async fn ollama_pull(State(hits): State<Arc<AtomicUsize>>) -> Response {
+    hits.fetch_add(1, Ordering::SeqCst);
+    (StatusCode::OK, r#"{"status":"success"}"#).into_response()
+}
+
+/// Beide Modell-Pfade antworten mit `401`.
+async fn unauthorized(State(hits): State<Arc<AtomicUsize>>) -> Response {
+    hits.fetch_add(1, Ordering::SeqCst);
+    (StatusCode::UNAUTHORIZED, "no").into_response()
+}
+
+/// `POST /v1/chat/completions` und `POST /api/chat`: eine SSE-Antwort mit
+/// `?count=` Stücken im Abstand `?interval_ms=`.
+///
+/// Das erste Stück geht sofort hinaus, danach kommt die Pause. Ein Test misst
+/// damit, ob der Proxy streamt oder puffert.
+async fn llm_stream(State(hits): State<Arc<AtomicUsize>>, uri: Uri, _body: Bytes) -> Response {
+    hits.fetch_add(1, Ordering::SeqCst);
+    let count = param(&uri, "count")
+        .and_then(|text| text.parse().ok())
+        .unwrap_or(SSE_EVENTS);
+    let interval = Duration::from_millis(
+        param(&uri, "interval_ms")
+            .and_then(|text| text.parse().ok())
+            .unwrap_or(SSE_DEFAULT_INTERVAL_MS),
+    );
+    let (tx, rx) = mpsc::channel::<Result<Bytes, Infallible>>(1);
+    tokio::spawn(async move {
+        for index in 0..count {
+            if index > 0 {
+                tokio::time::sleep(interval).await;
+            }
+            let chunk = format!("data: {{\"index\":{index}}}\n\n");
+            if tx.send(Ok(Bytes::from(chunk))).await.is_err() {
+                break;
+            }
+        }
+        let _ = tx.send(Ok(Bytes::from_static(b"data: [DONE]\n\n"))).await;
+    });
+    Response::builder()
+        .header(CONTENT_TYPE, "text/event-stream")
+        .header(CACHE_CONTROL, "no-cache")
+        .body(Body::from_stream(ReceiverStream::new(rx)))
+        .unwrap_or_else(|_err| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 // ---------------------------------------------------------------------------

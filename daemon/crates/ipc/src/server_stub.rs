@@ -123,6 +123,18 @@ pub trait DaemonApi: Send + Sync + 'static {
 
     /// Die LAN-Suche nach LLM-Servern.
     fn discover_llm(&self, request: v1::DiscoverRequest) -> BoxStream<v1::DiscoverResult>;
+
+    /// Prüft einen einzelnen LLM-Endpunkt, host-seitig und nur lesend.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`] mit `LLM_001`, wenn nichts antwortet, `LLM_002`, wenn der
+    /// Server eine Anmeldung verlangt, `LLM_003`, wenn die Adresse gar keine
+    /// HTTP-Adresse ist (HUM-039).
+    async fn probe_llm(
+        &self,
+        request: v1::ProbeLlmRequest,
+    ) -> Result<v1::ProbeLlmResponse, Diagnostic>;
 }
 
 /// Der tonic-Dienst über einem beliebigen [`DaemonApi`].
@@ -406,6 +418,18 @@ impl<T: DaemonApi> v1::humanitl_server::Humanitl for DaemonService<T> {
         Ok(Response::new(ok_stream(
             self.api.discover_llm(request.into_inner()),
         )))
+    }
+
+    async fn probe_llm(
+        &self,
+        request: Request<v1::ProbeLlmRequest>,
+    ) -> Result<Response<v1::ProbeLlmResponse>, Status> {
+        self.check_token(&request)?;
+        self.api
+            .probe_llm(request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
     }
 }
 

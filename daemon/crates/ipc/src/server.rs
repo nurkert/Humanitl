@@ -42,8 +42,12 @@ use humanitl_core::{
     SessionId, Severity,
 };
 use humanitl_proxy::hold::NotHeld;
+use humanitl_proxy::llm_probe;
 use humanitl_proxy::rules_store::RulesStore;
-use humanitl_proxy::{FlowFilter, FlowRegistry, HoldQueue};
+use humanitl_proxy::{
+    ClientTls, Direct, FlowFilter, FlowRegistry, HoldQueue, LlmProbe, Resolver, ResolverPort,
+    Upstream,
+};
 use humanitl_recorder::{
     Cursor, CursorKey, Dir, FlowDetail as RecordedDetail, FlowQuery, Recorder, SortKey,
 };
@@ -102,6 +106,16 @@ pub struct IpcServer {
     rules: Option<RulesService>,
     recorder: Option<Recorder>,
     domains: Option<Arc<DomainTable>>,
+    /// Die host-seitige Probe des LLM-Endpunkts (HUM-039).
+    ///
+    /// Sie hängt am Dienst und nicht am Proxy, weil sie nichts mit einem Fluss
+    /// zu tun hat: Sie beantwortet eine Frage, die ein Mensch im Setup stellt,
+    /// bevor überhaupt eine Sandbox läuft. `None` nur, wenn sich der
+    /// Verbindungsstapel aus der Konfiguration nicht bauen ließ; der Grund
+    /// steht dann in `llm_probe_error` und geht als Antwort an den Aufrufer,
+    /// statt still zu verschwinden.
+    llm_probe: Option<Arc<LlmProbe>>,
+    llm_probe_error: Option<Diagnostic>,
     bodies: BodyIndex,
 }
 
@@ -130,6 +144,14 @@ impl IpcServer {
     #[must_use]
     pub fn new(queue: Arc<HoldQueue>, config: &Config, session: Option<SessionId>) -> Self {
         let registry = Arc::clone(queue.registry());
+        let probe = build_llm_probe(config).map(Arc::new);
+        if let Err(diagnostic) = probe.as_ref() {
+            tracing::warn!(
+                code = %diagnostic.code,
+                why = %diagnostic.why,
+                "the LLM endpoint probe is not available in this daemon"
+            );
+        }
         Self {
             registry,
             queue,
@@ -144,8 +166,21 @@ impl IpcServer {
             rules: None,
             recorder: None,
             domains: None,
+            llm_probe: probe.as_ref().ok().map(Arc::clone),
+            llm_probe_error: probe.err(),
             bodies: BodyIndex::new(),
         }
+    }
+
+    /// Derselbe Dienst mit einer anderen Probe; für Tests.
+    ///
+    /// Der Daemon braucht das nicht: [`IpcServer::new`] baut die Probe aus
+    /// derselben Konfiguration, aus der auch der Proxy seine Ports baut.
+    #[must_use]
+    pub fn with_llm_probe(mut self, probe: LlmProbe) -> Self {
+        self.llm_probe = Some(Arc::new(probe));
+        self.llm_probe_error = None;
+        self
     }
 
     /// Derselbe Dienst, der aus der Aufzeichnung liest.
@@ -226,10 +261,17 @@ impl IpcServer {
             };
             // Ereignisse eines Durchreich-Flows (LLM-Passthrough) sieht nur,
             // wer sie ausdruecklich verlangt; `ListFlows` und der Rueckstand
-            // filtern genauso. In M1 traegt noch kein Flow das Merkmal, der
-            // Filter steht trotzdem hier, damit HUM-024 nichts nachruesten
-            // muss und der Strom nicht stiller ist als die Liste.
+            // filtern genauso, damit der Strom nicht stiller ist als die
+            // Liste.
+            //
+            // Ein Befund ist davon ausgenommen, und zwar immer. `LLM_005`
+            // warnt vor genau der Anfrage, die hier versteckt wird; ihn
+            // mitzuverstecken kehrte die Zusage aus `docs/SECURITY.md` 3.1 um
+            // („ein Treffer erzeugt eine Warnung") und liesse den Menschen
+            // ohne die eine Meldung zurueck, die er sehen muss. Eingeklappt
+            // heisst nicht stumm (HUM-039).
             let hidden = !include_passthrough
+                && !matches!(event, FlowEvent::Diagnostic { .. })
                 && event.flow_id().is_some_and(|id| {
                     registry
                         .get(id)
@@ -1077,6 +1119,88 @@ impl v1::humanitl_server::Humanitl for IpcServer {
     ) -> Result<Response<Self::DiscoverLlmStream>, Status> {
         Err(unimplemented("DiscoverLlm", "HUM-076"))
     }
+
+    /// Prüft genau den Endpunkt, den der Aufrufer nennt (HUM-039).
+    ///
+    /// Nichts davon läuft in der Sandbox, nichts davon ändert etwas: zwei
+    /// `GET` auf zwei feste Pfade, keine Weiterleitung, keine Zugangsdaten.
+    /// Was der Endpunkt nicht beantwortet hat, steht als Befund in der Antwort
+    /// und nie als erfundene Modellliste.
+    async fn probe_llm(
+        &self,
+        request: Request<v1::ProbeLlmRequest>,
+    ) -> Result<Response<v1::ProbeLlmResponse>, Status> {
+        let request = request.into_inner();
+        let probe = self.llm_probe.as_ref().ok_or_else(|| {
+            let diagnostic = self.llm_probe_error.clone().unwrap_or_else(no_probe);
+            diagnostic_to_status(&diagnostic)
+        })?;
+        let endpoint = url::Url::parse(&request.endpoint).map_err(|err| {
+            diagnostic_to_status(
+                &Diagnostic::builder(codes::LLM_007, Severity::Error)
+                    .why(format!(
+                        "{:?} is not a URL Humanitl can read: {err}",
+                        request.endpoint
+                    ))
+                    .fix(humanitl_core::FixAction::ChangeSetting {
+                        key: "llm.endpoint".to_owned(),
+                        value: llm_probe::EXAMPLE_ENDPOINT.to_owned(),
+                    })
+                    .build(),
+            )
+        })?;
+        // Die Probe klemmt die Frist selbst auf `MAX_TIMEOUT_MS`; hier steht
+        // nur die Umrechnung, und `0` heißt die Vorgabe.
+        let timeout = match request.timeout_ms {
+            0 => None,
+            ms => Some(Duration::from_millis(u64::from(ms))),
+        };
+        let result = probe
+            .probe(&endpoint, timeout)
+            .await
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        Ok(Response::new(convert::probe_result_to_proto(&result)))
+    }
+}
+
+/// Baut den Verbindungsstapel der Endpunkt-Probe aus der Konfiguration.
+///
+/// Ein **eigener** Stapel, nicht der des Proxys, und zwar mit Absicht: Der
+/// Zähler des Proxy-Resolvers belegt, dass vor einer Freigabe kein Name
+/// aufgelöst wird (ADR-006, Escape-Test 3). Eine Auflösung, die ein Mensch im
+/// Setup selbst angestoßen hat, gehört nicht in diesen Beweis. Die
+/// Einstellungen sind dieselben (`resolver.*`, `limits.*`), also verhält sich
+/// die Probe gegenüber `ollama.lan` genauso wie später der Proxy.
+///
+/// Die Vertrauensanker sind die des Upstreams, nicht die Humanitl-CA: Die
+/// Probe redet mit dem Endpunkt, nicht mit dem Agenten.
+fn build_llm_probe(config: &Config) -> Result<LlmProbe, Diagnostic> {
+    let resolver = Arc::new(ResolverPort::from_config(&config.resolver)?);
+    let client_tls = ClientTls::new(&[], false)?;
+    let upstream = Upstream::new(
+        Arc::new(Direct::new(Duration::from_secs(
+            config.limits.connect_timeout_secs,
+        ))),
+        resolver as Arc<dyn Resolver>,
+        client_tls,
+        config.resolver.prefer,
+        Duration::from_secs(config.limits.header_timeout_secs),
+    );
+    Ok(LlmProbe::new(upstream))
+}
+
+/// Der Befund für einen Daemon ohne Endpunkt-Probe.
+///
+/// `IPC_006` und nicht `IPC_005`: Der Regel-RPC hat damit nichts zu tun, und
+/// ein Code, der „Rules-Anfrage ungültig" heißt, schickte den Leser an die
+/// falsche Stelle.
+fn no_probe() -> Diagnostic {
+    Diagnostic::builder(codes::IPC_006, Severity::Error)
+        .why(
+            "this daemon runs without an endpoint probe; llm.endpoint cannot be tested here"
+                .to_owned(),
+        )
+        .build()
 }
 
 /// Bindet einen Unix-Socket mit `0600`.
@@ -1200,9 +1324,10 @@ mod tests {
     use std::time::SystemTime;
 
     use humanitl_config::{Config, Limits};
+    use humanitl_core::diagnostics::codes;
     use humanitl_core::{
-        Authority, BodyRef, Flow, FlowId, HostName, HttpRequest, Method, Scheme, SessionId,
-        TransitionInput,
+        Authority, BodyRef, Diagnostic, Flow, FlowEvent, FlowId, HostName, HttpRequest, Method,
+        Scheme, SessionId, Severity, TransitionInput,
     };
     use humanitl_proxy::registry::FlowRecord;
     use humanitl_proxy::{ConnMeta, FlowRegistry, HoldQueue};
@@ -1301,6 +1426,71 @@ mod tests {
             assert_eq!(code, tonic::Code::Unimplemented);
             assert!(message.contains("arrives in"), "{message}");
         }
+    }
+
+    /// `ProbeLlm` gibt es (HUM-039), und was es nicht lesen kann, lehnt es
+    /// ab, statt zu raten.
+    #[tokio::test]
+    async fn probe_llm_refuses_an_endpoint_it_cannot_read() {
+        let queue = queue();
+        let server = server(&queue);
+        for endpoint in ["", "not a url", "ftp://model.lan/"] {
+            let Err(status) = server
+                .probe_llm(Request::new(v1::ProbeLlmRequest {
+                    endpoint: endpoint.to_owned(),
+                    timeout_ms: 50,
+                }))
+                .await
+            else {
+                panic!("an endpoint that is no http url is refused: {endpoint:?}");
+            };
+            assert_ne!(
+                status.code(),
+                tonic::Code::Unimplemented,
+                "the rpc exists: {endpoint:?}"
+            );
+            let diagnostic = crate::server_stub::diagnostic_from_status(&status)
+                .expect("the status carries the diagnostic");
+            assert_eq!(
+                diagnostic.code, "LLM_007",
+                "nothing was measured, so no code may claim a measurement — {endpoint:?}: {}",
+                diagnostic.why
+            );
+        }
+    }
+
+    /// Ein Ziel, an dem niemand lauscht, ist `LLM_001` samt einem `curl` —
+    /// kein Fehler des Nutzers und keine erfundene Modellliste.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn probe_llm_reports_an_endpoint_that_does_not_answer() {
+        let queue = queue();
+        let server = server(&queue);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a free port");
+        let port = listener.local_addr().expect("an address").port();
+        drop(listener);
+
+        let Err(status) = server
+            .probe_llm(Request::new(v1::ProbeLlmRequest {
+                endpoint: format!("http://127.0.0.1:{port}"),
+                timeout_ms: 2_000,
+            }))
+            .await
+        else {
+            panic!("nothing is listening on {port}, so the probe must refuse");
+        };
+        let diagnostic = crate::server_stub::diagnostic_from_status(&status)
+            .expect("the status carries the diagnostic");
+        assert_eq!(diagnostic.code, "LLM_001", "{}", diagnostic.why);
+        assert!(
+            matches!(
+                diagnostic.fix.as_ref().and_then(|fix| fix.action.as_ref()),
+                Some(v1::fix_action::Action::CopyCommand(_))
+            ),
+            "the fix is a command the human can run: {:?}",
+            diagnostic.fix
+        );
     }
 
     #[tokio::test]
@@ -1468,6 +1658,122 @@ mod tests {
 
         // Nachladen: die Registry kennt jeden Flow, auch die verpassten.
         assert_eq!(server.page(&v1::ListFlowsRequest::default()).total, 20);
+    }
+
+    /// Ein durchgereichter Fluss ist eingeklappt, seine Warnung nicht.
+    ///
+    /// Der Filter für `include_passthrough: false` versteckt jedes Ereignis
+    /// eines Durchreich-Flusses. Ein Befund darf davon nie betroffen sein:
+    /// `LLM_005` warnt vor genau der Anfrage, die hier versteckt wird, und mit
+    /// ihr zu verschwinden kehrte die Zusage aus `docs/SECURITY.md` 3.1 um
+    /// („ein Treffer erzeugt eine Warnung"). Geprüft wird über
+    /// [`IpcServer::event_stream`], nicht über den rohen Rundfunk: Nur der
+    /// Strom des Dienstes trägt den Filter, und nur seine Zustellung zählt.
+    #[tokio::test]
+    async fn a_warning_survives_the_passthrough_filter_that_hides_its_flow() {
+        let queue = queue();
+        let session = SessionId::new();
+        let server = IpcServer::new(Arc::clone(&queue), &Config::default(), Some(session));
+        let mut stream = server.event_stream(&v1::SubscribeRequest::default());
+
+        let mut flow = analyzed(session, "192.168.1.50");
+        queue
+            .registry()
+            .insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+        // Erst die Entscheidung: Danach steht `passthrough = true` am
+        // Datensatz, und genau in diesem Zustand liest die Filter-Closure
+        // beim Pollen.
+        let decided = flow
+            .apply(
+                TransitionInput::Decide {
+                    decision: humanitl_core::Decision::Allow,
+                    source: humanitl_core::DecisionSource::Passthrough,
+                },
+                SystemTime::now(),
+            )
+            .unwrap();
+        queue.publish(decided);
+        queue.publish(FlowEvent::Diagnostic {
+            flow_id: Some(flow.id),
+            at: SystemTime::now(),
+            diagnostic: Box::new(
+                Diagnostic::builder(codes::LLM_005, Severity::Warning)
+                    .why("two potential secrets".to_owned())
+                    .build(),
+            ),
+        });
+        queue.publish(FlowEvent::Recorded {
+            flow_id: flow.id,
+            at: SystemTime::now(),
+        });
+
+        let mut seen = Vec::new();
+        while let Ok(Some(event)) = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            tokio_stream::StreamExt::next(&mut stream),
+        )
+        .await
+        {
+            let event = event.unwrap();
+            let Some(inner) = event.event else { continue };
+            seen.push(inner);
+            if seen.len() == 1 {
+                break;
+            }
+        }
+
+        let Some(v1::flow_event::Event::FlowDiagnostic(warning)) = seen.first() else {
+            panic!("the only event that reaches a default subscriber is the warning: {seen:?}");
+        };
+        assert_eq!(
+            warning.flow_id,
+            flow.id.to_string(),
+            "and it names the flow it warns about, so the details are reachable"
+        );
+        assert_eq!(
+            warning.diagnostic.as_ref().map(|d| d.code.as_str()),
+            Some("LLM_005")
+        );
+    }
+
+    /// Mit `include_passthrough` kommt alles durch, die Warnung eingeschlossen.
+    #[tokio::test]
+    async fn with_include_passthrough_the_whole_flow_arrives() {
+        let queue = queue();
+        let session = SessionId::new();
+        let server = IpcServer::new(Arc::clone(&queue), &Config::default(), Some(session));
+        let mut stream = server.event_stream(&v1::SubscribeRequest {
+            include_passthrough: true,
+            ..v1::SubscribeRequest::default()
+        });
+
+        let mut flow = analyzed(session, "192.168.1.50");
+        queue
+            .registry()
+            .insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+        let decided = flow
+            .apply(
+                TransitionInput::Decide {
+                    decision: humanitl_core::Decision::Allow,
+                    source: humanitl_core::DecisionSource::Passthrough,
+                },
+                SystemTime::now(),
+            )
+            .unwrap();
+        queue.publish(decided);
+
+        let event = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            tokio_stream::StreamExt::next(&mut stream),
+        )
+        .await
+        .expect("an event")
+        .expect("the stream stays open")
+        .unwrap();
+        assert!(
+            matches!(event.event, Some(v1::flow_event::Event::Decided(_))),
+            "{event:?}"
+        );
     }
 
     #[tokio::test]

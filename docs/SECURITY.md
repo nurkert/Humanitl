@@ -247,11 +247,14 @@ durch, und nach zwei Stunden klickt er alles blind weg.
 
 *Was Humanitl tut.* Der Passthrough ist eine Regel, keine Lücke im Filter: exakt ein Host, ein
 Port, ein Schema, die Methoden `POST` und `GET` (die Modellliste ist ein `GET`) und eine Liste von
-Pfadpräfixen. Der Default deckt nur, was Inferenz ist: `/v1/` für die OpenAI-kompatible Oberfläche
-und die einzelnen Ollama-Endpunkte `/api/chat`, `/api/generate`, `/api/embed`, `/api/embeddings`,
-`/api/tags`, `/api/show`, `/api/ps`, `/api/version`. Das nackte `/api/` steht bewusst **nicht**
-darin: Darunter lägen auch `POST /api/pull`, `POST /api/create` und `DELETE /api/delete`, mit denen
-ein Agent ungefragt Modelle nachladen und löschen könnte. Genauso wenig trifft ein Pfad mit einem
+Pfadpräfixen. Ein Präfix benennt dabei einen Endpunkt und nie eine ganze API-Fläche. Weder `/v1/`
+noch `/api/` steht deshalb im Default: Beide decken neben der Inferenz auch Aufrufe, die den Server
+verändern — unter `/api/` sind das `POST /api/pull`, `POST /api/create` und `DELETE /api/delete`,
+unter `/v1/` `POST /v1/files`, `/v1/uploads`, `/v1/vector_stores`, `/v1/fine_tuning/jobs` und bei
+vLLM `POST /v1/load_lora_adapter`. Der Default zählt stattdessen die dreizehn Endpunkte auf, die
+Inferenz machen oder Auskunft geben: `/v1/chat/completions`, `/v1/completions`, `/v1/responses`,
+`/v1/embeddings`, `/v1/models` sowie `/api/chat`, `/api/generate`, `/api/embed`, `/api/embeddings`,
+`/api/tags`, `/api/show`, `/api/ps` und `/api/version`. Genauso wenig trifft ein Pfad mit einem
 `..`-Segment ein Präfix, denn erst der Server löst es auf. Jede andere Anfrage an denselben Host
 wird normal gehalten, also einem Menschen gezeigt. Wer eine davon ohne Rückfrage braucht, schreibt
 ihren Pfad selbst in `llm.passthrough_paths`.
@@ -265,10 +268,20 @@ einen Regel und an dieser einen Anfrage: Die nächste Anfrage derselben Verbindu
 es an. Im Isolations-Panel erscheint der Kanal als vierte, bernsteinfarbene Zeile mit dem konkreten
 Endpunkt.
 
+*Was offen bleibt.* Steht in `llm.endpoint` ein Name statt einer Adresse, entscheidet der Resolver,
+wohin die Durchreiche führt, und er entscheidet es bei jeder Anfrage neu. Wer diesen einen Namen
+kontrolliert — ein DHCP-verteilter DNS im fremden WLAN, ein kompromittierter Router —, lenkt die
+Durchreiche zwischen zwei Anfragen auf einen anderen Rechner, und weil die Regel `allow_private`
+trägt, ist auch der Router selbst oder `169.254.169.254` ein gültiges Ziel. Die Prüfung auf private
+Adressen greift hier nicht: Sie ist für diese Regel absichtlich ausgeschaltet. Die Abhilfe ist eine
+Adresse statt eines Namens, oder ein fester Eintrag unter `resolver.overrides`, der den Namen an
+genau eine Adresse bindet, bevor überhaupt jemand gefragt wird.
+
 *Was der Nutzer tun sollte.* Nur eine Maschine eintragen, die er selbst kontrolliert. Kein
-geteilter Ollama-Server ohne Authentifizierung im Firmennetz. Wer das nicht hat, schaltet den
-Passthrough ab und lässt auch die Inferenz halten — unbequem, aber ehrlich. Und: den Endpunkt in
-Zeile 4 des Panels bei jedem Start einmal ansehen.
+geteilter Ollama-Server ohne Authentifizierung im Firmennetz. Am besten die IP-Adresse eintragen
+und nicht den Namen, oder den Namen unter `resolver.overrides` festnageln. Wer keine eigene
+Maschine hat, schaltet den Passthrough ab und lässt auch die Inferenz halten — unbequem, aber
+ehrlich. Und: den Endpunkt in Zeile 4 des Panels bei jedem Start einmal ansehen.
 
 ### 3.2 Das Projektverzeichnis `/work`
 
@@ -354,7 +367,7 @@ darstellt, führt zu einer falschen Freigabe. Deshalb rendert sie Bodies als Tex
 einer WebView.
 
 Toolchain-Anforderungen für Reproduzierbarkeit: Rust 1.85+ (gepinnt in
-`daemon/rust-toolchain.toml`), Flutter 3.44+ (gepinnt in `app/.fvmrc`), `bubblewrap` 0.8+.
+`daemon/rust-toolchain.toml`), Flutter 3.47.2 (gepinnt in `app/.fvmrc`), `bubblewrap` 0.8+.
 `socat` wird **nicht** benötigt; die Brücke steckt im Shim, damit kein weiteres Programm in der
 Sandbox laufen muss.
 

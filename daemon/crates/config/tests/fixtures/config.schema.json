@@ -362,7 +362,7 @@
             "/v1/",
             "/api/"
           ],
-          "description": "Pfadpräfixe, die als LLM-Passthrough gelten.",
+          "description": "Pfadpräfixe, die als LLM-Passthrough gelten. Ein Präfix soll einen Endpunkt benennen, keine ganze API-Fläche: Der Agent-Adapter ersetzt `/v1/` und `/api/` deshalb durch die Endpunkte, die Inferenz machen, damit `POST /api/pull` und `POST /v1/files` nicht ungefragt hinausgehen. Ein Pfad, der mehr nennt, bleibt stehen, wie er hier steht.",
           "items": {
             "type": "string"
           },

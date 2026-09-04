@@ -58,11 +58,11 @@ Generierter Code ist kein Quellcode (`docs/ARCHITECTURE.md` 4). Wer ihn von Hand
 6. Header-Werte sind `bytes`, nicht `string`. HTTP-Header sind nicht garantiert UTF-8.
 7. Jede Variante von `humanitl_core::FlowEvent` hat ihr Gegenstück im `oneof event` von `FlowEvent`, damit die Abbildung total ist. Ein Upstream-Fehler ist `FlowEvent.Failed` mit `UpstreamError`, nie `ResponseHeaders` mit Status 502 (CONVENTIONS.md 3.2, 4.10).
 8. Nach der Änderung: `make proto`, `proto/descriptor.binpb` und `proto/generated.sha256` mitcommitten, `cargo test -p humanitl-ipc` und `flutter test`. Ein vergessener Descriptor fällt sofort auf: `checked_in_descriptor_matches_the_proto_sources` schlägt an, solange `proto/descriptor.binpb` nicht zu den `.proto`-Dateien passt; ein vergessener Dart-Hash erst in CI („Fail on generated drift"). Die Tabellen in `daemon/crates/ipc/tests/proto_contract.rs` sind Teil des Vertrags und werden mitgepflegt.
-9. Ein neuer RPC bringt sein CLI-Subkommando im selben Issue mit (`docs/ARCHITECTURE.md` 3b).
+9. Ein neuer RPC bringt sein CLI-Subkommando im selben Issue mit (`docs/ARCHITECTURE.md` 3b). Eine Ausnahme steht offen und ist in `backlog/CONVENTIONS.md` 4.21 begründet: `ProbeLlm` (HUM-039) hat noch keins, weil `humanitl rules test` selbst bis HUM-065 mit `CLI_003` antwortet. Wer HUM-065 baut, nimmt `humanitl llm test URL` mit.
 
 ## 5. Versionsregel
 
-`Info.proto_major` und `Info.proto_minor` sagen, was der Daemon spricht; die Konstanten dazu stehen in `humanitl_ipc::PROTO_MAJOR` und `PROTO_MINOR`. Stand 2026-09-03: `1.1`. Die Nebenversion steigt bei jeder additiven Erweiterung, und `app/lib/core/ipc/proto_version.dart` haelt dieselbe Zahl; eine aeltere Nebenversion auf einer Seite ist keine Stoerung, sie liest die neueren Felder dann nicht.
+`Info.proto_major` und `Info.proto_minor` sagen, was der Daemon spricht; die Konstanten dazu stehen in `humanitl_ipc::PROTO_MAJOR` und `PROTO_MINOR`. Stand 2026-09-04: `1.2` (`ProbeLlm`, `FlowEvent.flow_diagnostic`, `Rule.passthrough_llm` und `RuleMatcher.path_prefixes`, HUM-039). Die Nebenversion steigt bei jeder additiven Erweiterung, und `app/lib/core/ipc/proto_version.dart` haelt dieselbe Zahl; eine aeltere Nebenversion auf einer Seite ist keine Stoerung, sie liest die neueren Felder dann nicht.
 
 - Additive Änderung ⇒ Minor steigt. Ältere Clients funktionieren weiter, sie sehen die neuen Felder nicht.
 - Bruch ⇒ Major steigt und das Paket heißt `humanitl.v2` in einem neuen Verzeichnis. `humanitl.v1` bleibt bestehen, bis niemand mehr danach fragt.

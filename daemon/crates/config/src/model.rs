@@ -80,7 +80,7 @@ pub struct LlmConfig {
     /// OpenAI-kompatibler Endpunkt im LAN. Verkehr dorthin wird nicht angehalten, aber protokolliert.
     #[schemars(extend("x-tier" = "basic", "x-project-scope" = "denied"), with = "Option<String>")]
     pub endpoint: Option<url::Url>,
-    /// Pfadpräfixe, die als LLM-Passthrough gelten.
+    /// Pfadpräfixe, die als LLM-Passthrough gelten. Ein Präfix soll einen Endpunkt benennen, keine ganze API-Fläche: Der Agent-Adapter ersetzt `/v1/` und `/api/` deshalb durch die Endpunkte, die Inferenz machen, damit `POST /api/pull` und `POST /v1/files` nicht ungefragt hinausgehen. Ein Pfad, der mehr nennt, bleibt stehen, wie er hier steht.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub passthrough_paths: Vec<String>,
     /// Modelle, die der Endpunkt anbietet. Leer heißt: der Agent bekommt ein Platzhalter-Modell und eine Warnung.
