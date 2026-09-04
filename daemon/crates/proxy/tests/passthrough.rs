@@ -49,7 +49,6 @@ fn rules(port: u16) -> String {
          \x20     path_prefixes: [\"/v1/chat/completions\", \"/v1/models\", \"/api/chat\", \
          \"/api/tags\"]\n\
          \x20   allow_private: true\n\
-         \x20   bundled: true\n\
          \x20   passthrough_llm: true\n\
          \x20   note: \"LLM passthrough. Logged, never held.\"\n"
     )

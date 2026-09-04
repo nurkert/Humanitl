@@ -1,8 +1,9 @@
 # Der mitgelieferte Regelsatz für den OpenCode-Adapter (HUM-038).
 #
-# Diese Regeln stehen vor den Regeln des Nutzers; die erste passende gewinnt.
-# Der Nutzer kann sie abschalten, aber nicht löschen: sie erscheinen im
-# Rules-Screen mit dem Abzeichen „Bundled" (HUM-033).
+# Diese Regeln stehen hinter den Regeln des Nutzers (`backlog/CONVENTIONS.md`
+# 4.5); innerhalb eines Rangs gewinnt die erste passende. Der Nutzer kann sie
+# abschalten oder mit einer eigenen Regel überstimmen, aber nicht löschen: sie
+# erscheinen im Rules-Screen mit dem Abzeichen „Bundled" (HUM-033).
 #
 # Wozu sie da sind: Beim ersten Start darf niemand eine Flut von Anfragen sehen,
 # die er nicht ausgelöst hat. Der erste Fluss, den ein Mensch zu Gesicht bekommt,
@@ -28,78 +29,75 @@
 #     expires: never                             # never | session | Zeitstempel
 #     stream: false
 #     allow_private: false
-#     bundled: false
 #     note: "wofür die Regel da ist"
 #
-# Die erste passende Regel gewinnt, Sitzungsregeln vor dauerhaften.
+# Ausgewertet wird in vier Raengen (`backlog/CONVENTIONS.md` 4.5): die
+# mitgelieferte Durchreiche zum Sprachmodell, die Sitzungsregeln, die
+# dauerhaften Regeln des Nutzers, zuletzt diese hier. Innerhalb eines Rangs
+# gewinnt die erste passende Regel.
+#
+# `bundled: true` steht hier bewusst **nicht**: Der Vermerk sagt, woher eine
+# Regel kommt, und das entscheidet der Lader (`RuleSet::add_bundled`), nicht
+# die Datei. Eine Datei, die ihn setzen koennte, koennte sich damit den
+# ersten Rang ausstellen (HUM-104).
 version: 1
 rules:
   - id: 01920000-0000-7000-8000-000000000001
     action: block
     match: { host: "models.dev" }
     expires: never
-    bundled: true
     note: "models.dev is the model catalog that the OpenCode documentation names. The installed 1.18.25 uses models.opencode.ai instead (rule ...0009); this rule covers the documented host. Humanitl ships the catalog as a file, so neither call is needed."
 
   - id: 01920000-0000-7000-8000-000000000002
     action: block
     match: { host: "api.github.com", path: "/repos/anomalyco/opencode/releases/**" }
     expires: never
-    bundled: true
     note: "Update check. Disabled via OPENCODE_DISABLE_AUTOUPDATE; this rule is the second lock."
 
   - id: 01920000-0000-7000-8000-000000000003
     action: block
     match: { host: "**.posthog.com" }
     expires: never
-    bundled: true
     note: "Product analytics endpoint used by several agent CLIs. The string posthog does not appear in the OpenCode 1.18.25 binary at all; this rule is a lock for other agents and for a later version, not a claim about what OpenCode does today."
 
   - id: 01920000-0000-7000-8000-000000000004
     action: block
     match: { host: "**.sentry.io" }
     expires: never
-    bundled: true
     note: "Crash reporting would carry stack traces including file paths. OpenCode 1.18.25 bundles a Sentry shim but calls no sentry.io address; this rule is a lock for other agents and for a later version, not a claim about what OpenCode does today."
 
   - id: 01920000-0000-7000-8000-000000000005
     action: block
     match: { host: "opncd.ai" }
     expires: never
-    bundled: true
     note: "Session sharing uploads the whole conversation. OpenCode 1.18.25 posts it to opncd.ai (POST /api/share, then /api/share/<id>/sync), and that is the only place the host appears in the binary, so the rule carries no path. What else the host may serve is unknown. Sharing is off by config as well; this rule is the second lock."
 
   - id: 01920000-0000-7000-8000-000000000006
     action: block
     match: { host: "**.exa.ai" }
     expires: never
-    bundled: true
     note: "Hosted web search backend for OpenCode's websearch tool."
 
   - id: 01920000-0000-7000-8000-000000000007
     action: block
     match: { host: "**.parallel.ai" }
     expires: never
-    bundled: true
     note: "Hosted web search backend (Parallel)."
 
   - id: 01920000-0000-7000-8000-000000000008
     action: ask
     match: { host: "registry.npmjs.org", method: [GET, HEAD] }
     expires: never
-    bundled: true
     note: "OpenCode installs provider packages on first use. Shown as a normal held request so the user learns what it is."
 
   - id: 01920000-0000-7000-8000-000000000009
     action: block
     match: { host: "models.opencode.ai" }
     expires: never
-    bundled: true
     note: "OpenCode 1.18.25 fetches its model catalog from models.opencode.ai; the documentation and the rule above name models.dev. Both are blocked because Humanitl ships the catalog as a file."
 
   - id: 01920000-0000-7000-8000-00000000000a
     action: block
     match: { host: "opencode.ai", path: "/share/**" }
     expires: never
-    bundled: true
     note: "The share links of OpenCode are read under this path. The upload itself goes to opncd.ai in 1.18.25; this rule covers the case that it moves back to the main host."
