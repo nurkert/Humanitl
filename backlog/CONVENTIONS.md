@@ -245,7 +245,7 @@ Exit-Codes: 0 ok, 1 Nutzerfehler (mit Diagnostic), 2 Daemon nicht erreichbar, 3 
 
 ### 3.9 Flutter (`app/`)
 
-Flutter 3.44.0 gepinnt in `app/.fvmrc`; das ist der Pin, den der CI-Job liest (`.github/actions/setup-flutter`). `app/pubspec.yaml` führt die Untergrenze zusätzlich als eigenen Constraint (`flutter: ">=3.44.0"`, `sdk: ^3.12.0`). Eine Komponentenbibliothek gibt es nicht: `packages/ui` steht auf `package:flutter/widgets.dart` (ADR-0009, Abschnitt „Entscheidung nach Sprint 2", 2026-09-04). Pakete: `flutter_riverpod` 3.x + `riverpod_annotation` + `riverpod_generator`, `freezed` 3.x + `json_serializable` (4.x verlangt Dart 3.13), `grpc` 5.x + `protobuf`, `re_editor`, `xterm2`, `diff_match_patch`, `window_manager`, `file_picker`, `dbus` (Tray und Notification ohne Plugin, HUM-034), `flutter_localizations` + `intl`, `alchemist` (dev). `two_dimensional_scrollables` steht noch aus und wird erst mit dem JSON-Baum entschieden (HUM-030); die History-Tabelle braucht es nicht.
+Flutter 3.47.2 gepinnt in `app/.fvmrc`; das ist der Pin, den der CI-Job liest (`.github/actions/setup-flutter`). `app/pubspec.yaml` führt die Untergrenze zusätzlich als eigenen Constraint (`flutter: ">=3.47.2"`, `sdk: ^3.13.0`). Der Pin folgt dem neuesten stabilen Flutter; wo ein Paket die Anhebung blockiert, wird das Paket genannt und nicht die Anhebung vertagt. Die Komponentenbibliothek ist `shadcn_flutter`, exakt gepinnt und ausschließlich in `app/packages/ui` importiert (ADR-0009, Abschnitt „Revidiert am 2026-09-04 durch den Projekteigentümer"). Pakete: `flutter_riverpod` 3.x + `riverpod_annotation` + `riverpod_generator`, `freezed` 4.x + `json_serializable`, `grpc` 5.x + `protobuf`, `re_editor`, `xterm2`, `diff_match_patch`, `window_manager`, `file_picker`, `dbus` (Tray und Notification ohne Plugin, HUM-034), `flutter_localizations` + `intl`, `alchemist` (dev). `two_dimensional_scrollables` steht noch aus und wird erst mit dem JSON-Baum entschieden (HUM-030); die History-Tabelle braucht es nicht.
 
 Struktur:
 
@@ -422,7 +422,7 @@ Entscheidungen, die beim Bauen fielen und ab jetzt gelten. Wo 3.x anderes sagt, 
 - Env und CLI: Werte werden nach dem Typ des Zielfeldes gelesen; Variablen ohne `__` im Namen sind keine Konfigurationsschlüssel (`HUMANITL_GALLERY`, `HUMANITL_ESCAPE_MARKER`). Laufzeitverzeichnis: `$XDG_RUNTIME_DIR/humanitl`, sonst `/run/user/<uid>/humanitl`, sonst `$TMPDIR/humanitl-<uid>` mit `CONFIG_004`.
 - `limits.hold_max_flows` Default ist 200 (nicht 500); sprint-5.md HUM-057 wird angepasst. `pseudonyms.max_response_bytes` Default 8 MiB.
 - ARB-Schlüssel sind camelCase mit Feature-Präfix (`stateHeld`, `interceptAllowButton`), wie sprint-4.md; `HFlowState.l10nKey` liefert entsprechend. Die drei Garantiesätze heißen `isolationCheck1..3`; der Wortlaut aus sprint-3.md HUM-041 und `docs/SECURITY.md` Abschnitt 1 ist kanonisch. `packages/ui` enthält keinen Nutzer-String; Gallery-Beschriftungen sind englische Literale.
-- `app/packages/ui` baut auf `package:flutter/widgets.dart` und bleibt dort (ADR-0009, Abschnitt „Entscheidung nach Sprint 2"; die ursprüngliche Fassung dieses Punktes erwartete `shadcn_flutter` mit HUM-019). Features importieren `lib/core/ui/ui.dart`, nie das Paket. Fonts werden nicht gebündelt; `HType` nennt Familien mit Fallback-Stack, Bündelung ist ein eigenes späteres Issue. Light-Zustandsfarben sind abgeleitet (HSL-Lightness −12 %, dann abdunkeln bis Kontrast ≥ 3:1 auf allen hellen Flächen); `allowedEdited` hat die eigene Dark-Farbe `#57B99F`.
+- `app/packages/ui` baut auf `shadcn_flutter`, exakt gepinnt (ADR-0009, Abschnitt „Revidiert am 2026-09-04 durch den Projekteigentümer"; HUM-035 hatte das am selben Tag verworfen, der Projekteigentümer hat es zurückgenommen). Features importieren `lib/core/ui/ui.dart`, nie das Paket; `tools/check-deps.sh` beanstandet jeden `package:shadcn_flutter` außerhalb von `app/packages/ui`. Die Bibliothek bündelt 8,3 MB eigener Assets in jeden Build — 4,4 MB Geist-Schriften in 33 Schnitten, 1,25 MB Icon-Schriften, 3,3 MB Länderflaggen aus `country_flags`; Flutter nimmt Paket-Schriften unabhängig von Importen mit. Wir bündeln darüber hinaus keine eigenen Fonts; `HType` nennt Familien mit Fallback-Stack, Bündelung ist ein eigenes späteres Issue. Light-Zustandsfarben sind abgeleitet (HSL-Lightness −12 %, dann abdunkeln bis Kontrast ≥ 3:1 auf allen hellen Flächen); `allowedEdited` hat die eigene Dark-Farbe `#57B99F`.
 - `dart format --set-exit-if-changed app/lib app/test app/packages/ui` wird Teil von `make flutter-analyze`, sobald die Sprint-0-Dart-Dateien einmalig umformatiert sind (eigener Commit `chore(app): dart format`).
 - ADR-Dateien heißen `NNNN-kebab-titel.md`, Status `Accepted | Superseded by ADR-NNNN | Deprecated`, zitiert als `ADR-0007`; die dreistellige Form `ADR-007` in BACKLOG.md, ARCHITECTURE.md und hier meint dieselbe Datei. `docs/adr/check.sh` läuft in `scripts/ci/lint-docs.sh`.
 - Sicherheitsdokumente bleiben bis HUM-086 deutsch; dann wird die englische Fassung verbindlich.
@@ -478,7 +478,7 @@ Entscheidungen, die beim Bauen fielen und ab jetzt gelten. Wo 3.x oder 4.11 ande
 - `flows decide ID allow|block [--note TEXT]` bleibt im Produkt: Es ist der Vorläufer von `--ask terminal` (HUM-067) und das Werkzeug, mit dem das Demoskript und die Escape-Tests entscheiden.
 
 **Oberfläche, Nachtrag 2026-09-03.**
-- `shadcn_flutter` war nie in `app/pubspec.yaml`, und es kommt auch nicht mehr: HUM-035 hat am 2026-09-04 auf diesem tatsächlichen Stand entschieden, dass `packages/ui` auf reinem `package:flutter/widgets.dart` bleibt (88,3 % der gewichteten Punkte gegen 48,3 % für `shadcn_flutter` 0.0.54 und 51,7 % für forui 0.26.0, entschieden ohne den vorgesehenen Prototyp-Branch, siehe 4.20; ADR-0009, Abschnitt „Entscheidung nach Sprint 2"). Der Wrapper bleibt trotzdem Pflicht: Er hält die Tür für eine spätere Bibliothek offen, und ein Feature importiert weiterhin `lib/core/ui/ui.dart`, nie ein fremdes Widget-Paket.
+- `shadcn_flutter` war bis zum 2026-09-04 nie in einer Pubspec-Datei, obwohl ADR-0009 es von Anfang an als gesetzt beschrieb. HUM-035 hat auf diesem tatsächlichen Stand entschieden, es nicht aufzunehmen (88,3 % der gewichteten Punkte für die eigene Schicht gegen 48,3 % und 51,7 %, ohne den vorgesehenen Prototyp-Branch, siehe 4.20). Der Projekteigentümer hat das am selben Tag zurückgenommen; seither steht die Bibliothek exakt gepinnt in `app/packages/ui/pubspec.yaml` (ADR-0009, Abschnitt „Revidiert am 2026-09-04 durch den Projekteigentümer"). Der Wrapper bleibt Pflicht: ein Feature importiert `lib/core/ui/ui.dart`, nie ein fremdes Widget-Paket, und `tools/check-deps.sh` erzwingt das.
 - Bewegung erklärt oder entfällt. Ein geteilter Übergang (`Hero`) wird nicht erzwungen: Er gehört an die zwei Stellen, an denen der Blick sonst springt, nämlich von der Karte in der Warteschlange in die Detailansicht und von einem entschiedenen Fluss in die History. Überall sonst genügen die Tokens aus `HMotion`. Eine Animation, die keine Frage des Nutzers beantwortet, ist ein Fehler, kein Schmuck.
 
 ### 4.13 Vertrauen als Gestaltungsauftrag (2026-09-03)
@@ -1013,7 +1013,7 @@ durchginge.
 **Grund.** Die Bedingung, an der die Entscheidung hängt, steht ohne Prototyp
 fest und wäre durch ihn nicht anders ausgefallen: `shadcn_flutter` 0.0.54 und
 forui 0.26.0 verlangen beide Flutter ≥ 3.47.0 und Dart ≥ 3.13.0, während der
-Pin in `app/.fvmrc` auf 3.44.0 steht. Ein Port hätte mit dieser Anhebung
+Pin in `app/.fvmrc` am Tag dieser Entscheidung auf 3.44.0 stand; er steht seit demselben Tag auf 3.47.2, siehe 3.9. Ein Port hätte mit dieser Anhebung
 begonnen, und die Zeitbox wäre vor der ersten portierten Zeile verbraucht
 gewesen. Der Fallstrick des Issues, ein halbfertiger Port sei kein Argument,
 zeigt in dieselbe Richtung.
@@ -1041,25 +1041,32 @@ Abweichungen von `backlog/sprint-3.md`, die dauerhaft gelten. Wo die
 Spezifikation anderes sagt, gilt dieser Abschnitt. Die Oberflächen-Hälfte des
 Issues (Endpunkt-Feld und Test-Knopf im Setup) steht noch aus.
 
-**Das nackte Präfix `/api/` wird zur Inferenz-Teilmenge verengt.** Die Vorgabe
-von `llm.passthrough_paths` ist `["/v1/", "/api/"]`. Unter `/api/` liegt bei
-Ollama nicht nur die Inferenz, sondern auch `POST /api/pull`,
-`POST /api/create`, `POST /api/copy`, `POST /api/push`, `POST /api/blobs/…` und
-`DELETE /api/delete`. Ein Agent könnte damit ungefragt Modelle nachladen und
-löschen, und zwar über die eine Regel, die nicht gehalten wird und private
-Adressen erlauben darf. `OpenCodeAdapter::passthrough_prefixes` ersetzt dieses
-eine Präfix deshalb durch `OLLAMA_INFERENCE_PATHS` (`/api/chat`,
-`/api/generate`, `/api/embed`, `/api/embeddings`, `/api/tags`, `/api/show`,
-`/api/ps`, `/api/version`). `/v1/` bleibt, wie es ist: Unter der
-OpenAI-kompatiblen Oberfläche gibt es keinen Weg, den Bestand des Servers zu
-ändern.
+**Ein Präfix benennt einen Endpunkt, keine API-Fläche.** Die Vorgabe von
+`llm.passthrough_paths` ist `["/v1/", "/api/"]`, und beide Einträge sind
+Flächen. Unter `/api/` liegt bei Ollama neben der Inferenz auch
+`POST /api/pull`, `POST /api/create`, `POST /api/copy`, `POST /api/push`,
+`POST /api/blobs/…` und `DELETE /api/delete`; unter `/v1/` liegen bei OpenAI
+`POST /v1/files`, `/v1/uploads`, `/v1/vector_stores` und `/v1/fine_tuning/jobs`,
+bei vLLM `POST /v1/load_lora_adapter` und `/v1/unload_lora_adapter`. Ein Agent
+könnte damit ungefragt am Bestand des Servers arbeiten, und zwar über die eine
+Regel, die nicht gehalten wird und private Adressen erlauben darf.
 
-Die Regel ist syntaktisch und erklärbar: Ein Präfix soll einen Endpunkt
-benennen, nicht eine ganze API-Fläche. Wer `POST /api/pull` ohne Rückfrage
-will, schreibt den Pfad selbst in `llm.passthrough_paths`; ein Präfix, das mehr
-nennt als das nackte `/api/`, bleibt unverändert stehen. Die Vorgabe ist damit
-die sichere Seite, und was sie nicht deckt, wird gehalten statt geblockt — der
-Mensch sieht es also, statt es zu vermissen.
+`OpenCodeAdapter::passthrough_prefixes` ersetzt deshalb **beide** Flächen durch
+Endpunkte: `/api/` durch `OLLAMA_INFERENCE_PATHS` (`/api/chat`,
+`/api/generate`, `/api/embed`, `/api/embeddings`, `/api/tags`, `/api/show`,
+`/api/ps`, `/api/version`) und `/v1/` durch `OPENAI_INFERENCE_PATHS`
+(`/v1/chat/completions`, `/v1/completions`, `/v1/responses`, `/v1/embeddings`,
+`/v1/models`; das letzte deckt über das Präfix auch `/v1/models/<id>`). Mit und
+ohne abschließenden `/` gilt dasselbe — ohne ihn wäre die Fläche sogar breiter,
+weil `/api` auch `/apifoo` träfe.
+
+Die Regel ist syntaktisch und erklärbar. Wer `POST /api/pull` oder
+`POST /v1/files` ohne Rückfrage will, schreibt den Pfad selbst in
+`llm.passthrough_paths`; ein Präfix, das mehr nennt als das nackte `/api/` oder
+`/v1/`, bleibt unverändert stehen. Die Vorgabe ist damit die sichere Seite, und
+was sie nicht deckt, wird gehalten statt geblockt — der Mensch sieht es also,
+statt es zu vermissen. Der Test `no_mutating_path_is_covered_by_the_default`
+hält die Zusage gegen eine Liste echter verändernder Pfade beider APIs.
 
 **`Matcher.path_prefixes` steht neben `Matcher.path`, nicht an seiner Stelle.**
 Beide schränken ein; sind beide gesetzt, müssen beide zutreffen. Eine leere
@@ -1144,6 +1151,93 @@ bleibt erhalten.
 einem Ergebnis und nicht an seiner Stelle; nur `LLM_001` und `LLM_002` sind
 ein `Err`. `ProbeLlmResponse` hat deshalb `diagnostics` und daneben
 `diagnostic` mit dem ersten Eintrag, wie `RulesResponse` es schon tut.
+
+**Die Regel muss auch im laufenden Daemon stehen.** `llm_passthrough()` allein
+tut nichts: `humanitld::load_rules` stellt das Ergebnis vor die mitgelieferten
+Regeln, und ohne diese Zeile hält der Proxy jede Inferenz an, während der
+Durchreich-Zweig, `DecisionSource::Passthrough` und `LLM_005` toter Code
+bleiben — in den Crate-Tests grün, im Programm wirkungslos. Die Reihenfolge ist
+Teil davon: Die Durchreiche steht **vor** allen anderen mitgelieferten Regeln,
+sonst stünde die Blockregel `host: "**"` des Profils `llm-only` davor. Der
+Beleg ist ein Test am gestarteten Binary
+(`the_configured_llm_endpoint_becomes_a_passthrough_rule`), nicht am Adapter;
+ein Adapter-Test hätte diese Lücke nie gesehen. `humanitld` hängt dafür an
+`humanitl-sandbox`, was `tools/deps-allow.toml` für die Gruppe `bins` erlaubt.
+
+**Ein Befund fällt nie unter den Durchreich-Filter.** `Subscribe` versteckt ohne
+`include_passthrough` jedes Ereignis eines durchgereichten Flusses. Ein
+`FlowEvent::Diagnostic` ist davon ausgenommen, im echten Daemon wie im Fake:
+`LLM_005` warnt vor genau der Anfrage, die der Filter versteckt, und mit ihr zu
+verschwinden kehrte die Zusage aus `docs/SECURITY.md` 3.1 um. Eingeklappt heißt
+nicht stumm.
+
+**Ein Befund mit Fluss reist als `FlowEvent.flow_diagnostic` (Feld 16).** Der
+Strom ist sitzungsweit; der alte Arm `diagnostic` (12) trägt keine `flow_id`,
+und ohne sie könnte kein Client die Meldung ihrem Fluss zuordnen. Der alte Arm
+bleibt für Befunde, die zu keinem Fluss gehören — ein `ClientHello` ohne SNI
+etwa (`TLS_003`), aus dem noch gar kein Fluss geworden ist.
+
+**Eine Durchreiche muss genau ein Ziel nennen.** `too_broad` warnt mit
+`RULES_008`, sobald `passthrough_llm` ohne exakten Host, ohne Port, ohne Schema
+oder ohne Pfadbedingung dasteht. Der Host wiegt am schwersten: Eine Durchreiche
+mit `host: "**"` reichte jeden Host der Welt ungehalten durch und bliebe dabei
+aus der voreingestellten Ansicht heraus. `too_broad` gibt deshalb eine Liste
+zurück statt eines einzelnen Befunds; vorher übersprang ein früher `return` die
+Prüfung auf „alles".
+
+**Was privat heißt, steht im Register.** Für `LLM_006` zählen die aufgelöste
+Adresse (RFC 1918, Loopback, Link-Local, CGNAT) und der Name: `localhost` sowie
+`.local`, `.lan`, `.home.arpa` und `.internal`. Die Spezifikation nennt nur die
+ersten drei Suffixe; `localhost` und `.internal` kamen bei der Umsetzung dazu,
+weil beide dasselbe meinen und ein Mensch sie tippt. Der Doc-Kommentar an
+`LLM_006` in `codes.rs` ist die verbindliche Liste.
+
+**Eigene Codes für eigene Zustände.** `LLM_007` steht für eine Adresse, die sich
+gar nicht als HTTP-Adresse lesen lässt — nicht `LLM_001` und nicht `LLM_003`,
+weil beide eine Beobachtung am Endpunkt behaupten würden und hier weder
+aufgelöst noch verbunden wurde. `IPC_006` steht für „diesen RPC gibt es, aber
+dieser Daemon hat nicht, was er dafür braucht"; vorher lieh sich die fehlende
+Probe `IPC_005`, das „Rules-Anfrage ungültig" heißt.
+
+**Eine Frist über der Obergrenze wird geklemmt.** `ProbeLlmRequest.timeout_ms`
+gilt bis `MAX_TIMEOUT_MS` (30 000 ms). Eine Probe hält einen Task und eine
+ausgehende Verbindung fest, solange sie läuft; ohne Obergrenze band ein
+Aufrufer beides für bis zu 49 Tage.
+
+**Eine Zeitüberschreitung nach einer Antwort ist keine Unerreichbarkeit.** Hat
+der Server schon einmal geantwortet und läuft die Frist erst beim zweiten Pfad
+ab, sagt der Befund das auch. Derselbe Code `LLM_001`, weil der Agent so oder so
+nicht arbeiten kann, aber ein `why`, das die Beobachtung nicht überzeichnet
+(4.13).
+
+**`latency_ms` misst die Probe, nicht das Modell.** Gezählt wird vom Beginn der
+Auflösung bis zur Antwort, aus der das Ergebnis stammt; bei einem
+OpenAI-kompatiblen Server zählt der erste Umlauf nach `/api/tags` mit, der ins
+Leere ging. Das ist die Zahl, die ein Mensch am Testknopf erlebt.
+
+**Die Probe nutzt den mitgelieferten Wurzelsatz, nicht den System-Trust-Store.**
+Die Spezifikation verlangt den des Hosts. Umgesetzt ist `webpki-roots`, also
+derselbe Satz, den `Upstream` für jede Verbindung nach draußen benutzt. Der
+Grund ist die Gleichheit mit dem Proxy-Pfad: Ein zweiter Vertrauensweg neben
+dem einen, der zählt, wäre eine Aussage mehr, die niemand prüft. Der Kern der
+Vorgabe bleibt erfüllt — es ist nicht die Humanitl-CA.
+
+**Das Verhalten des Resolvers ist über `resolver.overrides` belegt, nicht über
+`/etc/hosts`.** Der Fallstrick von HUM-039 nennt einen `/etc/hosts`-Eintrag im
+CI. Der Test `probe_and_proxy_resolve_a_lan_name_the_same_way` gibt beiden
+Seiten dieselbe `ResolverConfig` mit einer festen Zuordnung für `ollama.lan`
+und lässt den Namensdienst darunter für diesen Namen scheitern; kommt trotzdem
+eine Verbindung zustande, hat die Zuordnung geantwortet, und zwar auf beiden
+Wegen. Ein `/etc/hosts` täte dasselbe, verlangte aber Schreibrechte am System
+und wäre keine Prüfung mehr, sondern eine Umgebung.
+
+**Der Name ist das Restrisiko der Durchreiche.** Steht in `llm.endpoint` ein
+DNS-Name, entscheidet der Resolver bei jeder Anfrage neu, wohin sie führt, und
+`allow_private` macht auch den Router und `169.254.169.254` zu gültigen Zielen.
+Das ist DNS-Rebinding an der einen Stelle, an der ADR-0006 es nicht verhindern
+kann, weil dort niemand gefragt wird. `docs/SECURITY.md` 3.1 und
+`docs/THREAT-MODEL.md` K-02 nennen es und empfehlen eine IP-Adresse oder einen
+festen Eintrag unter `resolver.overrides`.
 
 **Offen und bewusst nicht in dieser Hälfte gebaut.** `docs/PROTOCOL.md` 4.9
 verlangt zu jedem neuen RPC ein CLI-Subkommando im selben Issue. `ProbeLlm` hat

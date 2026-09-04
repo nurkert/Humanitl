@@ -847,6 +847,7 @@ dependencies = [
  "tonic-prost",
  "tonic-prost-build",
  "tracing",
+ "url",
  "uuid",
 ]
 
@@ -872,6 +873,7 @@ dependencies = [
  "libc",
  "rcgen",
  "rustls",
+ "serde_json",
  "sha2",
  "tempfile",
  "thiserror",
@@ -881,6 +883,7 @@ dependencies = [
  "tokio-stream",
  "toml",
  "tracing",
+ "url",
  "webpki-roots",
  "zeroize",
 ]
@@ -960,6 +963,7 @@ dependencies = [
  "humanitl-proxy",
  "humanitl-recorder",
  "humanitl-rules",
+ "humanitl-sandbox",
  "libc",
  "tempfile",
  "thiserror",

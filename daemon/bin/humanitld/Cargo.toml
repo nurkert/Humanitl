@@ -25,6 +25,10 @@ humanitl-recorder.workspace = true
 # Der Domain-Katalog wird beim Start geladen und hängt am Ereignisstrom
 # (HUM-031).
 humanitl-catalog.workspace = true
+# Der Agent-Adapter liefert die Durchreichregel zum Sprachmodell aus
+# `llm.endpoint`; sie steht vor den mitgelieferten Regeln (HUM-037 Schritt 6,
+# HUM-039). `tools/deps-allow.toml` erlaubt die Kante für die Gruppe `bins`.
+humanitl-sandbox.workspace = true
 
 clap.workspace = true
 thiserror.workspace = true

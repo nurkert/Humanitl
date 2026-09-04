@@ -34,6 +34,7 @@ use humanitl_core::{
 };
 use humanitl_proxy::registry::{FlowRecord, FlowRegistry};
 use humanitl_proxy::rules_store::StoredRule;
+use humanitl_proxy::{LlmFlavor, ProbeResult};
 use humanitl_recorder::{
     Dir, FindingRecord, FlowDetail as RecordedDetail, FlowSummary as RecordedSummary, MessageRecord,
 };
@@ -136,6 +137,35 @@ pub const fn action_to_proto(action: humanitl_core::rule::Action) -> v1::RuleAct
     }
 }
 
+/// Übersetzt das Ergebnis der Endpunkt-Probe in seine Wire-Form (HUM-039).
+///
+/// `diagnostic` trägt den ersten Befund noch einmal, weil ein Client, der nur
+/// eine Karte zeigt, sonst raten müsste, welcher gemeint ist; `diagnostics`
+/// trägt alle. Ein leeres `models` bei `flavor = UNKNOWN` ist eine Aussage:
+/// Es hat sich nichts gemeldet, was Humanitl kennt.
+#[must_use]
+pub fn probe_result_to_proto(result: &ProbeResult) -> v1::ProbeLlmResponse {
+    let diagnostics: Vec<v1::Diagnostic> =
+        result.diagnostics.iter().map(diagnostic_to_proto).collect();
+    v1::ProbeLlmResponse {
+        models: result.models.clone(),
+        flavor: llm_flavor_to_proto(result.flavor) as i32,
+        diagnostic: diagnostics.first().cloned(),
+        latency_ms: result.latency_ms,
+        diagnostics,
+        endpoint_is_private: result.endpoint_is_private,
+    }
+}
+
+/// Übersetzt die erkannte API in ihre Wire-Form.
+const fn llm_flavor_to_proto(flavor: LlmFlavor) -> v1::LlmProduct {
+    match flavor {
+        LlmFlavor::Ollama => v1::LlmProduct::Ollama,
+        LlmFlavor::OpenAiCompatible => v1::LlmProduct::OpenaiCompatible,
+        LlmFlavor::Unknown => v1::LlmProduct::Unknown,
+    }
+}
+
 /// Übersetzt eine Regel in ihre Wire-Form.
 #[must_use]
 pub fn rule_to_proto(rule: &Rule) -> v1::Rule {
@@ -156,6 +186,7 @@ pub fn rule_to_proto(rule: &Rule) -> v1::Rule {
         hit_count: 0,
         allow_private: rule.allow_private,
         disabled: rule.disabled,
+        passthrough_llm: rule.passthrough_llm,
     }
 }
 
@@ -176,6 +207,7 @@ fn matcher_to_proto(matcher: &humanitl_core::rule::Matcher) -> v1::RuleMatcher {
             .scheme
             .map_or(0, |scheme| scheme_to_proto(scheme) as i32),
         port: u32::from(matcher.port.unwrap_or(0)),
+        path_prefixes: matcher.path_prefixes.clone(),
         upgrade: match matcher.upgrade {
             Some(humanitl_core::http::Upgrade::WebSocket) => v1::Upgrade::Websocket as i32,
             None => v1::Upgrade::None as i32,
@@ -683,7 +715,12 @@ pub fn domain_of(authority: &Authority, first_seen: SystemTime) -> v1::DomainInf
 ///   das null Bytes.
 /// - `finding_count` zählt nur, solange der Flow in [`FlowState::Analyzed`]
 ///   steht; danach hält der Zustand die Funde nicht mehr.
-/// - `origin_tool` und `passthrough` sind in M1 unbekannt.
+/// - `origin_tool` ist in M1 unbekannt.
+/// - `passthrough` kommt aus der Herkunft der Entscheidung: Nur die
+///   Durchreichregel zum Sprachmodell entscheidet mit
+///   [`humanitl_core::DecisionSource::Passthrough`]
+///   (HUM-039). Solange nichts entschieden ist, ist das Feld `false` — was
+///   noch offen ist, wurde nicht durchgereicht.
 #[must_use]
 pub fn record_to_summary(record: &FlowRecord) -> v1::FlowSummary {
     let request = &record.request;
@@ -716,7 +753,7 @@ pub fn record_to_summary(record: &FlowRecord) -> v1::FlowSummary {
             _ => 0,
         },
         edited: matches!(record.decision, Some(Decision::AllowEdited { .. })),
-        passthrough: false,
+        passthrough: record.decision_source == Some(humanitl_core::DecisionSource::Passthrough),
         deadline: record.deadline.map(|at| timestamp(wall_clock(at))),
         origin_tool: String::new(),
         upstream_error: match &record.state {
@@ -1000,6 +1037,20 @@ pub fn flow_event_to_proto(
         FlowEvent::TimedOut { .. } => Event::TimedOut(v1::FlowRef { flow_id }),
         FlowEvent::Recorded { .. } => Event::Recorded(v1::FlowRef { flow_id }),
         FlowEvent::Lagged { n } => Event::Lagged(v1::flow_event::Lagged { dropped: *n }),
+        // Ein Befund mit Flow gehört an seinen Flow. Der Strom ist
+        // sitzungsweit; ohne die Kennung könnte kein Client die Meldung der
+        // Anfrage zuordnen, vor der sie warnt, und `LLM_005` öffnete keine
+        // Flow-Details (HUM-039). Der alte Arm bleibt für alles, was zu keinem
+        // Flow gehört — ein `ClientHello` ohne SNI etwa, aus dem noch gar kein
+        // Flow geworden ist (`TLS_003`).
+        FlowEvent::Diagnostic {
+            flow_id: Some(_),
+            diagnostic,
+            ..
+        } => Event::FlowDiagnostic(v1::flow_event::FlowDiagnostic {
+            flow_id,
+            diagnostic: Some(diagnostic_to_proto(diagnostic)),
+        }),
         FlowEvent::Diagnostic { diagnostic, .. } => {
             Event::Diagnostic(diagnostic_to_proto(diagnostic))
         }
@@ -1167,6 +1218,12 @@ pub fn rule_from_proto(proto: &v1::Rule, session: SessionId) -> Result<Rule, Rul
     if !wire.path.is_empty() {
         matcher.path = Some(PathPattern::parse(&wire.path));
     }
+    // Ein unbrauchbarer Präfix wird nicht stillschweigend weggelassen: Er
+    // stünde sonst in der Regel, die der Mensch abgeschickt hat, und nicht in
+    // der, die gilt. Die Engine sortiert ihn beim Übersetzen aus und lässt die
+    // Regel dann nichts treffen (`humanitl_rules::eval`); dieselbe sichere
+    // Seite wie bei einem Pfadmuster, das sich nicht übersetzen lässt.
+    matcher.path_prefixes.clone_from(&wire.path_prefixes);
     matcher.scheme = match v1::Scheme::try_from(wire.scheme).unwrap_or(v1::Scheme::Unspecified) {
         v1::Scheme::Unspecified => None,
         v1::Scheme::Http => Some(humanitl_core::http::Scheme::Http),
@@ -1199,7 +1256,13 @@ pub fn rule_from_proto(proto: &v1::Rule, session: SessionId) -> Result<Rule, Rul
         // Eine Regel, die über den Draht kommt, darf abgeschaltet ankommen;
         // wirksam wird das nur für mitgelieferte Regeln, und die kommen nie
         // über den Draht (`RulesStore::set_bundled_disabled`).
-        .disabled(proto.disabled);
+        .disabled(proto.disabled)
+        // `passthrough_llm` wird von der Leitung nie übernommen, aus demselben
+        // Grund wie `bundled`: Ein Client, der sich eine Durchreichregel
+        // anlegen könnte, könnte damit Verkehr an der Warteschlange und an der
+        // voreingestellten Ansicht vorbeiführen — die eine erklärte Ausnahme
+        // ist keine, die ein Aufruf sich selbst ausstellt (HUM-039).
+        .passthrough_llm(false);
     if !proto.created_from_flow_id.is_empty() {
         rule.created_from =
             Some(
@@ -1387,9 +1450,65 @@ mod tests {
     use humanitl_proxy::registry::{FlowRecord, FlowRegistry};
 
     use super::{
-        flow_event_to_proto, matches_filter, record_to_detail, record_to_summary, wall_clock,
+        flow_event_to_proto, matches_filter, record_to_detail, record_to_summary, rule_from_proto,
+        rule_to_proto, wall_clock,
     };
     use crate::v1;
+
+    /// Was von der Leitung kommt, darf sich keine Durchreiche ausstellen.
+    ///
+    /// `passthrough_llm` bedeutet: nicht gehalten, in der voreingestellten
+    /// Ansicht nicht sichtbar. Ein Client, der sich das selbst setzen könnte,
+    /// könnte Verkehr an der Warteschlange vorbeiführen (HUM-039). Dieselbe
+    /// Zusage wie bei `bundled`.
+    #[test]
+    fn a_rule_from_the_wire_can_never_be_a_passthrough() {
+        let wire = v1::Rule {
+            action: v1::RuleAction::Allow as i32,
+            matcher: Some(v1::RuleMatcher {
+                host: "ip:192.168.1.50".to_owned(),
+                path_prefixes: vec!["/v1/".to_owned()],
+                port: 11434,
+                ..v1::RuleMatcher::default()
+            }),
+            passthrough_llm: true,
+            bundled: true,
+            allow_private: true,
+            ..v1::Rule::default()
+        };
+        let rule = rule_from_proto(&wire, SessionId::new()).expect("the rule is readable");
+        assert!(!rule.passthrough_llm, "the exception is not self-service");
+        assert!(!rule.bundled, "and neither is being bundled");
+        assert_eq!(
+            rule.matcher.path_prefixes,
+            vec!["/v1/".to_owned()],
+            "the prefixes do come from the wire; they only ever narrow"
+        );
+    }
+
+    /// In die andere Richtung steht das Merkmal an der Regel, damit die
+    /// Oberfläche sie als das zeigen kann, was sie ist.
+    #[test]
+    fn a_passthrough_rule_says_so_on_the_wire() {
+        let rule = humanitl_core::Rule::new(
+            humanitl_core::RuleId::new(),
+            humanitl_core::rule::Action::Allow,
+            humanitl_core::Matcher::host(
+                humanitl_core::HostPattern::parse("ip:192.168.1.50").unwrap(),
+            )
+            .with_path_prefixes(vec!["/v1/".to_owned(), "/api/chat".to_owned()]),
+        )
+        .passthrough_llm(true)
+        .with_allow_private(true);
+
+        let wire = rule_to_proto(&rule);
+        assert!(wire.passthrough_llm);
+        assert!(wire.allow_private);
+        assert_eq!(
+            wire.matcher.expect("a matcher").path_prefixes,
+            vec!["/v1/".to_owned(), "/api/chat".to_owned()]
+        );
+    }
 
     fn flow(session: SessionId, host: &str) -> Flow {
         let request = HttpRequest::new(

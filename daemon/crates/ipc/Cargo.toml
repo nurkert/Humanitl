@@ -32,6 +32,9 @@ serde_json.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 tokio.workspace = true
+# Die Endpunkt-Probe (HUM-039) bekommt `llm.endpoint` als Text und liest ihn
+# als `Url`, bevor irgendetwas den Rechner verlaesst.
+url.workspace = true
 tokio-stream.workspace = true
 tonic.workspace = true
 tonic-prost.workspace = true

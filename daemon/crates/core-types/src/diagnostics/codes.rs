@@ -224,6 +224,12 @@ registry! {
     /// läuft ohne Regelspeicher. Eine abgelehnte Anfrage ändert nichts
     /// (HUM-027).
     IPC_005 => "ipc", "Rules-Anfrage ungültig", "#ipc_005";
+    /// Den RPC gibt es, aber dieser Daemon hat nicht, was er dafür braucht:
+    /// keine Endpunkt-Probe etwa, weil sich der Verbindungsstapel aus der
+    /// Konfiguration nicht bauen ließ. Der Unterschied zu `UNIMPLEMENTED` ist
+    /// für den Client wichtig: Das eine ändert sich mit einem Update, das
+    /// andere mit dem Start (HUM-039).
+    IPC_006 => "ipc", "Fähigkeit in diesem Daemon nicht verfügbar", "#ipc_006";
 
     /// `config.toml` ließ sich nicht lesen.
     CONFIG_001 => "config", "Config-Datei ungültig", "#config_001";
@@ -309,10 +315,27 @@ registry! {
     /// `ca.key` oder `ca.crt` fehlt, ist unlesbar, passt nicht zusammen oder hat unsichere Rechte (HUM-014).
     TLS_005 => "tls", "CA-Dateien unbrauchbar", "#tls_005";
 
-    /// Der LLM-Endpunkt aus `llm.endpoint` antwortet nicht.
+    /// Der LLM-Endpunkt aus `llm.endpoint` antwortet nicht: die TCP-Verbindung
+    /// kam nicht zustande, der Name löste nicht auf, oder die Frist der Probe
+    /// lief ab. Blockierend, weil der Agent ohne Modell nichts tun kann
+    /// (HUM-039).
     LLM_001 => "llm", "LLM-Endpoint nicht erreichbar", "#llm_001";
-    /// Der LLM-Endpunkt antwortet, aber nicht wie eine OpenAI-kompatible API.
-    LLM_002 => "llm", "LLM-Endpoint antwortet nicht als OpenAI-kompatible API", "#llm_002";
+    /// Der LLM-Endpunkt antwortet, verlangt aber eine Anmeldung (`401` oder
+    /// `403`). Humanitl schickt im MVP keine Zugangsdaten an das Modell
+    /// (HUM-039).
+    ///
+    /// **Der Titel hat sich mit HUM-039 geschärft.** Er lautete
+    /// „LLM-Endpoint antwortet nicht als OpenAI-kompatible API"; diese
+    /// Bedeutung trägt jetzt `LLM_003`, und die Aufteilung folgt der Tabelle in
+    /// `backlog/sprint-3.md` unter HUM-039. Die Nummer wird damit nicht
+    /// wiederverwendet: bis HUM-039 hat sie kein Codepfad je ausgegeben, es
+    /// gibt also keine ältere Meldung, keinen Screenshot und keine Zeile in
+    /// `audit.jsonl`, die etwas anderes bedeuten könnte.
+    LLM_002 => "llm", "LLM-Endpoint verlangt eine Anmeldung", "#llm_002";
+    /// Die Verbindung steht, aber weder `/api/tags` (Ollama) noch `/v1/models`
+    /// (OpenAI-kompatibel) hat geantwortet. Meist zeigt die Adresse auf eine
+    /// Oberfläche statt auf die Wurzel der API (HUM-039).
+    LLM_003 => "llm", "LLM-Endpoint antwortet nicht als bekannte API", "#llm_003";
 
     /// `rules.yaml` ließ sich nicht lesen: die Datei fehlt, ist nicht lesbar,
     /// ist kein gültiges YAML oder passt nicht zum Schema. Der Befund nennt
@@ -358,6 +381,11 @@ registry! {
     /// was sich dabei geändert hat; er ist eine Information, kein Fehler
     /// (HUM-027).
     RULES_011 => "rules", "Regelsatz neu geladen", "#rules_011";
+    /// Der Probelauf konnte die aufgezeichneten Flows nicht lesen. Die
+    /// Antwort trägt dann keine Treffer und keine geprüfte Zeile; ohne diesen
+    /// Befund läse der Regel-Bildschirm eine gezählte Null, hinter der man
+    /// Grün vermuten könnte (`backlog/CONVENTIONS.md` 4.13, HUM-033).
+    RULES_012 => "rules", "Probelauf konnte die Aufzeichnung nicht lesen", "#rules_012";
 
     /// Das eingebaute Regel-Set der Secret-Detektoren ließ sich nicht lesen
     /// oder eines seiner Muster nicht übersetzen. Das ist ein Fehler im
@@ -450,6 +478,35 @@ registry! {
     /// und zwar erst nach dem Start. Der Befund nennt den gefundenen Pfad und
     /// einen Ort, an dem er erreichbar wäre (HUM-037).
     AGENT_004 => "agent", "Agent-Kommando in der Sandbox nicht erreichbar", "#agent_004";
+
+    // HUM-039: die Durchreiche zum Sprachmodell und die Probe ihres Endpunkts.
+    /// Eine durchgereichte Anfrage an das Sprachmodell trägt Funde: mögliche
+    /// Geheimnisse oder personenbezogene Daten. Sie wird trotzdem gesendet,
+    /// weil der LLM-Endpunkt die erklärte Vertrauensgrenze ist (BACKLOG.md
+    /// 4.2); der Befund ist die Warnung, die davon übrig bleibt, und steht als
+    /// bernsteinfarbene Zeile am Fluss. Er nennt die Zahl der Funde und den
+    /// Host, nie den gefundenen Wert (HUM-039).
+    LLM_005 => "llm", "Funde in einer durchgereichten Anfrage", "#llm_005";
+    /// Der Endpunkt aus `llm.endpoint` liegt nicht in einem privaten Netz.
+    ///
+    /// Als privat zählen zwei Wege, und beide genügen für sich: die aufgelöste
+    /// Adresse in RFC 1918, Loopback, Link-Local oder CGNAT, oder der Name
+    /// `localhost` beziehungsweise ein Name unter `.local`, `.lan`,
+    /// `.home.arpa` oder `.internal`. Die Spezifikation von HUM-039 nennt nur
+    /// die ersten drei Suffixe; `localhost` und `.internal` kamen bei der
+    /// Umsetzung dazu, weil beide dasselbe meinen und ein Mensch sie tippt
+    /// (`backlog/CONVENTIONS.md` 4.21).
+    ///
+    /// Der Befund ist erlaubt und nur ein Hinweis, aber ein wichtiger: Er
+    /// heißt, dass der Verkehr an der Warteschlange vorbei den Rechner und das
+    /// eigene Netz verlässt (HUM-039).
+    LLM_006 => "llm", "LLM-Endpunkt liegt nicht in einem privaten Netz", "#llm_006";
+    /// Die Adresse in `llm.endpoint` lässt sich gar nicht als HTTP-Adresse
+    /// lesen: ein anderes Schema als `http` oder `https`, kein Host, oder
+    /// überhaupt keine URL. Es wurde nichts gemessen und nichts verbunden —
+    /// deshalb nicht `LLM_001` und nicht `LLM_003`, die beide eine Beobachtung
+    /// am Endpunkt behaupten würden (HUM-039).
+    LLM_007 => "llm", "LLM-Endpunkt ist keine lesbare HTTP-Adresse", "#llm_007";
 }
 
 /// Sucht einen Code im Register.

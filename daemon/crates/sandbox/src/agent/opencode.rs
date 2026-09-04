@@ -62,7 +62,7 @@ use std::path::{Path, PathBuf};
 
 use humanitl_config::LlmConfig;
 use humanitl_core::diagnostics::codes::{AGENT_001, AGENT_002, AGENT_004, LLM_004};
-use humanitl_core::rule::{Action, HostPattern, Matcher, PathPattern, Rule};
+use humanitl_core::rule::{Action, HostPattern, Matcher, Rule};
 use humanitl_core::{Diagnostic, FixAction, HostName, Method, RuleId, Scheme, Severity};
 use url::Url;
 use uuid::Uuid;
@@ -148,13 +148,66 @@ pub const ENV_PERMISSION: &str = "OPENCODE_PERMISSION";
 /// Die Id der Passthrough-Regel; fest, damit sie überall dieselbe ist.
 const PASSTHROUGH_RULE_ID: u128 = 0x0192_0000_0000_7000_8000_0000_0000_00ff;
 
-/// Die Pfadpräfixe, die gelten, wenn `llm.passthrough_paths` keinen brauchbaren
-/// Eintrag hat.
+/// Das Präfix, unter dem Ollama seine gesamte eigene API anbietet.
 ///
-/// Dieselben Werte wie die Vorgabe des Schlüssels in `humanitl-config`; hier
-/// noch einmal, damit ein leerer oder unbrauchbarer Eintrag nicht in eine Regel
-/// ohne Pfadgrenze mündet.
-pub const FALLBACK_PASSTHROUGH_PATHS: &[&str] = &["/v1/", "/api/"];
+/// Es steht in der Vorgabe von `llm.passthrough_paths`, taugt aber nicht als
+/// Grenze: Unter ihm liegen neben der Inferenz auch `POST /api/pull`,
+/// `POST /api/create` und `DELETE /api/delete`. Ein Agent könnte damit
+/// ungefragt Modelle nachladen und löschen, und zwar über die eine Regel, die
+/// nicht gehalten wird und private Adressen erlauben darf. Der Adapter ersetzt
+/// dieses Präfix deshalb durch [`OLLAMA_INFERENCE_PATHS`]
+/// ([`passthrough_prefixes`]).
+pub const OLLAMA_API_PREFIX: &str = "/api/";
+
+/// Die Endpunkte der Ollama-API, die Inferenz machen oder auskunftgeben und
+/// nichts am Server ändern.
+///
+/// Gemessen an der API-Dokumentation von Ollama: `generate`, `chat`, `embed`
+/// und `embeddings` rechnen, `tags`, `show`, `ps` und `version` geben
+/// Auskunft. Nicht dabei: `pull`, `push`, `create`, `copy`, `delete` und
+/// `blobs` — sie ändern den Bestand des Servers, und dafür gibt es die
+/// Warteschlange. Wer sie trotzdem ohne Rückfrage will, schreibt den Pfad
+/// selbst in `llm.passthrough_paths`.
+pub const OLLAMA_INFERENCE_PATHS: &[&str] = &[
+    "/api/chat",
+    "/api/generate",
+    "/api/embed",
+    "/api/embeddings",
+    "/api/tags",
+    "/api/show",
+    "/api/ps",
+    "/api/version",
+];
+
+/// Das Präfix, unter dem eine OpenAI-kompatible API ihre ganze Fläche anbietet.
+///
+/// Genau wie [`OLLAMA_API_PREFIX`] taugt es nicht als Grenze, und aus demselben
+/// Grund. Der Name `/v1/` sagt nichts darüber, was darunter liegt: der Anbieter
+/// selbst bietet dort `POST /v1/files`, `/v1/uploads`, `/v1/vector_stores` und
+/// `/v1/fine_tuning/jobs` an, vLLM `POST /v1/load_lora_adapter` und
+/// `/v1/unload_lora_adapter`. Alles davon ist `POST` und würde von einem
+/// Flächen-Präfix gedeckt: ungehalten, mit `allow_private`. Der Adapter ersetzt
+/// das Präfix deshalb durch [`OPENAI_INFERENCE_PATHS`]
+/// ([`passthrough_prefixes`]).
+pub const OPENAI_PREFIX: &str = "/v1/";
+
+/// Die Endpunkte der OpenAI-kompatiblen Oberfläche, die ein Coding-Agent für
+/// Inferenz braucht.
+///
+/// `chat/completions` und `completions` rechnen, `responses` ist die neuere
+/// Form davon, `embeddings` bettet ein, `models` gibt Auskunft und deckt über
+/// das Präfix auch `models/<id>` ab. Nicht dabei: alles, was auf dem Server
+/// etwas anlegt, ablegt oder umbaut — Dateien, Uploads, Vektorspeicher,
+/// Feinabstimmung, LoRA-Adapter. Auch Bild- und Audio-Endpunkte fehlen; sie
+/// erzeugen Artefakte und gehören nicht zu dem, wofür die Durchreiche da ist.
+/// Wer sie braucht, schreibt ihren Pfad selbst in `llm.passthrough_paths`.
+pub const OPENAI_INFERENCE_PATHS: &[&str] = &[
+    "/v1/chat/completions",
+    "/v1/completions",
+    "/v1/responses",
+    "/v1/embeddings",
+    "/v1/models",
+];
 
 /// Der Adapter für `OpenCode`.
 ///
@@ -185,53 +238,79 @@ pub fn base_url(endpoint: &Url) -> String {
     }
 }
 
-/// Setzt vor jedes Zeichen mit Bedeutung im regulären Ausdruck einen
-/// Rückstrich.
+/// Die Pfadpräfixe der Durchreichregel aus `llm.passthrough_paths`.
 ///
-/// Dieselbe Zeichenmenge, die `regex::escape` schützt. Der Adapter baut das
-/// Muster selbst, statt die Crate `regex` zu ziehen: er braucht sie sonst
-/// nirgends, und die Zeichenmenge ist Teil der Sprache, nicht der Bibliothek.
-fn escape_regex(input: &str) -> String {
-    const SPECIAL: &str = r"\.+*?()|[]{}^$#&-~";
-    let mut out = String::with_capacity(input.len() * 2);
-    for character in input.chars() {
-        if SPECIAL.contains(character) {
-            out.push('\\');
+/// Drei Schritte, in dieser Reihenfolge:
+///
+/// 1. **Aussortieren.** Ein Präfix zählt nur, wenn es
+///    [`humanitl_core::path_prefix_is_valid`] besteht, also mit `/` beginnt und
+///    mindestens zwei Zeichen lang ist. `""` und `/` träfen jeden Pfad und
+///    höben genau die Grenze auf, die die Liste ziehen soll (HUM-039,
+///    Fallstricke).
+/// 2. **Verengen.** Ein Präfix soll einen Endpunkt benennen, keine ganze
+///    API-Fläche. [`OLLAMA_API_PREFIX`] deckt neben der Inferenz auch
+///    `POST /api/pull`, `POST /api/create` und `DELETE /api/delete`;
+///    [`OPENAI_PREFIX`] deckt neben der Inferenz `POST /v1/files`,
+///    `/v1/uploads`, `/v1/vector_stores`, `/v1/fine_tuning/jobs` und bei vLLM
+///    `/v1/load_lora_adapter`. Der Adapter setzt an ihre Stelle die Endpunkte
+///    aus [`OLLAMA_INFERENCE_PATHS`] beziehungsweise
+///    [`OPENAI_INFERENCE_PATHS`]. Damit gilt die Durchreiche für das, wofür sie
+///    da ist — Inferenz und die Modellliste —, und alles Übrige an demselben
+///    Server geht durch die Warteschlange, wird also einem Menschen gezeigt.
+///    Wer eine dieser Anfragen ohne Rückfrage will, schreibt ihren Pfad selbst
+///    in `llm.passthrough_paths` (`"/api/pull"`, `"/v1/files"`); ein Präfix,
+///    das mehr nennt als das nackte `/api/` oder `/v1/`, bleibt unverändert
+///    stehen.
+/// 3. **Zurückfallen.** Bleibt nichts übrig, gelten
+///    [`OPENAI_INFERENCE_PATHS`] und [`OLLAMA_INFERENCE_PATHS`]. Eine engere
+///    Regel ist ein erklärbarer Zustand, eine unbegrenzte nicht.
+///
+/// Doppelte Einträge fallen weg, die Reihenfolge der Konfiguration bleibt.
+#[must_use]
+pub fn passthrough_prefixes(prefixes: &[String]) -> Vec<String> {
+    fn push(out: &mut Vec<String>, prefix: &str) {
+        if !out.iter().any(|existing| existing == prefix) {
+            out.push(prefix.to_owned());
         }
-        out.push(character);
+    }
+
+    /// Die Endpunkte, die an die Stelle eines Flächen-Präfixes treten.
+    ///
+    /// Mit und ohne abschließenden `/` ist dasselbe gemeint, und ohne ihn ist
+    /// es sogar breiter: `/api` träfe auch `/apifoo`.
+    fn expansion_of(prefix: &str) -> Option<&'static [&'static str]> {
+        let bare = prefix.trim_end_matches('/');
+        if bare == OLLAMA_API_PREFIX.trim_end_matches('/') {
+            return Some(OLLAMA_INFERENCE_PATHS);
+        }
+        if bare == OPENAI_PREFIX.trim_end_matches('/') {
+            return Some(OPENAI_INFERENCE_PATHS);
+        }
+        None
+    }
+
+    let mut out: Vec<String> = Vec::new();
+    for prefix in prefixes {
+        let prefix = prefix.trim();
+        if !humanitl_core::path_prefix_is_valid(prefix) {
+            continue;
+        }
+        match expansion_of(prefix) {
+            Some(paths) => {
+                for path in paths {
+                    push(&mut out, path);
+                }
+            }
+            None => push(&mut out, prefix),
+        }
+    }
+
+    if out.is_empty() {
+        for path in OPENAI_INFERENCE_PATHS.iter().chain(OLLAMA_INFERENCE_PATHS) {
+            push(&mut out, path);
+        }
     }
     out
-}
-
-/// Das Pfadmuster der Passthrough-Regel aus den Präfixen der Konfiguration.
-///
-/// Ein Präfix zählt, wenn es mit `/` beginnt und mindestens zwei Zeichen lang
-/// ist; ein leeres Präfix würde jeden Pfad treffen und damit die Grenze
-/// aufheben, die die Regel setzen soll (HUM-039, Fallstricke). Bleibt kein
-/// gültiges Präfix übrig, gelten [`FALLBACK_PASSTHROUGH_PATHS`]: eine engere
-/// Regel ist ein erklärbarer Zustand, eine unbegrenzte nicht.
-///
-/// Das Ergebnis ist ein regulärer Ausdruck, weil ein [`Matcher`] genau ein
-/// Pfadmuster trägt. HUM-039 ersetzt ihn durch das Feld `path_prefixes`.
-#[must_use]
-pub fn passthrough_path_pattern(prefixes: &[String]) -> PathPattern {
-    let valid: Vec<String> = prefixes
-        .iter()
-        .map(|prefix| prefix.trim())
-        .filter(|prefix| prefix.starts_with('/') && prefix.chars().count() >= 2)
-        .map(escape_regex)
-        .collect();
-
-    let alternatives = if valid.is_empty() {
-        FALLBACK_PASSTHROUGH_PATHS
-            .iter()
-            .map(|prefix| escape_regex(prefix))
-            .collect::<Vec<_>>()
-    } else {
-        valid
-    };
-
-    PathPattern::Regex(format!("^(?:{})", alternatives.join("|")))
 }
 
 impl AgentAdapter for OpenCodeAdapter {
@@ -313,7 +392,7 @@ impl AgentAdapter for OpenCodeAdapter {
             // `GET` ist dabei, weil OpenCode die Modellliste über
             // `GET /v1/models` holt.
             .with_methods(vec![Method::POST, Method::GET])
-            .with_path(passthrough_path_pattern(&llm.passthrough_paths))
+            .with_path_prefixes(passthrough_prefixes(&llm.passthrough_paths))
             .with_scheme(scheme)
             .with_port(port);
 
@@ -327,6 +406,10 @@ impl AgentAdapter for OpenCodeAdapter {
             // verweigerte der Proxy die aufgelöste Adresse (ADR-006).
             .with_allow_private(true)
             .bundled(true)
+            // Erst dieses Merkmal macht aus der Regel die erklärte Ausnahme:
+            // Der Proxy hält solche Flüsse nicht, zeichnet sie vollständig auf
+            // und warnt vor Funden, statt sie aufzuhalten (`LLM_005`).
+            .passthrough_llm(true)
             .with_note(format!("LLM passthrough for {url}. Logged, never held.")),
         )
     }
@@ -474,10 +557,40 @@ pub fn file_targets(home: &Path) -> Vec<PathBuf> {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-    use humanitl_core::rule::PathPattern;
     use url::Url;
 
-    use super::{base_url, escape_regex, passthrough_path_pattern};
+    use super::{OLLAMA_INFERENCE_PATHS, OPENAI_INFERENCE_PATHS, base_url, passthrough_prefixes};
+
+    /// Die Vorgabe, so wie sie aus `llm.passthrough_paths` entsteht.
+    fn default_prefixes() -> Vec<String> {
+        OPENAI_INFERENCE_PATHS
+            .iter()
+            .chain(OLLAMA_INFERENCE_PATHS)
+            .map(|path| (*path).to_owned())
+            .collect()
+    }
+
+    /// Pfade, die keine Inferenz sind und den Server verändern oder belegen.
+    ///
+    /// Ollama aus `server/routes.go`, die OpenAI-kompatiblen und die
+    /// vLLM-Pfade aus ihren API-Referenzen. Keiner davon darf von der Vorgabe
+    /// gedeckt sein.
+    const MUTATING: &[&str] = &[
+        "/api/pull",
+        "/api/push",
+        "/api/create",
+        "/api/copy",
+        "/api/delete",
+        "/api/blobs/sha256:aa",
+        "/v1/files",
+        "/v1/uploads",
+        "/v1/vector_stores",
+        "/v1/fine_tuning/jobs",
+        "/v1/batches",
+        "/v1/assistants",
+        "/v1/load_lora_adapter",
+        "/v1/unload_lora_adapter",
+    ];
 
     #[test]
     fn v1_is_appended_once() {
@@ -492,19 +605,96 @@ mod tests {
         }
     }
 
+    /// Beide Flächen-Präfixe der Vorgabe werden zu Endpunkten.
     #[test]
-    fn regex_special_characters_are_escaped() {
-        assert_eq!(escape_regex("/v1/"), "/v1/");
-        assert_eq!(escape_regex("/a.b*"), r"/a\.b\*");
+    fn both_surface_prefixes_are_narrowed_to_inference_endpoints() {
+        let prefixes = passthrough_prefixes(&["/v1/".to_owned(), "/api/".to_owned()]);
+        assert_eq!(prefixes, default_prefixes());
+        assert!(
+            prefixes.iter().any(|p| p == "/v1/chat/completions"),
+            "inference stays: {prefixes:?}"
+        );
+        assert!(
+            prefixes.iter().any(|p| p == "/api/chat"),
+            "inference stays: {prefixes:?}"
+        );
+    }
+
+    /// Kein Pfad, der den Server verändert, wird von der Vorgabe gedeckt.
+    ///
+    /// Das ist die eigentliche Zusage der Verengung, und sie gilt für beide
+    /// Flächen. Ohne sie deckte `/v1/` `POST /v1/files` und `/api/`
+    /// `POST /api/pull`, beides ungehalten und mit `allow_private`.
+    #[test]
+    fn no_mutating_path_is_covered_by_the_default() {
+        for prefixes in [
+            passthrough_prefixes(&["/v1/".to_owned(), "/api/".to_owned()]),
+            passthrough_prefixes(&[]),
+            passthrough_prefixes(&[String::new(), "/".to_owned()]),
+        ] {
+            for path in MUTATING {
+                assert!(
+                    !prefixes.iter().any(|prefix| path.starts_with(prefix)),
+                    "{path} is covered by {prefixes:?}"
+                );
+            }
+        }
+    }
+
+    /// Auch ohne abschließenden `/` sind `/api` und `/v1` die ganze Fläche —
+    /// und träfen obendrein `/apifoo` und `/v1beta`.
+    #[test]
+    fn a_surface_prefix_is_narrowed_with_and_without_the_trailing_slash() {
+        for (written, expected) in [
+            ("/api", OLLAMA_INFERENCE_PATHS),
+            ("/api/", OLLAMA_INFERENCE_PATHS),
+            ("/v1", OPENAI_INFERENCE_PATHS),
+            ("/v1/", OPENAI_INFERENCE_PATHS),
+        ] {
+            let prefixes = passthrough_prefixes(&[written.to_owned()]);
+            let expected: Vec<String> = expected.iter().map(|p| (*p).to_owned()).collect();
+            assert_eq!(prefixes, expected, "for {written}");
+        }
+    }
+
+    /// Wer den Pfad selbst hinschreibt, bekommt ihn: die Vorgabe ist die
+    /// sichere Seite, nicht die einzige.
+    #[test]
+    fn an_explicit_path_stays_even_when_it_changes_the_server() {
+        assert_eq!(
+            passthrough_prefixes(&["/api/chat".to_owned(), "/api/pull".to_owned()]),
+            vec!["/api/chat".to_owned(), "/api/pull".to_owned()]
+        );
+        assert_eq!(
+            passthrough_prefixes(&["/v1/files".to_owned()]),
+            vec!["/v1/files".to_owned()]
+        );
     }
 
     #[test]
     fn an_empty_prefix_does_not_widen_the_rule() {
-        let pattern = passthrough_path_pattern(&[String::new(), "/".to_owned()]);
         assert_eq!(
-            pattern,
-            PathPattern::Regex("^(?:/v1/|/api/)".to_owned()),
+            passthrough_prefixes(&[String::new(), "/".to_owned()]),
+            default_prefixes(),
             "an unusable prefix list falls back, it never matches everything"
+        );
+        assert_eq!(
+            passthrough_prefixes(&[]),
+            default_prefixes(),
+            "an empty list falls back the same way"
+        );
+    }
+
+    #[test]
+    fn duplicates_collapse_and_the_order_of_the_configuration_stays() {
+        let prefixes = passthrough_prefixes(&[
+            "/api/chat".to_owned(),
+            "/v1/models".to_owned(),
+            "/api/chat".to_owned(),
+        ]);
+        assert_eq!(
+            prefixes,
+            vec!["/api/chat".to_owned(), "/v1/models".to_owned()]
         );
     }
 }

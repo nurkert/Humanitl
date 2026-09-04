@@ -150,11 +150,56 @@ enum CompiledPath {
     Broken,
 }
 
+/// Die geprüften Pfadpräfixe einer Regel.
+#[derive(Debug, Clone)]
+enum CompiledPrefixes {
+    /// Die Regel trägt keine Präfixe; jeder Pfad passt.
+    Any,
+    /// Die brauchbaren Präfixe der Regel; mindestens einer muss passen.
+    Some(Vec<String>),
+    /// Die Regel trägt Präfixe, aber keinen brauchbaren; sie trifft nichts.
+    ///
+    /// Fail closed: Eine Präfix-Liste ist eine Grenze. Wer sie schreibt und
+    /// dabei nur Unbrauchbares hinschreibt, bekommt eine Regel, die nichts
+    /// trifft — nie eine, die alles trifft (HUM-039, Fallstricke). Aus
+    /// `rules.yaml` kommt dieser Zustand nicht, `parse_rules` lehnt die Datei
+    /// vorher mit `RULES_005` ab; er entsteht nur für eine Regel, die im
+    /// Programm gebaut wurde.
+    Broken,
+}
+
+impl CompiledPrefixes {
+    fn new(prefixes: &[String]) -> Self {
+        if prefixes.is_empty() {
+            return Self::Any;
+        }
+        let usable: Vec<String> = prefixes
+            .iter()
+            .filter(|prefix| humanitl_core::path_prefix_is_valid(prefix))
+            .cloned()
+            .collect();
+        if usable.is_empty() {
+            Self::Broken
+        } else {
+            Self::Some(usable)
+        }
+    }
+
+    fn matches(&self, path_and_query: &str) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Some(prefixes) => crate::path::prefix_matches(prefixes, path_and_query),
+            Self::Broken => false,
+        }
+    }
+}
+
 /// Eine Regel samt ihrem übersetzten Pfadmuster.
 #[derive(Debug, Clone)]
 struct CompiledRule {
     rule: Rule,
     path: CompiledPath,
+    prefixes: CompiledPrefixes,
 }
 
 impl CompiledRule {
@@ -166,7 +211,12 @@ impl CompiledRule {
                 Err(_) => CompiledPath::Broken,
             },
         };
-        Self { rule, path }
+        let prefixes = CompiledPrefixes::new(&rule.matcher.path_prefixes);
+        Self {
+            rule,
+            path,
+            prefixes,
+        }
     }
 
     fn matches(&self, key: &RequestKey<'_>) -> bool {
@@ -200,6 +250,11 @@ impl CompiledRule {
         if let Some(port) = matcher.port
             && port != key.port
         {
+            return false;
+        }
+        // Pfadmuster und Präfixe stehen nebeneinander und schränken beide
+        // ein: Wer beides schreibt, meint beides.
+        if !self.prefixes.matches(key.path) {
             return false;
         }
         match &self.path {
@@ -433,6 +488,18 @@ impl RuleSet {
             .iter()
             .find(|compiled| compiled.rule.id == id)
             .map(|compiled| &compiled.rule)
+    }
+
+    /// Wahr, wenn die Regel mit dieser Id die Durchreiche zum Sprachmodell ist.
+    ///
+    /// Eine Id, die es im Satz nicht gibt, ist `false`: Was der Regelsatz nicht
+    /// kennt, reicht er auch nicht durch. Die Frage steht hier und nicht am
+    /// [`Verdict`], weil zwischen Auswertung und Abfrage ein Neuladen liegen
+    /// kann; die Antwort kommt dann aus dem Satz, der gerade gilt, und im
+    /// Zweifel zur sicheren Seite.
+    #[must_use]
+    pub fn is_passthrough_llm(&self, id: RuleId) -> bool {
+        self.get(id).is_some_and(|rule| rule.passthrough_llm)
     }
 
     /// Die Anzahl der Regeln.

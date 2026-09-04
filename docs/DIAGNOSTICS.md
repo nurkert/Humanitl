@@ -73,6 +73,10 @@ Decide-Anfrage ungültig
 
 Rules-Anfrage ungültig
 
+#### IPC_006
+
+Fähigkeit in diesem Daemon nicht verfügbar
+
 ### Bereich config
 
 #### CONFIG_001
@@ -209,11 +213,27 @@ LLM-Endpoint nicht erreichbar
 
 #### LLM_002
 
-LLM-Endpoint antwortet nicht als OpenAI-kompatible API
+LLM-Endpoint verlangt eine Anmeldung
+
+#### LLM_003
+
+LLM-Endpoint antwortet nicht als bekannte API
 
 #### LLM_004
 
 Kein Modell konfiguriert
+
+#### LLM_005
+
+Funde in einer durchgereichten Anfrage
+
+#### LLM_006
+
+LLM-Endpunkt liegt nicht in einem privaten Netz
+
+#### LLM_007
+
+LLM-Endpunkt ist keine lesbare HTTP-Adresse
 
 ### Bereich rules
 
@@ -256,6 +276,10 @@ Mitgelieferte Regel ist unveränderlich
 #### RULES_011
 
 Regelsatz neu geladen
+
+#### RULES_012
+
+Probelauf konnte die Aufzeichnung nicht lesen
 
 ### Bereich findings
 

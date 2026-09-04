@@ -18,8 +18,10 @@
 //!   entscheidet oder die Frist abläuft.
 //! - [`PassthroughPipeline`] lässt jeden Flow sofort durch
 //!   ([`DecisionSource::Passthrough`]). Sie ist der Test-Hook, mit dem sich der
-//!   Weiterleitungs-Pfad ohne Oberfläche prüfen lässt, und der Platzhalter für
-//!   die spätere LLM-Passthrough-Regel.
+//!   Weiterleitungs-Pfad ohne Oberfläche prüfen lässt. Die echte Durchreiche
+//!   zum Sprachmodell ist etwas anderes: Sie ist eine Regel, sie trifft genau
+//!   einen Host, Port und Pfad, und sie liegt deshalb in [`RulesPipeline`]
+//!   (HUM-039).
 //!
 //! Der Scan der Detektoren liegt davor, im Handler: Er steht in
 //! `FlowEvent::Analyzed`, bevor eine Regel greift (`backlog/sprint-2.md`
@@ -36,8 +38,11 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
+use humanitl_core::diagnostics::codes::LLM_005;
 use humanitl_core::rule::Action;
-use humanitl_core::{BlockReason, Decision, DecisionSource, Flow, FlowState, RuleId};
+use humanitl_core::{
+    BlockReason, Decision, DecisionSource, Diagnostic, Flow, FlowEvent, FlowState, RuleId, Severity,
+};
 use humanitl_rules::{RequestKey, RuleSet, Verdict};
 
 use crate::connect::requested_upgrade;
@@ -179,9 +184,10 @@ fn system_block(queue: &HoldQueue, flow: &mut Flow) -> Decision {
 ///
 /// | Verdict | Ergebnis |
 /// | --- | --- |
+/// | `Matched { Allow }`, `passthrough_llm` | `Decision::Allow`, Quelle [`DecisionSource::Passthrough`], dazu `LLM_005` bei Funden |
 /// | `Matched { Allow }` | `Decision::Allow`, Quelle [`DecisionSource::Rule`] |
 /// | `Matched { Block }` | `Decision::Block { BlockReason::Rule }`, `403` |
-/// | `Matched { Redact }` | wie `Default`; der Pseudonymisierer kommt in HUM-039 |
+/// | `Matched { Redact }` | wie `Default`; der Pseudonymisierer kommt in HUM-079 |
 /// | `Matched { Ask }`, `Default` | die innere Strategie, also der Hold |
 pub struct RulesPipeline {
     queue: Arc<HoldQueue>,
@@ -254,6 +260,51 @@ impl RulesPipeline {
             .is_ok_and(|set| set.get(rule).is_some_and(|found| found.allow_private))
     }
 
+    /// Ob die Regel mit dieser Kennung die erklärte Durchreiche zum
+    /// Sprachmodell ist.
+    ///
+    /// Wie [`RulesPipeline::rule_allows_private`] gelesen aus dem Satz, der
+    /// gerade gilt; ist die Regel weg, gilt `false`. Das ist die sichere Seite:
+    /// Der Fluss wird dann als gewöhnliche Regel-Freigabe verbucht und bleibt
+    /// in der voreingestellten Ansicht sichtbar.
+    fn rule_is_passthrough(&self, rule: RuleId) -> bool {
+        self.rules
+            .read()
+            .is_ok_and(|set| set.is_passthrough_llm(rule))
+    }
+
+    /// Die Warnung `LLM_005` für einen durchgereichten Fluss mit Funden.
+    ///
+    /// Der Befund hält nichts auf — dafür ist die Durchreiche da —, aber er
+    /// muss ankommen: Er nennt die Zahl der Funde und den Host, damit die
+    /// Zeile im Verlauf bernsteinfarben wird und die Details erreichbar sind.
+    /// Was gefunden wurde, steht im Fluss selbst (`Analyzed`) und in der
+    /// Aufzeichnung (`findings`); **der gefundene Wert steht in keinem von
+    /// beiden**, nur sein Hash (`humanitl_core::Finding`). Deshalb steht er
+    /// auch hier nicht.
+    fn warn_about_findings(&self, flow: &Flow) {
+        let FlowState::Analyzed { findings } = &flow.state else {
+            return;
+        };
+        if findings.is_empty() {
+            return;
+        }
+        let diagnostic = Diagnostic::builder(LLM_005, Severity::Warning)
+            .why(format!(
+                "this request to your language model at {} contains {} potential secret(s) or \
+                 personal data. It was sent because the LLM endpoint is a declared trust \
+                 boundary: traffic to it is logged, never held.",
+                flow.request.authority.host,
+                findings.len()
+            ))
+            .build();
+        self.queue.publish(FlowEvent::Diagnostic {
+            flow_id: Some(flow.id),
+            at: SystemTime::now(),
+            diagnostic: Box::new(diagnostic),
+        });
+    }
+
     fn decide_by_rule(
         &self,
         flow: &mut Flow,
@@ -292,8 +343,17 @@ impl FlowPipeline for RulesPipeline {
                 // an der Verbindung: Ohne diese Zeile faellt sie zwischen
                 // Entscheidung und Verbindung heraus, und die Durchreichregel
                 // zum lokalen Sprachmodell auf der Schleife greift nie
-                // (ADR-006).
+                // (ADR-006). Sie steht am `Flow`, also an dieser einen
+                // Anfrage; die naechste Anfrage derselben Verbindung faengt
+                // wieder ohne sie an.
                 flow.allow_private |= self.rule_allows_private(rule);
+                if self.rule_is_passthrough(rule) {
+                    // Erst warnen, dann entscheiden: Nach dem Uebergang steht
+                    // der Fluss in `Decided`, und die Funde des Scans sind
+                    // dort nicht mehr zu haben.
+                    self.warn_about_findings(flow);
+                    return self.decide_by_rule(flow, Decision::Allow, DecisionSource::Passthrough);
+                }
                 self.decide_by_rule(flow, Decision::Allow, DecisionSource::Rule(rule))
             }
             Action::Block => self.decide_by_rule(
@@ -305,14 +365,14 @@ impl FlowPipeline for RulesPipeline {
                 DecisionSource::Rule(rule),
             ),
             // `redact` heißt in M1: fragen. Der Pseudonymisierer, der die
-            // Funde vor dem Weiterleiten ersetzt, kommt in HUM-039; bis dahin
-            // wäre ein stilles Durchlassen eine Freigabe, die niemand gegeben
-            // hat.
+            // Funde vor dem Weiterleiten ersetzt, kommt in HUM-079
+            // (`backlog/CONVENTIONS.md` 4.10); bis dahin wäre ein stilles
+            // Durchlassen eine Freigabe, die niemand gegeben hat.
             Action::Redact => {
                 tracing::debug!(
                     flow = %flow.id,
                     %rule,
-                    "rule action redact is treated as ask until HUM-039"
+                    "rule action redact is treated as ask until HUM-079"
                 );
                 self.inner.decide(flow, meta).await
             }

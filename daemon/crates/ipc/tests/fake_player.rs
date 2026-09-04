@@ -59,6 +59,7 @@ fn name(event: &v1::FlowEvent) -> &'static str {
         Some(Event::TimedOut(_)) => "timed_out",
         Some(Event::Lagged(_)) => "lagged",
         Some(Event::Diagnostic(_)) => "diagnostic",
+        Some(Event::FlowDiagnostic(_)) => "flow_diagnostic",
         Some(Event::RulesChanged(_)) => "rules_changed",
         Some(Event::AgentAsk(_)) => "agent_ask",
         None => "empty",

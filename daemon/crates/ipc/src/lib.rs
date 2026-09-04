@@ -32,11 +32,13 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `1` seit `FlowDetail.findings_truncated` (HUM-026, Feld 10). Die
+/// `2` seit `ProbeLlm` samt `Rule.passthrough_llm` und
+/// `RuleMatcher.path_prefixes` (HUM-039); `1` war `FlowDetail.findings_truncated`
+/// (HUM-026, Feld 10). Die
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 1;
+pub const PROTO_MINOR: u32 = 2;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
