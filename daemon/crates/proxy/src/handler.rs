@@ -43,6 +43,7 @@ use crate::ca::LeafCache;
 use crate::connect::{AuthorityError, AuthorityRefusal, ConnectionContext, RequestTarget};
 use crate::findings::{NoScan, Scanner};
 use crate::hold::HoldQueue;
+use crate::meta::{self, MetaEndpoint, MetaReply, MetaRequest};
 use crate::pipeline::FlowPipeline;
 use crate::registry::FlowRecord;
 use crate::tls_observe::{self, HandshakeWatch};
@@ -126,8 +127,45 @@ struct Inner {
     limits: ProxyLimits,
     scanner: Arc<dyn Scanner>,
     recorder: Option<Recorder>,
+    /// Der Meta-Endpunkt, falls diese Sitzung einen hat (HUM-073).
+    meta: Option<Arc<MetaEndpoint>>,
     /// Das Zählfenster der gescheiterten Handschläge dieser Sitzung (HUM-045).
     handshakes: HandshakeWatch,
+}
+
+/// Die wahlfreien Anschlüsse eines Handlers.
+///
+/// Detektoren, Aufzeichnung und Meta-Endpunkt sind alle drei „kann, muss
+/// nicht": Ein Test läuft ohne sie, der Daemon mit allen. Sie stehen deshalb
+/// zusammen in einem Wert und nicht als drei weitere Stellen in einer
+/// Argumentliste, die mit jedem Sprint länger würde.
+pub struct HandlerPorts {
+    /// Die Detektoren, die im Pfad laufen (HUM-025).
+    pub scanner: Arc<dyn Scanner>,
+    /// Die Aufzeichnung (HUM-026).
+    pub recorder: Option<Recorder>,
+    /// Der Meta-Endpunkt `humanitl.internal` (HUM-073).
+    pub meta: Option<Arc<MetaEndpoint>>,
+}
+
+impl Default for HandlerPorts {
+    /// Keine Detektoren ([`NoScan`]), keine Aufzeichnung, kein Meta-Endpunkt.
+    fn default() -> Self {
+        Self {
+            scanner: Arc::new(NoScan),
+            recorder: None,
+            meta: None,
+        }
+    }
+}
+
+impl std::fmt::Debug for HandlerPorts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HandlerPorts")
+            .field("recorder", &self.recorder.is_some())
+            .field("meta", &self.meta.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Bedient eine Verbindung: liest Anfragen, entscheidet, leitet weiter.
@@ -146,18 +184,14 @@ impl FlowHandler {
         leaves: Arc<LeafCache>,
         limits: ProxyLimits,
     ) -> Self {
-        Self {
-            inner: Arc::new(Inner {
-                queue,
-                pipeline,
-                upstream,
-                leaves,
-                limits,
-                scanner: Arc::new(NoScan),
-                recorder: None,
-                handshakes: HandshakeWatch::new(),
-            }),
-        }
+        Self::with_ports(
+            queue,
+            pipeline,
+            upstream,
+            leaves,
+            limits,
+            HandlerPorts::default(),
+        )
     }
 
     /// Derselbe Handler mit den Detektoren aus HUM-025.
@@ -198,6 +232,36 @@ impl FlowHandler {
         scanner: Arc<dyn Scanner>,
         recorder: Option<Recorder>,
     ) -> Self {
+        Self::with_ports(
+            queue,
+            pipeline,
+            upstream,
+            leaves,
+            limits,
+            HandlerPorts {
+                scanner,
+                recorder,
+                meta: None,
+            },
+        )
+    }
+
+    /// Derselbe Handler mit allen wahlfreien Anschlüssen, auch dem
+    /// Meta-Endpunkt (HUM-073).
+    ///
+    /// Der Weg, den `humanitld` nimmt. Ohne [`HandlerPorts::meta`] gibt es den
+    /// reservierten Host `humanitl.internal` für diese Sitzung nicht; eine
+    /// Anfrage dorthin läuft dann durch die Regeln wie jeder andere Host und
+    /// endet ohne Freigabe in der Warteschlange.
+    #[must_use]
+    pub fn with_ports(
+        queue: Arc<HoldQueue>,
+        pipeline: Arc<dyn FlowPipeline>,
+        upstream: Upstream,
+        leaves: Arc<LeafCache>,
+        limits: ProxyLimits,
+        ports: HandlerPorts,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 queue,
@@ -205,8 +269,9 @@ impl FlowHandler {
                 upstream,
                 leaves,
                 limits,
-                scanner,
-                recorder,
+                scanner: ports.scanner,
+                recorder: ports.recorder,
+                meta: ports.meta,
                 handshakes: HandshakeWatch::new(),
             }),
         }
@@ -501,6 +566,11 @@ impl FlowHandler {
             .path_and_query()
             .map_or_else(|| "/".to_owned(), ToString::to_string);
 
+        // Die Weiche zum Meta-Endpunkt: vor Body, Detektoren, Regeln und damit
+        // vor jeder Auflösung. Warum genau hier: [`FlowHandler::serve_meta`].
+        if let Some(endpoint) = self.meta_for(&authority) {
+            return self.serve_meta(endpoint, req, &path_and_query, &meta).await;
+        }
         let (parts, incoming) = req.into_parts();
         let cap = self.inner.limits.body_cap_bytes;
         let content_type =
@@ -569,8 +639,25 @@ impl FlowHandler {
         }
 
         let decision = self.inner.pipeline.decide(&mut flow, &meta).await;
+        self.carry_out(decision, flow, request, body_bytes, &meta)
+            .await
+    }
+
+    /// Führt aus, was entschieden wurde.
+    ///
+    /// Die zweite Hälfte von [`FlowHandler::handle_request`], ab dem Punkt, an
+    /// dem die Entscheidung feststeht: weiterleiten, bearbeitet weiterleiten,
+    /// oder die Sperre bauen und den Flow abschließen.
+    async fn carry_out(
+        &self,
+        decision: Decision,
+        mut flow: Flow,
+        request: HttpRequest,
+        body_bytes: Bytes,
+        meta: &ConnectionContext,
+    ) -> Response<ResponseBody> {
         match decision {
-            Decision::Allow => self.forward(flow, request, body_bytes, &meta).await,
+            Decision::Allow => self.forward(flow, request, body_bytes, meta).await,
             Decision::AllowEdited { request: edited } => {
                 // Die Bearbeitung darf Methode, Pfad, Kopfzeilen und Body
                 // aendern, aber nie das Ziel: Entschieden wurde fuer genau
@@ -602,13 +689,93 @@ impl FlowHandler {
                     edited_body.clone(),
                 )
                 .await;
-                self.forward(flow, edited, edited_body, &meta).await
+                self.forward(flow, edited, edited_body, meta).await
             }
             Decision::Block { reason, note } => {
                 self.record_block(&mut flow, reason, note.as_deref())
             }
             Decision::TimedOut => self.record_block(&mut flow, BlockReason::Timeout, None),
         }
+    }
+
+    /// Der Meta-Endpunkt dieser Sitzung, falls die Anfrage an ihn geht.
+    ///
+    /// Geprüft wird die [`Authority`] aus
+    /// [`connect::check_authority`](crate::connect::check_authority), nie der
+    /// `Host`-Kopf für sich: Ein `CONNECT github.com:443` mit
+    /// `Host: humanitl.internal` darin ist ein Widerspruch und wird vorher
+    /// geblockt. Sonst wäre die Weiche über eine Kopfzeile steuerbar.
+    fn meta_for(&self, authority: &Authority) -> Option<&MetaEndpoint> {
+        self.inner
+            .meta
+            .as_deref()
+            .filter(|_| meta::is_meta_host(&authority.host))
+    }
+
+    /// Beantwortet eine Anfrage an `humanitl.internal` selbst (HUM-073).
+    ///
+    /// **Warum die Weiche dorthin vor der Regelauswertung liegt.** Der Name
+    /// ist reserviert: Er wird nie aufgelöst und nie an einen Upstream
+    /// weitergereicht (ADR-014). Läge die Weiche später, stünde
+    /// `humanitl.internal` als `ask` in der Warteschlange, und eine Freigabe
+    /// dafür löste eine Namensauflösung aus — für einen Namen, den es
+    /// nirgends gibt. Ein `CONNECT humanitl.internal:443` kommt über denselben
+    /// Weg hier an: Der Tunnel endet am eigenen TLS-Endpunkt, und die Anfrage
+    /// darin läuft durch dieselbe Prüfung wie Klartext.
+    ///
+    /// Es entsteht kein [`Flow`]: Die Anfrage geht nirgendwo hin, hält nichts
+    /// auf und wird von niemandem entschieden. Ein Datensatz mit einer
+    /// Entscheidung, die es nicht gab, wäre eine Behauptung über einen
+    /// Menschen, der nichts getan hat (`backlog/CONVENTIONS.md` 4.13). Was
+    /// sichtbar wird, ist die Bitte aus `/ask` — als
+    /// [`FlowEvent::AgentAsk`] im Ereignisstrom und als Karte in der
+    /// Oberfläche.
+    ///
+    /// Der Body wird nur bis [`meta::ASK_BODY_CAP_BYTES`] gelesen, nicht bis
+    /// `limits.hold_body_cap_bytes`: Für `/ask` gilt die kleinere Grenze aus
+    /// ADR-014, und alles darüber ist `413`, ohne dass die Bytes fließen.
+    async fn serve_meta(
+        &self,
+        endpoint: &MetaEndpoint,
+        req: Request<Incoming>,
+        path_and_query: &str,
+        conn: &ConnectionContext,
+    ) -> Response<ResponseBody> {
+        let (parts, incoming) = req.into_parts();
+        let declared_over_cap =
+            content_length(&parts.headers).is_some_and(|len| len > meta::ASK_BODY_CAP_BYTES);
+        let (body, over_cap) = if declared_over_cap {
+            (Bytes::new(), true)
+        } else {
+            match body::buffer(incoming, meta::ASK_BODY_CAP_BYTES).await {
+                Ok(bytes) => (bytes, false),
+                Err(BufferError::Cap) => (Bytes::new(), true),
+                Err(BufferError::Read) => {
+                    return text_response(StatusCode::BAD_REQUEST, "request body read error");
+                }
+            }
+        };
+        let outcome = endpoint.respond(
+            &MetaRequest {
+                method: &parts.method,
+                path_and_query,
+                body: &body,
+                body_over_cap: over_cap,
+                session: conn.session,
+            },
+            self.inner.queue.registry(),
+        );
+        if let Some(event) = outcome.event {
+            self.inner.queue.publish(event);
+        }
+        tracing::debug!(
+            session = %conn.session,
+            method = %parts.method,
+            path = path_and_query,
+            status = outcome.reply.status,
+            "the meta endpoint answered"
+        );
+        meta_to_response(&outcome.reply)
     }
 
     /// Der Scan und alles, was aus ihm folgt: `Analyzed`, die Befunde, der
@@ -1107,6 +1274,38 @@ fn block_to_response(block: &humanitl_core::BlockResponse, flow: FlowId) -> Resp
             HeaderName::from_static(humanitl_core::block::NOTE_HEADER),
             value,
         );
+    }
+    response
+}
+
+/// Baut die HTTP-Antwort des Meta-Endpunkts (HUM-073).
+///
+/// `Connection: close` wie bei der Block-Antwort: Eine abgelehnte Methode und
+/// ein Body über dem Cap lassen ungelesene Bytes auf der Leitung stehen, und
+/// die blockierten sonst die Keep-Alive-Verbindung (Fallstrick HUM-015). Der
+/// Unterschied zwischen den beiden Fällen wäre eine Fallunterscheidung, die
+/// nichts einbringt: Der Agent stellt hier einzelne Fragen, keine Serien.
+fn meta_to_response(reply: &MetaReply) -> Response<ResponseBody> {
+    let mut response = Response::new(body::full(Bytes::from(reply.body.clone())));
+    *response.status_mut() =
+        StatusCode::from_u16(reply.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    *response.version_mut() = Version::HTTP_11;
+    let headers = response.headers_mut();
+    headers.insert(
+        hyper::header::CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+    headers.insert(hyper::header::CONNECTION, HeaderValue::from_static("close"));
+    for (name, value) in &reply.headers {
+        // Beides steht als Konstante im Modul `meta`; eine Kopfzeile, die
+        // hier trotzdem nicht durchgeht, fällt lieber weg, als dass der
+        // Handler in Panik gerät.
+        if let (Ok(name), Ok(value)) = (
+            HeaderName::from_bytes(name.as_bytes()),
+            HeaderValue::from_str(value),
+        ) {
+            headers.insert(name, value);
+        }
     }
     response
 }

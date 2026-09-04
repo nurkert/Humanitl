@@ -43,6 +43,9 @@
 //!   [`HoldQueue`] (HUM-016).
 //! - [`tls_observe`]: deutet einen gescheiterten Handschlag des Clients und
 //!   macht ihn als Befund und als Flow sichtbar (HUM-045).
+//! - [`meta`]: der reservierte Host `humanitl.internal`, den der Proxy selbst
+//!   beantwortet — ohne Namensauflösung, ohne Upstream, ohne Regelauswertung
+//!   (HUM-073, ADR-014). Die Weiche dorthin liegt im [`handler`], vor beidem.
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
@@ -56,6 +59,7 @@ pub mod handler;
 pub mod hold;
 pub mod listener;
 pub mod llm_probe;
+pub mod meta;
 pub mod pipeline;
 pub mod registry;
 pub mod resolver;
@@ -70,10 +74,14 @@ pub use crate::connect::{
 pub use crate::core::ProxyCore;
 pub use crate::egress::{AsyncStream, Direct, Egress};
 pub use crate::findings::{NoScan, Scanner, Tier1Scanner};
-pub use crate::handler::{FlowHandler, ProxyLimits};
+pub use crate::handler::{FlowHandler, HandlerPorts, ProxyLimits};
 pub use crate::hold::{DomainSink, HoldQueue};
 pub use crate::listener::SessionSocket;
 pub use crate::llm_probe::{LlmFlavor, LlmProbe, ProbeResult};
+pub use crate::meta::{
+    META_HOST, MetaClock, MetaEndpoint, MetaOutcome, MetaReply, MetaRequest, MetaStatus,
+    SuggestedTarget, SystemClock, is_meta_host, suggested_target,
+};
 pub use crate::pipeline::{AskPipeline, FlowPipeline, PassthroughPipeline, RulesPipeline};
 pub use crate::registry::{FlowFilter, FlowRecord, FlowRegistry, FlowSummary};
 pub use crate::resolver::{

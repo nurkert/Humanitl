@@ -32,6 +32,7 @@ import 'providers/queue_freeze.dart';
 import 'providers/selection.dart';
 import 'rule_sentence.dart';
 import 'widgets/action_bar.dart';
+import 'widgets/agent_ask_card.dart';
 import 'widgets/batch_modal.dart';
 import 'widgets/domain_pane_placeholder.dart';
 import 'widgets/queue_pane.dart';
@@ -443,6 +444,7 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
     // (`docs/UX.md` 3.5).
     final List<Flow> chosen = ref.watch(selectedFlowsProvider).flows;
     final BatchRequest? asking = ref.watch(batchConfirmProvider);
+    final AgentAskRuleDraft? ruleDraft = ref.watch(agentAskRuleDraftProvider);
     return Shortcuts(
       shortcuts: _shortcuts,
       child: Actions(
@@ -476,6 +478,18 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
                       DomainPanePlaceholder(flow: selected),
                     ],
                   ),
+                  // The sheet hangs on the right edge and leaves the panes
+                  // where they are: it asks for a rule, it does not decide
+                  // anything, so it never dims the screen behind it
+                  // (`docs/UX.md` 2.2). It comes from the agent's card in the
+                  // queue (HUM-073).
+                  if (ruleDraft != null)
+                    Positioned(
+                      top: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: AgentAskRuleSheet(draft: ruleDraft),
+                    ),
                   // The one modal of this screen, above everything, with the
                   // background dimmed and nothing behind it reachable.
                   if (asking != null) BatchModal(request: asking),

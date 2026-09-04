@@ -66,12 +66,20 @@ impl BlockResponse {
 /// `char::is_control`, könnten aber im Terminal des Agenten einen anderen Text
 /// vortäuschen als den, den der Nutzer geschrieben hat.
 ///
+/// Und es bleiben höchstens [`MAX_COMBINING_MARKS`] kombinierende Zeichen je
+/// Basiszeichen stehen. Sechzig gestapelte Akzente auf einem Buchstaben sind
+/// keine Schrift mehr, sondern ein Strich, der über alles läuft, was daneben
+/// steht — im Terminal des Agenten wie in der Karte, mit der ein Mensch über
+/// eine Bitte entscheidet (HUM-073). Zwei genügen jeder Rechtschreibung, die
+/// diese Blöcke benutzt.
+///
 /// Nicht-ASCII bleibt erhalten; für den Header kürzt [`note_header_value`]
 /// weiter.
 #[must_use]
 pub fn sanitize_note(note: &str) -> String {
     let mut out = String::new();
     let mut last_was_space = false;
+    let mut marks = 0_usize;
     for raw in note.chars() {
         let ch = match raw {
             '\r' | '\n' | '\u{2028}' | '\u{2029}' => ' ',
@@ -80,6 +88,14 @@ pub fn sanitize_note(note: &str) -> String {
             ch if ch.is_whitespace() => ' ',
             ch => ch,
         };
+        if is_combining(ch) {
+            marks += 1;
+            if marks > MAX_COMBINING_MARKS {
+                continue;
+            }
+        } else {
+            marks = 0;
+        }
         if ch == ' ' {
             if last_was_space {
                 continue;
@@ -110,6 +126,38 @@ pub fn note_header_value(note: &str) -> String {
         .filter(|ch| matches!(ch, ' ' | '\t' | '!'..='~'))
         .collect();
     ascii.trim().to_owned()
+}
+
+/// So viele kombinierende Zeichen dürfen auf einem Basiszeichen stehen.
+///
+/// Zwei, weil jede Rechtschreibung, die die reinen Kombinationsblöcke benutzt,
+/// mit zweien auskommt (ein Vietnamesisches `ế` ist in NFD ein `e` plus zwei
+/// Marken). Alles darüber ist keine Schrift, sondern ein Stapel.
+pub const MAX_COMBINING_MARKS: usize = 2;
+
+/// Wahr für ein Zeichen aus den reinen Kombinationsblöcken.
+///
+/// **Das ist keine vollständige Prüfung der Unicode-Eigenschaft `Mn`.** Sie
+/// wäre eine Tabelle über Hunderte von Bereichen, und die von Hand zu pflegen
+/// ist gefährlicher, als sie wegzulassen; eine Bibliothek dafür brauchte einen
+/// neuen Eintrag in `daemon/Cargo.toml`. Abgedeckt sind die Blöcke, die nur
+/// aus Kombinationszeichen bestehen und die jeder Stapel-Generator benutzt:
+/// die vier `Combining Diacritical Marks`-Blöcke, die kombinierenden
+/// kyrillischen Zeichen und die `Combining Half Marks`.
+///
+/// Weil die Prüfung unvollständig ist, verlässt sich die Oberfläche nicht auf
+/// sie: Die Karte in `app/lib/features/intercept/widgets/agent_ask_card.dart`
+/// begrenzt die Zeilen und beschneidet ihren Rahmen, und das gilt für jedes
+/// Zeichen, gleich aus welchem Block.
+fn is_combining(ch: char) -> bool {
+    matches!(ch,
+        '\u{0300}'..='\u{036f}'
+            | '\u{0483}'..='\u{0489}'
+            | '\u{1ab0}'..='\u{1aff}'
+            | '\u{1dc0}'..='\u{1dff}'
+            | '\u{20d0}'..='\u{20f0}'
+            | '\u{fe20}'..='\u{fe2f}'
+    )
 }
 
 /// Unsichtbare Zeichen, die eine Notiz anders aussehen lassen, als sie ist.
@@ -174,7 +222,8 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::{
-        NOTE_MAX_CHARS, block_response, failed_response, note_header_value, sanitize_note,
+        MAX_COMBINING_MARKS, NOTE_MAX_CHARS, block_response, failed_response, note_header_value,
+        sanitize_note,
     };
     use crate::flow::{BlockReason, UpstreamError};
     use crate::host::HostName;
@@ -288,6 +337,30 @@ mod tests {
         // SEPARATOR, Sprach-Tags aus Ebene 14) fallen ebenfalls weg.
         let sneaky = "a\u{061c}b\u{00ad}c\u{034f}d\u{180e}e\u{e0041}f";
         assert_eq!(sanitize_note(sneaky), "abcdef");
+    }
+
+    #[test]
+    fn a_stack_of_combining_marks_is_cut_down() {
+        // Sechzig Akzente auf einem `a` laufen im Terminal und in der Karte
+        // über alles, was darüber steht. Zwei bleiben, der Rest fällt weg; der
+        // Text daneben bleibt unangetastet.
+        let zalgo = format!("a{}b", "\u{0301}".repeat(60));
+        let sanitized = sanitize_note(&zalgo);
+        assert_eq!(sanitized, "a\u{0301}\u{0301}b");
+
+        // Der Zähler beginnt bei jedem Basiszeichen von vorn.
+        let two_each = "a\u{0301}\u{0300}b\u{0301}\u{0300}";
+        assert_eq!(sanitize_note(two_each), two_each);
+
+        // Eine übliche Schreibweise bleibt, wie sie ist: `ế` in NFD ist ein
+        // `e` mit zwei Marken.
+        assert_eq!(sanitize_note("e\u{0302}\u{0301}"), "e\u{0302}\u{0301}");
+
+        // Marken ohne Basiszeichen werden genauso begrenzt.
+        assert_eq!(
+            sanitize_note(&"\u{20d0}".repeat(40)).chars().count(),
+            MAX_COMBINING_MARKS
+        );
     }
 
     #[test]

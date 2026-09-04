@@ -738,6 +738,20 @@ pub fn event_to_proto(event: &FlowEvent, flow: &FakeFlow) -> v1::FlowEvent {
         FlowEvent::Diagnostic { diagnostic, .. } => {
             Event::Diagnostic(diagnostic_to_proto(diagnostic))
         }
+        // Der Fake baut keine Bitte des Agenten; der Arm steht hier, damit
+        // die Übersetzung vollständig bleibt (HUM-073).
+        FlowEvent::AgentAsk {
+            ask_id,
+            text,
+            suggested_host,
+            suggested_path,
+            ..
+        } => Event::AgentAsk(v1::flow_event::AgentAsk {
+            ask_id: ask_id.to_string(),
+            text: text.clone(),
+            suggested_host: suggested_host.clone().unwrap_or_default(),
+            suggested_path: suggested_path.clone().unwrap_or_default(),
+        }),
     };
     v1::FlowEvent {
         at: Some(timestamp(event.at().unwrap_or(flow.last_at))),

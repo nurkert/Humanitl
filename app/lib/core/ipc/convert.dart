@@ -360,6 +360,7 @@ extension FlowEventToDomain on pb.FlowEvent {
         askId: agentAsk.askId,
         text: agentAsk.text,
         suggestedHost: agentAsk.suggestedHost,
+        suggestedPath: agentAsk.suggestedPath,
       ),
       pb.FlowEvent_Event.failed => FlowEvent.failed(
         at: when,

@@ -503,6 +503,11 @@ message FlowEvent {
     string text = 2;
     // Host aus einer URL im Text, falls eine erkennbar war.
     string suggested_host = 3;
+    // Pfad derselben URL, ohne Query und Fragment; leer, wenn die URL keinen
+    // Pfad nannte oder er nicht als Muster taugt. Er engt die vorgeschlagene
+    // Regel auf das ein, worum der Agent gebeten hat: ohne ihn gaelte sie
+    // fuer jeden Pfad des Hosts (HUM-073).
+    string suggested_path = 4;
   }
 
   // Ein Diagnostic, das zu genau einem Flow gehoert.

@@ -430,5 +430,24 @@
 
   "historyEmptyPassthroughOnly": "Jede Anfrage dieser Sitzung ging an den Modell-Endpunkt, und dieser Verkehr ist ausgeblendet.",
   "historyExportBesideFile": "Daneben entsteht eine zweite Datei, {name}; aus ihr liest der Befehl den Rumpf.",
-  "historyExportNothing": "Es passte nichts, also wurde nichts geschrieben."
+  "historyExportNothing": "Es passte nichts, also wurde nichts geschrieben.",
+  "interceptAgentAskTitle": "Der Agent bittet um etwas",
+  "interceptAgentAskFrom": "Agent",
+  "interceptAgentAskDismiss": "Bitte wegnehmen",
+  "interceptAgentAskCreateRule": "Regel anlegen",
+  "interceptAgentAskSemantics": "Der Agent bittet: {text}",
+  "interceptAgentAskRuleTitle": "Regel aus der Bitte",
+  "interceptAgentAskRuleClose": "Blatt schließen",
+  "interceptAgentAskRuleHost": "Host",
+  "interceptAgentAskRuleAllow": "Erlauben",
+  "interceptAgentAskRuleBlock": "Blocken",
+  "interceptAgentAskRuleSession": "Diese Sitzung",
+  "interceptAgentAskRuleForever": "Dauerhaft",
+  "interceptAgentAskRuleCreate": "Regel anlegen",
+  "interceptAgentAskRuleCancel": "Abbrechen",
+  "interceptAgentAskRulePath": "Pfad",
+  "interceptAgentAskRuleAction": "Was die Regel tut",
+  "interceptAgentAskRuleChoose": "Wähle erlauben oder blocken, bevor die Regel entstehen kann.",
+  "interceptAgentAskRuleWholeHost": "Ohne Pfad gilt diese Regel für jede Methode und jeden Pfad von {host}.",
+  "interceptAgentAskRuleFailed": "Die Regel wurde nicht angelegt: {why}"
 }

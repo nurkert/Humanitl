@@ -46,8 +46,9 @@ use humanitl_proxy::pipeline::FlowPipeline;
 use humanitl_proxy::rules_store::RulesStore;
 use humanitl_proxy::upstream::ClientTls;
 use humanitl_proxy::{
-    AskPipeline, ConnectionContext, DomainSink, FlowHandler, FlowRegistry, HoldQueue, ProxyCore,
-    Resolver, ResolverPort, RulesPipeline, Scanner, Tier1Scanner, Upstream,
+    AskPipeline, ConnectionContext, DomainSink, FlowHandler, FlowRegistry, HandlerPorts, HoldQueue,
+    MetaEndpoint, MetaStatus, ProxyCore, Resolver, ResolverPort, RulesPipeline, Scanner,
+    Tier1Scanner, Upstream,
 };
 use humanitl_recorder::{Recorder, RecorderSettings, SessionMeta};
 use humanitl_rules::parse_rules_for_session;
@@ -533,15 +534,43 @@ fn build_handler(
     // immer den geltenden Satz, ohne den Speicher zu kennen (HUM-027).
     let pipeline: Arc<dyn FlowPipeline> =
         Arc::new(RulesPipeline::new(Arc::clone(queue), rules.snapshot(), ask));
-    Ok(FlowHandler::with_recorder(
+    // Der Meta-Endpunkt liest denselben Regel-Schnappschuss wie die Pipeline
+    // (HUM-073): Was `http://humanitl.internal/` zeigt, ist der Satz, nach dem
+    // entschieden wird, und keine zweite Kopie.
+    let meta = MetaEndpoint::new(
+        MetaStatus {
+            ask_mode: config.hold.ask_mode,
+            hold_timeout: timeout,
+            llm: llm_authority(config),
+        },
+        rules.snapshot(),
+    );
+    Ok(FlowHandler::with_ports(
         Arc::clone(queue),
         pipeline,
         upstream,
         Arc::new(LeafCache::new(Arc::clone(ca), DEFAULT_LEAF_CAPACITY)),
         ProxyLimits::from_config(&config.limits, &config.recorder).with_hold(&config.hold),
-        Arc::clone(scanner),
-        Some(recorder.clone()),
+        HandlerPorts {
+            scanner: Arc::clone(scanner),
+            recorder: Some(recorder.clone()),
+            meta: Some(Arc::new(meta)),
+        },
     ))
+}
+
+/// Der Sprachmodell-Endpunkt als `host:port` für die Statusausgabe des
+/// Meta-Endpunkts.
+///
+/// Ohne `llm.endpoint` und bei einer Adresse ohne Host gibt es nichts zu
+/// zeigen; `/` schreibt dann `llm=none`, statt einen Endpunkt zu erfinden.
+fn llm_authority(config: &Config) -> Option<String> {
+    let endpoint = config.llm.endpoint.as_ref()?;
+    let host = endpoint.host_str()?;
+    Some(match endpoint.port_or_known_default() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_owned(),
+    })
 }
 
 /// Baut die Detektoren aus der Konfiguration, einmal beim Start.
