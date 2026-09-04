@@ -1701,3 +1701,296 @@ Kein Rücktausch in gestreamten Antworten (M9). Kein Rücktausch von Secrets (To
 
 ### Referenzen
 BACKLOG.md ADR-008, Abschnitt 9 M9; HUM-048; aho-corasick (https://docs.rs/aho-corasick).
+
+---
+
+## HUM-090 · Paritaetsluecke zwischen CLI, RPC und UI
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-027, HUM-064, HUM-036 · Blockiert: HUM-078
+
+### Kontext
+Prinzip 10 (BACKLOG.md 52) und ADR-018 sagen zu, dass jede Fähigkeit genau einmal als RPC existiert, dass UI und CLI austauschbare dünne Clients derselben Proto sind und dass jedes Issue, das einen RPC einführt, das CLI-Subkommando im selben Issue mitliefert. Für `Humanitl.Decide` gilt das heute nicht: `DecideRequest` trägt `repeated string flow_ids = 1` (`proto/humanitl/v1/humanitl.proto:574`) und `Rule remember = 5` (`:592`), der Dienst setzt beides um (`daemon/crates/ipc/src/server.rs:876-905`: erst die Regel, dann jede Id, Rücknahme der Regel, wenn nichts wirkte), der Fake identisch (`daemon/crates/ipc/src/fake/mod.rs:246-293`). Die Kommandozeile kennt nur eine Id und keine Regel: `FlowsCmd::Decide { id, verdict, note }` (`daemon/bin/humanitl/src/cli.rs:235-245`) und `flow_ids: vec![id.to_owned()], remember: None` (`daemon/bin/humanitl/src/cmd/flows.rs:336-339`). Die Zusage ist also nicht bloß unvollständig, sie ist unwahr: Der Server kann es, ein Client bekommt es nur mit der Maus.
+
+Messbar ist die Folge an einer Stelle, an der Belege verloren gehen. Die Oberfläche hängt beim Merken `createdFrom: flow.id` an die Regel (`app/lib/features/intercept/rule_sentence.dart:117`); der Regel-Bildschirm zeigt daraus das Herkunfts-Abzeichen, das zurück auf die Anfrage springt (`app/lib/features/rules/widgets/rule_row.dart:378-395`). Über die Kommandozeile entsteht dieselbe Regel nur über den Umweg `rules add`, und `rule_from_args` kennt kein Herkunftsfeld (`daemon/bin/humanitl/src/cmd/rules.rs:632`). Genau so läuft das M2-Skript: erst `rules add --expires session`, dann zwölf Einzelentscheidungen (`tests/e2e/m2_first_decision/run.sh:337-375`). Die Regel trägt kein `created_from_flow_id`, das Abzeichen hat für sie nichts anzuzeigen, und der Lauf kann nicht zeigen, was er zeigen soll.
+
+Zwei Dinge werden dabei oft falsch erzählt, und dieses Issue behauptet sie nicht. **Erstens** nutzt `repeated flow_ids` kein einziger Client: `Future<Rule?> decide(FlowId id, Decision decision, {Rule? remember})` (`app/lib/core/ipc/daemon_client.dart:39`) und `..flowIds.add(flowId.value)` (`app/lib/core/ipc/convert.dart:501-502`) schicken je eine Id, und die Oberfläche schleift selbst über die Flows und hängt `remember: i == 0 ? rule : null` an den ersten Aufruf (`app/lib/features/intercept/providers/decision.dart:615-620`). Der Unterschied zwischen Oberfläche und Kommandozeile ist nicht eine Stapel-Anfrage, sondern dass die Oberfläche die Schleife und das Anlegen der Regel selbst fährt und die Kommandozeile beides nicht hat. **Zweitens** meldet keine Prüfung die Lücke, auch nicht die geplante: Der CI-Job `parity-check` ruft `scripts/ci/parity-placeholder.sh` (`.github/workflows/ci.yml:572-582`), das Skript endet mit `exit 0`, solange `daemon/xtask/src/parity.rs` fehlt — und es fehlt, `daemon/xtask/src/` enthält nur `main.rs`. HUM-078 vergleicht auf RPC-Ebene („CI-Job `parity-check` schlägt fehl, wenn ein RPC keine CLI-Zeile hat", `backlog/sprint-4.md:1614`), und seine Beispielzeile `| Humanitl.Decide | humanitl flows decide <id> allow oder block [--note] | intercept/action_bar |` (`:1629`) ist der heutige Stand: grün, mit Lücke.
+
+Zu klären ist außerdem ein Widerspruch im Repository. Der Doc-Kommentar `daemon/bin/humanitl/src/cmd/flows.rs:308-311` nennt die Ein-Id-Regel Absicht („auf der Kommandozeile wäre er die bequeme Art, versehentlich mehr freizugeben als gemeint"), `backlog/CONVENTIONS.md:1305-1318` (4.22) nennt dieselbe Sache eine Paritätslücke, die in ein eigenes Issue gehört. Beides stimmt für verschiedene Hälften: Die Sorge gilt einem Stapel, den niemand einzeln benannt hat; für `--remember` gibt es nirgends eine Begründung. Dieses Issue löst den Widerspruch auf, statt eine der beiden Stellen zu überschreiben.
+
+### Ziel
+`humanitl flows decide` entscheidet mehrere ausdrücklich genannte Flows in einer einzigen `Decide`-Anfrage und legt dabei auf Wunsch die Regel an, die die Oberfläche an derselben Stelle anlegt — mit `created_from_flow_id`, damit die Herkunft der Regel auch ohne Maus belegt ist. Der Vertrag, der Daemon und der Fake bleiben, wie sie sind; es entsteht nur der Client, der sie nutzt.
+
+### Nicht-Ziel
+Keine Massenentscheidung über einen Filter (`decide --filter state:held`, `--all`): Das ist genau die bequeme Art, mehr freizugeben als gemeint, vor der `flows.rs:308-311` warnt, und sie bleibt ausgeschlossen. Kein `allow_edited` auf der Kommandozeile (der Vertrag lässt dafür genau eine Id zu, `daemon/crates/ipc/src/validate.rs:67-79`, und einen Editor gibt es im Terminal nicht). Kein Flag für `acknowledge_findings` (`humanitl.proto:594`): Das Feld liest heute kein Dienstpfad, ein Flag würde eine Wirkung versprechen, die es nicht gibt; es kommt mit HUM-049, der ihm einen Leser gibt. Keine Paritäts-Tabelle und kein Generator — das ist HUM-078; eine mechanische Prüfung auf Feld-Ebene (jedes Proto-Feld einer Anfrage hat eine CLI-Entsprechung) baut auch dieses Issue nicht, sie wird in `CONVENTIONS.md` 4.22 ausdrücklich als offene Grenze festgehalten, damit die nächste Lücke dieser Art nicht für geprüft gehalten wird.
+
+### Betroffene Pfade
+- `daemon/bin/humanitl/src/cli.rs:229-245`: `FlowsCmd::Decide` bekommt `--also ID` (wiederholbar) und den Argumentsatz `RememberArgs` (neu, präfigierte Flags)
+- `daemon/bin/humanitl/src/cmd/flows.rs:306-381`: `decide()`, Ausgabe je Flow, JSON-Form, Doc-Kommentar neu
+- `daemon/bin/humanitl/src/cmd/rules.rs:632`: `rule_from_args` wird `pub(crate)`
+- `daemon/bin/humanitl/tests/cli.rs`: Prozesstests gegen `FakeServer`
+- `tests/e2e/lib.sh:424-431`: Helfer `flow_decide`
+- `tests/e2e/m2_first_decision/run.sh:337-375`: Schritt 2
+- `backlog/CONVENTIONS.md:478` (Signaturzeile) und `:1305-1318` (4.22)
+- `backlog/sprint-4.md:1629`: Beispielzeile der Paritäts-Tabelle in HUM-078
+
+Unberührt, weil dort nichts fehlt: `proto/humanitl/v1/humanitl.proto`, `daemon/crates/ipc/src/server.rs`, `daemon/crates/ipc/src/fake/mod.rs`, `daemon/crates/ipc/src/validate.rs`, `app/`.
+
+### Spezifikation
+Aufrufform, positional unverändert:
+
+```
+humanitl flows decide <ID> allow|block [--also <ID>]... [--note TEXT]
+    [--remember --remember-host PATTERN [--remember-expires WHEN]
+     [--remember-path P] [--remember-method M]... [--remember-note TEXT]]
+```
+
+- `--also ID` ist wiederholbar und nennt jede weitere Id einzeln. Alle Ids gehen in **eine** `DecideRequest` (`flow_ids` in der Reihenfolge der Kommandozeile, `<ID>` zuerst). Eine Id, die zweimal vorkommt, ist `CLI_004` mit Exit 1 vor dem Aufruf; sonst käme sie als zweites, nicht angewandtes Ergebnis zurück und sähe aus wie ein Fehlschlag.
+- `--remember` schaltet `DecideRequest.remember` ein und verlangt `--remember-host`. Die Aktion der Regel kommt aus dem Verdikt (`allow` ⇒ `allow`, `block` ⇒ `block`); es gibt kein `--remember-action`, damit ein Block nie eine Freigabe-Regel anlegt. `--remember-expires` ohne Angabe ist `session`; eine dauerhafte Regel schreibt `rules.yaml` und muss deshalb ausgesprochen werden.
+- Die Regel entsteht nicht in der CLI: `RememberArgs` wird auf `RuleArgs` abgebildet, `rules::rule_from_args(&args, None)` baut die Wire-Form, danach setzt `decide()` `created_from_flow_id` auf die erste Id. Eine zweite Regelbau-Logik im Binary wäre Fachlogik im Client (`docs/ARCHITECTURE.md` 3b).
+- Reihenfolge und Rücknahme bleiben Sache des Dienstes (`server.rs:876-905`): Scheitert das Anlegen, wird nichts entschieden; wirkte keine Entscheidung, wird die Regel zurückgenommen. Die CLI wiederholt das nicht, sie meldet nur, was zurückkam.
+- Textausgabe: je Ergebnis eine Zeile `<verdict> <short_id>` wie heute (`short_id` sind die ersten 8 Zeichen). Nicht angewandte Flows stehen mit ihrem `Diagnostic` des Dienstes auf stderr. Mit `--remember` folgt zuletzt `remembered <short rule id> <action> <host> <expires>`.
+- `--json`: ein Objekt mit `results` (je Id `flow_id`, `decision`, `applied`, bei Ablehnung `diagnostic`), `note` und `created_rule` (die Regel des Dienstes samt `rule_id` und `created_from_flow_id`, ohne `--remember` `null`). Die alte Ein-Objekt-Form entfällt; sie wird heute von niemandem gelesen (`tests/e2e/lib.sh:427-429` verwirft stdout).
+- Exit: `0` nur, wenn jeder genannte Flow entschieden wurde; `1`, sobald einer abgelehnt wurde, auch wenn andere entschieden wurden und die Regel steht — die Ausgabe nennt dann beides. `2` bleibt der nicht erreichbare Daemon.
+- Der Doc-Kommentar `flows.rs:306-314` wird neu geschrieben: Die Sicherung gegen versehentliche Freigaben liegt jetzt darin, dass jede Id einzeln genannt wird, jede Entscheidung eine eigene Zeile bekommt und das Host-Muster nie erraten wird — nicht mehr darin, dass es nur eine Id gibt.
+
+### Schritte
+1. `RememberArgs` und `--also` in `cli.rs`, Hilfetexte, Abbildung auf `RuleArgs`.
+2. `rule_from_args` auf `pub(crate)`, `decide()` auf Ergebnisliste umbauen, `created_from_flow_id` setzen, JSON-Form, Exit-Regel, Doc-Kommentar.
+3. Prozesstests in `tests/cli.rs`.
+4. M2-Schritt 2 auf einen Aufruf ziehen, Erzähltext `run.sh:340-343` und die Regel-Prüfungen `:345-360` auf die Regel aus `--remember` umhängen, Prüfung auf `created_from_flow_id` ergänzen.
+5. `CONVENTIONS.md:478` und 4.22 auf den neuen Stand, `sprint-4.md:1629` auf die neue Signatur.
+
+### Tests
+- `daemon/bin/humanitl/tests/cli.rs`, gegen `FakeServer`: `decide_releases_every_named_id`, `decide_remember_creates_exactly_one_rule`, `decide_remember_carries_the_origin_flow`, `decide_rejected_rule_decides_nothing`, `decide_all_refused_leaves_no_rule`, `decide_repeated_id_is_cli_004`.
+- `daemon/bin/humanitl/src/cmd/flows.rs` Testmodul (ab `:642`): JSON-Form einer Antwort mit drei Ergebnissen und `created_rule`, Abbildung Verdikt ⇒ Aktion, Default `session`.
+- `tests/e2e/m2_first_decision/run.sh` als Integrationsbeleg.
+
+### Akzeptanzkriterien
+- [ ] `humanitl flows decide <id1> allow --also <id2> --also <id3>` endet mit Exit 0, druckt drei Zeilen `allow <short_id>`, und `humanitl --json flows list --filter state:held` nennt danach keine der drei Ids.
+- [ ] Derselbe Aufruf mit `--remember --remember-host '**.npmjs.org'` liefert in `--json` genau ein `created_rule`; `humanitl --json rules list` zeigt danach genau eine Session-Regel mit `.action == "allow"`, `.host == "**.npmjs.org"`, `.expires.kind == "session"` und `.created_from_flow_id == <id1>` (heute für jede über die CLI angelegte Regel leer).
+- [ ] `--remember --remember-host 'nicht:gueltig'` endet mit Exit 1 und dem `Diagnostic` des Dienstes; danach hat `rules list` null Session-Regeln und alle genannten Flows stehen weiter auf `state:held`.
+- [ ] Ein Aufruf, dessen Ids alle nicht mehr warten, endet mit Exit 1, und `rules list` zeigt danach keine neue Regel (Rücknahme im Dienst).
+- [ ] Zweimal dieselbe Id endet mit `CLI_004` und Exit 1, ohne dass ein Flow entschieden wurde.
+- [ ] `humanitl flows decide ID allow` und `humanitl flows decide ID block --note TEXT` verhalten sich unverändert: `tests/e2e/lib.sh:424-431` und die Escape-Schritte aus Sprint 1 bleiben unangetastet, `make check` ist grün.
+- [ ] `tests/e2e/m2_first_decision/run.sh` gibt die zwölf npm-Anfragen in genau einem `humanitl flows decide` frei (`grep -c 'flows decide' run.sh` zählt einen Aufruf in Schritt 2), endet mit Exit 0 und prüft, dass die Session-Regel `created_from_flow_id` der ersten freigegebenen Anfrage trägt.
+- [ ] `grep -rn 'kennt weder mehrere Ids noch' backlog/ tests/` findet nichts mehr; `backlog/CONVENTIONS.md:478` und `backlog/sprint-4.md:1629` zeigen die neue Signatur, 4.22 hält fest, dass eine Prüfung auf Feld-Ebene weiterhin fehlt.
+
+### Fallstricke
+- clap duldet eine variadische Position nur zuletzt: `decide <ID>... <VERDICT>` ist nicht baubar, und ein Tausch der Reihenfolge bräche jeden vorhandenen Aufrufer (`tests/e2e/lib.sh:424-431`, die Escape-Schritte, `CONVENTIONS.md:478`). Deshalb `--also`, nicht mehr Positionen.
+- `RuleArgs` trägt selbst `--note` (`cli.rs:399-401`) und der Block-Zweig ebenfalls (`cli.rs:242-244`). Ein flaches `#[command(flatten)]` kollidiert; nur der präfigierte Satz `--remember-*` geht. Jedes `--remember-*` bekommt `requires = "remember"`, sonst wirkt eine Angabe ohne `--remember` stillschweigend nicht.
+- Exit 1 heißt hier nicht „nichts ist passiert": Bei gemischtem Ausgang bleiben die entschiedenen Flows entschieden und die Regel steht. Die Ausgabe muss beides nennen, sonst räumt jemand hinterher eine Regel weg, die er für nicht angelegt hält.
+- `created_from_flow_id` muss eine UUID sein, sonst lehnt `humanitl_ipc::convert` die Regel ab (`daemon/crates/ipc/src/convert.rs:1266-1272`). Die Id kommt unverändert von der Kommandozeile; ein Tippfehler wird zum Fehler beim Anlegen, nicht zu einer Regel ohne Herkunft.
+- Der M2-Lauf hängt an `M2_RULE_ID` aus der Ausgabe von `rules add` (`run.sh:346-347`). Die Id kommt künftig aus `.created_rule.rule_id` der Entscheidung; die Prüfungen `:349-360` bleiben, sie zeigen nur auf eine andere Quelle.
+- Die Haltefrist des Laufs steht auf 10 Sekunden, weil zwölf Prozesse nacheinander liefen (`CONVENTIONS.md` 4.22). Mit einem Aufruf entfällt der Grund; die Frist bleibt trotzdem, bis ein Lauf auf CI-Hardware das Gegenteil zeigt.
+
+### Referenzen
+BACKLOG.md Prinzip 10, ADR-018; `docs/ARCHITECTURE.md` 3b; `docs/adr/0018-rpc-parity.md` (Mitlieferpflicht); `backlog/CONVENTIONS.md` 4.12 (CLI), 4.22; HUM-027 (Regel vor Entscheidung), HUM-036 (M2), HUM-064, HUM-078; clap, variadische Positionen (https://docs.rs/clap/latest/clap/struct.Arg.html#method.num_args).
+
+---
+
+## HUM-092 · Export ist Fachlogik in der Anwendung
+Sprint: 4 · Größe: L · Abhängigkeiten: HUM-026, HUM-032, HUM-065 · Blockiert: HUM-078
+
+### Kontext
+`README.md` sagt in Zeile 123 bis 124 über beide Clients: „Every capability is an RPC first; neither client contains domain logic." Dieser Satz ist heute unwahr. Die vier Export-Formate existieren ausschließlich in der Flutter-Anwendung: `encodeHar` (`app/lib/features/history/export/har.dart:49`), `encodeJsonl` (`jsonl.dart:15`), `encodeCsv` (`csv.dart:39`), `encodeCurl` (`curl.dart:20`), zusammengeschaltet in `history_export.dart:104-110`. Der Service in `proto/humanitl/v1/humanitl.proto:23-44` führt fünfzehn RPCs, keinen davon für den Export von Flows; `daemon/bin/humanitl/src/cli.rs:187-263` kennt `flows list|show|decide`, kein `export`. Wer die Historie ohne die Oberfläche exportieren will, kann es nicht — und die Aussage des README beschreibt eine Architektur, die an dieser Stelle nicht gebaut ist.
+
+Das ist kein Versäumnis der Umsetzung, sondern ein Widerspruch zwischen zwei Dokumenten, die beide im Repository stehen. ADR-0018 zählt in Zeile 25 bis 28 die Fähigkeiten auf, die zuerst RPC sind, und nennt „Export" ausdrücklich; Zeile 110 wiederholt, dass Fachlogik in `app/` ein Architekturverstoß ist, ebenso `docs/ARCHITECTURE.md:66`. Die Sprint-Spezifikation ordnete das Gegenteil an: `backlog/sprint-2.md:583` schreibt „HUM-032 baut HAR in der UI aus `GetFlow`/`GetBody`", `sprint-2.md:1342` nennt `app/lib/features/history/export/{har,jsonl,curl}.dart` als neue Dateien. HUM-032 hat also getan, was dort stand. Solange diese beiden Zeilen stehen bleiben, kommt die Abweichung beim nächsten Export-Format zurück; dieses Issue korrigiert sie deshalb mit.
+
+Das Muster für die richtige Seite existiert bereits: `AuditRequest.Export` (`humanitl.proto:863`) exportiert `jsonl` und `csv` daemon-seitig, und `backlog/sprint-4.md:789` hält für den Audit-Screen fest: „der Daemon schreibt die Datei (`ExportOp.out_path`), das UI zeigt Inline-Bestätigung". Der Export fehlt also nicht generell, die Historie weicht von einem vorhandenen Muster ab. CSV kam dabei ohne Spezifikation dazu (`backlog/CONVENTIONS.md:865`: „**CSV ist ein vierter Export.** Die Spezifikation nennt HAR, JSONL und curl.") — ein zusätzlicher Beleg dafür, dass Formate dort wachsen, wo niemand sie über den Vertrag sieht.
+
+Maschinell ist die Klasse unsichtbar. Der CI-Job `parity-check` (`.github/workflows/ci.yml:572-582`) läuft auf `scripts/ci/parity-placeholder.sh` und überspringt bis HUM-078; auch danach prüft er nach ADR-0018 Zeile 39 bis 42 nur „RPC ohne CLI-Zeile", nie „Fähigkeit nur im Client". Ein Export ohne RPC fällt keiner Prüfung auf.
+
+Schweregrad **major**, nicht blocking: Die Produktzusage aus `README.md:83` („exportable as HAR, JSONL and CSV") ist erfüllt, Nutzer bekommen ihre Dateien, und die Sicherheitsaussage bleibt unberührt. Unwahr ist allein die Architektur-Aussage — und ein dokumentierter Satz, der nicht gilt, ist in diesem Repository ein Fehler und keine Geschmacksfrage.
+
+Umfang der Verschiebung: rund 1100 Zeilen Dart ohne Tests (`export/` 755, `providers/history_export.dart` 335, `history_export_menu.dart` 284, dazu die Formatierer aus `history_view.dart`, die alle drei Encoder importieren) plus 964 Zeilen Tests; dagegen rund 1000 Zeilen neuer Rust.
+
+### Ziel
+Der Daemon kann Flows exportieren. Ein RPC `ExportFlows` nimmt Format und Auswahl entgegen, holt Bodies aus dem Recorder, kodiert HAR 1.2, JSON Lines, CSV oder `curl` und liefert die Bytes zurück oder schreibt die Datei selbst. `humanitl flows export` und der Export-Dialog der Oberfläche sind zwei dünne Aufrufer desselben RPC und erzeugen für dieselbe Auswahl byte-identische Dateien. `app/lib/features/history/export/` existiert nicht mehr; die Anwendung wählt Format und Umfang, zeigt Fortschritt und legt ab, was sie bekommt.
+
+### Nicht-Ziel
+- Kein fünftes Format, keine Änderung an den vier bestehenden Abbildungen. Was `CONVENTIONS.md` 4.18 über HAR festhält (`timings.wait` ist 0, `content.text` fehlt ohne Bytes, `content.comment` sagt das), gilt unverändert weiter; es sind Entscheidungen über das Format, nicht über seinen Ort.
+- Keine Host-Redaktion und keine andere Entschärfung des Inhalts. Sie kommt nach dem MVP (`docs/SECURITY.md`, `BACKLOG.md` Zeile 313).
+- Der Audit-Export (HUM-050, HUM-051, HUM-070) wird nicht angefasst. `AuditRequest.Export` bleibt, wie er ist; die beiden Exporte werden nicht zusammengelegt.
+- Der allgemeine Paritäts-Check „Fähigkeit nur im Client" bleibt HUM-078. Dieses Issue liefert nur die eine enge Sicherung gegen den Rückfall und den Satz, den HUM-078 aufgreift.
+- Mehrfachauswahl bleibt draußen: Der Umfang „Auswahl" ist weiterhin eine Zeile (`CONVENTIONS.md` 4.18), bis HUM-029 im History-Screen eine Menge liefert.
+
+### Betroffene Pfade
+Proto:
+- `proto/humanitl/v1/humanitl.proto` (ändern: `rpc ExportFlows` ans Ende des Service, `ExportFormat`, `ExportFlowsRequest`, `ExportFlowsChunk`)
+- `proto/descriptor.binpb`, `proto/generated.sha256` (ändern, `make proto`)
+
+Daemon:
+- `daemon/crates/recorder/src/export/{mod,har,jsonl,csv,curl}.rs` (neu): die vier Encoder, portiert aus den vier Dart-Dateien
+- `daemon/crates/recorder/src/export/entry.rs` (neu): der Satz Daten, den ein Encoder braucht (Gegenstück zu `export_entry.dart`), gefüllt aus `query.rs` und `blob.rs`
+- `daemon/crates/recorder/tests/export.rs` (neu), `daemon/crates/recorder/tests/fixtures/export/` (neu)
+- `daemon/crates/ipc/src/server.rs`, `src/server_stub.rs` (Trait-Methode neben `audit`), `src/convert.rs`, `src/validate.rs`, `src/fake/mod.rs`
+- `daemon/crates/ipc/tests/proto_contract.rs` (Namenstabelle, heute Zeile 416 mit `AuditRequest.Export`)
+- `daemon/bin/humanitl/src/cli.rs` (`FlowsCmd::Export`), `src/cmd/flows.rs`, `src/render.rs`
+- `daemon/crates/config/src/schema.rs`: `limits.export_max_flows`
+
+App:
+- löschen: `app/lib/features/history/export/{har,jsonl,csv,curl,export_entry,history_export}.dart`
+- umbauen: `app/lib/features/history/providers/history_export.dart`, `app/lib/features/history/history_export_menu.dart`, `app/lib/features/history/history_view.dart` (die Formatierer, die nur die Encoder brauchten, wandern nach Rust)
+- `app/lib/core/ipc/daemon_client.dart`, `grpc_daemon_client.dart`, `fake_daemon_client.dart`, `convert.dart`
+- `app/test/features/history/history_export_test.dart`, `history_export_flow_test.dart`
+- `app/test/goldens/goldens/ci/history_export_light.png`, `history_export_dark.png`
+- `app/l10n/app_en.arb`, `app_de.arb`
+
+Sicherung und Dokumente:
+- `scripts/ci/check-client-logic.sh` (neu), `Makefile`, `.github/workflows/ci.yml` (Job `parity-check`)
+- `backlog/sprint-2.md` (Zeile 583 und 1329 bis 1345), `backlog/CONVENTIONS.md` (4.18, neuer Abschnitt 4.23), `backlog/sprint-4.md` (Notiz an HUM-078)
+- `docs/PROTOCOL.md` (Zeile 11, RPC-Liste), `BACKLOG.md` (Zeile 460)
+
+### Spezifikation
+
+**Proto.** Additiv, neuer RPC ans Ende des Service, Kommentare ohne Umlaute wie im Rest der Datei (`docs/PROTOCOL.md` 4).
+
+```proto
+  // Exportiert aufgezeichnete Flows in ein Austauschformat (HUM-092). Die
+  // Bytes entstehen im Daemon; der Client waehlt Format und Umfang.
+  rpc ExportFlows(ExportFlowsRequest) returns (stream ExportFlowsChunk);
+```
+
+```proto
+enum ExportFormat {
+  EXPORT_FORMAT_UNSPECIFIED = 0;
+  EXPORT_FORMAT_HAR = 1;
+  EXPORT_FORMAT_JSONL = 2;
+  EXPORT_FORMAT_CSV = 3;
+  EXPORT_FORMAT_CURL = 4;
+}
+
+message ExportFlowsRequest {
+  ExportFormat format = 1;
+
+  // Genau eine Auswahl. `query` benutzt dieselbe Filtergrammatik wie
+  // `ListFlows`; `limit` und `cursor` darin werden ignoriert, die Obergrenze
+  // ist `max_flows`.
+  oneof selection {
+    FlowIds flows = 2;
+    ListFlowsRequest query = 3;
+  }
+
+  // 0 bedeutet die Vorgabe des Dienstes (`limits.export_max_flows`).
+  uint32 max_flows = 4;
+
+  // Leer: der Dienst streamt die Bytes. Sonst schreibt er die Datei selbst
+  // und nennt die Pfade in `Done`.
+  string out_path = 5;
+
+  // Was in den `creator`-Block der HAR kommt, zum Beispiel "humanitl-app 0.1.0".
+  string creator = 6;
+
+  message FlowIds {
+    repeated string flow_ids = 1;
+  }
+}
+
+message ExportFlowsChunk {
+  oneof part {
+    Progress progress = 1;
+    FileStart file = 2;
+    bytes data = 3;
+    Done done = 4;
+    Diagnostic diagnostic = 5;
+  }
+
+  // Wie viele Flows gesammelt sind. `total` ist die gekappte Trefferzahl.
+  message Progress {
+    uint32 done = 1;
+    uint32 total = 2;
+  }
+
+  // Beginnt eine Datei. Der `curl`-Export sendet zwei davon.
+  message FileStart {
+    string name = 1;
+    string mime_type = 2;
+  }
+
+  message Done {
+    uint32 flow_count = 1;
+    uint64 byte_count = 2;
+    repeated string out_paths = 3;
+    // Der Filter traf mehr als `max_flows`.
+    bool capped = 4;
+  }
+}
+```
+
+Ablauf des Stroms: beliebig viele `progress`, dann je Datei ein `file` gefolgt von `data`-Stücken (höchstens 256 KiB je Stück), am Ende genau ein `done`. Mit gesetztem `out_path` entfallen die `data`-Stücke; `file` und `done` kommen trotzdem, damit der Client die Namen nennen kann, bevor etwas geschrieben ist. Ein Fehler beendet den Strom mit einem `diagnostic` als letztem Teil, nie mit einem halben `done`.
+
+**Reihenfolge und Determinismus.** `query` wird serverseitig ausgewertet, in der Reihenfolge, die `ListFlows` mit demselben `filter`, `order_by` und `include_passthrough` liefert; `flows` exportiert in der Reihenfolge der Liste. Zweimal derselbe Aufruf ergibt dieselben Bytes.
+
+**Kappe.** `limits.export_max_flows`, Default 5000, Tier `advanced` (`CONVENTIONS.md` 4.4 ist die Heimat aller Caps). Die Dart-Konstante `historyExportMaxFlows` entfällt ersatzlos; sie war nie ein Config-Schlüssel, also braucht sie keinen Alias. Trifft der Filter mehr, exportiert der Dienst die ersten `max_flows` der Sortierung und setzt `Done.capped`.
+
+**Formate.** Byte-gleich zum heutigen Dart-Stand, sonst ist der Umbau nicht prüfbar:
+- HAR 1.2 mit `_humanitl` je Eintrag, `timings.wait` = 0, `content.text` fehlt ohne aufgezeichnete Bytes, `content.comment` sagt warum, Binärinhalt base64 mit `encoding: "base64"`.
+- JSON Lines, ein Objekt je Zeile, Bodies in `body_b64` mit `truncated` daneben, abschließender Zeilenumbruch. Der Round-Trip-Partner `decodeJsonl` wandert als `parse` in dieselbe Rust-Datei, damit der Round-Trip-Test bleibt.
+- CSV nach RFC 4180: die 21 Spalten aus `csvColumns` in derselben Reihenfolge, CRLF, Feld mit Komma, Anführungszeichen oder Umbruch wird gequotet, inneres Anführungszeichen verdoppelt, unfertiger Wert leer statt null. Keine Bodies.
+- `curl`: genau ein Flow, Kopfzeilenreihenfolge wie aufgezeichnet, `--data-binary @request.body`, zweite Datei `request.body` daneben. Eine vorhandene Datei wird nummeriert (`request.body.1`), nie überschrieben.
+
+**Fehler.** Jeder Pfad liefert ein `Diagnostic` mit `why` und, wo möglich, `fix`; freie Codes im Bereich `recorder` (`CONVENTIONS.md` 4.6):
+- `RECORDER_005` Format unbekannt oder Auswahl leer.
+- `RECORDER_006` `out_path` nicht schreibbar (Verzeichnis fehlt, kein Recht, Symlink); `fix` nennt den geprüften Pfad.
+- `RECORDER_007` `curl` mit einer Auswahl ungleich einem Flow; `why` nennt die Anzahl.
+`--out -` zusammen mit `--format curl` ist ein `CLI_004` („curl schreibt zwei Dateien"), weil zwei Dateien nicht in einen Stdout passen.
+
+**CLI.** Ein Subkommando von `flows`, mit dem Pflicht-Attribut `#[humanitl(rpc = "ExportFlows")]` (ADR-0018):
+
+```
+humanitl flows export [FILTER...] --format har|jsonl|csv|curl --out PATH
+                      [--flow ID]... [--limit N] [--sort KEY] [--asc]
+```
+
+`--out -` schreibt nach Stdout (nicht für `curl`), sonst wird `out_path` gesetzt und der Daemon schreibt. `--flow` und `FILTER` schließen sich aus. Die Ausgabe nennt danach Anzahl, Bytes und Pfade in einer Zeile, mit `--json` als Objekt.
+
+**Anwendung.** `history_export_menu.dart` behält Formatwahl, Umfangswahl, den Satz über den Inhalt der Datei (`historyExportContents`) und die Bestätigung. `providers/history_export.dart` schrumpft auf: Aufruf, Fortschritt aus `Progress`, Ablage. `isolateHistoryExportEncoder`, `historyExportEncoderProvider` und `dart:isolate` entfallen — es wird in der Anwendung nichts mehr kodiert. Die Naht für Tests ist ab jetzt der `DaemonClient`, nicht eine Encoder-Funktion.
+
+**Wohin die Datei geht.** Zwei Wege, die Entscheidung fällt in Schritt 1 und steht danach in `CONVENTIONS.md` 4.23:
+- **A, Strom (Vorgabe):** `out_path` bleibt leer, der Dienst streamt, die Oberfläche reicht die Bytes an `file_picker` 12 weiter, das sie selbst schreibt und die `Uri` zurückgibt (`CONVENTIONS.md` 4.18, Zeilen 857 bis 864). Bytes ablegen, die ein anderer errechnet hat, ist keine Fachlogik.
+- **B, `out_path`:** nur wenn gemessen ist, dass der Speichern-Dialog unter Linux einen Pfad liefert, den der Daemon-Prozess selbst öffnen darf. Dann wie beim Audit-Screen (`sprint-4.md:789`).
+Die CLI benutzt in beiden Fällen `out_path`.
+
+**ARB.** Die Schlüssel ab `historyExport` (`app_en.arb:1090-1133`, mit den späteren ab 1174) bleiben, soweit ihr Text stimmt: `historyExportCollecting` bekommt seine beiden Zahlen ab jetzt aus `Progress`. Texte, die behaupten, die Anwendung schreibe („Writing {count} requests"), werden auf das umgestellt, was tatsächlich passiert; jede Änderung in beiden Dateien. Kein Schlüssel verschwindet, ohne dass seine Verwendung verschwindet.
+
+### Schritte
+1. Weg A oder B entscheiden: `FilePicker.platform.saveFile` auf dem Zielsystem einmal aufrufen und protokollieren, was zurückkommt (Pfad oder Portal-`Uri`) und ob ein zweiter Prozess dorthin schreiben darf. Ergebnis mit der Messung in `CONVENTIONS.md` 4.23. Zwischenstand: ein Absatz mit Zahl und Datum im Repository.
+2. Proto ergänzen, `make proto`, Namenstabelle in `proto_contract.rs` erweitern. Zwischenstand: `cargo test -p humanitl-ipc` grün, `checked_in_descriptor_matches_the_proto_sources` grün.
+3. Fixtures aus `app/test/features/history/history_export_test.dart` einmalig als Dateien erzeugen (Eingabe als JSON, erwartete Ausgabe als `.har`, `.jsonl`, `.csv`, `.sh`) und nach `daemon/crates/recorder/tests/fixtures/export/` legen. Zwischenstand: die Dateien liegen da und stammen nachweislich aus dem alten Code.
+4. Die vier Encoder in `humanitl-recorder` bauen. Zwischenstand: `cargo test -p humanitl-recorder export::` grün, jede Fixture byte-identisch.
+5. RPC bedienen: `DaemonApi`-Methode, `server.rs`, `validate.rs`, `convert.rs`, Fake mit drei synthetischen Flows. Zwischenstand: `grpcurl` gegen den Fake liefert einen HAR-Strom.
+6. CLI `flows export` mit `render.rs`. Zwischenstand: `humanitl flows export --format har --out /tmp/e.har` schreibt eine Datei, die `jq` liest.
+7. Anwendung umbauen, `export/` löschen, Client-Methode in allen drei Clients. Zwischenstand: `flutter test` grün, Goldens neu.
+8. Sicherung `scripts/ci/check-client-logic.sh`, Einbindung in `make check` und `parity-check`. Zwischenstand: das Skript wird mit einer absichtlich wieder eingefügten Encoder-Datei rot und ohne sie grün.
+9. Dokumente korrigieren: `sprint-2.md`, `CONVENTIONS.md` 4.18 und 4.23, `sprint-4.md` (Notiz an HUM-078), `docs/PROTOCOL.md`, `BACKLOG.md`. Zwischenstand: `make check` und `tools/verify-commit.sh` grün.
+
+### Akzeptanzkriterien
+- [ ] `grep -rn "encodeHar\|encodeJsonl\|encodeCsv\|encodeCurl" app/lib` findet nichts, und `app/lib/features/history/export/` existiert nicht mehr (`test ! -d`).
+- [ ] `proto/humanitl/v1/humanitl.proto` enthält `rpc ExportFlows`; `cargo test -p humanitl-ipc` ist grün, `proto/descriptor.binpb` und `proto/generated.sha256` liegen im selben Commit.
+- [ ] Byte-Gleichheit der Formate: `cargo test -p humanitl-recorder export::` prüft alle Fixtures aus Schritt 3; für jede ist die Ausgabe des Rust-Encoders byte-identisch mit der Datei, die die Dart-Implementierung erzeugt hat (Vergleich über `assert_eq!` auf `&[u8]`, nicht auf Text).
+- [ ] `humanitl flows export host:example.com --format har --out /tmp/e.har` endet mit 0, und `jq -e '.log.version == "1.2" and (.log.entries | length) == 3' /tmp/e.har` ist wahr (gegen den Fake-Daemon).
+- [ ] Oberfläche und Kommandozeile liefern dasselbe: `tests/e2e/m2_first_decision/run.sh` exportiert die gefilterte Menge einmal über die Oberfläche und einmal über `humanitl flows export`; `cmp ui.har cli.har` endet mit 0.
+- [ ] `curl`-Export schreibt zwei Dateien, ein zweiter Lauf in dasselbe Verzeichnis schreibt `request.body.1`, und `request.body` ist danach byte-identisch zum ersten Lauf (`export::curl::existing_body_file_is_numbered`).
+- [ ] Kappe: bei 5001 passenden Flows im Recorder liefert der Strom `Done.flow_count == 5000` und `Done.capped == true`, und die Oberfläche zeigt `historyExportCap` (Widget-Test mit gesetztem Fake-Wert).
+- [ ] Fehlerpfade: `--format curl` mit zwei `--flow` endet mit Exit ungleich 0 und `RECORDER_007` in der Ausgabe; `--out /nonexistent/dir/e.har` endet mit `RECORDER_006`, dessen `why` und `fix` gefüllt sind; kein Pfad liefert einen nackten String (Register-Test aus `CONVENTIONS.md` 4.6).
+- [ ] `humanitl flows export --help` existiert, und `grep -n 'humanitl(rpc = "ExportFlows")' daemon/bin/humanitl/src/cli.rs` findet das Attribut.
+- [ ] `scripts/ci/check-client-logic.sh` läuft in `make check` und im Job `parity-check`; mit einer testweise unter `app/lib/features/` angelegten Datei, die `encodeHar` definiert, endet es mit 1 und nennt Datei und Zeile, ohne sie mit 0.
+- [ ] `backlog/sprint-2.md` enthält weder in Zeile 583 noch im Abschnitt HUM-032 die Anweisung, den Export in der Oberfläche zu bauen; beide Stellen verweisen auf HUM-092. `grep -n "in der UI" backlog/sprint-2.md` findet keine Export-Zeile mehr.
+- [ ] `backlog/CONVENTIONS.md` 4.18 sagt bei „Der Export schreibt die Datei selbst" und „CSV ist ein vierter Export", dass die Kodierung ab HUM-092 im Daemon liegt; 4.23 nennt die Messung aus Schritt 1 mit Datum.
+- [ ] `docs/PROTOCOL.md` Zeile 11 führt den Export in der Liste des Service, und die HUM-032-Zeile in `BACKLOG.md` (Zeile 460) nennt `ExportFlows` als Quelle des Exports.
+- [ ] `flutter gen-l10n` läuft ohne Warnung, `app_en.arb` und `app_de.arb` haben denselben Schlüsselsatz (bestehender Test), und `flutter test` ist grün, Goldens `history_export_light.png` und `history_export_dark.png` neu erzeugt.
+- [ ] `make check` und `tools/verify-commit.sh` sind auf dem Commit grün, nicht nur im Arbeitsbaum.
+
+### Fallstricke
+- Die Kommentare in `humanitl.proto` schreiben Umlaute als `ae`, `oe`, `ue`. Wer das bricht, sieht es erst im Descriptor-Diff.
+- Der Export trägt Bodies. `ExportFlowsChunk` darf von `FlowEvent` aus nicht erreichbar sein, sonst schlägt `edited_request_and_body_preview_stay_out_of_the_event_stream` an; das neue `bytes`-Feld gehört mit Begründung in die Erlaubnisliste von `proto_contract.rs` (`docs/PROTOCOL.md` 4.5).
+- `out_path` ist ein Pfad, den der Daemon unter seinem eigenen Benutzer öffnet. Prüfen vor dem Schreiben: kein Symlink (`O_NOFOLLOW`, wie in HUM-043), kein Pfad in einen Sandbox-Mount, keine stille Auflösung von `~`. Ein Export ist kein Grund, dem Client einen Schreibzugriff zu leihen.
+- Der Inhalt bleibt gefährlich: Hosts, vollständige Pfade mit Query, alle Kopfzeilen und beide Rümpfe im Klartext. Der Satz davor (`historyExportContents`, `CONVENTIONS.md` 4.18, `docs/SECURITY.md`) wandert mit und verschwindet nicht dadurch, dass jetzt der Daemon schreibt.
+- `timings.wait` bleibt 0. Die `FlowSummary` trägt keine Haltezeit, und der Encoder neben dem Recorder zu haben ist kein Anlass, eine Aufteilung zu raten (`CONVENTIONS.md` 4.13, 4.18). Wer `held_ms` will, nimmt das Feld in die Proto auf, in einem eigenen Issue.
+- Die 964 Zeilen Dart-Tests werden nicht gelöscht, sondern geteilt: was das Format prüft, wird zum Rust-Test, was den Dialog prüft (`history_export_flow_test.dart`), bleibt und bekommt den Fake-Client als Naht statt der Encoder-Funktion.
+- Keine neue Crate ohne Not: die Encoder liegen in `humanitl-recorder`, das die Bodies ohnehin hält und von `humanitl-ipc` schon abhängt. Ein Subagent ändert `daemon/Cargo.toml` nicht.
+- `history_view.dart` liefert Formatierer sowohl an die Tabelle als auch an die Encoder. Nur die zweite Gruppe wandert; wer die Datei leert, nimmt der Tabelle ihre Spaltenformate.
+- Der Fake-Daemon muss den RPC mitliefern, sonst ist die Anwendung im Fake-Modus ohne Export und die Widget-Tests haben keinen Gegenstand.
+- `make proto` nicht vergessen: ein fehlender Descriptor fällt sofort auf, ein fehlender Dart-Hash erst in CI („Fail on generated drift", `docs/PROTOCOL.md` 4.8).
+
+### Quellen
+`docs/ARCHITECTURE.md` 3b (Zeile 66); `docs/adr/0018-rpc-parity.md` Zeilen 25 bis 28, 39 bis 42, 110; `README.md` Zeile 83 und Zeilen 123 bis 124; `backlog/CONVENTIONS.md` 4.4, 4.6, 4.13, 4.18 (Zeilen 802 bis 880); `backlog/sprint-2.md` HUM-026 Nicht-Ziel (Zeile 583) und HUM-032 (Zeilen 1329 bis 1345); `backlog/sprint-4.md` HUM-051 (Zeile 789, Audit-Export als Vorbild) und HUM-078; `docs/PROTOCOL.md` Abschnitte 3 und 4; `proto/humanitl/v1/humanitl.proto` Zeilen 23 bis 44 und 863; `daemon/bin/humanitl/src/cli.rs` Zeilen 102 bis 142 und 187 bis 263; `.github/workflows/ci.yml` Zeilen 572 bis 582; HAR 1.2 (http://www.softwareishard.com/blog/har-12-spec/); RFC 4180 (https://www.rfc-editor.org/rfc/rfc4180).
