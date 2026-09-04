@@ -1473,7 +1473,7 @@ Die Goldens und Widget-Tests sind der Inhalt. Meta-Test: `golden_variants_comple
 - [ ] `flutter test --tags golden` grün lokal und in CI (Ahem).
 - [ ] 36 Golden-Namen × 4 Varianten = 144 PNG-Dateien unter `app/test/goldens/**`.
 - [ ] Änderung eines Tokens (z. B. `held`-Farbe) lässt mindestens `tokens_palette` und `queue_row_held` fehlschlagen.
-- [ ] shadcn_flutter-Bump auf die nächste Version: Golden-Job zeigt die Abweichungen als Diff-Bilder in den CI-Artefakten.
+- [ ] Flutter-Anhebung in `app/.fvmrc`: Golden-Job zeigt die Abweichungen als Diff-Bilder in den CI-Artefakten.
 
 ### Fallstricke
 - Ahem rendert alle Glyphen als Blöcke; deutsche Textlängen werden nur über Boxbreiten sichtbar. Für Überlauf-Prüfung zusätzlich einen Widget-Test `no_overflow_in_de` mit echtem Font lokal (`platform goldens`) oder mit `debugCheckHasOverflow`-Assertion: `tester.takeException()` muss null sein.

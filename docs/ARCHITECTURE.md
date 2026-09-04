@@ -84,7 +84,7 @@ Wachstum ist erlaubt, Wucherung nicht. Die Unterscheidung:
 - `core/ipc` ist ein Interface `DaemonClient` mit zwei Implementierungen: gRPC und Fake. Jeder Screen ist gegen das Interface gebaut, jeder Widget-Test läuft gegen Fake.
 - Features sind Verzeichnisse mit Screen, Providern, Widgets. Ein Feature importiert kein anderes Feature, nur `core`. Übergreifende Widgets liegen in `packages/ui`.
 - Zustand fließt in eine Richtung: Event-Stream → Provider → Widget. Widgets rufen `DaemonClient` nur über Provider-Methoden auf (Mutationen), nie direkt.
-- shadcn_flutter ist hinter `packages/ui` gekapselt. Kein Feature importiert `shadcn_flutter` direkt.
+- Das Widget-Vokabular steht in `packages/ui` und baut auf `package:flutter/widgets.dart`; eine Komponentenbibliothek gibt es nicht (ADR-0009, Abschnitt „Entscheidung nach Sprint 2"). Ein Feature importiert `lib/core/ui/ui.dart`, nie ein fremdes Widget-Paket.
 
 ## 6. Tests als Architektur-Wächter
 

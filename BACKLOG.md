@@ -14,7 +14,7 @@
 
 | Thema | Entscheidung |
 |---|---|
-| UI | Flutter 3.47+, shadcn_flutter (gepinnt), riverpod 3, feature-first |
+| UI | Flutter 3.44 (Pin `app/.fvmrc`), eigenes Widget-Vokabular in `packages/ui` ohne Komponentenbibliothek, riverpod 3, feature-first |
 | Daemon | Rust, ein statisches Binary `humanitld`, systemd user service |
 | Proxy-Engine | hudsucker (hyper 1 + rustls + rcgen), MITM mit eigener CA pro Installation |
 | Sandbox MVP | bubblewrap `--unshare-all` + Unix-Socket-Bridge + seccomp (Muster von Claude Code `sandbox-runtime` und OpenAI Codex CLI) |
@@ -122,8 +122,8 @@ Jede Entscheidung hat eine eigene, ausformulierte Datei unter [`docs/adr/`](docs
 
 ### ADR-009 UI-Stack
 
-- shadcn_flutter für Chrome (Resizable, Command Palette, Sheet, Toast, ContextMenu, Menubar), exakte Version gepinnt, hinter `packages/ui` gekapselt, ein Upgrade-Tag pro Sprint. Entscheidung shadcn vs forui wird Ende Sprint 2 nach dem ersten echten Intercept-Screen bestätigt oder revidiert.
-- Datenlastige Widgets nicht aus shadcn: `two_dimensional_scrollables` (TableView, TreeView), `re_editor` (Editor), `xterm2` (Terminal), `diff_match_patch`.
+- Das Chrome (Resizable, Command Palette, Sheet, Segmented) steht in `packages/ui` auf reinem Flutter. HUM-035 hat am 2026-09-04 gegen `shadcn_flutter` und gegen forui entschieden: 88,3 % der gewichteten Punkte für die eigene Schicht, 48,3 % für `shadcn_flutter` 0.0.54 und 51,7 % für forui 0.26.0, Wechselaufwand 8,5 bis 11,5 Tage gegen 3,5 Tage Eigenbau. Toast und Menubar entfallen durch die Gestaltung; ContextMenu, Datum-Zeit-Wähler und die senkrechte Achse des Resizable werden gebaut. Die Kapselung bleibt, damit die Entscheidung umkehrbar ist.
+- Datenlastige Widgets aus Spezialpaketen, nicht selbst gebaut: `re_editor` (Editor), `xterm2` (Terminal), `diff_match_patch`. `two_dimensional_scrollables` steht noch aus und wird erst mit dem JSON-Baum entschieden (HUM-030); die History-Tabelle braucht es nicht: `ListView.builder` mit bekannter `itemExtent` gibt dieselbe Zusage und einen `Semantics`-Knoten je Zeile statt elf.
 - riverpod 3 + Generator, freezed für Modelle, sealed classes für `FlowEvent`.
 - Kein WebView auf Linux. Vorschau als Bild vom Daemon oder Katalog-Karte.
 - Ein Fenster, gedockte Panes. Multi-Window ist in Flutter noch experimentell.
@@ -238,7 +238,7 @@ humanitl/
   app/                                Flutter, feature-first
     lib/core/{ipc,domain,ui}          generated/ ist gitignored, CI erzeugt
     lib/features/{setup,intercept,editor,history,rules,sandbox,audit,settings}
-    packages/ui/                      Wrapper um shadcn_flutter-Primitive
+    packages/ui/                      Widget-Vokabular auf reinem Flutter
     l10n/{app_en.arb,app_de.arb}
   profiles/sandbox/*.toml             bwrap-Argv-Templates, Env-Kit, Mount-Allowlist
   agents/opencode/                    Profil, gebündelte models.json, opencode.json-Template
@@ -418,7 +418,7 @@ Definition of Done für jedes Issue: Tests auf der passenden Ebene, neue Fehlerp
 | HUM-005 | Fake-Daemon für UI-Entwicklung | M | `humanitld --fake <session.jsonl> [--speed N]` implementiert dieselbe gRPC-Schnittstelle in Rust, spielt eine JSONL-Session mit Timestamps ab, hält Flows echt (Deadline, Timeout); dazu `FakeDaemonClient` in Dart für Widget-Tests (`--dart-define=HUMANITL_FAKE=<scenario>`) |
 | HUM-006 | Escape-Test-Harness | M | Skript startet ein bwrap-Profil und führt Test 1–3 aus 4.5 aus, Ergebnis als JUnit-XML, läuft in CI (erwartet noch rot bis M1) |
 | HUM-007 | SECURITY.md und THREAT-MODEL.md Entwurf | S | Drei Garantien, deklarierte Seitenkanäle, Threat Model aus Abschnitt 4 in ausformulierter Fassung |
-| HUM-008 | Design-Tokens und `packages/ui` | M | Farb-, Typo-, Spacing-Tokens aus Abschnitt 5 als Dart-Konstanten, Dark+Light-Theme für shadcn_flutter, Wrapper für Button, Badge, Pill, Panel, Row; Storybook-artige Galerie-Seite; Inter und JetBrains Mono gebündelt |
+| HUM-008 | Design-Tokens und `packages/ui` | M | Farb-, Typo-, Spacing-Tokens aus Abschnitt 5 als Dart-Konstanten, Dark+Light-Theme, Wrapper für Button, Badge, Pill, Panel, Row; Storybook-artige Galerie-Seite; Inter und JetBrains Mono als Familien mit Fallback-Stack |
 | HUM-009 | ADR-Verzeichnis | S | `docs/adr/0001` bis `0010` aus Abschnitt 2, Template für neue |
 | HUM-010 | Sandbox-Profil-Format | S | `profiles/sandbox/*.toml`: bwrap-Argv-Template, Mount-Allowlist, Env-Kit, maskierte Pfade; Parser mit Tests |
 | HUM-062 | config Crate mit Schema | M | Settings-Typen mit `serde` + `schemars`, Stufen-Attribut `basic`/`advanced`/`expert`, Beschreibung und Default pro Feld, JSON-Schema-Export, Laden aus TOML mit Overrides (global, Projekt `.humanitl/`, CLI-Flag, Env), Tests für Präzedenz |
@@ -461,7 +461,7 @@ Definition of Done für jedes Issue: Tests auf der passenden Ebene, neue Fehlerp
 | HUM-033 | Rules-Screen | M | Geordnete Liste mit Drag-Reorder, Formular-Editor, „erstellt vor 2 min aus Request #41", Dry-Run-Panel, Bundled-Badge für Default-Regeln, Löschen mit Undo, Tabs „Gespeichert" und „Temporär" (Session-Regeln mit „dauerhaft machen" und Restlaufzeit) |
 | HUM-065 | CLI rules/flows | S | `humanitl rules list|add|remove|test <url>`, `humanitl flows list|show <id>`, Ausgabe als Tabelle oder `--json`, gleiche Filter-Syntax wie History-Screen |
 | HUM-034 | Notification und Tray | M | `flutter_local_notifications` mit Allow/Block-Aktionen bei Queue 0 → 1, `tray_manager`-Badge mit Zähler, Rückkehr-Banner „Agent wartet seit …", Fenster nach vorn bei Klick; GNOME-AppIndicator-Hinweis in Docs |
-| HUM-035 | shadcn vs forui Entscheidung | S | Nach HUM-020/028: ADR-009 bestätigen oder auf forui wechseln, Wrapper-Layer macht das lokal |
+| HUM-035 | shadcn vs forui Entscheidung | S | Erledigt 2026-09-04 ohne den vorgesehenen Spike-Branch (Abweichung in CONVENTIONS 4.20): weder noch, `packages/ui` bleibt auf reinem Flutter (ADR-009, Abschnitt „Entscheidung nach Sprint 2") |
 | HUM-036 | Demo-Skript M2 | S | CI e2e unter xvfb: Fake-Agent feuert 15 Requests, UI gruppiert, Batch-Allow mit Session-Regel, ein Block, ein Timeout, History zeigt alles, Export validiert |
 
 ### Sprint 3 — Agent Inside (M3)
@@ -515,7 +515,7 @@ Definition of Done für jedes Issue: Tests auf der passenden Ebene, neue Fehlerp
 | HUM-059 | Dokumentation | M | README (Installation, drei Garantien, Screenshot), SECURITY.md final, THREAT-MODEL.md final, DESIGN.md, Regel-Referenz, Agent-Profile schreiben |
 | HUM-086 | Repository auf Englisch | M | Alle Dokumente, Kommentare, ADRs, Backlog-Dateien, Diagnostics-Texte und Commit-Vorlagen ins Englische übersetzen; Deutsch bleibt nur in `app_de.arb`; `CLAUDE.md`, `CONTRIBUTING.md`, `AGENTS.md` auf English-only umstellen; Lint `scripts/ci/lint-docs.sh` prüft, dass keine deutschen Stoppwörter in Doku und Kommentaren stehen; erst nach HUM-059, vor HUM-060 |
 | HUM-060 | Release 0.1 | S | Tag `v0.1.0` bzw. Snapshot-Tag `v0.1.0-snapshot.N` per `git push origin <tag>`, tag-getriggerte Release-Action baut das versionierte `.deb` (Version aus dem Tag) und AppImage, prüft Signatur und Checksummen, hängt beides als GitHub Pre-Release an; Abnahme: frisches Debian, `.deb` aus dem Release installieren, App startet, Demo-Skripte M1–M4 grün |
-| HUM-061 | Puffer | L | Reserve für shadcn-Breakage, MITM-Randfälle, Wayland-Themen |
+| HUM-061 | Puffer | L | Reserve für MITM-Randfälle, Wayland-Themen, Flutter-Anhebungen |
 
 ---
 
@@ -544,7 +544,7 @@ Definition of Done für jedes Issue: Tests auf der passenden Ebene, neue Fehlerp
 | Sandbox-Escape über einen nicht bedachten Pfad (vererbte FDs, `/proc/net`, io_uring) | Escape-Tests vor dem Proxy schreiben (Sprint 0/1), FD-Enumeration beim Agent-Start, externes Review der bwrap-Zeile vor 0.1 |
 | MITM-Randfälle blockieren die Demo (h2 ALPN, chunked, SSE durch Bun-fetch) | Konformitäts-Matrix Sprint 1, h1-Upstream erzwingen, h2 hinter Flag |
 | OpenCode telefoniert beim Start nach Hause und flutet die Queue | Default-Regeln + Metrik „≤ 1 gehaltener Request vor erstem Prompt" (Sprint 3) |
-| shadcn_flutter bricht jede Release | Exakt pinnen, Wrapper-Layer, Upgrade-Tag pro Sprint, forui-Entscheidung Ende Sprint 2 |
+| Eine Komponentenbibliothek vor 1.0 bricht jede Release | Entschärft: HUM-035 nimmt am 2026-09-04 keine auf. `packages/ui` steht auf reinem Flutter, der Wrapper bleibt als Naht für eine spätere Bibliothek |
 | Solo-Scope-Creep (Katalog, Docker, Plugins) | Abschnitt 9 ist die Grenze, Demo-Skript grün ist Merge-Bedingung |
 | Nutzer klickt unter Last „Allow all" | Gruppierung, Katalog-Identität, Batch nur pro Host, Confirm bei Block-all |
 | LLM-Host ist geteilt und ungeschützt (Ollama ohne Auth) | Setup-Satz „Nur eine Maschine, die du kontrollierst", Findings-Warnung im Passthrough, Threat Model dokumentiert |

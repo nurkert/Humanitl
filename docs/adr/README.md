@@ -9,7 +9,13 @@ Backlog verständlich ist.
 Format ist [MADR](https://adr.github.io/madr/) in einer schlanken Fassung. Jede
 Datei hat dieselben sieben Überschriften: Titel, dann `Kontext`, `Entscheidung`,
 `Begründung`, `Verworfene Alternativen`, `Konsequenzen`, `Betroffene Issues`.
-Darunter stehen `Status:` und `Datum:`. Vorlage für neue Entscheidungen:
+Darunter stehen `Status:` und `Datum:`. Eine Entscheidung, die von einem
+eigenen Issue überprüft wird, darf einen achten Abschnitt tragen: den Nachtrag
+mit dem Ergebnis dieser Überprüfung, benannt nach ihm (`Entscheidung nach
+Sprint N`). Er steht vor `Betroffene Issues`, und die Abschnitte, die er
+ersetzt, bekommen ein Banner, das auf ihn zeigt, statt überschrieben zu werden.
+`check.sh` prüft die sieben Pflichtüberschriften und stört sich nicht an dem
+achten. Vorlage für neue Entscheidungen:
 [`0000-template.md`](0000-template.md).
 
 Regeln:
@@ -44,7 +50,7 @@ Regeln:
 | [0006](0006-dns-after-allow.md) | DNS-Auflösung erst nach der Freigabe | Accepted | Ein Hostname leakt 63 Bytes pro Label; aufgelöst wird einmal nach `allow`, die IP wird gepinnt. |
 | [0007](0007-rule-model.md) | Regel-Modell: geordnete Liste, first match wins, Default `ask` | Accepted | Label-Globs statt Substrings, Punycode-Normalisierung, Session-Regeln zuerst, Domain Fronting blockt ohne Nachfrage. |
 | [0008](0008-storage.md) | Speicherung: SQLite, Blob-Store, Audit-Kette, Pseudonym-Mapping | Accepted | Metadaten in SQLite, große Bodies content-addressed, Audit als JSONL-Hash-Kette mit ehrlicher Aussage über ihre Grenzen. |
-| [0009](0009-ui-stack.md) | UI-Stack: Flutter mit shadcn_flutter, gekapselt hinter `packages/ui` | Accepted | Chrome aus shadcn, datenlastige Widgets aus Spezialpaketen, kein WebView; Bestätigung Ende Sprint 2. |
+| [0009](0009-ui-stack.md) | UI-Stack: Flutter mit eigener Wrapper-Schicht `packages/ui` | Accepted | Datenlastige Widgets aus Spezialpaketen, kein WebView; HUM-035 entscheidet 2026-09-04 gegen `shadcn_flutter` und gegen forui. |
 | [0010](0010-packaging.md) | Auslieferung als `.deb` und AppImage, Flatpak später und nur für die UI | Accepted | Ein Artefakt enthält alles; systemd user unit per Klick; Flatpak scheitert am `bwrap`-Start des Daemons. |
 | [0011](0011-single-config-source.md) | Eine Konfigurationsquelle, drei Sichtbarkeitsstufen | Accepted | Rust-Typ als einzige Quelle für Schema, CLI-Flags, Einstellungsbildschirm und Doku; `basic`/`advanced`/`expert`. |
 | [0012](0012-diagnostics-as-type.md) | Geführte Zustände als Typ: `Diagnostic` statt Fehlerstring | Accepted | Jeder Fehlerpfad liefert `code`, `why` und eine ausführbare `FixAction`; Codes stehen in einem Register. |
@@ -72,7 +78,16 @@ Wo eine Entscheidung eine andere verfeinert oder korrigiert:
 | ADR-0011 | ADR-0007 | Regelt die zwei Ablageorte für Regeln (gespeichert und Session). |
 | ADR-0012 | ADR-0010 | `FixAction::InstallService` ist der Mechanismus hinter der Ein-Klick-Installation. |
 
-Eine Korrektur innerhalb einer Entscheidung: ADR-0005 hält fest, dass
+Die größte Korrektur innerhalb einer Entscheidung steht in ADR-0009: HUM-035
+hat am 2026-09-04 die Wahl der Komponentenbibliothek revidiert. `shadcn_flutter`
+wird nicht aufgenommen, forui auch nicht; `app/packages/ui` bleibt auf
+`package:flutter/widgets.dart`. Der Nachtrag „Entscheidung nach Sprint 2" trägt
+die Matrix und das Ergebnis, die Abschnitte `Entscheidung`, `Begründung`,
+`Verworfene Alternativen` und `Konsequenzen` tragen das Banner darauf, und der
+Rest der Entscheidung — Flutter, die Kapselung, kein WebView, ein Fenster mit
+gedockten Panes — steht unverändert.
+
+Weitere Korrekturen innerhalb einer Entscheidung: ADR-0005 hält fest, dass
 `Expect: 100-continue` **sofort** mit `100 Continue` beantwortet wird. Die
 frühere Formulierung „erst nach der Entscheidung" hätte das Puffern des Bodys
 unmöglich gemacht. ADR-0004 hält entsprechend fest, dass die Übergangsmethode das
