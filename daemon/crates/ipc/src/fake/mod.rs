@@ -26,11 +26,10 @@ use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::{BroadcastStream, UnboundedReceiverStream};
 
 use crate::convert;
-use crate::convert::{
-    after, before, diagnostic_to_proto, lagged_event, matches_filter, request_from_proto, timestamp,
-};
+use crate::convert::{after, before, diagnostic_to_proto, lagged_event, matches_filter, timestamp};
 use crate::server_stub::{BoxStream, DaemonApi};
 use crate::v1;
+use crate::validate;
 use crate::{PROTO_MAJOR, PROTO_MINOR};
 
 pub use crate::convert::EditedRequestError;
@@ -95,6 +94,12 @@ pub struct FakeDaemon {
     state: Arc<FakeState>,
     session: Arc<Session>,
     options: FakeOptions,
+    /// Dieselbe Grenze, die der echte Dienst aus `limits.hold_body_cap_bytes`
+    /// bekommt. Der Fake liest keine Konfiguration und nimmt deshalb die
+    /// Vorgabe; ohne sie fehlte ihm die Prüfung ganz, und eine bearbeitete
+    /// Anfrage beliebiger Größe käme durch, die der Daemon mit `IPC_004`
+    /// ablehnt.
+    body_cap_bytes: u64,
 }
 
 impl FakeDaemon {
@@ -108,6 +113,7 @@ impl FakeDaemon {
             state,
             session: Arc::new(session),
             options,
+            body_cap_bytes: humanitl_config::Limits::default().hold_body_cap_bytes,
         }
     }
 
@@ -215,7 +221,11 @@ impl DaemonApi for FakeDaemon {
     }
 
     async fn list_flows(&self, request: v1::ListFlowsRequest) -> Result<v1::FlowPage, Diagnostic> {
-        Ok(self.page(&request))
+        // Ein Schlüssel, den niemand sortieren kann, wird abgelehnt und nicht
+        // durch einen anderen ersetzt (`crate::validate::order_by`); vorher sah
+        // der Fake nur nach, ob irgendwo `desc` stand.
+        let (_, descending) = validate::order_by(&request.order_by)?;
+        Ok(self.page(&request, descending))
     }
 
     async fn get_flow(&self, id: FlowId) -> Result<v1::FlowDetail, Diagnostic> {
@@ -224,20 +234,54 @@ impl DaemonApi for FakeDaemon {
             .ok_or_else(|| not_held(id, "is unknown to the fake daemon"))
     }
 
-    fn get_body(&self, body: v1::BodyRef) -> BoxStream<v1::BodyChunk> {
-        let mut sha256 = [0u8; 32];
-        if body.sha256.len() == 32 {
-            sha256.copy_from_slice(&body.sha256);
-        }
+    fn get_body(&self, body: v1::BodyRef) -> Result<BoxStream<v1::BodyChunk>, Diagnostic> {
+        // Ein gekürzter Hash wurde vorher mit Nullen aufgefüllt und konnte
+        // damit einen fremden Body treffen. Der echte Dienst lehnt ihn mit
+        // `IPC_005` ab, und hier gilt dasselbe.
+        let sha256 = validate::body_hash(&body)?;
         let data = self.state.blob(&sha256).unwrap_or_default();
-        Box::pin(tokio_stream::iter(chunks(&data)))
+        Ok(Box::pin(tokio_stream::iter(chunks(&data))))
     }
 
     async fn decide(&self, request: v1::DecideRequest) -> Result<v1::DecideResponse, Diagnostic> {
-        let created = self.remember(request.remember.as_ref());
+        // Dieselben Prüfungen in derselben Reihenfolge wie im echten Dienst,
+        // und vor jeder Wirkung: eine Anfrage, die nicht ausführbar ist, legt
+        // auch keine Regel an (`crate::validate`, CONVENTIONS 4.12).
+        let decision = match validate::decide_plan(&request, self.body_cap_bytes)? {
+            validate::DecidePlan::Decide(decision) => decision,
+            validate::DecidePlan::RefuseEach(diagnostic) => {
+                return Ok(v1::DecideResponse {
+                    results: request
+                        .flow_ids
+                        .iter()
+                        .map(|text| refused(text, &diagnostic))
+                        .collect(),
+                    created_rule_id: String::new(),
+                    created_rule: None,
+                });
+            }
+        };
+        let created = self.remember(request.remember.as_ref())?;
         let mut results = Vec::with_capacity(request.flow_ids.len());
+        let mut refusals = Vec::new();
         for text in &request.flow_ids {
-            results.push(self.decide_one(text, &request));
+            let (result, refusal) = self.decide_one(text, &decision);
+            results.push(result);
+            refusals.push(refusal);
+        }
+        if results.iter().all(|result| !result.applied) {
+            // Nichts entschieden heißt: die Anfrage hat nichts bewirkt. Die
+            // Regel, die nur zu dieser Entscheidung gehörte, wird deshalb
+            // wieder zurückgenommen, und der Aufruf endet mit dem Befund des
+            // ersten Flows — genau wie im echten Dienst.
+            if let Some(rule) = created.as_ref() {
+                self.forget(&rule.rule_id);
+            }
+            return Err(refusals.into_iter().flatten().next().unwrap_or_else(|| {
+                Diagnostic::builder(codes::IPC_003, Severity::Error)
+                    .why("no flow of this request could be decided".to_owned())
+                    .build()
+            }));
         }
         Ok(v1::DecideResponse {
             results,
@@ -250,7 +294,10 @@ impl DaemonApi for FakeDaemon {
     }
 
     async fn rules(&self, request: v1::RulesRequest) -> Result<v1::RulesResponse, Diagnostic> {
-        Ok(self.apply_rules_op(request))
+        // Ohne Operation ist es keine Anfrage, auch nicht im Fake: der echte
+        // Dienst antwortet `IPC_005`, nicht mit der Liste.
+        validate::rules_op(&request)?;
+        self.apply_rules_op(request)
     }
 
     fn sandbox(&self, request: v1::SandboxRequest) -> BoxStream<v1::SandboxEvent> {
@@ -342,11 +389,12 @@ impl DaemonApi for FakeDaemon {
         &self,
         request: v1::ProbeLlmRequest,
     ) -> Result<v1::ProbeLlmResponse, Diagnostic> {
-        let endpoint = if request.endpoint.is_empty() {
-            self.state.session().llm_endpoint
-        } else {
-            request.endpoint
-        };
+        // Was der echte Dienst nicht lesen kann, beantwortet auch der Fake
+        // nicht mit einer erfundenen Modellliste: `LLM_007`, wie dort. Ein
+        // leerer Endpunkt ist keine URL und wird nicht durch den der Sitzung
+        // ersetzt — sonst übte die Oberfläche gegen einen Fehlerfall, den sie
+        // nie zu sehen bekommt.
+        let endpoint = validate::llm_endpoint(&request.endpoint)?.to_string();
         // Ob der Endpunkt privat ist, wird am Namen entschieden und nicht
         // geraten: Ein `api.openai.com` als privat auszuweisen wäre eine
         // Behauptung über die Welt, und der Fake misst nichts
@@ -410,12 +458,11 @@ impl FakeDaemon {
     }
 
     /// Eine Seite der Flow-Historie.
-    fn page(&self, request: &v1::ListFlowsRequest) -> v1::FlowPage {
+    fn page(&self, request: &v1::ListFlowsRequest, descending: bool) -> v1::FlowPage {
         let since = FlowId::parse(&request.since_flow_id).ok();
         let cursor = FlowId::parse(&request.cursor).ok();
         // Der Cursor zeigt auf das letzte gelieferte Element; die nächste Seite liegt
         // in Sortierrichtung dahinter, also bei absteigender Reihenfolge davor.
-        let descending = request.order_by.contains("desc");
         let mut flows: Vec<v1::FlowSummary> = self
             .state
             .summaries()
@@ -459,142 +506,124 @@ impl FakeDaemon {
     }
 
     /// Legt die Regel aus `remember` an, falls eine mitkam.
-    fn remember(&self, rule: Option<&v1::Rule>) -> Option<v1::Rule> {
-        let mut rule = rule?.clone();
-        if rule.rule_id.is_empty() {
-            rule.rule_id = RuleId::new().to_string();
+    ///
+    /// Die Regel läuft durch [`convert::rule_from_proto`] und wieder zurück,
+    /// wie im echten Dienst. Das ist keine Formsache: Der Konverter erzwingt
+    /// `bundled = false` und `passthrough_llm = false`. Der Fake legte die
+    /// Nachricht vorher unverändert ab, und ein Client konnte sich damit eine
+    /// mitgelieferte, unlöschbare Regel und eine Durchreichregel zum
+    /// Sprachmodell bauen — beides verbietet `rules.proto`.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`] mit `IPC_005`, wenn die Regel nicht lesbar ist.
+    fn remember(&self, rule: Option<&v1::Rule>) -> Result<Option<v1::Rule>, Diagnostic> {
+        let Some(wire) = rule else {
+            return Ok(None);
+        };
+        let mut wire = wire.clone();
+        if wire.rule_id.is_empty() {
+            wire.rule_id = RuleId::new().to_string();
         }
-        self.state.with_rules(|rules| rules.push(rule.clone()));
+        let stored = convert::rule_to_proto(&self.read_rule(&wire)?);
+        self.state.with_rules(|rules| rules.push(stored.clone()));
         self.state.emit_rules_changed(SystemTime::now());
-        Some(rule)
+        Ok(Some(stored))
+    }
+
+    /// Nimmt eine gerade angelegte Regel wieder zurück.
+    fn forget(&self, rule_id: &str) {
+        self.state
+            .with_rules(|rules| rules.retain(|rule| rule.rule_id != rule_id));
+        self.state.emit_rules_changed(SystemTime::now());
     }
 
     /// Entscheidet genau einen Flow.
-    fn decide_one(&self, text: &str, request: &v1::DecideRequest) -> v1::DecideResult {
-        let Ok(id) = FlowId::parse(text) else {
-            return refused(
-                text,
-                &Diagnostic::builder(codes::IPC_003, Severity::Error)
-                    .why(format!("{text} is not a flow id"))
-                    .build(),
-            );
+    ///
+    /// Der Befund kommt zusätzlich zum Ergebnis zurück, weil `Decide` ihn
+    /// braucht, falls die Anfrage als Ganzes nichts bewirkt hat.
+    fn decide_one(
+        &self,
+        text: &str,
+        decision: &Decision,
+    ) -> (v1::DecideResult, Option<Diagnostic>) {
+        let id = match validate::flow_id(text) {
+            Ok(id) => id,
+            Err(diagnostic) => return (refused(text, &diagnostic), Some(diagnostic)),
         };
-        let edited = matches!(
-            request.decision,
-            Some(v1::decide_request::Decision::AllowEdited(_))
-        );
-        if edited && request.flow_ids.len() > 1 {
-            return refused(
-                text,
-                &Diagnostic::builder(codes::IPC_002, Severity::Error)
-                    .why(format!(
-                        "allow_edited came with {} flow ids",
-                        request.flow_ids.len()
-                    ))
-                    .build(),
-            );
-        }
         if !self.state.is_held(id) {
             let reason = if self.state.knows(id) {
                 "is no longer held"
             } else {
                 "is unknown to the fake daemon"
             };
-            return refused(text, &not_held(id, reason));
+            let diagnostic = not_held(id, reason);
+            return (refused(text, &diagnostic), Some(diagnostic));
         }
 
         let at = SystemTime::now();
-        let decision = match &request.decision {
-            Some(v1::decide_request::Decision::Block(block)) => {
-                // Die Notiz erreicht den Agenten im 403-Body und im Header; sie wird
-                // deshalb wie im echten Daemon gesäubert (HUM-072, CONVENTIONS 4.11).
-                let note = humanitl_core::block::sanitize_note(&block.note);
-                Decision::Block {
-                    reason: humanitl_core::BlockReason::User,
-                    note: (!note.is_empty()).then_some(note),
-                }
-            }
-            Some(v1::decide_request::Decision::AllowEdited(edited)) => {
-                // Eine bearbeitete Anfrage, die sich nicht lesen lässt, wird
-                // nicht stillschweigend zur unbearbeiteten: das hieße, etwas
-                // durchzulassen, was der Mensch so nie gesehen hat. Der Body
-                // reist in der `EditedRequest` vollständig mit und wird mit
-                // der Anfrage abgelegt, damit `GetBody` ihn liefert.
-                let request = match request_from_proto(edited) {
-                    Ok(request) => request,
-                    Err(error) => {
-                        return refused(
-                            text,
-                            &Diagnostic::builder(codes::IPC_004, Severity::Error)
-                                .why(format!("the edited request is not readable: {error}"))
-                                .build(),
-                        );
-                    }
-                };
-                self.state.set_edited(id, request.clone());
-                Decision::AllowEdited {
-                    request: Box::new(request),
-                }
-            }
-            Some(v1::decide_request::Decision::Allow(())) => Decision::Allow,
-            // Keine Entscheidung ist keine Freigabe. Der Fake steht in Tests an
-            // der Stelle des Daemons; liesse er eine leere Anfrage als `Allow`
-            // durch, uebte die Oberflaeche gegen ein Verhalten, das der echte
-            // Daemon mit `IPC_004` ablehnt, und der Unterschied fiele erst im
-            // Betrieb auf.
-            None => {
-                return refused(
-                    text,
-                    &Diagnostic::builder(codes::IPC_004, Severity::Error)
-                        .why("the decide request carries no decision".to_owned())
-                        .build(),
-                );
-            }
-        };
+        // Der Body einer bearbeiteten Anfrage wird abgelegt, damit `GetBody`
+        // ihn liefert; alles andere hat [`crate::validate`] schon gelesen.
+        if let Decision::AllowEdited { request } = decision {
+            self.state.set_edited(id, (**request).clone());
+        }
         let allow = decision.is_allow();
         if self
             .state
             .advance(
                 id,
                 humanitl_core::TransitionInput::Decide {
-                    decision,
+                    decision: decision.clone(),
                     source: DecisionSource::User,
                 },
                 at,
             )
             .is_err()
         {
-            return refused(
-                text,
-                &not_held(id, "cannot be decided in its current state"),
-            );
+            let diagnostic = not_held(id, "cannot be decided in its current state");
+            return (refused(text, &diagnostic), Some(diagnostic));
         }
         if allow {
             self.state.complete_allowed(id, at);
         } else {
             self.state.complete_refused(id, at);
         }
-        v1::DecideResult {
-            flow_id: text.to_owned(),
-            applied: true,
-            diagnostic: None,
-        }
+        (
+            v1::DecideResult {
+                flow_id: text.to_owned(),
+                applied: true,
+                diagnostic: None,
+            },
+            None,
+        )
     }
 
     /// Führt eine Regel-Operation aus.
-    fn apply_rules_op(&self, request: v1::RulesRequest) -> v1::RulesResponse {
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`], wenn die Operation eine Regel oder eine Probe trägt, die
+    /// sich nicht lesen lässt — mit denselben Codes wie im echten Dienst.
+    fn apply_rules_op(&self, request: v1::RulesRequest) -> Result<v1::RulesResponse, Diagnostic> {
         let mut dry_run_matches = Vec::new();
         let mut test = None;
         match request.op {
             None | Some(v1::rules_request::Op::List(())) => {}
-            Some(v1::rules_request::Op::Add(mut rule)) => {
-                if rule.rule_id.is_empty() {
-                    rule.rule_id = RuleId::new().to_string();
+            // `add` und `update` gehen durch denselben Leser wie `remember`.
+            // Ohne ihn legte der Fake die Nachricht der Leitung wörtlich ab,
+            // und ein Client konnte sich hier eine mitgelieferte (unlöschbare)
+            // Regel oder die Durchreiche zum Sprachmodell selbst geben —
+            // dieselbe Lücke wie in `remember`, nur eine Tür weiter.
+            Some(v1::rules_request::Op::Add(mut wire)) => {
+                if wire.rule_id.is_empty() {
+                    wire.rule_id = RuleId::new().to_string();
                 }
+                let rule = convert::rule_to_proto(&self.read_rule(&wire)?);
                 self.state.with_rules(|rules| rules.push(rule));
                 self.state.emit_rules_changed(SystemTime::now());
             }
-            Some(v1::rules_request::Op::Update(rule)) => {
+            Some(v1::rules_request::Op::Update(wire)) => {
+                let rule = convert::rule_to_proto(&self.read_rule(&wire)?);
                 self.state.with_rules(|rules| {
                     if let Some(slot) = rules.iter_mut().find(|old| old.rule_id == rule.rule_id) {
                         *slot = rule;
@@ -602,9 +631,25 @@ impl FakeDaemon {
                 });
                 self.state.emit_rules_changed(SystemTime::now());
             }
+            // Eine mitgelieferte Regel ist unlöschbar. Der Fake behielt sie
+            // stillschweigend und antwortete `Ok`; der echte Dienst sagt
+            // `RULES_010` und schlägt eine eigene Regel davor vor. Der Befund
+            // kommt aus derselben Funktion wie dort, damit es ihn nur einmal
+            // gibt.
             Some(v1::rules_request::Op::Remove(id)) => {
+                if let Some(bundled) = self
+                    .state
+                    .rules()
+                    .iter()
+                    .find(|rule| rule.rule_id == id && rule.bundled)
+                {
+                    return Err(humanitl_proxy::rules_store::immutable_bundled(
+                        &self.read_rule(bundled)?,
+                        "removed",
+                    ));
+                }
                 self.state
-                    .with_rules(|rules| rules.retain(|rule| rule.rule_id != id || rule.bundled));
+                    .with_rules(|rules| rules.retain(|rule| rule.rule_id != id));
                 self.state.emit_rules_changed(SystemTime::now());
             }
             Some(v1::rules_request::Op::Reorder(order)) => {
@@ -621,10 +666,14 @@ impl FakeDaemon {
                 self.state.emit_rules_changed(SystemTime::now());
             }
             Some(v1::rules_request::Op::DryRun(dry_run)) => {
-                dry_run_matches = self.dry_run(dry_run.rule.as_ref(), dry_run.limit);
+                // Ein Probelauf ohne lesbare Regel ist keiner. Der Fake lieferte
+                // still eine leere Trefferliste, und die sieht aus wie „diese
+                // Regel trifft nichts".
+                let rule = self.read_rule(validate::dry_run_rule(&dry_run)?)?;
+                dry_run_matches = self.dry_run(&convert::rule_to_proto(&rule), dry_run.limit);
             }
             Some(v1::rules_request::Op::Test(probe)) => {
-                test = self.test(&probe);
+                test = Some(self.test(&probe)?);
             }
             // Der Fake hat keine Datei: neu zu laden heißt hier, den Stand zu
             // melden, den er ohnehin hat. Ein `UNIMPLEMENTED` wäre falsch,
@@ -647,27 +696,37 @@ impl FakeDaemon {
                 self.state.emit_rules_changed(SystemTime::now());
             }
         }
-        v1::RulesResponse {
+        Ok(v1::RulesResponse {
             rules: self.state.rules(),
             dry_run_scanned: u32::try_from(self.state.summaries().len()).unwrap_or(u32::MAX),
             dry_run_matches,
             diagnostic: None,
             diagnostics: Vec::new(),
             test,
-        }
+        })
+    }
+
+    /// Liest eine Regel von der Leitung, mit denselben Codes wie der echte
+    /// Dienst (`RULES_003` für ein Host-Muster, sonst `IPC_005`).
+    fn read_rule(&self, wire: &v1::Rule) -> Result<humanitl_core::rule::Rule, Diagnostic> {
+        validate::rule(wire, self.state.session().id)
     }
 
     /// Fragt den Regelsatz des Fakes, was er zu einer Anfrage sagt.
     ///
     /// Ausgewertet wird mit derselben Engine wie im Daemon: Die Oberfläche soll
     /// gegen den Fake nichts üben, was der echte Daemon anders beantwortet
-    /// (`backlog/CONVENTIONS.md` 4.11). Eine Regel, die sich nicht lesen lässt,
-    /// wird übergangen; eine unlesbare Probe ergibt keinen Treffer, und ohne
-    /// Treffer gilt `ask` — nie `allow`.
-    fn test(&self, probe: &v1::rules_request::Test) -> Option<v1::RuleTest> {
+    /// (`backlog/CONVENTIONS.md` 4.11). Eine Regel im Satz, die sich nicht
+    /// lesen lässt, wird übergangen; ohne Treffer gilt `ask` — nie `allow`.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`] mit `IPC_005`, wenn Methode oder URL der Probe nicht
+    /// lesbar sind. Vorher kam `Ok` mit leerem Ergebnis heraus, und das sieht
+    /// für den Menschen aus wie „keine Regel trifft".
+    fn test(&self, probe: &v1::rules_request::Test) -> Result<v1::RuleTest, Diagnostic> {
         let session = self.state.session().id;
-        let method = convert::method_from_proto(probe.method, "").ok()?;
-        let (scheme, authority, path) = convert::split_url(&probe.url).ok()?;
+        let (method, scheme, authority, path) = validate::rule_probe(probe)?;
         let rules = self.state.rules();
         let set = humanitl_rules::RuleSet::from_rules(
             rules
@@ -688,7 +747,7 @@ impl FakeDaemon {
         let matching = verdict
             .rule()
             .and_then(|id| rules.iter().find(|rule| rule.rule_id == id.to_string()));
-        Some(v1::RuleTest {
+        Ok(v1::RuleTest {
             action: convert::action_to_proto(verdict.action()) as i32,
             matched: matches!(verdict, humanitl_rules::Verdict::Matched { .. }),
             rule_id: verdict.rule().map(|id| id.to_string()).unwrap_or_default(),
@@ -701,8 +760,8 @@ impl FakeDaemon {
     /// Der Fake vergleicht nur den Host, und zwar wörtlich oder als Suffix
     /// eines `**`-Musters. Die richtige Auswertung steht in `humanitl-rules`;
     /// hier geht es darum, dass die Oberfläche eine Liste zum Anzeigen hat.
-    fn dry_run(&self, rule: Option<&v1::Rule>, limit: u32) -> Vec<v1::FlowSummary> {
-        let Some(pattern) = rule.and_then(|rule| rule.matcher.as_ref()) else {
+    fn dry_run(&self, rule: &v1::Rule, limit: u32) -> Vec<v1::FlowSummary> {
+        let Some(pattern) = rule.matcher.as_ref() else {
             return Vec::new();
         };
         let limit = match limit {

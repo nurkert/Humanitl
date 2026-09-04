@@ -93,9 +93,11 @@ impl RulesService {
         let mut dry_run = None;
         let mut test = None;
 
+        // Die Prüfung „ohne Operation ist keine Anfrage" steht in
+        // [`crate::validate`] und gilt für den Fake genauso.
+        crate::validate::rules_op(&request)?;
         match request.op {
-            None => return Err(no_op()),
-            Some(v1::rules_request::Op::List(())) => {}
+            None | Some(v1::rules_request::Op::List(())) => {}
             Some(v1::rules_request::Op::Add(rule)) => {
                 let position = position_of(&rule);
                 let rule = self.read_rule(&rule)?;
@@ -129,12 +131,7 @@ impl RulesService {
                 test = Some(self.test(&probe)?);
             }
             Some(v1::rules_request::Op::DryRun(request)) => {
-                let rule = request.rule.as_ref().ok_or_else(|| {
-                    Diagnostic::builder(codes::IPC_005, Severity::Error)
-                        .why("dry_run came without a rule".to_owned())
-                        .build()
-                })?;
-                let rule = self.read_rule(rule)?;
+                let rule = self.read_rule(crate::validate::dry_run_rule(&request)?)?;
                 dry_run = Some(self.dry_run(&rule, request.limit, &mut diagnostics).await);
             }
         }
@@ -214,16 +211,7 @@ impl RulesService {
     /// Eine Probe, die auf eine andere Anfrage antwortet als die gemeinte, wäre
     /// schlimmer als keine.
     fn test(&self, probe: &v1::rules_request::Test) -> Result<v1::RuleTest, Diagnostic> {
-        let method = convert::method_from_proto(probe.method, "").map_err(|error| {
-            Diagnostic::builder(codes::IPC_005, Severity::Error)
-                .why(format!("the method of the probe is not readable: {error}"))
-                .build()
-        })?;
-        let (scheme, authority, path) = convert::split_url(&probe.url).map_err(|error| {
-            Diagnostic::builder(codes::IPC_005, Severity::Error)
-                .why(format!("{:?} is not a request url: {error}", probe.url))
-                .build()
-        })?;
+        let (method, scheme, authority, path) = crate::validate::rule_probe(probe)?;
         let mut key = RequestKey::new(&authority.host, &method, &path, scheme, authority.port);
         if v1::Upgrade::try_from(probe.upgrade) == Ok(v1::Upgrade::Websocket) {
             key = key.with_upgrade(Upgrade::WebSocket);
@@ -243,15 +231,7 @@ impl RulesService {
 
     /// Liest eine Regel von der Leitung.
     fn read_rule(&self, rule: &v1::Rule) -> Result<Rule, Diagnostic> {
-        convert::rule_from_proto(rule, self.session()).map_err(|error| {
-            let code = match error {
-                convert::RuleError::Host(_) => codes::RULES_003,
-                _ => codes::IPC_005,
-            };
-            Diagnostic::builder(code, Severity::Error)
-                .why(format!("the rule is not readable: {error}"))
-                .build()
-        })
+        crate::validate::rule(rule, self.session())
     }
 
     /// Der Probelauf gegen die letzten aufgezeichneten Flows.
@@ -360,13 +340,6 @@ fn rule_id(text: &str) -> Result<RuleId, Diagnostic> {
             .why(format!("{text:?} is not a rule id: {error}"))
             .build()
     })
-}
-
-/// Der Befund für eine Anfrage ohne Operation.
-fn no_op() -> Diagnostic {
-    Diagnostic::builder(codes::IPC_005, Severity::Error)
-        .why("rules came without an operation; there is no default".to_owned())
-        .build()
 }
 
 /// Der Befund für einen Daemon, der ohne Regelspeicher läuft.

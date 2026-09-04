@@ -49,6 +49,30 @@ use crate::tls_observe::{self, HandshakeWatch};
 use crate::upstream::{self, Upstream};
 use crate::{connect, tls};
 
+/// Der Grund, mit dem ein abgelehnter Übergang den Flow beendet.
+///
+/// Es gibt keinen Weg zum Ziel, weil der Daemon die Anfrage nicht weiterführen
+/// kann; ein Grund, der einen Menschen nennt, wäre falsch, denn es hat niemand
+/// entschieden.
+const FAIL_CLOSED_REASON: BlockReason = BlockReason::NoRoute;
+
+/// Der Upstream-Fehler, den ein Flow bekommt, der beim Abbruch schon
+/// `Forwarded` war.
+///
+/// Aus `Forwarded` kennt der Automat nur `Respond` und `Fail`. `Respond` hieße,
+/// das Ziel habe geantwortet — das wäre die größere Unwahrheit. Bleibt `Fail`,
+/// und der Aufrufer muss den Fehler benennen, weil der Kern keinen kennt: Die
+/// Verbindung stand, und wir haben sie abgebrochen. `Connect` ist davon das
+/// nächstliegende. Ein eigener Wert `UpstreamError::Aborted` wäre genauer,
+/// bräuchte aber ein neues Feld in `humanitl.v1` und dessen Spiegel in `app/`;
+/// bis dahin trägt der Client denselben `upstream_connect` wie die
+/// Aufzeichnung, sodass Antwort und Protokoll wenigstens dasselbe sagen.
+///
+/// Erreichbar ist das heute nur über [`FlowHandler::fail_closed`] nach einem
+/// abgelehnten `Respond`, und `Respond` ist aus `Forwarded` immer erlaubt — der
+/// Pfad ist also Vorsorge, kein laufender Fall.
+const FAIL_CLOSED_ABORTED: UpstreamError = UpstreamError::Connect;
+
 /// Die Caps und Fristen, die der Handler pro Verbindung und Anfrage kennt.
 #[derive(Debug, Clone, Copy)]
 pub struct ProxyLimits {
@@ -434,9 +458,12 @@ impl FlowHandler {
     /// Bringt einen Flow ohne Antwort zu Ende, so weit der Automat es zulässt.
     ///
     /// Dieselbe Absicht wie [`FlowHandler::fail_closed`], nur ohne die
-    /// Block-Antwort: Es gibt keine Verbindung mehr, an die sie ginge.
+    /// Block-Antwort: Es gibt keine Verbindung mehr, an die sie ginge. Damit
+    /// auch derselbe Weg durch den Automaten — ein bloßes `Record` wäre aus
+    /// `Received` oder `Analyzed` kein gültiger Übergang, der Flow bliebe in
+    /// der Registry stehen, und `PROXY_005` stünde ein zweites Mal im Strom.
     fn close_without_response(&self, flow: &mut Flow) -> FlowId {
-        let _ = self.apply(flow, TransitionInput::Record);
+        self.publish_fail_closed(flow);
         flow.id
     }
 
@@ -922,45 +949,47 @@ impl FlowHandler {
     ///
     /// Fail-closed: der Flow geht so weit, wie der Automat es noch zulässt
     /// (`Decided(Block { NoRoute })`, dann `Recorded`), der Client bekommt die
-    /// Block-Antwort, und die Anfrage erreicht das Ziel nicht. Der Befund
-    /// `PROXY_005` liegt zu diesem Zeitpunkt schon im Strom; die Übergänge hier
+    /// Block-Antwort, und die Anfrage erreicht das Ziel nicht.
+    ///
+    /// Welche Übergänge das sind, weiß allein [`Flow::fail_closed`] im Kern.
+    /// Der Handler kennt keine eigene Tabelle: Er würde sie sonst neben
+    /// [`FlowState::on`] pflegen, und beide liefen auseinander. Der Befund
+    /// `PROXY_005` liegt zu diesem Zeitpunkt schon im Strom; die Übergänge
     /// gehen deshalb an [`FlowHandler::apply`] vorbei, damit derselbe Fehler
     /// nicht ein zweites Mal gemeldet wird.
     fn fail_closed(&self, flow: &mut Flow) -> Response<ResponseBody> {
-        let reason = BlockReason::NoRoute;
-        // `Record` ist nur aus `Decided(Block | TimedOut)`, `Responded` und
-        // `Failed` erlaubt. Der Flow wird deshalb erst auf dem legalen Weg in
-        // einen dieser Zustaende gebracht, je nachdem, wo er gerade steht;
-        // sonst bliebe er in der Registry fuer immer in `Received`,
-        // `Decided(Allow)` oder `Forwarded` haengen und `Recorded` kaeme nie.
-        let block = TransitionInput::Decide {
-            decision: Decision::Block { reason, note: None },
-            source: DecisionSource::System,
-        };
-        let steps: Vec<TransitionInput> = match &flow.state {
-            FlowState::Received => vec![
-                TransitionInput::Analyze {
-                    findings: Vec::new(),
-                },
-                block,
-            ],
-            FlowState::Analyzed { .. } | FlowState::Held { .. } => vec![block],
-            FlowState::Decided(Decision::Allow | Decision::AllowEdited { .. })
-            | FlowState::Forwarded => vec![TransitionInput::Fail {
-                error: UpstreamError::Connect,
-            }],
-            _ => Vec::new(),
-        };
-        for step in steps {
-            if let Ok(event) = flow.apply(step, SystemTime::now()) {
-                self.inner.queue.publish(event);
+        self.publish_fail_closed(flow);
+        // Die Antwort sagt dasselbe wie die Aufzeichnung. Aus zehn der elf
+        // Zustände endet der Flow als `Decided(Block { NoRoute })`, und der
+        // Client bekommt `no_route`. Aus `Forwarded` endet er als `Failed`,
+        // weil der Automat von dort keinen anderen Weg kennt und eine Sperre
+        // die Unwahrheit wäre — die Anfrage ist schon draußen. Dann bekommt der
+        // Client auch `upstream_*` und nicht `no_route`; sonst läse ein Mensch
+        // im Protokoll einen Verbindungsfehler und in der Antwort „keine
+        // Route".
+        let response = match &flow.state {
+            FlowState::Failed { error } => {
+                failed_response(*error, flow.id, &flow.request.authority.host)
             }
-        }
-        if let Ok(event) = flow.apply(TransitionInput::Record, SystemTime::now()) {
+            _ => block_response(
+                FAIL_CLOSED_REASON,
+                flow.id,
+                &flow.request.authority.host,
+                None,
+            ),
+        };
+        block_to_response(&response, flow.id)
+    }
+
+    /// Beendet den Flow fail-closed und veröffentlicht die Ereignisse.
+    ///
+    /// Die gemeinsame Hälfte von [`FlowHandler::fail_closed`] und
+    /// [`FlowHandler::close_without_response`]: derselbe Weg durch den
+    /// Automaten, einmal mit und einmal ohne Antwort an den Client.
+    fn publish_fail_closed(&self, flow: &mut Flow) {
+        for event in flow.fail_closed(FAIL_CLOSED_REASON, FAIL_CLOSED_ABORTED, SystemTime::now()) {
             self.inner.queue.publish(event);
         }
-        let block = block_response(reason, flow.id, &flow.request.authority.host, None);
-        block_to_response(&block, flow.id)
     }
 
     fn build_request(

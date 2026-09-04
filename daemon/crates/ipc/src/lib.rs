@@ -21,7 +21,14 @@
 //! - [`client`] mit dem Gegenstück für CLI, Oberfläche und Tests,
 //! - [`server_stub`] mit dem Port [`DaemonApi`] und dem tonic-Dienst darüber,
 //! - [`fake`] mit einem Daemon, der statt eines Proxys eine aufgezeichnete
-//!   Sitzung spielt (`humanitld --fake`, HUM-005).
+//!   Sitzung spielt (`humanitld --fake`, HUM-005),
+//! - [`validate`] mit den Prüfungen, die für beide Dienste dieselben sind.
+//!
+//! [`server`] und [`fake`] erfüllen denselben Vertrag (ADR-0003, ADR-0018);
+//! ein Client soll den Unterschied nicht sehen können. Alles, was dafür an
+//! einer Anfrage zu prüfen ist, bevor sie wirkt, steht in [`validate`] und
+//! nirgends sonst; `tests/fake_parity.rs` fährt beide Dienste durch dieselbe
+//! Tabelle von Anfragen und vergleicht gRPC-Code und Befund.
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
@@ -69,6 +76,7 @@ pub mod fake;
 pub mod rules;
 pub mod server;
 pub mod server_stub;
+pub mod validate;
 
 pub use crate::client::connect;
 pub use crate::convert::diagnostic_to_proto;
