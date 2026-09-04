@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use humanitl_config::scope::ProjectScope;
-use humanitl_config::{Env, Origin, Sources, alias, load, schema};
+use humanitl_config::{Env, Origin, ProfileSource, Sources, alias, load, schema};
 use humanitl_core::{Diagnostic, Severity};
 use serde_json::Value;
 
@@ -136,7 +136,7 @@ fn the_same_key_is_accepted_from_every_other_layer() {
 
     let profile = scratch.global_profile("llm.endpoint = \"http://b.lan/v1\"");
     let resolved = load(&Sources {
-        profile_global: Some(profile),
+        profiles: vec![ProfileSource::File(profile)],
         ..Sources::empty()
     })
     .expect("a global profile may set llm.endpoint");
@@ -315,7 +315,7 @@ fn every_denied_key_is_rejected_from_a_project_profile() {
         // darf an ihrem Beispielwert scheitern; das ist dann die Wertprüfung.
         let global = scratch.global_profile(&line);
         if let Err(diagnostic) = load(&Sources {
-            profile_global: Some(global),
+            profiles: vec![ProfileSource::File(global)],
             ..Sources::empty()
         }) {
             assert!(

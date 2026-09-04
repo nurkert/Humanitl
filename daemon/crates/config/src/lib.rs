@@ -18,7 +18,9 @@
 //! - [`alias`] alte Schlüsselnamen, die weiter funktionieren
 //! - [`mod@env`] die Umgebung als Wert statt als globaler Zustand
 //! - [`paths`] die Pfade nach XDG
-//! - [`mod@load`] die sechs Ebenen der Präzedenz
+//! - [`mod@load`] die sieben Ebenen der Präzedenz
+//! - [`profile`] Profile: `default`, `llm-only`, eigene und das des Projekts
+//! - [`mod@resolve`] welche Profile gelten und woher sie kommen
 //! - [`origin`] die Herkunft je Feld
 //!
 //! ```
@@ -44,6 +46,8 @@ pub mod load;
 pub mod model;
 pub mod origin;
 pub mod paths;
+pub mod profile;
+pub mod resolve;
 pub mod schema;
 pub mod scope;
 pub mod tier;
@@ -53,10 +57,7 @@ pub use crate::validate::loader_variable_refused;
 
 pub use crate::alias::{ALIASES, Alias};
 pub use crate::env::{Env, LOADER_ENV_KEYS, is_loader_key};
-pub use crate::load::{
-    DEFAULT_ENV_PREFIX, ENV_SEPARATOR, PROFILE_PASSTHROUGH, PROFILE_SECTION, Sources, discover,
-    discover_with, load,
-};
+pub use crate::load::{DEFAULT_ENV_PREFIX, ENV_SEPARATOR, PROFILE_SECTION, Sources, load};
 pub use crate::model::{
     AgentBriefing, AgentRef, AskMode, Config, Experimental, FindingsConfig, HoldConfig,
     IpPreference, Language, Limits, LlmConfig, PseudonymConfig, RecorderConfig, ResolverConfig,
@@ -64,6 +65,15 @@ pub use crate::model::{
 };
 pub use crate::origin::{Origin, Resolved};
 pub use crate::paths::{APP_DIR, DIR_MODE, FILE_MODE, Paths, RuntimeDir};
+pub use crate::profile::{
+    BUILTIN_PROFILES, ConfigOverlay, DEFAULT_PROFILE, PROFILE_KEYS, PROFILE_RULES_SECTION, Profile,
+    ProfileRules, ProfileSource, ProfileSummary, RULES_DOCUMENT_VERSION, builtin_names,
+    builtin_text,
+};
+pub use crate::resolve::{
+    ProfileSelection, available_profiles, discover, discover_with, profile_exists, profile_layers,
+    resolve, sources_for,
+};
 pub use crate::schema::{Field, json_schema};
 pub use crate::scope::{PROJECT_SCOPE_KEY, ProjectScope};
 pub use crate::tier::{TIER_KEY, Tier};

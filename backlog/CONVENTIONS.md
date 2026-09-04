@@ -1463,3 +1463,197 @@ Feld darin. Er übt den MITM-Pfad nicht (HUM-087, Absatz oben). Er sagt nichts
 über eine zweite Sitzung, über Neustarts (das prüft M1), über OpenCode
 (HUM-046) und über Benachrichtigungen (abgeschaltet). Und Schritt 7 hält eine
 Abwesenheit fest, keine Verweigerung.
+
+### 4.23 Aus der Umsetzung der Profile (HUM-066, 2026-09-04)
+
+Abweichungen von `backlog/sprint-3.md`, die dauerhaft gelten. Wo die
+Spezifikation oder 4.4 anderes sagt, gilt dieser Abschnitt.
+
+**Sieben Ebenen statt sechs.** Die Präzedenz aus 3.7 und 4.4 bekommt eine
+zweite Profil-Ebene: eingebaute Vorgabewerte, `config.toml`, Profil `default`,
+gewähltes Profil, Projekt-Profil, Umgebung, Kommandozeile. `default` gilt
+immer, auch wenn ein anderes Profil gewählt wurde; das gewählte liegt darüber.
+Beide Ebenen nehmen die Datei aus `$XDG_CONFIG_HOME/humanitl/profiles/`, sonst
+die eingebettete Fassung. `docs/CONFIG.md` und `docs/profiles.md` sind die
+Beschreibung.
+
+**Das mitgelieferte Profil `default` setzt keinen Wert.** Es liegt über
+`config.toml`; ein Wert darin — auch einer, der nur den Vorgabewert wiederholt,
+wie ihn das Beispiel im Issue zeigt — machte die Datei des Nutzers für diesen
+Schlüssel wirkungslos, ohne dass er es sähe. Der gängige Fall steht deshalb als
+Kommentar in `profiles/default.toml`, und der Test
+`the_default_profile_sets_no_value` hält es fest. `llm-only` setzt sehr wohl
+Werte: es zu wählen ist eine ausdrückliche Entscheidung und soll `config.toml`
+überstimmen.
+
+**Ein Profil hat vier Schlüssel, nicht fünf.** `name`, `description`,
+`[config]` und `[rules]`. Der Block `[agent]` aus 4.11 entfällt: `agent.adapter`
+und `agent.command` sind Konfigurationsschlüssel und stehen unter
+`[config.agent]`. Ein `[agent]` auf der obersten Ebene ist damit `CONFIG_002`
+mit dem Hinweis auf `[config.agent]`, statt still übergangen zu werden;
+`PROFILE_PASSTHROUGH` gibt es nicht mehr, an seine Stelle tritt
+`humanitl_config::PROFILE_KEYS`.
+
+**`ConfigOverlay` ist eine Menge von Blattpfaden, kein `Option`-Spiegel von
+`Config`.** Die Spezifikation skizziert „`Config` mit allen Feldern
+`Option<T>`". Gemischt wird aber ohnehin auf Blattpfaden, und ein zweiter, von
+Hand gepflegter Typ mit denselben vierzig Feldern wäre die doppelte Pflege, die
+ADR-011 ausschließt. `ConfigOverlay` hält deshalb `BTreeMap<Blattpfad, Wert>`;
+feldweise wirkt es dadurch von selbst, und eine freie Tabelle bleibt ein Blatt.
+
+**`EffectiveConfig` heißt weiter `Resolved`.** Der Typ aus HUM-062 hat schon
+`config` und `origins`; dazu kommen `profiles: Vec<Profile>` und die Methode
+`profile_chain() -> Vec<Origin>`. Ein zweiter Name für dieselbe Sache hätte
+jeden Aufrufer in `humanitl-ipc`, `humanitl-proxy` und beiden Binaries berührt,
+ohne etwas auszusagen. `Origin` bekommt die Variante `ProfileBuiltin(String)`
+(`kind()` = `profile_builtin`), die Ränge rücken auf 0..6.
+
+**`resolve()` nimmt `Env` und `&[(String, String)]`.** Die Signatur der
+Spezifikation (`env: &[(String,String)]`, `cli: &CliOverrides`) hätte zwei neue
+Typen neben `Env` und `Sources::cli` gestellt. Es gilt
+`resolve(&ProfileSelection, work_dir: Option<&Path>, &Env, &[(String, String)])`;
+daneben steht `sources_for(..)` mit denselben Argumenten für Aufrufer, die vor
+dem Laden noch an den Quellen etwas ändern (die Kommandozeile mit `--config`).
+
+**`--profile` benennt zwei Dinge, und eine Regel unterscheidet sie.**
+**Verworfen am 2026-09-04, siehe den Nachtrag am Ende dieses Abschnitts. Die
+Fassung hier ist nicht mehr gültig und steht nur noch da, damit die Begründung
+der Rücknahme einen Bezug hat.** 3.8 nennt
+`--profile NAME` sowohl für `humanitl run` (Sitzungsprofil) als auch für
+`humanitl sandbox run|argv` (bwrap-Profil unter `profiles/sandbox/`). Es ist
+deshalb kein Zweitname von `--sandbox-profile` mehr, sondern ein eigenes
+globales Argument: Gibt es ein Sitzungsprofil dieses Namens, ist es gemeint;
+sonst benennt der Name das bwrap-Profil und landet als `sandbox.profile` auf der
+Kommandozeilen-Ebene. `--profile test` verhält sich damit wie bisher (die
+Escape-Tests und `tests/e2e` bleiben unberührt), und `--profile llm-only` lässt
+`sandbox.profile` in Ruhe, statt eine Datei `profiles/sandbox/llm-only.toml` zu
+suchen, die es nicht gibt. `humanitl run` ist die Ausnahme und immer streng:
+dort ist `--profile` das Sitzungsprofil, ein unbekannter Name ist `CONFIG_001`,
+und wer das bwrap-Profil meint, schreibt `--sandbox-profile`.
+`humanitl_config::discover_with` bleibt entsprechend nachsichtig,
+`humanitl_config::resolve` ist streng.
+
+**Drei Grenzen für das Projekt-Profil statt einer.** Zu `x-project-scope` aus
+4.11 kommen zwei dazu: Ein `[rules]`-Block im Projekt-Profil ist `CONFIG_003` —
+ein geklontes Repository entscheidet nicht, was die Sandbox verlassen darf —,
+und `sandbox.mounts.extra_ro` / `sandbox.mounts.extra_rw` aus dieser Ebene sind
+`CONFIG_003` mit dem Satz, dass nur globale Profile Host-Pfade einhängen dürfen.
+Die Schlüssel stehen nicht im Schema (Einhängungen wohnen im Sandbox-Profil);
+ohne diese Ausnahme wäre die Antwort „unbekannter Schlüssel, meintest du
+`sandbox.profile`?" und damit die irreführendste, die möglich ist.
+`hold.ask_mode` bleibt entgegen dem Text des Issues gesperrt: 4.11 führt es als
+`denied`, und Abschnitt 4 geht vor.
+
+**Zwei neue Diagnose-Codes.** `CONFIG_007` (Warning) für ein Projekt-Profil, das
+einem anderen Konto gehört — das Issue nennt dafür `CONFIG_004`, die Nummer ist
+seit 4.11 für den Ersatz des Laufzeitverzeichnisses vergeben, und eine Nummer
+wird nie wiederverwendet. `CONFIG_008` (Info), wenn eine eigene Profildatei ein
+mitgeliefertes Profil desselben Namens verdeckt und sich von ihm unterscheidet;
+eine wortgleiche Kopie wird nicht gemeldet. Der Bereich `CONFIG` hat damit noch
+`009` frei und muss für den übernächsten Code wachsen.
+
+**`Env::default()` trägt die Nutzerkennung des Prozesses.** Bisher war sie 0,
+weil `Default` abgeleitet war, während `Env::from_pairs` schon `current_uid()`
+setzte. Seit `CONFIG_007` die Kennung gegen den Besitzer einer Datei hält, machte
+die 0 aus jeder Datei die eines Fremden. Wer eine feste Kennung braucht, nimmt
+`Env::with_uid`.
+
+**Regeln aus einem Profil reisen als Dokument, nicht als `Rule`.**
+`humanitl-config` darf nicht auf `humanitl-rules` zeigen (`deps-allow.toml`).
+`Profile::rules_document()` liefert die Regeln aus `[rules].inline` deshalb als
+JSON, das gültiges YAML ist und das `humanitl_rules::parse_rules` unverändert
+liest; `Profile::rule_files()` liefert die Pfade aus `[rules].files`, relativ zur
+Profildatei aufgelöst. Die Test-Abhängigkeit auf `humanitl-rules` steht unter
+`[dev-dependencies]` und zeigt damit nicht nach außen.
+
+**`humanitl run` löst auf und startet nichts.** Bis HUM-067 endet es weiter mit
+`CLI_003`; neu ist, dass es vorher `Context::session()` ruft. Ein Projekt-Profil,
+das Host-Pfade einhängen will oder einen gesperrten Schlüssel setzt, verweigert
+damit schon hier den Start mit `CONFIG_003`. Die aufgelöste Sitzung steht unter
+`-v` auf `stderr`; `stdout` bleibt leer, weil es kein Ergebnis gibt.
+
+#### Nachtrag aus dem Review von HUM-066 (2026-09-04)
+
+Sechs Befunde, alle übernommen. Wo dieser Nachtrag dem Text darüber
+widerspricht, gilt der Nachtrag.
+
+**Ein Projekt darf mit `name` nur ein mitgeliefertes Profil wählen.** Vorher
+setzte der `name` des Projekt-Profils jedes Profil des Nutzers als Ebene 4 ein.
+Ein geklontes Repository kam damit über den Umweg an jeden Schlüssel, den ihm
+die Projekt-Ebene verwehrt: `.humanitl/profile.toml` mit `name = "loose"`, und
+`agent.command` und `sandbox.profile` aus `loose.toml` galten — der Prozess in
+der Sandbox und ihre Einhängefläche. `name` wählt jetzt nur unter
+`BUILTIN_PROFILES`; ein anderer Wunsch wird übergangen und mit `CONFIG_009`
+(Warning) gemeldet. Wer sein eigenes Profil meint, nennt es mit `--profile`.
+Damit hat das Projekt-Profil vier Grenzen statt drei, und die erste trägt die
+anderen drei.
+
+**Das Projektverzeichnis ist `sandbox.work_dir`, nicht das aktuelle
+Verzeichnis.** Vorher wurde das Projekt-Profil immer unter `cwd` gesucht: Mit
+`--work` von außen sah niemand das Profil des Projekts, und stand die Shell in
+einem feindlichen Repository, wirkte dessen Profil auf eine Sitzung, die
+woanders arbeitete. `sources_for` lädt deshalb die Ebenen 1 bis 4 samt Umgebung
+und Kommandozeile einmal vorab, nimmt `sandbox.work_dir` (sonst `cwd`) und sucht
+erst dort. Zirkelfrei, weil der Schlüssel auf der Projekt-Ebene gesperrt ist.
+
+**Die elfte Abweichung ist zurückgenommen: `--profile` bekommt seine Bedeutung
+vom Unterkommando, nicht von der Platte.** Das ist keine Behebung im Rahmen der
+alten Regel, sondern deren Verwerfung — wer oben die elfte Abweichung liest,
+liest eine Fassung, die nicht mehr gilt.
+
+Verworfen wurde die Regel „gibt es ein Sitzungsprofil dieses Namens, ist es
+gemeint; sonst das bwrap-Profil". Sie machte die Bedeutung eines Arguments von
+der Anwesenheit einer Datei abhängig, und das hat zwei Folgen, die eine Regel
+nicht haben darf. Erstens kippte sie im Betrieb: Legt jemand ein
+`profiles/test.toml` an — und `docs/profiles.md` lehrt genau das —, dann meint
+`sandbox run --profile test` plötzlich etwas anderes, die `/tests/escape`-
+Einhängung verschwindet lautlos und `sandbox.profile` bleibt still auf
+`default`. Zweitens verschluckte sie einen Fehler: Ein Profil, das existiert,
+sich aber nicht lesen lässt, galt als „kein Sitzungsprofil"; der Aufruf lief mit
+Exit 0, ohne Befund und mit der anderen Bedeutung weiter — im Widerspruch zu dem
+Satz, den derselbe Code schreibt („Nothing starts while it does not parse").
+
+Es gilt stattdessen: Unter `humanitl sandbox` benennt `--profile` das
+bwrap-Profil unter `profiles/sandbox/`, überall sonst das Profil der Sitzung.
+Zwei Bedeutungen, eine Zuordnung, und die steht am Kommando. `cmd::ProfileMeaning`
+trägt sie, `main::profile_means` trifft sie am `Cmd`. `Context::session`
+entfällt; `Context::config` ist der eine, strenge Weg, und
+`profile_is_a_session_profile` gibt es nicht mehr.
+
+**`profile_exists` fragt nach der Datei, nicht nach ihrem Inhalt.** Ein Profil,
+das sich nicht lesen lässt, ist ein Profil und wird beim Laden zu `CONFIG_001`.
+
+**`discover_with` ist so streng wie `sources_for` und gibt ein `Result`.** Zwei
+Auflösungen mit verschiedener Strenge nebeneinander waren die eigentliche
+Fehlerquelle; es gibt nur noch eine. Zusätzlich prüft die Stelle, die aus einem
+Namen einen Pfad macht (`resolve::layer`), den Namen selbst: Ein `../` erreicht
+keine Datei außerhalb des Profilverzeichnisses, unabhängig davon, ob ein Mensch
+ihn tippen könnte.
+
+**Die Rangfolge der Herkunft ist ein Band, kein Vergleich.**
+`Origin::ProfileBuiltin` und `Origin::ProfileGlobal` teilen sich Rang 2; die
+Ränge darüber rücken auf 3, 4, 5. Welche von zwei Ebenen gewonnen hat,
+entscheidet der Ebenen-Index, den `load::Merge` mitführt, nicht `rank()`. Vorher
+benannte `alias_diagnostics` in der Mischung „eigenes `default.toml` auf Ebene 3
+plus eingebettetes `llm-only` auf Ebene 4" den falschen Gewinner und hätte dem
+Nutzer gesagt, er solle die falsche Zeile löschen.
+
+**Der Bereich `CONFIG` reicht bis 019.** `CONFIG_009` ist der Befund für einen
+übergangenen Profilwunsch des Projekts; mit `007` und `008` wäre der alte
+Bereich bis `009` sonst voll gewesen. Die Tabelle `AREAS` und
+`docs/DIAGNOSTICS.md` sind nachgezogen.
+
+**Ein Name wird geprüft, wo er entsteht, nicht wo er dasteht.** `Profile::parse`
+prüfte `check_name` nur am ausdrücklich gesetzten `name`. Fehlt der Schlüssel —
+was erlaubt ist und wozu die Meldung bei einem Namenskonflikt sogar rät —, kam
+der Name aus dem Dateistamm und blieb ungeprüft; ein `Work.Profile.toml` trug
+seinen Stamm durch Auflösung, Herkunftsanzeige und Profil-Kette. Die Prüfung
+steht jetzt hinter der Auswahl, also am Namen, der gilt.
+
+**Eine Liste, die ein kaputtes Profil als brauchbar ausgibt, lädt zum Fehlschlag
+ein.** Verdeckte eine unlesbare Datei ein mitgeliefertes Profil, zeigte
+`humanitl config schema --profiles` weiter die Einbettung mit `bundled`, obwohl
+`resolve::layer` die Datei nimmt und jeder Aufruf mit `CONFIG_001` endet.
+`ProfileSummary` trägt deshalb `broken`, und ein Fehlschlag bekommt seine Zeile
+an derselben Stelle wie ein Erfolg; die Kommandozeile schreibt `(does not load)`
+hinter die Herkunft. Die Befunde stehen weiterhin daneben.

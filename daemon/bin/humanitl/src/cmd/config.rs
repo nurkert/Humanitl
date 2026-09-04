@@ -1,10 +1,12 @@
 //! `humanitl config get|schema`: die aufgelöste Konfiguration und ihr Schema.
 //!
-//! Aufgelöst wird in `humanitl-config`, nicht hier: die sechs Ebenen, die
+//! Aufgelöst wird in `humanitl-config`, nicht hier: die sieben Ebenen, die
 //! Aliasse, die Wertebereiche und die Herkunft je Feld gehören dorthin
 //! (ADR-011). Dieses Modul sucht den Pfad im Ergebnis und schreibt ihn auf.
 
-use humanitl_config::{Resolved, alias, schema};
+use std::path::Path;
+
+use humanitl_config::{ProfileSource, Resolved, alias, schema};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use serde_json::{Value, json};
@@ -24,11 +26,89 @@ const SUGGESTIONS: usize = 5;
 pub fn run(ctx: &Context, cmd: &ConfigCmd) -> Result<u8, Failure> {
     match cmd {
         ConfigCmd::Get { key } => get(ctx, key),
-        ConfigCmd::Schema => {
-            schema_out(ctx);
+        ConfigCmd::Schema { profiles } => {
+            if *profiles {
+                profiles_out(ctx);
+            } else {
+                schema_out(ctx);
+            }
             Ok(EXIT_OK)
         }
     }
+}
+
+/// `config schema --profiles`: was `--profile` wählen kann.
+///
+/// Die mitgelieferten Profile und alles, was als `*.toml` im Profilverzeichnis
+/// liegt, jeweils mit Beschreibung und Herkunft. Ein Profil, das sich nicht
+/// lesen lässt, erscheint als Befund und nicht als Lücke.
+fn profiles_out(ctx: &Context) {
+    let (summaries, diagnostics) = humanitl_config::available_profiles(&ctx.paths);
+    for diagnostic in &diagnostics {
+        ctx.render
+            .note(&crate::render::diagnostic_block(diagnostic));
+    }
+
+    if ctx.render.is_json() {
+        let rows: Vec<Value> = summaries
+            .iter()
+            .map(|summary| {
+                json!({
+                    "name": summary.name,
+                    "description": summary.description,
+                    "source": source_label(&summary.source),
+                    "broken": summary.broken,
+                })
+            })
+            .collect();
+        ctx.render.value(&json!({ "profiles": rows }));
+        return;
+    }
+
+    let home = ctx.paths.home();
+    let rows: Vec<Vec<String>> = summaries
+        .iter()
+        .map(|summary| {
+            let from = shorten(&source_label(&summary.source), &home);
+            vec![
+                summary.name.clone(),
+                if summary.broken {
+                    format!("{from} (does not load)")
+                } else {
+                    from
+                },
+                summary
+                    .description
+                    .clone()
+                    .unwrap_or_else(|| "-".to_owned()),
+            ]
+        })
+        .collect();
+    ctx.render.line(&crate::render::table(
+        &["NAME", "FROM", "DESCRIPTION"],
+        &rows,
+    ));
+}
+
+/// Woher ein Profil kommt, als eine Spalte.
+fn source_label(source: &ProfileSource) -> String {
+    match source {
+        ProfileSource::Builtin(_) => "bundled".to_owned(),
+        ProfileSource::File(path) | ProfileSource::Project(path) => path.display().to_string(),
+    }
+}
+
+/// Ein Pfad im Heimatverzeichnis, mit `~` statt seines Anfangs.
+///
+/// Nur für die Tabelle: Der volle Pfad ist dort dreimal so breit wie der Name
+/// und die Beschreibung zusammen, und `--json` trägt ihn ungekürzt.
+fn shorten(text: &str, home: &Path) -> String {
+    let home = home.display().to_string();
+    if home.is_empty() {
+        return text.to_owned();
+    }
+    text.strip_prefix(&home)
+        .map_or_else(|| text.to_owned(), |rest| format!("~{rest}"))
 }
 
 /// `config get KEY`.
@@ -49,7 +129,11 @@ fn get(ctx: &Context, key: &str) -> Result<u8, Failure> {
 
     ctx.render.line(&scalar(&value));
     if let Some(origin) = origin {
-        ctx.render.detail(&format!(
+        // Die Herkunft steht auf `stderr` und nicht hinter `-v`: Wer den Wert
+        // liest, will wissen, welche Ebene ihn gesetzt hat — sonst ist eine
+        // überraschende Sandbox nicht zu erklären (HUM-066). In eine Pipe
+        // gerät sie trotzdem nicht; dort steht nur der Wert.
+        ctx.render.note(&format!(
             "{path} comes from {origin}; {} sets it for one run",
             flag_for(&path)
         ));

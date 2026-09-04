@@ -62,8 +62,8 @@ pub static AREAS: &[AreaInfo] = &[
         area: "config",
         prefix: "CONFIG",
         first: 1,
-        last: 9,
-        note: "Konfigurationsdatei, Schlüssel, Wertebereiche",
+        last: 19,
+        note: "001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066)",
     },
     AreaInfo {
         area: "sandbox",
@@ -243,6 +243,13 @@ registry! {
     CONFIG_005 => "config", "Veralteter Schlüssel", "#config_005";
     /// Alter und neuer Schlüssel sind gleichzeitig gesetzt; der kanonische gewinnt (Warning).
     CONFIG_006 => "config", "Alter und neuer Schlüssel gesetzt", "#config_006";
+    /// Das Projekt-Profil liegt in einer Datei, die einem anderen Konto gehört (Warning, HUM-066).
+    CONFIG_007 => "config", "Projekt-Profil gehört einem anderen Konto", "#config_007";
+    /// Ein eigenes Profil verdeckt ein mitgeliefertes mit demselben Namen; die Datei gewinnt (Info, HUM-066).
+    CONFIG_008 => "config", "Eigenes Profil verdeckt ein mitgeliefertes", "#config_008";
+    /// Das Projekt-Profil nennt ein Profil, das nicht gilt: ein Projekt darf nur ein
+    /// mitgeliefertes wählen, und die Kommandozeile geht vor (Warning, HUM-066).
+    CONFIG_009 => "config", "Profilwunsch des Projekts gilt nicht", "#config_009";
 
     /// `bwrap` ist nicht installiert oder liegt nicht im Pfad.
     SANDBOX_001 => "sandbox", "bwrap nicht gefunden", "#sandbox_001";

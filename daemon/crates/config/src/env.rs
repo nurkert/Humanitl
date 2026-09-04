@@ -37,10 +37,25 @@ pub fn is_loader_key(key: &str) -> bool {
 
 /// Eine Umgebung: Variablen plus die Nutzerkennung, die für
 /// `$XDG_RUNTIME_DIR`-Ersatzpfade nötig ist.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Env {
     vars: BTreeMap<String, String>,
     uid: u32,
+}
+
+impl Default for Env {
+    /// Keine Variablen, aber die Nutzerkennung des laufenden Prozesses.
+    ///
+    /// Die Kennung wird gegen den Besitzer von Dateien gehalten (`CONFIG_007`);
+    /// eine leere Umgebung mit der Kennung 0 machte daraus die Behauptung, jede
+    /// Datei gehöre jemand anderem. Wer eine feste Kennung braucht, nimmt
+    /// [`Env::with_uid`].
+    fn default() -> Self {
+        Self {
+            vars: BTreeMap::new(),
+            uid: current_uid(),
+        }
+    }
 }
 
 impl Env {
