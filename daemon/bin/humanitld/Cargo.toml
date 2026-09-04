@@ -26,8 +26,9 @@ humanitl-recorder.workspace = true
 # (HUM-031).
 humanitl-catalog.workspace = true
 # Der Agent-Adapter liefert die Durchreichregel zum Sprachmodell aus
-# `llm.endpoint`; sie steht vor den mitgelieferten Regeln (HUM-037 Schritt 6,
-# HUM-039). `tools/deps-allow.toml` erlaubt die Kante für die Gruppe `bins`.
+# `llm.endpoint`; sie wird vor jeder anderen Regel ausgewertet
+# (`backlog/CONVENTIONS.md` 4.5, HUM-039, HUM-104).
+# `tools/deps-allow.toml` erlaubt die Kante für die Gruppe `bins`.
 humanitl-sandbox.workspace = true
 
 clap.workspace = true
@@ -38,6 +39,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+# Die Tests zu `load_rules` werten den geladenen Regelsatz aus; `evaluate`
+# nimmt den Zeitpunkt als Argument (HUM-104).
+chrono.workspace = true
 # Der End-to-End-Test schickt dem gestarteten Binary ein `SIGTERM`; nur der
 # geordnete Weg raeumt Socket und Token weg.
 libc.workspace = true
