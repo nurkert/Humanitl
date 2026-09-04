@@ -887,3 +887,105 @@ Keine inhaltlichen Änderungen beim Übersetzen. Keine Umbenennung von Bezeichne
 
 ### Referenzen
 BACKLOG.md 1.3 Prinzip 2; CLAUDE.md Abschnitt Sprache.
+
+---
+
+## HUM-093 · M1-Demolauf raeumt sein Verzeichnis nicht weg
+Sprint: 5 · Größe: S · Schweregrad: minor · Abhängigkeiten: HUM-021, HUM-036 · Blockiert: keine
+
+### Kontext
+Der Kopf von `tests/e2e/lib.sh` (Zeilen 10 bis 13) sagt über den Wegwerf-Baum, in dem jeder Demolauf steht: „Ein laufender Daemon des Entwicklers wird dadurch nie berührt, und der Lauf hinterlässt nichts, was der nächste erbt." Der erste Halbsatz stimmt, der zweite ist für M1 unwahr. `e2e_short_workdir` legt den Baum mit `mktemp -d /tmp/hum-e2e-XXXXXX` an (`lib.sh:237`), und weder `lib.sh` noch `m1_sealed_box.sh` entfernen ihn je wieder: `m1_sealed_box.sh` hat einen EXIT-Trap (Zeile 81), sein `collect()` kopiert `out/*` und `daemon.log` nach `target/e2e` (Zeilen 78 und 79) und hört dort auf. Jeder Durchgang lässt also einen weiteren `/tmp/hum-e2e-*` stehen.
+
+Das ist keine vergessene Bequemlichkeit, sondern eine dokumentierte Zusage, die der Code nicht einlöst — und zwar ausgerechnet im Skript, dessen letzter Schritt `the daemon leaves nothing behind` heißt und Socket, Token und Proxy-Socket genau daraufhin prüft. Das Demo belegt eine Aufräum-Aussage über den Daemon und bricht dieselbe Aussage über sich selbst.
+
+Was stehen bleibt, ist der vollständige XDG-Baum der Sitzung: `data/humanitl/ca/ca.key`, der private Schlüssel der Sitzungs-CA (Rechte `0600`, `daemon/crates/proxy/src/ca.rs` `KEY_MODE`, Pfad aus `daemon/crates/config/src/paths.rs` `ca_key_path`), dazu `ca.crt`, die Aufzeichnung, `state/runtime`, `work` und die Protokolle. Das Verzeichnis selbst hat `0700` aus `mktemp -d`, es liegt also nichts offen; es sammelt sich aber mit jedem Lauf Testschlüsselmaterial an, das laut Kommentar längst weg sein sollte. Der Lauf sieht das Host-`/tmp`, denn `e2e_enter_namespace` nimmt `unshare -rn`, also nur Nutzer- und Netz-Namensraum, keinen Mount-Namensraum (`lib.sh:206-227`). CI-Runner sind kurzlebig, der Schaden liegt auf Entwicklerrechnern.
+
+M2 macht es seit HUM-036 richtig und schreibt den Grund dazu („auf dem Rechner bleibt sonst nichts", `m2_first_decision/run.sh:125-128`): doppelt abgesichert über eine Existenzprüfung und einen `case`-Präfix `/tmp/hum-e2e-*` (Zeilen 137 bis 143), im EXIT-Trap, der wegen `set -euo pipefail` und `e2e_die` mit Exit 1 auch nach einem Fehlschlag greift. M1 ist der Ausreißer, und die Absicherung existiert bereits — sie steht nur an der falschen Stelle, nämlich einmal in M2 statt einmal für beide.
+
+### Ziel
+`m1_sealed_box.sh` entfernt seinen Arbeitsbaum im vorhandenen `collect()`, mit derselben doppelten Absicherung wie M2. Die Absicherung steht als Helfer `e2e_drop_workdir` in `lib.sh` neben `e2e_short_workdir`, und M2 nutzt ihn statt der eigenen `case`-Zeile. `E2E_KEEP_WORKDIR=1` behält den Baum für die Fehlersuche und nennt seinen Pfad im Protokoll.
+
+### Nicht-Ziel
+Kein neuer Trap: M1 hat einen, es fehlt ihm nur eine Zeile. Keine Änderung daran, was gesammelt wird oder wohin — `out/*` und `daemon.log` liegen vor dem Löschen bereits in `target/e2e`, und genau diesen Pfad lädt die CI hoch (`.github/workflows/ci.yml`, `path: target/e2e`). Kein Aufräumen fremder Bäume: Was ältere Läufe hinterlassen haben, entfernt der Nutzer; es gibt keinen Reaper über `/tmp/hum-e2e-*`. Kein Rust, keine CI-Datei, kein Makefile, kein `.gitignore`.
+
+### Betroffene Pfade
+- `tests/e2e/lib.sh`: neuer Helfer `e2e_drop_workdir` direkt unter `e2e_short_workdir` (231-243)
+- `tests/e2e/m1_sealed_box.sh`: `collect()` (75-80), Aufrufblock im Kopf (33-38)
+- `tests/e2e/m2_first_decision/run.sh`: `collect()` (137-143) auf den Helfer umstellen, Kommentar (125-128) und Aufrufblock (37-42) nachziehen
+- `tests/e2e/run.sh`: Aufrufblock im Kopf (4-8)
+
+### Spezifikation
+Der Helfer in `lib.sh`, POSIX sh wie der Rest der Datei:
+
+```sh
+# e2e_drop_workdir — den Wegwerf-Baum dieses Laufs entfernen.
+#
+# Zweifach abgesichert, weil `rm -rf` auf einem Variablenwert die Stelle ist,
+# an der ein leerer Wert teuer wird: Der Baum muss existieren und unter dem
+# Präfix liegen, den `e2e_short_workdir` vergibt. Alles andere wird gemeldet
+# und stehen gelassen. `E2E_KEEP_WORKDIR=1` behält ihn für die Fehlersuche.
+e2e_drop_workdir() {
+    [ -n "${E2E_WORKDIR:-}" ] || return 0
+    [ -d "$E2E_WORKDIR" ] || return 0
+    if [ "${E2E_KEEP_WORKDIR:-0}" = 1 ]; then
+        e2e_say "keeping the workdir $E2E_WORKDIR (E2E_KEEP_WORKDIR=1)"
+        return 0
+    fi
+    case "$E2E_WORKDIR" in
+    /tmp/hum-e2e-*) rm -rf "$E2E_WORKDIR" ;;
+    *) e2e_say "not removing $E2E_WORKDIR: it is not under /tmp/hum-e2e-" ;;
+    esac
+}
+```
+
+`collect()` in `m1_sealed_box.sh` bekommt die Reihenfolge, die M2 schon hat: erst die Prozesse dieses Laufs beenden, dann die Protokolle nach `$E2E_OUT` kopieren, dann `e2e_drop_workdir` als letzte Zeile. Die beiden `cp`-Zeilen werden dabei wie in M2 gegen einen ungesetzten oder fehlenden Baum abgesichert.
+
+```sh
+collect() {
+    stop_daemon
+    stop_fake_upstream
+    if [ -n "${E2E_WORKDIR:-}" ] && [ -d "$E2E_WORKDIR" ]; then
+        cp -f "$E2E_WORKDIR"/out/* "$E2E_OUT/" 2> /dev/null || true
+        cp -f "$E2E_WORKDIR"/daemon.log "$E2E_OUT/" 2> /dev/null || true
+    fi
+    e2e_drop_workdir
+}
+```
+
+`collect()` in `m2_first_decision/run.sh` verliert seine `case`-Zeilen und ruft stattdessen `e2e_drop_workdir`; Verhalten und Reihenfolge bleiben, was sie sind. Der Präfix-Vergleich lautet in beiden Fällen `/tmp/hum-e2e-`, nicht `$TMPDIR/…`: Der Baum liegt bewusst unter `/tmp`, weil ein Unix-Socket-Pfad in 108 Bytes passen muss (`lib.sh`, Kopf).
+
+`E2E_KEEP_WORKDIR` wird in den drei Aufrufblöcken dokumentiert, in der Form, die dort schon steht:
+
+```
+#   E2E_KEEP_WORKDIR=1 ./tests/e2e/m1_sealed_box.sh
+#                                         den Wegwerf-Baum unter /tmp behalten
+```
+
+### Schritte
+1. `e2e_drop_workdir` in `lib.sh` schreiben, direkt unter `e2e_short_workdir`.
+2. `collect()` in `m1_sealed_box.sh` um die Absicherung der `cp`-Zeilen und den Aufruf ergänzen.
+3. `collect()` in `m2_first_decision/run.sh` auf den Helfer umstellen, Kommentar 125 bis 128 auf die neue Stelle beziehen.
+4. `E2E_KEEP_WORKDIR` in die drei Aufrufblöcke aufnehmen.
+5. `./tests/e2e/run.sh` einmal grün fahren, einmal absichtlich rot (siehe Akzeptanzkriterien), `/tmp` jeweils davor und danach zählen.
+
+### Tests
+Die Demoskripte sind der Test; geprüft wird von außen, mit einem Blick nach `/tmp` und nach `target/e2e` vor und nach dem Lauf. Kein neuer Testrunner, keine neue Datei.
+
+### Akzeptanzkriterien
+- [ ] Grüner Lauf räumt auf: `ls -d /tmp/hum-e2e-* 2>/dev/null | wc -l` liefert nach `./tests/e2e/run.sh` (Exit 0) dieselbe Zahl wie unmittelbar davor, auf einer sauberen Maschine 0.
+- [ ] Roter Lauf räumt auch auf: `E2E_SKIP_BUILD=1 CARGO_TARGET_DIR=/tmp/no-such-target ./tests/e2e/m1_sealed_box.sh` endet mit Exit 1 und `no humanitld binary at …`, und danach ist die Zahl der `/tmp/hum-e2e-*` unverändert.
+- [ ] Artefakte bleiben vollständig: `ls target/e2e` nennt nach dem Lauf dieselben Dateien wie vor der Änderung (`daemon.log`, `upstream.log`, die Ausgaben aus `out/`), und `target/e2e/m2` ist nach `E2E_ONLY=m2 ./tests/e2e/run.sh` unverändert gefüllt.
+- [ ] `E2E_KEEP_WORKDIR=1 ./tests/e2e/m1_sealed_box.sh` endet mit Exit 0, das Verzeichnis existiert danach noch, und das Protokoll enthält genau eine Zeile `keeping the workdir /tmp/hum-e2e-…`.
+- [ ] M2 löscht weiter: `E2E_ONLY=m2 ./tests/e2e/run.sh` Exit 0, danach kein neues `/tmp/hum-e2e-*`.
+- [ ] Die Absicherung steht genau einmal: `git grep -n 'hum-e2e-\*' tests/e2e` zeigt nur die eine Stelle in `lib.sh`.
+
+### Fallstricke
+- Reihenfolge in `collect()`: erst die Prozesse beenden, dann kopieren, dann löschen. Ein `rm -rf` vor dem `cp` nimmt genau die Protokolle mit, die den Fehlschlag erklären, und macht aus einem roten Lauf einen stummen.
+- Der Trap läuft auch, wenn `e2e_short_workdir` selbst gescheitert ist. Unter `set -euo pipefail` ist `E2E_WORKDIR` dann ungesetzt, und ein nacktes `"$E2E_WORKDIR"` beendet `collect()` mit `unbound variable`, bevor `stop_daemon` etwas tut. Deshalb `${E2E_WORKDIR:-}` in den `cp`-Zeilen und im Helfer.
+- Beide Absicherungen bleiben. Die Existenzprüfung allein genügt nicht, der Präfix allein auch nicht; zusammen decken sie den leeren Wert und den fremden Pfad ab.
+- `lib.sh` ist POSIX sh (`# shellcheck shell=sh`, Zeile 1): kein `local`, keine Arrays, kein `[[`. Hilfsvariablen brauchen ein Präfix nach dem Vorbild von `wait_socket_path`, sonst überschreibt der Helfer dem Aufrufer etwas.
+- `m1_sealed_box.sh` setzt `E2E_OUT="$E2E_ROOT/target/e2e"` und löscht das Verzeichnis zu Beginn als Ganzes, also auch das Unterverzeichnis `m2` von M2. Das geht heute nur gut, weil `run.sh` M1 zuerst fährt; dieses Issue fasst es nicht an, aber wer die `rm -rf "$E2E_OUT"`-Zeilen anrührt, verliert Artefakte.
+- Das Löschen darf nur den eigenen Baum treffen: kein Muster über `/tmp/hum-e2e-*` als Ganzes, sonst räumt ein Lauf den Baum eines parallel laufenden zweiten weg.
+
+### Referenzen
+`tests/e2e/lib.sh` 10-13 (die Zusage), 206-227 (`unshare -rn`, kein Mount-Namensraum) und 231-243; `tests/e2e/m1_sealed_box.sh` 69-81 und der Schlussschritt `the daemon leaves nothing behind`; `tests/e2e/m2_first_decision/run.sh` 125-145; `.github/workflows/ci.yml`, Artefakt-Pfad `target/e2e`; CONVENTIONS.md 3.11; HUM-021, HUM-036.
