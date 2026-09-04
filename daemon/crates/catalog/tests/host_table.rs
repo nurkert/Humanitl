@@ -1,13 +1,21 @@
 //! Die Matching-Tabelle aus `backlog/sprint-2.md` (HUM-022), soweit sie für
-//! Namensmuster gilt.
+//! Namensmuster gilt, durch die Schnittstelle des Katalogs gefahren.
 //!
-//! Der Katalog vergleicht Hosts mit derselben Label-Semantik wie die Regeln,
-//! aber mit eigenem Code: `humanitl-catalog` darf nicht von `humanitl-rules`
-//! abhängen (`tools/deps-allow.toml`). Diese Datei ist die Klammer um die
-//! Doppelung. Sie wiederholt die Zeilen aus
-//! `daemon/crates/rules/tests/host_table.rs` mit denselben Nummern, damit ein
-//! Unterschied zwischen den beiden Umsetzungen als roter Test auffällt und
-//! nicht als stiller Fehltreffer im Domain-Panel.
+//! Die Datei prüft zwei Dinge, und sie tut es an denselben nummerierten Zeilen
+//! wie `daemon/crates/rules/tests/host_table.rs`:
+//!
+//! 1. Was der Katalog **selbst** entscheidet: welche der vier Musterformen er
+//!    annimmt (`ip:`, `cidr:` und eine nackte Adresse nimmt er nicht) und dass
+//!    eine Adresse nie einen Katalogeintrag trifft.
+//! 2. Dass [`humanitl_catalog::pattern::matches`] die Zeilen der Tabelle
+//!    tatsächlich so beantwortet — end-to-end, von `parse` bis zum Ergebnis.
+//!
+//! Der Gang über die Labels selbst liegt seit dem Umzug nur noch einmal im
+//! Baum, als [`humanitl_core::rule::glob_matches`], und seine eigene Tabelle
+//! steht in `daemon/crates/core-types/tests/host_glob.rs`. Die Zeilen hier sind
+//! deshalb keine zweite Fassung dieser Tabelle mehr, sondern die Probe, dass
+//! der Katalog den Kern auch wirklich fragt: Wer `matches` durch `ends_with`
+//! ersetzte, käme an `host_glob.rs` vorbei, aber nicht hier vorbei.
 //!
 //! Die Zeilen 27 bis 40 der Tabelle betreffen `ip:` und `cidr:`. Der Katalog
 //! kennt diese Muster nicht; `catalog_rejects_address_patterns` hält das fest.

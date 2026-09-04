@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use humanitl_core::diagnostics::codes;
-use humanitl_core::{Diagnostic, DiagnosticCode, FlowId, Severity};
+use humanitl_core::{Diagnostic, DiagnosticCode, FlowId};
 use prost::Message as _;
 use tokio::sync::mpsc;
 use tokio_stream::Stream;
@@ -65,7 +65,14 @@ pub trait DaemonApi: Send + Sync + 'static {
     async fn get_flow(&self, id: FlowId) -> Result<v1::FlowDetail, Diagnostic>;
 
     /// Der Inhalt eines Bodys, in Stücken. Das letzte Stück trägt `last`.
-    fn get_body(&self, body: v1::BodyRef) -> BoxStream<v1::BodyChunk>;
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`] mit `IPC_005`, wenn die Prüfsumme keine 32 Bytes hat.
+    /// Der Port braucht diesen Fehlerpfad, weil der echte Dienst ihn hat: ohne
+    /// ihn müsste der Fake eine unlesbare Anfrage als leeren Body beantworten,
+    /// und das sähe für den Client aus wie ein Body, den es gibt.
+    fn get_body(&self, body: v1::BodyRef) -> Result<BoxStream<v1::BodyChunk>, Diagnostic>;
 
     /// Entscheidet einen oder mehrere gehaltene Flows.
     ///
@@ -210,6 +217,27 @@ pub fn diagnostic_to_status(diagnostic: &Diagnostic) -> Status {
     Status::with_details(grpc_code(diagnostic.code), diagnostic.to_string(), details)
 }
 
+/// Übersetzt den Befund eines `GetFlow` in seinen gRPC-Status.
+///
+/// Eine einzige Ausnahme von [`grpc_code`], und sie steht hier, an der Stelle,
+/// an der ohnehin übersetzt wird: `IPC_003` heißt überall sonst „der Flow
+/// wartet nicht mehr" und damit `FailedPrecondition`. Aus `GetFlow` heißt es
+/// etwas anderes — den Flow gibt es nicht —, und das ist `NOT_FOUND`. Ein
+/// eigener Diagnostic-Code dafür wäre ein neuer Eintrag im Register für einen
+/// Unterschied, den nur ein einziger RPC macht; [`grpc_code`] zu ändern
+/// verschöbe jeden anderen Aufruf mit.
+///
+/// Der Befund reist wie immer vollständig in den Details mit; ein nackter
+/// String stünde dem Client nur als Textzeile zur Verfügung.
+#[must_use]
+pub fn get_flow_status(diagnostic: &Diagnostic) -> Status {
+    if diagnostic.code != codes::IPC_003 {
+        return diagnostic_to_status(diagnostic);
+    }
+    let details = Bytes::from(diagnostic_to_proto(diagnostic).encode_to_vec());
+    Status::with_details(Code::NotFound, diagnostic.to_string(), details)
+}
+
 /// Liest einen Befund aus den Details eines gRPC-Fehlers zurück.
 ///
 /// Gedacht für Clients und Tests. Ein Fehler ohne Details oder mit fremden
@@ -302,18 +330,16 @@ impl<T: DaemonApi> v1::humanitl_server::Humanitl for DaemonService<T> {
     ) -> Result<Response<v1::FlowDetail>, Status> {
         self.check_token(&request)?;
         let reference = request.into_inner();
-        let id = FlowId::parse(&reference.flow_id).map_err(|err| {
-            diagnostic_to_status(
-                &Diagnostic::builder(codes::IPC_003, Severity::Error)
-                    .why(err.to_string())
-                    .build(),
-            )
-        })?;
+        // `IPC_004`, nicht `IPC_003`: eine unlesbare Id ist eine unlesbare
+        // Anfrage und kein Zustand eines Flows (CONVENTIONS 4.12). Der echte
+        // Dienst sagt dasselbe, weil beide durch [`crate::validate`] gehen.
+        let id = crate::validate::flow_id(&reference.flow_id)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
         self.api
             .get_flow(id)
             .await
             .map(Response::new)
-            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
+            .map_err(|diagnostic| get_flow_status(&diagnostic))
     }
 
     async fn get_body(
@@ -321,9 +347,11 @@ impl<T: DaemonApi> v1::humanitl_server::Humanitl for DaemonService<T> {
         request: Request<v1::BodyRef>,
     ) -> Result<Response<Self::GetBodyStream>, Status> {
         self.check_token(&request)?;
-        Ok(Response::new(ok_stream(
-            self.api.get_body(request.into_inner()),
-        )))
+        let stream = self
+            .api
+            .get_body(request.into_inner())
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        Ok(Response::new(ok_stream(stream)))
     }
 
     async fn decide(

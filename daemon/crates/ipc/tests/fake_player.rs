@@ -274,11 +274,18 @@ async fn allow_edited_with_two_ids_is_ipc_002() {
         ids.push(flow_of(&held));
     }
 
+    // Die Anfrage selbst ist lesbar; allein ihre Zahl von Flows ist falsch.
+    // Eine unlesbare Anfrage waere `IPC_004` und ein Fehler des ganzen
+    // Aufrufs, weil sie vor der Zahl geprueft wird (CONVENTIONS 4.12).
     let response = daemon
         .decide(v1::DecideRequest {
             flow_ids: ids.clone(),
             decision: Some(v1::decide_request::Decision::AllowEdited(
-                v1::EditedRequest::default(),
+                v1::EditedRequest {
+                    method: v1::Method::Get as i32,
+                    url: "https://registry.npmjs.org/express".to_owned(),
+                    ..v1::EditedRequest::default()
+                },
             )),
             ..v1::DecideRequest::default()
         })
@@ -318,7 +325,10 @@ async fn an_unreadable_edited_request_is_refused_not_allowed() {
     let flow_id = flow_of(&held);
 
     // Unlesbar heisst: die Methode oder die URL ergeben keine Anfrage. Beide
-    // Faelle enden mit `IPC_004` und dem Grund, nie mit einem `Allow`.
+    // Faelle enden mit `IPC_004` und dem Grund, nie mit einem `Allow`. Der
+    // Fehler gilt dem ganzen Aufruf und nicht einem einzelnen Flow: der echte
+    // Dienst liest die Entscheidung, bevor er einen Flow ansieht, und der Fake
+    // tut seit HUM-022 dasselbe (`crate::validate`).
     let unreadable = [
         (
             "a url without a scheme",
@@ -338,24 +348,21 @@ async fn an_unreadable_edited_request_is_refused_not_allowed() {
         ),
     ];
     for (case, edited) in unreadable {
-        let response = daemon
+        let Err(diagnostic) = daemon
             .decide(v1::DecideRequest {
                 flow_ids: vec![flow_id.clone()],
                 decision: Some(v1::decide_request::Decision::AllowEdited(edited)),
                 ..v1::DecideRequest::default()
             })
             .await
-            .expect("the call itself succeeds");
-
-        let [result] = response.results.as_slice() else {
-            panic!("{case}: one flow, one result: {:?}", response.results);
+        else {
+            panic!("{case}: an unreadable edited request is never an allow");
         };
-        assert!(
-            !result.applied,
-            "{case}: nothing is let through: {result:?}"
+        assert_eq!(
+            diagnostic.code,
+            humanitl_core::diagnostics::codes::IPC_004,
+            "{case}"
         );
-        let diagnostic = result.diagnostic.as_ref().expect("a diagnostic");
-        assert_eq!(diagnostic.code, "IPC_004", "{case}");
         assert!(
             diagnostic.why.contains("not readable"),
             "{case}: {}",
@@ -381,7 +388,9 @@ async fn an_unreadable_edited_request_is_refused_not_allowed() {
 
 /// Liest einen Body vollstaendig ueber `GetBody`.
 async fn read_body(daemon: &Arc<FakeDaemon>, body: v1::BodyRef) -> Vec<u8> {
-    let mut chunks = daemon.get_body(body);
+    let mut chunks = daemon
+        .get_body(body)
+        .expect("the body reference is readable");
     let mut data = Vec::new();
     while let Some(chunk) = chunks.next().await {
         data.extend_from_slice(&chunk.data);
@@ -632,13 +641,33 @@ async fn get_body_chunks_and_answers_an_empty_body() {
             truncated: false,
             content_type: String::new(),
         })
+        .expect("a 32 byte hash is readable")
         .collect()
         .await;
     assert_eq!(chunks.len(), 1);
     assert!(chunks[0].last);
     assert!(chunks[0].data.is_empty());
 
-    let unknown: Vec<v1::BodyChunk> = daemon.get_body(v1::BodyRef::default()).collect().await;
+    // Eine Prüfsumme, die keine 32 Bytes hat, ist keine Prüfsumme. Sie wurde
+    // früher mit Nullen aufgefüllt und traf damit unter Umständen einen
+    // fremden Body; jetzt ist sie `IPC_005`, wie im echten Dienst.
+    let Err(refused) = daemon.get_body(v1::BodyRef::default()) else {
+        panic!("an empty sha256 is not a body reference");
+    };
+    assert_eq!(refused.code, humanitl_core::diagnostics::codes::IPC_005);
+
+    // Ein wohlgeformter Hash, den der Fake nicht kennt, bleibt ein leerer
+    // Body: sein Blob-Speicher ist die Sitzungsdatei, nicht die Aufzeichnung.
+    let unknown: Vec<v1::BodyChunk> = daemon
+        .get_body(v1::BodyRef {
+            sha256: vec![7u8; 32],
+            size: 0,
+            truncated: false,
+            content_type: String::new(),
+        })
+        .expect("a 32 byte hash is readable")
+        .collect()
+        .await;
     assert_eq!(unknown.len(), 1, "an unknown body is empty, not an error");
 }
 
