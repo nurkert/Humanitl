@@ -15,13 +15,32 @@
 //! |---|---|---|---|
 //! | Session | `expires: session` über den RPC | nie | ja |
 //! | Dauerhaft | `rules.yaml` des Nutzers | ja | ja |
-//! | Mitgeliefert | `rules/default.yaml` | nie | nein (`RULES_010`) |
+//! | Mitgeliefert | `rules/default.yaml`, Agent-Adapter | nie | nein (`RULES_010`) |
 //!
-//! Ausgewertet wird in dieser Reihenfolge: Sitzungsregeln zuerst, dann die
-//! dauerhaften des Nutzers, dann die mitgelieferten
-//! (`backlog/CONVENTIONS.md` 4.5). Was der Mensch gerade entschieden hat, soll
-//! sofort gelten, auch wenn eine ältere, breitere Regel darunter steht; und
-//! eine eigene Regel steht vor jeder mitgelieferten.
+//! # Die Auswertungsreihenfolge
+//!
+//! Vier Gruppen, geprüft in dieser Reihenfolge (`backlog/CONVENTIONS.md` 4.5):
+//!
+//! 1. die mitgelieferte Durchreiche zum Sprachmodell (`passthrough_llm` und
+//!    `bundled`),
+//! 2. die Sitzungsregeln,
+//! 3. die dauerhaften Regeln des Nutzers,
+//! 4. die mitgelieferten.
+//!
+//! Die ersten beiden Ränge macht [`RuleSet::evaluate`] selbst; sie hängen an
+//! der Regel, nicht an ihrem Platz. Den Vermerk `bundled`, an dem Rang 1
+//! hängt, setzt allein [`RuleSet::add_bundled`]: Eine `rules.yaml` und die
+//! Inline-Regeln eines Profils bekommen ihn nicht (`humanitl_rules`
+//! verwirft ihn mit `RULES_010`), und über die Leitung kommt er auch nicht. Die letzten beiden macht die Reihenfolge,
+//! in der `snapshot_of` den Satz zusammensetzt: die mitgelieferten kommen
+//! über [`RuleSet::add_bundled`] ans Ende.
+//!
+//! Die Gründe: Die Durchreiche ist der eine erklärte Seitenkanal und muss als
+//! solcher erkennbar bleiben (`DecisionSource::Passthrough`, `LLM_005`); was
+//! der Mensch gerade entschieden hat, soll sofort gelten, auch wenn eine
+//! ältere, breitere Regel darunter steht; und eine eigene Regel steht vor
+//! jeder mitgelieferten, sonst ließe sich eine mitgelieferte Regel nicht
+//! überstimmen, ohne sie zu löschen (HUM-027).
 //!
 //! # Zusagen, die kein Compiler prüft
 //!
@@ -159,16 +178,6 @@ struct State {
 }
 
 impl State {
-    /// Die Regeln in Auswertungsreihenfolge.
-    fn all(&self) -> Vec<Rule> {
-        let mut out =
-            Vec::with_capacity(self.session.len() + self.persistent.len() + self.bundled.len());
-        out.extend(self.session.iter().cloned());
-        out.extend(self.persistent.iter().cloned());
-        out.extend(self.bundled.iter().cloned());
-        out
-    }
-
     /// Die Gruppe, in der die Regel mit dieser Id steht.
     fn origin_of(&self, id: RuleId) -> Option<Origin> {
         if self.session.iter().any(|rule| rule.id == id) {
@@ -217,8 +226,12 @@ impl RulesStore {
     /// ihm ansieht, welche Hälfte fehlt. Ohne Regel wird jede Anfrage gehalten,
     /// der Fehler kostet also Rückfragen und nie eine stille Freigabe.
     ///
-    /// `bundled` sind die mitgelieferten Regeln aus `rules/default.yaml`; sie
-    /// werden hinter die Nutzerregeln gehängt und als `bundled` markiert.
+    /// `bundled` sind die mitgelieferten Regeln aus `rules/default.yaml` und
+    /// die Durchreiche des Agent-Adapters; sie werden hinter die Nutzerregeln
+    /// gehängt und als `bundled` markiert. Die Marken stehen schon hier und
+    /// nicht erst im Schnappschuss, weil [`RulesStore::list`] sie zeigt;
+    /// [`RuleSet::add_bundled`] setzt dieselben Marken noch einmal, damit ein
+    /// Satz auch dann stimmt, wenn er anderswo gebaut wurde.
     #[must_use]
     pub fn load(path: &Path, bundled: &[Rule], session: SessionId) -> (Self, Vec<Diagnostic>) {
         let (persistent, disabled_bundled, diagnostics) = read_file(path, session);
@@ -304,7 +317,17 @@ impl RulesStore {
         self.changed.subscribe()
     }
 
-    /// Alle Regeln mit Gruppe und Platz, in Auswertungsreihenfolge.
+    /// Alle Regeln mit ihrer Gruppe und ihrem Platz darin: Sitzung, Nutzer,
+    /// mitgeliefert.
+    ///
+    /// Das ist die Reihenfolge der **Gruppen**, nicht die der Auswertung: Die
+    /// mitgelieferte Durchreiche zum Sprachmodell steht hier am Ende, in ihrer
+    /// Gruppe, und wird trotzdem vor allem anderen geprüft
+    /// (`backlog/CONVENTIONS.md` 4.5). Sortiert wird deshalb nicht: Die Liste
+    /// ist das, was Oberfläche und `humanitl rules list` zeigen, und dort ist
+    /// die Gruppe die Ordnung, die ein Mensch sucht — die Durchreiche trägt
+    /// ihren Rang sichtbar an sich (`passthrough_llm`, in der Liste als eigene
+    /// Kennzeichnung).
     #[must_use]
     pub fn list(&self) -> Vec<StoredRule> {
         let state = self.lock();
@@ -723,9 +746,25 @@ impl RulesStore {
 
 /// Der Regelsatz, den der Proxy sieht: die Regeln plus die Liste der
 /// abgeschalteten mitgelieferten.
+///
+/// Hier entsteht die Reihenfolge der Ränge 3 und 4 aus dem Kopf dieser Datei:
+/// erst die Sitzungsregeln und die dauerhaften des Nutzers, dann über
+/// [`RuleSet::add_bundled`] die mitgelieferten ans Ende. Ein Vertauschen wäre
+/// nicht bloß Kosmetik — es nähme dem Nutzer die Möglichkeit, eine
+/// mitgelieferte Regel zu überstimmen, und machte damit den Vorschlag aus
+/// [`immutable_bundled`] unerfüllbar. Der Test
+/// `a_user_rule_overrides_a_bundled_rule`
+/// (`daemon/crates/proxy/tests/rules_order.rs`) hält das fest.
+///
+/// Die Durchreiche zum Sprachmodell kommt als mitgelieferte Regel ebenfalls
+/// ans Ende und wird trotzdem zuerst geprüft: Ihren Vorrang trägt sie an sich
+/// selbst, nicht an ihrem Platz in der Liste.
 fn snapshot_of(state: &State) -> RuleSet {
-    let mut set = RuleSet::from_rules(state.all());
+    let mut set = RuleSet::from_rules(state.session.iter().chain(&state.persistent).cloned());
+    // Vor `add_bundled`: die Liste entscheidet dort mit, welche mitgelieferte
+    // Regel abgeschaltet in den Satz geht.
     set.set_disabled_bundled(state.disabled_bundled.iter().copied());
+    set.add_bundled(state.bundled.iter().cloned());
     set
 }
 

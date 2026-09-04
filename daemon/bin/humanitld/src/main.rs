@@ -615,11 +615,11 @@ const BUNDLED_RULES: &str = include_str!("../../../../rules/default.yaml");
 
 /// Öffnet den Regelspeicher dieser Sitzung.
 ///
-/// Der Speicher hält drei Gruppen und wertet sie in dieser Reihenfolge aus:
-/// Sitzungsregeln, dauerhafte Regeln des Nutzers aus `rules.yaml`, dann die
-/// mitgelieferten (`backlog/CONVENTIONS.md` 4.5). Er ist zugleich die Quelle
-/// des `Rules`-RPC und die des Proxys: Der eine ändert, der andere liest, und
-/// beide halten dasselbe Handle (HUM-027).
+/// Ausgewertet wird in vier Rängen (`backlog/CONVENTIONS.md` 4.5): die
+/// erklärte Durchreiche zum Sprachmodell, die Sitzungsregeln, die dauerhaften
+/// Regeln des Nutzers aus `rules.yaml`, zuletzt die mitgelieferten. Der
+/// Speicher ist zugleich die Quelle des `Rules`-RPC und die des Proxys: Der
+/// eine ändert, der andere liest, und beide halten dasselbe Handle (HUM-027).
 ///
 /// Fehlt `rules.yaml`, ist das kein Fehler; lehnt die Engine sie ab, startet
 /// der Speicher ohne die Regeln des Nutzers und meldet die Befunde. Ohne Regel
@@ -627,9 +627,16 @@ const BUNDLED_RULES: &str = include_str!("../../../../rules/default.yaml");
 fn load_rules(xdg: &XdgPaths, config: &Config, session: SessionId) -> Arc<RulesStore> {
     let path = xdg.rules_path();
     let mut bundled = Vec::new();
-    // Die Durchreiche steht vor allem anderen (`backlog/sprint-3.md` HUM-037
-    // Schritt 6): Sie ist die engste Regel des Satzes, und eine Blockregel des
-    // Profils `llm-only` (`host: "**"`) stünde sonst davor.
+    // Die Durchreiche steht als erste in der Gruppe der mitgelieferten Regeln,
+    // damit sie im Rules-Screen oben in ihrer Gruppe erscheint. Ihren Vorrang
+    // trägt sie nicht an dieser Stelle, sondern an sich selbst:
+    // `RuleSet::evaluate` prüft mitgelieferte Regeln mit `passthrough_llm` in
+    // einem eigenen ersten Durchgang (`backlog/CONVENTIONS.md` 4.5, HUM-104).
+    // Nur deshalb blockt eine weite Regel des Nutzers oder des Profils
+    // `llm-only` (`host: "**"`) nicht das Sprachmodell und nimmt der
+    // Durchreiche nicht ihre Merkmale. `bundled` setzt dabei erst der Speicher
+    // beim Laden; was hier hineingeht, kommt aus dem Adapter und aus dem
+    // eingebauten `rules/default.yaml`, nie aus einer Datei des Nutzers.
     bundled.extend(llm_passthrough_rule(config));
     bundled.extend(read_bundled_rules(session));
     let (store, diagnostics) = RulesStore::load(&path, &bundled, session);
