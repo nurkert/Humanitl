@@ -145,9 +145,8 @@ void main() {
       const Decision.allow().toProto(id).whichDecision(),
       pb.DecideRequest_Decision.allow,
     );
-    final pb.DecideRequest block = const Decision.block(
-      note: 'use PyPI',
-    ).toProto(id);
+    final pb.DecideRequest block = const Decision.block(note: 'use PyPI')
+        .toProto(id);
     expect(block.whichDecision(), pb.DecideRequest_Decision.block);
     expect(block.block.note, 'use PyPI');
     expect(block.flowIds, <String>[id.value]);

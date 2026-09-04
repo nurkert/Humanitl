@@ -50,7 +50,7 @@ Regeln:
 | [0006](0006-dns-after-allow.md) | DNS-Auflösung erst nach der Freigabe | Accepted | Ein Hostname leakt 63 Bytes pro Label; aufgelöst wird einmal nach `allow`, die IP wird gepinnt. |
 | [0007](0007-rule-model.md) | Regel-Modell: geordnete Liste, first match wins, Default `ask` | Accepted | Label-Globs statt Substrings, Punycode-Normalisierung, Session-Regeln zuerst, Domain Fronting blockt ohne Nachfrage. |
 | [0008](0008-storage.md) | Speicherung: SQLite, Blob-Store, Audit-Kette, Pseudonym-Mapping | Accepted | Metadaten in SQLite, große Bodies content-addressed, Audit als JSONL-Hash-Kette mit ehrlicher Aussage über ihre Grenzen. |
-| [0009](0009-ui-stack.md) | UI-Stack: Flutter mit eigener Wrapper-Schicht `packages/ui` | Accepted | Datenlastige Widgets aus Spezialpaketen, kein WebView; HUM-035 entscheidet 2026-09-04 gegen `shadcn_flutter` und gegen forui. |
+| [0009](0009-ui-stack.md) | UI-Stack: Flutter mit `shadcn_flutter` hinter `packages/ui` | Accepted | Datenlastige Widgets aus Spezialpaketen, kein WebView; HUM-035 entschied am 2026-09-04 dagegen, der Projekteigentümer nahm das am selben Tag zurück. |
 | [0010](0010-packaging.md) | Auslieferung als `.deb` und AppImage, Flatpak später und nur für die UI | Accepted | Ein Artefakt enthält alles; systemd user unit per Klick; Flatpak scheitert am `bwrap`-Start des Daemons. |
 | [0011](0011-single-config-source.md) | Eine Konfigurationsquelle, drei Sichtbarkeitsstufen | Accepted | Rust-Typ als einzige Quelle für Schema, CLI-Flags, Einstellungsbildschirm und Doku; `basic`/`advanced`/`expert`. |
 | [0012](0012-diagnostics-as-type.md) | Geführte Zustände als Typ: `Diagnostic` statt Fehlerstring | Accepted | Jeder Fehlerpfad liefert `code`, `why` und eine ausführbare `FixAction`; Codes stehen in einem Register. |
@@ -78,14 +78,18 @@ Wo eine Entscheidung eine andere verfeinert oder korrigiert:
 | ADR-0011 | ADR-0007 | Regelt die zwei Ablageorte für Regeln (gespeichert und Session). |
 | ADR-0012 | ADR-0010 | `FixAction::InstallService` ist der Mechanismus hinter der Ein-Klick-Installation. |
 
-Die größte Korrektur innerhalb einer Entscheidung steht in ADR-0009: HUM-035
-hat am 2026-09-04 die Wahl der Komponentenbibliothek revidiert. `shadcn_flutter`
-wird nicht aufgenommen, forui auch nicht; `app/packages/ui` bleibt auf
-`package:flutter/widgets.dart`. Der Nachtrag „Entscheidung nach Sprint 2" trägt
-die Matrix und das Ergebnis, die Abschnitte `Entscheidung`, `Begründung`,
-`Verworfene Alternativen` und `Konsequenzen` tragen das Banner darauf, und der
-Rest der Entscheidung — Flutter, die Kapselung, kein WebView, ein Fenster mit
-gedockten Panes — steht unverändert.
+Die größte Korrektur innerhalb einer Entscheidung steht in ADR-0009, und sie
+ging am 2026-09-04 zweimal hin und her. HUM-035 hat die Wahl der
+Komponentenbibliothek revidiert und `shadcn_flutter` verworfen; der
+Projekteigentümer hat das am selben Tag zurückgenommen, weil die ursprüngliche
+Fassung des ADR seine Vorgabe war und ein Issue sie nicht ohne Rückfrage
+aufheben darf. Es gilt der Abschnitt „Revidiert am 2026-09-04 durch den
+Projekteigentümer": `shadcn_flutter` wird aufgenommen, gepinnt und
+ausschließlich in `app/packages/ui`. Der Abschnitt „Entscheidung nach Sprint 2"
+bleibt als Historie stehen, weil seine Messungen weiter gelten; die Abschnitte
+`Entscheidung`, `Begründung`, `Verworfene Alternativen` und `Konsequenzen`
+tragen Banner auf den heutigen Stand. Der Rest der Entscheidung — Flutter, die
+Kapselung, kein WebView, ein Fenster mit gedockten Panes — steht unverändert.
 
 Weitere Korrekturen innerhalb einer Entscheidung: ADR-0005 hält fest, dass
 `Expect: 100-continue` **sofort** mit `100 Continue` beantwortet wird. Die

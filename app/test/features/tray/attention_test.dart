@@ -37,9 +37,8 @@ void main() {
     });
 
     test('the_provider_names_the_real_reason', () {
-      final String source = File(
-        'lib/features/tray/providers/attention.dart',
-      ).readAsStringSync();
+      final String source = File('lib/features/tray/providers/attention.dart')
+          .readAsStringSync();
       // Der Grund, warum jeder Meldungen bekommt, ist der fehlende Abruf,
       // nicht ein fehlender Eintrag im Register.
       for (final String named in <String>[

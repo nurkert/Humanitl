@@ -49,9 +49,10 @@ const Set<String> multiLabelSuffixes = <String>{
 /// Derived from the table instead of written down: a new three-label entry
 /// beside a two-label one would otherwise be shadowed by the shorter match,
 /// and the grouping would change without anybody noticing.
-List<int> suffixLengths(Set<String> suffixes) => <int>{
-  for (final String suffix in suffixes) suffix.split('.').length,
-}.toList()..sort((int a, int b) => b.compareTo(a));
+List<int> suffixLengths(Set<String> suffixes) =>
+    <int>{for (final String suffix in suffixes) suffix.split('.').length}
+        .toList()
+      ..sort((int a, int b) => b.compareTo(a));
 
 /// The registrable domain of [host]: `api.github.com` becomes `github.com`,
 /// `foo.bar.co.uk` becomes `bar.co.uk`.

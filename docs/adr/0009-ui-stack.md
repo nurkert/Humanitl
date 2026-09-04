@@ -1,6 +1,6 @@
 # ADR-0009 · UI-Stack: Flutter mit eigener Wrapper-Schicht `packages/ui`
 Status: Accepted
-Datum: 2026-09-02, revidiert 2026-09-04 (HUM-035)
+Datum: 2026-09-02, zweimal revidiert am 2026-09-04 (HUM-035, dann der Projekteigentümer)
 
 ## Kontext
 
@@ -22,15 +22,15 @@ teuer, wenn sie sich erst im dritten Sprint zeigt.
 
 ## Entscheidung
 
-> **Revidiert am 2026-09-04 durch HUM-035.** Der Abschnitt „Entscheidung
-> nach Sprint 2" weiter unten ersetzt die Wahl der Komponentenbibliothek:
-> `shadcn_flutter` wird nicht aufgenommen, forui auch nicht,
-> `app/packages/ui` bleibt auf `package:flutter/widgets.dart`. Alles Übrige
-> dieses Abschnitts gilt unverändert. Der ursprüngliche Wortlaut bleibt
-> stehen, damit nachvollziehbar ist, worauf HUM-035 antwortet — auch der
-> letzte Absatz dieses Abschnitts, der die Überprüfung am Ende von Sprint 2
-> als bevorstehend ankündigt: Sie hat stattgefunden, und dies ist ihr
-> Ergebnis.
+> **Zweimal revidiert am 2026-09-04.** HUM-035 hatte diesen Abschnitt
+> ersetzt und `shadcn_flutter` verworfen; der Projekteigentümer hat das am
+> selben Tag zurückgenommen. Es gilt der Abschnitt „Revidiert am 2026-09-04
+> durch den Projekteigentümer" ganz unten: `shadcn_flutter` wird
+> aufgenommen, gepinnt auf 0.0.54 und ausschließlich in
+> `app/packages/ui`. Alles Übrige dieses Abschnitts gilt unverändert. Der
+> ursprüngliche Wortlaut bleibt stehen, damit die Kette nachvollziehbar
+> ist — auch der letzte Absatz, der die Überprüfung am Ende von Sprint 2
+> ankündigt: Sie hat stattgefunden, zweimal.
 
 Die Oberfläche ist Flutter (Desktop/GTK). Für das Chrome — Resizable Panes,
 Command Palette, Sheet, Toast, ContextMenu, Menubar — kommt
@@ -68,10 +68,11 @@ existiert: bestätigen oder wechseln.
 
 ## Begründung
 
-> **Revidiert am 2026-09-04 durch HUM-035.** Die Absätze zu
-> `shadcn_flutter` und zur Überprüfung am Ende von Sprint 2 sind
-> beantwortet; der Abschnitt „Entscheidung nach Sprint 2" trägt die
-> Begründung des heutigen Standes. Alles Übrige gilt unverändert.
+> **Zweimal revidiert am 2026-09-04.** Die Absätze zu `shadcn_flutter` und
+> zur Überprüfung am Ende von Sprint 2 sind beantwortet. Die Begründung des
+> heutigen Standes steht im Abschnitt „Revidiert am 2026-09-04 durch den
+> Projekteigentümer"; der Abschnitt „Entscheidung nach Sprint 2" ist
+> Historie. Alles Übrige gilt unverändert.
 
 Flutter liefert für den Linux-Desktop ein vollständiges Rendering ohne
 GTK-Widget-Zoo, eine sehr gute Animationsschicht (Ankunfts- und
@@ -109,10 +110,10 @@ Wertsemantik plus erschöpfendes Pattern-Matching braucht.
 
 ## Verworfene Alternativen
 
-> **Revidiert am 2026-09-04 durch HUM-035.** Der Punkt „forui statt
-> shadcn_flutter" ist entschieden: weder noch. Die Liste steht als
-> Historie; die heutige Fassung ist „Verworfene Alternativen dieser
-> Revision" im Abschnitt „Entscheidung nach Sprint 2".
+> **Zweimal revidiert am 2026-09-04.** Der Punkt „forui statt
+> shadcn_flutter" ist entschieden: `shadcn_flutter`. Die Liste steht als
+> Historie; maßgeblich ist der Abschnitt „Revidiert am 2026-09-04 durch den
+> Projekteigentümer".
 
 - **GTK4 direkt (Rust `gtk4-rs` oder Vala).** Nativ, leichtgewichtig, gute
   Systemintegration. Verliert an der Menge der Spezialwidgets: virtualisierte
@@ -136,14 +137,13 @@ Wertsemantik plus erschöpfendes Pattern-Matching braucht.
 
 ## Konsequenzen
 
-> **Revidiert am 2026-09-04 durch HUM-035.** Die vier Punkte, die
+> **Zweimal revidiert am 2026-09-04.** Die vier Punkte, die
 > `shadcn_flutter` betreffen — Pinning, Upgrade-Tag, Import-Verbot,
-> Restrisiko —, ersetzt der Unterabschnitt „Folgen dieser Entscheidung" im
-> Abschnitt „Entscheidung nach Sprint 2". Der Punkt, der für eine
-> Entscheidung zugunsten von forui einen Nachfolge-ADR ankündigt, ist
-> erledigt: Es wird keine Bibliothek, deshalb kein Nachfolger, sondern
-> dieser Nachtrag. Goldens, `DaemonClient`-Bindung und `HTokens` gelten
-> unverändert.
+> Restrisiko —, gelten wieder, in der Fassung des Abschnitts „Revidiert am
+> 2026-09-04 durch den Projekteigentümer": Pin auf 0.0.54, Import nur in
+> `app/packages/ui`, von `tools/check-deps.sh` erzwungen. Ein Nachfolge-ADR
+> für forui entfällt, weil forui nicht gewählt wurde. Goldens,
+> `DaemonClient`-Bindung und `HTokens` gelten unverändert.
 
 - `app/packages/ui` ist verbindlich: Ein direkter `shadcn_flutter`-Import in
   einem Feature ist ein Architekturverstoß und wird im Review beanstandet.
@@ -166,6 +166,13 @@ Wertsemantik plus erschöpfendes Pattern-Matching braucht.
   ausdrücklich auch für shadcn-Breakage reserviert.
 
 ## Entscheidung nach Sprint 2 (2026-09-04)
+
+> **Dieser Abschnitt ist Historie.** Er hält fest, wie HUM-035 entschieden
+> hat und woran gemessen wurde. Sein Ergebnis — keine Bibliothek — gilt
+> nicht mehr; der Projekteigentümer hat es am selben Tag zurückgenommen.
+> Maßgeblich ist der Abschnitt „Revidiert am 2026-09-04 durch den
+> Projekteigentümer". Die Messungen hier bleiben gültig und lesenswert, denn
+> sie beschreiben, was die Bibliothek kostet.
 
 HUM-035 sollte die Wahl zwischen `shadcn_flutter` und forui bestätigen oder
 revidieren. Beim Nachsehen war die Lage eine andere als die, für die das Issue
@@ -616,6 +623,108 @@ aufgezählt, damit niemand sie für gültig hält:
   gedockten Panes, riverpod mit Generator, freezed, die Spezialpakete — steht
   unverändert. Ein Nachfolge-ADR hätte 90 % des Textes wiederholt, um einen
   Paketnamen zu streichen.
+
+## Revidiert am 2026-09-04 durch den Projekteigentümer
+
+Der Abschnitt „Entscheidung nach Sprint 2" gilt nicht mehr. Er hat entschieden,
+`shadcn_flutter` nicht aufzunehmen und die eigene Widget-Schicht zu behalten.
+Der Projekteigentümer hat das am selben Tag überstimmt: **Flutter läuft auf der
+jeweils neuesten stabilen Fassung, und `shadcn_flutter` wird aufgenommen.**
+
+Warum die vorige Entscheidung falsch war, unabhängig vom Ergebnis: Dieser ADR
+hat in seiner ursprünglichen Fassung `shadcn_flutter` als gesetzt benannt. Das
+war eine Vorgabe des Projekteigentümers, kein Vorschlag. HUM-035 hat sie
+revidiert, ohne zu fragen — und hat damit als Prüfung ausgegeben, was in
+Wahrheit die Rücknahme einer fremden Entscheidung war. Eine Entscheidung, die
+etwas zurücknimmt, das der Projekteigentümer gesetzt hat, geht ihm als Frage
+vor, nicht als Ergebnis nach.
+
+### Was jetzt gilt
+
+Flutter steht auf **3.47.2** mit Dart **3.13.2**, gepinnt in `app/.fvmrc`, und
+folgt künftig dem neuesten stabilen Stand. Blockiert ein Paket eine Anhebung,
+wird das Paket benannt und gelöst, statt die Anhebung zu vertagen. Der Wechsel
+kostete: `intl` von 0.20.2 auf 0.20.3, weil `flutter_localizations` in 3.47.2
+seinen exakten Pin durch `^0.20.3` ersetzt; `freezed` auf 4.0.1,
+`riverpod_generator` auf 4.0.9, `json_serializable` auf 6.14.1 und
+`build_runner` auf 2.16.1. Die Deckel im Einzelnen, an den Pubspecs im Cache
+gemessen: `riverpod_generator` 4.0.3 nimmt `analyzer ^9.0.0`, und `analyzer`
+9.0.0 kennt Sprachversion 3.11, also zwei hinter Dart 3.13; `freezed` 3.2.5 und
+`json_serializable` 6.13.0 nehmen `analyzer >=9 <11`, und 10.1.0 kennt 3.12,
+also eine hinter. `build_runner` 2.15.1 hätte mit `analyzer >=8 <14` gereicht;
+seine Anhebung ist Mitnahme, kein Zwang. Mitgesprungen sind ausserdem die
+Laufzeit-Pakete `flutter_riverpod` auf 3.4.3 und `riverpod_annotation` auf
+4.0.7 sowie `json_annotation` auf 4.12.0, das `json_serializable` exakt
+vorschreibt. Der übrige Code
+war unberührt: 3.45 und 3.46 führen keine Breaking Changes, und die drei aus
+3.47 treffen uns nicht.
+
+`shadcn_flutter` ist exakt auf 0.0.54 gepinnt und steht in
+`app/packages/ui/pubspec.yaml`, nicht in `app/pubspec.yaml`. Die Naht bleibt
+also: kein Feature importiert die Bibliothek, `tools/check-deps.sh` beanstandet
+jeden `package:shadcn_flutter` ausserhalb von `app/packages/ui`, und was ein
+Bildschirm sieht, sind weiterhin die `H*`-Widgets.
+
+Sie bringt dreizehn weitere Pakete mit, und sie bündelt **8,3 MB eigener
+Assets** in jeden Build: 4,4 MB Geist-Schriften in 33 Schnitten, 1,25 MB
+Icon-Schriften, und 3,3 MB Länderflaggen aus `country_flags`. Flutter nimmt die
+Schriften eines Pakets unabhängig davon mit, ob jemand sie importiert, das
+Gewicht fällt also auch dann an, wenn wir nur einen Teil der Bibliothek
+benutzen. Für eine Desktop-Anwendung ist das tragbar; es gehört trotzdem hier
+notiert, weil `backlog/CONVENTIONS.md` 4.11 bis heute „Fonts werden nicht
+gebündelt" sagte. Die Lock-Dateien sind seit dieser Anhebung versioniert: die
+dreizehn Pakete kommen mit Caret-Bereichen, und ohne Lock änderte eine
+Veröffentlichung eines davon den Bau ohne einen einzigen Commit.
+
+### Was die Bibliothek nicht mitbringt
+
+Vor der Aufnahme wurden die 165 Dateien des Pakets im Quelltext gelesen, nicht
+die README. Das Ergebnis gehört hierher, weil es die Grenze zieht, bis zu der
+man sich auf sie verlassen kann:
+
+- Sie prüft nirgends ein Kontrastverhältnis. Es gibt eine Heuristik über die
+  Helligkeit (`getContrastColor` in `lib/src/util.dart`), die aus einer Farbe
+  eine helle oder dunkle Gegenfarbe wählt, aber kein Verhältnis nachrechnet.
+  Der Destructive-Button im hellen Thema malt deshalb fest `Colors.white` auf
+  ein Rot mit halber Deckkraft, also 1,97:1, mit einem Kommentar daneben, der
+  das einräumt.
+- Die gesamte Bibliothek hat drei `Semantics`-Knoten, keinen davon auf Button,
+  Checkbox, Tabs oder Badge.
+- `AnimationBehavior` kommt nicht vor. Jede ihrer Animationsdauern kollabiert
+  auf fünf Prozent, sobald das System reduzierte Bewegung meldet; was an einem
+  `Timer` hängt, etwa die Verzögerung der Hover-Karte, behält seine Zeit.
+- Es gibt kein Halten-zum-Bestätigen, keine Mindest-Trefferfläche, und auf dem
+  Desktop keinen gedrückten Zustand: die einzige Rückmeldung hängt an einem
+  Schalter, der unter Linux ausgeschaltet ist.
+
+Sie ist damit kein Radix: sie liefert Aussehen und Chrome, nicht die
+Verhaltensschicht darunter. Das ist kein Einwand gegen ihre Aufnahme, sondern
+die Beschreibung dessen, was `packages/ui` weiterhin selbst tun muss.
+
+### Was im MVP gilt und was zu 1.0.0 zurückkommt
+
+Der Projekteigentümer hat die Barrierefreiheit als Programm aus dem MVP
+genommen: erst beweisen, dass es geht und gut sein kann. Screenreader-Semantik,
+WCAG-Zahlen als Testgatter und die Prüfung bei doppelter Textskalierung sind
+damit bis 1.0.0 vertagt.
+
+Vier Dinge bleiben trotzdem, weil sie nur wie Barrierefreiheit aussehen:
+
+1. **Die Haltedauer behält ihre Zeit.** Meldet das System reduzierte Bewegung,
+   kürzt Flutter jede Animationsdauer auf fünf Prozent. Daran hängt bei uns die
+   Sicherung, die verhindert, dass ein Klick eine Anfrage hinausschickt;
+   gemessen genügten 60 Millisekunden. Das ist ein Sicherheitsfehler, der
+   zufällig über dieselbe Einstellung läuft.
+2. **Eine Untergrenze für Lesbarkeit.** 1,97:1 ist nicht „nicht barrierefrei",
+   sondern unlesbar. Die Grenze bleibt, aber als Gestaltungsfrage und deutlich
+   lockerer als die 4,5:1, die bis heute galten.
+3. **Die Trefferflächen der Entscheidung.** Mindestens 28 × 28 px allgemein,
+   mindestens 32 × 120 px für Erlauben und Blockieren. Die Bibliothek kennt
+   keine Mindest-Trefferfläche; wer sich bei einer unumkehrbaren Handlung
+   vergreift, hat kein Barrierefreiheitsproblem, sondern eine gesendete
+   Anfrage.
+4. **Ein sichtbarer gedrückter Zustand.** Ein Control, das auf einen Klick
+   nichts tut, fühlt sich kaputt an.
 
 ## Betroffene Issues
 

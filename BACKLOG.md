@@ -14,7 +14,7 @@
 
 | Thema | Entscheidung |
 |---|---|
-| UI | Flutter 3.44 (Pin `app/.fvmrc`), eigenes Widget-Vokabular in `packages/ui` ohne Komponentenbibliothek, riverpod 3, feature-first |
+| UI | Flutter 3.47.2 (Pin `app/.fvmrc`, folgt dem neuesten stabilen Stand), Widget-Vokabular in `packages/ui` auf `shadcn_flutter`, riverpod 3, feature-first |
 | Daemon | Rust, ein statisches Binary `humanitld`, systemd user service |
 | Proxy-Engine | hudsucker (hyper 1 + rustls + rcgen), MITM mit eigener CA pro Installation |
 | Sandbox MVP | bubblewrap `--unshare-all` + Unix-Socket-Bridge + seccomp (Muster von Claude Code `sandbox-runtime` und OpenAI Codex CLI) |
@@ -122,7 +122,7 @@ Jede Entscheidung hat eine eigene, ausformulierte Datei unter [`docs/adr/`](docs
 
 ### ADR-009 UI-Stack
 
-- Das Chrome (Resizable, Command Palette, Sheet, Segmented) steht in `packages/ui` auf reinem Flutter. HUM-035 hat am 2026-09-04 gegen `shadcn_flutter` und gegen forui entschieden: 88,3 % der gewichteten Punkte für die eigene Schicht, 48,3 % für `shadcn_flutter` 0.0.54 und 51,7 % für forui 0.26.0, Wechselaufwand 8,5 bis 11,5 Tage gegen 3,5 Tage Eigenbau. Toast und Menubar entfallen durch die Gestaltung; ContextMenu, Datum-Zeit-Wähler und die senkrechte Achse des Resizable werden gebaut. Die Kapselung bleibt, damit die Entscheidung umkehrbar ist.
+- Das Chrome (Resizable, Command Palette, Sheet, Segmented, ContextMenu) kommt aus `shadcn_flutter`, exakt auf 0.0.54 gepinnt und ausschliesslich in `app/packages/ui` importiert. HUM-035 hatte am 2026-09-04 dagegen entschieden (88,3 % der gewichteten Punkte fuer die eigene Schicht gegen 48,3 % und 51,7 %); der Projekteigentümer hat das am selben Tag zurückgenommen, weil die ursprüngliche Fassung von ADR-0009 seine Vorgabe war. Die Bibliothek liefert Aussehen und Chrome, nicht die Verhaltensschicht: Kontrast, Fokus, Halten und Trefferflächen bleiben Sache von `packages/ui` (ADR-0009, Abschnitt „Revidiert am 2026-09-04 durch den Projekteigentümer").
 - Datenlastige Widgets aus Spezialpaketen, nicht selbst gebaut: `re_editor` (Editor), `xterm2` (Terminal), `diff_match_patch`. `two_dimensional_scrollables` steht noch aus und wird erst mit dem JSON-Baum entschieden (HUM-030); die History-Tabelle braucht es nicht: `ListView.builder` mit bekannter `itemExtent` gibt dieselbe Zusage und einen `Semantics`-Knoten je Zeile statt elf.
 - riverpod 3 + Generator, freezed für Modelle, sealed classes für `FlowEvent`.
 - Kein WebView auf Linux. Vorschau als Bild vom Daemon oder Katalog-Karte.
@@ -461,7 +461,7 @@ Definition of Done für jedes Issue: Tests auf der passenden Ebene, neue Fehlerp
 | HUM-033 | Rules-Screen | M | Geordnete Liste mit Drag-Reorder, Formular-Editor, „erstellt vor 2 min aus Request #41", Dry-Run-Panel, Bundled-Badge für Default-Regeln, Löschen mit Undo, Tabs „Gespeichert" und „Temporär" (Session-Regeln mit „dauerhaft machen" und Restlaufzeit) |
 | HUM-065 | CLI rules/flows | S | `humanitl rules list|add|remove|test <url>`, `humanitl flows list|show <id>`, Ausgabe als Tabelle oder `--json`, gleiche Filter-Syntax wie History-Screen |
 | HUM-034 | Notification und Tray | M | `flutter_local_notifications` mit Allow/Block-Aktionen bei Queue 0 → 1, `tray_manager`-Badge mit Zähler, Rückkehr-Banner „Agent wartet seit …", Fenster nach vorn bei Klick; GNOME-AppIndicator-Hinweis in Docs |
-| HUM-035 | shadcn vs forui Entscheidung | S | Erledigt 2026-09-04 ohne den vorgesehenen Spike-Branch (Abweichung in CONVENTIONS 4.20): weder noch, `packages/ui` bleibt auf reinem Flutter (ADR-009, Abschnitt „Entscheidung nach Sprint 2") |
+| HUM-035 | shadcn vs forui Entscheidung | S | Erledigt 2026-09-04 ohne den vorgesehenen Spike-Branch (Abweichung in CONVENTIONS 4.20). Das Ergebnis „weder noch" hat der Projekteigentümer am selben Tag zurückgenommen: `shadcn_flutter` wird aufgenommen (ADR-0009, Abschnitt „Revidiert am 2026-09-04 durch den Projekteigentümer") |
 | HUM-036 | Demo-Skript M2 | S | CI e2e unter xvfb: Fake-Agent feuert 15 Requests, UI gruppiert, Batch-Allow mit Session-Regel, ein Block, ein Timeout, History zeigt alles, Export validiert |
 
 ### Sprint 3 — Agent Inside (M3)

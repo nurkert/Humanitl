@@ -68,6 +68,7 @@ flutter-codegen: flutter-get proto ## Generated Dart code: riverpod, freezed, AR
 flutter-analyze: flutter-codegen ## Static analysis of the Flutter app and packages/ui
 	cd app && flutter analyze
 	cd app/packages/ui && flutter analyze
+	cd app && dart format --output=none --set-exit-if-changed lib test packages/ui/lib packages/ui/test
 
 flutter-build: flutter-codegen ## Debug build of the Linux desktop app (CI parity)
 	cd app && flutter build linux --debug

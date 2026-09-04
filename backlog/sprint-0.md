@@ -1746,7 +1746,7 @@ Galerie: eine Seite mit Sektionen Farben (alle Swatches mit Hex-Label), Typo-Ska
 - [ ] `flutter analyze` in `app/packages/ui` sauber
 - [ ] Galerie startet über `HUMANITL_GALLERY=1 flutter run -d linux`
 - [ ] Alle Hex-Werte aus BACKLOG.md 5 exakt in `colors.dart`
-- [ ] Keine Komponentenbibliothek in `app/packages/ui/pubspec.yaml`; die Schicht steht auf `package:flutter/widgets.dart` (ADR-0009, Abschnitt „Entscheidung nach Sprint 2")
+- [x] ~~Keine Komponentenbibliothek in `app/packages/ui/pubspec.yaml`~~ — am 2026-09-04 vom Projekteigentümer zurückgenommen: `shadcn_flutter` steht dort, ausschließlich hinter der Naht (ADR-0009, Abschnitt „Revidiert am 2026-09-04 durch den Projekteigentümer"); `tools/check-deps.sh` erzwingt, dass kein Feature sie importiert
 - [ ] Fonts gebündelt, Lizenzdateien im Repo
 - [ ] Tests grün, Kontrast-Test bestanden
 

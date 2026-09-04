@@ -86,9 +86,10 @@ Trait ohne zweiten Nutzer in Sicht.
 Dieselben Regeln gelten auf der Flutter-Seite: `core/domain` sind freezed-Typen
 ohne Flutter-Import, `core/ipc` ist ein Interface mit zwei Implementierungen
 (gRPC und Fake), ein Feature importiert kein anderes Feature, und das
-Widget-Vokabular steht in `packages/ui` auf `package:flutter/widgets.dart`. Ein
-Feature importiert `lib/core/ui/ui.dart`, nie ein fremdes Widget-Paket
-(ADR-0009, Abschnitt „Entscheidung nach Sprint 2").
+Widget-Vokabular steht in `packages/ui` auf `shadcn_flutter`. Ein Feature
+importiert `lib/core/ui/ui.dart`, nie ein fremdes Widget-Paket; `tools/check-deps.sh`
+beanstandet jeden Import der Bibliothek ausserhalb von `app/packages/ui`
+(ADR-0009, Abschnitt „Revidiert am 2026-09-04 durch den Projekteigentümer").
 
 ## Begründung
 

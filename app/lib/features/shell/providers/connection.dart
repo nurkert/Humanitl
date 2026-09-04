@@ -124,9 +124,8 @@ class DaemonConnection extends _$DaemonConnection {
       }
       if (!ProtoVersion.isCompatible(info.protoMajor)) {
         _fail(ClientDiagnostics.protoIncompatible(info));
-      } else if (state case ConnectionConnected(
-        info: final known,
-      ) when known != info) {
+      } else if (state case ConnectionConnected(info: final known)
+          when known != info) {
         state = ConnectionStatus.connected(info: info);
       }
     } on Object catch (error) {

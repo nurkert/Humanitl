@@ -124,9 +124,8 @@ void main() {
   });
 
   test('a method the contract does not know matches nothing', () {
-    final Flow odd = testFlow(
-      n: 1,
-    ).copyWith(method: Method.other, methodRaw: 'PROPFIND');
+    final Flow odd = testFlow(n: 1)
+        .copyWith(method: Method.other, methodRaw: 'PROPFIND');
     expect(ruleMatchesFlow(matcherRule(), odd, now: rulesTestNow), isFalse);
   });
 

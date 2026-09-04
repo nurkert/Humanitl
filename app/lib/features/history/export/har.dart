@@ -49,9 +49,9 @@ Map<String, Object?> harLog({
 String encodeHar({
   required List<HistoryExportEntry> entries,
   required String creatorVersion,
-}) => const JsonEncoder.withIndent(
-  '  ',
-).convert(harLog(entries: entries, creatorVersion: creatorVersion));
+}) =>
+    const JsonEncoder.withIndent('  ')
+        .convert(harLog(entries: entries, creatorVersion: creatorVersion));
 
 /// One `log.entries` element.
 Map<String, Object?> harEntry(HistoryExportEntry entry) {
