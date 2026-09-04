@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use humanitl_config::model::{AskMode, Language, Theme};
-use humanitl_config::{Config, Env, Origin, Resolved, Sources, load};
+use humanitl_config::{Config, Env, Origin, ProfileSource, Resolved, Sources, load};
 use humanitl_core::{FixAction, Severity};
 
 fn fixture(name: &str) -> PathBuf {
@@ -24,7 +24,7 @@ fn fixture(name: &str) -> PathBuf {
 fn all_files() -> Sources {
     Sources {
         global_toml: Some(fixture("global.toml")),
-        profile_global: Some(fixture("profile-global.toml")),
+        profiles: vec![ProfileSource::File(fixture("profile-global.toml"))],
         profile_project: Some(fixture("profile-project.toml")),
         ..Sources::empty()
     }
@@ -107,7 +107,7 @@ fn global_overrides_default() {
 fn profile_global_overrides_global() {
     let sources = Sources {
         global_toml: Some(fixture("global.toml")),
-        profile_global: Some(fixture("profile-global.toml")),
+        profiles: vec![ProfileSource::File(fixture("profile-global.toml"))],
         ..Sources::empty()
     };
     let resolved = expect_ok(&sources);
@@ -574,7 +574,7 @@ fn a_group_outside_the_config_block_of_a_profile_is_config_002() {
     // [hold] auf der obersten Ebene eines Profils: ohne Meldung bliebe das
     // Profil wirkungslos, und der Nutzer suchte den Fehler anderswo.
     let sources = Sources {
-        profile_global: Some(fixture("profile-misplaced-group.toml")),
+        profiles: vec![ProfileSource::File(fixture("profile-misplaced-group.toml"))],
         ..Sources::empty()
     };
     let diagnostic = expect_err(&sources);
@@ -865,12 +865,16 @@ fn discover_finds_the_files_of_a_home_and_a_project() {
             home.path().join("cfg").display().to_string(),
         ),
     ]);
-    let sources = humanitl_config::discover_with(&env, &project, Some("work"));
+    let sources = humanitl_config::discover_with(&env, &project, Some("work"))
+        .expect("the profile work exists");
 
     assert_eq!(sources.global_toml, Some(config_dir.join("config.toml")));
     assert_eq!(
-        sources.profile_global,
-        Some(config_dir.join("profiles/work.toml"))
+        sources.profiles,
+        vec![
+            ProfileSource::Builtin("default"),
+            ProfileSource::File(config_dir.join("profiles/work.toml")),
+        ]
     );
     assert_eq!(
         sources.profile_project,
@@ -886,10 +890,11 @@ fn discover_finds_the_files_of_a_home_and_a_project() {
 fn discover_is_content_with_nothing() {
     let empty = tempfile::tempdir().expect("tempdir");
     let env = Env::from_pairs([("HOME", empty.path().display().to_string())]);
-    let sources = humanitl_config::discover_with(&env, empty.path(), None);
+    let sources =
+        humanitl_config::discover_with(&env, empty.path(), None).expect("nothing is not an error");
 
     assert_eq!(sources.global_toml, None);
-    assert_eq!(sources.profile_global, None);
+    assert_eq!(sources.profiles, vec![ProfileSource::Builtin("default")]);
     assert_eq!(sources.profile_project, None);
     assert_eq!(
         expect_ok(&sources).config,

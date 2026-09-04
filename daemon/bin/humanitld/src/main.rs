@@ -473,7 +473,7 @@ fn load_catalog(xdg: &XdgPaths) -> Catalog {
 /// Lädt die Konfiguration und meldet, was das Laden überlebt hat.
 fn load_config(xdg: &XdgPaths) -> Result<Config, Diagnostic> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let sources = humanitl_config::discover_with(xdg.env(), &cwd, None);
+    let sources = humanitl_config::discover_with(xdg.env(), &cwd, None)?;
     let resolved = humanitl_config::load(&sources)?;
     for diagnostic in &resolved.diagnostics {
         tracing::warn!(

@@ -1,0 +1,56 @@
+# Das mitgelieferte Profil `default`.
+#
+# Ein Profil bündelt alles, was eine Sitzung ausmacht: Konfigurationswerte unter
+# `[config.<gruppe>]`, dazu die Regeln, die zum Profil gehören. `default` gilt
+# immer, auch wenn ein anderes Profil gewählt wurde; das gewählte liegt darüber.
+#
+# Die Datei ist zugleich in den Daemon eingebettet. Fehlt sie, startet er mit
+# der eingebetteten Fassung; liegt unter `$XDG_CONFIG_HOME/humanitl/profiles/`
+# eine eigene Fassung, gewinnt diese und das Laden legt einen Hinweis dazu
+# (`CONFIG_008`). Beides steht in `docs/profiles.md`.
+#
+# **Dieses Profil setzt mit Absicht keinen einzigen Wert.** Es liegt in der
+# Präzedenz über `config.toml`; ein Wert hier — auch einer, der nur den
+# Vorgabewert wiederholt — überschriebe die Datei des Nutzers, und `hold`,
+# `sandbox` oder `llm` aus seiner `config.toml` blieben wirkungslos, ohne dass
+# er es sähe. Der Test `the_default_profile_sets_no_value` hält das fest.
+#
+# Der gängige Fall steht deshalb als Kommentar da: Wer ihn ändern will, kopiert
+# die Datei nach `$XDG_CONFIG_HOME/humanitl/profiles/default.toml`, nimmt die
+# Rauten weg und hat ein eigenes Profil. Die Vorgabewerte selbst stehen in
+# `docs/CONFIG.md`.
+
+name = "default"
+description = "Ask for everything no rule decides. Full moderation with the desktop UI."
+
+# [config.llm]
+# `endpoint` gehört zur Einrichtung dieser Maschine und steht in `config.toml`,
+# nicht in einem Profil, das man weitergibt.
+# passthrough_paths = ["/v1/", "/api/"]
+
+# [config.hold]
+# timeout_secs = 300
+# ask_mode = "ui"            # ui | terminal | none
+
+# [config.limits]
+# hold_body_cap_bytes = 33554432
+
+# [config.sandbox]
+# profile = "default"        # die Datei profiles/sandbox/default.toml
+# work_mode = "rw"           # ro | rw
+
+# [config.agent]
+# adapter = "opencode"
+
+# [config.recorder]
+# inline_max_bytes = 262144
+# retention_days = 90
+
+[rules]
+# Dateien werden relativ zu dieser Profildatei aufgelöst, nie zum
+# Arbeitsverzeichnis. Sie kommen nach den mitgelieferten Regeln des
+# Agent-Adapters und vor der `rules.yaml` des Nutzers. Beide Listen ersetzen,
+# sie hängen nicht an.
+files = []
+# Regeln, die unmittelbar im Profil stehen, im Schema von `rules.yaml`.
+inline = []

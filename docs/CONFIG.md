@@ -40,14 +40,24 @@ sein Wert stammt, und die Oberfläche zeigt es an.
 |---|---|
 | 1 | eingebaute Vorgabewerte |
 | 2 | `$XDG_CONFIG_HOME/humanitl/config.toml` |
-| 3 | `$XDG_CONFIG_HOME/humanitl/profiles/<name>.toml`, Block `[config]` |
-| 4 | `<projekt>/.humanitl/profile.toml`, Block `[config]`; nur Felder mit Projekt `allowed` |
-| 5 | Umgebungsvariablen `HUMANITL_*` |
-| 6 | Argumente der Kommandozeile |
+| 3 | Profil `default`: `$XDG_CONFIG_HOME/humanitl/profiles/default.toml`, sonst die eingebettete Fassung |
+| 4 | das gewählte Profil, falls es nicht `default` ist; Datei, sonst eingebettet |
+| 5 | `<projekt>/.humanitl/profile.toml`, Block `[config]`; nur Felder mit Projekt `allowed` |
+| 6 | Umgebungsvariablen `HUMANITL_*` |
+| 7 | Argumente der Kommandozeile |
 
-Ein Profil hat neben `[config]` nur `name`, `description`, `[rules]` und `[agent]`
-(HUM-066). Jeder andere Block auf der obersten Ebene ist `CONFIG_002`; eine Gruppe wie
-`[hold]` gehört im Profil unter `[config.hold]`.
+Ein Profil hat neben `[config]` nur `name`, `description` und `[rules]` (HUM-066,
+`docs/profiles.md`). Jeder andere Block auf der obersten Ebene ist `CONFIG_002`; eine
+Gruppe wie `[hold]` gehört im Profil unter `[config.hold]`. Das mitgelieferte Profil
+`default` setzt mit Absicht keinen Wert: es liegt über `config.toml` und machte sie
+sonst für jeden Schlüssel wirkungslos, den es nennt.
+
+`<projekt>` ist `sandbox.work_dir`, sonst das aktuelle Verzeichnis — nicht umgekehrt:
+Wer mit `--work` aus einem fremden Verzeichnis heraus arbeitet, bekommt das Profil des
+Projekts, an dem er arbeitet. Der Schlüssel ist auf der Projekt-Ebene gesperrt, deshalb
+kann das Projekt-Profil nicht bestimmen, wo nach ihm gesucht wird. Sein `name` wählt nur
+unter den mitgelieferten Profilen; jeder andere Wunsch wird übergangen und mit
+`CONFIG_009` gemeldet (`docs/profiles.md`).
 
 Eine Umgebungsvariable heißt wie ihr Pfad in Großbuchstaben, mit `__` zwischen den
 Ebenen: `hold.timeout_secs` wird zu `HUMANITL_HOLD__TIMEOUT_SECS`. Der Wert wird nach dem

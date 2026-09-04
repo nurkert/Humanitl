@@ -1,0 +1,36 @@
+# Das mitgelieferte Profil `llm-only`.
+#
+# Reine Inferenz: Erreichbar ist nur der eingerichtete LLM-Endpunkt, alles
+# andere wird geblockt, ohne zu fragen. Damit läuft eine Sitzung ohne
+# Oberfläche und ohne wartenden Menschen — `humanitl run --profile llm-only`
+# im Projektverzeichnis genügt.
+#
+# Wie das zusammenwirkt: Der Agent-Adapter stellt seine Durchreichregel zum
+# Sprachmodell voran (`passthrough_llm`, feste Id `…00ff`). Sie trifft vor der
+# Blockregel unten, denn die erste passende Regel gewinnt. Die Blockregel
+# darunter deckt jeden übrigen Host; `ask_mode = "none"` sorgt dafür, dass auch
+# eine Anfrage, die keine Regel entscheidet, sofort geblockt statt angehalten
+# wird. `timeout_secs` ist deshalb bedeutungslos und steht auf 1, damit eine
+# Fehlkonfiguration nicht fünf Minuten lang hängt.
+#
+# Die Datei ist zugleich in den Daemon eingebettet; siehe `docs/profiles.md`.
+
+name = "llm-only"
+description = "Pure inference. Only the configured LLM endpoint is reachable; everything else is blocked without asking. No UI needed."
+
+[config.hold]
+ask_mode = "none"
+timeout_secs = 1
+
+[config.sandbox]
+profile = "default"
+work_mode = "rw"
+
+[config.agent]
+adapter = "opencode"
+
+[rules]
+files = []
+inline = [
+  { action = "block", match = { host = "**" }, expires = "never", note = "llm-only profile: block everything that is not the LLM passthrough" },
+]

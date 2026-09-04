@@ -13,10 +13,16 @@
 //!   Umgebung über Profil über Datei über Vorgabe entsteht dort, nicht hier.
 //!
 //! Ein paar Flags haben zusätzlich den kurzen Namen aus `CONVENTIONS.md` 3.8:
-//! `--profile` ist `--sandbox-profile`, `--work` ist `--sandbox-work-dir`,
-//! `--ask` ist `--hold-ask-mode`, `--llm` ist `--llm-endpoint`. Sie sind
-//! Zweitnamen desselben Arguments, nicht eigene Argumente: sonst gäbe es zwei
-//! Wege, dasselbe Feld zu setzen, und eine Regel, welcher gewinnt.
+//! `--work` ist `--sandbox-work-dir`, `--ask` ist `--hold-ask-mode`, `--llm`
+//! ist `--llm-endpoint`. Sie sind Zweitnamen desselben Arguments, nicht eigene
+//! Argumente: sonst gäbe es zwei Wege, dasselbe Feld zu setzen, und eine Regel,
+//! welcher gewinnt.
+//!
+//! `--profile` ist die Ausnahme und ein eigenes Argument ([`GlobalOpts::profile`]).
+//! Was es benennt, entscheidet das Unterkommando: unter `humanitl sandbox` das
+//! bwrap-Profil unter `profiles/sandbox/`, überall sonst das Profil der Sitzung
+//! (HUM-066). Die Entscheidung fällt in [`crate::cmd::ProfileMeaning`], die
+//! Begründung steht in `backlog/CONVENTIONS.md` 4.23.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -48,7 +54,6 @@ of JSON to stdout.";
 
 /// Die Zweitnamen aus `CONVENTIONS.md` 3.8: `(Schema-Pfad, kurzes Flag)`.
 pub const SHORT_FLAGS: &[(&str, &str)] = &[
-    ("sandbox.profile", "profile"),
     ("sandbox.work_dir", "work"),
     ("sandbox.work_mode", "work-mode"),
     ("hold.ask_mode", "ask"),
@@ -95,13 +100,18 @@ pub struct GlobalOpts {
     /// Only the result, no notes.
     #[arg(short = 'q', long, global = true, conflicts_with = "verbose")]
     pub quiet: bool,
+
+    /// Use this profile for the session; falls back to the sandbox profile of
+    /// that name when no session profile exists.
+    #[arg(long = "profile", global = true, value_name = "NAME")]
+    pub profile: Option<String>,
 }
 
 /// Die Unterkommandos.
 #[derive(Debug, Subcommand)]
 pub enum Cmd {
-    /// Run an agent behind the proxy in a sandbox (arrives in HUM-067).
-    Run(PlaceholderArgs),
+    /// Show the session a profile resolves to; starting it arrives in HUM-067.
+    Run(RunArgs),
 
     /// Start, plan and check the sandbox.
     Sandbox {
@@ -140,6 +150,19 @@ pub enum Cmd {
         #[command(subcommand)]
         cmd: DaemonCmd,
     },
+}
+
+/// Die Argumente von `humanitl run`.
+///
+/// `--profile`, `--work`, `--ask` und `--llm` stehen als globale Argumente
+/// schon bereit; hier bleibt der Befehl hinter `--`, den HUM-067 in der
+/// Sandbox startet.
+#[derive(Debug, Args)]
+pub struct RunArgs {
+    /// Der Befehl in der Sandbox, hinter `--`; ohne ihn der Agent aus der
+    /// Konfiguration.
+    #[arg(last = true, value_name = "CMD")]
+    pub cmd: Vec<OsString>,
 }
 
 /// Ein Unterkommando, das es noch nicht gibt.
@@ -425,8 +448,12 @@ pub enum ConfigCmd {
         key: String,
     },
 
-    /// Print the JSON schema of the configuration.
-    Schema,
+    /// Print the JSON schema of the configuration, or the list of profiles.
+    Schema {
+        /// List the profiles --profile can choose instead of the schema.
+        #[arg(long)]
+        profiles: bool,
+    },
 }
 
 /// Die Unterkommandos von `humanitl daemon`.
@@ -678,7 +705,6 @@ mod tests {
     fn the_short_flags_of_conventions_38_are_aliases_of_the_config_flags() {
         // Ein gültiger Wert je Flag: die Aufzählungen nehmen nicht jeden Text.
         let values = [
-            ("sandbox.profile", "test"),
             ("sandbox.work_dir", "/tmp/project"),
             ("sandbox.work_mode", "ro"),
             ("hold.ask_mode", "none"),
@@ -764,7 +790,7 @@ mod tests {
         assert!(matches!(
             after.cli.cmd,
             Cmd::Config {
-                cmd: ConfigCmd::Schema
+                cmd: ConfigCmd::Schema { profiles: false }
             }
         ));
     }
