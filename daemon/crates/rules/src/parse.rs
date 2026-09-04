@@ -12,9 +12,13 @@
 //! Hälfte fehlt. Warnungen kommen mit dem Regelsatz zusammen zurück.
 
 use chrono::{DateTime, Utc};
-use humanitl_core::diagnostics::codes::{RULES_001, RULES_005, RULES_006, RULES_007, RULES_008};
+use humanitl_core::diagnostics::codes::{
+    RULES_001, RULES_005, RULES_006, RULES_007, RULES_008, RULES_010,
+};
 use humanitl_core::rule::{Action, Expiry, HostPattern, Matcher, PathPattern, Rule};
-use humanitl_core::{Diagnostic, FlowId, Method, RuleId, Scheme, SessionId, Severity, Upgrade};
+use humanitl_core::{
+    Diagnostic, FixAction, FlowId, Method, RuleId, Scheme, SessionId, Severity, Upgrade,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::eval::{RuleSet, is_known_method};
@@ -107,7 +111,12 @@ pub fn parse_rules_for_session(
     let mut disabled_bundled = Vec::with_capacity(file.disabled_bundled.len());
     for text in &file.disabled_bundled {
         match RuleId::parse(text) {
-            Ok(id) => disabled_bundled.push(id),
+            Ok(id) => {
+                if rules.iter().any(|rule| rule.id == id) {
+                    diagnostics.push(own_rule_disabled(id, &source));
+                }
+                disabled_bundled.push(id);
+            }
             Err(err) => diagnostics.push(
                 Diagnostic::builder(RULES_001, Severity::Error)
                     .why(format!(
@@ -242,6 +251,31 @@ fn key_starts(line: &str, key: &str) -> bool {
 /// `rules[3].match.host (line 12)`, soweit die Zeile bekannt ist.
 fn at(index: usize, field: &str, line: Option<usize>) -> String {
     place(&format!("rules[{index}].{field}"), line)
+}
+
+/// Die Warnung, dass `disabled_bundled` eine Regel dieser Datei benennt.
+///
+/// Die Liste ist für mitgelieferte Regeln gedacht; sie stehen nie in der Datei
+/// des Nutzers, sondern kommen aus `rules/default.yaml` (HUM-038). Eine Id
+/// darin, die zu einer Regel derselben Datei gehört, ist deshalb fast immer
+/// ein Missverständnis: gemeint war, eine eigene Regel loszuwerden, und der
+/// Weg dahin ist, sie zu löschen.
+///
+/// Abgeschaltet wird sie trotzdem. Wer „aus" schreibt, soll nicht die
+/// entgegengesetzte Wirkung bekommen, und eine Regel, die nichts entscheidet,
+/// führt zur Vorgabe `ask`, nie zu einer Freigabe, die niemand gegeben hat.
+fn own_rule_disabled(id: RuleId, source: &Source) -> Diagnostic {
+    Diagnostic::builder(RULES_010, Severity::Warning)
+        .why(format!(
+            "{}: the id {id} belongs to a rule of this file, and that list is meant for the \
+             bundled rules, which never stand here. The rule is switched off, but a rule of \
+             your own is removed, not disabled",
+            place("disabled_bundled", source.top_key("disabled_bundled"))
+        ))
+        .fix(FixAction::CopyCommand(format!(
+            "humanitl rules remove {id}"
+        )))
+        .build()
 }
 
 /// Ein Feldpfad mit seiner Zeile, soweit sie bekannt ist.

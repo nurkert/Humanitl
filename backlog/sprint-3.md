@@ -314,9 +314,127 @@ Metrik-Test: Sandbox-Start mit OpenCode-Adapter gegen Fake-LLM (HUM-046 liefert 
 - `startup_noise_budget` (ignore-Feature): `held <= 1`.
 
 ### Akzeptanzkriterien
-- [ ] `humanitl rules list` zeigt die 8 Regeln mit `bundled` und Position vor allen Nutzerregeln.
-- [ ] Rules-Screen zeigt Badge „Bundled" und „Deaktivieren" statt „Löschen" für diese Regeln.
-- [ ] `startup_noise_budget` grün im `agent-e2e`-Job.
+- [ ] `humanitl rules list` zeigt die 8 Regeln mit `bundled` und Position vor allen Nutzerregeln. Gemessen: `humanitl rules list --all` zeigt zehn mitgelieferte Regeln mit `ORIGIN bundled`; ohne `--all` nennt die Fußzeile sie jetzt. Die Reihenfolge ist offen und wird in HUM-104 entschieden, nicht hier.
+- [ ] Rules-Screen zeigt Badge „Bundled" und „Deaktivieren" statt „Löschen" für diese Regeln. Abzeichen, Schloss, eigener Block und der fehlende Papierkorb stehen; der Schalter „Deaktivieren" fehlt, weil die Dart-`Rule` das Feld `disabled` nicht kennt.
+- [ ] `startup_noise_budget` grün im `agent-e2e`-Job. Es gibt weder den Test noch das Feature noch den Job; der Metriktest wartet auf den Modell-Mock aus HUM-046.
+
+### Stand (2026-09-04): Regelsatz und Kommandozeile stehen, Reihenfolge offen (HUM-104), Oberfläche halb
+
+Umgesetzt und gemessen ist alles, was ohne die Dart-Seite prüfbar ist:
+
+- `rules/default.yaml` steht und wird über `include_str!` in `humanitld`
+  gebunden. Beleg ist die Ausgabe, nicht die Zahl im Protokoll:
+  `humanitl rules list --all` zeigt die zehn Regeln, jede mit
+  `ORIGIN bundled` und ihrer festen Id. Die Zeile `rule store loaded` taugt
+  dafür nicht — `main.rs:648` zählt `bundled.len()`, und darin steckt die
+  Durchreichregel aus `main.rs:633`: ohne `llm.endpoint` steht dort
+  `bundled=10`, mit gesetztem Endpunkt `bundled=11` (beides gemessen).
+- Regel-Engine: `Rule.disabled` in `humanitl-core`,
+  `RuleSet::set_disabled_bundled` und der Dateischlüssel `disabled_bundled`
+  in `humanitl-rules`; `RuleSet::evaluate` überspringt eine abgeschaltete
+  Regel, als gäbe es sie nicht. Ein `disabled_bundled`, das eine Regel
+  derselben Datei benennt, warnt seit HUM-038 mit `RULES_010` und schaltet sie
+  trotzdem ab; wer „aus" schreibt, bekommt nie das Gegenteil.
+- Kommandozeile: `humanitl rules list --all` zeigt die zehn Regeln mit
+  `ORIGIN bundled`, eine abgeschaltete als `bundled (off)`;
+  `humanitl rules disable|enable ID` schaltet sie über
+  `RulesRequest.set_disabled` ab und wieder an; `--json` trägt `bundled`,
+  `disabled` und `origin`. Ohne `--all` nennt eine Fußzeile, was fehlt:
+  `10 bundled rules and 1 passthrough rule also apply; humanitl rules list
+  --all shows them`. Vorher stand der Hinweis nur im Zweig der leeren Liste,
+  und sobald der Nutzer eine eigene Regel hatte, schwieg die Kommandozeile
+  über elf Regeln, die entscheiden — während `cli.rs:287` verspricht, sie
+  zeige die Regeln „in the order in which they are evaluated"
+  (CONVENTIONS 4.13).
+
+**Was die Fußzeile zählt, und warum getrennt.** Eine abgeschaltete oder
+abgelaufene Regel steht nicht unter „gilt auch", sondern wird eigens
+genannt: `8 bundled rules and 1 passthrough rule also apply, 2 rules are
+switched off`. Die Alternative — eine Summe mit Nebensatz („10 bundled
+rules also apply, 2 of them switched off") — nennt zuerst eine Zahl, die
+nicht stimmt, und nimmt sie danach halb zurück; wer nur den ersten Halbsatz
+liest, hat die falsche Zahl im Kopf. Es wäre außerdem derselbe Fehler, den
+diese Bestandsaufnahme dem Regel-Bildschirm vorwirft: eine abgeschaltete
+Regel wie eine wirksame zu zeichnen (CONVENTIONS 4.13). Vier Töpfe,
+geprüft in dieser Reihenfolge: abgelaufen, abgeschaltet, Durchreiche,
+mitgeliefert. Abgelaufen steht vorn, weil eine abgelaufene Regel auch dann
+nichts entscheidet, wenn jemand sie wieder anschaltet. Jede verborgene Regel
+fällt in genau einen Topf; die Zusage „Zeilen der Tabelle plus Summe der
+Fußzeile ist die Zeilenzahl von `--all`" steht als Test
+(`every_hidden_rule_is_counted_exactly_once`) und ist an einem laufenden
+Daemon nachgerechnet: 1 + (8 + 1 + 2) = 12.
+
+**`RuleSet::prepend_bundled` gehört nicht in diese Liste.** Die Funktion
+(`daemon/crates/rules/src/eval.rs:394`) hat außerhalb von Tests keinen
+Aufrufer; alle vier Fundstellen sind Tests, darunter der grüne
+`prepend_bundled_puts_the_bundled_rules_first`. Der Daemon baut seinen
+Regelsatz über `RulesStore::load`, nicht über sie. Ihre Tests sagen deshalb
+nichts über das laufende Produkt aus, und dieses Häkchen hätte auf sie nie
+gestützt werden dürfen.
+- Tests grün: `default_rules_parse`, `default_rules_match_table`,
+  `disabled_bundled_is_skipped`, `prepend_bundled_puts_the_bundled_rules_first`
+  (`daemon/crates/sandbox/tests/default_rules.rs`), dazu in
+  `daemon/crates/rules` die Datei-Tests von `disabled_bundled`
+  (`tests/parse.rs`) und die Engine-Tests dazu (`tests/eval.rs`): eine
+  abgeschaltete Regel entscheidet nichts, die nächste kommt dran, und ohne
+  weitere Regel bleibt es bei `ask`.
+
+**Offen und ausdrücklich nicht gedeckt:**
+
+- **Der Schalter „Deaktivieren" im Rules-Screen.** Der Daemon kann es, die
+  Oberfläche nicht: `app/lib/core/domain/rule.dart` kennt kein `disabled`,
+  `app/lib/core/ipc/convert.dart` liest es nicht aus der Proto, und
+  `DaemonClient` hat keine Operation dafür. Solange das fehlt, zeichnet der
+  Bildschirm eine abgeschaltete mitgelieferte Regel wie eine wirksame und
+  behauptet damit etwas, das nicht stimmt (CONVENTIONS 4.13). Es fehlen: ein
+  Feld in `Rule`, eine Zeile in `RuleToDomain`, eine Methode
+  `setRuleDisabled` in `DaemonClient`, `GrpcDaemonClient` und
+  `FakeDaemonClient`, dann der Schalter in `rule_row.dart` samt seinen
+  ARB-Schlüsseln.
+- **`startup_noise_budget`.** Der Metriktest braucht einen Endpunkt, der
+  `/v1/models` beantwortet; den liefert HUM-046. Bis dahin gibt es weder
+  `daemon/crates/sandbox/tests/startup_noise.rs` noch das Feature `agent-e2e`
+  noch einen CI-Job dieses Namens.
+
+**Die Reihenfolge ist keine falsche Anforderung, sondern eine offene
+Entscheidung. Sie wird in HUM-104 getroffen, und bis dahin bleibt das
+Kästchen leer.** Das Repository widerspricht sich über genau diese Frage:
+
+- **Für „mitgeliefert zuletzt":** HUM-027 (`backlog/sprint-2.md`) legt
+  Sitzung, Nutzer, mitgeliefert fest, damit eine eigene Regel eine
+  mitgelieferte überstimmen kann, ohne sie abschalten zu müssen.
+  `rules_store.rs:20-24` schreibt es so hin, und `State::all`
+  (`rules_store.rs:163-170`) setzt es um.
+- **Für „Durchreiche und mitgeliefert zuerst":** `docs/profiles.md:171-175`
+  aus HUM-066 sagt das Gegenteil — „die Durchreichregel des Agent-Adapters,
+  dann seine mitgelieferten Regeln, dann die Dateien und Regeln der Profile,
+  zuletzt die `rules.yaml` des Nutzers". Der Kommentar in `main.rs:629-634`
+  meint dasselbe („Die Durchreiche steht vor allem anderen") und erreicht
+  es nicht: er legt die Durchreiche in dieselbe Liste wie die mitgelieferten
+  Regeln, und die hängt `State::all` hinten an.
+- Beide Seiten berufen sich auf `backlog/CONVENTIONS.md` 4.5. Dort steht nur
+  Sitzung vor dauerhaft; über die mitgelieferten Regeln schweigt der
+  Abschnitt. Die Nummer trägt die Entscheidung also nicht, die sie belegen
+  soll.
+
+**Was daran heute schon kaputt ist**, und was HUM-104 zu reparieren hat:
+
+- `profiles/llm-only.toml:35` bringt `block host "**"` mit, und sein
+  Kommentar (Zeilen 8 bis 10) erklärt, die Durchreiche träfe davor. Sie trifft
+  danach. Sobald `[rules].inline` des Profils verdrahtet ist, erreicht
+  `humanitl run --profile llm-only` sein eigenes Sprachmodell nicht mehr.
+- `pipeline.rs:350` erkennt die Durchreiche an der Regel, die entschieden hat.
+  Trifft vorher eine `allow`-Regel des Nutzers, gibt es kein
+  `DecisionSource::Passthrough` und kein `LLM_005`: der erklärte Seitenkanal
+  (BACKLOG.md 4.2) wird still zu einem gewöhnlichen Allow.
+
+**Ein Teil des Kriteriums bleibt trotzdem abgelehnt:**
+„die 8 Regeln" und `humanitl rules list` ohne `--all`. Es sind zehn, und
+die beiden zusätzlichen sind am installierten Binary 1.18.25 gemessen
+(CONVENTIONS 4.17). `--all` ist der Schalter, unter dem HUM-065 mitgelieferte
+und abgelaufene Regeln zeigt; ohne ihn zeigt die Liste, was dem Nutzer
+gehört. Der Zweck des Kriteriums — niemand soll übersehen, dass mitgelieferte
+Regeln mitentscheiden — ist seit der Fußzeile oben erfüllt.
 
 ### Fallstricke
 - Hostnamen ändern sich. Jede Regel hat eine `note`, die erklärt, warum sie existiert, damit ein späterer Leser sie prüfen kann.
