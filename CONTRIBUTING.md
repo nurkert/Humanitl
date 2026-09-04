@@ -31,6 +31,40 @@ issue is in `backlog/sprint-N.md`; read `BACKLOG.md` sections 2 to 6 and
 
 `make check` has to pass before every push.
 
+## Sprint gate
+
+Every milestone ends with a demo script, and the scripts of the milestones
+already reached stay green (`BACKLOG.md` section 8). From the end of sprint 2
+on, nothing merges unless both are green in continuous integration:
+
+| Milestone | Script | CI job |
+|---|---|---|
+| M1, the sealed box | `tests/e2e/m1_sealed_box.sh` | `e2e` |
+| M2, the first decision | `tests/e2e/m2_first_decision/run.sh` | `e2e-xvfb` |
+
+`make e2e` runs both, in that order; `E2E_ONLY=m1` or `E2E_ONLY=m2` picks one.
+Both scripts print one line per assertion they checked, whether it held or not.
+The M2 script also counts them and fails when fewer ran than it expects, so a
+run that skipped a branch cannot report success; the M1 script carries the same
+counter but does not yet check it.
+
+**The M2 gate is half built, and the half that is missing is named.** HUM-036
+asks for the whole loop — real daemon, real sandbox **and the real screen under
+xvfb**, ending in a valid HAR file. What runs today is the daemon half: request
+grouping, a batch release with a session rule, block with a note, the hold
+deadline, the recorded history and the set the export is built from. Not
+covered, and therefore not vouched for by a green run:
+
+- **the screen.** Queue, action bar, rules screen and history are never driven;
+  no HAR file is written or validated. That is HUM-097.
+- **the MITM path.** Sixteen of the seventeen requests are plain HTTP, so leaf
+  minting from Humanitl's own CA, the handshake with the agent and the upstream
+  TLS session run for no released or blocked flow at all. That is coverage the
+  product does not have right now, and it comes back with HUM-087.
+
+Until both land, a green `e2e-xvfb` means "the daemon half of M2 holds", not
+"M2 holds". Say so when you lean on it.
+
 ## Commit messages
 
 Prefix with `feat`, `fix`, `test`, `docs`, `chore` or `refactor`, followed by the

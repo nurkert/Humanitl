@@ -1,0 +1,56 @@
+# Die Konfiguration des M2-Demolaufs (HUM-036), als Vorlage.
+#
+# `run.sh` ersetzt darin `@UPSTREAM_ADDR@` und `@TEST_CA@` und legt das Ergebnis
+# als `$XDG_CONFIG_HOME/humanitl/config.toml` des Wegwerf-Baums ab. Der Daemon
+# findet es dort von selbst; ein eigener `--config`-Schalter ist dafür nicht
+# nötig (`humanitl_config::discover_with`).
+#
+# Jeder Schlüssel hier ist ein Test-Hebel und im Alltag falsch. Sie stehen
+# deshalb alle im Tier `expert` und sind für das Projekt-Profil gesperrt
+# (`x-project-scope = "denied"`): Ein geklontes Repository darf weder den
+# Resolver umlenken noch eine fremde Wurzel nachreichen.
+
+[hold]
+# Die Frist ist zweierlei zugleich, und das ist der Preis dieses Aufbaus:
+#
+#   1. die Zeit, nach der die eine unentschiedene Anfrage 504 bekommt — das
+#      soll der Lauf zeigen, dafür soll sie kurz sein;
+#   2. das Budget, in dem die Kommandozeile die zwölf gehaltenen Anfragen
+#      entscheiden muss, bevor die erste von ihnen verfällt. Sie startet je
+#      Entscheidung einen eigenen Prozess; gemessen braucht der Stapel 21 bis
+#      30 Prozent der Frist, auf einem langsamen Läufer entsprechend mehr.
+#
+# Läuft das Budget über, wird der Lauf rot, ohne dass am Produkt etwas falsch
+# wäre. Die Spezifikation nennt 8 Sekunden; hier stehen 10, und die Rechnung
+# steht hier, damit ein späterer Leser weiß, welche Schraube er dreht, wenn der
+# Lauf auf fremder Hardware wackelt. Mit `Decide{flow_ids, remember}` in der
+# Kommandozeile (HUM-095) fällt Punkt 2 weg, und 8 Sekunden reichen wieder.
+#
+# `run.sh` setzt denselben Wert zusätzlich über die Umgebung, weil
+# `start_daemon` die Frist so entgegennimmt.
+timeout_secs = 10
+
+[ui]
+# Der Lauf zeigt keine Benachrichtigungen; im Kopfhörer eines CI-Runners hört
+# sie ohnehin niemand, und ein Portal-Aufruf wäre eine weitere Abhängigkeit.
+notifications = false
+
+[resolver]
+# Die drei Hosts des Drehbuchs zeigen auf das Ziel dieses Laufs. Die Adresse
+# stammt aus TEST-NET-2 (RFC 5737) und liegt im eigenen Netz-Namensraum des
+# Laufs auf `lo`: nicht privat, also vom Proxy erreichbar, und nirgends
+# geroutet, also ohne Weg nach draußen. Loopback ginge nicht — der Proxy weist
+# eine private Adresse ab (`UpstreamError::PrivateAddress`), und die Freigabe
+# ließe sich damit nie belegen.
+overrides = { "registry.npmjs.org" = "@UPSTREAM_ADDR@", "api.github.com" = "@UPSTREAM_ADDR@", "evil.example" = "@UPSTREAM_ADDR@" }
+
+# Die Wurzel des Testzertifikats, das der Fake-Upstream auf Port 443 zeigt.
+# Sie entsteht bei jedem Lauf neu und liegt im Wegwerf-Baum, nie im Repository.
+#
+# Der Daemon soll sie nur annehmen, wenn er ausdrücklich mit `--allow-test-ca`
+# gestartet wurde. Solange es dieses Flag nicht gibt, liest er den Schlüssel
+# gar nicht (`humanitld` meldet das beim Start), und der Lauf belegt genau das:
+# Schritt „a test CA in the configuration is not trusted on its own" fährt eine
+# TLS-Anfrage an dasselbe Ziel und erwartet einen gescheiterten Handschlag,
+# keine Antwort. Siehe `backlog/CONVENTIONS.md` 4.22.
+test_ca = "@TEST_CA@"
