@@ -58,6 +58,6 @@ pub mod parse;
 pub mod path;
 
 pub use crate::eval::{RequestKey, RuleSet, UnknownRule, Verdict, is_known_method};
-pub use crate::host::{LabelPat, matches as host_matches};
+pub use crate::host::matches as host_matches;
 pub use crate::parse::{RULES_VERSION, parse_rules, parse_rules_for_session, serialize_rules};
 pub use crate::path::PathMatcher;

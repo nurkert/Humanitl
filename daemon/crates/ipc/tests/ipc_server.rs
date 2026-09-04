@@ -627,8 +627,16 @@ async fn every_other_rpc_says_which_issue_brings_it() {
         .map(|_| ())
         .unwrap_err();
     assert_eq!(unknown.code(), Code::NotFound, "{unknown}");
+    // Die Prüfsumme muss lesbar sein, damit der Befund von der fehlenden
+    // Aufzeichnung handelt: eine unlesbare wäre `IPC_005`, bevor der Dienst
+    // überhaupt nach einer Aufzeichnung sieht (`humanitl_ipc::validate`).
     let without_recording = client
-        .get_body(v1::BodyRef::default())
+        .get_body(v1::BodyRef {
+            sha256: vec![0u8; 32],
+            size: 0,
+            truncated: false,
+            content_type: String::new(),
+        })
         .await
         .map(|_| ())
         .unwrap_err();

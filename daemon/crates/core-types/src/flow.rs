@@ -727,6 +727,69 @@ impl Flow {
         self.state = next;
         Ok(event)
     }
+
+    /// Bringt den Flow von jedem Zustand aus fail-closed nach
+    /// [`FlowState::Recorded`] und gibt die Ereignisse zurück, die dabei
+    /// entstehen.
+    ///
+    /// Der Aufrufer braucht das, wenn ein Übergang abgelehnt wurde und der Flow
+    /// deshalb nicht weiterlaufen darf: Die Anfrage erreicht ihr Ziel nicht, und
+    /// der Flow soll trotzdem sauber enden, statt in der Registry für immer in
+    /// `Received`, `Analyzed` oder `Forwarded` zu hängen.
+    ///
+    /// Die Methode enthält bewusst **keine** zweite Übergangstabelle. Sie
+    /// versucht der Reihe nach vier Absichten; welche davon gilt, entscheidet
+    /// allein [`FlowState::on`], und eine abgelehnte Absicht lässt Zustand und
+    /// Historie unberührt:
+    ///
+    /// 1. `Analyze` ohne Befunde, damit ein Flow in `Received` überhaupt
+    ///    entscheidbar wird.
+    /// 2. `Decide` auf `Block { reason }` durch [`DecisionSource::System`].
+    ///    Das gilt aus `Analyzed`, aus `Held` und auch aus
+    ///    `Decided(Allow | AllowEdited)`: Eine Freigabe, die nicht weiterlaufen
+    ///    darf, endet als Sperre und nicht als erfundener Upstream-Fehler.
+    /// 3. `Fail { aborted }` — nur `Forwarded` kommt hier an, denn dort ist die
+    ///    Anfrage schon hinausgegangen und eine Sperre wäre die Unwahrheit.
+    ///    Welcher Upstream-Fehler das ist, sagt der Aufrufer: Der Automat kennt
+    ///    keinen, und einen zu erfinden hieße, dem Protokoll einen Vorgang
+    ///    anzudichten, den es nicht gab. Der Aufrufer muss dieselbe Angabe auch
+    ///    in seiner Antwort an den Client führen, sonst behaupten Antwort und
+    ///    Aufzeichnung Verschiedenes.
+    /// 4. `Record`.
+    ///
+    /// Jeder Zustand erreicht damit `Recorded`; `flow_ends_recorded_from_every_state`
+    /// zählt sie auf. Ein Flow, der schon `Recorded` ist, bleibt es und liefert
+    /// keine Ereignisse.
+    ///
+    /// Der Aufrufer veröffentlicht die zurückgegebenen Ereignisse selbst. Ein
+    /// Befund zum abgelehnten Übergang gehört nicht hierher: den kennt nur der
+    /// Aufrufer, und er hat ihn zu diesem Zeitpunkt schon gemeldet.
+    #[must_use]
+    pub fn fail_closed(
+        &mut self,
+        reason: BlockReason,
+        aborted: UpstreamError,
+        at: SystemTime,
+    ) -> Vec<FlowEvent> {
+        let plan = [
+            TransitionInput::Analyze {
+                findings: Vec::new(),
+            },
+            TransitionInput::Decide {
+                decision: Decision::Block { reason, note: None },
+                source: DecisionSource::System,
+            },
+            TransitionInput::Fail { error: aborted },
+            TransitionInput::Record,
+        ];
+        let mut events = Vec::with_capacity(plan.len());
+        for input in plan {
+            if let Ok(event) = self.apply(input, at) {
+                events.push(event);
+            }
+        }
+        events
+    }
 }
 
 #[cfg(test)]

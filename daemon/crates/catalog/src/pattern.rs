@@ -7,30 +7,16 @@
 //! Dienst" auf der Karte, und ein falscher Treffer wäre genau die Beruhigung,
 //! die ein Angreifer will.
 //!
-//! **Doppelung, bewusst und eng begrenzt.** Dieselbe Label-Semantik steht in
-//! `humanitl-rules` (`host.rs`). `humanitl-catalog` darf laut
-//! `backlog/CONVENTIONS.md` 3.1 und `tools/deps-allow.toml` nur von
-//! `humanitl-core` abhängen, und der Vergleich liegt nicht im Kern. Der
-//! Mustertyp [`HostPattern`] wird deshalb aus dem Kern übernommen, der Gang
-//! über die Labels hier wiederholt. Damit die beiden nicht auseinanderlaufen,
-//! steht in `tests/host_table.rs` dieselbe Tabelle wie in
-//! `daemon/crates/rules/tests/host_table.rs`. Der saubere Weg wäre, `matches`
-//! und `split_pattern` nach `humanitl_core::rule` zu ziehen; das ist ein
-//! eigener Umbau und braucht die Zustimmung beider Crates.
+//! Der Gang über die Labels steht nicht hier, sondern als
+//! [`humanitl_core::rule::glob_matches`] im Kern. Er stand
+//! einmal in dieser Datei und ein zweites Mal in `humanitl-rules`, weil
+//! `humanitl-catalog` laut `backlog/CONVENTIONS.md` 3.1 und
+//! `tools/deps-allow.toml` nicht von den Regeln abhängen darf. Beide Fassungen
+//! dürfen von einem Host-Muster nie etwas Verschiedenes behaupten, also gibt
+//! es nur noch eine, in der Schicht, die beide benutzen dürfen.
 
 use humanitl_core::HostName;
-use humanitl_core::rule::{HostPattern, HostPatternError};
-
-/// Ein Label eines Musters.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum LabelPat {
-    /// Genau dieses Label, schon normalisiert (A-Label, klein).
-    Literal(String),
-    /// `*`: genau ein Label, gleich welches.
-    One,
-    /// `**`: ein oder mehr Labels.
-    Many,
-}
+use humanitl_core::rule::{HostPattern, HostPatternError, glob_matches};
 
 /// Liest ein Host-Muster eines Katalogeintrags.
 ///
@@ -70,53 +56,8 @@ pub fn parse(input: &str) -> Result<HostPattern, HostPatternError> {
 pub fn matches(pattern: &HostPattern, host: &HostName) -> bool {
     match (pattern, host) {
         (HostPattern::Exact(expected), HostName::Dns(_)) => expected == host,
-        (HostPattern::Glob(glob), HostName::Dns(_)) => {
-            let Some(labels) = host.labels() else {
-                return false;
-            };
-            glob_matches(&split_pattern(glob), &labels)
-        }
+        (HostPattern::Glob(glob), HostName::Dns(_)) => glob_matches(glob, host),
         _ => false,
-    }
-}
-
-/// Zerlegt ein Glob-Muster in seine Labels.
-fn split_pattern(glob: &str) -> Vec<LabelPat> {
-    glob.split('.')
-        .map(|label| match label {
-            "*" => LabelPat::One,
-            "**" => LabelPat::Many,
-            literal => LabelPat::Literal(literal.to_owned()),
-        })
-        .collect()
-}
-
-/// Der Vergleich aus Schritt 2 und 3.
-fn glob_matches(pattern: &[LabelPat], labels: &[&str]) -> bool {
-    if matches_from(pattern, labels) {
-        return true;
-    }
-    // Apex-Ausnahme: `**.example.com` trifft `example.com`. Nur für ein
-    // führendes `**` und nur, wenn danach noch etwas steht.
-    matches!(pattern.first(), Some(LabelPat::Many))
-        && pattern.len() > 1
-        && matches_from(&pattern[1..], labels)
-}
-
-fn matches_from(pattern: &[LabelPat], labels: &[&str]) -> bool {
-    match pattern.split_first() {
-        None => labels.is_empty(),
-        Some((LabelPat::Literal(expected), rest)) => match labels.split_first() {
-            Some((label, tail)) => label == expected && matches_from(rest, tail),
-            None => false,
-        },
-        Some((LabelPat::One, rest)) => match labels.split_first() {
-            Some((_, tail)) => matches_from(rest, tail),
-            None => false,
-        },
-        Some((LabelPat::Many, rest)) => {
-            (1..=labels.len()).any(|taken| matches_from(rest, &labels[taken..]))
-        }
     }
 }
 
