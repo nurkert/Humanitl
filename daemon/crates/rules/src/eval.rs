@@ -10,6 +10,8 @@
 //! Passt keine Regel, ist das Ergebnis [`Verdict::Default`], und das heißt
 //! `ask`. Es gibt keinen Weg, auf dem eine Anfrage ohne Regel durchgeht.
 
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Utc};
 use humanitl_core::rule::{Action, Expiry, Matcher, Rule};
 use humanitl_core::{HostName, Method, RuleId, Scheme, SessionId, Upgrade};
@@ -213,16 +215,26 @@ impl CompiledRule {
 /// Erzeugt wird er aus `rules.yaml` über [`crate::parse_rules`] oder leer über
 /// [`RuleSet::new`]. Die Reihenfolge ist Teil der Bedeutung: die erste passende
 /// Regel gewinnt.
+///
+/// Daneben führt der Satz die Ids der mitgelieferten Regeln, die der Nutzer
+/// abgeschaltet hat ([`RuleSet::disabled_bundled`]). Sie stehen getrennt, weil
+/// sie eine Regel benennen können, die erst später dazukommt: Die `rules.yaml`
+/// des Nutzers wird gelesen, bevor [`RuleSet::prepend_bundled`] die
+/// mitgelieferten Regeln davorstellt.
 #[derive(Debug, Clone, Default)]
 pub struct RuleSet {
     rules: Vec<CompiledRule>,
+    disabled_bundled: BTreeSet<RuleId>,
 }
 
 impl PartialEq for RuleSet {
     /// Zwei Regelsätze sind gleich, wenn sie dieselben Regeln in derselben
-    /// Reihenfolge tragen. Die übersetzten Muster sind daraus abgeleitet.
+    /// Reihenfolge und dieselben abgeschalteten Ids tragen. Die übersetzten
+    /// Muster sind daraus abgeleitet.
     fn eq(&self, other: &Self) -> bool {
-        self.len() == other.len() && self.iter().zip(other.iter()).all(|(a, b)| a == b)
+        self.len() == other.len()
+            && self.disabled_bundled == other.disabled_bundled
+            && self.iter().zip(other.iter()).all(|(a, b)| a == b)
     }
 }
 
@@ -232,7 +244,10 @@ impl RuleSet {
     /// Ein leerer Regelsatz. Ohne Regeln wird jede Anfrage gehalten.
     #[must_use]
     pub const fn new() -> Self {
-        Self { rules: Vec::new() }
+        Self {
+            rules: Vec::new(),
+            disabled_bundled: BTreeSet::new(),
+        }
     }
 
     /// Baut einen Regelsatz aus Regeln in der gegebenen Reihenfolge.
@@ -240,6 +255,29 @@ impl RuleSet {
     pub fn from_rules(rules: impl IntoIterator<Item = Rule>) -> Self {
         Self {
             rules: rules.into_iter().map(CompiledRule::new).collect(),
+            disabled_bundled: BTreeSet::new(),
+        }
+    }
+
+    /// Die Ids der mitgelieferten Regeln, die der Nutzer abgeschaltet hat.
+    ///
+    /// Eine Id darin muss keine Regel dieses Satzes benennen: Sie überlebt
+    /// eine Fassung, in der es die Regel noch nicht oder nicht mehr gibt,
+    /// damit ein Abschalten nicht stillschweigend zurückgeht.
+    pub fn disabled_bundled(&self) -> impl Iterator<Item = RuleId> + '_ {
+        self.disabled_bundled.iter().copied()
+    }
+
+    /// Übernimmt die Liste der abgeschalteten mitgelieferten Regeln.
+    ///
+    /// Regeln, die schon im Satz stehen und in der Liste vorkommen, werden
+    /// sofort abgeschaltet; alles Weitere wirkt in [`RuleSet::prepend_bundled`].
+    pub fn set_disabled_bundled(&mut self, ids: impl IntoIterator<Item = RuleId>) {
+        self.disabled_bundled = ids.into_iter().collect();
+        for compiled in &mut self.rules {
+            if self.disabled_bundled.contains(&compiled.rule.id) {
+                compiled.rule.disabled = true;
+            }
         }
     }
 
@@ -249,9 +287,13 @@ impl RuleSet {
     ///
     /// 1. Eine unbekannte Methode führt sofort zu [`Verdict::Default`].
     /// 2. Erster Durchgang über die Regeln dieser Sitzung, zweiter über alle
-    ///    übrigen; abgelaufene Regeln werden übersprungen.
+    ///    übrigen; abgelaufene und abgeschaltete Regeln werden übersprungen.
     /// 3. Innerhalb eines Durchgangs gewinnt die erste passende Regel.
     /// 4. Trifft nichts, gilt [`Verdict::Default`], also `ask`.
+    ///
+    /// Eine abgeschaltete Regel (`disabled`) zählt wie eine, die es nicht gibt.
+    /// Sie bleibt im Satz stehen, damit der Rules-Screen sie samt Begründung
+    /// zeigen kann; entscheiden darf sie nichts (HUM-038).
     #[must_use]
     pub fn evaluate(
         &self,
@@ -268,7 +310,7 @@ impl RuleSet {
                 if matches!(compiled.rule.expires, Expiry::Session(_)) != session_scoped {
                     continue;
                 }
-                if compiled.rule.is_expired(now, session) {
+                if compiled.rule.disabled || compiled.rule.is_expired(now, session) {
                     continue;
                 }
                 if compiled.matches(key) {
@@ -281,6 +323,43 @@ impl RuleSet {
         }
 
         Verdict::Default
+    }
+
+    /// Stellt mitgelieferte Regeln vor alle vorhandenen.
+    ///
+    /// `bundled` wird dabei erzwungen: Was auf diesem Weg hereinkommt, stammt
+    /// aus dem Adapter oder aus `rules/default.yaml` und gehört nicht dem
+    /// Nutzer, auch wenn die Datei es anders behauptet. Die Reihenfolge der
+    /// übergebenen Regeln bleibt erhalten, und die Regeln des Nutzers rücken
+    /// dahinter (`backlog/CONVENTIONS.md` 4.5, HUM-038).
+    ///
+    /// `disabled` kommt aus der Liste `disabled_bundled` dieses Satzes, also aus
+    /// der `rules.yaml` des Nutzers. So wirkt ein Abschalten auch dann, wenn
+    /// die Datei gelesen wurde, bevor es die Regel im Satz gab.
+    pub fn prepend_bundled(&mut self, rules: impl IntoIterator<Item = Rule>) {
+        let disabled = &self.disabled_bundled;
+        let bundled: Vec<CompiledRule> = rules
+            .into_iter()
+            .map(|rule| {
+                let off = rule.disabled || disabled.contains(&rule.id);
+                CompiledRule::new(rule.bundled(true).disabled(off))
+            })
+            .collect();
+        self.rules.splice(0..0, bundled);
+    }
+
+    /// Schaltet die Regel mit dieser Id ab oder wieder an.
+    ///
+    /// # Errors
+    ///
+    /// [`UnknownRule`], wenn es keine Regel mit dieser Id gibt.
+    pub fn set_disabled(&mut self, id: RuleId, disabled: bool) -> Result<(), UnknownRule> {
+        let at = self.position(id).ok_or(UnknownRule { id })?;
+        let Some(compiled) = self.rules.get_mut(at) else {
+            return Err(UnknownRule { id });
+        };
+        compiled.rule.disabled = disabled;
+        Ok(())
     }
 
     /// Hängt eine Regel ein. `None` heißt: ans Ende.

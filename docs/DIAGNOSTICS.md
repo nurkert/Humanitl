@@ -28,6 +28,8 @@ Entfernen eines Codes.
 | audit | `AUDIT` | 001 | 009 | Hash-Kette und Export |
 | doctor | `DOCTOR` | 001 | 019 | Selbsttest der Installation |
 | cli | `CLI` | 001 | 009 | Kommandozeile und ihre Vorbedingungen |
+| ui | `UI` | 001 | 009 | Oberflaeche und was ihr die Arbeitsumgebung verweigert |
+| agent | `AGENT` | 001 | 009 | Agent-Adapter: Startkommando, Vorlagen, Vorprüfung vor dem Start |
 
 ## Codes
 
@@ -183,6 +185,14 @@ HTTP/2 nicht verfügbar
 
 Client hat Humanitl-CA abgelehnt
 
+#### TLS_002
+
+Client bricht den Handschlag wiederholt ab
+
+#### TLS_003
+
+Client ohne SNI
+
 #### TLS_004
 
 CA-Verzeichnis nicht beschreibbar
@@ -200,6 +210,10 @@ LLM-Endpoint nicht erreichbar
 #### LLM_002
 
 LLM-Endpoint antwortet nicht als OpenAI-kompatible API
+
+#### LLM_004
+
+Kein Modell konfiguriert
 
 ### Bereich rules
 
@@ -310,4 +324,28 @@ Unterkommando noch nicht verfügbar
 #### CLI_004
 
 Aufruf ungültig
+
+### Bereich ui
+
+#### UI_002
+
+Kein Platz für das Anzeigesymbol
+
+### Bereich agent
+
+#### AGENT_001
+
+Agent-Kommando nicht gefunden
+
+#### AGENT_002
+
+Agent-Kommando nicht ausführbar
+
+#### AGENT_003
+
+Gebündelte Agenten-Vorlage unbrauchbar
+
+#### AGENT_004
+
+Agent-Kommando in der Sandbox nicht erreichbar
 

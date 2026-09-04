@@ -345,6 +345,13 @@ impl Matcher {
 
 /// Eine Regel: Bedingung, Aktion, Gültigkeit, Herkunft.
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Vier Wahrheitswerte, und clippy schlägt einen Zustandstyp vor. Er wäre hier
+// falsch: `stream`, `allow_private`, `bundled` und `disabled` sind vier
+// unabhängige Eigenschaften derselben Regel, jede mit ihrem eigenen Schlüssel
+// in `rules.yaml` (`backlog/CONVENTIONS.md` 3.3). Ein Aufzählungstyp behauptete
+// eine Ordnung oder einen Ausschluss zwischen ihnen, den es nicht gibt, und die
+// Datei ließe sich nicht mehr eins zu eins abbilden.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Rule {
     /// Id der Regel.
     pub id: RuleId,
@@ -366,6 +373,15 @@ pub struct Rule {
     pub created_from: Option<FlowId>,
     /// Ob die Regel mitgeliefert wurde statt vom Nutzer angelegt.
     pub bundled: bool,
+    /// Ob die Regel abgeschaltet ist.
+    ///
+    /// Eine abgeschaltete Regel bleibt im Regelsatz stehen und wird bei der
+    /// Auswertung übersprungen. Nur so lässt sich eine mitgelieferte Regel
+    /// aufheben, ohne sie zu löschen: sie gehört nicht dem Nutzer (`RULES_010`),
+    /// bleibt aber im Rules-Screen sichtbar samt ihrer Begründung. Persistiert
+    /// wird der Zustand in der `rules.yaml` des Nutzers als Liste
+    /// `disabled_bundled`, nie in `rules/default.yaml` (HUM-038).
+    pub disabled: bool,
     /// Freitext des Nutzers.
     pub note: Option<String>,
 }
@@ -383,6 +399,7 @@ impl Rule {
             allow_private: false,
             created_from: None,
             bundled: false,
+            disabled: false,
             note: None,
         }
     }
@@ -419,6 +436,13 @@ impl Rule {
     #[must_use]
     pub const fn bundled(mut self, bundled: bool) -> Self {
         self.bundled = bundled;
+        self
+    }
+
+    /// Schaltet die Regel ab oder wieder an.
+    #[must_use]
+    pub const fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
         self
     }
 

@@ -1,0 +1,17 @@
+-- Ein Flow kann scheitern, ohne dass jemand über ihn entschieden hätte. Der
+-- Zustand `failed` sagt bisher nur, dass die Verbindung zum Ziel nicht
+-- zustande kam, und `block_reason` sagt, warum jemand oder etwas geblockt hat.
+-- Beides beantwortet nicht die Frage, die vor der History steht: woran ist es
+-- gescheitert?
+--
+-- `error` hält diesen Grund als kurzen, festen Bezeichner: `upstream_dns`,
+-- `upstream_connect`, `upstream_tls`, `upstream_private_address`,
+-- `upstream_timeout` für einen gescheiterten Weg nach draußen (HUM-015,
+-- HUM-024) und `tls_handshake_failed` für einen Client in der Sandbox, der den
+-- Handschlag zum Proxy abgebrochen hat (HUM-045). Die Spalte bleibt `NULL`,
+-- solange nichts gescheitert ist; sie ersetzt keine der beiden anderen
+-- Spalten, sondern steht neben ihnen.
+--
+-- Kein Index: Die Spalte wird angezeigt, nicht gefiltert. Ein Filter darauf
+-- käme mit einem eigenen Index in einer eigenen Migration.
+ALTER TABLE flows ADD COLUMN error TEXT;

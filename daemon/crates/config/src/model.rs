@@ -83,6 +83,9 @@ pub struct LlmConfig {
     /// Pfadpräfixe, die als LLM-Passthrough gelten.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub passthrough_paths: Vec<String>,
+    /// Modelle, die der Endpunkt anbietet. Leer heißt: der Agent bekommt ein Platzhalter-Modell und eine Warnung.
+    #[schemars(extend("x-tier" = "basic", "x-project-scope" = "denied"))]
+    pub models: Vec<String>,
 }
 
 impl Default for LlmConfig {
@@ -90,6 +93,7 @@ impl Default for LlmConfig {
         Self {
             endpoint: None,
             passthrough_paths: vec!["/v1/".to_owned(), "/api/".to_owned()],
+            models: Vec::new(),
         }
     }
 }
@@ -294,6 +298,9 @@ pub struct SandboxRef {
     /// Ob der Agent im Projektverzeichnis schreiben darf.
     #[schemars(extend("x-tier" = "basic", "x-project-scope" = "denied"))]
     pub work_mode: WorkMode,
+    /// Zusätzliche Umgebungsvariablen für die Sandbox; sie überschreiben gleichnamige Einträge aus dem `[env]` des Profils. Der Schlüssel lässt sich aus der Umgebung des Prozesses setzen und ist damit nur so vertrauenswürdig wie die Shell, aus der Humanitl startet; die Variablen des dynamischen Linkers (`LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`) werden deshalb abgelehnt, sie liefen vor dem seccomp-Filter des Shims.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub env: BTreeMap<String, String>,
 }
 
 impl Default for SandboxRef {
@@ -302,6 +309,7 @@ impl Default for SandboxRef {
             profile: "default".to_owned(),
             work_dir: None,
             work_mode: WorkMode::Rw,
+            env: BTreeMap::new(),
         }
     }
 }

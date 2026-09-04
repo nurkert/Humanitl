@@ -278,7 +278,51 @@ fn sandbox_is_well_formed(sandbox: &SandboxRef) -> Result<(), Diagnostic> {
     if let Some(work_dir) = &sandbox.work_dir {
         work_dir_is_a_directory(work_dir)?;
     }
+    // Die Paare aus `sandbox.env` gehen als `--setenv KEY VALUE` an bwrap. Ein
+    // leerer Name, ein `=` oder ein Nullbyte darin ergäbe dort kein Paar mehr,
+    // sondern eine zweite Variable oder ein abgeschnittenes Wort; das wird hier
+    // abgelehnt und nicht erst in der Kommandozeile sichtbar.
+    for (key, value) in &sandbox.env {
+        if key.is_empty() || key.contains('=') || key.contains('\0') || value.contains('\0') {
+            return Err(out_of_range(
+                "sandbox.env",
+                &format!("{key:?}"),
+                "a variable name without \'=\' and without a NUL byte, and a value without a NUL byte",
+            ));
+        }
+        if crate::env::is_loader_key(key) {
+            return Err(loader_variable_refused("sandbox.env", key));
+        }
+    }
     Ok(())
+}
+
+/// Eine Linker-Variable in einer Sandbox-Umgebung: abgelehnt, mit Grund.
+///
+/// Der Weg, den das schließt, ist billig: `sandbox.env` ist gegen das
+/// Projekt-Profil gesperrt, aber nicht gegen die Umgebung des Prozesses. Ein
+/// `HUMANITL_SANDBOX__ENV='{ LD_PRELOAD = "/work/evil.so" }'` in derselben
+/// Shell, in der ein `direnv` das `.envrc` eines geklonten Projekts ausführt,
+/// setzt den Schlüssel — und dasselbe Profil behandelt `/work/.envrc`
+/// ausdrücklich als angreiferbeeinflusst und überdeckt es
+/// (`MANDATORY_MASKED_FILES`).
+///
+/// `key` ist der Konfigurationsschlüssel (`sandbox.env` oder `[env]` eines
+/// Profils), `name` die beanstandete Variable.
+#[must_use]
+pub fn loader_variable_refused(key: &str, name: &str) -> Diagnostic {
+    Diagnostic::builder(CONFIG_003, Severity::Blocking)
+        .why(format!(
+            "{key} sets {name}; the dynamic linker reads it before main runs, so the code it \
+             loads would run in the shim and in the agent before the seccomp filter is installed, \
+             and a process forked there would never inherit it. That is the third guarantee, and \
+             no setting may take it away. Remove {name} from {key}."
+        ))
+        .fix(FixAction::ChangeSetting {
+            key: key.to_owned(),
+            value: format!("remove {name}"),
+        })
+        .build()
 }
 
 /// Der Agent: ein Adapter und, falls gesetzt, ein Befehl mit einem Programm.

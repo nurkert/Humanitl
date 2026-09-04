@@ -155,6 +155,7 @@ pub fn rule_to_proto(rule: &Rule) -> v1::Rule {
         position: 0,
         hit_count: 0,
         allow_private: rule.allow_private,
+        disabled: rule.disabled,
     }
 }
 
@@ -722,6 +723,18 @@ pub fn record_to_summary(record: &FlowRecord) -> v1::FlowSummary {
             FlowState::Failed { error } => upstream_error_to_proto(*error) as i32,
             _ => 0,
         },
+        // Die Registry im Speicher führt nur den Grund, den ihr Zustand selbst
+        // nennt: `Failed { error }` für einen gescheiterten Weg nach draußen.
+        // Der abgebrochene TLS-Handschlag (HUM-045) steht dort nicht, denn sein
+        // Flow endet als `recorded`, und der Grund lebt allein in der Spalte
+        // `flows.error`. Wer ihn braucht, liest die Aufzeichnung
+        // ([`recorded_summary_to_proto`]); läuft der Daemon ohne Recorder — im
+        // Fake-Betrieb etwa —, bleibt `error` bei einem TLS-Flow leer. Ihn hier
+        // aus dem Zustand zu raten hieße, ihn zu erfinden.
+        error: match &record.state {
+            FlowState::Failed { error } => error.to_string(),
+            _ => String::new(),
+        },
     }
 }
 
@@ -1182,7 +1195,11 @@ pub fn rule_from_proto(proto: &v1::Rule, session: SessionId) -> Result<Rule, Rul
     let mut rule = Rule::new(id, action, matcher)
         .with_expiry(expiry_from_proto(proto.expires.as_ref(), session)?)
         .with_stream(proto.stream)
-        .with_allow_private(proto.allow_private);
+        .with_allow_private(proto.allow_private)
+        // Eine Regel, die über den Draht kommt, darf abgeschaltet ankommen;
+        // wirksam wird das nur für mitgelieferte Regeln, und die kommen nie
+        // über den Draht (`RulesStore::set_bundled_disabled`).
+        .disabled(proto.disabled);
     if !proto.created_from_flow_id.is_empty() {
         rule.created_from =
             Some(
@@ -1297,6 +1314,9 @@ pub fn recorded_summary_to_proto(row: &RecordedSummary) -> v1::FlowSummary {
         deadline: None,
         origin_tool: String::new(),
         upstream_error: 0,
+        // Der Grund steht in der Spalte, nicht im Zustand: Ein abgebrochener
+        // TLS-Handschlag endet als `recorded`, nicht als `failed` (HUM-045).
+        error: row.error.clone().unwrap_or_default(),
     }
 }
 

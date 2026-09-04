@@ -41,6 +41,7 @@
 //! 4. **Mitgelieferte Regeln gehören nicht dem Nutzer.** Weder Anlegen noch
 //!    Ändern noch Löschen; `bundled` von außen wird immer auf `false` gesetzt.
 
+use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
@@ -148,6 +149,13 @@ struct State {
     persistent: Vec<Rule>,
     /// Mitgelieferte Regeln, in ihrer Reihenfolge.
     bundled: Vec<Rule>,
+    /// Die Ids mitgelieferter Regeln, die der Nutzer abgeschaltet hat.
+    ///
+    /// Sie stehen getrennt von den Regeln, weil sie eine Regel benennen dürfen,
+    /// die es in dieser Fassung (noch) nicht gibt: Ein Abschalten darf nicht
+    /// stillschweigend zurückgehen, nur weil `rules/default.yaml` sich geändert
+    /// hat (HUM-038).
+    disabled_bundled: BTreeSet<RuleId>,
 }
 
 impl State {
@@ -213,18 +221,22 @@ impl RulesStore {
     /// werden hinter die Nutzerregeln gehängt und als `bundled` markiert.
     #[must_use]
     pub fn load(path: &Path, bundled: &[Rule], session: SessionId) -> (Self, Vec<Diagnostic>) {
-        let (persistent, diagnostics) = read_file(path, session);
+        let (persistent, disabled_bundled, diagnostics) = read_file(path, session);
         let bundled: Vec<Rule> = bundled
             .iter()
             .cloned()
-            .map(|rule| rule.bundled(true))
+            .map(|rule| {
+                let off = rule.disabled || disabled_bundled.contains(&rule.id);
+                rule.bundled(true).disabled(off)
+            })
             .collect();
         let state = State {
             session: Vec::new(),
             persistent,
             bundled,
+            disabled_bundled,
         };
-        let snapshot = Arc::new(RwLock::new(RuleSet::from_rules(state.all())));
+        let snapshot = Arc::new(RwLock::new(snapshot_of(&state)));
         let (changed, _idle) = broadcast::channel(REVISION_BUFFER);
         let store = Self {
             path: path.to_path_buf(),
@@ -344,7 +356,7 @@ impl RulesStore {
         } else {
             let mut next = state.persistent.clone();
             next.insert(clamp(pos, next.len()), rule.clone());
-            self.write(&next)?;
+            self.write(&next, &state.disabled_bundled)?;
             state.persistent = next;
         }
         self.publish(&state);
@@ -376,20 +388,20 @@ impl RulesStore {
             (Origin::User, false) => {
                 let mut next = state.persistent.clone();
                 replace_in(&mut next, &rule);
-                self.write(&next)?;
+                self.write(&next, &state.disabled_bundled)?;
                 state.persistent = next;
             }
             (Origin::Session, false) => {
                 let mut next = state.persistent.clone();
                 next.push(rule.clone());
-                self.write(&next)?;
+                self.write(&next, &state.disabled_bundled)?;
                 state.session.retain(|old| old.id != rule.id);
                 state.persistent = next;
             }
             (Origin::User, true) => {
                 let mut next = state.persistent.clone();
                 next.retain(|old| old.id != rule.id);
-                self.write(&next)?;
+                self.write(&next, &state.disabled_bundled)?;
                 state.persistent = next;
                 state.session.push(rule.clone());
             }
@@ -429,7 +441,7 @@ impl RulesStore {
                 let at = position_of(&state.persistent, id).ok_or_else(|| unknown(id))?;
                 let mut next = state.persistent.clone();
                 let rule = next.remove(at);
-                self.write(&next)?;
+                self.write(&next, &state.disabled_bundled)?;
                 state.persistent = next;
                 self.publish(&state);
                 Ok(rule)
@@ -465,7 +477,7 @@ impl RulesStore {
             Origin::User => {
                 let mut next = state.persistent.clone();
                 move_within(&mut next, id, pos);
-                self.write(&next)?;
+                self.write(&next, &state.disabled_bundled)?;
                 state.persistent = next;
                 self.publish(&state);
                 Ok(())
@@ -488,7 +500,7 @@ impl RulesStore {
         let sorted_session = sort_by_order(&state.session, order);
         let sorted_persistent = sort_by_order(&state.persistent, order);
         if sorted_persistent != state.persistent {
-            self.write(&sorted_persistent)?;
+            self.write(&sorted_persistent, &state.disabled_bundled)?;
             state.persistent = sorted_persistent;
         }
         state.session = sorted_session;
@@ -522,7 +534,7 @@ impl RulesStore {
     /// Der erste Befund ist bei Erfolg ein `RULES_011` mit dem, was sich
     /// geändert hat.
     pub fn reload(&self) -> Vec<Diagnostic> {
-        let (loaded, mut diagnostics) = read_file(&self.path, self.session);
+        let (loaded, disabled_bundled, mut diagnostics) = read_file(&self.path, self.session);
         if diagnostics
             .iter()
             .any(|diagnostic| matches!(diagnostic.severity, Severity::Error | Severity::Blocking))
@@ -532,6 +544,12 @@ impl RulesStore {
         let mut state = self.lock();
         let report = compare(&state.persistent, &loaded);
         state.persistent = loaded;
+        // Auch das Abschalten kommt aus der Datei: Wer sie von Hand ändert,
+        // erwartet, dass ein `reload` genau das übernimmt.
+        for rule in &mut state.bundled {
+            rule.disabled = disabled_bundled.contains(&rule.id);
+        }
+        state.disabled_bundled = disabled_bundled;
         self.publish(&state);
         diagnostics.insert(
             0,
@@ -544,6 +562,55 @@ impl RulesStore {
                 .build(),
         );
         diagnostics
+    }
+
+    /// Schaltet eine mitgelieferte Regel ab oder wieder an.
+    ///
+    /// Mitgelieferte Regeln gehören nicht dem Nutzer: löschen oder ändern
+    /// lehnt der Speicher mit `RULES_010` ab. Abschalten ist der Weg, sie
+    /// aufzuheben, ohne die Begründung zu verlieren, die im Rules-Screen
+    /// steht. Der Zustand liegt in der `rules.yaml` des Nutzers als Liste
+    /// `disabled_bundled` und überlebt eine neue Fassung von
+    /// `rules/default.yaml` (HUM-038).
+    ///
+    /// # Errors
+    ///
+    /// `RULES_010`, wenn die Id keine mitgelieferte Regel benennt — eine
+    /// eigene Regel löscht man, statt sie abzuschalten. `RULES_009`, wenn die
+    /// Datei nicht geschrieben werden konnte; der Speicher bleibt dann
+    /// unverändert.
+    pub fn set_bundled_disabled(&self, id: RuleId, disabled: bool) -> Result<Rule, Diagnostic> {
+        let mut state = self.lock();
+        let Some(position) = state.bundled.iter().position(|rule| rule.id == id) else {
+            return Err(Diagnostic::builder(codes::RULES_010, Severity::Error)
+                .why(format!(
+                    "there is no bundled rule with the id {id}; only bundled rules are \
+                     disabled instead of removed"
+                ))
+                .build());
+        };
+
+        let mut next = state.disabled_bundled.clone();
+        if disabled {
+            next.insert(id);
+        } else {
+            next.remove(&id);
+        }
+        let persistent = state.persistent.clone();
+        self.write(&persistent, &next)?;
+
+        state.disabled_bundled = next;
+        let Some(rule) = state.bundled.get_mut(position) else {
+            return Err(Diagnostic::builder(codes::RULES_010, Severity::Error)
+                .why(format!(
+                    "the bundled rule {id} disappeared while it was changed"
+                ))
+                .build());
+        };
+        rule.disabled = disabled;
+        let changed = rule.clone();
+        self.publish(&state);
+        Ok(changed)
     }
 
     /// Entfernt abgelaufene Regeln aus beiden Gruppen.
@@ -570,7 +637,7 @@ impl RulesStore {
             .collect();
         let removed = before - (state.session.len() + kept.len());
         if kept.len() != state.persistent.len() {
-            self.write(&kept)?;
+            self.write(&kept, &state.disabled_bundled)?;
             state.persistent = kept;
         }
         if removed > 0 {
@@ -621,14 +688,17 @@ impl RulesStore {
     }
 
     /// Schreibt die dauerhaften Regeln, atomar.
-    fn write(&self, rules: &[Rule]) -> Result<(), Diagnostic> {
-        let set = RuleSet::from_rules(rules.iter().cloned());
+    fn write(&self, rules: &[Rule], disabled_bundled: &BTreeSet<RuleId>) -> Result<(), Diagnostic> {
+        let mut set = RuleSet::from_rules(rules.iter().cloned());
+        // Ohne diese Zeile verschwände die Liste bei der nächsten Änderung aus
+        // der Datei, und ein abgeschaltetes Bündel käme still zurück.
+        set.set_disabled_bundled(disabled_bundled.iter().copied());
         write_atomically(&self.path, &serialize_rules(&set))
     }
 
     /// Übernimmt den neuen Stand in den Schnappschuss und meldet die Revision.
     fn publish(&self, state: &State) {
-        let next = RuleSet::from_rules(state.all());
+        let next = snapshot_of(state);
         match self.snapshot.write() {
             Ok(mut slot) => *slot = next,
             Err(poisoned) => *poisoned.into_inner() = next,
@@ -651,19 +721,28 @@ impl RulesStore {
     }
 }
 
+/// Der Regelsatz, den der Proxy sieht: die Regeln plus die Liste der
+/// abgeschalteten mitgelieferten.
+fn snapshot_of(state: &State) -> RuleSet {
+    let mut set = RuleSet::from_rules(state.all());
+    set.set_disabled_bundled(state.disabled_bundled.iter().copied());
+    set
+}
+
 /// Liest die Regel-Datei; eine fehlende Datei ist ein leerer Regelsatz.
-fn read_file(path: &Path, session: SessionId) -> (Vec<Rule>, Vec<Diagnostic>) {
+fn read_file(path: &Path, session: SessionId) -> (Vec<Rule>, BTreeSet<RuleId>, Vec<Diagnostic>) {
     if path.as_os_str().is_empty() {
-        return (Vec::new(), Vec::new());
+        return (Vec::new(), BTreeSet::new(), Vec::new());
     }
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return (Vec::new(), Vec::new());
+            return (Vec::new(), BTreeSet::new(), Vec::new());
         }
         Err(error) => {
             return (
                 Vec::new(),
+                BTreeSet::new(),
                 vec![
                     Diagnostic::builder(codes::RULES_001, Severity::Error)
                         .why(format!("cannot read {}: {error}", path.display()))
@@ -673,8 +752,12 @@ fn read_file(path: &Path, session: SessionId) -> (Vec<Rule>, Vec<Diagnostic>) {
         }
     };
     match parse_rules_for_session(&text, session) {
-        Ok((set, warnings)) => (set.iter().cloned().collect(), warnings),
-        Err(diagnostics) => (Vec::new(), diagnostics),
+        Ok((set, warnings)) => (
+            set.iter().cloned().collect(),
+            set.disabled_bundled().collect(),
+            warnings,
+        ),
+        Err(diagnostics) => (Vec::new(), BTreeSet::new(), diagnostics),
     }
 }
 

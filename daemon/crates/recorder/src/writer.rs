@@ -154,6 +154,17 @@ pub enum WriterCmd {
         /// Die Kennung im Domain-Katalog.
         catalog_id: Option<String>,
     },
+    /// Woran ein Flow gescheitert ist (`flows.error`).
+    ///
+    /// Für den Fall, den kein Ereignis trägt: der Client in der Sandbox bricht
+    /// den TLS-Handschlag zum Proxy ab (HUM-045). Der Weg nach draußen schreibt
+    /// die Spalte dagegen aus [`FlowEvent::Failed`].
+    FlowError {
+        /// Der Flow.
+        flow: FlowId,
+        /// Der feste Bezeichner des Grundes, zum Beispiel `tls_handshake_failed`.
+        error: String,
+    },
     /// Eine Regel, wie sie zum Zeitpunkt der Entscheidung aussah.
     Rule {
         /// Die Id der Regel.
@@ -364,6 +375,7 @@ impl Writer {
                 apex,
                 catalog_id,
             } => self.write_domain(flow, apex.as_deref(), catalog_id.as_deref()),
+            WriterCmd::FlowError { flow, error } => self.write_flow_error(flow, &error),
             WriterCmd::Rule { id, yaml, at } => self.write_rule(&id, &yaml, at),
             WriterCmd::RuleDeleted { id, at } => self.write_rule_deleted(&id, at),
             WriterCmd::ReserveBlob(sha256) => {
@@ -541,10 +553,13 @@ impl Writer {
                 "UPDATE flows SET state = 'responded', status = ?2 WHERE id = ?1",
                 rusqlite::params![flow_id.to_string(), i64::from(*status)],
             ),
-            FlowEvent::Failed { flow_id, .. } => self.update(
+            // `error` sagt, woran der Weg nach draußen gescheitert ist. Ein
+            // schon gesetzter Grund bleibt stehen: Der erste ist der, der den
+            // Flow beendet hat, jeder weitere wäre nur seine Folge.
+            FlowEvent::Failed { flow_id, error, .. } => self.update(
                 flow_id,
-                "UPDATE flows SET state = 'failed' WHERE id = ?1",
-                rusqlite::params![flow_id.to_string()],
+                "UPDATE flows SET state = 'failed', error = COALESCE(error, ?2) WHERE id = ?1",
+                rusqlite::params![flow_id.to_string(), error.to_string()],
             ),
             FlowEvent::TimedOut { flow_id, at } => {
                 let held_ms = self.held.remove(flow_id).map(|held| millis(*at) - held);
@@ -717,6 +732,25 @@ impl Writer {
             .map_err(|err| {
                 storage_failed(format!(
                     "could not record the domain of the flow {key} ({err})"
+                ))
+            })
+    }
+
+    /// Trägt nach, woran ein Flow gescheitert ist.
+    ///
+    /// Wie bei [`FlowEvent::Failed`] bleibt ein schon gesetzter Grund stehen;
+    /// der erste ist der, der den Flow beendet hat.
+    fn write_flow_error(&self, flow: FlowId, error: &str) -> Result<(), RecorderError> {
+        let key = flow.to_string();
+        self.conn
+            .execute(
+                "UPDATE flows SET error = COALESCE(error, ?2) WHERE id = ?1",
+                rusqlite::params![key, error],
+            )
+            .map(|_rows| ())
+            .map_err(|err| {
+                storage_failed(format!(
+                    "could not record the error of the flow {key} ({err})"
                 ))
             })
     }

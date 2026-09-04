@@ -65,6 +65,11 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "host_suffix",
         sql: include_str!("../migrations/V3__host_suffix.sql"),
     },
+    Migration {
+        version: 4,
+        name: "flow_error",
+        sql: include_str!("../migrations/V4__flow_error.sql"),
+    },
 ];
 
 /// Der Stand, den eine frisch migrierte Datenbank hat.

@@ -7,9 +7,20 @@
 # (`humanitl sandbox argv`). Wer wissen will, was die Sandbox tut, liest diese
 # Datei und die Zeile, nicht den Quelltext.
 #
-# Was hier NICHT steht, gibt es nicht: es gibt keinen zweiten Weg, einen Mount
-# oder eine Variable in die Sandbox zu bringen. Host-Quellen werden zusaetzlich
-# gegen eine fest verdrahtete Denylist geprueft (SANDBOX_006).
+# Drei Quellen fuellen die Sandbox, und nur diese drei:
+#
+#   1. diese Datei,
+#   2. der Beitrag des Agent-Adapters (HUM-037): seine Umgebungsvariablen und
+#      die Dateien, die er als `--ro-bind-data` mitbringt, jede aus einem
+#      versiegelten memfd und keine unter /work,
+#   3. der Konfigurationsschluessel `sandbox.env` fuer weitere Variablen.
+#
+# Was aus keiner dieser drei kommt, gibt es in der Sandbox nicht. Ein Host-Pfad
+# kommt nur ueber diese Datei herein und wird zusaetzlich gegen eine fest
+# verdrahtete Denylist geprueft (SANDBOX_006); der Adapter kann keinen Mount
+# hinzufuegen, keine Bridge und keine seccomp-Familie. Die fuenf Variablen des
+# Shims stehen ueber allen dreien. `humanitl sandbox argv` zeigt das Ergebnis
+# Argument fuer Argument, also auch den Beitrag des Adapters.
 version = 1
 name = "default"
 description = "bwrap sandbox: no network interface, one proxy socket, seccomp after bridge"

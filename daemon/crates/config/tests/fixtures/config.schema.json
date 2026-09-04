@@ -329,6 +329,7 @@
       "additionalProperties": false,
       "default": {
         "endpoint": null,
+        "models": [],
         "passthrough_paths": [
           "/v1/",
           "/api/"
@@ -343,6 +344,16 @@
             "string",
             "null"
           ],
+          "x-project-scope": "denied",
+          "x-tier": "basic"
+        },
+        "models": {
+          "default": [],
+          "description": "Modelle, die der Endpunkt anbietet. Leer heißt: der Agent bekommt ein Platzhalter-Modell und eine Warnung.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
           "x-project-scope": "denied",
           "x-tier": "basic"
         },
@@ -500,12 +511,23 @@
     "sandbox": {
       "additionalProperties": false,
       "default": {
+        "env": {},
         "profile": "default",
         "work_dir": null,
         "work_mode": "rw"
       },
       "description": "Welches Sandbox-Profil mit welchem Arbeitsverzeichnis startet.",
       "properties": {
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Zusätzliche Umgebungsvariablen für die Sandbox; sie überschreiben gleichnamige Einträge aus dem `[env]` des Profils. Der Schlüssel lässt sich aus der Umgebung des Prozesses setzen und ist damit nur so vertrauenswürdig wie die Shell, aus der Humanitl startet; die Variablen des dynamischen Linkers (`LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`) werden deshalb abgelehnt, sie liefen vor dem seccomp-Filter des Shims.",
+          "type": "object",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        },
         "profile": {
           "default": "default",
           "description": "Name des Profils unter `profiles/sandbox/`, ohne Endung.",

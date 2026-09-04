@@ -596,6 +596,7 @@ fn sandbox_argv_is_the_translation_of_the_profile() {
             OsString::from("-c"),
             OsString::from("echo hello world"),
         ],
+        files: Vec::new(),
     };
     let profile = SandboxProfile::load(&profile_file("default")).expect("the profile loads");
     let expected: Vec<String> = profile
@@ -1224,5 +1225,33 @@ fn sigint_reaches_the_agent_and_keeps_its_exit_code() {
         status.code(),
         Some(42),
         "the handler of the agent must decide the exit code, not the escalation"
+    );
+}
+
+#[test]
+fn sandbox_env_from_the_config_reaches_the_argv() {
+    // HUM-045: `FixAction::SetEnv` schreibt nach `sandbox.env`. Der Knopf ist
+    // nur dann etwas wert, wenn der Wert auch in der Sandbox ankommt und dabei
+    // die Vorgabe des Profils überschreibt.
+    let harness = Harness::new();
+    let config_dir = harness.path("config").join("humanitl");
+    std::fs::create_dir_all(&config_dir).expect("the config directory");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        "[sandbox.env]\nCURL_CA_BUNDLE = \"/work/.certs/own.pem\"\n",
+    )
+    .expect("the config file");
+
+    let output = harness.run(["--json", "sandbox", "argv"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let value: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("JSON");
+    let line = value["argv_line"].as_str().expect("an argv line");
+    assert!(
+        line.contains("--setenv CURL_CA_BUNDLE /work/.certs/own.pem"),
+        "{line}"
+    );
+    assert!(
+        !line.contains("--setenv CURL_CA_BUNDLE /etc/humanitl/ca.crt"),
+        "the value of the profile must not survive next to it: {line}"
     );
 }

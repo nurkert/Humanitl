@@ -390,8 +390,51 @@ rules:
 fn the_shipped_default_file_parses() {
     let (set, warnings) = ok(DEFAULT_RULES);
     assert!(warnings.is_empty(), "{warnings:?}");
-    assert!(
-        set.is_empty(),
-        "the shipped file holds no rule yet (HUM-038 fills it)"
+    // Seit HUM-038 hält die Datei den mitgelieferten Regelsatz des
+    // OpenCode-Adapters. Wie er wirkt, prüft
+    // `daemon/crates/sandbox/tests/default_rules.rs`; hier zählt nur, dass der
+    // Parser ihn ohne Befund liest und keine Regel darin etwas erlaubt.
+    assert!(!set.is_empty(), "the shipped file holds the bundled rules");
+    for rule in set.iter() {
+        assert!(rule.bundled, "rule {} is not marked bundled", rule.id);
+        assert_ne!(
+            rule.action,
+            Action::Allow,
+            "rule {} would let traffic through without asking",
+            rule.id
+        );
+    }
+}
+
+#[test]
+fn disabled_bundled_round_trips_through_the_file() {
+    let yaml = "version: 1\nrules: []\ndisabled_bundled:\n                  - 01920000-0000-7000-8000-000000000001\n";
+    let (set, warnings) = ok(yaml);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(
+        set.disabled_bundled()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>(),
+        vec!["01920000-0000-7000-8000-000000000001".to_owned()]
     );
+
+    let written = serialize_rules(&set);
+    assert!(
+        written.contains("disabled_bundled"),
+        "the list survives a write: {written}"
+    );
+    let (again, _) = ok(&written);
+    assert_eq!(again, set);
+}
+
+#[test]
+fn disabled_bundled_rejects_something_that_is_not_an_id() {
+    let diagnostics = errors("version: 1\nrules: []\ndisabled_bundled: [\"nope\"]\n");
+    assert_eq!(codes(&diagnostics), vec![RULES_001]);
+}
+
+#[test]
+fn a_file_without_disabled_bundled_writes_none() {
+    let (set, _) = ok("version: 1\nrules: []\n");
+    assert!(!serialize_rules(&set).contains("disabled_bundled"));
 }

@@ -38,6 +38,8 @@
 //! - [`registry`]: [`FlowRegistry`] hält je Flow einen [`FlowRecord`] und
 //!   beantwortet `ListFlows`; sie teilt sich den Ereignisstrom mit der
 //!   [`HoldQueue`] (HUM-016).
+//! - [`tls_observe`]: deutet einen gescheiterten Handschlag des Clients und
+//!   macht ihn als Befund und als Flow sichtbar (HUM-045).
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
@@ -55,6 +57,7 @@ pub mod registry;
 pub mod resolver;
 pub mod rules_store;
 pub mod tls;
+pub mod tls_observe;
 pub mod upstream;
 
 pub use crate::connect::{
@@ -73,4 +76,7 @@ pub use crate::resolver::{
     ResolverPort, ResolverStats, SystemResolver,
 };
 pub use crate::rules_store::{Origin, ReloadReport, RulesStore, StoredRule};
+pub use crate::tls_observe::{
+    HandshakeWatch, TlsFailure, ToolHint, classify, diagnostic_for, tool_hint,
+};
 pub use crate::upstream::{ClientTls, Upstream};

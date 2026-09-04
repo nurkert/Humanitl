@@ -327,6 +327,15 @@ pub struct FlowSummary {
     pub apex: Option<String>,
     /// Die Kennung im Domain-Katalog.
     pub catalog_id: Option<String>,
+    /// Woran der Flow gescheitert ist, sonst `None`.
+    ///
+    /// Ein kurzer, fester Bezeichner: `upstream_dns`, `upstream_connect`,
+    /// `upstream_tls`, `upstream_private_address:<ip>`, `upstream_timeout` für
+    /// einen gescheiterten Weg nach draußen, `tls_handshake_failed` für einen
+    /// Client in der Sandbox, der den Handschlag zum Proxy abgebrochen hat
+    /// (HUM-045). Nicht dasselbe wie [`FlowSummary::block_reason`]: dort steht,
+    /// warum jemand geblockt hat, hier, woran es gescheitert ist.
+    pub error: Option<String>,
 }
 
 /// Eine aufgezeichnete Nachricht: Kopfzeilen plus Verweis auf den Body.
