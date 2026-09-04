@@ -437,6 +437,37 @@ Das Notizfeld beim Blockieren (HUM-072) ist vorübergehend: verborgen bis `N`, g
 
 ## 6. Barrierefreiheit als Zahlen
 
+> **Stand 2026-09-04: bis 1.0.0 vertagt.** Der Projekteigentümer hat
+> entschieden, dass der MVP zuerst beweisen soll, dass die Sache trägt und gut
+> sein kann; die Barrierefreiheit als Programm kommt danach. Was in diesem
+> Abschnitt steht, bleibt das Ziel und bleibt lesenswert, blockiert aber kein
+> Issue mehr: die Screenreader-Ansagen, der zweite Kanal in seiner vollen
+> Abstufung, die Prüfung bei `TextScaler.linear(2.0)` und die 4,5:1 als
+> Testgatter ruhen. Wo eine dieser Zahlen heute schon erreicht ist, bleibt sie
+> stehen — vertagt heißt „nicht darauf warten", nicht „Erreichtes wieder
+> herausreissen".
+>
+> **Vier Dinge gelten weiter**, weil sie nur wie Barrierefreiheit aussehen und
+> in Wahrheit Sicherheit oder schlichte Benutzbarkeit sind:
+>
+> 1. Eine Haltedauer behält ihre volle Zeit, auch wenn die Plattform
+>    `disableAnimations` meldet. Flutter kürzt sonst auf fünf Prozent, und
+>    damit sendet ein gewöhnlicher Klick, wo ein Halten verlangt war; gemessen
+>    genügten 60 Millisekunden.
+> 2. Die Trefferflächen der Entscheidung bleiben: mindestens 28 × 28 px
+>    allgemein, mindestens 32 × 120 px für Erlauben und Blockieren. Wer sich
+>    bei einer unumkehrbaren Handlung vergreift, hat kein
+>    Barrierefreiheitsproblem, sondern eine gesendete Anfrage.
+> 3. Text bleibt über etwa 3:1. Das ist keine Norm mehr, sondern
+>    Lesbarkeit: `shadcn_flutter` malt seinen Destructive-Button bei 1,97:1,
+>    und das ist für jeden unlesbar, nicht nur für manche.
+> 4. Ein Klick zeigt eine sichtbare Reaktion. Ein Control, das nichts tut,
+>    fühlt sich kaputt an.
+>
+> Siehe ADR-0009, Abschnitt „Revidiert am 2026-09-04 durch den
+> Projekteigentümer".
+
+
 - **Kontrast.** Text erreicht 4,5:1 gegen die Fläche, auf der er wirklich steht — also auch gegen einen 10-%-Tint und gegen eine Füllung, auf allen vier Flächen beider Leitern. Flächen und Rails erreichen 3:1, mit der einen benannten Ausnahme der ruhenden `held`-Rail (3.3, Regel 10). Der Test in `app/packages/ui/test/tokens_test.dart` prüft heute nur 3:1 für Zustandsfarben als Fläche; er wird auf Text-auf-Tint und Text-auf-Füllung erweitert und schlägt unter 4,5:1 fehl. Gemessene Verstöße heute: DELETE-Label auf seinem Tint über `bg3` 2,65:1, `held`-Label hell auf seinem Tint 2,75:1.
 - **Sekundärtext.** `fg2` misst 3,02:1 auf `bg3`, `lFg2` 3,24:1 auf `lBg3`. Beide sind für wirklich deaktivierte Controls reserviert. Jeder Satz, den jemand lesen soll, ist `fg1` oder besser; das betrifft heute den Leerzustand der Queue und die Titel der Klappabschnitte.
 - **Fokus.** 2 px Akzentring außerhalb des eigenen Rahmens. Nie durch Umfärben eines vorhandenen Rahmens, nie in der Farbe, mit der das Control gefüllt ist. Auf dem Primärbutton misst der Fokusrahmen heute 1,00:1 gegen die Füllung — ein Tastaturnutzer sieht dort keinen Unterschied.
@@ -614,14 +645,20 @@ Gewachsen sind `motion.dart` (`leaveOffset`, `stagger`, `staggerMax`, `leaveGlid
 26. Ein ARB-Lint prüft die Verbotswörter aus 4.1 in beiden Sprachen und kennt die drei Aussage-Schlüssel als Ausnahme.
 27. Ein Widget-Test hält `Enter` 500 ms gedrückt und erwartet genau ein `Decide` (5.4).
 
-**Was keine Bibliothek mehr liefert (ADR-0009, „Entscheidung nach Sprint 2", 2026-09-04):**
+**Was die Bibliothek liefert und was nicht (ADR-0009, „Revidiert am 2026-09-04 durch den Projekteigentümer"):**
 
-ADR-0009 hat ursprünglich Resizable, Command Palette, Sheet, Toast, ContextMenu
-und Menubar von `shadcn_flutter` erwartet. HUM-035 hat am 2026-09-04 gegen
-`shadcn_flutter` und gegen forui entschieden; was von dieser Liste fehlt, baut
-das Designsystem selbst. Toast und Menubar entfallen dabei ganz: Ein Toast
-widerspricht 2.11, 4.6 und 4.8, und die beiden Wege zu jeder Handlung sind die
-Icon-Rail und die Command Palette (5.1), nicht eine Menüleiste.
+`shadcn_flutter` ist seit dem 2026-09-04 aufgenommen und liefert Resizable,
+Command Palette, Sheet und ContextMenu. Toast und Menubar entfallen trotzdem:
+Ein Toast widerspricht 2.11, 4.6 und 4.8, und die beiden Wege zu jeder Handlung
+sind die Icon-Rail und die Command Palette (5.1), nicht eine Menüleiste.
+
+Die Bibliothek liefert das Aussehen, nicht die Verhaltensschicht darunter. Sie
+berechnet an keiner Stelle einen Kontrastwert, kennt `AnimationBehavior` nicht,
+hat drei `Semantics`-Knoten in der ganzen Bibliothek, kein
+Halten-zum-Bestätigen, keine Mindest-Trefferfläche und auf dem Desktop keinen
+gedrückten Zustand. Was davon im MVP trotzdem gilt, steht im ADR: die
+Haltedauer behält ihre Zeit, Text bleibt über etwa 3:1, und ein Klick zeigt
+eine Reaktion. Der Rest ist bis 1.0.0 vertagt.
 
 28. Ein Kontextmenü fehlt. Gebraucht wird es zweimal: „Copy value" und „Copy
     path" im JSON-Baum und Copy/Paste im Terminal. Es gehört nach `packages/ui`

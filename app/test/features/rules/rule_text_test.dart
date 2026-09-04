@@ -88,10 +88,9 @@ void main() {
 
   group('arb', () {
     /// Die Schlüssel einer Sprachdatei, ohne die `@`-Einträge.
-    Map<String, Object?> read(String locale) =>
-        (jsonDecode(File('l10n/app_$locale.arb').readAsStringSync())
-                as Map<String, Object?>)
-            .cast<String, Object?>();
+    Map<String, Object?> read(String locale) => (jsonDecode(
+      File('l10n/app_$locale.arb').readAsStringSync(),
+    ) as Map<String, Object?>).cast<String, Object?>();
 
     test('every rules key carries its description, in both languages', () {
       final Map<String, Object?> source = read('en');

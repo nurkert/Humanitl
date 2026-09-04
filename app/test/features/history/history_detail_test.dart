@@ -114,9 +114,8 @@ void main() {
       // The body arrives through a future; give it a turn before reading
       // what the pane says about it.
       final HistoryBody body = await container.read(
-        historyBodyProvider(
-          client.state.details[post.id]!.request!.body,
-        ).future,
+        historyBodyProvider(client.state.details[post.id]!.request!.body)
+            .future,
       );
       expect(body.truncated, isTrue);
       expect(body.linesCapped, isTrue);
