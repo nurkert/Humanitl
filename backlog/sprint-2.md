@@ -1678,10 +1678,35 @@ Nach dem Test prüft `run.sh` die HAR gegen das Schema und dass `_humanitl.decis
 Das Skript ist der Test.
 
 ### Akzeptanzkriterien
-- [ ] `tests/e2e/m2_first_decision/run.sh` Exit 0 lokal und in CI (Job `e2e-xvfb`).
-- [ ] Laufzeit < 4 min in CI.
-- [ ] Bei Fehlschlag: Screenshot und Daemon-Log als CI-Artefakt.
-- [ ] Sprint-Gate in `CONTRIBUTING.md` dokumentiert: Merges nach Sprint 2 brauchen grünes M1- und M2-Skript.
+- [x] `tests/e2e/m2_first_decision/run.sh` Exit 0 lokal und in CI (Job `e2e-xvfb`).
+- [x] Laufzeit < 4 min in CI (gemessen: 15 bis 20 Sekunden ohne den Bau).
+- [ ] Bei Fehlschlag: Screenshot und Daemon-Log als CI-Artefakt. Das Daemon-Log, das Protokoll des Ziels und die Antworten des Agenten stehen unter `target/e2e/m2`; Screenshots gibt es erst mit der Oberflächen-Hälfte (HUM-097).
+- [x] Sprint-Gate in `CONTRIBUTING.md` dokumentiert, samt dem, was es heute **nicht** deckt.
+
+### Stand (2026-09-04): nur die Daemon-Hälfte
+
+Umgesetzt und in CI grün ist die Hälfte, die ohne Oberfläche prüfbar ist:
+Gruppierung nach registrierbarer Domäne, Funde vor der Entscheidung,
+Stapel-Freigabe mit Sitzungsregel, Block mit Notiz, Zeitüberschreitung, was die
+Regel danach entscheidet, die Historie und die Menge, aus der der Export
+entsteht — 59 Zusicherungen, jede mit ihrer Zahl im Protokoll.
+
+**Offen und ausdrücklich nicht gedeckt:**
+
+- Die Oberfläche. Warteschlange, Aktionsleiste, Regel-Bildschirm und Historie
+  werden nicht bedient, und es wird keine HAR-Datei geschrieben oder geprüft.
+  Das ist **HUM-097**; `run.sh` überspringt seinen Schritt 10 mit einer
+  ausdrücklichen Meldung, solange `app/integration_test/m2_first_decision_test.dart`
+  fehlt, und `M2_UI=1` macht daraus einen Fehlschlag.
+- Der MITM-Pfad. Sechzehn der siebzehn Anfragen laufen über Klartext-HTTP, weil
+  der Daemon `resolver.test_ca` nicht liest; Blatt-Erzeugung aus der eigenen
+  CA, Handschlag mit dem Agenten und TLS-Sitzung nach oben werden damit für
+  keinen freigegebenen oder geblockten Fluss ausgeführt. Das ist verlorene
+  Abdeckung für die Hauptbauart des Produkts, und sie kommt mit **HUM-087**
+  zurück.
+
+Ein grünes `e2e-xvfb` heißt bis dahin „die Daemon-Hälfte von M2 hält", nicht
+„M2 hält". Die dauerhaften Abweichungen stehen in `backlog/CONVENTIONS.md` 4.22.
 
 ### Fallstricke
 - Timing: alle Wartezeiten mit `pumpUntil`-Helfer und Timeout, keine festen `sleep`s außer dem Timeout-Schritt.
@@ -1690,7 +1715,7 @@ Das Skript ist der Test.
 - `resolver.overrides` und `upstream_port_map` sind Test-Hebel; Daemon loggt eine Warnung beim Start, damit sie nie unbemerkt in Produktion landen.
 
 ### Referenzen
-BACKLOG.md 7 (M2), 8 (Sprint-Gate); CONVENTIONS.md 3.8, 3.11; Flutter integration_test (https://docs.flutter.dev/testing/integration-tests).
+BACKLOG.md 7 (M2), 8 (Sprint-Gate); CONVENTIONS.md 3.8, 3.11, 4.22; HUM-087 (Testwurzel), HUM-095 (Herkunft der Sitzungsregel), HUM-097 (Oberflächen-Hälfte); Flutter integration_test (https://docs.flutter.dev/testing/integration-tests).
 
 
 ## HUM-072 · Block mit Notiz
@@ -2383,3 +2408,93 @@ Im Klartext folgt der Zeile `allow 01000000` eine zweite: `rule 018f0002 allow *
 
 ### Referenzen
 `docs/adr/0007-rule-model.md` (Herkunft einer Regel); ADR-0018 und `docs/ARCHITECTURE.md` 3b (Parität von UI und CLI, keine Fachlogik in `bin/humanitl`); `backlog/CONVENTIONS.md` 4.5 (Sitzungsregeln) und 4.22 (Befund aus dem M2-Lauf); `backlog/sprint-2.md` HUM-027 (Regel vor Entscheidung, Rücknahme), HUM-029 (eine `Decide` je Flow, Regel nur einmal), HUM-072 (Notiz an den Agenten); `backlog/sprint-4.md` HUM-078 (Paritäts-Tabelle); `proto/humanitl/v1/rules.proto` Feld 6.
+
+
+## HUM-097 · Oberflächen-Hälfte des M2-Demoskripts
+Sprint: 2 · Größe: M · Abhängigkeiten: HUM-036, HUM-028, HUM-029, HUM-032, HUM-033, HUM-035 · Blockiert: das vollständige M2-Sprint-Gate
+
+### Kontext
+HUM-036 verlangt den vollen Kreislauf mit echtem Daemon, echter Sandbox **und echtem UI unter xvfb**, samt gültiger HAR-Datei, und `CONTRIBUTING.md` erklärt M2 zur Voraussetzung für jeden Merge ab Sprint 3. Gebaut ist bisher nur die Daemon-Hälfte: `tests/e2e/m2_first_decision/run.sh` fährt Gruppierung, Stapel-Freigabe mit Sitzungsregel, Block, Zeitüberschreitung, Historie und die Menge, aus der der Export entsteht, über die Kommandozeile. Seinen Schritt 10 überspringt es mit einer ausdrücklichen Meldung, solange `app/integration_test/m2_first_decision_test.dart` fehlt, und meldet trotzdem Erfolg — das Gate gilt also als erfüllt und ist es nur zur Hälfte.
+
+Der Test wurde bewusst nicht zusammen mit der Daemon-Hälfte gebaut: Die Widgets von `app/packages/ui` sind am 2026-09-04 auf `shadcn_flutter` umgestellt worden (ADR-0009, revidiert), und ein Integrationstest, der gegen die Fassung davor geschrieben worden wäre, hätte Selektoren geprüft, die es beim Merge nicht mehr gab.
+
+Was fehlt, ist ausschließlich die Oberflächen-Hälfte. Die Naht steht: `run.sh` startet den Test, reicht ihm die Umgebung und prüft danach die Datei, die er geschrieben hat.
+
+### Ziel
+`app/integration_test/m2_first_decision_test.dart` treibt denselben Lauf über den Bildschirm statt über die Kommandozeile und schreibt am Ende die HAR-Datei; `tests/e2e/m2_first_decision/run.sh` fährt ihn unter `xvfb-run` und prüft das Ergebnis. Ein grünes `e2e-xvfb` heißt danach „M2 hält", nicht „die Daemon-Hälfte von M2 hält".
+
+### Nicht-Ziel
+Keine Änderung an Fake-Upstream, Fake-Agent, `script.json` oder `config.toml`. Kein neuer RPC. Keine Golden-Tests (HUM-054). Nicht das Umstellen des Laufs auf `https://` — das ist HUM-087. Nicht die Herkunft der Sitzungsregel — das ist HUM-095, und bis dahin bleibt der Schritt mit dem Abzeichen `from #1` offen.
+
+### Betroffene Pfade
+- `app/integration_test/m2_first_decision_test.dart` (neu)
+- `app/pubspec.yaml` (`integration_test` als Dev-Abhängigkeit, falls sie fehlt)
+- `tests/e2e/m2_first_decision/run.sh`: Schritt 2 bis 4 bekommen einen Schalter, der die Entscheidungen dem Bildschirm überlässt; `M2_EXPECTED_ASSERTIONS` steigt
+- `.github/workflows/ci.yml`: Job `e2e-xvfb` lädt zusätzlich die Screenshots hoch
+- `CONTRIBUTING.md` und `backlog/CONVENTIONS.md` 4.22: der Absatz „nur die Daemon-Hälfte" entfällt
+- `backlog/sprint-2.md` HUM-036: Abschnitt „Stand" entfällt
+
+### Spezifikation
+
+**Die Schnittstelle, die `run.sh` heute schon stellt** (Schritt 10, unverändert zu übernehmen):
+
+```sh
+cd app && \
+  XDG_RUNTIME_DIR=<wegwerf>/state/runtime \
+  XDG_DATA_HOME=<wegwerf>/data \
+  XDG_CONFIG_HOME=<wegwerf>/config \
+  HOME=<wegwerf>/home \
+  HUMANITL_SOCKET=<runtime>/humanitl/daemon.sock \
+  HUMANITL_TOKEN=<runtime>/humanitl/token \
+  HUMANITL_E2E_HAR=<wegwerf>/out/m2.har \
+  xvfb-run -a --server-args='-screen 0 1600x1000x24' \
+  flutter test integration_test/m2_first_decision_test.dart -d linux
+```
+
+- `XDG_RUNTIME_DIR` genügt, um den Daemon zu finden: `DaemonPaths.resolve` in `app/lib/core/ipc/daemon_paths.dart` leitet Socket und Token daraus ab, genau wie `humanitl_config::Paths` auf der Rust-Seite. `HUMANITL_SOCKET` und `HUMANITL_TOKEN` stehen daneben, damit der Test die Pfade nehmen kann, ohne sie herzuleiten.
+- `HUMANITL_E2E_HAR` ist der Pfad, unter den der Test die Export-Datei schreiben muss. `run.sh` prüft danach: Datei nicht leer, `.log.entries | length == 17`.
+- Die Auflösung ist Vorgabe und kein Vorschlag: unter 1400×900 greift das schmale Layout, und die Selektoren scheitern.
+- Der Daemon läuft bereits, die Sitzung ist offen, der Agent hat seine ersten Anfragen gestellt. Der Test verbindet sich, er startet nichts.
+
+**Die Schritte auf dem Bildschirm** (aus HUM-036, mit dem Stand der Bildschirme von heute):
+
+1. Warten, bis die Warteschlange drei Gruppen zeigt: `registry.npmjs.org` 12, `api.github.com` 2, `evil.example` 1. Zusicherungen: npm-Gruppe eingeklappt, `0 findings`; github-Gruppe 1 Fund (Mailadresse); evil 1 Fund (AWS-Schlüssel) und die Karte „unbekannte Domäne".
+2. npm-Gruppe: `Remember` auf `session` × `apex`, dann `Allow 12 → registry.npmjs.org` über die Aktionsleiste (der Kopf der Gruppe kann nur blocken, CONVENTIONS 4.15). Zusicherungen: 12 Flüsse verlassen die Warteschlange, der Temporär-Tab des Regel-Bildschirms führt genau eine Regel `allow · ∗ · **.npmjs.org · this session`.
+3. `evil.example`: `B`. Zusicherung: die Karte verschwindet, die Historie führt sie als geblockt.
+4. github-POST: Enter (einmal erlauben). Zusicherung: Historie `allowed`, Fund-Zähler 1.
+5. github-GET: nichts tun. Nach der Haltefrist Zusicherung: Karte „Blocked (timed out)", Historie `timedOut`.
+6. Historie: Filter `decision:block` → 1 Zeile, `decision:timed_out` → 1 Zeile, `findings:>0` → 2 Zeilen. **Nicht** `state:blocked`: `state:` kennt nur die sieben Zustände des Automaten (CONVENTIONS 4.18).
+7. Export der ungefilterten Menge als HAR nach `HUMANITL_E2E_HAR`.
+
+**Was heute noch nicht geht und deshalb nicht Teil der Akzeptanz ist:** der Katalogname „Looks like: npm install" und `Edit + Allow` (HUM-094, HUM-047); das Abzeichen `from #1` an der Sitzungsregel (HUM-095, weil die Regel neben der Entscheidung entsteht statt in ihr).
+
+**Wer entscheidet.** `run.sh` treibt die Entscheidungen heute selbst über `humanitl`. Beide Treiber zugleich wären ein Wettlauf. Der Lauf bekommt deshalb einen Schalter: mit Oberfläche entscheidet der Bildschirm und die Abschnitte 2 bis 4 des Skripts entfallen, ohne Oberfläche bleibt es beim heutigen Weg. Die Zusicherungen der Abschnitte 5 bis 9 laufen in beiden Fällen unverändert — sie fragen den Daemon und den Agenten, nicht den Treiber.
+
+### Schritte
+1. `integration_test` als Dev-Abhängigkeit prüfen und, falls nötig, ergänzen; ein leerer Test muss unter `xvfb-run` grün durchlaufen, bevor irgendetwas behauptet wird.
+2. Einen `pumpUntil`-Helfer mit Frist schreiben. Feste `sleep`s nur für den Schritt, der die Zeitüberschreitung abwartet.
+3. Die sieben Schritte oben, jeder mit seiner Zusicherung.
+4. Export schreiben, Pfad aus `HUMANITL_E2E_HAR`.
+5. `run.sh`: Schalter für den Treiber, `M2_EXPECTED_ASSERTIONS` hochsetzen, Schritt 10 von „übersprungen" auf „geprüft" bringen.
+6. `CONTRIBUTING.md`, `backlog/CONVENTIONS.md` 4.22 und den Abschnitt „Stand" in HUM-036 zurücknehmen.
+
+### Tests
+Das Skript ist der Test. Zusätzlich: `flutter test integration_test/...` muss auch allein gegen einen laufenden Daemon grün sein, damit ein Entwickler ihn ohne den ganzen Lauf fahren kann.
+
+### Akzeptanzkriterien
+- [ ] `tests/e2e/m2_first_decision/run.sh` Exit 0 mit der Oberflächen-Hälfte, lokal und im Job `e2e-xvfb`.
+- [ ] `M2_UI=1 tests/e2e/m2_first_decision/run.sh` läuft durch, statt mit „the integration test of the screen is not there" zu sterben.
+- [ ] Die HAR-Datei hat 17 Einträge, und `_humanitl.decision` verteilt sich auf 15 `allow` (davon 2 mit `rule_id`), 1 `block` mit `reason: user` und 1 `timed_out`.
+- [ ] Laufzeit unter 4 Minuten in CI.
+- [ ] Bei Fehlschlag: Screenshot (`integration_test` `takeScreenshot`) und Daemon-Log als CI-Artefakt.
+- [ ] Der Absatz „nur die Daemon-Hälfte" ist aus `CONTRIBUTING.md`, aus 4.22 und aus HUM-036 verschwunden.
+
+### Fallstricke
+- Alle Wartezeiten über `pumpUntil` mit Frist. Ein `pumpAndSettle` läuft in einer Oberfläche mit laufenden Animationen nicht aus.
+- Die Haltefrist des Laufs steht in `tests/e2e/m2_first_decision/config.toml` und ist zugleich das Budget für die Entscheidungen. Treibt der Bildschirm sie, wird das Budget kleiner, nicht größer — der Test darf zwischen dem Erscheinen der Gruppe und der Freigabe nicht trödeln.
+- `flutter test -d linux` erbt die Umgebung des Aufrufers; `Platform.environment` im Test liest sie. `--dart-define` wäre der andere Weg, dann muss `run.sh` mitziehen.
+- Der Test darf nichts starten und nichts aufräumen. Daemon, Ziel und Sandbox gehören dem Skript; ein Test, der den Daemon beendet, nimmt den folgenden Zusicherungen ihre Grundlage.
+- Der Fund-Zähler der github-POST-Anfrage ist 1, nicht 0: Die Mailadresse im Rumpf ist ein Fund, und `findings.email_allow_domains` ist im Lauf leer.
+
+### Referenzen
+`backlog/sprint-2.md` HUM-036 (Abschnitt „Stand"), HUM-028, HUM-029, HUM-032, HUM-033; `backlog/CONVENTIONS.md` 4.15, 4.16, 4.18, 4.22; `docs/ARCHITECTURE.md` 6 (e2e, ein Nutzerweg je Meilenstein); Flutter integration_test (https://docs.flutter.dev/testing/integration-tests).
