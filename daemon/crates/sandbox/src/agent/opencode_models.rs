@@ -47,7 +47,7 @@ const MODEL_PLACEHOLDER_KEY: &str = "{{MODEL_ID}}";
 /// Das ist ein Fehler im Build, keine Nutzereingabe: die Dateien liegen unter
 /// `agents/` und werden einkompiliert. Ein `unwrap` wäre hier trotzdem falsch,
 /// weil dieselbe Meldung dann als Panik statt als Befund erschiene.
-fn broken(file: &str, why: &str) -> Diagnostic {
+pub(crate) fn broken(file: &str, why: &str) -> Diagnostic {
     Diagnostic::builder(AGENT_003, Severity::Blocking)
         .why(format!(
             "the bundled template {file} is not usable: {why}; \
