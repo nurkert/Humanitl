@@ -314,6 +314,20 @@ pub enum RulesCmd {
         scan: u32,
     },
 
+    /// Switch a bundled rule off. It stays in the list and decides nothing.
+    Disable {
+        /// Die Id der mitgelieferten Regel.
+        #[arg(value_name = "ID")]
+        id: String,
+    },
+
+    /// Switch a bundled rule back on.
+    Enable {
+        /// Die Id der mitgelieferten Regel.
+        #[arg(value_name = "ID")]
+        id: String,
+    },
+
     /// Read rules.yaml again and report what changed.
     Reload,
 

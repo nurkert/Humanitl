@@ -150,6 +150,9 @@ impl FakeFlow {
             upstream_error: self
                 .upstream_error
                 .map_or(0, |error| upstream_error_to_proto(error) as i32),
+            error: self
+                .upstream_error
+                .map_or_else(String::new, |error| error.to_string()),
         }
     }
 

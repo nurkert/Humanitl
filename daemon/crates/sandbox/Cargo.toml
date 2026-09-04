@@ -15,6 +15,10 @@ humanitl-config.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
+# Der Agent-Adapter (HUM-037): `llm.endpoint` ist eine `url::Url`, und die
+# Passthrough-Regel traegt eine feste UUID-Literal-Id.
+url.workspace = true
+uuid.workspace = true
 # Sichere Huellen um memfd_create(2), fcntl(2) und kill(2): der Launcher legt
 # die Maskendatei als versiegeltes memfd an, vererbt Deskriptoren ohne
 # CLOEXEC an bwrap und beendet die Sandbox mit SIGTERM. Ohne rustix braeuchte
@@ -25,5 +29,12 @@ rustix = { version = "1.1", features = ["fs", "process"] }
 
 [dev-dependencies]
 tempfile.workspace = true
+# Nur im Test: der mitgelieferte Regelsatz des Adapters wird mit dem echten
+# Parser gelesen und ausgewertet. Als Abhaengigkeit der Bibliothek waere das
+# ein Verstoss gegen `tools/deps-allow.toml`; als Dev-Abhaengigkeit ist es
+# erlaubt (`tools/check_deps.py` ueberspringt `kind == "dev"`), und der Adapter
+# liefert deshalb den Text der Datei statt geparster Regeln.
+humanitl-rules.workspace = true
+chrono.workspace = true
 # Nur im Test: prueft, dass `argv_line` wirklich von einer Shell zerlegbar ist.
 shlex.workspace = true

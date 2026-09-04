@@ -156,6 +156,20 @@ pub static AREAS: &[AreaInfo] = &[
         last: 9,
         note: "Kommandozeile und ihre Vorbedingungen",
     },
+    AreaInfo {
+        area: "ui",
+        prefix: "UI",
+        first: 1,
+        last: 9,
+        note: "Oberflaeche und was ihr die Arbeitsumgebung verweigert",
+    },
+    AreaInfo {
+        area: "agent",
+        prefix: "AGENT",
+        first: 1,
+        last: 9,
+        note: "Agent-Adapter: Startkommando, Vorlagen, Vorprüfung vor dem Start",
+    },
 ];
 
 macro_rules! registry {
@@ -271,6 +285,25 @@ registry! {
 
     /// Der Client vertraut der mitgelieferten CA nicht.
     TLS_001 => "tls", "Client hat Humanitl-CA abgelehnt", "#tls_001";
+    /// Ein Client in der Sandbox bricht den TLS-Handschlag zu demselben Host
+    /// wiederholt ab (dreimal in zehn Sekunden), ohne einen Alert zu schicken,
+    /// der die CA nennt. Das deutet auf Certificate Pinning oder auf ein
+    /// Werkzeug, das die CA-Umgebungsvariablen nicht liest (HUM-045).
+    TLS_002 => "tls", "Client bricht den Handschlag wiederholt ab", "#tls_002";
+    /// Der Client hat im `ClientHello` keinen Namen genannt (keine SNI),
+    /// obwohl der Tunnel zu einem DNS-Namen führt. Der Handschlag kommt
+    /// zustande, aber keine Anfrage darin lässt sich dem Tunnelziel zuordnen;
+    /// alle werden abgelehnt (HUM-045, HUM-023).
+    ///
+    /// **Bereich `Session`, nicht `Flow`.** Der Katalog in `backlog/sprint-3.md`
+    /// HUM-068 führt `TLS_001..003` gemeinsam unter `Flow`. Für `TLS_001` und
+    /// `TLS_002` stimmt das: Sie hängen am Flow des gescheiterten `CONNECT`.
+    /// `TLS_003` entsteht dagegen, wenn der Handschlag gerade *gelungen* ist
+    /// und noch keine Anfrage darin steht; welcher Flow daraus wird, ist offen,
+    /// und es werden meist mehrere. Der Proxy schickt ihn deshalb mit
+    /// `flow_id = None` in den Ereignisstrom. Wer `DiagnosticScope` baut
+    /// (HUM-068), trägt hier `Session` ein und nicht `Flow`.
+    TLS_003 => "tls", "Client ohne SNI", "#tls_003";
     /// Das CA-Verzeichnis oder eine Datei darin ließ sich nicht anlegen, schreiben oder umbenennen (HUM-014).
     TLS_004 => "tls", "CA-Verzeichnis nicht beschreibbar", "#tls_004";
     /// `ca.key` oder `ca.crt` fehlt, ist unlesbar, passt nicht zusammen oder hat unsichere Rechte (HUM-014).
@@ -383,6 +416,40 @@ registry! {
     CLI_003 => "cli", "Unterkommando noch nicht verfügbar", "#cli_003";
     /// Die Kommandozeile ließ sich nicht lesen: unbekanntes Unterkommando, fehlendes oder unlesbares Argument (HUM-064).
     CLI_004 => "cli", "Aufruf ungültig", "#cli_004";
+    /// Die Arbeitsumgebung bietet keinen Platz fuer ein Anzeigesymbol
+    /// (GNOME ohne die AppIndicator-Erweiterung). Die Anwendung laeuft
+    /// weiter, der Zaehler steht im Fenstertitel; der Fix verweist auf die
+    /// Erweiterung (HUM-034).
+    UI_002 => "ui", "Kein Platz für das Anzeigesymbol", "#ui_002";
+
+    // HUM-037: der Agent-Adapter und seine Vorprüfung. Neue Einträge stehen am
+    // Ende des Registers, nicht bei ihrem Bereich; die Reihenfolge im Quelltext
+    // sagt nichts aus, `docs/DIAGNOSTICS.md` gruppiert nach Bereich.
+    /// Das Kommando des Agenten ist auf diesem Rechner nicht zu finden: weder
+    /// im `$PATH` des Hosts noch als `agent.command`. Ohne Kommando gibt es
+    /// nichts zu starten, deshalb ist der Befund blockierend (HUM-037).
+    AGENT_001 => "agent", "Agent-Kommando nicht gefunden", "#agent_001";
+    /// `agent.command` zeigt auf eine Datei, die es nicht gibt oder die nicht
+    /// ausführbar ist. Die Sandbox startet trotzdem, weil der Pfad in der
+    /// Sandbox ein anderer sein kann als auf dem Host; scheitert das `exec`,
+    /// meldet der Shim es mit seinem eigenen Exit-Code (HUM-037).
+    AGENT_002 => "agent", "Agent-Kommando nicht ausführbar", "#agent_002";
+    /// Eine mitgelieferte Vorlage des Adapters (`opencode.json.tmpl`,
+    /// `models.json`) ließ sich nicht als JSON lesen oder hat nicht die Form,
+    /// die der Adapter erwartet. Das ist ein Fehler im Build, keine
+    /// Nutzereingabe: die Dateien liegen unter `agents/` und werden
+    /// einkompiliert (HUM-037).
+    AGENT_003 => "agent", "Gebündelte Agenten-Vorlage unbrauchbar", "#agent_003";
+    /// Es ist kein Modell konfiguriert (`llm.models` ist leer). Der Adapter
+    /// trägt ein Platzhalter-Modell in die Konfiguration des Agenten ein,
+    /// damit er überhaupt startet; ob der LLM-Server dieses Modell kennt, weiß
+    /// Humanitl nicht (HUM-037, HUM-039).
+    LLM_004 => "llm", "Kein Modell konfiguriert", "#llm_004";
+    /// Das Kommando des Agenten liegt auf dem Host, aber an einer Stelle, die
+    /// die Sandbox nicht einhängt. In der Sandbox scheitert dann das `exec`,
+    /// und zwar erst nach dem Start. Der Befund nennt den gefundenen Pfad und
+    /// einen Ort, an dem er erreichbar wäre (HUM-037).
+    AGENT_004 => "agent", "Agent-Kommando in der Sandbox nicht erreichbar", "#agent_004";
 }
 
 /// Sucht einen Code im Register.

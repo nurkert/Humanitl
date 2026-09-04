@@ -702,6 +702,15 @@ pub struct SessionContext {
     pub session_env: Vec<(String, String)>,
     /// Der Befehl, den der Shim nach seccomp startet.
     pub command: Vec<OsString>,
+    /// Dateien, die vor dem `exec` in der Sandbox liegen müssen.
+    ///
+    /// Sie kommen vom Agent-Adapter ([`crate::agent::AgentAdapter::files`]) und
+    /// werden als `--ro-bind-data FD DST` aus versiegelten memfds eingehängt,
+    /// nie von einem Pfad des Hosts: so liegt keine davon auf einer Platte, der
+    /// Agent kann sie nicht über einen Symlink umlenken, und sie verschwinden
+    /// mit der Sitzung. Keine von ihnen darf unter `/work` liegen; das prüft
+    /// [`crate::agent::files_inside_work`], bevor der Plan entsteht.
+    pub files: Vec<crate::agent::SandboxFile>,
 }
 
 /// Ein Eintrag der Denylist.
@@ -1332,7 +1341,29 @@ impl SandboxProfile {
         for (whence, source) in self.mount_sources() {
             policy.check(source, whence)?;
         }
+        self.check_env()?;
         self.check_session_mountpoints()
+    }
+
+    /// Das `[env]` des Profils darf den dynamischen Linker nicht steuern.
+    ///
+    /// Dieselbe Sperre wie für `sandbox.env` in der Konfiguration
+    /// (`humanitl_config::LOADER_ENV_KEYS`), und aus demselben Grund: Ein
+    /// `LD_PRELOAD` läuft im Shim vor `main` und damit vor dem seccomp-Filter.
+    /// Welche Datei die Variable gesetzt hat, ändert daran nichts, also steht
+    /// die Prüfung an beiden Stellen. Ein Profil, das die Zeile braucht, gibt
+    /// es nicht: Die Sandbox bringt ihre eigene Sicht auf das Dateisystem mit.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`] mit `CONFIG_003` und dem Namen der Variablen.
+    fn check_env(&self) -> Result<(), Diagnostic> {
+        for key in self.env.keys() {
+            if humanitl_config::is_loader_key(key) {
+                return Err(humanitl_config::loader_variable_refused("[env]", key));
+            }
+        }
+        Ok(())
     }
 
     /// Jede Host-Quelle des Profils, mit dem Schlüssel, unter dem sie steht.

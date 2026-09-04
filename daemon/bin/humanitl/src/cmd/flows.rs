@@ -572,6 +572,7 @@ pub fn summary_json(summary: &v1::FlowSummary) -> Value {
         "passthrough": summary.passthrough,
         "rule_id": summary.rule_id,
         "origin_tool": summary.origin_tool,
+        "error": summary.error,
     })
 }
 
@@ -645,7 +646,7 @@ mod tests {
 
     use super::{
         FLOW_HEADERS, PATH_WIDTH, authority, decision_name, method_name, order_by, short_id,
-        summary_row, truncate_middle,
+        summary_json, summary_row, truncate_middle,
     };
 
     fn summary() -> v1::FlowSummary {
@@ -678,7 +679,18 @@ mod tests {
             deadline: None,
             origin_tool: String::new(),
             upstream_error: 0,
+            error: String::new(),
         }
+    }
+
+    #[test]
+    fn the_json_carries_the_reason_a_flow_failed() {
+        // HUM-045, Akzeptanzkriterium: `humanitl flows list --json` zeigt das
+        // Feld `error`. Leer heißt „nichts gescheitert", nicht „unbekannt".
+        let mut summary = summary();
+        assert_eq!(summary_json(&summary)["error"], "");
+        summary.error = "tls_handshake_failed".to_owned();
+        assert_eq!(summary_json(&summary)["error"], "tls_handshake_failed");
     }
 
     #[test]

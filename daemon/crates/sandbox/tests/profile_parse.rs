@@ -789,3 +789,38 @@ fn a_custom_runtime_directory_is_forbidden_too() {
         .expect_err("a runtime directory outside /run is still a runtime directory");
     assert_eq!(err.code.as_str(), "SANDBOX_006");
 }
+
+#[test]
+fn load_validated_refuses_a_loader_variable_in_the_profile_env() {
+    // Dieselbe Sperre wie für `sandbox.env` in der Konfiguration: Ein
+    // `LD_PRELOAD` läuft im Shim vor `main` und damit vor dem seccomp-Filter.
+    // Welche Datei die Zeile trägt, ändert daran nichts.
+    for name in humanitl_config::LOADER_ENV_KEYS {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("preload.toml");
+        std::fs::write(
+            &path,
+            format!("version = 1\nname = \"preload\"\n[env]\n{name} = \"/work/evil.so\"\n"),
+        )
+        .expect("write the probe profile");
+
+        let err = SandboxProfile::load_validated(&path, &MountPolicy::new(HOME))
+            .expect_err("a profile must not steer the dynamic linker");
+        assert_eq!(err.code.as_str(), "CONFIG_003", "{name}");
+        assert!(err.why.contains(name), "{}", err.why);
+        assert!(err.why.contains("seccomp"), "{}", err.why);
+    }
+}
+
+#[test]
+fn the_shipped_profiles_carry_no_loader_variable() {
+    for name in ["default", "test"] {
+        let profile = load(name);
+        for key in profile.env.keys() {
+            assert!(
+                !humanitl_config::is_loader_key(key),
+                "{name}.toml sets {key}"
+            );
+        }
+    }
+}

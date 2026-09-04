@@ -9,6 +9,32 @@
 use std::collections::BTreeMap;
 use std::collections::btree_map::Iter;
 
+/// Variablen, die der dynamische Linker auswertet, bevor `main` läuft.
+///
+/// Sie gehören in keine Sandbox-Umgebung, und zwar aus einem Grund, der nichts
+/// mit Geschmack zu tun hat: Der Shim setzt seinen seccomp-Filter in `main`.
+/// Was der Linker davor lädt, läuft ungefiltert — ein Konstruktor in einer so
+/// vorgeladenen Bibliothek läuft im Shim **und** im Agenten, jeweils vor dem
+/// Filter, und ein dort abgezweigter Prozess erbt ihn nie. Damit fiele die
+/// dritte Garantie („keine neuen Türen", `docs/SECURITY.md`).
+///
+/// Genau diese drei, nicht das ganze `LD_`-Präfix: Nur sie bringen den Linker
+/// dazu, fremden Code zu laden. `LD_PRELOAD` und `LD_AUDIT` benennen ihn
+/// direkt, `LD_LIBRARY_PATH` lenkt die Suche nach den eigenen Bibliotheken des
+/// Shims um und tut damit dasselbe. `LD_DEBUG`, `LD_BIND_NOW` und Verwandte
+/// laden nichts und stehen deshalb nicht hier.
+pub const LOADER_ENV_KEYS: &[&str] = &["LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH"];
+
+/// Wahr, wenn dieser Variablenname den Linker vor `main` Code laden ließe.
+///
+/// Verglichen wird genau, ohne Rücksicht auf Groß- und Kleinschreibung zu
+/// nehmen: Der Linker liest ausschließlich die Großschreibung, und ein
+/// `ld_preload` wäre eine gewöhnliche Variable.
+#[must_use]
+pub fn is_loader_key(key: &str) -> bool {
+    LOADER_ENV_KEYS.contains(&key)
+}
+
 /// Eine Umgebung: Variablen plus die Nutzerkennung, die für
 /// `$XDG_RUNTIME_DIR`-Ersatzpfade nötig ist.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
