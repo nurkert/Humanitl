@@ -54,6 +54,16 @@ abstract final class HMotion {
   /// Flackern des Panes, nicht als fünfzehn ankommende Pakete.
   static const Duration stagger = Duration(milliseconds: 30);
 
+  /// Versatz zwischen zwei Isolationsprüfungen, die zugleich eintreffen.
+  ///
+  /// Die drei Ergebnisse kommen im selben Millisekundenfenster aus derselben
+  /// Sandbox; alle drei Punkte im selben Frame auf Grün zu schalten liest das
+  /// Auge als einen Zustandswechsel, nicht als drei Belege. Deutlich länger
+  /// als [stagger], weil hier nicht ein Schwall geordnet, sondern eine
+  /// Aussage nacheinander belegt wird — und das ist der Augenblick, in dem
+  /// das Produkt seine eigene Kernaussage zeigt (BACKLOG.md 5).
+  static const Duration checkStagger = Duration(milliseconds: 120);
+
   /// Wie viele Zeilen höchstens versetzt einfliegen.
   ///
   /// Alle weiteren fahren mit der letzten mit, damit ein Schwall nie länger

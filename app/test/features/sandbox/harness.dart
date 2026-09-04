@@ -90,6 +90,88 @@ SandboxTestClient blockedClient() {
   return client;
 }
 
+/// Die drei Garantien, gemessen und belegt.
+///
+/// Die Evidenzzeilen sind die, die `humanitl sandbox check --json` am
+/// 2026-09-04 auf dem Entwicklungsrechner geliefert hat; `limit=none` steht
+/// hier, weil der abgebrochene Suchlauf sein eigener Fall ist.
+const List<IsolationCheckResult> isolationGreenChecks = <IsolationCheckResult>[
+  IsolationCheckResult(
+    check: IsolationCheck.noNetworkInterface,
+    passed: true,
+    evidence: 'no_interfaces ok: lo',
+  ),
+  IsolationCheckResult(
+    check: IsolationCheck.singleSocket,
+    passed: true,
+    evidence:
+        'single_socket ok: sockets=/run/humanitl/proxy.sock;unexpected=none;'
+        'entries=41;limit=none; '
+        'bridge_listening ok: proxy=127.0.0.1:3128->/run/humanitl/proxy.sock',
+  ),
+  IsolationCheckResult(
+    check: IsolationCheck.seccompActive,
+    passed: true,
+    evidence:
+        'seccomp_applied ok: Seccomp:2;NoNewPrivs:1; '
+        'families ok: socket(AF_UNIX,SOCK_STREAM)=EPERM;'
+        'socket(AF_INET,SOCK_DGRAM)=EPERM;x32:socket=EPERM;'
+        'io_uring_setup=EPERM;socket(AF_INET,SOCK_STREAM)=ok',
+  ),
+];
+
+/// Der rote Fall: eine zweite Socket-Datei im Projektverzeichnis, der Befund
+/// des Daemons daneben.
+const IsolationCheckResult isolationRedSocketCheck = IsolationCheckResult(
+  check: IsolationCheck.singleSocket,
+  passed: false,
+  evidence:
+      'single_socket FAIL: sockets=/run/humanitl/proxy.sock,/work/agent.sock;'
+      'unexpected=/work/agent.sock;entries=41;limit=none; '
+      'bridge_listening ok: proxy=127.0.0.1:3128->/run/humanitl/proxy.sock',
+  diagnostic: Diagnostic(
+    code: DiagnosticCodes.isolationSingleSocket,
+    severity: Severity.blocking,
+    title: 'Isolation check 2: more than one door',
+    // Der Wortlaut, den `check_from` in `bwrap.rs` baut: `why` ist der Name
+    // der Garantie und die rohe Zeile des Shims. **Kein `fix`** -- die vier
+    // Codes tragen heute keine Behebungs-Aktion, und eine Fixture, die eine
+    // erfindet, prueft eine Karte, die der Daemon nie schickt.
+    why:
+        'single_socket: single_socket FAIL: '
+        'sockets=/run/humanitl/proxy.sock,/work/agent.sock;'
+        'unexpected=/work/agent.sock;entries=41;limit=none; '
+        'bridge_listening ok: proxy=127.0.0.1:3128->/run/humanitl/proxy.sock',
+  ),
+);
+
+/// Was der Daemon meldet, wenn der Shim keinen Bericht geliefert hat: drei
+/// rote Ergebnisse mit `SANDBOX_013`.
+final List<IsolationCheckResult> isolationNoReportChecks =
+    fakeIsolationNoReport();
+
+/// Dieselben drei Garantien mit einer roten in der Mitte.
+const List<IsolationCheckResult> isolationOneRedCheck = <IsolationCheckResult>[
+  IsolationCheckResult(
+    check: IsolationCheck.noNetworkInterface,
+    passed: true,
+    evidence: 'no_interfaces ok: lo',
+  ),
+  isolationRedSocketCheck,
+  IsolationCheckResult(
+    check: IsolationCheck.seccompActive,
+    passed: true,
+    evidence: 'seccomp_applied ok: Seccomp:2;NoNewPrivs:1',
+  ),
+];
+
+/// Ein laufender Client, der genau [checks] misst.
+///
+/// Nur `isolationChecks`: die Momentaufnahme traegt nie ein Ergebnis, weder im
+/// Fake noch auf der Leitung. Sie kommen als eigene Ereignisse.
+SandboxTestClient checkedClient(List<IsolationCheckResult> checks) =>
+    runningClient()..isolationChecks = checks;
+
 /// Der Befund, an dem ein Start scheitert.
 const Diagnostic blockingFinding = Diagnostic(
   code: 'SANDBOX_001',

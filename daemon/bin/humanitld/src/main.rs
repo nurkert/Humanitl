@@ -38,7 +38,7 @@ use humanitl_core::rule::Rule;
 use humanitl_core::{Diagnostic, FixAction, FlowEvent, SessionId, Severity};
 use humanitl_findings::FindingsSettings;
 use humanitl_ipc::fake::{FakeDaemon, FakeOptions, Session};
-use humanitl_ipc::{DaemonService, DomainTable, IpcServer, auth, bind_socket, v1};
+use humanitl_ipc::{DaemonService, DomainTable, IpcServer, SandboxService, auth, bind_socket, v1};
 use humanitl_proxy::ca::{CaStore, DEFAULT_LEAF_CAPACITY, LeafCache};
 use humanitl_proxy::egress::Direct;
 use humanitl_proxy::handler::ProxyLimits;
@@ -241,7 +241,11 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
     let server = IpcServer::new(Arc::clone(&queue), &config, Some(session))
         .with_rules(Arc::clone(&rules), Some(recorder.clone()))
         .with_recorder(recorder.clone())
-        .with_domains(Arc::clone(&domains));
+        .with_domains(Arc::clone(&domains))
+        // Die Sandbox derselben Sitzung: dasselbe Profil, dasselbe
+        // Projektverzeichnis und derselbe Proxy-Socket, den der Proxy oben
+        // gerade geöffnet hat (HUM-040).
+        .with_sandbox(SandboxService::new(config.clone(), xdg.clone(), session));
     let result = humanitl_ipc::serve(&paths.socket, &paths.token, server, shutdown()).await;
 
     // Erst die Sitzungen, dann zurückkehren: der Accept-Loop endet, und mit

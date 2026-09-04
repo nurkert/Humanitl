@@ -276,6 +276,10 @@ class GrpcDaemonClient implements DaemonClient {
   Stream<SandboxUpdate> stopSandbox() =>
       _sandbox(pb.SandboxRequest()..stop = Empty());
 
+  @override
+  Stream<SandboxUpdate> checkIsolation() =>
+      _sandbox(pb.SandboxRequest()..isolationCheck = Empty());
+
   /// The wish of the caller; an argument left out stays empty, and the daemon
   /// reads empty as "keep what you have".
   pb.SandboxRequest_Plan _plan(
@@ -312,10 +316,15 @@ class GrpcDaemonClient implements DaemonClient {
             );
           case pb.SandboxEvent_Event.argvLine:
             yield SandboxUpdate.argvLine(event.argvLine);
-          // The isolation results arrive as `check`; they are read by the
-          // panel of HUM-041, and repeating them here as something else would
-          // be an invented answer.
           case pb.SandboxEvent_Event.check_2:
+            // A guarantee this build does not know is dropped rather than
+            // shown on one of the three lines it does know: the wrong
+            // evidence under the wrong sentence would be worse than a line
+            // that stays unknown.
+            final IsolationCheckResult? result = event.check_2.toDomain();
+            if (result != null) {
+              yield SandboxUpdate.check(result);
+            }
           case pb.SandboxEvent_Event.notSet:
             break;
         }

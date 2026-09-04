@@ -521,10 +521,12 @@ e2e_expect "the agent reports one line per request" 17 "$lines"
 
 # Die drei Garantien, aus der Sandbox, die den Verkehr dieses Laufs getragen
 # hat. `humanitl sandbox run -v` schreibt sie beim Start als Zeilen
-# `check <name> pass|FAIL: <evidence>` nach stderr, und `sandbox run` läuft
-# fail-closed — der Agent lief also nur, weil sie alle drei hielten. Gelesen
-# werden sie trotzdem: M2 ist der einzige Lauf, in dem die Sandbox echten
-# Verkehr trägt, und ein Bericht, in den niemand sieht, ist kein Beleg.
+# `check <name> pass|FAIL: <evidence>` nach stderr, und `sandbox run` beendet
+# die Sandbox mit Exit 3, sobald eine rot ist. Beendet, nicht verhindert: Der
+# Agent startet vor der Prüfung (docs/THREAT-MODEL.md K-15). Genau deshalb
+# werden die Zeilen hier gelesen und nicht der Exit-Code allein geglaubt: M2
+# ist der einzige Lauf, in dem die Sandbox echten Verkehr trägt, und ein
+# Bericht, in den niemand sieht, ist kein Beleg.
 isolation=$(cat "$M2_AGENT_ERR")
 e2e_expect_match "the sandbox that carried this run had no interface but lo" \
     'check no_network_interface pass' "$isolation"

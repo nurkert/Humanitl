@@ -123,10 +123,13 @@ for guarantee in no_network_interface single_socket seccomp_active; do
 done
 
 # Und dasselbe noch einmal für die Sandbox, in der der Rest des Demos läuft:
-# `humanitl sandbox run` läuft fail-closed, startet den Befehl also nur, wenn
-# alle drei Garantien aus der laufenden Sandbox belegt sind, und schreibt mit
-# `-v` je eine Zeile `check <name> pass|FAIL: <evidence>` nach stderr
-# (HUM-011, HUM-064, CONVENTIONS 4.12).
+# `humanitl sandbox run` beendet die Sandbox mit Exit 3, sobald eine der drei
+# Garantien rot ist, und schreibt mit `-v` je eine Zeile
+# `check <name> pass|FAIL: <evidence>` nach stderr (HUM-011, HUM-064,
+# CONVENTIONS 4.12). Beendet, nicht verhindert: Der Shim startet den Befehl
+# unmittelbar nach seiner letzten Prüfzeile (docs/THREAT-MODEL.md K-15).
+# Genau deshalb liest dieser Lauf die Zeilen und verlässt sich nicht auf den
+# Exit-Code allein.
 isolation=$(sandbox_run /bin/true 2>&1 > /dev/null || e2e_die "the sandbox did not start")
 printf '%s\n' "$isolation" | sed 's/^/  /'
 checks=$(printf '%s\n' "$isolation" | grep -c 'check .* pass:' || true)

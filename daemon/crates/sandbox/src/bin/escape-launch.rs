@@ -65,9 +65,18 @@
 //!   `SANDBOX_010` (die Argumentliste hat nicht mehr die Form aus HUM-010)
 //!   oder `SANDBOX_011` (ein Platzhalter ließ sich nicht anlegen).
 //!
-//! Der Starter läuft damit fail-closed: mit einem Shim, der den Vertrag kennt,
-//! wird der Befehl in der Sandbox nur ausgeführt, wenn alle drei Garantien aus
-//! der laufenden Sandbox belegt sind.
+//! Der Starter beendet die Sandbox damit, sobald eine Garantie nicht belegt
+//! ist — **er verhindert den Befehl nicht.** Der Shim erzwingt nichts: Er
+//! schreibt seine Prüfzeilen und `exec`t den Befehl unmittelbar danach
+//! (HUM-012, CONVENTIONS 4.12), und der Wirt liest den Bericht erst danach.
+//! Zwischen dem `exec` und dem `SIGKILL` liegt ein Fenster, in dem der Befehl
+//! läuft und die Brücke steht; die obere Schranke ist `REPORT_TIMEOUT` (5 s)
+//! plus zweimal `KILL_GRACE` (je 5 s), weil dieser Starter mit `SIGTERM`
+//! beginnt. Derselbe Bau steht im Daemon und in `humanitl sandbox run`
+//! (`docs/THREAT-MODEL.md` K-15, `docs/SECURITY.md` Abschnitt 10, Punkt 6b).
+//! Für die Escape-Tests genügt das: Sie messen von innen, in genau dieser
+//! Sandbox. Als Beleg dafür, dass ein roter Check einen Befehl verhindert,
+//! taugt der Starter nicht.
 //!
 //! `run.sh` unterscheidet daran „die Sandbox lief gar nicht" von „die Sandbox
 //! lief und eine Probe ist durchgekommen".
@@ -370,13 +379,18 @@ fn ca_sources(args: &Args, state: &Path) -> Result<(PathBuf, PathBuf), LaunchErr
 /// Der Bericht des Shims als Beleg ins Protokoll des Laufs, und der Abbruch,
 /// wenn er eine Garantie nicht belegt.
 ///
-/// Fehlt eine Garantie oder ist sie rot, läuft der Befehl nicht. Eine Sandbox,
-/// deren Isolation nicht belegt ist, ist keine Sandbox, und ein Escape-Test in
-/// ihr misst nichts: er meldete grün, weil die Probe nicht durchkam, obwohl
-/// niemand weiß, ob sie es gekonnt hätte. Deshalb beendet der Starter hier die
-/// Sandbox und gibt den Befund zurück, statt nur eine Zeile zu schreiben
-/// (Review-Befund vom 2026-09-03). Die Proben selbst messen dasselbe noch
-/// einmal von innen.
+/// Fehlt eine Garantie oder ist sie rot, wird die Sandbox beendet. Eine
+/// Sandbox, deren Isolation nicht belegt ist, ist keine Sandbox, und ein
+/// Escape-Test in ihr misst nichts: er meldete grün, weil die Probe nicht
+/// durchkam, obwohl niemand weiß, ob sie es gekonnt hätte. Deshalb beendet der
+/// Starter hier die Sandbox und gibt den Befund zurück, statt nur eine Zeile
+/// zu schreiben (Review-Befund vom 2026-09-03). Die Proben selbst messen
+/// dasselbe noch einmal von innen.
+///
+/// **Der Befehl ist zu diesem Zeitpunkt schon gestartet.** Der Shim `exec`t
+/// ihn unmittelbar nach seiner letzten Prüfzeile; geprüft wird danach. Das
+/// Fenster dazwischen ist in `docs/THREAT-MODEL.md` K-15 beschrieben und gilt
+/// hier wie im Daemon.
 fn enforce_isolation(backend: &BwrapBackend, handle: &SandboxHandle) -> Result<(), LaunchError> {
     let results = backend.isolation_check(handle);
     for result in &results {

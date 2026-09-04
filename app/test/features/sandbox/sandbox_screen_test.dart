@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/features/sandbox/widgets/env_tab.dart';
+import 'package:humanitl/features/sandbox/widgets/isolation_panel.dart';
 import 'package:humanitl/features/sandbox/widgets/sandbox_header.dart';
 
 import 'harness.dart';
@@ -276,7 +277,7 @@ void main() {
     );
   });
 
-  testWidgets('the_terminal_and_the_isolation_panel_say_what_is_coming', (
+  testWidgets('the_terminal_says_what_is_coming_and_isolation_no_longer_does', (
     WidgetTester tester,
   ) async {
     await pumpSandbox(tester, client: SandboxTestClient());
@@ -285,8 +286,15 @@ void main() {
       findsOneWidget,
     );
 
+    // Der Isolations-Reiter ist seit HUM-041 kein Platzhalter mehr: er zeigt
+    // die drei Garantien, und ohne laufende Sandbox sagt er, dass nichts
+    // gemessen wurde.
     await openTab(tester, 'sandbox-tab-isolation');
-    expect(find.textContaining('the three guarantees'), findsOneWidget);
+    expect(find.byType(IsolationPanel), findsOneWidget);
+    expect(
+      find.textContaining('Nothing runs, so nothing is measured'),
+      findsOneWidget,
+    );
   });
 }
 
