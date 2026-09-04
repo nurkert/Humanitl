@@ -1329,8 +1329,62 @@ Die `SetEnv`-Fix-Aktion wird in der UI als „Für nächste Session setzen" gere
 - `tls_002_after_three_resets`.
 
 ### Akzeptanzkriterien
-- [ ] `curl --cacert /dev/null https://example.com` in der Sandbox erzeugt `TLS_001` mit `CURL_CA_BUNDLE`-Fix im UI und in `humanitl flows list --json` (Feld `error`).
-- [ ] Fix „Für nächste Session setzen" schreibt `[sandbox.env]` ins globale Profil, sichtbar in `humanitl config get sandbox.env`.
+- [ ] `curl --cacert /dev/null https://example.com` in der Sandbox erzeugt `TLS_001` mit `CURL_CA_BUNDLE`-Fix im UI und in `humanitl flows list --json` (Feld `error`). Die Daemon-Hälfte steht samt Integrationstest; die Karte im UI fehlt ganz.
+- [ ] Fix „Für nächste Session setzen" schreibt `[sandbox.env]` ins globale Profil, sichtbar in `humanitl config get sandbox.env`. Lesen geht: `humanitl config get sandbox.env` antwortet `{}`, lokal aufgelöst ohne Daemon (`cmd/config.rs:115-119`). Geschrieben wird nichts — es gibt weder den Knopf noch einen Schreibweg.
+
+### Stand (2026-09-04): nur die Daemon-Hälfte
+
+Erkennung, Zuordnung und Aufzeichnung sind fertig:
+
+- `daemon/crates/proxy/src/tls_observe.rs` mit `TlsFailure`, `ToolHint`,
+  `classify`, `tool_hint` und `diagnostic_for` samt der Tabelle der Hinweise;
+  `HandshakeWatch` zählt Abbrüche im 10-Sekunden-Fenster für `TLS_002`,
+  entstört `TLS_001` je Host und Hinweis für 60 Sekunden und führt den
+  Zähler der unterdrückten Versuche in der nächsten Karte mit.
+- `handler.rs` hängt den gescheiterten Handschlag an den Flow des `CONNECT`,
+  der Recorder schreibt `error = tls_handshake_failed` (Migration
+  `V4__flow_error.sql`), und `humanitl flows list --json` zeigt das Feld
+  `error`.
+- Tests grün: `classify_unknown_ca`, `classify_eof`,
+  `tool_hint_from_user_agent`, `tls_002_after_three_resets` und die sechs
+  Integrationstests in `daemon/crates/proxy/tests/tls_observe.rs`, darunter
+  `a_client_without_a_trust_store_gets_one_tls_001_and_a_flow_with_an_error`.
+
+**Offen und ausdrücklich nicht gedeckt:**
+
+- **Die Oberfläche.** Es gibt keinen `diagnosticsProvider` und keine Karte im
+  Feed. `FlowEvent.diagnostic` kommt in der App an und wird verworfen
+  (`app/lib/features/intercept/providers/flows.dart`,
+  `app/lib/features/history/providers/history_page.dart`). Bis dahin sieht ein
+  Mensch den TLS-Fehler nur in `humanitl flows list --json` und im Protokoll
+  des Agenten. Der Platz dafür ist
+  `app/lib/features/intercept/widgets/diagnostic_card.dart`.
+- **Der Knopf „Für nächste Session setzen".** Er bräuchte einen
+  Schreibweg in die Konfiguration, und den gibt es nicht: der RPC `SetConfig`
+  antwortet `unimplemented` und wartet auf den Einstellungen-Bildschirm
+  (HUM-069), `humanitl config set` gibt es noch nicht (`CLI_004:
+  unrecognized subcommand 'set'`, gemessen). Das betrifft nur das Schreiben:
+  `humanitl config get` löst lokal auf und braucht den Daemon nicht, nur der
+  RPC `GetConfig` ist ebenfalls unimplementiert.
+- Der Befund selbst trägt den Vorschlag bereits — `FixAction::SetEnv` je
+  Hinweis, dazu den Kopierbefehl für die laufende Sitzung. Es fehlt die
+  Hand, die ihn ausführt.
+
+**Abweichung mit Folge: „globales Profil" heißt seit HUM-066 etwas anderes
+als `config.toml`.** `docs/profiles.md:91-99` macht `config.toml` zur Ebene 2
+und die Profile zu den Ebenen 3 und 4; ein Profil setzt Konfigurationswerte im
+Block `[config.sandbox]`, also auch `env`. Ein globales Profil, das
+`sandbox.env` mitbringt, überstimmt damit genau die Stelle, in die der Fix
+schreiben würde. Nach `config.toml` zu schreiben bleibt trotzdem richtig, weil
+`profiles/default.toml` mit Absicht leer ist und der Wert so über jedes
+gewählte Profil hinweg gilt — aber der Knopf verspricht dann mehr, als er
+halten kann.
+
+Wer ihn baut, schuldet deshalb zweierlei: den `why` des Befunds um den Satz
+zu ergänzen, dass ein globales Profil mit eigenem `sandbox.env` den Fix
+überstimmt (heute nennt `tls_observe.rs:437-446` nur den Fall, dass das
+Sandbox-Profil die Variable schon in seinem `[env]` trägt), und die Beschriftung
+so zu wählen, dass sie kein Profil verspricht, das sie nicht schreibt.
 
 ### Fallstricke
 - Nicht jeder Client sendet einen Alert; viele schließen einfach. Deshalb `EofBeforeFinished` als eigener Fall mit Schwellwert, sonst False Positives bei normalen Abbrüchen.
