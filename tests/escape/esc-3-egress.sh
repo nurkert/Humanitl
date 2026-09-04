@@ -73,6 +73,34 @@ expect_output via_proxy_reason_line \
 expect_output host_mismatch_blocked \
     'authority_mismatch' curl -sk --max-time 10 -H 'Host: evil.io' https://github.com/
 
+# --- the meta endpoint, the one channel back to the human ---------------------
+#
+# ADR-014 and HUM-073: the proxy answers the reserved host `humanitl.internal`
+# itself, without DNS and without an upstream. From inside the sandbox this is
+# the only way for the agent to read the rules or to ask the human for
+# something, and it has to work in a namespace that has no name service at all.
+#
+# --noproxy is deliberately NOT passed here: the request is meant to go to the
+# proxy, in absolute form, so curl never resolves the name either.
+expect_output meta_status \
+    '^humanitl session=' curl -s --max-time 10 http://humanitl.internal/
+expect_output meta_status_lists_rules \
+    'rules \(first match wins\):' curl -s --max-time 10 http://humanitl.internal/
+expect_output meta_ask_queued \
+    '^queued$' curl -s --max-time 10 --data 'please allow https://pypi.org/' \
+    http://humanitl.internal/ask
+expect_output meta_unknown_path_404 \
+    '^404$' curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+    http://humanitl.internal/secrets
+expect_output meta_other_method_405 \
+    '^405$' curl -s -o /dev/null -w '%{http_code}' --max-time 10 --data x \
+    http://humanitl.internal/
+# A name that only looks like the reserved one is an ordinary host and lands in
+# the queue like everything else. Without this line the case above would also
+# be green if the proxy answered every `*.internal` name itself.
+expect_output meta_look_alike_is_held \
+    'Blocked by Humanitl' curl -s --max-time 10 http://evil-humanitl.internal/
+
 # --- the host-side observation ------------------------------------------------
 #
 # ADR-006 says a name is resolved only after the decision. Proving it needs a
@@ -82,5 +110,11 @@ expect_output host_mismatch_blocked \
 # rather than letting it fall out of sight.
 skip dns_not_before_decision \
     "needs the resolver after the decision (HUM-024) and a host-side DNS watcher in run.sh"
+# The same gap, for the reserved name: that no lookup happens for
+# `humanitl.internal` is proven inside the daemon by the counting resolver mock
+# (daemon/crates/proxy/tests/meta.rs, `status_over_plain_http`). Proving it from
+# out here needs the same host-side watcher.
+skip meta_no_dns_lookup \
+    "proven by the counting resolver in daemon/crates/proxy/tests/meta.rs; from the host it needs the DNS watcher of dns_not_before_decision"
 
 esc_end

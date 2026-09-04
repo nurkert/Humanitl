@@ -1657,3 +1657,148 @@ ein.** Verdeckte eine unlesbare Datei ein mitgeliefertes Profil, zeigte
 `ProfileSummary` trägt deshalb `broken`, und ein Fehlschlag bekommt seine Zeile
 an derselben Stelle wie ein Erfolg; die Kommandozeile schreibt `(does not load)`
 hinter die Herkunft. Die Befunde stehen weiterhin daneben.
+
+### 4.24 Aus der Umsetzung des Meta-Endpunkts (HUM-073, 2026-09-04)
+
+Abweichungen von `backlog/sprint-3.md`, die dauerhaft gelten. Wo die
+Spezifikation anderes sagt, gilt dieser Abschnitt.
+
+**`FlowEvent::AgentAsk` liegt in `event.rs`, nicht in `flow.rs`.** Die
+Spezifikation nennt `daemon/crates/core-types/src/flow.rs`; der Ereignistyp
+wohnt aber seit HUM-004 in `event.rs`, und `flow.rs` trägt den
+Zustandsautomaten. Die Variante trägt `ask_id`, `at`, `text` und
+`suggested_host` — nicht `{ text, ts }` wie im Ziel des Issues —, weil die
+Proto-Nachricht `FlowEvent.AgentAsk` diese drei Felder schon vorsah. `AskId`
+ist eine neue typisierte Id in `ids.rs`: Eine Bitte ist kein Flow, hat aber
+eine Kennung, damit die Oberfläche zwei gleichlautende Bitten auseinanderhält.
+
+**Die Weiche liegt hinter der Authority-Prüfung und vor allem anderen.** Sie
+steht in `FlowHandler::handle_request` unmittelbar nach
+`connect::check_authority` und vor dem Puffern des Bodys, den Detektoren, der
+Regelauswertung und jeder Namensauflösung. Hinter der Prüfung, damit sie auf
+dem geprüften Ziel arbeitet: Ein `CONNECT github.com:443` mit
+`Host: humanitl.internal` darin ist ein Widerspruch und wird geblockt, nicht
+beantwortet; sonst wäre die Weiche über eine Kopfzeile steuerbar. Über CONNECT
+zum reservierten Namen selbst kommt die Anfrage über denselben Weg an.
+
+**Der reservierte Name ist der Name, nicht ein Dienst auf einem Port.**
+`is_meta_host` vergleicht den normalisierten `HostName`. `HUMANITL.INTERNAL`
+und `humanitl.internal.` sind derselbe Name und lösen die Weiche aus — genau
+dafür normalisiert `HostName::parse`. Jeder Port desselben Namens gehört
+ebenfalls dem Endpunkt: Ginge `humanitl.internal:8080` durch die Regeln, könnte
+eine Freigabe dafür eine Namensauflösung auslösen, und ADR-014 schließt aus,
+dass der Name je aufgelöst wird. Ein Name, der nur so *aussieht* —
+`evil-humanitl.internal`, `sub.humanitl.internal`,
+`humanitl.internal.evil.io` —, ist ein gewöhnlicher Host und läuft durch die
+Regeln.
+
+**Meta-Anfragen erzeugen keinen Flow.** Die Spezifikation will sie „im Recorder
+als Flow mit `state=Recorded`, `decision=meta`" sehen, sichtbar über den Filter
+`meta:true`. Der Zustandsautomat kennt keinen Weg von einer Nicht-Sperre nach
+`Recorded`; `decision=meta` verlangte deshalb eine neue Variante in
+`Decision`, in `DecisionKind` der Proto, im Schema und im Filter des Recorders.
+Das ist **HUM-103**; bis dahin entsteht für `/` und `/why` gar kein Flow —
+niemand hat entschieden, und ein Datensatz mit einer erfundenen Entscheidung
+wäre eine Behauptung über einen Menschen, der nichts getan hat (4.13). Sichtbar
+wird allein `/ask`, als `FlowEvent::AgentAsk` und als Karte.
+
+**Das Ratenlimit ist ein gleitendes Fenster.** Zehn angenommene Bitten je
+Sitzung in sechzig Sekunden, gezählt über die Zeitpunkte der angenommenen
+Bitten. Ein fester Minutenzähler ließe zwanzig Bitten in zwei Sekunden durch,
+wenn sie um die Grenze herum liegen. Eine abgelehnte Bitte belegt keinen Platz,
+sonst sperrte sich ein Agent, der einmal zu schnell war, dauerhaft selbst aus —
+und **die Reihenfolge der Prüfungen in `/ask` gehört zu dieser Zusage**: erst
+die Länge des Rumpfes, dann Säuberung und Leerprüfung, und erst danach der
+Platz im Fenster. Andersherum verbrauchten zehn leere Rümpfe das Fenster, und
+die Grenze wäre eine Waffe gegen den, den sie schützt. Die Fenster werden bei
+jedem Zugriff gegen `now` beschnitten und danach die leeren weggeworfen, in
+dieser Reihenfolge; sonst bliebe das Fenster einer Sitzung, die nicht mehr
+fragt, für immer nicht-leer und die Tabelle wüchse über die Laufzeit des
+Daemons (`MetaEndpoint::tracked_sessions` macht das prüfbar). Die Zeit kommt
+aus `MetaClock`, nie aus der Wanduhr; die Antwort `429` trägt `Retry-After`.
+
+**Was `/` zeigt und was nicht.** Eine Zeile je Regel mit Aktion, Methoden,
+Host (mit Port, wenn die Regel einen verlangt), Pfad und Ablauf, dazu die
+Vermerke `(llm passthrough)` und `(bundled)`; die letzte Zeile ist der Ausgang
+ohne Treffer (`ask`, Spalte `default`). Nie Notiz, `created_from`, Regel-Id
+oder Position. Abgeschaltete, abgelaufene und fremde Sitzungsregeln stehen
+nicht in der Liste: Sie entscheiden nichts. Die Reihenfolge ist die von
+`RuleSet::evaluate` — erst die Regeln dieser Sitzung, dann alle übrigen. Jedes
+Feld läuft durch `sanitize_note`, weil ein Pfadmuster aus `rules.yaml` sonst
+eine zweite Zeile in die Ausgabe schreiben könnte.
+
+**`/why/<id>` antwortet nur für Flows derselben Sitzung.** Ein Flow einer
+anderen Sitzung wird behandelt, als gäbe es ihn nicht (`404`), ebenso eine
+unlesbare Id. `note=` trägt die Notiz **der Entscheidung**
+(`Decision::Block { note }`, HUM-072), nie die Notiz einer Regel; sie steht als
+letztes Feld der Zeile, weil sie das einzige mit Leerzeichen ist. Ein noch
+nicht entschiedener Flow antwortet `decision=pending reason=<zustand>`.
+
+**Der Vorschlag für das Regel-Blatt entsteht im Daemon, und er trägt den
+Pfad.** `suggested_target` sucht die **erste** Fundstelle von `http://` oder
+`https://` im gesäuberten Text, wirft Benutzerangaben vor einem `@` und den
+Port weg und lässt das Ergebnis durch `HostName::parse`. Vorgeschlagen wird nur
+ein DNS-Name mit mindestens einem Punkt; eine Adresse, ein einzelnes Label
+(`https://ein Satz` liest sich als Host `ein`) und `humanitl.internal` selbst
+ergeben keinen Vorschlag. Ist die erste Fundstelle kaputt, wird nicht
+weitergesucht: Sonst lenkte ein Text den Blick des Menschen auf die eine und
+den Vorschlag auf die andere URL.
+
+Der Pfad derselben URL reist als `suggested_path` mit (Proto-Feld 4 in
+`FlowEvent.AgentAsk`) und ist der Grund, warum es das Feld gibt: **Ohne ihn
+wäre eine Regel aus einer Bitte eine Freigabe für jeden Pfad und jede Methode
+des Hosts, während der Agent nach genau einer Adresse gefragt hat.** Query und
+Fragment fallen weg (ein Glob vergleicht Pfad *und* Query), ein `*` aus dem
+Text des Agenten macht den Vorschlag ungültig statt weit, alles außerhalb der
+sichtbaren ASCII-Zeichen fällt aus, und `/` allein zählt als „kein Pfad". Genau
+dieser Fall ist der, den das Blatt ausdrücklich benennen muss.
+
+**Die Karte steht über der Warteschlange, nicht in ihr.** `AgentAskStrip` hängt
+im `QueuePane` zwischen Kopfzeile und `AnimatedList`. Eine Bitte ist keine
+angehaltene Anfrage; als Zeile in der Liste könnte sie mit einer verwechselt
+werden, und sie hätte Anteil an Auswahl, Gruppierung und Einfrieren, die alle
+eine `FlowId` voraussetzen. Der Text wird als `Text` gezeichnet, nie als
+`Text.rich` und nie als Verweis, in der Schreibmaschinenschrift und unter dem
+Abzeichen „Agent" im Violett der Durchreiche: Er ist Zitat, keine Meldung des
+Programms.
+
+**Das Regel-Blatt der Intercept-Seite ist klein und eigen.** Ein „HUM-028-Sheet"
+gibt es nicht: HUM-028 ist der `RememberGrid` in der Aktionsleiste, und der
+Editor der Regel-Seite ist von `features/intercept` aus unerreichbar, weil eine
+Feature-Schicht keine andere importiert (`tools/check-deps.sh`). Die Karte
+öffnet deshalb ein eigenes `HSheet` mit Host, Pfad, Aktion und Dauer. Es legt
+nichts an, bis der Mensch den Knopf drückt, und beide Felder bleiben änderbar —
+die Vorschläge stammen aus Text, den der Agent geschrieben hat.
+
+**Keine Vorauswahl bei der Aktion.** Das eine Feld, das entscheidet, ob Verkehr
+fließt, wird von Hand gewählt; der Knopf bleibt aus, bis das geschehen ist. Ein
+vorgewähltes `allow` machte aus einem bestätigenden Klick einen Netzzugang, der
+aus der Bitte eines Programms entstand, dem wir nicht trauen. Ein vorgewähltes
+`ask` wäre die andere Falle: Es schriebe eine Regel, die nichts ändert — `ask`
+gilt ohnehin ohne Regel —, und der Mensch ginge in dem Glauben weg, er habe
+etwas eingerichtet (4.13). Ist das Pfad-Feld leer, steht im Blatt der Satz, dass
+die Regel jede Methode und jeden Pfad des Hosts abdeckt.
+
+**Nichts wird rechts abgeschnitten.** Der vorgeschlagene Host stand mit
+`TextOverflow.ellipsis` in der Karte; aus `pypi.org.attacker.com` wurde
+`pypi.org…`. Das ist Domain-Täuschung durch die eigene Oberfläche, genau in dem
+Augenblick, in dem ein Mensch entscheidet. Der Name bricht jetzt um. Die
+registrierbare Domäne wird auch nicht hervorgehoben: `app/lib/features/intercept/psl.dart`
+rät sie aus einer kurzen Tabelle, und ein falsch geratener Apex wäre dieselbe
+Täuschung mit umgekehrtem Vorzeichen.
+
+**Gestapelte kombinierende Zeichen werden begrenzt, und die Karte clippt
+trotzdem.** `sanitize_note` lässt höchstens `MAX_COMBINING_MARKS` (zwei)
+kombinierende Zeichen je Basiszeichen stehen; sechzig Akzente auf einem `a`
+laufen sonst über alles, was daneben steht. Die Prüfung `is_combining` deckt die
+reinen Kombinationsblöcke ab und ist **keine** vollständige Prüfung der
+Eigenschaft `Mn` — eine vollständige bräuchte eine Bibliothek und damit einen
+Eintrag in `daemon/Cargo.toml`. Weil sie unvollständig ist, deckelt die Karte
+zusätzlich ihre Zeilen (`agentAskMaxLines`) und beschneidet ihren Rahmen; das
+gilt für jedes Zeichen, gleich aus welchem Block.
+
+**Ein Fehlschlag beim Anlegen bleibt sichtbar.** Scheitert `AddRule`, steht der
+Satz des Daemons im Blatt und der Entwurf bleibt stehen. Ein still gescheitertes
+Anlegen ist schlimmer als eines, das nie versucht wurde: Der Mensch geht in dem
+Glauben weg, die Regel gebe es. Der Host wird vorher mit `hostPatternProblem`
+geprüft, damit ein untauglicher Vorschlag gar nicht erst hinausgeht.
