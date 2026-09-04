@@ -336,6 +336,11 @@ fn a_session_rule_from_the_file_belongs_to_no_running_session() {
     assert!(rule.is_expired(chrono::Utc::now(), SessionId::new()));
 }
 
+/// Alle Felder, die eine Datei setzen darf, ueberleben Schreiben und Lesen.
+///
+/// `bundled` gehoert nicht dazu: Es sagt, woher eine Regel kommt, und das
+/// entscheidet der Lader (HUM-104). Ein eigener Test haelt fest, was mit einer
+/// Datei geschieht, die es trotzdem hinschreibt.
 #[test]
 fn round_trip_keeps_every_field() {
     let session = SessionId::new();
@@ -353,7 +358,6 @@ rules:
     stream: true
     allow_private: true
     created_from: 018f6c1e-7a2b-7c3d-8e4f-0123456789ac
-    bundled: true
     note: \"npm install\"
   - action: redact
     match:
@@ -396,7 +400,11 @@ fn the_shipped_default_file_parses() {
     // Parser ihn ohne Befund liest und keine Regel darin etwas erlaubt.
     assert!(!set.is_empty(), "the shipped file holds the bundled rules");
     for rule in set.iter() {
-        assert!(rule.bundled, "rule {} is not marked bundled", rule.id);
+        // Den Vermerk setzt der Lader, nicht die Datei: `RuleSet::add_bundled`
+        // erzwingt ihn beim Einhängen (HUM-104). Stünde er hier im Text, könnte
+        // ihn auch die `rules.yaml` des Nutzers setzen — und mit ihm den ersten
+        // Rang der Durchreiche.
+        assert!(!rule.bundled, "rule {} marks itself bundled", rule.id);
         assert_ne!(
             rule.action,
             Action::Allow,
@@ -455,7 +463,6 @@ rules:
       port: 11434
       path_prefixes: [\"/v1/\", \"/api/chat\"]
     allow_private: true
-    bundled: true
     passthrough_llm: true
     note: \"LLM passthrough. Logged, never held.\"
 ";
@@ -476,6 +483,52 @@ rules:
     assert_eq!(first, second, "written file:\n{written}");
     assert!(written.contains("passthrough_llm: true"));
     assert!(written.contains("path_prefixes:"));
+}
+
+/// Eine Datei kann sich den Vermerk `bundled` nicht selbst ausstellen.
+///
+/// Der Vermerk sagt, woher eine Regel kommt; seit HUM-104 entscheidet er mit
+/// ueber den Rang, denn nur eine mitgelieferte Durchreiche wird vor allen
+/// anderen Regeln geprueft (`backlog/CONVENTIONS.md` 4.5). Koennte die Datei
+/// ihn setzen, koennte sie sich den Rang ausstellen und die eigenen
+/// Block-Regeln ihres Verfassers unbemerkt ueberholen.
+#[test]
+fn a_file_cannot_declare_a_rule_bundled() {
+    let yaml = "version: 1
+rules:
+  - action: allow
+    match:
+      host: \"ollama.lan\"
+      port: 11434
+      scheme: http
+      path_prefixes: [\"/v1/chat/completions\"]
+    bundled: true
+    passthrough_llm: true
+";
+    let (set, warnings) = parse_rules(yaml).unwrap_or_else(|d| panic!("must parse: {d:?}"));
+
+    let rule = set.iter().next().expect("one rule");
+    assert!(!rule.bundled, "the mark is set on loading, not in the file");
+    assert!(
+        rule.passthrough_llm,
+        "the exception itself stays: the flow is not held and warns with LLM_005"
+    );
+
+    let warning = warnings
+        .iter()
+        .find(|warning| warning.code == RULES_010)
+        .unwrap_or_else(|| panic!("the dropped mark has to be said out loud: {warnings:?}"));
+    assert_eq!(
+        warning.severity,
+        Severity::Warning,
+        "a file is not rejected for it"
+    );
+    assert!(warning.why.contains("bundled"), "{}", warning.why);
+
+    // Und der Weg, auf dem der Vermerk zustande kommt, setzt ihn weiterhin.
+    let mut loaded = RuleSet::new();
+    loaded.add_bundled(set.iter().cloned());
+    assert!(loaded.iter().all(|rule| rule.bundled));
 }
 
 /// Eine gewöhnliche Regel schreibt die neuen Felder nicht mit.

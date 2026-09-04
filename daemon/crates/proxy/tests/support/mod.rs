@@ -45,6 +45,7 @@ use humanitl_config::{HoldConfig, Limits, RecorderConfig, ResolverConfig};
 use humanitl_core::{Authority, Decision, Diagnostic, FlowEvent, HttpRequest, SessionId};
 use humanitl_proxy::ca::{CaStore, LeafCache};
 use humanitl_proxy::hold::next_event;
+use humanitl_proxy::rules_store::RulesStore;
 use humanitl_proxy::{
     AskPipeline, AsyncStream, ClientTls, ConnectionContext, Direct, Egress, FlowHandler,
     FlowPipeline, HandlerPorts, HoldQueue, MetaEndpoint, MetaStatus, PassthroughPipeline,
@@ -185,6 +186,7 @@ pub struct ProxyBuilder {
     resolver_config: ResolverConfig,
     extra_roots: Vec<CertificateDer<'static>>,
     rules: Option<String>,
+    rules_store: Option<(String, String)>,
     scanner: Option<Arc<dyn Scanner>>,
     hard_block_checksum_secrets: bool,
     recording: bool,
@@ -208,6 +210,7 @@ impl Default for ProxyBuilder {
             },
             extra_roots: Vec::new(),
             rules: None,
+            rules_store: None,
             scanner: None,
             hard_block_checksum_secrets: false,
             // Wie im Daemon: Der Meta-Endpunkt gehoert zu jeder Sitzung. Ein
@@ -285,6 +288,19 @@ impl ProxyBuilder {
         self
     }
 
+    /// Der Regelsatz über den echten Ladeweg des Daemons: `RulesStore::load`
+    /// liest die `rules.yaml` des Nutzers und bekommt die mitgelieferten
+    /// Regeln daneben, genau wie `load_rules` in `humanitld`.
+    ///
+    /// Der Unterschied zu [`ProxyBuilder::rules`] ist der Punkt: Dort baut der
+    /// Test den Regelsatz selbst und misst damit seine eigene Reihenfolge.
+    /// Hier baut ihn der Speicher, und der Test misst die des Produkts
+    /// (HUM-104).
+    pub fn rules_store(mut self, user_yaml: &str, bundled_yaml: &str) -> Self {
+        self.rules_store = Some((user_yaml.to_owned(), bundled_yaml.to_owned()));
+        self
+    }
+
     /// Die Detektoren, die im Pfad laufen (HUM-025). Ohne das läuft `NoScan`.
     pub fn scanner(mut self, scanner: Arc<dyn Scanner>) -> Self {
         self.scanner = Some(scanner);
@@ -345,24 +361,52 @@ impl ProxyBuilder {
         };
         // Ein Handle fuer beide: Der Meta-Endpunkt zeigt denselben Satz, nach
         // dem die Pipeline entscheidet (HUM-073).
-        let set = match &self.rules {
-            None => humanitl_rules::RuleSet::new(),
-            // `parse_rules_for_session` liefert `Err`, sobald ein Befund ein
-            // Fehler ist; was hier ankommt, sind Warnungen.
-            Some(yaml) => {
-                humanitl_rules::parse_rules_for_session(yaml, session)
+        let store = self.rules_store.as_ref().map(|(user_yaml, bundled_yaml)| {
+            let path = tmp.path().join("config").join("rules.yaml");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, user_yaml).unwrap();
+            let bundled: Vec<humanitl_core::rule::Rule> =
+                humanitl_rules::parse_rules_for_session(bundled_yaml, session)
                     .unwrap()
                     .0
-            }
+                    .iter()
+                    .cloned()
+                    .collect();
+            let (store, diagnostics) = RulesStore::load(&path, &bundled, session);
+            // Warnungen sind erlaubt: `allow host "**"` ist RULES_008 und
+            // genau der Fall, den die Reihenfolge-Tests brauchen. Ein Fehler
+            // hiesse, der Speicher startet ohne die Regeln des Nutzers.
+            assert!(
+                diagnostics
+                    .iter()
+                    .all(|d| d.severity != humanitl_core::Severity::Error),
+                "{diagnostics:?}"
+            );
+            Arc::new(store)
+        });
+        let rules = if let Some(store) = store.as_ref() {
+            store.snapshot()
+        } else {
+            let set = match &self.rules {
+                None => humanitl_rules::RuleSet::new(),
+                // `parse_rules_for_session` liefert `Err`, sobald ein Befund
+                // ein Fehler ist; was hier ankommt, sind Warnungen.
+                Some(yaml) => {
+                    humanitl_rules::parse_rules_for_session(yaml, session)
+                        .unwrap()
+                        .0
+                }
+            };
+            Arc::new(std::sync::RwLock::new(set))
         };
-        let rules = Arc::new(std::sync::RwLock::new(set));
-        let pipeline: Arc<dyn FlowPipeline> = match &self.rules {
-            None => inner,
-            Some(_) => Arc::new(RulesPipeline::new(
+        let pipeline: Arc<dyn FlowPipeline> = if self.rules.is_none() && store.is_none() {
+            inner
+        } else {
+            Arc::new(RulesPipeline::new(
                 Arc::clone(&queue),
                 Arc::clone(&rules),
                 inner,
-            )),
+            ))
         };
         let mut mock = MockResolver::answering(self.resolve_to);
         for (host, addrs) in &self.resolver_answers {
@@ -445,6 +489,7 @@ impl ProxyBuilder {
             egress,
             core,
             recorder,
+            rules_store: store,
             tmp,
         }
     }
@@ -464,6 +509,8 @@ pub struct Proxy {
     pub core: ProxyCore,
     /// Die Aufzeichnung, falls `ProxyBuilder::recording(true)` gesetzt war.
     pub recorder: Option<Recorder>,
+    /// Der Regelspeicher, falls `ProxyBuilder::rules_store` gesetzt war.
+    pub rules_store: Option<Arc<RulesStore>>,
     tmp: TempDir,
 }
 

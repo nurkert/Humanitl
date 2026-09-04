@@ -334,7 +334,33 @@ Die Sprint-Files wurden parallel geschrieben und haben an einigen Stellen die Ab
 - `experimental.upstream_port_map` (nur Tests).
 
 ### 4.5 Regeln
-- Session-Regeln (In-Memory, `expires: session`) werden vor persistenten Regeln ausgewertet. Innerhalb jeder Gruppe gilt die Reihenfolge der Liste. Grund: Was der Nutzer gerade entschieden hat, soll sofort gelten, auch wenn eine ältere persistente Regel breiter matcht.
+- **Die Auswertungsreihenfolge, vier Ränge (entschieden in HUM-104, 2026-09-04):**
+
+  1. die **mitgelieferte** Durchreiche zum Sprachmodell (`passthrough_llm` **und** `bundled`),
+  2. die Sitzungsregeln **des Nutzers** (In-Memory, `expires: session`, nicht mitgeliefert),
+  3. die dauerhaften Regeln des Nutzers aus `rules.yaml`,
+  4. alles übrige Mitgelieferte (`rules/default.yaml`, Agent-Adapter, Profile).
+
+  Innerhalb eines Rangs gilt die Reihenfolge der Liste; die erste passende Regel gewinnt. Passt nichts, gilt `ask`.
+
+  Alle vier Ränge macht `RuleSet::evaluate` in eigenen Durchgängen (`Tier`). Sie hängen an der Regel selbst, nicht an ihrem Platz in der Liste; die Liste ordnet nur innerhalb eines Rangs. `RulesStore::snapshot_of` hängt die mitgelieferten Regeln trotzdem ans Ende — die Anzeige soll die Ordnung nicht anders herum behaupten als die Auswertung.
+
+  **`bundled` schlägt `expires`.** Eine mitgelieferte Regel mit `expires: session` ist keine Sitzungsregel des Nutzers und fällt in Rang 4, nicht in Rang 2. Sonst überholte sie seine dauerhaften Regeln, und HUM-027 hinge daran, welche Gültigkeit `rules/default.yaml` gerade schreibt.
+
+  **Die Lehre aus HUM-104, für jedes Feld, das jemand später hinzufügt: Ein Feld, an dem eine Rangordnung hängt, muss dem Lader gehören und darf nicht aus einer Datei kommen, die von der Ordnung betroffen ist.** Antigravity und Codex fanden am 2026-09-04 unabhängig je eine Hälfte derselben Lücke — erst `passthrough_llm`, dann `bundled`. Wer ein solches Feld einführt, schreibt zugleich hin, wo es gesetzt wird, und einen Test, der belegt, dass eine Datei es nicht setzen kann.
+
+  **Der Vermerk `bundled` sagt, woher eine Regel kommt, und keine Datei setzt ihn.** Gesetzt wird er allein in `RuleSet::add_bundled`, also für die Regeln des Agent-Adapters und aus `rules/default.yaml`. `parse_rules` verwirft ihn und meldet `RULES_010` als Warnung — das gilt für die `rules.yaml` des Nutzers wie für `[rules].inline` und `[rules].files` eines Profils, denn beide gehen durch denselben Parser. `humanitl_ipc::convert::rule_from_proto` verwirft ihn für die Leitung. `rules/default.yaml` schreibt ihn deshalb nicht mehr hin.
+
+  Das ist die Bedingung dafür, dass Rang 1 und Rang 4 eine Ordnung und keine Bitte sind: Rang 1 lässt eine Anfrage **ungehalten** hinaus und warnt bei Funden nur (`LLM_005`). Hinge er an `passthrough_llm` allein, stellte sich jede Datei den Rang selbst aus — und wer `passthrough_llm: true` schreibt, weil er ein zweites Modell durchreichen will, überholte damit unbemerkt seine eigenen Block-Regeln. Eine Durchreiche aus einer Datei behält alles andere: Sie wird nicht gehalten, sie warnt mit `LLM_005`, sie trägt `DecisionSource::Passthrough`. Sie steht nur an ihrem Platz in der Liste, und innerhalb derselben Datei bestimmt ihr Verfasser den ohnehin selbst.
+
+  Begründungen, Rang für Rang:
+
+  - **Rang 1.** Die Durchreiche ist der eine erklärte Seitenkanal (BACKLOG.md 4.2, `docs/SECURITY.md`). Erklärt ist er nur, solange er als solcher erkennbar bleibt: `DecisionSource::Passthrough` in der Aufzeichnung und die Warnung `LLM_005` vor Funden hängen daran, dass **diese** Regel entschieden hat (`pipeline.rs`). Entschiede eine breitere `allow`-Regel des Nutzers zuerst über denselben Host, sähe der Kanal aus wie jede andere Freigabe — und eine `block`-Regel wie die des Profils `llm-only` (`host: "**"`) blockte das eigene Modell. Deshalb steht die Durchreiche vor allem anderen, und ihr Vorrang hängt an der Regel, nicht an der Zusammenbau-Reihenfolge; eine Reihenfolge, die nur „meistens" stimmt, wäre für einen protokollierten Seitenkanal keine.
+  - **Rang 2 vor Rang 3.** Was der Nutzer gerade entschieden hat, soll sofort gelten, auch wenn eine ältere persistente Regel breiter matcht.
+  - **Rang 3 vor Rang 4.** Eine eigene Regel überstimmt eine mitgelieferte (HUM-027). Mitgelieferte Regeln gehören nicht dem Nutzer und lassen sich nicht löschen (`RULES_010`); der Fix, den dieser Befund vorschlägt, ist eine eigene Regel mit demselben Muster. Stünden die mitgelieferten vorn, verspräche er etwas Unmögliches.
+
+  Verworfen wurde der zweite Weg aus der Spezifikation, „mitgeliefert ganz nach vorn" (wie `docs/profiles.md` es vor HUM-104 beschrieb). Er hätte Rang 3 gegen Rang 4 getauscht und damit HUM-027 aufgehoben, und er hätte den stillen Fall nicht gelöst: Eine Sitzungsregel `allow host "**"` hätte die Durchreiche weiterhin überdeckt, denn eine mitgelieferte Regel steht nicht vor einer Sitzungsregel.
+
 - `match.upgrade: websocket` ist Teil des Schemas.
 
 ### 4.6 Diagnostic-Register
@@ -781,8 +807,8 @@ weiterhin nur über die Profildatei herein.
 **Mitgelieferte Regeln schaltet man ab, statt sie zu löschen.**
 `Rule.disabled` liegt in `humanitl-core`, die Liste `disabled_bundled` in der
 `rules.yaml` des Nutzers. Sie steht am `RuleSet`, nicht an der Regel, weil die
-Nutzerdatei gelesen wird, bevor `RuleSet::prepend_bundled` die mitgelieferten
-Regeln davorstellt; eine Id darin darf eine Regel benennen, die es in dieser
+Nutzerdatei gelesen wird, bevor `RuleSet::add_bundled` die mitgelieferten
+Regeln dazunimmt; eine Id darin darf eine Regel benennen, die es in dieser
 Fassung nicht gibt. `RulesStore::set_bundled_disabled` ist der einzige Weg,
 `RulesRequest.set_disabled` die RPC, `humanitl rules disable|enable ID` die
 Kommandozeile. Eine eigene Regel abzuschalten ist `RULES_010`: die löscht man.

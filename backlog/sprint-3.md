@@ -365,14 +365,16 @@ Fußzeile ist die Zeilenzahl von `--all`" steht als Test
 Daemon nachgerechnet: 1 + (8 + 1 + 2) = 12.
 
 **`RuleSet::prepend_bundled` gehört nicht in diese Liste.** Die Funktion
-(`daemon/crates/rules/src/eval.rs:394`) hat außerhalb von Tests keinen
-Aufrufer; alle vier Fundstellen sind Tests, darunter der grüne
-`prepend_bundled_puts_the_bundled_rules_first`. Der Daemon baut seinen
-Regelsatz über `RulesStore::load`, nicht über sie. Ihre Tests sagen deshalb
+(`daemon/crates/rules/src/eval.rs:394`) hatte außerhalb von Tests keinen
+Aufrufer; alle vier Fundstellen waren Tests, darunter der grüne
+`prepend_bundled_puts_the_bundled_rules_first`. Der Daemon baute seinen
+Regelsatz über `RulesStore::load`, nicht über sie. Ihre Tests sagten deshalb
 nichts über das laufende Produkt aus, und dieses Häkchen hätte auf sie nie
-gestützt werden dürfen.
+gestützt werden dürfen. HUM-104 hat das aufgelöst: Die Funktion heißt jetzt
+`RuleSet::add_bundled`, hängt hinten an und wird von `RulesStore::snapshot_of`
+gerufen.
 - Tests grün: `default_rules_parse`, `default_rules_match_table`,
-  `disabled_bundled_is_skipped`, `prepend_bundled_puts_the_bundled_rules_first`
+  `disabled_bundled_is_skipped`, `a_user_rule_overrides_a_bundled_rule`
   (`daemon/crates/sandbox/tests/default_rules.rs`), dazu in
   `daemon/crates/rules` die Datei-Tests von `disabled_bundled`
   (`tests/parse.rs`) und die Engine-Tests dazu (`tests/eval.rs`): eine
@@ -2342,13 +2344,22 @@ Weg 1 ist der empfohlene. Was auch gewählt wird: `RuleSet::prepend_bundled` wir
 - Mutationsprobe: die Durchreiche zurück ans Ende der Liste, dann werden die ersten beiden Tests rot.
 
 ### Akzeptanzkriterien
-- [ ] Die Entscheidung ist getroffen und in `backlog/CONVENTIONS.md` 4.5 mit Begründung festgehalten; `eval.rs`, `rules_store.rs` und `docs/profiles.md` sagen alle dasselbe.
-- [ ] Die Durchreiche trifft vor jeder Regel des Nutzers, belegt über den echten Ladeweg.
-- [ ] Eine Nutzerregel überstimmt weiterhin eine mitgelieferte.
-- [ ] `RuleSet::prepend_bundled` ist verdrahtet oder entfernt; kein Test misst mehr Code, der im Daemon nicht läuft.
-- [ ] Der Kommentar in `profiles/llm-only.toml` und der in `main.rs` stimmen mit dem Verhalten überein.
-- [ ] `make check`, clippy mit `-D warnings` und `cargo fmt --all -- --check` grün.
+- [x] Die Entscheidung ist getroffen und in `backlog/CONVENTIONS.md` 4.5 mit Begründung festgehalten; `eval.rs`, `rules_store.rs` und `docs/profiles.md` sagen alle dasselbe.
+- [x] Die Durchreiche trifft vor jeder Regel des Nutzers, belegt über den echten Ladeweg.
+- [x] Eine Nutzerregel überstimmt weiterhin eine mitgelieferte.
+- [x] `RuleSet::prepend_bundled` ist verdrahtet oder entfernt; kein Test misst mehr Code, der im Daemon nicht läuft.
+- [x] Der Kommentar in `profiles/llm-only.toml` und der in `main.rs` stimmen mit dem Verhalten überein.
+- [x] `make check`, clippy mit `-D warnings` und `cargo fmt --all -- --check` grün.
 
 ### Fallstricke
 - Der Fall ist heute nur deshalb nicht sichtbar, weil das Profil noch nicht verdrahtet ist. Wer HUM-067 vor diesem Issue baut, bekommt eine Inferenz-Instanz, die ihr eigenes Modell blockt.
 - `pipeline.rs:350` erkennt die Durchreiche an der entscheidenden Regel. Jede Lösung, die die Durchreiche nur „meistens" zuerst treffen lässt, lässt auch das Merkmal manchmal verschwinden — und ein Seitenkanal, der manchmal protokolliert wird, ist keiner.
+
+### Ergebnis (2026-09-04)
+Gewählt wurde Weg 1, die vier Gruppen. Alle vier Ränge macht `RuleSet::evaluate` über den neuen Typ `Tier`, je ein Durchgang: mitgelieferte Durchreiche, Sitzungsregeln des Nutzers, dauerhafte Regeln des Nutzers, alles übrige Mitgelieferte. Weg 2 wurde verworfen: Er hätte HUM-027 aufgehoben und den stillen Fall nicht gelöst, denn eine Sitzungsregel `allow host "**"` hätte die Durchreiche weiterhin überdeckt. Begründung in `backlog/CONVENTIONS.md` 4.5.
+
+Aus den Reviews kamen zwei Hälften derselben Lücke, beide behoben. Antigravity: Der Rang hing an `passthrough_llm`, und dieses Feld liest `parse_rules` aus der `rules.yaml` des Nutzers und aus den Inline-Regeln eines Profils — eine Datei konnte sich also den Rang selbst ausstellen und ihre eigenen Block-Regeln ungehalten überholen. Codex: Dieselbe Lücke über `bundled`, und dazu ein Loch in HUM-027 — eine mitgelieferte Regel mit `expires: session` fiel in den Sitzungsdurchgang und stand damit vor den dauerhaften Regeln des Nutzers. Ergebnis: Rang 1 verlangt `passthrough_llm` **und** `bundled`; `bundled` gehört dem Lader (`RuleSet::add_bundled`) und wird von `parse_rules` verworfen und mit `RULES_010` gemeldet; `bundled` schlägt `expires`, damit Rang 4 nicht über die Gültigkeit umgangen werden kann. `rules/default.yaml` schreibt den Vermerk deshalb nicht mehr hin. Die Lehre steht als Satz in `CONVENTIONS.md` 4.5.
+
+`RuleSet::prepend_bundled` heißt jetzt `RuleSet::add_bundled`, hängt hinten an statt vorn und wird von `snapshot_of` gerufen — also auf dem Weg, den der Daemon geht.
+
+Tests über den echten Ladeweg: `load_rules_evaluates_the_passthrough_before_every_rule_of_the_user` und `load_rules_lets_a_user_rule_override_a_bundled_one` in `daemon/bin/humanitld/src/main.rs`, dazu `daemon/crates/proxy/tests/rules_order.rs` (fünf Fälle über `RulesStore::load` und die Proxy-Pipeline, mit `DecisionSource::Passthrough`, `LLM_005` und der Aufzeichnung). Für die Herkunft: `a_passthrough_written_into_rules_yaml_does_not_outrank_the_user` (Speicher), `a_file_cannot_declare_a_rule_bundled` und `a_passthrough_from_a_file_does_not_reach_the_first_rank` (Engine), `a_profile_cannot_declare_its_own_rule_bundled` (globales Profil), `a_session_scoped_bundled_rule_does_not_outrank_the_user` (HUM-027 gegen die Gültigkeit).

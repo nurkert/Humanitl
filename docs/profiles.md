@@ -78,7 +78,8 @@ Entscheidung, und sie soll `config.toml` überstimmen: `ask_mode = "none"` heiß
 dass eine Anfrage, die keine Regel entscheidet, sofort geblockt statt angehalten
 wird. `timeout_secs` ist dann bedeutungslos und steht auf 1, damit eine
 Fehlkonfiguration nicht fünf Minuten lang hängt. Die Durchreichregel des
-Agent-Adapters steht vor der Blockregel des Profils und trifft zuerst; alles
+Agent-Adapters wird vor der Blockregel des Profils ausgewertet und trifft
+zuerst, wo immer sie in der Liste steht (`backlog/CONVENTIONS.md` 4.5); alles
 andere fällt auf `block` mit dem Grund „llm-only profile".
 
 ## Reihenfolge der Ebenen
@@ -168,11 +169,24 @@ nur Regeln mitbringen, die in ihm selbst stehen.
 `Profile::rules_document()` gibt sie als Dokument zurück, das
 `humanitl_rules::parse_rules` liest.
 
-Die Reihenfolge, in der ein Regelsatz entsteht: die Durchreichregel des
-Agent-Adapters, dann seine mitgelieferten Regeln, dann die Dateien und Regeln
-der Profile in der Reihenfolge der Ebenen, zuletzt die `rules.yaml` des Nutzers.
-Die erste passende Regel gewinnt, Sitzungsregeln vor dauerhaften
-(`backlog/CONVENTIONS.md` 4.5).
+Die Reihenfolge, in der ein Regelsatz **entsteht**, ist nicht die Reihenfolge,
+in der er **ausgewertet** wird. Ausgewertet wird in vier Rängen
+(`backlog/CONVENTIONS.md` 4.5): zuerst die Durchreichregel des Agent-Adapters,
+dann die Sitzungsregeln, dann die dauerhaften Regeln des Nutzers aus
+`rules.yaml`, zuletzt die mitgelieferten — die Regeln aus `rules/default.yaml`
+des Adapters ebenso wie die Dateien und Regeln der Profile. Innerhalb eines
+Rangs gewinnt die erste passende Regel.
+
+Ein Profil kann die Durchreiche also nicht überdecken, auch nicht mit
+`block host "**"`, und der Nutzer kann eine mitgelieferte Regel überstimmen,
+ohne sie zu löschen.
+
+Den ersten Rang trägt allein die Durchreiche, die der Agent-Adapter baut. Ein
+Profil kann ihn sich nicht selbst geben: Eine Inline-Regel mit `bundled = true`
+verliert den Vermerk beim Lesen und bekommt eine Warnung (`RULES_010`). Der
+Vermerk sagt, woher eine Regel kommt, und das entscheidet der Lader, nicht die
+Datei — sonst schriebe sich ein Profil eine ungehaltene Durchreiche an jeder
+Block-Regel seines Nutzers vorbei (`backlog/CONVENTIONS.md` 4.5).
 
 ## Auf der Kommandozeile
 
