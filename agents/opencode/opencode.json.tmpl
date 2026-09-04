@@ -1,0 +1,21 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "humanitl-local": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Humanitl local LLM",
+      "options": {
+        "baseURL": "{{LLM_BASE_URL}}"
+      },
+      "models": {}
+    }
+  },
+  "model": "humanitl-local/{{DEFAULT_MODEL}}",
+  "autoupdate": false,
+  "share": "disabled",
+  "permission": {
+    "webfetch": "ask",
+    "websearch": "deny",
+    "external_directory": "deny"
+  }
+}

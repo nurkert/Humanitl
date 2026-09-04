@@ -13,6 +13,9 @@
 //!
 //! - [`profile`] die Typen des Profils, das Laden und die Mount-Allowlist
 //!   (HUM-010)
+//! - [`agent`] der Port [`AgentAdapter`] mit [`AgentContext`],
+//!   [`SandboxFile`] und [`AdapterRegistry`]; der einzige Adapter des MVP ist
+//!   [`OpenCodeAdapter`] (HUM-037)
 //! - [`bwrap_args`] die Übersetzung in die Argumentliste
 //! - [`bridge_env`] der Vertrag zwischen Launcher und Shim: Umgebung,
 //!   Bericht, Exit-Codes (HUM-011, HUM-012, HUM-013)
@@ -56,6 +59,7 @@
 //!     // Sitzung nicht.
 //!     session_env: vec![("HUMANITL_SESSION".to_owned(), SessionId::nil().to_string())],
 //!     command: vec!["opencode".into()],
+//!     files: Vec::new(),
 //! };
 //!
 //! // Die Vorschau: feste Deskriptornummern, alles unter /work als vorhanden.
@@ -67,6 +71,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod agent;
 pub mod bridge_env;
 pub mod bwrap;
 pub mod bwrap_args;
@@ -74,6 +79,10 @@ pub mod handle;
 pub mod launcher;
 pub mod profile;
 
+pub use crate::agent::{
+    AdapterRegistry, AgentAdapter, AgentContext, OpenCodeAdapter, SandboxFile, files_inside_work,
+    find_in_path,
+};
 pub use crate::bridge_env::{
     CHECK_BRIDGE_LISTENING, CHECK_FAMILIES, CHECK_NAMES, CHECK_NO_INTERFACES, CHECK_PREFIX,
     CHECK_SECCOMP_APPLIED, CHECK_SINGLE_SOCKET, ENV_BRIDGES, ENV_REPORT_FD, ENV_SECCOMP_DENY,
@@ -86,7 +95,8 @@ pub use crate::bwrap::{
 };
 pub use crate::bwrap_args::{
     DEFAULT_HOME, DEFAULT_USER, GROUP_DST, HOSTS_DST, IdentityFds, IdentityFiles, LaunchInputs,
-    MaskFds, PASSWD_DST, PREVIEW_MASK_FD_FIRST, SANDBOX_SHELL, shell_line, shell_quote,
+    MaskFds, PASSWD_DST, PREVIEW_AGENT_FD_FIRST, PREVIEW_MASK_FD_FIRST, SANDBOX_SHELL, shell_line,
+    shell_quote,
 };
 pub use crate::handle::{
     CAPTURE_MAX_BYTES, CapturedOutput, INTERRUPT_GRACE, KILL_GRACE, ReportSnapshot, STATUS_DRAIN,

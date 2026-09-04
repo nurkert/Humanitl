@@ -918,14 +918,18 @@ dependencies = [
 name = "humanitl-sandbox"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "humanitl-config",
  "humanitl-core",
+ "humanitl-rules",
  "rustix",
  "serde",
  "serde_json",
  "shlex",
  "tempfile",
  "toml",
+ "url",
+ "uuid",
 ]
 
 [[package]]

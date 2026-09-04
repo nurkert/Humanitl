@@ -45,16 +45,16 @@ use humanitl_core::diagnostics::codes;
 use humanitl_core::ids::SessionId;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_sandbox::{
-    BwrapBackend, CheckResult, INTERRUPT_GRACE, LaunchInputs, MIN_BWRAP_VERSION, MountPolicy,
-    SANDBOX_SHELL, SandboxBackend, SandboxHandle, SandboxProfile, SessionContext, StdioMode,
-    shell_line,
+    AdapterRegistry, AgentContext, BwrapBackend, CheckResult, INTERRUPT_GRACE, LaunchInputs,
+    MIN_BWRAP_VERSION, MountPolicy, SANDBOX_SHELL, SandboxBackend, SandboxFile, SandboxHandle,
+    SandboxProfile, SessionContext, StdioMode, shell_line,
 };
 use serde_json::json;
 use tempfile::TempDir;
 
 use crate::cli::SandboxCmd;
 use crate::cmd::{Context, EXIT_CHECK, EXIT_OK, Failure, is_executable, status_diagnostic};
-use crate::render::{table, tick};
+use crate::render::{diagnostic_block, table, tick};
 
 /// Der Name des Shims, wie er neben der Kommandozeile oder im Systempfad liegt.
 const SHIM_BINARY: &str = "humanitl-shim";
@@ -163,11 +163,12 @@ fn argv(ctx: &Context, command: &[OsString]) -> Result<u8, Failure> {
     // `/work` als vorhanden. Der Plan legt Deskriptoren an und verlangt
     // Socket, CA und Shim; nichts davon braucht, wer nur nachsehen will.
     let mut args = vec![setup.backend.program().as_os_str().to_owned()];
-    args.extend(
-        setup
-            .profile
-            .to_bwrap_args(&setup.session, &LaunchInputs::preview()),
-    );
+    args.extend(setup.profile.to_bwrap_args(
+        &setup.session,
+        &LaunchInputs::preview_with_agent_files(
+            setup.session.files.iter().map(|file| file.dst.clone()),
+        ),
+    ));
     let line = shell_line(&args);
 
     if ctx.render.is_json() {
@@ -497,19 +498,45 @@ fn prepare(
         .detail(&format!("profile {}", profile_path.display()));
 
     let id = SessionId::new();
+    let work_src = wiring.work_dir(ctx, config);
+    // Der Beitrag des Agent-Adapters gilt dem Agenten. Steht auf der
+    // Kommandozeile ein eigener Befehl (`sandbox run -- CMD`, so laufen die
+    // Escape-Tests), läuft nicht der Agent, und der Adapter trägt nichts bei.
+    let agent = if command.is_empty() {
+        agent_contribution(ctx, config, &wiring, id, &work_src, &profile)?
+    } else {
+        AgentContribution::default()
+    };
+    let mut session_env = vec![("HUMANITL_SESSION".to_owned(), id.to_string())];
+    session_env.extend(agent.env);
+    // `sandbox.env` zuletzt: Was der Mensch in seiner Konfiguration setzt,
+    // gilt vor dem `[env]` des Profils und vor dem Beitrag des Adapters. Das
+    // ist der Weg, auf dem `FixAction::SetEnv` wirkt (HUM-045): Ein Werkzeug,
+    // das die Vorgabe des Profils nicht mag, bekommt hier einen anderen Wert.
+    // Die fünf Variablen des Shims bleiben unberührt, sie werden in
+    // `SandboxProfile::effective_env` zuletzt gesetzt
+    // (`humanitl_sandbox::bridge_env::RESERVED_ENV`).
+    session_env.extend(
+        config
+            .sandbox
+            .env
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
     let session = SessionContext {
         session: id,
-        work_src: wiring.work_dir(ctx, config),
+        work_src,
         work_mode: config.sandbox.work_mode,
         proxy_socket_src: wiring.proxy_socket(ctx),
         ca_cert_src: wiring.ca_cert(ctx),
         ca_bundle_src: wiring.ca_bundle(ctx),
         shim_src: shim_path(&wiring)?,
-        // Nur die Variable, die allein die Sitzung kennt; die übrigen Paare
-        // des Env-Kits stehen im `[env]` des Profils
-        // (`humanitl_proxy::ca::ENV_KIT`).
-        session_env: vec![("HUMANITL_SESSION".to_owned(), id.to_string())],
-        command: agent_command(config, command),
+        // Nur die Variable, die allein die Sitzung kennt, plus die des
+        // Adapters; die übrigen Paare des Env-Kits stehen im `[env]` des
+        // Profils (`humanitl_proxy::ca::ENV_KIT`).
+        session_env,
+        command: agent_command(config, command, &agent.command),
+        files: agent.files,
     };
 
     let backend = match BwrapBackend::detect(paths.clone()) {
@@ -529,11 +556,119 @@ fn prepare(
     })
 }
 
-/// Der Befehl in der Sandbox: der von der Kommandozeile, sonst der aus
-/// `agent.command`, sonst die Shell.
-fn agent_command(config: &Config, command: &[OsString]) -> Vec<OsString> {
+/// Was der Agent-Adapter zu einer Sitzung beiträgt.
+#[derive(Debug, Default)]
+struct AgentContribution {
+    /// Das Kommando, das der Shim nach seccomp startet; leer, wenn kein
+    /// Adapter beiträgt.
+    command: Vec<OsString>,
+    /// Die Umgebungsvariablen des Agenten.
+    env: Vec<(String, String)>,
+    /// Die Dateien, die vor dem `exec` in der Sandbox liegen müssen.
+    files: Vec<SandboxFile>,
+}
+
+/// Fragt den Adapter aus `agent.adapter` nach Umgebung und Dateien.
+///
+/// Die Vorprüfung läuft vorher und fasst das Netz nicht an. Ein blockierender
+/// Befund verhindert den Start; alles Darunter wird angezeigt, und der Start
+/// läuft weiter.
+///
+/// Die Vorschau ([`Wiring::Preview`]) hält kein Befund auf. `sandbox argv` ist
+/// genau das Kommando, mit dem man vor der Installation nachsieht, was passieren
+/// wird; es wäre die falsche Stelle, um einen fehlenden Agenten zu melden. Die
+/// Befunde stehen trotzdem auf `stderr`, außer mit `-q` oder `--json`.
+fn agent_contribution(
+    ctx: &Context,
+    config: &Config,
+    wiring: &Wiring,
+    session: SessionId,
+    work_src: &Path,
+    profile: &SandboxProfile,
+) -> Result<AgentContribution, Failure> {
+    let registry = AdapterRegistry::builtin();
+    let adapter = registry.get(&config.agent.adapter).ok_or_else(|| {
+        Failure::new(
+            Diagnostic::builder(codes::CONFIG_003, Severity::Blocking)
+                .why(format!(
+                    "agent.adapter is {:?}, and no adapter of that name exists; known: {}",
+                    config.agent.adapter,
+                    registry.ids().join(", ")
+                ))
+                .fix(FixAction::ChangeSetting {
+                    key: "agent.adapter".to_owned(),
+                    value: registry
+                        .ids()
+                        .first()
+                        .map_or_else(String::new, |id| (*id).to_owned()),
+                })
+                .build(),
+        )
+    })?;
+
+    let agent_ctx = AgentContext::new(session, work_src.to_path_buf(), config.llm.clone())
+        .with_command_override(
+            config
+                .agent
+                .command
+                .as_ref()
+                .map(|parts| parts.iter().map(OsString::from).collect()),
+        )
+        .with_host_path(ctx.env.non_empty("PATH").map(OsString::from))
+        .with_language(config.ui.language)
+        // Das Heimatverzeichnis, das der Agent tatsächlich vorfindet: aus dem
+        // `[env]` des Profils, von `sandbox.env` überschreibbar.
+        .with_home(profile.env.get("HOME").map_or_else(
+            || PathBuf::from(humanitl_sandbox::DEFAULT_HOME),
+            PathBuf::from,
+        ))
+        // Nur-Lese-Einhängungen mit gleicher Quelle und gleichem Ziel: nur
+        // darunter findet der Agent sein eigenes Programm wieder.
+        .with_sandbox_ro_paths(
+            profile
+                .mounts
+                .ro
+                .iter()
+                .chain(&profile.mounts.extra_ro)
+                .cloned()
+                .collect(),
+        );
+
+    let preview = matches!(wiring, Wiring::Preview);
+    for diagnostic in adapter.preflight(&agent_ctx) {
+        if diagnostic.severity == Severity::Blocking && !preview {
+            return Err(Failure::new(diagnostic));
+        }
+        // Nicht `detail`: das druckt nur mit `-v`, und ein Befund, den niemand
+        // sieht, ist keiner (`backlog/CONVENTIONS.md` 4.13). `note` schreibt
+        // auf `stderr`, lässt also `stdout` für das Ergebnis frei.
+        ctx.render.note(diagnostic_block(&diagnostic).trim_end());
+    }
+
+    Ok(AgentContribution {
+        command: adapter.command(&agent_ctx),
+        env: adapter.env(&agent_ctx),
+        files: adapter.files(&agent_ctx).map_err(Failure::new)?,
+    })
+}
+
+/// Der Befehl in der Sandbox: der von der Kommandozeile, sonst der des
+/// Adapters, sonst der aus `agent.command`, sonst die Shell.
+///
+/// Der Adapter kennt `agent.command` selbst
+/// ([`AgentContext::agent_command_override`]); steht dort etwas, gibt er es
+/// unverändert zurück. Die beiden letzten Zweige greifen nur, wenn gar kein
+/// Adapter beiträgt — dann ist die Shell die einzige sinnvolle Antwort.
+fn agent_command(
+    config: &Config,
+    command: &[OsString],
+    from_adapter: &[OsString],
+) -> Vec<OsString> {
     if !command.is_empty() {
         return command.to_vec();
+    }
+    if !from_adapter.is_empty() {
+        return from_adapter.to_vec();
     }
     config
         .agent
@@ -780,18 +915,37 @@ mod tests {
     }
 
     #[test]
-    fn the_command_line_wins_over_the_configured_agent() {
+    fn the_command_line_wins_over_the_agent_and_the_agent_over_the_shell() {
         let mut config = Config::default();
         config.agent.command = Some(vec!["opencode".to_owned()]);
+        let from_adapter = vec![OsString::from("opencode")];
 
         assert_eq!(
-            agent_command(&config, &[OsString::from("sh"), OsString::from("-c")]),
-            ["sh", "-c"]
+            agent_command(
+                &config,
+                &[OsString::from("sh"), OsString::from("-c")],
+                &from_adapter
+            ),
+            ["sh", "-c"],
+            "an explicit command wins over everything"
         );
-        assert_eq!(agent_command(&config, &[]), ["opencode"]);
+        assert_eq!(
+            agent_command(&config, &[], &from_adapter),
+            ["opencode"],
+            "without one the adapter decides; it knows agent.command itself"
+        );
 
         config.agent.command = None;
-        assert_eq!(agent_command(&config, &[]), ["/bin/sh"]);
+        assert_eq!(
+            agent_command(&config, &[], &from_adapter),
+            ["opencode"],
+            "the adapter also brings its own default command"
+        );
+        assert_eq!(
+            agent_command(&config, &[], &[]),
+            ["/bin/sh"],
+            "only without any adapter is the shell the answer"
+        );
         assert_eq!(CHECK_COMMAND[0], "/bin/sh");
     }
 

@@ -106,13 +106,30 @@ pub fn parse_rules_for_session(
         }
     }
 
+    let mut disabled_bundled = Vec::with_capacity(file.disabled_bundled.len());
+    for text in &file.disabled_bundled {
+        match RuleId::parse(text) {
+            Ok(id) => disabled_bundled.push(id),
+            Err(err) => diagnostics.push(
+                Diagnostic::builder(RULES_001, Severity::Error)
+                    .why(format!(
+                        "{}: disabled_bundled holds {text:?}, which is not a rule id: {err}",
+                        place("disabled_bundled", source.top_key("disabled_bundled"))
+                    ))
+                    .build(),
+            ),
+        }
+    }
+
     if diagnostics
         .iter()
         .any(|diagnostic| matches!(diagnostic.severity, Severity::Error | Severity::Blocking))
     {
         return Err(diagnostics);
     }
-    Ok((RuleSet::from_rules(rules), diagnostics))
+    let mut set = RuleSet::from_rules(rules);
+    set.set_disabled_bundled(disabled_bundled);
+    Ok((set, diagnostics))
 }
 
 /// Schreibt einen Regelsatz als YAML.
@@ -125,6 +142,7 @@ pub fn serialize_rules(set: &RuleSet) -> String {
     let file = OutFile {
         version: RULES_VERSION,
         rules: set.iter().map(OutRule::from_rule).collect(),
+        disabled_bundled: set.disabled_bundled().map(|id| id.to_string()).collect(),
     };
     serde_yaml_ng::to_string(&file).unwrap_or_else(|err| {
         // Die Struktur besteht aus Zeichenketten, Zahlen und Wahrheitswerten;
@@ -274,6 +292,13 @@ struct RulesFile {
     version: Option<u32>,
     #[serde(default)]
     rules: Vec<RawRule>,
+    /// Ids mitgelieferter Regeln, die der Nutzer abgeschaltet hat.
+    ///
+    /// Der Zustand steht hier und nicht an der Regel: `rules/default.yaml`
+    /// gehört zum Build und wird nie geschrieben, die Entscheidung des Nutzers
+    /// gehört in seine Datei (HUM-038).
+    #[serde(default)]
+    disabled_bundled: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -575,6 +600,10 @@ fn parse_expiry(text: &str, session: SessionId) -> Option<Expiry> {
 struct OutFile {
     version: u32,
     rules: Vec<OutRule>,
+    /// Leer weggelassen, damit eine Datei ohne abgeschaltete Regel so aussieht
+    /// wie bisher.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    disabled_bundled: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]

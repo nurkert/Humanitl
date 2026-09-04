@@ -331,6 +331,30 @@ impl Recorder {
         });
     }
 
+    /// Trägt nach, woran ein Flow gescheitert ist (`flows.error`).
+    ///
+    /// Für den einen Fall, den kein [`FlowEvent`] trägt: Der Client in der
+    /// Sandbox bricht den TLS-Handschlag zum Proxy ab, es gibt keine Anfrage
+    /// und niemanden, der entschieden hätte, und die History soll den Versuch
+    /// trotzdem zeigen (HUM-045). Der Weg nach draußen schreibt die Spalte
+    /// dagegen von selbst aus [`FlowEvent::Failed`].
+    ///
+    /// `error` ist ein kurzer, fester Bezeichner in `snake_case`, kein Satz:
+    /// `tls_handshake_failed`, `upstream_tls`, `upstream_dns`. Der Satz für den
+    /// Menschen steht im [`Diagnostic`] am selben Flow. Ein schon gesetzter
+    /// Grund bleibt stehen.
+    ///
+    /// Aufzurufen erst, nachdem [`FlowEvent::Received`] durch
+    /// [`Recorder::apply`] gegangen ist: vorher gibt es die Zeile nicht, die
+    /// hier fortgeschrieben wird. Beide Wege gehen durch denselben Kanal, also
+    /// genügt die Reihenfolge der Aufrufe.
+    pub fn set_flow_error(&self, flow: FlowId, error: &str) {
+        self.send(WriterCmd::FlowError {
+            flow,
+            error: error.to_owned(),
+        });
+    }
+
     /// Trägt Apex und Katalog-Kennung eines Flows nach.
     ///
     /// Beides kennt der Recorder nicht selbst: die Public Suffix List und der

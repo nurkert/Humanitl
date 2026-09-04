@@ -101,6 +101,13 @@ pub const SANDBOX_SHELL: &str = "/bin/sh";
 /// die drei Identitätsdateien.
 pub const PREVIEW_MASK_FD_FIRST: RawFd = 15;
 
+/// Ab dieser Nummer zählt die Vorschau die Deskriptoren der Adapter-Dateien.
+///
+/// Weit genug hinter den Masken, damit die Zahlen der Vorschau stabil bleiben,
+/// wenn ein Profil eine Maske mehr oder weniger trägt. Beim Start vergibt der
+/// Launcher die echten Nummern; die Vorschau ist Anzeige, nicht Ausführung.
+pub const PREVIEW_AGENT_FD_FIRST: RawFd = 40;
+
 /// Zeichen, die eine Shell unverändert liest und die deshalb ohne
 /// Anführungszeichen auskommen.
 fn is_safe(c: char) -> bool {
@@ -180,6 +187,16 @@ pub struct LaunchInputs {
     /// Die Pfade unter `/work` (Sandbox-Sicht), die auf dem Host existieren.
     /// `None` rendert jeden Eintrag; das ist die Vorschau, nicht der Start.
     pub present_under_work: Option<BTreeSet<PathBuf>>,
+    /// Die Dateien des Agent-Adapters, je Eintrag ein Deskriptor und sein Ziel
+    /// in der Sandbox, in der Reihenfolge von
+    /// [`crate::profile::SessionContext::files`].
+    ///
+    /// Gerendert wird `--ro-bind-data FD DST`, nach den Masken und vor
+    /// `--clearenv`. Leer heißt: kein Argument, und die Zeile sieht aus wie
+    /// vorher. `-1` steht für einen Deskriptor, der fehlt; `bwrap` startet dann
+    /// nicht, und das ist die richtige Antwort — eine Konfiguration, die der
+    /// Agent nicht vorfindet, wäre schlimmer als kein Start.
+    pub agent_files: Vec<(RawFd, PathBuf)>,
 }
 
 impl LaunchInputs {
@@ -198,6 +215,31 @@ impl LaunchInputs {
             report_fd: Some(10),
             status_fd: Some(11),
             present_under_work: None,
+            agent_files: Vec::new(),
+        }
+    }
+
+    /// Dieselbe Vorschau, aber mit den Dateien eines Agent-Adapters.
+    ///
+    /// Die Deskriptoren zählen ab [`PREVIEW_AGENT_FD_FIRST`], einer je Datei,
+    /// in der Reihenfolge der Liste. Für `humanitl sandbox argv`: die Zeile
+    /// soll zeigen, was startet, und dazu gehören die Dateien des Adapters.
+    #[must_use]
+    pub fn preview_with_agent_files(dsts: impl IntoIterator<Item = PathBuf>) -> Self {
+        let agent_files = dsts
+            .into_iter()
+            .enumerate()
+            .map(|(index, dst)| {
+                let fd = RawFd::try_from(index)
+                    .ok()
+                    .and_then(|offset| PREVIEW_AGENT_FD_FIRST.checked_add(offset))
+                    .unwrap_or(-1);
+                (fd, dst)
+            })
+            .collect();
+        Self {
+            agent_files,
+            ..Self::preview()
         }
     }
 
@@ -322,6 +364,14 @@ impl SandboxProfile {
             .enumerate()
         {
             args.data(inputs.masks.get(index), path);
+        }
+
+        // Die Dateien des Agent-Adapters, jede aus ihrem eigenen memfd. Sie
+        // stehen nach den Masken, damit ein Profil, das denselben Ort
+        // maskiert, nicht die Konfiguration verdeckt, und vor `--clearenv`,
+        // weil `bwrap` seine Argumente der Reihe nach abarbeitet.
+        for (fd, dst) in &inputs.agent_files {
+            args.data(*fd, dst);
         }
 
         args.flag("--clearenv");
@@ -572,6 +622,7 @@ mod tests {
             shim_src: PathBuf::from("/usr/lib/humanitl/humanitl-shim"),
             session_env: Vec::new(),
             command: vec!["true".into()],
+            files: Vec::new(),
         }
     }
 
@@ -650,6 +701,7 @@ mod tests {
                 report_fd: None,
                 status_fd: None,
                 present_under_work: None,
+                agent_files: Vec::new(),
             },
         );
         assert!(with.windows(2).any(|w| w == ["--json-status-fd", "11"]));
@@ -672,6 +724,55 @@ mod tests {
         assert!(window_at(&with, &["--ro-bind-data", &second, "/work/.git/config"]).is_some());
     }
 
+    /// Die Dateien des Adapters stehen als `--ro-bind-data` in der Zeile, nach
+    /// den Masken und vor `--clearenv`. Ohne Dateien ändert sich nichts.
+    #[test]
+    fn agent_files_are_rendered_after_the_masks_and_before_clearenv() {
+        let profile =
+            SandboxProfile::parse("version = 1\nname = \"x\"\n", Path::new("<t>")).expect("parses");
+        let plain = strings(&profile, &LaunchInputs::preview());
+        let inputs = LaunchInputs {
+            agent_files: vec![
+                (40, PathBuf::from("/etc/humanitl/opencode/opencode.json")),
+                (41, PathBuf::from("/etc/humanitl/opencode/models.json")),
+            ],
+            ..LaunchInputs::preview()
+        };
+        let with = strings(&profile, &inputs);
+
+        assert_eq!(with.len(), plain.len() + 6, "two files, three words each");
+        let config = window_at(
+            &with,
+            &[
+                "--ro-bind-data",
+                "40",
+                "/etc/humanitl/opencode/opencode.json",
+            ],
+        )
+        .expect("the config is in the line");
+        let models = window_at(
+            &with,
+            &["--ro-bind-data", "41", "/etc/humanitl/opencode/models.json"],
+        )
+        .expect("the catalog is in the line");
+        let last_mask = window_at(
+            &with,
+            &[
+                "--ro-bind-data",
+                &(PREVIEW_MASK_FD_FIRST + 1).to_string(),
+                "/work/.git/config",
+            ],
+        )
+        .expect("the masks are in the line");
+        let clearenv = with
+            .iter()
+            .position(|arg| arg == "--clearenv")
+            .expect("--clearenv is in the line");
+        assert!(last_mask < config, "adapter files come after the masks");
+        assert!(config < models, "the order is the order of the list");
+        assert!(models < clearenv, "adapter files come before --clearenv");
+    }
+
     /// Beim Start trägt jede Maske ihren eigenen Deskriptor; fehlt einer,
     /// steht `-1` da, und `bwrap` verweigert den Start, statt einen fremden
     /// Deskriptor zu lesen.
@@ -691,6 +792,7 @@ mod tests {
                 report_fd: None,
                 status_fd: None,
                 present_under_work: None,
+                agent_files: Vec::new(),
             },
         );
         assert!(window_at(&args, &["--ro-bind-data", "40", "/work/.envrc"]).is_some());

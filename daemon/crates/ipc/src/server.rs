@@ -340,6 +340,8 @@ impl IpcServer {
             flows,
             next_cursor,
             total,
+            // Die Registry zaehlt, was sie hat: die Zahl ist exakt.
+            capped: false,
         }
     }
 
@@ -377,6 +379,10 @@ impl IpcServer {
             flows,
             next_cursor: page.next.as_ref().map(encode_cursor).unwrap_or_default(),
             total: page.total_estimate,
+            // Der Recorder zaehlt nur bis zu seiner Obergrenze; ist sie
+            // erreicht, ist `total` eine Untergrenze und die Oberflaeche muss
+            // das sagen statt es zu raten (CONVENTIONS 4.13).
+            capped: page.capped,
         })
     }
 

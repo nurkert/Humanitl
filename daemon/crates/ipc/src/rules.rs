@@ -121,6 +121,10 @@ impl RulesService {
             Some(v1::rules_request::Op::Reload(())) => {
                 diagnostics = self.store.reload();
             }
+            Some(v1::rules_request::Op::SetDisabled(request)) => {
+                self.store
+                    .set_bundled_disabled(rule_id(&request.rule_id)?, request.disabled)?;
+            }
             Some(v1::rules_request::Op::Test(probe)) => {
                 test = Some(self.test(&probe)?);
             }

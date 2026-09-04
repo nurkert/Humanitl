@@ -75,4 +75,9 @@ message Rule {
   // Erlaubt Zieladressen in RFC-1918, Loopback, Link-Local und CGNAT.
   // Ohne dieses Flag lehnt der Proxy private Ziele ab (CONVENTIONS.md 4.10).
   bool allow_private = 12;
+  // Abgeschaltet: die Regel bleibt in der Liste stehen und entscheidet nichts.
+  // Nur mitgelieferte Regeln werden so aufgehoben; eine eigene Regel loescht
+  // man. Der Zustand steht in der `rules.yaml` des Nutzers als Liste
+  // `disabled_bundled` (HUM-038).
+  bool disabled = 13;
 }

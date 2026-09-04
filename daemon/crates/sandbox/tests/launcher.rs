@@ -25,8 +25,8 @@ use std::time::{Duration, Instant};
 use humanitl_config::{Env, Paths, WorkMode};
 use humanitl_core::ids::SessionId;
 use humanitl_sandbox::{
-    BwrapBackend, ENV_REPORT_FD, IsolationCheck, LaunchPlan, SandboxBackend, SandboxHandle,
-    SandboxProfile, SessionContext, StdioMode, Version,
+    BwrapBackend, ENV_REPORT_FD, IsolationCheck, LaunchPlan, SandboxBackend, SandboxFile,
+    SandboxHandle, SandboxProfile, SessionContext, StdioMode, Version,
 };
 
 /// Kein Test wartet länger: eine Sandbox, die nach einer Minute noch läuft,
@@ -165,6 +165,7 @@ impl Fixture {
             shim_src: self.shim.clone(),
             session_env: vec![("HUMANITL_SESSION".to_owned(), SessionId::nil().to_string())],
             command: command.iter().map(OsString::from).collect(),
+            files: Vec::new(),
         }
     }
 
@@ -346,6 +347,69 @@ fn assert_descriptors(plan: &LaunchPlan, args: &[String]) {
     for fd in &used {
         assert!(planned.contains(fd), "{fd} is not in plan.fds {planned:?}");
     }
+}
+
+/// Die Dateien des Agent-Adapters kommen als `--ro-bind-data` in die Zeile,
+/// jede mit einem eigenen, vererbten Deskriptor.
+#[test]
+fn plan_carries_the_files_of_the_agent_adapter() {
+    let fx = fixture();
+    let backend = fx.unchecked();
+    let mut context = fx.context(&["sh", "-c", "true"]);
+    context.files = vec![
+        SandboxFile::read_only("/etc/humanitl/opencode/opencode.json", b"{}".to_vec()),
+        SandboxFile::read_only("/etc/humanitl/opencode/models.json", b"{}".to_vec()),
+    ];
+    let plan = backend
+        .plan(&profile("default"), &context)
+        .expect("the plan builds");
+    let args = strings(&plan.argv);
+
+    assert_eq!(plan.files.len(), 2, "the plan carries the list for the UI");
+    let mut seen = Vec::new();
+    for dst in [
+        "/etc/humanitl/opencode/opencode.json",
+        "/etc/humanitl/opencode/models.json",
+    ] {
+        let at = args
+            .iter()
+            .position(|arg| arg == dst)
+            .unwrap_or_else(|| panic!("{dst} is not in the line: {args:?}"));
+        assert_eq!(args[at - 2], "--ro-bind-data");
+        let fd: i32 = args[at - 1].parse().expect("a descriptor number");
+        assert!(fd >= 0, "{dst} has no descriptor");
+        assert!(
+            plan.fds
+                .iter()
+                .any(|(host, target)| *host == fd && *target == fd),
+            "the descriptor of {dst} is inherited"
+        );
+        seen.push(at);
+    }
+    assert!(seen[0] < seen[1], "the order is the order of the list");
+    let clearenv = args
+        .iter()
+        .position(|arg| arg == "--clearenv")
+        .expect("--clearenv is in the line");
+    assert!(seen[1] < clearenv, "the files come before --clearenv");
+}
+
+/// Nichts vom Adapter darf in das Projektverzeichnis.
+#[test]
+fn plan_refuses_an_adapter_file_under_work() {
+    let fx = fixture();
+    let backend = fx.unchecked();
+    let mut context = fx.context(&["sh", "-c", "true"]);
+    context.files = vec![SandboxFile::read_only(
+        "/work/opencode.json",
+        b"{}".to_vec(),
+    )];
+
+    let err = backend
+        .plan(&profile("default"), &context)
+        .expect_err("a file under /work is refused");
+    assert_eq!(err.code.as_str(), "SANDBOX_006");
+    assert!(err.why.contains("/work"), "{}", err.why);
 }
 
 #[test]

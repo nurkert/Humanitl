@@ -334,6 +334,17 @@ message FlowSummary {
   string origin_tool = 22;
   // Nur bei FLOW_STATE_FAILED gesetzt.
   UpstreamError upstream_error = 23;
+  // Woran der Flow gescheitert ist, als kurzer fester Bezeichner; leer, wenn
+  // nichts gescheitert ist. `upstream_dns`, `upstream_connect`, `upstream_tls`,
+  // `upstream_private_address:<ip>`, `upstream_timeout` fuer einen
+  // gescheiterten Weg nach draussen, `tls_handshake_failed` fuer einen Client
+  // in der Sandbox, der den Handschlag zum Proxy abgebrochen hat (HUM-045).
+  //
+  // Nicht dasselbe wie `upstream_error`: Das Enum gilt nur bei
+  // FLOW_STATE_FAILED, waehrend ein abgebrochener Handschlag als
+  // FLOW_STATE_RECORDED verbucht wird. Und nicht dasselbe wie `block_reason`:
+  // dort steht, warum jemand geblockt hat, hier, woran es gescheitert ist.
+  string error = 24;
 }
 
 // Alles, was der Detail-Bereich zu einem Flow zeigt.
@@ -503,7 +514,14 @@ message ListFlowsRequest {
 message FlowPage {
   repeated FlowSummary flows = 1;
   string next_cursor = 2;
+  // Die Gesamtzahl der Treffer. Der Recorder zaehlt nur bis zu einer Obergrenze,
+  // damit eine grosse History keine Abfrage blockiert; ist sie erreicht, ist
+  // `total` eine Untergrenze und `capped` steht. Wer die Zahl anzeigt, muss das
+  // sagen (CONVENTIONS 4.13: eine geschaetzte Zahl wird als geschaetzt
+  // gekennzeichnet). Ohne dieses Feld muesste die Oberflaeche aus dem Wert
+  // raten, ob er exakt ist.
   uint64 total = 3;
+  bool capped = 4;
 }
 
 // Ein Stueck eines Bodys.
@@ -607,6 +625,15 @@ message RulesRequest {
     google.protobuf.Empty reload = 8;
     // Fragt den geltenden Regelsatz, was er zu genau dieser Anfrage sagt.
     Test test = 9;
+    // Schaltet eine mitgelieferte Regel ab oder wieder an. Andere Regeln
+    // lehnt der Daemon mit RULES_010 ab: eine eigene Regel loescht man.
+    SetDisabled set_disabled = 10;
+  }
+
+  // Eine mitgelieferte Regel abschalten oder wieder anschalten.
+  message SetDisabled {
+    string rule_id = 1;
+    bool disabled = 2;
   }
 
   // Eine Anfrage, wie sie der Proxy sehen wuerde, aber nur zum Fragen.

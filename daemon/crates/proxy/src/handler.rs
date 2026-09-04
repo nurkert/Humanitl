@@ -45,6 +45,7 @@ use crate::findings::{NoScan, Scanner};
 use crate::hold::HoldQueue;
 use crate::pipeline::FlowPipeline;
 use crate::registry::FlowRecord;
+use crate::tls_observe::{self, HandshakeWatch};
 use crate::upstream::{self, Upstream};
 use crate::{connect, tls};
 
@@ -101,6 +102,8 @@ struct Inner {
     limits: ProxyLimits,
     scanner: Arc<dyn Scanner>,
     recorder: Option<Recorder>,
+    /// Das Zählfenster der gescheiterten Handschläge dieser Sitzung (HUM-045).
+    handshakes: HandshakeWatch,
 }
 
 /// Bedient eine Verbindung: liest Anfragen, entscheidet, leitet weiter.
@@ -128,6 +131,7 @@ impl FlowHandler {
                 limits,
                 scanner: Arc::new(NoScan),
                 recorder: None,
+                handshakes: HandshakeWatch::new(),
             }),
         }
     }
@@ -179,6 +183,7 @@ impl FlowHandler {
                 limits,
                 scanner,
                 recorder,
+                handshakes: HandshakeWatch::new(),
             }),
         }
     }
@@ -208,6 +213,14 @@ impl FlowHandler {
     /// [`ConnectionContext`] der entschlüsselten Verbindung; dort vergleicht
     /// ihn [`check_authority`](crate::connect::check_authority) mit Tunnelziel
     /// und `Host`.
+    ///
+    /// Scheitert der Handschlag, endet die Verbindung hier, und der Client
+    /// sieht nur seinen eigenen Fehler. Damit nicht auch der Mensch vor dem
+    /// Bildschirm allein davorsteht, deutet
+    /// [`FlowHandler::note_handshake_failure`] den Fehler und macht ihn als
+    /// Flow und als Befund sichtbar (HUM-045). Der Proxy hält dabei nichts an
+    /// und lässt nichts offen: Die Task endet, der Strom wird fallen gelassen,
+    /// und der Accept-Loop nimmt die nächste Verbindung.
     fn handle_connect(
         &self,
         mut req: Request<Incoming>,
@@ -224,23 +237,26 @@ impl FlowHandler {
             }
         };
 
+        // Die Kopfzeilen des `CONNECT` sind die einzige Stelle, an der ein
+        // gescheiterter Handschlag noch etwas über den Client aussagt: Der
+        // `User-Agent` steht dort und danach nirgends mehr.
+        let connect_headers = req.headers().clone();
         let handler = self.clone();
         let meta = meta.clone();
         tokio::spawn(async move {
             match hyper::upgrade::on(&mut req).await {
-                Ok(upgraded) => {
-                    match tls::accept(server_config, TokioIo::new(upgraded)).await {
-                        Ok((stream, sni)) => {
-                            let inner_meta = meta.tunnel(authority, sni);
-                            serve_connection(handler, stream, inner_meta).await;
-                        }
-                        // Der Client hat unsere CA nicht akzeptiert oder eine
-                        // unbrauchbare SNI geschickt — beides ist gewollt
-                        // fail-closed, sichtbar wird es als TLS_003 in
-                        // HUM-045.
-                        Err(err) => tracing::debug!(%err, "tls handshake with the client failed"),
+                Ok(upgraded) => match tls::accept(server_config, TokioIo::new(upgraded)).await {
+                    Ok((stream, sni)) => {
+                        handler.note_missing_sni(sni.as_ref(), &authority);
+                        let inner_meta = meta.tunnel(authority, sni);
+                        serve_connection(handler, stream, inner_meta).await;
                     }
-                }
+                    Err(err) => {
+                        handler
+                            .note_handshake_failure(&meta, &authority, &connect_headers, &err)
+                            .await;
+                    }
+                },
                 Err(err) => tracing::debug!(%err, "connect upgrade failed"),
             }
         });
@@ -248,6 +264,180 @@ impl FlowHandler {
         let mut response = Response::new(body::empty());
         *response.status_mut() = StatusCode::OK;
         response
+    }
+
+    /// Meldet einen Handschlag ohne SNI zu einem DNS-Ziel als `TLS_003`.
+    ///
+    /// Der Handschlag selbst kommt zustande: Das Leaf gilt dem Ziel des
+    /// `CONNECT`, nicht dem Namen aus dem `ClientHello`. Ohne SNI fehlt aber
+    /// der zweite Beleg für das Ziel, und
+    /// [`check_authority`](crate::connect::check_authority) lehnt jede Anfrage
+    /// in dieser Verbindung ab. Der Befund sagt vorab, warum gleich alles
+    /// blockt; er gehört zur Verbindung und nicht zu einem Flow, denn welcher
+    /// Flow daraus wird, steht noch nicht fest.
+    ///
+    /// Zu einem IP-Ziel ist die fehlende SNI richtig: TLS sieht für Adressen
+    /// keine vor. Dann geschieht hier nichts.
+    fn note_missing_sni(&self, sni: Option<&HostName>, target: &Authority) {
+        if sni.is_some() || !matches!(target.host, HostName::Dns(_)) {
+            return;
+        }
+        if !self.inner.handshakes.on_missing_sni(&target.host) {
+            return;
+        }
+        self.inner.queue.publish(FlowEvent::Diagnostic {
+            flow_id: None,
+            at: SystemTime::now(),
+            diagnostic: Box::new(tls_observe::missing_sni(&target.host)),
+        });
+    }
+
+    /// Deutet einen gescheiterten Handschlag und macht ihn sichtbar (HUM-045).
+    ///
+    /// Was sich nicht deuten lässt, bleibt eine Protokollzeile: Ein Befund, der
+    /// eine Ursache erfindet, ist schlechter als keiner. Was sich deuten lässt,
+    /// wird zu einem Flow — die History soll den Versuch zeigen, auch wenn nie
+    /// eine Anfrage darin stand — und, wenn das Zählfenster es zulässt, zu
+    /// einem Befund am selben Flow.
+    async fn note_handshake_failure(
+        &self,
+        meta: &ConnectionContext,
+        target: &Authority,
+        connect_headers: &HeaderMap,
+        err: &std::io::Error,
+    ) {
+        let Some(failure) = tls_observe::classify(err) else {
+            tracing::debug!(%err, host = %target.host, "tls handshake with the client failed");
+            return;
+        };
+        let hint = tls_observe::tool_hint(connect_headers);
+        tracing::debug!(
+            host = %target.host,
+            failure = failure.as_str(),
+            hint = hint.as_str(),
+            "the client aborted the tls handshake"
+        );
+        let flow_id = self
+            .record_connect_failure(meta, target, connect_headers)
+            .await;
+        // `on_rejection` liefert die Zahl der Versuche seit der letzten Karte;
+        // `on_drop` nur, ob das Muster fällig ist. `TLS_002` trägt keinen
+        // Zähler, weil sein Text ohnehin von Wiederholung spricht, also steht
+        // dort die 1.
+        let report = if failure.is_rejection() {
+            self.inner.handshakes.on_rejection(&target.host, hint)
+        } else {
+            self.inner.handshakes.on_drop(&target.host).then_some(1)
+        };
+        if let Some(since_last) = report {
+            self.publish_diagnostic(
+                flow_id,
+                tls_observe::diagnostic_for(&failure, &target.host, hint, since_last),
+            );
+        }
+    }
+
+    /// Verbucht den gescheiterten `CONNECT` als Flow und liefert seine Id.
+    ///
+    /// Der Flow trägt die Anfrage, die es wirklich gab: `CONNECT` auf das
+    /// Tunnelziel, mit den Kopfzeilen des Clients. Kein Pfad — ein `CONNECT`
+    /// nennt keinen (RFC 9110 §9.3.6) — und kein Body.
+    ///
+    /// Die Detektoren laufen auch hier. Ein `Proxy-Authorization` oder ein
+    /// Token in einer eigenen Kopfzeile des `CONNECT` ist ein Geheimnis wie
+    /// jedes andere; es wird aufgezeichnet, und was aufgezeichnet wird, wird
+    /// durchsucht. Ein Datensatz mit `findings_count = 0`, den niemand
+    /// durchsucht hat, sähe aus wie ein sauberer (`backlog/CONVENTIONS.md`
+    /// 4.13). Geblockt wird deswegen nichts mehr: Der Tunnel steht ohnehin
+    /// nicht, und `hold.hard_block_checksum_secrets` hat hier nichts zu
+    /// entscheiden.
+    ///
+    /// Der Flow endet als `Decided(Block { NoRoute })` durch das System. Kein
+    /// Grund, der einen Menschen nennt: Es hat niemand entschieden, der Client
+    /// hat aufgelegt, und es gibt keinen Weg zum Ziel, weil der Tunnel nie
+    /// stand. Woran es lag, steht in `flows.error`
+    /// ([`tls_observe::FLOW_ERROR`]) und im Befund am selben Flow.
+    async fn record_connect_failure(
+        &self,
+        meta: &ConnectionContext,
+        target: &Authority,
+        connect_headers: &HeaderMap,
+    ) -> FlowId {
+        let request = Self::build_request(
+            Method::CONNECT,
+            Scheme::Https,
+            target.clone(),
+            String::new(),
+            connect_headers.clone(),
+            BodyRef::empty(),
+        );
+        let mut flow = Flow::new(
+            FlowId::new(),
+            meta.session,
+            SystemTime::now(),
+            request.clone(),
+        );
+        let report = self.inner.scanner.scan(&request, &[]);
+        let mut record = FlowRecord::new(&flow, meta);
+        record.findings_truncated = report.truncated;
+        self.inner.queue.registry().insert(record);
+        self.inner.queue.publish(flow.received_event());
+        // Erst nach `Received`: Vorher gibt es die Zeile nicht, die der Grund
+        // fortschreibt. Beide Wege gehen durch denselben Kanal des Recorders,
+        // also genügt die Reihenfolge der Aufrufe.
+        if let Some(recorder) = self.inner.recorder.as_ref() {
+            recorder.set_flow_error(flow.id, tls_observe::FLOW_ERROR);
+        }
+        if let Some(recorder) = self.inner.recorder.as_ref()
+            && !report.findings.is_empty()
+        {
+            recorder.store_findings(flow.id, &report.findings);
+        }
+        self.record_message(flow.id, Dir::Request, &request.headers, Bytes::new())
+            .await;
+        log_findings(&flow, &report.findings, report.truncated);
+        if self
+            .apply(
+                &mut flow,
+                TransitionInput::Analyze {
+                    findings: report.findings,
+                },
+            )
+            .is_err()
+        {
+            return self.close_without_response(&mut flow);
+        }
+        // Erst `Analyzed`, dann die Befunde des Scans: Sie erklären eine Lücke
+        // in der Suche und gehören an den Fund, nicht davor.
+        for diagnostic in report.diagnostics {
+            self.publish_diagnostic(flow.id, diagnostic);
+        }
+        if self
+            .apply(
+                &mut flow,
+                TransitionInput::Decide {
+                    decision: Decision::Block {
+                        reason: BlockReason::NoRoute,
+                        note: None,
+                    },
+                    source: DecisionSource::System,
+                },
+            )
+            .is_err()
+        {
+            return self.close_without_response(&mut flow);
+        }
+        let _ = self.apply(&mut flow, TransitionInput::Record);
+        flow.id
+    }
+
+    /// Bringt einen Flow ohne Antwort zu Ende, so weit der Automat es zulässt.
+    ///
+    /// Dieselbe Absicht wie [`FlowHandler::fail_closed`], nur ohne die
+    /// Block-Antwort: Es gibt keine Verbindung mehr, an die sie ginge.
+    fn close_without_response(&self, flow: &mut Flow) -> FlowId {
+        let _ = self.apply(flow, TransitionInput::Record);
+        flow.id
     }
 
     /// Eine gewöhnliche Anfrage (Origin- oder Absolut-Form): Ziel prüfen,

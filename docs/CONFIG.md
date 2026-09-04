@@ -126,6 +126,7 @@ Der lokale LLM-Endpunkt und was als Passthrough gilt.
 | Schlüssel | Typ | Vorgabe | Stufe | Projekt | Beschreibung |
 |---|---|---|---|---|---|
 | `llm.endpoint` | string, optional | `-` | basic | denied | OpenAI-kompatibler Endpunkt im LAN. Verkehr dorthin wird nicht angehalten, aber protokolliert. |
+| `llm.models` | list of string | `[]` | basic | denied | Modelle, die der Endpunkt anbietet. Leer heißt: der Agent bekommt ein Platzhalter-Modell und eine Warnung. |
 | `llm.passthrough_paths` | list of string | `["/v1/","/api/"]` | advanced | denied | Pfadpräfixe, die als LLM-Passthrough gelten. |
 
 ### `pseudonyms`
@@ -164,6 +165,7 @@ Welches Sandbox-Profil mit welchem Arbeitsverzeichnis startet.
 
 | Schlüssel | Typ | Vorgabe | Stufe | Projekt | Beschreibung |
 |---|---|---|---|---|---|
+| `sandbox.env` | table of string | `{}` | advanced | denied | Zusätzliche Umgebungsvariablen für die Sandbox; sie überschreiben gleichnamige Einträge aus dem `[env]` des Profils. Der Schlüssel lässt sich aus der Umgebung des Prozesses setzen und ist damit nur so vertrauenswürdig wie die Shell, aus der Humanitl startet; die Variablen des dynamischen Linkers (`LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`) werden deshalb abgelehnt, sie liefen vor dem seccomp-Filter des Shims. |
 | `sandbox.profile` | string | `"default"` | advanced | denied | Name des Profils unter `profiles/sandbox/`, ohne Endung. |
 | `sandbox.work_dir` | string, optional | `-` | basic | denied | Projektverzeichnis, das als `/work` eingehängt wird. Leer bedeutet: das aktuelle Verzeichnis. |
 | `sandbox.work_mode` | ro \| rw | `"rw"` | basic | denied | Ob der Agent im Projektverzeichnis schreiben darf. |

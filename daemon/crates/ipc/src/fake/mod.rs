@@ -407,6 +407,8 @@ impl FakeDaemon {
             flows,
             next_cursor,
             total,
+            // Der Fake haelt alles im Speicher und zaehlt genau.
+            capped: false,
         }
     }
 
@@ -582,6 +584,20 @@ impl FakeDaemon {
             // melden, den er ohnehin hat. Ein `UNIMPLEMENTED` wäre falsch,
             // weil die Oberfläche gegen den Fake übt, was der Daemon kann.
             Some(v1::rules_request::Op::Reload(())) => {
+                self.state.emit_rules_changed(SystemTime::now());
+            }
+            // Der Fake meldet dieselben Codes wie der echte Daemon
+            // (`backlog/CONVENTIONS.md` 4.12): abschalten geht nur bei
+            // mitgelieferten Regeln, alles andere bleibt unverändert.
+            Some(v1::rules_request::Op::SetDisabled(request)) => {
+                self.state.with_rules(|rules| {
+                    if let Some(rule) = rules
+                        .iter_mut()
+                        .find(|rule| rule.rule_id == request.rule_id && rule.bundled)
+                    {
+                        rule.disabled = request.disabled;
+                    }
+                });
                 self.state.emit_rules_changed(SystemTime::now());
             }
         }
