@@ -69,4 +69,15 @@ if [[ -d app/lib/features ]]; then
   done < <(grep -rn "^import '\.\./" app/lib/features --include='*.dart' 2>/dev/null || true)
 fi
 
+# Die Komponentenbibliothek steht hinter der Naht (ADR-0009, revidiert am
+# 2026-09-04). Nur `app/packages/ui` darf sie importieren; ein Import aus einem
+# Feature, aus `app/lib/core` oder aus einem Test macht die Naht wertlos, denn
+# dann haengt ein Bildschirm direkt an einer fremden Bibliothek.
+if [[ -d app/lib ]]; then
+  while IFS= read -r hit; do
+    echo "imports the component library outside packages/ui: $hit" >&2
+    fail=1
+  done < <(grep -rn "package:shadcn_flutter" app/lib app/test app/integration_test --include='*.dart' 2>/dev/null || true)
+fi
+
 exit "$fail"

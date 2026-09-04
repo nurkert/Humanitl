@@ -352,9 +352,8 @@ void main() {
     await playScript(tester);
 
     final double before = tester.getRect(find.byType(QueuePane)).width;
-    final List<double> ratiosBefore = containerOf(
-      tester,
-    ).read(paneRatiosProvider);
+    final List<double> ratiosBefore = containerOf(tester)
+        .read(paneRatiosProvider);
     await tester.dragFrom(
       Offset(tester.getRect(find.byType(QueuePane)).right + 3, 400),
       const Offset(60, 0),

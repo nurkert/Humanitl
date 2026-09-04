@@ -1,4 +1,5 @@
 import 'package:flutter/widgets.dart';
+
 import '../../core/ui/ui.dart';
 
 /// Hosts the design gallery of `packages/ui` as a standalone application.

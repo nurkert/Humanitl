@@ -5,6 +5,11 @@ analyzer:
     - lib/core/ipc/generated/**
     - "**/*.g.dart"
     - "**/*.freezed.dart"
+    # `flutter pub get` traegt diese beiden selbst ein. Unter `app/build` und
+    # `app/linux` liegt heute kein Dart, sie sind also wirkungslos; sie stehen
+    # hier, damit der naechste `pub get` sie nicht erneut anhaengt.
+    - build/**
+    - linux/**
   errors:
     invalid_annotation_target: ignore
 
