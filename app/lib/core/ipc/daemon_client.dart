@@ -125,6 +125,15 @@ abstract class DaemonClient {
   /// `stopped`.
   Stream<SandboxUpdate> stopSandbox();
 
+  /// `Sandbox(IsolationCheck)`: the three guarantees, measured inside the
+  /// running sandbox.
+  ///
+  /// The stream carries one [SandboxUpdate.check] per guarantee. When no
+  /// sandbox runs it carries none: nothing was measured, and three grey
+  /// results on the wire could not be told apart from three measured ones
+  /// (CONVENTIONS 4.13).
+  Stream<SandboxUpdate> checkIsolation();
+
   /// Releases the transport. The client is unusable afterwards.
   Future<void> close();
 }

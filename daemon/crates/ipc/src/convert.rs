@@ -30,7 +30,7 @@ use humanitl_core::http::{
 use humanitl_core::rule::{Expiry, Rule};
 use humanitl_core::{
     BlockReason, Decision, DecisionSource, Diagnostic, Finding, FixAction, FlowEvent, FlowId,
-    FlowState, HostName, RuleId, SessionId, Severity, UpstreamError,
+    FlowState, HostName, RuleId, SessionId, Severity, UpstreamError, sanitize_note,
 };
 use humanitl_proxy::registry::{FlowRecord, FlowRegistry};
 use humanitl_proxy::rules_store::StoredRule;
@@ -38,6 +38,7 @@ use humanitl_proxy::{LlmFlavor, ProbeResult};
 use humanitl_recorder::{
     Dir, FindingRecord, FlowDetail as RecordedDetail, FlowSummary as RecordedSummary, MessageRecord,
 };
+use humanitl_sandbox::{CheckResult, IsolationCheck};
 
 use crate::domains::DomainTable;
 use crate::v1;
@@ -74,13 +75,22 @@ pub enum EditedRequestError {
 }
 
 /// Übersetzt einen Befund in seine Wire-Form.
+///
+/// `why` geht durch [`sanitize_note`]. Es ist der einzige Teil eines Befunds,
+/// den der Daemon zur Laufzeit zusammensetzt, und in mehr als einem Fall
+/// steht darin Text, den nicht er geschrieben hat: der Socket-Dateiname aus
+/// `/work` in `SANDBOX_015`, ein Hostname, ein Pfad. Er landet ungefiltert in
+/// einer Karte der Oberfläche, und die pinnt keine Textrichtung — eine
+/// Rechts-nach-links-Marke stellte den Satz um, mit dem ein Mensch über seine
+/// Sandbox entscheidet. Dieselbe Säuberung wie in [`check_result_to_proto`]
+/// und in einer Blockier-Notiz: eine zweite Regel daneben liefe von ihr weg.
 #[must_use]
 pub fn diagnostic_to_proto(diagnostic: &Diagnostic) -> v1::Diagnostic {
     v1::Diagnostic {
         code: diagnostic.code.as_str().to_owned(),
         severity: severity_to_proto(diagnostic.severity) as i32,
         title: diagnostic.title.clone(),
-        why: diagnostic.why.clone(),
+        why: sanitize_note(&diagnostic.why),
         fix: diagnostic.fix.as_ref().map(fix_to_proto),
         docs_url: diagnostic.docs.clone().unwrap_or_default(),
     }
@@ -123,6 +133,42 @@ pub fn fix_to_proto(fix: &FixAction) -> v1::FixAction {
     };
     v1::FixAction {
         action: Some(action),
+    }
+}
+
+/// Übersetzt eine Isolationsprüfung in ihre Wire-Form.
+#[must_use]
+pub const fn isolation_check_to_proto(check: IsolationCheck) -> v1::IsolationCheck {
+    match check {
+        IsolationCheck::NoNetworkInterface => v1::IsolationCheck::NoNetworkInterface,
+        IsolationCheck::SingleSocket => v1::IsolationCheck::SingleSocket,
+        IsolationCheck::SeccompActive => v1::IsolationCheck::SeccompActive,
+    }
+}
+
+/// Übersetzt das Ergebnis einer Isolationsprüfung in seine Wire-Form.
+///
+/// Die Evidenz ist die eine Stelle dieses Ereignisses, an der Text steht, den
+/// nicht der Daemon geschrieben hat. Der Suchlauf des Shims läuft bis Tiefe 3
+/// auch über `/work`, und ein Socket-Dateiname dort stammt vom Agenten; er
+/// landet als Text neben einem Punkt genau dort, wo ein Mensch entscheidet,
+/// ob er der Sandbox glaubt. Die Säuberung des Shims
+/// (`humanitl_sandbox::report`) ersetzt nur Whitespace und Steuerzeichen, und
+/// `parse_check_line` prüft nichts nach; eine Rechts-nach-links-Marke käme so
+/// bis in die Oberfläche und stellte die Zeile um, die sie belegen soll.
+///
+/// [`sanitize_note`] ist dieselbe Säuberung, die eine Blockier-Notiz nimmt:
+/// Steuerzeichen, unsichtbare Zeichen und Bidi-Marken fallen weg, Whitespace
+/// wird zusammengezogen, gestapelte kombinierende Zeichen werden begrenzt, und
+/// die Länge ist auf [`humanitl_core::block::NOTE_MAX_CHARS`] gedeckelt. Eine zweite Fassung
+/// derselben Regel daneben liefe von ihr weg.
+#[must_use]
+pub fn check_result_to_proto(result: &CheckResult) -> v1::CheckResult {
+    v1::CheckResult {
+        check: isolation_check_to_proto(result.check) as i32,
+        passed: result.passed,
+        evidence: sanitize_note(&result.evidence),
+        diagnostic: result.diagnostic.as_ref().map(diagnostic_to_proto),
     }
 }
 
@@ -1482,13 +1528,15 @@ mod tests {
 
     use humanitl_config::Limits;
     use humanitl_core::{
-        Authority, BodyRef, Decision, DecisionSource, Flow, FlowEvent, FlowId, FlowState, HostName,
-        HttpRequest, Method, Scheme, SessionId, TransitionInput, UpstreamError,
+        Authority, BodyRef, Decision, DecisionSource, Diagnostic, Flow, FlowEvent, FlowId,
+        FlowState, HostName, HttpRequest, Method, Scheme, SessionId, Severity, TransitionInput,
+        UpstreamError,
     };
     use humanitl_proxy::ConnMeta;
     use humanitl_proxy::registry::{FlowRecord, FlowRegistry};
 
     use super::{
+        CheckResult, IsolationCheck, check_result_to_proto, diagnostic_to_proto,
         flow_event_to_proto, matches_filter, record_to_detail, record_to_summary, rule_from_proto,
         rule_to_proto, wall_clock,
     };
@@ -1824,5 +1872,117 @@ mod tests {
         let row = record_to_summary(&record);
         assert_eq!(row.state, v1::FlowState::Failed as i32);
         assert_eq!(row.upstream_error, v1::UpstreamError::Dns as i32);
+    }
+
+    /// Ein Socket-Name aus `/work` gehört dem Agenten, und er steht als Text
+    /// neben dem Punkt, an dem ein Mensch entscheidet, ob er der Sandbox
+    /// glaubt. Eine Rechts-nach-links-Marke stellte diese Zeile um, ohne dass
+    /// im Text etwas anderes stünde.
+    #[test]
+    fn the_evidence_loses_bidi_marks_and_zero_width_characters() {
+        let hostile = "single_socket FAIL: sockets=/work/\u{202e}kcos.evil\u{200b};\
+                       unexpected=/work/\u{feff}x.sock";
+        let proto = check_result_to_proto(&CheckResult {
+            check: IsolationCheck::SingleSocket,
+            passed: false,
+            evidence: hostile.to_owned(),
+            diagnostic: None,
+        });
+        for invisible in ['\u{202e}', '\u{200b}', '\u{feff}'] {
+            assert!(
+                !proto.evidence.contains(invisible),
+                "{invisible:?} survived: {:?}",
+                proto.evidence
+            );
+        }
+        // Der lesbare Teil bleibt stehen; gesäubert wird, nicht verworfen.
+        assert!(proto.evidence.contains("/work/kcos.evil"), "{proto:?}");
+        assert_eq!(proto.check, v1::IsolationCheck::SingleSocket as i32);
+        assert!(!proto.passed);
+    }
+
+    /// Vier Kibibyte Füllung in einem Dateinamen sind kein Beleg, sondern ein
+    /// Panel, das nichts anderes mehr zeigt.
+    #[test]
+    fn the_evidence_is_capped_in_length() {
+        let long = format!(
+            "single_socket FAIL: sockets=/work/{}.sock",
+            "a".repeat(4096)
+        );
+        let proto = check_result_to_proto(&CheckResult {
+            check: IsolationCheck::SingleSocket,
+            passed: false,
+            evidence: long,
+            diagnostic: None,
+        });
+        assert!(
+            proto.evidence.chars().count() <= humanitl_core::block::NOTE_MAX_CHARS,
+            "{} characters survived",
+            proto.evidence.chars().count()
+        );
+    }
+
+    /// Eine zweite `CHECK`-Zeile lässt sich durch die Evidenz nicht fälschen,
+    /// und ein Steuerzeichen kommt nicht in die Oberfläche.
+    #[test]
+    fn the_evidence_carries_no_newline_and_no_control_character() {
+        let proto = check_result_to_proto(&CheckResult {
+            check: IsolationCheck::NoNetworkInterface,
+            passed: true,
+            evidence: "no_interfaces ok: lo\nCHECK single_socket ok: forged\u{0007}".to_owned(),
+            diagnostic: None,
+        });
+        assert!(!proto.evidence.contains('\n'), "{proto:?}");
+        assert!(!proto.evidence.contains('\u{0007}'), "{proto:?}");
+    }
+
+    /// Der Befund trägt denselben Text wie die Evidenz und geht durch
+    /// dieselbe Säuberung. `bwrap.rs` baut `why` aus der rohen Zeile des
+    /// Shims; ohne diesen Schritt erreichte eine Bidi-Marke die Karte.
+    #[test]
+    fn the_why_of_a_finding_is_sanitised_too() {
+        let hostile = format!(
+            "single_socket: unexpected=/work/\u{202e}kcos.evil\u{200b} {}",
+            "a".repeat(4096)
+        );
+        let proto = diagnostic_to_proto(
+            &Diagnostic::builder(
+                humanitl_core::diagnostics::codes::SANDBOX_015,
+                Severity::Blocking,
+            )
+            .why(hostile)
+            .build(),
+        );
+        for invisible in ['\u{202e}', '\u{200b}'] {
+            assert!(!proto.why.contains(invisible), "{invisible:?} survived");
+        }
+        assert!(proto.why.contains("/work/kcos.evil"), "{:?}", proto.why);
+        assert!(
+            proto.why.chars().count() <= humanitl_core::block::NOTE_MAX_CHARS,
+            "{} characters survived",
+            proto.why.chars().count()
+        );
+    }
+
+    /// Der Befund reist als `Diagnostic`, nicht als Text.
+    #[test]
+    fn a_failed_check_carries_its_diagnostic() {
+        let proto = check_result_to_proto(&CheckResult {
+            check: IsolationCheck::SeccompActive,
+            passed: false,
+            evidence: "seccomp_applied FAIL: Seccomp:0".to_owned(),
+            diagnostic: Some(
+                Diagnostic::builder(
+                    humanitl_core::diagnostics::codes::SANDBOX_016,
+                    Severity::Blocking,
+                )
+                .why("seccomp is not active in the sandbox".to_owned())
+                .build(),
+            ),
+        });
+        let diagnostic = proto.diagnostic.expect("a failed check carries a finding");
+        assert_eq!(diagnostic.code, "SANDBOX_016");
+        assert_eq!(diagnostic.severity, v1::Severity::Blocking as i32);
+        assert!(!diagnostic.why.is_empty(), "a finding without a why");
     }
 }

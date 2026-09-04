@@ -101,10 +101,13 @@ Abschnitt 4. Die Spalte „Escape-Test" nennt den automatisierten Test, der den 
 | K-12 | Package-Caches | | • | | | Cache pro Projekt, nicht pro Vertrauensstufe | geteilter Cache trägt Daten zwischen Projekten | — |
 | K-13 | Direkter Netzwerk-Egress | • | • | • | | Netz-Namespace + seccomp + Capability-Drop | Kernel-Fehler | ESC-1, ESC-3 |
 | K-14 | Audit-Datei auf dem Host | | | | • | Hash-Kette mit HMAC | Kürzen am Ende, Angreifer mit Schlüssel | ESC-5 |
+| K-15 | Fenster zwischen `exec` und `SIGKILL` | | • | | | Bericht sofort nach dem Start, `SIGKILL` ohne Gnadenfrist | offen: der Proxy kennt die Isolation der Sitzung noch nicht | — |
 
 K-01 bis K-12 sind die zwölf Kanäle der Sicherheits-Review vom 2026-09-02. K-13 steht dabei, weil
 ein Modell ohne den offensichtlichsten Kanal unvollständig wäre — er ist der einzige, der als
-geschlossen gilt. K-14 steht dabei, weil sonst Angreifer (d) in keiner Zeile vorkäme.
+geschlossen gilt. K-14 steht dabei, weil sonst Angreifer (d) in keiner Zeile vorkäme. K-15 kam am
+2026-09-04 mit HUM-041 dazu: Die Prüfung, die die drei Garantien belegt, läuft erst, wenn der Agent
+schon gestartet ist.
 
 ---
 
@@ -443,6 +446,44 @@ beiden Fällen einen Befund.
 
 ---
 
+### K-15 Das Fenster zwischen `exec` und `SIGKILL`
+
+*Was er ist.* Der Shim meldet die drei Garantien und startet den Agenten unmittelbar danach; er
+erzwingt nichts (`CONVENTIONS.md` 4.12). Der Wirt liest den Bericht erst danach. Zwischen dem
+`exec` des Agenten und dem `SIGKILL` des Daemons läuft der Agent in einer Sandbox, deren Isolation
+noch nicht belegt ist: Die Brücke steht, der Proxy nimmt an, eine `allow`-Regel leitet ohne
+Menschen weiter, und die Durchreiche zum Modell streamt.
+
+*Schwere.* Hoch. Im Fall `SANDBOX_015` ist genau der zweite Socket, den die Prüfung beanstandet, in
+diesem Fenster benutzbar.
+
+*Minderung im MVP.* Das Fenster ist so kurz wie es ohne den Proxy geht: Der Bericht wird sofort
+nach dem Start gelesen, und der Daemon beendet die Sandbox ohne Gnadenfrist (`SIGKILL` statt
+`SIGTERM` plus fünf Sekunden) und wartet nur einmal. Im Normalfall sind das Millisekunden.
+Zusätzlich hält jede Anfrage, die keine Regel entscheidet, ohnehin an einem Menschen — das Fenster
+wirkt nur über Regeln, die schon `allow` sagen, und über die erklärte Durchreiche.
+
+*Obere Schranke.* Nicht eine Frist, sondern ihre Summe: `REPORT_TIMEOUT` (5 s), bis ein
+ausbleibender Bericht als ausgeblieben gilt, plus `KILL_GRACE` (5 s) für das Einsammeln nach dem
+`SIGKILL` — im Daemon zusammen **bis zu 10 s**. Auf den Wegen `humanitl sandbox run` und
+`escape-launch` kommt eine weitere `KILL_GRACE` dazu, weil sie mit `SIGTERM` beginnen: **bis zu
+15 s**.
+
+*Restrisiko.* Ein Agent, der in dieser Zeit gezielt eine erlaubte Verbindung aufbaut.
+
+*Status.* Offen, und auf **jedem** Weg in die Sandbox gleich: `escape-launch` und `humanitl sandbox
+run` starten ebenso erst und prüfen danach. Keiner von ihnen ist fail-closed in dem Sinn, dass der
+Befehl nicht liefe. Es zu schließen heißt, dass der Proxy Verbindungen ablehnt, solange die
+Isolation der laufenden Sitzung nicht belegt ist; das ist ein eigenes Issue (`humanitl-proxy` liegt
+innerhalb von `humanitl-ipc`, die Naht gehört deshalb in eine innere Crate). Bis dahin gilt: Ein
+roter Isolations-Check **beendet** die Sitzung, er **verhindert** sie nicht.
+
+*Prüfung.* `daemon/crates/ipc/tests/sandbox_start.rs`
+(`a_second_socket_in_the_project_stops_the_start`) belegt, dass die Sitzung beendet wird und nie
+`running` meldet. Dass in dem Fenster nichts hinausgeht, ist **nicht** belegt. Die Escape-Tests
+belegen es auch nicht: Sie laufen selbst in dieser Sandbox und messen von innen, was dort gilt —
+über die Zeit zwischen `exec` und `SIGKILL` sagen sie nichts.
+
 ## 5. Annahmen
 
 Die Argumentation dieses Dokuments steht und fällt mit sechs Annahmen. Die ersten vier sind die
@@ -504,6 +545,7 @@ Sitzungs-Historie steht.
 |---|---|---|
 | 2026-09-02 | Erstfassung: vier Angreifer, vierzehn Kanäle, sechs Annahmen | HUM-007, Sicherheits-Review vom selben Tag |
 | 2026-09-02 | Review-Korrekturen: Shim-Prozessmodell (Brücke im Elternprozess, Filter im Kind), CA-Schlüssel bleibt auf dem Host, kein Loopback-Port auf dem Host, Mount-Allowlist als Auszug der Argv-Tabelle, `socketpair()` bleibt unberührt und erlaubt (CONVENTIONS.md 4.11) | HUM-007 Review |
+| 2026-09-04 | K-15 aufgenommen: der Isolations-Check läuft, nachdem der Shim den Agenten gestartet hat, also beendet ein roter Check die Sitzung, statt sie zu verhindern. Der Halbsatz „Check 3 prüft, dass `socketpair` gelingt" gestrichen — `probe_families` probt es nicht | HUM-041, externer Review |
 
 Geplante Fortschreibung: HUM-059 bringt das Dokument zum Release auf den Stand des Codes. Jede
 sicherheitsrelevante Änderung am Shim, an der Mount-Allowlist, am Filter oder am Passthrough

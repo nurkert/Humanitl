@@ -147,6 +147,86 @@ abstract class EnvEntry with _$EnvEntry {
   bool get isEmpty => !withheld && value.isEmpty;
 }
 
+/// One of the three guarantees, mirror of `IsolationCheck`.
+///
+/// The order is the order of the wire enum and the order the panel draws
+/// them in; it is also the order the daemon folds the shim's five report
+/// lines into (`daemon/crates/sandbox/src/bwrap.rs`).
+enum IsolationCheck {
+  /// There is no network interface but `lo`, so there is nowhere to go.
+  noNetworkInterface,
+
+  /// Exactly one socket leads out of the sandbox, and it leads to Humanitl.
+  singleSocket,
+
+  /// The seccomp filter is in force in the agent's process.
+  seccompActive,
+}
+
+/// What one guarantee looks like right now.
+///
+/// A missing result is its own state and never the colour of a passed one:
+/// nothing measured is not the same as measured and good (CONVENTIONS 4.13).
+enum IsolationSegment {
+  /// Nothing was measured. Not a claim in either direction.
+  unknown,
+
+  /// The sandbox is starting and the result has not arrived yet.
+  running,
+
+  /// Measured, and the guarantee holds.
+  passed,
+
+  /// Measured, and the guarantee does not hold.
+  failed,
+}
+
+/// One measured guarantee, mirror of `CheckResult`.
+///
+/// [evidence] is what was actually measured, in the shim's own words -- the
+/// interfaces it found, the sockets it walked, the `Seccomp:` line it read.
+/// The panel shows it next to the sentence, because a green dot without the
+/// line under it is decoration and a green dot with it is an argument.
+@freezed
+abstract class IsolationCheckResult with _$IsolationCheckResult {
+  /// Creates a result.
+  const factory IsolationCheckResult({
+    required IsolationCheck check,
+    required bool passed,
+    @Default('') String evidence,
+    Diagnostic? diagnostic,
+  }) = _IsolationCheckResult;
+
+  const IsolationCheckResult._();
+
+  /// True when the shim's socket walk stopped at its budget instead of
+  /// finishing.
+  ///
+  /// The walk runs to depth [socketWalkDepth] over at most
+  /// [socketWalkEntries] entries and writes `limit=none|entries|depth` into
+  /// its own line. Anything but `none` means the walk ran out before it was
+  /// done: still a check, no longer a proof, and the panel has to say so
+  /// rather than show smooth green (CONVENTIONS 4.13). The exhaustive proof
+  /// stays ESC-2.
+  ///
+  /// This is the one place the application reads a field out of the evidence
+  /// instead of out of a message field. The wire has no room for it, and the
+  /// alternative -- letting a truncated walk look like a finished one -- is
+  /// the one thing this screen must not do.
+  bool get walkStopped =>
+      evidence.contains('$socketWalkLimitKey=entries') ||
+      evidence.contains('$socketWalkLimitKey=depth');
+
+  /// The key the shim writes its walk budget under.
+  static const String socketWalkLimitKey = 'limit';
+
+  /// How deep the shim's socket walk goes (`SOCKET_WALK_MAX_DEPTH`).
+  static const int socketWalkDepth = 3;
+
+  /// How many entries it visits at most (`SOCKET_WALK_MAX_ENTRIES`).
+  static const int socketWalkEntries = 2000;
+}
+
 /// Everything the sandbox screen shows, mirror of `SandboxEvent.Status`.
 @freezed
 abstract class SandboxStatus with _$SandboxStatus {
@@ -166,6 +246,8 @@ abstract class SandboxStatus with _$SandboxStatus {
     @Default('') String argvPreview,
     @Default(false) bool agentRunning,
     @Default(<Diagnostic>[]) List<Diagnostic> diagnostics,
+    @Default(<IsolationCheckResult>[]) List<IsolationCheckResult> checks,
+    SandboxId? checksSandboxId,
   }) = _SandboxStatus;
 
   const SandboxStatus._();
@@ -191,6 +273,96 @@ abstract class SandboxStatus with _$SandboxStatus {
     }
     return null;
   }
+
+  /// The result for [check], or null when none arrived.
+  ///
+  /// Null is an answer: nothing was measured. It is never folded into a
+  /// passed result anywhere on the way to the screen.
+  IsolationCheckResult? checkFor(IsolationCheck check) {
+    for (final IsolationCheckResult result in checks) {
+      if (result.check == check) {
+        return result;
+      }
+    }
+    return null;
+  }
+
+  /// What one guarantee looks like right now.
+  ///
+  /// While the sandbox is starting a missing result means "not yet"; at every
+  /// other moment it means "not measured". Neither is [IsolationSegment.passed].
+  IsolationSegment segmentFor(IsolationCheck check) {
+    final IsolationCheckResult? result = checkFor(check);
+    if (result != null) {
+      return result.passed ? IsolationSegment.passed : IsolationSegment.failed;
+    }
+    return state == SandboxState.starting
+        ? IsolationSegment.running
+        : IsolationSegment.unknown;
+  }
+
+  /// [next] with the results this snapshot may carry into it.
+  ///
+  /// **A result belongs to one run of one sandbox and to nothing else.** It is
+  /// as worthless for the next run as no result at all -- the same lie as
+  /// "nothing measured looks like measured and good", only along the time
+  /// axis. Three things end that ownership:
+  ///
+  /// - **A start.** `starting` means this run has measured nothing yet. A
+  ///   green dot left over from the last run, over a sandbox that is still
+  ///   coming up, claims a guarantee nobody checked in it.
+  /// - **A stop.** Nothing runs, so nothing is proven.
+  /// - **Another sandbox id.** The daemon is answering about a different run
+  ///   -- started from the command line, or in a second window -- and a
+  ///   result from run A says nothing about run B.
+  ///
+  /// The results arrive between `Status(starting)` and the status that ends
+  /// the start, and only that status carries the id of the run they were
+  /// measured in ([SandboxEvent.Status.sandbox_id] is empty while nothing is
+  /// launched). Leaving `starting` is therefore the one moment at which the
+  /// id is written down ([checksSandboxId]); from then on it is compared, not
+  /// adopted. A run that ended before it ever had an id -- a start the daemon
+  /// stopped over a red guarantee -- keeps its results under a null id, and
+  /// the next start clears them at `starting` before anything else can.
+  SandboxStatus carryChecksInto(SandboxStatus next) {
+    if (checks.isEmpty) {
+      return next;
+    }
+    final bool aRunIsUp =
+        next.state == SandboxState.running || next.state == SandboxState.failed;
+    if (!aRunIsUp) {
+      return next;
+    }
+    if (state == SandboxState.starting) {
+      return next.copyWith(checks: checks, checksSandboxId: next.sandboxId);
+    }
+    if (checksSandboxId == next.sandboxId) {
+      return next.copyWith(checks: checks, checksSandboxId: checksSandboxId);
+    }
+    return next;
+  }
+
+  /// How many of the three guarantees are proven right now.
+  int get checksPassed =>
+      checks.where((IsolationCheckResult result) => result.passed).length;
+
+  /// The first guarantee that was measured and did not hold, if there is one.
+  IsolationCheckResult? get failedCheck {
+    for (final IsolationCheckResult result in checks) {
+      if (!result.passed) {
+        return result;
+      }
+    }
+    return null;
+  }
+
+  /// True when all three guarantees were measured and all three hold.
+  ///
+  /// Counted against [IsolationCheck.values], not against the length of
+  /// [checks]: two green results out of two received are not three out of
+  /// three, and the ring must not close on them.
+  bool get isolationProven =>
+      checksPassed == IsolationCheck.values.length && failedCheck == null;
 
   /// The mounts that carry a host path, in the order of the command line.
   List<MountEntry> get hostMounts =>
@@ -247,4 +419,8 @@ sealed class SandboxUpdate with _$SandboxUpdate {
 
   /// One argument of the command line.
   const factory SandboxUpdate.argvLine(String line) = SandboxUpdateArgvLine;
+
+  /// One measured guarantee.
+  const factory SandboxUpdate.check(IsolationCheckResult result) =
+      SandboxUpdateCheck;
 }

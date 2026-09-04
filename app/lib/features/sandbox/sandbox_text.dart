@@ -109,3 +109,68 @@ String sandboxUptimeText(Duration duration) {
   }
   return '$hours:${minutes.toString().padLeft(2, '0')}:$ss';
 }
+
+/// The sentence of one guarantee.
+///
+/// Word for word the sentence from `docs/SECURITY.md` section 1 and
+/// BACKLOG.md 4.1. The panel makes a claim the product makes elsewhere; two
+/// wordings would be two claims.
+String isolationCheckSentence(AppLocalizations l10n, IsolationCheck check) =>
+    switch (check) {
+      IsolationCheck.noNetworkInterface => l10n.isolationCheck1,
+      IsolationCheck.singleSocket => l10n.isolationCheck2,
+      IsolationCheck.seccompActive => l10n.isolationCheck3,
+    };
+
+/// The word for what one guarantee looks like right now.
+///
+/// The dot carries the colour and this carries the word. Four states and four
+/// words: "not measured" is never the word for a passed check, and never its
+/// colour either.
+String isolationSegmentLabel(AppLocalizations l10n, IsolationSegment segment) =>
+    switch (segment) {
+      IsolationSegment.unknown => l10n.isolationStateUnknown,
+      IsolationSegment.running => l10n.isolationStateRunning,
+      IsolationSegment.passed => l10n.isolationStatePassed,
+      IsolationSegment.failed => l10n.isolationStateFailed,
+    };
+
+/// The hue of one guarantee.
+///
+/// Red here, and not the orange of an error, because a guarantee that does
+/// not hold is not a hiccup on a screen: the daemon has already killed the
+/// sandbox over it, and nothing of the agent's goes anywhere. That is exactly
+/// what red means in this product (`docs/UX.md` 3.3, rule 6, and the ring of
+/// BACKLOG.md section 5). Unknown is `fg2`, the same grey the ring wears
+/// before anything was measured -- never a shade of green.
+Color isolationSegmentColor(HTokens tokens, IsolationSegment segment) =>
+    switch (segment) {
+      IsolationSegment.unknown => tokens.colors.fg2,
+      IsolationSegment.running => tokens.state.held,
+      IsolationSegment.passed => tokens.state.allowed,
+      IsolationSegment.failed => tokens.state.blocked,
+    };
+
+/// Whether the dot of one guarantee is filled.
+///
+/// **Filled means measured.** A guarantee nobody has measured yet -- unknown,
+/// or being measured right now while the sandbox comes up -- wears a ring and
+/// not a disc, so the shape says what the colour says and a result that is
+/// missing can never be read as a paler version of one that is there. This is
+/// the same rule along the time axis as [SandboxStatus.carryChecksInto]: what
+/// was not measured in this run is not shown as measured.
+bool isolationSegmentFilled(IsolationSegment segment) =>
+    segment == IsolationSegment.passed || segment == IsolationSegment.failed;
+
+/// The hue the word of one guarantee may wear.
+///
+/// [isolationSegmentColor] is the surface palette, clamped to 3:1 and right
+/// for a dot and for an arc of the ring. A sentence needs 4,5:1 and takes the
+/// text palette instead (`docs/UX.md` 6).
+Color isolationSegmentTextColor(HTokens tokens, IsolationSegment segment) =>
+    switch (segment) {
+      IsolationSegment.unknown => tokens.colors.fg2,
+      IsolationSegment.running => tokens.stateText.held,
+      IsolationSegment.passed => tokens.stateText.allowed,
+      IsolationSegment.failed => tokens.stateText.blocked,
+    };
