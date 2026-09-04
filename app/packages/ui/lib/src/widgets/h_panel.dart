@@ -1,4 +1,5 @@
 import 'package:flutter/widgets.dart';
+import 'package:shadcn_flutter/shadcn_flutter.dart' as shad;
 
 import '../theme/h_theme.dart';
 import '../tokens/spacing.dart';
@@ -8,6 +9,12 @@ import 'h_hairline.dart';
 
 /// A persistent region of the shell: panel background, hairline border, no
 /// radius and no shadow.
+///
+/// Die Fläche ist `OutlinedContainer` aus `shadcn_flutter`; die Farben, die
+/// Stärke und die fehlende Ecke kommen aus den Token. Ihre `Card` wäre der
+/// nächste Nachbar, legt aber ihre Polsterung um den ganzen Inhalt — ein
+/// Panel setzt seine Kopfzeile bündig an die Haarlinie und polstert nur den
+/// Rumpf.
 class HPanel extends StatelessWidget {
   /// Creates a panel around [child].
   const HPanel({
@@ -38,46 +45,48 @@ class HPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     final Widget? title = this.title;
-    return Semantics(
-      container: true,
-      label: semanticsLabel,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: tokens.colors.bg1,
-          border: Border.all(color: tokens.colors.line),
+    return HTheme.host(
+      context,
+      Semantics(
+        container: true,
+        label: semanticsLabel,
+        child: shad.OutlinedContainer(
+          backgroundColor: tokens.colors.bg1,
+          borderColor: tokens.colors.line,
+          borderWidth: HSize.hairline,
           borderRadius: BorderRadius.circular(tokens.radii.panel),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            if (title != null || actions.isNotEmpty) ...<Widget>[
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: HSpace.panelPadding,
-                  vertical: HSpace.x2,
-                ),
-                child: Row(
-                  children: <Widget>[
-                    if (title != null)
-                      Expanded(
-                        child: DefaultTextStyle(
-                          style: tokens.typography.ui13.semibold.tinted(
-                            tokens.colors.fg0,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              if (title != null || actions.isNotEmpty) ...<Widget>[
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: HSpace.panelPadding,
+                    vertical: HSpace.x2,
+                  ),
+                  child: Row(
+                    children: <Widget>[
+                      if (title != null)
+                        Expanded(
+                          child: DefaultTextStyle(
+                            style: tokens.typography.ui13.semibold.tinted(
+                              tokens.colors.fg0,
+                            ),
+                            child: title,
                           ),
-                          child: title,
-                        ),
-                      )
-                    else
-                      const Spacer(),
-                    ...actions,
-                  ],
+                        )
+                      else
+                        const Spacer(),
+                      ...actions,
+                    ],
+                  ),
                 ),
-              ),
-              const HHairline(),
+                const HHairline(),
+              ],
+              Padding(padding: padding, child: child),
             ],
-            Padding(padding: padding, child: child),
-          ],
+          ),
         ),
       ),
     );

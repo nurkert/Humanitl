@@ -73,15 +73,21 @@ bool isSectionVisible(BuildContext context) => Visibility.of(context);
 /// 5.2). A disabled action makes `ShortcutManager.handleKeypress` return
 /// `KeyEventResult.ignored`, the key falls through to the default bindings of
 /// `WidgetsApp`, and the focused control wins.
+///
+/// Der Typparameter ist `Intent` und nicht `ActivateIntent`. `Clickable` aus
+/// `shadcn_flutter` legt seine Aktion als `CallbackAction` **ohne**
+/// Typargument ab, also als `CallbackAction<Intent>`, und Flutter kann die
+/// nicht auf `Action<ActivateIntent>` werfen: im Entwicklungsbau bricht
+/// `maybeFind<ActivateIntent>` in einer Zusicherung ab, im Auslieferungsbau
+/// gibt es still `null` zurück. Damit gälte jede Bildschirmtaste als frei,
+/// während ein Control den Fokus hält — und `a` ist unumkehrbar. Flutter
+/// nennt `Intent` als den Weg dafür (flutter/flutter#180871).
 bool focusedControlHandlesActivate() {
   final BuildContext? context = FocusManager.instance.primaryFocus?.context;
   if (context == null || !context.mounted) {
     return false;
   }
-  return Actions.maybeFind<ActivateIntent>(
-        context,
-        intent: const ActivateIntent(),
-      ) !=
+  return Actions.maybeFind<Intent>(context, intent: const ActivateIntent()) !=
       null;
 }
 

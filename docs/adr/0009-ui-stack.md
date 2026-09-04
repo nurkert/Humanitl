@@ -726,6 +726,48 @@ Vier Dinge bleiben trotzdem, weil sie nur wie Barrierefreiheit aussehen:
 4. **Ein sichtbarer gedrückter Zustand.** Ein Control, das auf einen Klick
    nichts tut, fühlt sich kaputt an.
 
+### Was die Aufnahme gekostet hat
+
+Genau eine Zusicherung ist gelockert worden, und sie steht namentlich in
+`docs/UX.md` 8:
+
+**Der Fokusring von `HTextField` animiert und reserviert keinen Platz.**
+`docs/UX.md` 2.9 verlangt einen Fokusring in einem Frame, weil ein
+einblendender sich als Eingabeverzögerung liest. Das `TextField` der
+Bibliothek hängt seinen `FocusOutline` fest ein, ohne Schalter; der fährt
+einen Wertbauer über 150 ms, skaliert die Rahmenbreite und zeichnet über die
+eigene Kante hinaus. Zwei Ringe übereinander wären einer zu viel, also ist es
+ihrer. Seine Maße bleiben unsere — zwei Pixel Akzent, zwei Pixel Abstand,
+gesetzt über ihr `FocusOutlineTheme` aus `HFocusRingMetrics` —, und jedes
+andere Control trägt weiterhin `HFocusRing`, der seinen Platz reserviert und
+nicht animiert. Kein Kontrastwert ist gesenkt worden.
+
+Vier Fallen sind abgefangen statt übernommen worden, jede mit einem Test, der
+ohne die Sicherung rot wird:
+
+- Ihr `TextField` meldet **jede** Änderung des `TextEditingController` an
+  `onChanged`, auch eine, die ein Widget selbst zuweist. Flutter schreibt für
+  `onChanged` das Gegenteil auf, und die Bildschirme sind unter dem Vertrag
+  geschrieben: der Regel-Editor füllt seine Felder beim Öffnen, und die
+  Meldung liefe mitten im Aufbau in den Provider zurück.
+- Ihr `Clickable` bindet unter jedem Control vier Pfeiltasten auf
+  `DirectionalFocusIntent`. Das innerste `Shortcuts` gewinnt, also erreichten
+  `ArrowUp` und `ArrowDown` den Bildschirm nicht mehr, solange eine Zeile oder
+  ein Knopf den Fokus hält — und die Warteschlange ist ein einziger Fokusstopp
+  mit Navigation darin (`docs/UX.md` 5.2).
+- Ihre Aktionen liegen als `CallbackAction<Intent>` vor.
+  `Actions.maybeFind<ActivateIntent>` kann die nicht werfen: im
+  Entwicklungsbau bricht sie in einer Zusicherung ab, im Auslieferungsbau gibt
+  sie still `null` zurück. Genau diese Frage entscheidet, ob eine
+  Bildschirmtaste feuert, während ein Control den Fokus hält
+  (flutter/flutter#180871, `docs/UX.md` 5.2).
+- Ihr `Checkbox` rechnet `enabled ?? onChanged != null`. Wer die Entscheidung
+  wie wir außerhalb der Komponente trifft und `onChanged` deshalb leer lässt,
+  bekommt `false` — und damit den Zweig, der den Rahmen in `muted` malt:
+  **jedes** nicht angehakte Kästchen stünde in der Farbe eines toten. Das
+  `enabled` steht deshalb fest auf `true`, und die vier Farben kommen aus den
+  Token.
+
 ## Betroffene Issues
 
 `HUM-008` (Design-Tokens und `packages/ui`), `HUM-019` (Flutter-Shell),

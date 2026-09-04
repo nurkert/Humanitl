@@ -1,26 +1,44 @@
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:shadcn_flutter/shadcn_flutter.dart' as shad;
 
 import '../theme/h_theme.dart';
 import '../tokens/colors.dart';
 import '../tokens/spacing.dart';
 import '../tokens/tokens.dart';
 import '../tokens/typography.dart';
-import 'h_focus_ring.dart';
 
 /// Ein einzeiliges Eingabefeld.
 ///
-/// Es gab bisher keines, und der Regel-Editor hat sich deshalb eines gebaut.
-/// Dieses hier ist dasselbe aus denselben Token: `bg2` als Fläche, die
-/// Haarlinie als Rahmen, der Akzent als Cursor, der Fokusring außerhalb des
-/// Rahmens ([HFocusRing]) und eine Mindesthöhe statt einer Höhe, damit bei
-/// `TextScaler.linear(2.0)` nichts abgeschnitten wird
-/// (`docs/UX.md` 5.1, 6 und 9, Punkte 14 und 17).
+/// Steht auf `TextField` aus `shadcn_flutter`: Auswahl, Zeiger, Kontextmenü,
+/// Autofill und die Platzhalter-Behandlung kommen von dort. Die Fläche ist
+/// `bg2`, der Rahmen die Haarlinie, der Cursor der Akzent — alles aus
+/// [HTokens], über die Dekoration und über das `TextFieldTheme`, das `HTheme`
+/// veröffentlicht.
+///
+/// Dies ist das eine Control, dessen Fokusring **die Bibliothek** zeichnet:
+/// `TextField` bringt ihren `FocusOutline` fest eingebaut mit, und zwei Ringe
+/// übereinander sind einer zu viel. Er trägt trotzdem unsere Maße — zwei Pixel
+/// Akzent, zwei Pixel Abstand —, weil `HTheme` sein `FocusOutlineTheme` aus
+/// [HFocusRingMetrics] füllt. Der Unterschied zu [HFocusRing] ist, dass dieser
+/// Ring keinen Platz reserviert, sondern über die eigene Kante hinaus
+/// zeichnet.
 ///
 /// Der Platzhalter ist `fg2` und verschwindet mit dem ersten Zeichen; er ist
 /// nie die einzige Beschriftung: [semanticsLabel] sagt, was das Feld bedeutet,
 /// weil die sichtbare Beschriftung über dem Kasten steht und die Semantik sie
 /// nicht mit ihm verbindet.
+///
+/// **[onChanged] meldet nur, was ein Mensch getippt hat.** Das ist der
+/// Vertrag, den Flutter für `onChanged` aufschreibt, und der, unter dem die
+/// Bildschirme dieses Programms geschrieben sind. Die Bibliothek hält ihn
+/// nicht: ihr `TextField` hängt an dem `TextEditingController` und meldet
+/// **jede** Änderung, auch eine, die ein Widget selbst zuweist. Der
+/// Regel-Editor füllt seine Felder beim Öffnen genau so, und die Meldung
+/// liefe dort mitten im Aufbau in den Provider zurück. Deshalb steht zwischen
+/// beiden ein Filter: ein `TextInputFormatter` sieht ausschließlich Eingaben
+/// eines Menschen, merkt sich deren Ergebnis, und nur dieses Ergebnis wird
+/// weitergereicht.
 class HTextField extends StatefulWidget {
   /// Creates an input.
   const HTextField({
@@ -72,117 +90,101 @@ class HTextField extends StatefulWidget {
 }
 
 class _HTextFieldState extends State<HTextField> {
-  FocusNode? _owned;
-  bool _focused = false;
+  final _HUserEditProbe _probe = _HUserEditProbe();
 
-  FocusNode get _focus => widget.focusNode ?? (_owned ??= FocusNode());
-
-  @override
-  void initState() {
-    super.initState();
-    _focus.addListener(_syncFocus);
-    widget.controller.addListener(_redrawHint);
-  }
-
-  @override
-  void didUpdateWidget(HTextField oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.controller != widget.controller) {
-      oldWidget.controller.removeListener(_redrawHint);
-      widget.controller.addListener(_redrawHint);
+  /// Reicht [value] weiter, sofern ein Mensch ihn getippt hat.
+  void _forward(String value) {
+    if (!_probe.wasTyped(value)) {
+      return;
     }
-    if (oldWidget.focusNode != widget.focusNode) {
-      oldWidget.focusNode?.removeListener(_syncFocus);
-      _focus.addListener(_syncFocus);
-    }
-  }
-
-  void _syncFocus() {
-    if (_focused != _focus.hasFocus) {
-      setState(() => _focused = _focus.hasFocus);
-    }
-  }
-
-  void _redrawHint() {
-    if (mounted) {
-      setState(() {});
-    }
-  }
-
-  @override
-  void dispose() {
-    widget.controller.removeListener(_redrawHint);
-    _focus.removeListener(_syncFocus);
-    _owned?.dispose();
-    super.dispose();
+    widget.onChanged?.call(value);
   }
 
   @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
+    final bool mono = widget.mono;
+    final bool enabled = widget.enabled;
+    final String hint = widget.hint;
     final TextStyle style =
-        (widget.mono ? tokens.typography.mono13 : tokens.typography.ui13)
-            .tinted(widget.enabled ? tokens.colors.fg0 : tokens.colors.fg1);
-    return Semantics(
-      textField: true,
-      label: widget.semanticsLabel,
-      enabled: widget.enabled,
-      child: HFocusRing(
-        visible: _focused,
-        radius: tokens.radii.control,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: widget.enabled ? tokens.colors.bg2 : tokens.colors.bg1,
-            borderRadius: HRadius.controlRadius,
-            border: Border.all(color: tokens.colors.line),
-          ),
-          child: Padding(
-            padding: EdgeInsets.symmetric(
-              horizontal: tokens.spacing.x2,
-              vertical: tokens.spacing.x1,
+        (mono ? tokens.typography.mono13 : tokens.typography.ui13).tinted(
+          enabled ? tokens.colors.fg0 : tokens.colors.fg1,
+        );
+    return HTheme.host(
+      context,
+      Semantics(
+        textField: true,
+        label: widget.semanticsLabel,
+        enabled: enabled,
+        child: DefaultSelectionStyle(
+          cursorColor: tokens.colors.accent,
+          selectionColor: HColorDerivation.fade(tokens.colors.accent, 0.35),
+          child: shad.TextField(
+            controller: widget.controller,
+            focusNode: widget.focusNode,
+            autofocus: widget.autofocus,
+            enabled: enabled,
+            readOnly: !enabled,
+            style: style,
+            cursorColor: tokens.colors.accent,
+            maxLines: 1,
+            placeholder: hint.isEmpty
+                ? null
+                : Text(hint, style: style.tinted(tokens.colors.fg2)),
+            // Die Dekoration steht hier und nicht im `TextFieldTheme`, weil
+            // ein abgeschaltetes Feld eine andere Fläche trägt: `bg1` statt
+            // `bg2`. Deaktiviert heißt sichtbar deaktiviert (`docs/UX.md` 6).
+            decoration: BoxDecoration(
+              color: enabled ? tokens.colors.bg2 : tokens.colors.bg1,
+              borderRadius: HRadius.controlRadius,
+              border: Border.all(color: tokens.colors.line),
             ),
-            child: ConstrainedBox(
-              // Eine Untergrenze, nie eine Höhe: bei doppelter Skalierung ist
-              // die Zeile höher, als der Kasten wäre (`docs/UX.md` 6).
-              constraints: BoxConstraints(
-                minHeight: tokens.sizes.hitMin - tokens.spacing.x2,
-              ),
-              child: Stack(
-                alignment: Alignment.centerLeft,
-                children: <Widget>[
-                  if (widget.controller.text.isEmpty && widget.hint.isNotEmpty)
-                    ExcludeSemantics(
-                      child: Text(
-                        widget.hint,
-                        style: style.tinted(tokens.colors.fg2),
-                      ),
-                    ),
-                  EditableText(
-                    controller: widget.controller,
-                    focusNode: _focus,
-                    autofocus: widget.autofocus,
-                    readOnly: !widget.enabled,
-                    style: style,
-                    cursorColor: tokens.colors.accent,
-                    backgroundCursorColor: tokens.colors.bg3,
-                    selectionColor: HColorDerivation.fade(
-                      tokens.colors.accent,
-                      0.35,
-                    ),
-                    inputFormatters: widget.digitsOnly
-                        ? <TextInputFormatter>[
-                            FilteringTextInputFormatter.digitsOnly,
-                          ]
-                        : null,
-                    onChanged: widget.onChanged,
-                    onSubmitted: widget.onSubmitted,
-                  ),
-                ],
-              ),
+            padding: const EdgeInsets.symmetric(
+              horizontal: HSpace.x2,
+              vertical: HSpace.x1,
             ),
+            // Der Filter steht **hinter** allen anderen, damit er den Text
+            // sieht, der am Ende im Feld steht.
+            inputFormatters: <TextInputFormatter>[
+              if (widget.digitsOnly) FilteringTextInputFormatter.digitsOnly,
+              _probe,
+            ],
+            onChanged: _forward,
+            onSubmitted: widget.onSubmitted,
           ),
         ),
       ),
     );
+  }
+}
+
+/// Merkt sich, was zuletzt ein Mensch getippt hat.
+///
+/// Ein `TextInputFormatter` läuft ausschließlich auf Eingaben, die über die
+/// Eingabeverbindung kommen — Tippen, Einfügen, Autofill. Eine Zuweisung an
+/// den `TextEditingController` läuft nicht durch ihn. Das ist der einzige
+/// Unterschied, an dem sich beides auseinanderhalten lässt, und deshalb steht
+/// hier ein Formatter, der nichts formatiert.
+class _HUserEditProbe extends TextInputFormatter {
+  String? _typed;
+
+  /// Ob [value] das Ergebnis der letzten Eingabe eines Menschen ist.
+  ///
+  /// Verbraucht die Marke: eine Eingabe wird genau einmal gemeldet.
+  bool wasTyped(String value) {
+    if (_typed != value) {
+      return false;
+    }
+    _typed = null;
+    return true;
+  }
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    _typed = newValue.text;
+    return newValue;
   }
 }

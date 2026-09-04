@@ -624,10 +624,12 @@ void main() {
       final BuildContext? focused = FocusManager.instance.primaryFocus?.context;
       onControl =
           focused != null &&
-          Actions.maybeFind<ActivateIntent>(
-                focused,
-                intent: const ActivateIntent(),
-              ) !=
+          // `maybeFind<ActivateIntent>` bricht ab, sobald die gefundene
+          // Action ein `CallbackAction<Intent>` ist — und genau das legt
+          // `Clickable` aus `shadcn_flutter` unter jedes Control. Der
+          // Typparameter `Intent` ist der Weg, den Flutter dafür nennt
+          // (flutter/flutter#180871).
+          Actions.maybeFind<Intent>(focused, intent: const ActivateIntent()) !=
               null;
     }
     expect(onControl, isTrue, reason: 'a control takes the focus');
@@ -635,6 +637,45 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await settleHistory(tester, container);
     expect(container.read(flowHandoffProvider), isNull);
+  });
+
+  testWidgets('eine Bildschirmtaste bricht nicht, wenn ein Control steht', (
+    WidgetTester tester,
+  ) async {
+    // Derselbe Pfad wie oben, aber über `_SingleKeyAction.isActionEnabled`:
+    // der läuft bei **jedem** Druck auf `j`, `k` und `/`. Vor der Korrektur
+    // warf `maybeFind<ActivateIntent>` dort auf der `CallbackAction<Intent>`
+    // von `Clickable` (flutter/flutter#180871).
+    final FakeDaemonClient client = FakeDaemonClient.history(count: 24);
+    final ProviderContainer container = await pumpHistory(
+      tester,
+      client: client,
+    );
+    final Flow first = container.read(historyPageProvider).rows.first;
+    container.read(historySelectionProvider.notifier).select(first.id);
+    await tester.pump();
+
+    bool onControl = false;
+    for (int i = 0; i < 12 && !onControl; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      final BuildContext? focused = FocusManager.instance.primaryFocus?.context;
+      onControl =
+          focused != null &&
+          Actions.maybeFind<Intent>(focused, intent: const ActivateIntent()) !=
+              null;
+    }
+    expect(onControl, isTrue, reason: 'ein Control nimmt den Fokus');
+
+    for (final LogicalKeyboardKey key in <LogicalKeyboardKey>[
+      LogicalKeyboardKey.keyJ,
+      LogicalKeyboardKey.keyK,
+      LogicalKeyboardKey.slash,
+    ]) {
+      await tester.sendKeyEvent(key);
+      await settleHistory(tester, container);
+      expect(tester.takeException(), isNull, reason: key.keyLabel);
+    }
   });
 
   test('every bound key has an action in the same screen', () {

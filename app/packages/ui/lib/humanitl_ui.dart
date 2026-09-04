@@ -1,18 +1,34 @@
 /// Design tokens and the widget vocabulary of the application.
 ///
 /// No feature builds its own look; everything goes through this package, so a
-/// change lands in one place. ADR-0009 decided on 2026-09-04 that no foreign
-/// component library sits behind this seam: the widgets are built on
-/// `package:flutter/widgets.dart`. The seam stays anyway, so the decision
-/// remains reversible. See HUM-008.
+/// change lands in one place. Hinter dieser Naht steht seit der Revision von
+/// ADR-0009 am 2026-09-04 `shadcn_flutter`, exakt auf 0.0.54 gepinnt. **Nur
+/// dieses Paket darf die Bibliothek importieren**; ein Import in einem Feature
+/// oder in `app/lib/core` ist ein Architekturverstoß und wird von
+/// `tools/check-deps.sh` beanstandet. Ein Bildschirm sieht weiterhin
+/// `HButton`, `HRow`, `HModal` und die Token — was sich geändert hat, ist
+/// ausschließlich, worauf diese Widgets stehen. See HUM-008.
 ///
 /// The layer has two halves. `HTokens` is data — the colours, type scale,
 /// spacing, radii, durations and curves of the Airlock design direction
 /// (BACKLOG.md 5), in a dark and a light instance, published to the widget tree
 /// by `HTheme` and read back with `HTheme.of(context)`. The `H*` widgets are
-/// the vocabulary a screen is allowed to use; they are built on
-/// `package:flutter/widgets.dart` and could be re-pointed at a component
-/// library without any feature noticing.
+/// the vocabulary a screen is allowed to use.
+///
+/// Die Naht ist auch hier zu: `src/theme/shadcn_theme.dart` und
+/// `src/widgets/h_control.dart` werden **nicht** exportiert. Beide führen
+/// Typen der Bibliothek in ihrer Signatur, und was hier hinausgeht, könnte ein
+/// Feature benutzen, ohne je `package:shadcn_flutter` zu schreiben — genau der
+/// Import, nach dem `tools/check-deps.sh` sucht. Die Tests dieses Pakets
+/// greifen auf beide über ihren Pfad zu.
+///
+/// **Die Richtung zwischen den beiden Themen ist eine Entscheidung.** Nicht
+/// `HTokens` wird aus dem `ColorScheme` der Bibliothek abgeleitet, sondern
+/// umgekehrt: `HTheme` baut aus den Token deren `ThemeData` und veröffentlicht
+/// es mitsamt den Komponententhemen für Button, Eingabefeld, Kästchen,
+/// Haarlinie, Karte, Badge und Fokusring (`HShadcnTheme`). Damit malt jede
+/// Komponente der Bibliothek in unserer Palette, und es gibt keine zweite.
+/// Die Begründung steht in `src/theme/shadcn_theme.dart`.
 library;
 
 export 'src/gallery/gallery_page.dart';

@@ -42,6 +42,17 @@ import 'h_hairline.dart';
 /// wirksam 0,248, und für diese Fläche gilt keine der Zusicherungen der
 /// Textableitung.
 ///
+/// **Ohne Entsprechung in der Bibliothek.** `shadcn_flutter` hat keine
+/// geteilte Pille und kein Halten-zum-Bestätigen; die Pille bleibt deshalb
+/// unser Bau. Ihre Farben kommen trotzdem aus derselben Quelle wie die jeder
+/// Komponente der Bibliothek: `HTokens` speist deren `ThemeData`
+/// (`HShadcnTheme`), also gibt es keine zweite Palette, an der sie sich
+/// bedienen könnte. Was sie zusätzlich braucht, sobald sie einmal auf eine
+/// Komponente gestellt wird, ist eine Haltefüllung, deren Dauer nicht an der
+/// Animationsprimitive der Bibliothek hängt: die baut ihren Controller ohne
+/// `animationBehavior`, und an dieser Dauer hängt die Sicherung, die einen
+/// Klick daran hindert, eine Anfrage hinauszuschicken (`docs/UX.md` 2.10).
+///
 /// [onLeftLongPress] hat einen Tastenweg, und zwar denselben: `Enter` oder
 /// die Leertaste **gehalten** füllt und bestätigt die gemerkte Variante,
 /// kurz gedrückt löst [onLeft] aus. Ohne ihn wäre die gemerkte Handlung nur

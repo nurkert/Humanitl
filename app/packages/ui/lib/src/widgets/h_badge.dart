@@ -1,11 +1,11 @@
 import 'package:flutter/widgets.dart';
+import 'package:shadcn_flutter/shadcn_flutter.dart' as shad;
 
 import '../theme/h_theme.dart';
-import '../tokens/colors.dart';
+import '../theme/shadcn_theme.dart';
 import '../tokens/spacing.dart';
 import '../tokens/tokens.dart';
-import '../tokens/typography.dart';
-import 'h_focus_ring.dart';
+import 'h_control.dart';
 
 /// A small tinted label: 11/500, radius 2, ten percent area tint.
 ///
@@ -17,12 +17,18 @@ import 'h_focus_ring.dart';
 /// eine feste Höhe schluckte den Überlauf still (`docs/UX.md` 6 und 9,
 /// Punkt 18).
 ///
+/// Ein Badge ist in `shadcn_flutter` ein Button, und hier ebenso: ohne
+/// [onTap] steht er als `PrimaryBadge` der Bibliothek — derselbe Rumpf, ohne
+/// Fokus und ohne Zeigerweg —, mit [onTap] als [HControl], damit er ein
+/// Fokusstopp mit Ring ist (`docs/UX.md` 9, Punkt 17). Den Stil liefert in
+/// beiden Fällen [HShadcnButtonStyle.badge].
+///
 /// Fläche und Beschriftung werden getrennt geführt. [color] ist die Fläche —
 /// zehn Prozent Tönung —, [textColor] das Wort darauf. Eine Zustands- oder
 /// Methodenfarbe ist auf 3:1 geklemmt und trägt damit keinen Text; die
 /// Textvariante derselben Farbe erreicht 4,5:1, auch auf ihrer eigenen Tönung
 /// (`docs/UX.md` 6 und 9, Punkt 5).
-class HBadge extends StatefulWidget {
+class HBadge extends StatelessWidget {
   /// Creates a badge showing [text].
   const HBadge({
     required this.text,
@@ -73,90 +79,68 @@ class HBadge extends StatefulWidget {
   static const double chipHeight = 18;
 
   @override
-  State<HBadge> createState() => _HBadgeState();
-}
-
-class _HBadgeState extends State<HBadge> {
-  bool _focused = false;
-
-  void _setFocused(bool value) {
-    if (_focused != value) {
-      setState(() => _focused = value);
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
-    final String text = widget.text;
-    final VoidCallback? onTap = widget.onTap;
-    final Color resolved = widget.color ?? tokens.colors.fg1;
-    // Ohne ausdrückliche Beschriftungsfarbe: die Textvariante der Fläche,
-    // sofern es eine Zustandsfarbe ist. Eine Zustandsfarbe ist auf 3:1
-    // geklemmt und trägt damit kein Wort (`docs/UX.md` 6).
-    final Color label = widget.textColor ?? tokens.stateTextOf(resolved);
-    final TextStyle style =
-        (widget.mono ? tokens.typography.mono11 : tokens.typography.ui11).medium
-            .tinted(label);
-    // No `alignment:` on the container and `widthFactor: 1` on every Center:
-    // a badge shrink-wraps its label. A container with an alignment expands to
-    // the incoming constraints, which turns every badge in a column into a
-    // full width bar.
-    final Widget chip = Container(
+    final Color resolved = color ?? tokens.colors.fg1;
+    shad.AbstractButtonStyle styleOf(HTokens tokens) =>
+        HShadcnButtonStyle.badge(
+          tokens,
+          resolved,
+          background: background,
+          textColor: textColor,
+          mono: mono,
+        );
+    // Kein `alignment` am Kasten und `widthFactor: 1` an jedem Center: ein
+    // Badge schrumpft auf seine Beschriftung. Ein Kasten mit Ausrichtung
+    // dehnt sich auf die einlaufenden Constraints, und damit wird jeder Badge
+    // in einer Spalte zu einem Balken über die volle Breite.
+    Widget label() => ConstrainedBox(
       constraints: const BoxConstraints(minHeight: HBadge.chipHeight),
-      padding: const EdgeInsets.symmetric(horizontal: HSpace.x2),
-      decoration: BoxDecoration(
-        color: widget.background ?? HColorDerivation.tint(resolved),
-        borderRadius: HRadius.badgeRadius,
-      ),
       child: Center(
         widthFactor: 1,
         heightFactor: 1,
-        child: Text(
-          text,
-          style: style,
-          maxLines: 1,
-          overflow: TextOverflow.clip,
-        ),
+        child: Text(text, maxLines: 1, overflow: TextOverflow.clip),
       ),
     );
-    final Widget sized = ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: HSize.hitMin),
-      // heightFactor: 1, sonst dehnt sich der Badge auf die volle verfügbare
-      // Höhe: die reservierte Höhe ist eine Untergrenze, keine Höhe.
-      child: Center(widthFactor: 1, heightFactor: 1, child: chip),
-    );
-    final Widget labelled = Semantics(
-      label: widget.semanticsLabel ?? text,
+
+    final Widget chip = onTap == null
+        ? HTheme.host(
+            context,
+            shad.PrimaryBadge(style: styleOf(tokens), child: label()),
+          )
+        : HControl(
+            onPressed: onTap,
+            focusNode: focusNode,
+            radius: tokens.radii.badge,
+            fill: (HTokens tokens, Set<WidgetState> states) =>
+                HShadcnButtonStyle.badgeFill(
+                  resolved,
+                  states,
+                  background: background,
+                ),
+            style: (HTokens tokens, Color fill) => HShadcnButtonStyle.badge(
+              tokens,
+              resolved,
+              background: fill,
+              textColor: textColor,
+              mono: mono,
+            ),
+            builder: (
+              BuildContext context,
+              Set<WidgetState> states,
+              Color fill,
+            ) => label(),
+          );
+
+    return Semantics(
+      label: semanticsLabel ?? text,
       button: onTap != null,
       excludeSemantics: true,
-      child: sized,
-    );
-    if (onTap == null) {
-      return labelled;
-    }
-    // Ein Badge, den man anfassen kann, ist ein Control und damit ein
-    // Fokusstopp (`docs/UX.md` 5.1 und 9, Punkt 17).
-    return FocusableActionDetector(
-      focusNode: widget.focusNode,
-      mouseCursor: SystemMouseCursors.click,
-      onFocusChange: _setFocused,
-      actions: <Type, Action<Intent>>{
-        ActivateIntent: CallbackAction<ActivateIntent>(
-          onInvoke: (ActivateIntent intent) {
-            onTap();
-            return null;
-          },
-        ),
-      },
-      child: HFocusRing(
-        visible: _focused,
-        radius: tokens.radii.badge,
-        child: GestureDetector(
-          onTap: onTap,
-          behavior: HitTestBehavior.opaque,
-          child: labelled,
-        ),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: HSize.hitMin),
+        // heightFactor: 1, sonst dehnt sich der Badge auf die volle verfügbare
+        // Höhe: die reservierte Höhe ist eine Untergrenze, keine Höhe.
+        child: Center(widthFactor: 1, heightFactor: 1, child: chip),
       ),
     );
   }

@@ -1,5 +1,6 @@
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:shadcn_flutter/shadcn_flutter.dart' as shad;
 
 import '../theme/h_theme.dart';
 import '../tokens/colors.dart';
@@ -18,6 +19,13 @@ import '../tokens/typography.dart';
 /// Modal für die Tastatur eine Sackgasse: `Tab` liefe durch den Screen
 /// dahinter, über den man gerade nicht entscheiden soll
 /// (`docs/UX.md` 5.1 und 9, Punkt 16).
+///
+/// Die Karte ist `ModalContainer` aus `shadcn_flutter`, dieselbe Fläche, auf
+/// der auch deren eigener Dialog steht. Ihr `AlertDialog` wäre der nächste
+/// Nachbar, bringt aber seinen eigenen Verdunkler mit, der keine Berührung
+/// annimmt, und schreibt Ecke und Rahmenfarbe fest — der Rahmen stünde dann
+/// als `muted` auf `popover` und wäre nicht zu sehen. Der Verdunkler bleibt
+/// deshalb unserer: er ist die Fläche, die den Modal schließt.
 class HModal extends StatelessWidget {
   /// Creates a modal.
   const HModal({
@@ -68,7 +76,10 @@ class HModal extends StatelessWidget {
               },
             ),
         },
-        child: FocusScope(autofocus: true, child: _card(context, tokens)),
+        child: HTheme.host(
+          context,
+          FocusScope(autofocus: true, child: _card(context, tokens)),
+        ),
       ),
     );
   }
@@ -91,43 +102,41 @@ class HModal extends StatelessWidget {
         Center(
           child: SizedBox(
             width: width,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: tokens.colors.bg2,
-                borderRadius: HRadius.cardRadius,
-                border: Border.all(color: tokens.colors.lineStrong),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(HSpace.x4),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: <Widget>[
-                    DefaultTextStyle(
-                      style: tokens.typography.ui16.semibold.tinted(
-                        tokens.colors.fg0,
-                      ),
-                      child: title,
+            child: shad.ModalContainer(
+              filled: true,
+              fillColor: tokens.colors.bg2,
+              borderColor: tokens.colors.lineStrong,
+              borderWidth: HSize.hairline,
+              borderRadius: HRadius.cardRadius,
+              padding: const EdgeInsets.all(HSpace.x4),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  DefaultTextStyle(
+                    style: tokens.typography.ui16.semibold.tinted(
+                      tokens.colors.fg0,
                     ),
-                    SizedBox(height: tokens.spacing.x2),
-                    DefaultTextStyle(
-                      style: tokens.typography.ui13.tinted(tokens.colors.fg1),
-                      child: child,
-                    ),
-                    if (actions.isNotEmpty) ...<Widget>[
-                      SizedBox(height: tokens.spacing.x4),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: <Widget>[
-                          for (final Widget action in actions) ...<Widget>[
-                            SizedBox(width: tokens.spacing.x2),
-                            action,
-                          ],
+                    child: title,
+                  ),
+                  SizedBox(height: tokens.spacing.x2),
+                  DefaultTextStyle(
+                    style: tokens.typography.ui13.tinted(tokens.colors.fg1),
+                    child: child,
+                  ),
+                  if (actions.isNotEmpty) ...<Widget>[
+                    SizedBox(height: tokens.spacing.x4),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: <Widget>[
+                        for (final Widget action in actions) ...<Widget>[
+                          SizedBox(width: tokens.spacing.x2),
+                          action,
                         ],
-                      ),
-                    ],
+                      ],
+                    ),
                   ],
-                ),
+                ],
               ),
             ),
           ),

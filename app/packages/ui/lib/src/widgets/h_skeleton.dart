@@ -15,6 +15,12 @@ import 'h_hairline.dart';
 /// dass etwas läuft, und es gibt in diesem Programm keinen
 /// (`docs/UX.md` 2.11).
 ///
+/// **Ohne Entsprechung in der Bibliothek.** `shadcn_flutter` hat ein Skelett,
+/// aber es ist ein Schimmern über dem echten Inhalt (`Skeletonizer`), und
+/// `docs/UX.md` 2.11 verlangt das Gegenteil: die Haarlinien der erwarteten
+/// Zeilen, ohne Bewegung. Das Skelett bleibt deshalb unser Bau; seine Farben
+/// kommen aus denselben Token, die das `ThemeData` der Bibliothek speisen.
+///
 /// Beim Eintreffen wird nichts verschoben: das Skelett wird an derselben
 /// Stelle durch die Zeile ersetzt, die es beschrieben hat, in einem Frame.
 /// Deshalb steht hier dieselbe Höhe wie in der Liste dahinter —
