@@ -1,10 +1,12 @@
 import 'package:flutter/widgets.dart';
+import 'package:shadcn_flutter/shadcn_flutter.dart' as shad;
 
 import '../theme/h_theme.dart';
+import '../theme/shadcn_theme.dart';
 import '../tokens/spacing.dart';
 import '../tokens/tokens.dart';
 import '../tokens/typography.dart';
-import 'h_focus_ring.dart';
+import 'h_control.dart';
 
 /// Ein Kästchen, das an oder aus ist, mit dem Satz daneben, der sagt, was das
 /// Anhaken kostet.
@@ -14,11 +16,24 @@ import 'h_focus_ring.dart';
 /// ist ein Fokusstopp, mindestens [HSize.hitMin] hoch, und zeigt den Fokus als
 /// Ring außerhalb (`docs/UX.md` 5.1 und 6).
 ///
-/// Ein Kästchen mit `enabled: false` sieht auch so aus: Beschriftung und Haken
-/// stehen in `fg2`, der Stufe, die `docs/UX.md` 6 für wirklich deaktivierte
-/// Controls freihält, und die Fläche des Hakens trägt nicht den Akzent — der
-/// gehört dem, was man anfassen kann (3.3).
-class HCheckbox extends StatefulWidget {
+/// Das Kästchen selbst ist `Checkbox` aus `shadcn_flutter`, mitsamt ihrem
+/// gezeichneten Haken und dessen Anlauf; Größe, Ecke und Farben kommen aus dem
+/// `CheckboxTheme`, das `HTheme` aus den Token füllt. Verhalten und Fokus
+/// bleiben bei [HControl], weil die Komponente der Bibliothek keinen
+/// `FocusNode` von außen annimmt — ein Bildschirm könnte die Reihenfolge
+/// seiner Fokusstopps dann nicht mehr selbst bestimmen. Deshalb steht die
+/// Komponente hier hinter `ExcludeFocus` und `IgnorePointer`: sie zeichnet,
+/// sie entscheidet nicht.
+///
+/// Ein Kästchen mit `enabled: false` sieht auch so aus: Beschriftung, Hinweis
+/// und die Fläche des Kästchens stehen in `fg2`, der Stufe, die `docs/UX.md` 6
+/// für wirklich deaktivierte Controls freihält, und die Fläche trägt nicht den
+/// Akzent — der gehört dem, was man anfassen kann (3.3). Der Haken selbst
+/// bleibt `onAccent`: er kommt aus der Komponente der Bibliothek und ist dort
+/// fest an `primaryForeground` gebunden. Auf `fg2` misst er dunkel 3,90:1 —
+/// über der Flächengrenze, unter der Textgrenze, und ein Haken ist eine
+/// Grafik.
+class HCheckbox extends StatelessWidget {
   /// Creates a checkbox.
   const HCheckbox({
     required this.label,
@@ -49,59 +64,68 @@ class HCheckbox extends StatefulWidget {
   final FocusNode? focusNode;
 
   @override
-  State<HCheckbox> createState() => _HCheckboxState();
-}
-
-class _HCheckboxState extends State<HCheckbox> {
-  bool _focused = false;
-
-  @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
-    final String? hint = widget.hint;
+    final String? hint = this.hint;
     // Deaktiviert heißt sichtbar deaktiviert: `fg2` ist genau dafür da.
-    final Color labelColor = widget.enabled
-        ? tokens.colors.fg0
-        : tokens.colors.fg2;
-    final Color hintColor = widget.enabled
-        ? tokens.colors.fg1
-        : tokens.colors.fg2;
+    final Color labelColor = enabled ? tokens.colors.fg0 : tokens.colors.fg2;
+    final Color hintColor = enabled ? tokens.colors.fg1 : tokens.colors.fg2;
     return Semantics(
-      checked: widget.value,
-      enabled: widget.enabled,
-      label: widget.label,
+      checked: value,
+      enabled: enabled,
+      label: label,
       excludeSemantics: true,
-      child: FocusableActionDetector(
-        enabled: widget.enabled,
-        focusNode: widget.focusNode,
-        mouseCursor: widget.enabled
-            ? SystemMouseCursors.click
-            : MouseCursor.defer,
-        onFocusChange: (bool value) => setState(() => _focused = value),
-        actions: <Type, Action<Intent>>{
-          ActivateIntent: CallbackAction<ActivateIntent>(
-            onInvoke: (ActivateIntent intent) {
-              widget.onChanged(!widget.value);
-              return null;
-            },
-          ),
-        },
-        child: HFocusRing(
-          visible: _focused && widget.enabled,
-          radius: tokens.radii.control,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: widget.enabled
-                ? () => widget.onChanged(!widget.value)
-                : null,
-            child: ConstrainedBox(
+      child: HControl(
+        enabled: enabled,
+        onPressed: enabled ? () => onChanged(!value) : null,
+        focusNode: focusNode,
+        radius: tokens.radii.control,
+        fill: (HTokens tokens, Set<WidgetState> states) =>
+            const Color(0x00000000),
+        style: (HTokens tokens, Color fill) => HShadcnButtonStyle.plain(tokens),
+        builder: (BuildContext context, Set<WidgetState> states, Color fill) =>
+            ConstrainedBox(
               constraints: BoxConstraints(minHeight: tokens.sizes.hitMin),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
                   Padding(
                     padding: EdgeInsets.only(top: tokens.spacing.x2),
-                    child: _HTick(on: widget.value, enabled: widget.enabled),
+                    child: ExcludeFocus(
+                      child: IgnorePointer(
+                        child: shad.Checkbox(
+                          state: value
+                              ? shad.CheckboxState.checked
+                              : shad.CheckboxState.unchecked,
+                          onChanged: null,
+                          // **Immer `true`, auch am toten Kästchen.** Der
+                          // Wert entscheidet in der Komponente nichts als die
+                          // Rahmenfarbe: ohne ihn rechnet sie
+                          // `widget.enabled ?? widget.onChanged != null`, und
+                          // weil hier niemand entscheidet — `IgnorePointer`
+                          // und `ExcludeFocus` liegen darum —, käme immer
+                          // `false` heraus. Dann malte sie den Zweig
+                          // `!enabled ? colorScheme.muted` und damit **jedes**
+                          // nicht angehakte Kästchen in `bg2`, also in der
+                          // Farbe eines toten. Deaktiviert heißt hier `fg2`,
+                          // und das steht unten in [borderColor].
+                          enabled: true,
+                          // Die Farben stehen hier und nicht nur im
+                          // `CheckboxTheme`, weil ein abgeschaltetes Kästchen
+                          // `fg2` trägt und nicht den Akzent: der gehört dem,
+                          // was man anfassen kann (`docs/UX.md` 3.3).
+                          activeColor: enabled
+                              ? tokens.colors.accentFill
+                              : tokens.colors.fg2,
+                          borderColor: enabled
+                              ? tokens.colors.lineStrong
+                              : tokens.colors.fg2,
+                          backgroundColor: const Color(0x00000000),
+                          size: HSize.tick,
+                          borderRadius: HRadius.badgeRadius,
+                        ),
+                      ),
+                    ),
                   ),
                   SizedBox(width: tokens.spacing.x2),
                   Expanded(
@@ -111,7 +135,7 @@ class _HCheckboxState extends State<HCheckbox> {
                         Padding(
                           padding: EdgeInsets.only(top: tokens.spacing.x1),
                           child: Text(
-                            widget.label,
+                            label,
                             style: tokens.typography.ui13.tinted(labelColor),
                           ),
                         ),
@@ -126,67 +150,7 @@ class _HCheckboxState extends State<HCheckbox> {
                 ],
               ),
             ),
-          ),
-        ),
       ),
     );
   }
-}
-
-/// Das Kästchen selbst: leer eine Haarlinie, angehakt die Akzentfüllung mit
-/// dem Haken in [HSurfaceColors.onAccent].
-///
-/// [HSurfaceColors.accentFill] und nicht [HSurfaceColors.accent]: das Wort auf
-/// der Fläche erreicht dort 4,5:1 statt 3,73:1, und der Primärbutton macht es
-/// seit derselben Runde genauso (`docs/UX.md` 6). Deaktiviert trägt das
-/// Kästchen `fg2` statt des Akzents.
-class _HTick extends StatelessWidget {
-  const _HTick({required this.on, required this.enabled});
-
-  final bool on;
-  final bool enabled;
-
-  @override
-  Widget build(BuildContext context) {
-    final HTokens tokens = HTheme.of(context);
-    final Color filled = enabled ? tokens.colors.accentFill : tokens.colors.fg2;
-    final Color empty = enabled ? tokens.colors.lineStrong : tokens.colors.fg2;
-    return SizedBox.square(
-      dimension: 14,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: on ? filled : const Color(0x00000000),
-          borderRadius: HRadius.badgeRadius,
-          border: Border.all(color: on ? filled : empty),
-        ),
-        child: on
-            ? CustomPaint(painter: _HTickPainter(tokens.colors.onAccent))
-            : null,
-      ),
-    );
-  }
-}
-
-class _HTickPainter extends CustomPainter {
-  _HTickPainter(this.color);
-
-  final Color color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final Paint stroke = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..color = color;
-    final Path path = Path()
-      ..moveTo(size.width * 0.22, size.height * 0.52)
-      ..lineTo(size.width * 0.42, size.height * 0.74)
-      ..lineTo(size.width * 0.78, size.height * 0.28);
-    canvas.drawPath(path, stroke);
-  }
-
-  @override
-  bool shouldRepaint(_HTickPainter oldDelegate) => oldDelegate.color != color;
 }

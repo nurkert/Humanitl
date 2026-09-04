@@ -164,6 +164,15 @@ abstract final class HSize {
   /// Diameter of the state glyph in a row.
   static const double glyph = 16;
 
+  /// Kantenlänge des Kästchens in `HCheckbox`.
+  ///
+  /// Wie [glyph] und [splitter] eine Zeichen-Geometrie und deshalb
+  /// ausdrücklich nicht auf dem Vierer-Raster: bei 16 px stünde das Kästchen
+  /// so hoch wie die Zeile, in der es sitzt, und läse sich als Fläche statt
+  /// als Marke. Ein Token, weil die Bibliothek die Größe ihres Kästchens aus
+  /// dem Theme nimmt und der Wert sonst zweimal geschrieben würde.
+  static const double tick = 14;
+
   /// Stroke width of the countdown ring around a state glyph.
   static const double ringStroke = 1.5;
 

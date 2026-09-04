@@ -1,7 +1,9 @@
 import 'package:flutter/widgets.dart';
+import 'package:shadcn_flutter/shadcn_flutter.dart' as shad;
 
 import '../tokens/tokens.dart';
 import '../tokens/typography.dart';
+import 'shadcn_theme.dart';
 
 /// Which theme the application shows.
 enum HThemeMode {
@@ -28,8 +30,12 @@ enum HThemeMode {
 /// Publishes a set of [HTokens] to the widget tree.
 ///
 /// Every widget in this package reads its colours through [HTheme.of]; none of
-/// them takes a colour argument it could have looked up. When a component
-/// library arrives, this is the one place that has to learn about it.
+/// them takes a colour argument it could have looked up. Dies ist zugleich die
+/// eine Stelle, die von `shadcn_flutter` weiß: sie baut aus den Token das
+/// `ThemeData` der Bibliothek ([HShadcnTheme]) und veröffentlicht daneben die
+/// Komponententhemen, aus denen Button, Eingabefeld, Kästchen, Haarlinie,
+/// Karte und Fokusring der Bibliothek ihre Farben nehmen. Ein Bildschirm sieht
+/// davon nichts; er sieht `HButton`, `HRow`, `HModal`.
 class HTheme extends StatelessWidget {
   /// Publishes [tokens] to [child].
   const HTheme({required this.tokens, required this.child, super.key});
@@ -56,13 +62,81 @@ class HTheme extends StatelessWidget {
   static HTokens? maybeOf(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<_HThemeScope>()?.tokens;
 
+  /// Stellt sicher, dass [child] ein Theme der Bibliothek über sich hat.
+  ///
+  /// `Theme.of` der Bibliothek bricht ab, wenn keines da ist, und jedes
+  /// `H*`-Widget, das eine ihrer Komponenten aufhängt, liefe damit ohne
+  /// [HTheme] in eine Zusicherung statt in die dunklen Token. [HTheme.of]
+  /// verspricht seit jeher den Rückfall, also hält ihn diese Funktion.
+  ///
+  /// Im Normalfall — und der ist in der Anwendung wie im Testgerüst immer
+  /// gegeben — steht ein [HTheme] darüber, und die Funktion gibt [child]
+  /// unverändert zurück. Sie kostet dann kein einziges Element, was in einer
+  /// Liste über zehntausend Zeilen der Unterschied zwischen einem Token-Lesen
+  /// und zehntausend zusätzlichen `InheritedWidget`s ist.
+  static Widget host(BuildContext context, Widget child) =>
+      maybeOf(context) == null
+      ? shad.Theme(data: HShadcnTheme.of(HTokens.dark), child: child)
+      : child;
+
   @override
   Widget build(BuildContext context) {
+    final HShadcnBundle bundle = HShadcnTheme.bundle(tokens);
     return _HThemeScope(
       tokens: tokens,
-      child: DefaultTextStyle(
-        style: HType.ui13.copyWith(color: tokens.colors.fg0),
-        child: child,
+      child: shad.Theme(
+        data: bundle.theme,
+        child: shad.ComponentTheme<shad.FocusOutlineTheme>(
+          data: bundle.focusOutline,
+          child: shad.ComponentTheme<shad.TextFieldTheme>(
+            data: bundle.textField,
+            child: shad.ComponentTheme<shad.CheckboxTheme>(
+              data: bundle.checkbox,
+              child: shad.ComponentTheme<shad.DividerTheme>(
+                data: bundle.divider,
+                child: shad.ComponentTheme<shad.CardTheme>(
+                  data: bundle.card,
+                  child: shad.ComponentTheme<shad.OutlinedContainerTheme>(
+                    data: bundle.outlinedContainer,
+                    child: shad.ComponentTheme<shad.BadgeTheme>(
+                      data: bundle.badge,
+                      child: shad.ComponentTheme<shad.PrimaryButtonTheme>(
+                        data: bundle.primaryButton,
+                        child: shad.ComponentTheme<shad.SecondaryButtonTheme>(
+                          data: bundle.secondaryButton,
+                          child: shad.ComponentTheme<shad.GhostButtonTheme>(
+                            data: bundle.ghostButton,
+                            child:
+                                shad.ComponentTheme<
+                                  shad.DestructiveButtonTheme
+                                >(
+                                  data: bundle.destructiveButton,
+                                  child:
+                                      shad.ComponentTheme<shad.TextButtonTheme>(
+                                        data: bundle.textButton,
+                                        child:
+                                            shad.ComponentTheme<
+                                              shad.MutedButtonTheme
+                                            >(
+                                              data: bundle.mutedButton,
+                                              child: DefaultTextStyle(
+                                                style: tokens.typography.ui13
+                                                    .tinted(tokens.colors.fg0),
+                                                child: child,
+                                              ),
+                                            ),
+                                      ),
+                                ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

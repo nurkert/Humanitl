@@ -1,6 +1,11 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl_ui/humanitl_ui.dart';
+// Die Bruecke steht mit Absicht nicht in `humanitl_ui.dart`: sie fuehrt Typen
+// der Bibliothek in ihrer Signatur, und was dort hinausginge, koennte ein
+// Feature benutzen. Der Test des Pakets greift ueber den Pfad zu.
+import 'package:humanitl_ui/src/theme/shadcn_theme.dart';
+import 'package:shadcn_flutter/shadcn_flutter.dart' as shad;
 
 import 'harness.dart';
 
@@ -1109,6 +1114,260 @@ void main() {
       expect(HThemeMode.system.resolve(Brightness.dark), HTokens.dark);
       expect(HThemeMode.system.resolve(Brightness.light), HTokens.light);
       expect(HThemeMode.system.configValue, 'system');
+    });
+  });
+
+  group('das Theme der Bibliothek', () {
+    // Die Richtung ist die eigentliche Entwurfsfrage: `HTokens` speist das
+    // `ThemeData` von `shadcn_flutter`, nicht umgekehrt. Zwei Paletten
+    // nebeneinander sind keine Lösung, und dieser Test ist die Sicherung
+    // dagegen (`app/packages/ui/lib/src/theme/shadcn_theme.dart`).
+    test('jede Farbe des ColorScheme ist eine Farbe unserer Leiter', () {
+      for (final Brightness brightness in Brightness.values) {
+        final HTokens tokens = HTokens.forBrightness(brightness);
+        final shad.ColorScheme scheme = HShadcnTheme.colorScheme(tokens);
+        final HSurfaceColors c = tokens.colors;
+        expect(scheme.brightness, tokens.brightness);
+        expect(scheme.background, c.bg0);
+        expect(scheme.foreground, c.fg0);
+        expect(scheme.card, c.bg1);
+        expect(scheme.popover, c.bg2);
+        expect(scheme.primary, c.accentFill);
+        expect(scheme.primaryForeground, c.onAccent);
+        expect(scheme.secondary, c.bg2);
+        expect(scheme.muted, c.bg2);
+        expect(scheme.mutedForeground, c.fg2);
+        // `accent` heißt in shadcn die Hover-Fläche eines Menüeintrags und
+        // nicht die Markenfarbe; unser Akzent gehört auf `ring` und `primary`.
+        expect(scheme.accent, c.bg3);
+        expect(scheme.accent, isNot(c.accent));
+        expect(scheme.ring, c.accent);
+        expect(scheme.destructive, tokens.state.blocked);
+        expect(scheme.border, c.line);
+        expect(scheme.input, c.line);
+
+        // Und dann über die Farbkarte des Schemas selbst, nicht über eine
+        // Handliste: sonst prüft der Test die Liste und nicht das Schema, und
+        // ein Feld, das die Bibliothek beim nächsten Aufstieg hinzufügt —
+        // oder eines, das wir heute übersehen —, fiele durch. `toMap` ist
+        // ihre eigene vollständige Aufzählung.
+        final Set<String> ours = <Color>[
+          c.bg0,
+          c.bg1,
+          c.bg2,
+          c.bg3,
+          c.line,
+          c.lineStrong,
+          c.fg0,
+          c.fg1,
+          c.fg2,
+          c.accent,
+          c.accentText,
+          c.accentFill,
+          c.onAccent,
+          for (final HFlowState state in HFlowState.values)
+            tokens.stateColor(state),
+          for (final HFlowState state in HFlowState.values)
+            tokens.stateTextColor(state),
+        ].map(shad.hexFromColor).toSet();
+        final Map<String, String> painted = scheme.toMap();
+        // Beide Aufzählungen der Bibliothek — `colorKeys` und `toMap` — sind
+        // von Hand gepflegt. Ein Feld, das ein Aufstieg hinzufügt, ohne in
+        // beide einzugehen, fiele durch. Deshalb ein Kanarienvogel auf die
+        // Anzahl: er zwingt bei jedem Aufstieg zu einem Blick in
+        // `color_scheme.dart`.
+        expect(
+          shad.ColorScheme.colorKeys.length,
+          24,
+          reason:
+              'shadcn_flutter führt eine andere Zahl von Farbfeldern als '
+              'zuletzt geprüft; die Zuordnung in HShadcnTheme nachziehen',
+        );
+        expect(
+          painted.keys.where((String key) => key != 'brightness').toSet(),
+          shad.ColorScheme.colorKeys,
+          reason:
+              'die Bibliothek führt ein Farbfeld, das die Liste nicht kennt',
+        );
+        for (final String key in shad.ColorScheme.colorKeys) {
+          final String? hex = painted[key];
+          expect(hex, isNotNull, reason: '$key fehlt in der Farbkarte');
+          expect(
+            ours.contains(hex),
+            isTrue,
+            reason:
+                '${brightness.name} $key ist $hex und steht in keinem Token',
+          );
+        }
+      }
+    });
+
+    test('jede Füllung eines Controls trägt ihr Wort', () {
+      // Die Kontrastprüfungen sweepen die Zustandsleiter; die neutralen
+      // Füllungen der Controls standen nicht darin. Mit dem Umbau ist
+      // `lineStrong` als Druckfläche dazugekommen — die einzige neutrale
+      // Farbe über `bg3` —, und eine Fläche, die niemand nachrechnet, ist
+      // genau die, auf der ein Wort verschwindet (`docs/UX.md` 6).
+      for (final Brightness brightness in Brightness.values) {
+        final HTokens tokens = HTokens.forBrightness(brightness);
+        for (final HShadcnButtonRole role in HShadcnButtonRole.values) {
+          for (final Set<WidgetState> states in <Set<WidgetState>>[
+            const <WidgetState>{},
+            const <WidgetState>{WidgetState.hovered},
+            const <WidgetState>{WidgetState.pressed},
+            const <WidgetState>{WidgetState.disabled},
+          ]) {
+            final Color fill = HShadcnButtonStyle.fillOf(tokens, role, states);
+            final Color label = HShadcnButtonStyle.textStyle(
+              tokens,
+              role,
+              states,
+            ).color!;
+            for (final Color surface in tokens.colors.ladder) {
+              final double contrast = HColorDerivation.contrast(
+                label,
+                HColorDerivation.flatten(fill, surface),
+              );
+              // Ein wirklich deaktiviertes Control trägt `fg2`, und `fg2` ist
+              // von der 4,5:1 ausgenommen: `docs/UX.md` 6 hält die Stufe
+              // genau dafür frei und nennt ihre 3,02:1 namentlich.
+              final double floor = states.contains(WidgetState.disabled)
+                  ? HColorDerivation.areaMinContrast
+                  : HColorDerivation.textMinContrast;
+              expect(
+                contrast,
+                greaterThanOrEqualTo(floor),
+                reason:
+                    '${brightness.name} ${role.name} $states auf '
+                    '${HColorDerivation.toHex(surface)} misst '
+                    '${contrast.toStringAsFixed(2)}',
+              );
+            }
+          }
+        }
+        for (final bool selected in <bool>[true, false]) {
+          // Auch `disabled`: `HSegment(enabled: false)` ist erreichbar — der
+          // Regel-Editor schaltet die Segmente einer gebündelten Regel ab —,
+          // und beide Segment-Funktionen führen dafür einen eigenen Zweig.
+          // Genau diese Rolle-mal-Zustand-Kombination ist die, für die dieser
+          // Sweep geschrieben ist.
+          for (final Set<WidgetState> states in <Set<WidgetState>>[
+            const <WidgetState>{},
+            const <WidgetState>{WidgetState.hovered},
+            const <WidgetState>{WidgetState.pressed},
+            const <WidgetState>{WidgetState.disabled},
+          ]) {
+            final Color fill = HShadcnButtonStyle.segmentFill(
+              tokens,
+              states,
+              selected: selected,
+            );
+            final Color label = HShadcnButtonStyle.segmentTextColor(
+              tokens,
+              states,
+              selected: selected,
+            );
+            final double floor = states.contains(WidgetState.disabled)
+                ? HColorDerivation.areaMinContrast
+                : HColorDerivation.textMinContrast;
+            for (final Color surface in tokens.colors.ladder) {
+              final double contrast = HColorDerivation.contrast(
+                label,
+                HColorDerivation.flatten(fill, surface),
+              );
+              expect(
+                contrast,
+                greaterThanOrEqualTo(floor),
+                reason:
+                    '${brightness.name} Segment selected=$selected $states '
+                    'auf ${HColorDerivation.toHex(surface)} misst '
+                    '${contrast.toStringAsFixed(2)}',
+              );
+            }
+          }
+        }
+      }
+    });
+
+    test('die Typografie der Bibliothek ist die Skala aus BACKLOG 5', () {
+      final shad.Typography type = HShadcnTheme.typography(HTokens.dark);
+      expect(type.xSmall, HType.ui11);
+      expect(type.small, HType.ui12);
+      expect(type.base, HType.ui13);
+      expect(type.large, HType.ui16);
+      expect(type.xLarge, HType.ui20);
+      // Die Skala kennt kein 700 und kein 800; alles Schwerere fällt auf 600.
+      for (final TextStyle style in <TextStyle>[
+        type.bold,
+        type.extraBold,
+        type.black,
+        type.semiBold,
+      ]) {
+        expect(style.fontWeight, HType.semibold);
+      }
+      for (final TextStyle style in <TextStyle>[
+        type.thin,
+        type.light,
+        type.extraLight,
+        type.normal,
+      ]) {
+        expect(style.fontWeight, HType.regular);
+      }
+    });
+
+    test('Ecke und Dichte der Bibliothek kommen aus den Token', () {
+      final shad.ThemeData theme = HShadcnTheme.of(HTokens.dark);
+      // `radiusMd` ist die Ecke, die jedes Control der Bibliothek nimmt.
+      expect(theme.radiusMd, closeTo(HRadius.control, 1e-9));
+      expect(theme.scaling, 1);
+      expect(theme.density.baseGap, HSpace.x2);
+      expect(theme.density.baseContentPadding, HSpace.x3);
+      expect(theme.density.baseContainerPadding, HSpace.x3);
+      // Die Rueckmeldung auf einen Druck ist eine Fuellung und kein
+      // Schrumpfen der Flaeche (`docs/UX.md` 2.2 und 2.8).
+      expect(theme.enableFeedback, isFalse);
+    });
+
+    test('dasselbe Token liefert dasselbe Bündel', () {
+      // `ButtonTheme` und Verwandte vergleichen sich über
+      // Funktionsidentität; ein bei jedem Aufbau neu erzeugtes Bündel meldete
+      // jedem Button des Baumes eine Themenänderung.
+      expect(
+        identical(
+          HShadcnTheme.bundle(HTokens.dark),
+          HShadcnTheme.bundle(HTokens.dark),
+        ),
+        isTrue,
+      );
+      expect(
+        HShadcnTheme.bundle(HTokens.dark),
+        isNot(HShadcnTheme.bundle(HTokens.light)),
+      );
+      // Auch für Token, die nicht die beiden Singletons sind: der Speicher
+      // hängt am Token und nicht in einer Karte, die niemand räumt. Zwei
+      // gleich aussehende Token-Sätze sind zwei Objekte — [HTokens] hat kein
+      // `==` — und bekommen deshalb zwei Bündel.
+      final HTokens one = HTokens(
+        brightness: Brightness.dark,
+        colors: HSurfaceColors.dark,
+        state: HStateColors.dark,
+        method: HMethodColors.dark,
+        stateText: HStateColors.darkText,
+        methodText: HMethodColors.darkText,
+      );
+      final HTokens two = HTokens(
+        brightness: Brightness.dark,
+        colors: HSurfaceColors.dark,
+        state: HStateColors.dark,
+        method: HMethodColors.dark,
+        stateText: HStateColors.darkText,
+        methodText: HMethodColors.darkText,
+      );
+      expect(
+        identical(HShadcnTheme.bundle(one), HShadcnTheme.bundle(one)),
+        isTrue,
+      );
+      expect(HShadcnTheme.bundle(one), isNot(HShadcnTheme.bundle(two)));
     });
   });
 

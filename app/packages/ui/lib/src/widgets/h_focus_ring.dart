@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 
 import '../theme/h_theme.dart';
+import '../theme/shadcn_theme.dart';
 import '../tokens/colors.dart';
 import '../tokens/tokens.dart';
 
@@ -59,7 +60,10 @@ class HFocusRing extends StatelessWidget {
        _reserve = false;
 
   /// Die Breite des Rings. Zwei Pixel, wie `docs/UX.md` 6 sie nennt.
-  static const double width = 2;
+  ///
+  /// Der Wert steht in [HFocusRingMetrics], weil der Ring der Bibliothek
+  /// (`FocusOutline`, gesetzt in `HTheme`) dieselben zwei Pixel braucht.
+  static const double width = HFocusRingMetrics.width;
 
   /// Der Abstand zwischen dem Control und dem Ring.
   ///
@@ -67,7 +71,7 @@ class HFocusRing extends StatelessWidget {
   /// liegt. Gilt nur für [HFocusRing.new] und nur über einer Füllung, gegen
   /// die der Ring sonst verschwände; [HFocusRing.inline] hat kein Außen, in
   /// das ein Abstand passte.
-  static const double gap = 2;
+  static const double gap = HFocusRingMetrics.gap;
 
   /// Ob ein Ring in [ring] neben der Füllung [fill] einen [gap] braucht.
   ///

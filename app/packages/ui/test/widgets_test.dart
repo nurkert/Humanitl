@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl_ui/humanitl_ui.dart';
+import 'package:shadcn_flutter/shadcn_flutter.dart' as shad;
 
 import 'harness.dart';
 
@@ -123,18 +124,13 @@ void main() {
               ),
             ),
           );
-          BoxDecoration decorationOf(String key) {
-            final Container container = tester.widget<Container>(
-              find.descendant(
-                of: find.byKey(Key(key)),
-                matching: find.byType(Container),
-              ),
-            );
-            return container.decoration! as BoxDecoration;
-          }
+          BoxDecoration decorationOf(String key) =>
+              paintedDecoration(tester, find.byKey(Key(key)));
 
           expect(buttonFill(tester, 'plain'), tokens.colors.bg2);
-          expect(buttonFill(tester, 'pressed'), tokens.colors.bg3);
+          // Drei Flächen, nicht zwei: der Druck steht eine Stufe über dem
+          // Überfahren, sonst sieht ein Klick aus wie ein Zeiger.
+          expect(buttonFill(tester, 'pressed'), tokens.colors.lineStrong);
           expect(buttonFill(tester, 'hovered'), tokens.colors.bg3);
           // Der Fokus färbt den vorhandenen Rahmen nicht um; er kommt als
           // zwei Pixel Akzent außerhalb (`docs/UX.md` 6).
@@ -622,11 +618,7 @@ void main() {
         await tester.pump();
         final Color label = tokens.stateTextColor(HFlowState.blocked);
         for (final String text in <String>['own', 'foreign']) {
-          expect(
-            tester.widget<Text>(find.text(text)).style?.color,
-            label,
-            reason: text,
-          );
+          expect(paintedTextColor(tester, text), label, reason: text);
         }
         expect(tester.takeException(), isNull);
       });
@@ -1131,6 +1123,204 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  group('das Theme der Bibliothek', () {
+    testWidgets('ein Button der Bibliothek malt in unserer Palette', (
+      WidgetTester tester,
+    ) async {
+      // `HTheme` legt die Ableitung aus [HTokens] in die `ButtonTheme`-
+      // Einträge der Bibliothek. Damit malt auch ein Button, den dieses Paket
+      // nicht selbst aufhängt — die Aktionen eines Dialogs etwa —, in
+      // unserer Palette und nicht in `ColorSchemes.darkSlate`.
+      for (final Brightness brightness in Brightness.values) {
+        final HTokens tokens = HTokens.forBrightness(brightness);
+        for (final (String name, shad.AbstractButtonStyle style, Color expected)
+            in <(String, shad.AbstractButtonStyle, Color)>[
+              (
+                'primary',
+                shad.ButtonVariance.primary,
+                tokens.colors.accentFill,
+              ),
+              ('secondary', shad.ButtonVariance.secondary, tokens.colors.bg2),
+              (
+                'destructive',
+                shad.ButtonVariance.destructive,
+                HColorDerivation.tint(tokens.state.blocked),
+              ),
+            ]) {
+          await tester.pumpWidget(
+            harness(
+              brightness: brightness,
+              shad.Button(
+                style: style,
+                onPressed: () {},
+                child: const Text('x'),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(
+            paintedFill(tester, find.byType(shad.Button)),
+            expected,
+            reason: '${brightness.name} $name',
+          );
+        }
+      }
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('jede Buttonrolle der Bibliothek', () {
+    testWidgets('trägt ihr Wort in unserer Palette, nicht in ihrer', (
+      WidgetTester tester,
+    ) async {
+      // Die Aussage „jede Komponente der Bibliothek malt in unserer Palette"
+      // gilt nur so weit, wie ihre Rollen ein Thema haben. Zwei von zwölf
+      // schrieben ihr Wort im Ruhezustand in `mutedForeground` — bei uns
+      // `fg2`, die Stufe für wirklich Deaktiviertes, 3,39:1 auf `bg2`. Heute
+      // baut kein gewickeltes Widget so einen Knopf; der erste Wrapper für
+      // Kontextmenü oder Datum-Zeit-Wähler bringt einen mit. Deshalb steht
+      // hier die ganze Tabelle und nicht die vier, die dieses Paket selbst
+      // benutzt.
+      const List<(String, shad.AbstractButtonStyle)> roles =
+          <(String, shad.AbstractButtonStyle)>[
+            ('primary', shad.ButtonVariance.primary),
+            ('secondary', shad.ButtonVariance.secondary),
+            ('outline', shad.ButtonVariance.outline),
+            ('ghost', shad.ButtonVariance.ghost),
+            ('link', shad.ButtonVariance.link),
+            ('text', shad.ButtonVariance.text),
+            ('destructive', shad.ButtonVariance.destructive),
+            ('fixed', shad.ButtonVariance.fixed),
+            ('menu', shad.ButtonVariance.menu),
+            ('menubar', shad.ButtonVariance.menubar),
+            ('muted', shad.ButtonVariance.muted),
+            ('card', shad.ButtonVariance.card),
+          ];
+      for (final Brightness brightness in Brightness.values) {
+        final HTokens tokens = HTokens.forBrightness(brightness);
+        for (final (String name, shad.AbstractButtonStyle style) in roles) {
+          await tester.pumpWidget(
+            harness(
+              brightness: brightness,
+              shad.Button(
+                style: style,
+                onPressed: () {},
+                child: const Text('Regel'),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+          final Color fill = paintedFill(tester, find.byType(shad.Button));
+          final Color label = paintedTextColor(tester, 'Regel')!;
+          expect(
+            label,
+            isNot(tokens.colors.fg2),
+            reason: '$name schreibt in der Deaktiviert-Stufe',
+          );
+          for (final Color surface in tokens.colors.ladder) {
+            final double contrast = HColorDerivation.contrast(
+              label,
+              HColorDerivation.flatten(fill, surface),
+            );
+            expect(
+              contrast,
+              greaterThanOrEqualTo(HColorDerivation.textMinContrast),
+              reason:
+                  '${brightness.name} $name auf '
+                  '${HColorDerivation.toHex(surface)} misst '
+                  '${contrast.toStringAsFixed(2)}',
+            );
+          }
+        }
+      }
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('der gedrückte Zustand', () {
+    // `shadcn_flutter` zeigt auf dem Desktop keinen: ihre Vorgaben kennen nur
+    // `hovered` und `disabled`, und ihre einzige Druck-Rückmeldung hängt an
+    // `enableFeedback`, der unter Linux aus ist. Ein Control, das auf einen
+    // Klick nichts tut, fühlt sich kaputt an
+    // (`docs/adr/0009-ui-stack.md`, Revision vom 2026-09-04).
+    testWidgets('jede Buttonvariante malt beim Druck eine andere Fläche', (
+      WidgetTester tester,
+    ) async {
+      for (final HButtonVariant variant in HButtonVariant.values) {
+        await tester.pumpWidget(harness(buttonStates(variant)));
+        await tester.pumpAndSettle();
+        final Color rest = buttonFill(tester, 'rest');
+        final Color hovered = buttonFill(tester, 'hovered');
+        final Color pressed = buttonFill(tester, 'pressed');
+        expect(pressed, isNot(rest), reason: '${variant.name} rest/pressed');
+        expect(
+          pressed,
+          isNot(hovered),
+          reason: '${variant.name} hover/pressed',
+        );
+      }
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets(
+      'HIconButton und HSegment füllen unter dem Zeiger und beim Druck',
+      (WidgetTester tester) async {
+        await tester.pumpWidget(
+          harness(
+            keyboard(
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  HIconButton(
+                    glyph: HGlyph.close,
+                    onPressed: () {},
+                    semanticsLabel: 'close',
+                  ),
+                  HSegmented<int>(
+                    selected: 1,
+                    onSelect: (int value) {},
+                    options: const <HSegmentOption<int>>[
+                      HSegmentOption<int>(value: 2, label: 'block'),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        for (final Finder control in <Finder>[
+          find.byType(HIconButton),
+          find.byType(HSegment<int>),
+        ]) {
+          final Color rest = paintedFill(tester, control);
+          final TestGesture gesture = await tester.startGesture(
+            tester.getCenter(control),
+            kind: PointerDeviceKind.mouse,
+          );
+          await tester.pumpAndSettle();
+          expect(
+            paintedFill(tester, control),
+            isNot(rest),
+            reason: 'kein sichtbarer Druck',
+          );
+          final Color pressed = paintedFill(tester, control);
+          await gesture.up();
+          await tester.pumpAndSettle();
+          // Der Zeiger steht nach dem Loslassen noch auf dem Control, also
+          // bleibt die Hover-Füllung stehen — aber nicht die des Drucks.
+          expect(paintedFill(tester, control), isNot(pressed));
+          await gesture.removePointer();
+          await tester.pumpAndSettle();
+          expect(paintedFill(tester, control), rest);
+        }
+        expect(tester.takeException(), isNull);
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.linux),
+    );
+  });
+
   testWidgets('widgets fall back to the dark tokens without a theme', (
     WidgetTester tester,
   ) async {
@@ -1145,8 +1335,7 @@ void main() {
     );
     expect(find.text('no theme'), findsOneWidget);
     // The fallback is the dark token set, not merely "something renders".
-    final Text label = tester.widget<Text>(find.text('no theme'));
-    expect(label.style?.color, HTokens.dark.colors.fg1);
+    expect(paintedTextColor(tester, 'no theme'), HTokens.dark.colors.fg1);
     expect(tester.takeException(), isNull);
   });
 
