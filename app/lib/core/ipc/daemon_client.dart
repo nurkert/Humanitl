@@ -93,6 +93,38 @@ abstract class DaemonClient {
   /// `GetBody`: the content behind a body reference, in chunks.
   Stream<Uint8List> getBody(BodyRef ref);
 
+  /// `Sandbox(Status)`: what the agent gets right now.
+  ///
+  /// The stream carries one snapshot and ends. It is a stream and not a
+  /// future because the contract has one `Sandbox` RPC and every operation
+  /// answers on it; a start reports twice, a status once.
+  Stream<SandboxUpdate> sandboxStatus();
+
+  /// `Sandbox(Plan)`: the snapshot a start with these settings would have,
+  /// without starting anything.
+  ///
+  /// This is how the project directory picker shows what it is about to do:
+  /// mounts, environment and command line come back from the daemon for a
+  /// directory that does not apply yet. Every argument left out keeps the
+  /// value the daemon already has.
+  Stream<SandboxUpdate> planSandbox({
+    String? profile,
+    String? workDir,
+    WorkMode? workMode,
+  });
+
+  /// `Sandbox(Start)`: starts the sandbox and reports `starting`, then
+  /// `running`, or a diagnostic and `failed`.
+  Stream<SandboxUpdate> startSandbox({
+    String? profile,
+    String? workDir,
+    WorkMode? workMode,
+  });
+
+  /// `Sandbox(Stop)`: stops the sandbox and reports `stopping`, then
+  /// `stopped`.
+  Stream<SandboxUpdate> stopSandbox();
+
   /// Releases the transport. The client is unusable afterwards.
   Future<void> close();
 }

@@ -74,6 +74,9 @@ void main() {
       FindingLocation.values,
       'FINDING_LOCATION_',
     );
+    checkParity(pb.SandboxState.values, SandboxState.values, 'SANDBOX_STATE_');
+    checkParity(pb.MountMode.values, MountMode.values, 'MOUNT_MODE_');
+    checkParity(pb.ValueOrigin.values, ValueOrigin.values, 'VALUE_ORIGIN_');
   });
 
   test('Info becomes DaemonInfo', () {

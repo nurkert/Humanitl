@@ -59,15 +59,17 @@ use tonic::{Request, Response, Status};
 
 use crate::domains::DomainTable;
 use crate::rules::RulesService;
+use crate::sandbox::SandboxService;
 use crate::server_stub::{BoxStream, diagnostic_to_status};
 use crate::{PROTO_MAJOR, PROTO_MINOR, auth, convert, rules, v1, validate};
 
 /// Was dieser Daemon in M1 kann.
 ///
-/// Die Liste ist eine Zusage, keine Absichtserklärung: `sandbox.bwrap` und
-/// `findings.regex` fehlen, solange die zugehörigen RPCs `UNIMPLEMENTED`
-/// liefern (HUM-040, HUM-025). Ein Client, der danach schaltet, soll nicht in
-/// einen Fehler laufen.
+/// Die Liste ist eine Zusage, keine Absichtserklärung: `findings.regex` fehlt,
+/// solange die zugehörige RPC `UNIMPLEMENTED` liefert (HUM-025). Ein Client,
+/// der danach schaltet, soll nicht in einen Fehler laufen. `sandbox.bwrap`
+/// kommt erst mit [`IpcServer::with_sandbox`] dazu, also genau dann, wenn
+/// dieser Daemon wirklich eine Sandbox planen und starten kann (HUM-040).
 pub const CAPABILITIES: &[&str] = &["hold", "proxy.h1"];
 
 /// Vorgabe für `ListFlowsRequest.limit`, wie im Vertrag beschrieben.
@@ -114,6 +116,11 @@ pub struct IpcServer {
     /// statt still zu verschwinden.
     llm_probe: Option<Arc<LlmProbe>>,
     llm_probe_error: Option<Diagnostic>,
+    /// Die Sandbox dieser Sitzung: Einhängungen, Umgebung, Kommandozeile,
+    /// Start und Stopp (HUM-040). `None` in einem Daemon, der ohne Sandbox
+    /// läuft; `Sandbox` antwortet dann mit `IPC_006` statt mit einer
+    /// erfundenen Momentaufnahme.
+    sandbox: Option<SandboxService>,
     bodies: BodyIndex,
 }
 
@@ -166,8 +173,22 @@ impl IpcServer {
             domains: None,
             llm_probe: probe.as_ref().ok().map(Arc::clone),
             llm_probe_error: probe.err(),
+            sandbox: None,
             bodies: BodyIndex::new(),
         }
+    }
+
+    /// Derselbe Dienst über der Sandbox dieser Sitzung (HUM-040).
+    ///
+    /// Mit ihr beantwortet `Sandbox` die Momentaufnahme aus dem Profil, das
+    /// auch startet, und startet und stoppt sie. Ohne sie bleibt es bei
+    /// `IPC_006`: ein Daemon, der keine Sandbox hat, soll das sagen, statt
+    /// eine leere Tabelle zu zeigen, die wie „nichts eingehängt" aussieht.
+    #[must_use]
+    pub fn with_sandbox(mut self, sandbox: SandboxService) -> Self {
+        self.info.capabilities.push("sandbox.bwrap".to_owned());
+        self.sandbox = Some(sandbox);
+        self
     }
 
     /// Derselbe Dienst mit einer anderen Probe; für Tests.
@@ -1000,11 +1021,30 @@ impl v1::humanitl_server::Humanitl for IpcServer {
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
     }
 
+    /// Was der Agent bekommt, und Start und Stopp (HUM-040).
+    ///
+    /// Der Strom endet, wenn die Operation beantwortet ist; er bleibt nicht
+    /// offen. Ein Client, der zusehen will, fragt nach jeder Änderung erneut —
+    /// die Ereignisse einer laufenden Sitzung (Terminal, Isolationsprüfungen)
+    /// kommen mit HUM-041 und HUM-042 dazu.
     async fn sandbox(
         &self,
-        _request: Request<v1::SandboxRequest>,
+        request: Request<v1::SandboxRequest>,
     ) -> Result<Response<Self::SandboxStream>, Status> {
-        Err(unimplemented("Sandbox", "sprint 3 with the sandbox panel"))
+        let sandbox = self.sandbox.as_ref().ok_or_else(|| {
+            diagnostic_to_status(
+                &Diagnostic::builder(codes::IPC_006, Severity::Error)
+                    .why(
+                        "this daemon runs without a sandbox, so it cannot say what an agent \
+                         would get or start one"
+                            .to_owned(),
+                    )
+                    .build(),
+            )
+        })?;
+        Ok(Response::new(Box::pin(
+            sandbox.stream(request.into_inner()).map(Ok),
+        )))
     }
 
     async fn terminal(
@@ -1316,11 +1356,6 @@ mod tests {
         let server = server(&queue);
         let codes = [
             server
-                .sandbox(Request::new(v1::SandboxRequest::default()))
-                .await
-                .err()
-                .map(|status| (status.code(), status.message().to_owned())),
-            server
                 .audit(Request::new(v1::AuditRequest::default()))
                 .await
                 .err()
@@ -1351,6 +1386,25 @@ mod tests {
             assert_eq!(code, tonic::Code::Unimplemented);
             assert!(message.contains("arrives in"), "{message}");
         }
+    }
+
+    /// Ohne Sandbox sagt der Dienst, dass er keine hat.
+    ///
+    /// Nicht `UNIMPLEMENTED`: Die RPC gibt es, dieser Daemon hat nur nichts,
+    /// wovon er berichten könnte. Eine leere Momentaufnahme wäre die falsche
+    /// Antwort — sie sähe aus wie „nichts eingehängt".
+    #[tokio::test]
+    async fn without_a_sandbox_the_rpc_says_the_daemon_has_none() {
+        let queue = queue();
+        let server = server(&queue);
+        let status = server
+            .sandbox(Request::new(v1::SandboxRequest::default()))
+            .await
+            .err()
+            .expect("a daemon without a sandbox must refuse");
+        let diagnostic =
+            crate::diagnostic_from_status(&status).expect("the refusal carries a diagnostic");
+        assert_eq!(diagnostic.code, codes::IPC_006.to_string());
     }
 
     /// Ein Endpunkt, der keine URL ist, wird gelesen, bevor der Dienst nach

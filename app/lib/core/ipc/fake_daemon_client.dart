@@ -173,6 +173,14 @@ class FakeDaemonClient implements DaemonClient {
   /// The socket the unavailable scenario pretends to have tried.
   static const String defaultSocket = '/run/user/1000/humanitl/daemon.sock';
 
+  /// Die Sandbox, die der Fake startet.
+  static const SandboxId defaultSandbox = SandboxId(
+    '018f0002-0000-7000-8000-000000000001',
+  );
+
+  /// Das Projektverzeichnis, das der Fake einhaengt.
+  static const String defaultWorkDir = '/home/nik/clients/acme';
+
   /// The session every scripted flow belongs to.
   static const SessionId defaultSession = SessionId(
     '018f0001-0000-7000-8000-000000000001',
@@ -265,6 +273,14 @@ class FakeDaemonClient implements DaemonClient {
   /// answers with when the file was read again; the `rules:broken` scenario
   /// replaces it with a refused file.
   List<Diagnostic> reloadDiagnostics = <Diagnostic>[defaultReloadReport];
+
+  /// Die Momentaufnahme der Sandbox (HUM-040). Sie steht hier und nicht in
+  /// [state], weil sie kein Fluss ist und weil ein Test sie ohne Umweg setzen
+  /// koennen soll -- etwa auf `failed` mit einem blockierenden Befund.
+  SandboxStatus sandbox = defaultSandbox_();
+
+  /// Was ein Start meldet, statt zu laufen. `null` heisst: er laeuft.
+  Diagnostic? sandboxStartFailure;
 
   /// The rules the person created, session rules first. `Decide.remember`
   /// adds to it, `Rules(remove)` takes from it.
@@ -879,6 +895,109 @@ class FakeDaemonClient implements DaemonClient {
     if (body != null && body.isNotEmpty) {
       yield body;
     }
+  }
+
+  // --- Sandbox (HUM-040) ---------------------------------------------------
+  //
+  // Der Fake spielt genau die Momentaufnahme, die der echte Daemon liefert:
+  // dieselben Einhaengungen, dieselbe Umgebung samt einem Geheimnis und
+  // dieselbe Kommandozeile. Sie ist als Fake gekennzeichnet, damit niemand
+  // eine gemessene Zeile fuer eine gespielte haelt (CONVENTIONS 4.7).
+
+  @override
+  Stream<SandboxUpdate> sandboxStatus() async* {
+    _check();
+    // Wie beim echten Daemon: der Befund ist ein eigenes Ereignis und steckt
+    // nicht in der Momentaufnahme. Der Vertrag kennt in `SandboxEvent.Status`
+    // kein Feld dafuer, und ein Fake, der eines erfaende, pruefte einen Weg,
+    // den es nicht gibt (CONVENTIONS 4.7).
+    for (final Diagnostic diagnostic in sandbox.diagnostics) {
+      yield SandboxUpdate.diagnostic(diagnostic);
+    }
+    yield SandboxUpdate.status(sandbox);
+  }
+
+  @override
+  Stream<SandboxUpdate> planSandbox({
+    String? profile,
+    String? workDir,
+    WorkMode? workMode,
+  }) async* {
+    _check();
+    sandbox = sandbox.copyWith(
+      profile: profile ?? sandbox.profile,
+      workDirHost: workDir ?? sandbox.workDirHost,
+      workMode: workMode ?? sandbox.workMode,
+    );
+    sandbox = sandbox.copyWith(
+      mounts: fakeSandboxMounts(
+        workDir: sandbox.workDirHost ?? '',
+        workMode: sandbox.workMode,
+      ),
+      argvPreview: fakeSandboxArgv(
+        workDir: sandbox.workDirHost ?? '',
+        workMode: sandbox.workMode,
+      ),
+    );
+    yield SandboxUpdate.status(sandbox);
+  }
+
+  @override
+  Stream<SandboxUpdate> startSandbox({
+    String? profile,
+    String? workDir,
+    WorkMode? workMode,
+  }) async* {
+    _check();
+    await for (final SandboxUpdate update in planSandbox(
+      profile: profile,
+      workDir: workDir,
+      workMode: workMode,
+    )) {
+      // Der Plan ist nur die Vorbereitung; gemeldet wird er als `starting`.
+      if (update is SandboxUpdateStatus) {
+        sandbox = update.status.copyWith(state: SandboxState.starting);
+        yield SandboxUpdate.status(sandbox);
+      }
+    }
+    final Diagnostic? refusal = sandboxStartFailure;
+    if (refusal != null) {
+      sandbox = sandbox.copyWith(
+        state: SandboxState.failed,
+        agentRunning: false,
+        diagnostics: <Diagnostic>[...sandbox.diagnostics, refusal],
+      );
+      yield SandboxUpdate.diagnostic(refusal);
+      yield SandboxUpdate.status(sandbox);
+      return;
+    }
+    sandbox = sandbox.copyWith(
+      state: SandboxState.running,
+      agentRunning: true,
+      startedAt: _clock(),
+      sandboxId: defaultSandbox,
+    );
+    yield SandboxUpdate.log(
+      SandboxLogLine(at: _clock(), text: 'sandbox started, pid 4711 (fake)'),
+    );
+    yield SandboxUpdate.status(sandbox);
+  }
+
+  @override
+  Stream<SandboxUpdate> stopSandbox() async* {
+    _check();
+    sandbox = sandbox.copyWith(state: SandboxState.stopping);
+    yield SandboxUpdate.status(sandbox);
+    sandbox = sandbox.copyWith(
+      state: SandboxState.stopped,
+      agentRunning: false,
+      startedAt: null,
+      sandboxId: null,
+    );
+    yield SandboxUpdate.log(
+      SandboxLogLine(at: _clock(), text: 'sandbox stopped (fake)'),
+    );
+    yield SandboxUpdate.status(sandbox);
   }
 
   @override
@@ -2251,3 +2370,139 @@ class _SeededFlow {
 
 String _hexOfBytes(List<int> bytes) =>
     bytes.map((int b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+// --- Die gespielte Sandbox (HUM-040) ----------------------------------------
+//
+// Dieselbe Momentaufnahme, die der Rust-Fake liefert
+// (`daemon/crates/ipc/src/fake/mod.rs`). Beide Seiten muessen dasselbe zeigen,
+// sonst sieht der Bildschirm unter `--fake-client` anders aus als unter
+// `humanitld --fake` (CONVENTIONS 4.7).
+
+/// Der Zustand, mit dem der Fake beginnt: nichts laeuft, und der Bildschirm
+/// zeigt, was ein Start taete.
+SandboxStatus defaultSandbox_() => SandboxStatus(
+  profile: 'default',
+  sessionId: FakeDaemonClient.defaultSession,
+  workDirHost: FakeDaemonClient.defaultWorkDir,
+  llmEndpoint: 'http://192.168.1.50:11434',
+  mounts: fakeSandboxMounts(
+    workDir: FakeDaemonClient.defaultWorkDir,
+    workMode: WorkMode.rw,
+  ),
+  env: fakeSandboxEnv(),
+  argvPreview: fakeSandboxArgv(
+    workDir: FakeDaemonClient.defaultWorkDir,
+    workMode: WorkMode.rw,
+  ),
+);
+
+/// Jeder Pfad, den der Agent in der gespielten Sandbox saehe.
+List<MountEntry> fakeSandboxMounts({
+  required String workDir,
+  required WorkMode workMode,
+}) => <MountEntry>[
+  const MountEntry(dst: '/usr', src: '/usr', mode: MountMode.ro),
+  const MountEntry(dst: '/etc/ssl', src: '/etc/ssl', mode: MountMode.ro),
+  const MountEntry(
+    dst: '/etc/alternatives',
+    src: '/etc/alternatives',
+    mode: MountMode.ro,
+  ),
+  const MountEntry(dst: '/bin', mode: MountMode.symlink, linkTarget: 'usr/bin'),
+  const MountEntry(dst: '/proc', mode: MountMode.proc),
+  const MountEntry(dst: '/dev', mode: MountMode.dev),
+  const MountEntry(dst: '/tmp', mode: MountMode.tmpfs),
+  const MountEntry(dst: '/dev/shm', mode: MountMode.tmpfs),
+  MountEntry(
+    dst: '/work',
+    src: workDir,
+    mode: workMode == WorkMode.ro ? MountMode.ro : MountMode.rw,
+    origin: ValueOrigin.session,
+  ),
+  const MountEntry(dst: '/work/.git/hooks', mode: MountMode.tmpfs),
+  const MountEntry(dst: '/work/.envrc', mode: MountMode.masked),
+  const MountEntry(dst: '/work/.git/config', mode: MountMode.masked),
+  const MountEntry(
+    dst: '/run/humanitl/proxy.sock',
+    src: r'$XDG_RUNTIME_DIR/humanitl/proxy/proxy.sock',
+    mode: MountMode.ro,
+    origin: ValueOrigin.session,
+  ),
+  const MountEntry(
+    dst: '/etc/humanitl/ca.crt',
+    src: r'$XDG_DATA_HOME/humanitl/ca/ca.crt',
+    mode: MountMode.ro,
+    origin: ValueOrigin.session,
+  ),
+  const MountEntry(
+    dst: '/run/humanitl/humanitl-shim',
+    src: '/usr/lib/humanitl/humanitl-shim',
+    mode: MountMode.ro,
+    origin: ValueOrigin.session,
+  ),
+  const MountEntry(
+    dst: '/etc/humanitl/AGENTS.md',
+    mode: MountMode.masked,
+    origin: ValueOrigin.adapter,
+  ),
+];
+
+/// Die Umgebung der gespielten Sandbox, alphabetisch.
+///
+/// Zwei Werte sind zurueckgehalten, und beide heissen mit Absicht so, dass
+/// keine Regel ueber verdaechtige Endungen sie faende: `AWS_ACCESS_KEY_ID`
+/// endet auf `_ID`, `DATABASE_URL` traegt das Passwort in der URL. So zeigt
+/// auch der Fake, dass die Vorgabe „zurueckgehalten" lautet und nicht
+/// „sichtbar, ausser der Name klingt verdaechtig" (CONVENTIONS 4.17).
+List<EnvEntry> fakeSandboxEnv() => <EnvEntry>[
+  const EnvEntry(
+    key: 'AWS_ACCESS_KEY_ID',
+    origin: ValueOrigin.user,
+    withheld: true,
+  ),
+  const EnvEntry(key: 'DATABASE_URL', origin: ValueOrigin.user, withheld: true),
+  const EnvEntry(key: 'HOME', value: '/home/agent'),
+  const EnvEntry(key: 'HTTPS_PROXY', value: 'http://127.0.0.1:3128'),
+  const EnvEntry(key: 'HTTP_PROXY', value: 'http://127.0.0.1:3128'),
+  const EnvEntry(
+    key: 'HUMANITL_SESSION',
+    value: '018f0001-0000-7000-8000-000000000001',
+    origin: ValueOrigin.session,
+  ),
+  const EnvEntry(key: 'NO_PROXY'),
+  const EnvEntry(
+    key: 'OPENCODE_CONFIG',
+    value: '/etc/humanitl/opencode.json',
+    origin: ValueOrigin.adapter,
+  ),
+  const EnvEntry(key: 'PATH', value: '/usr/bin:/bin'),
+  const EnvEntry(key: 'SSL_CERT_FILE', value: '/etc/humanitl/ca.crt'),
+  const EnvEntry(key: 'TERM', value: 'xterm-256color'),
+  const EnvEntry(key: 'USER', value: 'agent'),
+];
+
+/// Die Kommandozeile der gespielten Sandbox als eine Zeile.
+String fakeSandboxArgv({required String workDir, required WorkMode workMode}) {
+  final String work = workMode == WorkMode.ro ? '--ro-bind' : '--bind';
+  return 'bwrap --unshare-user --unshare-ipc --unshare-pid --unshare-net '
+      '--unshare-uts --unshare-cgroup --die-with-parent --new-session '
+      '--cap-drop ALL --disable-userns --hostname sandbox '
+      '--ro-bind /usr /usr --ro-bind /etc/ssl /etc/ssl '
+      '--ro-bind /etc/alternatives /etc/alternatives --proc /proc --dev /dev '
+      '--tmpfs /tmp --tmpfs /dev/shm $work $workDir /work '
+      '--tmpfs /work/.git/hooks '
+      r'--ro-bind $XDG_RUNTIME_DIR/humanitl/proxy/proxy.sock '
+      '/run/humanitl/proxy.sock '
+      r'--ro-bind $XDG_DATA_HOME/humanitl/ca/ca.crt /etc/humanitl/ca.crt '
+      '--ro-bind /usr/lib/humanitl/humanitl-shim /run/humanitl/humanitl-shim '
+      '--ro-bind-data 15 /work/.envrc --ro-bind-data 16 /work/.git/config '
+      '--ro-bind-data 40 /etc/humanitl/AGENTS.md --clearenv '
+      '--setenv HTTP_PROXY http://127.0.0.1:3128 '
+      '--setenv HTTPS_PROXY http://127.0.0.1:3128 '
+      // Wie beim echten Daemon: ein zurueckgehaltener Wert steht auch in der
+      // Zeile nicht, die man kopieren kann (CONVENTIONS 4.17).
+      "--setenv AWS_ACCESS_KEY_ID '<withheld>' "
+      "--setenv DATABASE_URL '<withheld>' "
+      '--setenv SSL_CERT_FILE /etc/humanitl/ca.crt --chdir /work '
+      '-- /run/humanitl/humanitl-shim --proxy-port 3128 -- opencode';
+}

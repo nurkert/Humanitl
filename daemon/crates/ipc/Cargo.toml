@@ -19,6 +19,9 @@ humanitl-proxy.workspace = true
 # erlaubt beide Kanten.
 humanitl-recorder.workspace = true
 humanitl-rules.workspace = true
+# Die `Sandbox`-RPC (HUM-040) liest das Profil, baut die Kommandozeile und
+# startet sie; `tools/deps-allow.toml` erlaubt die Kante seit Sprint 0.
+humanitl-sandbox.workspace = true
 
 chrono.workspace = true
 
