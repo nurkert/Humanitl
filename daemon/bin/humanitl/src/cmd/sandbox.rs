@@ -616,12 +616,36 @@ fn agent_contribution(
         )
         .with_host_path(ctx.env.non_empty("PATH").map(OsString::from))
         .with_language(config.ui.language)
-        // Das Heimatverzeichnis, das der Agent tatsächlich vorfindet: aus dem
-        // `[env]` des Profils, von `sandbox.env` überschreibbar.
-        .with_home(profile.env.get("HOME").map_or_else(
-            || PathBuf::from(humanitl_sandbox::DEFAULT_HOME),
-            PathBuf::from,
-        ))
+        // Frist und Ask-Modus stehen im Briefing (HUM-071); sie müssen die
+        // sein, nach denen der Proxy arbeitet, sonst nennt der Text dem Agenten
+        // eine Wartezeit, die es nicht gibt.
+        .with_hold(config.hold.clone())
+        .with_briefing(config.agent.briefing.clone())
+        // Das Heimatverzeichnis, das der Agent tatsächlich vorfindet, und das
+        // Konfigurationsverzeichnis dazu.
+        //
+        // Die Reihenfolge ist die von `SandboxProfile::effective_env`: das
+        // `[env]` des Profils zuerst, dann `session_env` — darin der Beitrag
+        // des Adapters und **danach** `sandbox.env`. Wer dort `HOME` oder
+        // `XDG_CONFIG_HOME` setzt, verschiebt damit das Verzeichnis, in dem
+        // der Agent seine Konfiguration und seine Einweisung sucht. Nähme der
+        // Adapter statt dessen den Wert des Profils, hängte die Sandbox die
+        // Dateien an einen Ort, den niemand liest, und nichts fiele auf
+        // (HUM-071, Review vom 2026-09-04).
+        .with_home(
+            config
+                .sandbox
+                .env
+                .get("HOME")
+                .or_else(|| profile.env.get("HOME"))
+                .map_or_else(
+                    || PathBuf::from(humanitl_sandbox::DEFAULT_HOME),
+                    PathBuf::from,
+                ),
+        )
+        // Nur `sandbox.env`: ein `XDG_CONFIG_HOME` im `[env]` des Profils
+        // überschreibt der Adapter selbst und kann es deshalb nicht verlieren.
+        .with_config_home(config.sandbox.env.get("XDG_CONFIG_HOME").map(PathBuf::from))
         // Nur-Lese-Einhängungen mit gleicher Quelle und gleichem Ziel: nur
         // darunter findet der Agent sein eigenes Programm wieder.
         .with_sandbox_ro_paths(

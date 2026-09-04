@@ -67,6 +67,7 @@ use humanitl_core::{Diagnostic, FixAction, HostName, Method, RuleId, Scheme, Sev
 use url::Url;
 use uuid::Uuid;
 
+use crate::agent::briefing;
 use crate::agent::opencode_models::{
     DEFAULT_RULES, PROVIDER_ID, effective_models, permission_json, render_config, render_models,
 };
@@ -89,22 +90,53 @@ pub const CONFIG_DST: &str = "/etc/humanitl/opencode/opencode.json";
 /// Der mitgelieferte Modellkatalog in der Sandbox.
 pub const MODELS_DST: &str = "/etc/humanitl/opencode/models.json";
 
-/// Die zweite Ablage derselben Konfiguration, unterhalb des Heimatverzeichnisses.
+/// Das Verzeichnis, in dem `OpenCode` seine eigene Konfiguration sucht.
+///
+/// Unter dem `XDG_CONFIG_HOME`, das der Agent wirklich sieht
+/// ([`AgentContext::config_home`]) — nicht unter einer Konstante und nicht
+/// unter dem `HOME` des Profils. Setzt `sandbox.env` ein eigenes
+/// `XDG_CONFIG_HOME`, gewinnt es in der Umgebung des Agenten, und die Dateien
+/// müssen dorthin, sonst liegen sie da, wo niemand sie liest.
+#[must_use]
+pub fn agent_config_dir(config_home: &Path) -> PathBuf {
+    config_home.join("opencode")
+}
+
+/// Die zweite Ablage derselben Konfiguration, im Verzeichnis des Agenten.
 ///
 /// `OpenCode` liest `$XDG_CONFIG_HOME/opencode/opencode.json` immer und
 /// `OPENCODE_CONFIG` zusätzlich; beide werden zusammengeführt. Derselbe Inhalt
 /// an beiden Orten ist deshalb wirkungsgleich und deckt den Fall ab, dass eine
-/// Fassung `OPENCODE_CONFIG` nicht beachtet (Fallstrick 4). Der Pfad hängt am
-/// [`AgentContext::home`] des Profils, nicht an einer Konstante.
+/// Fassung `OPENCODE_CONFIG` nicht beachtet (Fallstrick 4).
 #[must_use]
-pub fn home_config_dst(home: &Path) -> PathBuf {
-    home.join(".config/opencode/opencode.json")
+pub fn config_dst(config_home: &Path) -> PathBuf {
+    agent_config_dir(config_home).join("opencode.json")
 }
 
 /// Eine leere Datei, damit das Konfigurationsverzeichnis des Agenten existiert.
 #[must_use]
-pub fn home_keep_dst(home: &Path) -> PathBuf {
-    home.join(".config/opencode/.keep")
+pub fn keep_dst(config_home: &Path) -> PathBuf {
+    agent_config_dir(config_home).join(".keep")
+}
+
+/// Der Name der Instruktionsdatei, die `OpenCode` als Erstes liest.
+///
+/// Gemessen an 1.18.25: `InstructionContext` setzt die Liste der Regeldateien
+/// aus `join(<Konfigurationsverzeichnis>, "AGENTS.md")` und danach den
+/// `AGENTS.md` des Projektbaums zusammen. Die globale Datei steht also vorn und
+/// wird auch dann gelesen, wenn `OPENCODE_DISABLE_PROJECT_CONFIG` gesetzt ist —
+/// diese Variable schaltet nur den Lauf durch den Projektbaum ab.
+pub const BRIEFING_FILE_NAME: &str = "AGENTS.md";
+
+/// Die Einweisung des Agenten in der Sandbox (HUM-071).
+///
+/// Unter dem Konfigurationsverzeichnis im Heimatverzeichnis, nie unter `/work`:
+/// `OpenCode` liest die `AGENTS.md` des Projekts zusätzlich, und eine Datei,
+/// die Humanitl dort ablegte, landete im Diff des Nutzers und irgendwann in
+/// einem fremden Repository (ADR-0014).
+#[must_use]
+pub fn briefing_dst(config_home: &Path) -> PathBuf {
+    agent_config_dir(config_home).join(BRIEFING_FILE_NAME)
 }
 
 /// Die dritte Ablage derselben Konfiguration: das verwaltete Verzeichnis.
@@ -208,6 +240,36 @@ pub const OPENAI_INFERENCE_PATHS: &[&str] = &[
     "/v1/embeddings",
     "/v1/models",
 ];
+
+/// Host, Schema und Port, für die die Durchreiche gilt.
+///
+/// `None`, wenn daraus keine Regel entsteht: kein `llm.endpoint`, ein Wert
+/// ohne Host, ein Host, den [`HostName::parse`] ablehnt, ein unbekanntes
+/// Schema oder ein Schema ohne Vorgabeport. Genau diese Prüfungen macht
+/// [`AgentAdapter::llm_passthrough`], und sie stehen hier, damit die Regel und
+/// der Text des Briefings nicht auseinanderlaufen können: Ein Endpunkt wie
+/// `http://good.test`#x`:11434` überlebt `Url::parse`, aber nicht
+/// [`HostName::parse`] — die Regel entsteht dann nicht, und das Briefing darf
+/// den Host dann auch nicht nennen (HUM-071, Review vom 2026-09-04).
+#[must_use]
+pub fn passthrough_target(llm: &LlmConfig) -> Option<(HostName, Scheme, u16)> {
+    let url = llm.endpoint.as_ref()?;
+    let host = HostName::parse(url.host_str()?).ok()?;
+    let scheme = Scheme::parse(url.scheme())?;
+    let port = url.port_or_known_default()?;
+    Some((host, scheme, port))
+}
+
+/// Der Host der Durchreiche als `host:port`, für das Briefing.
+///
+/// Derselbe Port, auf den die Regel passt, also der Vorgabeport des Schemas,
+/// wenn der Endpunkt keinen nennt. Ohne Regel kein Host: siehe
+/// [`passthrough_target`].
+#[must_use]
+pub fn passthrough_authority(llm: &LlmConfig) -> Option<String> {
+    let (host, _, port) = passthrough_target(llm)?;
+    Some(format!("{host}:{port}"))
+}
 
 /// Der Adapter für `OpenCode`.
 ///
@@ -328,6 +390,10 @@ impl AgentAdapter for OpenCodeAdapter {
     fn env(&self, ctx: &AgentContext) -> Vec<(String, String)> {
         let ca = ctx.ca_path_sandbox.to_string_lossy().into_owned();
         let home = ctx.home.to_string_lossy().into_owned();
+        // Dasselbe Verzeichnis, in das `files()` schreibt. Setzt `sandbox.env`
+        // ein eigenes `XDG_CONFIG_HOME`, steht es schon in `ctx.config_home`,
+        // und beide Seiten meinen weiter denselben Ort.
+        let config_home = ctx.config_home().to_string_lossy().into_owned();
         [
             (ENV_DISABLE_AUTOUPDATE, "true".to_owned()),
             (ENV_MODELS_PATH, MODELS_DST.to_owned()),
@@ -339,7 +405,7 @@ impl AgentAdapter for OpenCodeAdapter {
             (ENV_ENABLE_PARALLEL, "false".to_owned()),
             (ENV_DISABLE_LSP_DOWNLOAD, "true".to_owned()),
             ("HOME", home.clone()),
-            ("XDG_CONFIG_HOME", format!("{home}/.config")),
+            ("XDG_CONFIG_HOME", config_home),
             ("XDG_DATA_HOME", format!("{home}/.local/share")),
             ("XDG_CACHE_HOME", format!("{home}/.cache")),
             ("NODE_EXTRA_CA_CERTS", ca),
@@ -369,13 +435,36 @@ impl AgentAdapter for OpenCodeAdapter {
         let config = render_config(&base, &ctx.llm.models)?;
         let models = render_models(&ctx.llm.models)?;
 
-        Ok(vec![
+        let config_home = ctx.config_home();
+        let mut files = vec![
             SandboxFile::read_only(CONFIG_DST, config.clone().into_bytes()),
             SandboxFile::read_only(MODELS_DST, models.into_bytes()),
-            SandboxFile::read_only(home_config_dst(&ctx.home), config.clone().into_bytes()),
-            SandboxFile::read_only(home_keep_dst(&ctx.home), Vec::new()),
+            SandboxFile::read_only(config_dst(&config_home), config.clone().into_bytes()),
+            SandboxFile::read_only(keep_dst(&config_home), Vec::new()),
             SandboxFile::read_only(MANAGED_CONFIG_DST, config.into_bytes()),
-        ])
+        ];
+        // `agent.briefing.enabled = false` unterdrückt die Datei ganz, statt
+        // eine leere anzulegen: `OpenCode` überspringt eine fehlende globale
+        // Instruktionsdatei, und eine leere stünde als Aussage da, die niemand
+        // geschrieben hat.
+        if ctx.briefing.enabled {
+            // Der Host kommt aus derselben geprüften Quelle wie die
+            // Durchreichregel ([`passthrough_target`]). Stünde dort ein Wert,
+            // für den `llm_passthrough` keine Regel baut, nennte das Briefing
+            // einen Host, der gar nicht durchgereicht wird — und der Agent
+            // wunderte sich, warum sein Modell in der Warteschlange steht.
+            let text = briefing::render(
+                ctx.language,
+                ctx.hold.ask_mode,
+                ctx.hold.timeout_secs,
+                passthrough_authority(&ctx.llm).as_deref(),
+            )?;
+            files.push(SandboxFile::read_only(
+                briefing_dst(&config_home),
+                text.into_bytes(),
+            ));
+        }
+        Ok(files)
     }
 
     fn default_rules(&self) -> &'static str {
@@ -384,9 +473,7 @@ impl AgentAdapter for OpenCodeAdapter {
 
     fn llm_passthrough(&self, llm: &LlmConfig) -> Option<Rule> {
         let url = llm.endpoint.as_ref()?;
-        let host = HostName::parse(url.host_str()?).ok()?;
-        let scheme = Scheme::parse(url.scheme())?;
-        let port = url.port_or_known_default()?;
+        let (host, scheme, port) = passthrough_target(llm)?;
 
         let matcher = Matcher::host(HostPattern::Exact(host))
             // `GET` ist dabei, weil OpenCode die Modellliste über
@@ -541,16 +628,21 @@ impl AgentAdapter for OpenCodeAdapter {
 /// Die Dateien, die der Adapter anlegt, als Pfade.
 ///
 /// Für die Anzeige und für Tests; die Reihenfolge ist die von
-/// [`AgentAdapter::files`].
+/// [`AgentAdapter::files`]. `briefing` ist `agent.briefing.enabled`: steht es
+/// aus, fehlt die Instruktionsdatei auch hier.
 #[must_use]
-pub fn file_targets(home: &Path) -> Vec<PathBuf> {
-    vec![
+pub fn file_targets(config_home: &Path, briefing: bool) -> Vec<PathBuf> {
+    let mut targets = vec![
         PathBuf::from(CONFIG_DST),
         PathBuf::from(MODELS_DST),
-        home_config_dst(home),
-        home_keep_dst(home),
+        config_dst(config_home),
+        keep_dst(config_home),
         PathBuf::from(MANAGED_CONFIG_DST),
-    ]
+    ];
+    if briefing {
+        targets.push(briefing_dst(config_home));
+    }
+    targets
 }
 
 #[cfg(test)]
