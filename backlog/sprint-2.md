@@ -23,6 +23,15 @@ Voraussetzungen aus Sprint 0 und 1: HUM-003 (Proto), HUM-004 (core-types), HUM-0
 | 14 | HUM-034 | Notification und Tray | M | UI |
 | 15 | HUM-035 | shadcn vs forui Entscheidung | S | UI |
 | 16 | HUM-036 | Demo-Skript M2 | S | e2e |
+| 17 | HUM-089 | acknowledge_findings wird nie gelesen | S | Proto/IPC |
+| 18 | HUM-091 | FlowSummary traegt keine registrierbare Domaene | L | Daemon + UI |
+| 19 | HUM-095 | Sitzungsregel aus dem Stapel traegt keine Herkunft | M | CLI |
+| 20 | HUM-097 | Oberflächen-Hälfte des M2-Demoskripts | L | e2e |
+| 21 | HUM-094 | Katalogname und Editor fehlen dem M2-Demolauf | XL | UI |
+| 22 | HUM-105 | Schalter „Deaktivieren" für mitgelieferte Regeln | M | UI |
+| 23 | HUM-106 | TLS-Karte im Intercept-Bildschirm | M | UI |
+
+Die Zeilen 17 bis 23 sind am 2026-09-04 nachgetragen (Audit der fünf offenen Issues gegen den Code); vorher standen sie in keiner Tabelle, und die Regel aus `CLAUDE.md`, die Tabellenreihenfolge sei die Bearbeitungsreihenfolge, griff für sie ins Leere. Die Reihenfolge folgt den Abhängigkeiten: HUM-089 zuerst, weil es das kleinste ist und das `DecideRequest`-Literal in `daemon/bin/humanitl/src/cmd/flows.rs:336-340` streicht, das HUM-095 danach umbaut (nie parallel). HUM-091 vor HUM-094, weil HUM-094 den Gruppenkopf auf den Apex des Daemons stellt, den erst HUM-091 liefert. HUM-095 vor HUM-097, weil beide `run.sh` Schritt 2 umschreiben und die Form der Kommandozeile stehen muss, bevor der Bildschirm-Treiber daran vorbeigeschaltet wird; HUM-095 wartet auf die Entscheidung des Projekteigentümers gegen HUM-090 (siehe dort), und solange sie aussteht, ist HUM-097 das nächste baubare Issue. HUM-097 vor HUM-094, weil die e2e-Behauptungen von HUM-094 einen Bildschirm-Lauf brauchen, der während des Haltens läuft, und den baut HUM-097. HUM-105 und HUM-106 hängen an keinem der fünf; sie stehen hinten, weil sie dieselben geteilten Dateien anfassen (`app/lib/core/ipc/convert.dart`, `fake_daemon_client.dart`, `app/lib/features/intercept/providers/flows.dart`), die HUM-091 und HUM-094 umbauen.
 
 ---
 
@@ -1773,16 +1782,16 @@ BACKLOG.md ADR-014; `docs/ARCHITECTURE.md` 8.2; RFC 9110 §5.5 (Field Values).
 ---
 
 ## HUM-089 · acknowledge_findings wird nie gelesen
-Sprint: 2 · Größe: S · Abhängigkeiten: HUM-003 · Blockiert: HUM-049
+Sprint: 2 · Größe: S · Abhängigkeiten: HUM-003, Entscheidung zu `docs/PROTOCOL.md` 4/5 (siehe Stand) · Blockiert: HUM-049; läuft vor HUM-095 (gleiches Literal in `flows.rs:336-340`)
 
 ### Kontext
-`DecideRequest.acknowledge_findings` steht seit HUM-003 im Vertrag, mit dem Kommentar „Der Nutzer hat offene Findings gesehen." (`proto/humanitl/v1/humanitl.proto:593-594`). Gelesen wird das Feld nirgends: `decide_plan` und `decision_of` nehmen `flow_ids` und `decision` (`daemon/crates/ipc/src/validate.rs:66-110`), `decide` nimmt zusätzlich `remember` (`daemon/crates/ipc/src/server.rs:848-925`), der Fake tut aus Paritätsgründen dasselbe (`daemon/crates/ipc/src/fake/mod.rs:246-292`), und `hold.rs` sagt im Modulkopf selbst, dass es keine Findings kennt (`daemon/crates/proxy/src/hold.rs:42`). Geschrieben wird es auch nicht: `DecisionToProto.toProto` setzt `flowIds`, die Entscheidung und optional `remember`, nie `acknowledgeFindings` (`app/lib/core/ipc/convert.dart:501-521`). Die einzigen beiden Zuweisungen im Repository stehen in einem CLI-Aufruf (`daemon/bin/humanitl/src/cmd/flows.rs:339`, `false`) und in einem Roundtrip-Test (`daemon/crates/ipc/tests/proto_roundtrip.rs:156`, `true`).
+`DecideRequest.acknowledge_findings` steht seit HUM-003 im Vertrag, mit dem Kommentar „Der Nutzer hat offene Findings gesehen." (`proto/humanitl/v1/humanitl.proto:598-599`). Gelesen wird das Feld nirgends: `decide_plan` und `decision_of` nehmen `flow_ids` und `decision` (`daemon/crates/ipc/src/validate.rs:66-110`), `decide` nimmt zusätzlich `remember` (`daemon/crates/ipc/src/server.rs:848-925`), der Fake tut aus Paritätsgründen dasselbe (`daemon/crates/ipc/src/fake/mod.rs:246-292`), und `hold.rs` sagt im Modulkopf selbst, dass es keine Findings kennt (`daemon/crates/proxy/src/hold.rs:42`). Geschrieben wird es auch nicht: `DecisionToProto.toProto` setzt `flowIds`, die Entscheidung und optional `remember`, nie `acknowledgeFindings` (`app/lib/core/ipc/convert.dart:501-521`). Die einzigen beiden Zuweisungen im Repository stehen in einem CLI-Aufruf (`daemon/bin/humanitl/src/cmd/flows.rs:339`, `false`) und in einem Roundtrip-Test (`daemon/crates/ipc/tests/proto_roundtrip.rs:156`, `true`).
 
-Das ist keine Lücke im Plan, sondern eine unwahre Aussage des Produkts. `docs/PROTOCOL.md` 3 nennt die `.proto`-Dateien „Der Vertrag", und `backlog/CONVENTIONS.md` 4.13 macht daraus die Regel, nie mehr zu behaupten als belegt ist. Ein Feld mit Doc-Kommentar sagt jedem, der den Vertrag liest — Mensch wie `grpcurl` gegen `proto/descriptor.binpb` —, der Daemon nehme eine Bestätigung entgegen und richte sich danach. Er tut es nicht, und `daemon/crates/ipc/tests/proto_contract.rs:721` friert die Behauptung zusätzlich als geprüften Vertrag ein.
+Das ist keine Lücke im Plan, sondern eine unwahre Aussage des Produkts. `docs/PROTOCOL.md` 3 nennt die `.proto`-Dateien „Der Vertrag", und `backlog/CONVENTIONS.md` 4.13 macht daraus die Regel, nie mehr zu behaupten als belegt ist. Ein Feld mit Doc-Kommentar sagt jedem, der den Vertrag liest — Mensch wie `grpcurl` gegen `proto/descriptor.binpb` —, der Daemon nehme eine Bestätigung entgegen und richte sich danach. Er tut es nicht, und `daemon/crates/ipc/tests/proto_contract.rs:726` friert die Behauptung zusätzlich als geprüften Vertrag ein.
 
-Dazu kommt eine terminierte Kollision. HUM-049 (`backlog/sprint-4.md:498`) baut die echte Durchsetzung und entwirft dafür `repeated uint32 acknowledged_findings = 6;` (`backlog/sprint-4.md:231`): dieselbe Nummer 6, unverträglicher Typ. Dieselbe Nachricht sperrt Nummer 3 aus genau diesem Grund bereits, mit der Begründung „Die Nummer wird nicht wiederverwendet (docs/PROTOCOL.md 4)" (`proto/humanitl/v1/humanitl.proto:577-580`). Die Nummern 5 und 7 sind an `remember` und `allow_edited` vergeben; solange 6 mit einem toten `bool` belegt ist, hat HUM-049 dort keinen sauberen Platz.
+Dazu kommt eine terminierte Kollision. HUM-049 (`backlog/sprint-4.md:498`) baut die echte Durchsetzung und entwirft dafür `repeated uint32 acknowledged_findings = 6;` (`backlog/sprint-4.md:231`): dieselbe Nummer 6, unverträglicher Typ. Dieselbe Nachricht sperrt Nummer 3 aus genau diesem Grund bereits, mit der Begründung „Die Nummer wird nicht wiederverwendet (docs/PROTOCOL.md 4)" (`proto/humanitl/v1/humanitl.proto:581-584`). Die Nummern 5 und 7 sind an `remember` und `allow_edited` vergeben; solange 6 mit einem toten `bool` belegt ist, hat HUM-049 dort keinen sauberen Platz.
 
-Die Geste in der Oberfläche fehlt dagegen nicht. `holdRequired: anyFinding`, Amber, Label `interceptSendWithFindings` und Haltegrund `interceptHoldReasonFindings` sind gebaut (`app/lib/features/intercept/widgets/action_bar.dart:157-173`, `:640`), wie `docs/UX.md` 4.7 Punkt 3 es verlangt. Was fehlt, ist der Transport dieser Geste, ihre Durchsetzung im Daemon und ihre Aufzeichnung: `write_findings` schreibt `resolved` hart als `NULL` und lässt die Spalte im `ON CONFLICT ... DO UPDATE` aus (`daemon/crates/recorder/src/writer.rs:674-684`), gelesen wird sie in `types.rs:376`, `query.rs:243` und `query.rs:464`, aktualisiert nirgends. Diese drei Teile sind HUM-049 und bleiben dort. Dieses Issue entfernt nur die falsche Behauptung und macht die Nummer frei.
+Die Geste in der Oberfläche fehlt dagegen nicht. `holdRequired: anyFinding`, Amber, Label `interceptSendWithFindings` und Haltegrund `interceptHoldReasonFindings` sind gebaut (`app/lib/features/intercept/widgets/action_bar.dart:157-173`, `:640`), wie `docs/UX.md` 4.7 Punkt 3 es verlangt. Was fehlt, ist der Transport dieser Geste, ihre Durchsetzung im Daemon und ihre Aufzeichnung: `write_findings` schreibt `resolved` hart als `NULL` und lässt die Spalte im `ON CONFLICT ... DO UPDATE` aus (`daemon/crates/recorder/src/writer.rs:680-690`), gelesen wird sie in `types.rs:376`, `query.rs:243` und `query.rs:464`, aktualisiert nirgends. Diese drei Teile sind HUM-049 und bleiben dort. Dieses Issue entfernt nur die falsche Behauptung und macht die Nummer frei.
 
 ### Ziel
 `DecideRequest` trägt kein Feld 6 mehr. Die Nummern 3 und 6 und der Name `acknowledge_findings` sind reserviert, mit Begründung im Proto. Vertragstabelle, Roundtrip-Test und die beiden Rust-Konstruktionsstellen ziehen nach; `proto/descriptor.binpb` und `proto/generated.sha256` sind neu erzeugt. `docs/PROTOCOL.md` 4 führt die reservierten Feldnummern als Tabelle. HUM-049 in `backlog/sprint-4.md` bekommt die freien Nummern 8 und 9 und eine Pfadliste, deren Dateien es gibt. Kein Verhalten des Daemons, der CLI oder der App ändert sich.
@@ -1792,17 +1801,17 @@ Die Geste in der Oberfläche fehlt dagegen nicht. `holdRequired: anyFinding`, Am
 - Keine Aufzeichnung: `resolved` bleibt `NULL`, keine Allowlist, keine Werte `acknowledged` oder `allowlisted`.
 - Keine UI-Änderung: keine `findings_pause.dart`, keine neuen ARB-Schlüssel, keine Änderung an `action_bar.dart`.
 - Kein neues Feld. Die Nummern 8 und 9 werden nur in der Spezifikation von HUM-049 notiert, nicht im Proto angelegt.
-- Kein Major-Bump und kein `humanitl.v2`. `PROTO_MAJOR` und `PROTO_MINOR` bleiben `1` und `2`.
+- Kein Major-Bump und kein `humanitl.v2`. `PROTO_MAJOR` und `PROTO_MINOR` bleiben unverändert (heute `1` und `3`, `daemon/crates/ipc/src/lib.rs:52`, seit HUM-040). Die Ausnahme in `docs/PROTOCOL.md` 4/5 für ein nachweislich totes Feld ist kein Bruch dieses Nicht-Ziels, sondern seine Voraussetzung (siehe Stand).
 - `backlog/sprint-0.md:600` bleibt unangetastet; ein abgeschlossenes Sprint-File hält fest, was damals entworfen wurde.
 
 ### Betroffene Pfade
-- `proto/humanitl/v1/humanitl.proto` (ändern: Zeilen 577-580 und 593-594)
+- `proto/humanitl/v1/humanitl.proto` (ändern: `reserved`-Block Zeilen 581-584, Feld Zeilen 598-599)
 - `proto/descriptor.binpb`, `proto/generated.sha256` (Regenerat aus `make proto`)
-- `daemon/crates/ipc/tests/proto_contract.rs` (ändern: Zeile 721 streichen, Test bei Zeile 328 erweitern oder danebenstellen)
+- `daemon/crates/ipc/tests/proto_contract.rs` (ändern: Zeile 726 streichen, Test bei Zeile 329 erweitern oder danebenstellen)
 - `daemon/crates/ipc/tests/proto_roundtrip.rs` (ändern: Zeile 156 streichen)
 - `daemon/bin/humanitl/src/cmd/flows.rs` (ändern: Zeile 339 streichen)
-- `docs/PROTOCOL.md` (ändern: Abschnitt 4, Tabelle der reservierten Nummern)
-- `backlog/sprint-4.md` (ändern: HUM-049, Zeilen 231-232 und 508-517)
+- `docs/PROTOCOL.md` (ändern: Abschnitt 4, Tabelle der reservierten Nummern; Abschnitte 4 und 5, Ausnahme für ein nie gelesenes Feld, siehe Stand)
+- `backlog/sprint-4.md` (ändern: HUM-049, Entwurf Zeilen 226-232 und „Betroffene Pfade" Zeilen 511-519)
 
 ### Spezifikation
 
@@ -1848,7 +1857,7 @@ Die Liste „Betroffene Pfade" (Zeilen 508-517) nennt vier Dateien, die es nicht
 | in HUM-049 genannt | tatsächlich |
 |---|---|
 | `daemon/crates/findings/src/scanner.rs` | Trait `Scanner` in `daemon/crates/proxy/src/findings.rs:34`, Scan in `daemon/crates/findings/src/registry.rs:127` |
-| `daemon/crates/recorder/src/findings.rs` | `daemon/crates/recorder/src/writer.rs:674` (Schreiben), `daemon/crates/recorder/src/query.rs:243` (Lesen) |
+| `daemon/crates/recorder/src/findings.rs` | `daemon/crates/recorder/src/writer.rs:680` (Schreiben), `daemon/crates/recorder/src/query.rs:243` (Lesen) |
 | `daemon/crates/config/src/hold.rs` | `HoldConfig` in `daemon/crates/config/src/model.rs:104` |
 | `app/lib/features/intercept/providers/decision_provider.dart` | `app/lib/features/intercept/providers/decision.dart` |
 
@@ -1871,17 +1880,33 @@ Zwei Angaben in HUM-049 werden dabei mitkorrigiert, weil sie sonst Arbeit erzeug
 - `daemon/crates/ipc/tests/fake_parity.rs` (bestehend): grün, Beleg dafür, dass sich am Verhalten nichts geändert hat.
 
 ### Akzeptanzkriterien
-- [ ] `grep -rn acknowledge_findings --exclude-dir=target .` liefert genau zwei Zeilen: `proto/humanitl/v1/humanitl.proto` mit `reserved "acknowledge_findings";` und `backlog/sprint-0.md:600`. Kein Treffer unter `daemon/` oder `app/`.
+- [ ] `grep -rn acknowledge_findings daemon/ app/ proto/ --exclude-dir=target` liefert genau eine Zeile: `proto/humanitl/v1/humanitl.proto` mit `reserved "acknowledge_findings";`. Kein Treffer unter `daemon/` oder `app/`. (Die Nennungen in `backlog/` und `BACKLOG.md` bleiben; sie beschreiben das Feld als entfernt. Das frühere Kriterium „genau zwei Zeilen im ganzen Repository" war nie erfüllbar, siehe Stand.)
 - [ ] `cargo build --workspace` grün: `daemon/bin/humanitl` und `daemon/crates/ipc` übersetzen ohne das Feld.
 - [ ] `cargo test -p humanitl-ipc` grün, darunter der neue Reservierungstest und `checked_in_descriptor_matches_the_proto_sources`.
-- [ ] Ein lokaler Versuchspatch, der `bool acknowledge_findings = 6;` wieder einfügt, lässt `cargo test -p humanitl-ipc` fehlschlagen; die Fehlermeldung nennt den neuen Test. Ergebnis im Commit-Body.
-- [ ] Nach `make proto` ist `git diff --exit-code proto/` leer, und `proto/descriptor.binpb` sowie `proto/generated.sha256` liegen im selben Commit. `git check-ignore app/lib/core/ipc/generated/` trifft weiterhin, es wird nichts Generiertes eingecheckt.
+- [ ] Ein lokaler Versuchspatch, der `bool acknowledge_findings = 6;` wieder einfügt, lässt `cargo test -p humanitl-ipc` fehlschlagen; unter den fehlenden Tests ist der neue Reservierungstest (dazu fallen `check_fields`, weil es beidseitig prüft, und `checked_in_descriptor_matches_the_proto_sources`). Ergebnis im Commit-Body.
+- [ ] Nach dem Commit ist `make proto` gefolgt von `git diff --exit-code proto/` leer (keine weitere Drift), und `proto/descriptor.binpb` sowie `proto/generated.sha256` liegen im selben Commit. `git check-ignore app/lib/core/ipc/generated/` trifft weiterhin, es wird nichts Generiertes eingecheckt.
 - [ ] `scripts/gen-proto.sh`, dann `flutter analyze` und `flutter test` in `app/` grün; `grep -rn acknowledgeFindings app/lib` ohne Treffer.
-- [ ] `git diff --exit-code daemon/crates/ipc/src/lib.rs app/lib/core/ipc/proto_version.dart` leer: `PROTO_MAJOR` bleibt `1`, `PROTO_MINOR` bleibt `2`.
+- [ ] `git diff --exit-code daemon/crates/ipc/src/lib.rs app/lib/core/ipc/proto_version.dart` leer: `PROTO_MAJOR` und `PROTO_MINOR` bleiben unverändert.
 - [ ] `git diff --stat` berührt keine Datei unter `daemon/crates/proxy/src/`, `daemon/crates/recorder/src/`, `daemon/crates/config/src/`, `app/lib/features/` oder `app/l10n/`.
 - [ ] `grep -n "acknowledged_findings = 8" backlog/sprint-4.md` und `grep -n "ignore_always = 9" backlog/sprint-4.md` treffen je einmal; im `DecideRequest`-Entwurf von HUM-049 kommt Nummer 6 nicht mehr vor.
-- [ ] Jeder Pfad ohne Marke „(neu)" in HUM-049 „Betroffene Pfade" existiert: eine `test -e`-Schleife über die Liste meldet keinen Fehler (vor der Änderung meldet sie vier).
+- [ ] Jeder Pfad ohne Marke „(neu)" in HUM-049 „Betroffene Pfade" existiert: eine `test -e`-Schleife über die Liste, die Einträge mit „(neu)" und Nicht-Pfade wie `- ARB-Dateien` überspringt, meldet keinen Fehler (vor der Änderung meldet sie vier).
 - [ ] `make check` grün und `tools/verify-commit.sh` auf dem Commit grün.
+
+### Stand (2026-09-04): baubar, zwei Kriterien und eine Protokollregel vorher richten
+
+Geprüft am Code (Audit 2026-09-04, Zeilen gegen den heutigen Baum gezogen). Die Prämisse hält: `acknowledge_findings` liest niemand (`validate.rs:67`, `:83`; `server.rs:863`; `fake/mod.rs:246`; `convert.dart:500-521`), gesetzt wird es nur in `flows.rs:339` und `proto_roundtrip.rs:156`, beide Struct-Literale ohne `..Default::default()`. Die Vertragszeile steht in `proto_contract.rs:726`. Die Kollision mit HUM-049 ist echt (`backlog/sprint-4.md:231-232`); `ignore_always = 7` kollidiert zusätzlich mit dem lebenden `allow_edited = 7` (`humanitl.proto:591`). Die vier nicht existierenden HUM-049-Pfade und ihre vier Ersatzpfade stimmen. Heute stehen 17 Treffer für `acknowledge_findings` in 8 Dateien im Repository.
+
+**Blockierend, vor dem Bau zu richten** (im Text oben bereits korrigiert):
+
+- Das Akzeptanzkriterium „genau zwei Zeilen" war nie erfüllbar: nach der Änderung bleiben 14 Treffer (Proto, `sprint-0.md:600`, zehn in dieser Spezifikation, `sprint-4.md`, `BACKLOG.md`). Das Kriterium zählt jetzt nur `daemon/`, `app/`, `proto/`.
+- `PROTO_MINOR` ist `3`, nicht `2` (`daemon/crates/ipc/src/lib.rs:52`, seit HUM-040; `app/lib/core/ipc/proto_version.dart:20` und `docs/PROTOCOL.md:65` sagen dasselbe). Das Kriterium heißt jetzt „bleibt unverändert".
+- `docs/PROTOCOL.md` widerspricht dem Vorgehen: Regel 1 (`:54`) sagt „Nur additiv", Abschnitt 5 (`:68`) „Bruch ⇒ Major steigt und das Paket heißt `humanitl.v2`". Regel 2 (`:55`) erlaubt nur das Reservieren einer entfernten Nummer und hebt beides nicht auf; `proto/buf.yaml` (`breaking: use: [FILE]`) meldet die Löschung als `FIELD_NO_DELETE`. Das Nicht-Ziel „kein Major-Bump" verbot sich bisher die einzige Lösung. Sie gehört in denselben Commit: eine Ausnahme in `docs/PROTOCOL.md` 4/5 für ein Feld, das nachweislich kein Handler liest und kein Client setzt, mit `reserved` als Sperre. **Ob diese Ausnahme gilt, entscheidet der Projekteigentümer; ohne sie steht die Löschung gegen das eigene Vertragsdokument und das Issue ist nicht abschließbar.**
+
+**Weitere Befunde, im Text korrigiert oder hier vermerkt:** Proto-Zeilen sind `:581-584` (`reserved`) und `:598-599` (Feld). HUM-049 „Betroffene Pfade" steht in `sprint-4.md:511-519`; die Liste endet mit `- ARB-Dateien` (kein Pfad) und trägt eine Marke `(neu)` (`:513`), die `test -e`-Schleife muss beides überspringen. `write_findings` beginnt in `writer.rs:680`, das harte `NULL` steht `:684`. HUM-049s `DecideRequest`-Entwurf (`sprint-4.md:226-229`) weicht in vier weiteren Feldern vom gelieferten Vertrag ab: `string flow_id = 1` gegen `repeated string flow_ids = 1` (`humanitl.proto:579`), `DecisionKind decision = 2` gegen `oneof decision` mit `allow = 2`, `HttpRequestProto edited = 3` gegen `reserved 3`, `replacements = 4` gegen `Block block = 4`. Wer nur 6 und 7 auf 8 und 9 zieht, lässt den Entwurf auf der gesperrten Nummer 3 stehen, und das Kriterium „Nummer 6 kommt nicht mehr vor" wird trotzdem grün; Schritt 6 zieht deshalb den ganzen Entwurf nach. Die Gegenprobe (Feld wieder einfügen) lässt drei Tests fallen, nicht einen: `check_fields` prüft beidseitig (`proto_contract.rs:595-633`), dazu `decide_request_has_every_decision_of_the_oneof` (`:747`) und `checked_in_descriptor_matches_the_proto_sources` (`:58`).
+
+**Voraussetzungen auf dieser Maschine:** `protoc-gen-dart` liegt unter `~/.pub-cache/bin` und steht nicht im `PATH`; ohne `export PATH="$PATH:$HOME/.pub-cache/bin"` überspringt `scripts/gen-proto.sh` (`fail_or_skip`, `:39`, `:57`) die Dart-Erzeugung mit Exit 0, erneuert nur `proto/descriptor.binpb` und lässt `proto/generated.sha256` veraltet; der CI-Schritt „Fail on generated drift" (`.github/workflows/ci.yml:249`) wird dann auf einem Commit rot, der lokal grün aussah. `protoc` 27.5 ist da (`~/.local/bin/protoc`), `protoc_plugin 25.0.0` ist aktiv; `AGENTS.md:81` behauptet, es gebe kein `protoc`, und ist veraltet. `proto/` ist im Arbeitsbaum schmutzig (HUM-040, siehe HUM-091 Stand); vor dem Proto-Schritt neu einlesen. Der CI-Schritt „buf breaking against main" steht noch auf `continue-on-error: true` (`ci.yml:240-245`), obwohl der Kommentar das Entfernen nach dem Merge von HUM-003 verlangt; solange die Flag steht, geht die Löschung durch CI, danach greift `FIELD_NO_DELETE`.
+
+**Reihenfolge:** vor HUM-095. Beide schreiben dasselbe Literal `daemon/bin/humanitl/src/cmd/flows.rs:336-340` (dieses Issue streicht `:339`, HUM-095 ersetzt `:338`). Nicht parallel.
 
 ### Fallstricke
 - `proto/buf.yaml` stellt `breaking: use: [FILE]`. Die Kategorie FILE enthält `FIELD_NO_DELETE` ohne Ausnahme für reservierte Nummern; `buf breaking` schlägt bei dieser Löschung also an, obwohl `docs/PROTOCOL.md` 4 Regel 2 sie ausdrücklich vorsieht. Der CI-Schritt „buf breaking against main" (`.github/workflows/ci.yml:240`) steht heute noch auf `continue-on-error: true`, mit dem Kommentar, die Flag sei nach dem Merge von HUM-003 zu entfernen. Diese Löschung darf deshalb nicht dazu benutzt werden, das Entfernen der Flag weiter aufzuschieben, und sie darf die Kategorie auch nicht still auf `WIRE_JSON` senken: Wer die Flag entfernt, entscheidet das mit einem ADR. Hier gehört der Stand in den Commit-Body, damit die Entscheidung sichtbar bleibt.
@@ -1897,7 +1922,7 @@ Zwei Angaben in HUM-049 werden dabei mitkorrigiert, weil sie sonst Arbeit erzeug
 ---
 
 ## HUM-091 · FlowSummary traegt keine registrierbare Domaene
-Sprint: 2 · Größe: M · Abhängigkeiten: HUM-026, HUM-029, HUM-031 · Blockiert: HUM-036 (Sprint-Gate)
+Sprint: 2 · Größe: L · Abhängigkeiten: HUM-026, HUM-029, HUM-031, Merge von HUM-040 (Proto im Arbeitsbaum, siehe Stand) · Blockiert: HUM-094 (Gruppenkopf auf dem Apex des Daemons)
 
 ### Kontext
 Der Daemon kennt die registrierbare Domäne, filtert danach und verschweigt sie. `daemon/crates/recorder/src/filter.rs:15-17` sagt zu, dass Filterleiste, `ListFlows.filter` und `humanitl flows list` dieselbe Sprache sprechen und dass sie an genau dieser Stelle übersetzt und nirgends nachgebaut wird. `apex` steht in `KEYS` (`filter.rs:32`), wird deshalb in jedem `RECORDER_002`-Befund als gültiger Schlüssel aufgezählt und übersetzt sich zu `apex = ?` (`filter.rs:214`) auf eine Spalte, die gefüllt ist (`query.rs:39`, geschrieben über `daemon/crates/ipc/src/domains.rs:113`). Ein Schlüssel, der dokumentiert ist, wirkt und dessen Ergebnis niemand nachprüfen kann, ist der Bruch, den `backlog/CONVENTIONS.md` 4.13 „Nie mehr behaupten als bewiesen ist" ausschließt: Wer `apex:b.github.io` tippt, bekommt eine Zeilenmenge und keine Möglichkeit, an einer einzigen Zeile zu sehen, wonach gefiltert wurde.
@@ -1919,18 +1944,20 @@ Kein `catalog_id`, kein `popularity_rank`, kein ganzes `DomainInfo` in der Zeile
 ### Betroffene Pfade
 - `proto/humanitl/v1/humanitl.proto` (ändern: `FlowSummary`, Feld 25)
 - `proto/descriptor.binpb` (neu erzeugt über `cargo xtask proto` bzw. `scripts/gen-proto.sh`)
-- `daemon/crates/ipc/src/convert.rs`: `recorded_summary_to_proto:1338`, `record_to_summary:725`, `received_summary:1069`, `matches_filter:1120`
-- `daemon/crates/ipc/src/server.rs`: Aufrufer `:277`, `:336`; `DomainTable` hängt schon an `:107`, `domain_of:464` bleibt für `FlowDetail`
-- `daemon/crates/ipc/src/fake/state.rs`: `summary():122` (`apex_of` dort schon in `domain():194`)
+- `daemon/crates/ipc/src/convert.rs`: `recorded_summary_to_proto:1377`, `record_to_summary:725`, `record_to_detail:801` (ruft `record_to_summary` und `domain_of`, siehe Stand), `received_summary:1108`, `matches_filter:1159`, `apex_of:631` (weicht `humanitl_catalog::psl::apex`)
+- `daemon/crates/ipc/src/server.rs`: Aufrufer `:297`, `:356`, `:962` (`get_flow`-Rückfall auf `record_to_detail`); `DomainTable` hängt schon an `:108`
+- `daemon/crates/ipc/src/fake/state.rs`: `summary():122`, `domain():192-194` (heute `apex_of`, künftig `humanitl_catalog::psl::apex`)
 - `daemon/bin/humanitl/src/cmd/flows.rs`: `summary_json:548`, Tests ab `:652`
 - `app/lib/core/ipc/generated/humanitl/v1/humanitl.pb*.dart` (neu erzeugt)
-- `app/lib/core/domain/flow.dart:78` plus freezed-Regeneration
+- `app/lib/core/domain/flow.dart:85` (neben `authority`) plus freezed-Regeneration
 - `app/lib/core/ipc/convert.dart:196`
-- `app/lib/core/ipc/fake_daemon_client.dart:1640` (geteilte Datei)
-- `app/lib/features/intercept/psl.dart` (gelöscht), `app/test/features/intercept/psl_test.dart` (gelöscht)
+- `app/lib/core/ipc/fake_daemon_client.dart:1825-1828` (`case 'apex'` von `case 'host'` trennen; `_suffixMatch:2026`), geteilte Datei
+- `app/lib/features/intercept/psl.dart` (gelöscht); seine Tests stehen in `app/test/features/intercept/helpers_test.dart` (Import Zeile 9, Fälle Zeilen 83-104) und fallen im selben Commit; ein `psl_test.dart` gibt es nicht
 - `app/lib/features/intercept/providers/held_groups.dart:184`, `providers/decision.dart:975-995`, `widgets/batch_modal.dart:97`
+- `app/test/features/intercept/fixtures.dart:25` (`heldFlow` bekommt `apex`), `held_groups_test.dart:17` (`flowOf` ebenso), die 15 Testdateien, die `heldFlow` nutzen, darunter `app/test/goldens/intercept_golden_test.dart`, `intercept_group_golden_test.dart`, `action_bar_golden_test.dart` (Goldens neu abnehmen); `batch_test.dart:173`, `:186`, `:313` (Prämisse „`psl.dart` rät")
+- Kommentare mit derselben Prämisse: `decision.dart:519`, `:974`, `agent_ask_card.dart:174`, `held_groups.dart:56`, `held_groups_test.dart:65`
 - Tests: `daemon/crates/ipc/tests/proto_roundtrip.rs`, `daemon/crates/ipc/tests/proto_contract.rs`, `daemon/bin/humanitld/tests/daemon_end_to_end.rs:308`, `app/test/core/ipc/convert_test.dart`, `app/test/features/intercept/held_groups_test.dart`
-- `backlog/CONVENTIONS.md`: 4.3 um `FlowSummary.apex` ergänzen, 4.15 (`:628-637`) neu fassen
+- `backlog/CONVENTIONS.md`: 4.3 um `FlowSummary.apex` ergänzen, 4.15 (`psl.dart`-Absatz bei `:650`) neu fassen, 4.16 (`:1808`, behauptet ebenfalls, `psl.dart` rate) nachziehen
 
 Nicht berührt: `daemon/crates/recorder/*` (Spalte und Filter stehen), `daemon/crates/catalog/*` (die Liste steht), `daemon/Cargo.toml`.
 
@@ -1956,10 +1983,11 @@ Woher der Wert je Pfad kommt:
 | `ListFlows`, `GetFlow` aus der Aufzeichnung (`recorded_summary_to_proto`) | `RecordedSummary.apex`, Spalte `apex` | Spalte ist `NULL` |
 | `Subscribe` und `ListFlows` der laufenden Sitzung (`record_to_summary`) | `DomainTable::get(flow)`, sonst `DomainTable::describe(host)` | kein Katalog, IP-Literal, unbekanntes Suffix |
 | `Received`, bevor die Registry den Datensatz hat (`received_summary`) | dieselbe `DomainTable` | wie oben |
-| `humanitld --fake` (`fake/state.rs::summary`) | `convert::apex_of`, dieselbe Quelle wie `domain()` derselben Nachricht | nie |
+| `humanitld --fake` (`fake/state.rs::summary`) | `humanitl_catalog::psl::apex`, dieselbe Funktion wie im Daemon und wie `domain()` derselben Nachricht (`convert::apex_of` entfällt, siehe Stand) | IP-Literal, unbekanntes Suffix |
 
 ```rust
 pub fn record_to_summary(record: &FlowRecord, domains: Option<&DomainTable>) -> v1::FlowSummary;
+pub fn record_to_detail(record: &FlowRecord, domains: Option<&DomainTable>) -> v1::FlowDetail;
 fn received_summary(
     id: FlowId,
     at: SystemTime,
@@ -1968,7 +1996,7 @@ fn received_summary(
 ) -> v1::FlowSummary;
 ```
 
-Alle vier Aufrufer übergeben `self.domains.as_deref()`, auch die Passthrough-Prüfung in `server.rs:277`, die nur `.passthrough` liest: eine Zeile, zwei Formen wäre die nächste Abweichung.
+Alle Aufrufer übergeben `self.domains.as_deref()`: `server.rs:297` (Passthrough-Prüfung, liest nur `.passthrough`), `:356` (Nachlieferung), `:962` (`get_flow` über `record_to_detail`) und `flow_event_to_proto` (trägt `domains` schon). Eine Zeile, zwei Formen wäre die nächste Abweichung.
 
 `matches_filter` lernt den Schlüssel, den der Recorder schon kennt:
 
@@ -1993,17 +2021,18 @@ Gruppierung: `apexOfHost(Flow flow) => flow.apex.isEmpty ? flow.host : flow.apex
 ### Schritte
 1. Proto-Feld 25 ergänzen, `cargo xtask proto`, `proto/descriptor.binpb` erneuern; `cargo test -p humanitl-ipc --test proto_contract` grün.
 2. `recorded_summary_to_proto` aus `row.apex` füllen; Unit-Test grün, History-Pfad liefert den Wert.
-3. `record_to_summary` und `received_summary` um `domains` erweitern, alle Aufrufer nachziehen, `fake/state.rs::summary` füllen; `cargo test -p humanitl-ipc` grün.
+3. `record_to_summary`, `received_summary` und `record_to_detail` um `domains` erweitern, alle Aufrufer nachziehen, `apex_of` durch `humanitl_catalog::psl::apex` ersetzen, `fake/state.rs::summary` füllen; `cargo test -p humanitl-ipc` grün.
 4. `matches_filter` um `apex` erweitern; Test, dass `apex:github.io` `a.b.github.io` nicht trifft.
 5. `summary_json` erweitern, CLI-Tests nachziehen; `humanitl flows list --json` zeigt den Schlüssel.
 6. Dart-Stubs neu erzeugen, `Flow.apex` plus `build_runner`, `convert.dart` durchreichen, Fake auf exakten Vergleich umstellen; `flutter test test/core/ipc/` grün.
-7. `psl.dart` und seinen Test löschen, `held_groups.dart`, `decision.dart`, `batch_modal.dart` auf das Feld umstellen; `flutter test test/features/intercept/` grün.
-8. `daemon_end_to_end.rs` um die Zusicherung beider Wege und den Neustart erweitern, `backlog/CONVENTIONS.md` 4.3 und 4.15 nachziehen, `make check`, danach `tools/verify-commit.sh`.
+7. `psl.dart` löschen und `helpers_test.dart:9,83-104` streichen; `heldFlow` und `flowOf` um `apex` erweitern, die 15 Testdateien nachziehen, drei Golden-Suites neu abnehmen; `held_groups.dart`, `decision.dart`, `batch_modal.dart` auf das Feld umstellen; `flutter test test/features/intercept/ test/goldens/` grün.
+8. `daemon_end_to_end.rs` um die Zusicherung beider Wege erweitern (der Neustart-Test `the_recording_outlives_the_daemon`, `:328`, hat den Harness schon), `backlog/CONVENTIONS.md` 4.3, 4.15 und 4.16 nachziehen, `make check`, danach `tools/verify-commit.sh`.
 
 ### Tests
 - `convert::tests::recorded_summary_carries_the_apex`: `RecordedSummary { apex: Some("b.github.io"), .. }` ergibt `summary.apex == "b.github.io"`; `apex: None` ergibt `""`.
 - `convert::tests::live_summary_apex_is_empty_without_catalog`: `record_to_summary(&record, None)` gibt `""`, nicht die letzten zwei Labels.
 - `convert::tests::live_and_recorded_summary_agree_on_the_apex`: derselbe Flow über beide Funktionen, gleicher String.
+- `convert::tests::detail_summary_and_domain_agree_on_the_apex`: `record_to_detail(&record, domains)` liefert `summary.apex == domain.apex`, für `a.b.github.io` beide `b.github.io`, für `192.168.1.50` beide leer.
 - `convert::tests::filter_apex_is_exact`: `matches_filter` mit `apex:github.io` gegen eine Zeile mit `apex = "b.github.io"` ist `false`, mit `apex:b.github.io` `true`, Groß- und Kleinschreibung egal.
 - `fake::state::tests::summary_and_domain_agree_on_the_apex`: `summary().apex == domain().apex`.
 - `proto_roundtrip::flow_summary_carries_the_apex`: Feld überlebt Encode und Decode.
@@ -2018,20 +2047,36 @@ Gruppierung: `apexOfHost(Flow flow) => flow.apex.isEmpty ? flow.host : flow.apex
 - [ ] Nach je einer Anfrage an `a.b.github.io`, `api.github.com` und `192.168.1.50` zeigt `humanitl flows list --json` die drei Zeilen mit `"apex": "b.github.io"`, `"apex": "github.com"` und `"apex": ""`.
 - [ ] `humanitl flows list --filter apex:b.github.io --json` liefert genau diese eine Zeile, `--filter apex:github.io` null Zeilen; der Wert im Filter und der Wert in der Zeile sind derselbe String.
 - [ ] Derselbe Lauf, zwei Wege: `Subscribe` (`Received.summary.apex`) und `ListFlows` liefern für dieselbe `flow_id` denselben Wert, und nach einem Neustart des Daemons steht er weiter in der Zeile (e2e-Assertionen in `daemon_end_to_end.rs`).
-- [ ] Kein Pfad des echten Daemons rät: `rg "apex_of" daemon/crates/ipc/src` trifft nur `fake/` und die Rückfall-Funktion `domain_of`, und `live_summary_apex_is_empty_without_catalog` ist grün.
+- [ ] Kein Pfad rät mehr, auch der Fake nicht: `rg "apex_of" daemon/crates/ipc/src` trifft nichts; `domain_of` und `fake/state.rs` nutzen `humanitl_catalog::psl::apex`, `live_summary_apex_is_empty_without_catalog`, `summary_and_domain_agree_on_the_apex` und `detail_summary_and_domain_agree_on_the_apex` sind grün. (Das frühere Kriterium „trifft nur `fake/` und `domain_of`" war heute schon grün und bewies nichts, siehe Stand.)
 - [ ] `rg "multiLabelSuffixes|registrableDomain" app/` trifft nichts; `app/lib/features/intercept/psl.dart` existiert nicht mehr.
 - [ ] Warteschlange mit vier gehaltenen Anfragen an `a.foo.com.pl`, `b.evil.com.pl`, `a.b.github.io` und `c.b.github.io`: drei Gruppen, die letzten beiden zusammen unter `b.github.io`.
 - [ ] Ohne vorherige Auswahl und ohne einen `GetFlow`-Aufruf ist das Ziel „Domäne" in der Aktionsleiste für jede gehaltene Anfrage mit nicht-leerem Apex wählbar und die Regelvorschau nennt `**.<apex>`; bei leerem Apex bleibt es ausgegraut und nennt beim Anklicken den Grund.
 - [ ] `make check` grün, `proto/descriptor.binpb` im selben Commit erneuert, `tools/verify-commit.sh` vor dem Push grün.
 
+### Stand (2026-09-04): Größe L, ein fünfter Aufrufer, die Fakes raten weiter
+
+Geprüft am Code (Audit 2026-09-04, Zeilen gegen den heutigen Baum gezogen). Der Kern hält: die Spalte `apex` existiert und ist gefüllt (`daemon/crates/recorder/migrations/V1__init.sql:35`, `query.rs:39`, `:407`, `types.rs:327`, geschrieben über `ipc/src/domains.rs:113`), der Filter übersetzt `apex` zu `apex = ?` (`recorder/src/filter.rs:214`, Schlüssel in `KEYS` `:32`), das Proto führt Felder 1..24 ohne Apex (`humanitl.proto:312-350`), und `recorded_summary_to_proto` (`convert.rs:1377`) wirft `row.apex` weg. Die Drei-Wege-Divergenz ist belegt: Daemon exakt, Dart-Fake Suffix (`fake_daemon_client.dart:1825-1828` teilt den Fall mit `host`, `_suffixMatch:2026`), Rust-Fake kennt den Schlüssel nicht (`matches_filter`, `convert.rs:1159`). Keine neue Abhängigkeit nötig: `psl = "=2.1.228"` steht in `daemon/Cargo.toml:67`, `humanitl_catalog::psl::apex` (`catalog/src/psl.rs:27-29`, `::psl::domain_str`) ist `pub`, und `humanitl-ipc` hängt schon an `humanitl-catalog` (`ipc/Cargo.toml:13`, erlaubt in `tools/deps-allow.toml:22`).
+
+**Blockierend, im Text oben korrigiert:**
+
+- **Ein fünfter Aufrufer.** `record_to_detail` (`convert.rs:801`) ruft `record_to_summary` ohne `domains` und setzt daneben `domain: Some(domain_of(...))`, also den Rater `apex_of`. Der echte Dienst erreicht ihn: `server.rs:962` (`get_flow`) fällt darauf zurück, sobald `self.recorder` `None` ist (`server.rs:107`, Default `:173`) oder keine Zeile hat. Ergebnis wäre ein `FlowDetail` mit `summary.apex = ""` neben `domain.apex = <Rat>`, genau das, was der eigene Fallstrick verbietet. `record_to_detail` bekommt denselben Parameter.
+- **`apex_of` rät anders als der Daemon.** Die Quellen-Tabelle schrieb dem Rust-Fake `convert::apex_of` (`:631-643`) vor: letzte zwei Label, `a.b.github.io` wird `github.io`, ein IP-Literal wird zur Adresse, wo `catalog::psl::apex` `None` sagt. Mit dem exakten Vergleich fände `apex:b.github.io` im Fake nichts und `apex:github.io` die Zeile, umgekehrt zum Daemon und zum eigenen Test `filter_apex_is_exact`. Das Ziel „beide Fakes exakt wie der Daemon" ist nur zu halten, wenn `apex_of` durch `humanitl_catalog::psl::apex` ersetzt wird (eine Zeile, erreichbar); Tabelle, Fallstrick und Akzeptanzkriterium sind darauf umgestellt. Das alte Kriterium „`rg apex_of` trifft nur `fake/` und `domain_of`" war heute schon grün (Treffer: `convert.rs:631`, `:684`, `:691`, `fake/state.rs:22`, `:194`, `:791`, `:939-955`) und bewies nichts, weil `domain_of` über `record_to_detail` aus einem echten Pfad läuft.
+- **Die Tests, die kippen.** `psl_test.dart` gibt es nicht; die Tests von `psl.dart` stehen in `app/test/features/intercept/helpers_test.dart` (Import `:9`, Fälle `:83-104`) und fallen im selben Commit, sonst übersetzt die Datei nicht. `apexOfHost` auf `flow.apex` stellt jeden Gruppentest um: keine Fixture setzt `apex`; `heldFlow` (`app/test/features/intercept/fixtures.dart:25`) hat den Parameter nicht, `flowOf` (`held_groups_test.dart:17`) auch nicht, und `heldFlow` wird von 15 Testdateien benutzt, darunter drei Golden-Suites (`app/test/goldens/intercept_golden_test.dart`, `intercept_group_golden_test.dart`, `action_bar_golden_test.dart`). Ohne den Parameter zerfällt die Warteschlange in den Tests in eine Gruppe je Host (`held_groups_test.dart:60-63` erwartet `['npmjs.org', 'github.com']`, `:93-101` erwartet `pypi.org` und `files.pypi.org` in einer Gruppe). Dazu drei Fälle in `batch_test.dart` (`:173`, `:186`, `:313`), deren Prämisse „`psl.dart` rät" ist. Das ist der Grund für L statt M.
+
+**Kleineres, im Text korrigiert:** `Blockiert: HUM-036` war falsch; HUM-036 ist gemerged (`0bfe967`, `617cf77`), und der M2-Lauf filtert über `apex:` (`run.sh:409`, `:460`, `:469`, `:471`, `:478`, `:484`), ohne je `FlowSummary.apex` zu lesen. Gebraucht wird das Feld von HUM-094 (Gruppenkopf). Zeilenanker waren 20 bis 40 Zeilen verschoben (`received_summary` `:1108`, `matches_filter` `:1159`, `server.rs` `:108`/`:297`/`:356`/`:962`, `fake/state.rs` `:122`/`:192-194`, `flows.rs` `:494`/`:548`, `flow.dart:85`). `backlog/CONVENTIONS.md`: der `psl.dart`-Absatz steht in 4.15 bei `:650`, nicht `:628-637`, und 4.16 (`:1808`) behauptet ebenfalls, `psl.dart` rate die registrierbare Domäne; beide Stellen fallen. Kommentare mit derselben Behauptung stehen in der Pfadliste.
+
+**Voraussetzungen:** `proto/humanitl/v1/humanitl.proto`, `proto/descriptor.binpb` und `proto/generated.sha256` sind im Arbeitsbaum schmutzig (HUM-040: `SandboxRequest.Plan`, `Mount`, `EnvVar`, laut `docs/PROTOCOL.md:65`). Wer jetzt regeneriert, backt fremde Nachrichten in Descriptor und Hash ein; `daemon/crates/ipc/tests/proto_contract.rs` vergleicht Byte für Byte, und `tools/verify-commit.sh` wird rot. Proto-Schritt erst nach dem Merge von HUM-040, Datei unmittelbar davor neu einlesen. `protoc-gen-dart` liegt außerhalb des `PATH` (siehe HUM-089 Stand); ohne `export PATH="$PATH:$HOME/.pub-cache/bin"` existiert `pb.FlowSummary.apex` nicht und `app/lib/core/ipc/convert.dart` übersetzt nicht.
+
+**Bauabfolge (aus dem Audit):** (1) Feld 25, `cargo xtask proto`, `proto_contract` grün. (2) `recorded_summary_to_proto` füllt `row.apex`; eine Zeile, macht den History-Pfad allein ehrlich und ist für sich lieferbar. (3) `record_to_summary`, `received_summary` und `record_to_detail` bekommen `domains`; Aufrufer `server.rs:297`, `:356`, `:962`. (4) `apex_of` durch `humanitl_catalog::psl::apex` ersetzen, `fake/state.rs::summary` füllen. (5) `matches_filter`, `summary_json` (`flows.rs:548`, `apex` direkt nach `authority`). (6) Dart: `Flow.apex` neben `authority` (`flow.dart:85`), `convert.dart`, Fake-Fall `apex` von `host` trennen, `apex` in die Szenarien. (7) `apex`-Parameter in `heldFlow` und `flowOf`, 15 Testdateien, drei Goldens neu abnehmen. (8) `psl.dart` und `helpers_test.dart:9,83-104` raus, `held_groups.dart:184`, `decision.dart:981` und `:990`, Kommentare. (9) `daemon_end_to_end.rs`: `the_recording_outlives_the_daemon` (`:328`) erweitern, Harness liegt in `spawn` (`:108`); `a.b.github.io`, `api.github.com`, `192.168.1.50`; `ListFlows` gegen `Subscribe`, Neustart, `filter: "apex:b.github.io"`. (10) CONVENTIONS 4.3 (`:325`), 4.15 (`:650`), 4.16 (`:1808`); `make check`; `tools/verify-commit.sh`.
+
 ### Fallstricke
 - Feldnummer 25, sonst nichts umnummerieren. `proto/descriptor.binpb` gehört in denselben Commit: `proto_contract.rs` vergleicht Byte für Byte, und ein Arbeitsbaum mit erneuertem Descriptor ist grün, während derselbe Commit auf `main` rot ist.
-- `convert::apex_of` bleibt der Rückfall des Fakes und füllt im echten Daemon nichts. Er nimmt die letzten zwei Labels, macht aus `a.b.github.io` also `github.io` und legt zwei fremde Registranten unter einen Namen; und für ein IP-Literal gibt er die Adresse zurück, wo `catalog::psl::apex` `None` sagt. Beide Antworten dürfen in derselben Nachricht nicht nebeneinander stehen.
+- `convert::apex_of` (`convert.rs:631-643`) entfällt, statt Rückfall des Fakes zu bleiben. Er nimmt die letzten zwei Labels, macht aus `a.b.github.io` also `github.io` und legt zwei fremde Registranten unter einen Namen; für ein IP-Literal gibt er die Adresse zurück, wo `catalog::psl::apex` `None` sagt. Mit dem exakten Vergleich fände `apex:b.github.io` im Fake nichts und `apex:github.io` die Zeile, umgekehrt zum Daemon und zum eigenen Test `filter_apex_is_exact`. `humanitl_catalog::psl::apex` ist von `humanitl-ipc` aus erreichbar (`ipc/Cargo.toml:13`, `tools/deps-allow.toml:22`); eine Zeile. Beide Antworten dürfen in derselben Nachricht nicht nebeneinander stehen.
 - Ein leerer Apex ist keine Einladung zum Raten. Die Gruppierung nimmt dann den Host, der Kopf schreibt den Host, und niemand ergänzt „unbekannt" durch eine Ableitung; genau das verbietet CONVENTIONS 4.13.
 - `apex` ist das A-Label wie `authority.host`, nie die Anzeigeform. Die Spalte hält das A-Label, und der Filter vergleicht dagegen; eine Anzeigeform im Feld würde bei internationalisierten Namen dazu führen, dass man nach dem filtert, was man sieht, und nichts findet.
 - Geteilte Dateien: `app/lib/core/ipc/fake_daemon_client.dart` und `app/lib/core/domain/flow.dart` berühren mehrere Issues. Nur den eigenen Abschnitt ändern, die Datei unmittelbar vor jedem Schreiben neu einlesen, nie im Ganzen neu schreiben.
 - Die Szenarien des `FakeDaemonClient` müssen `apex` setzen. Sonst zerfällt die Warteschlange dort in eine Gruppe je Host, und die Tests von `held_groups_test.dart` verschieben sich, ohne dass am Produkt etwas kaputt wäre — ein Fehlalarm, der viel Zeit kostet.
-- `record_to_summary` bekommt einen zweiten Parameter; jeder Aufrufer übergibt die Tabelle. Ein Aufrufer mit `None` erzeugt still eine zweite Form derselben Zeile, und die fällt erst auf, wenn ein Client zwei Antworten auf dieselbe Frage sieht.
+- `record_to_summary` bekommt einen zweiten Parameter; jeder Aufrufer übergibt die Tabelle. Ein Aufrufer mit `None` erzeugt still eine zweite Form derselben Zeile, und die fällt erst auf, wenn ein Client zwei Antworten auf dieselbe Frage sieht. Der Aufrufer, der in der ersten Fassung fehlte, ist `record_to_detail` (`convert.rs:801`), erreichbar über `server.rs:962`.
 
 ### Referenzen
 BACKLOG.md 3.3; `backlog/sprint-2.md` HUM-026 (Filter-Grammatik, „`FlowSummary` enthält alle Spalten von `flows`"), HUM-031; `backlog/CONVENTIONS.md` 4.3, 4.13, 4.15; ADR-006 (gebündelte Daten, kein Fetch zur Laufzeit); ADR-018; Public Suffix List (https://publicsuffix.org/).
@@ -2039,7 +2084,7 @@ BACKLOG.md 3.3; `backlog/sprint-2.md` HUM-026 (Filter-Grammatik, „`FlowSummary
 ---
 
 ## HUM-094 · Katalogname und Editor fehlen dem M2-Demolauf
-Sprint: 2 · Größe: L · Abhängigkeiten: HUM-029, HUM-031 (Daemon-Hälfte gemerged), HUM-036 (Daemon-Hälfte gemerged) · Blockiert: Sprint-3-Merges (Sprint-Gate, geerbt von HUM-036)
+Sprint: 2 · Größe: XL · Abhängigkeiten: HUM-029, HUM-031 (Daemon-Hälfte gemerged), HUM-036 (Daemon-Hälfte gemerged), HUM-091 (`FlowSummary.apex`, `psl.dart` entfällt), HUM-097 (Bildschirm-Lauf während des Haltens), Entscheidung zu `FlowSummary.catalog_id` (siehe Stand) · Blockiert: Sprint-3-Merges (Sprint-Gate, geerbt von HUM-036)
 
 ### Kontext
 `BACKLOG.md:459` verspricht für M2 die Katalog-Karte, `BACKLOG.md:457` für die Warteschlange eine „Summary-Zeile mit Katalog-Identität", und `backlog/sprint-2.md:1660` schreibt die Behauptung aus, an der das gemessen werden soll: „npm-Gruppe eingeklappt, Summary „Looks like: npm install", `0 findings`". Die Daten dafür liegen im Repository und reisen bereits über die Leitung. Die Daemon-Hälfte von HUM-031 ist gemerged (`4790c4a merge: HUM-031 catalog`), `catalog/domains.yaml` trägt die Einträge samt `name` und `typical`, `catalog_id` steht im Proto und wird in `app/lib/core/ipc/convert.dart:184-188` nach `DomainInfo` übersetzt.
@@ -2050,10 +2095,10 @@ Das ist kein offenes Feature, sondern eine Zusage, die heute unwahr ist. HUM-031
 
 Die zweite Hälfte des Titels ist eine Zusage in `BACKLOG.md:395`: M2 liefert „Allow/Edit/Block". `Edit + Allow` hat kein Control (`app/lib/features/intercept/widgets/action_bar.dart:385-388`), die ARB-Strings liegen ungenutzt bereit (`app/l10n/app_en.arb:233-234`), und der Request-Editor ist HUM-047 in Sprint 4. Behoben wird das durch eine Korrektur an dieser einen Zeile, nicht durch Code: `Edit + Allow` ist keine Zusicherung von HUM-036. Der ganze Abschnitt `backlog/sprint-2.md:1605-1695` hat null Treffer für „edit" oder „Edit", und keiner der Schritte 1 bis 8 (`:1659-1667`) bearbeitet je einen Request. HUM-047 blockiert M2 nicht.
 
-Zwei Dinge werden dabei ausdrücklich nicht behauptet. Erstens steht `M2_EXPECTED_ASSERTIONS=47` in `tests/e2e/m2_first_decision/run.sh:76` nicht wegen dieser Lücken niedriger: der Kommentar `:71-75` definiert die Zahl als „So viele Behauptungen prüft ein vollständiger Lauf ohne die Oberfläche", und die Oberflächen-Hälfte fällt aus genau einem Grund aus, nämlich weil `app/integration_test/m2_first_decision_test.dart` fehlt (`run.sh:518-520`). Der fehlende Katalogname ist eine unter vielen ungeprüften Sachen, nicht die Ursache der Zahl. Zweitens ist der Katalog nicht ungeprüft: `run.sh:321-329` vergleicht die Apex-Spalte, die der Katalog beim Eintreffen füllt, gegen die Zählung nach Host, zwölf gegen zwölf. Ungeprüft ist der Name.
+Zwei Dinge werden dabei ausdrücklich nicht behauptet. Erstens steht `M2_EXPECTED_ASSERTIONS=59` in `tests/e2e/m2_first_decision/run.sh:112` nicht wegen dieser Lücken niedriger: der Kommentar `:107-111` definiert die Zahl als „So viele Behauptungen prüft ein vollständiger Lauf ohne die Oberfläche", und die Oberflächen-Hälfte fällt aus genau einem Grund aus, nämlich weil `app/integration_test/m2_first_decision_test.dart` fehlt (`run.sh:673-681`). Der fehlende Katalogname ist eine unter vielen ungeprüften Sachen, nicht die Ursache der Zahl. Zweitens ist der Katalog nicht ungeprüft: `run.sh:406-416` vergleicht die Apex-Spalte, die der Katalog beim Eintreffen füllt, gegen die Zählung nach Host, zwölf gegen zwölf. Ungeprüft ist der Name.
 
 ### Ziel
-Das rechte Pane des Intercept-Bildschirms zeigt für eine Anfrage an `registry.npmjs.org` die Katalog-Karte mit „npm registry", Kategorie-Chip, Beschreibung, „Typical for: npm install", Rang-Badge und Schnellregeln; für `evil.example` die gestrichelte Unbekannt-Karte; ohne Auswahl die Sitzungs-Zusammenfassung. Der Kopf einer Gruppe, deren gehaltene Anfragen alle dieselbe `catalog_id` vom Daemon tragen, nennt den Dienst statt eines Hosts, und dieselbe Zeile steht in der Auswahl-Karte. `tests/e2e/m2_first_decision/run.sh` überspringt Schritt 10 nicht mehr, sondern fährt `app/integration_test/m2_first_decision_test.dart` unter `xvfb-run`, prüft den HAR-Export und prüft, dass auf dem Bildschirm der Dienstname und nicht der Host stand. `BACKLOG.md:395` verspricht für M2 nur noch, was M2 liefert.
+Das rechte Pane des Intercept-Bildschirms zeigt für eine Anfrage an `registry.npmjs.org` die Katalog-Karte mit „npm registry", Kategorie-Chip, Beschreibung, „Typical for: npm install", Rang-Badge und Schnellregeln; für `evil.example` die gestrichelte Unbekannt-Karte; ohne Auswahl die Sitzungs-Zusammenfassung. Der Kopf einer Gruppe, deren gehaltene Anfragen alle dieselbe `catalog_id` vom Daemon tragen, nennt den Dienst statt eines Hosts, und dieselbe Zeile steht in der Auswahl-Karte. Der Bildschirm-Lauf aus HUM-097 prüft zusätzlich, dass auf dem Bildschirm der Dienstname und nicht der Host stand; Schritt 10, `m2_first_decision_test.dart` und die HAR-Prüfung selbst sind HUM-097. `BACKLOG.md:395` verspricht für M2 nur noch, was M2 liefert.
 
 ### Nicht-Ziel
 Kein Request-Editor. `Edit + Allow` bleibt bis HUM-047 (Sprint 4) ohne Control, und die Karte zeigt den Body weiter nur lesend; hier fällt allein die falsche Zusage in `BACKLOG.md:395`. Kein Live-Fetch von Favicon oder Vorschau, keine Screenshots, keine Nutzer-Kataloge (M9, M7, wie in HUM-031). Keine neuen Einträge in `catalog/domains.yaml` über die vorhandenen hinaus (HUM-059). Kein Umbenennen von `tranco_rank` nach `popularity_rank` (eigener Chore, siehe HUM-031 Kontext). Nicht der zu weit gefasste Satz in `CONTRIBUTING.md:46-47` („a run that skipped a branch fails instead of reporting success"); der M2-Lauf überspringt heute den Bildschirm-Zweig und endet trotzdem mit 0, meldet das aber laut und bricht mit `M2_UI=1` ab, also ist dort kein Loch, sondern ein zu weiter Satz — eigenes Issue.
@@ -2063,19 +2108,22 @@ Kein Request-Editor. `Edit + Allow` bleibt bis HUM-047 (Sprint 4) ohne Control, 
 - `app/lib/features/intercept/providers/catalog.dart`, `catalog.g.dart` (neu)
 - `app/lib/features/intercept/widgets/domain_panel.dart`, `catalog_card.dart`, `unknown_domain_card.dart` (neu)
 - `app/assets/catalog/domains.yaml` (neu, erzeugte Kopie von `catalog/domains.yaml`)
-- `app/integration_test/m2_first_decision_test.dart` (neu)
+- `app/integration_test/m2_first_decision_test.dart` (HUM-097; hier nur der Nachtrag der zwei Namens-Behauptungen)
 - `app/test/features/intercept/catalog_test.dart`, `domain_panel_test.dart` (neu); Goldens unter `app/test/goldens/`
-- `app/lib/features/intercept/intercept_screen.dart` (ändern: Import Zeile 36, Verwendung Zeile 476)
+- `app/lib/core/domain/flow.dart`, `app/lib/features/intercept/providers/flows.dart:54-57` (ändern: `DomainInfo` je Warteschlangenzeile behalten statt verwerfen, siehe Stand)
+- `app/lib/core/ipc/fake_daemon_client.dart` (ändern, geteilte Datei: `Received.domain` in den Szenarien füllen; heute null Treffer für `domain` in der Datei)
+- `proto/humanitl/v1/humanitl.proto` (nur falls die Entscheidung `FlowSummary.catalog_id` lautet; dann zusammen mit HUM-091)
+- `app/lib/features/intercept/intercept_screen.dart` (ändern: Import Zeile 37, Verwendung Zeile 478)
 - `app/lib/features/intercept/widgets/domain_pane_placeholder.dart` (entfällt)
 - `app/lib/features/intercept/providers/held_groups.dart` (ändern: Zeilen 56, 168, 184)
-- `app/lib/features/intercept/widgets/group_header_row.dart` (ändern: Zeilen 145-151)
+- `app/lib/features/intercept/widgets/group_header_row.dart` (ändern: `groupTitle`, Zeilen 149-152)
 - `app/lib/features/intercept/widgets/selection_card.dart` (ändern: Zeile 51)
-- `app/lib/features/intercept/psl.dart` (ändern: nur noch Rückfall, siehe Spezifikation)
+- `app/lib/features/intercept/psl.dart` (entfällt mit HUM-091; hier nicht mehr berührt)
 - `app/l10n/app_en.arb`, `app/l10n/app_de.arb` (ändern: neue Schlüssel ans Ende des eigenen Abschnitts)
 - `app/pubspec.yaml` (ändern: `yaml` in `dependencies`, `assets:`-Block unter `flutter:`)
 - `Makefile` (ändern: Ziele `catalog-assets` und `catalog-lint`)
-- `tests/e2e/m2_first_decision/run.sh` (ändern: Zeile 76, Schritt 10 Zeilen 516-559)
-- `backlog/CONVENTIONS.md` (ändern: 4.15 Zeilen 669-673, 4.22 Zeilen 1251-1258)
+- `tests/e2e/m2_first_decision/run.sh` (ändern: nur der Nachtrag der zwei Namens-Behauptungen in Schritt 10, Zeilen 671-716, und `M2_EXPECTED_ASSERTIONS` in Zeile 112; der Umbau des Schritts ist HUM-097)
+- `backlog/CONVENTIONS.md` (ändern: 4.15, Satz bei Zeile 695; 4.22, Absatz zur Oberflächen-Hälfte bei Zeile 1420, zusammen mit HUM-097)
 - `BACKLOG.md` (ändern: Zeile 395)
 
 `.github/workflows/ci.yml` bleibt unberührt: der Job `e2e-xvfb` (Zeilen 516-569) installiert `xvfb`, richtet Flutter ein und lädt `target/e2e` hoch; nachgeprüft, keine Änderung nötig.
@@ -2096,7 +2144,7 @@ abstract class CatalogEntry with _$CatalogEntry {
     @Default(<String>[]) List<String> typical,
     @Default('') String icon,
     @Default('') String homepage,
-    @Default('') String riskNote,
+    @Default(<String, String>{}) Map<String, String> riskNote, // en/de wie description
   }) = _CatalogEntry;
 
   const CatalogEntry._();
@@ -2133,14 +2181,7 @@ catalog-lint: ## The bundled catalog matches the source byte for byte
 
 `catalog-lint` hängt an `check`, `catalog-assets` an `flutter-codegen`.
 
-Gruppierung. `DomainInfo.apex` kommt vom Daemon und wird bevorzugt; `registrableDomain` aus `psl.dart` bleibt Rückfall für Flows ohne `DomainInfo` (Fake-Szenarien, ältere Ereignisse).
-
-```dart
-// held_groups.dart
-String apexOfHost(Flow flow) => flow.domain.apex.isNotEmpty
-    ? flow.domain.apex
-    : registrableDomain(flow.host, isIpLiteral: flow.authority.isIpLiteral);
-```
+Gruppierung. Der Apex kommt aus `FlowSummary.apex` (HUM-091): `apexOfHost(Flow flow) => flow.apex.isEmpty ? flow.host : flow.apex;`. `Flow` hat kein Feld `domain` (`app/lib/core/domain/flow.dart:76-110`, `DomainInfo` hängt an `FlowDetail:174`); das frühere Beispiel `flow.domain.apex` kompilierte nicht. Die `catalog_id` je Zeile braucht einen eigenen Draht, siehe Stand.
 
 `HeldGroup` bekommt zwei Felder:
 
@@ -2173,7 +2214,7 @@ Rang-Format wie in HUM-031: unter 1000 exakt, darüber `1.2k`, ohne Rang `unrank
 
 `DomainPanel` hat drei Zustände: Katalog-Karte, Unbekannt-Karte, Sitzungs-Zusammenfassung ohne Auswahl (Anzahl Hosts, Top 5 nach Requests). Aufbau der Karten wie in HUM-031 spezifiziert; die Schnellregeln rufen `Rules(add)`, nie `Decide`.
 
-`run.sh` Schritt 10. Der Zweig für die fehlende Datei wird zum harten Fehler, weil die Datei ab jetzt im Repository liegt:
+`run.sh` Schritt 10 gehört HUM-097 (Treiber-Schalter, Bildschirm läuft während des Haltens). Dieses Issue trägt nur den Nachtrag ein, sobald der Gruppenkopf steht; der Zweig für die fehlende Datei wird dann zum harten Fehler:
 
 ```sh
 if [ "${M2_UI:-auto}" = 0 ]; then
@@ -2194,9 +2235,9 @@ e2e_check "and says what the group looks like" \
     "$(grep -q 'Looks like: npm install' "$M2_GROUP_SUMMARY" && echo ok)"
 ```
 
-Schritt 10 zählt damit vier Behauptungen mit (HAR geschrieben, HAR-Einträge, Name, Katalogzeile). `M2_EXPECTED_ASSERTIONS` in Zeile 76 steigt auf die Zahl, die der Lauf meldet, mindestens 51.
+Schritt 10 zählt damit zwei Behauptungen mehr (Name, Katalogzeile); HAR geschrieben und HAR-Einträge zählt HUM-097. `M2_EXPECTED_ASSERTIONS` (`run.sh:112`, heute 59 ohne Oberfläche) trägt die Zahl, die der Bildschirm-Zweig nach HUM-097 meldet; HUM-097 führt sie je Zweig.
 
-`backlog/CONVENTIONS.md`: In 4.15 fällt der letzte Satz des Absatzes zu `Edit + Allow` weg (Zeilen 672-673, „Aus demselben Grund fehlen der Katalogname … bis HUM-031 den Katalog liefert."); der Satz zu `Edit + Allow` selbst bleibt, bis HUM-047 ihn einlöst. Der Absatz bei Zeile 637 wird umgeschrieben: der Rat aus `psl.dart` entfällt für Gruppen mit Daemon-Apex, samt der Sonderregel des Gruppen-Modals, und bleibt für alle anderen. In 4.22 fällt der Satz weg, der die Oberflächen-Hälfte als ausstehend führt (Zeilen 1253-1258).
+`backlog/CONVENTIONS.md`: In 4.15 fällt der letzte Satz des Absatzes zu `Edit + Allow` weg (Zeile 695, „… bis HUM-031 den Katalog liefert."); der Satz zu `Edit + Allow` selbst bleibt, bis HUM-047 ihn einlöst. Den `psl.dart`-Absatz (Zeile 650) schreibt HUM-091 um; das Modal für Entscheidungen über mehrere Hosts bleibt mit der Begründung von dort. In 4.22 fällt der Absatz weg, der die Oberflächen-Hälfte als ausstehend führt (Zeile 1420); das tut HUM-097.
 
 `BACKLOG.md:395`: „Allow/Edit/Block" wird zu „Allow/Block (Editor ab M4, HUM-047)".
 
@@ -2205,8 +2246,8 @@ Schritt 10 zählt damit vier Behauptungen mit (HAR geschrieben, HAR-Einträge, N
 2. `CatalogEntry` und `catalogProvider`. Prüfbar: `flutter test test/features/intercept/catalog_test.dart` grün, der Test liest das echte Asset und findet `npm` mit Name „npm registry".
 3. `DomainPanel` mit den drei Zuständen, `catalog_card.dart`, `unknown_domain_card.dart`, Schnellregeln, Goldens. `intercept_screen.dart` umhängen, `domain_pane_placeholder.dart` löschen. Prüfbar: `grep -rn DomainPanePlaceholder app/lib app/test` leer, `make flutter-test` grün.
 4. Gruppierung auf den Apex des Daemons umstellen, `HeldGroup.catalogId` und `apexFromDaemon`, Kopf und Auswahl-Karte, ARB-Schlüssel, Sonderregel des Gruppen-Modals nur noch für Gruppen ohne Daemon-Apex. Prüfbar: `make flutter-analyze flutter-test` grün.
-5. `app/integration_test/m2_first_decision_test.dart` nach den acht Schritten aus `backlog/sprint-2.md:1659-1667`, schreibt HAR und Summary-Zeile in die Pfade aus der Umgebung. Prüfbar: `xvfb-run -a flutter test integration_test/m2_first_decision_test.dart -d linux` gegen einen von Hand gestarteten Lauf grün.
-6. `run.sh` Schritt 10 und Zeile 76. Prüfbar: `M2_UI=1 tests/e2e/m2_first_decision/run.sh` endet 0, ohne `SKIPPED:`-Zeile und ohne `raise M2_EXPECTED_ASSERTIONS`.
+5. Nachtrag zu HUM-097s `m2_first_decision_test.dart`: die Summary-Zeile der npm-Gruppe nach `$HUMANITL_E2E_GROUP_SUMMARY` schreiben. Prüfbar: `xvfb-run -a flutter test integration_test/m2_first_decision_test.dart -d linux` gegen einen von Hand gestarteten Lauf grün.
+6. `run.sh` Schritt 10: die zwei Namens-Behauptungen und `M2_EXPECTED_ASSERTIONS` (Zeile 112 bzw. der Wert des Bildschirm-Zweigs). Prüfbar: `M2_UI=1 tests/e2e/m2_first_decision/run.sh` endet 0, ohne `SKIPPED:`-Zeile und ohne `raise M2_EXPECTED_ASSERTIONS`.
 7. `backlog/CONVENTIONS.md` 4.15 und 4.22 sowie `BACKLOG.md:395` nachziehen. Prüfbar: `make check` grün.
 
 ### Tests
@@ -2227,24 +2268,42 @@ Schritt 10 zählt damit vier Behauptungen mit (HAR geschrieben, HAR-Einträge, N
 - [ ] `grep -n 'interceptGroupLooksLike' app/l10n/app_en.arb app/l10n/app_de.arb` liefert je einen Treffer, `make flutter-codegen` läuft ohne Warnung, und `grep -rn 'interceptGroupLooksLike' app/lib` liefert mindestens den Treffer in `group_header_row.dart`.
 - [ ] `make flutter-test` grün, inklusive der drei Goldens `domain_panel_known`, `domain_panel_unknown`, `domain_panel_session_summary` und der Tests `quick_rule_calls_rules_add`, `group_title_uses_catalog_name`, `group_title_keeps_host_when_catalog_ids_differ`.
 - [ ] `make catalog-lint` endet 0. Nach `printf '\n' >> app/assets/catalog/domains.yaml` endet es 1 mit einer Meldung, die beide Pfade nennt (danach `git checkout app/assets/catalog/domains.yaml`).
-- [ ] `M2_UI=1 tests/e2e/m2_first_decision/run.sh` endet mit 0. Die Ausgabe enthält keine Zeile mit `SKIPPED:` und keine mit `raise M2_EXPECTED_ASSERTIONS`.
-- [ ] Der Lauf meldet mindestens 51 geprüfte Behauptungen, und `M2_EXPECTED_ASSERTIONS` in `tests/e2e/m2_first_decision/run.sh:76` trägt genau die gemeldete Zahl.
+- [ ] (nach HUM-097) `M2_UI=1 tests/e2e/m2_first_decision/run.sh` endet mit 0. Die Ausgabe enthält keine Zeile mit `SKIPPED:` und keine mit `raise M2_EXPECTED_ASSERTIONS`.
+- [ ] Der Bildschirm-Zweig meldet zwei Behauptungen mehr als vor diesem Issue, und `M2_EXPECTED_ASSERTIONS` in `tests/e2e/m2_first_decision/run.sh:112` (bzw. der Wert je Zweig nach HUM-097) trägt genau die gemeldete Zahl. (Die frühere Zahl „mindestens 51" bezog sich auf einen Stand von 47; heute sind es 59 ohne Oberfläche.)
 - [ ] Zwei dieser Behauptungen betreffen den Namen: die Datei aus `$HUMANITL_E2E_GROUP_SUMMARY` enthält `npm registry` und `Looks like: npm install`. Gegenprobe von Hand: liefert `groupTitle` wieder `group.display`, fallen beide aus und der Lauf endet mit 1.
-- [ ] `jq -r '.log.entries | length' "$M2_HAR"` liefert 17, die Datei ist nicht leer.
-- [ ] Ein Lauf ohne `app/integration_test/m2_first_decision_test.dart` (Datei versetzen, danach zurück) endet mit 1 und der Meldung, dass sie fehlt, nicht mehr mit 0.
+- [ ] (HUM-097) `jq -r '.log.entries | length' "$M2_HAR"` liefert 17, die Datei ist nicht leer.
+- [ ] (HUM-097) Ein Lauf ohne `app/integration_test/m2_first_decision_test.dart` (Datei versetzen, danach zurück) endet mit 1 und der Meldung, dass sie fehlt, nicht mehr mit 0.
 - [ ] `grep -n 'bis HUM-031 den Katalog liefert' backlog/CONVENTIONS.md` liefert null Treffer, und 4.22 führt die Oberflächen-Hälfte von HUM-036 nicht mehr als ausstehend.
 - [ ] `grep -n 'Allow/Edit/Block' BACKLOG.md` liefert null Treffer; die M2-Zeile nennt den Editor als M4 mit Verweis auf HUM-047.
 - [ ] `make check` grün.
 
+### Stand (2026-09-04): Größe XL, die e2e-Hälfte gehört HUM-097, der Gruppenkopf hat keinen Draht
+
+Geprüft am Code (Audit 2026-09-04, Zeilen gegen den heutigen Baum gezogen). Die Bestandsaufnahme hält: `app/assets/` fehlt, `Makefile` hat weder `catalog-assets` noch `catalog-lint`, `app/pubspec.yaml` keinen `assets:`-Block und keine `yaml`-Abhängigkeit, `interceptGroupLooksLike` null Treffer, `DomainPanePlaceholder` steht (`intercept_screen.dart:37`, `:478`), `catalog/domains.yaml` trägt 34 Einträge mit `name`, `typical` und `description` als `en`/`de`-Abbildung, die Katalog-Crate ist vollständig, und der Daemon liefert `DomainInfo` live (`convert.rs:964-978`) und in `GetFlow` (`server.rs:469`, `:484-491`). Baubar ohne jede Vertragsänderung ist die Katalog-Karte für den ausgewählten Flow: `flowDetailProvider(id).value?.domain` trägt `apex`, `catalogId`, `trancoRank`, `firstSeen`, `seenCount`, vom Daemon gefüllt.
+
+**Blockierend:**
+
+- **Der Gruppenkopf aus `catalog_id` hat keinen Draht.** `Flow` (`app/lib/core/domain/flow.dart:76-110`) hat kein Feld `domain`; `DomainInfo` hängt an `FlowDetail` (`:174`) und an `Received`. `FlowSummary` auf der Leitung trägt keine `DomainInfo` (`humanitl.proto:312-350`, Felder 1..24). Die einzige Stelle, an der sie je Warteschlangenzeile ankommt, verwirft sie: `flows.dart:56-57` zerlegt `FlowEventReceived` nur nach `flow`. Die Nachlieferung schickt `domain: None` (`server.rs:338`), die App abonniert ohne `since` (`flow_events.dart`), und der Lücken-Reload geht über `ListFlows`, also über `FlowSummary` ohne Domain (`flows.dart:167-190`). Das frühere Code-Beispiel `flow.domain.apex` kompilierte nicht (oben korrigiert). Ein `FlowSummary.catalog_id` stand nicht in „Betroffene Pfade", und HUM-091 verbietet es in seinem Nicht-Ziel. **Entscheidung des Projekteigentümers vor Teil (c):** `FlowSummary.catalog_id` im Proto (zusammen mit HUM-091, dessen Nicht-Ziel dann fällt) oder `DomainInfo` aus `Received` in `flows.dart` mitführen und den Kopf nur benennen, wenn jede gehaltene Anfrage der Gruppe live beobachtet wurde (deckt Nachlieferung und Reload nicht ab; der Kopf zeigt dann ehrlich den Host).
+- **Die e2e-Hälfte gehört HUM-097.** `m2_first_decision_test.dart`, Schritt 10, HAR-Prüfung und `M2_UI=1` sind HUM-097 (`BACKLOG.md:470`, `run.sh:63-65`, `:671-716`); HUM-097 nahm umgekehrt den Katalognamen aus seiner Akzeptanz und verwies auf dieses Issue. Beide warteten aufeinander. Ab jetzt: HUM-097 baut den Bildschirm-Lauf, die zwei Namens-Behauptungen kommen als Nachtrag hinein, wenn der Gruppenkopf steht (Pfadliste, Schritte und Kriterien oben entsprechend gefasst).
+- **Im beschriebenen Lauf gibt es zum Zeitpunkt der Prüfung keine npm-Gruppe.** `run.sh` entscheidet alle 17 Flüsse über die Kommandozeile in den Schritten 2 bis 4 (`:425-513`) und startet den Bildschirm erst in Schritt 10 (`:671`), nach `wait "$M2_AGENT_PID"` (`:517`). `heldGroups` leitet aus `heldFlowsProvider` ab (`held_groups.dart:234-235`), `heldFlows` filtert `flow.isHeld` (`flows.dart:195`): nichts hält mehr, keine Gruppe, keine Summary-Zeile, beide Namens-Behauptungen fallen aus. Erst HUM-097s Umbau (Bildschirm-Treiber während des Haltens) macht sie prüfbar.
+- **Zahlen veraltet.** `M2_EXPECTED_ASSERTIONS` steht bei `run.sh:112` und trägt 59, nicht 47 bei `:76`; Zeile 76 ist Prosa über `resolver.test_ca`. Nach zwei zusätzlichen Behauptungen wäre die Zahl des Bildschirm-Zweigs plus zwei richtig, nicht 51. Oben korrigiert.
+- **HUM-091 schreibt dieselben drei Zeilen anders.** `held_groups.dart:184`, `decision.dart:975-995`: HUM-091 löscht `psl.dart` und setzt `apexOfHost` auf `flow.apex.isEmpty ? flow.host : flow.apex`. Der Fallstrick „`psl.dart` bleibt Rückfall" ist damit hinfällig und korrigiert; HUM-091 steht jetzt in den Abhängigkeiten.
+
+**Major, im Text korrigiert oder hier vermerkt:** `risk_note` ist eine `en`/`de`-Abbildung (`catalog/domains.yaml:34-37`, `entry.rs:157` `Option<Text>`), kein String; dieselbe Falle, vor der die Spezifikation bei `description` selbst warnt. `run.sh` Schritt 10 wird von HUM-097 anders umgebaut als hier beschrieben (Treiber-Schalter; Abschnitte 2 bis 4 entfallen mit Oberfläche); der Zweig ist außerdem nicht stumm: `M2_UI=1` stirbt heute (`:678-679`). Zeilenanker waren teils um 200 Zeilen verschoben (`groupTitle` `group_header_row.dart:149-152`; CONVENTIONS 4.15 läuft `:637-696`, „bis HUM-031 den Katalog liefert" steht `:695`; 4.22 beginnt `:1273`, die Oberflächen-Hälfte steht `:1420`; HAR-Prüfung `run.sh:712-713`, xvfb `:703`, Zähler-Zweig `:748-753`, Apex gegen Host `:406-416`). Richtig waren `BACKLOG.md:395`, `:457`, `:459`, `app_en.arb:801`, `app_de.arb:315`, `action_bar.dart:385-389`, `held_groups.dart:56`, `:168`, `:184`, `selection_card.dart:51`, `ci.yml` 516-569.
+
+**Minor, offen:** `icon` bleibt tot (`make catalog-assets` kopiert nur die YAML, `catalog/icons/` hält 12 SVG, `app/pubspec.yaml` hat keinen SVG-Renderer) und `source` fehlt der Karte, obwohl `entry.rs:150-152` es als „Pflicht, damit die Karte prüfbar bleibt" führt; entweder `catalog/icons/` mitbündeln samt Renderer oder die Zusage „Icon gebündelt" in `BACKLOG.md:459` zurücknehmen. Ein relativer Symlink `app/assets/catalog/domains.yaml -> ../../../catalog/domains.yaml` würde Kopie, `catalog-lint` und Driftgefahr ersetzen (`Makefile:57-58`: Erzeugtes ist keine Quelle und steht nicht im Repository). Beides entscheidet der Projekteigentümer beziehungsweise der Bau, nicht dieser Abschnitt.
+
+**Empfehlung des Audits, nicht entschieden:** nicht als ein Issue bauen. (a) Größe S, sofort, reine Dokumentation: `BACKLOG.md:395` und `CONVENTIONS.md:695` korrigieren; damit ist die unwahre Zusage weg, ohne eine Zeile Code. (b) Größe M, ohne Vertragsänderung: Asset (Kopie oder Symlink), `CatalogEntry`, `catalogProvider`, `DomainPanel` aus `flowDetailProvider(id).value?.domain`, drei Goldens, `quick_rule_calls_rules_add`. (c) Größe M, nach der Entscheidung oben und nach HUM-091: Gruppierung auf dem Apex des Daemons, `HeldGroup.catalogId` und `apexFromDaemon`, Kopf, ARB, Sonderregel des Modals. Danach der Nachtrag in HUM-097s Lauf. Der Zuschnitt ist Sache des Projekteigentümers; XL gilt für das ungeteilte Issue.
+
 ### Fallstricke
-- Der Kopf darf den Katalognamen nur führen, wenn er vom Daemon kommt. `catalog_id` kommt von dort, der Apex aus `psl.dart` ist ein Rat, und `backlog/CONVENTIONS.md` 4.13 und 4.15 verbieten eine geratene Domäne in einer Zeile, die eine Entscheidung bewacht. Tragen zwei gehaltene Anfragen einer Gruppe verschiedene `catalog_id` oder gar keine, bleibt es bei „Host und n weitere".
-- Die Sonderregel des Gruppen-Modals fällt nur dort weg, wo jeder gehaltene Flow der Gruppe seinen Apex vom Daemon hat. `psl.dart` bleibt als Rückfall stehen, und für solche Gruppen bleibt auch das Modal. Wer `psl.dart` ganz löscht, nimmt dem Fake-Modus die Gruppierung.
+- Der Kopf darf den Katalognamen nur führen, wenn er vom Daemon kommt. `catalog_id` kommt von dort, der Apex seit HUM-091 aus `FlowSummary.apex`, und `backlog/CONVENTIONS.md` 4.13 und 4.15 verbieten eine geratene Domäne in einer Zeile, die eine Entscheidung bewacht. Tragen zwei gehaltene Anfragen einer Gruppe verschiedene `catalog_id` oder gar keine, bleibt es bei „Host und n weitere".
+- `psl.dart` entfällt mit HUM-091; der Rückfall ist der Host (`flow.apex.isEmpty ? flow.host : flow.apex`), nicht ein Rat. Das Modal für Entscheidungen über mehrere Hosts bleibt, mit der Begründung aus HUM-091 (es listet die Hosts auf). Der frühere Fallstrick „wer `psl.dart` löscht, nimmt dem Fake-Modus die Gruppierung" gilt nicht mehr: die Fake-Szenarien setzen `apex`.
 - Der Kopf zählt weiterhin nur gehaltene Anfragen (`backlog/CONVENTIONS.md` 4.15, `HeldGroup.flows` gegen `HeldGroup.rows`). Der Katalogname ändert daran nichts.
 - `catalog/domains.yaml` trägt `description` als Abbildung `en`/`de`; die Spezifikation von HUM-031 zeigt noch die ältere Form mit einem einzelnen String. Beschreibung und `typical` kommen aus der YAML, nur die Rahmentexte (Kategorie-Chip, „Not in catalog", Rang-Badge, „Typical for") sind ARB-Schlüssel.
 - Die Kopie unter `app/assets/` wird nie von Hand gepflegt. Ohne die Prüfung in `make check` driftet sie, und der Bildschirm nennt dann einen anderen Dienst, als der Daemon zugeordnet hat.
-- `run.sh:552` erwartet 17 HAR-Einträge, `backlog/sprint-2.md:1669` schreibt 16. Der Lauf trägt die neuere Zahl; wer 16 einsetzt, macht den Schritt rot.
-- Die Auflösung unter xvfb bleibt `1600x1000x24` (`run.sh:547`). Darunter greift das schmale Layout, und das rechte Pane ist gar nicht gezeichnet.
-- `M2_EXPECTED_ASSERTIONS` muss von Hand nachgezogen werden. Eine zu niedrige Zahl meldet das Skript nur als Hinweis (`run.sh:584-586`) und bleibt grün; nur eine zu hohe bricht ab. Genau darum steht sie in den Akzeptanzkriterien.
+- `run.sh:712-713` erwartet 17 HAR-Einträge, `backlog/sprint-2.md:1669` schreibt 16. Der Lauf trägt die neuere Zahl; wer 16 einsetzt, macht den Schritt rot.
+- Die Auflösung unter xvfb bleibt `1600x1000x24` (`run.sh:703`). Darunter greift das schmale Layout, und das rechte Pane ist gar nicht gezeichnet.
+- `M2_EXPECTED_ASSERTIONS` muss von Hand nachgezogen werden. Eine zu niedrige Zahl meldet das Skript nur als Hinweis (`run.sh:751-753`) und bleibt grün; nur eine zu hohe bricht ab (`:748-749`). Genau darum steht sie in den Akzeptanzkriterien.
 - `rootBundle` in einem Widget-Test braucht `TestWidgetsFlutterBinding.ensureInitialized()` vor dem ersten Laden, sonst schlägt das Parsen des Assets mit einer irreführenden Meldung fehl.
 - `app/l10n/app_en.arb` und `app_de.arb` werden von mehreren Agenten berührt: nur den eigenen Abschnitt ändern, neue Schlüssel ans Ende anhängen, die Datei unmittelbar vor jedem Schreiben neu einlesen.
 
@@ -2254,7 +2313,7 @@ BACKLOG.md Abschnitt 7 (M2), Zeilen 395, 457, 459; `backlog/sprint-2.md` HUM-029
 ---
 
 ## HUM-095 · Sitzungsregel aus dem Stapel traegt keine Herkunft
-Sprint: 2 · Größe: S · Abhängigkeiten: HUM-027, HUM-036 · Blockiert: HUM-078
+Sprint: 2 · Größe: M · Abhängigkeiten: HUM-027, HUM-036, HUM-089 (läuft davor, gleiches Literal), Entscheidung des Projekteigentümers gegen HUM-090 (siehe Stand) · Blockiert: keine (HUM-078 vergleicht Subkommandos, nicht Flags)
 
 ### Kontext
 ADR-0007 sagt zu: „Jede Regel kann ihre Herkunft nennen (`created_from: <FlowId>`), damit das Rules-Screen ‚erstellt vor 2 min aus Request #41' anzeigen kann." Der Vertrag sagt dasselbe schärfer: `proto/humanitl/v1/rules.proto`:68 kommentiert `created_from_flow_id` mit „Leer, wenn handgeschrieben". Ein leeres Feld ist also keine fehlende Angabe, sondern eine Aussage — diese Regel hat ein Mensch selbst getippt.
@@ -2280,13 +2339,13 @@ Kein Herkunftsflag für `rules add`. Eine von Hand geschriebene Regel hat keine 
 Keine Ableitung des Host-Musters aus dem Flow. Ob eine Freigabe den exakten Host, die registrierbare Domain oder ein `**`-Muster meint, ist Fachlogik und gehört nicht in `bin/humanitl` (`docs/ARCHITECTURE.md` 4). Der Mensch nennt das Muster.
 
 ### Betroffene Pfade
-- `daemon/bin/humanitl/src/cli.rs`: neue Struktur `RememberArgs` neben `RuleArgs`; `FlowsCmd::Decide` (Zeilen 234-244) bekommt sie als `#[command(flatten)]`
+- `daemon/bin/humanitl/src/cli.rs`: neue Struktur `RememberArgs` neben `RuleArgs` (Zeile 384); `FlowsCmd::Decide` (Zeilen 258-268) bekommt sie als `#[command(flatten)]`
 - `daemon/bin/humanitl/src/cmd/flows.rs`: `decide` (Zeilen 316-381) baut die Regel und setzt die Herkunft, `remember: None` (Zeile 338) fällt weg; Doc-Kommentar 305-314 nachziehen
-- `daemon/bin/humanitl/src/cmd/rules.rs`: `rule_from_args` (Zeile 632) und `rule_json` (Zeile 544) werden `pub(crate)`
+- `daemon/bin/humanitl/src/cmd/rules.rs`: `rule_from_args` (Zeile 796) und `rule_json` (Zeile 708) werden `pub(crate)`
 - `daemon/bin/humanitl/tests/cli.rs`: neue Fälle (heute kein einziger Treffer für `created_from` in der Datei)
-- `tests/e2e/lib.sh`: `flow_decide` (Zeilen 425-431)
-- `tests/e2e/m2_first_decision/run.sh`: Schritt 2 (Zeilen 340-374)
-- `backlog/CONVENTIONS.md`: Absatz „Die Stapel-Freigabe geht über zwei Aufrufe" in 4.22 (Zeilen 1306-1318)
+- `tests/e2e/lib.sh`: `flow_decide` (Zeilen 444-451)
+- `tests/e2e/m2_first_decision/run.sh`: Schritt 2 (Zeilen 418-472)
+- `backlog/CONVENTIONS.md`: Absatz „Die Stapel-Freigabe geht über zwei Aufrufe" in 4.22 (Zeilen 1368-1386) und der Absatz zum Haltebudget (Zeilen 1393-1400), der dieses Issue mit „einem einzigen `Decide` für den Stapel" verwechselt (siehe Stand)
 - `backlog/sprint-4.md`: Paritätszeile für `Humanitl.Decide` (Zeile 1629)
 
 Nicht betroffen: `proto/` (Feld 6 existiert), `app/` (füllt es schon), `daemon/crates/rules`, `daemon/crates/proxy/src/rules_store.rs`, Migration, ARB.
@@ -2396,6 +2455,25 @@ Im Klartext folgt der Zeile `allow 01000000` eine zweite: `rule 018f0002 allow *
 - [ ] `backlog/CONVENTIONS.md` 4.22 enthält den Absatz „Die Stapel-Freigabe geht über zwei Aufrufe" nicht mehr, und `backlog/sprint-4.md` Zeile 1629 nennt `--remember` in der Paritätszeile für `Humanitl.Decide`.
 - [ ] `make check` grün.
 
+### Stand (2026-09-04): Größe M, Überschneidung mit HUM-090, kein Vorlauf im Code
+
+Geprüft am Code (Audit 2026-09-04, Zeilen gegen den heutigen Baum gezogen). Die Kette steht: `DecideRequest.remember` (`humanitl.proto:597`), `Rule.created_from_flow_id` (`rules.proto:68`), der Dienst legt die Regel vor der Entscheidung an (`server.rs:892-903`), nimmt sie zurück, wenn kein Flow wirkte (`:906-919`), und antwortet mit `created_rule_id` und `created_rule` (`:929-935`); `RulesService::remember` (`rules.rs:150-158`) reicht die Regel des Clients unverändert durch, `rule_from_proto` übernimmt `created_from` nur bei nicht-leerem Feld (`convert.rs:1305-1313`), der Fake macht dasselbe (`fake/mod.rs:520-532`) und lehnt ein kaputtes Host-Muster über `HostPattern::parse` ab. Die CLI schickt `remember: None` (`flows.rs:338`), `rule_from_args` fasst `created_from` nie an (`rules.rs:796-851`). Kein Proto-, kein Daemon-Code nötig.
+
+**Überschneidung mit HUM-090 (blockierend, Entscheidung des Projekteigentümers).** HUM-090 (`backlog/sprint-4.md:1707`, `BACKLOG.md:518`) baut dieselbe Fähigkeit in unvereinbarer Form: `--remember` als Schalter plus `--remember-host PATTERN` statt `--remember <PATTERN>`; `--json` als `results[]` plus `created_rule`, und „die alte Ein-Objekt-Form entfällt", während dieses Issue verlangt, dass ohne `--remember` genau `{flow_id, decision, note, applied}` bleibt (`flows.rs:371-377` heute). Beide setzen `created_from_flow_id`, beide bilden `RememberArgs` auf `RuleArgs` ab, beide heben `rule_from_args` auf `pub(crate)`, beide bauen Tests in `daemon/bin/humanitl/tests/cli.rs`, beide schreiben `run.sh` Schritt 2 um, beide ändern CONVENTIONS 4.22 und `sprint-4.md:1629`. Wer zuerst läuft, zwingt den anderen zum Umbau einer gerade veröffentlichten Flagge. **Der Projekteigentümer entscheidet die Flag-Form und die JSON-Form, bevor eines von beiden gebaut wird; bis dahin keine Zeile Code an `flows decide`.** Dieser Abschnitt entscheidet nichts; derselbe Absatz steht bei HUM-090.
+
+**Warum M statt S:** `daemon/bin/humanitl/tests/cli.rs` enthält in rund 1500 Zeilen keinen einzigen `flows decide`-Test (`grep -c` ist 0, ebenso für `created_from`); die sechs geforderten Fälle sind die erste CLI-Abdeckung von `decide` überhaupt, jeder gegen `FakeServer` (`cli.rs:129-136`). `run.sh` Schritt 2 (`:418-472`) wird spröder: die Regel hängt danach am ersten `Decide`, und verfällt dieser Flow innerhalb der 10 s (`config.toml:31`), nimmt der Dienst die Regel zurück (`server.rs:906-919`); heute steht sie unabhängig davor (`:433`). Dazu zwei Absätze in CONVENTIONS 4.22 und die Abstimmung mit HUM-090.
+
+**Widersprüche, im Text korrigiert oder hier vermerkt:**
+
+- `Blockiert: HUM-078` war falsch; der eigene Kontext sagt es (`parity-check` vergleicht Subkommandos, nicht Flags, `docs/adr/0018-rpc-parity.md:41-43`), und `sprint-4.md:1629` führt `Humanitl.Decide` schon als abgedeckt. HUM-090 trägt dieselbe falsche Kopfzeile.
+- CONVENTIONS `:1393-1400` schreibt, das 10-Sekunden-Haltebudget des M2-Laufs „verschwindet mit HUM-095: Mit einem einzigen `Decide` für den Stapel". Dieses Issue schließt den Stapel aus (Nicht-Ziel „Keine mehreren Ids je Aufruf", Fallstrick „Zwölf Aufrufe mit dem Flag legen zwölf Regeln an"); nach ihm laufen weiter zwölf Prozesse gegen die 10 s. Der Nutzen gehört zu HUM-090s `--also`. Der Absatz steht jetzt in „Betroffene Pfade" und darf HUM-095 keinen Stapel mehr zuschreiben.
+- CONVENTIONS `:1385-1386` und HUM-097 behaupteten, das Abzeichen `from #1` sei auch für die Oberflächen-Hälfte unerfüllbar, „weil die Regel neben der Entscheidung entsteht statt in ihr". Das gilt nur für die Kommandozeile: die Oberfläche legt die Regel in der Entscheidung an (`decision.dart:619` `remember: i == 0 ? rule : null`, `rule_sentence.dart:117` `createdFrom: flow.id`, über die Leitung `convert.dart:502-518`, Abzeichen `rule_row.dart:378-395`). Ein Bildschirm-Lauf zeigt `from #1` ohne dieses Issue; HUM-097 ist entsprechend korrigiert, CONVENTIONS 4.22 beim Bau.
+- Zeilenanker in Kontext und Pfadliste waren 20 bis 165 Zeilen verschoben; richtig sind `cli.rs:258-268` (`Decide`), `:264-266` (`--note`), `:384` (`RuleArgs`), `rules.rs:796` (`rule_from_args`), `:708` (`rule_json`), `:730`, `convert.rs:179`, `:1305`, `:1339-1345` (`expiry_from_proto`), `rules_store.rs:369` (`add`), `validate.rs:123` (`flow_id`), `server.rs:892-903`, `rules.rs:150-158`, `lib.sh:444-451`, `run.sh:433`, `:463`, Schritt 2 `:418-472`, CONVENTIONS 4.22 `:1368-1400`. Nur die `flows.rs`-Angaben stimmten.
+
+**Reihenfolge:** nach HUM-089; beide schreiben das Literal `daemon/bin/humanitl/src/cmd/flows.rs:336-340` (HUM-089 streicht `:339`, dieses Issue ersetzt `:338`). Nicht parallel.
+
+**Ohne automatisierten Nachweis:** das Sicht-Kriterium zum Herkunfts-Abzeichen braucht einen gebauten Client gegen einen echten Daemon; zwei Kriterien brauchen einen lauffähigen `tests/e2e/m2_first_decision/run.sh` (eigener Nutzer- und Netz-Namensraum, voller Build). Vor dem Commit den Lauf mehrfach fahren, weil die Regel dann am ersten `Decide` hängt.
+
 ### Fallstricke
 - `RuleArgs` einfach zu flatten bricht den Start: `--note` gäbe es dann zweimal in `flows decide`, und clap bricht mit „Long option names must be unique" ab. Deshalb `RememberArgs` mit eigenen Namen und `rule_args()` als Brücke auf `rule_from_args`.
 - Ohne `--remember-expires` muss `session` in der Anfrage stehen. Ein leeres `expires` wird zu `Never` (`convert.rs`:1301-1306), und eine dauerhafte Regel als Nebenwirkung einer einzelnen Freigabe ist genau die Überraschung, die das Produkt nicht macht.
@@ -2411,32 +2489,35 @@ Im Klartext folgt der Zeile `allow 01000000` eine zweite: `rule 018f0002 allow *
 
 
 ## HUM-097 · Oberflächen-Hälfte des M2-Demoskripts
-Sprint: 2 · Größe: M · Abhängigkeiten: HUM-036, HUM-028, HUM-029, HUM-032, HUM-033, HUM-035 · Blockiert: das vollständige M2-Sprint-Gate
+Sprint: 2 · Größe: L · Abhängigkeiten: HUM-036, HUM-028, HUM-029, HUM-032, HUM-033, HUM-035; vorher zu bauen: Beweis des `integration_test`-Harness, App-Bau im Job `e2e-xvfb`, Exportziel nach `HUMANITL_E2E_HAR` (siehe Stand) · Blockiert: das vollständige M2-Sprint-Gate, HUM-094 (Namens-Behauptungen im Bildschirm-Lauf)
 
 ### Kontext
 HUM-036 verlangt den vollen Kreislauf mit echtem Daemon, echter Sandbox **und echtem UI unter xvfb**, samt gültiger HAR-Datei, und `CONTRIBUTING.md` erklärt M2 zur Voraussetzung für jeden Merge ab Sprint 3. Gebaut ist bisher nur die Daemon-Hälfte: `tests/e2e/m2_first_decision/run.sh` fährt Gruppierung, Stapel-Freigabe mit Sitzungsregel, Block, Zeitüberschreitung, Historie und die Menge, aus der der Export entsteht, über die Kommandozeile. Seinen Schritt 10 überspringt es mit einer ausdrücklichen Meldung, solange `app/integration_test/m2_first_decision_test.dart` fehlt, und meldet trotzdem Erfolg — das Gate gilt also als erfüllt und ist es nur zur Hälfte.
 
 Der Test wurde bewusst nicht zusammen mit der Daemon-Hälfte gebaut: Die Widgets von `app/packages/ui` sind am 2026-09-04 auf `shadcn_flutter` umgestellt worden (ADR-0009, revidiert), und ein Integrationstest, der gegen die Fassung davor geschrieben worden wäre, hätte Selektoren geprüft, die es beim Merge nicht mehr gab.
 
-Was fehlt, ist ausschließlich die Oberflächen-Hälfte. Die Naht steht: `run.sh` startet den Test, reicht ihm die Umgebung und prüft danach die Datei, die er geschrieben hat.
+Was fehlt, ist die Oberflächen-Hälfte, und die Naht steht **nicht**: Schritt 10 von `run.sh` liegt hinter dem Ende des Agenten (`:517` `wait "$M2_AGENT_PID"`, `:671` Schritt 10), also zu einem Zeitpunkt, an dem nichts mehr gehalten wird. Der Env-Block ist da, der Platz ist falsch (siehe Stand).
 
 ### Ziel
 `app/integration_test/m2_first_decision_test.dart` treibt denselben Lauf über den Bildschirm statt über die Kommandozeile und schreibt am Ende die HAR-Datei; `tests/e2e/m2_first_decision/run.sh` fährt ihn unter `xvfb-run` und prüft das Ergebnis. Ein grünes `e2e-xvfb` heißt danach „M2 hält", nicht „die Daemon-Hälfte von M2 hält".
 
 ### Nicht-Ziel
-Keine Änderung an Fake-Upstream, Fake-Agent, `script.json` oder `config.toml`. Kein neuer RPC. Keine Golden-Tests (HUM-054). Nicht das Umstellen des Laufs auf `https://` — das ist HUM-087. Nicht die Herkunft der Sitzungsregel — das ist HUM-095, und bis dahin bleibt der Schritt mit dem Abzeichen `from #1` offen.
+Keine Änderung an Fake-Upstream, Fake-Agent, `script.json` oder `config.toml`. Kein neuer RPC. Keine Golden-Tests (HUM-054). Nicht das Umstellen des Laufs auf `https://` — das ist HUM-087. Nicht die Herkunft der Sitzungsregel auf der Kommandozeile — das ist HUM-095; für die Oberfläche gilt das nicht, sie legt die Regel in der Entscheidung an (`decision.dart:619`, `rule_sentence.dart:117`), und das Abzeichen `from #1` ist hier prüfbar.
 
 ### Betroffene Pfade
 - `app/integration_test/m2_first_decision_test.dart` (neu)
 - `app/pubspec.yaml` (`integration_test` als Dev-Abhängigkeit, falls sie fehlt)
-- `tests/e2e/m2_first_decision/run.sh`: Schritt 2 bis 4 bekommen einen Schalter, der die Entscheidungen dem Bildschirm überlässt; `M2_EXPECTED_ASSERTIONS` steigt
-- `.github/workflows/ci.yml`: Job `e2e-xvfb` lädt zusätzlich die Screenshots hoch
+- `tests/e2e/m2_first_decision/run.sh`: der Bildschirm-Treiber startet im Hintergrund vor Abschnitt 2, Abschnitte 2 bis 4 laufen nur ohne Oberfläche, Abschnitte 6 und 8 bekommen Regel-Id und Stapel-Ids aus dem laufenden Treiber (`:439`, `:459-460`, `:565`, `:626`, `:632`), Schritt 10 behält die HAR-Prüfung; `M2_EXPECTED_ASSERTIONS` (`:112`, `:748`) wird je Zweig geführt, im Bildschirm-Zweig fällt die Zahl
+- `.github/workflows/ci.yml`: Job `e2e-xvfb` (Zeilen 516-566) führt `flutter pub get` und `flutter build linux --debug` aus (heute nur der Flutter-Job, `:317`, `:321`) und lädt Screenshots hoch, falls das Kriterium bleibt
+- `app/lib/features/history/export/history_export.dart`, `providers/history_export.dart`: ein zweites `HistoryExportTarget`, das nach `HUMANITL_E2E_HAR` schreibt, gewählt über die Startoptionen (`app/lib/core/ipc/launch_options.dart`)
+- `app/lib/features/history/export/har.dart:75-76`: Wire-Namen `timed_out` und `block_reason` (siehe Stand)
+- `app/test/features/history/history_export_flow_test.dart` und ein Widget-Test für das neue Ziel
 - `CONTRIBUTING.md` und `backlog/CONVENTIONS.md` 4.22: der Absatz „nur die Daemon-Hälfte" entfällt
 - `backlog/sprint-2.md` HUM-036: Abschnitt „Stand" entfällt
 
 ### Spezifikation
 
-**Die Schnittstelle, die `run.sh` heute schon stellt** (Schritt 10, unverändert zu übernehmen):
+**Der Env-Block, den `run.sh` heute stellt** (Schritt 10, `:695-705`; der Block bleibt, der Aufruf wandert vor Abschnitt 2, siehe Stand):
 
 ```sh
 cd app && \
@@ -2451,14 +2532,14 @@ cd app && \
   flutter test integration_test/m2_first_decision_test.dart -d linux
 ```
 
-- `XDG_RUNTIME_DIR` genügt, um den Daemon zu finden: `DaemonPaths.resolve` in `app/lib/core/ipc/daemon_paths.dart` leitet Socket und Token daraus ab, genau wie `humanitl_config::Paths` auf der Rust-Seite. `HUMANITL_SOCKET` und `HUMANITL_TOKEN` stehen daneben, damit der Test die Pfade nehmen kann, ohne sie herzuleiten.
-- `HUMANITL_E2E_HAR` ist der Pfad, unter den der Test die Export-Datei schreiben muss. `run.sh` prüft danach: Datei nicht leer, `.log.entries | length == 17`.
+- `XDG_RUNTIME_DIR` genügt, um den Daemon zu finden: `DaemonPaths.resolve` in `app/lib/core/ipc/daemon_paths.dart` leitet Socket und Token daraus ab, genau wie `humanitl_config::Paths` auf der Rust-Seite. `HUMANITL_SOCKET` und `HUMANITL_TOKEN` stehen daneben, damit der Test die Pfade nehmen kann, ohne sie herzuleiten. `HUMANITL_TOKEN` liest heute nichts in `app/` (nur `HUMANITL_SOCKET`, `launch_options.dart:59`; der Token-Pfad wird neben dem Socket abgeleitet). `launchOptionsProvider` ist nur in `main()` überschrieben (`main.dart:51`); ein Test, der `HumanitlApp` selbst pumpt, ruft `LaunchOptions.resolve` und überschreibt den Provider, sonst redet er mit dem falschen Socket.
+- `HUMANITL_E2E_HAR` ist der Pfad, unter den der Test die Export-Datei schreiben muss. `run.sh` prüft danach: Datei nicht leer, `.log.entries | length == 17`. Nichts in `app/` liest die Variable heute; das Exportziel ist `FilePickerExportTarget` (`providers/history_export.dart:34`), also `FilePicker.saveFile` (`export/history_export.dart:184`) und das XDG-Portal über D-Bus, das es unter xvfb nicht gibt. Die Naht ist ein zweites `HistoryExportTarget`, das aus den Startoptionen gewählt wird, damit der Lauf denselben Kodier- und Schreibweg prüft wie ein Mensch; ein bloßes Override des Providers im Test ließe den Produktivweg ungeprüft (CONVENTIONS 4.13, 4.22).
 - Die Auflösung ist Vorgabe und kein Vorschlag: unter 1400×900 greift das schmale Layout, und die Selektoren scheitern.
-- Der Daemon läuft bereits, die Sitzung ist offen, der Agent hat seine ersten Anfragen gestellt. Der Test verbindet sich, er startet nichts.
+- Der Daemon läuft bereits, die Sitzung ist offen, der Agent hat seine ersten Anfragen gestellt, und sie werden gehalten. Der Test verbindet sich, er startet nichts. Dafür muss `run.sh` ihn vor Abschnitt 2 starten, nicht in Schritt 10 nach `wait "$M2_AGENT_PID"`.
 
 **Die Schritte auf dem Bildschirm** (aus HUM-036, mit dem Stand der Bildschirme von heute):
 
-1. Warten, bis die Warteschlange drei Gruppen zeigt: `registry.npmjs.org` 12, `api.github.com` 2, `evil.example` 1. Zusicherungen: npm-Gruppe eingeklappt, `0 findings`; github-Gruppe 1 Fund (Mailadresse); evil 1 Fund (AWS-Schlüssel) und die Karte „unbekannte Domäne".
+1. Warten, bis die Warteschlange drei Gruppen zeigt: `registry.npmjs.org` 12, `api.github.com` 2, `evil.example` 1. Zusicherungen: npm-Gruppe eingeklappt, `0 findings`; github-Gruppe 1 Fund (Mailadresse); evil 1 Fund (AWS-Schlüssel). Keine Zusicherung über die Karte „unbekannte Domäne": `domain_pane_placeholder.dart:79` zeichnet sie für jeden ausgewählten Flow, auch für `registry.npmjs.org`, bis HUM-094 die Katalog-Karte liefert.
 2. npm-Gruppe: `Remember` auf `session` × `apex`, dann `Allow 12 → registry.npmjs.org` über die Aktionsleiste (der Kopf der Gruppe kann nur blocken, CONVENTIONS 4.15). Zusicherungen: 12 Flüsse verlassen die Warteschlange, der Temporär-Tab des Regel-Bildschirms führt genau eine Regel `allow · ∗ · **.npmjs.org · this session`.
 3. `evil.example`: `B`. Zusicherung: die Karte verschwindet, die Historie führt sie als geblockt.
 4. github-POST: Enter (einmal erlauben). Zusicherung: Historie `allowed`, Fund-Zähler 1.
@@ -2466,17 +2547,17 @@ cd app && \
 6. Historie: Filter `decision:block` → 1 Zeile, `decision:timed_out` → 1 Zeile, `findings:>0` → 2 Zeilen. **Nicht** `state:blocked`: `state:` kennt nur die sieben Zustände des Automaten (CONVENTIONS 4.18).
 7. Export der ungefilterten Menge als HAR nach `HUMANITL_E2E_HAR`.
 
-**Was heute noch nicht geht und deshalb nicht Teil der Akzeptanz ist:** der Katalogname „Looks like: npm install" und `Edit + Allow` (HUM-094, HUM-047); das Abzeichen `from #1` an der Sitzungsregel (HUM-095, weil die Regel neben der Entscheidung entsteht statt in ihr).
+**Was heute noch nicht geht und deshalb nicht Teil der Akzeptanz ist:** der Katalogname „Looks like: npm install" und `Edit + Allow` (HUM-094, HUM-047). Das Abzeichen `from #1` an der Sitzungsregel geht dagegen heute schon: die Oberfläche legt die Regel in der Entscheidung an (`decision.dart:619`, `rule_sentence.dart:117`), das Abzeichen zeichnet `rule_row.dart:378-395`; Schritt 8 aus HUM-036 wird hier geprüft.
 
-**Wer entscheidet.** `run.sh` treibt die Entscheidungen heute selbst über `humanitl`. Beide Treiber zugleich wären ein Wettlauf. Der Lauf bekommt deshalb einen Schalter: mit Oberfläche entscheidet der Bildschirm und die Abschnitte 2 bis 4 des Skripts entfallen, ohne Oberfläche bleibt es beim heutigen Weg. Die Zusicherungen der Abschnitte 5 bis 9 laufen in beiden Fällen unverändert — sie fragen den Daemon und den Agenten, nicht den Treiber.
+**Wer entscheidet.** `run.sh` treibt die Entscheidungen heute selbst über `humanitl`. Beide Treiber zugleich wären ein Wettlauf. Der Lauf bekommt deshalb einen Schalter: mit Oberfläche entscheidet der Bildschirm, im Hintergrund gestartet, bevor Abschnitt 2 begänne, und die Abschnitte 2 bis 4 des Skripts entfallen; ohne Oberfläche bleibt es beim heutigen Weg. Die Abschnitte 5 bis 9 sind **nicht** treiberunabhängig: `:565` und `:626` prüfen gegen `M2_RULE_ID` (gesetzt `:439`, Abschnitt 2), `:632` liest `M2_BATCH_IDS` (`:459-460`, Abschnitt 2). Der Bildschirm-Zweig muss beide liefern (die Regel-Id über `humanitl --json rules list` nach der Freigabe, die Stapel-Ids über `m2_ids` davor), sonst vergleichen drei Behauptungen in 6 und 8 gegen einen leeren String.
 
 ### Schritte
-1. `integration_test` als Dev-Abhängigkeit prüfen und, falls nötig, ergänzen; ein leerer Test muss unter `xvfb-run` grün durchlaufen, bevor irgendetwas behauptet wird.
-2. Einen `pumpUntil`-Helfer mit Frist schreiben. Feste `sleep`s nur für den Schritt, der die Zeitüberschreitung abwartet.
-3. Die sieben Schritte oben, jeder mit seiner Zusicherung.
-4. Export schreiben, Pfad aus `HUMANITL_E2E_HAR`.
-5. `run.sh`: Schalter für den Treiber, `M2_EXPECTED_ASSERTIONS` hochsetzen, Schritt 10 von „übersprungen" auf „geprüft" bringen.
-6. `CONTRIBUTING.md`, `backlog/CONVENTIONS.md` 4.22 und den Abschnitt „Stand" in HUM-036 zurücknehmen.
+1. `integration_test` steht in `app/pubspec.yaml:61`. Kein Gate führt `app/integration_test/shell_test.dart` aus (`Makefile:77` und `ci.yml:310` prüfen nur `test/`): `xvfb-run -a --server-args='-screen 0 1600x1000x24' flutter test integration_test/shell_test.dart -d linux` muss lokal und in einem Wegwerf-Branch in CI grün sein, mit gemessener Laufzeit, bevor irgendetwas behauptet wird.
+2. `flutter pub get` und `flutter build linux --debug` in den Job `e2e-xvfb`, `PUB_CACHE` durch den Env-Block von Schritt 10; Schritt 1 in `unshare -rn` wiederholen (der Lauf hat kein Netz, `lib.sh:222-245`, und ein frisches `HOME`, `run.sh:700`).
+3. Exportziel nach `HUMANITL_E2E_HAR` als zweites `HistoryExportTarget`, über die Startoptionen gewählt; Widget-Test. `har.dart:75-76` auf die Wire-Namen, `history_export_flow_test.dart` erweitern.
+4. `run.sh` umbauen: Bildschirm-Treiber im Hintergrund vor Abschnitt 2, HAR-Prüfung in Schritt 10, Abschnitte 2 bis 4 bedingt, Regel-Id und Stapel-Ids aus dem laufenden Treiber, `M2_EXPECTED_ASSERTIONS` je Zweig.
+5. Einen `pumpUntil`-Helfer mit Frist schreiben; feste `sleep`s nur für den Schritt, der die Zeitüberschreitung abwartet. `LaunchOptions.resolve` und `launchOptionsProvider` überschreiben. Die sieben Schritte oben, jeder mit seiner Zusicherung; die zwölf npm-Flüsse zuerst, denn das 10-Sekunden-Budget (`config.toml:31`) geht an zwölf sequenzielle `Decide`-Aufrufe (`decision.dart:610-624`) plus je 350 ms `AllowArmed`-Rearm (`motion.dart:49`).
+6. Screenshot-Weg festlegen (siehe Akzeptanzkriterien), dann erst `CONTRIBUTING.md:51-65`, `backlog/CONVENTIONS.md` 4.22 und den Abschnitt „Stand" in HUM-036 zurücknehmen.
 
 ### Tests
 Das Skript ist der Test. Zusätzlich: `flutter test integration_test/...` muss auch allein gegen einen laufenden Daemon grün sein, damit ein Entwickler ihn ohne den ganzen Lauf fahren kann.
@@ -2484,10 +2565,32 @@ Das Skript ist der Test. Zusätzlich: `flutter test integration_test/...` muss a
 ### Akzeptanzkriterien
 - [ ] `tests/e2e/m2_first_decision/run.sh` Exit 0 mit der Oberflächen-Hälfte, lokal und im Job `e2e-xvfb`.
 - [ ] `M2_UI=1 tests/e2e/m2_first_decision/run.sh` läuft durch, statt mit „the integration test of the screen is not there" zu sterben.
-- [ ] Die HAR-Datei hat 17 Einträge, und `_humanitl.decision` verteilt sich auf 15 `allow` (davon 2 mit `rule_id`), 1 `block` mit `reason: user` und 1 `timed_out`.
+- [ ] Die HAR-Datei hat 17 Einträge, und `_humanitl.decision` verteilt sich auf 15 `allow` (davon 2 mit `rule_id`), 1 `block` mit `block_reason: user` und 1 `timed_out`. Heute schreibt `har.dart:75-76` `flow.decision?.name`, also `timedOut`, und den Schlüssel `block_reason`; `har.dart` bekommt die Wire-Namen des Daemons (`timed_out`, CONVENTIONS 4.22 bei `:1410`), und `history_export_flow_test.dart` prüft sie. Eine `jq`-Prüfung nach dem alten Wortlaut fiel gegen den heutigen Encoder durch.
 - [ ] Laufzeit unter 4 Minuten in CI.
-- [ ] Bei Fehlschlag: Screenshot (`integration_test` `takeScreenshot`) und Daemon-Log als CI-Artefakt.
+- [ ] Bei Fehlschlag: Daemon-Log als CI-Artefakt und ein Bild des Bildschirms. Entweder ein Treiber-Paar unter `app/test_driver` mit `flutter drive` in Schritt 10 (Voraussetzung für `takeScreenshot`; heute gibt es weder das Verzeichnis noch den Aufruf, `run.sh:705` ruft `flutter test`), oder ein `RenderRepaintBoundary`-Dump, den der Test selbst nach `target/e2e/m2` schreibt. Welcher Weg, entscheidet der Bau; das Kriterium ist das Bild im Artefakt.
 - [ ] Der Absatz „nur die Daemon-Hälfte" ist aus `CONTRIBUTING.md`, aus 4.22 und aus HUM-036 verschwunden.
+
+### Stand (2026-09-04): Größe L, die Naht steht nicht
+
+Geprüft am Code (Audit 2026-09-04, Zeilen gegen den heutigen Baum gezogen). Was hält: `app/integration_test/` existiert (`shell_test.dart`, 43 Zeilen, `FakeDaemonClient`, `IntegrationTestWidgetsFlutterBinding`), `integration_test` ist Dev-Abhängigkeit (`app/pubspec.yaml:61`), der Job `e2e-xvfb` installiert `xvfb` (`ci.yml:516`, `:541`), Schritt 10 steht mit dem zitierten Env-Block und dem Schalter `M2_UI=0|1|auto` (`run.sh:671-716`), `DaemonPaths.resolve` ist echt (`app/lib/core/ipc/daemon_paths.dart:38`), die Keys der Bildschirme sind dicht (`intercept-allow`, `intercept-block`, `intercept-remember`, `intercept-remember-duration`, `intercept-remember-target`, `intercept-batch-modal`, `intercept-batch-confirm`, `queue-group-<apex>`, `queue-group-findings-<apex>`, `queue-group-block-<apex>`, `history-filter-input`, `history-chip-<name>`, `history-export-open`, `history-export-save`, `rules-filter`), Tastatur-Allow übergibt `confirmed: true` (`intercept_screen.dart:310`), das Ziel `apex` ergibt `**.npmjs.org` (`rule_sentence.dart:136`), der Temporär-Tab existiert (`rules_screen.dart:243-246`), und Filterstrings gehen wörtlich an den Daemon (`history_query.dart`), sodass `decision:block`, `decision:timed_out` und `findings:>0` funktionieren (`run.sh:615-621` beweist die Daemon-Seite).
+
+**Blockierend:**
+
+- **Schritt 10 läuft, wenn nichts mehr gehalten wird.** Er beginnt bei `run.sh:671`, nach `wait "$M2_AGENT_PID"` (`:517`, Schritt „the agent runs to its end", `:515`). Alle 17 Flüsse sind dann entschieden, geblockt oder verfallen. Ein Bildschirm, der sich dort verbindet, kann keine Entscheidung treiben. Der Treiber muss laufen, **während** gehalten wird, also vor `:425`; das ist ein Umbau von `run.sh` in einen Hintergrund-Lauf der Oberfläche plus späte Export-Prüfung, kein Schalter. Die Sätze „Die Naht steht" und „Schritt 10 unverändert zu übernehmen" waren falsch und sind oben korrigiert.
+- **Die Abschnitte 5 bis 9 sind nicht treiberunabhängig.** `run.sh:565` (`e2e_expect "by the session rule, not by a human" "$M2_RULE_ID"`) und `:626` (`m2_count "rule:$M2_RULE_ID"`) prüfen gegen `M2_RULE_ID`, gesetzt in Abschnitt 2 (`:439`); `:632` liest `M2_BATCH_IDS` (`:459-460`, Abschnitt 2). Ohne Abschnitt 2 vergleichen drei Behauptungen in 6 und 8 gegen einen leeren String. Oben korrigiert.
+- **Kein Netz, fremdes `HOME`, keine gebaute App.** `run.sh:700` setzt `HOME="$E2E_HOME"` (frisches `mktemp`, `lib.sh:335`), `:699` verbiegt `XDG_CONFIG_HOME`, der ganze Lauf steckt in `unshare -rn` (`lib.sh:222-245`), `app/.dart_tool` ist ignoriert (`app/.gitignore:29`), und der Job `e2e-xvfb` (`ci.yml:516-566`) führt weder `flutter pub get` noch `flutter build linux` aus; das tut nur der Flutter-Job (`ci.yml:317`, `:321`). Das erste `flutter test integration_test/... -d linux` löst also Pakete aus einem leeren `$HOME/.pub-cache` ohne Netz auf und baut die GTK-App von Null. Nötig: `flutter pub get` und `flutter build linux --debug` im Job `e2e-xvfb` und `PUB_CACHE` durch den Env-Block in Schritt 10.
+
+**Major, im Text korrigiert oder hier vermerkt:**
+
+- **HAR-Feldnamen.** `har.dart:75-76` schreibt `'decision': flow.decision?.name` und `'block_reason': flow.blockReason?.name`; der Enum heißt `timedOut` (`flow_state.dart:54`). Die Datei trägt also `"decision":"timedOut"` und den Schlüssel `block_reason`, nicht `timed_out` und `reason`. Kriterium und Pfadliste oben gefasst: `har.dart` bekommt die Wire-Namen, das schließt zugleich die Drift gegen CONVENTIONS `:1410` (der Daemon schreibt `timed_out`).
+- **Der Export geht durch ein Portal.** Nichts in `app/` liest `HUMANITL_E2E_HAR` (Treffer nur in `run.sh:703`); das Exportziel ist `FilePickerExportTarget` (`providers/history_export.dart:34-36`) über `FilePicker.saveFile` (`export/history_export.dart:184`), das XDG-Portal über D-Bus. Unter nacktem xvfb gibt es kein Portal; die Spezifikation nannte keinen Mechanismus. Oben ergänzt.
+- **`takeScreenshot` hat keinen Treiber.** Kein `app/test_driver`, Schritt 10 ruft `flutter test`, nicht `flutter drive` (`run.sh:705`); `IntegrationTestWidgetsFlutterBinding.takeScreenshot` hat unter `flutter test` niemanden, dem es die Bytes gibt. Kriterium oben gefasst.
+- **`M2_EXPECTED_ASSERTIONS` fällt im Bildschirm-Zweig, statt zu steigen.** Abschnitte 2 und 3 tragen rund zehn Behauptungen (`e2e_check`, `e2e_expect`, `m2_expect_count` zwischen `:425` und `:494`), Schritt 10 zwei (`:708`, `:712`); eine Konstante (`:112`, geprüft mit `-lt` bei `:748`) muss je Zweig gelten, sonst stirbt die Selbstprüfung mit „a branch was skipped". Pfadliste oben gefasst.
+- **Das Abzeichen `from #1` braucht HUM-095 nicht.** Die Oberfläche legt die Regel in der Entscheidung an (`decision.dart:619`, `rule_sentence.dart:117`); Nicht-Ziel und der Absatz „Was heute noch nicht geht" sind korrigiert. CONVENTIONS `:1385-1386` behauptet dasselbe Falsche und wird beim Bau nachgezogen.
+
+**Minor, im Text korrigiert:** Die Karte „unbekannte Domäne" ist keine Eigenschaft von `evil.example` (`domain_pane_placeholder.dart:79`). `HUMANITL_TOKEN` hat keinen Leser, `launchOptionsProvider` ist nur in `main()` überschrieben (`main.dart:51`).
+
+**Voraussetzungen, in dieser Reihenfolge** (Schritte oben): (1) Beweis, dass `flutter test integration_test/<file> -d linux` in diesem Repository überhaupt läuft; das Harness ist bis heute nie ausgeführter Code. (2) App-Bau und Paket-Cache im Job `e2e-xvfb`. (3) Exportziel nach `HUMANITL_E2E_HAR`. (4) `har.dart` Wire-Namen. (5) `run.sh`-Umbau. (6) Der Test selbst. (7) Screenshot-Weg. Erst danach die Absätze zur halben Abnahme aus `CONTRIBUTING.md:51-65`, CONVENTIONS 4.22 und HUM-036 „Stand" streichen.
 
 ### Fallstricke
 - Alle Wartezeiten über `pumpUntil` mit Frist. Ein `pumpAndSettle` läuft in einer Oberfläche mit laufenden Animationen nicht aus.
@@ -2498,3 +2601,204 @@ Das Skript ist der Test. Zusätzlich: `flutter test integration_test/...` muss a
 
 ### Referenzen
 `backlog/sprint-2.md` HUM-036 (Abschnitt „Stand"), HUM-028, HUM-029, HUM-032, HUM-033; `backlog/CONVENTIONS.md` 4.15, 4.16, 4.18, 4.22; `docs/ARCHITECTURE.md` 6 (e2e, ein Nutzerweg je Meilenstein); Flutter integration_test (https://docs.flutter.dev/testing/integration-tests).
+
+---
+
+## HUM-105 · Schalter „Deaktivieren" für mitgelieferte Regeln
+Sprint: 2 · Größe: M · Abhängigkeiten: HUM-033, HUM-038 (Daemon-Hälfte gemerged, `215447b`) · Blockiert: keine
+
+### Kontext
+Der Daemon kann eine mitgelieferte Regel abschalten, die Oberfläche nicht. HUM-038 hat `Rule.disabled` (`daemon/crates/core-types/src/rule.rs:527`), die Operation `RulesRequest.set_disabled` (`proto/humanitl/v1/humanitl.proto:650-657`), das Feld `Rule.disabled = 13` (`proto/humanitl/v1/rules.proto:88`), `RulesStore::set_bundled_disabled` (`daemon/crates/proxy/src/rules_store.rs:595`), die Kommandozeile `humanitl rules disable|enable ID` (`daemon/bin/humanitl/src/cli.rs:341-352`, `cmd/rules.rs:153-166`) und die Parität im Rust-Fake (`daemon/crates/ipc/src/fake/mod.rs:687-693`) geliefert; `humanitl rules list --all` zeigt eine abgeschaltete Regel als `bundled (off)` (`cmd/rules.rs:610`).
+
+In `app/` kommt davon nichts an. `app/lib/core/domain/rule.dart:65-80` kennt kein `disabled`, `RuleToDomain` in `app/lib/core/ipc/convert.dart:437-452` liest das Feld nicht aus der Proto und `RuleToProto` (`:455-471`) schreibt es nicht, und `DaemonClient` (`app/lib/core/ipc/daemon_client.dart`) hat keine Operation dafür, also auch `GrpcDaemonClient` und `FakeDaemonClient` nicht. Der Regel-Bildschirm zeichnet eine mitgelieferte Regel mit Schloss und dem Wort `bundled` (`app/lib/features/rules/widgets/rule_row.dart:365-374`) und ohne Papierkorb (`onDelete == null`, `:187-196`); einen Schalter gibt es nicht. Folge: eine Regel, die der Nutzer über die Kommandozeile abgeschaltet hat, steht auf dem Bildschirm wie eine wirksame. Das ist die Behauptung, die `backlog/CONVENTIONS.md` 4.13 ausschließt. HUM-038 führt die Lücke in seinem Stand als offen (`backlog/sprint-3.md:386-395`) und in seinem zweiten Akzeptanzkriterium als nicht erfüllt (`:318`); ein eigenes Issue gab es bis heute nicht. Dieses Issue ist die Oberflächen-Hälfte von HUM-038.
+
+### Ziel
+Im Regel-Bildschirm, Tab „Gespeichert", Block der mitgelieferten Regeln: Jede Zeile trägt an der Stelle, an der eine eigene Regel den Papierkorb hat, einen Schalter „Ausschalten" beziehungsweise „Einschalten". Eine abgeschaltete Regel wird wie eine abgelaufene gezeichnet (gedämpft), ihr Herkunftswort lautet „mitgeliefert, ausgeschaltet", und ihr Schalter liest „Einschalten". Der Klick schickt `RulesRequest.set_disabled`; die Liste zeigt danach den Regelsatz aus der Antwort des Daemons, nie einen lokal vorweggenommenen Zustand. `humanitl rules disable ID` und der Bildschirm zeigen zu jeder Zeit denselben Zustand. Der Dart-Fake antwortet wie der Daemon.
+
+### Nicht-Ziel
+Keine eigene Regel wird abgeschaltet; der Daemon lehnt das mit `RULES_010` ab (`rules_store.rs:598-603`), und die Oberfläche bietet den Schalter dort nicht an (eine eigene Regel löscht man). Kein Löschen mitgelieferter Regeln. Keine Änderung an Daemon, Proto oder Kommandozeile. Kein Rückgängig-Streifen: der Schalter ist sein eigenes Rückgängig. Keine Änderung der Auswertungsreihenfolge (HUM-104, CONVENTIONS 4.5).
+
+### Betroffene Pfade
+- `app/lib/core/domain/rule.dart` (ändern: `@Default(false) bool disabled`), `rule.freezed.dart`, `rule.g.dart` (Regenerat)
+- `app/lib/core/ipc/convert.dart` (ändern, geteilte Datei: `RuleToDomain` liest `disabled`, `RuleToProto` schreibt es)
+- `app/lib/core/ipc/daemon_client.dart` (ändern: `Future<RuleSet> setRuleDisabled(RuleId id, {required bool disabled})`)
+- `app/lib/core/ipc/grpc_daemon_client.dart` (ändern: Umsetzung über `_rules(pb.RulesRequest()..setDisabled = …)`, wie `makeRulePermanent` in `:151-152`)
+- `app/lib/core/ipc/fake_daemon_client.dart` (ändern, geteilte Datei: Umsetzung neben `makeRulePermanent`, `:525`)
+- `app/lib/features/rules/providers/rules.dart` (ändern: `Future<Diagnostic?> setDisabled(Rule rule, {required bool disabled})` neben `makePermanent`, `:166`)
+- `app/lib/features/rules/widgets/rule_row.dart` (ändern: Schalter im `actionSlot` für `rule.bundled`, `:187-196`; Herkunftswort und Dämpfung bei `rule.disabled`, `:147-148`, `:365-374`)
+- `app/l10n/app_en.arb`, `app/l10n/app_de.arb` (ändern: neue Schlüssel ans Ende der Datei)
+- `app/test/core/ipc/convert_test.dart`, `app/test/features/rules/fake_rules_parity_test.dart`, `app/test/features/rules/rules_screen_test.dart`, `app/test/features/rules/fixtures.dart` (ändern: Parameter `disabled` neben `bundled`, `:39`), `app/test/goldens/rules_golden_test.dart` (ändern: `rules_list_saved_*` mit einer abgeschalteten mitgelieferten Regel)
+- `backlog/CONVENTIONS.md` 4.16 (ändern: ein Absatz zum Schalter)
+
+Nicht berührt: `daemon/`, `proto/`, `backlog/sprint-3.md` (HUM-038; sein Stand verweist nachträglich hierher, sobald dort niemand mehr arbeitet).
+
+### Spezifikation
+
+```dart
+// app/lib/core/domain/rule.dart, in Rule
+/// Switched off by the user. Only a bundled rule can be; it stays in the
+/// list and decides nothing (`rules.proto` field 13, HUM-038).
+@Default(false) bool disabled,
+```
+
+```dart
+// app/lib/core/ipc/daemon_client.dart
+/// Switches a bundled rule off or back on (`RulesRequest.set_disabled`).
+/// Any other rule is refused by the daemon with `RULES_010`.
+Future<RuleSet> setRuleDisabled(RuleId id, {required bool disabled});
+```
+
+`GrpcDaemonClient`: `_rules(pb.RulesRequest()..setDisabled = (pb.RulesRequest_SetDisabled()..ruleId = id.value..disabled = disabled))`. `FakeDaemonClient`: unbekannte Id ⇒ `DaemonException(_unknownRule(id))`; Regel nicht `bundled` ⇒ `DaemonException` mit `DiagnosticCodes.ruleBundled` (`RULES_010`) und dem `why` des Daemons („only bundled rules are disabled instead of removed", `rules_store.rs:600-601`); sonst `disabled` setzen, `RulesChanged` senden, Regelsatz zurückgeben.
+
+`RulesNotifier.setDisabled` läuft über `_run` wie `makePermanent` und gibt den `Diagnostic` des Daemons zurück; kein `RuleUndo`.
+
+`RuleRow`: für `rule.bundled` steht im `actionSlot` ein `HButton` (`variant: HButtonVariant.ghost`) mit `key: ValueKey<String>('rule-disable-$index')`, Beschriftung `rulesDisable` beziehungsweise `rulesEnable` je nach `rule.disabled`, `semanticsLabel` mit dem Host der Regel; während der Aufruf läuft, ist der Knopf deaktiviert. `_Origin` schreibt für `rule.disabled` `rulesOriginBundledOff` statt `rulesOriginBundled`. Die Zeile wird bei `rule.disabled` mit derselben Dämpfung gezeichnet wie bei `expired` (`ruleRowState`, `:147-148`).
+
+ARB-Schlüssel, `en` Quelle, `de` Übersetzung, ans Ende beider Dateien angehängt:
+
+- `rulesDisable`: „Switch off" / „Ausschalten"
+- `rulesEnable`: „Switch on" / „Einschalten"
+- `rulesDisableSemantics`: „Switch off the bundled rule for {host}" / „Die mitgelieferte Regel für {host} ausschalten"
+- `rulesEnableSemantics`: „Switch on the bundled rule for {host}" / „Die mitgelieferte Regel für {host} einschalten"
+- `rulesOriginBundledOff`: „bundled, switched off" / „mitgeliefert, ausgeschaltet"
+
+### Schritte
+1. `Rule.disabled`, `build_runner`, `convert.dart` beidseitig. Prüfbar: `flutter test test/core/ipc/convert_test.dart` grün mit dem neuen Fall.
+2. `setRuleDisabled` in `DaemonClient`, `GrpcDaemonClient`, `FakeDaemonClient`. Prüfbar: `flutter analyze` sauber, `fake_rules_parity_test.dart` grün mit den zwei neuen Fällen.
+3. `RulesNotifier.setDisabled`, Schalter und Darstellung in `rule_row.dart`, ARB. Prüfbar: `rules_screen_test.dart` grün, Golden neu abgenommen.
+4. CONVENTIONS 4.16, `make check`.
+
+### Tests
+- `convert_test.dart`: `rule_disabled_survives_the_round_trip`: `pb.Rule` mit `disabled = true` ⇒ `Rule.disabled == true`; `toProto()` schreibt es zurück.
+- `fake_rules_parity_test.dart`: `set_disabled_toggles_a_bundled_rule` (aus, wieder an; der zurückgegebene Regelsatz trägt den Zustand); `set_disabled_refuses_an_own_rule_with_rules_010` (Diagnostic-Code `RULES_010`, Regelsatz unverändert).
+- `rules_screen_test.dart`: `bundled_switch_calls_set_disabled` (Klick auf `rule-disable-<i>` ruft `setRuleDisabled(id, disabled: true)` genau einmal); `own_rule_has_no_switch` (`rule-disable-<i>` fehlt für eine eigene Regel, `rule-delete-<i>` ist da); `disabled_bundled_row_is_drawn_off` (Herkunftswort „mitgeliefert, ausgeschaltet", Schalter liest „Einschalten").
+- `rules_golden_test.dart`: `rules_list_saved_*` mit einer abgeschalteten mitgelieferten Regel im Block.
+
+### Akzeptanzkriterien
+- [ ] `grep -n "bool disabled" app/lib/core/domain/rule.dart` trifft einmal; `grep -c "disabled" app/lib/core/ipc/convert.dart` ist mindestens 2 (lesen und schreiben).
+- [ ] `grep -n "setRuleDisabled" app/lib/core/ipc/daemon_client.dart app/lib/core/ipc/grpc_daemon_client.dart app/lib/core/ipc/fake_daemon_client.dart` trifft in jeder der drei Dateien.
+- [ ] `cd app && flutter test test/core/ipc test/features/rules test/goldens/rules_golden_test.dart` grün, darunter die sechs oben benannten Fälle.
+- [ ] Gegen einen laufenden Daemon: `humanitl rules disable <Id einer mitgelieferten Regel>`, dann der Bildschirm: die Zeile ist gedämpft, liest „mitgeliefert, ausgeschaltet", der Schalter „Einschalten" (Blick). Klick darauf, dann gibt `humanitl --json rules list --all | jq -r --arg id <Id> '.rules[] | select(.rule_id == $id) | .disabled'` `false` aus; noch ein Klick, `true`.
+- [ ] Eine eigene Regel hat keinen Schalter: `find.byKey(const ValueKey<String>('rule-disable-<i>'))` findet für sie nichts (Test `own_rule_has_no_switch`).
+- [ ] `grep -c '"rulesDisable"\|"rulesEnable"\|"rulesOriginBundledOff"' app/l10n/app_en.arb app/l10n/app_de.arb` ergibt je 3; `make flutter-codegen` läuft ohne Warnung.
+- [ ] `make check` grün.
+
+### Fallstricke
+- `convert.dart`, `fake_daemon_client.dart` und `daemon_client.dart` sind geteilte Dateien (CLAUDE.md): nur den eigenen Abschnitt ändern, neue Einträge ans Ende, die Datei unmittelbar vor jedem Schreiben neu einlesen, nie im Ganzen neu schreiben.
+- Der Rust-Fake (`fake/mod.rs:687-693`) ignoriert eine Anfrage für eine nicht mitgelieferte Regel stillschweigend, während `rules_store.rs:598-603` `RULES_010` antwortet; sein Kommentar behauptet Parität. Der Dart-Fake folgt dem Daemon, nicht dem Rust-Fake. Die Abweichung im Rust-Fake ist ein eigener Befund unter `daemon/` und wird hier nur genannt.
+- Der Zustand kommt aus der Antwort des Daemons. Ein Schalter, der vor der Antwort umspringt, zeigt für die Dauer eines Fehlschlags etwas, das nicht stimmt (4.13); deshalb deaktiviert, bis die Antwort da ist, dann die Liste aus der Antwort.
+- `RuleToProto` muss `disabled` mitschreiben, sonst verliert jede Regel, die einmal durch `toProto()` läuft (Probelauf, Editor), das Feld; der Daemon lehnt `Update` für mitgelieferte Regeln zwar ab, der Konverter soll trotzdem symmetrisch sein wie bei `bundled`.
+- `disabled` und `expired` sind zwei Dinge: eine mitgelieferte Regel läuft nie ab (`Expiry::Never`), eine eigene wird nie abgeschaltet. Dieselbe Dämpfung, zwei Wörter.
+- Das Herkunftswort „mitgeliefert, ausgeschaltet" ist ein eigener Schlüssel, keine Verkettung: `de` und `en` setzen die Kommata verschieden.
+
+### Referenzen
+`backlog/sprint-3.md` HUM-038 (Spezifikation und Stand), HUM-104; `backlog/CONVENTIONS.md` 4.5, 4.12, 4.13, 4.16; `proto/humanitl/v1/rules.proto` Feld 13, `humanitl.proto` `RulesRequest.SetDisabled`; ADR-018 (dünne Clients).
+
+---
+
+## HUM-106 · TLS-Karte im Intercept-Bildschirm
+Sprint: 2 · Größe: M · Abhängigkeiten: HUM-020, HUM-045 (Daemon-Hälfte gemerged, `3e5c49b`), HUM-063 · Blockiert: keine; Überschneidung mit der Oberflächen-Hälfte von HUM-039 (siehe Fallstricke)
+
+### Kontext
+Der Daemon erkennt einen abgelehnten Handschlag und sagt, welches Werkzeug welche Variable braucht: `TLS_001` mit `FixAction::SetEnv` je Hinweis (`daemon/crates/proxy/src/tls_observe.rs`, HUM-045). Er hängt den Befund an den Flow des `CONNECT` (`daemon/crates/proxy/src/handler.rs:904-911`, `FlowEvent::Diagnostic { flow_id: Some(..) }`) und schickt ihn als `FlowEvent.flow_diagnostic` (`daemon/crates/ipc/src/convert.rs:1040-1046`, Proto-Feld 16); `TLS_003` (kein SNI) geht ohne Flow als `FlowEvent.diagnostic` (Feld 12).
+
+In der Anwendung kommt beides an und wird verworfen. `app/lib/core/ipc/convert.dart:340-353` übersetzt beide Varianten nach `FlowEvent.diagnostic(at, diagnostic)` und lässt die `flow_id` fallen (der Kommentar dort verweist die Erweiterung um `flowId` auf die Oberflächen-Hälfte von HUM-039). `app/lib/features/intercept/providers/flows.dart:138-145` und `app/lib/features/history/providers/history_page.dart:558-563` behandeln `FlowEventDiagnostic` mit `break`, der Dart-Fake ebenso (`app/lib/core/ipc/fake_daemon_client.dart:1128-1133`). Einen `diagnosticsProvider`, wie ihn `backlog/CONVENTIONS.md` 3.9 als verbindlichen Namen führt und HUM-045 Schritt 5 voraussetzt, gibt es nicht (`grep -rn diagnosticsProvider app/lib` ist leer); die Datei `app/lib/features/intercept/widgets/diagnostic_card.dart`, die HUM-045 als Ort nennt, existiert nicht. Kein Bildschirm zeigt den Befund. Ein Mensch sieht den TLS-Fehler nur in `humanitl flows list --json` (`error = tls_handshake_failed`) und im Terminal des Agenten, und `docs/UX.md` 4.4 sagt: „Ein `Diagnostic` mit `FixAction` und ohne sichtbare Aktion ist ein Defekt." HUM-045 führt das in seinem Stand als offen (`backlog/sprint-3.md:1357-1370`) und in seinem ersten Akzeptanzkriterium als nicht erfüllt (`:1334`); ein eigenes Issue gab es nicht. Dieses Issue ist die Oberflächen-Hälfte von HUM-045, ohne den Schreibweg in die Konfiguration.
+
+Was da ist: `HDiagnosticCard` (`app/lib/core/ui/h_diagnostic_card.dart:14-25`) und `FixControl` (`app/lib/core/ui/fix_control.dart`), zusammen benutzt in `setup_screen.dart:51-58`, `sandbox_screen.dart:228-239` und `attention_notice.dart:42-50`; `FixControl` zeichnet `FixActionSetEnv` heute nur als Abzeichen „Set {key}" (`fix_control.dart:68`), die Kopierzeile gibt es nur für `copyCommand` und `openUrl` (`:54-66`). `AgentAskStrip` über der Warteschlange (`app/lib/features/intercept/widgets/agent_ask_card.dart:52-71`, eingehängt in `queue_pane.dart:361`) mit `agentAsksProvider` (`providers/agent_asks.dart`) ist das Muster für Karten aus einem Ereignis, das kein Flow ist. Das Standard-Szenario des Dart-Fakes sendet nach 5 s genau ein `TLS_001` mit `setEnv(CURL_CA_BUNDLE, /etc/humanitl/ca.crt)` (`fake_daemon_client.dart:1236`, `:1366-1376`), und `fake_daemon_client_test.dart:44` prüft, dass es ankommt.
+
+### Ziel
+Ein `Diagnostic` aus dem Ereignisstrom erscheint im Intercept-Bildschirm als Karte über der Warteschlange: Code, Titel, der `why`-Satz des Daemons, für `SetEnv` das Abzeichen plus eine Kopierzeile `export KEY=VALUE`, für `AddRule` und `CopyCommand` das, was `FixControl` heute schon zeichnet; jede Karte ist einzeln wegklickbar. `diagnosticsProvider` hält die Befunde der Sitzung, `FlowEvent.diagnostic` trägt die `flowId` aus `flow_diagnostic`. Mit `--dart-define=HUMANITL_FAKE=default` steht die Karte nach 5 s, gegen den echten Daemon nach `curl --cacert /dev/null https://example.com` in der Sandbox.
+
+### Nicht-Ziel
+Kein Knopf „Für nächste Session setzen": er bräuchte `SetConfig`, und der RPC antwortet `unimplemented` (HUM-045 Stand, HUM-069). Keine amberfarbene Zeile für `LLM_005` an einer durchgereichten Anfrage und kein Öffnen der Flow-Details aus der Karte: das ist die Oberflächen-Hälfte von HUM-039, die denselben Provider und dieselbe `flowId` nutzt. Keine Karte in der Historie: der Flow steht dort mit `error` (HUM-045). Keine Entstörung in der Anwendung: der Daemon entstört `TLS_001` je Host und Hinweis für 60 s (`tls_observe.rs:85`). Keine Benachrichtigung (HUM-034). Keine Änderung an Daemon oder Proto.
+
+### Betroffene Pfade
+- `app/lib/core/domain/flow_event.dart` (ändern: `FlowEvent.diagnostic` bekommt `FlowId? flowId`; der Getter in `:130-141`, der für die Variante heute `null` liefert, liefert ihn), `flow_event.freezed.dart` (Regenerat)
+- `app/lib/core/ipc/convert.dart` (ändern, geteilte Datei: `:350-353` setzt `flowId: FlowId(flowDiagnostic.flowId)`; der Kommentar `:344-349` entfällt)
+- `app/lib/features/intercept/providers/diagnostics.dart`, `diagnostics.g.dart` (neu): `diagnosticsProvider`
+- `app/lib/features/intercept/widgets/diagnostic_card.dart` (neu): `DiagnosticStrip`, `DiagnosticCard`
+- `app/lib/features/intercept/widgets/queue_pane.dart` (ändern: `DiagnosticStrip` neben `AgentAskStrip`, `:361`)
+- `app/lib/core/ui/fix_control.dart` (ändern: `FixActionSetEnv` zeichnet Abzeichen und Kopierzeile `export KEY=VALUE`)
+- `app/lib/core/ui/` (ändern: die privaten Helfer `_severityLabel` und `_severityColor` aus `attention_notice.dart:88` einmal hierher heben statt kopieren)
+- `app/l10n/app_en.arb`, `app/l10n/app_de.arb` (ändern: neue Schlüssel ans Ende der Datei)
+- `app/test/core/ipc/convert_test.dart`, `app/test/features/intercept/diagnostics_test.dart` (neu), `diagnostic_card_test.dart` (neu), `app/test/core/ui/fix_control_test.dart` (neu), `app/test/goldens/intercept_golden_test.dart` (ändern: ein Golden mit Karte)
+- `backlog/CONVENTIONS.md` 4.15 (ändern: ein Absatz zur Karte)
+
+Nicht berührt: `daemon/`, `proto/`, `app/lib/features/history/` (`history_page.dart:558-563` behält sein `break`), `backlog/sprint-3.md` (HUM-045; sein Stand verweist nachträglich hierher, sobald dort niemand mehr arbeitet).
+
+### Spezifikation
+
+```dart
+// app/lib/core/domain/flow_event.dart
+/// A diagnostic of the session, or of one flow when [flowId] is set
+/// (`flow_diagnostic`, field 16): a TLS refusal, a finding on a passthrough.
+const factory FlowEvent.diagnostic({
+  required DateTime at,
+  required Diagnostic diagnostic,
+  FlowId? flowId,
+}) = FlowEventDiagnostic;
+```
+
+```dart
+// app/lib/features/intercept/providers/diagnostics.dart
+/// One diagnostic as the strip holds it.
+@immutable
+class SessionDiagnostic {
+  final int id;            // laufende Nummer, für Schlüssel und dismiss
+  final DateTime at;
+  final FlowId? flowId;
+  final Diagnostic diagnostic;
+}
+
+@Riverpod(keepAlive: true)
+class Diagnostics extends _$Diagnostics {
+  @override
+  List<SessionDiagnostic> build();   // hört auf flowEventsProvider wie agent_asks.dart
+  void dismiss(int id);
+}
+```
+
+Der Provider hängt jede `FlowEventDiagnostic` an, ohne Obergrenze (Begründung wie bei `agentAsksProvider`: der Daemon begrenzt, die Anwendung verschluckt nichts). `DiagnosticStrip` zeichnet nichts, solange die Liste leer ist, sonst je Eintrag eine `DiagnosticCard`: `HDiagnosticCard(code, severityLabel, color, title, why, fix: FixControl(fix: diagnostic.fix), docsUrl)` nach dem Aufruf in `attention_notice.dart:42-50`, daneben ein `HIconButton` mit `key: ValueKey<String>('intercept-diagnostic-dismiss-$id')`. Der Titel ist der Text der Anwendung (`interceptDiagnosticTitle`), der `why`-Slot der Satz des Daemons (`docs/UX.md` 4.4). Ein Eintrag ohne `fix` (`TLS_003`) hat keinen leeren Slot.
+
+`FixControl` für `FixActionSetEnv(key, value)`: das Abzeichen `setupFixSetEnv(key)` bleibt, darunter `_copyRow` mit `label: setupFixCopyExport` und `text: 'export $key=$value'`, so wie `copyCommand` es heute tut (`fix_control.dart:54-59`).
+
+ARB-Schlüssel, ans Ende beider Dateien:
+
+- `interceptDiagnosticTitle`: „The daemon reports" / „Der Daemon meldet"
+- `interceptDiagnosticDismiss`: „Dismiss" / „Ausblenden"
+- `setupFixCopyExport`: „Copy export command" / „Export-Befehl kopieren"
+
+### Schritte
+1. `flowId` an `FlowEvent.diagnostic`, `build_runner`, `convert.dart`. Prüfbar: `flutter test test/core/ipc/convert_test.dart` grün mit `flow_diagnostic_carries_the_flow_id`; `flows.dart`, `history_page.dart`, `fake_daemon_client.dart` übersetzen unverändert.
+2. `FixControl` mit Kopierzeile für `SetEnv`. Prüfbar: `fix_control_test.dart` grün.
+3. `diagnosticsProvider` und Tests. Prüfbar: `diagnostics_test.dart` grün.
+4. `DiagnosticStrip`, `DiagnosticCard`, Einhängen in `queue_pane.dart`, ARB, Golden. Prüfbar: `diagnostic_card_test.dart` grün, Golden abgenommen, `flutter run --dart-define=HUMANITL_FAKE=default` zeigt die Karte nach 5 s.
+5. CONVENTIONS 4.15, `make check`.
+
+### Tests
+- `convert_test.dart`: `flow_diagnostic_carries_the_flow_id`: `pb.FlowEvent` mit `flowDiagnostic` ⇒ `FlowEventDiagnostic.flowId` gleich der Id; `diagnostic` (Feld 12) ⇒ `flowId == null`.
+- `diagnostics_test.dart`: `collects_every_diagnostic_of_the_stream` (zwei Ereignisse, zwei Einträge, auch bei gleichem Code); `dismiss_removes_only_that_one`; `a_flow_event_that_is_no_diagnostic_changes_nothing`.
+- `diagnostic_card_test.dart`: `tls_card_shows_code_why_and_export_command`: `FakeDaemonClient` Standard-Szenario, 5 s vorspulen ⇒ genau eine Karte, Text `TLS_001`, der `why`-Satz des Szenarios, Kopierzeile `export CURL_CA_BUNDLE=/etc/humanitl/ca.crt`; `dismiss_hides_the_card`; `a_diagnostic_without_fix_has_no_fix_row` (`TLS_003`-Beispiel ohne `fix`).
+- `fix_control_test.dart`: `set_env_offers_the_export_command`: Tippen auf die Kopierzeile legt `export KEY=VALUE` in die Zwischenablage (`SystemChannels.platform`-Mock), das Label wechselt auf `setupFixCopied`.
+- `intercept_golden_test.dart`: `intercept_diagnostic_tls` (Karte über der Warteschlange, hell und dunkel wie die übrigen).
+
+### Akzeptanzkriterien
+- [ ] `grep -n "FlowId? flowId" app/lib/core/domain/flow_event.dart` trifft in der Fabrik `diagnostic`; `grep -n "flowId: FlowId(flowDiagnostic.flowId)" app/lib/core/ipc/convert.dart` trifft einmal; `flow_diagnostic_carries_the_flow_id` grün.
+- [ ] `grep -rn "diagnosticsProvider" app/lib` trifft mindestens zweimal (Definition und `DiagnosticStrip`); `app/lib/features/intercept/widgets/diagnostic_card.dart` existiert.
+- [ ] `cd app && flutter run -d linux --dart-define=HUMANITL_FAKE=default`: nach etwa 5 s steht über der Warteschlange eine Karte `TLS_001` mit dem Satz „curl in the sandbox does not trust the Humanitl CA yet", dem Abzeichen `Set CURL_CA_BUNDLE` und der Kopierzeile; nach dem Kopieren enthält die Zwischenablage `export CURL_CA_BUNDLE=/etc/humanitl/ca.crt` (Blick, dazu `tls_card_shows_code_why_and_export_command` und `set_env_offers_the_export_command`).
+- [ ] Gegen einen laufenden Daemon: `curl --cacert /dev/null https://example.com` in der Sandbox (HUM-045, erstes Akzeptanzkriterium) erzeugt dieselbe Karte mit `CURL_CA_BUNDLE`; `humanitl --json flows list` zeigt den Flow mit `"error": "tls_handshake_failed"` (Blick).
+- [ ] Ausblenden entfernt nur diese Karte; ein zweites `TLS_001` danach ergibt eine neue (`dismiss_removes_only_that_one`, `collects_every_diagnostic_of_the_stream`).
+- [ ] `grep -n "FixActionSetEnv" app/lib/core/ui/fix_control.dart` zeigt einen Zweig, der `_copyRow` ruft, nicht nur `HBadge`.
+- [ ] `grep -c '"interceptDiagnosticTitle"\|"interceptDiagnosticDismiss"\|"setupFixCopyExport"' app/l10n/app_en.arb app/l10n/app_de.arb` ergibt je 3; `make flutter-codegen` ohne Warnung.
+- [ ] `cd app && flutter test test/features/intercept test/core/ipc test/core/ui test/goldens/intercept_golden_test.dart` grün; `make check` grün.
+
+### Fallstricke
+- Das neue Feld an `FlowEvent.diagnostic` berührt drei Aufrufer, die die Variante heute mit `||`-Mustern verwerfen (`flows.dart:141`, `history_page.dart:560`, `fake_daemon_client.dart:1130`), und den erschöpfenden `switch` in `flow_event.dart:130-141`. Sie bleiben, wie sie sind; nur der Getter liefert die Id jetzt mit. `convert.dart` und `fake_daemon_client.dart` sind geteilte Dateien (CLAUDE.md).
+- Überschneidung mit HUM-039: dessen Oberflächen-Hälfte („`LLM_005` erscheint im Feed als amber Zeile, öffnet die Flow-Details", `backlog/sprint-3.md:570`) braucht denselben Provider und dieselbe `flowId`. Wer zuerst baut, baut beides; das andere Issue nutzt es und baut es nicht ein zweites Mal. Die amberfarbene Zeile und der Sprung in die Flow-Details bleiben bei HUM-039.
+- Die Karte darf nichts versprechen, was sie nicht tut: kein Knopf, der in die Konfiguration schreibt (4.13; `SetConfig` ist unimplementiert). Die Kopierzeile ist der eine Fix, den die Anwendung heute ausführen kann; HUM-045 nennt ihn ausdrücklich („Befehl kopieren").
+- Der `why`-Satz kommt vom Daemon und wird nicht übersetzt oder umformuliert; der Titel der Anwendung ist nur der Rahmen (`docs/UX.md` 4.4, erster Punkt).
+- Keine Obergrenze und kein Zusammenfassen gleicher Codes in der Anwendung: der Daemon entstört bereits und führt den Zähler unterdrückter Versuche in der nächsten Karte mit (`tls_observe.rs`, HUM-045 Stand). Zwei Karten sind zwei Befunde.
+- Die Historie bleibt unberührt: der Flow steht dort mit `error`, und eine zweite Karte dort wäre dieselbe Aussage zweimal.
+
+### Referenzen
+`backlog/sprint-3.md` HUM-045 (Spezifikation, Tabelle der Hinweise, Stand), HUM-039 (Oberflächen-Hälfte), HUM-068 (`DiagnosticScope`); `backlog/CONVENTIONS.md` 3.9 (`diagnosticsProvider`), 4.13, 4.15; `docs/UX.md` 4.4; `proto/humanitl/v1/humanitl.proto` `FlowEvent` Felder 12 und 16; `daemon/crates/core-types/src/diagnostics/codes.rs` `TLS_001..003`.
