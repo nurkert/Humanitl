@@ -2119,3 +2119,236 @@ Bedingung: Ein ausgelieferter Test braucht die Umlenkung und lässt sich ohne si
 
 ### Referenzen
 `backlog/CONVENTIONS.md` 4.4, 4.11, 4.13, 4.22; BACKLOG.md ADR-006; `docs/CONFIG.md`; HUM-024 (`backlog/sprint-2.md:371`), HUM-036 (`backlog/sprint-2.md:1605`), HUM-076 (`backlog/sprint-3.md:1702`).
+
+
+## HUM-101 · Konfigurationsschlüssel ohne Leser
+Sprint: 3 · Größe: L · Abhängigkeiten: HUM-062, HUM-063 · Blockiert: —
+
+### Kontext
+`docs/CONFIG.md` wird aus dem Schema erzeugt (`daemon/crates/config/tests/config_docs.rs`) und ist deshalb nie veraltet, was die **Existenz** eines Schlüssels angeht. Über seine **Wirkung** sagt der Generator nichts. Mindestens sieben Schlüssel stehen damit heute mit einer Zusage im Dokument, die der Code nicht einlöst:
+
+- `limits.idle_timeout_secs` (Vorgabe 90) und `limits.body_timeout_secs` (Vorgabe 300). Beide werden nur in `validate.rs:211-212` auf ihren Bereich geprüft und danach von niemandem gelesen. `docs/CONFIG.md:120` und `:127` sagen zu, dass sie Verbindungen beenden.
+- `experimental.upstream_port_map` — das ist HUM-088 und wird dort entfernt.
+- `experimental.ws_hold` — Treffer nur unter `#[cfg(test)]` (`humanitl/src/cli.rs:644`).
+- `ui.sound` und `ui.notifications` — im Rust-Teil kein Treffer, und der Leser in Dart ist festverdrahtet: `app/lib/features/tray/providers/attention.dart:70` lautet `bool notificationsEnabled(Ref ref) => true;`, der Kommentar darüber räumt die fehlende Verdrahtung ein.
+- `pseudonyms.max_response_bytes` und `pseudonyms.translate_responses` gehören zu HUM-079 aus Sprint 4 und haben zu Recht noch keinen Leser — aber das Dokument sagt es nicht, sondern beschreibt sie in derselben Gegenwartsform wie jeden wirksamen Schlüssel.
+
+Bei den beiden `limits`-Schlüsseln wiegt es schwerer als bei `resolver.test_ca` (HUM-087), weil sie Ressourcengrenzen zusagen, die es nicht gibt.
+
+### Was der Review dieses Issues ergeben hat, und was daraus folgt
+Die erste Fassung wollte beide Zeitgrenzen einbauen und dabei das Halten ausnehmen. Der Review hat gezeigt, dass das so nicht baubar ist, und die Fassung ist daran angepasst:
+
+Der Hold sitzt **in** der Service-Future innerhalb `serve_connection` (`handler.rs:1193-1211`). Während er läuft, fließen auf der Verbindung des Agenten null Bytes. Eine Leerlaufuhr auf dieser Verbindung feuert also genau dann, wenn sie nicht darf — und mit den Vorgaben 90 Sekunden Leerlauf gegen 300 Sekunden Haltefrist würde die Standardkonfiguration **jeden** Hold nach 90 Sekunden töten. `hyper` bietet dafür keinen Aufhänger; die einzige Stelle wäre ein Wrapper um den Socket in `core.rs:134-141`, vor `serve_connection`, mit einem Zähler gehaltener Flüsse, der die Uhr anhält. Das ist kein Beiwerk, sondern der eigentliche Aufwand des Issues, und es ist der Grund für die Größe L.
+
+Zweitens beschreiben `idle_timeout_secs` und `header_timeout_secs` auf einer Keep-Alive-Verbindung dieselbe Spanne — der Doc-Kommentar in `handler.rs:86-88` sagt selbst, die Kopf-Frist sei „zugleich die Frist bis zur nächsten Anfrage". Zwei Schlüssel für eine Uhr sind eine Zusage zu viel. **Erste zu treffende Entscheidung dieses Issues:** entweder speist `idle_timeout_secs` die vorhandene `header_read_timeout` und `header_timeout_secs` verschwindet, oder umgekehrt. Ein dritter Weg ist, `idle_timeout_secs` nach dem Muster von HUM-088 ganz zu entfernen; das ist der ehrlichste, wenn sich keine Spanne findet, die er allein beschreibt.
+
+Drittens ist beim Ziel nur der gestreamte Antwort-Body unbegrenzt (`body.rs:102-120`); bis zu den Antwort-Kopfzeilen deckt `handshake_timeout` bereits alles ab (`upstream.rs:267,287,301`), gespeist aus `header_timeout_secs`. Die Rumpfgrenze gehört also genau dorthin und nirgends sonst — drei Uhren auf einer Verbindung ergeben einen Abbruch, dessen Grund niemand nennen kann.
+
+Viertens: `reason: idle_timeout` im Blockbanner ist unlieferbar. Im Leerlauf ist keine Anfrage in Flug, also gibt es keine Antwort, in die ein Banner passt (`core-types/src/block.rs:162-163`). Der Leerlauf schließt still und meldet sich im Ereignisstrom und im Protokoll. Nur die Rumpfgrenze auf der Client-Seite hat eine Anfrage in Flug und kann ein Banner tragen; auf der Ziel-Seite trüge die Zeile ohnehin das Präfix `upstream_` (`flow.rs:184`).
+
+Fünftens speist `limits.*` auch den IPC-Stapel (`ipc/src/server.rs:1107-1112`). Eine symmetrische Verdrahtung dorthin würde den Ereignisstrom der Oberfläche abschneiden, der minutenlang stumm sein darf. Der IPC-Stapel bleibt ausgenommen.
+
+### Ziel
+Die Zusagen im Dokument und das Verhalten stimmen wieder überein — durch Einbau, wo eine Grenze sinnvoll ist, und durch Streichung, wo sie es nicht ist. Jeder Schlüssel im Schema trägt entweder einen Leser oder die Angabe, ab welchem Issue er wirkt; `docs/CONFIG.md` schreibt diese Angabe mit, und ein Test verhindert, dass ein achter Fall entsteht.
+
+### Nicht-Ziel
+Keine Umsetzung von HUM-079 und keine Entfernung von `experimental.upstream_port_map` (HUM-088). Keine Verdrahtung von `ui.sound` und `ui.notifications` — sie bekommen die Angabe und ihr eigenes Issue.
+
+### Betroffene Pfade
+- `daemon/crates/config/src/model.rs`: `#[schemars(extend(...))]` mit einem neuen Schlüssel `x-pending-issue`, nach dem Vorbild von `x-tier` (`model.rs:141-174`)
+- `daemon/crates/config/src/schema.rs`: die Angabe wird über `leaf_paths()` erreichbar
+- `daemon/crates/config/tests/config_readers.rs` (neu): das Register und sein Test
+- `daemon/crates/config/tests/config_docs.rs`: der Generator schreibt die Angabe in die Tabelle
+- `daemon/crates/proxy/src/core.rs`: der Wrapper um den Socket samt Zähler
+- `daemon/crates/proxy/src/connect.rs`: der Zähler im `ConnectionContext`, den `tunnel` mitklont
+- `daemon/crates/proxy/src/body.rs`: die Rumpfgrenze am gestreamten Antwort-Body
+- `proto/humanitl/v1/humanitl.proto`, `daemon/crates/ipc/src/convert.rs`, `app/lib/core/domain/flow_state.dart`: falls ein neuer `reason` entsteht
+- `docs/CONFIG.md` aus dem Generatorlauf
+
+### Spezifikation
+**Das Register statt einer Heuristik.** Die erste Fassung wollte ein Shell-Gate, das über den Feldnamen nach einem Leser sucht. Der Review hat es durchgezählt: `env` trifft 244-mal, `profile` 464-mal, `command` 293-mal; `timeout_secs` ist Teilzeichenkette von vier verschiedenen Schlüsseln; `enabled` ist zweimal vergeben (`findings.enabled`, `recorder.enabled`) und über den Namen nicht zu trennen; ein Doc-Kommentar zählt als Treffer; und `humanitl config get` liest generisch über serde jeden Schlüssel, sodass formal keiner leserlos ist. Die Heuristik findet also weder zuverlässig noch trennt sie „wirkt" von „wird serialisiert".
+
+Stattdessen ein Register im Repository, eine Zeile je Schema-Pfad, mit genau einer Einstufung: `effective` oder `pending(HUM-xxx)`. Ein Test in `daemon/crates/config/tests/` liest `schema::leaf_paths()` und das Register und wird rot, sobald das Schema einen Pfad kennt, den das Register nicht kennt, oder umgekehrt. Das ist dasselbe Muster wie beim Diagnostik-Register, es braucht keinen neuen Schritt in `make check`, und es muss das Schema nicht aus einer Shell heraus parsen — was ohnehin nicht ginge.
+
+Die Einstufung `effective` ist eine Behauptung eines Menschen, keine Messung. Das ist Absicht: das Register soll den **vergessenen** Schlüssel finden, und ein Mensch, der beim Anlegen eines Schlüssels „wirkt" schreibt, ohne ihn zu verdrahten, hat bewusst gelogen statt es zu übersehen.
+
+**Die Zeitgrenzen.** Die Rumpfgrenze begrenzt die Zeit, in der ein Rumpf vollständig angekommen sein muss, und sitzt für die Ziel-Richtung am gestreamten Antwort-Body. Die Leerlaufgrenze — sofern die erste Entscheidung sie behält — sitzt im Wrapper vor `serve_connection` und ruht, solange die Verbindung einen gehaltenen Fluss trägt. Sie ruht auch für die Durchreiche zum Sprachmodell: ein lokales Modell schweigt vor dem ersten Token regelmäßig länger als 90 Sekunden, und dieser Seitenkanal ist ausdrücklich erklärt.
+
+### Tests
+- Paar-Test der Rumpfgrenze: ein Antwort-Body, der zu langsam kommt, wird abgebrochen; mit hoher Grenze nicht. Zeit über eine einspeisbare Uhr, nie über die Wanduhr.
+- Ein Test, dass eine gehaltene Anfrage die Leerlaufgrenze überlebt, auch wenn sie länger wartet — und ein zweiter, dass eine Verbindung **ohne** gehaltenen Fluss sie nicht überlebt. Ohne den zweiten prüft der erste nichts.
+- Ein Test, dass eine Durchreiche zum Sprachmodell mit langer Stille nicht abgebrochen wird.
+- Register-Probe: einen Schlüssel im Schema hinzufügen, ohne Zeile im Register — der Test wird rot und nennt den Pfad.
+- `ui.sound`, `ui.notifications`, `experimental.ws_hold` und die beiden `pseudonyms`-Schlüssel tragen `pending`, und `docs/CONFIG.md` zeigt es.
+
+### Akzeptanzkriterien
+- [ ] Die erste Entscheidung (`idle_timeout_secs` gegen `header_timeout_secs`) ist getroffen und in `CONVENTIONS.md` begründet; am Ende beschreibt kein Schlüssel dieselbe Spanne wie ein anderer.
+- [ ] Jeder Schema-Pfad steht im Register, und der Test wird rot, sobald einer fehlt oder einer zu viel ist.
+- [ ] Eine gehaltene Anfrage und eine schweigende Durchreiche überleben die Leerlaufgrenze; eine leere Verbindung nicht.
+- [ ] `docs/CONFIG.md` kommt aus dem Generatorlauf und nennt für jeden noch nicht wirksamen Schlüssel sein Issue.
+- [ ] Der IPC-Stapel ist von den Grenzen ausgenommen, und ein Test belegt, dass ein minutenlang stummer Ereignisstrom nicht abbricht.
+- [ ] `make check`, clippy mit `-D warnings` und `cargo fmt --all -- --check` grün.
+
+### Fallstricke
+- Eine Leerlaufgrenze auf der Verbindung zum Agenten schneidet ohne den Zähler genau den Hold ab, den sie verschonen soll. Das ist der Grund, warum dieser Schlüssel gefährlicher ist als sein Fehlen.
+- Der Zähler muss die CONNECT-Rekursion überleben: `ConnectionContext::tunnel` klont den Kontext (`handler.rs:335-341`), und ein Zähler, der dabei verlorengeht, lässt getunnelte Holds ungeschützt.
+- Ein neuer `reason` zieht Proto, `convert.rs` und die Dart-Seite nach sich, dazu `CONVENTIONS.md` 3.2 mit dem Status je Grund.
+
+## HUM-102 · Die abgelehnte private Adresse hat keinen Diagnostic
+Sprint: 3 · Größe: M · Abhängigkeiten: HUM-015, HUM-025 · Blockiert: —
+
+### Kontext
+ADR-006, Zeile 39: „wird die Verbindung abgelehnt: `BlockReason::PrivateAddress`, Diagnostic `PROXY_005` mit einem Regelvorschlag." Den Diagnostic gibt es nicht. `PROXY_005` heißt im Code „Ungültiger Übergang im Flow" (`core-types/src/diagnostics/codes.rs:295`) und wird an ganz anderer Stelle ausgelöst (`handler.rs:1099`). Für die abgelehnte private Adresse gibt es `BlockReason::PrivateAddress` und `UpstreamError::PrivateAddress(ip)`, beides erreicht die Oberfläche und trägt die Adresse mit (`ipc/src/convert.rs:1068-1072`) — aber keinen Befund, kein `why`, keinen `fix`.
+
+Das trifft den Normalfall dieses Produkts. Das Sprachmodell steht im LAN, andere interne Dienste auch. Die Durchreichregel trägt `allow_private` und deckt nur Inferenz und die Modellliste (`sandbox/src/agent/opencode.rs:423-453`). Jede andere Anfrage an denselben Server geht durch die Warteschlange, und wenn ein Mensch dort „Erlauben" drückt, scheitert sie trotzdem: `flow.allow_private` wird ausschließlich aus einer Regel gesetzt (`pipeline.rs:349`), nie aus einer menschlichen Entscheidung. Der Mensch sieht eine abgelehnte Verbindung mit einer IP-Adresse und erfährt nicht, dass seine Freigabe an einer Sperre gescheitert ist, die nur eine Regel öffnet.
+
+### Der Fund, der dieses Issue umgedreht hat
+Der Review hat gezeigt, dass ein bloßer Regelvorschlag das Produkt **unsicherer** machen würde, statt es zu erklären. Der Grund steht in `pipeline.rs:347-349`: `flow.allow_private` wird nur im Zweig `Action::Allow` gesetzt. Eine Regel mit `action: ask` und `allow_private: true` parst anstandslos (`rules/src/parse.rs:355`, ohne die Prüfung, die `passthrough_llm` hat) und **wirkt nicht**. Wer also dem naheliegenden, engen Vorschlag folgt, bekommt eine wirkungslose Regel und eine zweite Ablehnung ohne neue Erklärung. Wirksam bleibt nur `action: allow` — und damit wird aus „ein Mensch erlaubt eine Anfrage" dauerhaft „alle künftigen Anfragen an diesen Host laufen ungehalten hinaus". Der Vorschlag verleitet also bauartbedingt zu mehr Öffnung als die Freigabe, die gerade gescheitert ist.
+
+Deshalb ist die Behebung von `pipeline.rs` Teil dieses Issues und nicht eines späteren: `flow.allow_private |= self.rule_allows_private(rule);` gehört vor das `match action`, damit eine Regel mit `action: ask` und `allow_private: true` das Ziel öffnet und die Anfrage trotzdem jedes Mal einem Menschen gezeigt wird. Das ist der Vorschlag, den der Befund machen soll.
+
+### Ziel
+Die Ablehnung einer privaten Adresse liefert einen Befund mit eigener Nummer, `why` und einem `fix`, den ein Klick anwendet — und der vorgeschlagene Weg ist der enge: das Ziel wird geöffnet, die Aufsicht bleibt.
+
+### Nicht-Ziel
+Keine Aufweichung von ADR-006: eine menschliche Freigabe öffnet weiterhin **nicht** von sich aus ein privates Ziel. Kein globaler Schalter. Nicht in diesem Issue: die zweite Entscheidung mit sichtbarer Adresse — die Ablehnung samt Adresse zurück in die Warteschlange zu geben, damit ein Mensch ein zweites Mal entscheidet, diesmal über `10.0.0.5`, gültig für diese eine Anfrage. Das wäre die sauberste Auflösung des Widerspruchs, dass die unbeaufsichtigte Mechanik (die Regel) mehr darf als die beaufsichtigte (der Mensch); sie ist für M3 zu groß und bekommt ihr eigenes Issue, sobald dieses steht.
+
+### Betroffene Pfade
+- `daemon/crates/core-types/src/diagnostics/codes.rs`: `PROXY_008`, ans Ende des Bereichs
+- `daemon/crates/proxy/src/handler.rs`: der Befund entsteht in `record_failure` beim Match auf `UpstreamError::PrivateAddress(ip)`
+- `daemon/crates/proxy/src/pipeline.rs`: `allow_private` vor das `match action`
+- `daemon/crates/rules/src/parse.rs`: Rundlauf-Test für die vorgeschlagene Regel
+- `docs/adr/0006-dns-after-allow.md`: die falsche Nummer wird berichtigt
+- `docs/DIAGNOSTICS.md` aus dem Generatorlauf
+
+### Spezifikation
+Der Befund entsteht an **einer** Stelle: in `record_failure`, beim Match auf `UpstreamError::PrivateAddress(ip)`. Nicht dort, wo `AddressRefusal::Private` zurückkommt — das ist nur der DNS-Zweig; ein IP-Literal liefert den Fehler direkt (`upstream.rs:212-215`), und der dritte Aufrufer ist die Endpunkt-Probe (`ipc/src/server.rs:1102-1114`), wo es weder einen Fluss noch eine sinnvolle Regel gibt.
+
+Der `fix` ist ein `FixAction::AddRule(Box<Rule>)` — dieser Typ existiert und ist bis in die Oberfläche durchgezogen (`core-types/src/diagnostics/mod.rs:85`, `ipc/src/convert.rs:110`, die Proto, `app/lib/core/ipc/convert.dart:70`) und wird dort per Klick angewandt. Ein Text zum Abtippen wäre nicht nur schwächer, er erfüllte das eigene Akzeptanzkriterium nicht, denn `fix` ist `Option<FixAction>` und kein Freitext. Und das Abtippen ist genau die Stelle, an der die Enge verlorengeht.
+
+Die vorgeschlagene Regel trägt: `action: ask` mit `allow_private: true`; `HostPattern::Exact(host)`, bei einem IP-Literal `HostPattern::Ip(ip)`, weil ein Glob eine Adresse nie trifft (ADR-007, `rules/src/host.rs:126`); den Port; das Schema; und die Methode der gescheiterten Anfrage. Der Pfad kommt aus `flow.request.path_and_query`, aber **immer** durch `strip_query` (`rules/src/path.rs:78-96`) — roh übernommen landete sonst ein Token aus der Abfragezeichenkette in `rules.yaml`. Ergibt der Pfad kein zulässiges Präfix (die Mindestlänge ab `/` ist zwei Zeichen, `core-types/src/rule.rs:396-402`, also etwa bei `GET /`), bleibt das Feld weg statt leer.
+
+Die Adresse und der Vorschlag stehen im `Diagnostic` und in `resolved_ip`, **nie** im Rumpf der Blockantwort und nie in einer Kopfzeile zum Agenten. Die Sandbox hat keinen Resolver — das ist die erste Garantie —, der Agent kennt also nur den Namen. Die Zuordnung dieses Namens zu einer privaten Adresse ist für ihn neue Information und taugt zur Vermessung des LAN. Heute geht sie ausschließlich an die Oberfläche (`convert.rs:772`, `:1068`), und der Banner trägt nur den Grund ohne Adresse (`block.rs:151-156`); das bleibt so.
+
+### Tests
+- Ein Fluss auf einen Namen, der auf `10.0.0.5` auflöst, ohne Regel mit `allow_private`: genau ein Befund, mit der Adresse und einer `FixAction::AddRule`, deren Regel Host, Port, Schema und Methode nennt.
+- Derselbe Fall mit einem IP-Literal: der Befund entsteht ebenso, und die Regel trägt `HostPattern::Ip`.
+- Rundlauf: die vorgeschlagene Regel durch `parse_rules` und `serialize_rules`, dann muss sie den gescheiterten `RequestKey` treffen. Ohne diesen Test ist „anwendbar" unbewiesen.
+- Nach Anwendung des Vorschlags: die Anfrage wird gehalten statt abgelehnt, und eine zweite Anfrage an dasselbe Ziel wird wieder gehalten. Dieser Test schlägt heute fehl und belegt die Behebung in `pipeline.rs`.
+- Ein Test, dass weder der Rumpf der Blockantwort noch eine Kopfzeile die Adresse trägt.
+- Mutationsprobe: den `fix` aus dem Befund entfernen, dann wird der erste Test rot.
+
+### Akzeptanzkriterien
+- [ ] Jede Ablehnung wegen einer privaten Adresse erzeugt genau einen Befund mit `why` und einer anwendbaren `FixAction::AddRule`.
+- [ ] Die vorgeschlagene Regel hält die Anfrage weiterhin an, statt sie dauerhaft freizugeben, und sie wirkt — belegt durch den Test, der heute fehlschlägt.
+- [ ] Adresse und Vorschlag erreichen den Agenten nicht.
+- [ ] ADR-006 nennt die richtige Nummer.
+- [ ] `docs/DIAGNOSTICS.md` kommt aus dem Generatorlauf.
+- [ ] `make check`, clippy mit `-D warnings` und `cargo fmt --all -- --check` grün.
+
+### Fallstricke
+- `PROXY_004` und `PROXY_006` sind frei. Eine Lücke nachzubelegen macht die Registry schwerer lesbar; die neue Nummer kommt ans Ende des Bereichs.
+- `flow.allow_private` vor das `match action` zu ziehen ändert das Verhalten für **jede** Regel mit `allow_private`, nicht nur für die vorgeschlagene. Das ist beabsichtigt, gehört aber in `CONVENTIONS.md` und braucht einen Test, der zeigt, dass eine Regel mit `action: block` und `allow_private: true` weiterhin blockt.
+
+## HUM-103 · Meta-Flüsse fehlen in der Historie
+Sprint: 3 · Größe: M · Abhängigkeiten: HUM-073, HUM-026, HUM-031 · Blockiert: —
+
+### Kontext
+HUM-073 verlangt in seinem vierten Akzeptanzkriterium, dass Anfragen an `humanitl.internal` in der Historie erscheinen: „Meta-Requests werden im Recorder als Flow mit `state=Recorded`, `decision=meta` gespeichert (sichtbar in History, Filter `meta:true`), nicht gehalten, nicht auditiert außer `/ask`." Umgesetzt ist es nicht, und beide Reviewer kommen unabhängig zu demselben Schluss wie der Umsetzer: innerhalb der Pfade von HUM-073 ist es nicht sauber baubar.
+
+Was fehlt, ist mehr als eine Zeile. Der Zustandsautomat kennt keinen Weg nach `Recorded`, der nicht über eine Sperre führt (ADR-004). `decision=meta` gibt es weder in `Decision` noch in `DecisionKind` der Proto, also auch nicht im Recorder-Schema und nicht im Filter. Und `meta:` ist kein Term der Filtersprache — die drei Stellen, die diese Sprache auslegen, sind Gegenstand von HUM-099.
+
+Ein Fluss mit erfundener Entscheidung wäre keine Lösung: `decision` sagt aus, wie über eine Anfrage entschieden wurde, und über eine Meta-Anfrage entscheidet niemand. Der Umsetzer von HUM-073 hat sie deshalb ausdrücklich nicht angelegt, statt eine Behauptung über einen Menschen zu speichern, der nichts getan hat (`backlog/CONVENTIONS.md` 4.13).
+
+### Ziel
+Eine Anfrage an den Meta-Endpunkt erscheint in der Historie als das, was sie ist: eine Auskunft, die der Agent sich geholt hat, ohne dass jemand entschieden hat. Sie ist filterbar, sie ist von einer echten Entscheidung unterscheidbar, und sie verfälscht keine Zählung, die über Entscheidungen spricht.
+
+### Nicht-Ziel
+Keine Rümpfe der Meta-Antworten in der Aufzeichnung. Keine Auditierung von `/` und `/why`; `/ask` bleibt auditiert wie bisher. Keine Änderung an der Weiche selbst.
+
+### Betroffene Pfade
+- `daemon/crates/core-types/src/flow.rs` und die Proto: die neue Variante
+- `daemon/crates/recorder/`: Migration, Spalte, Query
+- `daemon/crates/recorder/src/filter.rs` und der Dart-Fake: der Term `meta:`
+- `app/lib/features/history/`: Anzeige und Filter
+- `tests/fixtures/filter-language.json` aus HUM-099, sofern das bis dahin steht
+
+### Spezifikation
+Die neue Variante steht neben den Entscheidungen, nicht unter ihnen. Wo heute über Entscheidungen gezählt oder gefiltert wird (`decision:allow`, `decision:block`, die Zahlen im Demolauf), zählt ein Meta-Fluss nicht mit, außer der Filter nennt ihn ausdrücklich. `meta:true` liefert genau die Meta-Flüsse, `meta:false` genau die übrigen; ohne den Term erscheinen beide, damit die Historie zeigt, was wirklich passiert ist.
+
+Die Zeile in der Historie nennt den Pfad (`/`, `/why/<id>`, `/ask`) und den Statuscode, nicht den Inhalt. Bei `/ask` steht der gesäuberte Text, denn er ist ohnehin schon als Ereignis durch die Oberfläche gegangen.
+
+Der Weg im Zustandsautomaten ist der kleinste, der ohne Lüge auskommt: von der Annahme unmittelbar nach `Recorded`, ohne `Held` und ohne `Decided`. Der ADR-004 wird um diesen Weg ergänzt, mit der Begründung.
+
+### Tests
+- Ein Lauf mit je einer Anfrage an `/`, `/why/<id>` und `/ask`: drei Einträge in der Historie, `meta:true` liefert genau sie, `meta:false` keinen davon.
+- Ein Test, dass `decision:allow` und `decision:block` keinen Meta-Fluss mitzählen.
+- Ein Test, dass der Rumpf einer Meta-Antwort nirgends in der Aufzeichnung landet.
+- Mutationsprobe: die neue Variante aus dem Filter entfernen, dann wird der erste Test rot.
+
+### Akzeptanzkriterien
+- [ ] Drei Meta-Anfragen erzeugen drei Einträge, unterscheidbar von Entscheidungen.
+- [ ] `meta:true` und `meta:false` teilen die Historie vollständig und überschneidungsfrei.
+- [ ] Keine Zählung über Entscheidungen ändert sich durch Meta-Flüsse.
+- [ ] Akzeptanzkriterium 4 von HUM-073 ist hier abgehakt, und die Notiz dort verweist auf dieses Issue.
+- [ ] `make check`, clippy mit `-D warnings` und `cargo fmt --all -- --check` grün.
+
+### Fallstricke
+- Der Demolauf M2 zählt bediente Anfragen und Entscheidungen. Kommen Meta-Flüsse hinzu, ohne dass die Zählung sie ausnimmt, wird er rot — und zwar zu Recht; die Zahlen gehören dann angepasst, nicht der Filter.
+- `meta:` als Filterterm trifft auf drei Auslegungen derselben Sprache (HUM-099). Wer diesen Term hinzufügt, bevor HUM-099 die gemeinsame Tabelle gebaut hat, fügt ihn dreimal hinzu.
+
+## HUM-104 · Die Durchreiche zum Sprachmodell steht hinter den Regeln des Nutzers
+Sprint: 3 · Größe: M · Abhängigkeiten: HUM-037, HUM-039, HUM-066 · Blockiert: HUM-067, HUM-046
+
+### Kontext
+`daemon/bin/humanitld/src/main.rs:629-634` schiebt die Durchreichregel in dieselbe Liste wie die mitgelieferten Regeln, mit dem Kommentar: „Die Durchreiche steht vor allem anderen … eine Blockregel des Profils `llm-only` (`host: \"**\"`) stünde sonst davor." Das trifft nicht zu. `State::all()` in `daemon/crates/proxy/src/rules_store.rs:163-170` hängt die mitgelieferten Regeln **hinter** die Sitzungsregeln und die dauerhaften Regeln des Nutzers. Die Durchreiche ist damit die **letzte** Regel des Satzes, nicht die erste.
+
+`RuleSet::prepend_bundled` — die Funktion, die genau diese Reihenfolge herstellen würde — hat außerhalb von Tests **keinen einzigen Aufrufer**. Die vier Fundstellen liegen in `daemon/crates/rules/tests/eval.rs`, `daemon/crates/sandbox/tests/default_rules.rs` und `daemon/crates/config/tests/profiles.rs`. Die grünen Tests messen also Code, den der Daemon nie ausführt.
+
+Zwei Folgen, beide ernst:
+
+1. **Das Profil `llm-only` blockt das Sprachmodell.** `profiles/llm-only.toml:35` bringt `block host "**"` als Regel der Profil-Ebene. Sein eigener Kommentar (Zeilen 8 bis 10) erklärt: „Der Agent-Adapter stellt seine Durchreichregel zum Sprachmodell voran … Sie trifft vor der Blockregel unten, denn die erste passende Regel gewinnt." Nach der tatsächlichen Reihenfolge trifft die Blockregel zuerst. `humanitl run --profile llm-only` — die reine Inferenz-Instanz, die dieser Sprint verspricht — erreicht damit sein eigenes Modell nicht. Heute ist das latent, weil `Profile::rules_document()` (`daemon/crates/config/src/profile.rs:432`) außer in Tests keinen Leser hat und die Verdrahtung erst mit HUM-067 kommt; über eine eigene `rules.yaml` mit `block **` ist es schon jetzt auslösbar.
+
+2. **Der erklärte Seitenkanal wird still zum gewöhnlichen Allow.** `pipeline.rs:350` erkennt die Durchreiche daran, dass **diese** Regel entschieden hat. Trifft vorher eine `allow`-Regel des Nutzers denselben Host, gibt es kein `DecisionSource::Passthrough` und keine Warnung `LLM_005` vor Funden. Der Kanal, den `docs/SECURITY.md` als bewusste, protokollierte Ausnahme beschreibt, verliert genau die Merkmale, die ihn erklärbar machen.
+
+Dazu widersprechen sich drei Stellen im Repository: `daemon/crates/rules/src/eval.rs:394` sagt „die Regeln des Nutzers rücken dahinter (CONVENTIONS 4.5)", `daemon/crates/proxy/src/rules_store.rs:20-24` sagt für dieselbe Nummer „Sitzung, dauerhaft, mitgeliefert", und `docs/profiles.md:171-175` (aus HUM-066) beschreibt „die Durchreichregel des Agent-Adapters, dann seine mitgelieferten Regeln, dann die Dateien und Regeln der Profile, zuletzt die `rules.yaml` des Nutzers". `backlog/CONVENTIONS.md` 4.5 selbst sagt zu den mitgelieferten Regeln nichts.
+
+### Ziel
+Es gibt genau eine Auswertungsreihenfolge, sie steht an einer Stelle geschrieben, der Code hält sie ein, und die Durchreiche steht dort, wo beide Kommentare und das Profil sie behaupten.
+
+### Nicht-Ziel
+Keine Aufweichung von HUM-027: der Nutzer muss eine mitgelieferte Regel weiterhin überstimmen können. Keine Verdrahtung von `Profile::rules_document()` — das bleibt HUM-067.
+
+### Betroffene Pfade
+- `daemon/crates/rules/src/eval.rs`: die Auswertung
+- `daemon/crates/proxy/src/rules_store.rs`: `State::all` und der Doc-Kommentar
+- `daemon/bin/humanitld/src/main.rs`: die Einordnung der Durchreiche
+- `backlog/CONVENTIONS.md` 4.5: die eine Reihenfolge, mit Begründung
+- `docs/profiles.md`, `profiles/llm-only.toml`: die Kommentare, die heute Falsches sagen
+- `daemon/crates/proxy/tests/`: der Systemtest, der heute fehlt
+
+### Spezifikation
+**Erste zu treffende Entscheidung: welche Reihenfolge gilt.** Zwei Wege stehen zur Wahl, und beide sind vertretbar:
+
+1. **Vier Gruppen.** Durchreiche, dann Sitzung, dann Nutzer, dann mitgeliefert. Das ist der kleinste Eingriff: `evaluate` bekommt neben dem vorhandenen Durchgang über `session_scoped` einen weiteren für die Durchreiche. HUM-027 bleibt vollständig erhalten — der Nutzer überstimmt die mitgelieferten Regeln weiter —, und der eine Fall, der wirklich vorn stehen muss, steht vorn.
+2. **Mitgeliefert ganz nach vorn**, wie `docs/profiles.md:171` es beschreibt. Dann muss die Ausweichregel aus `rules_store.rs:923` (`immutable_bundled`) `Expiry::Session` tragen statt des `Expiry::Never`, das `Rule::new` setzt — sonst landet sie hinter der mitgelieferten Regel, und der Fix, den `RULES_010` vorschlägt, verspricht etwas Unmögliches. Dasselbe gilt für `overrideBundled` in `app/lib/features/rules/editor.dart`.
+
+Weg 1 ist der empfohlene. Was auch gewählt wird: `RuleSet::prepend_bundled` wird verdrahtet oder entfernt. Eine Funktion, die die richtige Reihenfolge herstellt und nie gerufen wird, ist schlimmer als ihr Fehlen, weil ihre grünen Tests Sicherheit vortäuschen.
+
+### Tests
+- Ein Systemtest über den echten Ladeweg (`load_rules` bis `RulesStore::list`), nicht über `prepend_bundled` von Hand: eine Nutzerregel `block host "**"` und eine Durchreiche zum Modell — die Anfrage an das Modell wird durchgereicht, mit `DecisionSource::Passthrough`.
+- Derselbe Test mit `allow host "**"`: die Anfrage trägt weiterhin `DecisionSource::Passthrough` und die Warnung `LLM_005` bei einem Fund, statt still als gewöhnliches Allow zu gelten.
+- Ein Test, dass eine Nutzerregel eine **mitgelieferte** Regel weiterhin überstimmt (HUM-027 bleibt).
+- Mutationsprobe: die Durchreiche zurück ans Ende der Liste, dann werden die ersten beiden Tests rot.
+
+### Akzeptanzkriterien
+- [ ] Die Entscheidung ist getroffen und in `backlog/CONVENTIONS.md` 4.5 mit Begründung festgehalten; `eval.rs`, `rules_store.rs` und `docs/profiles.md` sagen alle dasselbe.
+- [ ] Die Durchreiche trifft vor jeder Regel des Nutzers, belegt über den echten Ladeweg.
+- [ ] Eine Nutzerregel überstimmt weiterhin eine mitgelieferte.
+- [ ] `RuleSet::prepend_bundled` ist verdrahtet oder entfernt; kein Test misst mehr Code, der im Daemon nicht läuft.
+- [ ] Der Kommentar in `profiles/llm-only.toml` und der in `main.rs` stimmen mit dem Verhalten überein.
+- [ ] `make check`, clippy mit `-D warnings` und `cargo fmt --all -- --check` grün.
+
+### Fallstricke
+- Der Fall ist heute nur deshalb nicht sichtbar, weil das Profil noch nicht verdrahtet ist. Wer HUM-067 vor diesem Issue baut, bekommt eine Inferenz-Instanz, die ihr eigenes Modell blockt.
+- `pipeline.rs:350` erkennt die Durchreiche an der entscheidenden Regel. Jede Lösung, die die Durchreiche nur „meistens" zuerst treffen lässt, lässt auch das Merkmal manchmal verschwinden — und ein Seitenkanal, der manchmal protokolliert wird, ist keiner.
