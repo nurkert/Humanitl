@@ -1247,3 +1247,219 @@ niemandem. Wer HUM-065 baut, nimmt `humanitl llm test URL` mit; die RPC steht
 dafür bereit. Ebenso offen: `app/lib/core/ipc/proto_version.dart` steht noch
 auf Minor `1`, während der Daemon `2` meldet — das ist verabredetermaßen keine
 Störung (`docs/PROTOCOL.md` 5), und die Oberflächen-Hälfte zieht die Zahl nach.
+
+### 4.22 Aus der Umsetzung des M2-Demoskripts (HUM-036, Daemon-Hälfte, 2026-09-04)
+
+Abweichungen von `backlog/sprint-2.md`, die dauerhaft gelten. Wo die
+Spezifikation anderes sagt, gilt dieser Abschnitt. Die Oberflächen-Hälfte des
+Issues (`app/integration_test/m2_first_decision_test.dart` und der HAR-Export
+aus dem Lauf) steht noch aus; `tests/e2e/m2_first_decision/run.sh` überspringt
+sie mit einer ausdrücklichen Meldung, solange die Datei fehlt, und prüft sie,
+sobald es sie gibt.
+
+**Fake-Upstream und Fake-Agent sind Python, keine Rust-Binaries.** Die
+Spezifikation nennt einen axum-Server und ein statisch gelinktes
+musl-Binary. Beide wären zwei weitere Workspace-Member samt Bauzeit in jedem
+Lauf, für ein Ziel, das zurückmeldet, wonach gefragt wurde, und einen Agenten,
+der eine Liste von Zeitpunkten abarbeitet. Der M1-Lauf hat für sein Ziel
+denselben Weg gewählt und ihn dort begründet. In der Sandbox liegen `python3`
+und `curl` unter `/usr`, das jedes Profil ohnehin nur lesbar einhängt; der Lauf
+belegt vor dem ersten Schritt, dass beide da sind, und der Agent bricht mit
+einer Meldung ab, wenn `curl` fehlt. `daemon/Cargo.toml` und
+`tools/deps-allow.toml` bleiben damit unberührt.
+
+**Der Agent spricht über `curl`, nicht über eine eigene HTTP-Bibliothek.**
+Derselbe Grund, aus dem das Demoskript über `humanitl` fährt und nicht über
+einen eigenen gRPC-Klienten (3.11): Gemessen werden soll der Weg, den ein
+echter Agent nimmt. `curl` liest `HTTP_PROXY` und `CURL_CA_BUNDLE` aus dem
+Umgebungs-Kit des Profils, löst deshalb selbst keinen Namen auf und spricht
+ausschließlich mit dem Proxy auf `127.0.0.1:3128`.
+
+**Das Ziel liegt auf einer Adresse aus TEST-NET-2, nicht auf `127.0.0.1`.** Die
+Spezifikation stellt den Fake-Upstream auf `127.0.0.1:8443` und lenkt den Port
+mit `experimental.upstream_port_map` um. Beides geht nicht: Der Proxy weist
+jede aufgelöste Adresse in einem privaten Bereich ab (`ip_is_private`, ADR-006),
+und `127.0.0.1` ist eine; eine Freigabe wäre dort immer `502
+upstream_private_address` statt einer Antwort. Ausserdem liest den Schlüssel
+`experimental.upstream_port_map` heute niemand — er steht im Schema, wird
+validiert und hat im Proxy keinen Aufrufer. Der Lauf nimmt deshalb denselben
+Weg wie M1: ein eigener Netz-Namensraum, in dem `198.51.100.7` (RFC 5737) auf
+`lo` liegt, und `resolver.overrides` zeigt die drei Hosts dorthin. Im eigenen
+Namensraum ist der Lauf root und bindet die Ports 80 und 443 direkt, also
+braucht er gar keine Umlenkung.
+
+**Der Verkehr des Laufs ist Klartext-HTTP, nicht HTTPS — und damit fehlt
+Abdeckung, nicht nur eine Variante.** Sechzehn der siebzehn Anfragen laufen
+über Klartext; die einzige verschlüsselte existiert, um zu scheitern. Für
+keinen einzigen freigegebenen oder geblockten Fluss werden deshalb ausgeführt:
+das Prägen eines Blatts aus der eigenen CA, der TLS-Handschlag mit dem Agenten
+hinter seinem `CONNECT`, die TLS-Sitzung nach oben und der Fund im
+entschlüsselten Rumpf. Das ist die Hauptbauart des Produkts, und der einzige
+vollständige Lauf, den es gibt, geht sie nicht. Kein grüner M2-Lauf darf als
+Beleg für den MITM-Pfad gelesen werden, solange dieser Absatz hier steht; die
+Abdeckung kommt mit **HUM-087** zurück, das `--allow-test-ca` nachliefert, den
+Lauf auf `https://` stellt und Schritt 7 umdreht. Bis dahin belegen ihn allein
+die Integrationstests in `daemon/crates/proxy/tests`, und die fahren keine
+Sandbox.
+
+Der Fake-Upstream zeigt auf 443 bereits ein Testzertifikat für die drei Hosts,
+das bei jedem Lauf neu entsteht (`tests/e2e/fake-upstream/gen-test-ca.sh`,
+`umask 077` vor der ersten Datei) und nie im Repository liegt. Der Daemon nimmt
+es nicht an: `resolver.test_ca` steht im Schema und in
+`docs/CONFIG.md`, aber `humanitld` liest den Schlüssel nicht (`ClientTls::new`
+bekommt eine leere Wurzelliste) und meldet das beim Start als Warnung; das
+Flag `--allow-test-ca`, das die Spezifikation nennt, gibt es nicht. Der Lauf
+belegt deshalb die andere Richtung und macht sie zu einer Zusicherung: Schritt
+7 („a test CA in the configuration is not trusted on its own") schickt eine
+TLS-Anfrage an dasselbe Ziel, die die Sitzungsregel ohne Rückfrage erlaubt, und
+erwartet `502` mit `error = upstream_tls`. Eine fremde Wurzel, die ohne Flag
+gälte, wäre ein Loch in `docs/SECURITY.md`, und deshalb ist die heutige Lage
+die sichere Seite.
+
+Der Schritt hält damit eine **Abwesenheit** fest, keine Verweigerung: Der
+Daemon lehnt die Wurzel nicht ab, er sieht sie nicht an. Zwei Vorkehrungen
+halten die Aussage ehrlich, und beide gehören dazu, wenn jemand den Schritt
+anfasst. Erstens ein Stolperdraht auf der Kommandozeilen-Fläche statt auf dem
+Ergebnis: Der Lauf prüft, dass `humanitld --help` das Flag **nicht** kennt, und
+stirbt mit der Anweisung, was umzudrehen ist, sobald es da ist. Ohne ihn bliebe
+Schritt 7 grün, nachdem der Mangel behoben wäre, weil `start_daemon` den Daemon
+weiter ohne das Flag startete. Dazu liest der Lauf die Zeile aus dem
+Daemon-Protokoll, in der der Daemon selbst sagt, dass er den Schlüssel nicht
+liest — die Behauptung stammt damit von ihm und nicht aus einem Ausbleiben.
+Zweitens eine positive Kontrolle: `502 upstream_tls` entsteht genauso, wenn das
+Blatt für die falschen Hosts gälte, abgelaufen wäre oder von einer fremden
+Wurzel stammte. Ein `curl` im selben Namensraum, mit `--cacert` auf dieselbe
+Wurzel, am Proxy vorbei und auf einem eigenen Pfad (`/tls-control`, damit die
+Null-Zählung für `/tls-probe` unberührt bleibt), schafft den Handschlag — und
+derselbe Aufruf ohne die Wurzel scheitert. Erst dieses Paar belegt die
+Voraussetzung des Schritts: Das Material ist gültig, und was ihm fehlt, ist
+allein das Vertrauen des Daemons.
+
+Wer das Flag nachliefert, dreht den Schritt um und stellt die URLs in
+`script.json` auf `https://`; alles andere am Lauf bleibt, wie es ist.
+
+**Der Daemon warnt nur für `resolver.test_ca`, nicht für die anderen
+Test-Hebel.** Der Fallstrick der Spezifikation verlangt eine Warnung beim
+Start, damit `resolver.overrides` und `experimental.upstream_port_map` „nie
+unbemerkt in Produktion landen". `humanitld` meldet beim Start nur
+`resolver.nameserver` (ungenutzt) und `resolver.test_ca` (ungelesen); eine
+nicht leere Zuordnungstabelle und eine gesetzte Portumlenkung gehen still
+durch. Der Demolauf lebt davon, also fällt es dort nicht auf; im Alltag ist es
+eine fehlende Warnung an genau der Stelle, an der die Spezifikation eine
+verlangt. Gehört zum selben Bündel wie das fehlende `--allow-test-ca`.
+
+**Die Stapel-Freigabe geht über zwei Aufrufe, nicht über einen.**
+`DecideRequest` trägt `repeated flow_ids` und `remember`, kann eine Gruppe also
+in einem Zug freigeben und die Regel dabei anlegen. `humanitl flows decide`
+kennt weder mehrere Ids noch `--remember`; die Kommandozeile hat für die
+Fähigkeit, die es im RPC und in der Oberfläche gibt, kein Gegenstück. Der Lauf
+legt deshalb erst die Sitzungsregel über `humanitl rules add --expires session`
+an und entscheidet dann die zwölf wartenden Anfragen einzeln. Die Wirkung ist
+dieselbe — entschieden wird beim Eintreffen, die zwölf gehen also über die
+Entscheidung und alles Spätere über die Regel —, der Preis ist größer als er
+zunächst aussieht: Die Regel trägt kein `created_from_flow_id`, das Abzeichen
+„from #n" des Regel-Bildschirms hat für sie nichts anzuzeigen, und damit ist
+der Akzeptanzschritt 8 der Spezifikation („Rules-Screen: Temporär-Tab zeigt die
+Session-Regel mit `from #1`") auch für die Oberflächen-Hälfte unerfüllbar,
+solange die Regel neben der Entscheidung entsteht statt in ihr. Das ist eine
+Lücke in der Parität von Oberfläche und Kommandozeile (ADR-018,
+`docs/ARCHITECTURE.md` 3b); sie wird in **HUM-095** geschlossen, das
+`humanitl flows decide <id> allow --remember <PATTERN>` nachliefert und den
+M2-Lauf die Sitzungsregel über die Entscheidung anlegen lässt. Bis dahin gilt
+Schritt 8 als offen und nicht als erfüllt.
+
+**Die Haltefrist des Laufs ist 10 Sekunden, nicht 8, und sie ist zweierlei.**
+Sie ist die Zeit, nach der die eine unentschiedene Anfrage 504 bekommt — dafür
+soll sie kurz sein —, und zugleich das Budget, in dem die Kommandozeile die
+zwölf gehaltenen Anfragen entscheiden muss, bevor die erste von ihnen verfällt.
+Ein eigener Prozess je Entscheidung braucht davon gemessen 21 bis 30 Prozent;
+auf einem langsamen Läufer wird der Lauf rot, ohne dass am Produkt etwas falsch
+wäre. Das ist der eine Punkt, an dem dieses Gate an fremder Hardware wackeln
+kann, und er verschwindet mit HUM-095: Mit einem einzigen `Decide` für den
+Stapel ist das Budget kein Faktor mehr, und 8 Sekunden reichen wieder.
+
+**`state:blocked` und `findings:>0` sind nicht dasselbe Paar wie in der
+Spezifikation.** `state:` vergleicht gegen die sieben Zustände des Automaten,
+und `blocked` ist keiner davon (4.18). Eine Zeitüberschreitung ist ausserdem
+`decision = timed_out` mit `block_reason = timeout`, nicht `decision = block`:
+Der Lauf zählt deshalb `decision:block` (eine Zeile, der Block eines Menschen)
+und `decision:timed_out` (eine Zeile) getrennt und prüft die Gründe über
+`reason:user` und `reason:timeout`.
+
+**Der Export wird ohne die Oberfläche als Menge geprüft, nicht als Datei.** Das
+HAR entsteht in `app/lib/features/history/export/har.dart`, also in der
+Oberfläche; ohne sie gibt es keine Datei. Der Lauf prüft statt dessen die
+Menge, aus der der Export entsteht: siebzehn Flüsse, fünfzehn `allow`, ein
+Block eines Menschen, eine Zeitüberschreitung, zwei mit Funden, zwei durch die
+Sitzungsregel. Sobald die Oberflächen-Hälfte da ist, prüft Schritt 10
+zusätzlich die geschriebene Datei.
+
+**`tests/e2e/lib.sh` zählt die Behauptungen.** `e2e_check` erhöht
+`E2E_ASSERTIONS`, durch das jede Behauptung geht. Der M2-Lauf vergleicht den
+Zähler am Ende mit einer festen Zahl im Skript und scheitert, wenn weniger
+gelaufen sind: Ein Demoskript, das grün ist, weil ein Zweig übersprungen wurde,
+ist schlimmer als keines. Beim M1-Lauf läuft der Zähler mit, ohne dass er ihn
+prüft.
+
+**Der Einstieg `tests/e2e/run.sh` fährt beide Demos.** Ein Meilenstein, ein
+Skript, und jedes bleibt stehen (BACKLOG.md 8). `E2E_ONLY=m1` oder `m2` fährt
+eines davon; die CI nutzt das, weil M1 im Job `e2e` und M2 im Job `e2e-xvfb`
+läuft. Der zweite Lauf baut nicht noch einmal.
+
+**Jede Demo hat ihr eigenes Artefakt-Verzeichnis.** M1 schreibt nach
+`target/e2e/m1`, M2 nach `target/e2e/m2`, und jede räumt vor dem Lauf nur ihr
+eigenes leer. Vorher lag M1 direkt in `target/e2e` und begann mit `rm -rf`
+darauf — wer die Demos in der anderen Reihenfolge fuhr, verlor damit die
+Artefakte der anderen. Die CI lädt weiter `target/e2e` als Ganzes hoch.
+
+**Ein Abbruch bricht ab.** `e2e_trap` in `lib.sh` hängt den Aufräumer nicht nur
+an `EXIT`, sondern auch an `INT`, `TERM` und `HUP`, und endet dort mit 130. Der
+Grund ist gemessen: Ein Demoskript wartet die meiste Zeit in `wait` auf einen
+Hintergrundprozess; trifft `SIGINT` die Shell dort und ist kein eigener Handler
+gesetzt, bricht nur der Wartelauf ab, das Skript läuft weiter, entscheidet
+weiter und meldet am Ende „OK". Wer abgebrochen hat, bekäme einen grünen
+Bericht über einen Lauf, den er beendet zu haben glaubte; und wer statt dessen
+hart tötet, lässt Daemon, Ziel, Sandbox-Baum, Shim, Agent und die privaten
+Schlüssel des Laufs stehen. Beide Demos benutzen `e2e_trap`, und beide räumen
+ihren Baum unter `/tmp` am Ende weg — auch nach einem Abbruch.
+
+**Der Isolationsbericht wird gelesen, nicht nur geschrieben.** `humanitl
+sandbox run -v` schreibt die drei Zeilen `check <name> pass|FAIL: <evidence>`
+nach stderr, und `sandbox run` läuft fail-closed, startet den Befehl also
+ohnehin nur, wenn alle drei halten. Der M2-Lauf prüft sie trotzdem: Er ist der
+einzige Lauf, in dem die Sandbox echten Verkehr trägt, und ein Bericht, in den
+niemand sieht, ist kein Beleg. Drei Zusicherungen, aus derselben Datei, die
+auch der Agent beschrieben hat.
+
+**Zusicherungen, die aus zwei Gründen leer sein könnten, kommen paarweise.**
+Eine Zahl null am Ziel („die geblockte Anfrage kam nie an") ist ohne
+Gegenstück auch dann grün, wenn das Ziel gar nicht lief; ein leeres Feld in der
+Ausgabe des Agenten auch dann, wenn er nie gestartet ist. Deshalb hängt in
+diesem Lauf jede solche Null an einer positiven Zahl aus derselben Quelle: die
+Null-Treffer im Protokoll des Ziels an den sechzehn bedienten Anfragen darin,
+die leeren Agentenfelder an den siebzehn Zeilen seiner Ausgabe, der
+gescheiterte Handschlag an dem, der mit derselben Wurzel gelingt. Wer eine
+weitere Zusicherung dieser Form hinzufügt, bringt ihr Gegenstück mit.
+
+**Heute steht nur die Daemon-Hälfte des M2-Gates.** HUM-036 verlangt den vollen
+Kreislauf mit echtem Daemon, echter Sandbox **und echtem UI unter xvfb**, samt
+gültiger HAR-Datei, und `CONTRIBUTING.md` erklärt M2 zur Voraussetzung für
+jeden Merge ab Sprint 3. Gebaut ist die Hälfte, die ohne Oberfläche prüfbar
+ist; `run.sh` überspringt seinen Schritt 10 mit einer ausdrücklichen Meldung
+und meldet trotzdem Erfolg. Damit gälte das Gate als erfüllt, ohne es zu sein —
+genau die Sorte Behauptung, die 4.13 verbietet. Die Lücke hat deshalb eine
+Nummer (**HUM-097**), und drei Stellen sagen sie laut: der Kopf von `run.sh`,
+der Abschnitt „Stand" in HUM-036 und der Absatz „The M2 gate is half built" in
+`CONTRIBUTING.md`. Ein grünes `e2e-xvfb` heißt bis dahin „die Daemon-Hälfte von
+M2 hält", nicht „M2 hält". Wer sich darauf beruft, sagt dazu, worauf.
+
+**Was ein grüner M2-Lauf trägt, und was nicht.** Ein Gate ist nur so viel wert,
+wie ein späterer Leser über seine Reichweite weiß; der Kopf von `run.sh`
+wiederholt das, damit niemand dafür diesen Abschnitt suchen muss. Er sagt
+nichts über den Bildschirm — Warteschlange, Aktionsleiste, Regel-Bildschirm und
+Historie werden nicht bedient (HUM-097). Er sagt nichts über das HAR-Format;
+geprüft wird die Menge, aus der der Export entsteht, nicht eine Datei und kein
+Feld darin. Er übt den MITM-Pfad nicht (HUM-087, Absatz oben). Er sagt nichts
+über eine zweite Sitzung, über Neustarts (das prüft M1), über OpenCode
+(HUM-046) und über Benachrichtigungen (abgeschaltet). Und Schritt 7 hält eine
+Abwesenheit fest, keine Verweigerung.
