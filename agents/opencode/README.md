@@ -9,6 +9,7 @@ hier gelesen und nichts nachgeladen.
 |---|---|---|
 | `opencode.json.tmpl` | `/etc/humanitl/opencode/opencode.json`, `~/.config/opencode/opencode.json` und `/etc/opencode/opencode.json` | Provider, Modell und Berechtigungen des Agenten |
 | `models.json` | `/etc/humanitl/opencode/models.json` | Ersatz für den Modellkatalog, den OpenCode sonst aus dem Netz holt |
+| `briefing.en.md`, `briefing.de.md` | `~/.config/opencode/AGENTS.md` | Die Einweisung des Agenten, in der Sprache aus `ui.language` |
 | `update-models.sh` | — | Entwickler-Werkzeug, das das Schema-Skelett gegen die echte Quelle abgleicht |
 
 ## Warum eine gebündelte `models.json`
@@ -95,6 +96,55 @@ Anführungszeichen darf keine fremde Struktur in die Datei schreiben können
 
 Ist kein Modell konfiguriert, trägt der Adapter das Platzhalter-Modell `default`
 ein und meldet `LLM_004` als Warnung.
+
+## Die Einweisung des Agenten
+
+`briefing.{en,de}.md` sind der einzige Text, den Humanitl dem Agenten mitgibt
+(ADR-0014, HUM-071). Er landet als `~/.config/opencode/AGENTS.md` in der
+Sandbox und **nie** unter `/work`: OpenCode liest die `AGENTS.md` des Projekts
+zusätzlich, und eine Datei, die Humanitl dort ablegte, stünde im Diff des
+Nutzers und irgendwann in einem fremden Repository. `agent.briefing.enabled =
+false` lässt die Datei ganz weg.
+
+Gemessen an OpenCode 1.18.25 setzt `InstructionContext` seine Liste aus
+`join(<Konfigurationsverzeichnis>, "AGENTS.md")` und danach den `AGENTS.md` des
+Projektbaums zusammen; die globale Datei steht also vorn und wird auch bei
+gesetztem `OPENCODE_DISABLE_PROJECT_CONFIG` gelesen.
+
+Welches Verzeichnis das ist, entscheidet die Umgebung, die der Agent wirklich
+sieht, nicht das Profil: `sandbox.env` wird **nach** dem Beitrag des Adapters
+gesetzt und gewinnt. Setzt jemand dort `HOME` oder `XDG_CONFIG_HOME`, folgen
+die Dateien dorthin (`AgentContext::config_home`). Täten sie es nicht, läge die
+Einweisung an einem Ort, den niemand liest, und nichts fiele auf.
+
+Für den Wortlaut gelten zwei Regeln, und beide sind der Grund, warum der Text
+in Dateien und nicht im Quelltext steht:
+
+1. **Jede Aussage ist am Verhalten geprüft, nicht an der Spezifikation.** Der
+   Agent behandelt den Text als Wahrheit. Steht dort eine Frist, die es nicht
+   gibt, bricht er zu früh ab; steht dort ein Endpunkt, der nicht antwortet,
+   erzeugt er genau die Schleife, gegen die der Text geschrieben ist. Die
+   Belege stehen im Modulkommentar von
+   `daemon/crates/sandbox/src/agent/briefing.rs`.
+2. **Der Text bleibt kurz.** Jedes Token fehlt dem Agenten für seine Arbeit.
+   Gezählt wird mit `python3 tools/briefing-tokens.py`, im ungünstigsten Fall
+   (längerer Ask-Block, langer Endpunkt, vierstellige Frist) und mit
+   `o200k_base`. Die geltende Grenze ist `TOKEN_BUDGET` in
+   `daemon/crates/sandbox/src/agent/briefing.rs`; dort steht auch, warum sie
+   über den Schätzungen von ADR-0014 und HUM-071 liegt.
+
+Was der Text sagt, steht in der Tabelle im Modulkommentar von `briefing.rs`,
+Aussage für Aussage mit dem Beleg im Code — einschließlich des Meta-Endpunkts
+`http://humanitl.internal/` (HUM-073) und seiner Grenze: `POST /ask` legt dem
+Nutzer eine Bitte vor und legt nie eine Regel an.
+
+Drei Platzhalter werden beim Start ersetzt: `{ask_mode}` durch den Block, der
+zu `hold.ask_mode` passt, `{timeout}` durch `hold.timeout_secs` und
+`{llm_host}` durch Host und Port der Durchreiche. Der Host kommt aus
+`passthrough_authority()`, also aus derselben geprüften Quelle wie die
+Durchreichregel; entsteht dort keine Regel, fällt die ganze Zeile weg.
+HTML-Kommentare entfernt der Renderer; ein Kommentar endet dabei am ersten
+`-->`, es darf deshalb keines im Text eines Kommentars stehen.
 
 ## Wie `models.json` erneuert wird
 
