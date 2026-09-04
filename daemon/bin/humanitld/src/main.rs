@@ -1044,11 +1044,16 @@ mod tests {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
     use std::path::Path;
 
-    use humanitl_core::FixAction;
+    use chrono::Utc;
+    use humanitl_config::Env;
+    use humanitl_core::rule::Action;
+    use humanitl_core::{FixAction, HostName, Method, Scheme, SessionId};
+    use humanitl_proxy::rules_store::Origin;
+    use humanitl_rules::{RequestKey, Verdict};
 
     use super::{
-        ADVICE_DAEMON_SOCKET, DirOwner, Runtime, check_private_dir, fix_hint, free_socket,
-        parse_speed,
+        ADVICE_DAEMON_SOCKET, Config, DirOwner, Runtime, XdgPaths, check_private_dir, fix_hint,
+        free_socket, load_rules, parse_speed,
     };
 
     fn mode_of(path: &Path) -> u32 {
@@ -1225,6 +1230,103 @@ mod tests {
         assert_eq!(runtime.dir, Path::new("."));
         assert_eq!(runtime.token, Path::new("./token"));
         assert_eq!(runtime.socket, Path::new("d.sock"));
+    }
+
+    /// Eine Sitzung, wie `load_rules` sie sieht: eigenes Konfigurations-
+    /// verzeichnis, eine `rules.yaml` des Nutzers, ein Sprachmodell im LAN.
+    fn session_with(user_rules: &str) -> (tempfile::TempDir, XdgPaths, Config, SessionId) {
+        let dir = tempfile::tempdir().unwrap();
+        let config_home = dir.path().join("config");
+        let xdg = XdgPaths::new(Env::default().with(
+            "XDG_CONFIG_HOME",
+            config_home.to_str().expect("a utf-8 path"),
+        ));
+        fs::create_dir_all(xdg.config_dir()).unwrap();
+        fs::write(xdg.rules_path(), user_rules).unwrap();
+
+        let mut config = Config::default();
+        config.llm.endpoint = Some("http://ollama.lan:11434".parse().unwrap());
+        (dir, xdg, config, SessionId::new())
+    }
+
+    /// Der Schlüssel einer Inferenz-Anfrage an das Sprachmodell der Sitzung.
+    fn llm_key<'a>(host: &'a HostName, method: &'a Method) -> RequestKey<'a> {
+        RequestKey::new(host, method, "/v1/chat/completions", Scheme::Http, 11434)
+    }
+
+    /// Der echte Ladeweg: Auch eine Regel des Nutzers über jeden Host trifft
+    /// nicht vor der Durchreiche zum Sprachmodell.
+    ///
+    /// Das ist der Fehler aus HUM-104, gemessen an der Funktion, die der Daemon
+    /// beim Start wirklich ruft — nicht an einem Regelsatz, den der Test selbst
+    /// zusammenstellt. `block host "**"` ist die Regel, die das Profil
+    /// `llm-only` mitbringt.
+    #[test]
+    fn load_rules_evaluates_the_passthrough_before_every_rule_of_the_user() {
+        for action in ["block", "allow"] {
+            let user = format!(
+                "version: 1\nrules:\n  - action: {action}\n    match: {{ host: \"**\" }}\n"
+            );
+            let (_dir, xdg, config, session) = session_with(&user);
+
+            let store = load_rules(&xdg, &config, session);
+            let snapshot = store.snapshot();
+            let set = snapshot.read().expect("the snapshot");
+
+            let host = HostName::parse("ollama.lan").expect("a host");
+            let verdict = set.evaluate(&llm_key(&host, &Method::POST), Utc::now(), session);
+            let Verdict::Matched { rule, .. } = verdict else {
+                panic!("`{action} host \"**\"` swallowed the passthrough: {verdict:?}");
+            };
+            assert!(
+                set.is_passthrough_llm(rule),
+                "the flow has to carry DecisionSource::Passthrough and the LLM_005 warning"
+            );
+
+            // Und die Durchreiche steht dabei nicht vor der Regel des Nutzers,
+            // sondern in der Gruppe der mitgelieferten Regeln dahinter: Ihren
+            // Vorrang trägt sie an sich selbst.
+            let listed = store.list();
+            let user_at = listed
+                .iter()
+                .position(|stored| stored.origin == Origin::User)
+                .expect("the rule of the user is in the list");
+            let passthrough_at = listed
+                .iter()
+                .position(|stored| stored.rule.passthrough_llm)
+                .expect("the passthrough is in the list");
+            assert!(user_at < passthrough_at);
+        }
+    }
+
+    /// HUM-027 bleibt: Eine eigene Regel überstimmt eine mitgelieferte.
+    ///
+    /// `models.dev` steht in `rules/default.yaml` als `block`; die Regel des
+    /// Nutzers erlaubt denselben Host und muss gewinnen. Löschen kann er die
+    /// mitgelieferte nicht (`RULES_010`), also ist das der einzige Weg.
+    #[test]
+    fn load_rules_lets_a_user_rule_override_a_bundled_one() {
+        let user = "version: 1\nrules:\n  - action: allow\n    match: { host: \"models.dev\" }\n";
+        let (_dir, xdg, config, session) = session_with(user);
+
+        let store = load_rules(&xdg, &config, session);
+        let snapshot = store.snapshot();
+        let set = snapshot.read().expect("the snapshot");
+
+        let bundled = store
+            .list()
+            .into_iter()
+            .find(|stored| stored.origin == Origin::Bundled && stored.rule.action == Action::Block)
+            .expect("the bundled set blocks something");
+        assert!(bundled.rule.bundled);
+
+        let host = HostName::parse("models.dev").expect("a host");
+        let key = RequestKey::new(&host, &Method::GET, "/api.json", Scheme::Https, 443);
+        assert_eq!(
+            set.evaluate(&key, Utc::now(), session).action(),
+            Action::Allow,
+            "the rule of the user decides, the bundled one below it does not"
+        );
     }
 
     #[test]
