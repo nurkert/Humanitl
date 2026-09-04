@@ -15,12 +15,12 @@ import '../../../core/domain/domain.dart';
 import '../../../core/ui/flow_visual_state.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
+import '../body/body_view.dart';
 import '../format.dart';
 import '../providers/decision.dart';
 import '../providers/flows.dart';
 import '../providers/now.dart';
 import 'countdown_ring.dart';
-import 'section_body_raw.dart';
 import 'section_headers.dart';
 import 'section_query.dart';
 import 'selectable_mono_text.dart';
@@ -78,10 +78,7 @@ class RequestCard extends ConsumerWidget {
                       SectionHeaders(
                         headers: request?.headers ?? const <Header>[],
                       ),
-                      SectionBodyRaw(
-                        preview: detail.value?.bodyPreview ?? '',
-                        body: request?.body,
-                      ),
+                      BodyView(flowId: flow.id, body: request?.body),
                     ],
                   ),
                 ),

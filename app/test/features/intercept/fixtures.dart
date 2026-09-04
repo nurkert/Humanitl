@@ -2,6 +2,7 @@
 // DaemonClient, dessen Stream der Test selbst füttert.
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:humanitl/core/domain/domain.dart';
@@ -86,7 +87,7 @@ FlowDetail detailFor(
     headers: headers,
     body: BodyRef(
       sha256: List<int>.filled(32, 7),
-      size: bodyPreview.length,
+      size: utf8.encode(bodyPreview).length,
       contentType: contentType,
     ),
     version: 'HTTP/1.1',
@@ -208,7 +209,20 @@ class TestDaemonClient implements DaemonClient {
   }
 
   @override
-  Stream<Uint8List> getBody(BodyRef ref) => const Stream<Uint8List>.empty();
+  Stream<Uint8List> getBody(BodyRef ref) {
+    // Der Doppelgänger liefert den Rumpf, den `detailFor` angekündigt hat.
+    // Ohne ihn kämen null Bytes zu einem Verweis, der mehr nennt, und jede
+    // Rumpf-Ansicht sagte zu Recht "es kam weniger an als angekündigt" -- eine
+    // Aussage über den Test, nicht über das Programm (HUM-030).
+    for (final FlowDetail detail in details.values) {
+      if (detail.request?.body == ref && detail.bodyPreview.isNotEmpty) {
+        return Stream<Uint8List>.value(
+          Uint8List.fromList(utf8.encode(detail.bodyPreview)),
+        );
+      }
+    }
+    return const Stream<Uint8List>.empty();
+  }
 
   // Der Regel-Teil des Ports (HUM-033). Diese Tests fahren ihn nicht; die
   // Antworten sind der leere Regelsatz, damit nichts behauptet wird, was
