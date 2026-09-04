@@ -1747,3 +1747,203 @@ Kein mDNS (Ollama kündigt nichts an). Keine Suche außerhalb des lokalen /24. K
 
 ### Referenzen
 BACKLOG.md Prinzip 9, HUM-039; Ollama API (https://docs.ollama.com/api); OpenAI Models-Endpoint.
+
+---
+
+## HUM-087 · resolver.test_ca wirkt nicht
+Sprint: 3 · Größe: M · Abhängigkeiten: HUM-024, HUM-036, HUM-062 · Blockiert: keine
+
+### Kontext
+Der Schlüssel `resolver.test_ca` steht im Schema (`daemon/crates/config/src/model.rs:213`), in der Schema-Fixture (`daemon/crates/config/tests/fixtures/config.schema.json:496`), in der Schlüsselliste des Tests (`daemon/crates/config/tests/schema.rs:170`) und in der erzeugten Referenz (`docs/CONFIG.md:160`: „Zusätzliche CA für Tests. Nur in Testläufen setzen, nie im Alltag."). Er wird geladen, validiert, in der Stufe `expert` geführt und erscheint mit HUM-069 im Settings-Bildschirm. Gelesen wird er nirgends: `daemon/bin/humanitld/src/main.rs:488-489` meldet beim Start nur `resolver.test_ca is set but the daemon does not read it yet (HUM-024)`, und `main.rs:510` baut den Verbindungsstapel mit `ClientTls::new(&[], config.experimental.h2_upstream)`, also mit leerer Wurzelliste. Ein Schlüssel, der dokumentiert und validiert ist und nichts bewirkt, behauptet eine Fähigkeit, die es nicht gibt. Das ist der Bruch, der dieses Issue zu einem Fehler und nicht zu einer Wunschliste macht: `backlog/CONVENTIONS.md` 4.13 verlangt „Nie mehr behaupten als bewiesen ist", und Prinzip 8 in `BACKLOG.md` sagt zu, eine Konfigurationsquelle speise UI und CLI gleichermaßen.
+
+Der Preis ist messbar. Weil keine fremde Wurzel gilt, fährt der M2-Demolauf über Klartext-HTTP (`tests/e2e/m2_first_decision/script.json`, Kommentar Zeile 20 und die Schritt-URLs), und damit bleibt der TLS-Weg des Proxys — CONNECT, Blatt aus der eigenen CA, Handschlag zum Ziel, Fund im entschlüsselten Body — im einzigen vollständigen Lauf des Produkts unbelegt.
+
+Kein Regress und kein rotes Demoskript: Der Lauf ist grün, weil er die heutige Lage ausdrücklich als Zusicherung festhält. Schritt 7 („a test CA in the configuration is not trusted on its own", `tests/e2e/m2_first_decision/run.sh:459-475`) erwartet für `https://registry.npmjs.org/tls-probe` genau `502` und `error = upstream_tls`, und `tests/e2e/m2_first_decision/config.toml:41-47` sowie `backlog/CONVENTIONS.md` 4.22 nennen diese Richtung die sichere Seite. Es fehlt eine Fähigkeit, Schweregrad major. Das Flag `--allow-test-ca`, auf das Konfiguration, Zertifikatsskript und Konventionen zeigen, gibt es nirgends (`grep -rn "allow-test-ca" daemon/` liefert null Treffer); sein einziger Fundort in einer Spezifikation ist HUM-036 (`backlog/sprint-2.md:1635` und `:1653`). Die Warnung verweist auf HUM-024, dessen Spezifikation (`backlog/sprint-2.md` ab Zeile 371) weder den Schlüssel noch das Flag nennt; auch dieser Verweis geht ins Leere.
+
+Die Fähigkeit selbst ist da: `ClientTls::new(extra_roots, h2)` nimmt zusätzliche Wurzeln entgegen (`daemon/crates/proxy/src/upstream.rs:86`) und wird in den Proxy-Tests so benutzt (`daemon/crates/proxy/tests/support/mod.rs:367`, Bauer-Methode `ProxyBuilder::trust`). Zu tun ist Verdrahtung, keine neue TLS-Logik.
+
+### Ziel
+`humanitld --allow-test-ca` liest `resolver.test_ca`, lädt die Datei als PEM und reicht die enthaltenen Zertifikate als zusätzliche Wurzeln an `ClientTls::new` weiter; ohne das Flag bleibt die Wurzelliste leer, und der gesetzte Schlüssel erzeugt einen Befund statt einer nackten Zeile im Log. Ein Flag mit unbrauchbarer Datei lässt den Daemon gar nicht erst starten. Der M2-Demolauf fährt danach über `https://` und dreht Schritt 7 um: Die Anfrage, die die Sitzungsregel erlaubt, erreicht das Ziel.
+
+### Nicht-Ziel
+Kein Eintrag in den System- oder Browser-Trust-Store und keine Änderung an der Humanitl-CA oder an dem, was in die Sandbox geht (`docs/SECURITY.md` 5). Keine Kopplung von Flag und Schlüssel im Config-Crate; es kennt die Kommandozeile nicht. Kein Flag, das mehrere Pfade oder ein Verzeichnis nimmt. Keine zweite Daemon-Instanz im Demolauf, nur um die Richtung ohne Flag noch einmal zu zeigen: Sie wird im Rust-Test gemessen, nicht im Skript.
+
+### Betroffene Pfade
+- `daemon/bin/humanitld/src/main.rs`: `--allow-test-ca` in `Cli` (65-99), Lader `test_ca_roots`, Warnung 488-489 ersetzen, Wurzeln durch `build_handler` (501-510) reichen
+- `daemon/crates/ipc/src/server.rs`: `build_llm_probe` (1088-1112) und der zweite Stapel mit leerer Wurzelliste (1101)
+- `daemon/crates/core-types/src/diagnostics/codes.rs`: `CONFIG_007`, `CONFIG_008` (gemeinsam genutzte Datei, nur anhängen)
+- `tests/e2e/lib.sh`: `start_daemon` reicht Daemon-Argumente durch (geteilt mit M1)
+- `tests/e2e/m2_first_decision/{run.sh,script.json,config.toml}`, `tests/e2e/fake-upstream/gen-test-ca.sh:17-24`
+- `docs/CONFIG.md:160` und `docs/DIAGNOSTICS.md` (beide erzeugt, siehe Fallstricke), `docs/SECURITY.md` 5
+- `backlog/CONVENTIONS.md` 4.22 (Abschnitt über die Testwurzel), `backlog/sprint-2.md:1635` und `:1653`
+
+### Spezifikation
+
+Flag (Vorgabe aus, `expert`-Charakter im Hilfetext sichtbar):
+
+```rust
+/// Nimmt die Wurzel aus `resolver.test_ca` als zusätzlichen Vertrauensanker
+/// für Verbindungen zum Ziel an. Nur für Testläufe.
+#[arg(long)]
+allow_test_ca: bool,
+```
+
+Lader in `main.rs`, damit die vier Fälle ohne laufenden Daemon prüfbar sind:
+
+```rust
+struct TestCa {
+    roots: Vec<CertificateDer<'static>>,
+    note: Option<Diagnostic>,
+}
+
+fn test_ca_roots(allow: bool, resolver: &ResolverConfig) -> Result<TestCa, Diagnostic>;
+```
+
+| Flag | `resolver.test_ca` | Ergebnis |
+|---|---|---|
+| aus | nicht gesetzt | `roots` leer, kein Befund; der Standardweg ist unverändert |
+| aus | gesetzt | `roots` leer, `note` = `CONFIG_008` (Warning), `why`: „resolver.test_ca is set but the daemon was started without --allow-test-ca; the root is ignored", `fix`: `FixAction::CopyCommand("humanitld --allow-test-ca")` |
+| an | nicht gesetzt | `roots` leer, `note` = `CONFIG_008` (Warning), `why` nennt die andere Hälfte: das Flag ohne Schlüssel bewirkt nichts |
+| an | gesetzt, PEM mit mindestens einem Zertifikat | `roots` = alle gelesenen Zertifikate, kein Befund; der Start meldet `roots = <n>` und den Pfad auf `info` |
+| an | gesetzt, Datei fehlt, unlesbar oder ohne Zertifikat | `Err(CONFIG_007)` (Error), `why` nennt Pfad und Ursache, `fix`: `FixAction::CopyCommand("openssl x509 -in <pfad> -noout -subject")`; der Daemon startet nicht |
+
+Gelesen wird mit `CertificateDer::pem_slice_iter`, dem Muster aus `daemon/crates/proxy/src/ca.rs:512` und `:628`. Lehnt rustls eine Wurzel ab, kommt der Fehler bereits als `PROXY_003` mit „test CA is no trust anchor" aus `ClientTls::new` (`daemon/crates/proxy/src/upstream.rs:86-102`); dieser Fehler wird durchgereicht, nicht verschluckt.
+
+Verdrahtung: `build_handler` bekommt einen Parameter `extra_roots: &[CertificateDer<'static>]` und gibt ihn an `ClientTls::new` weiter. Der zweite Stapel, die Endpunkt-Probe in `daemon/crates/ipc/src/server.rs:1101`, bekommt dieselben Wurzeln: Zwei verschiedene Vertrauensentscheidungen in einem Prozess wären genau die Überraschung, die dieses Repository vermeidet, und die Probe spricht mit demselben Netz wie der Proxy. Weil `IpcServer::new` neun Aufrufer hat, bleibt die Signatur, und die Wurzeln kommen über eine anhängende Methode:
+
+```rust
+/// Baut die Endpunkt-Probe mit zusätzlichen Wurzeln neu (`--allow-test-ca`).
+pub fn with_extra_roots(self, roots: &[CertificateDer<'static>]) -> Self;
+```
+
+Demolauf: `start_daemon` in `tests/e2e/lib.sh` nimmt die Argumente des Daemons als weiteren Parameter entgegen (leer für M1), `run.sh` startet mit `--allow-test-ca`. Alle URLs in `script.json` gehen auf `https://`, ebenso `M2_URL_BLOCKED`, `M2_URL_ALLOWED`, `M2_URL_TIMEOUT` in `run.sh:97-100`. Schritt 7 dreht sich um: `200` statt `502`, leeres `error`-Feld, und die Gegenprobe in Schritt 9 zählt eine bediente Anfrage mehr (`served` 16 statt 15, `m2_upstream_hits '/tls-probe'` 1 statt 0). Die Zahlen in Schritt 8 bleiben, wie sie sind — die TLS-Anfrage zählt schon heute als `allow` und als eine der vierzehn erlaubten Anfragen an die Registry —, werden aber am grünen Lauf nachgeprüft.
+
+Doku: `docs/CONFIG.md:160` nennt die Flagpflicht (über den Doc-Kommentar in `model.rs`, siehe Fallstricke). `docs/SECURITY.md` 5 bekommt einen Satz: Eine fremde Wurzel gilt nur für Verbindungen zum Ziel, nur mit `--allow-test-ca`, nie für die Sandbox und nie ohne ausdrücklichen Start. `backlog/CONVENTIONS.md` 4.22 wird von „gibt es nicht" auf die neue Lage umgeschrieben; `backlog/sprint-2.md:1635` und `:1653` werden auf den tatsächlichen Startbefehl angeglichen (kein `--config`; die Konfiguration findet der Daemon über den XDG-Baum des Laufs).
+
+### Schritte
+1. `test_ca_roots` samt `TestCa` schreiben, die fünf Zeilen der Tabelle als Unit-Tests in `main.rs`.
+2. `CONFIG_007` und `CONFIG_008` ans Register anhängen, `docs/DIAGNOSTICS.md` erzeugen.
+3. Flag in `Cli`, Warnung 488-489 entfernen, Befund in `run_daemon` protokollieren oder mit `Err` abbrechen; `build_handler` und `IpcServer::with_extra_roots` verdrahten.
+4. Paar-Test im Proxy mit `UpstreamCa` und `ProxyBuilder::trust`.
+5. Daemon-Test: Start mit Flag, ohne Flag und mit unbrauchbarer Datei.
+6. `tests/e2e/lib.sh` um die Daemon-Argumente erweitern, M1 unverändert grün halten.
+7. M2 auf `https://` stellen, Schritt 7 umdrehen, Zahlen in Schritt 9 und `M2_EXPECTED_ASSERTIONS` nachziehen, Lauf grün.
+8. `docs/CONFIG.md` neu erzeugen, `docs/SECURITY.md`, `CONVENTIONS.md` 4.22, `sprint-2.md` und die Kommentare in `config.toml`, `script.json` und `gen-test-ca.sh` nachziehen.
+
+### Tests
+- `tests::test_ca_without_the_flag_is_ignored`, `tests::the_flag_without_the_key_says_so`, `tests::a_readable_test_ca_becomes_one_root`, `tests::an_unusable_test_ca_refuses_the_start` (alle in `daemon/bin/humanitld/src/main.rs`).
+- `daemon/crates/proxy/tests/upstream_roots.rs`: dasselbe Blatt aus `UpstreamCa::new()`, einmal mit `ProxyBuilder::trust(root)`, einmal ohne.
+- `daemon/bin/humanitld/tests/daemon_end_to_end.rs`: `a_test_ca_is_only_trusted_with_the_flag` (Log), `a_broken_test_ca_stops_the_start` (Exit-Code und fehlende Sockets).
+- `tests/e2e/m2_first_decision/run.sh` Schritt 7, 9 und der Zähler am Ende.
+
+### Akzeptanzkriterien
+- [ ] `test_ca_roots` erfüllt die fünf Zeilen der Tabelle: ohne Schlüssel leer und ohne Befund, Schlüssel ohne Flag leer mit genau einem `CONFIG_008`, Flag mit gültiger PEM genau eine Wurzel, Flag mit Datei ohne Zertifikat `Err` mit `CONFIG_007`.
+- [ ] `humanitld --allow-test-ca` mit gültiger Wurzel schreibt beim Start genau eine Zeile mit `roots=1` und dem Pfad; derselbe Baum ohne Flag schreibt `CONFIG_008` und keine Zeile mit `roots=`.
+- [ ] `humanitld --allow-test-ca` mit unlesbarer Datei endet mit Exit-Code ungleich 0, meldet `CONFIG_007` mit `why` und `fix`, und weder `daemon.sock` noch `proxy.sock` entstehen.
+- [ ] Paar-Test im Proxy: mit `trust(root)` antwortet der Proxy `200` und `upstream.hits() == 1`; ohne `trust(root)` antwortet er `502`, der Body enthält `reason: upstream_tls`, und `upstream.hits() == 0`.
+- [ ] `E2E_ONLY=m2 tests/e2e/run.sh` grün mit `https://` in `script.json`: Schritt 7 misst `200` für `https://registry.npmjs.org/tls-probe`, leeres `error`-Feld und `m2_upstream_hits '/tls-probe'` gleich 1; Schritt 9 zählt 16 bediente Anfragen.
+- [ ] `E2E_ONLY=m1 tests/e2e/run.sh` bleibt grün, und der M2-Lauf meldet weder „only N of M assertions ran" noch die Notiz über einen zu niedrigen `M2_EXPECTED_ASSERTIONS`.
+- [ ] `make check` ist grün, ohne dass `docs/CONFIG.md`, `docs/DIAGNOSTICS.md` oder `config.schema.json` von Hand geändert wurden; `grep -rn "allow-test-ca" backlog/ docs/ tests/` beschreibt überall dieselbe, jetzt vorhandene Fähigkeit.
+
+### Fallstricke
+- `docs/CONFIG.md` und die Schema-Fixture sind erzeugt. Der Text zu `resolver.test_ca` ändert sich über den Doc-Kommentar in `daemon/crates/config/src/model.rs:212`, danach `UPDATE_CONFIG_DOCS=1 cargo test -p humanitl-config --test config_docs` und `UPDATE_SNAPSHOTS=1 cargo test -p humanitl-config --test schema`. Für das Code-Register `UPDATE_DIAG_DOCS=1 cargo test -p humanitl-core --test diag_docs`. Handarbeit an diesen drei Dateien macht `make check` rot.
+- `codes.rs` ist eine gemeinsam genutzte Datei: unmittelbar vor dem Schreiben neu einlesen, nur anhängen, Bereich `CONFIG_001..009` (frei sind 007 bis 009).
+- `tests/e2e/lib.sh` fährt beide Demos. Der neue Parameter von `start_daemon` muss vorne stehen bleiben, was M1 übergibt, sonst kippt der M1-Lauf mit.
+- `M2_EXPECTED_ASSERTIONS=47` in `run.sh:76` wird exakt verglichen: zu wenige Behauptungen beenden den Lauf, zu viele erzeugen eine Notiz. Die Zahl gehört zu jeder Änderung an den Schritten dazu.
+- Das Ziel des Laufs liegt in TEST-NET-2 im eigenen Netz-Namensraum, nicht auf `127.0.0.1`: Der Proxy weist private Adressen ab (`ip_is_private`, ADR-006, CONVENTIONS 4.22). Der Wechsel auf `https://` ändert daran nichts, und eine Vereinfachung auf Loopback bricht den Lauf.
+- Das Flag ist standardmäßig aus und darf in keiner systemd-Unit, keinem Paket-Startbefehl und keiner Beispielkonfiguration auftauchen. Eine fremde Wurzel, die ohne Flag gälte, wäre ein Loch in `docs/SECURITY.md`.
+- Die alte Warnung nennt HUM-024 als Grund; dieser Verweis ist falsch und verschwindet mit ihr, statt in den neuen Text übernommen zu werden.
+- `backlog/sprint-2.md:1653` nennt zusätzlich `--config config.toml`, ein Flag, das `humanitld` ebenfalls nicht hat. Beim Angleichen wird geschrieben, was der Lauf tut, nicht was dort steht.
+- Über `https://` läuft jede Anfrage des Demolaufs durch die TLS-Terminierung. Gruppierung, Funde und die Notiz im 403 werden am grünen Lauf nachgeprüft, nicht angenommen.
+
+### Referenzen
+BACKLOG.md Prinzip 3 und 8, ADR-006; `backlog/CONVENTIONS.md` 4.6, 4.13, 4.22; `docs/SECURITY.md` 5; `docs/CONFIG.md` `resolver.test_ca`; HUM-024, HUM-036, HUM-045; rustls `RootCertStore` (https://docs.rs/rustls/latest/rustls/struct.RootCertStore.html).
+
+---
+
+## HUM-088 · experimental.upstream_port_map wirkt nicht
+Sprint: 3 · Größe: S · Abhängigkeiten: HUM-062 · Blockiert: HUM-076
+
+### Kontext
+`docs/CONFIG.md:80` sagt über `experimental.upstream_port_map`: „Lenkt einen Zielport auf einen anderen um, Schlüssel und Wert als Portnummer. Nur für Tests." Die Seite entsteht aus `daemon/crates/config/src/model.rs`, ist also keine Beschreibung neben dem Code, sondern der Code in Prosa. Umgelenkt wird trotzdem nichts. `grep -rn "port_map" --include="*.rs" daemon/` (ohne `target/`) trifft ausschließlich die Config-Kiste: Feld `daemon/crates/config/src/model.rs:452`, Prüfung `src/validate.rs:349`, Schema-Test `src/schema.rs:338`, dazu `tests/schema.rs:189` und `tests/precedence.rs:333`. In `daemon/crates/proxy/` und `daemon/bin/humanitld/` kommt der Name nicht vor. Der einzige gelesene Nachbar desselben Abschnitts ist `experimental.h2_upstream` in `daemon/bin/humanitld/src/main.rs:510`.
+
+Das ist ein Fehler und nicht bloß eine Lücke, weil die Konfiguration sonst streng ist: Ein unbekannter Schlüssel in der Datei ist ein harter `CONFIG_002` (CONVENTIONS 4.11). Wer diesen Schlüssel setzt, bekommt deshalb kein „gibt es nicht", sondern Stille — und `experimental_is_well_formed` (`src/validate.rs:348`) prüft obendrein, dass die Schlüssel Portnummern sind. Ein Wert, der geprüft wird und dann nie gelesen wird, ist von außen nicht von einem wirksamen zu unterscheiden. CONVENTIONS 4.13 verlangt „Nie mehr behaupten als bewiesen ist"; für die Konfiguration gilt das wie für die Oberfläche. Für `resolver.test_ca` zieht der Daemon die Konsequenz und warnt beim Start (`daemon/bin/humanitld/src/main.rs:488-489`); für den Portschlüssel gibt es kein Gegenstück, obwohl `backlog/sprint-2.md:1690` genau das verlangt.
+
+Die Lücke ist bereits zweimal festgehalten worden, ohne geschlossen zu werden: `backlog/CONVENTIONS.md` 4.22 (Zeile 1284) — „liest den Schlüssel `experimental.upstream_port_map` heute niemand — er steht im Schema, wird validiert und hat im Proxy keinen Aufrufer" — und `tests/e2e/m2_first_decision/run.sh:80`, das ausdrücklich daran vorbeifährt. Beide Testaufbauten, für die der Schlüssel gedacht war (HUM-024 in `backlog/sprint-2.md:439`, HUM-036 in `:1631`), stellen ihr Ziel auf `127.0.0.1:8443`; `ip_is_private` (ADR-006, angewendet in `daemon/crates/proxy/src/upstream.rs:213`) weist jede aufgelöste Adresse aus einem privaten Bereich ab, solange die Regel nicht `allow_private: true` setzt, und `127.0.0.1` ist eine — unabhängig vom Port. Der Schlüssel hätte die beiden Aufbauten also auch dann nicht lauffähig gemacht. HUM-024 ist ohne ihn fertig geworden: `pinned_addr_used` (`daemon/crates/proxy/tests/dns_after_allow.rs:274`) setzt stattdessen den echten flüchtigen Port in die Host-Kopfzeile. Kein ausgelieferter Test braucht den Schlüssel.
+
+`Experimental` kündigt seinen eigenen Abbau an (`src/model.rs:71`, `docs/CONFIG.md:75`: „Schalter für unfertige Wege. Alles hier darf ohne Ankündigung wegfallen."). Ein Schalter, der nie einen Weg geschaltet hat, fällt deshalb weg, statt nachträglich einen zu bekommen.
+
+### Ziel
+`experimental.upstream_port_map` verschwindet aus Modell, Prüfung, Schema, Fixture, `docs/CONFIG.md` und aus allen Stellen in `backlog/` und `tests/`, die ihn als Test-Hebel nennen. Danach ist eine `config.toml` mit dem Schlüssel ein harter `CONFIG_002` mit dem Schlüsselnamen in der Meldung, und `docs/CONFIG.md` behauptet nichts mehr, was der Proxy nicht tut. `backlog/CONVENTIONS.md` 4.22 hält die Entscheidung samt Grund fest, damit sie nicht als Versehen gelesen wird.
+
+### Nicht-Ziel
+Kein Einbau der Portumlenkung in den Proxy; der Bauplan dafür steht unten in Spezifikation B und wird nur ausgeführt, wenn seine Bedingung eintritt. Keine Änderung an `ip_is_private` oder `allow_private`. Kein `upstream_override` (`backlog/sprint-3.md:1492` und `:1504`, `#[cfg(feature = "test-hooks")]` aus HUM-046) — ein anderer Hebel, der ebenfalls noch nicht existiert. Nicht behandelt wird die zweite Hälfte des Fallstricks aus `backlog/sprint-2.md:1690`: Auch für `resolver.overrides` warnt der Daemon beim Start nicht; das bleibt offen und gehört in ein eigenes Issue. `resolver.test_ca` bleibt, wie es ist (Warnung vorhanden, Leser fehlt, HUM-024).
+
+### Betroffene Pfade
+- `daemon/crates/config/src/model.rs:452` (Feld entfernen), `src/validate.rs:348-357` und `:386` (Prüffunktion und Aufruf entfernen), `src/schema.rs:338` (Testerwartung auf `resolver.overrides` umstellen)
+- `daemon/crates/config/tests/schema.rs:189`, `tests/precedence.rs:333-336`
+- `daemon/crates/config/tests/fixtures/config.schema.json` (erzeugt, zwei Stellen bei Zeile 65 und 77)
+- `docs/CONFIG.md:80` (erzeugt)
+- `backlog/CONVENTIONS.md:334`, `:390`, Abschnitt 4.22 (Zeile 1284)
+- `backlog/RECONCILE.md:34`
+- `backlog/sprint-2.md:414`, `:439` (HUM-024), `:1631`, `:1690` (HUM-036)
+- `backlog/sprint-3.md:1733` (HUM-076, Test `detects_ollama_mock`)
+- `tests/e2e/m2_first_decision/run.sh:80` (Kommentar)
+
+### Spezifikation
+
+**A. Entfernung (dieses Issue).**
+
+`Experimental` behält `h2_upstream` und `ws_hold` und verliert `upstream_port_map`. `experimental_is_well_formed` hat danach nichts mehr zu prüfen und entfällt mitsamt dem Aufruf in `validate.rs:386`; `Experimental` als Import in `validate.rs` fällt mit weg, `BTreeMap` in `model.rs` bleibt (`resolver.overrides`, `sandbox.env`). Schema, Fixture und `docs/CONFIG.md` sind erzeugte Artefakte: `free_table_paths()` (`src/schema.rs:128`) leitet sich aus dem Schema ab und braucht keine Änderung, nur seine Testerwartung; die Fixture entsteht neu über den Fixture-Test, `docs/CONFIG.md` über `UPDATE_CONFIG_DOCS=1 cargo test -p humanitl-config --test config_docs`. Von Hand editiert driften beide.
+
+`precedence.rs` prüft mit dem Schlüssel die Regel aus CONVENTIONS 4.11 („Freiform-Tabellen sind im Merge ein Blatt: eine höhere Ebene ersetzt die ganze Tabelle"). Diese Regel behält ihren Test, der Fall wandert auf die einzige verbleibende Freiform-Tabelle `resolver.overrides`, mit `lower = { "a.test" = "10.0.0.1" }` und `higher = { "b.test" = "10.0.0.2" }`.
+
+Prosa-Stellen, wörtlich zu korrigieren, nicht zu streichen:
+
+- `backlog/CONVENTIONS.md` 4.22, Satz ab Zeile 1284: aus „Ausserdem liest den Schlüssel `experimental.upstream_port_map` heute niemand" wird die Feststellung, dass der Schlüssel nie einen Leser hatte und mit HUM-088 entfernt wurde, samt Grund (`ip_is_private` hätte die gedachten Aufbauten ohnehin abgewiesen).
+- `backlog/CONVENTIONS.md:334` (Liste 4.4) und `:390` (Freiform-Tabellen): Eintrag streichen beziehungsweise auf `resolver.overrides` reduzieren.
+- `backlog/sprint-2.md:1631`: die Zeile `[experimental] upstream_port_map = { "443" = 8443 }` aus dem `config.toml` des Demoskripts entfernen; `:1690` nennt danach nur noch `resolver.overrides` als Test-Hebel. `:414` und `:439` (HUM-024) verlieren den Schlüssel aus Schlüsselliste und Test `pinned_addr_used`; was dort wirklich läuft, steht in `daemon/crates/proxy/tests/dns_after_allow.rs:274`.
+- `backlog/sprint-3.md:1733`: `detects_ollama_mock` bindet den Mock auf einem flüchtigen Port und bekommt ihn übergeben, statt den Schlüssel zu nennen.
+- `tests/e2e/m2_first_decision/run.sh:80`: Der Kommentar begründet die eigenen Ports weiter mit dem Netz-Namensraum, ohne einen Schlüssel zu nennen, der es nicht mehr gibt. `M2_EXPECTED_ASSERTIONS` bleibt 47.
+- `backlog/RECONCILE.md:34` ist ein Protokolleintrag von 2026-09-02 und wird nicht umgeschrieben; er bekommt den Verweis auf dieses Issue in Klammern.
+
+**B. Einbau (nicht dieses Issue, Bedingung und Bauplan).**
+
+Bedingung: Ein ausgelieferter Test braucht die Umlenkung und lässt sich ohne sie nicht schreiben. Tritt sie ein, gilt: `Direct::new` (`daemon/crates/proxy/src/egress/direct.rs:26`) nimmt die Tabelle entgegen und bildet den Port in Zeile 52 ab, bevor `SocketAddr::new` ihn benutzt; die beiden Aufrufstellen `daemon/bin/humanitld/src/main.rs:512` und `daemon/crates/ipc/src/server.rs:1103` haben beide `&Config` zur Hand; `ProxyBuilder` (`daemon/crates/proxy/tests/support/mod.rs:368`) reicht sie durch; neben `main.rs:488` kommt die von `backlog/sprint-2.md:1690` verlangte Startwarnung dazu. Die Host-Kopfzeile aus `daemon/crates/proxy/src/upstream.rs:348` bleibt beim Originalport — das ist Absicht, weil sie zum Namen im Zertifikat gehört, und gehört als Satz in den Doc-Kommentar der Tabelle. Abnahme dieser Variante: Ein Lauf mit `{ "443" = 8443 }` gegen ein Ziel, das auf 8443 lauscht, antwortet 200; derselbe Lauf ohne den Schlüssel endet mit 502 und `PROXY_003`.
+
+### Schritte
+1. Feld, Prüffunktion und Aufruf entfernen; `cargo test -p humanitl-config` zeigt die Testerwartungen, die nachziehen müssen.
+2. `schema.rs:338` und `tests/schema.rs:189` anpassen, `precedence.rs`-Fall auf `resolver.overrides` umstellen.
+3. Fixture und `docs/CONFIG.md` neu erzeugen, Diff ansehen: nur die Blöcke des Schlüssels dürfen fehlen.
+4. Prosa-Stellen aus Spezifikation A korrigieren, CONVENTIONS 4.22 mit Grund fortschreiben.
+5. `tests/e2e/m2_first_decision/run.sh` einmal ganz fahren.
+6. `make check`, danach `tools/verify-commit.sh` gegen den Commit.
+
+### Tests
+- `humanitl-config` Schema-Test: `known_paths()` und `leaf_paths()` enthalten `experimental.upstream_port_map` nicht mehr.
+- `schema::tests::free_tables_are_leaves`: prüft `resolver.overrides`, nicht mehr den entfernten Schlüssel.
+- `precedence`-Fall für Freiform-Tabellen auf `resolver.overrides`: untere Ebene `{ "a.test" = "10.0.0.1" }`, obere `{ "b.test" = "10.0.0.2" }`, Ergebnis ist die obere Tabelle allein.
+- Neuer Fall in den Config-Tests: eine `config.toml` mit `[experimental] upstream_port_map = { "443" = 8443 }` liefert `CONFIG_002` mit `Severity::Error` und dem Schlüsselnamen im Text.
+- Fixture-Test und `config_docs`-Test grün ohne erneutes Setzen von `UPDATE_CONFIG_DOCS`.
+- `tests/e2e/m2_first_decision/run.sh` unverändert grün.
+
+### Akzeptanzkriterien
+- [ ] `grep -rn "upstream_port_map" --include="*.rs" daemon/ | grep -v "/target/"` liefert keine Zeile.
+- [ ] `grep -rn "upstream_port_map" docs/ tests/ app/` liefert keine Zeile; in `backlog/` bleiben nur die Zeilen von CONVENTIONS 4.22 und dieses Issue.
+- [ ] Ein Start mit einer `config.toml`, die `[experimental] upstream_port_map = { "443" = 8443 }` enthält, endet mit Exit-Code ungleich 0 und einem `CONFIG_002`, dessen `why` den Schlüssel nennt.
+- [ ] `cargo test -p humanitl-config` grün, inklusive Fixture- und `config_docs`-Test ohne Neuschreiben der erzeugten Dateien.
+- [ ] `git diff -- daemon/crates/config/tests/fixtures/config.schema.json docs/CONFIG.md` zeigt ausschließlich Entfernungen, die den Schlüssel betreffen.
+- [ ] `tests/e2e/m2_first_decision/run.sh` Exit 0, `M2_EXPECTED_ASSERTIONS` weiterhin 47.
+- [ ] `backlog/CONVENTIONS.md` 4.22 nennt HUM-088, den Entfernungsgrund und die Bedingung, unter der der Schlüssel zurückkäme.
+- [ ] `make check` grün und `tools/verify-commit.sh` grün gegen den Commit, nicht gegen den Arbeitsbaum.
+
+### Fallstricke
+- `precedence.rs` verliert ohne Ersatz den einzigen Test für die Regel aus CONVENTIONS 4.11; `resolver.overrides` ist die letzte Freiform-Tabelle und muss den Fall übernehmen, sonst ist die Regel unbelegt.
+- Entfernen ist ein Bruch für bestehende Dateien: Der Schlüssel wird vom stillen No-Op zum harten `CONFIG_002`. Das ist zulässig, weil `Experimental` es ankündigt (`model.rs:71`, `docs/CONFIG.md:75`), gehört aber in CONVENTIONS 4.22, damit ein Fehlerbericht dazu sofort einzuordnen ist.
+- `daemon/crates/config/tests/fixtures/config.schema.json` und `docs/CONFIG.md` werden erzeugt. Von Hand geändert driften sie gegen `model.rs`, und der Fixture-Test wird erst im nächsten Lauf rot.
+- HUM-039 nennt den Schlüssel nicht; wer in dessen Nähe sucht, findet `upstream_override` (`backlog/sprint-3.md:1492` und `:1504`) und verwechselt zwei verschiedene, beide nicht existierende Hebel.
+- Beim Einbau nach Variante B: `Direct::new` ist heute `const fn` und verliert das mit einem `BTreeMap`-Parameter; `impl Default for Direct` zieht mit.
+- Beim Einbau nach Variante B: `daemon/crates/proxy/src/upstream.rs:348` baut die Host-Kopfzeile aus `request.authority.port`. Wird sie mit abgebildet, passt der Name nicht mehr zum Zertifikat, und der Test misst das Falsche.
+
+### Referenzen
+`backlog/CONVENTIONS.md` 4.4, 4.11, 4.13, 4.22; BACKLOG.md ADR-006; `docs/CONFIG.md`; HUM-024 (`backlog/sprint-2.md:371`), HUM-036 (`backlog/sprint-2.md:1605`), HUM-076 (`backlog/sprint-3.md:1702`).
