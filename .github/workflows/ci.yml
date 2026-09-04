@@ -497,9 +497,12 @@ jobs:
         run: bwrap --version
       - name: M1 demo (sealed box, held request, human decision)
         # E2E_TRACE=1 adds `set -x`, so every failing assertion has its step in
-        # the log, as the acceptance criteria of HUM-021 ask.
+        # the log, as the acceptance criteria of HUM-021 ask. E2E_ONLY=m1 keeps
+        # this job on the M1 demo; M2 has its own job below, because it needs
+        # xvfb and Flutter for its screen half.
         env:
           E2E_TRACE: "1"
+          E2E_ONLY: m1
         run: ./tests/e2e/run.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
@@ -513,6 +516,10 @@ jobs:
   e2e-xvfb:
     name: e2e-xvfb
     runs-on: ubuntu-24.04
+    # The M2 demo itself is around twenty seconds; the rest of the budget is the
+    # Rust build and the Flutter setup. A job that hangs instead of failing
+    # would hide exactly the kind of defect this gate exists for.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/setup-rust
@@ -522,16 +529,43 @@ jobs:
         with:
           linux-desktop: "true"
       - name: Install the runtime tooling
+        # Same set as the M1 job, plus openssl for the test certificate the
+        # fake upstream shows on 443 and xvfb for the screen half. bubblewrap
+        # starts the sandbox, curl is the client the agent speaks through,
+        # python3 runs both the target and the agent, jq reads the answers,
+        # iproute2 gives the target its address in the run's own network
+        # namespace, and util-linux brings the unshare that creates it.
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb bubblewrap socat
-      - name: End-to-end walkthrough
-        # From HUM-021 on: xvfb-run -a ./tests/e2e/run.sh
-        run: ./scripts/ci/e2e-placeholder.sh
+          sudo apt-get install -y --no-install-recommends \
+            xvfb bubblewrap curl jq python3 openssl iproute2 util-linux musl-tools
+      - name: Allow unprivileged user namespaces
+        # Ubuntu 24.04 restricts them through AppArmor (HUM-002). Without this
+        # neither bwrap nor `unshare -rn` starts; the demo says so and fails,
+        # it does not hang.
+        run: |
+          set -euo pipefail
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: bwrap is usable
+        run: bwrap --version
+      - name: M2 demo (grouping, batch release, block, timeout, history)
+        # The demo runs its own daemon, its own target and its own sandbox in a
+        # throwaway tree and needs no network. It skips its screen half with a
+        # loud notice while app/integration_test/m2_first_decision_test.dart
+        # does not exist, and it fails when fewer assertions ran than it expects.
+        env:
+          E2E_TRACE: "1"
+          E2E_ONLY: m2
+        run: ./tests/e2e/run.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: e2e-artifacts
+          # The daemon log, the access log of the target, what the agent got
+          # back for every request and, once the screen half is there, the HAR
+          # export and the screenshots of a failed run.
           path: target/e2e
           if-no-files-found: ignore
 
