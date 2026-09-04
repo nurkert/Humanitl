@@ -571,6 +571,35 @@ extension EnvVarToDomain on pb.EnvVar {
   );
 }
 
+/// `IsolationCheck` to [IsolationCheck].
+extension IsolationCheckToDomain on pb.IsolationCheck {
+  /// The domain form, or null for an unknown guarantee.
+  ///
+  /// Null and not a default: a guarantee this build does not know is not one
+  /// of the three it draws, and putting it on one of their lines would attach
+  /// the wrong evidence to the wrong sentence.
+  IsolationCheck? toDomain() => enumFromWire(IsolationCheck.values, value);
+}
+
+/// `CheckResult` to [IsolationCheckResult].
+extension CheckResultToDomain on pb.CheckResult {
+  /// The domain form, or null when the guarantee is not one of the three.
+  IsolationCheckResult? toDomain() {
+    // `check_1`: the generated name of field `check`, which the protobuf
+    // runtime renames because `GeneratedMessage` already has a `check`.
+    final IsolationCheck? which = check_1.toDomain();
+    if (which == null) {
+      return null;
+    }
+    return IsolationCheckResult(
+      check: which,
+      passed: passed,
+      evidence: evidence,
+      diagnostic: hasDiagnostic() ? diagnostic.toDomain() : null,
+    );
+  }
+}
+
 /// `SandboxEvent.Status` to [SandboxStatus].
 extension SandboxStatusToDomain on pb.SandboxEvent_Status {
   /// The domain form, without diagnostics: those arrive as their own events

@@ -40,7 +40,7 @@ use humanitl_core::{Rule, RuleId, SessionId};
 use humanitl_ipc::DaemonApi as _;
 use humanitl_ipc::fake::{BUNDLED_BLOCK_RULE, FakeDaemon, FakeOptions, Session};
 use humanitl_ipc::v1::humanitl_server::Humanitl as _;
-use humanitl_ipc::{DaemonService, IpcServer, diagnostic_from_status, v1};
+use humanitl_ipc::{DaemonService, IpcServer, SandboxService, diagnostic_from_status, v1};
 use humanitl_proxy::rules_store::RulesStore;
 use humanitl_proxy::{FlowRegistry, HoldQueue};
 use tokio_stream::StreamExt as _;
@@ -561,6 +561,96 @@ async fn the_fake_answers_like_the_daemon() {
             case.what
         );
     }
+}
+
+/// Die drei Garantien: Was keiner der beiden gemessen hat, meldet auch keiner.
+///
+/// Der Fake behauptet drei bestandene Prüfungen und schreibt in jede Evidenz,
+/// dass nichts gemessen wurde (CONVENTIONS 4.7). Der echte Dienst kann das
+/// nicht behaupten, solange keine Sandbox läuft — und schickt deshalb gar kein
+/// Ergebnis statt drei graue. Genau diese Richtung ist die, die niemand
+/// lockern darf: „unbekannt" darf nie wie „bestanden" aussehen
+/// (CONVENTIONS 4.13, `backlog/sprint-3.md` HUM-041).
+///
+/// Gemeinsam ist beiden die Form: drei Garantien in der Reihenfolge der
+/// Varianten, jede mit einer Evidenz, die nicht leer ist, und ein roter Befund
+/// nie ohne `Diagnostic`.
+#[tokio::test]
+async fn the_isolation_check_reports_only_what_was_measured() {
+    let checks = |events: Vec<v1::SandboxEvent>| -> Vec<v1::CheckResult> {
+        events
+            .into_iter()
+            .filter_map(|event| match event.event {
+                Some(v1::sandbox_event::Event::Check(check)) => Some(check),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let from_fake = checks(sandbox_events(&fake(), isolation_check()).await);
+    assert_eq!(
+        from_fake
+            .iter()
+            .map(|check| check.check)
+            .collect::<Vec<_>>(),
+        vec![
+            v1::IsolationCheck::NoNetworkInterface as i32,
+            v1::IsolationCheck::SingleSocket as i32,
+            v1::IsolationCheck::SeccompActive as i32,
+        ],
+        "the fake answers the three guarantees in the order of the variants"
+    );
+    for check in &from_fake {
+        assert!(!check.evidence.is_empty(), "a check without evidence");
+        assert!(
+            check.passed || check.diagnostic.is_some(),
+            "a red check without a finding: {check:?}"
+        );
+    }
+
+    let (real, _dir) = real_with_sandbox();
+    let from_real = checks(sandbox_events(&real, isolation_check()).await);
+    assert!(
+        from_real.is_empty(),
+        "no sandbox ran, so nothing is proven: {from_real:?}"
+    );
+}
+
+/// Die Anfrage, die die drei Garantien holt.
+fn isolation_check() -> v1::SandboxRequest {
+    v1::SandboxRequest {
+        op: Some(v1::sandbox_request::Op::IsolationCheck(())),
+    }
+}
+
+/// Der echte Dienst mit Sandbox-RPC; ohne sie antwortete er „dieser Daemon hat
+/// keine Sandbox", bevor er die Anfrage überhaupt liest.
+fn real_with_sandbox() -> (IpcServer, tempfile::TempDir) {
+    let (server, dir) = real();
+    let paths = humanitl_config::Paths::new(humanitl_config::Env::from_pairs([(
+        "HOME",
+        dir.path().to_string_lossy(),
+    )]));
+    let service = SandboxService::new(Config::default(), paths, SessionId::new());
+    (server.with_sandbox(service), dir)
+}
+
+/// Alle Ereignisse einer Sandbox-Operation, in der Reihenfolge des Stroms.
+async fn sandbox_events<S>(service: &S, request: v1::SandboxRequest) -> Vec<v1::SandboxEvent>
+where
+    S: v1::humanitl_server::Humanitl,
+{
+    let stream = service
+        .sandbox(authed(request))
+        .await
+        .expect("the sandbox rpc answers")
+        .into_inner();
+    let mut stream = std::pin::pin!(stream);
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event.expect("no stream error"));
+    }
+    events
 }
 
 /// `allow_edited` für mehrere Flows: beide lehnen jeden einzeln mit `IPC_002`

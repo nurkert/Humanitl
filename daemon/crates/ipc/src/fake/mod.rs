@@ -788,9 +788,13 @@ impl FakeDaemon {
         match &request.op {
             Some(Op::Start(start)) => {
                 self.state.set_sandbox_state(v1::SandboxState::Running);
+                // Dieselbe Reihenfolge wie beim echten Dienst: Die drei
+                // Garantien stehen zwischen `starting` und `running`, damit
+                // niemand `running` sieht, bevor er die Ergebnisse gesehen
+                // hat (HUM-041).
                 let mut events = vec![self.sandbox_status(v1::SandboxState::Starting)];
-                events.push(self.sandbox_status(v1::SandboxState::Running));
                 events.extend(isolation_checks());
+                events.push(self.sandbox_status(v1::SandboxState::Running));
                 events.push(sandbox_log(format!(
                     "started {} in {}",
                     start.command.join(" "),

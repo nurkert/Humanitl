@@ -25,6 +25,7 @@ import 'widgets/argv_sheet.dart';
 import 'widgets/arrive.dart';
 import 'widgets/coming_pane.dart';
 import 'widgets/env_tab.dart';
+import 'widgets/isolation_panel.dart';
 import 'widgets/log_tab.dart';
 import 'widgets/mounts_tab.dart';
 import 'widgets/sandbox_header.dart';
@@ -70,6 +71,8 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
     unawaited(ref.read(sandboxStatusProvider.notifier).stop());
   }
 
+  void _showArgv() => setState(() => _argvOpen = true);
+
   @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
@@ -108,15 +111,12 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
                         rowHeight: tokens.sizes.rowHistory,
                       ),
                     ),
-                    child: _Body(status: status),
+                    child: _Body(status: status, onShowArgv: _showArgv),
                   ),
                 },
               ),
               const HHairline(),
-              SandboxStatusBar(
-                status: status,
-                onShowArgv: () => setState(() => _argvOpen = true),
-              ),
+              SandboxStatusBar(status: status, onShowArgv: _showArgv),
             ],
           ),
           if (_argvOpen)
@@ -137,9 +137,12 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
 
 /// The terminal above, the four tabs below.
 class _Body extends ConsumerWidget {
-  const _Body({required this.status});
+  const _Body({required this.status, required this.onShowArgv});
 
   final SandboxStatus status;
+
+  /// Opens the command the daemon built; the isolation tab leads there too.
+  final VoidCallback onShowArgv;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -188,8 +191,9 @@ class _Body extends ConsumerWidget {
           child: switch (tab) {
             SandboxTab.mounts => MountsTab(status: status),
             SandboxTab.env => EnvTab(status: status),
-            SandboxTab.isolation => ComingPane(
-              text: l10n.sandboxIsolationPlaceholder,
+            SandboxTab.isolation => IsolationPanel(
+              status: status,
+              onShowArgv: onShowArgv,
             ),
             SandboxTab.log => const LogTab(),
           },

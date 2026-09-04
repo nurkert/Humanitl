@@ -469,7 +469,9 @@ daemon_info() {
 # pass|FAIL: <evidence>` auf stderr). stdout bleibt dem Befehl vorbehalten.
 #
 # Ist eine der drei Garantien rot, beendet `sandbox run` die Sandbox und endet
-# mit 3, statt den Befehl trotzdem laufen zu lassen.
+# mit 3. Beendet, nicht verhindert: Der Shim startet den Befehl unmittelbar
+# nach seiner letzten Pruefzeile, geprueft wird auf dem Wirt danach
+# (docs/THREAT-MODEL.md K-15).
 sandbox_run() {
     [ -x "$E2E_CLI" ] || e2e_die "no humanitl binary at $E2E_CLI"
     humanitl -v sandbox run \
