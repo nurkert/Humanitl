@@ -8,7 +8,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use humanitl_core::diagnostics::codes::{
-    RULES_001, RULES_002, RULES_003, RULES_005, RULES_006, RULES_007, RULES_008,
+    RULES_001, RULES_002, RULES_003, RULES_005, RULES_006, RULES_007, RULES_008, RULES_010,
 };
 use humanitl_core::rule::{Action, Expiry, HostPattern};
 use humanitl_core::{Diagnostic, DiagnosticCode, Method, SessionId, Severity};
@@ -606,4 +606,58 @@ rules:
         panic!("a passthrough over every host must warn: {warnings:?}");
     };
     assert!(warning.why.contains("a single host"), "{}", warning.why);
+}
+
+/// `disabled_bundled` nennt eine Regel, die in derselben Datei steht.
+///
+/// Die Liste gehört den mitgelieferten Regeln; die stehen nie in der Datei des
+/// Nutzers. Eine Id, die auf eine eigene Regel zeigt, ist deshalb ein
+/// Missverständnis, und die Warnung sagt den richtigen Weg. Abgeschaltet wird
+/// die Regel trotzdem: Wer „aus" schreibt, bekommt nicht das Gegenteil.
+#[test]
+fn disabled_bundled_warns_about_a_rule_of_ones_own() {
+    let yaml = "version: 1
+rules:
+  - id: 01920000-0000-7000-8000-0000000000aa
+    action: allow
+    match:
+      host: \"api.github.com\"
+disabled_bundled:
+  - 01920000-0000-7000-8000-0000000000aa
+";
+    let (set, warnings) = ok(yaml);
+    assert_eq!(codes(&warnings), vec![RULES_010]);
+    assert_eq!(warnings[0].severity, Severity::Warning);
+    assert!(
+        warnings[0].why.contains("removed, not disabled"),
+        "{}",
+        warnings[0].why
+    );
+    assert!(
+        set.iter().all(|rule| rule.disabled),
+        "the rule is switched off all the same"
+    );
+}
+
+/// Eine Id, die keine Regel dieser Datei benennt, warnt nicht.
+///
+/// Das ist der Normalfall: `disabled_bundled` zeigt auf eine mitgelieferte
+/// Regel, und die kommt erst später dazu.
+#[test]
+fn disabled_bundled_stays_quiet_for_a_bundled_id() {
+    let yaml = "version: 1
+rules:
+  - id: 01920000-0000-7000-8000-0000000000aa
+    action: allow
+    match:
+      host: \"api.github.com\"
+disabled_bundled:
+  - 01920000-0000-7000-8000-000000000001
+";
+    let (set, warnings) = ok(yaml);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(
+        set.iter().all(|rule| !rule.disabled),
+        "no rule of this file is named"
+    );
 }
