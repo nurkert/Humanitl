@@ -807,14 +807,48 @@ impl FakeDaemon {
             }
             Some(Op::IsolationCheck(())) => isolation_checks(),
             Some(Op::Argv(())) => argv_lines(&self.state.session().work_dir),
+            Some(Op::Plan(plan)) => vec![self.sandbox_status_for(
+                self.state.sandbox().1,
+                Some(&plan.work_dir),
+                Some(&plan.work_mode),
+            )],
             _ => vec![self.sandbox_status(self.state.sandbox().1)],
         }
     }
 
     /// Der Zustand der simulierten Sandbox als Ereignis.
+    ///
+    /// Die Momentaufnahme ist vollstaendig, weil der Bildschirm sonst nichts
+    /// zu zeigen haette: dieselben Einhaengungen, dieselbe Umgebung und
+    /// dieselbe Kommandozeile, die ein echter Start haette, nur als Fake
+    /// gekennzeichnet (CONVENTIONS 4.7).
     fn sandbox_status(&self, state: v1::SandboxState) -> v1::SandboxEvent {
+        self.sandbox_status_for(state, None, None)
+    }
+
+    /// Dieselbe Momentaufnahme fuer ein Projektverzeichnis, das noch nicht
+    /// gilt (`SandboxRequest.Plan`).
+    fn sandbox_status_for(
+        &self,
+        state: v1::SandboxState,
+        work_dir: Option<&str>,
+        work_mode: Option<&str>,
+    ) -> v1::SandboxEvent {
         let session = self.state.session();
         let (sandbox_id, _) = self.state.sandbox();
+        let work_dir = work_dir
+            .map(str::trim)
+            .filter(|dir| !dir.is_empty())
+            .map_or(session.work_dir, ToOwned::to_owned);
+        let work_mode = work_mode
+            .map(str::trim)
+            .filter(|mode| matches!(*mode, "ro" | "rw"))
+            .unwrap_or("rw")
+            .to_owned();
+        let running = matches!(
+            state,
+            v1::SandboxState::Running | v1::SandboxState::Stopping
+        );
         v1::SandboxEvent {
             event: Some(v1::sandbox_event::Event::Status(
                 v1::sandbox_event::Status {
@@ -823,8 +857,14 @@ impl FakeDaemon {
                     session_id: session.id.to_string(),
                     backend: "bwrap".to_owned(),
                     llm_endpoint: session.llm_endpoint,
-                    work_dir: session.work_dir,
-                    work_mode: "rw".to_owned(),
+                    started_at: running.then(|| timestamp(SystemTime::now())),
+                    profile: FAKE_PROFILE.to_owned(),
+                    mounts: fake_mounts(&work_dir, &work_mode),
+                    env: fake_env(),
+                    argv_preview: fake_argv_line(&work_dir, &work_mode),
+                    agent_running: running,
+                    work_dir,
+                    work_mode,
                 },
             )),
         }
@@ -1044,6 +1084,157 @@ fn sandbox_log(line: String) -> v1::SandboxEvent {
             line,
         })),
     }
+}
+
+/// Das Sandbox-Profil, das der Fake vorgibt zu lesen.
+const FAKE_PROFILE: &str = "default";
+
+/// Die Einhaengungen, die ein echter Start haette. Dieselbe Liste, aus der
+/// [`fake_argv_line`] ihre Zeile baut: eine Tabelle, die etwas anderes sagt
+/// als die Kommandozeile daneben, waere schlimmer als keine.
+fn fake_mounts(work_dir: &str, work_mode: &str) -> Vec<v1::Mount> {
+    let work = if work_mode == "ro" {
+        v1::MountMode::Ro
+    } else {
+        v1::MountMode::Rw
+    };
+    vec![
+        mount("/usr", "/usr", v1::MountMode::Ro, v1::ValueOrigin::Profile),
+        mount(
+            "/etc/ssl",
+            "/etc/ssl",
+            v1::MountMode::Ro,
+            v1::ValueOrigin::Profile,
+        ),
+        mount("", "/tmp", v1::MountMode::Tmpfs, v1::ValueOrigin::Profile),
+        mount(
+            "",
+            "/dev/shm",
+            v1::MountMode::Tmpfs,
+            v1::ValueOrigin::Profile,
+        ),
+        mount("", "/proc", v1::MountMode::Proc, v1::ValueOrigin::Profile),
+        mount("", "/dev", v1::MountMode::Dev, v1::ValueOrigin::Profile),
+        mount(work_dir, "/work", work, v1::ValueOrigin::Session),
+        mount(
+            "",
+            "/work/.git/config",
+            v1::MountMode::Masked,
+            v1::ValueOrigin::Profile,
+        ),
+        mount(
+            "",
+            "/work/.envrc",
+            v1::MountMode::Masked,
+            v1::ValueOrigin::Profile,
+        ),
+        mount(
+            "$XDG_RUNTIME_DIR/humanitl/proxy/proxy.sock",
+            "/run/humanitl/proxy.sock",
+            v1::MountMode::Ro,
+            v1::ValueOrigin::Session,
+        ),
+        mount(
+            "$XDG_DATA_HOME/humanitl/ca/ca.crt",
+            "/etc/humanitl/ca.crt",
+            v1::MountMode::Ro,
+            v1::ValueOrigin::Session,
+        ),
+        mount(
+            "/usr/lib/humanitl/humanitl-shim",
+            "/run/humanitl/humanitl-shim",
+            v1::MountMode::Ro,
+            v1::ValueOrigin::Session,
+        ),
+        mount(
+            "",
+            "/etc/humanitl/AGENTS.md",
+            v1::MountMode::Masked,
+            v1::ValueOrigin::Adapter,
+        ),
+    ]
+}
+
+/// Ein Eintrag der Einhaengetabelle.
+fn mount(src: &str, dst: &str, mode: v1::MountMode, origin: v1::ValueOrigin) -> v1::Mount {
+    v1::Mount {
+        dst: dst.to_owned(),
+        src: src.to_owned(),
+        mode: mode as i32,
+        origin: origin as i32,
+        link_target: String::new(),
+    }
+}
+
+/// Die Umgebung, die die Sandbox setzt, alphabetisch.
+///
+/// Zwei Werte sind zurueckgehalten, und beide sind mit Absicht so benannt, dass
+/// keine Regel ueber verdaechtige Endungen sie faende: `AWS_ACCESS_KEY_ID`
+/// endet auf `_ID`, `DATABASE_URL` traegt das Passwort in der URL. So zeigt
+/// auch der Fake, dass die Vorgabe „zurueckgehalten" lautet (CONVENTIONS 4.17).
+fn fake_env() -> Vec<v1::EnvVar> {
+    [
+        ("AWS_ACCESS_KEY_ID", "", v1::ValueOrigin::User, true),
+        ("DATABASE_URL", "", v1::ValueOrigin::User, true),
+        ("HOME", "/home/agent", v1::ValueOrigin::Profile, false),
+        (
+            "HTTPS_PROXY",
+            "http://127.0.0.1:3128",
+            v1::ValueOrigin::Profile,
+            false,
+        ),
+        (
+            "HTTP_PROXY",
+            "http://127.0.0.1:3128",
+            v1::ValueOrigin::Profile,
+            false,
+        ),
+        ("NO_PROXY", "", v1::ValueOrigin::Profile, false),
+        (
+            "OPENCODE_CONFIG",
+            "/etc/humanitl/opencode.json",
+            v1::ValueOrigin::Adapter,
+            false,
+        ),
+        ("PATH", "/usr/bin:/bin", v1::ValueOrigin::Profile, false),
+        (
+            "SSL_CERT_FILE",
+            "/etc/humanitl/ca.crt",
+            v1::ValueOrigin::Profile,
+            false,
+        ),
+        ("TERM", "xterm-256color", v1::ValueOrigin::Profile, false),
+        ("USER", "agent", v1::ValueOrigin::Profile, false),
+    ]
+    .into_iter()
+    .map(|(key, value, origin, withheld)| v1::EnvVar {
+        key: key.to_owned(),
+        value: value.to_owned(),
+        origin: origin as i32,
+        withheld,
+    })
+    .collect()
+}
+
+/// Die Kommandozeile als eine Zeile, so wie eine Shell sie liest.
+fn fake_argv_line(work_dir: &str, work_mode: &str) -> String {
+    let work_flag = if work_mode == "ro" {
+        "--ro-bind"
+    } else {
+        "--bind"
+    };
+    format!(
+        "bwrap --unshare-all --die-with-parent --new-session --cap-drop ALL --disable-userns \
+         --hostname sandbox --ro-bind /usr /usr --ro-bind /etc/ssl /etc/ssl --proc /proc --dev /dev \
+         --tmpfs /tmp --tmpfs /dev/shm {work_flag} {work_dir} /work \
+         --ro-bind $XDG_RUNTIME_DIR/humanitl/proxy/proxy.sock /run/humanitl/proxy.sock \
+         --ro-bind $XDG_DATA_HOME/humanitl/ca/ca.crt /etc/humanitl/ca.crt \
+         --ro-bind /usr/lib/humanitl/humanitl-shim /run/humanitl/humanitl-shim \
+         --clearenv --setenv HTTP_PROXY http://127.0.0.1:3128 \
+         --setenv AWS_ACCESS_KEY_ID '<withheld>' \
+         --setenv DATABASE_URL '<withheld>' --chdir /work \
+         -- /run/humanitl/humanitl-shim --proxy-port 3128 -- opencode"
+    )
 }
 
 /// Die Kommandozeile, die der echte Launcher bauen würde, Zeile für Zeile als

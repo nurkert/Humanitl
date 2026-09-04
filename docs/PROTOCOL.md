@@ -62,7 +62,7 @@ Generierter Code ist kein Quellcode (`docs/ARCHITECTURE.md` 4). Wer ihn von Hand
 
 ## 5. Versionsregel
 
-`Info.proto_major` und `Info.proto_minor` sagen, was der Daemon spricht; die Konstanten dazu stehen in `humanitl_ipc::PROTO_MAJOR` und `PROTO_MINOR`. Stand 2026-09-04: `1.2` (`ProbeLlm`, `FlowEvent.flow_diagnostic`, `Rule.passthrough_llm` und `RuleMatcher.path_prefixes`, HUM-039). Die Nebenversion steigt bei jeder additiven Erweiterung, und `app/lib/core/ipc/proto_version.dart` haelt dieselbe Zahl; eine aeltere Nebenversion auf einer Seite ist keine Stoerung, sie liest die neueren Felder dann nicht.
+`Info.proto_major` und `Info.proto_minor` sagen, was der Daemon spricht; die Konstanten dazu stehen in `humanitl_ipc::PROTO_MAJOR` und `PROTO_MINOR`. Stand 2026-09-04: `1.3` (die Sandbox-Momentaufnahme mit `Mount`, `EnvVar`, `argv_preview` und `agent_running` samt der Operation `SandboxRequest.Plan`, HUM-040; davor `1.2` mit `ProbeLlm`, `FlowEvent.flow_diagnostic`, `Rule.passthrough_llm` und `RuleMatcher.path_prefixes`, HUM-039). Die Nebenversion steigt bei jeder additiven Erweiterung, und `app/lib/core/ipc/proto_version.dart` haelt dieselbe Zahl; eine aeltere Nebenversion auf einer Seite ist keine Stoerung, sie liest die neueren Felder dann nicht.
 
 - Additive Änderung ⇒ Minor steigt. Ältere Clients funktionieren weiter, sie sehen die neuen Felder nicht.
 - Bruch ⇒ Major steigt und das Paket heißt `humanitl.v2` in einem neuen Verzeichnis. `humanitl.v1` bleibt bestehen, bis niemand mehr danach fragt.
