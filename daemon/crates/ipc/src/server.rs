@@ -38,11 +38,9 @@ use dashmap::DashMap;
 use humanitl_config::Config;
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{
-    BlockReason, BodyRef, Decision, DecisionSource, Diagnostic, FlowEvent, FlowId, HostName,
-    SessionId, Severity,
+    BodyRef, Decision, DecisionSource, Diagnostic, FlowEvent, FlowId, HostName, SessionId, Severity,
 };
 use humanitl_proxy::hold::NotHeld;
-use humanitl_proxy::llm_probe;
 use humanitl_proxy::rules_store::RulesStore;
 use humanitl_proxy::{
     ClientTls, Direct, FlowFilter, FlowRegistry, HoldQueue, LlmProbe, Resolver, ResolverPort,
@@ -62,7 +60,7 @@ use tonic::{Request, Response, Status};
 use crate::domains::DomainTable;
 use crate::rules::RulesService;
 use crate::server_stub::{BoxStream, diagnostic_to_status};
-use crate::{PROTO_MAJOR, PROTO_MINOR, auth, convert, rules, v1};
+use crate::{PROTO_MAJOR, PROTO_MINOR, auth, convert, rules, v1, validate};
 
 /// Was dieser Daemon in M1 kann.
 ///
@@ -339,13 +337,12 @@ impl IpcServer {
     }
 
     /// Eine Seite der Flow-Historie.
-    fn page(&self, request: &v1::ListFlowsRequest) -> v1::FlowPage {
+    fn page(&self, request: &v1::ListFlowsRequest, descending: bool) -> v1::FlowPage {
         let since = FlowId::parse(&request.since_flow_id).ok();
         let cursor = FlowId::parse(&request.cursor).ok();
         // Der Cursor zeigt auf das letzte gelieferte Element; die nächste Seite
         // liegt in Sortierrichtung dahinter, bei absteigender Reihenfolge also
         // davor.
-        let descending = request.order_by.contains("desc");
         let mut flows: Vec<v1::FlowSummary> = self
             .summaries()
             .into_iter()
@@ -518,46 +515,6 @@ impl IpcServer {
             .map_err(humanitl_recorder::RecorderError::into_diagnostic)
     }
 
-    /// Liest die Entscheidung aus der Anfrage.
-    ///
-    /// Fail closed: eine Anfrage ohne `decision` wird abgelehnt, nicht zu
-    /// `Allow` ergänzt. Eine bearbeitete Anfrage, die sich nicht lesen lässt
-    /// oder deren Body über `limits.hold_body_cap_bytes` liegt, wird ebenfalls
-    /// abgelehnt — beides wäre sonst ein Weiterleiten von etwas, das der
-    /// Mensch so nie gesehen hat (`backlog/CONVENTIONS.md` 4.11).
-    fn decision_of(&self, request: &v1::DecideRequest) -> Result<Decision, Diagnostic> {
-        match &request.decision {
-            Some(v1::decide_request::Decision::Allow(())) => Ok(Decision::Allow),
-            Some(v1::decide_request::Decision::Block(block)) => {
-                // Die Notiz erreicht den Agenten im 403-Body und im Header
-                // `X-Humanitl-Note`; sie wird deshalb gesäubert (HUM-072).
-                let note = humanitl_core::block::sanitize_note(&block.note);
-                Ok(Decision::Block {
-                    reason: BlockReason::User,
-                    note: (!note.is_empty()).then_some(note),
-                })
-            }
-            Some(v1::decide_request::Decision::AllowEdited(edited)) => {
-                let size = u64::try_from(edited.body.len()).unwrap_or(u64::MAX);
-                if size > self.body_cap_bytes {
-                    return Err(bad_request(format!(
-                        "the edited body is {size} bytes, over limits.hold_body_cap_bytes ({})",
-                        self.body_cap_bytes
-                    )));
-                }
-                let request = convert::request_from_proto(edited).map_err(|error| {
-                    bad_request(format!("the edited request is not readable: {error}"))
-                })?;
-                Ok(Decision::AllowEdited {
-                    request: Box::new(request),
-                })
-            }
-            None => Err(bad_request(
-                "decide came without a decision; a missing decision is never an allow".to_owned(),
-            )),
-        }
-    }
-
     /// Entscheidet genau einen Flow.
     ///
     /// Der Befund kommt zusätzlich zum Ergebnis zurück, weil `Decide`
@@ -567,8 +524,9 @@ impl IpcServer {
         text: &str,
         decision: &Decision,
     ) -> (v1::DecideResult, Option<Diagnostic>) {
-        let Ok(id) = FlowId::parse(text) else {
-            return refused(text, bad_request(format!("{text} is not a flow id")));
+        let id = match validate::flow_id(text) {
+            Ok(id) => id,
+            Err(diagnostic) => return refused(text, diagnostic),
         };
         match self
             .queue
@@ -587,27 +545,12 @@ impl IpcServer {
     }
 }
 
-/// Ein Befund für eine `Decide`-Anfrage, die so nicht gilt (`InvalidArgument`).
+/// Ein unbekannter Flow als `NOT_FOUND`, mit seinem Befund in den Details.
 ///
-/// `IPC_004` deckt jede Anfrage ab, die der Daemon nicht ausführen kann: keine
-/// Flow-Id, keine Entscheidung, eine unlesbare Flow-Id, eine bearbeitete
-/// Anfrage, die sich nicht lesen lässt oder über `limits.hold_body_cap_bytes`
-/// liegt. Der Grund nennt den vorliegenden Fall. Der einzige Sonderfall mit
-/// eigenem Code ist [`edited_for_many`].
-fn bad_request(why: String) -> Diagnostic {
-    Diagnostic::builder(codes::IPC_004, Severity::Error)
-        .why(why)
-        .build()
-}
-
-/// Ein Befund für `AllowEdited` mit mehr als einem Flow (`InvalidArgument`).
-///
-/// `IPC_002` bleibt genau diesem Fall vorbehalten, so wie sein Titel ihn nennt:
-/// eine bearbeitete Anfrage gilt immer genau einem Flow.
-fn edited_for_many(count: usize) -> Diagnostic {
-    Diagnostic::builder(codes::IPC_002, Severity::Error)
-        .why(format!("allow_edited came with {count} flow ids"))
-        .build()
+/// Die Ausnahme selbst steht in [`crate::server_stub::get_flow_status`], damit
+/// der Fake sie nicht ein zweites Mal beschreiben muss.
+fn unknown_flow(id: FlowId) -> Status {
+    crate::server_stub::get_flow_status(&not_held(&NotHeld::Unknown { id }))
 }
 
 /// Ein Befund für einen Flow, der nicht mehr wartet (`FailedPrecondition`).
@@ -697,24 +640,16 @@ fn flow_query(request: &v1::ListFlowsRequest) -> Result<FlowQuery, Diagnostic> {
 ///
 /// `IPC_005` mit der Liste der gültigen Schlüssel.
 fn order_of(order_by: &str) -> Result<(SortKey, bool), Diagnostic> {
-    let lower = order_by.to_ascii_lowercase();
-    let mut words = lower.split_whitespace();
-    let sort = match words.next() {
-        None | Some("received_at" | "ts" | "time") => SortKey::Ts,
-        Some("host") => SortKey::Host,
-        Some("duration") => SortKey::Duration,
-        Some("size") => SortKey::Size,
-        Some(other) => {
-            return Err(Diagnostic::builder(codes::IPC_005, Severity::Error)
-                .why(format!(
-                    "{other:?} is not a sort key; list_flows sorts by received_at, host, \
-                     duration or size"
-                ))
-                .build());
-        }
+    let (key, descending) = validate::order_by(order_by)?;
+    let sort = match key {
+        "host" => SortKey::Host,
+        "duration" => SortKey::Duration,
+        "size" => SortKey::Size,
+        // `received_at` und alles, was [`crate::validate::order_by`] darauf
+        // abbildet. Ein anderer Name kommt von dort nicht zurück.
+        _ => SortKey::Ts,
     };
-    let ascending = words.any(|word| word == "asc");
-    Ok((sort, !ascending))
+    Ok((sort, descending))
 }
 
 /// Der Cursor der nächsten Seite als Text des Vertrags.
@@ -780,14 +715,7 @@ fn decode_cursor(text: &str) -> Result<Cursor, Diagnostic> {
 /// `IPC_005`, wenn sie keine 32 Bytes hat. Ein gekürzter Hash zeigte auf einen
 /// anderen Inhalt oder auf keinen.
 fn body_hash(wire: &v1::BodyRef) -> Result<[u8; 32], Diagnostic> {
-    <[u8; 32]>::try_from(wire.sha256.as_slice()).map_err(|_error| {
-        Diagnostic::builder(codes::IPC_005, Severity::Error)
-            .why(format!(
-                "a body reference carries a sha256 of {} bytes, not 32",
-                wire.sha256.len()
-            ))
-            .build()
-    })
+    validate::body_hash(wire)
 }
 
 /// Der Anfang des Anfrage-Bodys für die Anzeige.
@@ -888,8 +816,14 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         request: Request<v1::ListFlowsRequest>,
     ) -> Result<Response<v1::FlowPage>, Status> {
         let request = request.into_inner();
+        // Der Sortierschlüssel wird geprüft, bevor feststeht, woher die Seite
+        // kommt: Ohne Aufzeichnung antwortete der Dienst sonst auf einen
+        // Schlüssel, den er nicht sortieren kann, mit der Vorgabereihenfolge —
+        // also anders als mit Aufzeichnung und anders als der Fake.
+        let (_, descending) = validate::order_by(&request.order_by)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
         let Some(recorder) = self.recorder.as_ref() else {
-            return Ok(Response::new(self.page(&request)));
+            return Ok(Response::new(self.page(&request, descending)));
         };
         self.recorded_page(recorder, &request)
             .await
@@ -910,32 +844,25 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         request: Request<v1::DecideRequest>,
     ) -> Result<Response<v1::DecideResponse>, Status> {
         let request = request.into_inner();
-        if request.flow_ids.is_empty() {
-            return Err(diagnostic_to_status(&bad_request(
-                "decide came without a flow id".to_owned(),
-            )));
-        }
-        let decision = self
-            .decision_of(&request)
-            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
-        let count = request.flow_ids.len();
-        if matches!(decision, Decision::AllowEdited { .. }) && count > 1 {
-            // Eine bearbeitete Anfrage gilt genau einem Flow. Der Vertrag
-            // verlangt hier ausdrücklich ein Ergebnis je Flow mit `IPC_002`
-            // statt eines Fehlers für den ganzen Aufruf
-            // (`proto/humanitl/v1/humanitl.proto`, `Decide`); entschieden wird
-            // dabei nichts.
-            let results = request
-                .flow_ids
-                .iter()
-                .map(|text| refused(text, edited_for_many(count)).0)
-                .collect();
-            return Ok(Response::new(v1::DecideResponse {
-                results,
-                created_rule_id: String::new(),
-                created_rule: None,
-            }));
-        }
+        // Erst lesen, dann wirken: die Prüfungen und ihre Reihenfolge stehen in
+        // [`crate::validate`] und gelten für den Fake genauso.
+        let decision = match validate::decide_plan(&request, self.body_cap_bytes)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?
+        {
+            validate::DecidePlan::Decide(decision) => decision,
+            validate::DecidePlan::RefuseEach(diagnostic) => {
+                let results = request
+                    .flow_ids
+                    .iter()
+                    .map(|text| refused(text, diagnostic.clone()).0)
+                    .collect();
+                return Ok(Response::new(v1::DecideResponse {
+                    results,
+                    created_rule_id: String::new(),
+                    created_rule: None,
+                }));
+            }
+        };
 
         // Erst die Regel, dann die Entscheidung: scheitert das Anlegen, wird
         // nichts entschieden (`backlog/sprint-2.md`, HUM-027). Der umgekehrte
@@ -999,12 +926,8 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         request: Request<v1::FlowRef>,
     ) -> Result<Response<v1::FlowDetail>, Status> {
         let request = request.into_inner();
-        let id = FlowId::parse(&request.flow_id).map_err(|error| {
-            diagnostic_to_status(&bad_request(format!(
-                "{:?} is not a flow id: {error}",
-                request.flow_id
-            )))
-        })?;
+        let id = validate::flow_id(&request.flow_id)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
         if let Some(recorder) = self.recorder.as_ref()
             && let Some(detail) = self
                 .recorded_detail(recorder, id)
@@ -1016,7 +939,7 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         self.registry
             .get(id)
             .map(|record| Response::new(convert::record_to_detail(&record)))
-            .ok_or_else(|| Status::not_found(format!("IPC_003 {}", NotHeld::Unknown { id })))
+            .ok_or_else(|| unknown_flow(id))
     }
 
     /// Der Inhalt eines Bodys, in Stücken.
@@ -1030,6 +953,11 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         request: Request<v1::BodyRef>,
     ) -> Result<Response<Self::GetBodyStream>, Status> {
         let wire = request.into_inner();
+        // Erst die Anfrage lesen, dann nachsehen, ob dieser Daemon sie
+        // beantworten kann: Ein `sha256`, das keines ist, bleibt auch mit
+        // Aufzeichnung unlesbar, und der Fake — der keine hat — antwortet
+        // sonst auf dieselbe Anfrage etwas anderes.
+        body_hash(&wire).map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
         let recorder = self.recorder.as_ref().ok_or_else(|| {
             diagnostic_to_status(
                 &Diagnostic::builder(codes::RECORDER_001, Severity::Error)
@@ -1058,6 +986,10 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         &self,
         request: Request<v1::RulesRequest>,
     ) -> Result<Response<v1::RulesResponse>, Status> {
+        // Die Prüfung „ohne Operation ist keine Anfrage" steht genau einmal, in
+        // [`crate::validate::rules_op`], und wird genau einmal gerufen, aus
+        // [`RulesService::apply`]. Sie hier zusätzlich zu wiederholen, machte
+        // ihre Entfernung dort unbemerkbar.
         let service = self
             .rules_or_refuse()
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
@@ -1131,23 +1063,16 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         request: Request<v1::ProbeLlmRequest>,
     ) -> Result<Response<v1::ProbeLlmResponse>, Status> {
         let request = request.into_inner();
+        // Dieselbe Reihenfolge wie beim Fake und wie bei `GetBody` und `Rules`:
+        // erst die Anfrage lesen, dann fragen, ob dieser Daemon sie beantworten
+        // kann. Ein Endpunkt, der keine URL ist, bleibt auch mit Probe keine;
+        // andersherum antwortete ein Daemon ohne Probe auf denselben Unsinn
+        // `IPC_006`, der Fake dagegen `LLM_007`.
+        let endpoint = validate::llm_endpoint(&request.endpoint)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
         let probe = self.llm_probe.as_ref().ok_or_else(|| {
             let diagnostic = self.llm_probe_error.clone().unwrap_or_else(no_probe);
             diagnostic_to_status(&diagnostic)
-        })?;
-        let endpoint = url::Url::parse(&request.endpoint).map_err(|err| {
-            diagnostic_to_status(
-                &Diagnostic::builder(codes::LLM_007, Severity::Error)
-                    .why(format!(
-                        "{:?} is not a URL Humanitl can read: {err}",
-                        request.endpoint
-                    ))
-                    .fix(humanitl_core::FixAction::ChangeSetting {
-                        key: "llm.endpoint".to_owned(),
-                        value: llm_probe::EXAMPLE_ENDPOINT.to_owned(),
-                    })
-                    .build(),
-            )
         })?;
         // Die Probe klemmt die Frist selbst auf `MAX_TIMEOUT_MS`; hier steht
         // nur die Umrechnung, und `0` heißt die Vorgabe.
@@ -1428,6 +1353,39 @@ mod tests {
         }
     }
 
+    /// Ein Endpunkt, der keine URL ist, wird gelesen, bevor der Dienst nach
+    /// seiner Probe sieht.
+    ///
+    /// Die Reihenfolge ist beobachtbar und deshalb Teil des Vertrags: Ein
+    /// Daemon ohne Probe antwortete sonst `IPC_006` („diese Fähigkeit fehlt"),
+    /// wo der Fake `LLM_007` sagt — auf dieselbe Anfrage zwei Antworten. Der
+    /// Fake hat nie eine Probe, also prüft `tests/fake_parity.rs` nur die
+    /// Fassung mit Probe; diese Zeile deckt die ohne ab.
+    #[tokio::test]
+    async fn an_unreadable_endpoint_is_refused_before_the_probe_is_looked_up() {
+        let queue = queue();
+        let mut server = server(&queue);
+        server.llm_probe = None;
+        server.llm_probe_error = None;
+
+        let Err(status) = server
+            .probe_llm(Request::new(v1::ProbeLlmRequest {
+                endpoint: "not a url".to_owned(),
+                timeout_ms: 0,
+            }))
+            .await
+        else {
+            panic!("an endpoint that is no url is refused, probe or not");
+        };
+        let diagnostic = crate::server_stub::diagnostic_from_status(&status)
+            .expect("the status carries the diagnostic");
+        assert_eq!(
+            diagnostic.code,
+            codes::LLM_007.as_str(),
+            "a daemon without a probe must still say what is wrong with the request"
+        );
+    }
+
     /// `ProbeLlm` gibt es (HUM-039), und was es nicht lesen kann, lehnt es
     /// ab, statt zu raten.
     #[tokio::test]
@@ -1511,8 +1469,17 @@ mod tests {
         assert_eq!(status.code(), tonic::Code::NotFound, "{status}");
 
         // Ein Body dagegen hat ohne Aufzeichnung überhaupt keinen Ort: Der Proxy
-        // hält ihn nur, solange die Anfrage läuft. Das sagt der Befund.
-        let refused = server.get_body(Request::new(v1::BodyRef::default())).await;
+        // hält ihn nur, solange die Anfrage läuft. Das sagt der Befund. Die
+        // Prüfsumme muss dafür lesbar sein — eine unlesbare wäre `IPC_005`,
+        // bevor der Dienst überhaupt nach einer Aufzeichnung sieht.
+        let refused = server
+            .get_body(Request::new(v1::BodyRef {
+                sha256: vec![0u8; 32],
+                size: 0,
+                truncated: false,
+                content_type: String::new(),
+            }))
+            .await;
         let Err(status) = refused else {
             panic!("a daemon without a recording has no body to hand out")
         };
@@ -1657,7 +1624,10 @@ mod tests {
         assert!(lagged.dropped > 0, "Lagged names how many events are gone");
 
         // Nachladen: die Registry kennt jeden Flow, auch die verpassten.
-        assert_eq!(server.page(&v1::ListFlowsRequest::default()).total, 20);
+        assert_eq!(
+            server.page(&v1::ListFlowsRequest::default(), true).total,
+            20
+        );
     }
 
     /// Ein durchgereichter Fluss ist eingeklappt, seine Warnung nicht.
@@ -1777,6 +1747,12 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Ohne `order_by` gilt „nach Ankunft, neueste zuerst".
+    ///
+    /// Die Registry sortierte hier bis HUM-022 aufsteigend, weil sie nur nach
+    /// dem Wort `desc` sah; die Aufzeichnung, der Fake und die Beschreibung des
+    /// Vertrags sagten absteigend. Der Schlüssel wird jetzt an einer Stelle
+    /// gelesen ([`crate::validate::order_by`]), und alle drei sagen dasselbe.
     async fn list_flows_orders_by_arrival_and_honours_the_limit() {
         let queue = queue();
         let server = server(&queue);
@@ -1790,23 +1766,30 @@ mod tests {
                 .insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
         }
 
-        let page = server.page(&v1::ListFlowsRequest::default());
+        let page = server.page(&v1::ListFlowsRequest::default(), true);
         assert_eq!(page.total, 3);
         let order: Vec<String> = page.flows.iter().map(|row| row.flow_id.clone()).collect();
         let expected: Vec<String> = ids.iter().map(ToString::to_string).collect();
-        assert_eq!(order, expected);
+        let newest_first: Vec<String> = expected.iter().rev().cloned().collect();
+        assert_eq!(order, newest_first);
 
-        let filtered = server.page(&v1::ListFlowsRequest {
-            filter: "host:b.example.com".to_owned(),
-            ..v1::ListFlowsRequest::default()
-        });
+        let filtered = server.page(
+            &v1::ListFlowsRequest {
+                filter: "host:b.example.com".to_owned(),
+                ..v1::ListFlowsRequest::default()
+            },
+            true,
+        );
         assert_eq!(filtered.flows.len(), 1);
 
-        let first = server.page(&v1::ListFlowsRequest {
-            limit: 2,
-            ..v1::ListFlowsRequest::default()
-        });
+        let first = server.page(
+            &v1::ListFlowsRequest {
+                limit: 2,
+                ..v1::ListFlowsRequest::default()
+            },
+            true,
+        );
         assert_eq!(first.flows.len(), 2);
-        assert_eq!(first.next_cursor, expected[1]);
+        assert_eq!(first.next_cursor, newest_first[1]);
     }
 }

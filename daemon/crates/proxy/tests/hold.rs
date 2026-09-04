@@ -18,7 +18,7 @@ use humanitl_core::diagnostics::codes::PROXY_005;
 use humanitl_core::{
     Authority, BlockReason, BodyRef, Decision, DecisionSource, Flow, FlowEvent, FlowId, FlowState,
     HostName, HttpRequest, InvalidTransition, Method, RuleId, Scheme, SessionId, Severity,
-    TransitionInput,
+    TransitionInput, UpstreamError,
 };
 use humanitl_proxy::ca::{CaStore, LeafCache};
 use humanitl_proxy::handler::serve_connection;
@@ -1076,4 +1076,49 @@ async fn invalid_transition_blocks() {
     drop(sender);
     let _ = driving.await;
     let _ = serving.await;
+}
+
+/// Antwort und Aufzeichnung sagen beim Fail-closed dasselbe.
+///
+/// Der Handler wählt seine Antwort aus dem Zustand, in dem der Flow wirklich
+/// endet, statt immer `no_route` zu schicken. Endet er als
+/// `Decided(Block { NoRoute })` — der Fall aus zehn der elf Zustände —, steht
+/// `no_route` in der Antwort; endet er als `Failed`, steht dort der
+/// `upstream_*`-Grund desselben Fehlers, den das Ereignis trägt. Vorher konnte
+/// der Client `no_route` lesen, während das Protokoll einen Verbindungsfehler
+/// behauptete.
+#[test]
+fn the_fail_closed_answer_says_what_the_flow_says() {
+    let at = SystemTime::now();
+
+    for (name, start) in [
+        ("analyzed", FlowState::Analyzed { findings: vec![] }),
+        ("forwarded", FlowState::Forwarded),
+    ] {
+        let mut flow = received_flow(FlowId::new(), 0);
+        flow.state = start;
+        let events = flow.fail_closed(BlockReason::NoRoute, UpstreamError::Connect, at);
+        assert!(flow.state.is_terminal(), "{name}");
+
+        let reason = match &events[0] {
+            FlowEvent::Decided { decision, .. } => decision
+                .block_reason()
+                .expect("a block carries a reason")
+                .as_str(),
+            FlowEvent::Failed { error, .. } => error.reason(),
+            other => panic!("{name}: unexpected first event {other:?}"),
+        };
+        let host = &flow.request.authority.host;
+        let answer = match &events[0] {
+            FlowEvent::Failed { error, .. } => {
+                humanitl_core::failed_response(*error, flow.id, host)
+            }
+            _ => humanitl_core::block_response(BlockReason::NoRoute, flow.id, host, None),
+        };
+        assert!(
+            answer.body.contains(&format!("reason: {reason}")),
+            "{name}: the client is told {:?} while the record says {reason}",
+            answer.body
+        );
+    }
 }

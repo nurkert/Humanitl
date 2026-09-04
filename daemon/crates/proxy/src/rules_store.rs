@@ -914,7 +914,12 @@ fn duplicate(id: RuleId) -> Diagnostic {
 /// eigene Regel mit demselben Muster, die davor steht. Sie hebt die
 /// mitgelieferte auf, ohne sie zu löschen — und bleibt sichtbar, wenn jemand
 /// später fragt, warum der Host durchgeht.
-fn immutable_bundled(rule: &Rule, verb: &str) -> Diagnostic {
+///
+/// Öffentlich, weil der Fake-Daemon denselben Befund liefern muss: Eine
+/// mitgelieferte Regel ist auch dort unlöschbar, und `RULES_010` zweimal zu
+/// bauen hieße, dieselbe Aussage zweimal zu pflegen (ADR-0018).
+#[must_use]
+pub fn immutable_bundled(rule: &Rule, verb: &str) -> Diagnostic {
     let own = Rule::new(RuleId::new(), Action::Ask, rule.matcher.clone())
         .with_note("overrides the bundled rule above it");
     Diagnostic::builder(codes::RULES_010, Severity::Error)

@@ -238,6 +238,96 @@ impl FromStr for HostPattern {
     }
 }
 
+/// Ein Label eines Glob-Musters.
+///
+/// Die Reihenfolge ist die des Musters, von links nach rechts:
+/// `**.github.com` wird zu `[Many, Literal("github"), Literal("com")]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LabelPat {
+    /// Genau dieses Label, schon normalisiert (A-Label, klein).
+    Literal(String),
+    /// `*`: genau ein Label, gleich welches.
+    One,
+    /// `**`: ein oder mehr Labels.
+    Many,
+}
+
+/// Wahr, wenn das Label-Glob `glob` den Namen `host` trifft.
+///
+/// Die einzige Stelle im Projekt, die ein Host-Muster mit einem Host
+/// vergleicht. Sie stand vorher zweimal da, in `humanitl-rules` und in
+/// `humanitl-catalog`, weil der Katalog nicht von den Regeln abhängen darf.
+/// Ein Host-Muster falsch zu vergleichen ist ein Sicherheitsfehler, und dafür
+/// darf es nur eine Fassung geben; der Kern ist die Schicht, die beide
+/// benutzen dürfen.
+///
+/// Verglichen werden immer ganze Labels, nie Zeichenketten. `*.github.com`
+/// trifft `evil-github.com` nicht und `github.com.evil.io` auch nicht; beides
+/// wäre mit `ends_with` oder `contains` sofort falsch und ist der übliche Weg
+/// an einer Host-Prüfung vorbei (`BACKLOG.md` 4.5 Test 4).
+///
+/// Die Regeln, in der Reihenfolge der Matching-Tabelle aus
+/// `backlog/CONVENTIONS.md` 3.3:
+///
+/// 1. Eine IP-Adresse trifft nie ein Glob. Wer eine Adresse meint, schreibt
+///    `ip:` oder `cidr:` (ADR-007); für einen Host ohne Labels ist das
+///    Ergebnis `false`.
+/// 2. `*` steht für genau ein Label, `**` für ein oder mehr.
+/// 3. Beginnt das Muster mit `**` und hat es mehr als ein Label, trifft es
+///    zusätzlich den Namen ohne diese Labels: `**.example.com` trifft auch
+///    `example.com` selbst (Apex-Ausnahme). Ein `**` in der Mitte verlangt
+///    weiterhin mindestens ein Label.
+///
+/// Das Muster ist beim Bau durch [`HostPattern::glob`] normalisiert; hier wird
+/// nur noch verglichen.
+#[must_use]
+pub fn glob_matches(glob: &str, host: &HostName) -> bool {
+    let Some(labels) = host.labels() else {
+        return false;
+    };
+    walk(&split_pattern(glob), &labels)
+}
+
+/// Zerlegt ein Glob-Muster in seine Labels.
+fn split_pattern(glob: &str) -> Vec<LabelPat> {
+    glob.split('.')
+        .map(|label| match label {
+            "*" => LabelPat::One,
+            "**" => LabelPat::Many,
+            literal => LabelPat::Literal(literal.to_owned()),
+        })
+        .collect()
+}
+
+/// Der Vergleich aus Schritt 2 und 3 der Matching-Tabelle.
+fn walk(pattern: &[LabelPat], labels: &[&str]) -> bool {
+    if walk_from(pattern, labels) {
+        return true;
+    }
+    // Apex-Ausnahme: `**.example.com` trifft `example.com`. Sie gilt nur für
+    // ein führendes `**` und nur, wenn danach noch etwas steht.
+    matches!(pattern.first(), Some(LabelPat::Many))
+        && pattern.len() > 1
+        && walk_from(&pattern[1..], labels)
+}
+
+fn walk_from(pattern: &[LabelPat], labels: &[&str]) -> bool {
+    match pattern.split_first() {
+        None => labels.is_empty(),
+        Some((LabelPat::Literal(expected), rest)) => match labels.split_first() {
+            Some((label, tail)) => label == expected && walk_from(rest, tail),
+            None => false,
+        },
+        Some((LabelPat::One, rest)) => match labels.split_first() {
+            Some((_, tail)) => walk_from(rest, tail),
+            None => false,
+        },
+        Some((LabelPat::Many, rest)) => {
+            (1..=labels.len()).any(|taken| walk_from(rest, &labels[taken..]))
+        }
+    }
+}
+
 /// Muster für den Pfad einer Regel.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

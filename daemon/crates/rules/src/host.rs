@@ -12,22 +12,8 @@
 use std::net::IpAddr;
 
 use humanitl_core::diagnostics::codes::{RULES_002, RULES_003};
-use humanitl_core::rule::HostPattern;
+use humanitl_core::rule::{HostPattern, glob_matches};
 use humanitl_core::{Diagnostic, HostName, Severity};
-
-/// Ein Label eines Glob-Musters.
-///
-/// Die Reihenfolge ist die des Musters, von links nach rechts:
-/// `**.github.com` wird zu `[Many, Literal("github"), Literal("com")]`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LabelPat {
-    /// Genau dieses Label, schon normalisiert (A-Label, klein).
-    Literal(String),
-    /// `*`: genau ein Label, gleich welches.
-    One,
-    /// `**`: ein oder mehr Labels.
-    Many,
-}
 
 /// Liest ein Host-Muster aus der Schreibweise von `rules.yaml`.
 ///
@@ -124,12 +110,7 @@ pub fn matches(pattern: &HostPattern, host: &HostName) -> bool {
             HostName::Ip(actual),
         ) => canonical(*expected) == canonical(*actual),
         (HostPattern::Exact(expected), _) => expected == host,
-        (HostPattern::Glob(glob), HostName::Dns(_)) => {
-            let Some(labels) = host.labels() else {
-                return false;
-            };
-            glob_matches(&split_pattern(glob), &labels)
-        }
+        (HostPattern::Glob(glob), HostName::Dns(_)) => glob_matches(glob, host),
         (HostPattern::Cidr { addr, prefix }, HostName::Ip(actual)) => {
             // Ein Netz wird zusammen mit seiner Präfixlänge umgerechnet, nie
             // die Adresse allein: `::ffff:192.168.0.0/112` bezeichnet
@@ -144,51 +125,6 @@ pub fn matches(pattern: &HostPattern, host: &HostName) -> bool {
         }
         // Ein Glob trifft nie eine Adresse, `ip:` und `cidr:` nie einen Namen.
         (HostPattern::Glob(_) | HostPattern::Ip(_) | HostPattern::Cidr { .. }, _) => false,
-    }
-}
-
-/// Zerlegt ein Glob-Muster in seine Labels.
-///
-/// Das Muster ist beim Bau durch [`HostPattern::glob`] normalisiert; hier wird
-/// nur noch getrennt.
-#[must_use]
-pub fn split_pattern(glob: &str) -> Vec<LabelPat> {
-    glob.split('.')
-        .map(|label| match label {
-            "*" => LabelPat::One,
-            "**" => LabelPat::Many,
-            literal => LabelPat::Literal(literal.to_owned()),
-        })
-        .collect()
-}
-
-/// Der Vergleich aus Schritt 2 und 3 der Matching-Tabelle.
-fn glob_matches(pattern: &[LabelPat], labels: &[&str]) -> bool {
-    if matches_from(pattern, labels) {
-        return true;
-    }
-    // Apex-Ausnahme: `**.example.com` trifft `example.com`. Sie gilt nur für
-    // ein führendes `**` und nur, wenn danach noch etwas steht — ein `**` in
-    // der Mitte verlangt weiterhin mindestens ein Label.
-    matches!(pattern.first(), Some(LabelPat::Many)) && pattern.len() > 1 && {
-        matches_from(&pattern[1..], labels)
-    }
-}
-
-fn matches_from(pattern: &[LabelPat], labels: &[&str]) -> bool {
-    match pattern.split_first() {
-        None => labels.is_empty(),
-        Some((LabelPat::Literal(expected), rest)) => match labels.split_first() {
-            Some((label, tail)) => label == expected && matches_from(rest, tail),
-            None => false,
-        },
-        Some((LabelPat::One, rest)) => match labels.split_first() {
-            Some((_, tail)) => matches_from(rest, tail),
-            None => false,
-        },
-        Some((LabelPat::Many, rest)) => {
-            (1..=labels.len()).any(|taken| matches_from(rest, &labels[taken..]))
-        }
     }
 }
 
