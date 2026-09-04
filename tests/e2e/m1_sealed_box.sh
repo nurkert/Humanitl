@@ -66,7 +66,10 @@ e2e_enter_namespace "$@"
 
 # --- Der Lauf ----------------------------------------------------------------
 
-E2E_OUT="$E2E_ROOT/target/e2e"
+# Ein Unterverzeichnis je Demo. Vorher lag M1 direkt in `target/e2e` und räumte
+# es beim Start leer; seit M2 daneben liegt, hätte das dessen Artefakte
+# mitgenommen, sobald jemand die Demos in der anderen Reihenfolge fährt.
+E2E_OUT="$E2E_ROOT/target/e2e/m1"
 rm -rf "$E2E_OUT"
 mkdir -p "$E2E_OUT"
 
@@ -75,10 +78,20 @@ e2e_short_workdir
 collect() {
     stop_daemon
     stop_fake_upstream
-    cp -f "$E2E_WORKDIR"/out/* "$E2E_OUT/" 2> /dev/null || true
-    cp -f "$E2E_WORKDIR"/daemon.log "$E2E_OUT/" 2> /dev/null || true
+    if [ -n "${E2E_WORKDIR:-}" ] && [ -d "$E2E_WORKDIR" ]; then
+        cp -f "$E2E_WORKDIR"/out/* "$E2E_OUT/" 2> /dev/null || true
+        cp -f "$E2E_WORKDIR"/daemon.log "$E2E_OUT/" 2> /dev/null || true
+        # Alles Lesenswerte liegt jetzt in `$E2E_OUT`; der Baum selbst darf
+        # weg, auch nach einem Abbruch. Vorher blieb er nach jedem Lauf unter
+        # /tmp stehen, samt CA und Aufzeichnung.
+        case "$E2E_WORKDIR" in
+        /tmp/hum-e2e-*) rm -rf "$E2E_WORKDIR" ;;
+        esac
+    fi
 }
-trap collect EXIT
+# Auch bei einem Abbruch: sonst bliebe der ganze Lauf stehen, und wer `Strg-C`
+# gedrückt hat, bekäme trotzdem einen grünen Bericht (`lib.sh`).
+e2e_trap collect
 
 start_fake_upstream
 start_daemon "$E2E_WORKDIR/state" "$E2E_WORKDIR" 10

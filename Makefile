@@ -87,7 +87,7 @@ proto: ## Regenerate protobuf code for Rust and Dart (HUM-003)
 escape: ## Run the sandbox escape tests (HUM-006)
 	./tests/escape/run.sh
 
-e2e: ## Run the end-to-end demo script of the current milestone
+e2e: ## Run the demo scripts of every milestone reached (E2E_ONLY=m1|m2 picks one)
 	./tests/e2e/run.sh
 
 clean: ## Remove build artefacts
