@@ -34,12 +34,11 @@ final Provider<HistoryExportTarget> historyExportTargetProvider =
     Provider<HistoryExportTarget>((Ref ref) => const FilePickerExportTarget());
 
 /// How an export turns entries into bytes.
-typedef HistoryExportEncoder =
-    Future<HistoryExportResult> Function({
-      required HistoryExportFormat format,
-      required List<HistoryExportEntry> entries,
-      required String creatorVersion,
-    });
+typedef HistoryExportEncoder = Future<HistoryExportResult> Function({
+  required HistoryExportFormat format,
+  required List<HistoryExportEntry> entries,
+  required String creatorVersion,
+});
 
 /// Encodes on another isolate.
 ///

@@ -67,9 +67,8 @@ class _HistoryExportModalState extends ConsumerState<HistoryExportModal> {
   /// The file name the save dialog offers: what it holds and when it was
   /// taken, so two exports of one session do not overwrite each other.
   String _fileName(HistoryExportFormat format) {
-    final String stamp = formatHistoryTimestamp(
-      DateTime.now(),
-    ).replaceAll(RegExp('[^0-9]'), '');
+    final String stamp = formatHistoryTimestamp(DateTime.now())
+        .replaceAll(RegExp('[^0-9]'), '');
     return 'humanitl-$stamp.${format.fileExtension}';
   }
 

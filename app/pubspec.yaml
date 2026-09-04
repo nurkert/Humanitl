@@ -4,12 +4,17 @@ publish_to: "none"
 version: 0.0.0
 
 environment:
-  sdk: ^3.12.0
-  flutter: ">=3.44.0"
+  sdk: ^3.13.0
+  flutter: ">=3.47.2"
 
-# Versions are exact where the package shapes generated code or the window:
-# `pubspec.lock` is gitignored, so the pubspec is the only pin that reaches CI.
-# Every pin below resolves with Flutter 3.44.0 / Dart 3.12.0 (HUM-019).
+# Versions are exact where the package shapes generated code or the window.
+# `pubspec.lock` dieser Anwendung ist versioniert: die Komponentenbibliothek
+# bringt dreizehn Pakete mit, die meisten mit Caret-Bereichen, und ohne Lock
+# loest die CI bei jedem Lauf neu auf — ein Release eines dieser Pakete aendert
+# dann den Bau ohne einen einzigen Commit. Die Lock-Datei von
+# `app/packages/ui` bleibt ignoriert: das ist eine Bibliothek, und fuer die
+# gilt der Lock des Aufrufers.
+# Every pin below resolves with Flutter 3.47.2 / Dart 3.13.2 (HUM-019).
 dependencies:
   flutter:
     sdk: flutter
@@ -25,14 +30,14 @@ dependencies:
   # `Int64` fuer uint64-Felder des Vertrags; Version folgt `protobuf`.
   fixnum: ^1.1.1
   # Zustand: Riverpod 3 mit Codegenerator (`dart run build_runner build`).
-  flutter_riverpod: 3.3.1
-  riverpod_annotation: 4.0.2
-  # Werttypen: freezed 3.x ist die letzte Linie fuer Dart 3.12; 4.x verlangt
-  # Dart 3.13. JSON nur fuer Diagnostics und DaemonInfo (Protokolle, HUM-058).
+  flutter_riverpod: 3.4.3
+  riverpod_annotation: 4.0.7
+  # Werttypen: freezed 4.x, seit Flutter 3.47.2 Dart 3.13 mitbringt. JSON nur
+  # fuer Diagnostics und DaemonInfo (Protokolle, HUM-058).
   freezed_annotation: 3.1.0
-  json_annotation: 4.11.0
-  # Von `flutter_localizations` in Flutter 3.44 exakt auf 0.20.2 festgelegt.
-  intl: 0.20.2
+  json_annotation: 4.12.0
+  # Von `flutter_localizations` in Flutter 3.47.2 auf `^0.20.3` gefordert.
+  intl: 0.20.3
   # Fenstertitel und Mindestgroesse (nur nach `ensureInitialized`).
   window_manager: 0.5.2
   # Speichern-Dialog des History-Exports (HUM-032). Exakt gepinnt: der Picker
@@ -56,10 +61,10 @@ dev_dependencies:
   integration_test:
     sdk: flutter
   flutter_lints: ^6.0.0
-  build_runner: 2.15.1
-  riverpod_generator: 4.0.3
-  freezed: 3.2.5
-  json_serializable: 6.13.0
+  build_runner: 2.16.1
+  riverpod_generator: 4.0.9
+  freezed: 4.0.1
+  json_serializable: 6.14.1
   alchemist: 0.14.0
   # Zeitraffer fuer die Skript-Tests des FakeDaemonClient; Version wie in
   # flutter_test.

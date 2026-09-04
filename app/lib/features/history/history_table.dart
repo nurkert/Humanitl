@@ -215,9 +215,10 @@ class HistoryTableState extends ConsumerState<HistoryTable> {
                                   controller: _vertical,
                                   itemExtent: extent,
                                   itemCount: page.rows.length,
-                                  itemBuilder:
-                                      (BuildContext context, int index) =>
-                                          _row(page.rows[index], width),
+                                  itemBuilder: (
+                                    BuildContext context,
+                                    int index,
+                                  ) => _row(page.rows[index], width),
                                 ),
                               ),
                             ),

@@ -113,23 +113,19 @@ void main() {
     expect(page.windowFull, isTrue);
   });
 
-  test(
-    'a total at the ceiling is a lower bound, not a count',
-    () async {
-      // Every twelfth flow is passthrough and the default query leaves it
-      // out, so the set has to be larger than the ceiling by more than that.
-      final FakeDaemonClient client = FakeDaemonClient.history(
-        count: fakeCountCeiling + 2000,
-      );
-      final ProviderContainer container = _container(client);
-      await settle(container);
-      final HistoryPageState page = container.read(historyPageProvider);
-      expect(page.total, fakeCountCeiling);
-      // Read from the wire, never inferred from the value.
-      expect(page.capped, isTrue);
-    },
-    timeout: const Timeout(Duration(minutes: 2)),
-  );
+  test('a total at the ceiling is a lower bound, not a count', () async {
+    // Every twelfth flow is passthrough and the default query leaves it
+    // out, so the set has to be larger than the ceiling by more than that.
+    final FakeDaemonClient client = FakeDaemonClient.history(
+      count: fakeCountCeiling + 2000,
+    );
+    final ProviderContainer container = _container(client);
+    await settle(container);
+    final HistoryPageState page = container.read(historyPageProvider);
+    expect(page.total, fakeCountCeiling);
+    // Read from the wire, never inferred from the value.
+    expect(page.capped, isTrue);
+  }, timeout: const Timeout(Duration(minutes: 2)));
 
   test(
     'a filter narrows the set and keeps the grammar of the daemon',
