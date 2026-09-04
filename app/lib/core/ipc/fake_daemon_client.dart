@@ -142,6 +142,17 @@ class FakeDaemonClient implements DaemonClient {
     return client;
   }
 
+  /// A fake that holds one request with a body of eight mebibytes: the
+  /// `big_body` scenario of HUM-030.
+  ///
+  /// The body is generated rather than read from
+  /// `fixtures/sessions/big_body.jsonl`: eight mebibytes of JSON cost every
+  /// checkout more than they explain, and the content is generated anyway.
+  /// One finding sits in it, so that the chips and the jump to a finding have
+  /// something to do.
+  factory FakeDaemonClient.bigBody({DateTime Function()? clock}) =>
+      FakeDaemonClient(script: bigBodyScript(), clock: clock);
+
   /// The fake for a `HUMANITL_FAKE=<name>` scenario. Unknown names replay
   /// the default script, so a typo still shows a working shell.
   factory FakeDaemonClient.scenario(String name) {
@@ -159,6 +170,7 @@ class FakeDaemonClient implements DaemonClient {
       'mismatch' || 'incompatible' => FakeDaemonClient.incompatible(),
       'empty' => FakeDaemonClient.empty(),
       'rules:broken' || 'broken-rules' => FakeDaemonClient.brokenRules(),
+      'big_body' || 'big-body' => FakeDaemonClient.bigBody(),
       _ => FakeDaemonClient(),
     };
   }
@@ -1161,6 +1173,60 @@ class FakeDaemonClient implements DaemonClient {
         ..add(flow.held(at + const Duration(milliseconds: 10), budget));
     }
     return events;
+  }
+
+  /// One held request whose body is eight mebibytes of JSON.
+  ///
+  /// The point of the scenario is what the surface does with it: the queue has
+  /// to stay scrollable while the body is taken apart, and the tree has to
+  /// appear (HUM-030 acceptance criteria). The address in the last record is
+  /// reported as a finding, so the chips and the jump have a target.
+  static List<ScriptedEvent> bigBodyScript() {
+    final String body = bigBodyJson();
+    final int mail = body.lastIndexOf('big.body@example.org');
+    final _ScriptedFlow flow = _ScriptedFlow(
+      id: const FlowId('018f0004-0000-7000-8000-000000000001'),
+      method: Method.post,
+      host: 'api.example.org',
+      path: '/v1/import',
+      originTool: 'opencode',
+      headers: const <Header>[Header(name: 'content-type', value: <int>[])],
+      body: body,
+    );
+    return <ScriptedEvent>[
+      flow.received(const Duration(milliseconds: 50)),
+      flow.analyzed(const Duration(milliseconds: 80), <Finding>[
+        Finding(
+          kind: 'email',
+          location: FindingLocation.body,
+          spanStart: mail,
+          spanEnd: mail + 'big.body@example.org'.length,
+          tier: FindingTier.regex,
+          displayPrefix: 'big.body@',
+        ),
+      ]),
+      flow.held(
+        const Duration(milliseconds: 100),
+        const Duration(seconds: 300),
+      ),
+    ];
+  }
+
+  /// Eight mebibytes of JSON, deterministic, with one address in the last
+  /// record.
+  static String bigBodyJson() {
+    const int limit = 8 * 1024 * 1024;
+    final StringBuffer buffer = StringBuffer('{"records":[');
+    int i = 0;
+    while (buffer.length < limit - 256) {
+      if (i > 0) {
+        buffer.write(',');
+      }
+      buffer.write('{"id":$i,"name":"record $i","tags":["a","b"],"ok":true}');
+      i++;
+    }
+    buffer.write(',{"id":$i,"mail":"big.body@example.org"}]}');
+    return buffer.toString();
   }
 
   /// The default script: a cousin of `fixtures/sessions/mixed.jsonl`.

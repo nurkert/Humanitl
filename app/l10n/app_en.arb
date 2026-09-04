@@ -1232,6 +1232,55 @@
     "description": "The daemon refused to write the rule. Its own sentence is shown, because a rule that silently fails to appear leaves the human believing it exists.",
     "placeholders": {"why": {"type": "String"}}
   },
+  "interceptBodyPaneTree": "Tree",
+  "@interceptBodyPaneTree": {"description": "Segment of the body switcher: the JSON tree. The default for a JSON body."},
+  "interceptBodyPaneForm": "Form",
+  "@interceptBodyPaneForm": {"description": "Segment of the body switcher: the decoded table of a form body."},
+  "interceptBodyPaneRaw": "Raw",
+  "@interceptBodyPaneRaw": {"description": "Segment of the body switcher: the text as it arrived, with line numbers and no wrapping."},
+  "interceptBodyPaneHex": "Hex",
+  "@interceptBodyPaneHex": {"description": "Segment of the body switcher: the bytes. The one view that always shows something."},
+  "interceptBodyUnreadable": "The body could not be read.",
+  "@interceptBodyUnreadable": {"description": "The body did not arrive or could not be taken apart. Deliberately not the sentence for an empty body: \"empty\" and \"unreadable\" are two different statements, and the second one must never look like the first."},
+  "interceptBodyIncomplete": "Less arrived than the request announced; what is shown stops early.",
+  "@interceptBodyIncomplete": {"description": "The stream ended before the announced size, or unpacking stopped. Said out loud, because a body that silently stops looks like a body that ends there."},
+  "interceptBodyTypeDisputed": "The content type says text, the bytes are not text. The bytes are shown.",
+  "@interceptBodyTypeDisputed": {"description": "The Content-Type header claims a text type while the body is binary. The header is a claim of the sender; the bytes are the evidence, and the human decides on the evidence."},
+  "interceptBodyNotJson": "Announced as JSON, but it does not parse. The raw text is shown.",
+  "@interceptBodyNotJson": {"description": "The body claims to be JSON and is not. Without this sentence an empty tree would look like an empty body."},
+  "interceptBodyNotForm": "Announced as a form, but no field could be read. The raw text is shown.",
+  "@interceptBodyNotForm": {"description": "The body claims to be a form and carries no readable pair."},
+  "interceptBodyTooLarge": "Larger than 8 MiB, so this view takes nothing apart. {count, plural, =0{No finding was reported for it.} =1{1 finding was reported for it.} other{{count} findings were reported for it.}} The first 64 KB are shown.",
+  "@interceptBodyTooLarge": {
+    "description": "A body above the cap. The sentence says only what is known here: how many findings the daemon reported, and that the display stops at 64 KB. How much of the body the daemon itself read is not something this side can claim (CONVENTIONS 4.13).",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "interceptBodyDuplicateKeys": "This object carries a key twice; the tree shows the last one.",
+  "@interceptBodyDuplicateKeys": {"description": "JSON allows repeated keys and the parser keeps the last. A body that repeats a key and counts on the human seeing the other one is exactly what this sentence is for."},
+  "interceptBodyTreeCapped": "The tree stops here; the body nests deeper or carries more entries than it shows.",
+  "@interceptBodyTreeCapped": {"description": "The node or depth limit of the tree was reached. Said out loud, because a tree that quietly ends looks like a body that ends."},
+  "interceptBodyRowsCapped": "The text stops here; the body has more lines than are shown.",
+  "@interceptBodyRowsCapped": {"description": "The line limit of the raw view was reached."},
+  "interceptBodyHexTruncated": "The first 64 KB of the bytes.",
+  "@interceptBodyHexTruncated": {"description": "The hex view shows a prefix; the rest is not drawn."},
+  "interceptBodyFindingsElsewhere": "{count, plural, =1{1 finding does not sit anywhere in this view.} other{{count} findings do not sit anywhere in this view.}}",
+  "@interceptBodyFindingsElsewhere": {
+    "description": "A finding that a view cannot place is named rather than dropped. The sentence promises no other view: where the lines stop at their cap, the raw text cannot show it either, and a pointer to a place that is also empty would be worse than none.",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "interceptBodyFindingHover": "{name} · {tier}",
+  "@interceptBodyFindingHover": {
+    "description": "Read-out above the body while the pointer rests on a finding: what it is and how sure the detector is. A line in reserved space, not a popover, so nothing moves under the reading eye.",
+    "placeholders": {"name": {"type": "String"}, "tier": {"type": "String"}}
+  },
+  "interceptBodyTierChecksum": "checksum",
+  "@interceptBodyTierChecksum": {"description": "How sure the detector is: the value passed a checksum, so this is a secret."},
+  "interceptBodyTierRegex": "pattern",
+  "@interceptBodyTierRegex": {"description": "How sure the detector is: a pattern matched."},
+  "interceptBodyTierUserTerm": "your term",
+  "@interceptBodyTierUserTerm": {"description": "How sure the detector is: a term the person listed themselves."},
+  "interceptSectionBodyPending": "Body",
+  "@interceptSectionBodyPending": {"description": "Title of the body section while the detail is still on its way. Size and type are missing, so neither is claimed."},
   "sandboxStateStopped": "Stopped",
   "@sandboxStateStopped": {"description": "Header state: no sandbox runs. The screen then shows what a start would mount, not what is mounted."},
   "sandboxStateStarting": "Starting",
@@ -1419,5 +1468,17 @@
     "placeholders": {"why": {"type": "String"}}
   },
   "sandboxRetry": "Ask again",
-  "@sandboxRetry": {"description": "Repeats the Sandbox call after a failure."}
+  "@sandboxRetry": {"description": "Repeats the Sandbox call after a failure."},
+  "interceptBodyStreamTruncated": "The compressed body does not end where its own trailer says it does; what is shown stops early, and the daemon may have searched something else.",
+  "@interceptBodyStreamTruncated": {"description": "A gzip or deflate stream whose checksum or length trailer does not match what was unpacked: cut short, or carrying more than one member. Said out loud because the decoder reports success with partial output, and a small clean-looking body would otherwise pass for the whole request."},
+  "interceptBodyEncodingUndecoded": "The request declares {encoding}, which this view cannot unpack. The bytes are shown as they arrived, and no finding is placed in them.",
+  "@interceptBodyEncodingUndecoded": {
+    "description": "The daemon searches the unpacked body and reports its findings on unpacked offsets. Where this view cannot reach the same bytes, it draws no marker at all rather than one in the wrong place.",
+    "placeholders": {"encoding": {"type": "String"}}
+  },
+  "interceptBodyFindingsNotPlaced": "{count, plural, =1{1 finding was reported, but this view cannot say where it sits.} other{{count} findings were reported, but this view cannot say where they sit.}}",
+  "@interceptBodyFindingsNotPlaced": {
+    "description": "Shown when the bytes on screen are not the bytes the daemon searched. The findings keep their names and lose their places; a marker in the wrong byte space points at a value that was never there.",
+    "placeholders": {"count": {"type": "int"}}
+  }
 }
