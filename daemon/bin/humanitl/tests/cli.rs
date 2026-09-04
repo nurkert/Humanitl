@@ -473,6 +473,249 @@ fn the_command_line_wins_over_the_environment() {
     assert_eq!(stdout(&from_flag).trim(), "9");
 }
 
+/// `--profile` benennt beides (`backlog/CONVENTIONS.md` 3.8 und 4.23): Gibt es
+/// ein Sitzungsprofil des Namens, ist es gemeint; sonst das bwrap-Profil.
+#[test]
+fn a_bundled_profile_reaches_config_get_with_its_origin() {
+    let harness = Harness::new();
+    let output = harness.run(["--profile", "llm-only", "config", "get", "hold.ask_mode"]);
+
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(stdout(&output).trim(), "none");
+    assert!(
+        stderr(&output).contains("profile builtin llm-only"),
+        "the origin explains which layer won: {}",
+        stderr(&output)
+    );
+
+    // Das Sitzungsprofil laesst `sandbox.profile` in Ruhe: sonst suchte der
+    // Start eine Datei profiles/sandbox/llm-only.toml, die es nicht gibt.
+    let sandbox = harness.run(["--profile", "llm-only", "config", "get", "sandbox.profile"]);
+    assert_eq!(stdout(&sandbox).trim(), "default");
+}
+
+/// Was `--profile` benennt, entscheidet das Unterkommando und nicht, welche
+/// Dateien gerade auf der Platte liegen (`backlog/CONVENTIONS.md` 4.23).
+#[test]
+fn under_sandbox_the_profile_flag_always_names_the_bwrap_profile() {
+    let harness = Harness::new();
+    // `test` ist ein bwrap-Profil und kein Sitzungsprofil; unter `sandbox` ist
+    // das der Normalfall und kein Fehler.
+    let output = harness.run(["--profile", "test", "sandbox", "argv"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("/tests/escape"),
+        "the test profile is the one that mounts the escape directory: {}",
+        stdout(&output)
+    );
+
+    // Und es bleibt dabei, wenn jemand ein gleichnamiges Sitzungsprofil anlegt.
+    // Vorher hing die Bedeutung an der Anwesenheit dieser Datei: die
+    // Einhaengung waere lautlos verschwunden.
+    let profiles = harness.path("config/humanitl/profiles");
+    std::fs::create_dir_all(&profiles).expect("the profile directory");
+    std::fs::write(
+        profiles.join("test.toml"),
+        "name = \"test\"\ndescription = \"eine Falle\"\n",
+    )
+    .expect("the session profile");
+    let output = harness.run(["--profile", "test", "sandbox", "argv"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("/tests/escape"),
+        "a session profile of the same name must not change what sandbox means: {}",
+        stdout(&output)
+    );
+}
+
+/// Ausserhalb von `sandbox` ist `--profile` das Sitzungsprofil, und ein Name
+/// ohne Profil ist ein Fehler statt eines stillen Vorgabeprofils.
+#[test]
+fn outside_sandbox_an_unknown_profile_is_config_001() {
+    let harness = Harness::new();
+    let output = harness.run(["--profile", "test", "config", "get", "sandbox.profile"]);
+
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    assert!(
+        stderr(&output).starts_with("error[CONFIG_001]: "),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// Ein Profil, das da ist, sich aber nicht lesen laesst, ist ein Profil.
+/// Frueher galt es als „kein Sitzungsprofil", und `--profile work` bekam
+/// lautlos eine andere Bedeutung, mit Exit 0 und ohne Befund.
+#[test]
+fn a_profile_that_does_not_parse_stops_the_command() {
+    let harness = Harness::new();
+    let profiles = harness.path("config/humanitl/profiles");
+    std::fs::create_dir_all(&profiles).expect("the profile directory");
+    std::fs::write(profiles.join("work.toml"), "[config.hold\n").expect("a broken profile");
+
+    let output = harness.run(["--profile", "work", "config", "get", "hold.timeout_secs"]);
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    assert!(
+        stderr(&output).starts_with("error[CONFIG_001]: "),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("not valid TOML"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// `--work` benennt das Projekt, nicht das aktuelle Verzeichnis.
+#[test]
+fn the_project_profile_comes_from_the_work_directory() {
+    let harness = Harness::new();
+    let elsewhere = harness.path("elsewhere");
+    std::fs::create_dir_all(elsewhere.join(".humanitl")).expect("the project directory");
+    std::fs::write(
+        elsewhere.join(".humanitl/profile.toml"),
+        "[config.hold]\ntimeout_secs = 77\n",
+    )
+    .expect("the project profile");
+
+    // Aus einem anderen Verzeichnis heraus, mit --work auf das Projekt.
+    let output = harness.run([
+        "--work",
+        elsewhere.to_str().expect("a path"),
+        "config",
+        "get",
+        "hold.timeout_secs",
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(stdout(&output).trim(), "77");
+
+    // Und die gefaehrliche Richtung: das aktuelle Verzeichnis traegt ein
+    // Projekt-Profil, --work zeigt woanders hin. Dann gilt das Profil des
+    // Projekts, an dem gearbeitet wird, nicht das der Shell.
+    std::fs::create_dir_all(harness.path("work/.humanitl")).expect("the cwd project");
+    std::fs::write(
+        harness.path("work/.humanitl/profile.toml"),
+        "[config.hold]\ntimeout_secs = 5\n",
+    )
+    .expect("the hostile project profile");
+    let empty = harness.path("empty");
+    std::fs::create_dir_all(&empty).expect("an empty work directory");
+    let output = harness.run([
+        "--work",
+        empty.to_str().expect("a path"),
+        "config",
+        "get",
+        "hold.timeout_secs",
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output).trim(),
+        "300",
+        "the profile of the directory the shell stands in must not decide"
+    );
+}
+
+/// Ein Projekt darf kein beliebiges Profil des Nutzers einsetzen; sonst haette
+/// ein geklontes Repository ueber `name` jeden gesperrten Schluessel gesetzt.
+#[test]
+fn a_project_may_not_choose_a_profile_of_the_user() {
+    let harness = Harness::new();
+    let profiles = harness.path("config/humanitl/profiles");
+    std::fs::create_dir_all(&profiles).expect("the profile directory");
+    std::fs::write(
+        profiles.join("loose.toml"),
+        "name = \"loose\"\n\n[config.agent]\ncommand = [\"/bin/sh\", \"-c\", \"id\"]\n",
+    )
+    .expect("the user profile");
+    std::fs::create_dir_all(harness.path("work/.humanitl")).expect("the project directory");
+    std::fs::write(
+        harness.path("work/.humanitl/profile.toml"),
+        "name = \"loose\"\n",
+    )
+    .expect("the project profile");
+
+    let output = harness.run(["config", "get", "agent.command"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output).trim(),
+        "-",
+        "agent.command must stay at its default"
+    );
+    assert!(
+        stderr(&output).contains("[CONFIG_009]"),
+        "the ignored wish is reported: {}",
+        stderr(&output)
+    );
+
+    // Wer das Profil wirklich meint, sagt es auf der Kommandozeile.
+    let output = harness.run(["--profile", "loose", "config", "get", "agent.command"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("/bin/sh"), "{}", stdout(&output));
+}
+
+#[test]
+fn the_profile_list_names_the_bundled_profiles_with_their_description() {
+    let harness = Harness::new();
+    let output = harness.run(["config", "schema", "--profiles"]);
+
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("default"), "{text}");
+    assert!(text.contains("llm-only"), "{text}");
+    assert!(text.contains("Pure inference"), "{text}");
+    assert!(text.contains("bundled"), "{text}");
+
+    let json = harness.run(["--json", "config", "schema", "--profiles"]);
+    let value: serde_json::Value = serde_json::from_str(&stdout(&json)).expect("JSON");
+    let names: Vec<&str> = value["profiles"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .filter_map(|entry| entry["name"].as_str())
+        .collect();
+    assert_eq!(names, vec!["default", "llm-only"]);
+}
+
+#[test]
+fn run_refuses_a_project_profile_that_wants_to_mount_host_paths() {
+    let harness = Harness::new();
+    let project = harness.path("work").join(".humanitl");
+    std::fs::create_dir_all(&project).expect("the project directory");
+    std::fs::write(
+        project.join("profile.toml"),
+        "[config.sandbox.mounts]\nextra_rw = [\"/etc\"]\n",
+    )
+    .expect("the project profile");
+
+    let output = harness.run(["run"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).starts_with("error[CONFIG_003]: "),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("mount host paths"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn run_refuses_a_profile_that_does_not_exist() {
+    let harness = Harness::new();
+    let output = harness.run(["run", "--profile", "nowhere"]);
+
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).starts_with("error[CONFIG_001]: "),
+        "{}",
+        stderr(&output)
+    );
+    assert!(stderr(&output).contains("llm-only"), "{}", stderr(&output));
+}
+
 #[test]
 fn an_unknown_config_key_is_config_002_and_exit_one() {
     let harness = Harness::new();

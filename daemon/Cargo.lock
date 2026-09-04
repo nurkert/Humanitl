@@ -782,7 +782,9 @@ dependencies = [
 name = "humanitl-config"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "humanitl-core",
+ "humanitl-rules",
  "schemars",
  "serde",
  "serde_json",

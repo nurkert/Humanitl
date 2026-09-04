@@ -1,10 +1,12 @@
-# Ein globales Profil. In Sprint 0 zaehlt nur der [config]-Block.
+# Ein globales Profil. Konfigurationswerte stehen unter [config.<gruppe>].
 [config.hold]
 timeout_secs = 120
 
 [config.ui]
 language = "de"
 
-# HUM-066 fuellt diesen Block; Sprint 0 uebergeht ihn.
+# Der Regelblock eines Profils (HUM-066): Dateien relativ zur Profildatei,
+# eigene Regeln im Schema von rules.yaml.
 [rules]
-inherit = "default"
+files = []
+inline = []

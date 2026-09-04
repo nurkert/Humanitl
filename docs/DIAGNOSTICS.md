@@ -14,7 +14,7 @@ Entfernen eines Codes.
 |---|---|---|---|---|
 | daemon | `DAEMON` | 001 | 019 | Start, Erreichbarkeit, Version des Daemons |
 | ipc | `IPC` | 001 | 009 | gRPC-Schnittstelle, Token, Aufrufe gegen den Zustand |
-| config | `CONFIG` | 001 | 009 | Konfigurationsdatei, Schlüssel, Wertebereiche |
+| config | `CONFIG` | 001 | 019 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066) |
 | sandbox | `SANDBOX` | 001 | 029 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler |
 | proxy | `PROXY` | 001 | 009 | Anfragen, Caps, Protokoll |
 | tls | `TLS` | 001 | 009 | CA, Zertifikate, Handschlag |
@@ -102,6 +102,18 @@ Veralteter Schlüssel
 #### CONFIG_006
 
 Alter und neuer Schlüssel gesetzt
+
+#### CONFIG_007
+
+Projekt-Profil gehört einem anderen Konto
+
+#### CONFIG_008
+
+Eigenes Profil verdeckt ein mitgeliefertes
+
+#### CONFIG_009
+
+Profilwunsch des Projekts gilt nicht
 
 ### Bereich sandbox
 

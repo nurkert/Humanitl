@@ -81,17 +81,33 @@ fn render_preamble(out: &mut String) {
     out.push_str("| Ebene | Quelle |\n|---|---|\n");
     out.push_str("| 1 | eingebaute Vorgabewerte |\n");
     out.push_str("| 2 | `$XDG_CONFIG_HOME/humanitl/config.toml` |\n");
-    out.push_str("| 3 | `$XDG_CONFIG_HOME/humanitl/profiles/<name>.toml`, Block `[config]` |\n");
     out.push_str(
-        "| 4 | `<projekt>/.humanitl/profile.toml`, Block `[config]`; nur Felder mit Projekt \
+        "| 3 | Profil `default`: `$XDG_CONFIG_HOME/humanitl/profiles/default.toml`, sonst die \
+         eingebettete Fassung |\n",
+    );
+    out.push_str(
+        "| 4 | das gewählte Profil, falls es nicht `default` ist; Datei, sonst eingebettet |\n",
+    );
+    out.push_str(
+        "| 5 | `<projekt>/.humanitl/profile.toml`, Block `[config]`; nur Felder mit Projekt \
          `allowed` |\n",
     );
-    out.push_str("| 5 | Umgebungsvariablen `HUMANITL_*` |\n");
-    out.push_str("| 6 | Argumente der Kommandozeile |\n\n");
+    out.push_str("| 6 | Umgebungsvariablen `HUMANITL_*` |\n");
+    out.push_str("| 7 | Argumente der Kommandozeile |\n\n");
     out.push_str(
-        "Ein Profil hat neben `[config]` nur `name`, `description`, `[rules]` und `[agent]`\n\
-         (HUM-066). Jeder andere Block auf der obersten Ebene ist `CONFIG_002`; eine Gruppe wie\n\
-         `[hold]` gehört im Profil unter `[config.hold]`.\n\n",
+        "Ein Profil hat neben `[config]` nur `name`, `description` und `[rules]` (HUM-066,\n\
+         `docs/profiles.md`). Jeder andere Block auf der obersten Ebene ist `CONFIG_002`; eine\n\
+         Gruppe wie `[hold]` gehört im Profil unter `[config.hold]`. Das mitgelieferte Profil\n\
+         `default` setzt mit Absicht keinen Wert: es liegt über `config.toml` und machte sie\n\
+         sonst für jeden Schlüssel wirkungslos, den es nennt.\n\n",
+    );
+    out.push_str(
+        "`<projekt>` ist `sandbox.work_dir`, sonst das aktuelle Verzeichnis — nicht umgekehrt:\n\
+         Wer mit `--work` aus einem fremden Verzeichnis heraus arbeitet, bekommt das Profil des\n\
+         Projekts, an dem er arbeitet. Der Schlüssel ist auf der Projekt-Ebene gesperrt, deshalb\n\
+         kann das Projekt-Profil nicht bestimmen, wo nach ihm gesucht wird. Sein `name` wählt nur\n\
+         unter den mitgelieferten Profilen; jeder andere Wunsch wird übergangen und mit\n\
+         `CONFIG_009` gemeldet (`docs/profiles.md`).\n\n",
     );
     out.push_str(
         "Eine Umgebungsvariable heißt wie ihr Pfad in Großbuchstaben, mit `__` zwischen den\n\

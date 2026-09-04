@@ -16,11 +16,12 @@ pub mod config;
 pub mod daemon;
 pub mod flows;
 pub mod rules;
+pub mod run;
 pub mod sandbox;
 
 use std::path::{Path, PathBuf};
 
-use humanitl_config::{Env, Paths, Resolved, Sources};
+use humanitl_config::{Env, Paths, ProfileSelection, Resolved};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_ipc::client::Client;
@@ -107,8 +108,28 @@ pub struct Context {
     pub cli_config: Vec<(String, String)>,
     /// Eine ausdrücklich genannte `config.toml` (`--config`).
     pub config_file: Option<PathBuf>,
+    /// Der Name aus `--profile`, falls einer dasteht.
+    pub profile: Option<String>,
+    /// Was `--profile` in diesem Aufruf benennt.
+    pub profile_means: ProfileMeaning,
     /// Wie ausgegeben wird.
     pub render: Renderer,
+}
+
+/// Was `--profile` benennt.
+///
+/// `backlog/CONVENTIONS.md` 3.8 führt `--profile NAME` für `humanitl run`
+/// (Sitzungsprofil aus HUM-066) und für `humanitl sandbox run|argv`
+/// (bwrap-Profil unter `profiles/sandbox/`). Welches gemeint ist, entscheidet
+/// das Unterkommando und sonst nichts — insbesondere nicht, welche Dateien
+/// gerade auf der Platte liegen: Eine Bedeutung, die davon abhinge, kippte
+/// lautlos, sobald jemand ein gleichnamiges Profil anlegt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileMeaning {
+    /// Das Profil der Sitzung (HUM-066). Der Regelfall.
+    Session,
+    /// Das bwrap-Profil unter `profiles/sandbox/`. Nur unter `humanitl sandbox`.
+    Sandbox,
 }
 
 impl Context {
@@ -117,6 +138,8 @@ impl Context {
     pub fn new(
         cli_config: Vec<(String, String)>,
         config_file: Option<PathBuf>,
+        profile: Option<String>,
+        profile_means: ProfileMeaning,
         render: Renderer,
     ) -> Self {
         let env = Env::from_process();
@@ -128,43 +151,71 @@ impl Context {
             cwd,
             cli_config,
             config_file,
+            profile,
+            profile_means,
             render,
         }
     }
 
-    /// Der Name des Sandbox-Profils, wie ihn die Kommandozeile genannt hat.
-    ///
-    /// `--profile` ist der Zweitname von `--sandbox-profile`; der Wert wird
-    /// hier auch als Name des Konfigurations-Profils benutzt, damit
-    /// `--profile test` beide Dateien meint: `profiles/sandbox/test.toml` und
-    /// `$XDG_CONFIG_HOME/humanitl/profiles/test.toml`, soweit es sie gibt.
+    /// Der Name aus `--profile`, falls einer dasteht.
     #[must_use]
     pub fn profile_flag(&self) -> Option<&str> {
-        self.cli_config
-            .iter()
-            .find(|(key, _)| key == "sandbox.profile")
-            .map(|(_, value)| value.as_str())
+        self.profile.as_deref()
     }
 
-    /// Die Quellen der Konfiguration, in der Reihenfolge der Präzedenz.
+    /// Die Profilauswahl der Kommandozeile.
+    ///
+    /// Leer unter `humanitl sandbox`: Dort benennt `--profile` das bwrap-Profil.
     #[must_use]
-    pub fn sources(&self) -> Sources {
-        let mut sources = humanitl_config::discover_with(&self.env, &self.cwd, self.profile_flag());
-        if let Some(file) = self.config_file.as_ref() {
-            sources.global_toml = Some(file.clone());
+    pub fn selection(&self) -> ProfileSelection {
+        ProfileSelection {
+            name: match self.profile_means {
+                ProfileMeaning::Session => self.profile.clone(),
+                ProfileMeaning::Sandbox => None,
+            },
         }
-        sources.cli.clone_from(&self.cli_config);
-        sources
+    }
+
+    /// Die Konfigurations-Flags, unter `humanitl sandbox` um `sandbox.profile`
+    /// ergänzt.
+    #[must_use]
+    pub fn cli_pairs(&self) -> Vec<(String, String)> {
+        let mut pairs = self.cli_config.clone();
+        if let (ProfileMeaning::Sandbox, Some(name)) = (self.profile_means, self.profile_flag())
+            && !pairs.iter().any(|(key, _)| key == "sandbox.profile")
+        {
+            pairs.push(("sandbox.profile".to_owned(), name.to_owned()));
+        }
+        pairs
     }
 
     /// Lädt die Konfiguration und meldet, was das Laden überlebt hat.
     ///
+    /// Streng: Ein `--profile`, das ein Sitzungsprofil benennt, muss eines
+    /// benennen, das es gibt. Ein Tippfehler ist `CONFIG_001` und kein stiller
+    /// Start mit dem Vorgabeprofil; ein Profil, das da ist, sich aber nicht
+    /// lesen lässt, ebenso.
+    ///
     /// # Errors
     ///
-    /// `CONFIG_001`, `CONFIG_002` oder `CONFIG_003`, wenn eine Datei oder ein
-    /// Flag nicht stimmt.
+    /// `CONFIG_001`, `CONFIG_002` oder `CONFIG_003`, wenn eine Datei, ein
+    /// Profil oder ein Flag nicht stimmt.
     pub fn config(&self) -> Result<Resolved, Failure> {
-        let resolved = humanitl_config::load(&self.sources()).map_err(Failure::new)?;
+        let mut sources = humanitl_config::sources_for(
+            &self.selection(),
+            Some(&self.cwd),
+            &self.env,
+            &self.cli_pairs(),
+        )
+        .map_err(Failure::new)?;
+        if let Some(file) = self.config_file.as_ref() {
+            sources.global_toml = Some(file.clone());
+        }
+        Ok(self.report(humanitl_config::load(&sources).map_err(Failure::new)?))
+    }
+
+    /// Schreibt die Befunde einer Auflösung und gibt sie weiter.
+    fn report(&self, resolved: Resolved) -> Resolved {
         for diagnostic in &resolved.diagnostics {
             self.render
                 .note(&crate::render::diagnostic_block(diagnostic));
@@ -173,7 +224,7 @@ impl Context {
             self.render
                 .detail(&crate::render::diagnostic_block(&diagnostic));
         }
-        Ok(resolved)
+        resolved
     }
 
     /// Verbindet sich mit dem Daemon.

@@ -18,4 +18,10 @@ toml.workspace = true
 url = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
+# Nur für den Test `llm_only_blocks_everything_but_passthrough`: er baut den
+# Regelsatz des Profils `llm-only` und wertet ihn aus. Eine Test-Abhängigkeit
+# zeigt nicht nach außen (`tools/check_deps.py` überspringt `kind = "dev"`);
+# im Bibliothekscode bleibt `humanitl-config` bei `humanitl-core`.
+humanitl-rules.workspace = true
+chrono.workspace = true
 tempfile.workspace = true
