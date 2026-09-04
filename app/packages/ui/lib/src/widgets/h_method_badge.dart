@@ -12,10 +12,23 @@ import 'h_badge.dart';
 /// [HMethodColors]; this widget only reads it.
 class HMethodBadge extends StatelessWidget {
   /// Creates a badge for [method].
-  const HMethodBadge({required this.method, this.semanticsLabel, super.key});
+  const HMethodBadge({
+    required this.method,
+    this.neutral = false,
+    this.semanticsLabel,
+    super.key,
+  });
 
   /// The HTTP method, in any case; it is displayed uppercase.
   final String method;
+
+  /// Die neutrale Variante für Listen: `fg1` auf `bg2`, kein Ton.
+  ///
+  /// Die Methoden-Hues borgen sich Zustandsfarben. In einer Liste steht ein
+  /// rötliches `DELETE` neben einer roten Rail, und das Auge liest zwei
+  /// Blöcke statt eines Verbs und eines Zustands. Ton bekommt nur das eine
+  /// Badge im Kartenkopf (`docs/UX.md` 3.3, Regel 4, und 9, Punkt 13).
+  final bool neutral;
 
   /// Screen-reader label; the uppercase method when null.
   final String? semanticsLabel;
@@ -28,9 +41,21 @@ class HMethodBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     final String upper = method.toUpperCase();
+    if (neutral) {
+      return HBadge(
+        text: upper,
+        color: tokens.colors.fg1,
+        background: tokens.colors.bg2,
+        mono: true,
+        semanticsLabel: semanticsLabel ?? upper,
+      );
+    }
     return HBadge(
       text: upper,
       color: colorFor(method, tokens),
+      // Die Fläche trägt den Ton, das Kürzel die Textvariante desselben Tons:
+      // auf der eigenen Tönung misst `DELETE` sonst 2,65:1 (`docs/UX.md` 6).
+      textColor: tokens.methodTextColor(method),
       mono: true,
       semanticsLabel: semanticsLabel ?? upper,
     );

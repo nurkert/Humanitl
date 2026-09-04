@@ -81,6 +81,22 @@ abstract final class HMotion {
   /// löschbar.
   static const Duration undoWindow = Duration(seconds: 10);
 
+  /// Wie lange der Zeiger auf einem Ziel ruhen muss, bis sein Name erscheint.
+  ///
+  /// Dieselbe Frist wie [rearm], aus demselben Grund: eine Sakkade plus eine
+  /// Fixation dauert rund 300 ms, und darunter erscheint der Name unter einem
+  /// Zeiger, der nur vorbeifährt. Ein eigenes Token, weil die beiden Fristen
+  /// verschiedene Fragen beantworten und getrennt wandern dürfen
+  /// (`docs/UX.md` 2.1 und 5.1).
+  static const Duration hoverLabel = Duration(milliseconds: 350);
+
+  /// Wie lange ein Control bestätigt, dass es etwas in die Zwischenablage
+  /// gelegt hat.
+  ///
+  /// Lang genug, um gelesen zu werden, kurz genug, dass die Beschriftung
+  /// wieder sagt, was der nächste Druck tut.
+  static const Duration copyFeedback = Duration(seconds: 2);
+
   /// Wie lange die Queue nach der letzten Tastaturnavigation eingefroren
   /// bleibt.
   static const Duration freezeAfterKey = Duration(seconds: 2);
@@ -185,8 +201,9 @@ abstract final class HReducedMotion {
 ///
 /// Nur die geführten Bewegungen stehen hier. Die Zeitfenster einer Regel —
 /// [HMotion.confirm], [HMotion.undoWindow], [HMotion.freezeAfterKey],
-/// [HMotion.freezeAfterPointer], [HMotion.clockTick] — sind Politik, keine
-/// Animation, und bleiben statisch.
+/// [HMotion.freezeAfterPointer], [HMotion.clockTick], [HMotion.hoverLabel],
+/// [HMotion.copyFeedback] — sind Politik, keine Animation, und bleiben
+/// statisch.
 @immutable
 class HMotionTokens {
   /// Creates a motion set. Use [standard].

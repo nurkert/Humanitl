@@ -111,25 +111,10 @@ class NoteIntent extends Intent {
   const NoteIntent();
 }
 
-/// The bindings of the Intercept section (CONVENTIONS 3.9).
-Map<ShortcutActivator, Intent> interceptShortcuts() =>
-    <ShortcutActivator, Intent>{
-      const SingleActivator(LogicalKeyboardKey.enter): const AllowIntent(),
-      const SingleActivator(LogicalKeyboardKey.numpadEnter):
-          const AllowIntent(),
-      const SingleActivator(LogicalKeyboardKey.keyA): const AllowIntent(),
-      const SingleActivator(LogicalKeyboardKey.keyF, control: true):
-          const AllowIntent(chord: true),
-      const SingleActivator(LogicalKeyboardKey.keyB): const BlockIntent(),
-      const SingleActivator(LogicalKeyboardKey.keyL, control: true):
-          const BlockIntent(chord: true),
-      const SingleActivator(LogicalKeyboardKey.keyJ): const NextFlowIntent(),
-      const SingleActivator(LogicalKeyboardKey.arrowDown):
-          const NextFlowIntent(),
-      const SingleActivator(LogicalKeyboardKey.keyK): const PrevFlowIntent(),
-      const SingleActivator(LogicalKeyboardKey.arrowUp): const PrevFlowIntent(),
-      const SingleActivator(LogicalKeyboardKey.slash): const FilterIntent(),
-      const SingleActivator(LogicalKeyboardKey.keyD, control: true):
-          const ToggleDomainPanelIntent(),
-      const SingleActivator(LogicalKeyboardKey.keyN): const NoteIntent(),
-    };
+// The bindings of the Intercept section live with that section, in
+// `features/intercept/intents.dart`: they carry `includeRepeats: false` on
+// the two decisions, and a binding without an action in the screen is deleted
+// rather than silenced (`docs/UX.md` 5.3). The intents themselves stay here,
+// because `FilterIntent`, `ToggleDomainPanelIntent` and `NoteIntent` belong to
+// the vocabulary of CONVENTIONS 3.9 and come back with the screens that
+// answer them.

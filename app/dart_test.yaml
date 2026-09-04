@@ -1,0 +1,7 @@
+# Die Tags, die die Testläufe benutzen. Ohne diese Datei meldet `flutter test`
+# für jede Golden-Datei „A tag was used that wasn't specified in
+# dart_test.yaml", und eine Warnung, die bei jedem Lauf steht, wird nicht mehr
+# gelesen.
+tags:
+  golden:
+    description: Vergleicht gerenderte Pixel; erneuern mit `--update-goldens`.

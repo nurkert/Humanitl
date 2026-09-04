@@ -1,6 +1,7 @@
 /// Entry point of the Humanitl desktop application.
 library;
 
+import 'dart:async' show unawaited;
 import 'dart:io' show Platform;
 
 import 'package:flutter/services.dart' show MissingPluginException;
@@ -12,6 +13,11 @@ import 'app.dart';
 import 'core/ipc/client_providers.dart';
 import 'core/ipc/launch_options.dart';
 import 'features/settings/gallery_screen.dart';
+import 'features/tray/desktop_ports.dart';
+import 'features/tray/platform/dbus_notifications.dart';
+import 'features/tray/platform/sni_tray.dart';
+import 'features/tray/platform/window_port.dart';
+import 'features/tray/providers/attention.dart';
 
 export 'app.dart' show HumanitlApp;
 
@@ -38,12 +44,48 @@ Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   await configureWindow();
   final LaunchOptions options = LaunchOptions.resolve(args);
+  final DesktopPorts ports = desktopPortsForPlatform();
   runApp(
     ProviderScope(
-      overrides: [launchOptionsProvider.overrideWithValue(options)],
+      overrides: [
+        launchOptionsProvider.overrideWithValue(options),
+        // `overrideWith` and not `overrideWithValue`: a value has no
+        // lifetime, and these three ports hold two D-Bus connections and a
+        // bus name. The `dbus` package says of its own client that a process
+        // which leaves one open may not end at all, so the scope releases
+        // them when it goes; the tray menu's `Quit` releases them before it
+        // destroys the window.
+        desktopPortsProvider.overrideWith((Ref ref) {
+          ref.onDispose(() => unawaited(ports.dispose()));
+          return ports;
+        }),
+      ],
       child: const HumanitlApp(),
     ),
   );
+}
+
+/// The desktop this run talks to: the real one on Linux, none anywhere else.
+///
+/// This is the only place the real tray, the real notification and the real
+/// window are built. Every test and every headless run gets
+/// [DesktopPorts.inert], so nothing below the ports ever needs a session bus
+/// to be present (HUM-034).
+DesktopPorts desktopPortsForPlatform() {
+  if (!Platform.isLinux) {
+    return DesktopPorts.inert();
+  }
+  try {
+    return DesktopPorts(
+      window: WindowManagerPort(),
+      notifications: DBusNotificationPort(),
+      tray: SniTrayPort(),
+    );
+  } on Object {
+    // No session bus at all -- a headless run, a broken environment. The
+    // program is about the window, not about the tray.
+    return DesktopPorts.inert();
+  }
 }
 
 /// Title and minimum size of the window, after `ensureInitialized` (HUM-019

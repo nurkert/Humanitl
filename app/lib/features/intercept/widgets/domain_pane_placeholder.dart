@@ -10,12 +10,13 @@ library;
 import 'dart:ui' show PathMetric;
 
 import 'package:flutter/widgets.dart' hide Flow;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
 import '../../../core/ui/hover_label.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
-import '../psl.dart';
+import '../providers/decision.dart';
 
 /// The domain pane.
 class DomainPanePlaceholder extends StatelessWidget {
@@ -35,7 +36,10 @@ class DomainPanePlaceholder extends StatelessWidget {
         color: tokens.colors.bg1,
         border: Border(left: BorderSide(color: tokens.colors.line)),
       ),
-      child: Padding(
+      // The pane scrolls: at twice the text scale its content is taller than
+      // any window, and a column that overflows swallows the rest in silence
+      // (`docs/UX.md` 6).
+      child: SingleChildScrollView(
         padding: EdgeInsets.all(tokens.spacing.x3),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -58,13 +62,18 @@ class DomainPanePlaceholder extends StatelessWidget {
                 l10n.interceptDomainApex,
                 style: tokens.typography.ui11.tinted(tokens.colors.fg2),
               ),
-              Text(
-                registrableDomain(
-                  flow.host,
-                  isIpLiteral: flow.authority.isIpLiteral,
-                ),
-                key: const Key('intercept-domain-apex'),
-                style: tokens.typography.mono12.tinted(tokens.colors.fg1),
+              // What the daemon's catalog said, never a guess of ours: an
+              // apex the client worked out itself would be a claim nobody
+              // checked (`backlog/CONVENTIONS.md` 4.13).
+              Consumer(
+                builder: (BuildContext context, WidgetRef ref, Widget? _) {
+                  final String apex = ref.watch(selectedApexProvider);
+                  return Text(
+                    apex.isEmpty ? l10n.interceptDomainApexUnknown : apex,
+                    key: const Key('intercept-domain-apex'),
+                    style: tokens.typography.mono12.tinted(tokens.colors.fg1),
+                  );
+                },
               ),
               SizedBox(height: tokens.spacing.x4),
               const _NotInCatalogCard(),

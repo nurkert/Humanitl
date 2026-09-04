@@ -310,7 +310,7 @@ Zusätzlich: `--unshare-pid --unshare-ipc --unshare-uts`, eigenes `/proc`, `--tm
 | **LLM-Passthrough** | Der Agent muss legitim Code ans LLM schicken | Regel exakt auf Host+Port+Pfadpräfix+POST, gestreamt, vollständig geloggt, Findings-Scan mit Warnung, amber im Isolation-Panel. Dokumentiert: „LLM-Host ist Teil der Vertrauensbasis" | Findings-basiertes Halten, Rate-Limits |
 | **`/work` (rw)** | Der Agent muss Dateien schreiben | Nur Unterpfad mounten, `.git/hooks`, `.git/config`, `.envrc`, `.vscode`, `.idea` maskiert (tmpfs). Session-Ende: Diff-Zusammenfassung „berührte Dateien", Secret-Scan über den Diff, Symlinks nach außerhalb `/work` markiert | Git-Operationen host-seitig aus dem UI |
 | **Terminal-Ausgabe** | Der Mensch liest, was der Agent schreibt | xterm2: OSC 52 (Clipboard), OSC 8, Titel-Setzen deaktiviert. Banner „Agent-Ausgabe ist nicht vertrauenswürdig" | |
-| **Hostname im Log** | Blockierte Anfragen sind trotzdem sichtbar | Dokumentiert, Export mit optionaler Host-Redaktion | |
+| **Hostname im Log** | Blockierte Anfragen sind trotzdem sichtbar | Dokumentiert. Der Export trägt Hosts, Pfade, Kopfzeilen und Rümpfe im Klartext und sagt das vor dem Schreiben; die optionale Host-Redaktion kommt nach dem MVP (`docs/SECURITY.md`) | |
 | **Package-Caches** | Wiederholte Installs | Cache-Volumes pro Projekt, nicht pro Vertrauensstufe | Read-only Seeds |
 
 ### 4.3 Threat Model (Kurz)

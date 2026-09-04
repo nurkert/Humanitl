@@ -4,9 +4,11 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
+import 'package:humanitl/features/intercept/providers/decision.dart';
 import 'package:humanitl/features/intercept/providers/flows.dart';
 import 'package:humanitl/features/intercept/providers/now.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
+import 'package:humanitl/core/ipc/flow_events.dart';
 
 import 'fixtures.dart';
 
@@ -208,10 +210,13 @@ void main() {
       host: 'crates.io',
     );
     client.page = FlowPage(flows: <Flow>[reloaded], total: 1);
+    // Seit HUM-034 synchronisiert auch die erste Verbindung; gezaehlt wird
+    // deshalb der Zuwachs durch die Luecke, nicht die Gesamtzahl.
+    final int beforeGap = client.listFlowsCalls;
     client.emit(FlowEvent.lagged(at: testStart, dropped: 12));
     await settle();
 
-    expect(client.listFlowsCalls, 1);
+    expect(client.listFlowsCalls, beforeGap + 1);
     expect(
       container.read(heldFlowsProvider).map((Flow flow) => flow.id).toList(),
       <FlowId>[reloaded.id],
@@ -234,12 +239,14 @@ void main() {
       ],
       total: 1,
     );
+    final int beforeBreak = client.listFlowsCalls;
     client.breakStream();
     await Future<void>.delayed(const Duration(milliseconds: 20));
     await settle();
 
     expect(client.streams.length, greaterThan(1));
-    expect(client.listFlowsCalls, 1);
+    // Wie oben: der Zuwachs durch den Neuaufbau, nicht die Gesamtzahl.
+    expect(client.listFlowsCalls, beforeBreak + 1);
     expect(container.read(heldFlowsProvider), hasLength(1));
   });
 
