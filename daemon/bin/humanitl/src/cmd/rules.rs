@@ -65,6 +65,8 @@ pub async fn run(ctx: &Context, cmd: &RulesCmd) -> Result<u8, Failure> {
         RulesCmd::Remove { id } => remove(ctx, id).await,
         RulesCmd::Reorder { id, position } => reorder(ctx, id, *position).await,
         RulesCmd::DryRun { rule, scan } => dry_run(ctx, rule, *scan).await,
+        RulesCmd::Disable { id } => set_disabled(ctx, id, true).await,
+        RulesCmd::Enable { id } => set_disabled(ctx, id, false).await,
         RulesCmd::Reload => reload(ctx).await,
     }
 }
@@ -139,6 +141,40 @@ async fn remove(ctx: &Context, id: &str) -> Result<u8, Failure> {
         return Ok(EXIT_OK);
     }
     ctx.render.line(&format!("removed {id}"));
+    Ok(EXIT_OK)
+}
+
+/// `rules disable ID` und `rules enable ID`.
+///
+/// Nur für mitgelieferte Regeln: sie gehören nicht dem Nutzer und lassen sich
+/// nicht löschen (`RULES_010`), aber abschalten. Der Zustand steht in der
+/// `rules.yaml` des Nutzers als Liste `disabled_bundled` und überlebt eine neue
+/// Fassung von `rules/default.yaml` (HUM-038).
+async fn set_disabled(ctx: &Context, id: &str, disabled: bool) -> Result<u8, Failure> {
+    let mut client = ctx.connect().await?;
+    let before = call_on(&mut client, v1::rules_request::Op::List(())).await?;
+    find(&before, id).ok_or_else(|| unknown_rule(id))?;
+
+    let response = call_on(
+        &mut client,
+        v1::rules_request::Op::SetDisabled(v1::rules_request::SetDisabled {
+            rule_id: id.to_owned(),
+            disabled,
+        }),
+    )
+    .await?;
+    warnings(ctx, &response);
+
+    let changed = find(&response, id).ok_or_else(|| unknown_rule(id))?.clone();
+    if ctx.render.is_json() {
+        emit(ctx, &response, vec![("changed", rule_json(&changed))]);
+        return Ok(EXIT_OK);
+    }
+    ctx.render.line(&format!(
+        "{} {id}",
+        if disabled { "disabled" } else { "enabled" }
+    ));
+    print!("{}", table(&HEADERS, &[rule_row(&changed, Utc::now())]));
     Ok(EXIT_OK)
 }
 
@@ -406,7 +442,11 @@ fn rule_row(rule: &v1::Rule, now: DateTime<Utc>) -> Vec<String> {
             matcher.path.clone()
         },
         expires_cell(rule, now),
-        origin(rule).to_owned(),
+        if rule.disabled {
+            format!("{} (off)", origin(rule))
+        } else {
+            origin(rule).to_owned()
+        },
         rule.rule_id.clone(),
     ]
 }
@@ -520,6 +560,7 @@ fn rule_json(rule: &v1::Rule) -> Value {
         "note": rule.note,
         "stream": rule.stream,
         "allow_private": rule.allow_private,
+        "disabled": rule.disabled,
         "hit_count": rule.hit_count,
         "created_at": rule.created_at.as_ref().map(|at| at.seconds),
         "created_from_flow_id": rule.created_from_flow_id,

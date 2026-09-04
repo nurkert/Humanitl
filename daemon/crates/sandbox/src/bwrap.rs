@@ -36,7 +36,7 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{BufRead, BufReader, PipeReader, Read, Seek, SeekFrom, Write};
-use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -64,7 +64,7 @@ use crate::handle::{ReportSnapshot, SandboxHandle, Shared};
 use crate::launcher::{
     CheckResult, IsolationCheck, LaunchOnce, LaunchPlan, SandboxBackend, StdioMode,
 };
-use crate::profile::{MountPolicy, SandboxProfile, SessionContext, normalize};
+use crate::profile::{MountPolicy, SandboxProfile, SessionContext, WORK_DST, normalize};
 
 /// Die kleinste `bwrap`-Fassung, mit der der Launcher arbeitet.
 ///
@@ -92,6 +92,15 @@ pub const USERNS_SYSCTL_COMMAND: &str =
 /// Wo die Sperre erklärt ist.
 pub const USERNS_DOCS_URL: &str =
     "https://ubuntu.com/blog/ubuntu-23-10-restricted-unprivileged-user-namespaces";
+
+/// Die Deskriptoren der Adapter-Dateien und ihre Ziele in der Sandbox.
+///
+/// Der erste Teil hält die memfds am Leben, bis `bwrap` sie geerbt hat; der
+/// zweite ist das, was die Argumentliste braucht.
+type AgentFileFds = (Vec<OwnedFd>, Vec<(RawFd, PathBuf)>);
+
+/// Der Name des memfd einer Adapter-Datei, wie ihn `/proc/<pid>/fd` zeigt.
+const AGENT_FILE_MEMFD_NAME: &str = "humanitl-agent-file";
 
 /// Der Name des memfd einer Maske, wie ihn `/proc/<pid>/fd` zeigt.
 const MASK_MEMFD_NAME: &str = "humanitl-mask";
@@ -450,6 +459,49 @@ impl BwrapBackend {
         present
     }
 
+    /// Ein memfd je Datei des Agent-Adapters, mit ihrem Ziel in der Sandbox.
+    ///
+    /// # Errors
+    ///
+    /// `SANDBOX_006`, wenn eine Datei unter `/work` liegen soll — Humanitl
+    /// schreibt nicht in ein Repository, das ihm nicht gehört — oder wenn sie
+    /// ein Ziel belegt, das die Sandbox selbst setzt (Proxy-Socket, CA, Shim,
+    /// Identitätsdateien, `/proc`, `/sys`, `/dev`, `/run/humanitl`).
+    /// `SANDBOX_011`, wenn ein memfd nicht anzulegen ist.
+    fn agent_file_fds(session: &SessionContext) -> Result<AgentFileFds, Diagnostic> {
+        let inside = crate::agent::files_inside_work(&session.files, Path::new(WORK_DST));
+        if let Some(first) = inside.first() {
+            return Err(Diagnostic::builder(SANDBOX_006, Severity::Blocking)
+                .why(format!(
+                    "the agent adapter wants to write {} into the project directory {WORK_DST}; \
+                     adapter files live outside it",
+                    first.display()
+                ))
+                .build());
+        }
+        let reserved = crate::agent::files_on_reserved_targets(&session.files);
+        if let Some(first) = reserved.first() {
+            return Err(Diagnostic::builder(SANDBOX_006, Severity::Blocking)
+                .why(format!(
+                    "the agent adapter wants to put a file at {}, a target the sandbox sets \
+                     itself; its file would come later in the argument list and cover it",
+                    first.display()
+                ))
+                .build());
+        }
+        let fds = session
+            .files
+            .iter()
+            .map(|file| Self::sealed_memfd(AGENT_FILE_MEMFD_NAME, &file.content))
+            .collect::<Result<Vec<OwnedFd>, Diagnostic>>()?;
+        let targets = fds
+            .iter()
+            .zip(&session.files)
+            .map(|(fd, file)| (fd.as_raw_fd(), file.dst.clone()))
+            .collect();
+        Ok((fds, targets))
+    }
+
     /// Ein versiegeltes memfd mit diesem Inhalt, Leseposition am Anfang.
     ///
     /// Versiegelt gegen Wachsen, Schrumpfen und Schreiben: wer den Deskriptor
@@ -549,6 +601,8 @@ impl SandboxBackend for BwrapBackend {
             .map(|_| Self::sealed_memfd(MASK_MEMFD_NAME, b""))
             .collect::<Result<Vec<OwnedFd>, Diagnostic>>()?;
 
+        let (agent_fds, agent_files) = Self::agent_file_fds(session)?;
+
         let inputs = LaunchInputs {
             masks: MaskFds::Each(masks.iter().map(AsRawFd::as_raw_fd).collect()),
             identity: Some(IdentityFds {
@@ -559,6 +613,7 @@ impl SandboxBackend for BwrapBackend {
             report_fd: Some(report_writer.as_raw_fd()),
             status_fd: Some(status_writer.as_raw_fd()),
             present_under_work: Some(present),
+            agent_files,
         };
         let env = profile.effective_env(session, inputs.report_fd);
         let mut argv = vec![self.program.clone().into_os_string()];
@@ -572,6 +627,7 @@ impl SandboxBackend for BwrapBackend {
             hosts,
         ];
         inherit.extend(masks);
+        inherit.extend(agent_fds);
         let fds = inherit
             .iter()
             .map(|fd| (fd.as_raw_fd(), fd.as_raw_fd()))
@@ -580,6 +636,7 @@ impl SandboxBackend for BwrapBackend {
             argv,
             env,
             fds,
+            files: session.files.clone(),
             session: session.session,
             profile: profile.name.clone(),
             program: self.program.clone(),

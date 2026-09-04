@@ -896,3 +896,92 @@ fn discover_is_content_with_nothing() {
         humanitl_config::Config::default()
     );
 }
+
+#[test]
+fn sandbox_env_is_a_free_table_that_reaches_the_launcher() {
+    // HUM-045: `FixAction::SetEnv` schreibt hierher. Ohne den Schlüssel wäre
+    // der Knopf in der Oberfläche ein Vorschlag ins Leere, und
+    // `humanitl config get sandbox.env` endete als CONFIG_002.
+    let sources = Sources::empty().with_cli([(
+        "sandbox.env",
+        "{ \"CURL_CA_BUNDLE\" = \"/etc/humanitl/ca.crt\" }",
+    )]);
+    let resolved = expect_ok(&sources);
+    assert_eq!(
+        resolved
+            .config
+            .sandbox
+            .env
+            .get("CURL_CA_BUNDLE")
+            .map(String::as_str),
+        Some("/etc/humanitl/ca.crt")
+    );
+    assert!(
+        humanitl_config::schema::known_paths().contains("sandbox.env"),
+        "the key has to be in the schema, or `config get` refuses it"
+    );
+}
+
+#[test]
+fn a_broken_variable_name_in_sandbox_env_is_refused() {
+    // `--setenv KEY VALUE`: Ein `=` im Namen machte aus einem Paar zwei.
+    let sources =
+        Sources::empty().with_cli([("sandbox.env", "{ \"A=B\" = \"/etc/humanitl/ca.crt\" }")]);
+    let diagnostic = expect_err(&sources);
+    assert_eq!(diagnostic.code.as_str(), "CONFIG_003");
+    assert!(diagnostic.why.contains("sandbox.env"), "{}", diagnostic.why);
+}
+
+#[test]
+fn a_loader_variable_in_sandbox_env_is_refused() {
+    // Gemessen vom Review: Eine Bibliothek mit Konstruktor, per `LD_PRELOAD`
+    // vorgeladen, läuft in Shim und Agent vor `main` und damit vor dem
+    // seccomp-Filter; ein dort abgezweigter Prozess erbt ihn nie. Der billige
+    // Weg dorthin führt über die Umgebung des Prozesses, nicht über eine
+    // Datei — deshalb wird der Schlüssel abgelehnt, egal auf welcher Ebene.
+    for name in humanitl_config::LOADER_ENV_KEYS {
+        let sources = Sources::empty().with_cli([(
+            "sandbox.env",
+            &format!("{{ \"{name}\" = \"/work/evil.so\" }}"),
+        )]);
+        let diagnostic = expect_err(&sources);
+        assert_eq!(diagnostic.code.as_str(), "CONFIG_003", "{name}");
+        assert!(diagnostic.why.contains(name), "{}", diagnostic.why);
+        assert!(
+            diagnostic.why.contains("seccomp"),
+            "the reason has to name what breaks: {}",
+            diagnostic.why
+        );
+    }
+}
+
+#[test]
+fn a_loader_variable_from_the_host_environment_is_refused_too() {
+    // Der Weg, den der Review gemessen hat: `HUMANITL_SANDBOX__ENV` aus
+    // derselben Shell, in der ein `direnv` das `.envrc` eines geklonten
+    // Projekts ausführt.
+    let sources = Sources::empty().with_env(Env::from_pairs([(
+        "HUMANITL_SANDBOX__ENV",
+        "{ LD_PRELOAD = \"/work/evil.so\" }",
+    )]));
+    let diagnostic = expect_err(&sources);
+    assert_eq!(diagnostic.code.as_str(), "CONFIG_003");
+    assert!(diagnostic.why.contains("LD_PRELOAD"), "{}", diagnostic.why);
+}
+
+#[test]
+fn a_harmless_variable_in_sandbox_env_still_passes() {
+    // Gesperrt sind genau die drei, die den Linker fremden Code laden lassen,
+    // nicht das ganze `LD_`-Präfix.
+    let sources = Sources::empty().with_cli([("sandbox.env", "{ \"LD_DEBUG\" = \"libs\" }")]);
+    let resolved = expect_ok(&sources);
+    assert_eq!(
+        resolved
+            .config
+            .sandbox
+            .env
+            .get("LD_DEBUG")
+            .map(String::as_str),
+        Some("libs")
+    );
+}

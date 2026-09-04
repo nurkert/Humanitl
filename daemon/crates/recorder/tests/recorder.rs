@@ -1512,3 +1512,134 @@ async fn timestamps_are_unix_milliseconds() {
         .unwrap_or_else(|| panic!("flow missing"));
     assert_eq!(detail.summary.ts, millis(at));
 }
+
+#[tokio::test]
+async fn a_flow_can_carry_the_reason_it_failed() {
+    // HUM-045: Der Client in der Sandbox bricht den TLS-Handschlag zum Proxy
+    // ab. Es gibt keine Anfrage, niemand hat entschieden, und trotzdem soll die
+    // History den Versuch samt Grund zeigen.
+    let harness = Harness::open();
+    let at = SystemTime::now();
+    let flow = FlowId::new();
+    harness
+        .recorder
+        .apply(&received(flow, "api.github.com", "/user", at));
+    harness
+        .recorder
+        .set_flow_error(flow, "tls_handshake_failed");
+    harness.recorder.apply(&FlowEvent::Decided {
+        flow_id: flow,
+        at,
+        decision: Decision::Block {
+            reason: BlockReason::NoRoute,
+            note: None,
+        },
+        source: DecisionSource::System,
+    });
+    harness
+        .recorder
+        .apply(&FlowEvent::Recorded { flow_id: flow, at });
+    harness.recorder.flush().await;
+
+    let detail = harness
+        .recorder
+        .get_flow(flow)
+        .await
+        .unwrap_or_else(|err| panic!("{err}"))
+        .unwrap_or_else(|| panic!("flow missing"));
+    assert_eq!(
+        detail.summary.error.as_deref(),
+        Some("tls_handshake_failed")
+    );
+    // Der Grund steht neben der Entscheidung, nicht an ihrer Stelle.
+    assert_eq!(detail.summary.block_reason.as_deref(), Some("no_route"));
+
+    let page = harness
+        .recorder
+        .list_flows(&FlowQuery::default())
+        .await
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(
+        page.rows.first().and_then(|row| row.error.as_deref()),
+        Some("tls_handshake_failed"),
+        "the flow list carries the reason as well"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_upstream_names_itself_in_the_error_column() {
+    let harness = Harness::open();
+    let at = SystemTime::now();
+    let flow = FlowId::new();
+    harness
+        .recorder
+        .apply(&received(flow, "api.github.com", "/user", at));
+    harness.recorder.apply(&FlowEvent::Failed {
+        flow_id: flow,
+        at,
+        error: humanitl_core::UpstreamError::Dns,
+    });
+    harness.recorder.flush().await;
+
+    let detail = harness
+        .recorder
+        .get_flow(flow)
+        .await
+        .unwrap_or_else(|err| panic!("{err}"))
+        .unwrap_or_else(|| panic!("flow missing"));
+    assert_eq!(detail.summary.state, "failed");
+    assert_eq!(detail.summary.error.as_deref(), Some("upstream_dns"));
+}
+
+#[tokio::test]
+async fn an_old_database_gets_the_error_column() {
+    // Eine Datenbank aus der Zeit vor V4: Die Migration darf die vorhandenen
+    // Zeilen nicht anfassen und muss die Spalte leer nachrüsten.
+    let dir = tempfile::tempdir().unwrap_or_else(|err| panic!("{err}"));
+    let db = dir.path().join("humanitl.db");
+    let session = SessionId::new();
+    let flow = FlowId::new();
+    {
+        let conn = rusqlite::Connection::open(&db).unwrap_or_else(|err| panic!("{err}"));
+        for migration in humanitl_recorder::MIGRATIONS.iter().take(3) {
+            conn.execute_batch(migration.sql)
+                .unwrap_or_else(|err| panic!("{err}"));
+        }
+        conn.execute_batch("PRAGMA user_version = 3;")
+            .unwrap_or_else(|err| panic!("{err}"));
+        conn.execute(
+            "INSERT INTO sessions (id, started_at, sandbox_profile, work_dir, agent) \
+             VALUES (?1, 0, 'default', '/w', 'opencode')",
+            rusqlite::params![session.to_string()],
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        conn.execute(
+            "INSERT INTO flows (id, session_id, seq, ts, method, scheme, host, host_display, \
+             host_rev, port, path, state, request_size) VALUES (?1, ?2, 1, 1, 'GET', 'https', \
+             'api.github.com', 'api.github.com', 'com.github.api.', 443, '/user', 'recorded', 0)",
+            rusqlite::params![flow.to_string(), session.to_string()],
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+    }
+
+    let recorder = Recorder::open(&db, &dir.path().join("blobs"), RecorderSettings::default())
+        .unwrap_or_else(|err| panic!("{err}"));
+    let detail = recorder
+        .get_flow(flow)
+        .await
+        .unwrap_or_else(|err| panic!("{err}"))
+        .unwrap_or_else(|| panic!("flow missing"));
+    assert_eq!(detail.summary.error, None, "an old row keeps its data");
+
+    recorder.set_flow_error(flow, "tls_handshake_failed");
+    recorder.flush().await;
+    let detail = recorder
+        .get_flow(flow)
+        .await
+        .unwrap_or_else(|err| panic!("{err}"))
+        .unwrap_or_else(|| panic!("flow missing"));
+    assert_eq!(
+        detail.summary.error.as_deref(),
+        Some("tls_handshake_failed")
+    );
+}

@@ -142,6 +142,11 @@ pub struct LaunchPlan {
     /// vererbt, nicht umnummeriert ([`crate::LaunchInputs`]); die Paarform
     /// bleibt, damit ein Backend, das umnummerieren muss, Platz hat.
     pub fds: Vec<(RawFd, RawFd)>,
+    /// Die Dateien, die der Agent-Adapter in die Sandbox legt, in der
+    /// Reihenfolge, in der sie in [`LaunchPlan::argv`] als `--ro-bind-data`
+    /// stehen. Für Anzeige und Prüfung; der Inhalt liegt schon in den
+    /// Deskriptoren aus [`LaunchPlan::fds`].
+    pub files: Vec<crate::agent::SandboxFile>,
     /// Die Sitzung, für die der Plan gilt.
     pub session: SessionId,
     /// Der Name des Profils, für Protokoll und Thread-Namen.

@@ -47,6 +47,7 @@ use humanitl_proxy::{
     FlowPipeline, HoldQueue, PassthroughPipeline, ProxyCore, ProxyLimits, ResolveError, Resolver,
     ResolverPort, RulesPipeline, Scanner, Upstream,
 };
+use humanitl_recorder::{Recorder, RecorderSettings, SessionMeta};
 use hyper::body::Incoming;
 use hyper::client::conn::http1::SendRequest;
 use hyper::{Method, Request, StatusCode};
@@ -183,6 +184,7 @@ pub struct ProxyBuilder {
     rules: Option<String>,
     scanner: Option<Arc<dyn Scanner>>,
     hard_block_checksum_secrets: bool,
+    recording: bool,
 }
 
 impl Default for ProxyBuilder {
@@ -204,6 +206,7 @@ impl Default for ProxyBuilder {
             rules: None,
             scanner: None,
             hard_block_checksum_secrets: false,
+            recording: false,
         }
     }
 }
@@ -287,12 +290,42 @@ impl ProxyBuilder {
         self
     }
 
+    /// Eine echte Aufzeichnung im Temp-Verzeichnis des Proxys (HUM-026).
+    ///
+    /// Ohne das laeuft der Proxy ohne History, wie in den meisten Tests. Wer
+    /// pruefen will, was in `flows` steht, schaltet sie ein und liest ueber
+    /// [`Proxy::recorder`].
+    pub fn recording(mut self, on: bool) -> Self {
+        self.recording = on;
+        self
+    }
+
     pub async fn start(self) -> Proxy {
         let tmp = tempfile::tempdir().unwrap();
         let ca = Arc::new(CaStore::load_or_create(&tmp.path().join("ca")).unwrap());
         let leaves = Arc::new(LeafCache::new(Arc::clone(&ca), 16));
-        let queue = Arc::new(HoldQueue::new(&self.limits));
         let session = SessionId::new();
+        let recorder = self.recording.then(|| {
+            let recorder = Recorder::open(
+                &tmp.path().join("data").join("humanitl.db"),
+                &tmp.path().join("data").join("blobs"),
+                RecorderSettings::default(),
+            )
+            .unwrap();
+            recorder.start_session(&SessionMeta {
+                id: session,
+                started_at: std::time::SystemTime::now(),
+                sandbox_profile: "test".to_owned(),
+                llm_endpoint: None,
+                work_dir: tmp.path().display().to_string(),
+                agent: "test".to_owned(),
+            });
+            recorder
+        });
+        let queue = Arc::new(match recorder.clone() {
+            Some(recorder) => HoldQueue::new(&self.limits).recording(recorder),
+            None => HoldQueue::new(&self.limits),
+        });
         let inner: Arc<dyn FlowPipeline> = match self.pipe {
             Pipe::Ask(timeout) => Arc::new(AskPipeline::new(Arc::clone(&queue), timeout)),
             Pipe::Passthrough => Arc::new(PassthroughPipeline::new(Arc::clone(&queue))),
@@ -349,13 +382,14 @@ impl ProxyBuilder {
             .scanner
             .clone()
             .unwrap_or_else(|| Arc::new(humanitl_proxy::NoScan) as Arc<dyn Scanner>);
-        let handler = FlowHandler::with_findings(
+        let handler = FlowHandler::with_recorder(
             Arc::clone(&queue),
             pipeline,
             upstream,
             leaves,
             limits,
             scanner,
+            recorder.clone(),
         );
 
         let socket = tmp.path().join("proxy").join("proxy.sock");
@@ -375,6 +409,7 @@ impl ProxyBuilder {
             port,
             egress,
             core,
+            recorder,
             tmp,
         }
     }
@@ -392,6 +427,8 @@ pub struct Proxy {
     pub port: Arc<ResolverPort>,
     pub egress: Arc<CountingEgress>,
     pub core: ProxyCore,
+    /// Die Aufzeichnung, falls `ProxyBuilder::recording(true)` gesetzt war.
+    pub recorder: Option<Recorder>,
     tmp: TempDir,
 }
 

@@ -75,6 +75,7 @@ fn context(work_mode: WorkMode) -> SessionContext {
             OsString::from("-c"),
             OsString::from("echo hello world"),
         ],
+        files: Vec::new(),
     }
 }
 
