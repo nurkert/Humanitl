@@ -694,12 +694,15 @@ fn llm_only_blocks_everything_but_passthrough() {
     assert_eq!(rules.len(), 1);
     assert!(warnings.is_empty(), "{warnings:?}");
 
-    // Der Adapter stellt seine Durchreichregel voran; sie steht hier als
+    // Der Adapter bringt seine Durchreichregel mit; sie steht hier als
     // dieselbe YAML, die `OpenCodeAdapter::llm_passthrough` baut
     // (`backlog/CONVENTIONS.md` 4.21), damit dieser Test keine Kante nach
-    // außen braucht.
+    // außen braucht. Sie kommt als mitgelieferte Regel **hinter** die
+    // Blockregel des Profils und trifft trotzdem zuerst: Ihren Vorrang trägt
+    // sie an `passthrough_llm`, nicht an ihrem Platz in der Liste
+    // (`backlog/CONVENTIONS.md` 4.5, HUM-104).
     let (passthrough, _) = parse_rules(PASSTHROUGH_YAML).expect("the passthrough rule parses");
-    rules.prepend_bundled(passthrough.iter().cloned());
+    rules.add_bundled(passthrough.iter().cloned());
 
     let session = SessionId::new();
     let now = chrono::Utc::now();
@@ -725,6 +728,65 @@ fn llm_only_blocks_everything_but_passthrough() {
     // Auch ein Pfad am Sprachmodell, der keine Inferenz macht, wird geblockt
     // statt durchgereicht: die Durchreiche nennt Endpunkte, keine Fläche.
     let key = RequestKey::new(&llm, &Method::POST, "/api/pull", Scheme::Http, 11434);
+    assert_eq!(rules.evaluate(&key, now, session).action(), Action::Block);
+}
+
+/// Ein globales Profil kann sich den ersten Rang nicht selbst ausstellen.
+///
+/// Inline-Regeln eines Profils gehen denselben Weg wie die `rules.yaml`:
+/// `rules_document()` und `parse_rules`. Duerfte eine von ihnen sich
+/// `bundled: true` geben, bekaeme sie den Rang der Durchreiche — vor jeder
+/// Sitzungs- und Nutzerregel, ungehalten und mit `LLM_005` statt eines Halts.
+/// Der Vermerk faellt deshalb beim Lesen weg (HUM-104,
+/// `backlog/CONVENTIONS.md` 4.5).
+#[test]
+fn a_profile_cannot_declare_its_own_rule_bundled() {
+    let home = Home::new();
+    home.write_profile(
+        "own",
+        "name = \"own\"\n\
+         description = \"a profile of my own\"\n\
+         \n\
+         [rules]\n\
+         files = []\n\
+         inline = [\n\
+         \x20 { action = \"block\", match = { host = \"**\" } },\n\
+         \x20 { action = \"allow\", match = { host = \"ollama.lan\", port = 11434, scheme = \"http\", \
+         path_prefixes = [\"/v1/chat/completions\"] }, bundled = true, passthrough_llm = true },\n\
+         ]\n",
+    );
+
+    let resolved = home.resolve(&ProfileSelection::named("own"), &[]);
+    let profile = resolved
+        .profile("own")
+        .expect("the profile is in the chain");
+    let document = profile.rules_document().expect("the profile brings rules");
+    let (rules, warnings) =
+        parse_rules(&document).unwrap_or_else(|diagnostics| panic!("{diagnostics:?}"));
+
+    assert!(
+        rules.iter().all(|rule| !rule.bundled),
+        "a profile does not decide where a rule comes from"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.code.as_str() == "RULES_010"),
+        "and the dropped mark is said out loud: {warnings:?}"
+    );
+
+    // Ohne den Vermerk gilt die Reihenfolge der Liste: die Blockregel steht
+    // davor und entscheidet.
+    let session = SessionId::new();
+    let now = chrono::Utc::now();
+    let llm = HostName::parse("ollama.lan").expect("a host");
+    let key = RequestKey::new(
+        &llm,
+        &Method::POST,
+        "/v1/chat/completions",
+        Scheme::Http,
+        11434,
+    );
     assert_eq!(rules.evaluate(&key, now, session).action(), Action::Block);
 }
 

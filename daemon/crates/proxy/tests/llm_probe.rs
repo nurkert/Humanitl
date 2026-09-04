@@ -370,7 +370,6 @@ async fn probe_and_proxy_resolve_a_lan_name_the_same_way() {
          \x20     method: [POST, GET]\n\
          \x20     path_prefixes: [\"/api/tags\"]\n\
          \x20   allow_private: true\n\
-         \x20   bundled: true\n\
          \x20   passthrough_llm: true\n"
     );
     let proxy = ProxyBuilder::new()

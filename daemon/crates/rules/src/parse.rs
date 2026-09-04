@@ -278,6 +278,34 @@ fn own_rule_disabled(id: RuleId, source: &Source) -> Diagnostic {
         .build()
 }
 
+/// Die Warnung, dass eine Regel der Datei sich selbst als mitgeliefert ausgibt.
+///
+/// `bundled` sagt, **woher** eine Regel kommt, und das weiss die Datei nicht.
+/// Den Vermerk setzt der Lader ([`RuleSet::add_bundled`](crate::RuleSet::add_bundled))
+/// fuer genau die Regeln, die der Agent-Adapter und `rules/default.yaml`
+/// beisteuern; von der Leitung wird er ebenso verworfen
+/// (`humanitl_ipc::convert::rule_from_proto`).
+///
+/// Seit HUM-104 haengt daran mehr als ein Abzeichen: Nur eine **mitgelieferte**
+/// Durchreiche wird vor allen anderen Regeln geprueft
+/// (`backlog/CONVENTIONS.md` 4.5). Eine Datei, die sich den Vermerk selbst
+/// ausstellte, stellte sich damit den Rang aus und ueberholte die eigenen
+/// Block-Regeln ihres Verfassers - und zwar unsichtbar, denn eine Durchreiche
+/// wird nicht gehalten. Deshalb faellt der Vermerk hier weg.
+///
+/// Warnung und keine Ablehnung: Die Regel gilt weiter, sie gilt nur an ihrem
+/// Platz. Eine abgelehnte Datei kostete den Nutzer alle seine Regeln.
+fn declared_bundled(index: usize, source: &Source) -> Diagnostic {
+    Diagnostic::builder(RULES_010, Severity::Warning)
+        .why(format!(
+            "{}: a file does not decide where a rule comes from. The mark is set when the \
+             shipped rules are loaded; here it is ignored, and the rule keeps its place in the \
+             order",
+            place("bundled", source.field(index, "bundled"))
+        ))
+        .build()
+}
+
 /// Ein Feldpfad mit seiner Zeile, soweit sie bekannt ist.
 fn place(field: &str, line: Option<usize>) -> String {
     match line {
@@ -488,6 +516,10 @@ impl RawRule {
             }
         };
 
+        if self.bundled {
+            diagnostics.push(declared_bundled(index, source));
+        }
+
         if self.passthrough_llm && self.action != Action::Allow {
             diagnostics.push(schema_error(
                 index,
@@ -510,7 +542,6 @@ impl RawRule {
             .with_expiry(expires)
             .with_stream(self.stream)
             .with_allow_private(self.allow_private)
-            .bundled(self.bundled)
             .passthrough_llm(self.passthrough_llm);
         rule.created_from = created_from;
         rule.note = self.note;

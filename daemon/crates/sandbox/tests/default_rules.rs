@@ -12,11 +12,21 @@ use humanitl_core::{HostName, Method, Scheme, SessionId};
 use humanitl_rules::{RequestKey, RuleSet, Verdict, parse_rules};
 use humanitl_sandbox::{AgentAdapter, OpenCodeAdapter};
 
-/// Der Regelsatz, wie ihn der Daemon lesen würde.
+/// Der Regelsatz, wie ihn der Daemon lädt.
+///
+/// Erst lesen, dann über `add_bundled` in den Satz hängen — denselben Weg geht
+/// `RulesStore`. Der Vermerk `bundled` steht deshalb nicht in der Datei: Woher
+/// eine Regel kommt, entscheidet der Lader, nicht der Text (HUM-104).
 fn bundled() -> RuleSet {
-    let (rules, warnings) =
+    let (parsed, warnings) =
         parse_rules(OpenCodeAdapter::new().default_rules()).expect("rules/default.yaml parses");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    assert!(
+        parsed.iter().all(|rule| !rule.bundled),
+        "the shipped file does not hand out the mark itself"
+    );
+    let mut rules = RuleSet::new();
+    rules.add_bundled(parsed.iter().cloned());
     rules
 }
 
@@ -178,7 +188,7 @@ fn disabled_bundled_is_skipped() {
     assert!(warnings.is_empty(), "{warnings:?}");
 
     let (bundled, _) = parse_rules(OpenCodeAdapter::new().default_rules()).expect("bundled parse");
-    set.prepend_bundled(bundled.iter().cloned());
+    set.add_bundled(bundled.iter().cloned());
 
     assert_eq!(
         verdict(&set, "models.dev", &Method::GET, "/api.json"),
@@ -200,24 +210,33 @@ fn disabled_bundled_is_skipped() {
     );
 }
 
+/// Eine eigene Regel des Nutzers überstimmt eine mitgelieferte.
+///
+/// Das ist die Zusage aus HUM-027 und der einzige Weg, eine mitgelieferte
+/// Regel loszuwerden, ohne sie zu löschen — löschen kann der Nutzer sie nicht
+/// (`RULES_010`). `add_bundled` hängt deshalb hinten an, und
+/// `backlog/CONVENTIONS.md` 4.5 hält die Reihenfolge fest.
 #[test]
-fn prepend_bundled_puts_the_bundled_rules_first() {
+fn a_user_rule_overrides_a_bundled_rule() {
     let user = "version: 1\nrules:\n  - action: allow\n    match: { host: \"models.dev\" }\n";
     let (mut set, _) = parse_rules(user).expect("the user file parses");
     let (bundled, _) = parse_rules(OpenCodeAdapter::new().default_rules()).expect("bundled parse");
-    set.prepend_bundled(bundled.iter().cloned());
+    set.add_bundled(bundled.iter().cloned());
 
     assert_eq!(
         verdict(&set, "models.dev", &Method::GET, "/api.json").action(),
-        Action::Block,
-        "the bundled rule is evaluated before the rule of the user"
+        Action::Allow,
+        "the rule of the user is evaluated before the bundled one"
     );
     assert_eq!(set.len(), 11);
     assert!(
-        set.iter().take(10).all(|rule| rule.bundled),
-        "the first ten rules are the bundled ones"
+        !set.iter().next().expect("the user rule").bundled,
+        "the rule of the user comes first"
     );
-    assert!(!set.iter().nth(10).expect("the user rule").bundled);
+    assert!(
+        set.iter().skip(1).all(|rule| rule.bundled),
+        "the ten bundled rules follow it"
+    );
 }
 
 /// Der Regelsatz gegen die Startziele, die im Binary stehen.

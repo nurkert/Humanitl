@@ -566,21 +566,21 @@ fn set_disabled_toggles_a_rule_by_id() {
     );
 }
 
-/// `prepend_bundled` erzwingt `bundled` und übernimmt die Abschaltliste.
+/// `add_bundled` erzwingt `bundled` und übernimmt die Abschaltliste.
 ///
 /// Beides ist die Zusage des Aufrufs: Was auf diesem Weg hereinkommt, gehört
 /// nicht dem Nutzer, auch wenn die Datei etwas anderes behauptet, und die
 /// Entscheidung des Nutzers aus seiner `rules.yaml` wirkt auch dann, wenn er
 /// sie vor dieser Fassung des Regelsatzes getroffen hat.
 #[test]
-fn prepend_bundled_forces_bundled_and_honours_the_disable_list() {
+fn add_bundled_forces_bundled_and_honours_the_disable_list() {
     let off = rule(Action::Block, "models.dev");
     let on = rule(Action::Block, "**.sentry.io");
     let (off_id, on_id) = (off.id, on.id);
 
     let mut rules = RuleSet::new();
     rules.set_disabled_bundled([off_id]);
-    rules.prepend_bundled([off, on]);
+    rules.add_bundled([off, on]);
 
     assert!(
         rules.iter().all(|rule| rule.bundled),
@@ -613,18 +613,192 @@ fn prepend_bundled_forces_bundled_and_honours_the_disable_list() {
     );
 }
 
-/// Die mitgelieferten Regeln behalten ihre Reihenfolge und stehen vorne.
+/// Die mitgelieferten Regeln behalten ihre Reihenfolge und stehen hinten.
+///
+/// Hinten, damit eine eigene Regel des Nutzers eine mitgelieferte überstimmt
+/// (HUM-027, `backlog/CONVENTIONS.md` 4.5): Löschen kann er sie nicht, also
+/// muss er sie überschreiben können.
 #[test]
-fn prepend_bundled_keeps_its_order_in_front_of_what_was_there() {
-    let mine = rule(Action::Allow, "example.com");
+fn add_bundled_keeps_its_order_behind_what_was_there() {
+    let mine = rule(Action::Allow, "models.dev");
     let mine_id = mine.id;
     let first = rule(Action::Block, "models.dev");
     let second = rule(Action::Ask, "registry.npmjs.org");
     let (first_id, second_id) = (first.id, second.id);
 
     let mut rules = RuleSet::from_rules([mine]);
-    rules.prepend_bundled([first, second]);
+    rules.add_bundled([first, second]);
 
     let order: Vec<RuleId> = rules.iter().map(|rule| rule.id).collect();
-    assert_eq!(order, vec![first_id, second_id, mine_id]);
+    assert_eq!(order, vec![mine_id, first_id, second_id]);
+
+    let contested = host("models.dev");
+    let key = RequestKey::new(&contested, &Method::GET, "/api.json", Scheme::Https, 443);
+    assert_eq!(
+        rules.evaluate(&key, now(), SessionId::new()),
+        Verdict::Matched {
+            rule: mine_id,
+            action: Action::Allow
+        },
+        "the rule of the user decides, the bundled one below it does not"
+    );
+}
+
+/// Die Durchreiche trifft vor jeder anderen Regel, egal wo sie steht.
+///
+/// Das ist der Kern von HUM-104: Der Vorrang hängt an `passthrough_llm`, nicht
+/// am Platz in der Liste. Steht die Durchreiche hinter einer Sitzungsregel und
+/// einer Nutzerregel, die beide denselben Host treffen, entscheidet trotzdem
+/// sie — sonst verlöre der eine erklärte Seitenkanal die Merkmale, an denen er
+/// zu erkennen ist (`DecisionSource::Passthrough`, `LLM_005`).
+#[test]
+fn the_passthrough_decides_before_session_and_user_rules() {
+    let session = SessionId::new();
+    let user_block = rule(Action::Block, "**");
+    let session_allow = rule(Action::Allow, "**").with_expiry(Expiry::Session(session));
+    let passthrough = rule(Action::Allow, "ollama.lan").passthrough_llm(true);
+    let passthrough_id = passthrough.id;
+
+    // Die Durchreiche steht ganz hinten und in der Gruppe der mitgelieferten
+    // Regeln — genau so, wie der Regelspeicher den Satz zusammensetzt.
+    let mut rules = RuleSet::from_rules([session_allow, user_block]);
+    rules.add_bundled([passthrough]);
+
+    let llm = host("ollama.lan");
+    let key = RequestKey::new(
+        &llm,
+        &Method::POST,
+        "/v1/chat/completions",
+        Scheme::Http,
+        11434,
+    );
+    assert_eq!(
+        rules.evaluate(&key, now(), session),
+        Verdict::Matched {
+            rule: passthrough_id,
+            action: Action::Allow
+        }
+    );
+    assert!(rules.is_passthrough_llm(passthrough_id));
+}
+
+/// Eine mitgelieferte Regel rueckt nicht dadurch vor, dass sie
+/// sitzungsgebunden ist.
+///
+/// Rang 2 gehoert den Sitzungsregeln **des Nutzers** — "fuer diese Sitzung
+/// erlauben" ist seine juengste Absicht. Eine mitgelieferte Regel mit
+/// `expires: session` ist das nicht. Stuende sie trotzdem in Rang 2, ueberholte
+/// sie die dauerhaften Regeln des Nutzers, und HUM-027 — der Nutzer ueberstimmt
+/// eine mitgelieferte Regel — hinge daran, welche Gueltigkeit
+/// `rules/default.yaml` gerade schreibt.
+#[test]
+fn a_session_scoped_bundled_rule_does_not_outrank_the_user() {
+    let session = SessionId::new();
+    let user_allow = rule(Action::Allow, "models.dev");
+    let user_allow_id = user_allow.id;
+    let bundled_block = rule(Action::Block, "models.dev").with_expiry(Expiry::Session(session));
+
+    let mut rules = RuleSet::from_rules([user_allow]);
+    rules.add_bundled([bundled_block]);
+
+    let contested = host("models.dev");
+    let key = RequestKey::new(&contested, &Method::GET, "/api.json", Scheme::Https, 443);
+    assert_eq!(
+        rules.evaluate(&key, now(), session),
+        Verdict::Matched {
+            rule: user_allow_id,
+            action: Action::Allow
+        },
+        "the rule of the user decides; a bundled rule is bundled, session-scoped or not"
+    );
+
+    // Dieselbe Gueltigkeit an einer eigenen Regel gewinnt sehr wohl: Rang 2
+    // gehoert dem Nutzer, und HUM-027 sagt ausdruecklich, dass eine
+    // Sitzungsregel einen mitgelieferten Block ueberstimmen darf.
+    let own_session = rule(Action::Block, "models.dev").with_expiry(Expiry::Session(session));
+    let own_session_id = own_session.id;
+    let user_allow = rule(Action::Allow, "models.dev");
+    let mut rules = RuleSet::from_rules([user_allow, own_session]);
+    rules.add_bundled([rule(Action::Allow, "models.dev")]);
+    assert_eq!(
+        rules.evaluate(&key, now(), session).rule(),
+        Some(own_session_id),
+        "his own session rule still comes first"
+    );
+}
+
+/// Eine Durchreiche aus einer Datei bekommt den ersten Rang nicht.
+///
+/// `passthrough_llm` steht auch in der `rules.yaml` des Nutzers und in den
+/// Inline-Regeln eines Profils. Waere das Feld allein der Rang, stellte sich
+/// jede Datei den Rang selbst aus und ueberholte die eigenen Block-Regeln
+/// ihres Verfassers — unbemerkt, denn eine Durchreiche wird nicht gehalten.
+/// Den Rang gibt es deshalb nur mit dem Vermerk `bundled`, und den setzt
+/// allein `add_bundled` (HUM-104, `backlog/CONVENTIONS.md` 4.5).
+#[test]
+fn a_passthrough_from_a_file_does_not_reach_the_first_rank() {
+    let session = SessionId::new();
+    let llm = host("ollama.lan");
+    let key = RequestKey::new(
+        &llm,
+        &Method::POST,
+        "/v1/chat/completions",
+        Scheme::Http,
+        11434,
+    );
+
+    // So, wie `parse_rules` sie liefert: `passthrough_llm`, aber nicht bundled.
+    let from_file = rule(Action::Allow, "ollama.lan").passthrough_llm(true);
+    let from_file_id = from_file.id;
+    let user_block = rule(Action::Block, "**");
+    let user_block_id = user_block.id;
+
+    let rules = RuleSet::from_rules([user_block, from_file]);
+    assert_eq!(
+        rules.evaluate(&key, now(), session),
+        Verdict::Matched {
+            rule: user_block_id,
+            action: Action::Block
+        },
+        "a file does not hand itself the first rank; list order decides"
+    );
+    assert!(
+        rules.is_passthrough_llm(from_file_id),
+        "the rule keeps what it is; only its rank is not its own to declare"
+    );
+
+    // Dieselbe Regel ueber den Lader: jetzt gilt der erste Rang.
+    let mut loaded = RuleSet::from_rules(rules.iter().filter(|r| r.id == user_block_id).cloned());
+    loaded.add_bundled(rules.iter().filter(|r| r.id == from_file_id).cloned());
+    assert_eq!(
+        loaded.evaluate(&key, now(), session),
+        Verdict::Matched {
+            rule: from_file_id,
+            action: Action::Allow
+        }
+    );
+}
+
+/// Eine abgeschaltete Durchreiche entscheidet nichts, auch nicht als erste.
+///
+/// Der eigene Durchgang ist ein Vorrang, keine Ausnahme von den übrigen
+/// Prüfungen: `disabled` und `expires` gelten dort wie überall.
+#[test]
+fn a_disabled_passthrough_does_not_decide() {
+    let session = SessionId::new();
+    let passthrough = rule(Action::Allow, "ollama.lan")
+        .passthrough_llm(true)
+        .bundled(true)
+        .disabled(true);
+    let rules = RuleSet::from_rules([passthrough]);
+
+    let llm = host("ollama.lan");
+    let key = RequestKey::new(
+        &llm,
+        &Method::POST,
+        "/v1/chat/completions",
+        Scheme::Http,
+        11434,
+    );
+    assert_eq!(rules.evaluate(&key, now(), session), Verdict::Default);
 }

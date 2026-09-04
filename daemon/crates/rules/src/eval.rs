@@ -1,11 +1,28 @@
 //! Der Regelsatz und seine Auswertung.
 //!
-//! Ein [`RuleSet`] ist eine geordnete Liste. Ausgewertet wird in zwei
-//! Durchgängen: zuerst die Regeln dieser Sitzung, dann die dauerhaften
-//! (`backlog/CONVENTIONS.md` 4.5). Innerhalb jedes Durchgangs gewinnt die erste
-//! passende Regel. Der Grund für die zwei Durchgänge steht in ADR-007: was der
-//! Mensch gerade entschieden hat, soll sofort gelten, auch wenn eine ältere,
-//! breitere Regel in der Datei darüber steht.
+//! Ein [`RuleSet`] ist eine geordnete Liste. Ausgewertet wird in vier
+//! Durchgängen (`Tier`, `backlog/CONVENTIONS.md` 4.5): zuerst die
+//! mitgelieferte Durchreiche zum Sprachmodell, dann die Sitzungsregeln des
+//! Nutzers, dann seine dauerhaften, zuletzt alles übrige Mitgelieferte.
+//! Innerhalb jedes Durchgangs gewinnt die erste passende Regel.
+//!
+//! Die Gründe stehen in ADR-007 und in 4.5. Kurz: Die Durchreiche ist der eine
+//! erklärte Seitenkanal (BACKLOG.md 4.2). Er ist nur dadurch erklärt, dass er
+//! als solcher erkennbar bleibt — mit
+//! [`DecisionSource::Passthrough`](humanitl_core::DecisionSource::Passthrough)
+//! in der Aufzeichnung und der Warnung `LLM_005` vor Funden. Entschiede eine
+//! beliebige, breitere Regel des Nutzers zuerst über denselben Host, wäre der
+//! Kanal von einer gewöhnlichen Freigabe nicht mehr zu unterscheiden. Deshalb
+//! hängt sein Vorrang an der Regel selbst und nicht daran, an welcher Stelle
+//! jemand sie in die Liste gehängt hat — und er hängt daran, dass die Regel
+//! mitgeliefert ist, denn eine Datei darf sich einen Rang nicht selbst
+//! ausstellen. Danach gilt: was der Mensch gerade entschieden hat, soll sofort
+//! gelten, auch wenn eine ältere, breitere Regel in der Datei darüber steht.
+//!
+//! Dass die eigenen Regeln vor den mitgelieferten stehen, ist HUM-027 und
+//! steht deshalb im Durchgang selbst, nicht in der Reihenfolge der Liste: Eine
+//! mitgelieferte Regel mit `expires: session` soll dem Nutzer nicht dadurch
+//! vorrücken, dass sie sitzungsgebunden ist.
 //!
 //! Passt keine Regel, ist das Ergebnis [`Verdict::Default`], und das heißt
 //! `ask`. Es gibt keinen Weg, auf dem eine Anfrage ohne Regel durchgeht.
@@ -194,6 +211,74 @@ impl CompiledPrefixes {
     }
 }
 
+/// Der Durchgang, in dem eine Regel ausgewertet wird.
+///
+/// Die Reihenfolge der Varianten ist die Auswertungsreihenfolge
+/// (`backlog/CONVENTIONS.md` 4.5). Sie hängt an Eigenschaften der Regel, nicht
+/// an ihrem Platz in der Liste: Wo eine Regel steht, entscheidet nur innerhalb
+/// ihres Durchgangs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tier {
+    /// Die mitgelieferte Durchreiche zum Sprachmodell.
+    ///
+    /// Beides zusammen: `passthrough_llm` **und** `bundled`.
+    Passthrough,
+    /// Regeln dieser Sitzung (`expires: session`), die dem Nutzer gehören.
+    Session,
+    /// Die dauerhaften Regeln des Nutzers.
+    User,
+    /// Alles Mitgelieferte, das nicht die Durchreiche ist.
+    Bundled,
+}
+
+impl Tier {
+    /// Die Durchgänge in der Reihenfolge, in der sie geprüft werden.
+    const ORDER: [Self; 4] = [Self::Passthrough, Self::Session, Self::User, Self::Bundled];
+
+    /// Der Durchgang dieser Regel.
+    ///
+    /// Die Durchreiche steht vor der Sitzung: Eine Sitzungsregel ist die
+    /// jüngste Absicht des Menschen, aber ein breites „für diese Sitzung
+    /// erlauben" auf denselben Host nähme dem einen erklärten Seitenkanal
+    /// genau die Merkmale, an denen er zu erkennen ist.
+    ///
+    /// Den ersten Rang bekommt nur eine **mitgelieferte** Durchreiche.
+    /// `passthrough_llm` allein genügt nicht, denn dieses Feld steht auch in
+    /// der `rules.yaml` des Nutzers und in den Inline-Regeln eines Profils.
+    /// Ein Rang, den sich eine Datei selbst ausstellen könnte, wäre eine
+    /// Bitte und keine Ordnung: Wer `passthrough_llm: true` schreibt, weil er
+    /// ein zweites Modell durchreichen will, überholte damit unbemerkt seine
+    /// eigenen Block-Regeln — und eine Durchreiche wird nicht gehalten.
+    /// `bundled` setzt nur [`RuleSet::add_bundled`], also der Lader für die
+    /// Regeln des Agent-Adapters und aus `rules/default.yaml`; aus einer Datei
+    /// (`crate::parse_rules`) und von der Leitung
+    /// (`humanitl_ipc::convert::rule_from_proto`) kommt der Vermerk nie.
+    ///
+    /// Eine Durchreiche aus der `rules.yaml` verliert dabei nichts von ihrer
+    /// Wirkung — sie wird weiter nicht gehalten und warnt mit `LLM_005` —,
+    /// sie steht nur an ihrem Platz in der Liste. Innerhalb derselben Datei
+    /// bestimmt der Verfasser die Reihenfolge ohnehin selbst.
+    ///
+    /// Umgekehrt gilt `bundled` vor `expires`: Eine mitgelieferte Regel mit
+    /// `expires: session` ist keine Sitzungsregel des Nutzers und darf ihm
+    /// nicht in den Rang 2 rutschen. Sonst stünde sie vor seinen dauerhaften
+    /// Regeln, und HUM-027 — der Nutzer überstimmt eine mitgelieferte Regel —
+    /// hinge davon ab, welche Gültigkeit `rules/default.yaml` gerade schreibt.
+    const fn of(rule: &Rule) -> Self {
+        if rule.bundled {
+            if rule.passthrough_llm {
+                Self::Passthrough
+            } else {
+                Self::Bundled
+            }
+        } else if matches!(rule.expires, Expiry::Session(_)) {
+            Self::Session
+        } else {
+            Self::User
+        }
+    }
+}
+
 /// Eine Regel samt ihrem übersetzten Pfadmuster.
 #[derive(Debug, Clone)]
 struct CompiledRule {
@@ -268,14 +353,16 @@ impl CompiledRule {
 /// Der geordnete Regelsatz.
 ///
 /// Erzeugt wird er aus `rules.yaml` über [`crate::parse_rules`] oder leer über
-/// [`RuleSet::new`]. Die Reihenfolge ist Teil der Bedeutung: die erste passende
-/// Regel gewinnt.
+/// [`RuleSet::new`]. Die Reihenfolge ist Teil der Bedeutung: Innerhalb eines
+/// Durchgangs gewinnt die erste passende Regel. Über die Durchgänge hinweg
+/// entscheidet nicht der Platz, sondern die Regel selbst; siehe
+/// [`RuleSet::evaluate`] und den Kopf dieser Datei.
 ///
 /// Daneben führt der Satz die Ids der mitgelieferten Regeln, die der Nutzer
 /// abgeschaltet hat ([`RuleSet::disabled_bundled`]). Sie stehen getrennt, weil
 /// sie eine Regel benennen können, die erst später dazukommt: Die `rules.yaml`
-/// des Nutzers wird gelesen, bevor [`RuleSet::prepend_bundled`] die
-/// mitgelieferten Regeln davorstellt.
+/// des Nutzers wird gelesen, bevor [`RuleSet::add_bundled`] die
+/// mitgelieferten Regeln dazunimmt.
 #[derive(Debug, Clone, Default)]
 pub struct RuleSet {
     rules: Vec<CompiledRule>,
@@ -326,7 +413,7 @@ impl RuleSet {
     /// Übernimmt die Liste der abgeschalteten mitgelieferten Regeln.
     ///
     /// Regeln, die schon im Satz stehen und in der Liste vorkommen, werden
-    /// sofort abgeschaltet; alles Weitere wirkt in [`RuleSet::prepend_bundled`].
+    /// sofort abgeschaltet; alles Weitere wirkt in [`RuleSet::add_bundled`].
     pub fn set_disabled_bundled(&mut self, ids: impl IntoIterator<Item = RuleId>) {
         self.disabled_bundled = ids.into_iter().collect();
         for compiled in &mut self.rules {
@@ -341,8 +428,9 @@ impl RuleSet {
     /// Reihenfolge, genau so umgesetzt:
     ///
     /// 1. Eine unbekannte Methode führt sofort zu [`Verdict::Default`].
-    /// 2. Erster Durchgang über die Regeln dieser Sitzung, zweiter über alle
-    ///    übrigen; abgelaufene und abgeschaltete Regeln werden übersprungen.
+    /// 2. Ein Durchgang je `Tier`, in der Reihenfolge `Tier::ORDER`:
+    ///    mitgelieferte Durchreiche, Sitzung, Nutzer, mitgeliefert;
+    ///    abgelaufene und abgeschaltete Regeln werden übersprungen.
     /// 3. Innerhalb eines Durchgangs gewinnt die erste passende Regel.
     /// 4. Trifft nichts, gilt [`Verdict::Default`], also `ask`.
     ///
@@ -360,9 +448,9 @@ impl RuleSet {
             return Verdict::Default;
         }
 
-        for session_scoped in [true, false] {
+        for tier in Tier::ORDER {
             for compiled in &self.rules {
-                if matches!(compiled.rule.expires, Expiry::Session(_)) != session_scoped {
+                if Tier::of(&compiled.rule) != tier {
                     continue;
                 }
                 if compiled.rule.disabled || compiled.rule.is_expired(now, session) {
@@ -380,27 +468,35 @@ impl RuleSet {
         Verdict::Default
     }
 
-    /// Stellt mitgelieferte Regeln vor alle vorhandenen.
+    /// Hängt mitgelieferte Regeln hinter alle vorhandenen.
     ///
     /// `bundled` wird dabei erzwungen: Was auf diesem Weg hereinkommt, stammt
     /// aus dem Adapter oder aus `rules/default.yaml` und gehört nicht dem
     /// Nutzer, auch wenn die Datei es anders behauptet. Die Reihenfolge der
-    /// übergebenen Regeln bleibt erhalten, und die Regeln des Nutzers rücken
-    /// dahinter (`backlog/CONVENTIONS.md` 4.5, HUM-038).
+    /// übergebenen Regeln bleibt erhalten.
+    ///
+    /// **Hinten, nicht vorn.** Eine eigene Regel des Nutzers steht vor jeder
+    /// mitgelieferten (`backlog/CONVENTIONS.md` 4.5, HUM-027); nur so lässt
+    /// sich eine mitgelieferte Regel überstimmen, ohne sie zu löschen. Die
+    /// Durchreiche zum Sprachmodell kommt auf diesem Weg ebenfalls herein und
+    /// wird trotzdem zuerst geprüft — ihren Vorrang trägt sie an sich selbst
+    /// (`Tier::Passthrough`), nicht an ihrem Platz in der Liste.
+    ///
+    /// Dieser Aufruf ist zugleich die einzige Stelle, an der `bundled` wahr
+    /// wird. Das ist kein Zufall: Am Vermerk hängt der Rang der Durchreiche,
+    /// und deshalb darf ihn nur der Lader setzen, nie eine Datei und nie ein
+    /// Aufruf über die Leitung.
     ///
     /// `disabled` kommt aus der Liste `disabled_bundled` dieses Satzes, also aus
     /// der `rules.yaml` des Nutzers. So wirkt ein Abschalten auch dann, wenn
     /// die Datei gelesen wurde, bevor es die Regel im Satz gab.
-    pub fn prepend_bundled(&mut self, rules: impl IntoIterator<Item = Rule>) {
+    pub fn add_bundled(&mut self, rules: impl IntoIterator<Item = Rule>) {
         let disabled = &self.disabled_bundled;
-        let bundled: Vec<CompiledRule> = rules
-            .into_iter()
-            .map(|rule| {
-                let off = rule.disabled || disabled.contains(&rule.id);
-                CompiledRule::new(rule.bundled(true).disabled(off))
-            })
-            .collect();
-        self.rules.splice(0..0, bundled);
+        let bundled = rules.into_iter().map(|rule| {
+            let off = rule.disabled || disabled.contains(&rule.id);
+            CompiledRule::new(rule.bundled(true).disabled(off))
+        });
+        self.rules.extend(bundled);
     }
 
     /// Schaltet die Regel mit dieser Id ab oder wieder an.

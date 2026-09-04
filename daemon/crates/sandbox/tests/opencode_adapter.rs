@@ -633,7 +633,16 @@ fn opencode_default_rules_are_bundled() {
         "the bundled rules are free of warnings: {warnings:?}"
     );
     assert!(!rules.is_empty());
+    // Den Vermerk setzt der Lader, nicht die Datei: `RuleSet::add_bundled`
+    // erzwingt ihn beim Einhaengen, und nur so kann sich keine `rules.yaml` und
+    // kein Profil den ersten Rang der Durchreiche selbst ausstellen (HUM-104,
+    // `backlog/CONVENTIONS.md` 4.5).
     for rule in rules.iter() {
+        assert!(!rule.bundled, "rule {} marks itself bundled", rule.id);
+    }
+    let mut loaded = humanitl_rules::RuleSet::new();
+    loaded.add_bundled(rules.iter().cloned());
+    for rule in loaded.iter() {
         assert!(rule.bundled, "rule {} is not marked bundled", rule.id);
     }
 }
