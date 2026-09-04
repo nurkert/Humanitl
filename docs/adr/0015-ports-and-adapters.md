@@ -85,8 +85,10 @@ Trait ohne zweiten Nutzer in Sicht.
 
 Dieselben Regeln gelten auf der Flutter-Seite: `core/domain` sind freezed-Typen
 ohne Flutter-Import, `core/ipc` ist ein Interface mit zwei Implementierungen
-(gRPC und Fake), ein Feature importiert kein anderes Feature, und
-`shadcn_flutter` ist hinter `packages/ui` gekapselt (ADR-0009).
+(gRPC und Fake), ein Feature importiert kein anderes Feature, und das
+Widget-Vokabular steht in `packages/ui` auf `package:flutter/widgets.dart`. Ein
+Feature importiert `lib/core/ui/ui.dart`, nie ein fremdes Widget-Paket
+(ADR-0009, Abschnitt „Entscheidung nach Sprint 2").
 
 ## Begründung
 
