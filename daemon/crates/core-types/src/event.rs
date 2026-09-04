@@ -5,12 +5,14 @@
 //! später Plugins sind Zuhörer, niemand fragt den Proxy nach seinem Zustand
 //! (siehe `docs/ARCHITECTURE.md` 1).
 //!
-//! Drei Varianten entstehen nicht im Automaten: [`FlowEvent::ResponseChunk`]
+//! Vier Varianten entstehen nicht im Automaten: [`FlowEvent::ResponseChunk`]
 //! schreibt der Proxy beim Durchreichen der Antwort, [`FlowEvent::Lagged`]
-//! meldet die IPC-Schicht, wenn ein Zuhörer zu langsam war, und
+//! meldet die IPC-Schicht, wenn ein Zuhörer zu langsam war,
 //! [`FlowEvent::Diagnostic`] trägt einen Befund in denselben Strom, damit die
 //! Oberfläche ihn an derselben Stelle sieht wie den Flow, um den es geht
-//! (`backlog/CONVENTIONS.md` 4.3).
+//! (`backlog/CONVENTIONS.md` 4.3), und [`FlowEvent::AgentAsk`] trägt die Bitte
+//! des Agenten aus dem Meta-Endpunkt hinein, die zu gar keinem Flow gehört
+//! (HUM-073).
 
 use std::time::{Instant, SystemTime};
 
@@ -18,7 +20,7 @@ use crate::diagnostics::Diagnostic;
 use crate::finding::Finding;
 use crate::flow::{Decision, DecisionSource, UpstreamError};
 use crate::http::HttpRequest;
-use crate::ids::FlowId;
+use crate::ids::{AskId, FlowId};
 
 /// Ein Ereignis aus dem Leben eines Flows.
 #[derive(Debug, Clone, PartialEq)]
@@ -132,6 +134,33 @@ pub enum FlowEvent {
         /// Der Befund; geboxt, damit die Variante nicht alle anderen aufbläht.
         diagnostic: Box<Diagnostic>,
     },
+    /// Der Agent hat über `POST http://humanitl.internal/ask` um etwas
+    /// gebeten; kein Zustandswechsel und kein Flow (HUM-073, ADR-014).
+    ///
+    /// Eine Bitte, keine Aktion: Sie erzeugt eine Karte in der Oberfläche und
+    /// sonst nichts. Der Text stammt vom Agenten und ist damit die einzige
+    /// Stelle, an der fremder Text in den Ereignisstrom kommt; er ist beim
+    /// Anlegen durch [`sanitize_note`](crate::block::sanitize_note) gegangen
+    /// und trägt weder Steuerzeichen noch Zeilenumbrüche.
+    AgentAsk {
+        /// Die Kennung dieser Bitte.
+        ask_id: AskId,
+        /// Wann.
+        at: SystemTime,
+        /// Der gesäuberte Text des Agenten.
+        text: String,
+        /// Der Host aus der ersten URL im Text, falls einer erkennbar war.
+        ///
+        /// Nur ein Vorschlag für das Regel-Blatt; der Mensch bestätigt ihn.
+        suggested_host: Option<String>,
+        /// Der Pfad derselben URL, ohne Query und Fragment.
+        ///
+        /// Er engt den Vorschlag auf das ein, worum gebeten wurde: Ohne ihn
+        /// wäre die vorgeschlagene Regel eine Freigabe für jeden Pfad des
+        /// Hosts, und der Agent hat nach einer Adresse gefragt, nicht nach
+        /// einem Host.
+        suggested_path: Option<String>,
+    },
 }
 
 impl FlowEvent {
@@ -151,13 +180,14 @@ impl FlowEvent {
             Self::Recorded { .. } => "recorded",
             Self::Lagged { .. } => "lagged",
             Self::Diagnostic { .. } => "diagnostic",
+            Self::AgentAsk { .. } => "agent_ask",
         }
     }
 
     /// Der Flow, zu dem das Ereignis gehört.
     ///
-    /// `None` bei [`FlowEvent::Lagged`] und bei einem [`FlowEvent::Diagnostic`],
-    /// der die ganze Sitzung betrifft.
+    /// `None` bei [`FlowEvent::Lagged`], bei [`FlowEvent::AgentAsk`] und bei
+    /// einem [`FlowEvent::Diagnostic`], der die ganze Sitzung betrifft.
     #[must_use]
     pub const fn flow_id(&self) -> Option<FlowId> {
         match self {
@@ -172,7 +202,7 @@ impl FlowEvent {
             | Self::TimedOut { flow_id, .. }
             | Self::Recorded { flow_id, .. } => Some(*flow_id),
             Self::Diagnostic { flow_id, .. } => *flow_id,
-            Self::Lagged { .. } => None,
+            Self::Lagged { .. } | Self::AgentAsk { .. } => None,
         }
     }
 
@@ -190,7 +220,8 @@ impl FlowEvent {
             | Self::Failed { at, .. }
             | Self::TimedOut { at, .. }
             | Self::Recorded { at, .. }
-            | Self::Diagnostic { at, .. } => Some(*at),
+            | Self::Diagnostic { at, .. }
+            | Self::AgentAsk { at, .. } => Some(*at),
             Self::Lagged { .. } => None,
         }
     }

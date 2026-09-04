@@ -99,11 +99,17 @@ sealed class FlowEvent with _$FlowEvent {
   }) = FlowEventRulesChanged;
 
   /// The agent asked for something through `humanitl.internal/ask`.
+  ///
+  /// [suggestedHost] and [suggestedPath] come from the first URL the daemon
+  /// found in [text]; both are empty when it found none. The path is what
+  /// keeps a rule made from this request as narrow as the request was: without
+  /// it the rule would open every path of the host (HUM-073).
   const factory FlowEvent.agentAsk({
     required DateTime at,
     required String askId,
     required String text,
     @Default('') String suggestedHost,
+    @Default('') String suggestedPath,
   }) = FlowEventAgentAsk;
 
   /// An allowed request did not reach its target.

@@ -1628,7 +1628,7 @@ rules (first match wins):
 - [ ] Die drei Pfade antworten wie spezifiziert, andere ⇒ 404/405.
 - [ ] Kein Resolver-Aufruf für `humanitl.internal` (Resolver-Mock zählt 0).
 - [ ] `/ask` erzeugt genau eine Karte pro Request, Rate-Limit greift.
-- [ ] History zeigt Meta-Flows mit Filter `meta:true`.
+- [ ] History zeigt Meta-Flows mit Filter `meta:true`. **Offen, verschoben nach HUM-103.** Der Zustandsautomat kennt keinen Weg von einer Nicht-Sperre nach `Recorded`, und `decision=meta` verlangt eine neue Variante in `Decision`, in `DecisionKind` der Proto, im Schema und im Filter des Recorders sowie die Historie in der Oberfläche. Meta-Anfragen erzeugen bis dahin gar keinen Flow; sichtbar ist allein `/ask` als `FlowEvent::AgentAsk` und als Karte (`backlog/CONVENTIONS.md` 4.24).
 
 ### Fallstricke
 - Die Weiche muss vor DNS und vor Regelauswertung liegen, sonst landet `humanitl.internal` als `ask` in der Queue oder löst einen Lookup aus.

@@ -373,7 +373,8 @@ impl FlowRegistry {
     ///
     /// Der Gegenweg zu [`FlowRegistry::transition`]: hier hat jemand anderes
     /// den Übergang bereits auf seinem [`Flow`] ausgeführt, die Registry zieht
-    /// nur nach. Ereignisse ohne Flow ([`FlowEvent::Lagged`]) oder zu einem
+    /// nur nach. Ereignisse ohne Flow ([`FlowEvent::Lagged`],
+    /// [`FlowEvent::AgentAsk`]) oder zu einem
     /// unbekannten Flow ändern nichts. Ereignisse ohne Übergang lassen den
     /// Zustand stehen, tragen aber bei, was sie an Zahlen mitbringen: ein
     /// [`FlowEvent::ResponseChunk`] erhöht [`FlowRecord::response_bytes`], ein
@@ -476,7 +477,8 @@ fn order_key(row: &FlowSummary) -> (bool, Option<Instant>, SystemTime, FlowId) {
 ///
 /// `None` für die Ereignisse, die kein Übergang sind: [`FlowEvent::Received`]
 /// (der Flow beginnt damit), [`FlowEvent::ResponseChunk`],
-/// [`FlowEvent::Diagnostic`] und [`FlowEvent::Lagged`].
+/// [`FlowEvent::Diagnostic`], [`FlowEvent::Lagged`] und
+/// [`FlowEvent::AgentAsk`], das zu gar keinem Flow gehört (HUM-073).
 fn transition_input(event: &FlowEvent) -> Option<TransitionInput> {
     match event {
         FlowEvent::Analyzed { findings, .. } => Some(TransitionInput::Analyze {
@@ -508,7 +510,8 @@ fn transition_input(event: &FlowEvent) -> Option<TransitionInput> {
         FlowEvent::Received { .. }
         | FlowEvent::ResponseChunk { .. }
         | FlowEvent::Diagnostic { .. }
-        | FlowEvent::Lagged { .. } => None,
+        | FlowEvent::Lagged { .. }
+        | FlowEvent::AgentAsk { .. } => None,
     }
 }
 

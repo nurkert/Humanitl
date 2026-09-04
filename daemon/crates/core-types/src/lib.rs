@@ -49,7 +49,7 @@ pub use crate::host::{HostName, HostParseError, ip_is_private};
 pub use crate::http::{
     Authority, BodyRef, HeaderMap, HeaderName, HttpRequest, Method, Scheme, Upgrade, Version,
 };
-pub use crate::ids::{FlowId, IdParseError, RuleId, SandboxId, SessionId};
+pub use crate::ids::{AskId, FlowId, IdParseError, RuleId, SandboxId, SessionId};
 pub use crate::rule::{
     Action, Expiry, HostPattern, Matcher, PathPattern, Rule, path_prefix_is_valid,
 };

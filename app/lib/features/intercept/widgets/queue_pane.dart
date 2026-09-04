@@ -32,6 +32,7 @@ import '../providers/held_groups.dart';
 import '../providers/queue_freeze.dart';
 import '../providers/selection.dart';
 import '../queue_items.dart';
+import 'agent_ask_card.dart';
 import 'group_header_row.dart';
 import 'new_arrivals_pill.dart';
 import 'queue_row.dart';
@@ -353,6 +354,11 @@ class _QueuePaneState extends ConsumerState<QueuePane> {
             ),
           ),
           const HHairline(),
+          // What the agent asked for stands above the queue, not in it: it is
+          // not a request that waits for a decision, and it must never take a
+          // place in the list that a held flow could be mistaken for
+          // (HUM-073). It draws nothing while there is nothing.
+          const AgentAskStrip(),
           Expanded(
             child: MouseRegion(
               onEnter: (PointerEnterEvent _) => _pointerEnter(),

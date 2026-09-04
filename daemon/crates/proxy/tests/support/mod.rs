@@ -23,7 +23,10 @@
     clippy::similar_names,
     clippy::doc_markdown,
     clippy::cast_precision_loss,
-    clippy::cast_possible_truncation
+    clippy::cast_possible_truncation,
+    // Das Geruest ist eine Reihe von Schaltern, keine Zustandsmaschine: jeder
+    // steht fuer eine Einstellung des Daemons, die ein Test einzeln setzt.
+    clippy::struct_excessive_bools
 )]
 
 pub mod clients;
@@ -44,8 +47,8 @@ use humanitl_proxy::ca::{CaStore, LeafCache};
 use humanitl_proxy::hold::next_event;
 use humanitl_proxy::{
     AskPipeline, AsyncStream, ClientTls, ConnectionContext, Direct, Egress, FlowHandler,
-    FlowPipeline, HoldQueue, PassthroughPipeline, ProxyCore, ProxyLimits, ResolveError, Resolver,
-    ResolverPort, RulesPipeline, Scanner, Upstream,
+    FlowPipeline, HandlerPorts, HoldQueue, MetaEndpoint, MetaStatus, PassthroughPipeline,
+    ProxyCore, ProxyLimits, ResolveError, Resolver, ResolverPort, RulesPipeline, Scanner, Upstream,
 };
 use humanitl_recorder::{Recorder, RecorderSettings, SessionMeta};
 use hyper::body::Incoming;
@@ -185,6 +188,7 @@ pub struct ProxyBuilder {
     scanner: Option<Arc<dyn Scanner>>,
     hard_block_checksum_secrets: bool,
     recording: bool,
+    meta: bool,
 }
 
 impl Default for ProxyBuilder {
@@ -206,6 +210,9 @@ impl Default for ProxyBuilder {
             rules: None,
             scanner: None,
             hard_block_checksum_secrets: false,
+            // Wie im Daemon: Der Meta-Endpunkt gehoert zu jeder Sitzung. Ein
+            // Test, der zeigen will, was ohne ihn geschieht, schaltet ihn ab.
+            meta: true,
             recording: false,
         }
     }
@@ -290,6 +297,12 @@ impl ProxyBuilder {
         self
     }
 
+    /// Der Meta-Endpunkt `humanitl.internal` (HUM-073). Vorgabe: an.
+    pub fn meta(mut self, on: bool) -> Self {
+        self.meta = on;
+        self
+    }
+
     /// Eine echte Aufzeichnung im Temp-Verzeichnis des Proxys (HUM-026).
     ///
     /// Ohne das laeuft der Proxy ohne History, wie in den meisten Tests. Wer
@@ -330,19 +343,26 @@ impl ProxyBuilder {
             Pipe::Ask(timeout) => Arc::new(AskPipeline::new(Arc::clone(&queue), timeout)),
             Pipe::Passthrough => Arc::new(PassthroughPipeline::new(Arc::clone(&queue))),
         };
+        // Ein Handle fuer beide: Der Meta-Endpunkt zeigt denselben Satz, nach
+        // dem die Pipeline entscheidet (HUM-073).
+        let set = match &self.rules {
+            None => humanitl_rules::RuleSet::new(),
+            // `parse_rules_for_session` liefert `Err`, sobald ein Befund ein
+            // Fehler ist; was hier ankommt, sind Warnungen.
+            Some(yaml) => {
+                humanitl_rules::parse_rules_for_session(yaml, session)
+                    .unwrap()
+                    .0
+            }
+        };
+        let rules = Arc::new(std::sync::RwLock::new(set));
         let pipeline: Arc<dyn FlowPipeline> = match &self.rules {
             None => inner,
-            Some(yaml) => {
-                // `parse_rules_for_session` liefert `Err`, sobald ein Befund
-                // ein Fehler ist; was hier ankommt, sind Warnungen.
-                let (set, _warnings) =
-                    humanitl_rules::parse_rules_for_session(yaml, session).unwrap();
-                Arc::new(RulesPipeline::new(
-                    Arc::clone(&queue),
-                    Arc::new(std::sync::RwLock::new(set)),
-                    inner,
-                ))
-            }
+            Some(_) => Arc::new(RulesPipeline::new(
+                Arc::clone(&queue),
+                Arc::clone(&rules),
+                inner,
+            )),
         };
         let mut mock = MockResolver::answering(self.resolve_to);
         for (host, addrs) in &self.resolver_answers {
@@ -382,14 +402,29 @@ impl ProxyBuilder {
             .scanner
             .clone()
             .unwrap_or_else(|| Arc::new(humanitl_proxy::NoScan) as Arc<dyn Scanner>);
-        let handler = FlowHandler::with_recorder(
+        let meta = self.meta.then(|| {
+            Arc::new(MetaEndpoint::new(
+                MetaStatus::new(
+                    humanitl_config::AskMode::Ui,
+                    match self.pipe {
+                        Pipe::Ask(timeout) => timeout,
+                        Pipe::Passthrough => Duration::ZERO,
+                    },
+                ),
+                Arc::clone(&rules),
+            ))
+        });
+        let handler = FlowHandler::with_ports(
             Arc::clone(&queue),
             pipeline,
             upstream,
             leaves,
             limits,
-            scanner,
-            recorder.clone(),
+            HandlerPorts {
+                scanner,
+                recorder: recorder.clone(),
+                meta,
+            },
         );
 
         let socket = tmp.path().join("proxy").join("proxy.sock");

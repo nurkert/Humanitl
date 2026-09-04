@@ -126,6 +126,17 @@ typed_id! {
     SandboxId
 }
 
+typed_id! {
+    /// Id einer Bitte des Agenten über `POST http://humanitl.internal/ask`
+    /// (HUM-073, ADR-014).
+    ///
+    /// Eine Bitte ist kein Flow: Sie hält nichts an, sie entscheidet nichts,
+    /// und der Zustandsautomat kennt sie nicht. Sie braucht trotzdem eine
+    /// Kennung, damit die Oberfläche zwei gleichlautende Bitten
+    /// auseinanderhalten und eine Karte wiederfinden kann.
+    AskId
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
