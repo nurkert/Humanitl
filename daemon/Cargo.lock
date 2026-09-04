@@ -835,6 +835,7 @@ dependencies = [
  "humanitl-proxy",
  "humanitl-recorder",
  "humanitl-rules",
+ "humanitl-sandbox",
  "prost",
  "prost-types",
  "protox",
@@ -956,6 +957,7 @@ dependencies = [
 name = "humanitld"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "clap",
  "humanitl-catalog",
  "humanitl-config",
