@@ -31,6 +31,15 @@ issue is in `backlog/sprint-N.md`; read `BACKLOG.md` sections 2 to 6 and
 
 `make check` has to pass before every push.
 
+`make flutter-test-dbus` is not part of it: the D-Bus protocol tests
+(`app/test/features/tray/dbus_live_test.dart`) need a session bus that CI does
+not have, and only on the private bus of `dbus-run-session` are the names
+`org.kde.StatusNotifierWatcher` and `org.freedesktop.Notifications` free, so
+that the test can hold them itself and read what its adapters put on the wire.
+Run it after touching the tray or the notification adapter. On the bus of a
+real desktop the same tests skip with a reason instead of registering against
+the panel of the person sitting there.
+
 ## Sprint gate
 
 Every milestone ends with a demo script, and the scripts of the milestones
