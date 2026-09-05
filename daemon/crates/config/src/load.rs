@@ -159,7 +159,8 @@ struct Entry {
 /// Lädt die Konfiguration aus allen Quellen.
 ///
 /// Was das Laden überlebt, steht als Befund in [`Resolved::diagnostics`]:
-/// `CONFIG_005` (Info) für einen veralteten Schlüssel, `CONFIG_006` (Warning),
+/// `CONFIG_005` (Info) für einen veralteten Schlüssel und (Warning) für einen
+/// ersatzlos entfallenen, `CONFIG_006` (Warning),
 /// wenn alter und neuer Schlüssel nebeneinander stehen, `CONFIG_002` (Warning)
 /// für einen unbekannten Schlüssel in der Umgebung, `CONFIG_007` (Warning) für
 /// ein Projekt-Profil aus fremdem Besitz und `CONFIG_008` (Info), wenn eine
@@ -496,6 +497,15 @@ impl Merge {
                 return Err(project_mount_refused(&entry));
             }
 
+            // Ein Schlüssel, den wir selbst entfernt haben, ist kein Tippfehler:
+            // Die Datei des Nutzers war gestern gültig. Er wird übergangen und
+            // gemeldet, aber er bricht den Start nicht ab
+            // (`backlog/CONVENTIONS.md` 4.25).
+            if let Some(gone) = alias::retired(&entry.path) {
+                self.diagnostics.push(retired_key(&entry, gone));
+                continue;
+            }
+
             let Some(field) = schema::field(&entry.path).filter(|field| !field.group) else {
                 let diagnostic = unknown_key(&entry, severity);
                 if hard {
@@ -680,6 +690,25 @@ fn project_scope_denied(entry: &Entry) -> Diagnostic {
              repository and cannot decide trust-relevant settings; move this setting to the \
              global config or profile",
             entry.origin
+        ))
+        .build()
+}
+
+/// Ein Schlüssel, den ein Issue entfernt hat (`alias::RETIRED`).
+///
+/// Warnung, nie Fehler, und zwar auf jeder Ebene: Der Wert wird übergangen,
+/// aber der Daemon startet. Ein harter `CONFIG_002` wäre hier die Strafe für
+/// eine Entscheidung, die wir getroffen haben, nicht der Nutzer; und stilles
+/// Übergehen wäre die andere Hälfte des Fehlers, den HUM-101 gerade behoben
+/// hat — ein Schlüssel, der dasteht und nichts tut.
+///
+/// Ohne `FixAction`: Es gibt keinen Nachfolger, auf den ein Knopf zeigen
+/// könnte. Was zu tun ist — die Zeile löschen — steht im Satz.
+fn retired_key(entry: &Entry, gone: &alias::Retired) -> Diagnostic {
+    Diagnostic::builder(CONFIG_005, Severity::Warning)
+        .why(format!(
+            "{} (from {}) was removed with {}: {}. The value is ignored; delete the line.",
+            entry.written_as, entry.origin, gone.since, gone.why
         ))
         .build()
 }

@@ -2899,6 +2899,7 @@ DNS über TLS/HTTPS. Ein zweiter Nameserver als Rückfall. Der M1-Lauf (`m1_seal
 - `daemon/crates/proxy/tests/dns_after_allow.rs` (Adapter-Test gegen einen Stub im Test)
 - `tests/escape/dns-stub.py` (neu), `tests/escape/run.sh` (Stub starten, `HUMANITL_RESOLVER__NAMESERVER`, host-seitige Proben nach ESC-3), `tests/escape/esc-3-egress.sh` (die zwei `skip` entfallen, eine Probe zieht in den Host-Teil), `tests/escape/README.md` (Zahlen, Tabelle „Übersprungen")
 - `docs/CONFIG.md` (Generatorlauf), `docs/THREAT-MODEL.md` K-10, `docs/SECURITY.md:585` (nach HUM-111 wieder ins Präsens)
+- `daemon/crates/config/src/model.rs` (der Vermerk `x-pending-issue = "HUM-115"` an `resolver.nameserver` entfällt) und `daemon/crates/config/tests/config_readers.rs` (seine Registerzeile wechselt auf `effective`). Das Leser-Register aus HUM-101 führt den Schlüssel heute als `pending(HUM-115)`, weil dieses Issue ihn wirksam macht; sein Test vergleicht Register und Schema und wird rot, solange nur eine der beiden Seiten nachgezogen ist.
 
 ### Spezifikation
 ```rust
@@ -2935,7 +2936,7 @@ Die Frist des Daemons im Lauf sind 2 s (`HUMANITL_HOLD__TIMEOUT_SECS`, `run.sh`)
 ### Akzeptanzkriterien
 - [ ] `grep -n 'skip dns_not_before_decision\|skip meta_no_dns_lookup' tests/escape/esc-3-egress.sh` ist leer; `./tests/escape/run.sh` meldet `dns_not_before_decision`, `dns_after_allow_once` und `meta_no_dns_lookup` als `pass` und 6 übersprungene Fälle.
 - [ ] `target/escape/dns.log` existiert nach dem Lauf und enthält genau eine Zeile mit `allowed.esc3.test`, keine mit `held.esc3.test`, keine mit `humanitl.internal`.
-- [ ] `grep -n 'post-MVP' daemon/crates/proxy/src/resolver.rs` ist leer; `docs/CONFIG.md` beschreibt `resolver.nameserver` als wirksam; `cargo test -p humanitl-proxy` grün.
+- [ ] `grep -n 'post-MVP' daemon/crates/proxy/src/resolver.rs` ist leer; `docs/CONFIG.md` beschreibt `resolver.nameserver` als wirksam und zeigt in der Spalte „Wirkung" `ja`; das Leser-Register führt ihn als `effective`; `cargo test -p humanitl-proxy -p humanitl-config` grün.
 - [ ] `docs/THREAT-MODEL.md` K-10 und `docs/SECURITY.md` Tabelle 9.3 nennen ESC-3 als host-seitigen Beweis, und `tests/escape/README.md` trägt die neue Bilanz.
 - [ ] `daemon/Cargo.toml` trägt `hickory-resolver` als Workspace-Abhängigkeit (vom Eigentümer eingetragen), `cargo deny check` in der CI grün.
 - [ ] `make check` grün.

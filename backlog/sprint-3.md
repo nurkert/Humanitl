@@ -2249,6 +2249,7 @@ Kein Eintrag in den System- oder Browser-Trust-Store und keine Änderung an der 
 - `tests/e2e/lib.sh`: `start_daemon` reicht Daemon-Argumente durch (geteilt mit M1)
 - `tests/e2e/m2_first_decision/{run.sh,script.json,config.toml}`, `tests/e2e/fake-upstream/gen-test-ca.sh:17-24`
 - `docs/CONFIG.md:160` und `docs/DIAGNOSTICS.md` (beide erzeugt, siehe Fallstricke), `docs/SECURITY.md` 5
+- `daemon/crates/config/src/model.rs` (der Vermerk `x-pending-issue = "HUM-087"` an `resolver.test_ca` entfällt) und `daemon/crates/config/tests/config_readers.rs` (seine Registerzeile wechselt auf `effective`). Das Leser-Register aus HUM-101 führt den Schlüssel heute als `pending(HUM-087)`; sein Test vergleicht Register und Schema und wird rot, solange nur eine Seite nachgezogen ist
 - `backlog/CONVENTIONS.md` 4.22 (Abschnitt über die Testwurzel), `backlog/sprint-2.md:1635` und `:1653`
 
 ### Spezifikation
@@ -2317,6 +2318,7 @@ Doku: `docs/CONFIG.md:160` nennt die Flagpflicht (über den Doc-Kommentar in `mo
 - [ ] Paar-Test im Proxy: mit `trust(root)` antwortet der Proxy `200` und `upstream.hits() == 1`; ohne `trust(root)` antwortet er `502`, der Body enthält `reason: upstream_tls`, und `upstream.hits() == 0`.
 - [ ] `E2E_ONLY=m2 tests/e2e/run.sh` grün mit `https://` in `script.json`: Schritt 7 misst `200` für `https://registry.npmjs.org/tls-probe`, leeres `error`-Feld und `m2_upstream_hits '/tls-probe'` gleich 1; Schritt 9 zählt 16 bediente Anfragen.
 - [ ] `E2E_ONLY=m1 tests/e2e/run.sh` bleibt grün, und der M2-Lauf meldet weder „only N of M assertions ran" noch die Notiz über einen zu niedrigen `M2_EXPECTED_ASSERTIONS`.
+- [ ] `resolver.test_ca` hat einen Leser, und das Register sagt es: Die Zeile in `daemon/crates/config/tests/config_readers.rs` steht auf `effective`, der Vermerk `x-pending-issue` an `resolver.test_ca` ist weg, und `docs/CONFIG.md` zeigt in der Spalte „Wirkung" `ja` (HUM-101).
 - [ ] `make check` ist grün, ohne dass `docs/CONFIG.md`, `docs/DIAGNOSTICS.md` oder `config.schema.json` von Hand geändert wurden; `grep -rn "allow-test-ca" backlog/ docs/ tests/` beschreibt überall dieselbe, jetzt vorhandene Fähigkeit.
 
 ### Fallstricke
@@ -2397,14 +2399,14 @@ Bedingung: Ein ausgelieferter Test braucht die Umlenkung und lässt sich ohne si
 - `humanitl-config` Schema-Test: `known_paths()` und `leaf_paths()` enthalten `experimental.upstream_port_map` nicht mehr.
 - `schema::tests::free_tables_are_leaves`: prüft `resolver.overrides`, nicht mehr den entfernten Schlüssel.
 - `precedence`-Fall für Freiform-Tabellen auf `resolver.overrides`: untere Ebene `{ "a.test" = "10.0.0.1" }`, obere `{ "b.test" = "10.0.0.2" }`, Ergebnis ist die obere Tabelle allein.
-- Neuer Fall in den Config-Tests: eine `config.toml` mit `[experimental] upstream_port_map = { "443" = 8443 }` liefert `CONFIG_002` mit `Severity::Error` und dem Schlüsselnamen im Text.
+- Neuer Fall in den Config-Tests: eine `config.toml` mit `[experimental] upstream_port_map = { "443" = 8443 }` lädt und liefert `CONFIG_005` mit `Severity::Warning`, dem Schlüsselnamen und HUM-088 im Text; der Wert erreicht die Konfiguration nicht.
 - Fixture-Test und `config_docs`-Test grün ohne erneutes Setzen von `UPDATE_CONFIG_DOCS`.
 - `tests/e2e/m2_first_decision/run.sh` unverändert grün.
 
 ### Akzeptanzkriterien
 - [ ] `grep -rn "upstream_port_map" --include="*.rs" daemon/ | grep -v "/target/"` liefert keine Zeile.
 - [ ] `grep -rn "upstream_port_map" docs/ tests/ app/` liefert keine Zeile; in `backlog/` bleiben nur die Zeilen von CONVENTIONS 4.22 und dieses Issue.
-- [ ] Ein Start mit einer `config.toml`, die `[experimental] upstream_port_map = { "443" = 8443 }` enthält, endet mit Exit-Code ungleich 0 und einem `CONFIG_002`, dessen `why` den Schlüssel nennt.
+- [ ] Ein Start mit einer `config.toml`, die `[experimental] upstream_port_map = { "443" = 8443 }` enthält, läuft weiter und meldet `CONFIG_005` als Warnung mit Schlüssel, Issue und Grund; der Pfad steht dafür in `alias::RETIRED` (`backlog/CONVENTIONS.md` 4.25, entschieden in HUM-101).
 - [ ] `cargo test -p humanitl-config` grün, inklusive Fixture- und `config_docs`-Test ohne Neuschreiben der erzeugten Dateien.
 - [ ] `git diff -- daemon/crates/config/tests/fixtures/config.schema.json docs/CONFIG.md` zeigt ausschließlich Entfernungen, die den Schlüssel betreffen.
 - [ ] `tests/e2e/m2_first_decision/run.sh` Exit 0, `M2_EXPECTED_ASSERTIONS` weiterhin 47.
@@ -2413,7 +2415,7 @@ Bedingung: Ein ausgelieferter Test braucht die Umlenkung und lässt sich ohne si
 
 ### Fallstricke
 - `precedence.rs` verliert ohne Ersatz den einzigen Test für die Regel aus CONVENTIONS 4.11; `resolver.overrides` ist die letzte Freiform-Tabelle und muss den Fall übernehmen, sonst ist die Regel unbelegt.
-- Entfernen ist ein Bruch für bestehende Dateien: Der Schlüssel wird vom stillen No-Op zum harten `CONFIG_002`. Das ist zulässig, weil `Experimental` es ankündigt (`model.rs:71`, `docs/CONFIG.md:75`), gehört aber in CONVENTIONS 4.22, damit ein Fehlerbericht dazu sofort einzuordnen ist.
+- Entfernen ist ein Bruch für bestehende Dateien. Seit HUM-101 wird er abgefedert: Der Pfad kommt in `alias::RETIRED`, das Laden warnt mit `CONFIG_005` und startet weiter (CONVENTIONS 4.25). Ohne diesen Eintrag wäre der Schlüssel ein harter `CONFIG_002`, und ein Update ließe den Daemon nicht mehr starten. Der Grund für die Entfernung selbst gehört weiterhin in CONVENTIONS 4.22, damit ein Fehlerbericht dazu sofort einzuordnen ist.
 - `daemon/crates/config/tests/fixtures/config.schema.json` und `docs/CONFIG.md` werden erzeugt. Von Hand geändert driften sie gegen `model.rs`, und der Fixture-Test wird erst im nächsten Lauf rot.
 - HUM-039 nennt den Schlüssel nicht; wer in dessen Nähe sucht, findet `upstream_override` (`backlog/sprint-3.md:1492` und `:1504`) und verwechselt zwei verschiedene, beide nicht existierende Hebel.
 - Beim Einbau nach Variante B: `Direct::new` ist heute `const fn` und verliert das mit einem `BTreeMap`-Parameter; `impl Default for Direct` zieht mit.
@@ -2484,17 +2486,41 @@ Die Einstufung `effective` ist eine Behauptung eines Menschen, keine Messung. Da
 - `ui.sound`, `ui.notifications`, `experimental.ws_hold` und die beiden `pseudonyms`-Schlüssel tragen `pending`, und `docs/CONFIG.md` zeigt es.
 
 ### Akzeptanzkriterien
-- [ ] Die erste Entscheidung (`idle_timeout_secs` gegen `header_timeout_secs`) ist getroffen und in `CONVENTIONS.md` begründet; am Ende beschreibt kein Schlüssel dieselbe Spanne wie ein anderer.
-- [ ] Jeder Schema-Pfad steht im Register, und der Test wird rot, sobald einer fehlt oder einer zu viel ist.
-- [ ] Eine gehaltene Anfrage und eine schweigende Durchreiche überleben die Leerlaufgrenze; eine leere Verbindung nicht.
-- [ ] `docs/CONFIG.md` kommt aus dem Generatorlauf und nennt für jeden noch nicht wirksamen Schlüssel sein Issue.
-- [ ] Der IPC-Stapel ist von den Grenzen ausgenommen, und ein Test belegt, dass ein minutenlang stummer Ereignisstrom nicht abbricht.
-- [ ] `make check`, clippy mit `-D warnings` und `cargo fmt --all -- --check` grün.
+- [x] Die erste Entscheidung (`idle_timeout_secs` gegen `header_timeout_secs`) ist getroffen und in `CONVENTIONS.md` 4.25 begründet; am Ende beschreibt kein Schlüssel dieselbe Spanne wie ein anderer.
+- [x] Jeder Schema-Pfad steht im Register, und der Test wird rot, sobald einer fehlt oder einer zu viel ist (`every_schema_path_has_a_register_line`, Probe mit einem erfundenen Feld).
+- [x] Eine gehaltene Anfrage und eine schweigende Durchreiche überleben die Leerlaufgrenze; eine leere Verbindung nicht — und eine Keep-Alive-Verbindung nach ihrer Antwort ebenso wenig (`daemon/crates/proxy/tests/timeouts.rs`, jeder Fall mit oberer und unterer Schranke).
+- [x] `docs/CONFIG.md` kommt aus dem Generatorlauf und nennt für jeden noch nicht wirksamen Schlüssel sein Issue; ein Test hält dazu fest, dass die Spezifikation dieses Issues den Schlüssel wörtlich nennt.
+- [x] Der IPC-Stapel ist von den Grenzen ausgenommen (`daemon/crates/ipc/src/server.rs:1152` reicht `header_timeout_secs` allein an die LLM-Probe, nie an den tonic-Server). **Die zweite Hälfte des Kriteriums entfällt**: Es wurde keine Uhr gebaut, von der auszunehmen wäre — `limits.idle_timeout_secs` ist entfernt statt verdrahtet. Ein Test über einen minutenlang stummen Ereignisstrom prüfte damit nichts, was dieses Issue geändert hat. Er gehört an das Issue, das eine Uhr baut: HUM-120 nennt den IPC-Stapel in seinem Nicht-Ziel.
+- [x] `cargo fmt --all -- --check`, clippy mit `-D warnings`, `cargo build --workspace --all-targets`, `cargo test --workspace`, `cargo doc` mit `-D warnings`, `tools/check-deps.sh`, `scripts/ci/lint-docs.sh` und `scripts/ci/lint-no-string-errors.sh` grün. Die Flutter-Hälfte von `make check` läuft auf dieser Maschine nicht: `protoc-gen-dart` fehlt, `scripts/gen-proto.sh` überspringt die Dart-Seite, und `app/lib/core/ipc/generated` entsteht nicht. Der Diff fasst kein `app/**` und kein `proto/**` an.
 
 ### Fallstricke
 - Eine Leerlaufgrenze auf der Verbindung zum Agenten schneidet ohne den Zähler genau den Hold ab, den sie verschonen soll. Das ist der Grund, warum dieser Schlüssel gefährlicher ist als sein Fehlen.
 - Der Zähler muss die CONNECT-Rekursion überleben: `ConnectionContext::tunnel` klont den Kontext (`handler.rs:335-341`), und ein Zähler, der dabei verlorengeht, lässt getunnelte Holds ungeschützt.
 - Ein neuer `reason` zieht Proto, `convert.rs` und die Dart-Seite nach sich, dazu `CONVENTIONS.md` 3.2 mit dem Status je Grund.
+
+### Ergebnis (2026-09-05)
+
+**Erste Entscheidung: `limits.idle_timeout_secs` ist entfernt, `limits.header_timeout_secs` bleibt.** Der dritte Weg also, und aus vier Gründen der einzige ehrliche. Erstens deckt `header_read_timeout` in `hyper` beide Hälften derselben Spanne ab, das Eintreffen der Kopfzeilen und die Lücke bis zur nächsten Anfrage; die Uhr ist genau so lange gespannt, wie die Verbindung auf einen Anfragekopf wartet. Zweitens war der zweite Schlüssel mit seinen Vorgabewerten unerreichbar: 90 Sekunden Leerlauf gegen 30 Sekunden Kopf-Frist, die kürzere Uhr läuft immer zuerst ab. Drittens ist die einzige Spanne, die er allein beschreiben könnte, die Stille **während** einer laufenden Anfrage — und genau dort darf keine Uhr laufen, weil dort der Hold sitzt. Viertens folgt daraus, dass kein Wrapper vor `serve_connection` und kein Zähler gehaltener Flüsse nötig ist: Es bleibt keine zweite Uhr, die anzuhalten wäre. Entfernt wird nach dem Muster von HUM-088, ohne Alias; die Begründung steht in `backlog/CONVENTIONS.md` 4.25.
+
+**Drei Spannen bleiben unbewacht, und sie sind benannt statt eingebaut.** Nicht nur der gestreamte Antwort-Rumpf: Auch der Anfrage-Rumpf wird ohne Frist gepuffert (`handler.rs:597`, hypers Kopf-Uhr ist da schon gelöscht; es greift allein die Byte-Grenze `hold_body_cap_bytes`), und der TLS-Handschlag nach einem `CONNECT` hat gar keine Uhr (`handler.rs:337`). `limits.body_timeout_secs` trägt deshalb `pending(HUM-120)`, und HUM-120 heißt jetzt „Drei unbewachte Spannen der Verbindung". Alle drei werden an Stellen bewacht, die in `handler.rs` liegen — an dieser Datei wurde parallel gearbeitet, deshalb kein Code in diesem Commit. Die Form gehört mit ins Issue: Beide Rumpf-Grenzen begrenzen die Stille zwischen zwei Stücken und nicht die Gesamtdauer, was der heutige Doku-Kommentar sagt; diese Umdeutung ist ausdrücklich Teil von HUM-120, samt `docs/CONFIG.md` und CONVENTIONS 4.4 im selben Commit. Eine Gesamtdauer von 300 Sekunden risse den Strom des lokalen Sprachmodells, jeden langen Download und jeden großen Upload ab.
+
+**Das Register liegt in `daemon/crates/config/tests/config_readers.rs`.** 43 Zeilen, eine je Blattpfad, Einstufung `effective` oder `pending(HUM-xxx)`; die Angabe am Feld ist `x-pending-issue` in `src/model.rs`, gebaut wie `x-tier`. Sechs Tests halten es: jeder Schema-Pfad hat eine Zeile und jede Zeile einen Pfad, Register und Schema nennen dasselbe Issue, das Register ist sortiert, jedes genannte Issue steht als Zeile in `BACKLOG.md`, die Liste der Schlüssel ohne Leser ist ausgeschrieben, und `limits.idle_timeout_secs` ist weg. Die Probe des Registers selbst prüft die Vergleichsfunktion mit einem erfundenen Pfad und mit einem entfernten, damit der Vollständigkeitstest nicht nur sich selbst prüft.
+
+**Jeder `pending`-Zeiger zeigt auf ein Issue, das den Schlüssel wirklich nennt — und ein Test hält das fest.** Vier Spezifikationen nannten ihren Schlüssel zunächst nicht: HUM-069 (sprach von `configGet` und `SubscribeConfig`, aber weder von `ui.notifications` und `ui.theme` noch von `notificationsEnabled` und `themeModeProvider`), HUM-115 (baut den `HickoryResolver` hinter `resolver.nameserver`, wusste aber nichts vom Register), HUM-079 und HUM-087. Alle vier tragen die fehlenden Sätze jetzt: je eine Pfadzeile auf `model.rs` und `config_readers.rs` und je ein Akzeptanzkriterium, das die Registerzeile auf `effective` dreht.
+
+Geprüft wird das nicht mehr an der Form, sondern an der Sache: `every_pending_entry_points_at_an_issue_that_names_the_key` verlangt eine Zeile in `BACKLOG.md`, eine Überschrift `## HUM-xxx` in einer `backlog/sprint-*.md` **und** den Schlüsselpfad wörtlich in deren Abschnitt. Die erste Fassung prüfte nur die Tabellenzeile — und die bleibt stehen, wenn ein Issue erledigt ist. Nachgemessen: `pending(HUM-104)` an `ui.sound` war unter der alten Prüfung grün, obwohl HUM-104 längst gemergt ist und den Schlüssel nie nennt; unter der neuen Prüfung fällt es mit dem Satz „the specification of HUM-104 never names the key" auf.
+
+**Zehn Schlüssel tragen `pending`, drei mehr als das Issue nannte.** Neu gefunden hat das Register `resolver.nameserver` (der Daemon warnt beim Start und fragt trotzdem `/etc/resolv.conf`), `ui.theme` (dieselbe fehlende Naht wie bei `ui.notifications`) und, als bereits bekanntes eigenes Issue, `resolver.test_ca` (HUM-087). Die Zuordnung: `experimental.upstream_port_map` HUM-088, `experimental.ws_hold` und `ui.sound` HUM-121 (neu), `limits.body_timeout_secs` HUM-120 (neu), `pseudonyms.*` HUM-079, `resolver.nameserver` HUM-115 (die Bestandsaufnahme vom 2026-09-05 baut dort den `HickoryResolver` hinter den Schlüssel), `resolver.test_ca` HUM-087, `ui.notifications` und `ui.theme` HUM-069. Neu angelegt wurden nur HUM-120 und HUM-121; die Nummern 107 bis 119 gehören der Bestandsaufnahme vom selben Tag.
+
+**Ein entfernter Schlüssel warnt, er scheitert nicht.** Die erste Fassung machte aus `limits.idle_timeout_secs` einen harten `CONFIG_002`, wie bei einem Tippfehler. Das ist die Strafe für eine Entscheidung, die wir getroffen haben und nicht der Nutzer: Seine Datei war gestern gültig, und der Daemon startet nach dem Update nicht mehr. Der Pfad steht deshalb in `alias::RETIRED` mit Issue und Grund, das Laden übergeht ihn und legt `CONFIG_005` als Warnung dazu, und `docs/CONFIG.md` führt ihn in einer eigenen Tabelle „Entfallene Schlüssel". Ein unbekannter Schlüssel ohne Eintrag in `RETIRED` bleibt der harte Fehler. Die Regel gilt für jede künftige Streichung, also auch für `experimental.upstream_port_map` in HUM-088; sie steht in `backlog/CONVENTIONS.md` 4.25, und HUM-088 ist darauf umgestellt.
+
+**Die Warnung über einen entfallenen Schlüssel sieht heute niemand, und das ist notiert.** `load_config` (`daemon/bin/humanitld/src/main.rs:483-489`) schreibt jeden Befund des Ladens mit `tracing::warn!` und verwirft ihn danach; unter systemd landet er im Journal, und die Oberfläche erfährt nichts. Für einen Schlüssel, dessen Wert stillschweigend übergangen wird, ist genau das der Fall, in dem der Mensch es erfahren muss. Der Weg dorthin ist gebaut und wird nur nicht benutzt: `report_recorder_diagnostics` (`main.rs:302-330`) veröffentlicht Befunde ohne Flow als `FlowEvent::Diagnostic { flow_id: None }` in den Ereignisstrom, und HUM-106 sammelt sie in `diagnosticsProvider`. Es fehlt, dass `load_config` seine Befunde behält, bis die Warteschlange steht, und sie dort einspeist. Der Daemon gehört nicht zu den Pfaden dieses Issues; das Kriterium hängt deshalb an HUM-069, das die Konfiguration ohnehin anfasst und für die kaputte `config.toml` schon ein solches Kriterium führt.
+
+**Die Grenze des Registers steht in seinem Kopf, und drei Tests halten sie.** Der Durchlauf findet Blätter über `properties`. Die Schlüssel *in* einer freien Tabelle und die Elemente einer Liste sind deshalb nicht einzeln erfasst — der Behälter trägt die Zeile. `the_schema_hides_no_leaf_from_the_walk` wird rot, sobald in einem Behälter eine Struktur steht, und ebenso bei `allOf`, `anyOf` oder `$ref`. Die Prüfung sieht dabei nicht nur eine Ebene tief: `Vec<Enum mit Struktur-Varianten>` legt seine Felder unter `items.oneOf[].properties` und `BTreeMap<String, Vec<Struktur>>` zwei Behälter tief — beide Formen kamen an der ersten Fassung vorbei (nachgemessen), die zweite Fassung steigt durch `items`, `additionalProperties`, `oneOf`, `anyOf` und `prefixItems` ab und nennt in der Meldung weiterhin den Behälter. `#[serde(flatten)]` ist dabei kein Loch: nachgemessen mit einem `flatten` in `Experimental`, das der Generator wegen `inline_subschemas` in die `properties` einschmilzt, sodass der Vollständigkeitstest es als `experimental.enabled` ohne Registerzeile nennt. `every_alias_leads_to_a_registered_key` deckt die dritte Lücke: Jeder Alias zeigt auf ein registriertes Blatt und ist selbst keines. Dazu `no_group_carries_a_pending_note`: Ein `x-pending-issue` an einer Gruppe wirkt nicht — `leaves()` filtert Gruppen weg, und `docs/CONFIG.md` zeigt für jedes Blatt darunter weiter „ja" —, es ist aber ein naheliegender Irrtum, und ohne diese Zusicherung fiele nur der Schema-Schnappschuss auf, den derselbe Mensch neu schreibt.
+
+**Die Zeitgrenzen-Tests binden an die Konfiguration, nicht an das Vorhandensein einer Uhr.** Jeder der vier Fälle misst eine untere **und** eine obere Schranke, und die beiden Schließen-Fälle laufen mit zwei verschiedenen konfigurierten Werten (1 s und 3 s). Die Überlebens-Fälle messen nach dem Hold beziehungsweise nach dem Strom, dass dieselbe Verbindung dann nach genau der konfigurierten Frist schließt; damit fällt auch eine fest verdrahtete Frist durch, die den kurzen Fall zufällig überlebt. Nachgemessen mit `Duration::from_secs(5)` an der Stelle der Konfiguration: alle vier rot, jeder mit dem Satz „the clock does not come from limits.header_timeout_secs". Ein fünfter Fall hält den heutigen Zustand des Anfrage-Rumpfs fest — keine Uhr, die Verbindung bleibt offen —, und er wird rot, sobald HUM-120 diese Spanne schließt.
+
+**`docs/CONFIG.md` hat eine Spalte „Wirkung"** mit `ja` oder `offen (HUM-xxx)` und einen Abschnitt, der beides erklärt; `docs/SECURITY.md` nennt die Rumpfgrenze ausdrücklich als heute wirkungslos, statt sie in einer Zeile mit den drei wirksamen Grenzen zu führen.
 
 ## HUM-102 · Die abgelehnte private Adresse hat keinen Diagnostic
 Sprint: 3 · Größe: M · Abhängigkeiten: HUM-015, HUM-025 · Blockiert: —
@@ -2663,3 +2689,108 @@ Aus den Reviews kamen zwei Hälften derselben Lücke, beide behoben. Antigravity
 `RuleSet::prepend_bundled` heißt jetzt `RuleSet::add_bundled`, hängt hinten an statt vorn und wird von `snapshot_of` gerufen — also auf dem Weg, den der Daemon geht.
 
 Tests über den echten Ladeweg: `load_rules_evaluates_the_passthrough_before_every_rule_of_the_user` und `load_rules_lets_a_user_rule_override_a_bundled_one` in `daemon/bin/humanitld/src/main.rs`, dazu `daemon/crates/proxy/tests/rules_order.rs` (fünf Fälle über `RulesStore::load` und die Proxy-Pipeline, mit `DecisionSource::Passthrough`, `LLM_005` und der Aufzeichnung). Für die Herkunft: `a_passthrough_written_into_rules_yaml_does_not_outrank_the_user` (Speicher), `a_file_cannot_declare_a_rule_bundled` und `a_passthrough_from_a_file_does_not_reach_the_first_rank` (Engine), `a_profile_cannot_declare_its_own_rule_bundled` (globales Profil), `a_session_scoped_bundled_rule_does_not_outrank_the_user` (HUM-027 gegen die Gültigkeit).
+
+## HUM-120 · Drei unbewachte Spannen der Verbindung
+Sprint: 3 · Größe: M · Abhängigkeiten: HUM-062, HUM-101 · Blockiert: —
+
+### Kontext
+`limits.body_timeout_secs` (Vorgabe 300) wird in `daemon/crates/config/src/validate.rs:211` auf seinen Bereich geprüft und danach von niemandem gelesen. Seit HUM-101 trägt der Schlüssel im Register (`daemon/crates/config/tests/config_readers.rs`) `pending(HUM-120)` und in der Spalte „Wirkung" von `docs/CONFIG.md` den Vermerk `offen (HUM-120)`. Der Vermerk ist ehrlich, aber er ist keine Grenze.
+
+Auf der Verbindung zum Agenten laufen drei Spannen ohne Uhr, und alle drei sind Stille, während etwas offen steht:
+
+1. **Der Anfrage-Rumpf.** `handler.rs:597` puffert ihn über `body::buffer(incoming, cap)`, ohne Frist. Hypers Kopf-Uhr ist zu diesem Zeitpunkt gelöscht — sie wird gespannt, wenn ein Kopf gelesen wird, und fällt weg, sobald er geparst ist. Ein Client, der `Content-Length: 1000` ankündigt, zehn Bytes schickt und dann schweigt, hält Verbindung, Task und Hold-Budget unbegrenzt. Es greift allein `limits.hold_body_cap_bytes`, und das ist eine Byte-Grenze, keine Zeit.
+2. **Der gestreamte Antwort-Rumpf.** `body.rs` (`TeeBody`) reicht jedes Stück durch und wartet auf das nächste, so lange es dauert. Bis zu den Antwort-Kopfzeilen deckt der `handshake_timeout` des Upstreams alles ab (`upstream.rs:267`, `:288`, `:301`, gespeist aus `limits.header_timeout_secs`); danach nichts mehr.
+3. **Der TLS-Handschlag nach `CONNECT`.** `handler.rs:337` nimmt ihn über `tls::accept` entgegen, ohne Frist. Wer den Tunnel öffnet und nie ein `ClientHello` schickt, hält den Task für immer; die Kopf-Frist des inneren `serve_connection` beginnt erst nach dem Handschlag.
+
+**Was dabei gebunden wird, und von wem.** Je stehengebliebener Verbindung bleibt eine Tokio-Aufgabe und ein Dateideskriptor liegen; beim gestreamten Antwort-Rumpf zusätzlich die Verbindung zum Ziel und eine offene `ResponseSink` der Aufzeichnung. Dazu kommt das eigentliche Vielfache: `accept_loop` (`daemon/crates/proxy/src/core.rs:134-149`) begrenzt die Zahl gleichzeitiger Verbindungen nicht. Ein Prozess in der Sandbox kann deshalb viele Unix-Ströme öffnen, je einen Kopf schicken und im Rumpf stehenbleiben. **Eine Uhr je Spanne ohne Obergrenze für gleichzeitige Verbindungen deckt nur die Hälfte**, deshalb gehört die Obergrenze in dieses Issue: ein neuer Schlüssel `limits.max_client_connections` (Sprint 5 nennt ihn bereits, `backlog/sprint-5.md:241`), der Accept-Loop lehnt darüber hinaus ab, statt anzunehmen und liegen zu lassen. Die drei Garantien bricht das alles nicht — es geht nichts hinaus, was niemand erlaubt hat —, aber der Host trägt die Last.
+
+Der mit HUM-101 entfernte Schlüssel `limits.idle_timeout_secs` beschrieb wörtlich genau das („Sekunden ohne Bytes, nach denen eine offene Verbindung geschlossen wird"). Entfernt wurde er trotzdem zu Recht: Eine **eine** Uhr über der ganzen Verbindung trifft auch den Hold und den streamenden Antwort-Strom, in denen dieselbe Stille richtig ist (`backlog/CONVENTIONS.md` 4.25, empirisch belegt in `daemon/crates/proxy/tests/timeouts.rs`). Was fehlt, sind Grenzen **je Spanne** mit eigenen Namen — dieses Issue baut sie.
+
+### Ziel
+Die drei Spannen haben eine Grenze, `limits.body_timeout_secs` speist die beiden Rumpf-Spannen, `limits.header_timeout_secs` den Handschlag, und das Register führt `limits.body_timeout_secs` danach als `effective`.
+
+### Nicht-Ziel
+Keine zweite Uhr über der ganzen Verbindung: `limits.header_timeout_secs` bleibt die einzige Leerlaufgrenze zwischen zwei Anfragen (HUM-101). Keine Grenze am Hold — er ist die Stille, für die es Humanitl gibt — und keine an der Byte-Menge; `limits.hold_body_cap_bytes` bleibt, wie es ist.
+
+### Betroffene Pfade
+- `daemon/crates/proxy/src/body.rs`: die Grenze am `TeeBody` und um `body::buffer`
+- `daemon/crates/proxy/src/handler.rs`: `ProxyLimits` bekommt die Frist, `body::buffer` (Zeile 597) und `body::tee` (Zeile 984) reichen sie durch, `tls::accept` (Zeile 337) bekommt die Kopf-Frist
+- `daemon/crates/proxy/src/core.rs`: die Obergrenze gleichzeitiger Verbindungen im Accept-Loop
+- `daemon/crates/proxy/tests/timeouts.rs`: die neuen Paar-Tests neben den vier Fällen aus HUM-101
+- `daemon/crates/config/src/model.rs` (Doku-Kommentar und `x-pending-issue`), `daemon/crates/config/tests/config_readers.rs` (Registerzeile auf `effective`)
+- `docs/CONFIG.md` (Generatorlauf), `docs/SECURITY.md` (der Vorbehalt in der Grenzen-Tabelle entfällt), `backlog/CONVENTIONS.md` 4.4 und 4.25
+
+### Spezifikation
+**Die Grenze begrenzt die Stille zwischen zwei Stücken, nicht die Gesamtdauer — und das ist eine Umdeutung.** Heute sagen Schema, Doku und `docs/CONFIG.md` „Sekunden, in denen ein Body vollständig übertragen sein muss". Eine Gesamtdauer von 300 Sekunden risse den Strom des lokalen Sprachmodells ab, dazu jeden langen Download und jeden großen Upload — also genau den erklärten Seitenkanal und den Normalfall. Die Umdeutung gehört deshalb ausgesprochen: Doku-Kommentar in `model.rs`, `docs/CONFIG.md` aus dem Generatorlauf und `backlog/CONVENTIONS.md` 4.4 im selben Commit.
+
+**Vorher zu entscheiden:** ein Name für beide Rumpf-Spannen oder zwei. Sprint 5 hatte zwei vorgesehen (`limits.client_body_timeout_secs` für die Anfrage, `limits.response_idle_timeout_secs` für die Antwort, `backlog/sprint-5.md:231` und `:233`). Wer sie vorzieht, benennt `limits.body_timeout_secs` um und trägt den alten Pfad in `alias::RETIRED` ein, damit eine bestehende Datei eine Warnung bekommt und keinen Fehler (CONVENTIONS 4.25). Wer bei einem Namen bleibt, schreibt in den Doku-Kommentar, dass er beide Richtungen deckt. Was gewählt wird, steht danach in CONVENTIONS 4.4.
+
+**Der Ausgang je Spanne.** Der Anfrage-Rumpf hat eine Anfrage in Flug und kann deshalb eine Antwort tragen: `408`, `Connection: close`, wie `text_response` sie baut. Ob dafür ein eigener `BlockReason` nötig ist oder der vorhandene Fehlerpfad von `body::buffer` reicht (`BufferError::Read` endet heute mit `400`), entscheidet das Issue am Code — ein neuer Grund zieht Proto, `ipc/src/convert.rs` und die Dart-Seite nach sich, dazu CONVENTIONS 3.2. Der Antwort-Rumpf hat seine Kopfzeilen längst beim Client; er endet wie ein abgebrochener Strom (`ResponseSink::abort`, Mitschnitt als gekürzt, Flow über `TransitionInput::Record`), und es entsteht kein neuer Grund. Der Handschlag hat noch keinen Flow; er endet still, mit einer Protokollzeile, wie ein gescheiterter Handschlag heute auch (`tls_observe`).
+
+**Die Zeit kommt aus einer einspeisbaren Uhr, nie aus der Wanduhr.** `hyper::rt::Timer` ist im Proxy vorhanden (`TokioTimer` in `serve_connection`); ein Test, der 300 Sekunden wartet, ist kein Test.
+
+### Tests
+- Paar-Test Anfrage-Rumpf: ein Client, der `Content-Length` ankündigt und nach zehn Bytes schweigt, bekommt `408` und die Verbindung wird geschlossen; mit hoher Grenze läuft dieselbe Anfrage zu Ende.
+- Paar-Test Antwort-Rumpf: ein Ziel, dessen zweites Stück zu spät kommt, wird abgebrochen; mit hoher Grenze läuft der Strom zu Ende.
+- Paar-Test Handschlag: ein `CONNECT` ohne `ClientHello` endet nach der Kopf-Frist; ein regulärer Handschlag nicht.
+- Die drei Fälle aus HUM-101 (`daemon/crates/proxy/tests/timeouts.rs`) bleiben grün: gehaltene Anfrage und streamende Durchreiche überleben, die leere Verbindung nicht.
+- Die Aufzeichnung des abgebrochenen Antwort-Rumpfs ist als gekürzt vermerkt, nicht als vollständig.
+- `config_readers`: `limits.body_timeout_secs` steht auf `effective`, und `docs/CONFIG.md` zeigt `ja`.
+
+### Akzeptanzkriterien
+- [ ] Alle drei Spannen haben eine Grenze; für jede belegt ein Paar-Test beide Richtungen.
+- [ ] Die Zahl gleichzeitiger Verbindungen je Sitzung ist begrenzt (`limits.max_client_connections`), und ein Test belegt, dass die Verbindung über der Grenze abgelehnt wird, statt angenommen und liegen gelassen zu werden.
+- [ ] Jeder Paar-Test läuft über eine einspeisbare Uhr und in unter einer Sekunde Wanduhrzeit.
+- [ ] Eine gehaltene Anfrage und eine streamende Durchreiche zum Sprachmodell werden nicht abgebrochen (die Tests aus HUM-101 bleiben grün).
+- [ ] Der Doku-Kommentar von `limits.body_timeout_secs` beschreibt die Stille zwischen zwei Stücken, und `docs/CONFIG.md` sowie CONVENTIONS 4.4 sagen im selben Commit dasselbe.
+- [ ] Das Leser-Register führt `limits.body_timeout_secs` als `effective`; `docs/SECURITY.md` verliert den Vorbehalt in der Grenzen-Tabelle.
+- [ ] `make check`, clippy mit `-D warnings` und `cargo fmt --all -- --check` grün.
+
+### Fallstricke
+- Eine Gesamtdauer statt einer Stille tötet den erklärten Seitenkanal zum Sprachmodell und jeden langen Upload. Wer die Grenze so baut, wie der heutige Doku-Kommentar sie beschreibt, baut sie falsch.
+- `TeeBody::finish` läuft auch im `Drop`. Die Uhr darf den Flow nicht ein zweites Mal abschließen.
+- Die Uhr am Anfrage-Rumpf darf erst nach dem Kopf laufen und nicht schon während des Wartens auf die nächste Anfrage; sonst deckt sie dieselbe Spanne wie `limits.header_timeout_secs`, und es gäbe wieder zwei Uhren für eine Spanne (HUM-101).
+- `Expect: 100-continue` beantwortet hyper beim ersten Lesen des Rumpfs. Die Uhr beginnt danach, sonst trifft sie einen Client, der auf `100 Continue` wartet.
+- Drei Uhren schließen die Spannen, aber nicht die Menge: Ohne Obergrenze für gleichzeitige Verbindungen bindet derselbe Angriff dieselben Ressourcen, nur kürzer. Beides gehört in denselben Commit.
+
+## HUM-121 · Zwei Schlüssel ohne Leser: `ui.sound` und `experimental.ws_hold`
+Sprint: 3 · Größe: S · Abhängigkeiten: HUM-101 · Blockiert: —
+
+### Kontext
+Beide stehen im Schema, werden beim Laden geprüft, erscheinen in `docs/CONFIG.md` und haben außerhalb von `#[cfg(test)]` keinen Leser. HUM-101 hat sie im Register auf `pending(HUM-121)` gesetzt; damit lügt das Dokument nicht mehr, aber die Schlüssel sind weiter da.
+
+- `ui.sound`: Im Rust-Teil kein Treffer, in der Oberfläche kein Ton. Der Doku-Kommentar räumte die fehlende Wirkung selbst ein („Im MVP ohne Wirkung", HUM-034).
+- `experimental.ws_hold`: Treffer nur unter `#[cfg(test)]` (`daemon/bin/humanitl/src/cli.rs:694`). Ein WebSocket-Upgrade entscheidet heute allein die Regel (ADR-0007 nennt den Schalter, der Proxy kennt ihn nicht).
+
+Der dritte Schlüssel ohne Leser, den das Register gefunden hat, gehört nicht hierher: `resolver.nameserver` bedient HUM-115, das den `HickoryResolver` hinter den Schlüssel baut und damit den DNS-Beweis von ESC-3 führt.
+
+### Ziel
+Für beide Schlüssel eine begründete Entscheidung, Einbau oder Streichung, und danach kein Eintrag `pending(HUM-121)` mehr im Register.
+
+### Nicht-Ziel
+Kein Resolver-Adapter (HUM-115). Keine Verdrahtung von `ui.notifications` und `ui.theme`: Die hängen an `GetConfig` und gehören zu HUM-069.
+
+### Betroffene Pfade
+- `daemon/crates/config/src/model.rs`, `src/validate.rs`, `tests/schema.rs`, `tests/config_readers.rs`, `tests/fixtures/config.schema.json` (erzeugt)
+- `docs/CONFIG.md` (erzeugt), `backlog/CONVENTIONS.md` 4.4 und 4.25
+- bei Einbau zusätzlich der jeweilige Leser: der Melder der Oberfläche beziehungsweise `daemon/crates/proxy/src/pipeline.rs`
+
+### Spezifikation
+Das Muster ist HUM-088: Ein Schalter, der nie einen Weg geschaltet hat, fällt weg, statt nachträglich einen zu bekommen — ohne Alias, danach ein harter `CONFIG_002` mit dem Schlüsselnamen. Für `experimental.ws_hold` spricht dafür, dass `Experimental` seinen eigenen Abbau ankündigt; dagegen spricht ADR-0007, der den Schalter als geplanten Weg nennt. Entschieden wird er sinnvoll erst nach HUM-110: Solange ein WebSocket-Upgrade überhaupt nicht zustande kommt, gibt es nichts, was ein Schalter anhalten könnte. Für `ui.sound` gilt: Ein Schalter ohne Ton ist keine Einstellung.
+
+Jede Entscheidung wird in `backlog/CONVENTIONS.md` 4.25 fortgeschrieben, damit ein späterer Fehlerbericht sie einordnen kann.
+
+### Tests
+- `config_readers`: kein `pending(HUM-121)` mehr; die Liste der Schlüssel ohne Leser wird kürzer.
+- Für jeden gestrichenen Schlüssel: eine `config.toml`, die ihn setzt, liefert `CONFIG_002` mit `Severity::Error` und dem Schlüsselnamen im Text.
+- Für jeden eingebauten Schlüssel: ein Test, der die Wirkung zeigt, nicht nur das Lesen.
+
+### Akzeptanzkriterien
+- [ ] Für beide Schlüssel steht die Entscheidung samt Grund in `backlog/CONVENTIONS.md` 4.25.
+- [ ] Das Register kennt keinen Eintrag `pending(HUM-121)` mehr.
+- [ ] `docs/CONFIG.md` und die Schema-Fixture kommen aus den Generatorläufen.
+- [ ] `make check`, clippy mit `-D warnings` und `cargo fmt --all -- --check` grün.
+
+### Fallstricke
+- Ein gestrichener Schlüssel ist ein Bruch für bestehende Dateien: aus dem stillen No-Op wird ein harter `CONFIG_002`. Bei `experimental.*` ist das angekündigt, bei `ui.*` nicht — dort gehört die Streichung in die Freigabe-Notizen.
+- `ui.sound` einzubauen heißt, einen Tonausgabepfad in die Oberfläche zu ziehen. Das ist eine Fähigkeit und keine Verdrahtung; wer sie nicht will, streicht den Schlüssel und schreibt den Grund nach `CONVENTIONS.md` 4.25.
