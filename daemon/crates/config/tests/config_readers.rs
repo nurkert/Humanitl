@@ -92,17 +92,14 @@ const REGISTER: &[(&str, &str)] = &[
     ("hold.ask_mode", "effective"),
     ("hold.hard_block_checksum_secrets", "effective"),
     ("hold.timeout_secs", "effective"),
-    // Keine der beiden Rumpf-Spannen hat eine Uhr: Der Anfrage-Rumpf wird ohne
-    // Frist gepuffert, und der gestreamte Antwort-Rumpf läuft unbegrenzt weiter,
-    // sobald die Antwort-Kopfzeilen da sind. HUM-120 legt beide auf diesen
-    // Schlüssel, als Stille zwischen zwei Stücken.
-    ("limits.body_timeout_secs", "pending(HUM-120)"),
+    ("limits.body_timeout_secs", "effective"),
     ("limits.connect_timeout_secs", "effective"),
     ("limits.event_buffer", "effective"),
     ("limits.header_timeout_secs", "effective"),
     ("limits.hold_body_cap_bytes", "effective"),
     ("limits.hold_max_bytes", "effective"),
     ("limits.hold_max_flows", "effective"),
+    ("limits.max_client_connections", "effective"),
     ("limits.max_decompress_ratio", "effective"),
     ("limits.preview_cap_bytes", "effective"),
     ("limits.recorder_max_body_bytes", "effective"),
@@ -335,9 +332,10 @@ fn no_group_carries_a_pending_note() {
 #[test]
 fn the_keys_without_a_reader_are_the_known_ones() {
     // Die Liste aus HUM-101, plus die drei, die das Register selbst gefunden
-    // hat (`resolver.nameserver`, `ui.theme`, `resolver.test_ca` aus HUM-087).
-    // Sie steht hier, damit ein achter Fall nicht unbemerkt dazukommt: Wer
-    // einen Schlüssel verdrahtet, streicht ihn hier und im Register zugleich.
+    // hat (`resolver.nameserver`, `ui.theme`, `resolver.test_ca` aus HUM-087),
+    // abzüglich `limits.body_timeout_secs`, den HUM-120 verdrahtet hat. Sie
+    // steht hier, damit ein weiterer Fall nicht unbemerkt dazukommt: Wer einen
+    // Schlüssel verdrahtet, streicht ihn hier und im Register zugleich.
     let pending: Vec<&str> = register()
         .iter()
         .filter(|(_, readiness)| readiness.is_pending())
@@ -348,7 +346,6 @@ fn the_keys_without_a_reader_are_the_known_ones() {
         vec![
             "experimental.upstream_port_map",
             "experimental.ws_hold",
-            "limits.body_timeout_secs",
             "pseudonyms.max_response_bytes",
             "pseudonyms.translate_responses",
             "resolver.nameserver",

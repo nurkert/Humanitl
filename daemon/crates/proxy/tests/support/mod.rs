@@ -254,6 +254,24 @@ impl ProxyBuilder {
         self
     }
 
+    /// `limits.body_timeout_secs`: die längste Stille zwischen zwei Stücken
+    /// eines Rumpfs, in beide Richtungen (HUM-120).
+    ///
+    /// Anfrage-Rumpf des Clients und gestreamter Antwort-Rumpf des Ziels teilen
+    /// sich diesen einen Wert. Es ist keine Grenze der Gesamtdauer; ein Test,
+    /// der das prüft, lässt lange fließen und nur kurz schweigen.
+    pub fn body_timeout(mut self, timeout: Duration) -> Self {
+        self.limits.body_timeout_secs = timeout.as_secs();
+        self
+    }
+
+    /// `limits.max_client_connections`: wie viele Verbindungen der Accept-Loop
+    /// gleichzeitig annimmt (HUM-120).
+    pub fn max_client_connections(mut self, connections: u32) -> Self {
+        self.limits.max_client_connections = connections;
+        self
+    }
+
     pub fn hold_max_flows(mut self, flows: u32) -> Self {
         self.limits.hold_max_flows = flows;
         self

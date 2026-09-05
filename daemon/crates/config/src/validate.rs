@@ -214,6 +214,14 @@ fn limits_are_well_formed(limits: &Limits) -> Result<(), Diagnostic> {
         limits.recorder_max_body_bytes,
         1024,
     )?;
+    // Die Obergrenze ist grob und soll nur den Tippfehler fangen: Ein Wert über
+    // der Zahl der Dateideskriptoren des Prozesses ist keine Grenze mehr.
+    between(
+        "limits.max_client_connections",
+        u64::from(limits.max_client_connections),
+        1,
+        65_536,
+    )?;
 
     if limits.hold_max_bytes < limits.hold_body_cap_bytes {
         return Err(out_of_range(
