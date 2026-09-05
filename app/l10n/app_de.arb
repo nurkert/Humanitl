@@ -569,5 +569,11 @@
   "rulesDisableSemantics": "Die mitgelieferte Regel für {host} ausschalten",
   "rulesEnableSemantics": "Die mitgelieferte Regel für {host} einschalten",
   "rulesOriginBundledOff": "mitgeliefert, ausgeschaltet",
-  "rulesOriginOff": "aus"
+  "rulesOriginOff": "aus",
+  "interceptDiagnosticTitle": "Der Daemon meldet",
+  "interceptDiagnosticDismiss": "Ausblenden",
+  "setupFixCopyExport": "Export-Befehl kopieren",
+  "setupFixSetEnvBadKey": "Es gibt keinen Befehl zum Kopieren: {key} ist kein Name, dem eine Shell etwas zuweisen kann. Setzen Sie die Variable von Hand.",
+  "setupFixSetEnvMultiline": "Es gibt keinen Befehl zum Kopieren: Der Wert von {key} geht über mehr als eine Zeile, und ein eingefügter Befehl liefe als zwei. Setzen Sie die Variable von Hand.",
+  "interceptDiagnosticDropped": "{count, plural, =1{1 früherer Befund steht hier nicht mehr. Blenden Sie aus, was Sie gelesen haben, damit der Rest bleibt.} other{{count} frühere Befunde stehen hier nicht mehr. Blenden Sie aus, was Sie gelesen haben, damit der Rest bleibt.}}"
 }

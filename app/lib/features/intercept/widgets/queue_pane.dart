@@ -33,9 +33,19 @@ import '../providers/queue_freeze.dart';
 import '../providers/selection.dart';
 import '../queue_items.dart';
 import 'agent_ask_card.dart';
+import 'diagnostic_card.dart';
 import 'group_header_row.dart';
 import 'new_arrivals_pill.dart';
 import 'queue_row.dart';
+
+/// Wie viel Platz die beiden Streifen über der Warteschlange zusammen nehmen
+/// dürfen.
+///
+/// Ein gemeinsames Budget, kein Budget je Streifen: Bitte des Agenten und
+/// Befund des Daemons treten zusammen auf, und mit je eigener Schranke schöben
+/// sie die Warteschlange auf einem 800 Pixel hohen Schirm fast heraus. Ein
+/// Streifen erklärt die Warteschlange, er ersetzt sie nicht.
+const double interceptStripsMaxHeight = 420;
 
 /// How often a burst of arrivals is said out loud, at most.
 ///
@@ -358,7 +368,31 @@ class _QueuePaneState extends ConsumerState<QueuePane> {
           // not a request that waits for a decision, and it must never take a
           // place in the list that a held flow could be mistaken for
           // (HUM-073). It draws nothing while there is nothing.
-          const AgentAskStrip(),
+          // Was der Daemon gemeldet hat, steht ebenfalls über der
+          // Warteschlange und nicht in ihr: Ein Befund hält nichts an und darf
+          // keinen Platz einnehmen, den jemand für eine angehaltene Anfrage
+          // halten könnte. Auch dieser Streifen zeichnet nichts, solange es
+          // nichts zu melden gibt (HUM-106).
+          //
+          // Beide Streifen teilen sich ein Budget, und das Layout verteilt es:
+          // Die Bitten des Agenten nehmen, was sie brauchen, der Befund-
+          // Streifen bekommt als einziges `Flexible` den Rest. Mit je eigener
+          // Schranke schöben die beiden zusammen die Warteschlange auf einem
+          // 800 Pixel hohen Schirm fast heraus; mit einer festen Aufteilung
+          // verfiele der Platz, den eine kurze Bitte übrig lässt.
+          ConstrainedBox(
+            constraints: const BoxConstraints(
+              maxHeight: interceptStripsMaxHeight,
+            ),
+            child: const Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                AgentAskStrip(),
+                Flexible(child: DiagnosticStrip()),
+              ],
+            ),
+          ),
           Expanded(
             child: MouseRegion(
               onEnter: (PointerEnterEvent _) => _pointerEnter(),
