@@ -295,6 +295,29 @@ registry! {
     PROXY_005 => "proxy", "Ungültiger Übergang im Flow", "#proxy_005";
     /// Der Client verlangt HTTP/2; in M1 bietet der Proxy nur `http/1.1` an.
     PROXY_007 => "proxy", "HTTP/2 nicht verfügbar", "#proxy_007";
+    /// Die aufgelöste Zieladresse liegt in einem privaten Netz (RFC 1918,
+    /// Loopback, Link-Local, CGNAT oder `fc00::/7`), und keine Regel hat dieses
+    /// Ziel geöffnet. Die Verbindung kommt auch dann nicht zustande, wenn ein
+    /// Mensch die Anfrage gerade freigegeben hat: `allow_private` hängt an einer
+    /// Regel, nicht an einer Entscheidung (ADR-006).
+    ///
+    /// Der Befund nennt die Adresse und schlägt eine Regel mit `action: ask` und
+    /// `allow_private: true` vor. Damit wird genau dieses Ziel geöffnet, und die
+    /// Anfrage wird trotzdem jedes Mal einem Menschen gezeigt; ein `allow` wäre
+    /// mehr Öffnung als die Freigabe, die gerade gescheitert ist (HUM-102).
+    ///
+    /// Der Vorschlag fehlt, wo sich keine Regel bauen ließe, die wirkt: bei Port
+    /// `0`, den `parse_rules` ablehnt, und bei einer Methode, gegen die
+    /// überhaupt keine Regel matcht. Dann steht der Grund im `why` statt eines
+    /// Knopfes. Ebenso sagt das `why`, wie weit die Regel reicht, wenn der Pfad
+    /// kein Präfix hergibt, und dass sie vor die Regel gehört, die gerade
+    /// entschieden hat.
+    ///
+    /// Die Adresse steht im Befund und in `resolved_ip`, nie im Rumpf der
+    /// Antwort an den Client und nie in einer Kopfzeile: Die Sandbox hat keinen
+    /// Resolver, und die Zuordnung von Name zu privater Adresse wäre für den
+    /// Agenten neue Information über das lokale Netz.
+    PROXY_008 => "proxy", "Private Zieladresse abgelehnt", "#proxy_008";
 
     /// Der Client vertraut der mitgelieferten CA nicht.
     TLS_001 => "tls", "Client hat Humanitl-CA abgelehnt", "#tls_001";
