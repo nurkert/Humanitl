@@ -97,6 +97,18 @@ Datei braucht, meldet das und bekommt sie, wenn sonst niemand darin arbeitet.
 - Parallel laufende Reviewer bauen in eigene Zielverzeichnisse
   (`CARGO_TARGET_DIR=daemon/target/review-<name>`), damit sie sich nicht das
   Cargo-Lock streitig machen.
+- Das Scratchpad-Verzeichnis der Sitzung gehoert nicht einem Agenten allein.
+  Am 2026-09-05 hat ein Agent dort den Pruefbaum eines anderen vorgefunden und
+  sein eigenes Skript ueberschrieben bekommen. Wer darin einen Baum oder eine
+  Datei anlegt, nimmt einen Namen, der die Issue-Nummer traegt, und prueft eine
+  Kopie danach mit `cmp` nach.
+- Wer die Dateien eines Agenten aus dessen Arbeitsbaum uebernimmt, vergleicht
+  vorher, welche davon auf `main` seit dem Abzweig des Arbeitsbaums geaendert
+  wurden (`git diff --name-only <basis>..HEAD`). Fuer diese Dateien wird
+  zusammengefuehrt statt kopiert. Am 2026-09-05 haette ein reines Kopieren von
+  `daemon/crates/core-types/src/diagnostics/codes.rs` den Eintrag `PROXY_008`
+  eines schon gemergten Issues geloescht; der Commit haette gebaut und alle
+  Tests bestanden.
 
 ## Was der Compiler nicht prüft und wir deshalb selbst prüfen
 
