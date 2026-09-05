@@ -189,6 +189,15 @@ fn system_block(queue: &HoldQueue, flow: &mut Flow) -> Decision {
 /// | `Matched { Block }` | `Decision::Block { BlockReason::Rule }`, `403` |
 /// | `Matched { Redact }` | wie `Default`; der Pseudonymisierer kommt in HUM-079 |
 /// | `Matched { Ask }`, `Default` | die innere Strategie, also der Hold |
+///
+/// Trägt die treffende Regel `allow_private: true`, gilt das für **jede** der
+/// vier Aktionen und nicht nur für `allow`: Das Recht öffnet das Ziel, es
+/// entscheidet nichts. Erst dadurch lässt sich ein privates Ziel öffnen und
+/// trotzdem jede Anfrage dorthin einem Menschen zeigen (`action: ask`), und
+/// genau das schlägt
+/// [`private_address_refused`](crate::handler::private_address_refused) vor
+/// (HUM-102, `backlog/CONVENTIONS.md` 4.10). Für `block` bleibt es folgenlos:
+/// Was geblockt wird, wird nicht verbunden.
 pub struct RulesPipeline {
     queue: Arc<HoldQueue>,
     rules: Arc<RwLock<RuleSet>>,
@@ -337,16 +346,21 @@ impl FlowPipeline for RulesPipeline {
         let Verdict::Matched { rule, action } = verdict else {
             return self.inner.decide(flow, meta).await;
         };
+        // Die Erlaubnis fuer private Ziele haengt an der Regel, nicht an der
+        // Verbindung: Ohne diese Zeile faellt sie zwischen Entscheidung und
+        // Verbindung heraus, und die Durchreichregel zum lokalen Sprachmodell
+        // auf der Schleife greift nie (ADR-006). Sie steht am `Flow`, also an
+        // dieser einen Anfrage; die naechste Anfrage derselben Verbindung
+        // faengt wieder ohne sie an.
+        //
+        // Sie steht vor dem `match`, nicht im Zweig `Allow`: Sonst waere eine
+        // Regel mit `action: ask` und `allow_private: true` wirkungslos, und
+        // damit gaebe es keinen Weg, ein privates Ziel zu oeffnen, ohne
+        // zugleich die Aufsicht darueber aufzugeben (HUM-102). Fuer `block`
+        // aendert das nichts: Was geblockt wird, wird nicht verbunden.
+        flow.allow_private |= self.rule_allows_private(rule);
         match action {
             Action::Allow => {
-                // Die Erlaubnis fuer private Ziele haengt an der Regel, nicht
-                // an der Verbindung: Ohne diese Zeile faellt sie zwischen
-                // Entscheidung und Verbindung heraus, und die Durchreichregel
-                // zum lokalen Sprachmodell auf der Schleife greift nie
-                // (ADR-006). Sie steht am `Flow`, also an dieser einen
-                // Anfrage; die naechste Anfrage derselben Verbindung faengt
-                // wieder ohne sie an.
-                flow.allow_private |= self.rule_allows_private(rule);
                 if self.rule_is_passthrough(rule) {
                     // Erst warnen, dann entscheiden: Nach dem Uebergang steht
                     // der Fluss in `Decided`, und die Funde des Scans sind

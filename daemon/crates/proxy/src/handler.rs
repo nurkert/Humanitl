@@ -20,18 +20,22 @@
 //! `Block`, und das Ziel sieht die Anfrage nicht.
 
 use std::convert::Infallible;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
 use humanitl_config::{HoldConfig, Limits, RecorderConfig};
-use humanitl_core::diagnostics::codes::PROXY_005;
+use humanitl_core::diagnostics::codes::{PROXY_005, PROXY_008};
 use humanitl_core::{
-    Authority, BlockReason, BodyRef, Decision, DecisionSource, Diagnostic, Finding, Flow,
-    FlowEvent, FlowId, FlowState, HeaderMap, HostName, HttpRequest, InvalidTransition, Method,
-    Scheme, Severity, Tier, TransitionInput, UpstreamError, block_response, failed_response,
+    Action, Authority, BlockReason, BodyRef, Decision, DecisionSource, Diagnostic, Finding,
+    FixAction, Flow, FlowEvent, FlowId, FlowState, HeaderMap, HostName, HostPattern, HttpRequest,
+    InvalidTransition, Matcher, Method, Rule, RuleId, Scheme, Severity, Tier, TransitionInput,
+    UpstreamError, block_response, failed_response, path_prefix_is_valid,
 };
 use humanitl_recorder::{Dir, Recorder};
+use humanitl_rules::is_known_method;
+use humanitl_rules::path::{prefix_matches, strip_query};
 use hyper::body::Incoming;
 use hyper::header::{HeaderName, HeaderValue};
 use hyper::service::service_fn;
@@ -1064,8 +1068,17 @@ impl FlowHandler {
 
     /// Schließt einen gescheiterten Flow ab (`Record`) und baut die
     /// `502`-Antwort.
+    ///
+    /// Eine abgelehnte private Zieladresse bekommt hier ihren Befund
+    /// [`PROXY_008`], und nur hier: Diese Stelle sieht jede Ablehnung, gleich
+    /// ob die Adresse aus einer Auflösung kam oder als IP-Literal schon in der
+    /// Anfrage stand, und sie hat den Fluss zur Hand, aus dem der Regelvorschlag
+    /// entsteht (HUM-102).
     fn record_failure(&self, flow: &mut Flow, error: UpstreamError) -> Response<ResponseBody> {
         let _ = self.apply(flow, TransitionInput::Fail { error });
+        if let UpstreamError::PrivateAddress(ip) = error {
+            self.publish_diagnostic(flow.id, private_address_refused(&flow.request, ip));
+        }
         let _ = self.apply(flow, TransitionInput::Record);
         let block = failed_response(error, flow.id, &flow.request.authority.host);
         block_to_response(&block, flow.id)
@@ -1247,6 +1260,261 @@ fn placeholder_body(size: u64, content_type: Option<&str>) -> BodyRef {
         body = body.with_content_type(content_type);
     }
     body
+}
+
+/// Warum es zu einer Anfrage keinen Regelvorschlag gibt.
+///
+/// Beide Fälle sind derselbe Gedanke: Ein Vorschlag, den ein Mensch anklickt,
+/// muss danach wirken. Was hier steht, kommt in den `why` von [`PROXY_008`],
+/// damit der Mensch nicht auf einen Knopf wartet, den es nicht gibt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoRule {
+    /// Die Anfrage nennt Port `0`. `parse_rules` lehnt ihn ab und verwirft
+    /// dabei die ganze Datei; den Port wegzulassen öffnete jeden Port desselben
+    /// Hosts.
+    PortZero,
+    /// Die Methode gehört nicht zu den bekannten. Eine Anfrage mit einer
+    /// unbekannten Methode trifft überhaupt keine Regel, die vorgeschlagene
+    /// also auch nicht.
+    UnknownMethod,
+}
+
+/// Der Befund [`PROXY_008`] zu einer abgelehnten privaten Zieladresse.
+///
+/// Er erklärt den Widerspruch, an dem der Mensch sonst hängen bleibt: Er hat
+/// die Anfrage freigegeben, und sie ist trotzdem gescheitert. Das Recht auf ein
+/// privates Ziel hängt an einer Regel und nicht an einer Entscheidung
+/// (ADR-006); der Befund nennt deshalb die Adresse und legt die Regel bei, die
+/// fehlt.
+///
+/// Der `why` sagt nicht nur, was die Regel tut, sondern auch, wie weit sie
+/// reicht. Wo die Anfrage keinen engen Zuschnitt hergibt, steht das da:
+///
+/// - Ohne brauchbares Pfadpräfix (`GET /`) gilt die Regel für **jeden** Pfad
+///   dieses Hosts. Der Vorschlag bleibt trotzdem, denn die Wurzel eines
+///   Dienstes ist der Normalfall und nicht der Ausnahmefall, und die Regel gibt
+///   nichts frei: Sie öffnet ein Ziel, und jede Anfrage dorthin wird weiterhin
+///   gehalten. Verschwiegen wird die Weite nicht.
+/// - Zu einem Port `0` und zu einer unbekannten Methode gibt es **keinen**
+///   Vorschlag, weil sich dafür keine Regel anlegen ließe, die wirkt (siehe
+///   [`NoRule`]). Der `why` nennt dann den Grund statt eines Knopfes.
+///
+/// Die Adresse geht ausschließlich in diesen Befund und in `resolved_ip` des
+/// `Failed`-Ereignisses, also an die Oberfläche. Sie steht nicht im Rumpf der
+/// `502`-Antwort und in keiner Kopfzeile: Die Sandbox hat keinen Resolver, der
+/// Agent kennt also nur den Namen, und die Zuordnung dieses Namens zu einer
+/// privaten Adresse wäre für ihn neue Information über das lokale Netz
+/// (`docs/SECURITY.md`, erste Garantie).
+#[must_use]
+pub fn private_address_refused(request: &HttpRequest, ip: IpAddr) -> Diagnostic {
+    let mut why = format!(
+        "{host} points to {ip}, an address in a private network, and no rule opens that target. \
+         The request was refused after it had been allowed: the permission for private targets \
+         belongs to a rule, not to a single decision (ADR-006). ",
+        host = request.authority.host.display(),
+    );
+    let rule = private_address_rule(request);
+    match &rule {
+        Ok(rule) => {
+            why.push_str(
+                "The suggested rule opens this one target and keeps asking you about every \
+                 request to it.",
+            );
+            if rule.matcher.path_prefixes.is_empty() {
+                why.push_str(
+                    " It carries no path prefix, because this request has none that would draw a \
+                     boundary, so it covers every path of this host on this port.",
+                );
+            }
+            if rule.matcher.upgrade.is_some() {
+                why.push_str(
+                    " It covers the protocol upgrade of this request; ordinary requests to the \
+                     same host stay outside it and need a rule of their own.",
+                );
+            }
+            why.push_str(
+                " Put it in front of your other rules for this host: the first matching rule \
+                 decides, so a rule added at the end never gets its turn while an older one \
+                 already matches this host without allowing private targets. A rule that only \
+                 lasts for this session is checked before every permanent rule, so a permanent \
+                 rule cannot overtake it at all — change that one instead.",
+            );
+        }
+        Err(NoRule::PortZero) => why.push_str(
+            "There is no rule to suggest: the request names port 0, which is not a port a rule \
+             can carry (the range is 1..=65535) and not a port anything listens on. Check the \
+             address the agent asked for.",
+        ),
+        Err(NoRule::UnknownMethod) => {
+            use core::fmt::Write as _;
+            // `write!` statt `push_str(&format!(..))`: kein zweiter Puffer.
+            let _ = write!(
+                why,
+                "There is no rule to suggest: the request uses the method {method}, which the \
+                 rule engine does not know. A request with an unknown method matches no rule at \
+                 all, so any rule offered here would be one that never takes effect. Check what \
+                 the agent is doing.",
+                method = request.method,
+            );
+        }
+    }
+    let mut diagnostic = Diagnostic::builder(PROXY_008, Severity::Error).why(why);
+    if let Ok(rule) = rule {
+        diagnostic = diagnostic.fix(FixAction::AddRule(Box::new(rule)));
+    }
+    diagnostic.build()
+}
+
+/// Die Regel, die [`private_address_refused`] vorschlägt.
+///
+/// `action: ask` mit `allow_private: true`: Das Ziel wird geöffnet, die Aufsicht
+/// bleibt. Ein `allow` wäre der bequemere, aber falsche Vorschlag — er machte
+/// aus „ein Mensch gibt diese eine Anfrage frei" dauerhaft „jede künftige
+/// Anfrage an diesen Host geht ungefragt hinaus", also mehr Öffnung als die
+/// Freigabe, die gerade gescheitert ist.
+///
+/// # Der Vorschlag muss durch `parse_rules` passen
+///
+/// Ein Klick auf den Fix schreibt diese Regel in die `rules.yaml` des Nutzers,
+/// und ein einziger Wert außerhalb des Wertebereichs, den `parse_rules` kennt,
+/// lehnt **die ganze Datei** ab — der Nutzer verlöre alle seine Regeln. Ein
+/// Agent, der eine Anfrage frei formt, dürfte das sonst auslösen. Für jedes
+/// Feld, das hier aus der Anfrage in die Regel wandert, steht deshalb der
+/// Wertebereich daneben:
+///
+/// | Feld | Bereich in `parse_rules` | hier |
+/// | --- | --- | --- |
+/// | Host, Name | `idna::domain_to_ascii_strict`; `*` und `:` kommen nicht durch | [`HostPattern::Exact`], immer lesbar |
+/// | Host, Adresse | `ip:` plus `IpAddr`, auch `ip:::1` | [`HostPattern::Ip`] |
+/// | Methode | nur `is_known_method` | kein Vorschlag, wenn unbekannt |
+/// | Schema | genau `http`, `https`, `ws`, `wss` | [`Scheme`] hat genau diese vier |
+/// | Port | `1..=65535`; `0` lehnt die Datei ab | kein Vorschlag bei `0` |
+/// | Pfadpräfix | [`path_prefix_is_valid`]; sonst lehnt die Datei ab | weggelassen, wenn untauglich oder wenn es die Anfrage nicht trifft |
+/// | Upgrade | nur `websocket` | [`Upgrade`](humanitl_core::Upgrade) hat genau diese Variante |
+///
+/// Wer hier ein Feld hinzufügt, trägt seinen Wertebereich in diese Tabelle ein
+/// und in die Tabelle feindlicher Anfragen in
+/// `daemon/crates/proxy/tests/private_address.rs`.
+///
+/// # Zuschnitt
+///
+/// - Der Host als [`HostPattern::Exact`], bei einem IP-Literal als
+///   [`HostPattern::Ip`]. Ein Glob trifft eine Adresse nie (ADR-007), und ein
+///   Vorschlag, der nichts trifft, wäre kein Vorschlag. Bei einem Namen steht in
+///   der Regel nur der Name: Die Adresse gehört nicht in eine Datei, die der
+///   Agent über den Meta-Endpunkt lesen kann (HUM-073).
+/// - Schema, Port und die Methode der gescheiterten Anfrage.
+/// - Der Protokollwechsel der Anfrage, falls sie einen verlangt. Ohne ihn täte
+///   die Regel etwas anderes als das Gewünschte: Die Auswertung prüft die
+///   Upgrade-Dimension beidseitig, eine Regel ohne `upgrade` trifft nie ein
+///   Upgrade (`humanitl_rules::eval`). Ein Mensch, der einen gescheiterten
+///   WebSocket freigibt, bekäme sonst eine Regel, die gewöhnliches HTTP öffnet
+///   und genau diesen WebSocket weiterhin nicht.
+/// - Der Pfad als Präfix, immer ohne Query: Ein Token aus der Abfragezeichenkette
+///   hätte in `rules.yaml` nichts zu suchen. Gesetzt wird es nur, wenn es zwei
+///   Prüfungen besteht: [`path_prefix_is_valid`], sonst lehnt `parse_rules` die
+///   Datei ab, und [`prefix_matches`] gegen die gescheiterte Anfrage selbst,
+///   sonst stünde in der Regel eine Bedingung, die genau diese Anfrage nicht
+///   erfüllt. Die zweite Prüfung ist die schärfere: Ein Pfad mit einem
+///   `..`-Segment trifft nie ein Präfix, auch verschleiert nicht (`%2e`, `%5c`,
+///   `\`), weil erst der Server dahinter auflöst. Ein Vorschlag, der aus dem
+///   Pfad ein Präfix zöge, das ihn nicht trifft, wäre wirkungslos — dieselbe
+///   Falle wie eine Regel mit `action: ask` vor HUM-102.
+///
+///   Bleibt das Feld weg, gilt die Regel für jeden Pfad dieses Hosts
+///   (`CompiledPrefixes::Any`), und [`private_address_refused`] schreibt das in
+///   den `why`, statt es dem Klick zu überlassen.
+///
+/// Die Notiz nennt die Adresse nicht. Sie landet in `rules.yaml` und damit in
+/// der Regelübersicht, die der Meta-Endpunkt dem Agenten zeigt; die Adresse
+/// bleibt im Befund, der nur an die Oberfläche geht.
+///
+/// # Wo die Regel stehen muss, und was daran offen ist
+///
+/// `RuleSet::evaluate` liefert den **ersten** Treffer eines Ranges. Trifft
+/// schon eine ältere Regel des Nutzers denselben Host, ohne private Ziele zu
+/// erlauben, entscheidet weiterhin sie, und der Vorschlag bleibt wirkungslos —
+/// dieselbe Falle, wegen der dieses Issue umgeschrieben wurde, nur eine Ebene
+/// höher. Die Regel muss deshalb **vor** der stehen, die gerade entschieden
+/// hat.
+///
+/// Diese Stelle kann das nicht erzwingen. Ein [`FixAction::AddRule`] trägt
+/// keine Position; die entsteht erst in `humanitl_ipc::convert::rule_to_proto`,
+/// und die sendet heute `position: 0`, was `position_of` als „ans Ende" liest
+/// und `RulesStore::add` als Anhängen ausführt. Das gilt für **jedes**
+/// `AddRule` im Produkt und nicht nur für dieses, und es zu ändern heißt, die
+/// Wire-Form anzufassen. Es steht als eigenes Issue aus.
+///
+/// Bis dahin sagt der Befund es aus: Sein `why` und die Notiz dieser Regel
+/// nennen die Bedingung, damit der Mensch die Regel an den richtigen Platz
+/// zieht, statt vor einem Knopf zu stehen, der stumm nichts tut. Gegen eine
+/// **Sitzungsregel** hilft auch das Verschieben nicht: Rang `Session` liegt vor
+/// Rang `User` (`backlog/CONVENTIONS.md` 4.5), eine dauerhafte Regel überholt
+/// sie nie. Dann ist die Sitzungsregel selbst zu ändern, und der `why` sagt
+/// auch das.
+///
+/// `request` ist immer `flow.request`, also die Anfrage des Agenten, und nicht
+/// die von einem Menschen bearbeitete Fassung einer `AllowEdited`: Über den
+/// Regelsatz läuft die ursprüngliche Anfrage
+/// ([`RulesPipeline::decide`](crate::pipeline::RulesPipeline)), und eine Regel,
+/// die stattdessen die Bearbeitung beschriebe, träfe beim nächsten Mal nichts.
+///
+/// # Kein Vorschlag ist besser als ein untauglicher
+///
+/// Zwei Anfragen bekommen gar keine Regel, und beide Gründe sind derselbe
+/// Gedanke: Ein Vorschlag, den ein Mensch anklickt, muss danach wirken.
+///
+/// - **Port `0`.** `parse_rules` lehnt ihn ab, und ein Fehler dort verwirft die
+///   ganze Datei — ein Klick, und der Nutzer verlöre alle seine Regeln. Den Port
+///   wegzulassen wäre kein Ausweg, denn das öffnete jeden Port desselben Hosts,
+///   und ein Port `0` bezeichnet ohnehin keinen Dienst.
+/// - **Eine Methode außerhalb von [`is_known_method`].** Sie ohne Methode
+///   vorzuschlagen ginge durch den Parser, brächte aber nichts: `RuleSet::evaluate`
+///   bricht bei einer unbekannten Methode ab, **bevor** es überhaupt eine Regel
+///   ansieht, und gibt `Verdict::Default` zurück. Die Regel träfe nie, der
+///   Mensch klickte und bekäme beim nächsten Versuch dieselbe Ablehnung ohne
+///   neue Erklärung. Das ist die Falle, wegen der dieses Issue umgedreht wurde,
+///   nur an einer anderen Stelle.
+///
+/// In beiden Fällen trägt der Befund kein `fix`, und sein `why` sagt, was im
+/// Weg steht.
+/// # Errors
+///
+/// [`NoRule`], wenn sich zu dieser Anfrage keine Regel bauen lässt, die
+/// `parse_rules` annimmt und die die Anfrage danach auch trifft.
+pub fn private_address_rule(request: &HttpRequest) -> Result<Rule, NoRule> {
+    // Reihenfolge nach Schwere: Der Port zerrisse die Datei, die Methode
+    // erzeugte nur eine wirkungslose Regel.
+    if request.authority.port == 0 {
+        return Err(NoRule::PortZero);
+    }
+    if !is_known_method(&request.method) {
+        return Err(NoRule::UnknownMethod);
+    }
+    let host = match &request.authority.host {
+        HostName::Ip(ip) => HostPattern::Ip(*ip),
+        host @ HostName::Dns(_) => HostPattern::Exact(host.clone()),
+    };
+    let mut matcher = Matcher::host(host)
+        .with_scheme(request.scheme)
+        .with_port(request.authority.port);
+    matcher = matcher.with_methods(vec![request.method.clone()]);
+    if let Some(upgrade) = connect::requested_upgrade(&request.headers) {
+        matcher = matcher.with_upgrade(upgrade);
+    }
+    let prefix = strip_query(&request.path_and_query);
+    let prefixes = vec![prefix.to_owned()];
+    if path_prefix_is_valid(prefix) && prefix_matches(&prefixes, &request.path_and_query) {
+        matcher = matcher.with_path_prefixes(prefixes);
+    }
+    Ok(Rule::new(RuleId::new(), Action::Ask, matcher)
+        .with_allow_private(true)
+        .with_note(format!(
+            "suggested after Humanitl refused a private target address for {host}; \
+             the request is still held for a decision, and this rule has to stand in front of \
+             any other rule for the same host to take effect",
+            host = request.authority.host.display(),
+        )))
 }
 
 /// Baut die HTTP-Antwort aus einer [`BlockResponse`](humanitl_core::BlockResponse):

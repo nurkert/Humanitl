@@ -7,12 +7,19 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::net::IpAddr;
+
+use chrono::Utc;
 use humanitl_core::diagnostics::codes::{
     RULES_001, RULES_002, RULES_003, RULES_005, RULES_006, RULES_007, RULES_008, RULES_010,
 };
-use humanitl_core::rule::{Action, Expiry, HostPattern};
-use humanitl_core::{Diagnostic, DiagnosticCode, Method, SessionId, Severity};
-use humanitl_rules::{RuleSet, parse_rules, parse_rules_for_session, serialize_rules};
+use humanitl_core::rule::{Action, Expiry, HostPattern, Matcher, Rule};
+use humanitl_core::{
+    Diagnostic, DiagnosticCode, HostName, Method, RuleId, Scheme, SessionId, Severity,
+};
+use humanitl_rules::{
+    RequestKey, RuleSet, Verdict, parse_rules, parse_rules_for_session, serialize_rules,
+};
 
 /// Die mitgelieferte Datei, damit sie nie ungültig ins Paket kommt.
 const DEFAULT_RULES: &str = include_str!("../../../../rules/default.yaml");
@@ -712,5 +719,49 @@ disabled_bundled:
     assert!(
         set.iter().all(|rule| !rule.disabled),
         "no rule of this file is named"
+    );
+}
+
+/// Der Regelvorschlag aus HUM-102 kommt durch die Datei und trifft danach noch.
+///
+/// Er ist der einzige Vorschlag, den der Nutzer per Klick übernimmt, ohne ihn
+/// nachzuarbeiten (`FixAction::AddRule`), und er entscheidet über ein Ziel im
+/// eigenen Netz. Was `humanitl_proxy::handler::private_address_rule`
+/// tatsächlich baut, misst `daemon/crates/proxy/tests/private_address.rs`; hier
+/// steht die Form, auf die sich der Parser festlegt: `action: ask` zusammen mit
+/// `allow_private: true`, ein Host als `ip:`-Muster, Port, Schema, Methode und
+/// ein Pfadpräfix ohne Query.
+#[test]
+fn the_private_address_suggestion_survives_the_file_and_still_matches() {
+    let ip: IpAddr = "10.0.0.5".parse().expect("a literal address");
+    let host = HostName::Ip(ip);
+    let matcher = Matcher::host(HostPattern::Ip(ip))
+        .with_scheme(Scheme::Http)
+        .with_port(11434)
+        .with_methods(vec![Method::POST])
+        .with_path_prefixes(vec!["/v1/chat/completions".to_owned()]);
+    let rule = Rule::new(RuleId::new(), Action::Ask, matcher).with_allow_private(true);
+
+    let written = serialize_rules(&RuleSet::from_rules([rule.clone()]));
+    let (set, warnings) = ok(&written);
+    assert!(warnings.is_empty(), "{warnings:?}");
+
+    let stored = set.get(rule.id).expect("the rule keeps its id");
+    assert!(
+        stored.allow_private,
+        "`allow_private` next to `action: ask` is a valid combination and must survive:\n{written}"
+    );
+    assert_eq!(stored.action, Action::Ask);
+    assert_eq!(stored.matcher, rule.matcher);
+
+    let path = "/v1/chat/completions?stream=true";
+    let key = RequestKey::new(&host, &Method::POST, path, Scheme::Http, 11434);
+    assert_eq!(
+        set.evaluate(&key, Utc::now(), SessionId::new()),
+        Verdict::Matched {
+            rule: rule.id,
+            action: Action::Ask
+        },
+        "the suggestion must hit the request it was made for:\n{written}"
     );
 }

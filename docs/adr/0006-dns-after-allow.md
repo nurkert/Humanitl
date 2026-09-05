@@ -36,10 +36,41 @@ gepinnt (ADR-0017).
 **Private Zieladressen werden nach der Auflösung verweigert.** Löst ein Name auf
 eine Adresse in `10/8`, `172.16/12`, `192.168/16` (RFC 1918), `127/8`,
 `169.254/16`, `100.64/10` (CGNAT), `fc00::/7` oder `::1` auf, wird die
-Verbindung abgelehnt: `BlockReason::PrivateAddress`, Diagnostic `PROXY_005` mit
-einem Regelvorschlag. Ausnahme: Die matchende Regel trägt `allow_private: true`.
-Die LLM-Passthrough-Regel setzt dieses Flag automatisch, damit `localhost` oder
+Verbindung abgelehnt: `FlowState::Failed { UpstreamError::PrivateAddress(ip) }`
+und `502` an den Client, dazu der Diagnostic `PROXY_008` mit einem
+Regelvorschlag. Ausnahme: Die matchende Regel trägt `allow_private: true`. Die
+LLM-Passthrough-Regel setzt dieses Flag automatisch, damit `localhost` oder
 `192.168.x.y` als LLM-Host funktionieren.
+
+Der Regelvorschlag lautet `action: ask` mit `allow_private: true`, zugeschnitten
+auf Host, Port, Schema, Methode, Protokollwechsel und Pfadpräfix der
+gescheiterten Anfrage: Das Recht öffnet ein Ziel, es entscheidet nichts, und
+deshalb bleibt die Anfrage weiterhin jedes Mal einem Menschen vorgelegt. Ein
+vorgeschlagenes `allow` wäre mehr Öffnung als die Freigabe, die gerade
+gescheitert ist. Damit dieser Vorschlag wirkt, gilt `allow_private` einer
+treffenden Regel für jede Aktion und nicht nur für `allow` (HUM-102).
+
+Ein Vorschlag muss durch `parse_rules` passen und die Anfrage danach auch
+treffen; wo eine Anfrage beides nicht zulässt, gibt es keinen Vorschlag, und der
+Befund sagt warum. Das betrifft Port `0`, den keine Regel tragen kann, und eine
+Methode, die die Regel-Engine nicht kennt, gegen die überhaupt keine Regel
+matcht. Ergibt der Pfad kein Präfix, das die Anfrage trifft, entfällt das Feld;
+die Regel gilt dann für jeden Pfad dieses Hosts, und der Befund schreibt diese
+Weite aus. Die Einzelheiten stehen in `backlog/CONVENTIONS.md` 4.10.
+
+Offen bleibt, wo die angenommene Regel landet. Ein `FixAction::AddRule` trägt
+keine Position, und der Weg über die Leitung hängt sie ans Ende der
+Nutzerregeln; trifft schon eine ältere Regel denselben Host, entscheidet
+weiterhin sie. Solange das so ist, nennt der Befund die Bedingung in seinem
+`why` und in der Notiz der vorgeschlagenen Regel, statt einen Knopf anzubieten,
+der stumm nichts tut. Die Behebung fasst die Wire-Form an und gehört in ein
+eigenes Issue.
+
+Die Adresse selbst geht in den Befund und in `resolved_ip` des
+`Failed`-Ereignisses, also an die Oberfläche. Sie steht nicht im Rumpf der
+`502`-Antwort und in keiner Kopfzeile: Die Sandbox hat keinen Resolver, der
+Agent kennt also nur den Namen, und die Zuordnung dieses Namens zu einer
+privaten Adresse wäre für ihn neue Information über das lokale Netz.
 
 **Die Domain-Vorschau im UI holt nie automatisch etwas aus dem Netz.** Die
 Karte im Domain-Panel kommt aus einem gebündelten Katalog
@@ -119,4 +150,5 @@ IP-Adresse des Hosts, nicht der der Sandbox.
 `HUM-024` (DNS erst nach Allow, mit Resolver-Statistik im Test), `HUM-015`
 (Proxy-Kern, Verbindungsaufbau über `Egress`), `HUM-031` (Domain-Panel ohne
 automatischen Fetch), `HUM-039` (LLM-Passthrough setzt `allow_private`),
-`HUM-022` (Regel-Flag `allow_private`).
+`HUM-022` (Regel-Flag `allow_private`), `HUM-102` (der Befund `PROXY_008` mit
+seinem Regelvorschlag; `allow_private` wirkt seither bei jeder Aktion).

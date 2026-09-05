@@ -416,6 +416,11 @@ async fn a_private_address_after_resolution_is_refused_without_a_connect() {
     );
 
     events.wait_for("recorded").await;
+    // Zwischen `failed` und `recorded` steht der Befund `PROXY_008`: Die
+    // Ablehnung nennt die Adresse und schlaegt eine Regel vor, die das Ziel
+    // oeffnet und die Anfrage weiterhin haelt (HUM-102). Was er enthaelt,
+    // prueft `tests/private_address.rs`; hier zaehlt nur, dass er im Strom
+    // steht und an dieser Stelle.
     assert_eq!(
         events.names(),
         vec![
@@ -424,6 +429,7 @@ async fn a_private_address_after_resolution_is_refused_without_a_connect() {
             "decided",
             "forwarded",
             "failed",
+            "diagnostic",
             "recorded"
         ]
     );
