@@ -52,11 +52,9 @@ String encodeCsv(List<HistoryExportEntry> entries) {
     out
       ..write(
         csvRow(
-              entry.flow,
-              responseTruncated: entry.detail.responseBody?.truncated ?? false,
-            )
-            .map(csvField)
-            .join(','),
+          entry.flow,
+          responseTruncated: entry.detail.responseBody?.truncated ?? false,
+        ).map(csvField).join(','),
       )
       ..write('\r\n');
   }
