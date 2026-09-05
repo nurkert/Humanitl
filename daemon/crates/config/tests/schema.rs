@@ -154,7 +154,6 @@ fn every_key_of_the_conventions_is_reachable() {
         "limits.connect_timeout_secs",
         "limits.header_timeout_secs",
         "limits.body_timeout_secs",
-        "limits.idle_timeout_secs",
         "limits.recorder_max_body_bytes",
         "upstream.connect_timeout_secs",
         "preview.cap_bytes",

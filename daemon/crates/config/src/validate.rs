@@ -209,7 +209,6 @@ fn limits_are_well_formed(limits: &Limits) -> Result<(), Diagnostic> {
         3600,
     )?;
     between("limits.body_timeout_secs", limits.body_timeout_secs, 1, DAY)?;
-    between("limits.idle_timeout_secs", limits.idle_timeout_secs, 1, DAY)?;
     at_least(
         "limits.recorder_max_body_bytes",
         limits.recorder_max_body_bytes,

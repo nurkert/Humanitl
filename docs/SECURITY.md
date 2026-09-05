@@ -464,7 +464,40 @@ folgt eine Reihe harter Grenzen:
 | `limits.hold_max_bytes` | 256 MiB | neue Anfrage `503`, `BlockReason::HoldMemory`; gehaltene werden nie verworfen |
 | `limits.hold_max_flows` | 200 | neue Anfrage `503`, `BlockReason::HoldMaxFlows` |
 | `hold.timeout_secs` | 300 | `504`, `BlockReason::Timeout` — Ablauf bedeutet **block**, nie `allow` |
-| `limits.connect_timeout_secs`, `header_timeout_secs`, `body_timeout_secs`, `idle_timeout_secs` | siehe `humanitl config schema` | Verbindung wird abgebrochen, Flow wird `Failed` |
+| `limits.connect_timeout_secs` | 10 s | Verbindungsaufbau zum Ziel bricht ab, Flow wird `Failed` |
+| `limits.header_timeout_secs` | 30 s | Anfrage-Kopf des Clients und Lücke bis zur nächsten Anfrage; danach schließt die Verbindung. Speist zusätzlich den Handschlag zum Ziel bis zu dessen Antwort-Kopfzeilen |
+| `limits.body_timeout_secs` | 300 s | **heute ohne Wirkung** (HUM-120), siehe den Absatz unten |
+
+**Drei Spannen haben heute keine Uhr, und das ist eine Lücke, keine Auslegungssache.** Die Tabelle
+oben nennt harte Grenzen; diese drei fehlen darin, weil es sie nicht gibt:
+
+| Spanne | Ort | Was ein festgehaltener Peer bindet |
+|---|---|---|
+| Anfrage-Rumpf | `handler.rs`, `body::buffer` ohne Frist | Hypers Kopf-Uhr ist gelöscht, sobald der Kopf geparst ist. Ein Client, der `Content-Length` ankündigt und nach wenigen Bytes schweigt, hält eine Tokio-Aufgabe und einen Dateideskriptor, bis er selbst aufgibt. Es greift allein `limits.hold_body_cap_bytes`, eine Byte-Grenze |
+| Gestreamter Antwort-Rumpf | `body.rs`, `TeeBody` | Bis zu den Antwort-Kopfzeilen deckt der Handschlag zum Ziel alles ab, danach nichts. Ein Ziel, das ein Byte pro Stunde nachreicht, hält zusätzlich die Verbindung zum Ziel und eine offene `ResponseSink` der Aufzeichnung |
+| TLS-Handschlag nach `CONNECT` | `handler.rs`, `tls::accept` ohne Frist | Wer den Tunnel öffnet und nie ein `ClientHello` schickt, hält die Aufgabe unbegrenzt; die Kopf-Frist der entschlüsselten Verbindung beginnt erst nach dem Handschlag |
+
+Dazu begrenzt der Accept-Loop des Proxys die Zahl gleichzeitiger Verbindungen nicht. Ein Prozess in
+der Sandbox kann deshalb viele Verbindungen öffnen und in einer dieser drei Spannen stehenbleiben;
+was er bindet, sind Aufgaben, Deskriptoren und im dritten Fall Aufzeichnungs-Puffer des Hosts.
+Aus der Sandbox heraus ist das erreichbar — sie hat genau diesen einen Weg nach draußen. Es ist
+**keine** Umgehung der drei Garantien: Es geht nichts hinaus, was ein Mensch nicht erlaubt hat, und
+es wird nichts sichtbar, was vorher unsichtbar war. Geschlossen wird die Lücke von HUM-120 (eine
+Grenze je Spanne) zusammen mit einer Obergrenze für gleichzeitige Verbindungen; eine Uhr je Spanne
+ohne diese Obergrenze deckt nur die Hälfte.
+
+`limits.idle_timeout_secs` steht nicht mehr in dieser Tabelle und nicht mehr im Schema. Er hatte
+nie einen Leser — er wurde geprüft und an keine Uhr gereicht —, und seine Beschreibung („Sekunden
+ohne Bytes, nach denen eine offene Verbindung geschlossen wird") passte auf alle drei Spannen oben
+zugleich. Genau daran scheitert er: Dieselbe Stille ist auf zwei weiteren Spannen richtig — solange
+eine Anfrage gehalten wird und solange eine Antwort strömt —, und eine Uhr über der ganzen
+Verbindung kann beides nicht unterscheiden. Mit den Vorgabewerten hätte sie jeden gehaltenen Fluss
+nach 90 Sekunden getötet, obwohl die Haltefrist 300 Sekunden beträgt. Er ist mit HUM-101 entfernt,
+die drei Spannen bekommen mit HUM-120 je eine eigene Grenze; die Begründung und der Beleg stehen in
+`backlog/CONVENTIONS.md` 4.25.
+
+Welche Schlüssel heute wirken und welche auf ein Issue warten, sagt die Spalte „Wirkung" in
+`docs/CONFIG.md`; sie kommt aus demselben Schema wie diese Namen.
 
 Die Zahlen sind die Defaults aus `BACKLOG.md` (Abschnitt 3 und 4.4) und Sprint 1; verbindlich ist
 die Ausgabe von `humanitl config schema`, gegen die HUM-059 diese Tabelle vor dem Release
