@@ -546,6 +546,104 @@ fn unknown_key_is_config_002() {
 }
 
 #[test]
+fn a_retired_key_warns_and_lets_the_daemon_start() {
+    // HUM-101 hat `limits.idle_timeout_secs` entfernt. Eine Datei, die ihn noch
+    // setzt, war gestern gültig; der Nutzer hat nichts falsch gemacht. Er
+    // bekommt deshalb eine Warnung mit dem Issue und dem Grund, der Wert wird
+    // übergangen, und der Start läuft weiter (`backlog/CONVENTIONS.md` 4.25).
+    // Still übergehen wäre die andere Hälfte des Fehlers, den dieses Issue
+    // gerade behoben hat.
+    let sources = Sources {
+        global_toml: Some(fixture("removed-key.toml")),
+        ..Sources::empty()
+    };
+    let resolved = expect_ok(&sources);
+
+    // Der Wert des entfallenen Schlüssels erreicht die Konfiguration nicht,
+    // und — genauso wichtig — die Zeile **danach** erreicht sie sehr wohl.
+    // Ohne die zweite Zusicherung überlebt ein `break` an der Stelle des
+    // `continue` jede Prüfung, und jeder spätere Schlüssel derselben Ebene
+    // fiele still unter den Tisch.
+    assert_eq!(
+        resolved.config.limits.header_timeout_secs, 7,
+        "the key before the retired one must still be applied"
+    );
+    assert_eq!(
+        resolved.config.limits.preview_cap_bytes, 4096,
+        "the key after the retired one must still be applied; a `break` instead of the \
+         `continue` would swallow it in silence"
+    );
+    assert_eq!(
+        Config {
+            limits: humanitl_config::Limits {
+                header_timeout_secs: 30,
+                preview_cap_bytes: 8 * 1024 * 1024,
+                ..resolved.config.limits.clone()
+            },
+            ..resolved.config.clone()
+        },
+        Config::default(),
+        "nothing but those two keys may change"
+    );
+    let diagnostic = resolved
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code.as_str() == "CONFIG_005")
+        .unwrap_or_else(|| panic!("no CONFIG_005 among {:?}", resolved.diagnostics));
+    assert_eq!(diagnostic.severity, Severity::Warning);
+    assert!(
+        diagnostic.why.contains("limits.idle_timeout_secs"),
+        "why must name the path: {}",
+        diagnostic.why
+    );
+    assert!(
+        diagnostic.why.contains("HUM-101"),
+        "why must name the issue that removed it: {}",
+        diagnostic.why
+    );
+}
+
+#[test]
+fn a_neighbour_of_a_retired_key_still_fails_hard() {
+    // Die Milde gilt genau dem Pfad aus `alias::RETIRED`, nicht seinen
+    // Nachbarn. Ein `starts_with` statt des Vergleichs würde
+    // `limits.idle_timeout_secsx` als Warnung verschlucken, und die Ausnahme
+    // für entfallene Schlüssel griffe auf Tippfehler über — genau das, was
+    // `backlog/CONVENTIONS.md` 4.25 ausschließt.
+    for line in [
+        "idle_timeout_secsx = 90",
+        "idle_timeout_sec = 90",
+        "idle_timeout_secs_extra = 90",
+    ] {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let file = dir.path().join("config.toml");
+        std::fs::write(&file, format!("[limits]\n{line}\n")).expect("write the file");
+        let sources = Sources {
+            global_toml: Some(file),
+            ..Sources::empty()
+        };
+        let diagnostic = expect_err(&sources);
+        assert_eq!(diagnostic.code.as_str(), "CONFIG_002", "{line}");
+        assert_eq!(diagnostic.severity, Severity::Error, "{line}");
+    }
+}
+
+#[test]
+fn a_typo_next_to_a_retired_key_still_fails_hard() {
+    // Die Ausnahme gilt genau den Pfaden aus `alias::RETIRED` und keinem
+    // Nachbarn: Ein Tippfehler bleibt ein harter `CONFIG_002`, sonst hätte die
+    // Milde für entfallene Schlüssel die Strenge für alle anderen aufgehoben.
+    let sources = Sources {
+        global_toml: Some(fixture("unknown-key.toml")),
+        ..Sources::empty()
+    };
+    let diagnostic = expect_err(&sources);
+
+    assert_eq!(diagnostic.code.as_str(), "CONFIG_002");
+    assert_eq!(diagnostic.severity, Severity::Error);
+}
+
+#[test]
 fn an_unknown_cli_key_is_config_002() {
     let sources = Sources::empty().with_cli([("hold.nonsense", "1")]);
     let diagnostic = expect_err(&sources);

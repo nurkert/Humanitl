@@ -84,6 +84,7 @@
           "default": {},
           "description": "Lenkt einen Zielport auf einen anderen um, Schlüssel und Wert als Portnummer. Nur für Tests.",
           "type": "object",
+          "x-pending-issue": "HUM-088",
           "x-project-scope": "denied",
           "x-tier": "expert"
         },
@@ -91,6 +92,7 @@
           "default": false,
           "description": "Hält auch WebSocket-Upgrades an, statt sie über eine Regel zu entscheiden.",
           "type": "boolean",
+          "x-pending-issue": "HUM-121",
           "x-project-scope": "denied",
           "x-tier": "expert"
         }
@@ -214,7 +216,6 @@
         "hold_body_cap_bytes": 33554432,
         "hold_max_bytes": 268435456,
         "hold_max_flows": 200,
-        "idle_timeout_secs": 90,
         "max_decompress_ratio": 100,
         "preview_cap_bytes": 8388608,
         "recorder_max_body_bytes": 33554432
@@ -227,6 +228,7 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer",
+          "x-pending-issue": "HUM-120",
           "x-project-scope": "allowed",
           "x-tier": "expert"
         },
@@ -250,7 +252,7 @@
         },
         "header_timeout_secs": {
           "default": 30,
-          "description": "Sekunden, in denen der Client seine Anfrage-Kopfzeilen gesendet haben muss.",
+          "description": "Sekunden, in denen der Client seine Anfrage-Kopfzeilen gesendet haben muss. Auf einer Keep-Alive-Verbindung ist das zugleich die Frist bis zur nächsten Anfrage, also die einzige Leerlaufgrenze der Verbindung zum Agenten; während eine Anfrage gehalten wird, läuft sie nicht.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer",
@@ -283,15 +285,6 @@
           "type": "integer",
           "x-project-scope": "allowed",
           "x-tier": "advanced"
-        },
-        "idle_timeout_secs": {
-          "default": 90,
-          "description": "Sekunden ohne Bytes, nach denen eine offene Verbindung geschlossen wird.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer",
-          "x-project-scope": "allowed",
-          "x-tier": "expert"
         },
         "max_decompress_ratio": {
           "default": 100,
@@ -389,6 +382,7 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer",
+          "x-pending-issue": "HUM-079",
           "x-project-scope": "denied",
           "x-tier": "expert"
         },
@@ -396,6 +390,7 @@
           "default": true,
           "description": "Ersetzt Pseudonyme in Text-Antworten wieder durch den Originalwert.",
           "type": "boolean",
+          "x-pending-issue": "HUM-079",
           "x-project-scope": "denied",
           "x-tier": "advanced"
         }
@@ -462,6 +457,7 @@
             "string",
             "null"
           ],
+          "x-pending-issue": "HUM-115",
           "x-project-scope": "denied",
           "x-tier": "expert"
         },
@@ -500,6 +496,7 @@
             "string",
             "null"
           ],
+          "x-pending-issue": "HUM-087",
           "x-project-scope": "denied",
           "x-tier": "expert"
         }
@@ -600,13 +597,15 @@
           "default": true,
           "description": "Meldung des Systems, wenn eine Anfrage wartet und das Fenster nicht vorn ist.",
           "type": "boolean",
+          "x-pending-issue": "HUM-069",
           "x-project-scope": "allowed",
           "x-tier": "advanced"
         },
         "sound": {
           "default": false,
-          "description": "Ton zur Meldung. Im MVP ohne Wirkung: der Schlüssel wird gelesen, aber\nkein Ton gespielt (HUM-034).",
+          "description": "Ton zur Meldung.",
           "type": "boolean",
+          "x-pending-issue": "HUM-121",
           "x-project-scope": "allowed",
           "x-tier": "advanced"
         },
@@ -630,6 +629,7 @@
               "type": "string"
             }
           ],
+          "x-pending-issue": "HUM-069",
           "x-project-scope": "allowed",
           "x-tier": "advanced"
         }

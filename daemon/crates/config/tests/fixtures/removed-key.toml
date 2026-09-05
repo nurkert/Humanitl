@@ -1,0 +1,11 @@
+# Ein Schlüssel, den es einmal gab: `limits.idle_timeout_secs` beschrieb
+# dieselbe Spanne wie `limits.header_timeout_secs` und ist mit HUM-101
+# entfernt. Wer ihn noch stehen hat, soll es erfahren und nicht raten.
+#
+# Die beiden Nachbarn stehen mit Absicht daneben, einer davor und einer danach
+# in der Sortierung der Pfade: Sie belegen, dass das Laden über den entfallenen
+# Schlüssel hinweggeht und die übrigen Zeilen der Ebene weiterhin anwendet.
+[limits]
+header_timeout_secs = 7
+idle_timeout_secs = 90
+preview_cap_bytes = 4096

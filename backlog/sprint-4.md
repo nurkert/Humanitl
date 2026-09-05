@@ -997,6 +997,10 @@ Ein Settings-Screen (über Command Palette „Settings", Zahnrad in der Statusle
 - `app/lib/features/settings/providers/settings_provider.dart` (neu): `settingsSchemaProvider`, `settingsValuesProvider`, `settingsSearchProvider`
 - `app/lib/core/ipc/daemon_client.dart` (ändern: `configSchema`, `configGet`, `configSet`, `configReset`, `subscribeConfig`)
 - `app/lib/app.dart` (ändern: Route, `Ctrl+,`, Zahnrad)
+- `app/lib/features/tray/providers/attention.dart` (ändern: `notificationsEnabled` liest `ui.notifications`, statt fest `true` zu antworten)
+- `app/lib/features/shell/providers/theme.dart` (ändern: `themeModeProvider` startet aus `ui.theme` und folgt `ConfigChanged`)
+- `daemon/crates/config/src/model.rs` und `daemon/crates/config/tests/config_readers.rs` (ändern: der Vermerk `x-pending-issue` an `ui.notifications` und `ui.theme` entfällt, ihre Registerzeilen stehen danach auf `effective`)
+- `daemon/bin/humanitld/src/main.rs` (ändern: `load_config` behält `Resolved::diagnostics` und speist sie über die Warteschlange in den Ereignisstrom, statt sie nur zu protokollieren)
 - `daemon/crates/config/src/schema.rs` (ändern, falls HUM-062 nicht bereits liefert: `x-tier`, `x-security`, `title`, `description`, `default`, `format`, `minimum`, `maximum`)
 - `daemon/crates/config/src/origin.rs` (ändern: `Origin` pro Feld in `Config(Get)`-Antwort)
 - `daemon/crates/ipc/src/config.rs` (neu oder ändern: RPC `Config`, Stream `SubscribeConfig`)
@@ -1004,6 +1008,10 @@ Ein Settings-Screen (über Command Palette „Settings", Zahnrad in der Statusle
 - ARB
 
 ### Spezifikation
+
+**Die Befunde des Ladens dürfen nicht im Journal enden.** `load_config` (`daemon/bin/humanitld/src/main.rs:483-489`) schreibt heute jeden Befund aus `Resolved::diagnostics` mit `tracing::warn!` und verwirft ihn danach; unter systemd sieht ihn niemand. Das trifft genau die Fälle, in denen ein Wert stillschweigend übergangen wird: ein entfallener Schlüssel (`CONFIG_005`, `alias::RETIRED`, HUM-101), ein alter Name neben dem heutigen (`CONFIG_006`), ein gesperrter Schlüssel aus dem Projekt-Profil. Der Weg ist gebaut: `report_recorder_diagnostics` (`main.rs:302-330`) veröffentlicht Befunde ohne Flow als `FlowEvent::Diagnostic { flow_id: None }`, und `diagnosticsProvider` (HUM-106) sammelt sie. Zu tun ist, dass `load_config` seine Befunde behält, bis die Warteschlange steht, und sie dort einspeist; dieser Bildschirm zeigt sie neben den Feldern, die sie betreffen.
+
+**Zwei Schlüssel bekommen mit diesem Issue ihren ersten Leser.** `ui.notifications` und `ui.theme` stehen seit HUM-062 im Schema und werden von der Oberfläche nicht gelesen: `notificationsEnabled` (`app/lib/features/tray/providers/attention.dart`) antwortet fest `true`, und `themeModeProvider` (`app/lib/features/shell/providers/theme.dart`) startet fest auf dunkel. Beiden fehlt nicht der Schlüssel, sondern der Weg, ihn zu erfragen — `configGet` und `SubscribeConfig`, die dieses Issue liefert. Das Leser-Register aus HUM-101 (`daemon/crates/config/tests/config_readers.rs`) führt sie deshalb als `pending(HUM-069)`; mit diesem Bildschirm werden sie wirksam, und ihre Registerzeilen wechseln im selben Commit auf `effective`. Ohne diesen Wechsel zeigt der Zeiger auf ein Issue, das den Schlüssel nicht abdeckt, und das Register sähe nach Nachverfolgung aus, ohne eine zu sein.
 
 **Schema-Erweiterungen** (vom Daemon geliefert, JSON Schema Draft 2020-12 via `schemars`): Jedes Property hat `title` (kurz), `description`, `default`, optional `format` (`uri`, `path`, `duration-secs`, `bytes`, `host-port`), `enum`, `minimum`, `maximum`, `x-tier` (`basic|advanced|expert`), `x-security` (bool: Änderung beeinflusst Sicherheitsgarantien), `x-restart` (bool: wirkt erst nach Session-Neustart). Beispielausschnitt:
 
@@ -1104,6 +1112,8 @@ Widget: `expert_collapsed_by_default`, `search_finds_expert_field`, `env_overrid
 - [ ] Kaputte `config.toml` ⇒ Diagnostic `CONFIG_002` im Setup-Banner, alte Werte bleiben aktiv.
 - [ ] `HUMANITL_HOLD__TIMEOUT_SECS=42 humanitld` ⇒ Feld im UI deaktiviert mit Badge `env`.
 - [ ] `expert`-Felder mit `x-security` zeigen das Warn-Icon; Änderung erzeugt `config.changed` im Audit-Log.
+- [ ] `ui.notifications = false` unterdrückt die Meldung, und `ui.theme` bestimmt das Erscheinungsbild beim Start; beide Zeilen im Leser-Register stehen auf `effective`, und `docs/CONFIG.md` zeigt für sie in der Spalte „Wirkung" `ja` (HUM-101).
+- [ ] Die Befunde des Ladens erreichen die Oberfläche, nicht nur das Journal: Eine `config.toml` mit einem entfallenen Schlüssel (`alias::RETIRED`, heute `limits.idle_timeout_secs`) zeigt ihre `CONFIG_005`-Warnung im Bildschirm, und ein Test belegt es.
 
 ### Fallstricke
 - `toml::to_string` verwirft Kommentare und ordnet um. Nur `toml_edit::DocumentMut` verwenden.
@@ -1669,6 +1679,7 @@ Kein Rücktausch in gestreamten Antworten (M9). Kein Rücktausch von Secrets (To
 - `daemon/crates/proxy/src/handler.rs` (Response-Pfad, nach Puffern, vor Senden)
 - `daemon/crates/recorder/` (`messages.body_translated`, Migration V3)
 - `daemon/crates/config/src/schema.rs`: `pseudonyms.translate_responses: bool` (Default true, Tier `advanced`), `pseudonyms.max_response_bytes` (Default 8 MiB)
+- `daemon/crates/config/src/model.rs` (der Vermerk `x-pending-issue = "HUM-079"` an `pseudonyms.translate_responses` und `pseudonyms.max_response_bytes` entfällt) und `daemon/crates/config/tests/config_readers.rs` (beide Registerzeilen wechseln auf `effective`). Das Leser-Register aus HUM-101 führt die zwei Schlüssel heute als `pending(HUM-079)`, weil dieses Issue ihnen den ersten Leser gibt; sein Test vergleicht Register und Schema und wird rot, solange nur eine Seite nachgezogen ist
 - `app/lib/features/history/widgets/response_view.dart` (Umschalter „Original / Übersetzt")
 
 ### Spezifikation
@@ -1693,6 +1704,7 @@ Kein Rücktausch in gestreamten Antworten (M9). Kein Rücktausch von Secrets (To
 - [ ] Secrets bleiben pseudonymisiert.
 - [ ] Gestreamte Antwort trägt `X-Humanitl-Pseudonyms: untranslated`.
 - [ ] History zeigt beide Fassungen; Audit vermerkt `translated=true`.
+- [ ] `pseudonyms.translate_responses` und `pseudonyms.max_response_bytes` haben einen Leser: `translate_responses = false` schaltet den Rücktausch ab, eine Antwort über `max_response_bytes` bleibt unübersetzt; beide Zeilen im Leser-Register stehen auf `effective`, und `docs/CONFIG.md` zeigt für sie in der Spalte „Wirkung" `ja` (HUM-101).
 
 ### Fallstricke
 - Nach dem Rücktausch enthält die Antwort wieder PII; der Recorder speichert sie, das ist gewollt und im Audit vermerkt.

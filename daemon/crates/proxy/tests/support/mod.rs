@@ -241,6 +241,19 @@ impl ProxyBuilder {
         self
     }
 
+    /// `limits.header_timeout_secs`: die eine Uhr auf der Verbindung zum
+    /// Agenten (HUM-101, `backlog/CONVENTIONS.md` 4.25).
+    ///
+    /// Sie begrenzt zweierlei, und zwar mit Absicht dasselbe wie im Daemon:
+    /// die Frist des Clients für seine Kopfzeilen — auf einer
+    /// Keep-Alive-Verbindung zugleich die Frist bis zur nächsten Anfrage — und
+    /// den Handschlag zum Ziel bis zu dessen Antwort-Kopfzeilen. Sekunden sind
+    /// die kleinste Einheit; ein Test setzt üblicherweise eine.
+    pub fn header_timeout(mut self, timeout: Duration) -> Self {
+        self.limits.header_timeout_secs = timeout.as_secs();
+        self
+    }
+
     pub fn hold_max_flows(mut self, flows: u32) -> Self {
         self.limits.hold_max_flows = flows;
         self

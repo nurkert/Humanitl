@@ -239,7 +239,9 @@ registry! {
     CONFIG_003 => "config", "Wert außerhalb des Bereichs", "#config_003";
     /// `$XDG_RUNTIME_DIR` fehlt; ein Ersatzverzeichnis unter `/run/user` oder `$TMPDIR` wird genutzt (Info).
     CONFIG_004 => "config", "Laufzeitverzeichnis ist ein Ersatz", "#config_004";
-    /// Ein veralteter Schlüssel (Alias) ist in Gebrauch; der kanonische Name steht im Befund (Info).
+    /// Ein veralteter Schlüssel ist in Gebrauch: als Alias, dann steht der
+    /// kanonische Name im Befund (Info), oder ersatzlos entfallen, dann nennt
+    /// der Befund das Issue und der Wert wird übergangen (Warning, HUM-101).
     CONFIG_005 => "config", "Veralteter Schlüssel", "#config_005";
     /// Alter und neuer Schlüssel sind gleichzeitig gesetzt; der kanonische gewinnt (Warning).
     CONFIG_006 => "config", "Alter und neuer Schlüssel gesetzt", "#config_006";
