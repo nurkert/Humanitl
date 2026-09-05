@@ -19,12 +19,15 @@ Voraussetzung für alle Issues: `BACKLOG.md` Abschnitte 2 bis 6 und `backlog/CON
 | 11 | HUM-008 | Design-Tokens und `packages/ui` | M | HUM-001 |
 | 12 | HUM-074 | Abhängigkeits-Lint | S | HUM-001 |
 | HUM-009 | ADR-Verzeichnis | S | keine |
+| 13 | HUM-107 | `buf breaking` und `actionlint` können keinen Pull Request rot machen | S | HUM-002, HUM-003 |
 
 Sprint-Abschluss (Demo-Skript M0): `make check` läuft lokal und in CI grün durch: Rust-Workspace baut, Flutter-App baut, Proto-Codegen ohne Drift, `humanitl --fake`-Session spielt 20 Flows ab, Escape-Harness erzeugt JUnit-XML (Ergebnis rot ist erlaubt und erwartet).
 
 ---
 
 > **Abgleich 2026-09-02** (gilt vor dem Text der Issues, Details in `CONVENTIONS.md` Abschnitt 4): `Rule`-Typen liegen in `humanitl-core::rule`; seccomp erlaubt `AF_INET`/`AF_INET6`; Escape-Test-Dateien heißen `esc-N-<name>.sh`; Diagnostic-Codes werden im Register `core-types/src/diagnostics/codes.rs` reserviert (Bereiche siehe CONVENTIONS 4.6); `packages/ui` enthält zusätzlich `HModal`; `daemon/xtask` ist eine Hilfs-Crate außerhalb der Abhängigkeitsregeln; Sandbox-Profil hat `[network].bridges` und `[seccomp].allow_families`.
+
+> **Bestandsaufnahme 2026-09-05** (jedes Akzeptanzkriterium der 13 Issues dieses Sprints gegen den Code geprüft, durch Ausführen der Befehle und Lesen der Zeilen, nicht gegen Commit-Texte): 54 Kriterien erfüllt und abgehakt, 7 teilweise, 3 überholt formuliert (HUM-006 `ESCAPE_ALLOW_FAIL`, HUM-008 Fonts, HUM-009 „13 ADRs"); jedes offene Kästchen trägt den Halbsatz, was fehlt oder was das Produkt stattdessen tut. Nach Kriterien vollständig: HUM-004, HUM-063, HUM-062, HUM-010, HUM-005, HUM-007. Von dieser Maschine nicht prüfbar (kein clippy, cargo-deny, buf, actionlint, kein Blick in die CI): HUM-001 Kriterien 2 und 3, HUM-002 Kriterien 2 und 3, HUM-003 Kriterien 1 und 6, HUM-006 Kriterium 3. Neu angelegt aus der Aufnahme: HUM-107 (`buf breaking` und `actionlint` können keinen Pull Request rot machen); die Dokument- und Sandbox-Befunde der Sprint-0-Issues tragen HUM-111 und HUM-113 in `sprint-1.md`. Bewusst nicht als Issue: die veralteten Pfadlisten und Signaturen in den Spezifikationen (HUM-010, HUM-011, HUM-063), die `deny.toml`-Abweichung, der fehlende `OpenSSL`-Eintrag und die Zahl der Workspace-Mitglieder; sie stehen als Halbsatz am Kästchen oder in CONVENTIONS 4.
 
 ## HUM-001 · Monorepo anlegen
 Sprint: 0 · Größe: S · Abhängigkeiten: keine · Blockiert: alle anderen
@@ -150,13 +153,13 @@ escape:        ; ./tests/escape/run.sh         # ab HUM-006
 - `daemon/crates/core-types/src/lib.rs` enthält einen `#[cfg(test)] mod tests { #[test] fn workspace_builds() {} }`, damit `cargo test` nicht mit „0 tests" verwirrt.
 
 ### Akzeptanzkriterien
-- [ ] `cd daemon && cargo build --workspace` exit 0
-- [ ] `cd daemon && cargo clippy --workspace --all-targets -- -D warnings` exit 0
-- [ ] `cd daemon && cargo deny check` exit 0
-- [ ] `cd app && flutter analyze` exit 0 und `flutter build linux --debug` exit 0
-- [ ] `make check` exit 0
-- [ ] `find . -path ./.git -prune -o -type d -print | sort` enthält jedes Verzeichnis aus „Betroffene Pfade"
-- [ ] `git status` nach `make check` zeigt keine ungetrackten generierten Dateien
+- [x] `cd daemon && cargo build --workspace` exit 0
+- [ ] `cd daemon && cargo clippy --workspace --all-targets -- -D warnings` exit 0 Lokal nicht prüfbar (kein clippy auf der Maschine); das Gatter steht (`Makefile:25-28` überspringt lokal, `ci.yml:45` erzwingt `STRICT=1`), der Exit-Status wurde nur in der CI gesehen.
+- [ ] `cd daemon && cargo deny check` exit 0 Lokal nicht prüfbar (kein cargo-deny); `daemon/deny.toml` weicht von der Spezifikation ab (kein `OpenSSL` in der Allow-Liste, `advisories.version = 2` statt `vulnerability = "deny"`, `CDLA-Permissive-2.0` dazu), und nur `make rust-deny` in der CI fährt es.
+- [x] `cd app && flutter analyze` exit 0 und `flutter build linux --debug` exit 0
+- [x] `make check` exit 0 (lokal mit drei ehrlichen `SKIP`-Zeilen: rustfmt, clippy, `check-jsonschema`)
+- [x] `find . -path ./.git -prune -o -type d -print | sort` enthält jedes Verzeichnis aus „Betroffene Pfade"
+- [x] `git status` nach `make check` zeigt keine ungetrackten generierten Dateien
 
 ### Fallstricke
 - Cargo-Resolver 3 braucht Rust ≥ 1.84. Toolchain-Pin muss dazu passen.
@@ -317,12 +320,12 @@ Branch-Schutz (manuell im Repo, in CONTRIBUTING.md dokumentieren): `main` verlan
 - PR gegen `main` mit leerer Änderung zeigt sieben grüne Jobs (bzw. `proto-lint-and-gen` als skipped).
 
 ### Akzeptanzkriterien
-- [ ] Alle Jobs aus der Spezifikation existieren namentlich in `ci.yml`
-- [ ] `actionlint` sauber
-- [ ] Erster PR grün, Laufzeit gesamt < 15 min (Cache warm)
-- [ ] `escape-tests` lädt ein JUnit-Artefakt hoch, auch beim Platzhalter
-- [ ] `RUSTFLAGS=-D warnings` ist in CI aktiv, lokal nicht erzwungen
-- [ ] `release.yml` triggert nur auf `v*`-Tags
+- [x] Alle Jobs aus der Spezifikation existieren namentlich in `ci.yml` (dazu drei, die die Spezifikation nicht nannte: `deps-lint`, `e2e`, `parity-check`)
+- [ ] `actionlint` sauber Weder installiert noch als Makefile-Ziel noch als CI-Schritt vorhanden; nichts prüft die vier Workflow-Dateien (HUM-107).
+- [ ] Erster PR grün, Laufzeit gesamt < 15 min (Cache warm) Von einem Checkout aus nicht prüfbar; die Pipeline hat heute zehn Jobs statt sieben, `e2e` und `e2e-xvfb` tragen je `timeout-minutes: 30`, eine gemessene Laufzeit steht nirgends.
+- [x] `escape-tests` lädt ein JUnit-Artefakt hoch, auch beim Platzhalter
+- [x] `RUSTFLAGS=-D warnings` ist in CI aktiv, lokal nicht erzwungen
+- [x] `release.yml` triggert nur auf `v*`-Tags
 
 ### Fallstricke
 - `subosito/flutter-action` mit `cache: true` und wechselnder Version erzeugt stale Caches; `cache-key` mit `FLUTTER_VERSION` versehen.
@@ -786,12 +789,12 @@ Für den Drift-Check in CI (HUM-002) wird der Dart-Output in einem separaten Sch
 - Dart: `app/test/core/ipc/generated_smoke_test.dart`: instanziiert `Info()`, `FlowEvent()`, setzt Felder, `writeToBuffer()`/`fromBuffer()` Roundtrip.
 
 ### Akzeptanzkriterien
-- [ ] `buf lint proto` exit 0
-- [ ] `cargo build -p humanitl-ipc` exit 0, `cargo doc -p humanitl-ipc` ohne Warnungen (generierten Code mit `#[allow(missing_docs)]` im Modul umschließen)
-- [ ] `./scripts/gen-proto.sh` idempotent: zweiter Lauf ändert `proto/generated.sha256` nicht
-- [ ] Jedes Enum hat `_UNSPECIFIED = 0`
-- [ ] Jede Message aus BACKLOG.md 3.3 existiert; zusätzlich `GetConfig`/`SetConfig` für HUM-062/069
-- [ ] CI-Job `proto-lint-and-gen` grün
+- [ ] `buf lint proto` exit 0 Lokal ohne `buf` nicht prüfbar; `daemon/crates/ipc/tests/proto_contract.rs` bildet drei der Regeln nach, das Original fährt nur die CI.
+- [x] `cargo build -p humanitl-ipc` exit 0, `cargo doc -p humanitl-ipc` ohne Warnungen (generierten Code mit `#[allow(missing_docs)]` im Modul umschließen)
+- [x] `./scripts/gen-proto.sh` idempotent: zweiter Lauf ändert `proto/generated.sha256` nicht (nicht als zweiter Lauf beobachtet, weil das Skript `app/lib/core/ipc/generated` löscht; belegt über den Byte-Vergleich des Baums mit `proto/generated.sha256` und `checked_in_descriptor_matches_the_proto_sources`)
+- [x] Jedes Enum hat `_UNSPECIFIED = 0`
+- [x] Jede Message aus BACKLOG.md 3.3 existiert; zusätzlich `GetConfig`/`SetConfig` für HUM-062/069
+- [ ] CI-Job `proto-lint-and-gen` grün Von hier nicht beobachtbar; der Schritt `buf breaking` trägt seit dem Merge von HUM-003 (9a87bbc, 2026-09-03) weiter `continue-on-error: true` (`ci.yml:244`) und kann keinen Pull Request rot machen (HUM-107).
 
 ### Fallstricke
 - Proto-Feldnamen `snake_case`, Enum-Werte mit Typ-Präfix (`METHOD_GET`), sonst schlägt `buf lint` STANDARD an.
@@ -923,11 +926,11 @@ impl FlowState {
 - `fn is_private_table()`: `10.0.0.1` true, `169.254.169.254` true, `8.8.8.8` false, `fc00::1` true, `::1` true.
 
 ### Akzeptanzkriterien
-- [ ] `cargo test -p humanitl-core` grün, mindestens 12 Tests
-- [ ] Verbotene Übergänge: Zähler ≥ 35 im Test
-- [ ] `cargo doc -p humanitl-core` ohne Warnung
-- [ ] Keine Abhängigkeit auf tokio, sqlite, tonic in `Cargo.toml` dieser Crate
-- [ ] `FlowId::new()` ist zeitgeordnet (Test)
+- [x] `cargo test -p humanitl-core` grün, mindestens 12 Tests (65 Tests in sechs Suiten)
+- [x] Verbotene Übergänge: Zähler ≥ 35 im Test (115, und der Test pinnt die Formel `Zustände × Eingaben − Tabellenzeilen`)
+- [x] `cargo doc -p humanitl-core` ohne Warnung
+- [x] Keine Abhängigkeit auf tokio, sqlite, tonic in `Cargo.toml` dieser Crate
+- [x] `FlowId::new()` ist zeitgeordnet (Test)
 
 ### Fallstricke
 - `Uuid::new_v4()` statt `now_v7()`: verliert Zeitordnung, `ListFlows(since)` bricht später.
@@ -1042,10 +1045,10 @@ if [ -n "$bad" ]; then echo "$bad"; echo "::error::public fns must return typed 
 - Lint-Skript: negatives Fixture in `scripts/ci/fixtures/bad_signature.rs.txt` wird vom Skript erkannt (Test im Skript selbst: `sh -c` gegen Fixture-Verzeichnis, erwartet exit 1).
 
 ### Akzeptanzkriterien
-- [ ] `Diagnostic` ohne `why` lässt sich nicht bauen (Builder verlangt `why` vor `build`; typestate oder `build()` liefert `Result`)
-- [ ] `docs/DIAGNOSTICS.md` existiert und Test `docs_in_sync` grün
-- [ ] Lint-Skript in CI aktiv und grün auf aktuellem Stand
-- [ ] Alle 21 initialen Codes in Registry, Test `codes_are_unique` grün
+- [x] `Diagnostic` ohne `why` lässt sich nicht bauen (Builder verlangt `why` vor `build`; typestate oder `build()` liefert `Result`) (Typestate `MissingWhy` → `HasWhy`)
+- [x] `docs/DIAGNOSTICS.md` existiert und Test `docs_in_sync` grün
+- [x] Lint-Skript in CI aktiv und grün auf aktuellem Stand
+- [x] Alle 21 initialen Codes in Registry, Test `codes_are_unique` grün (heute 80 Codes im Register)
 
 ### Fallstricke
 - `FixAction::AddRule` braucht den `Rule`-Typ. Entschieden: `Rule`, `Matcher`, `Action`, `Expiry`, `HostPattern` liegen als reine Werttypen in `humanitl-core::rule`; `humanitl-rules` enthält nur Parsen (YAML) und `RuleSet::evaluate`. Kein Zyklus, `catalog` kann `HostPattern` ebenfalls nutzen.
@@ -1157,11 +1160,11 @@ Profil-Dateien enthalten in Sprint 0 nur einen `[config]`-Block, der wie die glo
 - `fn schema_is_stable()`: Snapshot in `tests/fixtures/config.schema.json`, Abweichung mit Hinweis auf `UPDATE_SNAPSHOTS=1`.
 
 ### Akzeptanzkriterien
-- [ ] `cargo test -p humanitl-config` grün, ≥ 10 Tests
-- [ ] `Config::json_schema()` enthält alle Schlüssel aus CONVENTIONS.md 3.7
-- [ ] Jedes Blattfeld hat Tier und Beschreibung (Test)
-- [ ] Präzedenz-Reihenfolge exakt: Default < Global < Profil global < Profil Projekt < Env < CLI (Tests)
-- [ ] `docs/CONFIG.md` generiert und in sync
+- [x] `cargo test -p humanitl-config` grün, ≥ 10 Tests (136 Tests)
+- [x] `Config::json_schema()` enthält alle Schlüssel aus CONVENTIONS.md 3.7 (drei Schlüssel als Aliasse, so will es CONVENTIONS 4.4)
+- [x] Jedes Blattfeld hat Tier und Beschreibung (Test)
+- [x] Präzedenz-Reihenfolge exakt: Default < Global < Profil global < Profil Projekt < Env < CLI (Tests) (heute sieben Ebenen: „Profil global" ist in Profil `default` und gewähltes Profil geteilt, HUM-066)
+- [x] `docs/CONFIG.md` generiert und in sync
 
 ### Fallstricke
 - `#[serde(default)]` auf Struct-Ebene plus `deny_unknown_fields` ist die richtige Kombination; nur eines von beiden lässt Tippfehler durch oder erzwingt alle Felder.
@@ -1290,11 +1293,11 @@ Reihenfolge der erzeugten Argumente (deterministisch, für Snapshot): `--unshare
 - `fn unknown_field_is_diagnostic()`: `deny_unknown_fields`.
 
 ### Akzeptanzkriterien
-- [ ] Beide Profile parsen, Snapshot-Test grün
-- [ ] Denylist-Tests grün
-- [ ] `argv_line` ist mit `sh -c` parsebar (Test: `shlex::split(line)` ergibt dieselbe Liste)
-- [ ] Kein Mount der Denylist kann per Profil eingeschmuggelt werden, auch nicht über Symlink-Quelle (Quelle wird kanonisiert vor Prüfung)
-- [ ] Alle Env-Schlüssel aus dem Env-Kit im Profil vorhanden
+- [x] Beide Profile parsen, Snapshot-Test grün
+- [x] Denylist-Tests grün
+- [x] `argv_line` ist mit `sh -c` parsebar (Test: `shlex::split(line)` ergibt dieselbe Liste)
+- [x] Kein Mount der Denylist kann per Profil eingeschmuggelt werden, auch nicht über Symlink-Quelle (Quelle wird kanonisiert vor Prüfung)
+- [x] Alle Env-Schlüssel aus dem Env-Kit im Profil vorhanden
 
 ### Fallstricke
 - `--unshare-all` ist Kurzform; explizite Liste ist für Snapshot und Anzeige besser, aber `--unshare-all` schließt zusätzlich `--unshare-cgroup` ein und ist zukunftssicher. Entscheidung: Liste explizit, plus `cgroup`.
@@ -1393,11 +1396,11 @@ Fixtures-Inhalt:
 - `fn lagged_when_subscriber_slow()`: Kanal-Kapazität auf 4 setzen, 20 Events feuern, Subscriber liest erst danach, erhält `Lagged{n>0}`.
 
 ### Akzeptanzkriterien
-- [ ] `humanitld --fake fixtures/sessions/mixed.jsonl` startet, `grpcurl` Subscribe liefert Events
-- [ ] Alle sechs Tests grün
-- [ ] Jeder Zustandswechsel im Fake geht durch `Flow::apply` (grep: kein direktes `state =` außerhalb von `flow.rs`)
-- [ ] Fake beendet sich auf SIGTERM und räumt Socket und Token-File weg
-- [ ] Fixtures haben gültige UUIDv7-Strings (Test: alle IDs parsen mit `FlowId::parse`)
+- [x] `humanitld --fake fixtures/sessions/mixed.jsonl` startet, `grpcurl` Subscribe liefert Events (grpcurl fehlt auf dieser Maschine; `Subscribe` belegt `serves_the_contract_over_a_unix_socket` über einen echten Unix-Socket, zwei weitere RPCs liefen live gegen den Fake)
+- [x] Alle sechs Tests grün
+- [x] Jeder Zustandswechsel im Fake geht durch `Flow::apply` (grep: kein direktes `state =` außerhalb von `flow.rs`)
+- [x] Fake beendet sich auf SIGTERM und räumt Socket und Token-File weg
+- [x] Fixtures haben gültige UUIDv7-Strings (Test: alle IDs parsen mit `FlowId::parse`)
 
 ### Fallstricke
 - Zeitsteuerung in Tests ohne `tokio::time::pause()` macht Tests langsam und flaky. `#[tokio::test(start_paused = true)]` plus `tokio::time::advance`.
@@ -1544,11 +1547,11 @@ CI: `ESCAPE_ALLOW_FAIL=1` in Sprint 0 im Job setzen, mit Kommentar `# remove in 
 - Rust: `escape-launch` hat einen Test, der ohne `exec` nur die Argv baut und den Snapshot aus HUM-010 mit `--tests-dir` erweitert prüft.
 
 ### Akzeptanzkriterien
-- [ ] `./tests/escape/run.sh` läuft lokal durch und erzeugt `target/escape/escape.xml` mit ≥ 25 Testcases
-- [ ] `xmllint --noout target/escape/escape.xml` exit 0
-- [ ] CI-Job `escape-tests` lädt das XML als Artefakt hoch und ist mit `ESCAPE_ALLOW_FAIL=1` grün
-- [ ] Erwartetes Ergebnis in Sprint 0 dokumentiert in `tests/escape/README.md`: welche Proben rot sind und welches Issue sie grün macht
-- [ ] Keine Probe nutzt Netzwerk auf dem Host außer der optionalen DNS-Beobachtung
+- [x] `./tests/escape/run.sh` läuft lokal durch und erzeugt `target/escape/escape.xml` mit ≥ 25 Testcases (104 Fälle, 96 grün, 0 rot, 8 übersprungen)
+- [x] `xmllint --noout target/escape/escape.xml` exit 0
+- [ ] CI-Job `escape-tests` lädt das XML als Artefakt hoch und ist mit `ESCAPE_ALLOW_FAIL=1` grün Der Upload steht (`escape-junit`, `if: always()`); die Klausel `ESCAPE_ALLOW_FAIL=1` ist seit HUM-021 überholt, der Job kennt keine Toleranz mehr und ist bei jeder roten Probe rot; ein CI-Lauf war von hier nicht beobachtbar.
+- [x] Erwartetes Ergebnis in Sprint 0 dokumentiert in `tests/escape/README.md`: welche Proben rot sind und welches Issue sie grün macht (die Kopfzahlen in Zeile 187 sind veraltet: dort 97/90/0/7, heute 104/96/0/8, und die eigene Tabelle der Datei zählt 8 übersprungene)
+- [x] Keine Probe nutzt Netzwerk auf dem Host außer der optionalen DNS-Beobachtung (die DNS-Beobachtung selbst existiert nicht, HUM-115)
 
 ### Fallstricke
 - `ip` ist in einer minimalen Sandbox nicht vorhanden; Fallback `/proc/net/dev` einbauen (in ESC-1 vorgesehen).
@@ -1615,10 +1618,10 @@ Kein Responsible-Disclosure-Prozess (kommt mit HUM-059). Keine Bewertung von Doc
 - `scripts/ci/lint-docs.sh` (neu, in `rust-check` einhängen): beide Dateien existieren, enthalten keine Zeile mit `TODO` oder `TBD`, alle referenzierten `ESC-N` existieren als Skript unter `tests/escape/`.
 
 ### Akzeptanzkriterien
-- [ ] Beide Dateien vollständig nach Gliederung, keine leeren Abschnitte
-- [ ] Die drei Garantie-Sätze stehen wortgleich in SECURITY.md Abschnitt 1, BACKLOG.md 4.1 und später im ARB (`isolation_guarantee_1..3`)
-- [ ] Jede der zwölf Kanäle aus dem Review ist in THREAT-MODEL.md Abschnitt 4 mit Status
-- [ ] `lint-docs.sh` grün
+- [x] Beide Dateien vollständig nach Gliederung, keine leeren Abschnitte
+- [x] Die drei Garantie-Sätze stehen wortgleich in SECURITY.md Abschnitt 1, BACKLOG.md 4.1 und später im ARB (`isolation_guarantee_1..3`) (die Schlüssel heißen heute `isolationCheck1..3`, CONVENTIONS 4.11; ein Gatter, das die Gleichheit hält, gibt es nicht, HUM-111)
+- [x] Jede der zwölf Kanäle aus dem Review ist in THREAT-MODEL.md Abschnitt 4 mit Status (K-01 bis K-15)
+- [x] `lint-docs.sh` grün
 
 ### Fallstricke
 - Nicht „sicher" schreiben, wo „gemindert" gemeint ist. Der Abschnitt 3 ist der wichtigste; wer ihn weglässt, verspielt Vertrauen.
@@ -1743,12 +1746,12 @@ Galerie: eine Seite mit Sektionen Farben (alle Swatches mit Hex-Label), Typo-Ska
 - Widget-Test: Galerie baut ohne Exception in Dark und Light (`pumpWidget`, `expect(tester.takeException(), isNull)`).
 
 ### Akzeptanzkriterien
-- [ ] `flutter analyze` in `app/packages/ui` sauber
-- [ ] Galerie startet über `HUMANITL_GALLERY=1 flutter run -d linux`
-- [ ] Alle Hex-Werte aus BACKLOG.md 5 exakt in `colors.dart`
+- [x] `flutter analyze` in `app/packages/ui` sauber
+- [x] Galerie startet über `HUMANITL_GALLERY=1 flutter run -d linux` (belegt über `main.dart:25-41`, `gallery_screen_test.dart` und einen Lauf des Debug-Bundles; `flutter run` selbst nicht aufgerufen)
+- [x] Alle Hex-Werte aus BACKLOG.md 5 exakt in `colors.dart`
 - [x] ~~Keine Komponentenbibliothek in `app/packages/ui/pubspec.yaml`~~ — am 2026-09-04 vom Projekteigentümer zurückgenommen: `shadcn_flutter` steht dort, ausschließlich hinter der Naht (ADR-0009, Abschnitt „Revidiert am 2026-09-04 durch den Projekteigentümer"); `tools/check-deps.sh` erzwingt, dass kein Feature sie importiert
-- [ ] Fonts gebündelt, Lizenzdateien im Repo
-- [ ] Tests grün, Kontrast-Test bestanden
+- [ ] Fonts gebündelt, Lizenzdateien im Repo Bewusst nicht gebündelt: CONVENTIONS 4.11 legt Familien mit Fallback-Stack fest (`typography.dart:14-31`), weil `shadcn_flutter` schon 8,3 MB eigene Assets in jeden Build trägt; die Bündelung ist ein eigenes späteres Issue.
+- [x] Tests grün, Kontrast-Test bestanden
 
 ### Fallstricke
 - shadcn_flutter 0.0.54 verlangt Flutter ≥ 3.47 und hat Material entfernt; kein `MaterialApp` verwenden, sondern `ShadcnApp`. Wer `material.dart` importiert, bekommt Konflikte bei `Colors`, `TextStyle`-Erweiterungen; in `packages/ui` nur `package:flutter/widgets.dart` plus shadcn.
@@ -1807,9 +1810,9 @@ Dateinamen: `0001-rust-hudsucker`, `0002-bwrap-first`, `0003-grpc-uds`, `0004-fl
 - `lint-docs.sh` grün.
 
 ### Akzeptanzkriterien
-- [ ] 13 ADRs plus Template plus Index
-- [ ] Jede ADR nennt mindestens ein Issue
-- [ ] BACKLOG.md 2 verlinkt auf `docs/adr/`
+- [ ] 13 ADRs plus Template plus Index Die Zahl passt zu nichts: Ziel und Pfade desselben Issues sagen 0001 bis 0018, im Verzeichnis liegen 18 plus Template und Index, und `docs/adr/check.sh` bestätigt sie samt Nummerierung und MADR-Gliederung.
+- [x] Jede ADR nennt mindestens ein Issue
+- [x] BACKLOG.md 2 verlinkt auf `docs/adr/`
 
 ### Fallstricke
 - ADR-Nummern nie umbenennen, auch wenn Reihenfolge im Backlog anders wirkt (010 kommt im Backlog nach 013).
@@ -1861,10 +1864,10 @@ if grep -rn 'TcpStream::connect' daemon/crates daemon/bin --include='*.rs' | gre
 - CI-Job grün auf `main`.
 
 ### Akzeptanzkriterien
-- [ ] `tools/check-deps.sh` liefert Exit 0 auf dem aktuellen Workspace.
-- [ ] Negativtest (Schritt 5) liefert Exit 1 mit sprechender Zeile.
-- [ ] Job `deps-lint` in `ci.yml` vorhanden und grün.
-- [ ] `grep -rn 'TcpStream::connect'` außerhalb `egress/` bricht den Job.
+- [x] `tools/check-deps.sh` liefert Exit 0 auf dem aktuellen Workspace.
+- [x] Negativtest (Schritt 5) liefert Exit 1 mit sprechender Zeile.
+- [x] Job `deps-lint` in `ci.yml` vorhanden und grün.
+- [ ] `grep -rn 'TcpStream::connect'` außerhalb `egress/` bricht den Job. Gilt für `daemon/crates` und `daemon/bin` außer `bin/humanitl-shim/`, wo `bridge.rs:360` ein echtes `TcpStream::connect_timeout` trägt (die Loopback-Brücke); die Ausnahme steht nur im Skriptkommentar, nicht im Issue.
 
 ### Fallstricke
 - `cargo metadata` ohne `--no-deps` listet alle externen Crates; die Prüfung wird dann langsam und falsch. Immer `--no-deps`.
@@ -1873,3 +1876,82 @@ if grep -rn 'TcpStream::connect' daemon/crates daemon/bin --include='*.rs' | gre
 
 ### Referenzen
 BACKLOG.md ADR-015; `docs/ARCHITECTURE.md` 2, 4; CONVENTIONS.md 3.1, 3.10b.
+
+---
+
+## HUM-107 · `buf breaking` und `actionlint` können keinen Pull Request rot machen
+Sprint: 0 · Größe: S · Abhängigkeiten: HUM-002, HUM-003 · Blockiert: keine
+
+### Kontext
+HUM-003 sagt in seinem Kontext, dass Änderungen an der Proto „ab jetzt `buf breaking`" brauchen, und `docs/PROTOCOL.md` 6 verspricht den Vertragsschutz in der CI. Der Schritt `buf breaking against main` in `.github/workflows/ci.yml:240-245` trägt aber `continue-on-error: true`, mit dem Kommentar, das Flag sei zu entfernen, sobald HUM-003 auf `main` liege. HUM-003 liegt seit dem 2026-09-03 auf `main` (Merge 9a87bbc); das Flag steht noch. Seitdem kann eine inkompatible Proto-Änderung keinen Pull Request rot machen. Zweite Lücke aus HUM-002: das Akzeptanzkriterium „`actionlint` sauber" hat weder ein Werkzeug noch ein Makefile-Ziel noch einen CI-Schritt hinter sich (`grep -rn actionlint` trifft nur `backlog/sprint-0.md`), während die Pipeline von sieben auf zehn Jobs gewachsen ist. Beides sind Wächter, die die Spezifikation versprochen hat und die heute nicht beißen (ADR-003, ADR-015).
+
+### Ziel
+Ein Pull Request, der die Proto inkompatibel ändert, bekommt einen roten Job `proto-lint-and-gen`. Ein Pull Request, der eine Workflow-Datei mit Syntaxfehler, fehlendem `shell:` oder ungepinnter Action einbringt, bekommt einen roten Job `workflows-lint`. Lokal ruft `make check` denselben Lint auf und überspringt ihn ehrlich, wenn `actionlint` fehlt, so wie clippy heute.
+
+### Nicht-Ziel
+`buf` lokal installieren oder ersetzen (`proto_contract.rs` bildet die Lint-Regeln nach, das bleibt so). Die Branch-Schutz-Einstellungen des Repositories selbst; sie sind nur dokumentierbar. Server-Reflection für grpcurl (HUM-018, eigene Frage).
+
+### Betroffene Pfade
+- `.github/workflows/ci.yml` (Zeilen 240-245; neuer Job `workflows-lint`; Pflichtliste im Kopfkommentar `ci.yml:13-15`)
+- `scripts/ci/lint-workflows.sh` (neu)
+- `Makefile` (Ziel `workflows-lint`, in `check`)
+- `CONTRIBUTING.md` (Absatz zum Branch-Schutz, den HUM-002 Schritt 6 verlangt hat)
+- `docs/PROTOCOL.md` 6 (der Satz, dass der Schritt einen PR rot macht)
+
+### Spezifikation
+Der Schritt verliert das Flag und den Kommentar:
+
+```yaml
+      - name: buf breaking against main
+        if: steps.sources.outputs.ready == 'true' && github.event_name == 'pull_request'
+        run: buf breaking proto --against '.git#branch=main,subdir=proto'
+```
+
+Der Checkout des Jobs hat schon `fetch-depth: 0` (`ci.yml:199`), damit `.git#branch=main` auflösbar ist; das bleibt.
+
+Neuer Job, gepinnt wie websocat und grpcurl in `ci.yml:99-131` (Release-Archiv, feste Version, SHA-256-Prüfung, harter Fehler bei Abweichung):
+
+```yaml
+  workflows-lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@<sha> # v4.4.0
+      - name: Install actionlint <version>
+        run: <download, sha256sum -c, install nach ~/.local/bin>
+      - run: make workflows-lint
+```
+
+`scripts/ci/lint-workflows.sh`: läuft `actionlint -color never .github/workflows/*.yml`; fehlt das Binary, druckt es `SKIP workflows-lint: actionlint not found` und endet 0, mit `STRICT=1` endet es 1 (Vorbild `Makefile:25-28`). Die Composite-Actions unter `.github/actions/` prüft actionlint über die Workflows mit, die sie verwenden.
+
+`CONTRIBUTING.md` bekommt den Absatz „Branch-Schutz": die Pflicht-Jobs stehen genau einmal, in `ci.yml:13-15`, und der Absatz verweist dorthin, statt die Liste zu wiederholen.
+
+### Schritte
+1. Flag und Kommentar aus `ci.yml` entfernen. Prüfen: `grep -n continue-on-error .github/workflows/ci.yml` ohne Treffer.
+2. `scripts/ci/lint-workflows.sh` mit SKIP-Logik schreiben, Makefile-Ziel `workflows-lint` in `check` aufnehmen. Prüfen: `make workflows-lint` ohne actionlint druckt die SKIP-Zeile; `STRICT=1 make workflows-lint` endet 1.
+3. Job `workflows-lint` in `ci.yml` mit gepinntem actionlint; Job in die Pflichtliste `ci.yml:13-15`. Prüfen: `python3 -c 'import yaml,sys; yaml.safe_load(open(".github/workflows/ci.yml"))'` endet 0.
+4. `CONTRIBUTING.md` und `docs/PROTOCOL.md` 6 nachziehen.
+5. Versuchs-PR (oder lokal mit `buf`, wo vorhanden): eine Feldnummer in `proto/humanitl/v1/humanitl.proto` ändern, Job rot; Ergebnis im Commit-Body festhalten, Änderung verwerfen.
+
+### Tests
+- `lint_workflows_skips_without_tool`: Skript ohne `actionlint` im `PATH` endet 0 und druckt `SKIP`.
+- `lint_workflows_strict_fails_without_tool`: dasselbe mit `STRICT=1` endet 1.
+- `lint_workflows_catches_a_broken_if`: eine Kopie von `ci.yml` mit `if: ${{ github.event_name = 'push' }}` in einem Temp-Verzeichnis lässt actionlint mit Exit 1 enden (nur wo actionlint installiert ist, sonst übersprungen).
+- Versuchs-PR aus Schritt 5, dokumentiert im Commit-Body.
+
+### Akzeptanzkriterien
+- [ ] `grep -n 'continue-on-error' .github/workflows/ci.yml` liefert keinen Treffer, und der Kommentar `ci.yml:241-243` ist weg.
+- [ ] Ein Pull Request, der in `proto/humanitl/v1/humanitl.proto` eine Feldnummer ändert, bekommt einen roten Job `proto-lint-and-gen`; das Ergebnis des Versuchs steht im Commit-Body.
+- [ ] `grep -n 'workflows-lint' .github/workflows/ci.yml` trifft den Job und die Pflichtliste in `ci.yml:13-15`; das actionlint-Binary ist mit Version und SHA-256 gepinnt.
+- [ ] `make check` ruft `scripts/ci/lint-workflows.sh`; ohne `actionlint` erscheint genau eine `SKIP`-Zeile, mit `STRICT=1` endet das Ziel 1.
+- [ ] `grep -n 'Branch-Schutz\|branch protection' CONTRIBUTING.md` trifft, und der Absatz verweist auf `ci.yml:13-15` statt die Liste zu kopieren.
+- [ ] `docs/PROTOCOL.md` 6 sagt, dass `buf breaking` einen Pull Request rot macht, und nennt keinen Vorbehalt mehr.
+- [ ] `make check` grün, `tools/verify-commit.sh` auf dem Commit grün.
+
+### Fallstricke
+- `buf breaking` gegen `.git#branch=main` braucht den `main`-Ref im Checkout; bei einem `push` auf `main` gibt es nichts zu vergleichen, die `pull_request`-Bedingung bleibt.
+- Die Ausnahmen in `proto/buf.yaml` (fünf dokumentierte) nicht aufweichen, um grün zu werden; eine gewollte inkompatible Änderung geht über `PROTO_MAJOR` (`docs/PROTOCOL.md` 5), nicht über das Flag.
+- actionlint meldet auch `shellcheck`-Befunde in `run:`-Blöcken; wer shellcheck nicht installiert, bekommt weniger Befunde als die CI. Das Skript sagt das in einer Zeile.
+- Ein ungepinntes `uses:` in einer Action ist genau das, was der Lint verhindern soll; das actionlint-Binary selbst deshalb aus dem Release-Archiv, nicht über eine Action.
+
+### Referenzen
+`backlog/sprint-0.md` HUM-002 (Schritt 6, Kriterium `actionlint`), HUM-003 (Kontext); `docs/PROTOCOL.md` 5, 6; BACKLOG.md ADR-003, ADR-015; `.github/workflows/ci.yml:13-15, 99-131, 240-245`; https://buf.build/docs/breaking/overview; https://github.com/rhysd/actionlint.

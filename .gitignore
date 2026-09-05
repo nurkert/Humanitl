@@ -28,3 +28,6 @@ target/e2e/
 .vscode/
 *.swp
 .DS_Store
+
+# Arbeitsbäume und Zwischenstände der KI-Agenten; nie Teil eines Commits.
+.claude/
