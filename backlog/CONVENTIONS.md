@@ -2198,3 +2198,169 @@ dieser Datei wurde parallel gearbeitet. `limits.body_timeout_secs` trägt
 deshalb bis auf Weiteres `pending(HUM-120)` statt einer Zusage, und
 `docs/SECURITY.md` nennt ihn ausdrücklich als heute wirkungslos, statt ihn in
 einer Zeile mit den drei wirksamen Grenzen zu führen.
+### 4.26 Aus der Umsetzung von `humanitl run` (HUM-067, 2026-09-05)
+
+Abweichungen von `backlog/sprint-3.md`, die dauerhaft gelten. Wo die
+Spezifikation anderes sagt, gilt dieser Abschnitt. Der Zuschnitt dieses
+Issues — was gebaut wurde und was nicht — steht als Stand-Abschnitt unter der
+Spezifikation.
+
+**Die Sitzungskonfiguration ist der Rumpf, und sie steht an zwei Stellen.**
+`humanitl_ipc::session::SessionResolver` löst je Start neu auf;
+`humanitl_proxy::session::SessionSettings` hält, was der laufende Proxy davon
+liest. `SandboxService::new` nimmt deshalb den Resolver statt einer
+eingefrorenen `Config`, und `Inner::config` steht hinter einem `RwLock`: Was
+der Sandbox-Bildschirm zeigt, ist die Sitzung, die läuft, und nicht die
+Auflösung des Daemon-Starts.
+
+Die Trennung ist eine Aussage. Die Regeln haben mit dem `RulesStore` schon
+einen Ort, der sich ändern lässt und Zuhörer benachrichtigt; sie bekommen
+deshalb keine zweite Stelle daneben, sondern `RulesStore::set_bundled`. Alles
+andere aus der Konfiguration ändert sich innerhalb eines Daemons nicht: Wer
+Grenzen, Detektoren oder Resolver anders will, startet ihn neu.
+
+**Ein Client darf zwei Konfigurationspfade setzen, und die Liste ist eine
+Erlaubnisliste.** `humanitl_ipc::session::SESSION_OVERRIDE_KEYS` nennt
+`llm.endpoint` und `hold.timeout_secs`; jeder andere Pfad ist `CONFIG_003`.
+Die Richtung ist dieselbe wie bei `VISIBLE_ENV` (4.17) und aus demselben Grund:
+Über einem offenen Namensraum kann keine Sperrliste vollständig sein, und die
+Lücken wären die gefährlichen. `sandbox.profile` bestimmt die Einhängefläche,
+`agent.command` den Prozess darin, `sandbox.env` seine Umgebung,
+`resolver.overrides` und `experimental.*`, wohin der Verkehr wirklich geht,
+`findings.enabled`, ob vor einer Entscheidung überhaupt noch gesucht wird, und
+`recorder.retention_days`, wie lange die Aufzeichnung sie belegt. Keiner davon
+gehört einem Prozess am Socket.
+
+Die beiden erlaubten stehen aus verschiedenen Gründen darauf.
+`hold.timeout_secs` vergrößert nichts: Eine kürzere Frist blockt früher, eine
+längere lässt nur den Menschen länger warten, und null ist nicht einstellbar.
+`llm.endpoint` **vergrößert sehr wohl etwas** — `AgentAdapter::llm_passthrough`
+baut daraus eine Regel in Rang 1 mit `allow_private`, die nicht gehalten wird
+und die Block-Regeln des Nutzers überholt. Er steht trotzdem darauf, weil 3.8
+ihn als Flag von `humanitl run` führt und weil seine Wirkung an drei Stellen
+sichtbar ist: als eigene Regel in der Liste, unter `http://humanitl.internal/`
+und in der Aufzeichnung. Dazu meldet der Start `LLM_006`, wenn der Endpunkt
+nach seinem Namen nicht im eigenen Netz liegt
+(`humanitl_proxy::not_private_by_name`, ohne Auflösung — ein Name verlässt den
+Rechner erst nach einer Freigabe, ADR-006).
+
+**Eine Profilregel kann sich den Rang der Durchreiche nicht selbst ausstellen.**
+`set_bundled` stempelt auf jede Regel der mitgelieferten Gruppe `bundled`, und
+Rang 1 gilt für `bundled && passthrough_llm`. `humanitl_rules::parse_rules`
+verwirft `bundled` aus einer Datei, `passthrough_llm` aber nicht — seit
+Profilregeln in dieser Gruppe stehen, genügte deshalb ein globales Profil mit
+`[rules].inline` und `passthrough_llm = true`, um für einen beliebigen Host
+einen ungehaltenen Weg zu öffnen, der die Block-Regeln des Nutzers überholt.
+`humanitl_ipc::session::BundledRules` trennt die Durchreiche deshalb im Typ:
+Ihr Konstruktor nimmt jeder anderen Regel den Vermerk und meldet den Entzug.
+Nur was aus `llm_passthrough_rule` kommt, trägt ihn (4.5, HUM-104).
+
+Profil, Projektverzeichnis, Arbeitsmodus, Frage-Modus und Befehl reisen
+**nicht** in dieser Liste, sondern in eigenen Feldern von `Start` mit je
+eigener Prüfung. Zwei Wege zu einem Feld wären zwei Regeln, welcher gewinnt —
+dieselbe Begründung, mit der `cli.rs` `--ro` neben `--work-mode` ablehnt.
+
+**Das Projektverzeichnis reist geprüft weiter, nie geschrieben.** `Start`
+trägt es als Text, `SandboxService::remember` prüft es nach den drei Stufen aus
+4.17 und legt den aufgelösten Pfad ab; die Sitzungsauflösung nimmt genau
+diesen, auch für die Suche nach dem Projekt-Profil. Ein Pfad, der die Prüfung
+nicht besteht, erreicht die Auflösung nie.
+
+**`--ask none` bleibt `504`.** Die Spezifikation ließ offen, ob eine Anfrage
+ohne Regel bei `ask_mode = none` weiter in die Zeitüberschreitung läuft (`504`,
+`reason: timeout`, `DECISION_KIND_TIMED_OUT`) oder einen eigenen Blockgrund
+bekommt (`403`, `BlockReason::AskModeNone`). Es bleibt bei `504`: Der Wert ist
+wahr — niemand hat entschieden, und genau das heißt `504` —, das Briefing des
+Agenten sagt es seit HUM-071 wörtlich und hält es mit einem Test fest, und
+`403` hieße „ein Mensch hat entschieden", was in diesem Modus niemand getan
+hat. Der Kommentar in `profiles/llm-only.toml` behauptete das Gegenteil und ist
+korrigiert. `BlockReason::AskModeNone` gibt es damit nicht.
+
+**Die mitgelieferte Regelgruppe entsteht an einer Stelle.**
+`humanitl_ipc::session::bundled_rules` setzt sie zusammen: Durchreiche, dann
+die Regeln der beteiligten Profile (`[rules].inline` und `[rules].files`, Rang
+4), dann `rules/default.yaml`. Dieselbe Funktion ruft `humanitld` beim Start
+und der Sandbox-Dienst bei jeder Sitzung; `BUNDLED_RULES` ist aus
+`humanitld/src/main.rs` dorthin gewandert. Zwei Stellen, die dieselbe Gruppe
+bauen, liefen auseinander, und die Reihenfolge darin ist genau das, woran
+HUM-104 gearbeitet hat.
+
+**`SandboxService` bekommt seine Anschlüsse als Wert, nicht über `with_`.**
+`SandboxPorts` trägt Regelspeicher und Sitzungszustand, beide wahlfrei. Ein
+`with_rules(mut self)` hätte `Arc::get_mut` und damit ein `expect` gebraucht,
+das die Codebasis außerhalb von Tests und `main` nicht kennt.
+
+**Der Strom von `Sandbox(Start)` endet erst mit dem Agenten.** Er trägt jetzt
+auch dessen Ausgabe (`SandboxEvent.output`) und seinen Exit-Code
+(`SandboxEvent.exit`). Wer nur den Zustand wissen will, liest bis zum ersten
+`running`, `failed` oder `stopped` und hört auf; die Tests tun genau das.
+
+**Die Ausgabe des Agenten wird gefiltert, bevor sie den Daemon verlässt, und
+der Filter ist eine Erlaubnisliste.** `humanitl_core::TerminalFilter` lässt von
+allen Steuerfolgen genau eine hinaus: `ESC [ … m`, Farbe und Attribute. Alles
+andere wird verworfen — jede OSC-Folge, jede Zeichenkettenfolge (DCS, SOS, PM,
+APC), jede andere CSI-Folge und jede Ein-Zeichen-Escape-Folge, jeweils auch in
+ihrer einbytigen C1-Form (`0x9b` ist CSI, `0x9d` ist OSC).
+
+Die Richtung ist dieselbe wie bei `VISIBLE_ENV` (4.17) und
+`SESSION_OVERRIDE_KEYS` und aus demselben Grund. Die erste Fassung sperrte
+OSC 52 und OSC 8; der Review von HUM-067 fand vier wirksame Wege daran vorbei
+(`OSC 052`, `OSC 0`, `\x9d52;…`, `ESC P tmux;…`). Über einem offenen
+Namensraum kann keine Sperrliste vollständig sein.
+
+Cursorbewegung, Löschen, Scrollen und das Zurücksetzen des Terminals gehen
+damit ebenfalls nicht hinaus. Das ist gewollt: `\x1b[1A\x1b[2K` überschreibt
+eine Zeile, die schon steht, und die drei Zeilen der Isolationsprüfung von
+`humanitl run` stehen genau dort. Ohne PTY braucht kein Agent mehr als Farbe;
+mit PTY entscheidet HUM-042 neu.
+
+Erkannt wird jede Folge in drei Schreibweisen: mit `ESC`, als einzelnes
+C1-Byte und als dessen wohlgeformte UTF-8-Kodierung (`C2 9B` ist `U+009B`,
+also CSI). Die dritte fehlte in der zweiten Fassung und war voll wirksam:
+VTE-basierte Terminals dekodieren UTF-8 vor dem Parser. Entschieden wird
+deshalb am Codepunkt und nicht am Byte — `0xC2` ist das einzige Anfangsbyte,
+aus dem ein C1-Steuerzeichen werden kann, und wird zurückgehalten, bis das
+Folgebyte es entscheidet.
+
+Der Filter hat Zustand, weil eine Folge über die Grenze zweier Lesevorgänge
+laufen darf; ein zustandsloser Filter je Stück sähe die Hälfte und ließe sie
+durch. Die Restlücke — ein Terminal, das nicht in UTF-8 arbeitet — steht in
+`docs/SECURITY.md` 3.3. Er sitzt im Daemon und nicht im Client: Es gibt mehr
+als einen Client, und die Zusage darf nicht an dem hängen, der gerade liest.
+HUM-042 erweitert diesen Filter für den PTY-Pfad, statt einen zweiten daneben
+zu bauen.
+
+**Ein Start beansprucht die Sitzung, bevor er etwas merkt.** `SandboxService`
+setzt `self.running` erst, wenn `bwrap` steht; dazwischen liegen die Auflösung
+der Sitzung und der Start selbst. Zwei gleichzeitige `Start` kämen an
+`is_running()` beide vorbei, beide starteten, und der zweite verdrängte den
+ersten aus `running` — der erste Prozess liefe dann weiter, ohne dass ihn noch
+jemand beenden könnte. `Pending::claimed` wird deshalb unter demselben Schloss
+geprüft und gesetzt, und ein `StartClaim` gibt ihn beim Fallenlassen frei,
+damit kein Fehlerpfad ihn vergisst. Aus demselben Grund gibt `remember` das
+geprüfte Projektverzeichnis zurück, statt dass der Aufrufer es später ein
+zweites Mal aus `pending` liest: Dazwischen könnte ein anderer Aufruf ein
+anderes hineingelegt haben.
+
+**Der Zuhörer der Ausgabe hängt am Backend, das startet, nicht an dem, das
+gehalten wird.** `BwrapBackend::with_output_sink` setzt ihn vor dem Start;
+`Running.backend` trägt ihn nicht. Ein gehaltener Sender schlösse seinen Kanal
+nie, und wer auf dessen Ende wartet — der Weiterleiter der Ausgabe — wartete
+für immer. Losgelassen wird er in `supervise`, nachdem die Leser eingesammelt
+sind: Die Ausgabe ist zu Ende, wenn die Pipes zu sind, und nicht, wenn jemand
+ein Handle fallen lässt.
+
+**`CLI_005` ist der zweite Start.** Der Daemon führt genau eine Sitzung; ein
+zweiter `Sandbox(Start)`, während eine läuft, bekommt den Befund vor der
+Momentaufnahme. Das weicht von HUM-040 ab, wo ein Start auf eine laufende
+Sandbox stillschweigend die Momentaufnahme lieferte — die Oberfläche schaltet
+ihre Schaltfläche ohnehin ab, `humanitl run` dagegen bekäme einen laufenden
+Zustand ohne Ausgabe und ohne Exit-Code und wüsste nicht, warum. Der Text nennt
+keinen Anhänge-Befehl, weil es keinen gibt.
+
+**Die Vertrags-Minor steht auf 4.** Neu sind `Start.session_profile`,
+`Start.ask_mode`, `Start.cli_overrides`, `SandboxEvent.output` und
+`SandboxEvent.exit`. Die Spiegelung in `app/lib/core/ipc/proto_version.dart`
+bleibt bei 3 und darf nachziehen: Eine abweichende Minor ist verabredetermaßen
+kein Grund, die Verbindung abzulehnen, und die Oberfläche liest die neuen
+Felder nicht.

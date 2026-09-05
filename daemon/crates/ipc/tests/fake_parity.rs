@@ -39,6 +39,8 @@ use humanitl_core::rule::{Action, HostPattern, Matcher};
 use humanitl_core::{Rule, RuleId, SessionId};
 use humanitl_ipc::DaemonApi as _;
 use humanitl_ipc::fake::{BUNDLED_BLOCK_RULE, FakeDaemon, FakeOptions, Session};
+use humanitl_ipc::sandbox::SandboxPorts;
+use humanitl_ipc::session::SessionResolver;
 use humanitl_ipc::v1::humanitl_server::Humanitl as _;
 use humanitl_ipc::{DaemonService, IpcServer, SandboxService, diagnostic_from_status, v1};
 use humanitl_proxy::rules_store::RulesStore;
@@ -631,7 +633,11 @@ fn real_with_sandbox() -> (IpcServer, tempfile::TempDir) {
         "HOME",
         dir.path().to_string_lossy(),
     )]));
-    let service = SandboxService::new(Config::default(), paths, SessionId::new());
+    let service = SandboxService::new(
+        SessionResolver::for_config(paths, Config::default()),
+        SessionId::new(),
+        SandboxPorts::none(),
+    );
     (server.with_sandbox(service), dir)
 }
 

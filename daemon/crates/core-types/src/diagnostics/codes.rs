@@ -491,8 +491,15 @@ registry! {
     /// Der Daemon hat geantwortet, aber den Aufruf abgelehnt: der Aufruf
     /// selbst passt nicht zum Zustand des Daemons.
     CLI_001 => "cli", "Aufruf am Daemon abgelehnt", "#cli_001";
-    /// `--ask terminal` verträgt sich nicht mit einem Vollbild-TUI-Agenten.
-    CLI_002 => "cli", "Vollbild-TUI-Agent nicht mit --ask terminal", "#cli_002";
+    /// `--ask terminal` steht für diesen Lauf nicht zur Verfügung.
+    ///
+    /// Zwei Gründe, und der zweite bleibt: Solange die Kommandozeile kein PTY
+    /// anhängt (HUM-042), gibt es überhaupt kein Terminal, in dem die Frage
+    /// stehen könnte; danach bleibt sie für Vollbild-TUI-Agenten wie `OpenCode`
+    /// verwehrt, weil die Frage dort nicht zu sehen wäre
+    /// (`backlog/CONVENTIONS.md` 4.10). Der Befund schlägt in beiden Fällen
+    /// `--ask ui` und `--ask none` vor.
+    CLI_002 => "cli", "`--ask terminal` ist hier nicht möglich", "#cli_002";
     /// Das Unterkommando steht im Vertrag, aber noch nicht in diesem Binary.
     CLI_003 => "cli", "Unterkommando noch nicht verfügbar", "#cli_003";
     /// Die Kommandozeile ließ sich nicht lesen: unbekanntes Unterkommando, fehlendes oder unlesbares Argument (HUM-064).
@@ -560,6 +567,19 @@ registry! {
     /// deshalb nicht `LLM_001` und nicht `LLM_003`, die beide eine Beobachtung
     /// am Endpunkt behaupten würden (HUM-039).
     LLM_007 => "llm", "LLM-Endpunkt ist keine lesbare HTTP-Adresse", "#llm_007";
+
+    // HUM-067: `humanitl run`. Neue Einträge stehen am Ende dieser Gruppe.
+    /// Der Daemon führt genau eine Sitzung, und sie läuft schon.
+    ///
+    /// Ein zweites `humanitl run` würde die erste nicht ersetzen und auch
+    /// nicht daneben laufen; es bekäme eine Sandbox, die einem anderen
+    /// Projektverzeichnis gehört. Der Befund nennt die Kennung der laufenden
+    /// Sitzung. Ein Befehl zum Anhängen steht nicht darin: `attach` gibt es
+    /// nicht, und die Oberfläche sieht die Sitzung ohnehin. Auch ein Vorschlag
+    /// zum Beheben steht nicht darin, weil es keinen Befehl gibt, der eine
+    /// fremde Sitzung beendet — wer sie gestartet hat, beendet sie dort
+    /// (HUM-067).
+    CLI_005 => "cli", "Es läuft schon eine Sitzung", "#cli_005";
 }
 
 /// Sucht einen Code im Register.

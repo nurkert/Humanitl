@@ -474,6 +474,50 @@ impl Target {
     }
 }
 
+/// Der Befund für einen Endpunkt außerhalb des eigenen Netzes, ohne dass etwas
+/// aufgelöst würde.
+///
+/// [`LlmProbe`] entscheidet die Frage mit der aufgelösten Adresse **und** dem
+/// Namen; hier steht nur der Name zur Verfügung. Das genügt für den Fall, auf
+/// den es beim Start einer Sitzung ankommt: `--llm` baut aus dem Endpunkt eine
+/// Regel in Rang 1, die nicht gehalten wird und die eigenen Block-Regeln des
+/// Nutzers überholt (`AgentAdapter::llm_passthrough`). Wer dort eine fremde
+/// Adresse einträgt, soll es erfahren, bevor der Agent läuft — und nicht erst,
+/// wenn jemand die Probe von Hand fährt.
+///
+/// Aufgelöst wird dabei nichts: Ein Name verlässt den Rechner erst, wenn eine
+/// Anfrage freigegeben ist (ADR-006). Deshalb sagt der Befund im Namensfall
+/// ausdrücklich, worauf er sich stützt.
+///
+/// `None` heißt: Der Endpunkt ist nach dem Namen privat, oder er ist keine
+/// lesbare Adresse — Letzteres meldet die Konfiguration schon selbst.
+#[must_use]
+pub fn not_private_by_name(endpoint: &Url) -> Option<Diagnostic> {
+    let host = endpoint.host_str()?;
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return (!ip_is_private(ip)).then(|| not_private(endpoint));
+    }
+    let name = host.to_ascii_lowercase();
+    if name == "localhost" || PRIVATE_SUFFIXES.iter().any(|suffix| name.ends_with(suffix)) {
+        return None;
+    }
+    Some(
+        Diagnostic::builder(LLM_006, Severity::Info)
+            .why(format!(
+                "{endpoint} is not one of the private forms — neither an address in a private \
+                 network nor localhost or a name under {}. Judged from the name alone; nothing \
+                 was resolved. Traffic to this address bypasses the queue, so only put a machine \
+                 you control here.",
+                PRIVATE_SUFFIXES.join(", ")
+            ))
+            .fix(FixAction::ChangeSetting {
+                key: "llm.endpoint".to_owned(),
+                value: EXAMPLE_ENDPOINT.to_owned(),
+            })
+            .build(),
+    )
+}
+
 /// Der Befund für einen Endpunkt außerhalb des eigenen Netzes.
 fn not_private(endpoint: &Url) -> Diagnostic {
     Diagnostic::builder(LLM_006, Severity::Info)

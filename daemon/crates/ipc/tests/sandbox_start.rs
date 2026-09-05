@@ -28,6 +28,8 @@ use std::path::{Path, PathBuf};
 
 use humanitl_config::{Config, Env, Paths};
 use humanitl_core::SessionId;
+use humanitl_ipc::sandbox::SandboxPorts;
+use humanitl_ipc::session::SessionResolver;
 use humanitl_ipc::{SandboxService, v1};
 use tokio_stream::StreamExt as _;
 
@@ -104,7 +106,11 @@ impl Fixture {
 
     /// Der Dienst über dieser Sitzung.
     fn service(&self) -> SandboxService {
-        SandboxService::new(Config::default(), self.paths.clone(), SessionId::new())
+        SandboxService::new(
+            SessionResolver::for_config(self.paths.clone(), Config::default()),
+            SessionId::new(),
+            SandboxPorts::none(),
+        )
     }
 
     /// Die Anfrage, die diese Sandbox startet.
@@ -115,6 +121,9 @@ impl Fixture {
                 work_dir: self.work.display().to_string(),
                 work_mode: "rw".to_owned(),
                 command: COMMAND.iter().map(|arg| (*arg).to_owned()).collect(),
+                session_profile: String::new(),
+                ask_mode: String::new(),
+                cli_overrides: Vec::new(),
             })),
         }
     }
@@ -142,8 +151,64 @@ fn usable(fixture: &Fixture) -> bool {
     found
 }
 
-/// Alle Ereignisse eines Sandbox-Aufrufs, in der Reihenfolge des Stroms.
+/// Die Ereignisse eines Sandbox-Aufrufs, bis der Zustand steht.
+///
+/// Der Strom eines Starts endet seit HUM-067 erst, wenn der Agent sich
+/// beendet: Er trägt auch dessen Ausgabe und seinen Exit-Code. Ein Test, der
+/// auf das Ende wartete, wartete so lange wie der Befehl in der Sandbox.
+/// Gelesen wird deshalb bis zum ersten Zustand, der steht.
 async fn events(service: &SandboxService, request: v1::SandboxRequest) -> Vec<v1::SandboxEvent> {
+    let mut stream = service.stream(request);
+    let mut seen = Vec::new();
+    while let Some(event) = stream.next().await {
+        let settled = matches!(
+            &event.event,
+            Some(v1::sandbox_event::Event::Status(status))
+                if status.state == v1::SandboxState::Running as i32
+                    || status.state == v1::SandboxState::Failed as i32
+                    || status.state == v1::SandboxState::Stopped as i32
+        );
+        seen.push(event);
+        if settled {
+            break;
+        }
+    }
+    seen
+}
+
+/// Die Ereignisse eines schon geöffneten Stroms, bis der Zustand steht.
+async fn settled_from(
+    mut stream: impl tokio_stream::Stream<Item = v1::SandboxEvent> + Unpin,
+) -> Vec<v1::SandboxEvent> {
+    let mut seen = Vec::new();
+    while let Some(event) = stream.next().await {
+        let settled = matches!(
+            &event.event,
+            Some(v1::sandbox_event::Event::Status(status))
+                if status.state == v1::SandboxState::Running as i32
+                    || status.state == v1::SandboxState::Failed as i32
+                    || status.state == v1::SandboxState::Stopped as i32
+        );
+        seen.push(event);
+        if settled {
+            break;
+        }
+    }
+    seen
+}
+
+/// Ob dieser Strom einen Befund mit diesem Code trägt.
+fn carries(events: &[v1::SandboxEvent], code: &str) -> bool {
+    diagnostics(events)
+        .iter()
+        .any(|diagnostic| diagnostic.code == code)
+}
+
+/// Alle Ereignisse eines Aufrufs, bis der Strom selbst endet.
+async fn events_to_end(
+    service: &SandboxService,
+    request: v1::SandboxRequest,
+) -> Vec<v1::SandboxEvent> {
     let mut stream = service.stream(request);
     let mut seen = Vec::new();
     while let Some(event) = stream.next().await {
@@ -312,4 +377,143 @@ async fn a_second_socket_in_the_project_stops_the_start() {
         checks(&after).is_empty(),
         "nothing runs, so nothing is measured: {after:?}"
     );
+}
+
+/// Die Ausgabe des Agenten erreicht den Client, gefiltert, und sein
+/// Exit-Code steht als eigenes Ereignis dahinter.
+///
+/// Das ist der Weg, den `humanitl run` nimmt: kein PTY, kein Raw-Modus, nur
+/// die Bytes und die Zahl am Ende (HUM-067). Der Befehl schreibt neben seiner
+/// Zeile eine OSC-52-Folge — die Folge, mit der ein Terminal in die
+/// Zwischenablage des Menschen schreibt. Sie darf den Daemon nicht verlassen;
+/// das ist einer der fünf erklärten Seitenkanäle (BACKLOG.md 4.2).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_output_travels_filtered_and_the_exit_code_behind_it() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    let service = fixture.service();
+    let mut start = fixture.start();
+    if let Some(v1::sandbox_request::Op::Start(inner)) = start.op.as_mut() {
+        inner.command = vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            // `printf` schreibt die Folgen wörtlich; `echo -e` ist nicht
+            // portabel. `\033` ist `ESC`, `\235` ist `OSC` als ein Byte, und
+            // `\007` ist `BEL`. Der Weg über die Oktalzahl ist nötig, weil
+            // `Start.command` eine Zeichenkette der Leitung ist und damit
+            // gültiges UTF-8 sein muss: `0x9d` allein ist keines.
+            "printf 'hello\\n'; \
+             printf '\\033]52;c;c2VjcmV0\\007'; \
+             printf '\\235052;c;c2VjcmV0\\007'; \
+             printf '\\302\\2352;c;eA==\\007'; \
+             printf '\\302\\2331A'; \
+             printf '\\033[1A\\033[2K'; \
+             printf '\\033]0;All Checks Passed\\007'; \
+             printf '\\033[32mbye\\033[0m\\n'; \
+             exit 7"
+                .to_owned(),
+        ];
+    }
+    let seen = events_to_end(&service, start).await;
+
+    let stdout: Vec<u8> = seen
+        .iter()
+        .filter_map(|event| match &event.event {
+            Some(v1::sandbox_event::Event::Output(chunk))
+                if chunk.stream == v1::OutputStream::Stdout as i32 =>
+            {
+                Some(chunk.data.clone())
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let text = String::from_utf8_lossy(&stdout);
+    assert!(text.contains("hello"), "the agent wrote a line: {text:?}");
+    assert!(
+        text.contains("bye"),
+        "and the lines behind the sequences: {text:?}"
+    );
+    assert!(
+        !text.contains("c2VjcmV0"),
+        "the payload of the clipboard sequence stays inside: {text:?}"
+    );
+    assert!(
+        !text.contains("All Checks Passed"),
+        "and so does the window title the agent wanted to set: {text:?}"
+    );
+    assert!(
+        !stdout.contains(&0x9d),
+        "the one-byte OSC introducer never leaves: {stdout:?}"
+    );
+    // Farbe darf hinaus, Bewegung und Löschen nicht. Die eine Folge, die
+    // bleibt, ist SGR.
+    assert!(
+        text.contains("\u{1b}[32m"),
+        "colour is the one sequence that passes: {text:?}"
+    );
+    for forbidden in ["\u{1b}[1A", "\u{1b}[2K", "\u{1b}]"] {
+        assert!(
+            !text.contains(forbidden),
+            "{forbidden:?} must not reach the terminal: {text:?}"
+        );
+    }
+
+    let exit = seen
+        .iter()
+        .find_map(|event| match &event.event {
+            Some(v1::sandbox_event::Event::Exit(exit)) => Some(exit.code),
+            _ => None,
+        })
+        .expect("the agent reports its exit code");
+    assert_eq!(exit, 7, "the code of the agent, unchanged: {seen:?}");
+}
+
+/// Zwei gleichzeitige `Start`: genau einer bekommt die Sitzung.
+///
+/// `self.running` wird erst gesetzt, wenn `bwrap` steht. Zwischen der Frage
+/// „läuft schon eine?" und dieser Zuweisung liegen die Auflösung der Sitzung
+/// und der Start selbst — lange genug, dass zwei Aufrufe beide daran
+/// vorbeikämen, beide starteten und der zweite den ersten aus `running`
+/// verdrängte. Der erste Prozess liefe dann weiter, ohne dass ihn noch jemand
+/// beenden könnte.
+///
+/// Der Test öffnet beide Ströme, bevor er einen davon liest; die Aufgaben
+/// laufen also wirklich nebeneinander. Der Befehl in der Sandbox lebt lange
+/// genug, dass der Gewinner den Anspruch während des ganzen Tests hält.
+#[tokio::test(flavor = "multi_thread")]
+async fn only_one_of_two_concurrent_starts_gets_the_session() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    let service = fixture.service();
+
+    let first = service.stream(fixture.start());
+    let second = service.stream(fixture.start());
+    let (seen_first, seen_second) = tokio::join!(settled_from(first), settled_from(second));
+
+    let refused = usize::from(carries(&seen_first, "CLI_005"))
+        + usize::from(carries(&seen_second, "CLI_005"));
+    assert_eq!(
+        refused, 1,
+        "exactly one of the two starts is refused: {seen_first:?} / {seen_second:?}"
+    );
+
+    let started = usize::from(states(&seen_first).contains(&v1::SandboxState::Running))
+        + usize::from(states(&seen_second).contains(&v1::SandboxState::Running));
+    assert_eq!(
+        started, 1,
+        "and exactly one sandbox reports running: {seen_first:?} / {seen_second:?}"
+    );
+
+    let _ = events(
+        &service,
+        v1::SandboxRequest {
+            op: Some(v1::sandbox_request::Op::Stop(())),
+        },
+    )
+    .await;
 }

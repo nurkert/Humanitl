@@ -32,18 +32,20 @@ use std::time::{Duration, SystemTime};
 
 use clap::Parser;
 use humanitl_catalog::Catalog;
-use humanitl_config::{AskMode, Config, DIR_MODE, Paths as XdgPaths};
+use humanitl_config::{Config, DIR_MODE, Paths as XdgPaths};
 use humanitl_core::diagnostics::codes;
-use humanitl_core::rule::Rule;
 use humanitl_core::{Diagnostic, FixAction, FlowEvent, SessionId, Severity};
 use humanitl_findings::FindingsSettings;
 use humanitl_ipc::fake::{FakeDaemon, FakeOptions, Session};
+use humanitl_ipc::sandbox::SandboxPorts;
+use humanitl_ipc::session::{SessionResolver, bundled_rules};
 use humanitl_ipc::{DaemonService, DomainTable, IpcServer, SandboxService, auth, bind_socket, v1};
 use humanitl_proxy::ca::{CaStore, DEFAULT_LEAF_CAPACITY, LeafCache};
 use humanitl_proxy::egress::Direct;
 use humanitl_proxy::handler::ProxyLimits;
 use humanitl_proxy::pipeline::FlowPipeline;
 use humanitl_proxy::rules_store::RulesStore;
+use humanitl_proxy::session::{SessionSettings, SessionState};
 use humanitl_proxy::upstream::ClientTls;
 use humanitl_proxy::{
     AskPipeline, ConnectionContext, DomainSink, FlowHandler, FlowRegistry, HandlerPorts, HoldQueue,
@@ -51,8 +53,6 @@ use humanitl_proxy::{
     Tier1Scanner, Upstream,
 };
 use humanitl_recorder::{Recorder, RecorderSettings, SessionMeta};
-use humanitl_rules::parse_rules_for_session;
-use humanitl_sandbox::AdapterRegistry;
 use tokio::net::UnixListener;
 // tonic bringt `tokio-stream` mit dem Feature `net` bereits mit (über sein
 // `server`-Feature); der Wrapper von dort erspart diesem Binary eine eigene
@@ -179,7 +179,8 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
     free_socket(&paths.socket, ADVICE_DAEMON_SOCKET)?;
     free_socket(&xdg.proxy_socket(), ADVICE_PROXY_SOCKET)?;
 
-    let config = load_config(&xdg)?;
+    let base = load_config(&xdg)?;
+    let config = base.config.clone();
 
     // Die Aufzeichnung zuerst: Ohne sie hat der Daemon kein Gedächtnis, und
     // eine Sitzung, die aufzeichnen soll und es nicht kann, startet nicht
@@ -213,7 +214,16 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
     let watchers = Watchers::start(&recorder, &queue);
 
     let proxy = ProxyCore::new();
-    let rules = load_rules(&xdg, &config, session);
+    let rules = load_rules(&xdg, &base, session);
+    // Frage-Modus, Frist und Endpunkt stehen ab hier an einer Stelle, die eine
+    // Sitzung beschreiben darf. Ohne sie wären `humanitl run --ask none` und
+    // `--llm` Dekoration: Der Proxy läuft schon, wenn die Sitzung startet
+    // (HUM-067).
+    let settings = Arc::new(SessionSettings::new(SessionState::for_config(
+        config.hold.ask_mode,
+        config.hold.timeout_secs,
+        llm_authority(&config),
+    )));
     let scanner = build_scanner(&config)?;
     // Ein Port fuer den ganzen Lauf: Der Zaehler, den `daemon status` zeigt,
     // und der Zwischenspeicher gehoeren derselben Instanz (HUM-024).
@@ -223,12 +233,15 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
         &xdg.proxy_socket(),
         build_handler(
             &config,
-            &queue,
-            &ca,
-            &rules,
-            &scanner,
-            &recorder,
-            Arc::clone(&resolver) as Arc<dyn Resolver>,
+            &HandlerWiring {
+                queue: Arc::clone(&queue),
+                ca: Arc::clone(&ca),
+                rules: Arc::clone(&rules),
+                scanner: Arc::clone(&scanner),
+                recorder: recorder.clone(),
+                resolver: Arc::clone(&resolver) as Arc<dyn Resolver>,
+                settings: Arc::clone(&settings),
+            },
         )?,
         ConnectionContext::plain(session),
     )?;
@@ -244,8 +257,17 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
         .with_domains(Arc::clone(&domains))
         // Die Sandbox derselben Sitzung: dasselbe Profil, dasselbe
         // Projektverzeichnis und derselbe Proxy-Socket, den der Proxy oben
-        // gerade geöffnet hat (HUM-040).
-        .with_sandbox(SandboxService::new(config.clone(), xdg.clone(), session));
+        // gerade geöffnet hat (HUM-040). Der Resolver statt einer
+        // eingefrorenen Konfiguration: Jeder Start löst für seine Sitzung neu
+        // auf und schreibt Regeln und Frist dorthin, wo Proxy und
+        // Meta-Endpunkt sie lesen (HUM-067).
+        .with_sandbox(SandboxService::new(
+            SessionResolver::new(xdg.clone(), base),
+            session,
+            SandboxPorts::none()
+                .with_rules(Arc::clone(&rules))
+                .with_settings(Arc::clone(&settings)),
+        ));
     let result = humanitl_ipc::serve(&paths.socket, &paths.token, server, shutdown()).await;
 
     // Erst die Sitzungen, dann zurückkehren: der Accept-Loop endet, und mit
@@ -476,7 +498,13 @@ fn load_catalog(xdg: &XdgPaths) -> Catalog {
 }
 
 /// Lädt die Konfiguration und meldet, was das Laden überlebt hat.
-fn load_config(xdg: &XdgPaths) -> Result<Config, Diagnostic> {
+///
+/// Zurück kommt die ganze Auflösung und nicht nur die Konfiguration: Der
+/// Sandbox-Dienst braucht die Profile, die gewirkt haben, um daraus die
+/// mitgelieferte Gruppe des Regelspeichers zu bauen (`Profile::rules_document`,
+/// Rang 4 nach `backlog/CONVENTIONS.md` 4.5), und den Grundstand, gegen den
+/// jede Sitzung neu auflöst (HUM-067).
+fn load_config(xdg: &XdgPaths) -> Result<humanitl_config::Resolved, Diagnostic> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let sources = humanitl_config::discover_with(xdg.env(), &cwd, None)?;
     let resolved = humanitl_config::load(&sources)?;
@@ -493,7 +521,7 @@ fn load_config(xdg: &XdgPaths) -> Result<Config, Diagnostic> {
     if resolved.config.resolver.test_ca.is_some() {
         tracing::warn!("resolver.test_ca is set but the daemon does not read it yet (HUM-024)");
     }
-    Ok(resolved.config)
+    Ok(resolved)
 }
 
 /// Baut den Handler, der jede Verbindung der Sitzung bedient.
@@ -503,15 +531,37 @@ fn load_config(xdg: &XdgPaths) -> Result<Config, Diagnostic> {
 /// Halte-Warteschlange als Pipeline. Ohne Frage (`hold.ask_mode = none`) ist
 /// die Frist null, und die Warteschlange blockt jede Anfrage sofort — sie
 /// lässt nie etwas ungefragt durch.
-fn build_handler(
-    config: &Config,
-    queue: &Arc<HoldQueue>,
-    ca: &Arc<CaStore>,
-    rules: &Arc<RulesStore>,
-    scanner: &Arc<dyn Scanner>,
-    recorder: &Recorder,
+/// Die Teile, aus denen der Handler einer Sitzung entsteht.
+///
+/// Sie stehen in einem Typ und nicht als acht Argumente: Wer eines vergisst,
+/// soll es an einem Namen merken und nicht an einer Reihenfolge.
+struct HandlerWiring {
+    /// Die Halte-Warteschlange, an der jeder gehaltene Fluss hängt.
+    queue: Arc<HoldQueue>,
+    /// Die eigene CA für die Blatt-Zertifikate.
+    ca: Arc<CaStore>,
+    /// Der Regelspeicher; der Handler liest seinen Schnappschuss.
+    rules: Arc<RulesStore>,
+    /// Die Detektoren.
+    scanner: Arc<dyn Scanner>,
+    /// Die Aufzeichnung.
+    recorder: Recorder,
+    /// Der Namensauflöser samt Zähler und Zwischenspeicher.
     resolver: Arc<dyn Resolver>,
-) -> Result<FlowHandler, Diagnostic> {
+    /// Frage-Modus, Haltefrist und Sprachmodell der laufenden Sitzung.
+    settings: Arc<SessionSettings>,
+}
+
+fn build_handler(config: &Config, wiring: &HandlerWiring) -> Result<FlowHandler, Diagnostic> {
+    let HandlerWiring {
+        queue,
+        ca,
+        rules,
+        scanner,
+        recorder,
+        resolver,
+        settings,
+    } = wiring;
     let client_tls = ClientTls::new(&[], config.experimental.h2_upstream)?;
     let upstream = Upstream::new(
         Arc::new(Direct::new(Duration::from_secs(
@@ -520,19 +570,20 @@ fn build_handler(
         // Der Resolver-Port kappt, zwischenspeichert und zaehlt (HUM-024).
         // Mit `SystemResolver` direkt gaebe es keinen Zaehler, keinen Cache
         // und keine Ueberpruefung der Adressen, die eine Antwort mitbringt.
-        resolver,
+        Arc::clone(resolver),
         client_tls,
         config.resolver.prefer,
         Duration::from_secs(config.limits.header_timeout_secs),
     );
-    let timeout = match config.hold.ask_mode {
-        AskMode::None => Duration::ZERO,
-        AskMode::Ui | AskMode::Terminal => Duration::from_secs(config.hold.timeout_secs),
-    };
     // Reihenfolge des Pfads (HUM-023): Der Handler prüft Authority und lässt
     // die Detektoren laufen, dann entscheidet die Regel-Engine, und gehalten
-    // wird nur, was `ask` ergibt. Ohne Regel fragt die Warteschlange.
-    let ask: Arc<dyn FlowPipeline> = Arc::new(AskPipeline::new(Arc::clone(queue), timeout));
+    // wird nur, was `ask` ergibt. Ohne Regel fragt die Warteschlange. Die
+    // Frist kommt je Fluss aus den Einstellungen der Sitzung und nicht aus
+    // einer Zahl von hier: Der Proxy steht, bevor die erste Sitzung startet.
+    let ask: Arc<dyn FlowPipeline> = Arc::new(AskPipeline::with_settings(
+        Arc::clone(queue),
+        Arc::clone(settings),
+    ));
     // `snapshot()` ist die Naht zum Regelspeicher: dasselbe Handle bleibt über
     // jede Änderung gültig, der Inhalt wird ersetzt. Der Proxy liest damit
     // immer den geltenden Satz, ohne den Speicher zu kennen (HUM-027).
@@ -544,11 +595,12 @@ fn build_handler(
     let meta = MetaEndpoint::new(
         MetaStatus {
             ask_mode: config.hold.ask_mode,
-            hold_timeout: timeout,
+            hold_timeout: settings.hold_timeout(),
             llm: llm_authority(config),
         },
         rules.snapshot(),
-    );
+    )
+    .with_settings(Arc::clone(settings));
     Ok(FlowHandler::with_ports(
         Arc::clone(queue),
         pipeline,
@@ -609,14 +661,6 @@ fn build_scanner(config: &Config) -> Result<Arc<dyn Scanner>, Diagnostic> {
     Ok(Arc::new(scanner))
 }
 
-/// Der mitgelieferte Regelsatz.
-///
-/// Er liegt als Datei im Baum, damit `docs/reference/rules.md` und die Tests
-/// dieselbe Quelle lesen, und wird ins Binary gebunden, damit ein installierter
-/// Daemon ihn ohne das Repository hat. HUM-038 füllt ihn; bis dahin ist er
-/// leer, und ohne Regel wird gefragt.
-const BUNDLED_RULES: &str = include_str!("../../../../rules/default.yaml");
-
 /// Öffnet den Regelspeicher dieser Sitzung.
 ///
 /// Ausgewertet wird in vier Rängen (`backlog/CONVENTIONS.md` 4.5): die
@@ -625,25 +669,31 @@ const BUNDLED_RULES: &str = include_str!("../../../../rules/default.yaml");
 /// Speicher ist zugleich die Quelle des `Rules`-RPC und die des Proxys: Der
 /// eine ändert, der andere liest, und beide halten dasselbe Handle (HUM-027).
 ///
+/// Die mitgelieferte Gruppe baut [`humanitl_ipc::session::bundled_rules`] —
+/// dieselbe Funktion, die der Sandbox-Dienst beim Start einer Sitzung ruft.
+/// Zwei Stellen, die dieselbe Gruppe zusammensetzen, liefen auseinander, und
+/// die Reihenfolge darin ist genau das, woran HUM-104 gearbeitet hat. Hier
+/// kommen die Profile aus der Auflösung des Daemon-Starts; dort aus der der
+/// Sitzung.
+///
 /// Fehlt `rules.yaml`, ist das kein Fehler; lehnt die Engine sie ab, startet
 /// der Speicher ohne die Regeln des Nutzers und meldet die Befunde. Ohne Regel
 /// wird gefragt, nie erlaubt.
-fn load_rules(xdg: &XdgPaths, config: &Config, session: SessionId) -> Arc<RulesStore> {
+fn load_rules(
+    xdg: &XdgPaths,
+    resolved: &humanitl_config::Resolved,
+    session: SessionId,
+) -> Arc<RulesStore> {
     let path = xdg.rules_path();
-    let mut bundled = Vec::new();
-    // Die Durchreiche steht als erste in der Gruppe der mitgelieferten Regeln,
-    // damit sie im Rules-Screen oben in ihrer Gruppe erscheint. Ihren Vorrang
-    // trägt sie nicht an dieser Stelle, sondern an sich selbst:
-    // `RuleSet::evaluate` prüft mitgelieferte Regeln mit `passthrough_llm` in
-    // einem eigenen ersten Durchgang (`backlog/CONVENTIONS.md` 4.5, HUM-104).
-    // Nur deshalb blockt eine weite Regel des Nutzers oder des Profils
-    // `llm-only` (`host: "**"`) nicht das Sprachmodell und nimmt der
-    // Durchreiche nicht ihre Merkmale. `bundled` setzt dabei erst der Speicher
-    // beim Laden; was hier hineingeht, kommt aus dem Adapter und aus dem
-    // eingebauten `rules/default.yaml`, nie aus einer Datei des Nutzers.
-    bundled.extend(llm_passthrough_rule(config));
-    bundled.extend(read_bundled_rules(session));
-    let (store, diagnostics) = RulesStore::load(&path, &bundled, session);
+    let (bundled, found) = bundled_rules(&resolved.config, &resolved.profiles, session);
+    for diagnostic in &found {
+        tracing::warn!(
+            code = %diagnostic.code,
+            why = %diagnostic.why,
+            "bundled rules"
+        );
+    }
+    let (store, diagnostics) = RulesStore::load(&path, &bundled.all(), session);
     for diagnostic in &diagnostics {
         tracing::warn!(
             code = %diagnostic.code,
@@ -660,69 +710,6 @@ fn load_rules(xdg: &XdgPaths, config: &Config, session: SessionId) -> Arc<RulesS
         "rule store loaded"
     );
     Arc::new(store)
-}
-
-/// Die Durchreichregel zum Sprachmodell, falls es einen Endpunkt gibt.
-///
-/// Ohne sie hielte der Proxy jede Inferenz an, und `DecisionSource::Passthrough`
-/// wie `LLM_005` blieben toter Code (HUM-039). Sie entsteht im Agent-Adapter,
-/// weil nur er weiß, welche Pfade sein Agent für Inferenz braucht; welcher
-/// Adapter gefragt wird, sagt `agent.adapter`.
-///
-/// `None` heißt in jedem Fall: es wird gefragt. Ohne `llm.endpoint` gibt es
-/// nichts durchzulassen, und ein unbekannter Adapter bekommt keine erfundene
-/// Regel — er bekommt einen Hinweis im Protokoll.
-fn llm_passthrough_rule(config: &Config) -> Option<Rule> {
-    config.llm.endpoint.as_ref()?;
-    let registry = AdapterRegistry::builtin();
-    let Some(adapter) = registry.get(&config.agent.adapter) else {
-        tracing::warn!(
-            adapter = %config.agent.adapter,
-            known = ?registry.ids(),
-            "no adapter of that name; the LLM endpoint gets no passthrough rule and \
-             every inference will be held"
-        );
-        return None;
-    };
-    let rule = adapter.llm_passthrough(&config.llm)?;
-    tracing::info!(
-        rule = %rule.id,
-        host = %rule.matcher.host,
-        prefixes = ?rule.matcher.path_prefixes,
-        "llm passthrough rule installed"
-    );
-    Some(rule)
-}
-
-/// Liest die mitgelieferten Regeln aus dem eingebundenen `rules/default.yaml`.
-///
-/// Ein abgelehnter Regelsatz wird zum leeren Regelsatz: Eine kaputte Datei darf
-/// nie zu einer Freigabe führen, die niemand gegeben hat.
-fn read_bundled_rules(session: SessionId) -> Vec<Rule> {
-    match parse_rules_for_session(BUNDLED_RULES, session) {
-        Ok((set, diagnostics)) => {
-            for diagnostic in &diagnostics {
-                tracing::warn!(
-                    code = %diagnostic.code,
-                    why = %diagnostic.why,
-                    source = "rules/default.yaml",
-                    "rules"
-                );
-            }
-            set.iter().cloned().collect()
-        }
-        Err(diagnostics) => {
-            for diagnostic in &diagnostics {
-                tracing::error!(
-                    code = %diagnostic.code,
-                    why = %diagnostic.why,
-                    source = "rules/default.yaml",
-                    "rules"
-                );
-            }
-            Vec::new()
-        }
-    }
 }
 
 /// Der Abspieler einer aufgezeichneten Sitzung (HUM-005).
@@ -1238,7 +1225,14 @@ mod tests {
 
     /// Eine Sitzung, wie `load_rules` sie sieht: eigenes Konfigurations-
     /// verzeichnis, eine `rules.yaml` des Nutzers, ein Sprachmodell im LAN.
-    fn session_with(user_rules: &str) -> (tempfile::TempDir, XdgPaths, Config, SessionId) {
+    fn session_with(
+        user_rules: &str,
+    ) -> (
+        tempfile::TempDir,
+        XdgPaths,
+        humanitl_config::Resolved,
+        SessionId,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let config_home = dir.path().join("config");
         let xdg = XdgPaths::new(Env::default().with(
@@ -1250,7 +1244,13 @@ mod tests {
 
         let mut config = Config::default();
         config.llm.endpoint = Some("http://ollama.lan:11434".parse().unwrap());
-        (dir, xdg, config, SessionId::new())
+        let resolved = humanitl_config::Resolved {
+            config,
+            origins: std::collections::BTreeMap::new(),
+            profiles: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        (dir, xdg, resolved, SessionId::new())
     }
 
     /// Der Schlüssel einer Inferenz-Anfrage an das Sprachmodell der Sitzung.
@@ -1271,9 +1271,9 @@ mod tests {
             let user = format!(
                 "version: 1\nrules:\n  - action: {action}\n    match: {{ host: \"**\" }}\n"
             );
-            let (_dir, xdg, config, session) = session_with(&user);
+            let (_dir, xdg, resolved, session) = session_with(&user);
 
-            let store = load_rules(&xdg, &config, session);
+            let store = load_rules(&xdg, &resolved, session);
             let snapshot = store.snapshot();
             let set = snapshot.read().expect("the snapshot");
 
@@ -1311,9 +1311,9 @@ mod tests {
     #[test]
     fn load_rules_lets_a_user_rule_override_a_bundled_one() {
         let user = "version: 1\nrules:\n  - action: allow\n    match: { host: \"models.dev\" }\n";
-        let (_dir, xdg, config, session) = session_with(user);
+        let (_dir, xdg, resolved, session) = session_with(user);
 
-        let store = load_rules(&xdg, &config, session);
+        let store = load_rules(&xdg, &resolved, session);
         let snapshot = store.snapshot();
         let set = snapshot.read().expect("the snapshot");
 

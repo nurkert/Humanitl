@@ -55,6 +55,38 @@ pub const CAPTURE_MAX_BYTES: usize = 1 << 20;
 /// Wie viel Fehlerausgabe ein Befund höchstens zitiert.
 pub const STDERR_EXCERPT_BYTES: usize = 2048;
 
+/// Welcher Strom der Sandbox ein Stück Ausgabe geschrieben hat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputStream {
+    /// Die Standardausgabe des Befehls in der Sandbox.
+    Stdout,
+    /// Seine Fehlerausgabe.
+    Stderr,
+}
+
+/// Ein Stück Ausgabe, so wie es aus der Pipe kam.
+///
+/// Die Stücke folgen den Lesevorgängen und nicht den Zeilen: Wer Zeilen will,
+/// setzt sie selbst zusammen. Der Weg über einen Kanal steht neben dem
+/// gesammelten Puffer und nicht an seiner Stelle, weil beide verschiedene
+/// Fragen beantworten — der Puffer „was kam insgesamt", bis
+/// [`CAPTURE_MAX_BYTES`], der Kanal „was kommt gerade", ohne Grenze.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputChunk {
+    /// Woher das Stück kam.
+    pub stream: OutputStream,
+    /// Die Bytes, ungefiltert und ungekürzt.
+    pub bytes: Vec<u8>,
+}
+
+/// Wohin die Ausgabe zusätzlich zum Puffer geschickt wird.
+///
+/// Ein Sender, den [`crate::BwrapBackend::with_output_sink`] setzt, bekommt
+/// jedes Stück, sobald es gelesen wurde. Bricht der Empfänger weg, wird das
+/// Ergebnis verworfen: Die Sandbox darf nicht daran hängen, dass jemand
+/// zuhört.
+pub type OutputSink = std::sync::mpsc::Sender<OutputChunk>;
+
 /// Die gesammelte Ausgabe einer Sandbox mit [`crate::StdioMode::Capture`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CapturedOutput {
@@ -120,6 +152,8 @@ pub(crate) struct Shared {
     /// eingesammelt, damit die Ausgabe vollständig ist.
     readers: Mutex<Vec<JoinHandle<()>>>,
     capturing: Mutex<bool>,
+    /// Wohin jedes gelesene Stück zusätzlich geht, solange jemand zuhört.
+    sink: Mutex<Option<OutputSink>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -164,10 +198,40 @@ impl Shared {
 
     pub(crate) fn append_stdout(&self, chunk: &[u8]) {
         append_capped(&mut lock(&self.stdout), chunk);
+        self.tee(OutputStream::Stdout, chunk);
     }
 
     pub(crate) fn append_stderr(&self, chunk: &[u8]) {
         append_capped(&mut lock(&self.stderr), chunk);
+        self.tee(OutputStream::Stderr, chunk);
+    }
+
+    /// Schickt ein Stück an den Zuhörer, falls einer da ist.
+    ///
+    /// Ungekürzt, anders als der Puffer: Wer mitliest, schreibt weiter, und
+    /// [`CAPTURE_MAX_BYTES`] begrenzt nur, was der Daemon aufhebt. Ein
+    /// abgebrochener Kanal wird stillschweigend fallen gelassen — der Leser
+    /// dieses Threads darf nie an einem Empfänger hängen bleiben.
+    fn tee(&self, stream: OutputStream, chunk: &[u8]) {
+        let sink = lock(&self.sink);
+        if let Some(sink) = sink.as_ref() {
+            let _ = sink.send(OutputChunk {
+                stream,
+                bytes: chunk.to_vec(),
+            });
+        }
+    }
+
+    pub(crate) fn set_sink(&self, sink: OutputSink) {
+        *lock(&self.sink) = Some(sink);
+    }
+
+    /// Lässt den Zuhörer los, damit sein Kanal endet.
+    ///
+    /// Wird gerufen, wenn die Leser eingesammelt sind: Ab dann kommt nichts
+    /// mehr, und wer auf das Ende des Kanals wartet, soll es sehen.
+    pub(crate) fn clear_sink(&self) {
+        *lock(&self.sink) = None;
     }
 
     pub(crate) fn add_reader(&self, reader: JoinHandle<()>) {

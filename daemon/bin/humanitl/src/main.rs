@@ -125,7 +125,7 @@ async fn run(ctx: &Context, command: Cmd) -> Result<u8, Failure> {
         // deshalb denselben Weg: [`Renderer::diagnostic`] macht daraus mit
         // `--json` eine Zeile JSON auf `stdout` und sonst den Block auf
         // `stderr`.
-        Cmd::Run(args) => cmd::run::run(ctx, &args),
+        Cmd::Run(args) => cmd::run::run(ctx, &args).await,
         Cmd::Audit(_) => Err(not_yet_failure("humanitl audit", "HUM-070")),
     }
 }
