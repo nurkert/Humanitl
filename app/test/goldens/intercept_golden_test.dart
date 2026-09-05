@@ -12,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/app.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ui/ui.dart';
+import 'package:humanitl/features/intercept/providers/diagnostics.dart';
 import 'package:humanitl/features/intercept/providers/flows.dart';
 import 'package:humanitl/features/intercept/providers/now.dart';
 import 'package:humanitl/features/intercept/widgets/queue_row.dart';
@@ -122,14 +123,46 @@ Widget piece({
 }
 
 /// Die ganze App mit fester Queue.
-Widget screen({required HThemeMode mode, required List<FlowDetail> details}) =>
-    ProviderScope(
-      overrides: <Override>[
-        ...overridesFor(details),
-        themeModeProvider.overrideWith(() => FixedTheme(mode)),
-      ],
-      child: const HumanitlApp(),
-    );
+///
+/// [found] steht über der Warteschlange; leer heißt: kein Streifen.
+Widget screen({
+  required HThemeMode mode,
+  required List<FlowDetail> details,
+  List<SessionDiagnostic> found = const <SessionDiagnostic>[],
+}) => ProviderScope(
+  overrides: <Override>[
+    ...overridesFor(details),
+    themeModeProvider.overrideWith(() => FixedTheme(mode)),
+    if (found.isNotEmpty)
+      diagnosticsProvider.overrideWith(() => FixedDiagnostics(found)),
+  ],
+  child: const HumanitlApp(),
+);
+
+/// Ein Befund, der nicht aus dem Strom kommt, sondern feststeht.
+class FixedDiagnostics extends Diagnostics {
+  /// Hält [found].
+  FixedDiagnostics(this.found);
+
+  /// Die Befunde des Goldens.
+  final List<SessionDiagnostic> found;
+
+  @override
+  List<SessionDiagnostic> build() => found;
+}
+
+/// Das `TLS_001` des Standard-Szenarios, an einem Fluss.
+SessionDiagnostic goldenDiagnostic() => SessionDiagnostic(
+  id: 0,
+  at: goldenNow,
+  flowId: const FlowId('018f0001-0000-7000-8000-000000060000'),
+  diagnostic: const Diagnostic(
+    code: 'TLS_001',
+    severity: Severity.warning,
+    why: 'curl in the sandbox does not trust the Humanitl CA yet',
+    fix: FixAction.setEnv(key: 'CURL_CA_BUNDLE', value: '/etc/humanitl/ca.crt'),
+  ),
+);
 
 /// Ein Theme, das nicht umschaltet.
 class FixedTheme extends ThemeModeSetting {
@@ -248,6 +281,19 @@ void main() {
       fileName: 'intercept_three_held_$name',
       constraints: window,
       builder: () => screen(mode: mode, details: goldenDetails()),
+    );
+
+    // Der Befund des Daemons über der Warteschlange: Code, Titel der
+    // Anwendung, der Satz des Daemons, das Abzeichen und die Kopierzeile.
+    goldenTest(
+      'intercept_diagnostic_tls_$name',
+      fileName: 'intercept_diagnostic_tls_$name',
+      constraints: window,
+      builder: () => screen(
+        mode: mode,
+        details: goldenDetails(),
+        found: <SessionDiagnostic>[goldenDiagnostic()],
+      ),
     );
   }
 }

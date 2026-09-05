@@ -1522,5 +1522,26 @@
   "@shellIsolationFailed": {
     "description": "Tooltip and screen-reader label of the isolation ring when a guarantee does not hold.",
     "placeholders": {"title": {"type": "String"}}
+  },
+  "interceptDiagnosticTitle": "The daemon reports",
+  "@interceptDiagnosticTitle": {"description": "Title of the card above the queue that carries a diagnostic of the daemon. Only the frame: the sentence under it is the daemon's own and is never rewritten (docs/UX.md 4.4)."},
+  "interceptDiagnosticDismiss": "Dismiss",
+  "@interceptDiagnosticDismiss": {"description": "Screen-reader label of the close glyph on one diagnostic card. It takes that one card off the screen and nothing else."},
+  "setupFixCopyExport": "Copy export command",
+  "@setupFixCopyExport": {"description": "Fix button of a SetEnv action: copies `export KEY=VALUE` to the clipboard. Writing the variable into the configuration needs SetConfig and arrives with HUM-069."},
+  "setupFixSetEnvBadKey": "There is no command to copy: {key} is not a name a shell can assign to. Set the variable by hand.",
+  "@setupFixSetEnvBadKey": {
+    "description": "Stands where the copy row would be when the daemon proposed a SetEnv whose key is not a POSIX environment name. No command is built rather than a wrong one (CONVENTIONS 4.13).",
+    "placeholders": {"key": {"type": "String"}}
+  },
+  "setupFixSetEnvMultiline": "There is no command to copy: the value of {key} spans more than one line, and a pasted command could run as two. Set the variable by hand.",
+  "@setupFixSetEnvMultiline": {
+    "description": "Stands where the copy row would be when a SetEnv value contains a carriage return or a line feed. Quoting alone would not help: a terminal without bracketed paste submits the first line.",
+    "placeholders": {"key": {"type": "String"}}
+  },
+  "interceptDiagnosticDropped": "{count, plural, =1{1 earlier finding is no longer shown here. Dismiss what you have read to keep the rest.} other{{count} earlier findings are no longer shown here. Dismiss what you have read to keep the rest.}}",
+  "@interceptDiagnosticDropped": {
+    "description": "Stands above the diagnostic strip once the session produced more findings than the strip keeps. The count is shown rather than the loss hidden (CONVENTIONS 4.13).",
+    "placeholders": {"count": {"type": "int"}}
   }
 }

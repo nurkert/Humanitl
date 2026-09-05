@@ -563,5 +563,11 @@
   "isolationShowArgv": "Den genauen Sandbox-Befehl anzeigen",
   "isolationEmpty": "Es läuft nichts, also wird nichts gemessen. Die drei Garantien werden bei jedem Start in der Sandbox geprüft, und danach steht jede hier mit ihrem Beleg.",
   "shellIsolationPassed": "{passed}/{total} Isolationsprüfungen bestanden",
-  "shellIsolationFailed": "Isolationsprüfung fehlgeschlagen: {title}"
+  "shellIsolationFailed": "Isolationsprüfung fehlgeschlagen: {title}",
+  "interceptDiagnosticTitle": "Der Daemon meldet",
+  "interceptDiagnosticDismiss": "Ausblenden",
+  "setupFixCopyExport": "Export-Befehl kopieren",
+  "setupFixSetEnvBadKey": "Es gibt keinen Befehl zum Kopieren: {key} ist kein Name, dem eine Shell etwas zuweisen kann. Setzen Sie die Variable von Hand.",
+  "setupFixSetEnvMultiline": "Es gibt keinen Befehl zum Kopieren: Der Wert von {key} geht über mehr als eine Zeile, und ein eingefügter Befehl liefe als zwei. Setzen Sie die Variable von Hand.",
+  "interceptDiagnosticDropped": "{count, plural, =1{1 früherer Befund steht hier nicht mehr. Blenden Sie aus, was Sie gelesen haben, damit der Rest bleibt.} other{{count} frühere Befunde stehen hier nicht mehr. Blenden Sie aus, was Sie gelesen haben, damit der Rest bleibt.}}"
 }

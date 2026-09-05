@@ -341,15 +341,21 @@ extension FlowEventToDomain on pb.FlowEvent {
         at: when,
         diagnostic: diagnostic.toDomain(),
       ),
-      // Ein Befund, der zu genau einem Fluss gehört (HUM-039, Feld 16). Er
-      // wird vorerst wie ein sitzungsweiter gelesen: Der Domäne fehlt noch das
-      // Feld für den Fluss, und ein Befund ohne Zuordnung ist immer noch
-      // besser als keiner. Die Oberflächen-Hälfte von HUM-039 erweitert
-      // `FlowEvent.diagnostic` um `flowId` und lässt die amberfarbene Zeile
-      // damit die Flow-Details öffnen.
+      // Ein Befund, der zu genau einem Fluss gehört (Feld 16). Die Kennung
+      // reist mit: Sie ist der einzige Weg, einen Befund an die Anfrage zu
+      // hängen, die gerade gescheitert ist, und ein Befund, der irgendwo
+      // allgemein steht, erklärt diese Anfrage nicht.
+      //
+      // Ein leeres Feld bleibt null. Der ganze Sinn der Kennung ist die
+      // Unterscheidung „gehört zu einem Fluss" von „gehört zur Sitzung", und
+      // die läuft über null; ein `FlowId('')` wäre ein Fluss, den es nicht
+      // gibt, und eine Ansicht spränge später in leere Details.
       pb.FlowEvent_Event.flowDiagnostic => FlowEvent.diagnostic(
         at: when,
         diagnostic: flowDiagnostic.diagnostic.toDomain(),
+        flowId: flowDiagnostic.flowId.isEmpty
+            ? null
+            : FlowId(flowDiagnostic.flowId),
       ),
       pb.FlowEvent_Event.rulesChanged => FlowEvent.rulesChanged(
         at: when,

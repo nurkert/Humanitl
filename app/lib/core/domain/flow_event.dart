@@ -86,10 +86,19 @@ sealed class FlowEvent with _$FlowEvent {
   const factory FlowEvent.lagged({required DateTime at, required int dropped}) =
       FlowEventLagged;
 
-  /// A session-wide diagnostic, for example a TLS refusal.
+  /// A diagnostic of the session, or of one flow when [flowId] is set.
+  ///
+  /// The daemon sends two shapes for the same thing: `diagnostic` (field 12)
+  /// for a finding that belongs to no single request -- a handshake without
+  /// SNI, for example -- and `flow_diagnostic` (field 16) for one that does,
+  /// such as the refused handshake of a `CONNECT`. The variant keeps the
+  /// distinction instead of flattening it: a finding that names its flow can
+  /// be shown next to that flow, and one that names none still has to arrive
+  /// somewhere.
   const factory FlowEvent.diagnostic({
     required DateTime at,
     required Diagnostic diagnostic,
+    FlowId? flowId,
   }) = FlowEventDiagnostic;
 
   /// The rule set changed; clients reload it.
@@ -134,9 +143,13 @@ sealed class FlowEvent with _$FlowEvent {
     FlowEventRecorded(:final flowId) ||
     FlowEventTimedOut(:final flowId) ||
     FlowEventFailed(:final flowId) => flowId,
-    FlowEventLagged() ||
-    FlowEventDiagnostic() ||
-    FlowEventRulesChanged() ||
-    FlowEventAgentAsk() => null,
+    // Ein eigener Zweig und keine Oder-Verkettung: Die Variante bindet
+    // `FlowId?`, die Gruppe darüber `FlowId`, und ein Oder-Muster verlangt in
+    // jedem Zweig denselben Typ. Erreicht wird dieser Zweig zur Laufzeit nie,
+    // weil das erzeugte Feld `flowId` der Variante diesen Getter überschreibt;
+    // der Zweig steht hier, weil der Schalter erschöpfend sein muss, und er
+    // liefert denselben Wert wie das Feld.
+    FlowEventDiagnostic(:final FlowId? flowId) => flowId,
+    FlowEventLagged() || FlowEventRulesChanged() || FlowEventAgentAsk() => null,
   };
 }
