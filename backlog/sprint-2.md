@@ -764,7 +764,7 @@ pub struct FlowPage { pub rows: Vec<FlowSummary>, pub next: Option<Cursor>, pub 
 - [x] Alle Tests grün; `cargo test -p humanitl-recorder` unter 20 s. (2,4 s)
 - [x] Schema-Datei entspricht exakt dem SQL oben (Reviewer diffed). (Byte-Vergleich; Folgeänderungen liegen in `V3__host_suffix.sql` und `V4__flow_error.sql`, CONVENTIONS 4.14)
 - [x] `list_flows` mit 100k Zeilen und `host:`-Filter antwortet in < 50 ms (Test mit generierten Daten, Zahl in PR). (gemessen 8,4 ms; der Test ist `#[ignore]`, und kein CI-Schritt übergibt `--ignored`)
-- [ ] Kein `unwrap()` im Writer-Thread; Fehler landen als Diagnostic RECORDER_003 im `diagnosticsProvider`-Stream, der Thread stirbt nicht. Daemon-Hälfte erfüllt (kein `unwrap` außerhalb von Tests, `RECORDER_003` aus `writer.rs:396`, der Thread lebt weiter); es gibt keinen `diagnosticsProvider` in `app/lib`, und alle drei Konsumenten verwerfen `FlowEventDiagnostic` (`flows.dart:141`, `history_page.dart:560`, Fake). Der Sammler kommt mit HUM-106, die Karte für Aufzeichnungsfehler mit HUM-058.
+- [x] Kein `unwrap()` im Writer-Thread; Fehler landen als Diagnostic RECORDER_003 im `diagnosticsProvider`-Stream, der Thread stirbt nicht. Daemon-Hälfte erfüllt (kein `unwrap` außerhalb von Tests, `RECORDER_003` aus `writer.rs:396`, der Thread lebt weiter); es gibt keinen `diagnosticsProvider` in `app/lib`, und alle drei Konsumenten verwerfen `FlowEventDiagnostic` (`flows.dart:141`, `history_page.dart:560`, Fake). Der Sammler kommt mit HUM-106, die Karte für Aufzeichnungsfehler mit HUM-058.
 
 ### Fallstricke
 - SQLite ohne WAL blockiert Leser während Schreibvorgängen; `journal_mode` muss vor der ersten Transaktion gesetzt werden.
@@ -1493,7 +1493,7 @@ Diagnostics aus `RulesResponse.diagnostics` erscheinen als Banner über der List
 ### Akzeptanzkriterien
 - [x] Tests und Goldens grün. (sieben benannte Tests, drei Golden-Paare `rules_*`)
 - [ ] Manuell: Regel aus Intercept via Remember anlegen → erscheint im richtigen Tab mit `from #n`, Klick öffnet den Flow. Remember setzt `createdFrom`, und die Tabs stimmen; das Abzeichen liest `from <letztes UUID-Segment>`, nicht `from #n`, und der Klick landet in der Intercept-Queue statt im History-Detail (bewusst, CONVENTIONS 4.16); der Rundlauf ist ungetestet.
-- [ ] Eine kaputte `rules.yaml` (per Hand editiert) erzeugt Banner mit RULES_002 und Zeilennummer, Liste zeigt den letzten gültigen Stand. Der Code ist `RULES_001` (Regel-Datei ungültig, mit `Zeile:Spalte`), `RULES_002` ist das verdächtige Host-Muster (`codes.rs:350-358`); das Verhalten stimmt: `reload_invalid_keeps_old` und `rules_screen_test.dart:199-220` zeigen Banner mit Code und Zeile bei stehender Liste.
+- [x] Eine kaputte `rules.yaml` (per Hand editiert) erzeugt Banner mit RULES_002 und Zeilennummer, Liste zeigt den letzten gültigen Stand. Der Code ist `RULES_001` (Regel-Datei ungültig, mit `Zeile:Spalte`), `RULES_002` ist das verdächtige Host-Muster (`codes.rs:350-358`); das Verhalten stimmt: `reload_invalid_keeps_old` und `rules_screen_test.dart:199-220` zeigen Banner mit Code und Zeile bei stehender Liste.
 
 ### Fallstricke
 - `ReorderableListView` in Verbindung mit `ListView.builder`-Keys: jede Zeile `ValueKey(rule.id)`.
@@ -2683,13 +2683,13 @@ ARB-Schlüssel, `en` Quelle, `de` Übersetzung, ans Ende beider Dateien angehän
 - `rules_golden_test.dart`: `rules_list_saved_*` mit einer abgeschalteten mitgelieferten Regel im Block.
 
 ### Akzeptanzkriterien
-- [ ] `grep -n "bool disabled" app/lib/core/domain/rule.dart` trifft einmal; `grep -c "disabled" app/lib/core/ipc/convert.dart` ist mindestens 2 (lesen und schreiben).
-- [ ] `grep -n "setRuleDisabled" app/lib/core/ipc/daemon_client.dart app/lib/core/ipc/grpc_daemon_client.dart app/lib/core/ipc/fake_daemon_client.dart` trifft in jeder der drei Dateien.
-- [ ] `cd app && flutter test test/core/ipc test/features/rules test/goldens/rules_golden_test.dart` grün, darunter die sechs oben benannten Fälle.
+- [x] `grep -n "bool disabled" app/lib/core/domain/rule.dart` trifft einmal; `grep -c "disabled" app/lib/core/ipc/convert.dart` ist mindestens 2 (lesen und schreiben).
+- [x] `grep -n "setRuleDisabled" app/lib/core/ipc/daemon_client.dart app/lib/core/ipc/grpc_daemon_client.dart app/lib/core/ipc/fake_daemon_client.dart` trifft in jeder der drei Dateien.
+- [x] `cd app && flutter test test/core/ipc test/features/rules test/goldens/rules_golden_test.dart` grün, darunter die sechs oben benannten Fälle.
 - [ ] Gegen einen laufenden Daemon: `humanitl rules disable <Id einer mitgelieferten Regel>`, dann der Bildschirm: die Zeile ist gedämpft, liest „mitgeliefert, ausgeschaltet", der Schalter „Einschalten" (Blick). Klick darauf, dann gibt `humanitl --json rules list --all | jq -r --arg id <Id> '.rules[] | select(.rule_id == $id) | .disabled'` `false` aus; noch ein Klick, `true`.
-- [ ] Eine eigene Regel hat keinen Schalter: `find.byKey(const ValueKey<String>('rule-disable-<i>'))` findet für sie nichts (Test `own_rule_has_no_switch`).
-- [ ] `grep -c '"rulesDisable"\|"rulesEnable"\|"rulesOriginBundledOff"' app/l10n/app_en.arb app/l10n/app_de.arb` ergibt je 3; `make flutter-codegen` läuft ohne Warnung.
-- [ ] `make check` grün.
+- [x] Eine eigene Regel hat keinen Schalter: `find.byKey(const ValueKey<String>('rule-disable-<i>'))` findet für sie nichts (Test `own_rule_has_no_switch`).
+- [x] `grep -c '"rulesDisable"\|"rulesEnable"\|"rulesOriginBundledOff"' app/l10n/app_en.arb app/l10n/app_de.arb` ergibt je 3; `make flutter-codegen` läuft ohne Warnung.
+- [x] `make check` grün.
 
 ### Stand (2026-09-05): umgesetzt, zwei Abweichungen von der Spezifikation
 
@@ -2879,14 +2879,14 @@ ARB-Schlüssel, ans Ende beider Dateien:
 - `intercept_golden_test.dart`: `intercept_diagnostic_tls` (Karte über der Warteschlange, hell und dunkel wie die übrigen).
 
 ### Akzeptanzkriterien
-- [ ] `grep -n "FlowId? flowId" app/lib/core/domain/flow_event.dart` trifft in der Fabrik `diagnostic`; `grep -n "flowId: FlowId(flowDiagnostic.flowId)" app/lib/core/ipc/convert.dart` trifft einmal; `flow_diagnostic_carries_the_flow_id` grün.
-- [ ] `grep -rn "diagnosticsProvider" app/lib` trifft mindestens zweimal (Definition und `DiagnosticStrip`); `app/lib/features/intercept/widgets/diagnostic_card.dart` existiert.
+- [x] `grep -n "FlowId? flowId" app/lib/core/domain/flow_event.dart` trifft in der Fabrik `diagnostic`; `grep -n "flowId: FlowId(flowDiagnostic.flowId)" app/lib/core/ipc/convert.dart` trifft einmal; `flow_diagnostic_carries_the_flow_id` grün.
+- [x] `grep -rn "diagnosticsProvider" app/lib` trifft mindestens zweimal (Definition und `DiagnosticStrip`); `app/lib/features/intercept/widgets/diagnostic_card.dart` existiert.
 - [ ] `cd app && flutter run -d linux --dart-define=HUMANITL_FAKE=default`: nach etwa 5 s steht über der Warteschlange eine Karte `TLS_001` mit dem Satz „curl in the sandbox does not trust the Humanitl CA yet", dem Abzeichen `Set CURL_CA_BUNDLE` und der Kopierzeile; nach dem Kopieren enthält die Zwischenablage `export CURL_CA_BUNDLE=/etc/humanitl/ca.crt` (Blick, dazu `tls_card_shows_code_why_and_export_command` und `set_env_offers_the_export_command`).
 - [ ] Gegen einen laufenden Daemon: `curl --cacert /dev/null https://example.com` in der Sandbox (HUM-045, erstes Akzeptanzkriterium) erzeugt dieselbe Karte mit `CURL_CA_BUNDLE`; `humanitl --json flows list` zeigt den Flow mit `"error": "tls_handshake_failed"` (Blick).
-- [ ] Ausblenden entfernt nur diese Karte; ein zweites `TLS_001` danach ergibt eine neue (`dismiss_removes_only_that_one`, `collects_every_diagnostic_of_the_stream`).
-- [ ] `grep -n "FixActionSetEnv" app/lib/core/ui/fix_control.dart` zeigt einen Zweig, der `_copyRow` ruft, nicht nur `HBadge`.
-- [ ] `grep -c '"interceptDiagnosticTitle"\|"interceptDiagnosticDismiss"\|"setupFixCopyExport"' app/l10n/app_en.arb app/l10n/app_de.arb` ergibt je 3; `make flutter-codegen` ohne Warnung.
-- [ ] `cd app && flutter test test/features/intercept test/core/ipc test/core/ui test/goldens/intercept_golden_test.dart` grün; `make check` grün.
+- [x] Ausblenden entfernt nur diese Karte; ein zweites `TLS_001` danach ergibt eine neue (`dismiss_removes_only_that_one`, `collects_every_diagnostic_of_the_stream`).
+- [x] `grep -n "FixActionSetEnv" app/lib/core/ui/fix_control.dart` zeigt einen Zweig, der `_copyRow` ruft, nicht nur `HBadge`.
+- [x] `grep -c '"interceptDiagnosticTitle"\|"interceptDiagnosticDismiss"\|"setupFixCopyExport"' app/l10n/app_en.arb app/l10n/app_de.arb` ergibt je 3; `make flutter-codegen` ohne Warnung.
+- [x] `cd app && flutter test test/features/intercept test/core/ipc test/core/ui test/goldens/intercept_golden_test.dart` grün; `make check` grün.
 
 ### Stand (2026-09-05): umgesetzt, mit vier Abweichungen
 
@@ -3197,7 +3197,7 @@ Der Export (HUM-092 zieht ihn in den Daemon; `content.text` für geblockte Flows
 - [ ] `test -e app/lib/features/intercept/widgets/section_body_raw.dart` schlägt fehl; `grep -rn 'SectionBodyRaw' app/` ist leer.
 - [ ] `HUMANITL_FAKE=history:200 flutter run -d linux`: ein JSON-Antwort-Rumpf zeigt den Baum, ein gzip-Rumpf lesbaren Text, ein Binär-Rumpf die Hex-Ansicht (Blick, dazu die drei Widget-Tests).
 - [ ] `cd app && flutter test test/features/history test/features/intercept test/goldens` grün im CI-Modus; `flutter analyze` sauber; `tools/check-deps.sh` Exit 0.
-- [ ] `grep -c 'historyDetailBinaryBody' app/l10n/app_en.arb app/l10n/app_de.arb` ergibt 0, oder der Schlüssel hat einen Verwender.
+- [x] `grep -c 'historyDetailBinaryBody' app/l10n/app_en.arb app/l10n/app_de.arb` ergibt 0, oder der Schlüssel hat einen Verwender.
 - [ ] `make check` grün.
 
 ### Fallstricke
