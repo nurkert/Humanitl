@@ -20,7 +20,11 @@ abstract final class ProtoVersion {
   /// and to 5 with `FlowSummary.meta`, the mark on a request the proxy
   /// answered itself, which the history reads (HUM-103). Minor 4 is skipped
   /// on this side on purpose: the five fields of the per-session start
-  /// (HUM-067) have no reader in the app yet.
+  /// (HUM-067) have no reader in the app yet. Minor 6 is skipped for the same
+  /// reason: the session summary of a sandbox run — the diff over the project,
+  /// the secret scan across it and the symlinks leaving it (HUM-043) — arrives
+  /// on the wire and has no reader here until the sheet that shows it is
+  /// built. Raising the number without a reader would claim otherwise.
   static const int minor = 5;
 
   /// `major.minor` as text.
