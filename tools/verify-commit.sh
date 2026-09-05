@@ -15,12 +15,46 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 commit="${1:-HEAD}"
-tree="${HUMANITL_VERIFY_TREE:-/tmp/humanitl-verify}"
-target="${HUMANITL_VERIFY_TARGET:-/tmp/humanitl-verify-target}"
+sha="$(git rev-parse --short=8 "$commit")"
+
+# Der Auscheckpfad haengt am Commit, nicht an einem festen Namen. Waehrend
+# mehrere Agenten arbeiten, laufen hier durchaus zwei Pruefungen zugleich; mit
+# einem festen Pfad hat die zweite den Baum der ersten geloescht, waehrend
+# diese darin testete, und beim Beenden nahm jede den Baum der anderen mit.
+# Der Aufraeumschritt unten fasst deshalb nur noch den eigenen Baum an.
+tree="${HUMANITL_VERIFY_TREE:-/tmp/hv-$sha}"
+
+# Das Zielverzeichnis liegt bewusst nicht unter /tmp. Dort steht ein tmpfs von
+# 16 GB, ein vollstaendiger Build des Workspace belegt 18 bis 36 GB, und ein
+# volles tmpfs laesst rustc mit "failed to parse process output" abbrechen --
+# ein Fehler, der wie ein Codefehler aussieht und keiner ist. Am 2026-09-05 ist
+# die Pruefung genau daran zweimal gescheitert.
+#
+# Gemeinsam bleibt es trotzdem: ein eigenes Verzeichnis je Lauf kostet dieselben
+# 18 bis 36 GB noch einmal, und die Sperre oben laesst ohnehin nur einen Lauf
+# zugleich daran.
+target="${HUMANITL_VERIFY_TARGET:-$HOME/.cache/humanitl/verify-target}"
 
 if [[ ${#tree} -gt 60 ]]; then
   echo "verify-commit: $tree ist zu lang für einen Unix-Socket in den Escape-Tests" >&2
   exit 2
+fi
+
+# Die Sperre haengt am Zielverzeichnis, nicht am Baum: zwei Laeufe mit
+# getrennten Baeumen, aber gemeinsamem Zielverzeichnis bauen dieselben
+# Binaries an dieselbe Stelle. Cargo nimmt dort zwar seine eigene Sperre, aber
+# die Escape-Tests und die Sandbox-Tests starten Programme neben sich, ausser
+# jeder Cargo-Sperre; tauscht der andere Lauf sie zwischendurch aus, scheitern
+# sie mit einem Fehler, der wie ein Codefehler aussieht. Genau so ist am
+# 2026-09-05 `sigint_reaches_the_agent_and_keeps_its_exit_code` gefallen,
+# waehrend derselbe Test einzeln sechs Mal unter Last 25 in 50 ms durchlief.
+lock="${target%/}.lock"
+mkdir -p "$(dirname "$lock")"
+exec {lockfd}> "$lock"
+if ! flock -n "$lockfd"; then
+  echo "verify-commit: $target ist von einem anderen Lauf belegt; dieser Lauf endet ohne Ergebnis" >&2
+  echo "verify-commit: warte auf ihn oder setze HUMANITL_VERIFY_TARGET auf ein eigenes Verzeichnis" >&2
+  exit 3
 fi
 
 cleanup() {
@@ -29,7 +63,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-cleanup
+git worktree remove --force "$tree" > /dev/null 2>&1 || true
 rm -rf "$tree"
 git worktree add -q --detach "$tree" "$commit"
 echo "verify-commit: $(git -C "$tree" rev-parse --short HEAD) in $tree"
