@@ -119,6 +119,7 @@ async fn run(ctx: &Context, command: Cmd) -> Result<u8, Failure> {
         Cmd::Sandbox { cmd } => cmd::sandbox::run(ctx, &cmd).await,
         Cmd::Daemon { cmd } => cmd::daemon::run(ctx, &cmd).await,
         Cmd::Flows { cmd } => cmd::flows::run(ctx, &cmd).await,
+        Cmd::Sessions { cmd } => cmd::sessions::run(ctx, &cmd).await,
         Cmd::Rules { cmd } => cmd::rules::run(ctx, &cmd).await,
         Cmd::Config { cmd } => cmd::config::run(ctx, &cmd),
         // Ein Platzhalter ist ein Fehlschlag wie jeder andere und geht

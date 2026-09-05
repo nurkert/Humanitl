@@ -237,10 +237,13 @@ humanitl sandbox check
 humanitl sandbox attach [--read-only]
 humanitl rules list|add|remove|test URL [--json]
 humanitl flows list [FILTER] | show ID [--json]
+humanitl sessions summary ID [--json]
 humanitl audit verify|export [--format jsonl|csv] [--out FILE]
 humanitl config get KEY | set KEY VALUE | schema | edit
 humanitl daemon install|status|logs
 ```
+
+`humanitl sessions summary ID` nennt die Sandbox-Kennung eines Laufs, nicht die Sitzung des Daemons: Ein Daemon-Prozess hat genau eine `SessionId`, startet darin aber beliebig viele Sandboxen, und die Zusammenfassung gehört dem Lauf (HUM-043). `ID` ist die Kennung aus der Log-Zeile des Laufs.
 
 Exit-Codes: 0 ok, 1 Nutzerfehler (mit Diagnostic), 2 Daemon nicht erreichbar, 3 Sandbox-Check fehlgeschlagen, 4 Sicherheitsverletzung (z. B. Authority-Mismatch im Test), 10 `rules test` ⇒ block, 11 `rules test` ⇒ ask.
 

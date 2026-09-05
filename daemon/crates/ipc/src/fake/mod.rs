@@ -145,6 +145,59 @@ impl FakeDaemon {
     }
 }
 
+/// Die erfundenen Zeilen der Tabelle „Changed files".
+///
+/// Eigene Funktion, damit `fake_summary` lesbar bleibt: Die Zeilen sind Daten,
+/// nicht Verhalten.
+fn fake_changes() -> Vec<v1::FileChange> {
+    vec![
+        v1::FileChange {
+            path: "fake/notes.md".to_owned(),
+            path_hash: "00000000000000f1".to_owned(),
+            mangled: false,
+            kind: v1::FileChangeKind::Added as i32,
+            size: 118,
+            git_metadata: false,
+            unprotected_by: String::new(),
+            unscanned: v1::ScanSkip::Unspecified as i32,
+        },
+        v1::FileChange {
+            path: ".git/hooks/pre-commit".to_owned(),
+            path_hash: "00000000000000f2".to_owned(),
+            mangled: false,
+            kind: v1::FileChangeKind::Added as i32,
+            size: 42,
+            git_metadata: false,
+            unprotected_by: ".git/hooks".to_owned(),
+            unscanned: v1::ScanSkip::Unspecified as i32,
+        },
+        v1::FileChange {
+            path: "fake/dump.bin".to_owned(),
+            path_hash: "00000000000000f5".to_owned(),
+            mangled: false,
+            kind: v1::FileChangeKind::Added as i32,
+            size: 9_000_000,
+            git_metadata: false,
+            unprotected_by: String::new(),
+            // Die Zeile, die zeigt, was „nicht durchsucht" heisst: In
+            // dieser Datei wurde nichts gefunden, weil in ihr nichts
+            // gesucht wurde. Die Oberflaeche muss das anders zeichnen
+            // als eine Datei ohne Fund.
+            unscanned: v1::ScanSkip::TooLarge as i32,
+        },
+        v1::FileChange {
+            path: ".git/index".to_owned(),
+            path_hash: "00000000000000f3".to_owned(),
+            mangled: false,
+            kind: v1::FileChangeKind::Modified as i32,
+            size: 4096,
+            git_metadata: true,
+            unprotected_by: String::new(),
+            unscanned: v1::ScanSkip::Unspecified as i32,
+        },
+    ]
+}
+
 /// Die Regeln, die der Fake von Anfang an kennt.
 fn bundled_rules() -> Vec<v1::Rule> {
     vec![
@@ -424,6 +477,25 @@ impl DaemonApi for FakeDaemon {
             diagnostics,
             endpoint_is_private,
         })
+    }
+
+    /// Die Zusammenfassung des simulierten Laufs.
+    ///
+    /// Dieselbe Reihenfolge wie beim echten Dienst: erst die Kennung lesen
+    /// (`IPC_005`), dann nachsehen, ob es zu ihr etwas gibt (`SANDBOX_027`).
+    /// Der Fake fuehrt genau einen Lauf; jede andere Kennung ist eine, zu der
+    /// er nichts hat, und eine erfundene Antwort darauf brachte der Oberflaeche
+    /// bei, dass es immer eine gibt.
+    async fn get_session_summary(
+        &self,
+        request: v1::SessionSummaryRef,
+    ) -> Result<v1::SessionSummary, Diagnostic> {
+        let wanted = validate::sandbox_id(&request.sandbox_id)?;
+        let (sandbox_id, _) = self.state.sandbox();
+        if wanted != sandbox_id {
+            return Err(crate::server::unknown_summary(wanted));
+        }
+        Ok(self.fake_summary())
     }
 }
 
@@ -807,6 +879,12 @@ impl FakeDaemon {
                 vec![
                     self.sandbox_status(v1::SandboxState::Stopping),
                     self.sandbox_status(v1::SandboxState::Stopped),
+                    // Wie beim echten Dienst kommt die Zusammenfassung, sobald
+                    // der Lauf endet, ohne dass ein Client danach fragt
+                    // (HUM-043). Der Bildschirm haette sonst nichts zu zeigen.
+                    v1::SandboxEvent {
+                        event: Some(v1::sandbox_event::Event::Summary(self.fake_summary())),
+                    },
                 ]
             }
             Some(Op::IsolationCheck(())) => isolation_checks(),
@@ -817,6 +895,79 @@ impl FakeDaemon {
                 Some(&plan.work_mode),
             )],
             _ => vec![self.sandbox_status(self.state.sandbox().1)],
+        }
+    }
+
+    /// Die erfundene Zusammenfassung des simulierten Laufs (HUM-043).
+    ///
+    /// Vollstaendig, weil das Sheet sonst nichts zu zeigen haette, und
+    /// unuebersehbar erfunden (CONVENTIONS 4.7): Die Pfade sagen `fake`. Sie
+    /// deckt die drei Faelle ab, die die Oberflaeche unterscheiden muss —
+    /// eine geaenderte Datei, ein Fund, ein Symlink nach draussen — und den
+    /// Fall, dass ueber einem Pfad keine Maske lag.
+    /// Gebaut wird die Wire-Form von Hand und nicht ueber
+    /// `humanitl_sandbox::summary::SessionSummary`: Erfundene Daten gehoeren in
+    /// den Fake, nicht in die Crate, die die echten baut.
+    fn fake_summary(&self) -> v1::SessionSummary {
+        let session = self.state.session();
+        let (sandbox_id, _) = self.state.sandbox();
+        v1::SessionSummary {
+            session_id: session.id.to_string(),
+            sandbox_id: sandbox_id.to_string(),
+            created: Some(timestamp(SystemTime::now())),
+            work_dir: session.work_dir.clone(),
+            changes: fake_changes(),
+            findings: vec![v1::SummaryFinding {
+                path: "fake/notes.md".to_owned(),
+                path_hash: "00000000000000f1".to_owned(),
+                mangled: false,
+                line: 3,
+                kind: "api_key:fake".to_owned(),
+                tier: v1::FindingTier::Regex as i32,
+                display_prefix: "fake_key…".to_owned(),
+                value_hash: "0".repeat(64),
+            }],
+            symlinks: vec![v1::SymlinkEscape {
+                path: "fake/outside".to_owned(),
+                path_hash: "00000000000000f4".to_owned(),
+                mangled: false,
+                target: "/etc".to_owned(),
+                escapes: true,
+                fix_command: format!("rm -- {}/fake/outside", session.work_dir),
+            }],
+            unprotected: vec![".git/hooks".to_owned(), ".idea".to_owned()],
+            scanned_bytes: 160,
+            truncated: false,
+            diagnostics: vec![
+                diagnostic_to_proto(
+                    &Diagnostic::builder(codes::SANDBOX_022, Severity::Warning)
+                        .why(
+                            "the agent created a symlink fake/outside pointing outside the \
+                             project (/etc); do not follow it"
+                                .to_owned(),
+                        )
+                        .build(),
+                ),
+                diagnostic_to_proto(
+                    &Diagnostic::builder(codes::SANDBOX_023, Severity::Warning)
+                        .why(
+                            "1 potential secret(s) were written into the project during this \
+                             session"
+                                .to_owned(),
+                        )
+                        .build(),
+                ),
+                diagnostic_to_proto(
+                    &Diagnostic::builder(codes::SANDBOX_028, Severity::Warning)
+                        .why(
+                            "1 changed file(s) were not searched for secrets; the first is \
+                             fake/dump.bin (larger than the scan reads). Nothing was found in \
+                             them because nothing was looked at."
+                                .to_owned(),
+                        )
+                        .build(),
+                ),
+            ],
         }
     }
 

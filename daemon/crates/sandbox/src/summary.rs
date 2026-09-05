@@ -44,7 +44,9 @@
 use std::path::{Path, PathBuf};
 
 use humanitl_core::block::sanitize_note;
-use humanitl_core::diagnostics::codes::{SANDBOX_022, SANDBOX_023, SANDBOX_024, SANDBOX_025};
+use humanitl_core::diagnostics::codes::{
+    SANDBOX_022, SANDBOX_023, SANDBOX_024, SANDBOX_025, SANDBOX_026, SANDBOX_028,
+};
 use humanitl_core::ids::{SandboxId, SessionId};
 use humanitl_core::{Diagnostic, Finding, FixAction, Severity, Tier};
 use serde::{Deserialize, Serialize};
@@ -65,6 +67,26 @@ pub const TEXT_PROBE_BYTES: usize = 8 * 1024;
 
 /// Bis zu dieser Größe wird eine geänderte Datei gescannt.
 pub const SCAN_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+/// So viele Bytes liest der Fundscan eines Laufs insgesamt.
+///
+/// [`SCAN_MAX_BYTES`] deckelt die einzelne Datei, dieses Budget den ganzen
+/// Lauf. Ohne das zweite wäre die Obergrenze das Produkt aus beiden Grenzen —
+/// [`MAX_CHANGES`] Dateien zu je 4 MiB sind 8 GiB, die zu lesen und durch die
+/// Detektoren zu schicken wären, und wie viele Dateien der Agent anlegt,
+/// bestimmt der Agent. Greift das Budget, endet der Scan und
+/// [`SessionSummary::truncated`] sagt es.
+pub const SCAN_TOTAL_MAX_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Die Art eines Fundes, der kein Geheimnis meldet, sondern eine Datei, die
+/// der Host von sich aus ausführt ([`executable_on_host`]).
+///
+/// Sie steht hier und nicht als Zeichenkette an zwei Stellen, weil
+/// [`SessionSummary::diagnostics`] die beiden Arten auseinanderhalten muss:
+/// `SANDBOX_023` zählt Geheimnisse, `SANDBOX_026` ausführbare Dateien. Der
+/// Wert ist die Anzeige von
+/// `humanitl_core::FindingKind::Custom("executable-on-host")`.
+pub const EXECUTABLE_ON_HOST_KIND: &str = "custom:executable-on-host";
 
 /// Die Art einer Änderung, wie sie in Protokoll, `JSON` und Oberfläche steht.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +116,64 @@ impl ChangeKind {
             Self::ModeChanged => "mode_changed",
         }
     }
+}
+
+/// Warum der Fundscan eine geänderte Datei nicht gelesen hat.
+///
+/// Jeder dieser Fälle ist ein Loch in genau der Prüfung, die dieses Issue
+/// liefert, und keiner darf still bleiben: Wie groß eine Datei ist, welche
+/// Rechte sie trägt und wie viele davon ein Lauf schreibt, bestimmt der Agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanSkip {
+    /// Über [`SCAN_MAX_BYTES`].
+    TooLarge,
+    /// Nicht lesbar: Rechte, verschwunden, kein gewöhnlicher Inhalt mehr.
+    Unreadable,
+    /// Das Byte-Budget des Laufs reichte für sie nicht mehr.
+    Budget,
+}
+
+impl ScanSkip {
+    /// Der Name in `snake_case`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TooLarge => "too_large",
+            Self::Unreadable => "unreadable",
+            Self::Budget => "budget",
+        }
+    }
+
+    /// Der Satz, den ein Mensch dazu liest.
+    #[must_use]
+    pub const fn why(self) -> &'static str {
+        match self {
+            Self::TooLarge => "larger than the scan reads",
+            Self::Unreadable => "could not be read",
+            Self::Budget => "the scan budget of this session was spent",
+        }
+    }
+}
+
+/// Eine geänderte Datei, die der Fundscan lesen soll.
+///
+/// Der Pfad ist **roh**, nicht die Anzeige: Wer mit der Anzeige öffnete,
+/// öffnete eine andere Datei oder keine. `row` zeigt auf die Zeile in
+/// [`SessionSummary::changes`], damit der Scan dort vermerken kann, was er
+/// nicht gelesen hat ([`SessionSummary::mark_unscanned`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanCandidate {
+    /// Der Pfad relativ zum Projektverzeichnis, roh.
+    pub path: PathBuf,
+    /// Die Größe aus dem zweiten Schnappschuss.
+    ///
+    /// Sie entscheidet **vor** dem Lesen, ob die Datei ins Budget passt. Erst
+    /// danach zu vergleichen hieße, das Budget zu überschreiten und die
+    /// Überschreitung als eingehalten zu melden.
+    pub size: u64,
+    /// Der Platz der Zeile in [`SessionSummary::changes`].
+    pub row: usize,
 }
 
 /// Der angezeigte Name eines Pfades samt dem, was die Anzeige verliert.
@@ -161,6 +241,15 @@ pub struct FileChangeRecord {
     /// Pfad später noch einmal gegen die Liste zu halten — was ein Vergleich
     /// auf gesäubertem Text wäre und damit falsch.
     pub unprotected_by: Option<String>,
+    /// Warum der Fundscan diese Datei nicht gelesen hat.
+    ///
+    /// `None` heißt: gelesen, oder es gab nichts zu lesen (ein Verzeichnis,
+    /// ein Verweis, etwas Gelöschtes, eine Rechte-Änderung). `Some` heißt: In
+    /// dieser Datei wurde **nicht** nach Geheimnissen gesucht, und der Grund
+    /// steht dabei. Ohne dieses Feld sähe eine Zusammenfassung, in der eine
+    /// 5-MiB-Datei oder eine unlesbare Datei übersprungen wurde, genauso aus
+    /// wie eine, in der nichts gefunden wurde.
+    pub unscanned: Option<ScanSkip>,
 }
 
 /// Ein Symlink, den der Agent angelegt hat.
@@ -234,6 +323,39 @@ impl SummaryFinding {
             value_hash: finding.value_hash_hex(),
         }
     }
+
+    /// Der Fund, den [`executable_on_host`] auslöst: die Datei selbst.
+    ///
+    /// Es gibt hier keinen gefundenen Wert — nicht die Zeile eines Musters ist
+    /// der Fund, sondern die Datei, die der Host beim nächsten `git commit`,
+    /// `make` oder `npm install` startet. [`SummaryFinding::display_prefix`]
+    /// und [`SummaryFinding::value_hash`] bleiben deshalb leer; der Hash der
+    /// leeren Zeichenkette stünde dort wie ein Wert, den es nie gab. Die Zeile
+    /// ist `1`: Die Datei als Ganzes ist gemeint.
+    ///
+    /// `path` ist der **rohe** Pfad relativ zu `/work`; die Anzeige entsteht
+    /// hier.
+    #[must_use]
+    pub fn executable_on_host(path: &Path) -> Self {
+        let view = PathView::of(path);
+        Self {
+            path: view.text,
+            path_hash: view.hash,
+            mangled: view.mangled,
+            line: 1,
+            kind: EXECUTABLE_ON_HOST_KIND.to_owned(),
+            tier: Tier::Regex,
+            display_prefix: String::new(),
+            value_hash: String::new(),
+        }
+    }
+
+    /// Ob dieser Fund eine Datei meldet, die der Host ausführt, statt eines
+    /// möglichen Geheimnisses.
+    #[must_use]
+    pub fn is_executable_on_host(&self) -> bool {
+        self.kind == EXECUTABLE_ON_HOST_KIND
+    }
 }
 
 /// Was ein Sandbox-Lauf im Projektverzeichnis hinterlassen hat.
@@ -275,7 +397,10 @@ pub struct SessionSummary {
     pub unprotected: Vec<String>,
     /// So viele Bytes hat der Scan gelesen.
     pub scanned_bytes: u64,
-    /// Ob ein Budget gegriffen hat — im Schnappschuss oder in dieser Liste.
+    /// Ob ein Budget gegriffen hat: im Schnappschuss, in einer der Listen
+    /// dieser Zusammenfassung oder im Fundscan
+    /// ([`SCAN_TOTAL_MAX_BYTES`]). Eine abgeschnittene Zusammenfassung darf
+    /// nie aussehen wie eine vollständige.
     pub truncated: bool,
 }
 
@@ -303,13 +428,19 @@ impl SessionSummary {
     /// Budgets [`MAX_CHANGES`] und [`MAX_SYMLINKS`] setzen
     /// [`SessionSummary::truncated`], statt die Liste wachsen zu lassen.
     ///
-    /// **Die Rückgabe sind die rohen Pfade, nicht die angezeigten.** In
+    /// **Die Rückgabe trägt die rohen Pfade, nicht die angezeigten.** In
     /// [`FileChangeRecord::path`] steht der Name, wie ein Mensch ihn sehen
     /// darf: durch [`sanitize_note`] gegangen, also ohne Steuerzeichen und mit
     /// Längendeckel. Damit lässt sich keine Datei mehr öffnen — der Name wäre
-    /// ein anderer. Wer die Dateien liest, nimmt diese Liste; sie enthält, was
-    /// neu ist oder sich geändert hat, ohne Symlinks, ohne Gelöschtes und ohne
-    /// alles über [`SCAN_MAX_BYTES`], jeweils relativ zu `/work`.
+    /// ein anderer. Wer die Dateien liest, nimmt diese Liste; sie enthält jede
+    /// gewöhnliche Datei, die neu ist oder sich geändert hat, ohne Symlinks,
+    /// ohne Verzeichnisse, ohne Gelöschtes, jeweils relativ zu `/work` und mit
+    /// ihrer Größe.
+    ///
+    /// Die Größe ist **nicht** vorsortiert: Was der Scan nicht liest,
+    /// entscheidet der Scan, und er vermerkt es an der Zeile
+    /// ([`SessionSummary::mark_unscanned`]). Eine Datei hier auszulassen hieße,
+    /// sie spurlos verschwinden zu lassen.
     ///
     /// Aus demselben Grund entsteht hier auch schon
     /// [`SymlinkEscape::fix_command`]: `root` ist das echte
@@ -323,7 +454,7 @@ impl SessionSummary {
         root: &Path,
         before: &TreeSnapshot,
         after: &TreeSnapshot,
-    ) -> Vec<PathBuf> {
+    ) -> Vec<ScanCandidate> {
         self.truncated |= before.truncated() || after.truncated();
         let unprotected: Vec<PathBuf> = self.unprotected.iter().map(PathBuf::from).collect();
         let mut candidates = Vec::new();
@@ -366,8 +497,28 @@ impl SessionSummary {
                 Some(crate::worktree::Kind::Dir)
             );
             let kind = kind_of(&change);
-            if matches!(kind, ChangeKind::Added | ChangeKind::Modified) && size <= SCAN_MAX_BYTES {
-                candidates.push(path.to_path_buf());
+            // **Nur gewöhnliche Dateien.** Ein Verzeichnis ließe sich nicht
+            // lesen, und eine benannte Röhre (`mkfifo`) ließe den Daemon im
+            // `open` hängen, bis jemand hineinschreibt — der Agent legt an,
+            // was er will. Was der Schnappschuss als `Kind::Other` gesehen
+            // hat, wird deshalb gar nicht erst zum Kandidaten.
+            //
+            // Die Größe entscheidet hier **nicht** mehr. Wer sie hier
+            // aussortierte, ließe eine Datei über [`SCAN_MAX_BYTES`] spurlos
+            // aus der Zusammenfassung fallen: kein Scan, kein Vermerk, ein
+            // Bericht, der vollständig aussieht. Der Scan entscheidet, und was
+            // er nicht liest, steht als
+            // [`FileChangeRecord::unscanned`] in seiner Zeile.
+            let is_file = matches!(
+                entry.map(|entry| &entry.kind),
+                Some(crate::worktree::Kind::File)
+            );
+            if is_file && matches!(kind, ChangeKind::Added | ChangeKind::Modified) {
+                candidates.push(ScanCandidate {
+                    path: path.to_path_buf(),
+                    size,
+                    row: self.changes.len(),
+                });
             }
             let view = PathView::of(path);
             self.changes.push(FileChangeRecord {
@@ -385,6 +536,7 @@ impl SessionSummary {
                         .find(|gap| path == *gap || path.starts_with(gap))
                         .map(|gap| gap.to_string_lossy().into_owned())
                 },
+                unscanned: None,
             });
         }
         candidates
@@ -406,6 +558,24 @@ impl SessionSummary {
             .collect();
     }
 
+    /// Vermerkt, dass der Fundscan diese Zeile nicht gelesen hat.
+    ///
+    /// `row` ist [`ScanCandidate::row`]. Der Vermerk setzt zugleich
+    /// [`SessionSummary::truncated`]: Eine Zusammenfassung, in der eine
+    /// geänderte Datei ungelesen blieb, ist nicht vollständig, und sie darf
+    /// nicht aussehen, als wäre sie es.
+    ///
+    /// **Das ist die Gegenprobe zum leisen Überspringen.** Eine Datei, die
+    /// sich nicht lesen lässt, gehört dem Agenten: Er bestimmt die Rechte an
+    /// dem, was er schreibt, und ohne diesen Vermerk verschwände sie aus dem
+    /// Geheimnis-Scan, während der Bericht vollständig aussieht.
+    pub fn mark_unscanned(&mut self, row: usize, why: ScanSkip) {
+        self.truncated = true;
+        if let Some(change) = self.changes.get_mut(row) {
+            change.unscanned = Some(why);
+        }
+    }
+
     /// Trägt einen Fund ein, solange [`MAX_FINDINGS`] es zulässt.
     pub fn add_finding(&mut self, finding: SummaryFinding) {
         if self.findings.len() >= MAX_FINDINGS {
@@ -418,78 +588,165 @@ impl SessionSummary {
     /// Die Befunde, die ein Mensch zu dieser Zusammenfassung sehen soll.
     ///
     /// `SANDBOX_022` je Symlink, dessen Ziel aus `/work` hinausführt,
-    /// `SANDBOX_023` einmal, wenn Funde in geänderten Dateien stecken,
-    /// `SANDBOX_024` einmal, wenn ein Budget gegriffen hat, `SANDBOX_025`
-    /// einmal, wenn eine Änderung unter einem Pfad liegt, über dem keine Maske
-    /// lag.
+    /// `SANDBOX_023` einmal, wenn mögliche Geheimnisse in geänderten Dateien
+    /// stecken, `SANDBOX_026` einmal, wenn der Lauf eine Datei hinterlassen
+    /// hat, die der Host ausführt, `SANDBOX_024` einmal, wenn ein Budget
+    /// gegriffen hat, `SANDBOX_025` einmal, wenn eine Änderung unter einem
+    /// Pfad liegt, über dem keine Maske lag.
+    ///
+    /// Geheimnisse und ausführbare Dateien stehen beide in
+    /// [`SessionSummary::findings`] und werden hier getrennt gezählt
+    /// ([`SummaryFinding::is_executable_on_host`]). Ein `Makefile`, das der
+    /// Agent geschrieben hat, als „mögliches Geheimnis" zu melden, wäre eine
+    /// falsche Auskunft über beide Zahlen.
     #[must_use]
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
-        let mut out = Vec::new();
-        for link in self.symlinks.iter().filter(|link| link.escapes) {
-            let mut builder = Diagnostic::builder(SANDBOX_022, Severity::Warning).why(format!(
-                "the agent created a symlink {} pointing outside the project ({}); do not follow \
-                 it",
-                link.path, link.target
-            ));
-            // Der Befehl ist beim Eintragen aus dem rohen Pfad entstanden; hier
-            // gibt es ihn nicht mehr, und es wäre der falsche Pfad.
-            if let Some(command) = link.fix_command.clone() {
-                builder = builder.fix(FixAction::CopyCommand(command));
-            }
-            out.push(builder.build());
-        }
-        // Nur die Lücken, unter denen wirklich etwas entstanden ist. Die ganze
-        // Liste aus `unprotected` wären in einem nackten Projekt fünfzehn
-        // Einträge, und daneben eine Zahl, die sich auf die Dateien bezieht:
-        // Das läse sich, als sei an fünfzehn Stellen etwas passiert.
+        let mut out = self.symlink_diagnostics();
+        out.extend(self.unprotected_diagnostic());
+        out.extend(self.secret_diagnostic());
+        out.extend(self.executable_diagnostic());
+        out.extend(self.unscanned_diagnostic());
+        out.extend(self.truncated_diagnostic());
+        out
+    }
+
+    /// `SANDBOX_022` je Symlink, dessen Ziel aus `/work` hinausführt.
+    fn symlink_diagnostics(&self) -> Vec<Diagnostic> {
+        self.symlinks
+            .iter()
+            .filter(|link| link.escapes)
+            .map(|link| {
+                let mut builder = Diagnostic::builder(SANDBOX_022, Severity::Warning).why(format!(
+                    "the agent created a symlink {} pointing outside the project ({}); do not \
+                     follow it",
+                    link.path, link.target
+                ));
+                // Der Befehl ist beim Eintragen aus dem rohen Pfad entstanden;
+                // hier gibt es ihn nicht mehr, und es wäre der falsche Pfad.
+                if let Some(command) = link.fix_command.clone() {
+                    builder = builder.fix(FixAction::CopyCommand(command));
+                }
+                builder.build()
+            })
+            .collect()
+    }
+
+    /// `SANDBOX_025`, wenn der Agent unter einem Pfad geschrieben hat, über dem
+    /// keine Maske lag.
+    ///
+    /// Genannt werden nur die Lücken, unter denen wirklich etwas entstanden
+    /// ist. Die ganze Liste aus [`SessionSummary::unprotected`] wären in einem
+    /// nackten Projekt fünfzehn Einträge, und daneben eine Zahl, die sich auf
+    /// die Dateien bezieht: Das läse sich, als sei an fünfzehn Stellen etwas
+    /// passiert.
+    fn unprotected_diagnostic(&self) -> Option<Diagnostic> {
         let written: Vec<&FileChangeRecord> = self
             .changes
             .iter()
             .filter(|change| change.unprotected_by.is_some())
             .filter(|change| !matches!(change.kind, ChangeKind::Removed))
             .collect();
-        if let Some(first) = written.first() {
-            let mut hit: Vec<&str> = written
-                .iter()
-                .filter_map(|change| change.unprotected_by.as_deref())
-                .collect();
-            hit.sort_unstable();
-            hit.dedup();
-            out.push(
-                Diagnostic::builder(SANDBOX_025, Severity::Warning)
-                    .why(format!(
-                        "the agent wrote {} file(s) below {}, which this profile masks but which \
-                         did not exist in the project, so nothing was mounted over them; the first \
-                         is {}. Read those before the next commit: the host runs what lies there.",
-                        written.len(),
-                        hit.join(", "),
-                        first.path
-                    ))
-                    .build(),
-            );
-        }
-        if !self.findings.is_empty() {
-            out.push(
-                Diagnostic::builder(SANDBOX_023, Severity::Warning)
-                    .why(format!(
-                        "{} potential secret(s) were written into the project during this session",
-                        self.findings.len()
-                    ))
-                    .build(),
-            );
-        }
-        if self.truncated {
-            out.push(
-                Diagnostic::builder(SANDBOX_024, Severity::Info)
-                    .why(
-                        "the snapshot of the project directory hit a budget and is incomplete; \
-                         the summary shows what fits, not everything that changed"
-                            .to_owned(),
-                    )
-                    .build(),
-            );
-        }
-        out
+        let first = written.first()?;
+        let mut hit: Vec<&str> = written
+            .iter()
+            .filter_map(|change| change.unprotected_by.as_deref())
+            .collect();
+        hit.sort_unstable();
+        hit.dedup();
+        Some(
+            Diagnostic::builder(SANDBOX_025, Severity::Warning)
+                .why(format!(
+                    "the agent wrote {} file(s) below {}, which this profile masks but which did \
+                     not exist in the project, so nothing was mounted over them; the first is {}. \
+                     Read those before the next commit: the host runs what lies there.",
+                    written.len(),
+                    hit.join(", "),
+                    first.path
+                ))
+                .build(),
+        )
+    }
+
+    /// `SANDBOX_023`, wenn mögliche Geheimnisse in geänderten Dateien stecken.
+    fn secret_diagnostic(&self) -> Option<Diagnostic> {
+        let secrets = self
+            .findings
+            .iter()
+            .filter(|finding| !finding.is_executable_on_host())
+            .count();
+        (secrets > 0).then(|| {
+            Diagnostic::builder(SANDBOX_023, Severity::Warning)
+                .why(format!(
+                    "{secrets} potential secret(s) were written into the project during this \
+                     session"
+                ))
+                .build()
+        })
+    }
+
+    /// `SANDBOX_026`, wenn der Lauf eine Datei hinterlassen hat, die dieser
+    /// Rechner von selbst ausführt.
+    fn executable_diagnostic(&self) -> Option<Diagnostic> {
+        let executable: Vec<&SummaryFinding> = self
+            .findings
+            .iter()
+            .filter(|finding| finding.is_executable_on_host())
+            .collect();
+        let first = executable.first()?;
+        Some(
+            Diagnostic::builder(SANDBOX_026, Severity::Warning)
+                .why(format!(
+                    "the agent wrote {} file(s) that this machine runs on its own — at the next \
+                     commit, build or install; the first is {}. Read them before you work in the \
+                     project again.",
+                    executable.len(),
+                    first.path
+                ))
+                .build(),
+        )
+    }
+
+    /// `SANDBOX_028`, wenn der Fundscan in eine geänderte Datei nicht gesehen
+    /// hat.
+    ///
+    /// Das ist etwas anderes als eine abgeschnittene Liste: Dort fehlt eine
+    /// Zeile, hier fehlt der Blick in eine Datei, die der Agent geändert hat.
+    /// `SANDBOX_024` sagt „nicht alles", `SANDBOX_028` sagt „in diesen nicht
+    /// nachgesehen" — und nur die zweite Aussage verhindert, dass ein Mensch
+    /// „kein Fund" als „sauber" liest.
+    fn unscanned_diagnostic(&self) -> Option<Diagnostic> {
+        let unscanned: Vec<&FileChangeRecord> = self
+            .changes
+            .iter()
+            .filter(|change| change.unscanned.is_some())
+            .collect();
+        let first = unscanned.first()?;
+        let why = first.unscanned?;
+        Some(
+            Diagnostic::builder(SANDBOX_028, Severity::Warning)
+                .why(format!(
+                    "{} changed file(s) were not searched for secrets; the first is {} ({}). \
+                     Nothing was found in them because nothing was looked at.",
+                    unscanned.len(),
+                    first.path,
+                    why.why()
+                ))
+                .build(),
+        )
+    }
+
+    /// `SANDBOX_024`, wenn irgendein Budget gegriffen hat.
+    fn truncated_diagnostic(&self) -> Option<Diagnostic> {
+        self.truncated.then(|| {
+            Diagnostic::builder(SANDBOX_024, Severity::Info)
+                .why(
+                    "a budget cut this session short: the walk over the project directory, one of \
+                     the lists here, or the scan for secrets stopped before the end. What you see \
+                     is what fits, not everything that changed"
+                        .to_owned(),
+                )
+                .build()
+        })
     }
 }
 
@@ -1193,27 +1450,34 @@ mod tests {
 
         let mut summary = summary();
         let candidates = summary.add_changes(root, &before, &after);
+        let named = |name: &str| {
+            candidates
+                .iter()
+                .any(|candidate| candidate.path == Path::new(name))
+        };
 
+        assert!(named(hostile), "{candidates:?}");
+        assert!(named("changed.txt"), "{candidates:?}");
         assert!(
-            candidates.contains(&PathBuf::from(hostile)),
-            "{candidates:?}"
-        );
-        assert!(
-            candidates.contains(&PathBuf::from("changed.txt")),
-            "{candidates:?}"
-        );
-        assert!(
-            !candidates.contains(&PathBuf::from("gone.txt")),
+            !named("gone.txt"),
             "a deleted file has nothing to scan: {candidates:?}"
         );
+        assert!(!named("link"), "a symlink is never opened: {candidates:?}");
         assert!(
-            !candidates.contains(&PathBuf::from("link")),
-            "a symlink is never opened: {candidates:?}"
-        );
-        assert!(
-            !candidates.contains(&PathBuf::from("keep.txt")),
+            !named("keep.txt"),
             "an untouched file has nothing new in it: {candidates:?}"
         );
+
+        // Jeder Kandidat zeigt auf seine eigene Zeile: Ohne das könnte der
+        // Scan nicht vermerken, was er nicht gelesen hat.
+        for candidate in &candidates {
+            let row = summary
+                .changes
+                .get(candidate.row)
+                .expect("every candidate points at a row of its own");
+            assert_eq!(row.size, candidate.size, "{candidate:?} / {row:?}");
+            assert!(matches!(row.kind, ChangeKind::Added | ChangeKind::Modified));
+        }
 
         // Und der angezeigte Name ist ein anderer als der auf der Platte.
         let shown = summary

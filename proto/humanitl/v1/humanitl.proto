@@ -42,6 +42,11 @@ service Humanitl {
   rpc DiscoverLlm(DiscoverRequest) returns (stream DiscoverResult);
   // Prueft genau einen Endpunkt, host-seitig, nur lesend (HUM-039).
   rpc ProbeLlm(ProbeLlmRequest) returns (ProbeLlmResponse);
+  // Was ein Sandbox-Lauf im Projektverzeichnis hinterlassen hat (HUM-043).
+  // `Sandbox` ist ein Strom ueber die laufende Sandbox; diese RPC liefert die
+  // gespeicherte Zusammenfassung eines Laufs nach seiner Kennung, auch wenn er
+  // laengst beendet ist.
+  rpc GetSessionSummary(SessionSummaryRef) returns (SessionSummary);
 }
 
 // ---------- Info ----------
@@ -917,6 +922,11 @@ message SandboxEvent {
     OutputChunk output = 6;
     // Der Agent ist beendet.
     Exit exit = 7;
+    // Was der Lauf im Projektverzeichnis hinterlassen hat (HUM-043). Kommt
+    // einmal, nachdem der Agent beendet ist, ohne dass ein Client danach
+    // fragen muss. Dieselbe Nachricht liefert `GetSessionSummary` spaeter
+    // wieder; sie steht in der Aufzeichnung.
+    SessionSummary summary = 8;
   }
 
   // Ein Stueck Ausgabe des Agenten.
@@ -969,6 +979,153 @@ message SandboxEvent {
     google.protobuf.Timestamp at = 1;
     string line = 2;
   }
+}
+
+// ---------- Zusammenfassung eines Sandbox-Laufs ----------
+
+// Verweis auf die Zusammenfassung eines Sandbox-Laufs.
+//
+// Der Schluessel ist die Sandbox-Kennung allein: Sie ist eine UUIDv7 und damit
+// fuer sich eindeutig, und sie ist der eine Wert, den `humanitl sessions
+// summary <id>` zur Hand hat. Die Sitzung steht in der Antwort.
+message SessionSummaryRef {
+  string sandbox_id = 1;
+}
+
+// Was mit einer Datei im Projekt geschehen ist.
+enum FileChangeKind {
+  FILE_CHANGE_KIND_UNSPECIFIED = 0;
+  FILE_CHANGE_KIND_ADDED = 1;
+  FILE_CHANGE_KIND_MODIFIED = 2;
+  FILE_CHANGE_KIND_REMOVED = 3;
+  FILE_CHANGE_KIND_SYMLINK_ADDED = 4;
+  FILE_CHANGE_KIND_MODE_CHANGED = 5;
+}
+
+// Eine Zeile der Tabelle „Changed files".
+//
+// **Jeder Pfad in dieser Nachricht ist Anzeige und nie wieder ein Pfad.** Die
+// Namen schreibt der Agent; der Daemon schickt sie durch
+// `humanitl_core::block::sanitize_note`, bevor sie auf die Leitung gehen. Wer
+// mit `path` eine Datei oeffnet, oeffnet eine andere oder keine: Zwei
+// verschiedene Namen koennen dieselbe Anzeige ergeben.
+message FileChange {
+  // Der Pfad relativ zum Projektverzeichnis, gesaeubert.
+  string path = 1;
+  // Die ersten 16 Hex-Zeichen des SHA-256 ueber die rohen Bytes des Pfades.
+  // Er macht zwei Zeilen unterscheidbar, deren Anzeige gleich aussieht.
+  string path_hash = 2;
+  // Ob die Anzeige den echten Namen veraendert hat.
+  bool mangled = 3;
+  FileChangeKind kind = 4;
+  // Die Groesse nach der Aenderung, 0 fuer Geloeschtes.
+  uint64 size = 5;
+  // Ob der Pfad zu den Git-Metadaten gehoert (`.git/index` und die Refs, nicht
+  // `.git/hooks`). Die Oberflaeche fasst sie zusammen.
+  bool git_metadata = 6;
+  // Der Eintrag aus `SessionSummary.unprotected`, unter dem diese Aenderung
+  // liegt; leer, wenn eine Maske darueber lag oder keine vorgesehen war.
+  string unprotected_by = 7;
+  // Warum der Fundscan in diese Datei nicht gesehen hat.
+  //
+  // `SCAN_SKIP_UNSPECIFIED` heisst: gelesen, oder es gab nichts zu lesen (ein
+  // Verzeichnis, ein Verweis, etwas Geloeschtes, eine Rechte-Aenderung). Jeder
+  // andere Wert heisst: In dieser Datei wurde **nicht** gesucht. Ohne das Feld
+  // saehe eine Zusammenfassung, in der eine 5-MiB-Datei uebersprungen wurde,
+  // genauso aus wie eine, in der nichts gefunden wurde.
+  ScanSkip unscanned = 8;
+}
+
+// Warum der Fundscan eine geaenderte Datei nicht gelesen hat.
+enum ScanSkip {
+  SCAN_SKIP_UNSPECIFIED = 0;
+  // Groesser, als der Scan liest (4 MiB).
+  SCAN_SKIP_TOO_LARGE = 1;
+  // Nicht lesbar: Rechte, verschwunden, kein gewoehnlicher Inhalt mehr.
+  SCAN_SKIP_UNREADABLE = 2;
+  // Das Byte-Budget des Laufs reichte fuer sie nicht mehr.
+  SCAN_SKIP_BUDGET = 3;
+}
+
+// Ein Symlink, den der Lauf angelegt hat.
+message SymlinkEscape {
+  // Der Verweis, relativ zum Projektverzeichnis, gesaeubert.
+  string path = 1;
+  string path_hash = 2;
+  bool mangled = 3;
+  // Das Ziel, woertlich wie es im Verweis steht, gesaeubert und nie aufgeloest.
+  string target = 4;
+  // Ob das Ziel aus dem Projektverzeichnis hinausfuehrt.
+  bool escapes = 5;
+  // Ein Befehl fuer die Zwischenablage, aus dem **rohen** Host-Pfad gebaut;
+  // leer, wenn sich der Pfad nicht woertlich zitieren laesst. Er entsteht im
+  // Daemon und nie aus `path`: Aus der Anzeige gebaut zeigte er auf eine
+  // andere Datei.
+  string fix_command = 6;
+}
+
+// Ein Fund in einer Datei, die dieser Lauf geaendert hat.
+//
+// Nicht `Finding`: Dort liegt ein Fund in einer Anfrage (`FindingLocation` mit
+// Header, Query, Body), hier in einer Datei mit Pfad und Zeile. Der Wert
+// bleibt in der Datei; hier steht nur, was `humanitl_core::Finding` hergibt.
+message SummaryFinding {
+  // Die Datei relativ zum Projektverzeichnis, gesaeubert.
+  string path = 1;
+  string path_hash = 2;
+  bool mangled = 3;
+  // Die Zeile, 1-basiert. Der Daemon rechnet sie; die Oberflaeche hat die
+  // Datei nicht.
+  uint32 line = 4;
+  // Die Art, zum Beispiel `api_key:aws` oder `custom:executable-on-host`.
+  //
+  // Die Schreibweise ist die Anzeige von `humanitl_core::FindingKind` mit
+  // Doppelpunkt, nicht die Punktform von `Finding.kind`: Diese Zeichenkette
+  // wird als Teil der Zusammenfassung in der Aufzeichnung abgelegt, und der
+  // gespeicherte Text ist derselbe, den die RPC ausgibt.
+  string kind = 5;
+  FindingTier tier = 6;
+  // Hoechstens acht Zeichen des Originals, danach `…`. Leer, wo es keinen
+  // gefundenen Wert gibt.
+  string display_prefix = 7;
+  // SHA-256 des gefundenen Werts als Hex. Leer, wo es keinen gibt.
+  string value_hash = 8;
+}
+
+// Was ein Sandbox-Lauf im Projektverzeichnis hinterlassen hat (HUM-043).
+//
+// `/work` mit Schreibrecht ist der erste der beiden offenen Kanaele
+// (BACKLOG.md 4.2). Er wird nicht geschlossen, sondern beobachtet: ein
+// Schnappschuss vor dem Start, einer nach dem Ende, und diese Nachricht ist
+// ihr Unterschied.
+message SessionSummary {
+  string session_id = 1;
+  string sandbox_id = 2;
+  // Wann die Zusammenfassung entstand.
+  google.protobuf.Timestamp created = 3;
+  // Das Projektverzeichnis auf dem Host, aus der Konfiguration und nie aus dem
+  // Baum. „Open folder" nimmt diesen Pfad.
+  string work_dir = 4;
+  // Die Aenderungen, sortiert nach Pfad.
+  repeated FileChange changes = 5;
+  // Die Funde in geaenderten Dateien.
+  repeated SummaryFinding findings = 6;
+  // Die Symlinks, die dieser Lauf angelegt hat.
+  repeated SymlinkEscape symlinks = 7;
+  // Die Pfade, ueber denen in diesem Lauf keine Maske und kein `tmpfs` lag,
+  // weil es sie im Projekt nicht gab. Sie kommen aus dem Profil, nicht vom
+  // Agenten.
+  repeated string unprotected = 8;
+  // So viele Bytes hat der Fundscan gelesen.
+  uint64 scanned_bytes = 9;
+  // Ob ein Budget gegriffen hat: im Schnappschuss, in einer der Listen oder im
+  // Scan. Eine abgeschnittene Zusammenfassung darf nie aussehen wie eine
+  // vollstaendige.
+  bool truncated = 10;
+  // Die Befunde zu dieser Zusammenfassung (`SANDBOX_022` bis `SANDBOX_026`).
+  // Sie stehen mit in der Nachricht, damit `GetSessionSummary` dieselbe
+  // Auskunft gibt wie das Ereignis am Ende des Laufs.
+  repeated Diagnostic diagnostics = 11;
 }
 
 // ---------- Terminal ----------

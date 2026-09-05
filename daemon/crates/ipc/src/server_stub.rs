@@ -142,6 +142,18 @@ pub trait DaemonApi: Send + Sync + 'static {
         &self,
         request: v1::ProbeLlmRequest,
     ) -> Result<v1::ProbeLlmResponse, Diagnostic>;
+
+    /// Was ein Sandbox-Lauf im Projektverzeichnis hinterlassen hat (HUM-043).
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`] mit `IPC_005`, wenn die Kennung keine ist,
+    /// `RECORDER_001`, wenn dieser Daemon ohne Aufzeichnung läuft, und
+    /// `SANDBOX_027`, wenn zu dem Lauf keine Zusammenfassung vorliegt.
+    async fn get_session_summary(
+        &self,
+        request: v1::SessionSummaryRef,
+    ) -> Result<v1::SessionSummary, Diagnostic>;
 }
 
 /// Der tonic-Dienst über einem beliebigen [`DaemonApi`].
@@ -231,7 +243,26 @@ pub fn diagnostic_to_status(diagnostic: &Diagnostic) -> Status {
 /// String stünde dem Client nur als Textzeile zur Verfügung.
 #[must_use]
 pub fn get_flow_status(diagnostic: &Diagnostic) -> Status {
-    if diagnostic.code != codes::IPC_003 {
+    as_not_found(diagnostic, codes::IPC_003)
+}
+
+/// Übersetzt den Befund eines `GetSessionSummary` in seinen gRPC-Status.
+///
+/// Dieselbe Ausnahme aus demselben Grund wie [`get_flow_status`]:
+/// `SANDBOX_027` heißt „zu diesem Lauf gibt es keine Zusammenfassung", und das
+/// ist `NOT_FOUND`. Jeder andere Befund — eine Aufzeichnung, die nicht liest,
+/// eine Zeile, die sich nicht lesen lässt — geht den gewöhnlichen Weg.
+#[must_use]
+pub fn missing_status(diagnostic: &Diagnostic) -> Status {
+    as_not_found(diagnostic, codes::SANDBOX_027)
+}
+
+/// `NOT_FOUND`, wenn der Befund genau `code` ist, sonst [`grpc_code`].
+///
+/// Die beiden Ausnahmen stehen hier zusammen und nicht zweimal: Ein zweiter
+/// Aufbau desselben `Status` liefe irgendwann auseinander.
+fn as_not_found(diagnostic: &Diagnostic, code: DiagnosticCode) -> Status {
+    if diagnostic.code != code {
         return diagnostic_to_status(diagnostic);
     }
     let details = Bytes::from(diagnostic_to_proto(diagnostic).encode_to_vec());
@@ -458,6 +489,21 @@ impl<T: DaemonApi> v1::humanitl_server::Humanitl for DaemonService<T> {
             .await
             .map(Response::new)
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
+    }
+
+    async fn get_session_summary(
+        &self,
+        request: Request<v1::SessionSummaryRef>,
+    ) -> Result<Response<v1::SessionSummary>, Status> {
+        self.check_token(&request)?;
+        self.api
+            .get_session_summary(request.into_inner())
+            .await
+            .map(Response::new)
+            // Derselbe `NOT_FOUND` wie beim echten Dienst: Ein Lauf, zu dem es
+            // keine Zusammenfassung gibt, ist nichts anderes, nur weil die
+            // Antwort aus dem Fake kommt.
+            .map_err(|diagnostic| missing_status(&diagnostic))
     }
 }
 

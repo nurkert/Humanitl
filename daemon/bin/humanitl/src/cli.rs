@@ -134,6 +134,13 @@ pub enum Cmd {
         cmd: FlowsCmd,
     },
 
+    /// What the agent left in the project during a sandbox run.
+    Sessions {
+        /// Was mit den Läufen geschehen soll.
+        #[command(subcommand)]
+        cmd: SessionsCmd,
+    },
+
     /// Verify and export the audit chain (arrives in HUM-070).
     Audit(PlaceholderArgs),
 
@@ -214,6 +221,26 @@ pub enum SandboxCmd {
         /// Watch without sending anything.
         #[arg(long)]
         read_only: bool,
+    },
+}
+
+/// Die Unterkommandos von `humanitl sessions`.
+#[derive(Debug, Subcommand)]
+pub enum SessionsCmd {
+    /// Show what a sandbox run changed in the project.
+    ///
+    /// Changed files, possible secrets and symlinks that leave the project.
+    /// ID is the sandbox id from the log line of the run or from
+    /// `humanitl sandbox` in the window; it is the only value this command
+    /// needs.
+    ///
+    /// Every path comes from the agent and is shown, never reopened: two
+    /// different names can look the same, so each row carries the first 16 hex
+    /// characters of the sha256 of the real name.
+    Summary {
+        /// Die Kennung des Sandbox-Laufs.
+        #[arg(value_name = "ID")]
+        id: String,
     },
 }
 
