@@ -2774,7 +2774,7 @@ Die Adresse und der Vorschlag stehen im `Diagnostic` und in `resolved_ip`, **nie
 - [x] Adresse und Vorschlag erreichen den Agenten nicht.
 - [x] ADR-006 nennt die richtige Nummer.
 - [x] `docs/DIAGNOSTICS.md` kommt aus dem Generatorlauf.
-- [ ] `make check`, clippy mit `-D warnings` und `cargo fmt --all -- --check` grün.
+- [x] `make check`, clippy mit `-D warnings` und `cargo fmt --all -- --check` grün.
 
 ### Fallstricke
 - `PROXY_004` und `PROXY_006` sind frei. Eine Lücke nachzubelegen macht die Registry schwerer lesbar; die neue Nummer kommt ans Ende des Bereichs.
