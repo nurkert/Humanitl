@@ -2888,6 +2888,122 @@ ARB-Schlüssel, ans Ende beider Dateien:
 - [ ] `grep -c '"interceptDiagnosticTitle"\|"interceptDiagnosticDismiss"\|"setupFixCopyExport"' app/l10n/app_en.arb app/l10n/app_de.arb` ergibt je 3; `make flutter-codegen` ohne Warnung.
 - [ ] `cd app && flutter test test/features/intercept test/core/ipc test/core/ui test/goldens/intercept_golden_test.dart` grün; `make check` grün.
 
+### Stand (2026-09-05): umgesetzt, mit vier Abweichungen
+
+Gebaut ist alles, was das Ziel nennt: `FlowEvent.diagnostic` trägt die
+`flowId`, `convert.dart` behält sie aus `flow_diagnostic` (Feld 16) und lässt
+sie für Feld 12 null, `diagnosticsProvider` sammelt die Befunde der Sitzung,
+und `DiagnosticStrip` zeichnet sie über der Warteschlange, jede Karte einzeln
+wegklickbar. `FixControl` bietet für `SetEnv` das Abzeichen und darunter die
+Kopierzeile `export KEY=VALUE`.
+
+**Acht Abweichungen von der Spezifikation, die dauerhaft gelten:**
+
+1. **Ein Befehl entsteht nur, wenn er beweisbar genau das ist, was er zu sein
+   vorgibt.** Die Kopierzeile für `SetEnv` wird nicht interpoliert, sondern in
+   `app/lib/core/ui/shell_command.dart` gebaut, nach derselben Regel, die der
+   Daemon für seine eigenen Kommandozeilen anwendet
+   (`humanitl_sandbox::shell_quote`). Der Wert steht in einfachen
+   Anführungszeichen, ein inneres `'` als `'\''`. Zwei Fälle ergeben gar
+   keinen Befehl, sondern einen Satz mit dem Grund: ein `key`, der nicht
+   `^[A-Za-z_][A-Za-z0-9_]*$` erfüllt, und ein `value` mit `\r` oder `\n`.
+   Kein Ersatzschlüssel, kein Platzhalter — ein Knopf, der etwas anderes
+   kopiert, als er anzeigt, ist schlimmer als kein Knopf. Die Bereinigung der
+   Anzeige deckt das nicht ab: `sanitizeBodyText` lässt Tabulator,
+   Zeilenvorschub und Wagenrücklauf ausdrücklich durch, was für eine
+   Rumpf-Ansicht richtig und für eine Shell-Zeile falsch ist.
+2. **Der Streifen hat eine Obergrenze und baut nur, was zu sehen ist.**
+   `maxSessionDiagnostics` ist 200, der älteste Eintrag fällt heraus, und
+   `Diagnostics.dropped` zählt den Verlust, den der Streifen hinschreibt.
+   Grund: Die Entstörung in `tls_observe.rs` deckt nur `TLS_001..003`.
+   `LLM_005` entsteht je durchgereichter Anfrage mit Funden
+   (`pipeline.rs::warn_about_findings`), `PROXY_002` je widersprüchlicher
+   Zieladresse und `PROXY_005` je abgelehntem Übergang
+   (`handler.rs::publish_invalid_transition`) — ohne jedes Fenster und alle
+   drei vom Agenten auslösbar. Gezeichnet wird über `ListView.builder`; eine
+   `Column` im `SingleChildScrollView` hätte alle 200 Karten in jedem Frame
+   gebaut und über `IntrinsicHeight` vermessen.
+3. **Der fremde Text wird an einer Grenze bereinigt.** Der `why`-Satz des
+   Daemons trägt Material von außen: den Hostnamen, mit dem der Handschlag
+   scheiterte, und den Fehlertext der Zertifikatsprüfung. Der Provider schickt
+   deshalb `code`, `title`, `why`, `docsUrl` und die Zeichenketten der
+   `FixAction` durch `sanitizeBodyText` aus
+   `features/intercept/body/body_span.dart` — dieselbe Bereinigung, die die
+   Rumpf-Ansichten benutzen, und keine zweite. Ohne sie liest ein Mensch auf
+   der Karte etwas anderes, als in seiner Zwischenablage landet. Die
+   Spezifikation nennt diesen Punkt nicht; die Karte zeigt Text von außen und
+   fällt damit unter dieselbe Regel wie die Bitte des Agenten (HUM-072).
+4. **`FixControl._copyRow` hat eine zweite Anordnung, `reflow`.** In der
+   Warteschlange steht das Control ab `HSize.paneMinQueue`, also 280 px; die
+   Zeile aus Knopf und Befehl lief dort um 0,36 px über den Rand. Mit `reflow`
+   rutscht der Befehl unter den Knopf, statt überzulaufen, und wird nie mit
+   einer Ellipse gekürzt: Was jemand kopieren soll, soll er auch lesen können
+   (`docs/UX.md` 6). Nur der `SetEnv`-Zweig setzt das Flag. Die alte
+   Anordnung bleibt für `CopyCommand` und `OpenUrl` unverändert, weil sie auf
+   den breiten Karten des Setup-Bildschirms, der Sandbox und der Mitteilung
+   des Trays steht — dieselbe Anordnung für alle hätte
+   `sandbox_header_failed_dark` und `_light` um 1,10 Prozent verschoben, und
+   die Goldens dieser beiden Bildschirme lassen sich auf diesem Rechner nicht
+   verlässlich neu abnehmen: `isolation_panel_*` und `sandbox_header_running_*`
+   weichen hier auch ohne jede Änderung um 0,02 Prozent ab.
+5. **Die Karte nimmt die Breite ihres Panes, und beide Streifen teilen sich
+   ein Höhenbudget.** `HDiagnosticCard` hat eine feste
+   Vorgabebreite von 560 px, die in der Warteschlange über den Rand liefe. Die
+   Karte steht deshalb in einem `Expanded`, das die Vorgabe überschreibt.
+   `interceptStripsMaxHeight` ist 420 und gilt für `AgentAskStrip` und
+   `DiagnosticStrip` zusammen. Verteilt wird es vom Layout und nicht gerechnet:
+   `queue_pane.dart` setzt beide Streifen in eine gemeinsame `ConstrainedBox`,
+   die Bitten des Agenten als festes Kind, den Befund-Streifen als einziges
+   `Flexible`. Eine Rechnung mit der Schranke des anderen Streifens zöge auch
+   dann volle 220 Pixel ab, wenn dort eine 60 Pixel hohe Bitte steht, und der
+   Rest verfiele. Mit je eigener Schranke schöben beide zusammen die
+   Warteschlange auf einem 800 Pixel hohen Schirm fast heraus.
+7. **Die Einblendung läuft mit `AnimationBehavior.preserve` und verlässt den
+   Baum.** Der Linux-Embedder meldet `disableAnimations`, und die Vorgabe
+   skalierte die 180 Millisekunden auf neun (`docs/UX.md` 2.10, Vorbilder in
+   `h_animated_fill.dart`, `h_pill.dart`, `hold_to_confirm.dart`,
+   `h_collapsible.dart`). Der `FadeTransition` nimmt sich nach dem Lauf selbst
+   aus dem Baum, sonst kostete er seine Schicht in jedem Frame für immer
+   (`docs/UX.md` 7); der Streifen steht in einer `RepaintBoundary`.
+8. **`DiagnosticStripState` ist öffentlich.** Allein wegen `pendingArrivals`:
+   Die Menge der offenen Ankünfte wächst sonst unbemerkt mit dem Ereignisstrom
+   mit, weil `ListView.builder` nur den Ausschnitt baut und eine Id nur beim
+   Bauen wieder herausfällt. Sie wird bei jeder Änderung auf die Einträge
+   zurückgeschnitten, die es noch gibt, und der Test misst die Menge statt der
+   gebauten Karten — an den gebauten Karten wäre das Leck nicht zu sehen.
+6. **Der Schweregrad steht einmal in `core/ui`.** `severityLabel` und
+   `severityColor` liegen in `app/lib/core/ui/diagnostic_severity.dart`;
+   `attention_notice.dart` benutzt sie statt seiner privaten Kopien. Sechs
+   weitere Kopien stehen noch in `setup_screen.dart`, `action_bar.dart`,
+   `history_filter_bar.dart`, `features/rules/severity.dart`,
+   `sandbox_screen.dart` und `isolation_panel.dart`; sie sind hier nicht
+   angefasst worden, weil an diesen Dateien andere Issues arbeiten.
+
+**Offen und ausdrücklich nicht gedeckt:**
+
+- **Der Befund hängt noch nicht sichtbar am Fluss.** Die `flowId` reist bis in
+  `SessionDiagnostic`, aber die Karte zeigt sie nicht und öffnet keine
+  Flow-Details: Das ist die Oberflächen-Hälfte von HUM-039, die denselben
+  Provider und dieselbe Kennung benutzt. Bis dahin steht ein Befund mit Fluss
+  am selben Ort wie einer ohne, nämlich im Streifen über der Warteschlange.
+  Der Ort ist bewusst gewählt: Ein Befund hält nichts an und darf keine Zeile
+  in der Liste bekommen, die jemand für eine angehaltene Anfrage halten
+  könnte, und ein Befund ohne Kennung hätte in der Liste ohnehin keinen Platz.
+- **Der Absatz in `backlog/CONVENTIONS.md` 4.15 fehlt.** Die Spezifikation
+  verlangt ihn; die Datei stand während dieser Umsetzung nicht zur Verfügung.
+  Am 2026-09-05 trugen vier der sieben Arbeitsbäume unter
+  `.claude/worktrees/` je eine eigene, veränderte Fassung von
+  `backlog/CONVENTIONS.md`; nach CLAUDE.md „Gemeinsam genutzte Dateien" wird
+  eine strukturelle Änderung daran gemeldet statt geschrieben. Die dauerhaften
+  Abweichungen stehen deshalb hier und gehören beim nächsten Anfassen von 4.15
+  dorthin übertragen.
+- **Kein Lauf gegen einen echten Daemon.** Das dritte und vierte
+  Akzeptanzkriterium (`flutter run -d linux --dart-define=HUMANITL_FAKE=default`
+  und `curl --cacert /dev/null https://example.com` in der Sandbox) sind
+  Blickprüfungen und in dieser Sitzung nicht gefahren worden. Was sich ohne
+  Bildschirm prüfen lässt, prüfen `tls_card_shows_code_why_and_export_command`
+  und `set_env_offers_the_export_command`.
+
 ### Fallstricke
 - Das neue Feld an `FlowEvent.diagnostic` berührt drei Aufrufer, die die Variante heute mit `||`-Mustern verwerfen (`flows.dart:141`, `history_page.dart:560`, `fake_daemon_client.dart:1130`), und den erschöpfenden `switch` in `flow_event.dart:130-141`. Sie bleiben, wie sie sind; nur der Getter liefert die Id jetzt mit. `convert.dart` und `fake_daemon_client.dart` sind geteilte Dateien (CLAUDE.md).
 - Überschneidung mit HUM-039: dessen Oberflächen-Hälfte („`LLM_005` erscheint im Feed als amber Zeile, öffnet die Flow-Details", `backlog/sprint-3.md:570`) braucht denselben Provider und dieselbe `flowId`. Wer zuerst baut, baut beides; das andere Issue nutzt es und baut es nicht ein zweites Mal. Die amberfarbene Zeile und der Sprung in die Flow-Details bleiben bei HUM-039.
