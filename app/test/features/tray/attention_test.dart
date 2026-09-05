@@ -31,9 +31,14 @@ void main() {
       );
       // HUM-034 nennt fuer `ui.notifications` die Stufe `basic`; das Register
       // nennt `advanced` und gewinnt (CONVENTIONS 4.19). Und die
-      // Spezifikation verlangt, dass die Beschreibung von `ui.sound` die
-      // fehlende Wirkung im MVP benennt.
-      expect(config, contains(RegExp(r'`ui\.sound`.*Im MVP ohne Wirkung')));
+      // Spezifikation verlangt, dass die Dokumentation die fehlende Wirkung
+      // von `ui.sound` benennt. Seit HUM-101 steht das nicht mehr in der
+      // Beschreibung, sondern in einer eigenen Spalte, die das Leser-Register
+      // fuellt: `offen (HUM-xxx)` heisst, dass kein Code den Schluessel liest,
+      // und nennt das Issue, das ihn wirksam macht. Die Zusicherung prueft
+      // deshalb die Spalte und nicht mehr den Satz; sie muss angepasst werden,
+      // sobald dieses Issue die Zeile auf `ja` dreht.
+      expect(config, contains(RegExp(r'`ui\.sound`.*\| offen \(HUM-[0-9]+\) \|')));
     });
 
     test('the_provider_names_the_real_reason', () {
