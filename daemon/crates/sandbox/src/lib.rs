@@ -29,6 +29,8 @@
 //!   Symlink-Erkennung und das sichere Öffnen mit `openat2` (HUM-043)
 //! - [`summary`] was ein Sandbox-Lauf im Projekt hinterlassen hat, in der Form,
 //!   die ein Mensch zu sehen bekommt (HUM-043)
+//! - [`doctor`] die Vorbedingungen dieser Maschine, eine Zeile je Prüfung mit
+//!   `ok`, `warn` oder `fail` und einem Befund (HUM-075)
 //!
 //! Wer ein Profil startet und nicht nur anzeigt, lädt es mit
 //! [`SandboxProfile::load_validated`] gegen eine [`MountPolicy`] aus
@@ -79,6 +81,7 @@ pub mod agent;
 pub mod bridge_env;
 pub mod bwrap;
 pub mod bwrap_args;
+pub mod doctor;
 pub mod handle;
 pub mod launcher;
 pub mod profile;

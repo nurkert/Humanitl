@@ -150,6 +150,29 @@ pub enum Cmd {
         #[command(subcommand)]
         cmd: DaemonCmd,
     },
+
+    /// Check this machine: one line per precondition, with a fix.
+    Doctor(DoctorArgs),
+}
+
+/// Die Argumente von `humanitl doctor`.
+///
+/// `--json` steht schon global bereit; hier bleibt der eine Schalter, der eine
+/// Verbindung ins Netz auslöst.
+#[derive(Debug, Args)]
+pub struct DoctorArgs {
+    // Der Schalter heißt nicht `--probe` und nicht `--llm`: `--llm` ist nach
+    // [`SHORT_FLAGS`] der Zweitname von `--llm-endpoint` und **setzt** die
+    // Adresse, statt sie zu prüfen. Der Text des Doc-Kommentars ist der
+    // Hilfetext von `clap` und deshalb englisch (CONVENTIONS.md 3.9).
+    /// Contact llm.endpoint as part of the report; without this, doctor opens
+    /// no connection at all.
+    ///
+    /// The endpoint is named on stderr before it is contacted. The probe runs
+    /// in the daemon (ProbeLlm): two GET requests, /api/tags then /v1/models,
+    /// no credentials, no redirects.
+    #[arg(long)]
+    pub probe_llm: bool,
 }
 
 /// Die Argumente von `humanitl run`.

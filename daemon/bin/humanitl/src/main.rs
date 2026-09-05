@@ -118,6 +118,7 @@ async fn run(ctx: &Context, command: Cmd) -> Result<u8, Failure> {
     match command {
         Cmd::Sandbox { cmd } => cmd::sandbox::run(ctx, &cmd).await,
         Cmd::Daemon { cmd } => cmd::daemon::run(ctx, &cmd).await,
+        Cmd::Doctor(args) => cmd::doctor::run(ctx, &args).await,
         Cmd::Flows { cmd } => cmd::flows::run(ctx, &cmd).await,
         Cmd::Rules { cmd } => cmd::rules::run(ctx, &cmd).await,
         Cmd::Config { cmd } => cmd::config::run(ctx, &cmd),

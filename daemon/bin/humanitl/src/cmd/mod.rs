@@ -15,6 +15,7 @@
 pub mod attach;
 pub mod config;
 pub mod daemon;
+pub mod doctor;
 pub mod flows;
 pub mod rules;
 pub mod run;

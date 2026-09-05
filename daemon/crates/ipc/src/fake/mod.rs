@@ -343,15 +343,30 @@ impl DaemonApi for FakeDaemon {
         Ok(snapshot)
     }
 
+    /// Alle Zeilen des Doctors, keine davon gemessen (HUM-075).
+    ///
+    /// Der Fake hat keine Maschine, die er lesen könnte. Bis zum 2026-09-05
+    /// meldete er dafür fünf grüne Zeilen — genau die Lüge, gegen die der
+    /// echte Doctor gebaut ist: `ok`, weil niemand nachgesehen hat. Jetzt
+    /// trägt jede Zeile `WARN` und den Befund `DOCTOR_012`, mit demselben Text
+    /// wie überall im Fake. Eine Oberfläche, die gegen ihn übt, sieht damit
+    /// den Zustand, den sie auch auf einem Rechner ohne Messung sehen würde.
+    ///
+    /// Die Kennungen sind [`humanitl_sandbox::doctor::CheckId::ALL`] und
+    /// nicht eine eigene Liste: Sonst zeigte der Fake Zeilen, die es beim
+    /// Daemon nicht gibt, oder ließe welche aus.
     async fn doctor(&self) -> v1::DoctorReport {
+        use humanitl_sandbox::doctor::{CheckId, CheckOutcome};
+
         v1::DoctorReport {
-            checks: ["bwrap", "userns", "seccomp", "runtime_dir", "llm"]
+            checks: CheckId::ALL
                 .into_iter()
-                .map(|id| v1::DoctorCheck {
-                    id: id.to_owned(),
-                    status: v1::CheckStatus::Ok as i32,
-                    evidence: NOTHING_MEASURED.to_owned(),
-                    diagnostic: None,
+                .map(|id| {
+                    crate::convert::doctor_check_to_proto(&CheckOutcome::unmeasured(
+                        id,
+                        NOTHING_MEASURED,
+                        &["humanitl", "doctor"],
+                    ))
                 })
                 .collect(),
         }

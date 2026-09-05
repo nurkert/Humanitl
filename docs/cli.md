@@ -4,10 +4,10 @@
 zuerst ein RPC; die Kommandozeile ruft ihn auf und formatiert die Antwort. Sie
 enthält keine Fachlogik, und sie erfindet nichts dazu.
 
-Dieses Dokument beschreibt `humanitl run` vollständig und die übrigen
-Unterkommandos nur so weit, wie sie `run` betreffen. Die kanonische Liste aller
-Unterkommandos steht in `backlog/CONVENTIONS.md` 3.8, das Schema aller
-Konfigurations-Flags in `docs/CONFIG.md`.
+Dieses Dokument beschreibt `humanitl run` und `humanitl doctor` vollständig und
+die übrigen Unterkommandos nur so weit, wie sie `run` betreffen. Die kanonische
+Liste aller Unterkommandos steht in `backlog/CONVENTIONS.md` 3.8, das Schema
+aller Konfigurations-Flags in `docs/CONFIG.md`.
 
 ## `humanitl run`
 
@@ -147,6 +147,121 @@ die Sandbox hat kein steuerndes Terminal. Wer sich abhängt, beendet nur den
 eigenen Strom; die Sitzung läuft weiter, und ein späteres `attach` zeigt den
 Rückstand.
 
+## `humanitl doctor`
+
+```
+humanitl doctor [--json] [--probe-llm]
+```
+
+Prüft die Maschine und gibt eine Zeile je Vorbedingung aus, mit `ok`, `warn`
+oder `fail`. Das ist der Befehl für die Frage „warum läuft das hier nicht?".
+
+### Die elf Zeilen
+
+| Kennung | Was sie prüft | `fail`, wenn |
+|---|---|---|
+| `bwrap` | `bwrap` liegt im `PATH` und ist mindestens 0.8 | es fehlt oder ist älter |
+| `userns` | `bwrap --unshare-user` macht einen Namensraum auf | es geht nicht oder hängt länger als zwei Sekunden |
+| `seccomp` | `/proc/self/status` führt ein Feld `Seccomp`, der Kernel ist mindestens 5.4 | das Feld fehlt (Kernel ohne `CONFIG_SECCOMP`) |
+| `runtime_dir` | `$XDG_RUNTIME_DIR` ist gesetzt, ist ein Verzeichnis, gehört uns und hat genau 0700 | eines davon nicht — auch ein zu enger Modus wie 0500 oder 0600, in dem der Daemon weder hineinwechseln noch den Socket anlegen kann |
+| `systemd_user` | `systemctl --user is-system-running` endet mit 0 und sagt `running` | nie; ohne systemd startet man `humanitld` von Hand |
+| `daemon` | der Daemon antwortet und spricht dieselbe Major-Version des Vertrags | die Major-Version abweicht |
+| `agent` | das Kommando des Agenten liegt im `PATH` und nennt seine Fassung | nie; der Pfad in der Sandbox kann ein anderer sein |
+| `llm` | der Endpunkt aus `llm.endpoint` antwortet | nie |
+| `tray` | `libayatana-appindicator3` oder `libappindicator3` liegt in einem Verzeichnis des Laders; unter GNOME zusätzlich die AppIndicator-Erweiterung | nie |
+| `renderer` | Impeller verträgt sich mit dem Treiber: ein geladenes NVIDIA-Modul unter Wayland ist der bekannte schwarze Bildschirm | nie |
+| `disk_space` | im Datenverzeichnis ist mindestens 1 GiB frei | nie |
+
+Die vier ersten sind die Vorbedingungen der Sandbox; ohne sie startet nichts.
+`fail` wird außerdem die Zeile `daemon`, wenn der Daemon eine andere
+Major-Version des Vertrags spricht — dann versteht keine Seite die Nachrichten
+der anderen. Alles Übrige ist eine Warnung: Es läuft, nur nicht so bequem.
+
+### Was eine Zeile bedeutet
+
+Jede Zeile, die nicht `ok` ist, trägt einen `Diagnostic` mit Code, Grund und
+Vorschlag; die Blöcke stehen unter der Tabelle, einer je Zeile und nicht nur
+für die erste. Die Codes sind `DOCTOR_001` bis `DOCTOR_013`
+(`docs/DIAGNOSTICS.md`).
+
+**`ok` heißt nachgesehen und in Ordnung, nie „ich konnte nicht nachsehen".**
+Eine Prüfung, die nicht durchgeführt werden konnte — eine Datei, die es auf
+diesem Kernel nicht gibt, ein Programm, das nicht antwortet —, ist `warn` mit
+`DOCTOR_012`; ihr Beleg beginnt mit `not measured:`, und ihr Vorschlag ist der
+Befehl, den der Doctor versucht hat, damit ein Mensch selbst nachsehen kann.
+
+### Der Endpunkt des Sprachmodells wird nur auf Verlangen angesprochen
+
+`humanitl doctor` baut von sich aus keine einzige Verbindung auf. Die Zeile
+`llm` trägt deshalb ohne weitere Angabe `DOCTOR_013` — „nicht angesprochen" —
+und als Vorschlag den Befehl, der es täte.
+
+Mit `--probe-llm` wird gemessen. Vorher steht auf `stderr` eine Zeile, die
+sagt, wohin es geht und was geschickt wird, **bevor** die Verbindung aufgebaut
+wird; sie lässt sich weder mit `--json` noch mit `-q` abstellen, weil sie zur
+Handlung gehört und nicht zur Ausgabe. Gemessen wird über die RPC `ProbeLlm`
+im Daemon (zwei `GET` auf
+`/api/tags` und `/v1/models`, keine Zugangsdaten, keine Weiterleitungen); ohne
+laufenden Daemon gibt es die Probe nicht, und die Zeile bleibt ehrlich
+ungemessen. Der Schalter heißt nicht `--llm`: Das ist der Zweitname von
+`--llm-endpoint` und **setzt** die Adresse, statt sie zu prüfen.
+
+### Woher der Bericht kommt
+
+Der Doctor ist eine Fähigkeit des Daemons (RPC `Doctor`, ADR-018); der
+Setup-Bildschirm zeigt dieselben Zeilen über denselben Aufruf. Läuft kein
+Daemon, führt die Kommandozeile dieselben Prüfungen aus derselben Crate im
+eigenen Prozess aus — ein Doctor, der einen laufenden Daemon bräuchte, wäre in
+genau dem Fall nutzlos, für den es ihn gibt. Welche der beiden Quellen es war,
+steht in der Ausgabe (`source`), denn `PATH` und `$XDG_RUNTIME_DIR` des Daemons
+sind die seiner Unit und nicht die des Terminals.
+
+Zwei Zeilen kommen immer vom Client: `daemon`, weil nur ein Client weiß, ob er
+den Daemon erreicht, und `llm`, weil dahinter eine Verbindung stünde.
+
+### Exit-Codes
+
+| Code | Bedeutung |
+|---|---|
+| `0` | jede Zeile ist `ok` oder `warn` |
+| `3` | mindestens eine Zeile ist `fail`; die Sandbox startet so nicht |
+| `1` | die Konfiguration ließ sich nicht lesen |
+
+Ein fehlender Daemon ist **kein** Exit 2: Er ist eine Zeile des Berichts.
+
+### `--json`
+
+Ein Wert auf `stdout`, die Schlüssel alphabetisch (so schreibt `serde_json`
+eine Map), die Zeilen in der Reihenfolge der Anzeige:
+
+```json
+{
+  "checks": [
+    { "evidence": "bubblewrap 0.12.0 at /usr/bin/bwrap", "id": "bwrap", "status": "ok" },
+    {
+      "diagnostic": {
+        "code": "DOCTOR_013",
+        "docs": "…/docs/DIAGNOSTICS.md#doctor_013",
+        "fix": { "command": "humanitl doctor --probe-llm", "kind": "copy_command" },
+        "severity": "warning",
+        "title": "Sprachmodell nicht angesprochen",
+        "why": "http://192.168.1.50:11434 was not contacted; …"
+      },
+      "evidence": "http://192.168.1.50:11434 was not contacted",
+      "id": "llm",
+      "status": "warn"
+    }
+  ],
+  "source": "local",
+  "status": "warn"
+}
+```
+
+`source` ist `daemon` oder `local`, `status` der schlimmste Zustand im Bericht,
+`checks` die elf Zeilen in der Reihenfolge der Anzeige. `diagnostic` steht
+genau dann, wenn die Zeile nicht `ok` ist. Ein Beleg, der mit `not measured:`
+beginnt, ist eine Zeile ohne Messung.
+
 ## Was `run` mit den anderen Unterkommandos teilt
 
 - `humanitl sandbox run` startet die Sandbox im Prozess der Kommandozeile und
@@ -156,3 +271,5 @@ Rückstand.
   also den der Sitzung, samt der Regeln ihres Profils und ihrer Durchreiche.
 - `humanitl daemon status` sagt, ob überhaupt ein Daemon da ist. Das ist die
   Antwort auf Exit 2.
+- `humanitl doctor` sagt, ob `run` auf dieser Maschine überhaupt eine Sandbox
+  bekommen kann. Das ist die Antwort auf Exit 3, bevor er eintritt.
