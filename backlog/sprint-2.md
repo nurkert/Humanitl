@@ -30,6 +30,12 @@ Voraussetzungen aus Sprint 0 und 1: HUM-003 (Proto), HUM-004 (core-types), HUM-0
 | 21 | HUM-094 | Katalogname und Editor fehlen dem M2-Demolauf | XL | UI |
 | 22 | HUM-105 | Schalter „Deaktivieren" für mitgelieferte Regeln | M | UI |
 | 23 | HUM-106 | TLS-Karte im Intercept-Bildschirm | M | UI |
+| 24 | HUM-114 | `humanitl rules test` ist eine Sackgasse | M | CLI |
+| 25 | HUM-115 | ESC-3 führt den DNS-Beweis nicht | M | Daemon + Escape |
+| 26 | HUM-116 | Body-Ansichten enden am History-Bildschirm | M | UI |
+| 27 | HUM-117 | Die Notiz einer Entscheidung hat keinen Ort außer der 403-Antwort | M | Daemon + UI |
+| 28 | HUM-118 | Notification-Hints kommen doppelt verpackt an | S | UI |
+| 29 | HUM-119 | `GetBody` kennt kein `decoded`-Flag | M | Proto/IPC + UI |
 
 Die Zeilen 17 bis 23 sind am 2026-09-04 nachgetragen (Audit der fünf offenen Issues gegen den Code); vorher standen sie in keiner Tabelle, und die Regel aus `CLAUDE.md`, die Tabellenreihenfolge sei die Bearbeitungsreihenfolge, griff für sie ins Leere. Die Reihenfolge folgt den Abhängigkeiten: HUM-089 zuerst, weil es das kleinste ist und das `DecideRequest`-Literal in `daemon/bin/humanitl/src/cmd/flows.rs:336-340` streicht, das HUM-095 danach umbaut (nie parallel). HUM-091 vor HUM-094, weil HUM-094 den Gruppenkopf auf den Apex des Daemons stellt, den erst HUM-091 liefert. HUM-095 vor HUM-097, weil beide `run.sh` Schritt 2 umschreiben und die Form der Kommandozeile stehen muss, bevor der Bildschirm-Treiber daran vorbeigeschaltet wird; HUM-095 wartet auf die Entscheidung des Projekteigentümers gegen HUM-090 (siehe dort), und solange sie aussteht, ist HUM-097 das nächste baubare Issue. HUM-097 vor HUM-094, weil die e2e-Behauptungen von HUM-094 einen Bildschirm-Lauf brauchen, der während des Haltens läuft, und den baut HUM-097. HUM-105 und HUM-106 hängen an keinem der fünf; sie stehen hinten, weil sie dieselben geteilten Dateien anfassen (`app/lib/core/ipc/convert.dart`, `fake_daemon_client.dart`, `app/lib/features/intercept/providers/flows.dart`), die HUM-091 und HUM-094 umbauen.
 
@@ -38,6 +44,8 @@ Die Zeilen 17 bis 23 sind am 2026-09-04 nachgetragen (Audit der fünf offenen Is
 > **Review-Korrekturen 2026-09-02** (gelten vor dem Text): HUM-024: verweigert nach Auflösung private, Loopback-, Link-Local-, CGNAT-Adressen, außer die matchende Regel hat `allow_private: true` (LLM-Passthrough setzt es; `localhost` funktioniert damit); DNS-/Connect-/TLS-Fehler führen in `FlowState::Failed{UpstreamError}` (CONVENTIONS 3.2), nie in `Responded{502}`; der Client bekommt `502` mit `Blocked by Humanitl.`-Body und `reason: upstream_dns` usw. HUM-023: Body-Cap antwortet `413`, Hold-Timeout `504`, Speicherbudget `503`, Policy `403`.
 >
 > **Abgleich 2026-09-02**: `Rule`, `Matcher`, `Action`, `Expiry`, `HostPattern` liegen in `humanitl-core::rule` (HUM-063), `humanitl-rules` enthält YAML-Parser und `RuleSet::evaluate`; `catalog` darf `HostPattern` aus core nutzen. `match.upgrade: websocket` ist Teil des YAML-Schemas. Session-Regeln werden vor persistenten Regeln ausgewertet (ADR-007). Blob-Pfade sind sharded `blobs/<hex[0..2]>/<hex>`. Upstream-Verbindungen nur über `Egress` (HUM-015). Neue Config-Schlüssel dieses Sprints (`resolver.*`, `findings.*`, `recorder.max_body_bytes`, `upstream.connect_timeout_secs`) sind in CONVENTIONS 4.4 registriert. Exit-Codes 10/11 für `rules test` gelten.
+
+> **Bestandsaufnahme 2026-09-05** (jedes Akzeptanzkriterium der 16 gemergten Issues dieses Sprints gegen den Code geprüft): 36 Kriterien erfüllt und abgehakt, 13 teilweise, 6 nicht erfüllt (HUM-024 `esc-3` mit `dns.log`, HUM-065 `rules test` und `esc-4` über die CLI, HUM-032 die zwei Messläufe, HUM-072 Audit-Export), 1 überholt formuliert (HUM-033 `RULES_002`). Nach Kriterien vollständig: HUM-023, HUM-025, HUM-035. Neu angelegt aus der Aufnahme: HUM-114 (`humanitl rules test` ist eine Sackgasse), HUM-115 (ESC-3 führt den DNS-Beweis nicht), HUM-116 (Body-Ansichten enden am History-Bildschirm), HUM-117 (die Notiz einer Entscheidung hat keinen Ort außer der 403-Antwort), HUM-118 (Notification-Hints kommen doppelt verpackt an), HUM-119 (`GetBody` kennt kein `decoded`-Flag). Schon getrackt und nur am Kästchen verwiesen: HUM-094 (Domain-Panel), HUM-097 (Bildschirm-Lauf), HUM-092 (Export in den Daemon), HUM-099 (Filtersprache, Fake), HUM-101 (Schlüssel ohne Leser), HUM-106 und HUM-058 (Karten für Befunde), HUM-057 (`stream: true`, `LIMIT_001`), HUM-050/HUM-070 (Audit). Bewusst nicht als Issue: `RulesChanged` ohne Konsumenten (Entscheidung aus HUM-033 in `rules.dart:49-55`), `findings.enabled` als `bool` (CONVENTIONS 4.4), der `#[ignore]`-Benchmark (Zahl im Merge-Body), das Herkunfts-Abzeichen `from <Segment>` statt `from #n` (CONVENTIONS 4.16), die fehlende About-Ansicht für `aboutRanks` (kommt mit der About-Ansicht), die verwaisten ARB-Schlüssel und die Doc-Kommentare zur alten Auswertungsreihenfolge (Aufräumen im nächsten Commit am jeweiligen Ort).
 
 ## HUM-022 · Regel-Engine
 Sprint: 2 · Größe: L · Abhängigkeiten: HUM-004, HUM-063 · Blockiert: HUM-023, HUM-027, HUM-028, HUM-033, HUM-036
@@ -264,11 +272,11 @@ impl RuleSet {
 - Property-Test (`proptest`): zufällige Hosts aus Labels `[a-z0-9-]{1,10}`, Muster `*.X` matcht genau dann, wenn Host genau ein Label vor `X` hat.
 
 ### Akzeptanzkriterien
-- [ ] `cargo test -p humanitl-rules` grün, 42 Host-Fälle plus alle Parse- und Eval-Tests vorhanden.
-- [ ] `cargo clippy -p humanitl-rules -- -D warnings` sauber; Crate hat keine Abhängigkeit auf tokio, std::fs oder std::net außer `IpAddr`.
-- [ ] `parse_rules` liefert für eine Datei mit `host: "*foo.com"` genau ein `Diagnostic` mit `code == RULES_003` und `why` enthält den Muster-String.
-- [ ] Escape-Test 4 (`tests/escape/esc-4.sh`) grün in CI.
-- [ ] Doku-Kommentar auf jedem öffentlichen Item, `cargo doc --no-deps` ohne Warnungen.
+- [x] `cargo test -p humanitl-rules` grün, 42 Host-Fälle plus alle Parse- und Eval-Tests vorhanden. (44 Host-Fälle, 32 Parse-, 26 Eval-Tests)
+- [ ] `cargo clippy -p humanitl-rules -- -D warnings` sauber; Crate hat keine Abhängigkeit auf tokio, std::fs oder std::net außer `IpAddr`. Abhängigkeiten belegt (nur `IpAddr`, kein tokio, kein `std::fs`); die Clippy-Hälfte ist lokal nicht prüfbar, nur die CI zeigt sie.
+- [x] `parse_rules` liefert für eine Datei mit `host: "*foo.com"` genau ein `Diagnostic` mit `code == RULES_003` und `why` enthält den Muster-String.
+- [x] Escape-Test 4 (`tests/escape/esc-4.sh`) grün in CI. (heute `esc-4-rules.sh`, 8 von 8; der Nutzerweg über `humanitl rules test` aus Schritt 8 fehlt, HUM-114)
+- [x] Doku-Kommentar auf jedem öffentlichen Item, `cargo doc --no-deps` ohne Warnungen.
 
 ### Fallstricke
 - Niemals `host.ends_with(pattern)` oder `contains`. Immer Labels vergleichen. Fall 4 und 5 sind die Tests dafür.
@@ -362,9 +370,9 @@ Upstream-Verbindungen: der hyper-Client-Pool wird pro `(scheme, host, port)` ges
 - `body_cap_blocks`: 33 MiB Body → `Block{BodyCap}`, Client bekommt 403 (nicht 413), Body wurde nicht an Upstream gesendet.
 
 ### Akzeptanzkriterien
-- [ ] Alle Tests oben grün; `sni_mismatch_blocked` entweder grün oder `#[ignore]` mit Verweis auf PROXY_090-Issue.
-- [ ] Escape-Test 3, Fall `curl -H 'Host: evil.io' https://github.com/` liefert 403 mit `reason: authority_mismatch`.
-- [ ] `grep -r "connect_target" daemon/crates/proxy/src` zeigt, dass Regeln nur auf `HttpRequest.authority` ausgewertet werden, nie auf das CONNECT-Ziel allein.
+- [x] Alle Tests oben grün; `sni_mismatch_blocked` entweder grün oder `#[ignore]` mit Verweis auf PROXY_090-Issue. (18 Tests; `PROXY_090` wird nicht gebraucht, SNI kommt aus rustls; `body_cap_blocks` assertet 413 nach CONVENTIONS 3.2)
+- [x] Escape-Test 3, Fall `curl -H 'Host: evil.io' https://github.com/` liefert 403 mit `reason: authority_mismatch`. (die Probe prüft die `reason`-Zeile, den Status 403 belegt `authority.rs:90`)
+- [x] `grep -r "connect_target" daemon/crates/proxy/src` zeigt, dass Regeln nur auf `HttpRequest.authority` ausgewertet werden, nie auf das CONNECT-Ziel allein.
 
 ### Fallstricke
 - hudsucker öffnet die Upstream-Verbindung standardmäßig selbst beim CONNECT (Tunnel), bevor ein Request gesehen wird. Das Handling muss so konfiguriert sein, dass CONNECT nur den lokalen TLS-Endpunkt aufbaut und keine Upstream-Verbindung vor der Entscheidung entsteht (sonst leakt bereits der TCP-Connect Metadaten, und HUM-024 wird verletzt).
@@ -448,10 +456,10 @@ Config-Schlüssel (Tier `expert`): `resolver.nameserver` (optional `IP[:port]`, 
 - `pinned_addr_used`: Mock antwortet `127.0.0.1`, Fake-Upstream auf `127.0.0.1:8443` mit `upstream_port_map`; Antwort kommt an, Zertifikat wurde gegen den Hostnamen validiert (Test mit falschem CN scheitert mit TLS-Fehler, nicht mit Erfolg).
 
 ### Akzeptanzkriterien
-- [ ] `grep -rn "lookup_host\|getaddrinfo\|to_socket_addrs" daemon/crates/proxy/src` liefert nur Treffer in `resolver.rs`.
-- [ ] Alle Tests oben grün.
-- [ ] `esc-3.sh` grün: `dns.log` enthält keinen geblockten Host, genau einen erlaubten.
-- [ ] Config-Schema enthält die fünf `resolver.*`/`upstream.*`-Schlüssel mit Tier `expert` und Beschreibung.
+- [x] `grep -rn "lookup_host\|getaddrinfo\|to_socket_addrs" daemon/crates/proxy/src` liefert nur Treffer in `resolver.rs`. (vier Treffer, alle `resolver.rs`; dazu der Quelltext-Test `only_the_resolver_module_touches_the_name_service`)
+- [x] Alle Tests oben grün. (15 in `dns_after_allow.rs`)
+- [ ] `esc-3.sh` grün: `dns.log` enthält keinen geblockten Host, genau einen erlaubten. `tests/escape/dns-recorder.rs` existiert nicht, `esc-3-egress.sh:111` trägt statt der Probe ein `skip`, und `HUMANITL_RESOLVER__NAMESERVER` wirkt nicht (`SystemResolver` ist getaddrinfo); der Beweis steht nur in `tests/dns_after_allow.rs` (HUM-115).
+- [ ] Config-Schema enthält die fünf `resolver.*`/`upstream.*`-Schlüssel mit Tier `expert` und Beschreibung. Vier `resolver.*`-Schlüssel mit Tier `expert` stehen; `upstream.connect_timeout_secs` ist nur Alias auf `limits.connect_timeout_secs` (Tier `advanced`, CONVENTIONS 4.4); `resolver.nameserver` hat keinen Leser (HUM-115), und die verlangte Start-Warnung für `resolver.overrides` fehlt.
 
 ### Fallstricke
 - `hyper_util::client::legacy::connect::HttpConnector` löst selbst auf. Nicht verwenden; eigener Connector ist Pflicht.
@@ -562,10 +570,10 @@ Config (`findings.*`): `findings.enabled` (Liste Detektor-IDs, Default alle sieb
 - Benchmark (criterion, nicht in CI-Gate): 8 MiB JSON in < 200 ms.
 
 ### Akzeptanzkriterien
-- [ ] Alle Tests grün; Benchmark-Zahl in der PR-Beschreibung.
-- [ ] `secrets.toml` hat für jede Regel ein Feld `source` mit gitleaks-Regel-ID oder „humanitl".
-- [ ] Spans sind immer innerhalb `bytes.len()` (Property-Test mit zufälligen Eingaben).
-- [ ] Config-Schema enthält die vier `findings.*`-Schlüssel mit Tier.
+- [x] Alle Tests grün; Benchmark-Zahl in der PR-Beschreibung. (Merge-Body 5a677d1: rund 160 ms für 8 MiB; der Durchsatz-Test ist `#[ignore]` mit 2-s-Schranke, kein Gatter)
+- [x] `secrets.toml` hat für jede Regel ein Feld `source` mit gitleaks-Regel-ID oder „humanitl". (13 Regeln, 13 `source`)
+- [x] Spans sind immer innerhalb `bytes.len()` (Property-Test mit zufälligen Eingaben). (200 deterministische Eingaben, kein proptest)
+- [x] Config-Schema enthält die vier `findings.*`-Schlüssel mit Tier. (`findings.enabled` ist ein `bool` für alles, nicht die Liste der Detektor-IDs; so registriert in CONVENTIONS 4.4)
 
 ### Fallstricke
 - `\b` in `regex::bytes` ist ASCII-Wortgrenze; für Email vor `@` reicht das, für User-Terms mit Umlauten (`Müller`) eigene Grenzprüfung über `char::is_alphanumeric` auf UTF-8-Dekodierung des Nachbarn.
@@ -753,10 +761,10 @@ pub struct FlowPage { pub rows: Vec<FlowSummary>, pub next: Option<Cursor>, pub 
 - `concurrent_read_during_write`: Writer schreibt 10k Events, parallel 50 `list_flows` → keine `SQLITE_BUSY`-Fehler.
 
 ### Akzeptanzkriterien
-- [ ] Alle Tests grün; `cargo test -p humanitl-recorder` unter 20 s.
-- [ ] Schema-Datei entspricht exakt dem SQL oben (Reviewer diffed).
-- [ ] `list_flows` mit 100k Zeilen und `host:`-Filter antwortet in < 50 ms (Test mit generierten Daten, Zahl in PR).
-- [ ] Kein `unwrap()` im Writer-Thread; Fehler landen als Diagnostic RECORDER_003 im `diagnosticsProvider`-Stream, der Thread stirbt nicht.
+- [x] Alle Tests grün; `cargo test -p humanitl-recorder` unter 20 s. (2,4 s)
+- [x] Schema-Datei entspricht exakt dem SQL oben (Reviewer diffed). (Byte-Vergleich; Folgeänderungen liegen in `V3__host_suffix.sql` und `V4__flow_error.sql`, CONVENTIONS 4.14)
+- [x] `list_flows` mit 100k Zeilen und `host:`-Filter antwortet in < 50 ms (Test mit generierten Daten, Zahl in PR). (gemessen 8,4 ms; der Test ist `#[ignore]`, und kein CI-Schritt übergibt `--ignored`)
+- [ ] Kein `unwrap()` im Writer-Thread; Fehler landen als Diagnostic RECORDER_003 im `diagnosticsProvider`-Stream, der Thread stirbt nicht. Daemon-Hälfte erfüllt (kein `unwrap` außerhalb von Tests, `RECORDER_003` aus `writer.rs:396`, der Thread lebt weiter); es gibt keinen `diagnosticsProvider` in `app/lib`, und alle drei Konsumenten verwerfen `FlowEventDiagnostic` (`flows.dart:141`, `history_page.dart:560`, Fake). Der Sammler kommt mit HUM-106, die Karte für Aufzeichnungsfehler mit HUM-058.
 
 ### Fallstricke
 - SQLite ohne WAL blockiert Leser während Schreibvorgängen; `journal_mode` muss vor der ersten Transaktion gesetzt werden.
@@ -865,9 +873,9 @@ Nach jeder Änderung: `FlowEvent`-Stream bekommt kein Event; stattdessen eigener
 - `reload_invalid_keeps_old`: Datei kaputt machen, reload → RULES_002, `effective()` unverändert.
 
 ### Akzeptanzkriterien
-- [ ] Alle Tests grün; `buf lint` sauber.
-- [ ] `grpcurl -unix … humanitl.v1.Humanitl/Rules` mit `{"list":{}}` liefert bundled Regeln mit `bundled: true`.
-- [ ] `rules.yaml` wird nie mit Session-Regeln geschrieben (Test greift Datei-Inhalt).
+- [ ] Alle Tests grün; `buf lint` sauber. Tests grün (`rules_rpc` 12 von 12); `buf lint` ist lokal nicht ausführbar, nur die CI zeigt es.
+- [x] `grpcurl -unix … humanitl.v1.Humanitl/Rules` mit `{"list":{}}` liefert bundled Regeln mit `bundled: true`. (belegt über `rules_rpc.rs:352` und live über `humanitl --json rules list --all`; grpcurl fehlt hier)
+- [x] `rules.yaml` wird nie mit Session-Regeln geschrieben (Test greift Datei-Inhalt).
 
 ### Fallstricke
 - `save()` muss die Datei mit Modus 0600 anlegen.
@@ -943,9 +951,9 @@ error DAEMON_001: Humanitl daemon is not running
 - `daemon_down_exit_2`.
 
 ### Akzeptanzkriterien
-- [ ] `humanitl rules test https://evil.example` mit Default-Regeln → `verdict: ask`, Exit 11.
-- [ ] `esc-4.sh` nutzt `humanitl rules test` für die Tabelle aus HUM-022 (Auszug: Fälle 1–15) und ist grün.
-- [ ] `humanitl flows list 'host:github.com findings:>0'` liefert Tabelle ohne Panik bei leerem Ergebnis.
+- [ ] `humanitl rules test https://evil.example` mit Default-Regeln → `verdict: ask`, Exit 11. Das Kommando antwortet `CLI_003` und behauptet in `cmd/rules.rs:1068-1094` und in `--help`, der Vertrag habe die Operation nicht; er hat sie seit HUM-027 (`RulesRequest.Test`, `ipc/src/rules.rs:213`, `rules_rpc.rs:618` grün); Exit 10 und 11 sind unerreichbar (HUM-114).
+- [ ] `esc-4.sh` nutzt `humanitl rules test` für die Tabelle aus HUM-022 (Auszug: Fälle 1–15) und ist grün. `esc-4-rules.sh` ruft `cargo test --test escape_table` (7 Engine-Fälle plus Body-Cap-Probe), nicht die Kommandozeile und nicht die 15 Fälle der Host-Tabelle (HUM-114).
+- [x] `humanitl flows list 'host:github.com findings:>0'` liefert Tabelle ohne Panik bei leerem Ergebnis.
 
 ### Fallstricke
 - Unicode-Hosts in der Tabelle: U-Label anzeigen, A-Label in `--json`.
@@ -1043,10 +1051,10 @@ Intents: `Shortcuts`/`Actions` auf `InterceptScreen`-Ebene (CONVENTIONS 3.9). `A
 - Goldens: `action_bar_default`, `action_bar_grid_open`, `action_bar_narrow`, `release_valve_holding`.
 
 ### Akzeptanzkriterien
-- [ ] Alle Tests und Goldens grün (alchemist CI-Modus).
-- [ ] Manuell: mit Fake-Daemon Enter drücken → Karte verlässt Queue, History (sobald HUM-032) zeigt `allow`.
-- [ ] Kein String hart im Code (`flutter gen-l10n` deckt alle Texte).
-- [ ] Hit-Targets: jedes klickbare Element ≥ 28 px hoch (Widget-Test prüft `Size`).
+- [x] Alle Tests und Goldens grün (alchemist CI-Modus). (272 Tests in `test/features/intercept`, 9 Goldens der Aktionsleiste)
+- [x] Manuell: mit Fake-Daemon Enter drücken → Karte verlässt Queue, History (sobald HUM-032) zeigt `allow`. (beide Hälften automatisiert über den Dart-Fake, `intercept_screen_test.dart:329` und `history_page_test.dart:221`; der Lauf über die ganze Kette ist HUM-097)
+- [x] Kein String hart im Code (`flutter gen-l10n` deckt alle Texte). (die Schlüssel heißen camelCase, nicht snake_case wie in der Spezifikation)
+- [ ] Hit-Targets: jedes klickbare Element ≥ 28 px hoch (Widget-Test prüft `Size`). Gemessen wird nur das Entscheidungspaar (`release_valve_test.dart:235-271`, `HSize.hitDecision`); für Remember-Raster und Chevron stehen die 28 px nur im Code (`remember_grid.dart:248-251`), kein Test prüft die `Size`.
 
 ### Fallstricke
 - `Shortcuts` fangen Enter auch in TextFields, wenn sie über dem `Focus` des Feldes liegen. `Actions` mit `Action.overridable` oder Prüfung `FocusManager.instance.primaryFocus?.context` auf `EditableText`.
@@ -1126,9 +1134,9 @@ Einfrieren (`queueFreezeProvider`): Die Queue rendert einen Snapshot `frozenOrde
 - Golden: `queue_grouped_collapsed`, `queue_grouped_expanded`, `queue_new_pill`.
 
 ### Akzeptanzkriterien
-- [ ] Tests und Goldens grün.
-- [ ] Manuell mit Fake-Daemon (Szenario `npm_install.jsonl`, 15 Flows/20 s): keine Zeile bewegt sich, während der Zeiger über der Queue steht; Pill zählt hoch.
-- [ ] Kein Button mit Text „Allow all" existiert außerhalb des Palette-Modals (`grep -r "allow_all" app/l10n` zeigt nur `palette_queue_allow_all`).
+- [x] Tests und Goldens grün. (154 Tests, sechs Goldens `queue_grouped_*`, `queue_new_pill_*`)
+- [ ] Manuell mit Fake-Daemon (Szenario `npm_install.jsonl`, 15 Flows/20 s): keine Zeile bewegt sich, während der Zeiger über der Queue steht; Pill zählt hoch. Das Szenario liegt als `fixtures/sessions/npm-install.jsonl` (Bindestrich); das Einfrieren belegen `queue_freeze_test.dart:44,70` mit zwei Ankünften, der manuelle Lauf mit 15 Flows ist nirgends dokumentiert.
+- [x] Kein Button mit Text „Allow all" existiert außerhalb des Palette-Modals (`grep -r "allow_all" app/l10n` zeigt nur `palette_queue_allow_all`). (das grep-Muster ist veraltet, ARB-Schlüssel sind camelCase; der einzige Treffer für „Allow all" ist `paletteQueueAllowAll`, und `askAllowAll` öffnet immer das Modal)
 
 ### Fallstricke
 - `ListView` mit `key: ValueKey(flowId)` pro Zeile, sonst springen Animationen bei Merge.
@@ -1201,9 +1209,9 @@ Umschalter: Segmented Control `Tree | Form | Raw | Hex` je nach Kind (json: Tree
 - Goldens: `body_json_tree_findings`, `body_form`, `body_raw_findings`, `body_hex`.
 
 ### Akzeptanzkriterien
-- [ ] Tests und Goldens grün.
-- [ ] 8 MiB JSON im Fake-Daemon-Szenario `big_body.jsonl`: UI bleibt bedienbar (Scrollen in der Queue ruckelt nicht sichtbar), Tree erscheint nach < 1 s.
-- [ ] Findings-Chips in der Karte (HUM-020) springen bei Klick zur ersten Fundstelle in der aktiven Ansicht (Raw scrollt, Tree klappt Pfad auf).
+- [x] Tests und Goldens grün. (acht benannte Tests, vier Golden-Paare `body_*`)
+- [ ] 8 MiB JSON im Fake-Daemon-Szenario `big_body.jsonl`: UI bleibt bedienbar (Scrollen in der Queue ruckelt nicht sichtbar), Tree erscheint nach < 1 s. Das Szenario ist `HUMANITL_FAKE=big_body` (generiert, keine Datei); Bedienbarkeit belegt `perf_test.dart` (der Baum baut nur den Ausschnitt), die Zeit nicht: gemessen 3157 ms für 8 MiB statt < 1 s, und ein Wanduhr-Gatter lehnt `perf_test.dart:80-86` bewusst ab (`docs/UX.md:526`). Das `decoded`-Flag an `GetBody` aus der Spezifikation fehlt (HUM-119).
+- [x] Findings-Chips in der Karte (HUM-020) springen bei Klick zur ersten Fundstelle in der aktiven Ansicht (Raw scrollt, Tree klappt Pfad auf). (`jump_test.dart:95,111`; die Chips sitzen im Kopf der `BodyView`, die in der Karte steckt)
 
 ### Fallstricke
 - `re_editor` mit Wrap erzeugt visuelle Zeilen, die Offsets verschieben; Wrap aus.
@@ -1319,10 +1327,10 @@ UI `DomainPanel` (rechtes Pane, 28 %):
 - Flutter: `domain_panel_known`, `domain_panel_unknown`, `domain_panel_session_summary` Goldens; `quick_rule_calls_rules_add`.
 
 ### Akzeptanzkriterien
-- [ ] Tests und Goldens grün.
-- [ ] `catalog/domains.yaml` validiert gegen ein JSON-Schema (`catalog/domains.schema.json`, in CI mit `check-jsonschema`).
-- [ ] Kein Netzwerkzugriff aus `humanitl-catalog` (Crate hat keine Abhängigkeit auf hyper/reqwest/tokio-net; `cargo tree` in CI geprüft).
-- [ ] Lizenzhinweis in `catalog/RANKS-LICENSE` und in der About-Ansicht (ARB `aboutRanks`).
+- [ ] Tests und Goldens grün. Daemon-Hälfte grün (72 Tests in `humanitl-catalog`); die drei Goldens `domain_panel_*` und `quick_rule_calls_rules_add` existieren nicht, gezeichnet wird `DomainPanePlaceholder` mit toten Knöpfen; die Oberflächen-Hälfte ist HUM-094.
+- [x] `catalog/domains.yaml` validiert gegen ein JSON-Schema (`catalog/domains.schema.json`, in CI mit `check-jsonschema`). (lokal nachgerechnet, 34 Einträge; fehlt das Werkzeug, überspringt `lint-docs.sh` mit `::notice`)
+- [ ] Kein Netzwerkzugriff aus `humanitl-catalog` (Crate hat keine Abhängigkeit auf hyper/reqwest/tokio-net; `cargo tree` in CI geprüft). Die Sache stimmt (`cargo tree` ohne hyper, reqwest, tokio); die CI-Prüfung gibt es nicht, und `tools/deps-allow.toml` beschränkt nur interne Crates.
+- [ ] Lizenzhinweis in `catalog/RANKS-LICENSE` und in der About-Ansicht (ARB `aboutRanks`). `catalog/RANKS-LICENSE` liegt da und ein Test hält es fest; `aboutRanks` und eine About-Ansicht gibt es in `app/` nicht, der Hinweis erreicht keinen Nutzer.
 
 ### Fallstricke
 - `psl`-Crate hat die Liste einkompiliert; Version pinnen und im Changelog erwähnen, da sich die PSL ändert.
@@ -1417,9 +1425,9 @@ Geblockte Flows: `response.status = 403`, `content.text` = 403-Body. JSONL: eine
 - Goldens: `history_table`, `history_detail_request`, `history_filter_error`.
 
 ### Akzeptanzkriterien
-- [ ] Tests und Goldens grün.
-- [ ] Fake-Daemon-Szenario `history_10k.jsonl`: Scrollen über 10k Zeilen ohne sichtbares Ruckeln; Speicher der App < 300 MB (DevTools-Messung in PR).
-- [ ] Export von 100 Flows als HAR öffnet fehlerfrei in Firefox DevTools (manuell, Screenshot in PR).
+- [x] Tests und Goldens grün. (147 Tests, sechs Goldens; das Detail zeichnet eigene Textzeilen statt der `BodyView` aus HUM-030, HUM-116)
+- [ ] Fake-Daemon-Szenario `history_10k.jsonl`: Scrollen über 10k Zeilen ohne sichtbares Ruckeln; Speicher der App < 300 MB (DevTools-Messung in PR). Das Szenario heißt `HUMANITL_FAKE=history:10000`; gemessen wurde nichts (kein Test misst Frames oder Speicher, keine DevTools-Zahl im Commit-Body 6a7da2f), und `historyMaxRows = 2000` beendet das Fenster vor 10k Zeilen (`history_page.dart:32`).
+- [ ] Export von 100 Flows als HAR öffnet fehlerfrei in Firefox DevTools (manuell, Screenshot in PR). Kein Screenshot, keine Zeile im Commit-Body; die Form prüft `_expectValidHar` feldweise, die Schema-Validierung hat CONVENTIONS 4.18 gestrichen; die Zusage `content.text = 403-Body` für geblockte Flows ist unerfüllbar, weil `record_block` die Block-Antwort nie aufzeichnet (der Export wandert mit HUM-092 in den Daemon).
 
 ### Fallstricke
 - `TableView` braucht feste Zeilenhöhen (`TableSpan` mit `FixedSpanExtent`), keine intrinsischen Höhen.
@@ -1483,9 +1491,9 @@ Diagnostics aus `RulesResponse.diagnostics` erscheinen als Banner über der List
 - Goldens: `rules_list_saved`, `rules_list_temporary`, `rules_editor_dry_run`.
 
 ### Akzeptanzkriterien
-- [ ] Tests und Goldens grün.
-- [ ] Manuell: Regel aus Intercept via Remember anlegen → erscheint im richtigen Tab mit `from #n`, Klick öffnet den Flow.
-- [ ] Eine kaputte `rules.yaml` (per Hand editiert) erzeugt Banner mit RULES_002 und Zeilennummer, Liste zeigt den letzten gültigen Stand.
+- [x] Tests und Goldens grün. (sieben benannte Tests, drei Golden-Paare `rules_*`)
+- [ ] Manuell: Regel aus Intercept via Remember anlegen → erscheint im richtigen Tab mit `from #n`, Klick öffnet den Flow. Remember setzt `createdFrom`, und die Tabs stimmen; das Abzeichen liest `from <letztes UUID-Segment>`, nicht `from #n`, und der Klick landet in der Intercept-Queue statt im History-Detail (bewusst, CONVENTIONS 4.16); der Rundlauf ist ungetestet.
+- [ ] Eine kaputte `rules.yaml` (per Hand editiert) erzeugt Banner mit RULES_002 und Zeilennummer, Liste zeigt den letzten gültigen Stand. Der Code ist `RULES_001` (Regel-Datei ungültig, mit `Zeile:Spalte`), `RULES_002` ist das verdächtige Host-Muster (`codes.rs:350-358`); das Verhalten stimmt: `reload_invalid_keeps_old` und `rules_screen_test.dart:199-220` zeigen Banner mit Code und Zeile bei stehender Liste.
 
 ### Fallstricke
 - `ReorderableListView` in Verbindung mit `ListView.builder`-Keys: jede Zeile `ValueKey(rule.id)`.
@@ -1542,9 +1550,9 @@ Sound (Setting existiert, Default aus, Implementierung Post-MVP), globale Hotkey
 - `tray_init_failure_single_diagnostic`.
 
 ### Akzeptanzkriterien
-- [ ] Tests grün.
-- [ ] Manuell unter GNOME mit AppIndicator-Extension: Tray-Zähler sichtbar; unter GNOME ohne Extension: genau ein Diagnostic in der Diagnostics-Ansicht, App läuft normal.
-- [ ] Notification-Aktion `Allow` entscheidet den Flow ohne dass das Fenster in den Vordergrund kommt.
+- [x] Tests grün. (`attention_test.dart`, `tray_host_test.dart`, `tray_icon_test.dart`; Namen nach CONVENTIONS 4.19)
+- [ ] Manuell unter GNOME mit AppIndicator-Extension: Tray-Zähler sichtbar; unter GNOME ohne Extension: genau ein Diagnostic in der Diagnostics-Ansicht, App läuft normal. Das Protokoll belegt `dbus_live_test.dart` auf einem privaten Bus (Watcher, Status, ToolTip, Menü); unter GNOME mit und ohne Extension hat niemand gemessen, und eine Diagnostics-Ansicht gibt es nicht: `UI_002` landet in einer wegklickbaren `AttentionNoticeCard` (CONVENTIONS 4.19). Die Hints der Notification kommen doppelt verpackt an (HUM-118).
+- [x] Notification-Aktion `Allow` entscheidet den Flow ohne dass das Fenster in den Vordergrund kommt.
 
 ### Fallstricke
 - `flutter_local_notifications` Linux-Aktionen brauchen einen laufenden D-Bus-Session-Bus; im CI/xvfb fehlt er; Tests mocken das Plugin-Interface.
@@ -1598,9 +1606,9 @@ Vorgehen, nachgezogen am 2026-09-04: **kein Prototyp-Branch.** Vorgesehen war ei
 keine (Dokument).
 
 ### Akzeptanzkriterien
-- [ ] ADR-Nachtrag enthält beide ausgefüllten Matrizen mit Datum und Versionsnummern.
-- [ ] Entscheidung ist ein Satz; Begründung ≤ 10 Zeilen.
-- [ ] Kein Spike-Branch. Die Abweichung ist im ADR unter „Entschieden ohne Prototyp" und in `backlog/CONVENTIONS.md` 4.20 begründet, und der ADR nennt, was ohne Messung offen bleibt und woran ein Fehlurteil auffiele.
+- [x] ADR-Nachtrag enthält beide ausgefüllten Matrizen mit Datum und Versionsnummern. (eine Tabelle mit drei bewerteten Spalten, Versionsstand 2026-09-04)
+- [x] Entscheidung ist ein Satz; Begründung ≤ 10 Zeilen.
+- [x] Kein Spike-Branch. Die Abweichung ist im ADR unter „Entschieden ohne Prototyp" und in `backlog/CONVENTIONS.md` 4.20 begründet, und der ADR nennt, was ohne Messung offen bleibt und woran ein Fehlurteil auffiele. (das Ergebnis „weder noch" hat der Projekteigentümer am selben Tag zurückgenommen, siehe Kopf dieses Issues)
 
 ### Fallstricke
 - Nicht nach Gefühl entscheiden; die Matrix ist verbindlich. Sie braucht dafür einen Punkte-Maßstab: Der ADR legt je Kriterium Schwellen für 0 bis 3 Punkte fest, sonst ist jede Einzelwertung ein Prosa-Urteil.
@@ -1766,10 +1774,10 @@ Keine Notiz bei Allow. Kein Meta-Endpoint (HUM-073). Keine Mehrzeiligkeit.
 - e2e (HUM-036 erweitern): ein Block mit Notiz, Fake-Agent gibt `X-Humanitl-Note` im Log wieder.
 
 ### Akzeptanzkriterien
-- [ ] `curl -x 127.0.0.1:3128 http://blocked.example` in der Sandbox liefert nach Block mit Notiz den Body mit `note:` und den Header.
-- [ ] Notiz mit 600 Zeichen wird im UI auf 500 begrenzt (Zähler sichtbar).
-- [ ] Audit-Export enthält die Notiz.
-- [ ] Kein Header-Injection möglich (Test grün).
+- [ ] `curl -x 127.0.0.1:3128 http://blocked.example` in der Sandbox liefert nach Block mit Notiz den Body mit `note:` und den Header. Body-Hälfte aus der Sandbox belegt (`m2_first_decision/run.sh:551`), den Header sieht der Fake-Agent nie (`fake_agent.py` protokolliert keine Antwort-Header); host-seitig belegt `block_returns_403_with_the_canonical_body_and_note` beides.
+- [x] Notiz mit 600 Zeichen wird im UI auf 500 begrenzt (Zähler sichtbar).
+- [ ] Audit-Export enthält die Notiz. Es gibt kein Audit-Log (`audit/src/lib.rs` hat 6 Zeilen, der `Audit`-RPC ist `unimplemented`, die CLI sagt `arrives in HUM-070`); die Kette ist HUM-050, der Export HUM-070, beide Sprint 4. Dazu speichert der Recorder die Notiz absichtlich nicht (`recorder.rs:836-879`), womit auch das Ziel „History-Detail zeigt die Notiz" offen ist (HUM-117).
+- [x] Kein Header-Injection möglich (Test grün).
 
 ### Fallstricke
 - Header-Injection über CR/LF ist der klassische Fehler; Sanitizing muss vor beiden Ausgaben laufen, nicht nur vor dem Header.
@@ -2802,3 +2810,400 @@ ARB-Schlüssel, ans Ende beider Dateien:
 
 ### Referenzen
 `backlog/sprint-3.md` HUM-045 (Spezifikation, Tabelle der Hinweise, Stand), HUM-039 (Oberflächen-Hälfte), HUM-068 (`DiagnosticScope`); `backlog/CONVENTIONS.md` 3.9 (`diagnosticsProvider`), 4.13, 4.15; `docs/UX.md` 4.4; `proto/humanitl/v1/humanitl.proto` `FlowEvent` Felder 12 und 16; `daemon/crates/core-types/src/diagnostics/codes.rs` `TLS_001..003`.
+
+---
+
+## HUM-114 · `humanitl rules test` ist eine Sackgasse
+Sprint: 2 · Größe: M · Abhängigkeiten: HUM-027, HUM-065 · Blockiert: HUM-038 (Schritt 1), HUM-039 (Akzeptanzkriterium), HUM-059 (`docs/reference/rules.md`)
+
+### Kontext
+Die Kommandozeile kennt `humanitl rules test URL [--method M] [--upgrade websocket]` (`daemon/bin/humanitl/src/cli.rs:357-372`) und antwortet darauf mit `CLI_003`: `cmd/rules.rs:57-61` ruft `test_not_yet`, dessen `why` (`:1068-1094`) behauptet, der Vertrag habe keine Operation, die eine URL gegen den Regelsatz auswertet, und `humanitl --help` (`cli.rs:49-50`) wiederholt das. Der Vertrag hat sie seit HUM-027: `RulesRequest.Test` (`proto/humanitl/v1/humanitl.proto:647, 665-671`), Antwort `RuleTest` (`:714-727`), umgesetzt in `daemon/crates/ipc/src/rules.rs:130, 213-231` und im Rust-Fake (`fake/mod.rs:675, 727`), grün in `rules_rpc.rs:618-684`. Die Exit-Codes 10 (block) und 11 (ask) aus CONVENTIONS 3.8 sind dokumentiert (`--help`) und unerreichbar (`cmd/mod.rs` kennt 0 bis 4). `tests/escape/esc-4-rules.sh` sagt in seinem Kopf (`:12-16`), es könne den Nutzerweg nehmen, sobald das Kommando existiert, und fährt bis dahin `cargo test`. Zwei Stellen im Repository widersprechen sich, und die falsche steht vor dem Nutzer; drei Issues in Sprint 3 und 5 hängen an dem Kommando (HUM-038 Schritt 1, HUM-039 Kriterium, HUM-059 Schritt 2). ADR-018: die Engine wird nicht ein zweites Mal gebaut, das Kommando ruft den RPC.
+
+### Ziel
+`humanitl rules test https://evil.example` mit den mitgelieferten Regeln druckt `verdict: ask` und endet 11; `... test https://models.dev/api.json` druckt `verdict: block`, die Regel mit Herkunft und Position, und endet 10; `--json` liefert die Felder von `RuleTest`. `esc-4-rules.sh` fährt die 15 Fälle der Host-Tabelle aus HUM-022 zusätzlich über das Kommando gegen den Daemon des Laufs. `humanitl llm test URL` ruft `ProbeLlm`, wie `docs/PROTOCOL.md` 4.9 und CONVENTIONS 4.21 es diesem Issue aufgetragen haben.
+
+### Nicht-Ziel
+Eine Auswertung ohne Daemon (ADR-018; ohne Daemon Exit 2 wie jedes andere Kommando). Der Regel-Bildschirm (sein Dry-Run-Panel hat seinen eigenen Weg, HUM-033). Änderungen an der Engine oder am RPC.
+
+### Betroffene Pfade
+- `daemon/bin/humanitl/src/cmd/rules.rs` (`test` statt `test_not_yet`), `src/cli.rs` (`--help`-Text `:49-50`, `RulesCmd::Test`-Doc-Kommentar, neues `LlmCmd::Test`), `src/cmd/mod.rs` (`EXIT_BLOCK = 10`, `EXIT_ASK = 11`), `src/cmd/llm.rs` (neu)
+- `daemon/bin/humanitl/tests/cli.rs`
+- `tests/escape/esc-4-rules.sh`, `tests/escape/run.sh` (XDG-Umgebung des Laufs an die CLI reichen; steht für ESC-3 schon), `tests/escape/README.md`
+- `backlog/CONVENTIONS.md` 3.8 (Exit-Codes bleiben), 4.21 (Absatz „Offen" schließen)
+
+### Spezifikation
+```text
+humanitl rules test <URL> [--method M] [--upgrade websocket] [--json]
+
+verdict: block
+rule: 018f… (bundled, position 3)   # oder: rule: none (default ask)
+```
+
+Abbildung: `RuleTest.action` → `verdict` (`allow`, `block`, `ask`, `redact`); `matched = false` → `rule: none (default ask)`. Exit: `allow` 0, `block` 10, `ask` 11, `redact` 11 (ein Redact wird heute gehalten, `pipeline.rs:371-379`). `--json`: `{"verdict","matched","rule_id","origin","position"}`; `origin` aus der Regel in `RulesResponse.rules` derselben Antwort (`session`, `user`, `bundled`), `position` aus `RuleTest.position`. Eine URL ohne Schema oder mit Fragment ist `CLI_004` vor dem Aufruf. Der Verdikt-Exit läuft nicht über `exit_code(&Diagnostic)`; `run` gibt `Ok(EXIT_BLOCK)`/`Ok(EXIT_ASK)` zurück.
+
+`humanitl llm test <URL> [--timeout-ms N] [--json]`: ruft `ProbeLlm { endpoint, timeout_ms }`, druckt `flavor`, Modelle (je eine Zeile, gedeckelt wie in der Oberfläche) und Latenz; unerreichbar → Exit 1 mit dem Befund des Daemons.
+
+`esc-4-rules.sh`: neue Probe je Zeile der Host-Tabelle (`backlog/sprint-2.md` HUM-022, Fälle 1 bis 15) als `rules_cli_<nn>`: `humanitl rules test <URL>` gegen den Daemon des Laufs mit einer `rules.yaml` aus `tests/fixtures/esc4.yaml` (die Datei existiert für die Engine-Tests) im XDG-Baum des Laufs, erwarteter Exit-Code und `verdict` je Fall; die bestehenden `cargo test`-Fälle bleiben.
+
+`--help`: die zwei Sätze „10 and 11 do not occur yet …" verschwinden.
+
+### Schritte
+1. `EXIT_BLOCK`, `EXIT_ASK`, `test` in `cmd/rules.rs`, `test_not_yet` löschen, `--help`. Prüfen: `humanitl rules test https://evil.example` gegen `humanitld --fake` endet 11 mit `verdict: ask`.
+2. `--json`, `CLI_004` für unbrauchbare URLs. Prüfen: `rules_test_json_shape`, `rules_test_bad_url_is_cli_004`.
+3. `llm test`. Prüfen: `llm_test_prints_models` gegen den Fake (der Fake beantwortet `ProbeLlm`, `fake/mod.rs`).
+4. `esc-4-rules.sh` mit den 15 CLI-Fällen, `run.sh` legt `esc4.yaml` als `rules.yaml` des Laufs ab oder lädt sie über `rules reload`. Prüfen: `./tests/escape/run.sh` zählt 15 neue grüne Fälle.
+5. CONVENTIONS 4.21 Absatz schließen, `tests/escape/README.md` Zahlen.
+
+### Tests
+- `rules_test_ask_exit_11`, `rules_test_block_exit_10`, `rules_test_allow_exit_0`, `rules_test_redact_exit_11` (cli, gegen `humanitld --fake` mit passenden Regeln).
+- `rules_test_json_shape`, `rules_test_bad_url_is_cli_004`, `rules_test_without_daemon_exit_2`.
+- `llm_test_prints_models`, `llm_test_unreachable_exit_1`.
+- ESC-4: `rules_cli_01` bis `rules_cli_15`.
+
+### Akzeptanzkriterien
+- [ ] `humanitl rules test https://evil.example` gegen einen laufenden Daemon mit den mitgelieferten Regeln druckt `verdict: ask` und endet 11; `humanitl rules test https://models.dev/api.json` druckt `verdict: block` mit `rule: <id> (bundled, position n)` und endet 10.
+- [ ] `humanitl --json rules test https://evil.example | jq -r .verdict` druckt `ask`; `grep -n 'do not occur yet' daemon/bin/humanitl/src/cli.rs` ist leer; `grep -n 'test_not_yet' daemon/bin/humanitl/src/cmd/rules.rs` ist leer.
+- [ ] `grep -c 'rules_cli_' tests/escape/esc-4-rules.sh` ist mindestens 15, und `./tests/escape/run.sh` zählt sie grün; `tests/escape/README.md` nennt die neue Bilanz.
+- [ ] `humanitl llm test http://127.0.0.1:1/` gegen den Fake endet 1 mit einem `LLM_`-Befund; gegen einen antwortenden Endpunkt druckt es `flavor` und Modelle (`llm_test_prints_models`).
+- [ ] `cargo test -p humanitl --test cli` grün; `backlog/CONVENTIONS.md` 4.21 führt `humanitl llm test` nicht mehr als offen.
+- [ ] `make check` grün.
+
+### Fallstricke
+- `exit_code(&Diagnostic)` in `cmd/mod.rs` bildet Codes auf 1 bis 4 ab; ein Verdikt ist kein Befund und darf diesen Weg nicht nehmen, sonst wird `block` zu Exit 1.
+- Der Fake antwortet `Test` mit seinem eigenen Regelsatz (`fake/mod.rs:727`); die CLI-Tests brauchen Regeln, die dort stehen, oder legen sie über `rules add` an.
+- Die Host-Tabelle prüft Normalisierung (Punycode, trailing dot, Groß-/Kleinschreibung); die URL erreicht den Daemon roh, die Normalisierung passiert dort. Kein `to_lowercase()` in der CLI.
+- `origin` steht nicht in `RuleTest`; die Regel dazu kommt aus `RulesResponse.rules` derselben Antwort. Kein zweiter Aufruf.
+- Die 15 CLI-Fälle brauchen den Daemon des Laufs; `run.sh` startet ihn vor ESC-3 (`:280-300`), ESC-4 läuft danach im selben XDG-Baum.
+
+### Referenzen
+`backlog/sprint-2.md` HUM-022 (Host-Tabelle, Schritt 8), HUM-027 (`Test`), HUM-065 (Kriterien 1 und 2); `backlog/sprint-3.md` HUM-038 Schritt 1, HUM-039 Akzeptanzkriterium; `backlog/sprint-5.md` HUM-059 Schritt 2; CONVENTIONS 3.8, 4.21; `docs/PROTOCOL.md` 4.9; BACKLOG.md ADR-018; `daemon/crates/ipc/src/rules.rs:213-231`; `tests/escape/esc-4-rules.sh:12-16`.
+
+---
+
+## HUM-115 · ESC-3 führt den DNS-Beweis nicht
+Sprint: 2 · Größe: M · Abhängigkeiten: HUM-024, HUM-006, HUM-021 · Blockiert: HUM-059
+
+### Kontext
+ADR-006 sagt: ein Name wird erst nach der Freigabe aufgelöst. Bewiesen ist das im Daemon (`daemon/crates/proxy/tests/dns_after_allow.rs`, 15 Tests mit zählendem Mock-Resolver). Von außen beweist es niemand: HUM-024 Kriterium 3 verlangt `esc-3.sh` mit `dns.log`, `tests/escape/esc-3-egress.sh:111` und `:117` tragen statt der Proben zwei `skip`-Zeilen („needs … a host-side DNS watcher in run.sh"), HUM-021 Kriterium 3 verlangt `--test-hooks` mit `daemon status --json | jq .test.resolves`, das es nicht gibt (`daemon.rs:40-47`, sechs Felder). `docs/THREAT-MODEL.md:366` (K-10) und `docs/SECURITY.md:585` behaupten trotzdem, ESC-3 beobachte host-seitig, dass vor der Entscheidung kein Lookup stattfindet. Der Hebel, den HUM-024 dafür vorgesehen hat, `resolver.nameserver`, steht im Schema und in `docs/CONFIG.md:167` und wirkt nicht: `SystemResolver` ist `getaddrinfo`, und `resolver.rs:595-604` warnt beim Start, der Adapter, der den Schlüssel bedienen könnte, sei „post-MVP". Kein Issue trug diese Lücke.
+
+**Vorher zu entscheiden.** Der Beweis von außen braucht einen Nameserver, den der Daemon wirklich fragt. Zwei Wege: (a) ein `hickory-resolver`-Adapter hinter `resolver.nameserver`, dazu ein aufzeichnender Stub-Nameserver im Harness, oder (b) der Zähler aus HUM-021 (`--test-hooks`, `daemon status --json .test.resolves`), ein Beweis von innen. Diese Spezifikation baut (a): sie macht den toten Schlüssel wirksam und beweist, was K-10 behauptet. (a) braucht eine neue Abhängigkeit in `daemon/Cargo.toml`; die trägt der Eigentümer ein, nicht ein Subagent (`CLAUDE.md`).
+
+### Ziel
+`resolver.nameserver = "IP:Port"` lenkt jede Auflösung des Daemons auf diesen Server. Das Escape-Harness startet einen aufzeichnenden Stub-Nameserver, setzt den Daemon des Laufs darauf, und ESC-3 belegt host-seitig: solange Anfragen gehalten werden, steht kein gehaltener Host in `dns.log`; nach genau einer Freigabe steht genau dieser Host darin, einmal, und danach nichts weiter; `humanitl.internal` erscheint nie. `docs/THREAT-MODEL.md` K-10 ist damit wahr.
+
+### Nicht-Ziel
+DNS über TLS/HTTPS. Ein zweiter Nameserver als Rückfall. Der M1-Lauf (`m1_sealed_box.sh`) behält Schritt 2 als Beleg; sein drittes Kriterium aus HUM-021 wird durch die ESC-3-Proben abgelöst, weil sein Ziel über `resolver.overrides` erreichbar ist und einen Nameserver nie fragt.
+
+### Betroffene Pfade
+- `daemon/crates/proxy/src/resolver.rs` (`HickoryResolver`, Auswahl in `ResolverPort::from_config`, Warnung `:595-604` entfällt), `daemon/crates/proxy/Cargo.toml` (`hickory-resolver.workspace = true`), `daemon/Cargo.toml` (Eigentümer), `daemon/deny.toml` (Lizenzen der neuen Abhängigkeiten prüfen)
+- `daemon/crates/proxy/tests/dns_after_allow.rs` (Adapter-Test gegen einen Stub im Test)
+- `tests/escape/dns-stub.py` (neu), `tests/escape/run.sh` (Stub starten, `HUMANITL_RESOLVER__NAMESERVER`, host-seitige Proben nach ESC-3), `tests/escape/esc-3-egress.sh` (die zwei `skip` entfallen, eine Probe zieht in den Host-Teil), `tests/escape/README.md` (Zahlen, Tabelle „Übersprungen")
+- `docs/CONFIG.md` (Generatorlauf), `docs/THREAT-MODEL.md` K-10, `docs/SECURITY.md:585` (nach HUM-111 wieder ins Präsens)
+- `daemon/crates/config/src/model.rs` (der Vermerk `x-pending-issue = "HUM-115"` an `resolver.nameserver` entfällt) und `daemon/crates/config/tests/config_readers.rs` (seine Registerzeile wechselt auf `effective`). Das Leser-Register aus HUM-101 führt den Schlüssel heute als `pending(HUM-115)`, weil dieses Issue ihn wirksam macht; sein Test vergleicht Register und Schema und wird rot, solange nur eine der beiden Seiten nachgezogen ist.
+
+### Spezifikation
+```rust
+/// Fragt genau den Server aus `resolver.nameserver`, UDP mit TCP-Rückfall,
+/// und sonst niemanden. Der Adapter für Tests und für Netze, in denen der
+/// Systemresolver nicht der gewünschte ist.
+pub struct HickoryResolver { inner: hickory_resolver::TokioAsyncResolver }
+impl Resolver for HickoryResolver { /* lookup wie SystemResolver, prefer beachtet */ }
+// ResolverPort::from_config: nameserver gesetzt -> HickoryResolver, sonst SystemResolver.
+```
+
+`tests/escape/dns-stub.py`: Python 3, UDP-Socket auf `127.0.0.1:<freier Port>`, schreibt je Anfrage eine Zeile `<epoch-ms> <qname> <qtype>` nach `$OUT/dns.log`, antwortet für jeden Namen `NXDOMAIN`. Ein Stub, der nichts auflöst, reicht: die Frage ist nur, *ob* und *wann* gefragt wird. Die freigegebene Anfrage endet deshalb mit 502 `reason: upstream_dns`, und genau das wird erwartet.
+
+`run.sh`: startet den Stub vor dem Daemon, exportiert `HUMANITL_RESOLVER__NAMESERVER=127.0.0.1:<port>` und `HUMANITL_RESOLVER__CACHE_TTL_SECS=0` für den Daemon des Laufs, beendet den Stub im `trap`. Nach den drei In-Sandbox-Suiten ein host-seitiger Block `esc-3 (host)`:
+
+1. `dns_not_before_decision`: aus der Sandbox wurde in ESC-3 ein `curl` an `held.esc3.test` gehalten (neue Probe `via_proxy_dns_probe_held` in `esc-3-egress.sh`, die die Anfrage im Hintergrund lässt, bis die Frist läuft); `dns.log` enthält zu diesem Zeitpunkt keine Zeile mit `held.esc3.test` und keine Zeile mit einem anderen in ESC-3 gehaltenen Host.
+2. `dns_after_allow_once`: `run.sh` gibt einen zweiten gehaltenen Flow an `allowed.esc3.test` über `humanitl --json flows decide <id> allow` frei; danach enthält `dns.log` genau eine Zeile mit `allowed.esc3.test`, ihr Zeitstempel liegt nach dem Zeitpunkt des `decide`, und `humanitl --json flows show <id>` zeigt `error: upstream_dns`.
+3. `meta_no_dns_lookup`: `dns.log` enthält keine Zeile mit `humanitl.internal` (ESC-3 hat den Meta-Endpunkt mehrfach angesprochen).
+
+Die Frist des Daemons im Lauf sind 2 s (`HUMANITL_HOLD__TIMEOUT_SECS`, `run.sh`); die Freigabe in Schritt 2 passiert innerhalb der Frist, deshalb hält `run.sh` die Flow-Id aus `humanitl --json flows list --filter 'state:held host:allowed.esc3.test'` vor dem Ablauf fest oder setzt die Frist für diesen Lauf auf 10 s.
+
+### Schritte
+1. `HickoryResolver` mit Test gegen einen Stub im Test (`tests/dns_after_allow.rs::hickory_adapter_asks_only_the_configured_server`). Prüfen: `cargo test -p humanitl-proxy --test dns_after_allow` grün; `cargo deny check` grün (CI).
+2. Warnung entfernen, `docs/CONFIG.md` regenerieren. Prüfen: `humanitld` mit `HUMANITL_RESOLVER__NAMESERVER=127.0.0.1:5353` loggt den Adapter.
+3. `dns-stub.py`, Start und Umgebung in `run.sh`. Prüfen: `dns.log` entsteht, ein `curl` aus der Sandbox nach Freigabe hinterlässt eine Zeile.
+4. Proben in `esc-3-egress.sh` und im Host-Block; die zwei `skip` entfallen. Prüfen: `./tests/escape/run.sh` zählt drei neue grüne Fälle, 6 übersprungene statt 8.
+5. `tests/escape/README.md`, `docs/THREAT-MODEL.md` K-10, `docs/SECURITY.md:585`.
+
+### Tests
+- `hickory_adapter_asks_only_the_configured_server`, `hickory_adapter_honours_prefer` (proxy).
+- ESC-3 (host): `dns_not_before_decision`, `dns_after_allow_once`, `meta_no_dns_lookup`.
+- `pinned_addr_used` und die 15 bestehenden Tests bleiben grün.
+
+### Akzeptanzkriterien
+- [ ] `grep -n 'skip dns_not_before_decision\|skip meta_no_dns_lookup' tests/escape/esc-3-egress.sh` ist leer; `./tests/escape/run.sh` meldet `dns_not_before_decision`, `dns_after_allow_once` und `meta_no_dns_lookup` als `pass` und 6 übersprungene Fälle.
+- [ ] `target/escape/dns.log` existiert nach dem Lauf und enthält genau eine Zeile mit `allowed.esc3.test`, keine mit `held.esc3.test`, keine mit `humanitl.internal`.
+- [ ] `grep -n 'post-MVP' daemon/crates/proxy/src/resolver.rs` ist leer; `docs/CONFIG.md` beschreibt `resolver.nameserver` als wirksam und zeigt in der Spalte „Wirkung" `ja`; das Leser-Register führt ihn als `effective`; `cargo test -p humanitl-proxy -p humanitl-config` grün.
+- [ ] `docs/THREAT-MODEL.md` K-10 und `docs/SECURITY.md` Tabelle 9.3 nennen ESC-3 als host-seitigen Beweis, und `tests/escape/README.md` trägt die neue Bilanz.
+- [ ] `daemon/Cargo.toml` trägt `hickory-resolver` als Workspace-Abhängigkeit (vom Eigentümer eingetragen), `cargo deny check` in der CI grün.
+- [ ] `make check` grün.
+
+### Fallstricke
+- Auf CI-Läufern lauscht oft `systemd-resolved` auf `127.0.0.53:53`; der Stub nimmt einen freien hohen Port, nie 53.
+- `resolver.cache_ttl_secs` würde eine zweite Auflösung verstecken und „genau einmal" trivial machen; der Lauf setzt die TTL auf 0, und die Probe prüft die Reihenfolge (Zeitstempel nach `decide`), nicht nur die Zahl.
+- `resolver.overrides` gehen vor jeder Abfrage (`OverrideResolver`); ein Host in den Overrides erreicht den Stub nie. Die Probennamen `*.esc3.test` dürfen dort nicht stehen.
+- Die Ablehnung privater Adressen (ADR-006) greift nach der Auflösung; der Stub antwortet `NXDOMAIN`, damit der Fall gar nicht entsteht. Ein Stub, der `127.0.0.1` liefert, würde `PrivateAddress` und nicht `upstream_dns` erzeugen.
+- hickory zieht einen eigenen Abhängigkeitsbaum; `deny.toml` prüft Lizenzen nur in der CI (`Makefile:39` steht nicht in `make check`), also vor dem Push in der CI-Ausgabe nachsehen.
+- `SystemResolver` bleibt der Standard; ein leerer Schlüssel ändert nichts am Verhalten des Alltags.
+
+### Referenzen
+`backlog/sprint-2.md` HUM-024 (Kriterium 3, `dns-recorder.rs`); `backlog/sprint-1.md` HUM-021 (Kriterium 3); BACKLOG.md ADR-006, 4.5 (ESC-3); `docs/THREAT-MODEL.md` K-10; `docs/SECURITY.md` 7, 9.3; `daemon/crates/proxy/src/resolver.rs:46, 281-292, 595-604`; `tests/escape/run.sh:228-300`; `tests/escape/README.md:251-253`; https://github.com/hickory-dns/hickory-dns.
+
+---
+
+## HUM-116 · Body-Ansichten enden am History-Bildschirm
+Sprint: 2 · Größe: M · Abhängigkeiten: HUM-030, HUM-032 · Blockiert: keine
+
+### Kontext
+HUM-030 hat `BodyView` gebaut: JSON-Baum, Formular-Tabelle, Raw mit Fund-Markierung, Hex für Binärdaten, Umschalter, Entpacken nach `Content-Encoding`. HUM-032 verlangt für das History-Detail „je Tab Header-Tabelle, dann BodyView (HUM-030)". Gebaut ist etwas anderes: `app/lib/features/history/history_detail.dart:474-560` zeichnet eigene Textzeilen, `grep -rn 'BodyView' app/lib/features/history/` trifft nichts, `providers/history_detail.dart:144-156` prüft auf ein NUL-Byte und dekodiert UTF-8, kennt aber kein `Content-Encoding`; ein gzip-Rumpf liest sich dort als „{size} of binary content", während dieselbe Aufzeichnung im Intercept ausgepackt und markiert wird. Der Doc-Kommentar `:104` verspricht einen Hex-Dump, den es im ganzen Feature nicht gibt. Ursache ist die Reihenfolge: HUM-032 wurde am Morgen des 2026-09-04 gemerged (6a7da2f), HUM-030 am Abend (d98782d), und niemand ist zurückgegangen. Dazu liegt `app/lib/features/intercept/widgets/section_body_raw.dart` (163 Zeilen) seit HUM-030 ohne Importeur herum. Kein Issue und kein Absatz in CONVENTIONS 4.18 nennt das.
+
+### Ziel
+Das History-Detail zeigt Request- und Response-Rumpf mit derselben `BodyView` wie die Intercept-Karte: Baum, Formular, Raw, Hex, Umschalter, entpackt nach `Content-Encoding`, mit Fund-Markierung, wo der Flow Funde trägt. Es gibt einen Rumpf-Provider (`flowBodyProvider`) für beide Bildschirme, und die tote Datei ist weg.
+
+### Nicht-Ziel
+Der Export (HUM-092 zieht ihn in den Daemon; `content.text` für geblockte Flows bleibt dort). Antwort-Rümpfe mit `br`/`zstd` (HUM-119). Funde in Antwort-Rümpfen (die Detektoren laufen auf Anfragen).
+
+### Betroffene Pfade
+- `app/lib/features/history/history_detail.dart` (`_Body` → `BodyView`), `app/lib/features/history/providers/history_detail.dart` (`historyBodyProvider`, `HistoryBody`, `decodeHistoryBody` entfallen)
+- `app/lib/features/intercept/providers/flow_body_provider.dart` (bleibt der eine Provider; Kommentar `history_detail.dart:58` einlösen, gegebenenfalls Umzug nach `app/lib/core/`), `app/lib/features/intercept/body/body_view.dart` (falls die Signatur einen Antwort-Rumpf ohne Funde braucht)
+- `app/lib/features/intercept/widgets/section_body_raw.dart` (gelöscht)
+- `app/test/features/history/history_detail_test.dart`, `app/test/goldens/history_golden_test.dart` (Goldens `history_detail_request_*` neu, `history_detail_body_json_*`, `history_detail_body_hex_*` dazu)
+- `app/l10n/app_en.arb`, `app_de.arb` (Schlüssel `historyDetailBinaryBody` und Verwandte entfallen, wenn `BodyView` sie ersetzt)
+
+### Spezifikation
+`_Body` wird `BodyView(flowId: flow.id, body: reference)` je Tab; `BodyView` bekommt die Funde des Flows aus dem Detail (`FlowDetail.findings`, Anfrage-Seite) und für die Antwort eine leere Liste. `flowBodyProvider(BodyRef)` bleibt die einzige Quelle für Bytes über `GetBody`, mit dem LRU aus HUM-030 (32 Einträge, 64 MiB), und liegt unter `app/lib/core/` oder bleibt im Intercept-Feature mit Import aus History (Regel aus `tools/check-deps.sh` zu Feature-Importen beachten: Features importieren nicht quer; deshalb Umzug nach `app/lib/core/ipc/`). Die Grenzen aus HUM-030 gelten (64 KiB Vorschau, 8 MiB `detect_too_large`); `historyMaxLines` entfällt. Der Doc-Kommentar zum Hex-Dump wird wahr oder verschwindet.
+
+### Schritte
+1. `flowBodyProvider` nach `app/lib/core/ipc/` verschieben, beide Importeure umstellen. Prüfen: `tools/check-deps.sh` Exit 0, `flutter analyze` sauber.
+2. `_Body` auf `BodyView` umstellen, Provider und Typen der History löschen. Prüfen: `grep -rn 'decodeHistoryBody\|class HistoryBody' app/lib` leer.
+3. Tests und Goldens. Prüfen: `flutter test test/features/history test/goldens/history_golden_test.dart` grün.
+4. `section_body_raw.dart` löschen, verwaiste ARB-Schlüssel entfernen. Prüfen: `grep -rn SectionBodyRaw app/` leer; `make flutter-codegen` ohne Warnung.
+
+### Tests
+- `history_detail_uses_body_view` (Widget): ein aufgezeichneter JSON-Rumpf zeigt den Baum, ein Formular-Rumpf die Tabelle, ein Binär-Rumpf die Hex-Ansicht.
+- `history_gzip_body_is_readable`: ein gzip-kodierter Rumpf (Header `Content-Encoding: gzip` im Detail) erscheint entpackt.
+- `history_request_findings_are_marked`: ein Flow mit einem Fund in der Anfrage zeigt die Markierung im Raw-Tab.
+- Goldens `history_detail_request_{dark,light}` (neu erzeugt), `history_detail_body_json_{dark,light}`, `history_detail_body_hex_{dark,light}`.
+
+### Akzeptanzkriterien
+- [ ] `grep -rn 'BodyView' app/lib/features/history/history_detail.dart` trifft; `grep -rn 'decodeHistoryBody\|class HistoryBody\|historyBodyProvider' app/lib` ist leer.
+- [ ] `test -e app/lib/features/intercept/widgets/section_body_raw.dart` schlägt fehl; `grep -rn 'SectionBodyRaw' app/` ist leer.
+- [ ] `HUMANITL_FAKE=history:200 flutter run -d linux`: ein JSON-Antwort-Rumpf zeigt den Baum, ein gzip-Rumpf lesbaren Text, ein Binär-Rumpf die Hex-Ansicht (Blick, dazu die drei Widget-Tests).
+- [ ] `cd app && flutter test test/features/history test/features/intercept test/goldens` grün im CI-Modus; `flutter analyze` sauber; `tools/check-deps.sh` Exit 0.
+- [ ] `grep -c 'historyDetailBinaryBody' app/l10n/app_en.arb app/l10n/app_de.arb` ergibt 0, oder der Schlüssel hat einen Verwender.
+- [ ] `make check` grün.
+
+### Fallstricke
+- `BodyView` hält Hover- und Fokus-Zustand für Funde; ohne Funde (Antwort) darf sie keine Chips-Zeile zeichnen. Prüfen, ob `body_view.dart` das heute schon kann.
+- Die Fake-Aufzeichnung füllt geblockte Flows mit `{"error": "blocked", …}` (`fake_daemon_client.dart:2292`), einem Rumpf, den der echte Proxy nie schreibt; kein Golden darauf bauen (HUM-099 räumt den Fake auf).
+- Große Rümpfe: `perf_test.dart` gilt weiter; der History-Tab darf kein zweites `Isolate.run` mit eigener Schwelle einführen.
+- `tools/check-deps.sh` verbietet Importe zwischen Features; der Provider zieht nach `core`, nicht History importiert Intercept.
+
+### Referenzen
+`backlog/sprint-2.md` HUM-030 (Spezifikation `BodyView`, `flowBodyProvider`), HUM-032 (Spezifikation „Detail unten", Zeile „dann BodyView (HUM-030)"); CONVENTIONS 4.18; `docs/UX.md` 3.2; `app/lib/features/history/history_detail.dart:474-560`; `app/lib/features/history/providers/history_detail.dart:58, 104, 144-156`.
+
+---
+
+## HUM-117 · Die Notiz einer Entscheidung hat keinen Ort außer der 403-Antwort
+Sprint: 2 · Größe: M · Abhängigkeiten: HUM-072, HUM-026 · Blockiert: HUM-051 (Audit-Screen zeigt die Notiz), HUM-073 (`/why` nach Neustart)
+
+### Kontext
+HUM-072 sagt in Ziel und Schritt 4: „History-Detail und Audit-Screen zeigen `note`", und `docs/ARCHITECTURE.md:115` (8.2) beschreibt die Notiz als Feedback an den Agenten. Gebaut ist der Weg zum Agenten: 403-Body und `X-Humanitl-Note`, gesäubert und getestet. Der Weg zum Menschen fehlt: `FlowEvent.Decided.note` reist live (`proto:457`, `convert.dart:311`), aber der Dart-`Flow` hat kein Feld dafür, `FlowSummary` und `FlowDetail` tragen keines, der Recorder hat keine Spalte, und sein Test `recorder.rs:836-879` verbietet sie ausdrücklich („the note of the user has no column and must not leak into one"). `/why/<id>` (HUM-073) liest die Notiz aus dem `FlowRegistry` im Speicher (`meta.rs:476-504`); nach einem Neustart des Daemons ist sie weg. Kein Absatz in CONVENTIONS hält fest, warum das Speichern verworfen wurde, und HUM-072 wurde als fertig committet.
+
+**Vorher zu entscheiden.** Speichern oder nicht. Diese Spezifikation speichert: die Notiz ist der eigene Satz des Menschen an den Agenten, sie geht ohnehin im Klartext in die 403-Antwort, und ein Audit-Screen, der die Entscheidung ohne ihre Begründung zeigt, ist die halbe Aufzeichnung. Wer anders entscheidet, streicht die Sätze in HUM-072, ARCHITECTURE 8.2 und HUM-051 und schreibt den Grund nach CONVENTIONS 4.x; der Recorder-Test bleibt dann als Zeuge.
+
+### Ziel
+Die Notiz einer Block-Entscheidung liegt in der Aufzeichnung, erscheint in `humanitl flows show`, im History-Detail unter der Entscheidung und im HAR-Export unter `_humanitl.note`, und `/why/<id>` liefert sie auch nach einem Neustart. HUM-072s Nebenzusage steht: enthält die Notiz selbst ein Secret, warnt ein Befund, die Entscheidung fällt trotzdem.
+
+### Nicht-Ziel
+Der Audit-Eintrag (HUM-050, HUM-051). Notizen an Allow-Entscheidungen. Bearbeiten einer Notiz nach der Entscheidung.
+
+### Betroffene Pfade
+- `daemon/crates/recorder/migrations/V5__decision_note.sql` (neu), `daemon/crates/recorder/src/writer.rs`, `src/read.rs` (oder wo `get_flow`/`list_flows` bauen), `tests/recorder.rs:836-879`
+- `proto/humanitl/v1/humanitl.proto` (`FlowDetail.decision_note`, `FlowSummary.decision_note`), `PROTO_MINOR`, `proto/descriptor.binpb`
+- `daemon/crates/ipc/src/convert.rs`, `src/fake/state.rs`
+- `daemon/crates/proxy/src/meta.rs` (`/why` liest nach dem Registry-Fehlschlag den Recorder), `src/handler.rs` (Findings-Scan der Notiz bei `Decide`)
+- `daemon/crates/core-types/src/diagnostics/codes.rs` (`FINDINGS_003`, „Fund in einer Notiz")
+- `daemon/bin/humanitl/src/cmd/flows.rs` (`show` druckt `note:`)
+- `app/lib/core/domain/flow.dart` (`note`), `app/lib/core/ipc/convert.dart`, `app/lib/features/history/history_detail.dart`, `app/lib/features/history/export/har.dart`, `app/l10n/*.arb`, `app/lib/core/ipc/fake_daemon_client.dart`
+
+### Spezifikation
+```sql
+-- V5__decision_note.sql
+ALTER TABLE flows ADD COLUMN decision_note TEXT;  -- kein Index: angezeigt, nicht gefiltert
+```
+
+Der Writer schreibt `decision_note` beim `Decided`-Ereignis mit `Decision::Block { note: Some(_) }`, gesäubert über `sanitize_note` (dieselbe Funktion wie für die 403-Antwort, damit die Aufzeichnung genau das trägt, was der Agent gesehen hat). Proto: `string decision_note = <nächste Nummer>` in `FlowSummary` und `FlowDetail`, leer wenn keine. `humanitl flows show` druckt `note: …` nach der Entscheidung, `--json` das Feld. History-Detail: eine Zeile unter der Entscheidung, ARB `historyDetailNote` („Note to the agent: {note}"). HAR: `_humanitl.note`. `/why`: `note=` aus dem Registry, sonst aus dem Recorder.
+
+Findings-Scan: beim `Decide` mit Notiz läuft die Registry aus HUM-025 über den Text; jeder Fund ergibt genau ein `FlowEvent::Diagnostic` `FINDINGS_003` (Warning) am Flow mit Art und Präfix des Funds, ohne den Wert; die Entscheidung fällt unverändert (die Notiz ist Wille des Menschen). Ein Fund in der Notiz erscheint nicht als `Finding` am Flow (die gehören zur Anfrage).
+
+### Schritte
+1. Migration, Writer, Leser; Recorder-Test umschreiben (`the_note_of_the_user_is_recorded_as_sent`). Prüfen: `cargo test -p humanitl-recorder` grün.
+2. Proto, `PROTO_MINOR`, Converter, Rust-Fake. Prüfen: `humanitl --json flows show <id> | jq -r .decision_note` gegen `humanitld --fake` nach einem Block mit `--note`.
+3. `/why` mit Recorder-Rückfall; Test `why_survives_a_restart` in `tests/meta.rs`.
+4. `FINDINGS_003`, Scan im Handler, Test `a_secret_in_the_note_warns_and_still_blocks`.
+5. CLI `show`, Dart-Domäne, History-Detail, HAR, ARB. Prüfen: `history_detail_shows_block_note`, `har_carries_the_note`.
+6. CONVENTIONS 4.x hält die Entscheidung fest; HUM-072 Kriterium 3 bleibt offen bis HUM-050/051.
+
+### Tests
+- `the_note_of_the_user_is_recorded_as_sent` (recorder): Block mit `note: Some("nein")`, `get_flow` liefert `decision_note == "nein"`; ein Allow hat `None`.
+- `note_is_sanitised_before_it_is_stored`: CR/LF in der Notiz landen als Leerzeichen in der Spalte.
+- `why_survives_a_restart` (proxy, `tests/meta.rs`).
+- `a_secret_in_the_note_warns_and_still_blocks` (proxy): Notiz mit `ghp_…`-Token → 403 mit der Notiz, ein `FINDINGS_003` im Strom, kein `Finding` am Flow.
+- `flows_show_prints_the_note` (cli), `history_detail_shows_block_note` (dart), `har_carries_the_note` (dart), `fake_records_the_note` (dart).
+
+### Akzeptanzkriterien
+- [ ] Nach `humanitl flows decide <id> block --note 'use PyPI'` druckt `humanitl --json flows show <id> | jq -r .decision_note` `use PyPI`, auch nach einem Neustart des Daemons.
+- [ ] Aus der Sandbox liefert `curl http://humanitl.internal/why/<id>` nach dem Neustart `note=use PyPI` als letztes Feld.
+- [ ] `grep -n 'must not leak' daemon/crates/recorder/tests/recorder.rs` ist leer; `daemon/crates/recorder/migrations/V5__decision_note.sql` existiert; `cargo test -p humanitl-recorder` grün.
+- [ ] Das History-Detail zeigt die Notiz unter der Entscheidung (`history_detail_shows_block_note`, Golden `history_detail_note_{dark,light}`); `grep -c '"historyDetailNote"' app/l10n/app_en.arb app/l10n/app_de.arb` ergibt je 1.
+- [ ] Eine Notiz mit einem GitHub-Token erzeugt genau einen Befund `FINDINGS_003` im Ereignisstrom, der Block fällt, und `FlowDetail.findings` bleibt unverändert.
+- [ ] `PROTO_MINOR` um eins erhöht, `proto/descriptor.binpb` im selben Commit; `make check` grün.
+- [ ] Bei Entscheidung „nicht speichern" statt der Punkte oben: HUM-072 Ziel und Schritt 4, `docs/ARCHITECTURE.md` 8.2 und `backlog/sprint-4.md` HUM-051 sind korrigiert, CONVENTIONS 4.x nennt den Grund, und `docs/PROTOCOL.md` bleibt unberührt.
+
+### Fallstricke
+- Die Notiz ist Eingabe des Menschen und wird dem Agenten gezeigt, aber im History-Detail und in `/why` auch wieder dem Menschen; `sanitize_note` vor dem Speichern, nie beim Lesen raten.
+- `FlowSummary` reist in jeder Listenzeile; eine 500-Zeichen-Notiz je Zeile ist vertretbar, aber `humanitl flows list` druckt sie nicht in der Tabelle, nur `show`.
+- `FINDINGS_003` ist Warnung, nicht Block; wer die Notiz mit einem Secret abschicken will, darf das. Der Befund nennt Art und `display_prefix`, nie den Wert (HUM-025-Regel für Funde).
+- Die Migration läuft auf bestehenden Datenbanken; alte Zeilen haben `NULL`, der Leser bildet das auf leer ab.
+- `/why` antwortet nur für die eigene Sitzung (CONVENTIONS 4.24); der Recorder-Rückfall darf das nicht aufweichen (Sitzungs-Id prüfen).
+
+### Referenzen
+`backlog/sprint-2.md` HUM-072 (Ziel, Schritt 4, Kriterium 3); `backlog/sprint-3.md` HUM-073; `backlog/sprint-4.md` HUM-050, HUM-051; `docs/ARCHITECTURE.md` 8.2; CONVENTIONS 4.13, 4.24; `daemon/crates/recorder/tests/recorder.rs:836-879`; `daemon/crates/proxy/src/meta.rs:476-504`; `proto/humanitl/v1/humanitl.proto:446-458, 601-609`.
+
+---
+
+## HUM-118 · Notification-Hints kommen doppelt verpackt an
+Sprint: 2 · Größe: S · Abhängigkeiten: HUM-034 · Blockiert: keine
+
+### Kontext
+`app/lib/features/tray/platform/dbus_notifications.dart:164-167` übergibt die Hints als `DBusDict.stringVariant({'urgency': const DBusVariant(DBusByte(1)), 'desktop-entry': const DBusVariant(DBusString(_desktopEntry))})`. `DBusDict.stringVariant` verpackt jeden Wert selbst in ein `DBusVariant` (`dbus` 0.7.15, `lib/src/dbus_value.dart:1169-1175`); auf der Leitung steht damit ein Variant im Variant. Live auf einer Sitzung mit `dbus-run-session` beobachtet: `Unsupported variant type for "urgency": "v"`. Jeder Notification-Server verwirft die Hints still; die Dringlichkeit und der Desktop-Eintrag (Icon, Zuordnung zur App) kommen nie an. Kein Test liest die Hints. Dazu misst der einzige Handtest des Tray-Protokolls auf einem echten Desktop falsch: `HUMANITL_DBUS_TESTS=1 flutter test test/features/tray/dbus_live_test.dart` endet auf dem Sitzungsbus dieser Maschine mit `Bad state: No element` (`dbus_live_test.dart:78`), weil ein echter `org.kde.StatusNotifierWatcher` den Namen schon hält und der Test das Ergebnis von `host.requestName(...)` nie prüft; auf einem privaten Bus ist er grün.
+
+### Ziel
+Die Hints erreichen den Server als `a{sv}` mit `urgency` als Byte und `desktop-entry` als String, ein Test liest sie über die Testattrappe, und der Live-Test erklärt auf einem Bus mit fremdem Watcher, warum er nicht messen kann, statt mit `Bad state` zu enden.
+
+### Nicht-Ziel
+Neue Hints (`image-path`, `category`). Der GNOME-Handlauf aus HUM-034 Kriterium 2.
+
+### Betroffene Pfade
+- `app/lib/features/tray/platform/dbus_notifications.dart:160-172`
+- `app/test/features/tray/tray_host_test.dart` oder eine neue `dbus_notifications_test.dart` (Attrappe `desktop.notifications` liest die Hints)
+- `app/test/features/tray/dbus_live_test.dart:70-90`
+- `Makefile` (Ziel `flutter-test-dbus`, das den Live-Test unter `dbus-run-session` fährt)
+
+### Spezifikation
+```dart
+DBusDict.stringVariant(<String, DBusValue>{
+  'urgency': const DBusByte(1),
+  'desktop-entry': const DBusString(_desktopEntry),
+}),
+```
+
+Die Attrappe der Notifications hält die zuletzt gesendeten Hints (`Map<String, DBusValue>`), der Test prüft `hints['urgency'] == DBusVariant(DBusByte(1))` und `hints['desktop-entry'] == DBusVariant(DBusString(...))`, also genau eine Verpackung. Der Live-Test prüft das Ergebnis von `requestName`; ist der Name vergeben, endet er mit `markTestSkipped('a StatusNotifierWatcher already owns the name; run under dbus-run-session')`. `make flutter-test-dbus` fährt ihn unter `dbus-run-session -- env HUMANITL_DBUS_TESTS=1 flutter test test/features/tray/dbus_live_test.dart`.
+
+### Schritte
+1. Verpackung korrigieren, Attrappe erweitern, Test. Prüfen: `flutter test test/features/tray` grün, der neue Test fällt mit der alten Zeile.
+2. Live-Test mit `requestName`-Prüfung und Skip. Prüfen: auf dem Sitzungsbus der Maschine `~1` statt Fehler; unter `dbus-run-session` grün.
+3. Makefile-Ziel, `CONTRIBUTING.md` ein Satz.
+
+### Tests
+- `notification_hints_are_wrapped_once` (Widget/Unit gegen die Attrappe); Mutationsprobe: die alte Zeile lässt ihn rot werden.
+- `dbus_live_test` unter `dbus-run-session`: die Hints kommen als `a{sv}` mit `y` und `s` an (`dbus-monitor` oder die Server-Attrappe des Tests liest den Typ).
+- `dbus_live_test` auf einem Bus mit fremdem Watcher: übersprungen mit Grund.
+
+### Akzeptanzkriterien
+- [ ] `grep -n 'DBusVariant(DBusByte\|DBusVariant(DBusString' app/lib/features/tray/platform/dbus_notifications.dart` ist leer.
+- [ ] `cd app && flutter test test/features/tray` grün, darunter `notification_hints_are_wrapped_once`; mit der alten Zeile wird er rot (Ergebnis im Commit-Body).
+- [ ] `make flutter-test-dbus` (unter `dbus-run-session`) grün; die Server-Seite des Tests sieht `urgency` als Byte, nicht als Variant.
+- [ ] `HUMANITL_DBUS_TESTS=1 flutter test test/features/tray/dbus_live_test.dart` auf einem Bus mit echtem Watcher endet mit einem Skip, dessen Text `dbus-run-session` nennt; `grep -n 'requestName' app/test/features/tray/dbus_live_test.dart` trifft eine Prüfung des Ergebnisses.
+- [ ] `make check` grün.
+
+### Fallstricke
+- `DBusDict.stringVariant` ist die richtige Fabrik; nur der Inhalt war doppelt. Nicht auf `DBusDict.unchecked` ausweichen.
+- `urgency` ist ein Byte (0, 1, 2) nach der Notifications-Spezifikation; `DBusUint32` wäre wieder ein stiller Verwurf.
+- Der Live-Test darf nie gegen den Watcher des echten Desktops registrieren; die `requestName`-Prüfung kommt vor jeder Registrierung.
+
+### Referenzen
+`backlog/sprint-2.md` HUM-034; CONVENTIONS 4.19; https://specifications.freedesktop.org/notification-spec/latest/ (Hints, `urgency`); `~/.pub-cache/hosted/pub.dev/dbus-0.7.15/lib/src/dbus_value.dart:1169-1175`; `app/lib/features/tray/platform/dbus_notifications.dart:158-172`.
+
+---
+
+## HUM-119 · `GetBody` kennt kein `decoded`-Flag
+Sprint: 2 · Größe: M · Abhängigkeiten: HUM-030, HUM-025, HUM-026 · Blockiert: keine
+
+### Kontext
+HUM-030 spezifiziert: „`GetBody` hat Flag `decoded = true`, der Daemon liefert dekodiert bis Cap" (`backlog/sprint-2.md:1176`). `rpc GetBody(BodyRef)` (`proto:28`) kennt kein solches Feld; `BodyRef` trägt `sha256`, `size`, `truncated`, `content_type` (`proto:135-141`). Die App packt deshalb selbst aus (`app/lib/features/intercept/body/body_decode.dart`) und kann `br` und `zstd` nicht (`:50-51`, `BodyEncoding.unsupported`), während der Daemon brotli beherrscht (`daemon/crates/findings/src/decode.rs`, `ContentEncoding::Brotli`) und die Funde auf den entpackten Bytes berechnet. Für einen brotli-Rumpf behält jeder Fund seinen Namen und verliert seine Stelle: die Spans zeigen in entpackte Bytes, die App hat nur die gepackten. Der Verzicht steht als Kommentar im Code (`body_decode.dart:17`), in keinem Issue.
+
+### Ziel
+Die App fragt `GetBody` mit `decoded = true` und bekommt vom Daemon die entpackten Bytes (gzip, deflate, brotli, mit dem Budget aus `decode.rs`), oder die rohen Bytes mit dem Namen der Kodierung, die er nicht kann (`zstd`, Ketten). Die Spans der Funde stimmen damit für jeden Rumpf, den der Daemon entpacken konnte. `body_decode.dart` verliert seinen eigenen Dekoder.
+
+### Nicht-Ziel
+`zstd` im Daemon (neue Abhängigkeit, eigene Entscheidung). Streaming-Dekodierung über die Grenze hinaus (HUM-057 setzt Ratio-Grenzen). Änderungen an der Aufzeichnung: gespeichert bleibt, was auf der Leitung war.
+
+### Betroffene Pfade
+- `proto/humanitl/v1/humanitl.proto` (`BodyRef.content_encoding = 5`, `BodyRef.decoded = 6`, `BodyChunk.encoding_left = 4`), `PROTO_MINOR`, `proto/descriptor.binpb`, `proto/generated.sha256`
+- `daemon/crates/ipc/src/server.rs:972` (`get_body`), `src/convert.rs` (`content_encoding` aus den aufgezeichneten Kopfzeilen in `FlowDetail.request.body`/`response`), `src/fake/`
+- `daemon/crates/findings/src/decode.rs` (öffentliche Funktion für den IPC-Pfad, falls nicht schon exportiert; `lib.rs:67`)
+- `daemon/crates/ipc/tests/` (neuer Test für `get_body`)
+- `app/lib/features/intercept/body/body_decode.dart` (schrumpft auf das Lesen von `encoding_left`), `app/lib/features/intercept/providers/flow_body_provider.dart` (Cache-Schlüssel mit `decoded`), `app/lib/core/ipc/convert.dart`, `app/lib/core/ipc/fake_daemon_client.dart`, `app/test/features/intercept/body/`
+
+### Spezifikation
+```proto
+message BodyRef {
+  bytes sha256 = 1;
+  uint64 size = 2;
+  bool truncated = 3;
+  string content_type = 4;
+  // Content-Encoding der aufgezeichneten Bytes, leer fuer identity. Fuellt der
+  // Daemon in FlowDetail; der Client reicht es in GetBody zurueck.
+  string content_encoding = 5;
+  // Nur in GetBody gelesen: wahr, wenn der Daemon nach content_encoding
+  // entpacken soll. Kann er das nicht, liefert er die rohen Bytes und nennt
+  // die Kodierung in BodyChunk.encoding_left.
+  bool decoded = 6;
+}
+message BodyChunk {
+  bytes data = 1;
+  uint64 offset = 2;
+  bool last = 3;
+  // Kodierung, die noch auf data liegt: leer nach erfolgreichem Entpacken
+  // oder bei identity; sonst der Name aus content_encoding.
+  string encoding_left = 4;
+}
+```
+
+`get_body`: ohne `decoded` wie heute. Mit `decoded` und bekannter Kodierung: Bytes aus dem Recorder lesen, über `humanitl_findings::decode` entpacken (Budget wie beim Scan; ein Abbruch am Budget liefert das Entpackte mit `last = true` und `truncated`-Semantik im letzten Chunk), als Chunks streamen, `encoding_left = ""`. Mit unbekannter Kodierung oder Kette: rohe Bytes, `encoding_left = content_encoding`. `sha256` bleibt der Hash der gespeicherten Bytes; der Cache der App schlüsselt nach `(sha256, decoded)`.
+
+App: `flowBodyProvider` fragt immer `decoded = true`; `body_decode.dart` bildet `encoding_left` auf `BodyEncoding.unsupported` mit Namen ab und entfällt sonst; `dart:io` `gzip`/`zlib` werden nicht mehr benutzt. Die Fund-Spans aus `Analyzed` beziehen sich auf die entpackten Bytes, also auf das, was die App jetzt hält.
+
+### Schritte
+1. Proto, Generatorläufe, `PROTO_MINOR`. Prüfen: `make proto && git diff --exit-code proto/` leer.
+2. `content_encoding` in `FlowDetail` füllen (Converter, beide Fakes). Prüfen: `detail_carries_the_content_encoding`.
+3. `get_body` mit Entpacken. Prüfen: `get_body_decoded_inflates_brotli`, `get_body_decoded_leaves_zstd_alone`, `get_body_raw_is_unchanged`.
+4. App-Seite: Provider, `body_decode.dart`, Dart-Fake (liefert einen brotli-Rumpf im Szenario `default`). Prüfen: `raw_findings_decoration_positions` mit einem brotli-Rumpf trifft die richtige Spalte.
+5. `grep -rn 'GZipCodec\|ZLibCodec' app/lib` leer.
+
+### Tests
+- `get_body_decoded_inflates_brotli`, `get_body_decoded_inflates_gzip`, `get_body_decoded_leaves_zstd_alone`, `get_body_raw_is_unchanged`, `get_body_decoded_stops_at_the_budget` (ipc).
+- `detail_carries_the_content_encoding` (ipc, beide Fakes).
+- `brotli_body_shows_its_finding_at_the_right_place` (dart, `raw_findings_decoration_positions` erweitert), `unsupported_encoding_names_itself` (dart).
+
+### Akzeptanzkriterien
+- [ ] `grep -n 'decoded\|encoding_left\|content_encoding' proto/humanitl/v1/humanitl.proto` trifft in `BodyRef` und `BodyChunk`; `PROTO_MINOR` um eins erhöht; `proto/descriptor.binpb` im selben Commit.
+- [ ] `cargo test -p humanitl-ipc` grün, darunter die fünf `get_body_*`-Tests; ein brotli-Rumpf kommt mit `decoded = true` als Klartext und `encoding_left == ""`, ein zstd-Rumpf roh mit `encoding_left == "zstd"`.
+- [ ] `grep -rn 'GZipCodec\|ZLibCodec\|gzip' app/lib/features/intercept/body/body_decode.dart` ist leer; `flutter test test/features/intercept/body` grün, darunter der brotli-Fall mit korrekter Fundstelle.
+- [ ] Gegen einen laufenden Daemon: ein `curl --compressed` aus der Sandbox an ein Ziel, das `br` liefert, zeigt in der Karte den lesbaren Rumpf (Blick).
+- [ ] `make check` grün.
+
+### Fallstricke
+- Dekompressionsbomben: das Budget aus `decode.rs` (und ab HUM-057 die Ratio-Grenze) gilt auch hier; kein eigener Dekoder im IPC-Pfad.
+- `truncated`-Rümpfe (der Recorder hat nur einen Präfix) lassen sich nicht vollständig entpacken; liefern, was entpackt wurde, und `truncated` weiterreichen, statt mit Fehler zu enden.
+- `Content-Encoding: gzip, br` ist eine Kette; `decode.rs` kennt nur eine Schicht, also `encoding_left = "gzip, br"` und roh.
+- Der Cache-Schlüssel der App muss `decoded` enthalten; sonst zeigt die History (HUM-116) rohe Bytes aus einem Cache-Treffer der Intercept-Karte oder umgekehrt.
+- Die beiden Fakes müssen `content_encoding` füllen und `decoded` beachten, sonst prüfen die Widget-Tests weiter das alte Verhalten.
+
+### Referenzen
+`backlog/sprint-2.md` HUM-030 (`:1176`), HUM-025 (Funde auf entpackten Bytes), HUM-026; `backlog/sprint-5.md` HUM-057 (Ratio-Grenze); `docs/PROTOCOL.md` 5; `proto/humanitl/v1/humanitl.proto:28, 135-141, 548-552`; `daemon/crates/findings/src/decode.rs`; `app/lib/features/intercept/body/body_decode.dart:17, 50-72`.

@@ -5,6 +5,11 @@
 //! (HUM-069) und `docs/CONFIG.md` (HUM-070). Es gibt deshalb genau einen
 //! Durchlauf, [`fields`], und alle drei benutzen ihn.
 //!
+//! Jedes Blattfeld trägt neben Stufe und Vertrauensgrenze eine Einstufung, ob
+//! es heute einen Leser hat ([`Field::readiness`], HUM-101). Sie kommt aus
+//! `x-pending-issue` am Feld; das Register in
+//! `daemon/crates/config/tests/config_readers.rs` hält sie vollständig.
+//!
 //! Untergeordnete Schemata werden eingebettet (`inline_subschemas`), nicht als
 //! `$ref` abgelegt. Das macht den Durchlauf einfach und die Ausgabe für einen
 //! Menschen lesbar; die Konfiguration ist flach genug, dass die Wiederholung
@@ -16,6 +21,7 @@ use std::sync::OnceLock;
 use serde_json::Value;
 
 use crate::model::Config;
+use crate::pending::{PENDING_ISSUE_KEY, Readiness};
 use crate::scope::{PROJECT_SCOPE_KEY, ProjectScope};
 use crate::tier::{TIER_KEY, Tier};
 
@@ -31,6 +37,12 @@ pub struct Field {
     /// Fehlt der Wert im Schema, gilt `denied`: ein Feld ohne Entscheidung
     /// bleibt hinter der Vertrauensgrenze, statt versehentlich davor.
     pub project_scope: ProjectScope,
+    /// Ob der Schlüssel heute einen Leser hat, aus `x-pending-issue`.
+    ///
+    /// Fehlt die Angabe im Schema, gilt [`Readiness::Effective`]: Ein Feld
+    /// ohne Vermerk wirkt, und wer es anlegt, ohne es zu verdrahten, setzt den
+    /// Vermerk (siehe [`crate::pending`]).
+    pub readiness: Readiness,
     /// Der Doku-Kommentar des Feldes.
     pub description: String,
     /// Der Typ, wie ihn die Doku zeigt, zum Beispiel `list of string`.
@@ -110,6 +122,9 @@ pub fn known_paths() -> BTreeSet<&'static str> {
 }
 
 /// Die Pfade der Blattfelder.
+///
+/// Das Register der Leser (`tests/config_readers.rs`) vergleicht seine Zeilen
+/// mit genau dieser Menge.
 #[must_use]
 pub fn leaf_paths() -> BTreeSet<&'static str> {
     leaves()
@@ -176,6 +191,7 @@ fn walk(node: &Value, prefix: &str, out: &mut Vec<Field>) {
                 .and_then(Value::as_str)
                 .and_then(ProjectScope::parse)
                 .unwrap_or(ProjectScope::Denied),
+            readiness: Readiness::from_issue(child.get(PENDING_ISSUE_KEY).and_then(Value::as_str)),
             description: child
                 .get("description")
                 .and_then(Value::as_str)

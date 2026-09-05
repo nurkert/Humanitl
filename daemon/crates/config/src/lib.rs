@@ -14,6 +14,7 @@
 //! - [`model`] die Typen mit ihren Vorgabewerten
 //! - [`tier`] die drei Sichtbarkeitsstufen
 //! - [`scope`] die Vertrauensgrenze des Projekt-Profils
+//! - [`pending`] ob ein Schlüssel heute einen Leser hat
 //! - [`schema`] das JSON-Schema und der Durchlauf durch seine Felder
 //! - [`alias`] alte Schlüsselnamen, die weiter funktionieren
 //! - [`mod@env`] die Umgebung als Wert statt als globaler Zustand
@@ -46,6 +47,7 @@ pub mod load;
 pub mod model;
 pub mod origin;
 pub mod paths;
+pub mod pending;
 pub mod profile;
 pub mod resolve;
 pub mod schema;
@@ -65,6 +67,7 @@ pub use crate::model::{
 };
 pub use crate::origin::{Origin, Resolved};
 pub use crate::paths::{APP_DIR, DIR_MODE, FILE_MODE, Paths, RuntimeDir};
+pub use crate::pending::{PENDING_ISSUE_KEY, Readiness};
 pub use crate::profile::{
     BUILTIN_PROFILES, ConfigOverlay, DEFAULT_PROFILE, PROFILE_KEYS, PROFILE_RULES_SECTION, Profile,
     ProfileRules, ProfileSource, ProfileSummary, RULES_DOCUMENT_VERSION, builtin_names,

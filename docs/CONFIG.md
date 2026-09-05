@@ -31,6 +31,18 @@ Zwei Werte werden beim Laden über ihren Typ hinaus geprüft: `llm.endpoint` nim
 `http` oder `https`; `sandbox.work_dir` muss absolut sein, ohne `..`, und ein
 existierendes Verzeichnis, das sich kanonisieren lässt. Beides sonst `CONFIG_003`.
 
+## Wirkung
+
+Diese Seite entsteht aus dem Schema und kann deshalb keinen Schlüssel vergessen. Ob ein
+Schlüssel etwas bewirkt, steht dem Schema nicht an: Ein Wert, der beschrieben und geprüft
+wird und den niemand liest, sähe hier aus wie jeder andere. Die Spalte „Wirkung" sagt es
+deshalb ausdrücklich (im JSON-Schema `x-pending-issue`, HUM-101).
+
+| Wirkung | Bedeutung |
+|---|---|
+| `ja` | Der Schlüssel wird gelesen und wirkt. |
+| `offen (HUM-xxx)` | Der Schlüssel hat heute keinen Leser. Das genannte Issue entscheidet ihn, durch Einbau oder durch Streichung; bis dahin ändert sein Wert nichts. Das Register `daemon/crates/config/tests/config_readers.rs` hält für jeden Schlüssel fest, welcher der beiden Fälle gilt. |
+
 ## Reihenfolge der Quellen
 
 Von unten nach oben; die obere Ebene gewinnt. Jedes Feld merkt sich, aus welcher Ebene
@@ -74,122 +86,121 @@ Werkzeugen und werden übergangen.
 
 Welcher Agent in der Sandbox läuft.
 
-| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Beschreibung |
-|---|---|---|---|---|---|
-| `agent.adapter` | string | `"opencode"` | advanced | denied | Kennung des Adapters, zum Beispiel `opencode`. |
-| `agent.briefing.enabled` | boolean | `true` | advanced | allowed | Legt die Instruktionsdatei des Agenten in der Sandbox an. |
-| `agent.command` | list of string, optional | `-` | expert | denied | Ersetzt die Kommandozeile des Adapters vollständig. Leer bedeutet: die des Adapters. |
+| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
+|---|---|---|---|---|---|---|
+| `agent.adapter` | string | `"opencode"` | advanced | denied | ja | Kennung des Adapters, zum Beispiel `opencode`. |
+| `agent.briefing.enabled` | boolean | `true` | advanced | allowed | ja | Legt die Instruktionsdatei des Agenten in der Sandbox an. |
+| `agent.command` | list of string, optional | `-` | expert | denied | ja | Ersetzt die Kommandozeile des Adapters vollständig. Leer bedeutet: die des Adapters. |
 
 ### `experimental`
 
 Schalter für unfertige Wege. Alles hier darf ohne Ankündigung wegfallen.
 
-| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Beschreibung |
-|---|---|---|---|---|---|
-| `experimental.h2_upstream` | boolean | `false` | expert | denied | Bietet dem Ziel HTTP/2 an. In M1 spricht der Proxy nach oben nur HTTP/1.1. |
-| `experimental.upstream_port_map` | table of integer | `{}` | expert | denied | Lenkt einen Zielport auf einen anderen um, Schlüssel und Wert als Portnummer. Nur für Tests. |
-| `experimental.ws_hold` | boolean | `false` | expert | denied | Hält auch WebSocket-Upgrades an, statt sie über eine Regel zu entscheiden. |
+| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
+|---|---|---|---|---|---|---|
+| `experimental.h2_upstream` | boolean | `false` | expert | denied | ja | Bietet dem Ziel HTTP/2 an. In M1 spricht der Proxy nach oben nur HTTP/1.1. |
+| `experimental.upstream_port_map` | table of integer | `{}` | expert | denied | offen (HUM-088) | Lenkt einen Zielport auf einen anderen um, Schlüssel und Wert als Portnummer. Nur für Tests. |
+| `experimental.ws_hold` | boolean | `false` | expert | denied | offen (HUM-121) | Hält auch WebSocket-Upgrades an, statt sie über eine Regel zu entscheiden. |
 
 ### `findings`
 
 Erkennung von Geheimnissen und persönlichen Daten.
 
-| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Beschreibung |
-|---|---|---|---|---|---|
-| `findings.email_allow_domains` | list of string | `[]` | advanced | denied | Domains, deren Mailadressen kein Fund sind, zum Beispiel die eigene Firma. |
-| `findings.enabled` | boolean | `true` | advanced | denied | Schaltet die Erkennung ganz ab. Aus bedeutet: keine Markierungen, keine Pseudonyme. |
-| `findings.ignored_hashes` | list of string | `[]` | expert | denied | Prüfsummen (SHA-256, hex) einzelner Werte, die nie wieder als Fund erscheinen. |
-| `findings.user_terms` | list of string | `[]` | basic | allowed | Eigene Begriffe, die als Fund gelten, zum Beispiel ein Projektname oder ein Kundenname. |
+| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
+|---|---|---|---|---|---|---|
+| `findings.email_allow_domains` | list of string | `[]` | advanced | denied | ja | Domains, deren Mailadressen kein Fund sind, zum Beispiel die eigene Firma. |
+| `findings.enabled` | boolean | `true` | advanced | denied | ja | Schaltet die Erkennung ganz ab. Aus bedeutet: keine Markierungen, keine Pseudonyme. |
+| `findings.ignored_hashes` | list of string | `[]` | expert | denied | ja | Prüfsummen (SHA-256, hex) einzelner Werte, die nie wieder als Fund erscheinen. |
+| `findings.user_terms` | list of string | `[]` | basic | allowed | ja | Eigene Begriffe, die als Fund gelten, zum Beispiel ein Projektname oder ein Kundenname. |
 
 ### `hold`
 
 Wie lange und auf welchem Weg gefragt wird, bevor eine Anfrage weiterläuft.
 
-| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Beschreibung |
-|---|---|---|---|---|---|
-| `hold.ask_mode` | ui \| terminal \| none | `"ui"` | advanced | denied | Wo gefragt wird: in der Oberfläche, im Terminal oder gar nicht. |
-| `hold.hard_block_checksum_secrets` | boolean | `false` | advanced | allowed | Blockt Anfragen mit prüfsummen-sicheren Geheimnissen sofort, ohne zu fragen. |
-| `hold.timeout_secs` | integer | `300` | basic | allowed | Sekunden, die eine angehaltene Anfrage auf eine Entscheidung wartet, bevor sie als Zeitüberschreitung endet. |
+| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
+|---|---|---|---|---|---|---|
+| `hold.ask_mode` | ui \| terminal \| none | `"ui"` | advanced | denied | ja | Wo gefragt wird: in der Oberfläche, im Terminal oder gar nicht. |
+| `hold.hard_block_checksum_secrets` | boolean | `false` | advanced | allowed | ja | Blockt Anfragen mit prüfsummen-sicheren Geheimnissen sofort, ohne zu fragen. |
+| `hold.timeout_secs` | integer | `300` | basic | allowed | ja | Sekunden, die eine angehaltene Anfrage auf eine Entscheidung wartet, bevor sie als Zeitüberschreitung endet. |
 
 ### `limits`
 
 Alle Caps und Zeitgrenzen an einer Stelle.
 
-| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Beschreibung |
-|---|---|---|---|---|---|
-| `limits.body_timeout_secs` | integer | `300` | expert | allowed | Sekunden, in denen ein Body vollständig übertragen sein muss. |
-| `limits.connect_timeout_secs` | integer | `10` | advanced | allowed | Sekunden bis zum Aufbau der Verbindung zum Ziel. |
-| `limits.event_buffer` | integer | `1024` | expert | allowed | Länge der Ereignis-Warteschlange je Client. Läuft sie über, meldet der Daemon `Lagged`. |
-| `limits.header_timeout_secs` | integer | `30` | expert | allowed | Sekunden, in denen der Client seine Anfrage-Kopfzeilen gesendet haben muss. |
-| `limits.hold_body_cap_bytes` | integer | `33554432` | advanced | allowed | Größte Anfrage, deren Body für die Entscheidung im Speicher gehalten wird. Darüber antwortet der Proxy mit 413. |
-| `limits.hold_max_bytes` | integer | `268435456` | advanced | allowed | Größte Summe der Bodies aller angehaltenen Flows. Darüber antwortet der Proxy mit 503. |
-| `limits.hold_max_flows` | integer | `200` | advanced | allowed | Größte Zahl gleichzeitig angehaltener Flows. Darüber antwortet der Proxy mit 503. |
-| `limits.idle_timeout_secs` | integer | `90` | expert | allowed | Sekunden ohne Bytes, nach denen eine offene Verbindung geschlossen wird. |
-| `limits.max_decompress_ratio` | integer | `100` | expert | allowed | Höchstes erlaubtes Verhältnis von entpackten zu gepackten Bytes einer Vorschau. |
-| `limits.preview_cap_bytes` | integer | `8388608` | expert | allowed | Größte Menge Body, die die Oberfläche als Vorschau bekommt. |
-| `limits.recorder_max_body_bytes` | integer | `33554432` | expert | allowed | Größter Body, den die Aufzeichnung als Blob ablegt. Alles darüber wird nur mit Prüfsumme vermerkt. |
+| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
+|---|---|---|---|---|---|---|
+| `limits.body_timeout_secs` | integer | `300` | expert | allowed | offen (HUM-120) | Sekunden, in denen ein Body vollständig übertragen sein muss. |
+| `limits.connect_timeout_secs` | integer | `10` | advanced | allowed | ja | Sekunden bis zum Aufbau der Verbindung zum Ziel. |
+| `limits.event_buffer` | integer | `1024` | expert | allowed | ja | Länge der Ereignis-Warteschlange je Client. Läuft sie über, meldet der Daemon `Lagged`. |
+| `limits.header_timeout_secs` | integer | `30` | expert | allowed | ja | Sekunden, in denen der Client seine Anfrage-Kopfzeilen gesendet haben muss. Auf einer Keep-Alive-Verbindung ist das zugleich die Frist bis zur nächsten Anfrage, also die einzige Leerlaufgrenze der Verbindung zum Agenten; während eine Anfrage gehalten wird, läuft sie nicht. |
+| `limits.hold_body_cap_bytes` | integer | `33554432` | advanced | allowed | ja | Größte Anfrage, deren Body für die Entscheidung im Speicher gehalten wird. Darüber antwortet der Proxy mit 413. |
+| `limits.hold_max_bytes` | integer | `268435456` | advanced | allowed | ja | Größte Summe der Bodies aller angehaltenen Flows. Darüber antwortet der Proxy mit 503. |
+| `limits.hold_max_flows` | integer | `200` | advanced | allowed | ja | Größte Zahl gleichzeitig angehaltener Flows. Darüber antwortet der Proxy mit 503. |
+| `limits.max_decompress_ratio` | integer | `100` | expert | allowed | ja | Höchstes erlaubtes Verhältnis von entpackten zu gepackten Bytes einer Vorschau. |
+| `limits.preview_cap_bytes` | integer | `8388608` | expert | allowed | ja | Größte Menge Body, die die Oberfläche als Vorschau bekommt. |
+| `limits.recorder_max_body_bytes` | integer | `33554432` | expert | allowed | ja | Größter Body, den die Aufzeichnung als Blob ablegt. Alles darüber wird nur mit Prüfsumme vermerkt. |
 
 ### `llm`
 
 Der lokale LLM-Endpunkt und was als Passthrough gilt.
 
-| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Beschreibung |
-|---|---|---|---|---|---|
-| `llm.endpoint` | string, optional | `-` | basic | denied | OpenAI-kompatibler Endpunkt im LAN. Verkehr dorthin wird nicht angehalten, aber protokolliert. |
-| `llm.models` | list of string | `[]` | basic | denied | Modelle, die der Endpunkt anbietet. Leer heißt: der Agent bekommt ein Platzhalter-Modell und eine Warnung. |
-| `llm.passthrough_paths` | list of string | `["/v1/","/api/"]` | advanced | denied | Pfadpräfixe, die als LLM-Passthrough gelten. Ein Präfix soll einen Endpunkt benennen, keine ganze API-Fläche: Der Agent-Adapter ersetzt `/v1/` und `/api/` deshalb durch die Endpunkte, die Inferenz machen, damit `POST /api/pull` und `POST /v1/files` nicht ungefragt hinausgehen. Ein Pfad, der mehr nennt, bleibt stehen, wie er hier steht. |
+| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
+|---|---|---|---|---|---|---|
+| `llm.endpoint` | string, optional | `-` | basic | denied | ja | OpenAI-kompatibler Endpunkt im LAN. Verkehr dorthin wird nicht angehalten, aber protokolliert. |
+| `llm.models` | list of string | `[]` | basic | denied | ja | Modelle, die der Endpunkt anbietet. Leer heißt: der Agent bekommt ein Platzhalter-Modell und eine Warnung. |
+| `llm.passthrough_paths` | list of string | `["/v1/","/api/"]` | advanced | denied | ja | Pfadpräfixe, die als LLM-Passthrough gelten. Ein Präfix soll einen Endpunkt benennen, keine ganze API-Fläche: Der Agent-Adapter ersetzt `/v1/` und `/api/` deshalb durch die Endpunkte, die Inferenz machen, damit `POST /api/pull` und `POST /v1/files` nicht ungefragt hinausgehen. Ein Pfad, der mehr nennt, bleibt stehen, wie er hier steht. |
 
 ### `pseudonyms`
 
 Rücktausch von Pseudonymen in Antworten.
 
-| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Beschreibung |
-|---|---|---|---|---|---|
-| `pseudonyms.max_response_bytes` | integer | `8388608` | expert | denied | Größte Antwort, die für den Rücktausch gepuffert wird. Alles darüber läuft unverändert durch. |
-| `pseudonyms.translate_responses` | boolean | `true` | advanced | denied | Ersetzt Pseudonyme in Text-Antworten wieder durch den Originalwert. |
+| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
+|---|---|---|---|---|---|---|
+| `pseudonyms.max_response_bytes` | integer | `8388608` | expert | denied | offen (HUM-079) | Größte Antwort, die für den Rücktausch gepuffert wird. Alles darüber läuft unverändert durch. |
+| `pseudonyms.translate_responses` | boolean | `true` | advanced | denied | offen (HUM-079) | Ersetzt Pseudonyme in Text-Antworten wieder durch den Originalwert. |
 
 ### `recorder`
 
 Aufzeichnung der Flows.
 
-| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Beschreibung |
-|---|---|---|---|---|---|
-| `recorder.inline_max_bytes` | integer | `262144` | expert | allowed | Bodies bis zu dieser Größe stehen in der Datenbank, größere als Datei im Blob-Speicher. |
-| `recorder.retention_days` | integer | `90` | advanced | denied | Tage, die eine Aufzeichnung aufgehoben wird. |
+| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
+|---|---|---|---|---|---|---|
+| `recorder.inline_max_bytes` | integer | `262144` | expert | allowed | ja | Bodies bis zu dieser Größe stehen in der Datenbank, größere als Datei im Blob-Speicher. |
+| `recorder.retention_days` | integer | `90` | advanced | denied | ja | Tage, die eine Aufzeichnung aufgehoben wird. |
 
 ### `resolver`
 
 Namensauflösung nach der Entscheidung.
 
-| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Beschreibung |
-|---|---|---|---|---|---|
-| `resolver.cache_ttl_secs` | integer | `300` | expert | denied | Sekunden, die eine Antwort im Zwischenspeicher bleibt. |
-| `resolver.nameserver` | string, optional | `-` | expert | denied | Nameserver als `IP:Port`. Leer bedeutet: die Einstellung des Systems. |
-| `resolver.overrides` | table of string | `{}` | expert | denied | Feste Zuordnungen von Hostname zu Adresse, vor jeder Abfrage. |
-| `resolver.prefer` | ipv4 \| ipv6 | `"ipv4"` | expert | denied | Welche Adressfamilie bevorzugt wird, wenn beide vorliegen. |
-| `resolver.test_ca` | string, optional | `-` | expert | denied | Zusätzliche CA für Tests. Nur in Testläufen setzen, nie im Alltag. |
+| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
+|---|---|---|---|---|---|---|
+| `resolver.cache_ttl_secs` | integer | `300` | expert | denied | ja | Sekunden, die eine Antwort im Zwischenspeicher bleibt. |
+| `resolver.nameserver` | string, optional | `-` | expert | denied | offen (HUM-115) | Nameserver als `IP:Port`. Leer bedeutet: die Einstellung des Systems. |
+| `resolver.overrides` | table of string | `{}` | expert | denied | ja | Feste Zuordnungen von Hostname zu Adresse, vor jeder Abfrage. |
+| `resolver.prefer` | ipv4 \| ipv6 | `"ipv4"` | expert | denied | ja | Welche Adressfamilie bevorzugt wird, wenn beide vorliegen. |
+| `resolver.test_ca` | string, optional | `-` | expert | denied | offen (HUM-087) | Zusätzliche CA für Tests. Nur in Testläufen setzen, nie im Alltag. |
 
 ### `sandbox`
 
 Welches Sandbox-Profil mit welchem Arbeitsverzeichnis startet.
 
-| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Beschreibung |
-|---|---|---|---|---|---|
-| `sandbox.env` | table of string | `{}` | advanced | denied | Zusätzliche Umgebungsvariablen für die Sandbox; sie überschreiben gleichnamige Einträge aus dem `[env]` des Profils. Der Schlüssel lässt sich aus der Umgebung des Prozesses setzen und ist damit nur so vertrauenswürdig wie die Shell, aus der Humanitl startet; die Variablen des dynamischen Linkers (`LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`) werden deshalb abgelehnt, sie liefen vor dem seccomp-Filter des Shims. |
-| `sandbox.profile` | string | `"default"` | advanced | denied | Name des Profils unter `profiles/sandbox/`, ohne Endung. |
-| `sandbox.work_dir` | string, optional | `-` | basic | denied | Projektverzeichnis, das als `/work` eingehängt wird. Leer bedeutet: das aktuelle Verzeichnis. |
-| `sandbox.work_mode` | ro \| rw | `"rw"` | basic | denied | Ob der Agent im Projektverzeichnis schreiben darf. |
+| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
+|---|---|---|---|---|---|---|
+| `sandbox.env` | table of string | `{}` | advanced | denied | ja | Zusätzliche Umgebungsvariablen für die Sandbox; sie überschreiben gleichnamige Einträge aus dem `[env]` des Profils. Der Schlüssel lässt sich aus der Umgebung des Prozesses setzen und ist damit nur so vertrauenswürdig wie die Shell, aus der Humanitl startet; die Variablen des dynamischen Linkers (`LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`) werden deshalb abgelehnt, sie liefen vor dem seccomp-Filter des Shims. |
+| `sandbox.profile` | string | `"default"` | advanced | denied | ja | Name des Profils unter `profiles/sandbox/`, ohne Endung. |
+| `sandbox.work_dir` | string, optional | `-` | basic | denied | ja | Projektverzeichnis, das als `/work` eingehängt wird. Leer bedeutet: das aktuelle Verzeichnis. |
+| `sandbox.work_mode` | ro \| rw | `"rw"` | basic | denied | ja | Ob der Agent im Projektverzeichnis schreiben darf. |
 
 ### `ui`
 
 Sprache, Erscheinungsbild und Meldungen der Oberfläche.
 
-| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Beschreibung |
-|---|---|---|---|---|---|
-| `ui.language` | en \| de | `"en"` | basic | allowed | Sprache der Oberfläche. |
-| `ui.notifications` | boolean | `true` | advanced | allowed | Meldung des Systems, wenn eine Anfrage wartet und das Fenster nicht vorn ist. |
-| `ui.sound` | boolean | `false` | advanced | allowed | Ton zur Meldung. Im MVP ohne Wirkung: der Schlüssel wird gelesen, aber kein Ton gespielt (HUM-034). |
-| `ui.theme` | dark \| light \| system | `"dark"` | advanced | allowed | Erscheinungsbild der Oberfläche. |
+| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
+|---|---|---|---|---|---|---|
+| `ui.language` | en \| de | `"en"` | basic | allowed | ja | Sprache der Oberfläche. |
+| `ui.notifications` | boolean | `true` | advanced | allowed | offen (HUM-069) | Meldung des Systems, wenn eine Anfrage wartet und das Fenster nicht vorn ist. |
+| `ui.sound` | boolean | `false` | advanced | allowed | offen (HUM-121) | Ton zur Meldung. |
+| `ui.theme` | dark \| light \| system | `"dark"` | advanced | allowed | offen (HUM-069) | Erscheinungsbild der Oberfläche. |
 
 ## Alte Namen
 
@@ -204,6 +215,18 @@ heutige, und das Laden legt einen Befund dazu.
 | `preview.max_decompress_ratio` | `limits.max_decompress_ratio` | HUM-057 |
 | `recorder.max_body_bytes` | `limits.recorder_max_body_bytes` | HUM-057 |
 | `upstream.connect_timeout_secs` | `limits.connect_timeout_secs` | HUM-057 |
+
+## Entfallene Schlüssel
+
+Diese Schlüssel gab es einmal und gibt es nicht mehr. Sie haben keinen Nachfolger. Wer
+sie noch in einer Datei stehen hat, bekommt beim Laden eine Warnung (`CONFIG_005`) mit
+dem Issue und dem Grund; der Wert wird übergangen, und der Daemon startet trotzdem. Ein
+harter Fehler wäre hier die Strafe für eine Entscheidung, die nicht der Nutzer getroffen
+hat (`backlog/CONVENTIONS.md` 4.25).
+
+| Schlüssel | Entfallen mit | Grund (Text des Befunds) |
+|---|---|---|
+| `limits.idle_timeout_secs` | HUM-101 | it described the same span as limits.header_timeout_secs, the one idle clock of the connection to the agent |
 
 ## Pfade
 

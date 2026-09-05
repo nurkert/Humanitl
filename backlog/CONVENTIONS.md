@@ -326,7 +326,7 @@ Die Sprint-Files wurden parallel geschrieben und haben an einigen Stellen die Ab
 `GetConfig`/`SetConfig`; `FlowEvent` hat die Varianten `Diagnostic`, `RulesChanged`, `AgentAsk`; `Received` trägt `DomainInfo`; `DecideRequest.remember: Rule`, `DecideRequest.block.note`; `DecideResponse.created_rule`; `RulesRequest.make_permanent`; `SandboxRequest.argv`; eigene Datei `rules.proto`, importiert von `humanitl.proto`.
 
 ### 4.4 Config-Schlüssel (Ergänzung zu 3.7)
-- Gruppe `limits` (HUM-057) ist die Heimat aller Caps und Timeouts: `limits.hold_body_cap_bytes` (Alias `hold.body_cap_bytes`), `limits.preview_cap_bytes` (Alias `preview.cap_bytes`), `limits.event_buffer` (Alias `ipc.event_buffer`), `limits.max_decompress_ratio`, `limits.hold_max_flows`, `limits.hold_max_bytes`, `limits.connect_timeout_secs`, `limits.header_timeout_secs`, `limits.body_timeout_secs`, `limits.idle_timeout_secs`, `limits.recorder_max_body_bytes` (Alias `recorder.max_body_bytes`).
+- Gruppe `limits` (HUM-057) ist die Heimat aller Caps und Timeouts: `limits.hold_body_cap_bytes` (Alias `hold.body_cap_bytes`), `limits.preview_cap_bytes` (Alias `preview.cap_bytes`), `limits.event_buffer` (Alias `ipc.event_buffer`), `limits.max_decompress_ratio`, `limits.hold_max_flows`, `limits.hold_max_bytes`, `limits.connect_timeout_secs`, `limits.header_timeout_secs`, `limits.body_timeout_secs`, `limits.recorder_max_body_bytes` (Alias `recorder.max_body_bytes`).
 - `resolver.nameserver`, `resolver.overrides`, `resolver.cache_ttl_secs`, `resolver.prefer` (`ipv4|ipv6`), `resolver.test_ca` (nur Tests).
 - `upstream.connect_timeout_secs` ist Alias von `limits.connect_timeout_secs`.
 - `findings.enabled`, `findings.user_terms`, `findings.email_allow_domains`, `findings.ignored_hashes`.
@@ -365,6 +365,8 @@ Die Sprint-Files wurden parallel geschrieben und haben an einigen Stellen die Ab
 
 ### 4.6 Diagnostic-Register
 Datei `daemon/crates/core-types/src/diagnostics/codes.rs` hält alle Codes als Konstanten mit Doc-Kommentar. Reservierte Bereiche: `DAEMON_001..019`, `SANDBOX_001..029` (001–006 Launcher/Profil, 007 Bridge-Richtung, 010–012 Start-Fehler), `TLS_001..009`, `LLM_001..009`, `RULES_001..019` (001–008 Datei und Muster, 009–011 Regelspeicher aus HUM-027), `TERM_001..009`, `RECORDER_001..009`, `LIMIT_001..009`, `AUDIT_001..009`, `CONFIG_001..009`. Ein Code wird nie wiederverwendet; entfernte Codes bleiben als `#[deprecated]` stehen. CI-Test: jeder im Code verwendete Code ist im Register.
+
+`CONFIG_005` („Veralteter Schlüssel") trägt mit HUM-101 zwei Fälle, und die Severity trennt sie: **`Info`** heißt Alias — der Schlüssel steht unter seinem alten Namen da, sein Wert **gilt**, und der Befund nennt den heutigen Namen; **`Warning`** heißt ersatzlos entfallen (`alias::RETIRED`) — der Wert **verfällt**, und der Befund nennt das Issue, das ihn entfernt hat, samt Grund. Beide Fälle stehen im Doc-Kommentar des Codes, damit ein Konsument nicht raten muss. Ein eigener Code wäre das Sauberere, aber der reservierte Bereich `CONFIG_001..009` ist voll; ihn zu erweitern ist eine Entscheidung über das Register und gehört dem, der den nächsten Config-Code braucht — dann bekommt der entfallene Schlüssel den neuen Code, und diese Zeile fällt weg. Bis dahin gilt: Wer `CONFIG_005` auswertet, verzweigt über die Severity, nie über den Titel.
 
 ### 4.7 Fake-Modus
 - Daemon: `humanitld --fake <session.jsonl> [--speed N]`.
@@ -412,7 +414,7 @@ Entscheidungen, die beim Bauen fielen und ab jetzt gelten. Wo 3.x anderes sagt, 
 - Aliase werden beim Laden auf Pfaden aufgelöst (`alias::ALIASES`), nicht per `#[serde(alias)]`, weil jeder Alias Gruppen überschreitet. Die Gruppen `ipc`, `preview`, `upstream` existieren im Schema nicht mehr; ihre Felder liegen unter `limits`, die alten Schlüssel bleiben als Aliase gültig. Alter und neuer Schlüssel gleichzeitig in derselben Ebene ⇒ `CONFIG_006`, der kanonische gewinnt. Über Ebenen hinweg gilt die Präzedenz der Ebene: Ein Alias in einer höheren Ebene (z. B. `HUMANITL_HOLD__BODY_CAP_BYTES`) überschreibt den kanonischen Schlüssel einer niedrigeren Ebene, weil beide dasselbe Feld meinen; `CONFIG_006` nennt dann Gewinner und Ebene. Eine unbekannte `HUMANITL_*`-Variable ist ein `CONFIG_002` mit `Severity::Warning`, nie `Error`.
 - Unbekannter Schlüssel in Datei oder auf der Kommandozeile ⇒ harter Fehler `CONFIG_002`; unbekannte `HUMANITL_*`-Variable ⇒ nur Diagnostic.
 - `Sources { env: Env, .. }` und `discover_with(env, cwd, profile)`: `env.rs` ist die einzige Stelle, die die Prozessumgebung liest; `paths.rs` nutzt denselben Typ.
-- Weitere Defaults: `limits.header_timeout_secs` 30, `limits.body_timeout_secs` 300, `limits.idle_timeout_secs` 90, `limits.recorder_max_body_bytes` 32 MiB, `resolver.cache_ttl_secs` 300, `resolver.prefer` ipv4, `pseudonyms.max_response_bytes` 1 MiB, `pseudonyms.translate_responses` true, `findings.enabled` true, `agent.briefing.enabled` true, `hold.hard_block_checksum_secrets` false.
+- Weitere Defaults: `limits.header_timeout_secs` 30, `limits.body_timeout_secs` 300, `limits.recorder_max_body_bytes` 32 MiB, `resolver.cache_ttl_secs` 300, `resolver.prefer` ipv4, `pseudonyms.max_response_bytes` 1 MiB, `pseudonyms.translate_responses` true, `findings.enabled` true, `agent.briefing.enabled` true, `hold.hard_block_checksum_secrets` false.
 - Freiform-Tabellen (`resolver.overrides`, `experimental.upstream_port_map`) sind im Merge ein Blatt: eine höhere Ebene ersetzt die ganze Tabelle.
 - `llm.endpoint` ist `Option<url::Url>`, im Schema als String.
 
@@ -1977,3 +1979,146 @@ Tabelle, ein Zustandspunkt, ein senkrechter Aufteiler und markierbarer Text ohne
 Material. Alle fünf stehen vorerst in `app/lib/features/sandbox`, gebaut aus den
 Teilen des Pakets (`HButton`, `HAnimatedFill`, `HHairline`, die Token) und ohne
 einen einzigen Import von `package:shadcn_flutter`.
+
+### 4.25 Aus der Umsetzung des Leser-Registers (HUM-101, 2026-09-05)
+
+**`limits.idle_timeout_secs` ist entfernt; die Leerlaufgrenze der Verbindung
+zum Agenten heißt `limits.header_timeout_secs`.** Das ist die erste
+Entscheidung von HUM-101, und sie fiel gegen den Einbau, aus vier Gründen:
+
+1. Auf einer Keep-Alive-Verbindung beschreiben beide Schlüssel dieselbe Spanne.
+   `header_read_timeout` in `hyper` deckt beides ab, das Eintreffen der
+   Kopfzeilen und die Lücke bis zur nächsten Anfrage; die Uhr ist genau so
+   lange gespannt, wie die Verbindung auf einen Anfragekopf wartet.
+2. Auf **dieser** Spanne war der zweite Schlüssel unerreichbar: 90 Sekunden
+   Leerlauf gegen 30 Sekunden Kopf-Frist, die kürzere Uhr läuft immer zuerst
+   ab. Das gilt nur für Kopf und Keep-Alive-Lücke; auf den Spannen unten wäre
+   er die einzige Uhr gewesen.
+3. Auf zwei Spannen hätte er genau das getroffen, was er verschonen soll. Der
+   Hold sitzt in der Service-Future innerhalb `serve_connection`; solange er
+   läuft, fließen auf der Verbindung des Agenten null Bytes. Dasselbe gilt für
+   den streamenden Antwort-Rumpf: Vom Client kommt nichts, während das
+   Sprachmodell antwortet. Eine Uhr über der ganzen Verbindung kann diese
+   Stille nicht von der eines hängenden Clients unterscheiden — sie hätte mit
+   den Vorgaben jeden gehaltenen Fluss nach 90 Sekunden getötet, obwohl die
+   Haltefrist 300 Sekunden beträgt, und dazu jede schweigende Durchreiche.
+   Nachgemessen: Eine naive Leerlaufuhr vor `serve_connection` macht
+   `a_held_request_survives_the_header_timeout` und
+   `a_streaming_passthrough_survives_the_header_timeout` rot und
+   `an_idle_connection_does_not_survive_the_header_timeout` grün
+   (`daemon/crates/proxy/tests/timeouts.rs`).
+4. Weil kein zweiter Schlüssel bleibt, braucht es auch keinen Wrapper vor
+   `serve_connection` und keinen Zähler gehaltener Flüsse im
+   `ConnectionContext`: Es gibt keine Uhr, die anzuhalten wäre. Was stattdessen
+   nötig ist, sind Grenzen **je Spanne** mit eigenen Namen. Eine Uhr über der
+   ganzen Verbindung ist der falsche Zuschnitt, nicht der falsche Wert.
+
+**Drei Spannen bleiben damit unbewacht, und HUM-120 trägt sie.** Sie stehen
+hier, damit die Entfernung nicht als Schließen einer Lücke gelesen wird, die
+sie offenlässt:
+
+- Der **Anfrage-Rumpf** (`handler.rs:597`, `body::buffer` ohne Frist). Hypers
+  Kopf-Uhr ist gelöscht, sobald der Kopf geparst ist; ein Client, der
+  `Content-Length` ankündigt, zehn Bytes schickt und schweigt, hält die
+  Verbindung unbegrenzt. Es greift allein `limits.hold_body_cap_bytes`, eine
+  Byte-Grenze.
+- Der **gestreamte Antwort-Rumpf** (`body.rs`, `TeeBody`). Bis zu den
+  Antwort-Kopfzeilen deckt der `handshake_timeout` des Upstreams alles ab,
+  danach nichts.
+- Der **TLS-Handschlag nach `CONNECT`** (`handler.rs:337`, `tls::accept` ohne
+  Frist). Wer den Tunnel öffnet und nie ein `ClientHello` schickt, hält den
+  Task für immer; die Kopf-Frist des inneren `serve_connection` beginnt erst
+  danach.
+
+`limits.body_timeout_secs` speist in HUM-120 die beiden Rumpf-Spannen,
+`limits.header_timeout_secs` den Handschlag. Beide Rumpf-Grenzen begrenzen die
+Stille **zwischen zwei Stücken** und nicht die Gesamtdauer; das ist eine
+Umdeutung des heutigen Doku-Kommentars und gehört samt `docs/CONFIG.md` und
+Abschnitt 4.4 in denselben Commit.
+
+Ein `reason: idle_timeout` ist nie entstanden und entsteht auch nicht: Im
+Leerlauf ist keine Anfrage in Flug, es gibt also keine Antwort, in die ein
+Banner passen würde; der Leerlauf schließt still und meldet sich im Protokoll.
+
+**Ein entfernter Schlüssel warnt, er scheitert nicht.** Das gilt für jeden
+Schlüssel, den wir selbst streichen, also auch für
+`experimental.upstream_port_map` in HUM-088. Die Regel:
+
+- Der Pfad kommt in `alias::RETIRED` (`daemon/crates/config/src/alias.rs`), mit
+  dem Issue und einem Satz Grund. Kein Alias — es gibt kein Ziel, auf das er
+  zeigen könnte.
+- Das Laden übergeht ihn und legt `CONFIG_005` mit `Severity::Warning` dazu:
+  Schlüssel, Ebene, Issue, Grund, und die Aufforderung, die Zeile zu löschen.
+  Der Wert erreicht die Konfiguration nicht, der Daemon startet.
+- Ein unbekannter Schlüssel, der **nicht** in `RETIRED` steht, bleibt der harte
+  `CONFIG_002` von vorher. Die Milde gilt genau den Pfaden der Liste.
+
+Der Grund für die Ausnahme: Ein `CONFIG_002` sagt „du hast dich vertippt". Wer
+`limits.idle_timeout_secs` in seiner Datei stehen hat, hat sich nicht vertippt
+— die Datei war gestern gültig, und die Entscheidung, den Schlüssel zu
+entfernen, haben wir getroffen. Ein Update, das den Daemon nicht mehr starten
+lässt, verlangt vom Nutzer die Reparatur einer Änderung, die er nicht
+veranlasst hat. Stilles Übergehen wäre die andere Hälfte desselben Fehlers und
+genau das, was dieses Issue behebt: ein Schlüssel, der dasteht und nichts tut.
+`docs/CONFIG.md` führt die entfallenen Schlüssel in einer eigenen Tabelle, damit
+der Text der Warnung nicht der einzige Ort ist, an dem sie noch vorkommen.
+
+Eine `FixAction` trägt der Befund nicht: Es gibt keinen Nachfolger, auf den ein
+Knopf zeigen könnte, und `ChangeSetting` auf einen anderen Schlüssel wäre eine
+Empfehlung, die niemand geprüft hat. Was zu tun ist, steht im Satz.
+
+**Das Register der Leser steht in `daemon/crates/config/tests/config_readers.rs`.**
+Eine Zeile je Blattpfad des Schemas, genau eine Einstufung: `effective` oder
+`pending(HUM-xxx)`. Sein Test liest `schema::leaf_paths()` und wird rot, sobald
+das Schema einen Pfad kennt, den das Register nicht kennt, sobald das Register
+einen Pfad nennt, den es nicht mehr gibt, und sobald eine Einstufung von der
+Angabe am Feld abweicht. Die Angabe am Feld ist `x-pending-issue` in
+`src/model.rs`, gebaut wie `x-tier` und `x-project-scope`; aus ihr schreibt der
+Generator die Spalte „Wirkung" in `docs/CONFIG.md`. Ein Eintrag `pending` muss
+ein Issue nennen, das `BACKLOG.md` als Zeile führt — ein Verweis ins Leere ist
+schlechter als keiner.
+
+**Wo das Register aufhört, sagt sein Kopf.** Eine Zeile deckt einen Blattpfad,
+und Blätter findet der Durchlauf über `properties`. Die Schlüssel *in* einer
+freien Tabelle (`sandbox.env`, `resolver.overrides`,
+`experimental.upstream_port_map`) und die Elemente einer Liste sind deshalb
+nicht einzeln erfasst; der Behälter trägt die Zeile, und seine Einstufung gilt
+für alles darin. Das reicht, solange darin Skalare stehen, und genau das prüft
+`the_schema_hides_no_leaf_from_the_walk`: eine Tabelle oder Liste von
+Strukturen macht ihn rot, ebenso `allOf`, `anyOf` und `$ref`.
+`#[serde(flatten)]` ist dabei kein Loch — nachgemessen: `inline_subschemas`
+schmilzt die Felder in die `properties` des Elternknotens, sie erscheinen als
+gewöhnliche Blätter, und der Vollständigkeitstest nennt sie beim Namen. Der
+Riegel gegen `allOf` bleibt für den Fall, dass jemand `inline_subschemas`
+abschaltet. Aliase stehen neben dem Schema; `every_alias_leads_to_a_registered_key`
+hält fest, dass jeder auf ein registriertes Blatt zeigt und selbst keines ist.
+
+Ein Gate über Feldnamen aus der Shell wäre untauglich gewesen und ist deshalb
+nicht gebaut: `env` trifft im Repository 244-mal, `profile` 464-mal,
+`timeout_secs` ist Teilzeichenkette von vier Schlüsseln, `enabled` ist zweimal
+vergeben, ein Doku-Kommentar zählt als Treffer, und `humanitl config get` liest
+über serde ohnehin jeden Schlüssel. `effective` ist deshalb die Behauptung
+eines Menschen und keine Messung. Das ist Absicht: Das Register soll den
+**vergessenen** Schlüssel finden; wer beim Anlegen „wirkt" schreibt, ohne zu
+verdrahten, hat nicht übersehen, sondern gelogen.
+
+Die Zählung hat drei Fälle mehr gefunden, als HUM-101 nannte:
+`resolver.nameserver` (der Daemon warnt beim Start und fragt trotzdem
+`/etc/resolv.conf`; HUM-115 baut den Hickory-Adapter dahinter), `ui.theme`
+(dieselbe fehlende Naht wie bei `ui.notifications`: dem Client fehlt
+`GetConfig`, deshalb beide HUM-069) und `resolver.test_ca`, das HUM-087 bereits
+als eigenes Issue führt. Genau dafür ist das Register da. Neu angelegt wurden
+nur zwei Issues: HUM-120 für die Rumpfgrenze und HUM-121 für `ui.sound` und
+`experimental.ws_hold`.
+
+**Der IPC-Stapel bleibt von den Zeitgrenzen ausgenommen.** `limits.*` speist
+über `ipc/src/server.rs` denselben Verbindungsstapel; eine symmetrische
+Verdrahtung einer Leerlaufgrenze dorthin schnitte den Ereignisstrom der
+Oberfläche ab, der minutenlang stumm sein darf.
+
+**Warum die Grenzen nicht in diesem Commit stehen.** Alle drei Spannen werden
+an Stellen bewacht, die in `daemon/crates/proxy/src/handler.rs` liegen — an
+dieser Datei wurde parallel gearbeitet. `limits.body_timeout_secs` trägt
+deshalb bis auf Weiteres `pending(HUM-120)` statt einer Zusage, und
+`docs/SECURITY.md` nennt ihn ausdrücklich als heute wirkungslos, statt ihn in
+einer Zeile mit den drei wirksamen Grenzen zu führen.

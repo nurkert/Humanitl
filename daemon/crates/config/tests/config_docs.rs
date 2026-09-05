@@ -73,6 +73,22 @@ fn render_preamble(out: &mut String) {
          existierendes Verzeichnis, das sich kanonisieren lässt. Beides sonst `CONFIG_003`.\n\n",
     );
 
+    out.push_str("## Wirkung\n\n");
+    out.push_str(
+        "Diese Seite entsteht aus dem Schema und kann deshalb keinen Schlüssel vergessen. Ob ein\n\
+         Schlüssel etwas bewirkt, steht dem Schema nicht an: Ein Wert, der beschrieben und geprüft\n\
+         wird und den niemand liest, sähe hier aus wie jeder andere. Die Spalte „Wirkung\" sagt es\n\
+         deshalb ausdrücklich (im JSON-Schema `x-pending-issue`, HUM-101).\n\n",
+    );
+    out.push_str("| Wirkung | Bedeutung |\n|---|---|\n");
+    out.push_str("| `ja` | Der Schlüssel wird gelesen und wirkt. |\n");
+    out.push_str(
+        "| `offen (HUM-xxx)` | Der Schlüssel hat heute keinen Leser. Das genannte Issue \
+         entscheidet ihn, durch Einbau oder durch Streichung; bis dahin ändert sein Wert nichts. \
+         Das Register `daemon/crates/config/tests/config_readers.rs` hält für jeden Schlüssel \
+         fest, welcher der beiden Fälle gilt. |\n\n",
+    );
+
     out.push_str("## Reihenfolge der Quellen\n\n");
     out.push_str(
         "Von unten nach oben; die obere Ebene gewinnt. Jedes Feld merkt sich, aus welcher Ebene\n\
@@ -132,18 +148,19 @@ fn render_fields(out: &mut String) {
             let _ = writeln!(out, "{heading}\n");
         }
         out.push_str(
-            "| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Beschreibung |\n\
-             |---|---|---|---|---|---|\n",
+            "| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |\n\
+             |---|---|---|---|---|---|---|\n",
         );
         for field in fields {
             let _ = writeln!(
                 out,
-                "| `{}` | {} | `{}` | {} | {} | {} |",
+                "| `{}` | {} | `{}` | {} | {} | {} | {} |",
                 field.path,
                 escape(&field.type_label),
                 field.default_literal(),
                 field.tier,
                 field.project_scope,
+                field.readiness.doc_label(),
                 escape(&field.description)
             );
         }
@@ -164,6 +181,26 @@ fn render_aliases_and_paths(out: &mut String) {
             out,
             "| `{}` | `{}` | {} |",
             entry.old, entry.canonical, entry.since
+        );
+    }
+    out.push('\n');
+
+    out.push_str("## Entfallene Schlüssel\n\n");
+    out.push_str(
+        "Diese Schlüssel gab es einmal und gibt es nicht mehr. Sie haben keinen Nachfolger. Wer\n\
+         sie noch in einer Datei stehen hat, bekommt beim Laden eine Warnung (`CONFIG_005`) mit\n\
+         dem Issue und dem Grund; der Wert wird übergangen, und der Daemon startet trotzdem. Ein\n\
+         harter Fehler wäre hier die Strafe für eine Entscheidung, die nicht der Nutzer getroffen\n\
+         hat (`backlog/CONVENTIONS.md` 4.25).\n\n",
+    );
+    out.push_str("| Schlüssel | Entfallen mit | Grund (Text des Befunds) |\n|---|---|---|\n");
+    for entry in alias::RETIRED {
+        let _ = writeln!(
+            out,
+            "| `{}` | {} | {} |",
+            entry.path,
+            entry.since,
+            escape(entry.why)
         );
     }
     out.push('\n');
@@ -238,6 +275,72 @@ fn every_field_appears_with_its_environment_variable_rule() {
             "{scope} is not explained"
         );
     }
+}
+
+#[test]
+fn every_retired_key_is_listed_with_its_issue() {
+    let rendered = render();
+    for entry in alias::RETIRED {
+        assert!(
+            rendered.contains(&format!("| `{}` | {} |", entry.path, entry.since)),
+            "{} is not listed among the retired keys",
+            entry.path
+        );
+    }
+    assert!(rendered.contains("## Entfallene Schlüssel"));
+    assert!(
+        rendered.contains("CONFIG_005"),
+        "the page must say what a retired key does at load time"
+    );
+}
+
+#[test]
+fn the_effect_column_names_the_issue_of_every_key_without_a_reader() {
+    // Die Erwartung steht hier als Wort, nicht als Aufruf von `doc_label()`:
+    // Sonst prüfte der Test den Generator gegen sich selbst, und aus „ja" dürfte
+    // still „offen" werden, ohne dass etwas rot wird.
+    let rendered = render();
+    let mut pending = 0_usize;
+    for field in schema::leaves() {
+        let row = rendered
+            .lines()
+            .find(|line| line.starts_with(&format!("| `{}` |", field.path)))
+            .unwrap_or_else(|| panic!("{} has no row", field.path));
+        match field.readiness.issue() {
+            None => assert!(
+                row.contains("| ja |"),
+                "{} has a reader and the column does not say `ja`: {row}",
+                field.path
+            ),
+            Some(issue) => {
+                pending += 1;
+                assert!(
+                    row.contains(&format!("| offen ({issue}) |")),
+                    "{} waits for {issue} and the column does not say so: {row}",
+                    field.path
+                );
+            }
+        }
+    }
+    assert!(pending > 0, "no key waits for an issue; the column is dead");
+    // Die beiden Wörter der Legende, ebenfalls wörtlich.
+    assert!(
+        rendered.contains("| `ja` | Der Schlüssel wird gelesen und wirkt. |"),
+        "the effective case is not explained"
+    );
+    assert!(
+        rendered.contains("`offen (HUM-xxx)`"),
+        "the column is not explained"
+    );
+    // Und die beiden Fälle je einmal am bekannten Schlüssel.
+    assert!(
+        rendered.contains("| `hold.timeout_secs` | integer | `300` | basic | allowed | ja |"),
+        "the row of an effective key changed shape"
+    );
+    assert!(
+        rendered.contains("| offen (HUM-079) |"),
+        "no row carries the pending issue of the pseudonym keys"
+    );
 }
 
 #[test]

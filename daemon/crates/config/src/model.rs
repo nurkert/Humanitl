@@ -9,6 +9,11 @@
 //! Einstellungs-Bildschirm (HUM-069) und `docs/CONFIG.md` (HUM-070) vollständig
 //! bleiben, ohne dass jemand sie von Hand pflegt.
 //!
+//! Ein Feld ohne Leser trägt ein fünftes: `x-pending-issue` mit der Kennung des
+//! Issues, das über den Schlüssel entscheidet (siehe [`crate::pending`], HUM-101).
+//! Fehlt die Angabe, behauptet das Feld, es wirke; das Register in
+//! `daemon/crates/config/tests/config_readers.rs` nagelt beide Fälle fest.
+//!
 //! `x-project-scope = "denied"` steht an jedem Schlüssel, den das Projekt-Profil
 //! nicht setzen darf (`backlog/CONVENTIONS.md` 4.11): `llm.*`, `sandbox.*`,
 //! `agent.adapter`, `agent.command`, `hold.ask_mode`, `findings.enabled`,
@@ -160,15 +165,16 @@ pub struct Limits {
     /// Sekunden bis zum Aufbau der Verbindung zum Ziel.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
     pub connect_timeout_secs: u64,
-    /// Sekunden, in denen der Client seine Anfrage-Kopfzeilen gesendet haben muss.
+    /// Sekunden, in denen der Client seine Anfrage-Kopfzeilen gesendet haben muss. Auf einer Keep-Alive-Verbindung ist das zugleich die Frist bis zur nächsten Anfrage, also die einzige Leerlaufgrenze der Verbindung zum Agenten; während eine Anfrage gehalten wird, läuft sie nicht.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "allowed"))]
     pub header_timeout_secs: u64,
     /// Sekunden, in denen ein Body vollständig übertragen sein muss.
-    #[schemars(extend("x-tier" = "expert", "x-project-scope" = "allowed"))]
+    #[schemars(extend(
+        "x-tier" = "expert",
+        "x-project-scope" = "allowed",
+        "x-pending-issue" = "HUM-120"
+    ))]
     pub body_timeout_secs: u64,
-    /// Sekunden ohne Bytes, nach denen eine offene Verbindung geschlossen wird.
-    #[schemars(extend("x-tier" = "expert", "x-project-scope" = "allowed"))]
-    pub idle_timeout_secs: u64,
     /// Größter Body, den die Aufzeichnung als Blob ablegt. Alles darüber wird nur mit Prüfsumme vermerkt.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "allowed"))]
     pub recorder_max_body_bytes: u64,
@@ -186,7 +192,6 @@ impl Default for Limits {
             connect_timeout_secs: 10,
             header_timeout_secs: 30,
             body_timeout_secs: 300,
-            idle_timeout_secs: 90,
             recorder_max_body_bytes: 32 * MIB,
         }
     }
@@ -197,7 +202,11 @@ impl Default for Limits {
 #[serde(default, deny_unknown_fields)]
 pub struct ResolverConfig {
     /// Nameserver als `IP:Port`. Leer bedeutet: die Einstellung des Systems.
-    #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
+    #[schemars(extend(
+        "x-tier" = "expert",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-115"
+    ))]
     pub nameserver: Option<String>,
     /// Feste Zuordnungen von Hostname zu Adresse, vor jeder Abfrage.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
@@ -209,7 +218,11 @@ pub struct ResolverConfig {
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub prefer: IpPreference,
     /// Zusätzliche CA für Tests. Nur in Testläufen setzen, nie im Alltag.
-    #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
+    #[schemars(extend(
+        "x-tier" = "expert",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-087"
+    ))]
     pub test_ca: Option<PathBuf>,
 }
 
@@ -269,10 +282,18 @@ impl Default for FindingsConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct PseudonymConfig {
     /// Ersetzt Pseudonyme in Text-Antworten wieder durch den Originalwert.
-    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    #[schemars(extend(
+        "x-tier" = "advanced",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-079"
+    ))]
     pub translate_responses: bool,
     /// Größte Antwort, die für den Rücktausch gepuffert wird. Alles darüber läuft unverändert durch.
-    #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
+    #[schemars(extend(
+        "x-tier" = "expert",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-079"
+    ))]
     pub max_response_bytes: u64,
 }
 
@@ -393,14 +414,25 @@ pub struct UiConfig {
     #[schemars(extend("x-tier" = "basic", "x-project-scope" = "allowed"))]
     pub language: Language,
     /// Erscheinungsbild der Oberfläche.
-    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
+    #[schemars(extend(
+        "x-tier" = "advanced",
+        "x-project-scope" = "allowed",
+        "x-pending-issue" = "HUM-069"
+    ))]
     pub theme: Theme,
     /// Meldung des Systems, wenn eine Anfrage wartet und das Fenster nicht vorn ist.
-    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
+    #[schemars(extend(
+        "x-tier" = "advanced",
+        "x-project-scope" = "allowed",
+        "x-pending-issue" = "HUM-069"
+    ))]
     pub notifications: bool,
-    /// Ton zur Meldung. Im MVP ohne Wirkung: der Schlüssel wird gelesen, aber
-    /// kein Ton gespielt (HUM-034).
-    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
+    /// Ton zur Meldung.
+    #[schemars(extend(
+        "x-tier" = "advanced",
+        "x-project-scope" = "allowed",
+        "x-pending-issue" = "HUM-121"
+    ))]
     pub sound: bool,
 }
 
@@ -445,9 +477,17 @@ pub struct Experimental {
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub h2_upstream: bool,
     /// Hält auch WebSocket-Upgrades an, statt sie über eine Regel zu entscheiden.
-    #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
+    #[schemars(extend(
+        "x-tier" = "expert",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-121"
+    ))]
     pub ws_hold: bool,
     /// Lenkt einen Zielport auf einen anderen um, Schlüssel und Wert als Portnummer. Nur für Tests.
-    #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
+    #[schemars(extend(
+        "x-tier" = "expert",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-088"
+    ))]
     pub upstream_port_map: BTreeMap<String, u16>,
 }
