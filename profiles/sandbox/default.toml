@@ -42,11 +42,39 @@ min_bwrap_version = "0.8.0"
 work = { dst = "/work", mode = "rw" }
 ro = ["/usr", "/etc/ssl", "/etc/alternatives", "/etc/ld.so.cache", "/etc/localtime"]
 symlinks = [["usr/lib", "/lib"], ["usr/lib64", "/lib64"], ["usr/bin", "/bin"], ["usr/sbin", "/sbin"]]
-tmpfs = ["/tmp", "/var/tmp", "/dev/shm", "/home/agent", "/work/.git/hooks", "/work/.vscode", "/work/.idea"]
+#
+# Die Eintraege unter /work sind die Haertung des Kanals 1 (HUM-043,
+# docs/SECURITY.md 3.2): Verzeichnisse, aus denen ein Werkzeug auf dem Host von
+# selbst Code startet, sobald ein Mensch mit dem Projekt weiterarbeitet. Ein
+# tmpfs entsteht nur ueber einem Pfad, den es im Projekt schon gibt, denn bwrap
+# haengt nur ueber einen vorhandenen Mountpoint ein. Fehlt eines davon, legt
+# Humanitl es NICHT an -- der Daemon schreibt nichts in das Projekt des
+# Nutzers -- sondern nennt den Pfad in der Zusammenfassung des Laufs.
+tmpfs = [
+  "/tmp", "/var/tmp", "/dev/shm", "/home/agent",
+  "/work/.git/hooks",
+  "/work/.vscode", "/work/.idea", "/work/.fleet",
+  "/work/.github/workflows",
+  "/work/.gitlab-ci.yml.d",
+  "/work/.direnv",
+  "/work/.humanitl",
+]
 proc = "/proc"
 dev = "/dev"
-# Werden als leere, nur lesbare Datei ueberdeckt.
-masked_files = ["/work/.envrc", "/work/.git/config"]
+# Werden als leere, nur lesbare Datei ueberdeckt: ein versiegeltes, leeres memfd
+# per --ro-bind-data (nicht /dev/null, das auf einem nodev-Mount mit EACCES
+# antwortet). Der Agent liest eine leere Datei, und Schreibversuche enden in
+# EROFS. Tools, die .env erwarten, sehen deshalb nichts; das ist gewollt.
+masked_files = [
+  "/work/.envrc", "/work/.env", "/work/.env.local",
+  "/work/.git/config",
+  "/work/.npmrc", "/work/.yarnrc", "/work/.yarnrc.yml", "/work/.pypirc",
+  "/work/.gitlab-ci.yml", "/work/Jenkinsfile", "/work/.pre-commit-config.yaml",
+]
+# Masken, die dieses Profil wieder aufhebt. /work/.envrc und /work/.git/config
+# stehen nie darin: ein Versuch wird mit CONFIG_003 abgelehnt. Jede andere
+# Freigabe erscheint beim Start als SANDBOX_020 (Warning).
+unmask = []
 # Nutzer-Erweiterung, gegen die Denylist geprueft. Kommt in der Zeile vor dem
 # Projekt, dem Proxy-Socket, der CA und dem Shim: die liegen immer obenauf.
 extra_ro = []

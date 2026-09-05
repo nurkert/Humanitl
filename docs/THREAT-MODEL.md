@@ -127,10 +127,15 @@ das nächste Mal pusht.
 *Schwere.* Hoch. Dies ist der breiteste offene Kanal.
 
 *Minderung im MVP.* Nur ein Unterpfad wird gebunden, nie `$HOME`. `work_mode = "ro"` ist möglich
-und für Analyse-Sitzungen der Vorschlag. `.git/hooks`, `.git/config`, `.envrc`, `.vscode`, `.idea`
-werden mit einem `tmpfs` beziehungsweise `/dev/null` überdeckt, damit ein geschriebener Hook nicht
-beim nächsten Commit auf dem Host läuft. Zum Sitzungsende zeigt Humanitl eine Zusammenfassung der
-berührten Dateien und führt den Findings-Scan über den Diff, nicht nur über die Netzwerk-Anfragen.
+und für Analyse-Sitzungen der Vorschlag. Verzeichnisse wie `.git/hooks`, `.vscode`, `.idea` und
+`.github/workflows` werden mit einem leeren `tmpfs` überdeckt, Dateien wie `.envrc`, `.env`,
+`.git/config`, `.npmrc` und `Jenkinsfile` mit einer leeren, nur lesbaren Datei aus einem
+versiegelten `memfd` (`--ro-bind-data`, nicht `/dev/null`: der Bind eines Gerätes auf einen
+`nodev`-Mount antwortet `EACCES`). Die vollständige Liste steht in
+`profiles/sandbox/default.toml`; damit läuft ein geschriebener Hook nicht beim nächsten Commit auf
+dem Host. Zum Ende eines Sandbox-Laufs zeigt Humanitl eine Zusammenfassung der berührten Dateien,
+markiert Symlinks mit Ziel außerhalb von `/work` und führt den Findings-Scan über den Diff, nicht
+nur über die Netzwerk-Anfragen.
 
 *Restrisiko.* Ein Agent kann Daten im Projekt umschichten, verschleiern oder in einer Datei
 ablegen, die der Mensch später selbst nach außen trägt. Humanitl sieht das nur, wenn der Mensch
@@ -247,7 +252,8 @@ was in der `bwrap`-Argumentliste steht, und die ist vollständig in `humanitl sa
 sichtbar (Reihenfolge verbindlich in HUM-011). Im Auszug: lesend `/usr`, `/etc/ssl`,
 `/etc/alternatives`, `/etc/ld.so.cache`, die CA-Dateien, generierte `/etc/passwd`, `/etc/group`,
 `/etc/hosts` und der Shim; das Projekt unter `/work` mit `tmpfs` über `.git/hooks`, `.vscode`,
-`.idea` und `/dev/null` über `.envrc` und `.git/config`; frisch angelegt `/proc`, ein minimales
+`.idea` und den weiteren Verzeichnissen der Liste sowie leeren, nur lesbaren Dateien über `.envrc`,
+`.git/config` und den weiteren Masken; frisch angelegt `/proc`, ein minimales
 `/dev`, `tmpfs` für `/tmp` und `/dev/shm`, ein leeres `/home/agent`; dazu die Proxy-Socket-Datei.
 `$XDG_RUNTIME_DIR`, `/tmp`, `/run`, `/home`, `~/.ssh`, `~/.gitconfig`, `~/.netrc` und die
 genannten Sockets sind nicht enthalten; der Argv-Builder lehnt ein Profil mit einem dieser Pfade
