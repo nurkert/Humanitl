@@ -458,6 +458,23 @@ teilen. Schreibgeschützte Seed-Caches sind nach dem MVP vorgesehen.
 
 ---
 
+`SANDBOX_026` (Warning) nennt jede Datei, die dieser Rechner von selbst
+ausführt — einen Git-Hook, ein `Makefile`, eine `package.json` mit
+`postinstall`, eine Workflow-Datei —, auch wenn kein Geheimnis darin steht.
+
+`SANDBOX_028` (Warning) nennt jede geänderte Datei, in die nicht gesehen werden
+konnte. Sie ist weder ein Fund noch eine saubere Datei, sondern eine benannte
+Lücke: Der Agent bestimmt die Rechte an dem, was er schreibt, und eine Datei,
+die stillschweigend aus dem Scan fällt, wäre der Weg an dieser Prüfung vorbei.
+
+Die Zusammenfassung liegt in der Aufzeichnung (`session_summaries`);
+`humanitl sessions summary <id>` holt sie über die Kennung des Laufs zurück,
+auch lange nach dessen Ende.
+
+Ist das Projekt nur lesbar eingehängt (`sandbox.work_mode = ro`), entsteht keine
+Zusammenfassung: Unter `--ro-bind` kann sich nichts ändern, und eine leere zu
+zeigen hieße zu behaupten, es sei gemessen worden.
+
 ## 4. Vertrauensbasis
 
 Die Vertrauensbasis (TCB, „trusted computing base") ist die Menge der Bausteine, deren Versagen
