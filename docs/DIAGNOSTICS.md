@@ -387,6 +387,60 @@ Blob-Speicher nicht benutzbar
 
 Hash-Kette gebrochen
 
+### Bereich doctor
+
+#### DOCTOR_001
+
+bubblewrap fehlt oder ist zu alt
+
+#### DOCTOR_002
+
+Nutzer-Namensräume nicht verfügbar
+
+#### DOCTOR_003
+
+Kernel ohne brauchbares seccomp
+
+#### DOCTOR_004
+
+Laufzeitverzeichnis fehlt oder ist nicht privat
+
+#### DOCTOR_005
+
+Keine systemd-Nutzersitzung
+
+#### DOCTOR_006
+
+Daemon nicht erreichbar oder anderer Vertrag
+
+#### DOCTOR_007
+
+Agent-Kommando nicht im PATH
+
+#### DOCTOR_008
+
+Sprachmodell nicht erreichbar
+
+#### DOCTOR_009
+
+Kein Platz für das Anzeigesymbol
+
+#### DOCTOR_010
+
+Renderer und Grafiktreiber vertragen sich nicht
+
+#### DOCTOR_011
+
+Wenig Platz im Datenverzeichnis
+
+#### DOCTOR_012
+
+Prüfung nicht durchführbar
+
+#### DOCTOR_013
+
+Sprachmodell nicht angesprochen
+
 ### Bereich cli
 
 #### CLI_001

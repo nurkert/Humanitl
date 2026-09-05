@@ -589,6 +589,94 @@ async fn list_flows_answers_from_the_registry() {
     daemon.shutdown().await;
 }
 
+/// `Doctor` prueft die Maschine, auf der der Daemon laeuft (HUM-075).
+///
+/// Was hier gemessen wird, haengt vom Rechner ab; was der Test festhaelt,
+/// haengt es nicht: elf Zeilen in fester Reihenfolge, jede mit einem der drei
+/// Zustaende, jede nicht-gruene mit einem Befund, der `why` und `fix` traegt,
+/// und keine gruene mit einem Befund. Und zwei Zeilen sind hier nie gemessen:
+/// Der Daemon kann nicht sagen, ob ein Client ihn erreicht, und er baut ohne
+/// ausdruecklichen Auftrag keine Verbindung zum Sprachmodell auf.
+#[tokio::test]
+async fn doctor_reports_every_check_and_measures_no_network() {
+    let daemon = Daemon::new().await;
+    let mut client = daemon.client().await;
+
+    let report = client
+        .doctor(())
+        .await
+        .expect("Doctor answers since HUM-075")
+        .into_inner();
+
+    let ids: Vec<&str> = report
+        .checks
+        .iter()
+        .map(|check| check.id.as_str())
+        .collect();
+    let expected: Vec<&str> = humanitl_sandbox::doctor::CheckId::ALL
+        .iter()
+        .map(|id| id.as_str())
+        .collect();
+    assert_eq!(ids, expected, "the order is the display order");
+
+    for check in &report.checks {
+        let status = v1::CheckStatus::try_from(check.status)
+            .unwrap_or_else(|_| panic!("{} carries an unknown status", check.id));
+        assert_ne!(
+            status,
+            v1::CheckStatus::Unspecified,
+            "{} was left unspecified",
+            check.id
+        );
+        if status == v1::CheckStatus::Ok {
+            assert!(
+                check.diagnostic.is_none(),
+                "{} is green and still carries a finding",
+                check.id
+            );
+            continue;
+        }
+        let diagnostic = check
+            .diagnostic
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} is not green and carries no finding", check.id));
+        assert!(!diagnostic.why.is_empty(), "{} has no why", check.id);
+        assert!(diagnostic.fix.is_some(), "{} has no fix", check.id);
+        assert!(!check.evidence.is_empty(), "{} has no evidence", check.id);
+    }
+
+    let llm = report
+        .checks
+        .iter()
+        .find(|check| check.id == "llm")
+        .expect("the llm line");
+    assert_eq!(llm.status, v1::CheckStatus::Warn as i32);
+    let code = llm
+        .diagnostic
+        .as_ref()
+        .map(|diagnostic| diagnostic.code.clone())
+        .unwrap_or_default();
+    assert!(
+        code == "DOCTOR_013" || code == "DOCTOR_008",
+        "the daemon never contacts the endpoint on its own, it says so: {code}"
+    );
+
+    let line = report
+        .checks
+        .iter()
+        .find(|check| check.id == "daemon")
+        .expect("the daemon line");
+    assert!(
+        line.evidence
+            .starts_with(humanitl_sandbox::doctor::NOT_MEASURED),
+        "a daemon cannot measure whether a client reaches it: {}",
+        line.evidence
+    );
+
+    drop(client);
+    daemon.shutdown().await;
+}
+
 #[tokio::test]
 async fn every_other_rpc_says_which_issue_brings_it() {
     let daemon = Daemon::new().await;
@@ -609,7 +697,6 @@ async fn every_other_rpc_says_which_issue_brings_it() {
             .map(|_| ())
             .unwrap_err(),
     );
-    refusals.push(client.doctor(()).await.map(|_| ()).unwrap_err());
 
     for error in refusals {
         assert_eq!(error.code(), Code::Unimplemented);

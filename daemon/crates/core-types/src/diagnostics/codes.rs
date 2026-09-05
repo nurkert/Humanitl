@@ -630,6 +630,102 @@ registry! {
     /// blieb stehen, ohne dass irgendetwas davon sichtbar wurde. Er wird wie
     /// [`PROXY_010`] zusammengefasst gemeldet, aus demselben Grund.
     PROXY_011 => "proxy", "Anfrage-Rumpf ist stehengeblieben", "#proxy_011";
+    // HUM-075: `humanitl doctor`. Ein Code je Prüfung, damit eine Zeile der
+    // Ausgabe und ihr Befund nicht auseinanderlaufen können, dazu zwei für die
+    // beiden Arten, nicht gemessen zu haben.
+    /// `bubblewrap` fehlt oder ist älter als die Untergrenze des Launchers.
+    ///
+    /// Beide Fälle stehen unter demselben Code, weil derselbe Befehl beide
+    /// behebt; welcher von beiden vorliegt, sagt das `why` und der Beleg der
+    /// Zeile. Ohne `bwrap` gibt es keine Sandbox, deshalb blockierend
+    /// (HUM-075).
+    DOCTOR_001 => "doctor", "bubblewrap fehlt oder ist zu alt", "#doctor_001";
+    /// Ein unprivilegierter Nutzer-Namensraum ließ sich nicht aufmachen.
+    ///
+    /// Gemessen wird mit `bwrap` und nicht mit `unshare`: Auf Ubuntu ab 23.10
+    /// schränkt `AppArmor` unprivilegierte Namensräume ein, das ausgelieferte
+    /// `bwrap` trägt dafür aber ein Profil. Der Befund nennt, was
+    /// `/proc/sys/kernel/apparmor_restrict_unprivileged_userns` und
+    /// `/proc/sys/kernel/unprivileged_userns_clone` dazu sagen, und
+    /// unterscheidet dabei eine Datei, die es nicht gibt, von einer mit
+    /// unbrauchbarem Wert (HUM-075).
+    DOCTOR_002 => "doctor", "Nutzer-Namensräume nicht verfügbar", "#doctor_002";
+    /// Der Kernel taugt nicht für den seccomp-Filter des Shims.
+    ///
+    /// Blockierend, wenn `/proc/self/status` gar kein Feld `Seccomp` führt:
+    /// Dann ist der Kernel ohne `CONFIG_SECCOMP` gebaut, und der Shim kann
+    /// seinen Filter nicht laden. Eine Warnung, wenn der Kernel älter ist als
+    /// die Fassung, gegen die der Filter gemessen wurde (HUM-075).
+    DOCTOR_003 => "doctor", "Kernel ohne brauchbares seccomp", "#doctor_003";
+    /// `$XDG_RUNTIME_DIR` fehlt, gehört einem anderen oder steht offen.
+    ///
+    /// Dort liegen der Socket des Daemons und das Sitzungs-Token. Ein
+    /// Verzeichnis, in das Gruppe oder Welt hineindarf, wäre der bequemste Weg
+    /// an jeder Entscheidung vorbei; eines, das einem anderen Nutzer gehört,
+    /// ebenso (HUM-075).
+    DOCTOR_004 => "doctor", "Laufzeitverzeichnis fehlt oder ist nicht privat", "#doctor_004";
+    /// Es gibt keine brauchbare systemd-Nutzersitzung.
+    ///
+    /// Nur eine Warnung: Ohne systemd startet man `humanitld` von Hand, und
+    /// alles Weitere läuft genauso. Was fehlt, ist der Start beim Anmelden
+    /// (HUM-075).
+    DOCTOR_005 => "doctor", "Keine systemd-Nutzersitzung", "#doctor_005";
+    /// Der Daemon antwortet nicht oder spricht einen anderen Vertrag.
+    ///
+    /// Der Befund des Verbindungsversuchs steht im `why`, mit seinem eigenen
+    /// Code davor; der Doctor führt je Zeile genau einen Code, damit Zeile und
+    /// Befund zusammenbleiben. Eine andere Major-Version ist blockierend, eine
+    /// fehlende Verbindung nur eine Warnung: Der Doctor selbst läuft auch ohne
+    /// Daemon, und genau dafür ist er da (HUM-075).
+    DOCTOR_006 => "doctor", "Daemon nicht erreichbar oder anderer Vertrag", "#doctor_006";
+    /// Das Kommando des Agenten liegt nicht im `PATH` des Hosts.
+    ///
+    /// Eine Warnung und kein Fehler: Der Pfad in der Sandbox kann ein anderer
+    /// sein als der auf dem Host, und ob das `exec` gelingt, entscheidet der
+    /// Shim. Ohne das Kommando läuft der Agent aber nicht (HUM-075, HUM-037).
+    DOCTOR_007 => "doctor", "Agent-Kommando nicht im PATH", "#doctor_007";
+    /// Der Endpunkt des Sprachmodells fehlt oder hat nicht geantwortet.
+    ///
+    /// Steht nur nach einer Messung. Der Befund der Endpunkt-Probe steht mit
+    /// seinem Code im `why`. Wurde gar nicht gemessen, ist es `DOCTOR_013`
+    /// (HUM-075, HUM-039).
+    DOCTOR_008 => "doctor", "Sprachmodell nicht erreichbar", "#doctor_008";
+    /// Die Arbeitsumgebung hat keinen Platz für das Anzeigesymbol.
+    ///
+    /// Entweder fehlt `libayatana-appindicator3`, oder die Sitzung ist GNOME,
+    /// das seit 3.26 keinen eigenen Bereich für Anzeigesymbole mehr hat und
+    /// die AppIndicator-Erweiterung braucht. Die Anwendung läuft weiter; der
+    /// Zähler der wartenden Anfragen steht dann im Fenstertitel (HUM-075,
+    /// HUM-034).
+    DOCTOR_009 => "doctor", "Kein Platz für das Anzeigesymbol", "#doctor_009";
+    /// Renderer und Grafiktreiber vertragen sich voraussichtlich nicht.
+    ///
+    /// Der bekannte Fall ist Impeller auf einem geladenen NVIDIA-Modul unter
+    /// Wayland: Die Oberfläche startet und bleibt schwarz. Der Befund nennt
+    /// den Schalter, mit dem sie ohne Impeller startet (HUM-075).
+    DOCTOR_010 => "doctor", "Renderer und Grafiktreiber vertragen sich nicht", "#doctor_010";
+    /// Im Datenverzeichnis ist wenig Platz.
+    ///
+    /// Die Aufzeichnung legt dort Flows und Bodies ab. Der Vorschlag ist eine
+    /// kürzere Aufbewahrung, nicht das Abschalten der Aufzeichnung: Ohne sie
+    /// gilt die Zusage „alles wird aufgezeichnet" nicht mehr (HUM-075,
+    /// HUM-026).
+    DOCTOR_011 => "doctor", "Wenig Platz im Datenverzeichnis", "#doctor_011";
+    /// Eine Prüfung ließ sich auf diesem Rechner nicht durchführen.
+    ///
+    /// Der einzige ehrliche Ausgang, wenn die Quelle fehlt oder nicht lesbar
+    /// ist: Eine Prüfung, die nicht nachsehen konnte, ist nicht grün. Das `why`
+    /// nennt die Prüfung und den Grund, der `fix` den Befehl, den der Doctor
+    /// versucht hat und den ein Mensch von Hand nachfahren kann (HUM-075).
+    DOCTOR_012 => "doctor", "Prüfung nicht durchführbar", "#doctor_012";
+    /// Der Endpunkt des Sprachmodells wurde nicht angesprochen.
+    ///
+    /// Nicht `DOCTOR_012`: Dort konnte der Doctor nicht nachsehen, hier wollte
+    /// er nicht. Die Erreichbarkeit des Sprachmodells ist die einzige Prüfung,
+    /// hinter der eine Verbindung stünde, und sie läuft nie als Nebenwirkung
+    /// eines anderen Befehls oder beim Öffnen eines Bildschirms. Der `fix`
+    /// nennt den Befehl, der sie auslöst (HUM-075, HUM-039).
+    DOCTOR_013 => "doctor", "Sprachmodell nicht angesprochen", "#doctor_013";
 }
 
 /// Sucht einen Code im Register.

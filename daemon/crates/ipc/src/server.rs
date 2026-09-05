@@ -49,6 +49,7 @@ use humanitl_proxy::{
 use humanitl_recorder::{
     Cursor, CursorKey, Dir, FlowDetail as RecordedDetail, FlowQuery, Recorder, SortKey,
 };
+use humanitl_sandbox::doctor::Probe as DoctorProbe;
 use tokio::net::UnixListener;
 use tokio::sync::oneshot;
 use tokio_stream::StreamExt as _;
@@ -121,7 +122,40 @@ pub struct IpcServer {
     /// läuft; `Sandbox` antwortet dann mit `IPC_006` statt mit einer
     /// erfundenen Momentaufnahme.
     sandbox: Option<SandboxService>,
+    /// Woraus `Doctor` seinen Bericht baut (HUM-075).
+    doctor: DoctorSetup,
     bodies: BodyIndex,
+}
+
+/// Was der Doctor über diese Installation wissen muss.
+///
+/// Drei Werte aus der Konfiguration und die Pfade dieses Prozesses. Sie liegen
+/// hier und nicht in der Prüfung, weil die Prüfung nichts über Konfiguration
+/// wissen soll: Sie liest die Maschine, und wonach sie sucht, sagt ihr der,
+/// der sie ruft.
+#[derive(Debug, Clone)]
+struct DoctorSetup {
+    /// Die Pfade und die Umgebung dieses Daemons.
+    paths: humanitl_config::Paths,
+    /// `agent.adapter`.
+    adapter: String,
+    /// Das erste Wort von `agent.command`, wenn es die Kommandozeile ersetzt.
+    agent_command: Option<String>,
+    /// `llm.endpoint`, als Text.
+    llm_endpoint: Option<String>,
+}
+
+impl DoctorSetup {
+    /// Was der Daemon über den Endpunkt des Sprachmodells sagen darf.
+    ///
+    /// Nie mehr als „er steht in der Konfiguration": Gemessen wird er über
+    /// `ProbeLlm`, auf ausdrücklichen Wunsch eines Menschen.
+    fn llm_facts(&self) -> humanitl_sandbox::doctor::LlmFacts {
+        humanitl_sandbox::doctor::LlmFacts::not_contacted(
+            self.llm_endpoint.clone(),
+            humanitl_sandbox::doctor::PROBE_LLM_COMMAND,
+        )
+    }
 }
 
 /// Wo ein Body liegt, den dieser Dienst schon einmal ausgeliefert hat.
@@ -174,6 +208,17 @@ impl IpcServer {
             llm_probe: probe.as_ref().ok().map(Arc::clone),
             llm_probe_error: probe.err(),
             sandbox: None,
+            doctor: DoctorSetup {
+                paths: humanitl_config::Paths::from_process(),
+                adapter: config.agent.adapter.clone(),
+                agent_command: config
+                    .agent
+                    .command
+                    .as_ref()
+                    .and_then(|words| words.first())
+                    .cloned(),
+                llm_endpoint: config.llm.endpoint.as_ref().map(ToString::to_string),
+            },
             bodies: BodyIndex::new(),
         }
     }
@@ -1103,8 +1148,45 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         ))
     }
 
+    /// Prüft die Maschine, auf der dieser Daemon läuft (HUM-075).
+    ///
+    /// Derselbe Bericht, den `humanitl doctor` ausgibt: Beide rufen
+    /// [`humanitl_sandbox::doctor::run`] über denselben [`DoctorProbe`], und
+    /// keiner von beiden hat eine eigene Prüfung (ADR-018).
+    ///
+    /// Zwei Dinge sind hier anders als in der Kommandozeile, und beide sind
+    /// Tatsachen und keine Wahl:
+    ///
+    /// - Die Zeile `daemon` ist nicht gemessen. Wer diese Antwort liest, hat
+    ///   den Daemon erreicht; ein Daemon kann aber nicht sagen, ob ein anderer
+    ///   Client ihn erreicht. Der Beleg sagt genau das.
+    /// - Die Zeile `llm` ist nicht gemessen. `Doctor` nimmt keinen Auftrag
+    ///   entgegen (`rpc Doctor(Empty)`), also kann niemand darin um eine
+    ///   Verbindung bitten — und eine Verbindung, um die niemand gebeten hat,
+    ///   baut dieser Daemon nicht auf. Gemessen wird sie über `ProbeLlm`
+    ///   (HUM-039).
+    ///
+    /// Die Prüfungen lesen Dateien und starten kurze Programme; das läuft in
+    /// [`tokio::task::spawn_blocking`], damit eine hängende Probe die Laufzeit
+    /// nicht anhält.
     async fn doctor(&self, _request: Request<()>) -> Result<Response<v1::DoctorReport>, Status> {
-        Err(unimplemented("Doctor", "HUM-075"))
+        let setup = self.doctor.clone();
+        let socket = setup.paths.daemon_socket();
+        let daemon = humanitl_sandbox::doctor::DaemonFacts::NotTried {
+            socket,
+            why: "this report comes from the daemon itself, which cannot tell whether a client \
+                  reaches it"
+                .to_owned(),
+        };
+        let llm = setup.llm_facts();
+        let report = tokio::task::spawn_blocking(move || {
+            let probe = DoctorProbe::new(setup.paths.env())
+                .with_agent(setup.adapter.clone(), setup.agent_command.clone());
+            humanitl_sandbox::doctor::run(&probe.collect(daemon, llm))
+        })
+        .await
+        .map_err(|error| Status::internal(format!("the doctor did not finish: {error}")))?;
+        Ok(Response::new(convert::doctor_report_to_proto(&report)))
     }
 
     async fn discover_llm(
@@ -1372,6 +1454,36 @@ mod tests {
         assert!(!info.session_id.is_empty());
     }
 
+    /// `Doctor` antwortet seit HUM-075 und misst dabei nichts im Netz.
+    ///
+    /// Der ganze Bericht wird in `tests/ipc_server.rs` geprüft; hier steht die
+    /// eine Zusage, die kein Rechner verwässern kann: Der Daemon baut von sich
+    /// aus keine Verbindung zum Sprachmodell auf, und die Zeile `llm` sagt
+    /// genau das, statt eine Messung zu behaupten.
+    #[tokio::test]
+    async fn doctor_answers_and_never_contacts_the_endpoint_by_itself() {
+        let queue = queue();
+        let server = server(&queue);
+        let report = server
+            .doctor(Request::new(()))
+            .await
+            .expect("Doctor answers")
+            .into_inner();
+        let llm = report
+            .checks
+            .iter()
+            .find(|check| check.id == "llm")
+            .expect("the llm line");
+        assert_ne!(llm.status, v1::CheckStatus::Ok as i32, "{llm:?}");
+        assert!(
+            llm.evidence
+                .starts_with(humanitl_sandbox::doctor::NOT_MEASURED)
+                || llm.evidence.contains("not set"),
+            "{}",
+            llm.evidence
+        );
+    }
+
     #[tokio::test]
     async fn every_rpc_of_sprint_two_and_later_is_unimplemented() {
         let queue = queue();
@@ -1389,11 +1501,6 @@ mod tests {
                 .map(|status| (status.code(), status.message().to_owned())),
             server
                 .set_config(Request::new(v1::SetConfigRequest::default()))
-                .await
-                .err()
-                .map(|status| (status.code(), status.message().to_owned())),
-            server
-                .doctor(Request::new(()))
                 .await
                 .err()
                 .map(|status| (status.code(), status.message().to_owned())),

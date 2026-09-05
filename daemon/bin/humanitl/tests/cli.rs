@@ -78,6 +78,41 @@ impl Harness {
         ]))
     }
 
+    /// Wie [`Harness::run`], aber mit einer eigenen Uhr.
+    ///
+    /// `None`, wenn der Prozess die Frist überschreitet; er wird dann beendet.
+    /// Ein Test, der beweisen soll, dass ein Befehl **nicht** hängt, darf nicht
+    /// darauf warten, dass er von selbst zurückkommt — sonst hängt der Test
+    /// mit, und die Mutation, die die Frist entfernt, überlebt, weil niemand
+    /// mehr zusieht.
+    fn run_bounded<I, S>(&self, args: I, limit: Duration) -> Option<Output>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<std::ffi::OsStr>,
+    {
+        let mut child = self
+            .command()
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the binary starts");
+        let deadline = Instant::now() + limit;
+        loop {
+            match child.try_wait().expect("the child can be polled") {
+                Some(_) => break,
+                None if Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                None => std::thread::sleep(Duration::from_millis(20)),
+            }
+        }
+        Some(child.wait_with_output().expect("the output is collected"))
+    }
+
     /// Ein Aufruf des Binaries in dieser Umgebung.
     fn command(&self) -> Command {
         let mut command = Command::new(BIN);
@@ -338,6 +373,338 @@ fn every_subcommand_has_a_help_of_its_own() {
         assert_eq!(code(&output), 0, "{command:?} has no help");
         assert!(!stdout(&output).is_empty(), "{command:?} printed nothing");
     }
+}
+
+// --- humanitl doctor (HUM-075) ---------------------------------------------
+
+/// Die elf Kennungen, in der Reihenfolge der Anzeige.
+fn doctor_ids() -> Vec<String> {
+    humanitl_sandbox::doctor::CheckId::ALL
+        .iter()
+        .map(|id| (*id).as_str().to_owned())
+        .collect()
+}
+
+/// Der Bericht aus `humanitl doctor --json`, samt Exit-Code.
+fn doctor_json(harness: &Harness, extra: &[&str]) -> (serde_json::Value, i32) {
+    let mut args = vec!["doctor", "--json"];
+    args.extend_from_slice(extra);
+    let output = harness.run(args);
+    let text = stdout(&output);
+    let value: serde_json::Value = serde_json::from_str(text.trim())
+        .unwrap_or_else(|error| panic!("one JSON value on stdout ({error}): {text}"));
+    (value, code(&output))
+}
+
+/// Der Code des Befunds einer Zeile, leer wenn sie keinen traegt.
+fn doctor_code(report: &serde_json::Value, id: &str) -> String {
+    report["checks"]
+        .as_array()
+        .expect("checks is an array")
+        .iter()
+        .find(|check| check["id"] == id)
+        .unwrap_or_else(|| panic!("the line {id}"))["diagnostic"]["code"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// Ein Socket, der die Verbindung annimmt und nie antwortet.
+///
+/// Genau der Fall, in dem `humanitl doctor` ohne Frist fuer immer haengt: Der
+/// Pfad ist da, das Token ist da, die Verbindung kommt zustande — und danach
+/// sagt niemand mehr etwas. Der Lauscher nimmt an und legt die Verbindung
+/// beiseite, statt sie zu schliessen; ein `drop` waere ein Verbindungsabbruch
+/// und damit ein anderer Fall.
+struct SilentSocket {
+    stop: Option<std::sync::mpsc::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl SilentSocket {
+    fn start(harness: &Harness) -> Self {
+        let paths = harness.paths();
+        let socket = paths.daemon_socket();
+        std::fs::create_dir_all(socket.parent().expect("the socket has a directory"))
+            .expect("the runtime directory");
+        let token = auth::new_token().expect("a token");
+        auth::write_token(&paths.token_path(), &token).expect("the token is written");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).expect("the socket binds");
+
+        let (stop, stopped) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            let mut held = Vec::new();
+            listener
+                .set_nonblocking(true)
+                .expect("the listener can poll");
+            while stopped.try_recv().is_err() {
+                if let Ok((stream, _)) = listener.accept() {
+                    held.push(stream);
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        Self {
+            stop: Some(stop),
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for SilentSocket {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Ein Daemon, der schweigt, haelt den Doctor nicht auf.
+///
+/// Ohne Frist um `connect`, `GetInfo` und `Doctor` haengt dieser Aufruf fuer
+/// immer und erreicht den Rueckfall auf den eigenen Prozess **nie** — womit
+/// genau die Eigenschaft hin waere, die den Rueckfall begruendet.
+#[test]
+fn a_daemon_that_answers_nothing_does_not_hold_the_doctor() {
+    let harness = Harness::new();
+    let _silent = SilentSocket::start(&harness);
+
+    // Die Frist gehoert dem Test und nicht dem Prozess: Ohne Frist im Code
+    // kaeme dieser Aufruf nie zurueck, und ein Test, der darauf wartet, waere
+    // kein Test, sondern derselbe Haenger.
+    let output = harness
+        .run_bounded(["doctor", "--json"], Duration::from_secs(60))
+        .expect("the doctor finishes on a socket that never answers");
+    let text = stdout(&output);
+    let report: serde_json::Value = serde_json::from_str(text.trim())
+        .unwrap_or_else(|error| panic!("one JSON value on stdout ({error}): {text}"));
+    let exit = code(&output);
+
+    assert_ne!(
+        exit, 2,
+        "a silent daemon is a line of the report, not exit 2"
+    );
+    assert_eq!(
+        report["source"], "local",
+        "the fallback is the whole point: {report}"
+    );
+    assert_eq!(
+        doctor_code(&report, "daemon"),
+        "DOCTOR_006",
+        "a socket that holds and says nothing is not a reachable daemon: {report}"
+    );
+    let ids: Vec<String> = report["checks"]
+        .as_array()
+        .expect("checks is an array")
+        .iter()
+        .map(|check| check["id"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(ids, doctor_ids(), "every line is there");
+}
+
+#[test]
+fn doctor_without_a_daemon_is_a_report_and_not_exit_two() {
+    let harness = Harness::new();
+    let output = harness.run(["doctor"]);
+
+    // Kein Daemon ist hier eine Zeile des Berichts und kein Abbruch: Genau
+    // dafuer gibt es den Befehl.
+    assert_ne!(code(&output), 2, "{}", stderr(&output));
+    let text = stdout(&output);
+    for id in doctor_ids() {
+        assert!(text.contains(&id), "the line {id} is missing from:\n{text}");
+    }
+    assert!(text.contains("DOCTOR_006"), "{text}");
+}
+
+#[test]
+fn json_shape_stable() {
+    let harness = Harness::new();
+    let (report, exit) = doctor_json(&harness, &[]);
+
+    let top: Vec<&str> = report
+        .as_object()
+        .expect("an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(top, vec!["checks", "source", "status"], "{report}");
+    assert!(
+        ["ok", "warn", "fail"].contains(&report["status"].as_str().unwrap_or_default()),
+        "{report}"
+    );
+    assert_eq!(report["source"], "local", "no daemon runs in this harness");
+    assert!(exit == 0 || exit == 3, "exit {exit} is not 0 or 3");
+
+    let checks = report["checks"].as_array().expect("checks is an array");
+    let ids: Vec<String> = checks
+        .iter()
+        .map(|check| check["id"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(ids, doctor_ids(), "the order is part of the contract");
+
+    for check in checks {
+        let id = check["id"].as_str().unwrap_or_default();
+        let status = check["status"].as_str().unwrap_or_default();
+        assert!(
+            ["ok", "warn", "fail"].contains(&status),
+            "{id} carries {status}"
+        );
+        assert!(
+            check["evidence"]
+                .as_str()
+                .is_some_and(|text| !text.is_empty()),
+            "{id} has no evidence"
+        );
+        if status == "ok" {
+            assert!(
+                check.get("diagnostic").is_none(),
+                "{id} is green with a finding"
+            );
+            continue;
+        }
+        let diagnostic = check
+            .get("diagnostic")
+            .unwrap_or_else(|| panic!("{id} has no finding"));
+        for key in ["code", "severity", "title", "why", "fix", "docs"] {
+            assert!(
+                diagnostic.get(key).is_some(),
+                "{id}: the finding has no {key}"
+            );
+        }
+        assert!(
+            diagnostic["code"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("DOCTOR_"),
+            "{id} carries {}, and the doctor keeps one code per line",
+            diagnostic["code"]
+        );
+    }
+}
+
+#[test]
+fn doctor_reaches_no_endpoint_unless_it_is_asked_to() {
+    let harness = Harness::new();
+    // Auf diesem Port hoert nichts. Wer ihn ansprechen wuerde, brauchte die
+    // Frist der Probe und meldete LLM_001; wer ihn in Ruhe laesst, ist sofort
+    // fertig und meldet DOCTOR_013.
+    let started = Instant::now();
+    let (report, _) = doctor_json(&harness, &["--llm", "http://127.0.0.1:1/"]);
+    let waited = started.elapsed();
+
+    assert_eq!(
+        doctor_code(&report, "llm"),
+        "DOCTOR_013",
+        "without --probe-llm nothing is contacted: {report}"
+    );
+    let evidence = report["checks"]
+        .as_array()
+        .and_then(|checks| checks.iter().find(|check| check["id"] == "llm"))
+        .map(|check| check["evidence"].to_string())
+        .unwrap_or_default();
+    assert!(
+        evidence.contains("127.0.0.1:1"),
+        "the line names what would be contacted: {evidence}"
+    );
+    assert!(
+        waited < PATIENCE,
+        "the doctor waited {waited:?}, which looks like a connection"
+    );
+}
+
+#[test]
+fn doctor_with_probe_llm_and_no_daemon_measures_nothing_and_says_so() {
+    let harness = Harness::new();
+    let (report, _) = doctor_json(&harness, &["--llm", "http://127.0.0.1:1/", "--probe-llm"]);
+
+    // Die Probe lebt im Daemon (ADR-018). Ohne ihn wird nicht gemessen, und
+    // das ist etwas anderes als ein Endpunkt, der schweigt.
+    assert_eq!(doctor_code(&report, "llm"), "DOCTOR_012", "{report}");
+}
+
+#[test]
+fn doctor_says_where_it_goes_before_it_goes_there_and_no_flag_silences_that() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+
+    // Auch mit --json und mit -q: Die Ankuendigung einer Verbindung ist Teil
+    // der Handlung und nicht ihre Verzierung. `stdout` bleibt trotzdem ein
+    // einziger JSON-Wert.
+    let output = harness.run([
+        "doctor",
+        "--json",
+        "-q",
+        "--llm",
+        "http://192.168.1.50:11434",
+        "--probe-llm",
+    ]);
+    let note = stderr(&output);
+    assert!(note.contains("192.168.1.50:11434"), "{note}");
+    assert!(note.contains("/api/tags"), "{note}");
+    assert!(note.contains("/v1/models"), "{note}");
+    assert!(note.contains("no credentials"), "{note}");
+
+    let text = stdout(&output);
+    let report: serde_json::Value = serde_json::from_str(text.trim())
+        .unwrap_or_else(|error| panic!("one JSON value on stdout ({error}): {text}"));
+    let llm = report["checks"]
+        .as_array()
+        .expect("checks is an array")
+        .iter()
+        .find(|check| check["id"] == "llm")
+        .expect("the llm line")
+        .clone();
+    assert_eq!(llm["status"], "ok", "{llm}");
+    assert!(
+        llm["evidence"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("2 models"),
+        "the line now carries a measurement: {llm}"
+    );
+}
+
+#[test]
+fn doctor_says_nothing_about_the_endpoint_when_it_does_not_go_there() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+    let output = harness.run(["doctor", "--json", "--llm", "http://192.168.1.50:11434"]);
+    let note = stderr(&output);
+    assert!(
+        !note.contains("contacting"),
+        "nothing was contacted, so nothing announces a contact: {note}"
+    );
+}
+
+#[test]
+fn doctor_takes_the_report_from_the_daemon_and_answers_the_daemon_line_itself() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+    let (report, exit) = doctor_json(&harness, &[]);
+
+    assert_eq!(report["source"], "daemon", "the RPC is the way (ADR-018)");
+    assert_eq!(exit, 0, "the fake reports warnings, not failures: {report}");
+
+    let checks = report["checks"].as_array().expect("checks is an array");
+    let ids: Vec<String> = checks
+        .iter()
+        .map(|check| check["id"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(ids, doctor_ids());
+
+    // Der Fake hat nichts gemessen und sagt es; nur die Zeile `daemon` weiss
+    // dieser Client besser, weil er gerade mit ihm gesprochen hat.
+    assert_eq!(doctor_code(&report, "bwrap"), "DOCTOR_012", "{report}");
+    let daemon = checks
+        .iter()
+        .find(|check| check["id"] == "daemon")
+        .expect("the daemon line");
+    assert_eq!(daemon["status"], "ok", "{daemon}");
+    assert!(daemon.get("diagnostic").is_none(), "{daemon}");
 }
 
 #[test]
