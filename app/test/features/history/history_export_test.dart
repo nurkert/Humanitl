@@ -336,20 +336,23 @@ void main() {
       );
     }
 
-    test('har says in the comment and in _humanitl that the answer was cut', () {
-      final Map<String, Object?> entry = harEntry(cutEntry());
-      final Map<String, Object?> response =
-          entry['response']! as Map<String, Object?>;
-      final Map<String, Object?> content =
-          response['content']! as Map<String, Object?>;
-      // Die Bytes sind da, und trotzdem steht die Marke daneben: Genau das
-      // fehlte, denn `text` allein sieht aus wie eine vollständige Antwort.
-      expect(content['text'], isNotEmpty);
-      expect(content['comment'], harBodyTruncated);
-      final Map<String, Object?> block =
-          entry['_humanitl']! as Map<String, Object?>;
-      expect(block['response_body_truncated'], isTrue);
-    });
+    test(
+      'har says in the comment and in _humanitl that the answer was cut',
+      () {
+        final Map<String, Object?> entry = harEntry(cutEntry());
+        final Map<String, Object?> response =
+            entry['response']! as Map<String, Object?>;
+        final Map<String, Object?> content =
+            response['content']! as Map<String, Object?>;
+        // Die Bytes sind da, und trotzdem steht die Marke daneben: Genau das
+        // fehlte, denn `text` allein sieht aus wie eine vollständige Antwort.
+        expect(content['text'], isNotEmpty);
+        expect(content['comment'], harBodyTruncated);
+        final Map<String, Object?> block =
+            entry['_humanitl']! as Map<String, Object?>;
+        expect(block['response_body_truncated'], isTrue);
+      },
+    );
 
     test('har leaves a complete answer unmarked', () {
       final Map<String, Object?> entry = harEntry(_threeFlows().first);
