@@ -83,7 +83,7 @@ use std::path::{Component, Path, PathBuf};
 
 use humanitl_config::{Env, Paths, WorkMode};
 use humanitl_core::diagnostics::codes::{
-    CONFIG_001, CONFIG_002, CONFIG_003, SANDBOX_006, SANDBOX_007,
+    CONFIG_001, CONFIG_002, CONFIG_003, SANDBOX_006, SANDBOX_007, SANDBOX_020,
 };
 use humanitl_core::ids::SessionId;
 use humanitl_core::{Diagnostic, Severity};
@@ -147,6 +147,14 @@ pub const HOSTNAME: &str = "sandbox";
 /// ein Profil kann weitere Dateien überdecken, diese beiden aber nicht
 /// freigeben, auch nicht mit `masked_files = []`.
 pub const MANDATORY_MASKED_FILES: &[&str] = &["/work/.envrc", "/work/.git/config"];
+
+/// Ob ein Pfad zu [`MANDATORY_MASKED_FILES`] gehört.
+#[must_use]
+pub fn is_mandatory_mask(path: &Path) -> bool {
+    MANDATORY_MASKED_FILES
+        .iter()
+        .any(|mandatory| path == Path::new(mandatory))
+}
 
 /// Ziele, die `mounts.tmpfs` in jedem Profil nennen muss.
 ///
@@ -387,6 +395,20 @@ pub struct MountSection {
     /// Dateien, die von einer leeren, nur lesbaren Datei überdeckt werden,
     /// zusätzlich zu [`MANDATORY_MASKED_FILES`].
     pub masked_files: Vec<PathBuf>,
+    /// Masken, die dieses Profil ausdrücklich wieder aufhebt.
+    ///
+    /// Der Schlüssel wohnt am Profil und nicht in der Konfiguration
+    /// (`sandbox.unmask`): Die Politik der Sandbox ist eine Datei, die man
+    /// lesen kann (ADR-002), und die Kommandozeile zeigt sie Argument für
+    /// Argument. Eine Maske, die in der Konfiguration fällt und im Profil
+    /// weiter dasteht, wäre genau die stille Lücke, die
+    /// `backlog/CONVENTIONS.md` 4.13 verbietet. Tiers sind außerdem
+    /// Anmerkungen am Konfigurationsschema, nicht am Sandbox-Profil.
+    ///
+    /// [`MANDATORY_MASKED_FILES`] lassen sich so nicht freigeben; ein Versuch
+    /// ist `CONFIG_003`. Jede andere aufgehobene Maske meldet
+    /// [`SandboxProfile::unmask_diagnostics`] beim Start als `SANDBOX_020`.
+    pub unmask: Vec<PathBuf>,
     /// Zusätzliche nur lesbare Einhängungen des Nutzers.
     pub extra_ro: Vec<PathBuf>,
     /// Zusätzliche beschreibbare Einhängungen des Nutzers.
@@ -403,6 +425,7 @@ impl Default for MountSection {
             proc: Some(PathBuf::from("/proc")),
             dev: Some(PathBuf::from("/dev")),
             masked_files: Vec::new(),
+            unmask: Vec::new(),
             extra_ro: Vec::new(),
             extra_rw: Vec::new(),
         }
@@ -1409,10 +1432,14 @@ impl SandboxProfile {
     }
 
     /// Die Dateien, die die Kommandozeile überdeckt: [`MANDATORY_MASKED_FILES`]
-    /// zuerst, dann die Ergänzungen aus `mounts.masked_files`, ohne Doppelungen.
+    /// zuerst, dann die Ergänzungen aus `mounts.masked_files`, ohne Doppelungen,
+    /// abzüglich dessen, was `mounts.unmask` freigibt.
     ///
     /// Ein Profil kann Dateien hinzufügen, die beiden Pflichteinträge aber
-    /// nicht streichen; `masked_files = []` ergibt genau die Pflichteinträge.
+    /// nicht streichen; `masked_files = []` ergibt genau die Pflichteinträge,
+    /// und `unmask` wirkt nie auf sie ([`SandboxProfile::parse`] lehnt den
+    /// Versuch mit `CONFIG_003` ab, und diese Funktion würde ihn auch dann
+    /// nicht befolgen, wenn ein Profil ohne `parse` gebaut wurde).
     #[must_use]
     pub fn effective_masked_files(&self) -> Vec<PathBuf> {
         let mut out: Vec<PathBuf> = MANDATORY_MASKED_FILES.iter().map(PathBuf::from).collect();
@@ -1421,7 +1448,32 @@ impl SandboxProfile {
                 out.push(path.clone());
             }
         }
+        out.retain(|path| is_mandatory_mask(path) || !self.mounts.unmask.contains(path));
         out
+    }
+
+    /// Die Befunde, die ein aufgehobene Maske beim Start auslöst:
+    /// `SANDBOX_020` (Warning) je Pfad aus `mounts.unmask`.
+    ///
+    /// Der Kanal `/work` wird nicht geschlossen, sondern deklariert (AGENTS.md,
+    /// Kanal 1). Wer eine Maske aufhebt, soll dabei nicht in einer stillen
+    /// Zeile eines Profils verschwinden, sondern in der Oberfläche stehen.
+    #[must_use]
+    pub fn unmask_diagnostics(&self) -> Vec<Diagnostic> {
+        self.mounts
+            .unmask
+            .iter()
+            .filter(|path| !is_mandatory_mask(path))
+            .map(|path| {
+                Diagnostic::builder(SANDBOX_020, Severity::Warning)
+                    .why(format!(
+                        "profile {:?} unmasks {}; the agent can read and write it",
+                        self.name,
+                        path.display()
+                    ))
+                    .build()
+            })
+            .collect()
     }
 
     fn check_consistency(&self, source: &Path, floor: SocketFloor) -> Result<(), Diagnostic> {
@@ -1648,6 +1700,38 @@ impl SandboxProfile {
                 )));
             }
         }
+        self.check_unmask(&where_.to_string())?;
+        Ok(())
+    }
+
+    /// `mounts.unmask` gibt Masken frei — aber nie eine der Pflichtmasken.
+    ///
+    /// `.envrc` führt `direnv` beim Betreten des Verzeichnisses aus, und
+    /// `.git/config` trägt Credential-Helper und `core.hooksPath`. Beide sind
+    /// deklarierte Sperren des Kanals `/work` (AGENTS.md, Kanal 1); ein Profil,
+    /// das sie freigäbe, nähme eine Aussage aus `docs/SECURITY.md` zurück, ohne
+    /// dass das Dokument sich ändert. Deshalb `CONFIG_003` statt einer Warnung.
+    ///
+    /// Ein Eintrag, der gar keine Maske ist, ist ebenfalls `CONFIG_003`: Er
+    /// sähe aus wie eine Freigabe und wäre eine Zeile ohne Wirkung.
+    fn check_unmask(&self, where_: &str) -> Result<(), Diagnostic> {
+        for path in &self.mounts.unmask {
+            if is_mandatory_mask(path) {
+                return Err(range(format!(
+                    "{where_}: mounts.unmask names {}, which is a mandatory mask; \
+                     {MANDATORY_MASKED_FILES:?} stay masked in every profile, because .envrc runs \
+                     through direnv and .git/config carries credential helpers and core.hooksPath",
+                    path.display()
+                )));
+            }
+            if !self.mounts.masked_files.contains(path) {
+                return Err(range(format!(
+                    "{where_}: mounts.unmask names {}, which mounts.masked_files does not mask; \
+                     the entry would have no effect",
+                    path.display()
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -1746,6 +1830,12 @@ impl SandboxProfile {
                 .masked_files
                 .iter()
                 .map(|p| ("mounts.masked_files".to_owned(), p.as_path())),
+        );
+        out.extend(
+            self.mounts
+                .unmask
+                .iter()
+                .map(|p| ("mounts.unmask".to_owned(), p.as_path())),
         );
         out.extend(
             self.mounts
@@ -2010,6 +2100,58 @@ name = "minimal"
             profile.effective_masked_files(),
             ["/work/.envrc", "/work/.git/config", "/work/.npmrc"].map(PathBuf::from)
         );
+    }
+
+    #[test]
+    fn unmask_never_touches_mandatory_masks() {
+        for mandatory in MANDATORY_MASKED_FILES {
+            let text = format!(
+                "version = 1\nname = \"x\"\n[mounts]\nmasked_files = [{mandatory:?}]\nunmask = [{mandatory:?}]\n"
+            );
+            let err = parse(&text).expect_err("a mandatory mask cannot be lifted");
+            assert_eq!(err.code.as_str(), "CONFIG_003");
+            assert!(err.why.contains(mandatory), "{}", err.why);
+        }
+
+        // Und selbst ein Profil, das nie durch `parse` ging, wird nicht befolgt.
+        let mut profile = parse("version = 1\nname = \"x\"\n").expect("parses");
+        profile.mounts.unmask = MANDATORY_MASKED_FILES.iter().map(PathBuf::from).collect();
+        assert_eq!(
+            profile.effective_masked_files(),
+            MANDATORY_MASKED_FILES
+                .iter()
+                .map(PathBuf::from)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            profile.unmask_diagnostics().is_empty(),
+            "a mandatory mask is not a lifted mask"
+        );
+    }
+
+    #[test]
+    fn unmask_lifts_an_optional_mask_and_says_so() {
+        let text = "version = 1\nname = \"x\"\n[mounts]\nmasked_files = [\"/work/.env\", \
+                    \"/work/.npmrc\"]\nunmask = [\"/work/.env\"]\n";
+        let profile = parse(text).expect("an optional mask can be lifted");
+        assert_eq!(
+            profile.effective_masked_files(),
+            ["/work/.envrc", "/work/.git/config", "/work/.npmrc"].map(PathBuf::from)
+        );
+
+        let diagnostics = profile.unmask_diagnostics();
+        assert_eq!(diagnostics.len(), 1);
+        let first = &diagnostics[0];
+        assert_eq!(first.code.as_str(), "SANDBOX_020");
+        assert_eq!(first.severity, humanitl_core::Severity::Warning);
+        assert!(first.why.contains("/work/.env"), "{}", first.why);
+    }
+
+    #[test]
+    fn unmask_without_a_mask_is_refused() {
+        let text = "version = 1\nname = \"x\"\n[mounts]\nunmask = [\"/work/.npmrc\"]\n";
+        let err = parse(text).expect_err("an entry without effect is a mistake, not a nicety");
+        assert_eq!(err.code.as_str(), "CONFIG_003");
     }
 
     #[test]

@@ -25,10 +25,24 @@ min_bwrap_version = "0.8.0"
 work = { dst = "/work", mode = "rw" }
 ro = ["/usr", "/etc/ssl", "/etc/alternatives", "/etc/ld.so.cache", "/etc/localtime"]
 symlinks = [["usr/lib", "/lib"], ["usr/lib64", "/lib64"], ["usr/bin", "/bin"], ["usr/sbin", "/sbin"]]
-tmpfs = ["/tmp", "/var/tmp", "/dev/shm", "/home/agent", "/work/.git/hooks", "/work/.vscode", "/work/.idea"]
+tmpfs = [
+  "/tmp", "/var/tmp", "/dev/shm", "/home/agent",
+  "/work/.git/hooks",
+  "/work/.vscode", "/work/.idea", "/work/.fleet",
+  "/work/.github/workflows",
+  "/work/.gitlab-ci.yml.d",
+  "/work/.direnv",
+  "/work/.humanitl",
+]
 proc = "/proc"
 dev = "/dev"
-masked_files = ["/work/.envrc", "/work/.git/config"]
+masked_files = [
+  "/work/.envrc", "/work/.env", "/work/.env.local",
+  "/work/.git/config",
+  "/work/.npmrc", "/work/.yarnrc", "/work/.yarnrc.yml", "/work/.pypirc",
+  "/work/.gitlab-ci.yml", "/work/Jenkinsfile", "/work/.pre-commit-config.yaml",
+]
+unmask = []
 extra_ro = ["/tests/escape"]
 extra_rw = []
 

@@ -35,6 +35,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
 use bytes::Bytes;
+use humanitl_core::ids::SandboxId;
 use humanitl_core::{
     BlockReason, Decision, DecisionSource, Diagnostic, Finding, FixAction, FlowEvent, FlowId,
     HeaderMap, HttpRequest, Scheme, SessionId,
@@ -173,6 +174,18 @@ pub enum WriterCmd {
         yaml: String,
         /// Wann sie zuerst gesehen wurde, in Unix-Millisekunden.
         at: i64,
+    },
+    /// Die Zusammenfassung eines Sandbox-Laufs (HUM-043).
+    SessionSummary {
+        /// Die Sitzung des Daemons.
+        session: SessionId,
+        /// Der Sandbox-Lauf innerhalb dieser Sitzung.
+        sandbox: SandboxId,
+        /// Wann, in Unix-Millisekunden.
+        at: i64,
+        /// Die Zusammenfassung als `JSON`. Die Struktur gehört
+        /// `humanitl-sandbox`; diese Crate speichert den Text.
+        json: String,
     },
     /// Eine Regel gibt es nicht mehr.
     RuleDeleted {
@@ -377,6 +390,12 @@ impl Writer {
             } => self.write_domain(flow, apex.as_deref(), catalog_id.as_deref()),
             WriterCmd::FlowError { flow, error } => self.write_flow_error(flow, &error),
             WriterCmd::Rule { id, yaml, at } => self.write_rule(&id, &yaml, at),
+            WriterCmd::SessionSummary {
+                session,
+                sandbox,
+                at,
+                json,
+            } => self.write_session_summary(session, sandbox, at, &json),
             WriterCmd::RuleDeleted { id, at } => self.write_rule_deleted(&id, at),
             WriterCmd::ReserveBlob(sha256) => {
                 self.reserved.insert(sha256, Instant::now());
@@ -772,6 +791,39 @@ impl Writer {
             )
             .map(|_rows| ())
             .map_err(|err| storage_failed(format!("could not snapshot the rule {id} ({err})")))
+    }
+
+    /// Schreibt die Zusammenfassung eines Sandbox-Laufs.
+    ///
+    /// Ein zweiter Lauf derselben Sandbox-Kennung überschreibt die Zeile: Es
+    /// gibt genau eine Zusammenfassung je Lauf, und die letzte ist die
+    /// vollständige.
+    fn write_session_summary(
+        &self,
+        session: SessionId,
+        sandbox: SandboxId,
+        at: i64,
+        json: &str,
+    ) -> Result<(), RecorderError> {
+        self.conn
+            .execute(
+                "INSERT INTO session_summaries (sandbox_id, session_id, created, json) \
+                 VALUES (?1, ?2, ?3, ?4) ON CONFLICT(sandbox_id) DO UPDATE SET \
+                 session_id = excluded.session_id, created = excluded.created, \
+                 json = excluded.json",
+                rusqlite::params![
+                    sandbox.to_string(),
+                    session.to_string(),
+                    at,
+                    json.as_bytes()
+                ],
+            )
+            .map(|_rows| ())
+            .map_err(|err| {
+                storage_failed(format!(
+                    "could not store the session summary of sandbox {sandbox} ({err})"
+                ))
+            })
     }
 
     /// Vermerkt, dass es eine Regel nicht mehr gibt.

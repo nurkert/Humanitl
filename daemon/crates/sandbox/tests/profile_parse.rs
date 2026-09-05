@@ -59,6 +59,55 @@ const ENV_KIT: &[&str] = &[
     "NIX_SSL_CERT_FILE",
 ];
 
+/// Die Überdeckungen unter `/work`, die den Kanal 1 härten (HUM-043,
+/// `docs/SECURITY.md` 3.2).
+///
+/// Die Listen dürfen wachsen; keiner dieser Einträge darf still verschwinden.
+fn assert_default_masks(profile: &SandboxProfile) {
+    for required in [
+        "/tmp",
+        "/var/tmp",
+        "/dev/shm",
+        "/home/agent",
+        "/work/.git/hooks",
+        "/work/.vscode",
+        "/work/.idea",
+        "/work/.fleet",
+        "/work/.github/workflows",
+        "/work/.gitlab-ci.yml.d",
+        "/work/.direnv",
+        "/work/.humanitl",
+    ] {
+        assert!(
+            profile.mounts.tmpfs.contains(&PathBuf::from(required)),
+            "mounts.tmpfs misses {required}"
+        );
+    }
+    assert_eq!(profile.mounts.proc, Some(PathBuf::from("/proc")));
+    assert_eq!(profile.mounts.dev, Some(PathBuf::from("/dev")));
+    assert_eq!(
+        profile.mounts.masked_files,
+        [
+            "/work/.envrc",
+            "/work/.env",
+            "/work/.env.local",
+            "/work/.git/config",
+            "/work/.npmrc",
+            "/work/.yarnrc",
+            "/work/.yarnrc.yml",
+            "/work/.pypirc",
+            "/work/.gitlab-ci.yml",
+            "/work/Jenkinsfile",
+            "/work/.pre-commit-config.yaml",
+        ]
+        .map(PathBuf::from)
+    );
+    assert!(
+        profile.mounts.unmask.is_empty(),
+        "the shipped profile lifts no mask"
+    );
+}
+
 #[test]
 fn parses_default_profile() {
     let profile = load("default");
@@ -98,24 +147,7 @@ fn parses_default_profile() {
     assert_eq!(profile.mounts.symlinks.len(), 4);
     assert_eq!(profile.mounts.symlinks[0].target, "usr/lib");
     assert_eq!(profile.mounts.symlinks[0].link, PathBuf::from("/lib"));
-    for required in [
-        "/tmp",
-        "/dev/shm",
-        "/work/.git/hooks",
-        "/work/.vscode",
-        "/work/.idea",
-    ] {
-        assert!(
-            profile.mounts.tmpfs.contains(&PathBuf::from(required)),
-            "mounts.tmpfs misses {required}"
-        );
-    }
-    assert_eq!(profile.mounts.proc, Some(PathBuf::from("/proc")));
-    assert_eq!(profile.mounts.dev, Some(PathBuf::from("/dev")));
-    assert_eq!(
-        profile.mounts.masked_files,
-        ["/work/.envrc", "/work/.git/config"].map(PathBuf::from)
-    );
+    assert_default_masks(&profile);
     assert!(profile.mounts.extra_ro.is_empty());
     assert!(profile.mounts.extra_rw.is_empty());
 
