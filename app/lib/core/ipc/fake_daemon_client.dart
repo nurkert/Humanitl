@@ -589,6 +589,27 @@ class FakeDaemonClient implements DaemonClient {
     );
   }
 
+  /// Switches a bundled rule off or back on, the way `RulesStore` does.
+  ///
+  /// It follows the daemon and not the Rust fake: the store answers
+  /// `RULES_010` for every id that names no bundled rule -- an unknown one
+  /// and a rule of the person alike, with one sentence for both
+  /// (`rules_store.rs`, `set_bundled_disabled`) -- while the Rust fake
+  /// (`daemon/crates/ipc/src/fake/mod.rs`) silently ignores such a request
+  /// although its comment claims parity. A screen that practised against the
+  /// silent variant would learn that a refusal looks like a success.
+  @override
+  Future<RuleSet> setRuleDisabled(RuleId id, {required bool disabled}) async {
+    _check();
+    final int at = bundledRules.indexWhere((Rule rule) => rule.id == id);
+    if (at < 0) {
+      throw DaemonException(_notBundled(id));
+    }
+    bundledRules[at] = bundledRules[at].copyWith(disabled: disabled);
+    _ruleSetChanged();
+    return _ruleSet();
+  }
+
   /// Stores [rule] the way the daemon does: an empty id is filled in, the
   /// rule joins its group and the event stream says the rule set changed.
   Rule? _remember(Rule? rule) {
@@ -750,6 +771,20 @@ class FakeDaemonClient implements DaemonClient {
         note: 'overrides the bundled rule above it',
       ),
     ),
+  );
+
+  /// The refusal of `Rules(set_disabled)` for anything but a bundled rule.
+  ///
+  /// One sentence for two cases, exactly as the store has it: an unknown id
+  /// and a rule of the person get the same answer, because switching off is
+  /// defined for bundled rules alone. No `FixAction` here -- the way around
+  /// it is to delete the rule, and deleting is what the row already offers.
+  static Diagnostic _notBundled(RuleId id) => Diagnostic(
+    code: DiagnosticCodes.ruleBundled,
+    severity: Severity.error,
+    why:
+        'there is no bundled rule with the id ${id.value}; only bundled '
+        'rules are disabled instead of removed',
   );
 
   String _nextRuleId() =>

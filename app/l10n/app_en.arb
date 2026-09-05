@@ -630,7 +630,7 @@
   "@rulesChainDefaultWhy": {"description": "Why the chain ends the way it does."},
   "rulesBundledTitle": "Bundled rules",
   "@rulesBundledTitle": {"description": "Heading of the block of rules that ship with the product."},
-  "rulesBundledWhy": "They ship with Humanitl and can be neither changed nor removed. A rule of your own above them wins.",
+  "rulesBundledWhy": "They ship with Humanitl and can be neither changed nor removed. You can switch one off and on again; a rule of your own above them wins.",
   "@rulesBundledWhy": {"description": "Why bundled rules cannot be touched, and what to do instead."},
   "rulesEmptySavedTitle": "Saved rules appear here",
   "@rulesEmptySavedTitle": {"description": "Empty state of the saved tab: the next event, never the absence (docs/UX.md 4.1)."},
@@ -1522,5 +1522,23 @@
   "@shellIsolationFailed": {
     "description": "Tooltip and screen-reader label of the isolation ring when a guarantee does not hold.",
     "placeholders": {"title": {"type": "String"}}
-  }
+  },
+  "rulesDisable": "Switch off",
+  "@rulesDisable": {"description": "Hover label of the switch in a bundled rule row. Switching off is the one way to lift a bundled rule; removing it is refused with RULES_010."},
+  "rulesEnable": "Switch on",
+  "@rulesEnable": {"description": "Hover label of the same switch while the bundled rule is off. The switch is its own undo, so there is no undo strip beside it."},
+  "rulesDisableSemantics": "Switch off the bundled rule for {host}",
+  "@rulesDisableSemantics": {
+    "description": "Screen-reader label of the switch. It names the host, because the row it sits in is one of several that look alike.",
+    "placeholders": {"host": {"type": "String"}}
+  },
+  "rulesEnableSemantics": "Switch on the bundled rule for {host}",
+  "@rulesEnableSemantics": {
+    "description": "Screen-reader label of the switch while the bundled rule is off.",
+    "placeholders": {"host": {"type": "String"}}
+  },
+  "rulesOriginBundledOff": "bundled, switched off",
+  "@rulesOriginBundledOff": {"description": "Where a rule comes from, and that it decides nothing: it ships with the product and somebody switched it off. One key rather than two joined ones, because English and German put the comma differently."},
+  "rulesOriginOff": "off",
+  "@rulesOriginOff": {"description": "The same statement in a pane too narrow for the full word: the rule is switched off. Only the half that carries the state survives; where the rule comes from is already said by the block it stands in."}
 }

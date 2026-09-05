@@ -242,7 +242,7 @@
   "rulesChainDefault": "Sonst · Fragen",
   "rulesChainDefaultWhy": "Eine Anfrage, auf die keine Regel zutrifft, wird für Sie angehalten.",
   "rulesBundledTitle": "Mitgelieferte Regeln",
-  "rulesBundledWhy": "Sie kommen mit Humanitl und lassen sich weder ändern noch entfernen. Eine eigene Regel darüber gewinnt.",
+  "rulesBundledWhy": "Sie kommen mit Humanitl und lassen sich weder ändern noch entfernen. Ausschalten und wieder einschalten geht; eine eigene Regel darüber gewinnt.",
   "rulesEmptySavedTitle": "Gespeicherte Regeln erscheinen hier",
   "rulesEmptySavedHint": "Eine Regel erscheint, sobald Sie eine Entscheidung mit „Merken“ behalten oder mit „Neue Regel“ eine schreiben.",
   "rulesEmptyTemporaryTitle": "Regeln für diese Sitzung erscheinen hier",
@@ -563,5 +563,11 @@
   "isolationShowArgv": "Den genauen Sandbox-Befehl anzeigen",
   "isolationEmpty": "Es läuft nichts, also wird nichts gemessen. Die drei Garantien werden bei jedem Start in der Sandbox geprüft, und danach steht jede hier mit ihrem Beleg.",
   "shellIsolationPassed": "{passed}/{total} Isolationsprüfungen bestanden",
-  "shellIsolationFailed": "Isolationsprüfung fehlgeschlagen: {title}"
+  "shellIsolationFailed": "Isolationsprüfung fehlgeschlagen: {title}",
+  "rulesDisable": "Ausschalten",
+  "rulesEnable": "Einschalten",
+  "rulesDisableSemantics": "Die mitgelieferte Regel für {host} ausschalten",
+  "rulesEnableSemantics": "Die mitgelieferte Regel für {host} einschalten",
+  "rulesOriginBundledOff": "mitgeliefert, ausgeschaltet",
+  "rulesOriginOff": "aus"
 }

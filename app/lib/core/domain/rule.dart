@@ -72,6 +72,15 @@ abstract class Rule with _$Rule {
     @Default(false) bool stream,
     @FlowIdConverter() FlowId? createdFrom,
     @Default(false) bool bundled,
+
+    /// Switched off by the user. Only a bundled rule can be; it stays in the
+    /// list and decides nothing (`rules.proto` field 13, HUM-038).
+    ///
+    /// Not the same thing as an expiry that has passed: a bundled rule never
+    /// runs out, and a rule of the person is never switched off -- that one is
+    /// deleted. Both decide nothing, and the screen says so with the same
+    /// damping and two different words (`backlog/sprint-2.md`, HUM-105).
+    @Default(false) bool disabled,
     String? note,
     DateTime? createdAt,
     @Default(0) int position,
