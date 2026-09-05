@@ -195,6 +195,10 @@ Ungültiger Übergang im Flow
 
 HTTP/2 nicht verfügbar
 
+#### PROXY_008
+
+Private Zieladresse abgelehnt
+
 ### Bereich tls
 
 #### TLS_001
