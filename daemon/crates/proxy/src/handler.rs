@@ -28,10 +28,10 @@ use bytes::Bytes;
 use humanitl_config::{HoldConfig, Limits, RecorderConfig};
 use humanitl_core::diagnostics::codes::{PROXY_005, PROXY_008};
 use humanitl_core::{
-    Action, Authority, BlockReason, BodyRef, Decision, DecisionSource, Diagnostic, Finding,
-    FixAction, Flow, FlowEvent, FlowId, FlowState, HeaderMap, HostName, HostPattern, HttpRequest,
-    InvalidTransition, Matcher, Method, Rule, RuleId, Scheme, Severity, Tier, TransitionInput,
-    UpstreamError, block_response, failed_response, path_prefix_is_valid,
+    Action, AnswerRefused, Authority, BlockReason, BodyRef, Decision, DecisionSource, Diagnostic,
+    Finding, FixAction, Flow, FlowEvent, FlowId, FlowState, HeaderMap, HostName, HostPattern,
+    HttpRequest, InvalidTransition, Matcher, Method, Rule, RuleId, Scheme, Severity, Tier,
+    TransitionInput, UpstreamError, block_response, failed_response, path_prefix_is_valid,
 };
 use humanitl_recorder::{Dir, Recorder};
 use humanitl_rules::is_known_method;
@@ -573,7 +573,9 @@ impl FlowHandler {
         // Die Weiche zum Meta-Endpunkt: vor Body, Detektoren, Regeln und damit
         // vor jeder Auflösung. Warum genau hier: [`FlowHandler::serve_meta`].
         if let Some(endpoint) = self.meta_for(&authority) {
-            return self.serve_meta(endpoint, req, &path_and_query, &meta).await;
+            return self
+                .serve_meta(endpoint, req, scheme, authority, &path_and_query, &meta)
+                .await;
         }
         let (parts, incoming) = req.into_parts();
         let cap = self.inner.limits.body_cap_bytes;
@@ -727,12 +729,15 @@ impl FlowHandler {
     /// Weg hier an: Der Tunnel endet am eigenen TLS-Endpunkt, und die Anfrage
     /// darin läuft durch dieselbe Prüfung wie Klartext.
     ///
-    /// Es entsteht kein [`Flow`]: Die Anfrage geht nirgendwo hin, hält nichts
-    /// auf und wird von niemandem entschieden. Ein Datensatz mit einer
-    /// Entscheidung, die es nicht gab, wäre eine Behauptung über einen
-    /// Menschen, der nichts getan hat (`backlog/CONVENTIONS.md` 4.13). Was
-    /// sichtbar wird, ist die Bitte aus `/ask` — als
-    /// [`FlowEvent::AgentAsk`] im Ereignisstrom und als Karte in der
+    /// Der entstehende [`Flow`] trägt **keine** Entscheidung. Die Anfrage geht
+    /// nirgendwo hin, hält nichts auf, und über sie entscheidet niemand; ein
+    /// Datensatz mit einer Entscheidung, die es nicht gab, wäre eine Behauptung
+    /// über einen Menschen, der nichts getan hat (`backlog/CONVENTIONS.md`
+    /// 4.13). Er geht deshalb über [`TransitionInput::Answer`] unmittelbar von
+    /// `Received` nach `Recorded`, den einen Weg, der keine Sperre verlangt,
+    /// und trägt in der Aufzeichnung den Vermerk `meta` statt einer
+    /// Entscheidung (HUM-103). Die Bitte aus `/ask` bleibt zusätzlich, was sie
+    /// war: [`FlowEvent::AgentAsk`] im Ereignisstrom und eine Karte in der
     /// Oberfläche.
     ///
     /// Der Body wird nur bis [`meta::ASK_BODY_CAP_BYTES`] gelesen, nicht bis
@@ -742,6 +747,8 @@ impl FlowHandler {
         &self,
         endpoint: &MetaEndpoint,
         req: Request<Incoming>,
+        scheme: Scheme,
+        authority: Authority,
         path_and_query: &str,
         conn: &ConnectionContext,
     ) -> Response<ResponseBody> {
@@ -769,6 +776,25 @@ impl FlowHandler {
             },
             self.inner.queue.registry(),
         );
+        // Der gesäuberte Text der Bitte, bevor das Ereignis weiterzieht. Er ist
+        // das Einzige, was von einem `/ask` in die Aufzeichnung geht: Der rohe
+        // Rumpf des Agenten wird nie gespeichert, und die Antwort des
+        // Endpunkts auch nicht.
+        let ask_text = match &outcome.event {
+            Some(FlowEvent::AgentAsk { text, .. }) => Bytes::from(text.clone()),
+            _other => Bytes::new(),
+        };
+        self.record_meta(
+            conn,
+            scheme,
+            authority,
+            &parts.method,
+            path_and_query,
+            &parts.headers,
+            ask_text,
+            outcome.reply.status,
+        )
+        .await;
         if let Some(event) = outcome.event {
             self.inner.queue.publish(event);
         }
@@ -780,6 +806,85 @@ impl FlowHandler {
             "the meta endpoint answered"
         );
         meta_to_response(&outcome.reply)
+    }
+
+    /// Schreibt die Meta-Anfrage in die Aufzeichnung, ohne eine Entscheidung zu
+    /// erfinden (HUM-103).
+    ///
+    /// **Warum nicht über [`HoldQueue::publish`](crate::hold::HoldQueue::publish).**
+    /// Der Fluss ist fertig, bevor ein Zuhörer etwas mit ihm anfangen könnte:
+    /// Der Proxy hat schon geantwortet, es gibt nichts zu halten, zu
+    /// entscheiden oder zu übergeben. Er gehört deshalb nicht in die
+    /// [`FlowRegistry`](crate::registry::FlowRegistry) — die führt die Flows
+    /// dieser Sitzung, über die noch entschieden werden kann, und `/why`
+    /// beantwortet genau die. Ein `Received` im Ereignisstrom hätte zudem eine
+    /// Zeile behauptet, die kein Zuhörer je vollständig sähe. Sichtbar wird der
+    /// Fluss in der Historie, also dort, wo steht, was geschehen ist.
+    ///
+    /// Aufgezeichnet werden Kopfzeilen und, bei `/ask`, der **gesäuberte** Text
+    /// der Bitte. Der Rumpf der Antwort wird nie aufgezeichnet: Was der
+    /// Endpunkt sagt, steht ohnehin in der Oberfläche, und die Aufzeichnung
+    /// ist für das da, was hinausging.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "die Zeile der Aufzeichnung braucht jedes dieser Felder; ein Bündel dafür wäre ein                   Typ, den sonst niemand benutzt"
+    )]
+    async fn record_meta(
+        &self,
+        conn: &ConnectionContext,
+        scheme: Scheme,
+        authority: Authority,
+        method: &Method,
+        path_and_query: &str,
+        headers: &HeaderMap,
+        body: Bytes,
+        status: u16,
+    ) {
+        let Some(recorder) = self.inner.recorder.as_ref() else {
+            return;
+        };
+        let request = Self::build_request(
+            method.clone(),
+            scheme,
+            authority,
+            path_and_query.to_owned(),
+            headers.clone(),
+            BodyRef::from_bytes(body.clone()),
+        );
+        let mut flow = Flow::new(FlowId::new(), conn.session, SystemTime::now(), request);
+        // Erst abschließen, dann anlegen. `Flow::answer` prüft die Anfrage
+        // **dieses** Flusses; sie ist der einzige Weg von `Received` nach
+        // `Recorded` ohne Entscheidung. Scheitert sie, ist die Weiche zum
+        // Endpunkt kaputt, und es entsteht keine halbe Zeile in der
+        // Aufzeichnung.
+        let closed = match flow.answer(SystemTime::now()) {
+            Ok(event) => event,
+            Err(AnswerRefused::NotMeta(diagnostic)) => {
+                tracing::error!(
+                    code = diagnostic.code.as_str(),
+                    why = %diagnostic.why,
+                    "the meta switch offered a request that is not a meta request"
+                );
+                self.inner.queue.publish(FlowEvent::Diagnostic {
+                    flow_id: None,
+                    at: SystemTime::now(),
+                    diagnostic,
+                });
+                return;
+            }
+            Err(AnswerRefused::State(err)) => {
+                // Unerreichbar, solange `Flow::new` in `Received` beginnt; der
+                // Befund steht trotzdem, damit ein späterer Umbau nicht still
+                // eine halbe Zeile hinterlässt.
+                self.publish_invalid_transition(&flow, err);
+                return;
+            }
+        };
+        recorder.apply(&flow.received_event());
+        recorder.apply(&closed);
+        recorder.set_meta_answer(flow.id, status);
+        self.record_message(flow.id, Dir::Request, headers, body)
+            .await;
     }
 
     /// Der Scan und alles, was aus ihm folgt: `Analyzed`, die Befunde, der

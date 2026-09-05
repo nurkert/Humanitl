@@ -15,9 +15,13 @@ abstract final class ProtoVersion {
   /// older minor keeps working against a newer daemon and simply does not
   /// read the newer fields. Raised to 1 with the rule test operation, the
   /// truncated-findings flag and the domain info (HUM-023 to HUM-031), to 2
-  /// with the endpoint probe (HUM-039) and to 3 with the sandbox snapshot:
-  /// mounts, environment, command line and the `Plan` operation (HUM-040).
-  static const int minor = 3;
+  /// with the endpoint probe (HUM-039), to 3 with the sandbox snapshot —
+  /// mounts, environment, command line and the `Plan` operation (HUM-040) —
+  /// and to 5 with `FlowSummary.meta`, the mark on a request the proxy
+  /// answered itself, which the history reads (HUM-103). Minor 4 is skipped
+  /// on this side on purpose: the five fields of the per-session start
+  /// (HUM-067) have no reader in the app yet.
+  static const int minor = 5;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

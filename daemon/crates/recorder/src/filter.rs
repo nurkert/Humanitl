@@ -7,6 +7,7 @@
 //! term    := key ':' value | word
 //! key     := host | apex | state | method | decision | reason | rule | status
 //!          | since | until | findings | session | path | edited | passthrough | upgrade
+//!          | meta
 //! value   := (cmp)? atom
 //! cmp     := '>=' | '<=' | '>' | '<'
 //! atom    := '"' [^"]* '"' | [^\s]+
@@ -44,6 +45,13 @@ pub const KEYS: &[&str] = &[
     "edited",
     "passthrough",
     "upgrade",
+    // `meta:true` liefert genau die Anfragen an `humanitl.internal`, die der
+    // Proxy selbst beantwortet hat, `meta:false` genau die übrigen; ohne den
+    // Term erscheinen beide (HUM-103). Der Term steht neben `decision:`, nicht
+    // darin: Über eine Meta-Anfrage entscheidet niemand, und `decision` bleibt
+    // an ihr leer — `decision:allow` und `decision:block` lassen sie deshalb
+    // schon von selbst aus.
+    "meta",
 ];
 
 /// Ein Wert, der als Platzhalter in die Abfrage geht.
@@ -270,6 +278,7 @@ fn compared(
         }
         "edited" => plain_bool(cmp, key, term, value, "edited"),
         "passthrough" => plain_bool(cmp, key, term, value, "passthrough"),
+        "meta" => plain_bool(cmp, key, term, value, "meta"),
         other => Err(unknown_key(term, other)),
     }
 }
@@ -540,11 +549,39 @@ mod tests {
     }
 
     #[test]
+    fn meta_splits_the_history_in_two() {
+        let filter = ok("meta:true");
+        assert_eq!(filter.sql, "meta = ?");
+        assert_eq!(filter.params, vec![Param::Int(1)]);
+
+        let filter = ok("meta:false");
+        assert_eq!(filter.sql, "meta = ?");
+        assert_eq!(filter.params, vec![Param::Int(0)]);
+
+        // Dieselben Schreibweisen wie bei jedem anderen Wahrheitswert.
+        for (input, wanted) in [
+            ("meta:yes", 1),
+            ("meta:1", 1),
+            ("meta:no", 0),
+            ("meta:0", 0),
+        ] {
+            assert_eq!(ok(input).params, vec![Param::Int(wanted)], "{input}");
+        }
+
+        // Ein Vergleich hat an einem Wahrheitswert nichts zu suchen.
+        let err = parse("meta:>0", 0)
+            .err()
+            .unwrap_or_else(|| panic!("no error"));
+        assert_eq!(err.diagnostic().code.as_str(), "RECORDER_002");
+    }
+
+    #[test]
     fn a_value_that_is_not_a_number_or_boolean_is_refused() {
         for input in [
             "status:soon",
             "findings:many",
             "edited:maybe",
+            "meta:maybe",
             "since:later",
         ] {
             let err = parse(input, 0).err().unwrap_or_else(|| panic!("{input}"));

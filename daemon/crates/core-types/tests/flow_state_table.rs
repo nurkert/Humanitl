@@ -5,14 +5,25 @@
 //! `forbidden_transitions_are_errors` prüft, dass jedes andere Paar aus
 //! Zustand und Eingabe scheitert. Nur beides zusammen fängt den typischen
 //! Fehler „ein Übergang zu viel".
+//!
+//! **Eine Eingabe steht nicht in der Tabelle: `Answer`.** Ihr Nachweis
+//! `MetaAnswer` ist außerhalb der Crate nicht baubar, und das ist der Punkt —
+//! ein Nachweis, den man mitbringen kann, ließe sich auf einen fremden Fluss
+//! anwenden (HUM-103). Von hier führt deshalb nur die eine Tür `Flow::answer`
+//! hinein, und der Abschnitt am Ende dieser Datei zählt dieselben zwei Hälften
+//! auf: aus welchem Zustand sie öffnet und aus welchen nicht, und für welchen
+//! Fluss sie überhaupt öffnet. Die Gegenprobe innerhalb der Crate — ein echter
+//! Nachweis an einem fremden Fluss — steht in
+//! `flow.rs::tests::a_witness_does_not_open_a_foreign_flow`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::time::{Duration, Instant, SystemTime};
 
 use humanitl_core::{
-    Authority, BlockReason, Decision, DecisionSource, Flow, FlowEvent, FlowId, FlowState, HostName,
-    HttpRequest, Method, RuleId, Scheme, SessionId, Transition, TransitionInput, UpstreamError,
+    AnswerRefused, Authority, BlockReason, Decision, DecisionSource, Flow, FlowEvent, FlowId,
+    FlowState, HostName, HttpRequest, META_HOST, Method, RuleId, Scheme, SessionId, Transition,
+    TransitionInput, UpstreamError,
 };
 
 /// `von`, `Eingabe`, `nach`, `Ereignis`.
@@ -37,12 +48,17 @@ const TABLE: &[(&str, &str, &str, &str)] = &[
 ];
 
 fn request() -> HttpRequest {
-    let host = HostName::parse("api.github.com").unwrap();
+    request_to("api.github.com", "/user")
+}
+
+/// Eine Anfrage an `host` mit diesem Pfad.
+fn request_to(host: &str, path: &str) -> HttpRequest {
+    let host = HostName::parse(host).unwrap();
     HttpRequest::new(
         Method::GET,
         Scheme::Https,
         Authority::with_scheme(host, Scheme::Https),
-        "/user",
+        path,
     )
 }
 
@@ -600,4 +616,194 @@ fn fail_closed_turns_an_allow_into_the_block_it_was_asked_for() {
             .collect::<Vec<_>>(),
         vec!["received", "decided", "recorded"]
     );
+}
+
+// ---------------------------------------------------------------------------
+// Der Weg am Menschen vorbei, der keiner ist (HUM-103)
+// ---------------------------------------------------------------------------
+//
+// `Received → Recorded` ist der einzige Weg in den Endzustand, der über keine
+// Entscheidung führt. Er hat zwei Hälften, und beide gehören geprüft:
+//
+// 1. Er öffnet nur aus `Received` — aus jedem anderen Zustand wird er
+//    abgelehnt, auch für einen Fluss an den reservierten Namen.
+// 2. Er öffnet nur für einen Fluss, dessen **eigene** Anfrage an den
+//    reservierten Namen ging. Ein Nachweis, den man von anderswo mitbringt,
+//    ist gar nicht erst zu haben: `MetaAnswer` lässt sich außerhalb der Crate
+//    nicht bauen, und `Flow::answer` gibt keinen heraus. Die Gegenprobe mit
+//    einem echten Nachweis an einem fremden Fluss steht deshalb innerhalb der
+//    Crate (`flow.rs::tests::a_witness_does_not_open_a_foreign_flow`).
+
+/// Ein Fluss an den reservierten Namen, frisch in `Received`.
+fn meta_flow() -> Flow {
+    flow_to(META_HOST, "/")
+}
+
+/// Ein Fluss an `host`, frisch in `Received`.
+fn flow_to(host: &str, path: &str) -> Flow {
+    Flow::new(
+        FlowId::new(),
+        SessionId::new(),
+        SystemTime::now(),
+        request_to(host, path),
+    )
+}
+
+/// Nur ein Fluss an den reservierten Namen wird selbst beantwortet.
+///
+/// Die Namen laufen durch `HostName::parse` und sind danach derselbe Name; ein
+/// Name, der nur so *aussieht*, ist ein eigener und gehört nicht hierher.
+#[test]
+fn only_a_flow_to_the_reserved_name_is_answered() {
+    for host in [META_HOST, "HUMANITL.INTERNAL", "humanitl.internal."] {
+        let mut flow = flow_to(host, "/");
+        let event = flow
+            .answer(SystemTime::now())
+            .unwrap_or_else(|err| panic!("{host} is the reserved name: {err}"));
+        assert_eq!(event.name(), "recorded");
+        assert_eq!(flow.state.name(), "recorded");
+    }
+
+    for host in [
+        "api.github.com",
+        "evil-humanitl.internal",
+        "sub.humanitl.internal",
+        "humanitl.internal.evil.io",
+        "127.0.0.1",
+    ] {
+        let mut flow = flow_to(host, "/");
+        let Err(AnswerRefused::NotMeta(diagnostic)) = flow.answer(SystemTime::now()) else {
+            panic!("{host} must never be answered by the proxy itself");
+        };
+        assert_eq!(diagnostic.code.as_str(), "PROXY_009");
+        assert!(
+            diagnostic.why.contains(host) || diagnostic.why.contains(META_HOST),
+            "the finding has to name what was refused: {}",
+            diagnostic.why
+        );
+        assert_eq!(flow.state.name(), "received", "the state is untouched");
+        assert_eq!(flow.history.len(), 1, "and so is the history");
+    }
+}
+
+/// Eine gewöhnliche Anfrage kommt aus `Received` nur über `Analyze` heraus.
+#[test]
+fn an_ordinary_flow_is_never_answered() {
+    let mut flow = flow_to("api.github.com", "/user");
+    assert!(
+        matches!(
+            flow.answer(SystemTime::now()),
+            Err(AnswerRefused::NotMeta(_))
+        ),
+        "without this there would be a way from Received to Recorded for every request"
+    );
+
+    // Der Weg, den dieser Fluss wirklich nehmen kann, ist der über `Analyzed`.
+    let event = flow
+        .apply(
+            TransitionInput::Analyze {
+                findings: Vec::new(),
+            },
+            SystemTime::now(),
+        )
+        .expect("an ordinary request is analysed first");
+    assert_eq!(event.name(), "analyzed");
+    assert_eq!(flow.state.name(), "analyzed");
+}
+
+/// `Flow::answer` lehnt ab, weil der Zustand nicht passt — nicht, weil der Host
+/// nicht passt.
+fn expect_state_refusal(flow: &mut Flow, from: &str) {
+    let history = flow.history.len();
+    let Err(err) = flow.answer(SystemTime::now()) else {
+        panic!("the meta path must be closed from {from}");
+    };
+    let AnswerRefused::State(err) = err else {
+        panic!("{from} is a meta flow; the refusal has to be about the state");
+    };
+    assert_eq!(err.from, from);
+    assert_eq!(err.input, "answer");
+    assert_eq!(flow.state.name(), from, "the state is untouched");
+    assert_eq!(flow.history.len(), history, "and so is the history");
+}
+
+/// Der Weg öffnet aus `Received` und aus keinem anderen Zustand — auch nicht
+/// für einen Fluss an den reservierten Namen.
+#[test]
+fn the_meta_path_opens_only_from_received() {
+    let analyze = || TransitionInput::Analyze {
+        findings: Vec::new(),
+    };
+    let decide = || TransitionInput::Decide {
+        decision: Decision::Allow,
+        source: DecisionSource::Rule(RuleId::new()),
+    };
+
+    // `Analyzed`.
+    let mut flow = meta_flow();
+    flow.apply(analyze(), SystemTime::now()).expect("analyze");
+    expect_state_refusal(&mut flow, "analyzed");
+
+    // `Held`.
+    let mut flow = meta_flow();
+    flow.apply(analyze(), SystemTime::now()).expect("analyze");
+    flow.apply(
+        TransitionInput::Hold {
+            deadline: Instant::now() + Duration::from_secs(300),
+            queue_bytes: 0,
+            queue_count: 1,
+        },
+        SystemTime::now(),
+    )
+    .expect("hold");
+    expect_state_refusal(&mut flow, "held");
+
+    // `Decided`, `Forwarded`, `Responded`, `Recorded`: der gewöhnliche Weg,
+    // Station für Station.
+    let mut flow = meta_flow();
+    flow.apply(analyze(), SystemTime::now()).expect("analyze");
+    flow.apply(decide(), SystemTime::now()).expect("decide");
+    expect_state_refusal(&mut flow, "decided");
+    flow.apply(TransitionInput::Forward, SystemTime::now())
+        .expect("forward");
+    expect_state_refusal(&mut flow, "forwarded");
+    flow.apply(TransitionInput::Respond { status: 200 }, SystemTime::now())
+        .expect("respond");
+    expect_state_refusal(&mut flow, "responded");
+    flow.apply(TransitionInput::Record, SystemTime::now())
+        .expect("record");
+    expect_state_refusal(&mut flow, "recorded");
+
+    // `Failed`.
+    let mut flow = meta_flow();
+    flow.apply(analyze(), SystemTime::now()).expect("analyze");
+    flow.apply(decide(), SystemTime::now()).expect("decide");
+    flow.apply(
+        TransitionInput::Fail {
+            error: UpstreamError::Dns,
+        },
+        SystemTime::now(),
+    )
+    .expect("fail");
+    expect_state_refusal(&mut flow, "failed");
+}
+
+/// Der Meta-Weg endet wirklich im Endzustand und trägt keine Entscheidung.
+#[test]
+fn the_meta_path_ends_recorded_without_a_decision() {
+    let mut flow = flow_to(META_HOST, "/why/0199c0ff-ee00-7000-8000-8000deadbeef");
+    let event = flow
+        .answer(SystemTime::now())
+        .expect("the reserved name may be answered by the proxy itself");
+
+    assert_eq!(event.name(), "recorded");
+    assert!(flow.state.is_terminal());
+    assert_eq!(flow.state.name(), "recorded");
+    assert!(
+        !matches!(flow.state, FlowState::Decided(_)),
+        "nobody decided about a meta request"
+    );
+    // Die Historie zeigt beide Stationen und keine dazwischen.
+    let names: Vec<&str> = flow.history.iter().map(|(_, name)| *name).collect();
+    assert_eq!(names, vec!["received", "recorded"]);
 }

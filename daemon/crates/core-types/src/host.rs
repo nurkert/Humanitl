@@ -14,6 +14,17 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+/// Der reservierte Name, den der Proxy selbst beantwortet (ADR-014, HUM-073).
+///
+/// Er wird nie aufgelöst und nie an einen Upstream weitergereicht. Er steht
+/// hier und nicht im Proxy, weil zwei Stellen ihn brauchen, die einander nicht
+/// kennen dürfen: die Weiche des Proxys und der Nachweis
+/// [`MetaAnswer`](crate::flow::MetaAnswer), mit dem ein Flow ohne Entscheidung
+/// aufgezeichnet wird. Zwei Kopien derselben Zeichenkette liefen auseinander,
+/// und dann hinge an der einen ein Endpunkt und an der anderen ein Weg am
+/// Menschen vorbei.
+pub const META_HOST: &str = "humanitl.internal";
+
 /// Ein Text ließ sich nicht als Host lesen.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("invalid host {input:?}: {reason}")]
@@ -120,6 +131,19 @@ impl HostName {
             Self::Dns(name) => idna::domain_to_unicode(name).0,
             Self::Ip(ip) => ip.to_string(),
         }
+    }
+
+    /// Wahr, wenn dieser Host der reservierte Meta-Host ist ([`META_HOST`]).
+    ///
+    /// Verglichen wird der normalisierte Name, nie der Text der Anfrage:
+    /// [`HostName::parse`] hat aus `HUMANITL.INTERNAL` und
+    /// `humanitl.internal.` vorher denselben Namen gemacht, und beide gehören
+    /// hierher. Ein Name, der nur so *aussieht*, gehört nicht hierher:
+    /// `evil-humanitl.internal`, `sub.humanitl.internal` und
+    /// `humanitl.internal.evil.io` sind eigene Namen. Eine IP ist es nie.
+    #[must_use]
+    pub fn is_meta(&self) -> bool {
+        matches!(self, Self::Dns(name) if name == META_HOST)
     }
 
     /// Wahr, wenn der Host eine Adresse aus einem privaten oder lokalen Bereich ist.
