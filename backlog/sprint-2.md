@@ -1551,7 +1551,7 @@ Sound (Setting existiert, Default aus, Implementierung Post-MVP), globale Hotkey
 
 ### Akzeptanzkriterien
 - [x] Tests grün. (`attention_test.dart`, `tray_host_test.dart`, `tray_icon_test.dart`; Namen nach CONVENTIONS 4.19)
-- [ ] Manuell unter GNOME mit AppIndicator-Extension: Tray-Zähler sichtbar; unter GNOME ohne Extension: genau ein Diagnostic in der Diagnostics-Ansicht, App läuft normal. Das Protokoll belegt `dbus_live_test.dart` auf einem privaten Bus (Watcher, Status, ToolTip, Menü); unter GNOME mit und ohne Extension hat niemand gemessen, und eine Diagnostics-Ansicht gibt es nicht: `UI_002` landet in einer wegklickbaren `AttentionNoticeCard` (CONVENTIONS 4.19). Die Hints der Notification kommen doppelt verpackt an (HUM-118).
+- [ ] Manuell unter GNOME mit AppIndicator-Extension: Tray-Zähler sichtbar; unter GNOME ohne Extension: genau ein Diagnostic in der Diagnostics-Ansicht, App läuft normal. Das Protokoll belegt `dbus_live_test.dart` auf einem privaten Bus (Watcher, Status, ToolTip, Menü); unter GNOME mit und ohne Extension hat niemand gemessen, und eine Diagnostics-Ansicht gibt es nicht: `UI_002` landet in einer wegklickbaren `AttentionNoticeCard` (CONVENTIONS 4.19). Die Hints der Notification kamen doppelt verpackt an; HUM-118 hat das behoben und belegt es mit `dbus_notifications_test.dart` und `make flutter-test-dbus`.
 - [x] Notification-Aktion `Allow` entscheidet den Flow ohne dass das Fenster in den Vordergrund kommt.
 
 ### Fallstricke
@@ -3114,10 +3114,10 @@ Die Attrappe der Notifications hält die zuletzt gesendeten Hints (`Map<String, 
 - `dbus_live_test` auf einem Bus mit fremdem Watcher: übersprungen mit Grund.
 
 ### Akzeptanzkriterien
-- [ ] `grep -n 'DBusVariant(DBusByte\|DBusVariant(DBusString' app/lib/features/tray/platform/dbus_notifications.dart` ist leer.
-- [ ] `cd app && flutter test test/features/tray` grün, darunter `notification_hints_are_wrapped_once`; mit der alten Zeile wird er rot (Ergebnis im Commit-Body).
-- [ ] `make flutter-test-dbus` (unter `dbus-run-session`) grün; die Server-Seite des Tests sieht `urgency` als Byte, nicht als Variant.
-- [ ] `HUMANITL_DBUS_TESTS=1 flutter test test/features/tray/dbus_live_test.dart` auf einem Bus mit echtem Watcher endet mit einem Skip, dessen Text `dbus-run-session` nennt; `grep -n 'requestName' app/test/features/tray/dbus_live_test.dart` trifft eine Prüfung des Ergebnisses.
+- [x] `grep -n 'DBusVariant(DBusByte\|DBusVariant(DBusString' app/lib/features/tray/platform/dbus_notifications.dart` ist leer.
+- [x] `cd app && flutter test test/features/tray` grün, darunter `notification_hints_are_wrapped_once`; mit der alten Zeile wird er rot (Ergebnis im Commit-Body).
+- [x] `make flutter-test-dbus` (unter `dbus-run-session`) grün; die Server-Seite des Tests sieht `urgency` als Byte, nicht als Variant.
+- [x] `HUMANITL_DBUS_TESTS=1 flutter test test/features/tray/dbus_live_test.dart` auf einem Bus mit echtem Watcher endet mit einem Skip, dessen Text `dbus-run-session` nennt; `grep -n 'requestName' app/test/features/tray/dbus_live_test.dart` trifft eine Prüfung des Ergebnisses.
 - [ ] `make check` grün.
 
 ### Fallstricke
@@ -3127,6 +3127,68 @@ Die Attrappe der Notifications hält die zuletzt gesendeten Hints (`Map<String, 
 
 ### Referenzen
 `backlog/sprint-2.md` HUM-034; CONVENTIONS 4.19; https://specifications.freedesktop.org/notification-spec/latest/ (Hints, `urgency`); `~/.pub-cache/hosted/pub.dev/dbus-0.7.15/lib/src/dbus_value.dart:1169-1175`; `app/lib/features/tray/platform/dbus_notifications.dart:158-172`.
+
+### Stand (2026-09-05): umgesetzt, mit drei Abweichungen von der Spezifikation
+
+Die Verpackung ist korrigiert wie spezifiziert (`DBusByte(1)` und
+`DBusString(_desktopEntry)` roh an `DBusDict.stringVariant`). Belegt wird sie
+auf zwei Ebenen: `app/test/features/tray/dbus_notifications_test.dart` fährt
+den Adapter gegen einen `DBusClient`, dessen `callMethod` überschrieben ist und
+der jeden Aufruf selbst beantwortet, also ohne Bus im normalen Lauf;
+`the_hints_reach_the_server_unwrapped` in `dbus_live_test.dart` fährt ihn unter
+`dbus-run-session` gegen einen echten Meldungsdienst-Attrappen und liest, was
+der Bus-Daemon serialisiert und wieder ausgeliefert hat. `dbus-monitor` auf
+demselben Lauf zeigt `variant byte 1` und `variant string "humanitl"`, also
+genau eine Verpackung; die Signatur des ganzen Aufrufs ist `susssasa{sv}i`.
+
+**Erstens: die `requestName`-Prüfung ist auch im Notification-Teil nötig, nicht
+nur im Tray-Teil.** Die Spezifikation nennt nur den Wächter. Auf dem Bus eines
+echten Desktops hält aber auch `org.freedesktop.Notifications` schon jemand;
+ohne die Prüfung nimmt der Meldungsdienst des Menschen den Aufruf entgegen, die
+Attrappe des Tests bleibt leer, und der Test stirbt an `Null check operator used
+on a null value` statt zu erklären, warum er nicht messen kann. Beide Tests
+prüfen deshalb `requestName` mit `doNotQueue`, bevor sie irgendetwas anmelden.
+
+**Zweitens: `the_notification_reaches_a_server` überspringt sich jetzt auf einem
+privaten Bus.** Dort gibt es keinen Dienst, der die Meldung zeichnen könnte, und
+`post` schluckt jeden Fehler; der Test wäre unter `make flutter-test-dbus` grün
+gewesen, ohne irgendetwas zu behaupten. Damit gehört jeder der drei Tests genau
+einer Art von Sitzung: auf dem Bus des Desktops läuft nur der Handlauf, der die
+Meldung auf den Schirm bringt; auf dem privaten Bus laufen die beiden, die die
+Leitung messen.
+
+**Drittens: der Text des Übersprungs ist allgemein statt wörtlich.** Die
+Spezifikation gibt `'a StatusNotifierWatcher already owns the name; run under
+dbus-run-session'` vor. Weil derselbe Grund für zwei Namen gilt, formuliert ihn
+`taken(name)` einmal: „another program already owns `<name>` on this session
+bus; run under dbus-run-session to measure the protocol".
+
+Mutationsproben, alle einzeln angewandt und wieder zurückgenommen:
+`'urgency': const DBusVariant(DBusByte(1))` macht
+`notification_hints_are_wrapped_once` rot (`y` erwartet, `v` gelesen) und
+denselben Vergleich im Live-Test unter `dbus-run-session` ebenso;
+`const DBusUint32(1)` statt `const DBusByte(1)` macht ihn rot mit `u`;
+`const DBusUint32(0)` statt `const DBusInt32(-1)` macht allein
+`notify_carries_the_arguments_of_the_specification` rot (`susssasa{sv}u`), und
+ebenso `const DBusInt32(5000)`, ein leerer Titel statt
+`notification.summary` (im Live-Test mit) und vertauschte Reihenfolge von
+Schlüssel und Beschriftung eines Knopfes; jede der beiden
+`requestName`-Prüfungen auf `false` gesetzt reproduziert auf dem Sitzungsbus
+dieser Maschine genau die beiden Fehler, gegen die sie stehen (`Bad state: No
+element` im Tray-Teil, `Null check operator used on a null value` im
+Notification-Teil).
+
+Zwei Tests im Unit-File, nicht drei, und ihre Grenze ist ausdrücklich
+kommentiert: `notification_hints_are_wrapped_once` bewacht den Inhalt der
+Hints, `notify_carries_the_arguments_of_the_specification` die äußere Form des
+Aufrufs und alles, was nicht Hint ist. Der zweite sieht die Doppelverpackung
+nicht, weil `a{sv}` `a{sv}` bleibt; das steht als Satz an ihm, damit ihn
+niemand für den Schutz dagegen hält.
+
+Nicht gedeckt bleibt, was die Spezifikation als Nicht-Ziel führt: dass ein
+Mensch auf GNOME oder Plasma nachsieht, ob Dringlichkeit und Symbol tatsächlich
+so ankommen, wie der Dienst sie zeichnet. Auf dem Bus eines echten Desktops kann
+kein Test das lesen, weil der Name dort vergeben ist.
 
 ---
 
