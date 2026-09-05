@@ -114,8 +114,12 @@ HUM-011). Im Auszug: schreibgeschützt gebunden werden `/usr`, `/etc/ssl`, `/etc
 `/etc/group` und `/etc/hosts` (aus dem Speicher des Daemons, nicht vom Host) sowie der Shim unter
 `/usr/local/bin/humanitl-shim`; frisch angelegt werden ein eigenes `/proc`, ein minimales `/dev`
 (mit `/dev/shm` als `tmpfs`), `tmpfs` für `/tmp` und ein leeres `/home/agent`; das Projekt liegt
-unter `/work`, darin `tmpfs` über `.git/hooks`, `.vscode`, `.idea` und `/dev/null` über `.envrc`
-und `.git/config`; dazu die Proxy-Socket-Datei. Kein `/etc/resolv.conf`. Was **nicht** gebunden
+unter `/work`, darin `tmpfs` über `.git/hooks`, `.vscode`, `.idea`, `.fleet`, `.github/workflows`,
+`.gitlab-ci.yml.d`, `.direnv` und `.humanitl` sowie leere, nur lesbare Dateien über `.envrc`,
+`.env`, `.env.local`, `.git/config`, `.npmrc`, `.yarnrc`, `.yarnrc.yml`, `.pypirc`,
+`.gitlab-ci.yml`, `Jenkinsfile` und `.pre-commit-config.yaml`; dazu die Proxy-Socket-Datei. Die
+Masken sind `--ro-bind-data` aus je einem versiegelten, leeren `memfd`, nicht `/dev/null`: Der
+Bind eines Gerätes auf einen `nodev`-Mount antwortet `EACCES`. Kein `/etc/resolv.conf`. Was **nicht** gebunden
 wird, steht im Profil ebenso ausdrücklich: `$XDG_RUNTIME_DIR`, `/run`, `/tmp` des Hosts, `/home`,
 `~/.ssh`, `~/.gitconfig`, `~/.netrc`, X11-, Wayland-, D-Bus- und Docker-Sockets; der
 Argv-Builder lehnt ein Profil mit einem dieser Pfade ab (`SANDBOX_006`).
@@ -294,12 +298,53 @@ ehrlich. Und: den Endpunkt in Zeile 4 des Panels bei jedem Start einmal ansehen.
 
 *Was Humanitl tut.* Gebunden wird nur ein Unterpfad, nie `$HOME`. `sandbox.work_mode = "ro"` ist
 möglich und für reine Analyse-Sitzungen der Vorschlag. Pfade, über die geschriebene Dateien später
-auf dem Host **ausgeführt** würden, werden überdeckt: `.git/hooks`, `.vscode`, `.idea` mit einem
-leeren `tmpfs`, `.envrc` und `.git/config` mit `/dev/null` (der Agent sieht eine leere Datei,
-Schreibversuche enden in `EROFS`, weil der Bind schreibgeschützt ist). Zum Sitzungsende zeigt
-Humanitl die berührten Dateien,
-markiert neue Symlinks, deren Ziel außerhalb von `/work` liegt, und führt den Secret-Scan über den
-Diff.
+auf dem Host **ausgeführt** würden, werden überdeckt (die vollständige Liste steht in
+`profiles/sandbox/default.toml` unter `[mounts]`):
+
+- als leeres `tmpfs`: `.git/hooks`, `.vscode`, `.idea`, `.fleet`, `.github/workflows`,
+  `.gitlab-ci.yml.d`, `.direnv`, `.humanitl`;
+- als leere, nur lesbare Datei: `.envrc`, `.env`, `.env.local`, `.git/config`, `.npmrc`,
+  `.yarnrc`, `.yarnrc.yml`, `.pypirc`, `.gitlab-ci.yml`, `Jenkinsfile`,
+  `.pre-commit-config.yaml`.
+
+Die Maske ist ein `--ro-bind-data` aus einem versiegelten, leeren `memfd`, nicht `/dev/null`: Der
+Bind eines Gerätes auf einen `nodev`-Mount antwortet `EACCES`. Der Agent sieht also eine leere
+Datei, und Schreibversuche enden in `EROFS`, weil der Bind schreibgeschützt ist. Werkzeuge, die
+eine `.env` erwarten, finden nichts darin; das ist gewollt.
+
+`bwrap` hängt nur über einen Mountpoint ein, den es gibt — das gilt für ein `tmpfs` wie für eine
+Maske. Fehlt eines dieser Verzeichnisse oder eine dieser Dateien im Projekt, liegt nichts darüber,
+und was der Agent dort schreibt, landet im Projekt. Humanitl legt es **nicht** selbst an: Der
+Daemon schreibt nichts in das Projektverzeichnis, auch kein leeres Verzeichnis, und ein Werkzeug,
+das erst ein `.git/` erfindet und dann behauptet, es habe nichts angefasst, wäre keines.
+
+Stattdessen wird die Lücke benannt. Die betroffenen Pfade stehen in der Zusammenfassung des Laufs,
+jede Änderung darunter ist dort als solche markiert, und sobald der Agent unter einem von ihnen
+geschrieben hat, erscheint `SANDBOX_025` (Warning) mit der Liste. Was dort entsteht, ist im Diff
+ohnehin eine neue Datei und damit sichtbar. In einem gewöhnlichen Repository ist die Lücke klein:
+`git init` legt `hooks/` an, und ein `.github/workflows`, das es vorher nicht gab, fällt beim Lesen
+des Diffs auf.
+
+Ein Profil kann eine Maske mit `mounts.unmask` wieder aufheben; das erscheint beim Start als
+`SANDBOX_020` (Warning). `/work/.envrc` und `/work/.git/config` sind davon ausgenommen: Ein
+Profil, das sie freigeben will, wird mit `CONFIG_003` abgelehnt.
+
+Zum Ende eines Sandbox-Laufs zeigt Humanitl die berührten Dateien, markiert neue Symlinks, deren
+Ziel außerhalb von `/work` liegt (`SANDBOX_022`), und führt den Secret-Scan über den Diff
+(`SANDBOX_023`). Die beiden Schnappschüsse laufen über einen Baum, in den der Agent bis eben
+geschrieben hat; jeder Zugriff darauf geht deshalb durch `openat2` mit
+`RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS`, und ein Symlink-Ziel wird nie
+aufgelöst, sondern nur gelesen. Ohne das läse der Daemon über einen untergeschobenen Symlink den
+Host aus und schriebe das Ergebnis in eine Zusammenfassung, die ein Mensch liest.
+
+Jeder Name in dieser Zusammenfassung stammt vom Agenten und wird vor der Anzeige gesäubert
+(dieselbe Regel wie bei der Notiz einer Block-Antwort). Ab da ist er nur noch Anzeige: Zwei Namen,
+die sich in einem unsichtbaren Zeichen unterscheiden, sehen danach gleich aus, deshalb trägt jede
+Zeile zusätzlich den Hash ihres echten Namens. Ein Befehl zum Kopieren entsteht ausschließlich aus
+dem ungesäuberten Pfad, und nur, wenn dieser sich wörtlich zitieren lässt und die Säuberung ihn
+nicht verändert hätte — sonst zeigt die Oberfläche den Pfad, aber es gibt keinen Befehl. Ein
+`.gitignore` mit einem angehängten unsichtbaren Zeichen dürfte sonst als Befehl erscheinen, der die
+echte `.gitignore` löscht.
 
 *Was der Nutzer tun sollte.* Den Diff lesen, bevor er committet — insbesondere neue Dateien und
 alles unter `.github/`, `Makefile`, `package.json` (`scripts`) und Build-Dateien. Für fremde

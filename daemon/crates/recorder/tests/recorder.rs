@@ -10,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use bytes::Bytes;
 use humanitl_core::http::HeaderValue;
+use humanitl_core::ids::SandboxId;
 use humanitl_core::{
     Authority, BlockReason, Decision, DecisionSource, Finding, FindingKind, FindingLocation,
     FlowEvent, FlowId, HeaderMap, HostName, HttpRequest, Method, Scheme, SessionId, Tier,
@@ -1641,5 +1642,71 @@ async fn an_old_database_gets_the_error_column() {
     assert_eq!(
         detail.summary.error.as_deref(),
         Some("tls_handshake_failed")
+    );
+}
+
+/// Die Zusammenfassung eines Sandbox-Laufs (HUM-043).
+///
+/// Der Schlüssel ist das Paar aus Sitzung und Sandbox-Lauf: Ein Daemon-Prozess
+/// hat genau eine Sitzung und startet darin beliebig viele Sandboxen, also muss
+/// jede von ihnen eine eigene Zeile bekommen.
+#[tokio::test]
+async fn a_session_holds_one_summary_per_sandbox_run() {
+    let harness = Harness::open();
+    let first = SandboxId::new();
+    let second = SandboxId::new();
+
+    harness
+        .recorder
+        .store_session_summary(harness.session, first, r#"{"changes":[]}"#);
+    harness
+        .recorder
+        .store_session_summary(harness.session, second, r#"{"changes":["a"]}"#);
+    harness.recorder.flush().await;
+
+    let one = harness
+        .recorder
+        .get_session_summary(first)
+        .await
+        .unwrap_or_else(|err| panic!("{err}"))
+        .unwrap_or_else(|| panic!("the first summary is missing"));
+    assert_eq!(one.sandbox, first);
+    assert_eq!(one.session, harness.session);
+    assert_eq!(one.json, r#"{"changes":[]}"#);
+
+    let all = harness
+        .recorder
+        .list_session_summaries(harness.session)
+        .await
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(all.len(), 2, "one row per sandbox run, not per session");
+
+    // Derselbe Lauf noch einmal: die Zeile wird ersetzt, nicht verdoppelt.
+    harness
+        .recorder
+        .store_session_summary(harness.session, first, r#"{"changes":["later"]}"#);
+    harness.recorder.flush().await;
+    let all = harness
+        .recorder
+        .list_session_summaries(harness.session)
+        .await
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(all.len(), 2);
+    let one = harness
+        .recorder
+        .get_session_summary(first)
+        .await
+        .unwrap_or_else(|err| panic!("{err}"))
+        .unwrap_or_else(|| panic!("the first summary is missing"));
+    assert_eq!(one.json, r#"{"changes":["later"]}"#);
+
+    // Ein Lauf, den es nicht gab.
+    assert!(
+        harness
+            .recorder
+            .get_session_summary(SandboxId::new())
+            .await
+            .unwrap_or_else(|err| panic!("{err}"))
+            .is_none()
     );
 }

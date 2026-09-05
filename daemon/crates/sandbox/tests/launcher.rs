@@ -211,6 +211,69 @@ fn wait(handle: &SandboxHandle) -> ExitStatus {
 
 // --- der Plan ----------------------------------------------------------------
 
+/// Was überdeckt ist und was nicht — und dass der Plan nichts anlegt (HUM-043).
+///
+/// Eigene Funktion, weil `plan_renders_the_shim_and_the_three_binds` sonst über
+/// hundert Zeilen lang wäre.
+fn assert_masks_and_gaps(fx: &Fixture, plan: &LaunchPlan, args: &[String]) {
+    // Nur was im Projekt liegt, wird überdeckt: `.git/hooks`, `.vscode`,
+    // `.envrc` und `.git/config` gibt es, `.idea` nicht. Der Plan legt nichts
+    // an — er nennt die Lücke (HUM-043).
+    assert!(window_at(args, &["--tmpfs", "/work/.git/hooks"]).is_some());
+    assert!(window_at(args, &["--tmpfs", "/work/.vscode"]).is_some());
+    assert!(window_at(args, &["--tmpfs", "/work/.idea"]).is_none());
+    assert!(!fx.work.join(".idea").exists(), "the plan creates nothing");
+    assert!(!fx.work.join(".github").exists(), "no .github was invented");
+    assert!(
+        plan.unprotected.contains(&PathBuf::from(".idea")),
+        "the plan names the gap: {:?}",
+        plan.unprotected
+    );
+    assert!(
+        plan.unprotected
+            .contains(&PathBuf::from(".github/workflows")),
+        "the plan names the gap: {:?}",
+        plan.unprotected
+    );
+    assert!(
+        !plan.unprotected.contains(&PathBuf::from(".vscode")),
+        "a path that got its tmpfs is not a gap: {:?}",
+        plan.unprotected
+    );
+    assert!(
+        !plan
+            .unprotected
+            .iter()
+            .any(|path| path == Path::new("tmp") || path == Path::new("/tmp")),
+        "only the paths under /work can be missing a mount point: {:?}",
+        plan.unprotected
+    );
+    // Eine fehlende Maske ist dieselbe Lücke wie ein fehlendes Verzeichnis:
+    // ohne die Datei auf dem Host gibt es kein `--ro-bind-data` darüber, und
+    // was der Agent dorthin schreibt, führt der Host später aus.
+    assert!(
+        plan.unprotected.contains(&PathBuf::from(".env")),
+        "a missing mask is a gap too: {:?}",
+        plan.unprotected
+    );
+    assert!(
+        plan.unprotected
+            .contains(&PathBuf::from(".pre-commit-config.yaml")),
+        "a missing mask is a gap too: {:?}",
+        plan.unprotected
+    );
+    assert!(
+        !plan.unprotected.contains(&PathBuf::from(".envrc")),
+        "an existing mask is no gap: {:?}",
+        plan.unprotected
+    );
+    assert!(
+        !plan.unprotected.contains(&PathBuf::from(".git/config")),
+        "an existing mask is no gap: {:?}",
+        plan.unprotected
+    );
+}
+
 #[test]
 fn plan_renders_the_shim_and_the_three_binds() {
     let fx = fixture();
@@ -253,11 +316,8 @@ fn plan_renders_the_shim_and_the_three_binds() {
 
     assert_descriptors(&plan, &args);
 
-    // Nur was im Projekt liegt, wird überdeckt: .git/hooks, .vscode, .envrc
-    // und .git/config gibt es, .idea nicht.
-    assert!(window_at(&args, &["--tmpfs", "/work/.git/hooks"]).is_some());
-    assert!(window_at(&args, &["--tmpfs", "/work/.vscode"]).is_some());
-    assert!(window_at(&args, &["--tmpfs", "/work/.idea"]).is_none());
+    assert_masks_and_gaps(&fx, &plan, &args);
+
     assert!(
         !args.contains(&"/dev/null".to_owned()),
         "no /dev/null masks"

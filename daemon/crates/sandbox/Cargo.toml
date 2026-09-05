@@ -26,6 +26,12 @@ uuid.workspace = true
 # Noch nicht unter [workspace.dependencies]; der Parent traegt die Version dort
 # ein (Handoff HUM-011).
 rustix = { version = "1.1", features = ["fs", "process"] }
+# Die Zusammenfassung eines Sandbox-Laufs baut aus einem Host-Pfad einen
+# Befehl fuer die Zwischenablage (HUM-043, `summary::copy_command`). Der Pfad
+# kommt aus einem Verzeichnis, in das der Agent schreiben darf; er wird nur
+# dann zu einem Befehl, wenn `shlex::try_quote` ihn zitieren kann und
+# `shlex::split` daraus wieder genau diesen einen Pfad macht.
+shlex.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -36,5 +42,3 @@ tempfile.workspace = true
 # liefert deshalb den Text der Datei statt geparster Regeln.
 humanitl-rules.workspace = true
 chrono.workspace = true
-# Nur im Test: prueft, dass `argv_line` wirklich von einer Shell zerlegbar ist.
-shlex.workspace = true

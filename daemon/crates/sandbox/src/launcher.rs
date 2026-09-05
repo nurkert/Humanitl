@@ -151,6 +151,23 @@ pub struct LaunchPlan {
     pub session: SessionId,
     /// Der Name des Profils, für Protokoll und Thread-Namen.
     pub profile: String,
+    /// Befunde, die den Start nicht verhindern, aber dazugehören: eine
+    /// aufgehobene Maske (`SANDBOX_020`), ein Kernel ohne `openat2`
+    /// (`SANDBOX_021`). Wer den Plan startet, gibt sie in den Ereignisstrom.
+    pub warnings: Vec<Diagnostic>,
+    /// Die Überdeckungen unter `/work`, die in diesem Lauf **fehlen**, weil es
+    /// den Pfad auf dem Host nicht gibt (HUM-043).
+    ///
+    /// Beide Arten: die Verzeichnisse aus `mounts.tmpfs` und die Dateien aus
+    /// `mounts.masked_files`. Die Pfade sind relativ zum Projektverzeichnis,
+    /// also in demselben Raum wie die Einträge des Schnappschusses; nur so
+    /// lässt sich eine Änderung einer fehlenden Überdeckung zuordnen
+    /// (`crate::summary::SessionSummary::set_unprotected`).
+    ///
+    /// Was der Agent dort schreibt, landet im Projekt — als neue Datei, die im
+    /// Diff des Laufs auftaucht. Die Zusammenfassung nennt die Liste, damit die
+    /// Lücke benannt ist und nicht bloß vorhanden.
+    pub unprotected: Vec<PathBuf>,
     /// Das Programm, `argv[0]`, aufgelöst.
     pub(crate) program: PathBuf,
     /// Was der Start einmal entnimmt; danach `None`.

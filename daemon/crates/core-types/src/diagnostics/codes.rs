@@ -70,7 +70,8 @@ pub static AREAS: &[AreaInfo] = &[
         prefix: "SANDBOX",
         first: 1,
         last: 29,
-        note: "001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler",
+        note: "001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, \
+               020-025 /work-Härtung (HUM-043)",
     },
     AreaInfo {
         area: "proxy",
@@ -279,6 +280,26 @@ registry! {
     SANDBOX_015 => "sandbox", "Isolation-Check 2: mehr als eine Tür", "#sandbox_015";
     /// Isolation-Check 3 fehlgeschlagen: seccomp nicht aktiv oder Familien nicht gesperrt.
     SANDBOX_016 => "sandbox", "Isolation-Check 3: seccomp unwirksam", "#sandbox_016";
+    /// Eine Pflicht-Maske oder eine andere Maske unter `/work` wurde per
+    /// `mounts.unmask` freigegeben; der Agent kann die Datei lesen und
+    /// beschreiben (Warning, HUM-043).
+    SANDBOX_020 => "sandbox", "Maskierter Pfad freigegeben", "#sandbox_020";
+    /// Der Kernel kennt `openat2` nicht; der Lauf über das Projektverzeichnis
+    /// nimmt den Weg über `openat` je Bestandteil (Info, HUM-043).
+    SANDBOX_021 => "sandbox", "Kernel ohne openat2", "#sandbox_021";
+    /// Der Agent hat einen Symlink angelegt, dessen Ziel außerhalb von `/work`
+    /// liegt (Warning, HUM-043).
+    SANDBOX_022 => "sandbox", "Symlink zeigt aus dem Projekt hinaus", "#sandbox_022";
+    /// Im Diff des Sandbox-Laufs stecken mögliche Geheimnisse (Warning,
+    /// HUM-043).
+    SANDBOX_023 => "sandbox", "Mögliche Geheimnisse im Projekt", "#sandbox_023";
+    /// Ein Budget hat gegriffen: Der Schnappschuss des Projektverzeichnisses
+    /// ist unvollständig (Info, HUM-043).
+    SANDBOX_024 => "sandbox", "Schnappschuss abgeschnitten", "#sandbox_024";
+    /// Der Agent hat unter einem Pfad geschrieben, den das Profil überdeckt,
+    /// den es aber im Projekt nicht gab: Ohne vorhandenen Mountpoint hängt
+    /// `bwrap` kein `tmpfs` und keine Maske darüber (Warning, HUM-043).
+    SANDBOX_025 => "sandbox", "Ohne Maske ins Projekt geschrieben", "#sandbox_025";
 
     /// Der Body ist größer als `limits.hold_body_cap_bytes`.
     PROXY_001 => "proxy", "Body über Cap", "#proxy_001";

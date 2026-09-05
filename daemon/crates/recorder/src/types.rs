@@ -8,6 +8,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use humanitl_core::ids::SandboxId;
 use humanitl_core::{BodyRef, FlowId, SessionId};
 
 /// So viele Zeilen liefert [`FlowQuery`] ohne eigene Angabe.
@@ -88,6 +89,38 @@ pub struct SessionMeta {
     pub work_dir: String,
     /// Der Agent-Adapter, zum Beispiel `opencode`.
     pub agent: String,
+}
+
+/// Der Zeitpunkt zu einer Unix-Millisekundenzahl; die Umkehrung von
+/// [`millis`].
+///
+/// Negative Werte liegen vor der Epoche und ergeben einen Zeitpunkt davor.
+#[must_use]
+pub fn at_millis(millis: i64) -> SystemTime {
+    let magnitude = std::time::Duration::from_millis(millis.unsigned_abs());
+    if millis < 0 {
+        UNIX_EPOCH.checked_sub(magnitude).unwrap_or(UNIX_EPOCH)
+    } else {
+        UNIX_EPOCH.checked_add(magnitude).unwrap_or(UNIX_EPOCH)
+    }
+}
+
+/// Eine Zeile aus `session_summaries`: die Zusammenfassung eines Sandbox-Laufs.
+///
+/// Der Inhalt bleibt Text. Die Struktur dahinter ist
+/// `humanitl_sandbox::summary::SessionSummary`, und diese Crate darf sie nicht
+/// kennen (`tools/deps-allow.toml`); wer sie braucht, liest sie mit
+/// `serde_json` aus [`SessionSummaryRow::json`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionSummaryRow {
+    /// Die Sitzung des Daemons.
+    pub session: SessionId,
+    /// Der Sandbox-Lauf innerhalb dieser Sitzung.
+    pub sandbox: SandboxId,
+    /// Wann die Zusammenfassung entstand.
+    pub created: SystemTime,
+    /// Die Zusammenfassung als `JSON`.
+    pub json: String,
 }
 
 /// Wonach eine Seite sortiert wird.

@@ -70,6 +70,11 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "flow_error",
         sql: include_str!("../migrations/V4__flow_error.sql"),
     },
+    Migration {
+        version: 5,
+        name: "session_summary",
+        sql: include_str!("../migrations/V5__session_summary.sql"),
+    },
 ];
 
 /// Der Stand, den eine frisch migrierte Datenbank hat.
@@ -380,12 +385,13 @@ mod tests {
         let tables: i64 = reader
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN \
-                 ('sessions', 'flows', 'messages', 'findings', 'rules_snapshot')",
+                 ('sessions', 'flows', 'messages', 'findings', 'rules_snapshot', \
+                 'session_summaries')",
                 [],
                 |row| row.get(0),
             )
             .unwrap_or(0);
-        assert_eq!(tables, 5);
+        assert_eq!(tables, 6);
     }
 
     #[test]

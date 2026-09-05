@@ -66,6 +66,7 @@ use std::sync::mpsc;
 use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
+use humanitl_core::ids::SandboxId;
 use humanitl_core::{
     BodyRef, Diagnostic, Finding, FlowEvent, FlowId, HeaderMap, RuleId, SessionId,
 };
@@ -81,7 +82,8 @@ pub use crate::settings::RecorderSettings;
 pub use crate::sink::ResponseSink;
 pub use crate::types::{
     COUNT_CEILING, Cursor, CursorKey, DEFAULT_LIMIT, Dir, FindingRecord, FlowDetail, FlowPage,
-    FlowQuery, FlowSummary, MAX_LIMIT, MessageRecord, PurgeReport, SessionMeta, SortKey, millis,
+    FlowQuery, FlowSummary, MAX_LIMIT, MessageRecord, PurgeReport, SessionMeta, SessionSummaryRow,
+    SortKey, millis,
 };
 pub use crate::writer::{BATCH_COMMANDS, BATCH_INTERVAL, RESERVATION_GRACE};
 
@@ -380,6 +382,68 @@ impl Recorder {
             yaml: yaml.to_owned(),
             at: millis(SystemTime::now()),
         });
+    }
+
+    /// Hält die Zusammenfassung eines Sandbox-Laufs fest (HUM-043).
+    ///
+    /// Die Zusammenfassung gehört zum Lauf, nicht zur Sitzung: Ein Daemon-
+    /// Prozess hat genau eine [`SessionId`], startet darin aber beliebig viele
+    /// Sandboxen. Der Schlüssel ist deshalb das Paar aus Sitzung und
+    /// [`SandboxId`], und ein zweiter Aufruf mit derselben Kennung
+    /// überschreibt die Zeile.
+    ///
+    /// `json` ist die serialisierte `humanitl_sandbox::summary::SessionSummary`.
+    /// Diese Crate kennt den Typ nicht (`tools/deps-allow.toml` erlaubt ihr nur
+    /// `humanitl-core`) und speichert deshalb den Text, so wie sie eine Regel
+    /// als `YAML` speichert.
+    pub fn store_session_summary(&self, session: SessionId, sandbox: SandboxId, json: &str) {
+        self.send(WriterCmd::SessionSummary {
+            session,
+            sandbox,
+            at: millis(SystemTime::now()),
+            json: json.to_owned(),
+        });
+    }
+
+    /// Liest die Zusammenfassung eines Sandbox-Laufs zurück.
+    ///
+    /// Der Lauf allein genügt als Schlüssel: Eine [`SandboxId`] ist eine
+    /// `UUIDv7` und damit für sich eindeutig, und der Weg des Nutzers führt über
+    /// sie (`humanitl sessions summary <id>`). Die Sitzung steht in der
+    /// Antwort; sie wird für die Suche nicht gebraucht.
+    ///
+    /// `None`, wenn es zu diesem Lauf keine gibt.
+    ///
+    /// # Errors
+    ///
+    /// [`RecorderError::Storage`] bei einem Fehler der Datenbank.
+    pub async fn get_session_summary(
+        &self,
+        sandbox: SandboxId,
+    ) -> Result<Option<SessionSummaryRow>, RecorderError> {
+        let read = Arc::clone(&self.read);
+        tokio::task::spawn_blocking(move || query::get_session_summary(&read, sandbox))
+            .await
+            .map_err(|err| {
+                storage_failed(format!("the session summary lookup did not finish ({err})"))
+            })?
+    }
+
+    /// Alle Zusammenfassungen einer Sitzung, die jüngste zuerst.
+    ///
+    /// # Errors
+    ///
+    /// [`RecorderError::Storage`] bei einem Fehler der Datenbank.
+    pub async fn list_session_summaries(
+        &self,
+        session: SessionId,
+    ) -> Result<Vec<SessionSummaryRow>, RecorderError> {
+        let read = Arc::clone(&self.read);
+        tokio::task::spawn_blocking(move || query::list_session_summaries(&read, session))
+            .await
+            .map_err(|err| {
+                storage_failed(format!("the session summary list did not finish ({err})"))
+            })?
     }
 
     /// Vermerkt, dass es eine Regel nicht mehr gibt.
