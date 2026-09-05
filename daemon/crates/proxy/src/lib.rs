@@ -64,6 +64,7 @@ pub mod pipeline;
 pub mod registry;
 pub mod resolver;
 pub mod rules_store;
+pub mod session;
 pub mod tls;
 pub mod tls_observe;
 pub mod upstream;
@@ -77,7 +78,7 @@ pub use crate::findings::{NoScan, Scanner, Tier1Scanner};
 pub use crate::handler::{FlowHandler, HandlerPorts, ProxyLimits};
 pub use crate::hold::{DomainSink, HoldQueue};
 pub use crate::listener::SessionSocket;
-pub use crate::llm_probe::{LlmFlavor, LlmProbe, ProbeResult};
+pub use crate::llm_probe::{LlmFlavor, LlmProbe, ProbeResult, not_private_by_name};
 pub use crate::meta::{
     META_HOST, MetaClock, MetaEndpoint, MetaOutcome, MetaReply, MetaRequest, MetaStatus,
     SuggestedTarget, SystemClock, is_meta_host, suggested_target,
@@ -89,6 +90,7 @@ pub use crate::resolver::{
     ResolverPort, ResolverStats, SystemResolver,
 };
 pub use crate::rules_store::{Origin, ReloadReport, RulesStore, StoredRule};
+pub use crate::session::{SessionSettings, SessionState};
 pub use crate::tls_observe::{
     HandshakeWatch, TlsFailure, ToolHint, classify, diagnostic_for, tool_hint,
 };

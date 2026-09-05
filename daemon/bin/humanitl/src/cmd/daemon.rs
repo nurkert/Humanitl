@@ -79,7 +79,7 @@ async fn status(ctx: &Context) -> Result<u8, Failure> {
 /// Eine andere Major heißt: Nachrichten, die der eine schickt, versteht der
 /// andere nicht mehr. Eine kleinere Minor beim Daemon ist dagegen kein
 /// Fehler, nur eine Notiz: additive Änderungen bleiben lesbar.
-fn check_proto(info: &v1::Info) -> Result<(), Failure> {
+pub fn check_proto(info: &v1::Info) -> Result<(), Failure> {
     if info.proto_major == PROTO_MAJOR {
         return Ok(());
     }

@@ -351,7 +351,7 @@ Aufruf am Daemon abgelehnt
 
 #### CLI_002
 
-Vollbild-TUI-Agent nicht mit --ask terminal
+`--ask terminal` ist hier nicht möglich
 
 #### CLI_003
 
@@ -360,6 +360,10 @@ Unterkommando noch nicht verfügbar
 #### CLI_004
 
 Aufruf ungültig
+
+#### CLI_005
+
+Es läuft schon eine Sitzung
 
 ### Bereich ui
 

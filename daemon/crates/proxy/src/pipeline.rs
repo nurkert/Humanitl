@@ -47,6 +47,7 @@ use humanitl_rules::{RequestKey, RuleSet, Verdict};
 
 use crate::connect::requested_upgrade;
 use crate::hold::HoldQueue;
+use crate::session::SessionSettings;
 
 pub use crate::connect::{ConnMeta, ConnectionContext};
 
@@ -67,17 +68,56 @@ pub trait FlowPipeline: Send + Sync {
 #[derive(Debug)]
 pub struct AskPipeline {
     queue: Arc<HoldQueue>,
-    timeout: Duration,
+    /// Woher die Frist kommt.
+    ///
+    /// Eine feste Zahl wäre die Frist des Daemon-Starts und nicht die der
+    /// Sitzung: `humanitl run --ask none` und `--profile llm-only` ändern sie,
+    /// und sie ändern sie, nachdem der Proxy steht (HUM-067).
+    deadline: Deadline,
+}
+
+/// Woher [`AskPipeline`] ihre Frist nimmt.
+#[derive(Debug)]
+enum Deadline {
+    /// Eine feste Frist, für Tests und für Aufrufer ohne Sitzungszustand.
+    Fixed(Duration),
+    /// Die Frist der Sitzung, so wie sie gerade gilt.
+    Session(Arc<SessionSettings>),
 }
 
 impl AskPipeline {
-    /// Eine Pipeline, die über `queue` hält und `timeout` als Frist setzt.
+    /// Eine Pipeline, die über `queue` hält und `timeout` als feste Frist setzt.
     ///
     /// `timeout` ist `hold.timeout_secs`; `0` (oder `ask_mode = none`) blockt
     /// alles, weil die Frist sofort abläuft.
     #[must_use]
     pub const fn new(queue: Arc<HoldQueue>, timeout: Duration) -> Self {
-        Self { queue, timeout }
+        Self {
+            queue,
+            deadline: Deadline::Fixed(timeout),
+        }
+    }
+
+    /// Eine Pipeline, deren Frist bei jedem Fluss aus den Sitzungs-
+    /// Einstellungen kommt.
+    ///
+    /// Das ist der Weg im Daemon: `humanitl run` löst das Profil der Sitzung
+    /// auf und schreibt Frage-Modus und Frist dorthin, lange nachdem diese
+    /// Pipeline gebaut wurde.
+    #[must_use]
+    pub const fn with_settings(queue: Arc<HoldQueue>, settings: Arc<SessionSettings>) -> Self {
+        Self {
+            queue,
+            deadline: Deadline::Session(settings),
+        }
+    }
+
+    /// Die Frist, die für den nächsten Fluss gilt.
+    fn timeout(&self) -> Duration {
+        match &self.deadline {
+            Deadline::Fixed(timeout) => *timeout,
+            Deadline::Session(settings) => settings.hold_timeout(),
+        }
     }
 }
 
@@ -94,7 +134,7 @@ impl FlowPipeline for AskPipeline {
     /// steht.
     async fn decide(&self, flow: &mut Flow, _meta: &ConnMeta) -> Decision {
         let deadline = Instant::now()
-            .checked_add(self.timeout)
+            .checked_add(self.timeout())
             .unwrap_or_else(Instant::now);
         // Das Future aus `hold` leiht `flow` bis zur Entscheidung; im
         // Fehlerfall endet die Leihe mit dem `match`, deshalb die Trennung.

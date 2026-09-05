@@ -325,6 +325,14 @@ class GrpcDaemonClient implements DaemonClient {
             if (result != null) {
               yield SandboxUpdate.check(result);
             }
+          case pb.SandboxEvent_Event.output:
+          case pb.SandboxEvent_Event.exit:
+            // The bytes of the agent and its exit code. `humanitl run` writes
+            // them to its terminal; this app has no terminal pane yet, and the
+            // sandbox screen says so where the pane will be (HUM-042). Dropping
+            // them here is deliberate: half a terminal would be worse than the
+            // sentence that names what is missing.
+            break;
           case pb.SandboxEvent_Event.notSet:
             break;
         }

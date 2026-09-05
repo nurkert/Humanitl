@@ -99,8 +99,9 @@ pub use crate::bwrap_args::{
     shell_quote,
 };
 pub use crate::handle::{
-    CAPTURE_MAX_BYTES, CapturedOutput, INTERRUPT_GRACE, KILL_GRACE, ReportSnapshot, STATUS_DRAIN,
-    STDERR_EXCERPT_BYTES, SandboxHandle, StatusSnapshot,
+    CAPTURE_MAX_BYTES, CapturedOutput, INTERRUPT_GRACE, KILL_GRACE, OutputChunk, OutputSink,
+    OutputStream, ReportSnapshot, STATUS_DRAIN, STDERR_EXCERPT_BYTES, SandboxHandle,
+    StatusSnapshot,
 };
 pub use crate::launcher::{CheckResult, IsolationCheck, LaunchPlan, SandboxBackend, StdioMode};
 pub use crate::profile::{

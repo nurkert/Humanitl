@@ -49,6 +49,7 @@ use humanitl_core::{
 use humanitl_rules::RuleSet;
 
 use crate::registry::FlowRegistry;
+use crate::session::SessionSettings;
 
 /// Der reservierte Name, den der Proxy selbst beantwortet.
 ///
@@ -180,6 +181,14 @@ pub struct MetaOutcome {
 #[derive(Debug)]
 pub struct MetaEndpoint {
     status: MetaStatus,
+    /// Der Stand der laufenden Sitzung, falls einer geführt wird.
+    ///
+    /// Er geht vor [`MetaEndpoint::status`]: Der Endpunkt beantwortet die
+    /// Frage „was gilt gerade", und was beim Bau des Endpunkts galt, ist nach
+    /// dem Start einer Sitzung nicht mehr dasselbe (HUM-067). Ohne
+    /// Sitzungszustand — in Tests und im Fake-Modus — bleibt es beim Wert des
+    /// Baus.
+    settings: Option<Arc<SessionSettings>>,
     rules: Arc<RwLock<RuleSet>>,
     clock: Arc<dyn MetaClock>,
     /// Die Zeitpunkte der angenommenen Bitten je Sitzung, älteste zuerst.
@@ -198,6 +207,7 @@ impl MetaEndpoint {
     pub fn new(status: MetaStatus, rules: Arc<RwLock<RuleSet>>) -> Self {
         Self {
             status,
+            settings: None,
             rules,
             clock: Arc::new(SystemClock),
             asks: Mutex::new(HashMap::new()),
@@ -209,6 +219,28 @@ impl MetaEndpoint {
     pub fn with_clock(mut self, clock: Arc<dyn MetaClock>) -> Self {
         self.clock = clock;
         self
+    }
+
+    /// Derselbe Endpunkt, der seinen Status aus der laufenden Sitzung liest.
+    #[must_use]
+    pub fn with_settings(mut self, settings: Arc<SessionSettings>) -> Self {
+        self.settings = Some(settings);
+        self
+    }
+
+    /// Der Stand, den `/` zeigt: der der Sitzung, sonst der des Baus.
+    fn status(&self) -> MetaStatus {
+        match self.settings.as_ref() {
+            Some(settings) => {
+                let state = settings.get();
+                MetaStatus {
+                    ask_mode: state.ask_mode,
+                    hold_timeout: state.hold_timeout,
+                    llm: state.llm,
+                }
+            }
+            None => self.status.clone(),
+        }
     }
 
     /// Wie viele Sitzungen gerade ein Fenster des Ratenlimits haben.
@@ -251,11 +283,12 @@ impl MetaEndpoint {
 
     /// Der Kurzstatus und die Regeln, die gerade gelten.
     fn status_body(&self, session: SessionId) -> MetaOutcome {
+        let status = self.status();
         let mut out = format!(
             "humanitl session={session} ask={ask} timeout={timeout} llm={llm}\n",
-            ask = ask_mode_name(self.status.ask_mode),
-            timeout = self.status.hold_timeout.as_secs(),
-            llm = self.status.llm.as_deref().unwrap_or("none"),
+            ask = ask_mode_name(status.ask_mode),
+            timeout = status.hold_timeout.as_secs(),
+            llm = status.llm.as_deref().unwrap_or("none"),
         );
         out.push_str("rules (first match wins):\n");
         let rows = self.rule_rows(session);

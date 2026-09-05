@@ -1841,6 +1841,184 @@ Audit von 28 Agenten gegen den Code: 16 Widersprüche, 7 blockierend, oben im Te
 - `--llm` mit öffentlicher IP ⇒ `LLM_006` wird vor dem Start gedruckt, Start läuft trotzdem (Info).
 - `ctx.config()` bleibt der erste Aufruf; alles, was vorher startet, umgeht den `CONFIG_003`-Riegel.
 
+### Stand (2026-09-05): die Sitzungskonfiguration und der Lauf ohne PTY
+
+Gebaut ist der Teil, der ohne HUM-042 vollständig sinnvoll ist, und mit ihm der
+Rumpf, den die erste Fassung nicht nannte: **der Daemon bekommt eine
+Konfiguration je Sitzung.** Bis hierher löste `humanitld` sie genau einmal beim
+Start auf und fror Regelspeicher, Haltefrist und Durchreiche darum ein;
+`--profile`, `--ask` und `--llm` hatten keinen Weg hinein. Jetzt haben sie
+einen, und er trägt auch alles, was danach kommt.
+
+**Was gilt.**
+
+- `humanitl run [--profile NAME] [--work DIR] [--work-mode ro|rw] [--ask ui|none] [--llm URL] [-- CMD...]`
+  im Projektverzeichnis. Der Befehl löst zuerst das Sitzungsprofil auf
+  (`ctx.config()`, der `CONFIG_003`-Riegel gegen ein feindliches
+  Projekt-Profil), verbindet den Daemon, prüft die Vertragsversion, startet
+  eine Sitzung mit `work_dir = cwd`, druckt die drei Garantien als je eine
+  Zeile, reicht die Ausgabe des Agenten durch und endet mit dessen Exit-Code.
+- `SandboxService` nimmt einen `SessionResolver` statt einer eingefrorenen
+  `Config`. Jeder `Sandbox(Start)` löst für seine Sitzung neu auf und baut
+  daraus die mitgelieferte Gruppe des Regelspeichers (Durchreiche, Profilregeln
+  Rang 4, `rules/default.yaml`) sowie Frage-Modus, Haltefrist und
+  Sprachmodell-Endpunkt, die Proxy und Meta-Endpunkt lesen.
+- `Start` trägt dafür `session_profile`, `ask_mode` und `cli_overrides`;
+  `SandboxEvent` trägt `output` und `exit`. Vertrags-Minor 4.
+- Ein Client darf genau zwei Konfigurationspfade setzen: `llm.endpoint` und
+  `hold.timeout_secs`. Jeder andere ist `CONFIG_003`. Die Begründung steht in
+  `backlog/CONVENTIONS.md` 4.25; kurz: Über einem offenen Namensraum kann keine
+  Sperrliste vollständig sein, und `sandbox.profile`, `agent.command` und
+  `sandbox.env` bestimmten sonst die Einhängefläche der Sandbox und den Prozess
+  darin — vom Socket aus.
+- `--ask none` bleibt `504`/`TimedOut`. Entscheidung (b) der Spezifikation, mit
+  Begründung in 4.25; der irreführende Kommentar in `profiles/llm-only.toml`
+  ist korrigiert. `BlockReason::AskModeNone` gibt es nicht.
+- Ein zweiter Start, während eine Sitzung läuft, ist `CLI_005` (Entscheidung
+  (d): ein Code im Bereich `CLI`, kein neuer Bereich).
+- `docs/cli.md` beschreibt Flags, Frage-Modi, Signale und Exit-Codes so, wie
+  sie sind, samt der bekannten Kollision zwischen dem Exit-Code des Agenten und
+  den Codes 2 und 3.
+
+**Was nicht gilt, und unter welchem Issue es kommt.**
+
+- **Kein PTY (HUM-042).** Der Agent bekommt kein Terminal. Seine Ausgabe reist
+  als Bytes über den Ereignisstrom und geht auf `stdout` und `stderr` der
+  Kommandozeile; es gibt keine Eingabe an ihn, keinen Raw-Modus, keine
+  Weiterleitung von `SIGWINCH` und kein `Ctrl+]`-Menü. `Ctrl+C` beendet die
+  Sitzung über `Sandbox(Stop)`, statt als Byte an den Agenten zu gehen.
+- **Kein `--ask terminal` (HUM-042).** Der Befehl antwortet mit `CLI_002` und
+  schlägt `--ask ui` oder `--ask none` vor — genau das Verhalten, das für
+  Vollbild-TUI-Agenten ohnehin dauerhaft gilt (CONVENTIONS 4.10), vorläufig für
+  alle. Damit entfällt auch der Prompt-Kasten, die Zwei-Schritt-Regelauswahl,
+  der `e`-Editor-Weg und der `v`-Pager; die drei `ask_terminal_*`-Tests und
+  `pager_renders_control_bytes_inert` kommen mit dem Prompt. Entscheidung (c)
+  ist damit für diese Fassung beantwortet und für HUM-042 offen.
+- **Keine Zeile je gehaltener Anfrage.** `--ask ui` sagt vor dem Start in
+  einer Zeile, wo entschieden wird, und danach nichts mehr; `[humanitl]
+  request held: …` braucht den `Subscribe`-Strom und die Säuberung der Werte,
+  die aus der Anfrage des Agenten stammen (Schritt 7 der Spezifikation). Beides
+  gehört zum Terminal.
+- **Kein Attach durch die Oberfläche (HUM-042).** `Terminal` antwortet weiter
+  mit `UNIMPLEMENTED`; `attach_read_only_sees_output` und
+  `reader_cannot_write` gehören dorthin. Die Oberfläche sieht die laufende
+  Sitzung im Sandbox-Bildschirm und kann Hold-Entscheidungen treffen — das
+  geht seit HUM-040 und hängt nicht am Terminal.
+- **Kein `SIGTERM`-Pfad mit Exit 143 und kein Panik-Hook** (`tty.rs` gibt es
+  nicht): Ohne Raw-Modus gibt es nichts wiederherzustellen. Die Tests
+  `raw_mode_restored_on_panic` und `sigterm_stops_session_exit_143` gehören zu
+  HUM-042.
+- **Keine Summary-Zeile** (HUM-043), kein `--detach`, kein `attach` (aus dem
+  Issue herausgenommen).
+
+**Der Filter ist hier gebaut, nicht dort.** Sobald Bytes des Agenten das
+Terminal eines Menschen erreichen, ist der Terminal-Seitenkanal offen
+(BACKLOG.md 4.2). `humanitl_core::TerminalFilter` steht deshalb im Daemon, mit
+Zustand über Stückgrenzen hinweg. HUM-042 erweitert ihn für den PTY-Pfad,
+statt einen zweiten daneben zu bauen.
+
+**Er ist eine Erlaubnisliste, und das ist die Antwort auf den Fallstrick des
+Issues.** Die erste Fassung sperrte OSC 52 und OSC 8. Der Review fand vier
+Wege daran vorbei, und alle vier waren wirksam: `OSC 052` (Terminals lesen die
+Nummer als Zahl), `OSC 0` (setzt den Fenstertitel), `\x9d52;…` (dieselbe Folge
+in einem C1-Byte) und `ESC P tmux;…` (reicht die verbotene Folge durch tmux
+hindurch). Statt vier Löcher zu stopfen, dreht der Filter die Richtung um:
+**Von allen Steuerfolgen geht genau eine hinaus, `ESC [ … m`.** Dieselbe
+Begründung wie bei `VISIBLE_ENV` und `SESSION_OVERRIDE_KEYS` — über einem
+offenen Namensraum kann keine Sperrliste vollständig sein.
+
+**Cursorbewegung und Löschen gehen damit nicht hinaus.** Das war die
+Entscheidung, die der Review verlangte: `\x1b[1A\x1b[2K` überschreibt eine
+Zeile, die schon steht, und die drei Zeilen der Isolationsprüfung stehen genau
+dort. Sie ausdrücklich stehen zu lassen und in `docs/SECURITY.md` als Lücke zu
+benennen, wäre die andere zulässige Antwort gewesen; sie ist es nicht geworden,
+weil ohne PTY nichts davon gebraucht wird. Der Agent schreibt in eine Pipe, und
+was in eine Pipe schreibt, färbt höchstens. Der Preis steht in `docs/cli.md`:
+Ein Fortschrittsbalken, der mit `\x1b[K` löscht, lässt Reste stehen.
+
+**Bytes sind roh, deshalb entscheidet der Filter am Codepunkt.** Gemessen und
+nicht angenommen: `SandboxEvent.OutputChunk.data` ist `bytes`, `Shared::tee`
+kopiert aus der Pipe, `write_output` schreibt mit `write_all` — auf dem ganzen
+Weg steht keine UTF-8-Prüfung. Die C1-Steuerzeichen sind damit voll wirksam,
+und zwar in beiden Schreibweisen: als einzelnes Byte (`\x9b`) und als
+wohlgeformte UTF-8-Kodierung (`C2 9B`). Die zweite fand erst der zweite
+Review; VTE-basierte Terminals — GNOME Terminal, Tilix, Terminator, XFCE
+Terminal, Guake — dekodieren UTF-8 vor dem Parser und führen `U+009B` als CSI
+aus, xterm ebenso mit seiner Vorgabe. Entschieden wird deshalb am Codepunkt:
+`0xC2` ist das einzige Anfangsbyte, aus dem ein C1-Steuerzeichen werden kann,
+und wird zurückgehalten, bis das Folgebyte es entscheidet. Ein Terminal, das
+nicht in UTF-8 arbeitet, bleibt die benannte Restlücke; sie steht in
+`docs/SECURITY.md` 3.3.
+
+**Eine Profilregel kann sich den Rang der Durchreiche nicht selbst
+ausstellen.** Der zweite Fund desselben Reviews, und der ernstere: Weil dieses
+Issue Profilregeln in die mitgelieferte Gruppe aufnimmt und `set_bundled` auf
+jede Regel dieser Gruppe `bundled` stempelt, hätte ein globales Profil mit
+`[rules].inline` und `passthrough_llm = true` sich Rang 1 gegeben — einen
+ungehaltenen Weg für einen beliebigen Host, der die Block-Regeln des Nutzers
+überholt, ohne einen einzigen Befund. `parse_rules` verwirft `bundled` aus
+einer Datei, `passthrough_llm` aber nicht. `BundledRules` trennt die
+Durchreiche deshalb im Typ, nimmt jeder anderen Regel den Vermerk und meldet
+den Entzug. Nicht geändert wurde `humanitl_rules::parse_rules`: Dass eine
+`rules.yaml` des Nutzers den Vermerk behält, ist eine dokumentierte
+Entscheidung von HUM-039/HUM-104 mit eigenem Test, und dort ist er ohne
+`bundled` kein Rang, sondern nur eine Beschriftung. Dass diese Beschriftung
+falsch sein kann, gehört in ein eigenes Issue.
+
+**`llm.endpoint` vergrößert etwas, und das steht jetzt so da.** Die erste
+Fassung begründete seinen Platz auf der Erlaubnisliste damit, es vergrößere
+nichts, und verwies auf eine `LLM_006`-Meldung, die auf diesem Weg niemand
+erzeugte. Beides ist korrigiert: Die Begründung nennt jetzt, was der Schlüssel
+wirklich aufmacht (Rang 1, `allow_private`, für die Inferenzpfade eines
+beliebigen Hosts), warum er trotzdem darauf steht (3.8 führt ihn als Flag von
+`run`, und seine Wirkung ist an drei Stellen sichtbar), und `apply_session`
+meldet `LLM_006` beim Start — entschieden am Namen, ohne aufzulösen.
+
+**Ein Start beansprucht die Sitzung, bevor er etwas merkt.** `self.running`
+wird erst gesetzt, wenn `bwrap` steht; zwei gleichzeitige `Start` kämen an
+`is_running()` beide vorbei, beide startten, und der zweite verdrängte den
+ersten aus `running` — der erste Prozess liefe weiter, ohne dass ihn noch
+jemand beenden könnte. `Pending::claimed` wird unter demselben Schloss geprüft
+und gesetzt, und `remember` gibt das geprüfte Projektverzeichnis unter
+demselben Schloss zurück, statt es später ein zweites Mal aus `pending` zu
+lesen.
+
+**Tests.** `crates/ipc/tests/session_config.rs` misst die Sitzungskonfiguration
+am Regelspeicher und am Sitzungszustand, die der Daemon wirklich verdrahtet, je
+mit Gegenprobe ohne den Wunsch: Profilregel, Frage-Modus, Durchreiche aus
+`--llm`, Vorrang der Kommandozeile über das Profil, und die drei Ablehnungen
+(`CONFIG_001` für ein unbekanntes Profil, `CONFIG_003` für einen Pfad außerhalb
+der Erlaubnisliste und für einen Frage-Modus, den es nicht gibt).
+`crates/ipc/tests/sandbox_start.rs` fährt eine echte Sandbox und prüft, dass
+`hello` und `bye` ankommen, kein `ESC` den Daemon verlässt und der Exit-Code 7
+als eigenes Ereignis dahintersteht. `crates/core-types/src/terminal.rs` hält den
+Filter fest, mit je einem Test für die vier Wege, die der Review an der ersten
+Fassung vorbeifand, für Cursorbewegung und Löschen, für die abgeschnittene
+Folge am Stromende, für den einzelnen Backslash in einer verworfenen Nutzlast,
+für eine Folge über zwei Stücke und für Text außerhalb von ASCII, dessen Bytes
+im C1-Bereich liegen. `only_one_of_two_concurrent_starts_gets_the_session`
+schickt zwei `Start` nebeneinander und belegt, dass genau einer `CLI_005`
+bekommt und genau eine Sandbox `running` meldet.
+`a_profile_rule_cannot_grant_itself_the_rank_of_the_passthrough` fährt eine
+Profilregel mit `passthrough_llm: true` durch `bundled_rules`, durch beide
+Wege in den Regelspeicher (`load` und `set_bundled`) und durch
+`RuleSet::evaluate` gegen eine Block-Regel des Nutzers; erwartet wird `Block`.
+`a_language_model_outside_the_private_network_is_reported` belegt `LLM_006` am
+Start. Jeder dieser Tests hat seine Mutationsprobe; sie stehen im Bericht zum
+Commit.
+`bin/humanitl/tests/cli.rs` prüft die drei Wege, auf denen `run` nicht startet:
+ohne Daemon `DAEMON_001` mit Exit 2, mit `--ask terminal` `CLI_002` ohne dass
+überhaupt verbunden wird, und mit einem Profil, das es nicht gibt, `CONFIG_001`.
+
+**Was an der Spezifikation nicht stimmt.** Die Tests `run_sh_echo_exit_code`,
+`run_llm_only_blocks_curl` und `run_llm_only_allows_llm` verlangen einen
+laufenden Daemon mit Proxy, Aufzeichnung und einem Fake-Sprachmodell; das ist
+der Aufbau von `tests/e2e` und nicht der eines Unit-Tests im Workspace. Sie
+gehören in das M3-Demoskript (HUM-046), das genau diesen Aufbau baut, und
+stehen hier deshalb als Tests am Ladeweg statt als Tests am Netz.
+`run_default_ask_none_status` ist mit Entscheidung (b) der Test, den
+`briefing.rs` schon hat.
+
 ### Referenzen
 BACKLOG.md ADR-013, Abschnitt 1.3 Prinzip 9; CONVENTIONS.md 3.2, 3.8, 4.5, 4.10, 4.17, 4.23; HUM-041, HUM-042 (Terminal), HUM-066 (Profile), HUM-104 (Reihenfolge). pipelock `action: ask` (https://github.com/luckyPipewrench/pipelock), `termios(3)`.
 
