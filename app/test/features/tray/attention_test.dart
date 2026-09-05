@@ -38,7 +38,10 @@ void main() {
       // und nennt das Issue, das ihn wirksam macht. Die Zusicherung prueft
       // deshalb die Spalte und nicht mehr den Satz; sie muss angepasst werden,
       // sobald dieses Issue die Zeile auf `ja` dreht.
-      expect(config, contains(RegExp(r'`ui\.sound`.*\| offen \(HUM-[0-9]+\) \|')));
+      expect(
+        config,
+        contains(RegExp(r'`ui\.sound`.*\| offen \(HUM-[0-9]+\) \|')),
+      );
     });
 
     test('the_provider_names_the_real_reason', () {
