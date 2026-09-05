@@ -587,6 +587,33 @@ impl RulesStore {
         diagnostics
     }
 
+    /// Ersetzt die mitgelieferten Regeln durch die dieser Sitzung.
+    ///
+    /// Der Daemon startet mit den mitgelieferten Regeln seiner eigenen
+    /// Auflösung. `humanitl run` bringt danach ein Profil mit, und dessen
+    /// Regeln sowie die Durchreiche zu **seinem** Sprachmodell gehören zur
+    /// Sitzung, nicht zum Daemon (HUM-067). Statt einen zweiten Regelsatz
+    /// daneben zu führen, bekommt der eine Speicher die neue Gruppe: Was der
+    /// Proxy auswertet, was der Rules-Screen zeigt und was
+    /// `http://humanitl.internal/` auflistet, bleibt derselbe Satz.
+    ///
+    /// Was der Nutzer abgeschaltet hat, bleibt abgeschaltet: `disabled_bundled`
+    /// benennt Ids und überlebt deshalb einen Austausch der Regeln, genau wie
+    /// eine neue Fassung von `rules/default.yaml`. Sitzungs- und Nutzerregeln
+    /// bleiben unberührt.
+    pub fn set_bundled(&self, bundled: &[Rule]) {
+        let mut state = self.lock();
+        state.bundled = bundled
+            .iter()
+            .cloned()
+            .map(|rule| {
+                let off = rule.disabled || state.disabled_bundled.contains(&rule.id);
+                rule.bundled(true).disabled(off)
+            })
+            .collect();
+        self.publish(&state);
+    }
+
     /// Schaltet eine mitgelieferte Regel ab oder wieder an.
     ///
     /// Mitgelieferte Regeln gehören nicht dem Nutzer: löschen oder ändern

@@ -372,25 +372,14 @@ fn a_missing_daemon_with_json_is_one_line_on_stdout() {
 #[test]
 fn a_placeholder_subcommand_is_a_diagnostic_block_and_exit_one() {
     let harness = Harness::new();
-    for (command, issue) in [
-        (vec!["run"], "HUM-067"),
-        (vec!["audit", "verify"], "HUM-070"),
-    ] {
-        let output = harness.run(command.clone());
-        let text = stderr(&output);
+    let output = harness.run(["audit", "verify"]);
+    let text = stderr(&output);
 
-        assert_eq!(code(&output), 1, "{command:?}: {text}");
-        assert!(text.starts_with("error[CLI_003]: "), "{command:?}: {text}");
-        assert!(
-            text.contains(&format!("arrives in {issue}")),
-            "{command:?}: {text}"
-        );
-        assert!(text.contains("\n  fix: "), "{command:?}: {text}");
-        assert!(
-            stdout(&output).is_empty(),
-            "{command:?}: stdout must stay clean"
-        );
-    }
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.starts_with("error[CLI_003]: "), "{text}");
+    assert!(text.contains("arrives in HUM-070"), "{text}");
+    assert!(text.contains("\n  fix: "), "{text}");
+    assert!(stdout(&output).is_empty(), "stdout must stay clean");
 }
 
 /// Ein Aufruf, den clap nicht lesen kann, ist ein Diagnostic wie jeder andere
@@ -422,7 +411,7 @@ fn an_unreadable_command_line_is_a_diagnostic_not_bare_clap_text() {
 #[test]
 fn a_placeholder_subcommand_with_json_is_one_line_on_stdout() {
     let harness = Harness::new();
-    let output = harness.run(["--json", "run"]);
+    let output = harness.run(["--json", "audit", "verify"]);
     let text = stdout(&output);
 
     assert_eq!(code(&output), 1, "{}", stderr(&output));
@@ -432,16 +421,65 @@ fn a_placeholder_subcommand_with_json_is_one_line_on_stdout() {
     assert!(
         value["why"]
             .as_str()
-            .is_some_and(|why| why.contains("humanitl run") && why.contains("HUM-067")),
+            .is_some_and(|why| why.contains("humanitl audit") && why.contains("HUM-070")),
         "{value}"
     );
     assert!(
         value["fix"]["command"]
             .as_str()
-            .is_some_and(|fix| fix.contains("HUM-067")),
+            .is_some_and(|fix| fix.contains("HUM-070")),
         "{value}"
     );
     assert!(stderr(&output).is_empty(), "stderr must stay clean");
+}
+
+/// Ohne Daemon startet `humanitl run` nichts und sagt, wie man ihn startet.
+///
+/// Das ist der erste Eindruck des Werkzeugs: Wer es zum ersten Mal aufruft,
+/// hat meistens keinen Daemon laufen. Er bekommt `DAEMON_001`, Exit 2 und
+/// einen Befehl zum Abtippen — keine nackte Zeile, keine Panik.
+#[test]
+fn run_without_a_daemon_is_daemon_001_and_exit_two() {
+    let harness = Harness::new();
+    let output = harness.run(["run", "--", "sh", "-c", "echo hi"]);
+    let text = stderr(&output);
+
+    assert_eq!(code(&output), 2, "{text}");
+    assert!(text.starts_with("blocking[DAEMON_001]: "), "{text}");
+    assert!(text.contains("\n  fix: "), "{text}");
+    assert!(
+        stdout(&output).is_empty(),
+        "stdout carries the agent, not us"
+    );
+}
+
+/// `--ask terminal` verweigert den Dienst, bevor irgendetwas verbindet.
+///
+/// `CLI_002` steht in CONVENTIONS 4.10 für Vollbild-TUI-Agenten; ohne das PTY
+/// aus HUM-042 gilt es für jeden. Der Befund nennt beide Auswege, und der
+/// Daemon wird gar nicht erst gefragt: Der Test läuft ohne einen.
+#[test]
+fn run_with_ask_terminal_is_cli_002_before_it_connects() {
+    let harness = Harness::new();
+    let output = harness.run(["run", "--ask", "terminal"]);
+    let text = stderr(&output);
+
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.starts_with("error[CLI_002]: "), "{text}");
+    assert!(text.contains("--ask ui"), "{text}");
+    assert!(text.contains("--ask none"), "{text}");
+}
+
+/// Ein Sitzungsprofil, das es nicht gibt, ist `CONFIG_001` und kein stiller
+/// Start mit dem Vorgabeprofil.
+#[test]
+fn run_with_an_unknown_profile_is_config_001() {
+    let harness = Harness::new();
+    let output = harness.run(["--profile", "there-is-no-such-profile", "run"]);
+    let text = stderr(&output);
+
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.starts_with("error[CONFIG_001]: "), "{text}");
 }
 
 #[test]
@@ -772,18 +810,13 @@ fn the_schema_is_json_and_names_every_key_of_conventions_37() {
 #[test]
 fn a_subcommand_that_does_not_exist_yet_names_its_issue_and_exits_one() {
     let harness = Harness::new();
-    for (command, issue) in [
-        (vec!["run", "--", "opencode"], "HUM-067"),
-        (vec!["audit", "verify"], "HUM-070"),
-    ] {
-        let output = harness.run(command.clone());
-        assert_eq!(code(&output), 1, "{command:?}");
-        assert!(
-            stderr(&output).contains(issue),
-            "{command:?} does not name {issue}: {}",
-            stderr(&output)
-        );
-    }
+    let output = harness.run(["audit", "verify"]);
+    assert_eq!(code(&output), 1);
+    assert!(
+        stderr(&output).contains("HUM-070"),
+        "the placeholder does not name its issue: {}",
+        stderr(&output)
+    );
 }
 
 #[test]

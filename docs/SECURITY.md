@@ -355,10 +355,31 @@ Repositories mit `--work-mode ro` starten.
 *Warum es ihn gibt.* Der Mensch muss sehen, was der Agent tut. Diese Ausgabe stammt vom Agenten
 und damit potenziell vom Angreifer.
 
-*Was Humanitl tut.* Im Terminal-Widget sind OSC 52 (Zugriff auf die Zwischenablage), OSC 8
-(Hyperlinks, mit denen sich ein fremdes Ziel hinter harmlosem Text verstecken lässt) und das
-Setzen des Fenstertitels abgeschaltet. Über dem Terminal steht dauerhaft ein Hinweis, dass die
-Ausgabe des Agenten nicht vertrauenswürdig ist.
+*Was Humanitl tut.* Die Ausgabe läuft im Daemon durch `humanitl_core::TerminalFilter`, bevor sie
+einen Client erreicht — sowohl auf dem Weg in das Terminal-Widget als auch auf dem Weg zu
+`humanitl run`, das sie in das Terminal des Nutzers schreibt. Der Filter ist eine Erlaubnisliste:
+**Von allen Steuerfolgen geht genau eine hinaus, `ESC [ … m` für Farbe und Attribute.** Verworfen
+werden damit OSC 52 (Zugriff auf die Zwischenablage), OSC 8 (Hyperlinks, mit denen sich ein
+fremdes Ziel hinter harmlosem Text verstecken lässt), das Setzen des Fenstertitels, jede
+Bewegung des Cursors, jedes Löschen und Scrollen, das Zurücksetzen des Terminals und die
+Zeichenkettenfolgen DCS, SOS, PM und APC — letztere, weil `ESC P tmux; …` eine verbotene Folge
+sonst durch tmux hindurchreicht. Jede dieser Folgen wird in drei Schreibweisen erkannt: mit `ESC`
+eingeleitet, als einzelnes C1-Byte (`0x9b` ist CSI, `0x9d` ist OSC) und als dessen wohlgeformte
+UTF-8-Kodierung (`C2 9B`, `C2 9D`). Die dritte ist nötig, weil VTE-basierte Terminals — GNOME
+Terminal, Tilix, Terminator, XFCE Terminal, Guake — UTF-8 vor dem Parser dekodieren und `U+009B`
+als CSI ausführen; xterm ebenso, solange `allowC1Printable` aus ist, und das ist die Vorgabe. Der
+Agent kann damit nur noch die Zeile umschreiben, auf der er gerade steht, und keine, die schon
+dasteht. Über dem Terminal-Widget steht zusätzlich dauerhaft ein Hinweis, dass die Ausgabe des
+Agenten nicht vertrauenswürdig ist.
+
+*Was der Filter nicht deckt.* Die C1-Bytes `0x80` bis `0x9f` sind zugleich Folgebytes von UTF-8:
+`€` ist `E2 82 AC` und enthält `0x82`. Der Filter entscheidet deshalb am Codepunkt und nicht am
+einzelnen Byte — `0xC2` ist das einzige Anfangsbyte, aus dem ein C1-Steuerzeichen werden kann, und
+wird zurückgehalten, bis das Folgebyte es entscheidet. Ein Byte dieses Bereichs **innerhalb** eines
+längeren, druckbaren Zeichens bleibt damit Text. Ein Terminal, das **nicht** in UTF-8 arbeitet,
+liest es trotzdem als Steuerzeichen. Dagegen hilft nur, jedes Byte dieses Bereichs zu verwerfen,
+und das hieße, keinen Text außerhalb von ASCII mehr anzuzeigen. Das ist eine bewusste Entscheidung
+und keine Lücke, die noch geschlossen wird.
 
 *Was der Nutzer tun sollte.* Angezeigte Befehle nicht per Copy-Paste in eine Host-Shell übernehmen,
 ohne sie zu lesen. Der klassische Angriff ist ein Befehl, dessen sichtbarer Teil harmlos ist und
