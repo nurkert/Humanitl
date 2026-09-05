@@ -2879,7 +2879,7 @@ Kein Eintrag in den System- oder Browser-Trust-Store und keine Änderung an der 
 ### Betroffene Pfade
 - `daemon/bin/humanitld/src/main.rs`: `--allow-test-ca` in `Cli` (65-99), Lader `test_ca_roots`, Warnung 488-489 ersetzen, Wurzeln durch `build_handler` (501-510) reichen
 - `daemon/crates/ipc/src/server.rs`: `build_llm_probe` (1088-1112) und der zweite Stapel mit leerer Wurzelliste (1101)
-- `daemon/crates/core-types/src/diagnostics/codes.rs`: `CONFIG_007`, `CONFIG_008` (gemeinsam genutzte Datei, nur anhängen)
+- `daemon/crates/core-types/src/diagnostics/codes.rs`: `CONFIG_010`, `CONFIG_011`, `CONFIG_012` (gemeinsam genutzte Datei, nur anhängen)
 - `tests/e2e/lib.sh`: `start_daemon` reicht Daemon-Argumente durch (geteilt mit M1)
 - `tests/e2e/m2_first_decision/{run.sh,script.json,config.toml}`, `tests/e2e/fake-upstream/gen-test-ca.sh:17-24`
 - `docs/CONFIG.md:160` und `docs/DIAGNOSTICS.md` (beide erzeugt, siehe Fallstricke), `docs/SECURITY.md` 5
@@ -2931,7 +2931,7 @@ Doku: `docs/CONFIG.md:160` nennt die Flagpflicht (über den Doc-Kommentar in `mo
 
 ### Schritte
 1. `test_ca_roots` samt `TestCa` schreiben, die fünf Zeilen der Tabelle als Unit-Tests in `main.rs`.
-2. `CONFIG_007` und `CONFIG_008` ans Register anhängen, `docs/DIAGNOSTICS.md` erzeugen.
+2. `CONFIG_010`, `CONFIG_011` und `CONFIG_012` ans Register anhängen, `docs/DIAGNOSTICS.md` erzeugen.
 3. Flag in `Cli`, Warnung 488-489 entfernen, Befund in `run_daemon` protokollieren oder mit `Err` abbrechen; `build_handler` und `IpcServer::with_extra_roots` verdrahten.
 4. Paar-Test im Proxy mit `UpstreamCa` und `ProxyBuilder::trust`.
 5. Daemon-Test: Start mit Flag, ohne Flag und mit unbrauchbarer Datei.
@@ -2946,14 +2946,14 @@ Doku: `docs/CONFIG.md:160` nennt die Flagpflicht (über den Doc-Kommentar in `mo
 - `tests/e2e/m2_first_decision/run.sh` Schritt 7, 9 und der Zähler am Ende.
 
 ### Akzeptanzkriterien
-- [ ] `test_ca_roots` erfüllt die fünf Zeilen der Tabelle: ohne Schlüssel leer und ohne Befund, Schlüssel ohne Flag leer mit genau einem `CONFIG_008`, Flag mit gültiger PEM genau eine Wurzel, Flag mit Datei ohne Zertifikat `Err` mit `CONFIG_007`.
-- [ ] `humanitld --allow-test-ca` mit gültiger Wurzel schreibt beim Start genau eine Zeile mit `roots=1` und dem Pfad; derselbe Baum ohne Flag schreibt `CONFIG_008` und keine Zeile mit `roots=`.
-- [ ] `humanitld --allow-test-ca` mit unlesbarer Datei endet mit Exit-Code ungleich 0, meldet `CONFIG_007` mit `why` und `fix`, und weder `daemon.sock` noch `proxy.sock` entstehen.
-- [ ] Paar-Test im Proxy: mit `trust(root)` antwortet der Proxy `200` und `upstream.hits() == 1`; ohne `trust(root)` antwortet er `502`, der Body enthält `reason: upstream_tls`, und `upstream.hits() == 0`.
-- [ ] `E2E_ONLY=m2 tests/e2e/run.sh` grün mit `https://` in `script.json`: Schritt 7 misst `200` für `https://registry.npmjs.org/tls-probe`, leeres `error`-Feld und `m2_upstream_hits '/tls-probe'` gleich 1; Schritt 9 zählt 16 bediente Anfragen.
-- [ ] `E2E_ONLY=m1 tests/e2e/run.sh` bleibt grün, und der M2-Lauf meldet weder „only N of M assertions ran" noch die Notiz über einen zu niedrigen `M2_EXPECTED_ASSERTIONS`.
-- [ ] `resolver.test_ca` hat einen Leser, und das Register sagt es: Die Zeile in `daemon/crates/config/tests/config_readers.rs` steht auf `effective`, der Vermerk `x-pending-issue` an `resolver.test_ca` ist weg, und `docs/CONFIG.md` zeigt in der Spalte „Wirkung" `ja` (HUM-101).
-- [ ] `make check` ist grün, ohne dass `docs/CONFIG.md`, `docs/DIAGNOSTICS.md` oder `config.schema.json` von Hand geändert wurden; `grep -rn "allow-test-ca" backlog/ docs/ tests/` beschreibt überall dieselbe, jetzt vorhandene Fähigkeit.
+- [x] `test_ca_roots` erfüllt die fünf Zeilen der Tabelle: ohne Schlüssel leer und ohne Befund, Schlüssel ohne Flag leer mit genau einem `CONFIG_011`, Flag mit gültiger PEM genau eine Wurzel, Flag mit Datei ohne Zertifikat `Err` mit `CONFIG_010`.
+- [x] `humanitld --allow-test-ca` mit gültiger Wurzel schreibt beim Start genau eine Zeile mit `roots=1` und dem Pfad; derselbe Baum ohne Flag schreibt `CONFIG_011` und keine Zeile mit `roots=`.
+- [x] `humanitld --allow-test-ca` mit unlesbarer Datei endet mit Exit-Code ungleich 0, meldet `CONFIG_010` mit `why` und `fix`, und weder `daemon.sock` noch `proxy.sock` entstehen.
+- [x] Paar-Test im Proxy: mit `trust(root)` antwortet der Proxy `200` und `upstream.hits() == 1`; ohne `trust(root)` antwortet er `502`, der Body enthält `reason: upstream_tls`, und `upstream.hits() == 0`.
+- [x] `E2E_ONLY=m2 tests/e2e/run.sh` grün mit `https://` in `script.json`: Schritt 7 misst `200` für `https://registry.npmjs.org/tls-probe`, leeres `error`-Feld und `m2_upstream_hits '/tls-probe'` gleich 1; Schritt 9 zählt 16 bediente Anfragen.
+- [x] `E2E_ONLY=m1 tests/e2e/run.sh` bleibt grün, und der M2-Lauf meldet weder „only N of M assertions ran" noch die Notiz über einen zu niedrigen `M2_EXPECTED_ASSERTIONS`.
+- [x] `resolver.test_ca` hat einen Leser, und das Register sagt es: Die Zeile in `daemon/crates/config/tests/config_readers.rs` steht auf `effective`, der Vermerk `x-pending-issue` an `resolver.test_ca` ist weg, und `docs/CONFIG.md` zeigt in der Spalte „Wirkung" `ja` (HUM-101).
+- [x] `make check` ist grün, ohne dass `docs/CONFIG.md`, `docs/DIAGNOSTICS.md` oder `config.schema.json` von Hand geändert wurden; `grep -rn "allow-test-ca" backlog/ docs/ tests/` beschreibt überall dieselbe, jetzt vorhandene Fähigkeit.
 
 ### Fallstricke
 - `docs/CONFIG.md` und die Schema-Fixture sind erzeugt. Der Text zu `resolver.test_ca` ändert sich über den Doc-Kommentar in `daemon/crates/config/src/model.rs:212`, danach `UPDATE_CONFIG_DOCS=1 cargo test -p humanitl-config --test config_docs` und `UPDATE_SNAPSHOTS=1 cargo test -p humanitl-config --test schema`. Für das Code-Register `UPDATE_DIAG_DOCS=1 cargo test -p humanitl-core --test diag_docs`. Handarbeit an diesen drei Dateien macht `make check` rot.
