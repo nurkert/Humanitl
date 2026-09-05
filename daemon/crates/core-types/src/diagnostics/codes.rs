@@ -302,6 +302,21 @@ registry! {
     /// den es aber im Projekt nicht gab: Ohne vorhandenen Mountpoint hängt
     /// `bwrap` kein `tmpfs` und keine Maske darüber (Warning, HUM-043).
     SANDBOX_025 => "sandbox", "Ohne Maske ins Projekt geschrieben", "#sandbox_025";
+    /// Der Lauf hat eine Datei hinterlassen, die dieser Rechner von selbst
+    /// ausführt: ein Git-Hook, ein `Makefile`, ein `package.json` mit
+    /// `postinstall`, eine Workflow-Datei. Nicht geblockt, sondern gelistet
+    /// (Warning, HUM-043).
+    SANDBOX_026 => "sandbox", "Datei im Projekt, die der Rechner ausführt", "#sandbox_026";
+    /// Zu dieser Sandbox-Kennung liegt keine Zusammenfassung vor: Der Lauf ist
+    /// älter als die Aufzeichnung, endete ohne Zusammenfassung, oder die
+    /// Kennung gehört zu keinem Lauf dieses Rechners (Error, HUM-043).
+    SANDBOX_027 => "sandbox", "Keine Zusammenfassung zu diesem Lauf", "#sandbox_027";
+    /// Der Lauf hat Dateien geändert, in die der Fundscan nicht gesehen hat:
+    /// zu groß, nicht lesbar, oder das Byte-Budget war aufgebraucht. In ihnen
+    /// wurde nichts gefunden, weil in ihnen nichts gesucht wurde — wie groß
+    /// eine Datei ist und welche Rechte sie trägt, bestimmt der Agent
+    /// (Warning, HUM-043).
+    SANDBOX_028 => "sandbox", "Geänderte Datei nicht durchsucht", "#sandbox_028";
 
     /// Der Body ist größer als `limits.hold_body_cap_bytes`.
     PROXY_001 => "proxy", "Body über Cap", "#proxy_001";

@@ -17,8 +17,10 @@ humanitl-proxy.workspace = true
 # Der Regelsatz wird beim Start gelesen und in die Proxy-Pipeline gehängt
 # (HUM-023); HUM-027 tauscht ihn zur Laufzeit über den `Rules`-RPC.
 humanitl-rules.workspace = true
-# Die Detektoren werden beim Start gebaut und in den Handler gehängt (HUM-025).
-humanitl-findings.workspace = true
+# `humanitl-findings` steht hier nicht mehr: Die Detektoren werden beim Start
+# über `humanitl_proxy::Tier1Scanner` gebaut, und die Einstellungen dazu kommen
+# aus `humanitl_ipc::summary::findings_settings` — dieselbe Ableitung, die auch
+# die Zusammenfassung eines Sandbox-Laufs benutzt (HUM-025, HUM-043).
 # Die Aufzeichnung wird beim Start geöffnet und an Warteschlange, Handler und
 # gRPC-Dienst gehängt (HUM-026).
 humanitl-recorder.workspace = true

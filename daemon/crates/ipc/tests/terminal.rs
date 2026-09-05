@@ -126,10 +126,22 @@ impl Fixture {
 const SKIP_MARKER: &str = "ESC5-SKIP";
 
 /// Ob dieser Rechner den Test tragen kann; sonst die Begründung auf stderr.
+///
+/// **Unter `CI` ist das Fehlen ein Fehler und kein Grund zu überspringen.** Wer
+/// hier `false` bekommt, kehrt zurück, und ein zurückkehrender Test gilt dem
+/// Testläufer als bestanden: Diese Datei meldete dann `ok` mit null
+/// Zusicherungen, und die beiden ESC-5-Fälle des Terminals (Kanal 3, OSC 52 und
+/// OSC 8) wären nie geprüft worden — während der Bericht sie als bestanden
+/// führte. Auf einer Entwicklermaschine darf `bwrap` fehlen, auf dem Runner
+/// nicht; dieselbe Regel wie in `daemon/bin/humanitl/tests/cli.rs` und
+/// `daemon/crates/sandbox/tests/shim_contract.rs`.
 fn usable(fixture: &Fixture) -> bool {
     if let Err(diagnostic) = humanitl_sandbox::BwrapBackend::detect(fixture.paths.clone()) {
-        eprintln!("{SKIP_MARKER} bwrap is not usable here: {}", diagnostic.why);
-        return false;
+        return refuse_under_ci(
+            &format!("bwrap is not usable here: {}", diagnostic.why),
+            "install it (apt-get install -y bubblewrap) and allow unprivileged user namespaces \
+             (sysctl -w kernel.apparmor_restrict_unprivileged_userns=0)",
+        );
     }
     let found = std::env::current_exe().ok().is_some_and(|exe| {
         exe.parent().is_some_and(|dir| {
@@ -140,9 +152,27 @@ fn usable(fixture: &Fixture) -> bool {
         })
     });
     if !found {
-        eprintln!("{SKIP_MARKER} humanitl-shim is not built next to the test binary");
+        return refuse_under_ci(
+            "humanitl-shim is not built next to the test binary",
+            "build the workspace first (cargo build --workspace --all-targets, or \
+             cargo test --workspace)",
+        );
     }
-    found
+    true
+}
+
+/// Meldet, warum dieser Test nicht laufen kann — und scheitert unter `CI`.
+///
+/// Liefert immer `false`; der Rückgabewert ist nur die Bequemlichkeit des
+/// Aufrufers. Die Zeile trägt [`SKIP_MARKER`], damit ESC-5 einen
+/// übersprungenen Fall von einem bestandenen unterscheiden kann.
+fn refuse_under_ci(why: &str, remedy: &str) -> bool {
+    assert!(
+        std::env::var_os("CI").is_none(),
+        "under CI this test must run: {why}; {remedy}"
+    );
+    eprintln!("{SKIP_MARKER} {why}");
+    false
 }
 
 /// Ein Client am Terminal: sein Eingangskanal und sein Strom.

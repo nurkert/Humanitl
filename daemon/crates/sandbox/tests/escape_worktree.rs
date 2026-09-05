@@ -112,10 +112,27 @@ impl Fixture {
 
     /// Das echte `bwrap`, oder `None` samt der Zeile, die ESC-5 als `skip`
     /// liest.
+    ///
+    /// **Unter `CI` ist ein fehlendes `bwrap` ein Fehler.** Wer hier `None`
+    /// bekommt, kehrt zurück, und ein zurückkehrender Test gilt dem Testläufer
+    /// als bestanden: Die drei Dateisystem-Fälle von ESC-5 — der Symlink aus
+    /// `/work` hinaus, die Maske, die hält, und der Hook, der drinnen bleibt —
+    /// meldeten dann `ok`, ohne dass eine einzige Zusicherung gelaufen wäre.
+    /// Genau diese drei sind das erste Akzeptanzkriterium von HUM-043. Auf
+    /// einer Entwicklermaschine darf `bwrap` fehlen, auf dem Runner nicht
+    /// (dieselbe Regel wie `shim_contract.rs` und
+    /// `daemon/bin/humanitl/tests/cli.rs`).
     fn backend(&self) -> Option<BwrapBackend> {
         match BwrapBackend::detect(self.paths.clone()) {
             Ok(backend) => Some(backend.with_stdio(StdioMode::Capture)),
             Err(err) => {
+                assert!(
+                    std::env::var_os("CI").is_none(),
+                    "under CI this test must run: bwrap is not usable on this machine ({}); \
+                     install it (apt-get install -y bubblewrap) and allow unprivileged user \
+                     namespaces (sysctl -w kernel.apparmor_restrict_unprivileged_userns=0)",
+                    err.why
+                );
                 println!(
                     "{SKIP_MARKER} bwrap is not usable on this machine: {}",
                     err.why

@@ -31,6 +31,7 @@ use humanitl_core::SessionId;
 use humanitl_ipc::sandbox::SandboxPorts;
 use humanitl_ipc::session::SessionResolver;
 use humanitl_ipc::{SandboxService, v1};
+use humanitl_recorder::{Recorder, RecorderSettings, SessionMeta};
 use tokio_stream::StreamExt as _;
 
 /// Das Profil, das der Test einhängt: das mitgelieferte `default`, damit die
@@ -47,6 +48,15 @@ struct Fixture {
     paths: Paths,
     work: PathBuf,
     _proxy: UnixListener,
+    /// Die Aufzeichnung dieser Sitzung.
+    ///
+    /// Sie hängt am Dienst, damit die Zusammenfassung eines Laufs denselben
+    /// Weg nimmt wie im Daemon: `SandboxPorts::with_recorder` und von dort in
+    /// `session_summaries`. Ohne sie prüfte kein Test, dass die Zeile je
+    /// geschrieben wird (HUM-043).
+    recorder: Recorder,
+    /// Die Sitzung, unter der der Dienst läuft und die Aufzeichnung schreibt.
+    session: SessionId,
 }
 
 impl Fixture {
@@ -96,11 +106,32 @@ impl Fixture {
         std::fs::write(work.join(".git/config"), "[user]\n\tname = canary\n").expect("git config");
         std::fs::write(work.join(".envrc"), "export CANARY=1\n").expect("envrc");
 
+        // Die Aufzeichnung, in der die Zusammenfassung eines Laufs landet. Die
+        // Sitzung steht darin, bevor der erste Lauf beginnt:
+        // `session_summaries.session_id` ist ein Fremdschlüssel.
+        let session = SessionId::new();
+        let recorder = Recorder::open(
+            &dir.path().join("humanitl.db"),
+            &dir.path().join("blobs"),
+            RecorderSettings::default(),
+        )
+        .expect("the recording opens");
+        recorder.start_session(&SessionMeta {
+            id: session,
+            started_at: std::time::SystemTime::now(),
+            sandbox_profile: PROFILE.to_owned(),
+            llm_endpoint: None,
+            work_dir: work.display().to_string(),
+            agent: "test".to_owned(),
+        });
+
         Self {
             _dir: dir,
             paths,
             work,
             _proxy: proxy,
+            recorder,
+            session,
         }
     }
 
@@ -108,8 +139,8 @@ impl Fixture {
     fn service(&self) -> SandboxService {
         SandboxService::new(
             SessionResolver::for_config(self.paths.clone(), Config::default()),
-            SessionId::new(),
-            SandboxPorts::none(),
+            self.session,
+            SandboxPorts::none().with_recorder(self.recorder.clone()),
         )
     }
 
@@ -130,10 +161,21 @@ impl Fixture {
 }
 
 /// Ob dieser Rechner den Test tragen kann; sonst die Begründung auf stderr.
+///
+/// **Unter `CI` ist das Fehlen ein Fehler und kein Grund zu überspringen.** Wer
+/// hier `false` bekommt, kehrt zurück, und ein zurückkehrender Test gilt dem
+/// Testläufer als bestanden: Diese Datei meldete dann `ok` mit null
+/// Zusicherungen, und die Zusagen von HUM-041 und HUM-043 wären nie geprüft
+/// worden. Auf einer Entwicklermaschine darf `bwrap` fehlen — das ist eine
+/// Aussage über die Maschine —, auf dem Runner nicht; dieselbe Regel wie in
+/// `daemon/bin/humanitl/tests/cli.rs` und
+/// `daemon/crates/sandbox/tests/shim_contract.rs`.
 fn usable(fixture: &Fixture) -> bool {
     if let Err(diagnostic) = humanitl_sandbox::BwrapBackend::detect(fixture.paths.clone()) {
-        eprintln!("skipping: bwrap is not usable here: {}", diagnostic.why);
-        return false;
+        return refuse_under_ci(
+            &format!("bwrap is not usable here: {}", diagnostic.why),
+            HOW_TO_GET_BWRAP,
+        );
     }
     // Der Shim liegt neben dem Testbinary oder ein Verzeichnis darüber; ohne
     // ihn prüfte der Test einen Start, den es nie gab.
@@ -146,9 +188,34 @@ fn usable(fixture: &Fixture) -> bool {
         })
     });
     if !found {
-        eprintln!("skipping: humanitl-shim is not built next to the test binary");
+        return refuse_under_ci(
+            "humanitl-shim is not built next to the test binary",
+            HOW_TO_GET_THE_SHIM,
+        );
     }
-    found
+    true
+}
+
+/// Was zu tun ist, wenn `bwrap` fehlt.
+const HOW_TO_GET_BWRAP: &str = "install it (apt-get install -y bubblewrap) and allow \
+     unprivileged user namespaces \
+     (sysctl -w kernel.apparmor_restrict_unprivileged_userns=0)";
+
+/// Was zu tun ist, wenn der Shim fehlt.
+const HOW_TO_GET_THE_SHIM: &str =
+    "build the workspace first (cargo build --workspace --all-targets, or cargo test --workspace)";
+
+/// Meldet, warum dieser Test nicht laufen kann — und scheitert unter `CI`.
+///
+/// Liefert immer `false`; der Rückgabewert ist nur die Bequemlichkeit des
+/// Aufrufers.
+fn refuse_under_ci(why: &str, remedy: &str) -> bool {
+    assert!(
+        std::env::var_os("CI").is_none(),
+        "under CI this test must run: {why}; {remedy}"
+    );
+    eprintln!("skipping: {why}");
+    false
 }
 
 /// Die Ereignisse eines Sandbox-Aufrufs, bis der Zustand steht.
@@ -516,4 +583,219 @@ async fn only_one_of_two_concurrent_starts_gets_the_session() {
         },
     )
     .await;
+}
+
+/// Die Zusammenfassung des Stroms, wenn er eine trägt.
+fn summary(events: &[v1::SandboxEvent]) -> Option<&v1::SessionSummary> {
+    events.iter().find_map(|event| match &event.event {
+        Some(v1::sandbox_event::Event::Summary(summary)) => Some(summary),
+        _ => None,
+    })
+}
+
+/// Die Zeile einer Änderung, an ihrem angezeigten Pfad.
+fn change<'a>(summary: &'a v1::SessionSummary, path: &str) -> Option<&'a v1::FileChange> {
+    summary.changes.iter().find(|change| change.path == path)
+}
+
+/// Am Ende eines Laufs steht, was der Agent im Projekt hinterlassen hat — ohne
+/// dass ein Client danach fragt.
+///
+/// Das ist das Akzeptanzkriterium von HUM-043, und es prüft beide Hälften der
+/// Aussage an derselben Sandbox:
+///
+/// - Was **nicht** überdeckt ist, landet im Projekt und steht in der
+///   Zusammenfassung (`new.txt`, mit einem Schlüsselmuster darin, also auch
+///   ein Fund und `SANDBOX_023`).
+/// - Was überdeckt ist, landet **nicht** im Projekt und steht deshalb auch
+///   nicht in der Zusammenfassung: `.envrc` liegt unter einem
+///   `--ro-bind-data`, `.git/hooks` unter einem `tmpfs`. Der Test liest
+///   danach die echten Dateien auf dem Host und vergleicht sie Byte für Byte
+///   mit dem, was vorher darin stand.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_finished_run_says_what_the_agent_left_in_the_project() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    let service = fixture.service();
+    let mut start = fixture.start();
+    if let Some(v1::sandbox_request::Op::Start(inner)) = start.op.as_mut() {
+        inner.command = vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            // Der Schlüssel wird zur Laufzeit zusammengesetzt, damit der
+            // Push-Schutz von GitHub nicht auf einen Testwert anspringt
+            // (CONVENTIONS 4.13). Die drei Schreibversuche gehen an drei
+            // Pfade mit drei verschiedenen Überdeckungen; nur der erste darf
+            // ankommen.
+            "printf 'key = %s%s\\n' AKIA IOSFODNN7EXAMPLE > /work/new.txt; \
+             printf 'export STOLEN=1\\n' > /work/.envrc; \
+             printf '#!/bin/sh\\ncurl evil\\n' > /work/.git/hooks/pre-commit; \
+             exit 0"
+                .to_owned(),
+        ];
+    }
+    let seen = events_to_end(&service, start).await;
+
+    let summary = summary(&seen).unwrap_or_else(|| {
+        panic!("the end of a run carries its summary, without anyone asking: {seen:?}")
+    });
+    assert!(!summary.sandbox_id.is_empty(), "{summary:?}");
+    assert_eq!(summary.work_dir, fixture.work.display().to_string());
+
+    let written = change(summary, "new.txt")
+        .unwrap_or_else(|| panic!("the unmasked file is listed: {summary:?}"));
+    assert_eq!(written.kind, v1::FileChangeKind::Added as i32);
+    assert!(written.size > 0, "{written:?}");
+    assert!(!written.mangled, "a plain name is shown as it is");
+
+    // Der Fundscan lief über genau diese Datei, und der Wert blieb darin.
+    let finding = summary
+        .findings
+        .iter()
+        .find(|finding| finding.path == "new.txt")
+        .unwrap_or_else(|| panic!("the key in the new file is found: {summary:?}"));
+    assert_eq!(finding.kind, "api_key:aws");
+    assert_eq!(finding.line, 1);
+    assert!(summary.scanned_bytes > 0, "{summary:?}");
+    let codes: Vec<&str> = summary
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect();
+    assert!(codes.contains(&"SANDBOX_023"), "{codes:?}");
+    // Dieselben Befunde stehen zusätzlich als eigene Ereignisse im Strom,
+    // damit ein Client, der Befunde ohnehin liest, sie ohne Änderung sieht.
+    assert!(carries(&seen, "SANDBOX_023"), "{seen:?}");
+
+    // Und jetzt die Gegenprobe, die eigentliche Zusage des Kanals: Was das
+    // Profil überdeckt, hat den Host nie erreicht.
+    assert_eq!(
+        change(summary, ".envrc"),
+        None,
+        "a masked file cannot change: {summary:?}"
+    );
+    assert_eq!(
+        change(summary, ".git/hooks/pre-commit"),
+        None,
+        "a tmpfs keeps the hook inside the sandbox: {summary:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.work.join(".envrc")).expect("the host file is still there"),
+        "export CANARY=1\n",
+        "the mask kept the agent out of the real file"
+    );
+    assert!(
+        !fixture.work.join(".git/hooks/pre-commit").exists(),
+        "and the hook stayed in the tmpfs"
+    );
+
+    // Und der zweite Weg zu derselben Auskunft: Die Zusammenfassung liegt in
+    // der Aufzeichnung, sonst fände `humanitl sessions summary <id>` morgen
+    // nichts mehr. Ohne diese Zeile prüfte kein Test, dass sie je geschrieben
+    // wird — das Ereignis oben käme auch ohne Aufzeichnung.
+    fixture.recorder.flush().await;
+    let sandbox = humanitl_core::ids::SandboxId::parse(&summary.sandbox_id)
+        .expect("the event carries a sandbox id");
+    let row = fixture
+        .recorder
+        .get_session_summary(sandbox)
+        .await
+        .expect("the lookup works")
+        .unwrap_or_else(|| panic!("the summary of {sandbox} is in the recording"));
+    assert_eq!(row.session, fixture.session);
+    let stored: serde_json::Value =
+        serde_json::from_str(&row.json).expect("the stored text is the summary as JSON");
+    assert_eq!(
+        stored["changes"]
+            .as_array()
+            .expect("changes is a list")
+            .iter()
+            .filter(|change| change["path"] == "new.txt")
+            .count(),
+        1,
+        "the stored summary names the same file: {}",
+        row.json
+    );
+}
+
+/// Eine aufgehobene Maske wird beim Start gesagt.
+///
+/// `LaunchPlan::warnings` trägt `SANDBOX_020` (eine Maske, die `mounts.unmask`
+/// freigibt) und `SANDBOX_021` (ein Kernel ohne `openat2`). Beide entstehen
+/// beim Planen und nützen nur, wenn sie jemand in den Ereignisstrom stellt;
+/// bis HUM-043 tat das niemand. Geprüft wird der Weg an dem Befund, der sich
+/// auf jeder Maschine auslösen lässt: `SANDBOX_021` hängt am Kernel.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_released_mask_is_said_when_the_sandbox_starts() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    // Dasselbe mitgelieferte Profil, um eine freigegebene Maske ergänzt. Der
+    // Pfad muss im Projekt liegen, sonst gäbe es die Maske gar nicht.
+    std::fs::write(fixture.work.join(".npmrc"), "//registry/:_authToken=x\n").expect("npmrc");
+    let profile = fixture
+        .paths
+        .profiles_dir()
+        .join("sandbox")
+        .join(format!("{PROFILE}.toml"));
+    let text = std::fs::read_to_string(&profile).expect("the profile is readable");
+    std::fs::write(
+        &profile,
+        text.replace("unmask = []", "unmask = [\"/work/.npmrc\"]"),
+    )
+    .expect("the profile is writable");
+
+    let service = fixture.service();
+    let mut start = fixture.start();
+    if let Some(v1::sandbox_request::Op::Start(inner)) = start.op.as_mut() {
+        inner.command = vec!["/bin/sh".to_owned(), "-c".to_owned(), "exit 0".to_owned()];
+    }
+    let seen = events_to_end(&service, start).await;
+    assert!(
+        carries(&seen, "SANDBOX_020"),
+        "the released mask is in the stream: {:?}",
+        diagnostics(&seen)
+    );
+
+    // Und die Gegenprobe: Ohne `unmask` sagt derselbe Lauf nichts dergleichen.
+    std::fs::write(&profile, text).expect("the profile is writable");
+    let quiet = Fixture::new();
+    let quiet_service = quiet.service();
+    let mut start = quiet.start();
+    if let Some(v1::sandbox_request::Op::Start(inner)) = start.op.as_mut() {
+        inner.command = vec!["/bin/sh".to_owned(), "-c".to_owned(), "exit 0".to_owned()];
+    }
+    let seen = events_to_end(&quiet_service, start).await;
+    assert!(
+        !carries(&seen, "SANDBOX_020"),
+        "a profile that masks everything says nothing: {:?}",
+        diagnostics(&seen)
+    );
+}
+
+/// Ein Projekt, das nur gelesen werden darf, bekommt keine Zusammenfassung.
+///
+/// Unter `--ro-bind` kann sich nichts ändern. Eine leere Zusammenfassung zu
+/// schicken hieße zu behaupten, es sei gemessen worden; gemessen wird gar
+/// nicht, und der Lauf über einen großen Baum bleibt erspart.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_only_project_ends_without_a_summary() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    let service = fixture.service();
+    let mut start = fixture.start();
+    if let Some(v1::sandbox_request::Op::Start(inner)) = start.op.as_mut() {
+        inner.work_mode = "ro".to_owned();
+        inner.command = vec!["/bin/sh".to_owned(), "-c".to_owned(), "exit 0".to_owned()];
+    }
+    let seen = events_to_end(&service, start).await;
+    assert!(
+        summary(&seen).is_none(),
+        "nothing can change under --ro-bind: {seen:?}"
+    );
 }

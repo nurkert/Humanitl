@@ -1727,8 +1727,11 @@ fn sandbox_check_shows_the_three_guarantees() {
 
 #[test]
 fn sandbox_run_exits_with_the_code_of_the_command() {
-    let Some(_shim) = sandbox_available() else {
-        eprintln!("skip: no bwrap or no humanitl-shim next to the binary");
+    // `sandbox_required` statt `sandbox_available`: Unter CI ist ein fehlendes
+    // `bwrap` ein Fehler und kein Grund zu überspringen. Ein zurückkehrender
+    // Test gilt dem Testläufer als bestanden, und dass `humanitl sandbox run`
+    // den Exit-Code des Befehls durchreicht, wäre dann nie geprüft worden.
+    let Some(_shim) = sandbox_required() else {
         return;
     };
     let harness = Harness::new();
@@ -1757,8 +1760,7 @@ fn sandbox_run_without_a_daemon_is_exit_two() {
 
 #[test]
 fn sigint_stops_the_sandbox_and_ends_with_130() {
-    let Some(_shim) = sandbox_available() else {
-        eprintln!("skip: no bwrap or no humanitl-shim next to the binary");
+    let Some(_shim) = sandbox_required() else {
         return;
     };
     let harness = Harness::new();
@@ -1805,8 +1807,7 @@ fn sigint_stops_the_sandbox_and_ends_with_130() {
 /// endet mit seinem eigenen Code, und der ist der Code der Kommandozeile.
 #[test]
 fn sigint_reaches_the_agent_and_keeps_its_exit_code() {
-    let Some(_shim) = sandbox_available() else {
-        eprintln!("skip: no bwrap or no humanitl-shim next to the binary");
+    let Some(_shim) = sandbox_required() else {
         return;
     };
     let harness = Harness::new();

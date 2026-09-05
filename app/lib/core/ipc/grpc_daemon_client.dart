@@ -343,6 +343,18 @@ class GrpcDaemonClient implements DaemonClient {
             // the scrollback and the geometry (HUM-042). Reading both would
             // show every line twice.
             break;
+          case pb.SandboxEvent_Event.summary:
+            // What the run left in the project (HUM-043). The daemon sends it
+            // once, after the agent has ended. The findings inside it also
+            // arrive as `diagnostic` events, so nothing is lost here today;
+            // what is missing is the sheet that shows the changed files, and
+            // it arrives with the UI half of HUM-043.
+            //
+            // The arm is written out rather than left to a default: Dart 3
+            // checks this switch at compile time, and that check is the one
+            // thing that tells this client when the contract grows a ninth
+            // event. A `default` would swallow it silently.
+            break;
           case pb.SandboxEvent_Event.notSet:
             break;
         }
