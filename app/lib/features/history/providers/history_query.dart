@@ -14,7 +14,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/domain/domain.dart';
 import '../history_metrics.dart';
 
-/// One of the five quick filters above the table.
+/// One of the six quick filters above the table.
 enum HistoryChip {
   /// Requests that are still waiting for a decision.
   held,
@@ -27,6 +27,14 @@ enum HistoryChip {
 
   /// Requests that went out changed.
   edited,
+
+  /// Requests the agent made to `humanitl.internal` and the proxy answered
+  /// itself (HUM-103).
+  ///
+  /// A term like the first four, not a flag like [passthrough]: the recorder
+  /// filters on the `meta` column, and `meta:true` written into the field
+  /// teaches the grammar the way `decision:block` does.
+  meta,
 
   /// Traffic to the configured LLM endpoint, hidden by default.
   ///
@@ -42,6 +50,7 @@ enum HistoryChip {
     HistoryChip.blocked => 'decision:block',
     HistoryChip.findings => 'findings:>0',
     HistoryChip.edited => 'edited:true',
+    HistoryChip.meta => 'meta:true',
     HistoryChip.passthrough => null,
   };
 }

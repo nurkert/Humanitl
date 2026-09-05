@@ -166,6 +166,20 @@ pub enum WriterCmd {
         /// Der feste Bezeichner des Grundes, zum Beispiel `tls_handshake_failed`.
         error: String,
     },
+    /// Der Vermerk an einer Anfrage, die der Proxy selbst beantwortet hat
+    /// (`flows.meta`, `flows.status`).
+    ///
+    /// Für den Fall, den kein Ereignis trägt: Eine Anfrage an
+    /// `humanitl.internal` wird von niemandem entschieden und erreicht ihren
+    /// Endzustand über `TransitionInput::Answer`. Das Ereignis daraus ist
+    /// [`FlowEvent::Recorded`] und sagt nichts über den Status, den der Proxy
+    /// selbst geschrieben hat; genau das trägt dieses Kommando nach (HUM-103).
+    Meta {
+        /// Der Flow.
+        flow: FlowId,
+        /// Der HTTP-Status, mit dem der Proxy geantwortet hat.
+        status: u16,
+    },
     /// Eine Regel, wie sie zum Zeitpunkt der Entscheidung aussah.
     Rule {
         /// Die Id der Regel.
@@ -389,6 +403,7 @@ impl Writer {
                 catalog_id,
             } => self.write_domain(flow, apex.as_deref(), catalog_id.as_deref()),
             WriterCmd::FlowError { flow, error } => self.write_flow_error(flow, &error),
+            WriterCmd::Meta { flow, status } => self.write_meta(flow, status),
             WriterCmd::Rule { id, yaml, at } => self.write_rule(&id, &yaml, at),
             WriterCmd::SessionSummary {
                 session,
@@ -781,6 +796,20 @@ impl Writer {
     }
 
     /// Hält eine Regel fest, wie sie zum Zeitpunkt der Entscheidung aussah.
+    /// Schreibt den Vermerk und den selbst geschriebenen Status eines
+    /// Meta-Flusses.
+    ///
+    /// `decision` bleibt dabei `NULL`. Das ist der Punkt: Über eine
+    /// Meta-Anfrage entscheidet niemand, und jede Auswertung über
+    /// Entscheidungen lässt sie damit von selbst aus (HUM-103).
+    fn write_meta(&self, flow: FlowId, status: u16) -> Result<(), RecorderError> {
+        self.update(
+            &flow,
+            "UPDATE flows SET meta = 1, status = ?2 WHERE id = ?1",
+            rusqlite::params![flow.to_string(), i64::from(status)],
+        )
+    }
+
     fn write_rule(&self, id: &str, yaml: &str, at: i64) -> Result<(), RecorderError> {
         self.conn
             .execute(

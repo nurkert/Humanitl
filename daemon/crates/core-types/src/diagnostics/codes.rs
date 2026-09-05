@@ -580,6 +580,19 @@ registry! {
     /// fremde Sitzung beendet — wer sie gestartet hat, beendet sie dort
     /// (HUM-067).
     CLI_005 => "cli", "Es läuft schon eine Sitzung", "#cli_005";
+
+    // HUM-103: der Meta-Fluss in der Historie.
+    /// Etwas wollte einen Fluss als vom Proxy selbst beantwortet abschließen,
+    /// dessen Anfrage nicht an den reservierten Namen `humanitl.internal` ging
+    /// (`Flow::answer`).
+    ///
+    /// Der Weg von `Received` unmittelbar nach `Recorded` ist der einzige, der
+    /// über keine Entscheidung führt, und er gehört allein dem Meta-Endpunkt:
+    /// Über eine Meta-Anfrage entscheidet niemand, weil sie nirgendwo hingeht.
+    /// Stünde er jeder Anfrage offen, wäre er ein Weg am Menschen vorbei. Der
+    /// Befund ist deshalb ein Fehler im Daemon und keine Eingabe eines Nutzers;
+    /// er trägt kein `fix`, weil nichts einzustellen ist (HUM-103).
+    PROXY_009 => "proxy", "Anfrage ist keine Meta-Anfrage", "#proxy_009";
 }
 
 /// Sucht einen Code im Register.

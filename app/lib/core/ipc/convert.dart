@@ -219,6 +219,7 @@ extension FlowSummaryToDomain on pb.FlowSummary {
     findingCount: findingCount,
     edited: edited,
     passthrough: passthrough,
+    meta: meta,
     deadline: hasDeadline() ? _dateTime(deadline) : null,
     originTool: originTool,
     upstreamError: enumFromWire(UpstreamError.values, upstreamError.value),

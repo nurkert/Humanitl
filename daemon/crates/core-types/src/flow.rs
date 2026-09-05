@@ -16,6 +16,7 @@
 //! | von | Eingabe | nach | Ereignis |
 //! |---|---|---|---|
 //! | `Received` | `Analyze` | `Analyzed` | `Analyzed` |
+//! | `Received` | `Answer` (nur über [`Flow::answer`]) | `Recorded` | `Recorded` |
 //! | `Analyzed` | `Hold` | `Held` | `Held` |
 //! | `Analyzed` | `Decide` (Regel, Passthrough oder System-Ablehnung) | `Decided` | `Decided` |
 //! | `Held` | `Decide` (Nutzer, Regel oder System-Ablehnung) | `Decided` | `Decided` |
@@ -28,6 +29,31 @@
 //! | `Forwarded` | `Fail` | `Failed` | `Failed` |
 //! | `Responded` | `Record` | `Recorded` | `Recorded` |
 //! | `Failed` | `Record` | `Recorded` | `Recorded` |
+//!
+//! # Der eine Weg nach `Recorded`, der über keine Entscheidung führt
+//!
+//! Jede gewöhnliche Anfrage erreicht `Recorded` nur über `Decided`, und
+//! `Decided` sagt, wie über sie entschieden wurde. Genau eine Art Anfrage hat
+//! keine Entscheidung, weil niemand entschieden hat: die an den reservierten
+//! Namen [`META_HOST`](crate::META_HOST), den der Proxy selbst beantwortet
+//! (ADR-014, HUM-073). Sie geht nirgendwo hin, sie hält nichts auf, und ein
+//! Datensatz mit einer erfundenen Entscheidung wäre eine Behauptung über
+//! einen Menschen, der nichts getan hat (`backlog/CONVENTIONS.md` 4.13).
+//!
+//! Der Weg dorthin ist [`TransitionInput::Answer`], und er ist keine Lücke in
+//! ADR-004: Er gilt allein für den Fluss, **dessen eigene Anfrage** an den
+//! reservierten Namen ging, und geprüft wird das an diesem Fluss, im Augenblick
+//! des Abschließens ([`Flow::apply`]). Eine gewöhnliche Anfrage kommt deshalb
+//! auch aus `Received` nicht auf diesen Weg; sie muss durch `Analyzed` und
+//! `Decided`.
+//!
+//! **Der Nachweis ist keine Marke, die man mitbringt.** [`MetaAnswer`] ist
+//! `#[non_exhaustive]` und außerhalb dieser Crate nicht baubar; die einzige
+//! Tür ist [`Flow::answer`]. Ein Nachweis, der reisen kann, kann am falschen
+//! Ort ankommen: Er belegte sonst nur, dass *irgendeine* Anfrage an den
+//! reservierten Namen ging, und ließe sich auf einen fremden Fluss anwenden,
+//! der noch in `Received` steht. Deshalb hängt die Zusage nicht an der Gattung
+//! der Anfrage, sondern an diesem einen Fluss.
 
 use core::fmt;
 use std::net::IpAddr;
@@ -35,6 +61,8 @@ use std::time::{Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
+use crate::diagnostics::codes::PROXY_009;
+use crate::diagnostics::{Diagnostic, Severity};
 use crate::event::FlowEvent;
 use crate::finding::Finding;
 use crate::http::HttpRequest;
@@ -303,6 +331,46 @@ impl DecisionSource {
     }
 }
 
+/// Der Nachweis, dass der Proxy die Anfrage **dieses** Flusses selbst
+/// beantwortet hat.
+///
+/// Die einzige Eintrittskarte für [`TransitionInput::Answer`], den einen Weg
+/// von `Received` nach `Recorded`, der über keine Entscheidung führt.
+///
+/// **Er lässt sich außerhalb dieser Crate nicht bauen** (`#[non_exhaustive]`),
+/// und drinnen baut ihn allein [`Flow::answer`]. Er trägt bewusst keine
+/// Angaben: Ein Nachweis mit Inhalt wäre ein Wert, den man weiterreichen kann,
+/// und genau das darf er nicht sein. Was den Weg öffnet, ist nicht der Besitz
+/// dieses Wertes, sondern die Anfrage des Flusses selbst — geprüft in
+/// [`Flow::apply`], im Augenblick des Abschließens.
+///
+/// **Warum die Prüfung am Fluss hängt und nicht am Wert.** Ein Nachweis, der
+/// nur belegt, dass *eine* Anfrage an den reservierten Namen ging, ließe sich
+/// auf einen gewöhnlichen Fluss anwenden, der noch in `Received` steht — jede
+/// Anfrage steht dort nach der Ankunft. Der Fluss landete in `Recorded`, ohne
+/// dass ein Mensch ihn je gesehen hätte. Der Statuscode der Antwort reist
+/// deshalb auch nicht hier mit, sondern geht als eigene Angabe an die
+/// Aufzeichnung.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct MetaAnswer;
+
+/// Warum ein Fluss nicht als selbst beantwortet abgeschlossen wurde.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum AnswerRefused {
+    /// Die Anfrage dieses Flusses ging nicht an den reservierten Namen
+    /// [`META_HOST`](crate::META_HOST).
+    ///
+    /// Ein Fehler im Daemon, keine Eingabe eines Nutzers: Wer hier scheitert,
+    /// wollte eine gewöhnliche Anfrage abschließen, ohne dass jemand über sie
+    /// entschieden hat.
+    #[error("{0}")]
+    NotMeta(Box<Diagnostic>),
+    /// Der Fluss stand nicht mehr in [`FlowState::Received`].
+    #[error("{0}")]
+    State(InvalidTransition),
+}
+
 /// Zustand eines Flows.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FlowState {
@@ -405,6 +473,13 @@ impl FlowState {
                     findings,
                 },
             )),
+            // Der eine Weg nach `Recorded`, der über keine Entscheidung führt.
+            // Dass er nur dem Fluss offensteht, dessen eigene Anfrage an den
+            // reservierten Namen ging, prüft `Flow::apply`: Hier ist der Fluss
+            // nicht bekannt, nur sein Zustand. Siehe Modul-Kommentar.
+            (Self::Received, TransitionInput::Answer(_)) => {
+                Ok((Self::Recorded, FlowEvent::Recorded { flow_id, at }))
+            }
             (
                 Self::Analyzed { .. },
                 TransitionInput::Hold {
@@ -529,6 +604,13 @@ pub enum TransitionInput {
     },
     /// Der Flow wird abgeschlossen.
     Record,
+    /// Der Proxy hat die Anfrage selbst beantwortet und schließt den Flow ab,
+    /// ohne dass jemand über sie entschieden hat.
+    ///
+    /// Nur über [`Flow::answer`] zu haben, nur aus [`FlowState::Received`]
+    /// gültig und nur für einen Fluss, dessen Anfrage an den reservierten
+    /// Namen ging; siehe Modul-Kommentar.
+    Answer(MetaAnswer),
     /// Die Wartezeit ist abgelaufen.
     Timeout,
     /// Die Verbindung zum Ziel ist gescheitert.
@@ -549,6 +631,7 @@ impl TransitionInput {
             Self::Forward => "forward",
             Self::Respond { .. } => "respond",
             Self::Record => "record",
+            Self::Answer(_) => "answer",
             Self::Timeout => "timeout",
             Self::Fail { .. } => "fail",
         }
@@ -711,21 +794,87 @@ impl Flow {
         }
     }
 
+    /// Wahr, wenn die Anfrage dieses Flusses an den reservierten Namen
+    /// [`META_HOST`](crate::META_HOST) ging.
+    ///
+    /// Die eine Bedingung, an der der Weg von `Received` unmittelbar nach
+    /// `Recorded` hängt. Sie steht genau hier, damit [`Flow::apply`] und
+    /// [`Flow::answer`] dieselbe Frage stellen und nicht zwei ähnliche.
+    #[must_use]
+    pub fn is_meta(&self) -> bool {
+        self.request.authority.host.is_meta()
+    }
+
     /// Wendet einen Übergang an, ersetzt den Zustand und hängt an die Historie an.
+    ///
+    /// [`TransitionInput::Answer`] verlangt zusätzlich zur Übergangstabelle,
+    /// dass die Anfrage **dieses** Flusses an den reservierten Namen ging
+    /// ([`Flow::is_meta`]). Geprüft wird das hier und nicht beim Bauen des
+    /// Nachweises: Ein Nachweis ist ein Wert, und ein Wert reist; die Frage,
+    /// ob dieser Fluss selbst beantwortet wurde, lässt sich nur an ihm
+    /// beantworten, und nur im Augenblick des Abschließens.
     ///
     /// # Errors
     ///
     /// [`InvalidTransition`], wenn das Paar aus Zustand und Eingabe nicht in
-    /// der Tabelle steht. Zustand und Historie bleiben dann unverändert.
+    /// der Tabelle steht oder wenn `Answer` auf einem Fluss steht, der nicht
+    /// an den reservierten Namen ging. Zustand und Historie bleiben dann
+    /// unverändert. Wer den Grund unterscheiden muss, nimmt [`Flow::answer`];
+    /// sie nennt ihn.
     pub fn apply(
         &mut self,
         input: TransitionInput,
         at: SystemTime,
     ) -> Result<FlowEvent, InvalidTransition> {
+        if matches!(input, TransitionInput::Answer(_)) && !self.is_meta() {
+            return Err(InvalidTransition {
+                from: self.state.name(),
+                input: input.name(),
+            });
+        }
         let (next, event) = self.state.clone().on(Transition::new(self.id, at, input))?;
         self.history.push((at, next.name()));
         self.state = next;
         Ok(event)
+    }
+
+    /// Schließt einen Fluss ab, den der Proxy selbst beantwortet hat: von
+    /// `Received` unmittelbar nach `Recorded`, ohne Sperre und ohne
+    /// Entscheidung (HUM-103).
+    ///
+    /// Die einzige Tür zu [`TransitionInput::Answer`]. Sie prüft die Anfrage
+    /// dieses Flusses, baut den Nachweis selbst und gibt ihn nicht heraus —
+    /// so kommt kein Aufrufer in die Lage, einen Nachweis von anderswo
+    /// mitzubringen.
+    ///
+    /// Der Statuscode der Antwort gehört nicht hierher: Der Automat kennt
+    /// keinen, und die Aufzeichnung nimmt ihn als eigene Angabe entgegen
+    /// (`Recorder::set_meta_answer`).
+    ///
+    /// # Errors
+    ///
+    /// [`AnswerRefused::NotMeta`] mit [`PROXY_009`] und dem Ziel dieses
+    /// Flusses, wenn seine Anfrage nicht an den reservierten Namen ging;
+    /// [`AnswerRefused::State`], wenn der Fluss nicht mehr in
+    /// [`FlowState::Received`] steht. Zustand und Historie bleiben in beiden
+    /// Fällen unverändert.
+    pub fn answer(&mut self, at: SystemTime) -> Result<FlowEvent, AnswerRefused> {
+        if !self.is_meta() {
+            return Err(AnswerRefused::NotMeta(Box::new(
+                Diagnostic::builder(PROXY_009, Severity::Error)
+                    .why(format!(
+                        "the flow {} to {} is not addressed to the reserved name {}; only the \
+                         meta endpoint answers a request itself, and only its flows reach the \
+                         recording without a decision",
+                        self.id,
+                        self.request.authority.host,
+                        crate::META_HOST,
+                    ))
+                    .build(),
+            )));
+        }
+        self.apply(TransitionInput::Answer(MetaAnswer), at)
+            .map_err(AnswerRefused::State)
     }
 
     /// Bringt den Flow von jedem Zustand aus fail-closed nach
@@ -797,9 +946,12 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use std::net::{IpAddr, Ipv4Addr};
+    use std::time::SystemTime;
 
-    use super::{BlockReason, UpstreamError};
-    use crate::ids::RuleId;
+    use super::{BlockReason, Flow, MetaAnswer, TransitionInput, UpstreamError};
+    use crate::host::HostName;
+    use crate::http::{Authority, HttpRequest, Method, Scheme};
+    use crate::ids::{FlowId, RuleId, SessionId};
 
     const BLOCK_REASONS: [BlockReason; 10] = [
         BlockReason::User,
@@ -843,6 +995,72 @@ mod tests {
             UpstreamError::PrivateAddress(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))).to_string(),
             "upstream_private_address:10.0.0.1"
         );
+    }
+
+    /// Eine Anfrage an `host` in `Received`.
+    fn flow_to(host: &str) -> Flow {
+        let host = HostName::parse(host).unwrap();
+        let request = HttpRequest::new(
+            Method::GET,
+            Scheme::Https,
+            Authority::with_scheme(host, Scheme::Https),
+            "/",
+        );
+        Flow::new(FlowId::new(), SessionId::new(), SystemTime::now(), request)
+    }
+
+    /// Ein Nachweis aus dieser Crate öffnet keinen fremden Fluss.
+    ///
+    /// Der Test steht hier und nicht in `tests/`, weil [`MetaAnswer`] außerhalb
+    /// der Crate gar nicht zu bauen ist. Drinnen ist er es, und genau das ist
+    /// die Lage, gegen die [`Flow::apply`] sichert: Der Nachweis belegt für
+    /// sich nur, dass *eine* Anfrage an den reservierten Namen ging. Ohne die
+    /// Prüfung am Fluss ließe er sich auf eine Anfrage an `api.github.com`
+    /// anwenden, die noch in `Received` steht — sie landete in `Recorded`, ohne
+    /// dass ein Mensch sie je gesehen hätte.
+    #[test]
+    fn a_witness_does_not_open_a_foreign_flow() {
+        let mut ordinary = flow_to("api.github.com");
+        let refused = ordinary.apply(TransitionInput::Answer(MetaAnswer), SystemTime::now());
+        let Err(err) = refused else {
+            panic!("a witness must never close an ordinary flow");
+        };
+        assert_eq!(err.from, "received");
+        assert_eq!(err.input, "answer");
+        assert_eq!(ordinary.state.name(), "received", "the state is untouched");
+        assert_eq!(ordinary.history.len(), 1, "and so is the history");
+
+        // Derselbe Nachweis am eigenen Fluss geht durch: Was ihn hält, ist
+        // nicht der Wert, sondern die Anfrage des Flusses.
+        let mut meta = flow_to(crate::META_HOST);
+        let event = meta
+            .apply(TransitionInput::Answer(MetaAnswer), SystemTime::now())
+            .expect("the reserved name may be answered by the proxy itself");
+        assert_eq!(event.name(), "recorded");
+        assert_eq!(meta.state.name(), "recorded");
+    }
+
+    /// Ein Fluss, der nicht an den reservierten Namen ging, wird mit
+    /// `PROXY_009` abgelehnt und nicht mit einem stillen Nein.
+    #[test]
+    fn answer_names_why_it_refuses_an_ordinary_flow() {
+        let mut ordinary = flow_to("api.github.com");
+        let Err(super::AnswerRefused::NotMeta(diagnostic)) = ordinary.answer(SystemTime::now())
+        else {
+            panic!("an ordinary flow is never answered by the proxy itself");
+        };
+        assert_eq!(diagnostic.code.as_str(), "PROXY_009");
+        assert!(
+            diagnostic.why.contains("api.github.com"),
+            "{}",
+            diagnostic.why
+        );
+        assert!(
+            diagnostic.why.contains(crate::META_HOST),
+            "{}",
+            diagnostic.why
+        );
+        assert_eq!(ordinary.state.name(), "received");
     }
 
     #[test]

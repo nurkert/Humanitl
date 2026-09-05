@@ -1561,5 +1561,11 @@
   "@interceptDiagnosticDropped": {
     "description": "Stands above the diagnostic strip once the session produced more findings than the strip keeps. The count is shown rather than the loss hidden (CONVENTIONS 4.13).",
     "placeholders": {"count": {"type": "int"}}
-  }
+  },
+  "historyChipMeta": "Enquiries",
+  "@historyChipMeta": {"description": "Quick filter (HUM-103): requests the agent made to humanitl.internal, which the proxy answered itself. Sets the term meta:true."},
+  "historyDeciderMeta": "endpoint",
+  "@historyDeciderMeta": {"description": "Rule column (HUM-103): the proxy answered the request itself; nobody and no rule decided."},
+  "historyDecisionNone": "nobody decided",
+  "@historyDecisionNone": {"description": "Decision field of the detail head for a request to humanitl.internal (HUM-103). Not a dash and not a decision name: the request went nowhere, so there was nothing to decide (CONVENTIONS 4.13)."}
 }

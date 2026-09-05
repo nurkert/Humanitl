@@ -2304,7 +2304,7 @@ rules (first match wins):
 - [x] Die drei Pfade antworten wie spezifiziert, andere ⇒ 404/405.
 - [x] Kein Resolver-Aufruf für `humanitl.internal` (Resolver-Mock zählt 0).
 - [x] `/ask` erzeugt genau eine Karte pro Request, Rate-Limit greift.
-- [ ] History zeigt Meta-Flows mit Filter `meta:true`. **Offen, verschoben nach HUM-103.** Der Zustandsautomat kennt keinen Weg von einer Nicht-Sperre nach `Recorded`, und `decision=meta` verlangt eine neue Variante in `Decision`, in `DecisionKind` der Proto, im Schema und im Filter des Recorders sowie die Historie in der Oberfläche. Meta-Anfragen erzeugen bis dahin gar keinen Flow; sichtbar ist allein `/ask` als `FlowEvent::AgentAsk` und als Karte (`backlog/CONVENTIONS.md` 4.24).
+- [x] History zeigt Meta-Flows mit Filter `meta:true`. **Erledigt in HUM-103 (2026-09-05).** Anders als hier vorgesehen ohne `decision=meta`: Der Datensatz trägt die Spalte `flows.meta` **neben** der Entscheidung, und `decision` bleibt leer, weil über eine Meta-Anfrage niemand entschieden hat. Der Zustandsautomat bekam den Weg `Received → Recorded` über `TransitionInput::Answer(MetaAnswer)`; der Nachweis trägt keine Angaben, ist außerhalb von `humanitl-core` nicht baubar, und `Flow::apply` prüft im Augenblick des Abschließens, dass dieser Fluss selbst an den reservierten Namen ging — ein Nachweis von einem fremden Meta-Fluss öffnet also keinen gewöhnlichen (ADR-0004, Nachtrag; `backlog/CONVENTIONS.md` 4.27).
 
 ### Fallstricke
 - Die Weiche muss vor DNS und vor Regelauswertung liegen, sonst landet `humanitl.internal` als `ask` in der Queue oder löst einen Lookup aus.
@@ -2817,15 +2817,138 @@ Der Weg im Zustandsautomaten ist der kleinste, der ohne Lüge auskommt: von der 
 - Mutationsprobe: die neue Variante aus dem Filter entfernen, dann wird der erste Test rot.
 
 ### Akzeptanzkriterien
-- [ ] Drei Meta-Anfragen erzeugen drei Einträge, unterscheidbar von Entscheidungen.
-- [ ] `meta:true` und `meta:false` teilen die Historie vollständig und überschneidungsfrei.
-- [ ] Keine Zählung über Entscheidungen ändert sich durch Meta-Flüsse.
-- [ ] Akzeptanzkriterium 4 von HUM-073 ist hier abgehakt, und die Notiz dort verweist auf dieses Issue.
-- [ ] `make check`, clippy mit `-D warnings` und `cargo fmt --all -- --check` grün.
+- [x] Drei Meta-Anfragen erzeugen drei Einträge, unterscheidbar von Entscheidungen.
+- [x] `meta:true` und `meta:false` teilen die Historie vollständig und überschneidungsfrei.
+- [x] Keine Zählung über Entscheidungen ändert sich durch Meta-Flüsse.
+- [x] Akzeptanzkriterium 4 von HUM-073 ist hier abgehakt, und die Notiz dort verweist auf dieses Issue.
+- [x] `make check`, clippy mit `-D warnings` und `cargo fmt --all -- --check` grün.
 
 ### Fallstricke
 - Der Demolauf M2 zählt bediente Anfragen und Entscheidungen. Kommen Meta-Flüsse hinzu, ohne dass die Zählung sie ausnimmt, wird er rot — und zwar zu Recht; die Zahlen gehören dann angepasst, nicht der Filter.
 - `meta:` als Filterterm trifft auf drei Auslegungen derselben Sprache (HUM-099). Wer diesen Term hinzufügt, bevor HUM-099 die gemeinsame Tabelle gebaut hat, fügt ihn dreimal hinzu.
+
+### Stand (2026-09-05)
+
+**Kein `decision=meta`.** Die Zusammenfassung in `BACKLOG.md` und das vierte
+Akzeptanzkriterium von HUM-073 nennen eine neue Variante in `Decision` und in
+`DecisionKind`. Gebaut ist das Gegenteil, und die Spezifikation dieses Issues
+verlangt es selbst: „Die neue Variante steht **neben** den Entscheidungen, nicht
+unter ihnen." `decision` sagt aus, wie über eine Anfrage entschieden wurde; über
+eine Meta-Anfrage entscheidet niemand. Der Datensatz trägt deshalb die neue
+Spalte `flows.meta` und lässt `decision` leer. Das kostet nichts und spart die
+Fallunterscheidung an jeder Stelle, die über Entscheidungen zählt: `decision:allow`,
+`decision:block` und die Zahlen des Demolaufs lassen einen Meta-Fluss von selbst
+aus, weil er keine Entscheidung trägt — sie mussten ihn nicht ausnehmen. Eine
+fünfte `DecisionKind`-Variante hätte dagegen jeden erschöpfenden `match` über
+`Decision` angefasst (Zustandsautomat, `convert.rs`, `validate.rs`, die
+Warteschlange, sechs Dart-Dateien) und jedem dieser Orte die Frage gestellt, was
+„die Entscheidung *meta*" bedeutet — eine Frage ohne Antwort.
+
+**Der Weg im Zustandsautomaten: `Received → Recorded`, gebunden an den Fluss.**
+Neu sind `TransitionInput::Answer(MetaAnswer)`, `Flow::is_meta`, `Flow::answer`
+und `AnswerRefused` in `daemon/crates/core-types/src/flow.rs`. Der Weg führt aus
+`Received` unmittelbar in den Endzustand, ohne `Held` und ohne `Decided`. Damit
+er kein Weg am Menschen vorbei ist, hängt er weder an der Sorgfalt des Aufrufers
+noch an einem Wert, den man mitbringt: `Flow::apply` lehnt `Answer` ab, sobald
+`Flow::is_meta` an **diesem** Fluss nicht gilt, und die einzige Tür dorthin ist
+`Flow::answer`, die den Grund nennt (`PROXY_009` für den falschen Host,
+`InvalidTransition` für den falschen Zustand) und den Nachweis nicht herausgibt.
+`MetaAnswer` ist `#[non_exhaustive]`, außerhalb der Crate also nicht baubar, und
+trägt keine Angaben. Der reservierte Name wohnt dafür jetzt als
+`humanitl_core::META_HOST` im Kern (`HostName::is_meta`); `humanitl_proxy::meta`
+reicht ihn weiter, damit die Weiche und die Prüfung denselben Namen meinen.
+
+**Der erste Entwurf war zu schwach, und die Reviews haben es gezeigt.** Er
+hängte den Weg an einen Nachweis, den `MetaAnswer::for_request(&HttpRequest)`
+ausstellte. Antigravity prüfte ihn gegen Fälschung — kein `Default`, kein
+`serde`, kein öffentlicher Konstruktor, keine Test-Hintertür — und alle Wege,
+den Host vorzutäuschen; beides hielt. Codex fand die andere Frage: **Ein
+Nachweis belegt, dass *irgendeine* Anfrage an den reservierten Namen ging, nicht
+dass diese es tat.** Ein Aufrufer konnte sich einen für `humanitl.internal`
+holen und ihn über `Flow::apply` auf einen gewöhnlichen Fluss anwenden, der noch
+in `Received` stand — jede Anfrage steht dort nach der Ankunft, und der Fluss
+landete in `Recorded`, ohne dass ein Mensch ihn je gesehen hätte. Von den beiden
+angebotenen Wegen wurde der erste gewählt (Prüfung am Fluss, im Augenblick des
+Abschließens) statt des zweiten (`FlowId` oder Autorität im Nachweis
+mitführen): Ein Nachweis, der nicht reisen kann, kann nicht am falschen Ort
+ankommen, und die Prüfung am Fluss deckt zusätzlich den Fall ab, dass jemand
+`flow.request` zwischen Ausstellen und Anwenden austauscht. Kosten: `Answer`
+steht nicht mehr in der Tabelle von `flow_state_table.rs`, weil sein Nachweis
+dort nicht baubar ist. Ersatz und Begründung stehen im Modulkommentar dieser
+Datei; die Deckung ist eher größer geworden — `the_meta_path_opens_only_from_received`
+geht jeden der acht Zustände durch, und die crate-interne Gegenprobe
+`a_witness_does_not_open_a_foreign_flow` wendet einen **echten** Nachweis auf
+einen fremden Fluss an.
+
+Verworfen wurden drei Alternativen. **(a) Ein freier Übergang `Received →
+Recorded`:** Jede gewöhnliche Anfrage steht nach der Ankunft in genau diesem
+Zustand; ein Fehler im Proxy hätte sie ungeprüft und unentschieden
+abgeschlossen. Ein Test hätte nur zeigen können, dass der Proxy den Weg heute
+nicht nimmt — das ist Disziplin, keine Zusage. **(b) Ein eigener Zustand
+`Answered`, in den kein Übergang führt:** Wäre ebenso dicht, hätte aber
+`FlowState`, das Proto-Enum `FlowState` und jeden `match` darüber angefasst,
+inklusive des Zeugen in `flow_state_table.rs` — viel Fläche für ein Feld, das
+die Zeile ohnehin trägt. **(c) Den Fluss ganz am Automaten vorbei in die
+Aufzeichnung schreiben:** Dann gäbe es zwei Wege, eine Flow-Zeile anzulegen, und
+der zweite hätte keine Regel, an die er sich hält.
+
+**Kein neues `FlowEvent` und kein Ereignis an die Zuhörer.** Der Übergang
+erzeugt `FlowEvent::Recorded`; Vermerk und Statuscode trägt
+`Recorder::set_meta_answer` nach, wie `set_flow_error` es für den abgebrochenen
+TLS-Handschlag tut (HUM-045). Der Handler ruft `Recorder::apply` direkt statt
+`HoldQueue::publish`: Ein Meta-Fluss ist fertig, bevor ein Zuhörer etwas mit ihm
+anfangen könnte, er gehört nicht in die `FlowRegistry` — die führt die Flows,
+über die noch entschieden werden kann, und `/why` beantwortet genau die —, und
+ein `Received` im Strom hätte eine Zeile behauptet, deren Vermerk aus der
+Registry gar nicht kommen kann. Folge, ausgesprochen: Die Historie zeigt einen
+Meta-Fluss erst beim nächsten Laden, nicht als Ankunft in der Pille.
+
+**Was aufgezeichnet wird.** Kopfzeilen der Anfrage, bei `/ask` zusätzlich der
+**gesäuberte** Text der Bitte (nie der rohe Rumpf des Agenten), Pfad, Methode und
+der Statuscode, den der Proxy selbst geschrieben hat. Kein Rumpf einer
+Meta-Antwort, an keiner Stelle; `no_body_of_a_meta_answer_is_recorded` durchsucht
+dafür alle Dateien der Aufzeichnung nach einem Stück der Statusausgabe.
+
+**Der Filterterm `meta:`.** In `daemon/crates/recorder/src/filter.rs` als
+Wahrheitswert wie `edited:` und `passthrough:`, und im Dart-Fake
+(`FakeFlowFilter`) an derselben Stelle. Die dritte Auslegung derselben Sprache,
+`humanitl_ipc::convert::matches_filter`, kennt weiterhin nur `host:`, `state:`
+und `session:` — sie kennt auch `decision:`, `edited:` und `findings:` nicht.
+`meta:` wurde dort **nicht** ergänzt: Das ist die bewusst kleinere Lesart, die
+HUM-099 zusammenführt, und ein einzelner Term mehr hätte die Divergenz nur
+verschoben. Neu ist dafür eine Naht, die sie sichtbar hält: Der Dart-Test
+`fakeFilterKeys is the KEYS list of the recorder, in order` liest `KEYS` aus
+`filter.rs` und vergleicht die Liste; läuft der Fake weg, wird er rot.
+
+**Die Farbe der Zeile.** `historyVisualState` fängt einen Meta-Fluss vor allem
+anderen ab. Ohne das fiele er über `FlowVisualState` auf `held` — die Zeile sähe
+aus, als warte sie auf einen Menschen. Er bekommt bis auf Weiteres das Violett
+der Durchreiche (`HFlowState.passthroughLlm`), die Farbe, die dieses Produkt
+schon für den eigenen Kanal des Agenten benutzt (die `AgentAsk`-Karte, 4.24).
+Ein eigener `HFlowState.meta` gehört in `app/packages/ui` neben die anderen acht
+und ist hier bewusst nicht angelegt: Das Paket gehörte in diesem Durchgang einem
+anderen Agenten. **Offen, klein, benannt.**
+
+**Vier Lücken, die erst Mutationsproben und Reviews gefunden haben.** Die
+Übertragung des Vermerks auf die Leitung (`recorded_summary_to_proto`) und die
+zurück in die Domäne (`FlowSummaryToDomain`) waren zuerst von keinem Test
+gedeckt: Beide Zeilen ließen sich entfernen, ohne dass irgendetwas rot wurde,
+während die Oberfläche danach jeden Meta-Fluss wie eine unentschiedene Anfrage
+gezeigt hätte. Dafür stehen jetzt `the_mark_of_a_meta_flow_reaches_the_wire`
+(Rust) und `the mark crosses the wire` (Dart). Dazu aus dem Review: Der Vertrag
+nagelte die Feldnummer nicht fest — der Frische-Test belegt nur, dass Deskriptor
+und `.proto` zueinander passen, eine geänderte Nummer wäre grün geblieben, und
+ältere Clients läsen für jeden Meta-Fluss still `false`; das prüft jetzt
+`the_meta_mark_keeps_its_field_number` (Nummer 25, `TYPE_BOOL`, allein). Und
+`summary_json()` ließ `meta` weg, sodass `humanitl flows list --json` genau die
+Unterscheidung verlor, um die es hier geht; Feld ergänzt,
+`the_json_tells_a_meta_flow_from_an_undecided_one` hält es fest.
+
+**Nicht angefasst, geprüft:** Der Demolauf M2 (`tests/e2e/m2_first_decision/run.sh`)
+schickt keine Anfrage an `humanitl.internal`; seine siebzehn Zeilen und alle
+Zählungen darin bleiben, wie sie sind. `daemon/crates/audit/` ist bis heute ein
+leerer Rumpf, das Nicht-Ziel „`/ask` bleibt auditiert wie bisher" also gegenstandslos.
+`tests/fixtures/filter-language.json` gibt es noch nicht (HUM-099, Sprint 5).
 
 ## HUM-104 · Die Durchreiche zum Sprachmodell steht hinter den Regeln des Nutzers
 Sprint: 3 · Größe: M · Abhängigkeiten: HUM-037, HUM-039, HUM-066 · Blockiert: HUM-067, HUM-046

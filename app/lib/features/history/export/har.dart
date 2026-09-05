@@ -78,6 +78,9 @@ Map<String, Object?> humanitlBlock(Flow flow) => <String, Object?>{
   'findings_count': flow.findingCount,
   'edited': flow.edited,
   'passthrough': flow.passthrough,
+  // Next to `decision`, not inside it: a meta request went nowhere and
+  // nobody decided about it, so `decision` is null on those rows (HUM-103).
+  'meta': flow.meta,
 };
 
 Map<String, Object?> _request(HistoryExportEntry entry) {

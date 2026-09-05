@@ -223,6 +223,10 @@ HTTP/2 nicht verfügbar
 
 Private Zieladresse abgelehnt
 
+#### PROXY_009
+
+Anfrage ist keine Meta-Anfrage
+
 ### Bereich tls
 
 #### TLS_001
