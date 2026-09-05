@@ -51,10 +51,10 @@ use humanitl_rules::RuleSet;
 use crate::registry::FlowRegistry;
 use crate::session::SessionSettings;
 
-/// Der reservierte Name, den der Proxy selbst beantwortet.
-///
-/// Er wird nie aufgelöst und nie an einen Upstream weitergereicht (ADR-014).
-pub const META_HOST: &str = "humanitl.internal";
+// Der reservierte Name wohnt im Kern: Die Weiche hier und der Nachweis
+// `MetaAnswer`, mit dem ein Fluss ohne Entscheidung aufgezeichnet wird, müssen
+// denselben Namen meinen (HUM-103).
+pub use humanitl_core::META_HOST;
 
 /// So viele Bytes darf der Body von `/ask` haben.
 pub const ASK_BODY_CAP_BYTES: u64 = 2 * 1024;
@@ -81,7 +81,7 @@ pub const ASK_WINDOW: Duration = Duration::from_secs(60);
 /// und genau das schließt der ADR aus.
 #[must_use]
 pub fn is_meta_host(host: &HostName) -> bool {
-    matches!(host, HostName::Dns(name) if name == META_HOST)
+    host.is_meta()
 }
 
 /// Eine Uhr, die sich im Test stellen lässt.

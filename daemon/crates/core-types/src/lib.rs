@@ -43,10 +43,10 @@ pub use crate::diagnostics::{
 pub use crate::event::FlowEvent;
 pub use crate::finding::{Finding, FindingKind, FindingLocation, Tier};
 pub use crate::flow::{
-    BlockReason, Decision, DecisionSource, Flow, FlowState, InvalidTransition, Transition,
-    TransitionInput, UpstreamError,
+    AnswerRefused, BlockReason, Decision, DecisionSource, Flow, FlowState, InvalidTransition,
+    MetaAnswer, Transition, TransitionInput, UpstreamError,
 };
-pub use crate::host::{HostName, HostParseError, ip_is_private};
+pub use crate::host::{HostName, HostParseError, META_HOST, ip_is_private};
 pub use crate::http::{
     Authority, BodyRef, HeaderMap, HeaderName, HttpRequest, Method, Scheme, Upgrade, Version,
 };

@@ -522,6 +522,38 @@ fn extension_fields_from_conventions_43_exist() {
     );
 }
 
+/// `FlowSummary.meta` steht auf Nummer 25 und ist ein `bool` (HUM-103).
+///
+/// Der Frische-Test belegt nur, dass der eingecheckte Deskriptor zur `.proto`
+/// passt. Änderte jemand die Nummer und erzeugte neu, bliebe er grün — und ein
+/// älterer Client läse für jeden Meta-Fluss still `false`, also „kein
+/// Meta-Fluss". Eine Feldnummer ist Teil des Vertrags und wird nie recycelt
+/// (`docs/PROTOCOL.md`); deshalb steht sie hier als Zusicherung.
+#[test]
+fn the_meta_mark_keeps_its_field_number() {
+    let summary = message("FlowSummary");
+    let meta = summary
+        .field
+        .iter()
+        .find(|f| f.name() == "meta")
+        .expect("FlowSummary.meta is missing");
+    assert_eq!(
+        meta.number(),
+        25,
+        "the field number is part of the contract"
+    );
+    assert_eq!(meta.r#type(), Type::Bool);
+
+    // Und die Nummer gehört ihm allein.
+    let holders: Vec<&str> = summary
+        .field
+        .iter()
+        .filter(|f| f.number() == 25)
+        .map(prost_types::FieldDescriptorProto::name)
+        .collect();
+    assert_eq!(holders, vec!["meta"]);
+}
+
 #[test]
 fn failed_event_mirrors_the_core_state_machine() {
     // CONVENTIONS.md 3.2 und 4.10: `Failed` ist ein eigener Zustand mit

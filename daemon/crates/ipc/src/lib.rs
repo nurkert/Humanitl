@@ -41,8 +41,10 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `4` seit der Sitzungskonfiguration am Start (`Start.session_profile`,
-/// `Start.ask_mode`, `Start.cli_overrides`) und den beiden Ereignissen, die
+/// `5` seit `FlowSummary.meta`, dem Vermerk an einer Anfrage, die der Proxy
+/// selbst beantwortet hat (`humanitl.internal`, HUM-103);
+/// `4` war die Sitzungskonfiguration am Start (`Start.session_profile`,
+/// `Start.ask_mode`, `Start.cli_overrides`) samt den beiden Ereignissen, die
 /// den Agenten begleiten (`SandboxEvent.output`, `SandboxEvent.exit`,
 /// HUM-067);
 /// `3` war die Sandbox-Momentaufnahme mit `Mount`, `EnvVar`, `argv_preview`
@@ -53,7 +55,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 4;
+pub const PROTO_MINOR: u32 = 5;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

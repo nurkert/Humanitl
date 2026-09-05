@@ -48,7 +48,7 @@ erfinden noch eine Uhr lesen darf, das erzeugte Ereignis aber beides trägt.
 `TransitionInput` hat die Varianten `Analyze` (mit den Findings der
 Detektoren), `Hold { deadline, queue_bytes, queue_count }`,
 `Decide { decision, source }`, `Forward`, `Respond { status }`, `Record`,
-`Timeout` und `Fail { error }`; dazu Konstruktoren `Transition::analyze(..)`
+`Answer(MetaAnswer)`, `Timeout` und `Fail { error }`; dazu Konstruktoren `Transition::analyze(..)`
 usw. `Flow::apply` kennt die eigene ID, ruft `on` und ersetzt Zustand und
 Historie; bei einem ungültigen Übergang bleiben beide unverändert
 (`backlog/CONVENTIONS.md` 4.11). `FlowEvent` ist die abgeleitete Ausgabe.
@@ -69,6 +69,42 @@ Erlaubt sind genau: `Received→Analyzed→Held→Decided→Forwarded→Responde
 `Analyzed→Decided` (Regel-Auto-Entscheidung, überspringt `Held`),
 `Decided(Allow|AllowEdited)→Failed`, `Forwarded→Failed`, `Failed→Recorded`.
 Alles andere liefert `InvalidTransition { from, input }`.
+
+### Nachtrag (HUM-103, 2026-09-05): `Received→Recorded` für den Meta-Endpunkt
+
+Es gibt genau einen weiteren erlaubten Übergang: `Received→Recorded` über
+`Answer(MetaAnswer)`. Er gilt für Anfragen an den reservierten Namen
+`humanitl.internal`, den der Proxy selbst beantwortet (ADR-0014). Eine solche
+Anfrage geht nirgendwo hin, hält nichts auf, und niemand entscheidet über sie.
+Sie hat deshalb keinen Weg über `Held` und keinen über `Decided`: `decision`
+sagt aus, wie ein Mensch oder eine Regel über eine Anfrage entschieden hat, und
+ein Datensatz mit einer erfundenen Entscheidung wäre eine Behauptung über einen
+Menschen, der nichts getan hat (`backlog/CONVENTIONS.md` 4.13). Ohne diesen
+Übergang bliebe die Anfrage unsichtbar, und die Historie zeigte weniger, als
+wirklich geschehen ist.
+
+Der Übergang ist keine Aufweichung der Zusage, dass jede gewöhnliche Anfrage
+einem Menschen gezeigt wird. Er gilt allein für den Fluss, **dessen eigene
+Anfrage** an den reservierten Namen ging, und geprüft wird das an diesem Fluss,
+im Augenblick des Abschließens: `Flow::apply` lehnt `Answer` ab, sobald
+`Flow::is_meta` nicht gilt. Die einzige Tür dorthin ist `Flow::answer`; sie
+nennt den Grund (`PROXY_009` für den falschen Host, `InvalidTransition` für den
+falschen Zustand) und gibt den Nachweis nicht heraus. `MetaAnswer` selbst ist
+`#[non_exhaustive]`, außerhalb der Crate also nicht baubar, und trägt keine
+Angaben.
+
+Dass der Nachweis nicht reisen darf, ist der Kern: Ein Wert, der nur belegt,
+dass *irgendeine* Anfrage an den reservierten Namen ging, ließe sich auf einen
+fremden Fluss anwenden, der noch in `Received` steht — jede Anfrage steht dort
+nach der Ankunft, und der Fluss landete in `Recorded`, ohne dass ein Mensch ihn
+je gesehen hätte. `flow_state_table.rs` zählt beide Hälften auf (aus welchem
+Zustand der Weg öffnet und für welchen Fluss), die crate-interne Gegenprobe mit
+einem echten Nachweis an einem fremden Fluss steht in
+`flow.rs::tests::a_witness_does_not_open_a_foreign_flow`.
+
+Der Datensatz eines Meta-Flusses trägt die Spalte `flows.meta` und **keine**
+`decision`. Er zählt in keiner Auswertung mit, die über Entscheidungen spricht;
+der Filterterm `meta:` trennt ihn von den übrigen.
 
 Wer entscheiden darf, hängt von der `DecisionSource` ab. `DecisionSource::System`
 (der Daemon selbst, etwa bei erschöpftem Budget) darf aus `Analyzed` und `Held`

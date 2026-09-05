@@ -153,6 +153,10 @@ impl FakeFlow {
             error: self
                 .upstream_error
                 .map_or_else(String::new, |error| error.to_string()),
+            // Der Fake spielt eine aufgezeichnete Sitzung nach, und eine
+            // Meta-Anfrage steht in keiner: Sie entsteht im Proxy und geht ohne
+            // Ereignis in die Aufzeichnung (HUM-103).
+            meta: false,
         }
     }
 

@@ -54,6 +54,8 @@ Map<String, Object?> jsonlRecord(HistoryExportEntry entry) {
     'findings_count': flow.findingCount,
     'edited': flow.edited,
     'passthrough': flow.passthrough,
+    // Next to `decision`, not inside it (HUM-103).
+    'meta': flow.meta,
     'origin_tool': flow.originTool,
     'upstream_error': flow.upstreamError?.name,
     'request_headers': _headers(request?.headers),

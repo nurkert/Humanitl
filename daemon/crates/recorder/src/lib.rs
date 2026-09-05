@@ -357,6 +357,25 @@ impl Recorder {
         });
     }
 
+    /// Vermerkt einen Flow als Anfrage an den Meta-Endpunkt und hält den
+    /// Status fest, mit dem der Proxy selbst geantwortet hat (HUM-103).
+    ///
+    /// Für den Fall, den kein Ereignis trägt: Eine Anfrage an
+    /// `humanitl.internal` geht nirgendwo hin, und über sie entscheidet
+    /// niemand. Ihr Flow erreicht seinen Endzustand über
+    /// `TransitionInput::Answer`, dessen Ereignis [`FlowEvent::Recorded`] ist
+    /// und keinen Status trägt; `flows.decision` bleibt `NULL`, weil eine
+    /// erfundene Entscheidung eine Behauptung über einen Menschen wäre, der
+    /// nichts getan hat (`backlog/CONVENTIONS.md` 4.13).
+    ///
+    /// Aufzurufen erst, nachdem [`FlowEvent::Received`] durch
+    /// [`Recorder::apply`] gegangen ist: vorher gibt es die Zeile nicht, die
+    /// hier fortgeschrieben wird. Beide Wege gehen durch denselben Kanal, also
+    /// genügt die Reihenfolge der Aufrufe.
+    pub fn set_meta_answer(&self, flow: FlowId, status: u16) {
+        self.send(WriterCmd::Meta { flow, status });
+    }
+
     /// Trägt Apex und Katalog-Kennung eines Flows nach.
     ///
     /// Beides kennt der Recorder nicht selbst: die Public Suffix List und der

@@ -1798,15 +1798,15 @@ dass der Name je aufgelöst wird. Ein Name, der nur so *aussieht* —
 `humanitl.internal.evil.io` —, ist ein gewöhnlicher Host und läuft durch die
 Regeln.
 
-**Meta-Anfragen erzeugen keinen Flow.** Die Spezifikation will sie „im Recorder
-als Flow mit `state=Recorded`, `decision=meta`" sehen, sichtbar über den Filter
-`meta:true`. Der Zustandsautomat kennt keinen Weg von einer Nicht-Sperre nach
-`Recorded`; `decision=meta` verlangte deshalb eine neue Variante in
-`Decision`, in `DecisionKind` der Proto, im Schema und im Filter des Recorders.
-Das ist **HUM-103**; bis dahin entsteht für `/` und `/why` gar kein Flow —
-niemand hat entschieden, und ein Datensatz mit einer erfundenen Entscheidung
-wäre eine Behauptung über einen Menschen, der nichts getan hat (4.13). Sichtbar
-wird allein `/ask`, als `FlowEvent::AgentAsk` und als Karte.
+**Meta-Anfragen erzeugten zunächst keinen Flow; seit HUM-103 tun sie es, ohne
+Entscheidung.** Die Spezifikation von HUM-073 wollte sie „im Recorder als Flow
+mit `state=Recorded`, `decision=meta`" sehen. Der Zustandsautomat kannte keinen
+Weg von einer Nicht-Sperre nach `Recorded`, und eine erfundene Entscheidung wäre
+eine Behauptung über einen Menschen, der nichts getan hat (4.13); bis HUM-103
+entstand für `/` und `/why` deshalb gar kein Flow, und sichtbar wurde allein
+`/ask` als `FlowEvent::AgentAsk` und als Karte. Seit HUM-103 gibt es die Zeile,
+und sie trägt **kein** `decision=meta`, sondern die Spalte `flows.meta` neben
+der Entscheidung; wie das gebaut ist, steht in 4.27.
 
 **Das Ratenlimit ist ein gleitendes Fenster.** Zehn angenommene Bitten je
 Sitzung in sechzig Sekunden, gezählt über die Zeitpunkte der angenommenen
@@ -2364,3 +2364,78 @@ keinen Anhänge-Befehl, weil es keinen gibt.
 bleibt bei 3 und darf nachziehen: Eine abweichende Minor ist verabredetermaßen
 kein Grund, die Verbindung abzulehnen, und die Oberfläche liest die neuen
 Felder nicht.
+
+### 4.27 Aus der Umsetzung der Meta-Flüsse in der Historie (HUM-103, 2026-09-05)
+
+Abweichungen von `backlog/sprint-3.md`, die dauerhaft gelten. Wo die
+Spezifikation anderes sagt, gilt dieser Abschnitt. Der Zuschnitt des Issues —
+was gebaut wurde und was nicht — steht als Stand-Abschnitt unter der
+Spezifikation.
+
+**Es gibt kein `decision=meta`, und es soll keines geben.** `BACKLOG.md` und das
+vierte Akzeptanzkriterium von HUM-073 nennen eine neue Variante in `Decision`
+und in `DecisionKind`. Gebaut ist die Spalte `flows.meta` **neben** der
+Entscheidung, und `decision` bleibt an einem Meta-Fluss leer. `decision` sagt
+aus, wie ein Mensch oder eine Regel über eine Anfrage entschieden hat; über eine
+Anfrage an `humanitl.internal` entscheidet niemand. Der Gewinn ist nicht nur
+Ehrlichkeit: Jede Auswertung über Entscheidungen — `decision:allow`,
+`decision:block`, die Zahlen des Demolaufs — lässt einen Meta-Fluss dadurch von
+selbst aus und musste ihn nicht ausnehmen. **Für jedes künftige Feld dieser Art
+gilt dieselbe Frage: Ist es eine Art von Entscheidung oder etwas daneben? Wenn
+es niemand entschieden hat, ist es etwas daneben.**
+
+**Der einzige Weg nach `Recorded` ohne Entscheidung hängt am Fluss, nicht an
+Disziplin und nicht an einem Wert.** `TransitionInput::Answer(MetaAnswer)` führt
+aus `Received` unmittelbar in den Endzustand (ADR-0004, Nachtrag). Geprüft wird
+er in `Flow::apply`, an `Flow::is_meta`, im Augenblick des Abschließens; die
+einzige Tür dorthin ist `Flow::answer`, die den Grund nennt (`PROXY_009` für den
+falschen Host) und den Nachweis nicht herausgibt. `MetaAnswer` ist
+`#[non_exhaustive]`, außerhalb der Crate nicht baubar, und trägt keine Angaben.
+
+**Die Lehre, teuer bezahlt:** Der erste Entwurf hängte den Weg an einen
+Nachweis, den `MetaAnswer::for_request(&HttpRequest)` ausstellte. Das war zu
+wenig. Ein solcher Nachweis belegt, dass *eine* Anfrage an den reservierten
+Namen ging, nicht dass **diese** es tat — ein Aufrufer konnte sich einen für
+`humanitl.internal` holen und ihn über `Flow::apply` auf einen gewöhnlichen
+Fluss anwenden, der noch in `Received` stand; jede Anfrage steht dort nach der
+Ankunft, und der Fluss landete in `Recorded`, ohne dass ein Mensch ihn je
+gesehen hätte. Codex hat das am 2026-09-05 gefunden. **Wer künftig einen
+Übergang hinzufügt, der eine Zusage dieses Produkts umgeht, bindet ihn an den
+Gegenstand, um den es geht — nicht an seine Gattung —, prüft ihn dort, wo dieser
+Gegenstand bekannt ist, und schreibt den Test dazu, dass ein echtes Zeugnis am
+falschen Gegenstand abgelehnt wird.**
+
+**Der reservierte Name wohnt im Kern.** `humanitl_core::META_HOST` und
+`HostName::is_meta`; `humanitl_proxy::meta` reicht beide weiter. Zwei Kopien
+derselben Zeichenkette liefen auseinander, und an der einen hinge ein Endpunkt,
+an der anderen ein Weg am Menschen vorbei.
+
+**Ein Meta-Fluss geht nicht durch `HoldQueue::publish`.** Der Handler ruft
+`Recorder::apply` direkt. Der Fluss ist fertig, bevor ein Zuhörer etwas mit ihm
+anfangen könnte; er gehört nicht in die `FlowRegistry`, die die Flows dieser
+Sitzung führt, über die noch entschieden werden kann, und deren Datensätze
+`/why/<id>` beantwortet. Folge, ausgesprochen: Die Historie zeigt einen
+Meta-Fluss erst beim nächsten Laden, nicht als Ankunft in der Pille, und
+`/why/<meta-id>` antwortet `404` — über einen Meta-Fluss gibt es nichts zu
+erklären.
+
+**Der Filterterm `meta:` steht an zwei der drei Auslegungen.** In
+`daemon/crates/recorder/src/filter.rs` und im Dart-Fake, als Wahrheitswert wie
+`edited:` und `passthrough:`. `humanitl_ipc::convert::matches_filter` bleibt bei
+seiner bewusst kleineren Lesart (`host:`, `state:`, `session:`), die auch
+`decision:` nicht kennt; HUM-099 führt die drei zusammen. Bis dahin hält ein
+Dart-Test die Naht sichtbar: Er liest `KEYS` aus `filter.rs` und vergleicht die
+Liste mit `fakeFilterKeys`.
+
+**Ein Meta-Fluss wird nie als gehalten gezeichnet.** `historyVisualState` fängt
+ihn vor allem anderen ab; die gemeinsame Ableitung `FlowVisualState` bildet
+`decision == null` auf `held` ab, und das behauptete, ein Mensch sei gerade
+dabei zu entscheiden. Er trägt bis auf Weiteres das Violett der Durchreiche
+(`HFlowState.passthroughLlm`), die Farbe, die dieses Produkt schon für den
+eigenen Kanal des Agenten benutzt (4.24, die `AgentAsk`-Karte). Ein eigener
+`HFlowState.meta` in `app/packages/ui` bleibt offen.
+
+**Was aufgezeichnet wird und was nicht.** Kopfzeilen der Anfrage, Pfad, Methode
+und der Statuscode, den der Proxy selbst geschrieben hat; bei `/ask` zusätzlich
+der **gesäuberte** Text der Bitte, nie der rohe Rumpf des Agenten. Der Rumpf
+einer Meta-Antwort wird an keiner Stelle aufgezeichnet.
