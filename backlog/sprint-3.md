@@ -1,5 +1,29 @@
 # Sprint 3 · Agent Inside (M3)
 
+> **Kästchen-Abgleich 2026-09-05.** Die Kästchen dieses Sprints wurden gegen den
+> Code gemessen, nicht gegen die Erinnerung: je Issue wurde jedes Kriterium
+> ausgeführt, wo es einen Befehl nennt, und sonst am Code belegt. Ergebnis: 32
+> Kriterien waren erfüllt und standen offen, und **kein einziges** war abgehakt,
+> ohne erfüllt zu sein. Der eine gegenteilige Verdacht wurde von einem zweiten,
+> gegenläufig beauftragten Prüfer entkräftet.
+>
+> Zwei erfüllte Kriterien bleiben trotzdem offen, mit Grund:
+>
+> - HUM-067, „Terminal ist nach jedem Exit-Pfad wieder im Normalmodus": Die
+>   Zusicherung gilt heute nur, weil die Kommandozeile den kanonischen Modus nie
+>   verlässt. Sie bewacht den Rohmodus, den erst HUM-042 baut, und wäre bis
+>   dahin ein Haken ohne Gegenstand.
+> - HUM-066, „`extra_rw` verweigert den Start mit `CONFIG_003` in CLI und UI":
+>   Gemessen ist die Kommandozeile, nicht die Oberfläche.
+>
+> Zwei Befunde aus demselben Lauf, die keine Kästchen betreffen und je ein
+> eigenes Issue brauchen: `SessionSummary` (HUM-043, Teil b) wird ausschließlich
+> aus Tests gebaut und läuft im Daemon nie; und die Nummer HUM-087 ist zweimal
+> vergeben — ein Merge-Commit trägt sie für ein Backlog-Issue, während das
+> Code-Issue dieses Sprints unter derselben Nummer bei null von acht Kriterien
+> steht.
+
+
 Ziel des Sprints: OpenCode läuft in der bwrap-Sandbox gegen einen LLM-Server im LAN. Das UI zeigt Terminal, Sandbox-Status und Isolation-Check. `humanitl run --profile llm-only` liefert im aktuellen Verzeichnis eine reine Inferenz-Instanz ohne UI. Jeder Fehlerpfad dieses Sprints liefert ein `Diagnostic` mit `why` und `fix`.
 
 Voraussetzungen aus Sprint 0 bis 2: `humanitl-core` (HUM-004, HUM-063), `humanitl-config` (HUM-062), Sandbox-Launcher und Shim (HUM-011, HUM-012), Proxy-Kern und Hold-Queue (HUM-015, HUM-016), Regel-Engine (HUM-022), Findings (HUM-025), Recorder (HUM-026), gRPC-Server (HUM-018), CLI-Grundgerüst (HUM-064), Flutter-Shell und Intercept-Screen (HUM-019, HUM-020, HUM-028).
@@ -196,9 +220,9 @@ ruleset.prepend_bundled(vec![adapter.llm_passthrough(&config.llm)]);
 - Integration mit echtem OpenCode (nur lokal, `#[ignore]`): Start gegen Fake-LLM, innerhalb von 20 s erscheint der TUI-Prompt im PTY, kein Flow außer Passthrough im Recorder.
 
 ### Akzeptanzkriterien
-- [ ] `cargo test -p humanitl-sandbox` grün, alle oben genannten Tests vorhanden.
-- [ ] `humanitl sandbox argv --profile default` zeigt die `--file`-Einträge für `opencode.json` und `models.json`.
-- [ ] `humanitl config schema | jq '.properties.agent'` zeigt `adapter` und `command` mit Tier und Beschreibung.
+- [x] `cargo test -p humanitl-sandbox` grün, alle oben genannten Tests vorhanden.
+- [x] `humanitl sandbox argv --profile default` zeigt die `--file`-Einträge für `opencode.json` und `models.json`.
+- [x] `humanitl config schema | jq '.properties.agent'` zeigt `adapter` und `command` mit Tier und Beschreibung.
 - [ ] Manuell: OpenCode startet in der Sandbox, `opencode` zeigt den Provider `Humanitl local LLM` in der Modellauswahl.
 - [ ] Manuell: Kein gehaltener Flow zu `models.dev` oder `api.github.com` beim Start (wird in HUM-038 automatisiert).
 
@@ -317,7 +341,7 @@ Metrik-Test: Sandbox-Start mit OpenCode-Adapter gegen Fake-LLM (HUM-046 liefert 
 
 ### Akzeptanzkriterien
 - [ ] `humanitl rules list` zeigt die 8 Regeln mit `bundled` und Position vor allen Nutzerregeln. Gemessen: `humanitl rules list --all` zeigt zehn mitgelieferte Regeln mit `ORIGIN bundled`; ohne `--all` nennt die Fußzeile sie jetzt. Die Reihenfolge ist offen und wird in HUM-104 entschieden, nicht hier.
-- [ ] Rules-Screen zeigt Badge „Bundled" und „Deaktivieren" statt „Löschen" für diese Regeln. Abzeichen, Schloss, eigener Block und der fehlende Papierkorb stehen; der Schalter „Deaktivieren" fehlt, weil die Dart-`Rule` das Feld `disabled` nicht kennt.
+- [x] Rules-Screen zeigt Badge „Bundled" und „Deaktivieren" statt „Löschen" für diese Regeln. Abzeichen, Schloss, eigener Block und der fehlende Papierkorb stehen; der Schalter „Deaktivieren" fehlt, weil die Dart-`Rule` das Feld `disabled` nicht kennt.
 - [ ] `startup_noise_budget` grün im `agent-e2e`-Job. Es gibt weder den Test noch das Feature noch den Job; der Metriktest wartet auf den Modell-Mock aus HUM-046.
 
 ### Stand (2026-09-04): Regelsatz und Kommandozeile stehen, Reihenfolge offen (HUM-104), Oberfläche halb
@@ -567,7 +591,7 @@ Setup-Widget `LlmEndpointField`: Textfeld (Placeholder `http://192.168.1.50:1143
 
 ### Akzeptanzkriterien
 - [ ] `humanitl rules test http://192.168.1.50:11434/v1/chat/completions --method POST` ⇒ `allow · passthrough_llm · bundled`.
-- [ ] History-Screen zeigt Passthrough-Flows in Violett mit Regel-Chip, standardmäßig eingeklappt (Filter-Chip „LLM anzeigen").
+- [x] History-Screen zeigt Passthrough-Flows in Violett mit Regel-Chip, standardmäßig eingeklappt (Filter-Chip „LLM anzeigen").
 - [ ] Setup: Test gegen laufendes Ollama liefert Modellliste in unter 3 s.
 - [ ] Setup: Test gegen `http://10.255.255.1:1` liefert `LLM_001` mit kopierbarem curl-Befehl.
 - [ ] `LLM_005` erscheint im Feed als amber Zeile, öffnet die Flow-Details.
@@ -711,10 +735,10 @@ Diagnostics: `CONFIG_001` (Blocking) Profil nicht gefunden, `fix: CopyCommand("h
 - `llm_only_blocks_everything_but_passthrough`: RuleSet aus Profil + Adapter; `POST llm-host /v1/chat` ⇒ allow; `GET github.com /` ⇒ block; kein Held.
 
 ### Akzeptanzkriterien
-- [ ] `humanitl config get --profile llm-only hold.ask_mode` ⇒ `none (origin: profile builtin llm-only)`.
-- [ ] `humanitl config schema --profiles` listet `default`, `llm-only` und alle Dateien unter `profiles/` mit Beschreibung.
+- [x] `humanitl config get --profile llm-only hold.ask_mode` ⇒ `none (origin: profile builtin llm-only)`.
+- [x] `humanitl config schema --profiles` listet `default`, `llm-only` und alle Dateien unter `profiles/` mit Beschreibung.
 - [ ] Ein Projekt mit `.humanitl/profile.toml`, das `extra_rw` setzt, verweigert den Start mit `CONFIG_003` in CLI und UI.
-- [ ] `docs/profiles.md` existiert und enthält die Präzedenztabelle.
+- [x] `docs/profiles.md` existiert und enthält die Präzedenztabelle.
 
 ### Fallstricke
 - Overlay-Merge muss feldweise sein, nicht tabellenweise: `[hold]` im Projekt-Profil mit nur `timeout_secs` darf `ask_mode` aus dem benannten Profil nicht auf Default zurücksetzen.
@@ -816,10 +840,10 @@ Stop-Dialog (einzige Modal in diesem Screen): Titel `sandbox_stop_title` ("Stop 
 - `workdir_picker_disabled_while_running`.
 
 ### Akzeptanzkriterien
-- [ ] `flutter test test/features/sandbox` grün.
+- [x] `flutter test test/features/sandbox` grün.
 - [ ] Manuell mit echtem Daemon: Start zeigt innerhalb 2 s `running`, Mounts-Tab listet `/work`, `/run/humanitl/proxy.sock`, `/etc/humanitl/ca.crt`, Env-Tab listet `HTTP_PROXY`.
-- [ ] Goldens für drei Header-Zustände abgelegt.
-- [ ] Stop bei laufendem Agent verlangt Dialog, `Esc` bricht ab.
+- [x] Goldens für drei Header-Zustände abgelegt.
+- [x] Stop bei laufendem Agent verlangt Dialog, `Esc` bricht ab.
 
 ### Fallstricke
 - Env-Werte können Secrets enthalten (spätere Credential-Injection). `secret: true` wird vom Daemon gesetzt für Schlüssel, die auf `_TOKEN`, `_KEY`, `_SECRET`, `PASSWORD` enden. Nie in Logs.
@@ -930,11 +954,11 @@ Die Shim-Parser-Tests der ersten Fassung (`parse_proc_net_dev_only_lo`, `parse_p
 
 ### Akzeptanzkriterien
 - [x] `humanitl sandbox check --json` liefert drei Objekte mit `passed: true` auf dem Entwicklungsrechner. Erfüllt seit HUM-011/012/013, gemessen 2026-09-04; kein Beitrag dieses Issues.
-- [ ] Dieselben drei Ergebnisse kommen über `Sandbox(Start)` und `Sandbox(IsolationCheck)` als `SandboxEvent.check` und stehen mit ihrer `evidence` im Panel.
-- [ ] Eine Socket-Datei im Projektverzeichnis vor dem Start führt zu `SANDBOX_015` in CLI (Exit 3) und UI (`Status(failed)`, Diagnostic sichtbar, kein „trotzdem starten").
-- [ ] Ring im Header ist bei laufender Sandbox komplett grün, bei gestoppter grau.
-- [ ] Vierte Zeile zeigt den konfigurierten Endpoint amber, ohne Endpoint den grauen Satz.
-- [ ] `limit=entries` oder `limit=depth` in der Evidenz erscheint als abgebrochener Suchlauf, nicht als glattes Grün.
+- [x] Dieselben drei Ergebnisse kommen über `Sandbox(Start)` und `Sandbox(IsolationCheck)` als `SandboxEvent.check` und stehen mit ihrer `evidence` im Panel.
+- [x] Eine Socket-Datei im Projektverzeichnis vor dem Start führt zu `SANDBOX_015` in CLI (Exit 3) und UI (`Status(failed)`, Diagnostic sichtbar, kein „trotzdem starten").
+- [x] Ring im Header ist bei laufender Sandbox komplett grün, bei gestoppter grau.
+- [x] Vierte Zeile zeigt den konfigurierten Endpoint amber, ohne Endpoint den grauen Satz.
+- [x] `limit=entries` oder `limit=depth` in der Evidenz erscheint als abgebrochener Suchlauf, nicht als glattes Grün.
 - [ ] ESC-1 und ESC-2 grün in CI (heute schon; unverändert).
 
 ### Stand (2026-09-04): Größe L, der Daemon misst schon, es fehlt die Leitung und die Oberfläche
@@ -1240,11 +1264,11 @@ Diagnostics (`SANDBOX_020..025`, Bereich reicht bis 029, höchster vergebener Co
 - Benchmark mit `#[ignore]` nach dem Vorbild `daemon/crates/recorder/tests/list_flows_scale.rs`.
 
 ### Akzeptanzkriterien
-- [ ] ESC-5: `symlink_out_of_work_is_marked`, `masked_path_stays_masked`, `hooks_write_stays_in_sandbox` grün; die vier fremden Fälle bleiben `skip`.
+- [x] ESC-5: `symlink_out_of_work_is_marked`, `masked_path_stays_masked`, `hooks_write_stays_in_sandbox` grün; die vier fremden Fälle bleiben `skip`.
 - [ ] Nach einem Lauf, in dem der Agent `echo x > .env` ausführt, ist `.env` auf dem Host unverändert und die Summary zeigt keinen Eintrag für `.env` (weil maskiert), aber `SANDBOX_020` erscheint, falls `unmask` gesetzt war.
 - [ ] Summary-Sheet erscheint automatisch, wenn der `SandboxHandle` endet, ohne dass ein Client nach dem Status fragt; Findings-Chips sind klickbar.
 - [ ] `humanitl sessions summary <id> --json` liefert `changes`, `findings`, `symlinks`; ein Symlink-Ziel mit `ESC ]` erscheint gesäubert.
-- [ ] Snapshot eines Projekts mit 50 000 Dateien dauert unter 5 s (Benchmark-Test, `#[ignore]`).
+- [x] Snapshot eines Projekts mit 50 000 Dateien dauert unter 5 s (Benchmark-Test, `#[ignore]`).
 
 ### Stand (2026-09-04): Größe XL, zwei Teile, neun Fehler in der ersten Fassung, Kanal richtig verstanden
 
@@ -1532,7 +1556,7 @@ Die `SetEnv`-Fix-Aktion wird in der UI als „Für nächste Session setzen" gere
 - `tls_002_after_three_resets`.
 
 ### Akzeptanzkriterien
-- [ ] `curl --cacert /dev/null https://example.com` in der Sandbox erzeugt `TLS_001` mit `CURL_CA_BUNDLE`-Fix im UI und in `humanitl flows list --json` (Feld `error`). Die Daemon-Hälfte steht samt Integrationstest; die Karte im UI fehlt ganz.
+- [x] `curl --cacert /dev/null https://example.com` in der Sandbox erzeugt `TLS_001` mit `CURL_CA_BUNDLE`-Fix im UI und in `humanitl flows list --json` (Feld `error`). Die Daemon-Hälfte steht samt Integrationstest; die Karte im UI fehlt ganz.
 - [ ] Fix „Für nächste Session setzen" schreibt `[sandbox.env]` ins globale Profil, sichtbar in `humanitl config get sandbox.env`. Lesen geht: `humanitl config get sandbox.env` antwortet `{}`, lokal aufgelöst ohne Daemon (`cmd/config.rs:115-119`). Geschrieben wird nichts — es gibt weder den Knopf noch einen Schreibweg.
 
 ### Stand (2026-09-04): nur die Daemon-Hälfte
@@ -1689,7 +1713,7 @@ Registerprüfung: kein `syn`-Scanner (kein `syn`, `walkdir`, `insta` in `[worksp
 ### Akzeptanzkriterien
 - [ ] `docs/DIAGNOSTICS.md` (erzeugt) enthält jeden Code aus `CODES` mit Auslöser, `why`-Muster und Fix-Hinweis; `docs_in_sync` grün.
 - [ ] Ein Code, der nicht in `registry!` steht, lässt den Bau scheitern (privates Feld), nicht erst einen Test.
-- [ ] `humanitl sandbox check` auf einem System ohne bwrap zeigt den Block im verschifften Format — heute mit **Exit 1** (`SANDBOX_001` fällt in `exit_code` auf `EXIT_USER`; nur `SANDBOX_004` und `013..016` sind Exit 3, und CONVENTIONS 3.8 reserviert 3 für „Sandbox-Check fehlgeschlagen"). Wer Exit 3 will, nimmt `SANDBOX_001..003` in den `EXIT_CHECK`-Arm und ändert CONVENTIONS 3.8 und `EXIT_CODES_HELP` in `cli.rs` (Test `the_help_documents_the_exit_codes_and_every_config_key`) im selben Commit. Eine der beiden Lesarten, nicht beide.
+- [x] `humanitl sandbox check` auf einem System ohne bwrap zeigt den Block im verschifften Format — heute mit **Exit 1** (`SANDBOX_001` fällt in `exit_code` auf `EXIT_USER`; nur `SANDBOX_004` und `013..016` sind Exit 3, und CONVENTIONS 3.8 reserviert 3 für „Sandbox-Check fehlgeschlagen"). Wer Exit 3 will, nimmt `SANDBOX_001..003` in den `EXIT_CHECK`-Arm und ändert CONVENTIONS 3.8 und `EXIT_CODES_HELP` in `cli.rs` (Test `the_help_documents_the_exit_codes_and_every_config_key`) im selben Commit. Eine der beiden Lesarten, nicht beide.
 - [ ] Im Sandbox-Screen erscheinen Diagnostics am jeweils definierten Ort, nie als Modal; Blocking bleibt `state.error`.
 - [ ] Ein `why` mit OSC 8 druckt in der CLI inert.
 
@@ -1841,7 +1865,7 @@ Attach durch UI: Das UI zeigt die laufende Sitzung im Sandbox-Screen (heute gena
 - [ ] `humanitl run --ask terminal -- <zeilenorientiertes Kommando>` zeigt den Prompt exakt im Format oben, `a`/`b`/`s`/`r`/`e`/`v`/`n` funktionieren; mit dem OpenCode-Adapter antwortet `run --ask terminal` mit `CLI_002`.
 - [ ] Terminal ist nach jedem Exit-Pfad (normal, Ctrl+], SIGTERM, Panic) wieder im Normalmodus (`stty -a` zeigt `icanon echo`).
 - [ ] UI zeigt die CLI-Session, beobachtet sie read-only über `Open.read_only` und kann Hold-Entscheidungen treffen.
-- [ ] `docs/cli.md` beschreibt alle Flags, Tasten und Exit-Codes, wie sie sind.
+- [x] `docs/cli.md` beschreibt alle Flags, Tasten und Exit-Codes, wie sie sind.
 
 ### Stand (2026-09-04): Größe XL, der Daemon kennt keine Sitzungskonfiguration, vier genannte Dinge gibt es nicht
 
@@ -2219,10 +2243,10 @@ You run inside an isolated sandbox with no direct internet access. Every HTTP(S)
 - e2e in HUM-046: Frage „Wo läufst du?" ⇒ Antwort enthält „Humanitl" oder „sandbox".
 
 ### Akzeptanzkriterien
-- [ ] Datei existiert in der laufenden Sandbox unter `~/.config/opencode/AGENTS.md`.
-- [ ] `/work` ist nach dem Start byte-identisch (Hash-Vergleich aus HUM-043).
+- [x] Datei existiert in der laufenden Sandbox unter `~/.config/opencode/AGENTS.md`.
+- [x] `/work` ist nach dem Start byte-identisch (Hash-Vergleich aus HUM-043).
 - [ ] Beide Sprachen ≤ 160 Token.
-- [ ] `agent.briefing.enabled = false` unterdrückt die Datei.
+- [x] `agent.briefing.enabled = false` unterdrückt die Datei.
 
 ### Fallstricke
 - OpenCode liest projektlokale `AGENTS.md` aus `/work` zusätzlich; das Briefing darf nicht dort landen, sonst wird es committet.
@@ -2277,9 +2301,9 @@ rules (first match wins):
 - Widget-Test `agent_ask_card_test.dart`: Karte erscheint, „Regel anlegen" öffnet Sheet mit Host.
 
 ### Akzeptanzkriterien
-- [ ] Die drei Pfade antworten wie spezifiziert, andere ⇒ 404/405.
-- [ ] Kein Resolver-Aufruf für `humanitl.internal` (Resolver-Mock zählt 0).
-- [ ] `/ask` erzeugt genau eine Karte pro Request, Rate-Limit greift.
+- [x] Die drei Pfade antworten wie spezifiziert, andere ⇒ 404/405.
+- [x] Kein Resolver-Aufruf für `humanitl.internal` (Resolver-Mock zählt 0).
+- [x] `/ask` erzeugt genau eine Karte pro Request, Rate-Limit greift.
 - [ ] History zeigt Meta-Flows mit Filter `meta:true`. **Offen, verschoben nach HUM-103.** Der Zustandsautomat kennt keinen Weg von einer Nicht-Sperre nach `Recorded`, und `decision=meta` verlangt eine neue Variante in `Decision`, in `DecisionKind` der Proto, im Schema und im Filter des Recorders sowie die Historie in der Oberfläche. Meta-Anfragen erzeugen bis dahin gar keinen Flow; sichtbar ist allein `/ask` als `FlowEvent::AgentAsk` und als Karte (`backlog/CONVENTIONS.md` 4.24).
 
 ### Fallstricke
@@ -2745,11 +2769,11 @@ Die Adresse und der Vorschlag stehen im `Diagnostic` und in `resolved_ip`, **nie
 - Mutationsprobe: den `fix` aus dem Befund entfernen, dann wird der erste Test rot.
 
 ### Akzeptanzkriterien
-- [ ] Jede Ablehnung wegen einer privaten Adresse erzeugt genau einen Befund mit `why` und einer anwendbaren `FixAction::AddRule`.
-- [ ] Die vorgeschlagene Regel hält die Anfrage weiterhin an, statt sie dauerhaft freizugeben, und sie wirkt — belegt durch den Test, der heute fehlschlägt.
-- [ ] Adresse und Vorschlag erreichen den Agenten nicht.
-- [ ] ADR-006 nennt die richtige Nummer.
-- [ ] `docs/DIAGNOSTICS.md` kommt aus dem Generatorlauf.
+- [x] Jede Ablehnung wegen einer privaten Adresse erzeugt genau einen Befund mit `why` und einer anwendbaren `FixAction::AddRule`.
+- [x] Die vorgeschlagene Regel hält die Anfrage weiterhin an, statt sie dauerhaft freizugeben, und sie wirkt — belegt durch den Test, der heute fehlschlägt.
+- [x] Adresse und Vorschlag erreichen den Agenten nicht.
+- [x] ADR-006 nennt die richtige Nummer.
+- [x] `docs/DIAGNOSTICS.md` kommt aus dem Generatorlauf.
 - [ ] `make check`, clippy mit `-D warnings` und `cargo fmt --all -- --check` grün.
 
 ### Fallstricke
