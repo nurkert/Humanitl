@@ -78,9 +78,13 @@ English. Read the German; do not ask for a translation.
   `cd daemon && cargo build --workspace --all-targets && cargo test --workspace`,
   `./tools/check-deps.sh`, `scripts/ci/lint-docs.sh`,
   `scripts/ci/lint-no-string-errors.sh`, and for Flutter
-  `cd app && flutter analyze && flutter test`. On this machine there is no
-  rustfmt, clippy, rustup, protoc or buf; do not report their absence as a
-  defect.
+  `cd app && flutter analyze && flutter test`. rustfmt and clippy are present
+  on this machine but not on the PATH: they live in the rustup toolchain under
+  `~/.rustup/toolchains/*/bin`, and the Makefile puts that directory on the
+  PATH itself (`Makefile:16-19`), which is why `make check` runs them while a
+  bare `cargo clippy` reports them missing. Prepend that directory before you
+  conclude a tool is absent. Genuinely absent here are `rustup` itself, protoc,
+  buf and check-jsonschema; do not report those as a defect.
 - Reviewers may run concurrently. To avoid fighting over the cargo lock, build
   into your own target directory: `export CARGO_TARGET_DIR=$PWD/daemon/target/review-<yourname>`
   (for example `review-codex`, `review-agy`). Do not delete or modify the
