@@ -253,6 +253,12 @@ class TestDaemonClient implements DaemonClient {
   Future<DryRun> dryRunRule(Rule rule, {int limit = dryRunScanDefault}) async =>
       DryRun.empty;
 
+  // Der Schalter mitgelieferter Regeln (HUM-105) gehört dem Rules-Screen; der
+  // Intercept-Screen fährt ihn nicht.
+  @override
+  Future<RuleSet> setRuleDisabled(RuleId id, {required bool disabled}) async =>
+      RuleSet.empty;
+
   // Der Sandbox-Teil des Ports (HUM-040). Diese Tests fahren ihn nicht; der
   // Sandbox-Bildschirm hat sein eigenes Gerüst mit dem FakeDaemonClient.
   @override

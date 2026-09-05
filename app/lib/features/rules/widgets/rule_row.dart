@@ -26,6 +26,11 @@ import '../providers/rules.dart';
 /// Below this pane width the origin of a rule leaves the row. It is the
 /// least load-bearing part of the line: it says where the rule came from,
 /// which the semantics and the editor still carry.
+///
+/// One exception, and it is not about provenance: for a rule somebody
+/// switched off the same slot carries the one word that says the rule decides
+/// nothing, and that word stays at every width -- shortened, so the sentence
+/// keeps its room (`docs/UX.md` 3.3 rule 2, 3.4).
 const double ruleRowOriginBelow = 420;
 
 /// Below this width the note leaves the row. It explains a rule; the sentence
@@ -73,11 +78,19 @@ class RuleRow extends ConsumerStatefulWidget {
     required this.selected,
     required this.onOpen,
     this.onDelete,
+    this.onToggleDisabled,
+    this.togglingDisabled = false,
     this.onMove,
     this.onMoveRefused,
     this.dragHandle,
     super.key,
-  });
+  }) : assert(
+         onDelete == null || onToggleDisabled == null,
+         'a row offers the bin or the switch, never both: a bundled rule '
+         'cannot be deleted and a rule of the person cannot be switched off, '
+         'and the daemon refuses whichever of the two is offered wrongly '
+         'with RULES_010',
+       );
 
   /// The rule this row shows.
   final Rule rule;
@@ -97,6 +110,22 @@ class RuleRow extends ConsumerStatefulWidget {
 
   /// Deletes the rule. Null for a bundled rule, which nobody can delete.
   final VoidCallback? onDelete;
+
+  /// Switches the bundled rule off, or back on. Null for every rule that is
+  /// not bundled: those are deleted rather than switched off, and the daemon
+  /// refuses anything else with `RULES_010` (`rules_store.rs`,
+  /// `set_bundled_disabled`). The row offers whichever of the two it was
+  /// given, never both.
+  ///
+  /// Die Zeile ruft und rechnet nicht: der Aufruf, sein laufender Zustand und
+  /// der Befund einer Ablehnung gehören der Liste, die ihn überlebt -- der
+  /// Aktionsslot wird nur bei Hover und Fokus gebaut.
+  final VoidCallback? onToggleDisabled;
+
+  /// True while the call behind [onToggleDisabled] is still out. The switch is
+  /// visibly disabled then; nothing anticipates the answer of the daemon
+  /// (CONVENTIONS 4.13).
+  final bool togglingDisabled;
 
   /// Moves the rule by so many places. Null while the list cannot be
   /// reordered -- a filtered list, or the bundled block.
@@ -145,6 +174,11 @@ class _RuleRowState extends ConsumerState<RuleRow> {
         ? ref.watch(ruleClockProvider).value ?? DateTime.now()
         : DateTime.now();
     final bool expired = ruleExpiredAt(rule, now);
+    // Zwei Gründe, aus denen eine Zeile nichts mehr entscheidet, und dieselbe
+    // Dämpfung für beide: abgelaufen und ausgeschaltet. Welcher der beiden es
+    // ist, sagt das Wort daneben, nie die Farbe allein (`docs/UX.md` 3.3,
+    // Regel 2).
+    final bool inert = expired || rule.disabled;
     final HFlowState state = ruleRowState(rule, expired: expired);
 
     return Actions(
@@ -178,22 +212,92 @@ class _RuleRowState extends ConsumerState<RuleRow> {
           rule.action,
           tokens.stateTextColor(state),
           expired: expired,
+          disabled: rule.disabled,
         ),
         leading: _Place(
           position: widget.position,
           dragHandle: widget.dragHandle,
         ),
-        title: _Line(rule: rule, expired: expired, now: now),
-        actionSlot: widget.onDelete == null
-            ? null
-            : HIconButton(
-                key: ValueKey<String>('rule-delete-${widget.index}'),
-                glyph: HGlyph.trash,
-                size: 14,
-                color: tokens.stateTextColor(HFlowState.blocked),
-                semanticsLabel: l10n.rulesDelete,
-                onPressed: widget.onDelete,
-              ),
+        title: _Line(rule: rule, inert: inert, now: now),
+        actionSlot: _actionSlot(tokens, l10n),
+      ),
+    );
+  }
+
+  /// Was am rechten Rand steht: bei einer eigenen Regel der Papierkorb, bei
+  /// einer mitgelieferten der Schalter -- nie beides und nie das eine an der
+  /// Stelle des anderen.
+  ///
+  /// Welche der beiden Handlungen es gibt, sagt der Aufrufer, indem er genau
+  /// einen der beiden Rückrufe reicht; die Zeile prüft das nicht ein zweites
+  /// Mal. Dieselbe Aufteilung hat der Papierkorb seit HUM-033, und zwei
+  /// Wahrheiten über dieselbe Frage wären eine zu viel.
+  Widget? _actionSlot(HTokens tokens, AppLocalizations l10n) {
+    final VoidCallback? onToggle = widget.onToggleDisabled;
+    if (onToggle != null) {
+      return _DisableSwitch(
+        rule: widget.rule,
+        index: widget.index,
+        onPressed: widget.togglingDisabled ? null : onToggle,
+      );
+    }
+    final VoidCallback? onDelete = widget.onDelete;
+    return onDelete == null
+        ? null
+        : HIconButton(
+            key: ValueKey<String>('rule-delete-${widget.index}'),
+            glyph: HGlyph.trash,
+            size: 14,
+            color: tokens.stateTextColor(HFlowState.blocked),
+            semanticsLabel: l10n.rulesDelete,
+            onPressed: onDelete,
+          );
+  }
+}
+
+/// Der Schalter einer mitgelieferten Regel: aus, und wieder an.
+///
+/// Er steht an der Stelle, an der eine eigene Regel den Papierkorb hat, weil
+/// dieselbe Handlung immer an derselben Stelle liegt (CONVENTIONS 4.13) --
+/// und weil er für die mitgelieferte Regel dasselbe ist wie der Papierkorb
+/// für die eigene: der eine Weg, sie aufzuheben. Löschen kann man sie nicht;
+/// abschalten schon, und ein Klick holt sie zurück.
+///
+/// Er zeichnet nur und ruft zurück. Ein null-[onPressed] heißt „der Aufruf
+/// ist noch unterwegs": der Knopf steht dann sichtbar deaktiviert da, und
+/// nichts nimmt die Antwort des Daemons vorweg (CONVENTIONS 4.13).
+class _DisableSwitch extends StatelessWidget {
+  const _DisableSwitch({
+    required this.rule,
+    required this.index,
+    required this.onPressed,
+  });
+
+  final Rule rule;
+  final int index;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppLocalizations l10n = context.l10n;
+    final bool off = rule.disabled;
+    final String host = rule.matcher.host;
+    return HoverLabel(
+      label: off ? l10n.rulesEnable : l10n.rulesDisable,
+      child: HIconButton(
+        key: ValueKey<String>('rule-disable-$index'),
+        // Der Blitz heißt in diesem Vokabular „eine Regel hat entschieden"
+        // (`HGlyph.bolt`), und genau das schaltet dieser Knopf an und aus. Ein
+        // Kreuz an dieser Stelle läse sich als der Papierkorb, der bei einer
+        // eigenen Regel im selben Slot steht; im Zustands-Glyph links, wo kein
+        // Papierkorb steht, sagt dasselbe Kreuz dagegen genau das Richtige.
+        // Die Richtung des Schalters sagen Beschriftung und Semantik.
+        glyph: HGlyph.bolt,
+        size: 14,
+        semanticsLabel: off
+            ? l10n.rulesEnableSemantics(host)
+            : l10n.rulesDisableSemantics(host),
+        onPressed: onPressed,
       ),
     );
   }
@@ -240,10 +344,14 @@ class _Place extends StatelessWidget {
 /// never goes -- it is the rule (`docs/UX.md` 3.4, same reasoning as the
 /// queue row).
 class _Line extends StatelessWidget {
-  const _Line({required this.rule, required this.expired, required this.now});
+  const _Line({required this.rule, required this.inert, required this.now});
 
   final Rule rule;
-  final bool expired;
+
+  /// True while the rule decides nothing: its time has passed, or it is
+  /// switched off. It is what the line is drawn in the quieter colour for.
+  final bool inert;
+
   final DateTime now;
 
   @override
@@ -254,10 +362,17 @@ class _Line extends StatelessWidget {
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         final double width = constraints.maxWidth;
+        // Das Herkunftswort weicht als Erstes, und bei einer ausgeschalteten
+        // Regel weicht es nur bis auf das eine Wort, auf das es ankommt: dort
+        // sagt es nicht mehr, woher die Regel kommt, sondern dass sie nichts
+        // entscheidet. Ganz wegzulassen hieße, das allein der Farbe und dem
+        // Kreuz zu überlassen; ganz stehen zu lassen quetschte den Satz, und
+        // der Satz ist die Regel (`docs/UX.md` 3.3 Regel 2, 3.4).
+        final bool wide = width >= ruleRowOriginBelow;
         return Row(
           children: <Widget>[
             Expanded(
-              child: _Sentence(rule: rule, expired: expired),
+              child: _Sentence(rule: rule, inert: inert),
             ),
             if (width >= ruleRowNoteBelow && note.isNotEmpty) ...<Widget>[
               SizedBox(width: tokens.spacing.x2),
@@ -284,15 +399,15 @@ class _Line extends StatelessWidget {
                 ruleExpiryLabel(rule.expires, l10n, now: now),
                 maxLines: 1,
                 style: tokens.typography.ui12.tinted(
-                  expired
+                  inert
                       ? tokens.stateTextColor(HFlowState.timedOut)
                       : tokens.colors.fg1,
                 ),
               ),
             ],
-            if (width >= ruleRowOriginBelow) ...<Widget>[
+            if (wide || rule.disabled) ...<Widget>[
               SizedBox(width: tokens.spacing.x2),
-              _Origin(rule: rule),
+              _Origin(rule: rule, short: !wide),
             ],
           ],
         );
@@ -306,23 +421,24 @@ class _Line extends StatelessWidget {
 ///
 /// Two families in one line on purpose. The action is a word somebody reads;
 /// the match is a pattern somebody compares with another pattern, and
-/// comparing needs a fixed advance (CONVENTIONS 4.13). A rule whose time has
-/// passed says so by fading to the colour of something that ran out: it
-/// decides nothing any more, and a full-strength line would claim it does.
+/// comparing needs a fixed advance (CONVENTIONS 4.13). A rule that decides
+/// nothing -- because its time has passed, or because somebody switched it
+/// off -- says so by fading to the colour of something that ran out: a
+/// full-strength line would claim it still decides.
 class _Sentence extends StatelessWidget {
-  const _Sentence({required this.rule, required this.expired});
+  const _Sentence({required this.rule, required this.inert});
 
   final Rule rule;
-  final bool expired;
+  final bool inert;
 
   @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
-    final Color word = expired
+    final Color word = inert
         ? tokens.stateTextColor(HFlowState.timedOut)
         : tokens.colors.fg0;
-    final Color match = expired
+    final Color match = inert
         ? tokens.stateTextColor(HFlowState.timedOut)
         : tokens.colors.fg1;
     return Text.rich(
@@ -348,30 +464,44 @@ class _Sentence extends StatelessWidget {
 ///
 /// Eine mitgelieferte Regel sagt das mit einem Wort und einem Schloss, weil
 /// „warum kann ich die nicht löschen" die erste Frage ist, die sie aufwirft.
+/// Ist sie ausgeschaltet, sagt dasselbe Wort beides -- woher sie kommt und
+/// dass sie nichts entscheidet -- und in einer schmalen Pane bleibt davon die
+/// Hälfte stehen, die den Zustand trägt.
 /// Eine Regel aus einer Anfrage trägt deren kurze Id, und zwar als Control:
 /// der Klick bittet die Shell, die Anfrage zu zeigen, so wie es die History
 /// für ihre gehaltenen Zeilen tut. Der Weg dorthin ist [flowHandoffProvider]
 /// in `core`, damit kein Feature in ein anderes greift (ARCHITECTURE 5); die
 /// Tastenentsprechung bringt der Knopf mit (`docs/UX.md` 5.1).
 class _Origin extends ConsumerWidget {
-  const _Origin({required this.rule});
+  const _Origin({required this.rule, this.short = false});
 
   final Rule rule;
+
+  /// True while the pane is too narrow for the full word. Only a switched-off
+  /// rule is drawn at all then, and only with the part that says it is off.
+  final bool short;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     if (rule.bundled) {
+      // Ein eigener Schlüssel und keine Verkettung: `de` und `en` setzen die
+      // Kommata verschieden.
+      final Color color = rule.disabled
+          ? tokens.stateTextColor(HFlowState.timedOut)
+          : tokens.colors.fg1;
+      final String word = rule.disabled
+          ? (short ? l10n.rulesOriginOff : l10n.rulesOriginBundledOff)
+          : l10n.rulesOriginBundled;
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          HGlyphIcon(HGlyph.lock, size: 12, color: tokens.colors.fg1),
-          SizedBox(width: tokens.spacing.x1),
-          Text(
-            l10n.rulesOriginBundled,
-            style: tokens.typography.ui11.tinted(tokens.colors.fg1),
-          ),
+          if (!short) ...<Widget>[
+            HGlyphIcon(HGlyph.lock, size: 12, color: color),
+            SizedBox(width: tokens.spacing.x1),
+          ],
+          Text(word, style: tokens.typography.ui11.tinted(color)),
         ],
       );
     }
@@ -379,7 +509,7 @@ class _Origin extends ConsumerWidget {
     if (from == null) {
       return const SizedBox.shrink();
     }
-    final String short = from.value.split('-').last;
+    final String tail = from.value.split('-').last;
     return HoverLabel(
       label: l10n.rulesOriginOpen,
       child: HButton(
@@ -388,7 +518,7 @@ class _Origin extends ConsumerWidget {
         semanticsLabel: l10n.rulesOriginFlowSemantics(from.value),
         onPressed: () => ref.read(flowHandoffProvider.notifier).request(from),
         child: Text(
-          l10n.rulesOriginFlow(short),
+          l10n.rulesOriginFlow(tail),
           style: tokens.typography.mono11.tinted(tokens.colors.fg1),
         ),
       ),
@@ -404,8 +534,15 @@ class _Origin extends ConsumerWidget {
 /// [HFlowState.timedOut], because that is exactly what happened to it and
 /// because nothing that decides nothing may look saturated (CONVENTIONS
 /// 4.13).
+///
+/// A bundled rule that somebody switched off wears the same damping for the
+/// same reason. The two are not the same thing -- a bundled rule never runs
+/// out, and a rule of the person is never switched off -- so the row says
+/// which of them it is in its origin word, not in its colour.
 HFlowState ruleRowState(Rule rule, {required bool expired}) =>
-    expired ? HFlowState.timedOut : ruleActionState(rule.action);
+    expired || rule.disabled
+    ? HFlowState.timedOut
+    : ruleActionState(rule.action);
 
 /// The state colour an action borrows.
 HFlowState ruleActionState(RuleAction action) => switch (action) {
@@ -422,8 +559,27 @@ Color ruleActionTextColor(RuleAction action, HTokens tokens) =>
 
 /// The glyph beside the action word. Colour is never the only channel
 /// (`docs/UX.md` 3.3, rule 2); a rule that has run out carries the glyph of a
-/// hold that ran out.
-Widget ruleActionGlyph(RuleAction action, Color color, {bool expired = false}) {
+/// hold that ran out, and a rule somebody switched off carries a plain cross.
+///
+/// The cross is the shape of "does not apply", and it is what tells a
+/// switched-off rule from an effective one at every pane width, before any
+/// word does. It is deliberately not the clock, and it never collides with
+/// the shape of an action: that is checked over every action rather than
+/// assumed (`rules_a11y_test.dart`).
+///
+/// [disabled] wins over [expired]. Today a bundled rule never runs out and a
+/// rule of the person is never switched off, so the two cannot meet; if a
+/// later contract lets them, being switched off is the decision of a person
+/// and running out is the absence of one, and the row names the decision.
+Widget ruleActionGlyph(
+  RuleAction action,
+  Color color, {
+  bool expired = false,
+  bool disabled = false,
+}) {
+  if (disabled) {
+    return HGlyphIcon(HGlyph.close, size: 14, color: color);
+  }
   if (expired) {
     return HGlyphIcon(HGlyph.clockX, size: 14, color: color);
   }

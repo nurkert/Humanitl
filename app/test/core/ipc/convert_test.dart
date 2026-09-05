@@ -214,6 +214,27 @@ void main() {
     );
   });
 
+  test('rule_disabled_survives_the_round_trip', () {
+    // Lesen: eine Proto, die das Feld trägt, kommt als abgeschaltete Regel an.
+    expect((pb.Rule()..disabled = true).toDomain().disabled, isTrue);
+    expect(pb.Rule().toDomain().disabled, isFalse);
+
+    // Schreiben: `toProto` gibt das Feld weiter. Ohne diese Zeile verlöre
+    // jede Regel, die einmal durch den Konverter läuft -- Probelauf, Editor --
+    // ihren Zustand.
+    final Rule off = Rule(
+      id: const RuleId('018f0000-0000-7000-8000-0000000000a1'),
+      action: RuleAction.block,
+      matcher: const RuleMatcher(host: 'models.dev'),
+      expires: const RuleExpiry.never(),
+      bundled: true,
+      disabled: true,
+    );
+    expect(off.toProto().disabled, isTrue);
+    expect(off.toProto().toDomain().disabled, isTrue);
+    expect(off.copyWith(disabled: false).toProto().disabled, isFalse);
+  });
+
   test('a diagnostic with a fix and a docs link converts', () {
     final Diagnostic diagnostic =
         (pb.Diagnostic()

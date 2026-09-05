@@ -468,7 +468,14 @@ class _Heading extends StatelessWidget {
   }
 }
 
-/// Why the form is grey, and what to do instead.
+/// Why the form is grey, what state the rule is in, and what to do instead.
+///
+/// Der Zustand steht hier und nicht nur in der Zeile: der Editor ist die
+/// größere Hälfte des Bildschirms, und eine ausgeschaltete Regel, die hier in
+/// voller Stärke mit Aktion, Host und Frist steht, liest als wirksam. Das ist
+/// dieselbe Behauptung, die dieses Feature in der Liste abstellt, eine Ebene
+/// tiefer (CONVENTIONS 4.13). Die drei Kanäle sind deshalb dieselben wie in
+/// der Zeile: Zeichen, Farbe und Wort.
 class _BundledNotice extends ConsumerWidget {
   const _BundledNotice({required this.rule});
 
@@ -491,7 +498,13 @@ class _BundledNotice extends ConsumerWidget {
           children: <Widget>[
             Row(
               children: <Widget>[
-                HGlyphIcon(HGlyph.lock, size: 14, color: tokens.colors.fg1),
+                HGlyphIcon(
+                  rule.disabled ? HGlyph.close : HGlyph.lock,
+                  size: 14,
+                  color: rule.disabled
+                      ? tokens.stateTextColor(HFlowState.timedOut)
+                      : tokens.colors.fg1,
+                ),
                 SizedBox(width: tokens.spacing.x2),
                 Text(
                   l10n.rulesBundledTitle,
@@ -501,6 +514,18 @@ class _BundledNotice extends ConsumerWidget {
                 ),
               ],
             ),
+            if (rule.disabled) ...<Widget>[
+              SizedBox(height: tokens.spacing.x1),
+              // Eine Feststellung, kein Angebot: der Satz darunter sagt, dass
+              // man eine mitgelieferte Regel abschalten kann, und ohne diese
+              // Zeile läse sich das, als wäre sie noch an.
+              Text(
+                l10n.rulesOriginBundledOff,
+                style: tokens.typography.ui12.medium.tinted(
+                  tokens.stateTextColor(HFlowState.timedOut),
+                ),
+              ),
+            ],
             SizedBox(height: tokens.spacing.x1),
             Text(
               l10n.rulesBundledWhy,

@@ -444,6 +444,7 @@ extension RuleToDomain on pb.Rule {
     stream: stream,
     createdFrom: createdFromFlowId.isEmpty ? null : FlowId(createdFromFlowId),
     bundled: bundled,
+    disabled: disabled,
     note: note.isEmpty ? null : note,
     createdAt: hasCreatedAt() ? _dateTime(createdAt) : null,
     position: position,
@@ -464,6 +465,10 @@ extension RuleToProto on Rule {
       ..stream = stream
       ..createdFromFlowId = createdFrom?.value ?? ''
       ..bundled = bundled
+      // Symmetric like `bundled`: the daemon ignores the field in a request,
+      // but a rule that goes through `toProto()` on its way to a dry run or
+      // back into the editor must not lose what it stands for (HUM-105).
+      ..disabled = disabled
       ..note = note ?? ''
       ..position = position
       ..hitCount = Int64(hitCount)
