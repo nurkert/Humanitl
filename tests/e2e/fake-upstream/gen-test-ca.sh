@@ -17,10 +17,10 @@
 # Der Daemon nimmt diese Wurzel nur an, wenn `resolver.test_ca` auf sie zeigt
 # **und** er ausdrücklich mit `--allow-test-ca` gestartet wurde. Beides ist
 # Absicht: Ein Testzertifikat, das ohne Flag gälte, wäre ein Loch in der
-# Sicherheitsaussage von `docs/SECURITY.md`. Solange der Daemon das Flag noch
-# nicht kennt (Stand HUM-036, siehe `backlog/CONVENTIONS.md` 4.22), belegt der
-# Demolauf mit diesem Material die andere Richtung: dass eine fremde Wurzel in
-# der Konfiguration allein nichts bewirkt.
+# Sicherheitsaussage von `docs/SECURITY.md`. Seit HUM-087 gibt es das Flag, und
+# der M2-Demolauf startet den Daemon damit; jede seiner Anfragen geht deshalb
+# über TLS. Dass dieselbe Wurzel ohne das Flag nicht gilt, misst der Rust-Test
+# `a_test_ca_is_only_trusted_with_the_flag`.
 set -eu
 
 # Zuerst die Maske, dann die erste Datei. Ein `chmod` am Ende deckt nur den

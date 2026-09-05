@@ -179,7 +179,7 @@ Namensauflösung nach der Entscheidung.
 | `resolver.nameserver` | string, optional | `-` | expert | denied | offen (HUM-115) | Nameserver als `IP:Port`. Leer bedeutet: die Einstellung des Systems. |
 | `resolver.overrides` | table of string | `{}` | expert | denied | ja | Feste Zuordnungen von Hostname zu Adresse, vor jeder Abfrage. |
 | `resolver.prefer` | ipv4 \| ipv6 | `"ipv4"` | expert | denied | ja | Welche Adressfamilie bevorzugt wird, wenn beide vorliegen. |
-| `resolver.test_ca` | string, optional | `-` | expert | denied | offen (HUM-087) | Zusätzliche CA für Tests. Nur in Testläufen setzen, nie im Alltag. |
+| `resolver.test_ca` | string, optional | `-` | expert | denied | ja | Zusätzliche CA für Tests, als PEM und mit absolutem Pfad. Gilt nur, wenn der Daemon mit `--allow-test-ca` gestartet wurde; ohne das Flag wird der Schlüssel nicht angenommen, und ein nicht absoluter Pfad beendet den Start, statt gegen das Arbeitsverzeichnis aufgelöst zu werden. Nur in Testläufen setzen, nie im Alltag. |
 
 ### `sandbox`
 

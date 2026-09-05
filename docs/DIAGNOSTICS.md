@@ -14,7 +14,7 @@ Entfernen eines Codes.
 |---|---|---|---|---|
 | daemon | `DAEMON` | 001 | 019 | Start, Erreichbarkeit, Version des Daemons |
 | ipc | `IPC` | 001 | 009 | gRPC-Schnittstelle, Token, Aufrufe gegen den Zustand |
-| config | `CONFIG` | 001 | 019 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066) |
+| config | `CONFIG` | 001 | 019 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), 010-012 Test-Wurzel und ihr Flag (HUM-087) |
 | sandbox | `SANDBOX` | 001 | 029 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 020-025 /work-Härtung (HUM-043) |
 | proxy | `PROXY` | 001 | 019 | Anfragen, Caps, Protokoll, 010-011 Grenzen der Verbindung (HUM-120) |
 | tls | `TLS` | 001 | 009 | CA, Zertifikate, Handschlag |
@@ -114,6 +114,18 @@ Eigenes Profil verdeckt ein mitgeliefertes
 #### CONFIG_009
 
 Profilwunsch des Projekts gilt nicht
+
+#### CONFIG_010
+
+Test-Wurzel nicht verwendbar
+
+#### CONFIG_011
+
+Test-Wurzel ohne Flag oder Flag ohne Test-Wurzel
+
+#### CONFIG_012
+
+Test-Wurzel ohne absoluten Pfad
 
 ### Bereich sandbox
 

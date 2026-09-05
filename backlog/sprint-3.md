@@ -2969,6 +2969,148 @@ Doku: `docs/CONFIG.md:160` nennt die Flagpflicht (über den Doc-Kommentar in `mo
 ### Referenzen
 BACKLOG.md Prinzip 3 und 8, ADR-006; `backlog/CONVENTIONS.md` 4.6, 4.13, 4.22; `docs/SECURITY.md` 5; `docs/CONFIG.md` `resolver.test_ca`; HUM-024, HUM-036, HUM-045; rustls `RootCertStore` (https://docs.rs/rustls/latest/rustls/struct.RootCertStore.html).
 
+### Stand (2026-09-05): gebaut, beide Hälften, mit zwei Abweichungen
+
+Gebaut ist der Daemon-Teil (Flag, Lader, Verdrahtung, Codes, Register,
+Dokumente) und der Demolauf. Nicht angefasst wurde `daemon/crates/ipc/` und
+`proto/`; die Arbeit lief parallel zu zwei anderen Agenten, und diese Pfade
+gehörten ihnen. Was daraus folgt, steht unten unter „Zwei Abweichungen".
+
+**Was es jetzt gibt.**
+
+- `humanitld --allow-test-ca` (`daemon/bin/humanitld/src/main.rs`). Vorgabe
+  aus. Der Hilfetext nennt den Zweck und sagt, dass ohne das Flag nichts gilt.
+- `test_ca_roots(allow, resolver) -> Result<TestCa, Diagnostic>` mit den vier
+  Fällen der Tabelle, dazu `announce_test_ca`, das den Befund und die Zeile
+  mit `roots` und Pfad schreibt. Beide Zeilen auf Stufe `warn`.
+- `humanitl_proxy::roots_from_pem(&[u8]) -> Vec<CertificateDer<'static>>`
+  (`daemon/crates/proxy/src/upstream.rs`) liest die Datei als PEM, mit
+  demselben `pem_slice_iter`-Muster wie `ca.rs`. Aufrufer: `test_ca_roots`.
+- `build_handler` nimmt `extra_roots: &[CertificateDer<'static>]` und reicht
+  sie an `ClientTls::new`. Die Endpunkt-Probe wird mit denselben Wurzeln neu
+  gebaut (`probe_with_roots`) und über das schon vorhandene
+  `IpcServer::with_llm_probe` angehängt — aber nur, wenn Wurzeln da sind; ohne
+  Flag bleibt die Probe aus `IpcServer::new` unverändert stehen.
+- `CONFIG_010` (Error, Testwurzel unbrauchbar), `CONFIG_011` (Warning, Flag ohne
+  Schlüssel oder Schlüssel ohne Flag) und `CONFIG_012` (Error, Pfad nicht
+  absolut) im Register, `docs/DIAGNOSTICS.md` erzeugt.
+- **Der Pfad muss absolut sein.** Ein relativer würde gegen das
+  Arbeitsverzeichnis des Starts aufgelöst, und das ist im Alltag das
+  Projektverzeichnis: Das Flag entscheidet, **ob** eine fremde Wurzel gilt, der
+  Pfad, **welche** — und den bestimmte dann teilweise das Projekt. Abgelehnt
+  wird vor dem Lesen, mit `CONFIG_012` und einem `FixAction::ChangeSetting`,
+  auch dann, wenn an der Stelle eine tadellose Wurzel liegt. Der Befund kam aus
+  dem Review von Codex (2026-09-05); er war zutreffend und blockierend.
+- **Jede Hälfte von `CONFIG_011` trägt ihren eigenen Fix.** Fehlt das Flag, ist
+  der Weg hinaus der Befehl (`FixAction::CopyCommand`); fehlt der Schlüssel, ist
+  es die Einstellung (`FixAction::ChangeSetting`). Vorher stand in beiden Fällen
+  der Befehl, und wer das Flag gerade getippt hatte, las die Aufforderung, es zu
+  tippen. Aus dem Review von Antigravity (2026-09-05), zutreffend.
+- `resolver.test_ca` hat einen Leser: `x-pending-issue` ist weg, die
+  Registerzeile steht auf `effective`, `docs/CONFIG.md` zeigt „ja".
+- `docs/SECURITY.md` 5 hat einen eigenen Abschnitt: was das Flag tut, was es
+  nicht tut, warum es ein Flag und kein Schlüssel ist, und woran ein Mensch von
+  außen sieht, dass ein Daemon damit läuft.
+
+**Zwei Abweichungen von der Spezifikation, beide notwendig.**
+
+1. **Die Codenummern.** Die Spezifikation nennt `CONFIG_007` und `CONFIG_008`
+   und sagt, 007 bis 009 seien frei. Sie sind es nicht mehr: HUM-066 hat sie
+   für die Profile belegt (`codes.rs`, `CONFIG_007` bis `CONFIG_009`). Gebaut
+   sind deshalb `CONFIG_010` und `CONFIG_011`; der Bereich `CONFIG` reicht bis
+   019, die Notiz an `AREAS` ist nachgezogen.
+2. **Die Endpunkt-Probe hängt anders am Server.** Die Spezifikation verlangt
+   `IpcServer::with_extra_roots(&[CertificateDer])` in
+   `daemon/crates/ipc/src/server.rs`. Diese Datei gehörte in dieser Sitzung
+   einem anderen Agenten. Dasselbe Ergebnis entsteht ohne eine Zeile in `ipc`:
+   `humanitld` baut die Probe selbst mit denselben Wurzeln und hängt sie über
+   das schon vorhandene `IpcServer::with_llm_probe` an. Der Stapel ist
+   derselbe wie in `build_llm_probe`, samt eigenem Resolver-Port; das ist
+   Verdopplung von sechs Zeilen Verdrahtung und der Preis dafür, `ipc`
+   unberührt zu lassen. Wer `with_extra_roots` später doch baut, ersetzt
+   `probe_with_roots` durch den Aufruf und streicht die Verdopplung.
+
+**Zwei weitere Stellen, an denen die Spezifikation ungenau ist.**
+
+- Sie sagt, `resolver.test_ca` werde „validiert". Wird es nicht:
+  `daemon/crates/config/src/validate.rs` kennt den Schlüssel nicht, er ist nur
+  typisiert (`Option<PathBuf>`). Geprüft wird die Datei erst jetzt, und zwar
+  im Daemon, mit Flag.
+- Sie sagt, `humanitld` habe kein `--config`. Das stimmt; `backlog/sprint-2.md`
+  ist entsprechend angeglichen.
+- **Ihre Zahlen zum Demolauf stimmen zur Hälfte.** `served` steigt tatsächlich
+  von 16 auf 17. Der Satz daneben, aus „genau eine TLS-Anfrage" würden „zwei",
+  folgt aber nicht aus der eigenen Vorgabe, alle URLs auf `https://` zu stellen:
+  Dann gehen fünfzehn Anfragen des Agenten und die Kontrolle über TLS, gemessen
+  sechzehn, und im Klartext bleibt allein die Erreichbarkeits-Probe. Gebaut ist
+  die gemessene Zahl.
+- `M2_EXPECTED_ASSERTIONS` steht nicht bei `run.sh:76`, sondern bei `:110`, und
+  trug 59, nicht 47; `backlog/sprint-2.md:2297` hatte das schon festgehalten.
+  Der grüne Lauf ergibt 69.
+
+**Wie der Normalfall unverändert blieb, nachgewiesen und nicht behauptet.**
+`ClientTls::new` ist unverändert; ohne zusätzliche Wurzeln ist die
+Wurzelmenge weiterhin genau `webpki-roots::TLS_SERVER_ROOTS`. Der Test
+`a_test_root_changes_nothing_but_the_root_list`
+(`daemon/crates/proxy/tests/upstream_roots.rs`) misst, dass eine zusätzliche
+Wurzel das ALPN-Angebot in beiden Stellungen von `experimental.h2_upstream`
+nicht verändert, und dass ohne Flag `http/1.1` allein angeboten wird. Die
+Fehlerdiagnose bleibt `PROXY_003` aus derselben Zeile. Der Test
+`no_connection_stack_of_this_binary_starts_with_an_empty_root_list` in
+`main.rs` hält fest, dass dieses Binary genau zwei Verbindungsstapel baut und
+keiner davon eine fest leere Wurzelliste bekommt.
+
+**Sichtbarkeit nach außen, und was bewusst fehlt.** Sichtbar ist das Flag am
+Prozess (`/proc/<pid>/cmdline`) und an der `WARN`-Zeile beim Start. Beides
+setzt aber Zugriff auf die Maschine voraus, auf der der Daemon läuft: **Wer nur
+seine Schnittstelle benutzt, sieht es nicht.** `GetInfo` trägt keine Fähigkeit
+dafür, `humanitl daemon status` sagt nichts, und der Ereignisstrom trägt den
+Befund des Starts nicht nach. Codex kommt im Review zum selben Schluss. Wohin
+es gehört, ist `GetInfo.capabilities` und damit `humanitl daemon status`; dafür
+braucht es `proto/` und `daemon/crates/ipc/`, beide in dieser Sitzung fremd.
+Nicht dorthin gehört der Meta-Endpunkt `http://humanitl.internal/`: Den liest
+der Agent in der Sandbox, dessen Vertrauen an der Humanitl-CA hängt und nicht
+an dieser Wurzel; sein Format ist außerdem ein Vertrag mit dem
+Terminal-Banner. Das ist hier verzeichnet und nirgends behauptet.
+
+**Der Demolauf, umgestellt und gemessen.**
+
+- `tests/e2e/lib.sh`: `start_daemon STATE_DIR XDG_DIR [HOLD_TIMEOUT_SECS]
+  [ARG...]` reicht alles ab dem vierten Argument an `humanitld` weiter und
+  merkt es in `DAEMON_ARGV`. Die ersten drei bleiben, wo sie waren; M1 ruft mit
+  genau dreien auf und ist unberührt.
+- `tests/e2e/m2_first_decision/run.sh` startet mit `--allow-test-ca`, alle
+  siebzehn URLs in `script.json` stehen auf `https://`, ebenso `M2_URL_BLOCKED`,
+  `M2_URL_ALLOWED` und `M2_URL_TIMEOUT`.
+- **Der Stolperdraht ist umgedreht, nicht gestrichen.** Er sicherte zu, dass es
+  das Flag nicht gibt; jetzt sichert er zu, dass dieser Lauf es benutzt: dass
+  `humanitld --help` es kennt (sonst stirbt er mit der Anweisung, was
+  zurückzudrehen wäre) und dass `DAEMON_ARGV` es trägt — also das, was wirklich
+  an den Daemon ging, und nicht die Konstante im Skript.
+- **Die Protokoll-Prüfung hat ihr Gegenstück bekommen.** Statt „der Daemon sagt,
+  er ignoriert den Schlüssel" prüft der Lauf jetzt die Zeile, mit der der Daemon
+  sagt, dass er die Wurzel geladen hat: `"roots":1`, den Pfad der Datei und die
+  Stufe `WARN`, dazu dass weder `CONFIG_010` noch `CONFIG_011` im Protokoll
+  steht.
+- **Schritt 7 prüft den Inhalt, nicht nur den Status.** `200` allein könnte auch
+  vom Proxy selbst kommen; geprüft werden `path` und `host` aus dem Rumpf, den
+  der Agent gesehen hat, dazu der leere `error` des Flusses, seine Entscheidung
+  `allow` und der Port des Ziels.
+- Schritt 9 zählt neu: 17 bediente Anfragen (vorher 16), davon 16 über TLS und
+  genau eine im Klartext (die Erreichbarkeits-Probe), und `/tls-probe` wie
+  `/tls-control` je genau einmal.
+- `M2_EXPECTED_ASSERTIONS` steht auf 69 (vorher 59), am grünen Lauf abgelesen.
+
+**Gemessen, nicht angenommen.** `E2E_ONLY=m2 tests/e2e/run.sh` grün, 69
+Behauptungen, Schritt 7 sieht `200` und den Rumpf des Ziels, das Ziel bedient
+17 Anfragen. `E2E_ONLY=m1 tests/e2e/run.sh` bleibt grün.
+
+**Was der Lauf weiterhin nicht sagt.** Die Richtung „ohne Flag gilt die Wurzel
+nicht" misst er nicht; sie steht als Rust-Test in
+`daemon/bin/humanitld/tests/daemon_end_to_end.rs`. Eine zweite Daemon-Instanz
+nur dafür gehört nicht in das Demoskript (Nicht-Ziel dieses Issues). Über den
+Bildschirm und den HAR-Export sagt er weiterhin nichts (HUM-097).
+
 ---
 
 ## HUM-088 · experimental.upstream_port_map wirkt nicht
