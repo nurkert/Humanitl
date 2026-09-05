@@ -2462,10 +2462,10 @@ Ausgabe (Text): `[ok] bubblewrap 0.11.0`, `[fail] user namespaces: unshare -Ur f
 - CLI-Test: Exit 3 bei einem `fail`, 0 bei nur `warn`.
 
 ### Akzeptanzkriterien
-- [ ] `humanitl doctor` auf der Entwicklungsmaschine: alle Zeilen ok oder warn mit Fix.
-- [ ] Jede Nicht-ok-Zeile hat `why` und `fix`.
-- [ ] Setup-Screen zeigt dieselben Zeilen, Start-Button bleibt bei `fail` deaktiviert.
-- [ ] `--json` ist stabil (Snapshot-Test).
+- [x] `humanitl doctor` auf der Entwicklungsmaschine: alle Zeilen ok oder warn mit Fix. Beleg im Stand-Abschnitt.
+- [x] Jede Nicht-ok-Zeile hat `why` und `fix`. Beleg im Stand-Abschnitt.
+- [ ] Setup-Screen zeigt dieselben Zeilen, Start-Button bleibt bei `fail` deaktiviert. **Offen**, Begründung im Stand-Abschnitt.
+- [x] `--json` ist stabil (Snapshot-Test). Beleg im Stand-Abschnitt.
 
 ### Fallstricke
 - `unshare -Ur` kann auf gehärteten Systemen hängen statt scheitern; Timeout 2 s.
@@ -2705,13 +2705,13 @@ liegen.
 
 **Akzeptanzkriterien.**
 
-- [x] `humanitl doctor` auf der Entwicklungsmaschine: alle Zeilen `ok` oder
+- **Erfüllt:** `humanitl doctor` auf der Entwicklungsmaschine: alle Zeilen `ok` oder
   `warn` mit Fix (Exit 0; gemessen am 2026-09-05, siehe unten).
-- [x] Jede Nicht-ok-Zeile hat `why` und `fix`
+- **Erfüllt:** Jede Nicht-ok-Zeile hat `why` und `fix`
   (`crates/sandbox/tests/doctor.rs::assert_report_invariants` über drei
   Maschinen, `crates/ipc/tests/ipc_server.rs::doctor_reports_every_check_and_measures_no_network`,
   `bin/humanitl/tests/cli.rs::json_shape_stable`).
-- [ ] Setup-Screen zeigt dieselben Zeilen, Start-Button bleibt bei `fail`
+- **Offen:** Setup-Screen zeigt dieselben Zeilen, Start-Button bleibt bei `fail`
   deaktiviert. **Offen**: `app/lib/features/setup/widgets/doctor_list.dart`
   braucht `app/l10n/app_en.arb` und `app_de.arb`, und beide Dateien werden
   gerade von anderen Agenten geschrieben (`CLAUDE.md`, Abschnitt
@@ -2720,7 +2720,7 @@ liegen.
   `has_failure` ist die eine Frage, an der der Start-Knopf hängt. Es fehlen
   die Strings der elf Zeilenüberschriften und der Satz für den gesperrten
   Knopf.
-- [x] `--json` ist stabil (`bin/humanitl/tests/cli.rs::json_shape_stable`:
+- **Erfüllt:** `--json` ist stabil (`bin/humanitl/tests/cli.rs::json_shape_stable`:
   feste Schlüssel oben, feste Reihenfolge der Kennungen, `diagnostic` genau
   bei nicht-`ok`). Ein wörtlicher Schnappschuss wäre unehrlich: Die Belege
   nennen gemessene Werte dieser Maschine.
