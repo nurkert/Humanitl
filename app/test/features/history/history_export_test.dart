@@ -307,4 +307,95 @@ void main() {
       expect(single.bodyFile, isNotNull);
     });
   });
+
+  // HUM-120: Der Daemon vermerkt einen abgeschnittenen Antwort-Rumpf als
+  // gekürzt. Bis dieses Issue kam das in HAR und CSV nicht an: Beide gaben
+  // die halbe Antwort als ganze aus. JSON Lines trug die Marke schon.
+  group('truncated response bodies', () {
+    /// Ein Fluss, dessen Antwort mitten im Strom abgeschnitten wurde.
+    HistoryExportEntry cutEntry() {
+      final Flow flow = testFlow(
+        id: '018f0004-0000-7000-8000-0000000000c0',
+        host: 'ollama.internal',
+        path: '/api/chat',
+        status: 200,
+        responseSize: 11,
+      );
+      final FlowDetail detail = testDetail(flow);
+      return HistoryExportEntry(
+        detail: detail.copyWith(
+          responseBody: BodyRef(
+            sha256: List<int>.filled(32, 9),
+            size: 11,
+            truncated: true,
+            contentType: 'text/event-stream',
+          ),
+        ),
+        requestBody: Uint8List.fromList(utf8.encode('{}')),
+        responseBody: Uint8List.fromList(utf8.encode('data: {"i":0')),
+      );
+    }
+
+    test('har says in the comment and in _humanitl that the answer was cut', () {
+      final Map<String, Object?> entry = harEntry(cutEntry());
+      final Map<String, Object?> response =
+          entry['response']! as Map<String, Object?>;
+      final Map<String, Object?> content =
+          response['content']! as Map<String, Object?>;
+      // Die Bytes sind da, und trotzdem steht die Marke daneben: Genau das
+      // fehlte, denn `text` allein sieht aus wie eine vollständige Antwort.
+      expect(content['text'], isNotEmpty);
+      expect(content['comment'], harBodyTruncated);
+      final Map<String, Object?> block =
+          entry['_humanitl']! as Map<String, Object?>;
+      expect(block['response_body_truncated'], isTrue);
+    });
+
+    test('har leaves a complete answer unmarked', () {
+      final Map<String, Object?> entry = harEntry(_threeFlows().first);
+      final Map<String, Object?> response =
+          entry['response']! as Map<String, Object?>;
+      final Map<String, Object?> content =
+          response['content']! as Map<String, Object?>;
+      expect(content.containsKey('comment'), isFalse);
+      final Map<String, Object?> block =
+          entry['_humanitl']! as Map<String, Object?>;
+      expect(block['response_body_truncated'], isFalse);
+    });
+
+    test('har keeps both notes apart where a body was not kept at all', () {
+      // Kein Rumpf aufgezeichnet und zugleich abgeschnitten: zwei
+      // verschiedene Tatsachen, und beide stehen im Kommentar.
+      final HistoryExportEntry cut = cutEntry();
+      final Map<String, Object?> entry = harEntry(
+        HistoryExportEntry(detail: cut.detail, requestBody: cut.requestBody),
+      );
+      final Map<String, Object?> response =
+          entry['response']! as Map<String, Object?>;
+      final Map<String, Object?> content =
+          response['content']! as Map<String, Object?>;
+      expect(content['comment'], contains(harBodyTruncated));
+      expect(content['comment'], contains(harBodyNotRecorded));
+    });
+
+    test('csv carries the mark in its own column', () {
+      final String csv = encodeCsv(<HistoryExportEntry>[cutEntry()]);
+      final List<String> lines = csv.split('\r\n')
+        ..removeWhere((String line) => line.isEmpty);
+      final int column = csvColumns.indexOf('response_body_truncated');
+      expect(column, isNonNegative, reason: 'the column has to exist');
+      expect(lines.first.split(',')[column], 'response_body_truncated');
+      expect(lines[1].split(',')[column], 'true');
+    });
+
+    test('csv says false for an answer nothing marked', () {
+      final String csv = encodeCsv(_threeFlows());
+      final List<String> lines = csv.split('\r\n')
+        ..removeWhere((String line) => line.isEmpty);
+      final int column = csvColumns.indexOf('response_body_truncated');
+      for (final String line in lines.skip(1)) {
+        expect(line.split(',')[column], 'false');
+      }
+    });
+  });
 }

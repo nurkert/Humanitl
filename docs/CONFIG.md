@@ -129,13 +129,14 @@ Alle Caps und Zeitgrenzen an einer Stelle.
 
 | Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
 |---|---|---|---|---|---|---|
-| `limits.body_timeout_secs` | integer | `300` | expert | allowed | offen (HUM-120) | Sekunden, in denen ein Body vollständig übertragen sein muss. |
+| `limits.body_timeout_secs` | integer | `300` | expert | allowed | ja | Sekunden Stille zwischen zwei Stücken eines Bodys, nicht seine Gesamtdauer. Gilt in beide Richtungen: für den Anfrage-Rumpf des Clients (danach 408) und für den gestreamten Antwort-Rumpf des Ziels (danach wird der Strom abgebrochen und die Aufzeichnung als gekürzt vermerkt). Ein großer Upload und ein langer Modell-Strom dürfen deshalb beliebig lange dauern, solange sie nicht verstummen. |
 | `limits.connect_timeout_secs` | integer | `10` | advanced | allowed | ja | Sekunden bis zum Aufbau der Verbindung zum Ziel. |
 | `limits.event_buffer` | integer | `1024` | expert | allowed | ja | Länge der Ereignis-Warteschlange je Client. Läuft sie über, meldet der Daemon `Lagged`. |
 | `limits.header_timeout_secs` | integer | `30` | expert | allowed | ja | Sekunden, in denen der Client seine Anfrage-Kopfzeilen gesendet haben muss. Auf einer Keep-Alive-Verbindung ist das zugleich die Frist bis zur nächsten Anfrage, also die einzige Leerlaufgrenze der Verbindung zum Agenten; während eine Anfrage gehalten wird, läuft sie nicht. |
 | `limits.hold_body_cap_bytes` | integer | `33554432` | advanced | allowed | ja | Größte Anfrage, deren Body für die Entscheidung im Speicher gehalten wird. Darüber antwortet der Proxy mit 413. |
 | `limits.hold_max_bytes` | integer | `268435456` | advanced | allowed | ja | Größte Summe der Bodies aller angehaltenen Flows. Darüber antwortet der Proxy mit 503. |
 | `limits.hold_max_flows` | integer | `200` | advanced | allowed | ja | Größte Zahl gleichzeitig angehaltener Flows. Darüber antwortet der Proxy mit 503. |
+| `limits.max_client_connections` | integer | `256` | expert | allowed | ja | Größte Zahl gleichzeitiger Verbindungen aus der Sandbox je Sitzung. Darüber antwortet der Proxy mit 503 und schließt; eine Uhr je Spanne allein hindert einen Prozess nicht daran, dieselben Ressourcen über viele Verbindungen zu binden. |
 | `limits.max_decompress_ratio` | integer | `100` | expert | allowed | ja | Höchstes erlaubtes Verhältnis von entpackten zu gepackten Bytes einer Vorschau. |
 | `limits.preview_cap_bytes` | integer | `8388608` | expert | allowed | ja | Größte Menge Body, die die Oberfläche als Vorschau bekommt. |
 | `limits.recorder_max_body_bytes` | integer | `33554432` | expert | allowed | ja | Größter Body, den die Aufzeichnung als Blob ablegt. Alles darüber wird nur mit Prüfsumme vermerkt. |

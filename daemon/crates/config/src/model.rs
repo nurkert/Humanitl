@@ -168,16 +168,15 @@ pub struct Limits {
     /// Sekunden, in denen der Client seine Anfrage-Kopfzeilen gesendet haben muss. Auf einer Keep-Alive-Verbindung ist das zugleich die Frist bis zur nächsten Anfrage, also die einzige Leerlaufgrenze der Verbindung zum Agenten; während eine Anfrage gehalten wird, läuft sie nicht.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "allowed"))]
     pub header_timeout_secs: u64,
-    /// Sekunden, in denen ein Body vollständig übertragen sein muss.
-    #[schemars(extend(
-        "x-tier" = "expert",
-        "x-project-scope" = "allowed",
-        "x-pending-issue" = "HUM-120"
-    ))]
+    /// Sekunden Stille zwischen zwei Stücken eines Bodys, nicht seine Gesamtdauer. Gilt in beide Richtungen: für den Anfrage-Rumpf des Clients (danach 408) und für den gestreamten Antwort-Rumpf des Ziels (danach wird der Strom abgebrochen und die Aufzeichnung als gekürzt vermerkt). Ein großer Upload und ein langer Modell-Strom dürfen deshalb beliebig lange dauern, solange sie nicht verstummen.
+    #[schemars(extend("x-tier" = "expert", "x-project-scope" = "allowed"))]
     pub body_timeout_secs: u64,
     /// Größter Body, den die Aufzeichnung als Blob ablegt. Alles darüber wird nur mit Prüfsumme vermerkt.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "allowed"))]
     pub recorder_max_body_bytes: u64,
+    /// Größte Zahl gleichzeitiger Verbindungen aus der Sandbox je Sitzung. Darüber antwortet der Proxy mit 503 und schließt; eine Uhr je Spanne allein hindert einen Prozess nicht daran, dieselben Ressourcen über viele Verbindungen zu binden.
+    #[schemars(extend("x-tier" = "expert", "x-project-scope" = "allowed"))]
+    pub max_client_connections: u32,
 }
 
 impl Default for Limits {
@@ -193,6 +192,7 @@ impl Default for Limits {
             header_timeout_secs: 30,
             body_timeout_secs: 300,
             recorder_max_body_bytes: 32 * MIB,
+            max_client_connections: 256,
         }
     }
 }

@@ -1008,6 +1008,9 @@ async fn invalid_transition_blocks() {
         handler,
         server_io,
         ConnMeta::plain(session),
+        // Kein Platz aus dem Accept-Loop: Dieser Test bedient eine einzelne
+        // Verbindung von Hand, `limits.max_client_connections` zählt sie nicht.
+        None,
     ));
     let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(client_io))
         .await

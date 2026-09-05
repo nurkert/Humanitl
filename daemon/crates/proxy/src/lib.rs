@@ -72,10 +72,12 @@ pub mod upstream;
 pub use crate::connect::{
     AuthorityError, AuthorityRefusal, ConnMeta, ConnectionContext, RequestTarget, check_authority,
 };
-pub use crate::core::ProxyCore;
+pub use crate::core::{ProxyCore, connection_limit_reached};
 pub use crate::egress::{AsyncStream, Direct, Egress};
 pub use crate::findings::{NoScan, Scanner, Tier1Scanner};
-pub use crate::handler::{FlowHandler, HandlerPorts, ProxyLimits};
+pub use crate::handler::{
+    ConnectionSlot, FlowHandler, HandlerPorts, PressureWatch, ProxyLimits, idle_request_body,
+};
 pub use crate::hold::{DomainSink, HoldQueue};
 pub use crate::listener::SessionSocket;
 pub use crate::llm_probe::{LlmFlavor, LlmProbe, ProbeResult, not_private_by_name};

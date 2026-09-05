@@ -487,25 +487,62 @@ folgt eine Reihe harter Grenzen:
 | `hold.timeout_secs` | 300 | `504`, `BlockReason::Timeout` — Ablauf bedeutet **block**, nie `allow` |
 | `limits.connect_timeout_secs` | 10 s | Verbindungsaufbau zum Ziel bricht ab, Flow wird `Failed` |
 | `limits.header_timeout_secs` | 30 s | Anfrage-Kopf des Clients und Lücke bis zur nächsten Anfrage; danach schließt die Verbindung. Speist zusätzlich den Handschlag zum Ziel bis zu dessen Antwort-Kopfzeilen |
-| `limits.body_timeout_secs` | 300 s | **heute ohne Wirkung** (HUM-120), siehe den Absatz unten |
+| `limits.body_timeout_secs` | 300 s | Stille **zwischen zwei Stücken** eines Rumpfs, in beide Richtungen. Anfrage-Rumpf: `408` mit `Connection: close` und `PROXY_011` im Ereignisstrom; gestreamter Antwort-Rumpf: der Strom bricht ab, die Aufzeichnung vermerkt ihn als gekürzt. Nie eine Grenze der Gesamtdauer |
+| `limits.max_client_connections` | 256 | Der Accept-Loop antwortet `503` mit `Connection: close` und schließt, statt anzunehmen und liegen zu lassen; `PROXY_010` im Ereignisstrom, zusammengefasst je Minute |
 
-**Drei Spannen haben heute keine Uhr, und das ist eine Lücke, keine Auslegungssache.** Die Tabelle
-oben nennt harte Grenzen; diese drei fehlen darin, weil es sie nicht gibt:
+**Die drei Spannen ohne Uhr sind mit HUM-120 geschlossen.** Bis dahin standen sie hier als
+erklärte Lücke; was an ihre Stelle tritt, steht in der Tabelle oben. Zur Erinnerung, was es war und
+was es jetzt ist:
 
-| Spanne | Ort | Was ein festgehaltener Peer bindet |
+| Spanne | Vorher | Jetzt |
 |---|---|---|
-| Anfrage-Rumpf | `handler.rs`, `body::buffer` ohne Frist | Hypers Kopf-Uhr ist gelöscht, sobald der Kopf geparst ist. Ein Client, der `Content-Length` ankündigt und nach wenigen Bytes schweigt, hält eine Tokio-Aufgabe und einen Dateideskriptor, bis er selbst aufgibt. Es greift allein `limits.hold_body_cap_bytes`, eine Byte-Grenze |
-| Gestreamter Antwort-Rumpf | `body.rs`, `TeeBody` | Bis zu den Antwort-Kopfzeilen deckt der Handschlag zum Ziel alles ab, danach nichts. Ein Ziel, das ein Byte pro Stunde nachreicht, hält zusätzlich die Verbindung zum Ziel und eine offene `ResponseSink` der Aufzeichnung |
-| TLS-Handschlag nach `CONNECT` | `handler.rs`, `tls::accept` ohne Frist | Wer den Tunnel öffnet und nie ein `ClientHello` schickt, hält die Aufgabe unbegrenzt; die Kopf-Frist der entschlüsselten Verbindung beginnt erst nach dem Handschlag |
+| Anfrage-Rumpf (`body::buffer`) | Hypers Kopf-Uhr ist gelöscht, sobald der Kopf geparst ist. Ein Client, der `Content-Length` ankündigt und nach zehn Bytes schweigt, hielt Aufgabe und Deskriptor, bis er selbst aufgab — nachgemessen: nach acht Sekunden noch offen, ohne Antwort und ohne ein einziges Ereignis | `limits.body_timeout_secs` je Stück. Danach `408`, `Connection: close`, und `PROXY_011` macht die Spanne für einen Menschen sichtbar |
+| Gestreamter Antwort-Rumpf (`TeeBody`) | Bis zu den Antwort-Kopfzeilen deckte der Handschlag zum Ziel alles ab, danach nichts. Ein Ziel, das ein Byte pro Stunde nachreichte, hielt zusätzlich die Verbindung zum Ziel und eine offene `ResponseSink` | `limits.body_timeout_secs` je Stück. Danach bricht der Strom ab; der Client sieht eine abgeschnittene Antwort, und die Aufzeichnung sagt „gekürzt" statt „vollständig" |
+| TLS-Handschlag nach `CONNECT` (`tls::accept`) | Wer den Tunnel öffnete und nie ein `ClientHello` schickte, hielt die Aufgabe unbegrenzt | `limits.header_timeout_secs`. Danach schließt der Tunnel still, mit einer Protokollzeile — es gibt noch keinen Fluss und der Client hat sein `200` längst |
 
-Dazu begrenzt der Accept-Loop des Proxys die Zahl gleichzeitiger Verbindungen nicht. Ein Prozess in
-der Sandbox kann deshalb viele Verbindungen öffnen und in einer dieser drei Spannen stehenbleiben;
-was er bindet, sind Aufgaben, Deskriptoren und im dritten Fall Aufzeichnungs-Puffer des Hosts.
-Aus der Sandbox heraus ist das erreichbar — sie hat genau diesen einen Weg nach draußen. Es ist
-**keine** Umgehung der drei Garantien: Es geht nichts hinaus, was ein Mensch nicht erlaubt hat, und
-es wird nichts sichtbar, was vorher unsichtbar war. Geschlossen wird die Lücke von HUM-120 (eine
-Grenze je Spanne) zusammen mit einer Obergrenze für gleichzeitige Verbindungen; eine Uhr je Spanne
-ohne diese Obergrenze deckt nur die Hälfte.
+Die Grenze misst in beiden Rumpf-Fällen die **Stille zwischen zwei Stücken** und nie die
+Gesamtdauer. Das ist keine Feinheit: Eine Gesamtdauer von 300 Sekunden risse den Strom des lokalen
+Sprachmodells ab — den erklärten Seitenkanal — und dazu jeden langen Download und jeden großen
+Upload. Belegt ist die Unterscheidung in `daemon/crates/proxy/tests/timeouts.rs`: Derselbe Peer mit
+derselben Pause wird mit der kurzen Frist abgeschnitten und kommt mit der langen durch, und die
+Tests aus HUM-101 (gehaltene Anfrage, streamende Durchreiche) bleiben grün.
+
+Dazu begrenzt der Accept-Loop des Proxys die Zahl gleichzeitiger Verbindungen jetzt auf
+`limits.max_client_connections`. **Eine Uhr je Spanne ohne diese Obergrenze deckte nur die Hälfte:**
+Wer in einer Spanne stehenbleibt und dafür nach der Frist bezahlt, öffnet einfach mehr
+Verbindungen, und jede einzelne bleibt innerhalb ihrer Frist. Fünfhundert solche Verbindungen
+standen vorher gleichzeitig offen; `limits.hold_max_flows` griff dabei nicht, weil kein Fluss
+entstand, und die schon gepufferten Bytes zählten gegen `limits.hold_body_cap_bytes`, aber nicht
+gegen `limits.hold_max_bytes`, dessen Buchführung erst mit dem Halten beginnt.
+
+Über der Grenze wird abgelehnt und nicht liegen gelassen: `503`, `Connection: close`, und der
+Befund `PROXY_010` im Ereignisstrom. Der Befund kommt **zusammengefasst**, höchstens einer je
+Minute, und nennt die Zahl der Ablehnungen seit der letzten Meldung. Das ist Teil der Grenze und
+keine Bequemlichkeit: Ein Befund je abgelehnter Verbindung wäre ein Hebel gegen die Oberfläche des
+Menschen, deren Ereignisstrom `limits.event_buffer` Plätze hat und bei Überlauf `Lagged` meldet.
+Eine Grenze, die den Host schützt und dabei die Oberfläche öffnet, wäre keine. Aus demselben Grund
+hat auch das Zurückschreiben der Ablehnung ein eigenes, kleines Kontingent und eine eigene Frist;
+ist es erschöpft, schließt die Verbindung ohne Antwort.
+
+**Was diese Grenzen nicht fangen, und das gehört gesagt.** Sie messen Stille, nicht Langsamkeit.
+Ein Gegenüber, das kurz vor Ablauf ein Byte schickt, ist nicht untätig — begrenzt wird es beim
+Anfrage-Rumpf durch `limits.hold_body_cap_bytes` und die Verbindungsgrenze, beim gestreamten
+Antwort-Rumpf allein durch die Verbindungsgrenze. Ein langsamer, aber nie stiller Antwort-Strom
+läuft also weiterhin unbegrenzt lange; was ihn deckelt, ist einzig die Zahl der Verbindungen, die
+ein Prozess gleichzeitig dafür halten darf. Eine Grenze über die Gesamtdauer wäre der falsche Weg
+dorthin: Sie träfe zuerst den erklärten Seitenkanal zum Sprachmodell. Eine Grenze über die
+Bandbreite wäre der richtige, und die gibt es heute nicht.
+
+Keine dieser Spannen war je eine Umgehung der drei Garantien: Es ging nichts hinaus, was ein Mensch
+nicht erlaubt hatte, und es wurde nichts sichtbar, was vorher unsichtbar war. Was der Host trug,
+waren Aufgaben, Deskriptoren und Aufzeichnungs-Puffer. Genau das tut er jetzt nicht mehr
+unbegrenzt.
+
+Ein abgeschnittener Antwort-Rumpf bleibt bis in die Ausgabe als solcher erkennbar: Die Aufzeichnung
+vermerkt ihn über `ResponseSink::abort` als gekürzt, und HAR (`content.comment` und
+`_humanitl.response_body_truncated`), JSON Lines (`response_body_truncated`) und CSV (Spalte
+`response_body_truncated`) tragen die Marke weiter. Ohne sie wäre die halbe Antwort im Export von
+einer ganzen nicht zu unterscheiden, und der Export ist Beweismittel.
 
 `limits.idle_timeout_secs` steht nicht mehr in dieser Tabelle und nicht mehr im Schema. Er hatte
 nie einen Leser — er wurde geprüft und an keine Uhr gereicht —, und seine Beschreibung („Sekunden
@@ -514,8 +551,8 @@ zugleich. Genau daran scheitert er: Dieselbe Stille ist auf zwei weiteren Spanne
 eine Anfrage gehalten wird und solange eine Antwort strömt —, und eine Uhr über der ganzen
 Verbindung kann beides nicht unterscheiden. Mit den Vorgabewerten hätte sie jeden gehaltenen Fluss
 nach 90 Sekunden getötet, obwohl die Haltefrist 300 Sekunden beträgt. Er ist mit HUM-101 entfernt,
-die drei Spannen bekommen mit HUM-120 je eine eigene Grenze; die Begründung und der Beleg stehen in
-`backlog/CONVENTIONS.md` 4.25.
+die drei Spannen haben mit HUM-120 je eine eigene Grenze bekommen; die Begründung und der Beleg
+stehen in `backlog/CONVENTIONS.md` 4.25.
 
 Welche Schlüssel heute wirken und welche auf ein Issue warten, sagt die Spalte „Wirkung" in
 `docs/CONFIG.md`; sie kommt aus demselben Schema wie diese Namen.
