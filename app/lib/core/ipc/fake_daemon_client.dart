@@ -1830,6 +1830,12 @@ const List<String> fakeFilterKeys = <String>[
   'edited',
   'passthrough',
   'upgrade',
+  // `meta:true` is exactly the requests to `humanitl.internal` the proxy
+  // answered itself, `meta:false` exactly the rest; without the term both
+  // appear (HUM-103). It stands next to `decision:`, not inside it: nobody
+  // decided about a meta request, so `decision:allow` and `decision:block`
+  // leave one out on their own.
+  'meta',
 ];
 
 /// What a page is sorted by in the fake; the four keys of `SortKey`.
@@ -1986,6 +1992,10 @@ class FakeFlowFilter {
         _rejectCmp(cmp, key, term);
         final bool wanted = _boolean(value, term);
         return (Flow flow) => flow.passthrough == wanted;
+      case 'meta':
+        _rejectCmp(cmp, key, term);
+        final bool wanted = _boolean(value, term);
+        return (Flow flow) => flow.meta == wanted;
       default:
         throw DaemonException(_refuse(_unknownKey(term, key)));
     }

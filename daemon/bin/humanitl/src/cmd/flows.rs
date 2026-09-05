@@ -570,6 +570,12 @@ pub fn summary_json(summary: &v1::FlowSummary) -> Value {
         "finding_count": summary.finding_count,
         "edited": summary.edited,
         "passthrough": summary.passthrough,
+        // Neben der Entscheidung, nicht darin: Über eine Anfrage an
+        // `humanitl.internal` entscheidet niemand. Ohne dieses Feld sähe sie
+        // in `--json` aus wie ein aufgezeichneter Fluss, über den noch nicht
+        // entschieden wurde — genau die Unterscheidung, um die es geht
+        // (HUM-103).
+        "meta": summary.meta,
         "rule_id": summary.rule_id,
         "origin_tool": summary.origin_tool,
         "error": summary.error,
@@ -680,6 +686,7 @@ mod tests {
             origin_tool: String::new(),
             upstream_error: 0,
             error: String::new(),
+            meta: false,
         }
     }
 
@@ -691,6 +698,35 @@ mod tests {
         assert_eq!(summary_json(&summary)["error"], "");
         summary.error = "tls_handshake_failed".to_owned();
         assert_eq!(summary_json(&summary)["error"], "tls_handshake_failed");
+    }
+
+    /// `--json` unterscheidet einen Meta-Fluss von einem unentschiedenen.
+    ///
+    /// HUM-103: An beiden ist `decision` leer. Wer sie in einem Skript
+    /// auseinanderhalten will — und der Demolauf tut genau das —, braucht das
+    /// Feld `meta`; ohne es sähe eine Auskunft, die der Agent sich geholt hat,
+    /// aus wie eine Anfrage, über die noch niemand entschieden hat.
+    #[test]
+    fn the_json_tells_a_meta_flow_from_an_undecided_one() {
+        let mut summary = summary();
+        assert_eq!(summary_json(&summary)["meta"], false);
+        assert_eq!(
+            summary_json(&summary)["decision"],
+            decision_name(v1::DecisionKind::Unspecified as i32)
+        );
+
+        summary.meta = true;
+        summary.path = "/why/0199c0ff-ee00-7000-8000-8000deadbeef".to_owned();
+        summary.status = 404;
+        let json = summary_json(&summary);
+        assert_eq!(json["meta"], true);
+        assert_eq!(
+            json["decision"],
+            decision_name(v1::DecisionKind::Unspecified as i32),
+            "nobody decided about a meta request"
+        );
+        assert_eq!(json["status"], 404);
+        assert_eq!(json["path"], "/why/0199c0ff-ee00-7000-8000-8000deadbeef");
     }
 
     #[test]

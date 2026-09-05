@@ -1,4 +1,4 @@
-/// The filter bar above the table: one expression field, five quick filters
+/// The filter bar above the table: one expression field, six quick filters
 /// and, when the daemon refuses the expression, its answer underneath.
 ///
 /// The field is the one place on this screen that carries the accent
@@ -210,6 +210,7 @@ class _HistoryFilterBarState extends ConsumerState<HistoryFilterBar> {
     HistoryChip.blocked => l10n.historyChipBlocked,
     HistoryChip.findings => l10n.historyChipFindings,
     HistoryChip.edited => l10n.historyChipEdited,
+    HistoryChip.meta => l10n.historyChipMeta,
     HistoryChip.passthrough =>
       query.includePassthrough
           ? l10n.historyChipPassthroughShown

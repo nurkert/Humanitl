@@ -207,11 +207,16 @@ class _Head extends StatelessWidget {
                 // What was decided, not how the row looks: an allow whose
                 // upstream failed was still an allow, and the state is on
                 // the glyph right above (`backlog/CONVENTIONS.md` 4.13).
-                value: flow.decision == null
-                    ? unknown
-                    : l10n.flowStateLabel(
-                        historyDecisionLabelState(flow.decision!),
-                      ),
+                // A meta request has no decision and never will: the proxy
+                // answered it itself, and a dash would read as "unknown"
+                // (`backlog/CONVENTIONS.md` 4.13, HUM-103).
+                value: switch (flow.decision) {
+                  null when flow.meta => l10n.historyDecisionNone,
+                  null => unknown,
+                  final DecisionKind decision => l10n.flowStateLabel(
+                    historyDecisionLabelState(decision),
+                  ),
+                },
               ),
               _Fact(label: l10n.historyDetailRule, value: _decider(l10n, flow)),
               _Fact(
@@ -249,6 +254,7 @@ class _Head extends StatelessWidget {
         HistoryDecider.timeout => l10n.historyDeciderTimeout,
         HistoryDecider.passthrough => l10n.historyDeciderPassthrough,
         HistoryDecider.pending => l10n.historyDeciderPending,
+        HistoryDecider.meta => l10n.historyDeciderMeta,
       };
 }
 

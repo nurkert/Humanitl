@@ -32,6 +32,9 @@ const List<String> csvColumns = <String>[
   'rule_id',
   'edited',
   'passthrough',
+  // Next to `decision`, not inside it: nobody decided about a request the
+  // proxy answered itself, so `decision` is empty on those rows (HUM-103).
+  'meta',
   'origin_tool',
 ];
 
@@ -70,6 +73,7 @@ List<String> csvRow(Flow flow) => <String>[
   flow.ruleId?.value ?? '',
   '${flow.edited}',
   '${flow.passthrough}',
+  '${flow.meta}',
   flow.originTool,
 ];
 

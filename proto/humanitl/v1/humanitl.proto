@@ -347,6 +347,19 @@ message FlowSummary {
   // FLOW_STATE_RECORDED verbucht wird. Und nicht dasselbe wie `block_reason`:
   // dort steht, warum jemand geblockt hat, hier, woran es gescheitert ist.
   string error = 24;
+  // Wahr fuer eine Anfrage an den reservierten Namen `humanitl.internal`, die
+  // der Proxy selbst beantwortet hat (ADR-0014, HUM-073, HUM-103).
+  //
+  // Das Feld steht **neben** `decision`, nicht darin: Ueber eine Meta-Anfrage
+  // entscheidet niemand, sie geht nirgendwo hin, und `decision` bleibt deshalb
+  // DECISION_KIND_UNSPECIFIED. Eine Zaehlung ueber Entscheidungen zaehlt einen
+  // Meta-Fluss nie mit; der Filterterm `meta:true` liefert genau sie,
+  // `meta:false` genau die uebrigen, und ohne den Term erscheinen beide.
+  //
+  // In einem `FlowEvent` ist das Feld immer false: Ein Meta-Fluss ist fertig,
+  // bevor ein Zuhoerer etwas mit ihm anfangen koennte, und erscheint deshalb
+  // nur in der Aufzeichnung (ListFlows, GetFlow).
+  bool meta = 25;
 }
 
 // Alles, was der Detail-Bereich zu einem Flow zeigt.

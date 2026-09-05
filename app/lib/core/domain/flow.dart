@@ -96,6 +96,15 @@ abstract class Flow with _$Flow {
     @Default(0) int findingCount,
     @Default(false) bool edited,
     @Default(false) bool passthrough,
+
+    /// True for a request to the reserved name `humanitl.internal` that the
+    /// proxy answered itself (HUM-073, HUM-103).
+    ///
+    /// It stands next to [decision], not inside it: nobody decided about a
+    /// meta request, it went nowhere, and [decision] stays null. No count over
+    /// decisions ever includes one; the filter term `meta:true` finds them and
+    /// `meta:false` excludes them.
+    @Default(false) bool meta,
     DateTime? deadline,
     @Default('') String originTool,
     UpstreamError? upstreamError,

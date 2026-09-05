@@ -37,7 +37,7 @@ const POOL_SIZE: usize = 8;
 /// Die Spalten von `flows`, in der Reihenfolge von [`row_to_summary`].
 const FLOW_COLUMNS: &str = "id, session_id, seq, ts, method, scheme, host, host_display, port, \
      path, upgrade, state, decision, block_reason, rule_id, passthrough, status, duration_ms, \
-     held_ms, edited, findings_count, request_size, response_size, apex, catalog_id, error";
+     held_ms, edited, findings_count, request_size, response_size, apex, catalog_id, error, meta";
 
 /// Ein kleiner Vorrat an Nur-Lese-Verbindungen.
 ///
@@ -491,6 +491,7 @@ fn row_to_summary(row: &Row<'_>) -> rusqlite::Result<FlowSummary> {
         apex: row.get(23)?,
         catalog_id: row.get(24)?,
         error: row.get(25)?,
+        meta: row.get::<_, i64>(26)? != 0,
     })
 }
 

@@ -369,6 +369,15 @@ pub struct FlowSummary {
     /// (HUM-045). Nicht dasselbe wie [`FlowSummary::block_reason`]: dort steht,
     /// warum jemand geblockt hat, hier, woran es gescheitert ist.
     pub error: Option<String>,
+    /// Wahr für eine Anfrage an den reservierten Namen `humanitl.internal`,
+    /// die der Proxy selbst beantwortet hat (ADR-014, HUM-073, HUM-103).
+    ///
+    /// Steht neben [`FlowSummary::decision`], nicht darin: Über eine
+    /// Meta-Anfrage entscheidet niemand, sie geht nirgendwo hin, und
+    /// `decision` bleibt deshalb `None`. Eine Auswertung über Entscheidungen
+    /// zählt einen Meta-Fluss nie mit; wer ihn sucht, filtert mit `meta:true`,
+    /// wer ihn ausschließt, mit `meta:false`.
+    pub meta: bool,
 }
 
 /// Eine aufgezeichnete Nachricht: Kopfzeilen plus Verweis auf den Body.

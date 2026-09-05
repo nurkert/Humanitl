@@ -34,6 +34,7 @@ Flow testFlow({
   int findingCount = 0,
   bool edited = false,
   bool passthrough = false,
+  bool meta = false,
   UpstreamError? upstreamError,
   DateTime? receivedAt,
   DateTime? deadline,
@@ -57,6 +58,7 @@ Flow testFlow({
   findingCount: findingCount,
   edited: edited,
   passthrough: passthrough,
+  meta: meta,
   upstreamError: upstreamError,
   deadline: deadline,
 );

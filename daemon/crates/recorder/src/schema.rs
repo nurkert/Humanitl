@@ -75,6 +75,11 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "session_summary",
         sql: include_str!("../migrations/V5__session_summary.sql"),
     },
+    Migration {
+        version: 6,
+        name: "meta_flow",
+        sql: include_str!("../migrations/V6__meta_flow.sql"),
+    },
 ];
 
 /// Der Stand, den eine frisch migrierte Datenbank hat.

@@ -19,27 +19,43 @@ const String historyFilterInvalidCode = 'RECORDER_002';
 
 /// The visual state a recorded flow is drawn in.
 ///
-/// Five rules run before the shared derivation of [FlowVisualState], in this
+/// Six rules run before the shared derivation of [FlowVisualState], in this
 /// order, because the history mixes eight states in one column while the
 /// queue only ever shows one:
 ///
-/// 1. A held flow is held; it has no status and no decision yet.
-/// 2. Passthrough traffic keeps its own hue whatever happened to it.
-/// 3. A timeout is a timeout. Its 504 is the answer the proxy wrote itself,
+/// 1. A request the proxy answered itself is neither held nor decided; the
+///    shared derivation would paint it as held, which would claim that
+///    somebody is about to decide about it. See below.
+/// 2. A held flow is held; it has no status and no decision yet.
+/// 3. Passthrough traffic keeps its own hue whatever happened to it.
+/// 4. A timeout is a timeout. Its 504 is the answer the proxy wrote itself,
 ///    not an upstream failure, and the same holds for the 403 of a block:
 ///    a decision is never overruled by the status it produced.
-/// 4. `no_route` is an error even though it is written as a block: nothing
+/// 5. `no_route` is an error even though it is written as a block: nothing
 ///    was refused, the target was never reachable.
-/// 5. Otherwise a failed upstream or a 5xx answer is an error, and everything
+/// 6. Otherwise a failed upstream or a 5xx answer is an error, and everything
 ///    left is what the queue would show, so that the same flow does not
 ///    change colour when it moves from one screen to the other.
 ///
-/// Rule 5 is a deliberate deviation from the derivation table of
+/// Rule 6 is a deliberate deviation from the derivation table of
 /// `backlog/sprint-2.md`, which maps every block to `blocked`: a block by a
 /// rule is `autoRule` in the queue, and two screens that paint one flow two
 /// ways cost more than the table gains (`backlog/CONVENTIONS.md` 4.13,
 /// predictability).
+///
+/// Rule 1 borrows [HFlowState.passthroughLlm], the violet of the declared
+/// side channel, because a meta request is the agent's own channel too and
+/// the design system already uses that hue for it: the `AgentAsk` card wears
+/// it (`backlog/CONVENTIONS.md` 4.24). What matters more is what it is *not*:
+/// none of the four decision hues (`allowed`, `allowedEdited`, `blocked`,
+/// `autoRule`) and not `held`. A state of its own belongs in `packages/ui`
+/// next to the other eight; until it exists, a borrowed hue that says "the
+/// agent's own channel" beats one that says "a person is deciding about
+/// this" (HUM-103).
 HFlowState historyVisualState(Flow flow) {
+  if (flow.meta) {
+    return HFlowState.passthroughLlm;
+  }
   if (flow.isHeld) {
     return HFlowState.held;
   }
@@ -78,6 +94,13 @@ HFlowState historyDecisionLabelState(DecisionKind decision) =>
 
 /// What decided the flow, as the short word the rule column prints.
 enum HistoryDecider {
+  /// Nothing did: the proxy answered the request itself (HUM-103).
+  ///
+  /// Not [pending]. `waiting` would say that a decision is still coming, and
+  /// about a request to `humanitl.internal` none ever will — it went nowhere
+  /// (`backlog/CONVENTIONS.md` 4.13).
+  meta,
+
   /// A rule matched.
   rule,
 
@@ -94,8 +117,11 @@ enum HistoryDecider {
   pending,
 }
 
-/// Which of the five words the rule column shows for [flow].
+/// Which of the six words the rule column shows for [flow].
 HistoryDecider historyDecider(Flow flow) {
+  if (flow.meta) {
+    return HistoryDecider.meta;
+  }
   if (flow.passthrough) {
     return HistoryDecider.passthrough;
   }

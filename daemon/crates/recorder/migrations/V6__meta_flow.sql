@@ -1,0 +1,27 @@
+-- Der Vermerk an einer Anfrage, die der Proxy selbst beantwortet hat (HUM-103).
+--
+-- Der Agent in der Sandbox kann den reservierten Namen `humanitl.internal`
+-- abfragen: eine Statusseite, eine Erklärung zu einem Flow, eine Bitte an den
+-- Menschen (ADR-0014, HUM-073). Diese Anfragen gehen nirgendwo hin, sie halten
+-- nichts auf, und über sie entscheidet niemand. Bis hierher hinterließen sie
+-- deshalb gar keine Spur; die Historie zeigte weniger, als wirklich geschehen
+-- ist.
+--
+-- Die Spalte steht **neben** `decision`, nicht darin. `decision` sagt aus, wie
+-- ein Mensch oder eine Regel über eine Anfrage entschieden hat; für eine
+-- Meta-Anfrage bleibt sie `NULL`, denn eine erfundene Entscheidung wäre eine
+-- Behauptung über einen Menschen, der nichts getan hat
+-- (`backlog/CONVENTIONS.md` 4.13). Jede Auswertung über Entscheidungen
+-- (`decision:allow`, `decision:block`, die Zahlen des Demolaufs) lässt einen
+-- Meta-Fluss deshalb von selbst aus, ohne dass sie ihn ausnehmen müsste.
+--
+-- Der Filter trennt beide Mengen vollständig und überschneidungsfrei:
+-- `meta:true` liefert genau die Meta-Flüsse, `meta:false` genau die übrigen,
+-- und ohne den Term erscheinen beide.
+--
+-- Mit Index, anders als bei `flows.error` (V4): Diese Spalte wird gefiltert,
+-- und die `1` ist selten. Der Index steht auf der Spalte allein, wie
+-- `flows_decision` in V1; die Sortierung nach `ts` bedient weiterhin
+-- `flows_ts`.
+ALTER TABLE flows ADD COLUMN meta INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX flows_meta ON flows(meta);

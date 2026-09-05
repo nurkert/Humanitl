@@ -818,6 +818,13 @@ pub fn record_to_summary(record: &FlowRecord) -> v1::FlowSummary {
             FlowState::Failed { error } => error.to_string(),
             _ => String::new(),
         },
+        // Die Registry hält nur Flows, über die noch entschieden werden kann
+        // oder gerade entschieden wurde. Eine Anfrage an `humanitl.internal`
+        // gehört nie dazu: Der Proxy beantwortet sie selbst und schreibt sie
+        // unmittelbar in die Aufzeichnung, ohne sie einzutragen. Wer den
+        // Vermerk sucht, liest die Aufzeichnung
+        // ([`recorded_summary_to_proto`], HUM-103).
+        meta: false,
     }
 }
 
@@ -1465,6 +1472,10 @@ pub fn recorded_summary_to_proto(row: &RecordedSummary) -> v1::FlowSummary {
         // Der Grund steht in der Spalte, nicht im Zustand: Ein abgebrochener
         // TLS-Handschlag endet als `recorded`, nicht als `failed` (HUM-045).
         error: row.error.clone().unwrap_or_default(),
+        // Neben `decision`, nicht darin: Über eine Meta-Anfrage entscheidet
+        // niemand, `decision` bleibt an ihr `DECISION_KIND_UNSPECIFIED`
+        // (HUM-103).
+        meta: row.meta,
     }
 }
 
@@ -1536,9 +1547,9 @@ mod tests {
     use humanitl_proxy::registry::{FlowRecord, FlowRegistry};
 
     use super::{
-        CheckResult, IsolationCheck, check_result_to_proto, diagnostic_to_proto,
-        flow_event_to_proto, matches_filter, record_to_detail, record_to_summary, rule_from_proto,
-        rule_to_proto, wall_clock,
+        CheckResult, IsolationCheck, RecordedSummary, check_result_to_proto, diagnostic_to_proto,
+        flow_event_to_proto, matches_filter, record_to_detail, record_to_summary,
+        recorded_summary_to_proto, rule_from_proto, rule_to_proto, wall_clock,
     };
     use crate::v1;
 
@@ -1984,5 +1995,72 @@ mod tests {
         assert_eq!(diagnostic.code, "SANDBOX_016");
         assert_eq!(diagnostic.severity, v1::Severity::Blocking as i32);
         assert!(!diagnostic.why.is_empty(), "a finding without a why");
+    }
+
+    /// Der Vermerk einer Meta-Anfrage überquert die Leitung (HUM-103).
+    ///
+    /// Ohne diese Zeile sähe die Oberfläche einen Meta-Fluss wie eine Anfrage,
+    /// über die noch niemand entschieden hat — `decision` ist an beiden leer,
+    /// und allein `meta` unterscheidet sie.
+    #[test]
+    fn the_mark_of_a_meta_flow_reaches_the_wire() {
+        let row = recorded_row();
+        let proto = recorded_summary_to_proto(&row);
+        assert!(!proto.meta, "an ordinary flow carries no mark");
+        assert_eq!(proto.decision, v1::DecisionKind::Allow as i32);
+
+        let meta = RecordedSummary {
+            host: humanitl_core::META_HOST.to_owned(),
+            host_display: humanitl_core::META_HOST.to_owned(),
+            path: "/why/0199c0ff-ee00-7000-8000-8000deadbeef".to_owned(),
+            decision: None,
+            block_reason: None,
+            rule_id: None,
+            status: Some(404),
+            meta: true,
+            ..row
+        };
+        let proto = recorded_summary_to_proto(&meta);
+        assert!(proto.meta, "the history has to be able to tell them apart");
+        assert_eq!(
+            proto.decision,
+            v1::DecisionKind::Unspecified as i32,
+            "nobody decided about a meta request"
+        );
+        assert_eq!(proto.block_reason, v1::BlockReason::Unspecified as i32);
+        assert_eq!(proto.status, 404);
+    }
+
+    /// Eine gewöhnliche, freigegebene Zeile der Aufzeichnung.
+    fn recorded_row() -> RecordedSummary {
+        RecordedSummary {
+            id: FlowId::new(),
+            session: SessionId::new(),
+            seq: 1,
+            ts: 1_788_000_000_000,
+            method: "GET".to_owned(),
+            scheme: "https".to_owned(),
+            host: "api.github.com".to_owned(),
+            host_display: "api.github.com".to_owned(),
+            port: 443,
+            path: "/user".to_owned(),
+            upgrade: None,
+            state: "recorded".to_owned(),
+            decision: Some("allow".to_owned()),
+            block_reason: None,
+            rule_id: None,
+            passthrough: false,
+            status: Some(200),
+            duration_ms: Some(120),
+            held_ms: Some(40),
+            edited: false,
+            findings_count: 0,
+            request_size: 12,
+            response_size: Some(34),
+            apex: Some("github.com".to_owned()),
+            catalog_id: None,
+            error: None,
+            meta: false,
+        }
     }
 }
