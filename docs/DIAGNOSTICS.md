@@ -15,7 +15,7 @@ Entfernen eines Codes.
 | daemon | `DAEMON` | 001 | 019 | Start, Erreichbarkeit, Version des Daemons |
 | ipc | `IPC` | 001 | 009 | gRPC-Schnittstelle, Token, Aufrufe gegen den Zustand |
 | config | `CONFIG` | 001 | 019 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066) |
-| sandbox | `SANDBOX` | 001 | 029 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler |
+| sandbox | `SANDBOX` | 001 | 029 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 020-025 /work-Härtung (HUM-043) |
 | proxy | `PROXY` | 001 | 009 | Anfragen, Caps, Protokoll |
 | tls | `TLS` | 001 | 009 | CA, Zertifikate, Handschlag |
 | llm | `LLM` | 001 | 009 | LLM-Endpunkt und seine Antworten |
@@ -172,6 +172,30 @@ Isolation-Check 2: mehr als eine Tür
 #### SANDBOX_016
 
 Isolation-Check 3: seccomp unwirksam
+
+#### SANDBOX_020
+
+Maskierter Pfad freigegeben
+
+#### SANDBOX_021
+
+Kernel ohne openat2
+
+#### SANDBOX_022
+
+Symlink zeigt aus dem Projekt hinaus
+
+#### SANDBOX_023
+
+Mögliche Geheimnisse im Projekt
+
+#### SANDBOX_024
+
+Schnappschuss abgeschnitten
+
+#### SANDBOX_025
+
+Ohne Maske ins Projekt geschrieben
 
 ### Bereich proxy
 

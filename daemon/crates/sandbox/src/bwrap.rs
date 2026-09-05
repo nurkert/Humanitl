@@ -435,6 +435,71 @@ impl BwrapBackend {
         Ok(())
     }
 
+    /// Die `tmpfs`-Pfade unter `/work`, über denen **kein** `tmpfs` liegt
+    /// (HUM-043).
+    ///
+    /// **Die Entscheidung, die HUM-043 offen ließ.** `bwrap` hängt nur über
+    /// einen Mountpoint ein, den es gibt, und [`Self::present_under_work`]
+    /// rendert ein `--tmpfs` unter `/work` deshalb nur für einen Pfad, den es
+    /// auf dem Host als Verzeichnis gibt: Sonst legte `bwrap` ihn selbst an,
+    /// auf `rw` als leeres Verzeichnis im Projekt des Nutzers, auf `ro` gar
+    /// nicht — dort scheiterte der Start mit `EROFS`. Daraus folgt eine Lücke:
+    /// Ohne `.git/hooks` auf dem Host liegt kein `tmpfs` darüber, und ein
+    /// `pre-commit`, den der Agent schreibt, landet im Projekt.
+    ///
+    /// Von den beiden Wegen, die das Issue zur Wahl stellte, nimmt Humanitl den
+    /// zweiten: **melden statt anlegen.** Drei Gründe:
+    ///
+    /// - Ein `.idea/` oder `.vscode/`, das Humanitl erfindet, lässt die
+    ///   Werkzeugkette des Nutzers glauben, das Projekt sei dafür eingerichtet;
+    ///   ein `.git/` in einem Verzeichnis ohne Repository bringt Git aus dem
+    ///   Tritt, das dann ein kaputtes Repository sieht statt keines.
+    /// - Die Invariante bleibt einfach: Der Daemon schreibt nicht in das
+    ///   Projekt des Nutzers, und zwar auch kein leeres Verzeichnis. Seit
+    ///   HUM-037 ist das geprüft (`opencode_adapter.rs`,
+    ///   `the_briefing_leaves_the_project_directory_byte_identical`).
+    /// - Ein Werkzeug, das erst ein `.git/` anlegt und dann behauptet, es habe
+    ///   nichts angefasst, wäre keines.
+    ///
+    /// Die Lücke bleibt damit offen, aber sie bleibt auch sichtbar, und das ist
+    /// genau die Bauweise dieses Kanals (BACKLOG.md 4.2): Was der Agent in ein
+    /// Verzeichnis schreibt, das es vorher nicht gab, ist im Diff des Laufs
+    /// eine **neue** Datei und steht als solche in der Zusammenfassung. Die
+    /// Liste hier geht denselben Weg und nennt die Pfade, über denen die Maske
+    /// diesmal nicht lag.
+    ///
+    /// Die Liste umfasst **beide** Arten von Überdeckung: die `tmpfs` aus
+    /// `mounts.tmpfs` und die Masken aus [`SandboxProfile::effective_masked_files`].
+    /// Für eine fehlende Maske gilt dasselbe wie für ein fehlendes Verzeichnis:
+    /// Ohne die Datei auf dem Host rendert der Launcher kein `--ro-bind-data`,
+    /// und ein `.pre-commit-config.yaml`, das der Agent neu anlegt, läuft beim
+    /// nächsten Commit.
+    ///
+    /// Die Pfade kommen **relativ zum Projektverzeichnis** zurück, in demselben
+    /// Raum wie die Einträge des Schnappschusses; nur so lässt sich eine
+    /// Änderung einem ungeschützten Pfad zuordnen
+    /// (`summary::SessionSummary::set_unprotected`).
+    fn unprotected_under_work(
+        profile: &SandboxProfile,
+        present: &BTreeSet<PathBuf>,
+    ) -> Vec<PathBuf> {
+        let work_dst = profile.mounts.work.dst.as_path();
+        profile
+            .mounts
+            .tmpfs
+            .iter()
+            .cloned()
+            .chain(profile.effective_masked_files())
+            .filter(|path| !present.contains(path))
+            .filter_map(|path| {
+                path.strip_prefix(work_dst)
+                    .ok()
+                    .filter(|rel| !rel.as_os_str().is_empty())
+                    .map(Path::to_path_buf)
+            })
+            .collect()
+    }
+
     /// Die Pfade unter `/work` (Sandbox-Sicht), die es im Projekt gibt: ein
     /// Verzeichnis je `mounts.tmpfs` darunter, eine Datei je Maske.
     fn present_under_work(profile: &SandboxProfile, work_src: &Path) -> BTreeSet<PathBuf> {
@@ -594,7 +659,12 @@ impl SandboxBackend for BwrapBackend {
         let passwd = Self::sealed_memfd("humanitl-passwd", identity.passwd.as_bytes())?;
         let group = Self::sealed_memfd("humanitl-group", identity.group.as_bytes())?;
         let hosts = Self::sealed_memfd("humanitl-hosts", identity.hosts.as_bytes())?;
+        let mut warnings = profile.unmask_diagnostics();
         let present = Self::present_under_work(profile, &session.work_src);
+        let unprotected = Self::unprotected_under_work(profile, &present);
+        if let Some(diagnostic) = crate::worktree::resolution_diagnostic() {
+            warnings.push(diagnostic);
+        }
         let masks = profile
             .masks_to_render(Some(&present))
             .iter()
@@ -639,6 +709,8 @@ impl SandboxBackend for BwrapBackend {
             files: session.files.clone(),
             session: session.session,
             profile: profile.name.clone(),
+            warnings,
+            unprotected,
             program: self.program.clone(),
             once: Mutex::new(Some(LaunchOnce {
                 inherit,

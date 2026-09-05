@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
 use bytes::Bytes;
+use humanitl_core::ids::SandboxId;
 use humanitl_core::{BodyRef, FlowId, SessionId};
 use rusqlite::types::Type;
 use rusqlite::{Connection, Row};
@@ -27,7 +28,7 @@ use crate::error::{RecorderError, cursor_mismatch, storage_failed};
 use crate::filter::{self, Param};
 use crate::types::{
     COUNT_CEILING, Cursor, CursorKey, Dir, FindingRecord, FlowDetail, FlowPage, FlowQuery,
-    FlowSummary, MessageRecord, SortKey,
+    FlowSummary, MessageRecord, SessionSummaryRow, SortKey, at_millis,
 };
 
 /// So viele Nur-Lese-Verbindungen bleiben zwischen zwei Abfragen offen.
@@ -185,6 +186,89 @@ pub fn get_flow(pool: &ReadPool, id: FlowId) -> Result<Option<FlowDetail>, Recor
             messages,
             findings,
         }))
+    })
+}
+
+/// Die Zusammenfassung eines Sandbox-Laufs, oder `None`.
+///
+/// Der Lauf allein genügt als Schlüssel: Eine [`SandboxId`] ist eine `UUIDv7`,
+/// und `humanitl sessions summary <id>` kennt genau diese eine Kennung.
+///
+/// # Errors
+///
+/// [`RecorderError::Storage`] bei einem Fehler der Datenbank.
+pub fn get_session_summary(
+    pool: &ReadPool,
+    sandbox: SandboxId,
+) -> Result<Option<SessionSummaryRow>, RecorderError> {
+    let sandbox_key = sandbox.to_string();
+    pool.with(|conn| {
+        conn.query_row(
+            "SELECT session_id, sandbox_id, created, json FROM session_summaries \
+             WHERE sandbox_id = ?1",
+            rusqlite::params![&sandbox_key],
+            row_to_session_summary,
+        )
+        .map(Some)
+        .or_else(|err| match err {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(storage_failed(format!(
+                "could not read the session summary of sandbox {sandbox_key} ({other})"
+            ))),
+        })
+    })
+}
+
+/// Alle Zusammenfassungen einer Sitzung, die jüngste zuerst.
+///
+/// # Errors
+///
+/// [`RecorderError::Storage`] bei einem Fehler der Datenbank.
+pub fn list_session_summaries(
+    pool: &ReadPool,
+    session: SessionId,
+) -> Result<Vec<SessionSummaryRow>, RecorderError> {
+    let session_key = session.to_string();
+    pool.with(|conn| {
+        let mut statement = conn
+            .prepare(
+                "SELECT session_id, sandbox_id, created, json FROM session_summaries \
+                 WHERE session_id = ?1 ORDER BY created DESC, sandbox_id",
+            )
+            .map_err(|err| {
+                storage_failed(format!("could not list the session summaries ({err})"))
+            })?;
+        let rows = statement
+            .query_map([&session_key], row_to_session_summary)
+            .map_err(|err| {
+                storage_failed(format!("could not read the session summaries ({err})"))
+            })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|err| {
+                storage_failed(format!("could not read a session summary ({err})"))
+            })?);
+        }
+        Ok(out)
+    })
+}
+
+/// Eine Zeile aus `session_summaries`.
+///
+/// Eine Kennung, die sich nicht als `UUID` lesen lässt, gibt es nicht: Sie
+/// entstand beim Schreiben aus einer. Käme trotzdem eine, wäre die Nil-Id die
+/// ehrlichere Antwort als ein Absturz — die Zeile bleibt sichtbar und zeigt,
+/// dass etwas nicht stimmt.
+fn row_to_session_summary(row: &Row<'_>) -> rusqlite::Result<SessionSummaryRow> {
+    let session: String = row.get(0)?;
+    let sandbox: String = row.get(1)?;
+    let created: i64 = row.get(2)?;
+    let json: Vec<u8> = row.get(3)?;
+    Ok(SessionSummaryRow {
+        session: session.parse().unwrap_or_else(|_err| SessionId::nil()),
+        sandbox: sandbox.parse().unwrap_or_else(|_err| SandboxId::nil()),
+        created: at_millis(created),
+        json: String::from_utf8_lossy(&json).into_owned(),
     })
 }
 

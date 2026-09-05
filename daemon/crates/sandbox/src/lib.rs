@@ -25,6 +25,10 @@
 //!   startet mit leerer Umgebung
 //! - [`handle`] die laufende Sandbox: [`SandboxHandle`] mit `wait`, `kill`
 //!   und dem Bericht des Shims
+//! - [`worktree`] der Blick des Hosts in `/work`: Schnappschuss, Diff,
+//!   Symlink-Erkennung und das sichere Öffnen mit `openat2` (HUM-043)
+//! - [`summary`] was ein Sandbox-Lauf im Projekt hinterlassen hat, in der Form,
+//!   die ein Mensch zu sehen bekommt (HUM-043)
 //!
 //! Wer ein Profil startet und nicht nur anzeigt, lädt es mit
 //! [`SandboxProfile::load_validated`] gegen eine [`MountPolicy`] aus
@@ -78,6 +82,8 @@ pub mod bwrap_args;
 pub mod handle;
 pub mod launcher;
 pub mod profile;
+pub mod summary;
+pub mod worktree;
 
 pub use crate::agent::{
     AdapterRegistry, AgentAdapter, AgentContext, OpenCodeAdapter, SandboxFile, files_inside_work,
@@ -110,4 +116,13 @@ pub use crate::profile::{
     REQUIRED_SOCKET_FAMILIES, REQUIRED_SOCKET_TYPES, REQUIRED_TMPFS, SHIM_DST,
     SOCKET_WALK_MAX_DEPTH, SOCKET_WALK_MAX_ENTRIES, SandboxProfile, SandboxSection, SeccompSection,
     SessionContext, SocketFamily, SocketFloor, SocketType, Symlink, WORK_DST, WorkMount,
+    is_mandatory_mask,
+};
+pub use crate::summary::{
+    ChangeKind, FileChangeRecord, SCAN_MAX_BYTES, SessionSummary, SummaryFinding, SymlinkEscape,
+    executable_on_host, looks_like_text,
+};
+pub use crate::worktree::{
+    Entry, FileChange, Kind, Resolution, SnapshotLimits, TreeSnapshot, diff, escapes, open_beneath,
+    open_root, read_beneath, snapshot,
 };
