@@ -527,6 +527,75 @@ beim Beenden verworfen wird.
 `trust list | grep -i humanitl` (beziehungsweise `ls /usr/local/share/ca-certificates/`) liefert
 nichts.
 
+**Die Testwurzel und ihr Flag (`--allow-test-ca`).** Für Testläufe und Vorführungen steht das Ziel
+oft auf demselben Rechner und weist ein selbst ausgestelltes Zertifikat vor. Damit der Proxy es
+annehmen kann, gibt es genau einen Hebel, und er ist eng gefasst.
+
+*Was das Flag tut.* `humanitld --allow-test-ca` liest die Datei aus `resolver.test_ca` als PEM und
+nimmt jedes darin gefundene Zertifikat als zusätzlichen Vertrauensanker **für Verbindungen des
+Proxys zum Ziel** an, neben den Wurzeln von `webpki-roots`. Der Pfad muss absolut sein; ein
+relativer beendet den Start mit `CONFIG_012`, bevor die Datei angefasst wird. Dieselben Anker bekommt die
+Endpunkt-Probe hinter dem RPC `ProbeLlm`, die `llm.endpoint` prüft; zwei verschiedene
+Vertrauensentscheidungen in einem Prozess wären eine Überraschung, die niemand erwartet. Lehnt
+rustls eine der Wurzeln ab, kommt der Fehler als `PROXY_003` heraus und wird nicht verschluckt.
+
+*Was das Flag nicht tut.* Es trägt nichts in den System- oder Browser-Trust-Store ein. Es ändert
+nichts an der Humanitl-CA und nichts an dem, was in die Sandbox geht: Dort liegt weiterhin nur
+`ca.crt` als `/etc/humanitl/ca.crt`. Es schaltet keinen Rückfallpfad frei — ein Ziel, dessen
+Zertifikat auch mit der Testwurzel nicht prüfbar ist, scheitert weiterhin sichtbar mit `502` und
+`upstream_tls`. Und es weitet nichts über diese eine Datei hinaus aus: Das ALPN-Angebot, die
+Fehlerdiagnosen und die übrigen Wurzeln sind mit und ohne Flag dieselben.
+
+*Warum es ein Flag ist und kein Schlüssel.* `resolver.test_ca` allein bewirkt nichts. Der Grund ist
+der Weg, auf dem eine Konfiguration entsteht: Sie kommt aus Dateien, die ein Projekt mitbringen
+kann, und wer ein Projekt hereinreicht, soll dem Daemon nicht nebenbei einen Vertrauensanker
+mitgeben können. Die Kommandozeile gehört dem Menschen, der den Daemon startet. Deshalb gilt die
+Wurzel nur, wenn beide Hälften da sind; steht nur eine, sagt der Daemon das als `CONFIG_011`
+(Warning) und vertraut nichts.
+
+*Und warum der Pfad absolut sein muss.* Aus demselben Grund, eine Ebene tiefer. Das Flag entscheidet
+**ob** eine fremde Wurzel gilt; der Pfad entscheidet **welche**. Ein relativer Pfad würde gegen das
+Arbeitsverzeichnis aufgelöst, in dem der Daemon gestartet wurde, und das ist im Alltag das
+Projektverzeichnis. Dann genügte es, einen Menschen einmal dazu zu bringen, den Daemon mit dem Flag
+in einem präparierten Verzeichnis zu starten, und die Datei daneben bestimmte die Wurzel. Ein
+absoluter Pfad ist die Zusage, die man vorlesen kann. Ein anderer wird abgelehnt, bevor gelesen
+wird (`CONFIG_012`, Exit-Code 1) — auch dann, wenn an dieser Stelle eine tadellose Wurzel liegt:
+Abgelehnt wird nicht ihr Inhalt, sondern dass erst der Startort bestimmt hätte, welche Datei
+gemeint ist. Steht das Flag und ist die Datei unbrauchbar — sie fehlt, ist
+unlesbar oder enthält kein Zertifikat —, dann **startet der Daemon nicht** (`CONFIG_010`, Exit-Code
+1, weder `daemon.sock` noch `proxy.sock` entstehen). Ein Daemon, der eine Testwurzel zugesagt
+bekommt und stillschweigend keine hat, misst später einen TLS-Fehler, den niemand mehr dieser Datei
+zuordnet. Das Flag steht in keiner systemd-Unit, in keinem Paket-Startbefehl und in keiner
+Beispielkonfiguration.
+
+*Woran ein Mensch von außen sieht, dass ein Daemon damit läuft.* An zwei Stellen, und beide sind
+unabhängig von jeder Konfigurationsdatei:
+
+1. Am Prozess selbst. `ps -o args= -p <pid>` beziehungsweise `tr '\0' ' ' < /proc/<pid>/cmdline`
+   zeigt `--allow-test-ca`. Nur die Kommandozeile schaltet die Wurzel ein, also ist ihr Fehlen der
+   Beweis, dass keine gilt.
+2. Am Protokoll des Starts. Der Daemon schreibt eine `WARN`-Zeile mit der Zahl der Wurzeln und dem
+   Pfad der Datei; sie geht wie jede Protokollzeile als JSON nach `stderr` und trägt
+   `"level":"WARN"` und `--allow-test-ca` im Text. Ohne das Flag steht dort stattdessen
+   `CONFIG_011`, sobald der Schlüssel gesetzt ist. `WARN` und nicht `INFO`: Wer sucht, warum ein
+   Ziel angenommen wird, das eigentlich keines sein sollte, findet die Zeile auf derselben Stufe
+   wie den Fehler, den sie erklärt. (Eine systemd-Unit, unter der `journalctl` danach suchen
+   könnte, gibt es noch nicht; sie kommt mit HUM-053.)
+
+Beide Wege setzen Zugriff auf die Maschine voraus, auf der der Daemon läuft. **Wer nur seine
+Schnittstelle benutzt, sieht es nicht:** `GetInfo` trägt keine Fähigkeit dafür, `humanitl daemon
+status` sagt nichts, und der Ereignisstrom trägt den Befund des Starts nicht nach.
+
+Der Ort, an den es gehört, ist benannt und nicht offen: eine Fähigkeit in `GetInfo.capabilities`
+(neben `sandbox.bwrap`), die `humanitl daemon status` und der Sitzungskopf der Oberfläche
+anzeigen — dann sähe ein erweitertes Vertrauen jeder, der den Daemon fragen darf, und nicht nur
+wer auf seiner Maschine sitzt. Gebaut ist das nicht; es bräuchte `proto/` und
+`daemon/crates/ipc/`. Bis dahin steht es hier als Lücke und nirgends als Zusage.
+
+Nicht dazu gehört der Meta-Endpunkt `http://humanitl.internal/`: Ihn liest der Agent in der
+Sandbox, und dessen Vertrauen zum Proxy hängt an der Humanitl-CA und nicht an dieser Wurzel. Er ist
+die falsche Stelle, weil er den falschen Leser hat.
+
 **Certificate Pinning.** Manche Programme akzeptieren nur ein fest einprogrammiertes Zertifikat.
 Für sie funktioniert die Terminierung nicht, und das ist beabsichtigt: Das Werkzeug scheitert
 sichtbar mit einem TLS-Fehler, Humanitl bietet **keinen** Rückfallpfad, der die Verbindung

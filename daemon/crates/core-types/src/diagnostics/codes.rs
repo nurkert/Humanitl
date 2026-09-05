@@ -63,7 +63,8 @@ pub static AREAS: &[AreaInfo] = &[
         prefix: "CONFIG",
         first: 1,
         last: 19,
-        note: "001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066)",
+        note: "001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), \
+               010-012 Test-Wurzel und ihr Flag (HUM-087)",
     },
     AreaInfo {
         area: "sandbox",
@@ -253,6 +254,21 @@ registry! {
     /// Das Projekt-Profil nennt ein Profil, das nicht gilt: ein Projekt darf nur ein
     /// mitgeliefertes wählen, und die Kommandozeile geht vor (Warning, HUM-066).
     CONFIG_009 => "config", "Profilwunsch des Projekts gilt nicht", "#config_009";
+    /// `resolver.test_ca` zeigt auf eine Datei, aus der sich kein Zertifikat lesen
+    /// lässt: sie fehlt, ist unlesbar oder enthält keinen PEM-Block. Mit
+    /// `--allow-test-ca` startet der Daemon dann nicht, statt still nichts zu
+    /// vertrauen (Error, HUM-087).
+    CONFIG_010 => "config", "Test-Wurzel nicht verwendbar", "#config_010";
+    /// Flag und Schlüssel passen nicht zusammen: `resolver.test_ca` ist gesetzt,
+    /// aber der Daemon läuft ohne `--allow-test-ca` (die Wurzel gilt nicht), oder
+    /// das Flag steht ohne den Schlüssel (es bewirkt nichts). Beide Hälften
+    /// gehören zusammen (Warning, HUM-087).
+    CONFIG_011 => "config", "Test-Wurzel ohne Flag oder Flag ohne Test-Wurzel", "#config_011";
+    /// `resolver.test_ca` trägt keinen absoluten Pfad. Ein relativer würde gegen
+    /// das Arbeitsverzeichnis des Starts aufgelöst; damit entschiede das
+    /// Verzeichnis mit, welcher Wurzel der Daemon vertraut. Abgelehnt wird vor
+    /// dem Lesen (Error, HUM-087).
+    CONFIG_012 => "config", "Test-Wurzel ohne absoluten Pfad", "#config_012";
 
     /// `bwrap` ist nicht installiert oder liegt nicht im Pfad.
     SANDBOX_001 => "sandbox", "bwrap nicht gefunden", "#sandbox_001";

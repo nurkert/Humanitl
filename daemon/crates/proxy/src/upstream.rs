@@ -36,6 +36,7 @@ use hyper::body::Incoming;
 use hyper::header::{HeaderName, HeaderValue};
 use hyper::{Request, Response, Version};
 use hyper_util::rt::TokioIo;
+use rustls::pki_types::pem::PemObject as _;
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
@@ -123,6 +124,28 @@ impl ClientTls {
     pub fn alpn(&self) -> Vec<Vec<u8>> {
         self.config.alpn_protocols.clone()
     }
+}
+
+/// Liest alle Zertifikate aus einem PEM-Text, in der Reihenfolge der Datei.
+///
+/// Der Gegenpart zu `extra_roots` in [`ClientTls::new`]: Der Daemon liest die
+/// Datei aus `resolver.test_ca` und reicht das Ergebnis dorthin weiter
+/// (`humanitld`, `--allow-test-ca`, HUM-087). Das Lesen liegt hier und nicht
+/// im Binary, weil hier schon rustls steht und der Typ der Wurzeln von dort
+/// kommt.
+///
+/// Unlesbare oder fremde Blöcke werden übersprungen, wie in
+/// [`CaStore::render_bundle`](crate::ca::CaStore::render_bundle) und
+/// [`read_system_bundle`](crate::ca::read_system_bundle). Eine leere
+/// Rückgabe heißt deshalb: in diesem Text steht kein Zertifikat. Wer daraus
+/// einen Fehler machen will, entscheidet das an seiner Stelle — hier gibt es
+/// keinen Pfad und keinen Schlüssel, die ein `Diagnostic` benennen könnte.
+///
+/// Geprüft wird das Material erst in [`ClientTls::new`]: Ein Block, den rustls
+/// nicht als Vertrauensanker annimmt, wird dort `PROXY_003`.
+#[must_use]
+pub fn roots_from_pem(pem: &[u8]) -> Vec<CertificateDer<'static>> {
+    CertificateDer::pem_slice_iter(pem).flatten().collect()
 }
 
 /// Leitet erlaubte Anfragen zum Ziel.

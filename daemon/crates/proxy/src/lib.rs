@@ -96,4 +96,12 @@ pub use crate::session::{SessionSettings, SessionState};
 pub use crate::tls_observe::{
     HandshakeWatch, TlsFailure, ToolHint, classify, diagnostic_for, tool_hint,
 };
-pub use crate::upstream::{ClientTls, Upstream};
+pub use crate::upstream::{ClientTls, Upstream, roots_from_pem};
+/// Ein Zertifikat in DER-Form, der Typ der zusätzlichen Wurzeln von
+/// [`ClientTls::new`].
+///
+/// Weitergereicht statt neu erfunden: Der Daemon hält die Wurzeln aus
+/// `resolver.test_ca` zwischen [`roots_from_pem`] und [`ClientTls::new`] in der
+/// Hand und braucht dafür einen Namen, aber keine eigene rustls-Abhängigkeit
+/// und schon gar keine Hülle um einen fremden Typ.
+pub use rustls::pki_types::CertificateDer;

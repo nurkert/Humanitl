@@ -16,8 +16,9 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::os::unix::process::ExitStatusExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, ExitStatus};
 use std::time::Duration;
 
 use humanitl_ipc::{auth, client, v1};
@@ -528,4 +529,260 @@ async fn without_an_endpoint_there_is_no_passthrough_rule() {
     );
 
     daemon.terminate();
+}
+
+// ---------------------------------------------------------------------------
+// `--allow-test-ca` (HUM-087)
+// ---------------------------------------------------------------------------
+
+/// Ein XDG-Baum mit einer `config.toml`, die `resolver.test_ca` setzt.
+///
+/// Über die Datei und nicht über eine Umgebungsvariable: Genau diesen Weg
+/// nimmt eine Konfiguration im Alltag, und genau er darf das Vertrauen nicht
+/// allein herstellen.
+fn tree_with_test_ca(test_ca: &Path) -> tempfile::TempDir {
+    let dir = tempfile::Builder::new()
+        .prefix("hum")
+        .tempdir_in("/tmp")
+        .expect("a short temporary directory for sun_path");
+    for name in ["run", "data", "config", "home"] {
+        std::fs::create_dir(dir.path().join(name)).unwrap();
+    }
+    let config = dir.path().join("config").join("humanitl");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("config.toml"),
+        format!("[resolver]\ntest_ca = \"{}\"\n", test_ca.display()),
+    )
+    .unwrap();
+    dir
+}
+
+/// Startet das Binary in `dir` mit den zusätzlichen Argumenten und gibt seine
+/// Fehlerausgabe zurück, sobald es geendet hat.
+///
+/// `until_ready` beendet einen Daemon, der hochkommt, mit `SIGTERM`; ohne das
+/// wird auf das Ende gewartet, das der Daemon von sich aus findet.
+///
+/// Gewartet wird mit Frist. Ohne sie bekäme ein Daemon, der wider Erwarten
+/// stehen bleibt, keinen roten Test, sondern einen Lauf, der nie endet — und
+/// ein Test, der hängt, statt zu scheitern, sagt nichts.
+fn run_daemon(dir: &Path, args: &[&str], until_ready: bool) -> (ExitStatus, String) {
+    run_daemon_in(dir, args, until_ready, None)
+}
+
+/// Wie [`run_daemon`], aber mit einem Arbeitsverzeichnis für den Daemon.
+///
+/// Nur ein Test braucht das, und er braucht es zwingend: Ein relativer Pfad in
+/// `resolver.test_ca` wird gegen genau dieses Verzeichnis aufgelöst, und ohne
+/// die Möglichkeit, es zu setzen, ließe sich der Fall nicht messen.
+fn run_daemon_in(
+    dir: &Path,
+    args: &[&str],
+    until_ready: bool,
+    cwd: Option<&Path>,
+) -> (ExitStatus, String) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_humanitld"));
+    command
+        .env("XDG_RUNTIME_DIR", dir.join("run"))
+        .env("XDG_DATA_HOME", dir.join("data"))
+        .env("XDG_CONFIG_HOME", dir.join("config"))
+        .env("HOME", dir.join("home"))
+        .args(args)
+        .stderr(std::process::Stdio::piped());
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let mut child = command.spawn().expect("the daemon binary must start");
+    if until_ready {
+        let socket = dir.join("run").join("humanitl").join("daemon.sock");
+        for _ in 0..1000 {
+            if socket.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let pid = i32::try_from(child.id()).unwrap();
+        // SAFETY: `kill` mit einer eigenen, noch nicht abgeernteten Kind-PID.
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+        }
+    }
+    for _ in 0..1000 {
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if child.try_wait().unwrap().is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!(
+            "the daemon was still running ten seconds after `humanitld {}`",
+            args.join(" ")
+        );
+    }
+    let out = child
+        .wait_with_output()
+        .expect("the daemon must be reapable");
+    (
+        out.status,
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// Wahr, wenn der Daemon bis zu unserem Signal gelaufen ist.
+///
+/// Zwei Ausgänge zählen dazu, und beide heißen dasselbe: Er endete geordnet
+/// (Status 0), oder das Signal traf ihn, bevor sein Handler stand, und der
+/// Kernel hat ihn beendet (Signal 15). Der Socket erscheint beim Binden, der
+/// Handler wird erst danach beim ersten Pollen der Abschaltung eingehängt; wer
+/// unmittelbar nach dem Socket signalisiert, trifft manchmal in diese Lücke.
+///
+/// Was **nicht** dazuzählt, ist genau der Fall, um den es hier geht: ein
+/// Daemon, der von selbst mit einem Fehler endet. Der käme mit Status 1
+/// zurück, und den lässt diese Funktion durchfallen.
+fn ran_until_the_signal(status: ExitStatus) -> bool {
+    status.success() || status.signal() == Some(libc::SIGTERM)
+}
+
+/// Eine echte CA in einem Wegwerf-Verzeichnis; ihr `ca.crt` ist die Testwurzel.
+fn a_root() -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = humanitl_proxy::ca::CaStore::load_or_create(&tmp.path().join("ca")).unwrap();
+    let path = store.cert_path();
+    (tmp, path)
+}
+
+/// Derselbe Baum, einmal mit und einmal ohne das Flag.
+///
+/// Gemessen wird am Protokoll des Daemons und nicht an einem Ausbleiben: Mit
+/// dem Flag steht dort die Zeile mit `roots` und dem Pfad, ohne das Flag der
+/// Befund `CONFIG_011`. Beides kommt vom Daemon selbst.
+#[test]
+fn a_test_ca_is_only_trusted_with_the_flag() {
+    let (_ca, root) = a_root();
+
+    let dir = tree_with_test_ca(&root);
+    let (status, log) = run_daemon(dir.path(), &["--allow-test-ca"], true);
+    assert!(
+        ran_until_the_signal(status),
+        "the daemon has to run until the signal, not end on its own: {status}\n{log}"
+    );
+    let line = log
+        .lines()
+        .find(|line| line.contains("\"roots\":1"))
+        .unwrap_or_else(|| panic!("the start has to name how many roots it trusts: {log}"));
+    assert!(
+        line.contains(&root.display().to_string()),
+        "the start has to name the file: {line}"
+    );
+    assert!(
+        line.contains("\"level\":\"WARN\""),
+        "an extra trust anchor is a warning, not a note in passing: {line}"
+    );
+    assert!(
+        !log.contains("CONFIG_011"),
+        "flag and key are both there, so there is nothing to warn about: {log}"
+    );
+
+    let dir = tree_with_test_ca(&root);
+    let (status, log) = run_daemon(dir.path(), &[], true);
+    assert!(
+        ran_until_the_signal(status),
+        "the daemon has to run until the signal, not end on its own: {status}\n{log}"
+    );
+    assert!(
+        log.contains("CONFIG_011"),
+        "a key without the flag has to be said out loud: {log}"
+    );
+    assert!(
+        !log.contains("\"roots\":"),
+        "without the flag no root is trusted, so no line claims one: {log}"
+    );
+}
+
+/// Ein relativer Pfad in `resolver.test_ca` beendet den Start, auch wenn genau
+/// dort eine tadellose Wurzel liegt.
+///
+/// Der Aufbau ist der Angriff: Ein präpariertes Projektverzeichnis mit einer
+/// eigenen `ca.crt` darin, der Daemon in diesem Verzeichnis gestartet, und in
+/// der Konfiguration steht nur der Name. Würde der Pfad gegen das
+/// Arbeitsverzeichnis aufgelöst, entschiede das Verzeichnis, welcher Wurzel
+/// der Daemon vertraut — das Flag bliebe nötig, die Datei käme aus dem Projekt.
+#[test]
+fn a_relative_test_ca_stops_the_start_even_next_to_a_valid_root() {
+    let project = tempfile::Builder::new()
+        .prefix("hum-project")
+        .tempdir_in("/tmp")
+        .expect("a project directory");
+    let store = humanitl_proxy::ca::CaStore::load_or_create(&project.path().join("ca"))
+        .expect("a certificate authority in the project directory");
+    std::fs::copy(store.cert_path(), project.path().join("ca.crt"))
+        .expect("a perfectly good root, lying in the project directory");
+
+    let dir = tree_with_test_ca(Path::new("ca.crt"));
+    let (status, log) = run_daemon_in(
+        dir.path(),
+        &["--allow-test-ca"],
+        false,
+        Some(project.path()),
+    );
+
+    assert_eq!(status.code(), Some(1), "{log}");
+    assert!(
+        log.contains("CONFIG_012"),
+        "a relative path is its own refusal, not a missing file: {log}"
+    );
+    assert!(
+        !log.contains("CONFIG_010"),
+        "the file is not the problem, the path is: {log}"
+    );
+    assert!(
+        !log.contains("\"roots\":"),
+        "nothing may be trusted on this start: {log}"
+    );
+
+    let runtime = dir.path().join("run").join("humanitl");
+    assert!(
+        !runtime.join("daemon.sock").exists(),
+        "a daemon that refuses to start leaves no gRPC socket"
+    );
+    assert!(
+        !runtime.join("proxy").join("proxy.sock").exists(),
+        "and no proxy socket either"
+    );
+}
+
+/// Eine unbrauchbare Testwurzel beendet den Start, und zwar bevor ein Socket
+/// entsteht.
+#[test]
+fn a_broken_test_ca_stops_the_start() {
+    let tmp = tempfile::tempdir().unwrap();
+    let broken = tmp.path().join("broken.pem");
+    std::fs::write(&broken, b"-----BEGIN CERTIFICATE-----\nnope\n").unwrap();
+
+    let dir = tree_with_test_ca(&broken);
+    let (status, log) = run_daemon(dir.path(), &["--allow-test-ca"], false);
+
+    assert_eq!(status.code(), Some(1), "{log}");
+    assert!(log.contains("CONFIG_010"), "{log}");
+    assert!(
+        log.contains(&broken.display().to_string()),
+        "the why has to name the path: {log}"
+    );
+    assert!(
+        log.contains("openssl x509 -in "),
+        "the fix has to be a command a person can paste: {log}"
+    );
+
+    let runtime = dir.path().join("run").join("humanitl");
+    assert!(
+        !runtime.join("daemon.sock").exists(),
+        "a daemon that refuses to start leaves no gRPC socket"
+    );
+    assert!(
+        !runtime.join("proxy").join("proxy.sock").exists(),
+        "and no proxy socket either"
+    );
 }

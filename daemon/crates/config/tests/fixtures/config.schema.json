@@ -500,12 +500,11 @@
         },
         "test_ca": {
           "default": null,
-          "description": "Zusätzliche CA für Tests. Nur in Testläufen setzen, nie im Alltag.",
+          "description": "Zusätzliche CA für Tests, als PEM und mit absolutem Pfad. Gilt nur, wenn\nder Daemon mit `--allow-test-ca` gestartet wurde; ohne das Flag wird der\nSchlüssel nicht angenommen, und ein nicht absoluter Pfad beendet den\nStart, statt gegen das Arbeitsverzeichnis aufgelöst zu werden. Nur in\nTestläufen setzen, nie im Alltag.",
           "type": [
             "string",
             "null"
           ],
-          "x-pending-issue": "HUM-087",
           "x-project-scope": "denied",
           "x-tier": "expert"
         }
