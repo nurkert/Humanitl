@@ -66,13 +66,15 @@ covered, and therefore not vouched for by a green run:
 
 - **the screen.** Queue, action bar, rules screen and history are never driven;
   no HAR file is written or validated. That is HUM-097.
-- **the MITM path.** Sixteen of the seventeen requests are plain HTTP, so leaf
-  minting from Humanitl's own CA, the handshake with the agent and the upstream
-  TLS session run for no released or blocked flow at all. That is coverage the
-  product does not have right now, and it comes back with HUM-087.
 
-Until both land, a green `e2e-xvfb` means "the daemon half of M2 holds", not
-"M2 holds". Say so when you lean on it.
+The MITM path used to be on this list and no longer is. HUM-087 gave the daemon
+`--allow-test-ca`; every one of the seventeen requests now goes over `https://`,
+so leaf minting from Humanitl's own CA, the handshake with the agent and the
+upstream TLS session run for every released and blocked flow, and both findings
+are made in bodies the proxy decrypted itself.
+
+Until the screen half lands, a green `e2e-xvfb` means "the daemon half of M2
+holds", not "M2 holds". Say so when you lean on it.
 
 ## Commit messages
 

@@ -314,20 +314,36 @@ stop_fake_upstream() {
 
 # --- Der Daemon --------------------------------------------------------------
 
-# start_daemon STATE_DIR XDG_DIR [HOLD_TIMEOUT_SECS] — den echten Daemon starten.
+# start_daemon STATE_DIR XDG_DIR [HOLD_TIMEOUT_SECS] [ARG...] — den echten
+# Daemon starten.
 #
 # Der Daemon läuft mit `XDG_RUNTIME_DIR=<STATE_DIR>/runtime`, damit sein
 # Proxy-Socket dort liegt, wo die Mount-Politik ihn erwartet; die
 # Kommandozeile läuft danach im selben Baum und findet ihn deshalb ohne ein
 # einziges Flag. XDG_DIR trägt Daten, Konfiguration und HOME des Laufs.
 #
+# Alles ab dem vierten Argument geht unverändert an `humanitld` weiter. Die
+# drei ersten bleiben, wo sie waren: M1 ruft mit genau dreien auf und wird von
+# dieser Erweiterung nicht berührt (HUM-087). Der M2-Lauf übergibt darüber
+# `--allow-test-ca`; ein Flag, das das Vertrauen des Daemons erweitert, gehört
+# in den Startbefehl des Laufs und nicht in eine Umgebungsvariable, die
+# irgendwo weiter oben gesetzt sein könnte.
+#
 # Setzt DAEMON_SOCK, DAEMON_TOKEN, DAEMON_PROXY_SOCK, DAEMON_CA_CERT,
-# DAEMON_CA_BUNDLE, DAEMON_LOG und E2E_DAEMON_PID, dazu die vier `E2E_XDG_*`,
-# mit denen `humanitl` denselben Baum sieht wie der Daemon.
+# DAEMON_CA_BUNDLE, DAEMON_LOG, DAEMON_ARGV und E2E_DAEMON_PID, dazu die vier
+# `E2E_XDG_*`, mit denen `humanitl` denselben Baum sieht wie der Daemon.
 start_daemon() {
     daemon_state="$1"
     daemon_xdg="$2"
     daemon_hold="${3:-10}"
+    if [ "$#" -ge 3 ]; then
+        shift 3
+    else
+        shift "$#"
+    fi
+    # Was der Daemon auf seiner Kommandozeile trägt, in einer Zeile, damit ein
+    # Schritt des Laufs es prüfen kann, ohne den Prozess zu befragen.
+    DAEMON_ARGV="$*"
 
     E2E_XDG_RUNTIME="$daemon_state/runtime"
     E2E_XDG_DATA="$daemon_xdg/data"
@@ -355,15 +371,15 @@ start_daemon() {
         XDG_CONFIG_HOME="$E2E_XDG_CONFIG" \
         HOME="$E2E_HOME" \
         HUMANITL_HOLD__TIMEOUT_SECS="$daemon_hold" \
-        "$E2E_DAEMON" > "$DAEMON_LOG" 2>&1 &
+        "$E2E_DAEMON" "$@" > "$DAEMON_LOG" 2>&1 &
     E2E_DAEMON_PID=$!
 
     if ! wait_for_socket "$DAEMON_SOCK" 20 || ! wait_for_socket "$DAEMON_PROXY_SOCK" 20; then
         e2e_say "the daemon did not come up; its log follows"
         cat "$DAEMON_LOG" >&2 || true
-        e2e_die "no daemon.sock and proxy.sock within twenty seconds"
+        e2e_die "no daemon.sock and proxy.sock within twenty seconds (argv: $DAEMON_ARGV)"
     fi
-    e2e_say "daemon up (pid $E2E_DAEMON_PID), hold timeout ${daemon_hold}s, log $DAEMON_LOG"
+    e2e_say "daemon up (pid $E2E_DAEMON_PID), hold timeout ${daemon_hold}s, argv \"$DAEMON_ARGV\", log $DAEMON_LOG"
 }
 
 # stop_daemon — den Daemon geordnet beenden.

@@ -1649,7 +1649,7 @@ OpenCode (HUM-046), Notifications (gemockt), Tray.
 [ui] notifications = false
 ```
 
-Der Fake-Upstream nutzt ein Testzertifikat für die drei Hosts, das über `resolver.test_ca` (expert, nur mit `--allow-test-ca`-Flag des Daemons akzeptiert) als zusätzliche Root gilt.
+Der Fake-Upstream nutzt ein Testzertifikat für die drei Hosts, das über `resolver.test_ca` (expert, nur mit dem Flag `--allow-test-ca` des Daemons akzeptiert) als zusätzliche Root gilt. Das Flag gibt es seit HUM-087; der Lauf startet den Daemon damit, und alle URLs stehen auf `https://` (`backlog/CONVENTIONS.md` 4.22).
 
 `script.json` (Fake-Agent, Zeiten relativ in ms):
 
@@ -1667,7 +1667,7 @@ Der Fake-Upstream nutzt ein Testzertifikat für die drei Hosts, das über `resol
 Der Fake-Agent schreibt pro Request `{"url", "status", "ms"}` nach stdout; `run.sh` sammelt das.
 
 Ablauf `run.sh`:
-1. Temp-XDG-Verzeichnisse, Daemon starten (`humanitld --config config.toml --allow-test-ca`), warten bis Socket da.
+1. Temp-XDG-Verzeichnisse, Daemon starten (`humanitld --allow-test-ca`; ein `--config` hat `humanitld` nicht, die Konfiguration findet er über den XDG-Baum des Laufs), warten bis Socket da.
 2. Fake-Upstream starten.
 3. `humanitl sandbox run --profile test -- fake-agent script.json &`.
 4. `flutter test integration_test/m2_first_decision_test.dart -d linux` unter `xvfb-run -a`, Env `HUMANITL_SOCKET` gesetzt.
@@ -1715,12 +1715,12 @@ entsteht — 59 Zusicherungen, jede mit ihrer Zahl im Protokoll.
   Das ist **HUM-097**; `run.sh` überspringt seinen Schritt 10 mit einer
   ausdrücklichen Meldung, solange `app/integration_test/m2_first_decision_test.dart`
   fehlt, und `M2_UI=1` macht daraus einen Fehlschlag.
-- Der MITM-Pfad. Sechzehn der siebzehn Anfragen laufen über Klartext-HTTP, weil
-  der Daemon `resolver.test_ca` nicht liest; Blatt-Erzeugung aus der eigenen
-  CA, Handschlag mit dem Agenten und TLS-Sitzung nach oben werden damit für
-  keinen freigegebenen oder geblockten Fluss ausgeführt. Das ist verlorene
-  Abdeckung für die Hauptbauart des Produkts, und sie kommt mit **HUM-087**
-  zurück.
+- Der MITM-Pfad — **erledigt mit HUM-087 (2026-09-05)**. Bis dahin liefen
+  sechzehn der siebzehn Anfragen über Klartext-HTTP, weil der Daemon
+  `resolver.test_ca` nicht las; Blatt-Erzeugung aus der eigenen CA, Handschlag
+  mit dem Agenten und TLS-Sitzung nach oben wurden für keinen freigegebenen
+  oder geblockten Fluss ausgeführt. Seit `--allow-test-ca` steht jede Anfrage
+  des Laufs auf `https://`, und das Ziel bedient sechzehn davon über TLS.
 
 Ein grünes `e2e-xvfb` heißt bis dahin „die Daemon-Hälfte von M2 hält", nicht
 „M2 hält". Die dauerhaften Abweichungen stehen in `backlog/CONVENTIONS.md` 4.22.

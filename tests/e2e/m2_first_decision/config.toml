@@ -47,10 +47,9 @@ overrides = { "registry.npmjs.org" = "@UPSTREAM_ADDR@", "api.github.com" = "@UPS
 # Die Wurzel des Testzertifikats, das der Fake-Upstream auf Port 443 zeigt.
 # Sie entsteht bei jedem Lauf neu und liegt im Wegwerf-Baum, nie im Repository.
 #
-# Der Daemon soll sie nur annehmen, wenn er ausdrücklich mit `--allow-test-ca`
-# gestartet wurde. Solange es dieses Flag nicht gibt, liest er den Schlüssel
-# gar nicht (`humanitld` meldet das beim Start), und der Lauf belegt genau das:
-# Schritt „a test CA in the configuration is not trusted on its own" fährt eine
-# TLS-Anfrage an dasselbe Ziel und erwartet einen gescheiterten Handschlag,
-# keine Antwort. Siehe `backlog/CONVENTIONS.md` 4.22.
+# Der Daemon nimmt sie nur an, wenn er ausdrücklich mit `--allow-test-ca`
+# gestartet wurde; `run.sh` übergibt das Flag über `start_daemon`. Der
+# Schlüssel allein bewirkt nichts — dann meldet der Daemon `CONFIG_011` und
+# vertraut nichts, und jede Anfrage dieses Laufs endete mit `502 upstream_tls`
+# (HUM-087, `docs/SECURITY.md` 5, `backlog/CONVENTIONS.md` 4.22).
 test_ca = "@TEST_CA@"
