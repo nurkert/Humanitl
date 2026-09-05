@@ -3323,7 +3323,7 @@ Die Attrappe der Notifications hält die zuletzt gesendeten Hints (`Map<String, 
 - [x] `cd app && flutter test test/features/tray` grün, darunter `notification_hints_are_wrapped_once`; mit der alten Zeile wird er rot (Ergebnis im Commit-Body).
 - [x] `make flutter-test-dbus` (unter `dbus-run-session`) grün; die Server-Seite des Tests sieht `urgency` als Byte, nicht als Variant.
 - [x] `HUMANITL_DBUS_TESTS=1 flutter test test/features/tray/dbus_live_test.dart` auf einem Bus mit echtem Watcher endet mit einem Skip, dessen Text `dbus-run-session` nennt; `grep -n 'requestName' app/test/features/tray/dbus_live_test.dart` trifft eine Prüfung des Ergebnisses.
-- [ ] `make check` grün.
+- [x] `make check` grün.
 
 ### Fallstricke
 - `DBusDict.stringVariant` ist die richtige Fabrik; nur der Inhalt war doppelt. Nicht auf `DBusDict.unchecked` ausweichen.
