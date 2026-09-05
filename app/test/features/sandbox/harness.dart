@@ -189,6 +189,7 @@ Future<void> pumpSandbox(
   HThemeMode mode = HThemeMode.dark,
   TextScaler textScaler = TextScaler.noScaling,
   Size size = const Size(1280, 800),
+  List<Override> overrides = const <Override>[],
 }) async {
   await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -198,6 +199,7 @@ Future<void> pumpSandbox(
       chosenDirectory: chosenDirectory,
       mode: mode,
       textScaler: textScaler,
+      overrides: overrides,
     ),
   );
   // Ein Frame für `Sandbox(Status)`, einer für die Antwort, einer für den

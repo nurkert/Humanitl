@@ -142,6 +142,23 @@ abstract class DaemonClient {
   /// (CONVENTIONS 4.13).
   Stream<SandboxUpdate> checkIsolation();
 
+  /// `Terminal`: the output of the running session, and the keys on their way
+  /// back (HUM-042).
+  ///
+  /// The first and only method of this port with a stream on both sides. The
+  /// first message of [input] is a [TerminalOpen] -- by construction, not by
+  /// convention: the daemon reads nothing before it.
+  ///
+  /// One client writes, any number watch. A second [TerminalOpen] with
+  /// `readOnly: false` gets a [TerminalFinding] carrying `TERM_001` and its
+  /// stream ends; the keys and resizes of a reader are dropped in the daemon,
+  /// which is the side that can enforce it.
+  ///
+  /// The bytes in [TerminalOutput] are filtered in the daemon. This app adds
+  /// no filter and registers no OSC handler on the emulator: two filters
+  /// would be two promises (`docs/SECURITY.md` 3.3).
+  Stream<TerminalFrame> terminal(Stream<TerminalCommand> input);
+
   /// Releases the transport. The client is unusable afterwards.
   Future<void> close();
 }

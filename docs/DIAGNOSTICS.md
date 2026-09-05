@@ -347,6 +347,10 @@ Rangliste nicht lesbar
 
 Zweiter schreibender Terminal-Client abgelehnt
 
+#### TERM_002
+
+Terminal der Sandbox nicht erreichbar
+
 ### Bereich recorder
 
 #### RECORDER_001

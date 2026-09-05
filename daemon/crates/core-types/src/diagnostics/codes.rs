@@ -467,6 +467,11 @@ registry! {
 
     /// Es gibt bereits einen schreibenden Terminal-Client.
     TERM_001 => "terminal", "Zweiter schreibender Terminal-Client abgelehnt", "#term_001";
+    /// Das Terminal der Sandbox nimmt weder Eingabe noch Geometrie an: Die
+    /// Sitzung läuft ohne Pseudoterminal, oder der Agent hat sich beendet und
+    /// der Kernel meldet `EIO`. Wer zusieht, verliert dabei nichts; wer
+    /// schreibt, erfährt, dass es niemanden mehr gibt, der liest (HUM-042).
+    TERM_002 => "terminal", "Terminal der Sandbox nicht erreichbar", "#term_002";
 
     /// Die Aufzeichnung ließ sich nicht öffnen: das Datenverzeichnis oder der
     /// Blob-Speicher ist nicht anlegbar, die Datenbankdatei nicht lesbar oder

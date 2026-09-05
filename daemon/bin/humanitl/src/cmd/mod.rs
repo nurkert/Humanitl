@@ -12,6 +12,7 @@
 //! `sandbox`-Kommandos rufen `humanitl-sandbox` auf, bis die `Sandbox`-RPC sie
 //! ablöst (siehe [`sandbox`]).
 
+pub mod attach;
 pub mod config;
 pub mod daemon;
 pub mod flows;

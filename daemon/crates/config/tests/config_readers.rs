@@ -135,6 +135,10 @@ const REGISTER: &[(&str, &str)] = &[
     ("ui.notifications", "pending(HUM-069)"),
     // Es gibt keinen Ton, den ein Schalter abschalten könnte.
     ("ui.sound", "pending(HUM-121)"),
+    // Gelesen in `SandboxService::launch`, wenn das Terminal der Sitzung
+    // entsteht: `TerminalHub::notice` schweigt ohne diesen Schalter
+    // (HUM-042).
+    ("ui.terminal_notices", "effective"),
     // Dasselbe wie bei `ui.notifications`: Das Erscheinungsbild steht fest im
     // Programm, bis der Einstellungs-Bildschirm die Werte holt.
     ("ui.theme", "pending(HUM-069)"),

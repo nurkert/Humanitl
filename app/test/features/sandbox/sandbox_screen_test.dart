@@ -10,6 +10,7 @@ import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/features/sandbox/widgets/env_tab.dart';
 import 'package:humanitl/features/sandbox/widgets/isolation_panel.dart';
 import 'package:humanitl/features/sandbox/widgets/sandbox_header.dart';
+import 'package:humanitl/features/sandbox/widgets/terminal_pane.dart';
 
 import 'harness.dart';
 
@@ -277,14 +278,14 @@ void main() {
     );
   });
 
-  testWidgets('the_terminal_says_what_is_coming_and_isolation_no_longer_does', (
+  testWidgets('the_terminal_stands_where_it_belongs_and_isolation_measures', (
     WidgetTester tester,
   ) async {
     await pumpSandbox(tester, client: SandboxTestClient());
-    expect(
-      find.textContaining("The agent's terminal belongs here"),
-      findsOneWidget,
-    );
+    // Ohne laufende Sitzung steht dort der Satz, warum kein Terminal da ist,
+    // und nicht eine schwarze Fläche, die wie ein Fehler aussieht (HUM-042).
+    expect(find.byType(TerminalPane), findsOneWidget);
+    expect(find.textContaining('Nothing runs'), findsOneWidget);
 
     // Der Isolations-Reiter ist seit HUM-041 kein Platzhalter mehr: er zeigt
     // die drei Garantien, und ohne laufende Sandbox sagt er, dass nichts

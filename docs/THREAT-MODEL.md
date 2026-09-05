@@ -95,7 +95,7 @@ Abschnitt 4. Die Spalte „Escape-Test" nennt den automatisierten Test, der den 
 | K-06 | PID- und IPC-Namespace | | • | | | `--unshare-pid --unshare-ipc`, eigenes `/proc` | — | ESC-2 |
 | K-07 | `/proc` und `/sys` | | • | | | eigenes `procfs`, `/sys` nicht gebunden | Kernel-Informationslecks | ESC-2 |
 | K-08 | Symlinks aus `/work` heraus | | • | | | Mount-Namespace; Markierung in der Sitzungs-Zusammenfassung | der Nutzer übersieht die Markierung | ESC-5 |
-| K-09 | Terminal-Escapes (OSC 52, OSC 8, Titel) | • | • | • | | Escapes im Terminal-Widget abgeschaltet | Fehler im Widget | ESC-5 |
+| K-09 | Terminal-Escapes (OSC 52, OSC 8, Titel) | • | • | • | | Filter im Daemon (Erlaubnisliste), Escapes im Widget abgeschaltet | Fehler im Filter oder im Widget | ESC-5 |
 | K-10 | DNS und Auflösungs-Zeitpunkt | • | • | • | | Auflösung erst nach Freigabe (ADR-006) | Zeitpunkt der Freigabe bleibt beobachtbar | ESC-3 |
 | K-11 | Queue- und Regel-Metadaten | • | • | • | | `humanitl.internal` ist lesend, `/ask` erzeugt nie eine Regel | Entscheidungs-Orakel bleibt | ESC-4 |
 | K-12 | Package-Caches | | • | | | Cache pro Projekt, nicht pro Vertrauensstufe | geteilter Cache trägt Daten zwischen Projekten | — |
@@ -336,16 +336,31 @@ eine fremde URL hinter harmlosem Text, mit dem Titel-Escape verändert sie das F
 
 *Schwere.* Mittel: Der Weg führt über den Menschen, nicht über den Kernel.
 
-*Minderung im MVP.* Das Terminal-Widget (`xterm2`) hat OSC 52, OSC 8 und das Setzen des
-Fenstertitels abgeschaltet. Über dem Terminal steht dauerhaft der Hinweis, dass die Ausgabe des
-Agenten nicht vertrauenswürdig ist.
+*Minderung im MVP.* **Der Daemon filtert, bevor ein Byte einen Client erreicht**, und das Widget
+registriert zusätzlich keinen OSC-Handler. Der Filter ist `humanitl_core::TerminalFilter` und hat
+zwei Politiken: `ColourOnly` für einen Strom ohne PTY (`humanitl run`, `SandboxEvent.output`),
+`FullScreen` für das Terminal der Sitzung. `FullScreen` lässt einen Vollbild-Agenten zeichnen —
+Cursor, Löschen, Scrollbereiche, Alternativschirm, Maus — und lässt von den Zeichenkettenfolgen
+nur eine kurze Erlaubnisliste von OSC-Nummern hinaus (Farbe 4, 10, 11, 104, 110, 111 und die
+Prompt-Marken 133), deren Nutzlast druckbares ASCII sein muss. Damit geht keine OSC-52-Folge
+hinaus, kein OSC 8, kein Fenstertitel (auch nicht über `CSI 22/23 t`), kein `ESC c` und keine
+DCS-, APC-, PM- oder SOS-Folge. Der Ringpuffer, aus dem ein später anhängender Client seinen
+Rückstand bekommt, hält **gefilterte** Bytes; sonst spielte ein zweiter Client genau die Folgen
+ab, die dem ersten herausgenommen wurden. Über dem Terminal steht dauerhaft der Hinweis, dass die
+Ausgabe des Agenten nicht vertrauenswürdig ist.
 
-*Restrisiko.* Fehler im Widget; Kopieren per Maus bleibt möglich und ist gewollt.
+*Restrisiko.* Fehler im Filter oder im Widget; Kopieren per Maus bleibt möglich und ist gewollt.
+Der Agent kann Text ausgeben, der wie eine Meldung von Humanitl aussieht — ein Absender in einem
+Bytestrom ist keine Beglaubigung. Deshalb steht die Aussage, auf die es ankommt („eine Anfrage
+wartet auf dich"), im Streifen **über** dem Terminal und nicht nur in dessen Bytestrom, und der
+eckigen Klammer des Absenders `[humanitl]` wird in allem, was aus dem Agenten stammt, die Klammer
+genommen (HUM-042).
 
 *Status.* MVP.
 
-*Prüfung.* ESC-5 sendet eine OSC-52-Sequenz und prüft, dass die Host-Zwischenablage unverändert
-bleibt.
+*Prüfung.* ESC-5 lässt einen Agenten an einem echten Pseudoterminal OSC 52, OSC 8 und einen
+Fenstertitel schreiben und prüft, dass keine der Folgen einen Client erreicht
+(`osc52_does_not_reach_host`, `osc8_and_title_are_inert`).
 
 ### K-10 DNS und Auflösungs-Zeitpunkt
 

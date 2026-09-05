@@ -285,6 +285,10 @@ class TestDaemonClient implements DaemonClient {
   Stream<SandboxUpdate> checkIsolation() => const Stream<SandboxUpdate>.empty();
 
   @override
+  Stream<TerminalFrame> terminal(Stream<TerminalCommand> input) =>
+      const Stream<TerminalFrame>.empty();
+
+  @override
   Future<void> close() async {
     for (final StreamController<FlowEvent> controller in streams) {
       if (!controller.isClosed) {

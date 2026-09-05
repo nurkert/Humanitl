@@ -526,7 +526,6 @@
   "sandboxEnvCount": "{shown} von {total}",
   "sandboxEnvEmptyAll": "Der Daemon hat nicht gesagt, was die Sandbox setzen würde.",
   "sandboxTerminalTitle": "Terminal",
-  "sandboxTerminalPlaceholder": "Hierher gehört das Terminal des Agenten. Es ist noch nicht gebaut, deshalb startet die Sandbox ohne eigenen Bildschirm; was der Daemon darüber protokolliert, steht unter Protokoll.",
   "sandboxLogEmpty": "Noch nichts protokolliert. Ein Start und ein Stopp schreiben je eine Zeile hierher.",
   "sandboxLogFollow": "Mitlaufen",
   "sandboxStopTitle": "Den Agenten stoppen?",
@@ -575,5 +574,13 @@
   "setupFixCopyExport": "Export-Befehl kopieren",
   "setupFixSetEnvBadKey": "Es gibt keinen Befehl zum Kopieren: {key} ist kein Name, dem eine Shell etwas zuweisen kann. Setzen Sie die Variable von Hand.",
   "setupFixSetEnvMultiline": "Es gibt keinen Befehl zum Kopieren: Der Wert von {key} geht über mehr als eine Zeile, und ein eingefügter Befehl liefe als zwei. Setzen Sie die Variable von Hand.",
-  "interceptDiagnosticDropped": "{count, plural, =1{1 früherer Befund steht hier nicht mehr. Blenden Sie aus, was Sie gelesen haben, damit der Rest bleibt.} other{{count} frühere Befunde stehen hier nicht mehr. Blenden Sie aus, was Sie gelesen haben, damit der Rest bleibt.}}"
+  "interceptDiagnosticDropped": "{count, plural, =1{1 früherer Befund steht hier nicht mehr. Blenden Sie aus, was Sie gelesen haben, damit der Rest bleibt.} other{{count} frühere Befunde stehen hier nicht mehr. Blenden Sie aus, was Sie gelesen haben, damit der Rest bleibt.}}",
+  "sandboxTerminalUntrustedBanner": "Agent-Ausgabe ist nicht vertrauenswürdig. Zwischenablage- und Link-Sequenzen werden gefiltert.",
+  "sandboxTerminalIdle": "Es läuft nichts. Das Terminal des Agenten erscheint hier, sobald eine Sitzung startet.",
+  "sandboxTerminalHeldNotice": "Wartet auf Sie: {method} {host}{path}",
+  "sandboxTerminalExited": "Der Agent endete mit Exit-Code {code}.",
+  "sandboxTerminalFinding": "{code}: {why}",
+  "sandboxTerminalMenu": "Terminal-Menü",
+  "sandboxTerminalCopy": "Kopieren",
+  "sandboxTerminalPaste": "Einfügen"
 }

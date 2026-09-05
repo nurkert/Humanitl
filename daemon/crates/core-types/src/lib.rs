@@ -54,4 +54,4 @@ pub use crate::ids::{AskId, FlowId, IdParseError, RuleId, SandboxId, SessionId};
 pub use crate::rule::{
     Action, Expiry, HostPattern, Matcher, PathPattern, Rule, path_prefix_is_valid,
 };
-pub use crate::terminal::TerminalFilter;
+pub use crate::terminal::{TerminalFilter, TerminalPolicy};

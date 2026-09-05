@@ -200,6 +200,7 @@ Sprache, Erscheinungsbild und Meldungen der Oberfläche.
 | `ui.language` | en \| de | `"en"` | basic | allowed | ja | Sprache der Oberfläche. |
 | `ui.notifications` | boolean | `true` | advanced | allowed | offen (HUM-069) | Meldung des Systems, wenn eine Anfrage wartet und das Fenster nicht vorn ist. |
 | `ui.sound` | boolean | `false` | advanced | allowed | offen (HUM-121) | Ton zur Meldung. |
+| `ui.terminal_notices` | boolean | `true` | advanced | allowed | ja | Zeile im Terminal des Agenten, wenn eine seiner Anfragen auf eine Entscheidung wartet. Der Streifen über dem Terminal zeigt sie in jedem Fall; dies ist die Zeile im Bytestrom, die ein Vollbild-TUI beim nächsten Bild überschreibt. |
 | `ui.theme` | dark \| light \| system | `"dark"` | advanced | allowed | offen (HUM-069) | Erscheinungsbild der Oberfläche. |
 
 ## Alte Namen

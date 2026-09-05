@@ -434,6 +434,9 @@ pub struct UiConfig {
         "x-pending-issue" = "HUM-121"
     ))]
     pub sound: bool,
+    /// Zeile im Terminal des Agenten, wenn eine seiner Anfragen auf eine Entscheidung wartet. Der Streifen über dem Terminal zeigt sie in jedem Fall; dies ist die Zeile im Bytestrom, die ein Vollbild-TUI beim nächsten Bild überschreibt.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
+    pub terminal_notices: bool,
 }
 
 impl Default for UiConfig {
@@ -443,6 +446,7 @@ impl Default for UiConfig {
             theme: Theme::Dark,
             notifications: true,
             sound: false,
+            terminal_notices: true,
         }
     }
 }

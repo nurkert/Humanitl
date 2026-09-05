@@ -23,7 +23,6 @@ import 'providers/sandbox_status_provider.dart';
 import 'sandbox_text.dart';
 import 'widgets/argv_sheet.dart';
 import 'widgets/arrive.dart';
-import 'widgets/coming_pane.dart';
 import 'widgets/env_tab.dart';
 import 'widgets/isolation_panel.dart';
 import 'widgets/log_tab.dart';
@@ -31,6 +30,7 @@ import 'widgets/mounts_tab.dart';
 import 'widgets/sandbox_header.dart';
 import 'widgets/sandbox_tabs.dart';
 import 'widgets/stop_dialog.dart';
+import 'widgets/terminal_pane.dart';
 
 /// How much of the height the terminal keeps.
 ///
@@ -153,9 +153,11 @@ class _Body extends ConsumerWidget {
       children: <Widget>[
         Expanded(
           flex: (sandboxTerminalFraction * 100).round(),
-          child: ComingPane(
-            title: l10n.sandboxTerminalTitle,
-            text: l10n.sandboxTerminalPlaceholder,
+          child: TerminalPane(
+            key: const Key('sandbox-terminal'),
+            sandboxId: status.agentRunning
+                ? (status.sandboxId?.value ?? '')
+                : '',
           ),
         ),
         const HHairline(),

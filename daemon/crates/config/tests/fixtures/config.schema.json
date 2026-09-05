@@ -571,6 +571,7 @@
         "language": "en",
         "notifications": true,
         "sound": false,
+        "terminal_notices": true,
         "theme": "dark"
       },
       "description": "Sprache, Erscheinungsbild und Meldungen der Oberfläche.",
@@ -606,6 +607,13 @@
           "description": "Ton zur Meldung.",
           "type": "boolean",
           "x-pending-issue": "HUM-121",
+          "x-project-scope": "allowed",
+          "x-tier": "advanced"
+        },
+        "terminal_notices": {
+          "default": true,
+          "description": "Zeile im Terminal des Agenten, wenn eine seiner Anfragen auf eine Entscheidung wartet. Der Streifen über dem Terminal zeigt sie in jedem Fall; dies ist die Zeile im Bytestrom, die ein Vollbild-TUI beim nächsten Bild überschreibt.",
+          "type": "boolean",
           "x-project-scope": "allowed",
           "x-tier": "advanced"
         },
