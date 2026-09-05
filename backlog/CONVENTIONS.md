@@ -1394,65 +1394,83 @@ Weg wie M1: ein eigener Netz-Namensraum, in dem `198.51.100.7` (RFC 5737) auf
 Namensraum ist der Lauf root und bindet die Ports 80 und 443 direkt, also
 braucht er gar keine Umlenkung.
 
-**Der Verkehr des Laufs ist Klartext-HTTP, nicht HTTPS — und damit fehlt
-Abdeckung, nicht nur eine Variante.** Sechzehn der siebzehn Anfragen laufen
-über Klartext; die einzige verschlüsselte existiert, um zu scheitern. Für
-keinen einzigen freigegebenen oder geblockten Fluss werden deshalb ausgeführt:
-das Prägen eines Blatts aus der eigenen CA, der TLS-Handschlag mit dem Agenten
-hinter seinem `CONNECT`, die TLS-Sitzung nach oben und der Fund im
-entschlüsselten Rumpf. Das ist die Hauptbauart des Produkts, und der einzige
-vollständige Lauf, den es gibt, geht sie nicht. Kein grüner M2-Lauf darf als
-Beleg für den MITM-Pfad gelesen werden, solange dieser Absatz hier steht; die
-Abdeckung kommt mit **HUM-087** zurück, das `--allow-test-ca` nachliefert, den
-Lauf auf `https://` stellt und Schritt 7 umdreht. Bis dahin belegen ihn allein
-die Integrationstests in `daemon/crates/proxy/tests`, und die fahren keine
-Sandbox.
+**Der Verkehr des Laufs geht über HTTPS (seit HUM-087, 2026-09-05).** Bis
+dahin waren sechzehn der siebzehn Anfragen Klartext und die einzige
+verschlüsselte existierte, um zu scheitern; für keinen freigegebenen oder
+geblockten Fluss liefen das Prägen eines Blatts aus der eigenen CA, der
+TLS-Handschlag mit dem Agenten hinter seinem `CONNECT`, die TLS-Sitzung nach
+oben und der Fund im entschlüsselten Rumpf. Das war die Hauptbauart des
+Produkts, und der einzige vollständige Lauf ging sie nicht. Mit
+`--allow-test-ca` ist diese Abdeckung zurück: Alle siebzehn Anfragen in
+`script.json` stehen auf `https://`, das Ziel bedient sechzehn davon über TLS
+(die siebzehnte Klartext-Zeile in seinem Protokoll ist die
+Erreichbarkeits-Probe des Laufs), und die beiden Funde entstehen jetzt in
+Rümpfen, die der Proxy selbst entschlüsselt hat.
 
-Der Fake-Upstream zeigt auf 443 bereits ein Testzertifikat für die drei Hosts,
-das bei jedem Lauf neu entsteht (`tests/e2e/fake-upstream/gen-test-ca.sh`,
-`umask 077` vor der ersten Datei) und nie im Repository liegt. Der Daemon nimmt
-es nicht an: `resolver.test_ca` steht im Schema und in
-`docs/CONFIG.md`, aber `humanitld` liest den Schlüssel nicht (`ClientTls::new`
-bekommt eine leere Wurzelliste) und meldet das beim Start als Warnung; das
-Flag `--allow-test-ca`, das die Spezifikation nennt, gibt es nicht. Der Lauf
-belegt deshalb die andere Richtung und macht sie zu einer Zusicherung: Schritt
-7 („a test CA in the configuration is not trusted on its own") schickt eine
-TLS-Anfrage an dasselbe Ziel, die die Sitzungsregel ohne Rückfrage erlaubt, und
-erwartet `502` mit `error = upstream_tls`. Eine fremde Wurzel, die ohne Flag
-gälte, wäre ein Loch in `docs/SECURITY.md`, und deshalb ist die heutige Lage
-die sichere Seite.
+Der Fake-Upstream zeigt auf 443 ein Testzertifikat für die drei Hosts, das bei
+jedem Lauf neu entsteht (`tests/e2e/fake-upstream/gen-test-ca.sh`, `umask 077`
+vor der ersten Datei) und nie im Repository liegt. Der Daemon nimmt es an, weil
+zwei Dinge zusammenkommen: `resolver.test_ca` zeigt auf die Wurzel, und
+`start_daemon` startet ihn mit `--allow-test-ca`. Eine Hälfte allein bewirkt
+nichts — der Schlüssel ohne Flag ergibt `CONFIG_011` und eine leere
+Wurzelliste, das Flag ohne Schlüssel ebenso, und eine unbrauchbare Datei mit
+Flag beendet den Start mit `CONFIG_010`. Eine fremde Wurzel, die ohne Flag
+gälte, wäre ein Loch in `docs/SECURITY.md` 5; die Trennung ist deshalb kein
+Umstand, sondern der Punkt.
 
-Der Schritt hält damit eine **Abwesenheit** fest, keine Verweigerung: Der
-Daemon lehnt die Wurzel nicht ab, er sieht sie nicht an. Zwei Vorkehrungen
-halten die Aussage ehrlich, und beide gehören dazu, wenn jemand den Schritt
-anfasst. Erstens ein Stolperdraht auf der Kommandozeilen-Fläche statt auf dem
-Ergebnis: Der Lauf prüft, dass `humanitld --help` das Flag **nicht** kennt, und
-stirbt mit der Anweisung, was umzudrehen ist, sobald es da ist. Ohne ihn bliebe
-Schritt 7 grün, nachdem der Mangel behoben wäre, weil `start_daemon` den Daemon
-weiter ohne das Flag startete. Dazu liest der Lauf die Zeile aus dem
-Daemon-Protokoll, in der der Daemon selbst sagt, dass er den Schlüssel nicht
-liest — die Behauptung stammt damit von ihm und nicht aus einem Ausbleiben.
-Zweitens eine positive Kontrolle: `502 upstream_tls` entsteht genauso, wenn das
-Blatt für die falschen Hosts gälte, abgelaufen wäre oder von einer fremden
-Wurzel stammte. Ein `curl` im selben Namensraum, mit `--cacert` auf dieselbe
-Wurzel, am Proxy vorbei und auf einem eigenen Pfad (`/tls-control`, damit die
-Null-Zählung für `/tls-probe` unberührt bleibt), schafft den Handschlag — und
-derselbe Aufruf ohne die Wurzel scheitert. Erst dieses Paar belegt die
-Voraussetzung des Schritts: Das Material ist gültig, und was ihm fehlt, ist
-allein das Vertrauen des Daemons.
+Schritt 7 hält seit HUM-087 die andere Richtung fest: `200` mit dem Rumpf des
+Ziels statt `502 upstream_tls`. Drei Vorkehrungen halten die Aussage ehrlich,
+und alle drei gehören dazu, wenn jemand den Schritt anfasst.
 
-Wer das Flag nachliefert, dreht den Schritt um und stellt die URLs in
-`script.json` auf `https://`; alles andere am Lauf bleibt, wie es ist.
+Erstens der Stolperdraht, umgedreht statt gestrichen. Er prüfte die
+Kommandozeilen-Fläche, solange das Flag fehlte, und stirbt heute, wenn
+`humanitld --help` es **nicht mehr** kennt — mit der Anweisung, was dann
+zurückzudrehen wäre. Daneben steht, dass dieser Lauf das Flag auch übergeben
+hat: geprüft wird `DAEMON_ARGV` aus `start_daemon`, also das, was wirklich an
+den Daemon ging, und nicht die Konstante im Skript. Eine Prüfung, die nach der
+Reparatur ersatzlos verschwände, hinterließe eine Lücke genau dort, wo vorher
+eine Zusicherung stand.
+
+Zweitens die Zeile aus dem Daemon-Protokoll, ebenfalls umgedreht: Früher sagte
+der Daemon, dass er den Schlüssel nicht liest, heute sagt er, dass er die
+Wurzel geladen hat — mit ihrer Zahl (`"roots":1`), dem Pfad und auf der Stufe
+`WARN`. Der Lauf prüft alle drei und dazu, dass kein `CONFIG_010` oder
+`CONFIG_011` im Protokoll steht. Die Behauptung stammt damit vom Daemon und
+nicht aus einem Ausbleiben.
+
+Drittens die positive Kontrolle, unverändert: Ein `curl` im selben
+Namensraum, mit `--cacert` auf dieselbe Wurzel, am Proxy vorbei und auf einem
+eigenen Pfad (`/tls-control`), schafft den Handschlag — und derselbe Aufruf
+ohne die Wurzel scheitert. Sie belegt, dass das Material gültig ist und dass
+eine Prüfung dagegen überhaupt etwas entscheidet. Der eigene Pfad trennt sie im
+Protokoll des Ziels von `/tls-probe`, das jetzt ebenfalls genau einmal bedient
+wird; Schritt 9 zählt beide getrennt.
+
+Dazu kommt, was der Status allein nicht sagt: Schritt 7 prüft den Rumpf, den
+der Agent gesehen hat (`path` und `host` aus der Antwort des Fake-Upstreams).
+Ein `200` von irgendwoher wäre sonst genauso gut wie das richtige.
+
+Die Richtung „ohne Flag gilt die Wurzel nicht" misst der Lauf **nicht**. Sie
+steht als Rust-Test in `daemon/bin/humanitld/tests/daemon_end_to_end.rs`
+(`a_test_ca_is_only_trusted_with_the_flag`, `a_broken_test_ca_stops_the_start`);
+eine zweite Daemon-Instanz nur dafür gehört nicht in das Demoskript.
+
+Die Zahlen des Laufs nach der Umstellung: 69 geprüfte Behauptungen
+(`M2_EXPECTED_ASSERTIONS`), 17 bediente Anfragen am Ziel (vorher 16), davon 16
+über TLS, und 14 mit `200` an die Paket-Registry (vorher 13).
 
 **Der Daemon warnt nur für `resolver.test_ca`, nicht für die anderen
 Test-Hebel.** Der Fallstrick der Spezifikation verlangt eine Warnung beim
 Start, damit `resolver.overrides` und `experimental.upstream_port_map` „nie
 unbemerkt in Produktion landen". `humanitld` meldet beim Start nur
-`resolver.nameserver` (ungenutzt) und `resolver.test_ca` (ungelesen); eine
-nicht leere Zuordnungstabelle und eine gesetzte Portumlenkung gehen still
-durch. Der Demolauf lebt davon, also fällt es dort nicht auf; im Alltag ist es
+`resolver.nameserver` (ungenutzt) und, seit HUM-087, `resolver.test_ca` ohne
+sein Flag (`CONFIG_011`); eine nicht leere Zuordnungstabelle und eine gesetzte
+Portumlenkung gehen still durch. Der Demolauf lebt davon, also fällt es dort nicht auf; im Alltag ist es
 eine fehlende Warnung an genau der Stelle, an der die Spezifikation eine
-verlangt. Gehört zum selben Bündel wie das fehlende `--allow-test-ca`.
+verlangt. `resolver.test_ca` ist mit HUM-087 aus diesem Bündel heraus: Der
+Schlüssel hat einen Leser, und der Daemon meldet mit `CONFIG_011`, wenn er ohne
+sein Flag gesetzt ist. Für `resolver.overrides` und
+`experimental.upstream_port_map` steht die Warnung weiterhin aus.
 
 **Die Stapel-Freigabe geht über zwei Aufrufe, nicht über einen.**
 `DecideRequest` trägt `repeated flow_ids` und `remember`, kann eine Gruppe also
@@ -1567,10 +1585,17 @@ wiederholt das, damit niemand dafür diesen Abschnitt suchen muss. Er sagt
 nichts über den Bildschirm — Warteschlange, Aktionsleiste, Regel-Bildschirm und
 Historie werden nicht bedient (HUM-097). Er sagt nichts über das HAR-Format;
 geprüft wird die Menge, aus der der Export entsteht, nicht eine Datei und kein
-Feld darin. Er übt den MITM-Pfad nicht (HUM-087, Absatz oben). Er sagt nichts
-über eine zweite Sitzung, über Neustarts (das prüft M1), über OpenCode
-(HUM-046) und über Benachrichtigungen (abgeschaltet). Und Schritt 7 hält eine
-Abwesenheit fest, keine Verweigerung.
+Feld darin. Er sagt nichts über eine zweite Sitzung, über Neustarts (das prüft
+M1), über OpenCode (HUM-046) und über Benachrichtigungen (abgeschaltet). Und er
+sagt nichts über die Richtung „ohne Flag gilt die Wurzel nicht": Er fährt mit
+`--allow-test-ca`, und die andere Richtung misst der Rust-Test
+`a_test_ca_is_only_trusted_with_the_flag` (HUM-087, Absatz oben).
+
+Den MITM-Pfad übt er seit HUM-087 (2026-09-05): Alle siebzehn Anfragen gehen
+über `https://`, das Ziel bedient sechzehn davon über TLS, und die beiden Funde
+entstehen in Rümpfen, die der Proxy selbst entschlüsselt hat. Bis dahin stand
+hier das Gegenteil, und ein grüner Lauf war kein Beleg für die Hauptbauart des
+Produkts.
 
 ### 4.23 Aus der Umsetzung der Profile (HUM-066, 2026-09-04)
 
@@ -2185,7 +2210,7 @@ Die Zählung hat drei Fälle mehr gefunden, als HUM-101 nannte:
 `/etc/resolv.conf`; HUM-115 baut den Hickory-Adapter dahinter), `ui.theme`
 (dieselbe fehlende Naht wie bei `ui.notifications`: dem Client fehlt
 `GetConfig`, deshalb beide HUM-069) und `resolver.test_ca`, das HUM-087 bereits
-als eigenes Issue führt. Genau dafür ist das Register da. Neu angelegt wurden
+als eigenes Issue führte und inzwischen verdrahtet hat. Genau dafür ist das Register da. Neu angelegt wurden
 nur zwei Issues: HUM-120 für die Rumpfgrenze und HUM-121 für `ui.sound` und
 `experimental.ws_hold`.
 

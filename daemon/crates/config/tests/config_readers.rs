@@ -119,9 +119,7 @@ const REGISTER: &[(&str, &str)] = &[
     ("resolver.nameserver", "pending(HUM-115)"),
     ("resolver.overrides", "effective"),
     ("resolver.prefer", "effective"),
-    // Der Vertrauensanker aus der Datei erreicht `ClientTls::new` nicht;
-    // HUM-087 verdrahtet ihn samt `--allow-test-ca`.
-    ("resolver.test_ca", "pending(HUM-087)"),
+    ("resolver.test_ca", "effective"),
     ("sandbox.env", "effective"),
     ("sandbox.profile", "effective"),
     ("sandbox.work_dir", "effective"),
@@ -333,9 +331,11 @@ fn no_group_carries_a_pending_note() {
 fn the_keys_without_a_reader_are_the_known_ones() {
     // Die Liste aus HUM-101, plus die drei, die das Register selbst gefunden
     // hat (`resolver.nameserver`, `ui.theme`, `resolver.test_ca` aus HUM-087),
-    // abzüglich `limits.body_timeout_secs`, den HUM-120 verdrahtet hat. Sie
-    // steht hier, damit ein weiterer Fall nicht unbemerkt dazukommt: Wer einen
-    // Schlüssel verdrahtet, streicht ihn hier und im Register zugleich.
+    // abzüglich `limits.body_timeout_secs`, den HUM-120 verdrahtet hat, und
+    // abzüglich `resolver.test_ca`, den HUM-087 an `--allow-test-ca` und
+    // `ClientTls::new` verdrahtet hat. Sie steht hier, damit ein weiterer Fall
+    // nicht unbemerkt dazukommt: Wer einen Schlüssel verdrahtet, streicht ihn
+    // hier und im Register zugleich.
     let pending: Vec<&str> = register()
         .iter()
         .filter(|(_, readiness)| readiness.is_pending())
@@ -349,7 +349,6 @@ fn the_keys_without_a_reader_are_the_known_ones() {
             "pseudonyms.max_response_bytes",
             "pseudonyms.translate_responses",
             "resolver.nameserver",
-            "resolver.test_ca",
             "ui.notifications",
             "ui.sound",
             "ui.theme",
