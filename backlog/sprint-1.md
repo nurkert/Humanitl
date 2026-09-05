@@ -18,6 +18,12 @@ Voraussetzungen aus Sprint 0: HUM-001 (Monorepo), HUM-002 (CI), HUM-003 (Proto v
 | HUM-019 | Flutter-Shell | M | HUM-003, HUM-005, HUM-008 |
 | HUM-020 | Intercept-Screen v1 | L | HUM-019 |
 | HUM-021 | Demo-Skript M1 | S | alle oben |
+| HUM-108 | `PROXY_007` wird nie ausgegeben | S | HUM-017, HUM-045 |
+| HUM-109 | `HoldQueue::extend` ist von nichts erreichbar | M | HUM-016, HUM-018, HUM-064 |
+| HUM-110 | WebSocket-Upgrade kommt nie zustande | L | HUM-015, HUM-017, HUM-026 |
+| HUM-111 | Die Sicherheitsdokumente behaupten, was der Code nicht tut | M | HUM-011, HUM-013, HUM-017, HUM-024 |
+| HUM-112 | hudsucker ist keine Abhängigkeit mehr, ADR-0001 sagt das Gegenteil | S | HUM-009, HUM-015 |
+| HUM-113 | `escape-launch` ist verwaist | S | HUM-064 |
 
 Leseanweisung für die Umsetzung: `BACKLOG.md` Abschnitte 2 bis 6, dann `backlog/CONVENTIONS.md`, dann das Issue. Jede Signatur in diesem Dokument ist verbindlich; Abweichungen werden im PR begründet.
 
@@ -28,6 +34,8 @@ Leseanweisung für die Umsetzung: `BACKLOG.md` Abschnitte 2 bis 6, dann `backlog
 > **Review-Korrekturen 2026-09-02** (gelten vor dem Text; Details CONVENTIONS 4.10): HUM-012: `socket()` nur `AF_INET`/`AF_INET6` mit `SOCK_STREAM` (arg1 & 0xff), Arch-Mismatch `KillProcess`, x32-Bit-Syscalls `EPERM` per BPF-Präludium, kein „falls"; bwrap-Argv `--cap-drop ALL` (HUM-011). HUM-015: Schritt 0 ist ein Spike, ob hudsucker einen generischen Accept-Stream annimmt, sonst Fork der Accept-Schleife auf `UnixListener`; der Loopback-TCP-Port auf dem Host entfällt in beiden Fällen. Kein `GaiResolver`: DNS nur über den `Resolver`-Port nach Allow, Verbindung über `Egress::connect(authority, Some(ip))`. `Expect: 100-continue` wird sofort beantwortet, der Body landet im Hold-Puffer, nichts geht vor der Entscheidung zum Upstream. HUM-016: `limits.hold_max_bytes` (256 MiB) und `limits.hold_max_flows` (200) als atomare Zähler, Überschreiten ⇒ `503`. HUM-017: gRPC-Zeile ist in M1 „erwartet: fehlschlägt mit `PROXY_007`", ALPN bietet dem Client nur `http/1.1`. Statuscodes: `403` Policy, `413` Body-Cap, `504` Timeout, `502` Upstream, `503` Budget.
 >
 > **Abgleich 2026-09-02**: Der Shim startet eine *Liste* von Bridges aus `[network].bridges` des Profils (MVP: genau eine, Richtung `in`, Proxy); Richtung `out` (Host verbindet in die Sandbox, später Browser-CDP, ADR-016) ist als Enum-Variante vorgesehen, aber nicht gebaut. seccomp-Familien kommen aus `[seccomp].allow_families` (Default `AF_INET`, `AF_INET6`). **Nachtrag 2026-09-03 (Review)**: Beide Listen sind keine freien Angaben mehr, sondern Böden in beide Richtungen — `network.bridges` ist genau die Proxy-Bridge, `allow_families` genau `AF_INET`, `AF_INET6` und `allow_types` genau `SOCK_STREAM`; siehe `CONVENTIONS.md` 4.12. Der Proxy öffnet Upstream-Verbindungen ausschließlich über den Port `Egress` (`Egress::Direct` im MVP, ADR-017); `TcpStream::connect` außerhalb `proxy/src/egress/` bricht `tools/check-deps.sh`. Escape-Test-Dateien heißen `esc-1-sockets.sh`, `esc-2-mounts.sh`, `esc-3-egress.sh`.
+
+> **Bestandsaufnahme 2026-09-05** (jedes Akzeptanzkriterium von elf Issues dieses Sprints gegen den Code geprüft; HUM-015 war nicht Teil der Aufnahme und ist unangetastet): 24 Kriterien erfüllt und abgehakt, 14 teilweise, 2 nicht erfüllt (HUM-013 Sitzungs-Sockets, HUM-021 DNS-Zähler), 2 überholt formuliert (HUM-013 `find -type s`, HUM-016 „403 bei Timeout"). Nach Kriterien vollständig: HUM-012, HUM-014. Neu angelegt aus der Aufnahme: HUM-108 (`PROXY_007` wird nie ausgegeben), HUM-109 (`HoldQueue::extend` ist von nichts erreichbar), HUM-110 (WebSocket-Upgrade kommt nie zustande), HUM-111 (die Sicherheitsdokumente behaupten, was der Code nicht tut), HUM-112 (hudsucker ist keine Abhängigkeit mehr, ADR-0001 sagt das Gegenteil), HUM-113 (`escape-launch` ist verwaist). Schon getrackt und nur am Kästchen verwiesen: HUM-097 (Bildschirm-Hälfte des Laufs), HUM-087 (`https://` durch die Sandbox), HUM-101 (`ui.notifications`, `experimental.ws_hold`), HUM-098 (Reduzierer), HUM-058 (Karten). Bewusst nicht als Issue: `SessionSocket::create` ohne Aufrufer (CONVENTIONS 4.12 verschiebt die zweite Sitzung nach Sprint 3, dort gehört er hin), die Form der Startzeile im Log (niemand liest sie), grpcurl ohne Reflection (`-protoset proto/descriptor.binpb` genügt), die Pane-Breiten über den Neustart (Halbsatz an HUM-020, wartet auf den Einstellungsspeicher), die 2-s- und 300-ms-Budgets ohne Messung (HUM-097 misst den Lauf) und die Nummerierungskollision 4.17 in CONVENTIONS (eine Korrektur, kein Issue).
 
 ## HUM-011 · bwrap-Launcher
 
@@ -160,11 +168,11 @@ Diagnostic-Codes:
 - `launch_early_exit_diag`: `agent_argv = ["/nonexistent"]` ⇒ `SANDBOX_009` mit stderr im `why`.
 
 ### Akzeptanzkriterien
-- [ ] `cargo test -p humanitl-sandbox` grün, Integrationstests laufen auf dem CI-Runner mit bwrap.
-- [ ] `argv_display` einer Default-Session ist eine einzige Zeile, per Copy-Paste in einer Shell ausführbar (manuell geprüft, dokumentiert in `docs/SECURITY.md` als Beispiel).
-- [ ] Kein Pfad aus der Blockliste kann über ein Profil gemountet werden (Test).
-- [ ] In der laufenden Sandbox: `ls /sys/class/net` zeigt nur `lo`; `/etc/resolv.conf` fehlt; `env | wc -l` ≤ 25.
-- [ ] Alle neun Diagnostic-Codes haben einen Unit-Test, der sie auslöst.
+- [x] `cargo test -p humanitl-sandbox` grün, Integrationstests laufen auf dem CI-Runner mit bwrap. (192 Tests, mit bubblewrap 0.12.0 wirklich gestartet)
+- [ ] `argv_display` einer Default-Session ist eine einzige Zeile, per Copy-Paste in einer Shell ausführbar (manuell geprüft, dokumentiert in `docs/SECURITY.md` als Beispiel). Eine Zeile ja; ausführbar nein: sie trägt `--json-status-fd 11` und `--ro-bind-data 12..16`, Deskriptoren, die eine Shell nicht hat (`launcher.rs:170-171` sagt es selbst); `docs/SECURITY.md:557` behauptet das Gegenteil und zeigt keine Beispielzeile (HUM-111).
+- [x] Kein Pfad aus der Blockliste kann über ein Profil gemountet werden (Test).
+- [ ] In der laufenden Sandbox: `ls /sys/class/net` zeigt nur `lo`; `/etc/resolv.conf` fehlt; `env | wc -l` ≤ 25. `/etc/resolv.conf` fehlt; `/sys` ist gar nicht gemountet, nur `lo` belegt der Shim über `/proc/net/dev`; `env | wc -l` ergibt 27 mit dem nackten Profil und rund 40 mit dem OpenCode-Adapter, nicht ≤ 25.
+- [ ] Alle neun Diagnostic-Codes haben einen Unit-Test, der sie auslöst. Die neun der Spezifikation gibt es so nicht mehr (Register: `SANDBOX_001..007`, `010..016`); ohne auslösenden Test bleiben `SANDBOX_003`, `SANDBOX_004` und `SANDBOX_014` (Garantie 1 rot).
 
 ### Fallstricke
 - `--unshare-all` schließt `--unshare-user` ein. Auf Ubuntu ≥ 24.04 blockiert AppArmor unprivilegierte User-Namespaces für Binaries ohne Profil; `bwrap` aus dem Ubuntu-Paket hat ein Profil, ein selbst gebautes nicht. Fehlerbild ist `bwrap: setting up uid map: Permission denied` ⇒ `SANDBOX_003`.
@@ -301,11 +309,11 @@ Implementierung: `no_interfaces` liest `/sys/class/net` und erwartet genau `lo`.
 - `esc-2.sh` (in Sandbox): `/proc/self/mountinfo` enthält keinen der Blocklisten-Pfade; `find / -xdev -type s 2>/dev/null` ⇒ genau `/run/humanitl/proxy.sock`; `cat /proc/1/environ` ist leer oder `bwrap`; `hostname` ⇒ `sandbox`; `ls /proc/self/fd` wie oben.
 
 ### Akzeptanzkriterien
-- [ ] `humanitl-shim` ist statisch (`ldd` ⇒ „not a dynamic executable"), < 2 MB.
-- [ ] Der Agent-Prozess hat `Seccomp: 2` und `NoNewPrivs: 1` in `/proc/<pid>/status`. Der Shim-Prozess trägt seit dem 2026-09-03 ebenfalls einen Filter (`Seccomp: 2`), dieselbe Sperrliste, nur zusätzlich `AF_UNIX` für die Brücke; damit trägt jeder Prozess unter bwraps Init einen Filter (ESC-1 `seccomp_every_process`).
-- [ ] `esc-1.sh` und `esc-2.sh` grün im CI-Job `escape-tests`.
-- [ ] `curl -x http://127.0.0.1:3128 http://example.com/` aus der Sandbox erreicht den Daemon-Socket (sichtbar im Daemon-Log), bevor HUM-015 antwortet.
-- [ ] Exit-Code des Agenten kommt beim Aufrufer an.
+- [x] `humanitl-shim` ist statisch (`ldd` ⇒ „not a dynamic executable"), < 2 MB. (1 340 328 Bytes)
+- [x] Der Agent-Prozess hat `Seccomp: 2` und `NoNewPrivs: 1` in `/proc/<pid>/status`. Der Shim-Prozess trägt seit dem 2026-09-03 ebenfalls einen Filter (`Seccomp: 2`), dieselbe Sperrliste, nur zusätzlich `AF_UNIX` für die Brücke; damit trägt jeder Prozess unter bwraps Init einen Filter (ESC-1 `seccomp_every_process`).
+- [x] `esc-1.sh` und `esc-2.sh` grün im CI-Job `escape-tests`. (heute `esc-1-sockets.sh` und `esc-2-mounts.sh`, 43 und 25 Fälle grün)
+- [x] `curl -x http://127.0.0.1:3128 http://example.com/` aus der Sandbox erreicht den Daemon-Socket (sichtbar im Daemon-Log), bevor HUM-015 antwortet.
+- [x] Exit-Code des Agenten kommt beim Aufrufer an.
 
 ### Fallstricke
 - Filter im Elternprozess setzen wäre falsch: `TSYNC` synchronisiert Threads desselben Prozesses, nicht Kinder; aber der Elternprozess braucht `socket()`, also Filter nur im Kind, nach `fork`, vor `exec`. Der Filter vererbt sich auf alle Nachkommen des Agenten.
@@ -369,9 +377,9 @@ Bind in bwrap: `--bind <path> /run/humanitl/proxy.sock` (rw-Bind; ro-Bind funkti
 - `esc-2.sh` erweitert.
 
 ### Akzeptanzkriterien
-- [ ] `find / -xdev -type s` in der Sandbox ⇒ genau `/run/humanitl/proxy.sock`.
-- [ ] `ls -la $XDG_RUNTIME_DIR/humanitl/` zeigt `daemon.sock` (0600), `token` (0600), `proxy/` (0700).
-- [ ] Zwei parallele Sessions haben zwei verschiedene Socket-Dateien und sehen jeweils nur ihre eigene.
+- [ ] `find / -xdev -type s` in der Sandbox ⇒ genau `/run/humanitl/proxy.sock`. `-type s` findet nichts, weil bwrap den Socket über eine leere reguläre Datei bindet und `find` dem `d_type` aus `readdir` traut; das Produkt misst mit `-xtype s` (`tests/escape/lib.sh`, `report.rs:260-266`) und findet genau `/run/humanitl/proxy.sock`; `docs/SECURITY.md:125` druckt weiter die tote Form (HUM-111).
+- [x] `ls -la $XDG_RUNTIME_DIR/humanitl/` zeigt `daemon.sock` (0600), `token` (0600), `proxy/` (0700).
+- [ ] Zwei parallele Sessions haben zwei verschiedene Socket-Dateien und sehen jeweils nur ihre eigene. Es gibt genau einen Proxy-Socket `<runtime>/humanitl/proxy/proxy.sock` (`config/src/paths.rs:238-240`), `SessionSocket::create` (`listener.rs:91-93`) hat keinen Aufrufer, und `proxy_dir` wird beim Start nicht geleert; die zweite Sitzung ist auf Sprint 3 verschoben (CONVENTIONS 4.12), das Ziel `<session-id>.sock` dieses Issues wurde ohne Vermerk aufgegeben.
 
 ### Fallstricke
 - Unix-Socket-Pfade sind auf 108 Bytes begrenzt (`sun_path`). `/run/user/1000/humanitl/proxy/<uuid>.sock` ist 58 Zeichen, sicher; bei langem `XDG_RUNTIME_DIR` ⇒ `DAEMON_004` mit Hinweis.
@@ -455,10 +463,10 @@ Diagnostic-Codes (Stand nach dem Register in `codes.rs`, das hier vorgeht): `TLS
 - `sandbox_tools_trust_ca` (Integration, Sandbox mit HUM-015-Stub, der ein selbstsigniertes Leaf für `example.test` ausstellt): `curl https://example.test/` ⇒ kein TLS-Fehler; `python3 -c "import urllib.request; urllib.request.urlopen('https://example.test/')"` ⇒ ok; `node -e "fetch('https://example.test/')"` falls Node vorhanden; `git ls-remote https://example.test/repo` ⇒ Fehler ist HTTP, nicht TLS.
 
 ### Akzeptanzkriterien
-- [ ] `ls -la $XDG_DATA_HOME/humanitl/ca/` zeigt `ca.key` 0600, `ca.crt` 0644, `ca-bundle.crt`.
-- [ ] `trust list` oder `ls /etc/ssl/certs` auf dem Host enthält die Humanitl-CA **nicht**.
-- [ ] In der Sandbox: `env | grep -c -E 'PROXY|CA|CERT'` ≥ 16.
-- [ ] `openssl verify -CAfile /etc/humanitl/ca.crt <leaf>` in der Sandbox ⇒ `OK`.
+- [x] `ls -la $XDG_DATA_HOME/humanitl/ca/` zeigt `ca.key` 0600, `ca.crt` 0644, `ca-bundle.crt`.
+- [x] `trust list` oder `ls /etc/ssl/certs` auf dem Host enthält die Humanitl-CA **nicht**.
+- [x] In der Sandbox: `env | grep -c -E 'PROXY|CA|CERT'` ≥ 16. (gemessen: 16)
+- [x] `openssl verify -CAfile /etc/humanitl/ca.crt <leaf>` in der Sandbox ⇒ `OK`. (gemessen gegen einen laufenden `humanitld`; ein automatisierter Test dafür aus der Sandbox heraus fehlt, HUM-087 fährt M2 über `https://`)
 
 ### Fallstricke
 - `NO_PROXY` mit `localhost` würde den Proxy für Loopback umgehen; da der Proxy selbst auf Loopback liegt, ist das egal, aber `NO_PROXY=*` in einem Agent-Image wäre fatal. Deshalb explizit leer setzen und `--clearenv`.
@@ -674,9 +682,9 @@ Broadcast-Lag: Empfänger, die `RecvError::Lagged(n)` sehen, erhalten stattdesse
 - `queue_does_not_block_proxy`: 50 gleichzeitige Holds, ein weiterer Request an einen Stub mit sofortigem Allow wird in < 50 ms beantwortet.
 
 ### Akzeptanzkriterien
-- [ ] Alle Tests grün, inklusive Property-Test `timeout_never_allows`.
-- [ ] Ein Timeout produziert eine 403-Antwort mit `reason: timeout` beim Client (Integration mit HUM-015).
-- [ ] `FlowRegistry::list` liefert gehaltene Flows sortiert nach Deadline aufsteigend.
+- [ ] Alle Tests grün, inklusive Property-Test `timeout_never_allows`. 27 Tests grün, `timeout_never_allows` belegt (1000 Holds, 0 Allow); `state_sequence_timeout` ist einen Schritt kürzer als spezifiziert, weil selbst erzeugte Block- und Timeout-Antworten kein `ResponseHeaders`-Ereignis auslösen (`handler.rs:1040` `record_block`).
+- [ ] Ein Timeout produziert eine 403-Antwort mit `reason: timeout` beim Client (Integration mit HUM-015). Das Produkt antwortet 504, nicht 403 (Review-Korrektur 2026-09-02, CONVENTIONS 3.2: `Timeout 504`); `hold_timeout_returns_504` und `conf_19_curl_hold_timeout` belegen 504 mit `reason: timeout`. `HoldQueue::extend` aus der Spezifikation ist gebaut und getestet, aber von nichts erreichbar (HUM-109).
+- [x] `FlowRegistry::list` liefert gehaltene Flows sortiert nach Deadline aufsteigend.
 
 ### Fallstricke
 - `tokio::time::sleep_until` mit einer Deadline in der Vergangenheit löst sofort aus; bei `timeout_secs = 0` ist das die gewünschte „alles blocken"-Semantik für `ask_mode = none` (HUM-067), also nicht als Fehler behandeln.
@@ -763,9 +771,9 @@ Matrix (jede Zeile ein Test; Spalten Client, Szenario, Erwartung):
 Die Matrix ist die Testliste. Jeder Test heißt `conf_<nr>_<client>_<szenario>`.
 
 ### Akzeptanzkriterien
-- [ ] Alle 22 Zeilen implementiert, keine als `ignored`; `skipped` nur bei fehlendem Client, und im CI sind alle Clients installiert.
-- [ ] Laufzeit des Moduls < 3 min lokal.
-- [ ] Zeile 13 dokumentiert das h2-Verhalten in `docs/SECURITY.md` („gRPC über TLS braucht `experimental.h2_upstream`").
+- [ ] Alle 22 Zeilen implementiert, keine als `ignored`; `skipped` nur bei fehlendem Client, und im CI sind alle Clients installiert. 22 Tests, keine `ignored`, CI installiert websocat und grpcurl; aber zwei Zeilen prüfen das Gegenteil der Matrix: Zeile 11 assertet 426 statt eines gehaltenen und dann durchgereichten Upgrades (`conformance.rs:629`, HUM-110), Zeile 12 assertet das Fehlen von `grpc-status: 0` (sanktioniert in CONVENTIONS 4.10); übersprungene Zeilen sind lokal unsichtbar, weil `clients::skip` über `eprintln!` geht.
+- [x] Laufzeit des Moduls < 3 min lokal. (3,8 s)
+- [ ] Zeile 13 dokumentiert das h2-Verhalten in `docs/SECURITY.md` („gRPC über TLS braucht `experimental.h2_upstream`"). Der Absatz steht (`docs/SECURITY.md:438-441`), beschreibt aber ein Signal, das es nicht gibt: kein Code baut `PROXY_007`, der Client sieht einen nackten TLS-Alert `no application protocol` (HUM-108).
 
 ### Fallstricke
 - axum `ws` und hudsucker: WebSocket über CONNECT erfordert, dass hudsucker den Upgrade durchreicht; `WebSocketHandler` von hudsucker nur registrieren, wenn Frames beobachtet werden sollen (HUM-026), sonst Default-Passthrough.
@@ -848,9 +856,9 @@ Diagnostic-Codes: `IPC_001` Socket-Bind fehlgeschlagen (fix: `CopyCommand("rm $X
 - `shutdown_cleans_up`: SIGTERM ⇒ Socket und Token gelöscht, Sandbox-Sessions beendet (bwrap-Prozess weg).
 
 ### Akzeptanzkriterien
-- [ ] `grpcurl -unix -H 'x-humanitl-token: …' -plaintext $XDG_RUNTIME_DIR/humanitl/daemon.sock humanitl.v1.Humanitl/GetInfo` liefert Versionen (grpcurl unterstützt `-unix`).
-- [ ] Alle Tests grün; `cargo doc` ohne Warnungen für `humanitl-ipc`.
-- [ ] `humanitld` startet in < 500 ms und loggt eine JSON-Zeile `{"level":"info","msg":"listening","socket":…}`.
+- [ ] `grpcurl -unix -H 'x-humanitl-token: …' -plaintext $XDG_RUNTIME_DIR/humanitl/daemon.sock humanitl.v1.Humanitl/GetInfo` liefert Versionen (grpcurl unterstützt `-unix`). So nicht ausführbar: ohne `-proto`/`-protoset` braucht grpcurl Server-Reflection, und `tonic-reflection` steht in keinem Manifest; mit `-protoset proto/descriptor.binpb` geht es; die Fähigkeit belegt `daemon_end_to_end.rs:137-147` über den Socket.
+- [x] Alle Tests grün; `cargo doc` ohne Warnungen für `humanitl-ipc`. (170 Tests in `humanitl-ipc`; `subscribe_filters_session` entfällt bewusst, CONVENTIONS 4.12)
+- [ ] `humanitld` startet in < 500 ms und loggt eine JSON-Zeile `{"level":"info","msg":"listening","socket":…}`. Start in 0,42 s gemessen; die Zeile hat die Form von `tracing_subscriber::fmt().json()` (`level` in Großbuchstaben, Text unter `fields.message`, kein `msg`), und nichts liest die spezifizierte Form.
 
 ### Fallstricke
 - tonic über UDS: die Client-`Endpoint`-URI ist ein Platzhalter; der Connector ignoriert sie. Nicht versuchen, `unix://` in die URI zu schreiben.
@@ -945,10 +953,10 @@ Mit `--json`: Diagnostic als JSON auf stdout, eine Zeile.
 - `config_precedence`: `HUMANITL_HOLD__TIMEOUT_SECS=7 humanitl --hold-timeout-secs 9 config get hold.timeout_secs` ⇒ `9`; ohne Flag ⇒ `7`.
 
 ### Akzeptanzkriterien
-- [ ] `humanitl sandbox check` zeigt drei grüne Zeilen auf dem CI-Runner.
-- [ ] `humanitl sandbox run -- curl -sS https://example.com` gibt nach Freigabe über gRPC (Test-Client) die Seite aus; ohne Freigabe nach Timeout den 403-Text.
-- [ ] Exit-Codes 0/1/2/3 sind in `--help` dokumentiert und getestet.
-- [ ] Alle Config-Schlüssel aus CONVENTIONS 3.7 sind als Flags in `--help` sichtbar.
+- [x] `humanitl sandbox check` zeigt drei grüne Zeilen auf dem CI-Runner.
+- [ ] `humanitl sandbox run -- curl -sS https://example.com` gibt nach Freigabe über gRPC (Test-Client) die Seite aus; ohne Freigabe nach Timeout den 403-Text. Belegt für plain HTTP im M1-Lauf (`m1_sealed_box.sh:189,214`); `https://` durch `sandbox run` prüft kein Test (nur `conf_02` auf Crate-Ebene), und der unentschiedene Request bekommt 504, nicht 403 (CONVENTIONS 4.11).
+- [x] Exit-Codes 0/1/2/3 sind in `--help` dokumentiert und getestet. (Exit 3 nur als Mapping-Unit-Test, kein Lauf erreicht ihn)
+- [x] Alle Config-Schlüssel aus CONVENTIONS 3.7 sind als Flags in `--help` sichtbar. (drei unter ihren Namen aus CONVENTIONS 4.4)
 
 ### Fallstricke
 - `#[arg(last = true)]` für `-- CMD...` nötig, sonst frisst clap Flags des Agenten.
@@ -1041,10 +1049,10 @@ l10n-Schlüssel: `shell_nav_intercept`, `shell_nav_history`, `shell_nav_rules`, 
 - Integration (`integration_test/shell_test.dart`, xvfb): App mit `HUMANITL_FAKE=1` startet, Rail sichtbar, keine Exceptions in 3 s.
 
 ### Akzeptanzkriterien
-- [ ] `flutter run -d linux --dart-define=HUMANITL_FAKE=1` zeigt die Shell in < 2 s nach Fensteröffnung.
-- [ ] Gegen echten Daemon (HUM-018): Statusleiste zeigt dessen Version; Daemon stoppen ⇒ innerhalb 5 s Setup-Screen mit `DAEMON_002`; Daemon starten, „Erneut verbinden" ⇒ Shell.
-- [ ] Alle sichtbaren Strings kommen aus ARB (Lint: kein String-Literal in `Text(...)` außerhalb `packages/ui`-Galerie; Custom-Lint oder Review-Checkliste).
-- [ ] Goldens identisch auf CI und lokal (CI-Modus).
+- [ ] `flutter run -d linux --dart-define=HUMANITL_FAKE=1` zeigt die Shell in < 2 s nach Fensteröffnung. Der Pfad steht (`LaunchOptions`, `HUMANITL_FAKE=1` gegen `humanitld --fake`), die 2 s misst kein Test; der einzige Messwert hier (12 bis 14 s bis zum ersten RPC aus dem Debug-Bundle unter Last) bestätigt und widerlegt nichts.
+- [ ] Gegen echten Daemon (HUM-018): Statusleiste zeigt dessen Version; Daemon stoppen ⇒ innerhalb 5 s Setup-Screen mit `DAEMON_002`; Daemon starten, „Erneut verbinden" ⇒ Shell. Heartbeat, Statusleiste und Setup-Screen sind gebaut und gegen den Dart-Fake getestet (`setup_test.dart:65`); der Code ist `DAEMON_001`, nicht `DAEMON_002` (im Register ist `DAEMON_002` der Proto-Mismatch), und kein automatisierter Test verbindet die App mit einem laufenden `humanitld`.
+- [x] Alle sichtbaren Strings kommen aus ARB (Lint: kein String-Literal in `Text(...)` außerhalb `packages/ui`-Galerie; Custom-Lint oder Review-Checkliste). (0 Literale in `app/lib`; ein Lint oder eine Checkliste existiert nicht, die Regel hält durch Disziplin)
+- [x] Goldens identisch auf CI und lokal (CI-Modus).
 
 ### Fallstricke
 - `CallbackShortcuts`/`Shortcuts` fangen Tasten auch in Textfeldern; deshalb der Fokus-Check. Für `Ctrl+K` ist das unkritisch, für Einzeltasten später zwingend.
@@ -1151,11 +1159,11 @@ Leerzustand der Queue: zentriert, `fg-2`, Icon `inbox`, Text `intercept_empty_ti
 - Integration (xvfb): Fake bei 10× spielt 30 Flows; keine Frame-Drops > 100 ms (`WidgetTester.binding` Frame-Timing), Queue zählt am Ende 0 offene, `decide` wurde 30× aufgerufen durch scripted Enter.
 
 ### Akzeptanzkriterien
-- [ ] Gegen echten Daemon: `humanitl sandbox run -- curl https://example.com` erscheint in < 300 ms in der Queue; Enter ⇒ curl liefert HTML; `B` ⇒ curl zeigt 403-Text.
-- [ ] Countdown stimmt auf ± 1 s mit dem Daemon-Timeout überein; Ablauf ⇒ Banner, keine Exception.
-- [ ] Alle Goldens grün in CI-Modus; `flutter analyze` sauber; keine Strings außerhalb ARB.
-- [ ] Panes lassen sich ziehen, Breiten überleben Neustart.
-- [ ] Bei 200 gehaltenen Flows (Fake) bleibt Scrollen flüssig (`ListView.builder`/`AnimatedList` mit `itemExtent`).
+- [ ] Gegen echten Daemon: `humanitl sandbox run -- curl https://example.com` erscheint in < 300 ms in der Queue; Enter ⇒ curl liefert HTML; `B` ⇒ curl zeigt 403-Text. Daemon-Hälfte belegt (`m1_sealed_box.sh:189,214`); kein Test fährt den Bildschirm gegen einen laufenden Daemon, die 300 ms misst niemand; die Oberflächen-Hälfte des Laufs ist HUM-097.
+- [x] Countdown stimmt auf ± 1 s mit dem Daemon-Timeout überein; Ablauf ⇒ Banner, keine Exception. (Frist reist als absoluter Timestamp, ein `nowProvider` mit 250 ms; nie gegen eine lebende Daemon-Frist verglichen)
+- [x] Alle Goldens grün in CI-Modus; `flutter analyze` sauber; keine Strings außerhalb ARB.
+- [ ] Panes lassen sich ziehen, Breiten überleben Neustart. Ziehen ja (`intercept_screen_test.dart:379`); Breiten überleben keinen Neustart: `shared_preferences` ist keine Abhängigkeit, `paneRatiosSettingsKey` wird nie gelesen oder geschrieben (`pane_layout.dart:7-22`), und der Verzicht steht nur im Quellkommentar.
+- [ ] Bei 200 gehaltenen Flows (Fake) bleibt Scrollen flüssig (`ListView.builder`/`AnimatedList` mit `itemExtent`). Faulheit belegt (200 Flows, 5 bis 60 gebaute Zeilen); die Queue ist eine `AnimatedList` ohne `itemExtent`, und der spezifizierte xvfb-Lauf mit Frame-Budget existiert nicht.
 
 ### Fallstricke
 - `AnimatedList` verlangt Index-Buchführung; bei Diff über IDs eine kleine `ListDiff`-Hilfsfunktion schreiben und testen, sonst Exceptions „index out of range" bei schnellen Änderungen.
@@ -1249,9 +1257,9 @@ Schritt 2 ist die Kontrollprobe für Garantie 1: Auch ein Prozess, der `HTTP_PRO
 Das Skript ist der Test. Zusätzlich `tests/e2e/README.md` mit Ablauf und Erwartungen.
 
 ### Akzeptanzkriterien
-- [ ] Skript grün lokal (Debian) und im CI (`ubuntu-latest`) in < 90 s.
-- [ ] Bei jedem `[[ … ]]`-Fehlschlag steht der Schritt im Log (`set -x` in CI).
-- [ ] Daemon-Log enthält für Schritt 3 keine DNS-Auflösung von `example.com` (Prüfung: `--test-hooks` zählt Resolver-Aufrufe, Skript prüft `humanitl daemon status --json | jq .test.resolves == 0` vor `decide` und `== 1` nach dem Allow in Schritt 4).
+- [x] Skript grün lokal (Debian) und im CI (`ubuntu-latest`) in < 90 s. (24,6 s mit `E2E_SKIP_BUILD=1`, 41 Behauptungen; der CI-Job läuft auf `ubuntu-24.04`)
+- [x] Bei jedem `[[ … ]]`-Fehlschlag steht der Schritt im Log (`set -x` in CI).
+- [ ] Daemon-Log enthält für Schritt 3 keine DNS-Auflösung von `example.com` (Prüfung: `--test-hooks` zählt Resolver-Aufrufe, Skript prüft `humanitl daemon status --json | jq .test.resolves == 0` vor `decide` und `== 1` nach dem Allow in Schritt 4). Es gibt weder `--test-hooks` noch ein Feld `test` in `daemon status --json` (sechs Felder, `daemon.rs:40-47`); das Skript ersetzt das Kriterium durch Schritt 2 (in der Sandbox löst nichts auf), was über den Daemon vor der Entscheidung nichts sagt (HUM-115).
 
 ### Fallstricke
 - `ubuntu-latest` und AppArmor: der Job setzt `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` vorab; wenn das fehlschlägt, muss `SANDBOX_003` sauber erscheinen und der Job rot sein, nicht hängen.
@@ -1261,3 +1269,411 @@ Das Skript ist der Test. Zusätzlich `tests/e2e/README.md` mit Ablauf und Erwart
 
 ### Referenzen
 BACKLOG.md 7 (M1), 8 (Merge-Bedingung), 4.5; CONVENTIONS 3.11.
+
+---
+
+## HUM-108 · `PROXY_007` wird nie ausgegeben
+Sprint: 1 · Größe: S · Abhängigkeiten: HUM-017, HUM-045 · Blockiert: keine
+
+### Kontext
+Das Register kennt `PROXY_007` („HTTP/2 nicht verfügbar", `codes.rs:297`), `docs/SECURITY.md:438-441` und `:602-604` versprechen, dass gRPC über TLS „sichtbar" mit diesem Befund scheitert, und CONVENTIONS 4.10 hält Zeile 13 der Matrix als „erwartet: fehlschlägt mit `PROXY_007 h2 not available`" fest. Kein Pfad erzeugt den Befund: `grep -rn PROXY_007 daemon/crates daemon/bin --include='*.rs'` trifft nur Doc-Kommentare, das Register und eine Assertion-Nachricht in `conformance.rs:772`. `tls_observe::classify` deutet nur `rustls::Error::AlertReceived` und einige `io::ErrorKind`; der ALPN-Fehlschlag `rustls::Error::NoApplicationProtocol` fällt auf `None`, es bleibt eine `tracing::debug!`-Zeile, und der Agent sieht einen nackten TLS-Alert `no application protocol`. Das verstößt gegen die Regel aus `CLAUDE.md`: jeder Fehlerpfad liefert ein `Diagnostic` mit `why`. Derselbe Lauf hat gezeigt, dass `PROXY_001` („Body über Cap") ebenso nie gebaut wird; das entscheidet HUM-057 mit `LIMIT_001`, nicht dieses Issue.
+
+### Ziel
+Ein Client, der in ALPN nur `h2` anbietet (grpcurl über TLS, Zeile 13 der Matrix), bekommt weiter den TLS-Alert, und der Daemon veröffentlicht dazu genau einen Befund `PROXY_007` (Warning) im Ereignisstrom, mit Host, dem Satz, warum es scheitert, und einem Verweis auf die Dokumentation; entstört je Host wie `TLS_002`. Die Karte aus HUM-106 kann ihn zeigen. Dazu ein Lint, der den nächsten toten Registereintrag verhindert.
+
+### Nicht-Ziel
+HTTP/2 selbst (M6, `experimental.h2_upstream`). `PROXY_001` (HUM-057 entscheidet, ob `LIMIT_001` ihn ersetzt oder er gebaut wird). Die Karte in der Oberfläche (HUM-106 zeigt heute `TLS_001..003`; dort kommt `PROXY_007` in den Filter, eine Zeile).
+
+### Betroffene Pfade
+- `daemon/crates/proxy/src/tls_observe.rs` (`TlsFailure::NoApplicationProtocol`, `classify`, `diagnostic_for`)
+- `daemon/crates/proxy/src/handler.rs` (Aufruf bei `handler.rs:398-424`, Entstörung über `HandshakeWatch`)
+- `daemon/crates/proxy/tests/tls_observe.rs`, `daemon/crates/proxy/tests/conformance.rs` (Zeile 13)
+- `scripts/ci/lint-dead-codes.sh` (neu), `scripts/ci/dead-codes-allow.txt` (neu), `Makefile`, `.github/workflows/ci.yml` (Job `rust-check`)
+- `docs/DIAGNOSTICS.md` (Generatorlauf, Titel bleibt)
+
+### Spezifikation
+```rust
+pub enum TlsFailure {
+    // ...
+    /// Client und Proxy haben kein gemeinsames ALPN-Protokoll: der Client bot
+    /// nur `h2`, der Proxy spricht in diesem Milestone `http/1.1`.
+    NoApplicationProtocol,
+}
+// classify: rustls::Error::NoApplicationProtocol => Some(TlsFailure::NoApplicationProtocol)
+// as_str: "no_application_protocol"
+
+pub fn diagnostic_for(failure: &TlsFailure, host: &HostName, hint: ToolHint, since_last: u32) -> Diagnostic
+// NoApplicationProtocol => h2_not_available(host, since_last)
+
+fn h2_not_available(host: &HostName, since_last: u32) -> Diagnostic {
+    Diagnostic::builder(PROXY_007, Severity::Warning)
+        .why(format!("{host}: the client offered only h2 in ALPN; the proxy speaks HTTP/1.1 in this milestone, so gRPC over TLS and other h2-only clients cannot connect through it"))
+        .fix(FixAction::OpenUrl(docs_url("#proxy_007")))
+        .build()
+}
+```
+
+Entstörung: dieselbe `HandshakeWatch` und dasselbe 60-s-Fenster je Host wie `TLS_002`; der Zähler unterdrückter Versuche steht ab zwei im Text. Ereignis: `FlowEvent::Diagnostic` ohne Flow (es gibt keine Anfrage; der Handschlag scheitert vor der ersten Zeile). Die `tracing::debug!`-Zeile bleibt.
+
+Lint `scripts/ci/lint-dead-codes.sh`: liest jeden Code aus dem `registry!`-Block in `codes.rs`, sucht eine Konstruktion (`codes::AREA_NNN` oder der nackte Bezeichner) außerhalb von `codes.rs`, Doc-Kommentaren und `#[cfg(test)]`-Blöcken; ein Code ohne Fundstelle endet 1 mit Nennung des Codes, außer er steht mit Begründung in `scripts/ci/dead-codes-allow.txt` (eine Zeile je Code: `PROXY_001 HUM-057`, `TERM_001 HUM-042`, `AUDIT_001 HUM-050`, `UI_002 app/lib/core/domain/diagnostic_codes.dart`). Ein Eintrag der Allow-Liste, der nicht mehr tot ist, endet ebenfalls 1, damit die Liste schrumpft. Teil von `make check` und des Jobs `rust-check`.
+
+### Schritte
+1. `TlsFailure::NoApplicationProtocol`, `classify`, `as_str`. Prüfen: Unit-Test mit `rustls::Error::NoApplicationProtocol` liefert die Variante.
+2. `diagnostic_for` → `PROXY_007`. Prüfen: Test assertet Code, Severity Warning, `why` enthält Host und `h2`.
+3. Anschluss an `HandshakeWatch` in `handler.rs`. Prüfen: zwei Handschläge in 60 s ergeben ein Ereignis mit Zähler 2.
+4. Zeile 13 der Matrix erweitern: nach dem grpcurl-Fehlschlag `events.wait_for("diagnostic")`, Code `PROXY_007`.
+5. Lint-Skript, Allow-Liste, Makefile, CI. Prüfen: Selbsttest mit einem Fixture-Register, das einen unbenutzten Code trägt, endet 1.
+6. `docs/SECURITY.md` gegenlesen: `:438` und `:602` sind mit diesem Issue wahr; keine Textänderung nötig, außer HUM-111 hat sie vorher umformuliert.
+
+### Tests
+- `no_application_protocol_is_classified` (Unit, `tls_observe.rs`).
+- `alpn_refusal_yields_proxy_007` (Unit): `diagnostic_for(&TlsFailure::NoApplicationProtocol, ...)`.
+- `alpn_refusal_reaches_the_event_stream` (Integration, `tests/tls_observe.rs`): ein rustls-Client mit `alpn_protocols = [b"h2"]` gegen `tls::accept` des Proxys; danach genau ein `Diagnostic`-Ereignis mit `PROXY_007`.
+- `conf_13_grpcurl_over_tls_fails_visibly` (erweitert): Alert wie bisher plus der Befund im Strom.
+- `lint_dead_codes_self_test`: Fixture mit unbenutztem `PROXY_099` → Exit 1; Allow-Listen-Eintrag mit lebendem Code → Exit 1.
+
+### Akzeptanzkriterien
+- [ ] `grep -rn 'codes::PROXY_007' daemon/crates/proxy/src` trifft eine Konstruktion in `tls_observe.rs`, nicht nur Doc-Kommentare.
+- [ ] `cargo test -p humanitl-proxy --test conformance conf_13` grün, und der Test assertet den Befund `PROXY_007` im Ereignisstrom.
+- [ ] Gegen einen laufenden Daemon: `grpcurl -cacert <ca.crt> <host>:443 list` über den Proxy scheitert, und das Daemon-Log trägt eine `warn`-Zeile mit `code=PROXY_007` und dem Host (Blick).
+- [ ] `scripts/ci/lint-dead-codes.sh` endet 0 auf dem Baum; nach Einfügen eines Codes `PROXY_099` ins Register ohne Verwendung endet es 1 und nennt den Code; `scripts/ci/dead-codes-allow.txt` trägt genau `PROXY_001`, `TERM_001`, `AUDIT_001` und `UI_002`, jeder mit Issue oder Datei.
+- [ ] `docs/DIAGNOSTICS.md` nach dem Generatorlauf unverändert (`docs_in_sync` grün); `make check` grün.
+
+### Fallstricke
+- rustls liefert `NoApplicationProtocol` serverseitig nur, wenn `alpn_protocols` nicht leer ist und keine Schnittmenge besteht (`ca.rs:601` setzt `[http/1.1]`); ein Client ohne ALPN bekommt `http/1.1` ohne Fehler. Nicht verwechseln.
+- Keinen Flow für den gescheiterten Handschlag anlegen; es gibt keine Anfrage.
+- `host` stammt aus dem CONNECT-Ziel und ist vom Agenten gewählt; im `why` wie bei `TLS_001` über `host.display()` und ohne Steuerzeichen.
+- Die Allow-Liste darf kein Friedhof werden: jeder Eintrag braucht eine Issue-Nummer oder die Datei, die den Code baut; wer einen Eintrag ohne Begründung sieht, löscht ihn oder den Code.
+
+### Referenzen
+`backlog/sprint-1.md` HUM-017 (Zeile 13), `backlog/sprint-3.md` HUM-045 (`tls_observe.rs`, `HandshakeWatch`); CONVENTIONS 4.6, 4.10; `docs/SECURITY.md` 5, 10.5; `daemon/crates/core-types/src/diagnostics/codes.rs:284, 297`; `CLAUDE.md` „Was der Compiler nicht prüft"; rustls 0.23 `Error::NoApplicationProtocol`.
+
+---
+
+## HUM-109 · `HoldQueue::extend` ist von nichts erreichbar
+Sprint: 1 · Größe: M · Abhängigkeiten: HUM-016, HUM-018, HUM-064 · Blockiert: keine
+
+### Kontext
+`HoldQueue::extend` (`daemon/crates/proxy/src/hold.rs:414`) schiebt die Frist eines gehaltenen Flows nach hinten und ist mit drei Tests belegt (`tests/hold.rs:233, 644, 795`). Von außen erreicht es niemand: kein Proto-Feld (`grep -n extend proto/humanitl/v1/humanitl.proto` leer), kein RPC in `daemon/crates/ipc/src/server.rs`, kein Unterkommando, keine Dart-Methode. Die Spezifikation von HUM-016 nennt den Zweck in einer Zeile („‚Timer pausieren' im UI = extend um 24 h, audit-geloggt (HUM-050)"), `docs/UX.md:362` verspricht neben der Vorwarnung „genau eine Verlängerung, sobald der Daemon Verlängern kennt". Totes Verhalten mit grünen Tests ist das Muster, das dieses Repository schon dreimal getäuscht hat (`CLAUDE.md`, 2026-09-03). ADR-018: jede Fähigkeit ist zuerst ein RPC; ADR-004: Ereignisse werden aus Übergängen abgeleitet.
+
+**Vorher zu entscheiden.** Verdrahten (diese Spezifikation) oder entfernen (Alternative unten). Empfehlung: verdrahten. Eine Frist von fünf Minuten ohne Verlängerung macht aus jeder Kaffeepause einen Timeout-Block, und `docs/UX.md` hat die Verlängerung schon zugesagt.
+
+### Ziel
+`humanitl flows extend <id> [--by SECS]` und der RPC `Extend` verschieben die Frist eines gehaltenen Flows; jeder Abonnent sieht die neue Frist als Ereignis; ein nicht mehr gehaltener Flow antwortet `IPC_003`; die Zustandsmaschine kennt den Übergang `Held → Held`; HUM-050 kann ihn später ins Audit schreiben.
+
+### Nicht-Ziel
+Der Knopf in der Aktionsleiste (Oberflächen-Hälfte; sie bekommt nach dem Muster HUM-105/HUM-106 eine eigene Nummer, sobald der RPC steht, und setzt `docs/UX.md:362` um: genau eine Verlängerung neben der Vorwarnung). Der Audit-Eintrag (HUM-050). Eine Obergrenze der Gesamthaltezeit (die Speichergrenze für gehaltene Bodies ist HUM-057).
+
+### Betroffene Pfade
+- `proto/humanitl/v1/humanitl.proto` (`rpc Extend`, `ExtendRequest`, `ExtendResponse`, `FlowEvent.extended = 17`), `proto/descriptor.binpb`, `proto/generated.sha256`
+- `daemon/crates/core-types/src/flow.rs` (`TransitionInput::Extend`, `FlowEvent::Extended`, Übergang `Held → Held`), `tests/flow_state_table.rs`
+- `daemon/crates/proxy/src/hold.rs` (bleibt), `src/handler.rs` oder `src/registry.rs` (Anwendung über `Flow::apply`)
+- `daemon/crates/ipc/src/server.rs`, `src/convert.rs`, `src/validate.rs`, `src/fake/state.rs`, `src/lib.rs` (`PROTO_MINOR`)
+- `daemon/bin/humanitl/src/cli.rs`, `src/cmd/flows.rs`
+- `app/lib/core/ipc/daemon_client.dart`, `grpc_daemon_client.dart`, `fake_daemon_client.dart`, `app/lib/core/ipc/convert.dart`, `app/lib/core/domain/flow_event.dart`, `app/lib/core/domain/flow_reducer.dart` (HUM-098), `app/lib/core/ipc/proto_version.dart`
+
+### Spezifikation
+```proto
+rpc Extend(ExtendRequest) returns (ExtendResponse);
+
+message ExtendRequest {
+  string flow_id = 1;
+  // Sekunden, um die die Frist nach hinten rückt. 0 bedeutet die Vorgabe 86400.
+  uint32 by_secs = 2;
+}
+message ExtendResponse { google.protobuf.Timestamp deadline = 1; }
+
+// in FlowEvent.event:
+//   Extended extended = 17;
+message Extended { string flow_id = 1; google.protobuf.Timestamp deadline = 2; }
+```
+
+```rust
+// humanitl-core
+pub enum TransitionInput { /* ... */ Extend { deadline: Instant } }
+pub enum FlowEvent { /* ... */ Extended { flow_id: FlowId, at: Instant, deadline: Instant } }
+// Erlaubt genau: Held + Extend -> Held. Jeder andere Zustand: InvalidTransition.
+```
+
+Reihenfolge im Proxy: `HoldQueue::extend(id, by)` liefert die neue Frist; danach `Flow::apply(Extend { deadline })` am registrierten Flow (einziger Mutationspunkt, wie im Fake `state.rs:330`); das Ereignis geht in den Strom. Scheitert `extend` mit `NotHeld`, gibt es kein Ereignis und der RPC antwortet `IPC_003`. Eine unlesbare Id ist `IPC_004`. `by_secs` über 7 Tagen ist `IPC_004` mit dem Wert im `why`.
+
+IPC: `PROTO_MINOR` 3 → 4, `app/lib/core/ipc/proto_version.dart` dieselbe Zahl (`docs/PROTOCOL.md` 5). Der Rust-Fake (`fake/state.rs`) setzt den RPC über denselben `apply` um, damit `humanitld --fake` ihn spielt.
+
+CLI (`docs/PROTOCOL.md` 4.9, ein RPC bringt sein Unterkommando mit): `humanitl flows extend <id> [--by SECS]`, Textausgabe `deadline <RFC 3339>`, `--json` `{"flow_id","deadline"}`; Exit 1 mit dem Befund des Daemons bei `IPC_003`/`IPC_004`.
+
+Dart: `DaemonClient.extendHold(FlowId id, Duration by)` in allen drei Clients; `FlowEvent.extended(flowId, deadline)`; der Reduzierer (`applyFlowEvent`, HUM-098) setzt `deadline`. Der Countdown-Ring folgt damit ohne weitere Änderung, weil er aus `flow.deadline` rechnet.
+
+**Alternative (entfernen), falls so entschieden:** `HoldQueue::extend` und seine drei Tests löschen, die Zeile in `backlog/sprint-1.md` HUM-016 (`:629`) bekommt den Vermerk, `docs/UX.md:362` verliert den Halbsatz über die Verlängerung, und `grep -n 'fn extend' daemon/crates/proxy/src/hold.rs` ist leer. Dann Größe S.
+
+### Schritte
+1. Core: `TransitionInput::Extend`, `FlowEvent::Extended`, Tabellenzeile `Held + Extend → Held`, Zeugentest und Zähler in `flow_state_table.rs` nachziehen. Prüfen: `cargo test -p humanitl-core` grün, `forbidden_transitions_are_errors` rechnet mit 13 Eingaben.
+2. Proto, `descriptor.binpb`, `generated.sha256`, `PROTO_MINOR`, `proto_version.dart`. Prüfen: `make proto && git diff --exit-code proto/` leer.
+3. Proxy: Anwendung über `Flow::apply`, Ereignis im Strom. Prüfen: `extend_publishes_extended_event`.
+4. IPC: `Extend` im Server und im Fake, Validierung. Prüfen: `extend_rpc_moves_the_deadline_and_streams_it`, `extend_of_a_decided_flow_is_ipc_003`.
+5. CLI `flows extend`. Prüfen: `flows_extend_prints_the_new_deadline` gegen `humanitld --fake`.
+6. Dart-Clients und Reduzierer. Prüfen: `flutter test test/core` grün, `apply_extended_moves_the_deadline`.
+
+### Tests
+- `extend_only_from_held` (core): jeder andere Zustand ergibt `InvalidTransition`.
+- `extend_moves_deadline` (bleibt), `extend_publishes_extended_event` (proxy).
+- `extend_rpc_moves_the_deadline_and_streams_it`, `extend_of_a_decided_flow_is_ipc_003`, `extend_over_seven_days_is_ipc_004` (ipc, gegen einen Unix-Socket wie `rules_rpc.rs`).
+- `flows_extend_prints_the_new_deadline`, `flows_extend_unknown_flow_exit_1` (cli).
+- `apply_extended_moves_the_deadline` (dart, `flow_reducer_test.dart`), `fake_extend_hold_emits_extended` (dart fake).
+
+### Akzeptanzkriterien
+- [ ] `grep -n 'rpc Extend' proto/humanitl/v1/humanitl.proto` trifft; `PROTO_MINOR` ist 4 in `daemon/crates/ipc/src/lib.rs` und `app/lib/core/ipc/proto_version.dart`; `proto/descriptor.binpb` liegt im selben Commit.
+- [ ] Gegen einen laufenden Daemon: ein `curl` aus der Sandbox wird gehalten; `humanitl --json flows extend <id> --by 60` liefert Exit 0, und `humanitl --json flows show <id> | jq -r .deadline` liegt 60 s hinter dem Wert von vor dem Aufruf (Blick).
+- [ ] `humanitl flows extend <id>` für einen entschiedenen Flow liefert Exit 1 mit `IPC_003`.
+- [ ] `cargo test -p humanitl-core` grün, `forbidden_transitions_are_errors` rechnet mit der neuen Eingabe; `cargo test -p humanitl-proxy --test hold` und `cargo test -p humanitl-ipc` grün.
+- [ ] `grep -n 'extendHold' app/lib/core/ipc/daemon_client.dart app/lib/core/ipc/grpc_daemon_client.dart app/lib/core/ipc/fake_daemon_client.dart` trifft in allen drei Dateien; `flutter test test/core` grün.
+- [ ] `make check` grün, `tools/verify-commit.sh` grün.
+- [ ] Bei Entscheidung „entfernen" statt der Punkte oben: `grep -rn 'fn extend\|extend_moves_deadline' daemon/crates/proxy` leer, die Spezifikationszeile in HUM-016 trägt den Vermerk, `docs/UX.md:362` ist angepasst.
+
+### Fallstricke
+- `HoldQueue::extend` ändert nur `pending.deadline`; die Halte-Task muss die verschobene Frist auch abwarten. `tests/hold.rs:233` belegt das (Entscheidung nach 500 ms kommt bei `timeout = 200 ms` noch durch); den Test nicht abschwächen.
+- Keinen zweiten Mutationspunkt einführen: `grep 'state =' daemon/crates/ipc/src/fake/` bleibt ohne Zustandszuweisung (HUM-005, Kriterium 3).
+- Die Frist reist als absoluter `Timestamp` aus einem `Instant` (`convert.rs:699` `wall_clock`); denselben Umrechner benutzen, sonst driften Ring und Daemon.
+- Der Daemon erlaubt wiederholtes Verlängern; die Oberfläche bietet nach `docs/UX.md:362` genau eine. Das ist eine Entscheidung der Oberfläche, nicht des Daemons, und steht so in CONVENTIONS 4.x.
+- `Held.queue_bytes`/`queue_count` ändern sich durch `extend` nicht; das Ereignis trägt sie nicht.
+
+### Referenzen
+`backlog/sprint-1.md` HUM-016 (Spezifikation `:629`, Test `extend_moves_deadline`), HUM-018; BACKLOG.md ADR-004, ADR-018; `docs/PROTOCOL.md` 4.9, 5; `docs/UX.md:362`; `backlog/sprint-4.md` HUM-050 (Audit), `backlog/sprint-5.md` HUM-098 (`applyFlowEvent`); `daemon/crates/proxy/src/hold.rs:404-421`.
+
+---
+
+## HUM-110 · WebSocket-Upgrade kommt nie zustande
+Sprint: 1 · Größe: L · Abhängigkeiten: HUM-015, HUM-017, HUM-026 · Blockiert: HUM-058 (Zeile 11 der Zustandsmatrix)
+
+### Kontext
+Der Proxy entfernt `connection` und `upgrade` als Kopfzeilen von Verbindungsrang (`daemon/crates/proxy/src/upstream.rs:48-58`). Das Ziel sieht die Anfrage deshalb ohne `Upgrade` und antwortet 426; `conformance.rs:629` assertet genau das und `:662` sagt es aus: „M1 has no upgrade passthrough". Versprochen ist das Gegenteil an vier Stellen: BACKLOG.md 2 (ADR-001, Protokoll-Ziel M1 „WebSocket-Passthrough"), ADR-007 („danach werden Frames aufgezeichnet, nicht angehalten. Das wird im UI ausgesprochen"), `docs/SECURITY.md:471-472` und `:605-606` („Nach einem freigegebenen Upgrade fließen Frames und werden aufgezeichnet") und `backlog/sprint-5.md` HUM-058 Zeile 11 mit dem Oberflächentext „Nachrichten danach werden aufgezeichnet, nicht angehalten". HUM-015 hat den Passthrough als Nicht-Ziel an HUM-026 verwiesen, HUM-026 hat ihn nicht gebaut; die Regeln kennen `upgrade: websocket`, der Recorder die Spalte `upgrade`, beides ohne Anfrage, die je durchkäme. CONVENTIONS 4.10 sanktioniert nur den dokumentierten Fehlschlag der gRPC-Zeile, nicht diesen. Festgehalten ist der Zustand in einem Kommentar in einem Test.
+
+### Ziel
+Nach `Decided(Allow)` auf einem Flow mit `Upgrade::WebSocket` reicht der Proxy den Handschlag mit `Connection: Upgrade` und `Upgrade: websocket` an das Ziel, gibt dessen 101 an den Client zurück und kopiert danach Bytes in beide Richtungen, bis eine Seite schließt. Der Flow durchläuft `Forwarded → Responded{101} → Recorded`; die Bytes vom Ziel zum Client werden wie eine gestreamte Antwort aufgezeichnet, die Bytes vom Client zum Ziel gezählt. Zeile 11 der Matrix assertet 101 und ein funktionierendes Echo. Block und Timeout vor dem Upgrade bleiben, wie sie sind (403, 504). Regeln mit `upgrade: websocket` entscheiden wie heute; `wss://` läuft nach dem CONNECT denselben Weg.
+
+### Nicht-Ziel
+Frames halten (BACKLOG.md 9.8, `experimental.ws_hold` bleibt `pending`, HUM-101). Frames zerlegen und je Opcode aufzeichnen (dieses Issue zeichnet die Rohbytes Ziel → Client auf; die Frame-Zerlegung entscheidet der Eigentümer mit 9.8). Findings-Scan auf Frames. Andere Upgrades (`h2c`, `TLS/1.0` über `Upgrade`): sie bleiben gestrichen und enden wie heute.
+
+### Betroffene Pfade
+- `daemon/crates/proxy/src/upstream.rs` (Ausnahme von `HOP_BY_HOP` für das freigegebene WebSocket-Upgrade)
+- `daemon/crates/proxy/src/handler.rs` (101-Pfad: `hyper::upgrade::on` auf beiden Seiten, `tokio::io::copy_bidirectional`)
+- `daemon/crates/proxy/src/body.rs` (Spiegel der Ziel-Bytes als `ResponseChunk`)
+- `daemon/crates/proxy/tests/conformance.rs` (Zeile 11), `tests/proxy.rs` (neue Fälle), `tests/support/mod.rs` (Fake-Upstream mit Echo-Endpunkt `/ws`, heute antwortet er 426)
+- `daemon/crates/recorder/src/writer.rs` (Status 101, `upgrade = 'websocket'`, Antwort-Bytes bis `recorder.max_body_bytes`)
+- `proto/humanitl/v1/humanitl.proto` (`FlowDetail.upgrade_client_bytes = <nächste Nummer>`), `PROTO_MINOR`
+- `docs/SECURITY.md` 6 und 10.3, `backlog/CONVENTIONS.md` 4.10 (Zeile 11)
+
+### Spezifikation
+Kopfzeilen: `HOP_BY_HOP` bleibt die Regel. Für einen Flow mit `RequestKey.upgrade == Some(WebSocket)` und `Decision::Allow` (oder `AllowEdited`) behält der Proxy genau `Connection: Upgrade`, `Upgrade: websocket` und die `Sec-WebSocket-Key`/`-Version`/`-Protocol`-Kopfzeilen (RFC 9110 §7.8: ein Proxy, der das Upgrade unterstützt, leitet es weiter). `Sec-WebSocket-Extensions` wird entfernt, damit aufgezeichnete Bytes nicht `permessage-deflate`-komprimiert sind; das Ziel darf dann keine Extension aushandeln, und eine 101-Antwort mit `Sec-WebSocket-Extensions` ist ein Protokollfehler (502, `reason: upstream`). Andere `Connection`-Token werden weiter gestrichen.
+
+Antwortpfad: Antwortet das Ziel 101 mit `Upgrade: websocket`, wird `hyper::upgrade::on` auf der Antwort (Ziel) und auf der Anfrage (Client, `with_upgrades()` steht in `handler.rs:1210`) abgewartet, dann `tokio::io::copy_bidirectional`. Bytes Ziel → Client gehen zusätzlich durch den Spiegel aus `body.rs` (Ereignisse `ResponseChunk`, Vorschau-Cap, `recorder.max_body_bytes`); Bytes Client → Ziel werden gezählt und in `FlowEvent::Recorded` beziehungsweise `FlowDetail.upgrade_client_bytes` gemeldet. `Responded { status: 101 }` beim Eintreffen der 101, `Recorded`, wenn beide Richtungen geschlossen sind. Ein 101 ohne `Upgrade: websocket` oder auf eine Anfrage ohne Upgrade ist ein Protokollfehler des Ziels: 502, `reason: upstream`, `Failed`. Jede andere Antwort (200, 404, 426) läuft den normalen Antwortpfad.
+
+Zeitgrenzen: die Leerlaufgrenze aus HUM-101 gilt nicht für eine aufgewertete Verbindung; die Verbindung lebt, bis eine Seite schließt oder die Sitzung endet.
+
+Recorder: `flows.status = 101`, `flows.upgrade = 'websocket'` (steht schon), Antwort-Body die aufgezeichneten Bytes bis zur Grenze mit `truncated`, `response_size` die Gesamtzahl.
+
+Zeile 11 der Matrix neu: curl-Handschlag mit `--http1.1 -i` liefert 101; websocat über den `ws-c:`-Overlay sendet eine Nachricht und bekommt sie vom Echo-Endpunkt zurück; danach `held` 1, `recorded` 1, `status 101`.
+
+### Schritte
+1. Fake-Upstream in `tests/support`: `/ws` als echter Echo-Endpunkt (`tokio-tungstenite` als Dev-Abhängigkeit oder ein handgeschriebener Minimal-Server, der genau Echo kann). Prüfen: direkter Handschlag ohne Proxy liefert 101 und Echo.
+2. `upstream.rs`: bedingte Ausnahme für das freigegebene WebSocket-Upgrade. Prüfen: `hop_by_hop_still_stripped_without_allowed_upgrade` bleibt grün, `allowed_upgrade_keeps_the_upgrade_headers` neu.
+3. `handler.rs`: 101-Pfad mit `copy_bidirectional`, Spiegel, Zähler, Zustandsübergänge. Prüfen: `ws_upgrade_after_allow_echoes`.
+4. Fehlerfälle: 101 ohne Upgrade, `Sec-WebSocket-Extensions` in der Antwort. Prüfen: `ws_bogus_101_is_502`.
+5. Recorder und Proto-Feld, `PROTO_MINOR`. Prüfen: `recorder_stores_101_with_upgrade_and_bytes`.
+6. Zeile 11 der Matrix umschreiben, CONVENTIONS 4.10 und `docs/SECURITY.md` 6, 10.3 im selben Commit auf das gebaute Verhalten bringen.
+
+### Tests
+- `allowed_upgrade_keeps_the_upgrade_headers`, `hop_by_hop_still_stripped_without_allowed_upgrade` (Unit, `upstream.rs`).
+- `ws_upgrade_after_allow_echoes` (Integration): Handschlag gehalten, Allow, 101, Echo einer 1-KiB-Nachricht, Ereignisfolge `received, analyzed, held, decided, forwarded, response_headers(101), response_chunk+, recorded`.
+- `ws_upgrade_blocked_stays_403`, `ws_upgrade_timeout_504`, `ws_rule_allow_skips_hold_and_upgrades` (Regel `upgrade: websocket`, `action: allow`).
+- `wss_upgrade_through_connect`: dasselbe über TLS nach dem CONNECT.
+- `ws_bogus_101_is_502`, `ws_extensions_are_stripped_on_the_way_up`.
+- `recorder_stores_101_with_upgrade_and_bytes` (recorder).
+- `conf_11_websocat_ws_upgrade_is_held` (umgeschrieben, beide Beine).
+
+### Akzeptanzkriterien
+- [ ] `cargo test -p humanitl-proxy --test conformance conf_11` grün; der Test assertet `line.code == 101` und das Echo von websocat, und `grep -n '426' daemon/crates/proxy/tests/conformance.rs` trifft nur noch den Fall für ein Upgrade, das nicht WebSocket ist.
+- [ ] In der CI (websocat installiert) laufen beide Beine der Zeile 11; lokal ohne websocat wird nur das websocat-Bein übersprungen.
+- [ ] Gegen einen laufenden Daemon mit einem lokalen Echo-Server (`resolver.overrides` auf `127.0.0.1`, Regel `allow_private: true`): `websocat --ws-c-uri=ws://<host>/ws - ws-c:tcp:127.0.0.1:3128` aus der Sandbox liefert nach dem Allow das Echo; `humanitl --json flows show <id>` zeigt `status: 101` und `upgrade: websocket` (Blick).
+- [ ] Ohne Allow: 504 nach der Frist; mit Block: 403 mit `reason: user`; `cargo test -p humanitl-proxy` grün, die bestehenden Tests unverändert.
+- [ ] `docs/SECURITY.md` 6 und 10.3 sagen genau, was nach dem Upgrade aufgezeichnet wird (Bytes Ziel → Client, Zähler Client → Ziel) und was nicht (Frames werden nicht gehalten, nicht gescannt); CONVENTIONS 4.10 nennt Zeile 11 nicht mehr als Ausnahme.
+- [ ] `experimental.ws_hold` hat weiter keinen Leser (HUM-101, `pending`).
+- [ ] `make check` grün, `proto/descriptor.binpb` im selben Commit, `tools/verify-commit.sh` grün.
+
+### Fallstricke
+- `Upgrade` und `Connection` sind nach RFC 9110 §7.6.1 Kopfzeilen von Verbindungsrang; die Ausnahme gilt nur für das freigegebene WebSocket-Upgrade und nur für diese Token, nie für andere `Connection`-Token.
+- `copy_bidirectional` endet erst, wenn beide Richtungen geschlossen sind; Close-Frames laufen durch, ein halb geschlossener Socket darf die Task nicht ewig halten (Sitzungsende beendet sie).
+- Die Bytes nach dem Upgrade umgehen die Moderation. Das ist der erklärte Seitenweg aus `docs/SECURITY.md` 10.3; der Text muss im selben Commit stimmen (`CLAUDE.md`: nichts schwächen, ohne die Sicherheitsdokumente anzupassen).
+- Speicher: der Spiegel hält nur die Vorschau; `HoldMemory` (HUM-057) zählt keine aufgewertete Verbindung. Ein langer WebSocket darf den Recorder nicht mit MB-großen Chunks fluten, deshalb `recorder.max_body_bytes` als Grenze.
+- `hyper::upgrade::on` auf der Client-Seite verlangt, dass die Antwort vollständig gesendet ist, bevor der aufgewertete Stream benutzt wird; die Reihenfolge im Handler ist deshalb: 101 zurückgeben, dann `on(req).await`.
+
+### Referenzen
+BACKLOG.md 2 (ADR-001 Protokoll-Ziel, ADR-007), 4.4, 9.8; `backlog/sprint-1.md` HUM-015 (Nicht-Ziel), HUM-017 (Zeile 11); `backlog/sprint-5.md` HUM-058 (Zeile 11); `docs/SECURITY.md` 6, 10.3; CONVENTIONS 3.3 (`upgrade: websocket`), 4.10; RFC 9110 §7.6.1, §7.8; RFC 6455 §4, §5; `daemon/crates/proxy/src/upstream.rs:48-58`, `tests/conformance.rs:583-672`.
+
+---
+
+## HUM-111 · Die Sicherheitsdokumente behaupten, was der Code nicht tut
+Sprint: 1 · Größe: M · Abhängigkeiten: HUM-011, HUM-013, HUM-017, HUM-024 · Blockiert: HUM-059
+
+### Kontext
+Die Bestandsaufnahme vom 2026-09-05 hat in `docs/SECURITY.md` und `docs/THREAT-MODEL.md` dreizehn Stellen gefunden, an denen der Text etwas anderes sagt als der Code, darunter zwei Prüfbefehle, die ein Nutzer wörtlich ausführen soll und die nichts zeigen. `scripts/ci/lint-docs.sh` prüft nur Existenz, `TODO`/`TBD` und die ESC-Verweise; die „wortgleich"-Zusage aus HUM-007 für die drei Garantiesätze hat kein Gatter. HUM-059 (Sprint 5, „SECURITY.md final") ist zu weit weg für ein Dokument, dessen Prüfbefehle heute falsch sind.
+
+| Stelle | Heute | Richtig |
+|---|---|---|
+| `SECURITY.md:69`, `README.md:120` | `bwrap --unshare-all --cap-drop ALL` | sechs einzelne `--unshare-*` (`bwrap_args.rs:264-266`, Snapshot `default.argv.txt:1-6`), dazu `--cap-drop ALL`, `--disable-userns`; strenger als der Text |
+| `SECURITY.md:115` | Shim unter `/usr/local/bin/humanitl-shim` | `/run/humanitl/humanitl-shim` (`profiles/sandbox/default.toml:59`; `bwrap_args.rs:38-42` erklärt, warum `/usr/local/bin` unter `--ro-bind /usr` scheitert); ebenso CONVENTIONS 4.12 (`:197`) und die Doc-Kommentare `humanitl-shim/src/main.rs:18, 76` |
+| `SECURITY.md:115-116` | maskierte Dateien mit `/dev/null` | versiegelte memfds über `--ro-bind-data` (`bwrap_args.rs:356-367`); `/dev/null` wurde verworfen, weil es auf einem `nodev`-Mount `EACCES` gibt |
+| `SECURITY.md:125` | `find / -xdev -path /proc -prune -o -type s -print` | `-xtype s`; die Form mit `-type s` druckt in der Sandbox nichts (`tests/escape/lib.sh`, `report.rs:260-266`) |
+| `SECURITY.md:364` | `hyper`/`rustls`/`rcgen` „über `hudsucker`" | hudsucker ist keine Abhängigkeit (HUM-112) |
+| `SECURITY.md:438-441`, `:602-604` | gRPC über TLS scheitert „sichtbar mit `PROXY_007`" | bis HUM-108: nackter TLS-Alert; danach wahr |
+| `SECURITY.md:506-513` | Audit-Log im Präsens, `humanitl audit verify` | nichts davon gebaut (`audit/src/lib.rs` 6 Zeilen, RPC `unimplemented`); geplant in HUM-050, HUM-070; `README.md:88` sagt es ehrlich |
+| `SECURITY.md:557` | die argv-Zeile ist per Copy-Paste ausführbar | sie ist Anzeige: `--json-status-fd 11`, `--ro-bind-data 12..16` (`launcher.rs:170-171`); `sh -c "$(humanitl sandbox argv)"` endet 1 mit `bwrap: Write to info_fd: Bad file descriptor` |
+| `SECURITY.md:568` | die Prüfungen lesen `/sys/class/net` | `/sys` ist nicht gemountet; der Shim liest `/proc/net/dev` (`report.rs:186-197`) |
+| `SECURITY.md:585`, `THREAT-MODEL.md:366` | ESC-3 beweist „kein DNS vor der Entscheidung" host-seitig | die Probe ist ein `skip`; der Beweis steht in `daemon/crates/proxy/tests/dns_after_allow.rs` (HUM-115 holt ihn nach) |
+| `SECURITY.md:605-606` | nach freigegebenem Upgrade fließen Frames | kein Upgrade kommt zustande, 426 (HUM-110) |
+| `SECURITY.md:610` | ob `hudsucker` den Unix-Socket annimmt, „klärt ein Spike" | längst entschieden (`proxy/src/core.rs:6-18`) |
+
+### Ziel
+Jeder Befehl in `docs/SECURITY.md` 9 läuft so, wie er gedruckt ist, und zeigt, was der Text sagt. Jede Aussage im Präsens ist heute wahr oder als geplant mit Issue-Nummer gekennzeichnet. Ein Gatter hält die drei Garantiesätze in `docs/SECURITY.md` 1, `BACKLOG.md` 4.1, `app/l10n/app_de.arb` und `app_en.arb` wortgleich.
+
+### Nicht-Ziel
+Die Fähigkeiten selbst (HUM-108, HUM-110, HUM-112, HUM-115 bauen sie; dieses Issue macht die Sätze wahr, bis sie gebaut sind, und die Sätze dort ändern sich beim Bau zurück). Die Endfassung der Dokumente (HUM-059). Übersetzung (HUM-086).
+
+### Betroffene Pfade
+- `docs/SECURITY.md`, `docs/THREAT-MODEL.md`, `README.md:120`
+- `backlog/CONVENTIONS.md` 4.12 (`:197`, Shim-Pfad)
+- `daemon/bin/humanitl-shim/src/main.rs:18, 76` (Doc-Kommentare, Shim-Pfad)
+- `scripts/ci/lint-docs.sh` (Prüfung 4: Garantiesätze), `scripts/ci/fixtures/` (Selbsttest)
+
+### Spezifikation
+Die Tabelle oben ist die Änderungsliste; jede Zeile wird eine Korrektur, keine Streichung. Ein Satz, der etwas Geplantes beschreibt, nennt das Issue in Klammern. `docs/SECURITY.md` 9.1 zeigt eine gerenderte Zeile aus `humanitl sandbox argv --profile default` (gekürzt auf die ersten Argumente und die Bindungen) mit dem Satz, dass die Zeile Anzeige ist und die Deskriptoren 11 bis 16 vom Launcher kommen.
+
+`scripts/ci/lint-docs.sh`, Prüfung 4: liest die drei fettgedruckten deutschen Sätze aus der Tabelle in `docs/SECURITY.md` 1, die drei aus `BACKLOG.md` 4.1 und `isolationCheck1..3` aus `app/l10n/app_de.arb`; die englischen aus derselben Tabelle und `app_en.arb`. Jede Abweichung ist ein Fehler mit beiden Fassungen in der Ausgabe. Selbsttest: eine Kopie von `BACKLOG.md` mit einem geänderten Wort lässt die Prüfung 1 enden.
+
+### Schritte
+1. Prüfbefehle zuerst (`:125`, `:557`, `:568`): in einer Sandbox ausführen, Ausgabe in den Text übernehmen. Prüfen: die gedruckten Befehle liefern die gedruckte Ausgabe.
+2. Mechanik-Sätze (`:69`, `:115-116`, `:364`, `:610`, `README.md:120`, CONVENTIONS 4.12, Shim-Doc-Kommentare). Prüfen: `grep -n 'unshare-all\|/dev/null\|/usr/local/bin/humanitl-shim' docs/SECURITY.md README.md backlog/CONVENTIONS.md daemon/bin/humanitl-shim/src/main.rs` ohne Treffer, die etwas Falsches behaupten.
+3. Geplantes kennzeichnen (`:438`, `:506-513`, `:585`, `:602-606`, THREAT-MODEL K-10). Prüfen: jede Stelle nennt HUM-050/070, HUM-108, HUM-110 oder HUM-115.
+4. Prüfung 4 in `lint-docs.sh` mit Selbsttest. Prüfen: `scripts/ci/lint-docs.sh` endet 0; die Mutation endet 1.
+
+### Tests
+- `lint_docs_guarantee_sentences_match`: Baum unverändert → Exit 0.
+- `lint_docs_guarantee_sentence_drift_fails`: ein Wort in einer Kopie von `BACKLOG.md` 4.1 geändert → Exit 1, Ausgabe nennt beide Fassungen.
+- Manuell in der Sandbox (`humanitl sandbox run --profile default -- sh`): die drei Befehle aus `docs/SECURITY.md` 9 liefern die im Text gezeigte Ausgabe; Ergebnis im Commit-Body.
+
+### Akzeptanzkriterien
+- [ ] `find / -xdev -path /proc -prune -o -xtype s -print` ist der gedruckte Befehl in `docs/SECURITY.md` 2, und in `humanitl sandbox run --profile default -- sh -c '<Befehl>'` druckt er genau `/run/humanitl/proxy.sock`.
+- [ ] `docs/SECURITY.md` 9.1 zeigt eine gerenderte argv-Zeile und sagt, dass sie Anzeige ist; `grep -n 'Copy-Paste' docs/SECURITY.md` trifft nur noch einen Satz, der die Deskriptoren nennt.
+- [ ] `grep -n 'unshare-all' docs/SECURITY.md README.md` trifft nur Sätze, die die sechs `--unshare-*` plus `--cap-drop ALL` und `--disable-userns` nennen; `grep -n '/dev/null' docs/SECURITY.md` beschreibt keine Maskierung mehr; `grep -rn '/usr/local/bin/humanitl-shim' docs backlog/CONVENTIONS.md daemon/bin/humanitl-shim/src` ist leer.
+- [ ] `docs/SECURITY.md` 8 steht im Futur mit HUM-050 und HUM-070; `humanitl audit verify` ist als geplant gekennzeichnet.
+- [ ] `docs/SECURITY.md` 5 und 10.2 (`PROXY_007`), 10.3 (WebSocket) und 10.5 (Listener) sagen den heutigen Stand und nennen HUM-108, HUM-110, HUM-112; `docs/THREAT-MODEL.md` K-10 nennt `dns_after_allow.rs` als Beweis und HUM-115 für die host-seitige Beobachtung.
+- [ ] `docs/SECURITY.md:568` nennt `/proc/net/dev` statt `/sys/class/net`.
+- [ ] `scripts/ci/lint-docs.sh` vergleicht die Garantiesätze an vier Stellen; die Mutation eines Wortes in `BACKLOG.md` 4.1 lässt es 1 enden (Ergebnis im Commit-Body); auf dem Baum endet es 0.
+- [ ] `make check` grün.
+
+### Fallstricke
+- Nichts abschwächen: jede Korrektur macht den Text genauer, nicht die Aussage kleiner. Wo das Produkt strenger ist als der Text (sechs `--unshare-*`), sagt der Text das.
+- Die drei Garantiesätze selbst bleiben unverändert; sie sind an vier Stellen wortgleich, und genau das prüft das neue Gatter.
+- K-10 darf nicht behaupten, ESC-3 beweise etwas; bis HUM-115 steht der Beweis nur im Daemon-Test.
+- `-xtype s` folgt Symlinks; der Satz daneben erklärt, warum `-type s` scheitert (Bind über eine reguläre Datei).
+- HUM-108, HUM-110, HUM-112 und HUM-115 drehen die Sätze beim Bau wieder ins Präsens; wer zuerst mergt, passt an.
+
+### Referenzen
+`backlog/sprint-0.md` HUM-007; `backlog/sprint-1.md` HUM-011 (Kriterium 2, 4), HUM-013 (Kriterium 1), HUM-017 (Kriterium 3); `backlog/sprint-2.md` HUM-024 (Kriterium 3); `docs/SECURITY.md` 1, 2, 5, 8, 9, 10; `docs/THREAT-MODEL.md` K-10; `daemon/crates/sandbox/src/bwrap_args.rs:38-42, 264-266, 356-367`; `daemon/crates/sandbox/src/launcher.rs:170-171`; `tests/escape/lib.sh`; `CLAUDE.md` „Was wir nicht tun".
+
+---
+
+## HUM-112 · hudsucker ist keine Abhängigkeit mehr, ADR-0001 sagt das Gegenteil
+Sprint: 1 · Größe: S · Abhängigkeiten: HUM-009, HUM-015 · Blockiert: HUM-059, HUM-086
+
+### Kontext
+`grep hudsucker daemon/Cargo.toml daemon/Cargo.lock` ist leer. `daemon/crates/proxy/src/core.rs:6-18` hält fest, warum: der Spike aus HUM-015 Schritt 0 fiel negativ aus (hudsucker 0.24.1 nimmt nur einen `TcpListener`), Client, Resolver und CA wären ohnehin durch die eigenen Ports ersetzt worden, und die Accept-Schleife auf hyper 1 ist kurz genug. Die Entscheidung steht nur in diesem Doc-Kommentar. Das Gegenteil behaupten `docs/adr/0001-rust-hudsucker.md` (Status `Accepted`), `docs/adr/0015-ports-and-adapters.md:27, 72, 112, 114`, `docs/ARCHITECTURE.md:15, 73`, `docs/SECURITY.md:364, 610`, `README.md:116, 245`, `AGENTS.md:21`, `BACKLOG.md:19, 63, 68, 230, 436` und `backlog/CONVENTIONS.md:71, 387`. `docs/adr/README.md:31` schreibt vor, wie eine abgelöste Entscheidung markiert wird: `Status: Superseded by ADR-XXXX`, die neue Datei verweist zurück.
+
+### Ziel
+ADR-0019 hält die Entscheidung fest: eigener Accept-Loop auf hyper 1 und `tokio-rustls` direkt auf dem Unix-Socket, hudsucker verworfen, mit dem Spike-Ergebnis als Begründung; die Rust-Hälfte von ADR-0001 („Rust, nicht mitmproxy") bleibt in Kraft und wird in ADR-0019 wiederholt, ADR-0001 trägt `Superseded by ADR-0019`. Alle Dokumente, die hudsucker als Bauteil nennen, nennen stattdessen hyper 1, rustls, rcgen und die drei Ports (`Egress`, `Resolver`, `LeafCache`).
+
+### Nicht-Ziel
+Code. Übersetzung (HUM-086). Die Endfassung von README und SECURITY (HUM-059).
+
+### Betroffene Pfade
+- `docs/adr/0019-hyper-accept-loop.md` (neu), `docs/adr/0001-rust-hudsucker.md` (Status), `docs/adr/README.md` (Index)
+- `docs/adr/0015-ports-and-adapters.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md:364, 610`, `README.md:116, 245`, `AGENTS.md:21`
+- `BACKLOG.md:19, 63, 68, 230, 436` (ADR-001-Kurzform, Stack-Tabelle, Monorepo-Layout, HUM-015-Zeile), `backlog/CONVENTIONS.md:71, 387`, `backlog/sprint-5.md:74` (HUM-057, „hudsucker-Optionen")
+- `daemon/crates/proxy/src/core.rs:6-18` (Doc-Kommentar verweist auf ADR-0019)
+
+### Spezifikation
+ADR-0019 nach `docs/adr/0000-template.md` (sieben MADR-Überschriften, `Status: Accepted`, `Datum`): Kontext (Spike-Ergebnis aus `core.rs`), Entscheidung (Accept-Loop auf `UnixListener`, hyper 1 `http1::Builder` mit `with_upgrades`, `tokio-rustls`, `rcgen` über `LeafCache`), Konsequenzen (kein TCP-Port auf dem Host, drei Ports statt einer Bibliothek, was bei einem Wechsel zu tun wäre), Betroffene Issues (HUM-015, HUM-017, HUM-023, HUM-024, HUM-045). ADR-0001 behält Titel und Text, bekommt `Status: Superseded by ADR-0019` und einen Satz am Kopf, dass die Rust-Entscheidung in ADR-0019 fortgilt. `docs/adr/README.md` bekommt die Zeile und den Status-Wechsel.
+
+Textstellen: „hudsucker-Wrapper" wird „Proxy-Kern auf hyper 1" (`ARCHITECTURE.md:15`, `BACKLOG.md:230, 436`); die Stack-Tabelle `BACKLOG.md:19` nennt „hyper 1 + rustls + rcgen, eigener Accept-Loop (ADR-0019)"; `AGENTS.md:21` „hyper-based MITM proxy"; `README.md:116` „A MITM proxy built on hyper and rustls"; `SECURITY.md:364` streicht „(über `hudsucker`)", `:610` nennt die Entscheidung statt des Spikes. `CONVENTIONS.md:71` streicht `hudsucker 0.25 mit Features ...` aus der Stack-Zeile; `:387` bleibt als Protokoll des Spikes und bekommt den Verweis auf ADR-0019.
+
+### Schritte
+1. ADR-0019 schreiben, ADR-0001 umstellen, Index. Prüfen: `bash docs/adr/check.sh` meldet 19 ADRs, konsistent.
+2. Textstellen nachziehen. Prüfen: `grep -rn hudsucker README.md AGENTS.md docs/ARCHITECTURE.md docs/SECURITY.md docs/adr/0015-ports-and-adapters.md BACKLOG.md backlog/CONVENTIONS.md backlog/sprint-5.md` trifft nur historische Nennungen (ADR-0001, CONVENTIONS 4.10 Spike-Protokoll, BACKLOG ADR-001-Kurzform als abgelöst markiert).
+3. `core.rs` Doc-Kommentar verweist auf ADR-0019. Prüfen: `cargo doc -p humanitl-proxy --no-deps` ohne Warnung.
+
+### Tests
+- `docs/adr/check.sh` (bestehend): Nummerierung, Index, Status-Vokabular, sieben Überschriften.
+- `scripts/ci/lint-docs.sh` grün.
+- Der grep aus Schritt 2 als Kriterium.
+
+### Akzeptanzkriterien
+- [ ] `docs/adr/0019-hyper-accept-loop.md` existiert, `bash docs/adr/check.sh` meldet `19 ADRs, template and index are consistent`.
+- [ ] `grep -n '^Status:' docs/adr/0001-rust-hudsucker.md` liefert `Status: Superseded by ADR-0019`, und ADR-0019 nennt ADR-0001 im Kontext.
+- [ ] `grep -rn hudsucker README.md AGENTS.md docs/ARCHITECTURE.md docs/SECURITY.md docs/adr/0015-ports-and-adapters.md` ist leer; in `BACKLOG.md` und `backlog/CONVENTIONS.md` trifft es nur Stellen, die die Ablösung oder das Spike-Protokoll nennen.
+- [ ] `grep -n 'ADR-0019' daemon/crates/proxy/src/core.rs` trifft im Doc-Kommentar.
+- [ ] `make check` grün.
+
+### Fallstricke
+- Die Entscheidung „Rust, nicht mitmproxy" darf nicht mit abgelöst werden; ADR-0019 wiederholt sie ausdrücklich.
+- `BACKLOG.md` 2 ist die Kurzform der ADRs; die Überschrift „ADR-001 Daemon in Rust auf hudsucker" wird umbenannt, der Absatz sagt in einem Satz, was ADR-0019 ersetzt hat. Nichts löschen, was die Entscheidung erklärt.
+- `check.sh` kennt nur `Accepted`, `Superseded by ADR-NNNN`, `Deprecated`; keine eigene Schreibweise erfinden.
+
+### Referenzen
+`docs/adr/README.md` (Regeln, Index), `docs/adr/0000-template.md`, `docs/adr/0001-rust-hudsucker.md`, `docs/adr/0015-ports-and-adapters.md`; `daemon/crates/proxy/src/core.rs:6-18`; `backlog/CONVENTIONS.md` 4.10 (Spike); `backlog/sprint-1.md` HUM-015 Schritt 0; BACKLOG.md 2, 3.2.
+
+---
+
+## HUM-113 · `escape-launch` ist verwaist
+Sprint: 1 · Größe: S · Abhängigkeiten: HUM-064 · Blockiert: keine
+
+### Kontext
+`daemon/crates/sandbox/src/bin/escape-launch.rs` (1111 Zeilen) war der Starter des Escape-Harness aus HUM-006. Seit HUM-064 starten alle Suiten über `humanitl sandbox run --profile test` (`tests/escape/run.sh:20` sagt es aus, `:316` tut es); `grep -rn escape-launch Makefile .github scripts` findet keinen Aufruf. Das Binary wird weiter mit `cargo build --workspace` übersetzt, trägt neun Unit-Tests und eine zweite Kopie der Logik „Bericht abwarten, Garantien prüfen, bei Rot beenden", die `docs/SECURITY.md:629-631` und `backlog/CONVENTIONS.md:476` als einen der Wege in die Sandbox nennen, die sich gleich verhalten müssen. Zwei Kopien einer Sicherheitslogik, von denen eine niemand mehr ausführt, driften. (`SANDBOX_010` bleibt: `daemon/bin/humanitl/src/cmd/sandbox.rs:371` baut ihn.)
+
+### Ziel
+Es gibt einen Testweg in die Sandbox, `humanitl sandbox run`. Das Binary ist gelöscht, die Behauptungen seiner Tests, die der CLI-Weg noch nicht deckt, sind dorthin gewandert, und kein Dokument nennt `escape-launch` mehr als Weg.
+
+### Nicht-Ziel
+Änderungen an `humanitl sandbox run` über die übernommenen Tests hinaus. Die Escape-Suiten selbst.
+
+### Betroffene Pfade
+- `daemon/crates/sandbox/src/bin/escape-launch.rs` (gelöscht), `daemon/crates/sandbox/Cargo.toml` (falls ein `[[bin]]`-Eintrag entsteht oder entfällt)
+- `daemon/bin/humanitl/tests/cli.rs` (übernommene Tests)
+- `tests/escape/README.md:79, 171`, `docs/SECURITY.md:625-631` (Tabelle unter 10, Punkt 6b), `backlog/CONVENTIONS.md:476`
+- `backlog/sprint-0.md` HUM-006 (Vermerk im Kopf des Issues, dass der Starter durch HUM-064 ersetzt wurde)
+
+### Spezifikation
+Vor dem Löschen: die neun Tests des Binaries gegen `daemon/bin/humanitl/tests/cli.rs` und `daemon/crates/sandbox/tests/launcher.rs` abgleichen. Jede Behauptung, die dort fehlt (Beispiel: Platzhalter-Socket unter dem erwarteten Pfad, leere CA-Datei unter `<state>`, `SANDBOX_010` bei fremder Argumentform), wird als Test am CLI-Weg neu geschrieben oder mit einem Satz im Commit-Body als durch die Suiten abgedeckt erklärt. Danach Datei löschen. die Tabelle unter `docs/SECURITY.md` 10, Punkt 6b, hat zwei Zeilen (Daemon, `humanitl sandbox run`); CONVENTIONS `:476` beschreibt das Verhalten für `humanitl sandbox run`.
+
+### Schritte
+1. Testabgleich, Ergebnis als Liste im Commit-Body. Prüfen: jede der neun Behauptungen hat einen Ort oder einen Satz.
+2. Datei löschen, Workspace bauen. Prüfen: `cargo build --workspace --all-targets` grün, `cargo test -p humanitl-sandbox` grün mit entsprechend weniger Tests.
+3. Dokumente nachziehen. Prüfen: grep unten.
+4. Escape-Harness fahren. Prüfen: gleiche Zahl grüner Fälle wie vorher.
+
+### Tests
+- Bestehende Suiten: `./tests/escape/run.sh` mit derselben Bilanz (heute 104 Fälle, 96 grün, 8 übersprungen).
+- Übernommene Tests in `cli.rs`, benannt im Commit-Body.
+
+### Akzeptanzkriterien
+- [ ] `test -e daemon/crates/sandbox/src/bin/escape-launch.rs` schlägt fehl; `cargo build --workspace --all-targets` grün.
+- [ ] `grep -rn 'escape-launch' --exclude-dir=target --exclude-dir=.git --exclude-dir=.claude .` trifft nur `backlog/` (Historie) und keinen Satz, der ihn als Weg beschreibt.
+- [ ] die Tabelle unter `docs/SECURITY.md` 10, Punkt 6b, hat zwei Zeilen; `backlog/CONVENTIONS.md:476` nennt `humanitl sandbox run`.
+- [ ] `./tests/escape/run.sh` endet mit derselben Zahl grüner Fälle wie vor dem Commit (Zahlen im Commit-Body).
+- [ ] Der Commit-Body listet die neun Tests des Binaries und sagt zu jedem, wo seine Behauptung jetzt lebt.
+
+### Fallstricke
+- Nicht löschen, bevor der Abgleich steht; die neun Tests sind die einzige Beschreibung dessen, was das Binary konnte.
+- `SANDBOX_010..012` bleiben registriert und gebaut (CLI); nicht mit HUM-108s Lint verwechseln.
+- `tests/escape/README.md:79` erklärt Geschichte; ein Satz Geschichte darf bleiben, aber nicht als Anleitung.
+
+### Referenzen
+`backlog/sprint-0.md` HUM-006; `backlog/sprint-1.md` HUM-064; `tests/escape/run.sh:19-21, 316`; `docs/SECURITY.md` 10 (Punkt 6b); `backlog/CONVENTIONS.md:476`; `daemon/crates/sandbox/src/bin/escape-launch.rs:1-30`.
