@@ -239,6 +239,55 @@ void main() {
     expect(pb.Diagnostic().toDomain().fix, isNull);
   });
 
+  test('flow_diagnostic_carries_the_flow_id', () {
+    // Feld 16 nennt den Fluss, zu dem der Befund gehört; Feld 12 nennt keinen.
+    // Fällt die Kennung hier weg, kann keine Ansicht den Befund mehr an die
+    // Anfrage hängen, die gerade gescheitert ist. Rot, sobald `convert.dart`
+    // `flowId` wieder weglässt.
+    final pb.Diagnostic refused = pb.Diagnostic()
+      ..code = 'TLS_001'
+      ..severity = pb.Severity.SEVERITY_WARNING
+      ..why = 'curl in the sandbox does not trust the Humanitl CA yet';
+    final FlowEvent? event =
+        (pb.FlowEvent()
+              ..flowDiagnostic = (pb.FlowEvent_FlowDiagnostic()
+                ..flowId = '018f0001-0000-7000-8000-000000060000'
+                ..diagnostic = refused))
+            .toDomain();
+    expect(event, isA<FlowEventDiagnostic>());
+    final FlowEventDiagnostic withFlow = event! as FlowEventDiagnostic;
+    expect(
+      withFlow.flowId,
+      const FlowId('018f0001-0000-7000-8000-000000060000'),
+    );
+    // Und über den gemeinsamen Getter, den jeder Aufrufer benutzt, der nur
+    // ein `FlowEvent` in der Hand hat.
+    expect(
+      (withFlow as FlowEvent).flowId,
+      const FlowId('018f0001-0000-7000-8000-000000060000'),
+    );
+    expect(withFlow.diagnostic.code, 'TLS_001');
+
+    final FlowEvent? plain = (pb.FlowEvent()..diagnostic = refused).toDomain();
+    expect(plain, isA<FlowEventDiagnostic>());
+    final FlowEventDiagnostic sessionWide = plain! as FlowEventDiagnostic;
+    expect(sessionWide.flowId, isNull);
+    expect((sessionWide as FlowEvent).flowId, isNull);
+
+    // Ein leeres Feld 16 ist keine Kennung. Die ganze Unterscheidung „gehört
+    // zu einem Fluss" gegen „gehört zur Sitzung" läuft über null; ein
+    // `FlowId('')` wäre ein Fluss, den es nicht gibt.
+    // Rot, sobald der Zweig wieder bedingungslos `FlowId(...)` schreibt.
+    final FlowEvent? empty =
+        (pb.FlowEvent()
+              ..flowDiagnostic = (pb.FlowEvent_FlowDiagnostic()
+                ..flowId = ''
+                ..diagnostic = refused))
+            .toDomain();
+    expect((empty! as FlowEventDiagnostic).flowId, isNull);
+    expect(empty.flowId, isNull);
+  });
+
   test('FlowFilter becomes a ListFlowsRequest', () {
     final pb.ListFlowsRequest request = const FlowFilter(
       query: 'host:github.com',

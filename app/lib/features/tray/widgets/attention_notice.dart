@@ -9,6 +9,7 @@ library;
 import 'package:flutter/widgets.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/ui/diagnostic_severity.dart';
 import '../../../core/ui/fix_control.dart';
 import '../../../core/ui/h_diagnostic_card.dart';
 import '../../../core/ui/ui.dart';
@@ -41,8 +42,8 @@ class AttentionNoticeCard extends StatelessWidget {
         children: <Widget>[
           HDiagnosticCard(
             code: diagnostic.code,
-            severityLabel: _severityLabel(l10n, diagnostic.severity),
-            color: _severityColor(tokens, diagnostic.severity),
+            severityLabel: severityLabel(l10n, diagnostic.severity),
+            color: severityColor(tokens, diagnostic.severity),
             title: title,
             why: why,
             detail: diagnostic.why.isEmpty ? null : diagnostic.why,
@@ -83,21 +84,5 @@ class AttentionNoticeCard extends StatelessWidget {
           diagnostic.title.isEmpty ? diagnostic.code : diagnostic.title,
           diagnostic.why,
         ),
-      };
-
-  static String _severityLabel(AppLocalizations l10n, Severity severity) =>
-      switch (severity) {
-        Severity.info => l10n.diagSeverityInfo,
-        Severity.warning => l10n.diagSeverityWarning,
-        Severity.error => l10n.diagSeverityError,
-        Severity.blocking => l10n.diagSeverityBlocking,
-      };
-
-  /// The severity's hue. Never the blocked red: red means blocked.
-  static Color _severityColor(HTokens tokens, Severity severity) =>
-      switch (severity) {
-        Severity.info => tokens.colors.accent,
-        Severity.warning => tokens.state.held,
-        Severity.error || Severity.blocking => tokens.state.error,
       };
 }
