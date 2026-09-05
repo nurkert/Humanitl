@@ -11,6 +11,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
+import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/rules/widgets/draw_in.dart';
 import 'package:humanitl/features/rules/widgets/rule_row.dart';
@@ -34,6 +35,70 @@ void main() {
     );
     return client;
   }
+
+  // Farbe ist nie der einzige Kanal (`docs/UX.md` 3.3, Regel 2). Für eine
+  // ausgeschaltete Regel ist der zweite Kanal das Zeichen, und es trägt nur,
+  // solange es mit keinem Zeichen zusammenfällt, das eine wirksame Regel
+  // trägt. Geprüft wird das über alle Aktionen und nicht an der einen Regel,
+  // die eine Vorrichtung gerade anlegt: fiele das Aus-Zeichen später mit einem
+  // Aktions-Zeichen zusammen, verlöre die Zeile einen Kanal, ohne dass ein
+  // Bildschirmtest das merkte.
+  test('the switched-off glyph is no action glyph', () {
+    const Color ink = Color(0xFF000000);
+    HGlyph glyphOf(Widget drawn) => (drawn as HGlyphIcon).glyph;
+
+    final HGlyph off = glyphOf(
+      ruleActionGlyph(RuleAction.block, ink, disabled: true),
+    );
+    for (final RuleAction action in RuleAction.values) {
+      expect(
+        glyphOf(ruleActionGlyph(action, ink)),
+        isNot(off),
+        reason: 'an effective $action rule wears the switched-off glyph',
+      );
+      expect(
+        glyphOf(ruleActionGlyph(action, ink, disabled: true)),
+        off,
+        reason: 'a switched-off $action rule wears something else',
+      );
+    }
+    // Und es ist auch nicht das Zeichen einer Regel, deren Zeit abgelaufen
+    // ist: das sind zwei Gründe und zwei Formen.
+    expect(
+      glyphOf(ruleActionGlyph(RuleAction.block, ink, expired: true)),
+      isNot(off),
+    );
+    // Treffen beide Gründe je zusammen, gewinnt das Ausschalten: das ist die
+    // Entscheidung eines Menschen, das Ablaufen ist das Ausbleiben einer.
+    // Heute kann der Fall nicht eintreten -- eine mitgelieferte Regel läuft
+    // nie ab --, und genau deshalb steht der Vorrang hier und nicht als
+    // Annahme in einem Kommentar.
+    expect(
+      glyphOf(
+        ruleActionGlyph(RuleAction.block, ink, expired: true, disabled: true),
+      ),
+      off,
+    );
+  });
+
+  // Die Zeile bietet den Papierkorb oder den Schalter, nie beides: eine
+  // mitgelieferte Regel löscht man nicht, eine eigene schaltet man nicht ab,
+  // und der Daemon lehnt beides mit `RULES_010` ab. Ohne diese Zusicherung
+  // hinge die Trennung an der Reihenfolge zweier Zweige in `_actionSlot`.
+  test('a row is never given both the bin and the switch', () {
+    expect(
+      () => RuleRow(
+        rule: testRule(n: 1),
+        index: 0,
+        total: 1,
+        selected: false,
+        onOpen: () {},
+        onDelete: () {},
+        onToggleDisabled: () {},
+      ),
+      throwsAssertionError,
+    );
+  });
 
   testWidgets('the list survives double text scale', (
     WidgetTester tester,
@@ -75,16 +140,30 @@ void main() {
     WidgetTester tester,
   ) async {
     await pumpRules(tester, client: seeded());
-    await hoverOver(tester, find.byType(RuleRow).first);
+    final TestGesture pointer = await hoverOver(
+      tester,
+      find.byType(RuleRow).first,
+    );
 
-    for (final Finder target in <Finder>[
-      find.byKey(const ValueKey<String>('rule-grip-0')),
-      find.byKey(const ValueKey<String>('rule-delete-0')),
-    ]) {
+    void measure(Finder target) {
       final Size size = tester.getSize(target);
       expect(size.width, greaterThanOrEqualTo(HSize.hitMin));
       expect(size.height, greaterThanOrEqualTo(HSize.hitMin));
     }
+
+    measure(find.byKey(const ValueKey<String>('rule-grip-0')));
+    measure(find.byKey(const ValueKey<String>('rule-delete-0')));
+
+    // Der Schalter der mitgelieferten Regel steht im selben Slot und ist
+    // dasselbe Gatter wert: Ausnahme 2 aus `docs/UX.md` 6 gilt für jedes
+    // Control, nicht nur für die, die es vor ihm gab.
+    await pointer.moveTo(
+      tester.getCenter(
+        find.byKey(ValueKey<String>(FakeDaemonClient.bundledBlockRule.value)),
+      ),
+    );
+    await tester.pumpAndSettle();
+    measure(find.byKey(const ValueKey<String>('rule-disable-0')));
 
     // Und die beiden Controls des Editors.
     await tester.tap(find.byKey(const Key('rules-new')));

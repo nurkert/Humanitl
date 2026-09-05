@@ -2691,6 +2691,94 @@ ARB-Schlüssel, `en` Quelle, `de` Übersetzung, ans Ende beider Dateien angehän
 - [ ] `grep -c '"rulesDisable"\|"rulesEnable"\|"rulesOriginBundledOff"' app/l10n/app_en.arb app/l10n/app_de.arb` ergibt je 3; `make flutter-codegen` läuft ohne Warnung.
 - [ ] `make check` grün.
 
+### Stand (2026-09-05): umgesetzt, zwei Abweichungen von der Spezifikation
+
+Gebaut: `Rule.disabled`, beide Richtungen in `convert.dart`, `setRuleDisabled`
+in allen drei Clients, `RulesNotifier.setDisabled`, der Schalter in
+`rule_row.dart` und `rules_list.dart` samt Darstellung, fünf ARB-Schlüssel plus
+einer (siehe unten), vierzehn Tests, die erneuerten Goldens und der Absatz in
+`backlog/CONVENTIONS.md` 4.16. `flutter analyze` ist sauber, `flutter test`
+grün bis auf sechs Goldens des Isolations-Bildschirms, die schon vorher rot
+waren (176 px Unterschied, HUM-041, kein Bezug zu diesem Issue).
+
+**Der Schalter ist ein `HIconButton`, kein beschrifteter `HButton`.** Der
+Aktionsslot einer Zeile ist `HSize.rowActionSlot` = 28 px breit
+(`app/packages/ui/lib/src/widgets/h_row.dart`), und ein `HButton` der Größe
+`sm` verbraucht davon 20 px allein für seine waagerechte Polsterung. Die
+Beschriftung „Ausschalten" hätte den Slot gesprengt. Sie steht deshalb als
+Hover-Label und als Semantik am Knopf, wie beim Griff daneben; im Slot steht
+das Glyph. Gewählt ist `HGlyph.bolt`, weil der Blitz in diesem Vokabular „eine
+Regel hat entschieden" heißt und der Knopf genau das an- und ausschaltet. Ein
+Kreuz an dieser Stelle läse sich als der Papierkorb, der bei einer eigenen
+Regel dort steht.
+
+**Drei Kanäle statt zweier — Layout, nicht Spezifikationsfehler.** Die
+Spezifikation nennt Dämpfung und Herkunftswort und überlässt die Breiten dem
+Bau. Gemessen weicht das Herkunftswort als Erstes aus der Zeile
+(`ruleRowOriginBelow` = 420 px), und die Liste steht im Standardfenster in
+einer Pane von rund 370 px: die Zeile hätte in der üblichen Breite nur die
+Farbe getragen, und Farbe ist nie der einzige Kanal (`docs/UX.md` 3.3,
+Regel 2). Deshalb ist das Zustands-Glyph bei `rule.disabled` das Kreuz
+`HGlyph.close`, in jeder Breite, und unterhalb von 420 px bleibt vom
+Herkunftswort das eine Wort stehen, das den Zustand trägt (`rulesOriginOff`,
+„aus"). Das ganze Wort stehenzulassen war keine Wahl: „mitgeliefert,
+ausgeschaltet" ist in der Testschrift 231 px breit und drückte den Regelsatz
+auf 35 px zusammen — und der Satz ist die Regel (`docs/UX.md` 3.4). Das Kreuz
+ist nicht die Uhr: abgelaufen und ausgeschaltet bleiben zwei Formen für zwei
+Dinge.
+
+**Der Fake antwortet auch auf eine unbekannte Id mit `RULES_010`.** Die
+Spezifikation schreibt für diesen Fall `_unknownRule` (`IPC_005`) vor. Der
+Daemon kennt die Unterscheidung nicht: `RulesStore::set_bundled_disabled`
+sucht die Id in der Liste der mitgelieferten Regeln und antwortet auf jeden
+Fehlschlag mit demselben Satz („there is no bundled rule with the id …; only
+bundled rules are disabled instead of removed"). Ein Fake, der hier zwei Codes
+kennt, brächte der Oberfläche ein Verhalten bei, das es nicht gibt.
+
+**Aufruf und Befund liegen in `rules_list.dart`, nicht in der Zeile.** Der
+Aktionsslot wird nur bei Hover und Fokus gebaut. Eine erste Fassung ließ die
+Zeile selbst rufen; nahm der Zeiger die Zeile, während die Anfrage unterwegs
+war, wurde der Schalter abgebaut und die Ablehnung verschwand mit ihm — der
+Mensch klickte, sah nichts geschehen und erfuhr den Grund nie. Aufruf,
+laufender Zustand (`_disabling`) und der Streifen liegen deshalb in der Liste,
+wie beim Löschen seit HUM-033. Die Zeile nimmt `onToggleDisabled` und
+`togglingDisabled` entgegen und zeichnet nur; damit stimmt auch ihre Kopfdoku
+wieder („Nothing here decides anything ... calls back"). Die Merkung
+„unterwegs" wird in einem `finally` gelöst, und ein Wurf, der kein
+`Diagnostic` ist, geht an `FlutterError.reportError`: sonst bliebe der Schalter
+nach einem abgeräumten Kanal für immer tot, und der Fehler selbst verschwände
+in einem Future, das niemand beobachtet.
+
+**Der Editor sagt denselben Zustand wie die Zeile.** Ein Klick auf die Zeile
+öffnet die Regel im Editor, und der ist die größere Hälfte des Bildschirms.
+Stünde dort Aktion, Host und Frist einer ausgeschalteten Regel in voller
+Stärke, läse sich die Regel als wirksam — dieselbe Behauptung, die dieses
+Feature in der Liste abstellt, eine Ebene tiefer. `_BundledNotice` trägt
+deshalb dieselben drei Kanäle: das Kreuz statt des Schlosses, die Farbe einer
+Regel, die nichts entscheidet, und das Wort „mitgeliefert, ausgeschaltet" als
+Feststellung über dem Satz, der das Abschalten nur anbietet.
+
+**Ein Wurf, der kein `Diagnostic` ist, geht an `FlutterError.reportError` und
+nicht in den Streifen.** Der Schalter wird dabei frei, aber der Mensch sieht
+keinen Grund. Das ist bewusst: `DaemonClient` sagt zu, dass jeder Fehlschlag
+als `DaemonException` mit `Diagnostic` ankommt, also ist alles andere ein
+Programmfehler und keine Lage, für die es einen registrierten Code gäbe; ein
+erfundener Code stünde als Behauptung im Streifen (4.6, 4.13). `_delete` und
+`_reorder` melden in derselben Lage bis heute gar nichts.
+
+**Das Zeichen für „ausgeschaltet" fällt mit keinem Aktions-Zeichen zusammen.**
+Ein Review hat vermutet, `RuleAction.block` trage ebenfalls `HGlyph.close` und
+der dritte Kanal existiere für mitgelieferte Block-Regeln nicht. Am Code
+gemessen stimmt das nicht: `block` trägt `HGlyph.shieldX`, `allow`
+`arrowUpRight`, `ask` `hourglass`, `redact` `redactBar`, abgelaufen `clockX`;
+ein `HGlyph.check` gibt es im Vokabular nicht. Die Mutationsprobe „Streichen
+des `disabled`-Zweigs in `ruleActionGlyph`" tötet
+`disabled_bundled_row_is_drawn_off`. Berechtigt war die Sorge trotzdem, denn
+belegt war die Zusicherung nur an der einen Regel, die die Vorrichtung anlegt.
+Sie wird jetzt über alle Aktionen geprüft (`rules_a11y_test.dart`, „the
+switched-off glyph is no action glyph"), und der Bildschirmtest stellt eine
+eingeschaltete mitgelieferte `allow`-Regel daneben.
+
 ### Fallstricke
 - `convert.dart`, `fake_daemon_client.dart` und `daemon_client.dart` sind geteilte Dateien (CLAUDE.md): nur den eigenen Abschnitt ändern, neue Einträge ans Ende, die Datei unmittelbar vor jedem Schreiben neu einlesen, nie im Ganzen neu schreiben.
 - Der Rust-Fake (`fake/mod.rs:687-693`) ignoriert eine Anfrage für eine nicht mitgelieferte Regel stillschweigend, während `rules_store.rs:598-603` `RULES_010` antwortet; sein Kommentar behauptet Parität. Der Dart-Fake folgt dem Daemon, nicht dem Rust-Fake. Die Abweichung im Rust-Fake ist ein eigener Befund unter `daemon/` und wird hier nur genannt.

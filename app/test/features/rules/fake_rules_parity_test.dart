@@ -225,6 +225,67 @@ void main() {
     });
   });
 
+  group('a bundled rule is switched off instead of removed', () {
+    Rule bundledIn(RuleSet set) => set.rules.firstWhere(
+      (Rule rule) => rule.id == FakeDaemonClient.bundledBlockRule,
+    );
+
+    test('set_disabled_toggles_a_bundled_rule', () async {
+      final RulesTestClient client = RulesTestClient();
+      expect(bundledIn(await client.listRules()).disabled, isFalse);
+
+      final RuleSet off = await client.setRuleDisabled(
+        FakeDaemonClient.bundledBlockRule,
+        disabled: true,
+      );
+      expect(bundledIn(off).disabled, isTrue);
+      // Sie steht weiter in der Liste: abschalten ist kein Löschen.
+      expect(off.rules.where((Rule rule) => rule.bundled), hasLength(1));
+
+      final RuleSet on = await client.setRuleDisabled(
+        FakeDaemonClient.bundledBlockRule,
+        disabled: false,
+      );
+      expect(bundledIn(on).disabled, isFalse);
+      // Und der Zustand kommt aus der Antwort, nicht aus dem Aufruf: eine
+      // neue Abfrage sagt dasselbe.
+      expect(bundledIn(await client.listRules()).disabled, isFalse);
+    });
+
+    test('set_disabled_refuses_an_own_rule_with_rules_010', () async {
+      final RulesTestClient client = RulesTestClient();
+      client.savedRules.add(testRule(n: 1));
+      // Der Speicher kennt für beide Fälle einen Satz: eine eigene Regel und
+      // eine unbekannte Id sind für ihn dasselbe, weil Abschalten nur für
+      // mitgelieferte Regeln erklärt ist (`rules_store.rs`,
+      // `set_bundled_disabled`). Der Rust-Fake schweigt hier statt zu
+      // antworten; der Dart-Fake folgt dem Daemon.
+      for (final RuleId id in <RuleId>[testRuleId(1), testRuleId(9)]) {
+        await expectLater(
+          client.setRuleDisabled(id, disabled: true),
+          throwsA(
+            isA<DaemonException>()
+                .having(
+                  (DaemonException e) => e.code,
+                  'code',
+                  DiagnosticCodes.ruleBundled,
+                )
+                .having(
+                  (DaemonException e) => e.diagnostic.why,
+                  'why',
+                  'there is no bundled rule with the id ${id.value}; only '
+                      'bundled rules are disabled instead of removed',
+                ),
+          ),
+        );
+      }
+      // Der Regelsatz ist unverändert: keine Regel ist abgeschaltet.
+      final RuleSet after = await client.listRules();
+      expect(after.rules.where((Rule rule) => rule.disabled), isEmpty);
+      expect(after.rules, hasLength(2));
+    });
+  });
+
   test(
     'a dry run without a limit reads the number the contract names',
     () async {

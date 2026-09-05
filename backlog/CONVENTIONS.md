@@ -767,6 +767,72 @@ Hinweis, der eine Auswertung behauptet (`rulesChainSessionFirst`), bleibt
 trotzdem wahr, weil nur Sitzungsregeln temporär sind und eine Sitzungsregel nie
 abläuft.
 
+**Der Schalter mitgelieferter Regeln (HUM-105, 2026-09-05).** Eine
+mitgelieferte Regel trägt an der Stelle, an der eine eigene ihren Papierkorb
+hat, den Schalter „Ausschalten" beziehungsweise „Einschalten"; welche der
+beiden Handlungen eine Zeile anbietet, entscheidet der Aufrufer, indem er genau
+einen der beiden Rückrufe reicht. Der Slot fasst kein beschriftetes Control:
+`HSize.rowActionSlot` ist 28 Pixel breit, und ein `HButton` der Größe `sm`
+verbraucht davon 20 allein für seine waagerechte Polsterung. Das Wort steht
+deshalb als Hover-Label und als Semantik am Knopf, im Slot steht `HGlyph.bolt`
+— der Blitz heißt in diesem Vokabular „eine Regel hat entschieden", und genau
+das schaltet der Knopf an und aus.
+
+**Eine abgeschaltete Regel wird über drei Kanäle als abgeschaltet erkennbar,
+und Farbe ist nur einer davon.** Die Zeile wird gedämpft wie eine abgelaufene
+(`HFlowState.timedOut`); ihr Zustands-Glyph ist das Kreuz `HGlyph.close` statt
+des Handlungs-Glyphs, in jeder Breite; und das Herkunftswort lautet
+„mitgeliefert, ausgeschaltet", unterhalb von `ruleRowOriginBelow` gekürzt auf
+das eine Wort, das den Zustand trägt. Die Kürzung ist keine Sparsamkeit,
+sondern gemessen: das volle Wort verbrauchte in der üblichen Panebreite mehr
+Platz als der Regelsatz selbst, und der Satz ist die Regel (`docs/UX.md` 3.4).
+Das Kreuz ist bewusst nicht die Uhr: abgelaufen und ausgeschaltet sind zwei
+Dinge — eine mitgelieferte Regel läuft nie ab, eine eigene wird nie
+abgeschaltet —, sie teilen die Dämpfung und sonst nichts.
+
+**Der Aufruf gehört dem Widget, das seine Antwort noch erlebt.** Der
+Aktionsslot einer Zeile wird nur bei Hover und Fokus gebaut. Läge der laufende
+Aufruf im Slot, nähme ein Zeiger, der die Zeile verlässt, den Befund einer
+Ablehnung mit ins Nichts: der Mensch klickte, sähe nichts geschehen und
+erführe nicht, dass der Daemon abgelehnt hat. Aufruf, laufender Zustand und
+Befund liegen deshalb in der Liste, wie beim Löschen seit HUM-033. Die Merkung
+„unterwegs" wird in einem `finally` gelöst: bricht der Aufruf mit etwas ab, das
+kein `Diagnostic` ist, bliebe der Schalter sonst für immer tot, und ein Knopf,
+den nur ein Neustart wiederbelebt, ist schlimmer als ein sichtbarer Fehler. Ein
+solcher Wurf ist nach dem Vertrag des Ports ein Programmfehler und bekommt
+keinen erfundenen Code; er geht an `FlutterError.reportError`, statt in einem
+Future zu verschwinden, das niemand beobachtet. Der Zustand selbst kommt
+ausschließlich aus der Antwort: der Schalter ist deaktiviert, solange die
+Anfrage unterwegs ist, und nichts nimmt vorweg, was der Daemon noch nicht
+bestätigt hat (4.13).
+
+**Was die Zeile sagt, sagt der Editor auch.** Ein Klick auf eine Zeile öffnet
+die Regel im Editor, und der nimmt mehr Fläche ein als die Zeile. Ein
+Zustand, den nur die Zeile trägt, wird von der größeren Hälfte des Bildschirms
+daneben stillschweigend bestritten: `_BundledNotice` trägt für eine
+ausgeschaltete Regel dieselben drei Kanäle wie die Zeile — Kreuz statt
+Schloss, die Farbe einer Regel, die nichts entscheidet, und das Wort als
+Feststellung. Ein Satz, der das Abschalten anbietet, ist keine Auskunft
+darüber, ob schon abgeschaltet wurde.
+
+**Das Zeichen für „ausgeschaltet" ist ein eigenes und fällt mit keinem
+Aktions-Zeichen zusammen.** Es ist das Kreuz `HGlyph.close`; `allow` trägt
+`arrowUpRight`, `block` `shieldX`, `ask` `hourglass`, `redact` `redactBar`, und
+eine abgelaufene Regel die Uhr `clockX`. Diese Zusicherung hängt nicht an der
+Regel, die eine Vorrichtung gerade anlegt: sie wird über alle Aktionen geprüft
+(`rules_a11y_test.dart`, „the switched-off glyph is no action glyph"), damit
+der zweite Kanal nicht eines Tages still verlorengeht, weil jemand ein
+Aktions-Zeichen auf dieselbe Form legt. Treffen „ausgeschaltet" und
+„abgelaufen" je zusammen, gewinnt das Ausschalten: das ist die Entscheidung
+eines Menschen, das Ablaufen das Ausbleiben einer.
+
+**Eine Zeile bietet den Papierkorb oder den Schalter, nie beides.** Welche der
+beiden Handlungen es gibt, sagt der Aufrufer; damit die Trennung nicht an der
+Reihenfolge zweier Zweige hängt, hält ein `assert` im Konstruktor von
+`RuleRow` sie fest. Der Daemon lehnt beide Handlungen an der falschen Regel
+mit `RULES_010` ab, und eine Oberfläche, die eine davon anbietet, verspräche
+etwas Unmögliches.
+
 ### 4.17 Aus der Umsetzung des Agent-Adapters (HUM-037, HUM-038, 2026-09-04)
 
 Abweichungen von `backlog/sprint-3.md`, die dauerhaft gelten. Alle sind an der

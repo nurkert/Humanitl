@@ -5,6 +5,7 @@
 import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
+import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/rules/providers/editor.dart';
 import 'package:humanitl/features/rules/widgets/rule_editor.dart';
 import 'package:humanitl/features/rules/widgets/rule_row.dart';
@@ -155,6 +156,40 @@ void main() {
     expect(find.text(l10n.rulesSaveFailedTitle), findsOneWidget);
     expect(find.text(DiagnosticCodes.hostPatternInvalid), findsOneWidget);
     expect(find.textContaining('match.host (line 4)'), findsOneWidget);
+  });
+
+  testWidgets('a_switched_off_rule_says_so_in_the_editor_too', (
+    WidgetTester tester,
+  ) async {
+    final RulesTestClient client = RulesTestClient();
+    await pumpRules(tester, client: client);
+
+    Finder inEditor(Finder what) =>
+        find.descendant(of: find.byType(RuleEditor), matching: what);
+    Finder glyph(HGlyph wanted) => find.byWidgetPredicate(
+      (Widget widget) => widget is HGlyphIcon && widget.glyph == wanted,
+    );
+
+    // Eingeschaltet: Schloss, kein Kreuz, kein Wort über einen Zustand.
+    await tester.tap(find.byType(RuleRow).first);
+    await tester.pump();
+    expect(inEditor(glyph(HGlyph.lock)), findsWidgets);
+    expect(inEditor(glyph(HGlyph.close)), findsNothing);
+    expect(inEditor(find.text(l10n.rulesOriginBundledOff)), findsNothing);
+
+    // Ausgeschaltet: dieselben drei Kanäle wie in der Zeile. Der Editor ist
+    // die größere Hälfte des Bildschirms; stünde die Regel hier in voller
+    // Stärke, läse sie sich als wirksam.
+    client.bundledRules[0] = client.bundledRules[0].copyWith(disabled: true);
+    await tester.tap(find.byKey(const Key('rules-reload')));
+    await tester.pump();
+    await tester.pump();
+    await tester.tap(find.byType(RuleRow).first);
+    await tester.pump();
+
+    expect(inEditor(find.text(l10n.rulesOriginBundledOff)), findsOneWidget);
+    expect(inEditor(glyph(HGlyph.close)), findsWidgets);
+    expect(inEditor(glyph(HGlyph.lock)), findsNothing);
   });
 
   testWidgets('override_bundled_creates_an_ask_rule_in_front', (
