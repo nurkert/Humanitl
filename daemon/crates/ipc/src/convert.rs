@@ -38,6 +38,7 @@ use humanitl_proxy::{LlmFlavor, ProbeResult};
 use humanitl_recorder::{
     Dir, FindingRecord, FlowDetail as RecordedDetail, FlowSummary as RecordedSummary, MessageRecord,
 };
+use humanitl_sandbox::doctor::{CheckOutcome, CheckStatus, DoctorReport};
 use humanitl_sandbox::{CheckResult, IsolationCheck};
 
 use crate::domains::DomainTable;
@@ -200,6 +201,44 @@ pub fn probe_result_to_proto(result: &ProbeResult) -> v1::ProbeLlmResponse {
         latency_ms: result.latency_ms,
         diagnostics,
         endpoint_is_private: result.endpoint_is_private,
+    }
+}
+
+/// Übersetzt den Bericht des Doctors in seine Wire-Form (HUM-075).
+///
+/// Die Reihenfolge der Zeilen bleibt die des Berichts; sie ist die
+/// Anzeigereihenfolge und Teil des Vertrags. `evidence` geht durch dieselbe
+/// [`sanitize_note`] wie der Beleg einer Isolations-Prüfung: Ein Teil davon
+/// stammt aus der Fehlerausgabe fremder Programme, und Steuerzeichen darin
+/// hätten in einer Oberfläche nichts zu suchen.
+#[must_use]
+pub fn doctor_report_to_proto(report: &DoctorReport) -> v1::DoctorReport {
+    v1::DoctorReport {
+        checks: report.checks.iter().map(doctor_check_to_proto).collect(),
+    }
+}
+
+/// Übersetzt eine Zeile des Doctors in ihre Wire-Form.
+#[must_use]
+pub fn doctor_check_to_proto(outcome: &CheckOutcome) -> v1::DoctorCheck {
+    v1::DoctorCheck {
+        id: outcome.id().as_str().to_owned(),
+        status: check_status_to_proto(outcome.status()) as i32,
+        evidence: sanitize_note(outcome.evidence()),
+        diagnostic: outcome.diagnostic().map(diagnostic_to_proto),
+    }
+}
+
+/// Übersetzt den Ausgang einer Prüfung in seine Wire-Form.
+///
+/// `CHECK_STATUS_UNSPECIFIED` kommt nicht vor: Jede Zeile des Doctors trägt
+/// einen der drei Zustände, und eine Prüfung, die nicht laufen konnte, ist
+/// `WARN` mit `DOCTOR_012` und nicht „unbekannt".
+const fn check_status_to_proto(status: CheckStatus) -> v1::CheckStatus {
+    match status {
+        CheckStatus::Ok => v1::CheckStatus::Ok,
+        CheckStatus::Warn => v1::CheckStatus::Warn,
+        CheckStatus::Fail => v1::CheckStatus::Fail,
     }
 }
 

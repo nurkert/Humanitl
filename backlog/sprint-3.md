@@ -2475,6 +2475,294 @@ Ausgabe (Text): `[ok] bubblewrap 0.11.0`, `[fail] user namespaces: unshare -Ur f
 ### Referenzen
 BACKLOG.md Prinzip 9; HUM-044; Ubuntu userns-Restriktion (https://ubuntu.com/blog/ubuntu-23-10-restricted-unprivileged-user-namespaces).
 
+### Stand (2026-09-05): Daemon und Kommandozeile gebaut, zehn Abweichungen, die Oberflächenhälfte offen
+
+Gebaut sind `humanitl_sandbox::doctor` (die elf Prüfungen, Tatsachen und
+Urteil getrennt), die RPC `Doctor` im echten Dienst, der Fake, die
+Übersetzung in die Wire-Form, `humanitl doctor [--json] [--probe-llm]` und
+`docs/cli.md`. Offen bleibt `app/lib/features/setup/widgets/doctor_list.dart`;
+warum, steht unten.
+
+**1. Tatsachen und Urteil sind getrennt, statt `trait Check`.** Schritt 1 der
+Spezifikation nennt `trait Check { fn run(&self) -> CheckOutcome }`. Ein Trait
+mit einer Methode, die zugleich liest und urteilt, ist nur prüfbar, indem man
+den Rechner in den Zustand bringt, um den es geht — auf einer
+Entwicklermaschine also gar nicht, und die Prüfung „Kernel ohne
+`CONFIG_SECCOMP`" nie. Stattdessen: `doctor::probe` liest die Maschine in
+`MachineFacts`, `doctor::checks` urteilt als reine Funktion darüber, und
+`doctor::run` setzt beides zusammen. Jede der elf Prüfungen hat damit einen
+Test ohne die Lage, die sie prüft; `crates/sandbox/tests/doctor.rs` fährt drei
+vollständige Maschinen durch (gesund, kaputt, unlesbar). Auch `ADR-015` bleibt
+gewahrt: Es entsteht kein neuer Port, nur eine Datenstruktur.
+
+**2. Eine Prüfung, die nicht laufen konnte, ist `warn` mit `DOCTOR_012`.** Der
+Vertrag kennt nur `OK`, `WARN`, `FAIL`, und ein vierter Wert im Enum wäre eine
+Proto-Änderung, mit der die Oberfläche nichts anfangen kann. `ok` wäre die
+Lüge, gegen die dieses Issue gebaut ist. Der Beleg einer solchen Zeile beginnt
+deshalb mit `not measured:`, der Befund nennt Prüfung und Grund, und der `fix`
+ist der Befehl, den der Doctor versucht hat — damit trägt auch diese Zeile
+etwas Brauchbares, obwohl es nichts zu reparieren gibt. Zwei Codes über die
+elf der Spezifikation hinaus: `DOCTOR_012` „nicht durchführbar" und
+`DOCTOR_013` „nicht angesprochen". Der Unterschied ist der Kern des nächsten
+Punktes.
+
+**3. Der Doctor fasst das Netz nie von selbst an.** Die Spezifikation führt
+die LLM-Erreichbarkeit als Prüfung 8 in der Liste, ohne zu sagen, wann sie
+läuft. Sie läuft nur mit `humanitl doctor --probe-llm`, und dann über die RPC
+`ProbeLlm` (HUM-039) statt über einen zweiten HTTP-Client — `tools/check-deps.sh`
+verbietet eine ausgehende Verbindung außerhalb des `Egress`-Ports ohnehin. Vor
+dem Verbindungsaufbau steht eine Zeile auf `stderr`, die Endpunkt und Vorgehen
+nennt. Ohne den Schalter trägt die Zeile `DOCTOR_013` und den Befehl, der sie
+misst. **Die RPC `Doctor` misst sie nie**, und zwar zwangsläufig: `rpc
+Doctor(google.protobuf.Empty)` hat kein Feld, in dem ein Client um eine
+Verbindung bitten könnte, und eine Verbindung, um die niemand gebeten hat,
+baut der Daemon nicht auf. Damit erzeugt auch das Öffnen des Setup-Bildschirms
+keine Verbindung — dieselbe Zusage, die HUM-076 als Akzeptanzkriterium führt.
+Der Schalter heißt `--probe-llm` und nicht `--llm`: `--llm` ist nach
+`CONVENTIONS.md` 3.8 der Zweitname von `--llm-endpoint` und **setzt** die
+Adresse.
+
+**4. Der Bericht hat zwei Quellen, und er sagt welche.** ADR-018 verlangt die
+RPC; der Doctor beantwortet aber vor allem die Frage eines Menschen, dessen
+Daemon gerade nicht läuft. `humanitl doctor` ruft deshalb `Doctor()`, wenn ein
+Daemon antwortet, und führt sonst dieselben Prüfungen aus derselben Crate im
+eigenen Prozess aus. Es gibt keine zweite Umsetzung, nur eine zweite Stelle,
+an der dieselbe läuft; welche es war, steht als `source` in der Ausgabe, weil
+`PATH` und `$XDG_RUNTIME_DIR` des Daemons die seiner Unit sind und nicht die
+des Terminals. Zwei Zeilen kommen immer vom Client: `daemon` (nur ein Client
+weiß, ob er den Daemon erreicht — der Daemon selbst schickt sie als „nicht
+gemessen") und `llm`. Geurteilt wird über beide trotzdem in der Crate
+(`doctor::daemon_line`, `doctor::llm_line`).
+
+**5. Zwei Aufrufe brauchen eine Umgebung, `bwrap` bekommt keine.** Der erste
+Lauf auf der Entwicklungsmaschine meldete `systemd_user` und `agent` als
+„nicht gemessen" — nicht weil die Maschine kaputt war, sondern weil der Doctor
+jeden Aufruf mit `env_clear()` startete: `systemctl --user` findet ohne
+`$XDG_RUNTIME_DIR` und `$DBUS_SESSION_BUS_ADDRESS` seinen Bus nicht, und das
+Startskript von OpenCode bricht ohne `$HOME` mit `unbound variable` ab. Diese
+beiden Aufrufe bekommen jetzt genau vier Variablen (`PATH`, `HOME`,
+`XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`), nie die ganze Umgebung und nie
+eine Lader-Variable. Jeder Start von `bwrap` bleibt bei der leeren Umgebung,
+auch die Namensraum-Probe: `bwrap` bleibt als PID 1 des Namensraums stehen,
+und `/proc/1/environ` zeigte sonst die Umgebung des Nutzers (ESC-2-Befund).
+
+**6. Die Ankündigung der Verbindung lässt sich nicht abstellen.** Sie ging
+zuerst durch `Renderer::note`, und das schweigt unter `--json` und unter `-q` —
+also genau dort, wo ein Skript oder ein knapper Aufruf die Verbindung auslöst.
+Sie geht jetzt an `Renderer` vorbei direkt auf `stderr`
+(`cmd/doctor.rs::announce`). `stdout` bleibt dabei ein einziger JSON-Wert; ein
+Ausgabeschalter darf nicht bestimmen, ob ein Mensch erfährt, dass sein Rechner
+gleich eine Verbindung aufbaut.
+
+**7. Ein Grund darf nicht länger sein, als der Vertrag ihn trägt.** Auf dem Weg
+zur Oberfläche geht jedes `why` durch `sanitize_note` und wird auf
+`NOTE_MAX_CHARS` (500) gekappt. Der erste Befund von `userns` trug die
+vollständige `bwrap`-Zeile mit zwanzig Argumenten und kam beim Menschen mitten
+im Wort abgeschnitten an — gemessen am 2026-09-05 an einem `bwrap`, das die
+Namensraum-Probe verweigert. Die Zeile steht jetzt im `fix`, wo man sie
+kopiert, und der Grund nennt nur Programm, Ausgang und erste Fehlermeldung.
+`crates/sandbox/tests/doctor.rs` hält beides fest: kein `why` über
+`NOTE_MAX_CHARS`, kein Beleg über 160 Zeichen, und die Vorgabe der kaputten
+Maschine trägt die echte zwanzigteilige Kommandozeile — eine kürzere hätte den
+Fehler nie gezeigt.
+
+**8. Ein Wert, der von außen kommt, wird nie durch Interpolation zu einem
+Befehl.** Das ist in diesem Projekt der dritte Fall desselben Fehlers, und
+deshalb steht die Regel hier als eigener Absatz:
+
+- **HUM-043**: `summary::copy_command` baute ein `rm` aus einem Pfad, den der
+  Agent benannt hatte.
+- **HUM-106**: `app/lib/core/ui/shell_command.dart` interpolierte
+  `export KEY=VALUE` ungequotet in die Zwischenablage.
+- **HUM-075**, hier: `XDG_RUNTIME_DIR='/tmp/h; touch /tmp/humanitl-pwn'` ergab
+  den Vorschlag `chmod 700 /tmp/h; touch /tmp/humanitl-pwn`, und ein Mensch
+  kopiert ihn und führt ihn aus. Dieselbe Lücke bei den Pfaden von
+  `df -h`, `ls -ld` und `<program> --version`, und die Darstellung des Aufrufs
+  begann schon ungequotet in `doctor::probe`.
+
+Die Regel, die beide vorhandenen Stellen halten und die jetzt als
+`humanitl_sandbox::doctor::shell_command` für beliebig viele Wörter dasteht:
+Ein Befehl entsteht **nur**, wenn jedes Wort nicht leer ist, `sanitize_note` es
+nicht ändert, `shlex::try_quote` es entweder unverändert lässt oder in genau
+ein Paar einfacher Anführungszeichen ohne inneres `'` setzt, und `shlex::split`
+der fertigen Zeile wieder genau diese Wörter ergibt. Sonst gibt es keinen
+Befehl, sondern einen Satz, der sagt warum — im Doctor ein `FixAction::OpenUrl`
+auf die Erklärung des Codes.
+
+Damit das nicht wieder auseinanderläuft, trägt `CommandRun` jetzt **Wörter**
+und keine fertige Zeile: Aus Wörtern lässt sich ein Befehl bauen, der beweisbar
+dieselben Wörter bleibt; aus einer Zeile, in die schon jemand einen Pfad
+interpoliert hat, nicht mehr. `summary::copy_command` sollte in einem
+Folge-Issue auf `shell_command` umgebaut werden; die Datei gehört gerade einem
+anderen Agenten, deshalb steht die Regel zweimal im Baum und nicht einmal.
+
+**9. Ein Vorschlag, der den Zustand nur noch einmal anzeigt, ist keiner.**
+`DOCTOR_003` trug `grep Seccomp /proc/self/status` beziehungsweise `uname -r`,
+`DOCTOR_004` zweimal `ls -ld <pfad>`. Keiner davon behebt etwas. `DOCTOR_003`
+verweist jetzt auf die Erklärung (einen Kernel tauscht man nicht mit einer
+Zeile), `DOCTOR_004` schlägt vor, `XDG_RUNTIME_DIR` auf das eigene
+Laufzeitverzeichnis zu richten. Die Ausnahme bleibt `DOCTOR_012`: Dort **ist**
+der Befehl, den der Doctor versucht hat, das Brauchbare — wer nachsehen will,
+bekommt den Weg dorthin.
+
+**10. Kleinere Berichtigungen an der Spezifikation.** Die Tabelle nennt in
+Zeile 2 `unshare -Ur`, die Fallstricke widersprechen dem und verlangen
+`bwrap --unshare-user`; gebaut ist die zweite Fassung, und die Zeile 2 ist
+damit erledigt. Prüfung 9 sucht auch `libappindicator3` — auf Debian 14 ist
+das die einzige vorhandene, und eine Prüfung, die sie übersieht, meldete eine
+fehlende Tray-Unterstützung, die es gibt. Prüfung 3 unterscheidet zwei Fälle,
+die die Spezifikation zu einem macht: kein Feld `Seccomp` in
+`/proc/self/status` ist `fail` (Kernel ohne `CONFIG_SECCOMP`), ein Kernel
+unter 5.4 nur `warn` (es läuft womöglich, nur ist es hier nicht gemessen).
+Prüfung 4 prüft zusätzlich den Eigentümer des Laufzeitverzeichnisses; ein
+Verzeichnis, das einem anderen Nutzer gehört, trüge Socket und Token in
+fremdes Gebiet.
+
+**11. Sechs Befunde aus den beiden Reviews, alle derselbe Fehler.** Was jedes
+Mal fehlte, war eine Messung, die es nicht gab, und die trotzdem als eine galt:
+
+- `systemd_user` las nur `stdout`. Ein `systemctl`, das an seiner Frist starb,
+  nachdem es `running` geschrieben hatte, wurde damit grün. Jetzt entscheidet
+  der Ausgang vor der Ausgabe: `TimedOut` und `Signalled` sind `DOCTOR_012`,
+  und `running` wird nur mit Exit 0 grün.
+- `runtime_dir` prüfte `mode & 0o077`, also allein nach außen. `0500`, `0600`
+  und `0000` bestanden das und lassen den Start trotzdem scheitern: ohne `+x`
+  kommt niemand hinein, ohne `+w` legt der Daemon dort weder `daemon.sock` noch
+  das Sitzungs-Token an. Jetzt genau `0700`, und der Grund unterscheidet zu
+  offen von zu eng.
+- `read_back` nahm `String::from_utf8_lossy`. Ein `bwrap`, das mit 0 endet und
+  `\xffbubblewrap 0.9.1` schreibt, galt als gemessene Fassung. Jetzt streng,
+  und unlesbare Bytes sind `Reading::Unreadable`.
+- `Version::parse` macht aus allem, was es nicht lesen kann, eine Null:
+  `bubblewrap 999999999999999999.9` ergab `0.9.0` und bestand damit die
+  Mindestprüfung. Der Doctor hat jetzt seinen eigenen, prüfenden Parser;
+  `bwrap.rs` bleibt unberührt.
+- Die vier Wege zum Daemon (`connect`, `GetInfo`, `Doctor`, `ProbeLlm`) hatten
+  keine Frist. Ein Prozess, der den Socket bindet, annimmt und schweigt, hätte
+  `humanitl doctor` für immer angehalten — und den Rückfall auf den eigenen
+  Prozess **nie** erreicht, also genau die Eigenschaft zunichte gemacht, die
+  ihn begründet. Jetzt 3 s für Verbindung und `GetInfo`, 10 s für `Doctor`,
+  35 s für `ProbeLlm`; eine abgelaufene Frist ist „nicht erreichbar" und fällt
+  zurück. `a_daemon_that_answers_nothing_does_not_hold_the_doctor` hält das mit
+  einem stummen Socket fest.
+- Der kopierbare Befehl nahm eine Einschleusung an; siehe Punkt 8.
+
+**Eine Mutationsprobe überlebt, und der Grund steht im Code.** Schritt 4 der
+Befehls-Regel — `shlex::split` der fertigen Zeile ergibt wieder dieselben
+Wörter — lässt sich mit `shlex` 2 nicht auslösen: Was Schritt 3 übrig lässt,
+ist entweder unverändert oder einfach zitiert, und beides zerlegt der Leser
+wieder zu demselben Wort. Ein Wort, das Schritt 3 besteht und Schritt 4
+scheitern ließe, gibt es nicht, also gibt es dazu keinen Test. Der Schritt
+bleibt trotzdem stehen, weil er die Zusage ist und nicht ihre Folge: Änderte
+`shlex` seine Zitierung, hinge alles daran. Beim Suchen danach fiel auf, dass
+zwei Sätze über `shlex` falsch waren — es löst ein enthaltenes `'` **nicht**
+als `'a'\''b'` auf, sondern greift zu doppelten Anführungszeichen (`"/w/it's"`,
+`"/w/a\\b"`), in denen `$`, Backtick, `\` und `"` ihre Bedeutung behalten.
+Solche Wörter ergeben deshalb gar keinen Befehl, und `is_literal_word` hat
+jetzt einen eigenen Test, der die Bedingung prüft statt der Form, die `shlex`
+gerade wählt.
+
+**12. Zwei eigene Tests maßen die Auslastung der Maschine statt des
+Verhaltens.** Die Vorgaben von `doctor::probe` starteten Testskripte mit der
+Vorgabefrist von zwei Sekunden; als am 2026-09-05 drei hängende Testbinaries
+eines anderen Baums den Rechner belegten, fiel eine Probe in ihre Frist, und
+ein Test wurde rot, ohne dass sich am Verhalten etwas geändert hätte. Sie
+setzen die Frist jetzt auf zwanzig Sekunden; nur der Test, der die Frist selbst
+prüft, behält eine kurze. Ebenso hat der Test mit dem stummen Socket seine
+eigene Uhr bekommen (`Harness::run_bounded`): Ein Test, der beweisen soll, dass
+ein Befehl **nicht** hängt, darf nicht darauf warten, dass der Prozess von
+selbst zurückkommt — sonst hängt er mit, und die Mutation, die die Frist
+entfernt, überlebt, weil niemand mehr zusieht.
+
+**Beobachtung außerhalb dieses Issues:** `crates/ipc/tests/terminal.rs`
+(`osc52_does_not_reach_host`, `osc8_and_title_are_inert`) verklemmt sich, wenn
+zwei Läufe davon gleichzeitig auf derselben Maschine Sandboxen starten. Am
+2026-09-05 standen vier solcher Binaries eines anderen Arbeitsbaums zwischen 70
+und 97 Minuten fest, mit vierzehn laufenden `bwrap`-Sandboxen; allein läuft
+dieselbe Datei in 1,3 s durch, auch auf `HEAD` ohne die Änderungen dieses
+Issues. Für die CI ist das ein Zeitzünder, sobald zwei Jobs auf einem Runner
+liegen.
+
+**Was in der Spezifikation fehlt oder falsch ist.**
+
+- `backlog/CONVENTIONS.md` 3.8 führt `humanitl doctor` nicht in der Liste der
+  Unterkommandos, obwohl das Ziel des Issues es einführt. Die Datei gehört
+  nicht zu diesem Issue; die Zeile
+  `humanitl doctor [--json] [--probe-llm]` gehört dort ergänzt.
+- Die Spezifikation nennt „Fix: Kernel-Update" (Prüfung 3) und
+  „`--no-enable-impeller`" (Prüfung 10). Für beides gibt es keinen Befehl, den
+  ein `FixAction::CopyCommand` tragen könnte, ohne distro-spezifisch zu werden
+  (Nicht-Ziel). Beide tragen deshalb `FixAction::OpenUrl` auf die Erklärung,
+  und der konkrete Schritt steht im `why`. Ein Binary, das man mit
+  `--no-enable-impeller` starten könnte, gibt es überdies noch nicht: Die
+  Oberfläche heißt in `app/linux/CMakeLists.txt` ebenfalls `humanitl`, und
+  `packaging/` ist leer.
+- Prüfung 6 („Daemon-Socket erreichbar, Version passt") lässt offen, was der
+  Daemon selbst darüber sagen soll. Er kann es nicht sagen; siehe Punkt 4.
+- Prüfung 10 nennt einen „`FLUTTER_ENGINE`-Hinweis" ohne Bedingung. Die
+  Variable steht jetzt im Beleg, wenn sie gesetzt ist, und löst für sich keine
+  Warnung aus: Wer sie setzt, weiß, was er tut.
+
+**Akzeptanzkriterien.**
+
+- [x] `humanitl doctor` auf der Entwicklungsmaschine: alle Zeilen `ok` oder
+  `warn` mit Fix (Exit 0; gemessen am 2026-09-05, siehe unten).
+- [x] Jede Nicht-ok-Zeile hat `why` und `fix`
+  (`crates/sandbox/tests/doctor.rs::assert_report_invariants` über drei
+  Maschinen, `crates/ipc/tests/ipc_server.rs::doctor_reports_every_check_and_measures_no_network`,
+  `bin/humanitl/tests/cli.rs::json_shape_stable`).
+- [ ] Setup-Screen zeigt dieselben Zeilen, Start-Button bleibt bei `fail`
+  deaktiviert. **Offen**: `app/lib/features/setup/widgets/doctor_list.dart`
+  braucht `app/l10n/app_en.arb` und `app_de.arb`, und beide Dateien werden
+  gerade von anderen Agenten geschrieben (`CLAUDE.md`, Abschnitt
+  „Gemeinsam genutzte Dateien"). Die Maschinenhälfte steht: Die RPC antwortet,
+  `DoctorReport.checks` trägt die elf Zeilen in Anzeigereihenfolge, und
+  `has_failure` ist die eine Frage, an der der Start-Knopf hängt. Es fehlen
+  die Strings der elf Zeilenüberschriften und der Satz für den gesperrten
+  Knopf.
+- [x] `--json` ist stabil (`bin/humanitl/tests/cli.rs::json_shape_stable`:
+  feste Schlüssel oben, feste Reihenfolge der Kennungen, `diagnostic` genau
+  bei nicht-`ok`). Ein wörtlicher Schnappschuss wäre unehrlich: Die Belege
+  nennen gemessene Werte dieser Maschine.
+
+**Die Ausgabe auf der Entwicklungsmaschine (2026-09-05, Debian 14,
+Kernel 7.1.10, Wayland, kein Daemon):**
+
+```
+        CHECK         EVIDENCE
+[ok]    bwrap         bubblewrap 0.12.0 at /usr/bin/bwrap
+[ok]    userns        /usr/bin/bwrap --unshare-user opened a namespace
+[ok]    seccomp       seccomp available (Seccomp: 0), kernel 7.1.10+deb14-amd64
+[ok]    runtime_dir   /run/user/1000 mode 0700, uid 1000
+[ok]    systemd_user  systemd user session running
+[warn]  daemon        no daemon on /run/user/1000/humanitl/daemon.sock
+[ok]    agent         opencode 1.18.25 at /home/…/.local/bin/opencode
+[warn]  llm           llm.endpoint is not set
+[ok]    tray          /usr/lib/x86_64-linux-gnu/libappindicator3.so.1, XDG_CURRENT_DESKTOP is not set
+[ok]    renderer      session wayland, no nvidia module loaded
+[ok]    disk_space    141.9 GiB free in /home/…/.local/share
+```
+
+**Und drei kaputte Maschinen, ohne Root herbeigeführt** (`PATH` ohne `bwrap`;
+ein `bwrap`, das sich als 0.6.0 meldet, samt Laufzeitverzeichnis 0755; ein
+`bwrap`, das die Namensraum-Probe mit `Permission denied` verweigert). Alle
+drei enden mit Exit 3, jede rote Zeile trägt Grund und Vorschlag:
+
+```
+[FAIL]  bwrap         no executable bwrap in PATH=…/bin-none
+[warn]  userns        not measured: bwrap --unshare-user was not run because it does not exist on this machine
+[FAIL]  runtime_dir   XDG_RUNTIME_DIR is not set
+
+[FAIL]  bwrap         bubblewrap 0.6.0 at …/bin-old/bwrap
+[FAIL]  runtime_dir   …/run-loose mode 0755, uid 1000
+
+[FAIL]  userns        …/bin-noperm/bwrap --unshare-user: exit 1
+```
+
+Die zweite Zeile des ersten Falls ist der Kern dieses Issues: `bwrap` fehlt,
+also **konnte** die Namensraum-Probe nicht laufen — und die Zeile sagt das,
+statt grün zu werden, weil niemand hingesehen hat.
+
 ## HUM-076 · LLM-Server finden
 Sprint: 3 · Größe: M · Abhängigkeiten: HUM-039, HUM-044 · Blockiert: keine
 
