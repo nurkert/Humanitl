@@ -326,7 +326,8 @@ Die Sprint-Files wurden parallel geschrieben und haben an einigen Stellen die Ab
 `GetConfig`/`SetConfig`; `FlowEvent` hat die Varianten `Diagnostic`, `RulesChanged`, `AgentAsk`; `Received` trägt `DomainInfo`; `DecideRequest.remember: Rule`, `DecideRequest.block.note`; `DecideResponse.created_rule`; `RulesRequest.make_permanent`; `SandboxRequest.argv`; eigene Datei `rules.proto`, importiert von `humanitl.proto`.
 
 ### 4.4 Config-Schlüssel (Ergänzung zu 3.7)
-- Gruppe `limits` (HUM-057) ist die Heimat aller Caps und Timeouts: `limits.hold_body_cap_bytes` (Alias `hold.body_cap_bytes`), `limits.preview_cap_bytes` (Alias `preview.cap_bytes`), `limits.event_buffer` (Alias `ipc.event_buffer`), `limits.max_decompress_ratio`, `limits.hold_max_flows`, `limits.hold_max_bytes`, `limits.connect_timeout_secs`, `limits.header_timeout_secs`, `limits.body_timeout_secs`, `limits.recorder_max_body_bytes` (Alias `recorder.max_body_bytes`).
+- Gruppe `limits` (HUM-057) ist die Heimat aller Caps und Timeouts: `limits.hold_body_cap_bytes` (Alias `hold.body_cap_bytes`), `limits.preview_cap_bytes` (Alias `preview.cap_bytes`), `limits.event_buffer` (Alias `ipc.event_buffer`), `limits.max_decompress_ratio`, `limits.hold_max_flows`, `limits.hold_max_bytes`, `limits.connect_timeout_secs`, `limits.header_timeout_secs`, `limits.body_timeout_secs`, `limits.recorder_max_body_bytes` (Alias `recorder.max_body_bytes`), `limits.max_client_connections` (HUM-120, Vorgabe 256).
+- **`limits.body_timeout_secs` misst die Stille zwischen zwei Stücken, nicht die Gesamtdauer** (HUM-120, Umdeutung des Schlüssels aus HUM-057). Ein Name für beide Rumpf-Spannen: den Anfrage-Rumpf des Clients (danach `408` mit `Connection: close` und `PROXY_011`) und den gestreamten Antwort-Rumpf des Ziels (danach bricht der Strom ab und die Aufzeichnung vermerkt ihn als gekürzt). Die zwei Namen aus `backlog/sprint-5.md` (`limits.client_body_timeout_secs`, `limits.response_idle_timeout_secs`) entfallen damit; sie hätten zwei Zahlen für dieselbe Aussage bedeutet und einen Eintrag in `alias::RETIRED` gekostet, ohne dass jemand die beiden Richtungen verschieden einstellen wollte. `limits.header_timeout_secs` deckt zusätzlich den TLS-Handschlag nach `CONNECT`.
 - `resolver.nameserver`, `resolver.overrides`, `resolver.cache_ttl_secs`, `resolver.prefer` (`ipv4|ipv6`), `resolver.test_ca` (nur Tests).
 - `upstream.connect_timeout_secs` ist Alias von `limits.connect_timeout_secs`.
 - `findings.enabled`, `findings.user_terms`, `findings.email_allow_domains`, `findings.ignored_hashes`.
@@ -2198,6 +2199,16 @@ dieser Datei wurde parallel gearbeitet. `limits.body_timeout_secs` trägt
 deshalb bis auf Weiteres `pending(HUM-120)` statt einer Zusage, und
 `docs/SECURITY.md` nennt ihn ausdrücklich als heute wirkungslos, statt ihn in
 einer Zeile mit den drei wirksamen Grenzen zu führen.
+**Nachtrag (HUM-120, 2026-09-05): die drei Spannen sind gebaut.** Beide Rumpf-Spannen laufen
+über `limits.body_timeout_secs`, der Handschlag über `limits.header_timeout_secs`, und beide
+Rumpf-Grenzen messen die Stille zwischen zwei Stücken (Abschnitt 4.4 nennt die Umdeutung). Der
+Absatz oben, der die Grenzen für ein anderes Issue zurückstellt, ist damit erledigt; das Register
+führt `limits.body_timeout_secs` als `effective`. Dazu kam `limits.max_client_connections`: Eine
+Uhr je Spanne begrenzt die Dauer, nicht die Menge, und ohne Obergrenze bindet derselbe Angriff
+dieselben Ressourcen, nur kürzer und dafür öfter. Was HUM-120 sonst entschieden hat — kein neuer
+`BlockReason`, zusammengefasste Befunde, und warum `start_paused` für diese Tests untauglich ist —
+steht im Stand-Abschnitt unter `## HUM-120` in `backlog/sprint-3.md`.
+
 ### 4.26 Aus der Umsetzung von `humanitl run` (HUM-067, 2026-09-05)
 
 Abweichungen von `backlog/sprint-3.md`, die dauerhaft gelten. Wo die

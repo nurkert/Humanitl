@@ -26,7 +26,7 @@ use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
 use humanitl_config::{HoldConfig, Limits, RecorderConfig};
-use humanitl_core::diagnostics::codes::{PROXY_005, PROXY_008};
+use humanitl_core::diagnostics::codes::{PROXY_005, PROXY_008, PROXY_011};
 use humanitl_core::{
     Action, AnswerRefused, Authority, BlockReason, BodyRef, Decision, DecisionSource, Diagnostic,
     Finding, FixAction, Flow, FlowEvent, FlowId, FlowState, HeaderMap, HostName, HostPattern,
@@ -88,8 +88,27 @@ pub struct ProxyLimits {
     pub inline_max_bytes: u64,
     /// So lange darf ein Client für seine Kopfzeilen brauchen
     /// (`limits.header_timeout_secs`). Auf einer Keep-Alive-Verbindung ist
-    /// das zugleich die Frist bis zur nächsten Anfrage.
+    /// das zugleich die Frist bis zur nächsten Anfrage. Sie deckt zusätzlich
+    /// den TLS-Handschlag nach einem `CONNECT`: Bis zum `ClientHello` ist der
+    /// Tunnel dieselbe Art von Warten wie das auf einen Anfragekopf, und der
+    /// Kopf der entschlüsselten Verbindung folgt unmittelbar darauf (HUM-120).
     pub header_timeout: Duration,
+    /// So lange darf ein Rumpf zwischen zwei Stücken schweigen
+    /// (`limits.body_timeout_secs`), in beide Richtungen: Anfrage-Rumpf des
+    /// Clients und gestreamter Antwort-Rumpf des Ziels.
+    ///
+    /// Es ist ausdrücklich **keine** Grenze der Gesamtdauer. Ein großer Upload
+    /// und ein langer Modell-Strom sind der Normalfall und der erklärte
+    /// Seitenkanal; nur Stille ist der Angriff (`backlog/CONVENTIONS.md` 4.25).
+    pub body_timeout: Duration,
+    /// So viele Verbindungen aus der Sandbox nimmt eine Sitzung gleichzeitig an
+    /// (`limits.max_client_connections`). Darüber antwortet der Accept-Loop mit
+    /// `503` und schließt.
+    ///
+    /// Ohne diese Zahl deckt eine Uhr je Spanne nur die Hälfte: Wer stehenbleibt
+    /// und dafür bezahlt, öffnet einfach mehr Verbindungen, und jede einzelne
+    /// bleibt innerhalb ihrer Frist.
+    pub max_client_connections: u32,
     /// Blockt eine Anfrage sofort, wenn der Scan ein prüfsummen-sicheres
     /// Geheimnis findet (`hold.hard_block_checksum_secrets`).
     pub hard_block_checksum_secrets: bool,
@@ -103,6 +122,8 @@ impl ProxyLimits {
             body_cap_bytes: limits.hold_body_cap_bytes,
             inline_max_bytes: recorder.inline_max_bytes,
             header_timeout: Duration::from_secs(limits.header_timeout_secs),
+            body_timeout: Duration::from_secs(limits.body_timeout_secs),
+            max_client_connections: limits.max_client_connections,
             hard_block_checksum_secrets: false,
         }
     }
@@ -122,6 +143,100 @@ impl Default for ProxyLimits {
     }
 }
 
+/// So selten meldet eine Grenze der Verbindung sich höchstens im Ereignisstrom.
+///
+/// Dieselbe Zahl wie [`tls_observe::REPEAT_WINDOW`]: Beides sind Muster, die
+/// erst in der Wiederholung etwas bedeuten, und in beiden Fällen sitzt der
+/// Auslöser in der Sandbox.
+pub const PRESSURE_REPORT_WINDOW: Duration = Duration::from_secs(60);
+
+/// Fasst wiederholte Grenzfälle zu höchstens einer Meldung je
+/// [`PRESSURE_REPORT_WINDOW`] zusammen.
+///
+/// **Warum das eine Sicherheitsmaßnahme und keine Bequemlichkeit ist.** Die
+/// Grenzen dieses Issues stehen gegen einen Prozess in der Sandbox, der viele
+/// Verbindungen öffnet und stehenbleibt. Ein Befund je Fall hinge diesem
+/// Prozess einen Hebel an den Ereignisstrom der Oberfläche: Der hat
+/// `limits.event_buffer` Plätze, und wer ihn überläuft, nimmt dem Menschen die
+/// Sicht auf die Flüsse, die es wirklich gibt (`FlowEvent::Lagged`). Eine
+/// Grenze, die den Host schützt und dabei die Oberfläche öffnet, wäre keine.
+///
+/// Gezählt wird trotzdem jeder Fall; die Meldung nennt die Zahl seit der
+/// letzten. Eine Häufung geht damit nicht verloren, sie kommt nur gebündelt.
+#[derive(Debug)]
+pub struct PressureWatch {
+    state: std::sync::Mutex<PressureState>,
+}
+
+/// Der Zustand eines [`PressureWatch`]: Zähler und Zeitpunkt der letzten
+/// Meldung.
+#[derive(Debug, Default)]
+struct PressureState {
+    /// Fälle seit der letzten Meldung, die Meldung selbst eingeschlossen.
+    since_last: u64,
+    /// Wann zuletzt gemeldet wurde. `None` heißt: noch nie.
+    last: Option<tokio::time::Instant>,
+}
+
+impl PressureWatch {
+    /// Ein leeres Fenster: der erste Fall wird sofort gemeldet.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            state: std::sync::Mutex::new(PressureState::default()),
+        }
+    }
+
+    /// Zählt einen Fall und liefert die Zahl der Fälle seit der letzten
+    /// Meldung, sobald wieder eine fällig ist.
+    ///
+    /// `None` heißt: gezählt, aber noch nicht melden.
+    #[must_use]
+    pub fn hit(&self) -> Option<u64> {
+        self.hit_at(tokio::time::Instant::now())
+    }
+
+    /// Wie [`PressureWatch::hit`], mit gesetzter Uhr; der Weg der Tests.
+    #[must_use]
+    pub fn hit_at(&self, now: tokio::time::Instant) -> Option<u64> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.since_last = state.since_last.saturating_add(1);
+        let due = state
+            .last
+            .is_none_or(|last| now.saturating_duration_since(last) >= PRESSURE_REPORT_WINDOW);
+        if !due {
+            return None;
+        }
+        state.last = Some(now);
+        Some(std::mem::take(&mut state.since_last))
+    }
+}
+
+impl Default for PressureWatch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Der Platz, den eine Verbindung in `limits.max_client_connections` belegt.
+///
+/// `None` heißt: Diese Verbindung zählt nicht, weil niemand sie gezählt hat —
+/// so laufen die Tests, die eine einzelne Verbindung von Hand bedienen. Der
+/// Accept-Loop reicht immer einen Platz herein.
+///
+/// **Warum ein [`Arc`] und kein nackter Permit.** Ein `CONNECT` steigt zum
+/// Tunnel auf: [`serve_connection`] kehrt zurück, sobald hyper die Verbindung
+/// übergeben hat, während der Tunnel in einer eigenen Aufgabe weiterlebt. Ein
+/// Permit, der an [`serve_connection`] hinge, fiele genau dort — und die
+/// Grenze deckte dann nur einfaches HTTP, ausgerechnet nicht die TLS-Tunnel,
+/// über die der Agent den überwiegenden Teil seines Verkehrs führt. Der `Arc`
+/// wandert deshalb in die aufsteigende Aufgabe; der Platz wird erst frei, wenn
+/// die letzte Hälfte der Verbindung zu ist.
+pub type ConnectionSlot = Option<Arc<tokio::sync::OwnedSemaphorePermit>>;
+
 /// Der geteilte Zustand eines Handlers; billig zu klonen (alles `Arc`).
 struct Inner {
     queue: Arc<HoldQueue>,
@@ -135,6 +250,8 @@ struct Inner {
     meta: Option<Arc<MetaEndpoint>>,
     /// Das Zählfenster der gescheiterten Handschläge dieser Sitzung (HUM-045).
     handshakes: HandshakeWatch,
+    /// Das Zählfenster der stehengebliebenen Anfrage-Rümpfe (HUM-120).
+    idle_bodies: PressureWatch,
 }
 
 /// Die wahlfreien Anschlüsse eines Handlers.
@@ -277,18 +394,39 @@ impl FlowHandler {
                 recorder: ports.recorder,
                 meta: ports.meta,
                 handshakes: HandshakeWatch::new(),
+                idle_bodies: PressureWatch::new(),
             }),
         }
     }
 
+    /// Die Grenzen dieser Sitzung, für den Accept-Loop
+    /// ([`accept_loop`](crate::core)).
+    #[must_use]
+    pub fn limits(&self) -> &ProxyLimits {
+        &self.inner.limits
+    }
+
+    /// Die Warteschlange dieser Sitzung, für den Accept-Loop: Er meldet die
+    /// erreichte Verbindungsgrenze in denselben Ereignisstrom.
+    #[must_use]
+    pub fn queue(&self) -> &Arc<HoldQueue> {
+        &self.inner.queue
+    }
+
     /// Nimmt eine einzelne Anfrage entgegen und liefert die Antwort.
+    ///
+    /// `slot` ist der Platz der Verbindung in `limits.max_client_connections`.
+    /// Nur ein `CONNECT` braucht ihn: Er reicht ihn an den Tunnel weiter, der
+    /// die Verbindung übernimmt. Jede andere Anfrage lässt ihre Kopie fallen;
+    /// die Verbindung selbst hält den Platz weiter über [`serve_connection`].
     async fn handle(
         &self,
         req: Request<Incoming>,
         meta: ConnectionContext,
+        slot: ConnectionSlot,
     ) -> Response<ResponseBody> {
         if req.method() == Method::CONNECT {
-            return self.handle_connect(req, &meta);
+            return self.handle_connect(req, &meta, slot);
         }
         self.handle_request(req, meta).await
     }
@@ -318,6 +456,7 @@ impl FlowHandler {
         &self,
         mut req: Request<Incoming>,
         meta: &ConnectionContext,
+        slot: ConnectionSlot,
     ) -> Response<ResponseBody> {
         let Some(authority) = connect_authority(req.uri()) else {
             return text_response(StatusCode::BAD_REQUEST, "missing host");
@@ -336,21 +475,49 @@ impl FlowHandler {
         let connect_headers = req.headers().clone();
         let handler = self.clone();
         let meta = meta.clone();
+        let handshake_timeout = self.inner.limits.header_timeout;
         tokio::spawn(async move {
-            match hyper::upgrade::on(&mut req).await {
-                Ok(upgraded) => match tls::accept(server_config, TokioIo::new(upgraded)).await {
-                    Ok((stream, sni)) => {
-                        handler.note_missing_sni(sni.as_ref(), &authority);
-                        let inner_meta = meta.tunnel(authority, sni);
-                        serve_connection(handler, stream, inner_meta).await;
-                    }
-                    Err(err) => {
-                        handler
-                            .note_handshake_failure(&meta, &authority, &connect_headers, &err)
-                            .await;
-                    }
-                },
-                Err(err) => tracing::debug!(%err, "connect upgrade failed"),
+            let upgraded = match hyper::upgrade::on(&mut req).await {
+                Ok(upgraded) => upgraded,
+                Err(err) => {
+                    tracing::debug!(%err, "connect upgrade failed");
+                    return;
+                }
+            };
+            // Die Frist um den Handschlag: Wer den Tunnel öffnet und nie ein
+            // `ClientHello` schickt, hielt bis HUM-120 diese Aufgabe und ihren
+            // Dateideskriptor für immer. Weder hyper noch `tokio_rustls` spannt
+            // hier eine Uhr — die Kopf-Frist des inneren `serve_connection`
+            // beginnt erst nach dem Handschlag.
+            let accepted = tokio::time::timeout(
+                handshake_timeout,
+                tls::accept(server_config, TokioIo::new(upgraded)),
+            )
+            .await;
+            match accepted {
+                Ok(Ok((stream, sni))) => {
+                    handler.note_missing_sni(sni.as_ref(), &authority);
+                    let inner_meta = meta.tunnel(authority, sni);
+                    serve_connection(handler, stream, inner_meta, slot).await;
+                }
+                Ok(Err(err)) => {
+                    handler
+                        .note_handshake_failure(&meta, &authority, &connect_headers, &err)
+                        .await;
+                }
+                Err(_elapsed) => {
+                    // Still, wie ein gescheiterter Handschlag heute auch: Es
+                    // gibt noch keinen Flow, weil noch keine Anfrage im Tunnel
+                    // stand, und der Client hat sein `200` längst — eine
+                    // Antwort ist nicht mehr möglich. `tls_observe` deutet nur
+                    // Fehler von rustls; ein Client, der einfach nichts sagt,
+                    // ist keiner.
+                    tracing::debug!(
+                        host = %authority.host,
+                        timeout = ?handshake_timeout,
+                        "no client hello within the header timeout; closing the tunnel"
+                    );
+                }
             }
         });
 
@@ -599,8 +766,11 @@ impl FlowHandler {
             return self.refuse_before_pipeline(&meta, request, BlockReason::BodyCap, None);
         }
 
-        let body_bytes = match body::buffer(incoming, cap).await {
+        let body_bytes = match body::buffer(incoming, cap, self.inner.limits.body_timeout).await {
             Ok(bytes) => bytes,
+            Err(BufferError::Idle) => {
+                return self.refuse_idle_request_body();
+            }
             Err(BufferError::Cap) => {
                 let request = Self::build_request(
                     parts.method.clone(),
@@ -758,9 +928,18 @@ impl FlowHandler {
         let (body, over_cap) = if declared_over_cap {
             (Bytes::new(), true)
         } else {
-            match body::buffer(incoming, meta::ASK_BODY_CAP_BYTES).await {
+            match body::buffer(
+                incoming,
+                meta::ASK_BODY_CAP_BYTES,
+                self.inner.limits.body_timeout,
+            )
+            .await
+            {
                 Ok(bytes) => (bytes, false),
                 Err(BufferError::Cap) => (Bytes::new(), true),
+                Err(BufferError::Idle) => {
+                    return self.refuse_idle_request_body();
+                }
                 Err(BufferError::Read) => {
                     return text_response(StatusCode::BAD_REQUEST, "request body read error");
                 }
@@ -1019,6 +1198,40 @@ impl FlowHandler {
         });
     }
 
+    /// Beantwortet einen Anfrage-Rumpf, der stehengeblieben ist, mit `408`
+    /// (HUM-120).
+    ///
+    /// Es entsteht **kein** Flow und **kein** `BlockReason`. Ein Flow trägt
+    /// eine Anfrage, und die Anfrage ist genau das, was hier fehlt: Der Kopf
+    /// steht, der Rumpf nicht, und was der Mensch zu sehen bekäme, wäre eine
+    /// halbe Anfrage, über die zu entscheiden er nie gebeten wurde. Ein neuer
+    /// `BlockReason` wäre dazu die falsche Aussage — geblockt hat niemand — und
+    /// zöge Proto, `ipc/src/convert.rs` und die Dart-Seite nach sich.
+    ///
+    /// Sichtbar wird die Spanne trotzdem, und das ist der Unterschied zum
+    /// Zustand vor diesem Issue: [`PROXY_011`] geht als
+    /// [`FlowEvent::Diagnostic`] ohne Flusskennung in den Ereignisstrom,
+    /// zusammengefasst über [`PressureWatch`], damit die Meldung nicht selbst
+    /// zum Hebel gegen die Oberfläche wird.
+    fn refuse_idle_request_body(&self) -> Response<ResponseBody> {
+        let idle = self.inner.limits.body_timeout;
+        tracing::debug!(
+            timeout = ?idle,
+            "the request body went silent between two chunks; answering 408"
+        );
+        if let Some(since_last) = self.inner.idle_bodies.hit() {
+            self.inner.queue.publish(FlowEvent::Diagnostic {
+                flow_id: None,
+                at: SystemTime::now(),
+                diagnostic: Box::new(idle_request_body(idle, since_last)),
+            });
+        }
+        text_response(
+            StatusCode::REQUEST_TIMEOUT,
+            "request body timed out between two chunks",
+        )
+    }
+
     /// Lehnt eine Anfrage ab, deren Angaben zum Ziel sich widersprechen.
     ///
     /// Der Body wird nicht gelesen und nichts wird weitergeleitet; der Flow
@@ -1090,7 +1303,14 @@ impl FlowHandler {
                 // Der Tee reicht die Antwort ungepuffert durch, schiebt jedes
                 // Stück in den Mitschnitt und schließt den Flow beim letzten
                 // Frame mit `Record` ab.
-                let body = body::tee(incoming, flow, Arc::clone(&self.inner.queue), sink, status);
+                let body = body::tee(
+                    incoming,
+                    flow,
+                    Arc::clone(&self.inner.queue),
+                    sink,
+                    status,
+                    self.inner.limits.body_timeout,
+                );
                 Response::from_parts(parts, body)
             }
             Err(error) => self.record_failure(&mut flow, error),
@@ -1307,16 +1527,31 @@ impl FlowHandler {
 /// Bedient eine ganze Verbindung, bis sie endet.
 ///
 /// Für die entschlüsselte Verbindung nach einem `CONNECT` ruft der Handler
-/// sich selbst rekursiv auf, mit dem Kontext des Tunnels (Ziel und SNI).
-pub async fn serve_connection<I>(handler: FlowHandler, io: I, meta: ConnectionContext)
-where
+/// sich selbst rekursiv auf, mit dem Kontext des Tunnels (Ziel und SNI) und mit
+/// demselben [`ConnectionSlot`].
+///
+/// **Diese Funktion kehrt zurück, bevor die Verbindung tot ist — bei genau
+/// einem Ausgang.** Ein `CONNECT` übergibt die Verbindung an
+/// `hyper::upgrade::on`, und der Tunnel läuft danach in einer eigenen Aufgabe
+/// weiter. Deshalb hängt der Platz am [`ConnectionSlot`] und nicht an der
+/// Lebensdauer dieser Zukunft. Ein zweiter solcher Ausgang existiert nicht:
+/// `hyper::upgrade::on` steht im Proxy nur im `CONNECT`-Pfad, und ein `101`,
+/// das vom Ziel durchgereicht wird, nimmt niemand entgegen — hyper lässt die
+/// Verbindung dann fallen.
+pub async fn serve_connection<I>(
+    handler: FlowHandler,
+    io: I,
+    meta: ConnectionContext,
+    slot: ConnectionSlot,
+) where
     I: crate::egress::AsyncStream + 'static,
 {
     let header_timeout = handler.inner.limits.header_timeout;
     let service = service_fn(move |req: Request<Incoming>| {
         let handler = handler.clone();
         let meta = meta.clone();
-        async move { Ok::<Response<ResponseBody>, Infallible>(handler.handle(req, meta).await) }
+        let slot = slot.clone();
+        async move { Ok::<Response<ResponseBody>, Infallible>(handler.handle(req, meta, slot).await) }
     });
 
     let result = hyper::server::conn::http1::Builder::new()
@@ -1468,6 +1703,38 @@ pub fn private_address_refused(request: &HttpRequest, ip: IpAddr) -> Diagnostic 
         diagnostic = diagnostic.fix(FixAction::AddRule(Box::new(rule)));
     }
     diagnostic.build()
+}
+
+/// Der Befund [`PROXY_011`] zu einem stehengebliebenen Anfrage-Rumpf
+/// (HUM-120).
+///
+/// `since_last` ist die Zahl der Fälle seit der letzten Meldung; sie steht im
+/// Text, weil die einzelne Zeitüberschreitung ein schlechtes Netz sein kann und
+/// ihre Häufung ein Prozess, der Ressourcen bindet.
+///
+/// Der `fix` zeigt auf `limits.body_timeout_secs` mit dem doppelten heutigen
+/// Wert. Das ist der Fall, den ein Mensch tatsächlich hat: Ein Werkzeug in der
+/// Sandbox lädt über eine langsame Leitung hoch, und die Vorgabe ist ihm zu
+/// knapp. Ein Vorschlag, die Grenze abzuschalten, steht nicht darin — es gibt
+/// keinen Wert, der das täte, und es wäre der falsche Rat.
+#[must_use]
+pub fn idle_request_body(idle: Duration, since_last: u64) -> Diagnostic {
+    let secs = idle.as_secs();
+    let why = format!(
+        "a client inside the sandbox sent a complete request head and then went silent in the \
+         middle of its body for more than {secs}s (limits.body_timeout_secs), so the request was \
+         answered with 408 and its connection closed. {since_last} request bodies timed out since \
+         the last report. The limit measures the silence between two chunks, never the total \
+         duration: a large upload may take as long as it takes. Until the body is complete there \
+         is no request to decide about, so nothing was held and nothing left the host."
+    );
+    Diagnostic::builder(PROXY_011, Severity::Warning)
+        .why(why)
+        .fix(FixAction::ChangeSetting {
+            key: "limits.body_timeout_secs".to_owned(),
+            value: secs.saturating_mul(2).to_string(),
+        })
+        .build()
 }
 
 /// Die Regel, die [`private_address_refused`] vorschlägt.
@@ -1724,5 +1991,82 @@ fn log_findings(flow: &Flow, findings: &[Finding], truncated: bool) {
             findings = findings.len(),
             "the request was only searched in part; the result is not an all-clear"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use std::time::Duration;
+
+    use super::{PRESSURE_REPORT_WINDOW, PressureWatch, idle_request_body};
+
+    /// Der erste Fall wird sofort gemeldet, die folgenden erst wieder nach dem
+    /// Fenster — und die Meldung nennt alle, die dazwischen lagen.
+    ///
+    /// Ohne diesen Test wäre das Zusammenfassen nur behauptet: Ein
+    /// Integrationstest müsste eine Minute warten, um dasselbe zu zeigen.
+    #[tokio::test(start_paused = true)]
+    async fn a_pressure_watch_reports_once_per_window_and_counts_the_rest() {
+        let watch = PressureWatch::new();
+        let start = tokio::time::Instant::now();
+
+        assert_eq!(
+            watch.hit_at(start),
+            Some(1),
+            "the first case is due at once"
+        );
+        for step in 1..=9_u32 {
+            assert_eq!(
+                watch.hit_at(start + Duration::from_secs(u64::from(step))),
+                None,
+                "inside the window nothing is reported"
+            );
+        }
+        assert_eq!(
+            watch.hit_at(start + PRESSURE_REPORT_WINDOW - Duration::from_millis(1)),
+            None,
+            "one millisecond before the window is over it is still too early"
+        );
+        assert_eq!(
+            watch.hit_at(start + PRESSURE_REPORT_WINDOW),
+            Some(11),
+            "the next report carries the ten suppressed cases and itself"
+        );
+        assert_eq!(
+            watch.hit_at(start + PRESSURE_REPORT_WINDOW + Duration::from_secs(1)),
+            None,
+            "and the window starts again from the report"
+        );
+        // Eine Uhr, die zurückgeht, ist kein Grund zu sterben: Die Spanne wird
+        // gesättigt und nicht subtrahiert. In einem Daemon, der wochenlang
+        // läuft, wäre ein Absturz aus einer Zeile, die nur zählen soll, der
+        // teuerste denkbare Fehler.
+        assert_eq!(
+            watch.hit_at(start),
+            None,
+            "a clock that went backwards neither reports nor panics"
+        );
+    }
+
+    /// Der Befund zum stehengebliebenen Rumpf nennt die Frist, die Zahl der
+    /// Fälle und einen Schlüssel, den es gibt.
+    #[test]
+    fn the_idle_body_diagnostic_names_its_key_and_its_numbers() {
+        let diagnostic = idle_request_body(Duration::from_secs(300), 7);
+        assert_eq!(diagnostic.code.as_str(), "PROXY_011");
+        assert!(diagnostic.why.contains("300s"), "{}", diagnostic.why);
+        assert!(diagnostic.why.contains('7'), "{}", diagnostic.why);
+        assert!(
+            diagnostic.why.contains("limits.body_timeout_secs"),
+            "{}",
+            diagnostic.why
+        );
+        let Some(humanitl_core::FixAction::ChangeSetting { key, value }) = diagnostic.fix else {
+            panic!("the fix must point at the setting");
+        };
+        assert_eq!(key, "limits.body_timeout_secs");
+        assert_eq!(value, "600", "the suggestion is twice the current value");
     }
 }

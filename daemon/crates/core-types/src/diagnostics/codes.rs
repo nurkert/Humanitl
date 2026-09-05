@@ -77,8 +77,8 @@ pub static AREAS: &[AreaInfo] = &[
         area: "proxy",
         prefix: "PROXY",
         first: 1,
-        last: 9,
-        note: "Anfragen, Caps, Protokoll",
+        last: 19,
+        note: "Anfragen, Caps, Protokoll, 010-011 Grenzen der Verbindung (HUM-120)",
     },
     AreaInfo {
         area: "tls",
@@ -593,6 +593,38 @@ registry! {
     /// Befund ist deshalb ein Fehler im Daemon und keine Eingabe eines Nutzers;
     /// er trägt kein `fix`, weil nichts einzustellen ist (HUM-103).
     PROXY_009 => "proxy", "Anfrage ist keine Meta-Anfrage", "#proxy_009";
+
+    // HUM-120: die drei unbewachten Spannen der Verbindung. Neue Einträge des
+    // Bereichs `proxy` stehen am Ende dieser Gruppe.
+    /// Der Accept-Loop hat eine Verbindung abgelehnt, weil
+    /// `limits.max_client_connections` erreicht war. Der Client bekommt `503`
+    /// und die Verbindung wird geschlossen; angenommen und liegen gelassen wird
+    /// sie nicht (HUM-120).
+    ///
+    /// Der Befund gehört zur Sitzung und zu keinem Fluss: Es wurde keine
+    /// Anfrage gelesen, es gibt also nichts, was jemand entscheiden könnte. Er
+    /// nennt die Zahl der Ablehnungen seit der letzten Meldung, denn die
+    /// einzelne Ablehnung sagt wenig und ihre Häufung alles.
+    ///
+    /// **Er wird bewusst zusammengefasst gemeldet.** Ein Befund je abgelehnter
+    /// Verbindung wäre selbst der Angriff: Der Ereignisstrom der Oberfläche hat
+    /// `limits.event_buffer` Plätze, und wer ihn überläuft, nimmt dem Menschen
+    /// die Sicht auf die Flüsse, die es wirklich gibt. Die Grenze schützt den
+    /// Host, und ihre Meldung darf ihn nicht an anderer Stelle wieder öffnen.
+    PROXY_010 => "proxy", "Verbindungsgrenze erreicht", "#proxy_010";
+    /// Der Client hat den Kopf seiner Anfrage vollständig geschickt und im
+    /// Rumpf länger als `limits.body_timeout_secs` geschwiegen. Der Proxy
+    /// antwortet mit `408` und schließt die Verbindung (HUM-120).
+    ///
+    /// Gemessen wird die Stille **zwischen zwei Stücken**, nicht die
+    /// Gesamtdauer: Ein großer Upload darf so lange dauern, wie er dauert.
+    ///
+    /// Auch dieser Befund hängt an keinem Fluss. Der Fluss entsteht erst, wenn
+    /// der Rumpf vollständig gepuffert ist — vorher gibt es keine Anfrage, die
+    /// ein Mensch sehen könnte, und genau das war die Lücke: Die Verbindung
+    /// blieb stehen, ohne dass irgendetwas davon sichtbar wurde. Er wird wie
+    /// [`PROXY_010`] zusammengefasst gemeldet, aus demselben Grund.
+    PROXY_011 => "proxy", "Anfrage-Rumpf ist stehengeblieben", "#proxy_011";
 }
 
 /// Sucht einen Code im Register.

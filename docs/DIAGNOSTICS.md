@@ -16,7 +16,7 @@ Entfernen eines Codes.
 | ipc | `IPC` | 001 | 009 | gRPC-Schnittstelle, Token, Aufrufe gegen den Zustand |
 | config | `CONFIG` | 001 | 019 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066) |
 | sandbox | `SANDBOX` | 001 | 029 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 020-025 /work-Härtung (HUM-043) |
-| proxy | `PROXY` | 001 | 009 | Anfragen, Caps, Protokoll |
+| proxy | `PROXY` | 001 | 019 | Anfragen, Caps, Protokoll, 010-011 Grenzen der Verbindung (HUM-120) |
 | tls | `TLS` | 001 | 009 | CA, Zertifikate, Handschlag |
 | llm | `LLM` | 001 | 009 | LLM-Endpunkt und seine Antworten |
 | rules | `RULES` | 001 | 019 | 001-008 Regeldatei und Muster, 009-011 Regelspeicher (HUM-027) |
@@ -226,6 +226,14 @@ Private Zieladresse abgelehnt
 #### PROXY_009
 
 Anfrage ist keine Meta-Anfrage
+
+#### PROXY_010
+
+Verbindungsgrenze erreicht
+
+#### PROXY_011
+
+Anfrage-Rumpf ist stehengeblieben
 
 ### Bereich tls
 

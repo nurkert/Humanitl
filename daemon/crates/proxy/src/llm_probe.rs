@@ -310,11 +310,17 @@ impl LlmProbe {
         if status != 200 {
             return Ok(None);
         }
-        match body::buffer(response.into_body(), RESPONSE_CAP_BYTES).await {
+        // Die Uhr der Probe ist die äußere ([`LlmProbe::probe`] legt sie um
+        // beide Anfragen); die Frist je Stück steht deshalb auf
+        // [`MAX_TIMEOUT_MS`] und kann nie vor ihr greifen. Zwei Uhren über
+        // derselben Spanne wären der Fehler aus HUM-101.
+        let idle = Duration::from_millis(u64::from(MAX_TIMEOUT_MS));
+        match body::buffer(response.into_body(), RESPONSE_CAP_BYTES, idle).await {
             Ok(bytes) => Ok(Some(bytes)),
-            // Ein Körper über dem Cap oder ein abgerissener Strom ist keine
-            // Modellliste. Die Probe zählt ihn wie eine fremde Antwort.
-            Err(BufferError::Cap | BufferError::Read) => Ok(None),
+            // Ein Körper über dem Cap, ein abgerissener oder ein
+            // stehengebliebener Strom ist keine Modellliste. Die Probe zählt
+            // ihn wie eine fremde Antwort.
+            Err(BufferError::Cap | BufferError::Read | BufferError::Idle) => Ok(None),
         }
     }
 }
