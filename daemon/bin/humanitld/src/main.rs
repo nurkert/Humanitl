@@ -35,7 +35,6 @@ use humanitl_catalog::Catalog;
 use humanitl_config::{Config, DIR_MODE, Paths as XdgPaths};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, FlowEvent, SessionId, Severity};
-use humanitl_findings::FindingsSettings;
 use humanitl_ipc::fake::{FakeDaemon, FakeOptions, Session};
 use humanitl_ipc::sandbox::SandboxPorts;
 use humanitl_ipc::session::{SessionResolver, bundled_rules};
@@ -275,7 +274,12 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
                 .with_notices(HeldNotices::new(
                     Arc::clone(&queue),
                     Arc::clone(queue.registry()),
-                )),
+                ))
+                // Was ein Lauf im Projektverzeichnis hinterlässt, bleibt in
+                // derselben Aufzeichnung liegen wie die Flows; ohne sie gäbe es
+                // die Zusammenfassung nur als Ereignis, und
+                // `humanitl sessions summary` fände nichts (HUM-043).
+                .with_recorder(recorder.clone()),
         ));
     let result = humanitl_ipc::serve(&paths.socket, &paths.token, server, shutdown()).await;
 
@@ -648,23 +652,20 @@ fn llm_authority(config: &Config) -> Option<String> {
 ///
 /// # Errors
 ///
-/// `FINDINGS_001` aus [`Tier1Scanner::new`], und der Befund aus
-/// [`FindingsSettings::with_ignored_hashes_hex`], wenn in
+/// `FINDINGS_001` aus [`Tier1Scanner::new`], und `CONFIG_003` aus
+/// [`humanitl_ipc::summary::findings_settings`], wenn in
 /// `findings.ignored_hashes` etwas steht, das kein SHA-256 in Hex ist.
 fn build_scanner(config: &Config) -> Result<Arc<dyn Scanner>, Diagnostic> {
-    let cap_bytes = usize::try_from(config.limits.preview_cap_bytes)
-        .unwrap_or(humanitl_findings::settings::DEFAULT_CAP_BYTES);
-    let settings = FindingsSettings::default()
-        .with_enabled(config.findings.enabled)
-        .with_user_terms(config.findings.user_terms.iter())
-        .with_email_allow_domains(config.findings.email_allow_domains.iter())
-        .with_ignored_hashes_hex(config.findings.ignored_hashes.iter())?
-        .with_limits(cap_bytes, config.limits.max_decompress_ratio);
+    // Die Ableitung aus der Konfiguration steht in `humanitl_ipc::summary` und
+    // nicht hier: Die Zusammenfassung eines Sandbox-Laufs baut daraus dieselben
+    // Detektoren (HUM-043), und zwei Ableitungen aus denselben vier Schlüsseln
+    // wären zwei Wahrheiten darüber, was als Fund gilt.
+    let settings = humanitl_ipc::summary::findings_settings(config)?;
     let scanner = Tier1Scanner::new(&settings)?;
     tracing::info!(
         enabled = config.findings.enabled,
         detectors = ?scanner.detector_ids(),
-        cap_bytes,
+        cap_bytes = settings.cap_bytes,
         "detectors ready"
     );
     Ok(Arc::new(scanner))

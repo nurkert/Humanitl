@@ -486,7 +486,15 @@ pub fn read_beneath(
     let fd = open_beneath(
         root,
         rel,
-        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        // `O_NONBLOCK` gilt einer benannten Röhre, nicht einer Datei. Für eine
+        // gewöhnliche Datei ändert es nichts; für ein `mkfifo`, das der Agent
+        // in das Projekt gelegt hat, ist es der Unterschied zwischen einem
+        // `open`, das sofort zurückkehrt, und einem, das wartet, bis jemand
+        // hineinschreibt — also einem hängenden Daemon. Der Schnappschuss
+        // sortiert solche Einträge schon aus (`Kind::Other` wird kein
+        // Kandidat); dies ist die zweite Sicherung für den Fall, dass zwischen
+        // Schnappschuss und Lesen aus der Datei eine Röhre wird.
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
     )
     .map_err(|err| read_failed(rel, err))?;
     read_capped(fd, max_bytes).map_err(|err| read_failed(rel, err))
@@ -503,16 +511,17 @@ fn read_failed(rel: &Path, err: impl core::fmt::Display) -> Diagnostic {
 }
 
 /// Liest höchstens `max_bytes` aus einem geöffneten Deskriptor.
+///
+/// Mehr als `max_bytes` kommt nie zurück. Ob die Datei zwischen `statat` und
+/// `read` gewachsen ist, sagt diese Funktion **nicht**: Sie liest bis zur
+/// Grenze und hört auf. Wer den Unterschied braucht, vergleicht die Länge des
+/// Ergebnisses mit der erwarteten Größe — der Fundscan tut genau das nicht,
+/// weil er ohnehin nur bis [`crate::summary::SCAN_MAX_BYTES`] sucht und eine
+/// Datei darüber gar nicht erst liest.
 fn read_capped(fd: OwnedFd, max_bytes: u64) -> Result<Vec<u8>, std::io::Error> {
     let file = File::from(fd);
-    let cap = usize::try_from(max_bytes).unwrap_or(usize::MAX);
     let mut out = Vec::new();
-    // Ein Byte mehr als erlaubt: Wächst die Datei zwischen `statat` und `read`,
-    // fällt das auf, statt unbemerkt abgeschnitten zu werden. Der Puffer bleibt
-    // trotzdem begrenzt.
-    let mut limited = file.take(max_bytes.saturating_add(1));
-    limited.read_to_end(&mut out)?;
-    out.truncate(cap);
+    file.take(max_bytes).read_to_end(&mut out)?;
     Ok(out)
 }
 
@@ -584,10 +593,25 @@ struct Walker<'a> {
 
 impl Walker<'_> {
     fn walk(&mut self, dir: BorrowedFd<'_>, rel: &Path, depth: usize) {
-        let Ok(names) = dir_names(dir) else {
-            self.out.truncated = true;
-            return;
+        // Nur so viele Namen, wie das Budget noch trägt. Ein Verzeichnis, in
+        // das der Agent eine Million Einträge legt, kostet damit eine Million
+        // `getdents`-Einträge **nicht**: Der Puffer hört auf, sobald der Rest
+        // des Budgets aufgebraucht ist. Ein Budget, das erst nach der Arbeit
+        // greift, wäre keines.
+        let room = self
+            .limits
+            .max_entries
+            .saturating_sub(self.out.entries.len());
+        let (names, overflowed) = match dir_names(dir, room) {
+            Ok(read) => read,
+            Err(_err) => {
+                self.out.truncated = true;
+                return;
+            }
         };
+        if overflowed {
+            self.out.truncated = true;
+        }
         for name in names {
             if self.out.entries.len() >= self.limits.max_entries {
                 self.out.truncated = true;
@@ -701,8 +725,24 @@ impl Walker<'_> {
     }
 }
 
-/// Die Namen der Einträge eines Verzeichnisses, ohne `.` und `..`.
-fn dir_names(dir: BorrowedFd<'_>) -> Result<Vec<OsString>, Errno> {
+/// Höchstens `room` Namen eines Verzeichnisses, ohne `.` und `..`.
+///
+/// Der zweite Rückgabewert sagt, ob es mehr gab, als `room` zuließ. Das ist
+/// der Unterschied zwischen einem Budget und einer Zählung: Gelesen wird nur
+/// so viel, wie noch hineinpasst, und die Liste kann deshalb nie größer werden
+/// als das, was der Schnappschuss ohnehin aufnehmen darf. Wie viele Einträge
+/// in einem Verzeichnis liegen, bestimmt der Agent; das ganze Verzeichnis erst
+/// in einen `Vec` zu legen und danach zu prüfen, gäbe ihm den Speicher und die
+/// Arbeit umsonst.
+///
+/// `room == 0` liest gar nichts und meldet `more`, sobald es einen Eintrag
+/// gibt.
+///
+/// Gelesen wird ab der aktuellen Position des Deskriptors, und ein Aufruf, der
+/// früh aufhört, lässt sie stehen. Das genügt hier, weil [`Walker::walk`] je
+/// Verzeichnis genau einen frischen Deskriptor öffnet und ihn genau einmal
+/// liest.
+fn dir_names(dir: BorrowedFd<'_>, room: usize) -> Result<(Vec<OsString>, bool), Errno> {
     let mut buffer = Vec::with_capacity(DIR_BUFFER_BYTES);
     let mut iter = RawDir::new(dir, buffer.spare_capacity_mut());
     let mut out = Vec::new();
@@ -712,9 +752,12 @@ fn dir_names(dir: BorrowedFd<'_>) -> Result<Vec<OsString>, Errno> {
         if name == b"." || name == b".." {
             continue;
         }
+        if out.len() >= room {
+            return Ok((out, true));
+        }
         out.push(OsString::from_vec(name.to_vec()));
     }
-    Ok(out)
+    Ok((out, false))
 }
 
 /// Der Unterschied zweier Schnappschüsse, sortiert nach Pfad.
@@ -781,5 +824,64 @@ fn changed(old: &Entry, new: &Entry) -> bool {
             (Some(a), Some(b)) => a != b,
             _ => old.size != new.size || old.mtime_ns != new.mtime_ns,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use std::os::fd::AsFd as _;
+
+    use super::{DEFAULT_MAX_ENTRIES, SnapshotLimits, dir_names, open_root, snapshot};
+
+    /// Ein Verzeichnis wird nur so weit gelesen, wie das Budget noch trägt.
+    ///
+    /// Das ist der Unterschied zwischen einem Budget und einer Zählung: Wer
+    /// erst das ganze Verzeichnis in einen `Vec` legt und danach `max_entries`
+    /// prüft, hat die Arbeit und den Speicher schon bezahlt — und wie viele
+    /// Einträge in einem Verzeichnis liegen, bestimmt der Agent. Von außen ist
+    /// das nicht zu sehen, deshalb steht der Test hier neben der Funktion.
+    #[test]
+    fn a_directory_is_read_only_as_far_as_the_budget_reaches() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for n in 0..20 {
+            std::fs::write(dir.path().join(format!("f{n:02}.txt")), b"x").expect("write");
+        }
+        // Je Aufruf ein frischer Deskriptor: `getdents` liest ab der aktuellen
+        // Position, und ein Aufruf, der früh aufhört, lässt sie stehen. Im
+        // Produktionsweg bekommt jeder Lauf ohnehin seinen eigenen (`walk`
+        // öffnet je Verzeichnis einmal).
+        let open = || open_root(dir.path()).expect("root");
+
+        let (names, overflowed) = dir_names(open().as_fd(), 3).expect("read");
+        assert_eq!(names.len(), 3, "only what fits is read: {names:?}");
+        assert!(overflowed, "and the rest is reported, not silently dropped");
+
+        // Kein Platz heißt: kein Name, und trotzdem die Meldung.
+        let (none, overflowed) = dir_names(open().as_fd(), 0).expect("read");
+        assert!(none.is_empty(), "{none:?}");
+        assert!(overflowed);
+
+        // Und mit Platz für alles wird alles gelesen und nichts gemeldet.
+        let (all, overflowed) = dir_names(open().as_fd(), DEFAULT_MAX_ENTRIES).expect("read");
+        assert_eq!(all.len(), 20, "{all:?}");
+        assert!(!overflowed);
+    }
+
+    /// Der Deckel des Schnappschusses greift und sagt es.
+    #[test]
+    fn the_snapshot_stops_at_the_entry_budget_and_says_so() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for n in 0..20 {
+            std::fs::write(dir.path().join(format!("f{n:02}.txt")), b"x").expect("write");
+        }
+        let limits = SnapshotLimits {
+            max_entries: 5,
+            ..SnapshotLimits::default()
+        };
+        let snap = snapshot(dir.path(), &limits).expect("snapshot");
+        assert!(snap.len() <= 5, "{} entries", snap.len());
+        assert!(snap.truncated());
     }
 }

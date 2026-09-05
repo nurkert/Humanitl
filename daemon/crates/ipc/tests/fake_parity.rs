@@ -541,6 +541,33 @@ fn table() -> Vec<Case> {
                 }
             ),
         },
+        // ---- GetSessionSummary (HUM-043) ---------------------------------
+        //
+        // Beide Seiten lesen zuerst die Kennung und sehen erst danach nach, ob
+        // es zu ihr etwas gibt. Andersherum antwortete der echte Dienst ohne
+        // Aufzeichnung `RECORDER_001` auf denselben Unsinn, auf den der Fake
+        // `SANDBOX_027` sagte — und die Oberfläche übte gegen den falschen
+        // Fehlerfall.
+        Case {
+            what: "get_session_summary with an id that is not one",
+            expected: refused(Code::InvalidArgument, codes::IPC_005),
+            call: both!(
+                get_session_summary,
+                v1::SessionSummaryRef {
+                    sandbox_id: "not-a-sandbox-id".to_owned(),
+                }
+            ),
+        },
+        Case {
+            what: "get_session_summary without an id",
+            expected: refused(Code::InvalidArgument, codes::IPC_005),
+            call: both!(
+                get_session_summary,
+                v1::SessionSummaryRef {
+                    sandbox_id: String::new(),
+                }
+            ),
+        },
     ]
 }
 

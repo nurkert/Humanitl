@@ -13,6 +13,11 @@ workspace = true
 humanitl-catalog.workspace = true
 humanitl-config.workspace = true
 humanitl-core.workspace = true
+# Die Zusammenfassung eines Sandbox-Laufs (HUM-043) laesst die Detektoren ueber
+# die Dateien laufen, die der Agent geschrieben hat; `humanitl-sandbox` darf
+# diese Crate nicht kennen (`tools/deps-allow.toml`: nur core und config), also
+# laeuft der Scan hier. Die Kante ist erlaubt und war nur nie eingetragen.
+humanitl-findings.workspace = true
 humanitl-proxy.workspace = true
 # Der Regel-RPC (HUM-027) wertet eine Regel gegen aufgezeichnete Flows aus
 # (`dry_run`) und liest den Regelspeicher des Proxys; `tools/deps-allow.toml`

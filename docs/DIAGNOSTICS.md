@@ -197,6 +197,18 @@ Schnappschuss abgeschnitten
 
 Ohne Maske ins Projekt geschrieben
 
+#### SANDBOX_026
+
+Datei im Projekt, die der Rechner ausführt
+
+#### SANDBOX_027
+
+Keine Zusammenfassung zu diesem Lauf
+
+#### SANDBOX_028
+
+Geänderte Datei nicht durchsucht
+
 ### Bereich proxy
 
 #### PROXY_001

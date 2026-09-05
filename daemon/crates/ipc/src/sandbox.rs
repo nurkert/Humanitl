@@ -88,11 +88,13 @@ use std::time::{Duration, SystemTime};
 use humanitl_config::{Config, WorkMode};
 use humanitl_core::Severity as CoreSeverity;
 use humanitl_core::diagnostics::codes;
-use humanitl_core::ids::SessionId;
+use humanitl_core::ids::{SandboxId, SessionId};
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_proxy::rules_store::RulesStore;
 use humanitl_proxy::session::{SessionSettings, SessionState};
+use humanitl_recorder::Recorder;
 use humanitl_sandbox::agent::opencode;
+use humanitl_sandbox::summary::SessionSummary;
 use humanitl_sandbox::{
     AdapterRegistry, AgentContext, BwrapBackend, CheckResult, IsolationCheck, KILL_GRACE,
     LaunchInputs, MIN_BWRAP_VERSION, MountPolicy, SANDBOX_SHELL, SandboxBackend, SandboxFile,
@@ -106,6 +108,7 @@ use crate::session::{
     SessionRequest, SessionResolver, ask_mode_name, bundled_rules, parse_ask_mode, parse_work_mode,
     work_mode_name,
 };
+use crate::summary::SummaryWatch;
 use crate::terminal::{HeldNotices, TerminalHub};
 use crate::v1;
 
@@ -340,6 +343,27 @@ struct Pending {
     claimed: bool,
 }
 
+/// Was ein geglückter Start dem Aufrufer mitgibt.
+///
+/// Alles drei überlebt den Start und wird danach gebraucht: die Befunde des
+/// Plans gehören in den Ereignisstrom, der Schnappschuss in die
+/// Zusammenfassung am Ende, und die Kennung des Laufs braucht beide. Sie
+/// stehen hier und nicht in [`Running`]: Ein Stopp räumt `running` weg, bevor
+/// die begleitende Aufgabe fertig ist, und die Zusammenfassung wäre dann
+/// verloren — mitsamt dem einzigen Schnappschuss, den es von vorher gibt.
+#[derive(Debug)]
+struct Launched {
+    /// Befunde, die den Start nicht verhindert haben: eine aufgehobene Maske
+    /// (`SANDBOX_020`), ein Kernel ohne `openat2` (`SANDBOX_021`), ein
+    /// Projektverzeichnis, das sich nicht lesen ließ (`SANDBOX_011`).
+    warnings: Vec<Diagnostic>,
+    /// Der Blick auf `/work`, sobald der Lauf endet; `None`, wenn das Projekt
+    /// nur lesbar eingehängt ist oder sich nicht lesen ließ.
+    watch: Option<SummaryWatch>,
+    /// Die Kennung dieses Laufs, zugleich der Schlüssel der Zusammenfassung.
+    sandbox: SandboxId,
+}
+
 /// Der Anspruch auf den nächsten Start, solange er gehalten wird.
 ///
 /// Er gibt sich beim Fallenlassen selbst frei, damit kein Fehlerpfad ihn
@@ -383,6 +407,12 @@ struct Inner {
     settings: Option<Arc<SessionSettings>>,
     /// Woher die Hinweiszeilen im Terminal kommen (HUM-042).
     notices: Option<HeldNotices>,
+    /// Wohin die Zusammenfassung eines Laufs geht (HUM-043).
+    ///
+    /// Ohne Aufzeichnung entsteht sie trotzdem und reist als Ereignis; nur
+    /// nachschlagen lässt sie sich später nicht. Das ist der Fall im
+    /// Fake-Modus und in Tests.
+    recorder: Option<Recorder>,
 }
 
 /// Woran der Dienst hängt, wenn eine Sitzung startet.
@@ -407,6 +437,11 @@ pub struct SandboxPorts {
     /// Ohne diesen Anschluss läuft die Sitzung ohne Hinweise. Das ist der
     /// Fall im Fake-Modus und in Tests; ein Daemon mit Proxy hat beide.
     pub notices: Option<HeldNotices>,
+    /// Wohin die Zusammenfassung eines Laufs geht (HUM-043).
+    ///
+    /// Ohne Aufzeichnung entsteht sie trotzdem und reist als Ereignis; nur
+    /// `GetSessionSummary` findet sie später nicht mehr.
+    pub recorder: Option<Recorder>,
 }
 
 impl SandboxPorts {
@@ -437,6 +472,14 @@ impl SandboxPorts {
         self.notices = Some(notices);
         self
     }
+
+    /// Dieselben Anschlüsse mit der Aufzeichnung, in der die Zusammenfassung
+    /// eines Laufs liegen bleibt (HUM-043).
+    #[must_use]
+    pub fn with_recorder(mut self, recorder: Recorder) -> Self {
+        self.recorder = Some(recorder);
+        self
+    }
 }
 
 impl SandboxService {
@@ -460,6 +503,7 @@ impl SandboxService {
                 rules: ports.rules,
                 settings: ports.settings,
                 notices: ports.notices,
+                recorder: ports.recorder,
             }),
         }
     }
@@ -845,7 +889,18 @@ impl Inner {
         })
         .await;
         match launched {
-            Ok(Ok(())) => self.accompany(&plan, output_rx, &tx).await,
+            Ok(Ok(run)) => {
+                // Die Befunde des Plans zuerst: eine aufgehobene Maske
+                // (`SANDBOX_020`) und ein Kernel ohne `openat2`
+                // (`SANDBOX_021`) gehören zu dem Lauf, der gerade beginnt, und
+                // nicht hinter seine Ausgabe.
+                for diagnostic in &run.warnings {
+                    if tx.send(diagnostic_event(diagnostic)).await.is_err() {
+                        break;
+                    }
+                }
+                self.accompany(&plan, run, output_rx, &tx).await;
+            }
             Ok(Err(diagnostic)) => {
                 let _ = tx.send(diagnostic_event(&diagnostic)).await;
                 let _ = tx
@@ -859,13 +914,39 @@ impl Inner {
         }
     }
 
-    /// Begleitet die gestartete Sitzung bis zum Ende des Agenten.
+    /// Begleitet die gestartete Sitzung bis zum Ende des Agenten und danach
+    /// bis zur Zusammenfassung.
     ///
     /// Die Reihenfolge ist eine Aussage: erst die Zeile für das Log, dann die
     /// drei Garantien (eine rote beendet die Sitzung hier), dann `running`,
     /// und erst danach die Ausgabe. Wer `running` sieht, hat die drei
     /// Ergebnisse schon gesehen.
+    ///
+    /// **Dies ist der Wach-Task auf den Lauf**, und es braucht keinen zweiten:
+    /// [`SandboxService::stream`] startet [`Inner::start`] in einer eigenen
+    /// Aufgabe, die nicht am Ereignisstrom des Clients hängt. Wer seinen Strom
+    /// schließt, beendet damit weder das Lesen der Ausgabe
+    /// ([`Inner::stream_output`] merkt es sich in `forward`) noch diese
+    /// Aufgabe. Die Zusammenfassung entsteht deshalb auch dann, wenn niemand
+    /// mehr zusieht, und sie entsteht auf **beiden** Wegen hinaus: nach einem
+    /// gewöhnlichen Ende ebenso wie nach einer roten Garantie. Was der Agent in
+    /// den Millisekunden bis zum `SIGKILL` geschrieben hat, gehört zu dem, was
+    /// ein Mensch danach sehen muss.
     async fn accompany(
+        self: &Arc<Self>,
+        plan: &v1::sandbox_request::Plan,
+        run: Launched,
+        output: std::sync::mpsc::Receiver<humanitl_sandbox::OutputChunk>,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) {
+        let watch = run.watch;
+        let sandbox = run.sandbox;
+        self.attend(plan, output, tx).await;
+        self.summarize(watch, sandbox, tx).await;
+    }
+
+    /// Der Lauf selbst: Log-Zeile, Garantien, `running`, Ausgabe, Exit-Code.
+    async fn attend(
         self: &Arc<Self>,
         plan: &v1::sandbox_request::Plan,
         output: std::sync::mpsc::Receiver<humanitl_sandbox::OutputChunk>,
@@ -1342,6 +1423,94 @@ impl Inner {
         }
     }
 
+    /// Baut die Zusammenfassung dieses Laufs, legt sie ab und schickt sie.
+    ///
+    /// Sie entsteht **nach** dem Ende des Prozesses: [`Inner::attend`] kehrt
+    /// erst zurück, wenn der Strom der Ausgabe zu Ende ist und `wait` den
+    /// Status hat, und `kill_and_fail` wartet auf das Einsammeln. Ein zweiter
+    /// Schnappschuss über einen Baum, in den noch geschrieben wird, wäre eine
+    /// Aussage über einen Zeitpunkt, der schon vorbei ist.
+    ///
+    /// Die Befunde reisen zweimal, aus einer Quelle: als eigene
+    /// `Diagnostic`-Ereignisse, damit jeder Client sie sieht, der Befunde
+    /// ohnehin liest (`humanitl run`, der Sandbox-Bildschirm), und in der
+    /// Nachricht selbst, weil `GetSessionSummary` keinen Ereignisstrom hat und
+    /// dieselbe Auskunft geben muss. Gerechnet werden sie an einer Stelle,
+    /// [`SessionSummary::diagnostics`].
+    async fn summarize(
+        self: &Arc<Self>,
+        watch: Option<SummaryWatch>,
+        sandbox: SandboxId,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) {
+        let Some(watch) = watch else {
+            return;
+        };
+        let settings = match crate::summary::findings_settings(&self.config()) {
+            Ok(settings) => settings,
+            Err(diagnostic) => {
+                let _ = tx.send(diagnostic_event(&diagnostic)).await;
+                return;
+            }
+        };
+        let session = self.session;
+        // Der zweite Schnappschuss läuft über den Baum und liest Dateien; das
+        // gehört auf einen eigenen Faden.
+        let built =
+            tokio::task::spawn_blocking(move || watch.finish(session, sandbox, &settings)).await;
+        let summary = match built {
+            Ok(Ok(summary)) => summary,
+            Ok(Err(diagnostic)) => {
+                let _ = tx.send(diagnostic_event(&diagnostic)).await;
+                return;
+            }
+            Err(error) => {
+                let _ = tx.send(diagnostic_event(&joined_failed(&error))).await;
+                return;
+            }
+        };
+        // Erst ablegen, dann senden: Ein Client, der das Ereignis sieht und
+        // sofort `GetSessionSummary` ruft, soll die Zeile schon finden.
+        self.store_summary(&summary, tx).await;
+        for diagnostic in &summary.diagnostics() {
+            if tx.send(diagnostic_event(diagnostic)).await.is_err() {
+                return;
+            }
+        }
+        let _ = tx
+            .send(v1::SandboxEvent {
+                event: Some(v1::sandbox_event::Event::Summary(
+                    crate::convert::session_summary_to_proto(&summary, SystemTime::now()),
+                )),
+            })
+            .await;
+    }
+
+    /// Legt die Zusammenfassung in der Aufzeichnung ab, wenn es eine gibt.
+    ///
+    /// Ohne Aufzeichnung geschieht nichts: Der Lauf ist trotzdem
+    /// zusammengefasst, nur nicht nachschlagbar. Ein Fehler beim Serialisieren
+    /// ist ein Befund und kein stiller Verlust — sonst hielte ein Mensch ein
+    /// leeres `humanitl sessions summary` für einen Lauf ohne Änderungen.
+    async fn store_summary(&self, summary: &SessionSummary, tx: &mpsc::Sender<v1::SandboxEvent>) {
+        let Some(recorder) = self.recorder.as_ref() else {
+            return;
+        };
+        match serde_json::to_string(summary) {
+            Ok(json) => recorder.store_session_summary(self.session, summary.sandbox, &json),
+            Err(error) => {
+                let diagnostic = Diagnostic::builder(codes::RECORDER_003, Severity::Warning)
+                    .why(format!(
+                        "the summary of sandbox {} could not be written to the recording \
+                         ({error}); it is in this event stream and nowhere else",
+                        summary.sandbox
+                    ))
+                    .build();
+                let _ = tx.send(diagnostic_event(&diagnostic)).await;
+            }
+        }
+    }
+
     /// Startet die geplante Sandbox und merkt sie sich.
     ///
     /// Die Sitzung läuft an einem Pseudoterminal (HUM-042): Der Agent bekommt
@@ -1357,12 +1526,15 @@ impl Inner {
     /// ([`Inner::stream_output`]), das Terminal
     /// [`humanitl_core::TerminalPolicy::FullScreen`] ([`TerminalHub`]). Zwei
     /// Wege, zwei Zusagen, ein Strom.
+    ///
+    /// Blockierend, und mit dem Schnappschuss des Projektverzeichnisses darin:
+    /// Der Aufrufer ruft es auf einem eigenen Faden.
     fn launch(
         &self,
         plan: &v1::sandbox_request::Plan,
         command: &[OsString],
         output: Option<humanitl_sandbox::OutputSink>,
-    ) -> Result<(), Diagnostic> {
+    ) -> Result<Launched, Diagnostic> {
         let prepared = self.prepare_with_command(plan, command)?;
         let backend = prepared.backend.clone().with_stdio(StdioMode::Pty {
             cols: DEFAULT_TERMINAL_SIZE.0,
@@ -1378,8 +1550,39 @@ impl Inner {
             launcher = launcher.with_output_sink(sink);
         }
         let launch = launcher.plan(&prepared.profile, &prepared.session)?;
+        let mut warnings = launch.warnings.clone();
+        // **Der Schnappschuss steht zwischen Planen und Starten.** Vorher gibt
+        // es `LaunchPlan::unprotected` noch nicht, und nachher wäre er falsch:
+        // Was der Agent in der Zwischenzeit schreibt, stünde als „war schon
+        // da" im Baum und fehlte am Ende im Unterschied. Er kostet einen Lauf
+        // über das Projekt und verzögert den Start um genau diesen Lauf; die
+        // Budgets aus `SnapshotLimits` decken ihn nach oben (HUM-043).
+        let watch = match crate::summary::SummaryWatch::start(
+            &prepared.session.work_src,
+            prepared.session.work_mode,
+            &launch.unprotected,
+        ) {
+            Ok(watch) => watch,
+            // Ohne ersten Schnappschuss gibt es später keinen Vergleich. Der
+            // Start geht trotzdem weiter: Ein Projektverzeichnis, das sich
+            // nicht lesen lässt, ist ein Grund für einen Befund und keiner,
+            // dem Menschen die Sitzung zu verweigern.
+            Err(diagnostic) => {
+                warnings.push(diagnostic);
+                None
+            }
+        };
+        if let Some(watch) = watch.as_ref() {
+            tracing::info!(
+                session = %self.session,
+                entries = watch.entries(),
+                work_dir = %prepared.session.work_src.display(),
+                "project snapshot taken before the sandbox starts"
+            );
+        }
         let handle = launcher.launch(&launch)?;
         drop(launcher);
+        let sandbox = handle.id;
         let handle = Arc::new(handle);
         let terminal = TerminalHub::new(
             Arc::clone(&handle),
@@ -1397,7 +1600,11 @@ impl Inner {
             work_mode: prepared.session.work_mode,
             terminal,
         });
-        Ok(())
+        Ok(Launched {
+            warnings,
+            watch,
+            sandbox,
+        })
     }
 
     /// Der Schnappschuss, wie ihn die Oberfläche zeigt.

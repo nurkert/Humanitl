@@ -24,6 +24,7 @@
 //! `daemon/crates/ipc/tests/fake_parity.rs` hält das fest.
 
 use humanitl_core::diagnostics::codes;
+use humanitl_core::ids::SandboxId;
 use humanitl_core::rule::Rule;
 use humanitl_core::{Authority, Decision, Diagnostic, FlowId, Method, Scheme, SessionId, Severity};
 use humanitl_proxy::llm_probe::EXAMPLE_ENDPOINT;
@@ -122,6 +123,25 @@ fn decision_of(request: &v1::DecideRequest, body_cap_bytes: u64) -> Result<Decis
 /// und behauptete damit, es gäbe ihn (`backlog/CONVENTIONS.md` 4.12).
 pub fn flow_id(text: &str) -> Result<FlowId, Diagnostic> {
     FlowId::parse(text).map_err(|error| bad_decide(format!("{text:?} is not a flow id: {error}")))
+}
+
+/// Liest die Kennung eines Sandbox-Laufs aus dem Text einer Anfrage.
+///
+/// Sie ist der Schlüssel der Zusammenfassung (HUM-043) und der eine Wert, den
+/// `humanitl sessions summary <id>` zur Hand hat.
+///
+/// # Errors
+///
+/// [`Diagnostic`] mit `IPC_005`, wenn der Text keine Kennung ist. Nicht
+/// `SANDBOX_027` („keine Zusammenfassung zu diesem Lauf"): Das hieße, es gäbe
+/// den Lauf und nur seine Zusammenfassung fehle. Eine unlesbare Kennung ist
+/// eine unlesbare Anfrage (`backlog/CONVENTIONS.md` 4.12).
+pub fn sandbox_id(text: &str) -> Result<SandboxId, Diagnostic> {
+    SandboxId::parse(text.trim()).map_err(|error| {
+        Diagnostic::builder(codes::IPC_005, Severity::Error)
+            .why(format!("{text:?} is not a sandbox id: {error}"))
+            .build()
+    })
 }
 
 /// Die Prüfsumme aus einem [`v1::BodyRef`].
