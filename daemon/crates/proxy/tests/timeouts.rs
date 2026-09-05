@@ -1,4 +1,9 @@
-//! Die eine Uhr auf der Verbindung zum Agenten (HUM-101).
+//! Die Uhren auf der Verbindung zum Agenten (HUM-101, HUM-120).
+//!
+//! Der erste Teil dieser Datei gehört HUM-101 und der einen Leerlaufuhr, der
+//! zweite HUM-120 und den drei Spannen, die bis dahin ohne Uhr liefen — dazu
+//! der Obergrenze für gleichzeitige Verbindungen, ohne die eine Uhr je Spanne
+//! nur die halbe Arbeit tut.
 //!
 //! Vor diesem Issue standen zwei Schlüssel für dieselbe Spanne im Schema:
 //! `limits.header_timeout_secs` (Vorgabe 30) und `limits.idle_timeout_secs`
@@ -35,9 +40,13 @@ mod support;
 
 use std::time::{Duration, Instant};
 
+use bytes::Bytes;
+use http_body_util::Full;
 use humanitl_core::{BlockReason, Decision, FlowEvent};
+use humanitl_recorder::{Dir, FlowQuery};
+use hyper::{Request, StatusCode};
 use support::{FakeUpstream, ProxyBuilder};
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::UnixStream;
 
 /// Die Uhr der meisten Fälle. Sekunden sind die kleinste Einheit der
@@ -303,45 +312,651 @@ async fn a_streaming_passthrough_survives_the_header_timeout() {
     assert_closed_by_the_clock(idle, CLOCK);
 }
 
-/// Der Client hört mitten in der Anfrage auf — und niemand schließt die
-/// Verbindung.
+// ---------------------------------------------------------------------------
+// Die drei Spannen der Verbindung (HUM-120)
+// ---------------------------------------------------------------------------
+//
+// Auch dieser Teil misst an der Wand, und das ist eine Messung und keine
+// Bequemlichkeit. `#[tokio::test(start_paused = true)]` wurde versucht und ist
+// hier untauglich: Die gestellte Uhr springt weiter, sobald der Ablauf nichts
+// zu rechnen hat, und das schließt das Warten auf einen echten Socket ein. Ein
+// Spike mit genau diesen Fällen ergab für eine konfigurierte Frist von einer
+// Sekunde eine gemessene Spanne von 29,952 Sekunden bei einer Lesefrist von 30
+// Sekunden und 1798,144 Sekunden bei einer von 1800 — die Uhr lief also der
+// eigenen Lesefrist des Tests hinterher, nicht der Frist des Proxys, weil der
+// Kopf der Anfrage noch unterwegs war, als der Ablauf sich für untätig hielt.
+// Ein zwischengeschobener virtueller Schlaf half nicht (gemessen: 28,662
+// Sekunden). Deshalb echte Sekunden, und deshalb dieselben Werte wie oben.
+
+/// Die Lücke, die ein redender Peer zwischen zwei Stücken lässt.
 ///
-/// Kein Regressionstest, sondern ein festgehaltener Zustand: Hypers Kopf-Uhr
-/// ist gelöscht, sobald der Kopf geparst ist, und um `body::buffer` liegt keine
-/// Frist. Die Verbindung bleibt offen, und mit ihr eine Aufgabe und ein
-/// Dateideskriptor. HUM-120 schließt diese Spanne; dann wird dieser Test rot
-/// und beschreibt das neue Verhalten (`backlog/CONVENTIONS.md` 4.25,
-/// `docs/SECURITY.md`).
+/// Sie liegt zwischen [`CLOCK`] und [`SLOW_CLOCK`], und daran hängt der ganze
+/// Beweis: Mit der kurzen Uhr wird derselbe Peer abgeschnitten, mit der langen
+/// kommt er durch. Eine fest verdrahtete Frist bestünde höchstens eine der
+/// beiden Richtungen.
+const GAP: Duration = Duration::from_secs(2);
+
+/// Eine Frist, die in diesen Fällen nie ablaufen soll: Sie gehört einer anderen
+/// Spanne, und wenn sie mitmisst, misst der Test das Falsche.
+const NEVER: Duration = Duration::from_secs(3600);
+
+/// Die obere Zugabe dieser Fälle, enger als [`SLACK`].
+///
+/// Sie muss unter dem Abstand zu [`GAP`] bleiben: Mit einer Zugabe von
+/// anderthalb Sekunden läge die Lücke des redenden Peers (2 s) noch im Fenster
+/// der Ein-Sekunden-Uhr, und eine Frist, die in Wahrheit auf die Lücke wartet,
+/// käme durch.
+const NARROW_SLACK: Duration = Duration::from_millis(700);
+
+/// Prüft, dass eine Spanne genau so lang war wie die konfigurierte Frist.
+///
+/// Beide Schranken gehören dazu. Die untere allein bestünde jede zu lange Uhr,
+/// die obere allein jede zu kurze; erst zusammen, und erst mit zwei
+/// verschiedenen konfigurierten Werten, binden sie die Uhr an ihren Schlüssel.
+fn assert_span_was_the_clock(measured: Duration, clock: Duration, span: &str) {
+    assert!(
+        measured + EARLY >= clock,
+        "{span} ended after {measured:?}, before its own configured timeout of {clock:?}"
+    );
+    assert!(
+        measured < clock + NARROW_SLACK,
+        "{span} ended after {measured:?}; the configured timeout is {clock:?}, so this clock does \
+         not come from its configuration key"
+    );
+}
+
+/// Liest bis zum Ende der Verbindung und liefert die Zeit dafür; wie
+/// [`read_to_the_end`], aber auch für die Lesehälfte eines geteilten Stroms.
+async fn read_half_to_the_end(
+    stream: &mut (impl AsyncRead + Unpin),
+    sink: &mut Vec<u8>,
+) -> Duration {
+    let started = Instant::now();
+    tokio::time::timeout(Duration::from_secs(20), stream.read_to_end(sink))
+        .await
+        .expect("the proxy closes the connection on its own")
+        .expect("reading until the end of the connection works");
+    started.elapsed()
+}
+
+/// Liest, bis `marker` im Empfangenen steht; wie [`read_until`], aber auch für
+/// die Lesehälfte eines geteilten Stroms.
+async fn read_half_until(
+    stream: &mut (impl AsyncRead + Unpin),
+    sink: &mut Vec<u8>,
+    marker: &str,
+) -> Duration {
+    let started = Instant::now();
+    let mut chunk = [0u8; 4096];
+    loop {
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "no {marker:?} within 20s; got {:?}",
+            String::from_utf8_lossy(sink)
+        );
+        let read = stream.read(&mut chunk).await.expect("the connection reads");
+        assert!(
+            read > 0,
+            "the connection ended before {marker:?}; got {:?}",
+            String::from_utf8_lossy(sink)
+        );
+        sink.extend_from_slice(&chunk[..read]);
+        if String::from_utf8_lossy(sink).contains(marker) {
+            return started.elapsed();
+        }
+    }
+}
+
+/// Ein `POST` mit vollständigem Kopf, angekündigten 1000 Bytes und zehn
+/// gesendeten. Der Rest kommt später — oder nie.
+fn half_sent_post(port: u16) -> String {
+    format!(
+        "POST http://127.0.0.1:{port}/echo HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+         Content-Length: 1000\r\n\r\n0123456789"
+    )
+}
+
+/// Die Codes aller Befunde, die dieser Strom bisher gezeigt hat.
+fn diagnostic_codes(events: &support::Events) -> Vec<String> {
+    events
+        .seen
+        .iter()
+        .filter_map(|event| match event {
+            FlowEvent::Diagnostic { diagnostic, .. } => Some(diagnostic.code.as_str().to_owned()),
+            _other => None,
+        })
+        .collect()
+}
+
+/// Spanne 1, Richtung „abgeschnitten": Ein Client, der zehn Bytes schickt und
+/// dann schweigt, bekommt `408` nach genau der konfigurierten Frist.
+///
+/// Vor HUM-120 lief diese Spanne ohne Uhr: Hypers Kopf-Uhr ist gelöscht, sobald
+/// der Kopf geparst ist, und um `body::buffer` lag keine Frist. Gemessen wurde
+/// eine Verbindung, die nach acht Sekunden noch stand, nichts lieferte und kein
+/// einziges Ereignis erzeugte — kein Mensch hat sie je gesehen.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_half_sent_request_body_is_not_watched_by_any_clock() {
-    let upstream = FakeUpstream::plain().await;
-    let port = upstream.port();
+async fn a_silent_request_body_ends_in_408_after_limits_body_timeout_secs() {
+    for clock in [CLOCK, SLOW_CLOCK] {
+        let upstream = FakeUpstream::plain().await;
+        let port = upstream.port();
+        let proxy = ProxyBuilder::new()
+            // Die Kopf-Uhr gehört einer anderen Spanne und darf hier nicht
+            // mitmessen; sonst stünde nicht fest, welche der beiden schnitt.
+            .header_timeout(NEVER)
+            .body_timeout(clock)
+            .passthrough()
+            .start()
+            .await;
+        let mut events = proxy.events();
+
+        let mut stream = UnixStream::connect(&proxy.socket).await.unwrap();
+        stream
+            .write_all(half_sent_post(port).as_bytes())
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+
+        let mut sink = Vec::new();
+        let silence = read_to_the_end(&mut stream, &mut sink).await;
+
+        let text = String::from_utf8_lossy(&sink);
+        assert!(
+            text.starts_with("HTTP/1.1 408 Request Timeout"),
+            "a request body that goes silent must end in 408: {text}"
+        );
+        assert!(
+            text.to_ascii_lowercase().contains("connection: close"),
+            "the answer must close the connection: {text}"
+        );
+        assert_span_was_the_clock(silence, clock, "the request body");
+        assert_eq!(
+            upstream.hits(),
+            0,
+            "nothing may leave while the body is incomplete"
+        );
+
+        // Der Mensch sieht die Spanne. Ein Fluss entsteht nicht — es gibt keine
+        // vollständige Anfrage, über die zu entscheiden wäre —, aber der Befund
+        // steht im Ereignisstrom, und genau der fehlte vorher.
+        events.drain();
+        assert_eq!(
+            events.count("received"),
+            0,
+            "a half-sent request never becomes a flow: {:?}",
+            events.names()
+        );
+        assert_eq!(diagnostic_codes(&events), ["PROXY_011"]);
+    }
+}
+
+/// Spanne 1, das Gegenstück: Derselbe Client mit derselben Pause kommt durch,
+/// sobald die konfigurierte Frist länger ist als seine Pause.
+///
+/// Die Pause ist beide Male [`GAP`]; nur der Schlüssel ändert sich. Damit
+/// scheitert jede Frist, die nicht aus `limits.body_timeout_secs` kommt: Eine
+/// zu kurze schneidet auch den langsamen Lauf ab, eine zu lange lässt auch den
+/// schnellen durch. Und weil die Pause zwischen den beiden Werten liegt, fällt
+/// auch eine Frist durch, die in Wahrheit die Gesamtdauer misst.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_request_body_that_pauses_shorter_than_its_clock_runs_to_the_end() {
+    for (clock, arrives) in [(CLOCK, false), (SLOW_CLOCK, true)] {
+        let upstream = FakeUpstream::plain().await;
+        let port = upstream.port();
+        let proxy = ProxyBuilder::new()
+            .header_timeout(NEVER)
+            .body_timeout(clock)
+            .passthrough()
+            .start()
+            .await;
+
+        let mut stream = UnixStream::connect(&proxy.socket).await.unwrap();
+        // Geliehene Hälften, nicht `into_split`: Eine eigene `OwnedWriteHalf`
+        // schließt beim Fallenlassen die Schreibrichtung, und der Proxy sähe
+        // ein Dateiende, bevor der Test seine Antwort gelesen hat.
+        let (mut reader, mut writer) = stream.split();
+        let head = half_sent_post(port);
+        let feeding = async {
+            let _ignored = writer.write_all(head.as_bytes()).await;
+            let _ignored = writer.flush().await;
+            tokio::time::sleep(GAP).await;
+            // Nach dem Abschneiden schlägt dieses Schreiben fehl. Das ist der
+            // Fall und kein Fehler des Tests.
+            let _ignored = writer.write_all(&[b'x'; 990]).await;
+            let _ignored = writer.flush().await;
+        };
+
+        let mut sink = Vec::new();
+        let reading = async {
+            if arrives {
+                // Der Fake-Upstream spiegelt die Länge zurück: `X-Echo-Len: 1000`
+                // heißt, dass beide Hälften des Rumpfs bei ihm ankamen.
+                read_half_until(&mut reader, &mut sink, "X-Echo-Len: 1000").await
+            } else {
+                read_half_to_the_end(&mut reader, &mut sink).await
+            }
+        };
+        let (_fed, span) = tokio::join!(feeding, reading);
+
+        if arrives {
+            let text = String::from_utf8_lossy(&sink);
+            assert!(
+                text.starts_with("HTTP/1.1 200 OK"),
+                "a body whose pause is shorter than {clock:?} must go through: {text}"
+            );
+            assert!(
+                span + EARLY >= GAP,
+                "the answer came after {span:?}, so the second half was never awaited"
+            );
+            assert_eq!(upstream.hits(), 1, "the complete request goes out");
+        } else {
+            let text = String::from_utf8_lossy(&sink);
+            assert!(
+                text.starts_with("HTTP/1.1 408 Request Timeout"),
+                "a pause of {GAP:?} is longer than {clock:?} and must be cut: {text}"
+            );
+            assert_span_was_the_clock(span, clock, "the request body");
+            assert_eq!(upstream.hits(), 0, "an incomplete request stays here");
+        }
+    }
+}
+
+/// Spanne 2, beide Richtungen: Ein Ziel, dessen nächstes Stück zu spät kommt,
+/// wird abgeschnitten; kommt es rechtzeitig, läuft der Strom zu Ende.
+///
+/// Und die Aufzeichnung sagt, was geschah: Der abgeschnittene Strom steht als
+/// **gekürzt** in der Historie, der vollständige nicht. Eine halbe Antwort, die
+/// wie eine ganze aussieht, wäre schlimmer als gar keine
+/// (`backlog/CONVENTIONS.md` 4.13).
+///
+/// Das Ziel ist hier das Sprachmodell: Genau seine Antwort ist der Strom, den
+/// eine Uhr über der Gesamtdauer zerrissen hätte.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_response_body_that_goes_silent_is_cut_and_recorded_as_truncated() {
+    for (clock, complete) in [(CLOCK, false), (SLOW_CLOCK, true)] {
+        let upstream = FakeUpstream::ollama().await;
+        let port = upstream.port();
+        let proxy = ProxyBuilder::new()
+            .header_timeout(NEVER)
+            .body_timeout(clock)
+            .passthrough()
+            .recording(true)
+            .start()
+            .await;
+        let mut events = proxy.events();
+
+        let mut stream = UnixStream::connect(&proxy.socket).await.unwrap();
+        // Zwei Stücke im Abstand von `GAP`, danach `[DONE]`.
+        let path = format!("/api/chat?count=2&interval_ms={}", GAP.as_millis());
+        let request = format!(
+            "POST http://127.0.0.1:{port}{path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+             Content-Length: 2\r\nContent-Type: application/json\r\n\r\n{{}}"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        stream.flush().await.unwrap();
+
+        // Das erste Stück kommt sofort; ab ihm läuft die Frist, denn sie misst
+        // die Lücke zwischen zwei Stücken und nicht die Gesamtdauer.
+        let mut sink = Vec::new();
+        read_until(&mut stream, &mut sink, "\"index\":0").await;
+        assert!(
+            String::from_utf8_lossy(&sink).starts_with("HTTP/1.1 200 OK"),
+            "{:?}",
+            String::from_utf8_lossy(&sink)
+        );
+
+        if complete {
+            let span = read_until(&mut stream, &mut sink, "[DONE]").await;
+            assert!(
+                span + EARLY >= GAP,
+                "the second chunk cannot have arrived within {span:?}"
+            );
+        } else {
+            let silence = read_to_the_end(&mut stream, &mut sink).await;
+            assert_span_was_the_clock(silence, clock, "the streamed response body");
+            let text = String::from_utf8_lossy(&sink);
+            assert!(
+                !text.contains("[DONE]"),
+                "a cut stream must not carry the end of the answer: {text}"
+            );
+            assert_eq!(
+                text.matches("data: ").count(),
+                1,
+                "only the first chunk may have arrived: {text}"
+            );
+        }
+
+        // `Recorded` kommt aus `TeeBody::finish`, und dort wird der Mitschnitt
+        // unmittelbar davor geschlossen: Wer das Ereignis gesehen hat, findet
+        // die Zeile nach dem Leeren der Warteschlange vor.
+        events.wait_for("recorded").await;
+        let recorder = proxy.recorder.as_ref().expect("recording is on");
+        recorder.flush().await;
+        let rows = recorder
+            .list_flows(&FlowQuery::new(""))
+            .await
+            .unwrap_or_else(|err| panic!("{err}"))
+            .rows;
+        let row = rows.first().expect("the flow is in the history");
+        let detail = recorder
+            .get_flow(row.id)
+            .await
+            .unwrap_or_else(|err| panic!("{err}"))
+            .expect("the flow is in the history");
+        let response = detail
+            .messages
+            .iter()
+            .find(|message| message.dir == Dir::Response)
+            .expect("the answer is recorded");
+        assert_eq!(
+            response.body.truncated, !complete,
+            "a cut answer must be recorded as truncated and a complete one must not"
+        );
+    }
+}
+
+/// Spanne 3, Richtung „abgeschnitten": Ein `CONNECT`, das mit `200` bestätigt
+/// wurde und nie ein `ClientHello` schickt, endet nach genau der konfigurierten
+/// Kopf-Frist.
+///
+/// Still, ohne Antwort und ohne Fluss: Der Client hat sein `200` längst, und
+/// eine Anfrage stand nie im Tunnel. Was bleibt, ist eine Protokollzeile — wie
+/// bei jedem gescheiterten Handschlag.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connect_without_a_client_hello_ends_after_limits_header_timeout_secs() {
+    for clock in [CLOCK, SLOW_CLOCK] {
+        let proxy = ProxyBuilder::new().header_timeout(clock).start().await;
+
+        let mut stream = UnixStream::connect(&proxy.socket).await.unwrap();
+        stream
+            .write_all(b"CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\n\r\n")
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+
+        let mut sink = Vec::new();
+        read_until(&mut stream, &mut sink, "200 OK").await;
+        // Kein Byte mehr. Der Tunnel steht, der Handschlag beginnt nie.
+        let silence = read_to_the_end(&mut stream, &mut sink).await;
+        assert_span_was_the_clock(silence, clock, "the tls handshake after CONNECT");
+    }
+}
+
+/// Spanne 3, das Gegenstück: Ein regulärer Handschlag wird nicht abgeschnitten,
+/// und die Anfrage darin läuft durch.
+///
+/// Ohne diesen Fall bewiese der vorige nur, dass irgendetwas den Tunnel
+/// schließt — auch eine Frist von null täte das.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_real_handshake_survives_the_header_timeout() {
     let proxy = ProxyBuilder::new()
         .header_timeout(CLOCK)
         .passthrough()
         .start()
         .await;
+    let upstream = FakeUpstream::tls(&proxy.ca).await;
 
-    let mut stream = UnixStream::connect(&proxy.socket).await.unwrap();
-    // Der Kopf ist vollständig, der Rumpf kündigt 1000 Bytes an und bleibt bei
-    // zehn stehen.
-    let head = format!(
-        "POST http://127.0.0.1:{port}/echo HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
-         Content-Length: 1000\r\n\r\n0123456789"
-    );
-    stream.write_all(head.as_bytes()).await.unwrap();
-    stream.flush().await.unwrap();
+    let mut tunnel = proxy.tls_client("localhost", upstream.port()).await;
+    let request = Request::builder()
+        .uri("/echo")
+        .header("host", format!("localhost:{}", upstream.port()))
+        .body(Full::new(Bytes::new()))
+        .unwrap();
+    let response = tunnel.client.send(request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(upstream.hits(), 1);
+}
 
-    let quiet = CLOCK * 4;
-    let outcome = tokio::time::timeout(quiet, stream.read(&mut [0u8; 64])).await;
-    assert!(
-        outcome.is_err(),
-        "the connection ended after less than {quiet:?}; if HUM-120 built the clock for the \
-         request body, this test describes the old state and has to be rewritten"
-    );
-    assert_eq!(
-        upstream.hits(),
-        0,
-        "nothing may leave while the body is incomplete"
-    );
+/// Die Menge, nicht die Dauer: Über `limits.max_client_connections` hinaus wird
+/// abgelehnt, statt angenommen und liegen gelassen.
+///
+/// Drei Uhren schließen die Spannen, aber nicht die Menge. Wer in einer Spanne
+/// stehenbleibt, bindet je Verbindung eine Aufgabe und einen Dateideskriptor;
+/// ohne Obergrenze bindet derselbe Angriff dieselben Ressourcen, nur kürzer und
+/// dafür öfter. Deshalb gehören beide in dasselbe Issue.
+///
+/// Beide Läufe öffnen dieselben drei Verbindungen; nur der konfigurierte Wert
+/// ändert sich, und mit ihm das Schicksal der dritten.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_connection_over_limits_max_client_connections_is_refused() {
+    for (limit, refused) in [(2_u32, true), (3_u32, false)] {
+        let upstream = FakeUpstream::plain().await;
+        let port = upstream.port();
+        let proxy = ProxyBuilder::new()
+            // Während des Tests darf nichts von selbst zugehen; gemessen wird
+            // die Zahl der Verbindungen und sonst nichts.
+            .header_timeout(NEVER)
+            .max_client_connections(limit)
+            .passthrough()
+            .start()
+            .await;
+        let mut events = proxy.events();
+
+        // Zwei Verbindungen, die einen halben Kopf schicken und dann warten.
+        // Sie sind angenommen und halten ihren Platz.
+        let mut held = Vec::new();
+        for _ in 0..2 {
+            let mut stream = UnixStream::connect(&proxy.socket).await.unwrap();
+            stream.write_all(b"GET ").await.unwrap();
+            stream.flush().await.unwrap();
+            held.push(stream);
+        }
+
+        let mut stream = UnixStream::connect(&proxy.socket).await.unwrap();
+        // Die Anfrage geht sofort hinaus, wie bei jedem gewöhnlichen Client.
+        // Damit liegen beim Ablehnen ungelesene Bytes im Empfangspuffer des
+        // Proxys — und genau dann entscheidet sich, ob die `503` ankommt oder
+        // ob der Kern beim Schließen ein `RST` schickt und sie mitnimmt.
+        stream
+            .write_all(raw_get(port, "/echo").as_bytes())
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+        let mut sink = Vec::new();
+        if refused {
+            read_to_the_end(&mut stream, &mut sink).await;
+            let text = String::from_utf8_lossy(&sink);
+            assert!(
+                text.starts_with("HTTP/1.1 503 Service Unavailable"),
+                "over the limit the proxy answers 503 instead of dropping the connection: {text}"
+            );
+            assert!(
+                text.to_ascii_lowercase().contains("connection: close"),
+                "{text}"
+            );
+            assert!(
+                text.contains("reason: max_client_connections"),
+                "the answer must name the limit it hit: {text}"
+            );
+            assert_eq!(
+                upstream.hits(),
+                0,
+                "a refused connection never carried a request"
+            );
+            let event = events.wait_for("diagnostic").await;
+            let FlowEvent::Diagnostic {
+                flow_id,
+                diagnostic,
+                ..
+            } = event
+            else {
+                panic!("wait_for returned the wrong event");
+            };
+            assert_eq!(diagnostic.code.as_str(), "PROXY_010");
+            assert_eq!(flow_id, None, "no request was read, so there is no flow");
+        } else {
+            read_until(&mut stream, &mut sink, support::ECHO_BODY).await;
+            let text = String::from_utf8_lossy(&sink);
+            assert!(
+                text.starts_with("HTTP/1.1 200 OK"),
+                "under the limit the third connection is served: {text}"
+            );
+            assert_eq!(upstream.hits(), 1);
+        }
+        drop(held);
+    }
+}
+
+/// Wie weit ein Tunnel für diesen Test gedieh, bevor er stehenblieb.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TunnelStage {
+    /// `CONNECT` bestätigt, danach kein `ClientHello`. Der Tunnel hängt in
+    /// `tls::accept`, also in der dritten Spanne dieses Issues.
+    BeforeClientHello,
+    /// Handschlag fertig, Tunnel steht, keine Anfrage darin.
+    Established,
+}
+
+/// Öffnet einen Tunnel und lässt ihn offen; der Rückgabewert hält ihn.
+///
+/// `BeforeClientHello` liefert den rohen Strom, über den nichts mehr geht;
+/// `Established` liefert den fertigen Client des Tunnels. Beide Male lebt die
+/// Verbindung, solange der Wert lebt.
+async fn open_tunnel(
+    proxy: &support::Proxy,
+    stage: TunnelStage,
+) -> (Option<UnixStream>, Option<support::TlsClient>) {
+    match stage {
+        TunnelStage::BeforeClientHello => {
+            let mut stream = UnixStream::connect(&proxy.socket).await.unwrap();
+            stream
+                .write_all(b"CONNECT localhost:443 HTTP/1.1\r\nHost: localhost:443\r\n\r\n")
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+            let mut sink = Vec::new();
+            read_until(&mut stream, &mut sink, "200 OK").await;
+            (Some(stream), None)
+        }
+        TunnelStage::Established => (None, Some(proxy.tls_client("localhost", 443).await)),
+    }
+}
+
+/// Ein `CONNECT`-Tunnel behält seinen Platz, solange er offen ist.
+///
+/// **Der Fall, für den die Grenze am wichtigsten ist.** Bei einem `CONNECT`
+/// übergibt hyper die Verbindung an `hyper::upgrade::on`; `serve_connection`
+/// kehrt dabei zurück, während der Tunnel in einer eigenen Aufgabe weiterlebt.
+/// Hängt der Platz an der Lebensdauer von `serve_connection`, fällt er genau
+/// dort — und `limits.max_client_connections` gilt dann nur für einfaches HTTP
+/// und ausgerechnet nicht für die TLS-Tunnel, über die der Agent den
+/// überwiegenden Teil seines Verkehrs führt. Der erste Entwurf dieses Issues
+/// hatte genau diesen Fehler, und der erste Entwurf dieses Tests hat ihn nicht
+/// gesehen: Er hielt nur halb gesendete gewöhnliche Anfragen.
+///
+/// Beide Stufen gehören dazu. `BeforeClientHello` ist der schärfere Fall — er
+/// trifft die Handschlag-Spanne und die Mengengrenze zugleich, und dort steht
+/// noch nicht einmal ein entschlüsselter Strom, an dem etwas hängen könnte.
+/// `Established` zeigt, dass auch der fertige Tunnel zählt.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connect_tunnel_holds_its_place_until_it_is_closed() {
+    for stage in [TunnelStage::BeforeClientHello, TunnelStage::Established] {
+        for (limit, refused) in [(2_u32, true), (3_u32, false)] {
+            let upstream = FakeUpstream::plain().await;
+            let port = upstream.port();
+            let proxy = ProxyBuilder::new()
+                // Nichts darf von selbst zugehen: Ohne diese Zeile schnitte die
+                // Handschlag-Uhr die hängenden Tunnel weg, und der Test mäße,
+                // dass eine Frist läuft, statt dass ein Platz gehalten wird.
+                .header_timeout(NEVER)
+                .max_client_connections(limit)
+                .passthrough()
+                .start()
+                .await;
+            let mut events = proxy.events();
+
+            let mut tunnels = Vec::new();
+            for _ in 0..2 {
+                tunnels.push(open_tunnel(&proxy, stage).await);
+            }
+
+            let mut stream = UnixStream::connect(&proxy.socket).await.unwrap();
+            let mut sink = Vec::new();
+            if refused {
+                read_to_the_end(&mut stream, &mut sink).await;
+                let text = String::from_utf8_lossy(&sink);
+                assert!(
+                    text.starts_with("HTTP/1.1 503 Service Unavailable"),
+                    "two open tunnels ({stage:?}) fill a limit of {limit}, so the next connection \
+                     is refused: {text}"
+                );
+                assert!(
+                    text.contains("reason: max_client_connections"),
+                    "the refusal must arrive with its reason and not as a reset: {text}"
+                );
+                let event = events.wait_for("diagnostic").await;
+                let FlowEvent::Diagnostic { diagnostic, .. } = event else {
+                    panic!("wait_for returned the wrong event");
+                };
+                assert_eq!(diagnostic.code.as_str(), "PROXY_010");
+            } else {
+                stream
+                    .write_all(raw_get(port, "/echo").as_bytes())
+                    .await
+                    .unwrap();
+                stream.flush().await.unwrap();
+                read_until(&mut stream, &mut sink, support::ECHO_BODY).await;
+                let text = String::from_utf8_lossy(&sink);
+                assert!(
+                    text.starts_with("HTTP/1.1 200 OK"),
+                    "under the limit the connection beside the two tunnels is served: {text}"
+                );
+                assert_eq!(upstream.hits(), 1);
+            }
+
+            // Und der Platz kommt zurück, sobald die Tunnel fallen. Ohne diese
+            // Hälfte bewiese der Test nur, dass irgendetwas ablehnt — auch eine
+            // Grenze, die nie wieder aufmacht, täte das.
+            drop(stream);
+            tunnels.clear();
+            wait_for_a_free_place(&proxy, port).await;
+        }
+    }
+}
+
+/// Wartet, bis wieder eine Verbindung bedient wird.
+///
+/// Mit Wiederholung, und das ist kein Nachgeben gegenüber einer wackligen
+/// Zusicherung: Der Platz wird frei, wenn die Aufgabe des Tunnels endet, und
+/// die endet erst, nachdem sie das Dateiende ihres Stroms gesehen hat. Ein
+/// einziger Versuch unmittelbar nach dem Schließen misst die Laufzeit des
+/// Ablaufplaners und nicht die Grenze. Was der Test zusichert, ist „der Platz
+/// kommt zurück", nicht „er kommt in derselben Mikrosekunde zurück".
+async fn wait_for_a_free_place(proxy: &support::Proxy, port: u16) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut stream = UnixStream::connect(&proxy.socket).await.unwrap();
+        stream
+            .write_all(raw_get(port, "/echo").as_bytes())
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+
+        let mut sink = Vec::new();
+        let mut chunk = [0u8; 4096];
+        let served = loop {
+            match stream.read(&mut chunk).await {
+                Ok(0) | Err(_) => break false,
+                Ok(read) => {
+                    sink.extend_from_slice(&chunk[..read]);
+                    let text = String::from_utf8_lossy(&sink);
+                    if text.contains(support::ECHO_BODY) {
+                        break true;
+                    }
+                    if text.contains("503 Service Unavailable") {
+                        break false;
+                    }
+                }
+            }
+        };
+        if served {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no place came back within 10s after the tunnels were closed; got {:?}",
+            String::from_utf8_lossy(&sink)
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }

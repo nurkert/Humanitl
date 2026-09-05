@@ -36,6 +36,11 @@ const List<String> csvColumns = <String>[
   // proxy answered itself, so `decision` is empty on those rows (HUM-103).
   'meta',
   'origin_tool',
+  // Appended, not slotted in beside `response_size`: the column order is the
+  // format, and a reader who follows the old one keeps working. True where the
+  // recorded answer stops early (HUM-120); the name is the one JSON Lines and
+  // HAR use.
+  'response_body_truncated',
 ];
 
 /// [entries] as CSV, header row first.
@@ -45,14 +50,26 @@ String encodeCsv(List<HistoryExportEntry> entries) {
     ..write('\r\n');
   for (final HistoryExportEntry entry in entries) {
     out
-      ..write(csvRow(entry.flow).map(csvField).join(','))
+      ..write(
+        csvRow(
+              entry.flow,
+              responseTruncated: entry.detail.responseBody?.truncated ?? false,
+            )
+            .map(csvField)
+            .join(','),
+      )
       ..write('\r\n');
   }
   return out.toString();
 }
 
 /// One flow as the values of [csvColumns].
-List<String> csvRow(Flow flow) => <String>[
+///
+/// `responseTruncated` comes from the recorded body reference, because the row
+/// itself has no field for it. A caller who only holds a [Flow] cannot know it
+/// and leaves the default: `false` reads as "nothing marks this answer as
+/// cut", never as "the answer is whole".
+List<String> csvRow(Flow flow, {bool responseTruncated = false}) => <String>[
   formatHistoryIso8601(flow.receivedAt),
   flow.id.value,
   flow.sessionId.value,
@@ -75,6 +92,7 @@ List<String> csvRow(Flow flow) => <String>[
   '${flow.passthrough}',
   '${flow.meta}',
   flow.originTool,
+  '$responseTruncated',
 ];
 
 /// [value] quoted where RFC 4180 asks for it.

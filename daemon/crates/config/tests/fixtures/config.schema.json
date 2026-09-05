@@ -216,6 +216,7 @@
         "hold_body_cap_bytes": 33554432,
         "hold_max_bytes": 268435456,
         "hold_max_flows": 200,
+        "max_client_connections": 256,
         "max_decompress_ratio": 100,
         "preview_cap_bytes": 8388608,
         "recorder_max_body_bytes": 33554432
@@ -224,11 +225,10 @@
       "properties": {
         "body_timeout_secs": {
           "default": 300,
-          "description": "Sekunden, in denen ein Body vollständig übertragen sein muss.",
+          "description": "Sekunden Stille zwischen zwei Stücken eines Bodys, nicht seine Gesamtdauer. Gilt in beide Richtungen: für den Anfrage-Rumpf des Clients (danach 408) und für den gestreamten Antwort-Rumpf des Ziels (danach wird der Strom abgebrochen und die Aufzeichnung als gekürzt vermerkt). Ein großer Upload und ein langer Modell-Strom dürfen deshalb beliebig lange dauern, solange sie nicht verstummen.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer",
-          "x-pending-issue": "HUM-120",
           "x-project-scope": "allowed",
           "x-tier": "expert"
         },
@@ -285,6 +285,15 @@
           "type": "integer",
           "x-project-scope": "allowed",
           "x-tier": "advanced"
+        },
+        "max_client_connections": {
+          "default": 256,
+          "description": "Größte Zahl gleichzeitiger Verbindungen aus der Sandbox je Sitzung. Darüber antwortet der Proxy mit 503 und schließt; eine Uhr je Spanne allein hindert einen Prozess nicht daran, dieselben Ressourcen über viele Verbindungen zu binden.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "allowed",
+          "x-tier": "expert"
         },
         "max_decompress_ratio": {
           "default": 100,

@@ -28,6 +28,17 @@ const String harCreatorName = 'Humanitl';
 const String harBodyNotRecorded =
     'the body was not recorded; content.size is what the daemon counted';
 
+/// What `content.comment` says where the answer stopped mid-stream.
+///
+/// A cut answer that looks complete is worse than one that says it was cut
+/// (`backlog/CONVENTIONS.md` 4.13). The daemon marks it when the target went
+/// silent for longer than `limits.body_timeout_secs` or the client hung up
+/// (HUM-120); without this line the export would hand out the half as a whole.
+/// English for the same reason as [harBodyNotRecorded].
+const String harBodyTruncated =
+    'the response body is incomplete; the stream was cut before the target '
+    'finished, and content.size is what arrived';
+
 /// The whole `log` object for [entries].
 Map<String, Object?> harLog({
   required List<HistoryExportEntry> entries,
@@ -64,12 +75,23 @@ Map<String, Object?> harEntry(HistoryExportEntry entry) {
     'response': _response(entry),
     'cache': const <String, Object?>{},
     'timings': _timings(duration),
-    '_humanitl': humanitlBlock(flow),
+    '_humanitl': humanitlBlock(
+      flow,
+      responseTruncated: entry.detail.responseBody?.truncated ?? false,
+    ),
   };
 }
 
 /// The `_humanitl` block: what the format has no field for.
-Map<String, Object?> humanitlBlock(Flow flow) => <String, Object?>{
+///
+/// `responseTruncated` comes from the recorded body reference and not from the
+/// row, because the row has no field for it. A caller who only holds a [Flow]
+/// cannot know it and says so by leaving the default: `false` means "nothing
+/// marks this answer as cut", never "the answer is whole".
+Map<String, Object?> humanitlBlock(
+  Flow flow, {
+  bool responseTruncated = false,
+}) => <String, Object?>{
   'flow_id': flow.id.value,
   'session_id': flow.sessionId.value,
   'decision': flow.decision?.name,
@@ -81,6 +103,10 @@ Map<String, Object?> humanitlBlock(Flow flow) => <String, Object?>{
   // Next to `decision`, not inside it: a meta request went nowhere and
   // nobody decided about it, so `decision` is null on those rows (HUM-103).
   'meta': flow.meta,
+  // The machine-readable half of the truncation mark; `content.comment` is the
+  // half a person reads (HUM-120). The name is the one JSON Lines already
+  // uses, so a reader who knows one file knows the other.
+  'response_body_truncated': responseTruncated,
 };
 
 Map<String, Object?> _request(HistoryExportEntry entry) {
@@ -122,6 +148,14 @@ Map<String, Object?> _response(HistoryExportEntry entry) {
   // 403 the proxy wrote, and that is what the export shows.
   final bool blocked = flow.decision == DecisionKind.block;
   final int status = blocked ? 403 : (head?.status ?? flow.status);
+  // Two things can be wrong with a recorded answer, and they are different
+  // facts: nothing was kept, and what was kept stops early. Both go into
+  // `comment`, because that is the field HAR has for saying something the
+  // format cannot express, and a viewer shows it.
+  final List<String> notes = <String>[
+    if (entry.detail.responseBody?.truncated ?? false) harBodyTruncated,
+    if (body.text.isEmpty && flow.responseSize > 0) harBodyNotRecorded,
+  ];
   return <String, Object?>{
     'status': status,
     'statusText': '',
@@ -138,8 +172,7 @@ Map<String, Object?> _response(HistoryExportEntry entry) {
       if (body.text.isNotEmpty) 'text': body.text,
       if (body.text.isNotEmpty && body.encoding != null)
         'encoding': body.encoding,
-      if (body.text.isEmpty && flow.responseSize > 0)
-        'comment': harBodyNotRecorded,
+      if (notes.isNotEmpty) 'comment': notes.join('; '),
     },
     'redirectURL': '',
     'headersSize': -1,
