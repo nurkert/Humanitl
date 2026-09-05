@@ -179,6 +179,15 @@ class GrpcDaemonClient implements DaemonClient {
     );
   }
 
+  @override
+  Future<RuleSet> setRuleDisabled(RuleId id, {required bool disabled}) =>
+      _rules(
+        pb.RulesRequest()
+          ..setDisabled = (pb.RulesRequest_SetDisabled()
+            ..ruleId = id.value
+            ..disabled = disabled),
+      );
+
   /// One `Rules` call, translated.
   ///
   /// With [raiseFirst] a diagnostic in the answer is thrown: the operation

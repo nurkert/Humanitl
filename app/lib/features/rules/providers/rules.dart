@@ -184,6 +184,27 @@ class Rules extends _$Rules {
     return failed;
   }
 
+  /// Switches a bundled rule off or back on.
+  ///
+  /// Der Zustand kommt aus der Antwort des Daemons und nirgends sonst: `_run`
+  /// setzt den Regelsatz, den die Antwort trägt, und gibt bei einer Ablehnung
+  /// dessen `Diagnostic` zurück. Ein vorweggenommener Zustand zeigte für die
+  /// Dauer eines Fehlschlags eine Regel als abgeschaltet, die weiter
+  /// entscheidet, und das ist genau die Behauptung, die dieses Feature
+  /// abstellt (CONVENTIONS 4.13).
+  ///
+  /// Kein Rückgängig-Streifen: der Schalter ist sein eigenes Rückgängig, und
+  /// ein Angebot daneben wäre dieselbe Handlung zweimal (`docs/UX.md` 4.5).
+  Future<Diagnostic?> setDisabled(Rule rule, {required bool disabled}) async {
+    final RuleId? id = rule.id;
+    if (id == null) {
+      return null;
+    }
+    return _run(
+      (DaemonClient client) => client.setRuleDisabled(id, disabled: disabled),
+    );
+  }
+
   /// Reads `rules.yaml` again. What the daemon found goes into the banner,
   /// including the report of a reload that changed nothing: a reload that
   /// says nothing looks like a reload that did not happen.

@@ -1,12 +1,15 @@
 // Der Rules-Screen: Tabs, Kette, Reihenfolge, Löschen mit Rückgängig,
 // Dauerhaft-Machen und der Befund über der Liste.
 
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
+import 'package:humanitl/core/ipc/daemon_client.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ipc/flow_handoff.dart';
 import 'package:humanitl/core/ui/hover_label.dart';
@@ -134,6 +137,309 @@ void main() {
     expect(find.text(l10n.rulesEditorBundledTitle), findsOneWidget);
     expect(find.byKey(const Key('rule-override')), findsOneWidget);
     expect(find.byKey(const Key('rule-save')), findsNothing);
+  });
+
+  /// Der Schalter der mitgelieferten Regel, so wie ihn ein Mensch erreicht:
+  /// der Zeiger steht auf der Zeile, dann liegt er im Aktionsslot.
+  Finder bundledSwitch() =>
+      find.byKey(const ValueKey<String>('rule-disable-0'));
+
+  /// Die Zeile der mitgelieferten Regel, über ihren eigenen Schlüssel.
+  ///
+  /// Nicht `find.byType(RuleRow).last`: verschwände die Zeile, wäre `.last`
+  /// die eigene Regel der Fixture, und eine Zusicherung über „die Zeile bleibt
+  /// stehen" ginge grün durch, weil sie eine andere Zeile fände.
+  Finder bundledRow() =>
+      find.byKey(ValueKey<String>(FakeDaemonClient.bundledBlockRule.value));
+
+  /// Die mitgelieferte Regel, so wie die Zeile sie gerade zeichnet. Was der
+  /// Bildschirm zeigt, kommt aus der Antwort des Daemons; hier wird gelesen,
+  /// was angekommen ist.
+  Rule drawnBundled(WidgetTester tester) =>
+      tester.widget<RuleRow>(bundledRow()).rule;
+
+  testWidgets('own_rule_has_no_switch', (WidgetTester tester) async {
+    final RulesTestClient client = seeded();
+    await pumpRules(tester, client: client);
+
+    // Die Indizes sind absichtlich dieselben: der Papierkorb der eigenen
+    // Regel und der Schalter der mitgelieferten wären beide die Null. Nur so
+    // belegt das Fehlen des einen etwas.
+    final TestGesture pointer = await hoverOver(
+      tester,
+      find.byType(RuleRow).first,
+    );
+    expect(find.byKey(const ValueKey<String>('rule-delete-0')), findsOneWidget);
+    expect(bundledSwitch(), findsNothing);
+
+    await pointer.moveTo(tester.getCenter(bundledRow()));
+    await tester.pumpAndSettle();
+    expect(bundledSwitch(), findsOneWidget);
+    expect(find.byKey(const ValueKey<String>('rule-delete-0')), findsNothing);
+    expect(client.setDisabledCalls, isEmpty);
+  });
+
+  testWidgets('bundled_switch_calls_set_disabled', (WidgetTester tester) async {
+    final RulesTestClient client = seeded();
+    await pumpRules(tester, client: client);
+
+    await hoverOver(tester, bundledRow());
+    await tester.tap(bundledSwitch(), kind: PointerDeviceKind.mouse);
+    await tester.pump();
+    await tester.pump();
+
+    expect(client.setDisabledCalls, <(RuleId, bool)>[
+      (FakeDaemonClient.bundledBlockRule, true),
+    ]);
+    // Was danach steht, kommt aus der Antwort des Daemons.
+    expect(drawnBundled(tester).disabled, isTrue);
+    expect(find.text(l10n.rulesOriginOff), findsOneWidget);
+
+    // Der Schalter ist sein eigenes Rückgängig: noch ein Klick, und sie gilt
+    // wieder. Kein Rückgängig-Streifen daneben -- das wäre dieselbe Handlung
+    // zweimal.
+    await tester.tap(bundledSwitch(), kind: PointerDeviceKind.mouse);
+    await tester.pump();
+    await tester.pump();
+    expect(client.setDisabledCalls, hasLength(2));
+    expect(client.setDisabledCalls.last, (
+      FakeDaemonClient.bundledBlockRule,
+      false,
+    ));
+    expect(drawnBundled(tester).disabled, isFalse);
+    expect(find.text(l10n.rulesOriginOff), findsNothing);
+    expect(find.byKey(const Key('rules-undo')), findsNothing);
+  });
+
+  testWidgets('disabled_bundled_row_is_drawn_off', (WidgetTester tester) async {
+    final RulesTestClient client = seeded();
+    client.bundledRules[0] = client.bundledRules[0].copyWith(disabled: true);
+    // Eine zweite mitgelieferte Regel, wirksam und mit einer anderen Aktion:
+    // erst neben ihr zeigt sich, dass das Zeichen der ausgeschalteten ein
+    // eigenes ist und nicht das ihrer Aktion.
+    client.bundledRules.add(
+      testRule(n: 8, host: 'registry.npmjs.org', bundled: true),
+    );
+    await pumpRules(tester, client: client);
+
+    // In dieser Panebreite wäre das Herkunftswort einer wirksamen Regel
+    // längst gewichen; von dem der ausgeschalteten bleibt die Hälfte stehen,
+    // die den Zustand trägt.
+    expect(find.text(l10n.rulesOriginOff), findsOneWidget);
+
+    // Das Kreuz statt des Handlungs-Glyphs, in jeder Breite: Farbe ist nie
+    // der einzige Kanal. Und es ist nicht die Uhr -- abgelaufen ist etwas
+    // anderes als ausgeschaltet.
+    final Finder bundled = bundledRow();
+    Iterable<HGlyph> glyphsOf(Finder row) => tester
+        .widgetList<HGlyphIcon>(
+          find.descendant(of: row, matching: find.byType(HGlyphIcon)),
+        )
+        .map((HGlyphIcon g) => g.glyph);
+    expect(glyphsOf(bundled), contains(HGlyph.close));
+    expect(glyphsOf(bundled), isNot(contains(HGlyph.clockX)));
+    // Die eingeschaltete mitgelieferte Regel daneben trägt das Zeichen ihrer
+    // Aktion, nicht das Kreuz.
+    final Finder effective = find.byKey(ValueKey<String>(testRuleId(8).value));
+    expect(glyphsOf(effective), contains(HGlyph.arrowUpRight));
+    expect(glyphsOf(effective), isNot(contains(HGlyph.close)));
+
+    // Und die Zeile ist gedämpft wie eine, die nichts mehr entscheidet.
+    final HRow row = tester.widget<HRow>(
+      find.descendant(of: bundled, matching: find.byType(HRow)),
+    );
+    expect(row.state, HFlowState.timedOut);
+    // Eine wirksame Regel daneben behält ihre Farbe.
+    expect(
+      tester
+          .widget<HRow>(
+            find.descendant(
+              of: find.byType(RuleRow).first,
+              matching: find.byType(HRow),
+            ),
+          )
+          .state,
+      HFlowState.allowed,
+    );
+
+    await hoverOver(tester, bundled);
+    expect(
+      tester
+          .widget<HoverLabel>(
+            find
+                .ancestor(
+                  of: bundledSwitch(),
+                  matching: find.byType(HoverLabel),
+                )
+                .first,
+          )
+          .label,
+      l10n.rulesEnable,
+    );
+    expect(
+      tester.widget<HIconButton>(bundledSwitch()).semanticsLabel,
+      l10n.rulesEnableSemantics('models.dev'),
+    );
+  });
+
+  testWidgets('a_wide_pane_spells_the_origin_out', (WidgetTester tester) async {
+    final RulesTestClient client = seeded();
+    client.bundledRules[0] = client.bundledRules[0].copyWith(disabled: true);
+    // Ab dieser Fensterbreite hat die Zeile Platz für das ganze Wort, und
+    // dann steht dort beides: woher die Regel kommt und dass sie aus ist.
+    await pumpRules(tester, client: client, size: const Size(1600, 900));
+
+    expect(find.text(l10n.rulesOriginBundledOff), findsOneWidget);
+    expect(find.text(l10n.rulesOriginOff), findsNothing);
+    expect(find.text(l10n.rulesOriginBundled), findsNothing);
+  });
+
+  testWidgets('the_switch_is_deaf_while_its_own_call_is_out', (
+    WidgetTester tester,
+  ) async {
+    final GatedRulesClient client = GatedRulesClient();
+    client.savedRules.add(testRule(n: 1, host: 'registry.npmjs.org'));
+    await pumpRules(tester, client: client);
+
+    await hoverOver(tester, bundledRow());
+
+    // Zwei Klicks ohne ein Bild dazwischen -- so schnell, wie eine Hand es
+    // kann. Der Knopf im Baum ist beim zweiten noch der alte und nimmt ihn
+    // an; abgewiesen wird er von der Sperre in der Liste, nicht vom Knopf.
+    // Das ist die erste der beiden Ebenen, und ohne sie käme derselbe Aufruf
+    // zweimal heraus.
+    await tester.tap(bundledSwitch(), kind: PointerDeviceKind.mouse);
+    await tester.tap(bundledSwitch(), kind: PointerDeviceKind.mouse);
+    await tester.pump();
+    expect(client.started, 1);
+
+    // Die zweite Ebene: sobald ein Bild steht, nimmt der Knopf selbst nichts
+    // mehr an. Zwei Zustandswechsel auf einen Blick wären einer zu viel, und
+    // der zweite spräche über einen Zustand, den der Daemon nicht bestätigt
+    // hat.
+    expect(tester.widget<HIconButton>(bundledSwitch()).onPressed, isNull);
+    await tester.tap(bundledSwitch(), kind: PointerDeviceKind.mouse);
+    await tester.pump();
+    expect(client.started, 1);
+
+    client.gate.complete();
+    await tester.pump();
+    await tester.pump();
+    expect(drawnBundled(tester).disabled, isTrue);
+    expect(tester.widget<HIconButton>(bundledSwitch()).onPressed, isNotNull);
+  });
+
+  testWidgets('a_thrown_call_does_not_wedge_the_switch', (
+    WidgetTester tester,
+  ) async {
+    final ThrowingRulesClient client = ThrowingRulesClient();
+    client.savedRules.add(testRule(n: 1, host: 'registry.npmjs.org'));
+    await pumpRules(tester, client: client);
+
+    await hoverOver(tester, bundledRow());
+    await tester.tap(bundledSwitch(), kind: PointerDeviceKind.mouse);
+    await tester.pump();
+    await tester.pump();
+    // Der Wurf ist kein `Diagnostic`, also steht er nicht im Streifen -- aber
+    // er wird gemeldet, statt in einem Future zu verschwinden.
+    expect(tester.takeException(), isA<StateError>());
+
+    // Die Regel darf danach nicht als „unterwegs“ vermerkt bleiben: ein
+    // Schalter, den nur ein Neustart wiederbelebt, wäre schlimmer als der
+    // Fehler selbst.
+    expect(tester.widget<HIconButton>(bundledSwitch()).onPressed, isNotNull);
+    await tester.tap(bundledSwitch(), kind: PointerDeviceKind.mouse);
+    await tester.pump();
+    await tester.pump();
+    expect(client.setDisabledCalls, <(RuleId, bool)>[
+      (FakeDaemonClient.bundledBlockRule, true),
+    ]);
+    expect(drawnBundled(tester).disabled, isTrue);
+  });
+
+  testWidgets('the_reason_arrives_even_when_the_pointer_left', (
+    WidgetTester tester,
+  ) async {
+    final GatedRulesClient client = GatedRulesClient();
+    client.savedRules.add(testRule(n: 1, host: 'registry.npmjs.org'));
+    await pumpRules(tester, client: client);
+
+    final TestGesture pointer = await hoverOver(tester, bundledRow());
+    await tester.tap(bundledSwitch(), kind: PointerDeviceKind.mouse);
+    await tester.pump();
+    expect(client.started, 1);
+
+    // Der Mensch nimmt Zeiger und Fokus von der Zeile, während die Anfrage
+    // unterwegs ist. Der Aktionsslot wird nur bei Hover und Fokus gebaut, der
+    // Schalter ist damit weg -- der Aufruf aber nicht.
+    focusRow(tester, 0);
+    await pointer.moveTo(tester.getCenter(find.byType(RuleRow).first));
+    await tester.pumpAndSettle();
+    expect(bundledSwitch(), findsNothing);
+
+    // Und nun lehnt der Daemon ab.
+    client.bundledRules.clear();
+    client.gate.complete();
+    await tester.pump();
+    await tester.pump();
+
+    // Der Grund steht trotzdem über der Liste. Ein Klick, der nichts tut und
+    // nichts sagt, ist die Behauptung, die dieses Feature abstellt, nur
+    // andersherum (CONVENTIONS 4.13).
+    expect(
+      find.text(
+        'there is no bundled rule with the id '
+        '${FakeDaemonClient.bundledBlockRule.value}; only bundled rules are '
+        'disabled instead of removed',
+      ),
+      findsOneWidget,
+    );
+    expect(drawnBundled(tester).disabled, isFalse);
+  });
+
+  testWidgets('a_refused_switch_leaves_the_row_and_says_why', (
+    WidgetTester tester,
+  ) async {
+    final RulesTestClient client = seeded();
+    await pumpRules(tester, client: client);
+    await hoverOver(tester, bundledRow());
+
+    // Die Regel verschwindet aus dem Regelsatz, nachdem der Bildschirm sie
+    // gezeichnet hat -- eine neue Fassung von `rules/default.yaml` kennt sie
+    // nicht mehr. Der Klick geht trotzdem hinaus und wird abgelehnt.
+    client.bundledRules.clear();
+    await tester.tap(bundledSwitch(), kind: PointerDeviceKind.mouse);
+    await tester.pump();
+    await tester.pump();
+
+    expect(client.setDisabledCalls, hasLength(1));
+    // Die Zeile steht noch, und sie zeigt den alten Zustand: der Schalter
+    // springt nicht vor der Antwort um, und eine abgelehnte Änderung ist
+    // keine Änderung.
+    expect(bundledRow(), findsOneWidget);
+    expect(find.byType(RuleRow), findsNWidgets(3));
+    expect(drawnBundled(tester).disabled, isFalse);
+    expect(find.text(l10n.rulesOriginOff), findsNothing);
+    expect(
+      tester
+          .widget<HRow>(
+            find.descendant(of: bundledRow(), matching: find.byType(HRow)),
+          )
+          .state,
+      HFlowState.blocked,
+    );
+    // Und der Grund steht über der Liste, mit den Worten des Daemons.
+    expect(
+      find.text(
+        'there is no bundled rule with the id '
+        '${FakeDaemonClient.bundledBlockRule.value}; only bundled rules are '
+        'disabled instead of removed',
+      ),
+      findsOneWidget,
+    );
+    // Der Befund trägt keinen Titel, also steht der Code als Kopf und als
+    // Marke daneben.
+    expect(find.text(DiagnosticCodes.ruleBundled), findsWidgets);
   });
 
   testWidgets('delete_undo_restores_position', (WidgetTester tester) async {
@@ -702,4 +1008,38 @@ void main() {
 
     expect(find.text(DiagnosticCodes.rulesFileInvalid), findsOneWidget);
   });
+}
+
+/// Ein Client, dessen erstes `Rules(set_disabled)` mit etwas abbricht, das
+/// kein `Diagnostic` ist: ein abgeräumter Kanal, ein Laufzeitfehler. Der
+/// zweite Aufruf gelingt.
+class ThrowingRulesClient extends RulesTestClient {
+  bool _first = true;
+
+  @override
+  Future<RuleSet> setRuleDisabled(RuleId id, {required bool disabled}) async {
+    if (_first) {
+      _first = false;
+      throw StateError('the channel went away');
+    }
+    return super.setRuleDisabled(id, disabled: disabled);
+  }
+}
+
+/// Ein Client, dessen `Rules(set_disabled)` erst antwortet, wenn der Test es
+/// zulässt. So wird das Fenster sichtbar, in dem die Anfrage unterwegs ist.
+class GatedRulesClient extends RulesTestClient {
+  /// Öffnet die Antwort.
+  final Completer<void> gate = Completer<void>();
+
+  /// Wie oft der Aufruf begonnen hat, unabhängig davon, ob er schon
+  /// geantwortet hat.
+  int started = 0;
+
+  @override
+  Future<RuleSet> setRuleDisabled(RuleId id, {required bool disabled}) async {
+    started++;
+    await gate.future;
+    return super.setRuleDisabled(id, disabled: disabled);
+  }
 }

@@ -80,6 +80,14 @@ abstract class DaemonClient {
   /// [limit] recorded requests.
   Future<DryRun> dryRunRule(Rule rule, {int limit = dryRunScanDefault});
 
+  /// `Rules(set_disabled)`: switches a bundled rule off or back on.
+  ///
+  /// Any other rule is refused by the daemon with `RULES_010`: a rule of the
+  /// person is deleted, not switched off (`rules_store.rs`,
+  /// `set_bundled_disabled`). The answer carries the whole set, so the screen
+  /// never has to guess what the new state is.
+  Future<RuleSet> setRuleDisabled(RuleId id, {required bool disabled});
+
   /// `ListFlows`: one page of the history.
   Future<FlowPage> listFlows(
     FlowFilter filter, {

@@ -52,6 +52,26 @@ RulesTestClient goldenClient() {
       note: 'until I know what it uploads',
     ),
   );
+  // Der mitgelieferte Block mit einer abgeschalteten Regel zwischen zwei
+  // wirksamen: genau die Lage, in der eine gedämpfte Zeile und ihr
+  // Herkunftswort etwas belegen müssen (HUM-105).
+  client.bundledRules.addAll(<Rule>[
+    testRule(
+      n: 6,
+      action: RuleAction.block,
+      host: 'opncd.ai',
+      bundled: true,
+      disabled: true,
+      note: 'sharing a session sends the transcript',
+    ),
+    testRule(
+      n: 7,
+      action: RuleAction.allow,
+      host: 'registry.npmjs.org',
+      methods: <Method>[Method.get],
+      bundled: true,
+    ),
+  ]);
   for (int i = 1; i <= 4; i++) {
     final Flow flow = testFlow(
       n: i,

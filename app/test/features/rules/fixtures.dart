@@ -37,6 +37,7 @@ Rule testRule({
   String? note,
   FlowId? createdFrom,
   bool bundled = false,
+  bool disabled = false,
   bool stream = false,
   int position = 0,
 }) => Rule(
@@ -47,6 +48,7 @@ Rule testRule({
   note: note,
   createdFrom: createdFrom,
   bundled: bundled,
+  disabled: disabled,
   stream: stream,
   position: position,
   createdAt: rulesTestNow,
@@ -92,6 +94,9 @@ class RulesTestClient extends FakeDaemonClient {
 
   /// Jede Id, die `Rules(make_permanent)` bekam.
   final List<RuleId> permanent = <RuleId>[];
+
+  /// Jedes `Rules(set_disabled)`, ältestes zuerst: Id und gewünschter Zustand.
+  final List<(RuleId, bool)> setDisabledCalls = <(RuleId, bool)>[];
 
   /// Jede Regel, mit der ein Probelauf lief.
   final List<Rule> dryRuns = <Rule>[];
@@ -167,6 +172,12 @@ class RulesTestClient extends FakeDaemonClient {
   Future<RuleSet> reloadRules() {
     reloadCalls++;
     return super.reloadRules();
+  }
+
+  @override
+  Future<RuleSet> setRuleDisabled(RuleId id, {required bool disabled}) {
+    setDisabledCalls.add((id, disabled));
+    return super.setRuleDisabled(id, disabled: disabled);
   }
 
   @override

@@ -41,6 +41,14 @@ class _RulesListState extends ConsumerState<RulesList> {
   /// 2.2 and 2.11).
   final Map<RuleTab, Set<RuleId>> _known = <RuleTab, Set<RuleId>>{};
 
+  /// Die mitgelieferten Regeln, deren Schalter gerade auf eine Antwort wartet.
+  ///
+  /// Der Zustand liegt hier und nicht in der Zeile, weil die Zeile ihn nicht
+  /// überlebt: der Aktionsslot wird nur bei Hover und Fokus gebaut
+  /// (`HRow`), und ein Zeiger, der die Zeile verlässt, während die Anfrage
+  /// unterwegs ist, nähme sonst den laufenden Aufruf und seine Ablehnung mit.
+  final Set<RuleId> _disabling = <RuleId>{};
+
   late final Map<ShortcutActivator, Intent> _shortcuts = ruleListShortcuts();
 
   /// Der Filter, unter dem zuletzt eine Bewegung abgelehnt wurde, oder null.
@@ -71,6 +79,69 @@ class _RulesListState extends ConsumerState<RulesList> {
         .remove(rule);
     if (failed != null) {
       ref.read(rulesBannerProvider.notifier).showOne(failed);
+    }
+  }
+
+  /// Schaltet eine mitgelieferte Regel ab oder wieder an.
+  ///
+  /// Steht neben [_delete] und aus demselben Grund: der Aufruf gehört dem
+  /// Widget, das die Antwort noch erlebt. Der Befund einer Ablehnung geht in
+  /// den Streifen über der Liste, bevor irgendetwas abgebaut sein kann
+  /// (CONVENTIONS 4.13: ein verschluckter Fehler ist keiner).
+  ///
+  /// Die Merkung im `finally`: bricht der Aufruf mit etwas ab, das kein
+  /// `Diagnostic` ist -- ein abgeräumter Kanal, ein Laufzeitfehler --, bliebe
+  /// die Regel sonst für immer als „unterwegs" vermerkt, ihr Schalter tot und
+  /// jeder weitere Klick von der Sperre geschluckt. Ein Knopf, den nur ein
+  /// Neustart wiederbelebt, ist schlimmer als ein Fehler, den man sieht.
+  Future<void> _setDisabled(Rule rule) async {
+    final RuleId? id = rule.id;
+    // `id` ist null nur an einem Entwurf, und einen Entwurf hält diese Liste
+    // nicht: der Daemon führt jede mitgelieferte Regel mit Kennung, und
+    // `RuleId` ist im Vertrag nicht optional (`rules.proto`). Die Prüfung
+    // steht, weil der Typ sie verlangt, nicht weil der Fall vorkäme.
+    if (id == null || _disabling.contains(id)) {
+      return;
+    }
+    // Das Objekt des Streifens wird vor dem `await` gegriffen. Kein Test hält
+    // diese Reihenfolge fest -- diese Liste lebt, solange der Bildschirm lebt,
+    // und stirbt mit ihm auch der Streifen; sie ist die billigere Reihenfolge
+    // und keine belegte Zusicherung.
+    final RulesBanner banner = ref.read(rulesBannerProvider.notifier);
+    setState(() => _disabling.add(id));
+    try {
+      final Diagnostic? failed = await ref
+          .read(rulesProvider.notifier)
+          .setDisabled(rule, disabled: !rule.disabled);
+      if (failed != null) {
+        banner.showOne(failed);
+      }
+    } catch (error, stack) {
+      // Der Vertrag des Ports sagt zu, dass jeder Fehlschlag als
+      // `DaemonException` mit `Diagnostic` ankommt (`DaemonClient`). Was hier
+      // landet, ist deshalb ein Programmfehler und keine Lage, für die es
+      // einen registrierten Code gäbe; die Anwendung erfindet keinen
+      // (CONVENTIONS 4.6), und ein erfundener stünde als Behauptung im
+      // Streifen (4.13). Gemeldet wird er trotzdem: ohne dieses `catch`
+      // verschwände er in einem Future, das niemand beobachtet, und das ist
+      // derselbe stille Pfad, den dieses Feature abstellt.
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stack,
+          library: 'humanitl',
+          context: ErrorDescription('switching a bundled rule off or on'),
+        ),
+      );
+    } finally {
+      // Ohne `mounted`: die Menge gehört diesem Zustand und überlebt ihn
+      // nicht, und ein Eintrag, der nach dem Abbau stehen bliebe, wäre der
+      // Fall, den dieses `finally` verhindert. Nur das Neuzeichnen braucht
+      // ein montiertes Widget.
+      _disabling.remove(id);
+      if (mounted) {
+        setState(() {});
+      }
     }
   }
 
@@ -191,6 +262,14 @@ class _RulesListState extends ConsumerState<RulesList> {
                   total: chain.bundledTotal,
                   selected: rule.id != null && rule.id == open,
                   onOpen: () => _open(rule),
+                  // Der Schalter steht an der Stelle, an der eine eigene
+                  // Regel ihren Papierkorb hat, und nur hier: eine eigene
+                  // Regel schaltet man nicht ab, man löscht sie, und der
+                  // Daemon lehnt alles andere mit `RULES_010` ab
+                  // (`rules_store.rs`, `set_bundled_disabled`).
+                  onToggleDisabled: () => _setDisabled(rule),
+                  togglingDisabled:
+                      rule.id != null && _disabling.contains(rule.id),
                   // Der Grund steht bei einer mitgelieferten Regel schon
                   // dauerhaft über ihrem Block; die Taste sagt ihn noch
                   // einmal, statt zu schweigen (`docs/UX.md` 5.3).
