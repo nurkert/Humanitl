@@ -336,14 +336,37 @@ class GrpcDaemonClient implements DaemonClient {
             }
           case pb.SandboxEvent_Event.output:
           case pb.SandboxEvent_Event.exit:
-            // The bytes of the agent and its exit code. `humanitl run` writes
-            // them to its terminal; this app has no terminal pane yet, and the
-            // sandbox screen says so where the pane will be (HUM-042). Dropping
-            // them here is deliberate: half a terminal would be worse than the
-            // sentence that names what is missing.
+            // The bytes of the agent and its exit code, filtered for a stream
+            // without a terminal (`TerminalPolicy::ColourOnly`). The terminal
+            // pane does not read them: it attaches to `Terminal`, which
+            // carries the same bytes filtered for a full-screen agent, with
+            // the scrollback and the geometry (HUM-042). Reading both would
+            // show every line twice.
             break;
           case pb.SandboxEvent_Event.notSet:
             break;
+        }
+      }
+    } on GrpcError catch (error) {
+      throw DaemonException(_translate(error));
+    } on IOException catch (error) {
+      throw DaemonException(_unreachable('$error'));
+    }
+  }
+
+  @override
+  Stream<TerminalFrame> terminal(Stream<TerminalCommand> input) async* {
+    // No deadline, like every other stream here: a terminal is open for as
+    // long as somebody works in it.
+    final CallOptions options = await _options(timeout: null);
+    try {
+      await for (final pb.TerminalOutput output in _stub.terminal(
+        input.map((TerminalCommand command) => command.toProto()),
+        options: options,
+      )) {
+        final TerminalFrame? frame = output.toDomain();
+        if (frame != null) {
+          yield frame;
         }
       }
     } on GrpcError catch (error) {

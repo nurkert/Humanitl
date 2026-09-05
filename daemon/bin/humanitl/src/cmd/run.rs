@@ -23,17 +23,23 @@
 //!
 //! # Was dieser Befehl nicht tut
 //!
-//! Er hängt kein PTY an. Der Agent bekommt kein Terminal, seine Ausgabe kommt
-//! als Bytes über den Ereignisstrom und geht unverändert auf `stdout` und
-//! `stderr` dieses Prozesses; gefiltert wird sie im Daemon
-//! ([`humanitl_core::TerminalFilter`]). Damit gibt es keinen Raw-Modus, keine
-//! Weiterleitung der Fenstergröße, keine Eingabe an den Agenten und kein
-//! `Ctrl+]`-Menü. Das alles ist HUM-042, und bis dahin verweigert
-//! `--ask terminal` den Dienst mit `CLI_002` — für jeden Agenten, nicht nur
-//! für die Vollbild-TUIs, für die es ohnehin gilt.
+//! Er verbindet dieses Terminal nicht mit dem des Agenten. Der Daemon startet
+//! die Sitzung seit HUM-042 zwar an einem Pseudoterminal, aber dieser Befehl
+//! liest nur mit: Seine Ausgabe kommt als Bytes über den Ereignisstrom und
+//! geht unverändert auf `stdout` dieses Prozesses; gefiltert wird sie im
+//! Daemon ([`humanitl_core::TerminalFilter`], Politik `ColourOnly`). Damit
+//! gibt es hier keinen Raw-Modus, keine Weiterleitung der Fenstergröße, keine
+//! Eingabe an den Agenten und kein `Ctrl+]`-Menü — das alles hat
+//! `humanitl sandbox attach`, und `--ask terminal` verweigert weiterhin den
+//! Dienst mit `CLI_002`.
+//!
+//! Zwei Dinge folgen aus dem Pseudoterminal und sind hier sichtbar: Ein
+//! Terminal hat einen Strom, also kommt alles auf `stdout` und nichts auf
+//! `stderr`, und seine Zeilendisziplin macht aus `\n` ein `\r\n`.
 //!
 //! `Ctrl+C` beendet die Sitzung über `Sandbox(Stop)`; ohne Eingabekanal
-//! erreicht kein Byte den Agenten.
+//! erreicht kein Byte den Agenten. Wer tippen will, hängt sich mit
+//! `humanitl sandbox attach` an dieselbe Sitzung.
 
 use std::ffi::OsString;
 

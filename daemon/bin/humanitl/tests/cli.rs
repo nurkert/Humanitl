@@ -1531,3 +1531,33 @@ fn sandbox_env_from_the_config_reaches_the_argv() {
         "the value of the profile must not survive next to it: {line}"
     );
 }
+
+/// `sandbox attach` ist ein dünner Client der `Terminal`-RPC (HUM-042).
+///
+/// Der Fake-Daemon spiegelt die Eingabe zurück; der Test prüft den Weg, nicht
+/// den Agenten: Öffnen mit der eigenen Größe, die Bytes des Daemons
+/// unverändert auf stdout, und am Ende der Eingabe ein `close`, das den Strom
+/// beendet, ohne die Sitzung zu beenden.
+///
+/// Die Eingabe ist hier kein Terminal, sondern `/dev/null`. Genau deshalb
+/// endet der Aufruf: An einem Terminal endet die Eingabe nie.
+#[test]
+fn sandbox_attach_speaks_the_terminal_rpc() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+
+    let mut command = harness.command();
+    command
+        .args(["sandbox", "attach"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let output = command.output().expect("the binary runs");
+
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("input is echoed"),
+        "the bytes of the daemon reach the terminal unchanged: {:?}",
+        stdout(&output)
+    );
+}

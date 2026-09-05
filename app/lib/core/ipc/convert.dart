@@ -11,6 +11,8 @@
 /// that is wrong in the least harmful way and is documented at the site.
 library;
 
+import 'dart:typed_data';
+
 import 'package:fixnum/fixnum.dart';
 import 'package:protobuf/well_known_types/google/protobuf/duration.pb.dart'
     as wkt;
@@ -634,4 +636,43 @@ extension SandboxStatusToDomain on pb.SandboxEvent_Status {
     argvPreview: argvPreview,
     agentRunning: agentRunning,
   );
+}
+
+/// [TerminalCommand] to `TerminalInput` (HUM-042).
+extension TerminalCommandToProto on TerminalCommand {
+  /// The wire form of one message to the terminal.
+  pb.TerminalInput toProto() => switch (this) {
+    final TerminalOpen open => pb.TerminalInput(
+      open: pb.TerminalInput_Open(
+        sandboxId: open.sandboxId,
+        cols: open.cols,
+        rows: open.rows,
+        readOnly: open.readOnly,
+      ),
+    ),
+    final TerminalKeys keys => pb.TerminalInput(data: keys.bytes),
+    final TerminalResize resize => pb.TerminalInput(
+      resize: pb.TerminalInput_Resize(cols: resize.cols, rows: resize.rows),
+    ),
+    TerminalDetach() => pb.TerminalInput(close: wkt.Empty()),
+  };
+}
+
+/// `TerminalOutput` to [TerminalFrame] (HUM-042).
+extension TerminalOutputToDomain on pb.TerminalOutput {
+  /// The domain form, or null for a variant this version does not know: a
+  /// newer daemon may send one, and a terminal that went blank at the first
+  /// unknown frame would lose a session over a field it does not need.
+  TerminalFrame? toDomain() => switch (whichOutput()) {
+    pb.TerminalOutput_Output.data => TerminalOutput(Uint8List.fromList(data)),
+    pb.TerminalOutput_Output.resize => TerminalGeometry(
+      cols: resize.cols,
+      rows: resize.rows,
+    ),
+    pb.TerminalOutput_Output.diagnostic => TerminalFinding(
+      diagnostic.toDomain(),
+    ),
+    pb.TerminalOutput_Output.exit => TerminalExit(exit.code),
+    pb.TerminalOutput_Output.notSet => null,
+  };
 }

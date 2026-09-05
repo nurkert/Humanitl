@@ -1354,6 +1354,7 @@ void main() {
         method: HMethodColors.dark,
         stateText: HStateColors.darkText,
         methodText: HMethodColors.darkText,
+        terminal: HTerminalPalette.dark,
       );
       final HTokens two = HTokens(
         brightness: Brightness.dark,
@@ -1362,6 +1363,7 @@ void main() {
         method: HMethodColors.dark,
         stateText: HStateColors.darkText,
         methodText: HMethodColors.darkText,
+        terminal: HTerminalPalette.dark,
       );
       expect(
         identical(HShadcnTheme.bundle(one), HShadcnTheme.bundle(one)),

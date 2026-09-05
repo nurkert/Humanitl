@@ -752,10 +752,12 @@ dependencies = [
  "humanitl-ipc",
  "humanitl-sandbox",
  "prost-types",
+ "rustix",
  "serde_json",
  "shlex",
  "tempfile",
  "tokio",
+ "tokio-stream",
  "tonic",
 ]
 

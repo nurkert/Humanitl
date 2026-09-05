@@ -21,11 +21,19 @@ clap.workspace = true
 # Wire-Form kennt keinen anderen Weg, einen Zeitpunkt zu schreiben.
 prost-types.workspace = true
 serde_json.workspace = true
+# `sandbox attach` setzt das eigene Terminal in den Rohmodus und liest seine
+# Groesse (`tcgetattr`, `tcsetattr`, `tcgetwinsize`). Ohne rustix braeuchte das
+# `unsafe`. Noch nicht unter [workspace.dependencies], wie in
+# `crates/sandbox/Cargo.toml`; der Parent traegt die Version dort ein.
+rustix = { version = "1.1", features = ["stdio", "termios"] }
 # `sandbox check` legt seinen Platzhalter-Socket und die Platzhalter-Dateien
 # der CA in einem eigenen Verzeichnis an, das mit dem Prozess verschwindet:
 # der Selbsttest darf dem laufenden Daemon nichts wegnehmen.
 tempfile.workspace = true
 tokio.workspace = true
+# `sandbox attach` schickt einen Strom von Tastendruecken an den Daemon;
+# `ReceiverStream` ist die Bruecke vom Kanal zum gRPC-Strom.
+tokio-stream.workspace = true
 tonic.workspace = true
 
 [dev-dependencies]

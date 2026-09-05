@@ -1122,6 +1122,115 @@ class FakeDaemonClient implements DaemonClient {
     return null;
   }
 
+  /// Ob dieser Fake schon einen schreibenden Terminal-Client hat.
+  ///
+  /// Der echte Daemon fuehrt genau einen; ein zweiter bekommt `TERM_001` und
+  /// sein Strom endet (CONVENTIONS 4.10). Der Fake fuehrt denselben Platz,
+  /// damit die Oberflaeche nicht gegen ein Verhalten uebt, das der Daemon
+  /// ablehnt.
+  bool _terminalWriter = false;
+
+  @override
+  Stream<TerminalFrame> terminal(Stream<TerminalCommand> input) {
+    _check();
+    // Geschoben und nicht gezogen: Ein `async*`-Erzeuger, der auf die naechste
+    // Nachricht wartet, laesst sich nicht abbrechen -- er haelt erst am
+    // naechsten `yield`, und der kommt nie, wenn niemand mehr tippt. Ein
+    // Abmelden am Terminal haenge dann fuer immer.
+    final StreamController<TerminalFrame> out =
+        StreamController<TerminalFrame>();
+    StreamSubscription<TerminalCommand>? source;
+    bool opened = false;
+    bool writes = false;
+
+    void release() {
+      if (writes) {
+        _terminalWriter = false;
+        writes = false;
+      }
+    }
+
+    void finish() {
+      release();
+      unawaited(source?.cancel());
+      source = null;
+      if (!out.isClosed) {
+        unawaited(out.close());
+      }
+    }
+
+    void onCommand(TerminalCommand command) {
+      if (!opened) {
+        // Die erste Nachricht ist `Open`; alles davor gehoert niemandem.
+        if (command is TerminalDetach) {
+          finish();
+          return;
+        }
+        if (command is! TerminalOpen) {
+          return;
+        }
+        opened = true;
+        writes = !command.readOnly;
+        if (writes && _terminalWriter) {
+          writes = false;
+          out.add(
+            const TerminalFinding(
+              Diagnostic(
+                code: DiagnosticCodes.terminalSecondWriter,
+                severity: Severity.error,
+                title: 'A second writing terminal client was refused',
+                why: 'this session already has a terminal client that writes',
+              ),
+            ),
+          );
+          finish();
+          return;
+        }
+        if (writes) {
+          _terminalWriter = true;
+        }
+        out
+          ..add(
+            TerminalGeometry(
+              cols: command.cols == 0 ? 80 : command.cols,
+              rows: command.rows == 0 ? 24 : command.rows,
+            ),
+          )
+          ..add(
+            TerminalOutput(
+              Uint8List.fromList(
+                utf8.encode('humanitl fake terminal: input is echoed\r\n'),
+              ),
+            ),
+          );
+        return;
+      }
+      switch (command) {
+        // Was ein Leser schickt, faellt weg -- im Daemon, nicht im Client.
+        case TerminalKeys(bytes: final Uint8List bytes) when writes:
+          out.add(TerminalOutput(bytes));
+        case TerminalResize(cols: final int cols, rows: final int rows)
+            when writes:
+          out.add(TerminalGeometry(cols: cols, rows: rows));
+        case TerminalDetach():
+          finish();
+        case TerminalOpen():
+        case TerminalKeys():
+        case TerminalResize():
+          break;
+      }
+    }
+
+    source = input.listen(onCommand, onDone: finish);
+    out.onCancel = () {
+      release();
+      final StreamSubscription<TerminalCommand>? pending = source;
+      source = null;
+      return pending?.cancel();
+    };
+    return out.stream;
+  }
+
   @override
   Future<void> close() async {
     _closed = true;

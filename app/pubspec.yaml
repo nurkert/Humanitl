@@ -54,6 +54,11 @@ dependencies:
   # `flutter build linux` scheitert, und `flutter_local_notifications` bringt
   # denselben D-Bus-Verkehr hinter einem Plugin mit. Siehe HUM-034.
   dbus: 0.7.15
+  # Der Terminal-Emulator des Sandbox-Bildschirms (HUM-042). Exakt gepinnt:
+  # Er malt das Fenster, und ein Wechsel der Fassung wechselt das Aussehen und
+  # den Umfang der Escape-Folgen, die er versteht. Die Bytes kommen gefiltert
+  # aus dem Daemon; das Widget registriert zusaetzlich keinen OSC-Handler.
+  xterm2: 5.2.0
 
 dev_dependencies:
   flutter_test:
