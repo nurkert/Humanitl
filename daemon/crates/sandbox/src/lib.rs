@@ -106,8 +106,8 @@ pub use crate::bwrap_args::{
 };
 pub use crate::handle::{
     CAPTURE_MAX_BYTES, CapturedOutput, INTERRUPT_GRACE, KILL_GRACE, OutputChunk, OutputSink,
-    OutputStream, ReportSnapshot, STATUS_DRAIN, STDERR_EXCERPT_BYTES, SandboxHandle,
-    StatusSnapshot,
+    OutputStream, PTY_MIRROR_BYTES, ReportSnapshot, STATUS_DRAIN, STDERR_EXCERPT_BYTES,
+    SandboxHandle, StatusSnapshot,
 };
 pub use crate::launcher::{CheckResult, IsolationCheck, LaunchPlan, SandboxBackend, StdioMode};
 pub use crate::profile::{

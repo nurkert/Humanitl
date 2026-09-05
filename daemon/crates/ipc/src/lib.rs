@@ -20,6 +20,9 @@
 //!   (HUM-027),
 //! - [`sandbox`] mit der `Sandbox`-RPC: Einhängungen, Umgebung,
 //!   Kommandozeile, Start und Stopp (HUM-040),
+//! - [`terminal`] mit der `Terminal`-RPC: der Ausgabe der Sitzung am
+//!   Pseudoterminal, gefiltert, mit einem Schreiber und beliebig vielen
+//!   Lesern (HUM-042),
 //! - [`client`] mit dem Gegenstück für CLI, Oberfläche und Tests,
 //! - [`server_stub`] mit dem Port [`DaemonApi`] und dem tonic-Dienst darüber,
 //! - [`fake`] mit einem Daemon, der statt eines Proxys eine aufgezeichnete
@@ -88,6 +91,7 @@ pub mod sandbox;
 pub mod server;
 pub mod server_stub;
 pub mod session;
+pub mod terminal;
 pub mod validate;
 
 pub use crate::client::connect;
@@ -99,3 +103,4 @@ pub use crate::server::{IpcServer, bind_socket, serve};
 pub use crate::server_stub::{
     BoxStream, DaemonApi, DaemonService, diagnostic_from_status, diagnostic_to_status,
 };
+pub use crate::terminal::{HeldNotices, TerminalHub};

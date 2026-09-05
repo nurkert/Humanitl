@@ -39,7 +39,9 @@ use humanitl_findings::FindingsSettings;
 use humanitl_ipc::fake::{FakeDaemon, FakeOptions, Session};
 use humanitl_ipc::sandbox::SandboxPorts;
 use humanitl_ipc::session::{SessionResolver, bundled_rules};
-use humanitl_ipc::{DaemonService, DomainTable, IpcServer, SandboxService, auth, bind_socket, v1};
+use humanitl_ipc::{
+    DaemonService, DomainTable, HeldNotices, IpcServer, SandboxService, auth, bind_socket, v1,
+};
 use humanitl_proxy::ca::{CaStore, DEFAULT_LEAF_CAPACITY, LeafCache};
 use humanitl_proxy::egress::Direct;
 use humanitl_proxy::handler::ProxyLimits;
@@ -266,7 +268,14 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
             session,
             SandboxPorts::none()
                 .with_rules(Arc::clone(&rules))
-                .with_settings(Arc::clone(&settings)),
+                .with_settings(Arc::clone(&settings))
+                // Der Hinweis im Terminal kommt aus dem Ereignisstrom, den
+                // ohnehin alle lesen, und nicht aus einem Kanal vom Proxy zum
+                // Terminal (HUM-042, ARCHITECTURE 1.2).
+                .with_notices(HeldNotices::new(
+                    Arc::clone(&queue),
+                    Arc::clone(queue.registry()),
+                )),
         ));
     let result = humanitl_ipc::serve(&paths.socket, &paths.token, server, shutdown()).await;
 

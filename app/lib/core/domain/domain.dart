@@ -13,3 +13,4 @@ export 'http.dart';
 export 'ids.dart';
 export 'rule.dart';
 export 'sandbox.dart';
+export 'terminal.dart';

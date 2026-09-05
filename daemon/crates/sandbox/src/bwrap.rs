@@ -34,9 +34,10 @@
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, PipeReader, Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::OsStringExt as _;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -48,12 +49,14 @@ use std::time::Duration;
 use humanitl_config::{Env, Paths, WorkMode};
 use humanitl_core::diagnostics::codes::{
     SANDBOX_001, SANDBOX_002, SANDBOX_003, SANDBOX_005, SANDBOX_006, SANDBOX_011, SANDBOX_012,
-    SANDBOX_013, SANDBOX_014, SANDBOX_015, SANDBOX_016,
+    SANDBOX_013, SANDBOX_014, SANDBOX_015, SANDBOX_016, TERM_002,
 };
 use humanitl_core::ids::SandboxId;
 use humanitl_core::{Diagnostic, DiagnosticCode, FixAction, Severity};
 use rustix::fs::{Access, MemfdFlags, SealFlags, access, fcntl_add_seals, memfd_create};
 use rustix::io::{FdFlags, fcntl_setfd};
+use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
+use rustix::termios::{Winsize, tcsetwinsize};
 
 use crate::bridge_env::{
     CHECK_BRIDGE_LISTENING, CHECK_FAMILIES, CHECK_NO_INTERFACES, CHECK_SECCOMP_APPLIED,
@@ -913,6 +916,19 @@ fn supervise(
     shared: &Arc<Shared>,
     tx: &Sender<Result<u32, Diagnostic>>,
 ) {
+    // Das Pseudoterminal steht vor dem Riegel: Es hat mit den geerbten
+    // Deskriptoren nichts zu tun, und ein Fehler dabei soll nicht den Riegel
+    // halten.
+    let pty = match stdio.pty_size() {
+        None => None,
+        Some((cols, rows)) => match open_pty(cols, rows) {
+            Ok(pair) => Some(pair),
+            Err(diagnostic) => {
+                let _ = tx.send(Err(diagnostic));
+                return;
+            }
+        },
+    };
     let spawned = {
         let _guard = SPAWN_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
         let mut command = BwrapBackend::scrubbed_command(program);
@@ -923,6 +939,25 @@ fn supervise(
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
             shared.set_capturing();
+        }
+        if let Some(pty) = pty.as_ref() {
+            // Die Untertanenseite wird für jeden der drei Deskriptoren
+            // verdoppelt; `Stdio::from` verbraucht sie. Ein `dup2` im Kind
+            // bräuchte `pre_exec` und damit `unsafe`, und das ist in dieser
+            // Crate verboten.
+            match pty.stdio() {
+                Ok((input, output, errors)) => {
+                    command.stdin(input).stdout(output).stderr(errors);
+                    // Die Meldungen von `bwrap` gehen damit nicht an das
+                    // geerbte stderr, sondern in dieselbe Leitung; der Befund
+                    // findet sie über die Spiegelung.
+                    shared.set_capturing();
+                }
+                Err(diagnostic) => {
+                    let _ = tx.send(Err(diagnostic));
+                    return;
+                }
+            }
         }
         for fd in &inherit {
             if let Err(err) = fcntl_setfd(fd.as_fd(), FdFlags::empty()) {
@@ -963,6 +998,30 @@ fn supervise(
             drain(stderr, |chunk| target.append_stderr(chunk));
         }));
     }
+    if let Some(pty) = pty {
+        // Die eigene Kopie der Untertanenseite geht jetzt zu; das Kind hat
+        // seine. Solange sie offen bliebe, sähe die Herrscherseite nie das
+        // Ende des Stroms, und wer darauf wartet, wartete für immer.
+        //
+        // Hier kann nichts mehr fehlschlagen, und das ist Absicht: Zwischen
+        // `spawn` und der Warteschleife darf es keinen Rückweg geben, denn
+        // `bwrap` läuft schon, und wer hier zurückkehrt, sammelt es nie ein.
+        // Der Leser-Deskriptor ist deshalb vor dem Start verdoppelt worden
+        // ([`open_pty`]).
+        let Pty {
+            master,
+            reader,
+            slave,
+        } = pty;
+        drop(slave);
+        // Der Deskriptor steht vor der PID: Wer das Handle bekommt, hat auch
+        // das Terminal, und niemand sieht ein Handle ohne eines.
+        shared.set_pty(master);
+        let target = Arc::clone(shared);
+        shared.add_reader(thread::spawn(move || {
+            drain(File::from(reader), |chunk| target.append_pty(chunk));
+        }));
+    }
     let _ = tx.send(Ok(child.id()));
 
     let status = loop {
@@ -982,6 +1041,115 @@ fn supervise(
     shared.join_readers();
     shared.clear_sink();
     shared.set_exit(status);
+}
+
+/// Ein Pseudoterminal: die Herrscherseite bleibt beim Daemon, die
+/// Untertanenseite bekommt die Sandbox als ihre drei Deskriptoren.
+#[derive(Debug)]
+struct Pty {
+    master: OwnedFd,
+    /// Dieselbe Herrscherseite ein zweites Mal, für den Leser-Faden.
+    ///
+    /// Sie wird **vor** dem Start verdoppelt. Danach läuft `bwrap`, und ein
+    /// Fehler, der zu einem `return` führte, ließe den Prozess als Zombie
+    /// stehen: Niemand riefe mehr `wait`. Ein Fehlerpfad, den es nicht gibt,
+    /// ist besser als einer, den man behandelt.
+    reader: OwnedFd,
+    slave: File,
+}
+
+impl Pty {
+    /// Dreimal dieselbe Untertanenseite: stdin, stdout, stderr.
+    ///
+    /// `Stdio::from` verbraucht seinen Deskriptor, also braucht jeder der drei
+    /// einen eigenen. Sie zeigen auf dieselbe Beschreibung; das ist genau, was
+    /// ein Terminal ist.
+    fn stdio(&self) -> Result<(Stdio, Stdio, Stdio), Diagnostic> {
+        let mut copies = Vec::with_capacity(3);
+        for _ in 0..3 {
+            copies.push(self.slave.try_clone().map_err(|err| {
+                pty_failed(&format!(
+                    "cannot hand the terminal to the sandbox as a descriptor: {err}"
+                ))
+            })?);
+        }
+        let mut copies = copies.into_iter().map(Stdio::from);
+        match (copies.next(), copies.next(), copies.next()) {
+            (Some(stdin), Some(stdout), Some(stderr)) => Ok((stdin, stdout, stderr)),
+            // Drei wurden gebaut, drei kommen heraus; der Zweig steht nur, weil
+            // `next` einen `Option` liefert und diese Crate kein `expect` außer
+            // in Tests kennt.
+            _ => Err(pty_failed("cannot hand the terminal to the sandbox")),
+        }
+    }
+}
+
+/// Öffnet ein Pseudoterminal und setzt seine Geometrie.
+///
+/// Der Weg ist der von POSIX: `posix_openpt`, `grantpt`, `unlockpt`, den Namen
+/// der Untertanenseite holen und sie öffnen. `rustix` kapselt jeden Schritt,
+/// deshalb braucht keiner davon `unsafe` — das wäre in dieser Crate verboten
+/// (`#![forbid(unsafe_code)]`).
+///
+/// Die Herrscherseite bekommt `CLOEXEC`: Sie darf nicht in die Sandbox
+/// vererbt werden. Ein Agent mit ihr in der Hand läse mit, was ein Mensch
+/// tippt, und könnte seine eigene Ausgabe fälschen.
+///
+/// `setsid` und das steuernde Terminal macht `bwrap` selbst (`--new-session`,
+/// unbedingt in jeder Kommandozeile). Deshalb hat der Agent kein *steuerndes*
+/// Terminal, und deshalb liefert der Kernel bei einer Größenänderung kein
+/// `SIGWINCH`; das tut [`SandboxHandle::resize`].
+fn open_pty(cols: u16, rows: u16) -> Result<Pty, Diagnostic> {
+    let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC)
+        .map_err(|err| pty_failed(&format!("cannot open a pseudo terminal: {err}")))?;
+    grantpt(&master).map_err(|err| {
+        pty_failed(&format!(
+            "cannot grant the follower side of the pseudo terminal: {err}"
+        ))
+    })?;
+    unlockpt(&master).map_err(|err| {
+        pty_failed(&format!(
+            "cannot unlock the follower side of the pseudo terminal: {err}"
+        ))
+    })?;
+    let name = ptsname(&master, Vec::new()).map_err(|err| {
+        pty_failed(&format!(
+            "cannot name the follower side of the pseudo terminal: {err}"
+        ))
+    })?;
+    let path = PathBuf::from(OsString::from_vec(name.into_bytes()));
+    let slave = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .map_err(|err| pty_failed(&format!("cannot open {}: {err}", path.display())))?;
+    tcsetwinsize(
+        &master,
+        Winsize {
+            ws_row: rows,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        },
+    )
+    .map_err(|err| pty_failed(&format!("cannot size the pseudo terminal: {err}")))?;
+    let reader = master.try_clone().map_err(|err| {
+        pty_failed(&format!(
+            "cannot duplicate the terminal of the sandbox: {err}"
+        ))
+    })?;
+    Ok(Pty {
+        master,
+        reader,
+        slave,
+    })
+}
+
+/// Der Befund, wenn sich kein Pseudoterminal aufbauen lässt.
+fn pty_failed(why: &str) -> Diagnostic {
+    Diagnostic::builder(TERM_002, Severity::Blocking)
+        .why(why.to_owned())
+        .build()
 }
 
 fn drain(mut source: impl Read, mut sink: impl FnMut(&[u8])) {

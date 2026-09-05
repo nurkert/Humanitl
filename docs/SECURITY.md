@@ -357,20 +357,56 @@ und damit potenziell vom Angreifer.
 
 *Was Humanitl tut.* Die Ausgabe läuft im Daemon durch `humanitl_core::TerminalFilter`, bevor sie
 einen Client erreicht — sowohl auf dem Weg in das Terminal-Widget als auch auf dem Weg zu
-`humanitl run`, das sie in das Terminal des Nutzers schreibt. Der Filter ist eine Erlaubnisliste:
-**Von allen Steuerfolgen geht genau eine hinaus, `ESC [ … m` für Farbe und Attribute.** Verworfen
+`humanitl run`, das sie in das Terminal des Nutzers schreibt. Der Filter ist eine Erlaubnisliste
+und hat zwei Politiken, weil zwei verschiedene Ströme zwei verschiedene Zusagen brauchen.
+
+**`ColourOnly`, der Strom ohne Pseudoterminal** (`humanitl run`, `SandboxEvent.output`): **Von
+allen Steuerfolgen geht genau eine hinaus, `ESC [ … m` für Farbe und Attribute.** Verworfen
 werden damit OSC 52 (Zugriff auf die Zwischenablage), OSC 8 (Hyperlinks, mit denen sich ein
 fremdes Ziel hinter harmlosem Text verstecken lässt), das Setzen des Fenstertitels, jede
 Bewegung des Cursors, jedes Löschen und Scrollen, das Zurücksetzen des Terminals und die
 Zeichenkettenfolgen DCS, SOS, PM und APC — letztere, weil `ESC P tmux; …` eine verbotene Folge
-sonst durch tmux hindurchreicht. Jede dieser Folgen wird in drei Schreibweisen erkannt: mit `ESC`
-eingeleitet, als einzelnes C1-Byte (`0x9b` ist CSI, `0x9d` ist OSC) und als dessen wohlgeformte
-UTF-8-Kodierung (`C2 9B`, `C2 9D`). Die dritte ist nötig, weil VTE-basierte Terminals — GNOME
-Terminal, Tilix, Terminator, XFCE Terminal, Guake — UTF-8 vor dem Parser dekodieren und `U+009B`
-als CSI ausführen; xterm ebenso, solange `allowC1Printable` aus ist, und das ist die Vorgabe. Der
-Agent kann damit nur noch die Zeile umschreiben, auf der er gerade steht, und keine, die schon
-dasteht. Über dem Terminal-Widget steht zusätzlich dauerhaft ein Hinweis, dass die Ausgabe des
-Agenten nicht vertrauenswürdig ist.
+sonst durch tmux hindurchreicht. Der Agent kann damit nur noch die Zeile umschreiben, auf der er
+gerade steht, und keine, die schon dasteht.
+
+**`FullScreen`, das Terminal der Sitzung** (`Terminal`-RPC, HUM-042): Ein Vollbild-Agent zeichnet
+mit absoluter Adressierung und ist ohne Cursorbewegung, Löschen, Scrollbereiche, Alternativschirm
+und Mausverfolgung nicht bedienbar; diese Politik lässt deshalb jede CSI-Folge hinaus und jede
+Escape-Folge außer `ESC c` (RIS). Nicht hinaus gehen dort: **jede Zeichenkettenfolge außer einer
+kurzen Liste von OSC-Nummern** — Farbe (4, 10, 11) mit ihren Rücknahmen (104, 110, 111) und die
+Prompt-Marken (133) —, deren Nutzlast zudem druckbares ASCII sein muss, weil ein `ESC` darin eine
+zweite Folge im Bauch der ersten wäre; **`CSI … t`** (XTWINOPS), das den Fenstertitel an OSC 0
+vorbei setzt und wiederherstellt, ihn in die Eingabe des Agenten schreiben lässt und die
+Fenstergröße ändert; und **`ESC c`**, das das Terminal samt Rollpuffer zurücksetzt. Die Liste ist
+eine Erlaubnisliste und keine Sperrliste, aus demselben Grund wie bei `VISIBLE_ENV`: Eine
+Sperrliste aus den bekannten Nummern ließe OSC 99 (Benachrichtigung in kitty), OSC 12
+(Cursorfarbe) und jede Nummer durch, die ein Terminal morgen belegt.
+
+**Beide Politiken erkennen jede Folge in drei Schreibweisen:** mit `ESC` eingeleitet, als
+einzelnes C1-Byte (`0x9b` ist CSI, `0x9d` ist OSC) und als dessen wohlgeformte UTF-8-Kodierung
+(`C2 9B`, `C2 9D`). Die dritte ist nötig, weil VTE-basierte Terminals — GNOME Terminal, Tilix,
+Terminator, XFCE Terminal, Guake — UTF-8 vor dem Parser dekodieren und `U+009B` als CSI ausführen;
+xterm ebenso, solange `allowC1Printable` aus ist, und das ist die Vorgabe. Eine Folge, die mit
+einem C1-Byte beginnt, geht **nie** hinaus, auch wenn dieselbe Folge mit `ESC` erlaubt wäre: Kein
+terminfo-Eintrag für `xterm-256color` erzeugt Acht-Bit-Einleiter, wer sie schickt, verkleidet
+etwas.
+
+**Nur wohlgeformtes UTF-8 verlässt den Daemon.** Ein Mehrbytezeichen wird zusammengehalten, bis es
+vollständig ist und die kürzeste Kodierung seines Codepunktes darstellt; was die Prüfung nicht
+besteht, fällt weg, auch das schon gesehene Anfangsbyte. Das ist nötig, weil eine überlange Form
+ein Steuerzeichen tragen kann: `E0 82 9B` besteht aus einem Anfangsbyte für drei Bytes und zwei
+gültig aussehenden Folgebytes und ist doch `U+009B`, also CSI; `C0 9B` wäre sogar `U+001B`, also
+`ESC`; in vier Bytes geht dasselbe. RFC 3629 verbietet diese Formen, und ein konformer Dekoder
+macht `U+FFFD` daraus — aber der Empfänger ist irgendein Terminal des Nutzers und keines, das wir
+aussuchen, und eine Zusage, dass keine Steuerfolge hinausgeht, darf nicht davon abhängen, dass der
+Empfänger richtig dekodiert. Ersatzzeichen (`U+D800` bis `U+DFFF`) und alles über `U+10FFFF`
+fallen aus demselben Grund weg.
+
+**Der Ringpuffer hält gefilterte Bytes.** Wer sich an eine laufende Sitzung hängt, bekommt die
+letzten 64 KiB nachgeliefert; hielte der Puffer den Rohstrom, spielte der zweite Client genau die
+Folgen ab, die dem ersten herausgenommen wurden. Über dem Terminal-Widget steht zusätzlich
+dauerhaft ein Hinweis, dass die Ausgabe des Agenten nicht vertrauenswürdig ist, und das Widget
+registriert keinen eigenen OSC-Handler.
 
 *Was der Filter nicht deckt.* Die C1-Bytes `0x80` bis `0x9f` sind zugleich Folgebytes von UTF-8:
 `€` ist `E2 82 AC` und enthält `0x82`. Der Filter entscheidet deshalb am Codepunkt und nicht am
@@ -380,6 +416,14 @@ längeren, druckbaren Zeichens bleibt damit Text. Ein Terminal, das **nicht** in
 liest es trotzdem als Steuerzeichen. Dagegen hilft nur, jedes Byte dieses Bereichs zu verwerfen,
 und das hieße, keinen Text außerhalb von ASCII mehr anzuzeigen. Das ist eine bewusste Entscheidung
 und keine Lücke, die noch geschlossen wird.
+
+Der Filter deckt außerdem nicht, was **Text** ist. Der Agent kann jederzeit
+`[humanitl] request allowed: …` auf seine eigene Ausgabe schreiben; ein Absender in einem
+Bytestrom ist keine Beglaubigung, und kein Filter kann daraus eine machen. Deshalb steht die
+Aussage, auf die es ankommt — eine Anfrage wartet auf eine Entscheidung —, im Streifen **über**
+dem Terminal, den die Oberfläche aus dem Ereignisstrom zeichnet, und nicht nur in der Zeile, die
+der Daemon in den Strom schreibt. In dieser Zeile wird der Pfad des Agenten gekürzt und um die
+eckige Klammer gebracht, damit wenigstens der Absender eindeutig bleibt (HUM-042).
 
 *Was der Nutzer tun sollte.* Angezeigte Befehle nicht per Copy-Paste in eine Host-Shell übernehmen,
 ohne sie zu lesen. Der klassische Angriff ist ein Befehl, dessen sichtbarer Teil harmlos ist und

@@ -1,23 +1,29 @@
 #!/bin/sh
 # ESC-5 — filesystem, terminal and audit trail.
 #
-# The three filesystem cases belong to HUM-043 and are live since it landed;
-# the terminal cases belong to HUM-050 and the audit cases to HUM-029, and they
-# are still skipped. The file exists since Sprint 0 because docs/SECURITY.md and
-# docs/THREAT-MODEL.md point at ESC-5 and scripts/ci/lint-docs.sh checks that
-# the file behind the reference is real. Runs on the HOST; see the note in
-# esc-4-rules.sh.
+# The three filesystem cases belong to HUM-043 and the two terminal cases to
+# HUM-042; both are live since those issues landed. The audit cases belong to
+# HUM-029 and are still skipped. The file exists since Sprint 0 because
+# docs/SECURITY.md and docs/THREAT-MODEL.md point at ESC-5 and
+# scripts/ci/lint-docs.sh checks that the file behind the reference is real.
+# Runs on the HOST; see the note in esc-4-rules.sh.
 #
-# The three live cases ask the same three questions the security claim about
-# channel 1 rests on: does a symlink out of /work show up in the session
+# The three filesystem cases ask the same three questions the security claim
+# about channel 1 rests on: does a symlink out of /work show up in the session
 # summary, do the masked paths stay empty in the sandbox and unchanged on the
 # host, and does a hook the agent writes stay inside the sandbox.
 #
-# Like ESC-4, each case runs the integration test of that name — here
-# `daemon/crates/sandbox/tests/escape_worktree.rs`, which carries the same three
-# names and drives the real launcher against a real bubblewrap. There is no
-# command that could ask these questions from outside without starting half the
-# daemon.
+# The two terminal cases ask the question channel 3 rests on: the agent writes
+# OSC 52, OSC 8 and a window title at a real pseudo terminal, and none of them
+# reaches a client. That is stronger than watching a clipboard: a sequence that
+# never leaves the daemon cannot reach a terminal that would execute it
+# (docs/SECURITY.md 3.3).
+#
+# Like ESC-4, each case runs the integration test of that name — the filesystem
+# cases `daemon/crates/sandbox/tests/escape_worktree.rs`, the terminal cases
+# `daemon/crates/ipc/tests/terminal.rs`. Both drive the real launcher against a
+# real bubblewrap; there is no command that could ask these questions from
+# outside without starting half the daemon.
 
 set -u
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -44,10 +50,20 @@ esc_begin esc-5
 #                        single assertion.
 #   anything else        fail, with the output as evidence.
 worktree_case() {
+    cargo_case "$1" humanitl-sandbox escape_worktree
+}
+
+# terminal_case NAME — the same for the terminal of the sandbox (HUM-042).
+terminal_case() {
+    cargo_case "$1" humanitl-ipc terminal
+}
+
+# cargo_case NAME PACKAGE TEST — run one integration test and judge it.
+cargo_case() {
     esc_wt_name="$1"
     esc_wt_out=$(
         cd "$DAEMON_DIR" 2>/dev/null || exit 127
-        cargo test -p humanitl-sandbox --test escape_worktree \
+        cargo test -p "$2" --test "$3" \
             -- --exact "$esc_wt_name" --nocapture 2>&1
     )
     esc_wt_code=$?
@@ -74,8 +90,9 @@ worktree_case symlink_out_of_work_is_marked
 worktree_case masked_path_stays_masked
 worktree_case hooks_write_stays_in_sandbox
 
-skip osc52_does_not_reach_host     "OSC 52 leaves the host clipboard untouched, HUM-050"
-skip osc8_and_title_are_inert      "OSC 8 and title sequences are disabled in the terminal, HUM-050"
+terminal_case osc52_does_not_reach_host
+terminal_case osc8_and_title_are_inert
+
 skip audit_delete_is_detected      "deleting an entry breaks the hash chain, HUM-029"
 skip audit_truncate_is_detected    "truncating the file is reported as truncation, HUM-029"
 

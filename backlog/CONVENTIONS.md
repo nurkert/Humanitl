@@ -234,6 +234,7 @@ humanitl run [--profile NAME] [--work DIR] [--ask ui|terminal|none] [--llm URL] 
 humanitl sandbox run [--profile NAME] -- CMD...
 humanitl sandbox argv [--profile NAME]
 humanitl sandbox check
+humanitl sandbox attach [--read-only]
 humanitl rules list|add|remove|test URL [--json]
 humanitl flows list [FILTER] | show ID [--json]
 humanitl audit verify|export [--format jsonl|csv] [--out FILE]
@@ -2439,3 +2440,147 @@ eigenen Kanal des Agenten benutzt (4.24, die `AgentAsk`-Karte). Ein eigener
 und der Statuscode, den der Proxy selbst geschrieben hat; bei `/ask` zusätzlich
 der **gesäuberte** Text der Bitte, nie der rohe Rumpf des Agenten. Der Rumpf
 einer Meta-Antwort wird an keiner Stelle aufgezeichnet.
+### 4.28 Aus der Umsetzung des Terminals (HUM-042, 2026-09-05)
+
+Abweichungen von `backlog/sprint-3.md`, die dauerhaft gelten. Wo die
+Spezifikation anderes sagt, gilt dieser Abschnitt.
+
+**Jede Sitzung läuft an einem Pseudoterminal.** `SandboxService::launch`
+startet mit `StdioMode::Pty { cols, rows }`, `80x24` bis ein Client seine
+eigene Geometrie nennt. Ein zweiter Modus daneben hätte einen Schalter
+gebraucht, den der Vertrag nicht hat: `Start` trägt kein Feld dafür, und jede
+Ableitung aus einem anderen Feld wäre eine zweite Bedeutung für dieses Feld.
+Drei Dinge ändern sich damit für **jeden** Leser dieser Ausgabe, auch für
+`humanitl run`: Ein Terminal hat einen Strom, also kommt alles als
+`OutputStream::Stdout`; die Zeilendisziplin macht aus `\n` ein `\r\n`; und die
+Eingabe endet nicht mehr von selbst, ein Agent, der von stdin liest, wartet
+statt sofort zu enden. Das Letzte ist der Zweck der Übung — ohne Terminal
+beendet sich ein Vollbild-TUI sofort.
+
+**Ein Strom, zwei Zusagen.** Die rohen Stücke werden **einmal** gelesen
+(`Inner::stream_output`) und bedienen zwei Wege mit zwei Politiken:
+`TerminalPolicy::ColourOnly` für `SandboxEvent.output`, das ein Mensch
+unverändert in sein eigenes Terminal schreibt, und `TerminalPolicy::FullScreen`
+für die `Terminal`-RPC. Der Leser hört nicht auf, wenn der Ereignisstrom
+seinen Client verliert: Das Terminal hängt daran, und es gehört nicht dem, der
+als erster gestartet hat.
+
+**Der Filter bleibt einer, mit zwei Politiken.** 4.26 verlangt, dass HUM-042
+den vorhandenen Filter erweitert statt einen zweiten daneben zu bauen; das gilt
+und ist umgesetzt. Der neue Zustandsautomat liegt weiter in
+`humanitl_core::terminal` und nicht in `humanitl-sandbox`, wohin die
+Spezifikation ihn legen wollte: Er ist eine reine Funktion über Bytes und
+gehört damit in den Kern (ARCHITECTURE 1), und der einzige Aufrufer sitzt
+ohnehin in `humanitl-ipc`. `daemon/crates/sandbox/src/osc_filter.rs` gibt es
+nicht.
+
+**Die erlaubten OSC-Nummern sind eine Erlaubnisliste, keine Sperrliste.** Die
+Spezifikation nannte `OscPolicy { deny: [0, 1, 2, 7, 8, 9, 52, 777, 1337] }`.
+Diese Liste hat Löcher, und sie sind nachgemessen: OSC 99 ist die
+Benachrichtigung in kitty, OSC 12 die Cursorfarbe, OSC 50 die Schriftart, und
+jede Nummer, die ein Terminal morgen belegt, wäre offen. Es gilt
+`terminal::OSC_ALLOWED` = `[4, 10, 11, 104, 110, 111, 133]`: Farbe, ihre
+Rücknahmen, Prompt-Marken. Dieselbe Richtung wie `VISIBLE_ENV` (4.17) und
+`SESSION_OVERRIDE_KEYS` (4.26), aus demselben Grund.
+
+Zwei Folgen fallen zusätzlich weg, die die Spezifikation nicht nannte:
+`CSI … t` (XTWINOPS setzt und liest den Fenstertitel an OSC 0 vorbei und ändert
+die Fenstergröße) und die Nutzlast einer erlaubten OSC-Folge, sobald darin ein
+Byte außerhalb von `0x20..=0x7e` steht — ein `ESC` in der Nutzlast ist eine
+zweite Folge im Bauch der ersten, und Terminals brechen die äußere daran ab.
+
+**Der Hinweis im Strom ist eine Bequemlichkeit, der Streifen ist die Zusage.**
+Beide entstehen aus demselben Ereignis (`HoldQueue::subscribe`), aber nur der
+Streifen über dem Terminal ist das Akzeptanzkriterium: Ein Vollbild-Agent
+zeichnet die Zeile im Strom mit dem nächsten Bild weg, und er kann dieselbe
+Zeile selbst schreiben — ein Absender in einem Bytestrom ist keine
+Beglaubigung. Die Zeile läuft trotzdem als Ganzes durch `sanitize_note`, der
+Pfad wird auf 48 Zeichen gekürzt, und **die eckige Klammer gehört dem
+Absender**: `[` wird in allem, was aus dem Agenten stammt, zu `(`, damit
+`[humanitl]` in der Zeile genau einmal vorkommt. Eingefügt wird nur an einer
+Grenze (`TerminalFilter::at_boundary`), also weder in einer halben Folge noch
+in einem halben Zeichen. `ui.terminal_notices` (Vorgabe `true`, Stufe
+`advanced`) schaltet die Zeile ab; der Streifen bleibt.
+
+**Ein Schreiber, beliebig viele Leser, und die Grenze steht im Daemon.**
+`TerminalHub` hält den Platz des Schreibers, und ein `WriterSlot` gibt ihn beim
+Fallenlassen frei — ein Platz, der nach einem abgebrochenen Strom belegt
+bliebe, verweigerte jeden weiteren Schreiber bis zum Ende der Sitzung. `data`
+und `Resize` eines Lesers werden im Handler verworfen. Der Ringpuffer (64 KiB)
+hält **gefilterte** Bytes; Ring lesen und Rundfunk abonnieren geschehen unter
+demselben Schloss, unter dem gefüttert wird, sonst läge zwischen beidem eine
+Lücke oder eine Wiederholung.
+
+**`TERM_002` ist neu:** Das Terminal der Sandbox nimmt weder Eingabe noch
+Geometrie an — die Sitzung läuft ohne Pseudoterminal, oder der Agent ist weg
+und der Kernel meldet `EIO`. Ohne laufende Sitzung antwortet `Terminal` mit
+`IPC_006`, wie `Sandbox`; ein leeres `Open.sandbox_id` heißt „die Sitzung, die
+läuft".
+
+**Die Startdiagnostik überlebt das Pseudoterminal.** Ein PTY hat keine
+getrennte Fehlerausgabe, und `Shared::verdict` liest genau die. Die ersten
+`PTY_MIRROR_BYTES` (2 KiB) der Terminalausgabe werden deshalb in den
+Fehlerpuffer gespiegelt — nicht über `append_stderr`, sonst bekäme ein
+Zuhörer jedes Byte des Anfangs zweimal. Ohne diese Spiegelung verlöre
+`is_userns_failure` seine Quelle, und aus `SANDBOX_003` mit
+Behebungsvorschlag würde ein `SANDBOX_012` ohne Grund.
+
+**`resize` ist zwei Schritte.** `tcsetwinsize` trägt die Größe ein, und
+`kill_process_group(child_pid, SIGWINCH)` sagt es dem Agenten. Der Kernel tut
+das Zweite nicht: Er schickt `SIGWINCH` an die Vordergrundgruppe des
+*steuernden* Terminals, und die Sandbox hat mit `--new-session` keines. Aus
+demselben Grund erreicht `Ctrl+C` den Agenten als Byte `0x03` und nie als
+Signal. Schreiber-Resizes sind auf eine je 50 ms gedrosselt, die letzte
+gewinnt.
+
+**`humanitl sandbox attach [--read-only]`** ist die CLI-Hälfte der RPC
+(ADR-018). Rohmodus über `rustix::termios`, `SIGWINCH` hinauf, `close` beim
+Ende der eigenen Eingabe, und beim Verlassen `ESC [ ? 1049 l ESC [ ? 25 h` in
+das eigene Terminal: Ein Vollbild-Agent lässt sonst den Alternativschirm an
+und den Cursor versteckt.
+
+**Nur wohlgeformtes UTF-8 geht hinaus, und eine C1-eingeleitete Folge nie.**
+Beides kam aus dem Review. Ein Filter, der nur Folgebytes zählt, lässt die
+überlangen Formen durch: `E0 82 9B` ist `U+009B` (CSI), `C0 9B` sogar `U+001B`
+(`ESC`), und in vier Bytes geht dasselbe. RFC 3629 verbietet sie, und ein
+konformer Dekoder macht `U+FFFD` daraus — aber **ein Filter, der zusichert,
+dass keine Steuerfolge hinausgeht, darf sich nicht darauf verlassen, dass der
+Empfänger korrekt dekodiert**; der Empfänger ist irgendein Terminal des
+Nutzers. Ein Mehrbytezeichen wird deshalb zusammengehalten, bis es vollständig
+und die kürzeste Kodierung seines Codepunktes ist; was die Prüfung nicht
+besteht, fällt weg, auch das schon gesehene Anfangsbyte. Und eine Folge, die
+mit einem C1-Byte beginnt, geht nie hinaus, auch wenn dieselbe Folge mit `ESC`
+erlaubt wäre: Ohne diese Regel machte der Filter aus `\x9b 2 J` die erlaubte
+Sieben-Bit-Form und reichte sie weiter.
+
+**Zwischen `spawn` und der Warteschleife gibt es keinen Rückweg.** `bwrap`
+läuft ab dem `spawn`; wer danach zurückkehrt, sammelt es nie ein, und der
+Prozess bleibt als Zombie stehen. Der Leser-Deskriptor des Pseudoterminals
+wird deshalb schon in `open_pty` verdoppelt und nicht erst nach dem Start.
+Einen Fehlerpfad zu entfernen ist besser, als ihn zu behandeln.
+
+**Der Zuhörer der Warteschlange endet mit seiner Sitzung.** `HeldNotices::run`
+hängt an einem Kanal, der dem Daemon gehört und länger lebt als die Sitzung.
+`accompany` hält deshalb sein `JoinHandle` und bricht es nach `stream_output`
+ab. Ohne das bliebe je beendeter Sitzung eine Aufgabe stehen, die einen
+`TerminalHub` hält — und mit ihm den `SandboxHandle` und die Herrscherseite
+des Pseudoterminals —, und sie könnte noch in den Ring einer Sitzung
+schreiben, die es nicht mehr gibt.
+
+**Ein aufgeschobener Hinweis geht mit dem Ende der Sitzung noch hinaus.**
+`TerminalHub::finish` gibt aus, was auf eine Grenze gewartet hat, bevor es
+`Exit` sendet: Nach dem `flush` steht der Filter wieder auf einer Grenze, und
+der Agent schreibt nichts mehr, in das der Hinweis fallen könnte. Ihn dort
+wegzuwerfen hieße, genau den Fluss zu verschweigen, der beim Ende noch offen
+war.
+
+**Die Oberfläche filtert nicht ein zweites Mal.** `TerminalPane` schreibt, was
+kommt, und registriert keinen OSC-Handler; die 16 Farben stehen als
+`HTokens.terminal` (`HTerminalPalette`) und leiten sich aus den Zustandsfarben
+ab — was ein Mensch in der Warteschlange lernt, gilt im Terminal. Neu in
+`packages/ui` ist außerdem `HContextMenu` samt `HContextMenuController`, weil
+der Emulator seinen Rechtsklick selbst braucht; zweiter Nutzer ist HUM-030.
+Und der Emulator erfährt, wenn er nur zusehen darf (`TerminalView.readOnly`
+aus `TerminalSessionState.readOnly` und der Phase): Der Daemon verwirft die
+Tastendrücke eines Lesers, und ein Cursor, der auf Eingabe zu warten scheint,
+verspricht etwas, das niemand hält.

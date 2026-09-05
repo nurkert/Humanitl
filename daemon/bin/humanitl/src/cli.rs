@@ -204,6 +204,17 @@ pub enum SandboxCmd {
 
     /// Start a short-lived sandbox and show the three isolation guarantees.
     Check,
+
+    /// Attach this terminal to the running session.
+    ///
+    /// One client writes, any number watch. Ctrl+C reaches the agent as byte
+    /// 0x03, not as a signal: the sandbox has no controlling terminal. Detach
+    /// by closing the connection; the session keeps running.
+    Attach {
+        /// Watch without sending anything.
+        #[arg(long)]
+        read_only: bool,
+    },
 }
 
 /// Die Unterkommandos von `humanitl flows`.
