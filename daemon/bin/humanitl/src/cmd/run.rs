@@ -44,6 +44,7 @@
 use std::ffi::OsString;
 
 use humanitl_config::AskMode;
+use humanitl_core::block::sanitize_note;
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_ipc::client::Client;
@@ -145,7 +146,14 @@ async fn drive(
     // Ein zweiter Client für den Stopp: Der erste hält den Ereignisstrom, und
     // ein `&mut` daran wäre für die Dauer der Schleife geliehen.
     let mut stopper = client.clone();
-    while exit.is_none() {
+    // **Gelesen wird bis zum Ende des Stroms, nicht bis zum Exit-Code.** Der
+    // Daemon schickt nach dem Exit noch, was der Lauf im Projekt hinterlassen
+    // hat: die Befunde `SANDBOX_022` bis `SANDBOX_026` und die Zusammenfassung
+    // selbst (HUM-043). Wer beim Exit-Code aufhört, beendet den Strom, bevor
+    // sie kommen — dann steht kein Wort darüber im Terminal, dass der Agent
+    // einen Git-Hook geschrieben hat. Das kostet die Zeit des zweiten
+    // Schnappschusses; der Strom endet unmittelbar danach.
+    loop {
         let next = tokio::select! {
             event = events.message() => event,
             // `Ctrl+C` beendet die Sitzung. Ein Byte an den Agenten gibt es
@@ -244,6 +252,24 @@ fn handle(ctx: &Context, event: v1::SandboxEvent) -> Option<Failure> {
         }
         Event::ArgvLine(line) => {
             ctx.render.detail(&line);
+            None
+        }
+        // Die Befunde der Zusammenfassung (`SANDBOX_022` bis `SANDBOX_026`)
+        // kommen als eigene `Diagnostic`-Ereignisse und stehen also schon da.
+        // Hier bleibt die Zeile, die zur ganzen Liste führt: Wer wissen will,
+        // welche Dateien es waren, tippt einen Befehl und liest keine
+        // Tabelle, die er nicht angefordert hat.
+        Event::Summary(summary) => {
+            if summary.changes.is_empty() {
+                ctx.render
+                    .detail("[humanitl] the agent left the project unchanged");
+            } else {
+                ctx.render.note(&format!(
+                    "{} file(s) changed in the project; humanitl sessions summary {}",
+                    summary.changes.len(),
+                    sanitize_note(&summary.sandbox_id)
+                ));
+            }
             None
         }
         Event::Exit(_) => None,

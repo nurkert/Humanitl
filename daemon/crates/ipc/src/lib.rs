@@ -23,6 +23,9 @@
 //! - [`terminal`] mit der `Terminal`-RPC: der Ausgabe der Sitzung am
 //!   Pseudoterminal, gefiltert, mit einem Schreiber und beliebig vielen
 //!   Lesern (HUM-042),
+//! - [`summary`] mit dem, was ein Sandbox-Lauf im Projektverzeichnis
+//!   hinterlassen hat: Schnappschuss davor, Schnappschuss danach, Fundscan
+//!   dazwischen (HUM-043),
 //! - [`client`] mit dem Gegenstück für CLI, Oberfläche und Tests,
 //! - [`server_stub`] mit dem Port [`DaemonApi`] und dem tonic-Dienst darüber,
 //! - [`fake`] mit einem Daemon, der statt eines Proxys eine aufgezeichnete
@@ -44,7 +47,10 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `5` seit `FlowSummary.meta`, dem Vermerk an einer Anfrage, die der Proxy
+/// `6` seit der Zusammenfassung eines Sandbox-Laufs: `SessionSummary` samt
+/// `FileChange`, `SymlinkEscape` und `SummaryFinding`, dem achten Arm
+/// `SandboxEvent.summary` und der RPC `GetSessionSummary` (HUM-043);
+/// `5` war `FlowSummary.meta`, der Vermerk an einer Anfrage, die der Proxy
 /// selbst beantwortet hat (`humanitl.internal`, HUM-103);
 /// `4` war die Sitzungskonfiguration am Start (`Start.session_profile`,
 /// `Start.ask_mode`, `Start.cli_overrides`) samt den beiden Ereignissen, die
@@ -58,7 +64,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 5;
+pub const PROTO_MINOR: u32 = 6;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
@@ -91,6 +97,7 @@ pub mod sandbox;
 pub mod server;
 pub mod server_stub;
 pub mod session;
+pub mod summary;
 pub mod terminal;
 pub mod validate;
 

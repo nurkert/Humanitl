@@ -409,6 +409,11 @@ fn all_contract_messages_exist() {
         "SandboxEvent",
         "SandboxEvent.Status",
         "SandboxEvent.LogLine",
+        "SessionSummaryRef",
+        "SessionSummary",
+        "FileChange",
+        "SymlinkEscape",
+        "SummaryFinding",
         "Mount",
         "EnvVar",
         "TerminalInput",
@@ -456,6 +461,8 @@ fn all_contract_enums_exist() {
         "ValueOrigin",
         "CheckStatus",
         "LlmProduct",
+        "FileChangeKind",
+        "ScanSkip",
     ];
 
     let present: Vec<String> = enums().into_iter().map(|(name, _)| name).collect();
@@ -769,6 +776,108 @@ const EDITED_REQUEST_FIELDS: &FieldTable = &[
     ("body", 5, "bytes", None),
 ];
 
+/// `SandboxEvent` vollstaendig: jede Variante von `oneof event`.
+///
+/// Die Nummern sind Drahtformat. Ein Arm, der seine Nummer wechselt, macht aus
+/// der Zusammenfassung eines Laufs beim naechsten Client eine Ausgabe des
+/// Agenten. `all_contract_messages_exist` faende das nicht: `SessionSummary`
+/// ist eine eigene Nachricht und bliebe stehen.
+const SANDBOX_EVENT_FIELDS: &FieldTable = &[
+    (
+        "status",
+        1,
+        ".humanitl.v1.SandboxEvent.Status",
+        Some("event"),
+    ),
+    ("check", 2, ".humanitl.v1.CheckResult", Some("event")),
+    ("argv_line", 3, "string", Some("event")),
+    ("diagnostic", 4, ".humanitl.v1.Diagnostic", Some("event")),
+    ("log", 5, ".humanitl.v1.SandboxEvent.LogLine", Some("event")),
+    (
+        "output",
+        6,
+        ".humanitl.v1.SandboxEvent.OutputChunk",
+        Some("event"),
+    ),
+    ("exit", 7, ".humanitl.v1.SandboxEvent.Exit", Some("event")),
+    // HUM-043: der achte Arm, nicht der sechste — `output` und `exit` kamen
+    // mit HUM-067 dazu.
+    ("summary", 8, ".humanitl.v1.SessionSummary", Some("event")),
+];
+
+/// `SessionSummary` vollstaendig (HUM-043).
+///
+/// Die Nachricht reist zweimal denselben Weg: als achter Arm von
+/// `SandboxEvent` und als Antwort von `GetSessionSummary`. Beide Male ist sie
+/// dieselbe, und diese Tabelle ist ihre vollstaendige Beschreibung.
+const SESSION_SUMMARY_FIELDS: &FieldTable = &[
+    ("session_id", 1, "string", None),
+    ("sandbox_id", 2, "string", None),
+    ("created", 3, ".google.protobuf.Timestamp", None),
+    ("work_dir", 4, "string", None),
+    ("changes", 5, "repeated .humanitl.v1.FileChange", None),
+    ("findings", 6, "repeated .humanitl.v1.SummaryFinding", None),
+    ("symlinks", 7, "repeated .humanitl.v1.SymlinkEscape", None),
+    ("unprotected", 8, "repeated string", None),
+    ("scanned_bytes", 9, "uint64", None),
+    ("truncated", 10, "bool", None),
+    ("diagnostics", 11, "repeated .humanitl.v1.Diagnostic", None),
+];
+
+#[test]
+fn sandbox_event_has_every_variant_of_the_oneof() {
+    let event = message("SandboxEvent");
+    assert_eq!(
+        check_fields("SandboxEvent", &event, SANDBOX_EVENT_FIELDS),
+        Ok(())
+    );
+}
+
+/// `FileChange` vollstaendig (HUM-043).
+///
+/// Feld 8 ist der Vermerk, dass der Fundscan in diese Datei **nicht** gesehen
+/// hat. Faellt es weg oder wandert es, liest ein Client „kein Fund" als
+/// „sauber", und genau das ist der Unterschied, um den es geht.
+const FILE_CHANGE_FIELDS: &FieldTable = &[
+    ("path", 1, "string", None),
+    ("path_hash", 2, "string", None),
+    ("mangled", 3, "bool", None),
+    ("kind", 4, ".humanitl.v1.FileChangeKind", None),
+    ("size", 5, "uint64", None),
+    ("git_metadata", 6, "bool", None),
+    ("unprotected_by", 7, "string", None),
+    ("unscanned", 8, ".humanitl.v1.ScanSkip", None),
+];
+
+#[test]
+fn a_changed_file_says_whether_it_was_searched() {
+    let change = message("FileChange");
+    assert_eq!(
+        check_fields("FileChange", &change, FILE_CHANGE_FIELDS),
+        Ok(())
+    );
+}
+
+#[test]
+fn the_session_summary_carries_what_the_run_left_behind() {
+    let summary = message("SessionSummary");
+    assert_eq!(
+        check_fields("SessionSummary", &summary, SESSION_SUMMARY_FIELDS),
+        Ok(())
+    );
+    // Der Verweis traegt genau die eine Kennung, die `humanitl sessions
+    // summary <id>` zur Hand hat.
+    let reference = message("SessionSummaryRef");
+    assert_eq!(
+        check_fields(
+            "SessionSummaryRef",
+            &reference,
+            &[("sandbox_id", 1, "string", None)]
+        ),
+        Ok(())
+    );
+}
+
 #[test]
 fn flow_event_has_every_variant_of_the_oneof() {
     let event = message("FlowEvent");
@@ -931,6 +1040,16 @@ const EXPECTED_RPCS: &[(&str, &str, &str, bool, bool)] = &[
         "ProbeLlm",
         ".humanitl.v1.ProbeLlmRequest",
         ".humanitl.v1.ProbeLlmResponse",
+        false,
+        false,
+    ),
+    // HUM-043: die gespeicherte Zusammenfassung eines Sandbox-Laufs. Nicht in
+    // BACKLOG.md 3.3; `Sandbox` ist ein Strom ueber die laufende Sandbox und
+    // kann einen Lauf, der beendet ist, nicht mehr beantworten.
+    (
+        "GetSessionSummary",
+        ".humanitl.v1.SessionSummaryRef",
+        ".humanitl.v1.SessionSummary",
         false,
         false,
     ),

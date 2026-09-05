@@ -38,6 +38,9 @@ use humanitl_proxy::{LlmFlavor, ProbeResult};
 use humanitl_recorder::{
     Dir, FindingRecord, FlowDetail as RecordedDetail, FlowSummary as RecordedSummary, MessageRecord,
 };
+use humanitl_sandbox::summary::{
+    ChangeKind, FileChangeRecord, ScanSkip, SessionSummary, SummaryFinding, SymlinkEscape,
+};
 use humanitl_sandbox::{CheckResult, IsolationCheck};
 
 use crate::domains::DomainTable;
@@ -1528,6 +1531,108 @@ fn block_reason_from_name(name: &str) -> v1::BlockReason {
         "private_address" => v1::BlockReason::PrivateAddress,
         "secret" => v1::BlockReason::Secret,
         _ => v1::BlockReason::Unspecified,
+    }
+}
+
+/// Übersetzt die Zusammenfassung eines Sandbox-Laufs in ihre Wire-Form
+/// (HUM-043).
+///
+/// `created` ist der Zeitpunkt, den die Aufzeichnung führt; für das Ereignis
+/// am Ende eines Laufs ist es der Augenblick, in dem die Zusammenfassung
+/// entstand. Er steht nicht in [`SessionSummary`] selbst: Dort wäre er ein
+/// zweites Mal geführt, und die Zeile in `session_summaries` trägt ihn
+/// ohnehin.
+///
+/// **Jeder Pfad in der Antwort ist Anzeige.** Er ist im Daemon durch
+/// [`sanitize_note`] gegangen, bevor er in die Zusammenfassung kam; hier wird
+/// nichts mehr daran verändert und nichts damit geöffnet.
+#[must_use]
+pub fn session_summary_to_proto(
+    summary: &SessionSummary,
+    created: SystemTime,
+) -> v1::SessionSummary {
+    v1::SessionSummary {
+        session_id: summary.session.to_string(),
+        sandbox_id: summary.sandbox.to_string(),
+        created: Some(timestamp(created)),
+        work_dir: summary.work_dir.clone(),
+        changes: summary.changes.iter().map(file_change_to_proto).collect(),
+        findings: summary
+            .findings
+            .iter()
+            .map(summary_finding_to_proto)
+            .collect(),
+        symlinks: summary
+            .symlinks
+            .iter()
+            .map(symlink_escape_to_proto)
+            .collect(),
+        unprotected: summary.unprotected.clone(),
+        scanned_bytes: summary.scanned_bytes,
+        truncated: summary.truncated,
+        diagnostics: summary
+            .diagnostics()
+            .iter()
+            .map(diagnostic_to_proto)
+            .collect(),
+    }
+}
+
+/// Eine Zeile der Tabelle „Changed files" in ihrer Wire-Form.
+fn file_change_to_proto(change: &FileChangeRecord) -> v1::FileChange {
+    let kind = match change.kind {
+        ChangeKind::Added => v1::FileChangeKind::Added,
+        ChangeKind::Modified => v1::FileChangeKind::Modified,
+        ChangeKind::Removed => v1::FileChangeKind::Removed,
+        ChangeKind::SymlinkAdded => v1::FileChangeKind::SymlinkAdded,
+        ChangeKind::ModeChanged => v1::FileChangeKind::ModeChanged,
+    };
+    let unscanned = match change.unscanned {
+        None => v1::ScanSkip::Unspecified,
+        Some(ScanSkip::TooLarge) => v1::ScanSkip::TooLarge,
+        Some(ScanSkip::Unreadable) => v1::ScanSkip::Unreadable,
+        Some(ScanSkip::Budget) => v1::ScanSkip::Budget,
+    };
+    v1::FileChange {
+        path: change.path.clone(),
+        path_hash: change.path_hash.clone(),
+        mangled: change.mangled,
+        kind: kind as i32,
+        size: change.size,
+        git_metadata: change.git_metadata,
+        unprotected_by: change.unprotected_by.clone().unwrap_or_default(),
+        unscanned: unscanned as i32,
+    }
+}
+
+/// Ein Symlink des Laufs in seiner Wire-Form.
+fn symlink_escape_to_proto(link: &SymlinkEscape) -> v1::SymlinkEscape {
+    v1::SymlinkEscape {
+        path: link.path.clone(),
+        path_hash: link.path_hash.clone(),
+        mangled: link.mangled,
+        target: link.target.clone(),
+        escapes: link.escapes,
+        fix_command: link.fix_command.clone().unwrap_or_default(),
+    }
+}
+
+/// Ein Fund in einer geänderten Datei in seiner Wire-Form.
+fn summary_finding_to_proto(finding: &SummaryFinding) -> v1::SummaryFinding {
+    let tier = match finding.tier {
+        humanitl_core::Tier::Checksum => v1::FindingTier::Checksum,
+        humanitl_core::Tier::Regex => v1::FindingTier::Regex,
+        humanitl_core::Tier::UserTerm => v1::FindingTier::UserTerm,
+    };
+    v1::SummaryFinding {
+        path: finding.path.clone(),
+        path_hash: finding.path_hash.clone(),
+        mangled: finding.mangled,
+        line: finding.line,
+        kind: finding.kind.clone(),
+        tier: tier as i32,
+        display_prefix: finding.display_prefix.clone(),
+        value_hash: finding.value_hash.clone(),
     }
 }
 

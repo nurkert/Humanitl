@@ -7,10 +7,10 @@
 //! [`exit_code`], damit derselbe Befund überall dieselbe Zahl ergibt.
 //!
 //! Fachlogik steht hier nicht (ADR-018): `daemon status`, `flows list`,
-//! `flows show` und die sieben `rules`-Kommandos sind gRPC-Aufrufe, `config
-//! get` und `config schema` lesen die Konfiguration, und die drei
-//! `sandbox`-Kommandos rufen `humanitl-sandbox` auf, bis die `Sandbox`-RPC sie
-//! ablöst (siehe [`sandbox`]).
+//! `flows show`, `sessions summary` und die sieben `rules`-Kommandos sind
+//! gRPC-Aufrufe, `config get` und `config schema` lesen die Konfiguration, und
+//! die drei `sandbox`-Kommandos rufen `humanitl-sandbox` auf, bis die
+//! `Sandbox`-RPC sie ablöst (siehe [`sandbox`]).
 
 pub mod attach;
 pub mod config;
@@ -19,6 +19,7 @@ pub mod flows;
 pub mod rules;
 pub mod run;
 pub mod sandbox;
+pub mod sessions;
 
 use std::path::{Path, PathBuf};
 

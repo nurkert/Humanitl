@@ -37,6 +37,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use humanitl_config::Config;
 use humanitl_core::diagnostics::codes;
+use humanitl_core::ids::SandboxId;
 use humanitl_core::{
     BodyRef, Decision, DecisionSource, Diagnostic, FlowEvent, FlowId, HostName, SessionId, Severity,
 };
@@ -475,6 +476,40 @@ impl IpcServer {
         )))
     }
 
+    /// Die abgelegte Zusammenfassung eines Sandbox-Laufs (HUM-043).
+    ///
+    /// Sie kommt aus der Aufzeichnung und nicht aus dem laufenden Dienst: Ein
+    /// Lauf, der längst beendet ist, hat keinen Zustand mehr, den man fragen
+    /// könnte, und `humanitl sessions summary <id>` fragt gerade nach so einem.
+    /// Der Text in der Zeile ist die serialisierte
+    /// [`humanitl_sandbox::summary::SessionSummary`]; die Befunde
+    /// (`SANDBOX_022` bis `SANDBOX_026`) rechnet die Übersetzung daraus, damit
+    /// die Kommandozeile ein dünner Client bleibt (ADR-018).
+    async fn stored_summary(
+        recorder: &Recorder,
+        sandbox: SandboxId,
+    ) -> Result<v1::SessionSummary, Diagnostic> {
+        // Die Zusammenfassung entsteht am Ende eines Laufs und geht über
+        // denselben Schreib-Thread wie alles andere; ohne `flush` fände ein
+        // Client, der sofort nach dem Ereignis fragt, seine eigene Zeile nicht.
+        recorder.flush().await;
+        let row = recorder
+            .get_session_summary(sandbox)
+            .await
+            .map_err(humanitl_recorder::RecorderError::into_diagnostic)?
+            .ok_or_else(|| unknown_summary(sandbox))?;
+        let summary: humanitl_sandbox::summary::SessionSummary = serde_json::from_str(&row.json)
+            .map_err(|error| {
+                Diagnostic::builder(codes::RECORDER_003, Severity::Error)
+                    .why(format!(
+                        "the stored summary of sandbox {sandbox} cannot be read back ({error}); \
+                         the recording holds a text that this version does not understand"
+                    ))
+                    .build()
+            })?;
+        Ok(convert::session_summary_to_proto(&summary, row.created))
+    }
+
     /// Was der Katalog zu diesem Flow sagt.
     ///
     /// Für einen Flow dieser Sitzung die Antwort, die beim Eintreffen entstand;
@@ -572,6 +607,22 @@ impl IpcServer {
 /// der Fake sie nicht ein zweites Mal beschreiben muss.
 fn unknown_flow(id: FlowId) -> Status {
     crate::server_stub::get_flow_status(&not_held(&NotHeld::Unknown { id }))
+}
+
+/// Ein Befund für einen Lauf, zu dem keine Zusammenfassung vorliegt.
+///
+/// Der Grund nennt beide Möglichkeiten, weil dieser Dienst sie nicht
+/// unterscheiden kann: Es gab den Lauf nie auf diesem Rechner, oder es gab ihn
+/// und er hinterließ keine Zusammenfassung (Projekt nur lesbar eingehängt,
+/// Daemon ohne Aufzeichnung, Lauf älter als HUM-043).
+pub(crate) fn unknown_summary(sandbox: SandboxId) -> Diagnostic {
+    Diagnostic::builder(codes::SANDBOX_027, Severity::Error)
+        .why(format!(
+            "no summary is recorded for sandbox {sandbox}; either this machine never ran it, or \
+             the run left none — a project mounted read-only cannot change, and a daemon without \
+             a recording keeps nothing"
+        ))
+        .build()
 }
 
 /// Ein Befund für einen Flow, der nicht mehr wartet (`FailedPrecondition`).
@@ -1147,6 +1198,36 @@ impl v1::humanitl_server::Humanitl for IpcServer {
             .await
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
         Ok(Response::new(convert::probe_result_to_proto(&result)))
+    }
+
+    /// Was ein Sandbox-Lauf im Projektverzeichnis hinterlassen hat.
+    ///
+    /// Dieselbe Reihenfolge wie bei `GetBody` und `ProbeLlm`: erst die Anfrage
+    /// lesen, dann fragen, ob dieser Daemon sie beantworten kann. Eine Kennung,
+    /// die keine ist, bleibt auch mit Aufzeichnung keine; andersherum
+    /// antwortete ein Daemon ohne Aufzeichnung auf denselben Unsinn
+    /// `RECORDER_001` und der Fake `IPC_005`.
+    async fn get_session_summary(
+        &self,
+        request: Request<v1::SessionSummaryRef>,
+    ) -> Result<Response<v1::SessionSummary>, Status> {
+        let sandbox = validate::sandbox_id(&request.into_inner().sandbox_id)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        let recorder = self.recorder.as_ref().ok_or_else(|| {
+            diagnostic_to_status(
+                &Diagnostic::builder(codes::RECORDER_001, Severity::Error)
+                    .why(
+                        "this daemon runs without a recording, so no summary of an earlier \
+                         sandbox run was kept"
+                            .to_owned(),
+                    )
+                    .build(),
+            )
+        })?;
+        Self::stored_summary(recorder, sandbox)
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| crate::server_stub::missing_status(&diagnostic))
     }
 }
 
