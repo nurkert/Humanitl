@@ -277,7 +277,7 @@ fn ok_stream<T: Send + 'static>(inner: BoxStream<T>) -> BoxStream<Result<T, Stat
 ///
 /// Ein Fehler auf dem Eingangsstrom beendet ihn; für das Terminal heißt das:
 /// der Client ist weg, also schließt die Verbindung.
-fn plain_stream<T: Send + 'static>(mut inner: tonic::Streaming<T>) -> BoxStream<T> {
+pub(crate) fn plain_stream<T: Send + 'static>(mut inner: tonic::Streaming<T>) -> BoxStream<T> {
     let (tx, rx) = mpsc::channel(16);
     tokio::spawn(async move {
         while let Ok(Some(item)) = inner.message().await {

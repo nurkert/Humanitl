@@ -111,9 +111,47 @@ pub enum StdioMode {
     #[default]
     Inherit,
     /// Eingabe aus `/dev/null`, Ausgabe und Fehlerausgabe gesammelt
-    /// ([`SandboxHandle::output`]). Für Prüfläufe, Tests und kurze Befehle;
-    /// ein Agent, der Stunden läuft, gehört an ein Terminal (HUM-042).
+    /// ([`SandboxHandle::output`]). Für Prüfläufe, Tests und kurze Befehle.
     Capture,
+    /// Alle drei Deskriptoren an einem Pseudoterminal, dessen Herrscherseite
+    /// der Daemon behält (HUM-042).
+    ///
+    /// Das ist der Modus einer Sitzung, in der ein Mensch mit dem Agenten
+    /// arbeitet: Er gibt dem Agenten ein Terminal — `isatty` ist wahr,
+    /// `TERM` gilt, ein Vollbild-TUI läuft —, und der Daemon liest und
+    /// schreibt die andere Seite ([`SandboxHandle::pty_master`],
+    /// [`SandboxHandle::write_input`], [`SandboxHandle::resize`]).
+    ///
+    /// Was das gegenüber [`StdioMode::Capture`] ändert, und was daran hängt:
+    ///
+    /// - **Ein Strom statt zwei.** Ein Terminal hat keine getrennte
+    ///   Fehlerausgabe; alles kommt als [`crate::OutputStream::Stdout`].
+    /// - **Kein `EOF` auf der Eingabe.** Ein Agent, der von stdin liest,
+    ///   wartet, statt sofort zu enden.
+    /// - **`\n` wird zu `\r\n`.** Das ist die Zeilendisziplin des Terminals
+    ///   und nicht der Agent.
+    /// - **Die Startdiagnostik kommt aus demselben Strom.** Ohne getrennte
+    ///   Fehlerausgabe fände `SandboxHandle::wait` die Meldung von `bwrap`
+    ///   nicht; die ersten [`crate::handle::PTY_MIRROR_BYTES`] werden deshalb
+    ///   gespiegelt.
+    Pty {
+        /// Spalten beim Start; der Client ändert sie später mit
+        /// [`SandboxHandle::resize`].
+        cols: u16,
+        /// Zeilen beim Start.
+        rows: u16,
+    },
+}
+
+impl StdioMode {
+    /// Die Geometrie, wenn dies ein Pseudoterminal ist.
+    #[must_use]
+    pub const fn pty_size(self) -> Option<(u16, u16)> {
+        match self {
+            Self::Pty { cols, rows } => Some((cols, rows)),
+            Self::Inherit | Self::Capture => None,
+        }
+    }
 }
 
 /// Was beim Start einmal aus dem Plan genommen wird.

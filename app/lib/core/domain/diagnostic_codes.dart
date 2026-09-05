@@ -69,4 +69,9 @@ abstract final class DiagnosticCodes {
   /// Guarantee 3 does not hold: seccomp is not in force, or a family the
   /// filter must refuse was allowed.
   static const String isolationSeccompActive = 'SANDBOX_016';
+
+  /// Somebody else already writes in the terminal of this session. Watching
+  /// stays open to everyone; only the keyboard belongs to one client
+  /// (HUM-042, CONVENTIONS 4.10).
+  static const String terminalSecondWriter = 'TERM_001';
 }

@@ -1047,11 +1047,33 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         )))
     }
 
+    /// Das Terminal der laufenden Sitzung (HUM-042).
+    ///
+    /// Ein Schreiber, beliebig viele Leser. Der Strom endet mit `close`, mit
+    /// dem Agenten oder mit einem Befund; er schließt nie das Pseudoterminal.
+    /// Ohne Sandbox antwortet er wie die `Sandbox`-RPC mit `IPC_006` —
+    /// hier allerdings als `Diagnostic` im Strom und nicht als Status, denn
+    /// der Vertrag hat für diesen Fall ein Feld
+    /// (`TerminalOutput.diagnostic`), und ein Client, der schon liest, soll
+    /// den Grund an derselben Stelle finden wie jeden anderen.
     async fn terminal(
         &self,
-        _request: Request<tonic::Streaming<v1::TerminalInput>>,
+        request: Request<tonic::Streaming<v1::TerminalInput>>,
     ) -> Result<Response<Self::TerminalStream>, Status> {
-        Err(unimplemented("Terminal", "HUM-042"))
+        let sandbox = self.sandbox.clone();
+        let input = crate::server_stub::plain_stream(request.into_inner());
+        let open = move |wanted: &str| match sandbox.as_ref() {
+            Some(sandbox) => sandbox.terminal(wanted),
+            None => Err(Diagnostic::builder(codes::IPC_006, Severity::Error)
+                .why(
+                    "this daemon runs without a sandbox, so there is no terminal to attach to"
+                        .to_owned(),
+                )
+                .build()),
+        };
+        Ok(Response::new(Box::pin(
+            crate::terminal::serve(open, input).map(Ok),
+        )))
     }
 
     async fn audit(

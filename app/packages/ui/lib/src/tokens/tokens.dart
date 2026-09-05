@@ -4,6 +4,7 @@ import 'colors.dart';
 import 'flow_state.dart';
 import 'motion.dart';
 import 'spacing.dart';
+import 'terminal_palette.dart';
 import 'typography.dart';
 
 /// Surface, line and text colours of one theme.
@@ -241,6 +242,7 @@ class HTokens {
     required this.method,
     required this.stateText,
     required this.methodText,
+    required this.terminal,
     this.typography = HTypography.standard,
     this.spacing = HSpacingTokens.standard,
     this.radii = HRadiusTokens.standard,
@@ -259,6 +261,7 @@ class HTokens {
     method: HMethodColors.dark,
     stateText: HStateColors.darkText,
     methodText: HMethodColors.darkText,
+    terminal: HTerminalPalette.dark,
   );
 
   /// The light theme, derived from the dark one.
@@ -269,6 +272,7 @@ class HTokens {
     method: HMethodColors.light,
     stateText: HStateColors.lightText,
     methodText: HMethodColors.lightText,
+    terminal: HTerminalPalette.light,
   );
 
   /// The token set of [brightness].
@@ -296,6 +300,13 @@ class HTokens {
 
   /// Die Methodenfarben, wie sie ein Kürzel tragen dürfen.
   final HMethodColors methodText;
+
+  /// Die sechzehn Farben des Terminals (HUM-042).
+  ///
+  /// Ein Terminal schlägt seine Farben selbst nach: Der Agent schreibt
+  /// `ESC [ 31 m`, und der Emulator entscheidet, was „rot" ist. Diese Tabelle
+  /// ist die Stelle, an der die Leiter dieses Programms dabei mitredet.
+  final HTerminalPalette terminal;
 
   /// The type scale.
   final HTypography typography;

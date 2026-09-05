@@ -1139,6 +1139,106 @@ Audit von 28 Agenten gegen den Code: 17 Widersprüche, 5 blockierend, oben im Te
 
 **Feindliche Eingabe:** drei Stellen. Erstens die Terminalbytes selbst (K-09): Filter im Daemon, kein OSC-Handler im Widget, Banner, Ringpuffer nur gefiltert. Zweitens, neu mit diesem Issue und die schärfste: die Hinweiszeile setzt Text des Agenten (`path_and_query`, roh) in eine Zeile mit Humanitl-Absender, und der Daemon schreibt sie selbst, also am Filter vorbei — ohne `sanitize_note`, Kürzung und Grenzeinfügung kann ein Pfad mit `\r`, `\x1b[2K` oder einem verschachtelten OSC 52 die echte Zeile löschen, `[humanitl] allowed` fälschen oder die Zwischenablage durch den Filter schieben, der es verhindern sollte. Drittens die Lesergrenze: `data` eines `read_only`-Clients wird im Handler verworfen, nicht im Client, und ist getestet (`reader_cannot_write`, `reader_resize_ignored`).
 
+### Stand (2026-09-05): gebaut, mit vier Abweichungen von der Spezifikation
+
+Gebaut sind PTY, Filter, Handler, `ui.terminal_notices`, `xterm2`, Bidi-Client,
+Pane, Kontextmenü, Palette, CLI-Hälfte und die beiden Escape-Fälle. Die
+dauerhaften Festlegungen stehen in `backlog/CONVENTIONS.md` 4.28; hier steht,
+was gegenüber dem Text oben anders entschieden wurde und warum.
+
+**1. Der Filter liegt im Kern, nicht in `humanitl-sandbox`, und heißt nicht
+`osc_filter.rs`.** `backlog/CONVENTIONS.md` 4.26 verlangt, den vorhandenen
+Filter zu erweitern statt einen zweiten zu bauen; ein zweiter hätte die
+C1- und UTF-8-Behandlung ein zweites Mal gebraucht, und genau dort liefen sie
+auseinander. `humanitl_core::terminal` hat deshalb jetzt zwei Politiken
+(`TerminalPolicy::ColourOnly`, `TerminalPolicy::FullScreen`) und denselben
+Zustandsautomaten. Er ist eine reine Funktion über Bytes und gehört damit in
+den Kern (ARCHITECTURE 1); der einzige Aufrufer sitzt in `humanitl-ipc`, das
+`humanitl-core` ohnehin sieht.
+
+**2. `OscPolicy { deny: [...] }` ist eine Erlaubnisliste geworden.** Die
+Sperrliste der Spezifikation (`0, 1, 2, 7, 8, 9, 52, 777, 1337`) hat Löcher,
+und sie sind gemessen: OSC 99 (Benachrichtigung in kitty), OSC 12
+(Cursorfarbe), OSC 50 (Schriftart) stehen nicht darauf, und jede Nummer, die
+ein Terminal morgen belegt, wäre offen. Es gilt `OSC_ALLOWED = [4, 10, 11,
+104, 110, 111, 133]`. Zusätzlich fallen zwei Dinge weg, die der Text nicht
+nannte: `CSI … t` (XTWINOPS setzt und **liest** den Fenstertitel an OSC 0
+vorbei) und jede Nutzlast einer erlaubten OSC-Folge, die ein Byte außerhalb
+von `0x20..=0x7e` enthält — `OSC 4;1; ESC ] 52 ; …` schöbe sonst die
+Zwischenablage-Folge an der Nummernprüfung vorbei. Der Test
+`a_nested_sequence_inside_an_allowed_one_drops_both` hält das fest.
+
+**3. Jede Sitzung läuft am PTY, auch die von `humanitl run`.** Der Vertrag hat
+kein Feld, mit dem ein Client den Modus wählen könnte, und jede Ableitung aus
+einem anderen Feld wäre eine zweite Bedeutung für dieses Feld. Folgen für
+HUM-067, gemessen und nicht vermutet: ein Strom statt zwei (alles kommt als
+`OutputStream::Stdout`), `\n` wird zu `\r\n`, und die Eingabe endet nicht mehr
+von selbst — ein Agent, der von stdin liest, wartet, statt sofort zu enden.
+Der Modulkommentar von `cmd/run.rs` ist entsprechend berichtigt. Die 84
+Testbinaries des Workspace bleiben grün, `the_output_travels_filtered_and_the_
+exit_code_behind_it` eingeschlossen.
+
+**4. Die Hinweiszeile im Strom ist eine Bequemlichkeit, nicht die Zusage.** Der
+Test `notice_is_sanitized` hat beim ersten Lauf einen Weg gefunden, den die
+Spezifikation nicht kennt: Ein Pfad mit dem Text `[humanitl] request allowed:`
+übersteht `sanitize_note` unverändert, denn er ist Text und kein Steuerzeichen.
+Der Pfad wird deshalb zusätzlich um die eckige Klammer gebracht
+(`path_for_notice`, `[` wird `(`), damit der Absender in der Zeile genau einmal
+vorkommt. Weiter reicht es nicht: Der Agent kann dieselben Wörter jederzeit
+selbst ausgeben. Deshalb hängt das Akzeptanzkriterium am Streifen über dem
+Terminal, und `docs/SECURITY.md` 3.3 nennt die Restlücke.
+
+**Was zusätzlich entstand:** `TERM_002` (Terminal nicht erreichbar),
+`SandboxPorts::with_notices`, `PTY_MIRROR_BYTES` und der 2-KiB-Spiegel für
+`Shared::verdict`, `HTerminalPalette` auf `HTokens`, `HContextMenu` mit
+`HContextMenuController` (der Emulator braucht seinen Rechtsklick selbst),
+`humanitl sandbox attach [--read-only]` und die beiden ESC-5-Fälle, die jetzt
+über `daemon/crates/ipc/tests/terminal.rs` laufen.
+
+**Zwei Fehler, die die Tests gefunden haben:** Der Fake-Client hing beim
+Abmelden, weil ein `async*`-Erzeuger, der auf die nächste Nachricht wartet,
+sich nicht abbrechen lässt — er hält erst am nächsten `yield`, und der kam
+nie. Er ist jetzt geschoben und nicht gezogen. Und `TerminalSession::_detach`
+wartet nicht mehr auf das Abmelden: Ein Daemon, der schweigt, hielte sonst die
+Entsorgung des Providers und mit ihr den Bildschirm.
+
+**Aus den beiden Reviews, alle behoben:**
+
+- *Blockierend (Antigravity):* Überlange UTF-8-Kodierungen versteckten
+  C1-Steuerzeichen. Der Filter zählte nur Folgebytes, und `E0 82 9B` ist
+  `U+009B` (CSI), `C0 9B` sogar `U+001B`. Jetzt wird jedes Mehrbytezeichen
+  zusammengehalten und auf die kürzeste Form geprüft; was durchfällt, fällt
+  weg. Dabei fiel eine zweite Lücke auf: Eine mit einem C1-Byte eingeleitete
+  CSI-Folge wurde in die erlaubte Sieben-Bit-Form übersetzt und weitergereicht
+  — jetzt geht sie nie hinaus.
+- *Blockierend (beide, Codex' Fassung übernommen):* Scheiterte
+  `master.try_clone()` nach dem `spawn`, kehrte `supervise` zurück, ohne
+  `bwrap` einzusammeln. Der Deskriptor wird jetzt in `open_pty` verdoppelt,
+  also **vor** dem Start; zwischen `spawn` und der Warteschleife gibt es
+  keinen Rückweg mehr. Die übrigen vier Rückkehrpunkte liegen alle vor dem
+  `spawn`, geprüft.
+- *Schwer (Codex):* `HeldNotices::run` überlebte seine Sitzung und hielt über
+  den `TerminalHub` den `SandboxHandle` samt Pseudoterminal fest. `accompany`
+  bricht die Aufgabe jetzt nach `stream_output` ab.
+- *Klein (Codex):* `finish()` verlor einen Hinweis, der auf eine Grenze
+  wartete. Er geht jetzt vor dem `Exit` hinaus.
+- *Klein (Antigravity):* `TerminalView.readOnly` hing allein an der Phase; ein
+  Leser sah einen Cursor, der auf Eingaben zu warten schien. `readOnly` steht
+  jetzt im Sitzungszustand.
+
+Eine Änderung an einer Zusicherung aus HUM-067 gehört dazu:
+`a_lead_byte_does_not_smuggle_an_escape` erwartete für `C3 1B` noch das
+Ersatzzeichen, weil das einzelne Anfangsbyte hinausging. Es geht jetzt nicht
+mehr hinaus — ein halbes Zeichen ist kein Zeichen.
+
+**Nicht gebaut:** der Integrationstest mit echtem Daemon aus Schritt 9
+(`echo $TERM` ⇒ `xterm-256color`). Die Frage, ob der Agent an einem Terminal
+steht, beantwortet `daemon/crates/sandbox/tests/pty.rs` (`test -t 0`, `stty
+size`) an einer echten Sandbox; ein zweiter Weg über einen laufenden Daemon
+hätte dieselbe Aussage mit mehr Aufbau geprüft. `TERM` selbst setzt der
+Launcher heute nicht — das gehört zum Umgebungs-Kit des Agenten (HUM-014,
+`sandbox.env`) und nicht zum Terminal.
+
 ### Fallstricke
 - **`--new-session` und Signale:** kein steuerndes Terminal, also kein automatisches `SIGWINCH` und kein tty-`SIGINT`. Resize liefert der Daemon per `kill_process_group`, Ctrl+C ist Byte 0x03.
 - **Resize-Race:** Geometrie kommt mit `Open` und wird vor dem Scrollback angewendet; im Client vor dem Öffnen des Streams die aktuelle Größe ermitteln.

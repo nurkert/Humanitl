@@ -25,7 +25,12 @@ uuid.workspace = true
 # das `unsafe`, und diese Crate verbietet es (`#![forbid(unsafe_code)]`).
 # Noch nicht unter [workspace.dependencies]; der Parent traegt die Version dort
 # ein (Handoff HUM-011).
-rustix = { version = "1.1", features = ["fs", "process"] }
+#
+# `pty` und `termios` kommen mit HUM-042 dazu: `StdioMode::Pty` oeffnet das
+# Pseudoterminal (`openpt`, `grantpt`, `unlockpt`, `ptsname`) und setzt seine
+# Geometrie (`tcsetwinsize`). Beides gaebe es sonst nur ueber `libc` und damit
+# ueber `unsafe`.
+rustix = { version = "1.1", features = ["fs", "process", "pty", "termios"] }
 # Die Zusammenfassung eines Sandbox-Laufs baut aus einem Host-Pfad einen
 # Befehl fuer die Zwischenablage (HUM-043, `summary::copy_command`). Der Pfad
 # kommt aus einem Verzeichnis, in das der Agent schreiben darf; er wird nur

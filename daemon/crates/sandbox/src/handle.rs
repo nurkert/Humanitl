@@ -21,15 +21,17 @@
 //! `bwrap`, das ein Signal beendet hat (etwa [`SandboxHandle::kill`]), ist kein
 //! Startfehler.
 
+use std::os::fd::{AsFd as _, OwnedFd};
 use std::process::ExitStatus;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use humanitl_core::diagnostics::codes::SANDBOX_012;
+use humanitl_core::diagnostics::codes::{SANDBOX_012, TERM_002};
 use humanitl_core::ids::SandboxId;
 use humanitl_core::{Diagnostic, Severity};
 use rustix::process::{Pid, Signal, kill_process, kill_process_group};
+use rustix::termios::{Winsize, tcsetwinsize};
 
 use crate::bridge_env::{CHECK_NAMES, ShimCheck};
 use crate::bwrap::{is_userns_failure, userns_diagnostic};
@@ -54,6 +56,16 @@ pub const CAPTURE_MAX_BYTES: usize = 1 << 20;
 
 /// Wie viel Fehlerausgabe ein Befund höchstens zitiert.
 pub const STDERR_EXCERPT_BYTES: usize = 2048;
+
+/// Wie viel vom Anfang der Terminalausgabe als Fehlerausgabe zählt.
+///
+/// Ein Pseudoterminal hat keine getrennte Fehlerausgabe: Was `bwrap` beim
+/// Scheitern schreibt, kommt aus derselben Leitung wie alles andere. Ohne
+/// diese Spiegelung fände der Befund von [`SandboxHandle::wait`] den Grund
+/// nicht mehr: [`is_userns_failure`] hätte keine Quelle, und der Auszug in
+/// `SANDBOX_012` bliebe leer. Gespiegelt wird nur der Anfang: Wenn `bwrap` scheitert,
+/// scheitert es, bevor der Agent ein Zeichen geschrieben hat.
+pub const PTY_MIRROR_BYTES: usize = 2048;
 
 /// Welcher Strom der Sandbox ein Stück Ausgabe geschrieben hat.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,6 +166,16 @@ pub(crate) struct Shared {
     capturing: Mutex<bool>,
     /// Wohin jedes gelesene Stück zusätzlich geht, solange jemand zuhört.
     sink: Mutex<Option<OutputSink>>,
+    /// Die Herrscherseite des Pseudoterminals, wenn die Sandbox an einem
+    /// läuft ([`crate::StdioMode::Pty`]).
+    ///
+    /// Ein [`OnceLock`], weil es genau einen Start je Handle gibt und der
+    /// Deskriptor vor der PID gesetzt wird: Wer das Handle hat, hat auch das
+    /// Terminal. Gelesen wird er von genau einem Faden (dem Leser in
+    /// `supervise`), geschrieben von dem Client, der schreiben darf.
+    pty: OnceLock<OwnedFd>,
+    /// Wie viele Bytes der Terminalausgabe schon als Fehlerausgabe zählen.
+    mirrored: Mutex<usize>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -204,6 +226,32 @@ impl Shared {
     pub(crate) fn append_stderr(&self, chunk: &[u8]) {
         append_capped(&mut lock(&self.stderr), chunk);
         self.tee(OutputStream::Stderr, chunk);
+    }
+
+    /// Ein Stück aus dem Pseudoterminal: ein Strom, und sein Anfang zählt
+    /// zusätzlich als Fehlerausgabe.
+    ///
+    /// Die Spiegelung geht **nicht** über [`Shared::append_stderr`]: Sie füllt
+    /// nur den Puffer, aus dem der Startbefund zitiert, und schickt kein
+    /// zweites Stück an den Zuhörer. Wer mitliest, bekäme sonst jedes Byte des
+    /// Anfangs doppelt, einmal als Ausgabe und einmal als Fehlerausgabe.
+    pub(crate) fn append_pty(&self, chunk: &[u8]) {
+        {
+            let mut mirrored = lock(&self.mirrored);
+            if *mirrored < PTY_MIRROR_BYTES {
+                let room = PTY_MIRROR_BYTES - *mirrored;
+                let cut = chunk.len().min(room);
+                append_capped(&mut lock(&self.stderr), &chunk[..cut]);
+                *mirrored += cut;
+            }
+        }
+        append_capped(&mut lock(&self.stdout), chunk);
+        self.tee(OutputStream::Stdout, chunk);
+    }
+
+    /// Legt die Herrscherseite des Pseudoterminals ab; einmal je Start.
+    pub(crate) fn set_pty(&self, master: OwnedFd) {
+        let _ = self.pty.set(master);
     }
 
     /// Schickt ein Stück an den Zuhörer, falls einer da ist.
@@ -369,6 +417,13 @@ impl Shared {
             .why(why)
             .build())
     }
+}
+
+/// Der Befund, wenn das Terminal einer Sandbox nicht mehr antwortet.
+fn terminal_gone(why: &str) -> Diagnostic {
+    Diagnostic::builder(TERM_002, Severity::Error)
+        .why(why.to_owned())
+        .build()
 }
 
 fn append_capped(buffer: &mut Vec<u8>, chunk: &[u8]) {
@@ -543,6 +598,108 @@ impl SandboxHandle {
         lock(&self.shared.status).child_pid
     }
 
+    /// Die Herrscherseite des Pseudoterminals, wenn die Sandbox an einem läuft.
+    ///
+    /// `None` in jedem anderen [`crate::StdioMode`]. Der Deskriptor gehört dem
+    /// Handle; wer ihn braucht, leiht ihn sich oder verdoppelt ihn. Gelesen
+    /// wird er bereits vom Leser dieser Crate — ein zweiter Leser bekäme
+    /// zufällige Hälften des Stroms —, geschrieben wird über
+    /// [`SandboxHandle::write_input`].
+    #[must_use]
+    pub fn pty_master(&self) -> Option<&OwnedFd> {
+        self.shared.pty.get()
+    }
+
+    /// Schreibt Bytes in die Eingabe des Agenten.
+    ///
+    /// Das ist die Tastatur des Menschen, nicht mehr: Der Agent liest sie als
+    /// Terminaleingabe. `Ctrl+C` erreicht ihn als Byte `0x03` und nicht als
+    /// `SIGINT`, denn die Sandbox läuft mit `--new-session` und hat kein
+    /// steuerndes Terminal (`docs/THREAT-MODEL.md`, Absatz zu `TIOCSTI`); wer
+    /// wirklich unterbrechen will, nimmt [`SandboxHandle::interrupt`].
+    ///
+    /// Der Aufruf blockiert, wenn der Agent nicht liest und der Puffer des
+    /// Terminals voll ist. Er gehört deshalb auf einen Faden, der blockieren
+    /// darf.
+    ///
+    /// # Errors
+    ///
+    /// `TERM_002`, wenn diese Sandbox kein Pseudoterminal hat oder das
+    /// Schreiben fehlschlägt — beendet der Agent sich, während der Mensch
+    /// tippt, ist das `EIO`.
+    pub fn write_input(&self, bytes: &[u8]) -> Result<(), Diagnostic> {
+        let master = self.pty_or_refuse("write to the terminal of")?;
+        let mut rest = bytes;
+        while !rest.is_empty() {
+            match rustix::io::write(master.as_fd(), rest) {
+                Ok(0) => {
+                    return Err(terminal_gone("the terminal accepted no more input"));
+                }
+                Ok(written) => rest = &rest[written.min(rest.len())..],
+                Err(rustix::io::Errno::INTR) => {}
+                Err(err) => {
+                    return Err(terminal_gone(&format!(
+                        "cannot write to the terminal of the sandbox: {err}"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Setzt die Geometrie des Terminals und sagt dem Agenten Bescheid.
+    ///
+    /// Zwei Schritte, und der zweite ist nicht selbstverständlich:
+    /// `tcsetwinsize` trägt die neue Größe ein, aber der Kernel schickt das
+    /// `SIGWINCH` nur an die Vordergrund-Prozessgruppe des *steuernden*
+    /// Terminals — und die Sandbox hat mit `--new-session` keines. Ohne das
+    /// Signal fragt kein Vollbild-TUI die neue Größe ab und zeichnet weiter
+    /// im alten Raster. Das Signal geht deshalb an die Prozessgruppe des
+    /// Sandbox-Init, genau wie bei [`SandboxHandle::interrupt`] und aus
+    /// demselben Grund: Ein Signal an die `bwrap`-PID allein wäre eines an
+    /// das Init des PID-Namensraums, und das verwirft der Kernel.
+    ///
+    /// # Errors
+    ///
+    /// `TERM_002`, wenn diese Sandbox kein Pseudoterminal hat oder der Kernel
+    /// die Größe nicht annimmt. Ein Signal, das niemanden mehr erreicht, ist
+    /// kein Fehler: Die Größe steht dann trotzdem, und der nächste Prozess
+    /// liest sie.
+    pub fn resize(&self, cols: u16, rows: u16) -> Result<(), Diagnostic> {
+        let master = self.pty_or_refuse("resize the terminal of")?;
+        let size = Winsize {
+            ws_row: rows,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        tcsetwinsize(master.as_fd(), size).map_err(|err| {
+            terminal_gone(&format!(
+                "cannot set the terminal of the sandbox to {cols}x{rows}: {err}"
+            ))
+        })?;
+        if let Some(pid) = self
+            .child_pid()
+            .and_then(|child| i32::try_from(child).ok())
+            .and_then(Pid::from_raw)
+        {
+            let _ = kill_process_group(pid, Signal::WINCH);
+        }
+        Ok(())
+    }
+
+    /// Das Terminal dieser Sandbox, oder der Befund, dass sie keines hat.
+    fn pty_or_refuse(&self, what: &str) -> Result<&OwnedFd, Diagnostic> {
+        self.pty_master().ok_or_else(|| {
+            Diagnostic::builder(TERM_002, Severity::Error)
+                .why(format!(
+                    "cannot {what} sandbox {}: it runs without a terminal",
+                    self.id
+                ))
+                .build()
+        })
+    }
+
     /// Die gesammelte Ausgabe, wenn die Sandbox mit
     /// [`crate::StdioMode::Capture`] lief und beendet ist; sonst `None`.
     #[must_use]
@@ -570,7 +727,7 @@ mod tests {
 
     use humanitl_core::ids::SandboxId;
 
-    use super::{CAPTURE_MAX_BYTES, ReportSnapshot, SandboxHandle, Shared};
+    use super::{CAPTURE_MAX_BYTES, PTY_MIRROR_BYTES, ReportSnapshot, SandboxHandle, Shared};
     use crate::bridge_env::ShimCheck;
 
     fn check(name: &str, ok: bool) -> ShimCheck {
@@ -652,6 +809,74 @@ mod tests {
         assert_eq!(super::lock(&shared.stdout).len(), CAPTURE_MAX_BYTES);
         shared.append_stderr(b"bwrap: nope");
         assert_eq!(shared.stderr_excerpt(), "bwrap: nope");
+    }
+
+    /// Die Startdiagnostik überlebt das Pseudoterminal.
+    ///
+    /// Am PTY gibt es keine getrennte Fehlerausgabe: Was `bwrap` beim
+    /// Scheitern schreibt, kommt aus derselben Leitung wie die Ausgabe des
+    /// Agenten. Ohne die Spiegelung der ersten [`PTY_MIRROR_BYTES`] fände
+    /// [`Shared::verdict`] nichts, `is_userns_failure` verlöre seine Quelle,
+    /// und aus `SANDBOX_003` mit Behebungsvorschlag würde ein `SANDBOX_012`
+    /// ohne Grund.
+    #[test]
+    fn the_start_diagnostic_survives_the_pty() {
+        let exit_1 = ExitStatus::from_raw(1 << 8);
+
+        let shared = Shared::default();
+        shared.set_capturing();
+        shared.append_pty(b"bwrap: setting up uid map: Permission denied\r\n");
+        shared.close_status();
+        let err = shared.verdict(exit_1).expect_err("userns");
+        assert_eq!(err.code.as_str(), "SANDBOX_003");
+        assert!(err.fix.is_some(), "and it still says how to fix it");
+
+        // Ein anderer Startfehler zitiert die Meldung.
+        let shared = Shared::default();
+        shared.set_capturing();
+        shared.append_pty(b"bwrap: Can't find source path /nope: No such file or directory\r\n");
+        shared.close_status();
+        let err = shared.verdict(exit_1).expect_err("no exit-code line");
+        assert_eq!(err.code.as_str(), "SANDBOX_012");
+        assert!(err.why.contains("/nope"), "{}", err.why);
+        assert!(
+            !err.why.contains("inherited stderr"),
+            "a terminal is not the inherited stderr: {}",
+            err.why
+        );
+    }
+
+    /// Gespiegelt wird der Anfang, nicht der Strom.
+    ///
+    /// Sonst zitierte ein Befund irgendwann den Agenten statt `bwrap`, und der
+    /// Puffer der Fehlerausgabe trüge dieselben Bytes ein zweites Mal.
+    #[test]
+    fn the_mirror_stops_after_the_first_bytes() {
+        let shared = Shared::default();
+        shared.set_capturing();
+        shared.append_pty(&vec![b'x'; PTY_MIRROR_BYTES]);
+        shared.append_pty(b"the agent writes on");
+        assert_eq!(super::lock(&shared.stderr).len(), PTY_MIRROR_BYTES);
+        assert_eq!(
+            super::lock(&shared.stdout).len(),
+            PTY_MIRROR_BYTES + "the agent writes on".len(),
+            "the output itself is not cut"
+        );
+    }
+
+    /// Ein Terminal hat einen Strom, und der Zuhörer bekommt jedes Stück
+    /// genau einmal.
+    #[test]
+    fn the_terminal_has_one_stream_and_no_echo() {
+        let shared = Shared::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        shared.set_sink(tx);
+        shared.append_pty(b"hello");
+        shared.clear_sink();
+        let chunks: Vec<super::OutputChunk> = rx.iter().collect();
+        assert_eq!(chunks.len(), 1, "one chunk, not one per buffer: {chunks:?}");
+        assert_eq!(chunks[0].stream, super::OutputStream::Stdout);
+        assert_eq!(chunks[0].bytes, b"hello");
     }
 
     #[test]

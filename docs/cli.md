@@ -138,9 +138,14 @@ Zeile mit dem Befund.
 ### Eine Sitzung je Daemon
 
 Der Daemon führt genau eine Sandbox. Ein zweites `humanitl run`, während eine
-läuft, bekommt `CLI_005` mit der Kennung der laufenden Sitzung. Einen Befehl
-zum Anhängen nennt der Text nicht, weil es keinen gibt; die Anwendung sieht die
-laufende Sitzung von selbst.
+läuft, bekommt `CLI_005` mit der Kennung der laufenden Sitzung. Wer sie sehen
+will, hängt sich an: `humanitl sandbox attach` verbindet dieses Terminal mit
+der laufenden Sitzung, `--read-only` sieht nur zu. Genau ein Client darf
+schreiben; ein zweiter bekommt `TERM_001` und den Hinweis auf `--read-only`.
+`Ctrl+C` erreicht den Agenten dabei als Byte `0x03` und nicht als Signal, denn
+die Sandbox hat kein steuerndes Terminal. Wer sich abhängt, beendet nur den
+eigenen Strom; die Sitzung läuft weiter, und ein späteres `attach` zeigt den
+Rückstand.
 
 ## Was `run` mit den anderen Unterkommandos teilt
 

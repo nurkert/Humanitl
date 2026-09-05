@@ -106,6 +106,7 @@ use crate::session::{
     SessionRequest, SessionResolver, ask_mode_name, bundled_rules, parse_ask_mode, parse_work_mode,
     work_mode_name,
 };
+use crate::terminal::{HeldNotices, TerminalHub};
 use crate::v1;
 
 /// Der Name des Shims, wie er neben dem Daemon oder im Systempfad liegt.
@@ -231,6 +232,22 @@ const ENV_SESSION: &str = "HUMANITL_SESSION";
 /// ab, der langsamer liest, als der Start meldet.
 const EVENT_BUFFER: usize = 32;
 
+/// Die Geometrie, mit der eine Sitzung startet, bevor ein Client seine eigene
+/// nennt.
+///
+/// Achtzig mal vierundzwanzig ist die Größe, die jedes Terminal kennt und die
+/// jedes TUI ohne Nachfrage bedienen kann. Der erste Schreiber ersetzt sie mit
+/// seinem `Open` (HUM-042).
+pub const DEFAULT_TERMINAL_SIZE: (u16, u16) = (80, 24);
+
+/// Der Code, mit dem ein Terminal endet, dessen Sitzung keinen Status mehr
+/// hergab.
+///
+/// Erreichbar nur, wenn der wartende Faden den Status nicht mehr findet;
+/// `128` ist die Stelle, an der die Signalcodes beginnen, und heißt hier
+/// „beendet, Grund unbekannt".
+const EXIT_UNKNOWN: i32 = 128;
+
 /// Ob der Name auf der Erlaubnisliste steht ([`VISIBLE_ENV`]).
 ///
 /// Die Frage lautet bewusst nicht „ist das ein Geheimnis?", sondern „brauche
@@ -285,6 +302,9 @@ struct Running {
     profile: String,
     work_dir: PathBuf,
     work_mode: WorkMode,
+    /// Das Terminal dieser Sitzung: der eine Filter, der Ringpuffer und die
+    /// Clients, die zusehen (HUM-042).
+    terminal: TerminalHub,
 }
 
 /// Was die `Sandbox`-RPC beantwortet.
@@ -361,6 +381,8 @@ struct Inner {
     rules: Option<Arc<RulesStore>>,
     /// Der Stand, den Proxy und Meta-Endpunkt lesen.
     settings: Option<Arc<SessionSettings>>,
+    /// Woher die Hinweiszeilen im Terminal kommen (HUM-042).
+    notices: Option<HeldNotices>,
 }
 
 /// Woran der Dienst hängt, wenn eine Sitzung startet.
@@ -379,6 +401,12 @@ pub struct SandboxPorts {
     /// Der Stand, den Proxy und Meta-Endpunkt lesen: Frage-Modus, Haltefrist
     /// und Sprachmodell.
     pub settings: Option<Arc<SessionSettings>>,
+    /// Woher die Hinweiszeilen im Terminal kommen: der Ereignisstrom und die
+    /// Registry, aus der sich ein gehaltener Fluss auflösen lässt (HUM-042).
+    ///
+    /// Ohne diesen Anschluss läuft die Sitzung ohne Hinweise. Das ist der
+    /// Fall im Fake-Modus und in Tests; ein Daemon mit Proxy hat beide.
+    pub notices: Option<HeldNotices>,
 }
 
 impl SandboxPorts {
@@ -400,6 +428,13 @@ impl SandboxPorts {
     #[must_use]
     pub fn with_settings(mut self, settings: Arc<SessionSettings>) -> Self {
         self.settings = Some(settings);
+        self
+    }
+
+    /// Dieselben Anschlüsse mit der Quelle der Terminal-Hinweise.
+    #[must_use]
+    pub fn with_notices(mut self, notices: HeldNotices) -> Self {
+        self.notices = Some(notices);
         self
     }
 }
@@ -424,8 +459,24 @@ impl SandboxService {
                 pending: Mutex::new(Pending::default()),
                 rules: ports.rules,
                 settings: ports.settings,
+                notices: ports.notices,
             }),
         }
+    }
+
+    /// Das Terminal der laufenden Sitzung.
+    ///
+    /// `sandbox_id` ist leer („die Sitzung, die läuft") oder nennt genau sie;
+    /// ein Daemon führt eine. Jede andere Kennung ist eine Anfrage nach einer
+    /// Sitzung, die es hier nicht gibt.
+    ///
+    /// # Errors
+    ///
+    /// `IPC_006`, wenn keine Sitzung läuft oder eine andere gemeint ist —
+    /// derselbe Befund, mit dem `Sandbox` antwortet, wenn dieser Daemon keine
+    /// Sandbox hat.
+    pub fn terminal(&self, sandbox_id: &str) -> Result<TerminalHub, Diagnostic> {
+        self.inner.terminal(sandbox_id)
     }
 
     /// Der Ereignisstrom einer Sandbox-Operation.
@@ -794,27 +845,7 @@ impl Inner {
         })
         .await;
         match launched {
-            Ok(Ok(())) => {
-                // Die Zeile, die der Log-Reiter zeigt. Der leere Zustand dort
-                // verspricht sie („ein Start und ein Stopp schreiben je eine
-                // Zeile"), also muss es sie geben; das Terminal des Agenten
-                // ist etwas anderes und kommt mit HUM-042.
-                if let Some(line) = self.started_line() {
-                    let _ = tx.send(log_event(line)).await;
-                }
-                if !self.check_isolation_or_kill(&plan, &tx).await {
-                    return;
-                }
-                let this = Arc::clone(&self);
-                let running_plan = plan.clone();
-                let running =
-                    tokio::task::spawn_blocking(move || this.snapshot(&running_plan)).await;
-                if let Ok(Ok(status)) = running {
-                    let _ = tx.send(status_event(status)).await;
-                }
-                self.stream_output(output_rx, &tx).await;
-                self.report_exit(&tx).await;
-            }
+            Ok(Ok(())) => self.accompany(&plan, output_rx, &tx).await,
             Ok(Err(diagnostic)) => {
                 let _ = tx.send(diagnostic_event(&diagnostic)).await;
                 let _ = tx
@@ -826,6 +857,59 @@ impl Inner {
                 let _ = tx.send(diagnostic_event(&diagnostic)).await;
             }
         }
+    }
+
+    /// Begleitet die gestartete Sitzung bis zum Ende des Agenten.
+    ///
+    /// Die Reihenfolge ist eine Aussage: erst die Zeile für das Log, dann die
+    /// drei Garantien (eine rote beendet die Sitzung hier), dann `running`,
+    /// und erst danach die Ausgabe. Wer `running` sieht, hat die drei
+    /// Ergebnisse schon gesehen.
+    async fn accompany(
+        self: &Arc<Self>,
+        plan: &v1::sandbox_request::Plan,
+        output: std::sync::mpsc::Receiver<humanitl_sandbox::OutputChunk>,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) {
+        // Die Zeile, die der Log-Reiter zeigt. Der leere Zustand dort
+        // verspricht sie („ein Start und ein Stopp schreiben je eine Zeile"),
+        // also muss es sie geben; das Terminal des Agenten ist etwas anderes
+        // und läuft über `Terminal`.
+        if let Some(line) = self.started_line() {
+            let _ = tx.send(log_event(line)).await;
+        }
+        if !self.check_isolation_or_kill(plan, tx).await {
+            return;
+        }
+        let this = Arc::clone(self);
+        let running_plan = plan.clone();
+        let running = tokio::task::spawn_blocking(move || this.snapshot(&running_plan)).await;
+        if let Ok(Ok(status)) = running {
+            let _ = tx.send(status_event(status)).await;
+        }
+        // Das Terminal dieser Sitzung, und die Hinweise darin. Der Zuhörer der
+        // Warteschlange wird hier angemeldet und nicht im Start-Faden: Er
+        // gehört in die Ereignisschleife und nicht auf den blockierenden
+        // Faden, der `bwrap` startet.
+        let Ok(hub) = self.terminal("") else {
+            // Zwischen Start und hier hat jemand die Sitzung beendet.
+            return;
+        };
+        // Die Aufgabe hängt an der Warteschlange, und die lebt länger als
+        // diese Sitzung. Ohne den Abbruch bliebe je beendeter Sitzung eine
+        // Aufgabe stehen, die einen `TerminalHub` hält — und mit ihm den
+        // `SandboxHandle` und die Herrscherseite des Pseudoterminals. Sie
+        // könnte außerdem noch in den Ring einer Sitzung schreiben, die es
+        // nicht mehr gibt.
+        let notices = self
+            .notices
+            .clone()
+            .map(|notices| tokio::spawn(notices.run(hub.clone())));
+        self.stream_output(output, hub, tx).await;
+        if let Some(task) = notices {
+            task.abort();
+        }
+        self.report_exit(tx).await;
     }
 
     /// Löst die Konfiguration dieser Sitzung auf, sendet ihre Befunde und sagt,
@@ -960,23 +1044,44 @@ impl Inner {
 
     /// Reicht die Ausgabe des Agenten weiter, bis sein Strom endet.
     ///
-    /// Die Bytes laufen durch [`humanitl_core::TerminalFilter`], je Strom
-    /// einen: Die Ausgabe eines Agenten erreicht ein Terminal, und ein
-    /// Terminal führt aus, was in ihr steht (`BACKLOG.md` 4.2). Ein Filter für
-    /// beide Ströme zusammen zerschnitte ihre Folgen gegenseitig.
+    /// Der Faden liest die rohen Stücke **einmal** und bedient damit zwei
+    /// Wege mit zwei Zusagen:
+    ///
+    /// - Das Terminal ([`TerminalHub::feed`]) bekommt jedes Stück, solange die
+    ///   Sitzung läuft. Es filtert mit
+    ///   [`humanitl_core::TerminalPolicy::FullScreen`], legt das Ergebnis in
+    ///   seinen Ringpuffer und schickt es an jeden, der zusieht.
+    /// - Der Ereignisstrom dieses Starts bekommt dieselben Bytes durch
+    ///   [`humanitl_core::TerminalPolicy::ColourOnly`], je Strom einen Filter:
+    ///   Wer `humanitl run` tippt, schreibt sie unverändert in sein eigenes
+    ///   Terminal, und dort darf keine Folge landen, die eine Zeile
+    ///   überschreibt, die schon steht (`backlog/CONVENTIONS.md` 4.26).
+    ///
+    /// Ein Client, der seinen Ereignisstrom schließt, beendet deshalb **nicht**
+    /// das Lesen: Das Terminal hängt daran, und es gehört nicht dem, der als
+    /// erster gestartet hat.
     ///
     /// Blockierend, denn der Kanal des Lesers ist einer der Standardbibliothek;
     /// das Warten gehört deshalb auf einen eigenen Faden.
     async fn stream_output(
         &self,
         rx: std::sync::mpsc::Receiver<humanitl_sandbox::OutputChunk>,
+        hub: TerminalHub,
         tx: &mpsc::Sender<v1::SandboxEvent>,
     ) {
         let tx = tx.clone();
+        let handle = self.running_handle();
         let _ = tokio::task::spawn_blocking(move || {
             let mut stdout = humanitl_core::TerminalFilter::new();
             let mut stderr = humanitl_core::TerminalFilter::new();
+            let mut forward = true;
             while let Ok(chunk) = rx.recv() {
+                // Am Pseudoterminal gibt es einen Strom; die Unterscheidung
+                // bleibt für einen Aufrufer, der Pipes benutzt.
+                hub.feed(&chunk.bytes);
+                if !forward {
+                    continue;
+                }
                 let (stream, filtered) = match chunk.stream {
                     humanitl_sandbox::OutputStream::Stdout => {
                         (v1::OutputStream::Stdout, stdout.push(&chunk.bytes))
@@ -989,7 +1094,7 @@ impl Inner {
                     continue;
                 }
                 if tx.blocking_send(output_event(stream, filtered)).is_err() {
-                    return;
+                    forward = false;
                 }
             }
             // Was am Ende noch zurückgehalten wird: eine angefangene Folge,
@@ -1000,9 +1105,22 @@ impl Inner {
                 (v1::OutputStream::Stderr, stderr),
             ] {
                 let rest = filter.flush();
-                if !rest.is_empty() {
+                if !rest.is_empty() && forward {
                     let _ = tx.blocking_send(output_event(stream, rest));
                 }
+            }
+            // Das Ende der Sitzung gehört auch denen, die am Terminal hängen.
+            // Es kommt aus derselben Quelle wie `SandboxEvent.exit`, damit
+            // beide Wege dieselbe Zahl nennen.
+            if let Some(handle) = handle {
+                let code = match handle.wait() {
+                    Ok(status) => exit_code_of(status),
+                    Err(diagnostic) => {
+                        hub.diagnostic(&diagnostic);
+                        handle.try_wait().map_or(EXIT_UNKNOWN, exit_code_of)
+                    }
+                };
+                hub.finish(code);
             }
         })
         .await;
@@ -1226,11 +1344,19 @@ impl Inner {
 
     /// Startet die geplante Sandbox und merkt sie sich.
     ///
-    /// `output` bekommt jedes Stück Ausgabe, sobald es gelesen ist. Der
-    /// Daemon selbst hat kein Terminal; die Bytes gehen über den Ereignisstrom
-    /// an den Client, der eines hat, und laufen dabei durch
-    /// [`humanitl_core::TerminalFilter`]. Ein PTY ist das nicht — es gibt
-    /// keine Eingabe und keine Geometrie, das kommt mit HUM-042.
+    /// Die Sitzung läuft an einem Pseudoterminal (HUM-042): Der Agent bekommt
+    /// ein Terminal, und der Daemon hält dessen andere Seite. Das ist die
+    /// Voraussetzung für alles, was `Terminal` kann — ohne Terminal gibt es
+    /// keine Eingabe, keine Geometrie und für ein Vollbild-TUI keinen Grund
+    /// zu starten.
+    ///
+    /// `output` bekommt jedes Stück Ausgabe, sobald es gelesen ist. Es ist
+    /// **roh**: Wer es weitergibt, filtert es für seinen Weg selbst. Der
+    /// Ereignisstrom der Sandbox nimmt
+    /// [`humanitl_core::TerminalPolicy::ColourOnly`]
+    /// ([`Inner::stream_output`]), das Terminal
+    /// [`humanitl_core::TerminalPolicy::FullScreen`] ([`TerminalHub`]). Zwei
+    /// Wege, zwei Zusagen, ein Strom.
     fn launch(
         &self,
         plan: &v1::sandbox_request::Plan,
@@ -1238,7 +1364,10 @@ impl Inner {
         output: Option<humanitl_sandbox::OutputSink>,
     ) -> Result<(), Diagnostic> {
         let prepared = self.prepare_with_command(plan, command)?;
-        let backend = prepared.backend.clone().with_stdio(StdioMode::Capture);
+        let backend = prepared.backend.clone().with_stdio(StdioMode::Pty {
+            cols: DEFAULT_TERMINAL_SIZE.0,
+            rows: DEFAULT_TERMINAL_SIZE.1,
+        });
         // Der Zuhörer hängt nur an dem Backend, das startet, und nicht an dem,
         // das gehalten wird: Ein gehaltener Sender schlösse seinen Kanal nie,
         // und wer auf dessen Ende wartet, wartete für immer. Beide tragen
@@ -1251,14 +1380,22 @@ impl Inner {
         let launch = launcher.plan(&prepared.profile, &prepared.session)?;
         let handle = launcher.launch(&launch)?;
         drop(launcher);
+        let handle = Arc::new(handle);
+        let terminal = TerminalHub::new(
+            Arc::clone(&handle),
+            DEFAULT_TERMINAL_SIZE.0,
+            DEFAULT_TERMINAL_SIZE.1,
+            self.config().ui.terminal_notices,
+        );
         let mut running = lock(&self.running);
         *running = Some(Running {
-            handle: Arc::new(handle),
+            handle,
             backend,
             started_at: SystemTime::now(),
             profile: prepared.profile.name.clone(),
             work_dir: prepared.session.work_src.clone(),
             work_mode: prepared.session.work_mode,
+            terminal,
         });
         Ok(())
     }
@@ -1405,6 +1542,27 @@ impl Inner {
         lock(&self.running)
             .as_ref()
             .is_some_and(|running| running.handle.try_wait().is_none())
+    }
+
+    /// Das Terminal der laufenden Sitzung; siehe [`SandboxService::terminal`].
+    fn terminal(&self, sandbox_id: &str) -> Result<TerminalHub, Diagnostic> {
+        let Some(running) = lock(&self.running)
+            .as_ref()
+            .map(|running| running.terminal.clone())
+        else {
+            return Err(no_terminal(
+                "no sandbox is running in this session, so there is no terminal to attach to"
+                    .to_owned(),
+            ));
+        };
+        let wanted = sandbox_id.trim();
+        if !wanted.is_empty() && wanted != running.sandbox().to_string() {
+            return Err(no_terminal(format!(
+                "this daemon runs sandbox {}, not {wanted}",
+                running.sandbox()
+            )));
+        }
+        Ok(running)
     }
 
     fn running_handle(&self) -> Option<Arc<SandboxHandle>> {
@@ -1963,6 +2121,18 @@ fn work_dir_refused(dir: &Path, why: &str) -> Diagnostic {
 /// zum Beheben steht im Text: `attach` gibt es nicht, und es gibt auch keinen
 /// Befehl, der eine fremde Sitzung beendet. Wer sie gestartet hat, beendet sie
 /// dort (HUM-067, Nicht-Ziel).
+/// Der Befund, wenn es kein Terminal gibt, an das man sich hängen könnte.
+///
+/// Derselbe Code wie bei einer `Sandbox`-Anfrage an einen Daemon ohne
+/// Sandbox: Die Frage ist dieselbe — „diese Fähigkeit gibt es hier gerade
+/// nicht" —, und ein eigener Code dafür wäre eine Unterscheidung ohne
+/// Unterschied.
+fn no_terminal(why: String) -> Diagnostic {
+    Diagnostic::builder(codes::IPC_006, Severity::Error)
+        .why(why)
+        .build()
+}
+
 fn already_running(facts: &Facts) -> Diagnostic {
     let id = facts.id.as_deref().unwrap_or("unknown");
     Diagnostic::builder(codes::CLI_005, Severity::Blocking)

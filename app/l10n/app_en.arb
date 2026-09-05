@@ -1420,8 +1420,6 @@
   "@sandboxEnvEmptyAll": {"description": "Empty state of the environment table when there is no snapshot at all."},
   "sandboxTerminalTitle": "Terminal",
   "@sandboxTerminalTitle": {"description": "Heading of the upper half, where the agent's terminal will live."},
-  "sandboxTerminalPlaceholder": "The agent's terminal belongs here. It is not built yet, so the sandbox starts without a screen of its own; what the daemon logs about it stands under Log.",
-  "@sandboxTerminalPlaceholder": {"description": "Says what is coming and what happens meanwhile. An empty pane that explains nothing would read as a fault."},
   "sandboxLogEmpty": "Nothing logged yet. A start and a stop each write a line here.",
   "@sandboxLogEmpty": {"description": "Empty state of the log tab; it names the next event instead of saying nothing."},
   "sandboxLogFollow": "Follow",
@@ -1567,5 +1565,30 @@
   "historyDeciderMeta": "endpoint",
   "@historyDeciderMeta": {"description": "Rule column (HUM-103): the proxy answered the request itself; nobody and no rule decided."},
   "historyDecisionNone": "nobody decided",
-  "@historyDecisionNone": {"description": "Decision field of the detail head for a request to humanitl.internal (HUM-103). Not a dash and not a decision name: the request went nowhere, so there was nothing to decide (CONVENTIONS 4.13)."}
+  "@historyDecisionNone": {"description": "Decision field of the detail head for a request to humanitl.internal (HUM-103). Not a dash and not a decision name: the request went nowhere, so there was nothing to decide (CONVENTIONS 4.13)."},
+  "sandboxTerminalUntrustedBanner": "Agent output is untrusted. Clipboard and link sequences are filtered.",
+  "@sandboxTerminalUntrustedBanner": {"description": "Stands above the terminal for as long as the terminal does. The daemon filters the byte stream (OSC 52, OSC 8, window title and every other string sequence); this sentence says so rather than leaving the human to assume that what a terminal shows is what a terminal was told (THREAT-MODEL K-09, HUM-042)."},
+  "sandboxTerminalIdle": "Nothing runs. The terminal of the agent appears here when a session starts.",
+  "@sandboxTerminalIdle": {"description": "Stands where the terminal is while no sandbox runs. An empty black pane would read as a fault."},
+  "sandboxTerminalHeldNotice": "Waiting for you: {method} {host}{path}",
+  "@sandboxTerminalHeldNotice": {
+    "description": "The strip above the terminal while a request of the agent waits for a decision. It is shown outside the emulator because a full-screen agent redraws over anything written into the stream (HUM-042).",
+    "placeholders": {"method": {"type": "String"}, "host": {"type": "String"}, "path": {"type": "String"}}
+  },
+  "sandboxTerminalExited": "The agent ended with exit code {code}.",
+  "@sandboxTerminalExited": {
+    "description": "Stands under the terminal once the agent is gone. The scrollback stays on screen; the number is the one the daemon reported.",
+    "placeholders": {"code": {"type": "int"}}
+  },
+  "sandboxTerminalFinding": "{code}: {why}",
+  "@sandboxTerminalFinding": {
+    "description": "A finding about the terminal itself, TERM_001 above all: somebody else already writes in this session. Code and reason come from the daemon.",
+    "placeholders": {"code": {"type": "String"}, "why": {"type": "String"}}
+  },
+  "sandboxTerminalMenu": "Terminal menu",
+  "@sandboxTerminalMenu": {"description": "Screen-reader label of the context menu over the terminal."},
+  "sandboxTerminalCopy": "Copy",
+  "@sandboxTerminalCopy": {"description": "Context menu entry that copies the selection. Copying out of a selection is an action of the human and therefore allowed, while the clipboard stays closed to the agent."},
+  "sandboxTerminalPaste": "Paste",
+  "@sandboxTerminalPaste": {"description": "Context menu entry that pastes the clipboard into the terminal as typed input."}
 }
