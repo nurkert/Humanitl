@@ -13,9 +13,13 @@
 # (`backlog/CONVENTIONS.md` 4.5). Umgekehrt kann sich dieses Profil keine
 # eigene Durchreiche ausstellen: `bundled` setzt der Lader, nicht die Datei. Die
 # Blockregel darunter deckt jeden übrigen Host; `ask_mode = "none"` sorgt dafür,
-# dass auch eine Anfrage, die keine Regel entscheidet, sofort geblockt statt
-# angehalten wird. `timeout_secs` ist deshalb bedeutungslos und steht auf 1,
-# damit eine Fehlkonfiguration nicht fünf Minuten lang hängt.
+# dass auch eine Anfrage, die keine Regel entscheidet, nicht auf einen Menschen
+# wartet: Die Frist ist null, die Anfrage läuft sofort in die
+# Zeitüberschreitung, und der Agent bekommt `504` mit `reason: timeout` — nicht
+# `403`. Der Unterschied ist gewollt und steht so auch im Briefing des Agenten
+# (HUM-071): `403` heißt „ein Mensch hat entschieden", `504` heißt „niemand hat
+# entschieden". `timeout_secs` ist damit bedeutungslos und steht auf 1, damit
+# eine Fehlkonfiguration nicht fünf Minuten lang hängt.
 #
 # Die Datei ist zugleich in den Daemon eingebettet; siehe `docs/profiles.md`.
 

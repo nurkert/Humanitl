@@ -761,11 +761,35 @@ message SandboxRequest {
 
   // Start einer Sandbox-Session.
   message Start {
+    // Das bwrap-Profil unter `profiles/sandbox/`, zum Beispiel `default`.
+    // Das ist nicht das Profil der Sitzung; das steht in `session_profile`.
     string profile = 1;
     string work_dir = 2;
     // `ro` oder `rw`.
     string work_mode = 3;
     repeated string command = 4;
+    // Das Profil der Sitzung (`profiles/*.toml`, HUM-066), zum Beispiel
+    // `llm-only`. Leer heisst: das Profil, das die Aufloesung ohne Wunsch
+    // waehlt. Der Daemon loest die Konfiguration fuer genau diesen Start
+    // erneut auf; Regelspeicher, Haltefrist und Durchreiche entstehen daraus
+    // neu (HUM-067).
+    string session_profile = 5;
+    // `ui`, `terminal` oder `none`. Leer heisst: der Wert aus dem Profil.
+    string ask_mode = 6;
+    // Einzelne Konfigurationswerte fuer diese Sitzung, auf der Ebene der
+    // Kommandozeile. Der Daemon nimmt nur die Pfade seiner Erlaubnisliste an
+    // und antwortet auf jeden anderen mit `CONFIG_003`: Ein Client, der jeden
+    // Pfad setzen duerfte, koennte die Einhaengeflaeche der Sandbox und den
+    // Prozess darin bestimmen.
+    repeated CliOverride cli_overrides = 7;
+  }
+
+  // Ein Konfigurationswert, den der Client fuer diese Sitzung setzt.
+  message CliOverride {
+    // Der Pfad im Schema, zum Beispiel `llm.endpoint`.
+    string path = 1;
+    // Der Wert als Text, genau wie auf der Kommandozeile.
+    string value = 2;
   }
 
   // Der Schnappschuss, den ein Start mit diesen Angaben haette, ohne dass
@@ -860,6 +884,13 @@ message CheckResult {
   Diagnostic diagnostic = 4;
 }
 
+// Welcher Strom der Sandbox eine Ausgabe geschrieben hat.
+enum OutputStream {
+  OUTPUT_STREAM_UNSPECIFIED = 0;
+  OUTPUT_STREAM_STDOUT = 1;
+  OUTPUT_STREAM_STDERR = 2;
+}
+
 // Ein Ereignis der Sandbox.
 message SandboxEvent {
   oneof event {
@@ -869,6 +900,28 @@ message SandboxEvent {
     string argv_line = 3;
     Diagnostic diagnostic = 4;
     LogLine log = 5;
+    // Ausgabe des Agenten, waehrend er laeuft.
+    OutputChunk output = 6;
+    // Der Agent ist beendet.
+    Exit exit = 7;
+  }
+
+  // Ein Stueck Ausgabe des Agenten.
+  //
+  // Die Bytes sind gefiltert, bevor sie den Daemon verlassen: OSC 52
+  // (Zwischenablage) und OSC 8 (Verweise) sind entfernt, denn die Ausgabe des
+  // Agenten ist einer der fuenf erklaerten Seitenkanaele (BACKLOG.md 4.2).
+  // Ein PTY gibt es hier nicht; das kommt mit HUM-042.
+  message OutputChunk {
+    OutputStream stream = 1;
+    bytes data = 2;
+  }
+
+  // Der Agent hat sich beendet.
+  message Exit {
+    // Sein Exit-Code, oder 128 plus die Nummer des Signals, das ihn beendet
+    // hat.
+    int32 code = 1;
   }
 
   // Momentaufnahme der Sandbox.

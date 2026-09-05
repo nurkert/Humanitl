@@ -29,6 +29,7 @@ pub mod host;
 pub mod http;
 pub mod ids;
 pub mod rule;
+pub mod terminal;
 
 /// Zweiter Name für [`diagnostics`], wie ihn HUM-063 verwendet.
 pub use crate::diagnostics as diag;
@@ -53,3 +54,4 @@ pub use crate::ids::{AskId, FlowId, IdParseError, RuleId, SandboxId, SessionId};
 pub use crate::rule::{
     Action, Expiry, HostPattern, Matcher, PathPattern, Rule, path_prefix_is_valid,
 };
+pub use crate::terminal::TerminalFilter;

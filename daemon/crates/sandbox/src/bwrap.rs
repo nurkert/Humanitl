@@ -60,7 +60,7 @@ use crate::bridge_env::{
     CHECK_SINGLE_SOCKET, parse_check_line,
 };
 use crate::bwrap_args::{IdentityFds, LaunchInputs, MaskFds};
-use crate::handle::{ReportSnapshot, SandboxHandle, Shared};
+use crate::handle::{OutputSink, ReportSnapshot, SandboxHandle, Shared};
 use crate::launcher::{
     CheckResult, IsolationCheck, LaunchOnce, LaunchPlan, SandboxBackend, StdioMode,
 };
@@ -147,6 +147,8 @@ pub struct BwrapBackend {
     paths: Paths,
     stdio: StdioMode,
     report_timeout: Duration,
+    /// Wohin die gesammelte Ausgabe zusätzlich geht, während sie läuft.
+    output_sink: Option<OutputSink>,
 }
 
 impl BwrapBackend {
@@ -193,6 +195,7 @@ impl BwrapBackend {
             paths,
             stdio: StdioMode::default(),
             report_timeout: REPORT_TIMEOUT,
+            output_sink: None,
         }
     }
 
@@ -200,6 +203,18 @@ impl BwrapBackend {
     #[must_use]
     pub const fn with_stdio(mut self, stdio: StdioMode) -> Self {
         self.stdio = stdio;
+        self
+    }
+
+    /// Wohin jedes gelesene Stück Ausgabe zusätzlich geht, während die Sandbox
+    /// läuft.
+    ///
+    /// Wirkt nur mit [`StdioMode::Capture`]; ohne Pipes gibt es nichts zu
+    /// lesen. Der Sender wird vor dem Start gesetzt und nicht danach, damit
+    /// kein Byte zwischen Start und Anmeldung verlorengeht.
+    #[must_use]
+    pub fn with_output_sink(mut self, sink: OutputSink) -> Self {
+        self.output_sink = Some(sink);
         self
     }
 
@@ -671,6 +686,9 @@ impl SandboxBackend for BwrapBackend {
         } = once;
         let id = SandboxId::new();
         let shared = Arc::new(Shared::default());
+        if let Some(sink) = self.output_sink.clone() {
+            shared.set_sink(sink);
+        }
         let program = self.program.clone();
         let args: Vec<OsString> = plan.argv.iter().skip(1).cloned().collect();
         let stdio = self.stdio;
@@ -884,6 +902,13 @@ fn supervise(
             Err(_) => break ExitStatus::default(),
         }
     };
+    // Erst die Leser einsammeln, dann den Zuhörer der Ausgabe loslassen, dann
+    // den Status setzen. Ein Zuhörer, der bliebe, hielte seinen Kanal offen,
+    // und wer auf dessen Ende wartet, wartete für immer — die Ausgabe ist zu
+    // Ende, wenn die Pipes zu sind und nicht, wenn jemand das Handle fallen
+    // lässt.
+    shared.join_readers();
+    shared.clear_sink();
     shared.set_exit(status);
 }
 

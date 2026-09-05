@@ -12,6 +12,8 @@ use std::path::Path;
 
 use humanitl_config::{Config, Env, Paths};
 use humanitl_core::ids::SessionId;
+use humanitl_ipc::sandbox::SandboxPorts;
+use humanitl_ipc::session::SessionResolver;
 use humanitl_ipc::v1;
 use humanitl_ipc::{SandboxService, v1::sandbox_event::Event};
 use tempfile::TempDir;
@@ -84,7 +86,11 @@ fn service(home: &TempDir) -> SandboxService {
     config.sandbox.work_dir = Some(home.path().join("project"));
     std::fs::create_dir_all(home.path().join("project")).unwrap();
 
-    SandboxService::new(config, Paths::new(env), SessionId::new())
+    SandboxService::new(
+        SessionResolver::for_config(Paths::new(env), config),
+        SessionId::new(),
+        SandboxPorts::none(),
+    )
 }
 
 /// Die Momentaufnahme einer Operation.
@@ -342,7 +348,11 @@ async fn a_profile_that_is_not_there_is_a_finding_and_not_an_empty_table() {
     ]);
     let mut config = Config::default();
     "there-is-no-such-profile".clone_into(&mut config.sandbox.profile);
-    let service = SandboxService::new(config, Paths::new(env), SessionId::new());
+    let service = SandboxService::new(
+        SessionResolver::for_config(Paths::new(env), config),
+        SessionId::new(),
+        SandboxPorts::none(),
+    );
 
     let mut stream = service.stream(v1::SandboxRequest {
         op: Some(v1::sandbox_request::Op::Status(())),

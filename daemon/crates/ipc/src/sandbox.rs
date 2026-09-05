@@ -82,7 +82,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Duration, SystemTime};
 
 use humanitl_config::{Config, WorkMode};
@@ -90,6 +90,8 @@ use humanitl_core::Severity as CoreSeverity;
 use humanitl_core::diagnostics::codes;
 use humanitl_core::ids::SessionId;
 use humanitl_core::{Diagnostic, FixAction, Severity};
+use humanitl_proxy::rules_store::RulesStore;
+use humanitl_proxy::session::{SessionSettings, SessionState};
 use humanitl_sandbox::agent::opencode;
 use humanitl_sandbox::{
     AdapterRegistry, AgentContext, BwrapBackend, CheckResult, IsolationCheck, KILL_GRACE,
@@ -100,6 +102,10 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::server_stub::BoxStream;
+use crate::session::{
+    SessionRequest, SessionResolver, ask_mode_name, bundled_rules, parse_ask_mode, parse_work_mode,
+    work_mode_name,
+};
 use crate::v1;
 
 /// Der Name des Shims, wie er neben dem Daemon oder im Systempfad liegt.
@@ -302,28 +308,122 @@ struct Pending {
     profile: Option<String>,
     work_dir: Option<PathBuf>,
     work_mode: Option<WorkMode>,
+    /// Ob gerade ein Start läuft, der noch kein Handle hat.
+    ///
+    /// `self.running` wird erst gesetzt, wenn `bwrap` steht; zwischen der
+    /// Frage „läuft schon eine?" und dieser Zuweisung liegen die Auflösung der
+    /// Sitzung und der Start selbst. Zwei gleichzeitige `Start` kämen ohne
+    /// diesen Anspruch beide daran vorbei, beide starteten, der zweite
+    /// überschriebe `running` — und der erste Prozess liefe weiter, ohne dass
+    /// ihn noch jemand beenden könnte. Der Anspruch wird unter demselben
+    /// Schloss gesetzt, unter dem er geprüft wird.
+    claimed: bool,
+}
+
+/// Der Anspruch auf den nächsten Start, solange er gehalten wird.
+///
+/// Er gibt sich beim Fallenlassen selbst frei, damit kein Fehlerpfad ihn
+/// vergisst: Ein Anspruch, der nach einem gescheiterten Start liegen bliebe,
+/// verweigerte jeden weiteren Start bis zum Ende des Daemons.
+#[derive(Debug)]
+struct StartClaim {
+    inner: Arc<Inner>,
+}
+
+impl Drop for StartClaim {
+    fn drop(&mut self) {
+        lock(&self.inner.pending).claimed = false;
+    }
 }
 
 #[derive(Debug)]
 struct Inner {
-    config: Config,
+    /// Die Konfiguration, die gerade gilt.
+    ///
+    /// Sie steht hinter einem Schloss und nicht als Wert, weil ein Start sie
+    /// ersetzt: `humanitl run --profile llm-only --ask none --llm …` löst für
+    /// seine Sitzung neu auf, und was der Bildschirm danach zeigt, ist die
+    /// Sitzung, die läuft, und nicht die Auflösung des Daemon-Starts
+    /// (HUM-067).
+    config: RwLock<Arc<Config>>,
+    /// Woher eine neue Auflösung kommt.
+    resolver: SessionResolver,
     paths: humanitl_config::Paths,
     session: SessionId,
     running: Mutex<Option<Running>>,
     pending: Mutex<Pending>,
+    /// Der Regelspeicher der Sitzung, falls einer geführt wird.
+    ///
+    /// Ein Start ersetzt seine mitgelieferte Gruppe: die Durchreiche zum
+    /// Sprachmodell dieser Sitzung und die Regeln ihrer Profile. Ohne
+    /// Speicher — im Fake-Modus und in Tests — bleibt die Auflösung ohne
+    /// Wirkung auf die Regeln.
+    rules: Option<Arc<RulesStore>>,
+    /// Der Stand, den Proxy und Meta-Endpunkt lesen.
+    settings: Option<Arc<SessionSettings>>,
+}
+
+/// Woran der Dienst hängt, wenn eine Sitzung startet.
+///
+/// Beide sind wahlfrei, weil beide fehlen dürfen: Im Fake-Modus und in Tests
+/// gibt es keinen Regelspeicher und keinen laufenden Proxy, und ein Start
+/// bleibt dort ein Start ohne Wirkung auf sie. Sie stehen zusammen in einem
+/// Typ und nicht als zwei Argumente, damit ein dritter Anschluss die Signatur
+/// nicht wieder ändert.
+#[derive(Debug, Clone, Default)]
+pub struct SandboxPorts {
+    /// Der Regelspeicher, dessen mitgelieferte Gruppe ein Start ersetzt: die
+    /// Durchreiche zum Sprachmodell dieser Sitzung und die Regeln ihrer
+    /// Profile.
+    pub rules: Option<Arc<RulesStore>>,
+    /// Der Stand, den Proxy und Meta-Endpunkt lesen: Frage-Modus, Haltefrist
+    /// und Sprachmodell.
+    pub settings: Option<Arc<SessionSettings>>,
+}
+
+impl SandboxPorts {
+    /// Ohne Anschlüsse: ein Dienst, dessen Start nichts außerhalb der Sandbox
+    /// ändert.
+    #[must_use]
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// Dieselben Anschlüsse mit einem Regelspeicher.
+    #[must_use]
+    pub fn with_rules(mut self, rules: Arc<RulesStore>) -> Self {
+        self.rules = Some(rules);
+        self
+    }
+
+    /// Dieselben Anschlüsse mit dem Stand der Sitzung.
+    #[must_use]
+    pub fn with_settings(mut self, settings: Arc<SessionSettings>) -> Self {
+        self.settings = Some(settings);
+        self
+    }
 }
 
 impl SandboxService {
-    /// Der Dienst für die Sitzung [`session`](SessionId) über [`config`](Config).
+    /// Der Dienst für die Sitzung [`session`](SessionId).
+    ///
+    /// Der Resolver ersetzt die eingefrorene [`Config`] der ersten Fassung:
+    /// Jeder Start löst für seine Sitzung neu auf, sonst hätten `--profile`,
+    /// `--ask` und `--llm` keinen Weg in den Daemon.
     #[must_use]
-    pub fn new(config: Config, paths: humanitl_config::Paths, session: SessionId) -> Self {
+    pub fn new(resolver: SessionResolver, session: SessionId, ports: SandboxPorts) -> Self {
+        let paths = resolver.paths().clone();
+        let config = Arc::new(resolver.base().config.clone());
         Self {
             inner: Arc::new(Inner {
-                config,
+                config: RwLock::new(config),
+                resolver,
                 paths,
                 session,
                 running: Mutex::new(None),
                 pending: Mutex::new(Pending::default()),
+                rules: ports.rules,
+                settings: ports.settings,
             }),
         }
     }
@@ -370,6 +470,40 @@ impl SandboxService {
 }
 
 impl Inner {
+    /// Nimmt den Anspruch auf den nächsten Start, wenn er frei ist.
+    ///
+    /// Prüfen und Setzen geschehen unter demselben Schloss; deshalb gewinnt
+    /// von zwei gleichzeitigen Startversuchen genau einer, und der andere
+    /// bekommt `CLI_005`. Ein laufender Agent hält den Anspruch ebenso wie
+    /// ein Start, der gerade erst beginnt.
+    ///
+    /// Dies ist die einzige Stelle, an der `pending` und `running` ineinander
+    /// gehalten werden, und die Reihenfolge ist `pending` vor `running`. Jede
+    /// andere Stelle nimmt sie nacheinander (`work_dir`, `work_mode`,
+    /// `profile_name`), also gibt es keinen Weg, sie andersherum zu halten.
+    fn claim_start(self: &Arc<Self>) -> Option<StartClaim> {
+        let mut pending = lock(&self.pending);
+        if pending.claimed || self.is_running() {
+            return None;
+        }
+        pending.claimed = true;
+        Some(StartClaim {
+            inner: Arc::clone(self),
+        })
+    }
+
+    /// Die Konfiguration, die gerade gilt.
+    ///
+    /// Ein Aufrufer nimmt sie einmal und liest daraus alles, was er braucht:
+    /// Zwei Zugriffe in derselben Antwort könnten sonst zwei verschiedene
+    /// Sitzungen zeigen, wenn dazwischen eine startet.
+    fn config(&self) -> Arc<Config> {
+        self.config.read().map_or_else(
+            |poisoned| Arc::clone(&poisoned.into_inner()),
+            |slot| Arc::clone(&slot),
+        )
+    }
+
     /// Prüft den Wunsch und merkt ihn sich für den nächsten Start.
     ///
     /// Leere Felder ändern nichts: `Status` schickt einen leeren Wunsch und
@@ -386,7 +520,7 @@ impl Inner {
     ///
     /// `CONFIG_003`, wenn der Profilname kein Name ist, `SANDBOX_006`, wenn
     /// das Verzeichnis keines ist, das ein Projekt sein darf.
-    fn remember(&self, plan: &v1::sandbox_request::Plan) -> Result<(), Diagnostic> {
+    fn remember(&self, plan: &v1::sandbox_request::Plan) -> Result<Option<PathBuf>, Diagnostic> {
         let profile = match plan.profile.trim() {
             "" => None,
             name => {
@@ -414,7 +548,13 @@ impl Inner {
         if let Some(mode) = work_mode {
             pending.work_mode = Some(mode);
         }
-        Ok(())
+        // Das Verzeichnis, das für **diesen** Wunsch gilt, gelesen unter
+        // demselben Schloss, unter dem es geschrieben wurde. Der Aufrufer
+        // trägt es weiter, statt es später noch einmal aus `pending` zu holen:
+        // Dazwischen könnte ein anderer Aufruf ein anderes hineingelegt haben,
+        // und die Sitzung löste dann gegen ein Verzeichnis auf, das niemand
+        // für sie gewählt hat.
+        Ok(pending.work_dir.clone())
     }
 
     /// Prüft ein Projektverzeichnis, das über die RPC hereinkommt.
@@ -466,7 +606,7 @@ impl Inner {
 
         let home = self.paths.home();
         let configured = self
-            .config
+            .config()
             .sandbox
             .work_dir
             .as_ref()
@@ -559,6 +699,13 @@ impl Inner {
     /// Läuft schon eine, ist der Start keine Änderung: Der Strom meldet den
     /// laufenden Zustand und endet. Die Oberfläche schaltet die Schaltfläche
     /// ohnehin ab; ein Befund an dieser Stelle wäre ein Fehler ohne Ursache.
+    ///
+    /// **Die Reihenfolge ist eine Aussage.** Geprüft wird, bevor irgendetwas
+    /// gilt: erst der Profilname und das Projektverzeichnis (der Socket ist
+    /// die Vertrauensgrenze, `backlog/CONVENTIONS.md` 4.17), dann die
+    /// Konfiguration dieser Sitzung. Erst wenn beides durchkommt, gelten die
+    /// Regeln der Sitzung, ihre Haltefrist und ihre Durchreiche; ein halb
+    /// übernommener Wunsch hinterließe einen Zustand, den niemand gewählt hat.
     async fn start(
         self: Arc<Self>,
         start: v1::sandbox_request::Start,
@@ -569,22 +716,40 @@ impl Inner {
             work_dir: start.work_dir.clone(),
             work_mode: start.work_mode.clone(),
         };
-        if let Err(diagnostic) = self.remember(&plan) {
-            let _ = tx.send(diagnostic_event(&diagnostic)).await;
+        // Der Anspruch zuerst, vor jeder Prüfung, die etwas merkt: Ein
+        // zweiter Start soll `pending` nicht anfassen, während der erste
+        // daraus seine Sitzung auflöst.
+        let Some(_claim) = self.claim_start() else {
+            // Der Befund zuerst, dann der Zustand. Die Oberfläche schaltet die
+            // Schaltfläche ohnehin ab und sieht ihn selten; `humanitl run`
+            // dagegen bekäme sonst nur einen laufenden Zustand ohne Ausgabe
+            // und ohne Exit-Code und wüsste nicht, warum (HUM-067).
             let _ = tx
-                .send(status_event(self.failed_status(
-                    &v1::sandbox_request::Plan::default(),
-                    &diagnostic,
-                )))
+                .send(diagnostic_event(&already_running(&self.running_facts())))
                 .await;
-            return;
-        }
-        if self.is_running() {
             let this = Arc::clone(&self);
             let plan = plan.clone();
             let tx = tx.clone();
             let _ =
                 tokio::task::spawn_blocking(move || this.snapshot_or_diagnostic(&plan, &tx)).await;
+            return;
+        };
+
+        let work_dir = match self.remember(&plan) {
+            Ok(work_dir) => work_dir,
+            Err(diagnostic) => {
+                let _ = tx.send(diagnostic_event(&diagnostic)).await;
+                let _ = tx
+                    .send(status_event(self.failed_status(
+                        &v1::sandbox_request::Plan::default(),
+                        &diagnostic,
+                    )))
+                    .await;
+                return;
+            }
+        };
+
+        if !self.settle_session(&start, work_dir, &plan, &tx).await {
             return;
         }
 
@@ -619,8 +784,15 @@ impl Inner {
         let this = Arc::clone(&self);
         let launch_plan = plan.clone();
         let command: Vec<OsString> = start.command.iter().map(OsString::from).collect();
-        let launched =
-            tokio::task::spawn_blocking(move || this.launch(&launch_plan, &command)).await;
+        // Die Ausgabe des Agenten läuft über einen eigenen Kanal, nicht über
+        // den gesammelten Puffer: Der Puffer gibt erst nach dem Ende etwas
+        // heraus und ist gedeckelt, und ein Mensch, der `humanitl run` tippt,
+        // will sehen, was gerade geschieht.
+        let (output_tx, output_rx) = std::sync::mpsc::channel();
+        let launched = tokio::task::spawn_blocking(move || {
+            this.launch(&launch_plan, &command, Some(output_tx))
+        })
+        .await;
         match launched {
             Ok(Ok(())) => {
                 // Die Zeile, die der Log-Reiter zeigt. Der leere Zustand dort
@@ -634,11 +806,14 @@ impl Inner {
                     return;
                 }
                 let this = Arc::clone(&self);
-                let plan = plan.clone();
-                let running = tokio::task::spawn_blocking(move || this.snapshot(&plan)).await;
+                let running_plan = plan.clone();
+                let running =
+                    tokio::task::spawn_blocking(move || this.snapshot(&running_plan)).await;
                 if let Ok(Ok(status)) = running {
                     let _ = tx.send(status_event(status)).await;
                 }
+                self.stream_output(output_rx, &tx).await;
+                self.report_exit(&tx).await;
             }
             Ok(Err(diagnostic)) => {
                 let _ = tx.send(diagnostic_event(&diagnostic)).await;
@@ -651,6 +826,216 @@ impl Inner {
                 let _ = tx.send(diagnostic_event(&diagnostic)).await;
             }
         }
+    }
+
+    /// Löst die Konfiguration dieser Sitzung auf, sendet ihre Befunde und sagt,
+    /// ob der Start weitergehen darf.
+    ///
+    /// Auflösen liest Dateien und gehört deshalb auf einen eigenen Faden.
+    async fn settle_session(
+        self: &Arc<Self>,
+        start: &v1::sandbox_request::Start,
+        work_dir: Option<PathBuf>,
+        plan: &v1::sandbox_request::Plan,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) -> bool {
+        let this = Arc::clone(self);
+        let wish = start.clone();
+        let applied =
+            tokio::task::spawn_blocking(move || this.apply_session(&wish, work_dir)).await;
+        match applied {
+            Ok(Ok(diagnostics)) => {
+                for diagnostic in &diagnostics {
+                    if tx.send(diagnostic_event(diagnostic)).await.is_err() {
+                        return false;
+                    }
+                }
+                true
+            }
+            Ok(Err(diagnostic)) => {
+                let _ = tx.send(diagnostic_event(&diagnostic)).await;
+                let _ = tx
+                    .send(status_event(self.failed_status(plan, &diagnostic)))
+                    .await;
+                false
+            }
+            Err(error) => {
+                let diagnostic = joined_failed(&error);
+                let _ = tx.send(diagnostic_event(&diagnostic)).await;
+                false
+            }
+        }
+    }
+
+    /// Löst die Konfiguration dieser Sitzung auf und lässt sie gelten.
+    ///
+    /// Drei Dinge ändern sich damit für die Dauer der Sitzung, und alle drei
+    /// hängen an derselben Auflösung:
+    ///
+    /// 1. **Die Konfiguration**, aus der Kommandozeile, Umgebung, Profilen und
+    ///    `config.toml` (`backlog/CONVENTIONS.md` 4.23). Alles, was der Dienst
+    ///    danach liest — Adapter, Befehl, Umgebung, Sprachmodell —, kommt aus
+    ///    ihr.
+    /// 2. **Die mitgelieferte Gruppe des Regelspeichers**: die Durchreiche zum
+    ///    Sprachmodell dieser Sitzung und die Regeln ihrer Profile (Rang 4).
+    ///    Ohne diesen Schritt brächte `--profile llm-only` seine Blockregel
+    ///    nicht mit, und `--llm` zeigte auf ein Modell, zu dem keine
+    ///    Durchreiche führt.
+    /// 3. **Frage-Modus und Haltefrist**, die der Proxy je gehaltenem Fluss
+    ///    liest, und der Endpunkt, den `http://humanitl.internal/` nennt.
+    ///
+    /// Zurück kommen die Befunde, die die Auflösung überlebt haben: ein
+    /// verdecktes Profil, ein Projekt-Profil aus fremdem Besitz, eine
+    /// Regeldatei, die sich nicht lesen ließ. Sie halten den Start nicht auf,
+    /// aber sie werden gesagt.
+    ///
+    /// # Errors
+    ///
+    /// `CONFIG_001` bis `CONFIG_003`, wenn Profil, Frage-Modus oder ein
+    /// Konfigurationswert des Clients nicht durchkommen.
+    fn apply_session(
+        &self,
+        start: &v1::sandbox_request::Start,
+        work_dir: Option<PathBuf>,
+    ) -> Result<Vec<Diagnostic>, Diagnostic> {
+        let request = SessionRequest {
+            profile: non_empty(&start.session_profile),
+            // Das Verzeichnis ist zu diesem Zeitpunkt geprüft: `remember` hat
+            // es aufgelöst und unter demselben Schloss zurückgegeben, unter dem
+            // es abgelegt wurde. Der geprüfte Pfad reist weiter, nie der
+            // geschriebene, und nie einer, den inzwischen jemand anders
+            // hineingelegt hat.
+            work_dir,
+            work_mode: parse_work_mode(&start.work_mode),
+            ask_mode: parse_ask_mode(&start.ask_mode)?,
+            overrides: start
+                .cli_overrides
+                .iter()
+                .map(|entry| (entry.path.trim().to_owned(), entry.value.clone()))
+                .collect(),
+        };
+        let resolved = self.resolver.resolve(&request)?;
+        let mut diagnostics = resolved.diagnostics.clone();
+
+        if let Some(store) = self.rules.as_ref() {
+            let (rules, found) = bundled_rules(&resolved.config, &resolved.profiles, self.session);
+            diagnostics.extend(found);
+            store.set_bundled(&rules.all());
+            tracing::info!(
+                session = %self.session,
+                rules = rules.len(),
+                profiles = resolved.profiles.len(),
+                "session rules installed"
+            );
+        }
+        // Was `--llm` aufmacht, wird gesagt, bevor der Agent läuft: Die
+        // Durchreiche steht in Rang 1, wird nicht gehalten und überholt die
+        // eigenen Block-Regeln des Nutzers. Geprüft wird ohne Auflösung — ein
+        // Name verlässt den Rechner erst, wenn eine Anfrage freigegeben ist
+        // (ADR-006).
+        if let Some(endpoint) = resolved.config.llm.endpoint.as_ref()
+            && let Some(diagnostic) = humanitl_proxy::not_private_by_name(endpoint)
+        {
+            diagnostics.push(diagnostic);
+        }
+        if let Some(settings) = self.settings.as_ref() {
+            settings.set(SessionState::for_config(
+                resolved.config.hold.ask_mode,
+                resolved.config.hold.timeout_secs,
+                llm_authority(&resolved.config),
+            ));
+        }
+        tracing::info!(
+            session = %self.session,
+            ask_mode = ask_mode_name(resolved.config.hold.ask_mode),
+            timeout_secs = resolved.config.hold.timeout_secs,
+            profiles = ?resolved.profiles.iter().map(|profile| profile.name.as_str()).collect::<Vec<_>>(),
+            "session configuration resolved"
+        );
+
+        let mut slot = self.config.write().unwrap_or_else(PoisonError::into_inner);
+        *slot = Arc::new(resolved.config);
+        Ok(diagnostics)
+    }
+
+    /// Reicht die Ausgabe des Agenten weiter, bis sein Strom endet.
+    ///
+    /// Die Bytes laufen durch [`humanitl_core::TerminalFilter`], je Strom
+    /// einen: Die Ausgabe eines Agenten erreicht ein Terminal, und ein
+    /// Terminal führt aus, was in ihr steht (`BACKLOG.md` 4.2). Ein Filter für
+    /// beide Ströme zusammen zerschnitte ihre Folgen gegenseitig.
+    ///
+    /// Blockierend, denn der Kanal des Lesers ist einer der Standardbibliothek;
+    /// das Warten gehört deshalb auf einen eigenen Faden.
+    async fn stream_output(
+        &self,
+        rx: std::sync::mpsc::Receiver<humanitl_sandbox::OutputChunk>,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) {
+        let tx = tx.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            let mut stdout = humanitl_core::TerminalFilter::new();
+            let mut stderr = humanitl_core::TerminalFilter::new();
+            while let Ok(chunk) = rx.recv() {
+                let (stream, filtered) = match chunk.stream {
+                    humanitl_sandbox::OutputStream::Stdout => {
+                        (v1::OutputStream::Stdout, stdout.push(&chunk.bytes))
+                    }
+                    humanitl_sandbox::OutputStream::Stderr => {
+                        (v1::OutputStream::Stderr, stderr.push(&chunk.bytes))
+                    }
+                };
+                if filtered.is_empty() {
+                    continue;
+                }
+                if tx.blocking_send(output_event(stream, filtered)).is_err() {
+                    return;
+                }
+            }
+            // Was am Ende noch zurückgehalten wird: eine angefangene Folge,
+            // die nie geschlossen wurde, gehört dem Menschen und nicht dem
+            // Filter — außer sie ist eine der gesperrten.
+            for (stream, mut filter) in [
+                (v1::OutputStream::Stdout, stdout),
+                (v1::OutputStream::Stderr, stderr),
+            ] {
+                let rest = filter.flush();
+                if !rest.is_empty() {
+                    let _ = tx.blocking_send(output_event(stream, rest));
+                }
+            }
+        })
+        .await;
+    }
+
+    /// Meldet den Exit-Code des Agenten, sobald er beendet ist.
+    ///
+    /// Ein Signal wird nach POSIX-Sitte auf `128 + n` abgebildet; so liest es
+    /// jede Shell, und so gibt `humanitl run` es weiter.
+    async fn report_exit(&self, tx: &mpsc::Sender<v1::SandboxEvent>) {
+        let Some(handle) = self.running_handle() else {
+            return;
+        };
+        let waited = tokio::task::spawn_blocking(move || handle.wait()).await;
+        let code = match waited {
+            Ok(Ok(status)) => exit_code_of(status),
+            Ok(Err(diagnostic)) => {
+                let _ = tx.send(diagnostic_event(&diagnostic)).await;
+                return;
+            }
+            Err(error) => {
+                let diagnostic = joined_failed(&error);
+                let _ = tx.send(diagnostic_event(&diagnostic)).await;
+                return;
+            }
+        };
+        let _ = tx
+            .send(v1::SandboxEvent {
+                event: Some(v1::sandbox_event::Event::Exit(v1::sandbox_event::Exit {
+                    code,
+                })),
+            })
+            .await;
     }
 
     /// Misst die drei Garantien der gerade gestarteten Sandbox, sendet sie und
@@ -840,17 +1225,32 @@ impl Inner {
     }
 
     /// Startet die geplante Sandbox und merkt sie sich.
+    ///
+    /// `output` bekommt jedes Stück Ausgabe, sobald es gelesen ist. Der
+    /// Daemon selbst hat kein Terminal; die Bytes gehen über den Ereignisstrom
+    /// an den Client, der eines hat, und laufen dabei durch
+    /// [`humanitl_core::TerminalFilter`]. Ein PTY ist das nicht — es gibt
+    /// keine Eingabe und keine Geometrie, das kommt mit HUM-042.
     fn launch(
         &self,
         plan: &v1::sandbox_request::Plan,
         command: &[OsString],
+        output: Option<humanitl_sandbox::OutputSink>,
     ) -> Result<(), Diagnostic> {
         let prepared = self.prepare_with_command(plan, command)?;
-        // Gesammelt, nicht durchgereicht: Der Daemon hat kein Terminal, und
-        // die Ausgabe des Agenten gehört ohnehin in das Terminal von HUM-042.
         let backend = prepared.backend.clone().with_stdio(StdioMode::Capture);
-        let launch = backend.plan(&prepared.profile, &prepared.session)?;
-        let handle = backend.launch(&launch)?;
+        // Der Zuhörer hängt nur an dem Backend, das startet, und nicht an dem,
+        // das gehalten wird: Ein gehaltener Sender schlösse seinen Kanal nie,
+        // und wer auf dessen Ende wartet, wartete für immer. Beide tragen
+        // dieselbe Frist für den Bericht des Shims, gemessen wird also unter
+        // denselben Bedingungen wie gestartet.
+        let mut launcher = backend.clone();
+        if let Some(sink) = output {
+            launcher = launcher.with_output_sink(sink);
+        }
+        let launch = launcher.plan(&prepared.profile, &prepared.session)?;
+        let handle = launcher.launch(&launch)?;
+        drop(launcher);
         let mut running = lock(&self.running);
         *running = Some(Running {
             handle: Arc::new(handle),
@@ -903,7 +1303,7 @@ impl Inner {
             session_id: self.session.to_string(),
             backend: prepared.backend.name().to_owned(),
             llm_endpoint: self
-                .config
+                .config()
                 .llm
                 .endpoint
                 .as_ref()
@@ -931,6 +1331,7 @@ impl Inner {
         plan: &v1::sandbox_request::Plan,
         _diagnostic: &Diagnostic,
     ) -> v1::sandbox_event::Status {
+        let config = self.config();
         let Facts {
             id,
             started_at,
@@ -942,17 +1343,16 @@ impl Inner {
             sandbox_id: id.unwrap_or_default(),
             session_id: self.session.to_string(),
             backend: "bwrap".to_owned(),
-            llm_endpoint: self
-                .config
+            llm_endpoint: config
                 .llm
                 .endpoint
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_default(),
-            work_dir: self.work_dir(plan).display().to_string(),
-            work_mode: work_mode_name(self.work_mode(plan)).to_owned(),
+            work_dir: self.work_dir(&config, plan).display().to_string(),
+            work_mode: work_mode_name(self.work_mode(&config, plan)).to_owned(),
             started_at: started_at.map(crate::convert::timestamp),
-            profile: self.profile_name(plan),
+            profile: self.profile_name(&config, plan),
             mounts: Vec::new(),
             env: Vec::new(),
             argv_preview: String::new(),
@@ -1034,15 +1434,19 @@ impl Inner {
         plan: &v1::sandbox_request::Plan,
         command: &[OsString],
     ) -> Result<Prepared, Diagnostic> {
+        // Eine Aufnahme der Konfiguration für den ganzen Aufbau: Ein Start,
+        // der dazwischenkommt, darf nicht die Hälfte einer Kommandozeile
+        // ersetzen.
+        let config = self.config();
         let policy = MountPolicy::from_paths(&self.paths);
-        let name = self.profile_name(plan);
+        let name = self.profile_name(&config, plan);
         let (profile_path, profile_origin) = self.profile_path(&name)?;
         let profile = SandboxProfile::load_validated(&profile_path, &policy)?;
 
-        let work_src = self.work_dir(plan);
-        let work_mode = self.work_mode(plan);
+        let work_src = self.work_dir(&config, plan);
+        let work_mode = self.work_mode(&config, plan);
         let agent = if command.is_empty() {
-            self.agent_contribution(&work_src, &profile)?
+            self.agent_contribution(&config, &work_src, &profile)?
         } else {
             AgentContribution::default()
         };
@@ -1050,7 +1454,7 @@ impl Inner {
         let mut session_env = vec![(ENV_SESSION.to_owned(), self.session.to_string())];
         session_env.extend(agent.env.iter().cloned());
         session_env.extend(
-            self.config
+            config
                 .sandbox
                 .env
                 .iter()
@@ -1074,7 +1478,7 @@ impl Inner {
         // `sandbox.env` steht in `config.toml` und ist von Hand geschrieben;
         // es überschreibt Profil und Adapter, also überschreibt es auch deren
         // Herkunft. Genau hier landet später die Zugangsdaten-Injektion.
-        for key in self.config.sandbox.env.keys() {
+        for key in config.sandbox.env.keys() {
             env_origin.insert(key.clone(), v1::ValueOrigin::User);
         }
         for key in humanitl_sandbox::RESERVED_ENV {
@@ -1090,7 +1494,7 @@ impl Inner {
             ca_bundle_src: self.paths.ca_dir().join(CA_BUNDLE_FILE),
             shim_src: shim_path(),
             session_env,
-            command: self.command(command, &agent.command),
+            command: Self::command(&config, command, &agent.command),
             files: agent.files,
         };
 
@@ -1113,15 +1517,16 @@ impl Inner {
     /// Was der Agent-Adapter zu dieser Sitzung beiträgt.
     fn agent_contribution(
         &self,
+        config: &Config,
         work_src: &Path,
         profile: &SandboxProfile,
     ) -> Result<AgentContribution, Diagnostic> {
         let registry = AdapterRegistry::builtin();
-        let adapter = registry.get(&self.config.agent.adapter).ok_or_else(|| {
+        let adapter = registry.get(&config.agent.adapter).ok_or_else(|| {
             Diagnostic::builder(codes::CONFIG_003, Severity::Blocking)
                 .why(format!(
                     "agent.adapter is {:?}, and no adapter of that name exists; known: {}",
-                    self.config.agent.adapter,
+                    config.agent.adapter,
                     registry.ids().join(", ")
                 ))
                 .fix(FixAction::ChangeSetting {
@@ -1134,49 +1539,39 @@ impl Inner {
                 .build()
         })?;
 
-        let ctx = AgentContext::new(
-            self.session,
-            work_src.to_path_buf(),
-            self.config.llm.clone(),
-        )
-        .with_command_override(
-            self.config
-                .agent
-                .command
-                .as_ref()
-                .map(|parts| parts.iter().map(OsString::from).collect()),
-        )
-        .with_host_path(self.paths.env().non_empty("PATH").map(OsString::from))
-        .with_language(self.config.ui.language)
-        .with_hold(self.config.hold.clone())
-        .with_briefing(self.config.agent.briefing.clone())
-        .with_home(
-            self.config
-                .sandbox
-                .env
-                .get("HOME")
-                .or_else(|| profile.env.get("HOME"))
-                .map_or_else(
-                    || PathBuf::from(humanitl_sandbox::DEFAULT_HOME),
-                    PathBuf::from,
-                ),
-        )
-        .with_config_home(
-            self.config
-                .sandbox
-                .env
-                .get("XDG_CONFIG_HOME")
-                .map(PathBuf::from),
-        )
-        .with_sandbox_ro_paths(
-            profile
-                .mounts
-                .ro
-                .iter()
-                .chain(&profile.mounts.extra_ro)
-                .cloned()
-                .collect(),
-        );
+        let ctx = AgentContext::new(self.session, work_src.to_path_buf(), config.llm.clone())
+            .with_command_override(
+                config
+                    .agent
+                    .command
+                    .as_ref()
+                    .map(|parts| parts.iter().map(OsString::from).collect()),
+            )
+            .with_host_path(self.paths.env().non_empty("PATH").map(OsString::from))
+            .with_language(config.ui.language)
+            .with_hold(config.hold.clone())
+            .with_briefing(config.agent.briefing.clone())
+            .with_home(
+                config
+                    .sandbox
+                    .env
+                    .get("HOME")
+                    .or_else(|| profile.env.get("HOME"))
+                    .map_or_else(
+                        || PathBuf::from(humanitl_sandbox::DEFAULT_HOME),
+                        PathBuf::from,
+                    ),
+            )
+            .with_config_home(config.sandbox.env.get("XDG_CONFIG_HOME").map(PathBuf::from))
+            .with_sandbox_ro_paths(
+                profile
+                    .mounts
+                    .ro
+                    .iter()
+                    .chain(&profile.mounts.extra_ro)
+                    .cloned()
+                    .collect(),
+            );
 
         Ok(AgentContribution {
             command: adapter.command(&ctx),
@@ -1187,14 +1582,18 @@ impl Inner {
 
     /// Der Befehl in der Sandbox: der des Aufrufers, sonst der des Adapters,
     /// sonst der aus `agent.command`, sonst die Shell.
-    fn command(&self, requested: &[OsString], from_adapter: &[OsString]) -> Vec<OsString> {
+    fn command(
+        config: &Config,
+        requested: &[OsString],
+        from_adapter: &[OsString],
+    ) -> Vec<OsString> {
         if !requested.is_empty() {
             return requested.to_vec();
         }
         if !from_adapter.is_empty() {
             return from_adapter.to_vec();
         }
-        self.config
+        config
             .agent
             .command
             .as_ref()
@@ -1212,7 +1611,7 @@ impl Inner {
     /// ist, und das vor dem, was konfiguriert ist. Sonst zeigte der Bildschirm
     /// während einer Sitzung das Profil, das beim nächsten Start gälte, und
     /// nicht das, unter dem der Agent gerade arbeitet.
-    fn profile_name(&self, plan: &v1::sandbox_request::Plan) -> String {
+    fn profile_name(&self, config: &Config, plan: &v1::sandbox_request::Plan) -> String {
         if !plan.profile.trim().is_empty() {
             return plan.profile.trim().to_owned();
         }
@@ -1222,14 +1621,21 @@ impl Inner {
         if let Some(chosen) = lock(&self.pending).profile.clone() {
             return chosen;
         }
-        self.config.sandbox.profile.clone()
+        config.sandbox.profile.clone()
     }
 
     /// Das Projektverzeichnis dieses Wunsches, sonst das der laufenden
     /// Sandbox, sonst das zuletzt gewählte, sonst das der Konfiguration.
-    fn work_dir(&self, plan: &v1::sandbox_request::Plan) -> PathBuf {
-        if !plan.work_dir.trim().is_empty() {
-            return PathBuf::from(plan.work_dir.trim());
+    fn work_dir(&self, config: &Config, plan: &v1::sandbox_request::Plan) -> PathBuf {
+        // Der Wunsch dieses Aufrufs, aber in der Fassung, die `check_work_dir`
+        // aufgelöst hat: `remember` hat ihn unmittelbar davor abgelegt. Die
+        // rohe Zeichenkette der Leitung wird nie eingehängt — sonst prüfte
+        // der Dienst den aufgelösten Pfad und hängte den geschriebenen ein,
+        // und die Prüfung sagte über die Einhängung nichts aus.
+        if !plan.work_dir.trim().is_empty()
+            && let Some(checked) = lock(&self.pending).work_dir.clone()
+        {
+            return checked;
         }
         if let Some(running) = lock(&self.running).as_ref() {
             return running.work_dir.clone();
@@ -1237,7 +1643,7 @@ impl Inner {
         if let Some(chosen) = lock(&self.pending).work_dir.clone() {
             return chosen;
         }
-        self.config
+        config
             .sandbox
             .work_dir
             .clone()
@@ -1246,7 +1652,7 @@ impl Inner {
 
     /// Der Modus dieses Wunsches, sonst der der laufenden Sandbox, sonst der
     /// zuletzt gewählte, sonst der der Konfiguration.
-    fn work_mode(&self, plan: &v1::sandbox_request::Plan) -> WorkMode {
+    fn work_mode(&self, config: &Config, plan: &v1::sandbox_request::Plan) -> WorkMode {
         match plan.work_mode.trim().to_ascii_lowercase().as_str() {
             "ro" => WorkMode::Ro,
             "rw" => WorkMode::Rw,
@@ -1256,7 +1662,7 @@ impl Inner {
                 }
                 lock(&self.pending)
                     .work_mode
-                    .unwrap_or(self.config.sandbox.work_mode)
+                    .unwrap_or(config.sandbox.work_mode)
             }
         }
     }
@@ -1550,11 +1956,67 @@ fn work_dir_refused(dir: &Path, why: &str) -> Diagnostic {
         .build()
 }
 
-/// `ro` oder `rw`, wie das Protokoll den Modus schreibt.
-const fn work_mode_name(mode: WorkMode) -> &'static str {
-    match mode {
-        WorkMode::Ro => "ro",
-        WorkMode::Rw => "rw",
+/// Der Befund für einen Start, während schon eine Sitzung läuft.
+///
+/// Der Daemon führt genau eine; eine zweite bekäme eine Sandbox, die einem
+/// anderen Projektverzeichnis gehört. Weder ein Befehl zum Anhängen noch einer
+/// zum Beheben steht im Text: `attach` gibt es nicht, und es gibt auch keinen
+/// Befehl, der eine fremde Sitzung beendet. Wer sie gestartet hat, beendet sie
+/// dort (HUM-067, Nicht-Ziel).
+fn already_running(facts: &Facts) -> Diagnostic {
+    let id = facts.id.as_deref().unwrap_or("unknown");
+    Diagnostic::builder(codes::CLI_005, Severity::Blocking)
+        .why(format!(
+            "a session is already running in this daemon (sandbox {id}); it keeps its own \
+             project directory, and a second one would not get it. End it where it was started, \
+             or watch it in the app."
+        ))
+        .build()
+}
+
+/// Ein Feld der Leitung als Wunsch: leer heißt „kein Wunsch".
+fn non_empty(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+/// Der Sprachmodell-Endpunkt als `host:port`, wie ihn `humanitl.internal`
+/// zeigt.
+///
+/// Ohne `llm.endpoint` und bei einer Adresse ohne Host gibt es nichts zu
+/// zeigen; `/` schreibt dann `llm=none`, statt einen Endpunkt zu erfinden.
+fn llm_authority(config: &Config) -> Option<String> {
+    let endpoint = config.llm.endpoint.as_ref()?;
+    let host = endpoint.host_str()?;
+    Some(match endpoint.port_or_known_default() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_owned(),
+    })
+}
+
+/// Der Exit-Code eines Prozesses: sein eigener, oder `128 + Signal`.
+///
+/// Über 255 gibt es keinen; `ExitStatus::code` liefert nie mehr, und ein
+/// Signal wird nach POSIX-Sitte auf `128 + n` abgebildet. Dieselbe Zuordnung
+/// wie in `humanitl sandbox run`.
+fn exit_code_of(status: std::process::ExitStatus) -> i32 {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    if let Some(code) = status.code() {
+        return code;
+    }
+    status.signal().map_or(1, |signal| 128 + signal)
+}
+
+/// Ein Stück gefilterte Ausgabe als Ereignis.
+fn output_event(stream: v1::OutputStream, data: Vec<u8>) -> v1::SandboxEvent {
+    v1::SandboxEvent {
+        event: Some(v1::sandbox_event::Event::Output(
+            v1::sandbox_event::OutputChunk {
+                stream: stream.into(),
+                data,
+            },
+        )),
     }
 }
 
@@ -2037,7 +2499,11 @@ mod tests {
 
         let paths =
             humanitl_config::Paths::new(humanitl_config::Env::from_pairs([("HOME", "/home/u")]));
-        let service = SandboxService::new(Config::default(), paths, SessionId::nil());
+        let service = SandboxService::new(
+            crate::session::SessionResolver::for_config(paths, Config::default()),
+            SessionId::nil(),
+            SandboxPorts::none(),
+        );
         let events: Vec<v1::SandboxEvent> = service
             .stream(v1::SandboxRequest {
                 op: Some(v1::sandbox_request::Op::IsolationCheck(())),
