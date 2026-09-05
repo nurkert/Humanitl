@@ -161,10 +161,18 @@ class DBusNotificationPort implements NotificationPort {
           DBusString(notification.summary),
           DBusString(notification.body),
           DBusArray(DBusSignature('s'), pairs),
+          // `DBusDict.stringVariant` wraps each value in a `DBusVariant`
+          // itself, so the values handed to it are the bare ones. A
+          // `DBusVariant` passed in here would arrive as a variant inside a
+          // variant, which is a well-formed `a{sv}` and useless: every
+          // notification server reads the inner type as `v`, finds no hint it
+          // knows, and drops the entry without a word.
           DBusDict.stringVariant(<String, DBusValue>{
             // Normal urgency: this is worth knowing, it is not an emergency.
-            'urgency': const DBusVariant(DBusByte(1)),
-            'desktop-entry': const DBusVariant(DBusString(_desktopEntry)),
+            // A byte, as the notification specification demands; a
+            // `DBusUint32` would be discarded just as silently.
+            'urgency': const DBusByte(1),
+            'desktop-entry': const DBusString(_desktopEntry),
           }),
           // The server decides how long its own popups stand; a client that
           // dictates a timeout overrides a setting the person made.
