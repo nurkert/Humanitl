@@ -2477,7 +2477,7 @@ You run inside an isolated sandbox with no direct internet access. Every HTTP(S)
 ### Akzeptanzkriterien
 - [x] Datei existiert in der laufenden Sandbox unter `~/.config/opencode/AGENTS.md`.
 - [x] `/work` ist nach dem Start byte-identisch (Hash-Vergleich aus HUM-043).
-- [ ] Beide Sprachen ≤ 160 Token.
+- [x] Beide Sprachen ≤ 160 Token. **Überholt formuliert, gemessen und entschieden:** Die Grenze ist 185, nicht 160 (`TOKEN_BUDGET` in `daemon/crates/sandbox/src/agent/briefing.rs` mit der Begründung; beide Zahlen des Issues stammen aus der Zeit vor dem Meta-Endpunkt und vor der ersten Zählung). Nachgezählt am 2026-09-06 mit `tools/briefing-tokens.py` und `tiktoken 0.14.0`, `o200k_base`, ungünstigster Fall: englisch 162 (`ask_mode=ui`) und 160 (`none`), deutsch 184 und 179 — alle vier unter der geltenden Grenze. Der deutsche Text kostet 13 bis 14 Prozent mehr, weil jeder BPE-Tokenisierer deutsche Wörter feiner zerlegt; ihn unter 160 zu drücken hieße, eine Aussage wegzulassen, die der englische macht.
 - [x] `agent.briefing.enabled = false` unterdrückt die Datei.
 
 ### Fallstricke
