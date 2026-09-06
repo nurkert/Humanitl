@@ -59,13 +59,16 @@ const Duration returnAfter = Duration(seconds: 60);
 /// Whether desktop notifications are wanted.
 ///
 /// The setting is registered: `docs/CONFIG.md` lists `ui.notifications`
-/// (boolean, default `true`, tier `advanced`) and next to it `ui.sound`
-/// (boolean, default `false`, tier `advanced`, without effect in the MVP).
-/// What is missing is not the key but the way to read it -- the daemon client
-/// has no `GetConfig` -- so this answers `true` for everybody and a person who
-/// switched the setting off still gets messages. The binding follows as soon
-/// as the client can ask; until then this is the seam it binds to, and the
-/// switch the tests use.
+/// (boolean, default `true`, tier `advanced`). What is missing is not the key
+/// but the way to read it -- the daemon client has no `GetConfig` -- so this
+/// answers `true` for everybody and a person who switched the setting off
+/// still gets messages. The binding follows as soon as the client can ask;
+/// until then this is the seam it binds to, and the switch the tests use.
+///
+/// Its neighbour `ui.sound` stood here until HUM-121 and is gone: it never
+/// played a sound, and a switch without a sound is no setting
+/// (`backlog/CONVENTIONS.md` 4.25). A sound for the notification is a
+/// capability of its own; it would come back together with its reader.
 @Riverpod(keepAlive: true)
 bool notificationsEnabled(Ref ref) => true;
 

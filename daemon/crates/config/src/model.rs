@@ -427,13 +427,6 @@ pub struct UiConfig {
         "x-pending-issue" = "HUM-069"
     ))]
     pub notifications: bool,
-    /// Ton zur Meldung.
-    #[schemars(extend(
-        "x-tier" = "advanced",
-        "x-project-scope" = "allowed",
-        "x-pending-issue" = "HUM-121"
-    ))]
-    pub sound: bool,
     /// Zeile im Terminal des Agenten, wenn eine seiner Anfragen auf eine Entscheidung wartet. Der Streifen über dem Terminal zeigt sie in jedem Fall; dies ist die Zeile im Bytestrom, die ein Vollbild-TUI beim nächsten Bild überschreibt.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
     pub terminal_notices: bool,
@@ -445,7 +438,6 @@ impl Default for UiConfig {
             language: Language::En,
             theme: Theme::Dark,
             notifications: true,
-            sound: false,
             terminal_notices: true,
         }
     }
@@ -480,11 +472,4 @@ pub struct Experimental {
     /// Bietet dem Ziel HTTP/2 an. In M1 spricht der Proxy nach oben nur HTTP/1.1.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub h2_upstream: bool,
-    /// Hält auch WebSocket-Upgrades an, statt sie über eine Regel zu entscheiden.
-    #[schemars(extend(
-        "x-tier" = "expert",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-121"
-    ))]
-    pub ws_hold: bool,
 }

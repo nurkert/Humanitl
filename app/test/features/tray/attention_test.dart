@@ -15,7 +15,7 @@ import 'fixtures.dart';
 
 void main() {
   group('the setting the notifications hang on', () {
-    test('the_register_really_has_both_keys', () {
+    test('the_register_has_the_key_and_the_sound_is_retired', () {
       // `ui.notifications` hat sehr wohl ein Zuhause; der Kommentar am
       // Provider darf nichts anderes behaupten.
       final String config = File('../docs/CONFIG.md').readAsStringSync();
@@ -25,23 +25,25 @@ void main() {
           RegExp(r'`ui\.notifications` \| boolean \| `true` \| advanced'),
         ),
       );
-      expect(
-        config,
-        contains(RegExp(r'`ui\.sound` \| boolean \| `false` \| advanced')),
-      );
       // HUM-034 nennt fuer `ui.notifications` die Stufe `basic`; das Register
-      // nennt `advanced` und gewinnt (CONVENTIONS 4.19). Und die
-      // Spezifikation verlangt, dass die Dokumentation die fehlende Wirkung
-      // von `ui.sound` benennt. Seit HUM-101 steht das nicht mehr in der
-      // Beschreibung, sondern in einer eigenen Spalte, die das Leser-Register
-      // fuellt: `offen (HUM-xxx)` heisst, dass kein Code den Schluessel liest,
-      // und nennt das Issue, das ihn wirksam macht. Die Zusicherung prueft
-      // deshalb die Spalte und nicht mehr den Satz; sie muss angepasst werden,
-      // sobald dieses Issue die Zeile auf `ja` dreht.
+      // nennt `advanced` und gewinnt (CONVENTIONS 4.19). Die Spalte des
+      // Registers steht daneben: `offen (HUM-xxx)` heisst, dass kein Code den
+      // Schluessel liest, und nennt das Issue, das ihn wirksam macht. Die
+      // Zusicherung prueft die Spalte und nicht den Satz; sie muss angepasst
+      // werden, sobald HUM-069 die Zeile auf `ja` dreht.
       expect(
         config,
-        contains(RegExp(r'`ui\.sound`.*\| offen \(HUM-[0-9]+\) \|')),
+        contains(RegExp(r'`ui\.notifications`.*\| offen \(HUM-[0-9]+\) \|')),
       );
+      // `ui.sound` stand bis HUM-121 daneben und ist entfallen: Es gab keinen
+      // Ton, den er abschalten konnte. Als Einstellung darf die Zeile nicht
+      // zurueckkommen, ohne dass ein Leser mit ihr kommt (CONVENTIONS 4.25);
+      // ohne diese Zusicherung faellt das erst dem naechsten Leser-Register
+      // auf. In der Tabelle der entfallenen Schluessel steht der Pfad sehr
+      // wohl, mit dem Issue -- deshalb pruefen beide Zusicherungen die Zeile
+      // und nicht den blossen Namen.
+      expect(config, isNot(contains(RegExp(r'`ui\.sound` \| boolean'))));
+      expect(config, contains(RegExp(r'`ui\.sound` \| HUM-121 \| Wert \|')));
     });
 
     test('the_provider_names_the_real_reason', () {
@@ -51,9 +53,12 @@ void main() {
       // nicht ein fehlender Eintrag im Register.
       for (final String named in <String>[
         'ui.notifications',
-        'ui.sound',
         'advanced',
         'GetConfig',
+        // Der entfallene Nachbar wird benannt, samt Issue: Wer den Kommentar
+        // liest, soll `ui.sound` nicht fuer vergessen halten.
+        'ui.sound',
+        'HUM-121',
       ]) {
         expect(
           source,

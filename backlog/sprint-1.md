@@ -1496,7 +1496,7 @@ Zeile 11 der Matrix neu: curl-Handschlag mit `--http1.1 -i` liefert 101; websoca
 - [ ] Gegen einen laufenden Daemon mit einem lokalen Echo-Server (`resolver.overrides` auf `127.0.0.1`, Regel `allow_private: true`): `websocat --ws-c-uri=ws://<host>/ws - ws-c:tcp:127.0.0.1:3128` aus der Sandbox liefert nach dem Allow das Echo; `humanitl --json flows show <id>` zeigt `status: 101` und `upgrade: websocket` (Blick).
 - [ ] Ohne Allow: 504 nach der Frist; mit Block: 403 mit `reason: user`; `cargo test -p humanitl-proxy` grün, die bestehenden Tests unverändert.
 - [ ] `docs/SECURITY.md` 6 und 10.3 sagen genau, was nach dem Upgrade aufgezeichnet wird (Bytes Ziel → Client, Zähler Client → Ziel) und was nicht (Frames werden nicht gehalten, nicht gescannt); CONVENTIONS 4.10 nennt Zeile 11 nicht mehr als Ausnahme.
-- [ ] `experimental.ws_hold` hat weiter keinen Leser (HUM-101, `pending`).
+- [ ] `experimental.ws_hold` hat weiter keinen Leser (HUM-101, `pending`). Nachtrag 2026-09-06: HUM-121 hat den Schlüssel entfernt, statt ihm einen Leser zu geben; wer das Halten von Frames baut, bringt ihn mit seinem Leser im selben Commit zurück (`backlog/CONVENTIONS.md` 4.25).
 - [ ] `make check` grün, `proto/descriptor.binpb` im selben Commit, `tools/verify-commit.sh` grün.
 
 ### Fallstricke

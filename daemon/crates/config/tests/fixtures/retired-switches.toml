@@ -1,0 +1,15 @@
+# Die beiden Schalter, die HUM-121 entfernt hat: `ui.sound` hat nie einen Ton
+# geschaltet, `experimental.ws_hold` nie ein Upgrade angehalten. Beide waren
+# ein Wahrheitswert, keine Tabelle; wer sie noch stehen hat, bekommt je eine
+# Warnung und einen startenden Daemon (CONVENTIONS 4.25).
+#
+# Die Nachbarn in denselben Gruppen stehen mit Absicht daneben: Sie belegen,
+# dass zwei entfallene Schlüssel in einer Datei nicht dazu führen, dass die
+# übrigen Zeilen liegen bleiben.
+[experimental]
+h2_upstream = true
+ws_hold = true
+
+[ui]
+language = "de"
+sound = true

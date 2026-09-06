@@ -4018,11 +4018,52 @@ Jede Entscheidung wird in `backlog/CONVENTIONS.md` 4.25 fortgeschrieben, damit e
 - Für jeden eingebauten Schlüssel: ein Test, der die Wirkung zeigt, nicht nur das Lesen.
 
 ### Akzeptanzkriterien
-- [ ] Für beide Schlüssel steht die Entscheidung samt Grund in `backlog/CONVENTIONS.md` 4.25.
-- [ ] Das Register kennt keinen Eintrag `pending(HUM-121)` mehr.
-- [ ] `docs/CONFIG.md` und die Schema-Fixture kommen aus den Generatorläufen.
-- [ ] `make check`, clippy mit `-D warnings` und `cargo fmt --all -- --check` grün.
+- [x] Für beide Schlüssel steht die Entscheidung samt Grund in `backlog/CONVENTIONS.md` 4.25 (Nachtrag HUM-121, 2026-09-06: je ein Absatz, dazu der Satz, warum die Spezifikation an einer Stelle nicht befolgt wird).
+- [x] Das Register kennt keinen Eintrag `pending(HUM-121)` mehr: `grep -c "pending(HUM-121)" daemon/crates/config/tests/config_readers.rs docs/CONFIG.md` zählt 0 und 0, `the_keys_without_a_reader_are_the_known_ones` listet noch fünf Pfade, keiner davon aus diesem Issue.
+- [x] `docs/CONFIG.md` und die Schema-Fixture kommen aus den Generatorläufen (`UPDATE_CONFIG_DOCS=1 UPDATE_SNAPSHOTS=1 cargo test -p humanitl-config`), und der Lauf ohne die Variablen ist danach grün — von Hand geändert wäre er rot.
+- [x] `make check` mit `STRICT=1` grün, also einschließlich clippy mit `-D warnings` und `cargo fmt --all -- --check` (2026-09-06).
 
 ### Fallstricke
 - Ein gestrichener Schlüssel ist ein Bruch für bestehende Dateien: aus dem stillen No-Op wird ein harter `CONFIG_002`. Bei `experimental.*` ist das angekündigt, bei `ui.*` nicht — dort gehört die Streichung in die Freigabe-Notizen.
 - `ui.sound` einzubauen heißt, einen Tonausgabepfad in die Oberfläche zu ziehen. Das ist eine Fähigkeit und keine Verdrahtung; wer sie nicht will, streicht den Schlüssel und schreibt den Grund nach `CONVENTIONS.md` 4.25.
+
+### Stand (2026-09-06)
+
+**Beide Schlüssel sind gestrichen, keiner eingebaut.** Die Begründungen stehen
+in `backlog/CONVENTIONS.md` 4.25 und werden hier nicht wiederholt; was hier
+steht, sind die drei Stellen, an denen die Umsetzung von der Spezifikation
+abweicht.
+
+**Der Befund ist `CONFIG_005` als Warnung, nicht der harte `CONFIG_002` aus dem
+Text oben.** Der Text dieses Issues ist älter als HUM-088: Seit dessen Nachtrag
+gilt für jeden Schlüssel, den wir selbst streichen, die Milde aus CONVENTIONS
+4.25 — Eintrag in `alias::RETIRED`, Warnung mit Issue und Grund, der Daemon
+startet. Ein harter Fehler wäre die Strafe für eine Entscheidung, die wir
+getroffen haben, nicht der Nutzer. Die Regel gewinnt gegen den Issue-Text.
+
+**`experimental.ws_hold` wurde vor HUM-110 entschieden, nicht danach.**
+`BACKLOG.md` ordnet dieses Issue hinter HUM-110 ein, das den Upgrade-Pfad erst
+baut; HUM-110 steht offen in `backlog/sprint-1.md` und gehört nicht in diesen
+Sprint. Zu warten hieße, einen Schlüssel im Schema zu lassen, der auf einem
+nicht vorhandenen Weg eine Wirkung zusagt — genau der Zustand, den das Register
+melden soll. Kommt der Weg, kommt der Schalter mit seinem Leser im selben
+Commit zurück; `docs/adr/0007-rule-model.md` sagt das an der Stelle, an der er
+bisher als offene Tür stand.
+
+**Zwei Tests mussten ihren Nachbarn wechseln, und das ist keine Kosmetik.**
+`the_retired_port_map_warns_and_stays_one_entry` belegte mit `experimental.ws_hold`,
+dass das Laden über einen entfallenen Schlüssel **hinweggeht** statt abzubrechen
+(`continue` statt `break`). Nach der Streichung ist `experimental.h2_upstream`
+der einzige Schlüssel der Gruppe, also übernimmt `findings.enabled` die Rolle
+des Nachbarn dahinter — die Zusicherung bleibt dieselbe, sie greift jetzt über
+eine Gruppengrenze hinweg. Ebenso in `the_whole_ladder_in_one_go`, wo
+`ui.notifications` die Sprosse „Umgebung" von `ui.sound` erbt. Neu dazu kam
+`the_two_retired_switches_warn_each_and_let_the_daemon_start`: eine Datei mit
+beiden Schlüsseln bekommt **zwei** Warnungen, nicht eine für alle zusammen.
+
+**Die Oberfläche trug den Schlüssel mit.** `attention.dart` nannte `ui.sound`
+im Doku-Kommentar des Melders, und `attention_test.dart` prüfte die Zeile in
+`docs/CONFIG.md` gegen die Spalte „Wirkung". Beide sind nachgezogen; der Test
+verlangt jetzt, dass `ui.sound` **nicht** mehr als Einstellung in der Tabelle
+steht und sehr wohl in der Tabelle der entfallenen Schlüssel — sonst wäre die
+Streichung durch eine Rückkehr ohne Leser still rückgängig zu machen.

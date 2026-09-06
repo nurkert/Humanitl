@@ -225,7 +225,7 @@ pub struct Config { pub llm: LlmConfig, pub hold: HoldConfig, pub sandbox: Sandb
 
 Jedes Feld hat `#[schemars(description = "…")]` und `#[humanitl(tier = "basic|advanced|expert")]` (eigenes Attribut-Makro oder `#[schemars(extend("x-tier" = "…"))]`). Präzedenz, niedrig nach hoch: eingebaute Defaults, `config.toml` global, Profil global, Profil Projekt, Env `HUMANITL_*` (Pfad mit `__`, z. B. `HUMANITL_HOLD__TIMEOUT_SECS`), CLI-Flag. Jede Auflösung merkt sich die Herkunft (`Origin`) pro Feld für die UI.
 
-Config-Schlüssel (Auszug, verbindlich): `llm.endpoint` (URL), `llm.passthrough_paths` (Default `["/v1/", "/api/"]`), `hold.timeout_secs`, `hold.body_cap_bytes`, `hold.ask_mode` (`ui|terminal|none`), `sandbox.profile`, `sandbox.work_dir`, `sandbox.work_mode` (`ro|rw`), `agent.adapter` (`opencode`), `agent.command` (Override), `recorder.inline_max_bytes`, `recorder.retention_days`, `preview.cap_bytes`, `ipc.event_buffer`, `ui.language` (`en|de`), `ui.theme` (`dark|light|system`), `ui.notifications`, `ui.sound`, `experimental.h2_upstream`, `experimental.ws_hold`.
+Config-Schlüssel (Auszug, verbindlich): `llm.endpoint` (URL), `llm.passthrough_paths` (Default `["/v1/", "/api/"]`), `hold.timeout_secs`, `hold.body_cap_bytes`, `hold.ask_mode` (`ui|terminal|none`), `sandbox.profile`, `sandbox.work_dir`, `sandbox.work_mode` (`ro|rw`), `agent.adapter` (`opencode`), `agent.command` (Override), `recorder.inline_max_bytes`, `recorder.retention_days`, `preview.cap_bytes`, `ipc.event_buffer`, `ui.language` (`en|de`), `ui.theme` (`dark|light|system`), `ui.notifications`, `experimental.h2_upstream`. (`ui.sound` und `experimental.ws_hold` sind mit HUM-121 entfallen, siehe 4.25.)
 
 ### 3.8 CLI (`humanitl`)
 
@@ -2277,6 +2277,44 @@ Uhr je Spanne begrenzt die Dauer, nicht die Menge, und ohne Obergrenze bindet de
 dieselben Ressourcen, nur kürzer und dafür öfter. Was HUM-120 sonst entschieden hat — kein neuer
 `BlockReason`, zusammengefasste Befunde, und warum `start_paused` für diese Tests untauglich ist —
 steht im Stand-Abschnitt unter `## HUM-120` in `backlog/sprint-3.md`.
+
+**Nachtrag HUM-121, 2026-09-06: `ui.sound` und `experimental.ws_hold` sind
+entfernt.** Beide Schlüssel standen im Schema, wurden beim Laden geprüft und
+hatten außerhalb von `#[cfg(test)]` keinen Leser; HUM-101 hat sie im Register
+auf `pending(HUM-121)` gesetzt, dieses Issue entscheidet sie. Beide fallen
+weg, nach dem Muster von HUM-088: Ein Schalter, der nie einen Weg geschaltet
+hat, bekommt nicht nachträglich einen.
+
+- **`ui.sound`.** Es gab keinen Ton, den er hätte abschalten können. Ihn
+  einzubauen hieße, einen Tonausgabepfad in die Oberfläche zu ziehen — eine
+  Fähigkeit mit eigener Plattformnaht, kein Verdrahten eines vorhandenen
+  Weges. Wer sie will, legt sie als eigenes Issue an und bringt den Schlüssel
+  im selben Commit wie den Leser zurück; der Ort dafür ist der Melder aus
+  HUM-069, an dem auch `ui.notifications` hängt.
+- **`experimental.ws_hold`.** Ein WebSocket-Upgrade entscheidet heute allein
+  die Regel; der Proxy hat den Schalter nie gelesen. `BACKLOG.md` ordnet dieses
+  Issue hinter HUM-110 ein, das den Upgrade-Pfad überhaupt erst baut — HUM-110
+  steht offen in `backlog/sprint-1.md` und gehört nicht in diesen Sprint. Bis
+  dahin zu warten hieße, einen Schlüssel im Schema zu lassen, der eine Wirkung
+  auf einem Weg zusagt, den es nicht gibt; das ist genau der Zustand, den das
+  Register melden soll. Er ist deshalb jetzt entfallen. Baut HUM-110 den Weg
+  und will ihn anhalten können, kommt der Schalter mit seinem Leser im selben
+  Commit zurück — ein Eintrag in `alias::RETIRED` ist eine Feststellung, keine
+  Sperre. `docs/adr/0007-rule-model.md` nennt die Streichung an der Stelle, an
+  der es den Schalter bisher als offene Tür geführt hat.
+
+Beide waren ein Wahrheitswert, also `RetiredShape::Scalar`: Was in einer alten
+Datei **unter** ihnen steht, hat es nie gegeben und scheitert weiter hart. Wer
+sie noch gesetzt hat, bekommt je einen `CONFIG_005` mit `Severity::Warning`,
+und der Daemon startet — die Milde dieses Abschnitts gilt auch hier. Die
+Spezifikation des Issues verlangte an dieser Stelle einen harten `CONFIG_002`
+mit dem Schlüsselnamen; das ist der Stand vor HUM-088 und widerspricht der
+Regel oben. Sie gewinnt: Ein Schlüssel, den **wir** streichen, warnt.
+
+Für `ui.sound` ist die Streichung ein Bruch ohne Ankündigung — `ui.*` trägt
+kein `experimental` im Namen. Eine Datei mit Freigabe-Notizen gibt es noch
+nicht; bis sie entsteht, ist dieser Absatz der Ort, an dem der Bruch steht,
+und die Warnung beim Laden nennt Issue und Grund im Klartext.
 
 ### 4.26 Aus der Umsetzung von `humanitl run` (HUM-067, 2026-09-05)
 
