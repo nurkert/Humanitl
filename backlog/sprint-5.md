@@ -2358,3 +2358,72 @@ Purge-Lauf neu erhoben.
 - Ein Blob hängt an mehreren Zeilen (Deduplizierung über sha256). Er fällt erst,
   wenn die letzte Zeile fällt — sonst zeigt eine Aufzeichnung auf eine Datei,
   die es nicht mehr gibt.
+
+---
+
+## HUM-132 · Der Entwicklungsbaum schreibt die Platte voll
+Sprint: 5 · Größe: S · Abhängigkeiten: — · Blockiert: —
+
+### Kontext
+Am 2026-09-06 lag `daemon/target` bei 103 GiB: 89 GiB `debug/deps`, 12 GiB
+`debug/incremental`, 2 GiB `debug/build`. Ein `cargo clean` gab 107,9 GiB frei
+(83 159 Dateien). Das ist kein Ausreißer, sondern der Normalfall dieses
+Repositories: Jede Änderung an einer Abhängigkeit oder an einem Feature-Satz
+legt einen neuen Satz Artefakte an, und Cargo räumt alte nie von selbst weg.
+
+Zwei Zahlen dazu, am selben Tag gemessen, beide nach `cargo clean` und mit
+`cargo build --workspace --all-targets` auf demselben Stand:
+
+- mit `debug = 2`, der Vorgabe des Dev-Profils: **13 GiB**
+- mit `debug = "line-tables-only"`: **6,1 GiB**
+
+Also 53 Prozent weniger für einen sauberen Baum, und derselbe Anteil für jeden
+Satz, der später danebenliegt. Ein Backtrace behält dabei Datei und Zeile; was
+fehlt, sind Variablenwerte im Debugger.
+
+### Ziel
+Ein Entwicklungsbaum dieses Repositories wächst langsamer, und wer ihn
+aufräumen will, findet den Weg dokumentiert statt in einer Sitzung.
+
+### Nicht-Ziel
+Keine Änderung am Release-Profil und keine am `shim`-Profil: Der Shim wird mit
+`strip = "symbols"` gebaut und ist davon nicht berührt. Kein automatisches
+Löschen im Hintergrund — was ein Werkzeug ungefragt löscht, fehlt genau dann,
+wenn jemand es gerade braucht.
+
+### Betroffene Pfade
+- `daemon/Cargo.toml` (`[profile.dev]`)
+- `CONTRIBUTING.md` (der Absatz über den Platz, den ein Baum braucht)
+
+### Spezifikation
+`[profile.dev] debug = "line-tables-only"` im Workspace. Die Begründung samt
+den beiden gemessenen Zahlen steht als Kommentar darüber, damit niemand sie
+später als Schätzung liest.
+
+`CONTRIBUTING.md` nennt die Größenordnung eines Baums (rund 6 GiB frisch, mehr
+mit jedem Wechsel von Abhängigkeiten) und den Befehl, der ihn zurücksetzt.
+
+### Tests
+Eine Messung statt eines Tests: `cargo clean` gefolgt von
+`cargo build --workspace --all-targets`, danach `du -sh daemon/target`, mit und
+ohne den Schlüssel. Beide Zahlen in den Commit-Body.
+
+### Akzeptanzkriterien
+- [x] `[profile.dev] debug = "line-tables-only"` steht im Workspace, mit den
+      beiden gemessenen Zahlen als Begründung darüber (`daemon/Cargo.toml`).
+- [x] `make check` mit `STRICT=1` grün (2026-09-06), und ein Backtrace aus einem
+      fehlschlagenden Test zeigt weiterhin Datei und Zeile. Gemessen mit einer
+      Probe: eine Zusicherung in `a_resize_reaches_the_agent` auf eine Größe
+      gestellt, die nie kommt, ergibt
+      `panicked at crates/ipc/tests/terminal.rs:704:9` und mit
+      `RUST_BACKTRACE=1` den Rahmen `at ./tests/terminal.rs:704:9`.
+- [x] `CONTRIBUTING.md` nennt die Größenordnung und den Aufräumbefehl
+      (Abschnitt „Disk").
+- [x] Der Commit-Body trägt beide Messungen.
+
+### Fallstricke
+- `line-tables-only` ist kein `debug = false`: Wer im Debugger Variablen
+  ansehen will, baut mit `RUSTFLAGS="-C debuginfo=2"` oder setzt den Schlüssel
+  lokal zurück. Das gehört in den Kommentar.
+- Der Wert gilt für `profile.dev` und damit auch für `cargo test`; die
+  Zeilennummern in Panics kommen daher, nicht aus voller Debug-Information.

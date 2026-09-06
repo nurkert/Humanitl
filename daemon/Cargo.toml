@@ -98,6 +98,20 @@ module_name_repetitions = "allow"
 # the design decision into every signature. Allowed once, here, on purpose.
 result_large_err = "allow"
 
+# Dev-Profil: Zeilentabellen statt voller Debug-Information (HUM-132).
+#
+# Gemessen am 2026-09-06 auf diesem Baum, beide Male nach `cargo clean` und mit
+# `cargo build --workspace --all-targets`: mit `debug = 2`, der Vorgabe des
+# Dev-Profils, wiegt `daemon/target` 13 GiB, mit `line-tables-only` 6,1 GiB.
+# Das ist die Haelfte fuer jeden Satz Artefakte, und Cargo raeumt alte Saetze
+# nie von selbst weg -- am selben Tag lag der Baum bei 103 GiB.
+#
+# Ein Backtrace behaelt damit Datei und Zeile, und die Panics der Tests bleiben
+# lesbar. Was fehlt, sind Variablenwerte im Debugger: Wer sie braucht, baut mit
+# `RUSTFLAGS="-C debuginfo=2"` oder setzt den Schluessel lokal zurueck.
+[profile.dev]
+debug = "line-tables-only"
+
 # Das Profil, mit dem `humanitl-shim` ausgeliefert wird (HUM-012).
 #
 # Der Shim ist das einzige Binary, das in die Sandbox eingehaengt wird, und die

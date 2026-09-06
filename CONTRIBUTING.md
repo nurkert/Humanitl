@@ -23,6 +23,25 @@ cannot resolve the generated code. Add `~/.pub-cache/bin` to PATH.
 
 Optional: `cargo install cargo-deny` for `make rust-deny`.
 
+## Disk
+
+A fresh build tree of the daemon weighs about 6 GiB after
+`cargo build --workspace --all-targets`, and it grows with every change of a
+dependency or a feature set: Cargo writes a new set of artefacts and never
+removes an old one. On 2026-09-06 the tree of this repository stood at 103 GiB
+after roughly a week of work. The dev profile therefore carries
+`debug = "line-tables-only"` (`daemon/Cargo.toml`, measured there), which halves
+each set while keeping file and line in every backtrace.
+
+When the tree has grown past what the machine can spare, reset it:
+
+```sh
+cargo clean --manifest-path daemon/Cargo.toml
+```
+
+The Flutter side is small by comparison (`app/build`, a few hundred MiB);
+`flutter clean` resets it.
+
 ## Working on an issue
 
 One issue, one branch, named `hum-042-short-title`. The specification of every
