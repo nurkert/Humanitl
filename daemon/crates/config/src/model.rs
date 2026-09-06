@@ -487,11 +487,4 @@ pub struct Experimental {
         "x-pending-issue" = "HUM-121"
     ))]
     pub ws_hold: bool,
-    /// Lenkt einen Zielport auf einen anderen um, Schlüssel und Wert als Portnummer. Nur für Tests.
-    #[schemars(extend(
-        "x-tier" = "expert",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-088"
-    ))]
-    pub upstream_port_map: BTreeMap<String, u16>,
 }

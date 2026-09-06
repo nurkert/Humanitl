@@ -1,0 +1,18 @@
+# Der zweite entfallene Schlüssel: `experimental.upstream_port_map` sollte einen
+# Zielport auf einen anderen umlenken, hat das nie getan und ist mit HUM-088
+# entfernt. Wer ihn noch stehen hat, soll es erfahren und nicht raten.
+#
+# Sein Wert ist eine Tabelle, und das ist der Unterschied zu
+# `limits.idle_timeout_secs`: Ohne den Riegel in `flatten` zerlegt das Laden ihn
+# in `experimental.upstream_port_map.443`, findet diesen Pfad nicht in
+# `alias::RETIRED` — verglichen wird der ganze Pfad — und macht daraus den
+# harten `CONFIG_002`, den `backlog/CONVENTIONS.md` 4.25 gerade ausschließt.
+#
+# Die beiden Nachbarn stehen mit Absicht daneben, einer davor und einer danach
+# in der Sortierung der Schlüssel: Sie belegen, dass das Laden über den
+# entfallenen Schlüssel hinweggeht und die übrigen Zeilen der Ebene weiterhin
+# anwendet.
+[experimental]
+h2_upstream = true
+upstream_port_map = { "443" = 8443, "80" = 8080 }
+ws_hold = true
