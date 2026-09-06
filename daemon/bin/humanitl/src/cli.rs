@@ -46,9 +46,6 @@ Exit codes:
   10  rules test: the request would be blocked
   11  rules test: the request would be held for a decision
 
-10 and 11 do not occur yet: the contract has no operation that evaluates one
-URL against the rule set, and humanitl rules test says so instead of guessing.
-
 A failing command writes a diagnostic block to stderr, or with --json one line
 of JSON to stdout.";
 
@@ -185,6 +182,20 @@ pub enum LlmCmd {
         /// A port to ask, repeatable; without it 11434, 1234, 8000 and 8080.
         #[arg(long, value_name = "PORT")]
         port: Vec<u16>,
+    },
+
+    /// Ask one endpoint what it is: which API answered, its models, how long.
+    ///
+    /// Two GET requests in the daemon, /api/tags then /v1/models, no
+    /// credentials and no redirects. Nothing goes through the sandbox.
+    Test {
+        /// Die Adresse, wie sie in `llm.endpoint` stünde.
+        #[arg(value_name = "URL")]
+        url: String,
+
+        /// Frist für die ganze Probe; ohne sie die Vorgabe des Daemons.
+        #[arg(long = "timeout-ms", value_name = "N")]
+        timeout_ms: Option<u32>,
     },
 }
 
@@ -441,7 +452,7 @@ pub enum RulesCmd {
     /// Read rules.yaml again and report what changed.
     Reload,
 
-    /// Evaluate one URL against the rule set (needs an RPC that is not there yet).
+    /// Evaluate one URL against the rule set; exit 10 block, 11 ask.
     Test {
         /// Die vollständige URL, zum Beispiel `https://api.github.com/repos/x`.
         #[arg(value_name = "URL")]

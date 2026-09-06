@@ -52,9 +52,9 @@ erscheint im XML als `<error>`, eine durchgekommene Probe als `<failure>`.
 | `esc-1-sockets.sh` | ESC-1: Socket-Familien und -Typen, Interfaces, Routing, Capabilities, seccomp |
 | `esc-2-mounts.sh` | ESC-2: Mount-Oberfläche, genau ein Socket, eigene Namespaces, Maskierungen |
 | `esc-3-egress.sh` | ESC-3: kein Egress ohne Proxy, über den Proxy landet alles in der Warteschlange |
-| `esc-4-rules.sh` | ESC-4: die Regel-Tabelle, gegen die Regel-Engine aus HUM-022 und, für den Body-Cap, gegen den laufenden Proxy |
+| `esc-4-rules.sh` | ESC-4: die Regel-Tabelle, gegen die Regel-Engine aus HUM-022, für den Body-Cap gegen den laufenden Proxy und seit HUM-114 fünfzehnmal über `humanitl rules test` gegen den Daemon des Laufs; dazu `llm_cli_unreachable`, die einzige Probe der Sammlung für `humanitl llm test` |
 | `body_cap.py` | die zwei Anfragen von `rule_body_over_cap`: eine über dem Cap, eine genau auf dem Cap, über den Proxy-Socket |
-| `esc-5-filesystem.sh` | ESC-5: Platzhalter, alle Fälle `skipped` (HUM-043/050/029) |
+| `esc-5-filesystem.sh` | ESC-5: fünf Fälle grün gegen die gleichnamigen Integrationstests (HUM-042, HUM-043), zwei `skipped` bis das Audit-Log existiert (HUM-029) |
 | `humanitl sandbox run --profile test --tests-dir tests/escape -- …` | der Start jeder Suite: dieselbe Kommandozeile, die der Nutzer aufruft (CONVENTIONS.md 3.11) |
 
 ESC-1 bis ESC-3 laufen **in** der Sandbox, ESC-4 und ESC-5 auf dem Host: die
@@ -63,9 +63,8 @@ braucht ohnehin keine Isolation, und ein Fall, der vom Start der Sandbox
 abhängt, verschwindet hinter dem ersten Startfehler. Seit HUM-022 ruft ESC-4 zu
 jeder Probe den gleichnamigen Test aus
 `daemon/crates/rules/tests/escape_table.rs` auf, der `tests/fixtures/esc4.yaml`
-auswertet; die Crate ist rein, also gibt es bis `humanitl rules test URL`
-(HUM-065) kein Werkzeug, das eine Regel-Datei von der Kommandozeile aus
-befragt. Ohne `cargo` auf der Maschine sind die Fälle ein `skip`, nie ein Grün. Der
+auswertet; die Crate ist rein, also befragt kein Werkzeug die Regel-Datei
+unmittelbar. Ohne `cargo` auf der Maschine sind die Fälle ein `skip`, nie ein Grün. Der
 achte Fall, `rule_body_over_cap`, hat zwei Hälften: die Engine erlaubt den Host
 per Regel, und der laufende Proxy antwortet auf einen Body über
 `limits.hold_body_cap_bytes` trotzdem mit `413` und `reason: body_cap`, während
@@ -184,8 +183,11 @@ der Socket dort liegt, wo die Mount-Politik ihn erwartet. `start_daemon` in
 
 ## Erwartetes Ergebnis in Sprint 0
 
-Stand nach HUM-022: 97 Fälle, 90 grün, 0 rot, 7 übersprungen (nach HUM-064
-waren es 82 grün und 15 übersprungen; ESC-4 hat alle acht Fälle eingelöst). Die Tabelle
+Stand nach HUM-114: 121 Fälle, 117 grün, 0 rot, 4 übersprungen. Unmittelbar
+davor waren es 105/101/0/4, gemessen am Lauf desselben Tages; HUM-114 bringt
+die sechzehn Fälle `rules_cli_01` bis `rules_cli_15` und `llm_cli_unreachable`.
+Die Zahl 97/90/0/7 stand hier bis dahin und war der Stand nach HUM-022, also
+vor HUM-042 und HUM-043. Die Tabelle
 unten ist der Stand aus Sprint 0 und nennt zu jeder Probe das Issue, das sie
 grün gemacht hat; rot ist keine mehr. Übersprungen bleibt, was auf ein Issue
 späterer Sprints wartet, darunter `dns_not_before_decision`: dass die Sandbox

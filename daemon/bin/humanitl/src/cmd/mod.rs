@@ -51,6 +51,20 @@ pub const EXIT_CHECK: u8 = 3;
 /// Eine Sicherheitsverletzung, zum Beispiel ein Authority-Mismatch.
 pub const EXIT_SECURITY: u8 = 4;
 
+/// `rules test`: Die Anfrage würde blockiert (CONVENTIONS 3.8).
+///
+/// Ein Verdikt ist kein Befund. Diese Zahl kommt deshalb nie aus
+/// [`exit_code`], sondern als `Ok(EXIT_BLOCK)` aus dem Kommando selbst; sonst
+/// wäre ein blockiertes Ziel ein Fehler des Aufrufers.
+pub const EXIT_BLOCK: u8 = 10;
+
+/// `rules test`: Die Anfrage würde gehalten und einem Menschen vorgelegt.
+///
+/// Wie [`EXIT_BLOCK`] ein Ergebnis und kein Fehlschlag. `redact` endet
+/// ebenfalls hier: Der Proxy hält eine solche Anfrage an
+/// (`daemon/crates/proxy/src/pipeline.rs`).
+pub const EXIT_ASK: u8 = 11;
+
 /// Ein Fehlschlag: der Befund und die Zahl, mit der der Prozess endet.
 #[derive(Debug, Clone)]
 pub struct Failure {
