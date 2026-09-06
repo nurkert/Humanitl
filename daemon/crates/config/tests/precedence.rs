@@ -328,14 +328,24 @@ const GROUP_OVERRIDES: &[GroupOverride] = &[
         after_higher: "System",
     },
     GroupOverride {
-        // Eine freie Tabelle: die obere Ebene ersetzt sie ganz.
+        // Die Gruppe braucht eine Zeile, sonst hat sie keinen Präzedenz-Test
+        // (`the_override_table_names_every_group_of_the_schema`). Bis HUM-088
+        // stand hier `experimental.upstream_port_map` als freie Tabelle; die
+        // Regel dahinter — eine höhere Ebene ersetzt eine freie Tabelle ganz —
+        // prüft `a_free_table_is_replaced_as_a_whole` an `resolver.overrides`
+        // und hing nie allein an dieser Zeile.
+        //
+        // `lower` ist mit Absicht der Wert, der nicht der Vorgabewert ist: Ein
+        // Laden, das die globale Datei übergeht, fiele sonst auf denselben Wert
+        // zurück und bliebe unentdeckt. Für die obere Ebene übernimmt das die
+        // Prüfung der Herkunft.
         group: "experimental",
-        path: "experimental.upstream_port_map",
-        lower: "{ \"443\" = 8443 }",
-        higher: "{ \"80\" = 8080 }",
-        read: |config| format!("{:?}", config.experimental.upstream_port_map),
-        after_lower: "{\"443\": 8443}",
-        after_higher: "{\"80\": 8080}",
+        path: "experimental.h2_upstream",
+        lower: "true",
+        higher: "false",
+        read: |config| config.experimental.h2_upstream.to_string(),
+        after_lower: "true",
+        after_higher: "false",
     },
 ];
 
@@ -601,6 +611,333 @@ fn a_retired_key_warns_and_lets_the_daemon_start() {
         "why must name the issue that removed it: {}",
         diagnostic.why
     );
+}
+
+#[test]
+fn the_retired_port_map_warns_and_stays_one_entry() {
+    // HUM-088 hat `experimental.upstream_port_map` entfernt: Der Proxy hat nie
+    // einen Port umgelenkt, und kein ausgelieferter Test braucht die Umlenkung.
+    // Eine Datei, die den Schlüssel noch setzt, war gestern gültig; sie bekommt
+    // deshalb dieselbe Milde wie jeder entfallene Pfad (CONVENTIONS 4.25).
+    //
+    // Der Fall steht neben `a_retired_key_warns_and_lets_the_daemon_start`,
+    // weil der Wert hier eine **Tabelle** ist. Sobald der Schlüssel aus dem
+    // Schema fällt, ist er auch keine freie Tabelle mehr, und ohne den Riegel
+    // in `flatten` zerlegt das Laden ihn in
+    // `experimental.upstream_port_map.443`. Diesen Pfad kennt `alias::retired`
+    // nicht — verglichen wird der ganze Pfad, nicht sein Anfang —, und aus der
+    // zugesagten Warnung würde der harte `CONFIG_002`, der den Daemon nicht
+    // mehr starten ließe. `expect_ok` unten ist genau diese Prüfung.
+    let sources = Sources {
+        global_toml: Some(fixture("retired-port-map.toml")),
+        ..Sources::empty()
+    };
+    let resolved = expect_ok(&sources);
+
+    // Die Zeile davor und die Zeile danach erreichen die Konfiguration; der
+    // entfallene Schlüssel selbst erreicht sie nicht. Ein `break` an der Stelle
+    // des `continue` würde `ws_hold` still verschlucken.
+    assert!(
+        resolved.config.experimental.h2_upstream,
+        "the key before the retired one must still be applied"
+    );
+    assert!(
+        resolved.config.experimental.ws_hold,
+        "the key after the retired one must still be applied; a `break` instead of the \
+         `continue` would swallow it in silence"
+    );
+    assert_eq!(
+        Config {
+            experimental: humanitl_config::Experimental::default(),
+            ..resolved.config.clone()
+        },
+        Config::default(),
+        "nothing outside [experimental] may change"
+    );
+
+    let warnings: Vec<&humanitl_core::Diagnostic> = resolved
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code.as_str() == "CONFIG_005")
+        .collect();
+    assert_eq!(
+        warnings.len(),
+        1,
+        "exactly one warning, for the one retired key: {:?}",
+        resolved.diagnostics
+    );
+    let diagnostic = warnings[0];
+    assert_eq!(diagnostic.severity, Severity::Warning);
+    assert!(
+        diagnostic.why.contains("experimental.upstream_port_map"),
+        "why must name the path: {}",
+        diagnostic.why
+    );
+    // Der Pfad steht ganz da, nicht mit einer Portnummer daran: Genau daran
+    // ließe sich ablesen, dass das Laden die Tabelle doch zerlegt hat.
+    assert!(
+        !diagnostic.why.contains("upstream_port_map.443"),
+        "the table must stay one entry, not become a level: {}",
+        diagnostic.why
+    );
+    assert!(
+        diagnostic.why.contains("HUM-088"),
+        "why must name the issue that removed it: {}",
+        diagnostic.why
+    );
+    assert!(
+        diagnostic.fix.is_none(),
+        "a retired key has no successor a button could point at (CONVENTIONS 4.25)"
+    );
+    assert!(
+        resolved
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code.as_str() != "CONFIG_002"),
+        "a key we removed ourselves is no typo: {:?}",
+        resolved.diagnostics
+    );
+}
+
+#[test]
+fn a_project_that_brings_the_retired_port_map_gets_nothing() {
+    // Der Schlüssel stand im Tier `expert` und war für das Projekt-Profil
+    // gesperrt: Ein geklontes Repository sollte nie bestimmen können, wohin
+    // der Proxy seine eigene Verbindung öffnet. Nach der Entfernung gibt es
+    // nichts mehr zu sperren, und der Weg dorthin ist ein anderer — der
+    // entfallene Pfad wird übergangen, bevor die Sperre überhaupt geprüft
+    // wird. Das Ergebnis für ein Projekt ist dasselbe und darauf kommt es an:
+    // Der Wert erreicht die Konfiguration nicht, und der Befund nennt die
+    // Ebene, aus der er kam.
+    //
+    // Der Unterschied ist der Befund selbst. Vor HUM-088 war das ein harter
+    // `CONFIG_003`; jetzt ist es eine Warnung, und der Daemon startet. Das ist
+    // die Milde für entfallene Schlüssel aus CONVENTIONS 4.25 und kein Loch:
+    // Ein Wert, der nirgends ankommt, verschiebt keine Vertrauensgrenze.
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let profile = dir.path().join("profile.toml");
+    std::fs::write(
+        &profile,
+        "[config.experimental]\nupstream_port_map = { \"443\" = 8443 }\n",
+    )
+    .expect("write the project profile");
+    let sources = Sources {
+        profile_project: Some(profile),
+        ..Sources::empty()
+    };
+    let resolved = expect_ok(&sources);
+
+    assert_eq!(
+        resolved.config,
+        Config::default(),
+        "a project profile must not change a single value through a retired key"
+    );
+    let diagnostic = resolved
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code.as_str() == "CONFIG_005")
+        .unwrap_or_else(|| panic!("no CONFIG_005 among {:?}", resolved.diagnostics));
+    assert_eq!(diagnostic.severity, Severity::Warning);
+    assert!(
+        diagnostic.why.contains("experimental.upstream_port_map"),
+        "why must name the path: {}",
+        diagnostic.why
+    );
+    assert!(
+        diagnostic.why.contains("project profile"),
+        "why must name the layer the value came from: {}",
+        diagnostic.why
+    );
+}
+
+#[test]
+fn a_table_under_a_retired_scalar_still_fails_hard() {
+    // `limits.idle_timeout_secs` war eine **Zahl**. `[limits.idle_timeout_secs]`
+    // mit Feldern darunter ist deshalb keine alte, gültige Datei, sondern eine
+    // Struktur, die das Schema nie kannte — und die bleibt der harte
+    // `CONFIG_002`. Die Milde gilt dem entfallenen Wert, nicht einer Ebene, die
+    // es unter ihm nie gab.
+    //
+    // Ohne die Formangabe in `alias::RETIRED` sähe das Laden nur den Pfad,
+    // nähme die ganze Untertabelle mit und täte sie mit einer Warnung ab: Ein
+    // beliebiger Tippfehler unter dem entfallenen Namen wäre damit
+    // stillschweigend erlaubt.
+    for text in [
+        "[limits.idle_timeout_secs]\nsecs = 90\n",
+        "[limits.idle_timeout_secs.deeper]\nsecs = 90\n",
+    ] {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let file = dir.path().join("config.toml");
+        std::fs::write(&file, text).expect("write the file");
+        let sources = Sources {
+            global_toml: Some(file),
+            ..Sources::empty()
+        };
+        let diagnostic = expect_err(&sources);
+        assert_eq!(diagnostic.code.as_str(), "CONFIG_002", "{text:?}");
+        assert_eq!(diagnostic.severity, Severity::Error, "{text:?}");
+        assert!(
+            diagnostic.why.contains("limits.idle_timeout_secs."),
+            "why must name the path that does not exist, not the retired one alone: {}",
+            diagnostic.why
+        );
+    }
+}
+
+#[test]
+fn a_table_under_the_retired_port_map_is_swallowed_with_it() {
+    // Die andere Hälfte derselben Regel. `experimental.upstream_port_map` war
+    // eine **freie Tabelle**: Ihre Schlüssel waren Portnummern des Nutzers, und
+    // `upstream_port_map.extra` ist ein Eintrag dieser Tabelle, kein eigener
+    // Pfad des Schemas. Er wird mit ihr verworfen, in einer Warnung, und nicht
+    // einzeln als unbekannter Schlüssel abgelehnt.
+    //
+    // Beide Schreibweisen derselben Sache stehen hier: die eingebettete
+    // Tabelle, wie `docs/CONFIG.md` sie zeigte, und die eigene Überschrift.
+    for text in [
+        "[experimental]\nupstream_port_map = { \"443\" = 8443, \"extra\" = 1 }\n",
+        "[experimental.upstream_port_map]\n443 = 8443\n",
+        "[experimental.upstream_port_map.extra]\n443 = 8443\n",
+    ] {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let file = dir.path().join("config.toml");
+        std::fs::write(&file, text).expect("write the file");
+        let sources = Sources {
+            global_toml: Some(file),
+            ..Sources::empty()
+        };
+        let resolved = expect_ok(&sources);
+        assert_eq!(
+            resolved.config,
+            Config::default(),
+            "nothing of the retired table may reach the configuration: {text:?}"
+        );
+        let warnings: Vec<&humanitl_core::Diagnostic> = resolved
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code.as_str() == "CONFIG_005")
+            .collect();
+        assert_eq!(
+            warnings.len(),
+            1,
+            "one warning for the one retired table, not one per entry in it: {text:?}, \
+             {:?}",
+            resolved.diagnostics
+        );
+        assert!(
+            warnings[0].why.contains("experimental.upstream_port_map"),
+            "{text:?}: {}",
+            warnings[0].why
+        );
+        assert!(
+            !warnings[0].why.contains("upstream_port_map.extra"),
+            "the table stays one entry, its keys are not paths: {text:?}: {}",
+            warnings[0].why
+        );
+    }
+}
+
+#[test]
+fn the_retired_port_map_warns_on_every_layer_it_can_come_from() {
+    // Der Schlüssel kann aus fünf Ebenen kommen, und die Milde gilt jeder. Der
+    // Test steht hier, weil er sonst nur für die globale Datei belegt wäre und
+    // für die übrigen behauptet: Wer die Prüfung an eine Ebene bindet, sieht in
+    // `a_retired_key_warns_and_lets_the_daemon_start` nichts davon.
+    //
+    // Jede Zeile nennt die Ebene so, wie sie im Befund erscheint; damit prüft
+    // der Test zugleich, dass die Warnung sagt, aus welcher Datei der Wert kam.
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let value = "{ \"443\" = 8443 }";
+
+    let global = dir.path().join("config.toml");
+    std::fs::write(
+        &global,
+        format!("[experimental]\nupstream_port_map = {value}\n"),
+    )
+    .expect("write the global file");
+    let profile = dir.path().join("legacy.toml");
+    std::fs::write(
+        &profile,
+        format!("[config.experimental]\nupstream_port_map = {value}\n"),
+    )
+    .expect("write the global profile");
+    let project = dir.path().join("profile.toml");
+    std::fs::write(
+        &project,
+        format!("[config.experimental]\nupstream_port_map = {value}\n"),
+    )
+    .expect("write the project profile");
+
+    let layers: Vec<(&str, Sources)> = vec![
+        (
+            "config.toml",
+            Sources {
+                global_toml: Some(global),
+                ..Sources::empty()
+            },
+        ),
+        (
+            "profile legacy",
+            Sources {
+                profiles: vec![ProfileSource::File(profile)],
+                ..Sources::empty()
+            },
+        ),
+        (
+            "project profile",
+            Sources {
+                profile_project: Some(project),
+                ..Sources::empty()
+            },
+        ),
+        (
+            "env HUMANITL_EXPERIMENTAL__UPSTREAM_PORT_MAP",
+            Sources::empty().with_env(Env::from_pairs([(
+                "HUMANITL_EXPERIMENTAL__UPSTREAM_PORT_MAP",
+                value,
+            )])),
+        ),
+        (
+            "command line",
+            Sources::empty().with_cli([("experimental.upstream_port_map", value)]),
+        ),
+    ];
+
+    for (layer, sources) in layers {
+        let resolved = expect_ok(&sources);
+        assert_eq!(
+            resolved.config,
+            Config::default(),
+            "{layer}: the retired key must not set a single value"
+        );
+        let warnings: Vec<&humanitl_core::Diagnostic> = resolved
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code.as_str() == "CONFIG_005")
+            .collect();
+        assert_eq!(
+            warnings.len(),
+            1,
+            "{layer}: exactly one warning, got {:?}",
+            resolved.diagnostics
+        );
+        assert_eq!(warnings[0].severity, Severity::Warning, "{layer}");
+        assert!(
+            warnings[0].why.contains("experimental.upstream_port_map"),
+            "{layer}: why must name the path: {}",
+            warnings[0].why
+        );
+        assert!(
+            warnings[0].why.contains(layer),
+            "{layer}: why must name the layer the value came from: {}",
+            warnings[0].why
+        );
+        assert!(
+            warnings[0].why.contains("HUM-088"),
+            "{layer}: why must name the issue: {}",
+            warnings[0].why
+        );
+    }
 }
 
 #[test]

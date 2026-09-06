@@ -20,8 +20,7 @@ use humanitl_core::diagnostics::codes::CONFIG_003;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
 use crate::model::{
-    AgentRef, Config, Experimental, FindingsConfig, Limits, LlmConfig, RecorderConfig,
-    ResolverConfig, SandboxRef,
+    AgentRef, Config, FindingsConfig, Limits, LlmConfig, RecorderConfig, ResolverConfig, SandboxRef,
 };
 use crate::schema;
 
@@ -351,20 +350,6 @@ fn agent_is_well_formed(agent: &AgentRef) -> Result<(), Diagnostic> {
     Ok(())
 }
 
-/// Die Versuchsfelder: Portnummern als Schlüssel.
-fn experimental_is_well_formed(experimental: &Experimental) -> Result<(), Diagnostic> {
-    for (from, to) in &experimental.upstream_port_map {
-        if from.parse::<u16>().is_err() {
-            return Err(out_of_range(
-                "experimental.upstream_port_map",
-                &format!("{from:?} = {to}"),
-                "a port number as the key",
-            ));
-        }
-    }
-    Ok(())
-}
-
 impl Config {
     /// Prüft alle Wertebereiche und Beziehungen zwischen Feldern.
     ///
@@ -389,8 +374,7 @@ impl Config {
         llm_is_well_formed(&self.llm)?;
         findings_are_well_formed(&self.findings)?;
         sandbox_is_well_formed(&self.sandbox)?;
-        agent_is_well_formed(&self.agent)?;
-        experimental_is_well_formed(&self.experimental)
+        agent_is_well_formed(&self.agent)
     }
 }
 

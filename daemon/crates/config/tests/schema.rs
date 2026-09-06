@@ -186,7 +186,6 @@ fn every_key_of_the_conventions_is_reachable() {
         "ui.sound",
         "experimental.h2_upstream",
         "experimental.ws_hold",
-        "experimental.upstream_port_map",
     ];
 
     let leaves = schema::leaf_paths();

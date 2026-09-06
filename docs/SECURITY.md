@@ -596,6 +596,30 @@ Nicht dazu gehört der Meta-Endpunkt `http://humanitl.internal/`: Ihn liest der 
 Sandbox, und dessen Vertrauen zum Proxy hängt an der Humanitl-CA und nicht an dieser Wurzel. Er ist
 die falsche Stelle, weil er den falschen Leser hat.
 
+**Und warum es keinen zweiten solchen Hebel gibt (HUM-088).** Neben der Testwurzel stand bis
+zum 2026-09-06 ein zweiter Schlüssel für denselben Zweck im Schema:
+`experimental.upstream_port_map` versprach, einen Zielport des Proxys auf einen anderen
+umzulenken. Er hat es nie getan — beschrieben, geprüft, von niemandem gelesen. Er ist entfernt
+und nicht nachgerüstet worden, und der Unterschied zu `resolver.test_ca` ist der Punkt: Die
+Testwurzel hatte einen ausgelieferten Lauf, der ohne sie das Falsche maß, und keinen zweiten
+Weg; die Portumlenkung hat keinen solchen Lauf und zwei zweite Wege. Ein Testaufbau setzt den
+Port, den er wirklich bedient, direkt in die Zieladresse
+(`daemon/crates/proxy/tests/dns_after_allow.rs`), oder er bindet in seinem eigenen
+Netz-Namensraum den echten Port 443, wie es der Meilenstein-2-Lauf tut.
+
+Das ist keine Kleinigkeit der Konfiguration, sondern eine Aussage über das Produkt. Ein Mensch
+gibt in der Warteschlange eine Anfrage an `https://api.github.com/graphql` frei. Wohin der Proxy
+daraufhin seine eigene Verbindung öffnet, ist Teil dessen, was er freigegeben hat. Eine Tabelle,
+die 443 still auf 8443 abbildet, hätte diese Zusage aus einer Datei heraus verschoben, und der
+Bildschirm hätte weiterhin 443 gezeigt. Käme die Umlenkung eines Tages doch, dann nur mit
+demselben Zuschnitt wie die Testwurzel: mit einem Flag auf der Kommandozeile des Menschen, der
+den Daemon startet, und ohne dass der Schlüssel allein etwas bewirkt. Die Bedingung dafür steht
+in `backlog/sprint-3.md` unter `## HUM-088`, die Begründung in `backlog/CONVENTIONS.md` 4.22.
+
+Wer den Schlüssel noch in einer `config.toml` stehen hat, bekommt beim Laden `CONFIG_005` als
+Warnung mit Issue und Grund; der Wert wird übergangen, und der Daemon startet
+(`backlog/CONVENTIONS.md` 4.25).
+
 **Certificate Pinning.** Manche Programme akzeptieren nur ein fest einprogrammiertes Zertifikat.
 Für sie funktioniert die Terminierung nicht, und das ist beabsichtigt: Das Werkzeug scheitert
 sichtbar mit einem TLS-Fehler, Humanitl bietet **keinen** Rückfallpfad, der die Verbindung

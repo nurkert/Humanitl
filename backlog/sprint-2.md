@@ -428,7 +428,7 @@ pub struct MockResolver { calls: Mutex<Vec<String>>, answers: HashMap<String, Ve
 pub struct PinnedConnector { tls: Arc<rustls::ClientConfig> }
 ```
 
-Config-Schlüssel (Tier `expert`): `resolver.nameserver` (optional `IP[:port]`, Default System), `resolver.overrides` (Map Host → IP), `resolver.cache_ttl_secs` (Default 60), `resolver.prefer` (`ipv4|ipv6`, Default `ipv4`), `upstream.connect_timeout_secs` (Default 10), `experimental.upstream_port_map` (Map `"443" → 8443`, nur für Tests, Warnung im Log beim Setzen).
+Config-Schlüssel (Tier `expert`): `resolver.nameserver` (optional `IP[:port]`, Default System), `resolver.overrides` (Map Host → IP), `resolver.cache_ttl_secs` (Default 60), `resolver.prefer` (`ipv4|ipv6`, Default `ipv4`), `upstream.connect_timeout_secs` (Default 10).
 
 `forward(flow, decision)`-Ablauf:
 
@@ -453,7 +453,7 @@ Config-Schlüssel (Tier `expert`): `resolver.nameserver` (optional `IP[:port]`, 
 - `allow_resolves_once`: Allow → `mock.calls() == ["api.github.com"]`.
 - `ip_literal_no_resolve`: Request an `192.168.1.50:11434` mit Regel `allow ip:192.168.1.50` → keine Calls.
 - `rebinding_to_loopback_rejected`: Mock antwortet `127.0.0.1` für `evil.example`, Regel allow → 502 mit PROXY_004, keine TCP-Verbindung (Fake-Upstream auf 127.0.0.1 zählt 0 Verbindungen).
-- `pinned_addr_used`: Mock antwortet `127.0.0.1`, Fake-Upstream auf `127.0.0.1:8443` mit `upstream_port_map`; Antwort kommt an, Zertifikat wurde gegen den Hostnamen validiert (Test mit falschem CN scheitert mit TLS-Fehler, nicht mit Erfolg).
+- `pinned_addr_used`: Mock antwortet `127.0.0.1`, Fake-Upstream auf einem flüchtigen Port von `127.0.0.1`, der direkt in der Authority steht; Antwort kommt an, Zertifikat wurde gegen den Hostnamen validiert (Test mit falschem CN scheitert mit TLS-Fehler, nicht mit Erfolg). Gebaut ist er so in `daemon/crates/proxy/tests/dns_after_allow.rs`; der hier ursprünglich genannte Hebel `experimental.upstream_port_map` hatte nie einen Leser und ist mit HUM-088 entfernt (`backlog/CONVENTIONS.md` 4.22).
 
 ### Akzeptanzkriterien
 - [x] `grep -rn "lookup_host\|getaddrinfo\|to_socket_addrs" daemon/crates/proxy/src` liefert nur Treffer in `resolver.rs`. (vier Treffer, alle `resolver.rs`; dazu der Quelltext-Test `only_the_resolver_module_touches_the_name_service`)
@@ -1645,7 +1645,6 @@ OpenCode (HUM-046), Notifications (gemockt), Tray.
 ```toml
 [hold] timeout_secs = 8
 [resolver] overrides = { "registry.npmjs.org" = "127.0.0.1", "api.github.com" = "127.0.0.1", "evil.example" = "127.0.0.1" }
-[experimental] upstream_port_map = { "443" = 8443 }
 [ui] notifications = false
 ```
 
@@ -1729,7 +1728,7 @@ Ein grünes `e2e-xvfb` heißt bis dahin „die Daemon-Hälfte von M2 hält", nic
 - Timing: alle Wartezeiten mit `pumpUntil`-Helfer und Timeout, keine festen `sleep`s außer dem Timeout-Schritt.
 - Der Fake-Agent muss in der Sandbox lauffähig sein: statisch gelinkt (`musl`), keine DNS-Nutzung (nutzt `HTTP_PROXY` und CA aus dem Env-Kit).
 - xvfb-Auflösung ≥ 1400×900, sonst greift das Narrow-Layout und Selektoren scheitern.
-- `resolver.overrides` und `upstream_port_map` sind Test-Hebel; Daemon loggt eine Warnung beim Start, damit sie nie unbemerkt in Produktion landen.
+- `resolver.overrides` ist ein Test-Hebel; Daemon loggt eine Warnung beim Start, damit er nie unbemerkt in Produktion landet. Die Warnung steht weiterhin aus (`backlog/CONVENTIONS.md` 4.22).
 
 ### Referenzen
 BACKLOG.md 7 (M2), 8 (Sprint-Gate); CONVENTIONS.md 3.8, 3.11, 4.22; HUM-087 (Testwurzel), HUM-095 (Herkunft der Sitzungsregel), HUM-097 (Oberflächen-Hälfte); Flutter integration_test (https://docs.flutter.dev/testing/integration-tests).

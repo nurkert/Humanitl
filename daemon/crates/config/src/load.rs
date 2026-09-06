@@ -298,6 +298,31 @@ fn entries_from_overlay(overlay: &ConfigOverlay, origin: &Origin) -> Vec<Entry> 
         .collect()
 }
 
+/// Zerlegt eine Tabelle in Einträge, einen je Blattpfad.
+///
+/// Zwei Arten von Tabellen bleiben dabei ganz, statt eine Ebene tiefer zerlegt
+/// zu werden:
+///
+/// 1. Eine **freie Tabelle** des Schemas (`resolver.overrides`, `sandbox.env`).
+///    Ihre Schlüssel sind Hostnamen und Variablennamen, keine Pfade; ein Punkt
+///    darin würde sonst eine Ebene erfinden.
+/// 2. Ein **entfallener Pfad** aus [`alias::RETIRED`], **der eine freie
+///    Tabelle war**. Er steht nicht mehr im Schema und ist damit auch keine
+///    freie Tabelle mehr. Zerlegt würde aus
+///    `experimental.upstream_port_map = { "443" = 8443 }` der Pfad
+///    `experimental.upstream_port_map.443`, den `alias::retired` nicht kennt
+///    (verglichen wird der ganze Pfad, nicht sein Anfang), und aus der
+///    zugesagten Warnung würde der harte `CONFIG_002`, den
+///    `backlog/CONVENTIONS.md` 4.25 gerade ausschließt. Ein entfallener
+///    Schlüssel bleibt deshalb ein Eintrag, so wie er einer war, als es ihn
+///    noch gab.
+///
+///    Die Form entscheidet mit, und der Pfad allein reicht nicht: Unter einem
+///    entfallenen **Skalar** hat es nie eine Ebene gegeben.
+///    `[limits.idle_timeout_secs]` mit Feldern darunter ist keine alte,
+///    gültige Datei, sondern eine Struktur, die das Schema nie kannte; sie
+///    wird zerlegt und scheitert hart wie jeder unbekannte Schlüssel
+///    ([`alias::RetiredShape`]).
 fn flatten(
     table: &toml::Table,
     prefix: &str,
@@ -311,8 +336,10 @@ fn flatten(
             format!("{prefix}.{key}")
         };
         let canonical = alias::canonical(&path).unwrap_or(path.as_str());
+        let stays_whole = free_tables.contains(canonical)
+            || alias::retired(canonical).is_some_and(alias::Retired::swallows_what_is_below);
         match value {
-            TomlValue::Table(inner) if !free_tables.contains(canonical) => {
+            TomlValue::Table(inner) if !stays_whole => {
                 flatten(inner, &path, free_tables, out);
             }
             other => out.push((path, other.clone())),

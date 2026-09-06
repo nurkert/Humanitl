@@ -62,7 +62,6 @@
       "additionalProperties": false,
       "default": {
         "h2_upstream": false,
-        "upstream_port_map": {},
         "ws_hold": false
       },
       "description": "Schalter für unfertige Wege. Alles hier darf ohne Ankündigung wegfallen.",
@@ -71,20 +70,6 @@
           "default": false,
           "description": "Bietet dem Ziel HTTP/2 an. In M1 spricht der Proxy nach oben nur HTTP/1.1.",
           "type": "boolean",
-          "x-project-scope": "denied",
-          "x-tier": "expert"
-        },
-        "upstream_port_map": {
-          "additionalProperties": {
-            "format": "uint16",
-            "maximum": 65535,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "default": {},
-          "description": "Lenkt einen Zielport auf einen anderen um, Schlüssel und Wert als Portnummer. Nur für Tests.",
-          "type": "object",
-          "x-pending-issue": "HUM-088",
           "x-project-scope": "denied",
           "x-tier": "expert"
         },

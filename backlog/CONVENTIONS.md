@@ -336,7 +336,6 @@ Die Sprint-Files wurden parallel geschrieben und haben an einigen Stellen die Ab
 - `upstream.connect_timeout_secs` ist Alias von `limits.connect_timeout_secs`.
 - `findings.enabled`, `findings.user_terms`, `findings.email_allow_domains`, `findings.ignored_hashes`.
 - `agent.briefing.enabled` (HUM-071).
-- `experimental.upstream_port_map` (nur Tests).
 
 ### 4.5 Regeln
 - **Die Auswertungsreihenfolge, vier Ränge (entschieden in HUM-104, 2026-09-04):**
@@ -430,7 +429,7 @@ Entscheidungen, die beim Bauen fielen und ab jetzt gelten. Wo 3.x anderes sagt, 
 - Unbekannter Schlüssel in Datei oder auf der Kommandozeile ⇒ harter Fehler `CONFIG_002`; unbekannte `HUMANITL_*`-Variable ⇒ nur Diagnostic.
 - `Sources { env: Env, .. }` und `discover_with(env, cwd, profile)`: `env.rs` ist die einzige Stelle, die die Prozessumgebung liest; `paths.rs` nutzt denselben Typ.
 - Weitere Defaults: `limits.header_timeout_secs` 30, `limits.body_timeout_secs` 300, `limits.recorder_max_body_bytes` 32 MiB, `resolver.cache_ttl_secs` 300, `resolver.prefer` ipv4, `pseudonyms.max_response_bytes` 1 MiB, `pseudonyms.translate_responses` true, `findings.enabled` true, `agent.briefing.enabled` true, `hold.hard_block_checksum_secrets` false.
-- Freiform-Tabellen (`resolver.overrides`, `experimental.upstream_port_map`) sind im Merge ein Blatt: eine höhere Ebene ersetzt die ganze Tabelle.
+- Freiform-Tabellen (`resolver.overrides`, `sandbox.env`) sind im Merge ein Blatt: eine höhere Ebene ersetzt die ganze Tabelle. Bis HUM-088 gehörte `experimental.upstream_port_map` dazu; der Schlüssel ist entfallen (4.22).
 - `llm.endpoint` ist `Option<url::Url>`, im Schema als String.
 
 **Sandbox-Profil (HUM-010).**
@@ -1389,13 +1388,42 @@ Spezifikation stellt den Fake-Upstream auf `127.0.0.1:8443` und lenkt den Port
 mit `experimental.upstream_port_map` um. Beides geht nicht: Der Proxy weist
 jede aufgelöste Adresse in einem privaten Bereich ab (`ip_is_private`, ADR-006),
 und `127.0.0.1` ist eine; eine Freigabe wäre dort immer `502
-upstream_private_address` statt einer Antwort. Ausserdem liest den Schlüssel
-`experimental.upstream_port_map` heute niemand — er steht im Schema, wird
-validiert und hat im Proxy keinen Aufrufer. Der Lauf nimmt deshalb denselben
+upstream_private_address` statt einer Antwort. Der Lauf nimmt deshalb denselben
 Weg wie M1: ein eigener Netz-Namensraum, in dem `198.51.100.7` (RFC 5737) auf
 `lo` liegt, und `resolver.overrides` zeigt die drei Hosts dorthin. Im eigenen
 Namensraum ist der Lauf root und bindet die Ports 80 und 443 direkt, also
 braucht er gar keine Umlenkung.
+
+**`experimental.upstream_port_map` ist mit HUM-088 entfernt (2026-09-06).** Der
+Schlüssel stand im Schema, wurde geprüft und hatte im Proxy nie einen Aufrufer;
+von außen war er von einem wirksamen nicht zu unterscheiden. Gebaut wurde er
+trotzdem nicht nachträglich, aus zwei Gründen:
+
+1. **Er hätte auch dann nichts gerettet.** Beide Aufbauten, für die er gedacht
+   war (HUM-024, HUM-036), stellen ihr Ziel auf `127.0.0.1:8443`, und
+   `ip_is_private` weist eine Loopback-Adresse unabhängig vom Port ab, solange
+   die Regel nicht `allow_private` setzt. Ein anderer Port an derselben
+   verbotenen Adresse ist immer noch die verbotene Adresse.
+2. **Kein ausgelieferter Test braucht ihn.** Die Rust-Tests des Proxys setzen
+   den flüchtigen Port direkt in die Authority (`pinned_addr_used` in
+   `daemon/crates/proxy/tests/dns_after_allow.rs`); der M2-Lauf bindet in
+   seinem eigenen Netz-Namensraum die echten Ports 80 und 443. Beide Wege sind
+   gebaut und in Gebrauch.
+
+Das ist der Unterschied zu `resolver.test_ca`, das HUM-087 am selben Tag
+verdrahtet statt gestrichen hat: Dort gab es einen ausgelieferten Lauf, der
+ohne den Schlüssel das Falsche maß, und keinen zweiten Weg. Hier gibt es zwei
+zweite Wege und keinen Lauf, der wartet. Ein Hebel, der beeinflusst, wohin der
+Proxy seine eigene Verbindung öffnet, bekommt keinen Leser auf Vorrat.
+
+Die Bedingung für die Rückkehr steht in `backlog/sprint-3.md` unter `## HUM-088`
+als Spezifikation B und ist eng: Ein ausgelieferter Test braucht die Umlenkung
+und lässt sich ohne sie nicht schreiben. Tritt sie ein, gilt derselbe Zuschnitt
+wie bei `resolver.test_ca` — die Umlenkung greift nur, wenn der Mensch, der den
+Daemon startet, sie auf der Kommandozeile verlangt hat, und der Schlüssel allein
+bewirkt weiterhin nichts. Bis dahin steht der Pfad in `alias::RETIRED`: Eine
+`config.toml`, die ihn noch setzt, bekommt `CONFIG_005` als Warnung und der
+Daemon startet (4.25).
 
 **Der Verkehr des Laufs geht über HTTPS (seit HUM-087, 2026-09-05).** Bis
 dahin waren sechzehn der siebzehn Anfragen Klartext und die einzige
@@ -1467,13 +1495,14 @@ Test-Hebel.** Der Fallstrick der Spezifikation verlangt eine Warnung beim
 Start, damit `resolver.overrides` und `experimental.upstream_port_map` „nie
 unbemerkt in Produktion landen". `humanitld` meldet beim Start nur
 `resolver.nameserver` (ungenutzt) und, seit HUM-087, `resolver.test_ca` ohne
-sein Flag (`CONFIG_011`); eine nicht leere Zuordnungstabelle und eine gesetzte
-Portumlenkung gehen still durch. Der Demolauf lebt davon, also fällt es dort nicht auf; im Alltag ist es
+sein Flag (`CONFIG_011`); eine nicht leere Zuordnungstabelle geht still durch.
+Der Demolauf lebt davon, also fällt es dort nicht auf; im Alltag ist es
 eine fehlende Warnung an genau der Stelle, an der die Spezifikation eine
 verlangt. `resolver.test_ca` ist mit HUM-087 aus diesem Bündel heraus: Der
 Schlüssel hat einen Leser, und der Daemon meldet mit `CONFIG_011`, wenn er ohne
-sein Flag gesetzt ist. Für `resolver.overrides` und
-`experimental.upstream_port_map` steht die Warnung weiterhin aus.
+sein Flag gesetzt ist. `experimental.upstream_port_map` ist mit HUM-088
+entfallen und braucht deshalb keine Warnung mehr. Für `resolver.overrides`
+steht sie weiterhin aus.
 
 **Die Stapel-Freigabe geht über zwei Aufrufe, nicht über einen.**
 `DecideRequest` trägt `repeated flow_ids` und `remember`, kann eine Gruppe also
@@ -2158,6 +2187,18 @@ Schlüssel, den wir selbst streichen, also auch für
   Der Wert erreicht die Konfiguration nicht, der Daemon startet.
 - Ein unbekannter Schlüssel, der **nicht** in `RETIRED` steht, bleibt der harte
   `CONFIG_002` von vorher. Die Milde gilt genau den Pfaden der Liste.
+- **Der Pfad allein reicht nicht; die Form gehört dazu (Nachtrag HUM-088,
+  2026-09-06).** Ein Eintrag in `RETIRED` nennt deshalb auch, ob dort ein
+  Skalar oder eine freie Tabelle stand (`alias::RetiredShape`), und das
+  entscheidet über alles, was in einer alten Datei **unter** dem Pfad steht:
+  Was unter einem entfallenen Skalar steht, hat es nie gegeben und scheitert;
+  was unter einer entfallenen Tabelle stand, gehörte ihr und wird mit ihr
+  verworfen. `[limits.idle_timeout_secs.deeper]` ist damit weiterhin ein harter
+  `CONFIG_002` — die Zahl hatte nie eine Ebene unter sich —, während
+  `experimental.upstream_port_map.extra` ein Eintrag der freien Tabelle war und
+  mit ihr in einer einzigen Warnung verschwindet. Ohne die Formangabe nähme das
+  Laden jede Untertabelle eines entfallenen Pfades mit, und ein Tippfehler
+  hinter einem entfallenen Namen wäre stillschweigend erlaubt.
 
 Der Grund für die Ausnahme: Ein `CONFIG_002` sagt „du hast dich vertippt". Wer
 `limits.idle_timeout_secs` in seiner Datei stehen hat, hat sich nicht vertippt
@@ -2186,10 +2227,9 @@ schlechter als keiner.
 
 **Wo das Register aufhört, sagt sein Kopf.** Eine Zeile deckt einen Blattpfad,
 und Blätter findet der Durchlauf über `properties`. Die Schlüssel *in* einer
-freien Tabelle (`sandbox.env`, `resolver.overrides`,
-`experimental.upstream_port_map`) und die Elemente einer Liste sind deshalb
-nicht einzeln erfasst; der Behälter trägt die Zeile, und seine Einstufung gilt
-für alles darin. Das reicht, solange darin Skalare stehen, und genau das prüft
+freien Tabelle (`sandbox.env`, `resolver.overrides`) und die Elemente einer
+Liste sind deshalb nicht einzeln erfasst; der Behälter trägt die Zeile, und
+seine Einstufung gilt für alles darin. Das reicht, solange darin Skalare stehen, und genau das prüft
 `the_schema_hides_no_leaf_from_the_walk`: eine Tabelle oder Liste von
 Strukturen macht ihn rot, ebenso `allOf`, `anyOf` und `$ref`.
 `#[serde(flatten)]` ist dabei kein Loch — nachgemessen: `inline_subschemas`
