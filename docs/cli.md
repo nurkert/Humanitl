@@ -345,6 +345,54 @@ gemeinsames `/tmp` ist der Weg, auf dem ein anderer Prozess des Nutzers dem
 Daemon eine Datei unterschiebt, und ein Projektordner in einem Verzeichnis, das
 beim nächsten Start verschwindet, ist ohnehin kein Ort für Arbeit.
 
+## `humanitl llm discover`
+
+Sucht im eigenen Netz nach Modellservern. Es ist nach `daemon install` der
+zweite Befehl, der über den eigenen Rechner hinausgreift, und deshalb steht
+hier vollständig, was er tut.
+
+```
+humanitl llm discover [--subnet CIDR] [--port PORT]... [--json]
+```
+
+**Nur auf Zuruf, und vorher angekündigt.** Ohne diesen Befehl entsteht keine
+einzige Verbindung; die Oberfläche hat denselben Weg hinter einem Knopf mit
+demselben Text. Vor dem ersten Paket geht auf `stderr` eine Zeile heraus, die
+das Netz und die Ports nennt — an der Ausgabesteuerung vorbei, damit auch
+`--json` sie nicht verschluckt.
+
+**Im eigenen `/24` und nirgends sonst.** Ohne `--subnet` leitet der Daemon das
+Netz aus der Vorgaberoute ab: Die Routing-Tabelle nennt Schnittstelle und
+Gateway, ein verbundener UDP-Socket (der nichts schickt) nennt die eigene
+Adresse, und daraus wird das `/24` um sie herum. Ein `--subnet`, das weiter ist
+als ein `/24`, wird mit `LLM_008` abgelehnt, bevor irgendetwas verbindet: Ein
+`/16` wären 65 534 Verbindungsversuche in ein Netz, das dem Aufrufer
+vielleicht nicht gehört.
+
+**Vier Ports, zwei Schritte.** Gefragt werden `11434` (Ollama), `1234`
+(LM Studio), `8000` (vLLM und die meisten Python-Server) und `8080`
+(llama.cpp); `--port` ersetzt diese Liste. Zuerst ein Verbindungsversuch je
+Adresse und Port mit 200 ms Frist, 64 gleichzeitig; für jeden offenen Port
+danach dieselbe Probe wie beim Testknopf: `GET /api/tags`, sonst `GET
+/v1/models`, ohne Zugangsdaten und ohne Weiterleitung. Ein `/24` ohne einen
+einzigen Treffer ist damit in unter vier Sekunden durch.
+
+**Was in der Liste steht, hat der Server gesagt.** Produkt, Modelle und Latenz
+kommen aus seiner Antwort; die Modellnamen sind gedeckelt und gesäubert wie
+die des Testknopfs. Ein Server, der `401` oder `403` sagt, verschwindet nicht,
+sondern trägt `(auth required)`. Ein Server, der auf einem der Ports horcht,
+aber keine der beiden APIs beantwortet, steht als `unknown` da — er wird
+genannt, nicht verschwiegen und nicht als Modellserver ausgegeben.
+
+**Kein Fluss und keine Warteschlange.** Die Suche läuft im Daemon im Host-Netz,
+nie in der Sandbox. Sie erscheint in keiner Warteschlange und in keiner
+Historie; sie ändert nichts und schreibt nichts.
+
+Der Lauf endet mit `0`, auch wenn nichts geantwortet hat: „nichts gefunden" ist
+ein Ergebnis und kein Fehler. Mit `--json` steht am Ende ein Wert mit
+`servers` und `count`, sonst eine Tabelle, während der Suche je Fund eine
+Zeile auf `stderr`.
+
 ## Was `run` mit den anderen Unterkommandos teilt
 
 - `humanitl sandbox run` startet die Sandbox im Prozess der Kommandozeile und

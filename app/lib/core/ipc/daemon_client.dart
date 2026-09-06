@@ -166,6 +166,24 @@ abstract class DaemonClient {
   /// [DaemonException]; neither is invented here.
   Future<LlmProbe> probeLlm(String endpoint, {Duration? timeout});
 
+  /// `DiscoverLlm`: searches the local network for LLM servers (HUM-076).
+  ///
+  /// The second call of this application that reaches machines on the network,
+  /// and like [probeLlm] it runs only on an explicit gesture. It is a scan:
+  /// one connection attempt per address and port in the local /24, four ports,
+  /// nothing written and no credentials sent. What it costs and where it goes
+  /// stands above the button that starts it; this method never runs on its
+  /// own.
+  ///
+  /// Servers arrive as they answer, so a list can fill while the search runs.
+  /// Cancelling the subscription ends the search in the daemon — that is what
+  /// the sheet's close button does.
+  ///
+  /// [subnet] overrides the network, in CIDR notation and never wider than a
+  /// /24; without it the daemon takes the local /24 of its default route.
+  /// [ports] overrides the four default ports.
+  Stream<LlmServer> discoverLlm({String? subnet, List<int> ports});
+
   /// `Terminal`: the output of the running session, and the keys on their way
   /// back (HUM-042).
   ///

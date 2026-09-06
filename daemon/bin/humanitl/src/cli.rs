@@ -160,6 +160,32 @@ pub enum Cmd {
 
     /// Check this machine: one line per precondition, with a fix.
     Doctor(DoctorArgs),
+
+    /// Find LLM servers in the local network.
+    Llm {
+        /// Was mit dem LLM-Server geschehen soll.
+        #[command(subcommand)]
+        cmd: LlmCmd,
+    },
+}
+
+/// Die Unterkommandos von `humanitl llm`.
+#[derive(Debug, Subcommand)]
+pub enum LlmCmd {
+    /// Search the local /24 for OpenAI-compatible servers and Ollama.
+    ///
+    /// Connection attempts only, to four ports, and only when you ask for it.
+    /// Nothing is written and no credentials are sent.
+    Discover {
+        /// The network to search, as CIDR; without it, the local /24 of the
+        /// default route. Never wider than a /24.
+        #[arg(long, value_name = "CIDR")]
+        subnet: Option<String>,
+
+        /// A port to ask, repeatable; without it 11434, 1234, 8000 and 8080.
+        #[arg(long, value_name = "PORT")]
+        port: Vec<u16>,
+    },
 }
 
 /// Die Argumente von `humanitl doctor`.

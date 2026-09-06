@@ -17,6 +17,7 @@ pub mod config;
 pub mod daemon;
 pub mod doctor;
 pub mod flows;
+pub mod llm;
 pub mod rules;
 pub mod run;
 pub mod sandbox;

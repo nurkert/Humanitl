@@ -654,6 +654,16 @@ registry! {
     /// deshalb nicht `LLM_001` und nicht `LLM_003`, die beide eine Beobachtung
     /// am Endpunkt behaupten würden (HUM-039).
     LLM_007 => "llm", "LLM-Endpunkt ist keine lesbare HTTP-Adresse", "#llm_007";
+    /// Die Suche nach LLM-Servern im eigenen Netz kann nicht stattfinden.
+    ///
+    /// Drei Fälle, und keiner davon ist ein Fehler des gesuchten Servers: Es
+    /// gibt keine Vorgaberoute, also kein eigenes Netz; die Routing-Tabelle
+    /// ist nicht lesbar; oder das genannte Netz ist weiter als ein `/24`. Der
+    /// letzte Fall ist eine Weigerung und keine Panne — der Text über dem
+    /// Knopf verspricht, dass die Suche im eigenen `/24` bleibt, und ein `/16`
+    /// wären 65 534 Verbindungsversuche in ein Netz, das dem Menschen
+    /// vielleicht nicht gehört (HUM-076).
+    LLM_008 => "llm", "Die Suche im Netz kann nicht stattfinden", "#llm_008";
 
     // HUM-067: `humanitl run`. Neue Einträge stehen am Ende dieser Gruppe.
     /// Der Daemon führt genau eine Sitzung, und sie läuft schon.

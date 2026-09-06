@@ -58,6 +58,7 @@ pub mod findings;
 pub mod handler;
 pub mod hold;
 pub mod listener;
+pub mod llm_discover;
 pub mod llm_probe;
 pub mod meta;
 pub mod pipeline;
@@ -80,6 +81,10 @@ pub use crate::handler::{
 };
 pub use crate::hold::{DomainSink, HoldQueue};
 pub use crate::listener::SessionSocket;
+pub use crate::llm_discover::{
+    CONNECT_TIMEOUT, DEFAULT_PORTS, Found, LocalNet, PARALLEL, PROBE_TIMEOUT, Scan, Subnet,
+    discover, local_net,
+};
 pub use crate::llm_probe::{LlmFlavor, LlmProbe, ProbeResult, not_private_by_name};
 pub use crate::meta::{
     META_HOST, MetaClock, MetaEndpoint, MetaOutcome, MetaReply, MetaRequest, MetaStatus,
