@@ -111,7 +111,7 @@ fi
 # Zähler aus `lib.sh`. Ein Skript, das grün ist, weil ein Zweig übersprungen
 # wurde, ist schlimmer als keines; deshalb steht die Zahl hier und nicht im
 # Kopf eines Menschen.
-M3_EXPECTED_ASSERTIONS=105
+M3_EXPECTED_ASSERTIONS=106
 
 # So viele kommen dazu, wenn die OpenCode-Variante läuft. Der Zweig prüft
 # immer dieselben sieben Dinge — die beiden Verzweigungen darin sind
@@ -774,19 +774,41 @@ e2e_step "5b. nothing an agent asks for on its own reaches a human"
 # Gemessen wird beides: dass die Regeln greifen (fünf blockierte Flüsse mit
 # Regel-Id) und dass die Warteschlange leer ist. Die zweite Hälfte allein wäre
 # grün, wenn der Agent gar nichts versucht hätte.
-for m3_noisy in api.github.com eu.posthog.com models.opencode.ai opencode.ai; do
-    e2e_expect "the agent got 403 for $m3_noisy" "403" \
-        "$(m3_agent_line "^STEP2B https://$m3_noisy" | sed 's/.*status=//')"
-    e2e_expect "and a bundled rule decided it, not a human" block \
-        "$(m3_field "host:$m3_noisy" decision)"
+# Gefragt wird nach dem **Pfad** und geprüft wird die **Regel-Id**, nicht der
+# Host und nicht die Entscheidung. Beides aus dem Review von Antigravity: Ein
+# Filter `host:opencode.ai` trifft auch `models.opencode.ai` — die Historie
+# vergleicht Hosts als Suffix —, und `decision: block` sagt nicht, wer
+# entschieden hat; ein Mensch blockt genauso. Mit der Id steht da, welche
+# mitgelieferte Regel gegriffen hat, und die Prüfung fällt, sobald eine davon
+# fehlt.
+for m3_noise in \
+    'api.github.com|/repos/anomalyco/opencode/releases/latest|01920000-0000-7000-8000-000000000002' \
+    'eu.posthog.com|/i/v0/e|01920000-0000-7000-8000-000000000003' \
+    'models.opencode.ai|/api.json|01920000-0000-7000-8000-000000000009' \
+    'opencode.ai|/share/abc|01920000-0000-7000-8000-00000000000a'; do
+    # Host **und** Pfad: `/api.json` allein trifft auch den Katalog aus
+    # Schritt 5, und `host:opencode.ai` allein träfe `models.opencode.ai` mit.
+    # Erst beide zusammen benennen genau einen Fluss.
+    m3_noise_host=${m3_noise%%|*}
+    m3_noise_rest=${m3_noise#*|}
+    m3_noise_path=${m3_noise_rest%%|*}
+    m3_noise_rule=${m3_noise_rest#*|}
+    e2e_expect "the agent got 403 for $m3_noise_host" "403" \
+        "$(m3_agent_line "^STEP2B https://$m3_noise_host" | sed 's/.*status=//')"
+    e2e_expect "and the bundled rule of that host decided it, not a human" \
+        "$m3_noise_rule" \
+        "$(m3_field "host:$m3_noise_host path:$m3_noise_path" rule_id)"
 done
 
-# Die Zahl, um die es geht: Was ein Agent beim Start von sich aus tut, landet
-# nicht in der Warteschlange. Die Vorgabe von HUM-038 erlaubt einen einzigen
-# Halt (den `ask` auf `registry.npmjs.org`); dieser Lauf ruft ihn mit Absicht
-# nicht ab, weil der Halt zwanzig Sekunden auf eine Entscheidung wartete, die
-# dieses Skript danach treffen müsste. Null ist damit die schärfere Zahl.
-e2e_expect "and the queue stayed empty through all of it" 0 "$(m3_count 'state:held')"
+# Die Zahl, um die es geht: Was ein Agent beim Start von sich aus tut, erreicht
+# keinen Menschen. Gemessen an den Hinweiszeilen, die der Daemon in das
+# Terminal schreibt — sie entstehen in dem Augenblick, in dem eine Anfrage
+# wartet, und überleben deshalb das Ende der Sitzung. Eine Zählung von
+# `state:held` nach der Sitzung sagte nur, dass gerade nichts mehr wartet
+# (Review Antigravity).
+e2e_expect "and not one of them ever waited for a human" 0 \
+    "$(m3_notice_count '^\[humanitl\] request held: .*\(github\|posthog\|opencode\)')"
+e2e_expect "and nothing is left in the queue either" 0 "$(m3_count 'state:held')"
 
 # --- 6. Die Entscheidung eines Menschen erreicht den Agenten -----------------
 
