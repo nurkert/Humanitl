@@ -111,7 +111,7 @@ fi
 # Zähler aus `lib.sh`. Ein Skript, das grün ist, weil ein Zweig übersprungen
 # wurde, ist schlimmer als keines; deshalb steht die Zahl hier und nicht im
 # Kopf eines Menschen.
-M3_EXPECTED_ASSERTIONS=95
+M3_EXPECTED_ASSERTIONS=105
 
 # So viele kommen dazu, wenn die OpenCode-Variante läuft. Der Zweig prüft
 # immer dieselben sieben Dinge — die beiden Verzweigungen darin sind
@@ -738,7 +738,11 @@ e2e_expect_match "and the body it received is the one the agent sent" \
 humanitl --json flows list --asc > "$M3_FLOWS_FIRST_JSON" 2> /dev/null || true
 e2e_expect "the passthrough flow stays out of the list the command line shows" 0 \
     "$(m3_count "host:$E2E_FAKE_ADDR")"
-e2e_expect "while the four flows of the moderated path are in it" 4 "$(m3_count '')"
+# Acht sichtbare Flüsse: der Katalog aus Schritt 5, die vier ungefragten
+# Abrufe des Starts aus Schritt 5b und die drei, über die ein Mensch
+# entscheidet. Die Durchreiche ist keiner davon.
+e2e_expect "while the eight flows the agent really made are in it" 8 "$(m3_count '')"
+e2e_expect "three of them the moderated path" 3 "$(m3_count 'host:example.com')"
 
 # --- 5. Die mitgelieferte Regel ----------------------------------------------
 
@@ -756,6 +760,33 @@ e2e_expect "and it never got as far as resolving the name" "" \
 e2e_expect "and the target never saw the request" 0 "$(m3_upstream_hits '/api.json')"
 e2e_expect "while it did serve the two a human released" 2 \
     "$(m3_upstream_hits '^fake-upstream: https example.com GET ')"
+
+# --- 5b. Das Rauschbudget des ersten Starts ----------------------------------
+
+e2e_step "5b. nothing an agent asks for on its own reaches a human"
+
+# HUM-038: Beim ersten Start darf der Mensch keine Flut ungefragter Anfragen
+# sehen. Der Agent hat gerade vier Adressen abgerufen, die ein frisch
+# gestartetes OpenCode von sich aus abruft — Release-Check, Telemetrie,
+# Modellkatalog, Freigabe-Seite —, dazu den Katalog aus Schritt 5. Jede davon
+# entscheidet eine mitgelieferte Regel; keine davon wartet auf einen Menschen.
+#
+# Gemessen wird beides: dass die Regeln greifen (fünf blockierte Flüsse mit
+# Regel-Id) und dass die Warteschlange leer ist. Die zweite Hälfte allein wäre
+# grün, wenn der Agent gar nichts versucht hätte.
+for m3_noisy in api.github.com eu.posthog.com models.opencode.ai opencode.ai; do
+    e2e_expect "the agent got 403 for $m3_noisy" "403" \
+        "$(m3_agent_line "^STEP2B https://$m3_noisy" | sed 's/.*status=//')"
+    e2e_expect "and a bundled rule decided it, not a human" block \
+        "$(m3_field "host:$m3_noisy" decision)"
+done
+
+# Die Zahl, um die es geht: Was ein Agent beim Start von sich aus tut, landet
+# nicht in der Warteschlange. Die Vorgabe von HUM-038 erlaubt einen einzigen
+# Halt (den `ask` auf `registry.npmjs.org`); dieser Lauf ruft ihn mit Absicht
+# nicht ab, weil der Halt zwanzig Sekunden auf eine Entscheidung wartete, die
+# dieses Skript danach treffen müsste. Null ist damit die schärfere Zahl.
+e2e_expect "and the queue stayed empty through all of it" 0 "$(m3_count 'state:held')"
 
 # --- 6. Die Entscheidung eines Menschen erreicht den Agenten -----------------
 
@@ -903,11 +934,13 @@ fi
 
 # --- 11. Die Historie und die beiden Stolperdrähte ---------------------------
 
-e2e_step "11. the history holds the four moderated flows, in the order they arrived"
+e2e_step "11. the history holds every flow the agent made, in the order they arrived"
 
-e2e_expect "the history holds the four flows of the moderated path" 4 "$(m3_count '')"
+e2e_expect "the history holds the eight flows of this session" 8 "$(m3_count '')"
+# Die Reihenfolge ist die des Agenten: erst der Katalog, dann die vier
+# ungefragten Abrufe des Starts, dann die drei, über die ein Mensch entscheidet.
 e2e_expect "in the order the agent asked for them" \
-    "/api.json /docs $M3_PATH_FORGED /secret" \
+    "/api.json /repos/anomalyco/opencode/releases/latest /i/v0/e /api.json /share/abc /docs $M3_PATH_FORGED /secret" \
     "$(jq -r '[.flows[].path] | join(" ")' "$M3_FLOWS_FIRST_JSON")"
 
 # Zwei Stolperdrähte bleiben stehen, weil das, worauf sie warten, noch fehlt.
@@ -959,13 +992,13 @@ e2e_expect_match "and 403 for everything else" '^LLM2 status=403$' "$only_out"
 # verdrahtet sind (HUM-066, HUM-067).
 e2e_expect_match "and a rule decided it, not an expired deadline" \
     '^LLM2 reason=reason: rule$' "$only_out"
-e2e_expect "the history grew by exactly one visible flow" 5 "$(m3_count '')"
+e2e_expect "the history grew by exactly one visible flow" 9 "$(m3_count '')"
 # Und die Zahl allein sagte nur, dass eine Zeile dazukam. Woher sie kam, sagen
-# die beiden Gründe: Zwei der fünf sind Blocks einer Regel — der Modellkatalog
-# aus der ersten Sitzung und dieser hier —, und genau einer ist der Block eines
-# Menschen. Niemand hat in dieser Sitzung entschieden, und trotzdem ist der
-# Agent nicht in eine Frist gelaufen.
-e2e_expect "two of the five were blocked by a rule" 2 "$(m3_count 'reason:rule')"
+# die beiden Gründe: Sechs der neun sind Blocks einer Regel — der Modellkatalog
+# und die vier ungefragten Abrufe der ersten Sitzung, dazu dieser hier —, und
+# genau einer ist der Block eines Menschen. Niemand hat in dieser Sitzung
+# entschieden, und trotzdem ist der Agent nicht in eine Frist gelaufen.
+e2e_expect "six of the nine were blocked by a rule" 6 "$(m3_count 'reason:rule')"
 e2e_expect "and exactly one by a human" 1 "$(m3_count 'reason:user')"
 e2e_expect "and the language model served a second inference request" 2 \
     "$(m3_llm_hits '^mock-llm: POST /v1/chat/completions 200 ')"
