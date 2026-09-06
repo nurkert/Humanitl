@@ -737,7 +737,7 @@ Diagnostics: `CONFIG_001` (Blocking) Profil nicht gefunden, `fix: CopyCommand("h
 ### Akzeptanzkriterien
 - [x] `humanitl config get --profile llm-only hold.ask_mode` ⇒ `none (origin: profile builtin llm-only)`.
 - [x] `humanitl config schema --profiles` listet `default`, `llm-only` und alle Dateien unter `profiles/` mit Beschreibung.
-- [ ] Ein Projekt mit `.humanitl/profile.toml`, das `extra_rw` setzt, verweigert den Start mit `CONFIG_003` in CLI und UI.
+- [x] Ein Projekt mit `.humanitl/profile.toml`, das `extra_rw` setzt, verweigert den Start mit `CONFIG_003` in CLI und UI. Die Kommandozeile war gemessen, die Oberfläche nicht; seit dem 2026-09-06 misst `app/test/features/setup/project_profile_test.dart` auch sie: Der Bildschirm bleibt stehen, der Abschnitt wechselt nicht, die Karte trägt den Code und den Satz aus `project_scope_denied`, und die Sandbox läuft nicht.
 - [x] `docs/profiles.md` existiert und enthält die Präzedenztabelle.
 
 ### Fallstricke
@@ -1746,7 +1746,7 @@ Die `SetEnv`-Fix-Aktion wird in der UI als „Für nächste Session setzen" gere
 
 ### Akzeptanzkriterien
 - [x] `curl --cacert /dev/null https://example.com` in der Sandbox erzeugt `TLS_001` mit `CURL_CA_BUNDLE`-Fix im UI und in `humanitl flows list --json` (Feld `error`). Die Daemon-Hälfte steht samt Integrationstest; die Karte im UI fehlt ganz.
-- [ ] Fix „Für nächste Session setzen" schreibt `[sandbox.env]` ins globale Profil, sichtbar in `humanitl config get sandbox.env`. Lesen geht: `humanitl config get sandbox.env` antwortet `{}`, lokal aufgelöst ohne Daemon (`cmd/config.rs:115-119`). Geschrieben wird nichts — es gibt weder den Knopf noch einen Schreibweg.
+- [ ] Fix „Für nächste Session setzen" schreibt `[sandbox.env]` ins globale Profil, sichtbar in `humanitl config get sandbox.env`. Lesen geht: `humanitl config get sandbox.env` antwortet `{}`, lokal aufgelöst ohne Daemon (`cmd/config.rs:115-119`). Geschrieben wird nichts — es gibt weder den Knopf noch einen Schreibweg. **Offen, und zwar gesperrt:** Der Knopf braucht einen Schreibweg in die Konfiguration, und `SetConfig` antwortet bis HUM-069 `unimplemented`; die Begründung samt Messung steht im Stand-Abschnitt dieses Issues. Die Karte verspricht deshalb heute nur, was sie hält.
 
 ### Stand (2026-09-04): nur die Daemon-Hälfte
 
