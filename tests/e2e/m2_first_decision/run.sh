@@ -111,8 +111,7 @@ M2_EXPECTED_ASSERTIONS=69
 
 # Die Ports des Ziels. Im eigenen Netz-Namensraum ist der Lauf root und darf
 # auch die privilegierten binden; damit braucht der Proxy keine Portumlenkung
-# (`experimental.upstream_port_map` bleibt deshalb ungenutzt, siehe
-# `backlog/CONVENTIONS.md` 4.22).
+# (`backlog/CONVENTIONS.md` 4.22).
 M2_HTTP_PORT=80
 M2_HTTPS_PORT=443
 

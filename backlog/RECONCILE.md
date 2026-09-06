@@ -31,7 +31,7 @@
 ## From sprint-2 (reported after limit)
 1. rules YAML: `match.upgrade: websocket` im Schema und RuleMatch-Proto -> CONVENTIONS 3.3 nachziehen
 2. Blob-Pfad sharded `blobs/<hex[0..2]>/<hex>` -> CONVENTIONS 3.4 anpassen (übernehmen)
-3. Neue Config-Schlüssel: resolver.*, upstream.connect_timeout_secs, experimental.upstream_port_map, findings.*, recorder.max_body_bytes -> CONVENTIONS 3.7 (mit Config.limits aus Sprint 5 zusammenführen)
+3. Neue Config-Schlüssel: resolver.*, upstream.connect_timeout_secs, experimental.upstream_port_map (mit HUM-088 wieder entfernt), findings.*, recorder.max_body_bytes -> CONVENTIONS 3.7 (mit Config.limits aus Sprint 5 zusammenführen)
 4. Proto: DomainInfo in Received, RulesChanged-Event, DecideRequest.remember/DecideResponse.created_rule, eigene rules.proto -> CONVENTIONS 3.6 + BACKLOG 3.3
 5. CLI-Exit-Codes 10 (block), 11 (ask) für `rules test` -> CONVENTIONS 3.8
 6. Session-Regeln vor persistenten in RulesStore::effective() -> in ADR-007 festhalten

@@ -32,12 +32,12 @@
 //! stillschweigend zu fehlen:
 //!
 //! 1. **Behälter.** Die Schlüssel *in* einer freien Tabelle (`sandbox.env`,
-//!    `resolver.overrides`, `experimental.upstream_port_map`) und die Elemente
-//!    einer Liste sind keine Blätter; der Behälter selbst trägt die Zeile, und
-//!    seine Einstufung gilt für alles darin. Das reicht, solange darin
-//!    Skalare stehen. `the_schema_hides_no_leaf_from_the_walk` wird rot,
-//!    sobald jemand eine Struktur in einen Behälter legt — dann muss die
-//!    Grenze neu gezogen werden. Geprüft wird dabei nicht nur die erste Ebene:
+//!    `resolver.overrides`) und die Elemente einer Liste sind keine Blätter;
+//!    der Behälter selbst trägt die Zeile, und seine Einstufung gilt für alles
+//!    darin. Das reicht, solange darin Skalare stehen.
+//!    `the_schema_hides_no_leaf_from_the_walk` wird rot, sobald jemand eine
+//!    Struktur in einen Behälter legt — dann muss die Grenze neu gezogen
+//!    werden. Geprüft wird dabei nicht nur die erste Ebene:
 //!    `Vec<Enum mit Struktur-Varianten>` legt die Felder unter
 //!    `items.oneOf[].properties` und `BTreeMap<String, Vec<Struktur>>` zwei
 //!    Behälter tief; beide Formen kämen an einer Prüfung vorbei, die nur den
@@ -79,9 +79,6 @@ const REGISTER: &[(&str, &str)] = &[
     ("agent.briefing.enabled", "effective"),
     ("agent.command", "effective"),
     ("experimental.h2_upstream", "effective"),
-    // Der Proxy lenkt keinen Port um; HUM-088 entfernt den Schlüssel, statt ihm
-    // nachträglich einen Leser zu geben.
-    ("experimental.upstream_port_map", "pending(HUM-088)"),
     // Ein WebSocket-Upgrade entscheidet heute allein die Regel; der Schalter
     // trifft im Proxy auf nichts.
     ("experimental.ws_hold", "pending(HUM-121)"),
@@ -331,11 +328,13 @@ fn no_group_carries_a_pending_note() {
 fn the_keys_without_a_reader_are_the_known_ones() {
     // Die Liste aus HUM-101, plus die drei, die das Register selbst gefunden
     // hat (`resolver.nameserver`, `ui.theme`, `resolver.test_ca` aus HUM-087),
-    // abzüglich `limits.body_timeout_secs`, den HUM-120 verdrahtet hat, und
+    // abzüglich `limits.body_timeout_secs`, den HUM-120 verdrahtet hat,
     // abzüglich `resolver.test_ca`, den HUM-087 an `--allow-test-ca` und
-    // `ClientTls::new` verdrahtet hat. Sie steht hier, damit ein weiterer Fall
-    // nicht unbemerkt dazukommt: Wer einen Schlüssel verdrahtet, streicht ihn
-    // hier und im Register zugleich.
+    // `ClientTls::new` verdrahtet hat, und abzüglich
+    // `experimental.upstream_port_map`, den HUM-088 entfernt hat, statt ihm
+    // nachträglich einen Leser zu geben. Sie steht hier, damit ein weiterer
+    // Fall nicht unbemerkt dazukommt: Wer einen Schlüssel verdrahtet oder
+    // streicht, zieht ihn hier und im Register zugleich nach.
     let pending: Vec<&str> = register()
         .iter()
         .filter(|(_, readiness)| readiness.is_pending())
@@ -344,7 +343,6 @@ fn the_keys_without_a_reader_are_the_known_ones() {
     assert_eq!(
         pending,
         vec![
-            "experimental.upstream_port_map",
             "experimental.ws_hold",
             "pseudonyms.max_response_bytes",
             "pseudonyms.translate_responses",
@@ -469,15 +467,12 @@ fn the_schema_hides_no_leaf_from_the_walk() {
         }
     });
     assert!(checked > 40, "only {checked} nodes, the walk found nothing");
-    // Die drei Behälter von heute, beim Namen: Wer einen vierten anlegt, sieht
-    // hier, dass seine Einträge keine eigene Zeile bekommen.
+    // Die beiden Behälter von heute, beim Namen: Wer einen dritten anlegt,
+    // sieht hier, dass seine Einträge keine eigene Zeile bekommen. Bis HUM-088
+    // waren es drei; `experimental.upstream_port_map` ist entfallen.
     assert_eq!(
         schema::free_table_paths().into_iter().collect::<Vec<_>>(),
-        vec![
-            "experimental.upstream_port_map",
-            "resolver.overrides",
-            "sandbox.env"
-        ]
+        vec!["resolver.overrides", "sandbox.env"]
     );
 }
 
@@ -517,6 +512,10 @@ fn no_retired_key_has_a_register_line() {
         alias::retired("limits.idle_timeout_secs").is_some(),
         "the removed idle limit must stay known to the loader"
     );
+    assert!(
+        alias::retired("experimental.upstream_port_map").is_some(),
+        "the removed port map must stay known to the loader"
+    );
 }
 
 #[test]
@@ -526,4 +525,17 @@ fn the_removed_idle_limit_is_gone_from_the_schema() {
     // versehentlich zurück, hat er wieder keinen Leser.
     assert!(!schema::known_paths().contains("limits.idle_timeout_secs"));
     assert!(schema::leaf_paths().contains("limits.header_timeout_secs"));
+}
+
+#[test]
+fn the_removed_port_map_is_gone_from_the_schema() {
+    // HUM-088: `experimental.upstream_port_map` hatte nie einen Leser. Der
+    // Proxy verbindet zu `authority.port`, und keine Stelle bildet ihn ab; die
+    // beiden Aufbauten, für die der Schlüssel gedacht war, wären ohnehin an
+    // `ip_is_private` gescheitert. Er ist entfernt statt nachgerüstet. Bleibt
+    // er versehentlich im Schema zurück, ist er wieder ein Schlüssel, der
+    // geprüft und nie gelesen wird — genau der Fall, den das Register findet.
+    assert!(!schema::known_paths().contains("experimental.upstream_port_map"));
+    assert!(schema::leaf_paths().contains("experimental.h2_upstream"));
+    assert!(schema::leaf_paths().contains("experimental.ws_hold"));
 }

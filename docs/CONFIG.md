@@ -99,7 +99,6 @@ Schalter für unfertige Wege. Alles hier darf ohne Ankündigung wegfallen.
 | Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
 |---|---|---|---|---|---|---|
 | `experimental.h2_upstream` | boolean | `false` | expert | denied | ja | Bietet dem Ziel HTTP/2 an. In M1 spricht der Proxy nach oben nur HTTP/1.1. |
-| `experimental.upstream_port_map` | table of integer | `{}` | expert | denied | offen (HUM-088) | Lenkt einen Zielport auf einen anderen um, Schlüssel und Wert als Portnummer. Nur für Tests. |
 | `experimental.ws_hold` | boolean | `false` | expert | denied | offen (HUM-121) | Hält auch WebSocket-Upgrades an, statt sie über eine Regel zu entscheiden. |
 
 ### `findings`
@@ -226,9 +225,16 @@ dem Issue und dem Grund; der Wert wird übergangen, und der Daemon startet trotz
 harter Fehler wäre hier die Strafe für eine Entscheidung, die nicht der Nutzer getroffen
 hat (`backlog/CONVENTIONS.md` 4.25).
 
-| Schlüssel | Entfallen mit | Grund (Text des Befunds) |
-|---|---|---|
-| `limits.idle_timeout_secs` | HUM-101 | it described the same span as limits.header_timeout_secs, the one idle clock of the connection to the agent |
+Die Spalte „Form" sagt, was mit dem geschieht, was **unter** dem Schlüssel steht. Bei
+einem Wert hat es dort nie eine Ebene gegeben: `[schlüssel.irgendwas]` ist kein alter
+Eintrag, sondern ein unbekannter, und scheitert weiterhin mit `CONFIG_002`. Bei einer
+Tabelle gehörten ihre Schlüssel dem Nutzer; sie verschwindet als Ganzes, in einer
+einzigen Warnung.
+
+| Schlüssel | Entfallen mit | Form | Grund (Text des Befunds) |
+|---|---|---|---|
+| `experimental.upstream_port_map` | HUM-088 | Tabelle | the proxy never redirected a port, and no shipped test needs one: they bind the real port inside their own network namespace or address the ephemeral port directly |
+| `limits.idle_timeout_secs` | HUM-101 | Wert | it described the same span as limits.header_timeout_secs, the one idle clock of the connection to the agent |
 
 ## Pfade
 

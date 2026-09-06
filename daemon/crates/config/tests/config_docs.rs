@@ -191,13 +191,24 @@ fn render_aliases_and_paths(out: &mut String) {
          sie noch in einer Datei stehen hat, bekommt beim Laden eine Warnung (`CONFIG_005`) mit\n\
          dem Issue und dem Grund; der Wert wird übergangen, und der Daemon startet trotzdem. Ein\n\
          harter Fehler wäre hier die Strafe für eine Entscheidung, die nicht der Nutzer getroffen\n\
-         hat (`backlog/CONVENTIONS.md` 4.25).\n\n",
+         hat (`backlog/CONVENTIONS.md` 4.25).\n\n\
+         Die Spalte „Form\" sagt, was mit dem geschieht, was **unter** dem Schlüssel steht. Bei\n\
+         einem Wert hat es dort nie eine Ebene gegeben: `[schlüssel.irgendwas]` ist kein alter\n\
+         Eintrag, sondern ein unbekannter, und scheitert weiterhin mit `CONFIG_002`. Bei einer\n\
+         Tabelle gehörten ihre Schlüssel dem Nutzer; sie verschwindet als Ganzes, in einer\n\
+         einzigen Warnung.\n\n",
     );
-    out.push_str("| Schlüssel | Entfallen mit | Grund (Text des Befunds) |\n|---|---|---|\n");
+    out.push_str(
+        "| Schlüssel | Entfallen mit | Form | Grund (Text des Befunds) |\n|---|---|---|---|\n",
+    );
     for entry in alias::RETIRED {
+        let shape = match entry.shape {
+            alias::RetiredShape::Scalar => "Wert",
+            alias::RetiredShape::FreeTable => "Tabelle",
+        };
         let _ = writeln!(
             out,
-            "| `{}` | {} | {} |",
+            "| `{}` | {} | {shape} | {} |",
             entry.path,
             entry.since,
             escape(entry.why)
@@ -291,6 +302,21 @@ fn every_retired_key_is_listed_with_its_issue() {
     assert!(
         rendered.contains("CONFIG_005"),
         "the page must say what a retired key does at load time"
+    );
+    // Die Form gehört auf die Seite, weil sie über den Start entscheidet: Unter
+    // einem entfallenen Wert bleibt jede Ebene ein harter `CONFIG_002`, unter
+    // einer entfallenen Tabelle nicht (`backlog/CONVENTIONS.md` 4.25).
+    assert!(
+        rendered.contains("| Schlüssel | Entfallen mit | Form | Grund"),
+        "the retired table must carry the shape column"
+    );
+    assert!(
+        rendered.contains("| `experimental.upstream_port_map` | HUM-088 | Tabelle |"),
+        "the retired port map must be listed as the free table it was"
+    );
+    assert!(
+        rendered.contains("| `limits.idle_timeout_secs` | HUM-101 | Wert |"),
+        "the retired idle limit must be listed as the scalar it was"
     );
 }
 

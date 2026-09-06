@@ -349,9 +349,14 @@ mod tests {
 
     #[test]
     fn free_tables_are_leaves() {
+        // Zwei seit HUM-088: `experimental.upstream_port_map` war die dritte
+        // und ist entfallen. Beide verbliebenen stehen hier beim Namen, damit
+        // aus dem Test nicht eine Prüfung wird, die schon eine Tabelle
+        // zufriedenstellt.
         let free = free_table_paths();
         assert!(free.contains("resolver.overrides"), "{free:?}");
-        assert!(free.contains("experimental.upstream_port_map"), "{free:?}");
+        assert!(free.contains("sandbox.env"), "{free:?}");
+        assert!(!free.contains("experimental.upstream_port_map"), "{free:?}");
         assert!(!free.contains("llm.passthrough_paths"));
     }
 
