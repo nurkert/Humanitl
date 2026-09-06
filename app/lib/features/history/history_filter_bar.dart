@@ -10,6 +10,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/domain/domain.dart';
+import '../../core/ui/diagnostic_severity.dart';
 import '../../core/ui/h_diagnostic_card.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
@@ -256,14 +257,11 @@ class _ChipButton extends StatelessWidget {
 ///
 /// The same table as the action bar's; it is repeated rather than imported so
 /// that this screen does not depend on a file of another feature. It belongs
-/// next to `HDiagnosticCard` in `core/ui` (handoff).
+/// Das Wort für [severity]; ein Alias auf die eine Abbildung in
+/// `core/ui/diagnostic_severity.dart` (HUM-068). Nur die **Farbe** dieses
+/// Bildschirms ist eine eigene: siehe [historySeverityColor].
 String historySeverityLabel(AppLocalizations l10n, Severity severity) =>
-    switch (severity) {
-      Severity.info => l10n.diagSeverityInfo,
-      Severity.warning => l10n.diagSeverityWarning,
-      Severity.error => l10n.diagSeverityError,
-      Severity.blocking => l10n.diagSeverityBlocking,
-    };
+    severityLabel(l10n, severity);
 
 /// The hue of [severity]. Never the blocked red: red means blocked.
 ///

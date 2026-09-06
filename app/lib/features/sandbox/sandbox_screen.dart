@@ -18,6 +18,7 @@ import '../../core/ipc/daemon_client.dart';
 import '../../core/time/now.dart';
 import '../../core/ui/fix_control.dart';
 import '../../core/ui/h_diagnostic_card.dart';
+import '../../core/ui/diagnostic_severity.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
 import 'providers/sandbox_status_provider.dart';
@@ -94,31 +95,55 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
       child: Stack(
         fit: StackFit.expand,
         children: <Widget>[
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              SandboxHeader(status: status, onAskStop: _askStop),
-              const HHairline(),
-              _Diagnostics(status: status),
-              Expanded(
-                child: switch (snapshot) {
-                  AsyncError(:final Object error) => _CannotRead(error: error),
-                  _ => HWait(
-                    loading: snapshot.isLoading && !snapshot.hasValue,
-                    skeleton: Padding(
-                      padding: EdgeInsets.all(tokens.spacing.x3),
-                      child: HSkeleton(
-                        rows: sandboxSkeletonRows,
-                        rowHeight: tokens.sizes.rowHistory,
+          // Der `LayoutBuilder` steht **über** der Spalte und nicht darin:
+          // Eine vertikale Spalte reicht ihren Kindern `maxHeight:
+          // double.infinity`, und ein Deckel, der daraus ein Drittel rechnet,
+          // ist wieder unendlich — also keiner. Genau das ist im Review von
+          // Antigravity aufgefallen, nachdem der erste Entwurf den Deckel
+          // innen hatte und der Bildschirm trotzdem übergelaufen wäre.
+          LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints constraints) =>
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    SandboxHeader(status: status, onAskStop: _askStop),
+                    const HHairline(),
+                    // Befunde stehen oben, wo sie entstanden sind, und sie
+                    // nehmen dem Bildschirm nicht den Boden weg: Über einem
+                    // Drittel der Höhe rollt der Block in sich. Ohne diese
+                    // Grenze schob schon der dritte Befund den Mounts-Reiter
+                    // aus dem Fenster — 32 px Inhalt, den niemand sehen
+                    // konnte (HUM-068).
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: constraints.maxHeight * _diagnosticsShare,
+                      ),
+                      child: SingleChildScrollView(
+                        child: _Diagnostics(status: status),
                       ),
                     ),
-                    child: _Body(status: status, onShowArgv: _showArgv),
-                  ),
-                },
-              ),
-              const HHairline(),
-              SandboxStatusBar(status: status, onShowArgv: _showArgv),
-            ],
+                    Expanded(
+                      child: switch (snapshot) {
+                        AsyncError(:final Object error) => _CannotRead(
+                          error: error,
+                        ),
+                        _ => HWait(
+                          loading: snapshot.isLoading && !snapshot.hasValue,
+                          skeleton: Padding(
+                            padding: EdgeInsets.all(tokens.spacing.x3),
+                            child: HSkeleton(
+                              rows: sandboxSkeletonRows,
+                              rowHeight: tokens.sizes.rowHistory,
+                            ),
+                          ),
+                          child: _Body(status: status, onShowArgv: _showArgv),
+                        ),
+                      },
+                    ),
+                    const HHairline(),
+                    SandboxStatusBar(status: status, onShowArgv: _showArgv),
+                  ],
+                ),
           ),
           if (_argvOpen)
             Align(
@@ -210,6 +235,12 @@ class _Body extends ConsumerWidget {
 ///
 /// A finding is anchored where the action was: the start button is above it,
 /// and the reason it did not start stands directly below (`docs/UX.md` 4.4).
+/// Wie viel Höhe die Befunde höchstens einnehmen.
+///
+/// Ein Drittel: genug für zwei Karten nebeneinanderliegender Ursachen, wenig
+/// genug, dass der Reiter darunter noch ein Reiter ist.
+const double _diagnosticsShare = 1 / 3;
+
 class _Diagnostics extends StatelessWidget {
   const _Diagnostics({required this.status});
 
@@ -227,15 +258,21 @@ class _Diagnostics extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          for (final Diagnostic diagnostic in status.diagnostics)
+          // Der Schlüssel trägt den Platz **und** den Code: Zwei Befunde
+          // desselben Codes in einer Sitzung sind kein Sonderfall — zwei
+          // verbotene Mounts, zwei Symlinks aus dem Projekt heraus —, und ein
+          // Schlüssel aus dem Code allein ließ den Bildschirm mit „Duplicate
+          // keys" abstürzen (gefunden beim Bau des Deckels, HUM-068).
+          for (final (int place, Diagnostic diagnostic)
+              in status.diagnostics.indexed)
             SandboxArrive(
-              key: ValueKey<String>('diagnostic-${diagnostic.code}'),
+              key: ValueKey<String>('diagnostic-$place-${diagnostic.code}'),
               child: Padding(
                 padding: EdgeInsets.only(bottom: tokens.spacing.x2),
                 child: HDiagnosticCard(
                   code: diagnostic.code,
-                  severityLabel: _severityLabel(l10n, diagnostic.severity),
-                  color: _severityColor(tokens, diagnostic.severity),
+                  severityLabel: severityLabel(l10n, diagnostic.severity),
+                  color: severityColor(tokens, diagnostic.severity),
                   title: diagnostic.title.isEmpty
                       ? diagnostic.code
                       : diagnostic.title,
@@ -384,20 +421,3 @@ class _CannotRead extends ConsumerWidget {
     );
   }
 }
-
-/// The label of a severity, in the person's language.
-String _severityLabel(AppLocalizations l10n, Severity severity) =>
-    switch (severity) {
-      Severity.info => l10n.diagSeverityInfo,
-      Severity.warning => l10n.diagSeverityWarning,
-      Severity.error => l10n.diagSeverityError,
-      Severity.blocking => l10n.diagSeverityBlocking,
-    };
-
-/// The hue of a severity. Never the blocked red: red means blocked
-/// (`docs/UX.md` 3.3, rule 6).
-Color _severityColor(HTokens tokens, Severity severity) => switch (severity) {
-  Severity.info => tokens.colors.accent,
-  Severity.warning => tokens.state.held,
-  Severity.error || Severity.blocking => tokens.state.error,
-};
