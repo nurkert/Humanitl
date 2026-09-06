@@ -40,9 +40,10 @@ rust-doc: ## Documentation builds without warnings (CI parity)
 rust-deny: ## License and advisory audit (needs cargo-deny)
 	cd daemon && cargo deny check
 
-typed-errors-lint: ## No public daemon signature returns String or anyhow errors (HUM-063)
+typed-errors-lint: ## Typed errors (HUM-063) and the test reporter (HUM-133) check themselves
 	scripts/ci/lint-no-string-errors.sh --self-test
 	scripts/ci/lint-no-string-errors.sh
+	scripts/ci/test-report.sh --self-test
 
 deps-lint: ## Enforce the dependency direction (HUM-074)
 	./tools/check-deps.sh
