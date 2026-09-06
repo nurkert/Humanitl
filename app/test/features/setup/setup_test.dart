@@ -5,12 +5,14 @@
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ui/fix_control.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl_ui/humanitl_ui.dart';
 import 'package:humanitl/core/ipc/client_diagnostics.dart';
+import 'package:humanitl/core/ipc/daemon_client.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/features/setup/providers/setup_provider.dart';
 import 'package:humanitl/features/setup/setup_screen.dart';
@@ -67,6 +69,30 @@ class SlowlyFailingClient extends FakeDaemonClient {
   @override
   Future<DaemonInfo> getInfo() async {
     await Future<void>.delayed(const Duration(milliseconds: 200));
+    return super.getInfo();
+  }
+}
+
+/// Ein Daemon, den es erst gibt, nachdem jemand ihn installiert hat.
+///
+/// `goOffline` taugt dafür nicht: Sein Befund trägt `fake: true`, und der
+/// gewöhnliche Weg — Nutzer-Unit, Standard-Socket — ist der einzige, auf dem
+/// `DAEMON_001` die Abhilfe `InstallService` trägt (`client_diagnostics.dart`).
+/// Der Knopf, um den es hier geht, entstünde sonst gar nicht.
+class UninstalledDaemonClient extends FakeDaemonClient {
+  /// True, sobald der Installer gelaufen ist.
+  bool installed = false;
+
+  @override
+  Future<DaemonInfo> getInfo() async {
+    if (!installed) {
+      throw DaemonException(
+        ClientDiagnostics.daemonUnreachable(
+          socketPath: FakeDaemonClient.defaultSocket,
+          detail: 'connection refused',
+        ),
+      );
+    }
     return super.getInfo();
   }
 }
@@ -696,5 +722,54 @@ void main() {
     // letzte Versuch, der noch unterwegs ist, in Ruhe aus.
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(milliseconds: 300));
+  });
+
+  /// Akzeptanzkriterium 1 von HUM-044, in einem Lauf: der Klick **und** die
+  /// Rückkehr.
+  ///
+  /// Die vier Aussagen des Kriteriums waren einzeln gemessen — der Befund mit
+  /// seiner Aktion, der Befehl ohne Shell, die Zeile, die von selbst grün wird
+  /// —, die Verkettung nicht: `FixControl` bekam seinen Runner nur als
+  /// Parameter, und der Anwendungsbaum reichte keinen durch. Seit
+  /// [serviceInstallerProvider] gibt es die Naht, und dieser Test läuft durch
+  /// sie: Klick auf den Knopf, der Installer stellt den Dienst an, und der
+  /// Zwei-Sekunden-Versuch bringt den Bildschirm zurück — innerhalb der vier
+  /// Sekunden, die das Kriterium nennt.
+  testWidgets('the install button starts the daemon and the line turns green', (
+    WidgetTester tester,
+  ) async {
+    final UninstalledDaemonClient client = UninstalledDaemonClient();
+    await pumpApp(
+      tester,
+      client: client,
+      reconnect: const Duration(seconds: 2),
+      overrides: <Override>[
+        serviceInstallerProvider.overrideWithValue(() async {
+          client.installed = true;
+          return null;
+        }),
+      ],
+    );
+
+    // Vorher: kein Daemon, der Bildschirm des Aufbaus, und der Knopf, der ihn
+    // anlegt.
+    expect(find.byType(SetupScreen), findsOneWidget);
+    expect(find.text('DAEMON_001'), findsWidgets);
+    expect(find.byKey(const Key('setup-fix-install')), findsOneWidget);
+    expect(client.installed, isFalse);
+
+    await tester.tap(find.byKey(const Key('setup-fix-install')));
+    await tester.pump();
+    await tester.pump();
+    expect(client.installed, isTrue, reason: 'the click ran the installer');
+
+    // Und nachher: Der Versuch, der alle zwei Sekunden läuft, findet den
+    // Dienst. Niemand fasst das Fenster dafür an.
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byType(ShellScreen), findsOneWidget);
+    expect(find.byType(SetupScreen), findsNothing);
   });
 }
