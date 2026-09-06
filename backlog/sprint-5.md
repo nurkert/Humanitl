@@ -1148,3 +1148,494 @@ Am Kopf von `mounts.rs` steht ein Doc-Kommentar, der sagt, was dieses Modul trä
 ### Fallstricke
 - `include_bytes!` und andere pfadbezogene Makros hängen an der Datei, in der sie stehen; nach dem Verschieben stimmen relative Pfade nicht mehr.
 - Die Testmodule teilen heute Hilfsfunktionen; die wandern in ein gemeinsames `#[cfg(test)] mod testing` unter `profile/`, nicht in drei Kopien.
+
+## HUM-122 · Die Regel für einen Befehl aus fremdem Wert steht zweimal
+
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-043, HUM-075 · Blockiert: —
+
+### Kontext
+Ein Wert von außen, der zu einem Befehl wird, den ein Mensch in seine Shell
+einfügt, ist der gefährlichste Weg in diesem Baum. Sprint 3 hat diese Gestalt
+achtmal gefunden: ein `rm` aus einem gesäuberten Anzeigepfad (HUM-043), ein
+`export KEY=VALUE` mit unzitiertem Wert (HUM-106), ein `chmod 700 /tmp/h`
+aus `XDG_RUNTIME_DIR` (HUM-075) und, als Umkehrung, ein bereits bewiesener
+Befehl, der ein zweites Mal gesäubert und dabei hinter dem schließenden
+Anführungszeichen abgeschnitten wurde (HUM-043b). Daraus ist eine Regel
+geworden: Ein Wert wird genau einmal geprüft, an der Stelle, die ihn erzeugt;
+danach wird er weder erneut geprüft noch erneut gesäubert.
+
+Die Regel selbst steht heute zweimal im Code. `humanitl_sandbox::summary::copy_command`
+(`summary.rs:933`) baut das `rm --` der Sitzungszusammenfassung, und
+`humanitl_sandbox::doctor::shell_command` (`doctor.rs:134`) baut die Befehlszeile
+eines Doctor-Vorschlags. Beide prüfen dieselben vier Bedingungen — nicht leer,
+`sanitize_note` ändert nichts, die Zitierung von `shlex::try_quote` ist wörtlich,
+`shlex::split` ergibt wieder genau dieselben Wörter —, und beide tragen dafür ein
+eigenes, bis auf den Parameternamen zeichengleiches `is_literal_word`
+(`summary.rs:951`, `doctor.rs:159`).
+
+Die beiden Doc-Kommentare sind bereits auseinandergelaufen. Der in `doctor.rs`
+erklärt zusätzlich, was `shlex` 2 mit einem Wort tut, das ein `'` oder ein `\`
+enthält (es setzt **doppelte** Anführungszeichen, in denen `$`, `` ` ``, `\` und
+`"` ihre Bedeutung behalten), und warum Schritt 4 heute unerreichbar ist und
+trotzdem stehen bleibt. In `summary.rs` fehlt beides. Wer den einen liest, kennt
+die Regel; wer den anderen liest, kennt sie halb. Das ist dasselbe Muster wie in
+HUM-098 und HUM-092: Fachlogik, die zweimal existiert, driftet, und die Tests der
+einen Seite belegen nichts über die andere. Bei einer Sicherheitsregel ist der
+Preis dafür höher als bei einem Reduzierer.
+
+### Ziel
+Eine Stelle, an der aus Wörtern eine Befehlszeile wird oder eben keine. Beide
+Aufrufer rufen sie; keiner zitiert noch selbst. Der Doc-Kommentar mit der
+vollständigen Begründung steht dort einmal, und die Aufrufer verweisen darauf.
+
+### Nicht-Ziel
+Keine Änderung an der Regel. Die vier Bedingungen bleiben, ihre Reihenfolge
+bleibt, und was heute `None` ergibt, ergibt danach `None`. Kein neuer Krate und
+kein Port. Keine zweite Prüfung an einer anderen Stelle — das war der Fehler von
+HUM-043b.
+
+### Betroffene Pfade
+- `daemon/crates/sandbox/src/shell.rs` (neu): `quote_word` und `command_line`
+- `daemon/crates/sandbox/src/lib.rs`: das Modul, nicht öffentlich re-exportiert außer was die Aufrufer brauchen
+- `daemon/crates/sandbox/src/summary.rs`: `copy_command` ruft `command_line`
+- `daemon/crates/sandbox/src/doctor.rs`: `shell_command` ruft `command_line`, `command_fix` bleibt
+- `daemon/crates/sandbox/tests/shell_quoting.rs` (neu)
+
+### Spezifikation
+`shell::command_line(words: &[&str]) -> Option<String>` trägt die Regel. Sie ist
+`None` für eine leere Wortliste, für ein leeres Wort, für ein Wort, das
+`sanitize_note` verändert, für eine Zitierung, die nicht wörtlich ist, und wenn
+`shlex::split` der fertigen Zeile nicht wieder genau diese Wörter in dieser
+Reihenfolge ergibt. `shell::quote_word` ist der Einzelfall davon und öffentlich,
+weil ein Aufrufer manchmal ein Wort und keine Zeile braucht; sie teilt sich die
+Prüfung mit `command_line` und dupliziert sie nicht.
+
+`summary::copy_command` wird zu `host_path.to_str().and_then(|text| shell::command_line(&["rm", "--", text]))`.
+Das ist wörtlich dasselbe Ergebnis wie heute: `rm` und `--` überstehen
+`sanitize_note` und `try_quote` unverändert, also ist die verbundene Zeile
+`rm -- <quoted>`. Ein Pfad, der kein gültiges `UTF-8` ist, ergibt weiterhin
+`None`, bevor die Regel überhaupt gefragt wird.
+
+`doctor::shell_command` wird zu einem Aufruf von `shell::command_line` und
+behält seinen Namen, weil er in `command_fix` und in den Doctor-Prüfungen steht.
+
+Der Doc-Kommentar an `shell::command_line` trägt die vollständige Begründung:
+die vier Bedingungen, die Erklärung zu den doppelten Anführungszeichen von
+`shlex` 2, und den Satz, dass Schritt 4 heute unerreichbar ist und trotzdem
+stehen bleibt, weil er die Zusage ist und nicht ihre Folge. Ohne diesen letzten
+Satz liest der nächste Leser den überlebenden Mutanten als Lücke.
+
+### Tests
+- `shell_quoting.rs`: je ein Fall pro abgelehnter Bedingung — leeres Wort,
+  Steuerzeichen, Zeilenumbruch, Bidi-Umkehrung, Überlänge, ein Wort mit `'`,
+  ein Wort mit `\`, ein Wort mit `$(`.
+- Ein Gleichheitstest: für dreißig Pfade (harmlose, exotische, abgelehnte) liefert
+  `copy_command` denselben `Option<String>` wie vor der Zusammenlegung. Die
+  Erwartungen stehen als Tabelle im Test, nicht als zweite Implementierung.
+- Mutationsprobe: `is_literal_word` in `shell.rs` auf `true` festnageln. Danach
+  muss mindestens ein Test aus dem Umfeld von `summary` **und** mindestens einer
+  aus dem Umfeld von `doctor` rot werden. Wird nur eine Seite rot, prüft die
+  andere die Regel nicht mehr.
+
+### Akzeptanzkriterien
+- [ ] `grep -rn 'fn is_literal_word' daemon/crates` findet genau einen Treffer.
+- [ ] `grep -rn 'try_quote' daemon/crates` findet außerhalb von `shell.rs` und der Tests keinen Treffer.
+- [ ] `summary::copy_command` und `doctor::shell_command` bestehen je aus höchstens drei Zeilen und rufen `shell::command_line`.
+- [ ] Der Gleichheitstest über dreißig Pfade ist grün.
+- [ ] Die Mutationsprobe macht auf beiden Seiten je mindestens einen Test rot.
+- [ ] `make check` grün.
+
+### Fallstricke
+- `copy_command` nimmt einen `&Path`, `shell_command` nimmt Wörter. Die
+  Umwandlung `to_str()` gehört zum Aufrufer und bleibt dort: Ein Pfad ohne
+  gültiges `UTF-8` ist kein Wort, das man zitieren könnte, sondern ein anderer
+  Pfad.
+- `sanitize_note` gilt für **jedes** Wort, auch für `rm` und `--`. Sie überstehen
+  es unverändert, aber die Prüfung darf nicht auf das letzte Wort verkürzt
+  werden; sonst hängt die Zusage an der Zusammensetzung des Aufrufers.
+- `shlex::try_quote` gibt ein `Cow`. Der geliehene Fall ist der häufige; ein
+  `into_owned()` je Wort ist an dieser Stelle egal, ein `clone()` in der Schleife
+  wäre es nicht.
+
+## HUM-123 · `IPC_005` heißt nach dem Regel-RPC und wird längst überall benutzt
+
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-026 · Blockiert: —
+
+### Kontext
+Das Register in `daemon/crates/core-types/src/diagnostics/codes.rs:228` führt
+`IPC_005` mit dem Titel „Rules-Anfrage ungültig". Der Titel ist nicht Beiwerk:
+`Diagnostic::builder` holt ihn aus dem Register (`diagnostics/mod.rs:149`), und
+die `Display`-Form eines Befunds ist `{code}: {title}: {why}`. Er steht damit in
+der Kopfzeile jeder Befundkarte, in jeder Zeile auf `stderr` und in
+`docs/DIAGNOSTICS.md:72`.
+
+Der Code wird längst weit außerhalb des `Rules`-RPC erzeugt:
+
+- `ipc/src/validate.rs:141` — die Sandbox-Kennung ist keine Kennung.
+- `ipc/src/validate.rs:156` und `ipc/src/server.rs:832` — eine Prüfsumme hat keine 32 Bytes.
+- `ipc/src/validate.rs:174` — die Anfrage trägt keinen `BodyRef` (seit HUM-026).
+- `ipc/src/validate.rs:269` und `ipc/src/server.rs:758` — ein unbekannter Schlüssel in `order_by`.
+- `ipc/src/server.rs:796` — ein Cursor, der nicht von `encode_cursor` stammt.
+
+Der Test `session_summary_rpc.rs:221` hält genau diesen Fall fest: Wer eine
+Sitzungszusammenfassung mit einer unlesbaren Kennung anfordert, bekommt
+`IPC_005` — und liest in der Kopfzeile seiner Karte „Rules-Anfrage ungültig",
+einen Satz über einen RPC, den er nicht aufgerufen hat. Das ist die Sorte
+Meldung, die einen Menschen an der falschen Stelle suchen lässt, und sie
+widerspricht CONVENTIONS 4.13: Der Titel sagt, was nicht ging.
+
+In der Anwendung heißt die Konstante `rulesRequestInvalid`
+(`app/lib/core/domain/diagnostic_codes.dart:25`); der Name trägt denselben
+Irrtum weiter.
+
+### Ziel
+Ein Titel, der alle Fälle des Codes deckt, im Register, in `docs/DIAGNOSTICS.md`
+und im Dart-Bezeichner. Die Nummer bleibt: Ein zurückgezogener Code bliebe als
+`#[deprecated]` stehen, und hier ist nichts zurückzuziehen, sondern nur richtig
+zu benennen.
+
+### Nicht-Ziel
+Keine Aufteilung auf mehrere Codes. `IPC_005` ist „die Anfrage lässt sich so
+nicht ausführen"; das ist eine Aussage, und der Bereich `ipc` hat nur die
+Nummern 1 bis 9. Kein neuer Code für den Sandbox-Fall. Keine Änderung an
+`why`-Texten — die sind bereits fallgenau.
+
+### Betroffene Pfade
+- `daemon/crates/core-types/src/diagnostics/codes.rs`: Titel und Doc-Kommentar von `IPC_005`
+- `docs/DIAGNOSTICS.md`: erzeugt mit `UPDATE_DIAG_DOCS=1 cargo test -p humanitl-core --test diag_docs`
+- `app/lib/core/domain/diagnostic_codes.dart`: `rulesRequestInvalid` wird `requestInvalid`
+- die Aufrufer des Dart-Bezeichners
+- `daemon/crates/ipc/src/validate.rs`: der Modul-Kommentar in Zeile 22, der `IPC_005` heute den `Rules`- und Decide-Pfaden zuordnet
+
+### Spezifikation
+Der Titel wird „Anfrage ungültig". Er ist wahr für jeden der genannten Fälle und
+sagt weiterhin, was nicht ging: Die Anfrage, nicht der Zustand und nicht der
+Daemon. Der Doc-Kommentar über dem Eintrag zählt die Fälle auf — Operation
+fehlt, Regel fehlt oder ist unlesbar, Regel-Id unbekannt, kein Regelspeicher,
+Kennung unlesbar, Prüfsumme nicht 32 Bytes, `BodyRef` fehlt, `order_by`
+unbekannt, Cursor nicht lesbar — und nennt zu jedem die Stelle. Er sagt
+außerdem, was `IPC_005` **nicht** ist: `IPC_004` gehört `Decide`, `IPC_006`
+heißt „der RPC existiert, dieser Daemon kann ihn nicht".
+
+`docs/DIAGNOSTICS.md` wird nicht von Hand angefasst, sondern erzeugt; der Anker
+`#ipc_005` bleibt, damit ein alter Verweis nicht ins Leere zeigt.
+
+In der Anwendung wird `rulesRequestInvalid` zu `requestInvalid`. Der Wert
+`'IPC_005'` bleibt.
+
+### Tests
+- Ein Test in `core-types`, der für jeden Code prüft, dass sein Titel keinen
+  RPC-Namen trägt, der nicht in seinem Doc-Kommentar vorkommt. Das ist die
+  Verallgemeinerung des Fundes und verhindert den nächsten.
+- `session_summary_rpc.rs`: der bestehende Fall prüft zusätzlich den Titel, nicht
+  nur den Code. Ein Test, der nur `"IPC_005"` liest, hätte diesen Fund nie
+  gemacht.
+- `cargo test -p humanitl-core --test diag_docs` ohne `UPDATE_DIAG_DOCS` ist
+  grün, das heißt: die Datei im Baum ist die erzeugte.
+
+### Akzeptanzkriterien
+- [ ] `IPC_005` trägt im Register den Titel „Anfrage ungültig"; sein Doc-Kommentar nennt alle neun Fälle mit Datei und Zeile.
+- [ ] `docs/DIAGNOSTICS.md` ist erzeugt, nicht editiert, und der Anker `#ipc_005` steht unverändert.
+- [ ] `grep -rn 'rulesRequestInvalid' app/` findet keinen Treffer mehr.
+- [ ] Der Test über Titel und Doc-Kommentar aller Codes ist grün und wird rot, wenn man `IPC_005` den alten Titel zurückgibt.
+- [ ] `make check` und `make flutter-analyze` grün.
+
+### Fallstricke
+- Der Titel steht in `Display`; Tests, die auf `"Rules-Anfrage ungültig"`
+  vergleichen, müssen mitgeführt und nicht gelöscht werden.
+- `docs/DIAGNOSTICS.md` ist erzeugt. Wer sie von Hand ändert, macht den
+  `diag_docs`-Test rot und merkt es erst in CI.
+
+## HUM-124 · Die Terminal-Tests warten ohne Frist auf den Start
+
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-042 · Blockiert: —
+
+### Kontext
+`daemon/crates/ipc/tests/terminal.rs` startet echte Sandboxen. Zwei seiner
+Warteschritte haben keine Frist:
+
+- `running_with` (`terminal.rs:242-266`) liest den Ereignisstrom des Starts, bis
+  ein `Status` `Running` oder `Failed` meldet — `while let Some(event) = stream.next().await`,
+  ohne `timeout`.
+- `with_session` (`terminal.rs:275-284`) wartet am Ende auf die erste Antwort auf
+  `stop()`, ebenfalls ohne Frist.
+
+Die Schritte **danach** sind gedeckt: `Client::wait_for` und `Client::next`
+(`terminal.rs:218-233`) laufen in ein `tokio::time::timeout(WAIT, …)` mit
+`WAIT = 20s`. Die Frist steht also überall dort, wo der Test schon läuft, und
+fehlt genau dort, wo er noch nicht angefangen hat.
+
+Am 2026-09-05 haben drei Agenten unabhängig voneinander gemeldet, dass
+`osc52_does_not_reach_host` hängt, wenn parallel ein zweiter Testlauf des
+Arbeitsbereichs Sandboxen startet. Allein läuft derselbe Test in 1,3 Sekunden.
+Ein hängender Test sagt niemandem etwas: Die CI bricht nach ihrer Gesamtfrist
+ab, und im Bericht steht eine Zeitüberschreitung ohne Ort. Genau dieselbe Regel
+steht schon ausgeschrieben im Kommentar von `m3_wait_ready`
+(`tests/e2e/m3_agent_inside/run.sh:333-341`), dort für Shell-Skripte. Sie gilt
+für die Rust-Tests genauso.
+
+Der Skript-Text von `osc52_does_not_reach_host` endet mit
+`while :; do sleep 0.05; done`. Der Agent läuft also weiter, bis ihn jemand
+beendet. Das ist gewollt und Teil der Aussage; es macht das fehlende Zeitlimit
+davor aber teurer, weil nichts von selbst endet.
+
+### Ziel
+Kein Wartepunkt in diesem Testmodul ohne Frist, und jede abgelaufene Frist sagt,
+worauf sie gewartet hat und was zuletzt zu sehen war.
+
+### Nicht-Ziel
+Keine Änderung an dem, was die Tests prüfen. Kein Ausschalten von Tests unter
+Last, kein `#[ignore]`. Keine Serialisierung des Arbeitsbereichs über eine
+globale Sperre — das verdeckte die Frage, statt sie zu beantworten.
+
+### Betroffene Pfade
+- `daemon/crates/ipc/tests/terminal.rs`: `running_with`, `with_session`, ein gemeinsamer Helfer
+- `daemon/crates/ipc/tests/sandbox_start.rs`, falls dort dieselbe Gestalt steht
+
+### Spezifikation
+Ein Helfer `within(label: &str, deadline: Duration, fut)` legt eine Frist um ein
+Warten und bricht bei Ablauf mit einer Meldung ab, die `label` nennt. Er wird von
+`running_with` und `with_session` benutzt.
+
+`running_with` bekommt eine Frist von `START_WAIT` (60 Sekunden; ein Start kostet
+hier zwei Sekunden, unter Last mehr, und die Zahl darf großzügig sein, solange
+sie existiert). Läuft sie ab, endet der Test rot mit: worauf gewartet wurde
+(`Status Running`), welcher Zustand zuletzt kam, und wie viele Ereignisse
+insgesamt eintrafen. Ein Start, der `Failed` meldet, bleibt wie heute ein
+übersprungener Test mit `SKIP_MARKER` — das ist eine Umgebung ohne Sandbox und
+kein Fehler des Codes.
+
+`with_session` bekommt eine Frist von `WAIT`. Läuft sie ab, endet der Test rot,
+**nachdem** ein etwaiger Panik-Ausgang des Rumpfes weitergereicht wurde: Die
+Aussage des Tests ist wichtiger als die Aufräumfrist, und ein `panic` im Rumpf
+ist der interessantere Befund.
+
+### Tests
+- Ein Test des Helfers selbst: `within` über ein Future, das nie fertig wird,
+  endet innerhalb der Frist mit einer Panik, deren Text das Label enthält.
+- Mutationsprobe: die Frist in `running_with` auf `Duration::MAX` setzen. Der
+  Helfer-Test bleibt grün, der Test aus dem vorigen Punkt wird rot — das zeigt,
+  dass die Frist und nicht nur ihr Helfer geprüft wird.
+
+### Akzeptanzkriterien
+- [ ] `grep -n '\.await' daemon/crates/ipc/tests/terminal.rs` zeigt keinen Wartepunkt auf einen Strom mehr, der nicht in `within`, `timeout` oder einem Helfer mit Frist steht.
+- [ ] Eine abgelaufene Frist nennt Label, letzten Zustand und Ereigniszahl.
+- [ ] Ein Start, der `Failed` meldet, überspringt weiterhin mit `SKIP_MARKER`, statt rot zu werden.
+- [ ] `cargo test -p humanitl-ipc --test terminal` ist grün, allein und parallel zu einem zweiten Lauf des Arbeitsbereichs.
+- [ ] `make check` grün.
+
+### Fallstricke
+- `with_session` reicht die Panik des Rumpfes mit `resume_unwind` weiter. Eine
+  Frist, die davor abbricht, verschluckt die eigentliche Fehlermeldung; die
+  Reihenfolge in der Spezifikation ist deshalb bindend.
+- Die Frist gehört nicht in `Client::attach`: Dort ist das Warten schon gedeckt,
+  und eine zweite Frist an derselben Stelle verdoppelt nur die Zahl, die man
+  später anpassen muss.
+- Eine großzügige Frist ist kein Verzicht auf die Frist. 60 Sekunden, die etwas
+  sagen, sind besser als kein Limit, das nichts sagt.
+
+## HUM-125 · Die Hinweiszeile erreicht nur ein Terminal, und erst nach der Prüfung
+
+Sprint: 5 · Größe: M · Abhängigkeiten: HUM-042, HUM-067 · Blockiert: —
+
+### Kontext
+Wenn eine Anfrage des Agenten auf eine Entscheidung wartet, schreibt der Daemon
+eine Zeile: `[humanitl] request held: GET example.com/pfad · waiting for you`.
+Sie entsteht in `HeldNotices` (`daemon/crates/ipc/src/terminal.rs:430-505`) aus
+dem Ereignisstrom der Warteschlange. Zwei Dinge stimmen daran nicht.
+
+**Sie kommt zu spät.** `HeldNotices::run` (`terminal.rs:443`) ruft
+`self.queue.subscribe()` als erste Zeile — und die Aufgabe wird erst in
+`SandboxService::attend` (`sandbox.rs:987`) gestartet, also **nach** der
+Isolationsprüfung (`sandbox.rs:964`), nach der Momentaufnahme und nach dem
+Öffnen des Terminals. Der Prozess des Agenten läuft zu diesem Zeitpunkt schon:
+`launch` (`sandbox.rs:1534-1605`) hat ihn gestartet, bevor `attend` überhaupt
+anfängt. `HoldQueue::subscribe` ist ein Rundfunk; wer später abonniert, bekommt
+nichts von vorher. Eine Anfrage, die der Agent in dieser Spanne stellt und die
+gehalten wird, erzeugt also nie eine Zeile. Die Spanne ist keine theoretische:
+Die Isolationsprüfung liest `/proc` und macht echte Syscalls, und ein Agent, der
+sofort loslegt, ist der Normalfall und nicht der Ausnahmefall.
+
+**Sie erreicht nur einen Strom.** `TerminalHub::notice` (`terminal.rs:222`)
+schreibt in den Ring und den Rundfunk des Terminals. Der `Sandbox`-Strom bekommt
+sie nicht: `SandboxEvent` (`proto/humanitl/v1/humanitl.proto:913-930`) trägt
+`LogLine log = 5`, aber `notice` schreibt nie dorthin. Wer `humanitl run` tippt,
+liest den `Sandbox`-Strom (`daemon/bin/humanitl/src/cmd/run.rs:225-276`) und
+sieht die Zeile nie. Für ihn steht der Agent still, ohne dass irgendwo stünde,
+warum. `docs/CONFIG.md:203` beschreibt `ui.terminal_notices` als „Zeile im
+Bytestrom, die ein Vollbild-TUI überschreibt"; das ist für die Anwendung richtig,
+lässt die Kommandozeile aber ohne Antwort auf die einzige Frage, die sie in dem
+Moment hat.
+
+### Ziel
+Die Hinweiszeile entsteht für jeden gehaltenen Fluss dieser Sitzung, auch für
+einen, der vor der Isolationsprüfung gehalten wurde, und sie erreicht beide
+Ströme: das Terminal als Bytes an einer Folgengrenze, den `Sandbox`-Strom als
+`LogLine`.
+
+### Nicht-Ziel
+Keine neue Nachricht in der Proto — `LogLine` gibt es. Keine Richtung Proxy zu
+Terminal (ARCHITECTURE 1.2: „Niemand fragt den Proxy nach seinem Zustand, alle
+hören zu"); es bleibt beim Abonnement. Kein Vorziehen des Abonnements auf den
+blockierenden Faden, der `bwrap` startet — der Grund dafür steht als Kommentar in
+`sandbox.rs:975-977` und gilt weiter.
+
+### Betroffene Pfade
+- `daemon/crates/ipc/src/terminal.rs`: `HeldNotices` bekommt `subscribe` und `drain` statt eines `run`
+- `daemon/crates/ipc/src/sandbox.rs`: `attend` abonniert früh, leert später
+- `daemon/bin/humanitl/src/cmd/run.rs`: nichts zu ändern, `Event::Log` steht schon
+- `app/lib/features/sandbox/…`: der Log-Reiter, dessen leerer Zustand heute „ein Start und ein Stopp schreiben je eine Zeile" verspricht
+- `app/l10n/app_en.arb`, `app/l10n/app_de.arb`
+- `daemon/crates/ipc/tests/terminal.rs`
+- `docs/CONFIG.md` (erzeugt), `backlog/CONVENTIONS.md` 4.4
+
+### Spezifikation
+`HeldNotices` wird in zwei Schritte geteilt. `subscribe(&self) -> HeldNotices Receiver`
+gibt das Abonnement zurück und ist billig, nicht blockierend und ohne
+`TerminalHub`. `drain(receiver, hub, tx)` liest daraus, bildet die Zeile wie
+heute (`line_for`, `line`, `sanitize_note` in `notice_line`) und gibt sie an
+beide Senken.
+
+`attend` ruft `subscribe` als erste Anweisung, noch vor `started_line`, und hält
+den `Receiver`. Erst nachdem das Terminal offen ist, startet es die Aufgabe mit
+`drain`. Der Rundfunk puffert in der Zwischenzeit; ein `Lagged` wird wie heute
+mit `continue` übergangen, denn die Warteschlange selbst steht in der Oberfläche
+und ein verlorener Hinweis ist folgenlos.
+
+Die zweite Senke ist `tx.clone()`, derselbe `mpsc::Sender<v1::SandboxEvent>`, den
+`attend` schon hat. Die Zeile geht als `log_event(line)` hinaus, also mit
+demselben Text, den das Terminal bekommt, aber ohne die `\r\n`-Umrahmung aus
+`notice_line` — die gehört dem Bytestrom und nicht einer Nachricht mit Feldern.
+`ui.terminal_notices` schaltet weiterhin **nur** den Bytestrom; der `Sandbox`-Strom
+bekommt die Zeile immer. Der Schlüssel heißt, was er tut.
+
+Der leere Zustand des Log-Reiters verspricht heute zwei Zeilen je Sitzung. Er
+bekommt einen Satz dazu, der die Hinweiszeilen nennt. Der ARB-Schlüssel wird
+angepasst, `en` ist die Quelle.
+
+### Tests
+- Ein Test, der einen Fluss **vor** dem Öffnen des Terminals in die Warteschlange
+  legt und danach die Zeile im Terminal sieht. Er wird rot, wenn man das
+  Abonnement zurück hinter die Isolationsprüfung schiebt.
+- Ein Test, der dieselbe Zeile im `Sandbox`-Strom als `LogLine` sieht.
+- Ein Test mit `ui.terminal_notices = false`: keine Bytes im Terminal, die
+  `LogLine` trotzdem da.
+- Ein Test der Reihenfolge: Die `LogLine` und die Bytes tragen denselben Text.
+- Mutationsprobe: `drain` nur noch an `hub` geben. Der zweite Test wird rot.
+
+### Akzeptanzkriterien
+- [ ] `attend` abonniert die Warteschlange vor `check_isolation_or_kill`; der Test mit dem früh gehaltenen Fluss ist grün und wird rot, wenn man die Zeile zurückschiebt.
+- [ ] Eine gehaltene Anfrage erzeugt in `humanitl run` die Zeile `[humanitl] request held: …`, gemessen an einem Lauf und nicht an einer Absicht.
+- [ ] `ui.terminal_notices = false` unterdrückt die Bytes und nicht die `LogLine`; `docs/CONFIG.md` sagt das.
+- [ ] Der leere Zustand des Log-Reiters nennt die Hinweiszeilen; `en` und `de` sind beide gepflegt.
+- [ ] Die Aufgabe wird am Sitzungsende weiterhin abgebrochen; `two_sessions_leave_nothing_behind` bleibt grün.
+- [ ] `make check` und `make flutter-test` grün.
+
+### Fallstricke
+- Der `Receiver` muss zwischen `subscribe` und `drain` **gehalten** werden. Ein
+  `subscribe()`, dessen Ergebnis fallen gelassen und später neu geholt wird, ist
+  genau der heutige Zustand mit mehr Zeilen.
+- Der Rundfunkpuffer ist endlich. Zwischen Abonnement und Leeren liegt hier eine
+  kurze Spanne; ein `Lagged` bleibt trotzdem möglich und bleibt folgenlos
+  behandelt.
+- `tx` ist der Sender des Startstroms. Ist der Client weg, schlägt `send` fehl;
+  das darf die Aufgabe nicht beenden, denn das Terminal hängt noch daran.
+- Die Aufgabe hält einen `TerminalHub` und damit den `SandboxHandle`. Der
+  `abort()` am Ende von `attend` bleibt, und der Grund dafür bleibt als
+  Kommentar stehen.
+
+## HUM-126 · M1 und M2 lesen ihre Bereitschaft aus einer Fifo ohne Frist
+
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-046 · Blockiert: —
+
+### Kontext
+`m3_agent_inside/run.sh` trägt seit HUM-046 einen Helfer `m3_wait_ready`
+(Zeilen 342-357) und dazu einen Kommentar, der die Regel ausspricht:
+
+> Die ersten Fassungen von M2 und M3 lasen die Zeile mit `read < fifo`. Das
+> wartet unbegrenzt, und zwar schon beim Öffnen: Kommt der Server gar nicht hoch
+> — ein Syntaxfehler, ein belegter Port, ein fehlendes `python3` —, steht der
+> ganze Lauf, bis die CI ihn nach dreissig Minuten abbricht, und im Bericht steht
+> eine Zeitüberschreitung, die nichts sagt.
+
+M3 wurde repariert, M2 nicht, und M1 auch nicht. `m2_start_upstream`
+(`tests/e2e/m2_first_decision/run.sh:271-293`) macht ein `mkfifo` und liest mit
+`read -r m2_ready < "$m2_fifo"`. `start_fake_upstream` (`tests/e2e/lib.sh:287-304`)
+tut dasselbe für M1. In beiden Fällen blockiert schon das Öffnen der Fifo, und
+zwar auch dann, wenn der Serverprozess bereits gestorben ist: Ein toter Schreiber
+öffnet die Fifo nie, und der Leser wartet auf ein Ereignis, das nicht mehr
+kommen kann. Der Kommentar in `lib.sh:295-296` behauptet das Gegenteil
+(„bricht er vorher ab, bleibt FAKE_HTTP leer und der Aufrufer merkt es sofort")
+— das gilt für einen Schreiber, der die Fifo geöffnet und dann geschlossen hat,
+nicht für einen, der nie so weit kam.
+
+Das ist derselbe Mangel, den HUM-046 in seinem eigenen Gerüst behoben hat, an
+zwei Stellen, die davon nichts wissen. Der Helfer steht in einem
+Meilenstein-Skript statt in `lib.sh`, also konnte ihn niemand erben.
+
+### Ziel
+Ein Helfer in `lib.sh`, den alle drei Meilensteine benutzen. Ein Server, der
+nicht hochkommt, beendet den Lauf innerhalb seiner Frist mit seinem Protokoll im
+Text, und ein Server, der vorher stirbt, sofort.
+
+### Nicht-Ziel
+Keine Änderung an dem, was die Skripte prüfen, und keine an den Bereitschafts-
+zeilen der Python-Server. Keine neue Abhängigkeit; `grep`, `kill -0` und `sleep`
+reichen.
+
+### Betroffene Pfade
+- `tests/e2e/lib.sh`: `e2e_wait_ready` und `e2e_ready_failed` (neu), `start_fake_upstream` benutzt sie
+- `tests/e2e/m2_first_decision/run.sh`: `m2_start_upstream`
+- `tests/e2e/m3_agent_inside/run.sh`: `m3_wait_ready` und `m3_ready_failed` entfallen zugunsten der Helfer aus `lib.sh`
+- `tests/e2e/README.md`: die Regel steht dort einmal
+
+### Spezifikation
+`e2e_wait_ready FILE PID SECONDS PATTERN` wartet, bis `FILE` eine Zeile enthält,
+die auf `PATTERN` passt (Vorgabe `^READY `), und gibt sie auf `stdout` aus.
+Rückgabe 0 mit der Zeile, 1 nach Ablauf der Frist, 2 wenn `kill -0 PID`
+fehlschlägt, bevor die Zeile da ist. Gewartet wird in Schritten von 0,1
+Sekunden; das ist ein Poll und kein Blockieren, und genau deshalb kann daneben
+die zweite Frage gestellt werden, ob der Prozess überhaupt noch lebt.
+
+`e2e_ready_failed WHAT PID CODE LOG` schreibt die Meldung: bei Code 2, dass der
+Prozess starb, bevor er Bereitschaft meldete, sonst, dass die Frist ablief;
+beide mit dem Protokoll des Servers im Text und, im zweiten Fall, einem `kill`
+davor.
+
+Beide Server schreiben ihre Bereitschaftszeile weiterhin nach `stdout`; die
+Umleitung geht statt in eine Fifo in eine leere Datei, die vorher angelegt wird.
+Die Prüfung der **ganzen** Zeile bleibt, wo sie heute steht: `m2_start_upstream`
+vergleicht weiter gegen `READY http=$M2_HTTP_PORT https=$M2_HTTPS_PORT`, denn
+ohne Zertifikat meldete der Server `https=-` und der Lauf bewiese in Schritt 7
+nur, dass auf 443 niemand antwortet.
+
+Die Frist ist 20 Sekunden, wie in M3.
+
+### Tests
+- Ein Selbsttest in `lib.sh` hinter `--self-test`, wie ihn
+  `scripts/ci/lint-no-string-errors.sh` schon hat: `e2e_wait_ready` gegen eine
+  Datei, die nie beschrieben wird, endet mit 1 innerhalb der Frist; gegen einen
+  Prozess, den der Test vorher beendet, mit 2; gegen eine Datei mit der Zeile
+  mit 0 und der Zeile auf `stdout`.
+- Ein Lauf von M1 und M2 mit einem Server, der absichtlich nicht startet
+  (`--http-port 1`, ein Port, den ein unprivilegierter Prozess nicht bekommt):
+  beide enden rot innerhalb von 25 Sekunden mit dem Protokoll im Text, nicht
+  nach der Gesamtfrist der CI.
+- Kein `mkfifo` mehr in `tests/e2e/`.
+
+### Akzeptanzkriterien
+- [ ] `grep -rn 'mkfifo' tests/e2e/` findet keinen Treffer.
+- [ ] `grep -rn 'read -r .* < ' tests/e2e/` findet keinen Treffer, der auf eine Fifo liest.
+- [ ] `e2e_wait_ready` und `e2e_ready_failed` stehen in `lib.sh`; M1, M2 und M3 rufen sie, und `m3_wait_ready` gibt es nicht mehr.
+- [ ] Der Selbsttest deckt alle drei Rückgabewerte und läuft in `make check`.
+- [ ] Ein Server, der nicht hochkommt, beendet M1 und M2 innerhalb von 25 Sekunden mit seinem Protokoll im Text — gemessen, nicht behauptet.
+- [ ] `E2E_ONLY=m1 make e2e` und `E2E_ONLY=m2 make e2e` sind grün.
+
+### Fallstricke
+- `grep -m 1` beendet sich beim ersten Treffer; ohne `|| true` reißt es unter
+  `set -e` den Lauf ab, wenn noch nichts da ist.
+- Die Datei muss vor dem Start des Servers existieren und leer sein (`: > "$file"`),
+  sonst liest `grep` im ersten Durchlauf einen Rest des vorigen Laufs.
+- `kill -0` auf einen Zombie gelingt. Der Aufrufer muss den Prozess deshalb am
+  Ende weiterhin über `wait` einsammeln; das tut `stop_fake_upstream` schon.
+- Der Kommentar in `lib.sh:295-296` ist falsch und wird ersetzt, nicht verschoben.
