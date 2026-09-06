@@ -308,6 +308,12 @@ class TestDaemonClient implements DaemonClient {
       LlmProbe(endpoint: endpoint);
 
   @override
+  Stream<LlmServer> discoverLlm({
+    String? subnet,
+    List<int> ports = const <int>[],
+  }) => const Stream<LlmServer>.empty();
+
+  @override
   Future<void> close() async {
     for (final StreamController<FlowEvent> controller in streams) {
       if (!controller.isClosed) {

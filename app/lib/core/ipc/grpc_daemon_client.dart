@@ -406,6 +406,32 @@ class GrpcDaemonClient implements DaemonClient {
   }
 
   @override
+  Stream<LlmServer> discoverLlm({
+    String? subnet,
+    List<int> ports = const <int>[],
+  }) async* {
+    // No deadline: the daemon bounds the scan itself (a /24 takes seconds),
+    // and a client that gave up earlier would hide servers that answered.
+    // Cancelling the subscription ends the call, and with it the search.
+    final CallOptions options = await _options(timeout: null);
+    final pb.DiscoverRequest request = pb.DiscoverRequest()
+      ..subnet = subnet ?? ''
+      ..ports.addAll(ports);
+    try {
+      await for (final pb.DiscoverResult result in _stub.discoverLlm(
+        request,
+        options: options,
+      )) {
+        yield result.toDomain();
+      }
+    } on GrpcError catch (error) {
+      throw DaemonException(_translate(error));
+    } on IOException catch (error) {
+      throw DaemonException(_unreachable('$error'));
+    }
+  }
+
+  @override
   Stream<TerminalFrame> terminal(Stream<TerminalCommand> input) async* {
     // No deadline, like every other stream here: a terminal is open for as
     // long as somebody works in it.

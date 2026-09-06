@@ -336,6 +336,22 @@ class FakeDaemonClient implements DaemonClient {
   /// nicht.
   Diagnostic? llmProbeFailure;
 
+  /// Jede Suche, die `DiscoverLlm` bekommen hat, als Netz-Angabe.
+  ///
+  /// Dieselbe Zusage wie [probedEndpoints], eine Stufe groesser: Ein
+  /// Netzscan darf nicht entstehen, weil jemand einen Bildschirm oeffnet
+  /// (HUM-076). Ein Test oeffnet das Setup und erwartet, dass die Liste leer
+  /// bleibt, bis jemand den Knopf drueckt.
+  final List<String> discoverCalls = <String>[];
+
+  /// Was `DiscoverLlm` streamt, statt die Vorgabe zu bauen. `null` heisst:
+  /// die Vorgabe.
+  List<LlmServer>? llmServers;
+
+  /// Der Befund, mit dem `DiscoverLlm` scheitert. `null` heisst: es scheitert
+  /// nicht.
+  Diagnostic? llmDiscoverFailure;
+
   /// The rules the person created, session rules first. `Decide.remember`
   /// adds to it, `Rules(remove)` takes from it.
   List<Rule> get rules => <Rule>[...sessionRules, ...savedRules];
@@ -1331,6 +1347,76 @@ class FakeDaemonClient implements DaemonClient {
           ),
       ],
     );
+  }
+
+  @override
+  Stream<LlmServer> discoverLlm({
+    String? subnet,
+    List<int> ports = const <int>[],
+  }) async* {
+    _check();
+    discoverCalls.add(subnet ?? '(default route)');
+    if (llmDiscoverFailure case final Diagnostic failure) {
+      throw DaemonException(failure);
+    }
+    // Ein Netz, das weiter ist als ein /24, weist der Dienst zurueck, bevor er
+    // ein Paket schickt; der Fake tut dasselbe, damit die Oberflaeche gegen
+    // die echte Weigerung uebt und nicht gegen eine leere Liste.
+    if (subnet != null && !_isLocalScale(subnet)) {
+      throw DaemonException(
+        Diagnostic(
+          code: 'LLM_008',
+          severity: Severity.error,
+          title: 'Die Suche im Netz kann nicht stattfinden',
+          why:
+              '$subnet is wider than the /24 this search stays in: it would be '
+              'connection attempts into a network that may not be yours',
+        ),
+      );
+    }
+    final List<LlmServer> servers = llmServers ?? _defaultServers();
+    for (final LlmServer server in servers) {
+      // Die Zeilen kommen nacheinander, wie beim echten Scan; ohne diese Pause
+      // uebte kein Test die Liste, die waehrend der Suche waechst.
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      yield server;
+    }
+  }
+
+  /// Die Vorgabe: der Server aus der Sitzung, mit dem Vermerk, dass hier
+  /// nichts gemessen wurde.
+  List<LlmServer> _defaultServers() {
+    final Uri? endpoint = Uri.tryParse(sandbox.llmEndpoint);
+    final String host = endpoint?.host.isNotEmpty ?? false
+        ? endpoint!.host
+        : '192.168.1.50';
+    final int port = (endpoint?.hasPort ?? false) ? endpoint!.port : 11434;
+    return <LlmServer>[
+      LlmServer(
+        host: host,
+        port: port,
+        flavor: LlmFlavor.ollama,
+        models: <String>[
+          for (final String model in <String>[
+            'qwen2.5-coder:14b',
+            'llama3.1:8b',
+          ])
+            '$fakeNothingMeasured: $model',
+        ],
+        // Null und keine Zahl, aus demselben Grund wie bei der Probe.
+        latencyMs: 0,
+      ),
+    ];
+  }
+
+  /// Ob die Netz-Angabe ein /24 oder enger ist.
+  static bool _isLocalScale(String subnet) {
+    final List<String> parts = subnet.split('/');
+    if (parts.length != 2) {
+      return false;
+    }
+    final int? prefix = int.tryParse(parts[1]);
+    return prefix != null && prefix >= 24 && prefix <= 32;
   }
 
   /// Ob der Endpunkt eine absolute http- oder https-URL mit Host ist, wie

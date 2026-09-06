@@ -37,6 +37,7 @@ class LlmCheck extends StatelessWidget {
     required this.probe,
     required this.controller,
     required this.onProbe,
+    required this.onDiscover,
     required this.onEdited,
     required this.enabled,
     super.key,
@@ -53,6 +54,12 @@ class LlmCheck extends StatelessWidget {
 
   /// Called with the endpoint somebody wants contacted.
   final void Function(String endpoint) onProbe;
+
+  /// Opens the search for servers in the local network (HUM-076).
+  ///
+  /// Opening it contacts nothing; the button inside the sheet starts the
+  /// search, and the sentence above that button says what it will do.
+  final VoidCallback onDiscover;
 
   /// Called with every text a person types into the field.
   final ValueChanged<String> onEdited;
@@ -79,6 +86,17 @@ class LlmCheck extends StatelessWidget {
             onChanged: onEdited,
             busy: probe.busy,
             enabled: enabled,
+          ),
+          SizedBox(height: tokens.spacing.x2),
+          // Der zweite Weg zu einer Adresse, für alle, die keine kennen
+          // (Prinzip 9). Er steht neben dem Feld und nicht darin: Suchen ist
+          // ein eigener Vorgang mit eigener Ankündigung, kein Zubehör eines
+          // Textfeldes.
+          HButton(
+            key: const Key('setup-llm-discover'),
+            variant: HButtonVariant.ghost,
+            onPressed: enabled ? onDiscover : null,
+            child: Text(l10n.setupLlmDiscoverOpen),
           ),
           SizedBox(height: tokens.spacing.x2),
           if (probe.probe case final LlmProbe answered)

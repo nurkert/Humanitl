@@ -1645,6 +1645,44 @@
     "description": "Last chip of the model list. The names come from a server on the LAN, so only a few are drawn; this says how many were left out.",
     "placeholders": {"count": {"type": "int"}}
   },
+  "setupLlmDiscoverOpen": "Find one",
+  "@setupLlmDiscoverOpen": {"description": "The second button of the model row. It opens the sheet that searches the local network; it starts no search by itself (HUM-076)."},
+  "setupLlmDiscoverTitle": "Find a model server",
+  "@setupLlmDiscoverTitle": {"description": "Heading of the search sheet."},
+  "setupLlmDiscoverExplain": "Searches the local network for model servers. Sends connection attempts to ports {ports}, and nothing else: nothing is written, no credentials are sent, and the search stays inside your own /24.",
+  "@setupLlmDiscoverExplain": {
+    "description": "The sentence above the search button. A network scan is explained before it happens, never after (HUM-076).",
+    "placeholders": {"ports": {"type": "String"}}
+  },
+  "setupLlmDiscoverStart": "Search",
+  "@setupLlmDiscoverStart": {"description": "The button that starts the network search. Nothing is contacted before it is pressed."},
+  "setupLlmDiscoverRunning": "{count, plural, =0{Searching…} =1{Searching… 1 server so far} other{Searching… {count} servers so far}}",
+  "@setupLlmDiscoverRunning": {
+    "description": "The line while the search runs. It counts what answered instead of showing a percentage: the daemon streams answers, not progress.",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "setupLlmDiscoverDone": "{count, plural, =0{Nothing answered.} =1{1 server answered.} other{{count} servers answered.}}",
+  "@setupLlmDiscoverDone": {
+    "description": "The line after the search ended.",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "setupLlmDiscoverEmpty": "Ollama listens on localhost only unless OLLAMA_HOST=0.0.0.0 is set. A server on another port is not found by this search.",
+  "@setupLlmDiscoverEmpty": {"description": "The hint under an empty result. It names the most common reason instead of claiming there is no server."},
+  "setupLlmDiscoverUse": "Use",
+  "@setupLlmDiscoverUse": {"description": "The action on a found server: it puts the address into the endpoint field and contacts it."},
+  "setupLlmDiscoverAuth": "asks for credentials",
+  "@setupLlmDiscoverAuth": {"description": "Badge of a server that answered with 401 or 403. It is listed, and it is not offered with a model list nobody asked it for."},
+  "setupLlmDiscoverUnidentified": "did not identify itself",
+  "@setupLlmDiscoverUnidentified": {"description": "Badge of a server that listens on one of the ports but answered neither API. It is listed as what it is and cannot be taken over as an endpoint."},
+  "setupLlmDiscoverLatency": "{ms} ms",
+  "@setupLlmDiscoverLatency": {
+    "description": "How long the server took to answer the search.",
+    "placeholders": {"ms": {"type": "int"}}
+  },
+  "setupLlmDiscoverCancel": "Stop",
+  "@setupLlmDiscoverCancel": {"description": "Stops a running search. What was found stays visible."},
+  "setupLlmDiscoverClose": "Close",
+  "@setupLlmDiscoverClose": {"description": "Closes the search sheet."},
   "setupStart": "Start agent",
   "@setupStart": {"description": "The one button of the setup screen. It starts the sandbox and moves to the queue."},
   "setupStartReady": "Everything was measured and everything holds.",
