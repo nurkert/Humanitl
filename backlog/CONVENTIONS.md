@@ -1347,14 +1347,15 @@ kann, weil dort niemand gefragt wird. `docs/SECURITY.md` 3.1 und
 `docs/THREAT-MODEL.md` K-02 nennen es und empfehlen eine IP-Adresse oder einen
 festen Eintrag unter `resolver.overrides`.
 
-**Offen und bewusst nicht in dieser Hälfte gebaut.** `docs/PROTOCOL.md` 4.9
-verlangt zu jedem neuen RPC ein CLI-Subkommando im selben Issue. `ProbeLlm` hat
-noch keines: `humanitl rules test` selbst antwortet bis heute mit `CLI_003`
-(HUM-065), und ein zweites Kommando neben einer fehlenden Grundlage hilft
-niemandem. Wer HUM-065 baut, nimmt `humanitl llm test URL` mit; die RPC steht
-dafür bereit. Ebenso offen: `app/lib/core/ipc/proto_version.dart` steht noch
-auf Minor `1`, während der Daemon `2` meldet — das ist verabredetermaßen keine
-Störung (`docs/PROTOCOL.md` 5), und die Oberflächen-Hälfte zieht die Zahl nach.
+**Nachgeholt mit HUM-114 (2026-09-07).** `docs/PROTOCOL.md` 4.9 verlangt zu
+jedem neuen RPC ein CLI-Subkommando im selben Issue. `ProbeLlm` hatte keines,
+weil `humanitl rules test` bis dahin mit `CLI_003` antwortete und ein zweites
+Kommando neben einer fehlenden Grundlage niemandem hilft. Beide gibt es jetzt:
+`humanitl rules test URL [--method M] [--upgrade websocket] [--json]` und
+`humanitl llm test URL [--timeout-ms N] [--json]`. Ebenso offen bleibt:
+`app/lib/core/ipc/proto_version.dart` steht noch auf Minor `1`, während der
+Daemon `2` meldet — das ist verabredetermaßen keine Störung
+(`docs/PROTOCOL.md` 5), und die Oberflächen-Hälfte zieht die Zahl nach.
 
 ### 4.22 Aus der Umsetzung des M2-Demoskripts (HUM-036, Daemon-Hälfte, 2026-09-04)
 

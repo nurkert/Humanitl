@@ -1385,19 +1385,184 @@ fn json_of(output: &Output) -> serde_json::Value {
     serde_json::from_str(text.trim()).expect("one JSON value")
 }
 
-/// `rules test` gibt es im Vertrag nicht; es sagt, was fehlt, und nicht, dass
-/// es keinen Daemon gäbe.
+/// Das Verdikt steht in der Zeile und im Exit-Code (CONVENTIONS 3.8): Ein
+/// Skript liest die Zahl, ein Mensch die Zeile, und beide bekommen dasselbe.
 #[test]
-fn rules_test_names_the_operation_the_contract_does_not_have() {
+fn rules_test_ask_exit_11_and_block_exit_10() {
     let harness = Harness::new();
-    let output = harness.run(["rules", "test", "https://evil.example"]);
-    let text = stderr(&output);
+    let _server = FakeServer::start(&harness);
 
+    // Ohne Treffer gilt die Voreinstellung, und die ist `ask` -- nie `allow`.
+    let ask = harness.run(["rules", "test", "https://evil.example/"]);
+    let text = stdout(&ask);
+    assert_eq!(code(&ask), 11, "{}", stderr(&ask));
+    assert!(text.contains("verdict: ask"), "{text}");
+    assert!(text.contains("rule: none (default ask)"), "{text}");
+
+    // Die mitgelieferte Regel gegen `models.dev` trifft, und die Zeile nennt
+    // sie mit Herkunft und Position.
+    let block = harness.run(["rules", "test", "https://models.dev/api.json"]);
+    let text = stdout(&block);
+    assert_eq!(code(&block), 10, "{}", stderr(&block));
+    assert!(text.contains("verdict: block"), "{text}");
+    assert!(text.contains("(bundled, position "), "{text}");
+    assert!(!text.contains("rule: none"), "{text}");
+}
+
+/// Eine eigene Regel entscheidet, und beide Ausgänge sind erreichbar: `allow`
+/// endet 0, `redact` wird heute gehalten und endet deshalb wie ein `ask`.
+#[test]
+fn rules_test_allow_exit_0_and_redact_exit_11() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+
+    let added = harness.run([
+        "rules",
+        "add",
+        "--action",
+        "allow",
+        "--host",
+        "allowed.example",
+    ]);
+    assert_eq!(code(&added), 0, "{}", stderr(&added));
+    let allow = harness.run(["rules", "test", "https://allowed.example/x"]);
+    assert_eq!(code(&allow), 0, "{}", stderr(&allow));
+    assert!(
+        stdout(&allow).contains("verdict: allow"),
+        "{}",
+        stdout(&allow)
+    );
+
+    let added = harness.run([
+        "rules",
+        "add",
+        "--action",
+        "redact",
+        "--host",
+        "redacted.example",
+    ]);
+    assert_eq!(code(&added), 0, "{}", stderr(&added));
+    let redact = harness.run(["rules", "test", "https://redacted.example/x"]);
+    assert_eq!(code(&redact), 11, "{}", stderr(&redact));
+    assert!(
+        stdout(&redact).contains("verdict: redact"),
+        "{}",
+        stdout(&redact)
+    );
+}
+
+/// `--json` trägt dieselben fünf Felder, und der Exit-Code bleibt das Verdikt.
+#[test]
+fn rules_test_json_shape() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+
+    let output = harness.run(["--json", "rules", "test", "https://models.dev/api.json"]);
+    assert_eq!(code(&output), 10, "{}", stderr(&output));
+    let value = json_of(&output);
+    assert_eq!(value["verdict"], "block", "{value}");
+    assert_eq!(value["matched"], true, "{value}");
+    assert_eq!(value["origin"], "bundled", "{value}");
+    assert!(
+        value["rule_id"].as_str().is_some_and(|id| !id.is_empty()),
+        "{value}"
+    );
+    assert!(value["position"].as_u64().is_some(), "{value}");
+    // Eine mitgelieferte Regel ist keine Durchreiche zum Sprachmodell; der
+    // Fall mit `true` steht im Unit-Test dieser Zeile, weil dieser Fake keinen
+    // Endpunkt kennt und deshalb keine Durchreiche führt.
+    assert_eq!(value["passthrough"], false, "{value}");
+
+    let ask = harness.run(["--json", "rules", "test", "https://evil.example/"]);
+    assert_eq!(code(&ask), 11, "{}", stderr(&ask));
+    let value = json_of(&ask);
+    assert_eq!(value["verdict"], "ask", "{value}");
+    assert_eq!(value["matched"], false, "{value}");
+    // Ohne Treffer gibt es keine Regel, also auch keine Herkunft und kein
+    // Ja/Nein zur Durchreiche: zweimal `null` und nirgends ein `false`, das
+    // mehr behauptete als bekannt ist.
+    assert_eq!(value["origin"], serde_json::Value::Null, "{value}");
+    assert_eq!(value["passthrough"], serde_json::Value::Null, "{value}");
+}
+
+/// Was keine Anfrage-URL ist, wird gemeldet, bevor jemand gefragt wird -- und
+/// ohne Daemon ist das Kommando dasselbe wie jedes andere: Exit 2.
+#[test]
+fn rules_test_bad_url_is_cli_004_and_without_a_daemon_exit_2() {
+    let harness = Harness::new();
+
+    for bad in ["evil.example", "https://a.example/x#top"] {
+        let output = harness.run(["rules", "test", bad]);
+        let text = stderr(&output);
+        assert_eq!(code(&output), 1, "{bad}: {text}");
+        assert!(text.starts_with("error[CLI_004]: "), "{bad}: {text}");
+        assert!(text.contains(bad), "{bad}: {text}");
+        assert!(stdout(&output).is_empty(), "stdout must stay clean: {bad}");
+    }
+
+    let output = harness.run(["rules", "test", "https://evil.example/"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).starts_with("blocking[DAEMON_001]: "),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// `llm test` fragt den Endpunkt über den Daemon und schreibt, was zurückkam.
+#[test]
+fn llm_test_prints_models() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+
+    let output = harness.run(["llm", "test", "http://127.0.0.1:11434"]);
+    let text = stdout(&output);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(text.contains("flavor: ollama"), "{text}");
+    assert!(text.contains("latency: 0 ms"), "{text}");
+    assert!(text.contains("models: 2"), "{text}");
+    // Der Fake misst nichts und sagt das an jedem Namen; ein Test, der das
+    // wegliest, übte gegen eine Messung, die nie stattgefunden hat.
+    assert!(text.contains("nothing was measured"), "{text}");
+    // Ein Name aus dem Netz bekommt hier nicht mehr Platz als in der
+    // Oberfläche: 40 Zeichen, zwei davor für die Einrückung.
+    assert!(
+        text.lines()
+            .filter(|line| line.starts_with("  "))
+            .all(|line| line.chars().count() <= 42),
+        "a model name got more room than the interface gives it:\n{text}"
+    );
+    // Die Ankündigung steht auf stderr, bevor irgendetwas hinausgeht.
+    assert!(
+        stderr(&output).contains("contacting http://127.0.0.1:11434 now"),
+        "{}",
+        stderr(&output)
+    );
+
+    let json = harness.run(["--json", "llm", "test", "http://127.0.0.1:11434"]);
+    assert_eq!(code(&json), 0, "{}", stderr(&json));
+    let value = json_of(&json);
+    assert_eq!(value["flavor"], "ollama", "{value}");
+    assert_eq!(value["models"].as_array().map(Vec::len), Some(2), "{value}");
+    assert_eq!(value["endpoint_is_private"], true, "{value}");
+}
+
+/// Ein Endpunkt, den der Dienst nicht lesen kann, endet 1 mit seinem Befund --
+/// nicht mit einer eigenen Erklärung der Kommandozeile.
+#[test]
+fn llm_test_an_endpoint_the_daemon_refuses_is_exit_1() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+
+    let output = harness.run(["llm", "test", "not a url"]);
+    let text = stderr(&output);
     assert_eq!(code(&output), 1, "{text}");
-    assert!(text.starts_with("error[CLI_003]: "), "{text}");
-    assert!(text.contains("Rules RPC"), "{text}");
-    assert!(text.contains("https://evil.example"), "{text}");
+    assert!(text.contains("[LLM_007]"), "{text}");
     assert!(stdout(&output).is_empty(), "stdout must stay clean");
+
+    let without = Harness::new();
+    let output = without.run(["llm", "test", "http://127.0.0.1:11434"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
 }
 
 #[test]
