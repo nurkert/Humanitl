@@ -387,13 +387,12 @@ fn child(
             env::remove_var(var);
         }
     }
-    // Rust ignores SIGPIPE at start-up and an ignored disposition survives
-    // exec; the agent gets the default back. Last, so the report writes above
-    // cannot kill the child when the launcher stopped reading.
-    // SAFETY: restoring the default disposition of one signal.
-    unsafe {
-        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
-    }
+    // The agent starts with the defaults. Last, and not a line earlier: the
+    // report writes above must survive a launcher that stopped reading, and
+    // they do that because Rust ignores SIGPIPE at start-up. Resetting the
+    // dispositions before them would kill the child on the first write into
+    // a closed pipe.
+    reset_signal_dispositions();
 
     let err = exec(command);
     say(&format!(
@@ -570,6 +569,41 @@ fn reset_signal_mask() {
         let mut set: libc::sigset_t = std::mem::zeroed();
         libc::sigemptyset(&raw mut set);
         libc::sigprocmask(libc::SIG_SETMASK, &raw const set, ptr::null_mut());
+    }
+}
+
+/// Gives the agent the default disposition for every signal it can handle.
+///
+/// `execve` resets a handler to the default, but it keeps `SIG_IGN`. An
+/// ignored signal therefore travels from whoever started Humanitl all the way
+/// into the sandbox: a service under systemd, a background job of a shell
+/// without job control, anything started through `nohup`. The agent then
+/// cannot install a handler for it at all -- POSIX says a non-interactive
+/// shell may not trap a signal that was ignored on entry -- and
+/// `SandboxHandle::interrupt` asks a process that cannot hear the question.
+/// Measured on 2026-09-06: with `SIGINT` ignored in the launcher, `sh -c
+/// 'trap "exit 42" INT; sleep 60'` in the sandbox stayed alive through the
+/// whole grace period and was killed instead of ending with its own code.
+///
+/// The sandbox init decides this, not the launcher. `SIGKILL` and `SIGSTOP`
+/// are left out because they cannot be set; the real-time signals are
+/// included because a queued one would be ignored just as silently.
+///
+/// Called immediately before `execvp` and nowhere earlier. `SIGPIPE` is one of
+/// the dispositions it resets, and Rust's ignored `SIGPIPE` is what keeps the
+/// report writes of this child alive when the launcher has stopped reading.
+fn reset_signal_dispositions() {
+    let last = libc::SIGRTMAX();
+    for signal in 1..=last {
+        if signal == libc::SIGKILL || signal == libc::SIGSTOP {
+            continue;
+        }
+        // SAFETY: signal(2) with SIG_DFL takes two integers and has no
+        // preconditions; an unknown number answers with SIG_ERR and is
+        // ignored here on purpose.
+        unsafe {
+            libc::signal(signal, libc::SIG_DFL);
+        }
     }
 }
 
