@@ -78,6 +78,25 @@ echo "STEP2 catalog"
 curl -sS --max-time "$MODERATED_DEADLINE" -o /dev/null \
     -w 'STEP2 status=%{http_code}\n' https://models.dev/api.json
 
+# 2b. Der Rest dessen, was ein frisch gestarteter OpenCode ungefragt abruft:
+#     der Release-Check auf GitHub, die Telemetrie, der Modellkatalog der
+#     eigenen Adresse und die Freigabe-Seite. Alle vier trifft eine
+#     mitgelieferte Regel, keine davon einen Menschen — das ist das
+#     Rauschbudget aus HUM-038. Ohne diese Zeilen misst der Lauf nur den einen
+#     Katalog-Abruf und behauptete aus einer Anfrage ein Budget.
+#
+#     Kurze Frist: Was die Regel blockt, antwortet sofort mit 403; wer hier
+#     hängt, hat einen Fehler und soll den Lauf nicht um Minuten verlängern.
+echo "STEP2B noise"
+for noisy in \
+    'https://api.github.com/repos/anomalyco/opencode/releases/latest' \
+    'https://eu.posthog.com/i/v0/e' \
+    'https://models.opencode.ai/api.json' \
+    'https://opencode.ai/share/abc'; do
+    printf 'STEP2B %s status=%s\n' "$noisy" \
+        "$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "$noisy" || echo curl-failed)"
+done
+
 # 3. Die Anfrage, über die ein Mensch entscheidet. Der Rumpf steht mit in der
 #    Ausgabe: Ein Status allein sagt nicht, von wem die Antwort kam.
 echo "STEP3 fetch"
