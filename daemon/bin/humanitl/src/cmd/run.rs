@@ -43,13 +43,14 @@
 
 use std::ffi::OsString;
 
-use humanitl_config::AskMode;
+use humanitl_config::{AskMode, Config};
 use humanitl_core::block::sanitize_note;
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_ipc::client::Client;
 use humanitl_ipc::session::{SESSION_OVERRIDE_KEYS, ask_mode_name};
 use humanitl_ipc::v1;
+use humanitl_sandbox::agent::{AdapterRegistry, AgentAdapter};
 use serde_json::json;
 use std::io::Write as _;
 
@@ -71,7 +72,12 @@ pub async fn run(ctx: &Context, args: &RunArgs) -> Result<u8, Failure> {
     let config = &resolved.config;
     ctx.render.detail(&session_lines(&resolved, args));
 
-    refuse_terminal_ask(config.hold.ask_mode)?;
+    // Beide Seiten müssen ein Terminal sein: Die Tasten kommen von `stdin`,
+    // und der Kasten geht nach `stderr`. Ein Lauf mit `2>log` schriebe ihn
+    // samt seiner Steuerfolgen in eine Datei, und niemand sähe die Frage.
+    let on_terminal = std::io::IsTerminal::is_terminal(&std::io::stdin())
+        && std::io::IsTerminal::is_terminal(&std::io::stderr());
+    refuse_terminal_ask(config, args, on_terminal)?;
 
     let mut client = ctx.connect().await?;
     let info = client
@@ -116,7 +122,8 @@ pub async fn run(ctx: &Context, args: &RunArgs) -> Result<u8, Failure> {
 
     ctx.render
         .note(&where_decisions_happen(config.hold.ask_mode));
-    let code = drive(ctx, &mut client, start).await?;
+    let moderate = config.hold.ask_mode == AskMode::Terminal;
+    let code = drive(ctx, &mut client, start, moderate).await?;
     if ctx.render.is_json() {
         let mut value = session;
         value["exit_code"] = json!(code);
@@ -130,7 +137,16 @@ async fn drive(
     ctx: &Context,
     client: &mut Client,
     start: v1::sandbox_request::Start,
+    moderate: bool,
 ) -> Result<u8, Failure> {
+    // **Erst das Abonnement, dann der Start.** Der Daemon liefert keinen
+    // Rückstand: `Subscribe` mit leerem `since_flow_id` beginnt bei jetzt.
+    // Ein Agent, der seine erste Anfrage in der ersten Sekunde stellt --
+    // OpenCode ruft beim Start seinen Katalog ab --, hielte sie also, bevor
+    // dieser Strom stünde, und niemand am Terminal erführe davon; der Agent
+    // liefe in die Frist.
+    let (mut flows, mut moderation) = open_moderation(client, moderate).await?;
+
     let mut events = client
         .sandbox(v1::SandboxRequest {
             op: Some(v1::sandbox_request::Op::Start(start)),
@@ -142,6 +158,17 @@ async fn drive(
     let mut failure: Option<Failure> = None;
     let mut exit: Option<i32> = None;
     let mut interrupted = false;
+
+    let mut clock = tokio::time::interval(std::time::Duration::from_secs(1));
+    clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut terminate = signal_stream(tokio::signal::unix::SignalKind::terminate());
+    let mut hangup = signal_stream(tokio::signal::unix::SignalKind::hangup());
+    // **Einmal angelegt und nicht je Umlauf.** `tokio::signal::ctrl_c()` baut
+    // bei jedem Aufruf einen frischen Empfänger; ein `SIGINT`, das eintrifft,
+    // während die Schleife gerade arbeitet -- ein Schwall Ausgabe, ein
+    // offener Editor --, fällt zwischen den alten und den neuen Empfänger und
+    // wird nie gesehen. Ein Strom, der von Anfang an steht, puffert es.
+    let mut interrupt = signal_stream(tokio::signal::unix::SignalKind::interrupt());
 
     // Ein zweiter Client für den Stopp: Der erste hält den Ereignisstrom, und
     // ein `&mut` daran wäre für die Dauer der Schleife geliehen.
@@ -156,16 +183,66 @@ async fn drive(
     loop {
         let next = tokio::select! {
             event = events.message() => event,
-            // `Ctrl+C` beendet die Sitzung. Ein Byte an den Agenten gibt es
-            // nicht — dafür bräuchte es das PTY aus HUM-042 —, also ist das
-            // Ende der Sitzung die ehrliche Antwort auf das Signal.
-            signal = tokio::signal::ctrl_c(), if !interrupted => {
-                if signal.is_ok() {
+            // Ein Ereignis der Warteschlange: gehalten, entschieden,
+            // abgelaufen. Ohne Moderation wartet dieser Zweig für immer.
+            flow = next_flow(flows.as_mut()) => {
+                if !moderated_flow(moderation.as_mut(), flow).await {
+                    // Endet der Strom oder bricht er ab, läuft die Sitzung
+                    // weiter: Der Agent arbeitet, und ohne Moderation wird
+                    // gehalten, bis die Frist entscheidet.
+                    flows = None;
+                }
+                continue;
+            }
+            // Eine Taste des Menschen.
+            key = next_key(moderation.as_mut()) => {
+                if moderated_key(&mut moderation, key).await {
+                    // Im Rohmodus ist `ISIG` aus: `Ctrl+C` kommt als Byte und
+                    // nicht als Signal, also braucht dieser Weg denselben
+                    // zweiten Schritt wie der Signalzweig. Ohne ihn wäre das
+                    // zweite `Ctrl+C` verschluckt, und der Befehl bliebe
+                    // hängen, wenn der Agent auf das erste nicht hört.
+                    if interrupted {
+                        return Ok(end_on_signal(ctx, &mut stopper, moderation.as_mut(), 2).await);
+                    }
                     interrupted = true;
-                    ctx.render.note("[humanitl] stopping the session");
                     stop(&mut stopper).await;
                 }
                 continue;
+            }
+            // Die Uhr im Kopf des Kastens.
+            _ = clock.tick(), if moderation.is_some() => {
+                if let Some(moderation) = moderation.as_mut() {
+                    moderation.tick();
+                }
+                continue;
+            }
+            // `Ctrl+C` beendet die Sitzung. Ein Byte an den Agenten gibt es
+            // nicht — dafür bräuchte es das PTY aus HUM-042 —, also ist das
+            // Ende der Sitzung die ehrliche Antwort auf das Signal.
+            // Ohne Bedingung, aus demselben Grund wie der Zweig darunter: Ein
+            // zweites `Ctrl+C` kommt, weil das erste nichts bewirkt hat, und
+            // dann endet dieser Befehl, statt es zu verschlucken.
+            () = next_of(&mut interrupt) => {
+                if interrupted {
+                    return Ok(end_on_signal(ctx, &mut stopper, moderation.as_mut(), 2).await);
+                }
+                interrupted = true;
+                ask_to_stop(ctx, moderation.as_mut(), &mut stopper).await;
+                continue;
+            }
+            // `SIGTERM` und `SIGHUP` beendet dieser Befehl selbst, damit die
+            // Sitzung nicht weiterläuft, wenn er weg ist. Ein Signalhandler,
+            // der den Prozess sofort beendete, wäre schneller als diese RPC --
+            // dann bliebe eine Sandbox stehen, die niemand mehr beenden kann
+            // (`tty.rs` erklärt, warum der Rohmodus deshalb keinen eigenen
+            // Handler mitbringt).
+            // Ohne Bedingung: Ein `SIGTERM`, das nach einem `Ctrl+C` kommt --
+            // weil der Agent auf das erste nicht hört --, muss noch ankommen.
+            // Sonst hinge der Befehl bis zu einem `SIGKILL`, und das ließe das
+            // Terminal im Rohmodus zurück.
+            number = next_signal(&mut terminate, &mut hangup) => {
+                return Ok(end_on_signal(ctx, &mut stopper, moderation.as_mut(), number).await);
             }
         };
         let event = match next {
@@ -182,11 +259,28 @@ async fn drive(
             exit = Some(ended.code);
             continue;
         }
+        // Solange ein Kasten steht, hält die Moderation die Ausgabe des
+        // Agenten an: Sie überschriebe ihn sonst.
+        if let (Some(moderation), Some(v1::sandbox_event::Event::Output(chunk))) =
+            (moderation.as_mut(), event.event.as_ref())
+        {
+            moderation.output(&chunk.data);
+            continue;
+        }
         if let Some(found) = handle(ctx, event) {
             failure.get_or_insert(found);
         }
     }
 
+    if let Some(moderation) = moderation.as_mut() {
+        moderation.finish();
+    }
+
+    outcome(exit, failure)
+}
+
+/// Der Exit-Code der Sitzung, oder der Befund, an dem sie hängen blieb.
+fn outcome(exit: Option<i32>, failure: Option<Failure>) -> Result<u8, Failure> {
     if let Some(code) = exit {
         // Eine rote Garantie beendet den Lauf, auch wenn danach noch ein
         // Exit-Code käme: Die Zusage, dass ohne die drei Garantien nichts
@@ -209,6 +303,181 @@ async fn drive(
                 .build(),
         )
     }))
+}
+
+/// Der Ereignisstrom der Flüsse und der Kasten, für `--ask terminal`.
+///
+/// Ohne Moderation ist beides `None`, und die Schleife in [`drive`] ist
+/// dieselbe wie vor diesem Issue. Der Strom wird **vor** dem Rohmodus
+/// geöffnet: Scheitert er, soll der Befund auf einem gewöhnlichen Terminal
+/// lesbar sein.
+async fn open_moderation(
+    client: &mut Client,
+    moderate: bool,
+) -> Result<
+    (
+        Option<tonic::Streaming<v1::FlowEvent>>,
+        Option<crate::cmd::moderate::Moderation>,
+    ),
+    Failure,
+> {
+    if !moderate {
+        return Ok((None, None));
+    }
+    let flows = client
+        .subscribe(v1::SubscribeRequest {
+            since_flow_id: String::new(),
+            include_passthrough: false,
+        })
+        .await
+        .map_err(|status| crate::cmd::moderate::subscribe_failed(&status))?
+        .into_inner();
+    Ok((
+        Some(flows),
+        Some(crate::cmd::moderate::Moderation::new(client.clone())),
+    ))
+}
+
+/// Sagt, dass die Sitzung endet, und schickt `Sandbox(Stop)`.
+///
+/// Steht ein Kasten, geht die Zeile über ihn: `Renderer::note` schreibt ein
+/// nacktes `\n`, und in einem Terminal im Rohmodus ist `OPOST` aus -- die
+/// Zeile stiege dann treppenförmig, und der nächste Kasten begänne nicht in
+/// Spalte 0.
+async fn ask_to_stop(
+    ctx: &Context,
+    moderation: Option<&mut crate::cmd::moderate::Moderation>,
+    stopper: &mut Client,
+) {
+    match moderation {
+        Some(open) => open.say_stopping(),
+        None => ctx.render.note("[humanitl] stopping the session"),
+    }
+    stop(stopper).await;
+}
+
+/// Das nächste Signal dieses Stroms, oder nie.
+async fn next_of(stream: &mut Option<tokio::signal::unix::Signal>) {
+    match stream {
+        Some(stream) => {
+            stream.recv().await;
+        }
+        None => std::future::pending().await,
+    }
+}
+
+/// Beendet die Sitzung auf ein Signal hin und liefert den Exit-Code `128 + n`.
+async fn end_on_signal(
+    ctx: &Context,
+    stopper: &mut Client,
+    moderation: Option<&mut crate::cmd::moderate::Moderation>,
+    number: u8,
+) -> u8 {
+    if let Some(open) = moderation {
+        open.finish();
+    }
+    ctx.render.note("[humanitl] stopping the session");
+    stop(stopper).await;
+    crate::tty::restore_now();
+    128_u8.saturating_add(number)
+}
+
+/// Reicht eine Taste an den Kasten; `true`, wenn die Sitzung enden soll.
+///
+/// Endet die Eingabe -- eine Pipe zum Beispiel --, geht die Moderation weg,
+/// und was im Puffer steht, geht vorher auf den Schirm: Ohne `finish`
+/// verschwänden bis zu 256 KiB Ausgabe des Agenten mitsamt dem gezeichneten
+/// Kasten.
+async fn moderated_key(
+    moderation: &mut Option<crate::cmd::moderate::Moderation>,
+    key: Option<u8>,
+) -> bool {
+    match (key, moderation.as_mut()) {
+        // `Ctrl+C` ohne stehenden Kasten beendet die Sitzung. Im Rohmodus
+        // kommt es als Byte und nicht als Signal.
+        (Some(byte), Some(open)) => {
+            if open.pressed(byte).await {
+                open.say_stopping();
+                return true;
+            }
+            false
+        }
+        (None, _) => {
+            if let Some(open) = moderation.as_mut() {
+                open.finish();
+            }
+            *moderation = None;
+            false
+        }
+        (Some(_), None) => false,
+    }
+}
+
+/// Reicht ein Ereignis der Warteschlange an den Kasten; `false`, wenn der
+/// Strom vorbei ist.
+async fn moderated_flow(
+    moderation: Option<&mut crate::cmd::moderate::Moderation>,
+    flow: Result<Option<v1::FlowEvent>, tonic::Status>,
+) -> bool {
+    match (flow, moderation) {
+        (Ok(Some(event)), Some(moderation)) => {
+            moderation.flow_event(&event).await;
+            true
+        }
+        (Ok(Some(_)), None) => true,
+        (Ok(None) | Err(_), _) => false,
+    }
+}
+
+/// Ein Signalstrom, oder `None`, wenn der Handler nicht anzulegen ist.
+fn signal_stream(kind: tokio::signal::unix::SignalKind) -> Option<tokio::signal::unix::Signal> {
+    tokio::signal::unix::signal(kind).ok()
+}
+
+/// Das nächste `SIGTERM` oder `SIGHUP`, als Signalnummer.
+///
+/// Ohne Handler wartet dieser Zweig für immer: Dann gilt das Standardverhalten
+/// des Signals, und der Prozess endet, wie er ohne diesen Befehl endete.
+async fn next_signal(
+    terminate: &mut Option<tokio::signal::unix::Signal>,
+    hangup: &mut Option<tokio::signal::unix::Signal>,
+) -> u8 {
+    match (terminate.as_mut(), hangup.as_mut()) {
+        (Some(term), Some(hup)) => tokio::select! {
+            _ = term.recv() => 15,
+            _ = hup.recv() => 1,
+        },
+        (Some(term), None) => {
+            term.recv().await;
+            15
+        }
+        (None, Some(hup)) => {
+            hup.recv().await;
+            1
+        }
+        (None, None) => std::future::pending().await,
+    }
+}
+
+/// Das nächste Ereignis der Warteschlange, oder nie.
+///
+/// `pending` statt eines Zweigs, den es nicht gibt: Ein `select!` braucht in
+/// jedem Arm eine Zukunft, und eine Sitzung ohne Moderation hat hier keine.
+async fn next_flow(
+    flows: Option<&mut tonic::Streaming<v1::FlowEvent>>,
+) -> Result<Option<v1::FlowEvent>, tonic::Status> {
+    match flows {
+        Some(stream) => stream.message().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Die nächste Taste, oder nie.
+async fn next_key(moderation: Option<&mut crate::cmd::moderate::Moderation>) -> Option<u8> {
+    match moderation {
+        Some(moderation) => moderation.key().await,
+        None => std::future::pending().await,
+    }
 }
 
 /// Beendet die laufende Sitzung.
@@ -348,23 +617,56 @@ fn where_decisions_happen(ask_mode: AskMode) -> String {
     }
 }
 
-/// `--ask terminal` gibt es noch nicht.
+/// `--ask terminal` mit einem Vollbild-Agenten: `CLI_002`.
 ///
-/// Die Spezifikation gibt `CLI_002` für Vollbild-TUI-Agenten; solange es kein
-/// PTY gibt (HUM-042), gilt dieselbe Antwort für jeden Agenten. Der
-/// Unterschied ist gering: Ohne PTY hätte auch ein zeilenorientierter Agent
-/// keinen Prompt, den ein Mensch beantworten könnte.
-fn refuse_terminal_ask(ask_mode: AskMode) -> Result<(), Failure> {
-    if ask_mode != AskMode::Terminal {
+/// Der Prompt teilt sich den Schirm mit der Ausgabe des Agenten. Ein
+/// zeilenorientiertes Kommando schreibt dabei nach unten weiter, und der
+/// Kasten steht darüber; ein Vollbild-TUI dagegen zeichnet den ganzen Schirm
+/// neu, sooft es will -- der Kasten wäre nach dem ersten Bild weg, und die
+/// Tasten, die ein Mensch darauf drückt, gingen an eine Frage, die er nicht
+/// mehr sieht (`backlog/CONVENTIONS.md` 4.10).
+///
+/// Entschieden wird am **wirksamen** Kommando: Wer `-- bash` schreibt, startet
+/// kein TUI, auch wenn der Adapter der Sitzung `opencode` heißt.
+fn refuse_terminal_ask(config: &Config, args: &RunArgs, on_terminal: bool) -> Result<(), Failure> {
+    if config.hold.ask_mode != AskMode::Terminal {
+        return Ok(());
+    }
+    // Ohne Terminal gibt es keinen Prompt: Aus einer Pipe kämen Bytes, die
+    // niemand als Antwort gemeint hat, und ein `b` in einem Skript blockte
+    // einen Fluss.
+    if !on_terminal {
+        return Err(Failure::with_exit(
+            Diagnostic::builder(codes::CLI_002, Severity::Error)
+                .why(
+                    "--ask terminal needs a terminal on standard input and on standard error, \
+                     and this run has none. Use --ask ui and decide in the app, or --ask none \
+                     and let every request without a rule be blocked.",
+                )
+                .fix(FixAction::CopyCommand("humanitl run --ask ui".to_owned()))
+                .build(),
+            EXIT_USER,
+        ));
+    }
+    if !args.cmd.is_empty() {
+        return Ok(());
+    }
+    let registry = AdapterRegistry::builtin();
+    let fullscreen = registry
+        .get(&config.agent.adapter)
+        .is_some_and(AgentAdapter::is_fullscreen_tui);
+    if !fullscreen {
         return Ok(());
     }
     Err(Failure::with_exit(
         Diagnostic::builder(codes::CLI_002, Severity::Error)
-            .why(
-                "--ask terminal needs a terminal of its own, and this humanitl does not attach \
-                 one yet (HUM-042). Use --ask ui and decide in the app, or --ask none and let \
-                 every request without a rule be blocked.",
-            )
+            .why(format!(
+                "the agent {} draws the whole screen, and a prompt in the same terminal would be \
+                 gone with its next frame. Use --ask ui and decide in the app, --ask none and let \
+                 every request without a rule be blocked, or run a line-oriented command with \
+                 `-- <command>`.",
+                config.agent.adapter
+            ))
             // Ein Befehl zum Abtippen, kein Schlüssel: `humanitl config set`
             // gibt es nicht, und ein Vorschlag, der nicht läuft, ist keiner.
             .fix(FixAction::CopyCommand("humanitl run --ask ui".to_owned()))
@@ -484,7 +786,9 @@ mod tests {
     use humanitl_config::{AskMode, Env, ProfileSelection, resolve};
     use humanitl_ipc::session::SESSION_OVERRIDE_KEYS;
 
-    use super::{chain, check_line, inline_rules, refuse_terminal_ask, session_lines, state_name};
+    use super::{
+        Config, chain, check_line, inline_rules, refuse_terminal_ask, session_lines, state_name,
+    };
     use crate::cli::RunArgs;
     use crate::cmd::{EXIT_CHECK, EXIT_USER};
 
@@ -515,9 +819,24 @@ mod tests {
         );
     }
 
+    /// Eine Konfiguration mit diesem Frage-Modus und diesem Adapter.
+    fn with(ask_mode: AskMode, adapter: &str) -> Config {
+        let mut config = Config::default();
+        config.hold.ask_mode = ask_mode;
+        config.agent.adapter = adapter.to_owned();
+        config
+    }
+
+    /// Kein Kommando hinter `--`.
+    fn no_cmd() -> RunArgs {
+        RunArgs { cmd: Vec::new() }
+    }
+
     #[test]
     fn ask_terminal_is_cli_002_and_names_both_ways_out() {
-        let failure = refuse_terminal_ask(AskMode::Terminal).expect_err("no terminal yet");
+        let config = with(AskMode::Terminal, "opencode");
+        let failure = refuse_terminal_ask(&config, &no_cmd(), true)
+            .expect_err("opencode draws the whole screen");
         assert_eq!(failure.diagnostic.code.as_str(), "CLI_002");
         assert_eq!(failure.exit, EXIT_USER);
         assert!(
@@ -547,8 +866,59 @@ mod tests {
     #[test]
     fn the_other_two_ask_modes_start() {
         for mode in [AskMode::Ui, AskMode::None] {
-            assert!(refuse_terminal_ask(mode).is_ok(), "{mode:?}");
+            let config = with(mode, "opencode");
+            assert!(
+                refuse_terminal_ask(&config, &no_cmd(), true).is_ok(),
+                "{mode:?}"
+            );
         }
+    }
+
+    /// Ein eigenes Kommando ist nicht der Vollbild-Agent.
+    ///
+    /// Wer `humanitl run --ask terminal -- bash` schreibt, startet eine Shell,
+    /// die zeilenweise schreibt; die Verweigerung hängt am wirksamen Kommando
+    /// und nicht am Namen des Adapters, der für diese Sitzung ohnehin nichts
+    /// startet.
+    #[test]
+    fn a_command_of_its_own_is_not_the_fullscreen_agent() {
+        let config = with(AskMode::Terminal, "opencode");
+        let args = RunArgs {
+            cmd: vec![std::ffi::OsString::from("bash")],
+        };
+        assert!(refuse_terminal_ask(&config, &args, true).is_ok());
+    }
+
+    /// Ein Adapter, den es nicht gibt, zeichnet keinen Vollbildschirm.
+    ///
+    /// Der Start scheitert daran später mit dem Befund des Dienstes; hier
+    /// scheitert er nicht vorher an einer Annahme über einen Namen, den
+    /// niemand kennt.
+    #[test]
+    fn an_unknown_adapter_is_not_refused_here() {
+        let config = with(AskMode::Terminal, "there-is-no-such-adapter");
+        assert!(refuse_terminal_ask(&config, &no_cmd(), true).is_ok());
+    }
+
+    /// Ohne Terminal gibt es keinen Prompt, und dann auch keinen Start.
+    ///
+    /// Aus einer Pipe kämen Bytes, die niemand als Antwort gemeint hat: Ein
+    /// `b` in einem Skript blockte einen Fluss, ohne dass ein Mensch die
+    /// Frage gesehen hätte.
+    #[test]
+    fn without_a_terminal_ask_terminal_is_cli_002() {
+        let config = with(AskMode::Terminal, "there-is-no-such-adapter");
+        let failure =
+            refuse_terminal_ask(&config, &no_cmd(), false).expect_err("no terminal, no prompt");
+        assert_eq!(failure.diagnostic.code.as_str(), "CLI_002");
+        assert!(
+            failure
+                .diagnostic
+                .why
+                .contains("terminal on standard input"),
+            "{}",
+            failure.diagnostic.why
+        );
     }
 
     #[test]
