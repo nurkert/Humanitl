@@ -1149,100 +1149,170 @@ Am Kopf von `mounts.rs` steht ein Doc-Kommentar, der sagt, was dieses Modul trä
 - `include_bytes!` und andere pfadbezogene Makros hängen an der Datei, in der sie stehen; nach dem Verschieben stimmen relative Pfade nicht mehr.
 - Die Testmodule teilen heute Hilfsfunktionen; die wandern in ein gemeinsames `#[cfg(test)] mod testing` unter `profile/`, nicht in drei Kopien.
 
-## HUM-122 · Die Regel für einen Befehl aus fremdem Wert steht zweimal
+## HUM-122 · Die Regel für einen Befehl aus fremdem Wert steht fünfmal und gilt an sieben von siebzehn Stellen
 
-Sprint: 5 · Größe: S · Abhängigkeiten: HUM-043, HUM-075 · Blockiert: —
+Sprint: 5 · Größe: L · Abhängigkeiten: HUM-043, HUM-075 · Blockiert: —
 
 ### Kontext
 Ein Wert von außen, der zu einem Befehl wird, den ein Mensch in seine Shell
 einfügt, ist der gefährlichste Weg in diesem Baum. Sprint 3 hat diese Gestalt
 achtmal gefunden: ein `rm` aus einem gesäuberten Anzeigepfad (HUM-043), ein
-`export KEY=VALUE` mit unzitiertem Wert (HUM-106), ein `chmod 700 /tmp/h`
-aus `XDG_RUNTIME_DIR` (HUM-075) und, als Umkehrung, ein bereits bewiesener
-Befehl, der ein zweites Mal gesäubert und dabei hinter dem schließenden
-Anführungszeichen abgeschnitten wurde (HUM-043b). Daraus ist eine Regel
-geworden: Ein Wert wird genau einmal geprüft, an der Stelle, die ihn erzeugt;
-danach wird er weder erneut geprüft noch erneut gesäubert.
+`export KEY=VALUE` mit unzitiertem Wert (HUM-106), ein
+`chmod 700 /tmp/h; touch /tmp/humanitl-pwn` aus `XDG_RUNTIME_DIR` (HUM-075) und,
+als Umkehrung, ein bereits bewiesener Befehl, der ein zweites Mal gesäubert und
+dabei hinter dem schließenden Anführungszeichen abgeschnitten wurde (HUM-043b).
+Daraus ist eine Regel geworden: Ein Wert wird genau einmal geprüft, an der
+Stelle, die ihn erzeugt; danach wird er weder erneut geprüft noch erneut
+gesäubert.
 
-Die Regel selbst steht heute zweimal im Code. `humanitl_sandbox::summary::copy_command`
-(`summary.rs:933`) baut das `rm --` der Sitzungszusammenfassung, und
-`humanitl_sandbox::doctor::shell_command` (`doctor.rs:134`) baut die Befehlszeile
-eines Doctor-Vorschlags. Beide prüfen dieselben vier Bedingungen — nicht leer,
-`sanitize_note` ändert nichts, die Zitierung von `shlex::try_quote` ist wörtlich,
-`shlex::split` ergibt wieder genau dieselben Wörter —, und beide tragen dafür ein
-eigenes, bis auf den Parameternamen zeichengleiches `is_literal_word`
-(`summary.rs:951`, `doctor.rs:159`).
+Am 2026-09-06 gegen den Code gemessen — nicht geschätzt, jede Zeile
+nachgeschlagen. Das Bild ist schlechter als die acht Einzelfälle vermuten
+ließen.
 
-Die beiden Doc-Kommentare sind bereits auseinandergelaufen. Der in `doctor.rs`
-erklärt zusätzlich, was `shlex` 2 mit einem Wort tut, das ein `'` oder ein `\`
-enthält (es setzt **doppelte** Anführungszeichen, in denen `$`, `` ` ``, `\` und
-`"` ihre Bedeutung behalten), und warum Schritt 4 heute unerreichbar ist und
-trotzdem stehen bleibt. In `summary.rs` fehlt beides. Wer den einen liest, kennt
-die Regel; wer den anderen liest, kennt sie halb. Das ist dasselbe Muster wie in
-HUM-098 und HUM-092: Fachlogik, die zweimal existiert, driftet, und die Tests der
-einen Seite belegen nichts über die andere. Bei einer Sicherheitsregel ist der
-Preis dafür höher als bei einem Reduzierer.
+**Die Regel steht fünfmal, in drei Lesarten.**
+
+| Ort | Lesart | `sanitize_note`? | Verlust |
+|---|---|---|---|
+| `sandbox/src/summary.rs:933` `copy_command` | beweisend: lehnt `'a'\''b'` ab | ja | `to_str()`, sonst `None` |
+| `sandbox/src/doctor.rs:134` `shell_command` | beweisend, zeichengleiche Kopie | ja | entfällt (nimmt `&str`) |
+| `proxy/src/ca.rs:977` `shell_quote` | erzeugend: baut `'a'\''b'` | nein | `to_string_lossy` beim Aufrufer |
+| `sandbox/src/bwrap_args.rs:523` `shell_quote` | erzeugend, bis auf das ausgelagerte Prädikat zeichengleich mit `ca.rs` | nein | `to_string_lossy` |
+| `config/src/validate.rs:174` `shell_word` | erzeugend, einzeilig | nein | `to_string_lossy` |
+
+Die ersten beiden lehnen genau die Form ab, die die letzten drei **herstellen**.
+Der Doc-Kommentar von `copy_command` begründet das: Zwischen einfachen
+Anführungszeichen hat kein Zeichen eine Sonderbedeutung, aber `'a'\''b'`
+verlässt die Anführungszeichen viermal, und ob jede Shell das gleich liest, ist
+genau die Frage, die dort niemand beantworten will. Drei Stellen im selben
+Repository beantworten sie mit „ja", ohne es zu sagen.
+
+Dazu kommt: Die drei erzeugenden Fassungen lassen `sanitize_note` aus. Ein Pfad
+mit `\n`, mit einer Bidi-Umkehrung oder von 100 kB Länge geht durch sie
+unverändert in einen Befehl, den ein Mensch liest, bevor er ihn einfügt — und
+`copy_command`s zweite Bedingung existiert gerade dafür, dass das, was im Befund
+steht, auch das ist, was der Mensch einfügt. Und alle drei gehen über
+`to_string_lossy`: ein Pfad ohne gültiges `UTF-8` wird ein **anderer** Pfad, mit
+Ersatzzeichen darin. Das ist wörtlich der Fund von HUM-043, drei Zeilen weiter
+unten wieder eingebaut.
+
+**Siebzehn Stellen bauen einen Befehl mit `format!`. Zehn davon setzen einen
+rohen Wert ein, ohne jede Zitierung:**
+
+1. `sandbox/src/agent/opencode.rs:586` — `sudo install -m 0755 {binary} /usr/local/bin/opencode`. Der schärfste Fall: `sudo` davor, Pfad roh. Ein ganz gewöhnlicher Pfad mit Leerzeichen (`/home/u/My Tools/opencode`) macht daraus drei Argumente, und `install` tut etwas anderes, als die Zeile zeigt.
+2. `recorder/src/error.rs:80` — `ls -ld {shown} && df -h {shown}`, derselbe rohe Pfad zweimal.
+3. `humanitld/src/main.rs:1110` — `chmod 700 {dir}`. Dieselbe Zeile, die HUM-075 an einer anderen Datei behoben hat; hier steht sie noch.
+4. `humanitld/src/main.rs:1097` — `humanitld --fake <session.jsonl> --socket {own}`.
+5. `humanitld/src/main.rs:714` — `openssl x509 -in {path} -noout -subject`.
+6. `proxy/src/llm_probe.rs:360` und 7. `:374` — `curl -sS {target.url(...)}`. Die Adresse kommt aus `llm.endpoint`.
+8. `sandbox/src/agent/opencode.rs:605` — `curl -sS {base_url(endpoint)}/models`.
+9. `humanitl/src/cmd/rules.rs:1011` — `humanitl rules add --action ask --host {matcher} --position 1`.
+10. `config/src/load.rs:639` — `humanitl run --profile {wish}`.
+
+Vier Stellen zitieren (`ca.rs:945`, `ca.rs:971`, `validate.rs:98`, `summary.rs:1202`),
+drei setzen einen Wert aus geschlossener Menge ein und sind darum heute in
+Ordnung, sagen es aber nirgends (`cmd/config.rs:188` ein Schema-Schlüssel,
+`cmd/flows.rs:127` und `rules/src/parse.rs:275` je eine Kennung aus Hex).
+
+Keiner der zehn ist ein Angriffsweg mit einem fremden Angreifer: `agent.command`
+ist `x-project-scope = "denied"`, die Adresse und der Socket-Pfad kommen aus der
+eigenen Konfiguration oder der eigenen Kommandozeile. Der Schaden ist trotzdem
+echt und trifft gewöhnliche Nutzer: ein Leerzeichen im Pfad, ein `&` in einer
+Adresse, ein Byte ohne `UTF-8` — und der Befehl im Befund tut etwas anderes, als
+er zeigt. Bei einer Zeile, die mit `sudo` anfängt, ist das genug.
 
 ### Ziel
-Eine Stelle, an der aus Wörtern eine Befehlszeile wird oder eben keine. Beide
-Aufrufer rufen sie; keiner zitiert noch selbst. Der Doc-Kommentar mit der
-vollständigen Begründung steht dort einmal, und die Aufrufer verweisen darauf.
+Eine Stelle, an der aus Wörtern eine Befehlszeile wird oder eben keine. Jede
+Stelle, die einen Befehl zum Einfügen anbietet, geht durch sie. Wo ein Wert
+nachweislich aus einer geschlossenen Menge kommt, steht das als Zusicherung im
+Code und nicht als stille Annahme.
 
 ### Nicht-Ziel
-Keine Änderung an der Regel. Die vier Bedingungen bleiben, ihre Reihenfolge
-bleibt, und was heute `None` ergibt, ergibt danach `None`. Kein neuer Krate und
-kein Port. Keine zweite Prüfung an einer anderen Stelle — das war der Fehler von
-HUM-043b.
+Keine Änderung an der beweisenden Regel selbst. Die vier Bedingungen bleiben,
+ihre Reihenfolge bleibt, und was heute `None` ergibt, ergibt danach `None`. Kein
+neuer Krate, kein Port. Keine zweite Prüfung an einer Stelle, die schon geprüft
+hat — das war der Fehler von HUM-043b.
+
+**`bwrap_args::shell_quote` wird nicht zusammengelegt.** Es rendert die
+Argumentzeile von `bwrap` zur *Anzeige* (`argv_line`, das UI zeigt sie), nicht
+einen Befehl zum Einfügen. Anzeigen und Anbieten sind zwei Zusagen, und die
+Zusammenlegung würde beide beschädigen. Es bekommt in diesem Issue nur einen
+Namen, der sagt, was es ist, und einen Doc-Kommentar, der die Grenze zieht.
 
 ### Betroffene Pfade
-- `daemon/crates/sandbox/src/shell.rs` (neu): `quote_word` und `command_line`
-- `daemon/crates/sandbox/src/lib.rs`: das Modul, nicht öffentlich re-exportiert außer was die Aufrufer brauchen
-- `daemon/crates/sandbox/src/summary.rs`: `copy_command` ruft `command_line`
-- `daemon/crates/sandbox/src/doctor.rs`: `shell_command` ruft `command_line`, `command_fix` bleibt
+- `daemon/crates/sandbox/src/shell.rs` (neu): `quote_word`, `command_line`
+- `daemon/crates/sandbox/src/lib.rs`, `summary.rs`, `doctor.rs`
+- `daemon/crates/sandbox/src/bwrap_args.rs`: Umbenennung und Doc-Kommentar
+- `daemon/crates/sandbox/src/agent/opencode.rs` (zwei Stellen)
+- `daemon/crates/proxy/src/ca.rs`, `daemon/crates/proxy/src/llm_probe.rs`
+- `daemon/crates/config/src/validate.rs`, `daemon/crates/config/src/load.rs`
+- `daemon/crates/recorder/src/error.rs`
+- `daemon/bin/humanitld/src/main.rs` (drei Stellen)
+- `daemon/bin/humanitl/src/cmd/rules.rs`
 - `daemon/crates/sandbox/tests/shell_quoting.rs` (neu)
 
+Die Abhängigkeitsrichtung muss halten (`tools/check-deps.sh`): `humanitl-proxy`,
+`humanitl-config` und `humanitl-recorder` dürfen nicht auf `humanitl-sandbox`
+zeigen. Die Funktion gehört deshalb wahrscheinlich nach `humanitl-core` neben
+`sanitize_note` (`core-types/src/block.rs:79`) und nicht in die Sandbox. Wer das
+Issue umsetzt, entscheidet das zuerst und begründet es im Commit; alles andere
+hängt daran.
+
 ### Spezifikation
-`shell::command_line(words: &[&str]) -> Option<String>` trägt die Regel. Sie ist
-`None` für eine leere Wortliste, für ein leeres Wort, für ein Wort, das
-`sanitize_note` verändert, für eine Zitierung, die nicht wörtlich ist, und wenn
-`shlex::split` der fertigen Zeile nicht wieder genau diese Wörter in dieser
-Reihenfolge ergibt. `shell::quote_word` ist der Einzelfall davon und öffentlich,
-weil ein Aufrufer manchmal ein Wort und keine Zeile braucht; sie teilt sich die
-Prüfung mit `command_line` und dupliziert sie nicht.
+`command_line(words: &[&str]) -> Option<String>` trägt die beweisende Regel:
+`None` für eine leere Wortliste, ein leeres Wort, ein Wort, das `sanitize_note`
+verändert, eine Zitierung, die nicht wörtlich ist, und wenn `shlex::split` der
+fertigen Zeile nicht wieder genau diese Wörter in dieser Reihenfolge ergibt.
+`quote_word` ist der Einzelfall und teilt sich die Prüfung mit ihr.
 
-`summary::copy_command` wird zu `host_path.to_str().and_then(|text| shell::command_line(&["rm", "--", text]))`.
-Das ist wörtlich dasselbe Ergebnis wie heute: `rm` und `--` überstehen
-`sanitize_note` und `try_quote` unverändert, also ist die verbundene Zeile
-`rm -- <quoted>`. Ein Pfad, der kein gültiges `UTF-8` ist, ergibt weiterhin
-`None`, bevor die Regel überhaupt gefragt wird.
+Jede der zehn rohen Stellen wird eine von zwei Formen:
 
-`doctor::shell_command` wird zu einem Aufruf von `shell::command_line` und
-behält seinen Namen, weil er in `command_fix` und in den Doctor-Prüfungen steht.
+- **Der Wert kann beliebig sein** (Pfade, Adressen, Regelmuster): Der Befund
+  bekommt seinen Befehl über `command_line`. Ergibt sie `None`, gibt es keinen
+  Befehl, sondern einen Satz, der sagt, was zu tun ist — dieselbe Behandlung, die
+  `doctor::command_fix` schon hat.
+- **Der Wert kommt aus einer geschlossenen Menge** (Schema-Schlüssel, Hex-Kennung):
+  Der Typ sagt das. Eine Kennung ist kein `String`, sondern der Typ, der nur
+  gültige Kennungen zulässt; ein Schema-Schlüssel kommt aus `schema::field`. Wo
+  der Typ es heute nicht sagt, geht der Wert durch `command_line` wie alle
+  anderen, statt sich auf eine Annahme zu verlassen, die niemand aufgeschrieben
+  hat.
 
-Der Doc-Kommentar an `shell::command_line` trägt die vollständige Begründung:
-die vier Bedingungen, die Erklärung zu den doppelten Anführungszeichen von
-`shlex` 2, und den Satz, dass Schritt 4 heute unerreichbar ist und trotzdem
-stehen bleibt, weil er die Zusage ist und nicht ihre Folge. Ohne diesen letzten
-Satz liest der nächste Leser den überlebenden Mutanten als Lücke.
+`ca::shell_quote` und `validate::shell_word` entfallen. `bwrap_args::shell_quote`
+heißt danach nach seiner Aufgabe (etwa `display_word`) und trägt einen
+Doc-Kommentar, der sagt: Das Ergebnis ist zum Lesen, nicht zum Einfügen, und wer
+daraus einen Befehl baut, nimmt `command_line`.
+
+`humanitld/src/main.rs:1110` ist derselbe Fall wie HUM-075. Die dortige Lösung
+ist der Bezugspunkt; wenn sie hier nicht passt, gehört der Grund in den Commit.
 
 ### Tests
 - `shell_quoting.rs`: je ein Fall pro abgelehnter Bedingung — leeres Wort,
-  Steuerzeichen, Zeilenumbruch, Bidi-Umkehrung, Überlänge, ein Wort mit `'`,
-  ein Wort mit `\`, ein Wort mit `$(`.
-- Ein Gleichheitstest: für dreißig Pfade (harmlose, exotische, abgelehnte) liefert
-  `copy_command` denselben `Option<String>` wie vor der Zusammenlegung. Die
-  Erwartungen stehen als Tabelle im Test, nicht als zweite Implementierung.
-- Mutationsprobe: `is_literal_word` in `shell.rs` auf `true` festnageln. Danach
-  muss mindestens ein Test aus dem Umfeld von `summary` **und** mindestens einer
-  aus dem Umfeld von `doctor` rot werden. Wird nur eine Seite rot, prüft die
-  andere die Regel nicht mehr.
+  Steuerzeichen, Zeilenumbruch, Bidi-Umkehrung, Überlänge, ein Wort mit `'`, ein
+  Wort mit `\`, ein Wort mit `$(`.
+- Ein Gleichheitstest: für dreißig Pfade liefert `copy_command` denselben
+  `Option<String>` wie vor der Zusammenlegung. Die Erwartungen stehen als Tabelle
+  im Test, nicht als zweite Implementierung.
+- Je ein Test pro behobener Stelle mit einem Pfad, der ein Leerzeichen enthält,
+  und einem, der `;` enthält: Entweder ist der Befehl beweisbar zitiert, oder es
+  gibt keinen.
+- Ein Test über den Baum: Kein `FixAction::CopyCommand` entsteht aus einem
+  `format!`, dessen Argumente nicht durch `command_line` gegangen sind. Ein
+  `grep`-Test ist dafür zulässig und ehrlicher als keiner — er steht als Skript
+  neben `scripts/ci/lint-no-string-errors.sh`, das dieselbe Art Regel schon so
+  durchsetzt.
+- Mutationsprobe: die wörtliche Prüfung in `command_line` auf `true` festnageln.
+  Danach muss auf **jeder** der behobenen Seiten mindestens ein Test rot werden.
+  Wird nur eine Seite rot, prüfen die anderen die Regel nicht.
 
 ### Akzeptanzkriterien
-- [ ] `grep -rn 'fn is_literal_word' daemon/crates` findet genau einen Treffer.
-- [ ] `grep -rn 'try_quote' daemon/crates` findet außerhalb von `shell.rs` und der Tests keinen Treffer.
-- [ ] `summary::copy_command` und `doctor::shell_command` bestehen je aus höchstens drei Zeilen und rufen `shell::command_line`.
+- [ ] `grep -rn 'fn shell_quote\|fn shell_word\|fn is_literal_word' daemon/crates daemon/bin` findet außerhalb der Anzeigefunktion und der einen gemeinsamen Stelle keinen Treffer.
+- [ ] Alle zehn oben genannten Stellen gehen durch `command_line` oder haben einen Typ, der die geschlossene Menge zusichert; im Issue-Commit steht je Stelle, welches von beidem.
+- [ ] `summary::copy_command` und `doctor::shell_command` bestehen aus höchstens drei Zeilen.
+- [ ] Die Anzeigefunktion heißt nach ihrer Aufgabe und sagt im Doc-Kommentar, dass ihr Ergebnis nicht zum Einfügen ist.
+- [ ] Kein Weg von einem Wert in einen `CopyCommand` geht mehr über `to_string_lossy`.
 - [ ] Der Gleichheitstest über dreißig Pfade ist grün.
-- [ ] Die Mutationsprobe macht auf beiden Seiten je mindestens einen Test rot.
+- [ ] Die Mutationsprobe macht auf jeder behobenen Seite mindestens einen Test rot.
+- [ ] `tools/check-deps.sh` grün; die Entscheidung über den Ort der Funktion steht im Commit.
 - [ ] `make check` grün.
 
 ### Fallstricke
@@ -1253,9 +1323,11 @@ Satz liest der nächste Leser den überlebenden Mutanten als Lücke.
 - `sanitize_note` gilt für **jedes** Wort, auch für `rm` und `--`. Sie überstehen
   es unverändert, aber die Prüfung darf nicht auf das letzte Wort verkürzt
   werden; sonst hängt die Zusage an der Zusammensetzung des Aufrufers.
-- `shlex::try_quote` gibt ein `Cow`. Der geliehene Fall ist der häufige; ein
-  `into_owned()` je Wort ist an dieser Stelle egal, ein `clone()` in der Schleife
-  wäre es nicht.
+- Der Satz „Schritt 4 ist heute unerreichbar" aus `doctor.rs` gehört mit an die
+  neue Stelle. Ohne ihn liest der nächste den überlebenden Mutanten als Lücke.
+- Zwei der zehn Stellen liegen in `humanitld`, das keine Fehlerpfade verstecken
+  darf: Wenn dort kein Befehl entsteht, muss der Satz trotzdem sagen, was zu tun
+  ist. Ein Befund ohne `fix` ist erlaubt, ein Befund ohne `why` nicht.
 
 ## HUM-123 · `IPC_005` heißt nach dem Regel-RPC und wird längst überall benutzt
 
@@ -1373,6 +1445,17 @@ ab, und im Bericht steht eine Zeitüberschreitung ohne Ort. Genau dieselbe Regel
 steht schon ausgeschrieben im Kommentar von `m3_wait_ready`
 (`tests/e2e/m3_agent_inside/run.sh:333-341`), dort für Shell-Skripte. Sie gilt
 für die Rust-Tests genauso.
+
+**In der CI ist es messbar.** Der Schritt `rust-test` (`make rust-build rust-test`,
+also `cargo test --workspace`) läuft grün in 184 bis 194 Sekunden. Die
+öffentliche Actions-API zeigt daneben zwei Läufe, die abgebrochen wurden,
+nachdem sie 2 144 beziehungsweise **13 784 Sekunden** (3 Stunden 49 Minuten) in
+demselben Schritt standen — beide am 2026-09-05. Ein Lauf, der das
+Zwanzigfache seiner grünen Dauer braucht, ist nicht langsam, sondern steht.
+Vier weitere Läufe sind in demselben Schritt nach 96 bis 133 Sekunden rot
+geworden, also **vor** der grünen Dauer; das ist ein zweites, anderes Phänomen
+und gehört nicht hierher, solange niemand die Protokolle gelesen hat (sie
+brauchen Admin-Rechte am Repository).
 
 Der Skript-Text von `osc52_does_not_reach_host` endet mit
 `while :; do sleep 0.05; done`. Der Agent läuft also weiter, bis ihn jemand
@@ -1639,3 +1722,87 @@ Die Frist ist 20 Sekunden, wie in M3.
 - `kill -0` auf einen Zombie gelingt. Der Aufrufer muss den Prozess deshalb am
   Ende weiterhin über `wait` einsammeln; das tut `stop_fake_upstream` schon.
 - Der Kommentar in `lib.sh:295-296` ist falsch und wird ersetzt, nicht verschoben.
+
+## HUM-127 · Der Tray-Befehl gilt nur für apt, und dort ändert sich der Paketname
+
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-044 · Blockiert: —
+
+### Kontext
+`DOCTOR_009` meldet, dass die Tray-Bibliothek fehlt, und bietet dazu
+`TRAY_INSTALL_COMMAND` an (`daemon/crates/sandbox/src/doctor/checks.rs:45`):
+
+```rust
+/// Der Befehl, der die Tray-Bibliothek auf Debian und Ubuntu nachinstalliert.
+const TRAY_INSTALL_COMMAND: &str = "sudo apt install libayatana-appindicator3-1";
+```
+
+Der Doc-Kommentar sagt selbst, für welche zwei Distributionen die Zeile gilt,
+und der Befund bietet sie trotzdem jedem an. Auf Fedora, Arch und openSUSE
+bekommt der Mensch einen Befehl, der mit „command not found" endet — in einem
+Befund, dessen einzige Aufgabe es ist, ihm den nächsten Schritt zu nennen.
+
+HUM-044 hat denselben Fehler für bubblewrap behoben: `install_command()` in
+`daemon/crates/sandbox/src/os_release.rs` wählt über `ID` und `ID_LIKE` aus vier
+festen Literalen. Hier reicht diese Abbildung aber nicht. Bei bubblewrap heißt
+das Paket überall `bubblewrap`, es wechselt nur der Verwalter. Bei der
+Tray-Bibliothek wechselt **auch der Paketname**, und ein falscher Paketname ist
+schlechter als kein Befehl: Er schickt die Fehlersuche in eine Richtung, in der
+nichts ist, und der Mensch glaubt danach, es liege nicht am Paket.
+
+### Ziel
+Der Befund nennt für die Distribution, auf der er entsteht, den Befehl, der dort
+wirklich das Paket installiert — oder er nennt keinen und sagt stattdessen, was
+zu suchen ist.
+
+### Nicht-Ziel
+Keine Installation durch die Anwendung. Keine Erweiterung von `os_release.rs` um
+eine allgemeine Paketdatenbank; diese eine Tabelle reicht, und die nächste
+Bibliothek bekommt ihre eigene. Keine Änderung an `DOCTOR_009` selbst — der
+Befund ist richtig, nur sein Vorschlag ist es nicht.
+
+### Betroffene Pfade
+- `daemon/crates/sandbox/src/os_release.rs`: die Abbildung bekommt neben dem Verwalter einen Paketnamen als Parameter
+- `daemon/crates/sandbox/src/doctor/checks.rs`: `TRAY_INSTALL_COMMAND` entfällt
+- `daemon/crates/sandbox/tests/os_release.rs`
+
+### Spezifikation
+Aus `install_bubblewrap()` wird eine Funktion, die Verwalter und Paketnamen
+trennt: der Verwalter kommt wie heute aus `ID`/`ID_LIKE`, der Paketname aus einer
+Tabelle je Bibliothek. Die vier Literale bleiben Literale — es wird weiterhin
+**kein** Text aus `/etc/os-release` in einen Befehl gesetzt (HUM-122, und der
+Test `a_hostile_id_never_reaches_the_command` bleibt grün).
+
+Jeder Paketname wird gegen den Paketindex seiner Distribution geprüft, und die
+Quelle steht als Kommentar über dem Eintrag: welche Distribution, welche
+Version, wo nachgesehen. Ein Name ohne Beleg kommt nicht in die Tabelle.
+
+Für eine Distribution ohne belegten Namen entsteht kein `CopyCommand`. Der
+Befund trägt dann nur seinen Satz und `docs` — dieselbe Behandlung, die
+`doctor::command_fix` schon für einen nicht beweisbar zitierbaren Befehl hat.
+Ein Befund ohne `fix` ist erlaubt; ein Befund, dessen `fix` nicht funktioniert,
+ist es nicht.
+
+### Tests
+- Je ein Fall pro Distributionsfamilie: der erwartete Befehl, wörtlich, oder das
+  begründete Fehlen.
+- Der bestehende `a_hostile_id_never_reaches_the_command` deckt die neue
+  Funktion mit ab; ohne ihn wäre die Tabelle ein neuer Weg für Dateitext in
+  einen Befehl.
+- Mutationsprobe: den Paketnamen einer Familie durch den einer anderen ersetzen.
+  Genau ein Test wird rot. Wird keiner rot, prüft die Tabelle nichts.
+
+### Akzeptanzkriterien
+- [ ] `grep -rn 'apt install' daemon/crates/sandbox/src` findet keinen fest verdrahteten Verwalter mehr.
+- [ ] Für jede der vier Familien steht der Paketname mit seiner Quelle als Kommentar im Code.
+- [ ] Eine Familie ohne belegten Namen erzeugt keinen `CopyCommand`, und ein Test hält das fest.
+- [ ] Die Mutationsprobe macht genau einen Test rot.
+- [ ] `make check` grün.
+
+### Fallstricke
+- Der Paketname der Tray-Bibliothek ist auf Debian und Ubuntu versionsbehaftet
+  (`libayatana-appindicator3-1`). Ein Name, der eine Versionsnummer trägt, altert;
+  der Kommentar nennt deshalb die Distributionsversion, gegen die er belegt ist.
+- Die Prüfung selbst sucht nach der Bibliothek in den lesbaren
+  Bibliotheksverzeichnissen, nicht nach dem Paket. Die beiden können
+  auseinanderlaufen — ein Nutzer, der die Bibliothek von Hand gelegt hat, bekommt
+  den Befund nicht, und das ist richtig so.
