@@ -1457,6 +1457,31 @@ geworden, also **vor** der grünen Dauer; das ist ein zweites, anderes Phänomen
 und gehört nicht hierher, solange niemand die Protokolle gelesen hat (sie
 brauchen Admin-Rechte am Repository).
 
+**Und er ist in der Laufliste unsichtbar.** `.github/workflows/ci.yml:28-31` setzt
+`concurrency: group: ci-${{ github.ref }}` mit `cancel-in-progress: true`. Ein
+hängender Lauf endet deshalb nicht als `failure`, sondern als `cancelled`,
+sobald der nächste Push kommt — und `cancelled` liest jeder als „überholt", nicht
+als „stand still". Genau deshalb sind die beiden langen Läufe niemandem
+aufgefallen: Man sieht sie nur, wenn man die Dauer neben die grüne Dauer legt.
+Am 2026-09-06 stand ein Lauf auf einem Commit, der ausschließlich zwei
+Backlog-Dateien ändert, über eine Stunde in `rust-test`, während alle zehn
+anderen Jobs grün waren (der längste, `flutter-analyze-test`, in 366 Sekunden).
+Der Hänger hängt an keiner Codeänderung.
+
+**Lokal reproduziert er nicht, und das ist ein Befund und kein Freispruch.**
+Am selben Tag auf dieser Maschine gemessen: `cargo test --workspace` läuft
+vollständig durch, 90 Suiten, null Fehler, langsamste Suite 13,68 Sekunden
+(`daemon_end_to_end.rs`). `terminal.rs` läuft dabei wirklich — sechs Tests in
+1,35 Sekunden, kein `ESC5-SKIP` in der Ausgabe, `bwrap` 0.12.0 vorhanden und der
+Shim gebaut. Der Unterschied zur CI ist die Enge: vier virtuelle Kerne statt
+acht, ein anderer Kernel, `kernel.apparmor_restrict_unprivileged_userns=0` per
+`sysctl` gesetzt.
+
+Das ändert nichts an der Aufgabe, sondern schärft sie. Eine Frist behebt den
+Hänger nicht — sie macht ihn **sichtbar**: Aus einem Lauf, der drei Stunden steht
+und dann als „cancelled" verschwindet, wird ein roter Test, der sagt, worauf er
+gewartet hat. Das ist der ganze Zweck.
+
 Der Skript-Text von `osc52_does_not_reach_host` endet mit
 `while :; do sleep 0.05; done`. Der Agent läuft also weiter, bis ihn jemand
 beendet. Das ist gewollt und Teil der Aussage; es macht das fehlende Zeitlimit
