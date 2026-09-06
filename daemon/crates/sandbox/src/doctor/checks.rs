@@ -1,9 +1,18 @@
 //! Die elf Urteile des Doctors, je eines je [`CheckId`].
 //!
 //! Jede Funktion hier ist rein: Sie bekommt die Tatsachen einer Prüfung und
-//! gibt eine Zeile zurück. Kein Dateizugriff, kein Prozess, kein Netz. Das ist
-//! der Grund, aus dem sich jede Prüfung testen lässt, ohne den Rechner in den
-//! Zustand zu bringen, um den es geht: Ein Test baut die Tatsachen.
+//! gibt eine Zeile zurück. Kein Prozess, kein Netz, und keine gemessene
+//! Tatsache stammt aus einer Datei. Das ist der Grund, aus dem sich jede
+//! Prüfung testen lässt, ohne den Rechner in den Zustand zu bringen, um den es
+//! geht: Ein Test baut die Tatsachen.
+//!
+//! Die eine Ausnahme ist [`install_command`]: Welcher Paketverwalter
+//! `bubblewrap` nachinstalliert, steht in `/etc/os-release`, und der Doctor
+//! liest denselben Vorschlag wie [`crate::bwrap`], damit die Oberfläche und
+//! `humanitl doctor` auf derselben Maschine nicht zwei verschiedene Befehle
+//! anbieten. Gemessen wird damit nichts: Das Urteil einer Zeile hängt nicht
+//! davon ab, und ein Test darf deshalb nur prüfen, dass der Vorschlag einer
+//! der vier festen Befehle ist, nie welcher davon.
 //!
 //! Drei Regeln gelten für alle:
 //!
@@ -26,7 +35,8 @@ use super::{
     TrayFacts, UsernsFacts, not_contacted,
 };
 use crate::agent::opencode;
-use crate::bwrap::{INSTALL_COMMAND, MIN_BWRAP_VERSION, USERNS_DOCS_URL, USERNS_SYSCTL_COMMAND};
+use crate::bwrap::{MIN_BWRAP_VERSION, USERNS_DOCS_URL, USERNS_SYSCTL_COMMAND};
+use crate::os_release::install_command;
 
 /// Die kleinste Kernel-Fassung, gegen die der seccomp-Filter des Shims
 /// geprüft ist (`major`, `minor`).
@@ -120,7 +130,7 @@ pub(super) fn bwrap(facts: &BwrapFacts) -> CheckOutcome {
                     "no executable bwrap in PATH={searched}; bubblewrap is not installed, \
                      and without it there is no sandbox"
                 ),
-                FixAction::CopyCommand(INSTALL_COMMAND.to_owned()),
+                FixAction::CopyCommand(install_command().to_owned()),
                 "https://github.com/containers/bubblewrap",
             ),
         ),
@@ -145,7 +155,7 @@ pub(super) fn bwrap(facts: &BwrapFacts) -> CheckOutcome {
                              {MIN_BWRAP_VERSION}",
                             program.display()
                         ),
-                        FixAction::CopyCommand(INSTALL_COMMAND.to_owned()),
+                        FixAction::CopyCommand(install_command().to_owned()),
                     ),
                 )
             }
@@ -1023,10 +1033,12 @@ mod tests {
         SystemdFacts, TrayFacts, UsernsFacts,
     };
     use super::{
-        agent, bwrap, daemon, disk_space, kernel_version, llm, renderer, runtime_dir, seccomp,
-        systemd_user, tray, userns,
+        agent, bwrap, daemon, disk_space, install_command, kernel_version, llm, renderer,
+        runtime_dir, seccomp, systemd_user, tray, userns,
     };
-    use crate::bwrap::Version;
+    use crate::bwrap::{BwrapBackend, Version};
+    use crate::os_release::PackageManager;
+    use humanitl_config::Env;
     use std::time::Duration;
 
     /// Eine Zeile in Woerter, fuer die Vorgaben der Tests.
@@ -1068,13 +1080,63 @@ mod tests {
             "{}",
             diagnostic.why
         );
-        assert_eq!(
-            diagnostic.fix,
-            Some(FixAction::CopyCommand(
-                "sudo apt install bubblewrap".to_owned()
-            ))
+        // Welcher der vier Befehle es ist, hängt an der Maschine, auf der der
+        // Test läuft; dass es einer der vier ist, hängt an nichts.
+        let Some(FixAction::CopyCommand(command)) = diagnostic.fix.clone() else {
+            panic!(
+                "the fix of a missing bwrap is a command to copy: {:?}",
+                diagnostic.fix
+            );
+        };
+        assert!(
+            PackageManager::ALL
+                .iter()
+                .any(|manager| manager.install_bubblewrap() == command),
+            "not one of the four fixed install commands: {command:?}"
         );
         assert!(!outcome.is_unmeasured(), "a missing bwrap was measured");
+    }
+
+    /// „Ohne bwrap: `SANDBOX_001` mit distributionsspezifischem Befehl, in der
+    /// App wie in `humanitl doctor`" (HUM-044, Akzeptanzkriterium 2).
+    ///
+    /// Die Oberfläche bekommt den Befund des Launchers, die Kommandozeile den
+    /// des Doctors. Sie kommen aus zwei Dateien und müssen denselben Befehl
+    /// tragen; sie tun es, weil beide dieselbe Funktion rufen. Ein zweiter
+    /// Leser mit eigener Tabelle bestünde diesen Test nicht.
+    #[test]
+    fn the_doctor_and_the_launcher_offer_the_same_install_command() {
+        let doctor = bwrap(&BwrapFacts::Missing {
+            searched: "/nonexistent".to_owned(),
+        });
+        let launcher = BwrapBackend::find_program(&Env::from_pairs([(
+            "PATH",
+            "/nonexistent/humanitl-has-no-bwrap-here",
+        )]))
+        .expect_err("no bwrap under a directory that does not exist");
+
+        assert_eq!(doctor.diagnostic().expect("a finding").fix, launcher.fix);
+        assert_eq!(
+            launcher.fix,
+            Some(FixAction::CopyCommand(install_command().to_owned()))
+        );
+    }
+
+    /// Zwei Wege durch dieselbe Zeile, ein Vorschlag: fehlendes und zu altes
+    /// `bwrap` schicken denselben Befehl.
+    #[test]
+    fn a_missing_bwrap_and_an_old_bwrap_offer_the_same_command() {
+        let missing = bwrap(&BwrapFacts::Missing {
+            searched: "/usr/bin".to_owned(),
+        });
+        let old = bwrap(&BwrapFacts::Found {
+            program: PathBuf::from("/usr/bin/bwrap"),
+            version: Version(0, 6, 2),
+        });
+        assert_eq!(
+            missing.diagnostic().expect("a finding").fix,
+            old.diagnostic().expect("a finding").fix
+        );
     }
 
     #[test]

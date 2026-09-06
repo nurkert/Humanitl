@@ -1,4 +1,4 @@
-/// The left icon rail: five sections, `Ctrl+1..5`, active entry with the
+/// The left icon rail: one entry per section, `Ctrl+<digit>`, active entry with the
 /// accent rail on its left edge.
 library;
 
@@ -144,5 +144,6 @@ class _RailEntryState extends State<RailEntry> {
     Section.rules => ShellGlyph.rules,
     Section.sandbox => ShellGlyph.sandbox,
     Section.audit => ShellGlyph.audit,
+    Section.setup => ShellGlyph.setup,
   };
 }

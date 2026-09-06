@@ -67,6 +67,7 @@ use crate::handle::{OutputSink, ReportSnapshot, SandboxHandle, Shared};
 use crate::launcher::{
     CheckResult, IsolationCheck, LaunchOnce, LaunchPlan, SandboxBackend, StdioMode,
 };
+use crate::os_release::install_command;
 use crate::profile::{MountPolicy, SandboxProfile, SessionContext, WORK_DST, normalize};
 
 /// Die kleinste `bwrap`-Fassung, mit der der Launcher arbeitet.
@@ -84,9 +85,6 @@ pub const EARLY_EXIT_WINDOW: Duration = Duration::from_millis(500);
 
 /// Wie lange [`SandboxBackend::isolation_check`] auf den Bericht des Shims wartet.
 pub const REPORT_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Der Befehl, der `bubblewrap` auf Debian und Ubuntu nachinstalliert.
-pub const INSTALL_COMMAND: &str = "sudo apt install bubblewrap";
 
 /// Der Befehl, der die AppArmor-Sperre für Nutzer-Namensräume aufhebt (Ubuntu ≥ 24.04).
 pub const USERNS_SYSCTL_COMMAND: &str =
@@ -181,7 +179,7 @@ impl BwrapBackend {
                     "{} is bubblewrap {version}; the launcher needs at least {MIN_BWRAP_VERSION}",
                     program.display()
                 ))
-                .fix(FixAction::CopyCommand(INSTALL_COMMAND.to_owned()))
+                .fix(FixAction::CopyCommand(install_command().to_owned()))
                 .build());
         }
         Self::probe_user_namespaces(&program)?;
@@ -270,7 +268,7 @@ impl BwrapBackend {
             .why(format!(
                 "no executable bwrap in PATH={path}; bubblewrap is not installed"
             ))
-            .fix(FixAction::CopyCommand(INSTALL_COMMAND.to_owned()))
+            .fix(FixAction::CopyCommand(install_command().to_owned()))
             .docs("https://github.com/containers/bubblewrap")
             .build())
     }
@@ -288,7 +286,7 @@ impl BwrapBackend {
             .map_err(|err| {
                 Diagnostic::builder(SANDBOX_001, Severity::Blocking)
                     .why(format!("cannot run {} --version: {err}", program.display()))
-                    .fix(FixAction::CopyCommand(INSTALL_COMMAND.to_owned()))
+                    .fix(FixAction::CopyCommand(install_command().to_owned()))
                     .build()
             })?;
         let text = String::from_utf8_lossy(&output.stdout);
@@ -650,7 +648,7 @@ impl SandboxBackend for BwrapBackend {
                     profile.name,
                     profile.sandbox.min_bwrap_version
                 ))
-                .fix(FixAction::CopyCommand(INSTALL_COMMAND.to_owned()))
+                .fix(FixAction::CopyCommand(install_command().to_owned()))
                 .build());
         }
 
@@ -981,7 +979,7 @@ fn supervise(
         Err(err) => {
             let _ = tx.send(Err(Diagnostic::builder(SANDBOX_001, Severity::Blocking)
                 .why(format!("cannot execute {}: {err}", program.display()))
-                .fix(FixAction::CopyCommand(INSTALL_COMMAND.to_owned()))
+                .fix(FixAction::CopyCommand(install_command().to_owned()))
                 .build()));
             return;
         }

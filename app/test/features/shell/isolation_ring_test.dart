@@ -23,6 +23,11 @@ const Key ringKey = Key('header-isolation-ring');
 String ringLabel(WidgetTester tester) =>
     tester.widget<HButton>(find.byKey(ringKey)).semanticsLabel!;
 
+/// Die Fläche, auf der die drei Bögen gezeichnet werden.
+Finder get ringArcs => find
+    .descendant(of: find.byKey(ringKey), matching: find.byType(CustomPaint))
+    .first;
+
 /// Ein Fake, dessen Sandbox mit [checks] laeuft.
 ///
 /// Die Momentaufnahme traegt keine Ergebnisse; sie kommen als Ereignisse aus
@@ -112,5 +117,38 @@ void main() {
           .read(sandboxTabChoiceProvider),
       SandboxTab.isolation,
     );
+  });
+
+  // Der Kopf steht ausserhalb der eingefrorenen Flaeche: Weder das
+  // `TickerMode` darin noch die stehengebliebene Uhr erreichen ihn. Ohne den
+  // `live`-Zweig in `header_bar.dart` malte der Ring die letzte Messung
+  // weiter gruen, waehrend das Banner darunter sagt, dass niemand antwortet
+  // (HUM-044, `docs/UX.md` 4.2, Fall 4). Diese beiden Erwartungen werden rot,
+  // wenn dieser Zweig verschwindet: die erste fuer die Boegen, die zweite fuer
+  // die Beschriftung.
+  testWidgets('a_ring_without_a_connection_makes_no_claim', (
+    WidgetTester tester,
+  ) async {
+    final FakeDaemonClient client = clientWithChecks(isolationGreenChecks);
+    await pumpApp(
+      tester,
+      client: client,
+      heartbeat: const Duration(seconds: 1),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(ringLabel(tester), '3/3 isolation checks passed');
+    final HTokens tokens = HTheme.of(tester.element(find.byKey(ringKey)));
+    expect(ringArcs, paints..arc(color: tokens.state.allowed));
+
+    // Der Dienst faellt weg; der Herzschlag merkt es.
+    client.goOffline();
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+
+    // Grau ist keine Behauptung in beide Richtungen (CONVENTIONS 4.13); gruen
+    // hiesse „gemessen und haelt", und das ist jetzt nicht mehr zu haben.
+    expect(ringArcs, paints..arc(color: tokens.colors.fg2));
+    expect(ringLabel(tester), 'Isolation: not measurable, no connection');
   });
 }

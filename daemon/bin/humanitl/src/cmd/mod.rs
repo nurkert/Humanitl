@@ -21,6 +21,7 @@ pub mod rules;
 pub mod run;
 pub mod sandbox;
 pub mod sessions;
+pub mod unit;
 
 use std::path::{Path, PathBuf};
 

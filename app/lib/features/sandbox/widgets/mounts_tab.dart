@@ -14,7 +14,6 @@ import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../sandbox_text.dart';
 import 'sandbox_table.dart';
-import 'work_dir_picker.dart';
 
 /// The mounts tab.
 class MountsTab extends StatelessWidget {

@@ -4,17 +4,23 @@
 
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/app.dart';
 import 'package:humanitl/core/ipc/daemon_client.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/features/shell/providers/connection.dart';
 
+import 'ui_state.dart';
+
 /// Baut die App über [client] und pumpt, bis das Verbindungs-Gate steht.
 Future<void> pumpApp(
   WidgetTester tester, {
   required DaemonClient client,
   Duration? heartbeat,
+  Duration? reconnect,
+  List<Override> overrides = const <Override>[],
+  Override? uiState,
   Size size = const Size(1280, 800),
 }) async {
   await tester.binding.setSurfaceSize(size);
@@ -24,6 +30,11 @@ Future<void> pumpApp(
       overrides: [
         daemonClientProvider.overrideWithValue(client),
         connectionHeartbeatProvider.overrideWithValue(heartbeat),
+        // Ohne Frist versucht die Verbindung nichts von selbst; ein Test, der
+        // den Zwei-Sekunden-Takt pruefen will, setzt ihn (HUM-044).
+        connectionReconnectProvider.overrideWithValue(reconnect),
+        uiState ?? uiStateOverride(),
+        ...overrides,
       ],
       child: const HumanitlApp(),
     ),

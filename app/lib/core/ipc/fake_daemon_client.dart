@@ -306,6 +306,36 @@ class FakeDaemonClient implements DaemonClient {
   /// Form, die es nicht gibt.
   List<IsolationCheckResult> isolationChecks = fakeIsolationChecks();
 
+  /// Was `Doctor` antwortet (HUM-075, HUM-044).
+  ///
+  /// Voreingestellt sind die elf Zeilen des Rust-Fakes: **keine davon
+  /// gemessen**, jede `warn` mit `DOCTOR_012`. Der Fake hat keine Maschine,
+  /// und `ok` zu melden, weil niemand nachgesehen hat, ist die Luege, gegen
+  /// die der Doctor gebaut ist. Ein Test, der den gruenen Weg braucht, setzt
+  /// [fakeDoctorOk] ein; ein Test, der eine rote Maschine braucht,
+  /// [fakeDoctorFailing].
+  DoctorReport doctorReport = fakeDoctorUnmeasured();
+
+  /// Wie oft `Doctor` gerufen wurde. Ein Bildschirm, der die Maschine bei
+  /// jedem Frame neu pruefen liesse, faellt hier auf.
+  int doctorCalls = 0;
+
+  /// Jeder Endpunkt, den `ProbeLlm` bekommen hat, in der Reihenfolge der
+  /// Aufrufe.
+  ///
+  /// Die Liste ist der Beweis fuer die Zusage, dass niemand je Tastendruck
+  /// eine Verbindung aufbaut: Ein Test tippt eine Adresse und erwartet, dass
+  /// sie leer bleibt, bis jemand den Knopf drueckt (HUM-044).
+  final List<String> probedEndpoints = <String>[];
+
+  /// Was `ProbeLlm` antwortet, statt die Vorgabe zu bauen. `null` heisst: die
+  /// Vorgabe.
+  LlmProbe? llmProbe;
+
+  /// Der Befund, mit dem `ProbeLlm` scheitert. `null` heisst: es scheitert
+  /// nicht.
+  Diagnostic? llmProbeFailure;
+
   /// The rules the person created, session rules first. `Decide.remember`
   /// adds to it, `Rules(remove)` takes from it.
   List<Rule> get rules => <Rule>[...sessionRules, ...savedRules];
@@ -1229,6 +1259,138 @@ class FakeDaemonClient implements DaemonClient {
       return pending?.cancel();
     };
     return out.stream;
+  }
+
+  // --- Doctor und Endpunkt-Probe (HUM-075, HUM-044) ---------------------
+  //
+  // Der Fake hat keine Maschine, die er lesen koennte, und kein Netz, das er
+  // ansprechen duerfte. Beide Antworten sind deshalb als Fake gekennzeichnet,
+  // und die Vorgabe des Doctors ist nicht gruen: `ok`, weil niemand
+  // nachgesehen hat, ist genau die Luege, gegen die der echte Doctor gebaut
+  // ist (`daemon/crates/ipc/src/fake/mod.rs`, CONVENTIONS 4.7).
+
+  @override
+  Future<DoctorReport> doctor() async {
+    _check();
+    doctorCalls++;
+    return doctorReport;
+  }
+
+  @override
+  Future<LlmProbe> probeLlm(String endpoint, {Duration? timeout}) async {
+    _check();
+    probedEndpoints.add(endpoint);
+    if (llmProbeFailure case final Diagnostic failure) {
+      throw DaemonException(failure);
+    }
+    // Was der echte Dienst nicht lesen kann, beantwortet auch der Fake nicht
+    // mit einer erfundenen Modellliste: `LLM_007`, wie dort. Ein leerer
+    // Endpunkt ist keine URL und wird nicht durch einen anderen ersetzt --
+    // sonst uebte die Oberflaeche gegen einen Fehlerfall, den sie nie sieht.
+    if (!_isUsableEndpoint(endpoint)) {
+      throw DaemonException(
+        Diagnostic(
+          code: 'LLM_007',
+          severity: Severity.blocking,
+          title: 'LLM-Endpunkt unbrauchbar',
+          why:
+              'llm.endpoint must be an absolute http or https URL with a host; '
+              '"$endpoint" is not one',
+        ),
+      );
+    }
+    if (llmProbe case final LlmProbe fixed) {
+      return fixed.copyWith(endpoint: endpoint);
+    }
+    // Ob der Endpunkt privat ist, wird am Namen entschieden und nicht
+    // geraten; alles, was sich nicht als privat lesen laesst, zaehlt als
+    // nicht privat -- die vorsichtige Seite, denn nur dann warnt die
+    // Oberflaeche mit `LLM_006`.
+    final bool private = _looksPrivate(endpoint);
+    return LlmProbe(
+      endpoint: endpoint,
+      models: <String>[
+        for (final String model in <String>['qwen2.5-coder:14b', 'llama3.1:8b'])
+          '$fakeNothingMeasured: $model',
+      ],
+      flavor: LlmFlavor.ollama,
+      // Null und keine Zahl: eine Latenz saehe in einem Screenshot wie eine
+      // Messung aus.
+      latencyMs: 0,
+      endpointIsPrivate: private,
+      diagnostics: <Diagnostic>[
+        if (!private)
+          Diagnostic(
+            code: 'LLM_006',
+            severity: Severity.info,
+            title: 'LLM-Endpunkt nicht im privaten Netz',
+            why:
+                '$endpoint is not on a private network. Traffic to this '
+                'address bypasses the queue, so only put a machine you '
+                'control here.',
+          ),
+      ],
+    );
+  }
+
+  /// Ob der Endpunkt eine absolute http- oder https-URL mit Host ist, wie
+  /// `validate::llm_endpoint` sie verlangt.
+  static bool _isUsableEndpoint(String endpoint) {
+    final Uri? url = Uri.tryParse(endpoint.trim());
+    if (url == null || !url.hasScheme || url.host.isEmpty) {
+      return false;
+    }
+    return url.scheme == 'http' || url.scheme == 'https';
+  }
+
+  /// Spiegel von `looks_private` im Rust-Fake: Loopback, RFC 1918 und die
+  /// vier Namensendungen des eigenen Netzes.
+  static bool _looksPrivate(String endpoint) {
+    final String host = (Uri.tryParse(endpoint.trim())?.host ?? '')
+        .toLowerCase();
+    if (host.isEmpty) {
+      return false;
+    }
+    if (host == 'localhost' || host == '::1') {
+      return true;
+    }
+    for (final String suffix in <String>[
+      '.local',
+      '.lan',
+      '.home.arpa',
+      '.internal',
+    ]) {
+      if (host.endsWith(suffix)) {
+        return true;
+      }
+    }
+    final List<int>? octets = _ipv4(host);
+    if (octets == null) {
+      return false;
+    }
+    return octets[0] == 127 ||
+        octets[0] == 10 ||
+        (octets[0] == 192 && octets[1] == 168) ||
+        (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31) ||
+        (octets[0] == 169 && octets[1] == 254) ||
+        (octets[0] == 100 && octets[1] >= 64 && octets[1] <= 127);
+  }
+
+  /// Die vier Zahlen einer IPv4-Adresse, oder null.
+  static List<int>? _ipv4(String host) {
+    final List<String> parts = host.split('.');
+    if (parts.length != 4) {
+      return null;
+    }
+    final List<int> octets = <int>[];
+    for (final String part in parts) {
+      final int? value = int.tryParse(part);
+      if (value == null || value < 0 || value > 255) {
+        return null;
+      }
+      octets.add(value);
+    }
+    return octets;
   }
 
   @override
@@ -2862,3 +3024,97 @@ String fakeSandboxArgv({required String workDir, required WorkMode workMode}) {
       '--setenv SSL_CERT_FILE /etc/humanitl/ca.crt --chdir /work '
       '-- /run/humanitl/humanitl-shim --proxy-port 3128 -- opencode';
 }
+
+/// Das Praefix jedes Belegs aus dem Fake: hier wurde nichts gemessen.
+///
+/// Wortgleich mit `NOTHING_MEASURED` im Rust-Fake. Ein Beleg, der wie eine
+/// echte Messung aussieht, waere in einem Screenshot oder einem Fehlerbericht
+/// nicht mehr von einer zu unterscheiden (CONVENTIONS 4.7).
+const String fakeNothingMeasured = 'fake daemon: nothing was measured';
+
+/// Die Kennungen der elf Pruefungen, in der Reihenfolge, in der der Daemon sie
+/// schickt (`humanitl_sandbox::doctor::CheckId::ALL`).
+const List<String> fakeDoctorCheckIds = <String>[
+  DoctorCheckId.bwrap,
+  DoctorCheckId.userns,
+  DoctorCheckId.seccomp,
+  DoctorCheckId.runtimeDir,
+  DoctorCheckId.systemdUser,
+  DoctorCheckId.daemon,
+  DoctorCheckId.agent,
+  DoctorCheckId.llm,
+  DoctorCheckId.tray,
+  DoctorCheckId.renderer,
+  DoctorCheckId.diskSpace,
+];
+
+/// Der Bericht des Rust-Fakes: elf Zeilen, keine davon gemessen.
+///
+/// Genau die Form, die auch ein echter Daemon auf einem Rechner schickt, auf
+/// dem keine der Quellen lesbar ist: `warn`, `DOCTOR_012`, ein Beleg, der mit
+/// `not measured` beginnt, und ein Vorschlag, der den Weg zum Nachsehen nennt.
+DoctorReport fakeDoctorUnmeasured() => DoctorReport(
+  checks: List<DoctorCheck>.unmodifiable(<DoctorCheck>[
+    for (final String id in fakeDoctorCheckIds)
+      DoctorCheck(
+        id: id,
+        status: DoctorStatus.warn,
+        evidence: 'not measured: $fakeNothingMeasured',
+        diagnostic: Diagnostic(
+          code: DiagnosticCodes.doctorNotPerformed,
+          severity: Severity.warning,
+          title: 'Prüfung nicht durchführbar',
+          why: 'the check $id could not be performed: $fakeNothingMeasured',
+          fix: const FixAction.copyCommand(command: 'humanitl doctor'),
+        ),
+      ),
+  ]),
+);
+
+/// Elf gruene Zeilen, jede mit einem Beleg, der ausdruecklich sagt, dass
+/// nichts gemessen wurde.
+///
+/// Fuer den Weg, auf dem alles stimmt. Er muss sich pruefen lassen, und ohne
+/// diesen Bericht gaebe es im Fake keinen Zustand, in dem der Start-Knopf
+/// jemals angeht. Der Beleg bleibt gekennzeichnet: gruen heisst hier
+/// „gespielt", nicht „gemessen".
+DoctorReport fakeDoctorOk() => DoctorReport(
+  checks: List<DoctorCheck>.unmodifiable(<DoctorCheck>[
+    for (final String id in fakeDoctorCheckIds)
+      DoctorCheck(
+        id: id,
+        status: DoctorStatus.ok,
+        evidence: '$fakeNothingMeasured (would check: $id)',
+      ),
+  ]),
+);
+
+/// Elf Zeilen, von denen genau eine `fail` traegt.
+///
+/// [failing] ist die Kennung der roten Zeile; alle anderen sind gruen. Damit
+/// laesst sich pruefen, dass eine einzige rote Zeile den Start sperrt, und
+/// zwar die genannte.
+DoctorReport fakeDoctorFailing({String failing = DoctorCheckId.bwrap}) =>
+    DoctorReport(
+      checks: List<DoctorCheck>.unmodifiable(<DoctorCheck>[
+        for (final DoctorCheck check in fakeDoctorOk().checks)
+          if (check.id == failing)
+            check.copyWith(
+              status: DoctorStatus.fail,
+              evidence: '$fakeNothingMeasured (played failure of $failing)',
+              diagnostic: Diagnostic(
+                code: 'DOCTOR_001',
+                severity: Severity.blocking,
+                title: 'bubblewrap fehlt oder ist zu alt',
+                why:
+                    '$fakeNothingMeasured: the played machine has no usable '
+                    '$failing',
+                fix: const FixAction.copyCommand(
+                  command: 'sudo apt install bubblewrap',
+                ),
+              ),
+            )
+          else
+            check,
+      ]),
+    );

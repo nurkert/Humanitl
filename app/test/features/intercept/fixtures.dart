@@ -261,8 +261,16 @@ class TestDaemonClient implements DaemonClient {
 
   // Der Sandbox-Teil des Ports (HUM-040). Diese Tests fahren ihn nicht; der
   // Sandbox-Bildschirm hat sein eigenes Gerüst mit dem FakeDaemonClient.
+  //
+  // Die Momentaufnahme nennt trotzdem einen Projektordner, weil ein echter
+  // Daemon das immer tut. Ohne ihn wäre der Zustand dieses Clients „niemand
+  // hat einen Ordner gewählt", und das ist ein blockierender Befund der
+  // Setup-Zeile (HUM-044): Die Shell öffnete dann die Checkliste, und diese
+  // Tests prüfen die Warteschlange.
   @override
-  Stream<SandboxUpdate> sandboxStatus() => const Stream<SandboxUpdate>.empty();
+  Stream<SandboxUpdate> sandboxStatus() => Stream<SandboxUpdate>.value(
+    const SandboxUpdate.status(SandboxStatus(workDirHost: '/home/u/project')),
+  );
 
   @override
   Stream<SandboxUpdate> planSandbox({
@@ -287,6 +295,17 @@ class TestDaemonClient implements DaemonClient {
   @override
   Stream<TerminalFrame> terminal(Stream<TerminalCommand> input) =>
       const Stream<TerminalFrame>.empty();
+
+  // Der Doctor und die Endpunkt-Probe (HUM-075, HUM-044) gehören dem
+  // Setup-Bildschirm. Der leere Bericht ist hier die ehrliche Antwort: nicht
+  // elf grüne Zeilen, sondern gar keine, denn dieser Client hat nichts
+  // gemessen (CONVENTIONS 4.13).
+  @override
+  Future<DoctorReport> doctor() async => DoctorReport.empty;
+
+  @override
+  Future<LlmProbe> probeLlm(String endpoint, {Duration? timeout}) async =>
+      LlmProbe(endpoint: endpoint);
 
   @override
   Future<void> close() async {

@@ -55,7 +55,14 @@ class CommandPalette extends StatefulWidget {
   final VoidCallback onClose;
 
   /// How many matches are listed at most.
-  static const int maxRows = 8;
+  ///
+  /// Never below the number of commands the shell offers without a filter.
+  /// Eight was that number until the setup section arrived; with a sixth
+  /// "go to" the ninth command was silently cut off, and the one command of
+  /// the program that opens the batch modal was the one that fell off the end
+  /// (HUM-044). A list that hides an entry nobody can guess at is worse than a
+  /// list that is one row longer.
+  static const int maxRows = 12;
 
   @override
   State<CommandPalette> createState() => _CommandPaletteState();

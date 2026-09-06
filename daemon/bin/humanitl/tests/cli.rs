@@ -1929,3 +1929,568 @@ fn sandbox_attach_speaks_the_terminal_rpc() {
         stdout(&output)
     );
 }
+
+// --- `humanitl daemon install` (HUM-044) -------------------------------------
+//
+// Der Befehl schreibt eine Datei auf den Rechner eines Menschen, die von da an
+// bei jeder Anmeldung einen Dienst startet. Die Tests halten fest, was daran
+// haengt: genau eine Datei an einem genannten Ort, sichtbar bevor sie
+// geschrieben wird, wiederholbar, nie ueber fremdes Eigentum, nie mit `sudo` —
+// und ohne `systemctl` kein `systemctl`.
+
+/// Der Dateiname der Unit, wie `humanitl daemon install` ihn schreibt.
+const UNIT_FILE: &str = "humanitld.service";
+
+/// Eine Installation neben einem `humanitld`, das es wirklich gibt.
+///
+/// `ExecStart` entsteht aus `std::env::current_exe()` und dessen Nachbarn, nie
+/// aus `PATH`. Der Test kopiert das Binary deshalb in ein eigenes Verzeichnis
+/// und legt einen Nachbarn daneben: So haengt er nicht daran, ob dieser Lauf
+/// zufaellig auch `humanitld` gebaut hat, und misst genau die Regel, um die es
+/// geht.
+fn installed_tree(harness: &Harness) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let bin = harness.path("opt");
+    std::fs::create_dir_all(&bin).expect("the install directory");
+    let cli = bin.join("humanitl");
+    std::fs::copy(BIN, &cli).expect("the binary is copied");
+    std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755))
+        .expect("0755 on the copy");
+    let daemon = bin.join("humanitld");
+    std::fs::write(&daemon, b"#!/bin/sh\nexit 0\n").expect("the neighbour");
+    std::fs::set_permissions(&daemon, std::fs::Permissions::from_mode(0o755))
+        .expect("0755 on the neighbour");
+    bin
+}
+
+/// Ruft die kopierte Kommandozeile in der Umgebung der Testumgebung auf.
+///
+/// `PATH` ist leer: Ohne `systemctl` darf der Befehl die Unit schreiben und
+/// nichts starten, und das ist genau der Fall, den ein Test ohne laufende
+/// Sitzung reproduzierbar herstellen kann.
+fn install_run(harness: &Harness, bin: &Path, args: &[&str]) -> Output {
+    let mut command = Command::new(bin.join("humanitl"));
+    command
+        .args(args)
+        .current_dir(harness.path("work"))
+        .env_clear()
+        .env("PATH", "")
+        .env("HOME", harness.path("home"))
+        .env("XDG_CONFIG_HOME", harness.path("config"))
+        .env("XDG_DATA_HOME", harness.path("data"))
+        .env("XDG_RUNTIME_DIR", harness.path("run"));
+    output_when_not_busy(command)
+}
+
+/// Startet ein frisch kopiertes Binary und wartet ab, solange der Kernel es
+/// noch als beschäftigt meldet.
+///
+/// `ETXTBSY` ("Text file busy") heißt: Irgendein Prozess hält noch einen
+/// Deskriptor zum **Schreiben** auf genau diese Datei, und Linux führt eine
+/// Datei nicht aus, die jemand gerade schreibt.
+///
+/// Neun Tests dieser Datei legen sich das Binary in ein eigenes
+/// Wegwerfverzeichnis und führen es dort aus, und der Testläufer von Rust fährt
+/// sie als Threads **eines** Prozesses. Kopiert Thread A gerade sein Binary,
+/// während Thread B einen Prozess startet, erbt das Kind von B den offenen
+/// Schreib-Deskriptor von A: `CLOEXEC` schließt ihn erst beim `exec` des Kindes,
+/// nicht schon beim `fork`. In diesem Fenster von wenigen Millisekunden
+/// scheitert A beim Ausführen seiner eigenen Kopie mit `ETXTBSY` — an einer
+/// Datei, die niemand mehr anfasst.
+///
+/// Das ist kein Fehler des Programms und keiner des Kernels, sondern die
+/// bekannte Verschränkung von `fork` und einer offenen Schreibdatei. Der Kernel
+/// gibt die Datei von selbst frei, sobald das fremde Kind sein `exec` hinter
+/// sich hat; deshalb wird hier gewartet und nicht umgebaut. Am 2026-09-06 ist
+/// genau das einmal von zwei Läufen rot geworden, und ein Test, der unter Last
+/// zufällig fällt, sagt über den Code nichts aus.
+///
+/// Die Obergrenze ist absichtlich endlich: Bleibt die Datei eine Sekunde lang
+/// belegt, ist es nicht mehr dieses Fenster, sondern etwas, das jemand ansehen
+/// muss.
+fn output_when_not_busy(mut command: Command) -> Output {
+    const ATTEMPTS: u32 = 50;
+    const PAUSE: std::time::Duration = std::time::Duration::from_millis(20);
+    for _ in 0..ATTEMPTS {
+        match command.output() {
+            Ok(output) => return output,
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(PAUSE);
+            }
+            Err(error) => panic!("the binary runs: {error:?}"),
+        }
+    }
+    panic!(
+        "the copied binary stayed busy for {:?}; that is no longer the fork window",
+        PAUSE * ATTEMPTS
+    )
+}
+
+/// Wo die Unit in dieser Umgebung liegt.
+fn unit_path(harness: &Harness) -> PathBuf {
+    harness.path("config").join("systemd/user").join(UNIT_FILE)
+}
+
+#[test]
+fn daemon_install_writes_one_unit_into_xdg_config_home() {
+    let harness = Harness::new();
+    let bin = installed_tree(&harness);
+    let output = install_run(&harness, &bin, &["daemon", "install"]);
+
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let unit = unit_path(&harness);
+    let text = std::fs::read_to_string(&unit).expect("the unit is written");
+
+    // `ExecStart` nennt den Nachbarn der laufenden Kommandozeile, aufgeloest
+    // bis zur wirklichen Datei: `daemon_binary` kanonisiert, damit ein spaeter
+    // umgehaengter Verweis nicht aendert, was beim Anmelden startet.
+    let expected = std::fs::canonicalize(harness.path("opt").join("humanitld"))
+        .expect("the neighbour is there");
+    assert!(
+        text.contains(&format!("ExecStart={}\n", expected.display())),
+        "{text}"
+    );
+    // Genau eine Datei, und keine Socket-Unit daneben.
+    let dir = unit.parent().expect("the unit directory");
+    let written: Vec<String> = std::fs::read_dir(dir)
+        .expect("the directory is readable")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    assert_eq!(written, vec!["humanitld.service".to_owned()], "{written:?}");
+    // Nie mit `sudo`: keine Anweisung der Unit ruft es, und der Befehl sagt
+    // es auch nicht. Die Kommentarzeilen duerfen das Wort tragen -- dort steht,
+    // warum es nirgends steht.
+    for line in text.lines() {
+        assert!(
+            line.trim_start().starts_with('#') || !line.contains("sudo"),
+            "a directive of the unit calls sudo: {line}"
+        );
+    }
+    assert!(
+        !stderr(&output).contains("sudo humanitl"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn daemon_install_shows_the_unit_before_it_writes_it() {
+    let harness = Harness::new();
+    // Auch unter `--json`: Ein Ausgabeschalter darf nicht bestimmen, ob ein
+    // Mensch sieht, welche Datei sein Rechner gleich bekommt.
+    let bin = installed_tree(&harness);
+    let output = install_run(&harness, &bin, &["--json", "daemon", "install", "--print"]);
+
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let announced = stderr(&output);
+    assert!(announced.contains("ExecStart="), "{announced}");
+    assert!(announced.contains("WantedBy=default.target"), "{announced}");
+    assert!(
+        announced.contains(&unit_path(&harness).display().to_string()),
+        "{announced}"
+    );
+    // `--print` schreibt nichts.
+    assert!(!unit_path(&harness).exists(), "--print writes nothing");
+    // Und `stdout` bleibt ein einziger JSON-Wert.
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("one JSON value");
+    assert_eq!(value["action"], "print");
+}
+
+#[test]
+fn daemon_install_twice_writes_nothing_the_second_time() {
+    let harness = Harness::new();
+    let bin = installed_tree(&harness);
+    let first = install_run(&harness, &bin, &["--json", "daemon", "install"]);
+    assert_eq!(code(&first), 0, "{}", stderr(&first));
+    let first: serde_json::Value =
+        serde_json::from_str(stdout(&first).trim()).expect("one JSON value");
+    assert_eq!(first["action"], "created");
+
+    let second = install_run(&harness, &bin, &["--json", "daemon", "install"]);
+    assert_eq!(code(&second), 0, "{}", stderr(&second));
+    let second: serde_json::Value =
+        serde_json::from_str(stdout(&second).trim()).expect("one JSON value");
+    assert_eq!(second["action"], "unchanged");
+}
+
+#[test]
+fn daemon_install_refuses_a_unit_it_did_not_write() {
+    let harness = Harness::new();
+    let unit = unit_path(&harness);
+    std::fs::create_dir_all(unit.parent().expect("the directory")).expect("the directory");
+    let theirs = "[Service]\nExecStart=/usr/local/bin/humanitld --fake\n";
+    std::fs::write(&unit, theirs).expect("their unit");
+
+    let bin = installed_tree(&harness);
+    let output = install_run(&harness, &bin, &["daemon", "install"]);
+
+    assert_ne!(code(&output), 0, "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("DAEMON_005"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&unit).expect("still there"),
+        theirs,
+        "the file of somebody else is not touched"
+    );
+}
+
+#[test]
+fn daemon_install_without_systemctl_leaves_the_unit_and_starts_nothing() {
+    let harness = Harness::new();
+    // `PATH` ist leer, also gibt es kein `systemctl`.
+    let bin = installed_tree(&harness);
+    let output = install_run(&harness, &bin, &["--json", "daemon", "install"]);
+
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("one JSON value");
+    assert_eq!(value["activation"], "no systemctl");
+    assert!(unit_path(&harness).is_file(), "the unit is in place anyway");
+    assert!(
+        stderr(&output).contains("no systemctl in PATH"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn daemon_install_refuses_when_no_humanitld_lies_next_to_it() {
+    let harness = Harness::new();
+    let bin = harness.path("lonely");
+    std::fs::create_dir_all(&bin).expect("the directory");
+    std::fs::copy(BIN, bin.join("humanitl")).expect("the binary is copied");
+
+    let mut command = Command::new(bin.join("humanitl"));
+    command
+        .args(["daemon", "install"])
+        .env_clear()
+        .env("PATH", "")
+        .env("HOME", harness.path("home"))
+        .env("XDG_CONFIG_HOME", harness.path("config"));
+    let output = output_when_not_busy(command);
+
+    assert_ne!(code(&output), 0, "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("DAEMON_007"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!unit_path(&harness).exists(), "nothing is left behind");
+}
+
+/// Ein `systemctl`, das die Aktivierung anlegt und dann scheitert.
+///
+/// Genau der Fall, um den es geht: `systemctl --user enable --now` ist **ein**
+/// Aufruf mit zwei Schritten. Es legt die Verweise unter `<ziel>.wants/` an und
+/// startet dann den Dienst; misslingt der Start, ist der Aufruf rot und die
+/// Verweise stehen trotzdem da. Das Skript tut beides.
+///
+/// Der Pfad des Unit-Verzeichnisses und der des Protokolls stehen woertlich im
+/// Skript, weil `daemon install` `systemctl` mit `env_clear()` und nur vier
+/// Variablen ruft; `XDG_CONFIG_HOME` gehoert nicht dazu. Aus demselben Grund
+/// setzt das Skript seinen eigenen `PATH`: Der geerbte enthaelt nur das
+/// Verzeichnis dieses Skripts, also weder `mkdir` noch `ln`.
+///
+/// Das Protokoll ist der Grund, aus dem der Test nicht leer gruen werden kann:
+/// Es haelt fest, dass der Verweis wirklich entstanden ist. Ohne diese Zeile
+/// bestuende der Test auch dann, wenn das Skript nie einen angelegt haette.
+fn fake_systemctl(harness: &Harness, unit_dir: &Path) -> (PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let bin = harness.path("fakebin");
+    std::fs::create_dir_all(&bin).expect("the fake bin directory");
+    let log = harness.path("systemctl.log");
+    let link = unit_dir.join("default.target.wants").join(UNIT_FILE);
+    let script = format!(
+        "#!/bin/sh\n\
+         PATH=/usr/bin:/bin\n\
+         export PATH\n\
+         echo \"$*\" >>'{log}'\n\
+         case \"$*\" in\n\
+         *enable*)\n\
+           mkdir -p '{wants}' || exit 90\n\
+           ln -sf '{unit}' '{link}' || exit 91\n\
+           test -L '{link}' || exit 92\n\
+           echo 'created the wants link' >>'{log}'\n\
+           echo 'Job for humanitld.service failed because the control process exited' >&2\n\
+           exit 1\n\
+           ;;\n\
+         esac\n\
+         exit 0\n",
+        log = log.display(),
+        wants = unit_dir.join("default.target.wants").display(),
+        unit = unit_dir.join(UNIT_FILE).display(),
+        link = link.display(),
+    );
+    let path = bin.join("systemctl");
+    std::fs::write(&path, script).expect("the fake systemctl");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("0755");
+    (bin, log)
+}
+
+/// Was das gefaelschte `systemctl` protokolliert hat.
+fn fake_systemctl_log(log: &Path) -> String {
+    std::fs::read_to_string(log).unwrap_or_default()
+}
+
+/// Wie [`install_run`], aber mit einem `PATH`, in dem ein `systemctl` liegt.
+fn install_run_with_path(harness: &Harness, bin: &Path, path: &Path, args: &[&str]) -> Output {
+    let mut command = Command::new(bin.join("humanitl"));
+    command
+        .args(args)
+        .current_dir(harness.path("work"))
+        .env_clear()
+        .env("PATH", path)
+        .env("HOME", harness.path("home"))
+        .env("XDG_CONFIG_HOME", harness.path("config"))
+        .env("XDG_DATA_HOME", harness.path("data"))
+        .env("XDG_RUNTIME_DIR", harness.path("run"));
+    output_when_not_busy(command)
+}
+
+/// Der Verweis, mit dem systemd die Unit beim Anmelden startet.
+fn wants_link(harness: &Harness) -> PathBuf {
+    harness
+        .path("config")
+        .join("systemd/user/default.target.wants/humanitld.service")
+}
+
+/// Ein gescheitertes `enable --now` laesst weder die Unit noch ihre Aktivierung
+/// liegen.
+///
+/// Ohne die Ruecknahme der Verweise waere `daemon install` nicht das eine
+/// Geschaeft, als das `docs/cli.md` es beschreibt: Der Befehl endete mit
+/// `DAEMON_008`, die Unit-Datei verschwaende — und der Dienst startete beim
+/// naechsten Anmelden trotzdem, weil der Verweis im `default.target.wants`
+/// stehen bliebe.
+#[test]
+fn a_failed_enable_takes_the_wants_link_back_as_well() {
+    let harness = Harness::new();
+    let bin = installed_tree(&harness);
+    let unit = unit_path(&harness);
+    let unit_dir = unit.parent().expect("the unit directory").to_path_buf();
+    let (fake, log) = fake_systemctl(&harness, &unit_dir);
+
+    let output = install_run_with_path(&harness, &bin, &fake, &["daemon", "install"]);
+
+    assert_ne!(code(&output), 0, "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("DAEMON_008"),
+        "{}",
+        stderr(&output)
+    );
+    // Das Skript hat den Verweis wirklich angelegt. Ohne diese Zeile waere der
+    // Test gruen, auch wenn nie einer entstanden ist.
+    let log = fake_systemctl_log(&log);
+    assert!(
+        log.contains("created the wants link"),
+        "the fake systemctl never created an enablement link: {log}"
+    );
+    // Und der Dienst wird angehalten, bevor die Datei verschwindet. `enable
+    // --now` startet die Unit; scheitert sie dabei, steht sie auf `failed`, und
+    // `Restart=on-failure` versucht es weiter. Eine Ruecknahme, die nur die
+    // Datei wegnimmt, laesst systemd auf eine Unit neu starten, die es nicht
+    // mehr gibt.
+    assert!(
+        log.contains("--user stop humanitld.service"),
+        "the failed unit is stopped before it is taken back: {log}"
+    );
+    assert!(
+        log.contains("--user reset-failed humanitld.service"),
+        "the failed state is cleared, not left in systemd's memory: {log}"
+    );
+    assert!(!unit.exists(), "the unit is taken back: {}", unit.display());
+    assert!(
+        wants_link(&harness).symlink_metadata().is_err(),
+        "the enablement link of this run stays behind: {}",
+        wants_link(&harness).display()
+    );
+    // Und gar nichts sonst: kein leeres `default.target.wants`, keine
+    // Nachbardatei des Schreibvorgangs.
+    let leftovers: Vec<PathBuf> = std::fs::read_dir(&unit_dir)
+        .expect("the directory is readable")
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .collect();
+    assert!(leftovers.is_empty(), "nothing stays behind: {leftovers:?}");
+}
+
+/// Angehalten wird nur, was dieser Lauf gestartet haben kann.
+///
+/// Scheitert schon `daemon-reload`, hat `daemon install` nichts gestartet. Ein
+/// `stop` traefe dann den Daemon, den der Mensch vorher selbst laufen hatte,
+/// und etwas anzuhalten, das man nicht gestartet hat, ist schlimmer als ein
+/// Rest im Gedaechtnis von systemd.
+#[test]
+fn a_failed_reload_stops_nothing() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let harness = Harness::new();
+    let bin = installed_tree(&harness);
+    let fakebin = harness.path("fakebin");
+    std::fs::create_dir_all(&fakebin).expect("the fake bin directory");
+    let log = harness.path("systemctl.log");
+    // Dieses `systemctl` scheitert am ersten Schritt und legt nie einen
+    // Verweis an.
+    let script = format!(
+        "#!/bin/sh\n\
+         echo \"$*\" >>'{log}'\n\
+         case \"$*\" in\n\
+         *daemon-reload*)\n\
+           echo 'Failed to reload daemon' >&2\n\
+           exit 1\n\
+           ;;\n\
+         esac\n\
+         exit 0\n",
+        log = log.display(),
+    );
+    let path = fakebin.join("systemctl");
+    std::fs::write(&path, script).expect("the fake systemctl");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+        .expect("0755 on the fake");
+
+    let output = install_run_with_path(&harness, &bin, &fakebin, &["daemon", "install"]);
+
+    assert_ne!(code(&output), 0, "{}", stdout(&output));
+    let log = fake_systemctl_log(&log);
+    assert!(
+        log.contains("--user daemon-reload"),
+        "the run really tried the reload: {log}"
+    );
+    assert!(
+        !log.contains("--user stop"),
+        "nothing this run did not start is stopped: {log}"
+    );
+    assert!(
+        !log.contains("--user enable"),
+        "the enable never runs after a failed reload: {log}"
+    );
+}
+
+/// Zurueckgenommen wird nur, was dieser Lauf angelegt hat.
+///
+/// Wer den Dienst schon vorher aktiviert hatte, behaelt die Aktivierung, auch
+/// wenn `daemon install` scheitert. Und die aeltere eigene Unit bekommt ihren
+/// Inhalt zurueck, statt zu verschwinden.
+#[test]
+fn a_failed_enable_keeps_an_enablement_that_was_there_before() {
+    let harness = Harness::new();
+    let bin = installed_tree(&harness);
+    let unit = unit_path(&harness);
+    let unit_dir = unit.parent().expect("the unit directory").to_path_buf();
+    std::fs::create_dir_all(unit_dir.join("default.target.wants")).expect("the wants directory");
+    let older = "# humanitl daemon install: written by Humanitl\n                 [Service]\nExecStart=/old/humanitld\n";
+    std::fs::write(&unit, older).expect("our older unit");
+    std::os::unix::fs::symlink(&unit, wants_link(&harness)).expect("the enablement from before");
+
+    let (fake, log) = fake_systemctl(&harness, &unit_dir);
+    let output = install_run_with_path(&harness, &bin, &fake, &["daemon", "install"]);
+
+    assert_ne!(code(&output), 0, "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("DAEMON_008"),
+        "{}",
+        stderr(&output)
+    );
+    let log = fake_systemctl_log(&log);
+    assert!(
+        log.contains("created the wants link"),
+        "the fake systemctl never touched the enablement: {log}"
+    );
+    assert!(
+        wants_link(&harness).symlink_metadata().is_ok(),
+        "an enablement from before this run is not taken away"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&unit).expect("still there"),
+        older,
+        "the older version of our own unit comes back"
+    );
+}
+
+/// Die Ankuendigung sagt, was geschieht, und nicht, was ein Aufruf im Regelfall
+/// taete.
+///
+/// Ein zweiter `daemon install` schreibt nichts (`unchanged`). Sagte die
+/// Ankuendigung trotzdem „writes <pfad>", stuende auf `stderr` ein Satz, den
+/// derselbe Lauf gleich widerlegt.
+#[test]
+fn the_announcement_of_a_second_install_says_that_nothing_is_written() {
+    let harness = Harness::new();
+    let bin = installed_tree(&harness);
+    let unit = unit_path(&harness);
+    let writes = format!("humanitl daemon install writes {}:", unit.display());
+
+    let first = install_run(&harness, &bin, &["daemon", "install"]);
+    assert_eq!(code(&first), 0, "{}", stderr(&first));
+    assert!(
+        stderr(&first).contains(&writes),
+        "the first call writes the file and says so: {}",
+        stderr(&first)
+    );
+
+    let second = install_run(&harness, &bin, &["daemon", "install"]);
+    assert_eq!(code(&second), 0, "{}", stderr(&second));
+    assert!(
+        !stderr(&second).contains(&writes),
+        "the second call writes nothing and may not say it does: {}",
+        stderr(&second)
+    );
+    assert!(
+        stderr(&second).contains(&format!(
+            "humanitl daemon install writes nothing: {} already carries exactly this:",
+            unit.display()
+        )),
+        "{}",
+        stderr(&second)
+    );
+    // Der ganze Text der Unit steht trotzdem da: Wer den Befehl ruft, soll
+    // sehen, was auf seiner Platte liegt.
+    assert!(
+        stderr(&second).contains("ExecStart="),
+        "{}",
+        stderr(&second)
+    );
+}
+
+/// Vor einer fremden Unit wird nichts angekuendigt, was dann nicht geschieht.
+///
+/// `DAEMON_005` heisst: Die Datei gehoert jemand anderem und wird nicht
+/// angefasst. Ein „humanitl daemon install writes <pfad>" davor waere die
+/// Sorte Satz, gegen die dieses Produkt gebaut ist.
+#[test]
+fn a_foreign_unit_is_refused_without_announcing_a_write() {
+    let harness = Harness::new();
+    let unit = unit_path(&harness);
+    std::fs::create_dir_all(unit.parent().expect("the directory")).expect("the directory");
+    std::fs::write(
+        &unit,
+        "[Service]\nExecStart=/usr/local/bin/humanitld --fake\n",
+    )
+    .expect("their unit");
+
+    let bin = installed_tree(&harness);
+    let output = install_run(&harness, &bin, &["daemon", "install"]);
+
+    assert_ne!(code(&output), 0, "{}", stdout(&output));
+    let announced = stderr(&output);
+    assert!(announced.contains("DAEMON_005"), "{announced}");
+    assert!(
+        !announced.contains("humanitl daemon install writes"),
+        "nothing is written, so nothing announces a write: {announced}"
+    );
+    assert!(
+        !announced.contains("enable --now"),
+        "nothing is started, so nothing announces a start: {announced}"
+    );
+}

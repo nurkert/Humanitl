@@ -53,6 +53,7 @@ export 'src/widgets/h_method_badge.dart';
 export 'src/widgets/h_modal.dart';
 export 'src/widgets/h_panel.dart';
 export 'src/widgets/h_pill.dart';
+export 'src/widgets/h_popover.dart';
 export 'src/widgets/h_row.dart';
 export 'src/widgets/h_segmented.dart';
 export 'src/widgets/h_sheet.dart';
