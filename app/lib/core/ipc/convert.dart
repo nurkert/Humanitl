@@ -677,3 +677,74 @@ extension TerminalOutputToDomain on pb.TerminalOutput {
     pb.TerminalOutput_Output.notSet => null,
   };
 }
+
+/// `CheckStatus` to [DoctorStatus] (HUM-075).
+///
+/// Not [enumFromWire]: the domain enum starts with [DoctorStatus.unknown] on
+/// purpose, so `CHECK_STATUS_UNSPECIFIED` and every value a newer daemon may
+/// invent land there. Folding an unknown status into [DoctorStatus.ok] would
+/// be the one lie this whole check is built against (CONVENTIONS 4.13).
+extension CheckStatusToDomain on pb.CheckStatus {
+  /// The domain form.
+  DoctorStatus toDomain() => switch (this) {
+    pb.CheckStatus.CHECK_STATUS_OK => DoctorStatus.ok,
+    pb.CheckStatus.CHECK_STATUS_WARN => DoctorStatus.warn,
+    pb.CheckStatus.CHECK_STATUS_FAIL => DoctorStatus.fail,
+    _ => DoctorStatus.unknown,
+  };
+}
+
+/// `DoctorCheck` to [DoctorCheck].
+extension DoctorCheckToDomain on pb.DoctorCheck {
+  /// The domain form.
+  DoctorCheck toDomain() => DoctorCheck(
+    id: id,
+    status: status.toDomain(),
+    evidence: evidence,
+    diagnostic: hasDiagnostic() ? diagnostic.toDomain() : null,
+  );
+}
+
+/// `DoctorReport` to [DoctorReport].
+extension DoctorReportToDomain on pb.DoctorReport {
+  /// The domain form, in the order the daemon sent it.
+  ///
+  /// The order is the display order and part of the contract; it is never
+  /// sorted here. A line this build does not know by name stays in the list:
+  /// a daemon that grows a twelfth check must be able to show it.
+  DoctorReport toDomain() => DoctorReport(
+    checks: List<DoctorCheck>.unmodifiable(
+      checks.map((pb.DoctorCheck check) => check.toDomain()),
+    ),
+  );
+}
+
+/// `LlmProduct` to [LlmFlavor].
+extension LlmProductToDomain on pb.LlmProduct {
+  /// The domain form; an unspecified or unknown product is
+  /// [LlmFlavor.unknown], which claims nothing about the API.
+  LlmFlavor toDomain() => switch (this) {
+    pb.LlmProduct.LLM_PRODUCT_OLLAMA => LlmFlavor.ollama,
+    pb.LlmProduct.LLM_PRODUCT_OPENAI_COMPATIBLE => LlmFlavor.openAiCompatible,
+    _ => LlmFlavor.unknown,
+  };
+}
+
+/// `ProbeLlmResponse` to [LlmProbe] (HUM-039).
+extension ProbeLlmResponseToDomain on pb.ProbeLlmResponse {
+  /// The domain form for the endpoint that was asked.
+  ///
+  /// The endpoint travels alongside because the answer does not carry it: a
+  /// result shown next to a field somebody has edited meanwhile would
+  /// otherwise claim to be about the text standing there now.
+  LlmProbe toDomain(String endpoint) => LlmProbe(
+    endpoint: endpoint,
+    models: List<String>.unmodifiable(models),
+    flavor: flavor.toDomain(),
+    latencyMs: latencyMs,
+    endpointIsPrivate: endpointIsPrivate,
+    diagnostics: List<Diagnostic>.unmodifiable(
+      diagnostics.map((pb.Diagnostic finding) => finding.toDomain()),
+    ),
+  );
+}

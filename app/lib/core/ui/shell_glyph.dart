@@ -1,4 +1,4 @@
-/// The five glyphs of the icon rail, painted like `HGlyphIcon` paints the
+/// The glyphs of the icon rail, painted like `HGlyphIcon` paints the
 /// state glyphs: Lucide shapes on a 24-unit box, no icon font. Candidates for
 /// `HGlyph` in `packages/ui` (handoff of HUM-019).
 library;
@@ -23,6 +23,9 @@ enum ShellGlyph {
 
   /// Lucide `scroll-text`: the audit log.
   audit,
+
+  /// Lucide `circle-check-big`: the checks that come before a start.
+  setup,
 }
 
 /// Draws one [ShellGlyph] at [size] in [color].
@@ -133,6 +136,17 @@ class _ShellGlyphPainter extends CustomPainter {
             stroke,
           )
           ..drawLine(const Offset(12, 12), const Offset(12, 21.5), stroke);
+      case ShellGlyph.setup:
+        canvas
+          ..drawCircle(const Offset(12, 12), 9, stroke)
+          ..drawPath(
+            _polyline(const <Offset>[
+              Offset(8, 12),
+              Offset(11, 15),
+              Offset(16.5, 9),
+            ]),
+            stroke,
+          );
       case ShellGlyph.audit:
         canvas
           ..drawPath(

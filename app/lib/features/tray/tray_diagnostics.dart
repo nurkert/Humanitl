@@ -41,6 +41,28 @@ abstract final class TrayDiagnostics {
     why: 'flow ${flowId.value} was no longer held',
   );
 
+  /// `DAEMON_001`: a notification button was pressed while the daemon was not
+  /// answering.
+  ///
+  /// The registered code of "the daemon is not reachable", raised by the
+  /// client because the client is the one that refuses. A message outlives
+  /// the connection it was posted over: the notice is withdrawn when the
+  /// queue empties, but that withdrawal is one unawaited call over a bus that
+  /// may itself be gone, and a press in the same instant would arrive anyway.
+  /// Sending it would end in the error card of the action bar, which sits
+  /// inside the frozen sections and may well be on a section nobody is
+  /// looking at -- so the person would have decided a request, and seen
+  /// neither that they did nor that it failed (HUM-044, `docs/UX.md` 4.2,
+  /// case 4). The refusal is stated here instead, in the one place the shell
+  /// keeps live above the snapshot.
+  static Diagnostic linkDown(FlowId flowId) => Diagnostic(
+    code: DiagnosticCodes.daemonUnreachable,
+    severity: Severity.warning,
+    why:
+        'flow ${flowId.value} was not decided: '
+        'the background service is not answering',
+  );
+
   /// `IPC_004`: `Allow` was pressed on a message for a request that carries a
   /// finding.
   ///

@@ -1,0 +1,80 @@
+# humanitl daemon install: written by Humanitl
+#
+# Die Vorlage der Nutzer-Unit des Daemons (HUM-044). `humanitl daemon install`
+# setzt in `ExecStart` den Pfad des Daemons neben der laufenden Kommandozeile
+# ein und legt das Ergebnis unter
+# `$XDG_CONFIG_HOME/systemd/user/humanitld.service` ab.
+#
+# **Die erste Zeile ist die Marke.** Solange sie dasteht, darf `humanitl daemon
+# install` die Datei ersetzen. Fehlt sie, gehört die Datei jemand anderem, und
+# der Befehl weigert sich mit `DAEMON_005`, statt sie zu überschreiben. Wer
+# eine eigene Fassung führen will, entfernt die Zeile.
+#
+# Der Daemon läuft nie mit `sudo` und nie als System-Unit: Er greift auf das
+# Laufzeitverzeichnis, die Konfiguration und die Aufzeichnung genau eines
+# Menschen zu, und eine System-Unit gäbe ihm mehr Rechte, als die Sache
+# braucht (`docs/SECURITY.md`).
+
+[Unit]
+Description=Humanitl moderation daemon
+Documentation=https://github.com/humanitl/humanitl/blob/main/docs/PROTOCOL.md
+
+[Service]
+ExecStart={humanitld}
+Restart=on-failure
+
+# Der Daemon startet `bwrap` als eigenes Kind und braucht dafür nichts
+# Zusätzliches: Unprivilegierte Nutzer-Namensräume kosten keine Rechte, die
+# `NoNewPrivileges` nähme. Gemessen am 2026-09-06 auf Debian 14 mit
+# bubblewrap 0.12.0.
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+# `@mount` gehört nicht zu `@system-service`; bubblewrap mountet und
+# `pivot_root`t.
+#
+# `@sandbox` steht hier wegen `seccomp(2)`: Der Filter dieser Unit wird an
+# jedes Kind vererbt, also auch an `humanitl-shim` in der Sandbox, und der Shim
+# stellt die dritte Sandbox-Garantie mit genau diesem Aufruf her
+# (`daemon/bin/humanitl-shim/src/seccomp.rs`, `apply` über
+# `seccompiler::apply_filter_all_threads`). Fehlt der Aufruf im Filter, stirbt
+# der Shim an `SIGSYS`, bevor er seinen eigenen Filter setzen kann.
+#
+# Auf systemd 262 wäre die Gruppe nicht nötig: `@system-service` enthält
+# `@default`, und `@default` enthält seinerseits `@sandbox` — gemessen am
+# 2026-09-06 mit `systemd-analyze syscall-filter @default`. Diese Verschachtelung
+# steht aber in keiner Zeile von `systemd.exec(5)`, sie ist über die Fassungen
+# von systemd hinweg gewachsen, und eine Sandbox-Garantie darf nicht daran
+# hängen, was eine undokumentierte Untergruppe gerade enthält. Deshalb wird
+# `@sandbox` hier genannt und nicht geerbt. Der Test
+# `the_filter_lets_the_shim_install_its_own_seccomp_filter` misst die Zeile
+# gegen `systemd-analyze`, statt sie mit sich selbst zu vergleichen.
+SystemCallFilter=@system-service @mount @sandbox
+
+# `AF_NETLINK` steht hier, weil bubblewrap ohne diese Familie die
+# Loopback-Schnittstelle im Namensraum nicht hochbringt und mit „loopback:
+# Failed to create NETLINK_ROUTE socket: Address family not supported by
+# protocol" abbricht — gemessen am 2026-09-06. Ohne `lo` gibt es keine Brücke
+# vom Shim zum Proxy, also keine einzige Anfrage; die Zeile ohne `AF_NETLINK`
+# hätte das Produkt stillgelegt.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+# Die drei Verzeichnisse, die der Daemon beschreibt: Aufzeichnung, eigene
+# Konfiguration und Laufzeitverzeichnis mit Socket und Token. Jedes mit `-`
+# davor, weil systemd eine Unit mit einem nicht vorhandenen `ReadWritePaths`
+# sonst gar nicht erst startet (Exit 226 `EXIT_NAMESPACE`) — und auf einer
+# frischen Installation gibt es keines der drei, bevor der Daemon einmal
+# gelaufen ist.
+ReadWritePaths=-%h/.local/share/humanitl -%h/.config/humanitl -%t/humanitl
+
+# Kein `ProtectHome=read-only`: Das Projektverzeichnis des Menschen liegt unter
+# `$HOME` und wird per Vorgabe schreibbar eingehängt (`sandbox.work_mode = rw`).
+# Mit `ProtectHome=read-only` wäre jedes Projekt unter `$HOME` unbrauchbar.
+
+# Keine `humanitld.socket`: Der Daemon kennt kein `LISTEN_FDS`, und beim Start
+# prüft er, ob auf dem Socket schon jemand antwortet; ein von systemd
+# gehaltener Socket sähe für ihn wie eine zweite Instanz aus (`DAEMON_003`).
+# Socket-Aktivierung ist ein eigenes Issue.
+
+[Install]
+WantedBy=default.target

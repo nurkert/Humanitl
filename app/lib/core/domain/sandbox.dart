@@ -399,6 +399,41 @@ abstract class SandboxLogLine with _$SandboxLogLine {
       _SandboxLogLine;
 }
 
+/// Which of the `Sandbox` calls produced the findings a snapshot carries.
+///
+/// The findings of every call end up in the same [SandboxStatus.diagnostics],
+/// because the wire has one field for them, but they are not about the same
+/// thing: `Plan` and `Status` answer about the folder somebody chose, while
+/// `Start`, `Stop` and `IsolationCheck` answer about a gesture somebody made.
+/// A screen that anchors a finding has to know which of the two it is holding,
+/// or it names the wrong control (`docs/UX.md` 4.4).
+enum SandboxCall {
+  /// `Sandbox(Status)`: what the daemon has, without anybody asking for a
+  /// change.
+  status,
+
+  /// `Sandbox(Plan)`: what a start with the chosen folder would mount.
+  plan,
+
+  /// `Sandbox(Start)`.
+  start,
+
+  /// `Sandbox(Stop)`.
+  stop,
+
+  /// `Sandbox(IsolationCheck)`: the three guarantees, measured inside a
+  /// running sandbox.
+  isolationCheck;
+
+  /// True while the findings of this call describe the chosen folder.
+  ///
+  /// The two calls that read a plan say something about the folder; the three
+  /// that act say something about the action. Nothing else separates them, and
+  /// the separation is what decides where a finding is drawn.
+  bool get isAboutTheFolder =>
+      this == SandboxCall.status || this == SandboxCall.plan;
+}
+
 /// One event of the `Sandbox` stream.
 ///
 /// The screen never folds these itself into something the daemon did not say:

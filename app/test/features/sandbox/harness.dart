@@ -12,7 +12,7 @@ import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/sandbox/providers/sandbox_status_provider.dart';
 import 'package:humanitl/features/sandbox/sandbox_screen.dart';
-import 'package:humanitl/features/sandbox/widgets/work_dir_picker.dart';
+import 'package:humanitl/core/ui/work_dir_picker.dart';
 import 'package:humanitl/l10n/l10n.dart';
 
 /// Der Zeitpunkt, gegen den jeder Test rechnet.

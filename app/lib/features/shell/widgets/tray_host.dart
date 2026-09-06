@@ -19,6 +19,7 @@ import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/flow_events.dart';
 import '../../../l10n/l10n.dart';
 import '../../intercept/providers/decision.dart';
@@ -28,7 +29,6 @@ import '../../tray/desktop_ports.dart';
 import '../../tray/providers/attention.dart';
 import '../../tray/providers/notice.dart';
 import '../../tray/tray_diagnostics.dart';
-import '../providers/connection.dart';
 import '../providers/navigation.dart';
 import '../section.dart';
 
@@ -97,11 +97,8 @@ class _TrayHostState extends ConsumerState<TrayHost> {
     ref.listen(heldFlowsProvider, (List<Flow>? previous, List<Flow> next) {
       _attention.heldChanged(next);
     });
-    ref.listen(connectionStateProvider, (
-      ConnectionStatus? previous,
-      ConnectionStatus next,
-    ) {
-      _attention.connectionChanged(connected: next is ConnectionConnected);
+    ref.listen(linkLiveProvider, (bool? previous, bool live) {
+      _attention.connectionChanged(connected: live);
     });
     ref.listen(flowEventsProvider, (
       AsyncValue<FlowEvent>? previous,
@@ -141,9 +138,7 @@ class _TrayHostState extends ConsumerState<TrayHost> {
     // three requests the app has not heard of yet; the resync of the first
     // connection answers with the real queue, and that answer is what the
     // tray waits for (`backlog/CONVENTIONS.md` 4.19).
-    _attention.connectionChanged(
-      connected: ref.read(connectionStateProvider) is ConnectionConnected,
-    );
+    _attention.connectionChanged(connected: ref.read(linkLiveProvider));
     _push(ref.read(attentionProvider));
     final Diagnostic? missing = await _ports.tray.start();
     if (missing != null && mounted) {
@@ -223,9 +218,18 @@ class _TrayHostState extends ConsumerState<TrayHost> {
   /// Decides the request the message named, and only that one.
   ///
   /// A message can outlive what it names, and what it names can change under
-  /// it. Two things are therefore checked against the queue as it is now, not
-  /// against the queue the message was worded from:
+  /// it. Three things are therefore checked against the world as it is now,
+  /// not against the world the message was worded from:
   ///
+  /// * The connection is gone. A message outlives it: the notice is
+  ///   withdrawn when the queue empties, but `withdraw` is one unawaited call
+  ///   over a bus that may itself have gone away, and a press in the same
+  ///   instant arrives anyway. Nothing is sent, because the send would end in
+  ///   the error card of the action bar -- inside the frozen sections, behind
+  ///   an [AbsorbPointer], possibly on a section nobody is looking at. The
+  ///   refusal is stated the way [TrayDiagnostics.decidedAlready] states its
+  ///   own, in the notice slot above the snapshot, and the window comes
+  ///   forward so it can be read.
   /// * The request has left the queue. Nothing is decided in its place -- the
   ///   window comes forward with the registered `IPC_003` instead, because
   ///   deciding whatever moved to the top meanwhile would be a decision
@@ -237,6 +241,14 @@ class _TrayHostState extends ConsumerState<TrayHost> {
   ///   carries a secret asks for the held confirmation and a sentence naming
   ///   what goes where (`docs/UX.md` 4.7), and neither fits in a message.
   Future<void> _decide(FlowId id, Decision decision) async {
+    if (!ref.read(linkLiveProvider)) {
+      _attention.notificationAnswered();
+      ref
+          .read(attentionNoticeProvider.notifier)
+          .show(TrayDiagnostics.linkDown(id));
+      await _reveal(id);
+      return;
+    }
     final Flow? flow = ref.read(flowsProvider)[id];
     if (flow == null || !flow.isHeld) {
       ref

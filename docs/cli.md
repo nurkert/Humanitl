@@ -262,6 +262,89 @@ eine Map), die Zeilen in der Reihenfolge der Anzeige:
 genau dann, wenn die Zeile nicht `ok` ist. Ein Beleg, der mit `not measured:`
 beginnt, ist eine Zeile ohne Messung.
 
+## `humanitl daemon install`
+
+Schreibt die systemd-Nutzer-Unit, die den Daemon bei jeder Anmeldung startet.
+Es ist der eingriffsreichste Befehl dieses Produkts außerhalb der Sandbox, und
+deshalb steht hier vollständig, was er tut.
+
+```
+humanitl daemon install [--print] [--no-start]
+```
+
+**Genau eine Datei, an einem genannten Ort.**
+`$XDG_CONFIG_HOME/systemd/user/humanitld.service`, sonst
+`~/.config/systemd/user/humanitld.service`, mit den Rechten `0644`. Keine
+System-Unit, kein `sudo`, keine zweite Datei, keine `humanitld.socket`. Ihr
+`ExecStart` nennt das `humanitld` **neben der laufenden Kommandozeile** — nie
+eines aus `PATH` und nie eines aus einem Konfigurationswert, damit beim
+Anmelden dieselbe Fassung startet wie die, die die Unit geschrieben hat.
+
+**Sichtbar, bevor es geschieht.** Der ganze Text der Unit und beide
+`systemctl`-Aufrufe gehen vor dem ersten Schreibzugriff auf `stderr`, an der
+Ausgabesteuerung vorbei: Weder `--json` noch `-q` können das abschalten.
+`--print` zeigt dieselbe Datei und schreibt nichts.
+
+**Wiederholbar.** Ein zweiter Aufruf mit demselben Ergebnis schreibt nicht
+noch einmal; die Ausgabe sagt dann `unchanged` statt `created`.
+
+**Nie über fremdes Eigentum.** Die erste Zeile der Unit ist die Marke
+`# humanitl daemon install: written by Humanitl`. Fehlt sie in einer
+vorhandenen Datei, gehört die Datei jemand anderem, und der Befehl weigert
+sich mit `DAEMON_005`, statt sie zu überschreiben. Es gibt dafür mit Absicht
+kein `--force`: Wer eine eigene Unit führt, legt sie beiseite.
+
+**Danach `systemctl --user`, nie `sudo`.** Ohne `--no-start` laufen
+`systemctl --user daemon-reload` und `systemctl --user enable --now
+humanitld.service`. Gibt es kein `systemctl` in `PATH`, bleibt die Unit
+liegen, es startet nichts, und die Ausgabe nennt die beiden Befehle.
+
+**Ein Fehlschlag lässt nichts liegen.** Nimmt systemd die Unit nicht an, wird
+der Zustand von vorher wiederhergestellt — eine angelegte Datei verschwindet,
+eine ersetzte bekommt ihren alten Inhalt zurück — und `daemon-reload` läuft
+noch einmal, damit auch systemds Bild davon stimmt. Der Befund ist
+`DAEMON_008`.
+
+Zurückgenommen wird dabei auch die Aktivierung. `systemctl --user enable --now`
+ist ein Aufruf mit zwei Schritten: Er legt die Verweise unter
+`<ziel>.wants/humanitld.service` an und startet dann den Dienst. Misslingt der
+Start, stünden die Verweise ohne diese Rücknahme weiter da, und der Dienst
+startete beim nächsten Anmelden, obwohl der Befehl mit `DAEMON_008` abgebrochen
+ist. Entfernt werden nur die Verweise, die dieser Aufruf angelegt hat: Wer den
+Dienst schon vorher aktiviert hatte, behält die Aktivierung.
+
+Die Härtung der Unit ist gemessen und nicht behauptet: `bubblewrap` läuft
+unter `SystemCallFilter=@system-service @mount @sandbox` und
+`NoNewPrivileges=yes` durch, braucht aber `AF_NETLINK` in
+`RestrictAddressFamilies`, um die Loopback-Schnittstelle im Namensraum
+hochzubringen — ohne sie bricht es mit „loopback: Failed to create
+NETLINK_ROUTE socket" ab, und ohne `lo` gibt es keine Brücke vom Shim zum
+Proxy. `@sandbox` steht in der Zeile, weil der Filter einer Unit an jedes Kind
+vererbt wird und `humanitl-shim` seinen eigenen seccomp-Filter mit `seccomp(2)`
+installiert; erlaubt der Filter den Aufruf nicht, stirbt der Shim an `SIGSYS`,
+bevor die dritte Sandbox-Garantie steht. Auf systemd 262 käme `seccomp` auch
+ohne das Wort durch — `@system-service` enthält `@default`, und `@default`
+enthält `@sandbox` —, aber diese Verschachtelung steht in keiner Zeile von
+`systemd.exec(5)`, und eine Sandbox-Garantie hängt nicht an einer
+undokumentierten Untergruppe. Jeder Pfad in `ReadWritePaths` trägt ein `-`, weil
+systemd eine Unit mit einem nicht vorhandenen Pfad darin gar nicht erst startet
+und auf einer frischen Installation keiner der drei existiert. Alles gemessen
+am 2026-09-06 auf Debian 14 mit bubblewrap 0.12.0 und systemd 262 (HUM-044).
+
+**`PrivateTmp=yes` hat eine Folge, die man kennen muss: Ein Projektordner
+unter `/tmp` funktioniert nicht.** Die Unit gibt dem Daemon ein eigenes,
+privates `/tmp`; das `/tmp` der Anmeldesitzung sieht er nicht. Ein Ordner wie
+`/tmp/repo` ist für ihn deshalb nicht vorhanden, `bwrap` kann ihn nicht
+einhängen, und der Start endet mit `SANDBOX_005` und dem Satz
+„sandbox.work_dir /tmp/repo does not exist", obwohl der Ordner im Terminal
+danebensteht. Dasselbe gilt für alles unter `/var/tmp`. Wer ein Projekt aus
+`/tmp` heraus moderieren will, legt es an eine bleibende Stelle — unter `$HOME`
+oder irgendwo sonst außerhalb von `/tmp` — oder startet den Daemon von Hand
+(`humanitld`) statt über die Unit. Die Zeile bleibt trotzdem in der Unit: Ein
+gemeinsames `/tmp` ist der Weg, auf dem ein anderer Prozess des Nutzers dem
+Daemon eine Datei unterschiebt, und ein Projektordner in einem Verzeichnis, das
+beim nächsten Start verschwindet, ist ohnehin kein Ort für Arbeit.
+
 ## Was `run` mit den anderen Unterkommandos teilt
 
 - `humanitl sandbox run` startet die Sandbox im Prozess der Kommandozeile und
@@ -273,3 +356,6 @@ beginnt, ist eine Zeile ohne Messung.
   Antwort auf Exit 2.
 - `humanitl doctor` sagt, ob `run` auf dieser Maschine überhaupt eine Sandbox
   bekommen kann. Das ist die Antwort auf Exit 3, bevor er eintritt.
+- `humanitl daemon install` legt die Unit an, die den Daemon beim Anmelden
+  startet. Das ist die Antwort auf die Zeile `daemon` des Doctors und auf
+  `DAEMON_001` im Setup-Bildschirm.

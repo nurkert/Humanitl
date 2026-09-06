@@ -31,6 +31,9 @@
 //!   die ein Mensch zu sehen bekommt (HUM-043)
 //! - [`doctor`] die Vorbedingungen dieser Maschine, eine Zeile je Prüfung mit
 //!   `ok`, `warn` oder `fail` und einem Befund (HUM-075)
+//! - [`os_release`] welcher Paketverwalter auf dieser Maschine installiert,
+//!   gelesen aus `/etc/os-release`; die eine Quelle des Befehls, den
+//!   `SANDBOX_001` und `SANDBOX_002` zum Kopieren anbieten (HUM-044)
 //!
 //! Wer ein Profil startet und nicht nur anzeigt, lädt es mit
 //! [`SandboxProfile::load_validated`] gegen eine [`MountPolicy`] aus
@@ -84,6 +87,7 @@ pub mod bwrap_args;
 pub mod doctor;
 pub mod handle;
 pub mod launcher;
+pub mod os_release;
 pub mod profile;
 pub mod summary;
 pub mod worktree;
@@ -99,8 +103,8 @@ pub use crate::bridge_env::{
     ShimCheck, bridges_json, parse_check_line, shim_env,
 };
 pub use crate::bwrap::{
-    BwrapBackend, EARLY_EXIT_WINDOW, INSTALL_COMMAND, MIN_BWRAP_VERSION, REPORT_TIMEOUT,
-    USERNS_DOCS_URL, USERNS_SYSCTL_COMMAND, Version, is_userns_failure,
+    BwrapBackend, EARLY_EXIT_WINDOW, MIN_BWRAP_VERSION, REPORT_TIMEOUT, USERNS_DOCS_URL,
+    USERNS_SYSCTL_COMMAND, Version, is_userns_failure,
 };
 pub use crate::bwrap_args::{
     DEFAULT_HOME, DEFAULT_USER, GROUP_DST, HOSTS_DST, IdentityFds, IdentityFiles, LaunchInputs,
@@ -113,6 +117,9 @@ pub use crate::handle::{
     SandboxHandle, StatusSnapshot,
 };
 pub use crate::launcher::{CheckResult, IsolationCheck, LaunchPlan, SandboxBackend, StdioMode};
+pub use crate::os_release::{
+    OS_RELEASE_FALLBACK_PATH, OS_RELEASE_PATH, PackageManager, install_command,
+};
 pub use crate::profile::{
     Bridge, BridgeDirection, CA_BUNDLE_DST, CA_CERT_DST, DEFAULT_DENY_SYSCALLS, FORBIDDEN_IN_HOME,
     FORBIDDEN_MOUNTS, HOSTNAME, MANDATORY_MASKED_FILES, MountPolicy, MountRule, MountSection,

@@ -74,4 +74,27 @@ abstract final class DiagnosticCodes {
   /// stays open to everyone; only the keyboard belongs to one client
   /// (HUM-042, CONVENTIONS 4.10).
   static const String terminalSecondWriter = 'TERM_001';
+
+  /// The project directory cannot be used: it is missing, not a directory,
+  /// not writable, or it lies outside the home directory. Raised by the
+  /// daemon while planning a start (`sandbox.rs`, `work_dir_refused`).
+  static const String workDirRefused = 'SANDBOX_006';
+
+  /// A check of the doctor could not be performed on this machine. It is a
+  /// warning on the wire because the contract has three states, and it is
+  /// never a passed check: nobody looked (HUM-075).
+  static const String doctorNotPerformed = 'DOCTOR_012';
+
+  /// The language model endpoint was not contacted, because nobody asked.
+  /// The daemon opens no connection as a side effect of a screen being
+  /// opened; the fix names the command that measures it (HUM-075, HUM-076).
+  static const String doctorNotContacted = 'DOCTOR_013';
+
+  /// Nobody has chosen a project folder yet. The agent works in exactly one
+  /// folder, so until it is named there is nothing to start. Raised by the
+  /// client, like [daemonUnreachable]: the daemon reports an empty
+  /// `work_dir_host` on `Sandbox(Status)` without raising a finding of its
+  /// own, because an open step of the setup is not a fault of the daemon
+  /// (HUM-044).
+  static const String noProjectFolder = 'CONFIG_013';
 }
