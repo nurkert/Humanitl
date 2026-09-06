@@ -2623,3 +2623,279 @@ Und der Emulator erfährt, wenn er nur zusehen darf (`TerminalView.readOnly`
 aus `TerminalSessionState.readOnly` und der Phase): Der Daemon verwirft die
 Tastendrücke eines Lesers, und ein Cursor, der auf Eingabe zu warten scheint,
 verspricht etwas, das niemand hält.
+
+### 4.29 Aus der Umsetzung des M3-Demoskripts (HUM-046, 2026-09-06)
+
+Abweichungen von `backlog/sprint-3.md`, die dauerhaft gelten. Wo die
+Spezifikation anderes sagt, gilt dieser Abschnitt. Sie wurde geschrieben, als
+HUM-041, HUM-042, HUM-043, HUM-067 und HUM-087 offen waren, und verlangt
+deshalb an fünf Stellen Stolperdrähte statt Zusicherungen. Alle fünf Issues
+sind inzwischen gemergt; der Lauf ist die volle Fassung, und die Stolperdrähte
+sind Zusicherungen geworden.
+
+**Der Lauf fährt über `humanitl run`, nicht über `humanitl sandbox run`.** Das
+ist die eine Entscheidung, aus der die meisten anderen folgen. `humanitl
+sandbox run` startet die Sandbox in der Kommandozeile; `humanitl run` bittet
+den Daemon darum (`Sandbox(Start)`), und nur auf diesem Weg gibt es die vier
+Dinge, die M3 zeigen soll: die Sitzungsauflösung mit Profil und Regeln
+(HUM-066, HUM-067), die drei Garantien als `SandboxEvent.check` statt als
+Zeilen auf stderr (HUM-041), das Pseudoterminal mit seinen Hinweiszeilen
+(HUM-042) und die Zusammenfassung des Laufs (HUM-043). M2 bleibt bei `sandbox
+run`; die beiden Wege stehen nebeneinander, und jeder wird von einem Demo
+gefahren.
+
+**Das Projektverzeichnis liegt unter dem Heimatverzeichnis des Laufs.**
+`SandboxService::check_work_dir` nimmt ein Projekt nur an, wenn es unter
+`$HOME` liegt oder genau das Verzeichnis aus `sandbox.work_dir` ist; alles
+andere endet mit `SANDBOX_006`. Das ist richtig so — ein Client darf sich
+`/etc` nicht als Projekt wünschen —, aber `e2e_short_workdir` aus `lib.sh`
+legt sein `work` **neben** das `home` des Wegwerf-Baums, und über `humanitl
+run` wäre es abgelehnt worden. Der M3-Lauf legt sein Projekt deshalb selbst
+unter `$E2E_WORKDIR/home/project` an und startet `humanitl run` ohne `--work`
+aus diesem Verzeichnis heraus: Das ist zugleich der Weg, den ein Mensch geht.
+
+**Fünf Stolperdrähte sind Zusicherungen geworden, zwei bleiben stehen.**
+Umgedreht wie in 4.22, nicht gestrichen: Eine Prüfung, die nach der Reparatur
+ersatzlos verschwände, hinterließe eine Lücke genau dort, wo vorher eine
+Zusicherung stand.
+
+- *Die drei Garantien* (HUM-041): Der Lauf liest die Zeilen `[ok  ] no network
+  interface`, `[ok  ] one door` und `[ok  ] seccomp active`, die `humanitl -v
+  run` aus `SandboxEvent.check` schreibt.
+- *Die Hinweiszeile* (HUM-042): Der Lauf hängt ein zweites Terminal an
+  (`humanitl sandbox attach --read-only`) und prüft dort vier Zeilen
+  namentlich, dazu die gefälschte.
+- *Die Zusammenfassung* (HUM-043): Der Agent schreibt `/work/notes.txt`, und
+  `humanitl sessions summary --json` nennt genau diese eine Änderung.
+- *`humanitl run`* (HUM-067): Es ist das Fahrzeug des ganzen Laufs, und die
+  zweite Sitzung fährt `--profile llm-only`.
+- *Die `https`-Variante* (HUM-087): Alle drei moderierten Anfragen gehen über
+  TLS; der Stolperdraht auf `--allow-test-ca` ist umgedreht wie in 4.22 und
+  stirbt, wenn `humanitld` das Flag nicht mehr kennt.
+
+Stehen bleiben zwei: `humanitl audit` ist ein Platzhalter (HUM-070), also wird
+über die Audit-Kette nichts behauptet, und der Draht stirbt, sobald es sie
+gibt. Und `humanitl flows list` hat keinen Schalter für `include_passthrough`;
+der Draht stirbt, sobald einer da ist.
+
+**Die Durchreiche wird an drei Quellen gemessen, und keine davon ist die
+Flow-Liste.** Die Spezifikation verlangt `humanitl --json flows list 'host:…'`
+mit `include_passthrough` und ein Feld `decision_source`. Beides gibt es
+nicht: `daemon/bin/humanitl/src/cmd/flows.rs` setzt `include_passthrough:
+false` fest, die Zeile trägt ein `passthrough`-Bool und kein
+`decision_source`, und ein Filterwort `passthrough:true` hilft nicht, weil der
+Dienst ohne das Flag `passthrough:false` an denselben Filter hängt. Gemessen
+wird deshalb: was der Agent bekam (zehn Rahmen, `tok0` bis `tok9`, `[DONE]`,
+und ein Abstand von mindestens 0,15 s zwischen dem ersten und dem letzten
+Byte), was der Mock empfing (genau eine Inferenzanfrage, als Strom bedient,
+mit dem Rumpf des Agenten unter `/_debug/last`) und die Abwesenheit des
+Flusses in der Liste — gepaart mit den vier Flüssen, die dort stehen. Die
+Paritätslücke ist dieselbe Sorte wie die von `flows decide` in 4.22 (ADR-018);
+sie ist nicht geschlossen, sondern benannt.
+
+**Die Hinweiszeilen stehen nur im `Terminal`-Strom, nicht im
+`Sandbox`-Strom.** `TerminalHub::notice` schreibt in den Ring und den Rundfunk
+des Hubs; `stream_output` schickt davon unabhängig die gefilterte Ausgabe des
+Agenten als `OutputChunk`. Wer `humanitl run` fährt, sieht die Hinweiszeilen
+deshalb **nicht** — sie erscheinen erst, wenn sich jemand mit `humanitl
+sandbox attach` anhängt. Für den Nutzer ist das folgenlos, weil die Oberfläche
+am Terminal hängt; für den Lauf heißt es, dass er zwei Transkripte
+mitschreibt (`agent.transcript` von `humanitl run`, `attached.transcript` vom
+angehängten Terminal) und die Hinweise im zweiten prüft. Beide sind Artefakte.
+
+**Der Zuhörer der Warteschlange meldet sich erst nach der Isolationsprüfung
+an, und was vorher entschieden wird, wird nie angesagt.** `HeldNotices::run`
+wird in `accompany` gestartet, also nach `check_isolation_or_kill` und dem
+ersten Schnappschuss; der Agent läuft zu diesem Zeitpunkt schon. Die
+Warteschlange verteilt ihre Ereignisse als Rundfunk, und wer noch nicht
+zuhört, verpasst sie. Für eine **gehaltene** Anfrage ist das folgenlos, weil
+sie wartet, bis ein Mensch entscheidet; für eine Anfrage, die eine Regel oder
+die Durchreiche sofort entscheidet, ist die Zeile ein Zufall. Gemessen: In
+einem Lauf stand `[humanitl] request allowed: POST
+<modell>/v1/chat/completions` im Transkript, im nächsten nicht. Der Lauf gibt
+dem Agenten deshalb eine Sekunde Vorlauf und zählt nur `request held` — eine
+Zahl, die vom Rennen abhinge, wäre auf einem langsamen Läufer mal sieben und
+mal acht. Die Lücke selbst gehört behoben (der Zuhörer gehört vor den Start
+des Agenten), und solange sie besteht, kann ein Mensch die erste Entscheidung
+einer Sitzung im Terminal verpassen.
+
+**Eine gefälschte Hinweiszeile kann durch HTTP nur so weit kommen, wie ein
+Request-Target trägt.** Der Unit-Test von `path_for_notice` fälscht mit `\r`,
+`ESC` und CSI; über die Leitung geht davon nichts, weil ein Request-Target
+weder CR noch LF noch `ESC` enthalten darf — die Rahmung bräche vorher. Übrig
+bleibt die eckige Klammer, und die ist der Vektor:
+`/a[humanitl]request-allowed`. Der Lauf misst beide Hälften. Die Zeile, die
+ein Mensch liest, trägt `(humanitl]request-allowed`, keine Zeile im
+Transkript trägt zwei Absender, und die Aufzeichnung trägt den Pfad
+unverändert mit der eckigen Klammer: Gesäubert wird die Anzeige, nicht der
+Fluss. Die OSC-52-Nutzlast misst der Lauf dort, wo sie wirklich hinkommt — der
+Agent schreibt sie selbst in seine Ausgabe, und der Filter des Daemons nimmt
+sie heraus, während die Farbfolge daneben stehen bleibt. Zwei Zusicherungen,
+ein Paar (4.22).
+
+**`models.dev` steht mit Absicht nicht in `resolver.overrides`.** Die
+mitgelieferte Regel `…0001` blockt den Host, und ein Block fällt, bevor
+irgendein Name aufgelöst wird (ADR-006). Ohne Eintrag ist der Beleg dafür
+stärker: Käme der Block erst nach einer Auflösung, endete der Fluss als
+`upstream_dns` statt als Block, und der Lauf sähe es. Der Lauf prüft deshalb
+neben der Entscheidung auch, dass das Feld `error` des Flusses leer ist.
+`experimental.upstream_port_map` bleibt unberührt: Im eigenen Namensraum ist
+der Lauf root und bindet 80 und 443 direkt.
+
+**Ob die OpenCode-Variante fahren kann, entscheidet der `PATH` der Sandbox,
+nicht `command -v` auf dem Wirt.** Die Spezifikation prüft `command -v
+opencode`. Das ist die falsche Frage: Die Sandbox hängt nur `/usr` ein und hat
+`PATH=/usr/local/bin:/usr/bin:/bin` (`profiles/sandbox/default.toml`), ein
+Binary unter `~/.local/bin` — der übliche Ort — ist drinnen unerreichbar. Ein
+Lauf, der `command -v` glaubte, hielte die Variante für fahrbar und scheiterte
+drinnen an einem fehlenden Programm, also an etwas anderem, als er messen
+wollte. Der Lauf sucht deshalb in genau den drei Verzeichnissen.
+
+**Ein übersprungener Zweig sieht nie aus wie ein bestandener.** Drei Dinge
+zusammen: Die Variante zählt keine Zusicherung, wenn sie nicht lief; ihre
+Meldung beginnt mit `SKIPPED:` und nennt den Grund und die Abhilfe; und die
+letzte Zeile des Laufs lautet dann `M3 demo: OK with gaps — …` statt `M3 demo:
+OK`. `M3_OPENCODE=1` macht aus dem Überspringen einen Fehlschlag,
+`M3_OPENCODE=0` schaltet die Variante ab. Läuft sie, vergleicht der Lauf den
+Zusicherungszähler vor und nach ihr mit `M3_OPENCODE_ASSERTIONS` und
+scheitert, wenn die Zahl nicht stimmt. Der Grund für den Aufwand steht in
+`backlog/sprint-3.md` HUM-046: Ein Zweig, der beim Fehlen seiner Voraussetzung
+einfach zurückkehrt, meldet Erfolg, ohne etwas geprüft zu haben.
+
+**Der Mock ist Python, eine Datei, mit eigenem Test.** Dieselbe Vorgabe wie in
+4.22 für den Fake-Upstream, und aus demselben Grund. Er streamt wirklich: zehn
+SSE-Rahmen im Abstand von 30 ms, von Hand gestückelt (`Transfer-Encoding:
+chunked`), jeder mit eigenem `flush`. `tests/e2e/mock_llm/self_test.sh` prüft
+ihn ohne Daemon und ohne Sandbox in einer Sekunde und läuft in CI als eigener
+Schritt vor dem Demo, damit ein roter M3-Lauf von einem kaputten Testdouble
+unterscheidbar ist. Meldet er seine Bereitschaft nicht, bricht der Demolauf
+dort ab und nicht später an einer Antwort, die niemand erklären kann.
+
+**Der Ausgang jeder Sitzung ist ein Messwert, kein Kommentar.** Die erste
+Fassung schrieb an allen drei Stellen `|| e2e_say "… exited non-zero"`: Der
+Fehler stand im Protokoll, und der Lauf war trotzdem grün — genau die Klasse,
+gegen die dieses Gate gebaut ist. Beide Skript-Sitzungen werden jetzt auf
+`0` festgenagelt (`humanitl run exited cleanly`, `the llm-only session exited
+cleanly`), und `humanitl run` reicht den Exit-Code des Agenten durch, also ist
+jede andere Zahl eine Aussage: 97 eine fehlende Voraussetzung in der Sandbox,
+3 eine rote Garantie, 2 kein Daemon. Geschrieben wird das als
+`status=0; wait "$pid" || status=$?` und nicht als nacktes `wait`: Unter
+`set -e` beendete ein `wait`, das einen Fehlschlag meldet, das Skript, bevor
+die Zahl gelesen wäre.
+
+Die OpenCode-Variante ist die eine Ausnahme, und sie ist begründet. Dort läuft
+ein fremdes Programm gegen ein Modell, das `tok0 ` sagt; ein `0` zu verlangen
+hieße, eine Aussage über OpenCode zu treffen statt über Humanitl. Geprüft wird
+deshalb, dass **Humanitl selbst** nicht abgelehnt hat: 2 (kein Daemon), 3
+(rote Garantie) und 4 (Sicherheitsverletzung) sind verboten, 1 bleibt
+zugelassen, weil es zugleich der Fehlercode der Kommandozeile und ein
+möglicher Ausgang des Agenten ist und die beiden über den Code nicht zu
+trennen sind.
+
+**Eine Uhr an jeder Spanne, an der etwas stehenbleiben kann.** Jeder `curl` im
+Agentenskript, im llm-only-Skript und im eigenen Test des Mocks trägt
+`--max-time`, und die Fristen sind verschieden lang, weil die längste erlaubte
+Antwort verschieden lang ist: 20 s für die Durchreiche (der Mock ist nach rund
+0,35 s fertig), 30 s für die drei moderierten Anfragen (ihre längste erlaubte
+Antwort ist die Haltefrist von 20 s, nach der der Proxy selbst `504` schickt),
+10 s im eigenen Test des Mocks. Ohne sie bliebe `curl` bei einem Gegenüber
+hängen, das mitten in der Antwort stehenbleibt, der Lauf wartete auf einen
+Prozess, der nie endet, und das Ganze liefe in den 30-Minuten-Abbruch der CI —
+der echte Fehler stünde hinter einer Zeitüberschreitung, die nichts sagt.
+Gemessen mit einem Mock, der in der zweiten Sitzung 600 s schweigt: Der Lauf
+endet nach 24 s rot, und im Protokoll steht `curl: (28) Operation timed out
+after 20001 milliseconds`. Derselbe Gedanke wie in HUM-120; die Uhr misst die
+Stille, nicht die Gesamtdauer.
+
+**Der Mock lehnt ein Modell ab, das er nicht bedient.** `--model` sagt, welches
+er hat (Vorgabe `mock`), ein anderes bekommt `404` mit dem Namen des
+bedienten, und ein Rumpf ohne `model` gilt als „das eine, das da ist". Ein
+Testdoppel, das jede Anfrage freundlich beantwortet, verdeckt genau den
+Fehler, für den man es hat — einen Modellnamen, den eine Vorlage anders
+einsetzt als gedacht. Deshalb steht in der `config.toml` des Laufs auch
+`llm.models = ["mock"]`: Der Agent-Adapter setzt den ersten Eintrag als
+`{{DEFAULT_MODEL}}` in die `opencode.json` der Sandbox, und ohne ihn fragte ein
+echtes OpenCode nach dem Platzhalter. Dazu eine Sperre um den zuletzt
+empfangenen Rumpf und um das Zugriffsprotokoll: `ThreadingHTTPServer` bedient
+jede Verbindung in einem eigenen Faden, und der Lauf zählt in dieser Datei
+Zeilen.
+
+**In einem Zweig, der nie läuft, sammeln sich Zusicherungen, die schon vorher
+wahr sind.** Beide Reviewer haben die Schritte 1 bis 12 als messend bestätigt;
+die drei inhaltlich schweren Befunde des zweiten Reviews lagen alle in Schritt
+13, dem einzigen Zweig, der auf keiner Maschine dieses Issues gefahren werden
+konnte. Das ist die Lehre, und sie gehört hierher, weil sie für jeden
+künftigen Zweig dieser Art gilt: Ohne Ausführung widerlegt nichts eine Zeile,
+die das Falsche misst. Die drei Schatten und ihre Reparatur:
+
+- *„Der echte Agent hat das Sprachmodell erreicht"* zählte alle Zeilen des
+  Mock-Protokolls und verlangte mehr als zwei. Zu diesem Zeitpunkt stehen dort
+  längst vier: Startprobe, Inferenz des Skript-Agenten, `/_debug/last` und
+  Inferenz der llm-only-Sitzung. Die Zeile wäre grün gewesen, wenn OpenCode
+  das Modell nie anspricht. Der Zweig nimmt die Zähler jetzt **vor** dem Lauf
+  auf und prüft den Zuwachs, und zwar zweifach: dass überhaupt Anfragen
+  dazukamen, und dass mindestens eine davon Inferenz war und nicht nur eine
+  Modellliste.
+- *„Die drei Garantien hielten auch für ihn"* prüfte eine, nämlich
+  `no network interface`. Bräche `one door` oder `seccomp active`, bliebe die
+  Zeile grün. Der Zweig prüft jetzt dieselben drei einzeln wie beim
+  Skript-Agenten.
+- *„Hat den Katalog nie geholt"* prüfte, dass kein Fluss dorthin **erlaubt**
+  wurde. Ein echter Abruf, den die mitgelieferte Regel blockt, bestünde das
+  mühelos — und „hat es nicht versucht" und „wurde daran gehindert" sind zwei
+  verschiedene Aussagen über einen Agenten. Der Zweig vergleicht jetzt die
+  Zahl der Flüsse zu beiden Katalog-Hosts mit der von vorher; für `models.dev`
+  ist das nicht null, sondern der eine geblockte Fluss des Skript-Agenten.
+
+Belegt sind alle drei ohne den Zweig zu fahren: `tests/e2e/mock_llm` liefert
+die Zahlen nicht, also werden die Zeilen aus `run.sh` herausgeschnitten und
+gegen gestellte Zähler gefahren. In allen drei Fällen wird die neue Fassung
+rot und die alte wäre grün geblieben. Ein Ersatz für einen echten Lauf ist das
+nicht, und der Abschnitt „Stand" von HUM-046 sagt, welche zehn Zusicherungen
+damit weiterhin nie ausgeführt worden sind.
+
+**Bereitschaft wird mit einer Frist gelesen, nicht mit einer Fifo.** `read <
+fifo` wartet unbegrenzt, und zwar schon beim Öffnen: Kommt ein Server gar
+nicht hoch, steht der Lauf, bis die CI ihn nach dreissig Minuten abbricht.
+Beide Server des M3-Laufs schreiben ihre Bereitschaftszeile deshalb in eine
+Datei, und `m3_wait_ready` pollt sie mit einer Frist von 20 s und fragt
+daneben, ob der Prozess überhaupt noch lebt; bei Ablauf oder Tod steht sein
+Protokoll in der Meldung. Gemessen: Ein Mock, der vor `READY` stirbt, färbt
+den Lauf nach 0 s rot, einer, der lebt und schweigt, nach 22 s — statt in
+beiden Fällen nach dreissig Minuten. Der eigene Test des Mocks liest genauso.
+Der M2-Lauf hat die Fifo noch; sie gehört dort in dasselbe Muster überführt.
+
+**Die Historie steht zweimal in den Artefakten.**
+`flows-after-first-session.json` ist der Stand, auf den sich die Schritte 7
+und 11 beziehen — die vier Flüsse der ersten Sitzung —, und `flows.json`
+entsteht am Ende und trägt alles, was danach dazukam. Ein einziger Stand
+hieße, dass das hochgeladene Artefakt eine Historie zeigt, die der Lauf selbst
+überholt hat.
+
+**Die Zahlen des Laufs.** 95 geprüfte Behauptungen ohne die OpenCode-Variante
+(`M3_EXPECTED_ASSERTIONS`), 10 mit ihr (`M3_OPENCODE_ASSERTIONS`). Vier
+sichtbare Flüsse in der ersten Sitzung — der geblockte Katalog, die
+freigegebene Anfrage, die gefälschte und die verbotene —, fünf nach der
+zweiten. Zwei Inferenzanfragen am Mock, eine je Sitzung, beide als Strom
+bedient. Zwei bediente Anfragen am zweiten Ziel, beide über TLS. Drei
+`request held`-Zeilen im angehängten Terminal. Laufzeit auf dieser Maschine
+unter fünf Sekunden ohne das Bauen, gemessen über drei Läufe.
+
+**Die OpenCode-Variante ist geschrieben, aber noch nie gegen ein echtes
+OpenCode gelaufen.** Auf der Maschine, auf der sie entstanden ist, liegt
+`opencode` unter `~/.local/bin`; die Sandbox sieht es dort nicht, und
+`/usr/local/bin` gehört root. Der Zweig ist deshalb aus der Spezifikation und
+aus dem Verhalten des Adapters abgeleitet und nicht gemessen. Wer ihn zum
+ersten Mal fährt, rechnet damit, dass er etwas findet — und schreibt hierher,
+was es war.
+
+**Zwei Kleinigkeiten im Daemon, die dieser Lauf gefunden und nicht angefasst
+hat.** `humanitl run --help` sagt weiterhin „Show the session a profile
+resolves to; starting it arrives in HUM-067" (`daemon/bin/humanitl/src/cli.rs`,
+`Cmd::Run`), obwohl der Befehl seit HUM-067 startet; und die Begründung von
+`SANDBOX_006` in `daemon/crates/ipc/src/sandbox.rs` trägt aus einem
+umgebrochenen String-Literal zwei Läufe von zwanzig Leerzeichen mitten im
+Satz. Beides ist Text, den ein Mensch liest, und beides gehört in das Issue,
+das die Datei als Nächstes anfasst. Dazu kommt eine dritte Zeile ausserhalb
+des Daemons: `make e2e` beschreibt sich selbst noch mit `E2E_ONLY=m1|m2`
+(`Makefile`), obwohl `m3` dazugekommen ist.

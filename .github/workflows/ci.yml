@@ -12,7 +12,7 @@
 #
 # Branch protection (configured manually on the repository): `main` requires
 # rust-check, rust-test, proto-lint-and-gen, flutter-analyze-test, goldens,
-# escape-tests, e2e, e2e-xvfb, deps-lint and parity-check to pass.
+# escape-tests, e2e, e2e-xvfb, e2e-agent, deps-lint and parity-check to pass.
 #
 # Every action is pinned to a commit SHA; the release tag in the trailing
 # comment is documentation. Bump both together, here and in .github/actions.
@@ -566,6 +566,76 @@ jobs:
           # The daemon log, the access log of the target, what the agent got
           # back for every request and, once the screen half is there, the HAR
           # export and the screenshots of a failed run.
+          path: target/e2e
+          if-no-files-found: ignore
+
+  e2e-agent:
+    name: e2e-agent
+    runs-on: ubuntu-24.04
+    # The M3 demo itself is around forty seconds; the rest of the budget is the
+    # Rust build. A job that hangs instead of failing would hide exactly the
+    # kind of defect this gate exists for.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: e2e-agent
+      - name: Install the runtime tooling
+        # The same set as the M2 job, minus xvfb: no screen is driven here.
+        # bubblewrap starts the sandbox, curl is the client the agent speaks
+        # through, python3 runs the language model and the second target,
+        # openssl makes the test certificate the target shows on 443, jq reads
+        # the answers, iproute2 gives both targets their address in the run's
+        # own network namespace, and util-linux brings the unshare that creates
+        # it.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bubblewrap curl jq python3 openssl iproute2 util-linux musl-tools
+      - name: Allow unprivileged user namespaces
+        # Ubuntu 24.04 restricts them through AppArmor (HUM-002). Without this
+        # neither bwrap nor `unshare -rn` starts; the demo says so and fails,
+        # it does not hang.
+        run: |
+          set -euo pipefail
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: bwrap is usable
+        run: bwrap --version
+      - name: The mock language model against itself
+        # Its own step on purpose. The mock carries the whole milestone; when
+        # it breaks, this step goes red and the demo below stays green-or-red
+        # on its own merits, so a red M3 is never ambiguous.
+        run: ./tests/e2e/mock_llm/self_test.sh
+      - name: M3 demo (agent in the sandbox, passthrough, bundled rules, one decision)
+        # The demo runs its own daemon, its own language model, its own target
+        # and two sandboxed sessions in a throwaway tree and needs no network.
+        # It fails when fewer assertions ran than it expects, and it says in
+        # its last line when a variant was skipped.
+        #
+        # M3_OPENCODE=auto: the real-agent variant runs only where the sandbox
+        # can see an `opencode` binary, which means under /usr/local/bin,
+        # /usr/bin or /bin. This image has none, so the run reports it as
+        # skipped — never as passed. Once the image ships one, the variant runs
+        # here without a change to this file; a runner that is supposed to have
+        # it can set M3_OPENCODE=1, and then a missing binary fails the job.
+        env:
+          E2E_TRACE: "1"
+          E2E_ONLY: m3
+          M3_OPENCODE: auto
+        run: ./tests/e2e/run.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: e2e-agent-artifacts
+          # The daemon log, the transcript of the agent as `humanitl run` saw
+          # it, the transcript of the attached terminal with the daemon's
+          # notice lines, the access logs of the language model and the target,
+          # the session summary, and the flow list in two states: after the
+          # first session, which is what steps 7 and 11 talk about, and at the
+          # end of the run, which carries everything that came after.
           path: target/e2e
           if-no-files-found: ignore
 
