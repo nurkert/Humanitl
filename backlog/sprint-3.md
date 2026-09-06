@@ -2931,10 +2931,10 @@ Kein mDNS (Ollama kündigt nichts an). Keine Suche außerhalb des lokalen /24. K
 - Widget-Test: Ergebnisklick setzt `configProvider.llm.endpoint`.
 
 ### Akzeptanzkriterien
-- [ ] Scan eines /24 endet in ≤ 5 s ohne Treffer.
-- [ ] Ollama-Mock wird gefunden, Modelle gelistet.
-- [ ] Ohne Klick kein einziger Verbindungsversuch (Test: Scanner-Aufrufzähler 0 beim Setup-Öffnen).
-- [ ] Audit-Eintrag vorhanden.
+- [x] Scan eines /24 endet in ≤ 5 s ohne Treffer. Gemessen zweifach: `the_time_budget_of_a_full_scan_holds` rechnet die Zusage über den Konstanten nach (1016 Versuche, 64 gleichzeitig, 200 ms Frist ergeben 3,2 s als schlimmsten Fall), und `a_scan_over_a_full_24_stays_in_the_budget` fährt ein ganzes `/24` auf der Schleife.
+- [x] Ollama-Mock wird gefunden, Modelle gelistet (`detects_ollama_mock` gegen `FakeUpstream::ollama`, die Modellnamen kommen aus der Antwort des Servers).
+- [x] Ohne Klick kein einziger Verbindungsversuch: `nothing_connects_before_the_search_is_started` zählt sie am Egress-Port, `opening_the_setup_contacts_nothing` prüft dasselbe an der Oberfläche — auch das geöffnete Blatt sucht noch nicht.
+- [ ] Audit-Eintrag vorhanden. **Offen**, Begründung im Stand-Abschnitt: Die Crate `humanitl-audit` ist eine leere Hülle, und niemand schreibt in ein Audit-Log; das baut HUM-029.
 
 ### Fallstricke
 - IDS/Firewalls in Firmennetzen melden Port-Scans; deshalb der Hinweistext und die Beschränkung auf vier Ports.
@@ -2945,6 +2945,109 @@ Kein mDNS (Ollama kündigt nichts an). Keine Suche außerhalb des lokalen /24. K
 BACKLOG.md Prinzip 9, HUM-039; Ollama API (https://docs.ollama.com/api); OpenAI Models-Endpoint.
 
 ---
+
+### Stand (2026-09-06)
+
+**Gebaut ist der ganze Weg: Scanner, RPC, Kommandozeile, Blatt.** Der Scanner
+liegt in `daemon/crates/proxy/src/llm_discover.rs` und nicht, wie die
+Spezifikation vorschlug, in `humanitl-sandbox`: Die Erkennung ist genau die
+Probe aus HUM-039 (`LlmProbe`), und die steht im Proxy über demselben
+`Egress`- und `Resolver`-Port. Ein zweiter Erkenner neben dem ersten hätte zwei
+Wahrheiten über dasselbe gehabt — welche API antwortet, in welcher Reihenfolge
+gefragt wird, was ein `401` heißt. Der Scan fügt dem nur zwei Dinge hinzu, die
+es vorher nicht gab: das Netz aus der Vorgaberoute und den Verbindungsversuch
+mit kurzer Frist.
+
+**Das eigene Netz ohne ein einziges Paket.** `/proc/net/route` nennt
+Schnittstelle und Gateway der Vorgaberoute (bei mehreren die mit der kleinsten
+Metrik, dieselbe Wahl wie die des Kernels), und ein *verbundener* UDP-Socket
+auf dieses Gateway nennt die Quelladresse, die der Kernel wählen würde —
+`connect` schickt auf UDP nichts. Daraus wird das `/24` um die eigene Adresse.
+Der Weg über `getifaddrs` hätte `unsafe` gebraucht, das die Crate verbietet.
+
+**Weiter als ein `/24` ist eine Weigerung, kein stiller größerer Scan.**
+`Subnet::parse` lässt nur `/24` bis `/32` zu und antwortet sonst mit `LLM_008`
+samt Zahl der Versuche, die es sonst würden. Das ist die Hälfte der Zusage über
+dem Knopf; die andere Hälfte ist der Text selbst, und der steht in derselben
+Sprache in `docs/cli.md`, im Blatt und im Modul.
+
+**Der Fortschritt ist Bewegung, keine Zahl.** Die Spezifikation nannte
+„Fortschritt (x/254)". Der Vertrag streamt aber Antworten und keine Zählstände,
+und eine Prozentzahl, die eine Uhr hochzählt, wäre eine Behauptung ohne
+Messung. Das Blatt zeigt deshalb eine Haarlinie, die läuft, solange gesucht
+wird, und daneben die Zahl der Server, die geantwortet haben. Wer das ändern
+will, braucht ein Feld im Vertrag, nicht eine Animation.
+
+**Ein Klick füllt das Feld und misst die Adresse.** `SetConfig` gibt es bis
+HUM-069 nicht; „übernehmen" heißt deshalb: Die Adresse steht im Feld der
+Modell-Zeile, und dieselbe Adresse wird sofort mit `ProbeLlm` gemessen. Eine
+Zeile, die eine Adresse zeigt und daneben die Messung einer anderen, wäre die
+Lüge, die CONVENTIONS 4.13 ausschließt. In der Konfiguration des Daemons landet
+sie erst mit HUM-069.
+
+**Ein Server ohne API steht in der Liste und ist nicht übernehmbar.** Die
+Spezifikation nennt `unknown` als Produkt, also wird er genannt: Dort horcht
+etwas. Ein Knopf „Übernehmen" fehlt ihm trotzdem — ein Klick trüge eine
+Adresse in die Einstellung, die nie als Modellserver geantwortet hat.
+
+**Der Audit-Eintrag fehlt, und zwar mangels Audit-Log.** Die Crate
+`humanitl-audit` besteht aus sechs Zeilen Doku-Kommentar, niemand hängt sie
+ein, und es gibt keine Datei `audit.jsonl`, in die ein `llm_discover` gehörte;
+HUM-029 baut die Hash-Kette. Der Scan protokolliert stattdessen über `tracing`
+mit Netz und Schnittstelle. Das Kästchen bleibt offen, statt mit einer
+Log-Zeile abgehakt zu werden, die kein Audit ist.
+
+**Aus den beiden Reviews kamen sechs Befunde, und vier davon waren Löcher in
+genau der Zusage, um die es hier geht.** Sie stehen hier, weil sie das Muster
+zeigen: Eine Grenze, die nur im Typ steht, ist keine Grenze, solange die
+Anfrage eines Clients daran vorbeikommt.
+
+- **Ein fremdes `/24` war erlaubt.** `Subnet::parse` prüfte die *Breite* und
+  nicht den *Ort*: `--subnet 8.8.8.0/24` hätte über den Daemon ein Netz
+  gescannt, das dem Nutzer nicht gehört. Der Dienst ermittelt jetzt immer das
+  eigene Netz und nimmt eine Angabe nur an, wenn sie darin liegt (oder in der
+  Schleife); sonst `LLM_008` mit beiden Netzen im Text.
+- **Die Portliste war unbegrenzt.** Tausend Ports in der Anfrage wären 254 000
+  Verbindungsversuche gewesen, und ungültige Werte fielen still weg, sodass
+  eine Liste aus lauter Unsinn wie „Vorgabe" aussah. Jetzt: höchstens vier
+  verschiedene, keine `0`, kein Wert jenseits von `u16`, jede Verletzung ein
+  Befund.
+- **Ein Präfix jenseits von 32 war eine Panik.** `u32::MAX >> 33` stürzt in
+  Rust ab, und die Zahl kam aus der Anfrage. Jetzt `checked_shr` hinter einer
+  Prüfung, die `/33` als „kein Präfix" abweist.
+- **Das Schließen des Blattes beendete den Scan nur ungefähr.** Das `break`
+  traf die innere Schleife, und die 64 laufenden Aufgaben liefen bis zu zwei
+  Sekunden weiter. Jetzt `abort_all` und `break 'sweep`.
+- **Eine Vorgaberoute ohne Gateway ist ein VPN.** Ihr Gateway steht als
+  `00000000` in der Tabelle, ein UDP-Socket auf `0.0.0.0` landet auf der
+  Schleife, und die Suche wäre still über `127.0.0.0/24` gelaufen. Jetzt
+  zählen nur Routen mit `RTF_UP | RTF_GATEWAY` und einem Gateway, das keines
+  ist.
+- **Ein `401` sagt nichts über die API.** Die Probe fragt zuerst `/api/tags`;
+  wer dort eine Anmeldung verlangt, kann alles Mögliche sein. Die
+  Spezifikation schlug `openai_compatible (auth required)` vor — das wäre eine
+  Behauptung über etwas Ungemessenes. Ein solcher Server steht jetzt als
+  `unknown` mit dem Vermerk da und bleibt übernehmbar: Er hat geantwortet, und
+  was dahinter steht, entscheidet ein Mensch mit einem Schlüssel.
+
+Dazu kamen vier Punkte an der Oberfläche, alle aus demselben Grund: Die
+Bewegung dieses Blattes lief an der Bewegungssprache des Hauses vorbei. Die
+Zeilen fliegen jetzt **von oben** ein wie jede ankommende Zeile
+(`HMotion.arriveOffset` über `HReducedMotion.distance`), die Kurve wird einmal
+gebaut und entsorgt statt in jedem `build` neu, jede Zeile trägt einen
+Schlüssel, das Blatt wächst mit `AnimatedSize` statt zu springen, und unter
+reduzierter Bewegung läuft die Haarlinie gar nicht — eine Schleife ist genau
+das, was diese Einstellung meint.
+
+**Die Ankündigung ging am Menschen vorbei.** Sie lief über `render.detail`,
+und das zeigt nur unter `-v`. Ein Ausgabeschalter darf nicht bestimmen, ob
+jemand erfährt, dass sein Rechner gleich 1016 Verbindungen aufbaut; sie geht
+jetzt wie bei `daemon install` direkt auf `stderr`.
+
+**`LLM_008` ist neu.** Der Bereich `llm` hatte 001 bis 007 vergeben; die
+Nummer 008 trägt jetzt „Die Suche im Netz kann nicht stattfinden" — drei Fälle
+(keine Vorgaberoute, Tabelle nicht lesbar, Netz zu weit), die alle nichts über
+einen gesuchten Server aussagen. `docs/DIAGNOSTICS.md` kommt aus dem Generator.
 
 ## HUM-087 · resolver.test_ca wirkt nicht
 Sprint: 3 · Größe: M · Abhängigkeiten: HUM-024, HUM-036, HUM-062 · Blockiert: keine

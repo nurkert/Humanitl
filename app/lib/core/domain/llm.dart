@@ -85,3 +85,54 @@ abstract class LlmProbe with _$LlmProbe {
       ? 0
       : models.length - LlmModelLimits.count;
 }
+
+/// One server the search in the local network found, mirror of
+/// `DiscoverResult` (HUM-076).
+///
+/// Everything in here was said by a machine nobody had decided on yet: the
+/// host is an address the search itself picked, the models are what the server
+/// answered. The same caps as for [LlmProbe] apply, and for the same reason —
+/// a row in a list is not a place a stranger gets to fill freely.
+@freezed
+abstract class LlmServer with _$LlmServer {
+  /// Creates a found server.
+  const factory LlmServer({
+    required String host,
+    required int port,
+    @Default(LlmFlavor.unknown) LlmFlavor flavor,
+    @Default(<String>[]) List<String> models,
+    @Default(0) int latencyMs,
+    @Default(false) bool authRequired,
+  }) = _LlmServer;
+
+  const LlmServer._();
+
+  /// The endpoint a click would take over.
+  String get endpoint => 'http://$host:$port';
+
+  /// The names to show, capped exactly like [LlmProbe.shownModels].
+  List<String> get shownModels => <String>[
+    for (final String name in models.take(LlmModelLimits.count))
+      if (name.runes.length <= LlmModelLimits.nameLength)
+        name
+      else
+        String.fromCharCodes(name.runes.take(LlmModelLimits.nameLength)),
+  ];
+
+  /// How many names are not shown; zero when all of them are.
+  int get hiddenModels => models.length <= LlmModelLimits.count
+      ? 0
+      : models.length - LlmModelLimits.count;
+
+  /// True when this row can be taken over as `llm.endpoint`.
+  ///
+  /// A server that answered neither API is listed — somebody is listening
+  /// there — but it is not offered as an endpoint: a click would put an
+  /// address into the configuration that has never answered as an LLM.
+  ///
+  /// One that asked for credentials is offered. It answered, and it answered
+  /// with the one sentence that ends every probe early: what it is stays
+  /// unknown until somebody gives it a key, and that is a decision for a
+  /// person and not for this list.
+  bool get isUsable => flavor != LlmFlavor.unknown || authRequired;
+}

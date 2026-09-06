@@ -35,6 +35,7 @@ import 'providers/setup_provider.dart';
 import 'setup_text.dart';
 import 'widgets/daemon_check.dart';
 import 'widgets/llm_check.dart';
+import 'widgets/llm_discover_sheet.dart';
 import 'widgets/project_check.dart';
 import 'widgets/sandbox_check.dart';
 import 'widgets/setup_check_row.dart';
@@ -114,6 +115,9 @@ class _SetupScreenState extends State<SetupScreen> {
     text: widget.llmEndpoint,
   );
 
+  /// True while the search sheet is open. Opening it contacts nothing.
+  bool _discovering = false;
+
   @override
   void didUpdateWidget(SetupScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -146,6 +150,36 @@ class _SetupScreenState extends State<SetupScreen> {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     final SetupState state = widget.state;
+    return Stack(
+      children: <Widget>[
+        _column(context, tokens, l10n, state),
+        if (_discovering)
+          LlmDiscoverSheet(
+            onClose: () => setState(() => _discovering = false),
+            onPick: _took,
+          ),
+      ],
+    );
+  }
+
+  /// Takes the address of a found server over into the field and contacts it.
+  ///
+  /// Contacting it is not an extra: the search already knows this server
+  /// answers, and the row above the button must show a measurement of the
+  /// address that now stands in the field, not of the one before it
+  /// (CONVENTIONS 4.13).
+  void _took(String endpoint) {
+    _endpoint.text = endpoint;
+    setState(() => _discovering = false);
+    widget.onProbeLlm(endpoint);
+  }
+
+  Widget _column(
+    BuildContext context,
+    HTokens tokens,
+    AppLocalizations l10n,
+    SetupState state,
+  ) {
     return ColoredBox(
       color: tokens.colors.bg0,
       child: SingleChildScrollView(
@@ -178,6 +212,7 @@ class _SetupScreenState extends State<SetupScreen> {
                   probe: widget.probe,
                   controller: _endpoint,
                   onProbe: widget.onProbeLlm,
+                  onDiscover: () => setState(() => _discovering = true),
                   onEdited: _edited,
                   enabled:
                       state[SetupCheckKind.daemon].state == SetupCheckState.ok,

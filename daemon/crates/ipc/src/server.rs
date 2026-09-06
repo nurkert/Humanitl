@@ -27,6 +27,7 @@
 
 use std::fs::Permissions;
 use std::future::Future;
+use std::net::Ipv4Addr;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::sync::Arc;
@@ -41,11 +42,12 @@ use humanitl_core::ids::SandboxId;
 use humanitl_core::{
     BodyRef, Decision, DecisionSource, Diagnostic, FlowEvent, FlowId, HostName, SessionId, Severity,
 };
+use humanitl_proxy::egress::Egress;
 use humanitl_proxy::hold::NotHeld;
 use humanitl_proxy::rules_store::RulesStore;
 use humanitl_proxy::{
-    ClientTls, Direct, FlowFilter, FlowRegistry, HoldQueue, LlmProbe, Resolver, ResolverPort,
-    Upstream,
+    CONNECT_TIMEOUT, ClientTls, Direct, FlowFilter, FlowRegistry, HoldQueue, LlmProbe, Resolver,
+    ResolverPort, Scan, Subnet, Upstream,
 };
 use humanitl_recorder::{
     Cursor, CursorKey, Dir, FlowDetail as RecordedDetail, FlowQuery, Recorder, SortKey,
@@ -1240,11 +1242,91 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         Ok(Response::new(convert::doctor_report_to_proto(&report)))
     }
 
+    /// Sucht LLM-Server im eigenen Netz (HUM-076).
+    ///
+    /// Nur auf ausdrücklichen Wunsch: Diese RPC ist der Klick, und ohne sie
+    /// entsteht keine einzige Verbindung. Der Scan läuft im Daemon, im
+    /// Host-Netz, nie in der Sandbox; er ist kein Fluss und erscheint in keiner
+    /// Warteschlange.
+    ///
+    /// Das Netz kommt aus der Anfrage oder, wenn sie keines nennt, aus der
+    /// Vorgaberoute. Weiter als ein `/24` geht die Suche nicht — die Weigerung
+    /// steht als `LLM_008` in der Antwort, statt still ein größeres Netz
+    /// abzuklopfen.
     async fn discover_llm(
         &self,
-        _request: Request<v1::DiscoverRequest>,
+        request: Request<v1::DiscoverRequest>,
     ) -> Result<Response<Self::DiscoverLlmStream>, Status> {
-        Err(unimplemented("DiscoverLlm", "HUM-076"))
+        let request = request.into_inner();
+        let probe = self.llm_probe.as_ref().ok_or_else(|| {
+            let diagnostic = self.llm_probe_error.clone().unwrap_or_else(no_probe);
+            diagnostic_to_status(&diagnostic)
+        })?;
+        // Ein Port jenseits von `u16` ist keine Portnummer. Er wird nicht
+        // still übergangen, sonst fiele eine Liste aus lauter Unsinn auf die
+        // Vorgabe zurück und der Aufrufer hielte sie für befolgt.
+        let ports: Vec<u16> = request
+            .ports
+            .iter()
+            .map(|port| {
+                u16::try_from(*port).map_err(|_error| {
+                    diagnostic_to_status(
+                        &Diagnostic::builder(codes::LLM_008, Severity::Error)
+                            .why(format!("{port} is not a port number"))
+                            .build(),
+                    )
+                })
+            })
+            .collect::<Result<Vec<u16>, Status>>()?;
+
+        // Das eigene Netz steht immer fest, auch wenn der Aufrufer eines
+        // nennt: Ein fremdes `/24` ist genauso breit wie das eigene und
+        // trotzdem das Netz von jemand anderem. Die Suche bleibt darin, und
+        // die Schleife gehört dazu — dort läuft Ollama, wenn es auf demselben
+        // Rechner läuft.
+        let local = humanitl_proxy::local_net()
+            .await
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        let loopback = Subnet::local_24(Ipv4Addr::LOCALHOST);
+        let subnet = if request.subnet.is_empty() {
+            local.subnet
+        } else {
+            let asked = Subnet::parse(&request.subnet)
+                .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+            if !local.subnet.contains(asked) && !loopback.contains(asked) {
+                return Err(diagnostic_to_status(
+                    &Diagnostic::builder(codes::LLM_008, Severity::Error)
+                        .why(format!(
+                            "{asked} is not inside the network of this machine ({}): the search \
+                             stays in the network it belongs to, and scanning someone else's is \
+                             not what this button promises",
+                            local.subnet
+                        ))
+                        .build(),
+                ));
+            }
+            asked
+        };
+        tracing::info!(
+            %subnet,
+            interface = %local.interface,
+            "searching for LLM servers"
+        );
+        let scan = Scan::new(subnet)
+            .with_ports(ports)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?
+            .first(vec![Ipv4Addr::LOCALHOST, local.own]);
+
+        // Ein eigener Egress für den Scan: Er trägt die kurze Frist der Suche
+        // (200 ms), während die Probe die längere der Verbindung behält.
+        let sweep: Arc<dyn Egress> = Arc::new(Direct::new(CONNECT_TIMEOUT));
+        let probe = Arc::clone(probe);
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+        tokio::spawn(async move { humanitl_proxy::discover(probe, sweep, &scan, tx).await });
+        Ok(Response::new(Box::pin(
+            tokio_stream::wrappers::ReceiverStream::new(rx)
+                .map(|found| Ok(convert::found_to_proto(&found))),
+        )))
     }
 
     /// Prüft genau den Endpunkt, den der Aufrufer nennt (HUM-039).
@@ -1585,16 +1667,71 @@ mod tests {
                 .await
                 .err()
                 .map(|status| (status.code(), status.message().to_owned())),
-            server
-                .discover_llm(Request::new(v1::DiscoverRequest::default()))
-                .await
-                .err()
-                .map(|status| (status.code(), status.message().to_owned())),
         ];
         for entry in codes {
             let (code, message) = entry.expect("the rpc must refuse, not answer");
             assert_eq!(code, tonic::Code::Unimplemented);
             assert!(message.contains("arrives in"), "{message}");
+        }
+    }
+
+    /// Ein Netz, das weiter ist als ein `/24`, wird abgelehnt, bevor irgendein
+    /// Paket entsteht (HUM-076).
+    ///
+    /// Die Weigerung ist kein `UNIMPLEMENTED` und kein leerer Strom: Sie nennt
+    /// den Grund, damit ein Mensch versteht, dass die Suche im eigenen Netz
+    /// bleibt und nicht, dass sein Server nicht gefunden wurde.
+    #[tokio::test]
+    async fn a_network_wider_than_a_24_is_refused_before_anything_connects() {
+        let queue = queue();
+        let server = server(&queue);
+        for subnet in [
+            "10.0.0.0/8",
+            "192.168.0.0/16",
+            "nonsense",
+            "192.168.2.0/33",
+            // Genauso breit wie ein eigenes Netz und trotzdem fremdes: Der
+            // Scan bleibt in dem Netz, in dem dieser Rechner steht.
+            "8.8.8.0/24",
+        ] {
+            let status = server
+                .discover_llm(Request::new(v1::DiscoverRequest {
+                    subnet: subnet.to_owned(),
+                    ports: Vec::new(),
+                }))
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("{subnet} is not a local network"));
+            assert_ne!(status.code(), tonic::Code::Unimplemented);
+            assert!(status.message().contains("LLM_008"), "{}", status.message());
+        }
+    }
+
+    /// Mehr Ports, als die Zusage nennt, werden abgelehnt.
+    ///
+    /// Die Dauer des Scans hängt an ihrer Zahl: Jeder Port multipliziert die
+    /// Verbindungsversuche, und „unter fünf Sekunden" ist eine Aussage über
+    /// vier davon. Eine Liste aus der Anfrage eines Clients darf sie nicht
+    /// aushebeln (Review Codex, 2026-09-06).
+    #[tokio::test]
+    async fn more_ports_than_the_promise_are_refused() {
+        let queue = queue();
+        let server = server(&queue);
+        for ports in [
+            vec![1, 2, 3, 4, 5],
+            vec![0],
+            vec![70000],
+            (1..=1000).collect::<Vec<u32>>(),
+        ] {
+            let status = server
+                .discover_llm(Request::new(v1::DiscoverRequest {
+                    subnet: String::new(),
+                    ports,
+                }))
+                .await
+                .err()
+                .expect("more ports than the search asks");
+            assert!(status.message().contains("LLM_008"), "{}", status.message());
         }
     }
 

@@ -730,6 +730,24 @@ extension LlmProductToDomain on pb.LlmProduct {
   };
 }
 
+/// `DiscoverResult` to [LlmServer] (HUM-076).
+extension DiscoverResultToDomain on pb.DiscoverResult {
+  /// The domain form of one server the search found.
+  ///
+  /// The host stays the string the daemon sent. It is an address the search
+  /// itself picked from the local network, never a name somebody typed, and
+  /// parsing it here would only add a second opinion about a value that
+  /// already has one.
+  LlmServer toDomain() => LlmServer(
+    host: host,
+    port: port,
+    flavor: product.toDomain(),
+    models: List<String>.unmodifiable(models),
+    latencyMs: latencyMs,
+    authRequired: authRequired,
+  );
+}
+
 /// `ProbeLlmResponse` to [LlmProbe] (HUM-039).
 extension ProbeLlmResponseToDomain on pb.ProbeLlmResponse {
   /// The domain form for the endpoint that was asked.
