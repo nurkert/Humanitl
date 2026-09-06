@@ -23,20 +23,16 @@
 //! ein späteres `attach` zeigt den Rückstand.
 
 use std::io::Write as _;
-use std::os::fd::BorrowedFd;
 
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, Severity};
 use humanitl_ipc::v1;
-use rustix::termios::{OptionalActions, Termios, tcgetattr, tcgetwinsize, tcsetattr};
 use tokio::io::AsyncReadExt as _;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::cmd::{Context, EXIT_OK, Failure, from_proto, status_diagnostic};
-
-/// Die Größe, mit der geöffnet wird, wenn dieses Terminal keine nennt.
-const FALLBACK_SIZE: (u32, u32) = (80, 24);
+use crate::tty::{RawMode, window_size};
 
 /// Wie viele Nachrichten der Eingangskanal puffert.
 const INPUT_BUFFER: usize = 32;
@@ -88,7 +84,21 @@ pub async fn run(ctx: &Context, read_only: bool) -> Result<u8, Failure> {
         spawn_resizes(tx.clone());
     }
 
-    let outcome = pump(&mut stream).await;
+    // `SIGTERM`, `SIGHUP` und `SIGINT` gehören diesem Befehl: Ohne eigenen Weg
+    // nähme der Kernel den Prozess weg, bevor `Drop` das Terminal zurückgibt,
+    // und die Shell des Menschen bliebe ohne Echo stehen (`tty.rs`).
+    let outcome = tokio::select! {
+        outcome = pump(&mut stream) => outcome,
+        number = terminated() => {
+            drop(raw);
+            if !read_only {
+                let mut out = std::io::stdout();
+                let _ = out.write_all(LEAVE_SCREEN);
+                let _ = out.flush();
+            }
+            return Ok(128_u8.saturating_add(number));
+        }
+    };
     drop(raw);
     if !read_only {
         let mut out = std::io::stdout();
@@ -165,6 +175,44 @@ fn spawn_input(tx: mpsc::Sender<v1::TerminalInput>) {
     });
 }
 
+/// Wartet auf `SIGTERM`, `SIGHUP` oder `SIGINT` und nennt die Nummer.
+///
+/// `SIGINT` gehört dazu, obwohl `Ctrl+C` im Rohmodus als Byte `0x03` ankommt
+/// und kein Signal auslöst: Ein `kill -INT` von außen gibt es trotzdem, und
+/// ohne diesen Zweig nähme der Kernel den Prozess weg, bevor der Rohmodus
+/// zurückgegeben ist -- die Shell des Menschen bliebe ohne Echo stehen.
+///
+/// Ohne Handler wartet sie für immer; dann gilt das Standardverhalten des
+/// Signals.
+async fn terminated() -> u8 {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut streams: Vec<(tokio::signal::unix::Signal, u8)> = [
+        (SignalKind::terminate(), 15),
+        (SignalKind::hangup(), 1),
+        (SignalKind::interrupt(), 2),
+    ]
+    .into_iter()
+    .filter_map(|(kind, number)| signal(kind).ok().map(|stream| (stream, number)))
+    .collect();
+    match streams.as_mut_slice() {
+        [(term, first), (hup, second), (int, third)] => tokio::select! {
+            _ = term.recv() => *first,
+            _ = hup.recv() => *second,
+            _ = int.recv() => *third,
+        },
+        [(only, number)] => {
+            only.recv().await;
+            *number
+        }
+        [(one, first), (two, second)] => tokio::select! {
+            _ = one.recv() => *first,
+            _ = two.recv() => *second,
+        },
+        _ => std::future::pending().await,
+    }
+}
+
 /// Das Ende dieses Stroms, nicht das der Sitzung.
 fn close() -> v1::TerminalInput {
     v1::TerminalInput {
@@ -195,54 +243,6 @@ fn spawn_resizes(tx: mpsc::Sender<v1::TerminalInput>) {
             }
         }
     });
-}
-
-/// Die Größe dieses Terminals, oder [`FALLBACK_SIZE`] ohne Terminal.
-fn window_size() -> (u32, u32) {
-    tcgetwinsize(stdin_fd()).map_or(FALLBACK_SIZE, |size| {
-        let cols = if size.ws_col == 0 {
-            FALLBACK_SIZE.0
-        } else {
-            u32::from(size.ws_col)
-        };
-        let rows = if size.ws_row == 0 {
-            FALLBACK_SIZE.1
-        } else {
-            u32::from(size.ws_row)
-        };
-        (cols, rows)
-    })
-}
-
-/// Die eigene Eingabe: Deskriptor `0`, mit der Lebensdauer des Prozesses.
-fn stdin_fd() -> BorrowedFd<'static> {
-    rustix::stdio::stdin()
-}
-
-/// Der Rohmodus dieses Terminals, solange der Befehl läuft.
-///
-/// Er wird beim Fallenlassen zurückgesetzt, damit kein Fehlerpfad die Shell
-/// des Menschen ohne Echo zurücklässt.
-struct RawMode {
-    saved: Termios,
-}
-
-impl RawMode {
-    /// Setzt den Rohmodus; `None`, wenn die Eingabe kein Terminal ist (eine
-    /// Pipe zum Beispiel).
-    fn enter() -> Option<Self> {
-        let saved = tcgetattr(stdin_fd()).ok()?;
-        let mut raw = saved.clone();
-        raw.make_raw();
-        tcsetattr(stdin_fd(), OptionalActions::Flush, &raw).ok()?;
-        Some(Self { saved })
-    }
-}
-
-impl Drop for RawMode {
-    fn drop(&mut self) {
-        let _ = tcsetattr(stdin_fd(), OptionalActions::Flush, &self.saved);
-    }
 }
 
 /// Der Befund, wenn der Eingangskanal des Stroms schon zu ist.

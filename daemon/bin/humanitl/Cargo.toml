@@ -25,7 +25,10 @@ serde_json.workspace = true
 # Groesse (`tcgetattr`, `tcsetattr`, `tcgetwinsize`). Ohne rustix braeuchte das
 # `unsafe`. Noch nicht unter [workspace.dependencies], wie in
 # `crates/sandbox/Cargo.toml`; der Parent traegt die Version dort ein.
-rustix = { version = "1.1", features = ["stdio", "termios"] }
+# `event` kommt mit `--ask terminal` dazu: Der Tastenleser wartet mit `poll`
+# statt in einem blockierenden `read`, damit er die Eingabe loslassen kann,
+# solange der `$EDITOR` laeuft.
+rustix = { version = "1.1", features = ["stdio", "termios", "event"] }
 # `sandbox check` legt seinen Platzhalter-Socket und die Platzhalter-Dateien
 # der CA in einem eigenen Verzeichnis an, das mit dem Prozess verschwindet:
 # der Selbsttest darf dem laufenden Daemon nichts wegnehmen.

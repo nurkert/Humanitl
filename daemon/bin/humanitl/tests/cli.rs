@@ -826,11 +826,13 @@ fn run_without_a_daemon_is_daemon_001_and_exit_two() {
     );
 }
 
-/// `--ask terminal` verweigert den Dienst, bevor irgendetwas verbindet.
+/// `--ask terminal` verweigert den Dienst für einen Vollbild-Agenten, bevor
+/// irgendetwas verbindet.
 ///
-/// `CLI_002` steht in CONVENTIONS 4.10 für Vollbild-TUI-Agenten; ohne das PTY
-/// aus HUM-042 gilt es für jeden. Der Befund nennt beide Auswege, und der
-/// Daemon wird gar nicht erst gefragt: Der Test läuft ohne einen.
+/// `CLI_002` steht in CONVENTIONS 4.10 für genau diesen Fall: Ein TUI zeichnet
+/// den ganzen Schirm neu, und der Kasten wäre nach dem ersten Bild weg. Der
+/// Befund nennt beide Auswege, und der Daemon wird gar nicht erst gefragt: Der
+/// Test läuft ohne einen.
 #[test]
 fn run_with_ask_terminal_is_cli_002_before_it_connects() {
     let harness = Harness::new();
@@ -841,6 +843,25 @@ fn run_with_ask_terminal_is_cli_002_before_it_connects() {
     assert!(text.starts_with("error[CLI_002]: "), "{text}");
     assert!(text.contains("--ask ui"), "{text}");
     assert!(text.contains("--ask none"), "{text}");
+}
+
+/// Ohne Terminal auf der Eingabe gibt es keinen Prompt und keinen Start.
+///
+/// Der Test läuft über eine Pipe, wie jeder Test hier -- und genau das ist der
+/// Fall, den die Verweigerung meint: Aus einer Pipe kämen Bytes, die niemand
+/// als Antwort gemeint hat, und ein `b` in einem Skript blockte einen Fluss,
+/// ohne dass ein Mensch die Frage gesehen hätte. Dass die Verweigerung sonst
+/// am wirksamen Kommando hängt, halten die Tests in `cmd/run.rs` fest, die die
+/// Frage nach dem Terminal als Wert bekommen.
+#[test]
+fn run_ask_terminal_without_a_terminal_is_cli_002() {
+    let harness = Harness::new();
+    let output = harness.run(["run", "--ask", "terminal", "--", "sh", "-c", "echo hi"]);
+    let text = stderr(&output);
+
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.starts_with("error[CLI_002]: "), "{text}");
+    assert!(text.contains("terminal on standard input"), "{text}");
 }
 
 /// Ein Sitzungsprofil, das es nicht gibt, ist `CONFIG_001` und kein stiller
