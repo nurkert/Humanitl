@@ -2032,6 +2032,99 @@ fn sandbox_attach_speaks_the_terminal_rpc() {
     );
 }
 
+/// `sandbox attach --read-only` zeigt die Sitzung und schickt nichts (HUM-042).
+///
+/// Der lesende Anschluss ist die Antwort auf `TERM_001`: Wer nicht schreiben
+/// darf, soll trotzdem zusehen können. Gemessen wird beides an einem Fake, der
+/// jedes empfangene Byte zurückwirft — was der Anschluss sendet, käme also
+/// sichtbar zurück. Es kommt nichts zurück.
+///
+/// Der Aufruf endet hier nicht von selbst: Ohne Eingabestrom schickt er kein
+/// `close`, und die Sitzung eines echten Daemons endet mit dem Agenten. Ein
+/// Faden liest deshalb mit, bis der Test den Prozess beendet.
+///
+/// **Alles in einem Faden lesen, nicht zweimal greifen.** Der erste Entwurf
+/// las die erste Zeile über einen `BufReader` und danach den Rest über
+/// `wait_with_output` — das gab einen leeren Puffer, und die Zusicherung war
+/// eine Behauptung über nichts. Die Mutationsprobe (Eingabe auch im lesenden
+/// Modus weiterreichen) blieb grün und hat es gezeigt.
+#[test]
+fn sandbox_attach_read_only_watches_and_sends_nothing() {
+    use std::io::{BufRead as _, BufReader, Write as _};
+
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+
+    let mut child = harness
+        .command()
+        .args(["sandbox", "attach", "--read-only"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the binary starts");
+
+    let reader = BufReader::new(child.stdout.take().expect("stdout is a pipe"));
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let collecting = std::sync::Arc::clone(&seen);
+    let reading = std::thread::spawn(move || {
+        for line in reader.lines() {
+            let Ok(line) = line else { return };
+            let mut out = collecting
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            out.push_str(&line);
+            out.push('\n');
+        }
+    });
+
+    // Ein Mensch tippt. Ein lesender Anschluss liest die Tastatur gar nicht
+    // erst; käme etwas davon beim Daemon an, wirft der Fake es zurück.
+    let mut keys = child.stdin.take().expect("stdin is a pipe");
+    let typed = "this must not reach the session";
+    // Beide Fehlerwege stehen hier ausdrücklich: Ein verschluckter
+    // Schreibfehler machte die Behauptung unten wieder zu einer Aussage über
+    // nichts — genau der Fehler, an dem der erste Entwurf dieses Tests scheiterte.
+    keys.write_all(format!("{typed}\n").as_bytes())
+        .expect("the keyboard reaches the process");
+    keys.flush().expect("and it leaves the buffer");
+
+    // Warten, bis die Zeile des Daemons da ist: Ohne sie prüfte der Test die
+    // Stille eines Prozesses, der noch gar nichts gesagt hat.
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        if seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains("input is echoed")
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the session's bytes never reached the reader"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // Zwei Sekunden Zuhören: genug, dass ein weitergereichter Tastendruck den
+    // Umlauf über den Fake geschafft hätte.
+    std::thread::sleep(Duration::from_secs(2));
+    let _ = child.kill();
+    let _ = child.wait();
+    drop(keys);
+    let _ = reading.join();
+
+    let out = seen
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert!(
+        !out.contains(typed),
+        "a read-only attach sent the keyboard on: {out:?}"
+    );
+}
+
 // --- `humanitl daemon install` (HUM-044) -------------------------------------
 //
 // Der Befehl schreibt eine Datei auf den Rechner eines Menschen, die von da an
