@@ -23,6 +23,17 @@ cannot resolve the generated code. Add `~/.pub-cache/bin` to PATH.
 
 Optional: `cargo install cargo-deny` for `make rust-deny`.
 
+## When CI is red
+
+The `rust-test` job pipes its output to a file. A red run therefore names the
+tests that failed as annotations on the run — one line per test, at most ten
+lines in all, and from the eleventh test on the tenth line collects the rest —
+and uploads the whole output as the artifact `rust-test-log`. Both are
+visible without write access to the repository; the job log itself is not.
+
+`scripts/ci/test-report.sh <log>` is the same evaluation, and
+`scripts/ci/test-report.sh --self-test` (part of `make check`) keeps it honest.
+
 ## Disk
 
 A fresh build tree of the daemon weighs about 6 GiB after
