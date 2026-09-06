@@ -316,7 +316,18 @@ impl Client {
 
     /// Die nächste Nachricht, oder `None` nach `WAIT`.
     async fn next(&mut self) -> Option<v1::TerminalOutput> {
-        tokio::time::timeout(WAIT, self.output.next()).await.ok()?
+        self.next_at(tokio::time::Instant::now() + WAIT).await
+    }
+
+    /// Dasselbe gegen einen festen Zeitpunkt.
+    ///
+    /// Für Schleifen: Eine Frist je Durchlauf summiert sich, und die Meldung
+    /// am Ende nennt dann eine Zeit, die nicht die gewartete ist -- derselbe
+    /// Grund, aus dem `wait_for` `timeout_at` nimmt.
+    async fn next_at(&mut self, until: tokio::time::Instant) -> Option<v1::TerminalOutput> {
+        tokio::time::timeout_at(until, self.output.next())
+            .await
+            .ok()?
     }
 }
 
@@ -824,7 +835,17 @@ async fn one_writer_many_readers() {
         writer.next().await.is_none(),
         "the closed stream ends without an exit"
     );
-    // Der Platz wird beim Fallenlassen frei; das braucht einen Umlauf.
+    // Der Platz gehört nicht diesem `Client`, sondern der Sitzung im Dienst:
+    // `WriterSlot::drop` gibt ihn frei, während `session` das `Close`
+    // abräumt, und weil Rust die eigenen Werte vor den Parametern fallen
+    // lässt, ist er frei, bevor der Strom oben endet. Das Fallenlassen hier
+    // schließt nur den eigenen Kanal.
+    //
+    // Gewartet wird trotzdem, und der Grund steht eine Zeile höher: Die
+    // Zusicherung dort ist schwächer, als sie klingt, weil `Client::next`
+    // auch für die eigene Frist `None` liefert. Ist das `Close` nur langsam
+    // statt erledigt, hält die Sitzung den Platz noch -- und dann ist
+    // Wiederholen richtig, gegen dieselbe Frist wie jedes andere Warten hier.
     drop(writer);
     let mut third = wait_for_writer_slot(&hub).await;
     let mut again = String::new();
@@ -838,17 +859,26 @@ async fn one_writer_many_readers() {
 
 /// Wartet, bis der Platz des Schreibers frei ist, und nimmt ihn.
 async fn wait_for_writer_slot(hub: &TerminalHub) -> Client {
-    for _ in 0..50 {
+    let until = tokio::time::Instant::now() + WAIT;
+    let mut tries = 0_usize;
+    while tokio::time::Instant::now() < until {
+        tries += 1;
         let mut candidate = Client::attach(hub, 100, 30, false);
-        match candidate.next().await {
+        match candidate.next_at(until).await {
             Some(v1::TerminalOutput {
                 output: Some(v1::terminal_output::Output::Diagnostic(_)),
             }) => tokio::time::sleep(Duration::from_millis(20)).await,
             Some(_) => return candidate,
-            None => panic!("the stream ended before the terminal answered"),
+            // Nur die Frist führt hierher: Die Sitzung schickt vor jedem Ende
+            // etwas -- die Geometrie an einen angenommenen Anschluss, den
+            // Befund an einen abgelehnten --, und der Empfänger lebt, solange
+            // `candidate` lebt. Ohne `next_at` liefe der letzte Durchlauf
+            // seine eigene Frist noch aus, und die Meldung unten nennte eine
+            // Zeit, die nicht die gewartete ist.
+            None => break,
         }
     }
-    panic!("the writer slot never became free");
+    panic!("the writer slot never became free within {WAIT:?} ({tries} tries)");
 }
 
 fn stop() -> v1::SandboxRequest {
@@ -1006,7 +1036,23 @@ async fn two_sessions_leave_nothing_behind() {
         // Ohne Frist, aus dem Grund, der bei `with_session` steht: Ein
         // Abbruch liesse den Empfaenger fallen und die Sandbox stehen.
         drain(service.stream(stop())).await;
-        // Der Abbau läuft über mehrere Aufgaben; ein paar Umläufe genügen.
+        // Die Sitzung ist weg, sobald `stop` zurück ist: `clear_running` läuft
+        // dort vor der letzten Statusmeldung, und `drain` liest bis zum Ende
+        // des Stroms.
+        assert!(
+            service.terminal("").is_err(),
+            "round {round}: the session is gone before anything is counted"
+        );
+        // **Was danach noch läuft, sagt niemand an, und deshalb steht hier
+        // eine Zahl statt einer Bedingung.** Gezählt werden Deskriptoren, die
+        // Aufräum-Aufgaben halten -- Klone des Hubs, des Handles, die
+        // Herrscherseite des Pseudoterminals --, und der Dienst hat keine
+        // Aussage darüber, wann die durch sind. Eine halbe Sekunde ist auf
+        // diesem Rechner reichlich; auf einem Läufer, der sich zwei Kerne mit
+        // allem anderen teilt, ist sie eine Wette. Sie steht hier trotzdem,
+        // weil die naheliegende Bedingung -- „keine Sitzung mehr" -- schon
+        // wahr ist, bevor die Aufgaben laufen, und eine Bedingung, die nie
+        // wartet, wäre die Zusage, die dieser Kommentar nicht macht.
         for _ in 0..20 {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
