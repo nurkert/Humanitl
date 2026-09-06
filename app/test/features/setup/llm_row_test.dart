@@ -193,6 +193,49 @@ void main() {
     );
   });
 
+  /// Die Adresse, die niemand beantwortet (HUM-039).
+  ///
+  /// Der Dienst misst das selbst: `humanitl doctor --probe-llm` gegen
+  /// `http://10.255.255.1:1` antwortet am 2026-09-06 nach 3 s mit
+  /// `LLM_001: Humanitl could not reach 10.255.255.1:1 from this machine` und
+  /// dem Befehl `curl -sS http://10.255.255.1:1/api/tags`. Hier steht die
+  /// andere Hälfte: dass die Zeile genau das zeigt — den Code und einen
+  /// Befehl, den ein Mensch kopieren kann, statt einer Zeile „ging nicht".
+  testWidgets('an address that nobody answers shows LLM_001 and its curl', (
+    WidgetTester tester,
+  ) async {
+    final FakeDaemonClient client = FakeDaemonClient()
+      // `Severity.blocking`, wie der Dienst ihn baut
+      // (`daemon/crates/proxy/src/llm_probe.rs`, `Unreachable`): Ein Modell,
+      // das nicht antwortet, hält den Start auf, und die Zeile muss das zeigen.
+      ..llmProbeFailure = const Diagnostic(
+        code: 'LLM_001',
+        severity: Severity.blocking,
+        title: 'Sprachmodell nicht erreichbar',
+        why:
+            'Humanitl could not reach 10.255.255.1:1 from this machine (no '
+            'answer within 3000 ms). The agent will not be able to talk to the '
+            'model.',
+        fix: FixAction.copyCommand(
+          command: 'curl -sS http://10.255.255.1:1/api/tags',
+        ),
+      );
+    await openSetup(tester, client);
+    await type(tester, 'http://10.255.255.1:1');
+    await probe(tester);
+
+    expect(llmState(tester), 'blocks the start');
+    expect(find.text('LLM_001'), findsWidgets);
+    expect(
+      find.text('curl -sS http://10.255.255.1:1/api/tags'),
+      findsOneWidget,
+      reason: 'the command stands there to be copied, not described',
+    );
+    expect(find.byKey(const Key('setup-fix-copy-llm')), findsOneWidget);
+    // Und keine Modellliste neben einer Adresse, die nichts gesagt hat.
+    expect(find.byKey(const Key('setup-llm-models')), findsNothing);
+  });
+
   test('a probe that is still running is not an answer', () {
     // Reine Funktion, ohne Baum: Solange die Probe laeuft, ist die Zeile
     // `checking` und sperrt den Start, statt das letzte Ergebnis zu zeigen.
