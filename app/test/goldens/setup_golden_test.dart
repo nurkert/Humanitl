@@ -22,12 +22,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/app.dart';
+import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/shell/providers/connection.dart';
 import 'package:humanitl/features/shell/providers/navigation.dart';
 import 'package:humanitl/features/shell/providers/theme.dart';
+import 'package:humanitl/features/setup/providers/discover_provider.dart';
 import 'package:humanitl/features/shell/section.dart';
 
 import '../harness/ui_state.dart';
@@ -56,6 +58,30 @@ class _FixedTheme extends ThemeModeSetting {
 
 /// Ein Abschnitt, der stehen bleibt: die Weiche der Shell darf im Golden nicht
 /// umschalten, sonst haengt das Bild an einer Zeitscheibe.
+/// Ein Suchergebnis, das im Golden feststeht.
+class _FoundServers extends SetupLlmDiscover {
+  @override
+  LlmDiscoverState build() => const LlmDiscoverState(
+    finished: true,
+    servers: <LlmServer>[
+      LlmServer(
+        host: '192.168.2.20',
+        port: 11434,
+        flavor: LlmFlavor.ollama,
+        models: <String>['qwen2.5-coder:14b', 'llama3.1:8b'],
+        latencyMs: 12,
+      ),
+      LlmServer(
+        host: '192.168.2.40',
+        port: 8000,
+        authRequired: true,
+        latencyMs: 31,
+      ),
+      LlmServer(host: '192.168.2.60', port: 8080, latencyMs: 8),
+    ],
+  );
+}
+
 class _FixedSection extends Navigation {
   _FixedSection(this.section);
 
@@ -101,6 +127,47 @@ void main() {
       fileName: 'setup_ready_$name',
       constraints: window,
       builder: () => setup(mode, ready()),
+    );
+  }
+
+  /// Das Such-Blatt mit drei Funden: der eine, der antwortet, der hinter einer
+  /// Anmeldung und der, der sich nicht ausgewiesen hat. Es ist das einzige
+  /// Bild dieses Bildschirms, in dem ein Vorgang steht, den ein Mensch
+  /// ausgelöst hat, und es hält fest, wie die drei Fälle nebeneinander
+  /// aussehen (HUM-076).
+  ///
+  /// Der Zustand wird gesetzt und nicht erlaufen: Ein Golden, das erst tippt
+  /// und dann auf einen Strom wartet, hängt an einer Zeitscheibe.
+  for (final HThemeMode mode in <HThemeMode>[
+    HThemeMode.dark,
+    HThemeMode.light,
+  ]) {
+    goldenTest(
+      'setup_discover_${mode.name}',
+      fileName: 'setup_discover_${mode.name}',
+      constraints: window,
+      pumpBeforeTest: (WidgetTester tester) async {
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('setup-llm-discover')));
+        await tester.pump();
+        // Über das Einfliegen der Zeilen hinaus: Ein Bild bei t=0 zeigt drei
+        // vollständig durchsichtige Zeilen, also nichts.
+        await tester.pump(const Duration(milliseconds: 300));
+      },
+      builder: () => ProviderScope(
+        overrides: <Override>[
+          uiStateOverride(),
+          daemonClientProvider.overrideWithValue(
+            FakeDaemonClient()..doctorReport = fakeDoctorOk(),
+          ),
+          connectionHeartbeatProvider.overrideWithValue(null),
+          connectionReconnectProvider.overrideWithValue(null),
+          themeModeProvider.overrideWith(() => _FixedTheme(mode)),
+          navigationProvider.overrideWith(() => _FixedSection(Section.setup)),
+          setupLlmDiscoverProvider.overrideWith(_FoundServers.new),
+        ],
+        child: const HumanitlApp(),
+      ),
     );
   }
 

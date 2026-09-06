@@ -101,6 +101,13 @@ pub mod summary;
 pub mod terminal;
 pub mod validate;
 
+/// Die Ports, die `DiscoverLlm` ohne eigene Angabe fragt (HUM-076).
+///
+/// Re-Export aus `humanitl-proxy`, damit die Kommandozeile die Zahlen nennen
+/// kann, ohne die Proxy-Crate zu kennen: Sie steht eine Schicht weiter innen
+/// (`backlog/CONVENTIONS.md` 3.1).
+pub use humanitl_proxy::DEFAULT_PORTS as DEFAULT_DISCOVER_PORTS;
+
 pub use crate::client::connect;
 pub use crate::convert::diagnostic_to_proto;
 pub use crate::domains::DomainTable;

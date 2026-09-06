@@ -331,6 +331,10 @@ LLM-Endpunkt liegt nicht in einem privaten Netz
 
 LLM-Endpunkt ist keine lesbare HTTP-Adresse
 
+#### LLM_008
+
+Die Suche im Netz kann nicht stattfinden
+
 ### Bereich rules
 
 #### RULES_001

@@ -34,7 +34,7 @@ use humanitl_core::{
 };
 use humanitl_proxy::registry::{FlowRecord, FlowRegistry};
 use humanitl_proxy::rules_store::StoredRule;
-use humanitl_proxy::{LlmFlavor, ProbeResult};
+use humanitl_proxy::{Found, LlmFlavor, ProbeResult};
 use humanitl_recorder::{
     Dir, FindingRecord, FlowDetail as RecordedDetail, FlowSummary as RecordedSummary, MessageRecord,
 };
@@ -257,6 +257,24 @@ pub fn probe_result_to_proto(result: &ProbeResult) -> v1::ProbeLlmResponse {
         latency_ms: result.latency_ms,
         diagnostics,
         endpoint_is_private: result.endpoint_is_private,
+    }
+}
+
+/// Übersetzt einen Fund der Netzsuche in seine Wire-Form (HUM-076).
+///
+/// Die Modellnamen kommen aus einem Server, den bis zu diesem Augenblick
+/// niemand kannte, und gehen deshalb durch dieselbe Säuberung wie die der
+/// Probe ([`probe_result_to_proto`]): kein Steuerzeichen, kein
+/// bidirektionaler Umbruch, ein Deckel auf Zahl und Länge.
+#[must_use]
+pub fn found_to_proto(found: &Found) -> v1::DiscoverResult {
+    v1::DiscoverResult {
+        host: found.host.to_string(),
+        port: u32::from(found.port),
+        product: llm_flavor_to_proto(found.flavor) as i32,
+        models: sanitize_models(&found.models),
+        latency_ms: found.latency_ms,
+        auth_required: found.auth_required,
     }
 }
 
