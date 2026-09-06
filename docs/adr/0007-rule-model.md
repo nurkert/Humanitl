@@ -134,8 +134,12 @@ zu Cedar ist eine offengehaltene Tür, keine Abhängigkeit.
   Nachfrage würde den Nutzer trainieren, eine Angriffssignatur wegzuklicken.
 - **WebSocket-Frames einzeln halten.** Wäre konsequent, macht aber jede
   interaktive Verbindung unbrauchbar. Der Aufsatzpunkt ist der Upgrade; der Rest
-  wird aufgezeichnet und die Lücke wird im UI benannt. `experimental.ws_hold`
-  hält die Tür offen.
+  wird aufgezeichnet und die Lücke wird im UI benannt. Ein Schalter
+  `experimental.ws_hold` sollte die Tür offenhalten; er ist mit HUM-121
+  entfallen, weil er nie einen Leser bekommen hat und der Upgrade-Pfad selbst
+  noch aussteht (HUM-110). Die Tür bleibt offen, sie hängt nur nicht mehr an
+  einem Schlüssel ohne Wirkung: Wer die Frames halten will, bringt den Schalter
+  mit seinem Leser im selben Commit zurück (`backlog/CONVENTIONS.md` 4.25).
 
 ## Konsequenzen
 

@@ -79,9 +79,6 @@ const REGISTER: &[(&str, &str)] = &[
     ("agent.briefing.enabled", "effective"),
     ("agent.command", "effective"),
     ("experimental.h2_upstream", "effective"),
-    // Ein WebSocket-Upgrade entscheidet heute allein die Regel; der Schalter
-    // trifft im Proxy auf nichts.
-    ("experimental.ws_hold", "pending(HUM-121)"),
     ("findings.email_allow_domains", "effective"),
     ("findings.enabled", "effective"),
     ("findings.ignored_hashes", "effective"),
@@ -125,8 +122,6 @@ const REGISTER: &[(&str, &str)] = &[
     // Die Oberfläche kann die Konfiguration nicht lesen: dem Client fehlt
     // `GetConfig`, und der Melder antwortet fest mit `true`.
     ("ui.notifications", "pending(HUM-069)"),
-    // Es gibt keinen Ton, den ein Schalter abschalten könnte.
-    ("ui.sound", "pending(HUM-121)"),
     // Gelesen in `SandboxService::launch`, wenn das Terminal der Sitzung
     // entsteht: `TerminalHub::notice` schweigt ohne diesen Schalter
     // (HUM-042).
@@ -332,7 +327,9 @@ fn the_keys_without_a_reader_are_the_known_ones() {
     // abzüglich `resolver.test_ca`, den HUM-087 an `--allow-test-ca` und
     // `ClientTls::new` verdrahtet hat, und abzüglich
     // `experimental.upstream_port_map`, den HUM-088 entfernt hat, statt ihm
-    // nachträglich einen Leser zu geben. Sie steht hier, damit ein weiterer
+    // nachträglich einen Leser zu geben, und abzüglich `experimental.ws_hold`
+    // und `ui.sound`, die HUM-121 aus demselben Grund entfernt hat. Sie steht
+    // hier, damit ein weiterer
     // Fall nicht unbemerkt dazukommt: Wer einen Schlüssel verdrahtet oder
     // streicht, zieht ihn hier und im Register zugleich nach.
     let pending: Vec<&str> = register()
@@ -343,12 +340,10 @@ fn the_keys_without_a_reader_are_the_known_ones() {
     assert_eq!(
         pending,
         vec![
-            "experimental.ws_hold",
             "pseudonyms.max_response_bytes",
             "pseudonyms.translate_responses",
             "resolver.nameserver",
             "ui.notifications",
-            "ui.sound",
             "ui.theme",
         ]
     );
@@ -537,5 +532,25 @@ fn the_removed_port_map_is_gone_from_the_schema() {
     // geprüft und nie gelesen wird — genau der Fall, den das Register findet.
     assert!(!schema::known_paths().contains("experimental.upstream_port_map"));
     assert!(schema::leaf_paths().contains("experimental.h2_upstream"));
-    assert!(schema::leaf_paths().contains("experimental.ws_hold"));
+}
+
+#[test]
+fn the_two_switches_without_a_reader_are_gone_from_the_schema() {
+    // HUM-121: `ui.sound` hat nie einen Ton geschaltet, und
+    // `experimental.ws_hold` nie ein Upgrade angehalten — das entscheidet
+    // heute allein die Regel. Beide sind entfernt statt nachgerüstet; die
+    // Begründung steht in `backlog/CONVENTIONS.md` 4.25. Ihre Nachbarn in
+    // denselben Gruppen bleiben da, damit die Streichung nicht als Abbau der
+    // Gruppen gelesen wird.
+    assert!(!schema::known_paths().contains("ui.sound"));
+    assert!(!schema::known_paths().contains("experimental.ws_hold"));
+    assert!(schema::leaf_paths().contains("ui.notifications"));
+    assert!(schema::leaf_paths().contains("ui.terminal_notices"));
+    assert!(schema::leaf_paths().contains("experimental.h2_upstream"));
+    for path in ["experimental.ws_hold", "ui.sound"] {
+        assert!(
+            alias::retired(path).is_some(),
+            "{path} is gone from the schema and not in alias::RETIRED; an old file would get              the hard CONFIG_002 that CONVENTIONS 4.25 rules out"
+        );
+    }
 }
