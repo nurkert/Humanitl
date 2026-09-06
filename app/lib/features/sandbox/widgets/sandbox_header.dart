@@ -14,10 +14,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/domain/domain.dart';
 import '../../../core/ui/hover_label.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/work_dir_picker.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/sandbox_status_provider.dart';
 import '../sandbox_text.dart';
-import 'work_dir_picker.dart';
 
 /// The header row.
 class SandboxHeader extends ConsumerWidget {
@@ -61,7 +61,26 @@ class SandboxHeader extends ConsumerWidget {
           Expanded(
             child: Align(
               alignment: Alignment.centerRight,
-              child: WorkDirPicker(status: status),
+              child: WorkDirPicker(
+                workDir: status.workDirHost,
+                workMode: status.workMode,
+                chooseLabel: l10n.sandboxWorkDirChoose,
+                noneLabel: l10n.sandboxWorkDirNone,
+                readOnlyLabel: l10n.sandboxWorkModeRo,
+                readWriteLabel: l10n.sandboxWorkModeRw,
+                // While the sandbox is up the mount cannot change; a picker
+                // that answered would show a folder the running agent does
+                // not have.
+                lockedLabel: status.isUp || status.isBusy
+                    ? l10n.sandboxWorkDirLocked
+                    : null,
+                onPick: (String dir) => unawaited(
+                  ref.read(sandboxStatusProvider.notifier).plan(workDir: dir),
+                ),
+                onMode: (WorkMode mode) => unawaited(
+                  ref.read(sandboxStatusProvider.notifier).plan(workMode: mode),
+                ),
+              ),
             ),
           ),
           SizedBox(width: tokens.spacing.x3),

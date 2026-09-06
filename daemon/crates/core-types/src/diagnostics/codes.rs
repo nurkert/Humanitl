@@ -49,7 +49,8 @@ pub static AREAS: &[AreaInfo] = &[
         prefix: "DAEMON",
         first: 1,
         last: 19,
-        note: "Start, Erreichbarkeit, Version des Daemons",
+        note: "001-004 Start, Erreichbarkeit, Version des Daemons, \
+               005-008 die Nutzer-Unit von `daemon install` (HUM-044)",
     },
     AreaInfo {
         area: "ipc",
@@ -64,7 +65,8 @@ pub static AREAS: &[AreaInfo] = &[
         first: 1,
         last: 19,
         note: "001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), \
-               010-012 Test-Wurzel und ihr Flag (HUM-087)",
+               010-012 Test-Wurzel und ihr Flag (HUM-087), 013 der Projektordner \
+               der Einrichtung (HUM-044)",
     },
     AreaInfo {
         area: "sandbox",
@@ -207,6 +209,40 @@ registry! {
     DAEMON_003 => "daemon", "Socket bereits belegt", "#daemon_003";
     /// Laufzeitverzeichnis oder Socket-Datei konnte nicht angelegt werden.
     DAEMON_004 => "daemon", "Laufzeitverzeichnis oder Socket nicht anlegbar", "#daemon_004";
+    // HUM-044: `humanitl daemon install`. Der Befehl schreibt eine Datei auf
+    // den Rechner des Menschen; jeder Weg, auf dem das schiefgehen kann, hat
+    // hier seinen eigenen Code, damit die Zeile in der Oberfläche sagt, was
+    // wirklich passiert ist.
+    /// Unter `~/.config/systemd/user/humanitld.service` liegt eine Unit, die
+    /// Humanitl nicht geschrieben hat.
+    ///
+    /// Erkannt an der Marke in der ersten Zeile. Der Befehl weigert sich dann
+    /// und überschreibt nichts: Die Datei bestimmt, was beim Anmelden startet,
+    /// und wer sie von Hand geschrieben hat, hat einen Grund dafür gehabt. Der
+    /// Vorschlag ist, sie beiseitezulegen (HUM-044).
+    DAEMON_005 => "daemon", "Fremde Unit-Datei wird nicht überschrieben", "#daemon_005";
+    /// Die Unit-Datei ließ sich nicht schreiben.
+    ///
+    /// Das Verzeichnis war nicht anlegbar, die Datei nicht schreibbar oder das
+    /// Umbenennen scheiterte. Geschrieben wird über eine Nachbardatei und
+    /// `rename`, also bleibt im Fehlerfall entweder die alte Fassung stehen
+    /// oder gar keine — nie eine halbe (HUM-044).
+    DAEMON_006 => "daemon", "Unit-Datei nicht schreibbar", "#daemon_006";
+    /// Neben der laufenden Kommandozeile liegt kein `humanitld`.
+    ///
+    /// `ExecStart` entsteht aus `std::env::current_exe()` und dem Nachbarn
+    /// dieses Pfades, nie aus `PATH` und nie aus einem Konfigurationswert: Was
+    /// beim Anmelden startet, soll dieselbe Fassung sein wie das Programm, das
+    /// die Unit geschrieben hat (HUM-044).
+    DAEMON_007 => "daemon", "humanitld liegt nicht neben humanitl", "#daemon_007";
+    /// systemd hat die geschriebene Unit nicht übernommen.
+    ///
+    /// `systemctl --user daemon-reload` oder `enable --now` ist mit einem
+    /// Fehler zurückgekommen. Was dieser Aufruf geschrieben hat, wird dabei
+    /// zurückgenommen: Eine Unit, die systemd nicht annimmt, soll nicht
+    /// liegenbleiben und beim nächsten Anmelden von selbst auftauchen
+    /// (HUM-044).
+    DAEMON_008 => "daemon", "systemd hat die Unit nicht übernommen", "#daemon_008";
 
     /// Das Token aus `$XDG_RUNTIME_DIR/humanitl/token` fehlt oder passt nicht.
     IPC_001 => "ipc", "Ungültiges Token", "#ipc_001";
@@ -269,6 +305,21 @@ registry! {
     /// Verzeichnis mit, welcher Wurzel der Daemon vertraut. Abgelehnt wird vor
     /// dem Lesen (Error, HUM-087).
     CONFIG_012 => "config", "Test-Wurzel ohne absoluten Pfad", "#config_012";
+    /// Es wurde kein Projektordner gewählt. Der Agent arbeitet in genau einem
+    /// Ordner, und solange keiner benannt ist, gibt es nichts zu starten — kein
+    /// Fehler des Nutzers, sondern ein offener Schritt der Einrichtung. Der
+    /// Befund trägt deshalb keinen `fix`: Die Zeile im Setup-Bildschirm öffnet
+    /// den Ordner-Knopf, und ein zweiter Knopf daneben führte nur woanders hin
+    /// (HUM-044).
+    ///
+    /// **Kein Weg im Daemon erhebt diesen Code, und das ist Absicht.** Er wird
+    /// von der Anwendung gebaut (`ClientDiagnostics.noProjectFolder`), wie
+    /// `DAEMON_001`: `Sandbox(Status)` antwortet mit leerem `work_dir_host` und
+    /// meldet dazu nichts, weil ein offener Schritt der Einrichtung kein Fehler
+    /// des Daemons ist. Er steht trotzdem hier, damit Anwendung und
+    /// `docs/DIAGNOSTICS.md` denselben Titel und denselben Anker nennen — wer
+    /// den erhebenden Pfad im Daemon sucht, sucht vergeblich.
+    CONFIG_013 => "config", "Kein Projektordner gewählt", "#config_013";
 
     /// `bwrap` ist nicht installiert oder liegt nicht im Pfad.
     SANDBOX_001 => "sandbox", "bwrap nicht gefunden", "#sandbox_001";

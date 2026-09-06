@@ -37,13 +37,20 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
   @override
   Future<SandboxStatus> build() async {
     final DaemonClient client = ref.watch(daemonClientProvider);
-    SandboxStatus status = await _drain(client.sandboxStatus());
+    SandboxStatus status = await _drain(
+      client.sandboxStatus(),
+      call: SandboxCall.status,
+    );
     // The ring in the header reads this provider and is on screen from the
     // first frame. A sandbox that was already up when the window opened has
     // three results to give, and a grey ring over a running sandbox is an
     // answer nobody asked for (BACKLOG.md 5).
     if (status.isUp) {
-      status = await _drain(client.checkIsolation(), from: status);
+      status = await _drain(
+        client.checkIsolation(),
+        from: status,
+        call: SandboxCall.isolationCheck,
+      );
     }
     return status;
   }
@@ -56,10 +63,14 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
   /// lines: an unknown guarantee is honest only as long as nobody could have
   /// asked (CONVENTIONS 4.13).
   Future<void> refresh() async {
-    await _apply((DaemonClient client) => client.sandboxStatus());
+    await _apply(
+      (DaemonClient client) => client.sandboxStatus(),
+      call: SandboxCall.status,
+    );
     if (state.value?.isUp ?? false) {
       await _apply(
         (DaemonClient client) => client.checkIsolation(),
+        call: SandboxCall.isolationCheck,
         clearDiagnostics: false,
       );
     }
@@ -75,23 +86,46 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
   Future<void> plan({String? workDir, WorkMode? workMode}) => _apply(
     (DaemonClient client) =>
         client.planSandbox(workDir: workDir, workMode: workMode),
+    call: SandboxCall.plan,
   );
 
   /// Starts the sandbox. Every event of the start updates the snapshot as it
   /// arrives, so `starting` is on the screen before `running` is.
-  Future<void> start() =>
-      _apply((DaemonClient client) => client.startSandbox());
+  Future<void> start() => _apply(
+    (DaemonClient client) => client.startSandbox(),
+    call: SandboxCall.start,
+  );
 
   /// Stops the sandbox.
-  Future<void> stop() => _apply((DaemonClient client) => client.stopSandbox());
+  Future<void> stop() => _apply(
+    (DaemonClient client) => client.stopSandbox(),
+    call: SandboxCall.stop,
+  );
 
-  /// Runs [call] and folds every event into the snapshot as it arrives.
+  /// Runs [request] and folds every event into the snapshot as it arrives.
+  ///
+  /// [call] says which of the `Sandbox` calls this is, so that a finding can
+  /// be drawn where it belongs: `sandboxCallProvider` carries it, and
+  /// [SandboxCall.isAboutTheFolder] is what the setup screen asks.
   ///
   /// [clearDiagnostics] is false where one gesture makes two calls -- a
   /// refresh that then measures the isolation -- because the second call
   /// would otherwise drop the findings of the first.
+  ///
+  /// **[call] travels with the stream and is never a field of this notifier.**
+  /// Two `Sandbox` calls can be in flight at the same time: the start of a
+  /// sandbox takes as long as a sandbox takes to come up, and a `plan` from
+  /// the folder picker or the `refresh` that a visible sandbox section fires
+  /// runs to its end while the start still waits for its next event. A field
+  /// would carry whichever call was begun last, so the refusal of the start
+  /// would be recorded as `plan` or `status`, `SandboxCall.isAboutTheFolder`
+  /// would say yes, and `_projectCheck` would put the start's finding back on
+  /// the project row -- the very dead end `docs/UX.md` 4.4 forbids, returning
+  /// through a race. The parameter is captured by the closure of this call and
+  /// no other one can reach it.
   Future<void> _apply(
-    Stream<SandboxUpdate> Function(DaemonClient) call, {
+    Stream<SandboxUpdate> Function(DaemonClient) request, {
+    required SandboxCall call,
     bool clearDiagnostics = true,
   }) async {
     final DaemonClient client = ref.read(daemonClientProvider);
@@ -103,8 +137,8 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
       current = current.copyWith(diagnostics: const <Diagnostic>[]);
     }
     try {
-      await for (final SandboxUpdate update in call(client)) {
-        current = _fold(current, update);
+      await for (final SandboxUpdate update in request(client)) {
+        current = _fold(current, update, call);
         state = AsyncData<SandboxStatus>(current);
       }
     } on DaemonException catch (error, stack) {
@@ -113,21 +147,26 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
   }
 
   /// Reads [updates] to its end and answers the snapshot it leaves behind.
+  ///
+  /// [call] says which `Sandbox` call [updates] belongs to, for the same
+  /// reason it is a parameter of [_apply] and not a field.
   Future<SandboxStatus> _drain(
     Stream<SandboxUpdate> updates, {
+    required SandboxCall call,
     SandboxStatus from = const SandboxStatus(),
   }) async {
     SandboxStatus status = from;
     await for (final SandboxUpdate update in updates) {
-      status = _fold(status, update);
+      status = _fold(status, update, call);
     }
     return status;
   }
 
-  /// One event on top of [current].
+  /// One event of [call] on top of [current].
   SandboxStatus _fold(
     SandboxStatus current,
     SandboxUpdate update,
+    SandboxCall call,
   ) => switch (update) {
     // A snapshot replaces the old one but keeps the findings of this
     // operation: the daemon sends the reason first and the failed state
@@ -143,8 +182,20 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
       current
           .carryChecksInto(status)
           .copyWith(diagnostics: current.diagnostics),
-    SandboxUpdateDiagnostic(:final Diagnostic diagnostic) => current.copyWith(
-      diagnostics: <Diagnostic>[...current.diagnostics, diagnostic],
+    // Der Befund kommt mitsamt der Frage, wo er hingehört: Die Leitung hat für
+    // alle Aufrufe dasselbe Feld, aber ein Befund von `Plan` redet über den
+    // gewählten Ordner und einer von `Start` über den Druck auf den Knopf
+    // (`docs/UX.md` 4.4). Geschrieben wird erst hier und nicht schon beim
+    // Aufruf: Was zählt, ist der Aufruf, der die Befunde erzeugt hat, die
+    // gerade dastehen. Welcher das ist, sagt [call] und kein Feld -- der
+    // Grund dafür steht bei [_apply]. Macht eine Geste zwei Aufrufe und
+    // liefern beide einen Befund -- `refresh` mit `Sandbox(Status)` und dann
+    // der Isolationsprüfung --, dann gilt der zuletzt eingetroffene für die
+    // ganze Liste.
+    SandboxUpdateDiagnostic(:final Diagnostic diagnostic) => _withDiagnostic(
+      current,
+      diagnostic,
+      call,
     ),
     SandboxUpdateLog(:final SandboxLogLine line) => _log(current, line),
     SandboxUpdateArgvLine() => current,
@@ -186,6 +237,34 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
     ref.read(sandboxLogProvider.notifier).add(line);
     return current;
   }
+
+  /// Appends [diagnostic] and writes down that [call] produced it.
+  SandboxStatus _withDiagnostic(
+    SandboxStatus current,
+    Diagnostic diagnostic,
+    SandboxCall call,
+  ) {
+    ref.read(sandboxCallProvider.notifier).record(call);
+    return current.copyWith(
+      diagnostics: <Diagnostic>[...current.diagnostics, diagnostic],
+    );
+  }
+}
+
+/// Which `Sandbox` call produced the findings the snapshot carries right now.
+///
+/// A provider of its own and not a field on the snapshot: the snapshot is the
+/// mirror of `SandboxEvent.Status` and carries nothing the daemon did not say
+/// (ADR-018). Which of our own calls a finding came back from is knowledge of
+/// this client, and the setup screen needs it to draw the finding under the
+/// control it belongs to (`docs/UX.md` 4.4).
+@Riverpod(keepAlive: true, name: 'sandboxCallProvider')
+class SandboxCallOfDiagnostics extends _$SandboxCallOfDiagnostics {
+  @override
+  SandboxCall build() => SandboxCall.status;
+
+  /// Writes down that [call] produced the findings that stand now.
+  void record(SandboxCall call) => state = call;
 }
 
 /// The lines the daemon logged about the sandbox, oldest first.

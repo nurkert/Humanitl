@@ -16,6 +16,7 @@ import 'package:humanitl/features/intercept/intercept_screen.dart';
 import 'package:humanitl/features/intercept/providers/now.dart';
 import 'package:humanitl/features/shell/providers/connection.dart';
 
+import '../../harness/ui_state.dart';
 import 'fixtures.dart';
 
 /// Ein Fake mit stehender Uhr.
@@ -78,6 +79,7 @@ Future<void> pumpIntercept(
   WidgetTester tester, {
   required FakeDaemonClient client,
   List<Override> overrides = const <Override>[],
+  Override? uiState,
   Size size = const Size(1400, 900),
   TextScaler textScaler = TextScaler.noScaling,
   bool disableAnimations = false,
@@ -90,6 +92,12 @@ Future<void> pumpIntercept(
         daemonClientProvider.overrideWithValue(client),
         connectionHeartbeatProvider.overrideWithValue(null),
         nowProvider.overrideWith(() => FixedNow(testStart)),
+        // Der einmalige Hinweis gilt als gesehen, solange ein Test nichts
+        // anderes sagt (`test/harness/ui_state.dart`). Er steht als eigener
+        // Parameter und nicht in `overrides`: Riverpod verweigert zwei
+        // Overrides desselben Providers, und ein Test, der den Hinweis pruefen
+        // will, muss diesen hier ersetzen koennen.
+        uiState ?? uiStateOverride(),
         ...overrides,
       ],
       child: MediaQuery(

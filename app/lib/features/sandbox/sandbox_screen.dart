@@ -15,6 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/domain/domain.dart';
 import '../../core/ipc/daemon_client.dart';
+import '../../core/time/now.dart';
 import '../../core/ui/fix_control.dart';
 import '../../core/ui/h_diagnostic_card.dart';
 import '../../core/ui/ui.dart';
@@ -306,41 +307,43 @@ class SandboxStatusBar extends StatelessWidget {
 
 /// How long the sandbox has been up, counted in whole seconds.
 ///
-/// Its own widget with its own timer, so the second that ticks rebuilds this
-/// text and nothing else (`docs/UX.md` 7). The digits jump; they never roll
-/// (2.9).
-class _Uptime extends StatefulWidget {
+/// Its own widget, so the second that ticks rebuilds this text and nothing
+/// else (`docs/UX.md` 7). The digits jump; they never roll (2.9).
+///
+/// # Die Sekunde kommt aus der Uhr des Programms, nie aus einem eigenen Timer
+///
+/// [nowProvider] ist die eine UI-Uhr, und ein eigener `Timer.periodic` neben
+/// ihr wäre nicht nur einer zu viel, sondern der falsche: Bricht die
+/// Verbindung, hängt die Shell `FrozenSections` über diesen Abschnitt und
+/// ersetzt darin genau diesen Provider durch einen, der stehen bleibt. Der
+/// Abschnitt wird dabei umgehängt und nicht zerstört (die `GlobalKey`s in
+/// `ShellScreen._sections`), also überlebte ein privater Timer den Bruch und
+/// zählte eine Laufzeit weiter, während das Banner darüber sagt, dass alles
+/// darunter ein Schnappschuss ist (`docs/UX.md` 4.2, Fall 4). Eine Laufzeit,
+/// die in einem eingefrorenen Bild weiterläuft, behauptet eine Messung, die
+/// niemand gemacht hat (CONVENTIONS 4.13).
+///
+/// Beobachtet wird über ein `.select` auf den fertigen Text: Die Uhr
+/// veröffentlicht alle 250 ms, die Anzeige ändert sich einmal je Sekunde, und
+/// nur diese Änderung baut das Widget neu (`docs/UX.md` 7, Gatter „eine
+/// Sekunde Uhr").
+class _Uptime extends ConsumerWidget {
   const _Uptime({required this.startedAt});
 
   final DateTime startedAt;
 
   @override
-  State<_Uptime> createState() => _UptimeState();
-}
-
-class _UptimeState extends State<_Uptime> {
-  Timer? _timer;
-
-  @override
-  void initState() {
-    super.initState();
-    _timer = Timer.periodic(HMotion.clockTick, (Timer _) => setState(() {}));
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
-    return Text(
-      l10n.sandboxUptime(
-        sandboxUptimeText(DateTime.now().difference(widget.startedAt)),
+    final String uptime = ref.watch(
+      nowProvider.select(
+        (DateTime now) => sandboxUptimeText(now.difference(startedAt)),
       ),
+    );
+    return Text(
+      l10n.sandboxUptime(uptime),
+      key: const Key('sandbox-uptime'),
       style: tokens.typography.mono11.tinted(tokens.colors.fg2),
     );
   }

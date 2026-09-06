@@ -8,6 +8,8 @@
 // Das Schreiben in die Konfiguration braucht `SetConfig` und kommt mit
 // HUM-069.
 
+import 'dart:io';
+
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -203,6 +205,333 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(HButton), findsNothing);
     expect(find.byType(HBadge), findsNothing);
+  });
+
+  testWidgets('install_service_runs_the_command_that_does_it', (
+    WidgetTester tester,
+  ) async {
+    // Die Tabelle von HUM-044 gibt `DAEMON_001` die Aktion `InstallService`,
+    // und das Akzeptanzkriterium ist gemessen: „Klick auf Fix installiert und
+    // startet die Unit". Rot, sobald der Zweig wieder nur kopiert.
+    int runs = 0;
+    await tester.pumpWidget(
+      host(
+        FixControl(
+          fix: const FixAction.installService(),
+          installService: () async {
+            runs++;
+            return null;
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(HBadge), findsOneWidget);
+    // Der Befehl steht sichtbar daneben, bevor er laeuft.
+    expect(find.text(installServiceCommand), findsOneWidget);
+    // Nie mit `sudo`: der Daemon ist ein Nutzerdienst.
+    expect(installServiceCommand, isNot(contains('sudo')));
+
+    await tester.tap(find.byKey(const Key('setup-fix-install')));
+    await tester.pumpAndSettle();
+
+    expect(runs, 1);
+    // Ohne Fehlschlag bleibt die Zeile ohne Befund und ohne Kopierknopf: Die
+    // Aktion ist eine.
+    expect(find.byKey(const Key('setup-fix-install-failed')), findsNothing);
+    expect(find.byKey(const Key('setup-fix-copy')), findsNothing);
+  });
+
+  /// Und ohne eingesetzte Fassung läuft der wirkliche Befehl.
+  ///
+  /// Jeder andere Test dieses Knopfs setzt seine eigene Fassung ein, damit
+  /// kein Widget-Test einen Prozess startet -- und genau dadurch war die
+  /// Vorgabe in `_install` von keinem Test gedeckt: Ein `installService`, das
+  /// still `null` liefert, ließe den Knopf nichts tun, keine Karte zeigen und
+  /// die Zeile rot stehen, während die Testsammlung grün bleibt.
+  ///
+  /// Hier hängt keine Fassung daneben, also läuft [runInstallService]. Neben
+  /// dem Testläufer liegt keine Kommandozeile namens `humanitl`, also verweigert
+  /// [installServiceCandidate] den Start und der Rückgabewert ist der Befund,
+  /// den die Karte zeigt. Es startet dabei kein Prozess.
+  testWidgets('install_service_without_a_stand_in_runs_the_real_command', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      host(const FixControl(fix: FixAction.installService())),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('setup-fix-install')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('setup-fix-install-failed')),
+      findsOneWidget,
+      reason: 'the default runner answers, and its answer is drawn',
+    );
+  });
+
+  testWidgets('install_service_says_it_when_the_command_fails', (
+    WidgetTester tester,
+  ) async {
+    // Ein Fehlschlag ist ein `Diagnostic` wie jeder andere, kein stilles
+    // Nichts (`docs/UX.md` 4.4). Rot, sobald der Zweig ihn verschluckt.
+    final List<String> written = captureClipboard(tester);
+    await tester.pumpWidget(
+      host(
+        FixControl(
+          fix: const FixAction.installService(),
+          installService: () async => const Diagnostic(
+            code: DiagnosticCodes.daemonUnreachable,
+            severity: Severity.error,
+            why: 'systemctl --user daemon-reload exited with 1',
+            fix: FixAction.copyCommand(command: installServiceCommand),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('setup-fix-install')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('setup-fix-install-failed')), findsOneWidget);
+    expect(
+      find.textContaining('systemctl --user daemon-reload exited with 1'),
+      findsOneWidget,
+    );
+
+    // Und danach steht der Weg von Hand da: derselbe Befehl zum Kopieren.
+    await tester.tap(find.byKey(const Key('setup-fix-copy')));
+    await tester.pump();
+    expect(written, <String>[installServiceCommand]);
+    await tester.pump(HMotion.copyFeedback);
+    await tester.pumpAndSettle();
+  });
+
+  group('installServiceCandidate', () {
+    // 0o755 ueberall: die Datei und jedes Verzeichnis darueber gehoeren dem
+    // Eigentuemer allein. Wer einen Modus pruefen will, setzt ihn je Test.
+    int owned(String path) => 0x1ED;
+
+    String? found(
+      String running,
+      bool Function(String) exists, [
+      int Function(String)? modeOf,
+    ]) => installServiceCandidate(
+      runningExecutable: running,
+      exists: exists,
+      modeOf: modeOf ?? owned,
+    ).path;
+
+    String? why(
+      String running,
+      bool Function(String) exists, [
+      int Function(String)? modeOf,
+    ]) => installServiceCandidate(
+      runningExecutable: running,
+      exists: exists,
+      modeOf: modeOf ?? owned,
+    ).refusal;
+
+    test('takes the command line from bin, as the package lays it out', () {
+      // HUM-053 (`backlog/sprint-4.md`): das Flutter-Binary liegt als
+      // `/usr/lib/humanitl/humanitl`, die Kommandozeile eine Ebene tiefer.
+      expect(
+        found(
+          '/usr/lib/humanitl/humanitl',
+          (String p) => p == '/usr/lib/humanitl/bin/humanitl',
+        ),
+        '/usr/lib/humanitl/bin/humanitl',
+      );
+    });
+
+    test('takes a sibling when the bundle keeps no bin directory', () {
+      expect(
+        found(
+          '/opt/humanitl/humanitl-app',
+          (String p) => p == '/opt/humanitl/humanitl',
+        ),
+        '/opt/humanitl/humanitl',
+      );
+    });
+
+    test('prefers bin over a sibling when both are there', () {
+      expect(
+        found('/opt/humanitl/humanitl-app', (String _) => true),
+        '/opt/humanitl/bin/humanitl',
+      );
+    });
+
+    test('never starts the application itself', () {
+      expect(
+        found(
+          '/usr/lib/humanitl/humanitl',
+          (String p) => p == '/usr/lib/humanitl/humanitl',
+        ),
+        isNull,
+      );
+    });
+
+    test('never falls back to PATH', () {
+      expect(found('/opt/humanitl/humanitl-app', (String _) => false), isNull);
+    });
+
+    test('refuses a binary the group may write', () {
+      // Nur das Gruppenbit, 0o775. Mit 0o777 in beiden Faellen waere die Maske
+      // nur zur Haelfte gehalten: eine Mutation, die eines der beiden Bits
+      // streicht, bliebe gruen.
+      expect(
+        found(
+          '/opt/humanitl/humanitl-app',
+          (String p) => p == '/opt/humanitl/bin/humanitl',
+          (String p) => p == '/opt/humanitl/bin/humanitl' ? 0x1FD : 0x1ED,
+        ),
+        isNull,
+      );
+    });
+
+    test('refuses a binary all others may write', () {
+      // Nur das Andere-Bit, 0o757.
+      expect(
+        found(
+          '/opt/humanitl/humanitl-app',
+          (String p) => p == '/opt/humanitl/bin/humanitl',
+          (String p) => p == '/opt/humanitl/bin/humanitl' ? 0x1EF : 0x1ED,
+        ),
+        isNull,
+      );
+    });
+
+    test('refuses a grandparent the others may write', () {
+      // Der Fall, den der Doc-Kommentar als Grund nennt: Wer
+      // `/opt/humanitl` schreiben darf, ersetzt `bin` samt Inhalt und waehlt
+      // die Rechte darin selbst. Eine Pruefung, die beim Elternverzeichnis
+      // aufhoert, sieht davon nichts.
+      expect(
+        found(
+          '/opt/humanitl/humanitl-app',
+          (String p) => p == '/opt/humanitl/bin/humanitl',
+          (String p) => p == '/opt/humanitl' ? 0x1FF : 0x1ED,
+        ),
+        isNull,
+      );
+    });
+
+    test('a sticky directory is not a writable one', () {
+      // `/tmp` traegt 1777: jeder darf anlegen, nur der Eigentuemer eines
+      // Eintrags darf ihn ersetzen. Ein AppImage haengt darunter, und ohne
+      // diese Ausnahme verloere es den Knopf.
+      expect(
+        found(
+          '/tmp/.mount_hum42/humanitl-app',
+          (String p) => p == '/tmp/.mount_hum42/bin/humanitl',
+          (String p) => p == '/tmp' ? 0x3FF : 0x1ED,
+        ),
+        '/tmp/.mount_hum42/bin/humanitl',
+      );
+    });
+
+    test('a path it cannot measure is a path it does not run', () {
+      expect(
+        found(
+          '/opt/humanitl/humanitl-app',
+          (String _) => true,
+          (String _) => throw const FileSystemException('gone'),
+        ),
+        isNull,
+      );
+    });
+
+    test('the refusal says which of the three it was', () {
+      // Der Satz muss messen, nicht raten: eine Datei, die daliegt und nur
+      // wegen ihrer Rechte verworfen wurde, ist etwas anderes als eine, die
+      // fehlt (CONVENTIONS 4.13).
+      expect(
+        why('/opt/humanitl/humanitl-app', (String _) => false),
+        contains('lies in /opt/humanitl/bin or beside'),
+      );
+      expect(
+        why(
+          '/opt/humanitl/humanitl-app',
+          (String p) => p == '/opt/humanitl/bin/humanitl',
+          (String p) => p == '/opt/humanitl' ? 0x1FF : 0x1ED,
+        ),
+        contains('may be written by somebody other than you'),
+      );
+      expect(
+        why(
+          '/opt/humanitl/humanitl-app',
+          (String _) => true,
+          (String _) => throw const FileSystemException('gone'),
+        ),
+        contains('could not be read'),
+      );
+    });
+  });
+
+  group('runInstallService', () {
+    test('runs the binary with its arguments as a list', () async {
+      String? seenExecutable;
+      List<String>? seenArguments;
+      final Diagnostic? failure = await runInstallService(
+        resolve: () => (path: '/opt/humanitl/humanitl', refusal: null),
+        run: (String executable, List<String> arguments) async {
+          seenExecutable = executable;
+          seenArguments = arguments;
+          return ProcessResult(1, 0, '', '');
+        },
+      );
+
+      expect(failure, isNull);
+      expect(seenExecutable, '/opt/humanitl/humanitl');
+      // Eine Liste, keine Zeile: Nichts davon geht durch eine Shell.
+      expect(seenArguments, <String>['daemon', 'install']);
+      expect(seenArguments, isNot(contains('sudo')));
+    });
+
+    test('turns a non-zero exit into a diagnostic with the reason', () async {
+      final Diagnostic? failure = await runInstallService(
+        resolve: () => (path: '/opt/humanitl/humanitl', refusal: null),
+        run: (String executable, List<String> arguments) async =>
+            ProcessResult(1, 3, '', 'DAEMON_005: the unit belongs to somebody'),
+      );
+
+      expect(failure, isNotNull);
+      expect(failure!.code, DiagnosticCodes.daemonUnreachable);
+      expect(failure.why, contains('exited with 3'));
+      expect(failure.why, contains('DAEMON_005'));
+      expect(
+        failure.fix,
+        const FixAction.copyCommand(command: installServiceCommand),
+      );
+    });
+
+    test('says so when no command line was found', () async {
+      final Diagnostic? failure = await runInstallService(
+        resolve: () => (path: null, refusal: 'nothing usable was found'),
+        run: (String executable, List<String> arguments) async =>
+            throw StateError('must not run'),
+      );
+
+      expect(failure, isNotNull);
+      // Der Satz der Absage wird durchgereicht, nicht durch einen eigenen
+      // ersetzt: Was gemessen wurde, weiss der Aufloeser, nicht dieser Aufruf.
+      expect(failure!.why, contains('nothing usable was found'));
+    });
+
+    test('turns a process that cannot start into a diagnostic', () async {
+      final Diagnostic? failure = await runInstallService(
+        resolve: () => (path: '/opt/humanitl/humanitl', refusal: null),
+        run: (String executable, List<String> arguments) async =>
+            throw const ProcessException('/opt/humanitl/humanitl', <String>[]),
+      );
+
+      expect(failure, isNotNull);
+      expect(failure!.why, contains('could not be started'));
+    });
   });
 
   testWidgets('change_setting_stays_a_badge_without_a_button', (

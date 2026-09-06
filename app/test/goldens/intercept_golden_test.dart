@@ -23,6 +23,7 @@ import 'package:humanitl/features/shell/providers/theme.dart';
 import 'package:humanitl/l10n/l10n.dart';
 
 import '../features/intercept/fixtures.dart';
+import '../harness/ui_state.dart';
 
 /// Die Uhr aller Goldens: 40 Sekunden nach dem Anhalten.
 final DateTime goldenNow = testStart.add(const Duration(seconds: 40));
@@ -74,6 +75,7 @@ List<Override> overridesFor(List<FlowDetail> details) {
     client.details[detail.summary.id] = detail;
   }
   return <Override>[
+    uiStateOverride(),
     daemonClientProvider.overrideWithValue(client),
     connectionHeartbeatProvider.overrideWithValue(null),
     nowProvider.overrideWith(() => FixedNow(goldenNow)),

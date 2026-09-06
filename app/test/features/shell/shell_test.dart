@@ -9,7 +9,6 @@ import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/shortcuts/intents.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/intercept/providers/flows.dart';
-import 'package:humanitl/features/setup/setup_screen.dart';
 import 'package:humanitl/features/shell/providers/navigation.dart';
 import 'package:humanitl/features/shell/providers/theme.dart';
 import 'package:humanitl/features/shell/section.dart';
@@ -35,8 +34,9 @@ void main() {
     await pumpApp(tester, client: FakeDaemonClient());
 
     expect(find.byType(ShellScreen), findsOneWidget);
-    expect(find.byType(SetupScreen), findsNothing);
-    expect(find.byType(RailEntry), findsNWidgets(5));
+    // Der Setup-Bildschirm ist seit HUM-044 der sechste Abschnitt: Er liegt im
+    // `IndexedStack` der Shell und ersetzt sie nicht mehr.
+    expect(find.byType(RailEntry), findsNWidgets(Section.values.length));
     expect(headerTitle(tester), 'Intercept');
 
     await pressCtrl(tester, LogicalKeyboardKey.digit2);
@@ -45,9 +45,12 @@ void main() {
     await pressCtrl(tester, LogicalKeyboardKey.digit5);
     expect(headerTitle(tester), 'Audit');
 
+    await pressCtrl(tester, LogicalKeyboardKey.digit6);
+    expect(headerTitle(tester), 'Setup');
+
     // Ctrl+9 hat keinen Abschnitt und tut nichts.
     await pressCtrl(tester, LogicalKeyboardKey.digit9);
-    expect(headerTitle(tester), 'Audit');
+    expect(headerTitle(tester), 'Setup');
     expect(tester.takeException(), isNull);
   });
 
@@ -225,7 +228,8 @@ void main() {
     final Navigation navigation = container.read(navigationProvider.notifier);
     navigation.goIndex(4);
     expect(container.read(navigationProvider), Section.audit);
-    navigation.goIndex(5);
+    // Eine Stelle hinter dem letzten Abschnitt, wie viele es auch sind.
+    navigation.goIndex(Section.values.length);
     expect(container.read(navigationProvider), Section.audit);
     navigation.goIndex(-1);
     expect(container.read(navigationProvider), Section.audit);

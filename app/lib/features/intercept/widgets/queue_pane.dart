@@ -23,6 +23,7 @@ import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/shortcuts/intents.dart';
 import '../../../core/ui/announce.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
@@ -712,7 +713,23 @@ class _FrozenLine extends StatelessWidget {
   static void _nothing() {}
 }
 
-/// What the pane shows while nothing waits: no spinner, one quiet sentence.
+/// Der Abschnitt, den die Aktion des Leerzustands öffnet: der letzte der
+/// Leiste, und das ist die Einrichtung mit dem Knopf, der eine Sitzung
+/// startet.
+///
+/// Der Index und nicht der Abschnitt selbst, weil kein Feature ein anderes
+/// importieren darf (ARCHITECTURE 5, `tools/check-deps.sh`): `Section` liegt
+/// in `features/shell`, [NavIntent] dagegen in `core/shortcuts`, wo die
+/// Tastatur-Sprache der Shell für alle steht. Beide Enden sind festgelegt --
+/// [navigationKeys] trägt „eine Taste je Eintrag von `Section`, die Liste
+/// wächst am Ende", und `Section.setup` steht ausdrücklich als letzter
+/// Eintrag, damit jede gelernte Ziffer ihre Bedeutung behält. Der Test
+/// `the empty queue leads to the start` hält das fest, indem er nach dem
+/// Klick den Start-Knopf der Einrichtung sucht.
+final int _setupSectionIndex = navigationKeys.length - 1;
+
+/// What the pane shows while nothing waits: no spinner, one quiet sentence,
+/// and the one action that changes it.
 class QueueEmptyState extends StatelessWidget {
   /// Creates the empty state.
   const QueueEmptyState({super.key});
@@ -747,6 +764,28 @@ class QueueEmptyState extends StatelessWidget {
               l10n.interceptEmptyHint,
               textAlign: TextAlign.center,
               style: tokens.typography.ui12.tinted(tokens.colors.fg1),
+            ),
+            SizedBox(height: tokens.spacing.x4),
+            // Die eine Aktion dieses Zustands, und sie ist gefüllt, weil der
+            // Bildschirm leer ist (`docs/UX.md` 3.1 und 4.2, Fall 3). Ohne
+            // sie endet der Weg hier: Solange nichts wartet und die vier
+            // Prüfungen der Einrichtung nicht alle grün sind, öffnet die
+            // Anwendung die Warteschlange, und der einzige Knopf, der eine
+            // Sitzung startet, steht unerreicht auf einem anderen Abschnitt.
+            //
+            // Sie startet nichts selbst. Was eine Sitzung startet, ist
+            // `Sandbox(Start)` hinter den vier Prüfungen, und die liegen in
+            // einem anderen Feature; diese Zeile führt dorthin, und dort
+            // steht der Knopf, der den Zustand der Maschine kennt (ADR-018).
+            HButton(
+              key: const Key('queue-start-session'),
+              variant: HButtonVariant.primary,
+              size: HButtonSize.md,
+              onPressed: () => Actions.maybeInvoke<NavIntent>(
+                context,
+                NavIntent(_setupSectionIndex),
+              ),
+              child: Text(l10n.interceptEmptyStart),
             ),
             SizedBox(height: tokens.spacing.x4),
             // The empty queue is the only teaching surface the program gets,

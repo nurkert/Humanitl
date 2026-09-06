@@ -12,9 +12,9 @@ Entfernen eines Codes.
 
 | Bereich | Präfix | Von | Bis | Wofür |
 |---|---|---|---|---|
-| daemon | `DAEMON` | 001 | 019 | Start, Erreichbarkeit, Version des Daemons |
+| daemon | `DAEMON` | 001 | 019 | 001-004 Start, Erreichbarkeit, Version des Daemons, 005-008 die Nutzer-Unit von `daemon install` (HUM-044) |
 | ipc | `IPC` | 001 | 009 | gRPC-Schnittstelle, Token, Aufrufe gegen den Zustand |
-| config | `CONFIG` | 001 | 019 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), 010-012 Test-Wurzel und ihr Flag (HUM-087) |
+| config | `CONFIG` | 001 | 019 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), 010-012 Test-Wurzel und ihr Flag (HUM-087), 013 der Projektordner der Einrichtung (HUM-044) |
 | sandbox | `SANDBOX` | 001 | 029 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 020-025 /work-Härtung (HUM-043) |
 | proxy | `PROXY` | 001 | 019 | Anfragen, Caps, Protokoll, 010-011 Grenzen der Verbindung (HUM-120) |
 | tls | `TLS` | 001 | 009 | CA, Zertifikate, Handschlag |
@@ -50,6 +50,22 @@ Socket bereits belegt
 #### DAEMON_004
 
 Laufzeitverzeichnis oder Socket nicht anlegbar
+
+#### DAEMON_005
+
+Fremde Unit-Datei wird nicht überschrieben
+
+#### DAEMON_006
+
+Unit-Datei nicht schreibbar
+
+#### DAEMON_007
+
+humanitld liegt nicht neben humanitl
+
+#### DAEMON_008
+
+systemd hat die Unit nicht übernommen
 
 ### Bereich ipc
 
@@ -126,6 +142,10 @@ Test-Wurzel ohne Flag oder Flag ohne Test-Wurzel
 #### CONFIG_012
 
 Test-Wurzel ohne absoluten Pfad
+
+#### CONFIG_013
+
+Kein Projektordner gewählt
 
 ### Bereich sandbox
 

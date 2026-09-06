@@ -28,6 +28,18 @@ export '../../core/shortcuts/intents.dart'
         PrevFlowIntent,
         isTextInputFocused;
 
+/// Close the one-time hint above the action bar. `Esc` (HUM-044).
+///
+/// It is bound on the screen and not inside the hint: `Esc` arrives where the
+/// focus is, and the hint takes no focus -- one that did would take the first
+/// tab stop away from the decision it explains (`docs/UX.md` 5.2). The action
+/// is disabled while no hint is open, so `Esc` falls through to whatever else
+/// wants it.
+class CloseCoachMarkIntent extends Intent {
+  /// Creates the intent.
+  const CloseCoachMarkIntent();
+}
+
 /// Open the remember grid without deciding anything. `Shift+Enter`.
 class OpenRememberIntent extends Intent {
   /// Creates the intent.
@@ -148,6 +160,8 @@ interceptShortcuts() => <ShortcutActivator, Intent>{
   const SingleActivator(LogicalKeyboardKey.enter, shift: true):
       const OpenRememberIntent(),
   const SingleActivator(LogicalKeyboardKey.keyN): const NoteIntent(),
+  const SingleActivator(LogicalKeyboardKey.escape):
+      const CloseCoachMarkIntent(),
   const SingleActivator(
     LogicalKeyboardKey.keyF,
     control: true,

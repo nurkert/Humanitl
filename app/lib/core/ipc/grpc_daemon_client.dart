@@ -59,6 +59,15 @@ class GrpcDaemonClient implements DaemonClient {
   /// Deadline of a unary call. Streams have none.
   final Duration callTimeout;
 
+  /// Deadline of `ProbeLlm`.
+  ///
+  /// Longer than [callTimeout] because the probe waits for a machine on the
+  /// network: the daemon clamps its own timeout at thirty seconds
+  /// (`MAX_TIMEOUT_MS`), and this deadline lies above it so that it only
+  /// bites when the daemon itself stops answering. `humanitl doctor` uses the
+  /// same number for the same reason (`cmd/doctor.rs::PROBE_TIMEOUT`).
+  static const Duration probeCallTimeout = Duration(seconds: 35);
+
   /// True when the app expects `humanitld --fake` on the socket.
   final bool fake;
 
@@ -359,6 +368,36 @@ class GrpcDaemonClient implements DaemonClient {
             break;
         }
       }
+    } on GrpcError catch (error) {
+      throw DaemonException(_translate(error));
+    } on IOException catch (error) {
+      throw DaemonException(_unreachable('$error'));
+    }
+  }
+
+  @override
+  Future<DoctorReport> doctor() async {
+    final pb.DoctorReport report = await _unary(
+      (CallOptions options) => _stub.doctor(Empty(), options: options),
+    );
+    return report.toDomain();
+  }
+
+  @override
+  Future<LlmProbe> probeLlm(String endpoint, {Duration? timeout}) async {
+    // No deadline of this client's own beyond the daemon's: the probe clamps
+    // its own timeout, and a client that gave up earlier would report "no
+    // answer" about an endpoint that was still answering.
+    final CallOptions options = await _options(timeout: probeCallTimeout);
+    final pb.ProbeLlmRequest request = pb.ProbeLlmRequest()
+      ..endpoint = endpoint
+      ..timeoutMs = timeout?.inMilliseconds ?? 0;
+    try {
+      final pb.ProbeLlmResponse response = await _stub.probeLlm(
+        request,
+        options: options,
+      );
+      return response.toDomain(endpoint);
     } on GrpcError catch (error) {
       throw DaemonException(_translate(error));
     } on IOException catch (error) {

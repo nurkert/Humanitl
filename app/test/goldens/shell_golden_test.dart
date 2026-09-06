@@ -11,8 +11,11 @@ import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/features/shell/providers/connection.dart';
 import 'package:humanitl/features/shell/providers/theme.dart';
 
+import '../harness/ui_state.dart';
+
 Widget shell(HThemeMode mode) => ProviderScope(
   overrides: [
+    uiStateOverride(),
     daemonClientProvider.overrideWithValue(FakeDaemonClient.empty()),
     connectionHeartbeatProvider.overrideWithValue(null),
     themeModeProvider.overrideWith(() => _FixedTheme(mode)),
