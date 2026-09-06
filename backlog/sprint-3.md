@@ -3222,14 +3222,13 @@ Bedingung: Ein ausgelieferter Test braucht die Umlenkung und lässt sich ohne si
 - Fixture-Test und `config_docs`-Test grün ohne erneutes Setzen von `UPDATE_CONFIG_DOCS`.
 - `tests/e2e/m2_first_decision/run.sh` unverändert grün.
 
-### Akzeptanzkriterien
-- [ ] `grep -rn "upstream_port_map" --include="*.rs" daemon/ | grep -v "/target/"` liefert keine Zeile.
-- [ ] `grep -rn "upstream_port_map" docs/ tests/ app/` liefert keine Zeile; in `backlog/` bleiben nur die Zeilen von CONVENTIONS 4.22 und dieses Issue.
-- [ ] Ein Start mit einer `config.toml`, die `[experimental] upstream_port_map = { "443" = 8443 }` enthält, läuft weiter und meldet `CONFIG_005` als Warnung mit Schlüssel, Issue und Grund; der Pfad steht dafür in `alias::RETIRED` (`backlog/CONVENTIONS.md` 4.25, entschieden in HUM-101).
-- [ ] `cargo test -p humanitl-config` grün, inklusive Fixture- und `config_docs`-Test ohne Neuschreiben der erzeugten Dateien.
-- [ ] `git diff -- daemon/crates/config/tests/fixtures/config.schema.json docs/CONFIG.md` zeigt ausschließlich Entfernungen, die den Schlüssel betreffen.
-- [ ] `tests/e2e/m2_first_decision/run.sh` Exit 0, `M2_EXPECTED_ASSERTIONS` weiterhin 47.
-- [ ] `backlog/CONVENTIONS.md` 4.22 nennt HUM-088, den Entfernungsgrund und die Bedingung, unter der der Schlüssel zurückkäme.
+- [x] Kein **Leser**: `grep -rn "upstream_port_map" --include="*.rs" daemon/ | grep -v "/target/"` trifft nur `alias::RETIRED` und erklärende Kommentare, keinen Zugriff auf einen Wert. **Berichtigt (2026-09-06):** Der ursprüngliche Wortlaut verlangte null Treffer und widersprach damit Kriterium 3, das den Eintrag in `RETIRED` verlangt.
+- [x] Keine **Zusage**: in `docs/` steht der Schlüssel nur noch in der Tabelle der entfallenen Schlüssel und in der Begründung von `docs/SECURITY.md`; `tests/` und `app/` treffen nicht. **Berichtigt (2026-09-06):** derselbe Widerspruch wie oben — die Tabelle entsteht aus `RETIRED`.
+- [x] Ein Start mit einer `config.toml`, die `[experimental] upstream_port_map = { "443" = 8443 }` enthält, läuft weiter und meldet `CONFIG_005` als Warnung mit Schlüssel, Issue und Grund; der Pfad steht dafür in `alias::RETIRED` (`backlog/CONVENTIONS.md` 4.25, entschieden in HUM-101). **Gemessen an der Binärdatei (2026-09-06):** `CONFIG_005`, voller Hochlauf, SIGTERM endet mit 0 und räumt ab.
+- [x] `cargo test -p humanitl-config` grün, inklusive Fixture- und `config_docs`-Test ohne Neuschreiben der erzeugten Dateien. **Gemessen (2026-09-06):** 167 Tests über acht Binärdateien, null Fehlschläge.
+- [x] `git diff -- daemon/crates/config/tests/fixtures/config.schema.json` zeigt ausschließlich Entfernungen (0 hinzugefügt, 15 entfernt). **Berichtigt (2026-09-06):** Für `docs/CONFIG.md` gilt das nicht mehr — dort kam die Spalte „Form“ samt Erklärung hinzu, ohne die die Unterscheidung zwischen entfallenem Wert und entfallener Tabelle nirgends stünde.
+- [x] `tests/e2e/m2_first_decision/run.sh` Exit 0, `M2_EXPECTED_ASSERTIONS` unverändert. **Berichtigt (2026-09-06):** die Zahl steht seit HUM-087 auf 69, nicht auf 47; gemessen 69.
+- [x] `backlog/CONVENTIONS.md` 4.22 nennt HUM-088, den Entfernungsgrund und die Bedingung, unter der der Schlüssel zurückkäme. **Gemessen (2026-09-06):** drei Nennungen in 4.22, dazu der neue vierte Punkt in 4.25.
 - [ ] `make check` grün und `tools/verify-commit.sh` grün gegen den Commit, nicht gegen den Arbeitsbaum.
 
 ### Fallstricke
