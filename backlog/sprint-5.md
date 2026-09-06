@@ -1617,14 +1617,14 @@ ist der interessantere Befund.
   dass die Frist und nicht nur ihr Helfer geprüft wird.
 
 ### Akzeptanzkriterien
-- [ ] **Ein Lauf hinterlässt keine Sandbox.** Vor und nach `cargo test -p humanitl-ipc --test terminal` dieselbe Zahl `bwrap`-Prozesse, dreimal wiederholt; der Prozess endet, statt im `wait` zu stehen.
-- [ ] Jeder Stop-Strom wird bis zum Ende gelesen, nicht bis zum ersten Ereignis; kein Aufruf von `stream(stop())` endet mehr auf `.next()`.
-- [ ] Die drei Stop-Ströme haben **keine** Frist, und daneben steht, warum: Abbrechen heißt den Empfänger fallen lassen, und das ist die Ursache selbst. Ihre Dauer wird stattdessen gemessen und hinterher beurteilt.
-- [ ] Jeder **andere** Wartepunkt auf einen Strom steht in `within`, `within_at` oder `timeout`.
-- [ ] Eine abgelaufene Frist nennt Label, letzten Zustand und Ereigniszahl.
-- [ ] Ein Start, der `Failed` meldet, überspringt weiterhin mit `SKIP_MARKER`, statt rot zu werden.
-- [ ] `cargo test -p humanitl-ipc --test terminal` ist grün, allein und parallel zu einem zweiten Lauf des Arbeitsbereichs.
-- [ ] `make check` grün.
+- [x] **Ein Lauf hinterlässt keine Sandbox.** Vor und nach `cargo test -p humanitl-ipc --test terminal` dieselbe Zahl `bwrap`-Prozesse, dreimal wiederholt; der Prozess endet, statt im `wait` zu stehen.
+- [x] Jeder Stop-Strom wird bis zum Ende gelesen, nicht bis zum ersten Ereignis; kein Aufruf von `stream(stop())` endet mehr auf `.next()`.
+- [x] Die drei Stop-Ströme haben **keine** Frist, und daneben steht, warum: Abbrechen heißt den Empfänger fallen lassen, und das ist die Ursache selbst. Ihre Dauer wird stattdessen gemessen und hinterher beurteilt.
+- [x] Jeder **andere** Wartepunkt auf einen Strom steht in `within`, `within_at` oder `timeout`.
+- [x] Eine abgelaufene Frist nennt Label, letzten Zustand und Ereigniszahl.
+- [x] Ein Start, der `Failed` meldet, überspringt weiterhin mit `SKIP_MARKER`, statt rot zu werden.
+- [x] `cargo test -p humanitl-ipc --test terminal` ist grün, allein und parallel zu einem zweiten Lauf des Arbeitsbereichs.
+- [x] `make check` grün.
 
 ### Fallstricke
 - `with_session` reicht die Panik des Rumpfes mit `resume_unwind` weiter. Eine
