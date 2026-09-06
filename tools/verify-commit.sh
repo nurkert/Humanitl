@@ -142,6 +142,15 @@ fi
 #
 # Der **Baum**: Der Lauf loescht ihn beim Anlegen und beim Aufraeumen. Zwei
 # Laeufe darin nehmen einander die Quellen weg, waehrend der andere darin testet.
+# Am 2026-09-05 ist genau das passiert, und der Schaden war nicht ein roter Lauf,
+# sondern ein Lauf, der nie endete: Dem `frontend_server` von Dart wurde sein
+# Arbeitsverzeichnis unter den Fuessen geloescht, er rief `Uri.base`, das ruft
+# `getcwd()`, und er starb mit
+# `PathNotFoundException: Getting current working directory failed, path = ''`.
+# Der Testlaeufer wartete danach auf einen Uebersetzer, den es nicht mehr gab.
+# Der Prozess stand am naechsten Tag noch, 25 Stunden, bei null Prozent CPU, mit
+# acht verwaisten `flutter_tester` daneben. Ein Lauf, der haengt, sagt niemandem
+# etwas -- deswegen diese Sperre und nicht bloss ein Baum je Commit.
 #
 # Eine Sperre allein reichte nur, solange beide Pfade zusammen voreingestellt
 # sind. Wer eine Variable setzt und die andere nicht, teilte sonst genau eine der
