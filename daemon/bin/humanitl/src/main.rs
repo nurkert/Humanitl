@@ -15,9 +15,11 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod ask_terminal;
 mod cli;
 mod cmd;
 mod render;
+mod tty;
 
 use std::process::ExitCode;
 
