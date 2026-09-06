@@ -712,7 +712,9 @@ impl Inner {
             return Err(work_dir_refused(
                 dir,
                 &format!(
-                    "lies outside {} and is not the directory named in sandbox.work_dir; a                      project directory comes from your home directory, and anything else is                      declared in config.toml",
+                    "lies outside {} and is not the directory named in sandbox.work_dir; a project \
+                     directory comes from your home directory, and anything else is declared in \
+                     config.toml",
                     home.display()
                 ),
             ));
