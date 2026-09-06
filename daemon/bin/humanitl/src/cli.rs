@@ -110,7 +110,7 @@ pub struct GlobalOpts {
 /// Die Unterkommandos.
 #[derive(Debug, Subcommand)]
 pub enum Cmd {
-    /// Show the session a profile resolves to; starting it arrives in HUM-067.
+    /// Start a session in the current directory, or show the session a profile resolves to.
     Run(RunArgs),
 
     /// Start, plan and check the sandbox.
