@@ -61,8 +61,7 @@
     "experimental": {
       "additionalProperties": false,
       "default": {
-        "h2_upstream": false,
-        "ws_hold": false
+        "h2_upstream": false
       },
       "description": "Schalter für unfertige Wege. Alles hier darf ohne Ankündigung wegfallen.",
       "properties": {
@@ -70,14 +69,6 @@
           "default": false,
           "description": "Bietet dem Ziel HTTP/2 an. In M1 spricht der Proxy nach oben nur HTTP/1.1.",
           "type": "boolean",
-          "x-project-scope": "denied",
-          "x-tier": "expert"
-        },
-        "ws_hold": {
-          "default": false,
-          "description": "Hält auch WebSocket-Upgrades an, statt sie über eine Regel zu entscheiden.",
-          "type": "boolean",
-          "x-pending-issue": "HUM-121",
           "x-project-scope": "denied",
           "x-tier": "expert"
         }
@@ -563,7 +554,6 @@
       "default": {
         "language": "en",
         "notifications": true,
-        "sound": false,
         "terminal_notices": true,
         "theme": "dark"
       },
@@ -592,14 +582,6 @@
           "description": "Meldung des Systems, wenn eine Anfrage wartet und das Fenster nicht vorn ist.",
           "type": "boolean",
           "x-pending-issue": "HUM-069",
-          "x-project-scope": "allowed",
-          "x-tier": "advanced"
-        },
-        "sound": {
-          "default": false,
-          "description": "Ton zur Meldung.",
-          "type": "boolean",
-          "x-pending-issue": "HUM-121",
           "x-project-scope": "allowed",
           "x-tier": "advanced"
         },

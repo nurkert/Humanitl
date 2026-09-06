@@ -182,7 +182,7 @@ fn cli_overrides_env() {
 fn the_whole_ladder_in_one_go() {
     let sources = all_files()
         .with_env(Env::from_pairs([
-            ("HUMANITL_UI__SOUND", "true"),
+            ("HUMANITL_UI__NOTIFICATIONS", "false"),
             ("HUMANITL_HOLD__TIMEOUT_SECS", "42"),
         ]))
         .with_cli([("limits.event_buffer", "16")]);
@@ -199,7 +199,10 @@ fn the_whole_ladder_in_one_go() {
             "findings.user_terms",
             Origin::ProfileProject(fixture("profile-project.toml")),
         ),
-        ("ui.sound", Origin::Env("HUMANITL_UI__SOUND".to_owned())),
+        (
+            "ui.notifications",
+            Origin::Env("HUMANITL_UI__NOTIFICATIONS".to_owned()),
+        ),
         ("limits.event_buffer", Origin::Cli),
     ];
     for (path, origin) in ladder {
@@ -636,23 +639,24 @@ fn the_retired_port_map_warns_and_stays_one_entry() {
 
     // Die Zeile davor und die Zeile danach erreichen die Konfiguration; der
     // entfallene Schlüssel selbst erreicht sie nicht. Ein `break` an der Stelle
-    // des `continue` würde `ws_hold` still verschlucken.
+    // des `continue` würde `findings.enabled` still verschlucken.
     assert!(
         resolved.config.experimental.h2_upstream,
         "the key before the retired one must still be applied"
     );
     assert!(
-        resolved.config.experimental.ws_hold,
+        !resolved.config.findings.enabled,
         "the key after the retired one must still be applied; a `break` instead of the \
          `continue` would swallow it in silence"
     );
     assert_eq!(
         Config {
             experimental: humanitl_config::Experimental::default(),
+            findings: humanitl_config::FindingsConfig::default(),
             ..resolved.config.clone()
         },
         Config::default(),
-        "nothing outside [experimental] may change"
+        "nothing outside [experimental] and [findings] may change"
     );
 
     let warnings: Vec<&humanitl_core::Diagnostic> = resolved
@@ -689,6 +693,71 @@ fn the_retired_port_map_warns_and_stays_one_entry() {
         diagnostic.fix.is_none(),
         "a retired key has no successor a button could point at (CONVENTIONS 4.25)"
     );
+    assert!(
+        resolved
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code.as_str() != "CONFIG_002"),
+        "a key we removed ourselves is no typo: {:?}",
+        resolved.diagnostics
+    );
+}
+
+#[test]
+fn the_two_retired_switches_warn_each_and_let_the_daemon_start() {
+    // HUM-121 hat `ui.sound` und `experimental.ws_hold` entfernt: Der eine hat
+    // nie einen Ton geschaltet, der andere nie ein Upgrade angehalten. Eine
+    // Datei, die beide setzt, bekommt für jeden eine eigene Warnung — nicht
+    // eine für alle zusammen —, und der Daemon startet (CONVENTIONS 4.25).
+    let sources = Sources {
+        global_toml: Some(fixture("retired-switches.toml")),
+        ..Sources::empty()
+    };
+    let resolved = expect_ok(&sources);
+
+    // Die Nachbarn in beiden Gruppen erreichen die Konfiguration; die beiden
+    // entfallenen Schalter erreichen sie nicht. Ohne diese Zusicherung bliebe
+    // unbemerkt, wenn das Laden nach dem ersten entfallenen Schlüssel einer
+    // Gruppe den Rest der Gruppe fallen ließe.
+    assert!(resolved.config.experimental.h2_upstream);
+    assert_eq!(resolved.config.ui.language, humanitl_config::Language::De);
+    assert_eq!(
+        Config {
+            experimental: humanitl_config::Experimental::default(),
+            ui: humanitl_config::UiConfig::default(),
+            ..resolved.config.clone()
+        },
+        Config::default(),
+        "nothing outside [experimental] and [ui] may change"
+    );
+
+    let warnings: Vec<&humanitl_core::Diagnostic> = resolved
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code.as_str() == "CONFIG_005")
+        .collect();
+    assert_eq!(
+        warnings.len(),
+        2,
+        "one warning per retired key: {:?}",
+        resolved.diagnostics
+    );
+    for (path, issue) in [("experimental.ws_hold", "HUM-121"), ("ui.sound", "HUM-121")] {
+        let diagnostic = warnings
+            .iter()
+            .find(|diagnostic| diagnostic.why.contains(path))
+            .unwrap_or_else(|| panic!("no CONFIG_005 for {path} among {warnings:?}"));
+        assert_eq!(diagnostic.severity, Severity::Warning);
+        assert!(
+            diagnostic.why.contains(issue),
+            "why must name the issue that removed it: {}",
+            diagnostic.why
+        );
+        assert!(
+            diagnostic.fix.is_none(),
+            "a retired key has no successor a button could point at (CONVENTIONS 4.25)"
+        );
+    }
     assert!(
         resolved
             .diagnostics
