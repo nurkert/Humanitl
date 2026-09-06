@@ -40,6 +40,15 @@ const AGENT: &str = "printf 'READY\\r\\n'; \
                      printf '\\033[2J'; \
                      while read -r line; do printf 'GOT %s\\r\\n' \"$line\"; done";
 
+/// Ein Agent, der auf jede Zeile seine Fenstergröße meldet (HUM-042).
+///
+/// `stty size` und nicht `tput cols`: Es druckt Zeilen und Spalten in einer
+/// Zeile, liest sie aus dem Terminal selbst und braucht keine
+/// terminfo-Datenbank in der Sandbox.
+const AGENT_SIZE: &str = "printf 'READY\\r\\n'; \
+                          while read -r line; do \
+                          printf 'SIZE %s\\r\\n' \"$(stty size)\"; done";
+
 /// Kein Test wartet länger auf ein Stück Ausgabe.
 const WAIT: Duration = Duration::from_secs(20);
 
@@ -101,6 +110,28 @@ impl Fixture {
             SessionId::new(),
             SandboxPorts::none(),
         )
+    }
+
+    /// Schreibt eine `config.toml` in dieses Fixture.
+    ///
+    /// Nötig, weil der Dienst seine Konfiguration beim Start **neu auflöst**
+    /// (`SessionResolver::resolve` liest Dateien und Umgebung); ein Wert, den
+    /// nur `for_config` kennt, wäre nach dem ersten Start wieder die Vorgabe.
+    fn write_config(&self, body: &str) {
+        let path = self.paths.config_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("the config directory");
+        }
+        std::fs::write(&path, body).expect("the config file");
+    }
+
+    /// Wie [`Fixture::start`], aber mit einem anderen Agenten.
+    fn start_with(&self, agent: &str) -> v1::SandboxRequest {
+        let mut request = self.start();
+        if let Some(v1::sandbox_request::Op::Start(start)) = request.op.as_mut() {
+            start.command = vec!["/bin/sh".to_owned(), "-c".to_owned(), agent.to_owned()];
+        }
+        request
     }
 
     fn start(&self) -> v1::SandboxRequest {
@@ -247,6 +278,40 @@ impl Client {
             }
         }
         true
+    }
+
+    /// Wartet, bis der Dienst die Größe `cols` mal `rows` bestätigt.
+    ///
+    /// Die Bestätigung kommt aus `TerminalHub::resize` und erst, nachdem
+    /// `SandboxHandle::resize` sie am Pseudoterminal gesetzt hat
+    /// (`terminal.rs`: `handle.resize(..)`, dann `frames.send(Frame::Resize)`).
+    /// Ohne dieses Warten läge zwischen einem `Resize` und der nächsten Zeile
+    /// an den Agenten ein Wettlauf: Der Wunsch geht über einen `watch`-Kanal an
+    /// eine eigene Aufgabe, die Zeile über `spawn_blocking` an dasselbe
+    /// Pseudoterminal, und welche von beiden zuerst drankommt, entscheidet der
+    /// Scheduler. Bytes, die dabei vorbeikommen, landen in `seen`, damit dieses
+    /// Warten nichts verschluckt.
+    async fn wait_for_size(&mut self, seen: &mut String, cols: u32, rows: u32) -> bool {
+        let until = tokio::time::Instant::now() + WAIT;
+        loop {
+            if tokio::time::Instant::now() >= until {
+                return false;
+            }
+            let Ok(Some(output)) = tokio::time::timeout_at(until, self.output.next()).await else {
+                return false;
+            };
+            match output.output {
+                Some(v1::terminal_output::Output::Data(data)) => {
+                    seen.push_str(&String::from_utf8_lossy(&data));
+                }
+                Some(v1::terminal_output::Output::Resize(size))
+                    if size.cols == cols && size.rows == rows =>
+                {
+                    return true;
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Die nächste Nachricht, oder `None` nach `WAIT`.
@@ -543,6 +608,127 @@ async fn drain(mut stream: impl tokio_stream::Stream<Item = v1::SandboxEvent> + 
         seen += 1;
     }
     seen
+}
+
+/// `ui.terminal_notices = false` schweigt im Bytestrom (HUM-042).
+///
+/// Die Zeile im Strom ist eine Bequemlichkeit für den, der am Terminal sitzt;
+/// der Streifen über dem Terminal bleibt davon unberührt, weil er aus dem
+/// Ereignisstrom kommt. Ohne diese Messung wäre der Schalter ein Schlüssel im
+/// Schema, dessen Wirkung niemand geprüft hat.
+///
+/// Die Abwesenheit hängt an einer Anwesenheit: Nach dem Hinweis geht eine
+/// Zeile an den Agenten, und erst wenn dessen Echo da ist, wird das Fehlen des
+/// Hinweises behauptet (`backlog/CONVENTIONS.md` 4.22).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_notice_switch_silences_the_stream() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    fixture.write_config("[ui]\nterminal_notices = false\n");
+    let service = fixture.service();
+    let Some(hub) = running_with(&service, fixture.start()).await else {
+        return;
+    };
+
+    with_session(service, async move {
+        let mut client = Client::attach(&hub, 100, 30, false);
+        let mut seen = String::new();
+        assert!(
+            client.wait_for(&mut seen, "READY").await,
+            "the agent starts: {seen:?}"
+        );
+        assert!(!hub.notices(), "the switch is off for this session");
+
+        // Erst an eine Grenze, dann der Hinweis. Steht der Filter mitten in
+        // einer Folge des Agenten, legt `TerminalHub::notice` die Zeile nach
+        // `pending`, und sie ginge erst mit dem nächsten `feed` hinaus — also
+        // hinter dem Echo, auf das dieser Test wartet. Die Abwesenheit unten
+        // wäre dann auch mit eingeschaltetem Schalter wahr.
+        let deadline = tokio::time::Instant::now() + WAIT;
+        while !hub.at_boundary() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            hub.at_boundary(),
+            "the agent stands at a boundary, so a notice would go out at once"
+        );
+
+        hub.notice("[humanitl] request held: GET example.com/ · waiting for you");
+        client
+            .send(v1::terminal_input::Input::Data(b"ping\n".to_vec()))
+            .await;
+        assert!(
+            client.wait_for(&mut seen, "GOT ping").await,
+            "the stream still carries the agent: {seen:?}"
+        );
+        assert!(
+            !seen.contains("waiting for you"),
+            "and nothing of the daemon: {seen:?}"
+        );
+    })
+    .await;
+}
+
+/// Was der Mensch am Fenster tut, sieht der Agent (HUM-042).
+///
+/// Der Agent meldet auf jede Zeile `stty size`, also das, was **sein** Terminal
+/// über sich weiß. Zuerst mit der Größe, mit der der Anschluss geöffnet wurde,
+/// dann nach einer Veränderung mit der neuen. Ohne diese Messung wäre „ein
+/// Resize erreicht den Agenten" eine Behauptung über eine Nachricht, die
+/// irgendwo hätte enden können.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_resize_reaches_the_agent() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    let service = fixture.service();
+    let Some(hub) = running_with(&service, fixture.start_with(AGENT_SIZE)).await else {
+        return;
+    };
+
+    with_session(service, async move {
+        let mut writer = Client::attach(&hub, 100, 30, false);
+        let mut seen = String::new();
+        assert!(
+            writer.wait_for(&mut seen, "READY").await,
+            "the agent starts: {seen:?}"
+        );
+
+        // Die Größe, mit der geöffnet wurde.
+        writer
+            .send(v1::terminal_input::Input::Data(b"?\n".to_vec()))
+            .await;
+        assert!(
+            writer.wait_for(&mut seen, "SIZE 30 100").await,
+            "the agent's terminal has the size the attach asked for: {seen:?}"
+        );
+
+        // Und die Größe danach. 132 mal 43 ist keine Vorgabe von irgendwo,
+        // sondern eine Zahl, die im Text davor nicht vorkommt.
+        writer
+            .send(v1::terminal_input::Input::Resize(
+                v1::terminal_input::Resize {
+                    cols: 132,
+                    rows: 43,
+                },
+            ))
+            .await;
+        assert!(
+            writer.wait_for_size(&mut seen, 132, 43).await,
+            "the service confirms the new size before the next line goes out: {seen:?}"
+        );
+        writer
+            .send(v1::terminal_input::Input::Data(b"?\n".to_vec()))
+            .await;
+        assert!(
+            writer.wait_for(&mut seen, "SIZE 43 132").await,
+            "the resize reached the agent's terminal: {seen:?}"
+        );
+    })
+    .await;
 }
 
 /// Ein Schreiber, beliebig viele Leser — und die Grenze steht im Daemon.

@@ -263,6 +263,42 @@ void main() {
       reason: 'the keys of a reader are dropped, not echoed',
     );
   });
+
+  /// Die Hälfte dieser Zusage, die im UI liegt (HUM-042).
+  ///
+  /// Der Weg vom Fenster zum Agenten hat zwei Hälften. Die untere ist im
+  /// Daemon gemessen (`a_resize_reaches_the_agent` in
+  /// `daemon/crates/ipc/tests/terminal.rs`: der Agent meldet nach einem Resize
+  /// `SIZE 43 132`). Die obere steht hier: Was der Emulator über seine neue
+  /// Größe meldet, geht als `TerminalResize` hinauf — und nicht nur in einen
+  /// Rückruf, den niemand liest. Der Fake antwortet auf ein `TerminalResize`
+  /// mit der Geometrie, die er verstanden hat, und erst die trägt die Zahlen
+  /// in den Zustand.
+  testWidgets('a_resize_of_the_window_goes_up_as_a_command', (
+    WidgetTester tester,
+  ) async {
+    final SandboxTestClient client = runningClient();
+    await pumpSandbox(tester, client: client);
+    await tester.pump();
+    await tester.pump();
+
+    final TerminalSessionState before = _session(tester, client);
+    expect(before.phase, TerminalPhase.attached);
+    // Die Zahlen, die gleich kommen, stehen vorher nirgends.
+    expect(before.cols, isNot(132));
+    expect(before.rows, isNot(43));
+
+    before.terminal.resize(132, 43);
+    await tester.pump();
+    await tester.pump();
+
+    final TerminalSessionState after = _session(tester, client);
+    expect(
+      (after.cols, after.rows),
+      (132, 43),
+      reason: 'the daemon answered the resize with the geometry it understood',
+    );
+  });
 }
 
 /// Der Zustand der Terminal-Sitzung dieses Bildschirms.
