@@ -2024,3 +2024,109 @@ Meldung raus ist. `clear_running` bleibt hinter dem Töten.
 - `stop_after_failed_check` benutzt `terminate(Duration::ZERO)` mit Absicht:
   Eine Sandbox, deren Isolation nicht hält, bekommt keine Gnadenfrist. Das
   bleibt so.
+
+## HUM-129 · Der Daemon fragt den Agent-Adapter nie, ob der Start gelingen kann
+
+Sprint: 5 · Größe: M · Abhängigkeiten: HUM-037 · Blockiert: —
+
+### Kontext
+`AgentAdapter::preflight` liefert die Befunde, die ein Start vorher kennen kann:
+`AGENT_001` (der Agent liegt nicht im Pfad), `AGENT_004` (er liegt auf diesem
+Rechner, aber nicht unter einem Pfad, den die Sandbox einhängt). Der Weg über
+die Kommandozeile fragt danach (`daemon/bin/humanitl/src/cmd/sandbox.rs:663`,
+`for diagnostic in adapter.preflight(&agent_ctx)`). Der Weg über den Daemon
+fragt nicht: `daemon/crates/ipc/src/sandbox.rs:1944-1946` ruft `adapter.command`,
+`adapter.env` und `adapter.files`, und `preflight` steht dort nicht. Auch
+`SandboxService::preflight` (`sandbox.rs:765`) prüft nur `bwrap`.
+
+Das trifft den Normalfall, nicht einen Randfall. Der Befund `AGENT_001` schlägt
+als Abhilfe den eigenen Installationsbefehl von OpenCode vor
+(`daemon/crates/sandbox/src/agent/opencode.rs:150`,
+`curl -fsSL https://opencode.ai/install | bash`), und der legt das Programm nach
+`$HOME/.opencode/bin`. Das mitgelieferte Profil hängt `$HOME` nicht ein
+(`profiles/sandbox/default.toml`, `mounts.ro = ["/usr", "/etc/ssl", …]`), und
+`profile.rs:1111-1116` weist jeden `mounts.extra_ro` unter `$HOME` ausdrücklich
+ab. Wer also tut, was das Programm ihm sagt, bekommt danach:
+
+```
+$ humanitl run
+exit 127
+humanitl-shim: exec failed: opencode: No such file or directory (os error 2)
+```
+
+Am 2026-09-06 mit echtem Daemon gemessen: `grep -c AGENT_004` über die Ausgabe
+findet null. Derselbe Zustand über die Kommandozeile gefragt zeigt den Befund
+sehr wohl:
+
+```
+$ humanitl sandbox argv
+blocking[AGENT_004] … fix: sudo install -m 0755 /home/…/.local/bin/opencode /usr/local/bin/opencode
+```
+
+Zwei Wege, dieselbe Frage, zwei Antworten. Der Weg, den fast jeder nimmt, gibt
+die schlechtere.
+
+HUM-037 hat den Aufruf im eigenen Text vorgesehen — „Integration: `let diags =
+adapter.preflight(&ctx); if diags.iter().any(|d| d.severity == Severity::Blocking)
+{ return Err(diags); }`" — und die Kästchen dieses Teils sind abgehakt, weil der
+CLI-Pfad ihn erfüllt.
+
+### Ziel
+Beide Wege geben dieselbe Auskunft. Ein Start, der an etwas scheitern wird, das
+vorher zu sehen war, scheitert mit dem Befund, der sagt, was zu tun ist — nicht
+mit `exit 127`.
+
+### Nicht-Ziel
+Keine Änderung an den Befunden selbst und keine an der Einhänge-Politik. Ob ein
+Profil `$HOME` einhängen darf, ist eine eigene Frage (`profile.rs:1111`); dieses
+Issue sorgt nur dafür, dass der Mensch erfährt, woran es liegt. Kein zweiter
+Preflight-RPC — `Sandbox(Plan)` ist die Stelle, die das schon beantwortet.
+
+### Betroffene Pfade
+- `daemon/crates/ipc/src/sandbox.rs`: der Zusammenbau des Starts und `SandboxService::preflight`
+- `daemon/crates/ipc/tests/sandbox_start.rs`
+- gegebenenfalls `daemon/bin/humanitl/src/cmd/sandbox.rs`, wenn der gemeinsame Aufruf dorthin wandert
+
+### Spezifikation
+`preflight` wird auf dem Daemon-Pfad gerufen, bevor `bwrap` startet, mit
+demselben `AgentContext`, den `command`, `env` und `files` bekommen — also
+inklusive `sandbox_ro_paths`, denn ohne die kann `AGENT_004` nicht entstehen.
+
+Ein blockierender Befund beendet den Start, bevor er beginnt, und geht als
+`Diagnostic`-Ereignis hinaus wie jeder andere. Nicht blockierende Befunde gehen
+mit und halten nichts auf.
+
+Der Aufruf steht **einmal**. Heute steht die Logik in der CLI und fehlt im
+Daemon; nach diesem Issue darf sie nicht an zwei Stellen stehen, sonst laufen
+sie wieder auseinander — dieselbe Lehre wie in HUM-122.
+
+`Sandbox(Plan)` beantwortet dieselbe Frage ohne zu starten und muss dieselben
+Befunde liefern; heute tut es das bereits über die CLI, und der Test dazu gehört
+in denselben Commit.
+
+### Tests
+- Ein Test in `sandbox_start.rs`, der `agent.command` auf einen Pfad außerhalb
+  der eingehängten Bäume setzt und belegt, dass der Start mit `AGENT_004` endet
+  und **nicht** mit einem Exit-Code des Shims. Er ist heute rot.
+- Ein Test, dass ein nicht blockierender Befund den Start nicht aufhält.
+- Ein Test, dass `Sandbox(Plan)` und `Sandbox(Start)` für denselben Zustand
+  dieselbe Menge Befunde liefern. Ohne ihn laufen die beiden Wege wieder
+  auseinander.
+- Mutationsprobe: den Aufruf wieder entfernen. Der erste Test muss rot werden.
+
+### Akzeptanzkriterien
+- [ ] `humanitl run` mit einem Agenten außerhalb der eingehängten Pfade endet mit `AGENT_004` und seinem Vorschlag, gemessen an der Ausgabe, nicht am Code.
+- [ ] `grep -rn 'adapter.preflight' daemon/` findet den Aufruf an genau einer Stelle, die beide Wege erreichen.
+- [ ] `Sandbox(Plan)` und `Sandbox(Start)` liefern für denselben Zustand dieselben Befunde; ein Test hält das fest.
+- [ ] Die Mutationsprobe macht den ersten Test rot.
+- [ ] `make check` grün.
+
+### Fallstricke
+- `preflight` braucht `sandbox_ro_paths`. Wird es zu früh gerufen — bevor das
+  Profil aufgelöst ist —, kann es `AGENT_004` nicht erheben und meldet nur
+  `AGENT_001` oder gar nichts. Die Reihenfolge ist Teil der Zusage.
+- Der Befund darf den Start nicht doppelt beenden: `kill_and_fail` und der neue
+  Weg müssen dieselbe Sitzung nicht zweimal abräumen.
+- Ein Agent, der über `agent.command` ausdrücklich benannt wurde, ist etwas
+  anderes als einer, der über `PATH` gefunden wurde. Beide Fälle brauchen den
+  Befund, aber nur der zweite darf ihn mit `AGENT_001` beantworten.
