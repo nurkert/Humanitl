@@ -15,6 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../domain/domain.dart';
 import 'client_providers.dart';
+import 'connection.dart';
 import 'daemon_client.dart';
 
 /// The longest wait between two reconnect attempts.
@@ -42,6 +43,22 @@ final Provider<Duration> reconnectBackoffProvider = Provider<Duration>(
 /// so that `ref.onDispose` can cancel the source at once: a generator is only
 /// cancelled when it next resumes, which leaves the daemon -- or the fake --
 /// holding a timer nobody waits for.
+///
+/// **The backoff is not waited out once the line is demonstrably back.**
+/// `GetInfo` and `Subscribe` are two calls over the same socket, and a daemon
+/// that went away breaks both. The first one comes back through
+/// [connectionStateProvider]'s two-second retry, and [linkLiveProvider] says
+/// so; this stream would still be sitting on a wait that has doubled its way
+/// up to [maxReconnectBackoff], and for up to half a minute the shell would
+/// claim to be live while no event reaches it -- countdowns running on
+/// requests that are already forwarded, a second `Enter` answered with
+/// `FLOW_NOT_HELD`. The listener below therefore drops the pending wait and
+/// connects at once. It does not make [linkLiveProvider] answer for this
+/// stream as well: that provider keeps its one meaning, "does what is on
+/// screen still come from the daemon", and this stream follows it rather than
+/// asking a second question of its own. It is also set up only once the stream
+/// is down, because that is the only state in which the answer changes
+/// anything here.
 final StreamProvider<FlowEvent> flowEventsProvider = StreamProvider<FlowEvent>((
   Ref ref,
 ) {
@@ -52,47 +69,65 @@ final StreamProvider<FlowEvent> flowEventsProvider = StreamProvider<FlowEvent>((
   Timer? retry;
   Duration wait = base;
   bool disposed = false;
+  ProviderSubscription<bool>? link;
 
-  void scheduleReconnect() {
+  // Der Rückfall ruft den Verbindungsversuch und der Verbindungsversuch den
+  // Rückfall; eine der beiden muss deshalb eine Variable sein, die erst nach
+  // der anderen gefüllt wird.
+  late final void Function() scheduleReconnect;
+
+  void connect() => connectFlowEvents(
+    client: client,
+    events: events,
+    afterGap: true,
+    onEvent: () => wait = base,
+    onBroken: () => scheduleReconnect(),
+    attach: (StreamSubscription<FlowEvent> subscription) =>
+        source = subscription,
+    isDisposed: () => disposed,
+  );
+
+  // Erst wenn der Strom wirklich unten ist, wird nach der Leitung gefragt --
+  // und dann nur einmal. Ein Horcher, den dieser Provider unbedingt aufsetzte,
+  // baute [connectionStateProvider] in jedem Baum, der Ereignisse liest, auch
+  // in denen, die nie eine Verbindung aufgemacht haben; damit liefe deren
+  // Herzschlag mit, ohne dass irgendjemand ihn bestellt hätte.
+  void watchTheLink() {
+    link ??= ref.listen<bool>(linkLiveProvider, (bool? previous, bool live) {
+      if (!live || disposed || events.isClosed || source != null) {
+        return;
+      }
+      retry?.cancel();
+      retry = null;
+      wait = base;
+      connect();
+    });
+  }
+
+  scheduleReconnect = () {
     source = null;
     if (disposed || events.isClosed) {
       return;
     }
+    watchTheLink();
     retry?.cancel();
     retry = Timer(wait, () {
       retry = null;
       final Duration doubled = wait * 2;
       wait = doubled > maxReconnectBackoff ? maxReconnectBackoff : doubled;
-      connectFlowEvents(
-        client: client,
-        events: events,
-        afterGap: true,
-        onEvent: () => wait = base,
-        onBroken: scheduleReconnect,
-        attach: (StreamSubscription<FlowEvent> subscription) =>
-            source = subscription,
-        isDisposed: () => disposed,
-      );
+      connect();
     });
-  }
+  };
 
   ref.onDispose(() {
     disposed = true;
     retry?.cancel();
+    link?.close();
     unawaited(source?.cancel());
     unawaited(events.close());
   });
 
-  connectFlowEvents(
-    client: client,
-    events: events,
-    afterGap: true,
-    onEvent: () => wait = base,
-    onBroken: scheduleReconnect,
-    attach: (StreamSubscription<FlowEvent> subscription) =>
-        source = subscription,
-    isDisposed: () => disposed,
-  );
+  connect();
   return events.stream;
 });
 

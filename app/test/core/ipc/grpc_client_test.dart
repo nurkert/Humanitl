@@ -8,6 +8,7 @@ import 'package:grpc/grpc.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/daemon_client.dart';
 import 'package:humanitl/core/ipc/generated/humanitl/v1/humanitl.pb.dart' as pb;
+import 'package:humanitl/core/ipc/client_diagnostics.dart';
 import 'package:humanitl/core/ipc/grpc_daemon_client.dart';
 
 const String socket = '/run/user/1000/humanitl/daemon.sock';
@@ -32,7 +33,11 @@ void main() {
       expect(diagnostic.why, contains(socket));
       expect(diagnostic.why, contains('UNAVAILABLE'));
       expect(diagnostic.why, contains('Connection refused'));
-      expect(diagnostic.fix, const FixAction.copyCommand(command: 'humanitld'));
+      // Seit HUM-044 legt die Zeile die Nutzer-Unit selbst an, statt einen
+      // Befehl zum Kopieren anzubieten; der Befehl steht im `why`
+      // (`backlog/sprint-3.md`, Tabelle der Diagnostics).
+      expect(diagnostic.fix, const FixAction.installService());
+      expect(diagnostic.why, contains(ClientDiagnostics.startUnitCommand));
     });
 
     test('UNAUTHENTICATED is IPC_001 with the token path in why', () {

@@ -522,6 +522,32 @@ pub enum ConfigCmd {
 pub enum DaemonCmd {
     /// Ask the daemon who it is.
     Status,
+
+    /// Write the systemd user unit that starts the daemon at login.
+    Install(InstallArgs),
+}
+
+/// Die Argumente von `humanitl daemon install`.
+///
+/// Es gibt mit Absicht kein `--force`: Eine Unit-Datei, die Humanitl nicht
+/// geschrieben hat, wird nie überschrieben, auch nicht auf Zuruf. Wer eine
+/// eigene führt, legt sie beiseite; der Befund `DAEMON_005` nennt den Befehl
+/// dazu.
+#[derive(Debug, Args)]
+pub struct InstallArgs {
+    // Der Text der Doc-Kommentare ist der Hilfetext von `clap` und deshalb
+    // englisch (CONVENTIONS.md 3.9).
+    /// Show the unit and the commands, write nothing and start nothing.
+    #[arg(long)]
+    pub print: bool,
+
+    /// Write the unit, but do not tell systemd about it.
+    ///
+    /// Without this, the command runs `systemctl --user daemon-reload` and
+    /// `systemctl --user enable --now humanitld.service` after writing. Never
+    /// with sudo: the daemon is a user service.
+    #[arg(long)]
+    pub no_start: bool,
 }
 
 /// Ein gelesener Aufruf: die Unterkommandos und die Konfigurations-Flags.

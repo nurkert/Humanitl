@@ -187,18 +187,71 @@ pub const fn action_to_proto(action: humanitl_core::rule::Action) -> v1::RuleAct
     }
 }
 
+/// So viele Modellnamen gehen höchstens über die Leitung.
+///
+/// `ollama_models`/`openai_models` (`humanitl_proxy::llm_probe`) begrenzen nur
+/// den Rumpf der Antwort auf 1 MiB, nicht die Zahl der Namen darin; ein Server
+/// im LAN kann also Zehntausende schicken. Fünfzig ist mehr, als ein Mensch in
+/// einer Zeile Chips liest, und mehr, als eine Ollama-Installation üblicherweise
+/// hält.
+pub const MODELS_MAX: usize = 50;
+
+/// So viele Zeichen bleiben von einem Modellnamen übrig.
+///
+/// Ein Name wie `qwen2.5-coder:32b-instruct-q4_K_M` misst 33 Zeichen; 120 lässt
+/// jeden echten Namen ganz und schneidet den ab, der eine Oberfläche sprengen
+/// soll.
+pub const MODEL_NAME_MAX_CHARS: usize = 120;
+
+/// Säubert und deckelt die Modellnamen einer Endpunkt-Probe.
+///
+/// Die Namen kommen wörtlich von einem unauthentifizierten Server im eigenen
+/// Netz. [`sanitize_note`] nimmt ihnen dasselbe wie einer Block-Notiz:
+/// Zeilenumbrüche und andere Steuerzeichen, unsichtbare Zeichen und
+/// Bidi-Marken, mehrfachen Leerraum und gestapelte kombinierende Zeichen.
+/// Danach bleiben höchstens [`MODEL_NAME_MAX_CHARS`] Zeichen je Name und
+/// [`MODELS_MAX`] Namen stehen; ein Name, von dem nichts übrig bleibt, fällt
+/// weg, denn eine leere Zeile ist kein Modell.
+///
+/// Der Deckel steht vor der Säuberung nicht: `take(MODELS_MAX)` zieht am
+/// gesäuberten Strom, und weil Iteratoren faul sind, werden auch bei
+/// zehntausend Namen nur die ersten gesäuberten berührt.
+fn sanitize_models(models: &[String]) -> Vec<String> {
+    models
+        .iter()
+        .filter_map(|name| {
+            let capped: String = sanitize_note(name)
+                .chars()
+                .take(MODEL_NAME_MAX_CHARS)
+                .collect();
+            let capped = capped.trim_end().to_owned();
+            (!capped.is_empty()).then_some(capped)
+        })
+        .take(MODELS_MAX)
+        .collect()
+}
+
 /// Übersetzt das Ergebnis der Endpunkt-Probe in seine Wire-Form (HUM-039).
 ///
 /// `diagnostic` trägt den ersten Befund noch einmal, weil ein Client, der nur
 /// eine Karte zeigt, sonst raten müsste, welcher gemeint ist; `diagnostics`
 /// trägt alle. Ein leeres `models` bei `flavor = UNKNOWN` ist eine Aussage:
 /// Es hat sich nichts gemeldet, was Humanitl kennt.
+///
+/// `models` ist das einzige Feld dieser Antwort, dessen Text von einem fremden
+/// Rechner stammt, und es wird hier gesäubert und gedeckelt — an der Stelle,
+/// an der der Wert entsteht, und nur dort. Weg fallen Steuerzeichen,
+/// unsichtbare Zeichen und Bidi-Marken, mehrfacher Leerraum und gestapelte
+/// kombinierende Zeichen — dieselbe Säuberung, die eine Block-Notiz nimmt
+/// ([`sanitize_note`]) — und ein Name, von dem danach nichts übrig bleibt.
+/// Die Deckel sind [`MODELS_MAX`] Namen und [`MODEL_NAME_MAX_CHARS`] Zeichen
+/// je Name.
 #[must_use]
 pub fn probe_result_to_proto(result: &ProbeResult) -> v1::ProbeLlmResponse {
     let diagnostics: Vec<v1::Diagnostic> =
         result.diagnostics.iter().map(diagnostic_to_proto).collect();
     v1::ProbeLlmResponse {
-        models: result.models.clone(),
+        models: sanitize_models(&result.models),
         flavor: llm_flavor_to_proto(result.flavor) as i32,
         diagnostic: diagnostics.first().cloned(),
         latency_ms: result.latency_ms,

@@ -174,3 +174,22 @@ Color isolationSegmentTextColor(HTokens tokens, IsolationSegment segment) =>
       IsolationSegment.passed => tokens.stateText.allowed,
       IsolationSegment.failed => tokens.stateText.blocked,
     };
+
+/// The sentence the mounts tab opens with, built from [status].
+///
+/// It lives here and not in the tab because the picker and the sentence make
+/// the same claim about the same folder, and two places that phrase it
+/// differently would be two claims. The picker itself moved to `core/ui`
+/// with HUM-044, because the setup screen draws it too; the sentence stayed,
+/// because it is about the mounts tab of this screen and about nothing else.
+String workDirSentence(AppLocalizations l10n, SandboxStatus status) {
+  final MountEntry? work = status.workMount;
+  final String? dir = work?.src ?? status.workDirHost;
+  if (dir == null || dir.isEmpty) {
+    return l10n.sandboxMountsSentenceNoWork;
+  }
+  final WorkMode mode = work == null
+      ? status.workMode
+      : (work.mode == MountMode.ro ? WorkMode.ro : WorkMode.rw);
+  return l10n.sandboxMountsSentence(dir, sandboxWorkModeLabel(l10n, mode));
+}

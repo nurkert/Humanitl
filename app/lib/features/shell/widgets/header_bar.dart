@@ -9,6 +9,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/ipc/connection.dart';
 import '../../../core/shortcuts/intents.dart';
 import '../../../core/ui/hover_label.dart';
 import '../../../core/ui/ui.dart';
@@ -39,6 +40,7 @@ class HeaderBar extends ConsumerWidget {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     final int heldCount = ref.watch(heldFlowsProvider).length;
+    final bool live = ref.watch(linkLiveProvider);
     return SizedBox(
       height: tokens.sizes.headerBar,
       child: DecoratedBox(
@@ -58,7 +60,16 @@ class HeaderBar extends ConsumerWidget {
                 style: tokens.typography.ui13.medium.tinted(tokens.colors.fg1),
               ),
               const Spacer(),
-              HBadge(text: l10n.shellInterceptOn, color: tokens.state.allowed),
+              // Ohne Daemon faengt niemand etwas ab, und eine gruene Pille,
+              // die „Intercept ON" sagt, behauptet dann das Gegenteil. Sie
+              // wird grau und sagt, warum -- dieselbe Behandlung wie der Ring
+              // daneben und der Punkt in der Statuszeile (`docs/UX.md` 3.3:
+              // jede Zustandsfarbe traegt ein Klartext-Label).
+              HBadge(
+                key: const Key('header-intercept-badge'),
+                text: live ? l10n.shellInterceptOn : l10n.shellInterceptUnknown,
+                color: live ? tokens.state.allowed : tokens.colors.fg1,
+              ),
               SizedBox(width: tokens.spacing.x2),
               HBadge(
                 key: const Key('header-held-badge'),
@@ -140,6 +151,16 @@ class Wordmark extends StatelessWidget {
 /// A click goes to the sandbox section and opens the isolation tab, where the
 /// evidence stands. It travels as a [NavIntent], the same way `Ctrl+4` does,
 /// so there is exactly one way into a section.
+///
+/// **Ohne Verbindung macht der Ring keine Aussage.** Die drei Bögen zeigen
+/// dann grau, den Zustand `IsolationSegment.unknown`, und der Atem hört auf.
+/// Der Kopf steht außerhalb der eingefrorenen Fläche, also greift weder das
+/// `TickerMode` darin noch der stehengebliebene Uhrenersatz; ohne diesen
+/// Zweig malte der Ring die letzte Messung weiter grün und atmete bernstein
+/// vor sich hin, während das Banner darunter sagt, dass niemand antwortet.
+/// Grün heißt „gemessen und hält" und ist nach `docs/UX.md` 4.2 Fall 4 nicht
+/// mehr zu haben; grau ist keine Behauptung in beide Richtungen
+/// (`backlog/CONVENTIONS.md` 4.13).
 class IsolationRing extends ConsumerStatefulWidget {
   /// Creates the ring.
   const IsolationRing({this.size = 20, super.key});
@@ -182,11 +203,12 @@ class _IsolationRingState extends ConsumerState<IsolationRing>
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
+    final bool live = ref.watch(linkLiveProvider);
     final SandboxStatus status =
         ref.watch(sandboxStatusProvider).value ?? const SandboxStatus();
     final List<IsolationSegment> segments = <IsolationSegment>[
       for (final IsolationCheck check in IsolationCheck.values)
-        status.segmentFor(check),
+        if (live) status.segmentFor(check) else IsolationSegment.unknown,
     ];
     _syncBreath(segments.contains(IsolationSegment.running));
     final IsolationCheckResult? failed = status.failedCheck;
@@ -203,10 +225,14 @@ class _IsolationRingState extends ConsumerState<IsolationRing>
       ),
     };
     // Nothing measured is not a count of zero out of three: it is no answer
-    // at all, and the label says that instead (CONVENTIONS 4.13).
-    final String tooltip = status.checks.isEmpty
-        ? l10n.shellIsolationUnknown
-        : label;
+    // at all, and the label says that instead (CONVENTIONS 4.13). Und ohne
+    // Verbindung wird gerade gar nichts gemessen, was ein dritter Satz ist:
+    // Es gab eine Antwort, sie ist nur nicht mehr aktuell.
+    final String tooltip = switch ((live, status.checks.isEmpty)) {
+      (false, _) => l10n.shellIsolationDisconnected,
+      (true, true) => l10n.shellIsolationUnknown,
+      (true, false) => label,
+    };
     // An `HButton` and not a bare gesture: the ring is a control, so it takes
     // focus, answers Enter and Space, and shows a pressed state like every
     // other control (`docs/UX.md` 5.1). The label is the ghost variant's

@@ -19,6 +19,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/domain/domain.dart';
 import '../../../core/ipc/client_providers.dart';
+import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/flow_events.dart';
 import 'now.dart';
 
@@ -48,10 +49,43 @@ class Flows extends _$Flows {
     ) {
       next.whenData(_apply);
     }, fireImmediately: true);
+    // Und was der Schnappschuss verworfen hat, wird geholt, sobald die
+    // Verbindung wieder steht.
+    //
+    // Meistens erledigt das der Ereignisstrom selbst: Bricht der Daemon weg,
+    // bricht auch `Subscribe`, und jede neue Verbindung beginnt mit einem
+    // `Lagged`, auf das [_resync] antwortet. Verlassen darf sich die
+    // Warteschlange darauf aber nicht. `GetInfo` und `Subscribe` sind zwei
+    // Aufrufe: Scheitert nur der erste, während der Strom weiterläuft, dann
+    // hat der Riegel in [_apply] Ereignisse verworfen, und es käme nie ein
+    // `Lagged`, das sie zurückholte. Die Warteschlange stünde still, ohne dass
+    // noch ein Banner darüber sagte, warum.
+    //
+    // `watch` wäre hier falsch: Es baute diesen Notifier neu, und die Karte
+    // mit allem, was er weiß, finge bei jedem Wechsel wieder leer an.
+    ref.listen(linkLiveProvider, (bool? previous, bool live) {
+      if (live) {
+        unawaited(_resync());
+      }
+    });
     return const <FlowId, Flow>{};
   }
 
   void _apply(FlowEvent event) {
+    // Ein Schnappschuss faltet nichts mehr ein. Solange die Verbindung nicht
+    // lebt, sagt das Banner darüber, die Warteschlange sei ein Schnappschuss
+    // (`docs/UX.md` 4.2, Fall 4), und eine Zeile, die danach noch einträfe,
+    // machte das Banner zur Lüge: Sie stünde mit `deadline - Bruchzeitpunkt`
+    // da und verspräche mehr Zeit, als sie hat.
+    //
+    // Verworfen und nicht aufgehoben: Jede neue Verbindung des Ereignisstroms
+    // beginnt mit einem `Lagged`, und darauf lädt [_resync] die gehaltenen
+    // Anfragen vollständig neu. Was hier fällt, kommt von dort zurück, und
+    // zwar so, wie der Daemon es inzwischen sieht, nicht so, wie es hier
+    // liegengeblieben wäre.
+    if (!ref.read(linkLiveProvider)) {
+      return;
+    }
     switch (event) {
       case FlowEventReceived(:final Flow flow):
         state = <FlowId, Flow>{...state, flow.id: flow};
@@ -161,7 +195,50 @@ class Flows extends _$Flows {
   /// believes are held but the daemon no longer lists have left the queue
   /// while nobody was listening. What the client knows and the wire does not
   /// carry ([Flow.heldAt], [Flow.decidedAt]) is kept.
+  ///
+  /// **Authoritative only over the rows it was asked about.** `ListFlows` is
+  /// an answer about the moment the daemon read its own state, and the stream
+  /// keeps running while the call is in flight: a request that arrives during
+  /// the await is folded into the map by [_apply] and is in neither set --
+  /// not in the page, because it did not exist when the page was made, and
+  /// not among the rows that survive, if the purge simply dropped everything
+  /// held. Its arrival events are spent, no `Lagged` follows, and the row
+  /// would be gone for good. The set of held ids is therefore taken **before**
+  /// the call, and only those are purged; a row that arrived meanwhile is
+  /// newer than the answer and stays.
+  ///
+  /// **And a decision that happened meanwhile is newer too.** The same window
+  /// carries the other direction: a flow the page still lists as held may have
+  /// been decided while the call was in flight. `ListFlows` reads the
+  /// recorder, and the recorder only sees a decision once it has consumed the
+  /// `Decided` event, so the daemon can deliver that event and answer the
+  /// older page in either order. Writing the page row over a decided one would
+  /// put an already forwarded request back into the queue with its decision
+  /// erased and its countdown running, and a second `Decide` on it comes back
+  /// as `FLOW_NOT_HELD`. Rows this client has seen decided are therefore left
+  /// alone.
+  ///
+  /// **And the purge spares them too, for the same reason.** The other order
+  /// of the same two events is the one the daemon takes most of the time: it
+  /// consumed the `Decided` before it read its own state, so the row is in the
+  /// set this call asked about -- it was held when the call went out -- and
+  /// missing from the page. A purge over that difference alone would take the
+  /// row away in the frame the decision arrived in, and with it the three
+  /// seconds of [queueExitWindow] in which the confirmation strip stands
+  /// (`docs/UX.md` 4.6). What the purge exists for is narrower than "held and
+  /// not listed": a row the daemon no longer holds **and** this client never
+  /// saw decided. That one still goes, and its own test says so.
   Future<void> _resync() async {
+    // Kein `ListFlows` gegen einen Daemon, der nicht antwortet: Der Aufruf
+    // liefe in denselben Fehler wie der Herzschlag, und die Antwort, die er
+    // nicht bekommt, dürfte den Schnappschuss ohnehin nicht anfassen.
+    if (!ref.read(linkLiveProvider)) {
+      return;
+    }
+    final Set<FlowId> askedAbout = <FlowId>{
+      for (final MapEntry<FlowId, Flow> entry in state.entries)
+        if (entry.value.isHeld) entry.key,
+    };
     try {
       final FlowPage page = await ref
           .read(daemonClientProvider)
@@ -169,12 +246,35 @@ class Flows extends _$Flows {
       if (!ref.mounted) {
         return;
       }
+      final Set<FlowId> listed = <FlowId>{
+        for (final Flow flow in page.flows) flow.id,
+      };
       final Map<FlowId, Flow> next = <FlowId, Flow>{
         for (final MapEntry<FlowId, Flow> entry in state.entries)
-          if (!entry.value.isHeld) entry.key: entry.value,
+          // Drei Gründe, eine Zeile zu behalten: Sie war nicht Teil der Frage,
+          // sie steht auf der Antwort, oder sie ist inzwischen entschieden.
+          // Nur wer keinen davon hat, war gehalten, ist es beim Daemon nicht
+          // mehr und wurde hier nie entschieden gesehen -- und genau der
+          // fliegt heraus.
+          if (!askedAbout.contains(entry.key) ||
+              entry.value.isDecided ||
+              listed.contains(entry.key))
+            entry.key: entry.value,
       };
       for (final Flow flow in page.flows) {
         final Flow? known = state[flow.id];
+        // Eine Zeile, die diese Anwendung schon entschieden gesehen hat, ist
+        // aus der Warteschlange heraus, und die Seite ist älter als das
+        // Ereignis, das sie herausnahm. Sie zu überschreiben hinge die
+        // erledigte Anfrage wieder als wartende in die Liste.
+        //
+        // Geprüft wird die Entscheidung und nicht `!isHeld`: Eine Zeile, die
+        // hier `received` oder `analyzed` steht, weil ihr `Held` in der Lücke
+        // verlorenging, ist genau der Fall, für den es diesen Abgleich gibt,
+        // und sie bekommt die Seite.
+        if (known != null && known.isDecided) {
+          continue;
+        }
         next[flow.id] = flow.copyWith(
           heldAt: flow.heldAt ?? known?.heldAt,
           decidedAt: flow.decidedAt ?? known?.decidedAt,
@@ -199,8 +299,8 @@ List<Flow> heldFlows(Ref ref) {
 /// The rows the queue pane draws.
 ///
 /// A separate type instead of a bare list because the snapshot is recomputed
-/// with every tick of [nowProvider]: with value equality riverpod notices that
-/// nothing changed and no row is rebuilt for a clock that moved.
+/// with every tick of [queueClockProvider]: with value equality riverpod
+/// notices that nothing changed and no row is rebuilt for a clock that moved.
 @immutable
 class QueueSnapshot {
   /// Wraps [flows], in queue order.
@@ -220,11 +320,46 @@ class QueueSnapshot {
   int get hashCode => Object.hashAll(flows);
 }
 
+/// Die Uhr, nach der sich die Warteschlange räumt.
+///
+/// Solange die Verbindung lebt, ist es die eine Uhr des Programms
+/// ([nowProvider]). Bricht sie, bleibt die Uhr im Augenblick des Bruchs
+/// stehen und bleibt dort, bis die Verbindung zurück ist.
+///
+/// **Warum nicht der `nowProvider`-Ersatz in `FrozenSections` genügt.** Der
+/// steht in einem [ProviderScope] um die Abschnitte, und ein abgeleiteter
+/// Provider ohne `dependencies` wird nicht in diesem Bereich, sondern im
+/// Wurzelbehälter gebaut. [visibleQueueFlows] läse dort also weiter die
+/// laufende Uhr: Eine entschiedene Zeile verschwände drei Sekunden nach dem
+/// Bruch aus dem Schnappschuss, während der Countdown daneben stillstünde.
+/// Die Zeile gehört der Warteschlange, nicht dem Widget-Baum, also steht das
+/// Einfrieren hier.
+@Riverpod(keepAlive: true)
+class QueueClock extends _$QueueClock {
+  /// Der Stand im Augenblick des Bruchs, oder null, solange die Verbindung
+  /// lebt. Ein Feld und kein Provider-Zustand: [build] läuft erneut, wenn
+  /// [linkLiveProvider] umspringt, und der Notifier überlebt das.
+  DateTime? _stopped;
+
+  @override
+  DateTime build() {
+    if (ref.watch(linkLiveProvider)) {
+      _stopped = null;
+      return ref.watch(nowProvider);
+    }
+    // Bewusst `read` und nicht `watch`: Ein `watch` hier hinge die stehende
+    // Uhr wieder an die laufende, und sie liefe mit.
+    final DateTime stopped = _stopped ?? ref.read(nowProvider);
+    _stopped = stopped;
+    return stopped;
+  }
+}
+
 /// Held flows plus the ones decided within the last [queueExitWindow], so a
 /// decision can be seen before its row collapses.
 @Riverpod(keepAlive: true)
 QueueSnapshot visibleQueueFlows(Ref ref) {
-  final DateTime now = ref.watch(nowProvider);
+  final DateTime now = ref.watch(queueClockProvider);
   final Map<FlowId, Flow> flows = ref.watch(flowsProvider);
   final List<Flow> visible =
       flows.values

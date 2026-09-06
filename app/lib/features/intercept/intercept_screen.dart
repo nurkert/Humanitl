@@ -19,10 +19,12 @@ import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/domain/domain.dart';
+import '../../core/ipc/connection.dart';
 import '../../core/ui/h_resizable_panes.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
 import 'intents.dart';
+import 'providers/coach_mark.dart';
 import 'providers/decision.dart';
 import 'providers/flows.dart';
 import 'providers/held_groups.dart';
@@ -34,6 +36,7 @@ import 'rule_sentence.dart';
 import 'widgets/action_bar.dart';
 import 'widgets/agent_ask_card.dart';
 import 'widgets/batch_modal.dart';
+import 'widgets/coach_mark.dart';
 import 'widgets/domain_pane_placeholder.dart';
 import 'widgets/queue_pane.dart';
 import 'widgets/request_card.dart';
@@ -339,6 +342,15 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
       active: _keysActive,
       onDecide: (AllowIntent intent) => _allow(_chosen()),
     ),
+    // `Esc` schliesst den einmaligen Hinweis und tut sonst nichts: Die
+    // Aktion ist aus, solange keiner offen ist, und die Taste faellt dann
+    // durch -- an das Modal, an die Palette, an wen auch immer sie gerade
+    // braucht (`docs/UX.md` 5.2).
+    CloseCoachMarkIntent: _ScreenAction<CloseCoachMarkIntent>(
+      active: ({required bool chord}) => ref.read(coachMarkVisibleProvider),
+      onAct: (CloseCoachMarkIntent intent) =>
+          ref.read(coachMarkVisibleProvider.notifier).close(),
+    ),
     BlockIntent: _DecisionAction<BlockIntent>(
       chord: (BlockIntent intent) => intent.chord,
       active: _keysActive,
@@ -420,6 +432,27 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
       }
       ref.read(interceptDecisionProvider.notifier).clear();
       ref.read(lastRefusalProvider.notifier).clear();
+    });
+    // Der Griff nach der Tastatur, wenn die Leitung zurückkommt.
+    //
+    // Während eines Bruchs liegt dieser Screen unter dem `ExcludeFocus` des
+    // Schnappschusses, und die Shell parkt den Fokus solange auf ihrem
+    // eigenen Knoten. Beim Auftauen gibt `ExcludeFocus` ihn nicht von selbst
+    // zurück: Es nimmt ihn beim Einfrieren, aber sein Ende ist keine
+    // Fokusänderung, also meldet sich der `FocusManager` nicht, und
+    // `_syncFocus` liefe nie. Ohne diesen Horcher bliebe die Tastatur nach
+    // dem Wiederanschluss bei der Shell hängen und keine Entscheidung käme
+    // mehr in der Warteschlange an (`docs/UX.md` 5.1).
+    //
+    // Bis HUM-044 tat das `initState`, weil ein Bruch den ganzen Abschnitt
+    // abriss und wieder aufbaute. Seit der Schnappschuss den `State` stehen
+    // lässt (`frozen_sections.dart`), läuft `initState` dabei nicht mehr.
+    ref.listen<bool>(linkLiveProvider, (bool? previous, bool live) {
+      if (live) {
+        WidgetsBinding.instance.addPostFrameCallback(
+          (Duration _) => _syncFocus(),
+        );
+      }
     });
     final bool visible = isSectionVisible(context);
     if (visible != _visible) {
@@ -573,6 +606,14 @@ class _DecisionAction<T extends Intent> extends Action<T> {
   }
 }
 
+/// How much of the inspector pane the one-time hint may take at most.
+///
+/// It is a hint above a decision, so it yields to the decision and to the
+/// request, not the other way round. Half is enough for the sentence at every
+/// text size this window is used at; beyond that the hint scrolls inside its
+/// own box and the request card keeps the rest.
+const double coachMarkMaxShare = 0.5;
+
 /// The middle pane: the card of the selected request above its action bar.
 class _InspectorPane extends StatelessWidget {
   const _InspectorPane({
@@ -599,14 +640,36 @@ class _InspectorPane extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
+        // Der Hinweis liegt **über** der Leiste im selben Stapel und nicht als
+        // Ebene darüber: Er kann die Entscheidung, die er erklärt, damit nicht
+        // verdecken (HUM-044). Er nimmt seinen Platz aus der Fläche der Karte
+        // und nie aus der Leiste, und mehr als [coachMarkMaxShare] davon
+        // bekommt er nicht -- bei doppelter Textgröße wächst er sonst über den
+        // Pane hinaus und schöbe die Entscheidung aus dem Bild, was derselbe
+        // Fehler in Grün wäre. Was über die Schranke hinausgeht, scrollt.
         Expanded(
-          child: selection.length > 1
-              ? SelectionCard(flows: selection)
-              : flow != null
-              ? RequestCard(flow: flow)
-              : queueEmpty
-              ? const SizedBox.shrink()
-              : const _NothingSelected(),
+          child: LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints pane) => Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Expanded(
+                  child: selection.length > 1
+                      ? SelectionCard(flows: selection)
+                      : flow != null
+                      ? RequestCard(flow: flow)
+                      : queueEmpty
+                      ? const SizedBox.shrink()
+                      : const _NothingSelected(),
+                ),
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: pane.maxHeight * coachMarkMaxShare,
+                  ),
+                  child: SingleChildScrollView(child: CoachMark(flow: flow)),
+                ),
+              ],
+            ),
+          ),
         ),
         ActionBar(flow: flow),
       ],

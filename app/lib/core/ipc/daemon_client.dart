@@ -142,6 +142,30 @@ abstract class DaemonClient {
   /// (CONVENTIONS 4.13).
   Stream<SandboxUpdate> checkIsolation();
 
+  /// `Doctor`: one line per precondition of the machine the daemon runs on
+  /// (HUM-075).
+  ///
+  /// The eleven checks live in `humanitl_sandbox::doctor` and nowhere else;
+  /// this call fetches their verdict. It contacts nothing on the network:
+  /// `rpc Doctor(Empty)` has no field in which a client could ask for a
+  /// connection, so opening a screen never opens one either. The `llm` line
+  /// therefore always arrives as "not contacted" and is measured with
+  /// [probeLlm] when a person asks.
+  Future<DoctorReport> doctor();
+
+  /// `ProbeLlm`: asks exactly the endpoint the caller names (HUM-039).
+  ///
+  /// Two GET requests on two fixed paths, no redirect, no credentials,
+  /// nothing through the sandbox. **This is the one call of the application
+  /// that reaches a machine on the network, and it runs only on an explicit
+  /// gesture** -- never while somebody types, because the name would go into
+  /// DNS before anybody decided on it (HUM-044).
+  ///
+  /// An endpoint the daemon refuses (`LLM_007`) or one outside a private
+  /// network (`LLM_006`) arrives as a finding, in the answer or as a
+  /// [DaemonException]; neither is invented here.
+  Future<LlmProbe> probeLlm(String endpoint, {Duration? timeout});
+
   /// `Terminal`: the output of the running session, and the keys on their way
   /// back (HUM-042).
   ///

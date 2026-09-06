@@ -10,7 +10,7 @@ library;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
-/// Show section [index] (0 = Intercept ... 4 = Audit). `Ctrl+1..5`.
+/// Show section [index] (0 = Intercept ... 5 = Setup). `Ctrl+1..6`.
 class NavIntent extends Intent {
   /// Creates the intent for section [index].
   const NavIntent(this.index);
@@ -25,7 +25,7 @@ class PaletteIntent extends Intent {
   const PaletteIntent();
 }
 
-/// The bindings of HUM-019: `Ctrl+1..5` and `Ctrl+K`.
+/// The bindings of HUM-019: one `Ctrl+<digit>` per section, and `Ctrl+K`.
 Map<ShortcutActivator, Intent> shellShortcuts() => <ShortcutActivator, Intent>{
   for (int i = 0; i < navigationKeys.length; i++)
     SingleActivator(navigationKeys[i], control: true): NavIntent(i),
@@ -33,13 +33,17 @@ Map<ShortcutActivator, Intent> shellShortcuts() => <ShortcutActivator, Intent>{
       const PaletteIntent(),
 };
 
-/// The digit keys of `Ctrl+1..5`, in section order.
+/// The digit keys of the navigation shortcuts, in section order.
+///
+/// One key per entry of `Section`; the list grows at the end when a section
+/// does, so every digit somebody has learned keeps its meaning (HUM-044).
 const List<LogicalKeyboardKey> navigationKeys = <LogicalKeyboardKey>[
   LogicalKeyboardKey.digit1,
   LogicalKeyboardKey.digit2,
   LogicalKeyboardKey.digit3,
   LogicalKeyboardKey.digit4,
   LogicalKeyboardKey.digit5,
+  LogicalKeyboardKey.digit6,
 ];
 
 /// True when the keyboard focus sits in an editable text.
