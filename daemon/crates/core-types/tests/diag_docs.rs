@@ -50,6 +50,12 @@ fn render() -> String {
         for info in codes {
             let _ = writeln!(out, "#### {}\n", info.code);
             let _ = writeln!(out, "{}\n", info.title);
+            // Drei Zeilen statt einer: Der Titel sagt, wie der Zustand heißt,
+            // der Auslöser, wann er entsteht, und der Hinweis, was dagegen
+            // hilft. Wer eine Meldung liest, kommt damit ohne Quelltext von
+            // dem Code zu der Ursache (HUM-068).
+            let _ = writeln!(out, "**Auslöser.** {}\n", info.trigger);
+            let _ = writeln!(out, "**Fix.** {}\n", info.fix_hint);
         }
     }
 

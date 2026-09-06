@@ -19,8 +19,31 @@ pub use codes::{AREAS, AreaInfo, CODES, CodeInfo, lookup, lookup_str};
 use crate::rule::Rule;
 
 /// Ein Code aus dem Register, Schema `BEREICH_NNN`.
+///
+/// **Das Feld ist privat, und das ist die Registerprüfung selbst** (HUM-068).
+/// Ein Code entsteht ausschließlich im Makro `registry!` in [`codes`], also in
+/// derselben Zeile, die ihn in [`CODES`] einträgt, in `docs/DIAGNOSTICS.md`
+/// erscheinen lässt und seinem Bereich zuordnet. Ein Befund mit einem Code,
+/// den niemand registriert hat, ist damit kein Fehler, den ein Test findet,
+/// sondern einer, den der Bau nicht übersetzt:
+///
+/// ```compile_fail
+/// use humanitl_core::DiagnosticCode;
+/// // Es gibt keinen Weg, hier einen Code zu erfinden: das Feld ist privat,
+/// // und einen öffentlichen Konstruktor gibt es mit Absicht nicht.
+/// let invented = DiagnosticCode("SANDBOX_999");
+/// ```
+///
+/// Registrierte Codes stehen als Konstanten bereit und tragen alles, was das
+/// Register über sie weiß:
+///
+/// ```
+/// use humanitl_core::diagnostics::codes::{self, SANDBOX_001};
+/// assert_eq!(SANDBOX_001.as_str(), "SANDBOX_001");
+/// assert_eq!(codes::lookup(SANDBOX_001).map(|info| info.area), Some("sandbox"));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct DiagnosticCode(pub &'static str);
+pub struct DiagnosticCode(&'static str);
 
 impl DiagnosticCode {
     /// Die Textform, zum Beispiel `SANDBOX_001`.
