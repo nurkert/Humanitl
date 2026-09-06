@@ -73,11 +73,61 @@ Profil, wo ein Mensch ihn geschrieben hat und der Daemon ihn liest.
   mit `reason: timeout`. Das ist der Modus des Profils `llm-only`: Dort
   entscheidet ohnehin eine Regel (`block host "**"`) vorher, und der Agent
   bekommt `403`.
-- **`terminal`** — **gibt es noch nicht.** Der Befehl antwortet mit `CLI_002`
-  und schlägt `--ask ui` oder `--ask none` vor. Der Prompt im Terminal braucht
-  ein PTY, und das kommt mit HUM-042. Für Vollbild-TUI-Agenten wie OpenCode
-  bleibt `CLI_002` auch danach die Antwort (`backlog/CONVENTIONS.md` 4.10): In
-  einem Vollbild-TUI wäre die Frage nicht zu sehen.
+- **`terminal`** — der Mensch entscheidet im selben Terminal. Sobald eine
+  Anfrage gehalten wird, steht ein Kasten auf `stderr`, während die Ausgabe des
+  Agenten auf `stdout` weiterläuft:
+
+  ```
+  ┌─ humanitl · request held (1 of 2) ─────────────────────── 04:52 left ─┐
+  │ POST https://api.github.com/graphql                                   │
+  │ from: opencode · webfetch                                             │
+  │ size: 2.1 KB                                                          │
+  │ findings: 1 · api_key.github in header Authorization                  │
+  │ catalog: github.api · rank #37                                        │
+  │                                                                       │
+  │ [a] allow once   [s] allow this session   [b] block   [r] rule…       │
+  │ [v] view body    [n] next                                             │
+  └───────────────────────────────────────────────────────────────────────┘
+  ```
+
+  Die Tasten:
+
+  | Taste | Was sie tut |
+  |---|---|
+  | `a` | Erlaubt diese eine Anfrage. |
+  | `s` | Erlaubt sie und legt eine Regel für diesen Host an, gültig für diese Sitzung. |
+  | `b` | Blockt sie. Der Agent bekommt `403`. |
+  | `r` | Fragt Ziel (URL, Host, Apex, Host und Methode) und Dauer (einmal, Sitzung, dauerhaft), zeigt die Regel und legt sie nach `Enter` an. Zwei Ziele können scheitern und sagen es: ein Apex, den der Dienst nicht kennt (eine Adresse, ein unbekanntes Suffix), und eine Methode, die der Vertrag nicht benennt — eine Regel, die dann breiter wäre als das, was auf dem Schirm stand, entsteht nicht. |
+  | `e` | Schreibt die Anfrage samt vollständigem Rumpf nach `$XDG_RUNTIME_DIR/humanitl/edit-<id>.http` (0600, neu angelegt, ohne einem Symlink zu folgen), öffnet `$VISUAL` oder `$EDITOR` (sonst `vi`) und schickt das Ergebnis als `allow_edited`. Die Datei wird nach dem Lesen gelöscht. Ohne `$XDG_RUNTIME_DIR` verweigert der Weg den Dienst, statt in ein Verzeichnis zu schreiben, in das jeder schreiben kann. Ein Rumpf, der kein UTF-8 ist, wird nicht bearbeitet: Was ein Editor daraus machte, ginge als etwas anderes hinaus, als der Agent geschickt hat. |
+  | `v` | Zeigt die ersten 4 KiB des Rumpfs; was nicht druckbar ist, steht als Hex. |
+  | `n` | Geht zur nächsten gehaltenen Anfrage, ohne zu entscheiden. |
+  | `Esc`, `Ctrl+C` | Schließt den Kasten. Die Anfrage bleibt gehalten. |
+
+  Der Kasten wird jede Sekunde neu gezeichnet, damit die Uhr oben rechts
+  stimmt, und er verschwindet, sobald über die Anfrage entschieden ist — auch
+  dann, wenn jemand anders sie im Fenster entschieden hat. Läuft die Frist ab,
+  steht `[humanitl] timed out -> blocked` da, und der nächste gehaltene Fluss
+  kommt.
+
+  Er braucht ein Terminal auf der Eingabe und mindestens 40 Spalten. Ohne
+  Terminal — in einer Pipe, in einem Skript — verweigert der Befehl den Dienst
+  mit `CLI_002`: Bytes aus einer Pipe hat niemand als Antwort gemeint. Der
+  Kasten ist außerdem ASCII; eine Breite in Zeichen ist nicht dieselbe wie eine
+  Breite in Spalten, und ein doppelt breites Zeichen ließe jede Zeile umbrechen.
+  Ein Pfad in einer anderen Schrift ist im Kasten deshalb nicht zu lesen; wer
+  ihn lesen will, nimmt `humanitl flows show`. Solange er steht,
+  wird die Ausgabe des Agenten angehalten (höchstens 256 KiB); danach geht sie
+  hinaus und der Kasten wird darüber neu gezeichnet.
+
+  Jedes Feld läuft durch `sanitize_note` und wird auf die Fensterbreite
+  geklemmt: Was der Agent schickt, ist Text und keine Steuerfolge, und keine
+  Adresse schiebt die Tastenzeile vom Schirm.
+
+  Für **Vollbild-TUI-Agenten wie OpenCode** bleibt `CLI_002` die Antwort
+  (`backlog/CONVENTIONS.md` 4.10): Ein TUI zeichnet den ganzen Schirm neu, und
+  der Kasten wäre nach dem ersten Bild weg. Entschieden wird am wirksamen
+  Kommando — `humanitl run --ask terminal -- bash` startet kein TUI und
+  bekommt den Prompt.
 
 ### Terminal, Eingabe und Signale
 
@@ -102,22 +152,31 @@ Daraus folgt für diese Fassung:
 
 - Es gibt **keine Eingabe** an den Agenten. Ein Programm, das eine Frage
   stellt, bekommt keine Antwort. Für zeilenorientierte Läufe ist das kein
-  Problem, für ein Vollbild-TUI schon.
-- Es gibt **keinen Raw-Modus** und keine Weiterleitung der Fenstergröße. Das
-  Terminal bleibt in jedem Ausgang so, wie es war.
+  Problem, für ein Vollbild-TUI schon. Wer tippen will, hängt sich mit
+  `humanitl sandbox attach` an dieselbe Sitzung; dort geht jede Taste an den
+  Agenten.
+- Einen **Raw-Modus** gibt es nur mit `--ask terminal`, und nur für die Tasten
+  des Kastens: Der Prompt braucht einzelne Tasten ohne Zeilenende. Das
+  Terminal wird auf jedem Ausgang zurückgegeben — beim gewöhnlichen Ende, auf
+  jedem Fehlerpfad, bei einer Panik und bei `SIGTERM`, `SIGHUP` und `SIGINT`
+  (dann mit Exit `128 + n`). Ohne `--ask terminal` wird es gar nicht erst
+  angefasst.
 - **`Ctrl+C`** beendet die Sitzung (`Sandbox(Stop)`), es geht nicht als Byte an
-  den Agenten. Ohne Eingabekanal wäre die Alternative, das Signal zu
-  verschlucken.
-- Ein **`Ctrl+]`-Menü** gibt es nicht.
-
-Alles davon kommt mit HUM-042.
+  den Agenten. Steht der Kasten, schließt das erste `Ctrl+C` ihn, und die
+  Anfrage bleibt gehalten. **Zweimal gedrückt endet der Befehl selbst** mit
+  `130`: Das erste bittet die Sitzung zu enden, und wenn der Agent darauf nicht
+  hört, soll das zweite nicht ins Leere gehen. Dasselbe gilt für `SIGTERM` und
+  `SIGHUP` von außen — sie beenden die Sitzung und den Befehl mit `128 + n`,
+  und das Terminal ist danach wieder im Normalmodus.
+- Ein **`Ctrl+]`-Menü** gibt es nicht. Der Weg zu einer gehaltenen Anfrage ist
+  der Kasten von `--ask terminal`, die Anwendung oder `humanitl flows`.
 
 ### Exit-Codes
 
 | Code | Bedeutung |
 |---|---|
 | Der des Agenten | Er hat sich beendet; seine Zahl wird weitergegeben. Ein Signal wird zu `128 + n`. |
-| `1` | Ein Fehler des Aufrufers: ein Profil, das es nicht gibt, ein Pfad, der keiner ist, `--ask terminal`. |
+| `1` | Ein Fehler des Aufrufers: ein Profil, das es nicht gibt, ein Pfad, der keiner ist, `--ask terminal` mit einem Vollbild-TUI-Agenten. |
 | `2` | Der Daemon ist nicht erreichbar, oder er spricht eine andere Major-Version des Vertrags. |
 | `3` | Eine der drei Isolations-Garantien gilt nicht. Die Sandbox wurde beendet. |
 | `4` | Eine Sicherheitsverletzung, zum Beispiel ein Authority-Mismatch. |
