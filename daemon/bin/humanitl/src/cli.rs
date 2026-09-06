@@ -778,7 +778,6 @@ mod tests {
             "ui.language",
             "ui.theme",
             "experimental.h2_upstream",
-            "experimental.ws_hold",
         ] {
             assert!(
                 long.contains(&flag_name(key)),
@@ -903,17 +902,17 @@ mod tests {
     #[test]
     fn a_boolean_config_flag_needs_no_value() {
         let invocation =
-            parse(["humanitl", "--experimental-ws-hold", "daemon", "status"]).expect("parses");
+            parse(["humanitl", "--experimental-h2-upstream", "daemon", "status"]).expect("parses");
         assert!(
             invocation
                 .config
                 .iter()
-                .any(|(key, value)| key == "experimental.ws_hold" && value == "true")
+                .any(|(key, value)| key == "experimental.h2_upstream" && value == "true")
         );
 
         let explicit = parse([
             "humanitl",
-            "--experimental-ws-hold=false",
+            "--experimental-h2-upstream=false",
             "daemon",
             "status",
         ])
@@ -922,7 +921,7 @@ mod tests {
             explicit
                 .config
                 .iter()
-                .any(|(key, value)| key == "experimental.ws_hold" && value == "false")
+                .any(|(key, value)| key == "experimental.h2_upstream" && value == "false")
         );
     }
 

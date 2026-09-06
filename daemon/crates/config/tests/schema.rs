@@ -183,9 +183,7 @@ fn every_key_of_the_conventions_is_reachable() {
         "ui.language",
         "ui.theme",
         "ui.notifications",
-        "ui.sound",
         "experimental.h2_upstream",
-        "experimental.ws_hold",
     ];
 
     let leaves = schema::leaf_paths();

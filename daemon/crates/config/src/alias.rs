@@ -140,9 +140,21 @@ pub static RETIRED: &[Retired] = &[
         shape: RetiredShape::FreeTable,
     },
     Retired {
+        path: "experimental.ws_hold",
+        since: "HUM-121",
+        why: "no upgrade was ever held by it: a WebSocket upgrade is decided by the rule alone, and the proxy never read the switch",
+        shape: RetiredShape::Scalar,
+    },
+    Retired {
         path: "limits.idle_timeout_secs",
         since: "HUM-101",
         why: "it described the same span as limits.header_timeout_secs, the one idle clock of the connection to the agent",
+        shape: RetiredShape::Scalar,
+    },
+    Retired {
+        path: "ui.sound",
+        since: "HUM-121",
+        why: "there is no sound the switch could have turned off: nothing in the user interface ever played one",
         shape: RetiredShape::Scalar,
     },
 ];
@@ -269,6 +281,12 @@ mod tests {
         assert!(retired("experimental.upstream_port_map").is_some());
         assert!(retired("experimental.upstream_port_map.443").is_none());
         assert!(retired("experimental.h2_upstream").is_none());
+        // HUM-121: zwei Schalter, die nie einen Weg geschaltet haben. Ihre
+        // Nachbarn in denselben Gruppen bleiben Schlüssel des Schemas.
+        assert!(retired("experimental.ws_hold").is_some());
+        assert!(retired("ui.sound").is_some());
+        assert!(retired("ui.notifications").is_none());
+        assert!(retired("ui.terminal_notices").is_none());
     }
 
     #[test]
@@ -284,6 +302,14 @@ mod tests {
         let table = retired("experimental.upstream_port_map").expect("the retired port map");
         assert_eq!(table.shape, RetiredShape::FreeTable);
         assert!(table.swallows_what_is_below());
+
+        // HUM-121: beide waren ein Wahrheitswert, also gilt für sie dasselbe
+        // wie für die Zahl oben. `[ui.sound] volume = 3` hat es nie gegeben.
+        for path in ["experimental.ws_hold", "ui.sound"] {
+            let switch = retired(path).expect("a retired switch of HUM-121");
+            assert_eq!(switch.shape, RetiredShape::Scalar);
+            assert!(!switch.swallows_what_is_below());
+        }
         // Genau der Pfad, nicht sein Anfang und nicht seine Nachbarn: Ein
         // Vergleich mit `starts_with` machte aus jedem Tippfehler hinter einem
         // entfallenen Schlüssel eine Warnung, und die Milde für entfallene

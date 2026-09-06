@@ -99,7 +99,6 @@ Schalter für unfertige Wege. Alles hier darf ohne Ankündigung wegfallen.
 | Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
 |---|---|---|---|---|---|---|
 | `experimental.h2_upstream` | boolean | `false` | expert | denied | ja | Bietet dem Ziel HTTP/2 an. In M1 spricht der Proxy nach oben nur HTTP/1.1. |
-| `experimental.ws_hold` | boolean | `false` | expert | denied | offen (HUM-121) | Hält auch WebSocket-Upgrades an, statt sie über eine Regel zu entscheiden. |
 
 ### `findings`
 
@@ -199,7 +198,6 @@ Sprache, Erscheinungsbild und Meldungen der Oberfläche.
 |---|---|---|---|---|---|---|
 | `ui.language` | en \| de | `"en"` | basic | allowed | ja | Sprache der Oberfläche. |
 | `ui.notifications` | boolean | `true` | advanced | allowed | offen (HUM-069) | Meldung des Systems, wenn eine Anfrage wartet und das Fenster nicht vorn ist. |
-| `ui.sound` | boolean | `false` | advanced | allowed | offen (HUM-121) | Ton zur Meldung. |
 | `ui.terminal_notices` | boolean | `true` | advanced | allowed | ja | Zeile im Terminal des Agenten, wenn eine seiner Anfragen auf eine Entscheidung wartet. Der Streifen über dem Terminal zeigt sie in jedem Fall; dies ist die Zeile im Bytestrom, die ein Vollbild-TUI beim nächsten Bild überschreibt. |
 | `ui.theme` | dark \| light \| system | `"dark"` | advanced | allowed | offen (HUM-069) | Erscheinungsbild der Oberfläche. |
 
@@ -234,7 +232,9 @@ einzigen Warnung.
 | Schlüssel | Entfallen mit | Form | Grund (Text des Befunds) |
 |---|---|---|---|
 | `experimental.upstream_port_map` | HUM-088 | Tabelle | the proxy never redirected a port, and no shipped test needs one: they bind the real port inside their own network namespace or address the ephemeral port directly |
+| `experimental.ws_hold` | HUM-121 | Wert | no upgrade was ever held by it: a WebSocket upgrade is decided by the rule alone, and the proxy never read the switch |
 | `limits.idle_timeout_secs` | HUM-101 | Wert | it described the same span as limits.header_timeout_secs, the one idle clock of the connection to the agent |
+| `ui.sound` | HUM-121 | Wert | there is no sound the switch could have turned off: nothing in the user interface ever played one |
 
 ## Pfade
 

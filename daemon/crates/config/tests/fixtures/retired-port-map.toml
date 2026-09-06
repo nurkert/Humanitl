@@ -10,9 +10,14 @@
 #
 # Die beiden Nachbarn stehen mit Absicht daneben, einer davor und einer danach
 # in der Sortierung der Schlüssel: Sie belegen, dass das Laden über den
-# entfallenen Schlüssel hinweggeht und die übrigen Zeilen der Ebene weiterhin
-# anwendet.
+# entfallenen Schlüssel hinweggeht und die übrigen Zeilen weiterhin anwendet.
+# Der Nachbar dahinter stand bis HUM-121 mit `ws_hold` in derselben Gruppe;
+# seit dieser Schalter selbst entfallen ist, übernimmt `findings.enabled` die
+# Rolle, denn `experimental.h2_upstream` ist der einzige Schlüssel, der der
+# Gruppe geblieben ist.
 [experimental]
 h2_upstream = true
 upstream_port_map = { "443" = 8443, "80" = 8080 }
-ws_hold = true
+
+[findings]
+enabled = false
