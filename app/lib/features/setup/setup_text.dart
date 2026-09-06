@@ -10,6 +10,7 @@ library;
 import 'package:flutter/widgets.dart' show Color;
 
 import '../../core/domain/domain.dart';
+import '../../core/ui/diagnostic_severity.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
 import 'providers/setup_provider.dart';
@@ -82,22 +83,18 @@ String setupNoEvidence(AppLocalizations l10n, SetupCheckState state) =>
       _ => l10n.setupEvidenceNone,
     };
 
-/// The label of a severity, in the person's language.
+/// Das Wort für [severity], für die Zeilen und Karten dieses Bildschirms.
+///
+/// Ein Alias auf die eine Abbildung in `core/ui/diagnostic_severity.dart`
+/// (HUM-068): Kopierte Tabellen laufen auseinander, sobald jemand einen Grad
+/// ergänzt, und dieser Bildschirm zeigt dieselben Befunde wie die Sandbox und
+/// die Warteschlange.
 String setupSeverityLabel(AppLocalizations l10n, Severity severity) =>
-    switch (severity) {
-      Severity.info => l10n.diagSeverityInfo,
-      Severity.warning => l10n.diagSeverityWarning,
-      Severity.error => l10n.diagSeverityError,
-      Severity.blocking => l10n.diagSeverityBlocking,
-    };
+    severityLabel(l10n, severity);
 
-/// The hue of a severity. Never the blocked red: red means blocked.
+/// Der Farbton für [severity]; derselbe Alias wie [setupSeverityLabel].
 Color setupSeverityColor(HTokens tokens, Severity severity) =>
-    switch (severity) {
-      Severity.info => tokens.colors.accent,
-      Severity.warning => tokens.state.held,
-      Severity.error || Severity.blocking => tokens.state.error,
-    };
+    severityColor(tokens, severity);
 
 /// The word of one doctor line, in the person's language.
 ///

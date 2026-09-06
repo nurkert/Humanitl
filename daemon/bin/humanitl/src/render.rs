@@ -16,6 +16,7 @@
 //! trägt, was schiefging und was man dagegen tun kann. Wer die Ausgabe in eine
 //! Pipe steckt, verliert damit keinen Befund und bekommt keinen dazu.
 
+use humanitl_core::block::sanitize_note;
 use humanitl_core::diagnostics::lookup;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use serde_json::{Value, json};
@@ -113,12 +114,12 @@ pub fn diagnostic_block(diagnostic: &Diagnostic) -> String {
         "{}[{}]: {}\n",
         severity_word(diagnostic.severity),
         diagnostic.code,
-        diagnostic.title
+        plain(&diagnostic.title)
     );
     // Ein `String` nimmt jedes `write!` an; der `Result` kann nicht scheitern.
-    let _ = writeln!(out, "{INDENT}why: {}", one_line(&diagnostic.why));
+    let _ = writeln!(out, "{INDENT}why: {}", plain(&diagnostic.why));
     if let Some(fix) = diagnostic.fix.as_ref() {
-        let _ = writeln!(out, "{INDENT}fix: {}", one_line(&fix_line(fix)));
+        let _ = writeln!(out, "{INDENT}fix: {}", plain(&fix_line(fix)));
     }
     if let Some(docs) = docs_url(diagnostic) {
         let _ = writeln!(out, "{INDENT}docs: {docs}");
@@ -213,6 +214,25 @@ pub fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Text aus einem Befund, wie er in ein Terminal darf (HUM-068).
+///
+/// Ein `why` trägt Namen von Hosts, Pfade und Fehlertexte fremder Programme;
+/// ein `fix` trägt Befehle. Beides kann Steuerzeichen enthalten, und ein
+/// Terminal führt sie aus: `ESC ] 8 ; ; URL BEL` macht aus dem folgenden Text
+/// einen Verweis, `CSI` verschiebt den Cursor, ein Bidi-Override dreht die
+/// Leserichtung um. Der Block dieses Programms zeigt deshalb nur, was Zeichen
+/// **sind**, nie was sie einem Terminal **sagen**: [`sanitize_note`] wirft
+/// Steuerzeichen und unsichtbare Zeichen weg, [`one_line`] faltet den
+/// Leerraum. Der sichtbare Text eines OSC-8-Verweises bleibt stehen — er ist
+/// Text —, seine Wirkung nicht.
+///
+/// `--json` braucht das nicht: `serde_json` schreibt ein `ESC` als `\u001b`,
+/// und damit ist es in jeder Ausgabe schon inert.
+#[must_use]
+pub fn plain(text: &str) -> String {
+    one_line(&sanitize_note(text))
+}
+
 /// Eine Tabelle mit Kopfzeile, Spalten nach dem längsten Eintrag ausgerichtet.
 ///
 /// Die letzte Spalte wird nicht aufgefüllt, damit kein Zeilenende Leerzeichen
@@ -270,6 +290,50 @@ pub const fn tick(passed: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    /// Ein `why`, das einen Verweis in das Terminal schreiben will, druckt
+    /// seinen Text und nicht seine Wirkung (HUM-068).
+    ///
+    /// Der Fall ist nicht ausgedacht: `why` trägt Hostnamen und Fehlertexte
+    /// fremder Programme, und ein Agent in der Sandbox entscheidet mit, was
+    /// darin steht. Ein OSC-8-Verweis im Block machte aus dem Satz eines
+    /// Befunds einen anklickbaren Link auf eine Adresse, die niemand gelesen
+    /// hat.
+    #[test]
+    fn a_diagnostic_with_terminal_escapes_prints_them_inert() {
+        let sneaky = "\u{1b}]8;;https://evil.example/pay\u{7}open the invoice\u{1b}]8;;\u{7}";
+        let block = diagnostic_block(
+            &Diagnostic::builder(SANDBOX_003, Severity::Blocking)
+                .why(format!("bwrap is missing; {sneaky}"))
+                .fix(FixAction::CopyCommand(format!("apt-get install {sneaky}")))
+                .build(),
+        );
+
+        assert!(
+            !block.contains('\u{1b}') && !block.contains('\u{7}'),
+            "no escape and no bell reach the terminal: {block:?}"
+        );
+        // Der sichtbare Text bleibt: Er ist die Nachricht, und ihn zu
+        // schlucken hieße, einen Befund zu verstümmeln.
+        assert!(block.contains("open the invoice"), "{block}");
+        assert!(block.contains("evil.example/pay"), "{block}");
+        assert!(block.contains("bwrap is missing"), "{block}");
+    }
+
+    /// Auch der Titel: Er kommt aus dem Register und ist damit unser Text —
+    /// die Zusicherung hält die Stelle trotzdem, weil ein Befund ihn
+    /// überschreiben darf.
+    #[test]
+    fn a_title_with_escapes_prints_inert() {
+        let block = diagnostic_block(
+            &Diagnostic::builder(SANDBOX_003, Severity::Blocking)
+                .title("bwrap \u{1b}[31mfehlt\u{1b}[0m")
+                .why("nothing".to_owned())
+                .build(),
+        );
+        assert!(!block.contains('\u{1b}'), "{block:?}");
+        assert!(block.contains("bwrap [31mfehlt[0m"), "{block}");
+    }
 
     use humanitl_core::diagnostics::codes::{DAEMON_001, SANDBOX_003};
     use humanitl_core::{Diagnostic, FixAction, Severity};
