@@ -51,6 +51,7 @@ use humanitl_sandbox::{
 };
 use serde_json::json;
 use tempfile::TempDir;
+use tokio::signal::unix::{Signal, SignalKind, signal};
 
 use crate::cli::SandboxCmd;
 use crate::cmd::{Context, EXIT_CHECK, EXIT_OK, Failure, is_executable, status_diagnostic};
@@ -215,12 +216,25 @@ async fn start(
     }
     ctx.render.detail(&format!("argv: {}", plan.argv_line()));
 
+    // Die Quelle für `SIGINT` steht, bevor die Sandbox läuft. Erst das Anmelden
+    // eines Handlers hebt ein geerbtes `SIG_IGN` auf, und zwischen dem Start der
+    // Sandbox und dem ersten Warten liegt sonst ein Fenster, in dem ein `SIGINT`
+    // spurlos verschwindet: Der Agent liefe weiter, und der Mensch hielte die
+    // Tastenkombination für kaputt.
+    let interrupts = signal(SignalKind::interrupt()).map_err(|error| {
+        Failure::new(
+            Diagnostic::builder(codes::SANDBOX_012, Severity::Blocking)
+                .why(format!("SIGINT cannot be listened for: {error}"))
+                .build(),
+        )
+    })?;
+
     let handle = Arc::new(setup.backend.launch(&plan).map_err(Failure::new)?);
     ctx.render
         .detail(&format!("sandbox {} pid {}", handle.id, handle.pid));
 
     enforce_isolation(ctx, &setup.backend, &handle)?;
-    wait_or_interrupt(handle).await
+    wait_or_interrupt(handle, interrupts).await
 }
 
 /// `sandbox check`: eine kurzlebige Sandbox und die drei Garantien.
@@ -416,16 +430,19 @@ fn rebind_source(args: &mut [OsString], dst: &Path, src: &Path) -> bool {
 /// [`EXIT_INTERRUPTED`]. In beiden Fällen wird auf das Ende gewartet, bevor
 /// die Kommandozeile selbst endet: ein halb beendeter Agent hinterließe
 /// Dateien im Projekt.
-async fn wait_or_interrupt(handle: Arc<SandboxHandle>) -> Result<u8, Failure> {
+async fn wait_or_interrupt(
+    handle: Arc<SandboxHandle>,
+    mut interrupts: Signal,
+) -> Result<u8, Failure> {
     let waiting = Arc::clone(&handle);
     let mut waiter = tokio::task::spawn_blocking(move || waiting.wait());
 
     tokio::select! {
         joined = &mut waiter => finish(joined),
-        signal = tokio::signal::ctrl_c() => {
-            if signal.is_err() {
-                // Ohne Signalquelle bleibt nur warten; der Lauf endet dann
-                // mit dem Code des Befehls wie ohne Unterbrechung.
+        signal = interrupts.recv() => {
+            if signal.is_none() {
+                // Die Quelle ist geschlossen; dann bleibt nur warten, und der
+                // Lauf endet mit dem Code des Befehls wie ohne Unterbrechung.
                 return finish(waiter.await);
             }
             let stopping = Arc::clone(&handle);
