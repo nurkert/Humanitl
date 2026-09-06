@@ -102,6 +102,43 @@ void main() {
     await tester.pump();
   });
 
+  /// `LLM_005` steht im Streifen als bernsteinfarbene Zeile (HUM-039).
+  ///
+  /// Der Befund entsteht, wenn eine durchgereichte Anfrage an das Sprachmodell
+  /// Funde trägt: Sie ist schon gesendet, niemand hat über sie entschieden,
+  /// und der Streifen ist der Ort, an dem der Mensch davon erfährt. Bernstein
+  /// und nicht Rot: Rot heißt in diesem Programm „blockiert", und diese
+  /// Anfrage war das Gegenteil (`docs/UX.md` Regel 6).
+  testWidgets('llm_005_is_an_amber_line_in_the_strip', (
+    WidgetTester tester,
+  ) async {
+    const String why =
+        'this request to your language model at http://192.168.1.50:11434 '
+        'contains 2 potential secret(s) or personal data';
+    final FakeDaemonClient client = fakeDaemon(
+      diagnosticScript(
+        const Diagnostic(code: 'LLM_005', severity: Severity.warning, why: why),
+        flowId: const FlowId('01920000-0000-7000-8000-0000000000ff'),
+      ),
+    );
+    await pumpIntercept(tester, client: client);
+    await playScript(tester, const Duration(milliseconds: 200));
+    await tester.pump(HMotion.arrive);
+    await tester.pump();
+
+    expect(find.text('LLM_005'), findsOneWidget);
+    expect(find.text(why), findsOneWidget);
+
+    final HDiagnosticCard card = tester.widget<HDiagnosticCard>(
+      find.byType(HDiagnosticCard),
+    );
+    final HTokens tokens = HTheme.of(
+      tester.element(find.byType(HDiagnosticCard)),
+    );
+    expect(card.color, tokens.state.held, reason: 'amber, the held hue');
+    expect(card.color, isNot(tokens.state.blocked));
+  });
+
   testWidgets('dismiss_hides_the_card', (WidgetTester tester) async {
     final FakeDaemonClient client = fakeDaemon(
       diagnosticScript(

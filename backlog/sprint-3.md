@@ -594,7 +594,7 @@ Setup-Widget `LlmEndpointField`: Textfeld (Placeholder `http://192.168.1.50:1143
 - [x] History-Screen zeigt Passthrough-Flows in Violett mit Regel-Chip, standardmäßig eingeklappt (Filter-Chip „LLM anzeigen").
 - [ ] Setup: Test gegen laufendes Ollama liefert Modellliste in unter 3 s.
 - [ ] Setup: Test gegen `http://10.255.255.1:1` liefert `LLM_001` mit kopierbarem curl-Befehl.
-- [ ] `LLM_005` erscheint im Feed als amber Zeile, öffnet die Flow-Details.
+- [ ] `LLM_005` erscheint im Feed als amber Zeile, öffnet die Flow-Details. **Die erste Hälfte ist gemessen, die zweite offen und begründet.** Gemessen am 2026-09-06 in `app/test/features/intercept/diagnostic_card_test.dart` (`llm_005_is_an_amber_line_in_the_strip`): Der Befund steht im Streifen mit Code und dem Satz des Daemons, und seine Farbe ist `state.held` — Bernstein, nie das Rot des Blockierens. Der Klick auf die Flow-Details fehlt, und zwar nicht aus Nachlässigkeit: Der Fluss hinter `LLM_005` ist eine **Durchreiche**, und die steht in keiner Warteschlange (`flows list` zeigt sie nicht, CONVENTIONS 4.29). Ein Klick müsste sie über `GetFlow` aus der Aufzeichnung holen und in der Historie öffnen; die Feed-Karte samt diesem Weg gehört HUM-106 (Sprint-2-Tabelle in `BACKLOG.md`), das auch `flowId` auf der Karte trägt.
 
 ### Fallstricke
 - Der Passthrough darf nie `stream: true` für den Request-Body bekommen. ADR-005 gilt auch hier: Request wird gepuffert, nur die Response streamt.
