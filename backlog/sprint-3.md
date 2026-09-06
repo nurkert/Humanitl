@@ -1606,12 +1606,57 @@ Coach-Mark: Beim ersten `Held`-Flow einer Installation erscheint über der Aktio
 - CLI: `daemon install` schreibt die Unit in ein temporäres `XDG_CONFIG_HOME`, `ExecStart` zeigt auf `current_exe()`-Nachbarn, keine Socket-Unit; `humanitl doctor --json` liefert fünf Zeilen.
 
 ### Akzeptanzkriterien
-- [ ] Frische Installation ohne laufenden Daemon: App zeigt Setup mit `DAEMON_001`, Klick auf Fix installiert und startet die Unit, Zeile wird binnen 4 s grün (durch den 2-s-Retry).
-- [ ] Ohne bwrap: `SANDBOX_001` mit distributionsspezifischem Befehl, in der App wie in `humanitl doctor`.
-- [ ] Alle grün ⇒ Start ⇒ Intercept-Screen; der Ring im Header wird grün, sobald HUM-041 gelandet ist (bis dahin grau, `IsolationRingPlaceholder`).
-- [ ] Coach-Mark erscheint genau einmal.
-- [ ] Während des Setups zeigt der Header-Badge gehaltene Flows, und `Ctrl+1` wechselt.
-- [ ] Goldens abgelegt.
+- [ ] Frische Installation ohne laufenden Daemon: App zeigt Setup mit `DAEMON_001`, Klick auf Fix installiert und startet die Unit, Zeile wird binnen 4 s grün (durch den 2-s-Retry). — **Offen, und zwar nur die Verkettung.** Jede der vier Aussagen ist gehalten: `setup_shows_daemon_001_with_install_action` und `setup_offers_the_install_button_for_the_ordinary_daemon_001` zeigen Befund und Aktion, `install_service_runs_the_command_that_does_it` und `install_service_without_a_stand_in_runs_the_real_command` fahren den Befehl ohne Shell, ohne `PATH`, ohne `sudo`, `a stopped daemon is tried again every two seconds` zeigt die Zeile ohne Zutun grün werden. Was kein Test hält, ist der Klick **und** die Rückkehr in einem Lauf: `FixControl` nimmt seinen Runner als Parameter, aber der App-Baum reicht keinen durch, also gibt es keine Naht, an der ein Widget-Test beides verbinden könnte. Die Naht zu bauen ist eine Entwurfsänderung und gehört nicht in einen Mess-Commit.
+- [x] Ohne bwrap: `SANDBOX_001` mit distributionsspezifischem Befehl, in der App wie in `humanitl doctor`.
+- [x] Alle grün ⇒ Start ⇒ Intercept-Screen; der Ring im Header wird grün, sobald HUM-041 gelandet ist (bis dahin grau, `IsolationRingPlaceholder`).
+- [x] Coach-Mark erscheint genau einmal.
+- [x] Während des Setups zeigt der Header-Badge gehaltene Flows, und `Ctrl+1` wechselt.
+- [x] Goldens abgelegt.
+
+### Stand (2026-09-06): gemergt nach fünf Review-Runden und fünfzig bestätigten Defekten
+
+Gemessen, nicht behauptet. Fünf der sechs Kriterien sind abgehakt, jedes gegen
+einen benannten Test oder eine ausgeführte Messung:
+
+- **Distributionsspezifischer Befehl**: `daemon/crates/sandbox/src/os_release.rs`
+  wählt aus vier fest einkompilierten Literalen über `ID` und `ID_LIKE`; kein
+  Zeichen aus `/etc/os-release` erreicht den Befehl, und ein Test mit
+  `ID="x\"; touch /tmp/pwn; \""` belegt das. `the_doctor_and_the_launcher_offer_the_same_install_command`
+  hält die zweite Hälfte des Satzes: in der App wie in `humanitl doctor`.
+- **Start führt in die Warteschlange**: `the queue opens only after the start
+  really came up` und `a start that fails leaves the setup on the screen`. Der
+  Ring ist echt und liest `sandboxStatusProvider`; der Platzhalter aus der
+  ersten Fassung ist weg, seit HUM-041 gelandet ist.
+- **Coach-Mark genau einmal**: `coach_mark_shown_once` fährt zwei Anwendungsstarts
+  über denselben Speicher — das ist der Unterschied zwischen „einmal" und
+  „einmal je Fenster" — und `a seen mark never appears`.
+- **Kopf-Abzeichen und `Ctrl+1`**: gemessen mit drei wirklich gehaltenen Flüssen.
+  Auf dem Setup-Abschnitt steht `3 held`, `Ctrl+1` wechselt nach Intercept, das
+  Abzeichen bleibt.
+- **Goldens**: sechs Bilder für drei Lagen in hell und dunkel.
+
+Das erste Kriterium bleibt offen; der Grund steht bei ihm, und er ist eine
+fehlende Naht, kein fehlendes Verhalten.
+
+**Was die fünf Runden gefunden haben**, weil die Form davon wiederkehrt: eine
+Oberfläche, die richtig aussah und log — der eingefrorene Bildschirm war nicht
+eingefroren, nur seine Uhr; eine Benachrichtigung konnte in ihn hineinentscheiden;
+`Ctrl+1` bis `Ctrl+6` starben mit dem Fokus, also genau die Wege zurück zu einem
+laufenden Daemon; und das Einfrieren war zugleich zu weit, denn es lähmte den
+Bildschirm, der den Daemon installiert. Dazu zweimal wieder die alte Klasse: ein
+Wert von außen, der ohne Beweis zu einem Befehl wird. Und dreimal ein
+Mutationsbeweis, der nicht hielt — der Countdown stand wegen `TickerMode` still,
+nicht wegen der Uhr, die der Test nannte.
+
+Die letzten beiden Runden fanden ausschließlich Folgeschäden der jeweils
+vorigen. Die fünfte Prüfung, eng auf diese vier Reparaturen und ihre Nachbarn
+gerichtet, fand nichts mehr; das war die Abbruchbedingung.
+
+**Nicht enthalten, benannt statt verschwiegen:** `AgentAdapter::preflight` wird
+auf dem Daemon-Pfad weiterhin nicht gerufen (HUM-129, gemessen und abgelegt).
+Zwei Dateien sind nach `core` gezogen, mit Weiterleitung am alten Pfad, damit in
+diesem Commit kein Aufrufer umziehen musste; beide stehen in
+`docs/ARCHITECTURE.md` 5.
 
 ### Stand (2026-09-04): Größe XL, neun genannte Codes, RPCs und Widgets gibt es nicht oder sie heißen anders, drei Kriterien enden in einem Schreibweg ohne Schreiber
 
