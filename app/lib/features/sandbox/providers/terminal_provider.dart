@@ -173,6 +173,25 @@ class TerminalSession extends _$TerminalSession {
         .listen(_onFrame, onError: _onError, onDone: _onDone);
   }
 
+  /// Hängt sich neu an, lesend, nachdem der Daemon den Schreibplatz vergeben
+  /// hat.
+  ///
+  /// Der Befund bleibt im Zustand stehen: Das Fenster soll sagen können,
+  /// warum es zusieht statt zu tippen. Er ist keine Absage mehr, sondern eine
+  /// Auskunft, und die Phase bleibt deshalb an dem, was der neue Anschluss
+  /// meldet.
+  Future<void> _watchInstead(Diagnostic why) async {
+    await _detach();
+    // Zwischen dem Abhängen und hier kann das Fenster zu sein; ein Schreiben
+    // auf einen entsorgten Notifier wäre ein Fehler ohne Empfänger. Dieselbe
+    // Wache steht in `flows.dart`, `history_page.dart` und `connection.dart`.
+    if (!ref.mounted) {
+      return;
+    }
+    state = state.copyWith(diagnostic: why, readOnly: true);
+    await attach(readOnly: true);
+  }
+
   /// Detaches this client. The session keeps running.
   Future<void> detach() async {
     _input?.add(const TerminalDetach());
@@ -197,6 +216,19 @@ class TerminalSession extends _$TerminalSession {
           rows: rows,
         );
       case TerminalFinding(diagnostic: final Diagnostic diagnostic):
+        // `TERM_001` heißt: Jemand anders schreibt schon -- die
+        // Kommandozeile, die diese Sitzung gestartet hat. Das ist kein
+        // Fehlschlag, sondern der Normalfall von `humanitl run` neben einem
+        // offenen Fenster (HUM-067, Kriterium 4). Statt einen toten Streifen
+        // zu zeigen, hängt sich dieses Fenster lesend an: Es sieht dieselbe
+        // Ausgabe, gibt die Tastatur ab und entscheidet weiterhin über
+        // gehaltene Anfragen -- die laufen über die Warteschlange und nicht
+        // über dieses Terminal.
+        if (diagnostic.code == DiagnosticCodes.terminalSecondWriter &&
+            !state.readOnly) {
+          unawaited(_watchInstead(diagnostic));
+          return;
+        }
         state = state.copyWith(
           phase: TerminalPhase.refused,
           diagnostic: diagnostic,

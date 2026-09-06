@@ -1,5 +1,7 @@
 // Tests des In-Process-Fakes (HUM-019): Skript, Entscheidungen, Szenarien.
 
+import 'dart:async';
+
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
@@ -163,5 +165,108 @@ void main() {
     await client.close();
     expect(client.isClosed, isTrue);
     expect(() => client.getInfo(), throwsStateError);
+  });
+
+  test('no terminal survives detach, cancel or the end of the agent', () async {
+    final FakeDaemonClient client = FakeDaemonClient();
+    const TerminalOpen open = TerminalOpen(sandboxId: '', cols: 80, rows: 24);
+
+    // Der ordentliche Weg hinaus: `Detach` beendet den Strom, und `finish()`
+    // traegt den Controller aus.
+    final StreamController<TerminalCommand> first =
+        StreamController<TerminalCommand>();
+    final StreamSubscription<TerminalFrame> firstFrames = client
+        .terminal(first.stream)
+        .listen((TerminalFrame _) {});
+    expect(client.openTerminals, 1);
+    first
+      ..add(open)
+      ..add(const TerminalDetach());
+    await pumpEventQueue();
+    expect(client.openTerminals, isZero);
+    await firstFrames.cancel();
+    await first.close();
+
+    // Abbrechen ohne `Detach`: Das loest kein `onDone` aus, also raeumt nur
+    // `onCancel` auf. Ohne diese Zeile bliebe der Controller stehen.
+    final StreamController<TerminalCommand> second =
+        StreamController<TerminalCommand>();
+    final StreamSubscription<TerminalFrame> secondFrames = client
+        .terminal(second.stream)
+        .listen((TerminalFrame _) {});
+    second.add(open);
+    await pumpEventQueue();
+    expect(client.openTerminals, 1);
+    await secondFrames.cancel();
+    expect(client.openTerminals, isZero);
+    await second.close();
+
+    // Das Ende des Agenten: Das `Exit` kommt an, und die Sitzung ist danach
+    // keine offene mehr, auch wenn der Strom absichtlich offen bleibt.
+    final StreamController<TerminalCommand> third =
+        StreamController<TerminalCommand>();
+    final List<TerminalFrame> seen = <TerminalFrame>[];
+    final StreamSubscription<TerminalFrame> thirdFrames = client
+        .terminal(third.stream)
+        .listen(seen.add);
+    third.add(open);
+    await pumpEventQueue();
+    client.endTerminals(code: 3);
+    await pumpEventQueue();
+    expect(seen.whereType<TerminalExit>().single.code, 3);
+    expect(client.openTerminals, isZero);
+    await thirdFrames.cancel();
+    await third.close();
+  });
+
+  test('the writing slot belongs to the session and not to the fake', () async {
+    final FakeDaemonClient client = FakeDaemonClient();
+    const TerminalOpen open = TerminalOpen(sandboxId: '', cols: 80, rows: 24);
+    final List<TerminalFrame> first = <TerminalFrame>[];
+    final List<TerminalFrame> second = <TerminalFrame>[];
+    final List<TerminalFrame> third = <TerminalFrame>[];
+    final StreamController<TerminalCommand> firstKeys =
+        StreamController<TerminalCommand>();
+    final StreamController<TerminalCommand> secondKeys =
+        StreamController<TerminalCommand>();
+    final StreamController<TerminalCommand> thirdKeys =
+        StreamController<TerminalCommand>();
+
+    final StreamSubscription<TerminalFrame> firstFrames = client
+        .terminal(firstKeys.stream)
+        .listen(first.add);
+    firstKeys.add(open);
+    await pumpEventQueue();
+    expect(first.whereType<TerminalFinding>(), isEmpty);
+
+    // Der Agent endet. Die Sitzung nimmt den Schreiber-Platz mit, also darf
+    // das erste Fenster der naechsten Sitzung schreiben.
+    client.endTerminals();
+    await pumpEventQueue();
+    final StreamSubscription<TerminalFrame> secondFrames = client
+        .terminal(secondKeys.stream)
+        .listen(second.add);
+    secondKeys.add(open);
+    await pumpEventQueue();
+    expect(second.whereType<TerminalFinding>(), isEmpty);
+
+    // Der alte Besitzer verabschiedet sich spaet und nimmt dem neuen nichts:
+    // Ein dritter Schreiber bekommt weiterhin `TERM_001`.
+    await firstFrames.cancel();
+    await firstKeys.close();
+    final StreamSubscription<TerminalFrame> thirdFrames = client
+        .terminal(thirdKeys.stream)
+        .listen(third.add);
+    thirdKeys.add(open);
+    await pumpEventQueue();
+    expect(
+      third.whereType<TerminalFinding>().single.diagnostic.code,
+      DiagnosticCodes.terminalSecondWriter,
+    );
+
+    await secondFrames.cancel();
+    await thirdFrames.cancel();
+    await secondKeys.close();
+    await thirdKeys.close();
   });
 }
