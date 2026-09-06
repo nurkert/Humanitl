@@ -74,6 +74,7 @@ jobs:
         run: |
           scripts/ci/lint-no-string-errors.sh --self-test
           scripts/ci/lint-no-string-errors.sh
+          scripts/ci/test-report.sh --self-test
 
   rust-test:
     name: rust-test
@@ -132,7 +133,28 @@ jobs:
           }
           exit "$missing"
       - name: Build and test the workspace
-        run: make rust-build rust-test
+        id: rust-test
+        # Die Ausgabe geht durch `tee` in eine Datei, und ein roter Lauf nennt
+        # danach die Tests, die fielen (HUM-133). Ohne das steht in der
+        # Annotation nur `Process completed with exit code 2`, und das Job-Log
+        # verlangt Schreibrechte am Repository -- ein roter Lauf waere von
+        # aussen nicht zu deuten.
+        run: |
+          set -o pipefail
+          make rust-build
+          cd daemon && cargo test --workspace 2>&1 | tee "$RUNNER_TEMP/rust-test.log"
+      - name: Name the tests that failed
+        # Nur wenn dieser Schritt fiel: `failure()` allein feuerte auch nach
+        # einem gescheiterten Checkout, und dann stuende in der Annotation eine
+        # fehlende Datei statt des Grundes.
+        if: failure() && steps.rust-test.outcome == 'failure'
+        run: ./scripts/ci/test-report.sh "$RUNNER_TEMP/rust-test.log"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure() && steps.rust-test.outcome == 'failure'
+        with:
+          name: rust-test-log
+          path: ${{ runner.temp }}/rust-test.log
+          if-no-files-found: ignore
       - name: The shim is static and under 2 MB (HUM-012)
         # The shim is the only binary that is mounted into the sandbox, and the
         # sandbox has none of the host's libraries: it must be statically
