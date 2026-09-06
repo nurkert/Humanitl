@@ -2130,3 +2130,231 @@ in denselben Commit.
 - Ein Agent, der über `agent.command` ausdrücklich benannt wurde, ist etwas
   anderes als einer, der über `PATH` gefunden wurde. Beide Fälle brauchen den
   Befund, aber nur der zweite darf ihn mit `AGENT_001` beantworten.
+
+## HUM-130 · Ein ignoriertes `SIGINT` des Starters erreicht den Agenten und macht seinen Handler wirkungslos
+Sprint: 5 · Größe: M · Abhängigkeiten: — · Blockiert: —
+
+### Kontext
+`humanitl sandbox run` gibt ein `SIGINT` an die Sandbox weiter, statt sie zu
+erschlagen: Der Agent soll selbst aufhören und seinen eigenen Code liefern
+(`daemon/bin/humanitl/src/cmd/sandbox.rs`, `wait_or_interrupt`). Die Bitte ist
+auf `INTERRUPT_GRACE` befristet, fünf Sekunden; danach folgt der Schlag und der
+Lauf endet mit 130.
+
+`execve` setzt einen Signal-**Handler** auf die Vorgabe zurück, behält aber
+`SIG_IGN`. Ein ignoriertes `SIGINT` wandert deshalb von dem, der Humanitl
+gestartet hat, bis in die Sandbox: aus einem Hintergrundjob einer Shell ohne
+Job-Control, aus `nohup`, aus einem Dienst, der mit ignoriertem `SIGINT`
+startet. Der Agent kann dafür keinen Handler mehr setzen — POSIX verbietet
+einer nicht-interaktiven Shell, ein beim Start ignoriertes Signal zu trappen —,
+und die höfliche Bitte trifft einen Prozess, der die Frage nicht hören kann.
+
+Gemessen am 2026-09-06: `sh -c 'trap "exit 42" INT; : > /work/ready; sleep 60'`
+in der Sandbox überlebte das `SIGINT` vollständig; 300 ms danach standen
+`bwrap`, Shim, `sh` und `sleep` unverändert in `ps`, nach fünf Sekunden folgte
+`SIGTERM`, und der Lauf endete mit 130 statt mit 42. Ohne unseren Code
+nachgestellt: dasselbe `bwrap`-Kommando aus einem Hintergrundjob heraus, und
+`kill -INT -<pgid>` bewegt nichts. In `tools/verify-commit.sh` und in
+`make check` — beide aus einem Kontext gestartet, der `SIGINT` ignoriert — war
+`sigint_reaches_the_agent_and_keeps_its_exit_code` deshalb acht von acht Läufen
+rot, während er allein im Terminal in 50 ms grün lief.
+
+Ein zweites, kleineres Loch derselben Stelle: Die Quelle für `SIGINT` wurde
+erst im `select!` angemeldet, also **nach** dem Start der Sandbox. Zwischen
+Start und erstem Warten verschwand ein `SIGINT` spurlos; der Mensch drückt
+Strg+C, nichts passiert, und der Agent läuft weiter.
+
+### Ziel
+Der Agent startet mit den Vorgaben für alle Signale, unabhängig davon, wie
+Humanitl gestartet wurde. Die Quelle für `SIGINT` steht, bevor die Sandbox
+läuft.
+
+### Nicht-Ziel
+Keine längere Frist. Fünf Sekunden reichen einem Handler; die Frist war nie das
+Problem. Keine Weitergabe von `SIGINT` durch den Shim — sie bleibt aus dem
+Grund aus, der in `forward_signals` steht (der Agent bekäme es zweimal).
+
+### Betroffene Pfade
+- `daemon/bin/humanitl-shim/src/main.rs` (`child`, `reset_signal_dispositions`)
+- `daemon/bin/humanitl/src/cmd/sandbox.rs` (`start`, `wait_or_interrupt`)
+- `daemon/bin/humanitl/tests/cli.rs`
+
+### Spezifikation
+Das Zurücksetzen gehört in das Init der Sandbox, nicht in den Starter: Der Shim
+setzt im Kind nach `reset_signal_mask` jede Disposition auf `SIG_DFL`, außer
+für `SIGKILL` und `SIGSTOP`, die sich nicht setzen lassen. Das deckt auch den
+Weg über den Daemon ab, der Sandboxen ohne die Kommandozeile startet.
+
+Die Kommandozeile meldet ihre `SIGINT`-Quelle vor dem Start der Sandbox an
+(`tokio::signal::unix::signal(SignalKind::interrupt())` statt
+`tokio::signal::ctrl_c()` im `select!`). Das schließt das Fenster und hebt
+nebenbei ein geerbtes `SIG_IGN` im eigenen Prozess auf.
+
+Beide Schichten bleiben, obwohl jede für sich genügt (gemessen, siehe unten).
+Der Shim ist die Stelle, die die Zusage für **jeden** Weg in die Sandbox hält;
+die frühe Anmeldung ist die Stelle, die das Fenster schließt. Wer eine davon
+entfernt, nimmt eine Zusage weg, die die andere nicht gibt.
+
+### Tests
+- `an_ignored_sigint_of_the_launcher_does_not_reach_the_agent`: Der Lauf startet
+  über `sh -c "trap '' INT; exec …"`, also mit ignoriertem `SIGINT`, und der
+  Agent endet trotzdem mit 42 — in weniger als vier Sekunden, also vor der
+  Eskalation. Zusätzlich liest der Test die Ignoriermaske des Agenten aus
+  `/proc/self/status` und verlangt, dass `SIGINT` nicht darin steht.
+- Mutationsprobe: Mit beiden Schichten zurückgebaut ist der Test rot
+  (5,15 s, `left: Some(130)`), mit je einer von beiden grün.
+- Der vorhandene `sigint_reaches_the_agent_and_keeps_its_exit_code` bleibt und
+  läuft unter Last aus demselben Kontext.
+
+### Akzeptanzkriterien
+- [x] Ein ignoriertes `SIGINT` des Starters erreicht den Agenten nicht; seine
+      Ignoriermaske ist frei davon (`an_ignored_sigint_of_the_launcher_does_not_reach_the_agent`
+      liest `SigIgn` aus `/proc/self/status` des Agenten und verlangt Bit 1 frei).
+- [x] Der Agent beantwortet das `SIGINT` und behält seinen Exit-Code, auch wenn
+      Humanitl aus einem Hintergrundjob gestartet wurde: derselbe Test verlangt
+      42 in unter vier Sekunden, und zehn Läufe der Suite unter Last aus genau
+      diesem Kontext sind grün, wo vorher acht von acht rot waren.
+- [x] Die `SIGINT`-Quelle der Kommandozeile steht vor dem Start der Sandbox
+      (`cmd/sandbox.rs`, `signal(SignalKind::interrupt())` vor `backend.launch`).
+- [x] Mutationsprobe für beide Schichten dokumentiert, siehe Stand unten.
+- [x] `make check` mit `STRICT=1` grün, also einschließlich clippy mit
+      `-D warnings` und `cargo fmt --all -- --check` (2026-09-06).
+
+### Fallstricke
+- Die beiden Schichten decken einander zu: Eine Mutation in einer allein bleibt
+  grün. Die Probe muss beide zugleich zurückbauen, sonst misst sie nichts.
+- `reset_signal_dispositions` läuft im Kind **nach** dem Fork und
+  **unmittelbar vor** `execvp`, nicht früher. `SIGPIPE` gehört zu den
+  Dispositionen, die es zurücksetzt, und genau dessen geerbtes `SIG_IGN` (Rust
+  setzt es beim Start) hält die Berichtsschreibungen des Kindes am Leben, wenn
+  der Starter nicht mehr liest. Eine frühere Stelle tötet das Kind beim ersten
+  Schreiben in eine geschlossene Pipe; im Review von Codex ist genau das
+  aufgefallen.
+- Die Echtzeit-Signale gehören dazu. Ein ignoriertes `SIGRTMIN+n` fiele sonst
+  genauso still unter den Tisch wie `SIGINT`.
+
+
+### Stand (2026-09-06)
+
+**Die Mutationsprobe braucht beide Schichten zugleich.** Gemessen in vier
+Läufen desselben Tests:
+
+| Shim setzt zurück | Kommandozeile meldet früh an | `an_ignored_sigint_…` |
+|---|---|---|
+| nein | nein | **rot**, 5,15 s, `left: Some(130)` |
+| nein | ja | grün, 0,14 s |
+| ja | nein | grün, 0,14 s |
+| ja | ja | grün, 0,14 s |
+
+Jede Schicht allein genügt also, und darin liegt die Grenze dieses Tests: Er
+deckt die Zusage ab, nicht ihre beiden Quellen. Wer nur eine Schicht entfernt,
+bleibt grün. Beide bleiben trotzdem, weil sie verschiedene Zusagen halten — der
+Shim für **jeden** Weg in die Sandbox, auch den über den Daemon, der die
+Kommandozeile nicht durchläuft; die frühe Anmeldung für das Fenster zwischen
+Start und erstem Warten, das der Shim nicht schließen kann. Ein Test, der den
+Shim allein misst, müsste ihn ohne `bwrap` und ohne Brücken starten; das ist
+ein eigener Zuschnitt und steht hier als bewusst offene Stelle, nicht als
+Versehen.
+
+**Die Reihenfolge im Kind ist die eigentliche Feinheit, und sie ist im Review
+aufgefallen.** Der erste Entwurf setzte die Dispositionen direkt nach
+`reset_signal_mask` zurück, also **vor** den Berichtszeilen des Kindes. Damit
+war `SIGPIPE` wieder auf der Vorgabe, und ein Starter, der die Berichts-Pipe
+nicht mehr liest, hätte das Kind beim nächsten `report.check` getötet — vor
+`execvp`, also mit einer Sandbox, die nie startet. Der vorhandene Kommentar an
+der alten `SIGPIPE`-Zeile sagte das seit HUM-012 („Last, so the report writes
+above cannot kill the child"); der Entwurf hat ihn übersehen. Codex und
+Antigravity haben unabhängig voneinander dieselbe Stelle gemeldet. Der Aufruf
+steht jetzt genau dort, wo vorher das einzelne `SIGPIPE` zurückgesetzt wurde:
+als letzte Zeile vor `exec`.
+
+**Was der Befund über die Ursache hinaus zeigt.** Das Signal kam an: Die
+Prozessgruppe stimmte, `kill(-pgid, SIGINT)` lieferte keinen Fehler, und
+trotzdem lief `sleep 60` weiter. Die Erklärung steckt nicht im Signalweg,
+sondern in der Disposition — und die ist von außen nicht sichtbar, solange man
+nur auf `ps` schaut. Der Weg dahin führte über `/proc/<pid>/status`, und der
+gehört bei jedem „das Signal kommt nicht an" als zweiter Blick dazu.
+
+## HUM-131 · Die Aufzeichnung kennt ein Alter, aber keine Menge
+Sprint: 5 · Größe: M · Abhängigkeiten: — · Blockiert: —
+
+### Kontext
+Humanitl schreibt in das Zuhause des Menschen: die Datenbank
+(`$XDG_DATA_HOME/humanitl/humanitl.db`), den Blob-Speicher daneben und das
+Audit-Protokoll. Begrenzt ist heute jede einzelne Zeile, aber nicht die Summe:
+
+- `limits.recorder_max_body_bytes` (Vorgabe 33 554 432) begrenzt **einen**
+  Body; alles darüber wird nur mit Prüfsumme vermerkt.
+- `recorder.inline_max_bytes` (Vorgabe 262 144) entscheidet nur, ob ein Body in
+  der Datenbank oder als Datei liegt — nicht, ob er überhaupt liegt.
+- `recorder.retention_days` (Vorgabe 90) räumt nach Alter auf, einmal beim
+  Start und danach täglich (`humanitld/src/main.rs`, `purge_daily`).
+
+Ein Alter begrenzt keine Menge. Ein Agent, der einen Tag lang große Antworten
+zieht, füllt bis zu 90 Tage lang, bevor überhaupt etwas gelöscht wird; ein
+zweiter Agent daneben verdoppelt das. Es gibt keine Obergrenze in Bytes, keine
+Verdrängung des Ältesten bei Überschreitung und keine Untergrenze für den
+freien Platz, bei der Humanitl aufhört, Rümpfe zu schreiben, statt die Platte
+des Menschen zu füllen. `journald` (`SystemMaxUse`, `SystemKeepFree`) und
+`docker` (`max-size`, `max-file`) führen beides seit Jahren; ein Werkzeug, das
+im Hintergrund mitschreibt, braucht es.
+
+### Ziel
+Die Aufzeichnung hat eine Mengengrenze und eine Untergrenze für den freien
+Platz. Beide sind Einstellungen mit Vorgaben, beide sind gemessen, und beim
+Erreichen der Grenze passiert etwas Benanntes statt etwas Stillem.
+
+### Nicht-Ziel
+Keine Kompression in diesem Issue (eigener Schnitt, eigene Messung). Keine
+Änderung an dem, was aufgezeichnet wird — die Auswahl ist ADR-008.
+
+### Betroffene Pfade
+- `daemon/crates/recorder/src/` (Grenze, Verdrängung, Bericht)
+- `daemon/crates/config/src/model.rs` (`recorder.max_total_bytes`,
+  `recorder.keep_free_bytes`), `docs/CONFIG.md` (erzeugt)
+- `daemon/bin/humanitld/src/main.rs` (die tägliche Aufgabe)
+- `daemon/crates/core-types/src/diagnostics/codes.rs` (ein Befund für den Fall)
+
+### Spezifikation
+Zwei Zahlen, beide in `recorder`:
+
+- `max_total_bytes`: die Summe aus Datenbank und Blob-Speicher. Über der Grenze
+  wird das Älteste verdrängt, in derselben Reihenfolge wie die Aufbewahrung es
+  tut, bis wieder Platz ist. Vorgabe: 2 GiB.
+- `keep_free_bytes`: der freie Platz des Dateisystems, unter den Humanitl nicht
+  drückt. Darunter werden **Rümpfe** nicht mehr abgelegt (Kopfzeilen, Regel,
+  Entscheidung und Prüfsumme bleiben, das ist die Zusage aus ADR-008), und ein
+  Befund sagt es einmal je Sitzung statt in jeder Zeile. Vorgabe: 1 GiB.
+
+Gemessen wird die Summe, nicht geschätzt: `page_count * page_size` der
+Datenbank plus die Größe des Blob-Verzeichnisses, gecacht und bei jedem
+Purge-Lauf neu erhoben.
+
+### Tests
+- Eine Aufzeichnung über `max_total_bytes` verliert die ältesten Flows, bis sie
+  darunter liegt; die jüngsten und alle gehaltenen bleiben.
+- Unter `keep_free_bytes` wird ein Body nicht mehr abgelegt, der Flow aber
+  weiterhin vollständig verzeichnet, und der Befund steht genau einmal.
+- Mutationsprobe: Wer die Grenze auf `u64::MAX` setzt, macht den ersten Test
+  rot.
+- Eine Messung im Commit-Body: wie viele Bytes eine Sitzung mit einem
+  Standard-Prompt tatsächlich schreibt.
+
+### Akzeptanzkriterien
+- [ ] `recorder.max_total_bytes` und `recorder.keep_free_bytes` stehen im
+      Schema, in `docs/CONFIG.md` und im Leser-Register als `effective`.
+- [ ] Die Summe wird gemessen, die Verdrängung nimmt das Älteste zuerst.
+- [ ] Unter der Untergrenze bleibt die Aufzeichnung vollständig bis auf die
+      Rümpfe, und der Mensch erfährt es einmal.
+- [ ] Die gemessene Größe einer Sitzung steht im Commit-Body.
+- [ ] `make check`, clippy mit `-D warnings` und `cargo fmt --all -- --check` grün.
+
+### Fallstricke
+- `VACUUM` gibt den Platz einer SQLite-Datenbank erst zurück, wenn er läuft;
+  ohne ihn schrumpft die Datei nach dem Löschen nicht, und die Messung sähe
+  eine Grenze, die längst unterschritten ist.
+- Die Verdrängung darf keinen gehaltenen Fluss löschen, über den gerade
+  entschieden wird.
+- Ein Blob hängt an mehreren Zeilen (Deduplizierung über sha256). Er fällt erst,
+  wenn die letzte Zeile fällt — sonst zeigt eine Aufzeichnung auf eine Datei,
+  die es nicht mehr gibt.

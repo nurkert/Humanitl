@@ -115,7 +115,13 @@ impl Harness {
 
     /// Ein Aufruf des Binaries in dieser Umgebung.
     fn command(&self) -> Command {
-        let mut command = Command::new(BIN);
+        self.command_of(BIN)
+    }
+
+    /// Wie [`Harness::command`], aber mit einem anderen Programm: für Läufe,
+    /// die das Binary über einen Starter erreichen.
+    fn command_of(&self, program: &str) -> Command {
+        let mut command = Command::new(program);
         command
             .current_dir(self.path("work"))
             .env("HOME", self.path("home"))
@@ -1869,6 +1875,102 @@ fn sigint_reaches_the_agent_and_keeps_its_exit_code() {
         status.code(),
         Some(42),
         "the handler of the agent must decide the exit code, not the escalation"
+    );
+}
+
+/// Ein Starter, der `SIGINT` ignoriert, macht den Agenten nicht taub.
+///
+/// `execve` setzt einen Handler zurück, behält aber `SIG_IGN`. Ohne das
+/// Zurücksetzen im Shim erbt der Agent das ignorierte Signal, sein `trap` ist
+/// nach POSIX wirkungslos, und aus der Bitte wird nach der Frist ein Schlag.
+/// Genau so sieht jeder Hintergrundjob einer Shell ohne Job-Control aus, jeder
+/// `nohup`-Aufruf und jeder Dienst, den systemd mit ignoriertem `SIGINT`
+/// startet — und genau so ist dieser Test am 2026-09-06 rot geworden, bevor
+/// `reset_signal_dispositions` da war.
+#[test]
+fn an_ignored_sigint_of_the_launcher_does_not_reach_the_agent() {
+    let Some(_shim) = sandbox_required() else {
+        return;
+    };
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+    let _socket = harness.wire_daemon_files();
+
+    // `trap '' INT` setzt `SIG_IGN`, `exec` behält es: Was hier startet, ist
+    // dasselbe Binary im selben Prozess, nur mit ignoriertem `SIGINT`.
+    let mut child = harness
+        .command_of("sh")
+        .args([
+            "-c",
+            "trap '' INT; exec \"$0\" \"$@\"",
+            BIN,
+            "sandbox",
+            "run",
+            "--",
+            "sh",
+            "-c",
+            "trap 'exit 42' INT; \
+             sed -n 's/^SigIgn:\\t//p' /proc/self/status > /work/sigign; \
+             : > /work/ready; sleep 60",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the launcher starts");
+
+    let ready = harness.path("work").join("ready");
+    let waiting = Instant::now();
+    while !ready.exists() {
+        assert!(
+            waiting.elapsed() < PATIENCE,
+            "the agent did not install its handler within {PATIENCE:?}"
+        );
+        if let Some(status) = child.try_wait().expect("the child is waitable") {
+            panic!("the sandbox ended before the handler was installed: {status}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let pid = child.id();
+    let signalled = Command::new("kill")
+        .args(["-INT", &pid.to_string()])
+        .status()
+        .expect("kill runs");
+    assert!(signalled.success(), "cannot send SIGINT to {pid}");
+
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("the child is waitable") {
+            break status;
+        }
+        assert!(
+            started.elapsed() < PATIENCE,
+            "the command did not stop within {PATIENCE:?}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+
+    assert_eq!(
+        status.code(),
+        Some(42),
+        "an ignored SIGINT of the launcher must not travel into the sandbox"
+    );
+    // Nicht nur das Ergebnis, sondern der Zustand: Der Agent hat `SIGINT`
+    // nicht in seiner Ignoriermaske. Ohne diese Zusicherung bliebe der Test
+    // grün, sobald irgendeine Schicht das Signal zufällig doch zustellt.
+    let mask = std::fs::read_to_string(harness.path("work").join("sigign"))
+        .expect("the agent wrote its ignore mask");
+    let bits = u64::from_str_radix(mask.trim(), 16).expect("the mask is hexadecimal");
+    assert_eq!(
+        bits & (1 << 1),
+        0,
+        "SIGINT is in the agent's ignore mask ({mask}); it was inherited"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "the agent answered only after the grace of the escalation ({:?}); \
+         that means the signal never reached it",
+        started.elapsed()
     );
 }
 
