@@ -11,6 +11,7 @@ import 'dart:io';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ui/focus_ring.dart';
@@ -24,28 +25,35 @@ import 'package:humanitl/core/ui/section_placeholder.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/l10n/l10n.dart';
 
-/// Ein Wirt mit Theme, Sprache, Overlay und den Standard-Tastenzuordnungen —
-/// alles, was die Anwendung mitbringt und ein einzelnes Widget braucht.
-Widget host(Widget child, {HTokens? tokens}) => WidgetsApp(
-  color: HColors.bg0,
-  debugShowCheckedModeBanner: false,
-  locale: const Locale('en'),
-  localizationsDelegates: AppLocalizations.localizationsDelegates,
-  supportedLocales: AppLocalizations.supportedLocales,
-  onGenerateTitle: (BuildContext context) => 'design system',
-  builder: (BuildContext context, Widget? _) => HTheme(
-    tokens: tokens ?? HTokens.dark,
-    child: Overlay(
-      initialEntries: <OverlayEntry>[
-        OverlayEntry(
-          // Ein Bereich, der den Fokus annimmt: ohne ihn hat `Tab` keinen
-          // Ausgangspunkt, und die Anwendung hat ihn über ihre Route.
-          builder: (BuildContext context) => FocusScope(
-            autofocus: true,
-            child: Align(alignment: Alignment.topLeft, child: child),
+/// Ein Wirt mit Theme, Sprache, Overlay, Provider-Bereich und den
+/// Standard-Tastenzuordnungen — alles, was die Anwendung mitbringt und ein
+/// einzelnes Widget braucht.
+///
+/// Der Bereich gehört seit HUM-044 dazu: `FixControl` liest seinen Installer
+/// aus `serviceInstallerProvider`, wenn kein Parameter ihn setzt, und die
+/// Anwendung hat ihren Bereich über `main.dart`.
+Widget host(Widget child, {HTokens? tokens}) => ProviderScope(
+  child: WidgetsApp(
+    color: HColors.bg0,
+    debugShowCheckedModeBanner: false,
+    locale: const Locale('en'),
+    localizationsDelegates: AppLocalizations.localizationsDelegates,
+    supportedLocales: AppLocalizations.supportedLocales,
+    onGenerateTitle: (BuildContext context) => 'design system',
+    builder: (BuildContext context, Widget? _) => HTheme(
+      tokens: tokens ?? HTokens.dark,
+      child: Overlay(
+        initialEntries: <OverlayEntry>[
+          OverlayEntry(
+            // Ein Bereich, der den Fokus annimmt: ohne ihn hat `Tab` keinen
+            // Ausgangspunkt, und die Anwendung hat ihn über ihre Route.
+            builder: (BuildContext context) => FocusScope(
+              autofocus: true,
+              child: Align(alignment: Alignment.topLeft, child: child),
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     ),
   ),
 );

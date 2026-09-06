@@ -1606,7 +1606,7 @@ Coach-Mark: Beim ersten `Held`-Flow einer Installation erscheint über der Aktio
 - CLI: `daemon install` schreibt die Unit in ein temporäres `XDG_CONFIG_HOME`, `ExecStart` zeigt auf `current_exe()`-Nachbarn, keine Socket-Unit; `humanitl doctor --json` liefert fünf Zeilen.
 
 ### Akzeptanzkriterien
-- [ ] Frische Installation ohne laufenden Daemon: App zeigt Setup mit `DAEMON_001`, Klick auf Fix installiert und startet die Unit, Zeile wird binnen 4 s grün (durch den 2-s-Retry). — **Offen, und zwar nur die Verkettung.** Jede der vier Aussagen ist gehalten: `setup_shows_daemon_001_with_install_action` und `setup_offers_the_install_button_for_the_ordinary_daemon_001` zeigen Befund und Aktion, `install_service_runs_the_command_that_does_it` und `install_service_without_a_stand_in_runs_the_real_command` fahren den Befehl ohne Shell, ohne `PATH`, ohne `sudo`, `a stopped daemon is tried again every two seconds` zeigt die Zeile ohne Zutun grün werden. Was kein Test hält, ist der Klick **und** die Rückkehr in einem Lauf: `FixControl` nimmt seinen Runner als Parameter, aber der App-Baum reicht keinen durch, also gibt es keine Naht, an der ein Widget-Test beides verbinden könnte. Die Naht zu bauen ist eine Entwurfsänderung und gehört nicht in einen Mess-Commit.
+- [x] Frische Installation ohne laufenden Daemon: App zeigt Setup mit `DAEMON_001`, Klick auf Fix installiert und startet die Unit, Zeile wird binnen 4 s grün (durch den 2-s-Retry). **Die Verkettung ist am 2026-09-06 gemessen, und die Naht dafür ist gebaut.** Bis dahin hielt jede der vier Aussagen einzeln (`setup_shows_daemon_001_with_install_action`, `setup_offers_the_install_button_for_the_ordinary_daemon_001`, `install_service_runs_the_command_that_does_it`, `install_service_without_a_stand_in_runs_the_real_command`, `a stopped daemon is tried again every two seconds`), aber kein Test verband Klick und Rückkehr: `FixControl` nahm seinen Runner nur als Parameter, und der Anwendungsbaum reichte keinen durch. Jetzt liest `FixControl` ihn aus `serviceInstallerProvider`, wenn kein Parameter ihn setzt — dasselbe Muster wie `directoryChooserProvider` beim Projektordner —, und `the install button starts the daemon and the line turns green` (`app/test/features/setup/setup_test.dart`) fährt den ganzen Weg: Bildschirm des Aufbaus mit `DAEMON_001` und Knopf, Klick, der Installer stellt den Dienst an, und der Zwei-Sekunden-Versuch bringt die Shell zurück. Mutationsprobe: den Provider ignorieren und wieder fest `runInstallService` nehmen, Test rot.
 - [x] Ohne bwrap: `SANDBOX_001` mit distributionsspezifischem Befehl, in der App wie in `humanitl doctor`.
 - [x] Alle grün ⇒ Start ⇒ Intercept-Screen; der Ring im Header wird grün, sobald HUM-041 gelandet ist (bis dahin grau, `IsolationRingPlaceholder`).
 - [x] Coach-Mark erscheint genau einmal.
@@ -1615,8 +1615,9 @@ Coach-Mark: Beim ersten `Held`-Flow einer Installation erscheint über der Aktio
 
 ### Stand (2026-09-06): gemergt nach fünf Review-Runden und fünfzig bestätigten Defekten
 
-Gemessen, nicht behauptet. Fünf der sechs Kriterien sind abgehakt, jedes gegen
-einen benannten Test oder eine ausgeführte Messung:
+Gemessen, nicht behauptet. Alle sechs Kriterien sind abgehakt, jedes gegen
+einen benannten Test oder eine ausgeführte Messung (das erste seit dem
+2026-09-06, siehe unten):
 
 - **Distributionsspezifischer Befehl**: `daemon/crates/sandbox/src/os_release.rs`
   wählt aus vier fest einkompilierten Literalen über `ID` und `ID_LIKE`; kein
@@ -1635,8 +1636,15 @@ einen benannten Test oder eine ausgeführte Messung:
   Abzeichen bleibt.
 - **Goldens**: sechs Bilder für drei Lagen in hell und dunkel.
 
-Das erste Kriterium bleibt offen; der Grund steht bei ihm, und er ist eine
-fehlende Naht, kein fehlendes Verhalten.
+**Nachtrag 2026-09-06: das erste Kriterium ist zu.** Es war keine fehlende
+Fähigkeit, sondern eine fehlende Naht — `FixControl` nahm seinen Runner nur als
+Parameter, und der Anwendungsbaum reichte keinen durch, also gab es keine
+Stelle, an der ein Widget-Test Klick und Rückkehr verbinden konnte. Die Naht ist
+jetzt ein Provider (`serviceInstallerProvider`, dasselbe Muster wie
+`directoryChooserProvider`), und `the install button starts the daemon and the
+line turns green` fährt den Weg in einem Lauf. Der Preis steht dabei: Wer
+`FixControl` außerhalb der Anwendung baut, braucht einen `ProviderScope` um
+seinen Wirt; die drei Test-Wirte, die keinen hatten, haben ihn bekommen.
 
 **Was die fünf Runden gefunden haben**, weil die Form davon wiederkehrt: eine
 Oberfläche, die richtig aussah und log — der eingefrorene Bildschirm war nicht

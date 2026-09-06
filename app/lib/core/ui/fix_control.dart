@@ -25,6 +25,7 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../domain/domain.dart';
 import '../../l10n/l10n.dart';
@@ -250,8 +251,25 @@ Diagnostic _installFailed(String why) => Diagnostic(
   fix: const FixAction.copyCommand(command: installServiceCommand),
 );
 
+/// Was ein Klick auf [FixAction.installService] startet. In Tests ersetzt.
+typedef ServiceInstaller = Future<Diagnostic?> Function();
+
+/// Der Installer, den [FixControl] benutzt.
+///
+/// Er steht als Provider da und nicht nur als Parameter, weil sonst niemand
+/// ihn austauschen kann, der nicht selbst ein [FixControl] baut: Der
+/// Anwendungsbaum reicht keinen durch — der Knopf entsteht tief in einer
+/// Diagnostik-Karte —, und damit gab es keine Naht, an der ein Widget-Test
+/// den Klick **und** die Rückkehr in einem Lauf messen könnte. Genau das
+/// verlangt das letzte Akzeptanzkriterium von HUM-044.
+///
+/// Der Parameter [FixControl.installService] bleibt und gewinnt, wo er
+/// gesetzt ist; die Tests des Knopfes selbst benutzen ihn weiter.
+final Provider<ServiceInstaller> serviceInstallerProvider =
+    Provider<ServiceInstaller>((Ref ref) => runInstallService);
+
 /// The control for a [FixAction].
-class FixControl extends StatefulWidget {
+class FixControl extends ConsumerStatefulWidget {
   /// Creates the control for [fix]; renders nothing for null.
   const FixControl({
     required this.fix,
@@ -265,8 +283,9 @@ class FixControl extends StatefulWidget {
 
   /// Was der Knopf von [FixAction.installService] tut.
   ///
-  /// Null bedeutet [runInstallService]; Tests setzen ihre eigene Fassung ein,
-  /// damit kein Widget-Test einen Prozess startet.
+  /// Null bedeutet [serviceInstallerProvider], also ohne Ersetzung
+  /// [runInstallService]; Tests setzen ihre eigene Fassung ein, damit kein
+  /// Widget-Test einen Prozess startet.
   final Future<Diagnostic?> Function()? installService;
 
   /// Key of the copy button, for a screen that draws more than one of these.
@@ -277,10 +296,10 @@ class FixControl extends StatefulWidget {
   final Key? copyKey;
 
   @override
-  State<FixControl> createState() => _FixControlState();
+  ConsumerState<FixControl> createState() => _FixControlState();
 }
 
-class _FixControlState extends State<FixControl> {
+class _FixControlState extends ConsumerState<FixControl> {
   bool _copied = false;
   bool _installing = false;
   Diagnostic? _installFailure;
@@ -298,8 +317,9 @@ class _FixControlState extends State<FixControl> {
       _installing = true;
       _installFailure = null;
     });
-    final Diagnostic? failure =
-        await (widget.installService ?? runInstallService)();
+    final ServiceInstaller installer =
+        widget.installService ?? ref.read(serviceInstallerProvider);
+    final Diagnostic? failure = await installer();
     if (!mounted) {
       return;
     }

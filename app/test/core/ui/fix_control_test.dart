@@ -12,6 +12,7 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ui/fix_control.dart';
@@ -21,18 +22,25 @@ import 'package:humanitl/l10n/l10n.dart';
 import 'shell_command_test.dart' show shellWords;
 
 /// Ein Wirt mit Theme und Sprache, so schmal wie das Control es braucht.
-Widget host(Widget child) => WidgetsApp(
-  color: HColors.bg0,
-  debugShowCheckedModeBanner: false,
-  locale: const Locale('en'),
-  localizationsDelegates: AppLocalizations.localizationsDelegates,
-  supportedLocales: AppLocalizations.supportedLocales,
-  onGenerateTitle: (BuildContext context) => 'fix control',
-  builder: (BuildContext context, Widget? _) => HTheme(
-    tokens: HTokens.dark,
-    child: Align(
-      alignment: Alignment.topLeft,
-      child: SizedBox(width: 480, child: child),
+Widget host(Widget child) => ProviderScope(
+  // Seit HUM-044 liest `FixControl` seinen Installer aus
+  // `serviceInstallerProvider`, wenn kein Parameter ihn setzt. Ohne Bereich
+  // gäbe es keinen Provider, den es lesen könnte; die Vorgabe bleibt
+  // `runInstallService`, und genau die misst
+  // `install_service_without_a_stand_in_runs_the_real_command`.
+  child: WidgetsApp(
+    color: HColors.bg0,
+    debugShowCheckedModeBanner: false,
+    locale: const Locale('en'),
+    localizationsDelegates: AppLocalizations.localizationsDelegates,
+    supportedLocales: AppLocalizations.supportedLocales,
+    onGenerateTitle: (BuildContext context) => 'fix control',
+    builder: (BuildContext context, Widget? _) => HTheme(
+      tokens: HTokens.dark,
+      child: Align(
+        alignment: Alignment.topLeft,
+        child: SizedBox(width: 480, child: child),
+      ),
     ),
   ),
 );
