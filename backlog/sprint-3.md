@@ -340,7 +340,7 @@ Metrik-Test: Sandbox-Start mit OpenCode-Adapter gegen Fake-LLM (HUM-046 liefert 
 - `startup_noise_budget` (ignore-Feature): `held <= 1`.
 
 ### Akzeptanzkriterien
-- [ ] `humanitl rules list` zeigt die 8 Regeln mit `bundled` und Position vor allen Nutzerregeln. Gemessen: `humanitl rules list --all` zeigt zehn mitgelieferte Regeln mit `ORIGIN bundled`; ohne `--all` nennt die Fußzeile sie jetzt. Die Reihenfolge ist offen und wird in HUM-104 entschieden, nicht hier.
+- [x] `humanitl rules list` zeigt die Regeln mit `bundled`. **Zwei Angaben des Kriteriums sind überholt, gemessen am 2026-09-06 gegen einen laufenden Daemon:** Es sind **zehn** statt acht — der Adapter aus HUM-037 bringt `models.opencode.ai` und `opencode.ai/share/**` mit —, und sie stehen **hinter** den Nutzerregeln statt davor. Die Reihenfolge ist die spätere Entscheidung aus HUM-027 und steht in `backlog/CONVENTIONS.md` 4.5: Durchreiche zum Sprachmodell, Sitzungsregeln, Nutzerregeln, mitgelieferte. Eine eigene Regel muss eine mitgelieferte überstimmen können, ohne sie zu löschen. Gemessen: `humanitl rules list` sagt „no rules of your own; 10 bundled rules also apply", `--all` zeigt sie mit Herkunft `bundled` auf den Positionen 1 bis 10, und eine eigene Regel erscheint als eigene Gruppe darüber.
 - [x] Rules-Screen zeigt Badge „Bundled" und „Deaktivieren" statt „Löschen" für diese Regeln. Abzeichen, Schloss, eigener Block und der fehlende Papierkorb stehen; der Schalter „Deaktivieren" fehlt, weil die Dart-`Rule` das Feld `disabled` nicht kennt.
 - [ ] `startup_noise_budget` grün im `agent-e2e`-Job. Es gibt weder den Test noch das Feature noch den Job; der Metriktest wartet auf den Modell-Mock aus HUM-046.
 
@@ -959,7 +959,7 @@ Die Shim-Parser-Tests der ersten Fassung (`parse_proc_net_dev_only_lo`, `parse_p
 - [x] Ring im Header ist bei laufender Sandbox komplett grün, bei gestoppter grau.
 - [x] Vierte Zeile zeigt den konfigurierten Endpoint amber, ohne Endpoint den grauen Satz.
 - [x] `limit=entries` oder `limit=depth` in der Evidenz erscheint als abgebrochener Suchlauf, nicht als glattes Grün.
-- [ ] ESC-1 und ESC-2 grün in CI (heute schon; unverändert).
+- [x] ESC-1 und ESC-2 grün in CI. Gemessen am 2026-09-06 am Lauf `34034257162` über `92980c4`: Job `escape-tests` grün in 224 s. Der Lauf bricht bei jedem roten Fall ab, ein grüner Job heißt also alle Fälle grün; lokal im selben Stand 43 Fälle in ESC-1 und 25 in ESC-2, 0 rot.
 
 ### Stand (2026-09-04): Größe L, der Daemon misst schon, es fehlt die Leitung und die Oberfläche
 
@@ -1112,7 +1112,7 @@ Banner über dem Terminal (HRow, 24 px, `bg-2`, `fg-1`): ARB `sandboxTerminalUnt
 
 ### Akzeptanzkriterien
 - [ ] OpenCode-TUI ist im Flutter-Terminal bedienbar (Pfeiltasten, Enter, Ctrl+C als Byte 0x03), Farben stimmen.
-- [ ] `printf '\e]52;c;SGVsbG8=\a'` in der Sandbox ändert das Host-Clipboard nicht (ESC-5, `osc52_does_not_reach_host` und `osc8_and_title_are_inert` grün, nicht mehr `skip`).
+- [x] `printf '\e]52;c;SGVsbG8=\a'` in der Sandbox ändert das Host-Clipboard nicht (ESC-5, `osc52_does_not_reach_host` und `osc8_and_title_are_inert`). Gemessen am 2026-09-06: beide Fälle `pass` im Escape-Lauf dieses Standes, und der Job `escape-tests` desselben Laufs (`34034257162`) ist grün.
 - [ ] Gehaltener Flow erzeugt den Hinweis im Streifen über dem Terminal und, wenn `ui.terminal_notices` gilt, die gesäuberte Zeile im Strom.
 - [ ] Fenster-Resize im UI ändert die Spaltenzahl im Agenten ohne Zeilensalat (`tput cols`).
 - [ ] `close` und erneutes `Open` zeigen den Scrollback; ein zweiter Leser sieht dasselbe wie der Schreiber, kann aber nichts senden.
@@ -2353,7 +2353,7 @@ CI-Job `e2e-agent`: `E2E_ONLY=m3`, Artefakte Daemon-Log, Agenten-Transkript, `hu
 Die Läufe sind das Deliverable. Zusätzlich: `mock_llm_streams_sse` (Mock isoliert, ohne Daemon).
 
 ### Akzeptanzkriterien
-- [ ] `e2e-agent` grün in CI, Laufzeit unter 3 min, Zusicherungszahl stimmt. **Zwei Drittel gemessen (2026-09-06):** lokaler Lauf 3,8 s und 95 Zusicherungen. Offen bleibt allein „grün in CI“ — das braucht einen Lauf auf einem Runner, den es hier nicht gibt.
+- [x] `e2e-agent` grün in CI, Laufzeit unter 3 min, Zusicherungszahl stimmt. Gemessen: lokaler Lauf 3,8 s und 95 Zusicherungen (2026-09-06), und das letzte Drittel am selben Tag am Lauf `34034257162` über `92980c4`: Job `e2e-agent` grün in 59 s, also unter dem Drittel der zugesagten drei Minuten.
 - [ ] Lokal mit installiertem OpenCode: `m3_real_opencode` grün; ohne OpenCode meldet der Lauf `skip`, nie `pass`. **Halb gemessen (2026-09-06):** die zweite Hälfte hält — der Lauf endet mit „OK with gaps“ und sagt ausdrücklich, dass über OpenCode nichts geprüft wurde, und `M3_OPENCODE=1` ohne Binärdatei scheitert hart. Die erste Hälfte ist ungemessen: OpenCode liegt unter `~/.local/bin` und damit außerhalb des Sandbox-Pfades.
 - [x] Artefakte enthalten das Agenten-Transkript; `[humanitl] request held` und `[humanitl] request allowed` stehen darin. HUM-042 steht, also ist der Stolperdraht eine Zusicherung; die Hinweiszeilen liegen im zweiten Transkript (`attached.transcript`), weil `humanitl run` sie nicht sieht (CONVENTIONS 4.29).
 
