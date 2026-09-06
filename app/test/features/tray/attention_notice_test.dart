@@ -6,6 +6,7 @@
 import 'dart:io' show File;
 
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ui/ui.dart';
@@ -36,23 +37,33 @@ double contrastOn(Color foreground, List<Color> layers, Color base) {
 }
 
 /// Die Karte in einem Fenster von [width], mit [textScaler].
+///
+/// Der Provider-Bereich gehoert dazu, seit `FixControl` seinen Installer aus
+/// `serviceInstallerProvider` liest (HUM-044): Die Karte baut immer eines,
+/// und ohne Bereich haette ein Klick auf „Dienst installieren" hier keinen,
+/// den er lesen koennte. Die Anwendung hat ihren ueber `main.dart`.
 Widget card({
   required Diagnostic diagnostic,
   double width = 900,
   TextScaler textScaler = TextScaler.noScaling,
-}) => WidgetsApp(
-  color: HColors.bg0,
-  localizationsDelegates: AppLocalizations.localizationsDelegates,
-  supportedLocales: AppLocalizations.supportedLocales,
-  builder: (BuildContext context, Widget? _) => MediaQuery(
-    data: MediaQueryData(textScaler: textScaler),
-    child: HTheme(
-      tokens: HTokens.dark,
-      child: Align(
-        alignment: Alignment.topLeft,
-        child: SizedBox(
-          width: width,
-          child: AttentionNoticeCard(diagnostic: diagnostic, onDismiss: () {}),
+}) => ProviderScope(
+  child: WidgetsApp(
+    color: HColors.bg0,
+    localizationsDelegates: AppLocalizations.localizationsDelegates,
+    supportedLocales: AppLocalizations.supportedLocales,
+    builder: (BuildContext context, Widget? _) => MediaQuery(
+      data: MediaQueryData(textScaler: textScaler),
+      child: HTheme(
+        tokens: HTokens.dark,
+        child: Align(
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: width,
+            child: AttentionNoticeCard(
+              diagnostic: diagnostic,
+              onDismiss: () {},
+            ),
+          ),
         ),
       ),
     ),
