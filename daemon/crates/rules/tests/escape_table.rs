@@ -4,9 +4,10 @@
 //! das Skript ruft ihn mit `cargo test -- --exact <name>` auf und verbucht das
 //! Ergebnis im Escape-Bericht. Der Umweg über die Test-Binärdatei hat einen
 //! Grund: die Crate ist rein (kein IO), also gibt es kein Werkzeug, das eine
-//! Regel-Datei von der Kommandozeile aus auswertet. Sobald `humanitl rules
-//! test URL` existiert (HUM-065), kann das Skript zusätzlich den Weg nehmen,
-//! den auch der Nutzer nimmt.
+//! Regel-Datei von der Kommandozeile aus auswertet. Seit HUM-114 nimmt das
+//! Skript zusätzlich den Weg, den auch der Nutzer nimmt: `rules_cli_01` bis
+//! `rules_cli_15` fragen dieselben Zeilen der Host-Tabelle über `humanitl
+//! rules test` beim Daemon des Laufs, mit demselben Regelsatz.
 //!
 //! Der Regelsatz steht in `tests/fixtures/esc4.yaml` und wird zur Bauzeit
 //! eingebettet.

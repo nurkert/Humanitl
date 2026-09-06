@@ -33,7 +33,7 @@ use humanitl_ipc::v1;
 use serde_json::{Value, json};
 
 use crate::cli::{RuleArgs, RulesCmd};
-use crate::cmd::{Context, EXIT_OK, EXIT_USER, Failure, from_proto, status_diagnostic};
+use crate::cmd::{Context, EXIT_ASK, EXIT_BLOCK, EXIT_OK, Failure, from_proto, status_diagnostic};
 use crate::render::{diagnostic_block, diagnostic_json, table};
 
 /// Die Spalten von `rules list` (`backlog/sprint-2.md`, HUM-065).
@@ -52,13 +52,11 @@ const HEADERS: [&str; 8] = [
 /// mitgelieferten Regel.
 pub async fn run(ctx: &Context, cmd: &RulesCmd) -> Result<u8, Failure> {
     match cmd {
-        // Braucht keinen Daemon: es gibt die Operation im Vertrag nicht, und
-        // das ist unabhängig davon, ob gerade einer läuft.
         RulesCmd::Test {
             url,
             method,
             upgrade,
-        } => Err(test_not_yet(url, method.as_deref(), upgrade.as_deref())),
+        } => test(ctx, url, method.as_deref(), upgrade.as_deref()).await,
         RulesCmd::List { all } => list(ctx, *all).await,
         RulesCmd::Add { rule } => add(ctx, rule).await,
         RulesCmd::Update { id, rule } => update(ctx, id, rule).await,
@@ -713,6 +711,7 @@ fn rule_json(rule: &v1::Rule) -> Value {
         "action": action_name(rule.action),
         "origin": origin(rule),
         "bundled": rule.bundled,
+        "passthrough": rule.passthrough_llm,
         "host": matcher.host,
         "methods": method_names(&matcher.methods),
         "path": matcher.path,
@@ -1059,37 +1058,204 @@ fn unknown_diagnostic(wire: &v1::Diagnostic) -> Diagnostic {
         .build()
 }
 
-/// Der Befund für `humanitl rules test`.
+/// `rules test URL [--method M] [--upgrade websocket]`.
 ///
-/// Das Kommando steht in `backlog/CONVENTIONS.md` 3.8 und in der
-/// Spezifikation, aber der Vertrag hat keine Operation, die eine URL gegen den
-/// Regelsatz auswertet. Sie hier auszuwerten hieße, die Engine ein zweites Mal
-/// zu bauen (ADR-018); solange die RPC fehlt, sagt das Kommando genau das.
-fn test_not_yet(url: &str, method: Option<&str>, upgrade: Option<&str>) -> Failure {
-    use core::fmt::Write as _;
+/// Ausgewertet wird im Daemon, mit derselben Engine wie im Proxy-Pfad
+/// (ADR-018): Eine zweite Auswertung in der Kommandozeile könnte anders
+/// antworten als die, die wirklich entscheidet, und dann wäre dieses Kommando
+/// genau dort falsch, wo es gebraucht wird.
+///
+/// Der Exit-Code trägt das Verdikt (CONVENTIONS 3.8), damit ein Skript ihn
+/// lesen kann, ohne die Zeile zu zerlegen: `allow` 0, `block` 10, `ask` und
+/// `redact` 11. Er läuft nicht über [`crate::cmd::exit_code`] -- der bildet
+/// Befunde ab, und ein Verdikt ist keiner.
+async fn test(
+    ctx: &Context,
+    url: &str,
+    method: Option<&str>,
+    upgrade: Option<&str>,
+) -> Result<u8, Failure> {
+    let probe = v1::rules_request::Test {
+        // Ohne `--method` gilt `GET`: `METHOD_UNSPECIFIED` lehnt der Daemon
+        // mit `IPC_005` ab, und eine Probe ohne Methode gibt es nicht.
+        method: match method {
+            Some(name) => method_from_name(name)? as i32,
+            None => v1::Method::Get as i32,
+        },
+        // Roh, wie sie der Mensch geschrieben hat. Die Normalisierung -- Punycode,
+        // Punkt am Ende, Groß- und Kleinschreibung -- gehört dem Daemon; eine
+        // zweite hier antwortete früher oder später anders als die erste.
+        url: probe_url(url)?.to_owned(),
+        upgrade: match upgrade {
+            Some(_) => v1::Upgrade::Websocket as i32,
+            None => v1::Upgrade::Unspecified as i32,
+        },
+    };
+    let response = call(ctx, v1::rules_request::Op::Test(probe)).await?;
+    warnings(ctx, &response);
+    let result = response.test.clone().ok_or_else(no_verdict)?;
 
-    // Ein `String` nimmt jedes `write!` an; der `Result` kann nicht scheitern.
-    let mut what = format!("humanitl rules test {url}");
-    if let Some(method) = method {
-        let _ = write!(what, " --method {method}");
+    let verdict = action_name(result.action);
+    // Gesucht wird nur, wenn getroffen wurde: Sonst trüge `--json` Herkunft und
+    // Position einer Regel, während die Zeile daneben `rule: none` sagt.
+    let rule = result
+        .matched
+        .then(|| {
+            response
+                .rules
+                .iter()
+                .find(|rule| !result.rule_id.is_empty() && rule.rule_id == result.rule_id)
+        })
+        .flatten();
+    let exit = verdict_exit(result.action)?;
+
+    if ctx.render.is_json() {
+        ctx.render.value(&json!({
+            "verdict": verdict,
+            "matched": result.matched,
+            "rule_id": result.rule_id,
+            "origin": rule.map(origin),
+            "position": result.position,
+            // `null`, wenn die Regel zur Antwort fehlt: Dasselbe „unbekannt",
+            // das `origin` daneben schon sagt, und nicht das Wort `false`.
+            "passthrough": rule.map(|rule| rule.passthrough_llm),
+        }));
+        return Ok(exit);
     }
-    if let Some(upgrade) = upgrade {
-        let _ = write!(what, " --upgrade {upgrade}");
+
+    ctx.render.line(&format!("verdict: {verdict}"));
+    ctx.render.line(&rule_line(&result, rule, verdict));
+    Ok(exit)
+}
+
+/// Der Exit-Code zu einem Verdikt, oder ein Befund.
+///
+/// `allow` 0, `block` 10, `ask` und `redact` 11 (CONVENTIONS 3.8); `redact`
+/// wird heute gehalten wie ein `ask` (`daemon/crates/proxy/src/pipeline.rs`),
+/// also endet es wie eines.
+///
+/// Eine Aktion, die dieses Binary nicht kennt -- ein neuerer Daemon, oder gar
+/// keine --, ist kein Verdikt. Mit `EXIT_ASK` hieße sie „wird gehalten", und
+/// ein Skript handelte danach; sie bekommt deshalb den Weg der Befunde.
+fn verdict_exit(action: i32) -> Result<u8, Failure> {
+    match v1::RuleAction::try_from(action) {
+        Ok(v1::RuleAction::Allow) => Ok(EXIT_OK),
+        Ok(v1::RuleAction::Block) => Ok(EXIT_BLOCK),
+        Ok(v1::RuleAction::Ask | v1::RuleAction::Redact) => Ok(EXIT_ASK),
+        Ok(v1::RuleAction::Unspecified) | Err(_) => Err(unknown_action(action)),
     }
-    Failure::with_exit(
-        Diagnostic::builder(codes::CLI_003, Severity::Error)
-            .why(format!(
-                "{what} needs an operation of the Rules RPC that evaluates one URL against the \
-                 rule set; the contract has list, add, update, remove, reorder, make_permanent, \
-                 dry_run and reload, and deciding it in the command line would be a second rule \
-                 engine next to the daemon"
+}
+
+/// Die zweite Zeile: welche Regel entschieden hat, oder dass keine es tat.
+///
+/// Ob getroffen wurde, sagt `matched` und nicht die Frage, ob zu der Id eine
+/// Regel in der Antwort steht. Andersherum zeigte die lesbare Zeile einen
+/// Treffer, während `--json` daneben `"matched": false` sagt.
+///
+/// Die Durchreiche zum Sprachmodell steht in der Gruppe der mitgelieferten
+/// Regeln und trägt ihren Rang an sich (`daemon/crates/proxy/src/rules_store.rs`,
+/// `backlog/CONVENTIONS.md` 4.5); wer sie hier für eine gewöhnliche
+/// mitgelieferte Regel hielte, suchte sie in `rules/default.yaml` statt in
+/// `llm.endpoint`.
+fn rule_line(result: &v1::RuleTest, rule: Option<&v1::Rule>, verdict: &str) -> String {
+    if !result.matched {
+        return format!("rule: none (default {verdict})");
+    }
+    let position = result.position;
+    match rule {
+        Some(rule) => {
+            let mark = if rule.passthrough_llm {
+                ", passthrough_llm"
+            } else {
+                ""
+            };
+            format!(
+                "rule: {} ({}, position {position}{mark})",
+                result.rule_id,
+                origin(rule)
+            )
+        }
+        // Ein Treffer, dessen Regel nicht in der Antwort steht: die Id ist das
+        // einzige, was belegt ist, und mehr behauptet die Zeile dann nicht.
+        None if !result.rule_id.is_empty() => {
+            format!("rule: {} (position {position})", result.rule_id)
+        }
+        // Ein Treffer ohne Id: auch das wird gesagt und nicht als „keine
+        // Regel" gezeigt, denn geblockt oder gehalten wird trotzdem.
+        None => format!("rule: unnamed (position {position})"),
+    }
+}
+
+/// Die URL, wie sie zum Daemon geht, oder `CLI_004`.
+///
+/// Geprüft wird nur, was ohne Regelsatz feststeht: ein fehlendes Schema und
+/// ein Fragment. Beides erreicht den Daemon sonst als `IPC_005`, und das ist
+/// die Sprache des Vertrags und nicht die des Aufrufers. Alles Weitere --
+/// Host, Port, Normalisierung -- entscheidet der Daemon.
+fn probe_url(url: &str) -> Result<&str, Failure> {
+    // `contains("://")` allein ließe `://host/x` durch: das Schema wäre leer,
+    // und der Daemon antwortete mit `IPC_005` -- der Sprache des Vertrags
+    // statt der des Aufrufers.
+    if url
+        .split_once("://")
+        .is_none_or(|(scheme, _)| scheme.is_empty())
+    {
+        return Err(bad_url(
+            url,
+            "a full url with a scheme, for example https://example.com/path",
+        ));
+    }
+    if url.contains('#') {
+        return Err(bad_url(
+            url,
+            "a request target without a fragment; a server never sees the part after #",
+        ));
+    }
+    Ok(url)
+}
+
+/// Der Befund zu einer URL, die dieses Kommando nicht abschickt.
+fn bad_url(url: &str, expected: &str) -> Failure {
+    Failure::new(
+        Diagnostic::builder(codes::CLI_004, Severity::Error)
+            .why(format!("{url:?} is not a request url; it takes {expected}"))
+            .fix(FixAction::CopyCommand(
+                "humanitl rules test --help".to_owned(),
             ))
-            .fix(FixAction::OpenUrl(format!(
-                "{}/issues?q=HUM-065",
-                env!("CARGO_PKG_REPOSITORY")
-            )))
             .build(),
-        EXIT_USER,
+    )
+}
+
+/// Eine Aktion, die dieses Binary nicht kennt.
+///
+/// Der Vertrag darf wachsen; was dieses Binary dann nicht abbilden kann, sagt
+/// es, statt die nächstliegende Zahl zu nehmen. `humanitl` ist der Client,
+/// nicht die Instanz, die entscheidet.
+fn unknown_action(action: i32) -> Failure {
+    Failure::new(
+        Diagnostic::builder(codes::CLI_001, Severity::Error)
+            .why(format!(
+                "the daemon answered the rule probe with action {action}, which this command \
+                 line does not know; update humanitl to the version of the daemon"
+            ))
+            .build(),
+    )
+}
+
+/// Eine Antwort auf `test` ohne Ergebnis.
+///
+/// Der Vertrag setzt `RulesResponse.test` bei dieser Operation; fehlt es ohne
+/// einen Befund daneben, ist die Antwort nicht die auf diese Frage. Ein
+/// erfundenes `ask` an dieser Stelle sähe aus wie eine Auswertung.
+fn no_verdict() -> Failure {
+    Failure::new(
+        Diagnostic::builder(codes::CLI_001, Severity::Error)
+            .why(
+                "the daemon answered the rule probe without a verdict; nothing here says what \
+                 would happen to this request"
+                    .to_owned(),
+            )
+            .build(),
     )
 }
 
@@ -1100,8 +1266,8 @@ mod tests {
     use humanitl_ipc::v1;
 
     use super::{
-        expires_cell, hidden_counts, order_with, origin, rule_from_args, rule_json, rule_row,
-        rules_view, test_not_yet,
+        expires_cell, hidden_counts, order_with, origin, probe_url, rule_from_args, rule_json,
+        rule_line, rule_row, rules_view, verdict_exit,
     };
     use crate::cli::RuleArgs;
     use crate::cmd::EXIT_USER;
@@ -1293,14 +1459,130 @@ mod tests {
         assert_eq!(order_with(&rules, &user, 99), ["s1", "s2", "u1"]);
     }
 
+    /// Ein Ergebnis der Probe, so wie der Dienst es schickt.
+    fn verdict_of(action: v1::RuleAction, matched: bool, rule_id: &str) -> v1::RuleTest {
+        v1::RuleTest {
+            action: action as i32,
+            matched,
+            rule_id: rule_id.to_owned(),
+            position: 1,
+        }
+    }
+
+    /// Der Exit-Code traegt das Verdikt, und was keines ist, bekommt keinen.
     #[test]
-    fn rules_test_is_a_diagnostic_that_names_the_call() {
-        let failure = test_not_yet("https://evil.example", Some("GET"), None);
-        assert_eq!(failure.exit, EXIT_USER);
-        assert_eq!(failure.diagnostic.code.as_str(), "CLI_003");
-        assert!(failure.diagnostic.why.contains("https://evil.example"));
-        assert!(failure.diagnostic.why.contains("--method GET"));
-        assert!(failure.diagnostic.why.contains("Rules RPC"));
+    fn only_a_known_verdict_becomes_an_exit_code() {
+        assert_eq!(
+            verdict_exit(v1::RuleAction::Allow as i32).expect("allow"),
+            0
+        );
+        assert_eq!(
+            verdict_exit(v1::RuleAction::Block as i32).expect("block"),
+            10
+        );
+        assert_eq!(verdict_exit(v1::RuleAction::Ask as i32).expect("ask"), 11);
+        // `redact` wird gehalten, endet also wie ein `ask`.
+        assert_eq!(
+            verdict_exit(v1::RuleAction::Redact as i32).expect("redact"),
+            11
+        );
+
+        // Keine Aktion und eine, die es hier noch nicht gibt: beides ist kein
+        // Verdikt. Mit 11 hiesse es „wird gehalten", und ein Skript handelte
+        // danach.
+        for action in [v1::RuleAction::Unspecified as i32, 99] {
+            let failure = verdict_exit(action).expect_err("a diagnostic");
+            assert_eq!(failure.diagnostic.code.as_str(), "CLI_001", "{action}");
+            assert_eq!(failure.exit, EXIT_USER, "{action}");
+            assert!(
+                failure.diagnostic.why.contains(&action.to_string()),
+                "{action}: {}",
+                failure.diagnostic.why
+            );
+        }
+    }
+
+    /// Die Zeile ueber die Regel sagt dasselbe wie `--json`, in jeder Lage --
+    /// und die Durchreiche ist keine gewoehnliche mitgelieferte Regel: Wer sie
+    /// fuer eine hielte, suchte sie in `rules/default.yaml` statt in
+    /// `llm.endpoint`.
+    #[test]
+    fn the_line_about_the_rule_follows_matched_and_names_the_passthrough() {
+        let bundled = rule("018f0001-0000-7000-8000-000000000001", None, true);
+        let hit = verdict_of(
+            v1::RuleAction::Block,
+            true,
+            "018f0001-0000-7000-8000-000000000001",
+        );
+        assert_eq!(
+            rule_line(&hit, Some(&bundled), "block"),
+            "rule: 018f0001-0000-7000-8000-000000000001 (bundled, position 1)"
+        );
+        assert_eq!(rule_json(&bundled)["passthrough"], serde_json::json!(false));
+
+        let mut passthrough = bundled.clone();
+        passthrough.passthrough_llm = true;
+        assert_eq!(
+            rule_line(&hit, Some(&passthrough), "block"),
+            "rule: 018f0001-0000-7000-8000-000000000001 (bundled, position 1, passthrough_llm)"
+        );
+        assert_eq!(
+            rule_json(&passthrough)["passthrough"],
+            serde_json::json!(true)
+        );
+
+        // Kein Treffer: die Voreinstellung, auch wenn zu der Id eine Regel in
+        // der Antwort steht. Sonst zeigte die Zeile einen Treffer, waehrend
+        // `--json` daneben `"matched": false` sagt.
+        let missed = verdict_of(
+            v1::RuleAction::Ask,
+            false,
+            "018f0001-0000-7000-8000-000000000001",
+        );
+        assert_eq!(
+            rule_line(&missed, Some(&bundled), "ask"),
+            "rule: none (default ask)"
+        );
+
+        // Ein Treffer, dessen Regel die Antwort nicht fuehrt: die Id ist das
+        // einzige, was belegt ist. Und einer ganz ohne Id wird als Treffer
+        // gezeigt und nicht als „keine Regel".
+        assert_eq!(
+            rule_line(&hit, None, "block"),
+            "rule: 018f0001-0000-7000-8000-000000000001 (position 1)"
+        );
+        assert_eq!(
+            rule_line(&verdict_of(v1::RuleAction::Block, true, ""), None, "block"),
+            "rule: unnamed (position 1)"
+        );
+    }
+
+    /// Was die Kommandozeile ablehnt, bevor jemand gefragt wird, und was sie
+    /// durchlaesst, weil es dem Daemon gehoert.
+    #[test]
+    fn a_url_without_a_scheme_or_with_a_fragment_never_reaches_the_daemon() {
+        for bad in [
+            "evil.example",
+            "//evil.example/x",
+            // Ein leeres Schema erfuellt `contains("://")` und ist trotzdem
+            // keine Adresse.
+            "://evil.example/x",
+            "https://a.example/x#top",
+        ] {
+            let failure = probe_url(bad).expect_err("a diagnostic");
+            assert_eq!(failure.diagnostic.code.as_str(), "CLI_004", "{bad}");
+            assert!(failure.diagnostic.why.contains(bad), "{bad}");
+        }
+        // Grosschreibung, Punkt am Ende und Punycode gehen roh hinaus: Die
+        // Normalisierung gehoert dem Daemon, und eine zweite hier antwortete
+        // frueher oder spaeter anders als die erste.
+        for good in [
+            "https://EVIL.example./x",
+            "https://xn--bcher-kva.example/x?q=1",
+            "http://[::1]:8080/x",
+        ] {
+            assert_eq!(probe_url(good).expect("a url"), good);
+        }
     }
 
     // --- Die Fußzeile unter der Tabelle (HUM-038) --------------------------
