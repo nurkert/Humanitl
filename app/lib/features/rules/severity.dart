@@ -9,23 +9,15 @@ library;
 import 'package:flutter/widgets.dart' show Color;
 
 import '../../core/domain/domain.dart';
+import '../../core/ui/diagnostic_severity.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
 
-/// The label of a severity, in the person's language.
+/// Das Wort für [severity]; ein Alias auf die eine Abbildung in
+/// `core/ui/diagnostic_severity.dart` (HUM-068).
 String ruleSeverityLabel(AppLocalizations l10n, Severity severity) =>
-    switch (severity) {
-      Severity.info => l10n.diagSeverityInfo,
-      Severity.warning => l10n.diagSeverityWarning,
-      Severity.error => l10n.diagSeverityError,
-      Severity.blocking => l10n.diagSeverityBlocking,
-    };
+    severityLabel(l10n, severity);
 
-/// The hue of a severity. Never the blocked red: red means blocked
-/// (`docs/UX.md` 3.3, rule 6).
+/// Der Farbton für [severity]; derselbe Alias wie [ruleSeverityLabel].
 Color ruleSeverityColor(HTokens tokens, Severity severity) =>
-    switch (severity) {
-      Severity.info => tokens.colors.accent,
-      Severity.warning => tokens.state.held,
-      Severity.error || Severity.blocking => tokens.state.error,
-    };
+    severityColor(tokens, severity);

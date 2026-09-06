@@ -24,6 +24,7 @@ import '../../../core/domain/domain.dart';
 import '../../../core/ui/announce.dart';
 import '../../../core/ui/fix_control.dart';
 import '../../../core/ui/h_diagnostic_card.dart';
+import '../../../core/ui/diagnostic_severity.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../finding_text.dart';
@@ -465,22 +466,6 @@ class _ActionBarState extends ConsumerState<ActionBar> {
     });
   }
 }
-
-/// The label of [severity] in the person's language.
-String severityLabel(AppLocalizations l10n, Severity severity) =>
-    switch (severity) {
-      Severity.info => l10n.diagSeverityInfo,
-      Severity.warning => l10n.diagSeverityWarning,
-      Severity.error => l10n.diagSeverityError,
-      Severity.blocking => l10n.diagSeverityBlocking,
-    };
-
-/// The hue of [severity]. Never the blocked red: red means blocked.
-Color severityColor(HTokens tokens, Severity severity) => switch (severity) {
-  Severity.info => tokens.colors.accent,
-  Severity.warning => tokens.state.held,
-  Severity.error || Severity.blocking => tokens.state.error,
-};
 
 /// Why an input did nothing, in the person's language.
 String refusalText(RefusalReason reason, AppLocalizations l10n) =>

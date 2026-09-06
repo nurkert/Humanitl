@@ -27,6 +27,7 @@ import 'package:flutter/widgets.dart';
 import '../../../core/domain/domain.dart';
 import '../../../core/ui/fix_control.dart';
 import '../../../core/ui/h_diagnostic_card.dart';
+import '../../../core/ui/diagnostic_severity.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../sandbox_text.dart';
@@ -219,7 +220,7 @@ class _CheckLine extends StatelessWidget {
               child: HDiagnosticCard(
                 key: Key('isolation-diagnostic-${check.name}'),
                 code: diagnostic.code,
-                severityLabel: _severityLabel(l10n, diagnostic.severity),
+                severityLabel: severityLabel(l10n, diagnostic.severity),
                 // The card keeps the hue every diagnostic wears in this
                 // product; red belongs to the dot and to the ring, which say
                 // "this guarantee does not hold", not "here is a finding"
@@ -519,12 +520,3 @@ class _Dot extends StatelessWidget {
     ),
   );
 }
-
-/// The label of a severity, in the person's language.
-String _severityLabel(AppLocalizations l10n, Severity severity) =>
-    switch (severity) {
-      Severity.info => l10n.diagSeverityInfo,
-      Severity.warning => l10n.diagSeverityWarning,
-      Severity.error => l10n.diagSeverityError,
-      Severity.blocking => l10n.diagSeverityBlocking,
-    };
