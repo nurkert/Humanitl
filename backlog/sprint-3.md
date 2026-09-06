@@ -3229,7 +3229,7 @@ Bedingung: Ein ausgelieferter Test braucht die Umlenkung und lässt sich ohne si
 - [x] `git diff -- daemon/crates/config/tests/fixtures/config.schema.json` zeigt ausschließlich Entfernungen (0 hinzugefügt, 15 entfernt). **Berichtigt (2026-09-06):** Für `docs/CONFIG.md` gilt das nicht mehr — dort kam die Spalte „Form“ samt Erklärung hinzu, ohne die die Unterscheidung zwischen entfallenem Wert und entfallener Tabelle nirgends stünde.
 - [x] `tests/e2e/m2_first_decision/run.sh` Exit 0, `M2_EXPECTED_ASSERTIONS` unverändert. **Berichtigt (2026-09-06):** die Zahl steht seit HUM-087 auf 69, nicht auf 47; gemessen 69.
 - [x] `backlog/CONVENTIONS.md` 4.22 nennt HUM-088, den Entfernungsgrund und die Bedingung, unter der der Schlüssel zurückkäme. **Gemessen (2026-09-06):** drei Nennungen in 4.22, dazu der neue vierte Punkt in 4.25.
-- [ ] `make check` grün und `tools/verify-commit.sh` grün gegen den Commit, nicht gegen den Arbeitsbaum.
+- [x] `make check` grün und `tools/verify-commit.sh` grün gegen den Commit, nicht gegen den Arbeitsbaum. **Gemessen (2026-09-06):** grün über alle acht Schritte gegen den Merge-Commit.
 
 ### Fallstricke
 - `precedence.rs` verliert ohne Ersatz den einzigen Test für die Regel aus CONVENTIONS 4.11; `resolver.overrides` ist die letzte Freiform-Tabelle und muss den Fall übernehmen, sonst ist die Regel unbelegt.
