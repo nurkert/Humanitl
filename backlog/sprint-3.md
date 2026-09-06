@@ -2308,8 +2308,8 @@ CI-Job `e2e-agent`: `E2E_ONLY=m3`, Artefakte Daemon-Log, Agenten-Transkript, `hu
 Die Läufe sind das Deliverable. Zusätzlich: `mock_llm_streams_sse` (Mock isoliert, ohne Daemon).
 
 ### Akzeptanzkriterien
-- [ ] `e2e-agent` grün in CI, Laufzeit unter 3 min, Zusicherungszahl stimmt.
-- [ ] Lokal mit installiertem OpenCode: `m3_real_opencode` grün; ohne OpenCode meldet der Lauf `skip`, nie `pass`.
+- [ ] `e2e-agent` grün in CI, Laufzeit unter 3 min, Zusicherungszahl stimmt. **Zwei Drittel gemessen (2026-09-06):** lokaler Lauf 3,8 s und 95 Zusicherungen. Offen bleibt allein „grün in CI“ — das braucht einen Lauf auf einem Runner, den es hier nicht gibt.
+- [ ] Lokal mit installiertem OpenCode: `m3_real_opencode` grün; ohne OpenCode meldet der Lauf `skip`, nie `pass`. **Halb gemessen (2026-09-06):** die zweite Hälfte hält — der Lauf endet mit „OK with gaps“ und sagt ausdrücklich, dass über OpenCode nichts geprüft wurde, und `M3_OPENCODE=1` ohne Binärdatei scheitert hart. Die erste Hälfte ist ungemessen: OpenCode liegt unter `~/.local/bin` und damit außerhalb des Sandbox-Pfades.
 - [x] Artefakte enthalten das Agenten-Transkript; `[humanitl] request held` und `[humanitl] request allowed` stehen darin. HUM-042 steht, also ist der Stolperdraht eine Zusicherung; die Hinweiszeilen liegen im zweiten Transkript (`attached.transcript`), weil `humanitl run` sie nicht sieht (CONVENTIONS 4.29).
 
 ### Stand (2026-09-04): Größe L, zwei Drittel trägt die Shell-Harness, der Rest wartet auf vier ungebaute Issues
