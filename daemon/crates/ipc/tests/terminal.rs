@@ -206,18 +206,40 @@ impl Client {
             .expect("the session takes its Open");
     }
 
+    /// Schickt eine Nachricht, mit Frist.
+    ///
+    /// Der Eingangskanal fasst sechzehn Nachrichten. Liest die Sitzung nicht
+    /// mehr, laeuft er voll, und ein `send` ohne Frist wartet dann fuer immer
+    /// auf Platz, der nie frei wird.
     async fn send(&mut self, input: v1::terminal_input::Input) {
-        self.input
-            .send(v1::TerminalInput { input: Some(input) })
-            .await
-            .expect("the session takes the message");
+        within(
+            "the session to take the message",
+            WAIT,
+            self.input.send(v1::TerminalInput { input: Some(input) }),
+        )
+        .await
+        .expect("the session takes the message");
     }
 
     /// Liest, bis die Ausgabe `needle` enthält; `false`, wenn die Frist um ist
     /// oder der Strom endet.
+    ///
+    /// **Eine Frist, und sie gilt dem ganzen Vorgang, nicht dem einzelnen
+    /// Stueck.** Vorher stand sie je Stueck: Ein Agent, der ununterbrochen
+    /// etwas anderes ausgibt als `needle`, hielt die Schleife damit endlos am
+    /// Leben, weil immer wieder rechtzeitig etwas ankam, und `seen` wuchs
+    /// unbegrenzt. `timeout_at` auf einen festen Zeitpunkt schneidet den
+    /// ganzen Aufruf ab, gleich wie oft etwas eintrifft.
+    ///
+    /// Das ist strenger als vorher, und das ist beabsichtigt. Die Suite
+    /// braucht unter zwei Sekunden, `WAIT` sind zwanzig.
     async fn wait_for(&mut self, seen: &mut String, needle: &str) -> bool {
+        let until = tokio::time::Instant::now() + WAIT;
         while !seen.contains(needle) {
-            let Ok(Some(output)) = tokio::time::timeout(WAIT, self.output.next()).await else {
+            if tokio::time::Instant::now() >= until {
+                return false;
+            }
+            let Ok(Some(output)) = tokio::time::timeout_at(until, self.output.next()).await else {
                 return false;
             };
             if let Some(v1::terminal_output::Output::Data(data)) = output.output {
@@ -233,30 +255,215 @@ impl Client {
     }
 }
 
+/// Die Frist ist echt, und sie sagt, worauf sie gewartet hat.
+///
+/// Ohne diesen Test wäre [`within`] eine Zusage ohne Beleg: Ein `timeout`, das
+/// nie zuschlägt, sieht genauso aus wie gar keines. Deshalb hier ein Warten,
+/// das von sich aus nie endet.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn a_wait_without_an_answer_ends_and_names_itself() {
+    let outcome = tokio::spawn(async {
+        within(
+            "the thing that never comes",
+            Duration::from_secs(30),
+            std::future::pending::<()>(),
+        )
+        .await;
+    })
+    .await;
+
+    let panic = outcome.expect_err("the wait ends the test").into_panic();
+    let text = panic
+        .downcast_ref::<String>()
+        .map_or_else(String::new, Clone::clone);
+    assert!(
+        text.contains("the thing that never comes"),
+        "the message names what was waited for: {text:?}"
+    );
+    assert!(text.contains("30s"), "and how long: {text:?}");
+}
+
+/// Und die Frist wirkt auch dort, wo `running_with` sie benutzt: an einem
+/// Strom, der nie etwas liefert.
+///
+/// Der Strom hier ist `tokio_stream::pending`, also genau der Fall, den die CI
+/// dreimal gezeigt hat -- ein Warten, auf das nichts antwortet.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn a_stream_that_never_answers_ends_the_start() {
+    let outcome = tokio::spawn(async {
+        let mut stream = tokio_stream::pending::<v1::SandboxEvent>();
+        until_running(&mut stream).await;
+    })
+    .await;
+
+    let panic = outcome.expect_err("the start ends the test").into_panic();
+    let text = panic
+        .downcast_ref::<String>()
+        .map_or_else(String::new, Clone::clone);
+    assert!(
+        text.contains("the sandbox to report Running"),
+        "the message names what was waited for: {text:?}"
+    );
+    assert!(
+        text.contains("0 events so far") && text.contains("none yet"),
+        "and what had been seen until then: {text:?}"
+    );
+}
+
 /// Startet die Sitzung und gibt ihr Terminal zurück.
 async fn running(service: &SandboxService, fixture: &Fixture) -> Option<TerminalHub> {
     running_with(service, fixture.start()).await
 }
 
+/// Die Frist, innerhalb der eine Sandbox hier `Running` melden muss.
+///
+/// Grosszuegig, und das ist Absicht: Ein Start kostet auf dieser Maschine
+/// wenige Sekunden, unter der Enge eines CI-Laeufers mehr, und eine Frist, die
+/// unter Last zuschlaegt, waere ein zweiter flatternder Test statt einer
+/// Diagnose. Sechzig Sekunden, die etwas sagen, sind besser als kein Limit,
+/// das nichts sagt.
+const START_WAIT: Duration = Duration::from_secs(60);
+
+/// Ein Warten mit Frist. Läuft sie ab, endet der Test und sagt, worauf er
+/// gewartet hat.
+///
+/// `label` wird gebaut, **bevor** gewartet wird, und darf deshalb den Zustand
+/// von diesem Moment tragen — wie viele Ereignisse schon da waren, welcher
+/// Zustand zuletzt kam. Genau das will der Mensch wissen, der später den
+/// roten Lauf liest.
+async fn within<T>(
+    label: &str,
+    deadline: Duration,
+    work: impl std::future::Future<Output = T>,
+) -> T {
+    within_at(
+        &format!("{label} for {deadline:?}"),
+        tokio::time::Instant::now() + deadline,
+        work,
+    )
+    .await
+}
+
+/// Dasselbe mit einem festen Zeitpunkt statt einer Dauer.
+///
+/// Für ein Warten in einer Schleife ist das der Unterschied zwischen einer
+/// Frist für den ganzen Vorgang und einer je Durchlauf. `until_running` wartet
+/// auf `Running` und sieht davor sechs bis sieben andere Ereignisse; mit einer
+/// Dauer je Durchlauf wäre die wirkliche Schranke deren Vielfaches, und die
+/// Meldung „ein Start, der länger als 60 s braucht, hängt" wäre falsch.
+async fn within_at<T>(
+    label: &str,
+    deadline: tokio::time::Instant,
+    work: impl std::future::Future<Output = T>,
+) -> T {
+    match tokio::time::timeout_at(deadline, work).await {
+        Ok(value) => value,
+        Err(elapsed) => panic!("waited for {label} without an answer ({elapsed})"),
+    }
+}
+
+/// Die Frist des Starts ist endlich, und der Test dazu nennt die Zahl nicht,
+/// sondern eine Schranke.
+///
+/// Die Mutationsprobe, die `backlog/sprint-5.md` unter HUM-124 verlangt --
+/// „die Frist auf `Duration::MAX` setzen" --, fällt genau hier auf. Sie ist
+/// die einzige Stelle, an der die Zahl steht: [`until_running`] nimmt sie
+/// nicht als Argument, sonst gäbe es eine zweite, und eine Mutation dort ginge
+/// an diesem Test vorbei.
+#[test]
+fn the_start_deadline_is_a_deadline() {
+    assert!(
+        START_WAIT <= Duration::from_secs(300),
+        "a start that takes longer than {START_WAIT:?} is a hang, not a slow machine"
+    );
+}
+
+/// Wie ein Start ausging.
+#[derive(Debug, PartialEq, Eq)]
+enum Start {
+    /// Die Sandbox meldete `Running`.
+    Running,
+    /// Sie meldete `Failed`: eine Umgebung ohne Sandbox, kein Fehler des Codes.
+    Skipped,
+    /// Der Strom endete, ohne dass eines von beidem kam.
+    Ended,
+}
+
+/// Liest `stream`, bis eine Sandbox `Running` meldet.
+///
+/// **Eigene Funktion, damit die Frist prüfbar ist.** Steht die Schleife in
+/// [`running_with`], braucht ein Test dafür einen Dienst, dessen Sandbox nie
+/// startet, und den gibt es nicht. Über einen Strom lässt sie sich mit jedem
+/// Strom prüfen, auch mit einem, der nie etwas liefert.
+///
+/// **Die Frist steht nur in [`START_WAIT`]**, und sie wird einmal vor der
+/// Schleife in einen Zeitpunkt umgerechnet. Als Argument gäbe es zwei Stellen,
+/// an denen sie stehen könnte; in der Schleife gälte sie je Ereignis, und ein
+/// Start meldet vor `Running` sechs bis sieben andere — die wirkliche Schranke
+/// wäre dann deren Vielfaches, und die Meldung „länger als 60 s ist ein
+/// Hänger" wäre falsch.
+///
+/// Drei Ausgänge und nicht zwei: Ein Strom, der ohne `Running` und ohne
+/// `Failed` endet, ist etwas anderes als ein übersprungener Test. Er entsteht
+/// auf den Fehlerpfaden von `Inner::start`, die mit einem Befund enden, und er
+/// gehört benannt, statt in ein `expect` weiter unten geleitet zu werden.
+async fn until_running<S>(stream: &mut S) -> Start
+where
+    S: tokio_stream::Stream<Item = v1::SandboxEvent> + Unpin,
+{
+    let until = tokio::time::Instant::now() + START_WAIT;
+    let mut seen = 0_usize;
+    let mut last_state = String::from("none yet");
+    loop {
+        let label = format!(
+            "the sandbox to report Running within {START_WAIT:?} ({seen} events so far, \
+             last state {last_state})"
+        );
+        let Some(event) = within_at(&label, until, stream.next()).await else {
+            return Start::Ended;
+        };
+        seen += 1;
+        if let Some(v1::sandbox_event::Event::Status(status)) = &event.event {
+            last_state = status.state.to_string();
+            if status.state == v1::SandboxState::Running as i32 {
+                return Start::Running;
+            }
+            if status.state == v1::SandboxState::Failed as i32 {
+                eprintln!("{SKIP_MARKER} the sandbox did not start here");
+                return Start::Skipped;
+            }
+        }
+    }
+}
+
 /// Dasselbe mit einer selbst gebauten Anfrage.
+///
+/// **Jedes Warten hier hat eine Frist.** Ohne sie wartet dieser Schritt
+/// unbegrenzt auf ein `Status`, das nie kommt, und aus einem roten Test wird
+/// ein haengender. Am 2026-09-05 und am 2026-09-06 stand der CI-Schritt
+/// `rust-test` deshalb 2 144, 13 784 und 1 628 Sekunden, gegen 190 Sekunden im
+/// gruenen Fall -- und weil `ci.yml` `cancel-in-progress` setzt, endete so ein
+/// Lauf als `cancelled` und nicht als `failure`. Ein haengender Test sagt
+/// niemandem etwas; ein roter, der nennt, worauf er gewartet hat, ist die
+/// Diagnose (HUM-124).
 async fn running_with(
     service: &SandboxService,
     request: v1::SandboxRequest,
 ) -> Option<TerminalHub> {
     let mut stream = service.stream(request);
-    while let Some(event) = stream.next().await {
-        if let Some(v1::sandbox_event::Event::Status(status)) = &event.event {
-            if status.state == v1::SandboxState::Running as i32 {
-                break;
-            }
-            if status.state == v1::SandboxState::Failed as i32 {
-                eprintln!("{SKIP_MARKER} the sandbox did not start here");
-                return None;
-            }
+    match until_running(&mut stream).await {
+        Start::Running => {}
+        Start::Skipped => return None,
+        Start::Ended => {
+            panic!("the start stream ended before any Status said Running or Failed")
         }
     }
     // Der Strom des Starts bleibt offen; er trägt die Ausgabe des Agenten in
     // den Ereignisstrom und speist dabei das Terminal.
+    // Ohne Frist, und das ist hier richtig: Diese Aufgabe wartet auf nichts,
+    // was ein Test braucht. Sie leert den Strom, damit die Ausgabe des Agenten
+    // ins Terminal fliesst, und endet mit ihm. Bleibt der Strom offen, lebt sie
+    // bis zum Ende des Testprozesses und haelt keinen Test auf.
     tokio::spawn(async move { while stream.next().await.is_some() {} });
     Some(
         service
@@ -277,10 +484,65 @@ where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
     let outcome = tokio::spawn(body).await;
-    service.stream(stop()).next().await;
+    // **Der Stopp wird gemessen, nicht abgeschnitten.**
+    //
+    // Eine Frist, die hier abbräche, erzeugte genau den Hänger, den dieses
+    // Issue behebt: Abbrechen heißt den Empfänger fallen lassen, und ein
+    // fallen gelassener Empfänger lässt `Inner::stop` vor `handle.terminate`
+    // zurückkehren (`ipc/src/sandbox.rs`). Die Sandbox überlebte dann, und die
+    // Testbinärdatei bliebe beim Beenden im `wait` stehen.
+    //
+    // `tokio::spawn` um das Leeren herum hilft nicht, und das ist gemessen:
+    // Läuft die Frist ab, kehrt diese Funktion zurück, der Test endet, und
+    // `#[tokio::test]` fährt die Laufzeit herunter — die abgesetzte Aufgabe
+    // wird mitten im Lauf verworfen, der Empfänger stirbt doch. Am 2026-09-06
+    // mit einer Frist von einer Millisekunde geprüft: drei Tests standen
+    // danach über sechzig Sekunden.
+    //
+    // Also bis zum Ende lesen und die Dauer hinterher beurteilen. Ein Stopp,
+    // der wirklich nie zurückkommt, hängt weiter — das wäre ein Fehler des
+    // Daemons und nicht des Gerüsts, und er hat sein eigenes Issue (HUM-128).
+    let started = tokio::time::Instant::now();
+    let count = drain(service.stream(stop())).await;
+    let took = started.elapsed();
+    // Die Aussage des Tests zuerst: Ein `panic!` im Rumpf ist der
+    // interessantere Befund.
     if let Err(error) = outcome {
         std::panic::resume_unwind(error.into_panic());
     }
+    assert!(count > 0, "the stop answered nothing at all");
+    assert!(
+        took < WAIT,
+        "the stop took {took:?}, more than the {WAIT:?} it is allowed"
+    );
+}
+
+/// Liest einen Strom bis zum Ende und zählt seine Ereignisse.
+///
+/// **Bis zum Ende, nicht bis zum ersten Ereignis, und das ist der ganze
+/// Punkt.** `Sandbox(Stop)` meldet zuerst `Stopping` und tötet die Sandbox
+/// **danach** (`ipc/src/sandbox.rs`, `Inner::stop`: erst
+/// `status_event(Stopping)`, dann `handle.terminate(KILL_GRACE)`). Wer den
+/// Strom nach dem ersten Ereignis fallen lässt, lässt `tx.send` scheitern, und
+/// `stop` kehrt an dieser Stelle zurück — **vor** dem Töten.
+///
+/// Am 2026-09-06 hat genau das drei Testprozesse auf dieser Maschine stehen
+/// lassen: `osc52_does_not_reach_host` und `osc8_and_title_are_inert` starten
+/// Sandboxen, deren Skript mit `while :; do sleep 0.05; done` endet, also von
+/// selbst nie aufhört. Ihre `bwrap`-Prozesse liefen 45 Minuten nach dem
+/// letzten `test result: ok` weiter, und die Testbinärdatei stand im
+/// `waitpid` darauf.
+///
+/// Das ist die Signatur, die die CI viermal gezeigt hat: jeder Test grün, und
+/// danach ein Prozess, der nicht endet. Fristen um die Wartepunkte des
+/// Gerüsts fangen das nicht — es ist kein Warten in `async`, sondern ein
+/// blockierendes `wait` auf ein Kind, das niemand umgebracht hat.
+async fn drain(mut stream: impl tokio_stream::Stream<Item = v1::SandboxEvent> + Unpin) -> usize {
+    let mut seen = 0_usize;
+    while stream.next().await.is_some() {
+        seen += 1;
+    }
+    seen
 }
 
 /// Ein Schreiber, beliebig viele Leser — und die Grenze steht im Daemon.
@@ -555,7 +817,9 @@ async fn two_sessions_leave_nothing_behind() {
         );
         drop(client);
         drop(hub);
-        service.stream(stop()).next().await;
+        // Ohne Frist, aus dem Grund, der bei `with_session` steht: Ein
+        // Abbruch liesse den Empfaenger fallen und die Sandbox stehen.
+        drain(service.stream(stop())).await;
         // Der Abbau läuft über mehrere Aufgaben; ein paar Umläufe genügen.
         for _ in 0..20 {
             tokio::time::sleep(Duration::from_millis(25)).await;
@@ -617,7 +881,9 @@ async fn a_pending_notice_still_leaves_when_the_agent_ends() {
 
     // Erst das Ende der Sitzung, dann das Warten: Der Hinweis geht in
     // `finish` hinaus, und `finish` kommt mit dem Ende des Agenten.
-    service.stream(stop()).next().await;
+    // Ohne Frist, aus dem Grund, der bei `with_session` steht: Ein Abbruch
+    // liesse den Empfaenger fallen und die Sandbox stehen.
+    drain(service.stream(stop())).await;
     assert!(
         client.wait_for(&mut seen, "waiting for you").await,
         "the end of the session releases it: {seen:?}"

@@ -1487,9 +1487,100 @@ Der Skript-Text von `osc52_does_not_reach_host` endet mit
 beendet. Das ist gewollt und Teil der Aussage; es macht das fehlende Zeitlimit
 davor aber teurer, weil nichts von selbst endet.
 
+### Die Ursache, am 2026-09-06 lokal gefunden
+
+**Der Hänger ist kein Warten in `async`. Es ist ein `waitpid` auf eine Sandbox,
+die niemand umgebracht hat.**
+
+Auf dieser Maschine standen drei Testprozesse aus früheren Läufen: 45, 40 und 29
+Minuten, alle bei null Prozent CPU, jeder mit zwei Threads in `do_wait` und
+**zwei lebenden `bwrap`-Kindern**. Die Kinder gehörten zu
+`osc52_does_not_reach_host` und `osc8_and_title_are_inert`, deren Agentenskript
+mit `while :; do sleep 0.05; done` endet und von selbst nie aufhört.
+
+Warum sie überlebten, steht in `ipc/src/sandbox.rs`, `Inner::stop`: Der RPC
+meldet **zuerst** `status_event(Stopping)` und tötet die Sandbox **danach**
+(`handle.terminate(KILL_GRACE)`). `with_session` nahm vom Stop-Strom nur das
+erste Ereignis und ließ ihn dann fallen. Damit scheitert das nächste
+`tx.send(...)`, und `stop` kehrt an genau dieser Stelle zurück — vor dem Töten.
+Der Test war fertig, die Sandbox lief weiter, und die Testbinärdatei blockierte
+beim Beenden im `wait` auf ein Kind, das niemand mehr beendete.
+
+Das ist die Signatur, die die CI viermal gezeigt hat: **jeder Test grün, danach
+ein Prozess, der nicht endet.** Kein roter Test, keine Meldung, nur Stille bis
+zum Abbruch.
+
+Gemessen vor und nach der Behebung, dreimal wiederholt: vorher ließ jeder Lauf
+zwei `bwrap` zurück, danach null, und der Lauf endet in zwei Sekunden statt zu
+stehen.
+
+**Was das für die Fristen bedeutet.** Sie bleiben richtig und sie bleiben in
+diesem Issue — aber sie hätten diesen Hänger nicht gefangen, und der Issue soll
+das nicht behaupten. Eine Frist um ein `await` sieht ein blockierendes `wait`
+auf einem anderen Thread nicht. Beides wird gebraucht: das Leeren des
+Stop-Stroms behebt die bekannte Ursache, die Fristen machen die nächste
+sichtbar.
+
+**Und um den Stopp herum darf keine Frist stehen.** Eine Frist bricht ab, und
+Abbrechen heißt hier den Empfänger fallen lassen — genau die Ursache. Ein
+Review schlug vor, das Leeren mit `tokio::spawn` abzusetzen, damit es die Frist
+überlebt. Das trägt nicht, und es ist gemessen: Läuft die Frist ab, kehrt
+`with_session` zurück, der Test endet, `#[tokio::test]` fährt die Laufzeit
+herunter, und die abgesetzte Aufgabe wird mitten im Lauf verworfen. Mit einer
+Frist von einer Millisekunde standen danach drei Tests über sechzig Sekunden.
+
+Der Stopp wird deshalb **gemessen statt abgeschnitten**: bis zum Ende lesen, die
+Dauer nehmen, hinterher beurteilen. Ein Stopp, der wirklich nie zurückkommt,
+hängt weiter — das wäre ein Fehler des Daemons, nicht des Gerüsts, und er hat
+sein eigenes Issue (HUM-128).
+
 ### Ziel
-Kein Wartepunkt in diesem Testmodul ohne Frist, und jede abgelaufene Frist sagt,
-worauf sie gewartet hat und was zuletzt zu sehen war.
+Der Stop-Strom wird bis zum Ende gelesen, damit `stop` bis zum Töten kommt und
+keine Sandbox einen Test überlebt.
+
+Und: kein Wartepunkt in diesem Testmodul ohne Frist, und jede abgelaufene Frist
+sagt, worauf sie gewartet hat und was zuletzt zu sehen war.
+
+**Und danach dasselbe für den ganzen Arbeitsbereich.** Fristen in einer Datei
+binden eine Datei. Hängt der Lauf woanders — und welche Datei es ist, weiß
+niemand, solange die Protokolle Admin-Rechte am Repository brauchen —, ändert
+dieses Issue nichts. Der allgemeine Weg ist `cargo-nextest`: Es fährt jeden Test
+in einem eigenen Prozess und kennt `slow-timeout` mit `terminate-after`, also
+wird ein hängender Test nach n Sekunden zu einem **benannten** Fehlschlag, statt
+den Job stehen zu lassen. `cargo test` kann das nicht; es hat keine Frist je
+Test.
+
+Das ist eine Änderung an der Werkzeugkette der CI und nicht an diesem Testmodul,
+deshalb steht es hier als Empfehlung und nicht in den Akzeptanzkriterien. Die
+Reihenfolge spricht dafür, es zuerst zu tun: Mit `terminate-after` benennt der
+nächste hängende Lauf seinen Test von selbst, und die Fristen hier wären dann
+eine zweite Sicherung statt die einzige.
+
+**Vier Folgen, die ein Review beim Nachrechnen fand und die zur Empfehlung
+gehören, damit niemand sie später entdeckt:**
+
+1. **Doctests laufen nicht mit.** `cargo nextest run` fährt keine. Der
+   Arbeitsbereich hat welche, die etwas behaupten — `crates/rules/src/lib.rs`
+   und `crates/findings/src/lib.rs` prüfen darin —, und der heutige Lauf zeigt
+   `Doc-tests` für zehn Kisten. Ein Wechsel ohne zusätzliches
+   `cargo test --doc` lässt sie still fallen.
+2. **Die Escape-Tests lesen die Ausgabe wörtlich.** `esc-5-filesystem.sh`
+   entscheidet an der Zeichenkette `1 passed; 0 failed` und am Marker
+   `ESC5-SKIP` auf stdout. `nextest` schreibt weder das eine noch das andere und
+   verbirgt die Ausgabe bestandener Tests. Beide Terminal-Fälle von ESC-5
+   kippten auf `fail`.
+3. **Die Nebenläufigkeit steigt, sie sinkt nicht.** `cargo test` fährt eine
+   Testbinärdatei nach der anderen; `nextest` fährt sie gleichzeitig. Auf einem
+   Läufer mit vier Kernen erhöht das die Zahl gleichzeitiger echter Sandboxen —
+   genau die Bedingung, unter der der Hänger auftritt. `test-threads` gehört
+   dann in eine `.config/nextest.toml`.
+4. **Die Installation.** Übersetzen kostet Minuten, und der bequeme Weg ist ein
+   ungepinntes `curl | tar` von `get.nexte.st`. `ci.yml` sagt oben: „Every
+   action is pinned to a commit SHA."
+
+Dazu die Einordnung, die daraus folgt: Der Hänger dieses Issues liegt **in**
+dieser Datei, und dort benennt ihn die Frist schon. `nextest` ist das Netz für
+den nächsten, den niemand kennt — nicht die Diagnose für diesen.
 
 ### Nicht-Ziel
 Keine Änderung an dem, was die Tests prüfen. Kein Ausschalten von Tests unter
@@ -1526,7 +1617,10 @@ ist der interessantere Befund.
   dass die Frist und nicht nur ihr Helfer geprüft wird.
 
 ### Akzeptanzkriterien
-- [ ] `grep -n '\.await' daemon/crates/ipc/tests/terminal.rs` zeigt keinen Wartepunkt auf einen Strom mehr, der nicht in `within`, `timeout` oder einem Helfer mit Frist steht.
+- [ ] **Ein Lauf hinterlässt keine Sandbox.** Vor und nach `cargo test -p humanitl-ipc --test terminal` dieselbe Zahl `bwrap`-Prozesse, dreimal wiederholt; der Prozess endet, statt im `wait` zu stehen.
+- [ ] Jeder Stop-Strom wird bis zum Ende gelesen, nicht bis zum ersten Ereignis; kein Aufruf von `stream(stop())` endet mehr auf `.next()`.
+- [ ] Die drei Stop-Ströme haben **keine** Frist, und daneben steht, warum: Abbrechen heißt den Empfänger fallen lassen, und das ist die Ursache selbst. Ihre Dauer wird stattdessen gemessen und hinterher beurteilt.
+- [ ] Jeder **andere** Wartepunkt auf einen Strom steht in `within`, `within_at` oder `timeout`.
 - [ ] Eine abgelaufene Frist nennt Label, letzten Zustand und Ereigniszahl.
 - [ ] Ein Start, der `Failed` meldet, überspringt weiterhin mit `SKIP_MARKER`, statt rot zu werden.
 - [ ] `cargo test -p humanitl-ipc --test terminal` ist grün, allein und parallel zu einem zweiten Lauf des Arbeitsbereichs.
@@ -1831,3 +1925,102 @@ ist es nicht.
   Bibliotheksverzeichnissen, nicht nach dem Paket. Die beiden können
   auseinanderlaufen — ein Nutzer, der die Bibliothek von Hand gelegt hat, bekommt
   den Befund nicht, und das ist richtig so.
+
+## HUM-128 · Ein Stopp, den der Client nicht zu Ende hört, tötet die Sandbox nicht
+
+Sprint: 5 · Größe: M · Abhängigkeiten: HUM-124 · Blockiert: —
+
+### Kontext
+`Sandbox(Stop)` ist ein Ereignisstrom, und sein Vollzug hängt daran, dass jemand
+zuhört. `daemon/crates/ipc/src/sandbox.rs`, `Inner::stop`:
+
+```rust
+if let Ok(Ok(status)) = spawn_blocking(|| snapshot_with(&plan, Some(Stopping))).await
+    && tx.send(status_event(status)).await.is_err()
+{
+    return;
+}
+let _ = spawn_blocking(move || handle.terminate(KILL_GRACE)).await;
+```
+
+Erst die Meldung `Stopping`, dann das Töten. Wer den Strom nach dem ersten
+Ereignis fallen lässt, lässt `tx.send` scheitern — und `stop` kehrt **an dieser
+Stelle** zurück, vor `handle.terminate`. Der Agent läuft weiter.
+
+Am 2026-09-06 in HUM-124 gemessen, nicht hergeleitet: Drei Testprozesse standen
+45, 40 und 29 Minuten mit je zwei lebenden `bwrap`-Kindern, deren
+Kommandozeilen die Skripte von `osc52_does_not_reach_host` und
+`osc8_and_title_are_inert` trugen. HUM-124 hat das Testgerüst geheilt, indem es
+den Strom bis zum Ende liest. Der Weg im Daemon ist unverändert.
+
+**Wie weit das trägt.** `--die-with-parent` steht immer im Argumentbau
+(`bwrap_args.rs:273`), also endet die Sandbox spätestens mit dem Daemon. Der
+Daemon ist aber ein langlebiger Nutzerdienst; zwischen dem abgebrochenen Stopp
+und seinem nächsten Ende arbeitet der Agent weiter. Die heutigen Clients leeren
+den Strom (`sandbox_status_provider.dart`, `_apply`, liest bis zum Ende), also
+braucht es einen Client, der **während** des RPC verschwindet: ein `Ctrl-C` auf
+`humanitl sandbox stop`, ein geschlossenes Fenster, ein Absturz, eine
+abreißende Verbindung.
+
+Der Mensch hat dann auf Stopp gedrückt, und es ist nicht gestoppt. Nichts auf
+dem Bildschirm sagt es ihm, denn der Bildschirm ist weg.
+
+### Ziel
+Ein Stopp ist ein Befehl und kein Abonnement. Wer ihn erteilt hat, hat ihn
+erteilt: Der Daemon führt ihn zu Ende, gleich ob noch jemand zuhört.
+
+### Nicht-Ziel
+Keine Änderung an der Reihenfolge der Meldungen — `Stopping` vor dem Töten ist
+richtig, der Client soll den Übergang sehen. Keine zweite Stopp-Fähigkeit neben
+dem RPC. Kein Aufräumen fremder Sandboxen beim Start des Daemons; das ist ein
+eigenes Thema.
+
+### Betroffene Pfade
+- `daemon/crates/ipc/src/sandbox.rs`: `Inner::stop` und die Stellen, die auf `tx.send(...).is_err()` mit `return` antworten
+- `daemon/crates/ipc/tests/sandbox_stop.rs` (neu) oder eine Ergänzung in `sandbox_start.rs`
+
+### Spezifikation
+Die Arbeit des Stopps wird von der Meldung getrennt. Das Töten läuft in einer
+Aufgabe, die der Daemon besitzt, nicht der RPC-Strom; die Meldungen gehen
+weiterhin über `tx`, und ein fehlgeschlagenes `send` beendet **die Meldungen**,
+nicht die Arbeit.
+
+Jede Stelle in `Inner::stop`, die heute mit `return` auf einen verlorenen
+Empfänger antwortet, wird darauf geprüft: Was danach käme, ist entweder eine
+weitere Meldung (dann ist das `return` richtig) oder eine Zustandsänderung
+(dann nicht). Dasselbe gilt für `stop_after_failed_check`, das eine Sandbox
+tötet, deren Isolationsprüfung fehlschlug — dort wäre ein verlorener Empfänger
+noch schwerer zu ertragen.
+
+Die Sitzung gilt als beendet, wenn `terminate` zurückkam, nicht wenn die letzte
+Meldung raus ist. `clear_running` bleibt hinter dem Töten.
+
+### Tests
+- Ein Test, der den Stopp-Strom **nach dem ersten Ereignis fallen lässt** und
+  danach belegt, dass die Sandbox weg ist. Er ist heute rot; das ist der Punkt.
+- Ein Test, der zeigt, dass die Meldungen weiterhin in der Reihenfolge
+  `Stopping`, Log-Zeile, Endzustand kommen, wenn jemand zuhört.
+- Eine Zählung: vor und nach dem Test dieselbe Zahl `bwrap`-Prozesse. Ohne sie
+  prüft der erste Test nur, dass ein Schnappschuss „stopped" sagt, und das ist
+  eine Aussage über eine Struktur, nicht über einen Prozess.
+- Mutationsprobe: das `return` beim fehlgeschlagenen `send` wieder vor das
+  Töten ziehen. Der erste Test muss rot werden.
+
+### Akzeptanzkriterien
+- [ ] Ein Stopp, dessen Strom nach dem ersten Ereignis fallen gelassen wird, beendet die Sandbox trotzdem; ein Test hält das fest und zählt dabei die `bwrap`-Prozesse.
+- [ ] Kein `return` in `Inner::stop` oder `stop_after_failed_check` steht mehr zwischen einer Zusage und ihrer Ausführung; wo eines bleibt, sagt ein Kommentar, dass danach nur noch gemeldet wird.
+- [ ] Die Reihenfolge der Meldungen für einen zuhörenden Client ist unverändert.
+- [ ] Die Mutationsprobe macht den ersten Test rot.
+- [ ] `make check` grün.
+
+### Fallstricke
+- `handle.terminate` blockiert; es gehört auf `spawn_blocking` und nicht in die
+  Ereignisschleife. Eine Aufgabe, die den Daemon überlebt, gibt es nicht — der
+  Daemon wartet beim Herunterfahren auf sie, sonst nimmt `--die-with-parent`
+  ihr die Sandbox unter den Händen weg und der Endzustand ist erfunden.
+- Zwei Stopps zur selben Zeit dürfen nicht zweimal töten und nicht zweimal
+  `clear_running` rufen. Der `running_handle` ist die Stelle, an der das
+  entschieden wird.
+- `stop_after_failed_check` benutzt `terminate(Duration::ZERO)` mit Absicht:
+  Eine Sandbox, deren Isolation nicht hält, bekommt keine Gnadenfrist. Das
+  bleibt so.
