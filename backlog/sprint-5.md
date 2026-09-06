@@ -2427,3 +2427,111 @@ ohne den Schlüssel. Beide Zahlen in den Commit-Body.
   lokal zurück. Das gehört in den Kommentar.
 - Der Wert gilt für `profile.dev` und damit auch für `cargo test`; die
   Zeilennummern in Panics kommen daher, nicht aus voller Debug-Information.
+
+---
+
+## HUM-133 · Ein roter Testlauf in CI nennt seinen Test nicht
+Sprint: 5 · Größe: S · Abhängigkeiten: — · Blockiert: —
+
+### Kontext
+Am 2026-09-06 sind drei Läufe des Jobs `rust-test` auf `main` rot geworden
+(`3f293f2`, `5ee92ba`, `9bc3717`), und in allen drei Fällen steht in der
+Annotation genau ein Satz: `Process completed with exit code 2`. Mehr ist von
+außen nicht zu sehen: Die Job-Logs verlangen Schreibrechte am Repository
+(`GET /actions/jobs/<id>/logs` antwortet 403), und die Annotationen tragen nur
+die letzte Zeile des Schritts. Der Schritt ist `make rust-build rust-test`,
+also `cargo test --workspace` über rund 900 Tests; welcher davon fiel, steht
+nirgends.
+
+Der Lauf davor und der danach waren grün, und lokal ist der Fehlschlag nicht zu
+erzeugen: dreimal `cargo test --workspace` auf zwei Kernen (`taskset -c 0,1`,
+`CI=1`), einmal davon mit den installierten Clients der Konformitäts-Matrix
+(`websocat`, `grpcurl`, `python3-requests`) — alles grün. Ein Flake also, und
+einer, den niemand einkreisen kann, solange die Ausgabe nicht aus dem Lauf
+herauskommt.
+
+Das ist mehr als eine Unbequemlichkeit: `BACKLOG.md` 8 macht die grüne
+Pipeline zur Sprint-Bedingung, und eine rote Pipeline, deren Grund niemand
+lesen kann, ist eine Bedingung, die niemand erfüllen kann.
+
+### Ziel
+Ein roter `rust-test`-Lauf nennt in der Annotation die Namen der Tests, die
+fielen, und legt seine vollständige Ausgabe als Artefakt ab.
+
+### Nicht-Ziel
+Keine Jagd auf den Flake selbst in diesem Issue — erst muss der Lauf sagen
+können, wer fiel. Kein Wechsel des Testläufers (`cargo-nextest` wäre eine
+eigene Entscheidung mit eigener Abwägung). Keine Wiederholung fehlgeschlagener
+Tests: Ein Test, der beim zweiten Mal grün ist, hat trotzdem etwas gefunden.
+
+### Betroffene Pfade
+- `.github/workflows/ci.yml` (Schritt „Build and test the workspace")
+- `scripts/ci/test-report.sh` (neu): liest die Ausgabe von `cargo test` und
+  schreibt je gefallenem Test eine `::error::`-Zeile
+- `CONTRIBUTING.md` (wo die Ausgabe eines roten Laufs zu finden ist)
+
+### Spezifikation
+Der Schritt leitet die Ausgabe durch `tee` in eine Datei und wertet sie bei
+einem Fehlschlag aus. Für jeden Namen unter `failures:` entsteht eine Zeile
+`::error::rust-test: <name>`; die Datei wird als Artefakt `rust-test-log`
+hochgeladen (`actions/upload-artifact`, `if: failure()`), damit auch die
+Panik-Meldung selbst erreichbar bleibt.
+
+Die Namen stehen in der Ausgabe zweimal: einmal je Testbinärdatei unter
+`failures:` mit Einrückung, einmal als `---- <name> stdout ----` mit der
+Meldung darüber. Ausgewertet wird der erste Block; der zweite wandert
+ungekürzt ins Artefakt.
+
+### Tests
+- `scripts/ci/test-report.sh --self-test` mit einer eingebetteten Beispiel-
+  Ausgabe: zwei gefallene Tests ergeben zwei `::error::`-Zeilen mit genau
+  diesen Namen, eine grüne Ausgabe ergibt keine.
+- Ein absichtlich roter Testlauf in einem Zweig belegt die Annotation. Der
+  Nachweis steht im Commit-Body, der Zweig bleibt nicht.
+
+### Akzeptanzkriterien
+- [x] `scripts/ci/test-report.sh --self-test` ist grün, Teil von `make check`
+      (Ziel `typed-errors-lint`) und Teil des CI-Schritts `rust-check`: dreizehn
+      Fälle — zwei gefallene Tests (der Name steht genau einmal, obwohl das
+      Protokoll ihn zweimal trägt); eine Zeile eines Kindprozesses mitten in
+      der Namensliste (`bwrap: setting up uid map: Permission denied`), nach
+      der alle drei Namen weiterhin genannt werden; Lärm, der aussieht wie eine
+      Marke des Testläufers (`error:`, `warning:`), der ebenfalls keinen Namen
+      kostet; eine Panik-Meldung, die selbst `failures:` in Spalte 0 trägt und
+      trotzdem nur den einen echten Namen ergibt; drei abgeschnittene Läufe —
+      mitten im Namen, mitten in der Zeile eines Kindprozesses und nach einem
+      ganzen Namen mit der Einrückung des nächsten —, bei denen jeder ganze
+      Name bleibt und kein Bruchstück einer wird; zwölf gefallene Tests (zehn
+      Zeilen, die zehnte sammelt die drei übrigen, weil GitHub die elfte nicht
+      mehr zeigt); ein Panik-Bericht, den `libtest` nicht eingefangen hat, mit
+      eingerückten Rahmen mitten in der Namensliste (zwei Namen, keine drei
+      erfundenen dazu); ein verirrtes `failures:` vor einer grünen Binärdatei,
+      dessen eingerückte Statuszeilen von Cargo keine Namen werden; drei
+      gefallene Doku-Tests, deren Namen Leerzeichen tragen — mit Pfad, mit
+      Generics und ohne Pfad (`src/lib.rs - (line 3)`, wie ein Doku-Test in den
+      `//!`-Zeilen einer Datei heißt; diese Crates haben solche); ein grüner Lauf; und
+      eine fehlende Datei.
+- [x] Der Auswerter nennt die Tests eines **echten** roten Laufs. Gemessen am
+      2026-09-06: Eine Zusicherung in `every_target_builds_what_its_line_promises`
+      auf einen Wert gestellt, den niemand baut, ergab
+      `::error::rust-test failed: cmd::moderate::tests::every_target_builds_what_its_line_promises`
+      — genau einmal, obwohl `cargo test` den Namen zweimal schreibt. **Was
+      hier nicht gemessen ist:** die Annotation an einem Lauf von GitHub
+      selbst. Dieser Baum kann keinen roten Lauf erzeugen, ohne `main` rot zu
+      machen (die CI läuft auf `push` nach `main` und auf `pull_request`, und
+      es gibt kein `gh` in dieser Umgebung, um einen PR zu öffnen); der
+      Nachweis fällt beim nächsten roten Lauf an, und das Kästchen darunter
+      bleibt bis dahin offen.
+- [ ] Die Annotation ist an einem Lauf von GitHub gesehen (Lauf-Id im
+      Nachtrag), und die vollständige Ausgabe liegt dort als Artefakt
+      `rust-test-log`.
+- [x] `CONTRIBUTING.md` sagt, wo die Ausgabe eines roten Laufs zu finden ist
+      (Abschnitt „When CI is red").
+
+### Fallstricke
+- `set -euo pipefail` und `tee`: Ohne `pipefail` verschluckt die Pipe den
+  Exit-Code von `cargo test`, und der Schritt wäre grün.
+- `cargo test` schreibt die Namen der gefallenen Tests nach `stdout`, die
+  Panik-Meldungen nach `stderr`; beide gehören in dieselbe Datei.
+- Eine Annotation je Test, nicht eine je Zeile: GitHub zeigt höchstens zehn
+  Annotationen je Schritt an.
