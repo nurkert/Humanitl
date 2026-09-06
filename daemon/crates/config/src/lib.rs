@@ -57,7 +57,7 @@ mod validate;
 
 pub use crate::validate::loader_variable_refused;
 
-pub use crate::alias::{ALIASES, Alias};
+pub use crate::alias::{ALIASES, Alias, Retired, RetiredShape};
 pub use crate::env::{Env, LOADER_ENV_KEYS, is_loader_key};
 pub use crate::load::{DEFAULT_ENV_PREFIX, ENV_SEPARATOR, PROFILE_SECTION, Sources, load};
 pub use crate::model::{

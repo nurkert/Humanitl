@@ -2233,7 +2233,7 @@ Jeder Sprint endet mit einem grünen Demo-Skript in CI (BACKLOG.md Abschnitt 8).
 `tests/e2e/m3_agent_inside/run.sh` startet über `tests/e2e/lib.sh` den Daemon, den Ollama-Mock und eine Sandbox mit Profil `default` und einem Skript-Agenten (`sh`), und prüft die Demo-Schritte automatisch, mit fester Zahl an Zusicherungen wie M2. CI-Job `e2e-agent` führt den Lauf aus. Was HUM-041, HUM-042, HUM-043 und HUM-067 voraussetzt, steht im Lauf als Stolperdraht, der rot wird, sobald das Fehlende da ist, und bis dahin ausdrücklich als offen gemeldet wird.
 
 ### Nicht-Ziel
-Keine UI-Automation von M3 (der Job `e2e-xvfb` existiert und fährt heute M2; die Bildschirm-Hälfte von M3 kommt später dorthin). Keine Performance-Messung. Keine Rust-Testcrate, keine Cargo-Features, kein `axum`, kein `expectrl` (siehe Stand). Kein Test-Hebel `experimental.upstream_override` (existiert nicht, und `experimental.upstream_port_map` wird mit HUM-088 entfernt statt gebaut).
+Keine UI-Automation von M3 (der Job `e2e-xvfb` existiert und fährt heute M2; die Bildschirm-Hälfte von M3 kommt später dorthin). Keine Performance-Messung. Keine Rust-Testcrate, keine Cargo-Features, kein `axum`, kein `expectrl` (siehe Stand). Kein Test-Hebel `experimental.upstream_override` (existiert nicht, und `experimental.upstream_port_map` ist mit HUM-088 entfernt statt gebaut).
 
 ### Betroffene Pfade
 - `tests/e2e/m3_agent_inside/run.sh` (neu), `config.toml` (neu, nach dem Muster `m2_first_decision/config.toml` mit `@UPSTREAM_ADDR@` und `resolver.overrides`), `agent_script.sh` (neu)
@@ -2838,7 +2838,7 @@ Kein mDNS (Ollama kündigt nichts an). Keine Suche außerhalb des lokalen /24. K
 4. RPC, CLI, Sheet mit Fortschritt (x/254) und Abbruch.
 
 ### Tests
-- `llm_discover::tests::detects_ollama_mock` (axum-Mock auf `127.0.0.1:11434`-ähnlichem Port über `experimental.upstream_port_map`).
+- `llm_discover::tests::detects_ollama_mock` (axum-Mock auf einem flüchtigen Port von `127.0.0.1`, der dem Test übergeben wird; `experimental.upstream_port_map` gibt es seit HUM-088 nicht mehr).
 - `llm_discover::tests::subnet_from_route`.
 - Widget-Test: Ergebnisklick setzt `configProvider.llm.endpoint`.
 
@@ -3199,6 +3199,161 @@ Bedingung: Ein ausgelieferter Test braucht die Umlenkung und lässt sich ohne si
 
 ### Referenzen
 `backlog/CONVENTIONS.md` 4.4, 4.11, 4.13, 4.22; BACKLOG.md ADR-006; `docs/CONFIG.md`; HUM-024 (`backlog/sprint-2.md:371`), HUM-036 (`backlog/sprint-2.md:1605`), HUM-076 (`backlog/sprint-3.md:1702`).
+
+### Stand (2026-09-06): entfernt nach Variante A, und die Streichung war mehr Arbeit als die Spezifikation annahm
+
+**Die Entscheidung ist nachgeprüft und nicht bloß übernommen worden.** Die
+Spezifikation nennt die Streichung als Ziel. Eine Streichung nimmt trotzdem
+etwas weg, und ein Ziel ist kein Beweis; deshalb stehen die drei Fragen hier
+mitsamt ihren Antworten:
+
+1. *Braucht ein Testaufbau die Umlenkung?* Nein. Zwei Wege sind gebaut und in
+   Gebrauch: Die Rust-Tests des Proxys setzen den flüchtigen Port direkt in die
+   Authority (`pinned_addr_used`, `daemon/crates/proxy/tests/dns_after_allow.rs`),
+   und der M2-Lauf bindet in seinem eigenen Netz-Namensraum die echten Ports 80
+   und 443. Der Lauf ist seit HUM-087 auf `https` umgestellt, prüft 69
+   Behauptungen und bedient 17 Anfragen, 16 davon über TLS — und er kommt an
+   keiner Stelle in die Nähe des Schlüssels. Der Kommentar in
+   `tests/e2e/m2_first_decision/run.sh`, der ihn als ungenutzt erwähnte, nennt
+   ihn jetzt gar nicht mehr.
+2. *Hätte er die Aufbauten gerettet, für die er gedacht war?* Nein.
+   `ip_is_private` weist `127.0.0.1` unabhängig vom Port ab, solange die Regel
+   nicht `allow_private` setzt. Der Port war nie das Hindernis.
+3. *Trägt das Argument von HUM-087, das denselben Schnitt anders entschied?*
+   Nein, und der Unterschied ist der Kern. `resolver.test_ca` hatte einen
+   ausgelieferten Lauf, der ohne den Schlüssel das Falsche maß, und keinen
+   zweiten Weg; deshalb wurde er verdrahtet, aber hinter einem Flag der
+   Kommandozeile. Der Portschlüssel hat keinen wartenden Lauf und zwei zweite
+   Wege. Ein Hebel, der beeinflusst, wohin der Proxy seine eigene Verbindung
+   öffnet, bekommt keinen Leser auf Vorrat — und ein Flag zu bauen, hinter dem
+   niemand steht, wäre dieselbe unbelegte Zusage in kleinerer Schrift. Der
+   Absatz steht in `docs/SECURITY.md` 5 neben dem der Testwurzel, damit die
+   beiden Entscheidungen nebeneinander lesbar sind, und in
+   `backlog/CONVENTIONS.md` 4.22 mit der Bedingung für die Rückkehr.
+
+**Die Spezifikation übersieht die eigentliche Arbeit: `flatten`.** Der Wert des
+Schlüssels ist eine Tabelle. Solange er im Schema stand, war er eine *freie
+Tabelle*, und `flatten` (`daemon/crates/config/src/load.rs`) ließ ihn deshalb
+ganz. Nimmt man ihn aus dem Schema, ist er keine mehr: Das Laden zerlegt
+`upstream_port_map = { "443" = 8443 }` in den Pfad
+`experimental.upstream_port_map.443`, `alias::retired` kennt genau diesen Pfad
+nicht — verglichen wird der ganze Pfad, nicht sein Anfang (HUM-101 hat das
+ausdrücklich so entschieden) — und aus der zugesagten Warnung wird der harte
+`CONFIG_002`, der den Daemon nicht mehr starten lässt. Genau das verbietet
+Akzeptanzkriterium 3. `flatten` lässt eine Tabelle jetzt auch dann ganz, wenn
+ihr Pfad in `alias::RETIRED` steht; ein entfallener Schlüssel bleibt ein
+Eintrag, so wie er einer war, als es ihn noch gab. Das ist neben der Streichung
+selbst und dem Eintrag in `alias::RETIRED` die einzige Änderung an
+Produktionscode, und es ist der Grund, warum `limits.idle_timeout_secs` aus
+HUM-101 den Fall nicht schon abgedeckt hatte: Sein Wert war eine Zahl.
+
+**Und der Pfad allein reicht auch dafür nicht — die Form gehört dazu (aus dem
+Review, blockierender Befund von Codex).** Die erste Fassung des Riegels sah nur
+den Pfad an und nahm damit jede Untertabelle eines entfallenen Schlüssels mit.
+Für `experimental.upstream_port_map` ist das richtig: Es war eine freie Tabelle,
+`upstream_port_map.extra` war ein Eintrag darin und kein Pfad des Schemas, und
+eine Warnung genügt. Für `limits.idle_timeout_secs` ist es falsch: Das war eine
+Zahl, unter der es nie eine Ebene gab, und `[limits.idle_timeout_secs.deeper]`
+ist keine gestern gültige Datei, sondern eine Struktur, die das Schema nie
+kannte — sie wurde stillschweigend zur Warnung, und ein Tippfehler hinter einem
+entfallenen Namen wäre damit erlaubt gewesen. `alias::RETIRED` führt deshalb
+neben Pfad, Issue und Grund die Form mit (`alias::RetiredShape`: `Scalar` oder
+`FreeTable`), und der Riegel gilt nur der Tabellenform. Kurz, und so steht es in
+`backlog/CONVENTIONS.md` 4.25: **Was unter einem entfallenen Skalar steht, hat
+es nie gegeben und scheitert; was unter einer entfallenen Tabelle stand, gehörte
+ihr und wird mit ihr verworfen.** Der Geschwister-Tippfehler
+(`experimental.upstream_port_map_typo`) war davon nie betroffen — er trifft den
+Pfad nicht und scheitert seit jeher hart.
+
+Die Form steht auch auf der erzeugten Seite: `docs/CONFIG.md` führt die
+entfallenen Schlüssel jetzt mit einer Spalte „Form" und einem Absatz darüber,
+was mit dem geschieht, was unter einem solchen Schlüssel steht. Ohne sie sagte
+das Dokument dasselbe für beide Fälle, und der Unterschied zwischen einem
+weiterlaufenden und einem nicht mehr startenden Daemon stünde nur im Quelltext.
+
+**Drei weitere Stellen, an denen die Spezifikation nicht stimmt.**
+
+- **Die Akzeptanzkriterien 1 und 2 widersprechen Kriterium 3.** „`grep -rn
+  "upstream_port_map" --include="*.rs" daemon/` liefert keine Zeile" und der
+  Eintrag in `alias::RETIRED` schließen einander aus: `RETIRED` steht in
+  `daemon/crates/config/src/alias.rs`, und der Pfad muss dort wörtlich stehen.
+  Dasselbe gilt für `docs/`: Die Tabelle „Entfallene Schlüssel" in
+  `docs/CONFIG.md` wird aus `RETIRED` erzeugt und nennt ihn. HUM-101 hatte
+  denselben Widerspruch und hat ihn genauso aufgelöst; die beiden Greps sind
+  aus der ersten Fassung des Issues stehengeblieben, die die Milde für
+  entfallene Schlüssel noch nicht kannte. Erfüllt ist, was sie meinen: kein
+  Leser, kein Feld, kein Schema-Eintrag, keine Zusage in der Dokumentation.
+- **Der Fallstrick „`precedence.rs` verliert ohne Ersatz den einzigen Test für
+  die Regel aus CONVENTIONS 4.11" trifft nicht zu.** Die Regel hat einen
+  eigenen Test, `a_free_table_is_replaced_as_a_whole`, und der prüft sie an
+  `resolver.overrides` seit HUM-062. Die Zeile in `GROUP_OVERRIDES` prüft etwas
+  anderes: dass jede Gruppe des Schemas einen Präzedenz-Test hat
+  (`the_override_table_names_every_group_of_the_schema` erzwingt genau eine
+  Zeile je Gruppe). Verschöbe man sie wie vorgeschlagen auf
+  `resolver.overrides`, hätte `resolver` zwei Zeilen und `experimental` keine,
+  und dieser Test würde rot. Die Zeile bleibt deshalb bei `experimental` und
+  zeigt jetzt auf `experimental.h2_upstream`.
+- **`M2_EXPECTED_ASSERTIONS` ist 69, nicht 47.** HUM-087 hat die Zahl am selben
+  Tag angehoben. Sie ist unverändert geblieben, und der Lauf ist grün.
+
+**Der Start ist gemessen, nicht nur der Ladevorgang.** Ein `humanitld` mit einer
+`config.toml`, die nur `[experimental] upstream_port_map = { "443" = 8443 }`
+enthält, schreibt als erste Zeile
+
+```json
+{"level":"WARN","fields":{"message":"configuration","code":"CONFIG_005","why":"experimental.upstream_port_map (from config.toml) was removed with HUM-088: … The value is ignored; delete the line."}}
+```
+
+und fährt danach vollständig hoch: Aufzeichnung offen, CA bereit, Regeln
+geladen, `proxy.sock` und `daemon.sock` da. `SIGTERM` räumt beides wieder ab.
+Das ist Akzeptanzkriterium 3, an der Binärdatei geprüft und nicht am
+Ladevorgang allein.
+
+**Zwölf Mutationsproben, alle rot.** Angewandt in einer Kopie des Baums
+außerhalb des Repositories, je eine Zeile Produktionscode, danach
+zurückgenommen und die Rücknahme mit `cmp` nachgeprüft:
+
+| Mutation | Datei | Ergebnis |
+|---|---|---|
+| `stays_whole` verliert den Riegel für entfallene Pfade | `load.rs` | `the_retired_port_map_warns_and_stays_one_entry` rot |
+| `continue` wird `break`, nachdem der entfallene Schlüssel gemeldet ist | `load.rs` | derselbe Test und `a_retired_key_warns_and_lets_the_daemon_start` rot |
+| `retired` vergleicht mit `starts_with` statt mit `==` | `alias.rs` | `retired_paths_are_sorted_unique_and_gone_from_the_schema` rot |
+| Das Feld steht wieder in `Experimental` | `model.rs` | fünf Tests in `config_readers` rot, darunter `the_removed_port_map_is_gone_from_the_schema` |
+| Die Warnung nennt das Issue nicht mehr | `load.rs` | beide Tests der entfallenen Schlüssel rot |
+| Beide ersten Mutationen zugleich (der naheliegende „Reparaturversuch": zerlegen und dafür den Anfang vergleichen) | `load.rs`, `alias.rs` | rot mit zwei Warnungen auf `…port_map.443` und `…port_map.80` statt einer auf dem Pfad |
+| Der Befund bekommt eine `FixAction` auf einen fremden Schlüssel | `load.rs` | rot an der Zusicherung aus CONVENTIONS 4.25 |
+| Die Milde gilt jeder Ebene außer dem Projekt-Profil | `load.rs` | `a_project_that_brings_the_retired_port_map_gets_nothing` rot, `CONFIG_002` statt der Warnung |
+| `stays_whole` ignoriert die Form und sieht wieder nur den Pfad | `load.rs` | `a_table_under_a_retired_scalar_still_fails_hard` rot — der blockierende Befund selbst |
+| Die freie Tabelle steht als `Scalar` in `RETIRED` | `alias.rs` | vier Tests rot, darunter `a_table_under_the_retired_port_map_is_swallowed_with_it` |
+| Die Milde gilt nur der globalen Datei | `load.rs` | `the_retired_port_map_warns_on_every_layer_it_can_come_from` und der Projekt-Profil-Test rot |
+| Die Form der Tabelle steht falsch in `RETIRED` (Blick auf die erzeugte Seite) | `alias.rs` | `every_retired_key_is_listed_with_its_issue` und `docs_in_sync` rot |
+
+Keine Mutation hat überlebt. Die Zeile in `GROUP_OVERRIDES` ist dabei keine neue
+Behauptung, sondern eine verschobene; was ihre Existenz erzwingt, ist
+`the_override_table_names_every_group_of_the_schema`, und das ist Testdaten und
+kein Produktionscode.
+
+**Eine Verhaltensänderung, die die Spezifikation nicht nennt: das
+Projekt-Profil.** Der Schlüssel war `x-project-scope = "denied"`, ein
+Projekt-Profil, das ihn setzte, scheiterte deshalb mit einem harten
+`CONFIG_003`. Jetzt bekommt es dieselbe Warnung wie jede andere Ebene, weil das
+Laden entfallene Pfade übergeht, bevor es die Sperre prüft (so gebaut in
+HUM-101). Der Wert erreicht die Konfiguration in beiden Fällen nicht; verschoben
+hat sich nur, ob der Daemon dabei stehenbleibt. Ein Wert, der nirgends ankommt,
+verschiebt keine Vertrauensgrenze — `a_project_that_brings_the_retired_port_map_gets_nothing`
+hält beide Hälften fest, und die achte Mutation zeigt, was der andere Weg wäre.
+Geprüft wird das für alle fünf Ebenen, aus denen der Schlüssel kommen kann:
+globale Datei, globales Profil, Projekt-Profil, Umgebung und Kommandozeile.
+`the_retired_port_map_warns_on_every_layer_it_can_come_from` fährt sie der Reihe
+nach und verlangt je Ebene genau eine Warnung, die den Pfad, das Issue und die
+Ebene nennt, und eine Konfiguration, die dem Vorgabewert gleicht. Der Bericht
+hat das anfangs behauptet, ohne dass ein Test es hielt; das war der zweite
+Befund aus dem Review, den ich übernommen habe.
+
+**Erwogen, aber nicht gebaut.** Die von `backlog/sprint-2.md:1690` verlangte
+Startwarnung für `resolver.overrides` fehlt weiterhin; sie war schon vorher
+Nicht-Ziel dieses Issues und braucht ein eigenes. Für den Portschlüssel
+erübrigt sie sich, weil es ihn nicht mehr gibt.
 
 
 ## HUM-101 · Konfigurationsschlüssel ohne Leser
