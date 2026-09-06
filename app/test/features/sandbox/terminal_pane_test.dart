@@ -15,6 +15,7 @@ import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/flow_events.dart';
 import 'package:humanitl/features/sandbox/providers/terminal_provider.dart';
 import 'package:humanitl/features/sandbox/widgets/terminal_pane.dart';
+import 'package:humanitl_ui/humanitl_ui.dart';
 import 'package:xterm2/ui.dart';
 
 import 'harness.dart';
@@ -298,6 +299,104 @@ void main() {
       (132, 43),
       reason: 'the daemon answered the resize with the geometry it understood',
     );
+  });
+
+  /// Läuft die Kommandozeile, sieht das Fenster zu (HUM-067, Kriterium 4).
+  ///
+  /// `humanitl run` hält den Schreibplatz der Sitzung. Ein Fenster, das sich
+  /// daneben öffnet, bekam bisher `TERM_001` und zeigte einen toten Streifen —
+  /// dabei ist das der Normalfall und kein Fehlschlag. Jetzt hängt es sich
+  /// lesend an: dieselbe Ausgabe, keine Tastatur, und der Grund steht dabei.
+  testWidgets('a_window_next_to_a_writing_command_line_watches_read_only', (
+    WidgetTester tester,
+  ) async {
+    final SandboxTestClient client = runningClient();
+
+    // Der Platz des Schreibers ist vergeben, bevor das Fenster aufgeht: Das
+    // ist die Kommandozeile, die die Sitzung gestartet hat.
+    final StreamController<TerminalCommand> cli =
+        StreamController<TerminalCommand>();
+    addTearDown(cli.close);
+    final StreamSubscription<TerminalFrame> held = client
+        .terminal(cli.stream)
+        .listen((TerminalFrame _) {});
+    addTearDown(held.cancel);
+    cli.add(
+      TerminalOpen(
+        sandboxId: client.sandbox.sandboxId!.value,
+        cols: 80,
+        rows: 24,
+      ),
+    );
+    await tester.pump();
+
+    await pumpSandbox(tester, client: client);
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+
+    final TerminalSessionState session = _session(tester, client);
+    expect(
+      session.phase,
+      TerminalPhase.attached,
+      reason: 'the window watches instead of showing a dead strip',
+    );
+    expect(session.readOnly, isTrue, reason: 'and it gave up the keyboard');
+    expect(
+      session.diagnostic?.code,
+      DiagnosticCodes.terminalSecondWriter,
+      reason: 'the reason stays visible: somebody else is typing',
+    );
+    // Und es sieht, was der Agent schreibt.
+    expect(session.terminal.buffer.getText(), contains(fakeGreeting));
+
+    // Und der Streifen darüber erklärt, statt einen Befund zu melden: Dass
+    // jemand anders tippt, ist kein Zustand einer Anfrage, also trägt die
+    // Zeile das ruhige Chrome und keine Zustandsfarbe (`docs/UX.md` 5 und 6).
+    expect(find.byKey(const Key('sandbox-terminal-watching')), findsOneWidget);
+    expect(find.byKey(const Key('sandbox-terminal-finding')), findsNothing);
+    final HTokens tokens = HTheme.of(
+      tester.element(find.byKey(const Key('sandbox-terminal-watching'))),
+    );
+    final Container strip = tester.widget<Container>(
+      find.byKey(const Key('sandbox-terminal-watching')),
+    );
+    expect(strip.color, tokens.colors.bg2);
+    expect(strip.color, isNot(HColorDerivation.tint(tokens.state.error)));
+    expect(strip.color, isNot(HColorDerivation.tint(tokens.state.held)));
+    expect(find.textContaining('watching'), findsOneWidget);
+
+    // Und einfügen geht nicht, solange dieses Fenster zusieht: `Terminal.paste`
+    // ruft `onOutput` auch in einer nur lesenden Ansicht, die Bytes gingen
+    // hinauf, und der Daemon verwürfe sie -- ein Menüpunkt, der nichts tut.
+    // Die Stelle ist wichtig: hier ist die Phase `attached`, also misst die
+    // Zusicherung `readOnly` und nicht die Phase.
+    final HContextMenu menu = tester.widget<HContextMenu>(
+      find.byType(HContextMenu),
+    );
+    final HMenuItem paste = menu.itemsBuilder().firstWhere(
+      (HMenuItem item) => item.label == 'Paste',
+    );
+    expect(paste.enabled, isFalse);
+
+    // Und wenn die Sitzung endet, kommt der Befund nicht zurück: `TERM_001`
+    // bleibt im Zustand stehen, aber er gehört einer Lage, die vorbei ist —
+    // orange neben der Exit-Zeile wäre eine Meldung über etwas, das gerade
+    // gutgegangen ist.
+    client.endTerminals();
+    await tester.pump();
+    await tester.pump();
+    expect(
+      _session(tester, client).phase,
+      TerminalPhase.ended,
+      reason: 'the agent ended while this window was watching',
+    );
+    expect(
+      find.byKey(const Key('sandbox-terminal-finding')),
+      findsNothing,
+      reason: 'and TERM_001 belongs to a situation that is over',
+    );
+    expect(find.byKey(const Key('sandbox-terminal-watching')), findsNothing);
   });
 }
 

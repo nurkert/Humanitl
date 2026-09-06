@@ -1585,6 +1585,10 @@
     "description": "A finding about the terminal itself, TERM_001 above all: somebody else already writes in this session. Code and reason come from the daemon.",
     "placeholders": {"code": {"type": "String"}, "why": {"type": "String"}}
   },
+  "sandboxTerminalWatching": "Another client is typing in this session. This window is watching.",
+  "@sandboxTerminalWatching": {
+    "description": "Stands above the terminal while this window only reads. The ordinary case: humanitl run holds the writer of the session it started, and the window attached with Open.read_only instead of showing a refusal. Not a finding, so it wears the neutral chrome rather than the colour of an error (docs/UX.md rules 5 and 6)."
+  },
   "sandboxTerminalMenu": "Terminal menu",
   "@sandboxTerminalMenu": {"description": "Screen-reader label of the context menu over the terminal."},
   "sandboxTerminalCopy": "Copy",

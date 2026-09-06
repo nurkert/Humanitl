@@ -128,14 +128,43 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
               notice.path,
             ),
           ),
-        if (session.diagnostic case final Diagnostic diagnostic)
-          _FindingStrip(
-            text: l10n.sandboxTerminalFinding(diagnostic.code, diagnostic.why),
-          ),
+        if (_strip(l10n, session) case final Widget strip) strip,
         Expanded(child: _view(tokens, l10n, session)),
         if (session.exitCode case final int code)
           _ExitStrip(text: l10n.sandboxTerminalExited(code)),
       ],
+    );
+  }
+
+  /// Die Zeile über dem Terminal, oder keine.
+  ///
+  /// Drei Lagen, und der Unterschied zwischen ihnen ist der Grund für diese
+  /// Funktion. **Zusehen** ist der Normalfall neben einer schreibenden
+  /// Kommandozeile: ein Satz im ruhigen Chrome, keine Zustandsfarbe, denn
+  /// nichts daran ist der Zustand einer Anfrage (`docs/UX.md` 5 und 6).
+  /// **Ein Befund** ist die Absage, die dieses Fenster wirklich trifft, und
+  /// trägt das Orange eines Findings. **Und dazwischen** liegt der Fall, den
+  /// ein früherer Entwurf übersah: Endet der Agent, während dieses Fenster
+  /// zusieht, bleibt `TERM_001` im Zustand stehen -- der Befund gehört dann
+  /// einer Lage, die vorbei ist, und er käme neben der Exit-Zeile in der Farbe
+  /// zurück, die „ging nicht" heißt. Deshalb hängt die Unterdrückung am Code
+  /// und nicht an der Phase.
+  Widget? _strip(AppLocalizations l10n, TerminalSessionState session) {
+    final Diagnostic? diagnostic = session.diagnostic;
+    if (diagnostic == null) {
+      return null;
+    }
+    final bool gaveUpTheKeyboard =
+        session.readOnly &&
+        diagnostic.code == DiagnosticCodes.terminalSecondWriter &&
+        session.phase != TerminalPhase.refused;
+    if (gaveUpTheKeyboard) {
+      return session.phase == TerminalPhase.attached
+          ? _WatchingStrip(text: l10n.sandboxTerminalWatching)
+          : null;
+    }
+    return _FindingStrip(
+      text: l10n.sandboxTerminalFinding(diagnostic.code, diagnostic.why),
     );
   }
 
@@ -152,7 +181,15 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
         enabled: _controller.selection != null,
         onSelected: _copy,
       ),
-      HMenuItem(label: l10n.sandboxTerminalPaste, onSelected: _paste),
+      // Einfügen geht am Rohmodus vorbei: `Terminal.paste` ruft `onOutput`
+      // auch dann, wenn die Ansicht nur liest, und die Bytes gingen hinauf,
+      // wo der Daemon sie verwirft. Ein Menüpunkt, der nichts tut, ist genau
+      // die Lüge, die der Kommentar am Cursor drei Zeilen tiefer ausschließt.
+      HMenuItem(
+        label: l10n.sandboxTerminalPaste,
+        enabled: !session.readOnly && session.phase == TerminalPhase.attached,
+        onSelected: _paste,
+      ),
     ],
     child: ColoredBox(
       color: tokens.terminal.background,
@@ -313,6 +350,9 @@ class _ExitStrip extends StatelessWidget {
 }
 
 /// A finding about this terminal, `TERM_001` above all.
+///
+/// `state.error` is the orange of a finding and not the red of a block: red
+/// means a request did not go out, and nothing else (`docs/UX.md` rule 6).
 class _FindingStrip extends StatelessWidget {
   const _FindingStrip({required this.text});
 
@@ -330,6 +370,36 @@ class _FindingStrip extends StatelessWidget {
       child: Text(
         text,
         style: tokens.typography.ui12.tinted(tokens.stateText.error),
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
+    );
+  }
+}
+
+/// Why this window has no keyboard: somebody else writes in this session.
+///
+/// Neutral chrome, like the line that says the agent has ended. Nothing here
+/// is the state of a request -- `held` belongs to a flow that waits, and such
+/// a flow has its own strip above this one -- and `docs/UX.md` 5 gives what
+/// carries no state the quiet colours.
+class _WatchingStrip extends StatelessWidget {
+  const _WatchingStrip({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final HTokens tokens = HTheme.of(context);
+    return Container(
+      key: const Key('sandbox-terminal-watching'),
+      constraints: const BoxConstraints(minHeight: terminalStripHeight),
+      color: tokens.colors.bg2,
+      padding: EdgeInsets.symmetric(horizontal: tokens.spacing.x2),
+      alignment: Alignment.centerLeft,
+      child: Text(
+        text,
+        style: tokens.typography.ui12.tinted(tokens.colors.fg1),
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
       ),

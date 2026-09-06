@@ -1119,7 +1119,42 @@ class FakeDaemonClient implements DaemonClient {
     yield SandboxUpdate.log(
       SandboxLogLine(at: _clock(), text: 'sandbox stopped (fake)'),
     );
+    // Wie der echte Dienst: Jeder Angeschlossene erfaehrt das Ende des
+    // Agenten. Was der Fake dabei anders macht, steht an `endTerminals`.
+    endTerminals();
     yield SandboxUpdate.status(sandbox);
+  }
+
+  /// Schickt jedem offenen Terminal das Ende des Agenten, wie der Dienst es
+  /// tut.
+  ///
+  /// Oeffentlich, weil ein Test den Augenblick braucht, in dem eine Sitzung
+  /// endet, waehrend ein Fenster zusieht.
+  ///
+  /// **Der Strom bleibt danach offen, und das ist eine Abweichung mit Grund.**
+  /// Der echte Dienst schliesst ihn nach dem `Exit`; hier zu schliessen haengt
+  /// den Widget-Test auf, weil das Schliessen die Abonnements abbricht, die
+  /// gerade noch dasselbe Ereignis zustellen (gemessen: der Test kommt nicht
+  /// zurueck). Fuer die Oberflaeche zaehlt das Ereignis -- daran haengt die
+  /// Phase --, und was das Schliessen ausloest, misst
+  /// `daemon/crates/ipc/tests/terminal.rs`.
+  void endTerminals({int code = 0}) {
+    for (final StreamController<TerminalFrame> out
+        in List<StreamController<TerminalFrame>>.of(_terminals)) {
+      if (!out.isClosed) {
+        out.add(TerminalExit(code));
+      }
+    }
+    // Die Sitzung ist vorbei, also fuehrt der Fake sie nicht weiter: sonst
+    // bekaeme derselbe Strom bei jedem weiteren Stopp ein zweites `Exit`, und
+    // die Liste wuechse ueber die Laufzeit eines Fakes hinweg an. Mit der
+    // Sitzung faellt der Schreiber-Platz. Im Daemon faellt er, weil der Hub
+    // fuer diese Sandbox verschwindet (`daemon/crates/ipc/src/terminal.rs`);
+    // hier lebt der Fake ueber den Start hinaus, und ohne diese Zeile bekaeme
+    // das erste Fenster der naechsten Sitzung `TERM_001` von einem Schreiber,
+    // den es nicht mehr gibt.
+    _terminals.clear();
+    _terminalWriter = null;
   }
 
   @override
@@ -1168,13 +1203,33 @@ class FakeDaemonClient implements DaemonClient {
     return null;
   }
 
-  /// Ob dieser Fake schon einen schreibenden Terminal-Client hat.
+  /// Der schreibende Terminal-Client, oder `null`.
   ///
   /// Der echte Daemon fuehrt genau einen; ein zweiter bekommt `TERM_001` und
   /// sein Strom endet (CONVENTIONS 4.10). Der Fake fuehrt denselben Platz,
   /// damit die Oberflaeche nicht gegen ein Verhalten uebt, das der Daemon
   /// ablehnt.
-  bool _terminalWriter = false;
+  ///
+  /// Der Platz haelt den Strom seines Besitzers und nicht nur ein Ja/Nein,
+  /// weil er zwei Besitzer nacheinander haben kann: Beim Ende des Agenten
+  /// faellt er, und das naechste Fenster darf schreiben. Ein Flag wuerde dann
+  /// vom Abschied des alten Besitzers geloescht -- mitten in der Sitzung des
+  /// neuen, der ihn gerade haelt.
+  StreamController<TerminalFrame>? _terminalWriter;
+
+  /// Die offenen Terminal-Stroeme dieser Sitzung.
+  ///
+  /// Der echte Daemon schickt jedem Angeschlossenen `Exit` und schliesst,
+  /// wenn der Agent endet (`daemon/crates/ipc/src/terminal.rs`). Ohne diese
+  /// Liste endete der Fake stumm, und die Oberflaeche uebte gegen einen
+  /// Ablauf, den es nicht gibt: Ein Fenster bliebe fuer immer `attached`.
+  final List<StreamController<TerminalFrame>> _terminals =
+      <StreamController<TerminalFrame>>[];
+
+  /// Wie viele Terminal-Stroeme der Fake gerade fuehrt. Ein Test misst daran,
+  /// dass keiner der drei Wege hinaus (Detach, Abbrechen, Ende des Agenten)
+  /// einen Controller stehen laesst.
+  int get openTerminals => _terminals.length;
 
   @override
   Stream<TerminalFrame> terminal(Stream<TerminalCommand> input) {
@@ -1191,13 +1246,16 @@ class FakeDaemonClient implements DaemonClient {
 
     void release() {
       if (writes) {
-        _terminalWriter = false;
+        if (identical(_terminalWriter, out)) {
+          _terminalWriter = null;
+        }
         writes = false;
       }
     }
 
     void finish() {
       release();
+      _terminals.remove(out);
       unawaited(source?.cancel());
       source = null;
       if (!out.isClosed) {
@@ -1217,7 +1275,7 @@ class FakeDaemonClient implements DaemonClient {
         }
         opened = true;
         writes = !command.readOnly;
-        if (writes && _terminalWriter) {
+        if (writes && _terminalWriter != null) {
           writes = false;
           out.add(
             const TerminalFinding(
@@ -1233,7 +1291,7 @@ class FakeDaemonClient implements DaemonClient {
           return;
         }
         if (writes) {
-          _terminalWriter = true;
+          _terminalWriter = out;
         }
         out
           ..add(
@@ -1267,9 +1325,14 @@ class FakeDaemonClient implements DaemonClient {
       }
     }
 
+    _terminals.add(out);
     source = input.listen(onCommand, onDone: finish);
     out.onCancel = () {
       release();
+      // Ein Abbrechen des Abonnements loest kein `onDone` aus, also raeumt
+      // `finish()` hier nichts auf; ohne diese Zeile bliebe der Controller
+      // fuer immer in `_terminals` stehen.
+      _terminals.remove(out);
       final StreamSubscription<TerminalCommand>? pending = source;
       source = null;
       return pending?.cancel();
