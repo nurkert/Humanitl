@@ -350,6 +350,11 @@ for n in 4 5; do
     ESC_OUT_DIR="$WORK/results" ESC_RESULTS= \
         ESC_PROXY_SOCK="$DAEMON_PROXY_SOCK" \
         ESC_BODY_CAP="$ESCAPE_BODY_CAP" \
+        ESC_CLI="$CLI" \
+        ESC_XDG_RUNTIME_DIR="$STATE/runtime" \
+        ESC_XDG_CONFIG_HOME="$DAEMON_XDG/config" \
+        ESC_XDG_DATA_HOME="$DAEMON_XDG/data" \
+        ESC_HOME="$DAEMON_XDG/home" \
         sh "$script"
     set -e
     file="$WORK/results/$suite.txt"

@@ -1,5 +1,5 @@
-//! `humanitl llm discover`: die Suche nach LLM-Servern im eigenen Netz
-//! (HUM-076).
+//! `humanitl llm discover|test`: die Suche nach LLM-Servern im eigenen Netz
+//! (HUM-076) und die Probe eines einzelnen Endpunkts (HUM-114).
 //!
 //! Ein gRPC-Aufruf und sonst nichts (ADR-018): Gesucht wird im Daemon, im
 //! Host-Netz; hier wird angekündigt, gezählt und geschrieben. Die Ankündigung
@@ -24,16 +24,137 @@ const HEADERS: [&str; 5] = ["HOST", "PORT", "PRODUCT", "MS", "MODELS"];
 /// Wie viele Modellnamen eine Zeile zeigt, bevor sie zählt statt aufzuzählen.
 const MODELS_IN_LINE: usize = 3;
 
+/// Wie viele Modellnamen `llm test` untereinander zeigt.
+const MODELS_SHOWN: usize = 6;
+
+/// Wie viele Zeichen eines Modellnamens gezeigt werden.
+const MODEL_NAME_CHARS: usize = 40;
+
 /// Führt `humanitl llm <cmd>` aus.
 ///
 /// # Errors
 ///
 /// `DAEMON_001`, wenn kein Daemon antwortet; `LLM_008`, wenn es kein eigenes
-/// Netz gibt oder das genannte weiter als ein `/24` ist.
+/// Netz gibt oder das genannte weiter als ein `/24` ist; bei `test` außerdem
+/// `LLM_007` für eine Adresse, die der Dienst nicht lesen kann, und `LLM_001`,
+/// wenn der Endpunkt nicht antwortet. `LLM_003` ist keiner davon: Wer
+/// antwortet, aber als keine bekannte API, hat geantwortet -- das steht als
+/// Warnung unter der Ausgabe, und der Lauf endet mit `0`.
 pub async fn run(ctx: &Context, cmd: &LlmCmd) -> Result<u8, Failure> {
     match cmd {
         LlmCmd::Discover { subnet, port } => discover(ctx, subnet.as_deref(), port).await,
+        LlmCmd::Test { url, timeout_ms } => test(ctx, url, timeout_ms.unwrap_or_default()).await,
     }
+}
+
+/// `llm test URL [--timeout-ms N]`.
+///
+/// Gefragt wird im Daemon (ADR-018); hier steht die Ankündigung, die Ausgabe
+/// und der Exit-Code. Ein Endpunkt, der nicht antwortet, ist ein Befund des
+/// Dienstes (`LLM_001`) und keine eigene Erklärung: Was gemessen wurde, weiß
+/// die Stelle, die gemessen hat.
+async fn test(ctx: &Context, url: &str, timeout_ms: u32) -> Result<u8, Failure> {
+    let mut client = ctx.connect().await?;
+    announce_probe(url);
+
+    let response = client
+        .probe_llm(v1::ProbeLlmRequest {
+            endpoint: url.to_owned(),
+            timeout_ms,
+        })
+        .await
+        .map_err(|status| Failure::new(status_diagnostic(&status, "ProbeLlm")))?
+        .into_inner();
+
+    if ctx.render.is_json() {
+        ctx.render.value(&json!({
+            "endpoint": url,
+            "flavor": flavor(response.flavor),
+            "models": response.models,
+            "latency_ms": response.latency_ms,
+            "endpoint_is_private": response.endpoint_is_private,
+            "diagnostics": response
+                .diagnostics
+                .iter()
+                .filter_map(crate::cmd::from_proto)
+                .map(|diagnostic| crate::render::diagnostic_json(&diagnostic))
+                .collect::<Vec<Value>>(),
+        }));
+        return Ok(EXIT_OK);
+    }
+
+    ctx.render
+        .line(&format!("flavor: {}", flavor(response.flavor)));
+    ctx.render
+        .line(&format!("latency: {} ms", response.latency_ms));
+    if response.models.is_empty() {
+        // Kein Modell ist eine Aussage und keine Lücke: Es hat sich nichts
+        // gemeldet, was Humanitl kennt (`ProbeLlmResponse` im Vertrag).
+        ctx.render.line("models: none");
+    } else {
+        ctx.render
+            .line(&format!("models: {}", response.models.len()));
+        for name in shown_models(&response.models) {
+            ctx.render.line(&format!("  {name}"));
+        }
+        if let Some(hidden) = response.models.len().checked_sub(MODELS_SHOWN)
+            && hidden > 0
+        {
+            ctx.render.line(&format!("  +{hidden} more"));
+        }
+    }
+    // Die Befunde des Dienstes stehen unverändert darunter, auch die, die
+    // keinen Fehlschlag bedeuten: `LLM_006` sagt, dass diese Adresse nicht im
+    // eigenen Netz liegt, und das ist der Satz, der einen Menschen angeht.
+    for wire in &response.diagnostics {
+        if let Some(diagnostic) = crate::cmd::from_proto(wire) {
+            ctx.render
+                .note(crate::render::diagnostic_block(&diagnostic).trim_end());
+        }
+    }
+    Ok(EXIT_OK)
+}
+
+/// Die Namen, die eine Ausgabe zeigt, jeder auf [`MODEL_NAME_CHARS`] gekürzt.
+///
+/// Dieselben Grenzen wie in der Oberfläche (`app/lib/core/domain/llm.dart`,
+/// `LlmModelLimits`): Ein Name aus dem Netz ist Text von einer Maschine, über
+/// die noch niemand entschieden hat, und er bekommt hier nicht mehr Platz als
+/// dort. Gekürzt wird an Zeichen und nicht an Bytes, sonst stünde am Ende ein
+/// halbes Zeichen.
+fn shown_models(models: &[String]) -> Vec<String> {
+    models
+        .iter()
+        .take(MODELS_SHOWN)
+        .map(|name| {
+            if name.chars().count() <= MODEL_NAME_CHARS {
+                name.clone()
+            } else {
+                name.chars().take(MODEL_NAME_CHARS).collect()
+            }
+        })
+        .collect()
+}
+
+/// Welche API geantwortet hat, in einem Wort.
+fn flavor(flavor: i32) -> &'static str {
+    match v1::LlmProduct::try_from(flavor) {
+        Ok(v1::LlmProduct::Ollama) => "ollama",
+        Ok(v1::LlmProduct::OpenaiCompatible) => "openai-compatible",
+        _ => "unknown",
+    }
+}
+
+/// Sagt vor dem ersten Paket, wohin gleich eine Verbindung geht.
+///
+/// **Geht mit Absicht nicht durch [`crate::render::Renderer`]**, aus demselben
+/// Grund wie [`announce`] und wie im Doctor: Ein Ausgabeschalter darf nicht
+/// bestimmen, ob ein Mensch von einer Verbindung erfährt.
+fn announce_probe(endpoint: &str) {
+    eprintln!(
+        "contacting {endpoint} now: two GET requests, /api/tags then /v1/models, \
+         no credentials, no redirects"
+    );
 }
 
 /// `llm discover [--subnet CIDR] [--port PORT]...`.

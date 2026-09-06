@@ -39,3 +39,11 @@ rules:
     match:
       host: "blocked.example"
     note: "der Cap gilt auch für einen erlaubten Host"
+
+  # Exakt heißt exakt: dieses Muster trifft genau einen Namen und keine
+  # Subdomain davor. Gemessen wird es über die Kommandozeile, in den Fällen 13
+  # bis 15 der Host-Tabelle (HUM-022) in `tests/escape/esc-4-rules.sh`.
+  - action: block
+    match:
+      host: "exact.example"
+    note: "ein exaktes Muster trifft genau einen Namen"

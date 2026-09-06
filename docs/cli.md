@@ -452,6 +452,73 @@ ein Ergebnis und kein Fehler. Mit `--json` steht am Ende ein Wert mit
 `servers` und `count`, sonst eine Tabelle, während der Suche je Fund eine
 Zeile auf `stderr`.
 
+## `humanitl rules test`
+
+Fragt den geltenden Regelsatz, was mit einer Anfrage geschähe. Ausgewertet wird
+im Daemon, mit derselben Engine wie im Proxy-Pfad (ADR-018): Eine zweite
+Auswertung in der Kommandozeile könnte anders antworten als die, die wirklich
+entscheidet.
+
+```
+humanitl rules test <URL> [--method M] [--upgrade websocket] [--json]
+
+verdict: block
+rule: 018f0000-0000-7000-8000-00000000000a (bundled, position 3)
+```
+
+Ohne `--method` gilt `GET`. Trifft keine Regel, steht dort
+`rule: none (default ask)`. Die Herkunft — `session`, `user` oder `bundled` —
+kommt aus derselben Antwort wie das Verdikt und nicht aus einem zweiten Aufruf.
+
+**Der Exit-Code trägt das Verdikt**, damit ein Skript es lesen kann, ohne die
+Zeile zu zerlegen: `allow` endet mit `0`, `block` mit `10`, `ask` mit `11`.
+`redact` endet ebenfalls mit `11`, weil eine solche Anfrage heute gehalten
+wird. Ein Fehlschlag bleibt davon unberührt: eine URL ohne Schema oder mit
+Fragment ist `CLI_004` und Exit `1`, bevor irgendjemand gefragt wird, und ohne
+Daemon endet auch dieses Kommando mit `2`.
+
+Mit `--json` steht eine Zeile auf `stdout`, mit `verdict`, `matched`,
+`rule_id`, `origin`, `position` und `passthrough`; der Exit-Code bleibt
+derselbe. `origin` und `passthrough` sind `null`, wo die Antwort die Regel
+nicht führt — dasselbe „unbekannt" zweimal, nie ein `false`, das mehr behauptet
+als bekannt ist.
+
+Normalisiert wird im Daemon: Groß- und Kleinschreibung, ein Punkt am Ende und
+ein internationalisierter Name gehen roh hinaus und werden dort behandelt wie
+in einer echten Anfrage. `tests/escape/esc-4-rules.sh` fährt fünfzehn Zeilen der
+Host-Tabelle aus HUM-022 auf genau diesem Weg.
+
+## `humanitl llm test`
+
+Fragt einen einzelnen Endpunkt, was er ist. Dieselbe Probe wie hinter dem
+Testknopf im Setup und wie bei `doctor --probe-llm`: zwei GET-Anfragen im
+Daemon, `/api/tags` und dann `/v1/models`, ohne Zugangsdaten und ohne
+Weiterleitung, nichts davon durch die Sandbox.
+
+```
+humanitl llm test <URL> [--timeout-ms N] [--json]
+
+flavor: ollama
+latency: 12 ms
+models: 2
+  qwen2.5-coder:14b
+  llama3.1:8b
+```
+
+Vor dem ersten Paket geht auf `stderr` eine Zeile heraus, die den Endpunkt und
+die zwei Anfragen nennt — an der Ausgabesteuerung vorbei, damit auch `--json`
+und `-q` sie nicht verschlucken. Gezeigt werden höchstens sechs Namen mit je
+höchstens 40 Zeichen, der Rest als `+N more`; dieselben Grenzen wie in der
+Oberfläche, denn ein Name aus dem Netz ist Text von einer Maschine, über die
+noch niemand entschieden hat. Die vollständige Liste steht in `--json`.
+
+Ein Endpunkt, der nicht antwortet, endet mit `1` und dem Befund des Daemons
+(`LLM_001`; `LLM_007`, wenn die Adresse gar nicht lesbar war). Befunde, die
+kein Fehlschlag sind, stehen unter der Ausgabe und der Lauf endet mit `0`:
+`LLM_006` für eine Adresse außerhalb des eigenen Netzes, und `LLM_003` für
+einen Server, der antwortet, aber als keine bekannte API — dann steht dort
+`flavor: unknown` und keine Modellliste. Wer geantwortet hat, hat geantwortet.
+
 ## Was `run` mit den anderen Unterkommandos teilt
 
 - `humanitl sandbox run` startet die Sandbox im Prozess der Kommandozeile und
