@@ -583,6 +583,7 @@
   "sandboxTerminalHeldNotice": "Wartet auf Sie: {method} {host}{path}",
   "sandboxTerminalExited": "Der Agent endete mit Exit-Code {code}.",
   "sandboxTerminalFinding": "{code}: {why}",
+  "sandboxTerminalWatching": "Ein anderer Client tippt in dieser Sitzung. Dieses Fenster sieht zu.",
   "sandboxTerminalMenu": "Terminal-Menü",
   "sandboxTerminalCopy": "Kopieren",
   "sandboxTerminalPaste": "Einfügen",
