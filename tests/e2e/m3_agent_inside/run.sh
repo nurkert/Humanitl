@@ -111,7 +111,7 @@ fi
 # Zähler aus `lib.sh`. Ein Skript, das grün ist, weil ein Zweig übersprungen
 # wurde, ist schlimmer als keines; deshalb steht die Zahl hier und nicht im
 # Kopf eines Menschen.
-M3_EXPECTED_ASSERTIONS=106
+M3_EXPECTED_ASSERTIONS=111
 
 # So viele kommen dazu, wenn die OpenCode-Variante läuft. Der Zweig prüft
 # immer dieselben sieben Dinge — die beiden Verzweigungen darin sind
@@ -602,6 +602,35 @@ e2e_expect "and it may reach a private address, which no other rule may" true \
     "$(printf '%s' "$passthrough" | jq -r '.allow_private')"
 e2e_expect "and it comes from the adapter, not from a file" bundled \
     "$(printf '%s' "$passthrough" | jq -r '.origin')"
+
+# Und derselbe Regelsatz, gefragt auf dem Weg, den ein Mensch nimmt: `humanitl
+# rules test` wertet im Daemon aus, mit derselben Engine wie der Proxy-Pfad
+# (ADR-018, HUM-114). Das Kriterium aus HUM-039 steht hier, weil es genau diese
+# Auskunft verlangt: erlaubt, aus der Durchreiche, mitgeliefert.
+# Der Exit-Code ist hier die halbe Aussage, also wird er aufgefangen: Unter
+# `set -e` beendete ein Verdikt ungleich `allow` sonst den ganzen Lauf.
+llm_rules_probe_code=0
+llm_rules_probe=$(humanitl rules test "$M3_LLM_ENDPOINT/v1/chat/completions" --method POST) ||
+    llm_rules_probe_code=$?
+e2e_expect "asking the rule set about the inference path ends with allow" 0 \
+    "$llm_rules_probe_code"
+e2e_expect_match "and the answer says allow" '^verdict: allow$' "$llm_rules_probe"
+e2e_expect_match "from the passthrough, which is bundled and carries its rank" \
+    '^rule: 01920000-0000-7000-8000-0000000000ff \(bundled, position 1, passthrough_llm\)$' \
+    "$llm_rules_probe"
+
+# Der Gegenfall, und er liegt mit Absicht **unter** der Fläche `/api/`:
+# `POST /api/pull` lädt ein Modell auf den Server und ist genau der Pfad, den
+# die Durchreiche nicht deckt, weil sie Endpunkte nennt und keine Fläche
+# (CONVENTIONS 4.21). Ein Pfad außerhalb beider Flächen -- `/admin` etwa --
+# bliebe auch dann gehalten, wenn die Durchreiche wieder `/api/` als Ganzes
+# erlaubte, und bewiese damit nichts.
+llm_mutating_code=0
+llm_mutating=$(humanitl rules test "$M3_LLM_ENDPOINT/api/pull" --method POST) ||
+    llm_mutating_code=$?
+e2e_expect "a mutating path on the same server is held, not allowed" 11 \
+    "$llm_mutating_code"
+e2e_expect_match "and no rule claims it" '^rule: none \(default ask\)$' "$llm_mutating"
 
 catalog_rule=$(printf '%s' "$rules_json" |
     jq -c '.rules[] | select(.rule_id == "01920000-0000-7000-8000-000000000001")')
