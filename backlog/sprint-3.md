@@ -2596,7 +2596,7 @@ Ausgabe (Text): `[ok] bubblewrap 0.11.0`, `[fail] user namespaces: unshare -Ur f
 ### Akzeptanzkriterien
 - [x] `humanitl doctor` auf der Entwicklungsmaschine: alle Zeilen ok oder warn mit Fix. Beleg im Stand-Abschnitt.
 - [x] Jede Nicht-ok-Zeile hat `why` und `fix`. Beleg im Stand-Abschnitt.
-- [ ] Setup-Screen zeigt dieselben Zeilen, Start-Button bleibt bei `fail` deaktiviert. **Offen**, Begründung im Stand-Abschnitt.
+- [x] Setup-Screen zeigt dieselben Zeilen, Start-Button bleibt bei `fail` deaktiviert. **Der Stand-Abschnitt unten ist an dieser Stelle überholt:** Er stammt vom 2026-09-05, und `app/lib/features/setup/widgets/doctor_list.dart` hat HUM-044 danach gebaut. Gemessen am 2026-09-06, beide Hälften einzeln ausgeführt: `the machine list shows every line the daemon sent` zeigt neun Zeilen — elf minus die zwei mit eigener Reihe — und die Überschrift verspricht genau diese neun; `start_button_enabled_only_when_all_ok` setzt eine Maschine ohne `bwrap` und findet den Knopf aus, die Sandbox-Zeile auf „blocks the start" und `DOCTOR_001` auf dem Schirm. Beide in `app/test/features/setup/setup_test.dart`.
 - [x] `--json` ist stabil (Snapshot-Test). Beleg im Stand-Abschnitt.
 
 ### Fallstricke
@@ -2608,6 +2608,11 @@ Ausgabe (Text): `[ok] bubblewrap 0.11.0`, `[fail] user namespaces: unshare -Ur f
 BACKLOG.md Prinzip 9; HUM-044; Ubuntu userns-Restriktion (https://ubuntu.com/blog/ubuntu-23-10-restricted-unprivileged-user-namespaces).
 
 ### Stand (2026-09-05): Daemon und Kommandozeile gebaut, zehn Abweichungen, die Oberflächenhälfte offen
+
+> **Nachtrag 2026-09-06.** Die Oberflächenhälfte ist seit HUM-044 gebaut:
+> `app/lib/features/setup/widgets/doctor_list.dart` zeichnet die Zeilen des
+> Doctors, und zwei Tests messen sie (siehe das Kästchen oben). Was unten
+> über sie steht, beschreibt den Stand von gestern.
 
 Gebaut sind `humanitl_sandbox::doctor` (die elf Prüfungen, Tatsachen und
 Urteil getrennt), die RPC `Doctor` im echten Dienst, der Fake, die
