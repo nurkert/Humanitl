@@ -20,6 +20,7 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-053 | Packaging deb, AppImage, systemd | M | HUM-070 |
 | HUM-054 | Golden- und Widget-Tests | M | HUM-047, HUM-052, HUM-069 |
 | HUM-055 | Demo-Skript M4 | S | alle oben |
+| HUM-134 | `find_program_reads_path_from_the_given_env_only` wird unter Last rot | S | — |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -2010,3 +2011,47 @@ Die CLI benutzt in beiden Fällen `out_path`.
 
 ### Quellen
 `docs/ARCHITECTURE.md` 3b (Zeile 66); `docs/adr/0018-rpc-parity.md` Zeilen 25 bis 28, 39 bis 42, 110; `README.md` Zeile 83 und Zeilen 123 bis 124; `backlog/CONVENTIONS.md` 4.4, 4.6, 4.13, 4.18 (Zeilen 802 bis 880); `backlog/sprint-2.md` HUM-026 Nicht-Ziel (Zeile 583) und HUM-032 (Zeilen 1329 bis 1345); `backlog/sprint-4.md` HUM-051 (Zeile 789, Audit-Export als Vorbild) und HUM-078; `docs/PROTOCOL.md` Abschnitte 3 und 4; `proto/humanitl/v1/humanitl.proto` Zeilen 23 bis 44 und 863; `daemon/bin/humanitl/src/cli.rs` Zeilen 102 bis 142 und 187 bis 263; `.github/workflows/ci.yml` Zeilen 572 bis 582; HAR 1.2 (http://www.softwareishard.com/blog/har-12-spec/); RFC 4180 (https://www.rfc-editor.org/rfc/rfc4180).
+
+
+---
+
+## HUM-134 · `find_program_reads_path_from_the_given_env_only` wird unter Last rot
+Sprint: 4 · Größe: S · Abhängigkeiten: — · Blockiert: eine verlässlich grüne Pipeline
+
+### Kontext
+Am 2026-09-07 fiel `cargo test -p humanitl-sandbox --lib` in einem sonst grünen `STRICT=1 make check` mit
+
+```
+thread 'bwrap::tests::find_program_reads_path_from_the_given_env_only' panicked at crates/sandbox/src/bwrap.rs:1317:
+runs: Diagnostic { code: SANDBOX_001, why: "cannot run /tmp/.tmpyk03Mt/bwrap --version: Text file busy (os error 26)" }
+```
+
+Derselbe Test lief unmittelbar danach fünfmal einzeln grün. Der Fehler ist `ETXTBSY` und damit ein bekanntes Rennen zwischen `fork` und `exec` in einem Testbinary mit mehreren Threads: Der Test schreibt in `crates/sandbox/src/bwrap.rs:1305-1309` ein ausführbares Skript und startet es sofort (`query_version`). Forkt ein anderer Test desselben Binaries genau in dem Augenblick, in dem die Datei noch zum Schreiben offen ist, erbt sein Kind den Deskriptor; bis das Kind `exec` erreicht, hält es die Datei zum Schreiben offen, und unser `exec` bekommt `ETXTBSY`. `O_CLOEXEC` hilft nicht, weil das Fenster genau zwischen `fork` und `exec` liegt.
+
+Das Rennen ist ein Fehler des Tests, nicht des Codes: `BwrapBackend::find_program` und `query_version` tun das Richtige, und ein Nutzer trifft die Lage nicht. Rot wird davon aber die Pipeline, und ein Lauf, der ohne Grund rot ist, kostet jedes Mal die Suche nach einer Ursache, die es nicht gibt.
+
+### Ziel
+`cargo test -p humanitl-sandbox` ist unter paralleler Last verlässlich grün, ohne dass der Test weniger prüft als heute.
+
+### Nicht-Ziel
+Den Test seriell zu stellen (`--test-threads=1` für die ganze Crate) — das verlangsamt jeden Lauf wegen eines Falls. Auf das Ausführen zu verzichten und `query_version` zu überspringen — dann misst der Test die Zeile nicht mehr, um die es geht.
+
+### Betroffene Pfade
+- `daemon/crates/sandbox/src/bwrap.rs` (`mod tests`)
+
+### Spezifikation
+Ein `exec`, das mit `ETXTBSY` scheitert, wird im Test bis zu fünfmal mit 20 ms Abstand wiederholt; erst danach gilt er als gescheitert. Alternativ schreibt der Test die Datei über einen eigenen Prozess (`cp`) oder wartet mit `fsync` plus erneutem Öffnen, bis kein Schreiber mehr offen ist. Die Wiederholung steht mit ihrer Begründung im Test, damit niemand sie später für Zierrat hält.
+
+### Tests
+Der bestehende Test bleibt; er ist die Messung. Zusätzlich ein Lauf mit `--test-threads=8` in einer Schleife (zwanzigmal), der vor und nach der Änderung gefahren und im Commit-Body mit seinen Zahlen genannt wird.
+
+### Akzeptanzkriterien
+- [ ] Zwanzig Läufe `cargo test -p humanitl-sandbox --lib -- --test-threads=8` hintereinander sind grün.
+- [ ] Der Test prüft weiterhin `SANDBOX_001` für einen leeren Pfad, das Finden im zweiten `PATH`-Eintrag, `query_version` und `SANDBOX_002` für eine zu alte Version.
+- [ ] `make check` grün.
+
+### Fallstricke
+- Eine Wiederholung, die jeden Fehler auffängt, verdeckt einen echten: Nur `ETXTBSY` wird wiederholt, jeder andere Befund scheitert sofort.
+
+### Referenzen
+`daemon/crates/sandbox/src/bwrap.rs:1295-1326`; Beobachtung am 2026-09-07 im Lauf zu HUM-039.
