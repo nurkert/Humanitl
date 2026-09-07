@@ -198,7 +198,7 @@ Sprache, Erscheinungsbild und Meldungen der Oberfläche.
 |---|---|---|---|---|---|---|
 | `ui.language` | en \| de | `"en"` | basic | allowed | ja | Sprache der Oberfläche. |
 | `ui.notifications` | boolean | `true` | advanced | allowed | offen (HUM-069) | Meldung des Systems, wenn eine Anfrage wartet und das Fenster nicht vorn ist. |
-| `ui.terminal_notices` | boolean | `true` | advanced | allowed | ja | Zeile im Terminal des Agenten, wenn eine seiner Anfragen auf eine Entscheidung wartet. Der Streifen über dem Terminal zeigt sie in jedem Fall; dies ist die Zeile im Bytestrom, die ein Vollbild-TUI beim nächsten Bild überschreibt. |
+| `ui.terminal_notices` | boolean | `true` | advanced | allowed | ja | Hinweiszeile des Daemons, wenn eine Anfrage des Agenten auf eine Entscheidung wartet oder entschieden ist. Sie geht als eigener Rahmen an jeden Client, nie in den Bytestrom des Agenten: Wer am Terminal sitzt, bekommt sie zwischen die Bytes geschrieben, und die Oberfläche zeigt sie im Streifen über dem Terminal. Der Streifen bleibt in jedem Fall, weil er aus dem Ereignisstrom kommt; dieser Schalter betrifft nur den Rahmen. |
 | `ui.theme` | dark \| light \| system | `"dark"` | advanced | allowed | offen (HUM-069) | Erscheinungsbild der Oberfläche. |
 
 ## Alte Namen

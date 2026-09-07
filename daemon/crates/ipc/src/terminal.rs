@@ -34,14 +34,24 @@
 //! „Niemand fragt den Proxy nach seinem Zustand, alle hören zu"), und nicht
 //! aus einem neuen Kanal vom Proxy zum Terminal.
 //!
+//! Sie geht als **eigener Rahmen** hinaus (`TerminalOutput.notice`) und nicht
+//! als Bytes im Strom des Agenten. Bis zum 2026-09-07 war es umgekehrt, und
+//! am Bildschirm sah man, warum das nicht geht: Die Oberfläche zeigt den
+//! Agenten in einem Emulator, ein Vollbild-TUI zeichnet dort mit absoluter
+//! Adressierung, und die eingeschobene Zeile stand quer über seinem Bild.
+//! Jetzt entscheidet jeder Client selbst — die Oberfläche zeichnet ihren
+//! Streifen, `humanitl sandbox attach` schreibt die Zeile mit
+//! [`notice_line`] zwischen die Bytes, weil dort niemand eine zweite Fläche
+//! hat.
+//!
 //! Diese Zeile ist die schärfste feindliche Eingabe dieses Moduls: Sie setzt
 //! Text des Agenten (`HttpRequest.path_and_query`, roh von der Leitung) in
-//! eine Zeile mit Humanitl-Absender, und sie wird **am Filter vorbei**
-//! geschrieben. Deshalb läuft sie als Ganzes durch
+//! eine Zeile mit Humanitl-Absender, und sie geht **am Filter vorbei**.
+//! Deshalb läuft sie als Ganzes durch
 //! [`humanitl_core::block::sanitize_note`], der Pfad wird vorher gekürzt und
-//! um die eckige Klammer gebracht ([`path_for_notice`]), und eingefügt wird
-//! nur an einer Grenze ([`TerminalFilter::at_boundary`]) — sonst fiele der
-//! Hinweis mitten in eine halb geschriebene Folge des Agenten.
+//! um die eckige Klammer gebracht ([`path_for_notice`]), und verschickt wird
+//! nur an einer Grenze ([`TerminalFilter::at_boundary`]) — sonst schriebe der
+//! Client sie mitten in eine halb geschriebene Folge des Agenten.
 //!
 //! **Was das nicht deckt, und warum es kein Loch ist:** Der Agent kann
 //! jederzeit selbst `[humanitl] request allowed` auf seine eigene
@@ -50,8 +60,8 @@
 //! Akzeptanzkriterium des Issues am Streifen **über** dem Terminal, den die
 //! Oberfläche aus demselben Ereignis zeichnet, und deshalb steht über dem
 //! Terminal dauerhaft, dass die Ausgabe des Agenten nicht vertrauenswürdig
-//! ist. Die Zeile im Strom ist eine Bequemlichkeit für den, der am Terminal
-//! sitzt, und `ui.terminal_notices` schaltet sie ab.
+//! ist. Der Rahmen ist eine Bequemlichkeit für den, der am Terminal sitzt,
+//! und `ui.terminal_notices` schaltet ihn ab.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -102,8 +112,10 @@ const NOTICE_PREFIX: &str = "[humanitl] ";
 /// Was an alle Clients eines Terminals geht.
 #[derive(Debug, Clone)]
 enum Frame {
-    /// Gefilterte Bytes des Agenten oder eine Zeile des Daemons.
+    /// Gefilterte Bytes des Agenten.
     Data(Arc<[u8]>),
+    /// Eine gesäuberte Zeile des Daemons, neben den Bytes und nicht darin.
+    Notice(Arc<str>),
     /// Die Geometrie des Schreibers; Leser rendern letterboxed.
     Resize { cols: u16, rows: u16 },
     /// Ein Befund, der zu diesem Terminal gehört.
@@ -124,8 +136,8 @@ struct HubState {
     rows: u16,
     /// Ob ein Schreiber angemeldet ist.
     writer: bool,
-    /// Eine Zeile, die auf die nächste Grenze wartet.
-    pending: Vec<u8>,
+    /// Die Zeilen, die auf die nächste Grenze warten.
+    pending: Vec<Arc<str>>,
     /// Der Exit-Code, sobald der Agent beendet ist.
     finished: Option<i32>,
 }
@@ -213,25 +225,30 @@ impl TerminalHub {
         }
         // Ein Hinweis, der auf eine Grenze gewartet hat, geht jetzt hinaus.
         if state.filter.at_boundary() && !state.pending.is_empty() {
-            let pending = std::mem::take(&mut state.pending);
-            self.emit(&mut state, &pending);
+            self.flush_notices(&mut state);
         }
     }
 
     /// Eine Zeile des Daemons, gesäubert und nur an einer Grenze.
+    ///
+    /// Sie geht als eigener Rahmen hinaus und nicht als Bytes im Strom des
+    /// Agenten: Wer eine eigene Anzeige dafür hat, benutzt sie, und wer am
+    /// Terminal sitzt, schreibt sie zwischen die Bytes. Die Reihenfolge zu
+    /// den Bytes bleibt trotzdem die des Rundfunks, deshalb hält auch dieser
+    /// Rahmen die Grenze ein.
     pub fn notice(&self, line: &str) {
         if !self.inner.notices {
             return;
         }
-        let bytes = notice_line(line);
+        let text: Arc<str> = Arc::from(sanitize_note(line).as_str());
         let mut state = lock(&self.inner.state);
         if state.filter.at_boundary() {
-            self.emit(&mut state, &bytes);
+            let _ = self.inner.frames.send(Frame::Notice(text));
         } else {
             // Mitten in einer Folge des Agenten: warten. Der Hinweis ist
             // nichts wert, wenn er eine halbe Folge zerschneidet — das
             // Terminal führte den Rest dann als Text aus.
-            state.pending.extend_from_slice(&bytes);
+            state.pending.push(text);
         }
     }
 
@@ -257,8 +274,7 @@ impl TerminalHub {
             // geht nicht hinaus.
             let _ = state.filter.flush();
             if !state.pending.is_empty() {
-                let pending = std::mem::take(&mut state.pending);
-                self.emit(&mut state, &pending);
+                self.flush_notices(&mut state);
             }
             state.finished = Some(code);
         }
@@ -331,6 +347,17 @@ impl TerminalHub {
             finished,
             writer: (!read_only).then(|| WriterSlot { hub: self.clone() }),
         })
+    }
+
+    /// Schickt die Hinweise, die auf eine Grenze gewartet haben.
+    ///
+    /// Sie gehen nicht in den Ring: Der Ring ist der Rückstand, den ein
+    /// später angehängter Client als Bild bekommt, und ein Hinweis von vorhin
+    /// gehört nicht in das Bild von jetzt.
+    fn flush_notices(&self, state: &mut HubState) {
+        for text in std::mem::take(&mut state.pending) {
+            let _ = self.inner.frames.send(Frame::Notice(text));
+        }
     }
 
     /// Legt Bytes in den Ring und verschickt sie.
@@ -407,13 +434,19 @@ pub fn path_for_notice(path: &str) -> String {
     short
 }
 
-/// Macht aus einer Hinweiszeile die Bytes, die in den Strom gehen.
+/// Macht aus einer Hinweiszeile die Bytes, die ein Terminal anzeigt.
 ///
 /// `\r\n` vorne und hinten, damit die Zeile in einer eigenen Zeile steht und
 /// der Cursor danach am Anfang der nächsten. Dazwischen genau das, was
 /// [`sanitize_note`] übrig lässt: kein Steuerzeichen, kein Zeilenumbruch,
 /// keine unsichtbaren Zeichen.
-fn notice_line(line: &str) -> Vec<u8> {
+///
+/// Der Daemon säubert schon, bevor er die Zeile verschickt; hier läuft es ein
+/// zweites Mal, weil an dieser Stelle die Bytes wirklich in ein Terminal
+/// gehen und `sanitize_note` idempotent ist. Wer die Zeile anders anzeigt —
+/// die Oberfläche zeichnet einen Streifen —, braucht diese Funktion nicht.
+#[must_use]
+pub fn notice_line(line: &str) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(b"\r\n");
     out.extend_from_slice(sanitize_note(line).as_bytes());
@@ -627,6 +660,11 @@ async fn forward(
                         return;
                     }
                 }
+                Ok(Frame::Notice(text)) => {
+                    if tx.send(notice_output(&text)).await.is_err() {
+                        return;
+                    }
+                }
                 Ok(Frame::Resize { cols, rows }) => {
                     if tx.send(resize_output(cols, rows)).await.is_err() {
                         return;
@@ -720,6 +758,12 @@ fn clamp(cols: u32, rows: u32) -> (u16, u16) {
 fn data_output(bytes: &[u8]) -> v1::TerminalOutput {
     v1::TerminalOutput {
         output: Some(v1::terminal_output::Output::Data(bytes.to_vec())),
+    }
+}
+
+fn notice_output(text: &str) -> v1::TerminalOutput {
+    v1::TerminalOutput {
+        output: Some(v1::terminal_output::Output::Notice(text.to_owned())),
     }
 }
 

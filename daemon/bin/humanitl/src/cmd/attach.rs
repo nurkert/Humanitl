@@ -26,7 +26,7 @@ use std::io::Write as _;
 
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, Severity};
-use humanitl_ipc::v1;
+use humanitl_ipc::{notice_line, v1};
 use tokio::io::AsyncReadExt as _;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -127,6 +127,17 @@ async fn pump(stream: &mut tonic::Streaming<v1::TerminalOutput>) -> Result<u8, F
             Some(v1::terminal_output::Output::Data(data)) => {
                 let mut out = std::io::stdout();
                 if out.write_all(&data).is_err() || out.flush().is_err() {
+                    return Ok(code);
+                }
+            }
+            // Die Hinweiszeile des Daemons steht neben den Bytes und nicht
+            // darin (`ipc/src/terminal.rs`). Wer am Terminal sitzt, hat keine
+            // zweite Fläche dafür, also schreibt dieser Befehl sie zwischen
+            // die Bytes des Agenten -- an der Grenze, an der der Daemon sie
+            // geschickt hat, und in ihre eigene Zeile.
+            Some(v1::terminal_output::Output::Notice(text)) => {
+                let mut out = std::io::stdout();
+                if out.write_all(&notice_line(&text)).is_err() || out.flush().is_err() {
                     return Ok(code);
                 }
             }

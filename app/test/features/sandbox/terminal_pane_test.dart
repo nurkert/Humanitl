@@ -5,14 +5,15 @@
 // Schreiber den Befund des Daemons zu sehen bekommt.
 
 import 'dart:async';
-import 'dart:typed_data';
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/flow_events.dart';
+import 'package:humanitl/core/shortcuts/intents.dart';
 import 'package:humanitl/features/sandbox/providers/terminal_provider.dart';
 import 'package:humanitl/features/sandbox/widgets/terminal_pane.dart';
 import 'package:humanitl_ui/humanitl_ui.dart';
@@ -66,6 +67,132 @@ void main() {
       contains(typed),
       reason: 'the bytes went up and came back',
     );
+  });
+
+  /// Die Tasten, die kein Buchstabe sind, kommen beim Agenten an (HUM-042).
+  ///
+  /// **Warum dieser Test neben dem darüber steht.** Der andere ruft
+  /// `terminal.onOutput` selbst auf und misst damit die Leitung vom Emulator
+  /// zum Dienst. Ein Mensch drückt aber Tasten, und Rücktaste, Pfeil, Enter
+  /// und jedes `Ctrl`-Kürzel nehmen im Emulator einen anderen Weg als ein
+  /// Buchstabe: nicht die Texteingabe, sondern die Tastenbehandlung. Am
+  /// 2026-09-07 hat ein Mensch am Bildschirm gemeldet, dass er in OpenCode
+  /// nichts löschen kann und `Ctrl+P` nicht ankommt -- und kein Test hat es
+  /// gesehen.
+  testWidgets('every_key_that_is_not_a_letter_reaches_the_agent', (
+    WidgetTester tester,
+  ) async {
+    final SandboxTestClient client = runningClient();
+    await pumpSandbox(tester, client: client);
+    await tester.pump();
+    await tester.pump();
+    expect(_session(tester, client).phase, TerminalPhase.attached);
+
+    await tester.tap(find.byType(TerminalView));
+    await tester.pump();
+
+    for (final (String what, LogicalKeyboardKey key, List<int> bytes)
+        in <(String, LogicalKeyboardKey, List<int>)>[
+          // Rücktaste ist `DEL`, wie im Terminal seit je.
+          ('backspace', LogicalKeyboardKey.backspace, <int>[0x7f]),
+          ('enter', LogicalKeyboardKey.enter, <int>[0x0d]),
+          ('arrow up', LogicalKeyboardKey.arrowUp, <int>[0x1b, 0x5b, 0x41]),
+        ]) {
+      client.typed.clear();
+      await tester.sendKeyEvent(key);
+      await tester.pump();
+      expect(client.typed, bytes, reason: '$what reaches the agent');
+    }
+
+    // Und die Kürzel, die dem Agenten gehören und nicht der Anwendung:
+    // `Ctrl+C` als Byte 0x03, `Ctrl+P` als 0x10, `Ctrl+A` als 0x01.
+    for (final (String what, LogicalKeyboardKey key, int byte)
+        in <(String, LogicalKeyboardKey, int)>[
+          ('ctrl+c', LogicalKeyboardKey.keyC, 0x03),
+          ('ctrl+p', LogicalKeyboardKey.keyP, 0x10),
+          // `Ctrl+A` ist der Zeilenanfang in readline und in bubbletea, also
+          // auch in OpenCode. Der Emulator bindet die Taste in seiner Vorgabe
+          // auf „alles auswählen" und prüft seine Kürzel vor der Übersetzung
+          // in Bytes; ohne den beschnittenen Vorrat käme sie nirgends an.
+          ('ctrl+a', LogicalKeyboardKey.keyA, 0x01),
+        ]) {
+      client.typed.clear();
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(key);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(client.typed, <int>[byte], reason: '$what reaches the agent');
+    }
+  });
+
+  /// Die Kürzel der Anwendung überleben den Emulator (HUM-042, HUM-019).
+  ///
+  /// Die Gegenprobe zum Test darüber: Weil das Terminal jetzt jede Taste
+  /// selbst behandeln darf, müssen die Kürzel der Anwendung trotzdem oben
+  /// ankommen und nicht beim Agenten landen. Von allein täte das nur `Ctrl+1`
+  /// bis `Ctrl+5`; `Ctrl+6` ist für den Emulator `0x1e` und `Ctrl+K` ist
+  /// `0x0b`, und was er kennt, meldet er als behandelt. Ohne diese Kürzel käme
+  /// man aus einem Vollbild-TUI nur noch mit der Maus heraus.
+  testWidgets('a_shortcut_of_the_application_survives_the_terminal', (
+    WidgetTester tester,
+  ) async {
+    final SandboxTestClient client = runningClient();
+    final List<int> navigated = <int>[];
+    int palettes = 0;
+    await pumpSandbox(
+      tester,
+      client: client,
+      wrap: (Widget child) => Shortcuts(
+        shortcuts: shellShortcuts(),
+        child: Actions(
+          actions: <Type, Action<Intent>>{
+            NavIntent: CallbackAction<NavIntent>(
+              onInvoke: (NavIntent intent) {
+                navigated.add(intent.index);
+                return null;
+              },
+            ),
+            PaletteIntent: CallbackAction<PaletteIntent>(
+              onInvoke: (PaletteIntent intent) {
+                palettes++;
+                return null;
+              },
+            ),
+          },
+          child: child,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(_session(tester, client).phase, TerminalPhase.attached);
+
+    await tester.tap(find.byType(TerminalView));
+    await tester.pump();
+
+    // Drei Tasten, drei Wege durch den Emulator: `Ctrl+1` kennt er nicht,
+    // `Ctrl+6` ist für ihn `0x1e` und `Ctrl+K` ist `0x0b`. Nur die erste käme
+    // von allein oben an; die anderen beiden sind der Grund, warum `_onKey`
+    // die Absicht selbst auslöst.
+    for (final (String what, LogicalKeyboardKey key)
+        in <(String, LogicalKeyboardKey)>[
+          ('ctrl+1', LogicalKeyboardKey.digit1),
+          ('ctrl+6', LogicalKeyboardKey.digit6),
+          ('ctrl+k', LogicalKeyboardKey.keyK),
+        ]) {
+      client.typed.clear();
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(key);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(client.typed, isEmpty, reason: '$what never reaches the agent');
+    }
+
+    expect(navigated, <int>[
+      0,
+      5,
+    ], reason: 'both section shortcuts reached the application');
+    expect(palettes, 1, reason: 'and the palette opened');
   });
 
   testWidgets('the_emulator_takes_no_keys_when_the_daemon_would_drop_them', (
