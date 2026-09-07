@@ -422,8 +422,10 @@ Der Filter deckt außerdem nicht, was **Text** ist. Der Agent kann jederzeit
 Bytestrom ist keine Beglaubigung, und kein Filter kann daraus eine machen. Deshalb steht die
 Aussage, auf die es ankommt — eine Anfrage wartet auf eine Entscheidung —, im Streifen **über**
 dem Terminal, den die Oberfläche aus dem Ereignisstrom zeichnet, und nicht nur in der Zeile, die
-der Daemon in den Strom schreibt. In dieser Zeile wird der Pfad des Agenten gekürzt und um die
-eckige Klammer gebracht, damit wenigstens der Absender eindeutig bleibt (HUM-042).
+der Daemon als eigenen Rahmen (`TerminalOutput.notice`) verschickt. In dieser Zeile wird der Pfad
+des Agenten gekürzt und um die eckige Klammer gebracht, damit wenigstens der Absender eindeutig
+bleibt. Der Rahmen steht neben den Bytes des Agenten und nie darin: Wer am Terminal sitzt, schreibt
+ihn zwischen die Bytes, wer eine eigene Anzeige hat, benutzt sie (HUM-042).
 
 *Was der Nutzer tun sollte.* Angezeigte Befehle nicht per Copy-Paste in eine Host-Shell übernehmen,
 ohne sie zu lesen. Der klassische Angriff ist ein Befehl, dessen sichtbarer Teil harmlos ist und

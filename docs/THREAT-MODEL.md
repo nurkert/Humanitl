@@ -352,9 +352,11 @@ Ausgabe des Agenten nicht vertrauenswürdig ist.
 *Restrisiko.* Fehler im Filter oder im Widget; Kopieren per Maus bleibt möglich und ist gewollt.
 Der Agent kann Text ausgeben, der wie eine Meldung von Humanitl aussieht — ein Absender in einem
 Bytestrom ist keine Beglaubigung. Deshalb steht die Aussage, auf die es ankommt („eine Anfrage
-wartet auf dich"), im Streifen **über** dem Terminal und nicht nur in dessen Bytestrom, und der
-eckigen Klammer des Absenders `[humanitl]` wird in allem, was aus dem Agenten stammt, die Klammer
-genommen (HUM-042).
+wartet auf dich"), im Streifen **über** dem Terminal, den die Oberfläche aus dem Ereignisstrom
+zeichnet. Der Daemon schickt sie zusätzlich als eigenen Rahmen (`TerminalOutput.notice`) und nie
+im Bytestrom des Agenten: Wer am Terminal sitzt, schreibt sie sich selbst zwischen die Bytes, wer
+eine eigene Fläche hat, benutzt sie. Der eckigen Klammer des Absenders `[humanitl]` wird in allem,
+was aus dem Agenten stammt, die Klammer genommen (HUM-042).
 
 *Status.* MVP.
 

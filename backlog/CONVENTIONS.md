@@ -2607,18 +2607,29 @@ die Fenstergröße) und die Nutzlast einer erlaubten OSC-Folge, sobald darin ein
 Byte außerhalb von `0x20..=0x7e` steht — ein `ESC` in der Nutzlast ist eine
 zweite Folge im Bauch der ersten, und Terminals brechen die äußere daran ab.
 
-**Der Hinweis im Strom ist eine Bequemlichkeit, der Streifen ist die Zusage.**
+**Der Hinweis ist ein eigener Rahmen, der Streifen ist die Zusage.**
 Beide entstehen aus demselben Ereignis (`HoldQueue::subscribe`), aber nur der
-Streifen über dem Terminal ist das Akzeptanzkriterium: Ein Vollbild-Agent
-zeichnet die Zeile im Strom mit dem nächsten Bild weg, und er kann dieselbe
+Streifen über dem Terminal ist das Akzeptanzkriterium: Der Agent kann dieselbe
 Zeile selbst schreiben — ein Absender in einem Bytestrom ist keine
-Beglaubigung. Die Zeile läuft trotzdem als Ganzes durch `sanitize_note`, der
-Pfad wird auf 48 Zeichen gekürzt, und **die eckige Klammer gehört dem
-Absender**: `[` wird in allem, was aus dem Agenten stammt, zu `(`, damit
-`[humanitl]` in der Zeile genau einmal vorkommt. Eingefügt wird nur an einer
-Grenze (`TerminalFilter::at_boundary`), also weder in einer halben Folge noch
-in einem halben Zeichen. `ui.terminal_notices` (Vorgabe `true`, Stufe
-`advanced`) schaltet die Zeile ab; der Streifen bleibt.
+Beglaubigung. Die Zeile geht deshalb **neben** den Bytes hinaus
+(`TerminalOutput.notice`, seit `1.7`) und nie darin, und jeder Client
+entscheidet, wie er sie zeigt: `humanitl sandbox attach` schreibt sie mit
+`humanitl_ipc::notice_line` zwischen die Bytes, die Oberfläche zeichnet ihren
+Streifen und wirft den Rahmen weg. Bis zum 2026-09-07 schob der Daemon die
+Zeile selbst in den Strom; im Emulator der Oberfläche stand sie dann quer über
+dem Bild eines Vollbild-TUI, das sie nicht wegzeichnet, weil es nur die
+Flächen neu malt, die es selbst kennt. Die Zeile läuft als Ganzes durch
+`sanitize_note`, der Pfad wird auf 48 Zeichen gekürzt, und **die eckige
+Klammer gehört dem Absender**: `[` wird in allem, was aus dem Agenten stammt,
+zu `(`, damit `[humanitl]` in der Zeile genau einmal vorkommt. Verschickt wird
+nur an einer Grenze (`TerminalFilter::at_boundary`), damit ein Client, der die
+Zeile in die Bytes schreibt, weder eine halbe Folge noch ein halbes Zeichen
+zerschneidet; ein Hinweis, der warten musste, geht mit dem nächsten `feed` und
+spätestens mit dem Ende der Sitzung hinaus. Er liegt **nicht** im Ringpuffer:
+Der Ring ist das Bild, das ein später angehängter Client bekommt, und ein
+Hinweis von vorhin gehört nicht in das Bild von jetzt. `ui.terminal_notices`
+(Vorgabe `true`, Stufe `advanced`) schaltet den Rahmen ab; der Streifen
+bleibt.
 
 **Ein Schreiber, beliebig viele Leser, und die Grenze steht im Daemon.**
 `TerminalHub` hält den Platz des Schreibers, und ein `WriterSlot` gibt ihn beim

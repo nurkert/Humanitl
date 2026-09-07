@@ -89,20 +89,76 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
     });
   }
 
-  /// Lets `Ctrl+1..5` leave the terminal.
+  /// Wer eine Taste bekommt: die Anwendung oder der Agent.
   ///
-  /// Everything else belongs to the agent -- including `Ctrl+C`, which reaches
-  /// it as byte `0x03`. The five section shortcuts are the way out; without
-  /// this the terminal would swallow them, and the only way to another screen
-  /// would be the mouse (`docs/UX.md` 5.1).
+  /// **`ignored` heißt hier „mach du".** `TerminalView` ruft diese Funktion vor
+  /// seiner eigenen Behandlung und nimmt jede Antwort außer `ignored` als
+  /// Übersteuerung: Es hört dann sofort auf und übersetzt die Taste nicht mehr
+  /// in Bytes. Bis zum 2026-09-07 stand hier `skipRemainingHandlers` für alles,
+  /// und weil Buchstaben über die Texteingabe laufen und nicht über die
+  /// Tastenbehandlung, fiel es niemandem auf: Tippen ging, aber Rücktaste,
+  /// Entf, Pfeile, Enter und jedes `Ctrl`-Kürzel erreichten den Agenten nie.
+  /// Gemeldet hat es ein Mensch vor dem Bildschirm, nicht ein Test.
+  ///
+  /// **Die Kürzel der Anwendung ruft diese Funktion selbst auf, und das muss
+  /// sie.** Der naheliegende Weg -- `ignored` zurückgeben und die Taste nach
+  /// oben durchreichen -- trägt nur so weit, wie der Emulator die Taste nicht
+  /// kennt. `Ctrl+K` ist für ihn `0x0b` und `Ctrl+6` ist `0x1e`
+  /// (`xterm2/src/core/input/handler.dart`, `CtrlInputHandler`); er meldet
+  /// `handled`, und damit endet die Reise des Ereignisses vor jedem
+  /// `Shortcuts` darüber. Die andere naheliegende Antwort,
+  /// `skipRemainingHandlers`, hält zwar den Emulator auf, beendet die Reise
+  /// aber genauso (`FocusManager` bricht die Schleife über die Vorfahren ab).
+  /// Bleibt der ehrliche Weg: Diese Funktion sucht die Taste in
+  /// [shellShortcuts] und löst die Absicht dort aus, wo sie hingehört -- über
+  /// [Actions], also bei genau der Stelle, die sie auch sonst behandelt.
+  ///
+  /// Der Preis steht ausdrücklich hier: `Ctrl+1` bis `Ctrl+6` und `Ctrl+K`
+  /// erreichen den Agenten nicht. Ohne sie käme man aus einem Vollbild-TUI nur
+  /// noch mit der Maus heraus (`docs/UX.md` 5.1). Alles andere gehört ihm,
+  /// `Ctrl+C` als `0x03` und `Ctrl+P` als `0x10` eingeschlossen.
+  ///
+  /// Hört an dieser Stelle des Baums niemand auf eine Absicht -- im Test etwa,
+  /// der die Kachel ohne Schale zeigt --, bleibt die Taste beim Agenten.
+  /// Die Kürzel, die der Emulator selbst behandelt.
+  ///
+  /// Seine Vorgabe bindet drei: Kopieren (`Ctrl+Shift+C`), Einfügen
+  /// (`Ctrl+V`) und **alles auswählen** (`Ctrl+A`). Die ersten beiden spiegeln
+  /// das Kontextmenü darüber und bleiben. Das dritte nicht: `Ctrl+A` ist in
+  /// readline und in jedem Programm auf bubbletea -- also auch in OpenCode --
+  /// der Sprung an den Zeilenanfang, und ein Terminal, in dem der nicht
+  /// ankommt, ist an dieser Stelle kaputt. Der Emulator prüft seine Kürzel vor
+  /// jeder Übersetzung in Bytes (`TerminalView._handleKeyEvent`), also hilft
+  /// hier nichts als das Kürzel selbst wegzunehmen; ausgewählt wird mit der
+  /// Maus und kopiert über das Menü.
+  ///
+  /// Die Vorgabe kommt weiterhin aus dem Emulator und wird nur beschnitten:
+  /// Auf einem Mac trägt sie `Meta` statt `Ctrl`, und das soll sie behalten.
+  Map<ShortcutActivator, Intent> _emulatorShortcuts() {
+    final Map<ShortcutActivator, Intent> shortcuts =
+        Map<ShortcutActivator, Intent>.of(defaultTerminalShortcuts);
+    shortcuts.removeWhere(
+      (ShortcutActivator _, Intent intent) => intent is SelectAllTextIntent,
+    );
+    return shortcuts;
+  }
+
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
-    final bool control =
-        HardwareKeyboard.instance.isControlPressed ||
-        HardwareKeyboard.instance.isMetaPressed;
-    if (control && navigationKeys.contains(event.logicalKey)) {
-      return KeyEventResult.ignored;
+    for (final MapEntry<ShortcutActivator, Intent> binding
+        in shellShortcuts().entries) {
+      if (!binding.key.accepts(event, HardwareKeyboard.instance)) {
+        continue;
+      }
+      // Mit der Absicht suchen, nicht nur mit ihrem Typ: `Actions.maybeFind`
+      // schlägt über `intent.runtimeType` nach, `Actions.handler` dagegen
+      // über den statischen Typ `Intent` -- und den registriert niemand.
+      if (Actions.maybeFind<Intent>(context, intent: binding.value) == null) {
+        break;
+      }
+      Actions.maybeInvoke<Intent>(context, binding.value);
+      return KeyEventResult.handled;
     }
-    return KeyEventResult.skipRemainingHandlers;
+    return KeyEventResult.ignored;
   }
 
   @override
@@ -198,6 +254,7 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
         controller: _controller,
         focusNode: _focus,
         autofocus: true,
+        shortcuts: _emulatorShortcuts(),
         theme: _theme(tokens.terminal),
         textStyle: TerminalStyle(
           fontSize: tokens.typography.mono13.fontSize ?? 13,
