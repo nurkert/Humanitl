@@ -114,11 +114,11 @@ fi
 M3_EXPECTED_ASSERTIONS=111
 
 # So viele kommen dazu, wenn die OpenCode-Variante läuft. Der Zweig prüft
-# immer dieselben sieben Dinge — die beiden Verzweigungen darin sind
+# immer dieselben dreizehn Dinge — die beiden Verzweigungen darin sind
 # Fallunterscheidungen über das Ergebnis, nicht darüber, ob geprüft wird —,
 # damit diese Zahl exakt ist und nicht ungefähr: Der Lauf vergleicht den
 # Zähler vor und nach der Variante mit ihr.
-M3_OPENCODE_ASSERTIONS=11
+M3_OPENCODE_ASSERTIONS=13
 
 # Die Ports des Ziels. Im eigenen Netz-Namensraum ist der Lauf root und darf
 # auch die privilegierten binden.
@@ -1239,11 +1239,68 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
     # bestünde auch dann, wenn OpenCode das Modell nie anspräche und den
     # Katalog doch abriefe. Deshalb: erst messen, dann starten, dann die
     # Differenz prüfen.
-    m3_oc_llm_before=$(m3_llm_hits '^mock-llm: ')
-    m3_oc_inference_before=$(m3_llm_hits '^mock-llm: POST /v1/chat/completions ')
+    #
+    # **Drei davon stehen vor der Modellauswahl unten, zwei dahinter, und das
+    # ist kein Zufall.** Auch `opencode models` ist ein Lauf des Agenten hinter
+    # demselben Proxy. Die drei Zähler, die unten auf **Gleichheit** geprüft
+    # werden (Katalog, Anbieterliste, GitHub), gehören deshalb davor: Griffe
+    # der Modellauswahl wären sonst schon im Ausgangswert und damit unsichtbar.
+    # Die beiden Zähler, die unten auf **Zuwachs** geprüft werden, gehören
+    # dahinter: Vor der Auswahl gemessen, könnte ihr Zuwachs von der Auswahl
+    # statt von der Sitzung stammen, und die Zusicherung wäre schwächer, als
+    # sie aussieht. Heute fragt `opencode models` das Modell nicht -- gemessen
+    # --, aber eine Zusicherung, die von diesem Umstand lebt, hält nur bis zur
+    # nächsten Fassung des Agenten.
     m3_oc_dev_before=$(m3_count 'host:models.dev')
     m3_oc_ai_before=$(m3_count 'host:models.opencode.ai')
     m3_oc_gh_before=$(m3_count 'host:api.github.com')
+
+    # **Die Modellauswahl des Agenten, ohne einen Menschen davor.** `opencode
+    # models` schreibt dieselbe Liste, aus der sein Auswahlfenster schöpft --
+    # eine Zeile je Modell, mit dem Anbieter davor. Was hier steht, ist der
+    # Anbieter, den Humanitl gebaut hat (`humanitl-local`, in der
+    # `opencode.json` als „Humanitl local LLM"), und das Modell dieser Sitzung.
+    #
+    # **Was die eine Zeile misst und was nicht.** Sie misst die Auswahl: Ein
+    # Mensch, der hier hineinsieht, findet genau den Anbieter dieser Sitzung.
+    # Sie misst **nicht** den Katalog: Ein Anbieter aus der Cloud erscheint in
+    # dieser Liste ohnehin erst mit seinem Zugangsschlüssel, und den gibt es in
+    # der Sandbox nicht (gemessen: mit `OPENAI_API_KEY` steht `openai/gpt-4o`
+    # darin, ohne ihn nicht). Dass der Katalog gar nicht erst geholt wird,
+    # halten die Zusicherungen über `host:models.dev` und
+    # `host:models.opencode.ai` weiter unten.
+    #
+    # Der Ausgang des Laufs steht in der Beschreibung der Zusicherung und nicht
+    # in einer eigenen: `humanitl run` beendet sich mit 2 ohne Daemon, mit 3
+    # bei roter Garantie und mit 4 bei einer Sicherheitsverletzung, und eine
+    # leere Liste aus einem dieser Gründe sähe sonst aus wie ein Agent, der
+    # seinen Anbieter nicht kennt. Die Zuweisung steht in einem `if`, weil
+    # `set -e` sonst den ganzen Lauf beendete, bevor die Zusicherung darunter
+    # überhaupt gemessen würde -- dieselbe Vorsicht wie bei `|| status=$?`
+    # weiter oben, nur ohne den Ausgang wegzuwerfen.
+    m3_oc_models_status=0
+    if ! m3_oc_models=$(
+        cd "$M3_PROJECT" &&
+            XDG_RUNTIME_DIR="$E2E_XDG_RUNTIME" \
+                XDG_DATA_HOME="$E2E_XDG_DATA" \
+                XDG_CONFIG_HOME="$E2E_XDG_CONFIG" \
+                HOME="$E2E_HOME" \
+                timeout "${M3_OPENCODE_SECONDS:-60}" \
+                "$E2E_CLI" run --ask none -- "$m3_opencode_path" models \
+                2> "$E2E_WORKDIR/out/opencode-models.log"
+    ); then
+        m3_oc_models_status=$?
+    fi
+    printf '%s\n' "$m3_oc_models" > "$E2E_WORKDIR/out/opencode-models.txt"
+    e2e_expect "the agent offers the provider Humanitl built for it (humanitl run exit $m3_oc_models_status)" \
+        "humanitl-local/mock" "$(printf '%s\n' "$m3_oc_models" | tr -d '\r' | head -n 1)"
+    e2e_expect "and offers nothing else" 1 \
+        "$(printf '%s\n' "$m3_oc_models" | tr -d '\r' | grep -c . || true)"
+
+    # Und jetzt die beiden Zähler, deren Zuwachs unten der Sitzung gehört und
+    # nicht der Modellauswahl darüber.
+    m3_oc_llm_before=$(m3_llm_hits '^mock-llm: ')
+    m3_oc_inference_before=$(m3_llm_hits '^mock-llm: POST /v1/chat/completions ')
 
     # **Mit einer Schranke, und die hat einen Grund.** Das Mock-Modell antwortet
     # auf jede Anfrage dasselbe (`tok0 … tok9`), also kommt ein echter Agent
