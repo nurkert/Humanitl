@@ -21,6 +21,10 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-054 | Golden- und Widget-Tests | M | HUM-047, HUM-052, HUM-069 |
 | HUM-055 | Demo-Skript M4 | S | alle oben |
 | HUM-134 | Zwei Tests werden unter Last rot | S | — |
+| HUM-136 | Die Oberflaeche verschwindet, und niemand weiss warum | M | HUM-042 |
+| HUM-137 | Ein Agent, den es nicht gibt, faellt lautlos aus | S | HUM-040, HUM-067 |
+| HUM-138 | Geblockter Verkehr ausserhalb von HTTP ist unsichtbar | M | HUM-002, HUM-021 |
+| HUM-139 | Die Vorpruefung sucht den Agenten im PATH des Hosts | S | HUM-037, HUM-135 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -2015,6 +2019,203 @@ Die CLI benutzt in beiden Fällen `out_path`.
 
 ---
 
+## HUM-139 · Die Vorprüfung sucht den Agenten im PATH des Hosts
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-037, HUM-135 · Blockiert: einen Start, der funktionieren würde
+
+### Kontext
+Beim Vorbereiten einer Vorführung am 2026-09-07 verweigerte der Daemon den Start mit einem **blockierenden** Befund, obwohl der Start funktioniert hätte:
+
+```
+blocking[AGENT_004]: Agent-Kommando in der Sandbox nicht erreichbar
+  why: /home/nburkert/.local/bin/opencode is on this machine, but the sandbox mounts only
+       /usr, …, /home/nburkert/.opencode/bin read-only, so the command is not there …
+```
+
+Die Lage: Das Profil mountet `/home/nburkert/.opencode/bin` read-only **und** trägt dieses Verzeichnis in `[env].PATH` der Sandbox ein. Ein `exec` von `opencode` in der Sandbox hätte also die gemountete Datei gefunden. Die Vorprüfung in `daemon/crates/sandbox/src/agent/opencode.rs` löst das nackte Kommando aber gegen den **PATH des Hosts** auf (`AgentContext::host_path`), findet dort zuerst `~/.local/bin/opencode` -- ein Wrapper-Skript, das nicht gemountet ist -- und prüft dann, ob **diese** Datei in der Sandbox sichtbar ist. Sie ist es nicht, und der Befund steht.
+
+Der Befund ist also nicht falsch über die Datei, die er nennt, sondern über die Frage, die er beantworten soll: Erreicht die Sandbox das Kommando? Umgangen wurde es für die Vorführung mit einem absoluten Pfad in `agent.command`; das ist die Krücke, nicht die Antwort.
+
+### Ziel
+Die Vorprüfung beantwortet die Frage, die sie stellt: Sie löst ein nacktes Kommando gegen den **PATH der Sandbox** auf, beschränkt auf Verzeichnisse, die die Sandbox wirklich sieht. Nur wenn dort nichts liegt, meldet sie `AGENT_004`, und dann nennt sie den PATH der Sandbox statt eines Pfads auf dem Host.
+
+### Nicht-Ziel
+Die Prüfung streichen -- sie hat einen echten Fall gefunden (ein Programm unter `$HOME`, das die Sandbox nicht sieht, HUM-135). Den PATH des Hosts ganz ignorieren: Wenn `agent.command` einen absoluten Pfad trägt, bleibt die Frage dieselbe wie heute.
+
+### Betroffene Pfade
+- `daemon/crates/sandbox/src/agent/opencode.rs` (die Stelle mit `AGENT_004`)
+- `daemon/crates/sandbox/src/agent/mod.rs` (`AgentContext`: der PATH der Sandbox gehört hinein, heute steht dort nur der des Hosts)
+- `daemon/crates/sandbox/tests/opencode_adapter.rs`
+
+### Spezifikation
+`AgentContext` bekommt neben `host_path` den PATH der Sandbox aus dem Profil (`[env].PATH`) und die Liste der read-only-Mounts, die es schon hat. Für ein nacktes Kommando wird zuerst im Sandbox-PATH gesucht, und zwar nur in Verzeichnissen, die unter einem Mount liegen; ein Treffer dort beendet die Prüfung ohne Befund. Erst wenn dort nichts liegt, gilt der heutige Weg: auf dem Host suchen, und wenn dort etwas liegt, `AGENT_004` mit beiden Angaben -- was auf dem Host liegt und welcher PATH in der Sandbox gilt.
+
+### Tests
+- Ein Test, in dem das Kommando nur über den Sandbox-PATH in einem gemounteten Verzeichnis erreichbar ist: kein Befund. Mutationsprobe: die Suche im Sandbox-PATH entfernen, Test rot.
+- Der bestehende Fall bleibt: Programm unter `$HOME`, nicht gemountet, kein Eintrag im Sandbox-PATH ⇒ `AGENT_004`.
+
+### Akzeptanzkriterien
+- [ ] Ein Kommando, das über den Sandbox-PATH in einem gemounteten Verzeichnis liegt, erzeugt keinen Befund.
+- [ ] `AGENT_004` nennt bei einem echten Fehlschlag den PATH der Sandbox.
+- [ ] `make check` grün.
+
+### Fallstricke
+- Der PATH der Sandbox kann Verzeichnisse nennen, die kein Mount abdeckt; die dürfen nicht als Treffer zählen, sonst verschwindet der Befund, den HUM-135 gebaut hat.
+
+### Referenzen
+Beobachtung am 2026-09-07 beim Aufsetzen der Vorführung; `daemon/crates/sandbox/src/agent/opencode.rs` (`AGENT_004`); HUM-135.
+
+---
+
+## HUM-138 · Geblockter Verkehr außerhalb von HTTP ist unsichtbar
+Sprint: 4 · Größe: M · Abhängigkeiten: HUM-002, HUM-021 · Blockiert: die Zusage „du siehst, was dein Agent tut"
+
+### Kontext
+Ein Mensch hat am 2026-09-07 gefragt, was passiert, wenn der Agent eine SSH-Verbindung aufbaut. Die Antwort in zwei Teilen, und der zweite ist der Mangel.
+
+**Geblockt wird zuverlässig.** `ssh github.com` scheitert schon an der Namensauflösung: Der seccomp-Filter des Shims erlaubt `socket()` nur für `AF_INET`/`AF_INET6` mit `SOCK_STREAM`, und DNS ist `SOCK_DGRAM` (`EPERM`). Mit einer nackten IP kommt der Agent bis `connect`, und dort endet es mit `ENETUNREACH`: Im Netz-Namensraum existiert nur `lo`, die Routing-Tabelle ist leer. Beides ist gemessen (`tests/escape/`, ESC-3, und die Zeilen in BACKLOG.md 3).
+
+**Berichtet wird nichts.** Der Proxy sieht diese Verbindung nie, also entsteht kein Fluss, keine Zeile in der Historie, kein Eintrag in der Warteschlange und keine Meldung im Fenster. Der Agent liest seinen eigenen Fehler, der Mensch sieht eine ruhige Oberfläche. Dasselbe gilt für jeden Versuch außerhalb von HTTP: ein eigener TCP-Port, ein UDP-Paket, ein Unix-Socket nach draußen, `git://`.
+
+Für ein Werkzeug, dessen Versprechen „du siehst, was dein Agent tut" lautet, ist die stille Blockade die halbe Antwort. Wer den Agenten beobachtet, um ihm zu vertrauen, muss auch sehen, was er **versucht** hat.
+
+### Ziel
+Ein Versuch des Agenten, an der einen Tür vorbei ins Netz zu gehen, erscheint in demselben Strom, den die Oberfläche ohnehin liest: mit Zeitpunkt, Ziel (soweit bekannt), Grund der Verweigerung und der Zahl der Wiederholungen. Die Historie zeigt ihn als eigene Art von Eintrag, nicht als Fluss.
+
+### Nicht-Ziel
+Den Verkehr durchlassen oder einen zweiten Weg nach draußen bauen. Jeden verweigerten Syscall einzeln melden -- ein Agent in einer Schleife erzeugte damit eine Flut; gezählt und zusammengefasst wird, nicht protokolliert. Die Zusicherung der drei Garantien ändert sich nicht.
+
+### Betroffene Pfade
+- `daemon/crates/sandbox/src/shim/` beziehungsweise das Shim-Binary: der seccomp-Filter und was er meldet
+- `daemon/crates/core-types/src/`: eine Ereignisart für „Versuch verweigert"
+- `daemon/crates/ipc/src/sandbox.rs`: der Weg in den `Sandbox`-Strom
+- `app/lib/features/`: die Zeile, die es zeigt
+- `docs/SECURITY.md`, `docs/THREAT-MODEL.md`: die Aussage, dass Blockaden jetzt auch sichtbar sind
+
+### Spezifikation
+Der Shim hält den Filter ohnehin; zwei Wege sind zu prüfen und einer zu wählen. Entweder `SECCOMP_RET_USER_NOTIF` statt `SECCOMP_RET_ERRNO` für die verweigerten Familien -- dann kennt der Shim jeden Versuch mit seinen Argumenten und kann ihn melden, bevor er `EPERM` zurückgibt -- oder ein Zähler je Familie und Typ im Shim, der beim Ende der Sitzung und alle `n` Sekunden gemeldet wird. Der erste Weg ist genauer und teurer, der zweite billig und gröber; die Entscheidung gehört in den ADR-Teil dieses Issues.
+
+Ein `connect`, das an `ENETUNREACH` scheitert, sieht der Filter nicht (es ist kein verweigerter Syscall). Für diesen Fall bleibt nur der Weg über das Kind selbst: `strace` kommt nicht in Frage (`ptrace` ist verboten, und das bleibt so). Die ehrliche Fassung des Ziels ist deshalb: gemeldet wird, was der Filter verweigert, und die Netzlosigkeit steht als Zustand daneben -- nicht als Ereignis je Versuch.
+
+### Tests
+- Ein Escape-Fall in `tests/escape/`, der aus der Sandbox `socket(AF_UNIX)` und `socket(AF_INET, SOCK_DGRAM)` versucht und danach den Bericht erwartet.
+- Ein Test im `Sandbox`-Strom, der den Bericht als Ereignis sieht.
+- Ein Widget-Test für die Zeile.
+
+### Akzeptanzkriterien
+- [ ] Ein verweigerter `socket()`-Aufruf des Agenten erscheint im `Sandbox`-Strom, zusammengefasst und mit Zahl.
+- [ ] Die Oberfläche zeigt ihn, ohne die Warteschlange der Flüsse zu berühren.
+- [ ] Die drei Garantien bleiben gemessen grün (`tests/escape/`).
+- [ ] `docs/SECURITY.md` sagt, was sichtbar wird und was nicht.
+- [ ] `make check` grün.
+
+### Fallstricke
+- `SECCOMP_RET_USER_NOTIF` hält den Aufruf an, bis jemand antwortet: Wer den Shim damit verzögert, verlangsamt jeden Aufruf des Agenten. Antwortzeit messen, sonst wird aus einer Meldung eine Bremse.
+- Ein Agent in einer Wiederholungsschleife erzeugt tausende Versuche je Sekunde. Ohne Zusammenfassung ist das eine Flut, die nichts zeigt.
+
+### Referenzen
+Frage des Nutzers am 2026-09-07; BACKLOG.md 3 (seccomp-Absatz); `tests/escape/` ESC-3; `docs/SECURITY.md` 5.
+
+---
+
+## HUM-137 · Ein Agent, den es nicht gibt, fällt lautlos aus
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-040, HUM-067 · Blockiert: das Vertrauen in den grünen Ring
+
+### Kontext
+Am 2026-09-07 hat der Live-Test des Sandbox-Bildschirms (`app/test/features/sandbox/daemon_live_test.dart`, HUM-040) einen Fall sichtbar gemacht, den vorher niemand gesehen hat: Die Sandbox startet, die drei Isolationsprüfungen sind grün, der Bildschirm zeigt `running` — und der Agent ist nie gelaufen. Im Test lag `opencode` nicht auf dem `PATH` der Sandbox (`/usr/local/bin:/usr/bin:/bin`), das `exec` scheiterte nach Millisekunden, und die Momentaufnahme trug `agentRunning = false` und `diagnostics = []`.
+
+Kein Befund, keine Zeile, nichts. Ein Mensch vor diesem Bildschirm sieht einen grünen Ring und eine Sitzung, in der nichts passiert; er wartet auf einen Agenten, der nie kommt, und das Werkzeug sagt ihm nicht, warum. Für ein Werkzeug, dessen ganzer Zweck es ist, über den Agenten Auskunft zu geben, ist das die falsche Art zu schweigen (`docs/UX.md` 4.4: kein toter Winkel).
+
+Gefunden hat es der Ersatz-Reviewer im Review zu HUM-040, mit einer eigenen Messung: `argvPreview` endet auf `-- /run/humanitl/humanitl-shim --proxy-port 3128 -- opencode`, und dieses `opencode` gibt es in der Sandbox nicht.
+
+### Ziel
+Startet der Agent nicht, sagt es der Daemon: ein `Diagnostic` mit Code, `why` und, wo möglich, `fix`, das über den `Sandbox`-Strom geht und im Bildschirm erscheint. Der Ring darf grün sein — die Sandbox steht ja —, aber die Zeile darunter nennt den Grund, aus dem nichts läuft.
+
+### Nicht-Ziel
+Den Start der Sandbox scheitern lassen, wenn der Agent fehlt: Die Sandbox ist auch ohne ihn eine gültige Sitzung, in der ein Mensch etwas anderes startet. Den `PATH` der Sandbox aufbohren, damit `opencode` vom Host gefunden wird — was gemountet wird, entscheidet das Profil.
+
+### Betroffene Pfade
+- `daemon/crates/sandbox/src/bwrap.rs` beziehungsweise `launcher.rs`: der Ausgang des `exec` im Kind
+- `daemon/crates/core-types/src/diagnostics/codes.rs`: ein neuer Code für „der Agent startete nicht"
+- `daemon/crates/ipc/src/sandbox.rs`: der Befund geht als `SandboxEvent.diagnostic` hinaus
+- `app/lib/features/sandbox/`: die Zeile, die ihn zeigt
+
+### Spezifikation
+Endet der Agent, bevor er das erste Byte geschrieben hat, und ist sein Exit-Code einer der Schalen-Codes für „nicht gefunden" oder „nicht ausführbar" (`127`, `126`), erzeugt der Daemon einen Befund mit dem Namen des Kommandos, dem `PATH` der Sandbox und dem Hinweis, dass das Profil entscheidet, was gemountet wird. Der Befund geht denselben Weg wie die übrigen Befunde des Starts.
+
+### Tests
+- Ein Test in `daemon/crates/ipc/tests/`, der eine Sitzung mit `command = ["gibt-es-nicht"]` startet und den Befund im Strom erwartet. Mutationsprobe: den Zweig entfernen, Test rot.
+- Eine Ergänzung in `app/test/features/sandbox/daemon_live_test.dart`: Die Momentaufnahme trägt den Befund, wenn der Agent fehlt.
+
+### Akzeptanzkriterien
+- [ ] Eine Sitzung mit einem Kommando, das es nicht gibt, erzeugt einen Befund mit Code, `why` und `fix`.
+- [ ] Der Bildschirm zeigt ihn, und der Ring bleibt bei der Wahrheit über die Sandbox.
+- [ ] `make check` grün.
+
+### Fallstricke
+- Ein Agent, der sich selbst sofort beendet (`--version`), ist kein Fehler: Unterschieden wird an `126`/`127` und daran, dass nichts geschrieben wurde.
+
+### Referenzen
+Review zu HUM-040 am 2026-09-07; `app/test/features/sandbox/daemon_live_test.dart`; `docs/UX.md` 4.4.
+
+---
+
+## HUM-136 · Die Oberfläche verschwindet, und niemand weiß warum
+Sprint: 4 · Größe: M · Abhängigkeiten: HUM-042 · Blockiert: das Vertrauen in ein Werkzeug, das stundenlang offen steht
+
+### Kontext
+Am 2026-09-07 hat der Nutzer die Oberfläche zum ersten Mal längere Zeit mit einem echten OpenCode in der Sandbox benutzt. Sein Bericht: „ja, aber nach einiger Zeit war die OpenCode-View dann weg", und die Anwendung war später von selbst beendet. Der Daemon lief weiter, die Sandbox lief weiter, der Agent lief weiter — nur das Fenster war fort.
+
+Was in den Protokollen steht, ist nichts. Beide Läufe (`/tmp/hum-gui/app.log`, `app2.log`) enden mit derselben Zeile, die auch ein sauberes Schließen erzeugt:
+
+```
+embedder.cc (2615): 'FlutterEngineRemoveView' returned 'kInvalidArguments'. Remove view info was invalid. The implicit view cannot be removed.
+```
+
+Kein Dart-Stack, kein Fehlerfeld, keine Diagnose. Der zweite Lauf trägt davor eine Warnung des Renderers (`Timed out waiting for OpenGL frame of size 2556x1376 (have 1916x1016)`), der erste nicht. `coredumpctl` und das Journal geben für den Zeitraum nichts her.
+
+**Zwei Erklärungen sind offen, und keine ist belegt.** Erstens ein Absturz in der Renderer-Schicht (Impeller/OpenGLES), zu dem Flutter nichts schreibt. Zweitens ein Fremdeinfluss von außen: In derselben Sitzung hat ein Agent mehrfach `pkill -f` mit einem Muster benutzt, das auf `humanitl` passt; ein solcher Aufruf hätte das Fenster mitgenommen. Solange die Anwendung ihr eigenes Ende nicht aufschreibt, bleibt beides gleich wahrscheinlich, und genau das ist der Fehler: Ein Werkzeug, das den ganzen Arbeitstag offen steht, muss über sein eigenes Ende Auskunft geben.
+
+### Ziel
+Wenn die Anwendung endet, steht danach fest, warum. Ein sauberes Schließen ist als solches erkennbar, ein Absturz hinterlässt eine Spur mit Zeitpunkt, Signal oder Ausnahme, und ein Ende von außen ist von beidem unterscheidbar.
+
+### Nicht-Ziel
+Die Ursache raten oder den Renderer wechseln, bevor eine Messung dafür spricht. Ein Absturzbericht, der irgendwohin ins Netz geht — was hier entsteht, bleibt auf dem Rechner des Nutzers. Sitzungswiederherstellung („die Ansicht war weg, hol sie zurück") gehört zum zweiten Teil unten und nicht in dieses Ziel.
+
+### Betroffene Pfade
+- `app/lib/main.dart`: ein Zonen-Fehlerhandler (`runZonedGuarded`) und `FlutterError.onError` schreiben in dieselbe Datei
+- `app/lib/core/diagnostics/` (neu): die Datei, ihre Rotation und ihre Obergrenze
+- `app/linux/runner/`: das Signal, das ein Ende von außen erzeugt (`SIGTERM`, `SIGHUP`), wird notiert, bevor die Schleife endet
+- `docs/DIAGNOSTICS.md`: wo die Datei liegt und was darin steht
+
+### Spezifikation
+Die Anwendung schreibt beim Start eine Zeile mit Zeitpunkt, Version und Prozesskennung nach `$XDG_STATE_HOME/humanitl/app.log` (Vorgabe `~/.local/state/humanitl/app.log`) und beim geordneten Ende eine zweite. Dazwischen landen dort nur Ausnahmen: `FlutterError.onError`, `PlatformDispatcher.instance.onError` und die Zone um `runApp`. Die Datei ist auf 256 KiB begrenzt und wird bei Überschreitung einmal rotiert (`app.log.1`); mehr Platz darf ein Protokoll auf der Platte des Nutzers nicht kosten (`docs/DIAGNOSTICS.md`, Sparsamkeit).
+
+Ein Ende durch ein Signal wird im Runner abgefangen (`SIGTERM`, `SIGHUP`, `SIGINT`) und als eigene Zeile geschrieben, bevor die Schleife endet. Damit ist die Frage „Absturz oder von außen beendet" nach dem nächsten Vorfall in einer Zeile beantwortet.
+
+Der zweite Teil betrifft die verschwundene Ansicht: `TerminalPane` zeigt heute nichts, was erklärt, warum ein Terminal fort ist. Der Zustand des Stroms (`TerminalPhase`) bekommt für das Ende einen sichtbaren Platz — beendet der Agent, steht dort sein Exit-Code; endet der Strom ohne Exit, steht dort der Befund des Daemons; endet die Verbindung, steht dort, dass die Sitzung weiterläuft und wie man sich wieder anhängt.
+
+### Tests
+- Ein Widget-Test, der `FlutterError.onError` auslöst und prüft, dass die Datei danach genau eine Zeile mehr hat und die Zeile den Fehlertext trägt.
+- Ein Test für die Rotation: 300 KiB geschrieben, danach zwei Dateien, die neuere unter 256 KiB.
+- Ein Test des Terminals, der den Strom ohne Exit enden lässt und die Erklärung im Fenster erwartet (Mutationsprobe: die Erklärung entfernen, Test rot).
+- Manuell: die laufende Anwendung mit `SIGTERM` beenden, danach steht die Zeile in der Datei.
+
+### Akzeptanzkriterien
+- [ ] Nach einem Ende der Anwendung steht in `~/.local/state/humanitl/app.log`, ob es geordnet, durch eine Ausnahme oder durch ein Signal kam.
+- [ ] Die Datei bleibt unter 512 KiB (256 KiB plus eine Rotation), gemessen mit einem Test.
+- [ ] Ein Terminal, dessen Strom endet, erklärt im Fenster, was passiert ist, und nennt den Weg zurück.
+- [ ] `make check` grün.
+
+### Fallstricke
+- Ein Protokoll, das bei jedem Bild schreibt, ist ein Protokoll, das die Platte füllt: Nur Start, Ende und Ausnahmen.
+- `runZonedGuarded` fängt nichts, was im nativen Teil abstürzt; das Signal aus dem Runner ist deshalb kein Zierrat, sondern die zweite Hälfte der Antwort.
+- Kein Pfad in `/tmp`: Ein Protokoll, das der nächste Neustart wegräumt, beantwortet die Frage nie.
+
+### Referenzen
+Bericht des Nutzers am 2026-09-07; `/tmp/hum-gui/app.log` und `app2.log` desselben Tages; `docs/DIAGNOSTICS.md`; HUM-042 für den Terminal-Zustand.
+
+---
+
 ## HUM-134 · Zwei Tests werden unter Last rot
 Sprint: 4 · Größe: S · Abhängigkeiten: — · Blockiert: eine verlässlich grüne Pipeline
 
@@ -2027,6 +2228,20 @@ runs: Diagnostic { code: SANDBOX_001, why: "cannot run /tmp/.tmpyk03Mt/bwrap --v
 ```
 
 Derselbe Test lief unmittelbar danach fünfmal einzeln grün. Der Fehler ist `ETXTBSY` und damit ein bekanntes Rennen zwischen `fork` und `exec` in einem Testbinary mit mehreren Threads: Der Test schreibt in `crates/sandbox/src/bwrap.rs:1305-1309` ein ausführbares Skript und startet es sofort (`query_version`). Forkt ein anderer Test desselben Binaries genau in dem Augenblick, in dem die Datei noch zum Schreiben offen ist, erbt sein Kind den Deskriptor; bis das Kind `exec` erreicht, hält es die Datei zum Schreiben offen, und unser `exec` bekommt `ETXTBSY`. `O_CLOEXEC` hilft nicht, weil das Fenster genau zwischen `fork` und `exec` liegt.
+
+**Ein dritter Fall, gefunden am 2026-09-07 in der CI und dort behoben:**
+`body_cap_blocks` (`daemon/crates/proxy/tests/authority.rs`) ist im Lauf
+`34097563533` mit `hyper::Error(BodyWrite, BrokenPipe)` gefallen, lokal in
+zwölf Einzelläufen und sechs Läufen der ganzen Datei auf zwei Kernen unter Last
+nicht reproduzierbar. Ursache: Der Proxy lehnt ein angekündigtes
+`Content-Length` über dem Cap mit `413` ab, **ohne den Body zu lesen**
+(Absicht), und lässt die Verbindung fallen; ein Client, der die angekündigten
+64 KiB wirklich schreibt, bekommt dabei `EPIPE`, und hyper gibt den
+Schreibfehler zurück statt der Antwort, die längst auf der Leitung stand. Der
+Test schreibt seitdem nur den Kopf und sechzehn Bytes und liest die Antwort
+über `Proxy::raw_exchange`. Er ist damit erledigt; die Zeile steht hier, weil
+das Muster dasselbe ist und wer dieses Issue baut, die drei Fälle zusammen
+sehen soll.
 
 **Ein zweiter Fall am selben Tag, andere Stelle, dieselbe Art:** `cargo test -p humanitld --test daemon_end_to_end` fiel einmal mit `the_configured_llm_endpoint_becomes_a_passthrough_rule` und `DAEMON_001: cannot reach the daemon on /tmp/hum0CSC7p/run/humanitl/daemon.sock: transport error`; derselbe Test lief danach dreimal einzeln und einmal als ganze Datei (10 von 10) grün. Auch das ist ein Rennen unter Last und keine Aussage über den Daemon; wer dieses Issue baut, sieht sich beide Stellen an, denn eine Pipeline, die ohne Grund rot wird, kostet jedes Mal dieselbe Suche.
 
@@ -2048,13 +2263,14 @@ Ein `exec`, das mit `ETXTBSY` scheitert, wird im Test bis zu fünfmal mit 20 ms 
 Der bestehende Test bleibt; er ist die Messung. Zusätzlich ein Lauf mit `--test-threads=8` in einer Schleife (zwanzigmal), der vor und nach der Änderung gefahren und im Commit-Body mit seinen Zahlen genannt wird.
 
 ### Akzeptanzkriterien
-- [ ] Zwanzig Läufe `cargo test -p humanitl-sandbox --lib -- --test-threads=8` hintereinander sind grün.
-- [ ] Zwanzig Läufe `cargo test -p humanitld --test daemon_end_to_end` hintereinander sind grün, oder der zweite Fall ist als eigene Ursache benannt und mit einer eigenen Messung erledigt.
-- [ ] Der Test prüft weiterhin `SANDBOX_001` für einen leeren Pfad, das Finden im zweiten `PATH`-Eintrag, `query_version` und `SANDBOX_002` für eine zu alte Version.
-- [ ] `make check` grün.
+- [x] Zwanzig Läufe `cargo test -p humanitl-sandbox --lib -- --test-threads=8` hintereinander sind grün. **Gemessen am 2026-09-07: 20 von 20**, nach dem Umbau der beiden Stellen, die ein Skript schreiben und sofort ausführen (`write_program` in `daemon/crates/sandbox/src/lib.rs` schreibt über einen eigenen Prozess, dessen Deskriptor kein Faden dieses Prozesses erben kann).
+- [x] Zwanzig Läufe `cargo test -p humanitld --test daemon_end_to_end` hintereinander sind grün, oder der zweite Fall ist als eigene Ursache benannt und mit einer eigenen Messung erledigt. **Gemessen am 2026-09-07: 20 von 20.** Für diesen Fall war keine Änderung nötig; er bleibt beobachtet, und die Messung steht hier, damit die nächste Rotfärbung eine Zahl hat, gegen die sie sich vergleichen lässt.
+- [x] Der Test prüft weiterhin `SANDBOX_001` für einen leeren Pfad, das Finden im zweiten `PATH`-Eintrag, `query_version` und `SANDBOX_002` für eine zu alte Version. Nur das Schreiben der Datei hat sich geändert, keine Zusicherung.
+- [x] `make check` grün. **Gemessen am 2026-09-07**, zusammen mit `tools/verify-commit.sh` über den fertigen Commit.
 
 ### Fallstricke
 - Eine Wiederholung, die jeden Fehler auffängt, verdeckt einen echten: Nur `ETXTBSY` wird wiederholt, jeder andere Befund scheitert sofort.
+- **Zwei Mittel gegen dieselbe Ursache stehen jetzt im Repository**, und das ist Absicht: die Wiederholung in `daemon/bin/humanitl/tests/cli.rs` (`output_when_not_busy`) und das Schreiben über einen eigenen Prozess (`write_program`). Keines ersetzt das andere. Offen bleibt eine Stelle: das falsche `systemctl` in `cli.rs:2345` und `:2464` wird noch auf die alte Art geschrieben; ausgeführt wird es vom Kind der Kommandozeile und nicht vom Testbinary, und gescheitert ist es nie -- gefunden im Review am 2026-09-07, aufgeschrieben statt geändert.
 
 ### Referenzen
 `daemon/crates/sandbox/src/bwrap.rs:1295-1326`; Beobachtung am 2026-09-07 im Lauf zu HUM-039.
