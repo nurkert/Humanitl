@@ -70,6 +70,14 @@ Run it after touching the tray or the notification adapter. On the bus of a
 real desktop the same tests skip with a reason instead of registering against
 the panel of the person sitting there.
 
+`make flutter-test-daemon` is not part of it either: the sandbox screen against
+a real daemon (`app/test/features/sandbox/daemon_live_test.dart`) starts a real
+`humanitld` in its own XDG root and a real sandbox with `bwrap`, and neither
+belongs in a gate that has to be green in seconds on every machine. Run it
+after touching the sandbox screen, its providers or the `Sandbox` RPC. Without
+`HUMANITL_DAEMON_TESTS=1` the file registers a single skipped test with the
+reason, so a normal `flutter test` run is unaffected.
+
 ## Sprint gate
 
 Every milestone ends with a demo script, and the scripts of the milestones
