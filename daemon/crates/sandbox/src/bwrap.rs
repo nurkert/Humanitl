@@ -1303,10 +1303,7 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let fake = dir.path().join("bwrap");
-        std::fs::write(&fake, b"#!/bin/sh\necho bubblewrap 0.0.1\n").expect("write");
-        let mut perms = std::fs::metadata(&fake).expect("meta").permissions();
-        std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
-        std::fs::set_permissions(&fake, perms).expect("chmod");
+        crate::test_support::write_program(&fake, "#!/bin/sh\necho bubblewrap 0.0.1\n");
         let found = BwrapBackend::find_program(&Env::from_pairs([(
             "PATH",
             format!("/nonexistent:{}", dir.path().display()),
