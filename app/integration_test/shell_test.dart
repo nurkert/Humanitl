@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/app.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
+import 'package:humanitl/features/shell/section.dart';
 import 'package:humanitl/features/shell/widgets/icon_rail.dart';
 import 'package:humanitl/features/shell/widgets/status_bar.dart';
 import 'package:integration_test/integration_test.dart';
@@ -28,7 +29,12 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(IconRail), findsOneWidget);
-    expect(find.byType(RailEntry), findsNWidgets(5));
+    // So viele Einträge, wie es Abschnitte gibt, und nicht fünf: Die Zahl hier
+    // stand fest, während `Section` wuchs, und der Test ist damit still veraltet
+    // -- gemessen am 2026-09-07, als er nach längerer Zeit wieder lief und
+    // sechs Einträge gegen seine fünf fand. Eine Zahl, die aus dem Code kommt,
+    // altert nicht.
+    expect(find.byType(RailEntry), findsNWidgets(Section.values.length));
     expect(find.byType(StatusBar), findsOneWidget);
 
     final Stopwatch clock = Stopwatch()..start();

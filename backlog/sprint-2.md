@@ -28,6 +28,7 @@ Voraussetzungen aus Sprint 0 und 1: HUM-003 (Proto), HUM-004 (core-types), HUM-0
 | 19 | HUM-095 | Sitzungsregel aus dem Stapel traegt keine Herkunft | M | CLI |
 | 20 | HUM-097 | Oberflächen-Hälfte des M2-Demoskripts | L | e2e |
 | 21 | HUM-094 | Katalogname und Editor fehlen dem M2-Demolauf | XL | UI |
+| 22 | HUM-144 | Der Integrationstest der eingefrorenen Warteschlange steht halb fertig | M | HUM-029, HUM-097 |
 | 22 | HUM-105 | Schalter „Deaktivieren" für mitgelieferte Regeln | M | UI |
 | 23 | HUM-106 | TLS-Karte im Intercept-Bildschirm | M | UI |
 | 24 | HUM-114 | `humanitl rules test` ist eine Sackgasse | M | CLI |
@@ -2494,6 +2495,58 @@ Geprüft am Code (Audit 2026-09-04, Zeilen gegen den heutigen Baum gezogen). Die
 ### Referenzen
 `docs/adr/0007-rule-model.md` (Herkunft einer Regel); ADR-0018 und `docs/ARCHITECTURE.md` 3b (Parität von UI und CLI, keine Fachlogik in `bin/humanitl`); `backlog/CONVENTIONS.md` 4.5 (Sitzungsregeln) und 4.22 (Befund aus dem M2-Lauf); `backlog/sprint-2.md` HUM-027 (Regel vor Entscheidung, Rücknahme), HUM-029 (eine `Decide` je Flow, Regel nur einmal), HUM-072 (Notiz an den Agenten); `backlog/sprint-4.md` HUM-078 (Paritäts-Tabelle); `proto/humanitl/v1/rules.proto` Feld 6.
 
+
+---
+
+## HUM-144 · Der Integrationstest der eingefrorenen Warteschlange steht halb fertig
+Sprint: 2 · Größe: M · Abhängigkeiten: HUM-029, HUM-097 · Blockiert: das letzte Kästchen von HUM-029
+
+### Kontext
+Am 2026-09-07 ist der erste Integrationstest entstanden, der die echte Anwendung gegen den echten `humanitld --fake` fährt: `Xvfb :99`, `flutter test integration_test/... -d linux`, das Szenario `fixtures/sessions/npm-install.jsonl`. Er lief grün, und dann hat das Review drei Löcher gezeigt, von denen zwei die Aussage selbst betreffen. Der Test liegt deshalb **nicht** im Repository, sondern als `~/hum-parked-queue_freeze_test.dart` daneben; er gehört hierher, sobald die Punkte unten stehen.
+
+**Was das Review fand** (beide Reviewer unabhängig, Antigravity mit eigener Messung):
+
+1. **Blockierend: zwei der drei Zusicherungen sind wirkungslos.** Alle fünfzehn Anfragen des Szenarios gehen an denselben Host, und ab drei Flüssen klappt die Warteschlange sie zu einer Gruppe zusammen (`collapseFrom = 3`). Kommen weitere hinzu, wächst die Zahl der Einträge nicht und nichts verschiebt sich -- auch dann nicht, wenn das Einfrieren ganz abgeschaltet ist. Nur die Pille hat Zähne. Zu messen ist die Gruppe **aufgeklappt**.
+2. **`--loop` verdeckt ein Zeitproblem.** Das Szenario ist unter Zeitraffer in gut fünf Sekunden durch, die Anwendung braucht länger bis zum ersten Bild; die Schleife hat das zugedeckt, statt es zu lösen. Der Umbau -- erst die Anwendung, dann der Daemon auf denselben Socket -- ist im geparkten Stand drin und richtig.
+3. **Das Abräumen ist noch nicht sauber.** Stirbt der Daemon, während die Anwendung noch hängt, meldet ihr Client `DAEMON_001`, und das Testgerüst zählt das als Fehlschlag -- auch wenn der Test selbst durch ist; dreimal von drei Läufen gemessen. Der Weg dorthin steht im Review: Das Abhängen gehört als **eigener** `addTearDown` **nach** der Registrierung von `daemon.stop`, dann läuft es davor (LIFO), `ProviderScope` wird abgeräumt, `ref.onDispose(client.close)` beendet den Strom mit `onDone` statt mit einem Fehler, und `SIGKILL` darf bleiben.
+
+4. **Der Import von `package:flutter/widgets.dart` ist überflüssig** und `flutter analyze --fatal-infos` bricht daran -- die CI-Stufe der Anwendung wäre rot.
+
+5. **Die Pille misst zu wenig.** „Zählt hoch" verlangt Wachstum; geprüft wird bisher nur, dass irgendeine Zahl dasteht. Dazu ist der Finder zu weit: `+{count} weitere` aus dem Einrichten-Bildschirm passt auf dasselbe Muster und steht im `IndexedStack` daneben. Die Pille trägt `Key('intercept-new-pill')`, der Widget-Test daneben benutzt ihn schon.
+
+6. **Niemand fährt die Datei.** `make check` liest `test/`, nicht `integration_test/`; das neue Ziel steht in keinem Gate und die CI hat keinen Schritt dafür. Genau so ist `shell_test.dart` still veraltet. HUM-097 verlangt den Beweis „lokal **und** in einem Wegwerf-Branch in CI, mit gemessener Laufzeit"; der Vorschlag aus dem Review ist der Job `e2e-xvfb` (`ci.yml:538`) mit `xvfb-run -a --server-args='-screen 0 1600x1000x24' make flutter-test-integration`.
+
+### Ziel
+Der Test steht im Repository, misst das Kästchen von HUM-029 mit aufgeklappter Gruppe und endet ohne Nachhall: kein Prozess, kein Verzeichnis, keine Ausnahme nach dem letzten `expect`.
+
+### Nicht-Ziel
+Den Fake-Daemon ändern, damit der Test bequemer wird. Das Einfrieren selbst -- das ist gebaut und in `test/features/intercept/queue_freeze_test.dart` mit zwei Ankünften gemessen.
+
+### Betroffene Pfade
+- `app/integration_test/queue_freeze_test.dart` (aus dem geparkten Stand)
+- `Makefile` (`flutter-test-integration` steht schon)
+- `backlog/sprint-2.md` (das Kästchen von HUM-029)
+
+### Spezifikation
+Die Gruppe wird vor dem Messen aufgeklappt (ein Tipp auf den Gruppenkopf), danach gilt: Zahl der Zeilen und Rechteck der ersten Zeile bleiben, solange der Zeiger darin steht; die Pille zählt; nach dem Verlassen ist sie fort und die Zeilen sind mehr geworden. Für das Ende ist die Reihenfolge zu klären: Entweder der Client wird geschlossen, bevor der Daemon fällt (dann muss der Container fallen, nicht nur der Baum), oder der Test nimmt die erwartete Ausnahme ausdrücklich entgegen.
+
+### Tests
+Der Test selbst ist die Messung. Mutationsprobe, schon gefahren: `_frozen` in `queue_pane.dart` fest auf `false`, Test rot -- allerdings nur an der Pille, und genau das ist Punkt 1 oben.
+
+### Akzeptanzkriterien
+- [ ] Der Test liegt in `app/integration_test/` und läuft unter `make flutter-test-integration` grün, und ein Schritt in CI fährt ihn ebenfalls.
+- [ ] Er misst mit aufgeklappter Gruppe, und die Mutationsprobe `_frozen = false` färbt **alle** Zusicherungen über die Zeilen rot, nicht nur die Pille.
+- [ ] Nach dem Lauf sind weder Prozess noch Verzeichnis übrig, und keine Ausnahme steht im Bericht.
+- [ ] Das Kästchen von HUM-029 trägt danach die Messung.
+
+### Fallstricke
+- Der Zeitraffer (`--speed`) ändert die Reihenfolge nicht, aber die Abstände: Wer zu spät hinsieht, misst eine fertige Warteschlange.
+- `Offset(5, 5)` als Ort außerhalb der Warteschlange trifft die Kopfzeile; bei kleineren Fenstern ist das zu prüfen.
+
+### Referenzen
+Geparkter Stand: `~/hum-parked-queue_freeze_test.dart` (2026-09-07). Reviews zu HUM-029 vom selben Tag, beide mit eigenen Messungen: 46 Zeilen im Szenario, 15 Anfragen an **einen** Host, Zeitraffer 4 macht aus 20,6 s knapp 5 s, und der Daemon hält unter `--loop` nach zwölf Sekunden 41 Flüsse. `docs/UX.md` 2.8.
+
+**Was der Kasten von HUM-029 nach diesem Issue sagen darf, und was nicht.** Gemessen wären dann: die Pille erscheint und wächst, während der Zeiger in der Warteschlange steht, und sie ist danach fort; die Reihenfolge bleibt bei aufgeklappter Gruppe. Ungemessen bleiben die übrigen Zusagen von HUM-029 -- der Zähler der Gruppe, `12× GET · 2× POST`, das Einklappen ab drei, die Stapel-Entscheidungen samt Modal über fünf, Mehrfachauswahl, die beiden anderen Einfrier-Gründe (Tastatur-Navigation, Auswahl über eins) und das Tempo von fünfzehn Flüssen in zwanzig Sekunden statt im Zeitraffer.
 
 ## HUM-097 · Oberflächen-Hälfte des M2-Demoskripts
 Sprint: 2 · Größe: L · Abhängigkeiten: HUM-036, HUM-028, HUM-029, HUM-032, HUM-033, HUM-035; vorher zu bauen: Beweis des `integration_test`-Harness, App-Bau im Job `e2e-xvfb`, Exportziel nach `HUMANITL_E2E_HAR` (siehe Stand) · Blockiert: das vollständige M2-Sprint-Gate, HUM-094 (Namens-Behauptungen im Bildschirm-Lauf)

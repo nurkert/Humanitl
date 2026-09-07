@@ -5,7 +5,8 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 .PHONY: help check rust-fmt rust-clippy rust-build rust-test rust-doc rust-deny typed-errors-lint \
-        flutter-get flutter-analyze flutter-test flutter-test-dbus flutter-test-daemon flutter-build proto escape e2e \
+        flutter-get flutter-analyze flutter-test flutter-test-dbus flutter-test-daemon \
+        flutter-test-integration flutter-build proto escape e2e \
         deps-lint docs-lint clean
 
 help: ## List targets
@@ -99,6 +100,23 @@ flutter-test-daemon: flutter-codegen ## Sandbox screen against a real daemon (HU
 	@test -x daemon/target/debug/humanitld || { echo "daemon/target/debug/humanitld missing: cargo build --manifest-path daemon/Cargo.toml" >&2; exit 1; }
 	@command -v bwrap >/dev/null 2>&1 || { echo "bwrap missing: install the bubblewrap package" >&2; exit 1; }
 	cd app && env HUMANITL_DAEMON_TESTS=1 flutter test test/features/sandbox/daemon_live_test.dart
+
+# Die Integrationstests: die echte Anwendung auf einem Bildschirm, gegen den
+# echten Daemon. Nicht Teil von `check`, aus denselben zwei Gruenden wie die
+# beiden Ziele darueber: Sie brauchen einen Bildschirm (`Xvfb :99` genuegt) und
+# starten Prozesse. Wer sie faehrt, prueft damit die Naht, die kein
+# Widget-Test sieht -- was die Oberflaeche zeigt, wenn ein echter Dienst
+# antwortet (HUM-029, HUM-097).
+flutter-test-integration: flutter-codegen ## The app on a screen, against a real daemon (HUM-097)
+	@test -x daemon/target/debug/humanitld || { echo "daemon/target/debug/humanitld missing: cargo build --manifest-path daemon/Cargo.toml" >&2; exit 1; }
+	@test -n "$$DISPLAY" || { echo "no DISPLAY: start one with 'Xvfb :99 -screen 0 1600x1000x24 &' and export DISPLAY=:99" >&2; exit 1; }
+	@# Eine Datei nach der anderen: Mehrere Dateien in einem Aufruf starten die
+	@# Anwendung mehrfach auf demselben Geraet, und der zweite Start scheitert
+	@# mit "Unable to start the app on the device" (gemessen 2026-09-07).
+	cd app && for file in integration_test/*_test.dart; do \
+		echo "== $$file"; \
+		flutter test "$$file" -d linux || exit 1; \
+	done
 
 # flutter-analyze and flutter-test depend on this: app/lib/core/ipc/generated/
 # is gitignored and imported by the app. Without protoc or protoc-gen-dart the
