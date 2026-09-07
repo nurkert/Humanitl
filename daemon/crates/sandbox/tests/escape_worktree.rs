@@ -22,6 +22,8 @@ use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+mod common;
+
 use humanitl_config::{Env, Paths, WorkMode};
 use humanitl_core::ids::{SandboxId, SessionId};
 use humanitl_sandbox::summary::SessionSummary;
@@ -80,8 +82,10 @@ impl Fixture {
         let ca_bundle = state.join("ca-bundle.crt");
         fs::write(&ca_bundle, b"-----BEGIN CERTIFICATE-----\n").expect("ca bundle");
         let shim = state.join("humanitl-shim");
-        fs::write(&shim, PASSTHROUGH_SHIM).expect("shim");
-        fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("chmod shim");
+        // Über `common::write_program`: Die Datei wird gleich ausgeführt, und
+        // ein geerbter Schreib-Deskriptor eines anderen Fadens gäbe `ETXTBSY`
+        // (HUM-134).
+        common::write_program(&shim, PASSTHROUGH_SHIM);
 
         Self {
             _dir: dir,
