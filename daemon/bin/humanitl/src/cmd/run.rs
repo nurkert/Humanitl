@@ -139,6 +139,22 @@ async fn drive(
     start: v1::sandbox_request::Start,
     moderate: bool,
 ) -> Result<u8, Failure> {
+    // **Erst die Signale, dann alles andere.** `open_moderation` setzt für
+    // `--ask terminal` den Rohmodus (`cmd/moderate.rs`), und danach dauert der
+    // Start der Sandbox Hunderte Millisekunden. Ein `SIGTERM` in dieser Lücke
+    // nähme der Kernel mit seinem Standardverhalten: Der Prozess wäre weg, das
+    // Terminal bliebe roh, und die Shell des Menschen stünde ohne Echo da --
+    // genau das, was `src/tty.rs` ausschließt. Die Ströme stehen deshalb,
+    // bevor irgendjemand das Terminal anfasst (HUM-135).
+    let mut terminate = signal_stream(tokio::signal::unix::SignalKind::terminate());
+    let mut hangup = signal_stream(tokio::signal::unix::SignalKind::hangup());
+    // **Einmal angelegt und nicht je Umlauf.** `tokio::signal::ctrl_c()` baut
+    // bei jedem Aufruf einen frischen Empfänger; ein `SIGINT`, das eintrifft,
+    // während die Schleife gerade arbeitet -- ein Schwall Ausgabe, ein
+    // offener Editor --, fällt zwischen den alten und den neuen Empfänger und
+    // wird nie gesehen. Ein Strom, der von Anfang an steht, puffert es.
+    let mut interrupt = signal_stream(tokio::signal::unix::SignalKind::interrupt());
+
     // **Erst das Abonnement, dann der Start.** Der Daemon liefert keinen
     // Rückstand: `Subscribe` mit leerem `since_flow_id` beginnt bei jetzt.
     // Ein Agent, der seine erste Anfrage in der ersten Sekunde stellt --
@@ -161,15 +177,6 @@ async fn drive(
 
     let mut clock = tokio::time::interval(std::time::Duration::from_secs(1));
     clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut terminate = signal_stream(tokio::signal::unix::SignalKind::terminate());
-    let mut hangup = signal_stream(tokio::signal::unix::SignalKind::hangup());
-    // **Einmal angelegt und nicht je Umlauf.** `tokio::signal::ctrl_c()` baut
-    // bei jedem Aufruf einen frischen Empfänger; ein `SIGINT`, das eintrifft,
-    // während die Schleife gerade arbeitet -- ein Schwall Ausgabe, ein
-    // offener Editor --, fällt zwischen den alten und den neuen Empfänger und
-    // wird nie gesehen. Ein Strom, der von Anfang an steht, puffert es.
-    let mut interrupt = signal_stream(tokio::signal::unix::SignalKind::interrupt());
-
     // Ein zweiter Client für den Stopp: Der erste hält den Ereignisstrom, und
     // ein `&mut` daran wäre für die Dauer der Schleife geliehen.
     let mut stopper = client.clone();
@@ -652,13 +659,13 @@ fn refuse_terminal_ask(config: &Config, args: &RunArgs, on_terminal: bool) -> Re
             EXIT_USER,
         ));
     }
-    if !args.cmd.is_empty() {
-        return Ok(());
-    }
-    let registry = AdapterRegistry::builtin();
-    let fullscreen = registry
+    // Entschieden wird am wirksamen Kommando: `-- bash` startet kein TUI, auch
+    // wenn der Adapter der Sitzung `opencode` heißt -- und `-- opencode`
+    // startet eines, auch wenn es genannt wurde (HUM-135).
+    let fullscreen = AdapterRegistry::builtin()
         .get(&config.agent.adapter)
-        .is_some_and(AgentAdapter::is_fullscreen_tui);
+        .is_some_and(AgentAdapter::is_fullscreen_tui)
+        && humanitl_sandbox::agent::command_is_the_agent(config, &args.cmd);
     if !fullscreen {
         return Ok(());
     }
@@ -887,10 +894,69 @@ mod tests {
     #[test]
     fn a_command_of_its_own_is_not_the_fullscreen_agent() {
         let config = with(AskMode::Terminal, "opencode");
+        // Auch die Namen, die dem Agenten ähneln, und der Umweg über eine
+        // Shell: Wer `sh -c "opencode"` schreibt, startet eine Shell.
+        for own in ["bash", "opencoded", "myopencode"] {
+            let args = RunArgs {
+                cmd: vec![std::ffi::OsString::from(own)],
+            };
+            assert!(
+                refuse_terminal_ask(&config, &args, true).is_ok(),
+                "{own} is a command of its own"
+            );
+        }
+        let shell = RunArgs {
+            cmd: vec![
+                std::ffi::OsString::from("sh"),
+                std::ffi::OsString::from("-c"),
+                std::ffi::OsString::from("opencode"),
+            ],
+        };
+        assert!(refuse_terminal_ask(&config, &shell, true).is_ok());
+    }
+
+    /// Der genannte Agent ist der Agent: Wer ihn beim Namen ruft, bekommt
+    /// dieselbe Absage wie der, der ihn gar nicht nennt (HUM-135).
+    #[test]
+    fn the_named_agent_is_still_the_fullscreen_agent() {
+        let config = with(AskMode::Terminal, "opencode");
+        for named in ["opencode", "/usr/local/bin/opencode", "./opencode"] {
+            for cmd in [
+                vec![std::ffi::OsString::from(named)],
+                // Mit Argumenten, denn so ruft ein Mensch ihn wirklich auf.
+                vec![
+                    std::ffi::OsString::from(named),
+                    std::ffi::OsString::from("run"),
+                    std::ffi::OsString::from("say hello"),
+                ],
+            ] {
+                let args = RunArgs { cmd };
+                let failure = refuse_terminal_ask(&config, &args, true)
+                    .expect_err(&format!("{named} draws the whole screen"));
+                assert_eq!(failure.diagnostic.code.as_str(), "CLI_002", "{named}");
+            }
+        }
+    }
+
+    /// Auch der Agent, den die Konfiguration selbst benennt, ist der Agent
+    /// (HUM-135): Wer `agent.command` setzt und dasselbe Programm hinter `--`
+    /// schreibt, bekommt dieselbe Absage.
+    #[test]
+    fn the_configured_agent_counts_under_its_own_name() {
+        let mut config = with(AskMode::Terminal, "opencode");
+        config.agent.command = Some(vec!["mycode".to_owned()]);
         let args = RunArgs {
+            cmd: vec![std::ffi::OsString::from("/opt/bin/mycode")],
+        };
+        let failure =
+            refuse_terminal_ask(&config, &args, true).expect_err("mycode is the agent here");
+        assert_eq!(failure.diagnostic.code.as_str(), "CLI_002");
+
+        // Und ein anderes Programm bleibt ein anderes.
+        let other = RunArgs {
             cmd: vec![std::ffi::OsString::from("bash")],
         };
-        assert!(refuse_terminal_ask(&config, &args, true).is_ok());
+        assert!(refuse_terminal_ask(&config, &other, true).is_ok());
     }
 
     /// Ein Adapter, den es nicht gibt, zeichnet keinen Vollbildschirm.

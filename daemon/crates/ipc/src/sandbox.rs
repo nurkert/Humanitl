@@ -1812,8 +1812,18 @@ impl Inner {
 
         let work_src = self.work_dir(&config, plan);
         let work_mode = self.work_mode(&config, plan);
-        let agent = if command.is_empty() {
-            self.agent_contribution(&config, &work_src, &profile)?
+        // Entschieden wird am wirksamen Kommando und nicht daran, ob eines
+        // genannt wurde: `humanitl run -- opencode` startet denselben Agenten
+        // wie `humanitl run`, und beide brauchen dieselbe Umgebung (HUM-135).
+        //
+        // Das leere Kommando geht dabei **immer** durch
+        // [`Self::agent_contribution`], auch wenn der Adapter der Konfiguration
+        // gar nicht existiert: Dort meldet ihn `CONFIG_003`, und ohne diesen
+        // Weg startete stattdessen still eine Shell.
+        let agent = if command.is_empty()
+            || humanitl_sandbox::agent::command_is_the_agent(&config, command)
+        {
+            self.agent_contribution(&config, &work_src, &profile, command)?
         } else {
             AgentContribution::default()
         };
@@ -1887,6 +1897,7 @@ impl Inner {
         config: &Config,
         work_src: &Path,
         profile: &SandboxProfile,
+        command: &[OsString],
     ) -> Result<AgentContribution, Diagnostic> {
         let registry = AdapterRegistry::builtin();
         let adapter = registry.get(&config.agent.adapter).ok_or_else(|| {
@@ -1907,13 +1918,12 @@ impl Inner {
         })?;
 
         let ctx = AgentContext::new(self.session, work_src.to_path_buf(), config.llm.clone())
-            .with_command_override(
-                config
-                    .agent
-                    .command
-                    .as_ref()
-                    .map(|parts| parts.iter().map(OsString::from).collect()),
-            )
+            // Das Kommando, das wirklich läuft: das genannte, sonst das der
+            // Konfiguration. Der Adapter prüft damit den Pfad, der gestartet
+            // wird, und nicht einen anderen, den er auf dem Host fände
+            // (`AGENT_004` nannte sonst eine Datei, die niemand aufrufen
+            // wollte). Die Herkunft geht mit: Ein Befund über ein Kommando von
+            // der Kommandozeile darf nicht `agent.command` anfassen.
             .with_host_path(self.paths.env().non_empty("PATH").map(OsString::from))
             .with_language(config.ui.language)
             .with_hold(config.hold.clone())
@@ -1939,6 +1949,17 @@ impl Inner {
                     .cloned()
                     .collect(),
             );
+        let ctx = if command.is_empty() {
+            ctx.with_command_override(
+                config
+                    .agent
+                    .command
+                    .as_ref()
+                    .map(|parts| parts.iter().map(OsString::from).collect()),
+            )
+        } else {
+            ctx.with_command_from_caller(command.to_vec())
+        };
 
         Ok(AgentContribution {
             command: adapter.command(&ctx),
@@ -2694,6 +2715,106 @@ mod tests {
         assert_eq!(masked.src, "");
         // Und nichts hinter dem ersten `--` zählt.
         assert!(mounts.iter().all(|mount| mount.dst != "/etc/shadow"));
+    }
+
+    /// Ein Dienst über einem Wegwerf-XDG mit dem mitgelieferten Profil.
+    fn service_for(home: &tempfile::TempDir, adapter: &str) -> SandboxService {
+        let config_home = home.path().join("config");
+        let profile_dir = config_home.join("humanitl/profiles/sandbox");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../profiles/sandbox");
+        std::fs::copy(shipped.join("default.toml"), profile_dir.join("test.toml")).unwrap();
+
+        let env = humanitl_config::Env::from_pairs([
+            ("HOME", home.path().display().to_string()),
+            ("XDG_CONFIG_HOME", config_home.display().to_string()),
+            (
+                "XDG_DATA_HOME",
+                home.path().join("data").display().to_string(),
+            ),
+            (
+                "XDG_RUNTIME_DIR",
+                home.path().join("run").display().to_string(),
+            ),
+        ]);
+        let mut config = humanitl_config::Config::default();
+        "test".clone_into(&mut config.sandbox.profile);
+        adapter.clone_into(&mut config.agent.adapter);
+        config.sandbox.work_dir = Some(home.path().join("project"));
+        std::fs::create_dir_all(home.path().join("project")).unwrap();
+
+        SandboxService::new(
+            crate::session::SessionResolver::for_config(humanitl_config::Paths::new(env), config),
+            SessionId::new(),
+            SandboxPorts::none(),
+        )
+    }
+
+    /// Die Namen der Umgebung, die eine Sitzung mit diesem Kommando bekäme.
+    fn env_keys_for(service: &SandboxService, command: &[&str]) -> Vec<String> {
+        let command: Vec<OsString> = command.iter().map(|arg| OsString::from(*arg)).collect();
+        let prepared = service
+            .inner
+            .prepare_with_command(&v1::sandbox_request::Plan::default(), &command)
+            .expect("the session is prepared");
+        prepared
+            .session
+            .session_env
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
+
+    /// Der genannte Agent bekommt seine Umgebung, ein anderes Kommando nicht
+    /// (HUM-135).
+    ///
+    /// Bis zum 2026-09-07 hing der Beitrag daran, ob **irgendein** Kommando
+    /// genannt wurde; `humanitl run -- opencode` startete den Agenten damit
+    /// ohne die Konfiguration, die dieses Produkt für ihn baut.
+    #[test]
+    fn a_named_agent_still_gets_its_environment() {
+        let home = tempfile::TempDir::new().unwrap();
+        let service = service_for(&home, "opencode");
+
+        for named in [
+            vec!["opencode"],
+            vec!["opencode", "run", "say hello"],
+            vec!["/usr/local/bin/opencode", "--version"],
+            vec![],
+        ] {
+            let keys = env_keys_for(&service, &named);
+            for wanted in [
+                "OPENCODE_CONFIG",
+                "OPENCODE_MODELS_PATH",
+                "OPENCODE_DISABLE_MODELS_FETCH",
+            ] {
+                assert!(
+                    keys.iter().any(|key| key == wanted),
+                    "{named:?} is the agent, so it needs {wanted}: {keys:?}"
+                );
+            }
+        }
+
+        for other in [vec!["bash"], vec!["sh", "-c", "opencode"]] {
+            let keys = env_keys_for(&service, &other);
+            assert!(
+                !keys.iter().any(|key| key.starts_with("OPENCODE_")),
+                "{other:?} is a command of its own: {keys:?}"
+            );
+        }
+    }
+
+    /// Ein Adapter, den es nicht gibt, bleibt ein Befund und wird nicht still
+    /// zur Shell.
+    #[test]
+    fn an_unknown_adapter_is_still_config_003() {
+        let home = tempfile::TempDir::new().unwrap();
+        let service = service_for(&home, "there-is-no-such-adapter");
+        let diagnostic = service
+            .inner
+            .prepare_with_command(&v1::sandbox_request::Plan::default(), &[])
+            .expect_err("an adapter that does not exist stops the start");
+        assert_eq!(diagnostic.code.as_str(), "CONFIG_003");
     }
 
     /// Ein Profil ohne Datei, nur für die Tabellenfunktionen.
