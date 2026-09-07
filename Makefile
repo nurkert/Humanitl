@@ -5,7 +5,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 .PHONY: help check rust-fmt rust-clippy rust-build rust-test rust-doc rust-deny typed-errors-lint \
-        flutter-get flutter-analyze flutter-test flutter-test-dbus flutter-build proto escape e2e \
+        flutter-get flutter-analyze flutter-test flutter-test-dbus flutter-test-daemon flutter-build proto escape e2e \
         deps-lint docs-lint clean
 
 help: ## List targets
@@ -89,6 +89,16 @@ flutter-test: flutter-codegen ## Flutter unit and widget tests (app and packages
 flutter-test-dbus: flutter-codegen ## D-Bus protocol tests on a private session bus (HUM-118)
 	@command -v dbus-run-session >/dev/null 2>&1 || { echo "dbus-run-session missing: install the dbus package" >&2; exit 1; }
 	cd app && dbus-run-session -- env HUMANITL_DBUS_TESTS=1 flutter test test/features/tray/dbus_live_test.dart
+
+# Der Sandbox-Bildschirm gegen einen echten Daemon. Nicht Teil von `check`:
+# Der Lauf startet `humanitld` und darunter eine echte Sandbox mit `bwrap`, und
+# beides gehoert nicht in ein Gate, das auf jedem Rechner in Sekunden gruen
+# sein soll. Er ist die Messung fuer das Kriterium von HUM-040, das frueher
+# "manuell mit echtem Daemon" hiess.
+flutter-test-daemon: flutter-codegen ## Sandbox screen against a real daemon (HUM-040)
+	@test -x daemon/target/debug/humanitld || { echo "daemon/target/debug/humanitld missing: cargo build --manifest-path daemon/Cargo.toml" >&2; exit 1; }
+	@command -v bwrap >/dev/null 2>&1 || { echo "bwrap missing: install the bubblewrap package" >&2; exit 1; }
+	cd app && env HUMANITL_DAEMON_TESTS=1 flutter test test/features/sandbox/daemon_live_test.dart
 
 # flutter-analyze and flutter-test depend on this: app/lib/core/ipc/generated/
 # is gitignored and imported by the app. Without protoc or protoc-gen-dart the
