@@ -47,7 +47,11 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `6` seit der Zusammenfassung eines Sandbox-Laufs: `SessionSummary` samt
+/// `7` seit der Hinweiszeile als eigener Rahmen: `TerminalOutput.notice`
+/// trägt die Zeile zu einem gehaltenen oder entschiedenen Fluss neben den
+/// Bytes des Agenten statt darin, damit ein Client mit eigener Anzeige sie
+/// nicht in sein Bild bekommt (HUM-042);
+/// `6` war die Zusammenfassung eines Sandbox-Laufs: `SessionSummary` samt
 /// `FileChange`, `SymlinkEscape` und `SummaryFinding`, dem achten Arm
 /// `SandboxEvent.summary` und der RPC `GetSessionSummary` (HUM-043);
 /// `5` war `FlowSummary.meta`, der Vermerk an einer Anfrage, die der Proxy
@@ -64,7 +68,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 6;
+pub const PROTO_MINOR: u32 = 7;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
@@ -117,4 +121,4 @@ pub use crate::server::{IpcServer, bind_socket, serve};
 pub use crate::server_stub::{
     BoxStream, DaemonApi, DaemonService, diagnostic_from_status, diagnostic_to_status,
 };
-pub use crate::terminal::{HeldNotices, TerminalHub};
+pub use crate::terminal::{HeldNotices, TerminalHub, notice_line};

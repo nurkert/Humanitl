@@ -1164,6 +1164,13 @@ message TerminalOutput {
     Diagnostic diagnostic = 3;
     // Geometrie des Schreibers; Leser rendern letterboxed.
     Resize resize = 4;
+    // Eine Zeile des Daemons zu einem gehaltenen oder entschiedenen Fluss,
+    // schon gesaeubert und ohne Steuerzeichen. Sie steht neben den Bytes und
+    // nicht darin: Wer eine eigene Anzeige dafuer hat (die Oberflaeche zeigt
+    // einen Streifen ueber dem Terminal), zeichnet sie dort, und wer am
+    // Terminal sitzt, schreibt sie zwischen die Bytes des Agenten. Sie kommt
+    // an einer Grenze zwischen zwei Folgen, nie mitten in einer.
+    string notice = 5;
   }
 
   // Der Prozess ist beendet.

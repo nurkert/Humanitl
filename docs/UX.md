@@ -401,6 +401,19 @@ Statt dessen: die `AllowIntent`- und `BlockIntent`-Actions des Screens überschr
 
 Die Queue ist ein einziger Fokusstopp mit Pfeiltasten-Navigation darin. Solange der Fokus in der Queue steht, gilt `Enter` = erlauben; steht er auf einem Control, gilt `Enter` für dieses Control. Das widerspricht nicht der Regel aus 3.4, dass aus der Zeile heraus nur blockiert wird: die Zeile ist nicht das Control, die **Auswahl** ist der Gegenstand. `Enter` erlaubt den ausgewählten Flow, dessen URL die Karte zeigt, und die Zeile selbst trägt keine Erlauben-Affordanz, die man mit dem Zeiger treffen könnte.
 
+**Im Terminal gilt dieselbe Frage, und die Antwort ist umgekehrt.** Dort gehört
+jede Taste dem Agenten -- Rücktaste, Pfeile, Enter, `Ctrl+C` als `0x03`,
+`Ctrl+P` als `0x10` --, mit genau sieben Ausnahmen: `Ctrl+1` bis `Ctrl+6` und
+`Ctrl+K`. Ohne sie käme man aus einem Vollbild-TUI nur noch mit der Maus
+heraus, und das verstieße gegen 5.1. Der Weg dorthin ist nicht der
+naheliegende: Der Emulator übersetzt `Ctrl+K` in `0x0b` und `Ctrl+6` in `0x1e`
+und meldet die Taste als behandelt, womit das Ereignis kein `Shortcuts`
+darüber mehr erreicht; `KeyEventResult.skipRemainingHandlers` hielte zwar den
+Emulator auf, beendete die Reise aber genauso. `TerminalPane._onKey` schlägt
+die Taste deshalb selbst in `shellShortcuts()` nach und löst die Absicht über
+`Actions` aus. Gemessen in `a_shortcut_of_the_application_survives_the_terminal`
+für alle drei Fälle (`Ctrl+1`, `Ctrl+6`, `Ctrl+K`).
+
 ### 5.3 Jede gebundene Taste tut etwas
 
 Jeder Aktivator in `interceptShortcuts()` hat eine Action im selben Screen. Ein Widget-Test vergleicht die beiden Tastenmengen und schlägt bei Ungleichheit fehl; eine Bindung ohne Action wird gelöscht, nicht stillgelegt. Heute sind `/`, `Ctrl+D` und `N` gebunden und stumm.

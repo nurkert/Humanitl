@@ -1456,6 +1456,20 @@ async fn echo_terminal(
                         )),
                     })
                 })
+                // Und ein Hinweis, damit ein Client den Weg üben kann, den es
+                // ohne laufende Sandbox sonst nirgends gibt: Die Zeile zu
+                // einem gehaltenen Fluss kommt als eigener Rahmen und nicht
+                // als Bytes, und jeder Client entscheidet selbst, ob er sie
+                // zwischen die Bytes schreibt (die Kommandozeile) oder eigene
+                // Fläche dafür hat (die Oberfläche). Sie nennt den Fake, weil
+                // hinter ihr kein Fluss steht.
+                .and_then(|()| {
+                    out.send(v1::TerminalOutput {
+                        output: Some(Output::Notice(
+                            "[humanitl] fake daemon: a request would wait for you here".to_owned(),
+                        )),
+                    })
+                })
             }
             // `Ctrl+D` beendet die Sitzung. Der echte Dienst endet, wenn der
             // Agent endet; der Fake hat keinen Agenten und braucht trotzdem

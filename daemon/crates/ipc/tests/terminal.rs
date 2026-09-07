@@ -210,6 +210,12 @@ fn refuse_under_ci(why: &str, remedy: &str) -> bool {
 struct Client {
     input: mpsc::Sender<v1::TerminalInput>,
     output: std::pin::Pin<Box<dyn tokio_stream::Stream<Item = v1::TerminalOutput> + Send>>,
+    /// Jede Hinweiszeile, die dieser Client bekommen hat.
+    ///
+    /// Sie kommt als eigener Rahmen und nicht als Bytes; wer die Bytes
+    /// abschreibt (`wait_for`), sieht sie deshalb nie. Genau das ist die
+    /// Zusage, und deshalb steht sie hier getrennt.
+    notices: Vec<String>,
 }
 
 impl Client {
@@ -219,7 +225,11 @@ impl Client {
         let hub = hub.clone();
         let output =
             humanitl_ipc::terminal::serve(move |_| Ok(hub), Box::pin(ReceiverStream::new(rx)));
-        let client = Self { input: tx, output };
+        let client = Self {
+            input: tx,
+            output,
+            notices: Vec::new(),
+        };
         client.blocking_open(cols, rows, read_only);
         client
     }
@@ -273,11 +283,38 @@ impl Client {
             let Ok(Some(output)) = tokio::time::timeout_at(until, self.output.next()).await else {
                 return false;
             };
-            if let Some(v1::terminal_output::Output::Data(data)) = output.output {
-                seen.push_str(&String::from_utf8_lossy(&data));
-            }
+            self.take(output, seen);
         }
         true
+    }
+
+    /// Liest, bis eine Hinweiszeile `needle` enthält.
+    ///
+    /// Bytes, die dabei vorbeikommen, landen in `seen`: Ein Test, der auf
+    /// einen Hinweis wartet, soll die Ausgabe des Agenten nicht verschlucken.
+    async fn wait_for_notice(&mut self, seen: &mut String, needle: &str) -> bool {
+        let until = tokio::time::Instant::now() + WAIT;
+        while !self.notices.iter().any(|line| line.contains(needle)) {
+            if tokio::time::Instant::now() >= until {
+                return false;
+            }
+            let Ok(Some(output)) = tokio::time::timeout_at(until, self.output.next()).await else {
+                return false;
+            };
+            self.take(output, seen);
+        }
+        true
+    }
+
+    /// Schreibt eine Nachricht dorthin, wo sie hingehört.
+    fn take(&mut self, output: v1::TerminalOutput, seen: &mut String) {
+        match output.output {
+            Some(v1::terminal_output::Output::Data(data)) => {
+                seen.push_str(&String::from_utf8_lossy(&data));
+            }
+            Some(v1::terminal_output::Output::Notice(line)) => self.notices.push(line),
+            _ => {}
+        }
     }
 
     /// Wartet, bis der Dienst die Größe `cols` mal `rows` bestätigt.
@@ -301,15 +338,12 @@ impl Client {
                 return false;
             };
             match output.output {
-                Some(v1::terminal_output::Output::Data(data)) => {
-                    seen.push_str(&String::from_utf8_lossy(&data));
-                }
                 Some(v1::terminal_output::Output::Resize(size))
                     if size.cols == cols && size.rows == rows =>
                 {
                     return true;
                 }
-                _ => {}
+                other => self.take(v1::TerminalOutput { output: other }, seen),
             }
         }
     }
@@ -676,7 +710,87 @@ async fn the_notice_switch_silences_the_stream() {
         );
         assert!(
             !seen.contains("waiting for you"),
-            "and nothing of the daemon: {seen:?}"
+            "and nothing of the daemon in the bytes: {seen:?}"
+        );
+        assert!(
+            client.notices.is_empty(),
+            "and no notice of the daemon at all: {:?}",
+            client.notices
+        );
+    })
+    .await;
+}
+
+/// Der Hinweis steht neben den Bytes des Agenten, nie darin (HUM-042).
+///
+/// **Warum das eine eigene Messung ist.** Bis zum 2026-09-07 schrieb der
+/// Daemon die Zeile in denselben Bytestrom, den der Agent malt. Am Terminal
+/// eines Menschen ist das eine Bequemlichkeit; in der Oberfläche, die den
+/// Agenten in einem Emulator zeigt und den Hinweis ohnehin als Streifen über
+/// dem Terminal führt, stand die Zeile mitten im Bild eines Vollbild-TUI --
+/// gemeldet von einem Menschen vor dem Bildschirm, nicht von einem Test. Seit
+/// dem Umbau ist die Zeile ein eigener Rahmen: Wer eine Anzeige dafür hat,
+/// benutzt sie, wer am Terminal sitzt, schreibt sie selbst dazwischen.
+///
+/// Die Abwesenheit in den Bytes hängt an einer Anwesenheit: Erst muss der
+/// Hinweis als Rahmen da sein, dann erst wird behauptet, dass er in den Bytes
+/// fehlt (`backlog/CONVENTIONS.md` 4.22).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_notice_stands_beside_the_bytes_and_never_inside_them() {
+    let Some((_fixture, service, mut client, seen)) = attacking_session(
+        "printf 'READY\\r\\n'; while IFS= read -r line; do printf 'GOT %s\\r\\n' \"$line\"; done",
+    )
+    .await
+    else {
+        return;
+    };
+    let hub = service.terminal("").expect("the session runs");
+    with_session(service, async move {
+        let mut seen = seen;
+        assert!(
+            client.wait_for(&mut seen, "READY").await,
+            "the agent starts: {seen:?}"
+        );
+        assert!(hub.notices(), "this session writes notices");
+
+        // Erst an eine Grenze: Steht der Filter mitten in einer Folge des
+        // Agenten, wartet der Hinweis auf den nächsten `feed`, und dieser Test
+        // spräche dann über das Warten statt über den Weg.
+        let deadline = tokio::time::Instant::now() + WAIT;
+        while !hub.at_boundary() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            hub.at_boundary(),
+            "the agent stands at a boundary, so the notice goes out at once"
+        );
+
+        hub.notice("[humanitl] request held: GET example.com/ · waiting for you");
+        assert!(
+            client.wait_for_notice(&mut seen, "waiting for you").await,
+            "the notice arrives as its own frame: {:?}",
+            client.notices
+        );
+        assert_eq!(
+            client.notices,
+            vec!["[humanitl] request held: GET example.com/ · waiting for you".to_owned()],
+            "sanitised, once, and without framing of its own"
+        );
+
+        // Und die Bytes des Agenten laufen weiter, ohne die Zeile getragen zu
+        // haben. Das Echo danach ist der Beleg, dass der Strom überhaupt noch
+        // etwas liefert -- sonst wäre die Abwesenheit unten die Abwesenheit
+        // von allem.
+        client
+            .send(v1::terminal_input::Input::Data(b"ping\n".to_vec()))
+            .await;
+        assert!(
+            client.wait_for(&mut seen, "GOT ping").await,
+            "the stream still carries the agent: {seen:?}"
+        );
+        assert!(
+            !seen.contains("waiting for you"),
+            "and no byte of the notice was in it: {seen:?}"
         );
     })
     .await;
@@ -1106,9 +1220,18 @@ async fn a_pending_notice_still_leaves_when_the_agent_ends() {
     );
 
     hub.notice("[humanitl] request held: GET example.com/ · waiting for you");
+    // Und er wartet wirklich: Was in den nächsten 300 ms kommt, wird
+    // eingesammelt, und ein Hinweis ist nicht darunter. Der Agent schreibt
+    // nichts mehr, also wäre alles, was jetzt käme, der Hinweis; eine kurze
+    // Frist reicht, weil ein Rahmen, der hinausgeht, sofort hinausgeht.
+    let until = tokio::time::Instant::now() + Duration::from_millis(300);
+    while let Some(output) = client.next_at(until).await {
+        client.take(output, &mut seen);
+    }
     assert!(
-        !seen.contains("waiting for you"),
-        "and it did wait: {seen:?}"
+        client.notices.is_empty(),
+        "the notice waits for the boundary: {:?}",
+        client.notices
     );
 
     // Erst das Ende der Sitzung, dann das Warten: Der Hinweis geht in
@@ -1117,12 +1240,17 @@ async fn a_pending_notice_still_leaves_when_the_agent_ends() {
     // liesse den Empfaenger fallen und die Sandbox stehen.
     drain(service.stream(stop())).await;
     assert!(
-        client.wait_for(&mut seen, "waiting for you").await,
-        "the end of the session releases it: {seen:?}"
+        client.wait_for_notice(&mut seen, "waiting for you").await,
+        "the end of the session releases it: {:?}",
+        client.notices
     );
     assert!(
         !seen.contains('\u{1b}'),
         "and the half-written sequence of the agent never left: {seen:?}"
+    );
+    assert!(
+        !seen.contains("waiting for you"),
+        "and it never went into the bytes of the agent: {seen:?}"
     );
 }
 
