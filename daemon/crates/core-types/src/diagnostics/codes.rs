@@ -785,6 +785,13 @@ registry! {
     CLI_004 => "cli", "Aufruf ungültig", "#cli_004",
         "Der Aufruf ist ungültig: unbekanntes Unterkommando, fehlendes Argument, widersprüchliche Schalter.",
         "`CopyCommand` mit der Form, die gilt.";
+    /// Die Kommandozeile konnte nicht einmal anfangen: Die Laufzeit, die jeder
+    /// Aufruf braucht, liess sich auf diesem Rechner nicht bauen (keine
+    /// Threads, kein `epoll`). Kein Fehler des Aufrufers und keiner des
+    /// Daemons, deshalb ein eigener Code statt `CLI_004` oder `CLI_001`.
+    CLI_006 => "cli", "Die Laufzeit liess sich nicht starten", "#cli_006",
+        "Die Kommandozeile konnte ihre Laufzeit nicht bauen; der Grund des Betriebssystems steht im Text.",
+        "Kein Fix: Der Text nennt, was das Betriebssystem gemeldet hat.";
     /// Die Arbeitsumgebung bietet keinen Platz fuer ein Anzeigesymbol
     /// (GNOME ohne die AppIndicator-Erweiterung). Die Anwendung laeuft
     /// weiter, der Zaehler steht im Fenstertitel; der Fix verweist auf die
