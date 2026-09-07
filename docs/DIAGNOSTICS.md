@@ -951,6 +951,14 @@ Aufruf ungültig
 
 **Fix.** `CopyCommand` mit der Form, die gilt.
 
+#### CLI_006
+
+Die Laufzeit liess sich nicht starten
+
+**Auslöser.** Die Kommandozeile konnte ihre Laufzeit nicht bauen; der Grund des Betriebssystems steht im Text.
+
+**Fix.** Kein Fix: Der Text nennt, was das Betriebssystem gemeldet hat.
+
 #### CLI_005
 
 Es läuft schon eine Sitzung

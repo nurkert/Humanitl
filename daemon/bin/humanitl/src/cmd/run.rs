@@ -610,10 +610,14 @@ fn where_decisions_happen(ask_mode: AskMode) -> String {
         AskMode::None => {
             "[humanitl] nobody is asked: a request without a rule is blocked right away".to_owned()
         }
-        // Unerreichbar: `refuse_terminal_ask` hat vorher abgebrochen. Die Zeile
-        // steht trotzdem da, damit ein künftiger Zweig nicht stillschweigend
-        // nichts sagt.
-        AskMode::Terminal => "[humanitl] --ask terminal is not available yet".to_owned(),
+        // Seit HUM-067 ist dieser Zweig der Normalfall und nicht mehr
+        // unerreichbar: Der Kasten steht in genau diesem Terminal. Bis zum
+        // 2026-09-07 sagte die Zeile hier „--ask terminal is not available
+        // yet" -- eine Auskunft, die der Lauf im selben Atemzug widerlegte,
+        // weil er die Frage danach stellte.
+        AskMode::Terminal => "[humanitl] a request without a rule is asked right here; \
+                              without an answer it is blocked when the hold timeout is over"
+            .to_owned(),
     }
 }
 

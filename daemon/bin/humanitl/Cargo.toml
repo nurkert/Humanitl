@@ -43,3 +43,15 @@ tonic.workspace = true
 # Der Integrationstest startet einen echten gRPC-Dienst (den Fake-Daemon aus
 # HUM-005) auf einem eigenen Socket und ruft das gebaute Binary dagegen auf.
 shlex.workspace = true
+# `tests/tty.rs` braucht ein Pseudoterminal, um die Rueckgabe des Rohmodus zu
+# messen, und ein Signal, um den Lauf zu beenden. Die Merkmale stehen
+# vollstaendig da und nicht als Ergaenzung der Zeile oben: Cargo fasst beide
+# zusammen, aber wer hier liest, soll nicht zwei Listen im Kopf vereinigen
+# muessen.
+rustix = { version = "1.1", features = [
+  "stdio",
+  "termios",
+  "event",
+  "pty",
+  "process",
+] }

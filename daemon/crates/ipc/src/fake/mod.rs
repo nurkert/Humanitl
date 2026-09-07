@@ -1429,6 +1429,9 @@ fn argv_lines(work_dir: &str) -> Vec<v1::SandboxEvent> {
 }
 
 /// Spiegelt die Eingabe des Terminals zurück.
+/// `Ctrl+D`: das Byte, an dem die Sitzung des Fakes endet.
+const EOT: u8 = 0x04;
+
 async fn echo_terminal(
     mut input: BoxStream<v1::TerminalInput>,
     out: mpsc::UnboundedSender<v1::TerminalOutput>,
@@ -1453,6 +1456,22 @@ async fn echo_terminal(
                         )),
                     })
                 })
+            }
+            // `Ctrl+D` beendet die Sitzung. Der echte Dienst endet, wenn der
+            // Agent endet; der Fake hat keinen Agenten und braucht trotzdem
+            // einen Weg, an dem ein Client das Ende einer Sitzung üben kann --
+            // sonst gäbe es das Ende nur, indem der Client selbst geht, und
+            // das ist ein anderer Ablauf (`daemon/bin/humanitl/tests/tty.rs`).
+            // `EOT` ist dafür das ehrliche Byte: Es heißt „Ende der
+            // Übertragung", und ein Agent, der es bekäme, endete auch. Genau
+            // dieses eine Byte und nicht „irgendwo darin": Im Rohmodus kommt
+            // jeder Tastendruck einzeln, und ein eingefügter Text, in dem
+            // zufällig ein `0x04` steckt, soll keine Sitzung beenden.
+            Some(Input::Data(data)) if data == [EOT] => {
+                let _ = out.send(v1::TerminalOutput {
+                    output: Some(Output::Exit(v1::terminal_output::Exit { code: 0 })),
+                });
+                return;
             }
             Some(Input::Data(data)) => out.send(v1::TerminalOutput {
                 output: Some(Output::Data(data)),

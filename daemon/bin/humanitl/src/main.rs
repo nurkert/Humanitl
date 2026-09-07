@@ -31,13 +31,50 @@ use crate::cli::{Cmd, Invocation};
 use crate::cmd::{Context, EXIT_OK, EXIT_USER, Failure, ProfileMeaning, not_yet_failure};
 use crate::render::Renderer;
 
-#[tokio::main]
-async fn main() -> ExitCode {
-    let invocation = match cli::parse(std::env::args_os()) {
-        Ok(invocation) => invocation,
-        Err(error) => return report_usage(&error),
+fn main() -> ExitCode {
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            // Wie in [`report_usage`]: Ob `--json` gilt, steht in den rohen
+            // Argumenten, denn gelesen ist die Kommandozeile hier noch nicht.
+            let json = std::env::args_os().any(|arg| arg == "--json");
+            Renderer::new(json, 0, false).diagnostic(&runtime_diagnostic(&error));
+            return ExitCode::from(EXIT_USER);
+        }
     };
-    ExitCode::from(dispatch(invocation).await)
+    let code = runtime.block_on(async {
+        let invocation = match cli::parse(std::env::args_os()) {
+            Ok(invocation) => invocation,
+            Err(error) => return Err(report_usage(&error)),
+        };
+        Ok(dispatch(invocation).await)
+    });
+    // **Die Laufzeit wird nicht abgewartet, sondern im Hintergrund
+    // fallengelassen.** `sandbox attach` liest die Tastatur über
+    // `tokio::io::stdin`, und das ist ein blockierender Lesevorgang in einem
+    // Thread der Laufzeit. Beim gewöhnlichen Fallenlassen wartet die Laufzeit
+    // auf solche Threads: Nach `SIGTERM` gab der Befehl das Terminal zurück
+    // und blieb dann für immer stehen, weil niemand mehr eine Taste drückte
+    // (gemessen am 2026-09-07, `tests/tty.rs`). `run --ask terminal` hat das
+    // Problem nicht -- sein Leser ist ein eigener Thread mit `poll`
+    // (`cmd/moderate.rs`) --, und die Stelle hier gilt trotzdem für beide.
+    // Alles, was zu tun war, ist an dieser Stelle getan: die Sitzung ist
+    // gestoppt, das Terminal steht wieder, die Ausgabe ist geschrieben.
+    runtime.shutdown_background();
+    match code {
+        Ok(code) => ExitCode::from(code),
+        Err(exit) => exit,
+    }
+}
+
+/// Der Befund, wenn nicht einmal die Laufzeit entsteht.
+fn runtime_diagnostic(error: &std::io::Error) -> Diagnostic {
+    Diagnostic::builder(codes::CLI_006, Severity::Error)
+        .why(format!("humanitl could not start its runtime: {error}"))
+        .build()
 }
 
 /// Meldet, was `clap` beim Lesen der Kommandozeile gefunden hat.
