@@ -117,6 +117,15 @@ fn opencode_config_is_valid_json_and_points_to_llm() {
         doc["provider"][PROVIDER_ID]["npm"],
         Value::String("@ai-sdk/openai-compatible".to_owned())
     );
+    // Der Name, den ein Mensch sieht. Die Modellauswahl von OpenCode zeigt ihn
+    // und nicht die Kennung; das Kriterium von HUM-037 nennt genau diesen Satz,
+    // und der Demolauf misst nur die Kennung (`opencode models` druckt
+    // `humanitl-local/<modell>`). Ohne diese Zusicherung fiele der Anzeigename
+    // weg, ohne dass irgendwo etwas rot würde.
+    assert_eq!(
+        doc["provider"][PROVIDER_ID]["name"],
+        Value::String("Humanitl local LLM".to_owned())
+    );
     assert_eq!(
         doc["model"],
         Value::String("humanitl-local/qwen3".to_owned())
