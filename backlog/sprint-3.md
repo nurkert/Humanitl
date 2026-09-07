@@ -47,6 +47,7 @@ Voraussetzungen aus Sprint 0 bis 2: `humanitl-core` (HUM-004, HUM-063), `humanit
 | HUM-068 | Geführte Diagnostics im Sandbox-Screen | XL |
 | 12 | HUM-067 | `humanitl run` | XL |
 | 13 | HUM-046 | Demo-Skript M3 | L |
+| 14 | HUM-135 | Ein genanntes Kommando bekommt den Adapter nicht | M | HUM-037 |
 
 Demo-Ziel am Sprint-Ende (HUM-046): CI startet einen Ollama-Mock, `humanitl run --profile default` startet OpenCode, der erste Prompt geht per Passthrough ans Mock-LLM, der models.dev-Aufruf wird per Default-Regel geblockt, ein `webfetch` wird gehalten, per gRPC erlaubt, und die Antwort erscheint im Terminal-Stream.
 
@@ -2362,7 +2363,7 @@ Die Läufe sind das Deliverable. Zusätzlich: `mock_llm_streams_sse` (Mock isoli
 
 ### Akzeptanzkriterien
 - [x] `e2e-agent` grün in CI, Laufzeit unter 3 min, Zusicherungszahl stimmt. Gemessen: lokaler Lauf 3,8 s und 95 Zusicherungen (2026-09-06), und das letzte Drittel am selben Tag am Lauf `34034257162` über `92980c4`: Job `e2e-agent` grün in 59 s, also unter dem Drittel der zugesagten drei Minuten.
-- [ ] Lokal mit installiertem OpenCode: `m3_real_opencode` grün; ohne OpenCode meldet der Lauf `skip`, nie `pass`. **Zweite Hälfte gemessen, erste Hälfte offen — und der Grund ist seit dem 2026-09-07 ein genauer.** Der Lauf findet OpenCode über den Sandbox-Pfad, über den `PATH` des Aufrufers und über `M3_OPENCODE_BIN`, löst Symlinks auf und hängt, wenn das Binary außerhalb dessen liegt, was die Sandbox ohnehin sieht, genau sein Verzeichnis nur lesend ein: Profil `m3-opencode`, das mitgelieferte mit genau drei geänderten Zeilen: `name`, `extra_ro` und `PATH`. Der Schlüssel `sandbox.profile` geht dabei erst **vor Schritt 13** in die Konfiguration, und der Daemon wird dafür neu gestartet — er liest seine Konfiguration beim Start, und die Schritte 1 bis 12 sollen unter dem ausgelieferten Profil laufen, damit ein lokaler Lauf dasselbe misst wie CI (gemessen: Startzeile `profile default` für die Schritte davor, `profile m3-opencode` für Schritt 13). Damit startet das echte OpenCode in der Sandbox, und alle drei Garantien sind für diese Sitzung grün. **Was nicht geht, ist gemessen:** OpenCode spricht nicht mit dem lokalen Modell. Seine erste Anfrage ist `GET models.opencode.ai/api.json` und wird von der mitgelieferten Regel `…0009` geblockt — der Agent holt seinen Modellkatalog also trotz `OPENCODE_MODELS_PATH` und `OPENCODE_DISABLE_MODELS_FETCH` aus dem Netz. Was daraus folgt, ist nicht gemessen, sondern geschlossen: Ohne Katalog ist `humanitl-local/mock` für ihn kein auflösbares Modell. Gemessen ist, was er stattdessen tut — er fällt auf seinen eigenen Dienst zurück: elfmal `POST opencode.ai /zen/v1/chat/completions`, dazu dreimal `GET registry.npmjs.org /@opencode-ai%2fplugin`, alle nach 20 s als `timed_out`: Der Lauf fährt mit `--ask none`, also antwortet niemand, und jeder gehaltene Fluss läuft die volle Frist ab — der mit der `ask`-Regel `…0008` (npm) genauso wie der ganz ohne Regel. **Nicht die Ursache, und der Irrtum steht hier, damit ihn niemand zweimal macht:** Das npm-Paket `@ai-sdk/openai-compatible` steckt im Binary (`strings` zeigt den Import aus `/$bunfs/root/`), es wird nicht nachgeladen, und keine Anfrage danach steht in der Warteschlange. **Offen sind damit mindestens zwei Dinge**, beide am Adapter: der Katalog, den OpenCode trotz gesetzter Variablen holt (die Vermutung, belegbar am Binary: nur `ModelsDev.populate` hängt an der Variablen, `ModelsDev.refresh` daneben nicht), und daraus folgend die Auflösung des Modells `humanitl-local/mock`. Rot wird der Lauf, sobald das gefundene Binary in der Sandbox wirklich läuft. Auf dieser Maschine ist `~/.local/bin/opencode` ein Wrapper-Skript und kein Symlink — er öffnet seinerseits eine Sandbox, scheitert drinnen an `bwrap: Creating new namespace failed` und wird von der Probe übersprungen; der rote Lauf braucht hier `M3_OPENCODE_BIN=~/.opencode/bin/opencode`. In CI gibt es kein OpenCode, dort bleibt es beim `skip`.
+- [ ] Lokal mit installiertem OpenCode: `m3_real_opencode` grün; ohne OpenCode meldet der Lauf `skip`, nie `pass`. **Zweite Hälfte gemessen, erste Hälfte offen — und der Grund ist seit dem 2026-09-07 ein genauer.** Der Lauf findet OpenCode über den Sandbox-Pfad, über den `PATH` des Aufrufers und über `M3_OPENCODE_BIN`, löst Symlinks auf und hängt, wenn das Binary außerhalb dessen liegt, was die Sandbox ohnehin sieht, genau sein Verzeichnis nur lesend ein: Profil `m3-opencode`, das mitgelieferte mit genau drei geänderten Zeilen: `name`, `extra_ro` und `PATH`. Der Schlüssel `sandbox.profile` geht dabei erst **vor Schritt 13** in die Konfiguration, und der Daemon wird dafür neu gestartet — er liest seine Konfiguration beim Start, und die Schritte 1 bis 12 sollen unter dem ausgelieferten Profil laufen, damit ein lokaler Lauf dasselbe misst wie CI (gemessen: Startzeile `profile default` für die Schritte davor, `profile m3-opencode` für Schritt 13). Damit startet das echte OpenCode in der Sandbox, und alle drei Garantien sind für diese Sitzung grün. **Was nicht geht, ist gemessen:** OpenCode spricht nicht mit dem lokalen Modell. Seine erste Anfrage ist `GET models.opencode.ai/api.json` und wird von der mitgelieferten Regel `…0009` geblockt — der Agent holt seinen Modellkatalog also trotz `OPENCODE_MODELS_PATH` und `OPENCODE_DISABLE_MODELS_FETCH` aus dem Netz. Was daraus folgt, ist nicht gemessen, sondern geschlossen: Ohne Katalog ist `humanitl-local/mock` für ihn kein auflösbares Modell. Gemessen ist, was er stattdessen tut — er fällt auf seinen eigenen Dienst zurück: elfmal `POST opencode.ai /zen/v1/chat/completions`, dazu dreimal `GET registry.npmjs.org /@opencode-ai%2fplugin`, alle nach 20 s als `timed_out`: Der Lauf fährt mit `--ask none`, also antwortet niemand, und jeder gehaltene Fluss läuft die volle Frist ab — der mit der `ask`-Regel `…0008` (npm) genauso wie der ganz ohne Regel. **Nicht die Ursache, und der Irrtum steht hier, damit ihn niemand zweimal macht:** Das npm-Paket `@ai-sdk/openai-compatible` steckt im Binary (`strings` zeigt den Import aus `/$bunfs/root/`), es wird nicht nachgeladen, und keine Anfrage danach steht in der Warteschlange. **Die Ursache steht seit demselben Tag fest und hat ein eigenes Issue: HUM-135.** Der Agent bekommt die Variablen gar nicht. `daemon/crates/ipc/src/sandbox.rs:1815-1819` holt den Beitrag des Adapters nur, wenn der Aufrufer **kein** Kommando genannt hat — und Schritt 13 nennt den Pfad des Binaries. Gemessen mit `humanitl run --ask none -- /usr/bin/env`: In der Sandbox steht keine einzige `OPENCODE_*`-Variable. Ohne `OPENCODE_CONFIG` gibt es keinen Anbieter `humanitl-local`, ohne `OPENCODE_MODELS_PATH` und `OPENCODE_DISABLE_MODELS_FETCH` holt OpenCode seinen Katalog aus dem Netz, und der Rest folgt. Die frühere Vermutung über `ModelsDev.populate` und `ModelsDev.refresh` braucht es dafür nicht mehr. Rot wird der Lauf, sobald das gefundene Binary in der Sandbox wirklich läuft. Auf dieser Maschine ist `~/.local/bin/opencode` ein Wrapper-Skript und kein Symlink — er öffnet seinerseits eine Sandbox, scheitert drinnen an `bwrap: Creating new namespace failed` und wird von der Probe übersprungen; der rote Lauf braucht hier `M3_OPENCODE_BIN=~/.opencode/bin/opencode`. In CI gibt es kein OpenCode, dort bleibt es beim `skip`.
 - [x] Artefakte enthalten das Agenten-Transkript; `[humanitl] request held` und `[humanitl] request allowed` stehen darin. HUM-042 steht, also ist der Stolperdraht eine Zusicherung; die Hinweiszeilen liegen im zweiten Transkript (`attached.transcript`), weil `humanitl run` sie nicht sieht (CONVENTIONS 4.29).
 
 ### Stand (2026-09-04): Größe L, zwei Drittel trägt die Shell-Harness, der Rest wartet auf vier ungebaute Issues
@@ -4183,3 +4184,59 @@ im Doku-Kommentar des Melders, und `attention_test.dart` prüfte die Zeile in
 verlangt jetzt, dass `ui.sound` **nicht** mehr als Einstellung in der Tabelle
 steht und sehr wohl in der Tabelle der entfallenen Schlüssel — sonst wäre die
 Streichung durch eine Rückkehr ohne Leser still rückgängig zu machen.
+
+
+---
+
+## HUM-135 · Ein genanntes Kommando bekommt den Adapter nicht
+Sprint: 3 · Größe: M · Abhängigkeiten: HUM-037 · Blockiert: HUM-046 (letztes Kriterium), HUM-038 Schritt 1
+
+### Kontext
+`daemon/crates/ipc/src/sandbox.rs:1815-1819` entscheidet so:
+
+```rust
+let agent = if command.is_empty() {
+    self.agent_contribution(&config, &work_src, &profile)?
+} else {
+    AgentContribution::default()
+};
+```
+
+Wer ein Kommando nennt, bekommt vom Agent-Adapter **nichts**: keine Umgebung, keine Dateien, keine Berechtigungen. Gemessen am 2026-09-07 mit `humanitl run --ask none -- /usr/bin/env` gegen einen echten Daemon (Vorgabe `agent.adapter = "opencode"`): In der Sandbox steht das Env-Kit (Proxy, CA, `HUMANITL`, `HOME`, `PATH`) und **keine einzige** `OPENCODE_*`-Variable. Es fehlen damit `OPENCODE_CONFIG` (die `opencode.json` mit dem Anbieter `humanitl-local` und dem Modell dieser Sitzung), `OPENCODE_MODELS_PATH` und `OPENCODE_DISABLE_MODELS_FETCH` (der mitgelieferte Modellkatalog statt des Netzes), `OPENCODE_DISABLE_SHARE` und `OPENCODE_AUTO_SHARE` (kein Hochladen der Sitzung), `OPENCODE_DISABLE_AUTOUPDATE`, `OPENCODE_DISABLE_LSP_DOWNLOAD` und `OPENCODE_PERMISSION`.
+
+Das trifft den Normalfall: `humanitl run -- opencode` ist die Zeile, die ein Mensch schreibt, wenn er sieht, dass `run` ein Kommando hinter `--` nimmt. Er bekommt dann einen Agenten ohne die Konfiguration, die dieses Produkt für ihn baut — mit Durchreichregel im Regelsatz, aber ohne den Anbieter, der sie benutzt. Gemessen im M3-Demolauf: OpenCode holt seinen Katalog (`GET models.opencode.ai/api.json`, von der mitgelieferten Regel `…0009` geblockt) und fällt danach auf seinen eigenen Dienst zurück (elfmal `POST opencode.ai /zen/v1/chat/completions`), statt mit dem lokalen Modell zu sprechen.
+
+Dieselbe grobe Regel steht in der Kommandozeile, nur andersherum: `daemon/bin/humanitl/src/cmd/run.rs` bricht die Prüfung auf ein Vollbild-TUI mit `if !args.cmd.is_empty() { return Ok(()); }` ab. `humanitl run --ask terminal -- opencode` wird also **nicht** mit `CLI_002` abgelehnt, obwohl genau der Vollbild-Agent startet, dessen Frage-Kasten dort nicht zu sehen wäre. Beide Stellen meinen „das wirksame Kommando" und prüfen „wurde eines genannt".
+
+### Ziel
+Der Adapter trägt bei, wenn das wirksame Kommando sein Agent ist — ob es genannt wurde oder nicht. `humanitl run -- opencode`, `humanitl run -- /pfad/zu/opencode` und `humanitl run` ohne Kommando bekommen dieselbe Umgebung und dieselben Dateien; `humanitl run -- bash` bekommt weiterhin nichts. Die Kommandozeile entscheidet die TUI-Frage mit derselben Regel.
+
+### Nicht-Ziel
+Ein Adapter, der an einem beliebigen Kommando etwas erkennt (Heuristik über Argumente). Ein zweiter Adapter. Änderungen an dem, was der Adapter beiträgt.
+
+### Betroffene Pfade
+- `daemon/crates/sandbox/src/agent/mod.rs` (neue Methode am Trait), `daemon/crates/sandbox/src/agent/opencode.rs`
+- `daemon/crates/ipc/src/sandbox.rs` (die Bedingung oben)
+- `daemon/bin/humanitl/src/cmd/run.rs` (`refuse_terminal_ask`)
+- `daemon/crates/sandbox/tests/opencode_adapter.rs`, `daemon/bin/humanitl/tests/cli.rs`
+
+### Spezifikation
+`AgentAdapter::is_agent_command(&self, command: &[OsString]) -> bool`: wahr für ein leeres Kommando und wahr, wenn der Dateiname des ersten Elements dem Kommando des Adapters entspricht (`opencode`, auch als absoluter Pfad). Sonst falsch. Der Daemon ruft den Beitrag genau dann ab; die Kommandozeile lehnt `--ask terminal` genau dann ab, wenn der Adapter ein Vollbild-TUI ist **und** `is_agent_command` gilt.
+
+### Tests
+- `the_adapter_contributes_to_its_own_command_however_it_is_written`: leeres Kommando, `opencode`, `/usr/local/bin/opencode`, `./opencode` — jedes Mal Beitrag; `bash`, `sh -c 'opencode'`, `python3` — kein Beitrag.
+- `a_named_agent_still_gets_its_environment` (ipc): `Sandbox(Start)` mit `command = ["opencode"]` liefert `OPENCODE_CONFIG`, `OPENCODE_MODELS_PATH` und `OPENCODE_DISABLE_MODELS_FETCH` in der Umgebung der Sitzung.
+- `ask_terminal_is_cli_002_for_the_named_agent` (cli): `run --ask terminal -- opencode` endet `CLI_002`; `run --ask terminal -- bash` nicht.
+
+### Akzeptanzkriterien
+- [ ] `humanitl run --ask none -- /usr/bin/env` zeigt weiterhin keine `OPENCODE_*`-Variablen; mit `-- opencode --version` stehen sie in der Umgebung des Agenten (gemessen über `sandbox argv` oder den Sitzungsstart).
+- [ ] `humanitl run --ask terminal -- opencode` endet mit `CLI_002`, `-- bash` nicht.
+- [ ] Das M3-Demoskript erreicht mit `M3_OPENCODE_BIN` das lokale Modell: `m3_real_opencode` grün (HUM-046, letztes Kriterium).
+- [ ] `make check` grün.
+
+### Fallstricke
+- Der Vergleich läuft über den Dateinamen und nicht über den ganzen Pfad; ein Wrapper namens `opencode`, der etwas anderes startet, bekommt damit die Umgebung des Adapters. Das ist gewollt: Wer sein `opencode` selbst gebaut hat, will die Konfiguration dieses Produkts.
+- `sandbox.env` und das Profil stehen weiterhin über dem Adapter (`sandbox.rs`, Reihenfolge der Quellen); die Bedingung ändert nur, **ob** der Adapter beiträgt.
+
+### Referenzen
+`daemon/crates/ipc/src/sandbox.rs:1815-1819`; `daemon/bin/humanitl/src/cmd/run.rs` (`refuse_terminal_ask`); `backlog/sprint-3.md` HUM-037 und HUM-046; Messung am 2026-09-07 im M3-Lauf und mit `humanitl run --ask none -- /usr/bin/env`.
