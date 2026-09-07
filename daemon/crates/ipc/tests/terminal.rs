@@ -945,21 +945,21 @@ async fn one_writer_many_readers() {
     // `close` beendet den Strom, nicht die Sitzung: Der Platz des Schreibers
     // wird frei, und ein neuer Schreiber bekommt ihn.
     writer.send(v1::terminal_input::Input::Close(())).await;
-    assert!(
-        writer.next().await.is_none(),
-        "the closed stream ends without an exit"
-    );
+    // Was nach dem `close` noch kommen darf, steht in `drain_after_close`.
+    drain_after_close(&mut writer).await;
+
     // Der Platz gehört nicht diesem `Client`, sondern der Sitzung im Dienst:
     // `WriterSlot::drop` gibt ihn frei, während `session` das `Close`
     // abräumt, und weil Rust die eigenen Werte vor den Parametern fallen
     // lässt, ist er frei, bevor der Strom oben endet. Das Fallenlassen hier
     // schließt nur den eigenen Kanal.
     //
-    // Gewartet wird trotzdem, und der Grund steht eine Zeile höher: Die
-    // Zusicherung dort ist schwächer, als sie klingt, weil `Client::next`
-    // auch für die eigene Frist `None` liefert. Ist das `Close` nur langsam
-    // statt erledigt, hält die Sitzung den Platz noch -- und dann ist
-    // Wiederholen richtig, gegen dieselbe Frist wie jedes andere Warten hier.
+    // Gewartet wird trotzdem, und der Grund ist seit dem 2026-09-07 ein
+    // anderer: Dass der Strom endete, steht oben fest. Der Platz des
+    // Schreibers wird aber nicht von diesem Strom freigegeben, sondern von
+    // `WriterSlot::drop` im Dienst, und das läuft nebenher, während `session`
+    // das `Close` abräumt. Wiederholen ist deshalb richtig, gegen dieselbe
+    // Frist wie jedes andere Warten hier.
     drop(writer);
     let mut third = wait_for_writer_slot(&hub).await;
     let mut again = String::new();
@@ -967,8 +967,54 @@ async fn one_writer_many_readers() {
         third.wait_for(&mut again, "READY").await,
         "and the scrollback is still there after a re-attach: {again:?}"
     );
+    // **Und die Sitzung lebt wirklich.** Der Rückstand oben käme auch aus dem
+    // Ring einer Sitzung, die gerade endet: `session` schickt einem neuen
+    // Anschluss erst die Geometrie und dann das Ende, und beides sähe von
+    // hier aus wie ein Anschluss, der steht. Erst eine Zeile, die der Agent
+    // beantwortet, unterscheidet die beiden Fälle. Gefunden im Review dieses
+    // Standes mit der Mutation „`close` nimmt die Sitzung mit"
+    // (`hub.finish(0)`), gegen die dieser Test bis dahin grün blieb.
+    third
+        .send(v1::terminal_input::Input::Data(b"third\n".to_vec()))
+        .await;
+    assert!(
+        third.wait_for(&mut again, "GOT third").await,
+        "and the agent is still there, so the close did not take the session: {again:?}"
+    );
     })
     .await;
+}
+
+/// Liest den Strom eines Clients leer, nachdem er `close` geschickt hat.
+///
+/// **Was danach noch kommen darf, und was nicht.** Der Strom endet, aber was
+/// schon unterwegs war, kommt noch an: Der Agent hat geantwortet, und der
+/// Filter gibt seine Bytes stückweise frei. Nur solche Bytes sind legitim.
+/// Ein `Exit` hieße, der Schluss dieses Anschlusses hätte die Sitzung
+/// mitgenommen; ein `Diagnostic` wäre ein Befund, den niemand mehr liest;
+/// eine Geometrie käme von einem Leser, dessen Wünsche der Dienst verwirft.
+///
+/// Die erste Fassung verlangte `next()` sei `None` und ist am 2026-09-07 in
+/// der CI gefallen (`the closed stream ends without an exit`), lokal nie; die
+/// zweite ließ jeden Rahmen außer `Exit` still durch. Beides hat das Review
+/// dieses Standes gefunden.
+async fn drain_after_close(client: &mut Client) {
+    let ends_at = tokio::time::Instant::now() + WAIT;
+    let mut after_close = 0_usize;
+    while let Some(output) = client.next_at(ends_at).await {
+        assert!(
+            matches!(output.output, Some(v1::terminal_output::Output::Data(_))),
+            "only bytes already on their way may follow a close, but got {output:?}"
+        );
+        after_close += 1;
+    }
+    // Und der Strom endet zügig: Die Schleife hört auch auf, wenn die Frist
+    // abläuft, und ohne diese Frage wäre „der Strom endet" die Aussage eines
+    // Timeouts.
+    assert!(
+        tokio::time::Instant::now() < ends_at,
+        "the closed stream ended by itself and not by the deadline (after {after_close} frames)"
+    );
 }
 
 /// Wartet, bis der Platz des Schreibers frei ist, und nimmt ihn.
