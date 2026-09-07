@@ -553,7 +553,22 @@ impl Moderation {
             raw.leave();
         }
         let status = open_editor(&path);
+        // Zurück in den Rohmodus. Der alte Wächter fällt dabei, ohne etwas zu
+        // tun: `leave()` hat ihn entwaffnet. Bleibt der neue aus -- kein
+        // Terminal mehr, oder kein Deskriptor frei --, sagt der Kasten das,
+        // statt still mit Echo weiterzuzeichnen.
         self.raw = RawMode::enter();
+        if self.raw.is_none() {
+            self.say(
+                &Diagnostic::builder(codes::CLI_001, Severity::Warning)
+                    .why(
+                        "this terminal did not go back into raw mode after the editor; every key \
+                         is echoed twice from here on, and the box may look doubled"
+                            .to_owned(),
+                    )
+                    .build(),
+            );
+        }
         // Erst die Warteschlange des Kernels leeren, dann wieder lesen: Was
         // ein Mensch tippte, während der Editor sich beendete, liegt dort und
         // nicht im Kanal -- der Leser holte es sonst gleich danach und machte

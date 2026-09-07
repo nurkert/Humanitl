@@ -1171,3 +1171,94 @@ fn shim_binary() -> Result<PathBuf, String> {
         ))
     }
 }
+
+/// Der Adapter erkennt seinen Agenten am Dateinamen, nicht daran, ob jemand
+/// ihn genannt hat (HUM-135).
+///
+/// Bis zum 2026-09-07 trug er nur zu einem leeren Kommando bei, und
+/// `humanitl run -- opencode` startete den Agenten ohne seine Konfiguration.
+#[test]
+fn the_adapter_knows_its_own_command_however_it_is_written() {
+    let adapter = OpenCodeAdapter::new();
+    for named in ["opencode", "/usr/local/bin/opencode", "./opencode"] {
+        let command = vec![std::ffi::OsString::from(named)];
+        assert!(
+            adapter.is_agent_command(&command),
+            "{named} is the agent of this adapter"
+        );
+        // Mit Argumenten bleibt es derselbe Agent: Ein Aufruf ohne Argumente
+        // ist die Ausnahme und nicht die Regel.
+        let with_args = vec![
+            std::ffi::OsString::from(named),
+            std::ffi::OsString::from("run"),
+            std::ffi::OsString::from("say hello"),
+        ];
+        assert!(
+            adapter.is_agent_command(&with_args),
+            "{named} with arguments is still the agent"
+        );
+    }
+    assert!(
+        adapter.is_agent_command(&[]),
+        "an empty command is the agent: the adapter sets it itself"
+    );
+    for other in ["bash", "/bin/sh", "python3", "opencoded", "myopencode"] {
+        let command = vec![std::ffi::OsString::from(other)];
+        assert!(
+            !adapter.is_agent_command(&command),
+            "{other} is a command of its own"
+        );
+    }
+    // Das Argument entscheidet nicht mit: Wer `sh -c "opencode"` schreibt,
+    // startet eine Shell, und die bekommt die Umgebung des Agenten nicht.
+    let shell = vec![
+        std::ffi::OsString::from("sh"),
+        std::ffi::OsString::from("-c"),
+        std::ffi::OsString::from("opencode"),
+    ];
+    assert!(!adapter.is_agent_command(&shell));
+}
+
+/// Ein Kommando von der Kommandozeile ist keine Einstellung: Der Befund sagt
+/// das, und er schlägt nicht vor, `agent.command` zu ändern (HUM-135).
+#[test]
+fn a_command_from_the_caller_is_not_blamed_on_a_setting() {
+    let adapter = OpenCodeAdapter::new();
+    let missing = std::env::temp_dir().join("humanitl-there-is-no-such-agent");
+    let _ = std::fs::remove_file(&missing);
+
+    let from_setting = context(None)
+        .with_host_path(Some(OsString::from("/nonexistent")))
+        .with_command_override(Some(vec![OsString::from(missing.clone())]));
+    let finding = adapter
+        .preflight(&from_setting)
+        .into_iter()
+        .find(|diagnostic| diagnostic.code.as_str() == "AGENT_002")
+        .expect("a command that is not there is a finding");
+    assert!(finding.why.contains("agent.command"), "{}", finding.why);
+    assert!(
+        matches!(
+            finding.fix,
+            Some(humanitl_core::FixAction::ChangeSetting { .. })
+        ),
+        "the setting is the way out when the setting named it"
+    );
+
+    let from_caller = context(None)
+        .with_host_path(Some(OsString::from("/nonexistent")))
+        .with_command_from_caller(vec![OsString::from(missing)]);
+    let finding = adapter
+        .preflight(&from_caller)
+        .into_iter()
+        .find(|diagnostic| diagnostic.code.as_str() == "AGENT_002")
+        .expect("a command that is not there is a finding");
+    assert!(
+        !finding.why.contains("agent.command"),
+        "the caller wrote the command, not the setting: {}",
+        finding.why
+    );
+    assert!(
+        finding.fix.is_none(),
+        "changing a setting nobody set would not help"
+    );
+}

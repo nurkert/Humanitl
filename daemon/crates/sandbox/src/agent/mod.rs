@@ -108,6 +108,14 @@ pub struct AgentContext {
     pub llm: LlmConfig,
     /// Ersetzt die Kommandozeile des Adapters vollständig (`agent.command`).
     pub agent_command_override: Option<Vec<OsString>>,
+    /// Woher dieses Kommando kommt: aus `agent.command` oder von der
+    /// Kommandozeile des Aufrufers.
+    ///
+    /// Ein Befund über ein Kommando, das der Aufrufer selbst hinter `--`
+    /// geschrieben hat, darf nicht `agent.command` anfassen -- die Einstellung
+    /// hat damit nichts zu tun, und ein Vorschlag, sie zu ändern, änderte auch
+    /// nichts (HUM-135).
+    pub agent_command_from_caller: bool,
     /// Der Port, auf dem die Bridge in der Sandbox lauscht
     /// ([`crate::profile::PROXY_PORT`]).
     pub proxy_port: u16,
@@ -185,6 +193,7 @@ impl AgentContext {
             work_dir_sandbox: PathBuf::from(WORK_DIR_SANDBOX),
             llm,
             agent_command_override: None,
+            agent_command_from_caller: false,
             proxy_port: crate::profile::PROXY_PORT,
             ca_path_sandbox: PathBuf::from(crate::profile::CA_CERT_DST),
             language: Language::En,
@@ -208,6 +217,19 @@ impl AgentContext {
     #[must_use]
     pub fn with_command_override(mut self, command: Option<Vec<OsString>>) -> Self {
         self.agent_command_override = command;
+        self.agent_command_from_caller = false;
+        self
+    }
+
+    /// Setzt das Kommando, das der Aufrufer hinter `--` genannt hat.
+    ///
+    /// Dasselbe Feld wie [`AgentContext::with_command_override`], aber mit der
+    /// Herkunft: Die Vorprüfung prüft dann den Pfad, der wirklich startet, und
+    /// ihre Befunde reden nicht von einer Einstellung, die niemand gesetzt hat.
+    #[must_use]
+    pub fn with_command_from_caller(mut self, command: Vec<OsString>) -> Self {
+        self.agent_command_override = Some(command);
+        self.agent_command_from_caller = true;
         self
     }
 
@@ -403,6 +425,34 @@ pub trait AgentAdapter: Send + Sync {
     /// [`humanitl_core::Severity::Blocking`] verhindert den Start.
     fn preflight(&self, ctx: &AgentContext) -> Vec<Diagnostic>;
 
+    /// Das Programm, das dieser Adapter begleitet, ohne Pfad.
+    ///
+    /// Daran wird entschieden, ob ein genanntes Kommando der Agent dieses
+    /// Adapters ist ([`AgentAdapter::is_agent_command`]).
+    fn program(&self) -> &'static str;
+
+    /// Wahr, wenn dieses Kommando der Agent dieses Adapters ist.
+    ///
+    /// Ein leeres Kommando ist er immer: Dann setzt der Adapter es selbst.
+    /// Sonst entscheidet der Dateiname, nicht der Pfad -- `opencode`,
+    /// `/usr/local/bin/opencode` und `./opencode` sind derselbe Agent, und wer
+    /// `bash` startet, ist keiner.
+    ///
+    /// **Warum am Kommando und nicht daran, ob eines genannt wurde.** Bis zum
+    /// 2026-09-07 trug der Adapter nur bei, wenn niemand ein Kommando nannte;
+    /// `humanitl run -- opencode` -- die Zeile, die ein Mensch schreibt --
+    /// startete den Agenten damit ohne seine Konfiguration: ohne den Anbieter
+    /// für die Durchreiche, ohne den mitgelieferten Modellkatalog, ohne die
+    /// abgeschaltete Sitzungsfreigabe (HUM-135).
+    fn is_agent_command(&self, command: &[std::ffi::OsString]) -> bool {
+        let Some(first) = command.first() else {
+            return true;
+        };
+        std::path::Path::new(first)
+            .file_name()
+            .is_some_and(|name| name == self.program())
+    }
+
     /// Wahr, wenn der Agent ein Vollbild-TUI ist.
     ///
     /// `humanitl run --ask terminal` verweigert dann den Dienst mit `CLI_002`
@@ -410,6 +460,38 @@ pub trait AgentAdapter: Send + Sync {
     /// die Frage nach einer Entscheidung nicht zu sehen
     /// (`backlog/CONVENTIONS.md` 4.10, HUM-067).
     fn is_fullscreen_tui(&self) -> bool;
+}
+
+/// Wahr, wenn dieses Kommando der Agent dieser Konfiguration ist.
+///
+/// Eine Stelle für beide Seiten: Der Daemon entscheidet damit, ob der Adapter
+/// beiträgt, und `humanitl sandbox argv` zeigt dasselbe. Standen die beiden
+/// auseinander, zeigte die Vorschau eine Umgebung, die der Start nicht baut
+/// (HUM-135).
+///
+/// Zwei Namen zählen: der des Adapters (`opencode`) und der aus
+/// `agent.command`, denn wer sein Programm dort benennt, startet mit
+/// `humanitl run` genau dieses.
+#[must_use]
+pub fn command_is_the_agent(config: &humanitl_config::Config, command: &[OsString]) -> bool {
+    if AdapterRegistry::builtin()
+        .get(&config.agent.adapter)
+        .is_some_and(|adapter| adapter.is_agent_command(command))
+    {
+        return true;
+    }
+    let Some(own) = config
+        .agent
+        .command
+        .as_ref()
+        .and_then(|parts| parts.first())
+    else {
+        return false;
+    };
+    let Some(named) = command.first() else {
+        return false;
+    };
+    std::path::Path::new(named).file_name() == std::path::Path::new(own).file_name()
 }
 
 /// Die eingebauten Adapter.
