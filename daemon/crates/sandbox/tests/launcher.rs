@@ -85,9 +85,12 @@ struct Fixture {
     state: PathBuf,
 }
 
+mod common;
+
 fn write_executable(path: &Path, content: &str) {
-    std::fs::write(path, content).expect("write script");
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    // Über `common::write_program`, damit kein Deskriptor dieses Prozesses auf
+    // der Datei offen bleibt, wenn sie gleich ausgeführt wird (HUM-134).
+    common::write_program(path, content);
 }
 
 fn bind_socket(path: &Path) -> UnixListener {

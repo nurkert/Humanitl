@@ -80,6 +80,10 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+/// Werkzeug, das nur die Unit-Tests dieser Crate benutzen (HUM-134).
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub mod agent;
 pub mod bridge_env;
 pub mod bwrap;
