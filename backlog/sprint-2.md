@@ -273,7 +273,7 @@ impl RuleSet {
 
 ### Akzeptanzkriterien
 - [x] `cargo test -p humanitl-rules` grün, 42 Host-Fälle plus alle Parse- und Eval-Tests vorhanden. (44 Host-Fälle, 32 Parse-, 26 Eval-Tests)
-- [ ] `cargo clippy -p humanitl-rules -- -D warnings` sauber; Crate hat keine Abhängigkeit auf tokio, std::fs oder std::net außer `IpAddr`. Abhängigkeiten belegt (nur `IpAddr`, kein tokio, kein `std::fs`); die Clippy-Hälfte ist lokal nicht prüfbar, nur die CI zeigt sie.
+- [x] `cargo clippy -p humanitl-rules -- -D warnings` sauber; Crate hat keine Abhängigkeit auf tokio, std::fs oder std::net außer `IpAddr`. **Beide Hälften gemessen am 2026-09-07.** `cargo clippy -p humanitl-rules --all-targets -- -D warnings` endet mit 0 (die Clippy-Hälfte war beim Schreiben dieses Kastens lokal nicht prüfbar, weil die Komponente fehlte; sie ist da). Die Abhängigkeiten stehen unverändert: aus `std::net` genau `IpAddr` (`daemon/crates/rules/src/host.rs:12`, mit der Begründung in Zeile 174), kein `tokio`, kein `std::fs`.
 - [x] `parse_rules` liefert für eine Datei mit `host: "*foo.com"` genau ein `Diagnostic` mit `code == RULES_003` und `why` enthält den Muster-String.
 - [x] Escape-Test 4 (`tests/escape/esc-4.sh`) grün in CI. (heute `esc-4-rules.sh`, seit HUM-114 24 von 24: acht Fälle gegen die Engine und den Proxy, fünfzehn über `humanitl rules test` gegen den Daemon des Laufs, dazu `llm_cli_unreachable`)
 - [x] Doku-Kommentar auf jedem öffentlichen Item, `cargo doc --no-deps` ohne Warnungen.
