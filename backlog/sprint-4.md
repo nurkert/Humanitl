@@ -20,7 +20,7 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-053 | Packaging deb, AppImage, systemd | M | HUM-070 |
 | HUM-054 | Golden- und Widget-Tests | M | HUM-047, HUM-052, HUM-069 |
 | HUM-055 | Demo-Skript M4 | S | alle oben |
-| HUM-134 | `find_program_reads_path_from_the_given_env_only` wird unter Last rot | S | — |
+| HUM-134 | Zwei Tests werden unter Last rot | S | — |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -2015,7 +2015,7 @@ Die CLI benutzt in beiden Fällen `out_path`.
 
 ---
 
-## HUM-134 · `find_program_reads_path_from_the_given_env_only` wird unter Last rot
+## HUM-134 · Zwei Tests werden unter Last rot
 Sprint: 4 · Größe: S · Abhängigkeiten: — · Blockiert: eine verlässlich grüne Pipeline
 
 ### Kontext
@@ -2027,6 +2027,8 @@ runs: Diagnostic { code: SANDBOX_001, why: "cannot run /tmp/.tmpyk03Mt/bwrap --v
 ```
 
 Derselbe Test lief unmittelbar danach fünfmal einzeln grün. Der Fehler ist `ETXTBSY` und damit ein bekanntes Rennen zwischen `fork` und `exec` in einem Testbinary mit mehreren Threads: Der Test schreibt in `crates/sandbox/src/bwrap.rs:1305-1309` ein ausführbares Skript und startet es sofort (`query_version`). Forkt ein anderer Test desselben Binaries genau in dem Augenblick, in dem die Datei noch zum Schreiben offen ist, erbt sein Kind den Deskriptor; bis das Kind `exec` erreicht, hält es die Datei zum Schreiben offen, und unser `exec` bekommt `ETXTBSY`. `O_CLOEXEC` hilft nicht, weil das Fenster genau zwischen `fork` und `exec` liegt.
+
+**Ein zweiter Fall am selben Tag, andere Stelle, dieselbe Art:** `cargo test -p humanitld --test daemon_end_to_end` fiel einmal mit `the_configured_llm_endpoint_becomes_a_passthrough_rule` und `DAEMON_001: cannot reach the daemon on /tmp/hum0CSC7p/run/humanitl/daemon.sock: transport error`; derselbe Test lief danach dreimal einzeln und einmal als ganze Datei (10 von 10) grün. Auch das ist ein Rennen unter Last und keine Aussage über den Daemon; wer dieses Issue baut, sieht sich beide Stellen an, denn eine Pipeline, die ohne Grund rot wird, kostet jedes Mal dieselbe Suche.
 
 Das Rennen ist ein Fehler des Tests, nicht des Codes: `BwrapBackend::find_program` und `query_version` tun das Richtige, und ein Nutzer trifft die Lage nicht. Rot wird davon aber die Pipeline, und ein Lauf, der ohne Grund rot ist, kostet jedes Mal die Suche nach einer Ursache, die es nicht gibt.
 
@@ -2047,6 +2049,7 @@ Der bestehende Test bleibt; er ist die Messung. Zusätzlich ein Lauf mit `--test
 
 ### Akzeptanzkriterien
 - [ ] Zwanzig Läufe `cargo test -p humanitl-sandbox --lib -- --test-threads=8` hintereinander sind grün.
+- [ ] Zwanzig Läufe `cargo test -p humanitld --test daemon_end_to_end` hintereinander sind grün, oder der zweite Fall ist als eigene Ursache benannt und mit einer eigenen Messung erledigt.
 - [ ] Der Test prüft weiterhin `SANDBOX_001` für einen leeren Pfad, das Finden im zweiten `PATH`-Eintrag, `query_version` und `SANDBOX_002` für eine zu alte Version.
 - [ ] `make check` grün.
 
