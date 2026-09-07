@@ -25,6 +25,9 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-137 | Ein Agent, den es nicht gibt, faellt lautlos aus | S | HUM-040, HUM-067 |
 | HUM-138 | Geblockter Verkehr ausserhalb von HTTP ist unsichtbar | M | HUM-002, HUM-021 |
 | HUM-139 | Die Vorpruefung sucht den Agenten im PATH des Hosts | S | HUM-037, HUM-135 |
+| HUM-140 | Modell-Endpunkt und Zugangsschluessel in der Oberflaeche | L | HUM-062, HUM-069, HUM-039 |
+| HUM-141 | Das Mock-Modell laesst keinen Werkzeugaufruf zu | M | HUM-046, HUM-067 |
+| HUM-142 | Der Daemon wartet ohne Frist auf einen Agenten, der nicht gehen will | M | HUM-011, HUM-042 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -2019,6 +2022,148 @@ Die CLI benutzt in beiden Fällen `out_path`.
 
 ---
 
+## HUM-142 · Der Daemon wartet ohne Frist auf einen Agenten, der nicht gehen will
+Sprint: 4 · Größe: M · Abhängigkeiten: HUM-011, HUM-042 · Blockiert: jeden Abschied, an dem ein Vollbild-TUI beteiligt ist
+
+### Kontext
+Am 2026-09-07 blieb der M3-Lauf zweimal unabhängig an derselben Zeile stehen -- einmal beim Implementierer, einmal im Review --, und beide Male war die Ursache dieselbe: Die Sitzung mit dem echten OpenCode-TUI endete nicht.
+
+Der Ablauf, gemessen: `humanitl run` läuft in eine Zeitschranke und schickt sein `Sandbox(Stop)`; im Protokoll steht `[humanitl] sandbox stopping` und `[humanitl] stopping the session`. Der Daemon nimmt `SIGTERM`, schreibt `recording flushed` -- und hängt. Das bwrap-Kind lebte danach noch 8,5 Minuten weiter, im zweiten Fall über 19 Minuten, bis jemand es von Hand erschlug. Ein kopfloser Agent (`opencode run …`) stirbt an `SIGTERM`; ein Vollbild-TUI fängt das Signal selbst ab, und `--die-with-parent` hält das Kind dann an einem Daemon fest, der auf genau dieses Kind wartet.
+
+`SandboxHandle::terminate` eskaliert korrekt (`SIGTERM`, nach `KILL_GRACE` `SIGKILL`, `daemon/crates/sandbox/src/handle.rs`). Der Weg, den der Abschied des Daemons nimmt, kommt dort offenbar nicht an -- sonst wäre das Kind nach fünf Sekunden weg.
+
+Für einen Menschen heißt das: `humanitl` beenden und der Daemon bleibt stehen, mit einer Sandbox, die weiterläuft. Das ist die unangenehmste Sorte Fehler, weil sie erst auffällt, wenn man das Werkzeug wieder benutzen will (`CLI_005`: „Es läuft schon eine Sitzung").
+
+### Ziel
+Kein Abschied ohne Frist. Ein `Sandbox(Stop)` und das Ende des Daemons beenden die Sandbox in beschränkter Zeit, auch wenn der Agent das Signal ignoriert; danach ist kein bwrap-Kind mehr übrig, und ein neuer Start bekommt seine Sitzung.
+
+### Nicht-Ziel
+Den Agenten härter anfassen als nötig: Erst `SIGTERM` und die Frist, die er heute hat, dann `SIGKILL`. Die Frist selbst zu verkürzen -- fünf Sekunden sind richtig für einen Agenten, der aufräumt.
+
+### Betroffene Pfade
+- `daemon/crates/ipc/src/sandbox.rs` (der Weg von `Stop` zum Handle und das Ende der begleitenden Aufgaben)
+- `daemon/bin/humanitld/src/main.rs` (der Abschied auf `SIGTERM`)
+- `daemon/crates/sandbox/src/handle.rs` (`terminate`, `KILL_GRACE`)
+
+### Spezifikation
+Zu klären ist zuerst, wo der Abschied hängt: an `wait_exit` ohne Frist, an einer Aufgabe, die den `SandboxHandle` festhält, oder am Einsammeln des Kindes. Danach gilt: Jeder Weg, der eine Sandbox beendet, geht über `terminate(KILL_GRACE)`, und der Daemon wartet auf seine Aufgaben mit einer Frist, nach der er sie abbricht.
+
+### Tests
+- Ein Integrationstest mit einem Agenten, der `SIGTERM` ignoriert (`trap '' TERM; while :; do sleep 1; done`): `Stop` beendet ihn trotzdem, gemessen an seiner PID, in weniger als `KILL_GRACE` plus einer Sekunde. Mutationsprobe: die Eskalation entfernen, Test rot (er läuft dann in seine Frist).
+- Derselbe Agent, und statt `Stop` bekommt der Daemon `SIGTERM`: Auch dann ist das Kind weg, bevor der Test seine Frist erreicht.
+
+### Akzeptanzkriterien
+- [ ] Ein Agent, der `SIGTERM` ignoriert, ist nach `Stop` in beschränkter Zeit beendet.
+- [ ] Dasselbe gilt für das Ende des Daemons.
+- [ ] Der M3-Lauf braucht die Hilfskonstruktion `m3_end_sandbox_from` nicht mehr; sie verschwindet mit diesem Issue aus `tests/e2e/m3_agent_inside/run.sh`.
+- [ ] `make check` grün.
+
+### Fallstricke
+- `--die-with-parent` bindet das Kind an den Daemon: Wer den Daemon härter beendet, ohne das Kind zu erschlagen, lässt es verwaist zurück. Die Reihenfolge ist erst das Kind, dann der eigene Abschied.
+
+### Referenzen
+Zwei Messungen am 2026-09-07 (Implementierer und Review zu HUM-067); `daemon/crates/sandbox/src/handle.rs` (`terminate`, `KILL_GRACE`); `tests/e2e/m3_agent_inside/run.sh` (`m3_end_sandbox_from`).
+
+---
+
+## HUM-141 · Das Mock-Modell lässt keinen Werkzeugaufruf zu
+Sprint: 4 · Größe: M · Abhängigkeiten: HUM-046, HUM-067 · Blockiert: die letzte Hälfte des Akzeptanzkriteriums von HUM-067
+
+### Kontext
+Das Akzeptanzkriterium von HUM-067 lautet: „`humanitl run --profile llm-only` startet OpenCode, der Prompt erscheint, `webfetch` liefert dem Agenten `403` aus der Profilregel, Inferenz funktioniert." Drei der vier Teile sind seit dem 2026-09-07 im M3-Lauf gemessen. Der vierte nicht, und der Grund liegt nicht im Werkzeug, sondern im Modell des Laufs.
+
+Das Mock-Modell (`tests/e2e/mock_llm`) antwortet auf jede Frage mit denselben zehn Token (`tok0 … tok9`). Ein Agent bekommt daraus nie einen Werkzeugaufruf; OpenCode ruft `webfetch` deshalb nie auf, und das `403` der Profilregel kann ihn nie erreichen. Gemessen wird es heute nur mit einem Skript-Agenten, der selbst `curl` aufruft (Schritt 12 desselben Laufs) -- das zeigt die Regel, aber nicht den Weg durch den echten Agenten.
+
+Ebenso unerreicht: Was der echte Agent im TUI tut, wenn ein Mensch etwas tippt. Der Lauf kann tippen (`humanitl sandbox attach` reicht die Standardeingabe an das Pseudoterminal weiter, gemessen mit `/bin/sh`), aber OpenCode nimmt die Zeichen in den ersten Sekunden nicht an, und danach hat der Lauf keine Antwort des Modells, auf die es lohnte zu warten.
+
+### Ziel
+Das Mock-Modell kann auf Verlangen eine Antwort geben, die einen Werkzeugaufruf enthält -- im Format, das OpenCode über seinen `openai-compatible`-Anbieter erwartet. Damit misst der M3-Lauf die letzte Hälfte des Kriteriums: Der echte Agent ruft `webfetch` auf, die Regel des Profils antwortet mit `403`, und das steht im Transkript des Agenten.
+
+### Nicht-Ziel
+Ein Mock, der ein Sprachmodell nachbaut. Er braucht genau zwei Antworten: die zehn Token wie bisher und, wenn der Lauf es verlangt, einen Werkzeugaufruf mit einer URL, die die Regel blockt.
+
+### Betroffene Pfade
+- `tests/e2e/mock_llm/` (die Antwort mit `tool_calls`)
+- `tests/e2e/m3_agent_inside/run.sh` (Schritt 13: tippen, warten, das `403` im Transkript suchen)
+- `backlog/sprint-3.md`, Kriterium von HUM-067
+
+### Spezifikation
+Der Mock bekommt einen Schalter (Umgebungsvariable oder ein Pfad in der Anfrage), der die nächste Antwort als Werkzeugaufruf formt: ein `tool_calls`-Eintrag mit dem Namen des Werkzeugs und einem Argument, das eine URL trägt (`https://models.dev/api.json` oder ein anderes Ziel, das die mitgelieferte Regel blockt). Der Lauf tippt dem Agenten eine Frage ein, wartet auf den Aufruf und sucht danach im Transkript nach dem `403`.
+
+Die Eingabe an das TUI ist der zweite Teil: Sie geht über `humanitl sandbox attach`, weil `humanitl run` keine Tasten weiterreicht (`daemon/bin/humanitl/src/cmd/run.rs`, Kopf). Wie lange OpenCode nach seinem ersten Bild braucht, bis es Zeichen annimmt, ist zu messen und als Zahl in den Lauf zu schreiben, nicht zu raten.
+
+### Tests
+- Der M3-Lauf misst den neuen Fall; die Zahl der Zusicherungen des OpenCode-Zweigs steigt entsprechend.
+- Eine Selbstprüfung des Mocks für die neue Antwortform, wie für die bestehenden.
+
+### Akzeptanzkriterien
+- [ ] Der Mock kann eine Antwort mit Werkzeugaufruf liefern, und seine Selbstprüfung deckt sie ab.
+- [ ] Der M3-Lauf tippt dem echten Agenten eine Frage ein und sieht seinen Werkzeugaufruf.
+- [ ] Das `403` der Profilregel steht im Transkript des echten Agenten.
+- [ ] Das Kriterium von HUM-067 ist danach vollständig abgehakt.
+
+### Fallstricke
+- Ein Werkzeugaufruf, den OpenCode nicht versteht, sieht aus wie „keine Antwort"; die Form gehört gegen die Fassung geprüft, die im Lauf steckt (`opencode --version` steht im Transkript).
+- `OPENCODE_PERMISSION` steht in der Sandbox auf `{"webfetch":"ask"}`; ohne Menschen antwortet OpenCode darauf mit einer Verweigerung. Der Lauf setzt es für diesen Fall auf `allow`, sonst misst er die Berechtigung des Agenten statt die Regel von Humanitl.
+
+### Referenzen
+`backlog/sprint-3.md` HUM-067; `tests/e2e/m3_agent_inside/run.sh` Schritt 12 und 13; Messungen vom 2026-09-07.
+
+---
+
+## HUM-140 · Modell-Endpunkt und Zugangsschlüssel in der Oberfläche
+Sprint: 4 · Größe: L · Abhängigkeiten: HUM-062, HUM-069, HUM-039 · Blockiert: jeden Nutzer, dessen Modell nicht ohne Schlüssel antwortet
+
+### Kontext
+Am 2026-09-07 hat der Nutzer die Oberfläche einem Kollegen gezeigt und dabei gefragt, wo er seinen eigenen Anschluss für das Modell und seinen Zugangsschlüssel hinterlegt. Die ehrliche Antwort war: nirgends.
+
+Was es gibt, steht in `docs/CONFIG.md`: `llm.endpoint` (ein OpenAI-kompatibler Endpunkt, Stufe `basic`), `llm.models` und `llm.passthrough_paths`. Alle drei nur in `config.toml`, von Hand. Was es nicht gibt:
+
+* **Keinen Zugangsschlüssel.** Im Schema kommt keiner vor. Die Annahme war „ein lokales Modell im eigenen Netz braucht keinen"; `LLM_006` warnt sogar, wenn der Endpunkt nicht in einem privaten Netz liegt. Für einen Anbieter mit Schlüssel fehlt damit alles: der Ort, an dem er liegt, der Weg in die Sandbox und die Maskierung überall dort, wo er sonst auftauchte.
+* **Keinen Ort in der Oberfläche.** Der Settings-Screen ist HUM-069; bis dahin antwortet `SetConfig` mit `unimplemented`, und die Anwendung kann Konfiguration lesen, aber nichts schreiben.
+
+Die Anforderung des Nutzers, in seinen Worten: „das muss auch bitte sehr einfach dann in der GUI gehen, dass das hier dann einfach funktioniert."
+
+### Ziel
+Ein Mensch trägt in der Oberfläche seinen Endpunkt, sein Modell und, wenn nötig, seinen Zugangsschlüssel ein, drückt einmal auf „Prüfen" und sieht, ob der Endpunkt antwortet und welche Modelle er anbietet. Der Schlüssel liegt danach an einem Ort, den weder Log noch Transkript noch Aufzeichnung zeigen, und der Agent bekommt ihn, ohne dass ein Mensch ihn noch einmal sieht.
+
+### Nicht-Ziel
+Ein Schlüsselspeicher mit eigener Kryptographie -- CLAUDE.md verbietet das, und der Speicher des Systems (Secret Service, `libsecret`) ist da. Mehrere Anbieter nebeneinander in einer Sitzung; genau einer je Sitzung reicht für M4. Die Frage, ob ein Modell in der Cloud überhaupt erlaubt sein soll -- das entscheidet der Mensch mit derselben Warnung wie heute (`LLM_006`), diese Arbeit macht sie nur sichtbar.
+
+### Betroffene Pfade
+- `daemon/crates/config/src/model.rs`: `llm.api_key_ref` (eine Referenz, nicht der Schlüssel selbst)
+- `daemon/crates/secrets/` (neu) oder `humanitl-core`: Zugriff auf den Schlüsselspeicher des Systems
+- `daemon/crates/proxy/src/llm_probe.rs`: die Probe schickt den Schlüssel mit, wenn einer hinterlegt ist
+- `daemon/crates/sandbox/src/agent/opencode.rs`: der Schlüssel geht als Umgebungsvariable in die Sandbox und steht nicht in `argv`
+- `app/lib/features/setup/` und der Settings-Screen aus HUM-069
+- `docs/CONFIG.md`, `docs/SECURITY.md` (was mit dem Schlüssel geschieht und was nicht)
+
+### Spezifikation
+In der Konfiguration steht **nie der Schlüssel**, sondern eine Referenz: `llm.api_key_ref = "secret-service:humanitl/llm"`. Der Daemon holt ihn beim Start der Sitzung und reicht ihn als Umgebungsvariable in die Sandbox; `argv` trägt ihn nicht, das Log trägt ihn nicht, die Aufzeichnung ersetzt ihn durch `••••` wie jedes andere Geheimnis (`humanitl-findings`, Tier 1). Fehlt der Schlüssel im Speicher, ist das ein `Diagnostic` mit `fix`, kein stiller Fehlschlag.
+
+Die Oberfläche bekommt im Setup und in den Einstellungen eine Karte „Modell": Endpunkt, Modell, Schlüssel (Eingabe maskiert, Wert wird nie zurückgelesen, nur „gesetzt" oder „nicht gesetzt"), und den Knopf „Prüfen", der `ProbeLlm` ruft und die Modelliste zeigt. Ein Endpunkt außerhalb des privaten Netzes trägt die Warnung aus `LLM_006` sichtbar neben sich, nicht in einem Log.
+
+### Tests
+- Ein Test, der den Schlüssel aus einer Attrappe des Speichers holt und ihn in der Umgebung der Sandbox findet, aber nicht in `argv`, nicht im Log und nicht in der Aufzeichnung. Mutationsprobe: den Schlüssel in `argv` legen, Test rot.
+- Ein Widget-Test der Karte: „gesetzt" ohne den Wert zu zeigen; „Prüfen" ruft `ProbeLlm` und zeigt die Modelle.
+- Ein Test für den fehlenden Schlüssel: `Diagnostic` mit `fix`.
+
+### Akzeptanzkriterien
+- [ ] Endpunkt, Modell und Schlüssel lassen sich in der Oberfläche setzen, ohne eine Datei zu öffnen.
+- [ ] Der Schlüssel steht nirgends im Klartext: nicht in `config.toml`, nicht in `argv`, nicht im Log, nicht in der Aufzeichnung.
+- [ ] „Prüfen" zeigt die Modelle des Endpunkts oder sagt mit `why` und `fix`, warum nicht.
+- [ ] `docs/SECURITY.md` beschreibt den Weg des Schlüssels.
+- [ ] `make check` grün.
+
+### Fallstricke
+- Ein Schlüssel in einer Umgebungsvariable steht in `/proc/<pid>/environ` des Agenten. Das ist innerhalb der Sandbox und damit für den Agenten ohnehin lesbar -- er braucht ihn ja --, aber er darf nicht in der Momentaufnahme der Oberfläche auftauchen (`EnvEntry.withheld` gibt es dafür schon).
+- Der Secret Service ist auf einem Rechner ohne Desktop nicht da. Dann bleibt eine Datei mit `0600` unter `$XDG_DATA_HOME`, und die Oberfläche sagt, welcher der beiden Wege gilt.
+
+### Referenzen
+Frage des Nutzers am 2026-09-07 während einer Vorführung; `docs/CONFIG.md` (`llm.*`); HUM-069 (Settings-Screen); HUM-039 (`ProbeLlm`); `LLM_006`.
+
+---
+
 ## HUM-139 · Die Vorprüfung sucht den Agenten im PATH des Hosts
 Sprint: 4 · Größe: S · Abhängigkeiten: HUM-037, HUM-135 · Blockiert: einen Start, der funktionieren würde
 
@@ -2172,6 +2317,14 @@ embedder.cc (2615): 'FlutterEngineRemoveView' returned 'kInvalidArguments'. Remo
 ```
 
 Kein Dart-Stack, kein Fehlerfeld, keine Diagnose. Der zweite Lauf trägt davor eine Warnung des Renderers (`Timed out waiting for OpenGL frame of size 2556x1376 (have 1916x1016)`), der erste nicht. `coredumpctl` und das Journal geben für den Zeitraum nichts her.
+
+**Ein dritter Fall am selben Tag, und diesmal steht eine Spur darin.** Um 12:01 endete ein weiterer Lauf (`/tmp/hum-gui/app3.log`), und vor der Zeile über die Ansicht steht:
+
+```
+(dev.humanitl.humanitl:682832): GLib-GObject-CRITICAL **: 12:01:12.016: object_ref: assertion '!object_already_finalized' failed
+```
+
+Ein Zugriff auf ein GTK-Objekt, das schon abgeräumt war. Das ist kein Beweis, aber die erste Aussage über die Schicht, in der es passiert: nicht Dart, sondern der Fensterteil. Wer dieses Issue baut, fängt dort an -- und die Zeile zeigt zugleich, warum das Ziel oben richtig ist: Diese Meldung stand nur deshalb im Protokoll, weil jemand die Ausgabe der Anwendung in eine Datei geleitet hatte. Ohne das wäre auch sie fort.
 
 **Zwei Erklärungen sind offen, und keine ist belegt.** Erstens ein Absturz in der Renderer-Schicht (Impeller/OpenGLES), zu dem Flutter nichts schreibt. Zweitens ein Fremdeinfluss von außen: In derselben Sitzung hat ein Agent mehrfach `pkill -f` mit einem Muster benutzt, das auf `humanitl` passt; ein solcher Aufruf hätte das Fenster mitgenommen. Solange die Anwendung ihr eigenes Ende nicht aufschreibt, bleibt beides gleich wahrscheinlich, und genau das ist der Fehler: Ein Werkzeug, das den ganzen Arbeitstag offen steht, muss über sein eigenes Ende Auskunft geben.
 
