@@ -62,6 +62,11 @@ struct Pty {
     master: Option<OwnedFd>,
     /// Die Seite des Laufs. Der Test hält eine Kopie, um `tcgetattr` zu rufen.
     slave: OwnedFd,
+    /// Was der Lauf geschrieben hat, seit zuletzt gelesen wurde.
+    ///
+    /// Das Leeren des Puffers und das Lesen sind dieselbe Bewegung: Wer nur
+    /// wegwirft, hat nichts mehr, wenn ein Test wissen will, was dastand.
+    seen: std::cell::RefCell<Vec<u8>>,
 }
 
 impl Pty {
@@ -90,6 +95,7 @@ impl Pty {
         Self {
             master: Some(master),
             slave,
+            seen: std::cell::RefCell::new(Vec::new()),
         }
     }
 
@@ -111,6 +117,12 @@ impl Pty {
         Stdio::from(self.slave.try_clone().expect("a second descriptor"))
     }
 
+    /// Alles, was der Lauf bisher geschrieben hat.
+    fn read(&self) -> Vec<u8> {
+        self.drain();
+        self.seen.borrow().clone()
+    }
+
     /// Nimmt weg, was der Lauf geschrieben hat, und kehrt sofort zurück.
     ///
     /// Ohne das füllt sich der Puffer des Pseudoterminals mit der
@@ -125,6 +137,7 @@ impl Pty {
             if read == 0 {
                 return;
             }
+            self.seen.borrow_mut().extend_from_slice(&buffer[..read]);
         }
     }
 
@@ -294,4 +307,43 @@ fn the_ordinary_end_is_an_exit_and_not_a_wait() {
     pty.close_master();
 
     assert_eq!(wait_for_exit(&mut child, &pty), 0);
+}
+
+/// `--ask terminal -- opencode` ist der Vollbild-Agent und wird abgelehnt,
+/// `-- bash` nicht (HUM-135).
+///
+/// Der Fall gehört hierher und nicht zu `tests/cli.rs`: Ohne Terminal lehnt
+/// `--ask terminal` **jedes** Kommando ab, und dann misst der Test die
+/// fehlende Konsole statt der Frage, um die es geht.
+#[test]
+fn ask_terminal_is_cli_002_for_the_named_agent() {
+    let harness = Harness::new();
+    let pty = Pty::open();
+
+    let mut refused = harness
+        .command()
+        .args(["run", "--ask", "terminal", "--", "opencode"])
+        .stdin(pty.stdio())
+        .stdout(pty.stdio())
+        .stderr(pty.stdio())
+        .spawn()
+        .expect("the binary starts");
+    assert_eq!(wait_for_exit(&mut refused, &pty), 1);
+    let said = String::from_utf8_lossy(&pty.read()).into_owned();
+    assert!(said.contains("CLI_002"), "{said}");
+    assert!(said.contains("--ask ui"), "{said}");
+
+    // Ein eigenes Kommando ist kein Vollbild-Agent. Der Lauf geht dann weiter
+    // und scheitert erst am fehlenden Daemon -- Exit 2, nicht 1.
+    let mut allowed = harness
+        .command()
+        .args(["run", "--ask", "terminal", "--", "bash"])
+        .stdin(pty.stdio())
+        .stdout(pty.stdio())
+        .stderr(pty.stdio())
+        .spawn()
+        .expect("the binary starts");
+    assert_eq!(wait_for_exit(&mut allowed, &pty), 2);
+    let said = String::from_utf8_lossy(&pty.read()).into_owned();
+    assert!(said.contains("DAEMON_001"), "{said}");
 }

@@ -375,9 +375,45 @@ pub fn passthrough_prefixes(prefixes: &[String]) -> Vec<String> {
     out
 }
 
+/// Der Befund zu einem Kommando, das auf diesem Rechner nicht ausführbar ist.
+///
+/// Der Satz nennt, woher das Kommando kommt, und der Vorschlag folgt daraus:
+/// `agent.command` zu ändern hilft nur dem, der es gesetzt hat; wer sein
+/// Kommando hinter `--` geschrieben hat, ändert seine eigene Zeile (HUM-135).
+fn not_executable(command: &OsString, from_caller: bool) -> Diagnostic {
+    let named = command.to_string_lossy();
+    let finding = Diagnostic::builder(AGENT_002, Severity::Warning).why(if from_caller {
+        format!(
+            "the command {named:?} of this run is not an executable file on this machine; the \
+             sandbox will still start, because the path inside it can be a different one"
+        )
+    } else {
+        format!(
+            "agent.command points at {named:?}, which is not an executable file on this machine; \
+             the sandbox will still start, because the path inside it can be a different one"
+        )
+    });
+    if from_caller {
+        return finding.build();
+    }
+    // Ein leerer Wert wird von `humanitl_config::validate` abgewiesen
+    // (`agent.command` ist entweder nichts oder mindestens das Programm). Der
+    // Vorschlag ist deshalb die Vorgabe des Adapters.
+    finding
+        .fix(FixAction::ChangeSetting {
+            key: "agent.command".to_owned(),
+            value: format!("[\"{DEFAULT_COMMAND}\"]"),
+        })
+        .build()
+}
+
 impl AgentAdapter for OpenCodeAdapter {
     fn id(&self) -> &'static str {
         ADAPTER_ID
+    }
+
+    fn program(&self) -> &'static str {
+        DEFAULT_COMMAND
     }
 
     fn command(&self, ctx: &AgentContext) -> Vec<OsString> {
@@ -514,25 +550,7 @@ impl AgentAdapter for OpenCodeAdapter {
                     std::fs::metadata(full).is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0)
                 });
                 if !executable {
-                    diagnostics.push(
-                        Diagnostic::builder(AGENT_002, Severity::Warning)
-                            .why(format!(
-                                "agent.command points at {:?}, which is not an executable file on \
-                                 this machine; the sandbox will still start, because the path \
-                                 inside it can be a different one",
-                                command.to_string_lossy()
-                            ))
-                            // Ein leerer Wert wird von
-                            // `humanitl_config::validate` abgewiesen
-                            // (`agent.command` ist entweder nichts oder
-                            // mindestens das Programm). Der Vorschlag ist
-                            // deshalb die Vorgabe des Adapters.
-                            .fix(FixAction::ChangeSetting {
-                                key: "agent.command".to_owned(),
-                                value: format!("[\"{DEFAULT_COMMAND}\"]"),
-                            })
-                            .build(),
-                    );
+                    diagnostics.push(not_executable(command, ctx.agent_command_from_caller));
                 }
             }
             // Ohne Suchpfad gibt es nichts zu durchsuchen. „Pfad unbekannt"
@@ -583,9 +601,17 @@ impl AgentAdapter for OpenCodeAdapter {
                             .collect::<Vec<_>>()
                             .join(", ")
                     ))
+                    // Der Name am Ziel ist der des Binaries und nicht der
+                    // des Adapters: Ein `agent.command = ["mycode"]` würde
+                    // sonst zu `install … /usr/local/bin/opencode`, und der
+                    // Vorschlag benennte die Datei beim Kopieren um.
                     .fix(FixAction::CopyCommand(format!(
-                        "sudo install -m 0755 {} /usr/local/bin/{DEFAULT_COMMAND}",
-                        binary.display()
+                        "sudo install -m 0755 {} /usr/local/bin/{}",
+                        binary.display(),
+                        binary
+                            .file_name()
+                            .unwrap_or(std::ffi::OsStr::new(DEFAULT_COMMAND))
+                            .to_string_lossy()
                     )))
                     .docs(DOCS_URL)
                     .build(),
