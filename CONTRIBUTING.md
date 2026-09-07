@@ -70,6 +70,12 @@ Run it after touching the tray or the notification adapter. On the bus of a
 real desktop the same tests skip with a reason instead of registering against
 the panel of the person sitting there.
 
+`make flutter-test-integration` is not part of it either: it runs the real
+application on a screen (`Xvfb :99` is enough) against a real daemon, one file
+at a time -- several files in one invocation start the app twice on the same
+device and the second start fails. Run it after touching the shell, the queue
+or anything the app shows while a daemon answers.
+
 `make flutter-test-daemon` is not part of it either: the sandbox screen against
 a real daemon (`app/test/features/sandbox/daemon_live_test.dart`) starts a real
 `humanitld` in its own XDG root and a real sandbox with `bwrap`, and neither
