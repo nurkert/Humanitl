@@ -812,14 +812,8 @@ mod tests {
 
     /// Ein ausführbares Skript, das `stdout`, `stderr` und Exit-Code setzt.
     fn script(dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
-        use std::io::Write as _;
-        use std::os::unix::fs::PermissionsExt as _;
-
         let path = dir.join(name);
-        let mut file = std::fs::File::create(&path).unwrap();
-        writeln!(file, "#!/bin/sh\n{body}").unwrap();
-        drop(file);
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_support::write_program(&path, &format!("#!/bin/sh\n{body}\n"));
         path
     }
 
