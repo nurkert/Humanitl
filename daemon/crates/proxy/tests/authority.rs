@@ -25,7 +25,7 @@ use humanitl_core::{
     Authority, BlockReason, Decision, FlowEvent, HostName, HttpRequest, Method, Scheme,
 };
 use hyper::{Request, StatusCode};
-use support::{ECHO_BODY, FakeUpstream, ProxyBuilder, body_string, get, post};
+use support::{ECHO_BODY, FakeUpstream, ProxyBuilder, body_string, get};
 
 /// Eine Anfrage in Origin-Form, wie sie in einem Tunnel steht.
 fn tunnel_get(path: &str, host: Option<&str>) -> Request<Full<Bytes>> {
@@ -559,17 +559,25 @@ async fn body_cap_blocks() {
     let mut events = proxy.events();
     let _decider = proxy.decide_with(Decision::Allow);
 
-    let oversized = vec![b'x'; 64 * 1024 + 1];
-    let mut client = proxy.client().await;
-    let response = client
-        .send(post(
-            &format!("http://127.0.0.1:{}/sink", upstream.port()),
-            oversized,
-        ))
+    // Der Kopf kündigt ein Byte über dem Cap an, geschickt werden sechzehn:
+    // Der Proxy entscheidet auf der Ankündigung und liest den Body nie, und
+    // ein Client, der die ganze Ankündigung wirklich schriebe, bekäme dabei
+    // eine gebrochene Leitung statt der Antwort (`Proxy::raw_exchange`).
+    let announced = 64 * 1024 + 1;
+    let answer = proxy
+        .raw_exchange(
+            &format!(
+                "POST /sink HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Length: {announced}\r\n\r\n",
+                upstream.port()
+            ),
+            b"xxxxxxxxxxxxxxxx",
+        )
         .await;
-    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    let body = body_string(response.into_body()).await;
-    assert!(body.contains("reason: body_cap"), "{body}");
+    assert!(
+        answer.starts_with("HTTP/1.1 413 "),
+        "an announced body over the cap is refused: {answer}"
+    );
+    assert!(answer.contains("reason: body_cap"), "{answer}");
 
     events.wait_for("recorded").await;
     assert_eq!(
