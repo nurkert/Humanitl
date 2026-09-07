@@ -28,6 +28,7 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-140 | Modell-Endpunkt und Zugangsschluessel in der Oberflaeche | L | HUM-062, HUM-069, HUM-039 |
 | HUM-141 | Das Mock-Modell laesst keinen Werkzeugaufruf zu | M | HUM-046, HUM-067 |
 | HUM-142 | Der Daemon wartet ohne Frist auf einen Agenten, der nicht gehen will | M | HUM-011, HUM-042 |
+| HUM-143 | Zwischen zwei Segmenten verschwindet der Klick | S | HUM-028 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -2019,6 +2020,48 @@ Die CLI benutzt in beiden Fällen `out_path`.
 ### Quellen
 `docs/ARCHITECTURE.md` 3b (Zeile 66); `docs/adr/0018-rpc-parity.md` Zeilen 25 bis 28, 39 bis 42, 110; `README.md` Zeile 83 und Zeilen 123 bis 124; `backlog/CONVENTIONS.md` 4.4, 4.6, 4.13, 4.18 (Zeilen 802 bis 880); `backlog/sprint-2.md` HUM-026 Nicht-Ziel (Zeile 583) und HUM-032 (Zeilen 1329 bis 1345); `backlog/sprint-4.md` HUM-051 (Zeile 789, Audit-Export als Vorbild) und HUM-078; `docs/PROTOCOL.md` Abschnitte 3 und 4; `proto/humanitl/v1/humanitl.proto` Zeilen 23 bis 44 und 863; `daemon/bin/humanitl/src/cli.rs` Zeilen 102 bis 142 und 187 bis 263; `.github/workflows/ci.yml` Zeilen 572 bis 582; HAR 1.2 (http://www.softwareishard.com/blog/har-12-spec/); RFC 4180 (https://www.rfc-editor.org/rfc/rfc4180).
 
+
+---
+
+## HUM-143 · Zwischen zwei Segmenten verschwindet der Klick
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-028 · Blockiert: nichts, aber es ist genau die Sorte Fehler, die `docs/UX.md` 5.3 verbietet
+
+### Kontext
+Im Review der Trefferflächen am 2026-09-07 hat der Ersatz-Reviewer nicht nur die Rechtecke gemessen, sondern auch den Raum dazwischen -- und dort ist ein Loch.
+
+`FocusRing` legt seine Ringreserve (`EdgeInsets.all(2)`, `HFocusRing.width = 2`) **außerhalb** des `GestureDetector` (`app/lib/core/ui/focus_ring.dart:71`). Zwei benachbarte Segmente des Remember-Rasters stehen deshalb 4 px auseinander, obwohl sie im Bild aneinanderstoßen: gemessen `Once` von 288,5 bis 352,5 und `Session` ab 356,5. Drei Taps dazwischen (`x = 353,0`, `354,5`, `356,0`) erreichen niemanden -- der Klick verschwindet lautlos, mitten in einem sichtbar zusammenhängenden Bedienelement. Oben und unten gilt dasselbe mit je 2 px.
+
+Das ist genau der Fall, den `docs/UX.md` 5.3 ausschließt („nie Stille") und den der Kommentar in `remember_grid.dart:132-134` selbst beschreibt. Der neue Test aus HUM-028 sieht ihn nicht: Er misst die Größe der Ziele, nicht die Lücken.
+
+### Ziel
+Zwischen zwei Segmenten derselben Gruppe gibt es keinen Punkt, an dem ein Klick nichts tut. Was aussieht wie eine zusammenhängende Fläche, ist eine.
+
+### Nicht-Ziel
+Den Fokusring abschaffen oder schmaler machen; er gehört zur Tastaturbedienung (`docs/UX.md` 5.1). Die Segmente optisch auseinanderrücken, damit die Lücke „ehrlich" wird -- das Bild ist richtig, die Trefferfläche ist es nicht.
+
+### Betroffene Pfade
+- `app/lib/core/ui/focus_ring.dart` (die Verschachtelung)
+- `app/lib/features/intercept/widgets/remember_grid.dart` (der Aufrufer, um den es zuerst geht)
+- `app/test/features/intercept/hit_targets_test.dart` (die Messung, die fehlt)
+- Goldens, falls die Reserve dabei ihren Platz wechselt
+
+### Spezifikation
+Der Vorschlag aus dem Review: die Verschachtelung tauschen, also `GestureDetector(behavior: opaque, child: FocusRing(...))` statt `FocusRing(child: … GestureDetector)`. Dann gehört die Reserve zum Ziel, und die Gruppe hat keine Löcher mehr. Zu prüfen ist, was das für die übrigen Aufrufer von `FocusRing` bedeutet -- es gibt mehrere -- und ob ein Golden sich dabei ändert; wenn ja, gehört die Änderung erklärt und nicht nur abgenommen.
+
+### Tests
+- Ein Test, der zwischen zwei Segmente tippt (`Offset` genau in die Lücke) und erwartet, dass eines der beiden antwortet. Mutationsprobe: die Verschachtelung zurückdrehen, Test rot.
+- Dieselbe Frage für den senkrechten Rand.
+
+### Akzeptanzkriterien
+- [ ] Ein Tipp zwischen zwei Segmenten erreicht ein Segment.
+- [ ] Die Fokusringe sehen aus wie vorher (Goldens, oder eine erklärte Abweichung).
+- [ ] `make check` grün.
+
+### Fallstricke
+- `FocusRing` wird an mehreren Stellen benutzt; wer die Verschachtelung tauscht, ändert überall die Trefferfläche -- das ist erwünscht, muss aber überall stimmen, auch dort, wo zwei Ziele heute absichtlich Abstand haben.
+
+### Referenzen
+Review zu HUM-028 am 2026-09-07 (drei gemessene Taps in die Lücke); `docs/UX.md` 5.3; `app/lib/core/ui/focus_ring.dart:71`.
 
 ---
 
