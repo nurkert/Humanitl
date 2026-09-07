@@ -118,7 +118,7 @@ M3_EXPECTED_ASSERTIONS=111
 # Fallunterscheidungen über das Ergebnis, nicht darüber, ob geprüft wird —,
 # damit diese Zahl exakt ist und nicht ungefähr: Der Lauf vergleicht den
 # Zähler vor und nach der Variante mit ihr.
-M3_OPENCODE_ASSERTIONS=10
+M3_OPENCODE_ASSERTIONS=11
 
 # Die Ports des Ziels. Im eigenen Netz-Namensraum ist der Lauf root und darf
 # auch die privilegierten binden.
@@ -1190,8 +1190,15 @@ else
     # seinerseits eine Sandbox aufmacht und das echte Binary woanders sucht.
     # Ohne diese Probe scheiterte der Lauf später an einer Zusicherung über das
     # Sprachmodell und nannte damit den falschen Grund.
+    # **stdout und stderr getrennt.** Seit HUM-135 trägt auch dieser Aufruf den
+    # Beitrag des Adapters, und dessen Befunde stehen auf `stderr`. Ein Pfad
+    # wie `/opt/opencode-0.4/bin/opencode` in einem solchen Satz passte auf das
+    # Versionsmuster, und die Probe hielte ein Binary für lauffähig, das nie
+    # gelaufen ist. Geprüft wird deshalb, was das Programm selbst sagt; die
+    # Befunde stehen daneben und kommen in den Satz der Übersprungmeldung.
+    m3_oc_probe_log="$E2E_WORKDIR/out/opencode-probe.log"
     m3_oc_version=$(humanitl sandbox run --profile "${M3_OC_PROFILE:-default}" \
-        --work "$M3_PROJECT" -- "$m3_opencode_path" --version 2>&1 || true)
+        --work "$M3_PROJECT" -- "$m3_opencode_path" --version 2> "$m3_oc_probe_log" || true)
     # `[.]` und nicht `.`: In einem Muster steht der Punkt für jedes Zeichen,
     # und dann ginge auch eine Fehlermeldung mit `0x1` darin als Version durch.
     case "$m3_oc_version" in
@@ -1200,7 +1207,7 @@ else
         if [ "$m3_opencode_wanted" = 1 ]; then
             e2e_die "M3_OPENCODE=1 was asked for, but $m3_opencode_path does not run inside the sandbox: $m3_oc_version"
         fi
-        m3_skip "the opencode at $m3_opencode_path does not run inside the sandbox, so the real-agent variant did not run; nothing about OpenCode was verified. Point M3_OPENCODE_BIN at the real binary if this one is a wrapper. What it said: $m3_oc_version"
+        m3_skip "the opencode at $m3_opencode_path does not run inside the sandbox, so the real-agent variant did not run; nothing about OpenCode was verified. Point M3_OPENCODE_BIN at the real binary if this one is a wrapper. What it said: ${m3_oc_version:-nothing on stdout}; and on stderr: $(tr '\n' ' ' < "$m3_oc_probe_log" 2> /dev/null)"
         m3_opencode_path=""
         ;;
     esac
@@ -1236,11 +1243,28 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
     m3_oc_inference_before=$(m3_llm_hits '^mock-llm: POST /v1/chat/completions ')
     m3_oc_dev_before=$(m3_count 'host:models.dev')
     m3_oc_ai_before=$(m3_count 'host:models.opencode.ai')
+    m3_oc_gh_before=$(m3_count 'host:api.github.com')
 
+    # **Mit einer Schranke, und die hat einen Grund.** Das Mock-Modell antwortet
+    # auf jede Anfrage dasselbe (`tok0 … tok9`), also kommt ein echter Agent
+    # damit nie ans Ziel und fragt weiter -- gemessen: über zehn Minuten und
+    # 157 KB Transkript, alles Verkehr mit dem lokalen Modell. Was dieser
+    # Schritt zeigen soll, steht nach wenigen Sekunden fest: dass der Agent
+    # über die Durchreiche spricht, seinen Katalog nicht aus dem Netz holt und
+    # niemanden warten lässt. Die Schranke beendet ihn danach; `timeout`
+    # meldet das mit 124, und das ist hier kein Fehlschlag. `timeout` bekommt
+    # das Binary und die Umgebung unmittelbar: `humanitl` ist in diesem Lauf
+    # eine Shell-Funktion, und `timeout` startet nur Programme (gemessen:
+    # `timeout: failed to run command 'humanitl': No such file or directory`).
     m3_oc_status=0
     (
         cd "$M3_PROJECT" &&
-            humanitl -v run --ask none -- "$m3_opencode_path" run 'say the word humanitl' \
+            XDG_RUNTIME_DIR="$E2E_XDG_RUNTIME" \
+                XDG_DATA_HOME="$E2E_XDG_DATA" \
+                XDG_CONFIG_HOME="$E2E_XDG_CONFIG" \
+                HOME="$E2E_HOME" \
+                timeout "${M3_OPENCODE_SECONDS:-60}" \
+                "$E2E_CLI" -v run --ask none -- "$m3_opencode_path" run 'say the word humanitl' \
                 > "$M3_OC_OUT" 2> "$M3_OC_ERR"
     ) || m3_oc_status=$?
 
@@ -1256,6 +1280,10 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
     # ist — die beiden sind über den Code nicht zu trennen, und der Zweig sagt
     # das lieber, als eine Trennung zu behaupten.
     case "$m3_oc_status" in
+    124)
+        # Die Schranke dieses Skripts, nicht der Agent und nicht Humanitl.
+        e2e_check "Humanitl itself did not refuse the real session" ok
+        ;;
     2 | 3 | 4)
         e2e_check "Humanitl itself did not refuse the real session" no \
             "humanitl run ended with $m3_oc_status: 2 means no daemon, 3 a failed isolation check, 4 a security violation. None of them is OpenCode's own exit code."
@@ -1315,6 +1343,10 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
         "$m3_oc_dev_before" "$(m3_count 'host:models.dev')"
     e2e_expect "nor the one the installed version really uses" \
         "$m3_oc_ai_before" "$(m3_count 'host:models.opencode.ai')"
+    # Und nicht GitHub: Die mitgelieferte Regel deckt nur den Release-Pfad, und
+    # ein Agent, der beim Start nach einer Aktualisierung fragte, stünde hier.
+    e2e_expect "and never asked GitHub for a release either" \
+        "$m3_oc_gh_before" "$(m3_count 'host:api.github.com')"
     e2e_expect "and left nothing waiting for a human" 0 "$(m3_count 'state:held')"
 
     m3_ran_opencode=$((E2E_ASSERTIONS - m3_before_opencode))
