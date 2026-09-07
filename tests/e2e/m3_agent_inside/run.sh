@@ -114,11 +114,11 @@ fi
 M3_EXPECTED_ASSERTIONS=111
 
 # So viele kommen dazu, wenn die OpenCode-Variante läuft. Der Zweig prüft
-# immer dieselben dreizehn Dinge — die beiden Verzweigungen darin sind
+# immer dieselben fünfzehn Dinge — die fünf Verzweigungen darin sind
 # Fallunterscheidungen über das Ergebnis, nicht darüber, ob geprüft wird —,
 # damit diese Zahl exakt ist und nicht ungefähr: Der Lauf vergleicht den
 # Zähler vor und nach der Variante mit ihr.
-M3_OPENCODE_ASSERTIONS=13
+M3_OPENCODE_ASSERTIONS=15
 
 # Die Ports des Ziels. Im eigenen Netz-Namensraum ist der Lauf root und darf
 # auch die privilegierten binden.
@@ -206,6 +206,9 @@ M3_ONLY_OUT="$E2E_WORKDIR/out/llm_only.transcript"
 M3_ONLY_ERR="$E2E_WORKDIR/out/llm_only.log"
 M3_OC_OUT="$E2E_WORKDIR/out/opencode.transcript"
 M3_OC_ERR="$E2E_WORKDIR/out/opencode.log"
+# Die zweite Sitzung des echten Agenten: sein Vollbild-TUI (HUM-067).
+M3_OC_TUI_OUT="$E2E_WORKDIR/out/opencode-tui.transcript"
+M3_OC_TUI_ERR="$E2E_WORKDIR/out/opencode-tui.log"
 M3_RUN_PID=""
 M3_ATTACH_PID=""
 M3_LLM_PID=""
@@ -455,10 +458,36 @@ m3_config_uses_opencode_profile() {
 # `humanitl -v run` schreibt sie, sobald der Daemon die Sandbox gestartet hat.
 # Sie ist zugleich die Kennung, mit der später die Zusammenfassung abgerufen
 # wird, und der Zeitpunkt, ab dem sich ein zweites Terminal anhängen kann.
-m3_wait_for_started() {
-    m3_started_left=$(( ${1:-20} * 10 ))
+# m3_end_sandbox_from FILE — die Sandbox dieser Sitzung wirklich beenden.
+#
+# **Warum das nötig ist, und was es über das Produkt sagt.** Endet `humanitl
+# run` an der Schranke von `timeout`, schickt es sein `Sandbox(Stop)`, und der
+# Daemon beendet die Sitzung. Ein kopfloser Agent stirbt dabei an `SIGTERM`;
+# ein Vollbild-TUI nicht, es fängt das Signal selbst ab. `--die-with-parent`
+# hält das bwrap-Kind dann am Daemon fest, der Daemon wartet auf das Kind, und
+# der ganze Lauf steht -- gemessen am 2026-09-07 zweimal unabhängig, einmal
+# hier und einmal im Review, beide Male 8 bis 20 Minuten an derselben Zeile.
+# Der eigentliche Fehler liegt im Daemon: Ein Abschied ohne Frist ist kein
+# Abschied (HUM-142). Solange der nicht behoben ist, räumt der Lauf selbst auf
+# und sagt hier, warum.
+m3_end_sandbox_from() {
+    m3_end_pid=$(grep -o 'started, pid [0-9]\{1,\}' "$1" 2> /dev/null |
+        head -n 1 | cut -d' ' -f3)
+    [ -n "$m3_end_pid" ] || return 0
+    kill -KILL "$m3_end_pid" 2> /dev/null || return 0
+    m3_end_left=100
+    while [ "$m3_end_left" -gt 0 ] && kill -0 "$m3_end_pid" 2> /dev/null; do
+        sleep 0.1
+        m3_end_left=$((m3_end_left - 1))
+    done
+}
+
+# m3_wait_for_started_in FILE SECONDS — dasselbe für eine andere Sitzung.
+m3_wait_for_started_in() {
+    m3_started_file="$1"
+    m3_started_left=$(( ${2:-20} * 10 ))
     while [ "$m3_started_left" -gt 0 ]; do
-        m3_started_id=$(grep -o 'sandbox [0-9a-f-]\{36\} started' "$M3_AGENT_ERR" 2> /dev/null |
+        m3_started_id=$(grep -o 'sandbox [0-9a-f-]\{36\} started' "$m3_started_file" 2> /dev/null |
             head -n 1 | cut -d' ' -f2)
         if [ -n "$m3_started_id" ]; then
             printf '%s\n' "$m3_started_id"
@@ -468,6 +497,10 @@ m3_wait_for_started() {
         m3_started_left=$((m3_started_left - 1))
     done
     return 1
+}
+
+m3_wait_for_started() {
+    m3_wait_for_started_in "$M3_AGENT_ERR" "${1:-20}"
 }
 
 # m3_decide FILTER allow|block [NOTE] — auf einen wartenden Fluss warten und
@@ -573,6 +606,23 @@ m3_profile_for_opencode() {
         }
         { print }
     ' "$E2E_ROOT/profiles/sandbox/default.toml" > "$m3_oc_profiles/sandbox/m3-opencode.toml" || return 1
+
+    # **Und dasselbe für das Sitzungsprofil `llm-only`.** Es setzt in seiner
+    # mitgelieferten Fassung `[config.sandbox] profile = "default"`, und das
+    # ist auf einem Rechner richtig, auf dem OpenCode unter `/usr/local/bin`
+    # liegt. Hier liegt es unter `$HOME`, also braucht die Sitzung dasselbe
+    # bwrap-Profil wie oben; sonst startete unter diesem Profil kein Agent.
+    # Eine eigene Fassung unter `$XDG_CONFIG_HOME/humanitl/profiles/` gewinnt
+    # gegen die eingebaute (`docs/profiles.md`), und genau das tut ein Mensch
+    # auch, dessen Agent woanders liegt.
+    awk '
+        $0 == "profile = \"default\"" { print "profile = \"m3-opencode\""; next }
+        { print }
+    ' "$E2E_ROOT/profiles/llm-only.toml" > "$m3_oc_profiles/llm-only.toml" || return 1
+    # Nachsehen statt hoffen, wie bei der Schwester oben: Benennt jemand die
+    # Zeile im mitgelieferten Profil um, entstünde hier still eine Kopie mit
+    # `default`, und die Sitzung liefe ohne den Mount des Agenten.
+    grep -q '^profile = "m3-opencode"$' "$m3_oc_profiles/llm-only.toml" || return 1
 
     printf 'm3-opencode\n'
 }
@@ -1255,6 +1305,10 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
     m3_oc_ai_before=$(m3_count 'host:models.opencode.ai')
     m3_oc_gh_before=$(m3_count 'host:api.github.com')
 
+    # Die beiden Zähler, deren Zuwachs der Sitzung des echten Agenten gehört.
+    # Sie stehen **nach** der Modellauswahl unten und vor dem Lauf: Was
+    # `opencode models` anfasst, gehört nicht in den Zuwachs der Sitzung.
+    #
     # **Die Modellauswahl des Agenten, ohne einen Menschen davor.** `opencode
     # models` schreibt dieselbe Liste, aus der sein Auswahlfenster schöpft --
     # eine Zeile je Modell, mit dem Anbieter davor. Was hier steht, ist der
@@ -1297,11 +1351,6 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
     e2e_expect "and offers nothing else" 1 \
         "$(printf '%s\n' "$m3_oc_models" | tr -d '\r' | grep -c . || true)"
 
-    # Und jetzt die beiden Zähler, deren Zuwachs unten der Sitzung gehört und
-    # nicht der Modellauswahl darüber.
-    m3_oc_llm_before=$(m3_llm_hits '^mock-llm: ')
-    m3_oc_inference_before=$(m3_llm_hits '^mock-llm: POST /v1/chat/completions ')
-
     # **Mit einer Schranke, und die hat einen Grund.** Das Mock-Modell antwortet
     # auf jede Anfrage dasselbe (`tok0 … tok9`), also kommt ein echter Agent
     # damit nie ans Ziel und fragt weiter -- gemessen: über zehn Minuten und
@@ -1313,6 +1362,30 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
     # das Binary und die Umgebung unmittelbar: `humanitl` ist in diesem Lauf
     # eine Shell-Funktion, und `timeout` startet nur Programme (gemessen:
     # `timeout: failed to run command 'humanitl': No such file or directory`).
+    #
+    # **Und zwar das Vollbild-TUI unter `--profile llm-only`, nicht
+    # `opencode run`.** Das Akzeptanzkriterium von HUM-067 lautet: „`humanitl
+    # run --profile llm-only` startet OpenCode, der Prompt erscheint, Inferenz
+    # funktioniert." Ein Prompt ist ein Bild, und das entsteht nur, wenn das
+    # echte TUI an einem Pseudoterminal läuft; `humanitl run` gibt ihm genau
+    # das, und was der Agent malt, steht danach im Transkript.
+    #
+    # **Getippt wird hier nicht**, und das ist keine Nachlässigkeit: `humanitl
+    # run` reicht ausdrücklich keine Taste an den Agenten weiter (Kopf von
+    # `daemon/bin/humanitl/src/cmd/run.rs`), dafür gibt es `humanitl sandbox
+    # attach`. Was ohne Tippen entsteht, ist genau das, was das Kriterium
+    # verlangt: Der Agent startet und malt seinen Prompt. Der Rest des
+    # Kriteriums -- ein Werkzeugaufruf, der am `403` der Profilregel scheitert
+    # -- braucht ein Modell, das Werkzeugaufrufe liefert, und liegt als
+    # HUM-141.
+    #
+    # Eine Sitzung und nicht zwei: Der Daemon führt genau eine
+    # (`CLI_005`), und eine zweite müsste warten, bis die erste wirklich
+    # weg ist -- gemessen am 2026-09-07, dass das länger dauert als die
+    # Schranke dieses Schritts.
+    m3_oc_llm_before=$(m3_llm_hits '^mock-llm: ')
+    m3_oc_inference_before=$(m3_llm_hits '^mock-llm: POST /v1/chat/completions ')
+
     m3_oc_status=0
     (
         cd "$M3_PROJECT" &&
@@ -1321,9 +1394,11 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
                 XDG_CONFIG_HOME="$E2E_XDG_CONFIG" \
                 HOME="$E2E_HOME" \
                 timeout "${M3_OPENCODE_SECONDS:-60}" \
-                "$E2E_CLI" -v run --ask none -- "$m3_opencode_path" run 'say the word humanitl' \
+                "$E2E_CLI" -v run --profile llm-only --ask none -- \
+                "$m3_opencode_path" run 'say the word humanitl' \
                 > "$M3_OC_OUT" 2> "$M3_OC_ERR"
     ) || m3_oc_status=$?
+    m3_end_sandbox_from "$M3_OC_ERR"
 
     # **Der einzige Ausgang, den dieser Zweig nicht auf 0 festnagelt, und der
     # Grund dafür.** `humanitl run` reicht den Exit-Code des Agenten durch, und
@@ -1356,8 +1431,6 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
     # Sprachmodell über die Durchreiche, er holt seinen Modellkatalog nicht aus
     # dem Netz, und er lässt niemanden warten.
     m3_oc_log=$(cat "$M3_OC_ERR")
-    e2e_expect_match "the daemon started a sandbox for the real agent" \
-        'sandbox [0-9a-f-]* started' "$m3_oc_log"
 
     # Alle drei Garantien, einzeln, wie beim Skript-Agenten. Eine Prüfung nur
     # auf `no network interface` bliebe grün, wenn `one door` oder `seccomp
@@ -1374,6 +1447,10 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
     # verschiedene Dinge sagen: dass OpenCode überhaupt mit dem Modell
     # gesprochen hat, und dass mindestens einmal davon Inferenz war und nicht
     # nur eine Modellliste.
+    # **Der Zuwachs am Sprachmodell, zwei Zahlen.** Die erste sagt, dass der
+    # echte Agent überhaupt mit dem Modell gesprochen hat, die zweite, dass
+    # eine Inferenzanfrage darunter war -- und beides unter `--profile
+    # llm-only`, wo die Durchreiche der einzige Weg nach draußen ist.
     m3_oc_llm_added=$(( $(m3_llm_hits '^mock-llm: ') - m3_oc_llm_before ))
     if [ "$m3_oc_llm_added" -ge 1 ]; then
         e2e_check "the real agent added requests of its own to the language model" ok
@@ -1405,6 +1482,55 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
     e2e_expect "and never asked GitHub for a release either" \
         "$m3_oc_gh_before" "$(m3_count 'host:api.github.com')"
     e2e_expect "and left nothing waiting for a human" 0 "$(m3_count 'state:held')"
+
+    # --- Dieselbe Sitzung noch einmal, diesmal als Vollbild-TUI -------------
+    #
+    # **Zwei Läufe und nicht einer, und der Grund ist eine Messung.** Der
+    # kopflose (`opencode run …`) fragt das Modell von selbst; daran hängen
+    # die beiden Zusicherungen über den Verkehr oben. Das TUI fragt nichts, es
+    # wartet auf einen Menschen -- dafür malt es den Prompt, und der steht im
+    # Akzeptanzkriterium von HUM-067. Getippt wird in keinem der beiden:
+    # `humanitl run` reicht ausdrücklich keine Taste weiter (Kopf von
+    # `daemon/bin/humanitl/src/cmd/run.rs`), und der Weg über `humanitl
+    # sandbox attach` braucht ein Modell, das Werkzeugaufrufe liefert
+    # (HUM-141).
+    m3_oc_tui_status=0
+    (
+        cd "$M3_PROJECT" &&
+            XDG_RUNTIME_DIR="$E2E_XDG_RUNTIME" \
+                XDG_DATA_HOME="$E2E_XDG_DATA" \
+                XDG_CONFIG_HOME="$E2E_XDG_CONFIG" \
+                HOME="$E2E_HOME" \
+                timeout "${M3_OPENCODE_TUI_SECONDS:-30}" \
+                "$E2E_CLI" -v run --profile llm-only --ask none -- "$m3_opencode_path" \
+                > "$M3_OC_TUI_OUT" 2> "$M3_OC_TUI_ERR"
+    ) || m3_oc_tui_status=$?
+    m3_end_sandbox_from "$M3_OC_TUI_ERR"
+
+    # Und der Beleg, dass diese Sitzung wirklich unter `llm-only` lief: Die
+    # Zeile steht im Kopf jedes Laufs, und ohne sie bliebe der Zweig auch
+    # dann grün, wenn `--profile llm-only` fehlte -- gefunden im Review.
+    e2e_expect_match "and the session really resolved the llm-only profile" \
+        '^profiles: .*llm-only' "$(cat "$M3_OC_TUI_ERR")"
+
+    # **Das Bild, das ein Mensch sieht.** `tr -d` und `sed` werfen weg, womit
+    # ein TUI seine Fläche baut; übrig bleibt der Text. Zwei Zeilen daraus
+    # sind das Akzeptanzkriterium von HUM-067: der Prompt, und der Anbieter,
+    # den Humanitl für den Agenten gebaut hat.
+    m3_oc_text=$(tr -d '\r' < "$M3_OC_TUI_OUT" |
+        sed 's/\x1b\[[0-9;?]*[A-Za-z]//g; s/\x1b\][^\x07]*\x07//g; s/\x1b[()][A-Z0-9]//g')
+    if printf '%s\n' "$m3_oc_text" | grep -q 'Ask anything'; then
+        e2e_check "the prompt of the agent appears under the llm-only profile" ok
+    else
+        e2e_check "the prompt of the agent appears under the llm-only profile" no \
+            "no prompt in $M3_OC_OUT"
+    fi
+    if printf '%s\n' "$m3_oc_text" | grep -q 'Humanitl local LLM'; then
+        e2e_check "and the picture names the provider Humanitl built for it" ok
+    else
+        e2e_check "and the picture names the provider Humanitl built for it" no \
+            "no provider name in $M3_OC_OUT"
+    fi
 
     m3_ran_opencode=$((E2E_ASSERTIONS - m3_before_opencode))
     [ "$m3_ran_opencode" = "$M3_OPENCODE_ASSERTIONS" ] ||
