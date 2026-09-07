@@ -2491,8 +2491,8 @@ ungekürzt ins Artefakt.
 
 ### Akzeptanzkriterien
 - [x] `scripts/ci/test-report.sh --self-test` ist grün, Teil von `make check`
-      (Ziel `typed-errors-lint`) und Teil des CI-Schritts `rust-check`: dreizehn
-      Fälle — zwei gefallene Tests (der Name steht genau einmal, obwohl das
+      (Ziel `typed-errors-lint`) und Teil des CI-Schritts `rust-check`:
+      einundzwanzig Fälle — zwei gefallene Tests (der Name steht genau einmal, obwohl das
       Protokoll ihn zweimal trägt); eine Zeile eines Kindprozesses mitten in
       der Namensliste (`bwrap: setting up uid map: Permission denied`), nach
       der alle drei Namen weiterhin genannt werden; Lärm, der aussieht wie eine
@@ -2510,7 +2510,27 @@ ungekürzt ins Artefakt.
       gefallene Doku-Tests, deren Namen Leerzeichen tragen — mit Pfad, mit
       Generics und ohne Pfad (`src/lib.rs - (line 3)`, wie ein Doku-Test in den
       `//!`-Zeilen einer Datei heißt; diese Crates haben solche); ein grüner Lauf; und
-      eine fehlende Datei.
+      eine fehlende Datei. **Dazu seit dem 2026-09-07 der Grund**, und die
+      sieben Fälle, die ihn halten: eine Panik mit Rahmen und Hinweis (genommen
+      wird die Zeile der Zusicherung, nicht der `note:`-Hinweis und kein
+      Rahmen); ein Test, der vor seiner Panik selbst Striche ausgibt und
+      trotzdem seinen Grund behält; ein Test, dessen eigene Ausgabe wie eine
+      Panik aussieht (der Grund ist seine Panik, nicht sein Zitat); ein
+      `assert_eq!` mit seinen Werten darunter, die zum Grund gehören; zwei
+      Paniken in einem Block, von denen die erste gilt; eine Panik ohne
+      Meldung vor dem Kopf des nächsten Tests und eine vor einem Backtrace, die
+      beide nur ihren Ort behalten; und eine sehr lange Meldung, die gekürzt
+      wird und das sagt.
+- [x] Der Auswerter nennt zu jedem gefallenen Test auch den Grund: den Ort aus
+      der `panicked at`-Zeile und die Meldung der Zusicherung darunter, mit den
+      Werten eines `assert_eq!`. **Gemessen am 2026-09-07** an einem Protokoll
+      der Form, die zwei rote CI-Läufe desselben Tages hinterlassen haben
+      (`rust-test failed: one_writer_many_readers` und sonst nichts): Die Zeile
+      lautet jetzt `rust-test failed: one_writer_many_readers --
+      crates/ipc/tests/terminal.rs:795:5: the reader gets the scrollback: ""`.
+      Sieben Mutationsproben, je eine Regel: unverankerte Suche, fehlende
+      Grenze an `stack backtrace`, an `----`, an einer zweiten Panik, „die
+      letzte Panik gewinnt", keine Kürzung und keine Werte — jede rot.
 - [x] Der Auswerter nennt die Tests eines **echten** roten Laufs. Gemessen am
       2026-09-06: Eine Zusicherung in `every_target_builds_what_its_line_promises`
       auf einen Wert gestellt, den niemand baut, ergab
