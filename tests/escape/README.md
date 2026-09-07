@@ -57,6 +57,14 @@ erscheint im XML als `<error>`, eine durchgekommene Probe als `<failure>`.
 | `esc-5-filesystem.sh` | ESC-5: fünf Fälle grün gegen die gleichnamigen Integrationstests (HUM-042, HUM-043), zwei `skipped` bis das Audit-Log existiert (HUM-029) |
 | `humanitl sandbox run --profile test --tests-dir tests/escape -- …` | der Start jeder Suite: dieselbe Kommandozeile, die der Nutzer aufruft (CONVENTIONS.md 3.11) |
 
+**Ein Fall heißt nie wie ein Agent.** Seit HUM-135 entscheidet der Daemon am
+wirksamen Kommando, ob der Agent-Adapter beiträgt, und er entscheidet am
+Dateinamen. Ein Skript oder Kommando dieser Sammlung, das `opencode` hieße,
+bekäme damit still die fünf Dateien und die `OPENCODE_*`-Variablen des
+Adapters — und die Suite maßte eine Sandbox, die sie nicht meint. Die Fälle
+heißen deshalb nach dem, was sie prüfen, und `sandbox run` bekommt hier immer
+`/bin/sh`.
+
 ESC-1 bis ESC-3 laufen **in** der Sandbox, ESC-4 und ESC-5 auf dem Host: die
 Regel-Engine entscheidet, bevor irgendetwas die Maschine verlässt, ein `skip`
 braucht ohnehin keine Isolation, und ein Fall, der vom Start der Sandbox

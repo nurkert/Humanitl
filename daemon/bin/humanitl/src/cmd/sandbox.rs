@@ -517,14 +517,18 @@ fn prepare(
 
     let id = SessionId::new();
     let work_src = wiring.work_dir(ctx, config);
-    // Der Beitrag des Agent-Adapters gilt dem Agenten. Steht auf der
-    // Kommandozeile ein eigener Befehl (`sandbox run -- CMD`, so laufen die
-    // Escape-Tests), läuft nicht der Agent, und der Adapter trägt nichts bei.
-    let agent = if command.is_empty() {
-        agent_contribution(ctx, config, &wiring, id, &work_src, &profile)?
-    } else {
-        AgentContribution::default()
-    };
+    // Der Beitrag des Agent-Adapters gilt dem Agenten, und zwar am wirksamen
+    // Kommando: `sandbox run -- /bin/sh` (so laufen die Escape-Tests) ist keiner
+    // und bekommt nichts, `sandbox run -- opencode` ist einer und bekommt
+    // dasselbe wie `humanitl run` (HUM-135). Dieselbe Regel im Daemon; stünde
+    // sie hier anders, zeigte `sandbox argv` eine Umgebung, die der Start nicht
+    // baut.
+    let agent =
+        if command.is_empty() || humanitl_sandbox::agent::command_is_the_agent(config, command) {
+            agent_contribution(ctx, config, &wiring, id, &work_src, &profile, command)?
+        } else {
+            AgentContribution::default()
+        };
     let mut session_env = vec![("HUMANITL_SESSION".to_owned(), id.to_string())];
     session_env.extend(agent.env);
     // `sandbox.env` zuletzt: Was der Mensch in seiner Konfiguration setzt,
@@ -603,6 +607,7 @@ fn agent_contribution(
     session: SessionId,
     work_src: &Path,
     profile: &SandboxProfile,
+    command: &[OsString],
 ) -> Result<AgentContribution, Failure> {
     let registry = AdapterRegistry::builtin();
     let adapter = registry.get(&config.agent.adapter).ok_or_else(|| {
@@ -625,13 +630,8 @@ fn agent_contribution(
     })?;
 
     let agent_ctx = AgentContext::new(session, work_src.to_path_buf(), config.llm.clone())
-        .with_command_override(
-            config
-                .agent
-                .command
-                .as_ref()
-                .map(|parts| parts.iter().map(OsString::from).collect()),
-        )
+        // Das Kommando, das wirklich läuft, steht weiter unten: Es hängt daran,
+        // ob der Aufrufer eines genannt hat, und die Herkunft geht mit.
         .with_host_path(ctx.env.non_empty("PATH").map(OsString::from))
         .with_language(config.ui.language)
         // Frist und Ask-Modus stehen im Briefing (HUM-071); sie müssen die
@@ -675,6 +675,17 @@ fn agent_contribution(
                 .cloned()
                 .collect(),
         );
+    let agent_ctx = if command.is_empty() {
+        agent_ctx.with_command_override(
+            config
+                .agent
+                .command
+                .as_ref()
+                .map(|parts| parts.iter().map(OsString::from).collect()),
+        )
+    } else {
+        agent_ctx.with_command_from_caller(command.to_vec())
+    };
 
     let preview = matches!(wiring, Wiring::Preview);
     for diagnostic in adapter.preflight(&agent_ctx) {

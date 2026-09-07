@@ -76,6 +76,10 @@ pub async fn run(ctx: &Context, read_only: bool) -> Result<u8, Failure> {
         .map_err(|status| Failure::new(status_diagnostic(&status, "Terminal")))?
         .into_inner();
 
+    // Erst die Signale, dann der Rohmodus: Ein `SIGTERM` zwischen beidem nähme
+    // der Kernel mit seinem Standardverhalten, und das Terminal bliebe roh.
+    let mut signals = Signals::listen();
+
     // Der Rohmodus steht erst, wenn der Strom offen ist: Ein Befund vor dem
     // ersten Byte soll auf einem gewöhnlichen Terminal lesbar sein.
     let raw = if read_only { None } else { RawMode::enter() };
@@ -89,7 +93,7 @@ pub async fn run(ctx: &Context, read_only: bool) -> Result<u8, Failure> {
     // und die Shell des Menschen bliebe ohne Echo stehen (`tty.rs`).
     let outcome = tokio::select! {
         outcome = pump(&mut stream) => outcome,
-        number = terminated() => {
+        number = signals.next() => {
             drop(raw);
             if !read_only {
                 let mut out = std::io::stdout();
@@ -175,41 +179,61 @@ fn spawn_input(tx: mpsc::Sender<v1::TerminalInput>) {
     });
 }
 
-/// Wartet auf `SIGTERM`, `SIGHUP` oder `SIGINT` und nennt die Nummer.
+/// Die Signale, auf die dieser Befehl selbst hört.
 ///
-/// `SIGINT` gehört dazu, obwohl `Ctrl+C` im Rohmodus als Byte `0x03` ankommt
-/// und kein Signal auslöst: Ein `kill -INT` von außen gibt es trotzdem, und
-/// ohne diesen Zweig nähme der Kernel den Prozess weg, bevor der Rohmodus
-/// zurückgegeben ist -- die Shell des Menschen bliebe ohne Echo stehen.
-///
-/// Ohne Handler wartet sie für immer; dann gilt das Standardverhalten des
-/// Signals.
-async fn terminated() -> u8 {
-    use tokio::signal::unix::{SignalKind, signal};
+/// **Der Handler steht, bevor das Terminal roh wird.** Ein Signal, das in der
+/// Lücke dazwischen ankommt, nähme der Kernel mit seinem Standardverhalten --
+/// der Prozess wäre weg, das Terminal bliebe im Rohmodus, und die Shell des
+/// Menschen stünde ohne Echo da. Genau diese Lücke ist am 2026-09-07 im Test
+/// `every_signal_gives_the_terminal_back` aufgefallen: unter Last endete der
+/// Lauf mit einem Signal statt mit `128 + n`.
+struct Signals {
+    /// Die Ströme und ihre Nummern, in der Reihenfolge `TERM`, `HUP`, `INT`.
+    streams: Vec<(tokio::signal::unix::Signal, u8)>,
+}
 
-    let mut streams: Vec<(tokio::signal::unix::Signal, u8)> = [
-        (SignalKind::terminate(), 15),
-        (SignalKind::hangup(), 1),
-        (SignalKind::interrupt(), 2),
-    ]
-    .into_iter()
-    .filter_map(|(kind, number)| signal(kind).ok().map(|stream| (stream, number)))
-    .collect();
-    match streams.as_mut_slice() {
-        [(term, first), (hup, second), (int, third)] => tokio::select! {
-            _ = term.recv() => *first,
-            _ = hup.recv() => *second,
-            _ = int.recv() => *third,
-        },
-        [(only, number)] => {
-            only.recv().await;
-            *number
+impl Signals {
+    /// Meldet die Handler an. Was sich nicht anmelden lässt, fehlt still; dann
+    /// gilt für dieses eine Signal das Standardverhalten.
+    fn listen() -> Self {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        Self {
+            streams: [
+                (SignalKind::terminate(), 15),
+                (SignalKind::hangup(), 1),
+                (SignalKind::interrupt(), 2),
+            ]
+            .into_iter()
+            .filter_map(|(kind, number)| signal(kind).ok().map(|stream| (stream, number)))
+            .collect(),
         }
-        [(one, first), (two, second)] => tokio::select! {
-            _ = one.recv() => *first,
-            _ = two.recv() => *second,
-        },
-        _ => std::future::pending().await,
+    }
+
+    /// Wartet auf das erste Signal und nennt seine Nummer.
+    ///
+    /// `SIGINT` gehört dazu, obwohl `Ctrl+C` im Rohmodus als Byte `0x03`
+    /// ankommt und kein Signal auslöst: Ein `kill -INT` von außen gibt es
+    /// trotzdem.
+    ///
+    /// Ohne Handler wartet sie für immer.
+    async fn next(&mut self) -> u8 {
+        match self.streams.as_mut_slice() {
+            [(term, first), (hup, second), (int, third)] => tokio::select! {
+                _ = term.recv() => *first,
+                _ = hup.recv() => *second,
+                _ = int.recv() => *third,
+            },
+            [(only, number)] => {
+                only.recv().await;
+                *number
+            }
+            [(one, first), (two, second)] => tokio::select! {
+                _ = one.recv() => *first,
+                _ = two.recv() => *second,
+            },
+            _ => std::future::pending().await,
+        }
     }
 }
 
