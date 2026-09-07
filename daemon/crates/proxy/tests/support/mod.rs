@@ -599,6 +599,62 @@ impl Proxy {
         }
     }
 
+    /// Schickt einen von Hand geschriebenen Request-Kopf und liest die
+    /// Antwort als Text.
+    ///
+    /// **Wofür das gut ist, und warum ein hyper-Client es nicht kann.** Der
+    /// Proxy lehnt ein angekündigtes `Content-Length` über dem Cap ab, ohne
+    /// den Body zu lesen (`handler.rs`, „es fließt keine Bandbreite"), und
+    /// lässt die Verbindung danach fallen. Ein Client, der zu diesem Zeitpunkt
+    /// noch schreibt, bekommt dabei `EPIPE`, und `send_request` gibt dann
+    /// einen Fehler statt der Antwort zurück -- die Antwort selbst stand
+    /// längst auf der Leitung. Am 2026-09-07 ist die CI genau daran rot
+    /// geworden (`body_cap_blocks`, `hyper::Error(BodyWrite, BrokenPipe)`),
+    /// lokal auch unter Last nicht: Es ist ein Rennen, kein Befund über den
+    /// Proxy.
+    ///
+    /// Hier wird deshalb nur der Kopf geschrieben und ein paar Bytes Body --
+    /// weniger, als in jeden Sende-Puffer passt --, und danach gelesen. Die
+    /// Zusicherung bleibt dieselbe: Was der Proxy auf einen angekündigten
+    /// Body über dem Cap antwortet.
+    pub async fn raw_exchange(&self, head: &str, body: &[u8]) -> String {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let mut stream = UnixStream::connect(&self.socket).await.unwrap();
+        // **Ein Schreibvorgang, nicht zwei.** Der Kopf endet mit der leeren
+        // Zeile, also darf der Proxy schon antworten und die Verbindung
+        // fallen lassen, sobald er ihn hat. Zwei `write_all` mit einem
+        // `await` dazwischen holten damit genau das Rennen zurück, gegen das
+        // diese Funktion gebaut ist.
+        // Ein Schreibvorgang trägt nur, solange er in einen Puffer passt; der
+        // Riegel steht hier, damit der nächste Aufrufer die Zusage nicht
+        // stillschweigend bricht.
+        assert!(
+            head.len() + body.len() < 4096,
+            "raw_exchange writes once; keep head and body under one buffer"
+        );
+        let mut message = Vec::with_capacity(head.len() + body.len());
+        message.extend_from_slice(head.as_bytes());
+        message.extend_from_slice(body);
+        stream.write_all(&message).await.unwrap();
+        stream.flush().await.unwrap();
+        let mut answer = Vec::new();
+        // Bis der Proxy die Verbindung schließt; er tut es nach dieser
+        // Antwort, und eine Frist steht darum, damit ein Fehlschlag eine
+        // Meldung ist und kein hängender Lauf. Beide Ergebnisse werden
+        // ausgepackt: Ein verschluckter Lesefehler machte aus einer
+        // abgebrochenen Verbindung eine leere Antwort, und die Zusicherung
+        // scheiterte danach an einem leeren String statt am Grund.
+        let read = tokio::time::timeout(WAIT, stream.read_to_end(&mut answer)).await;
+        // Läuft die Frist ab, steht in der Meldung, was bis dahin ankam: Ein
+        // nacktes `Elapsed` sagt nur, dass gewartet wurde, und nicht, ob der
+        // Proxy geschwiegen oder die Hälfte einer Antwort geschickt hat.
+        let text = String::from_utf8_lossy(&answer).into_owned();
+        read.unwrap_or_else(|_| panic!("the proxy answers in time; it said so far: {text:?}"))
+            .expect("the proxy response is readable");
+        text
+    }
+
     /// `CONNECT host:port`, dann TLS gegen den Proxy (der Client vertraut nur
     /// der Test-CA und bietet `h2` und `http/1.1`), dann HTTP/1.1 im Tunnel.
     pub async fn tls_client(&self, host: &str, port: u16) -> TlsClient {
