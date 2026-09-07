@@ -309,6 +309,26 @@ void main() {
     expect(empty.flowId, isNull);
   });
 
+  // Der Hinweis des Daemons erreicht den Emulator nie (HUM-042). Er kommt als
+  // eigener Rahmen, und diese Seite hat eine eigene Fläche dafür: den Streifen
+  // über dem Terminal. Ginge er als Bild-Frame durch, stünde die Zeile quer
+  // über dem Bild eines Vollbild-TUI -- so war es bis zum 2026-09-07, und ein
+  // Mensch vor dem Bildschirm hat es gemeldet.
+  test('a notice of the daemon never becomes a terminal frame', () {
+    expect(
+      (pb.TerminalOutput()
+            ..notice = '[humanitl] request held: GET example.com/ · waiting')
+          .toDomain(),
+      isNull,
+    );
+    // Und die Bytes daneben kommen weiterhin an, sonst wäre oben nur alles
+    // still.
+    expect(
+      (pb.TerminalOutput()..data = <int>[104, 105]).toDomain(),
+      isA<TerminalOutput>(),
+    );
+  });
+
   test('FlowFilter becomes a ListFlowsRequest', () {
     final pb.ListFlowsRequest request = const FlowFilter(
       query: 'host:github.com',

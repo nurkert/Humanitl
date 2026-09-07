@@ -1,6 +1,8 @@
 // Gerüst der Sandbox-Tests: der Bildschirm über einem Fake-Daemon, ohne
 // Shell, mit einem Verzeichnis-Dialog, den der Test steuert.
 
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 // `Override` lebt in riverpod 3 im Nebeneingang `misc.dart`.
@@ -32,6 +34,30 @@ class SandboxTestClient extends FakeDaemonClient {
 
   /// Wie oft `Sandbox(Stop)` gerufen wurde.
   int stops = 0;
+
+  /// Jedes Byte, das ein Terminal-Client geschickt hat, in der Reihenfolge des
+  /// Tippens.
+  ///
+  /// Eine Tastatur ist erst dann angeschlossen, wenn der Druck auf eine Taste
+  /// unten ankommt. Der Umweg über `terminal.onOutput` misst die Leitung, nicht
+  /// die Taste (HUM-042).
+  final List<int> typed = <int>[];
+
+  @override
+  Stream<TerminalFrame> terminal(Stream<TerminalCommand> input) {
+    final StreamController<TerminalCommand> seen =
+        StreamController<TerminalCommand>();
+    final StreamSubscription<TerminalCommand> source = input.listen((
+      TerminalCommand command,
+    ) {
+      if (command is TerminalKeys) {
+        typed.addAll(command.bytes);
+      }
+      seen.add(command);
+    }, onDone: seen.close);
+    seen.onCancel = source.cancel;
+    return super.terminal(seen.stream);
+  }
 
   @override
   Stream<SandboxUpdate> planSandbox({
@@ -190,6 +216,7 @@ Future<void> pumpSandbox(
   TextScaler textScaler = TextScaler.noScaling,
   Size size = const Size(1280, 800),
   List<Override> overrides = const <Override>[],
+  Widget Function(Widget child)? wrap,
 }) async {
   await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -200,6 +227,7 @@ Future<void> pumpSandbox(
       mode: mode,
       textScaler: textScaler,
       overrides: overrides,
+      wrap: wrap,
     ),
   );
   // Ein Frame für `Sandbox(Status)`, einer für die Antwort, einer für den
@@ -216,6 +244,7 @@ Widget sandboxUnderTest({
   HThemeMode mode = HThemeMode.dark,
   TextScaler textScaler = TextScaler.noScaling,
   List<Override> overrides = const <Override>[],
+  Widget Function(Widget child)? wrap,
 }) {
   final HTokens tokens = mode.resolve(Brightness.dark);
   return ProviderScope(
@@ -240,7 +269,10 @@ Widget sandboxUnderTest({
             child: Overlay(
               initialEntries: <OverlayEntry>[
                 OverlayEntry(
-                  builder: (BuildContext context) => const SandboxScreen(),
+                  builder: (BuildContext context) {
+                    const Widget screen = SandboxScreen();
+                    return wrap == null ? screen : wrap(screen);
+                  },
                 ),
               ],
             ),

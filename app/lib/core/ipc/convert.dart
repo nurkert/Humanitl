@@ -674,6 +674,11 @@ extension TerminalOutputToDomain on pb.TerminalOutput {
       diagnostic.toDomain(),
     ),
     pb.TerminalOutput_Output.exit => TerminalExit(exit.code),
+    // The line the daemon writes when one of the agent's requests waits for a
+    // person. This side has its own place for it -- the strip above the
+    // terminal, fed by the flow events -- so the emulator never sees these
+    // bytes: a full-screen TUI would be painted over by them (HUM-042).
+    pb.TerminalOutput_Output.notice => null,
     pb.TerminalOutput_Output.notSet => null,
   };
 }
