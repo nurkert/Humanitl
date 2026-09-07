@@ -427,6 +427,29 @@ m3_write_config() {
     e2e_say "config $E2E_WORKDIR/config/humanitl/config.toml"
 }
 
+# m3_config_uses_opencode_profile — das Sandbox-Profil für Schritt 13 setzen.
+#
+# **Erst dort und nicht von Anfang an.** Die Schritte 1 bis 12 sollen unter dem
+# Profil laufen, das ausgeliefert wird — sonst misst dieser Lauf lokal etwas
+# anderes als in CI, wo es kein OpenCode gibt. Der Aufrufer schreibt den
+# Schlüssel deshalb erst vor Schritt 13 und startet den Daemon danach neu; der
+# liest seine Konfiguration beim Start (gemessen: ohne Neustart stand in der
+# Startzeile weiter `profile default`). Der Schlüssel geht in den vorhandenen
+# Abschnitt `[sandbox]`; ein zweiter wäre ein doppelter Schlüssel, und der
+# Daemon lehnte die Datei ab (gemessen: `CONFIG_001`, „duplicate key").
+m3_config_uses_opencode_profile() {
+    [ -n "$M3_OC_PROFILE" ] || return 0
+    sed -i -e "s|^\[sandbox\]$|[sandbox]\nprofile = \"$M3_OC_PROFILE\"|" \
+        "$E2E_WORKDIR/config/humanitl/config.toml" || return 1
+    # Nachsehen statt hoffen: Fände das Muster den Abschnitt nicht, änderte
+    # `sed` nichts und meldete trotzdem Erfolg -- der Daemon liefe weiter unter
+    # `default`, und Schritt 13 scheiterte an einer Zusicherung, die mit dem
+    # Grund nichts zu tun hat.
+    grep -q "^profile = \"$M3_OC_PROFILE\"\$" \
+        "$E2E_WORKDIR/config/humanitl/config.toml" || return 1
+    e2e_say "sandbox profile $M3_OC_PROFILE mounts $(dirname "$M3_OPENCODE_PATH") read-only, from here on"
+}
+
 # m3_wait_for_started SECONDS — auf die Startzeile der Sitzung warten, Id auf stdout.
 #
 # `humanitl -v run` schreibt sie, sobald der Daemon die Sandbox gestartet hat.
@@ -469,20 +492,89 @@ m3_decide() {
 
 # m3_opencode_in_sandbox — der Pfad von OpenCode, so wie die Sandbox ihn sähe.
 #
-# **Nicht `command -v opencode`.** Der Host sucht in `$PATH` des Entwicklers,
-# und dort liegt das Binary oft unter `~/.local/bin`; die Sandbox hängt nur
-# `/usr` ein und hat `PATH=/usr/local/bin:/usr/bin:/bin`
+# **Nicht `command -v opencode` allein.** Der Host sucht in `$PATH` des
+# Entwicklers, und dort liegt das Binary oft unter `~/.local/bin` oder
+# `~/.opencode/bin`; die Sandbox hängt nur `/usr` ein
 # (`profiles/sandbox/default.toml`). Ein Lauf, der `command -v` glaubte, hielte
-# die Variante für fahrbar und scheiterte drinnen an `AGENT_004` — an etwas
-# anderem also, als er messen wollte.
+# die Variante für fahrbar und scheiterte drinnen an einem Kommando, das es
+# dort nicht gibt — an etwas anderem also, als er messen wollte.
+#
+# Deshalb zwei Wege, und der zweite braucht ein Profil (siehe
+# `m3_profile_for_opencode`): Liegt das Binary unter `/usr`, sieht die Sandbox
+# es ohnehin; liegt es woanders, hängt der Lauf genau dieses eine Verzeichnis
+# nur lesend ein. `$M3_OPENCODE_BIN` schlägt beides.
 m3_opencode_in_sandbox() {
+    # Aufgeloest und nicht wie gefunden: Ein Symlink zeigt oft aus seinem
+    # Verzeichnis heraus, und dann haengt die Sandbox den Link ohne sein Ziel
+    # ein. Aufgeloest wird deshalb hier, an der einen Stelle, die den Pfad
+    # ausgibt -- der Mount, der Aufruf und die Meldung meinen dann dieselbe
+    # Datei (gemessen: sonst `exec failed: … No such file or directory`).
+    if [ -n "${M3_OPENCODE_BIN:-}" ]; then
+        if [ -x "$M3_OPENCODE_BIN" ]; then
+            readlink -f "$M3_OPENCODE_BIN" 2> /dev/null || printf '%s\n' "$M3_OPENCODE_BIN"
+            return 0
+        fi
+        echo "M3_OPENCODE_BIN=$M3_OPENCODE_BIN is not an executable file" >&2
+        return 1
+    fi
     for m3_oc_dir in /usr/local/bin /usr/bin /bin; do
         if [ -x "$m3_oc_dir/opencode" ]; then
-            printf '%s/opencode\n' "$m3_oc_dir"
+            readlink -f "$m3_oc_dir/opencode" 2> /dev/null ||
+                printf '%s/opencode\n' "$m3_oc_dir"
             return 0
         fi
     done
-    return 1
+    m3_oc_host=$(command -v opencode 2> /dev/null) || return 1
+    [ -x "$m3_oc_host" ] || return 1
+    readlink -f "$m3_oc_host" 2> /dev/null || printf '%s\n' "$m3_oc_host"
+}
+
+# m3_profile_for_opencode PATH — der Profilname für diesen Lauf, oder leer.
+#
+# Leer heißt „das Standardprofil reicht": Ein Binary unter `/usr` ist in der
+# Sandbox schon zu sehen. Sonst entsteht im Wegwerf-Baum ein Profil, das sich
+# vom mitgelieferten nur in zwei Zeilen unterscheidet — dem Verzeichnis des
+# Binaries als `extra_ro` und demselben Verzeichnis am Ende von `PATH`. Alles
+# andere bleibt, wie es ausgeliefert wird: dieselben Namensräume, derselbe eine
+# Socket, dieselbe seccomp-Politik. Ein Mount mehr ist die Politik des Nutzers
+# und nicht eine Lockerung der Sandbox; die Denylist (`SANDBOX_006`) gilt
+# unverändert und lehnt zum Beispiel `~/.ssh` weiterhin ab.
+m3_profile_for_opencode() {
+    # Der Pfad ist schon aufgelöst (`m3_opencode_in_sandbox`).
+    m3_oc_real="$1"
+    case "$m3_oc_real" in
+    /usr/* | /bin/*)
+        # `/bin` ist in der Sandbox ein Link auf `usr/bin`; beides ist schon da.
+        return 0
+        ;;
+    esac
+    m3_oc_bindir=$(dirname "$m3_oc_real")
+    # Ein Verzeichnisname, der die Datei zerbrechen könnte, wird abgelehnt
+    # statt eingesetzt: Anführungszeichen und Backslash haben in einem
+    # TOML-String eine Bedeutung, und ein Profil, das der Daemon dann anders
+    # liest als hier gemeint, wäre die falsche Sandbox.
+    case "$m3_oc_bindir" in
+    *[\"\\]*)
+        echo "the directory of the opencode binary carries a quote or a backslash: $m3_oc_bindir" >&2
+        return 1
+        ;;
+    esac
+    m3_oc_profiles="$E2E_WORKDIR/config/humanitl/profiles"
+    mkdir -p "$m3_oc_profiles/sandbox" || return 1
+    # `awk` und nicht `sed`: Der Pfad kommt als Variable herein und nicht in
+    # ein Muster, also kann kein `&`, kein `|` und kein `\` darin etwas
+    # anderes bedeuten, als er ist. Verglichen werden ganze Zeilen.
+    awk -v dir="$m3_oc_bindir" '
+        $0 == "name = \"default\"" { print "name = \"m3-opencode\""; next }
+        $0 == "extra_ro = []" { printf "extra_ro = [\"%s\"]\n", dir; next }
+        $0 == "PATH = \"/usr/local/bin:/usr/bin:/bin\"" {
+            printf "PATH = \"/usr/local/bin:/usr/bin:/bin:%s\"\n", dir
+            next
+        }
+        { print }
+    ' "$E2E_ROOT/profiles/sandbox/default.toml" > "$m3_oc_profiles/sandbox/m3-opencode.toml" || return 1
+
+    printf 'm3-opencode\n'
 }
 
 # --- Zertifikat, Ziele, Daemon -----------------------------------------------
@@ -496,6 +588,22 @@ e2e_say "test CA in $M3_CA_DIR, valid for $M3_HOSTS"
 
 m3_start_llm
 m3_start_upstream
+# Wo OpenCode liegt, entscheidet sich vor der Konfiguration: Liegt es außerhalb
+# des Baums, den die Sandbox ohnehin sieht, braucht dieser Lauf ein eigenes
+# Sandbox-Profil, und das steht in der Konfiguration des Daemons.
+M3_OPENCODE_PATH=""
+M3_OC_PROFILE=""
+# `M3_OPENCODE=0` schaltet die Variante ab, und dann wird auch nichts für sie
+# vorbereitet: Ein Profil, das dieser Lauf gar nicht braucht, änderte sonst die
+# Sitzungen, die er wirklich fährt.
+if [ "${M3_OPENCODE:-auto}" != 0 ]; then
+    M3_OPENCODE_PATH="$(m3_opencode_in_sandbox || true)"
+    if [ -n "$M3_OPENCODE_PATH" ]; then
+        M3_OC_PROFILE=$(m3_profile_for_opencode "$M3_OPENCODE_PATH") ||
+            e2e_die "cannot write the sandbox profile that mounts $(dirname "$M3_OPENCODE_PATH")"
+    fi
+fi
+
 m3_write_config
 # `--allow-test-ca` ist das, was den `https`-Verkehr dieses Laufs möglich macht
 # (HUM-087). Es steht hier im Startbefehl und nicht in einer Umgebungsvariablen:
@@ -1059,19 +1167,62 @@ e2e_expect "and the language model served a second inference request" 2 \
 e2e_step "13. the same session with the real OpenCode, if the sandbox can see it"
 
 m3_before_opencode="$E2E_ASSERTIONS"
-m3_opencode_path="$(m3_opencode_in_sandbox || true)"
+m3_opencode_path="$M3_OPENCODE_PATH"
 m3_opencode_wanted="${M3_OPENCODE:-auto}"
 
 if [ "$m3_opencode_wanted" = 0 ]; then
     m3_skip "the OpenCode variant is switched off for this run (M3_OPENCODE=0); nothing about a real agent was verified"
 elif [ -z "$m3_opencode_path" ]; then
     if [ "$m3_opencode_wanted" = 1 ]; then
-        e2e_die "M3_OPENCODE=1 was asked for, but no opencode binary lies under /usr/local/bin, /usr/bin or /bin, which is the whole PATH of the sandbox. Install it there (sudo install -m 0755 \"\$(command -v opencode)\" /usr/local/bin/opencode) or drop M3_OPENCODE=1."
+        e2e_die "M3_OPENCODE=1 was asked for, but this machine has no opencode: neither under /usr/local/bin, /usr/bin or /bin nor anywhere in PATH. Install it, point M3_OPENCODE_BIN at it, or drop M3_OPENCODE=1."
     fi
-    m3_skip "no opencode under /usr/local/bin, /usr/bin or /bin, the whole PATH of the sandbox, so the real-agent variant did not run; nothing about OpenCode was verified. Install it there or set M3_OPENCODE=1 to make this a failure"
+    m3_skip "no opencode on this machine, neither in the sandbox's own PATH nor in the caller's, so the real-agent variant did not run; nothing about OpenCode was verified. Install it or set M3_OPENCODE=1 to make this a failure"
 else
-    e2e_say "opencode at $m3_opencode_path"
+    if [ -n "$M3_OC_PROFILE" ]; then
+        e2e_say "opencode at $m3_opencode_path, mounted read-only through sandbox profile $M3_OC_PROFILE"
+    else
+        e2e_say "opencode at $m3_opencode_path, already inside the sandbox tree"
+    fi
 
+    # Erst fragen, ob das Binary drinnen überhaupt läuft. Ein Pfad, den der
+    # Host kennt, ist noch kein Kommando, das die Sandbox starten kann: Auf
+    # dieser Maschine liegt unter `~/.local/bin/opencode` ein Wrapper, der
+    # seinerseits eine Sandbox aufmacht und das echte Binary woanders sucht.
+    # Ohne diese Probe scheiterte der Lauf später an einer Zusicherung über das
+    # Sprachmodell und nannte damit den falschen Grund.
+    m3_oc_version=$(humanitl sandbox run --profile "${M3_OC_PROFILE:-default}" \
+        --work "$M3_PROJECT" -- "$m3_opencode_path" --version 2>&1 || true)
+    # `[.]` und nicht `.`: In einem Muster steht der Punkt für jedes Zeichen,
+    # und dann ginge auch eine Fehlermeldung mit `0x1` darin als Version durch.
+    case "$m3_oc_version" in
+    *[0-9][.][0-9]*) ;;
+    *)
+        if [ "$m3_opencode_wanted" = 1 ]; then
+            e2e_die "M3_OPENCODE=1 was asked for, but $m3_opencode_path does not run inside the sandbox: $m3_oc_version"
+        fi
+        m3_skip "the opencode at $m3_opencode_path does not run inside the sandbox, so the real-agent variant did not run; nothing about OpenCode was verified. Point M3_OPENCODE_BIN at the real binary if this one is a wrapper. What it said: $m3_oc_version"
+        m3_opencode_path=""
+        ;;
+    esac
+fi
+
+# Erst wenn feststeht, dass die Variante wirklich läuft, wechselt der Lauf sein
+# Profil. **Der Daemon liest seine Konfiguration beim Start**, also braucht der
+# Wechsel einen Neustart; ohne ihn stand in der Startzeile weiter
+# `profile default` (gemessen). Die Schritte davor sind unter dem
+# ausgelieferten Profil gelaufen -- lokal dasselbe wie in CI, wo es kein
+# OpenCode gibt. Die Historie übersteht den Neustart: Sie liegt im
+# Datenverzeichnis des Laufs und nicht im Speicher des Prozesses. Die Probe
+# oben braucht den Wechsel nicht, weil `sandbox run --profile` das
+# Sandbox-Profil unmittelbar nennt.
+if [ -n "$m3_opencode_path" ] && [ -n "$M3_OC_PROFILE" ]; then
+    stop_daemon
+    m3_config_uses_opencode_profile ||
+        e2e_die "cannot put the sandbox profile into the configuration of this run"
+    start_daemon "$E2E_WORKDIR/state" "$E2E_WORKDIR" "$M3_HOLD_TIMEOUT" --allow-test-ca
+fi
+
+if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
     # **Die Zähler von vorher.** Alles, was dieser Zweig über den echten Agenten
     # behauptet, ist ein Zuwachs und keine Gesamtzahl. Zu diesem Zeitpunkt hat
     # der Mock längst die Startprobe, die Inferenz des Skript-Agenten,

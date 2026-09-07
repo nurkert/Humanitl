@@ -332,6 +332,9 @@ stop_fake_upstream() {
 # Setzt DAEMON_SOCK, DAEMON_TOKEN, DAEMON_PROXY_SOCK, DAEMON_CA_CERT,
 # DAEMON_CA_BUNDLE, DAEMON_LOG, DAEMON_ARGV und E2E_DAEMON_PID, dazu die vier
 # `E2E_XDG_*`, mit denen `humanitl` denselben Baum sieht wie der Daemon.
+# Angehaengt und nicht ueberschrieben: Ein Lauf darf den Daemon zwischendurch
+# neu starten (das M3-Demo tut es fuer seine OpenCode-Variante), und die
+# Artefakte sollen dann beide Haelften enthalten statt nur die zweite.
 start_daemon() {
     daemon_state="$1"
     daemon_xdg="$2"
@@ -371,7 +374,7 @@ start_daemon() {
         XDG_CONFIG_HOME="$E2E_XDG_CONFIG" \
         HOME="$E2E_HOME" \
         HUMANITL_HOLD__TIMEOUT_SECS="$daemon_hold" \
-        "$E2E_DAEMON" "$@" > "$DAEMON_LOG" 2>&1 &
+        "$E2E_DAEMON" "$@" >> "$DAEMON_LOG" 2>&1 &
     E2E_DAEMON_PID=$!
 
     if ! wait_for_socket "$DAEMON_SOCK" 20 || ! wait_for_socket "$DAEMON_PROXY_SOCK" 20; then
