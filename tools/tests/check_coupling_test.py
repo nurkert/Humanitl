@@ -114,8 +114,18 @@ def test_an_alias_of_the_proxy_crate_is_counted() -> None:
             "use humanitl_proxy::{HoldQueue as Queue};\n"
         ),
     })
+    root_spellings = {
+        "g.rs": "use ::humanitl_proxy as proxy;\n",
+        "i.rs": "use {humanitl_proxy as proxy};\n",
+        "j.rs": "use ::humanitl_proxy::*;\n",
+        "l.rs": "use {humanitl_proxy};\n",
+        "m.rs": "use humanitl_proxy::ca;\n",
+        "n.rs": "use humanitl_proxy::ca::{self, CaStore};\n",
+    }
+    for name, text in root_spellings.items():
+        (root / "daemon/crates/ipc/src" / name).write_text(text, encoding="utf-8")
     counts = check_coupling.measure(root)
-    expected = {f"daemon/crates/ipc/src/{name}.rs": 1 for name in "abcde"}
+    expected = {f"daemon/crates/ipc/src/{name}.rs": 1 for name in "abcdegijlmn"}
     expect(counts["proxy_alias"] == expected,
            f"every way to hide later uses is counted, renaming one item is not: "
            f"{counts['proxy_alias']}")
@@ -162,10 +172,17 @@ def test_code_behind_or_beside_a_block_comment_still_counts() -> None:
 def test_an_alias_of_an_engine_crate_is_counted() -> None:
     root = tree({
         "daemon/crates/ipc/src/h.rs": "use hyper as h;\nextern crate rustls;\n",
+        "daemon/crates/ipc/src/w.rs": (
+            "use hyper /* note */ ::Request;\nuse {rcgen, webpki_roots};\n"
+            "use humanitl_proxy /* note */ ::HoldQueue;\n"
+        ),
     })
     counts = check_coupling.measure(root)
-    expect(counts["proxy_engine"] == {"daemon/crates/ipc/src/h.rs": 2},
-           f"an aliased or bare engine crate counts: {counts['proxy_engine']}")
+    expect(counts["proxy_engine"] == {"daemon/crates/ipc/src/h.rs": 2,
+                                      "daemon/crates/ipc/src/w.rs": 3},
+           f"an aliased, bare, grouped or spaced engine crate counts: {counts['proxy_engine']}")
+    expect(counts["proxy_crate"] == {"daemon/crates/ipc/src/w.rs": 1},
+           f"a comment before `::` hides no proxy item: {counts['proxy_crate']}")
 
 
 def test_an_untracked_file_in_a_git_tree_counts() -> None:
