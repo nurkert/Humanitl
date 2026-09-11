@@ -657,5 +657,8 @@
   "shellIsolationDisconnected": "Isolation: nicht messbar, keine Verbindung",
   "shellInterceptUnknown": "Abfangen: keine Verbindung",
   "setupStartCallFailed": "Die letzte Anfrage an den Dienst kam nicht an, es wurde also nichts gestartet. An den vier Zeilen hat sich nichts geändert; der Befund steht darunter.",
-  "setupStartRefused": "Der Start kam nicht hoch, es läuft also kein Agent. An den vier Zeilen hat sich nichts geändert; der Befund steht darunter."
+  "setupStartRefused": "Der Start kam nicht hoch, es läuft also kein Agent. An den vier Zeilen hat sich nichts geändert; der Befund steht darunter.",
+  "interceptDiagnosticOpenFlow": "Anfrage öffnen",
+  "historyRevealFailedTitle": "Die Anfrage ließ sich nicht öffnen",
+  "historyRevealFailedDismiss": "Ausblenden"
 }

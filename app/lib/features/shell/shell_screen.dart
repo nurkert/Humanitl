@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/domain/domain.dart';
 import '../../core/ipc/flow_handoff.dart';
+import '../../core/ipc/flow_reveal.dart';
 import '../../core/shortcuts/intents.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
@@ -176,6 +177,18 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
     ref.read(flowHandoffProvider.notifier).clear();
   }
 
+  /// Shows the history when another section asked it to open a flow.
+  ///
+  /// The mirror of [_takeHandoff] for a finished flow: a finding over the
+  /// queue can name a passthrough that no queue holds (HUM-039). The shell
+  /// only switches the section; the history fetches and opens the flow and
+  /// clears the note, because only it knows when the flow is open.
+  void _takeReveal(FlowId? previous, FlowId? next) {
+    if (next != null) {
+      ref.read(navigationProvider.notifier).go(Section.history);
+    }
+  }
+
   /// Opens the setup section once, when the first settled answer says that
   /// nothing can start.
   ///
@@ -251,6 +264,7 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   @override
   Widget build(BuildContext context) {
     ref.listen<FlowId?>(flowHandoffProvider, _takeHandoff);
+    ref.listen<FlowId?>(flowRevealProvider, _takeReveal);
     // Ohne `fireImmediately`: Der erste Zustand ist `checking`, und darauf
     // schaltet `_offerSetup` ohnehin nicht. Der erste gesetzte Zustand kommt
     // als Änderung an, und genau auf ihn wartet die Weiche.
