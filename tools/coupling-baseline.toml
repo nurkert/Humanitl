@@ -1,0 +1,63 @@
+# Written by `python3 tools/check_coupling.py --update`; checked by
+# `make deps-lint`. Each number is how often an adapter-specific name
+# appears in that file outside its adapter. It may fall, never rise.
+
+[bwrap]
+"app/lib/core/domain/doctor.dart" = 3
+"app/lib/core/domain/sandbox.dart" = 2
+"app/lib/core/ipc/fake_daemon_client.dart" = 8
+"app/lib/core/ipc/grpc_daemon_client.dart" = 1
+"app/lib/core/ui/shell_command.dart" = 1
+"app/lib/features/setup/setup_text.dart" = 2
+"app/test/core/ipc/generated_smoke_test.dart" = 2
+"app/test/features/sandbox/daemon_live_test.dart" = 1
+"app/test/features/sandbox/harness.dart" = 3
+"app/test/features/sandbox/sandbox_screen_test.dart" = 1
+"app/test/features/setup/setup_checks_test.dart" = 12
+"app/test/features/setup/setup_test.dart" = 1
+"daemon/bin/humanitl/src/cli.rs" = 2
+"daemon/bin/humanitl/src/cmd/mod.rs" = 3
+"daemon/bin/humanitl/src/cmd/run.rs" = 1
+"daemon/bin/humanitl/src/cmd/sandbox.rs" = 13
+"daemon/bin/humanitl/src/cmd/unit.rs" = 1
+"daemon/bin/humanitl/src/main.rs" = 2
+"daemon/bin/humanitl/src/render.rs" = 7
+"daemon/bin/humanitl/tests/cli.rs" = 9
+"daemon/bin/humanitl/tests/common/mod.rs" = 8
+"daemon/crates/config/src/resolve.rs" = 1
+"daemon/crates/config/src/validate.rs" = 1
+"daemon/crates/core-types/src/diagnostics/codes.rs" = 10
+"daemon/crates/core-types/src/diagnostics/mod.rs" = 3
+"daemon/crates/ipc/src/convert.rs" = 1
+"daemon/crates/ipc/src/fake/mod.rs" = 4
+"daemon/crates/ipc/src/sandbox.rs" = 31
+"daemon/crates/ipc/src/server.rs" = 2
+"daemon/crates/ipc/src/summary.rs" = 1
+"daemon/crates/ipc/tests/sandbox_rpc.rs" = 1
+"daemon/crates/ipc/tests/sandbox_start.rs" = 9
+"daemon/crates/ipc/tests/terminal.rs" = 6
+"proto/humanitl/v1/humanitl.proto" = 3
+
+[proxy_engine]
+
+[proxy_crate]
+"daemon/bin/humanitld/src/main.rs" = 32
+"daemon/bin/humanitld/tests/daemon_end_to_end.rs" = 2
+"daemon/crates/ipc/src/convert.rs" = 9
+"daemon/crates/ipc/src/domains.rs" = 2
+"daemon/crates/ipc/src/fake/mod.rs" = 1
+"daemon/crates/ipc/src/lib.rs" = 1
+"daemon/crates/ipc/src/rules.rs" = 1
+"daemon/crates/ipc/src/sandbox.rs" = 4
+"daemon/crates/ipc/src/server.rs" = 21
+"daemon/crates/ipc/src/terminal.rs" = 6
+"daemon/crates/ipc/src/validate.rs" = 1
+"daemon/crates/ipc/tests/fake_parity.rs" = 3
+"daemon/crates/ipc/tests/ipc_server.rs" = 4
+"daemon/crates/ipc/tests/probe_models.rs" = 2
+"daemon/crates/ipc/tests/rules_rpc.rs" = 5
+"daemon/crates/ipc/tests/session_config.rs" = 3
+"daemon/crates/ipc/tests/session_summary_rpc.rs" = 2
+"daemon/crates/ipc/tests/terminal.rs" = 2
+
+[proxy_alias]

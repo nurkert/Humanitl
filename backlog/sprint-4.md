@@ -29,6 +29,7 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-141 | Das Mock-Modell laesst keinen Werkzeugaufruf zu | M | HUM-046, HUM-067 |
 | HUM-142 | Der Daemon wartet ohne Frist auf einen Agenten, der nicht gehen will | M | HUM-011, HUM-042 |
 | HUM-143 | Zwischen zwei Segmenten verschwindet der Klick | S | HUM-028 |
+| HUM-145 | Die Kopplung an einen Adapter waechst nicht weiter | S | HUM-074 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -2020,6 +2021,64 @@ Die CLI benutzt in beiden Fällen `out_path`.
 ### Quellen
 `docs/ARCHITECTURE.md` 3b (Zeile 66); `docs/adr/0018-rpc-parity.md` Zeilen 25 bis 28, 39 bis 42, 110; `README.md` Zeile 83 und Zeilen 123 bis 124; `backlog/CONVENTIONS.md` 4.4, 4.6, 4.13, 4.18 (Zeilen 802 bis 880); `backlog/sprint-2.md` HUM-026 Nicht-Ziel (Zeile 583) und HUM-032 (Zeilen 1329 bis 1345); `backlog/sprint-4.md` HUM-051 (Zeile 789, Audit-Export als Vorbild) und HUM-078; `docs/PROTOCOL.md` Abschnitte 3 und 4; `proto/humanitl/v1/humanitl.proto` Zeilen 23 bis 44 und 863; `daemon/bin/humanitl/src/cli.rs` Zeilen 102 bis 142 und 187 bis 263; `.github/workflows/ci.yml` Zeilen 572 bis 582; HAR 1.2 (http://www.softwareishard.com/blog/har-12-spec/); RFC 4180 (https://www.rfc-editor.org/rfc/rfc4180).
 
+
+---
+
+## HUM-145 · Die Kopplung an einen Adapter wächst nicht weiter
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-074 · Blockiert: nichts; es hält offen, dass ein zweites Sandbox-Backend oder eine andere Proxy-Engine später möglich bleibt
+
+### Kontext
+ADR-015 legt Sandbox und Proxy als Adapter an den äußeren Ring. Gemessen am 2026-09-11 hält sich der Code nur zum Teil daran:
+
+- Der Name `bwrap` steht 156-mal in 34 Dateien außerhalb von `daemon/crates/sandbox` und `daemon/bin/humanitl-shim`, Bezeichner wie `BwrapBackend` eingerechnet: in Diagnose-Codes (`core-types/src/diagnostics/codes.rs`), in der Ausgabe der Kommandozeile (`render.rs`), in der Proto, im Daemon (`ipc/src/sandbox.rs`), in der Dart-Domäne und im Fake-Client. Daemon und Kommandozeile halten `BwrapBackend` als konkreten Typ; es gibt kein `dyn SandboxBackend`. `LaunchPlan.argv` ist die wörtliche bwrap-Kommandozeile, und die Mounttabelle der Oberfläche entsteht aus deren Flags. Der Modulkommentar von `launcher.rs` behauptete bis heute, ein zweites Backend berühre nichts außerhalb der Crate; das war falsch und ist mit diesem Issue korrigiert.
+- `humanitl_proxy` wird außerhalb des Proxy-Crates an 101 Stellen in 18 Dateien benutzt, vor allem von `humanitld/src/main.rs` und `ipc/src/server.rs`. Das Crate mischt die Protokoll-Engine (hyper, tokio-rustls, rcgen) mit Anwendungslogik (Halte-Warteschlange, Registry, Regelspeicher); es gibt keinen Port, hinter dem die Engine austauschbar wäre.
+- Engine-Typen außerhalb des Proxy-Crates: keine. Das ist gut und soll so bleiben.
+
+Ein zweites Sandbox-Backend -- microsandbox als microVM, Docker aus M6 -- oder eine etablierte Proxy-Engine muss heute an all diesen Stellen ansetzen. Das wird hier nicht zurückgebaut. Es soll aber ab jetzt nicht mehr wachsen.
+
+### Ziel
+`make deps-lint` und damit der CI-Job `deps-lint` werden rot, sobald eine dieser Kopplungen in einer Datei zunimmt oder eine neue Datei sie aufnimmt.
+
+### Nicht-Ziel
+Die bestehende Kopplung abbauen; das geschieht in eigenen Issues, wenn ein zweiter Adapter wirklich kommt. Ein neuer Port ohne ADR und zweiten Adapter (`CLAUDE.md`, „Was wir nicht tun"). Ein Verbot, das Wort `bwrap` in Dokumenten zu schreiben: gezählt werden nur Quelltexte (`.rs`, `.dart`, `.proto`).
+
+### Betroffene Pfade
+- `tools/check_coupling.py` (die Zählung)
+- `tools/coupling-baseline.toml` (die Grundlinie)
+- `tools/tests/check_coupling_test.py` (die Selbstprüfung)
+- `Makefile` (`deps-lint`), `CLAUDE.md` (die Regel)
+- `daemon/crates/sandbox/src/launcher.rs` (der Modulkommentar, der die Kopplung verneinte)
+
+### Spezifikation
+Vier Regeln, je Datei gezählt, außerhalb des jeweiligen Adapters:
+
+| Regel | Was zählt | Zuhause |
+|---|---|---|
+| `bwrap` | die Zeichenfolge, in jeder Schreibweise, auch in Bezeichnern (`BwrapBackend`, `bwrap_args`) und Kommentaren | Sandbox-Crate, Shim |
+| `proxy_engine` | Pfade in `hyper`, `hyper_util`, `http_body_util`, `rustls`, `tokio_rustls`, `rcgen`, `webpki_roots` | Proxy-Crate |
+| `proxy_crate` | jedes Element von `humanitl_proxy`, in einer `use`-Liste jedes einzeln | Proxy-Crate |
+| `proxy_alias` | `use humanitl_proxy as …`, `use humanitl_proxy;`, `extern crate` | Proxy-Crate |
+
+Die beiden Proxy-Regeln überspringen Kommentarzeilen, weil ein Doc-Kommentar, der auf `humanitl_proxy::ca::ENV_KIT` zeigt, von nichts abhängt. Die `bwrap`-Regel zählt sie mit, weil Prosa über ein bestimmtes Backend genau das Wissen ist, das ein zweites Backend später suchen muss.
+
+Gelesen werden die Dateien aus `git ls-files --cached --others --exclude-standard`, also auch neue, noch nicht hinzugefügte; ohne Git läuft ein Verzeichnisdurchgang ohne `target`, `build`, `.dart_tool` und `generated`. Steigt eine Zahl, ist der Lauf rot und nennt Datei, alten und neuen Wert und den Grund der Regel. Sinkt eine, ist er ebenfalls rot, bis `python3 tools/check_coupling.py --update` die Grundlinie im selben Commit nachzieht -- sonst ließe sich der gewonnene Spielraum unbemerkt wieder verbrauchen.
+
+### Tests
+`tools/tests/check_coupling_test.py` baut Wegwerf-Bäume und prüft: Zählung nur außerhalb des Adapters, jede Schreibweise, auch in Bezeichnern; `use`-Listen über mehrere Zeilen und verschachtelt; Kommentare zählen für die Proxy-Regeln nicht, für `bwrap` schon; Aliase; unverändert grün, Anstieg rot, neue Datei rot, Abstieg rot bis `--update`.
+
+### Akzeptanzkriterien
+- [x] `make deps-lint` ist auf dem heutigen Stand grün. **Gemessen am 2026-09-11.**
+- [x] Eine zusätzliche Erwähnung von `bwrap` in einer Datei der Anwendung macht `make deps-lint` rot, ebenso eine neue, noch nicht hinzugefügte Datei mit dem Wort. **Gemessen am 2026-09-11** am echten Baum (`app/lib/core/domain/sandbox.dart` 2 auf 3, neue Datei 0 auf 1, `BwrapBackend` in `ipc/src/rules.rs`: jeweils Exit 1).
+- [x] Ein zusätzliches `use humanitl_proxy::…`, ein Alias und ein `hyper::`-Pfad außerhalb des Proxy-Crates machen es rot. **Gemessen am 2026-09-11**, dazu `{self as p}` und `/* note */ use humanitl_proxy::X;`: jeweils Exit 1.
+- [x] Dieselben Namen in einer Kommentarzeile (Proxy) oder im Sandbox-Crate (`bwrap`) lassen es grün. **Gemessen am 2026-09-11**: Exit 0.
+- [ ] Der CI-Job `deps-lint` ist über den fertigen Commit grün.
+
+### Fallstricke
+- Die Zählung ist textuell, kein Parser. Ein Re-Export (`pub use humanitl_proxy::X` in einem anderen Crate und danach `other::X`) oder ein Makro umgeht sie. Das fängt kein Skript, sondern das Review; die Regel in `CLAUDE.md` nennt deshalb das Ziel und nicht nur die Zahl.
+- Wer eine Zahl senkt, muss die Grundlinie mitändern. Das ist lästig und gewollt.
+
+### Referenzen
+Messung am 2026-09-11 (`tools/coupling-baseline.toml`); `docs/ARCHITECTURE.md` zu ADR-015; `BACKLOG.md` Abschnitt 6 (Sandbox-Backends) und Abschnitt 9 (M6 Docker, M13 microVM); microsandbox: https://github.com/superradcompany/microsandbox.
 
 ---
 

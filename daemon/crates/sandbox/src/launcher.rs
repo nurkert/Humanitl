@@ -3,8 +3,12 @@
 //! Ein Backend macht aus Profil und Sitzung einen [`LaunchPlan`], startet ihn
 //! zu einem [`SandboxHandle`] und liest aus der laufenden Sandbox die drei
 //! Garantien als [`CheckResult`]. Der MVP hat ein Backend, `bwrap`
-//! ([`crate::BwrapBackend`]); ein zweites (Docker, Seatbelt) berührt nichts
-//! außerhalb dieser Crate.
+//! ([`crate::BwrapBackend`]). Ein zweites (Docker, Seatbelt, microsandbox)
+//! käme heute nicht ohne Änderungen außerhalb dieser Crate aus: Daemon und
+//! Kommandozeile halten `BwrapBackend` als konkreten Typ, der Plan trägt die
+//! wörtliche bwrap-Kommandozeile, und die Mounttabelle der Oberfläche entsteht
+//! aus deren Flags. Dass diese Kopplung nicht weiter wächst, prüft
+//! `tools/check_coupling.py` (HUM-145).
 //!
 //! Der Plan ist vollständig: `argv[0]` ist das Programm, alles danach kommt
 //! aus [`crate::SandboxProfile::to_bwrap_args`], und die Oberfläche zeigt die
