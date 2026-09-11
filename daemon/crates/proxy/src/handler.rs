@@ -1652,7 +1652,7 @@ pub struct Served {
     pub requests: u64,
     /// Wahr, wenn die Verbindung sauber endete oder weil der Client weg war;
     /// falsch bei einer abgelaufenen Kopf-Frist und bei Unlesbarem
-    /// ([`went_away`]).
+    /// (`went_away` in diesem Modul).
     pub quiet_close: bool,
 }
 
