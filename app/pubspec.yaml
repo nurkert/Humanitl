@@ -79,3 +79,9 @@ flutter:
   uses-material-design: true
   # `flutter gen-l10n` laeuft mit `flutter pub get`; Konfiguration in l10n.yaml.
   generate: true
+  # Die Lizenz der mitgelieferten Rangliste fuer Flutters Lizenzseite
+  # (HUM-031). Eine Kopie von `catalog/RANKS-LICENSE`, keine Nacherzaehlung:
+  # `test/features/about/licences_test.dart` vergleicht sie Byte fuer Byte mit
+  # dem Original und nennt den Befehl, der sie nachzieht.
+  assets:
+    - assets/catalog/RANKS-LICENSE
