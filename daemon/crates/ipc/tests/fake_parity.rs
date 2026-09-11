@@ -218,7 +218,6 @@ fn table() -> Vec<Case> {
                         action: v1::RuleAction::Allow as i32,
                         ..v1::Rule::default()
                     }),
-                    ..v1::DecideRequest::default()
                 }
             ),
         },
@@ -708,7 +707,6 @@ async fn allow_edited_for_two_flows_refuses_each_the_same_way() {
             action: v1::RuleAction::Allow as i32,
             ..v1::Rule::default()
         }),
-        ..v1::DecideRequest::default()
     };
 
     let (real, _dir) = real();
@@ -863,7 +861,6 @@ async fn no_door_lets_a_rule_claim_to_be_bundled_or_passthrough() {
             flow_ids: vec![held],
             decision: Some(v1::decide_request::Decision::Allow(())),
             remember: Some(overreaching("")),
-            ..v1::DecideRequest::default()
         }))
         .await
         .expect("deciding a held flow works")

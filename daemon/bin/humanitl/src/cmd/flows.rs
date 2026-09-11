@@ -336,7 +336,6 @@ async fn decide(
             flow_ids: vec![id.to_owned()],
             decision: Some(decision),
             remember: None,
-            acknowledge_findings: false,
         })
         .await
         .map(tonic::Response::into_inner)
