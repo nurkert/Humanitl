@@ -10,6 +10,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-057 | Ressourcen-Limits und Backpressure | S | HUM-015, HUM-016, HUM-018, HUM-026, HUM-062 |
 | HUM-058 | Fehlerpfade im UI | M | HUM-063, HUM-019, HUM-040, HUM-041, HUM-042, HUM-045, HUM-068 |
 | HUM-146 | Private Ziele hinter NAT64, 6to4 und Sonderbereichen | S | HUM-004 |
+| HUM-147 | verify-commit baut inkrementell, die CI nicht | S | — |
 | HUM-059 | Dokumentation | M | alle vorherigen |
 | HUM-086 | Repository auf Englisch | M | HUM-059 |
 | HUM-060 | Release 0.1.0 | S | HUM-053, HUM-059 |
@@ -2604,3 +2605,36 @@ Je Bereich eine Adresse innen und eine knapp außerhalb. NAT64 und 6to4 je mit e
 
 ### Referenzen
 Proxy-Analyse 2026-09-11; RFC 6052, RFC 8215, RFC 3056, RFC 4380; IANA IPv4 und IPv6 Special-Purpose Address Registry; `daemon/crates/core-types/src/host.rs:192-225`; `docs/SECURITY.md` Abschnitt 6 (Regeln und ihre Fallen).
+
+---
+
+## HUM-147 · verify-commit baut inkrementell, die CI nicht
+Sprint: 5 · Größe: S · Abhängigkeiten: — · Blockiert: nichts; es hält die Platte des Entwicklungsrechners klein
+
+### Kontext
+Die CI setzt `CARGO_INCREMENTAL: "0"` (`.github/workflows/ci.yml:43`). `tools/verify-commit.sh` fährt dieselben Schritte in einem frischen Worktree, gegen ein gemeinsames Zielverzeichnis (`~/.cache/humanitl/verify-target`, Zeile 59), aber inkrementell. Gemessen am 2026-09-11: Das Zielverzeichnis belegt 62 GB, davon 30 GB in `debug/incremental` mit 830 Einträgen und 32 GB in `debug/deps`. Die Inkrement-Artefakte wachsen mit jedem geprüften Commit und helfen kaum, weil jeder Lauf in einem neuen Worktree beginnt. Zugleich weicht verify dadurch von der CI ab, deren Stand es nachstellen soll.
+
+### Ziel
+verify-commit baut wie die CI nicht inkrementell, und ein vorhandenes `incremental`-Verzeichnis im Zielverzeichnis verschwindet beim nächsten Lauf.
+
+### Nicht-Ziel
+Das gemeinsame Zielverzeichnis abschaffen: `deps` spart jedem Lauf das Übersetzen aller Abhängigkeiten. Eine Obergrenze für `deps` (eigenes Issue, falls es wächst).
+
+### Betroffene Pfade
+- `tools/verify-commit.sh`
+- `CONTRIBUTING.md` (ein Satz zum Zielverzeichnis, falls dort beschrieben)
+
+### Spezifikation
+Die Schritte laufen mit `CARGO_INCREMENTAL=0`, gesetzt an derselben Stelle wie `CARGO_TARGET_DIR` (Zeile 220). Vor dem ersten Schritt löscht das Skript `"$target"/*/incremental`, solange es die Sperre des Zielverzeichnisses hält; das ist Cache und wird mit `CARGO_INCREMENTAL=0` nie wieder gelesen.
+
+### Akzeptanzkriterien
+- [ ] `grep -n "CARGO_INCREMENTAL=0" tools/verify-commit.sh` trifft an der Stelle, an der die Schritte laufen.
+- [ ] Nach einem Lauf gibt es unter `~/.cache/humanitl/verify-target` kein `incremental`-Verzeichnis mehr; die Größe vorher und nachher steht im Commit-Body.
+- [ ] `tools/verify-commit.sh HEAD` ist grün.
+
+### Fallstricke
+- Das Skript darf nicht geändert werden, während ein verify läuft: bash liest ein Skript beim Ausführen nach.
+- Gelöscht wird nur unter dem gehaltenen Lock, sonst nimmt man einem parallelen Lauf den Cache unter den Füßen weg.
+
+### Referenzen
+Messung am 2026-09-11; `.github/workflows/ci.yml:43`; `tools/verify-commit.sh:59`, `:220`; Nutzervorgabe zur Plattensparsamkeit.
