@@ -8,6 +8,18 @@ mkdir -p daemon/target
 (cd daemon && cargo metadata --format-version 1 --no-deps > target/deps-meta.json)
 python3 tools/check_deps.py daemon/target/deps-meta.json tools/deps-allow.toml
 
+# Crates, die nie eine Verbindung aufbauen, ziehen auch keine Netzbibliothek
+# herein und benutzen keine Netz-API (HUM-031). Dafür braucht es den
+# aufgelösten Graphen, nicht nur die direkten Abhängigkeiten, und zwar für die
+# Plattform, auf der gebaut wird: eine Abhängigkeit nur für Windows gehört
+# nicht in das Linux-Programm. Mit allen Features, denn ein optionales Crate
+# hinter einem Feature ist eine Abhängigkeit, auch wenn sie heute keiner
+# einschaltet.
+host=$(rustc -vV | sed -n 's/^host: //p')
+(cd daemon && cargo metadata --format-version 1 --locked --all-features \
+  --filter-platform "$host" > target/deps-meta-resolved.json)
+python3 tools/check_offline.py daemon/target/deps-meta-resolved.json tools/offline-crates.toml
+
 fail=0
 for lib in daemon/crates/*/src/lib.rs; do
   if ! grep -q '#!\[deny(missing_docs)\]' "$lib"; then
