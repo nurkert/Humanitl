@@ -6,12 +6,12 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:humanitl/core/body/body_kind.dart';
+import 'package:humanitl/core/body/body_parser.dart';
+import 'package:humanitl/core/body/body_span.dart';
+import 'package:humanitl/core/body/form_view.dart';
+import 'package:humanitl/core/body/json_tree_view.dart';
 import 'package:humanitl/core/domain/domain.dart';
-import 'package:humanitl/features/intercept/body/body_kind.dart';
-import 'package:humanitl/features/intercept/body/body_parser.dart';
-import 'package:humanitl/features/intercept/body/body_span.dart';
-import 'package:humanitl/features/intercept/body/form_view.dart';
-import 'package:humanitl/features/intercept/body/json_tree_view.dart';
 
 import 'harness.dart';
 

@@ -6,12 +6,12 @@ import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:humanitl/core/body/body_kind.dart';
+import 'package:humanitl/core/body/body_providers.dart';
+import 'package:humanitl/core/body/body_view.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/core/ui/ui.dart';
-import 'package:humanitl/features/intercept/body/body_kind.dart';
-import 'package:humanitl/features/intercept/body/body_view.dart';
-import 'package:humanitl/features/intercept/providers/flow_body_provider.dart';
 import 'package:humanitl/l10n/l10n.dart';
 
 import '../fixtures.dart';
@@ -67,6 +67,8 @@ Future<void> pumpCard(
                 builder: (BuildContext context) => BodyView(
                   flowId: detail.summary.id,
                   body: detail.request!.body,
+                  headers: detail.request!.headers,
+                  findings: detail.findings,
                 ),
               ),
             ],

@@ -21,14 +21,14 @@ import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/text/finding_text.dart';
+import '../../../core/text/format.dart';
 import '../../../core/ui/announce.dart';
+import '../../../core/ui/diagnostic_severity.dart';
 import '../../../core/ui/fix_control.dart';
 import '../../../core/ui/h_diagnostic_card.dart';
-import '../../../core/ui/diagnostic_severity.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
-import '../finding_text.dart';
-import '../format.dart';
 import '../providers/decision.dart';
 import '../providers/note.dart';
 import '../providers/now.dart';

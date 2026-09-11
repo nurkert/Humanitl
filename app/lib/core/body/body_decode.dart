@@ -32,7 +32,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import '../../../core/domain/domain.dart';
+import '../domain/domain.dart';
 import 'body_kind.dart';
 import 'body_parser.dart';
 

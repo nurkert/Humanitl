@@ -10,6 +10,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show gzip;
 import 'dart:typed_data';
 
 import '../domain/domain.dart';
@@ -2744,11 +2745,46 @@ class _SeededFlow {
   bool get _carriesBody =>
       method == Method.post || method == Method.put || method == Method.patch;
 
-  Uint8List get bodyBytes => _carriesBody
-      ? Uint8List.fromList(
-          utf8.encode('{"flow": "${id.value}", "path": "$_pathAndQuery"}'),
-        )
-      : Uint8List(0);
+  /// Wie der Rumpf der Anfrage auf der Leitung stand.
+  ///
+  /// Die meisten Anfragen tragen JSON. Der Upload in den Bucket geht gepackt
+  /// (`Content-Encoding: gzip`), die Telemetrie als Protobuf; ohne diese
+  /// beiden zeigte `HUMANITL_FAKE=history` weder das Auspacken noch die
+  /// Hex-Ansicht des History-Details (HUM-116).
+  _SeededBody get _bodyForm => switch (host) {
+    _ when passthrough => _SeededBody.json,
+    'storage.googleapis.com' => _SeededBody.gzip,
+    'telemetry.vendor.io' => _SeededBody.binary,
+    _ => _SeededBody.json,
+  };
+
+  String get _contentType => _bodyForm == _SeededBody.binary
+      ? 'application/x-protobuf'
+      : 'application/json';
+
+  Uint8List get bodyBytes {
+    if (!_carriesBody) {
+      return Uint8List(0);
+    }
+    final List<int> json = utf8.encode(
+      '{"flow": "${id.value}", "path": "$_pathAndQuery"}',
+    );
+    return Uint8List.fromList(switch (_bodyForm) {
+      _SeededBody.json => json,
+      _SeededBody.gzip => gzip.encode(json),
+      // Feldnummer und Länge wie in Protobuf, dann die Flow-Id im Klartext,
+      // dann Steuerbytes. Die Bytes sind kein Text, bleiben aber gültiges
+      // UTF-8 mit der Id darin: ein Rumpf muss seinem Flow zuzuordnen sein.
+      _SeededBody.binary => <int>[
+        0x08,
+        0x01,
+        0x12,
+        id.value.length,
+        ...utf8.encode(id.value),
+        for (int i = 0; i < 48; i++) i % 8,
+      ],
+    });
+  }
 
   /// Der Pfad mit einer Abfrage, die sich je Zeile ändert.
   ///
@@ -2759,7 +2795,7 @@ class _SeededFlow {
   BodyRef get bodyRef => BodyRef(
     sha256: _digest('request'),
     size: bodyBytes.length,
-    contentType: bodyBytes.isEmpty ? '' : 'application/json',
+    contentType: bodyBytes.isEmpty ? '' : _contentType,
   );
 
   /// Ein Schlüssel, der zu genau einem Rumpf gehört.
@@ -2998,10 +3034,9 @@ class _SeededFlow {
         headers: <Header>[
           Header(name: 'accept', value: utf8.encode('application/json')),
           if (_carriesBody)
-            Header(
-              name: 'content-type',
-              value: utf8.encode('application/json'),
-            ),
+            Header(name: 'content-type', value: utf8.encode(_contentType)),
+          if (_carriesBody && _bodyForm == _SeededBody.gzip)
+            Header(name: 'content-encoding', value: utf8.encode('gzip')),
           Header(name: 'host', value: utf8.encode(flow.host)),
           Header(name: 'user-agent', value: utf8.encode('opencode/0.4.2')),
         ],
@@ -3322,3 +3357,16 @@ DoctorReport fakeDoctorFailing({String failing = DoctorCheckId.bwrap}) =>
             check,
       ]),
     );
+
+/// Wie das History-Szenario einen Anfrage-Rumpf auf die Leitung legt
+/// (`_SeededFlow._bodyForm`, HUM-116).
+enum _SeededBody {
+  /// Ungepacktes JSON, der Normalfall.
+  json,
+
+  /// JSON, mit `Content-Encoding: gzip` gepackt.
+  gzip,
+
+  /// Protobuf: Bytes, die kein Text sind.
+  binary,
+}

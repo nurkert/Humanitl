@@ -85,7 +85,6 @@
   "interceptQueryEmpty": "Keine Parameter.",
   "interceptHeadersEmpty": "Keine Header.",
   "interceptBodyEmpty": "Kein Body.",
-  "interceptBodyTruncated": "Vorschau der ersten 64 KB",
   "interceptMaskedValue": "••••",
   "interceptRevealValue": "Wert von {header} zeigen",
   "interceptHideValue": "Wert von {header} verbergen",
@@ -190,14 +189,11 @@
   "historyDetailTabResponse": "Antwort",
   "historyDetailTabEdited": "Bearbeitet",
   "historyDetailHeaders": "Kopfzeilen",
-  "historyDetailBody": "Body",
   "historyDetailCopy": "Kopieren",
   "historyDetailCopied": "Kopiert",
   "historyDetailNoHeaders": "Keine Kopfzeilen.",
   "historyDetailNoBody": "Kein Body.",
   "historyDetailNoResponse": "Es kam keine Antwort zurück.",
-  "historyDetailBinaryBody": "{size} Binärinhalt. Der Export trägt die Bytes.",
-  "historyDetailBodyTruncated": "Die Aufzeichnung endete nach {size}.",
   "historyDetailReceived": "Angekommen",
   "historyDetailDecision": "Entscheidung",
   "historyDetailDuration": "Dauer",
@@ -424,7 +420,6 @@
   "rulesEndsAtPast": "Dieser Zeitpunkt ist vorbei. Eine Regel, die in der Vergangenheit endet, entscheidet nichts.",
   "rulesDryRunFailedTitle": "Der Probelauf lief nicht",
 
-  "historyDetailLinesCapped": "Die ersten {lines} Zeilen stehen hier. Der Export trägt den ganzen Rumpf.",
   "historyExportContents": "Die Datei trägt Hosts, vollständige Pfade samt Query, alle Kopfzeilen und beide Rümpfe im Klartext.",
   "historyOpenRowInQueue": "In Angehalten öffnen",
 
@@ -455,7 +450,7 @@
   "interceptBodyPaneRaw": "Roh",
   "interceptBodyPaneHex": "Hex",
   "interceptBodyUnreadable": "Der Rumpf ließ sich nicht lesen.",
-  "interceptBodyIncomplete": "Es kam weniger an, als die Anfrage angekündigt hat; die Anzeige endet vorher.",
+  "interceptBodyIncomplete": "Es kam weniger an, als angekündigt war; die Anzeige endet vorher.",
   "interceptBodyTypeDisputed": "Der Content-Type nennt Text, die Bytes sind keiner. Gezeigt werden die Bytes.",
   "interceptBodyNotJson": "Als JSON angekündigt, aber nicht lesbar. Gezeigt wird der Rohtext.",
   "interceptBodyNotForm": "Als Formular angekündigt, aber kein Feld lesbar. Gezeigt wird der Rohtext.",
@@ -545,7 +540,7 @@
   "sandboxCannotRead": "Der Daemon hat nicht gesagt, was der Agent bekommt: {why}",
   "sandboxRetry": "Erneut fragen",
   "interceptBodyStreamTruncated": "Der gepackte Rumpf endet nicht dort, wo sein eigener Abschluss es sagt; die Anzeige endet vorher, und der Daemon hat möglicherweise etwas anderes durchsucht.",
-  "interceptBodyEncodingUndecoded": "Die Anfrage kündigt {encoding} an; diese Ansicht kann das nicht auspacken. Gezeigt werden die Bytes, wie sie ankamen, und kein Fund bekommt darin eine Stelle.",
+  "interceptBodyEncodingUndecoded": "Die Kopfzeilen nennen {encoding}; diese Ansicht kann das nicht auspacken. Gezeigt werden die Bytes, wie sie ankamen, und kein Fund bekommt darin eine Stelle.",
   "interceptBodyFindingsNotPlaced": "{count, plural, =1{1 Fund wurde gemeldet, aber diese Ansicht kann nicht sagen, wo er sitzt.} other{{count} Funde wurden gemeldet, aber diese Ansicht kann nicht sagen, wo sie sitzen.}}",
   "isolationIntro": "Jede Zeile darunter wurde in der laufenden Sandbox gemessen, nicht auf diesem Rechner, und trägt den Beleg dazu.",
   "isolationCheck1": "Kein Netzwerk-Interface. Es gibt keinen Weg nach draußen.",
@@ -664,5 +659,6 @@
   "setupFixWriteEnv": "In config.toml schreiben",
   "setupFixWriteEnvRunning": "Wird geschrieben …",
   "setupFixWriteEnvDone": "In config.toml geschrieben. Sitzungen, die ab jetzt starten, bekommen {key}, außer ein Profil bringt ein eigenes sandbox.env mit.",
-  "setupFixWriteEnvFailed": "Nicht geschrieben: {why}"
+  "setupFixWriteEnvFailed": "Nicht geschrieben: {why}",
+  "interceptBodyRecorderStopped": "Die Aufzeichnung endete nach {size}; die Anzeige endet dort."
 }
