@@ -48,6 +48,7 @@ Voraussetzungen aus Sprint 0 bis 2: `humanitl-core` (HUM-004, HUM-063), `humanit
 | 12 | HUM-067 | `humanitl run` | XL |
 | 13 | HUM-046 | Demo-Skript M3 | L |
 | 14 | HUM-135 | Ein genanntes Kommando bekommt den Adapter nicht | M | HUM-037 |
+| 15 | HUM-149 | curl lehnt die CA erst nach dem Handschlag ab, und der Proxy sieht es nicht | M | HUM-045 |
 
 Demo-Ziel am Sprint-Ende (HUM-046): CI startet einen Ollama-Mock, `humanitl run --profile default` startet OpenCode, der erste Prompt geht per Passthrough ans Mock-LLM, der models.dev-Aufruf wird per Default-Regel geblockt, ein `webfetch` wird gehalten, per gRPC erlaubt, und die Antwort erscheint im Terminal-Stream.
 
@@ -1754,7 +1755,7 @@ Die `SetEnv`-Fix-Aktion wird in der UI als „Für nächste Session setzen" gere
 - `tls_002_after_three_resets`.
 
 ### Akzeptanzkriterien
-- [x] `curl --cacert /dev/null https://example.com` in der Sandbox erzeugt `TLS_001` mit `CURL_CA_BUNDLE`-Fix im UI und in `humanitl flows list --json` (Feld `error`). Die Daemon-Hälfte steht samt Integrationstest; die Karte im UI fehlt ganz.
+- [x] `curl --cacert <fremde Wurzel> https://example.com` in der Sandbox erzeugt `TLS_001` mit `CURL_CA_BUNDLE`-Fix im UI und in `humanitl flows list --json` (Feld `error`). **Umformuliert und gemessen am 2026-09-11, nach HUM-149.** Die frühere Fassung nannte `--cacert /dev/null`; mit dem echten curl kann sie nie `TLS_001` ergeben, weil curl dabei gar kein Zertifikat sieht. Mit einer vorhandenen, fremden Wurzel (`ISRG_Root_X1.crt`) stehen Karte und Flow, gemessen gegen einen echten Daemon (Einzelheiten unter HUM-149). **Die Vorgeschichte, wie sie am 2026-09-11 aufgeschrieben wurde:** Abgehakt war das Kästchen auf den Integrationstest hin, und der nimmt einen rustls-Client, der mitten im Handschlag mit `unknown_ca` abbricht. curl 8.22 mit OpenSSL 3.6 tut das nicht: Mit `--cacert /dev/null` scheitert es schon beim Laden der Datei (Exit 77), der Proxy verbucht einen Flow mit `tls_handshake_failed`, aber als abgerissenen Handschlag und ohne `TLS_001`. Mit einer vorhandenen, fremden Wurzel (`--cacert …/ISRG_Root_X1.crt`) schließt curl den TLS-1.3-Handschlag vollständig ab, prüft das Zertifikat danach und legt ohne Alert auf (Exit 60); der Proxy sieht eine gelungene Verbindung ohne Anfrage und verbucht nichts. `openssl s_client -verify_return_error` dagegen erzeugt Flow und Befund. Die Oberflächen-Hälfte steht seit HUM-106; was fehlt, ist die Erkennung im Proxy, und die liegt als HUM-149.
 - [ ] Fix „Für nächste Session setzen" schreibt `[sandbox.env]` ins globale Profil, sichtbar in `humanitl config get sandbox.env`. Lesen geht: `humanitl config get sandbox.env` antwortet `{}`, lokal aufgelöst ohne Daemon (`cmd/config.rs:115-119`). Geschrieben wird nichts — es gibt weder den Knopf noch einen Schreibweg. **Offen, und zwar gesperrt:** Der Knopf braucht einen Schreibweg in die Konfiguration, und `SetConfig` antwortet bis HUM-069 `unimplemented`; die Begründung samt Messung steht im Stand-Abschnitt dieses Issues. Die Karte verspricht deshalb heute nur, was sie hält.
 
 ### Stand (2026-09-04): nur die Daemon-Hälfte
@@ -4240,3 +4241,43 @@ Ein Adapter, der an einem beliebigen Kommando etwas erkennt (Heuristik über Arg
 
 ### Referenzen
 `daemon/crates/ipc/src/sandbox.rs:1815-1819`; `daemon/bin/humanitl/src/cmd/run.rs` (`refuse_terminal_ask`); `backlog/sprint-3.md` HUM-037 und HUM-046; Messung am 2026-09-07 im M3-Lauf und mit `humanitl run --ask none -- /usr/bin/env`.
+
+---
+
+## HUM-149 · curl lehnt die CA erst nach dem Handschlag ab, und der Proxy sieht es nicht
+Sprint: 3 · Größe: M · Abhängigkeiten: HUM-045 · Blockiert: das erste Akzeptanzkriterium von HUM-045 und das zweite offene von HUM-106
+
+### Kontext
+HUM-045 erkennt einen abgelehnten Handschlag, wenn der Client **während** des Handschlags mit `unknown_ca` oder `bad_certificate` abbricht (`tls_observe::classify`, gerufen aus `handler.rs::note_handshake_failure`). Der Integrationstest belegt das mit einem rustls-Client, und `openssl s_client -verify_return_error` verhält sich genauso: Flow mit `tls_handshake_failed`, dazu `TLS_001` (gemessen am 2026-09-11).
+
+curl tut es nicht, und curl ist das Werkzeug, für das die Karte gebaut ist. Gemessen am 2026-09-11 mit curl 8.22 und OpenSSL 3.6 in der Sandbox:
+
+- `curl --cacert /dev/null https://example.com`: curl scheitert beim Laden der leeren Datei (Exit 77), bevor es ein Zertifikat sieht. Der Proxy verbucht einen abgerissenen Handschlag, Flow ja, `TLS_001` nein; `TLS_002` erst nach drei Abbrüchen in zehn Sekunden.
+- `curl --cacert <fremde Wurzel> https://example.com`: curl schließt den TLS-1.3-Handschlag vollständig ab (sein `Finished` geht hinaus), prüft das Zertifikat **danach**, legt ohne Alert auf und endet mit Exit 60. Für den Proxy ist das eine gelungene Verbindung, in der nie eine Anfrage kam. Er verbucht nichts und meldet nichts; der Mensch sieht keinen Flow und keine Karte.
+
+### Ziel
+Wenn ein Client einen Tunnel öffnet, den Handschlag abschließt und die Verbindung schließt, ohne eine einzige Anfrage zu senden, verbucht der Proxy einen Flow und meldet `TLS_001` mit dem Hinweis auf das Werkzeug, der Satz aber vorsichtiger als bei einem ausgesprochenen Alert: Der Client hat nichts gesagt, der Proxy schließt aus dem Verhalten.
+
+### Nicht-Ziel
+Eine Erkennung, die jede kurze Verbindung meldet: Ein Client, der wenigstens eine Anfrage gestellt hat, hat der CA vertraut. Eine Änderung an curl oder an den Umgebungsvariablen der Sandbox.
+
+### Spezifikation
+Eine neue Art in `TlsFailure`, `ClosedAfterHandshake`: Der Handschlag stand, die Verbindung endete sauber oder mit Abbruch, und `serve_connection` hat keine einzige Anfrage bedient. Sie zählt als Ablehnung (`is_rejection`), verbucht einen Flow mit `tls_handshake_failed` wie die übrigen und meldet `TLS_001` über dasselbe Zählfenster je Host, mit einem eigenen `why`-Satz, der sagt, dass der Client die Verbindung nach dem Handschlag ohne Anfrage geschlossen hat, was meist heißt, dass er der CA nicht traut. Der Werkzeughinweis kommt wie bisher aus dem `User-Agent` des `CONNECT`.
+
+### Tests
+- Integrationstest mit einem Client, der den Handschlag abschließt und ohne Anfrage schließt: ein Flow, ein `TLS_001`.
+- Integrationstest mit einem Client, der eine Anfrage stellt und dann schließt: kein Befund.
+- Messung mit dem echten curl in der Sandbox, wie im Kontext, danach Flow und Karte.
+
+### Akzeptanzkriterien
+- [x] Ein Tunnel, der nach dem Handschlag ohne Anfrage endet, ergibt einen Flow mit `tls_handshake_failed` und ein `TLS_001` am selben Flow. **Gemessen am 2026-09-11**: `a_tunnel_closed_after_the_handshake_gets_one_tls_001_and_a_flow`; die Mutation ohne Auslöser macht ihn rot.
+- [x] Ein Tunnel mit mindestens einer Anfrage ergibt keinen Befund. **Gemessen am 2026-09-11**: `a_tunnel_that_carried_a_request_gets_no_finding` (die Anfrage wird von einer Regel sofort beantwortet, der Tunnel endet, die Prüfung läuft) und `a_tunnel_that_carried_garbage_gets_no_finding` (Vorspann von HTTP/2, von hyper vor jedem Aufruf verworfen); die Mutation ohne Anfragezähler macht den ersten rot, die ohne Prüfung auf ein ruhiges Ende den zweiten. Grundlage im Review: Codex, der Zähler zählte Aufrufe des Dienstes und nicht Anfragen.
+- [x] `curl --cacert <fremde Wurzel> https://example.com` in der Sandbox erzeugt die Karte mit `CURL_CA_BUNDLE` in der Oberfläche und den Flow in `humanitl --json flows list`. **Gemessen am 2026-09-11** auf Xvfb gegen einen echten Daemon mit curl 8.22 und `--cacert /usr/share/ca-certificates/mozilla/ISRG_Root_X1.crt`: curl endet mit Exit 60, `flows list` zeigt `CONNECT example.com block tls_handshake_failed`, und über der Warteschlange steht `TLS_001` mit „A client that calls itself curl … finished the TLS handshake for example.com and then closed the connection without sending a request", dem Abzeichen „CURL_CA_BUNDLE setzen" und dem Export-Befehl. Nach der Umstellung auf das ruhige Ende ein zweites Mal gemessen, dasselbe Ergebnis.
+- [x] Das erste Kriterium von HUM-045 ist danach mit dem echten curl gemessen. **Gemessen am 2026-09-11**, mit der Umformulierung dort, die dieser Abschnitt ankündigt.
+
+### Fallstricke
+- Ein Client, der Verbindungen nur vorsorglich öffnet (Vorabverbindung eines Browsers), sähe genauso aus. Für die Werkzeuge in der Sandbox ist das selten; das Zählfenster je Host begrenzt die Karten, und der Satz sagt „meist", nicht „immer".
+- `--cacert /dev/null` bleibt ein anderer Fall: Dort sieht curl nie ein Zertifikat. Das Kriterium von HUM-045 wird deshalb mit einer fremden Wurzel gemessen, und die Umformulierung steht dort.
+
+### Referenzen
+Messungen vom 2026-09-11 (`curl -v` in der Sandbox, `openssl s_client`, Trace-Protokoll des Proxys); `daemon/crates/proxy/src/handler.rs` (`handle_connect`, `note_handshake_failure`, `serve_connection`); `daemon/crates/proxy/src/tls_observe.rs` (`TlsFailure`, `classify`).
