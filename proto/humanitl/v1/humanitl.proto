@@ -598,8 +598,18 @@ message DecideRequest {
 
   // Feld 3 trug `allow_edited` als `HttpRequest`, das den Body nur als
   // `BodyRef` kennt; eine bearbeitete Anfrage konnte ihren Body nicht
-  // uebertragen. Die Nummer wird nicht wiederverwendet (docs/PROTOCOL.md 4).
-  reserved 3;
+  // uebertragen.
+  //
+  // Feld 6 trug `acknowledge_findings` als `bool`. Kein Handler hat es je
+  // gelesen und kein Client hat es je gesetzt; die Bestaetigung offener
+  // Funde wird in HUM-049 als `repeated uint32 acknowledged_findings = 8`
+  // gebaut, mit unvertraeglichem Typ. Bis dahin waere ein Feld, das eine
+  // Zusage macht und nichts bewirkt, eine falsche Aussage ueber den Vertrag
+  // (backlog/CONVENTIONS.md 4.13).
+  //
+  // Beide Nummern werden nicht wiederverwendet (docs/PROTOCOL.md 4).
+  reserved 3, 6;
+  reserved "acknowledge_findings";
 
   oneof decision {
     google.protobuf.Empty allow = 2;
@@ -613,8 +623,6 @@ message DecideRequest {
   // Optionale Regel, die vor dem Fortsetzen angelegt wird. Scheitert das
   // Anlegen, wird nicht entschieden.
   Rule remember = 5;
-  // Der Nutzer hat offene Findings gesehen.
-  bool acknowledge_findings = 6;
 
   // Blockieren mit optionaler Begruendung fuer den Agenten.
   message Block {

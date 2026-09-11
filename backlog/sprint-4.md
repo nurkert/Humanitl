@@ -223,25 +223,23 @@ Entwürfe sind pro `FlowId` (Riverpod-Family, `keepAlive` bis der Flow den Zusta
 
 **Proto-Änderung**:
 
+Nachgezogen auf den gelieferten Vertrag (HUM-089, 2026-09-11): Die bearbeitete Anfrage reist als `EditedRequest` im `oneof decision` auf Nummer 7 (bestehend, `proto/humanitl/v1/humanitl.proto`), samt Body als `bytes`; ein eigenes `HttpRequestProto` braucht es nicht mehr. Die Nummern 3 und 6 sind gesperrt, 4 ist `block`, deshalb bekommt `replacements` die freie Nummer 10. Die übrigen Nennungen von `HttpRequestProto` in diesem Issue (Betroffene Pfade, Schritt 1) sind beim Bau entsprechend zu lesen.
+
 ```proto
-message HttpRequestProto {
-  string method = 1;
-  string scheme = 2;            // "http" | "https"
-  string host = 3;              // normalisiert
-  uint32 port = 4;
-  string path_and_query = 5;
-  repeated Header headers = 6;  // message Header { string name = 1; string value = 2; }
-  bytes body = 7;               // vollständiger Body, nie BodyRef (Edits sind < preview.cap_bytes)
-}
 message ReplacementProto { FindingLocationProto location = 1; uint32 start = 2; uint32 end = 3; bytes value_hash = 4; string pseudonym = 5; }
 message DecideRequest {
-  string flow_id = 1;
-  DecisionKind decision = 2;    // ALLOW, ALLOW_EDITED, BLOCK
-  HttpRequestProto edited = 3;  // nur bei ALLOW_EDITED
-  repeated ReplacementProto replacements = 4;
-  RuleProto remember = 5;       // bestehend aus HUM-028
-  repeated uint32 acknowledged_findings = 6;   // HUM-049
-  repeated uint32 ignore_always = 7;           // HUM-049
+  repeated string flow_ids = 1;                  // bestehend
+  reserved 3, 6;                                 // 3: altes `allow_edited`; 6: `acknowledge_findings` (HUM-089)
+  reserved "acknowledge_findings";
+  oneof decision {                               // bestehend
+    google.protobuf.Empty allow = 2;
+    EditedRequest allow_edited = 7;              // die bearbeitete Anfrage samt Body
+    Block block = 4;
+  }
+  Rule remember = 5;                             // bestehend aus HUM-028
+  repeated uint32 acknowledged_findings = 8;     // HUM-049
+  repeated uint32 ignore_always = 9;             // HUM-049
+  repeated ReplacementProto replacements = 10;   // dieses Issue; 4 ist `block`
 }
 ```
 
@@ -523,11 +521,12 @@ Hat eine gehaltene Anfrage offene Findings, heißt der Allow-Button „Senden mi
 ### Betroffene Pfade
 - `app/lib/features/intercept/widgets/action_bar.dart` (ändern)
 - `app/lib/features/intercept/widgets/findings_pause.dart` (neu)
-- `app/lib/features/intercept/providers/decision_provider.dart` (ändern: `acknowledgedFindings`, `ignoreAlways`)
+- `app/lib/features/intercept/providers/decision.dart` (ändern: `acknowledgedFindings`, `ignoreAlways`)
 - `daemon/crates/proxy/src/hold.rs` (ändern: Prüfung vor `Allow`)
-- `daemon/crates/recorder/src/findings.rs` (ändern: `resolved`, Allowlist-Abfrage)
-- `daemon/crates/findings/src/scanner.rs` (ändern: Allowlist beim Scan anwenden)
-- `daemon/crates/config/src/hold.rs` (ändern: neues Feld)
+- `daemon/crates/recorder/src/writer.rs` (ändern: `write_findings` schreibt `resolved`) und `daemon/crates/recorder/src/query.rs` (ändern: `findings_of` liest es, Allowlist-Abfrage)
+- `daemon/crates/proxy/src/findings.rs` (Trait `Scanner`) und `daemon/crates/findings/src/registry.rs` (`scan`; ändern: Allowlist beim Scan anwenden)
+- `daemon/crates/config/src/model.rs` (ändern: neues Feld in `HoldConfig`)
+- `daemon/crates/core-types/src/diagnostics/codes.rs` (ändern: `HOLD_004` ans Ende anhängen) und `docs/DIAGNOSTICS.md` (erzeugt)
 - ARB-Dateien
 
 ### Spezifikation
@@ -549,7 +548,7 @@ fn check_allow(flow: &Flow, req: &DecideRequest, cfg: &HoldConfig) -> Result<(),
 }
 ```
 
-`acknowledged_findings` markiert die Funde in der Tabelle `findings` als `resolved = 'acknowledged'` (Spalte `resolved` wird von BOOLEAN auf TEXT `NULL | replaced | acknowledged | allowlisted` erweitert, Migration). `ignore_always` schreibt `finding_allowlist(value_hash, kind, scope)`; `scope` ist `global`, wenn kein Projekt-Profil aktiv ist, sonst SHA-256-Hex des kanonischen Projektpfads. Beim nächsten Scan (HUM-025 `Scanner`) werden Findings mit Allowlist-Treffer mit `allowlisted = true` markiert, erscheinen im UI ausgegraut in einer eingeklappten Zeile „3 ignoriert in diesem Projekt" und zählen nicht als offen.
+`acknowledged_findings` markiert die Funde in der Tabelle `findings` als `resolved = 'acknowledged'`. Die Spalte `resolved` ist bereits `TEXT` (`daemon/crates/recorder/migrations/V1__init.sql`, Kommentar `NULL | replaced | ignored`); eine Migration entfällt, es kommen nur die Werte `acknowledged` und `allowlisted` hinzu (Korrektur aus HUM-089). `HOLD_004` gibt es im Register noch nicht; der Code wird in diesem Issue angelegt, ans Ende von `daemon/crates/core-types/src/diagnostics/codes.rs`. `ignore_always` schreibt `finding_allowlist(value_hash, kind, scope)`; `scope` ist `global`, wenn kein Projekt-Profil aktiv ist, sonst SHA-256-Hex des kanonischen Projektpfads. Beim nächsten Scan (HUM-025 `Scanner`) werden Findings mit Allowlist-Treffer mit `allowlisted = true` markiert, erscheinen im UI ausgegraut in einer eingeklappten Zeile „3 ignoriert in diesem Projekt" und zählen nicht als offen.
 
 `Decided`-Event bekommt `unresolved_findings: u32` (nach Abzug von acknowledged und allowlisted). Audit (HUM-050): `flow.decided` trägt `unresolved_findings`, `acknowledged: n`, `allowlisted_added: n`.
 
@@ -565,7 +564,7 @@ fn check_allow(flow: &Flow, req: &DecideRequest, cfg: &HoldConfig) -> Result<(),
 **FindingsPause** (`findings_pause.dart`): Ersetzt den unteren Teil der Karte (nicht die ganze Karte, kein Overlay), Höhe animiert 200 ms. Inhalt: Überschrift „n Funde in dieser Anfrage", Liste (Typ-Chip, maskierter Wert aus `mask()`, Ort `Header: Authorization` / `Body Zeile 12`), pro Zeile Buttons „Ignorieren" und „Immer ignorieren" (letzterer mit Tooltip „Dieser Wert wird in diesem Projekt nicht mehr gemeldet"). Fuß: `[Trotzdem senden] [Pseudonymisieren] [Blockieren]`, Tastatur: `S` senden, `P` pseudonymisieren, `B` blockieren, `Esc` zurück. „Trotzdem senden" sendet `Decide(Allow, acknowledged_findings = alle offenen)`. „Pseudonymisieren" setzt `editorOpenProvider = true` und ruft `draftProvider(id).replaceAllOpen()`.
 
 ### Schritte
-1. Config-Feld, Migration `findings.resolved` TEXT, Allowlist-Abfrage im Recorder.
+1. Config-Feld, die Werte `acknowledged` und `allowlisted` für `findings.resolved` (die Spalte ist schon `TEXT`, keine Migration), Allowlist-Abfrage im Recorder.
 2. `Scanner` wendet Allowlist an; Test.
 3. `check_allow` in `hold.rs` mit `HOLD_004`; Tests.
 4. `Decide`-Handler verarbeitet `acknowledged_findings` und `ignore_always`.
@@ -1746,7 +1745,7 @@ Zu klären ist außerdem ein Widerspruch im Repository. Der Doc-Kommentar `daemo
 `humanitl flows decide` entscheidet mehrere ausdrücklich genannte Flows in einer einzigen `Decide`-Anfrage und legt dabei auf Wunsch die Regel an, die die Oberfläche an derselben Stelle anlegt — mit `created_from_flow_id`, damit die Herkunft der Regel auch ohne Maus belegt ist. Der Vertrag, der Daemon und der Fake bleiben, wie sie sind; es entsteht nur der Client, der sie nutzt.
 
 ### Nicht-Ziel
-Keine Massenentscheidung über einen Filter (`decide --filter state:held`, `--all`): Das ist genau die bequeme Art, mehr freizugeben als gemeint, vor der `flows.rs:308-311` warnt, und sie bleibt ausgeschlossen. Kein `allow_edited` auf der Kommandozeile (der Vertrag lässt dafür genau eine Id zu, `daemon/crates/ipc/src/validate.rs:67-79`, und einen Editor gibt es im Terminal nicht). Kein Flag für `acknowledge_findings` (`humanitl.proto:594`): Das Feld liest heute kein Dienstpfad, ein Flag würde eine Wirkung versprechen, die es nicht gibt; es kommt mit HUM-049, der ihm einen Leser gibt. Keine Paritäts-Tabelle und kein Generator — das ist HUM-078; eine mechanische Prüfung auf Feld-Ebene (jedes Proto-Feld einer Anfrage hat eine CLI-Entsprechung) baut auch dieses Issue nicht, sie wird in `CONVENTIONS.md` 4.22 ausdrücklich als offene Grenze festgehalten, damit die nächste Lücke dieser Art nicht für geprüft gehalten wird.
+Keine Massenentscheidung über einen Filter (`decide --filter state:held`, `--all`): Das ist genau die bequeme Art, mehr freizugeben als gemeint, vor der `flows.rs:308-311` warnt, und sie bleibt ausgeschlossen. Kein `allow_edited` auf der Kommandozeile (der Vertrag lässt dafür genau eine Id zu, `daemon/crates/ipc/src/validate.rs:67-79`, und einen Editor gibt es im Terminal nicht). Kein Flag für die Bestätigung offener Funde: Das Feld `acknowledge_findings` gibt es seit HUM-089 nicht mehr, Nummer 6 und der Name sind gesperrt, und HUM-049 baut die Bestätigung als `acknowledged_findings = 8` samt Leser; ein Flag dafür gehört dorthin. Keine Paritäts-Tabelle und kein Generator — das ist HUM-078; eine mechanische Prüfung auf Feld-Ebene (jedes Proto-Feld einer Anfrage hat eine CLI-Entsprechung) baut auch dieses Issue nicht, sie wird in `CONVENTIONS.md` 4.22 ausdrücklich als offene Grenze festgehalten, damit die nächste Lücke dieser Art nicht für geprüft gehalten wird.
 
 ### Betroffene Pfade
 - `daemon/bin/humanitl/src/cli.rs:229-245`: `FlowsCmd::Decide` bekommt `--also ID` (wiederholbar) und den Argumentsatz `RememberArgs` (neu, präfigierte Flags)

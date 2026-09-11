@@ -343,6 +343,33 @@ fn decide_request_reserves_the_retired_allow_edited_number() {
 }
 
 #[test]
+fn decide_request_reserves_the_never_read_acknowledge_findings_number() {
+    // Feld 6 trug `acknowledge_findings` als `bool`; kein Handler hat es je
+    // gelesen und kein Client je gesetzt (HUM-089). HUM-049 braucht an dieser
+    // Stelle `repeated uint32`. Nummer und Name bleiben gesperrt, damit das
+    // Feld nicht mit unverträglichem Typ zurückkommt (docs/PROTOCOL.md 4).
+    let decide = message("DecideRequest");
+    assert!(
+        decide
+            .reserved_range
+            .iter()
+            .any(|range| range.start() <= 6 && 6 < range.end()),
+        "DecideRequest does not reserve field number 6"
+    );
+    assert!(
+        decide
+            .reserved_name
+            .iter()
+            .any(|name| name == "acknowledge_findings"),
+        "DecideRequest does not reserve the name acknowledge_findings"
+    );
+    assert!(
+        decide.field.iter().all(|f| f.number() != 6),
+        "DecideRequest reuses the retired field number 6"
+    );
+}
+
+#[test]
 fn header_values_are_bytes() {
     // HTTP-Header sind nicht garantiert UTF-8; als `string` wuerde der
     // Decoder auf echten Antworten scheitern.
@@ -744,8 +771,9 @@ const FLOW_EVENT_FIELDS: &FieldTable = &[
 ];
 
 /// `DecideRequest` vollstaendig, vor allem die drei Entscheidungen in
-/// `oneof decision`: `allow`, `allow_edited`, `block`. Nummer 3 ist
-/// `reserved`, siehe `decide_request_reserves_the_retired_allow_edited_number`.
+/// `oneof decision`: `allow`, `allow_edited`, `block`. Die Nummern 3 und 6
+/// sind `reserved`, siehe `decide_request_reserves_the_retired_allow_edited_number`
+/// und `decide_request_reserves_the_never_read_acknowledge_findings_number`.
 const DECIDE_REQUEST_FIELDS: &FieldTable = &[
     ("flow_ids", 1, "repeated string", None),
     ("allow", 2, ".google.protobuf.Empty", Some("decision")),
@@ -762,7 +790,6 @@ const DECIDE_REQUEST_FIELDS: &FieldTable = &[
         Some("decision"),
     ),
     ("remember", 5, ".humanitl.v1.Rule", None),
-    ("acknowledge_findings", 6, "bool", None),
 ];
 
 /// `EditedRequest` vollstaendig: die bearbeitete Anfrage samt Body als
