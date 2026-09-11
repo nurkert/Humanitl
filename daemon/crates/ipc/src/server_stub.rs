@@ -207,13 +207,15 @@ pub fn grpc_code(code: DiagnosticCode) -> Code {
         "IPC_001" => Code::Unauthenticated,
         "IPC_002" | "IPC_004" | "IPC_005" | "CONFIG_002" | "CONFIG_003" => Code::InvalidArgument,
         // Eine Regel, die der Client so geschickt hat, wie die Engine sie
-        // nicht annimmt: dasselbe Urteil wie bei einer unlesbaren Anfrage.
-        "RULES_001" | "RULES_003" | "RULES_005" | "RULES_006" | "RULES_007" => {
+        // nicht annimmt, oder eine Einstellung, die `SetConfig` nicht schreibt
+        // (HUM-151): dasselbe Urteil wie bei einer unlesbaren Anfrage.
+        "RULES_001" | "RULES_003" | "RULES_005" | "RULES_006" | "RULES_007" | "CONFIG_014" => {
             Code::InvalidArgument
         }
         // Der Zustand verbietet es, nicht das Argument: die Regel ist
-        // mitgeliefert, der Flow wartet nicht mehr.
-        "IPC_003" | "RULES_010" => Code::FailedPrecondition,
+        // mitgeliefert, der Flow wartet nicht mehr, `config.toml` steht in
+        // einer Form, die sich nicht ändern ließ, ohne mehr zu ändern (HUM-151).
+        "IPC_003" | "RULES_010" | "CONFIG_015" => Code::FailedPrecondition,
         "DAEMON_001" => Code::Unavailable,
         _ => Code::Internal,
     }

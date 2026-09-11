@@ -65,7 +65,7 @@ use crate::domains::DomainTable;
 use crate::rules::RulesService;
 use crate::sandbox::SandboxService;
 use crate::server_stub::{BoxStream, diagnostic_to_status};
-use crate::{PROTO_MAJOR, PROTO_MINOR, auth, convert, rules, v1, validate};
+use crate::{PROTO_MAJOR, PROTO_MINOR, auth, config_rpc, convert, rules, v1, validate};
 
 /// Was dieser Daemon in M1 kann.
 ///
@@ -236,6 +236,18 @@ impl IpcServer {
     pub fn with_sandbox(mut self, sandbox: SandboxService) -> Self {
         self.info.capabilities.push("sandbox.bwrap".to_owned());
         self.sandbox = Some(sandbox);
+        self
+    }
+
+    /// Derselbe Dienst über anderen Pfaden als denen des Prozesses.
+    ///
+    /// Gegen sie prüft `Doctor`, und in ihre `config.toml` schreibt
+    /// `SetConfig`. Der Daemon braucht das nicht; Tests setzen hier ein
+    /// Wegwerf-Verzeichnis, damit keiner die Konfiguration eines Menschen
+    /// berührt.
+    #[must_use]
+    pub fn with_paths(mut self, paths: humanitl_config::Paths) -> Self {
+        self.doctor.paths = paths;
         self
     }
 
@@ -1191,14 +1203,22 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         ))
     }
 
+    /// Setzt eine Variable der Sandbox in `config.toml`, und nur diese Art
+    /// Einstellung (HUM-151, [`config_rpc`]). Der Rest wartet auf HUM-069.
+    ///
+    /// Die Datei wird in [`tokio::task::spawn_blocking`] gelesen und
+    /// geschrieben, wie die Prüfungen des Doctors.
     async fn set_config(
         &self,
-        _request: Request<v1::SetConfigRequest>,
+        request: Request<v1::SetConfigRequest>,
     ) -> Result<Response<v1::ConfigSnapshot>, Status> {
-        Err(unimplemented(
-            "SetConfig",
-            "HUM-069 with the settings screen",
-        ))
+        let v1::SetConfigRequest { key, value } = request.into_inner();
+        let paths = self.doctor.paths.clone();
+        let snapshot = tokio::task::spawn_blocking(move || config_rpc::set(&paths, &key, &value))
+            .await
+            .map_err(|error| Status::internal(format!("SetConfig did not finish: {error}")))?
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        Ok(Response::new(snapshot))
     }
 
     /// Prüft die Maschine, auf der dieser Daemon läuft (HUM-075).
@@ -1662,11 +1682,8 @@ mod tests {
                 .await
                 .err()
                 .map(|status| (status.code(), status.message().to_owned())),
-            server
-                .set_config(Request::new(v1::SetConfigRequest::default()))
-                .await
-                .err()
-                .map(|status| (status.code(), status.message().to_owned())),
+            // `SetConfig` antwortet seit HUM-151, mit einer schmalen Tür; was
+            // sie annimmt und was nicht, prüft `tests/ipc_server.rs`.
         ];
         for entry in codes {
             let (code, message) = entry.expect("the rpc must refuse, not answer");

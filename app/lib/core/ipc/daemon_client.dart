@@ -184,6 +184,20 @@ abstract class DaemonClient {
   /// [ports] overrides the four default ports.
   Stream<LlmServer> discoverLlm({String? subnet, List<int> ports});
 
+  /// `SetConfig`: writes one value into `config.toml` (HUM-151).
+  ///
+  /// The daemon accepts exactly one kind of write for now: `sandbox.env.<NAME>`
+  /// set to the certificate path it mounts in the sandbox
+  /// (`/etc/humanitl/ca.crt`), which is what a `TLS_001` finding proposes.
+  /// Anything else arrives as a [DaemonException] carrying `CONFIG_014`; the
+  /// settings screen widens the call (HUM-069).
+  ///
+  /// The running session keeps its environment, which stood when it started;
+  /// the value applies to sessions started afterwards. The daemon answers with
+  /// a fresh `ConfigSnapshot`, and this method drops it on purpose: there is no
+  /// domain type for it yet, and HUM-069 brings one.
+  Future<void> setConfig(String key, String value);
+
   /// `Terminal`: the output of the running session, and the keys on their way
   /// back (HUM-042).
   ///

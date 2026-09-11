@@ -8,9 +8,9 @@
 /// whether it is writable, not where it lies (ADR-018).
 ///
 /// The chosen folder travels in `Sandbox(Plan)` and `Sandbox(Start)` and is
-/// not written into `config.toml`: there is no write path in the repository
-/// yet, and `SetConfig` answers `unimplemented` until HUM-069
-/// (CONVENTIONS 4.17).
+/// not written into `config.toml`: `SetConfig` accepts only a CA variable
+/// under `sandbox.env` since HUM-151 and refuses `sandbox.work_dir` with
+/// `CONFIG_014` until HUM-069 (CONVENTIONS 4.17).
 library;
 
 import 'package:flutter/widgets.dart';

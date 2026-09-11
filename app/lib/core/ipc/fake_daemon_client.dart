@@ -352,6 +352,17 @@ class FakeDaemonClient implements DaemonClient {
   /// nicht.
   Diagnostic? llmDiscoverFailure;
 
+  /// Jeder Wert, den `SetConfig` angenommen hat, als (Schluessel, Wert), in
+  /// der Reihenfolge der Aufrufe (HUM-151).
+  ///
+  /// Nur angenommene Auftraege stehen hier; ein abgelehnter hat nichts
+  /// geschrieben, und die Liste soll zeigen, was in `config.toml` staende.
+  final List<(String, String)> configWrites = <(String, String)>[];
+
+  /// Der Befund, mit dem `SetConfig` scheitert, bevor es die Regel des
+  /// Daemons prueft. `null` heisst: es scheitert nicht.
+  Diagnostic? setConfigFailure;
+
   /// The rules the person created, session rules first. `Decide.remember`
   /// adds to it, `Rules(remove)` takes from it.
   List<Rule> get rules => <Rule>[...sessionRules, ...savedRules];
@@ -1338,6 +1349,50 @@ class FakeDaemonClient implements DaemonClient {
       return pending?.cancel();
     };
     return out.stream;
+  }
+
+  // --- Schreibweg des TLS-Fixes (HUM-151) ---------------------------------
+  //
+  // Der Fake haelt die Tuer so schmal wie der Daemon: `sandbox.env.<NAME>`
+  // mit Grossbuchstaben, Ziffern und `_` im Namen und genau dem Zertifikat,
+  // das die Sandbox einhaengt, als Wert; alles andere ist `CONFIG_014`. Ein
+  // Fake, der jeden Schluessel annaehme, liesse die Oberflaeche gegen einen
+  // Schreibweg ueben, den es nicht gibt (CONVENTIONS 4.7).
+
+  @override
+  Future<void> setConfig(String key, String value) async {
+    _check();
+    if (setConfigFailure case final Diagnostic failure) {
+      throw DaemonException(failure);
+    }
+    const String prefix = 'sandbox.env.';
+    final String name = key.startsWith(prefix)
+        ? key.substring(prefix.length)
+        : '';
+    // Dieselbe Regel wie `config_rpc::accepted` im Daemon: kein Name, der mit
+    // einer Ziffer beginnt, und keiner der drei Loader-Schluessel
+    // (`LOADER_ENV_KEYS` in `daemon/crates/config/src/env.rs`).
+    const Set<String> loaderKeys = <String>{
+      'LD_PRELOAD',
+      'LD_AUDIT',
+      'LD_LIBRARY_PATH',
+    };
+    if (!RegExp(r'^[A-Z_][A-Z0-9_]*$').hasMatch(name) ||
+        loaderKeys.contains(name) ||
+        value != '/etc/humanitl/ca.crt') {
+      throw DaemonException(
+        Diagnostic(
+          code: 'CONFIG_014',
+          severity: Severity.error,
+          why:
+              'SetConfig accepts only sandbox.env.<NAME> set to '
+              '/etc/humanitl/ca.crt for now; "$key" = "$value" is not that '
+              'write. Every other setting comes with the settings screen '
+              '(HUM-069).',
+        ),
+      );
+    }
+    configWrites.add((key, value));
   }
 
   // --- Doctor und Endpunkt-Probe (HUM-075, HUM-044) ---------------------

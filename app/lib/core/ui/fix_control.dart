@@ -11,10 +11,11 @@
 /// from wherever a diagnostic is drawn.
 ///
 /// The line stays on the honest side of that rule in both directions. It never
-/// offers a button for something the client cannot do -- writing an environment
-/// variable into the configuration needs `SetConfig`, which answers
-/// `unimplemented` until HUM-069, so copying the `export` line is the part that
-/// works today. And where it can act, it acts: `InstallService` runs
+/// offers a button for something the client cannot do -- `SetConfig` accepts
+/// exactly one write until HUM-069, a `sandbox.env` variable pointing at the
+/// certificate in the sandbox, so that one `SetEnv` gets a button that writes
+/// `config.toml` and every other one only the `export` line to copy. And where
+/// it can act, it acts: `InstallService` runs
 /// `humanitl daemon install` instead of putting it on the clipboard, because
 /// the acceptance criterion of HUM-044 is measured -- the row turns green
 /// within four seconds of the click -- and a clipboard does not turn anything
@@ -28,9 +29,51 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../domain/domain.dart';
+import '../ipc/client_providers.dart';
+import '../ipc/connection.dart';
 import '../../l10n/l10n.dart';
 import 'shell_command.dart';
 import 'ui.dart';
+
+/// Der Pfad, unter dem der Daemon das Zertifikat seiner CA in der Sandbox
+/// einhängt.
+///
+/// Derselbe Wert wie `CA_CERT_DST` in `daemon/crates/sandbox/src/profile.rs`,
+/// und der einzige, den `SetConfig` bis HUM-069 als Wert annimmt (HUM-151).
+/// Ein `SetEnv`, der auf ihn zeigt, ist der Vorschlag eines `TLS_001`; nur
+/// dieser bekommt den Knopf, der in `config.toml` schreibt.
+const String sandboxCaPath = '/etc/humanitl/ca.crt';
+
+/// Was ein Klick auf „In config.toml schreiben" startet: schreibt die
+/// Variable [key] mit [value] und liefert null, wenn es geklappt hat, sonst
+/// den Befund. In Tests ersetzt.
+///
+/// [key] ist der Name der Variable ohne Präfix, so wie ihn
+/// [FixAction.setEnv] trägt; wohin im Konfigurationsbaum er gehört, weiß der
+/// Schreiber.
+typedef EnvWriter = Future<Diagnostic?> Function(String key, String value);
+
+/// Der Schreiber, den [FixControl] für `SetEnv` benutzt (HUM-151).
+///
+/// Die Vorgabe ruft `SetConfig` mit `sandbox.env.<key>` über den Client der
+/// Anwendung. Eine Absage des Daemons (`CONFIG_014`) oder eine gerissene
+/// Leitung kommt als Befund zurück, nie als Ausnahme, damit die Karte den
+/// Grund zeigt statt still stehen zu bleiben (`docs/UX.md` 4.4).
+///
+/// Er steht als Provider da aus demselben Grund wie
+/// [serviceInstallerProvider]: Der Knopf entsteht tief in einer
+/// Diagnostik-Karte, und nur so kann ein Widget-Test den Weg bis zum Client
+/// messen, ohne selbst ein [FixControl] zu bauen.
+final Provider<EnvWriter> envWriterProvider = Provider<EnvWriter>(
+  (Ref ref) => (String key, String value) async {
+    try {
+      await ref.read(daemonClientProvider).setConfig('sandbox.env.$key', value);
+      return null;
+    } on Object catch (error) {
+      return DaemonConnection.diagnosticOf(error);
+    }
+  },
+);
 
 /// Der Befehl, den [FixAction.installService] ausführt, als eine Zeile.
 ///
@@ -275,11 +318,19 @@ class FixControl extends ConsumerStatefulWidget {
     required this.fix,
     this.copyKey,
     this.installService,
+    this.writeEnv,
     super.key,
   });
 
   /// The proposed fix.
   final FixAction? fix;
+
+  /// Was der Knopf „In config.toml schreiben" eines `SetEnv` tut.
+  ///
+  /// Null bedeutet [envWriterProvider], also ohne Ersetzung `SetConfig` über
+  /// den Client der Anwendung; Tests des Knopfes setzen ihre eigene Fassung
+  /// ein. Gesetzt gewinnt der Parameter über den Provider.
+  final EnvWriter? writeEnv;
 
   /// Was der Knopf von [FixAction.installService] tut.
   ///
@@ -303,6 +354,35 @@ class _FixControlState extends ConsumerState<FixControl> {
   bool _copied = false;
   bool _installing = false;
   Diagnostic? _installFailure;
+  bool _writing = false;
+  bool _written = false;
+  Diagnostic? _writeFailure;
+
+  /// Schreibt die Variable nach `config.toml` (HUM-151).
+  ///
+  /// Wie bei [_install] tut ein zweiter Klick, während der erste läuft,
+  /// nichts, und nach dem Erfolg bleibt der Knopf aus: Derselbe Wert ein
+  /// zweites Mal geschrieben änderte nichts, und ein Knopf, der danach wieder
+  /// anginge, sähe aus, als hätte der erste Klick nicht gewirkt.
+  Future<void> _writeEnv(String key, String value) async {
+    if (_writing || _written) {
+      return;
+    }
+    setState(() {
+      _writing = true;
+      _writeFailure = null;
+    });
+    final EnvWriter writer = widget.writeEnv ?? ref.read(envWriterProvider);
+    final Diagnostic? failure = await writer(key, value);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _writing = false;
+      _written = failure == null;
+      _writeFailure = failure;
+    });
+  }
 
   /// Legt die Unit an und startet sie.
   ///
@@ -363,12 +443,16 @@ class _FixControlState extends ConsumerState<FixControl> {
         // Wort darauf braucht 4,5:1 (`docs/UX.md` 6).
         style: tokens.typography.mono12.tinted(tokens.colors.accentText),
       ),
-      // Das Abzeichen benennt, was zu tun ist; die Zeile darunter tut den
-      // einen Teil davon, den dieser Client heute wirklich ausführen kann.
-      // Ein Knopf, der in die Konfiguration schriebe, gehört hier nicht hin:
-      // `SetConfig` antwortet bis HUM-069 `unimplemented`, und ein Control,
-      // das etwas verspricht, was nicht geschieht, ist schlimmer als keines
-      // (`docs/UX.md` 4.4, `backlog/CONVENTIONS.md` 4.13).
+      // Das Abzeichen benennt, was zu tun ist; darunter steht, was dieser
+      // Client davon wirklich ausführen kann. Für genau einen Wert ist das
+      // mehr als die Kopierzeile: Zeigt die Variable auf [sandboxCaPath],
+      // schreibt ein Knopf sie über `SetConfig` nach `config.toml`, denn
+      // diesen einen Auftrag nimmt der Daemon seit HUM-151 an. Jeder andere
+      // Wert bekommt keinen Knopf, weil `SetConfig` ihn bis HUM-069 mit
+      // `CONFIG_014` ablehnt; `XDG_RUNTIME_DIR` etwa meint die Umgebung des
+      // Daemons und nicht die der Sandbox. Ein Control, das etwas verspricht,
+      // was nicht geschieht, ist schlimmer als keines (`docs/UX.md` 4.4,
+      // `backlog/CONVENTIONS.md` 4.13).
       //
       // Der Befehl wird nie interpoliert, sondern gebaut: `shell_command.dart`
       // quotiert den Wert und verweigert die Zeile, wo sie nicht beweisbar
@@ -504,8 +588,19 @@ class _FixControlState extends ConsumerState<FixControl> {
     );
   }
 
-  /// Das Abzeichen für `SetEnv` und darunter entweder die Kopierzeile oder
-  /// der Grund, warum es keine gibt.
+  /// Das Abzeichen für `SetEnv`, für den Zertifikatspfad der Knopf, der nach
+  /// `config.toml` schreibt, und darunter entweder die Kopierzeile oder der
+  /// Grund, warum es keine gibt.
+  ///
+  /// **Der Knopf nennt `config.toml` und nichts sonst.** Ein Profil mit
+  /// eigenem `sandbox.env` ersetzt diese Tabelle als Ganzes (HUM-151,
+  /// Fallstricke); ein Knopf, der „für die nächste Sitzung" oder ein Profil
+  /// verspräche, versprach mehr, als er hält. Deshalb sagt auch die Zeile nach
+  /// dem Erfolg, wann der Wert nicht ankommt.
+  ///
+  /// Die Kopierzeile bleibt neben dem Knopf stehen: Sie gilt der laufenden
+  /// Sitzung, deren Umgebung mit ihrem Start feststeht und die kein Schreiben
+  /// in `config.toml` mehr erreicht.
   ///
   /// Angezeigt und kopiert wird dieselbe Zeichenkette. Wer die eine säuberte
   /// und die andere roh ließe, hätte den Fehler nur verschoben.
@@ -517,12 +612,43 @@ class _FixControlState extends ConsumerState<FixControl> {
     required TextStyle style,
   }) {
     final String? command = exportCommand(key: key, value: value);
+    final Diagnostic? failure = _writeFailure;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
         HBadge(text: l10n.setupFixSetEnv(key)),
         SizedBox(height: tokens.spacing.x2),
+        if (value == sandboxCaPath) ...<Widget>[
+          HButton(
+            key: const Key('setup-fix-write-env'),
+            onPressed: _writing || _written
+                ? null
+                : () => _writeEnv(key, value),
+            child: Text(
+              _writing ? l10n.setupFixWriteEnvRunning : l10n.setupFixWriteEnv,
+            ),
+          ),
+          if (_written) ...<Widget>[
+            SizedBox(height: tokens.spacing.x1),
+            Text(
+              l10n.setupFixWriteEnvDone(key),
+              key: const Key('setup-fix-write-env-done'),
+              style: tokens.typography.ui12.tinted(tokens.colors.fg1),
+            ),
+          ],
+          if (failure != null) ...<Widget>[
+            SizedBox(height: tokens.spacing.x1),
+            Text(
+              l10n.setupFixWriteEnvFailed(failure.why),
+              key: const Key('setup-fix-write-env-failed'),
+              style: tokens.typography.ui12.tinted(
+                tokens.stateTextColor(HFlowState.error),
+              ),
+            ),
+          ],
+          SizedBox(height: tokens.spacing.x2),
+        ],
         if (command == null)
           Text(
             switch (exportRefusal(key: key, value: value)) {

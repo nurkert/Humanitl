@@ -310,6 +310,11 @@ class TestDaemonClient implements DaemonClient {
   Future<LlmProbe> probeLlm(String endpoint, {Duration? timeout}) async =>
       LlmProbe(endpoint: endpoint);
 
+  // Der Schreibweg des Fixes (HUM-151) gehört der Karte, nicht der
+  // Warteschlange. Dieser Client schreibt nichts und behauptet nichts.
+  @override
+  Future<void> setConfig(String key, String value) async {}
+
   @override
   Stream<LlmServer> discoverLlm({
     String? subnet,

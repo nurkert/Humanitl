@@ -406,6 +406,20 @@ class GrpcDaemonClient implements DaemonClient {
   }
 
   @override
+  Future<void> setConfig(String key, String value) async {
+    // Der `ConfigSnapshot` der Antwort wird verworfen: Es gibt noch keinen
+    // Domänentyp für ihn, und den bringt HUM-069.
+    await _unary(
+      (CallOptions options) => _stub.setConfig(
+        pb.SetConfigRequest()
+          ..key = key
+          ..value = value,
+        options: options,
+      ),
+    );
+  }
+
+  @override
   Stream<LlmServer> discoverLlm({
     String? subnet,
     List<int> ports = const <int>[],

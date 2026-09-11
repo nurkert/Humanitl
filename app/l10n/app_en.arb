@@ -1544,7 +1544,7 @@
   "interceptDiagnosticDismiss": "Dismiss",
   "@interceptDiagnosticDismiss": {"description": "Screen-reader label of the close glyph on one diagnostic card. It takes that one card off the screen and nothing else."},
   "setupFixCopyExport": "Copy export command",
-  "@setupFixCopyExport": {"description": "Fix button of a SetEnv action: copies `export KEY=VALUE` to the clipboard. Writing the variable into the configuration needs SetConfig and arrives with HUM-069."},
+  "@setupFixCopyExport": {"description": "Fix button of a SetEnv action: copies `export KEY=VALUE` to the clipboard, for the running session. Since HUM-151 a CA variable pointing at the sandbox certificate also gets a button that writes config.toml (setupFixWriteEnv); every other variable only this copy button until HUM-069."},
   "setupFixSetEnvBadKey": "There is no command to copy: {key} is not a name a shell can assign to. Set the variable by hand.",
   "@setupFixSetEnvBadKey": {
     "description": "Stands where the copy row would be when the daemon proposed a SetEnv whose key is not a POSIX environment name. No command is built rather than a wrong one (CONVENTIONS 4.13).",
@@ -1780,5 +1780,19 @@
   "historyRevealFailedTitle": "Could not open the request",
   "@historyRevealFailedTitle": {"description": "Title of the card over the history list when another screen asked the history to open a request and the background service could not give it back. The daemon's own sentence stands under it; the card is there so the click is never silently lost (docs/UX.md 4.4)."},
   "historyRevealFailedDismiss": "Dismiss",
-  "@historyRevealFailedDismiss": {"description": "Button on that card; it hides the card and changes nothing else."}
+  "@historyRevealFailedDismiss": {"description": "Button on that card; it hides the card and changes nothing else."},
+  "setupFixWriteEnv": "Write to config.toml",
+  "@setupFixWriteEnv": {"description": "Button under a finding that proposes a CA variable pointing at the certificate in the sandbox (TLS_001). It writes sandbox.env into config.toml for sessions started later. It names config.toml and nothing else: a profile with its own sandbox.env replaces that table, so the label must never promise a profile (HUM-151)."},
+  "setupFixWriteEnvRunning": "Writing…",
+  "@setupFixWriteEnvRunning": {"description": "The same button while the background service writes config.toml; it is disabled meanwhile."},
+  "setupFixWriteEnvDone": "Written to config.toml. Sessions started from now on get {key}, unless a profile brings its own sandbox.env.",
+  "@setupFixWriteEnvDone": {
+    "description": "Shown under the button after the write succeeded. The running session keeps its environment, so it names sessions started from now on, and it names the one case that overrides the write: a profile with its own sandbox.env (HUM-151).",
+    "placeholders": {"key": {"type": "String"}}
+  },
+  "setupFixWriteEnvFailed": "Not written: {why}",
+  "@setupFixWriteEnvFailed": {
+    "description": "Shown under the button when the background service refused the write (CONFIG_014) or could not be reached. The copy button for the running session stays below it.",
+    "placeholders": {"why": {"type": "String"}}
+  }
 }
