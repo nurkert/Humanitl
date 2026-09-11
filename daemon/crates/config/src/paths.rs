@@ -138,6 +138,24 @@ impl Paths {
         self.ca_dir().join("ca.key")
     }
 
+    /// Das Verzeichnis der Schlüssel, die der Daemon selbst anlegt. Rechte
+    /// `0700`.
+    ///
+    /// Getrennt vom Audit-Verzeichnis: Wer das Log weitergibt, gibt den
+    /// Schlüssel nicht mit.
+    #[must_use]
+    pub fn key_dir(&self) -> PathBuf {
+        self.data_dir().join("keys")
+    }
+
+    /// Der HMAC-Schlüssel des Audit-Logs. Rechte `0600`.
+    ///
+    /// Eine Datei, bis HUM-048 den Schlüssel in den Keyring legt (HUM-050).
+    #[must_use]
+    pub fn audit_key_path(&self) -> PathBuf {
+        self.key_dir().join("audit.key")
+    }
+
     /// Das Wurzelverzeichnis der Blobs.
     #[must_use]
     pub fn blobs_dir(&self) -> PathBuf {
@@ -308,6 +326,10 @@ mod tests {
         assert_eq!(
             paths.ca_key_path(),
             PathBuf::from("/data/humanitl/ca/ca.key")
+        );
+        assert_eq!(
+            paths.audit_key_path(),
+            PathBuf::from("/data/humanitl/keys/audit.key")
         );
         assert_eq!(
             paths.daemon_socket(),

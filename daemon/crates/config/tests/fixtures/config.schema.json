@@ -58,6 +58,48 @@
       "x-project-scope": "allowed",
       "x-tier": "advanced"
     },
+    "audit": {
+      "additionalProperties": false,
+      "default": {
+        "anchor_every": 100,
+        "fsync_every": 50,
+        "retention_days": 0
+      },
+      "description": "Die Audit-Kette: Anker, Synchronisation, Aufbewahrung.",
+      "properties": {
+        "anchor_every": {
+          "default": 100,
+          "description": "Jeder wievielte Record ein Anker ist, in der Datei und zugleich in der Datenbank. Records hinter dem letzten Anker kann jemand mit Zugriff auf die Datei am Ende abschneiden, ohne dass die Prüfung es merkt; ein kleinerer Wert macht dieses Fenster kleiner. Beim Beenden des Daemons wird immer geankert.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        },
+        "fsync_every": {
+          "default": 50,
+          "description": "Nach wie vielen Records der Daemon das Audit-Log auf die Platte zwingt (fsync). Spätestens nach einer Sekunde und vor jedem Anker geschieht es ohnehin.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "denied",
+          "x-tier": "expert"
+        },
+        "retention_days": {
+          "default": 0,
+          "description": "Tage, die das Audit-Log aufgehoben wird; 0 heißt für immer. Löschen bricht die Kette absichtlich, und im MVP wird nichts gelöscht.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer",
+          "x-pending-issue": "HUM-051",
+          "x-project-scope": "denied",
+          "x-tier": "expert"
+        }
+      },
+      "type": "object",
+      "x-project-scope": "denied",
+      "x-tier": "advanced"
+    },
     "experimental": {
       "additionalProperties": false,
       "default": {

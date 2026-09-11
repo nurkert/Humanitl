@@ -20,7 +20,8 @@ use humanitl_core::diagnostics::codes::CONFIG_003;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
 use crate::model::{
-    AgentRef, Config, FindingsConfig, Limits, LlmConfig, RecorderConfig, ResolverConfig, SandboxRef,
+    AgentRef, AuditConfig, Config, FindingsConfig, Limits, LlmConfig, RecorderConfig,
+    ResolverConfig, SandboxRef,
 };
 use crate::schema;
 
@@ -257,6 +258,25 @@ fn recorder_is_well_formed(recorder: &RecorderConfig, limits: &Limits) -> Result
     )
 }
 
+/// Die Audit-Kette: Anker und Synchronisation zählen Records, und null Records
+/// wären „nie". Nach oben begrenzt, weil ein riesiger Abstand zwischen zwei
+/// Ankern das Fenster für ein unbemerkt gekürztes Log so groß macht wie das
+/// Log selbst.
+fn audit_is_well_formed(audit: &AuditConfig) -> Result<(), Diagnostic> {
+    between(
+        "audit.anchor_every",
+        u64::from(audit.anchor_every),
+        1,
+        1_000_000,
+    )?;
+    between(
+        "audit.fsync_every",
+        u64::from(audit.fsync_every),
+        1,
+        100_000,
+    )
+}
+
 /// Der Resolver: die Frist des Caches und die festen Adressen.
 fn resolver_is_well_formed(resolver: &ResolverConfig) -> Result<(), Diagnostic> {
     between("resolver.cache_ttl_secs", resolver.cache_ttl_secs, 0, DAY)?;
@@ -365,6 +385,7 @@ impl Config {
         between("hold.timeout_secs", self.hold.timeout_secs, 1, DAY)?;
         limits_are_well_formed(&self.limits)?;
         recorder_is_well_formed(&self.recorder, &self.limits)?;
+        audit_is_well_formed(&self.audit)?;
         resolver_is_well_formed(&self.resolver)?;
         at_least(
             "pseudonyms.max_response_bytes",

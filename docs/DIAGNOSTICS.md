@@ -823,9 +823,57 @@ Blob-Speicher nicht benutzbar
 
 Hash-Kette gebrochen
 
-**Auslöser.** Reserviert für eine gebrochene Hash-Kette im Audit-Log. Heute baut ihn niemand: Die Crate `humanitl-audit` ist eine leere Hülle, und es gibt keine Datei, deren Kette prüfbar wäre (HUM-029).
+**Auslöser.** Die Prüfung von `audit.jsonl` findet einen Record, der nicht zu Vorgänger, Hash, MAC oder Anker passt, oder die Datei endet vor einem Anker; beim Start ist es der letzte Record, an den der Schreiber anhängen soll.
 
-**Fix.** Kein Fix: Der Code wartet auf das Audit-Log.
+**Fix.** `CopyCommand`, der die Datei samt Zeitstempel beiseitelegt; sie bleibt als Beleg liegen, und die Kette beginnt neu.
+
+#### AUDIT_002
+
+Unvollständige letzte Zeile beiseitegelegt
+
+**Auslöser.** Beim Start endet `audit.jsonl` nicht mit einem Zeilenumbruch; der Rest hinter dem letzten vollständigen Record wurde in eine eigene Datei verschoben.
+
+**Fix.** Kein Fix nötig: Der Text nennt die Datei mit dem Rest, und die Kette läuft weiter.
+
+#### AUDIT_003
+
+Audit-Daten nicht kanonisch
+
+**Auslöser.** Die Daten eines Records enthielten eine Zahl, die keine Ganzzahl ist; geschrieben wurde der Record mit einem Platzhalter statt der Daten.
+
+**Fix.** Kein Fix für Nutzer: ein Programmfehler; der Text nennt die Art des Records.
+
+#### AUDIT_004
+
+Audit-Log von einem anderen Daemon belegt
+
+**Auslöser.** Beim Start hält ein anderer Prozess die exklusive Sperre auf `audit.jsonl`.
+
+**Fix.** `CopyCommand` mit `humanitl daemon status`: den laufenden Daemon finden und beenden.
+
+#### AUDIT_005
+
+Audit-Schlüssel unbrauchbar
+
+**Auslöser.** Die Schlüsseldatei ist ein Symlink oder keine reguläre Datei, trägt Rechte für Gruppe oder Andere, gehört einem anderen Nutzer, hat nicht genau 32 Bytes oder lässt sich nicht anlegen.
+
+**Fix.** `CopyCommand`: `rm` für einen verbrannten Schlüssel, sonst `ls -ln` auf die Datei oder `mkdir`/`chmod` auf das Verzeichnis.
+
+#### AUDIT_006
+
+Audit-Log nicht schreibbar
+
+**Auslöser.** Datei, Verzeichnis oder Anker-Tabelle des Audit-Logs lassen sich nicht öffnen, lesen, schreiben oder auf die Platte bringen.
+
+**Fix.** `CopyCommand` mit `ls -ld` und `df -h` auf das Verzeichnis — Rechte oder Platz.
+
+#### AUDIT_007
+
+Audit-Kette hinter dem letzten Anker fortgesetzt
+
+**Auslöser.** Beim Start endet `audit.jsonl` vor einem Anker aus `audit_anchors`; die Kette läuft hinter diesem Anker weiter, und die Prüfung meldet die Lücke weiter als Bruch.
+
+**Fix.** Kein Fix nötig: Der Text nennt, wo das Log endete und hinter welchem Anker die Kette weiterläuft.
 
 ### Bereich doctor
 

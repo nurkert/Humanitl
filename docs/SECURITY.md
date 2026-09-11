@@ -492,7 +492,7 @@ andere ebenfalls benutzen.
 | `humanitld` | Proxy, Hold-Queue, Regeln, Aufzeichnung, Sandbox-Steuerung | Rust, `#![forbid(unsafe_code)]` in allen Bibliotheks-Crates | Speichersicher, ein statisches Binary, keine 40 transitiven Laufzeit-Pakete |
 | `hyper`/`rustls`/`rcgen` (über `hudsucker`) | TLS-Terminierung und HTTP-Verarbeitung | exakt gepinnt, regelmäßig aktualisiert | Rust-TLS-Stack ohne OpenSSL-Speicherfehlerklasse; Historie von Rapid Reset und CONTINUATION-Flood wird verfolgt |
 | Der Sprachmodell-Host | sieht jeden Prompt | muss dem Nutzer gehören | Erklärter Seitenkanal, keine technische Absicherung (Abschnitt 3.1) |
-| Keyring des Nutzers | HMAC-Schlüssel des Audit-Logs | Secret Service (`gnome-keyring`, `kwallet`) | Schutz gegen andere Nutzer, nicht gegen denselben Nutzer |
+| Schlüsseldatei des Audit-Logs | HMAC-Schlüssel der Kette | `$XDG_DATA_HOME/humanitl/keys/audit.key`, `0600` in `0700`; HUM-048 legt ihn in den Keyring (Secret Service: `gnome-keyring`, `kwallet`) | Schutz gegen andere Nutzer, nicht gegen denselben Nutzer |
 
 **Nicht in der Vertrauensbasis der Isolation:** die Flutter-Anwendung. Sie ist ein gRPC-Client wie
 die CLI und kann die Sandbox nicht schwächen. Sie ist allerdings vertrauenswürdig für die
@@ -810,37 +810,66 @@ Schlüssel fragt, gilt derselbe Aufrufpunkt nach der Entscheidung; ihn belegt de
 
 Aufgezeichnet wird lokal: Flows, Entscheidungen und Bodies in SQLite unter
 `$XDG_DATA_HOME/humanitl/humanitl.db`, große Bodies inhaltsadressiert unter `blobs/`, und
-zusätzlich ein append-only-Protokoll `audit/audit.jsonl`. Jeder Eintrag trägt `seq`, `ts`,
-`prev_hash` und `hash` über kanonischem JSON; über der Kette liegt ein HMAC mit einem
-Installationsschlüssel aus dem Keyring des Nutzers. Eine Verankerung des Kopf-Hashes außerhalb der
-Datei (Anzeige im UI, zweiter Ablageort, systemd-Journal) ist geplant (HUM-050), existiert im MVP
-aber noch nicht; bis dahin ist das Abschneiden des Endes der Kette nicht erkennbar.
+zusätzlich ein append-only-Protokoll `audit/audit.jsonl` (HUM-050). Jeder Eintrag ist eine Zeile
+kanonisches JSON mit `seq`, `ts`, `session`, `kind`, `data`, dem Hash des Vorgängers (`prev`) und
+dem eigenen `hash`; darüber liegt ein HMAC-SHA256. Bodies, Header, Klartext-Werte von Funden und
+die Notiz einer Blockierung stehen nie im Log, der Pfad einer Anfrage nur als SHA-256; der Host
+steht im Klartext (Abschnitt 3.1).
 
-**Was die Kette beweist.** Dass seit dem letzten Anker kein Eintrag geändert, entfernt oder
-umsortiert wurde, ohne dass `humanitl audit verify` es meldet — vorausgesetzt, der Angreifer hat
-den HMAC-Schlüssel nicht.
+Der HMAC-Schlüssel liegt heute als Datei unter `$XDG_DATA_HOME/humanitl/keys/audit.key` (`0600` in
+einem Verzeichnis `0700`, abgelehnt mit `AUDIT_005`, wenn andere ihn lesen können oder er einem
+anderen Nutzer gehört); `daemon.started` nennt das mit `key_origin: "file"`. HUM-048 legt ihn in
+den Keyring des Nutzers. Alle `audit.anchor_every` Records (Vorgabe 100) und beim Beenden des
+Daemons steht ein Anker in der Datei **und** derselbe in der Tabelle `audit_anchors` von
+`humanitl.db`: Wer nur die Datei ändert, scheitert an der Datenbank, wer beides ändert, braucht
+zusätzlich den Schlüssel. Beide Ablageorte liegen auf demselben Rechner. Anzeige des Kopf-Hashes
+im UI (HUM-051) und ein Anker im systemd-Journal existieren noch nicht.
 
-**Was die Kette nicht beweist.**
+Endet `audit.jsonl` beim Start vor einem Anker aus `audit_anchors` — gelöscht, gekürzt oder nach
+einem `AUDIT_001` beiseitegelegt —, startet der Daemon trotzdem und meldet `AUDIT_007`. Die Kette
+läuft hinter dem letzten Anker weiter: Ihr erster Record, `audit.resumed`, trägt die Nummer hinter
+dem Anker und dessen Hash als Vorgänger. Die Anker bleiben stehen, und `verify` meldet die Lücke
+weiter als Bruch. Ein Startverbot schützte keinen Beleg, der nicht schon in der Tabelle steht, und
+sperrte den Nutzer aus der Sandbox aus. Passt dagegen das Ende selbst nicht — ein letzter Record,
+der nicht zu Hash oder Schlüssel passt, oder ein Anker mit anderem Hash unter derselben Nummer —,
+hängt der Daemon nicht an (`AUDIT_001`), und der Befund nennt den Befehl, der die Datei als Beleg
+beiseitelegt.
 
-1. Nicht, dass der Daemon ehrlich geschrieben hat. Ein manipulierter Daemon protokolliert, was er
-   will; die Kette ist dann korrekt und trotzdem falsch.
-2. Nicht, dass nichts fehlt, was nie geschrieben wurde.
-3. Nicht, dass die letzten bis zu `anchor_every` Einträge hinter dem letzten Anker noch da sind:
-   Wer die Datei am Ende kürzt, hinterlässt eine gültige, nur kürzere Kette. `verify` meldet das
-   als Warnung und bleibt so lange rot, bis externes Head-Anchoring existiert.
-4. Nichts gegen einen Angreifer, der als **derselbe Nutzer** läuft. Wer den Keyring des Nutzers
-   und die Datei hat, hält beide Enden in der Hand und baut die Kette neu.
+### Was die Audit-Kette beweist
 
-Die Kette schützt also gegen nachträgliches Editieren durch jemanden mit Dateizugriff, nicht gegen
-den Nutzer selbst und nicht gegen einen Prozess mit dessen Rechten. Für stärkere Aussagen braucht
-es einen externen Anker (Post-MVP).
+Sie beweist, dass seit dem Setzen des letzten Ankers kein Record bis zu diesem Anker geändert,
+entfernt oder umsortiert wurde, ohne dass `verify` es meldet — sofern der Angreifer den
+HMAC-Schlüssel nicht hat.
+
+Sie beweist **nicht**:
+
+1. dass der Daemon ehrlich geschrieben hat. Ein manipulierter Daemon protokolliert, was er will;
+   die Kette ist dann korrekt und trotzdem falsch.
+2. dass keine Ereignisse fehlen, die nie geschrieben wurden. Ein hart beendeter Daemon kann die
+   letzte Zeile halb schreiben; der nächste Start legt sie beiseite (`AUDIT_002`) und setzt die
+   Kette ohne Lücke fort, der verlorene Record fehlt.
+3. dass die letzten bis zu `anchor_every` Records nach dem letzten Anker nicht gekürzt wurden. Wer
+   die Datei hinter dem letzten Anker kürzt, hinterlässt eine gültige, nur kürzere Kette; `verify`
+   warnt nur, wenn danach noch unverankerte Records stehen (`UnanchoredTail`), und schweigt, wenn
+   der Schnitt genau auf dem Anker liegt. Ein geordnet beendeter Daemon verankert seinen letzten
+   Record; das Fenster besteht, solange er läuft oder wenn er hart endet.
+4. etwas gegen einen Angreifer, der den Schlüssel hat. Wer den HMAC-Schlüssel hat — heute die
+   Schlüsseldatei, nach HUM-048 den Keyring des Nutzers — kann die Kette neu bauen, und wer
+   außerdem an `humanitl.db` kommt, auch die Anker. Ein Prozess, der als **derselbe Nutzer** läuft,
+   hat beides.
+
+Für stärkere Garantien braucht es externes Anchoring (nach dem MVP).
 
 Getrennt davon liegt das Pseudonymisierungs-Mapping: verschlüsselt, nur auf dem Host, nie in der
 Sandbox und nie in einer Anfrage.
 
-*Prüfung.* `humanitl audit verify` (Exit 0 = Kette intakt), `humanitl audit export --format jsonl`.
-ESC-5 löscht einen Eintrag und kürzt die Datei; erwartet wird, dass die erste Manipulation als
-Fehler und die zweite als Warnung erkannt wird.
+*Prüfung.* Die Prüfung steht im Daemon (`AuditVerifier`); `humanitl audit verify` und
+`humanitl audit export` baut HUM-070. ESC-5 fährt `audit_delete_is_detected` und
+`audit_truncate_is_detected` gegen einen echten Daemon: Er schreibt seine Kette, der Test löscht
+einen Eintrag aus der Mitte beziehungsweise kürzt das verankerte Ende und prüft mit dem Schlüssel
+und den Ankern des Daemons. Beides meldet die Prüfung als Bruch (`SeqGap`,
+`TruncatedBelowAnchor`). Die Grenze aus Punkt 3 steht als eigener Test daneben
+(`truncate_above_last_anchor_not_detected_documented`).
 
 ---
 
@@ -900,8 +929,9 @@ direkte Weg: sie brauchen nur eine Shell in der Sandbox.
 
 Ehrliche Liste dessen, was heute fehlt oder schwächer ist, als man annehmen könnte:
 
-1. **Head-Anchoring des Audit-Logs.** Ohne externen Anker bleibt das Kürzen am Ende der Kette eine
-   Warnung statt eines Beweises (Abschnitt 8). Externes Anchoring ist Post-MVP.
+1. **Externes Anchoring des Audit-Logs.** Die Anker liegen in der Datei und in SQLite auf
+   demselben Rechner. Das Kürzen hinter dem letzten Anker bleibt unerkannt, und wer Schlüssel und
+   Datenbank hat, baut Kette und Anker neu (Abschnitt 8). Externes Anchoring ist Post-MVP.
 2. **HTTP/2 zum Upstream.** In M1 wird auf HTTP/1.1 gezwungen. Werkzeuge, die zwingend h2 brauchen
    (gRPC über TLS), scheitern sichtbar mit `PROXY_007`. Das ist ein dokumentierter Fehlschlag, kein
    stiller Rückfall.

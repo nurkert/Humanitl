@@ -1,0 +1,16 @@
+-- Die Anker der Audit-Kette (HUM-050).
+--
+-- `audit.jsonl` trägt jeden Anker als eigenen Record; hier steht derselbe
+-- Anker ein zweites Mal, außerhalb der Datei. Wer nur die Datei ändert, kürzt
+-- oder ersetzt, scheitert an dieser Tabelle; wer beides ändert, braucht
+-- zusätzlich den HMAC-Schlüssel. Genau das ist der Punkt der doppelten Ablage.
+--
+-- `seq` ist die Nummer des verankerten Records, `hash` sein Hash als Hex,
+-- `ts` der Zeitpunkt im Format des Logs. Eine Nummer steht höchstens einmal
+-- da: Ein zweiter Anker mit anderem Hash unter derselben Nummer hieße, dass
+-- zwei Ketten dieselben Nummern tragen, und das verweigert der Schreiber.
+--
+-- Die Aufbewahrung der Aufzeichnung (`recorder.retention_days`) löscht hier
+-- nichts. Ein gelöschter Anker wäre ein Loch in genau der Aussage, für die
+-- es die Tabelle gibt.
+CREATE TABLE audit_anchors (seq INTEGER PRIMARY KEY, hash TEXT NOT NULL, ts TEXT NOT NULL);

@@ -56,7 +56,7 @@ erscheint im XML als `<error>`, eine durchgekommene Probe als `<failure>`.
 | `dns-proof.sh` | von `run.sh` eingelesen: startet den Stub, lässt neben ESC-3 einen Beobachter auf dem Host laufen und entscheidet die drei Fälle `esc-3/dns_not_before_decision`, `esc-3/dns_after_allow_once`, `esc-3/meta_no_dns_lookup` am Protokoll des Stubs |
 | `esc-4-rules.sh` | ESC-4: die Regel-Tabelle, gegen die Regel-Engine aus HUM-022, für den Body-Cap gegen den laufenden Proxy und seit HUM-114 fünfzehnmal über `humanitl rules test` gegen den Daemon des Laufs; dazu `llm_cli_unreachable`, die einzige Probe der Sammlung für `humanitl llm test` |
 | `body_cap.py` | die zwei Anfragen von `rule_body_over_cap`: eine über dem Cap, eine genau auf dem Cap, über den Proxy-Socket |
-| `esc-5-filesystem.sh` | ESC-5: fünf Fälle grün gegen die gleichnamigen Integrationstests (HUM-042, HUM-043), zwei `skipped` bis das Audit-Log existiert (HUM-029) |
+| `esc-5-filesystem.sh` | ESC-5: sieben Fälle gegen die gleichnamigen Integrationstests — fünf zu Dateisystem und Terminal (HUM-042, HUM-043), zwei zur Audit-Kette eines echten Daemons (HUM-050) |
 | `humanitl sandbox run --profile test --tests-dir tests/escape -- …` | der Start jeder Suite: dieselbe Kommandozeile, die der Nutzer aufruft (CONVENTIONS.md 3.11) |
 
 **Ein Fall heißt nie wie ein Agent.** Seit HUM-135 entscheidet der Daemon am
@@ -234,8 +234,10 @@ ESC-3 ein `skip`.
 
 ## Erwartetes Ergebnis in Sprint 0
 
-Stand nach HUM-115: 124 Fälle, 122 grün, 0 rot, 2 übersprungen, gemessen am
-2026-09-11. HUM-115 macht aus den zwei übersprungenen Fällen
+Stand nach HUM-050: 124 Fälle, 124 grün, 0 rot, 0 übersprungen, gemessen am
+2026-09-11. HUM-050 macht aus den zwei übersprungenen ESC-5-Fällen
+`audit_delete_is_detected` und `audit_truncate_is_detected` grüne. Davor,
+nach HUM-115, waren es 124/122/0/2. HUM-115 macht aus den zwei übersprungenen Fällen
 `dns_not_before_decision` und `meta_no_dns_lookup` die drei grünen
 Host-Fälle `esc-3/dns_not_before_decision`, `esc-3/dns_after_allow_once` und
 `esc-3/meta_no_dns_lookup` und bringt die zwei Anfragen
@@ -245,7 +247,7 @@ waren es 105/101/0/4, HUM-114 brachte die sechzehn Fälle `rules_cli_01` bis
 `rules_cli_15` und `llm_cli_unreachable`. Die Zahl 97/90/0/7 war der Stand
 nach HUM-022, also vor HUM-042 und HUM-043. Die Tabelle unten ist der Stand
 aus Sprint 0 und nennt zu jeder Probe das Issue, das sie grün gemacht hat; rot
-ist keine mehr. Übersprungen bleibt, was auf ein Issue späterer Sprints wartet.
+ist keine mehr, übersprungen auch nicht.
 
 `run.sh` legt seine Sockets unter `target/escape/state/runtime` an, und ein
 Unix-Socket-Pfad darf höchstens 107 Bytes lang sein. Liegt das Repository
@@ -308,9 +310,9 @@ rot — sie ist der Grund, warum sie existiert.
 
 ### Übersprungen, und was sie einlöst
 
-| Suite | Fälle | Wartet auf |
-|---|---|---|
-| ESC-5 | `audit_delete_is_detected`, `audit_truncate_is_detected` | HUM-029 (Hash-Kette des Audit-Logs) |
+Derzeit keiner. Die zwei ESC-5-Fälle `audit_delete_is_detected` und
+`audit_truncate_is_detected`, die hier bis HUM-050 auf die Hash-Kette des
+Audit-Logs warteten, prüfen jetzt die Kette eines echten Daemons und sind grün.
 
 Die zwei Fälle aus ESC-3, die hier bis HUM-115 standen
 (`dns_not_before_decision`, `meta_no_dns_lookup`), sind jetzt Host-Fälle und

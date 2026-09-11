@@ -70,6 +70,14 @@ idna = "1.1"
 psl = "=2.1.228"
 sha2 = "0.11"
 hmac = "0.13"
+# Audit-Kette (HUM-050): Hex der Hashes und MACs, der Dateischluessel aus dem
+# Zufall des Kerns, die Sperre auf `audit.jsonl` und der Schluessel im Speicher.
+# `rustix` und `getrandom` stehen schon im Baum (ueber `tempfile` und `uuid`);
+# hier bekommen sie nur einen Eintrag, damit eine Member-Crate sie nennen darf.
+hex = "0.4"
+getrandom = "0.4"
+rustix = { version = "1.1", default-features = false, features = ["std", "fs", "process"] }
+zeroize = "1"
 dashmap = "6.2"
 clap = { version = "4.6", features = ["derive", "env"] }
 aho-corasick = "1.1"
