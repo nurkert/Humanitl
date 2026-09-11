@@ -789,15 +789,20 @@ entschieden hat, ist damit selbst der Exfiltrationskanal — und zwar einer, der
 umgeht.
 
 Deshalb: Humanitl hält Anfragen auf dem Hostnamen als Zeichenkette. Aufgelöst wird erst nach
-`allow`, genau einmal, über den `Resolver`-Port (hickory), nie über den System-Resolver eines
-HTTP-Connectors. Die gefundene Adresse wird an die Verbindung gepinnt
+`allow`, genau einmal, über den `Resolver`-Port, nie über den System-Resolver eines
+HTTP-Connectors. Hinter dem Port fragt der Namensdienst des Systems oder, wenn
+`resolver.nameserver` gesetzt ist, hickory genau diesen einen Server. Die gefundene Adresse wird an die Verbindung gepinnt
 (`Egress::connect(authority, Some(ip))`), damit eine zweite Auflösung kein anderes Ziel liefern
 kann (DNS-Rebinding). Auch die Domain-Vorschau im UI holt nichts automatisch aus dem Netz; sie
 stammt aus einem mitgelieferten Katalog, und ein Live-Abruf passiert nur auf ausdrücklichen Klick,
 host-seitig, nur für die eTLD+1.
 
-*Prüfung.* ESC-3 beobachtet host-seitig (über `resolvectl statistics` oder `tcpdump port 53`),
-dass für einen gehaltenen Namen vor der Entscheidung kein Lookup stattfindet.
+*Prüfung.* ESC-3 beobachtet host-seitig, dass für einen gehaltenen Namen vor der Entscheidung kein
+Lookup stattfindet: Der Daemon des Laufs fragt über `resolver.nameserver` einen aufzeichnenden
+Nameserver (`tests/escape/dns-stub.py`), und `dns_not_before_decision`, `dns_after_allow_once` und
+`meta_no_dns_lookup` lesen dessen Protokoll (HUM-115). Für den Namensdienst des Systems, der ohne den
+Schlüssel fragt, gilt derselbe Aufrufpunkt nach der Entscheidung; ihn belegt der Test
+`daemon/crates/proxy/tests/dns_after_allow.rs` im Daemon.
 
 ---
 
@@ -880,7 +885,7 @@ xmllint --noout target/escape/escape.xml
 |---|---|---|
 | ESC-1 | `tests/escape/esc-1-sockets.sh` | Socket-Familien und -Typen, `io_uring`, x32, Interfaces, Routing, Capabilities, `Seccomp: 2` |
 | ESC-2 | `tests/escape/esc-2-mounts.sh` | Mount-Oberfläche, genau ein Socket, kein Host-`/proc`, Hostname |
-| ESC-3 | `tests/escape/esc-3-egress.sh` | kein Egress ohne Proxy; über den Proxy landet alles in der Warteschlange; kein DNS vor der Entscheidung |
+| ESC-3 | `tests/escape/esc-3-egress.sh` | kein Egress ohne Proxy; über den Proxy landet alles in der Warteschlange; kein DNS vor der Entscheidung, host-seitig am Protokoll eines aufzeichnenden Nameservers belegt (`tests/escape/dns-stub.py`, `dns-proof.sh`) |
 | ESC-4 | `tests/escape/esc-4-rules.sh` | die Regel-Tabelle einschließlich Homograph, IP-Literal, Body-Cap |
 | ESC-5 | `tests/escape/esc-5-filesystem.sh` | Symlink-Markierung, maskierte Pfade, OSC 52, Audit-Manipulation |
 

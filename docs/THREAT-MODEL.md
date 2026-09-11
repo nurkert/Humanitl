@@ -386,7 +386,13 @@ Ein-Bit-Signal bauen, wenn der Mensch bereitwillig freigibt.
 *Status.* MVP (ADR-006, umgesetzt in HUM-024).
 
 *Prüfung.* ESC-3 beobachtet host-seitig, dass vor der Entscheidung kein Lookup für den
-angefragten Namen stattfindet.
+angefragten Namen stattfindet. `tests/escape/run.sh` setzt den Daemon des Laufs mit
+`resolver.nameserver` auf einen aufzeichnenden Nameserver (`tests/escape/dns-stub.py`); an dessen
+Protokoll belegen `dns_not_before_decision`, `dns_after_allow_once` und `meta_no_dns_lookup`: kein
+gehaltener Name wird gefragt, ein freigegebener genau einmal und erst nach der Freigabe,
+`humanitl.internal` nie (HUM-115). Beobachtet wird dabei der Adapter hinter `resolver.nameserver`;
+der Namensdienst des Systems, den der Alltag benutzt, hängt am selben einzigen Aufrufpunkt nach der
+Entscheidung und ist dafür im Daemon belegt (`daemon/crates/proxy/tests/dns_after_allow.rs`).
 
 ### K-11 Queue- und Regel-Metadaten
 

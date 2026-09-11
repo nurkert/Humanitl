@@ -107,10 +107,10 @@ const REGISTER: &[(&str, &str)] = &[
     ("recorder.inline_max_bytes", "effective"),
     ("recorder.retention_days", "effective"),
     ("resolver.cache_ttl_secs", "effective"),
-    // Der Adapter über dem Namensdienst des Systems kann keinen eigenen Server
-    // ansprechen; der Daemon warnt beim Start und fragt trotzdem /etc/resolv.conf.
-    // HUM-115 baut den Hickory-Adapter dahinter und führt damit den DNS-Beweis.
-    ("resolver.nameserver", "pending(HUM-115)"),
+    // Gelesen in `ResolverPort::from_config`: gesetzt, fragt `HickoryResolver`
+    // nur diesen Server (HUM-115); ESC-3 beweist damit host-seitig, dass vor
+    // einer Entscheidung kein Name aufgelöst wird.
+    ("resolver.nameserver", "effective"),
     ("resolver.overrides", "effective"),
     ("resolver.prefer", "effective"),
     ("resolver.test_ca", "effective"),
@@ -328,8 +328,9 @@ fn the_keys_without_a_reader_are_the_known_ones() {
     // `ClientTls::new` verdrahtet hat, und abzüglich
     // `experimental.upstream_port_map`, den HUM-088 entfernt hat, statt ihm
     // nachträglich einen Leser zu geben, und abzüglich `experimental.ws_hold`
-    // und `ui.sound`, die HUM-121 aus demselben Grund entfernt hat. Sie steht
-    // hier, damit ein weiterer
+    // und `ui.sound`, die HUM-121 aus demselben Grund entfernt hat, und
+    // abzüglich `resolver.nameserver`, hinter den HUM-115 den Hickory-Adapter
+    // gebaut hat. Sie steht hier, damit ein weiterer
     // Fall nicht unbemerkt dazukommt: Wer einen Schlüssel verdrahtet oder
     // streicht, zieht ihn hier und im Register zugleich nach.
     let pending: Vec<&str> = register()
@@ -342,7 +343,6 @@ fn the_keys_without_a_reader_are_the_known_ones() {
         vec![
             "pseudonyms.max_response_bytes",
             "pseudonyms.translate_responses",
-            "resolver.nameserver",
             "ui.notifications",
             "ui.theme",
         ]

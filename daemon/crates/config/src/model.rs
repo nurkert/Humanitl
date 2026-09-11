@@ -201,12 +201,8 @@ impl Default for Limits {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct ResolverConfig {
-    /// Nameserver als `IP:Port`. Leer bedeutet: die Einstellung des Systems.
-    #[schemars(extend(
-        "x-tier" = "expert",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-115"
-    ))]
+    /// Nameserver als `IP:Port`, ohne Port gilt 53. Gesetzt fragt der Daemon nach einer Freigabe nur noch diesen Server, über UDP mit TCP-Rückfall, und weder `/etc/resolv.conf` noch `/etc/hosts`. Leer bedeutet: der Namensdienst des Systems.
+    #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub nameserver: Option<String>,
     /// Feste Zuordnungen von Hostname zu Adresse, vor jeder Abfrage.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]

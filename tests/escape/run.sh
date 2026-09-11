@@ -30,6 +30,12 @@
 # issue that turns each probe green. Since HUM-021 CI runs without
 # ESCAPE_ALLOW_FAIL: a red probe fails the build. The switch stays for local
 # runs that want the report without the verdict.
+#
+# Since HUM-115 the daemon of the run resolves through a recording name server
+# (tests/escape/dns-stub.py, set through HUMANITL_RESOLVER__NAMESERVER), and
+# three cases after the suites in the sandbox read its log: ESC-3 proves from
+# the host that no name is resolved before a decision. tests/escape/dns-proof.sh
+# holds that part; this script only calls it.
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -274,18 +280,59 @@ stop_escape_daemon() {
         daemon_pid=""
     fi
 }
-trap stop_escape_daemon EXIT INT TERM
+
+# The recording name server of ESC-3 (HUM-115): its functions, and the
+# watcher that runs next to ESC-3.
+# shellcheck source=tests/escape/dns-proof.sh
+. "$HERE/dns-proof.sh"
+
+# The order matters: the watcher asks the daemon, and the daemon may still ask
+# the stub until it has stopped.
+stop_escape_services() {
+    dns_watch_stop
+    stop_escape_daemon
+    dns_stub_stop
+}
+trap stop_escape_services EXIT INT TERM
 
 if [ ! -x "$DAEMON" ]; then
     record_error harness daemon_binary "no humanitld binary at $DAEMON"
     sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
     exit 2
 fi
+
+# The stub starts before the daemon, and only the daemon of the run is pointed
+# at it: HUMANITL_RESOLVER__NAMESERVER, and a cache TTL of zero so that a
+# second lookup could not hide behind a cached answer and "exactly once" could
+# not become trivial. Without python3 the daemon keeps the resolver of the
+# system and the three DNS cases are skipped; a stub that does not come up
+# although python3 is there is a run without a verdict.
+set -- "$DAEMON"
+set +e
+dns_stub_start
+dns_stub_code=$?
+set -e
+case "$dns_stub_code" in
+0)
+    echo "escape: recording name server on $DNS_NAMESERVER, log $DNS_LOG"
+    set -- env HUMANITL_RESOLVER__NAMESERVER="$DNS_NAMESERVER" \
+        HUMANITL_RESOLVER__CACHE_TTL_SECS=0 "$@"
+    ;;
+1)
+    echo "escape: no python3, so no recording name server; the DNS cases of ESC-3 are skipped"
+    ;;
+*)
+    record_error harness dns_stub \
+        "tests/escape/dns-stub.py did not come up within ten seconds; see target/escape/dns-stub.log"
+    sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
+    exit 2
+    ;;
+esac
 XDG_RUNTIME_DIR="$STATE/runtime" \
     XDG_DATA_HOME="$DAEMON_XDG/data" \
     XDG_CONFIG_HOME="$DAEMON_XDG/config" \
     HOME="$DAEMON_XDG/home" \
-    "$DAEMON" > "$OUT/daemon.log" 2>&1 &
+    "$@" > "$OUT/daemon.log" 2>&1 &
 daemon_pid=$!
 daemon_waited=0
 while [ ! -S "$DAEMON_PROXY_SOCK" ] && [ "$daemon_waited" -lt 400 ]; do
@@ -306,6 +353,11 @@ for n in 1 2 3; do
     suite="esc-$n"
     script=$(basename "$(ls "$HERE/$suite-"*.sh)")
     echo "== $suite ($script) =="
+    # The watcher of the DNS proof follows the queue while ESC-3 runs, and only
+    # then: it allows exactly one flow, and no other suite may lose one to it.
+    if [ "$n" = 3 ]; then
+        dns_watch_start
+    fi
     # Redirection, not `| tee`: a pipeline hands back the exit code of its last
     # element, and the one that matters here is the launcher's.
     set +e
@@ -320,6 +372,9 @@ for n in 1 2 3; do
         -- /bin/sh "/tests/escape/$script" > "$OUT/$suite.log" 2>&1
     launch_code=$?
     set -e
+    if [ "$n" = 3 ]; then
+        dns_watch_stop
+    fi
     cat "$OUT/$suite.log"
 
     file="$WORK/results/$suite.txt"
@@ -334,6 +389,10 @@ for n in 1 2 3; do
     fi
     grep '^RESULT ' "$file" >> "$RESULTS" || true
 done
+
+# The host half of ESC-3 (HUM-115): the log of the recording name server,
+# read before ESC-4 and ESC-5 send anything more through the daemon.
+dns_host_cases
 
 # ESC-4 and ESC-5 run on the host, and before the daemon is stopped. ESC-4 asks
 # the rule engine (HUM-022), which decides before anything leaves the machine
@@ -365,7 +424,7 @@ for n in 4 5; do
     fi
 done
 
-stop_escape_daemon
+stop_escape_services
 
 sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
 
