@@ -153,7 +153,6 @@ fn decide_request_carries_note_and_remembered_rule() {
             }),
             ..Default::default()
         }),
-        acknowledge_findings: true,
     };
 
     let decoded = roundtrip(&request);

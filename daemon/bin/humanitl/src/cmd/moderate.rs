@@ -320,7 +320,6 @@ impl Moderation {
             flow_ids: vec![flow_id.to_owned()],
             decision,
             remember,
-            acknowledge_findings: false,
         };
         if let Err(status) = self.client.decide(request).await {
             self.say(&status_diagnostic(&status, "Decide"));
@@ -412,7 +411,6 @@ impl Moderation {
             flow_ids: vec![flow_id.to_owned()],
             decision: Some(v1::decide_request::Decision::Allow(())),
             remember: rule,
-            acknowledge_findings: false,
         };
         if let Err(status) = self.client.decide(request).await {
             self.say(&status_diagnostic(&status, "Decide"));
@@ -606,7 +604,6 @@ impl Moderation {
             flow_ids: vec![flow_id.to_owned()],
             decision: Some(v1::decide_request::Decision::AllowEdited(edited)),
             remember: None,
-            acknowledge_findings: false,
         };
         if let Err(status) = self.client.decide(request).await {
             self.say(&status_diagnostic(&status, "Decide"));
