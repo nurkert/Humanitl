@@ -22,6 +22,7 @@
 use std::convert::Infallible;
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
@@ -497,8 +498,23 @@ impl FlowHandler {
             match accepted {
                 Ok(Ok((stream, sni))) => {
                     handler.note_missing_sni(sni.as_ref(), &authority);
-                    let inner_meta = meta.tunnel(authority, sni);
-                    serve_connection(handler, stream, inner_meta, slot).await;
+                    let inner_meta = meta.tunnel(authority.clone(), sni);
+                    let served = serve_connection(handler.clone(), stream, inner_meta, slot).await;
+                    // Der Handschlag stand, aber es kam keine einzige Anfrage,
+                    // und der Client ging ruhig: So lehnt curl mit OpenSSL ab,
+                    // das das Zertifikat erst danach prüft und ohne Alert
+                    // auflegt (HUM-149). Wer bis zur Kopf-Frist schwieg oder
+                    // Unlesbares schickte, hat nichts abgelehnt.
+                    if served.requests == 0 && served.quiet_close {
+                        handler
+                            .note_tls_failure(
+                                &meta,
+                                &authority,
+                                &connect_headers,
+                                tls_observe::TlsFailure::ClosedAfterHandshake,
+                            )
+                            .await;
+                    }
                 }
                 Ok(Err(err)) => {
                     handler
@@ -570,12 +586,31 @@ impl FlowHandler {
             tracing::debug!(%err, host = %target.host, "tls handshake with the client failed");
             return;
         };
+        self.note_tls_failure(meta, target, connect_headers, failure)
+            .await;
+    }
+
+    /// Verbucht einen gedeuteten Fehlschlag als Flow und, wenn das Zählfenster
+    /// es zulässt, als Befund am selben Flow.
+    ///
+    /// Zwei Wege führen hierher: ein Handschlag, den der Client abbrach
+    /// ([`Self::note_handshake_failure`]), und ein Tunnel, der nach dem
+    /// Handschlag ohne Anfrage endete (HUM-149). Beide nehmen denselben Flow
+    /// und dasselbe Zählfenster, damit ein Werkzeug nicht zwei Karten bekommt,
+    /// nur weil es auf zwei Arten ablehnt.
+    async fn note_tls_failure(
+        &self,
+        meta: &ConnectionContext,
+        target: &Authority,
+        connect_headers: &HeaderMap,
+        failure: tls_observe::TlsFailure,
+    ) {
         let hint = tls_observe::tool_hint(connect_headers);
         tracing::debug!(
             host = %target.host,
             failure = failure.as_str(),
             hint = hint.as_str(),
-            "the client aborted the tls handshake"
+            "the client refused the tls tunnel"
         );
         let flow_id = self
             .record_connect_failure(meta, target, connect_headers)
@@ -608,14 +643,15 @@ impl FlowHandler {
     /// jedes andere; es wird aufgezeichnet, und was aufgezeichnet wird, wird
     /// durchsucht. Ein Datensatz mit `findings_count = 0`, den niemand
     /// durchsucht hat, sähe aus wie ein sauberer (`backlog/CONVENTIONS.md`
-    /// 4.13). Geblockt wird deswegen nichts mehr: Der Tunnel steht ohnehin
-    /// nicht, und `hold.hard_block_checksum_secrets` hat hier nichts zu
+    /// 4.13). Geblockt wird deswegen nichts mehr: Zum Ziel geht ohnehin
+    /// nichts, und `hold.hard_block_checksum_secrets` hat hier nichts zu
     /// entscheiden.
     ///
     /// Der Flow endet als `Decided(Block { NoRoute })` durch das System. Kein
     /// Grund, der einen Menschen nennt: Es hat niemand entschieden, der Client
-    /// hat aufgelegt, und es gibt keinen Weg zum Ziel, weil der Tunnel nie
-    /// stand. Woran es lag, steht in `flows.error`
+    /// hat aufgelegt, und es gab keinen Weg zum Ziel, weil der Proxy nie zu
+    /// ihm verbunden hat -- der Tunnel stand nie, oder er stand und blieb leer
+    /// (HUM-149). Woran es lag, steht in `flows.error`
     /// ([`tls_observe::FLOW_ERROR`]) und im Befund am selben Flow.
     async fn record_connect_failure(
         &self,
@@ -1543,11 +1579,15 @@ pub async fn serve_connection<I>(
     io: I,
     meta: ConnectionContext,
     slot: ConnectionSlot,
-) where
+) -> Served
+where
     I: crate::egress::AsyncStream + 'static,
 {
     let header_timeout = handler.inner.limits.header_timeout;
+    let requests = Arc::new(AtomicU64::new(0));
+    let counted = Arc::clone(&requests);
     let service = service_fn(move |req: Request<Incoming>| {
+        counted.fetch_add(1, Ordering::Relaxed);
         let handler = handler.clone();
         let meta = meta.clone();
         let slot = slot.clone();
@@ -1562,9 +1602,58 @@ pub async fn serve_connection<I>(
         .serve_connection(TokioIo::new(io), service)
         .with_upgrades()
         .await;
+    let quiet_close = match &result {
+        Ok(()) => true,
+        Err(err) => went_away(err),
+    };
     if let Err(err) = result {
         tracing::debug!(%err, "connection ended with an error");
     }
+    Served {
+        requests: requests.load(Ordering::Relaxed),
+        quiet_close,
+    }
+}
+
+/// Wahr, wenn eine Verbindung endete, weil der Client weg war, und aus keinem
+/// anderen Grund.
+///
+/// hyper verwirft eine unlesbare Anfragezeile, einen zu langen Kopf, eine
+/// halbe Nachricht oder den Vorspann von HTTP/2, **bevor** der Handler je
+/// gerufen wird; eine abgelaufene Kopf-Frist endet ebenfalls ohne Anfrage.
+/// Keiner dieser Fälle ist ein Client, der der CA misstraut (HUM-149, Review):
+/// Nur ein Dateiende oder ein Abbruch der Leitung zählt.
+fn went_away(err: &hyper::Error) -> bool {
+    if err.is_parse() || err.is_timeout() || err.is_incomplete_message() {
+        return false;
+    }
+    std::error::Error::source(err)
+        .and_then(|source| source.downcast_ref::<std::io::Error>())
+        .is_some_and(|io| {
+            matches!(
+                io.kind(),
+                std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+            )
+        })
+}
+
+/// Was eine bediente Verbindung hinterlassen hat.
+///
+/// Der Tunnel nach einem `CONNECT` braucht es, um einen Client zu erkennen,
+/// der den Handschlag abschließt und ohne Anfrage wieder geht (HUM-149); der
+/// äußere Accept-Loop braucht es nicht.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Served {
+    /// Wie viele Anfragen hyper an den Handler gegeben hat. Eine Anfrage, die
+    /// hyper schon beim Lesen verwirft, zählt hier nicht.
+    pub requests: u64,
+    /// Wahr, wenn die Verbindung sauber endete oder weil der Client weg war;
+    /// falsch bei einer abgelaufenen Kopf-Frist und bei Unlesbarem
+    /// ([`went_away`]).
+    pub quiet_close: bool,
 }
 
 /// Das Ziel eines `CONNECT`: Host und Port aus der Authority-Form-URI.
