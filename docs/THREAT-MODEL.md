@@ -459,19 +459,24 @@ gebunden und damit ebenfalls tot.
 
 *Schwere.* Hoch für das zweite Schutzziel.
 
-*Minderung im MVP.* Jeder Eintrag trägt `seq`, `ts`, `prev_hash` und `hash` über kanonischem JSON;
-darüber liegt ein HMAC mit einem Installationsschlüssel aus dem Keyring. `humanitl audit verify`
-prüft die Kette.
+*Minderung im MVP.* Jeder Eintrag trägt `seq`, `ts`, den Hash des Vorgängers und den eigenen
+Hash über kanonischem JSON; darüber liegt ein HMAC mit einem Schlüssel, der bis HUM-048 als Datei
+`keys/audit.key` (`0600`) im Datenverzeichnis liegt und danach im Keyring. Alle
+`audit.anchor_every` Records und beim Beenden steht ein Anker in der Datei und in SQLite
+(`audit_anchors`). Der Daemon prüft die Kette mit `AuditVerifier` (HUM-050); `humanitl audit
+verify` baut HUM-070.
 
 *Restrisiko.* Ausführlich in [`SECURITY.md`](SECURITY.md) Abschnitt 8. Kurz: Erkannt wird das
-nachträgliche Ändern durch jemanden, der Dateizugriff hat. Nicht erkannt wird ein Angreifer, der
-als derselbe Nutzer läuft und damit Schlüssel **und** Datei besitzt — er baut die Kette neu.
-Ebenso wenig erkannt wird das Kürzen des Endes hinter dem letzten Anker.
+nachträgliche Ändern, Löschen oder Umordnen durch jemanden, der Dateizugriff hat, aber den
+Schlüssel nicht. Nicht erkannt wird ein Angreifer, der als derselbe Nutzer läuft und damit
+Schlüssel, Datei **und** Datenbank besitzt — er baut Kette und Anker neu. Ebenso wenig erkannt wird
+das Kürzen des Endes hinter dem letzten Anker.
 
-*Status.* MVP (Kette), externes Anchoring später.
+*Status.* MVP (Kette, Anker in Datei und SQLite), externes Anchoring später.
 
-*Prüfung.* `humanitl audit verify`; ESC-5 löscht einen Eintrag und kürzt die Datei und erwartet in
-beiden Fällen einen Befund.
+*Prüfung.* ESC-5 (`audit_delete_is_detected`, `audit_truncate_is_detected`) löscht in der Kette
+eines echten Daemons einen Eintrag und kürzt ihr verankertes Ende und erwartet in beiden Fällen
+einen Bruch.
 
 ---
 

@@ -48,6 +48,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod anchors;
 mod blob;
 mod error;
 mod filter;
@@ -72,6 +73,7 @@ use humanitl_core::{
 };
 use tokio::sync::{broadcast, oneshot};
 
+pub use crate::anchors::{AnchorStore, AuditAnchor, read_anchors};
 pub use crate::blob::{BlobStore, ORPHAN_GRACE};
 pub use crate::error::RecorderError;
 pub use crate::filter::KEYS as FILTER_KEYS;

@@ -667,6 +667,7 @@ Felder: `seq` (u64, beginnt bei 1, lückenlos), `ts` (RFC 3339 UTC mit Mikroseku
 | `finding.allowlisted` | `kind`, `scope` |
 | `audit.anchor` | `anchored_seq`, `anchored_hash` |
 | `audit.verified` | `result`, `first_bad_seq` (oder null), `records` |
+| `audit.resumed` | `log_seq`, `anchor_seq` — der erste Record hinter einer Lücke, wenn das Log beim Start vor einem Anker endet (`AUDIT_007`, aus dem Review von HUM-050) |
 
 **Writer** (`AuditWriter`): Öffnet die Datei `O_APPEND`, hält `last_seq` und `last_hash` im Speicher (beim Start durch Lesen der letzten Zeile ermittelt; ist die Datei leer, `seq = 0`, `prev = 0…0`). Schreibt jede Zeile mit `write_all` + `fsync` alle 50 Records oder 1 s (konfigurierbar `audit.fsync_every`, `expert`). Ein einzelner `tokio::sync::mpsc`-Consumer serialisiert alle Schreibvorgänge; kein paralleler Zugriff. Bei jedem `anchor_every`-ten Record und bei `daemon.stopped` wird ein `audit.anchor`-Record geschrieben **und** derselbe Anker in die SQLite-Tabelle:
 
@@ -726,12 +727,12 @@ Tamper-Tests (`audit/tests/tamper.rs`): Datei mit 10 Records und Ankern bei 5 un
 Integration (`humanitld`): `decided_event_produces_record_without_payload` (Flow mit E-Mail im Body ⇒ `flow.received` enthält keinen Body und keine E-Mail; Assertion per Substring-Suche über die Zeile), `path_is_hashed` (Query mit `token=abc` ⇒ `abc` nicht in der Datei).
 
 ### Akzeptanzkriterien
-- [ ] Nach einer Session enthält `audit.jsonl` `session.started`, mindestens ein `flow.received`, `flow.decided`, `session.ended`, und `audit.anchor` bei jedem `anchor_every`-ten Record.
-- [ ] `grep -c` nach einem im Test verwendeten Klartext-Wert über `audit.jsonl` liefert 0.
-- [ ] Alle acht Tamper-Tests grün, inklusive des dokumentierten Nicht-Erkennungsfalls.
-- [ ] `verify` über 100 000 Records dauert unter 5 s (Bench-Test, `#[ignore]` in normalem Lauf).
-- [ ] `docs/SECURITY.md` enthält den Abschnitt „Was die Audit-Kette beweist" mit den vier Grenzen.
-- [ ] Der Golden-Vektor-Test verhindert unbemerkte Änderungen an der Kanonisierung.
+- [x] Nach einer Session enthält `audit.jsonl` `session.started`, mindestens ein `flow.received`, `flow.decided`, `session.ended`, und `audit.anchor` bei jedem `anchor_every`-ten Record. (Gemessen 2026-09-11 mit dem Merge-Stand von HUM-050: `decided_event_produces_record_without_payload` in `daemon/bin/humanitld/tests/daemon_end_to_end.rs` fährt eine Sitzung gegen einen echten Daemon und prüft die Folge der Arten bis zum Anker am Ende; `anchor_written_every_n` prüft die Anker bei jedem `anchor_every`-ten Record in Datei und `SQLite`. Beide grün, und beide unter ihrer Mutation rot gesehen.)
+- [x] `grep -c` nach einem im Test verwendeten Klartext-Wert über `audit.jsonl` liefert 0. (Gemessen 2026-09-11 mit dem Merge-Stand von HUM-050: derselbe Ende-zu-Ende-Test sucht die Mail-Adresse aus dem Body, dessen Schlüssel `kontakt` und den Pfad `/contact` im Log und zählt null Treffer; `path_is_hashed` findet den Token aus der Query nicht und den Pfad nur als `path_hash`. Die Mutation „Pfad im Klartext" macht `path_is_hashed` rot.)
+- [x] Alle acht Tamper-Tests grün, inklusive des dokumentierten Nicht-Erkennungsfalls. (Gemessen 2026-09-11 mit dem Merge-Stand von HUM-050: `cargo test -p humanitl-audit`, `tests/tamper.rs` 8 von 8; sechs Prüfungen des Verifiers (Hash, MAC, `seq`, kanonische Form, Anker, Kürzung unter einen Anker), einzeln abgeschaltet, machen je ihren Test rot.)
+- [x] `verify` über 100 000 Records dauert unter 5 s (Bench-Test, `#[ignore]` in normalem Lauf). (Gemessen 2026-09-11 mit dem Merge-Stand von HUM-050: `cargo test -p humanitl-audit --release --test bench -- --ignored` grün, der ganze Test samt Erzeugen der Kette in 3,03 s, gedrosselt mit `nice -n 19` auf sechs Kernen.)
+- [x] `docs/SECURITY.md` enthält den Abschnitt „Was die Audit-Kette beweist" mit den vier Grenzen. (Nachgelesen 2026-09-11: Abschnitt 8, vier nummerierte Grenzen; dazu der Absatz zum Start hinter dem letzten Anker, `AUDIT_007`.)
+- [x] Der Golden-Vektor-Test verhindert unbemerkte Änderungen an der Kanonisierung. (Gemessen 2026-09-11 mit dem Merge-Stand von HUM-050: `hash_golden_vector` wird rot, wenn die Schlüssel umgekehrt sortiert werden oder `ts` nicht in den Hash geht.)
 
 ### Fallstricke
 - Zeitstempel: `chrono` serialisiert je nach Feature mal mit, mal ohne Nanosekunden. Immer explizit `ts.format("%Y-%m-%dT%H:%M:%S%.6fZ")` und in `data` nie `DateTime` direkt serialisieren, sondern über denselben Formatter.

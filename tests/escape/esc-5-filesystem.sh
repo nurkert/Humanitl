@@ -1,9 +1,9 @@
 #!/bin/sh
 # ESC-5 — filesystem, terminal and audit trail.
 #
-# The three filesystem cases belong to HUM-043 and the two terminal cases to
-# HUM-042; both are live since those issues landed. The audit cases belong to
-# HUM-029 and are still skipped. The file exists since Sprint 0 because
+# The three filesystem cases belong to HUM-043, the two terminal cases to
+# HUM-042 and the two audit cases to HUM-050; all are live since those issues
+# landed. The file exists since Sprint 0 because
 # docs/SECURITY.md and docs/THREAT-MODEL.md point at ESC-5 and
 # scripts/ci/lint-docs.sh checks that the file behind the reference is real.
 # Runs on the HOST; see the note in esc-4-rules.sh.
@@ -19,11 +19,20 @@
 # never leaves the daemon cannot reach a terminal that would execute it
 # (docs/SECURITY.md 3.3).
 #
+# The two audit cases ask what the audit chain promises (docs/SECURITY.md 8):
+# a real daemon writes its chain and anchors it on stop, the test deletes an
+# entry from the middle of that chain or cuts its anchored end, and the
+# verifier, holding the daemon's key and the anchors from its database, reports
+# both as a break. What the chain does not promise — a cut behind the last
+# anchor while the daemon still runs — is its own test in the audit crate.
+#
 # Like ESC-4, each case runs the integration test of that name — the filesystem
 # cases `daemon/crates/sandbox/tests/escape_worktree.rs`, the terminal cases
-# `daemon/crates/ipc/tests/terminal.rs`. Both drive the real launcher against a
-# real bubblewrap; there is no command that could ask these questions from
-# outside without starting half the daemon.
+# `daemon/crates/ipc/tests/terminal.rs`, the audit cases
+# `daemon/bin/humanitld/tests/daemon_end_to_end.rs`. The first two drive the
+# real launcher against a real sandbox backend, the last one the real daemon;
+# there is no command that could ask these questions from outside without
+# starting half the daemon (`humanitl audit verify` arrives with HUM-070).
 
 set -u
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -56,6 +65,11 @@ worktree_case() {
 # terminal_case NAME — the same for the terminal of the sandbox (HUM-042).
 terminal_case() {
     cargo_case "$1" humanitl-ipc terminal
+}
+
+# audit_case NAME — the same for the audit chain of a real daemon (HUM-050).
+audit_case() {
+    cargo_case "$1" humanitld daemon_end_to_end
 }
 
 # cargo_case NAME PACKAGE TEST — run one integration test and judge it.
@@ -93,7 +107,7 @@ worktree_case hooks_write_stays_in_sandbox
 terminal_case osc52_does_not_reach_host
 terminal_case osc8_and_title_are_inert
 
-skip audit_delete_is_detected      "deleting an entry breaks the hash chain, HUM-029"
-skip audit_truncate_is_detected    "truncating the file is reported as truncation, HUM-029"
+audit_case audit_delete_is_detected
+audit_case audit_truncate_is_detected
 
 esc_end

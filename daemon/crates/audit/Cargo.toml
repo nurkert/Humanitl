@@ -10,3 +10,31 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+humanitl-core.workspace = true
+
+chrono.workspace = true
+getrandom.workspace = true
+hex.workspace = true
+hmac.workspace = true
+# Der Code nutzt nur `O_NOFOLLOW` beim Anlegen des Schlüssels, wie `ca.rs`.
+libc.workspace = true
+rustix.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+# Nur `tokio::sync::broadcast` für den Strom der Befunde, wie in der
+# Aufzeichnung; der Schreiber selbst ist ein Thread ohne Laufzeit.
+tokio.workspace = true
+tracing.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+bytes.workspace = true
+# Die Tests schreiben die Anker in dieselbe SQLite-Tabelle wie der Daemon.
+# Eine Test-Abhängigkeit zeigt nicht nach außen (`tools/check_deps.py`
+# überspringt `kind = "dev"`); im Bibliothekscode bleibt die Crate bei
+# `humanitl-core`.
+humanitl-recorder.workspace = true
+# Nur für `anchor_tampered_detected`: Der Test ändert einen Anker in SQLite.
+rusqlite.workspace = true
+tempfile.workspace = true

@@ -38,6 +38,7 @@ const DENIED_BY_CONVENTION: &[&str] = &[
     "resolver.*",
     "experimental.*",
     "recorder.retention_days",
+    "audit.*",
 ];
 
 /// Ein Verzeichnis, in dem die Tests ihre Dateien anlegen.
