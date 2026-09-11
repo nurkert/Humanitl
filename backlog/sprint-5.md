@@ -11,6 +11,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-058 | Fehlerpfade im UI | M | HUM-063, HUM-019, HUM-040, HUM-041, HUM-042, HUM-045, HUM-068 |
 | HUM-146 | Private Ziele hinter NAT64, 6to4 und Sonderbereichen | S | HUM-004 |
 | HUM-147 | verify-commit baut inkrementell, die CI nicht | S | — |
+| HUM-152 | Der M3-Lauf tippt nicht ins TUI des echten Agenten | S | HUM-141 |
 | HUM-059 | Dokumentation | M | alle vorherigen |
 | HUM-086 | Repository auf Englisch | M | HUM-059 |
 | HUM-060 | Release 0.1.0 | S | HUM-053, HUM-059 |
@@ -2638,3 +2639,30 @@ Die Schritte laufen mit `CARGO_INCREMENTAL=0`, gesetzt an derselben Stelle wie `
 
 ### Referenzen
 Messung am 2026-09-11; `.github/workflows/ci.yml:43`; `tools/verify-commit.sh:59`, `:220`; Nutzervorgabe zur Plattensparsamkeit.
+
+---
+
+## HUM-152 · Der M3-Lauf tippt nicht ins TUI des echten Agenten
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-141 · Blockiert: nichts; der Werkzeugaufruf selbst ist seit HUM-141 gemessen
+
+### Kontext
+HUM-141 misst den Werkzeugaufruf des echten Agenten kopflos: Der M3-Lauf gibt OpenCode die Frage als Argument von `opencode run`, der Agent ruft `webfetch`, die Regel des Profils antwortet mit `403`, und das steht im Transkript des Agenten. Die Spezifikation von HUM-141 sah dafür das Tippen in das laufende TUI vor, über `humanitl sandbox attach`, weil `humanitl run` ausdrücklich keine Taste weiterreicht (`daemon/bin/humanitl/src/cmd/run.rs`, Kopf). Das ist nicht gebaut. Gemessen ist nur der Weg: `sandbox attach` reicht die Standardeingabe an das Pseudoterminal weiter (am 2026-09-07 mit `/bin/sh`), und OpenCode nimmt Zeichen in den ersten Sekunden nach seinem ersten Bild nicht an. Wie lange es braucht, ist nicht gemessen.
+
+### Ziel
+Der TUI-Lauf in Schritt 13 bekommt dieselbe Frage getippt (`humanitl-webfetch https://humanitl-probe.example/page`), und im Transkript des TUI steht der gescheiterte Aufruf mit dem `403` der Regel.
+
+### Nicht-Ziel
+Eine Änderung an `humanitl run`. Ein Mock, der mehr kann als in HUM-141.
+
+### Betroffene Pfade
+- `tests/e2e/m3_agent_inside/run.sh` (TUI-Lauf in Schritt 13)
+
+### Spezifikation
+Nach dem ersten Bild wartet der Lauf eine Frist, die gemessen und als Zahl ins Skript geschrieben ist, nicht geraten. Dann tippt er über `humanitl sandbox attach` die Frage samt Eingabetaste, wartet, bis `/_debug/tool` des Mocks die Antwort des Werkzeugs zeigt, und sucht im TUI-Transkript die Zeile des gescheiterten Aufrufs, ohne die Zeile, mit der der Mock die Antwort wiederholt.
+
+### Akzeptanzkriterien
+- [ ] Die Frist, bis OpenCode Zeichen annimmt, ist gemessen und steht als Zahl mit ihrer Messung im Lauf.
+- [ ] Im Transkript des TUI-Laufs steht der gescheiterte `webfetch` mit dem `403` der Profilregel, und die Zahl der Zusicherungen des OpenCode-Zweigs steigt entsprechend.
+
+### Referenzen
+HUM-141, HUM-067 (`backlog/sprint-3.md`); `tests/e2e/m3_agent_inside/run.sh` Schritt 13; Messungen vom 2026-09-07 und 2026-09-11.

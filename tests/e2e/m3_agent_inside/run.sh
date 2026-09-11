@@ -118,7 +118,7 @@ M3_EXPECTED_ASSERTIONS=111
 # Fallunterscheidungen über das Ergebnis, nicht darüber, ob geprüft wird —,
 # damit diese Zahl exakt ist und nicht ungefähr: Der Lauf vergleicht den
 # Zähler vor und nach der Variante mit ihr.
-M3_OPENCODE_ASSERTIONS=15
+M3_OPENCODE_ASSERTIONS=22
 
 # Die Ports des Ziels. Im eigenen Netz-Namensraum ist der Lauf root und darf
 # auch die privilegierten binden.
@@ -206,6 +206,8 @@ M3_ONLY_OUT="$E2E_WORKDIR/out/llm_only.transcript"
 M3_ONLY_ERR="$E2E_WORKDIR/out/llm_only.log"
 M3_OC_OUT="$E2E_WORKDIR/out/opencode.transcript"
 M3_OC_ERR="$E2E_WORKDIR/out/opencode.log"
+M3_OC_FETCH_OUT="$E2E_WORKDIR/out/opencode-webfetch.transcript"
+M3_OC_FETCH_ERR="$E2E_WORKDIR/out/opencode-webfetch.log"
 # Die zweite Sitzung des echten Agenten: sein Vollbild-TUI (HUM-067).
 M3_OC_TUI_OUT="$E2E_WORKDIR/out/opencode-tui.transcript"
 M3_OC_TUI_ERR="$E2E_WORKDIR/out/opencode-tui.log"
@@ -1376,8 +1378,8 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
     # attach`. Was ohne Tippen entsteht, ist genau das, was das Kriterium
     # verlangt: Der Agent startet und malt seinen Prompt. Der Rest des
     # Kriteriums -- ein Werkzeugaufruf, der am `403` der Profilregel scheitert
-    # -- braucht ein Modell, das Werkzeugaufrufe liefert, und liegt als
-    # HUM-141.
+    # -- braucht ein Modell, das Werkzeugaufrufe liefert; das misst seit
+    # HUM-141 der kopflose Lauf mit `humanitl-webfetch` weiter unten.
     #
     # Eine Sitzung und nicht zwei: Der Daemon führt genau eine
     # (`CLI_005`), und eine zweite müsste warten, bis die erste wirklich
@@ -1483,6 +1485,88 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
         "$m3_oc_gh_before" "$(m3_count 'host:api.github.com')"
     e2e_expect "and left nothing waiting for a human" 0 "$(m3_count 'state:held')"
 
+    # --- Der Werkzeugaufruf des echten Agenten (HUM-141) --------------------
+    #
+    # **Das `403` der Profilregel, dort, wo es hingehört: beim Agenten.** Der
+    # Mock beantwortet eine Frage mit dem Wort `humanitl-webfetch` und einer
+    # URL mit einem Aufruf von OpenCodes `webfetch`, und die Antwort des
+    # Werkzeugs, die OpenCode dem Modell zurückgibt, steht danach unter
+    # `/_debug/tool` -- aus der Sicht des Empfängers, nicht aus dem, was der
+    # Agent darüber schreibt.
+    #
+    # Ein eigenes Profil und nicht `llm-only` selbst: In der Sandbox steht
+    # `OPENCODE_PERMISSION` auf `{"webfetch":"ask"}`, und ohne Menschen
+    # verweigert OpenCode das Werkzeug. Gemessen würde dann die Berechtigung
+    # des Agenten statt der Regel von Humanitl. `[config.sandbox.env]` steht
+    # über dem Adapter (`daemon/crates/ipc/src/sandbox.rs`, Reihenfolge der
+    # Quellen); ein Projektprofil darf das nicht, ein globales schon.
+    # Das Verzeichnis, in das die Vorbereitung oben ihre `llm-only.toml`
+    # geschrieben hat. Deren eigene Variable lebte in einer Subshell (sie läuft
+    # als `$(…)`), deshalb hier aus dem Baum des Laufs.
+    m3_oc_fetch_profiles="$E2E_XDG_CONFIG/humanitl/profiles"
+    awk '
+        $0 == "name = \"llm-only\"" { print "name = \"llm-only-webfetch\""; next }
+        { print }
+    ' "$m3_oc_fetch_profiles/llm-only.toml" > "$m3_oc_fetch_profiles/llm-only-webfetch.toml"
+    printf '\n[config.sandbox.env]\nOPENCODE_PERMISSION = %s\n' \
+        "'{\"webfetch\":\"allow\"}'" >> "$m3_oc_fetch_profiles/llm-only-webfetch.toml"
+    grep -q '^name = "llm-only-webfetch"$' "$m3_oc_fetch_profiles/llm-only-webfetch.toml" ||
+        e2e_die "the webfetch profile was not derived from llm-only"
+
+    m3_oc_fetch_host=humanitl-probe.example
+    m3_oc_fetch_before=$(m3_count "host:$m3_oc_fetch_host")
+    m3_oc_fetch_status=0
+    (
+        cd "$M3_PROJECT" &&
+            XDG_RUNTIME_DIR="$E2E_XDG_RUNTIME" \
+                XDG_DATA_HOME="$E2E_XDG_DATA" \
+                XDG_CONFIG_HOME="$E2E_XDG_CONFIG" \
+                HOME="$E2E_HOME" \
+                timeout "${M3_OPENCODE_SECONDS:-60}" \
+                "$E2E_CLI" -v run --profile llm-only-webfetch --ask none -- \
+                "$m3_opencode_path" run "humanitl-webfetch https://$m3_oc_fetch_host/page" \
+                > "$M3_OC_FETCH_OUT" 2> "$M3_OC_FETCH_ERR"
+    ) || m3_oc_fetch_status=$?
+    m3_end_sandbox_from "$M3_OC_FETCH_ERR"
+    # Dieselbe Unterscheidung wie beim ersten Lauf des echten Agenten oben:
+    # Die drei Codes gehören Humanitl, jeder andere dem Agenten.
+    case "$m3_oc_fetch_status" in
+    2 | 3 | 4)
+        e2e_check "Humanitl itself did not refuse the webfetch session" no \
+            "humanitl run ended with $m3_oc_fetch_status: 2 means no daemon, 3 a failed isolation check, 4 a security violation."
+        ;;
+    *)
+        e2e_check "Humanitl itself did not refuse the webfetch session" ok
+        ;;
+    esac
+
+    m3_oc_tool=$(curl -sS --max-time 5 "http://$E2E_FAKE_ADDR:$M3_LLM_PORT/_debug/tool" || true)
+    e2e_expect_match "the real agent called webfetch and got the 403 of the profile rule back" \
+        '403' "$m3_oc_tool"
+    # Und beim Agenten selbst: OpenCode schreibt den gescheiterten Aufruf in
+    # sein eigenes Transkript. Die Zeile, mit der der Mock danach die Antwort
+    # des Werkzeugs wiederholt (`tool said: `, `_tool_plan` im Mock), zählt
+    # nicht mit — sonst bestünde die Aussage auch dann, wenn nur der Mock das
+    # `403` gesehen hätte.
+    m3_oc_fetch_own=$(sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' "$M3_OC_FETCH_OUT" |
+        grep -v '^tool said: ' || true)
+    e2e_expect_match "and the agent's own transcript shows that 403" \
+        '403' "$m3_oc_fetch_own"
+    # Und dass es `webfetch` war, das scheiterte, und nicht ein anderes
+    # Werkzeug, das dieselbe URL abrief: OpenCode nennt den Aufruf beim Namen.
+    e2e_expect_match "and the call that failed was OpenCode's webfetch" \
+        "WebFetch https://$m3_oc_fetch_host/page" "$m3_oc_fetch_own"
+    e2e_expect "and the history holds the one request its tool made" \
+        "$((m3_oc_fetch_before + 1))" "$(m3_count "host:$m3_oc_fetch_host")"
+    # Die Regel und nicht eine Frist: `rule_id` ist gesetzt, und entschieden
+    # wurde `block`. Ohne die erste Zeile bestünde der Schritt auch dann, wenn
+    # die Anfrage bis zur Frist gehalten worden wäre; ohne die zweite, wenn eine
+    # Regel sie durchgelassen und das Ziel selbst `403` gesagt hätte.
+    e2e_expect_match "and a rule of the profile blocked it, not a deadline" \
+        '"rule_id":"[^"]+"' "$(m3_row "host:$m3_oc_fetch_host" || true)"
+    e2e_expect "and that rule's decision was block" \
+        block "$(m3_field "host:$m3_oc_fetch_host" decision)"
+
     # --- Dieselbe Sitzung noch einmal, diesmal als Vollbild-TUI -------------
     #
     # **Zwei Läufe und nicht einer, und der Grund ist eine Messung.** Der
@@ -1491,9 +1575,9 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
     # wartet auf einen Menschen -- dafür malt es den Prompt, und der steht im
     # Akzeptanzkriterium von HUM-067. Getippt wird in keinem der beiden:
     # `humanitl run` reicht ausdrücklich keine Taste weiter (Kopf von
-    # `daemon/bin/humanitl/src/cmd/run.rs`), und der Weg über `humanitl
-    # sandbox attach` braucht ein Modell, das Werkzeugaufrufe liefert
-    # (HUM-141).
+    # `daemon/bin/humanitl/src/cmd/run.rs`). Den Werkzeugaufruf misst der
+    # kopflose Lauf mit `humanitl-webfetch` oben (HUM-141); ins TUI getippt
+    # wird weiterhin nicht.
     m3_oc_tui_status=0
     (
         cd "$M3_PROJECT" &&
