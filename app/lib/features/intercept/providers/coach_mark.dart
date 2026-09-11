@@ -3,8 +3,9 @@
 ///
 /// # Where the flag lives, and why it is not in `config.toml`
 ///
-/// There is no write path into the configuration in this repository:
-/// `SetConfig` answers `unimplemented` until HUM-069, `humanitl config` has
+/// There is no write path into the configuration for this flag: `SetConfig`
+/// accepts only a CA variable under `sandbox.env` since HUM-151 and refuses
+/// every other key with `CONFIG_014` until HUM-069, `humanitl config` has
 /// only `get` and `schema`, and `UiConfig` carries `deny_unknown_fields`, so a
 /// key `ui.coach_marks_seen` would be `CONFIG_001` on the next start. The flag
 /// therefore lives beside the application, in a file of its own under

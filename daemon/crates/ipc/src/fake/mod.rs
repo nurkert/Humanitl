@@ -385,10 +385,15 @@ impl DaemonApi for FakeDaemon {
         Self::config_snapshot(self.state.config_overrides(), request.include_schema)
     }
 
+    /// `SetConfig` mit derselben Tür wie der Daemon (HUM-151): Was
+    /// [`crate::config_rpc::accepted`] ablehnt, lehnt auch der Fake ab. Er
+    /// schreibt keine Datei, sondern hält den Wert im Speicher; eine Oberfläche,
+    /// die gegen ihn übt, sieht dieselben Antworten wie gegen den echten Dienst.
     async fn set_config(
         &self,
         request: v1::SetConfigRequest,
     ) -> Result<v1::ConfigSnapshot, Diagnostic> {
+        crate::config_rpc::accepted(&request.key, &request.value)?;
         let mut overrides = self.state.config_overrides();
         overrides.insert(request.key.clone(), request.value.clone());
         let snapshot = Self::config_snapshot(overrides, false)?;
@@ -1042,47 +1047,34 @@ impl FakeDaemon {
 
     /// Die effektive Konfiguration des Fakes.
     ///
-    /// Vorgabewerte aus `humanitl-config` plus die Schlüssel, die über
-    /// `SetConfig` gesetzt wurden. Der Fake liest keine Datei und keine
-    /// Umgebungsvariable: er soll auf jeder Maschine dasselbe zeigen.
+    /// Vorgabewerte aus `humanitl-config` plus die Werte, die `SetConfig`
+    /// angenommen hat. Der Fake liest keine Datei und keine Umgebungsvariable:
+    /// er soll auf jeder Maschine dasselbe zeigen.
+    ///
+    /// Angenommen werden seit HUM-151 nur Variablen unter `sandbox.env`. Beim
+    /// Daemon stehen sie danach in `config.toml`; der Fake legt sie dort ab, wo
+    /// die Auflösung eine Zeile aus `config.toml` ablegen würde, samt Herkunft
+    /// `global`. Über die Kommandozeilen-Ebene ginge es nicht: Ein Pfad in eine
+    /// freie Tabelle ist dort kein Schlüssel des Schemas (`CONFIG_002`).
     ///
     /// # Errors
     ///
-    /// Der Befund aus `humanitl-config`, wenn ein gesetzter Schlüssel nicht im
-    /// Schema steht (`CONFIG_002`) oder sein Wert nicht passt (`CONFIG_003`).
+    /// Der Befund aus `humanitl-config`, wenn sich schon die Vorgaben nicht
+    /// laden lassen.
     fn config_snapshot(
         overrides: BTreeMap<String, String>,
         include_schema: bool,
     ) -> Result<v1::ConfigSnapshot, Diagnostic> {
-        let resolved = load(&Sources::empty().with_cli(overrides))?;
-        let toml = toml::to_string_pretty(&resolved.config).map_err(|error| {
-            Diagnostic::builder(codes::CONFIG_001, Severity::Error)
-                .why(format!(
-                    "the effective configuration is not valid TOML: {error}"
-                ))
-                .build()
-        })?;
-        Ok(v1::ConfigSnapshot {
-            toml,
-            json_schema: if include_schema {
-                humanitl_config::json_schema().to_string()
-            } else {
-                String::new()
-            },
-            origins: resolved
-                .origins
-                .iter()
-                .map(|(key, origin)| v1::FieldOrigin {
-                    key: key.clone(),
-                    origin: origin.kind().to_owned(),
-                })
-                .collect(),
-            diagnostics: resolved
-                .diagnostics
-                .iter()
-                .map(diagnostic_to_proto)
-                .collect(),
-        })
+        let mut resolved = load(&Sources::empty())?;
+        for (key, value) in overrides {
+            if let Some(name) = key.strip_prefix(crate::config_rpc::SANDBOX_ENV_PREFIX) {
+                resolved.config.sandbox.env.insert(name.to_owned(), value);
+                resolved
+                    .origins
+                    .insert("sandbox.env".to_owned(), humanitl_config::Origin::Global);
+            }
+        }
+        convert::config_snapshot_to_proto(&resolved, include_schema)
     }
 }
 

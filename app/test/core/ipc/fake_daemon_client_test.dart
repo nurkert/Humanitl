@@ -269,4 +269,41 @@ void main() {
     await secondKeys.close();
     await thirdKeys.close();
   });
+
+  test('SetConfig takes only a sandbox.env variable set to the CA', () async {
+    // Dieselbe schmale Tür wie im Daemon (HUM-151). Jede Zeile ist eine
+    // Mutation, die rot wird: ohne Präfix, anderer Wert, Name, den keine
+    // Umgebung trägt, leerer Name.
+    final FakeDaemonClient client = FakeDaemonClient.empty();
+    Future<String?> refusal(String key, String value) async {
+      try {
+        await client.setConfig(key, value);
+        return null;
+      } on DaemonException catch (error) {
+        return error.code;
+      }
+    }
+
+    expect(
+      await refusal('sandbox.env.CURL_CA_BUNDLE', '/etc/humanitl/ca.crt'),
+      isNull,
+    );
+    expect(
+      await refusal('CURL_CA_BUNDLE', '/etc/humanitl/ca.crt'),
+      'CONFIG_014',
+    );
+    expect(
+      await refusal('sandbox.env.CURL_CA_BUNDLE', '/run/user/1000'),
+      'CONFIG_014',
+    );
+    expect(
+      await refusal('sandbox.env.curl-ca', '/etc/humanitl/ca.crt'),
+      'CONFIG_014',
+    );
+    expect(await refusal('sandbox.env.', '/etc/humanitl/ca.crt'), 'CONFIG_014');
+    // Nur der angenommene Auftrag steht in der Liste.
+    expect(client.configWrites, <(String, String)>[
+      ('sandbox.env.CURL_CA_BUNDLE', '/etc/humanitl/ca.crt'),
+    ]);
+  });
 }

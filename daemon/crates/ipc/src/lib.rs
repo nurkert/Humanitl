@@ -93,6 +93,7 @@ pub mod v1 {
 
 pub mod auth;
 pub mod client;
+pub mod config_rpc;
 pub mod convert;
 pub mod domains;
 pub mod fake;
