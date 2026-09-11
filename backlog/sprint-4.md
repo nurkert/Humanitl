@@ -30,6 +30,7 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-142 | Der Daemon wartet ohne Frist auf einen Agenten, der nicht gehen will | M | HUM-011, HUM-042 |
 | HUM-143 | Zwischen zwei Segmenten verschwindet der Klick | S | HUM-028 |
 | HUM-145 | Die Kopplung an einen Adapter waechst nicht weiter | S | HUM-074 |
+| HUM-148 | Die Sandbox-Goldens lesen die Wanduhr | S | HUM-040 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -2021,6 +2022,44 @@ Die CLI benutzt in beiden Fällen `out_path`.
 ### Quellen
 `docs/ARCHITECTURE.md` 3b (Zeile 66); `docs/adr/0018-rpc-parity.md` Zeilen 25 bis 28, 39 bis 42, 110; `README.md` Zeile 83 und Zeilen 123 bis 124; `backlog/CONVENTIONS.md` 4.4, 4.6, 4.13, 4.18 (Zeilen 802 bis 880); `backlog/sprint-2.md` HUM-026 Nicht-Ziel (Zeile 583) und HUM-032 (Zeilen 1329 bis 1345); `backlog/sprint-4.md` HUM-051 (Zeile 789, Audit-Export als Vorbild) und HUM-078; `docs/PROTOCOL.md` Abschnitte 3 und 4; `proto/humanitl/v1/humanitl.proto` Zeilen 23 bis 44 und 863; `daemon/bin/humanitl/src/cli.rs` Zeilen 102 bis 142 und 187 bis 263; `.github/workflows/ci.yml` Zeilen 572 bis 582; HAR 1.2 (http://www.softwareishard.com/blog/har-12-spec/); RFC 4180 (https://www.rfc-editor.org/rfc/rfc4180).
 
+
+---
+
+## HUM-148 · Die Sandbox-Goldens lesen die Wanduhr
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-040 · Blockiert: jedes `tools/verify-commit.sh` auf diesem Rechner und bald jeden CI-Lauf
+
+### Kontext
+Am 2026-09-11 schlug `tools/verify-commit.sh` zweimal fehl, obwohl die geprüften Commits `app/` nicht berührten: acht Goldens (`isolation_panel_*` und `sandbox_header_running_*`, je hell und dunkel) wichen um 0,02 Prozent ab, 176 Pixel, alle an derselben Stelle. Das Differenzbild zeigt den Grund: Unten links in der Fußzeile des Sandbox-Bildschirms ist ein Textblock ein Zeichen breiter als im Referenzbild.
+
+Der Block ist die Laufzeit der Sandbox (`_Uptime` in `app/lib/features/sandbox/sandbox_screen.dart`). Sie rechnet `nowProvider` gegen `startedAt`. Das Gerüst der Sandbox-Tests (`app/test/features/sandbox/harness.dart`) setzt `startedAt` fest auf `sandboxTestNow` (2026-09-04 12:00 UTC), überschreibt `nowProvider` aber nicht. Die Laufzeit liest deshalb die Wanduhr: Am 2026-09-05, als die Referenzbilder entstanden, stand dort eine zweistellige Stundenzahl; nach 100 Stunden, am 2026-09-08 16:00 UTC, wurde sie dreistellig. Die CI war auf `2ef3a24` noch grün und wird aus demselben Grund rot, sobald ihr Lauf die Grenze überschreitet.
+
+### Ziel
+Die Goldens des Sandbox-Bildschirms zeigen an jedem Tag und auf jedem Rechner dasselbe Bild.
+
+### Nicht-Ziel
+Eine Toleranz für Golden-Vergleiche: Sie verdeckte genau diese Sorte Fehler. Eine Änderung an `_Uptime` oder an `nowProvider`; beide tun, was sie sollen.
+
+### Betroffene Pfade
+- `app/test/features/sandbox/harness.dart` (die stehende Uhr in `sandboxUnderTest`)
+- `app/test/harness/fixed_now.dart` (neu: `FixedNow`, bisher nur in den Intercept-Fixtures)
+- `app/test/features/intercept/fixtures.dart` (exportiert `FixedNow` weiter)
+- `app/test/goldens/goldens/ci/isolation_panel_*.png`, `sandbox_header_running_*.png` (neu abgenommen)
+
+### Spezifikation
+`sandboxUnderTest` überschreibt `nowProvider` mit `FixedNow(sandboxTestNow + sandboxTestUptime)`, vor den Überschreibungen des Aufrufers, damit ein Test die Uhr weiter selbst stellen kann. `sandboxTestUptime` ist 12 Minuten 5 Sekunden, gezeichnet als `12:05`. `FixedNow` zieht in das geteilte Gerüst; die Intercept-Fixtures exportieren es weiter, damit kein Aufrufer umziehen muss.
+
+### Akzeptanzkriterien
+- [x] Die acht Goldens sind mit der stehenden Uhr neu abgenommen, und kein anderes Referenzbild hat sich geändert. **Gemessen am 2026-09-11**: `git status` zeigt genau die acht PNGs; im neuen Bild ist allein der Laufzeitblock der Fußzeile kürzer.
+- [x] Ohne die Überschreibung der Uhr im Gerüst werden die Goldens rot (Mutationsprobe). **Gemessen am 2026-09-11**: sechs der sechs Isolation-Goldens rot.
+- [x] `flutter analyze`, `dart format` und die Tests unter `test/features/sandbox`, `test/features/intercept` und `test/goldens` sind grün. **Gemessen am 2026-09-11**: keine Befunde, 0 Dateien umformatiert, 438 Tests grün.
+- [ ] `tools/verify-commit.sh` ist über den fertigen Commit grün.
+
+### Fallstricke
+- Ein neu abgenommenes Referenzbild beweist nichts, solange es aus der Wanduhr entsteht: Erst die stehende Uhr, dann das Bild.
+- Die Goldens laufen im CI-Modus von alchemist (Text als Blöcke). Ein hier abgenommenes Bild gilt deshalb auch in der CI.
+
+### Referenzen
+Differenzbilder vom 2026-09-11 (`isolation_panel_passed_light_maskedDiff.png`, Fußzeile x 322 bis 332); `app/lib/features/sandbox/sandbox_screen.dart:367-386`; `app/test/features/sandbox/harness.dart:21`, `:103`; Commit `2f2baa7` (Referenzbilder vom 2026-09-05).
 
 ---
 
