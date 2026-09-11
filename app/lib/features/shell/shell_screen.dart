@@ -11,6 +11,7 @@ import '../../core/ipc/flow_reveal.dart';
 import '../../core/shortcuts/intents.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
+import '../about/about_dialog.dart';
 import '../audit/audit_screen.dart';
 import '../history/history_screen.dart';
 import '../intercept/intercept_screen.dart';
@@ -127,6 +128,14 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
             ref.read(interceptDecisionProvider.notifier).askAllowAll();
           },
         ),
+      // Braucht keinen Daemon und steht deshalb auch während eines Bruchs
+      // darin: Name, Version, Lizenz und die Namensnennung der Rangliste
+      // (HUM-031).
+      PaletteCommand(
+        id: 'about',
+        label: l10n.shellPaletteAbout,
+        run: () => showHumanitlAbout(context),
+      ),
     ];
   }
 
