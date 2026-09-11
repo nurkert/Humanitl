@@ -2950,7 +2950,7 @@ Kein mDNS (Ollama kündigt nichts an). Keine Suche außerhalb des lokalen /24. K
 - [x] Scan eines /24 endet in ≤ 5 s ohne Treffer. Gemessen zweifach: `the_time_budget_of_a_full_scan_holds` rechnet die Zusage über den Konstanten nach (1016 Versuche, 64 gleichzeitig, 200 ms Frist ergeben 3,2 s als schlimmsten Fall), und `a_scan_over_a_full_24_stays_in_the_budget` fährt ein ganzes `/24` auf der Schleife.
 - [x] Ollama-Mock wird gefunden, Modelle gelistet (`detects_ollama_mock` gegen `FakeUpstream::ollama`, die Modellnamen kommen aus der Antwort des Servers).
 - [x] Ohne Klick kein einziger Verbindungsversuch: `nothing_connects_before_the_search_is_started` zählt sie am Egress-Port, `opening_the_setup_contacts_nothing` prüft dasselbe an der Oberfläche — auch das geöffnete Blatt sucht noch nicht.
-- [ ] Audit-Eintrag vorhanden. **Offen**, Begründung im Stand-Abschnitt: Die Crate `humanitl-audit` ist eine leere Hülle, und niemand schreibt in ein Audit-Log; das baut HUM-029.
+- [x] Audit-Eintrag vorhanden. (Gemessen 2026-09-11 mit HUM-050: `server::tests::a_discover_scan_leaves_exactly_one_audit_record` und `server::tests::the_discover_rpc_writes_its_audit_record` in `daemon/crates/ipc/src/server.rs` grün und je unter ihrer Mutation rot; der Record `llm.discover` trägt nur Netz, Ports und die Zahl der Antworten.)
 
 ### Fallstricke
 - IDS/Firewalls in Firmennetzen melden Port-Scans; deshalb der Hinweistext und die Beschränkung auf vier Ports.
@@ -3006,12 +3006,11 @@ Spezifikation nennt `unknown` als Produkt, also wird er genannt: Dort horcht
 etwas. Ein Knopf „Übernehmen" fehlt ihm trotzdem — ein Klick trüge eine
 Adresse in die Einstellung, die nie als Modellserver geantwortet hat.
 
-**Der Audit-Eintrag fehlt, und zwar mangels Audit-Log.** Die Crate
-`humanitl-audit` besteht aus sechs Zeilen Doku-Kommentar, niemand hängt sie
-ein, und es gibt keine Datei `audit.jsonl`, in die ein `llm_discover` gehörte;
-HUM-029 baut die Hash-Kette. Der Scan protokolliert stattdessen über `tracing`
-mit Netz und Schnittstelle. Das Kästchen bleibt offen, statt mit einer
-Log-Zeile abgehakt zu werden, die kein Audit ist.
+**Der Audit-Eintrag kam mit HUM-050.** Bis dahin fehlte er mangels
+Audit-Log, und das Kästchen blieb offen, statt mit einer `tracing`-Zeile
+abgehakt zu werden, die kein Audit ist. Seit HUM-050 schreibt der Scan, sobald
+er endet, einen Record `llm.discover` mit Netz, Ports und der Zahl der
+Antworten (`relay_scan` in `daemon/crates/ipc/src/server.rs`).
 
 **Aus den beiden Reviews kamen sechs Befunde, und vier davon waren Löcher in
 genau der Zusage, um die es hier geht.** Sie stehen hier, weil sie das Muster

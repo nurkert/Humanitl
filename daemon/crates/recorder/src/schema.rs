@@ -80,6 +80,11 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "meta_flow",
         sql: include_str!("../migrations/V6__meta_flow.sql"),
     },
+    Migration {
+        version: 7,
+        name: "audit_anchors",
+        sql: include_str!("../migrations/V7__audit_anchors.sql"),
+    },
 ];
 
 /// Der Stand, den eine frisch migrierte Datenbank hat.

@@ -12,6 +12,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-146 | Private Ziele hinter NAT64, 6to4 und Sonderbereichen | S | HUM-004 |
 | HUM-147 | verify-commit baut inkrementell, die CI nicht | S | — |
 | HUM-152 | Der M3-Lauf tippt nicht ins TUI des echten Agenten | S | HUM-141 |
+| HUM-155 | Der Audit-Schreiber lebt im Kern | M | HUM-050 |
 | HUM-059 | Dokumentation | M | alle vorherigen |
 | HUM-086 | Repository auf Englisch | M | HUM-059 |
 | HUM-060 | Release 0.1.0 | S | HUM-053, HUM-059 |
@@ -2666,3 +2667,28 @@ Nach dem ersten Bild wartet der Lauf eine Frist, die gemessen und als Zahl ins S
 
 ### Referenzen
 HUM-141, HUM-067 (`backlog/sprint-3.md`); `tests/e2e/m3_agent_inside/run.sh` Schritt 13; Messungen vom 2026-09-07 und 2026-09-11.
+
+## HUM-155 · Der Audit-Schreiber lebt im Kern
+Sprint: 5 · Größe: M · Abhängigkeiten: HUM-050 · Blockiert: nichts
+
+### Kontext
+`docs/ARCHITECTURE.md` 2 zählt `audit` zum Kern: kein IO, kein async, kein Proto. HUM-050 hat den Schreiber der Kette dorthin gelegt, wie seine Spezifikation es verlangt (`daemon/crates/audit/src/lib.rs`: `AuditWriter`), und damit Datei, `flock`, `fsync`, die Schlüsseldatei, einen Schreib-Thread und einen `tokio::sync::broadcast`-Kanal in eine Kern-Crate. Das Review von Codex hat es als Befund gemeldet; es ist zutreffend, ging aber nicht mehr in den Commit von HUM-050, weil der Umbau die Crate-Grenzen und `tools/check-deps.sh` berührt. `docs/ARCHITECTURE.md` nennt die Abweichung seither ausdrücklich.
+
+### Ziel
+`humanitl-audit` enthält nur noch Kanonisierung, Record, Arten und die Prüfung über einen Leser. Der Schreiber (`writer.rs`, die Datei-Seite von `key.rs`, `AuditVerifier::verify` über einen Pfad) lebt in einem Adapter außen, und `tools/check-deps.sh` verbietet `std::fs` und `tokio` im Kern.
+
+### Nicht-Ziel
+Ein neuer Port. Der Schreiber bleibt der einzige Adapter, und die Aufrufer im Daemon ändern nur ihren Import.
+
+### Betroffene Pfade
+- `daemon/crates/audit/src/` (Kern)
+- ein Adapter-Crate oder `daemon/crates/recorder/`, je nachdem, was `backlog/CONVENTIONS.md` 3.1 zulässt
+- `tools/check-deps.sh`, `docs/ARCHITECTURE.md`
+
+### Akzeptanzkriterien
+- [ ] `humanitl-audit` hängt weder von `tokio` noch von `rustix` oder `libc` ab, und kein Modul darin öffnet eine Datei.
+- [ ] `tools/check-deps.sh` meldet es, wenn eine Kern-Crate wieder eine dieser Abhängigkeiten bekommt; nachgewiesen durch eine Mutation.
+- [ ] Die Tests aus HUM-050 laufen unverändert grün, und der Satz über die Abweichung in `docs/ARCHITECTURE.md` ist gestrichen.
+
+### Referenzen
+HUM-050 (`backlog/sprint-4.md`), Review von Codex vom 2026-09-11; `docs/ARCHITECTURE.md` 1 und 2.

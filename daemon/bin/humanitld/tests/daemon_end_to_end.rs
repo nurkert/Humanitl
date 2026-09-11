@@ -786,3 +786,236 @@ fn a_broken_test_ca_stops_the_start() {
         "and no proxy socket either"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Die Audit-Kette (HUM-050)
+// ---------------------------------------------------------------------------
+
+/// Das Audit-Log eines beendeten Daemons, mit dem Schlüssel und den Ankern,
+/// die er selbst abgelegt hat.
+struct AuditTrail {
+    text: String,
+    key: [u8; 32],
+    anchors: Vec<humanitl_audit::Anchor>,
+}
+
+impl AuditTrail {
+    fn of(dir: &Path) -> Self {
+        let data = dir.join("data").join("humanitl");
+        let text = std::fs::read_to_string(data.join("audit").join("audit.jsonl"))
+            .expect("the daemon wrote an audit log");
+        let key: [u8; 32] = std::fs::read(data.join("keys").join("audit.key"))
+            .expect("the daemon created its audit key")
+            .try_into()
+            .expect("an audit key is 32 bytes");
+        let anchors = humanitl_recorder::read_anchors(&data.join("humanitl.db"))
+            .unwrap()
+            .into_iter()
+            .map(|anchor| humanitl_audit::Anchor {
+                seq: anchor.seq,
+                hash: anchor.hash,
+                ts: anchor.ts,
+            })
+            .collect();
+        Self { text, key, anchors }
+    }
+
+    fn records(&self) -> Vec<humanitl_audit::AuditRecord> {
+        self.text
+            .lines()
+            .map(|line| humanitl_audit::AuditRecord::from_line(line.as_bytes()).unwrap())
+            .collect()
+    }
+
+    fn kinds(&self) -> Vec<String> {
+        self.records()
+            .into_iter()
+            .map(|record| record.body.kind)
+            .collect()
+    }
+
+    /// Prüft einen Text, als stünde er in der Datei, mit Schlüssel und Ankern
+    /// des Daemons.
+    fn verify(&self, text: &str) -> humanitl_audit::VerifyReport {
+        humanitl_audit::AuditVerifier::verify_reader(
+            std::io::Cursor::new(text.as_bytes()),
+            Some(&self.key),
+            &self.anchors,
+        )
+        .unwrap()
+    }
+}
+
+/// Schickt eine Anfrage mit Body an `target`, die niemand entscheidet, und
+/// wartet auf die Antwort nach der Frist.
+async fn send_and_time_out(daemon: &Daemon, method: &str, target: &str, body: &str) {
+    let mut agent = UnixStream::connect(daemon.proxy_socket()).await.unwrap();
+    agent
+        .write_all(
+            format!(
+                "{method} {target} HTTP/1.1\r\nHost: example.com\r\nContent-Type: application/json\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut raw = Vec::new();
+    tokio::time::timeout(Duration::from_secs(20), agent.read_to_end(&mut raw))
+        .await
+        .expect("the timeout must end the wait")
+        .unwrap();
+    assert!(String::from_utf8_lossy(&raw).starts_with("HTTP/1.1 504"));
+}
+
+/// Eine Sitzung, eine Anfrage, ein geordnetes Ende: das Audit-Log danach.
+async fn one_session(method: &str, target: &str, body: &str) -> AuditTrail {
+    let mut daemon = Daemon::start(1);
+    daemon.ready().await;
+    send_and_time_out(&daemon, method, target, body).await;
+    daemon.terminate();
+    AuditTrail::of(daemon.dir.path())
+}
+
+/// Der Body trägt eine Mailadresse; im Log steht davon nichts, nicht einmal
+/// der Feldname. Die Datei ist dabei eine vollständige, prüfbare Kette mit
+/// allen Records einer Sitzung (Akzeptanzkriterien 1 und 2 von HUM-050).
+#[tokio::test]
+async fn decided_event_produces_record_without_payload() {
+    const MAIL: &str = "alice.wonder@example.org";
+    let body = format!("{{\"kontakt\":\"{MAIL}\"}}");
+    let trail = one_session("POST", "/contact", &body).await;
+
+    let kinds = trail.kinds();
+    for kind in [
+        "daemon.started",
+        "session.started",
+        "flow.received",
+        "flow.decided",
+        "session.ended",
+        "daemon.stopped",
+        "audit.anchor",
+    ] {
+        assert!(
+            kinds.iter().any(|seen| seen == kind),
+            "{kind} missing: {kinds:?}"
+        );
+    }
+    assert_eq!(kinds.last().map(String::as_str), Some("audit.anchor"));
+
+    // Die Suche nach dem Klartext liefert null Treffer (`grep -c` in der
+    // Spezifikation), und auch der Body als Ganzes steht nirgends.
+    assert_eq!(trail.text.matches(MAIL).count(), 0, "{}", trail.text);
+    assert!(!trail.text.contains("kontakt"), "{}", trail.text);
+    assert!(!trail.text.contains("/contact"), "{}", trail.text);
+
+    let records = trail.records();
+    let received = records
+        .iter()
+        .find(|record| record.body.kind == "flow.received")
+        .unwrap();
+    assert_eq!(received.body.data["method"], "POST");
+    assert_eq!(received.body.data["host"], "example.com");
+    assert_eq!(received.body.data["size"], body.len());
+    assert!(
+        received.body.data["findings_kinds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|kind| kind == "email"),
+        "the kind of the finding is named, its value is not: {:?}",
+        received.body.data
+    );
+    let decided = records
+        .iter()
+        .find(|record| record.body.kind == "flow.decided")
+        .unwrap();
+    assert_eq!(decided.body.data["decision"], "timed_out");
+    assert_eq!(decided.body.data["flow"], received.body.data["flow"]);
+
+    // Und die Kette hält, mit dem Schlüssel und den Ankern des Daemons, ohne
+    // unverankertes Ende.
+    let report = trail.verify(&trail.text);
+    assert!(report.is_ok(), "{report:?}");
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+}
+
+/// Ein Token in der Query steht nicht im Log, nur die Prüfsumme des Pfads.
+///
+/// Die Spezifikation nimmt `token=abc`. Der Wert hier hat Buchstaben, die in
+/// keinem Hex vorkommen: Drei Hex-Ziffern hintereinander stehen in einer
+/// Datei voller Hashes mit hoher Wahrscheinlichkeit irgendwo, und dann würde
+/// der Test ohne jedes Leck rot.
+#[tokio::test]
+async fn path_is_hashed() {
+    const TARGET: &str = "/search?q=rust&token=quux-geheim-7";
+    let trail = one_session("GET", TARGET, "").await;
+    assert!(!trail.text.contains("quux-geheim-7"), "{}", trail.text);
+    assert!(!trail.text.contains("/search"), "{}", trail.text);
+    let received = trail
+        .records()
+        .into_iter()
+        .find(|record| record.body.kind == "flow.received")
+        .unwrap();
+    assert_eq!(
+        received.body.data["path_hash"],
+        humanitl_audit::sha256_hex(TARGET.as_bytes())
+    );
+}
+
+/// ESC-5 `audit_delete_is_detected`: Ein Eintrag aus der Mitte einer echten
+/// Kette fehlt, und die Prüfung meldet den ersten Record danach als Bruch.
+#[tokio::test]
+async fn audit_delete_is_detected() {
+    let trail = one_session("GET", "/", "").await;
+    assert!(
+        trail.verify(&trail.text).is_ok(),
+        "the untouched chain holds"
+    );
+
+    let mut lines: Vec<&str> = trail.text.lines().collect();
+    assert!(lines.len() >= 5, "{}", trail.text);
+    let removed = humanitl_audit::AuditRecord::from_line(lines[2].as_bytes()).unwrap();
+    lines.remove(2);
+    let tampered = format!("{}\n", lines.join("\n"));
+    assert_eq!(
+        trail.verify(&tampered).status,
+        humanitl_audit::VerifyStatus::Broken {
+            first_bad_seq: removed.body.seq + 1,
+            reason: humanitl_audit::BreakReason::SeqGap,
+        }
+    );
+}
+
+/// ESC-5 `audit_truncate_is_detected`: Das Ende einer geordnet beendeten Kette
+/// ist verankert, in der Datei und in `SQLite`. Wer es abschneidet, schneidet
+/// unter einen Anker, und das ist ein Bruch, keine Warnung.
+#[tokio::test]
+async fn audit_truncate_is_detected() {
+    let trail = one_session("GET", "/", "").await;
+    let lines: Vec<&str> = trail.text.lines().collect();
+    let last = humanitl_audit::AuditRecord::from_line(lines[lines.len() - 1].as_bytes()).unwrap();
+    assert!(
+        trail
+            .anchors
+            .iter()
+            .any(|anchor| anchor.seq == last.body.seq),
+        "a daemon that stopped in order anchored its last record"
+    );
+
+    for cut in [1_usize, 2] {
+        let kept = &lines[..lines.len() - cut];
+        let tampered = format!("{}\n", kept.join("\n"));
+        assert_eq!(
+            trail.verify(&tampered).status,
+            humanitl_audit::VerifyStatus::Broken {
+                first_bad_seq: last.body.seq - u64::try_from(cut).unwrap(),
+                reason: humanitl_audit::BreakReason::TruncatedBelowAnchor {
+                    anchor_seq: last.body.seq
+                },
+            },
+            "cutting {cut} line(s)"
+        );
+    }
+}

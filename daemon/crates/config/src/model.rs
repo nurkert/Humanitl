@@ -18,7 +18,7 @@
 //! nicht setzen darf (`backlog/CONVENTIONS.md` 4.11): `llm.*`, `sandbox.*`,
 //! `agent.adapter`, `agent.command`, `hold.ask_mode`, `findings.enabled`,
 //! `findings.ignored_hashes`, `findings.email_allow_domains`, `pseudonyms.*`,
-//! `resolver.*`, `experimental.*`, `recorder.retention_days`. Eine Gruppe ist
+//! `resolver.*`, `experimental.*`, `recorder.retention_days`, `audit.*`. Eine Gruppe ist
 //! `denied`, wenn jedes Blatt darunter es ist.
 //!
 //! Gruppen sind flach und nach Zuständigkeit geschnitten. Caps und Zeitgrenzen
@@ -70,6 +70,9 @@ pub struct Config {
     /// Aufzeichnung der Flows.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
     pub recorder: RecorderConfig,
+    /// Die Audit-Kette: Anker, Synchronisation, Aufbewahrung.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub audit: AuditConfig,
     /// Sprache, Erscheinungsbild und Meldungen der Oberfläche.
     #[schemars(extend("x-tier" = "basic", "x-project-scope" = "allowed"))]
     pub ui: UiConfig,
@@ -398,6 +401,40 @@ impl Default for RecorderConfig {
         Self {
             inline_max_bytes: 256 * KIB,
             retention_days: 90,
+        }
+    }
+}
+
+/// Die Audit-Kette in `audit.jsonl` (HUM-050).
+///
+/// Die ganze Gruppe ist für das Projekt-Profil gesperrt: Ein geklontes
+/// Repository, das `anchor_every` hochsetzt, vergrößerte das Fenster, in dem
+/// ein gekürztes Log unbemerkt bleibt, und eines, das `fsync_every` hochsetzt,
+/// das, in dem ein Absturz Records kostet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct AuditConfig {
+    /// Jeder wievielte Record ein Anker ist, in der Datei und zugleich in der Datenbank. Records hinter dem letzten Anker kann jemand mit Zugriff auf die Datei am Ende abschneiden, ohne dass die Prüfung es merkt; ein kleinerer Wert macht dieses Fenster kleiner. Beim Beenden des Daemons wird immer geankert.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub anchor_every: u32,
+    /// Tage, die das Audit-Log aufgehoben wird; 0 heißt für immer. Löschen bricht die Kette absichtlich, und im MVP wird nichts gelöscht.
+    #[schemars(extend(
+        "x-tier" = "expert",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-051"
+    ))]
+    pub retention_days: u32,
+    /// Nach wie vielen Records der Daemon das Audit-Log auf die Platte zwingt (fsync). Spätestens nach einer Sekunde und vor jedem Anker geschieht es ohnehin.
+    #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
+    pub fsync_every: u32,
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            anchor_every: 100,
+            retention_days: 0,
+            fsync_every: 50,
         }
     }
 }

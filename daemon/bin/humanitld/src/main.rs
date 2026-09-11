@@ -22,17 +22,24 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod audit_sink;
+
 use std::fs::{self, Permissions};
 use std::io;
+use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use clap::Parser;
+use humanitl_audit::kinds::{DaemonStarted, SessionStarted};
+use humanitl_audit::{
+    Anchor, AnchorMirror, AuditKey, AuditWriter, RecordKind, WriterOptions, sha256_hex,
+};
 use humanitl_catalog::Catalog;
-use humanitl_config::{Config, DIR_MODE, Paths as XdgPaths, ResolverConfig};
+use humanitl_config::{Config, DIR_MODE, Paths as XdgPaths, ResolverConfig, WorkMode};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, FlowEvent, SessionId, Severity};
 use humanitl_ipc::fake::{FakeDaemon, FakeOptions, Session};
@@ -53,13 +60,17 @@ use humanitl_proxy::{
     HandlerPorts, HoldQueue, LlmProbe, MetaEndpoint, MetaStatus, ProxyCore, Resolver, ResolverPort,
     RulesPipeline, Scanner, Tier1Scanner, Upstream,
 };
-use humanitl_recorder::{Recorder, RecorderSettings, SessionMeta};
+use humanitl_recorder::{
+    AnchorStore, AuditAnchor, Recorder, RecorderSettings, SessionMeta, read_anchors,
+};
 use tokio::net::UnixListener;
 // tonic bringt `tokio-stream` mit dem Feature `net` bereits mit (über sein
 // `server`-Feature); der Wrapper von dort erspart diesem Binary eine eigene
 // Abhängigkeit außerhalb von `[workspace.dependencies]`.
 use tonic::codegen::tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::Server;
+
+use crate::audit_sink::AuditSink;
 
 /// Der Hintergrunddienst von Humanitl.
 #[derive(Debug, Parser)]
@@ -226,7 +237,10 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
     // Die Sitzung steht in der Aufzeichnung, bevor der erste Flow kommt:
     // `flows.session_id` ist ein Fremdschlüssel.
     recorder.start_session(&session_meta(session, &config));
-    let watchers = Watchers::start(&recorder, &queue);
+
+    // Das Audit-Log nach der Aufzeichnung und vor dem Proxy (HUM-050).
+    let (audit, sink) = start_audit(&xdg, &config, &queue, session)?;
+    let watchers = Watchers::start(&recorder, &queue, &audit);
 
     let proxy = ProxyCore::new();
     let rules = load_rules(&xdg, &base, session);
@@ -271,6 +285,8 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
         .with_rules(Arc::clone(&rules), Some(recorder.clone()))
         .with_recorder(recorder.clone())
         .with_domains(Arc::clone(&domains))
+        // Regeländerungen und Netzsuchen gehen ins Audit-Log (HUM-050).
+        .with_audit(audit.handle())
         // Die Sandbox derselben Sitzung: dasselbe Profil, dasselbe
         // Projektverzeichnis und derselbe Proxy-Socket, den der Proxy oben
         // gerade geöffnet hat (HUM-040). Der Resolver statt einer
@@ -305,7 +321,8 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
         Some(probe) => server.with_llm_probe(probe),
         None => server,
     };
-    let result = humanitl_ipc::serve(&paths.socket, &paths.token, server, shutdown()).await;
+    let (signal, stop_reason) = shutdown_with_reason();
+    let result = humanitl_ipc::serve(&paths.socket, &paths.token, server, signal).await;
 
     // Erst die Sitzungen, dann zurückkehren: der Accept-Loop endet, und mit
     // ihm verschwindet der Socket, den die Sandbox eingehängt hätte.
@@ -319,46 +336,256 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
     recorder.end_session(session);
     recorder.flush().await;
     tracing::info!(session = %session, "recording flushed");
+
+    // Zuletzt das Audit-Log: `session.ended`, `daemon.stopped`, der Anker.
+    stop_audit(sink, audit, stop_reason_of(&result, &stop_reason)).await;
     result
 }
 
-/// Die laufenden Nebenaufgaben der Aufzeichnung.
+/// Öffnet das Audit-Log und startet den Sink der Sitzung (HUM-050).
 ///
-/// Zwei, und beide enden mit dem Daemon: der Strom der Befunde des
-/// Schreib-Threads und der tägliche Aufräumlauf.
+/// Nach der Aufzeichnung: Die Anker liegen in derselben Datenbank, und deren
+/// Schema bringt das Öffnen der Aufzeichnung auf den neuesten Stand. Vor dem
+/// Proxy: Der Sink hört den Strom, bevor der erste Flow kommt. Ein Log, das
+/// nicht geschrieben werden kann, beendet den Start wie eine Aufzeichnung, die
+/// nicht aufzeichnen kann.
+///
+/// # Errors
+///
+/// Was [`open_audit`] meldet.
+fn start_audit(
+    xdg: &XdgPaths,
+    config: &Config,
+    queue: &HoldQueue,
+    session: SessionId,
+) -> Result<(AuditWriter, AuditSink), Diagnostic> {
+    let audit = open_audit(xdg, config, queue)?;
+    let sink = AuditSink::start(
+        audit.handle(),
+        session,
+        session_started(config),
+        queue.subscribe(),
+    );
+    Ok((audit, sink))
+}
+
+/// Beendet das Audit-Log der Sitzung (HUM-050): `session.ended` mit den
+/// Zahlen der Sitzung, dann `daemon.stopped` mit `reason` und der Anker
+/// dahinter in Datei und Datenbank, alles auf der Platte.
+///
+/// Nach dem Proxy kommt kein Flow mehr; der Sink nimmt, was noch im Strom
+/// liegt. Der Schreiber synchronisiert und schreibt in `SQLite`; das blockiert
+/// und läuft deshalb neben der Laufzeit.
+async fn stop_audit(sink: AuditSink, audit: AuditWriter, reason: &'static str) {
+    let ended = sink.finish().await;
+    tracing::info!(flows = ended.flows_total, "audit session ended");
+    match tokio::task::spawn_blocking(move || audit.stop(reason)).await {
+        Ok(Some(head)) => {
+            tracing::info!(seq = head.seq, hash = %head.hash, reason, "audit log closed");
+        }
+        Ok(None) => {
+            tracing::warn!(reason, "the audit writer had already ended");
+        }
+        Err(error) => {
+            tracing::warn!(%error, "closing the audit log failed");
+        }
+    }
+}
+
+/// Das Warten auf das Signal, das den Dienst beendet, samt der Stelle, an der
+/// danach sein Name steht; er wird der Grund in `daemon.stopped`.
+fn shutdown_with_reason() -> (
+    impl Future<Output = ()> + Send + 'static,
+    Arc<OnceLock<&'static str>>,
+) {
+    let reason = Arc::new(OnceLock::new());
+    let signal = {
+        let reason = Arc::clone(&reason);
+        async move {
+            let _ = reason.set(shutdown_signal().await);
+        }
+    };
+    (signal, reason)
+}
+
+/// Der Grund in `daemon.stopped`: das Signal, sonst was den Dienst beendet hat.
+fn stop_reason_of<E>(result: &Result<(), E>, signal: &OnceLock<&'static str>) -> &'static str {
+    match (result, signal.get()) {
+        (Err(_), _) => "serve_failed",
+        (Ok(()), Some(signal)) => signal,
+        (Ok(()), None) => "shutdown",
+    }
+}
+
+/// Öffnet das Audit-Log dieses Daemons und schreibt `daemon.started` (HUM-050).
+///
+/// Der Schlüssel ist bis HUM-048 eine Datei neben den Daten
+/// (`AuditKey::load_or_create_file`), die Anker liegen in der Tabelle
+/// `audit_anchors` der Aufzeichnung. Was das Öffnen zu melden hat, ohne den
+/// Start aufzuhalten (eine abgerissene letzte Zeile, `AUDIT_002`, oder ein
+/// Log, das vor einem Anker endet, `AUDIT_007`), steht im Protokoll und im
+/// Ereignisstrom.
+///
+/// # Errors
+///
+/// `AUDIT_005` für einen unbrauchbaren Schlüssel, `AUDIT_004`, wenn ein
+/// anderer Daemon das Log hält, `AUDIT_001`, wenn sein Ende nicht zu Schlüssel
+/// oder Ankern passt, `AUDIT_006` und `RECORDER_00x`, wenn Datei oder Tabelle
+/// nicht benutzbar sind.
+fn open_audit(
+    xdg: &XdgPaths,
+    config: &Config,
+    queue: &HoldQueue,
+) -> Result<AuditWriter, Diagnostic> {
+    let key = AuditKey::load_or_create_file(&xdg.audit_key_path())?;
+    let db = xdg.db_path();
+    let anchors: Vec<Anchor> = read_anchors(&db)?
+        .into_iter()
+        .map(|anchor| Anchor {
+            seq: anchor.seq,
+            hash: anchor.hash,
+            ts: anchor.ts,
+        })
+        .collect();
+    let store = AnchorStore::open(&db)?;
+    let mirror: AnchorMirror = Box::new(move |anchor: &Anchor| {
+        store.put(&AuditAnchor {
+            seq: anchor.seq,
+            hash: anchor.hash.clone(),
+            ts: anchor.ts.clone(),
+        })
+    });
+    let path = xdg.audit_path();
+    let (writer, notes) = AuditWriter::open(
+        &path,
+        &key,
+        WriterOptions {
+            anchor_every: config.audit.anchor_every,
+            fsync_every: config.audit.fsync_every,
+            ..WriterOptions::default()
+        },
+        &anchors,
+        Some(mirror),
+    )?;
+    for note in notes {
+        tracing::warn!(code = %note.code, why = %note.why, "audit log");
+        queue.publish(FlowEvent::Diagnostic {
+            flow_id: None,
+            at: SystemTime::now(),
+            diagnostic: Box::new(note),
+        });
+    }
+    writer.handle().record(
+        None,
+        RecordKind::DaemonStarted(DaemonStarted {
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            proto_version: format!(
+                "{}.{}",
+                humanitl_ipc::PROTO_MAJOR,
+                humanitl_ipc::PROTO_MINOR
+            ),
+            key_origin: key.origin(),
+        }),
+    );
+    tracing::info!(
+        path = %path.display(),
+        key = %xdg.audit_key_path().display(),
+        key_created = key.was_created(),
+        resumed_at = writer.resumed().seq,
+        anchor_every = config.audit.anchor_every,
+        "audit log open"
+    );
+    Ok(writer)
+}
+
+/// Das Projektverzeichnis dieser Sitzung: `sandbox.work_dir` oder das
+/// Arbeitsverzeichnis des Starts.
+fn work_dir_of(config: &Config) -> PathBuf {
+    config
+        .sandbox
+        .work_dir
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+}
+
+/// `session.started`: was beim Start der Sitzung feststeht (HUM-050).
+///
+/// Das Arbeitsverzeichnis nur als Prüfsumme seines kanonischen Pfads: Der Pfad
+/// nennt Nutzer- und Projektnamen. Backend und Kommandozeile der Sandbox
+/// stehen beim Start der Sitzung noch nicht fest — eine Sandbox startet
+/// später in derselben Sitzung, mit dem Plan, den der `Start`-Aufruf mitbringt
+/// (HUM-040, HUM-067) — und bleiben deshalb leer, statt einen Plan zu nennen,
+/// der vielleicht nie läuft.
+fn session_started(config: &Config) -> SessionStarted {
+    let work_dir = work_dir_of(config);
+    let canonical = fs::canonicalize(&work_dir).unwrap_or(work_dir);
+    SessionStarted {
+        profile: config.sandbox.profile.clone(),
+        agent: config.agent.adapter.clone(),
+        work_dir_hash: sha256_hex(canonical.as_os_str().as_bytes()),
+        work_mode: match config.sandbox.work_mode {
+            WorkMode::Ro => "ro",
+            WorkMode::Rw => "rw",
+        }
+        .to_owned(),
+        llm_endpoint_host: config
+            .llm
+            .endpoint
+            .as_ref()
+            .and_then(|endpoint| endpoint.host_str())
+            .map(str::to_owned),
+        sandbox_backend: None,
+        argv_hash: None,
+    }
+}
+
+/// Die laufenden Nebenaufgaben von Aufzeichnung und Audit-Log.
+///
+/// Drei, und alle enden mit dem Daemon: die Ströme der Befunde der beiden
+/// Schreib-Threads und der tägliche Aufräumlauf der Aufzeichnung.
 struct Watchers {
     diagnostics: tokio::task::JoinHandle<()>,
+    audit: tokio::task::JoinHandle<()>,
     purge: tokio::task::JoinHandle<()>,
 }
 
 impl Watchers {
-    /// Startet beide Aufgaben.
-    fn start(recorder: &Recorder, queue: &Arc<HoldQueue>) -> Self {
+    /// Startet alle drei Aufgaben.
+    fn start(recorder: &Recorder, queue: &Arc<HoldQueue>, audit: &AuditWriter) -> Self {
         Self {
-            diagnostics: tokio::spawn(report_recorder_diagnostics(
+            diagnostics: tokio::spawn(report_diagnostics(
+                "recorder",
                 recorder.diagnostics(),
+                Arc::clone(queue),
+            )),
+            audit: tokio::spawn(report_diagnostics(
+                "audit",
+                audit.diagnostics(),
                 Arc::clone(queue),
             )),
             purge: tokio::spawn(purge_daily(recorder.clone())),
         }
     }
 
-    /// Beendet beide Aufgaben.
+    /// Beendet alle drei Aufgaben.
     fn stop(self) {
         self.diagnostics.abort();
+        self.audit.abort();
         self.purge.abort();
     }
 }
 
-/// Hängt die Befunde der Aufzeichnung in den Ereignisstrom.
+/// Hängt die Befunde eines Schreib-Threads in den Ereignisstrom: der
+/// Aufzeichnung oder des Audit-Logs, genannt in `source`.
 ///
 /// Ein Schreibfehler ist keine Zeile im Protokoll, die niemand liest: Er
 /// gehört dorthin, wo der Mensch die Flows sieht, denn er heißt, dass die
-/// History eine Lücke hat (`backlog/sprint-2.md` HUM-026,
+/// History oder das Audit-Log eine Lücke hat (`backlog/sprint-2.md` HUM-026,
 /// `backlog/CONVENTIONS.md` 4.13). Er gehört zu keinem Flow — der Schreiber
 /// meldet den Zustand seines Threads, nicht den einer Anfrage —, also trägt
 /// das Ereignis `flow_id: None`.
-async fn report_recorder_diagnostics(
+async fn report_diagnostics(
+    source: &'static str,
     mut diagnostics: tokio::sync::broadcast::Receiver<Diagnostic>,
     queue: Arc<HoldQueue>,
 ) {
@@ -368,7 +595,7 @@ async fn report_recorder_diagnostics(
                 tracing::error!(
                     code = diagnostic.code.as_str(),
                     why = %diagnostic.why,
-                    "recorder"
+                    "{source}"
                 );
                 queue.publish(FlowEvent::Diagnostic {
                     flow_id: None,
@@ -379,7 +606,7 @@ async fn report_recorder_diagnostics(
             // Zu langsam mitgelesen: Die verlorenen Befunde stehen im
             // Protokoll, und der Strom läuft weiter.
             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                tracing::warn!(dropped = n, "recorder diagnostics were dropped");
+                tracing::warn!(dropped = n, "{source} diagnostics were dropped");
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
         }
@@ -455,13 +682,7 @@ fn session_meta(session: SessionId, config: &Config) -> SessionMeta {
         started_at: SystemTime::now(),
         sandbox_profile: config.sandbox.profile.clone(),
         llm_endpoint: config.llm.endpoint.as_ref().map(ToString::to_string),
-        work_dir: config
-            .sandbox
-            .work_dir
-            .clone()
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-            .display()
-            .to_string(),
+        work_dir: work_dir_of(config).display().to_string(),
         agent: config.agent.adapter.clone(),
     }
 }
@@ -1243,6 +1464,12 @@ async fn serve_listener(
 
 /// Wartet auf das Signal, das den Dienst beendet.
 async fn shutdown() {
+    let _ = shutdown_signal().await;
+}
+
+/// Wartet auf das Signal, das den Dienst beendet, und nennt es: `sigterm`
+/// oder `sigint`, so wie es in `daemon.stopped` steht.
+async fn shutdown_signal() -> &'static str {
     use tokio::signal::unix::{SignalKind, signal};
 
     let mut terminate = match signal(SignalKind::terminate()) {
@@ -1250,14 +1477,20 @@ async fn shutdown() {
         Err(error) => {
             tracing::warn!(%error, "cannot listen for SIGTERM, waiting for SIGINT only");
             let _ = tokio::signal::ctrl_c().await;
-            return;
+            return "sigint";
         }
     };
     tokio::select! {
-        _ = terminate.recv() => tracing::info!("SIGTERM received"),
+        _ = terminate.recv() => {
+            tracing::info!("SIGTERM received");
+            "sigterm"
+        }
         result = tokio::signal::ctrl_c() => {
             if result.is_ok() {
                 tracing::info!("SIGINT received");
+                "sigint"
+            } else {
+                "signal_error"
             }
         }
     }

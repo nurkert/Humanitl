@@ -92,6 +92,16 @@ Welcher Agent in der Sandbox läuft.
 | `agent.briefing.enabled` | boolean | `true` | advanced | allowed | ja | Legt die Instruktionsdatei des Agenten in der Sandbox an. |
 | `agent.command` | list of string, optional | `-` | expert | denied | ja | Ersetzt die Kommandozeile des Adapters vollständig. Leer bedeutet: die des Adapters. |
 
+### `audit`
+
+Die Audit-Kette: Anker, Synchronisation, Aufbewahrung.
+
+| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
+|---|---|---|---|---|---|---|
+| `audit.anchor_every` | integer | `100` | advanced | denied | ja | Jeder wievielte Record ein Anker ist, in der Datei und zugleich in der Datenbank. Records hinter dem letzten Anker kann jemand mit Zugriff auf die Datei am Ende abschneiden, ohne dass die Prüfung es merkt; ein kleinerer Wert macht dieses Fenster kleiner. Beim Beenden des Daemons wird immer geankert. |
+| `audit.fsync_every` | integer | `50` | expert | denied | ja | Nach wie vielen Records der Daemon das Audit-Log auf die Platte zwingt (fsync). Spätestens nach einer Sekunde und vor jedem Anker geschieht es ohnehin. |
+| `audit.retention_days` | integer | `0` | expert | denied | offen (HUM-051) | Tage, die das Audit-Log aufgehoben wird; 0 heißt für immer. Löschen bricht die Kette absichtlich, und im MVP wird nichts gelöscht. |
+
 ### `experimental`
 
 Schalter für unfertige Wege. Alles hier darf ohne Ankündigung wegfallen.
