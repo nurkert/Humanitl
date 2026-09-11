@@ -6,14 +6,14 @@ import 'dart:typed_data';
 
 import 'package:alchemist/alchemist.dart';
 import 'package:flutter/widgets.dart';
+import 'package:humanitl/core/body/body_kind.dart';
+import 'package:humanitl/core/body/body_parser.dart';
+import 'package:humanitl/core/body/form_view.dart';
+import 'package:humanitl/core/body/hex_view.dart';
+import 'package:humanitl/core/body/json_tree_view.dart';
+import 'package:humanitl/core/body/raw_view.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ui/ui.dart';
-import 'package:humanitl/features/intercept/body/body_kind.dart';
-import 'package:humanitl/features/intercept/body/body_parser.dart';
-import 'package:humanitl/features/intercept/body/form_view.dart';
-import 'package:humanitl/features/intercept/body/hex_view.dart';
-import 'package:humanitl/features/intercept/body/json_tree_view.dart';
-import 'package:humanitl/features/intercept/body/raw_view.dart';
 import 'package:humanitl/l10n/l10n.dart';
 
 import '../features/intercept/body/harness.dart';

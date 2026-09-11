@@ -4,8 +4,8 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:humanitl/core/body/body_span.dart';
 import 'package:humanitl/core/domain/domain.dart';
-import 'package:humanitl/features/intercept/body/body_span.dart';
 
 import 'harness.dart';
 

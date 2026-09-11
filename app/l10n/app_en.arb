@@ -202,8 +202,6 @@
   "@interceptHeadersEmpty": {"description": "Body of the header section when the request carries no headers."},
   "interceptBodyEmpty": "No body.",
   "@interceptBodyEmpty": {"description": "Body of the body section when the request has none."},
-  "interceptBodyTruncated": "Preview of the first 64 KB",
-  "@interceptBodyTruncated": {"description": "Note above a body that is shown only in part."},
   "interceptMaskedValue": "••••",
   "@interceptMaskedValue": {"description": "Stands in for the value of a header that carries a credential."},
   "interceptRevealValue": "Show the value of {header}",
@@ -471,8 +469,6 @@
   "@historyDetailTabEdited": {"description": "Detail tab: the request as the person changed it before sending."},
   "historyDetailHeaders": "Headers",
   "@historyDetailHeaders": {"description": "Heading of the header table in the detail area."},
-  "historyDetailBody": "Body",
-  "@historyDetailBody": {"description": "Heading of the body view in the detail area."},
   "historyDetailCopy": "Copy",
   "@historyDetailCopy": {"description": "Copies the headers as text to the clipboard."},
   "historyDetailCopied": "Copied",
@@ -483,16 +479,6 @@
   "@historyDetailNoBody": {"description": "A statement about a finished request: this request carried none."},
   "historyDetailNoResponse": "No answer came back.",
   "@historyDetailNoResponse": {"description": "A statement about a blocked or failed request: the target was never reached."},
-  "historyDetailBinaryBody": "{size} of binary content. The export carries the bytes.",
-  "@historyDetailBinaryBody": {
-    "description": "Body view of a body that is not text.",
-    "placeholders": {"size": {"type": "String"}}
-  },
-  "historyDetailBodyTruncated": "The recorder stopped after {size}.",
-  "@historyDetailBodyTruncated": {
-    "description": "Body view of a body the recorder did not store to the end. An incomplete body must never look complete (CONVENTIONS 4.13).",
-    "placeholders": {"size": {"type": "String"}}
-  },
   "historyDetailReceived": "Received",
   "@historyDetailReceived": {"description": "Label in the detail head: the exact arrival time."},
   "historyDetailDecision": "Decision",
@@ -1166,11 +1152,6 @@
   "rulesDryRunFailedTitle": "Dry run not run",
   "@rulesDryRunFailedTitle": {"description": "Title over the daemon's own words when the dry run itself failed. Without it the panel would keep saying it is counting while nothing counts (docs/UX.md 4.4)."},
 
-  "historyDetailLinesCapped": "The first {lines} lines are shown. The export carries the whole body.",
-  "@historyDetailLinesCapped": {
-    "description": "The view stopped drawing, not the recorder: two causes need two sentences, and this one names the way to the rest.",
-    "placeholders": {"lines": {"type": "String"}}
-  },
   "historyExportContents": "The file carries hosts, full paths with their query, all headers and both bodies, in clear text.",
   "@historyExportContents": {"description": "Said in the export modal before anything is written: whoever passes the file on has to know what is in it beforehand, not afterwards. There is no redaction yet (docs/SECURITY.md)."},
   "historyOpenRowInQueue": "Open in Intercept",
@@ -1242,7 +1223,7 @@
   "@interceptBodyPaneHex": {"description": "Segment of the body switcher: the bytes. The one view that always shows something."},
   "interceptBodyUnreadable": "The body could not be read.",
   "@interceptBodyUnreadable": {"description": "The body did not arrive or could not be taken apart. Deliberately not the sentence for an empty body: \"empty\" and \"unreadable\" are two different statements, and the second one must never look like the first."},
-  "interceptBodyIncomplete": "Less arrived than the request announced; what is shown stops early.",
+  "interceptBodyIncomplete": "Less arrived than was announced; what is shown stops early.",
   "@interceptBodyIncomplete": {"description": "The stream ended before the announced size, or unpacking stopped. Said out loud, because a body that silently stops looks like a body that ends there."},
   "interceptBodyTypeDisputed": "The content type says text, the bytes are not text. The bytes are shown.",
   "@interceptBodyTypeDisputed": {"description": "The Content-Type header claims a text type while the body is binary. The header is a claim of the sender; the bytes are the evidence, and the human decides on the evidence."},
@@ -1467,7 +1448,7 @@
   "@sandboxRetry": {"description": "Repeats the Sandbox call after a failure."},
   "interceptBodyStreamTruncated": "The compressed body does not end where its own trailer says it does; what is shown stops early, and the daemon may have searched something else.",
   "@interceptBodyStreamTruncated": {"description": "A gzip or deflate stream whose checksum or length trailer does not match what was unpacked: cut short, or carrying more than one member. Said out loud because the decoder reports success with partial output, and a small clean-looking body would otherwise pass for the whole request."},
-  "interceptBodyEncodingUndecoded": "The request declares {encoding}, which this view cannot unpack. The bytes are shown as they arrived, and no finding is placed in them.",
+  "interceptBodyEncodingUndecoded": "The headers declare {encoding}, which this view cannot unpack. The bytes are shown as they arrived, and no finding is placed in them.",
   "@interceptBodyEncodingUndecoded": {
     "description": "The daemon searches the unpacked body and reports its findings on unpacked offsets. Where this view cannot reach the same bytes, it draws no marker at all rather than one in the wrong place.",
     "placeholders": {"encoding": {"type": "String"}}
@@ -1794,5 +1775,10 @@
   "@setupFixWriteEnvFailed": {
     "description": "Shown under the button when the background service refused the write (CONFIG_014) or could not be reached. The copy button for the running session stays below it.",
     "placeholders": {"why": {"type": "String"}}
+  },
+  "interceptBodyRecorderStopped": "The recorder kept only the first {size}; what is shown ends there.",
+  "@interceptBodyRecorderStopped": {
+    "description": "Above a body the recorder did not store to the end (BodyRef.truncated), in the queue and in the history alike. An incomplete body must never look complete (CONVENTIONS 4.13); this names the recorder, not the transport or this view.",
+    "placeholders": {"size": {"type": "String"}}
   }
 }

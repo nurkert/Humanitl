@@ -20,12 +20,12 @@ import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/text/format.dart';
 import '../../../core/ui/flow_visual_state.dart';
 import '../../../core/ui/hold_to_confirm.dart';
 import '../../../core/ui/middle_ellipsis.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
-import '../format.dart';
 import '../providers/decision.dart';
 import 'countdown_ring.dart';
 
