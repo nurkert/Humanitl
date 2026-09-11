@@ -30,12 +30,19 @@
 /// * **Jede Karte geht einzeln weg.** Ausblenden ist die Antwort „gesehen"
 ///   und gilt nur für diesen einen Befund; ein zweiter Befund desselben Codes
 ///   ergibt eine neue Karte, weil zwei Befunde zwei Dinge sind.
+/// * **Ein Befund an einem Flow führt zu diesem Flow** (HUM-039). Der Flow
+///   hinter `LLM_005` ist eine Durchreiche und steht in keiner Warteschlange;
+///   „Anfrage öffnen" bittet die Historie über `flowRevealProvider`, ihn aus der
+///   Aufzeichnung zu holen. Die Karte greift dafür nicht in ein anderes Feature
+///   (ARCHITECTURE 5), sie hinterlässt eine Notiz, und die Shell wechselt den
+///   Bereich.
 library;
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/ipc/flow_reveal.dart';
 import '../../../core/ui/diagnostic_severity.dart';
 import '../../../core/ui/fix_control.dart';
 import '../../../core/ui/h_diagnostic_card.dart';
@@ -180,6 +187,7 @@ class DiagnosticCard extends ConsumerWidget {
     final AppLocalizations l10n = context.l10n;
     final Diagnostic diagnostic = entry.diagnostic;
     final FixAction? fix = diagnostic.fix;
+    final FlowId? flowId = entry.flowId;
     return _DiagnosticArrival(
       animate: animate,
       onShown: onShown,
@@ -198,19 +206,9 @@ class DiagnosticCard extends ConsumerWidget {
                 color: severityColor(tokens, diagnostic.severity),
                 title: l10n.interceptDiagnosticTitle,
                 why: diagnostic.why,
-                // Kein leerer Slot: Ein Befund ohne Vorschlag bekommt keine
-                // Zeile, die aussieht, als fehlte dort etwas.
-                fix: fix == null
-                    ? null
-                    // Eigener Schlüssel je Karte: Zwei Befunde mit Vorschlag
-                    // stehen im selben Streifen, und ein geteilter Schlüssel
-                    // machte beide Knöpfe ununterscheidbar.
-                    : FixControl(
-                        fix: fix,
-                        copyKey: ValueKey<String>(
-                          'intercept-diagnostic-copy-${entry.id}',
-                        ),
-                      ),
+                // Kein leerer Slot: Ein Befund ohne Vorschlag und ohne Flow
+                // bekommt keine Zeile, die aussieht, als fehlte dort etwas.
+                fix: _actions(l10n, ref, entry.id, fix, flowId, tokens),
                 docsUrl: diagnostic.docsUrl,
               ),
             ),
@@ -227,6 +225,51 @@ class DiagnosticCard extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// Was auf der Karte zu tun ist, im Rahmen der Karte (`docs/UX.md` 4.4).
+///
+/// Der Vorschlag des Daemons und der Weg zur Anfrage, zu der der Befund
+/// gehört; beide, wenn beide da sind (`TLS_001` an einem Tunnel), keiner, wenn
+/// keiner da ist. Eigene Schlüssel je Karte: Zwei Befunde stehen im selben
+/// Streifen, und geteilte Schlüssel machten ihre Knöpfe ununterscheidbar.
+Widget? _actions(
+  AppLocalizations l10n,
+  WidgetRef ref,
+  int id,
+  FixAction? fix,
+  FlowId? flowId,
+  HTokens tokens,
+) {
+  final Widget? control = fix == null
+      ? null
+      : FixControl(
+          fix: fix,
+          copyKey: ValueKey<String>('intercept-diagnostic-copy-$id'),
+        );
+  // Nur mit Flow: Ein Befund der ganzen Sitzung (`TLS_003`) hat nichts, wohin
+  // er führen könnte.
+  final Widget? open = flowId == null
+      ? null
+      : HButton(
+          key: ValueKey<String>('intercept-diagnostic-open-$id'),
+          variant: HButtonVariant.secondary,
+          onPressed: () =>
+              ref.read(flowRevealProvider.notifier).request(flowId),
+          child: Text(l10n.interceptDiagnosticOpenFlow),
+        );
+  if (control == null || open == null) {
+    return control ?? open;
+  }
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    mainAxisSize: MainAxisSize.min,
+    children: <Widget>[
+      control,
+      SizedBox(height: tokens.spacing.x2),
+      open,
+    ],
+  );
 }
 
 /// Das Einblenden eines Befundes: kein Weg, nur Deckkraft über
