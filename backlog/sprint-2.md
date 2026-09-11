@@ -874,7 +874,7 @@ Nach jeder Änderung: `FlowEvent`-Stream bekommt kein Event; stattdessen eigener
 - `reload_invalid_keeps_old`: Datei kaputt machen, reload → RULES_002, `effective()` unverändert.
 
 ### Akzeptanzkriterien
-- [ ] Alle Tests grün; `buf lint` sauber. Tests grün (`rules_rpc` 12 von 12); `buf lint` ist lokal nicht ausführbar, nur die CI zeigt es.
+- [x] Alle Tests grün; `buf lint` sauber. **Gemessen am 2026-09-11.** `rules_rpc` 12 von 12, lokal und im CI-Job `rust-test`. `buf lint` ist lokal nicht ausführbar; die CI fährt es im Job `proto-lint-and-gen` als Schritt 8, und der ist im Lauf 34596057818 über `784bc7e` grün (öffentliche Actions-API, Schrittliste des Jobs).
 - [x] `grpcurl -unix … humanitl.v1.Humanitl/Rules` mit `{"list":{}}` liefert bundled Regeln mit `bundled: true`. (belegt über `rules_rpc.rs:352` und live über `humanitl --json rules list --all`; grpcurl fehlt hier)
 - [x] `rules.yaml` wird nie mit Session-Regeln geschrieben (Test greift Datei-Inhalt).
 
