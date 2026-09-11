@@ -9,6 +9,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-056 | Fuzzing | M | HUM-015, HUM-022, HUM-032, HUM-050 |
 | HUM-057 | Ressourcen-Limits und Backpressure | S | HUM-015, HUM-016, HUM-018, HUM-026, HUM-062 |
 | HUM-058 | Fehlerpfade im UI | M | HUM-063, HUM-019, HUM-040, HUM-041, HUM-042, HUM-045, HUM-068 |
+| HUM-146 | Private Ziele hinter NAT64, 6to4 und Sonderbereichen | S | HUM-004 |
 | HUM-059 | Dokumentation | M | alle vorherigen |
 | HUM-086 | Repository auf Englisch | M | HUM-059 |
 | HUM-060 | Release 0.1.0 | S | HUM-053, HUM-059 |
@@ -2555,3 +2556,51 @@ ungekürzt ins Artefakt.
   Panik-Meldungen nach `stderr`; beide gehören in dieselbe Datei.
 - Eine Annotation je Test, nicht eine je Zeile: GitHub zeigt höchstens zehn
   Annotationen je Schritt an.
+
+---
+
+## HUM-146 · Private Ziele hinter NAT64, 6to4 und Sonderbereichen
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-004 · Blockiert: nichts; es macht einen Satz in `docs/SECURITY.md` in jedem Netz wahr
+
+### Kontext
+`docs/SECURITY.md` sagt: Löst ein Name auf RFC-1918, `127/8`, `169.254/16` (einschließlich `169.254.169.254`, der Cloud-Metadaten-Adresse), `100.64/10`, `fc00::/7` oder `::1` auf, wird die Verbindung verweigert. `ip_is_private` in `daemon/crates/core-types/src/host.rs:192-225` prüft genau diese Bereiche, entpackt IPv4-mapped und IPv4-compatible Adressen und nimmt `0/8` und `fe80::/10` dazu.
+
+Nicht erfasst sind Adressen, die eine IPv4-Adresse in sich tragen, und einige Sonderbereiche (gefunden in der Proxy-Analyse am 2026-09-11, gegen den Code nachgelesen):
+
+- `64:ff9b::/96` (NAT64, RFC 6052) und `64:ff9b:1::/48` (RFC 8215). In einem Netz mit DNS64 und NAT64 erreicht `64:ff9b::a9fe:a9fe` die Adresse `169.254.169.254`. Dort ist der Satz in `SECURITY.md` falsch.
+- `2002::/16` (6to4, RFC 3056): Die Bits 16 bis 48 sind eine IPv4-Adresse.
+- `2001::/32` (Teredo, RFC 4380): Die letzten 32 Bit sind die invertierte IPv4-Adresse des Clients.
+- IPv4-Sonderbereiche aus der IANA-Special-Purpose-Tabelle: `192.0.0.0/24`, `198.18.0.0/15`, `240.0.0.0/4`; IPv6 `fec0::/10` (veraltetes Site-Local).
+- Im Review ergänzt: IPv4-translated `::ffff:0:0/96` (RFC 2765) und ISATAP-Kennungen `…:0:5efe:a.b.c.d` und `…:200:5efe:a.b.c.d` unter beliebigem Präfix (RFC 5214) tragen die IPv4-Adresse ebenfalls in den letzten 32 Bit. 6rd (RFC 5969) hat kein festes Präfix und bleibt unerkannt; `SECURITY.md` sagt das.
+
+Ob einer dieser Wege in einem echten Netz des Nutzers erreichbar ist, ist nicht gemessen. Die Aussage in `SECURITY.md` muss aber ohne diese Einschränkung stimmen.
+
+### Ziel
+`ip_is_private` liefert für jede Adresse `true`, die in einem der genannten Bereiche liegt oder eine private IPv4-Adresse über NAT64, 6to4 oder Teredo in sich trägt. `docs/SECURITY.md` nennt die Bereiche vollständig.
+
+### Nicht-Ziel
+Eine eigene Tabelle aller IANA-Bereiche mit Aktualisierungsdienst. Ein neues Crate. Die Regel `allow_private: true` ändert sich nicht.
+
+### Betroffene Pfade
+- `daemon/crates/core-types/src/host.rs` (`ipv4_is_private`, `ipv6_is_private`)
+- Tests daneben
+- `docs/SECURITY.md` (Abschnitt „Private Bereiche sind gesperrt")
+
+### Spezifikation
+NAT64 (`64:ff9b::/96`) und 6to4 (`2002::/16`) werden entpackt und die IPv4-Adresse mit `ipv4_is_private` geprüft. Teredo und `64:ff9b:1::/48` gelten als privat, weil sich die eingebettete Adresse dort nicht eindeutig lesen lässt. Die IPv4- und IPv6-Sonderbereiche kommen in die beiden Funktionen. Jeder Bereich trägt einen Kommentar mit seiner RFC.
+
+### Tests
+Je Bereich eine Adresse innen und eine knapp außerhalb. NAT64 und 6to4 je mit einer privaten (`10.0.0.1`, `169.254.169.254`) und einer öffentlichen eingebetteten Adresse. Mutationsprobe: jede neue Zeile einzeln entfernen, ein Test wird rot.
+
+### Akzeptanzkriterien
+- [x] `ip_is_private("64:ff9b::a9fe:a9fe")` und `ip_is_private("2002:a9fe:a9fe::1")` sind `true`, `64:ff9b::808:808` ist `false`. **Gemessen am 2026-09-11** (`is_private_covers_special_ranges_and_embedded_ipv4`).
+- [x] `198.18.0.1`, `192.0.0.1`, `240.0.0.1`, `fec0::1` und eine Teredo-Adresse sind `true`. **Gemessen am 2026-09-11**; zehn Mutationen der neuen Zeilen (jede Zeile entfernt, zwei Masken zu weit) machen den Test jeweils rot.
+- [x] `docs/SECURITY.md` nennt die Bereiche. **Gemessen am 2026-09-11.**
+- [ ] `make check` grün.
+
+### Fallstricke
+- `Ipv6Addr::to_ipv4` entpackt NAT64 nicht; das Entpacken ist eigener Code und gehört getestet.
+- Ein öffentliches Ziel darf nicht versehentlich privat werden: `64:ff9b::808:808` (`8.8.8.8`) bleibt erreichbar.
+
+### Referenzen
+Proxy-Analyse 2026-09-11; RFC 6052, RFC 8215, RFC 3056, RFC 4380; IANA IPv4 und IPv6 Special-Purpose Address Registry; `daemon/crates/core-types/src/host.rs:192-225`; `docs/SECURITY.md` Abschnitt 6 (Regeln und ihre Fallen).
