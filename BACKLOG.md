@@ -375,7 +375,7 @@ Plugins sind kein MVP-Ziel. Damit sie später ohne Umbau möglich sind, gelten a
 | Findings-Detektoren | `trait Detector { fn scan(&self, body: &[u8], ct: &ContentType) -> Vec<Finding> }`, Registry, Regex-Detektoren aus TOML (gitleaks-Format) | Externe Detektoren als Prozess über gRPC (`DetectorService`), WASM-Detektoren (wasmtime) |
 | Regel-Aktionen | `enum Action { Allow, Block, Ask, Redact }` plus `trait ActionHandler` | Custom-Aktionen (`webhook`, `script`) |
 | Domain-Katalog | YAML-Dateien, mehrere Quellen gemergt | Nutzer-Katalog, Team-Katalog |
-| Sandbox-Backends | `trait SandboxBackend { fn launch(profile) -> Handle; fn isolation_check() }` | Docker, Podman, microVM, macOS Seatbelt |
+| Sandbox-Backends | `trait SandboxBackend { fn launch(profile) -> Handle; fn isolation_check() }` | Docker, Podman, microVM (Kandidat microsandbox, Abschnitt 9 Punkt 10), macOS Seatbelt |
 | Agent-Adapter | `trait AgentAdapter { env kit, default rules, profile, permission bridge? }`, Impl OpenCode | Aider, Codex, Claude Code, eigene |
 | UI-Panels | Feature-Module hinter riverpod-Providern, Domain-Panel als Slot | Panel-Plugins über gRPC-Events, später Dart-Packages |
 | Öffentliche API | Die gRPC-Proto selbst, Token-authentifiziert | Externe Prozesse als Plugins (Subscribe + Decide + Rules) |
@@ -582,7 +582,7 @@ Definition of Done für jedes Issue: Tests auf der passenden Ebene, neue Fehlerp
 7. **OpenCode-Permission-Bridge.** `opencode serve` SSE + `POST /session/:id/permissions/:id`, OpenCodes eigene Tool-Prompts nativ in Flutter rendern. Weitere Agent-Adapter: Aider, Codex (`--oss`), Claude Code (via `ANTHROPIC_BASE_URL`).
 8. **WebSocket-Frame-Hold.** Frames anhalten statt nur aufzeichnen.
 9. **M12 macOS.** Seatbelt-Backend (Muster sandbox-runtime), gleicher Daemon, gleiche Proto.
-10. **M13 microVM.** Firecracker/Kata oder Docker Sandboxes mit vsock-only, für stärkeres Threat Model.
+10. **M13 microVM.** Firecracker/Kata oder Docker Sandboxes mit vsock-only, für stärkeres Threat Model. Vorgemerkter Kandidat seit 2026-09-11: microsandbox (https://github.com/superradcompany/microsandbox, libkrun, Apache-2.0) als zweites, zuschaltbares Backend neben bwrap, nicht als Ersatz. Stand der Prüfung am 2026-09-11 (v0.6.18): noch Beta, braucht `/dev/kvm` ohne Ausweichweg, die Tür wird ein vsock-Port statt einer Socket-Datei, und der Konsolenkanal zu `agentd` bleibt immer zusätzlich offen, so dass Garantie 2 neu formuliert werden müsste. Geschätzt 45 bis 70 Personentage, davon 9 bis 14 für einen neutralen Port. Voraussetzung ist, dass `SandboxBackend` und `LaunchPlan` backend-neutral werden (die lesbare Policy kommt dann aus einer Policy-Tabelle statt aus der bwrap-Kommandozeile), mit Nachträgen zu ADR-0002, ADR-0010 und ADR-0015; bis dahin hält HUM-145 fest, dass die Kopplung an bwrap nicht wächst.
 11. **Upstream-Proxy und Tor.** `Egress`-Adapter `HttpProxy` und `Socks5h` (`tokio-socks`), Config `egress.via`, Regel-Feld `via`, Tor-Check im Isolation-Panel, Leak-Test: kein lokaler DNS-Lookup im Tor-Modus. Nice-to-have.
 12. **Flatpak.** UI im Flatpak, Daemon außerhalb.
 13. **OpenTelemetry** hinter Cargo-Feature, Team-Kataloge, Regel-Profile teilen.

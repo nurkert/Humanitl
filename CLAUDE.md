@@ -114,6 +114,17 @@ Datei braucht, meldet das und bekommt sie, wenn sonst niemand darin arbeitet.
 
 - Abhängigkeitsrichtung nur nach innen: `tools/check-deps.sh`, Teil von
   `make check`.
+- Adapter-Namen bleiben im Adapter: `tools/check_coupling.py`, Teil von
+  `make deps-lint` (HUM-145). Gezählt wird je Datei, wo `bwrap` außerhalb von
+  Sandbox-Crate und Shim steht, wo Engine-Typen (`hyper`, `rustls`, `rcgen`)
+  und wo `humanitl_proxy` außerhalb des Proxy-Crates benutzt werden. Der Stand
+  vom 2026-09-11 steht in `tools/coupling-baseline.toml`; eine Zahl darf
+  sinken, nie steigen. Neuer Code spricht die Sandbox über `SandboxBackend`
+  und neutrale Begriffe an („Sandbox-Backend", nicht „bwrap"), damit ein
+  zweites Backend wie microsandbox oder Docker später nicht an noch mehr
+  Stellen ansetzen muss als heute. Sinkt eine Zahl, zieht
+  `python3 tools/check_coupling.py --update` die Grundlinie im selben Commit
+  nach.
 - Die drei Sandbox-Garantien: `tests/escape/`, rot bis Sprint 1 fertig ist,
   danach Pflicht.
 - Jeder Fehlerpfad liefert ein `Diagnostic` mit `why` und wenn möglich `fix`,
