@@ -28,6 +28,7 @@
 
 Regeln:
 
+- Eine bekannte Abweichung, kein Muster: Die Crate `audit` schreibt seit HUM-050 selbst, mit Datei, Sperre, Schlüsseldatei und Schreib-Thread, weil die Spezifikation den Schreiber dorthin legt. Kanonisierung, Record und Prüfung sind reine Funktionen, der Schreiber ist ein Adapter im Kern. HUM-155 zieht ihn nach außen; bis dahin kommt kein weiterer IO in den Kern.
 - Abhängigkeiten zeigen nur nach innen. Der Kern importiert nichts aus Anwendung oder Adaptern. Die Anwendung kennt Adapter nur als Traits (Ports).
 - Ein Port ist ein Trait im Kern oder in der Anwendung; ein Adapter ist seine Implementierung außen. Im MVP hat jeder Port genau eine Implementierung. Ein zweiter Adapter (Docker, macOS, externes Plugin) berührt Kern und Anwendung nicht.
 - Erzwungen durch CI: `cargo deny` für Lizenzen und Duplikate, ein Skript `tools/check-deps.sh`, das den Cargo-Graphen gegen die erlaubte Richtung prüft (aus `backlog/CONVENTIONS.md` 3.1), und `#![deny(missing_docs)]` in allen Bibliotheks-Crates.

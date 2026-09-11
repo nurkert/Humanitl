@@ -10,6 +10,9 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+# Regel-RPC und Netzsuche schreiben ins Audit-Log (HUM-050);
+# `tools/deps-allow.toml` erlaubt die Kante seit Sprint 0.
+humanitl-audit.workspace = true
 humanitl-catalog.workspace = true
 humanitl-config.workspace = true
 humanitl-core.workspace = true

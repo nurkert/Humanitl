@@ -398,9 +398,10 @@ dns_host_cases
 # the rule engine (HUM-022), which decides before anything leaves the machine
 # and needs no isolation to be measured, and it asks the running proxy what it
 # answers to a body over the cap — over the same socket the bridge in the
-# sandbox carries, with the same bytes curl would send. ESC-5 is still a
-# placeholder whose every case is skipped. Neither depends on the launcher, so
-# neither disappears behind a sandbox failure.
+# sandbox carries, with the same bytes curl would send. ESC-5 runs integration
+# tests of the daemon crates: the work tree and the terminal of the sandbox,
+# and the audit chain of a real daemon (HUM-050). Neither depends on this
+# launcher run, so neither disappears behind a sandbox failure.
 for n in 4 5; do
     suite="esc-$n"
     script=$(ls "$HERE/$suite-"*.sh)

@@ -322,6 +322,15 @@ const GROUP_OVERRIDES: &[GroupOverride] = &[
         after_higher: "14",
     },
     GroupOverride {
+        group: "audit",
+        path: "audit.anchor_every",
+        lower: "50",
+        higher: "25",
+        read: |config| config.audit.anchor_every.to_string(),
+        after_lower: "50",
+        after_higher: "25",
+    },
+    GroupOverride {
         group: "ui",
         path: "ui.theme",
         lower: "\"light\"",

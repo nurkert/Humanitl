@@ -757,9 +757,16 @@ registry! {
         "`CopyCommand` mit `ls -ld` und `df -h` auf das Verzeichnis — Rechte oder Platz.";
 
     /// Die Hash-Kette in `audit.jsonl` passt nicht mehr zusammen.
+    ///
+    /// Zwei Stellen bauen ihn (HUM-050): die Prüfung der Kette, die die erste
+    /// fehlerhafte Position und den Grund nennt, und der Schreiber beim Start,
+    /// wenn der letzte vollständige Record nicht zu Schlüssel oder Ankern
+    /// passt. Im zweiten Fall startet der Daemon nicht: Eine Kette auf einem
+    /// gebrochenen Ende fortzusetzen hieße, jeden neuen Record auf etwas zu
+    /// bauen, das `verify` ohnehin verwirft.
     AUDIT_001 => "audit", "Hash-Kette gebrochen", "#audit_001",
-        "Reserviert für eine gebrochene Hash-Kette im Audit-Log. Heute baut ihn niemand: Die Crate `humanitl-audit` ist eine leere Hülle, und es gibt keine Datei, deren Kette prüfbar wäre (HUM-029).",
-        "Kein Fix: Der Code wartet auf das Audit-Log.";
+        "Die Prüfung von `audit.jsonl` findet einen Record, der nicht zu Vorgänger, Hash, MAC oder Anker passt, oder die Datei endet vor einem Anker; beim Start ist es der letzte Record, an den der Schreiber anhängen soll.",
+        "`CopyCommand`, der die Datei samt Zeitstempel beiseitelegt; sie bleibt als Beleg liegen, und die Kette beginnt neu.";
 
     /// Der Daemon hat geantwortet, aber den Aufruf abgelehnt: der Aufruf
     /// selbst passt nicht zum Zustand des Daemons.
@@ -1091,6 +1098,59 @@ registry! {
     CONFIG_015 => "config", "config.toml nicht geschrieben", "#config_015",
         "`config.toml` ließ sich nicht ändern, ohne mehr als den einen Wert zu ändern, oder nicht schreiben; sie ist unberührt.",
         "Kein Fix: Der Text nennt die Zeile, die von Hand in den Block `[sandbox.env]` gehört.";
+    /// Die letzte Zeile von `audit.jsonl` war unvollständig und liegt jetzt
+    /// daneben.
+    ///
+    /// Ein hart beendeter Daemon kann mitten in einer Zeile aufhören. Der
+    /// Schreiber legt den Rest beim nächsten Start als
+    /// `audit.jsonl.corrupt-<ts>` ab und setzt die Kette am letzten
+    /// vollständigen Record fort. Es entsteht keine Lücke; der verlorene
+    /// Record fehlt, und das ist die dokumentierte Grenze „nie geschriebene
+    /// Ereignisse" (HUM-050).
+    AUDIT_002 => "audit", "Unvollständige letzte Zeile beiseitegelegt", "#audit_002",
+        "Beim Start endet `audit.jsonl` nicht mit einem Zeilenumbruch; der Rest hinter dem letzten vollständigen Record wurde in eine eigene Datei verschoben.",
+        "Kein Fix nötig: Der Text nennt die Datei mit dem Rest, und die Kette läuft weiter.";
+    /// Ein Record trug Daten, die sich nicht kanonisch schreiben lassen.
+    ///
+    /// Ein Programmfehler: Jede Art von Record trägt nur Ganzzahlen, Strings,
+    /// Booleans und Listen davon. Im Debug-Build hält der Schreiber an, im
+    /// Release-Build schreibt er den Record mit `data: {"error":"non_canonical"}`,
+    /// damit die Kette keine Lücke bekommt (HUM-050).
+    AUDIT_003 => "audit", "Audit-Daten nicht kanonisch", "#audit_003",
+        "Die Daten eines Records enthielten eine Zahl, die keine Ganzzahl ist; geschrieben wurde der Record mit einem Platzhalter statt der Daten.",
+        "Kein Fix für Nutzer: ein Programmfehler; der Text nennt die Art des Records.";
+    /// Ein anderer Prozess hält die Sperre auf `audit.jsonl`.
+    ///
+    /// Zwei Daemons dürfen nie in dieselbe Kette schreiben: Beide hielten
+    /// `seq` und Hash des Endes im Speicher, und die Zeilen des einen hingen
+    /// an einem Ende, das der andere schon überschrieben hat (HUM-050).
+    AUDIT_004 => "audit", "Audit-Log von einem anderen Daemon belegt", "#audit_004",
+        "Beim Start hält ein anderer Prozess die exklusive Sperre auf `audit.jsonl`.",
+        "`CopyCommand` mit `humanitl daemon status`: den laufenden Daemon finden und beenden.";
+    /// Der HMAC-Schlüssel des Audit-Logs ist nicht benutzbar.
+    ///
+    /// Bis HUM-048 den Keyring bringt, liegt er als Datei im Datenverzeichnis
+    /// und wird geprüft wie der Schlüssel der CA: reguläre Datei, `0600`, dem
+    /// Nutzer gehörend, genau 32 Bytes (HUM-050).
+    AUDIT_005 => "audit", "Audit-Schlüssel unbrauchbar", "#audit_005",
+        "Die Schlüsseldatei ist ein Symlink oder keine reguläre Datei, trägt Rechte für Gruppe oder Andere, gehört einem anderen Nutzer, hat nicht genau 32 Bytes oder lässt sich nicht anlegen.",
+        "`CopyCommand`: `rm` für einen verbrannten Schlüssel, sonst `ls -ln` auf die Datei oder `mkdir`/`chmod` auf das Verzeichnis.";
+    /// `audit.jsonl` oder die Anker-Tabelle lässt sich nicht öffnen, lesen,
+    /// schreiben oder synchronisieren (HUM-050).
+    AUDIT_006 => "audit", "Audit-Log nicht schreibbar", "#audit_006",
+        "Datei, Verzeichnis oder Anker-Tabelle des Audit-Logs lassen sich nicht öffnen, lesen, schreiben oder auf die Platte bringen.",
+        "`CopyCommand` mit `ls -ld` und `df -h` auf das Verzeichnis — Rechte oder Platz.";
+    /// Das Audit-Log endete beim Start vor einem Anker; die Kette läuft hinter
+    /// dem letzten Anker weiter.
+    ///
+    /// Wer `audit.jsonl` löscht, kürzt oder nach einem `AUDIT_001`
+    /// beiseitelegt, lässt die Anker in `audit_anchors` zurück. Der Daemon
+    /// startet trotzdem: Er schreibt `audit.resumed` unter der Nummer hinter dem
+    /// letzten Anker, mit dessen Hash als Vorgänger. Die Lücke bleibt für
+    /// `verify` ein Bruch, und die Anker bleiben als Beleg liegen (HUM-050).
+    AUDIT_007 => "audit", "Audit-Kette hinter dem letzten Anker fortgesetzt", "#audit_007",
+        "Beim Start endet `audit.jsonl` vor einem Anker aus `audit_anchors`; die Kette läuft hinter diesem Anker weiter, und die Prüfung meldet die Lücke weiter als Bruch.",
+        "Kein Fix nötig: Der Text nennt, wo das Log endete und hinter welchem Anker die Kette weiterläuft.";
 }
 
 /// Sucht einen Code im Register.

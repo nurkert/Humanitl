@@ -36,6 +36,8 @@ use std::time::Duration;
 use base64::Engine as _;
 use bytes::Bytes;
 use dashmap::DashMap;
+use humanitl_audit::kinds::LlmDiscover;
+use humanitl_audit::{AuditHandle, RecordKind};
 use humanitl_config::Config;
 use humanitl_core::diagnostics::codes;
 use humanitl_core::ids::SandboxId;
@@ -125,6 +127,9 @@ pub struct IpcServer {
     /// läuft; `Sandbox` antwortet dann mit `IPC_006` statt mit einer
     /// erfundenen Momentaufnahme.
     sandbox: Option<SandboxService>,
+    /// Wohin Regeländerungen und Netzsuchen als Audit-Records gehen (HUM-050).
+    /// `None` im Fake und in Tests ohne Audit-Log.
+    audit: Option<AuditHandle>,
     /// Woraus `Doctor` seinen Bericht baut (HUM-075).
     doctor: DoctorSetup,
     bodies: BodyIndex,
@@ -211,6 +216,7 @@ impl IpcServer {
             llm_probe: probe.as_ref().ok().map(Arc::clone),
             llm_probe_error: probe.err(),
             sandbox: None,
+            audit: None,
             doctor: DoctorSetup {
                 paths: humanitl_config::Paths::from_process(),
                 adapter: config.agent.adapter.clone(),
@@ -298,7 +304,26 @@ impl IpcServer {
     /// die Quelle des Probelaufs; fehlt er, prüft `dry_run` null Flows.
     #[must_use]
     pub fn with_rules(mut self, store: Arc<RulesStore>, recorder: Option<Recorder>) -> Self {
-        self.rules = Some(RulesService::new(store, recorder));
+        let service = RulesService::new(store, recorder);
+        self.rules = Some(match self.audit.clone() {
+            Some(audit) => service.with_audit(audit),
+            None => service,
+        });
+        self
+    }
+
+    /// Derselbe Dienst mit dem Audit-Log (HUM-050).
+    ///
+    /// Dorthin gehen die Änderungen des Regel-RPC (`rule.*`) und jede Suche
+    /// nach Sprachmodellen im eigenen Netz (`llm.discover`, HUM-076). Die
+    /// Reihenfolge der Bausteine ist gleich: Ein schon verdrahteter
+    /// Regel-Dienst bekommt das Log nachgereicht.
+    #[must_use]
+    pub fn with_audit(mut self, audit: AuditHandle) -> Self {
+        if let Some(rules) = self.rules.take() {
+            self.rules = Some(rules.with_audit(audit.clone()));
+        }
+        self.audit = Some(audit);
         self
     }
 
@@ -1190,7 +1215,7 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         &self,
         _request: Request<v1::AuditRequest>,
     ) -> Result<Response<v1::AuditResponse>, Status> {
-        Err(unimplemented("Audit", "HUM-050 with the audit chain"))
+        Err(unimplemented("Audit", "HUM-070 with `humanitl audit`"))
     }
 
     async fn get_config(
@@ -1341,8 +1366,19 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         // (200 ms), während die Probe die längere der Verbindung behält.
         let sweep: Arc<dyn Egress> = Arc::new(Direct::new(CONNECT_TIMEOUT));
         let probe = Arc::clone(probe);
+        // Zwei Kanäle statt einem: Dazwischen zählt `relay_scan` die Treffer
+        // und vermerkt die Suche im Audit-Log, sobald sie endet (HUM-076,
+        // HUM-050). Geht der Aufrufer, lässt das Relais den inneren Empfänger
+        // fallen, und der Scan bricht ab wie vorher.
+        let (found_tx, found_rx) = tokio::sync::mpsc::channel(16);
         let (tx, rx) = tokio::sync::mpsc::channel(16);
-        tokio::spawn(async move { humanitl_proxy::discover(probe, sweep, &scan, tx).await });
+        let searched = LlmDiscover {
+            subnet: subnet.to_string(),
+            ports: scan.ports.clone(),
+            found: 0,
+        };
+        tokio::spawn(relay_scan(found_rx, tx, self.audit.clone(), searched));
+        tokio::spawn(async move { humanitl_proxy::discover(probe, sweep, &scan, found_tx).await });
         Ok(Response::new(Box::pin(
             tokio_stream::wrappers::ReceiverStream::new(rx)
                 .map(|found| Ok(convert::found_to_proto(&found))),
@@ -1453,6 +1489,35 @@ fn no_probe() -> Diagnostic {
                 .to_owned(),
         )
         .build()
+}
+
+/// Reicht die Treffer einer Netzsuche an den Aufrufer weiter und vermerkt die
+/// Suche im Audit-Log, sobald sie endet (HUM-076, HUM-050).
+///
+/// Genau ein `llm.discover` je Suche, auch wenn der Aufrufer vorher geht: Die
+/// Verbindungsversuche ins Netz haben dann trotzdem stattgefunden. `found`
+/// zählt jeden Server, der geantwortet hat, bevor die Suche endete. Der Record
+/// ist abgeschickt, bevor der Strom des Aufrufers endet; wer das Ende sieht,
+/// findet ihn im Log.
+async fn relay_scan<T: Send + 'static>(
+    mut found: tokio::sync::mpsc::Receiver<T>,
+    out: tokio::sync::mpsc::Sender<T>,
+    audit: Option<AuditHandle>,
+    mut searched: LlmDiscover,
+) {
+    while let Some(server) = found.recv().await {
+        searched.found += 1;
+        if out.send(server).await.is_err() {
+            break;
+        }
+    }
+    // Geht der Aufrufer, endet mit diesem Empfänger auch der Scan: Er fängt
+    // nichts mehr an und bricht ab, was noch läuft.
+    drop(found);
+    if let Some(audit) = audit {
+        audit.record(None, RecordKind::LlmDiscover(searched));
+    }
+    drop(out);
 }
 
 /// Bindet einen Unix-Socket mit `0600`.
@@ -1588,6 +1653,139 @@ mod tests {
     use super::{CAPABILITIES, IpcServer};
     use crate::v1;
     use crate::v1::humanitl_server::Humanitl as _;
+
+    /// Ein Audit-Log in einem Wegwerf-Verzeichnis und seine Zeilen der Art
+    /// `llm.discover`.
+    fn discover_log() -> (tempfile::TempDir, humanitl_audit::AuditWriter) {
+        let dir = tempfile::tempdir().unwrap();
+        let key = humanitl_audit::AuditKey::from_bytes([1; 32], humanitl_audit::KeyOrigin::File);
+        let (writer, _) = humanitl_audit::AuditWriter::open(
+            &dir.path().join("audit.jsonl"),
+            &key,
+            humanitl_audit::WriterOptions::default(),
+            &[],
+            None,
+        )
+        .unwrap();
+        (dir, writer)
+    }
+
+    fn discover_lines(writer: humanitl_audit::AuditWriter) -> Vec<String> {
+        writer.handle().sync().unwrap();
+        let path = writer.path().to_path_buf();
+        drop(writer);
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .filter(|line| line.contains("\"kind\":\"llm.discover\""))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Eine Netzsuche hinterlässt genau einen `llm.discover`, mit Netz, Ports
+    /// und der Zahl der Treffer — auch dann, wenn der Aufrufer vorher geht
+    /// (HUM-076: „Audit-Eintrag vorhanden").
+    #[tokio::test]
+    async fn a_discover_scan_leaves_exactly_one_audit_record() {
+        let searched = humanitl_audit::kinds::LlmDiscover {
+            subnet: "192.168.1.0/24".to_owned(),
+            ports: vec![11434, 8080],
+            found: 0,
+        };
+
+        // Der Aufrufer bleibt bis zum Ende: zwei Treffer, ein Record.
+        let (_dir, writer) = discover_log();
+        let (found_tx, found_rx) = tokio::sync::mpsc::channel(16);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let relay = tokio::spawn(super::relay_scan(
+            found_rx,
+            tx,
+            Some(writer.handle()),
+            searched.clone(),
+        ));
+        found_tx.send("a").await.unwrap();
+        found_tx.send("b").await.unwrap();
+        drop(found_tx);
+        assert_eq!(rx.recv().await, Some("a"));
+        assert_eq!(rx.recv().await, Some("b"));
+        assert_eq!(rx.recv().await, None);
+        relay.await.unwrap();
+        let lines = discover_lines(writer);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0].contains("\"subnet\":\"192.168.1.0/24\""),
+            "{}",
+            lines[0]
+        );
+        assert!(lines[0].contains("\"ports\":[11434,8080]"), "{}", lines[0]);
+        assert!(lines[0].contains("\"found\":2"), "{}", lines[0]);
+
+        // Der Aufrufer geht nach dem ersten Treffer: trotzdem genau einer.
+        let (_dir, writer) = discover_log();
+        let (found_tx, found_rx) = tokio::sync::mpsc::channel(16);
+        let (tx, rx) = tokio::sync::mpsc::channel::<&str>(16);
+        drop(rx);
+        let relay = tokio::spawn(super::relay_scan(
+            found_rx,
+            tx,
+            Some(writer.handle()),
+            searched,
+        ));
+        found_tx.send("a").await.unwrap();
+        relay.await.unwrap();
+        assert!(
+            found_tx.send("b").await.is_err(),
+            "the scan is told to stop once the caller left"
+        );
+        let lines = discover_lines(writer);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("\"found\":1"), "{}", lines[0]);
+    }
+
+    /// Derselbe Record über die RPC selbst, gegen die Schleife.
+    ///
+    /// Ohne Vorgaberoute hat der Rechner kein eigenes Netz; dann weigert sich
+    /// der Dienst mit `LLM_008`, es findet keine Suche statt, und im Log steht
+    /// auch keine. Beide Ausgänge werden geprüft, keiner ist ein stilles Grün.
+    #[tokio::test]
+    async fn the_discover_rpc_writes_its_audit_record() {
+        use tokio_stream::StreamExt as _;
+
+        let (_dir, writer) = discover_log();
+        let queue = queue();
+        let server = server(&queue).with_audit(writer.handle());
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+        let answer = server
+            .discover_llm(Request::new(v1::DiscoverRequest {
+                subnet: "127.0.0.1/32".to_owned(),
+                ports: vec![u32::from(port)],
+            }))
+            .await;
+        match answer {
+            Err(status) => {
+                assert!(status.message().contains("LLM_008"), "{}", status.message());
+                assert!(discover_lines(writer).is_empty(), "no search, no record");
+            }
+            Ok(stream) => {
+                let results: Vec<_> = stream.into_inner().collect().await;
+                assert!(results.iter().all(Result::is_ok), "{results:?}");
+                let lines = discover_lines(writer);
+                assert_eq!(lines.len(), 1, "{lines:?}");
+                assert!(
+                    lines[0].contains("\"subnet\":\"127.0.0.1/32\""),
+                    "{}",
+                    lines[0]
+                );
+                assert!(
+                    lines[0].contains(&format!("\"ports\":[{port}]")),
+                    "{}",
+                    lines[0]
+                );
+            }
+        }
+    }
 
     fn queue() -> Arc<HoldQueue> {
         let limits = Limits::default();
