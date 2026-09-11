@@ -1774,5 +1774,11 @@
   "setupStartCallFailed": "The last request to the background service did not arrive, so nothing started. Nothing about the four rows changed; the finding is below.",
   "@setupStartCallFailed": {"description": "The line under the start button when all four rows are green but the last Sandbox call failed in transport. It says what did not happen and, because a failure of the call says nothing about the folder, the machine or the model server, that the rows still stand (docs/UX.md 4.4)."},
   "setupStartRefused": "The start did not come up, so no agent is running. Nothing about the four rows changed; the finding is below.",
-  "@setupStartRefused": {"description": "The line under the start button when the daemon answered a Sandbox(Start) with a finding instead of a running sandbox - a guarantee that did not hold, a launcher that would not run. It is the counterpart of setupStartCallFailed, which is about a call that never arrived (docs/UX.md 4.4)."}
+  "@setupStartRefused": {"description": "The line under the start button when the daemon answered a Sandbox(Start) with a finding instead of a running sandbox - a guarantee that did not hold, a launcher that would not run. It is the counterpart of setupStartCallFailed, which is about a call that never arrived (docs/UX.md 4.4)."},
+  "interceptDiagnosticOpenFlow": "Open request",
+  "@interceptDiagnosticOpenFlow": {"description": "Button on a daemon finding over the queue that belongs to one request, for example LLM_005 on a passthrough to the language model. It opens that request in the history, because a passthrough is never held and has no row in the queue (docs/UX.md 4.4, backlog/CONVENTIONS.md 4.29)."},
+  "historyRevealFailedTitle": "Could not open the request",
+  "@historyRevealFailedTitle": {"description": "Title of the card over the history list when another screen asked the history to open a request and the background service could not give it back. The daemon's own sentence stands under it; the card is there so the click is never silently lost (docs/UX.md 4.4)."},
+  "historyRevealFailedDismiss": "Dismiss",
+  "@historyRevealFailedDismiss": {"description": "Button on that card; it hides the card and changes nothing else."}
 }

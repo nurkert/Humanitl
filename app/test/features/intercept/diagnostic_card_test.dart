@@ -15,14 +15,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
+import 'package:humanitl/core/ipc/flow_reveal.dart';
 import 'package:humanitl/core/ui/fix_control.dart';
 import 'package:humanitl/core/ui/h_diagnostic_card.dart';
 import 'package:humanitl/core/ui/ui.dart';
+import 'package:humanitl/features/history/providers/history_detail.dart';
 import 'package:humanitl/features/intercept/providers/diagnostics.dart';
 import 'package:humanitl/features/intercept/widgets/agent_ask_card.dart';
 import 'package:humanitl/features/intercept/widgets/diagnostic_card.dart';
 import 'package:humanitl/features/intercept/widgets/queue_pane.dart';
+import 'package:humanitl/features/shell/providers/navigation.dart';
+import 'package:humanitl/features/shell/section.dart';
 
+import 'fixtures.dart';
 import 'harness.dart';
 
 /// Der Satz, den das Standard-Szenario des Fakes mit `TLS_001` schickt.
@@ -137,6 +142,89 @@ void main() {
     );
     expect(card.color, tokens.state.held, reason: 'amber, the held hue');
     expect(card.color, isNot(tokens.state.blocked));
+  });
+
+  /// Ein Befund an einem Flow führt zu ihm (HUM-039).
+  ///
+  /// Der Flow hinter `LLM_005` ist eine Durchreiche und steht in keiner
+  /// Warteschlange. Die Karte hinterlässt deshalb eine Notiz für die
+  /// Historie; rot, sobald der Knopf fehlt oder eine andere Id meldet.
+  testWidgets('a_finding_on_a_flow_offers_to_open_it', (
+    WidgetTester tester,
+  ) async {
+    // Ein Flow, den der Fake kennt: Ohne ihn scheiterte `GetFlow` still, das
+    // Blatt ginge nie auf, und der Test prüfte nur die halbe Kette.
+    final Flow recorded = heldFlow(
+      n: 255,
+      deadline: testStart.add(const Duration(minutes: 5)),
+      host: '192.168.1.50',
+      path: '/v1/chat/completions',
+    );
+    final FlowId passthrough = recorded.id;
+    final FakeDaemonClient client = fakeDaemon(
+      diagnosticScript(
+        const Diagnostic(
+          code: 'LLM_005',
+          severity: Severity.warning,
+          why: 'this request contains 1 potential secret(s)',
+        ),
+        flowId: passthrough,
+      ),
+    );
+    client.state.details[passthrough] = detailFor(recorded);
+    await pumpIntercept(tester, client: client);
+    await playScript(tester, const Duration(milliseconds: 200));
+    await tester.pump(HMotion.arrive);
+    await tester.pump();
+
+    final Finder open = find.byKey(
+      const ValueKey<String>('intercept-diagnostic-open-0'),
+    );
+    expect(open, findsOneWidget);
+    expect(find.text('Open request'), findsOneWidget);
+    final ProviderContainer container = ProviderScope.containerOf(
+      tester.element(find.byType(DiagnosticCard)),
+    );
+    expect(container.read(flowRevealProvider), isNull);
+    expect(container.read(navigationProvider), Section.intercept);
+
+    await tester.tap(open);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    // Die ganze Kette, denn das Gerüst baut die ganze Anwendung: Die Shell
+    // hat zur Historie gewechselt, die Historie hat genau diese Anfrage
+    // ausgewählt, ihr Blatt aus `GetFlow` geöffnet und die Notiz gelöscht.
+    expect(container.read(navigationProvider), Section.history);
+    expect(container.read(historySelectionProvider), passthrough);
+    expect(find.byType(HSheet), findsOneWidget);
+    expect(container.read(flowRevealProvider), isNull);
+  });
+
+  /// Ein Befund der ganzen Sitzung hat keinen Flow und keinen Weg dorthin;
+  /// rot, sobald der Knopf ohne `flowId` erscheint und ins Leere führt.
+  testWidgets('a_finding_without_a_flow_has_no_way_to_one', (
+    WidgetTester tester,
+  ) async {
+    final FakeDaemonClient client = fakeDaemon(
+      diagnosticScript(
+        const Diagnostic(
+          code: 'TLS_003',
+          severity: Severity.info,
+          why: 'a client opened a tunnel without naming the host',
+        ),
+      ),
+    );
+    await pumpIntercept(tester, client: client);
+    await playScript(tester, const Duration(milliseconds: 200));
+    await tester.pump(HMotion.arrive);
+    await tester.pump();
+
+    expect(find.text('TLS_003'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('intercept-diagnostic-open-0')),
+      findsNothing,
+    );
+    expect(find.text('Open request'), findsNothing);
   });
 
   testWidgets('dismiss_hides_the_card', (WidgetTester tester) async {
