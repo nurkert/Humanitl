@@ -1073,6 +1073,24 @@ registry! {
     DOCTOR_013 => "doctor", "Sprachmodell nicht angesprochen", "#doctor_013",
         "Das Sprachmodell wurde nicht angesprochen, weil niemand darum gebeten hat.",
         "`CopyCommand` mit `humanitl doctor --probe-llm`.";
+    /// `SetConfig` nimmt diesen Schlüssel oder diesen Wert nicht an.
+    ///
+    /// Der Schreibweg ist mit Absicht schmal (HUM-151): Er richtet eine
+    /// Variable unter `sandbox.env` auf das Zertifikat, das Humanitl in der
+    /// Sandbox einhängt, und tut sonst nichts. Alles Weitere kommt mit dem
+    /// Einstellungen-Bildschirm (HUM-069).
+    CONFIG_014 => "config", "Einstellung nicht über den Daemon setzbar", "#config_014",
+        "`SetConfig` nimmt bis HUM-069 nur eine Variable unter `sandbox.env` an, deren Wert das Zertifikat in der Sandbox ist.",
+        "Kein Fix: Der Text nennt, was angenommen wird; alles andere steht von Hand in `config.toml`.";
+    /// `config.toml` wurde nicht geschrieben.
+    ///
+    /// Entweder steht `sandbox` oder `sandbox.env` dort in einer Form, die sich
+    /// nicht ändern lässt, ohne mehr als den einen Wert zu ändern, oder die
+    /// Datei ließ sich nicht anlegen oder ersetzen. In beiden Fällen ist die
+    /// Datei unberührt (HUM-151).
+    CONFIG_015 => "config", "config.toml nicht geschrieben", "#config_015",
+        "`config.toml` ließ sich nicht ändern, ohne mehr als den einen Wert zu ändern, oder nicht schreiben; sie ist unberührt.",
+        "Kein Fix: Der Text nennt die Zeile, die von Hand in den Block `[sandbox.env]` gehört.";
 }
 
 /// Sucht einen Code im Register.

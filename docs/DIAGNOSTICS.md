@@ -255,6 +255,22 @@ Kein Projektordner gewählt
 
 **Fix.** Kein Fix-Knopf: Der Ordner wird im Setup gewählt.
 
+#### CONFIG_014
+
+Einstellung nicht über den Daemon setzbar
+
+**Auslöser.** `SetConfig` nimmt bis HUM-069 nur eine Variable unter `sandbox.env` an, deren Wert das Zertifikat in der Sandbox ist.
+
+**Fix.** Kein Fix: Der Text nennt, was angenommen wird; alles andere steht von Hand in `config.toml`.
+
+#### CONFIG_015
+
+config.toml nicht geschrieben
+
+**Auslöser.** `config.toml` ließ sich nicht ändern, ohne mehr als den einen Wert zu ändern, oder nicht schreiben; sie ist unberührt.
+
+**Fix.** Kein Fix: Der Text nennt die Zeile, die von Hand in den Block `[sandbox.env]` gehört.
+
 ### Bereich sandbox
 
 #### SANDBOX_001

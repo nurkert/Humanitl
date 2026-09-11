@@ -58,6 +58,9 @@ tonic-prost-build = "0.14"
 protox = "0.9"
 schemars = "1.2"
 toml = "1.1"
+# Ändert `config.toml`, ohne Kommentare und Reihenfolge des Menschen zu
+# verlieren (HUM-151); dieselbe Familie wie `toml` und dieselben Parser-Crates.
+toml_edit = "0.25"
 serde_yaml_ng = "0.10"
 globset = "0.4"
 regex = "1.13"

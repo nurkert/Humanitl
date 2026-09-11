@@ -42,6 +42,12 @@ struct Daemon {
 impl Daemon {
     /// Startet den Dienst und wartet, bis Socket und Token da sind.
     async fn start(limits: &Limits) -> Self {
+        Self::start_with(limits, |server| server).await
+    }
+
+    /// Wie [`Daemon::start`], mit einem letzten Schritt am Dienst, bevor er
+    /// läuft — etwa eigenen Pfaden.
+    async fn start_with(limits: &Limits, configure: impl FnOnce(IpcServer) -> IpcServer) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("daemon.sock");
         let token_path = dir.path().join("token");
@@ -53,7 +59,11 @@ impl Daemon {
             limits: limits.clone(),
             ..Config::default()
         };
-        let server = IpcServer::new(Arc::clone(&queue), &config, Some(SessionId::new()));
+        let server = configure(IpcServer::new(
+            Arc::clone(&queue),
+            &config,
+            Some(SessionId::new()),
+        ));
 
         let (stop, wait) = oneshot::channel();
         let join = {
@@ -746,6 +756,155 @@ async fn every_other_rpc_says_which_issue_brings_it() {
     assert!(
         without_store.message().contains("rule store"),
         "{without_store}"
+    );
+
+    drop(client);
+    daemon.shutdown().await;
+}
+
+/// Pfade in einem Wegwerf-Verzeichnis, damit kein Test die Konfiguration eines
+/// Menschen berührt.
+fn scratch_paths(dir: &Path) -> humanitl_config::Paths {
+    humanitl_config::Paths::new(humanitl_config::Env::from_pairs([
+        ("HOME", dir.join("home").display().to_string()),
+        ("XDG_CONFIG_HOME", dir.join("config").display().to_string()),
+        ("XDG_DATA_HOME", dir.join("data").display().to_string()),
+    ]))
+}
+
+/// Ein Daemon, der gegen diese Pfade prüft und schreibt.
+async fn daemon_over(paths: &humanitl_config::Paths) -> Daemon {
+    let paths = paths.clone();
+    Daemon::start_with(&Limits::default(), move |server| server.with_paths(paths)).await
+}
+
+fn set_request(key: &str, value: &str) -> v1::SetConfigRequest {
+    v1::SetConfigRequest {
+        key: key.to_owned(),
+        value: value.to_owned(),
+    }
+}
+
+/// Der Befund, der im Status mitreist.
+fn finding_of(status: &tonic::Status) -> v1::Diagnostic {
+    humanitl_ipc::server_stub::diagnostic_from_status(status)
+        .expect("the finding travels in the details of the status")
+}
+
+#[tokio::test]
+async fn set_config_writes_the_ca_variable_and_a_new_resolution_sees_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = scratch_paths(dir.path());
+    let before = "# written by a person\n[hold]\ntimeout_secs = 42\n";
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    std::fs::write(paths.config_path(), before).unwrap();
+    let daemon = daemon_over(&paths).await;
+    let mut client = daemon.client().await;
+
+    let snapshot = client
+        .set_config(set_request(
+            "sandbox.env.CURL_CA_BUNDLE",
+            "/etc/humanitl/ca.crt",
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+
+    let text = std::fs::read_to_string(paths.config_path()).unwrap();
+    assert!(
+        text.starts_with(before),
+        "the person's lines stay first: {text}"
+    );
+    assert!(
+        text.contains("CURL_CA_BUNDLE = \"/etc/humanitl/ca.crt\""),
+        "{text}"
+    );
+    assert!(
+        snapshot
+            .toml
+            .contains("CURL_CA_BUNDLE = \"/etc/humanitl/ca.crt\""),
+        "the answer is the resolution after the write: {}",
+        snapshot.toml
+    );
+    assert!(
+        snapshot
+            .origins
+            .iter()
+            .any(|origin| origin.key == "sandbox.env" && origin.origin == "global"),
+        "{:?}",
+        snapshot.origins
+    );
+    // Derselbe Weg wie `humanitl config get`: lokal aufgelöst, ohne Daemon.
+    let resolved = humanitl_config::resolve(
+        &humanitl_config::ProfileSelection::default(),
+        None,
+        paths.env(),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        resolved
+            .config
+            .sandbox
+            .env
+            .get("CURL_CA_BUNDLE")
+            .map(String::as_str),
+        Some("/etc/humanitl/ca.crt")
+    );
+
+    drop(client);
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn set_config_refuses_everything_but_the_ca_path_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = scratch_paths(dir.path());
+    let daemon = daemon_over(&paths).await;
+    let mut client = daemon.client().await;
+
+    for (key, value) in [
+        ("sandbox.env.CURL_CA_BUNDLE", "/tmp/other.crt"),
+        ("hold.timeout_secs", "1"),
+        ("sandbox.env.LD_PRELOAD", "/etc/humanitl/ca.crt"),
+        ("sandbox.env.curl_ca_bundle", "/etc/humanitl/ca.crt"),
+    ] {
+        let refused = client
+            .set_config(set_request(key, value))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code(), Code::InvalidArgument, "{key}");
+        assert_eq!(finding_of(&refused).code, "CONFIG_014", "{key}");
+    }
+    assert!(!paths.config_path().exists(), "nothing was written");
+
+    drop(client);
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn set_config_on_a_file_it_cannot_edit_is_config_015_and_the_file_stays() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = scratch_paths(dir.path());
+    let before = "sandbox = \"not a table\"\n";
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    std::fs::write(paths.config_path(), before).unwrap();
+    let daemon = daemon_over(&paths).await;
+    let mut client = daemon.client().await;
+
+    let refused = client
+        .set_config(set_request(
+            "sandbox.env.CURL_CA_BUNDLE",
+            "/etc/humanitl/ca.crt",
+        ))
+        .await
+        .unwrap_err();
+
+    assert_eq!(refused.code(), Code::FailedPrecondition);
+    assert_eq!(finding_of(&refused).code, "CONFIG_015");
+    assert_eq!(
+        std::fs::read_to_string(paths.config_path()).unwrap(),
+        before
     );
 
     drop(client);
