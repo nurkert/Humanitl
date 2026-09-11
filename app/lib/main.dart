@@ -12,6 +12,7 @@ import 'package:window_manager/window_manager.dart';
 import 'app.dart';
 import 'core/ipc/client_providers.dart';
 import 'core/ipc/launch_options.dart';
+import 'features/about/licences.dart';
 import 'features/settings/gallery_screen.dart';
 import 'features/tray/desktop_ports.dart';
 import 'features/tray/platform/dbus_notifications.dart';
@@ -42,6 +43,7 @@ Future<void> main(List<String> args) async {
     return;
   }
   WidgetsFlutterBinding.ensureInitialized();
+  registerBundledLicences();
   await configureWindow();
   final LaunchOptions options = LaunchOptions.resolve(args);
   final DesktopPorts ports = desktopPortsForPlatform();

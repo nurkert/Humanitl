@@ -1,0 +1,90 @@
+Herkunft und Lizenz der Rangliste `ranks-top100k.csv.gz`
+========================================================
+
+Diese Datei ist ein Ausschnitt der Majestic Million. Sie wird mitgeliefert,
+damit das Domain-Panel einen Verbreitungsrang zeigen kann, ohne zur Laufzeit
+irgendetwas zu holen (ADR-006).
+
+
+Warum nicht Tranco
+------------------
+
+Die naheliegende Wahl wäre die Tranco-Liste gewesen; das Issue HUM-031 nennt
+sie namentlich. Sie liegt hier trotzdem nicht.
+
+Die Standardliste von Tranco ist eine Kombination aus fünf Quellranglisten, und
+eine davon, Cloudflare Radar, steht unter CC BY-NC 4.0, also unter einer Lizenz
+mit Verbot der kommerziellen Nutzung. Humanitl steht unter GPL-3.0-only. Die GPL
+verbietet ausdrücklich, der Weitergabe zusätzliche Beschränkungen aufzuerlegen;
+eine Nicht-kommerziell-Klausel ist genau so eine Beschränkung. Ein Datensatz mit
+dieser Klausel und ein Produkt unter der GPL passen nicht zusammen, und ein
+Hinweis daneben ändert daran nichts.
+
+Es gäbe den Weg, bei Tranco eine eigene Liste ohne Cloudflare Radar zu
+konfigurieren; das setzt ein Konto voraus. Solange das niemand eingerichtet hat,
+liegt hier die Majestic Million, die unter CC BY 3.0 steht und damit
+kommerzielle Nutzung und Bearbeitung erlaubt, solange die Quelle genannt wird.
+
+
+Attribution nach CC BY 3.0
+--------------------------
+
+Die Majestic Million wird bereitgestellt von Majestic-12 Ltd.
+(<https://majestic.com>) unter der Lizenz Creative Commons Attribution 3.0
+Unported, <https://creativecommons.org/licenses/by/3.0/>.
+
+  Quelle: Majestic Million, Majestic-12 Ltd., https://majestic.com/reports/majestic-million
+  Lizenz: CC BY 3.0, https://creativecommons.org/licenses/by/3.0/
+
+Die hier ausgelieferte Datei ist eine Bearbeitung im Sinne der Lizenz: Aus der
+vollständigen Liste sind die ersten 100 000 Ränge übernommen und auf zwei
+Spalten gekürzt. Was genau geändert wurde, steht im nächsten Abschnitt.
+
+
+Welche Liste hier liegt
+-----------------------
+
+Bezogen von:    https://downloads.majestic.com/majestic_million.csv
+Heruntergeladen am: 2026-09-03
+Stand der Datei:    2026-09-03 05:00:19 UTC (`Last-Modified` der Antwort)
+Umfang der Quelle:  1 000 000 Zeilen, 80 074 358 Byte
+
+Bearbeitung gegenüber der Quelldatei:
+  - nur die Ränge 1 bis 100 000
+  - nur die Spalten `GlobalRank` und `Domain`, in dieser Reihenfolge
+  - Kopfzeile entfernt, Zeilenformat `rang,domain`
+  - Namen klein geschrieben, ein abschließender Punkt entfernt
+  - keine Zeile inhaltlich verändert, keine Zeile ergänzt
+
+Ausgelieferte Datei:
+Format:         `rang,domain`, eine Zeile je Domain, keine Kopfzeile
+Zeilen:         100 000
+Größe:          910 417 Byte gepackt, 2 014 026 Byte entpackt
+
+SHA-256 gepackt:  7dac553854f5cafa579044d2fa0257b19aaf6d55fcc6420c72a118e0fd67c1a6
+SHA-256 entpackt: dd915c07f4ac410e14f6670665450f141c51301838a604ea8e36698e4d83cd82
+
+Die Prüfsummen stehen hier, damit sich nachvollziehen lässt, welche Daten in
+einem Build steckten; der Test `the_rank_licence_ships_next_to_the_data`
+vergleicht sie mit der Datei daneben. Eine Aktualisierung ist ein eigener
+`chore`-Commit pro Release; er ersetzt Datei, Datum und beide Prüfsummen
+zusammen.
+
+
+Was der Rang aussagt, und was nicht
+-----------------------------------
+
+Der Rang der Majestic Million misst, von wie vielen verschiedenen Klasse-C-Netzen
+aus im letzten Erhebungszeitraum auf eine Domain verwiesen wurde. Er misst
+Reichweite im Web, nicht Vertrauen, nicht Sicherheit und nicht Beliebtheit bei
+Nutzern.
+
+Ein niedriger Rang macht eine Anfrage nicht sicher: über verbreitete Dienste
+läuft auch Schadsoftware, und ein Datenabfluss nach `github.com` sieht aus wie
+ein Push. Ein fehlender Rang macht eine Anfrage nicht verdächtig: der interne
+Dienst einer Firma steht in keiner öffentlichen Rangliste.
+
+Nachgeschlagen wird der Apex (die registrierbare Domain), nicht der volle Host.
+Die Liste führt registrierbare Domains; `api.github.com` steht dort nicht,
+`github.com` schon. Die Oberfläche zeigt den Rang deshalb immer neben dem Apex
+und beschriftet ihn als Reichweite, nicht als Bewertung.
