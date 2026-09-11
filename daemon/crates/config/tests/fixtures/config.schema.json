@@ -437,12 +437,11 @@
         },
         "nameserver": {
           "default": null,
-          "description": "Nameserver als `IP:Port`. Leer bedeutet: die Einstellung des Systems.",
+          "description": "Nameserver als `IP:Port`, ohne Port gilt 53. Gesetzt fragt der Daemon nach einer Freigabe nur noch diesen Server, über UDP mit TCP-Rückfall, und weder `/etc/resolv.conf` noch `/etc/hosts`. Leer bedeutet: der Namensdienst des Systems.",
           "type": [
             "string",
             "null"
           ],
-          "x-pending-issue": "HUM-115",
           "x-project-scope": "denied",
           "x-tier": "expert"
         },

@@ -101,20 +101,35 @@ expect_output meta_other_method_405 \
 expect_output meta_look_alike_is_held \
     'Blocked by Humanitl' curl -s --max-time 10 http://evil-humanitl.internal/
 
-# --- the host-side observation ------------------------------------------------
+# --- the two requests of the DNS proof (HUM-115) -------------------------------
 #
-# ADR-006 says a name is resolved only after the decision. Proving it needs a
-# host-side watcher (resolvectl statistics, or tcpdump port 53) around the
-# sandbox, and something inside the proxy that could resolve at all. Both arrive
-# with HUM-024; recording the case as skipped keeps the claim in the report
-# rather than letting it fall out of sight.
-skip dns_not_before_decision \
-    "needs the resolver after the decision (HUM-024) and a host-side DNS watcher in run.sh"
-# The same gap, for the reserved name: that no lookup happens for
-# `humanitl.internal` is proven inside the daemon by the counting resolver mock
-# (daemon/crates/proxy/tests/meta.rs, `status_over_plain_http`). Proving it from
-# out here needs the same host-side watcher.
-skip meta_no_dns_lookup \
-    "proven by the counting resolver in daemon/crates/proxy/tests/meta.rs; from the host it needs the DNS watcher of dns_not_before_decision"
+# ADR-006 says a name is resolved only after the decision. The proof is taken
+# on the host: run.sh points the daemon of this run at a recording name server
+# (tests/escape/dns-stub.py, HUMANITL_RESOLVER__NAMESERVER), and a watcher on
+# the host follows the queue while this suite runs. The verdict is three host
+# cases in run.sh (dns_not_before_decision, dns_after_allow_once,
+# meta_no_dns_lookup), read from the log of the stub; this file only sends the
+# two requests they talk about. They stay the last two requests of the suite,
+# because dns_after_allow_once also checks that nothing is resolved after the
+# one that is allowed.
+#
+# The stub and the watcher need python3 on the host, and /usr in here is the
+# host's /usr: without python3 in here there is none out there either, the
+# proof cannot be taken, and both cases are a skip rather than a red line.
+if command -v python3 > /dev/null 2>&1; then
+    # Held and never decided: the watcher copies the log of the stub while
+    # this flow waits, and the name must not be in it. The flow ends as a
+    # timeout-block.
+    expect_output via_proxy_dns_probe_held \
+        '^reason: timeout$' curl -s --max-time 10 http://held.esc3.test/
+    # Held, then allowed by the watcher on the host with `humanitl flows
+    # decide`. Only now may the daemon ask; the stub answers NXDOMAIN, so the
+    # answer is the 502 of a name that does not resolve.
+    expect_output via_proxy_dns_allowed_upstream_dns \
+        '^reason: upstream_dns$' curl -s --max-time 10 http://allowed.esc3.test/
+else
+    skip via_proxy_dns_probe_held "no python3: run.sh has no recording name server"
+    skip via_proxy_dns_allowed_upstream_dns "no python3: run.sh has no recording name server"
+fi
 
 esc_end

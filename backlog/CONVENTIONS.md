@@ -1495,8 +1495,9 @@ Die Zahlen des Laufs nach der Umstellung: 69 geprüfte Behauptungen
 Test-Hebel.** Der Fallstrick der Spezifikation verlangt eine Warnung beim
 Start, damit `resolver.overrides` und `experimental.upstream_port_map` „nie
 unbemerkt in Produktion landen". `humanitld` meldet beim Start nur
-`resolver.nameserver` (ungenutzt) und, seit HUM-087, `resolver.test_ca` ohne
-sein Flag (`CONFIG_011`); eine nicht leere Zuordnungstabelle geht still durch.
+`resolver.test_ca` ohne sein Flag (`CONFIG_011`, seit HUM-087) und, seit
+HUM-115 auf Stufe `INFO`, den Server aus `resolver.nameserver`, den dann allein
+der Hickory-Adapter fragt; eine nicht leere Zuordnungstabelle geht still durch.
 Der Demolauf lebt davon, also fällt es dort nicht auf; im Alltag ist es
 eine fehlende Warnung an genau der Stelle, an der die Spezifikation eine
 verlangt. `resolver.test_ca` ist mit HUM-087 aus diesem Bündel heraus: Der
@@ -2250,8 +2251,9 @@ eines Menschen und keine Messung. Das ist Absicht: Das Register soll den
 verdrahten, hat nicht übersehen, sondern gelogen.
 
 Die Zählung hat drei Fälle mehr gefunden, als HUM-101 nannte:
-`resolver.nameserver` (der Daemon warnt beim Start und fragt trotzdem
-`/etc/resolv.conf`; HUM-115 baut den Hickory-Adapter dahinter), `ui.theme`
+`resolver.nameserver` (der Daemon warnte beim Start und fragte trotzdem
+`/etc/resolv.conf`; HUM-115 hat den Hickory-Adapter dahinter gebaut, seitdem
+ist der Schlüssel `effective`), `ui.theme`
 (dieselbe fehlende Naht wie bei `ui.notifications`: dem Client fehlt
 `GetConfig`, deshalb beide HUM-069) und `resolver.test_ca`, das HUM-087 bereits
 als eigenes Issue führte und inzwischen verdrahtet hat. Genau dafür ist das Register da. Neu angelegt wurden

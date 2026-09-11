@@ -93,8 +93,8 @@ pub use crate::meta::{
 pub use crate::pipeline::{AskPipeline, FlowPipeline, PassthroughPipeline, RulesPipeline};
 pub use crate::registry::{FlowFilter, FlowRecord, FlowRegistry, FlowSummary};
 pub use crate::resolver::{
-    AddressRefusal, CachingResolver, OverrideResolver, ResolveError, Resolver, ResolverMetrics,
-    ResolverPort, ResolverStats, SystemResolver,
+    AddressRefusal, CachingResolver, HickoryResolver, OverrideResolver, ResolveError, Resolver,
+    ResolverMetrics, ResolverPort, ResolverStats, SystemResolver,
 };
 pub use crate::rules_store::{Origin, ReloadReport, RulesStore, StoredRule};
 pub use crate::session::{SessionSettings, SessionState};

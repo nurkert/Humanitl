@@ -17,6 +17,10 @@
 //!    Adresse.
 //! 3. Eine Antwort, die in ein privates Netz zeigt, wird ohne
 //!    TCP-Verbindung abgelehnt (Rebinding).
+//! 4. Der Adapter hinter `resolver.nameserver` ([`HickoryResolver`], HUM-115)
+//!    fragt nur diesen Server, genau so oft, wie der Stapel darüber es
+//!    verlangt, und nach `NXDOMAIN` kein zweites Mal. Das ist die Hälfte im
+//!    Prozess; die Hälfte von außen ist ESC-3 mit `tests/escape/dns-stub.py`.
 //!
 //! Dazu kommt eine Prüfung am Quelltext: Außer dem Resolver-Modul fasst
 //! niemand im Proxy einen Namensdienst an.
@@ -25,14 +29,17 @@
 
 mod support;
 
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 
 use bytes::Bytes;
-use humanitl_config::ResolverConfig;
+use hickory_resolver::proto::rr::RecordType;
+use humanitl_config::{IpPreference, ResolverConfig};
 use humanitl_core::{BlockReason, Decision, FlowEvent};
+use humanitl_proxy::{HickoryResolver, ResolveError, Resolver, ResolverPort};
 use hyper::{Request, StatusCode};
 
+use support::dns::{Asked, DnsStub, Transport};
 use support::{ECHO_BODY, FakeUpstream, ProxyBuilder, body_string, get, post};
 
 /// Ein Regelsatz, der genau diesen Host blockt.
@@ -516,6 +523,173 @@ async fn an_override_answers_without_a_lookup() {
 }
 
 // ---------------------------------------------------------------------------
+// 4. Der Adapter hinter `resolver.nameserver` (HUM-115)
+// ---------------------------------------------------------------------------
+
+/// `resolver.nameserver` auf den Stub, ohne Zwischenspeicher, wie im Lauf der
+/// Escape-Tests.
+fn nameserver_config(stub: &DnsStub, prefer: IpPreference) -> ResolverConfig {
+    ResolverConfig {
+        nameserver: Some(stub.addr().to_string()),
+        cache_ttl_secs: 0,
+        prefer,
+        ..ResolverConfig::default()
+    }
+}
+
+fn v6(text: &str) -> IpAddr {
+    IpAddr::V6(text.parse::<Ipv6Addr>().unwrap())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hickory_adapter_asks_only_the_configured_server() {
+    // `only-here.test` steht in keiner Zone der Welt außer der des Stubs. Kommt
+    // seine Adresse zurück, hat der Stub geantwortet; der Namensdienst des
+    // Systems hätte `NXDOMAIN` gesagt.
+    let stub = DnsStub::builder()
+        .answer("only-here.test", vec![v4(203, 0, 113, 7)])
+        .start()
+        .await;
+    // Über `from_config`, wie der Daemon: Die Auswahl des Adapters ist Teil
+    // dessen, was hier bewiesen wird.
+    let port = ResolverPort::from_config(&nameserver_config(&stub, IpPreference::Ipv4))
+        .expect("an address with port is a valid nameserver");
+
+    assert_eq!(
+        port.resolve("only-here.test").await.unwrap(),
+        vec![v4(203, 0, 113, 7)]
+    );
+    assert_eq!(
+        stub.asked(),
+        vec![Asked::new("only-here.test", RecordType::A, Transport::Udp)],
+        "exactly one question, to the configured server"
+    );
+    assert_eq!(port.stats().lookups, 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hickory_adapter_honours_prefer() {
+    let public = v4(93, 184, 216, 34);
+    let doc = v6("2001:db8::7");
+    let stub = DnsStub::builder()
+        .answer("dual.test", vec![public, doc])
+        .answer("v6only.test", vec![doc])
+        .start()
+        .await;
+
+    // Beide Familien vorhanden: gefragt und geliefert wird die bevorzugte,
+    // die andere nicht einmal erfragt.
+    let ipv6 = HickoryResolver::new(stub.addr(), IpPreference::Ipv6).unwrap();
+    assert_eq!(ipv6.resolve("dual.test").await.unwrap(), vec![doc]);
+    let ipv4 = HickoryResolver::new(stub.addr(), IpPreference::Ipv4).unwrap();
+    assert_eq!(ipv4.resolve("dual.test").await.unwrap(), vec![public]);
+    // Den Namen gibt es, aber nur mit IPv6: Dann folgt die zweite Familie.
+    assert_eq!(ipv4.resolve("v6only.test").await.unwrap(), vec![doc]);
+
+    assert_eq!(
+        stub.asked(),
+        vec![
+            Asked::new("dual.test", RecordType::AAAA, Transport::Udp),
+            Asked::new("dual.test", RecordType::A, Transport::Udp),
+            Asked::new("v6only.test", RecordType::A, Transport::Udp),
+            Asked::new("v6only.test", RecordType::AAAA, Transport::Udp),
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hickory_adapter_asks_once_for_a_name_that_does_not_exist() {
+    // Das trägt die Aussage „genau eine Zeile" in ESC-3: Nach `NXDOMAIN` gibt
+    // es den Namen in keiner Familie, eine Frage nach AAAA trüge ihn nur ein
+    // zweites Mal hinaus.
+    let stub = DnsStub::builder().start().await;
+    let adapter = HickoryResolver::new(stub.addr(), IpPreference::Ipv4).unwrap();
+
+    let result = adapter.resolve("allowed.esc3.test").await;
+    assert!(
+        matches!(result, Err(ResolveError::NotFound { .. })),
+        "{result:?}"
+    );
+    assert_eq!(
+        stub.asked(),
+        vec![Asked::new(
+            "allowed.esc3.test",
+            RecordType::A,
+            Transport::Udp
+        )]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hickory_adapter_keeps_no_cache_of_its_own() {
+    // Der Stub gibt eine Frist von 60 Sekunden mit. Zwischengespeichert wird
+    // nur im `CachingResolver` darüber; unten fragt jeder Aufruf.
+    let stub = DnsStub::builder()
+        .answer("twice.test", vec![v4(203, 0, 113, 8)])
+        .start()
+        .await;
+    let adapter = HickoryResolver::new(stub.addr(), IpPreference::Ipv4).unwrap();
+
+    assert!(adapter.resolve("twice.test").await.is_ok());
+    assert!(adapter.resolve("twice.test").await.is_ok());
+
+    assert_eq!(
+        stub.asked().len(),
+        2,
+        "a hidden cache would swallow a lookup that the stats count: {:?}",
+        stub.asked()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hickory_adapter_falls_back_to_tcp_on_the_same_server() {
+    // Eine gekürzte UDP-Antwort: Der Rückfall auf TCP muss denselben Port
+    // desselben Servers treffen, nicht Port 53.
+    let stub = DnsStub::builder()
+        .answer("big.test", vec![v4(203, 0, 113, 9)])
+        .truncate_udp()
+        .start()
+        .await;
+    let adapter = HickoryResolver::new(stub.addr(), IpPreference::Ipv4).unwrap();
+
+    assert_eq!(
+        adapter.resolve("big.test").await.unwrap(),
+        vec![v4(203, 0, 113, 9)]
+    );
+    assert_eq!(
+        stub.asked(),
+        vec![
+            Asked::new("big.test", RecordType::A, Transport::Udp),
+            Asked::new("big.test", RecordType::A, Transport::Tcp),
+        ]
+    );
+}
+
+#[test]
+fn a_nameserver_that_is_not_an_address_is_a_config_diagnostic() {
+    for bad in [
+        "dns.example:53",
+        "dns.example",
+        "127.0.0.1:0",
+        "127.0.0.1:99999",
+    ] {
+        let config = ResolverConfig {
+            nameserver: Some(bad.to_owned()),
+            ..ResolverConfig::default()
+        };
+        let err = ResolverPort::from_config(&config).expect_err(bad);
+        assert_eq!(err.code.as_str(), "CONFIG_003", "{bad}");
+        assert!(err.why.contains("resolver.nameserver"), "{}", err.why);
+    }
+    // Leer heißt: der Namensdienst des Systems, kein Fehler.
+    let empty = ResolverConfig {
+        nameserver: Some("  ".to_owned()),
+        ..ResolverConfig::default()
+    };
+    assert!(ResolverPort::from_config(&empty).is_ok());
+}
+
+// ---------------------------------------------------------------------------
 // Der Quelltext selbst
 // ---------------------------------------------------------------------------
 
@@ -526,9 +700,11 @@ async fn an_override_answers_without_a_lookup() {
 /// `daemon/crates/proxy/src` darf nur `resolver.rs` treffen. Wer einen
 /// Namensdienst an einer anderen Stelle aufmacht — im Connector, im Handler,
 /// beim Aufräumen —, fällt hier auf, auch wenn kein Laufzeittest ihn trifft.
+/// Seit HUM-115 gehört `hickory` dazu: Die Bibliothek ist ein Namensdienst und
+/// bleibt im Resolver-Modul.
 #[test]
 fn only_the_resolver_module_touches_the_name_service() {
-    const NEEDLES: [&str; 3] = ["lookup_host", "getaddrinfo", "to_socket_addrs"];
+    const NEEDLES: [&str; 4] = ["lookup_host", "getaddrinfo", "to_socket_addrs", "hickory"];
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut offenders = Vec::new();
     for (path, text) in rust_sources(&src) {
