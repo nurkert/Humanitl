@@ -23,8 +23,11 @@
 //!    jede Abfrage.
 //! 2. [`CachingResolver`] beantwortet, was noch nicht älter als
 //!    `resolver.cache_ttl_secs` ist, ebenfalls ohne Abfrage.
-//! 3. [`SystemResolver`] fragt den Namensdienst des Systems
-//!    (`tokio::net::lookup_host`, also getaddrinfo in einem Blocking-Pool).
+//! 3. Ganz unten fragt genau ein Adapter wirklich: ohne `resolver.nameserver`
+//!    [`SystemResolver`], der Namensdienst des Systems
+//!    (`tokio::net::lookup_host`, also getaddrinfo in einem Blocking-Pool);
+//!    mit dem Schlüssel [`HickoryResolver`], der nur diesen einen Server fragt
+//!    (HUM-115). [`ResolverPort::from_config`] wählt.
 //!
 //! [`ResolverPort::stats`] liefert die Zähler dieses Stapels
 //! ([`ResolverStats`]). Sie sind absichtlich getrennt: Ein Cache-Treffer ist
@@ -42,17 +45,30 @@
 //! Fehlschläge werden nicht gespeichert, damit eine kurze Störung einen Host
 //! nicht für die ganze Frist unerreichbar macht.
 //!
-//! Ein späterer `hickory`-Adapter (ADR, Post-MVP) ersetzt nur
-//! [`SystemResolver`]; erst er kann `resolver.nameserver` bedienen.
+//! # Der Beweis von außen
+//!
+//! Weil [`HickoryResolver`] nur den Server aus `resolver.nameserver` fragt,
+//! kann ein aufzeichnender Nameserver jede Abfrage des Daemons sehen. Das
+//! Escape-Harness setzt den Daemon seines Laufs auf so einen Stub
+//! (`tests/escape/dns-stub.py`), und ESC-3 prüft am Protokoll des Stubs, dass
+//! ein gehaltener Name nie ankommt und ein freigegebener genau einmal.
 
 use std::collections::BTreeMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
+use hickory_resolver::TokioResolver;
+use hickory_resolver::config::{
+    NameServerConfig, ResolveHosts, ResolverConfig as HickoryConfig, ResolverOpts,
+};
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
+use hickory_resolver::net::{DnsError, NetError};
+use hickory_resolver::proto::op::ResponseCode;
+use hickory_resolver::proto::rr::{Name, RData, RecordType};
 use humanitl_config::{IpPreference, ResolverConfig};
 use humanitl_core::diagnostics::codes::CONFIG_003;
 use humanitl_core::{Diagnostic, FixAction, Severity, ip_is_private};
@@ -278,10 +294,9 @@ fn canonical(ip: IpAddr) -> IpAddr {
 
 /// Der Namensdienst des Systems (getaddrinfo über `tokio::net::lookup_host`).
 ///
-/// Der einzige Adapter, der wirklich fragt. `resolver.nameserver` kann er nicht
-/// bedienen: getaddrinfo nimmt den Server aus `/etc/resolv.conf`. Der
-/// `hickory`-Adapter, der das kann, ist Post-MVP; bis dahin meldet
-/// [`ResolverPort::from_config`] den ungenutzten Schlüssel im Log.
+/// Der Standard, solange `resolver.nameserver` leer ist. getaddrinfo nimmt den
+/// Server aus `/etc/resolv.conf` und kennt `/etc/hosts`; einen bestimmten
+/// Server kann es nicht ansprechen, das tut [`HickoryResolver`].
 #[derive(Debug, Clone, Default)]
 pub struct SystemResolver;
 
@@ -304,6 +319,204 @@ impl Resolver for SystemResolver {
         }
         Ok(addrs)
     }
+}
+
+/// Der Port, den `resolver.nameserver` meint, wenn der Wert nur eine Adresse
+/// nennt.
+const DNS_PORT: u16 = 53;
+
+/// Fragt genau den Server aus `resolver.nameserver`, UDP mit TCP-Rückfall,
+/// und sonst niemanden. Der Adapter für Tests und für Netze, in denen der
+/// Systemresolver nicht der gewünschte ist.
+///
+/// „Sonst niemanden" heißt dreierlei: Die Konfiguration entsteht allein aus
+/// dem Schlüssel, `/etc/resolv.conf` wird nie gelesen (hickory ist ohne
+/// `system-config` gebaut); `/etc/hosts` wird nicht gefragt
+/// (`ResolveHosts::Never`); und es gibt keinen zweiten Server als Rückfall.
+/// Auch der TCP-Rückfall nach einer gekürzten UDP-Antwort geht an denselben
+/// Port desselben Servers.
+///
+/// hickory bringt einen eigenen Zwischenspeicher mit. Er ist hier abgeschaltet
+/// (Größe null, Höchstfrist null): Zwischengespeichert wird allein im
+/// [`CachingResolver`] darüber, nach `resolver.cache_ttl_secs`. Ein zweiter,
+/// stiller Speicher darunter würde Abfragen beantworten, die
+/// [`ResolverStats::lookups`] als gestellt zählt, und eine Frist von null
+/// schaltete nichts mehr ab.
+///
+/// Gefragt wird zuerst die Familie aus `resolver.prefer`. Die zweite folgt nur,
+/// wenn es den Namen gibt, aber ohne Adresse dieser Familie (`NOERROR` ohne
+/// Antwort). Nach `NXDOMAIN` nicht: Den Namen gibt es dann in keiner Familie
+/// (RFC 8020), und eine zweite Abfrage trüge ihn nur ein weiteres Mal hinaus.
+/// hickorys eigene Strategie `Ipv4thenIpv6` fragt in diesem Fall trotzdem nach
+/// AAAA; deshalb wählt der Adapter die Familie selbst und fragt hickory je
+/// Familie einzeln.
+pub struct HickoryResolver {
+    inner: TokioResolver,
+    server: SocketAddr,
+    prefer: IpPreference,
+}
+
+impl std::fmt::Debug for HickoryResolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HickoryResolver")
+            .field("server", &self.server)
+            .field("prefer", &self.prefer)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Was eine einzelne Abfrage einer Familie ergab.
+enum Answer {
+    /// Adressen der gefragten Familie.
+    Found(Vec<IpAddr>),
+    /// Den Namen gibt es, aber ohne Adresse dieser Familie.
+    NoData,
+    /// Den Namen gibt es nicht (`NXDOMAIN`).
+    NoSuchName,
+    /// Der Server antwortete nicht oder mit einem Fehler.
+    Failed(String),
+}
+
+impl HickoryResolver {
+    /// Ein Adapter, der nur `server` fragt und `prefer` zuerst.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`] mit [`CONFIG_003`], wenn hickory aus dieser Einstellung
+    /// keinen Resolver bauen kann.
+    pub fn new(server: SocketAddr, prefer: IpPreference) -> Result<Self, Diagnostic> {
+        let mut name_server = NameServerConfig::udp_and_tcp(server.ip());
+        // Beide Wege an denselben Port: Ohne das ginge der TCP-Rückfall an
+        // Port 53 und damit an einen Server, den niemand eingestellt hat.
+        for connection in &mut name_server.connections {
+            connection.port = server.port();
+        }
+        let mut options = ResolverOpts::default();
+        options.cache_size = 0;
+        options.positive_max_ttl = Some(Duration::ZERO);
+        options.negative_max_ttl = Some(Duration::ZERO);
+        options.use_hosts_file = ResolveHosts::Never;
+        let inner = TokioResolver::builder_with_config(
+            HickoryConfig::from_name_servers(vec![name_server]),
+            TokioRuntimeProvider::default(),
+        )
+        .with_options(options)
+        .build()
+        .map_err(|err| {
+            nameserver_diagnostic(
+                &server.to_string(),
+                &format!("from which no resolver can be built: {err}"),
+            )
+        })?;
+        Ok(Self {
+            inner,
+            server,
+            prefer,
+        })
+    }
+
+    /// Der Server, den dieser Adapter fragt.
+    #[must_use]
+    pub const fn server(&self) -> SocketAddr {
+        self.server
+    }
+
+    /// Eine Abfrage für genau eine Familie.
+    async fn ask(&self, name: &Name, kind: RecordType) -> Answer {
+        match self.inner.lookup(name.clone(), kind).await {
+            Ok(lookup) => {
+                let addrs: Vec<IpAddr> = lookup
+                    .answers()
+                    .iter()
+                    .filter_map(|record| match &record.data {
+                        RData::A(a) => Some(IpAddr::V4(a.0)),
+                        RData::AAAA(aaaa) => Some(IpAddr::V6(aaaa.0)),
+                        _ => None,
+                    })
+                    .collect();
+                if addrs.is_empty() {
+                    Answer::NoData
+                } else {
+                    Answer::Found(addrs)
+                }
+            }
+            Err(NetError::Dns(DnsError::NoRecordsFound(records))) => match records.response_code {
+                ResponseCode::NXDomain => Answer::NoSuchName,
+                ResponseCode::NoError => Answer::NoData,
+                code => Answer::Failed(format!("the name server answered {code}")),
+            },
+            Err(err) => Answer::Failed(err.to_string()),
+        }
+    }
+}
+
+#[async_trait]
+impl Resolver for HickoryResolver {
+    async fn resolve(&self, host: &str) -> Result<Vec<IpAddr>, ResolveError> {
+        // Voll qualifiziert: kein Suchpfad, also keine Zusatzabfrage für
+        // `host.<domain>`, die den Namen ein zweites Mal hinaustrüge.
+        let mut name = Name::from_ascii(host).map_err(|err| ResolveError::Failed {
+            host: host.to_owned(),
+            reason: err.to_string(),
+        })?;
+        name.set_fqdn(true);
+        let (first, second) = match self.prefer {
+            IpPreference::Ipv4 => (RecordType::A, RecordType::AAAA),
+            IpPreference::Ipv6 => (RecordType::AAAA, RecordType::A),
+        };
+        let answer = match self.ask(&name, first).await {
+            Answer::NoData => self.ask(&name, second).await,
+            other => other,
+        };
+        match answer {
+            Answer::Found(addrs) => Ok(addrs),
+            Answer::NoData | Answer::NoSuchName => Err(ResolveError::NotFound {
+                host: host.to_owned(),
+            }),
+            Answer::Failed(reason) => Err(ResolveError::Failed {
+                host: host.to_owned(),
+                reason,
+            }),
+        }
+    }
+}
+
+/// Liest `resolver.nameserver`: `IP:Port`, `[IPv6]:Port` oder nur die Adresse,
+/// dann mit Port 53. Ein leerer Wert heißt: kein eigener Server.
+///
+/// Ein Name ist kein zulässiger Wert. Um ihn zu benutzen, müsste der Daemon ihn
+/// erst auflösen, und zwar mit einem Namensdienst, den der Schlüssel gerade
+/// ersetzen soll.
+fn parse_nameserver(value: &str) -> Result<Option<SocketAddr>, Diagnostic> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let server = value
+        .parse::<SocketAddr>()
+        .or_else(|_| {
+            value
+                .parse::<IpAddr>()
+                .map(|ip| SocketAddr::new(ip, DNS_PORT))
+        })
+        .map_err(|_| nameserver_diagnostic(value, "which is neither IP:port nor an IP address"))?;
+    if server.port() == 0 {
+        return Err(nameserver_diagnostic(value, "and port 0 is not a server"));
+    }
+    Ok(Some(server))
+}
+
+/// Der Befund zu einem unbrauchbaren `resolver.nameserver`.
+fn nameserver_diagnostic(value: &str, problem: &str) -> Diagnostic {
+    Diagnostic::builder(CONFIG_003, Severity::Error)
+        .why(format!("resolver.nameserver is \"{value}\", {problem}"))
+        .fix(FixAction::ChangeSetting {
+            key: "resolver.nameserver".to_owned(),
+            value: "an address with port, for example 127.0.0.1:5353, or empty for the \
+                    system resolver"
+                .to_owned(),
+        })
+        .build()
 }
 
 /// Ein Eintrag des Zwischenspeichers: die Adressen und der Zeitpunkt, ab dem
@@ -586,23 +799,35 @@ impl std::fmt::Debug for ResolverPort {
 }
 
 impl ResolverPort {
-    /// Der Stapel über dem Namensdienst des Systems.
+    /// Der Stapel des Daemons: über [`HickoryResolver`], wenn
+    /// `resolver.nameserver` einen Server nennt, sonst über dem Namensdienst
+    /// des Systems. Ein leerer Wert ändert nichts am Alltag.
     ///
     /// # Errors
     ///
     /// [`Diagnostic`] mit [`CONFIG_003`], wenn `resolver.overrides` einen Wert
-    /// enthält, der keine IP-Adresse ist.
+    /// enthält, der keine IP-Adresse ist, oder `resolver.nameserver` weder
+    /// `IP:Port` noch eine IP-Adresse ist.
     pub fn from_config(config: &ResolverConfig) -> Result<Self, Diagnostic> {
-        if let Some(nameserver) = &config.nameserver {
-            // Ehrlich statt still: Der Systemadapter nimmt den Server aus
-            // /etc/resolv.conf und kann diesen Schlüssel nicht bedienen.
-            tracing::warn!(
-                %nameserver,
-                "resolver.nameserver is set but the system resolver cannot use it; \
-                 the hickory adapter that can is post-MVP"
-            );
-        }
-        Self::over(Arc::new(SystemResolver), config)
+        let server = match config.nameserver.as_deref() {
+            Some(value) => parse_nameserver(value)?,
+            None => None,
+        };
+        let adapter: Arc<dyn Resolver> = match server {
+            Some(server) => {
+                // Eine Zeile beim Start, damit ein Mensch im Protokoll sieht,
+                // wen der Daemon nach einer Freigabe fragt.
+                tracing::info!(
+                    adapter = "hickory",
+                    %server,
+                    "resolver.nameserver is set: names are resolved by {server} only, \
+                     not by the system resolver"
+                );
+                Arc::new(HickoryResolver::new(server, config.prefer)?)
+            }
+            None => Arc::new(SystemResolver),
+        };
+        Self::over(adapter, config)
     }
 
     /// Derselbe Stapel über einem anderen Adapter; im Test über einem Mock.
@@ -673,8 +898,20 @@ mod tests {
 
     use super::{
         AddressRefusal, CachingResolver, OverrideResolver, ResolveError, Resolver, ResolverMetrics,
-        ResolverPort, pick, select,
+        ResolverPort, parse_nameserver, pick, select,
     };
+
+    #[test]
+    fn a_nameserver_reads_as_address_and_port_with_53_as_default() {
+        let parsed = |text: &str| parse_nameserver(text).unwrap().map(|addr| addr.to_string());
+        assert_eq!(parsed("127.0.0.1:5353").as_deref(), Some("127.0.0.1:5353"));
+        assert_eq!(parsed(" 127.0.0.1 ").as_deref(), Some("127.0.0.1:53"));
+        assert_eq!(parsed("[::1]:5353").as_deref(), Some("[::1]:5353"));
+        assert_eq!(parsed("::1").as_deref(), Some("[::1]:53"));
+        // Leer: kein eigener Server, der Namensdienst des Systems bleibt.
+        assert_eq!(parsed(""), None);
+        assert!(parse_nameserver("resolver.lan").is_err());
+    }
 
     /// Ein Adapter, der jeden Aufruf zählt und immer dieselbe Antwort gibt.
     struct Counting {

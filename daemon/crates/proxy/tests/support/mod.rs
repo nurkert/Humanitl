@@ -30,6 +30,7 @@
 )]
 
 pub mod clients;
+pub mod dns;
 pub mod upstream;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
