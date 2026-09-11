@@ -171,6 +171,11 @@ target_lock="${target}.lock"
 if [[ -z "${HUMANITL_VERIFY_LOCKED:-}" ]]; then
   mkdir -p "$(dirname "$tree_lock")" "$(dirname "$target_lock")"
   export HUMANITL_VERIFY_LOCKED=1
+  # Die schon aufgeloesten Pfade, nicht die urspruenglichen: Das Kind rechnet
+  # sonst `realpath` noch einmal, und ein Symlink, der zwischen beiden Aufrufen
+  # umgebogen wird, liesse es unter einem anderen Pfad arbeiten als dem, dessen
+  # Sperre gehalten wird (HUM-147, Review).
+  export HUMANITL_VERIFY_TREE="$tree" HUMANITL_VERIFY_TARGET="$target"
   # 3 heisst „nicht bekommen". Das Skript selbst endet mit 0, 1 oder 2, also ist
   # die Zahl eindeutig.
   set +e
@@ -213,11 +218,28 @@ for tool in cargo rustfmt protoc protoc-gen-dart flutter; do
   command -v "$tool" > /dev/null || echo "verify-commit: $tool fehlt im PATH; der zugehoerige Schritt wird scheitern" >&2
 done
 
+# Wie die CI (`.github/workflows/ci.yml`, `CARGO_INCREMENTAL: "0"`): kein
+# inkrementeller Bau. Jeder Lauf beginnt in einem neuen Worktree, die
+# Inkrement-Artefakte halfen ihm kaum und wuchsen mit jedem geprueften Commit;
+# am 2026-09-11 lagen 30 GB davon im Zielverzeichnis (HUM-147). Was schon da
+# ist, liest mit dieser Einstellung niemand mehr, also geht es weg -- hier,
+# waehrend dieser Lauf die Sperre des Zielverzeichnisses haelt.
+#
+# Nur in einem Zielverzeichnis von Cargo, erkennbar an `.rustc_info.json`, das
+# Cargo in die Wurzel jedes Zielverzeichnisses schreibt (`CACHEDIR.TAG` fehlt
+# in aelteren, gemessen am 2026-09-11 in diesem hier). Zeigt
+# HUMANITL_VERIFY_TARGET versehentlich auf einen Ordner, der jemandem gehoert,
+# verschwindet dort kein Unterordner, der zufaellig `incremental` heisst.
+if [[ -f "$target/.rustc_info.json" ]]; then
+  find "$target" -mindepth 2 -maxdepth 2 -type d -name incremental -prune \
+    -exec rm -rf {} + 2> /dev/null || true
+fi
+
 fail=0
 step() {
   local name="$1"; shift
   echo "verify-commit: $name"
-  if ! (cd "$tree" && CARGO_TARGET_DIR="$target" STRICT=1 ESCAPE_ALLOW_FAIL="${ESCAPE_ALLOW_FAIL:-}" "$@"); then
+  if ! (cd "$tree" && CARGO_TARGET_DIR="$target" CARGO_INCREMENTAL=0 STRICT=1 ESCAPE_ALLOW_FAIL="${ESCAPE_ALLOW_FAIL:-}" "$@"); then
     echo "verify-commit: $name schlug fehl" >&2
     fail=1
   fi
