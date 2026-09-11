@@ -98,11 +98,10 @@ class LiveDaemon {
       '${root.path}/runtime/humanitl',
     ]);
     final String socket = '${root.path}/runtime/humanitl/daemon.sock';
-    final Process process = await Process.start(
-      binary.path,
-      <String>['--socket', socket],
-      environment: _environment(root),
-    );
+    final Process process = await Process.start(binary.path, <String>[
+      '--socket',
+      socket,
+    ], environment: _environment(root));
     // `utf8.decode` und nicht `String.fromCharCodes`: Die Befunde des Daemons
     // sind deutsche Sätze, und aus einem Umlaut würde sonst Zeichensalat --
     // ausgerechnet in der Meldung, die den Fehlschlag erklären soll.
