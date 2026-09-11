@@ -46,9 +46,11 @@ typed-errors-lint: ## Typed errors (HUM-063) and the test reporter (HUM-133) che
 	scripts/ci/lint-no-string-errors.sh
 	scripts/ci/test-report.sh --self-test
 
-deps-lint: ## Enforce the dependency direction (HUM-074)
+deps-lint: ## Enforce the dependency direction (HUM-074) and the coupling ratchet (HUM-145)
 	./tools/check-deps.sh
 	python3 tools/tests/check_deps_test.py
+	python3 tools/check_coupling.py
+	python3 tools/tests/check_coupling_test.py
 
 docs-lint: ## Check the security documents (HUM-007)
 	./scripts/ci/lint-docs.sh
