@@ -9,7 +9,10 @@ import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/daemon_client.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/features/intercept/providers/flows.dart';
-import 'package:humanitl/features/intercept/providers/now.dart';
+
+// Die stehende Uhr liegt seit HUM-148 im geteilten Gerüst, weil auch die
+// Sandbox-Tests sie brauchen; der Export hält jeden Aufrufer hier am Ort.
+export '../../harness/fixed_now.dart';
 
 /// Die Session, zu der jeder Test-Flow gehört.
 const SessionId testSession = SessionId('018f0001-0000-7000-8000-000000000001');
@@ -320,23 +323,6 @@ class TestDaemonClient implements DaemonClient {
         await controller.close();
       }
     }
-  }
-}
-
-/// Eine stehende Uhr: kein Timer, dafür ein Zeitpunkt, den der Test setzt.
-class FixedNow extends Now {
-  /// Startet bei [_at].
-  FixedNow(this._at);
-
-  DateTime _at;
-
-  @override
-  DateTime build() => _at;
-
-  /// Setzt die Uhr auf [at].
-  void moveTo(DateTime at) {
-    _at = at;
-    state = at;
   }
 }
 

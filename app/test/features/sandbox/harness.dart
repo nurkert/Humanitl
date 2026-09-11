@@ -11,14 +11,25 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
+import 'package:humanitl/core/time/now.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/sandbox/providers/sandbox_status_provider.dart';
 import 'package:humanitl/features/sandbox/sandbox_screen.dart';
 import 'package:humanitl/core/ui/work_dir_picker.dart';
 import 'package:humanitl/l10n/l10n.dart';
 
+import '../../harness/fixed_now.dart';
+
 /// Der Zeitpunkt, gegen den jeder Test rechnet.
 final DateTime sandboxTestNow = DateTime.utc(2026, 9, 4, 12);
+
+/// Wie lange die Sandbox im Test schon läuft, als `m:ss` gezeichnet: `12:05`.
+///
+/// Die Laufzeit rechnet `nowProvider` gegen `startedAt`. Ohne stehende Uhr
+/// läse sie die Wanduhr, und die Goldens des Bildschirms zeigten an jedem Tag
+/// eine andere Zahl; nach 100 Stunden, am 2026-09-08 16:00 UTC, wurde die
+/// Stundenzahl dreistellig und jedes Bild ein Zeichen breiter (HUM-148).
+const Duration sandboxTestUptime = Duration(minutes: 12, seconds: 5);
 
 /// Ein Fake ohne Skript; die Sandbox-Tests abonnieren nichts.
 class SandboxTestClient extends FakeDaemonClient {
@@ -238,11 +249,16 @@ Future<void> pumpSandbox(
 }
 
 /// Der Bildschirm in einem Baum ohne Shell.
+///
+/// Die Uhr steht auf [now], ohne Angabe auf [sandboxTestNow] plus
+/// [sandboxTestUptime]. [overrides] darf `nowProvider` nicht noch einmal
+/// überschreiben.
 Widget sandboxUnderTest({
   required SandboxTestClient client,
   String? chosenDirectory,
   HThemeMode mode = HThemeMode.dark,
   TextScaler textScaler = TextScaler.noScaling,
+  DateTime? now,
   List<Override> overrides = const <Override>[],
   Widget Function(Widget child)? wrap,
 }) {
@@ -251,6 +267,12 @@ Widget sandboxUnderTest({
     overrides: <Override>[
       daemonClientProvider.overrideWithValue(client),
       directoryChooserProvider.overrideWithValue(() async => chosenDirectory),
+      // Genau eine Überschreibung der Uhr: Riverpod 3 wirft, wenn derselbe
+      // Provider in einem Container zweimal überschrieben wird. Wer die Uhr
+      // anders stellen will, übergibt [now].
+      nowProvider.overrideWith(
+        () => FixedNow(now ?? sandboxTestNow.add(sandboxTestUptime)),
+      ),
       ...overrides,
     ],
     child: WidgetsApp(
