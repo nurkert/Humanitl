@@ -2597,7 +2597,7 @@ Je Bereich eine Adresse innen und eine knapp außerhalb. NAT64 und 6to4 je mit e
 - [x] `ip_is_private("64:ff9b::a9fe:a9fe")` und `ip_is_private("2002:a9fe:a9fe::1")` sind `true`, `64:ff9b::808:808` ist `false`. **Gemessen am 2026-09-11** (`is_private_covers_special_ranges_and_embedded_ipv4`).
 - [x] `198.18.0.1`, `192.0.0.1`, `240.0.0.1`, `fec0::1` und eine Teredo-Adresse sind `true`. **Gemessen am 2026-09-11**; zehn Mutationen der neuen Zeilen (jede Zeile entfernt, zwei Masken zu weit) machen den Test jeweils rot.
 - [x] `docs/SECURITY.md` nennt die Bereiche. **Gemessen am 2026-09-11.**
-- [ ] `make check` grün.
+- [x] `make check` grün. **Gemessen am 2026-09-11** mit `tools/verify-commit.sh` über `24af9af` (enthält `02b4fe7`), dieselben Schritte wie die CI; CI-Lauf 34585656949 grün.
 
 ### Fallstricke
 - `Ipv6Addr::to_ipv4` entpackt NAT64 nicht; das Entpacken ist eigener Code und gehört getestet.
@@ -2628,9 +2628,9 @@ Das gemeinsame Zielverzeichnis abschaffen: `deps` spart jedem Lauf das Übersetz
 Die Schritte laufen mit `CARGO_INCREMENTAL=0`, gesetzt an derselben Stelle wie `CARGO_TARGET_DIR` (Zeile 220). Vor dem ersten Schritt löscht das Skript `"$target"/*/incremental`, solange es die Sperre des Zielverzeichnisses hält; das ist Cache und wird mit `CARGO_INCREMENTAL=0` nie wieder gelesen.
 
 ### Akzeptanzkriterien
-- [ ] `grep -n "CARGO_INCREMENTAL=0" tools/verify-commit.sh` trifft an der Stelle, an der die Schritte laufen.
-- [ ] Nach einem Lauf gibt es unter `~/.cache/humanitl/verify-target` kein `incremental`-Verzeichnis mehr; die Größe vorher und nachher steht im Commit-Body.
-- [ ] `tools/verify-commit.sh HEAD` ist grün.
+- [x] `grep -n "CARGO_INCREMENTAL=0" tools/verify-commit.sh` trifft an der Stelle, an der die Schritte laufen. **Gemessen am 2026-09-11**: Zeile 242, in `step()`.
+- [x] Nach einem Lauf gibt es unter `~/.cache/humanitl/verify-target` kein `incremental`-Verzeichnis mehr; die Größe vorher und nachher steht im Commit-Body. **Gemessen am 2026-09-11, mit zwei Einschränkungen, die hier stehen statt im Commit-Body:** Die Zahl nachher entsteht erst durch den Lauf über den Commit selbst und steht deshalb hier: vorher 62 GB, davon 30 GB in `debug/incremental` mit 832 Einträgen (Commit-Body `18dcb14`), nachher 36 GB. Und Cargo legt `debug/incremental` und `shim/incremental` auch mit `CARGO_INCREMENTAL=0` wieder an, leer: je 4 KB, 0 Einträge.
+- [x] `tools/verify-commit.sh HEAD` ist grün. **Gemessen am 2026-09-11** über `24af9af`.
 
 ### Fallstricke
 - Das Skript darf nicht geändert werden, während ein verify läuft: bash liest ein Skript beim Ausführen nach.

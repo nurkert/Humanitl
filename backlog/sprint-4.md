@@ -31,6 +31,7 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-143 | Zwischen zwei Segmenten verschwindet der Klick | S | HUM-028 |
 | HUM-145 | Die Kopplung an einen Adapter waechst nicht weiter | S | HUM-074 |
 | HUM-148 | Die Sandbox-Goldens lesen die Wanduhr | S | HUM-040 |
+| HUM-150 | Ein langer Befund wird mitten im Wort abgeschnitten | S | HUM-106 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -2025,6 +2026,30 @@ Die CLI benutzt in beiden Fällen `out_path`.
 
 ---
 
+## HUM-150 · Ein langer Befund wird mitten im Wort abgeschnitten
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-106 · Blockiert: nichts; aber der Satz des Daemons ist das, wofür die Karte da ist
+
+### Kontext
+Gemessen am 2026-09-11 auf Xvfb, echter Daemon, echter curl (Messung zu HUM-149): Die Karte `TLS_001` über der Warteschlange zeigt den `why`-Satz des Daemons bis „… keeps its own certificate pool, pins a c" und bricht dort mitten im Wort ab, ohne Auslassungszeichen. Darunter folgen Abzeichen und Kopierzeile. Der Rest des Satzes, der sagt, was der Mensch tun kann, ist nicht zu sehen und nicht zu erreichen.
+
+`HDiagnosticCard` (`app/lib/core/ui/h_diagnostic_card.dart:73-117`) legt die Karte in `ClipRRect` und `IntrinsicHeight`, der `why`-Text trägt kein `maxLines`. Vermutung, nicht gemessen: Die intrinsische Höhe wird bei einer anderen Breite geschätzt als der, mit der der umbrechende Text am Ende gezeichnet wird, und der Rest wird abgeschnitten. Die Sätze von `TLS_001` sind mit HUM-149 länger geworden, der Fehler ist aber älter.
+
+### Ziel
+Ein `why`-Satz steht vollständig auf der Karte, bei jeder Breite des Streifens und bei doppelter Textskalierung; wo der Platz des Streifens nicht reicht, wird gescrollt, nicht abgeschnitten.
+
+### Nicht-Ziel
+Kürzere Sätze im Daemon. Der Satz gehört dem Daemon (`docs/UX.md` 4.4), und die Karte zeichnet ihn, wie er ist.
+
+### Akzeptanzkriterien
+- [ ] Ein Widget-Test mit dem längsten `TLS_001`-Satz (Hinweis curl, Wiederholungszähler) findet den letzten Satz des Befundes auf dem Bildschirm, bei 280 px Breite des Streifens und bei Textskalierung 2.
+- [ ] Mutationsprobe: das bisherige Layout zurück, Test rot.
+- [ ] Die Goldens mit Karte sind geprüft oder mit Erklärung neu abgenommen.
+
+### Referenzen
+Bildschirmfoto `hum149-curl/app.png` vom 2026-09-11; `app/lib/core/ui/h_diagnostic_card.dart`; `app/lib/features/intercept/widgets/diagnostic_card.dart`; HUM-106, HUM-149.
+
+---
+
 ## HUM-148 · Die Sandbox-Goldens lesen die Wanduhr
 Sprint: 4 · Größe: S · Abhängigkeiten: HUM-040 · Blockiert: jedes `tools/verify-commit.sh` auf diesem Rechner und bald jeden CI-Lauf
 
@@ -2052,7 +2077,7 @@ Eine Toleranz für Golden-Vergleiche: Sie verdeckte genau diese Sorte Fehler. Ei
 - [x] Die acht Goldens sind mit der stehenden Uhr neu abgenommen, und kein anderes Referenzbild hat sich geändert. **Gemessen am 2026-09-11**: `git status` zeigt genau die acht PNGs; im neuen Bild ist allein der Laufzeitblock der Fußzeile kürzer.
 - [x] Ohne die Überschreibung der Uhr im Gerüst werden die Goldens rot (Mutationsprobe). **Gemessen am 2026-09-11**: sechs der sechs Isolation-Goldens rot.
 - [x] `flutter analyze`, `dart format` und die Tests unter `test/features/sandbox`, `test/features/intercept` und `test/goldens` sind grün. **Gemessen am 2026-09-11**: keine Befunde, 0 Dateien umformatiert, 438 Tests grün.
-- [ ] `tools/verify-commit.sh` ist über den fertigen Commit grün.
+- [x] `tools/verify-commit.sh` ist über den fertigen Commit grün. **Gemessen am 2026-09-11** über `24af9af` (enthält `079cc5b`), alle acht Schritte; CI-Lauf 34585656949 ebenfalls grün.
 
 ### Fallstricke
 - Ein neu abgenommenes Referenzbild beweist nichts, solange es aus der Wanduhr entsteht: Erst die stehende Uhr, dann das Bild.
@@ -2110,7 +2135,7 @@ Gelesen werden die Dateien aus `git ls-files --cached --others --exclude-standar
 - [x] Eine zusätzliche Erwähnung von `bwrap` in einer Datei der Anwendung macht `make deps-lint` rot, ebenso eine neue, noch nicht hinzugefügte Datei mit dem Wort. **Gemessen am 2026-09-11** am echten Baum (`app/lib/core/domain/sandbox.dart` 2 auf 3, neue Datei 0 auf 1, `BwrapBackend` in `ipc/src/rules.rs`: jeweils Exit 1).
 - [x] Ein zusätzliches `use humanitl_proxy::…`, ein Alias und ein `hyper::`-Pfad außerhalb des Proxy-Crates machen es rot. **Gemessen am 2026-09-11**, dazu `{self as p}` und `/* note */ use humanitl_proxy::X;`: jeweils Exit 1.
 - [x] Dieselben Namen in einer Kommentarzeile (Proxy) oder im Sandbox-Crate (`bwrap`) lassen es grün. **Gemessen am 2026-09-11**: Exit 0.
-- [ ] Der CI-Job `deps-lint` ist über den fertigen Commit grün.
+- [x] Der CI-Job `deps-lint` ist über den fertigen Commit grün. **Gemessen am 2026-09-11**: CI-Lauf 34585656949 über `24af9af`, alle Jobs grün.
 
 ### Fallstricke
 - Die Zählung ist textuell, kein Parser. Ein Re-Export (`pub use humanitl_proxy::X` in einem anderen Crate und danach `other::X`) oder ein Makro umgeht sie. Das fängt kein Skript, sondern das Review; die Regel in `CLAUDE.md` nennt deshalb das Ziel und nicht nur die Zahl.
