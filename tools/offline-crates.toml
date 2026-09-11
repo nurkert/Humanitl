@@ -1,0 +1,39 @@
+# Crates, die nie eine Verbindung aufbauen dürfen, und woran man erkennt, dass
+# eines es doch könnte (HUM-031). `tools/check_offline.py` prüft zweierlei:
+#
+# - den aufgelösten Abhängigkeitsgraphen für die Plattform, auf der gebaut
+#   wird: kein Crate aus `[network]` unter den normalen Abhängigkeiten, auch
+#   nicht transitiv;
+# - die Quellen des Crates selbst: keine Netz-API der Standardbibliothek und
+#   kein roher Socket über `libc`, denn dafür braucht es gar kein Crate.
+#
+# Dev- und Build-Abhängigkeiten zählen nicht: Ein Test darf einen Socket öffnen,
+# und ein `build.rs` läuft auf dem Rechner, der baut, nicht im ausgelieferten
+# Crate. Die Liste unten ist eine Sperrliste und damit nie vollständig; sie
+# fängt die verbreiteten Wege, und die Quelltextprüfung fängt den direkten.
+#
+# `humanitl-catalog` beantwortet jede Frage aus Dateien, die mit dem Programm
+# kommen: Katalog, Rangliste, Public-Suffix-Liste. Wer dort je eine
+# Netzbibliothek braucht, ändert diese Datei mit Begründung, statt die Prüfung
+# zu umgehen.
+
+[offline]
+crates = ["humanitl-catalog"]
+
+[network]
+# Laufzeiten und Sockets, HTTP-Clients und -Server, WebSocket, TLS, DNS.
+crates = [
+  "tokio", "tokio-net", "tokio-stream", "mio", "socket2", "async-std", "smol",
+  "hyper", "hyper-util", "h2", "h3", "reqwest", "ureq", "minreq", "isahc",
+  "attohttpc", "curl", "surf",
+  "tungstenite", "tokio-tungstenite",
+  "rustls", "native-tls", "openssl",
+  "hickory-proto", "hickory-resolver", "trust-dns-proto", "trust-dns-resolver",
+]
+
+[source]
+# Regulärer Ausdruck über jede Zeile unter `src/`, die kein Kommentar ist:
+# Sockets und Namensauflösung der Standardbibliothek und die rohen Aufrufe über
+# `libc`. Nicht `std::net` als Ganzes: `IpAddr` und `Ipv4Addr` sind Werte, keine
+# Verbindungen, und der Katalog muss IP-Hosts erkennen können.
+forbidden = '\bTcpStream\b|\bUdpSocket\b|\bTcpListener\b|\bToSocketAddrs\b|\bto_socket_addrs\b|\blookup_host\b|\bnet::\*|\blibc::(socket|connect|bind|sendto|getaddrinfo)\b'

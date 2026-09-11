@@ -49,6 +49,7 @@ typed-errors-lint: ## Typed errors (HUM-063) and the test reporter (HUM-133) che
 deps-lint: ## Enforce the dependency direction (HUM-074) and the coupling ratchet (HUM-145)
 	./tools/check-deps.sh
 	python3 tools/tests/check_deps_test.py
+	python3 tools/tests/check_offline_test.py
 	python3 tools/check_coupling.py
 	python3 tools/tests/check_coupling_test.py
 
