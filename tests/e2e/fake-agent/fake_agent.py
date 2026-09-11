@@ -27,12 +27,16 @@ Auf stdout steht je Anfrage eine Zeile JSON, in der Reihenfolge, in der die
 Antworten eintrafen:
 
     {"index": 0, "at": 0, "method": "GET", "url": "…", "status": 200,
-     "ms": 6123, "curl_exit": 0, "body_head": "…"}
+     "ms": 6123, "curl_exit": 0, "stderr": "", "body_head": "…",
+     "headers": {"content-type": "…"}}
 
 `status` ist der HTTP-Status, den der Agent gesehen hat (0, wenn keiner kam),
-`ms` die Dauer der Anfrage aus Sicht des Agenten, `body_head` der Anfang der
-Antwort. Der Anfang genügt: Die Blockantwort des Proxys nennt ihren Grund in
-den ersten Zeilen, und mehr braucht das Demoskript nicht.
+`ms` die Dauer der Anfrage aus Sicht des Agenten, `stderr` der Anfang dessen,
+was curl dazu sagte, `body_head` der Anfang der Antwort. Der Anfang genügt: Die
+Blockantwort des Proxys nennt ihren Grund in den ersten Zeilen, und mehr
+braucht das Demoskript nicht. `headers` sind die Kopfzeilen der letzten
+Antwort, die Namen klein geschrieben, jeder Wert höchstens
+`HEADER_VALUE_CHARS` Zeichen lang (HUM-072).
 
 Gesprochen wird über `curl`, nicht über eine eigene HTTP-Bibliothek. Der Grund
 ist derselbe wie beim Demoskript, das über `humanitl` fährt und nicht über
@@ -66,6 +70,10 @@ REQUEST_TIMEOUT_SECS = 90
 # So viele Zeichen der Antwort stehen in der Ausgabezeile.
 BODY_HEAD_CHARS = 400
 
+# So viele Zeichen eines Kopfzeilenwerts. Mehr als die 500 Zeichen, die eine
+# Notiz haben darf (`DecideRequest.Block.note`), damit keine gekürzt ankommt.
+HEADER_VALUE_CHARS = 1024
+
 # Schützt stdout: Die Threads schreiben ihre Zeilen unabhängig voneinander.
 OUT_LOCK = threading.Lock()
 
@@ -91,12 +99,15 @@ def run_request(index, step, out_dir):
     url = req.get("url", "")
     body = req.get("body")
     out_file = os.path.join(out_dir, f"response-{index:03d}.txt")
+    header_file = os.path.join(out_dir, f"response-{index:03d}.headers")
 
     argv = [
         CURL,
         "-sS",
         "--max-time",
         str(REQUEST_TIMEOUT_SECS),
+        "-D",
+        header_file,
         "-o",
         out_file,
         "-w",
@@ -140,7 +151,41 @@ def run_request(index, step, out_dir):
         "curl_exit": completed.returncode,
         "stderr": completed.stderr.decode("utf-8", "replace").strip()[:200],
         "body_head": body_head,
+        "headers": last_headers(header_file),
     }
+
+
+def last_headers(path):
+    """Die Kopfzeilen der letzten Antwort, Namen klein geschrieben (HUM-072).
+
+    `curl -D` schreibt jeden Antwortblock hintereinander, bei HTTPS über einen
+    Proxy zuerst das `200` des `CONNECT`. Gezählt wird der letzte Block: die
+    Antwort, die der Agent wirklich bekam. Werte werden gekürzt; zwei Kopfzeilen
+    gleichen Namens stehen mit `, ` verbunden.
+    """
+    try:
+        with open(path, "r", encoding="latin-1") as handle:
+            text = handle.read()
+    except OSError:
+        return {}
+    # Nur Blöcke mit Statuszeile: Nach einer Antwort mit Trailer schreibt curl
+    # die Trailer als eigenen Block ohne Statuszeile, und der zählt nicht.
+    blocks = [
+        block
+        for block in text.replace("\r\n", "\n").split("\n\n")
+        if block.lstrip().startswith("HTTP/")
+    ]
+    if not blocks:
+        return {}
+    headers = {}
+    for line in blocks[-1].split("\n")[1:]:
+        name, sep, value = line.partition(":")
+        if not sep:
+            continue
+        key = name.strip().lower()
+        value = value.strip()[:HEADER_VALUE_CHARS]
+        headers[key] = f"{headers[key]}, {value}" if key in headers else value
+    return headers
 
 
 def schedule(index, step, start, out_dir):

@@ -107,7 +107,7 @@ M2_UI_TEST="$E2E_ROOT/app/integration_test/m2_first_decision_test.dart"
 # Selbstprüfung am Ende vergleicht die Zahl mit dem Zähler aus `lib.sh`. Ein
 # Skript, das grün ist, weil ein Zweig übersprungen wurde, ist schlimmer als
 # keines; deshalb steht die Zahl hier und nicht im Kopf eines Menschen.
-M2_EXPECTED_ASSERTIONS=69
+M2_EXPECTED_ASSERTIONS=70
 
 # Die Ports des Ziels. Im eigenen Netz-Namensraum ist der Lauf root und darf
 # auch die privilegierten binden; damit braucht der Proxy keine Portumlenkung
@@ -577,6 +577,12 @@ e2e_expect "the blocked request ends as 403" 403 \
 blocked_body=$(m2_agent_field "$M2_URL_BLOCKED" body_head)
 e2e_expect_match "and names the human as the reason" '^reason: user$' "$blocked_body"
 e2e_expect_match "and carries the note of the human" '^note: not in this run$' "$blocked_body"
+# Dieselbe Notiz im Header, wie der Agent ihn bekam (HUM-072). `fake_agent.py`
+# hält die Kopfzeilen der letzten Antwort fest; ein Agent, der nur Header liest,
+# erfährt den Grund sonst nie.
+blocked_note_header=$(jq -r --arg url "$M2_URL_BLOCKED" \
+    'select(.url == $url) | .headers["x-humanitl-note"] // ""' "$M2_AGENT_LOG" 2> /dev/null || true)
+e2e_expect "and the same note in the header X-Humanitl-Note" "not in this run" "$blocked_note_header"
 
 e2e_expect "the allowed POST answers with 200" 200 \
     "$(m2_agent_field "$M2_URL_ALLOWED" status)"
