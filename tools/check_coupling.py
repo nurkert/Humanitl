@@ -21,8 +21,9 @@ Four rules:
   mixes the engine with the application logic (hold queue, registry, rules
   store); until that is cut, nothing new may depend on it.
 * `proxy_alias` -- `use humanitl_proxy as p;`, `use humanitl_proxy::ca as c;`,
-  `{self as p}`, a glob and a bare `use humanitl_proxy;`. Each would let later
-  uses pass uncounted, so there is none, and the count of zero holds that.
+  `{self as p}`, `use humanitl_proxy::ca;`, a glob and a bare
+  `use humanitl_proxy;`. Each would let later uses pass uncounted; the count
+  per file freezes the few that exist.
 
 The proxy rules skip `//` comment lines: a doc comment that points at
 `humanitl_proxy::ca::ENV_KIT` depends on nothing.
@@ -65,30 +66,38 @@ RULES: dict[str, Rule] = {
         re.compile(
             r"\b(?:extern\s+crate\s+)?"
             r"(?:hyper|hyper_util|http_body_util|rustls|tokio_rustls|rcgen|webpki_roots)"
-            r"(?:::|\s+as\b|\s*;)"
+            r"(?:\s*::|\s+as\b|\s*[,;}])"
         ),
         ("daemon/crates/proxy/",),
         "the protocol engine belongs to the proxy crate; nothing outside uses its types",
     ),
     "proxy_crate": Rule(
-        re.compile(r"\bhumanitl_proxy::"),
+        re.compile(r"\bhumanitl_proxy\s*::"),
         ("daemon/crates/proxy/",),
         "the proxy crate mixes engine and application; do not widen what depends on it",
     ),
+    # Every `use` statement that names the crate, however it is spelled:
+    # `use ::humanitl_proxy as p;` and `use {humanitl_proxy as p};` are Rust too.
     "proxy_alias": Rule(
-        re.compile(r"\b(?:use|extern\s+crate)\s+humanitl_proxy\b[^;]*"),
+        re.compile(r"\b(?:use|extern\s+crate)\b[^;]*?\bhumanitl_proxy\b[^;]*"),
         ("daemon/crates/proxy/",),
-        "an alias or a glob hides every later use of the crate from the proxy_crate count",
+        "an alias, a glob or a module import hides later uses from the proxy_crate count",
     ),
 }
 
 # Where a `use` list opens behind the crate name, perhaps after a module path.
 LIST_OPENING = re.compile(r"(?:\s*\w+\s*::)*\s*\{")
 
-# Inside a `use humanitl_proxy...` statement: a glob, or a lower-case name
-# renamed with `as` (a module, `self`, the crate itself). Renaming a type or a
-# constant stays allowed; it names one item, just as the import does.
-HIDING = re.compile(r"\*|\b[a-z_][a-z0-9_]*\s+as\b")
+# Inside a `use humanitl_proxy...` statement, what lets later code name the
+# crate's items without writing `humanitl_proxy::`: a glob, a lower-case name
+# renamed with `as` (a module, `self`, the crate itself), or a lower-case leaf
+# (`use humanitl_proxy::ca;`, `ca::{self, CaStore}`), after which `ca::X` goes
+# uncounted. A lower-case leaf may also be a function; it is flagged all the
+# same, since the import is new coupling either way. Renaming a type or a
+# constant stays allowed: it names one item, just as the import does.
+HIDING = re.compile(
+    r"\*|\b[a-z_][a-z0-9_]*\s+as\b|(?:::|[{,])\s*[a-z_][a-z0-9_]*\s*(?=[,;}]|$)"
+)
 
 EXTENSIONS = (".rs", ".dart", ".proto")
 
@@ -168,7 +177,8 @@ def proxy_aliases(code: str) -> int:
     for match in RULES["proxy_alias"].pattern.finditer(code):
         statement = match.group(0)
         tail = statement[statement.index("humanitl_proxy"):]
-        if statement.startswith("extern") or tail.strip() == "humanitl_proxy" or HIDING.search(tail):
+        bare = tail.strip(" \t\r\n{}") == "humanitl_proxy"
+        if statement.startswith("extern") or bare or HIDING.search(tail):
             count += 1
     return count
 
