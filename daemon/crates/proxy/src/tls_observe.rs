@@ -103,7 +103,8 @@ pub const FLOW_ERROR: &str = "tls_handshake_failed";
 /// So tief wird die Ursachenkette eines Fehlers verfolgt.
 const MAX_CAUSE_DEPTH: usize = 8;
 
-/// Warum der Handschlag mit dem Client nicht zustande kam.
+/// Warum aus der TLS-Verbindung mit dem Client nichts wurde: ein Handschlag,
+/// der nicht zustande kam, oder ein Tunnel, der danach leer blieb (HUM-149).
 ///
 /// Nur die Fälle, die etwas über den Client aussagen. Was sich nicht einordnen
 /// lässt, ist kein Befund: [`classify`] liefert dann `None`, und der Proxy
@@ -129,6 +130,14 @@ pub enum TlsFailure {
     /// abgerissen (`EPIPE`). In `tls::accept` gibt es genau eine Gegenstelle,
     /// den Client; ein gebrochener Schreibweg dorthin heißt, dass er weg ist.
     ResetBeforeFinished,
+    /// Der Handschlag stand, und der Client schloss den Tunnel, ohne eine
+    /// einzige Anfrage zu senden (HUM-149).
+    ///
+    /// So lehnt curl mit OpenSSL ab: Es prüft das Zertifikat erst nach dem
+    /// Handschlag, legt dann ohne Alert auf und endet mit Exit 60. Das ist kein
+    /// Beleg wie ein Alert, aber kaum ein Client öffnet einen Tunnel, um ihn
+    /// leer wieder zu schließen; der Befundtext sagt deshalb „meist".
+    ClosedAfterHandshake,
 }
 
 impl TlsFailure {
@@ -141,20 +150,26 @@ impl TlsFailure {
             Self::AlertOther(_) => "alert_other",
             Self::EofBeforeFinished => "eof_before_finished",
             Self::ResetBeforeFinished => "reset_before_finished",
+            Self::ClosedAfterHandshake => "closed_after_handshake",
         }
     }
 
-    /// Wahr, wenn der Client die Ablehnung des Zertifikats ausgesprochen hat.
+    /// Wahr, wenn der Client das Zertifikat abgelehnt hat.
     ///
-    /// Nur diese beiden Alerts belegen, dass der Client das Leaf gesehen und
-    /// verworfen hat; nur sie führen zu [`TLS_001`].
+    /// Die beiden Alerts belegen, dass der Client das Leaf gesehen und
+    /// verworfen hat; ein Tunnel, der nach dem Handschlag leer geschlossen
+    /// wird, legt es nahe. Diese drei führen zu [`TLS_001`].
     #[must_use]
     pub const fn is_rejection(&self) -> bool {
-        matches!(self, Self::AlertUnknownCa | Self::AlertBadCertificate)
+        matches!(
+            self,
+            Self::AlertUnknownCa | Self::AlertBadCertificate | Self::ClosedAfterHandshake
+        )
     }
 
     /// Wahr, wenn der Handschlag abgebrochen wurde, ohne dass ein Alert die
-    /// CA nennt.
+    /// CA nennt, und der Tunnel nicht einmal stand. Ein leer geschlossener
+    /// Tunnel ([`Self::ClosedAfterHandshake`]) ist keiner davon.
     ///
     /// Ein einzelnes Vorkommen sagt nichts; gezählt wird es trotzdem, weil
     /// drei davon in zehn Sekunden [`TLS_002`] ergeben.
@@ -397,7 +412,8 @@ const fn from_io_kind(kind: io::ErrorKind) -> Option<TlsFailure> {
 
 /// Der Befund zu einem gescheiterten Handschlag.
 ///
-/// Eine ausgesprochene Ablehnung ([`TlsFailure::is_rejection`]) ergibt
+/// Eine Ablehnung ([`TlsFailure::is_rejection`]: ein Alert oder ein leer
+/// geschlossener Tunnel) ergibt
 /// [`TLS_001`] samt dem Vorschlag, der zum Hinweis passt; ein Abbruch ohne
 /// Alert ergibt [`TLS_002`]. Der zweite Fall gehört nur dann in den
 /// Ereignisstrom, wenn die [`HandshakeWatch`] ein Muster gesehen hat — der Text
@@ -417,7 +433,8 @@ pub fn diagnostic_for(
     since_last: u32,
 ) -> Diagnostic {
     if failure.is_rejection() {
-        return rejected_ca(host, hint, since_last);
+        let closed = matches!(failure, TlsFailure::ClosedAfterHandshake);
+        return rejected_ca(host, hint, since_last, closed);
     }
     repeated_drops(host)
 }
@@ -434,8 +451,28 @@ pub fn diagnostic_for(
 /// angehefteter Schlüssel — nennt der Text als Möglichkeiten, und der Vorschlag
 /// wird als das benannt, was er leistet: Er sorgt dafür, dass die Variable auch
 /// dann gesetzt ist, wenn ein eigenes Profil sie nicht mitbringt.
-fn rejected_ca(host: &HostName, hint: ToolHint, since_last: u32) -> Diagnostic {
+///
+/// `closed` heißt: kein Alert, sondern ein Tunnel, der nach dem Handschlag
+/// leer geschlossen wurde ([`TlsFailure::ClosedAfterHandshake`]). Der erste
+/// Satz sagt dann, was der Proxy gesehen hat, und woraus er schließt; er
+/// behauptet keine Ablehnung, die niemand ausgesprochen hat (HUM-149).
+fn rejected_ca(host: &HostName, hint: ToolHint, since_last: u32, closed: bool) -> Diagnostic {
     let path = SANDBOX_CA_PATH;
+    let subject = hint.subject();
+    let host = host.display();
+    let lead = if closed {
+        format!(
+            "{subject} inside the sandbox finished the TLS handshake for {host} and then closed \
+             the connection without sending a request. Most clients that do this do not trust \
+             Humanitl's certificate: they check it only after the handshake. Nothing left the \
+             sandbox."
+        )
+    } else {
+        format!(
+            "{subject} inside the sandbox rejected Humanitl's certificate for {host}. The request \
+             never left the sandbox."
+        )
+    };
     let known = match hint.ca_variable() {
         Some(key) => format!(
             " Humanitl already sets {key}={path} in the sandbox, so this is not a missing \
@@ -447,10 +484,7 @@ fn rejected_ca(host: &HostName, hint: ToolHint, since_last: u32) -> Diagnostic {
         None => String::new(),
     };
     let why = format!(
-        "{subject} inside the sandbox rejected Humanitl's certificate for {host}. The request \
-         never left the sandbox.{known}{note}{repeats}",
-        subject = hint.subject(),
-        host = host.display(),
+        "{lead}{known}{note}{repeats}",
         note = hint.note(),
         repeats = repeat_sentence(since_last),
     );
@@ -473,7 +507,7 @@ fn repeat_sentence(since_last: u32) -> String {
         return String::new();
     }
     format!(
-        " {since_last} rejected handshakes have been counted for this host and this tool hint \
+        " {since_last} failed TLS connections have been counted for this host and this tool hint \
          since the previous card, this one included."
     )
 }
@@ -636,7 +670,8 @@ impl HandshakeWatch {
         Self::default()
     }
 
-    /// Meldet eine ausgesprochene Ablehnung.
+    /// Meldet eine Ablehnung: einen Alert gegen das Zertifikat oder einen
+    /// Tunnel, der nach dem Handschlag leer geschlossen wurde.
     ///
     /// `None` heißt: nicht berichten. `Some(n)` heißt: berichten, und `n` ist
     /// die Zahl der Ablehnungen dieser Paarung seit der letzten Karte, die
@@ -939,6 +974,41 @@ mod tests {
         );
     }
 
+    /// HUM-149: Ein Tunnel, der nach dem Handschlag leer endet, ist ein
+    /// `TLS_001` wie ein Alert, aber der Satz sagt, was gesehen wurde, und
+    /// behauptet keine ausgesprochene Ablehnung. Rot, sobald beide Fälle
+    /// wieder denselben Satz tragen.
+    #[test]
+    fn a_tunnel_closed_after_the_handshake_is_a_cautious_tls_001() {
+        let failure = TlsFailure::ClosedAfterHandshake;
+        assert!(failure.is_rejection());
+        assert_eq!(failure.as_str(), "closed_after_handshake");
+        let diagnostic = diagnostic_for(&failure, &host("example.com"), ToolHint::Curl, 1);
+        assert_eq!(diagnostic.code.as_str(), "TLS_001");
+        assert!(
+            diagnostic.why.contains("without sending a request"),
+            "{}",
+            diagnostic.why
+        );
+        assert!(
+            !diagnostic.why.contains("rejected Humanitl's certificate"),
+            "{}",
+            diagnostic.why
+        );
+        assert!(
+            diagnostic.why.contains("calls itself curl"),
+            "{}",
+            diagnostic.why
+        );
+        assert_eq!(
+            diagnostic.fix,
+            Some(FixAction::SetEnv {
+                key: "CURL_CA_BUNDLE".to_owned(),
+                value: "/etc/humanitl/ca.crt".to_owned(),
+            })
+        );
+    }
+
     #[test]
     fn the_rejection_does_not_claim_a_missing_variable() {
         // Jedes ausgelieferte Profil setzt die Variable, die der Fix
@@ -999,7 +1069,7 @@ mod tests {
         );
         assert!(
             later.why.contains(
-                "7 rejected handshakes have been counted for this host and this tool hint since \
+                "7 failed TLS connections have been counted for this host and this tool hint since \
                  the previous card"
             ),
             "the counter names what it counted, host and tool hint: {}",
