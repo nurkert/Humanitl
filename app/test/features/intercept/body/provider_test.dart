@@ -9,12 +9,12 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:humanitl/core/body/body_decode.dart';
+import 'package:humanitl/core/body/body_kind.dart';
+import 'package:humanitl/core/body/body_parser.dart';
+import 'package:humanitl/core/body/body_view.dart';
 import 'package:humanitl/core/domain/domain.dart';
-import 'package:humanitl/features/intercept/body/body_decode.dart';
-import 'package:humanitl/features/intercept/body/body_kind.dart';
-import 'package:humanitl/features/intercept/body/body_parser.dart';
-import 'package:humanitl/features/intercept/body/body_view.dart';
-import 'package:humanitl/features/intercept/providers/flow_body_provider.dart';
+import 'package:humanitl/core/body/flow_body_provider.dart';
 
 import 'harness.dart';
 

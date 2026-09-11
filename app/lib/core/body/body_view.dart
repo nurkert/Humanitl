@@ -1,4 +1,5 @@
-/// Der Rumpf der ausgewählten Anfrage, in vier Ansichten.
+/// Ein Rumpf in vier Ansichten: die Anfrage in der Warteschlange, Anfrage
+/// und Antwort in der History.
 ///
 /// Jeder Rumpf hier kommt aus dem Netz, durch einen Agenten, den niemand
 /// kontrolliert, und ein Mensch entscheidet auf dieser Grundlage über die
@@ -27,17 +28,18 @@ import 'dart:typed_data';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../core/domain/domain.dart';
-import '../../../core/ui/h_collapsible.dart';
-import '../../../core/ui/ui.dart';
-import '../../../l10n/l10n.dart';
-import '../finding_text.dart';
-import '../format.dart';
-import '../providers/flow_body_provider.dart';
+import '../../l10n/l10n.dart';
+import '../domain/domain.dart';
+import 'flow_body_provider.dart';
+import '../text/finding_text.dart';
+import '../text/format.dart';
+import '../ui/h_collapsible.dart';
+import '../ui/ui.dart';
 import 'body_decode.dart';
 import 'body_kind.dart';
 import 'body_marks.dart';
 import 'body_parser.dart';
+import 'body_providers.dart';
 import 'body_span.dart';
 import 'form_view.dart';
 import 'hex_view.dart';
@@ -53,16 +55,37 @@ const double bodyViewMaxHeight = 320;
 /// Wie viele Zeilen das Skelett zeigt, solange der Rumpf unterwegs ist.
 const int bodyViewSkeletonRows = 6;
 
-/// Der Rumpf-Abschnitt der Anfragekarte.
+/// Der Rumpf-Abschnitt einer Anfrage oder einer Antwort.
+///
+/// Die Warteschlange und die History zeigen denselben Rumpf in derselben
+/// Ansicht. Was sie unterscheidet, reichen sie herein: die Kopfzeilen der
+/// Seite, zu der der Rumpf gehört, und die Funde, die in ihm liegen.
 class BodyView extends ConsumerStatefulWidget {
-  /// Creates the section for [flowId] and [body].
-  const BodyView({required this.flowId, required this.body, super.key});
+  /// Creates the section for [body] of [flowId].
+  const BodyView({
+    required this.flowId,
+    required this.body,
+    required this.headers,
+    required this.findings,
+    super.key,
+  });
 
   /// Der Flow, zu dem der Rumpf gehört.
   final FlowId flowId;
 
   /// Der Verweis auf den Rumpf, oder null, solange das Detail unterwegs ist.
   final BodyRef? body;
+
+  /// Die Kopfzeilen der Seite, zu der der Rumpf gehört; aus ihnen kommt der
+  /// `Content-Encoding`, nach dem ausgepackt wird.
+  final List<Header> headers;
+
+  /// Die Funde, deren Stellen in diesem Rumpf liegen.
+  ///
+  /// Für eine Anfrage `FlowDetail.findings`, für eine Antwort eine leere
+  /// Liste (siehe [BodySource.findings]). Ohne Funde zeichnet die Ansicht
+  /// keine Zeile mit Chips.
+  final List<Finding> findings;
 
   @override
   ConsumerState<BodyView> createState() => _BodyViewState();
@@ -108,7 +131,11 @@ class _BodyViewState extends ConsumerState<BodyView> {
             )
           : _Loaded(
               flowId: widget.flowId,
-              body: body,
+              source: BodySource.of(
+                body,
+                headers: widget.headers,
+                findings: widget.findings,
+              ),
               hovered: _hovered,
               focused: _focused,
               onHover: _hover,
@@ -121,7 +148,7 @@ class _BodyViewState extends ConsumerState<BodyView> {
 class _Loaded extends ConsumerWidget {
   const _Loaded({
     required this.flowId,
-    required this.body,
+    required this.source,
     required this.hovered,
     required this.focused,
     required this.onHover,
@@ -129,7 +156,7 @@ class _Loaded extends ConsumerWidget {
   });
 
   final FlowId flowId;
-  final BodyRef body;
+  final BodySource source;
   final BodyFinding? hovered;
   final BodyFinding? focused;
   final ValueChanged<BodyFinding?> onHover;
@@ -139,9 +166,7 @@ class _Loaded extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final AppLocalizations l10n = context.l10n;
     final HTokens tokens = HTheme.of(context);
-    final AsyncValue<ParsedBody> parsed = ref.watch(
-      parsedBodyProvider(flowId, body),
-    );
+    final AsyncValue<ParsedBody> parsed = ref.watch(parsedBodyProvider(source));
     final ParsedBody? value = parsed.value;
     if (parsed.hasError && value == null) {
       return Text(
@@ -162,7 +187,7 @@ class _Loaded extends ConsumerWidget {
           ? const SizedBox.shrink()
           : _Panes(
               flowId: flowId,
-              body: body,
+              body: source.reference,
               parsed: value,
               hovered: hovered,
               focused: focused,
@@ -206,11 +231,15 @@ class _Panes extends ConsumerWidget {
         : (chosen != null && panes.contains(chosen) ? chosen : panes.first);
     // Die Hex-Ansicht liest denselben Byteraum, in dem die Fundstellen
     // liegen: den ausgepackten, wenn ausgepackt wurde, sonst den rohen.
-    final Uint8List bytes = parsedBodyBytes(
+    final RawBody? raw = ref.watch(flowBodyProvider(body)).value;
+    final Uint8List bytes = parsedBodyBytes(parsed, raw);
+    final List<String> notes = bodyNotes(
       parsed,
-      ref.watch(flowBodyProvider(body)).value,
+      pane,
+      bytes.length,
+      l10n,
+      recordedPrefix: body.truncated ? (raw?.bytes ?? bytes).length : null,
     );
-    final List<String> notes = bodyNotes(parsed, pane, bytes.length, l10n);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -408,13 +437,22 @@ String bodyPaneLabel(BodyPane pane, AppLocalizations l10n) => switch (pane) {
 ///
 /// Eine reine Funktion, damit prüfbar bleibt, dass jeder dieser Fälle einen
 /// Satz bekommt und keiner still bleibt.
+///
+/// [recordedPrefix] ist gesetzt, wenn der Recorder nur einen Präfix des
+/// Rumpfs gespeichert hat (`BodyRef.truncated`), und nennt dessen Bytes. Das
+/// ist kein [BodyProblem]: der Präfix ist vollständig angekommen und kann
+/// zugleich gepackt, zu groß oder kein JSON sein.
 List<String> bodyNotes(
   ParsedBody parsed,
   BodyPane pane,
   int byteCount,
-  AppLocalizations l10n,
-) {
+  AppLocalizations l10n, {
+  int? recordedPrefix,
+}) {
   final List<String> notes = <String>[];
+  if (recordedPrefix != null) {
+    notes.add(l10n.interceptBodyRecorderStopped(formatBytes(recordedPrefix)));
+  }
   if (parsed.disputedType) {
     notes.add(l10n.interceptBodyTypeDisputed);
   }

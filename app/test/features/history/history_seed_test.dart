@@ -3,12 +3,20 @@
 // daran erst der Mensch, der das Golden ansieht.
 
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:humanitl/core/body/body_decode.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/history/history_view.dart';
+
+/// Die Bytes eines Rumpfs, so wie die Kopfzeilen seiner Seite sie zu lesen
+/// verlangen. Ein gepackter Rumpf gehört seinem Flow erst nach dem Auspacken;
+/// roh verglichen fiele er durch, obwohl er stimmt.
+List<int> unpacked(List<Header> headers, List<int> bytes) =>
+    contentEncodingOf(headers) == 'gzip' ? gzip.decode(bytes) : bytes;
 
 void main() {
   test('twenty-four rows carry all eight visual states', () {
@@ -194,11 +202,16 @@ void main() {
     int checked = 0;
     for (final FlowDetail detail in client.state.details.values) {
       final String id = detail.summary.id.value;
-      for (final (String role, BodyRef? ref) in <(String, BodyRef?)>[
-        ('request', detail.request?.body),
-        ('request_edited', detail.editedRequest?.body),
-        ('response', detail.responseBody),
-      ]) {
+      for (final (String role, BodyRef? ref, List<Header>? headers)
+          in <(String, BodyRef?, List<Header>?)>[
+            ('request', detail.request?.body, detail.request?.headers),
+            (
+              'request_edited',
+              detail.editedRequest?.body,
+              detail.editedRequest?.headers,
+            ),
+            ('response', detail.responseBody, detail.response?.headers),
+          ]) {
         if (ref == null || ref.isEmpty) {
           continue;
         }
@@ -207,7 +220,7 @@ void main() {
             .toList();
         expect(bytes, hasLength(ref.size), reason: '$id $role size');
         expect(
-          utf8.decode(bytes),
+          utf8.decode(unpacked(headers ?? const <Header>[], bytes)),
           contains(id),
           reason: '$id $role is the body of another flow',
         );

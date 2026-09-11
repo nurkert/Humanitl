@@ -11,12 +11,12 @@ library;
 import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/body/body_view.dart';
 import '../../../core/domain/domain.dart';
+import '../../../core/text/format.dart';
 import '../../../core/ui/flow_visual_state.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
-import '../body/body_view.dart';
-import '../format.dart';
 import '../providers/decision.dart';
 import '../providers/flows.dart';
 import '../providers/now.dart';
@@ -78,7 +78,12 @@ class RequestCard extends ConsumerWidget {
                       SectionHeaders(
                         headers: request?.headers ?? const <Header>[],
                       ),
-                      BodyView(flowId: flow.id, body: request?.body),
+                      BodyView(
+                        flowId: flow.id,
+                        body: request?.body,
+                        headers: request?.headers ?? const <Header>[],
+                        findings: detail.value?.findings ?? const <Finding>[],
+                      ),
                     ],
                   ),
                 ),

@@ -24,7 +24,7 @@ library;
 
 import 'package:flutter/widgets.dart';
 
-import '../../../core/ui/ui.dart';
+import '../ui/ui.dart';
 import 'body_marks.dart';
 import 'body_parser.dart';
 import 'body_span.dart';

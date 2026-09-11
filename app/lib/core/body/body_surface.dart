@@ -9,7 +9,7 @@ library;
 
 import 'package:flutter/widgets.dart';
 
-import '../../../core/ui/ui.dart';
+import '../ui/ui.dart';
 
 /// Die Breite eines Monospace-Zeichens in [style], gemessen statt geschätzt.
 ///

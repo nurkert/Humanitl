@@ -32,6 +32,8 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-145 | Die Kopplung an einen Adapter waechst nicht weiter | S | HUM-074 |
 | HUM-148 | Die Sandbox-Goldens lesen die Wanduhr | S | HUM-040 |
 | HUM-150 | Ein langer Befund wird mitten im Wort abgeschnitten | S | HUM-106 |
+| HUM-153 | Im History-Detail bleibt dem Body kaum Platz | S | HUM-032, HUM-116 |
+| HUM-154 | „No body." steht in einer Farbe, die für Sätze zu schwach ist | S | HUM-030 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -2594,3 +2596,43 @@ Der bestehende Test bleibt; er ist die Messung. Zusätzlich ein Lauf mit `--test
 
 ### Referenzen
 `daemon/crates/sandbox/src/bwrap.rs:1295-1326`; Beobachtung am 2026-09-07 im Lauf zu HUM-039.
+
+---
+
+## HUM-153 · Im History-Detail bleibt dem Body kaum Platz
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-032, HUM-116 · Blockiert: nichts; der Body ist erreichbar, nur nicht auf einen Blick
+
+### Kontext
+Seit HUM-116 zeigt das History-Detail Anfrage und Antwort mit derselben `BodyView` wie die Warteschlange. Gemessen am 2026-09-11 in den Goldens: Bei einem Fenster von 1400 × 900, einem Detail-Anteil von 0,4 und einem Kopfzeilen-Anteil von 45 % bleiben dem Body etwa 95 px. `BodyView` zeigt dort nur Titel und Umschalter, der Inhalt liegt unter der Falz; er scrollt, es läuft nichts über. Die Rumpf-Goldens `history_detail_body_json_*` und `history_detail_body_hex_*` werden deshalb in einem Fenster von 1400 × 1500 aufgenommen; der Grund steht als Kommentar in `app/test/goldens/history_golden_test.dart`.
+
+### Ziel
+Wer im Verlauf eine Anfrage öffnet, sieht bei 1400 × 900 den Anfang ihres Bodys ohne zu scrollen.
+
+### Nicht-Ziel
+Eine andere `BodyView`. Die Aufteilung zwischen Tabelle und Detail als Ganzes neu zu entwerfen.
+
+### Akzeptanzkriterien
+- [ ] Ein Golden bei 1400 × 900 zeigt den Titel des Bodys und mindestens zehn Zeilen des JSON-Baums.
+- [ ] Die Rumpf-Goldens laufen wieder im Standardfenster des Tests; der Kommentar dazu entfällt.
+
+### Referenzen
+HUM-032 (Split von Tabelle und Detail), HUM-116; `app/lib/features/history/history_detail.dart`, `app/test/goldens/history_golden_test.dart`.
+
+---
+
+## HUM-154 · „No body." steht in einer Farbe, die für Sätze zu schwach ist
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-030 · Blockiert: nichts
+
+### Kontext
+`BodyView` (`app/lib/core/body/body_view.dart`, seit HUM-116 in `core`) zeichnet den Satz „No body." in `fg2`. `docs/UX.md` erlaubt `fg2` nicht für Sätze, weil sein Kontrast dafür nicht reicht. Gefunden am 2026-09-11 beim Bau von HUM-116; der Verlauf umgeht es, indem er einen leeren Body selbst mit `historyDetailNoBody` in `fg1` beschriftet. Die Warteschlange zeigt den Satz weiter in `fg2`.
+
+### Ziel
+Ein leerer Body wird in beiden Bildschirmen mit einem Satz in `fg1` benannt, und der Verlauf braucht dafür keinen eigenen Weg mehr.
+
+### Akzeptanzkriterien
+- [ ] `BodyView` zeichnet den Satz für einen leeren Body in `fg1`; ein Widget-Test prüft die Farbe, und die Mutation zurück auf `fg2` macht ihn rot.
+- [ ] Der Sonderweg im History-Detail entfällt, oder er bleibt mit einem Grund, der nicht die Farbe ist.
+- [ ] Die betroffenen Goldens sind geprüft und mit Erklärung neu aufgenommen.
+
+### Referenzen
+HUM-030, HUM-116; `docs/UX.md` (Kontrast von Text); `app/lib/core/body/body_view.dart`, `app/lib/features/history/history_detail.dart`.
