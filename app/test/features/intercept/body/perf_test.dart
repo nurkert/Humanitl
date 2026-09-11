@@ -10,11 +10,11 @@ import 'dart:typed_data';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:humanitl/core/body/body_kind.dart';
+import 'package:humanitl/core/body/body_parser.dart';
+import 'package:humanitl/core/body/json_tree_view.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
-import 'package:humanitl/features/intercept/body/body_kind.dart';
-import 'package:humanitl/features/intercept/body/body_parser.dart';
-import 'package:humanitl/features/intercept/body/json_tree_view.dart';
 
 import 'harness.dart';
 

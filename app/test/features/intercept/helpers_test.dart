@@ -3,8 +3,8 @@
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
+import 'package:humanitl/core/text/format.dart';
 import 'package:humanitl/core/ui/middle_ellipsis.dart';
-import 'package:humanitl/features/intercept/format.dart';
 import 'package:humanitl/features/intercept/list_diff.dart';
 import 'package:humanitl/features/intercept/psl.dart';
 import 'package:humanitl/features/intercept/widgets/key_value_table.dart';

@@ -3245,10 +3245,10 @@ Der Export (HUM-092 zieht ihn in den Daemon; `content.text` für geblockte Flows
 - Goldens `history_detail_request_{dark,light}` (neu erzeugt), `history_detail_body_json_{dark,light}`, `history_detail_body_hex_{dark,light}`.
 
 ### Akzeptanzkriterien
-- [ ] `grep -rn 'BodyView' app/lib/features/history/history_detail.dart` trifft; `grep -rn 'decodeHistoryBody\|class HistoryBody\|historyBodyProvider' app/lib` ist leer.
-- [ ] `test -e app/lib/features/intercept/widgets/section_body_raw.dart` schlägt fehl; `grep -rn 'SectionBodyRaw' app/` ist leer.
-- [ ] `HUMANITL_FAKE=history:200 flutter run -d linux`: ein JSON-Antwort-Rumpf zeigt den Baum, ein gzip-Rumpf lesbaren Text, ein Binär-Rumpf die Hex-Ansicht (Blick, dazu die drei Widget-Tests).
-- [ ] `cd app && flutter test test/features/history test/features/intercept test/goldens` grün im CI-Modus; `flutter analyze` sauber; `tools/check-deps.sh` Exit 0.
+- [x] `grep -rn 'BodyView' app/lib/features/history/history_detail.dart` trifft; `grep -rn 'decodeHistoryBody\|class HistoryBody\|historyBodyProvider' app/lib` ist leer. **Gemessen am 2026-09-11** auf `main` nach dem Zusammenführen: ein Treffer für `BodyView`, keiner für den alten Weg.
+- [x] `test -e app/lib/features/intercept/widgets/section_body_raw.dart` schlägt fehl; `grep -rn 'SectionBodyRaw' app/` ist leer. **Gemessen am 2026-09-11** auf `main` nach dem Zusammenführen: Die Datei gibt es nicht mehr, und `SectionBodyRaw` kommt in `app/lib` und `app/test` nicht mehr vor.
+- [ ] `HUMANITL_FAKE=history:200 flutter run -d linux`: ein JSON-Antwort-Rumpf zeigt den Baum, ein gzip-Rumpf lesbaren Text, ein Binär-Rumpf die Hex-Ansicht (Blick, dazu die drei Widget-Tests). **Offen, nur der Blick fehlt (Stand 2026-09-11).** Die drei Widget-Tests stehen und sind mutationsgeprüft (`history_detail_uses_body_view`, `history_gzip_body_is_readable`, `history_request_findings_are_marked`), und die Goldens `history_detail_body_json_*` und `history_detail_body_hex_*` zeigen Baum und Hex-Ansicht. Der Fake liefert seit HUM-116 unter `HUMANITL_FAKE=history` einen JSON-, einen gzip- und einen Binär-Rumpf. Der Blick in die laufende App braucht Klicks bis zu diesen Zeilen, und auf dem Rechner, auf dem gebaut wurde, gibt es keine Eingabeautomatisierung; er ist einem Menschen vorbehalten.
+- [x] `cd app && flutter test test/features/history test/features/intercept test/goldens` grün im CI-Modus; `flutter analyze` sauber; `tools/check-deps.sh` Exit 0. **Gemessen am 2026-09-11** auf `main` nach dem Zusammenführen und dem Umzug von `flow_body_provider.dart` nach `core/body`: `flutter test` über die ganze App 1024 grün und 4 übersprungen, darin die drei Ordner; `packages/ui` 129 grün; `make flutter-analyze` samt `dart format --set-exit-if-changed` sauber; `tools/check-deps.sh` Exit 0. Die vier neuen Tests in `app/test/features/history/history_body_test.dart` werden jeder unter seiner Mutation rot.
 - [x] `grep -c 'historyDetailBinaryBody' app/l10n/app_en.arb app/l10n/app_de.arb` ergibt 0, oder der Schlüssel hat einen Verwender.
 - [ ] `make check` grün.
 
@@ -3453,7 +3453,7 @@ kein Test das lesen, weil der Name dort vergeben ist.
 Sprint: 2 · Größe: M · Abhängigkeiten: HUM-030, HUM-025, HUM-026 · Blockiert: keine
 
 ### Kontext
-HUM-030 spezifiziert: „`GetBody` hat Flag `decoded = true`, der Daemon liefert dekodiert bis Cap" (`backlog/sprint-2.md:1176`). `rpc GetBody(BodyRef)` (`proto:28`) kennt kein solches Feld; `BodyRef` trägt `sha256`, `size`, `truncated`, `content_type` (`proto:135-141`). Die App packt deshalb selbst aus (`app/lib/features/intercept/body/body_decode.dart`) und kann `br` und `zstd` nicht (`:50-51`, `BodyEncoding.unsupported`), während der Daemon brotli beherrscht (`daemon/crates/findings/src/decode.rs`, `ContentEncoding::Brotli`) und die Funde auf den entpackten Bytes berechnet. Für einen brotli-Rumpf behält jeder Fund seinen Namen und verliert seine Stelle: die Spans zeigen in entpackte Bytes, die App hat nur die gepackten. Der Verzicht steht als Kommentar im Code (`body_decode.dart:17`), in keinem Issue.
+HUM-030 spezifiziert: „`GetBody` hat Flag `decoded = true`, der Daemon liefert dekodiert bis Cap" (`backlog/sprint-2.md:1176`). `rpc GetBody(BodyRef)` (`proto:28`) kennt kein solches Feld; `BodyRef` trägt `sha256`, `size`, `truncated`, `content_type` (`proto:135-141`). Die App packt deshalb selbst aus (`app/lib/core/body/body_decode.dart`) und kann `br` und `zstd` nicht (`:50-51`, `BodyEncoding.unsupported`), während der Daemon brotli beherrscht (`daemon/crates/findings/src/decode.rs`, `ContentEncoding::Brotli`) und die Funde auf den entpackten Bytes berechnet. Für einen brotli-Rumpf behält jeder Fund seinen Namen und verliert seine Stelle: die Spans zeigen in entpackte Bytes, die App hat nur die gepackten. Der Verzicht steht als Kommentar im Code (`body_decode.dart:17`), in keinem Issue.
 
 ### Ziel
 Die App fragt `GetBody` mit `decoded = true` und bekommt vom Daemon die entpackten Bytes (gzip, deflate, brotli, mit dem Budget aus `decode.rs`), oder die rohen Bytes mit dem Namen der Kodierung, die er nicht kann (`zstd`, Ketten). Die Spans der Funde stimmen damit für jeden Rumpf, den der Daemon entpacken konnte. `body_decode.dart` verliert seinen eigenen Dekoder.
@@ -3466,7 +3466,7 @@ Die App fragt `GetBody` mit `decoded = true` und bekommt vom Daemon die entpackt
 - `daemon/crates/ipc/src/server.rs:972` (`get_body`), `src/convert.rs` (`content_encoding` aus den aufgezeichneten Kopfzeilen in `FlowDetail.request.body`/`response`), `src/fake/`
 - `daemon/crates/findings/src/decode.rs` (öffentliche Funktion für den IPC-Pfad, falls nicht schon exportiert; `lib.rs:67`)
 - `daemon/crates/ipc/tests/` (neuer Test für `get_body`)
-- `app/lib/features/intercept/body/body_decode.dart` (schrumpft auf das Lesen von `encoding_left`), `app/lib/features/intercept/providers/flow_body_provider.dart` (Cache-Schlüssel mit `decoded`), `app/lib/core/ipc/convert.dart`, `app/lib/core/ipc/fake_daemon_client.dart`, `app/test/features/intercept/body/`
+- `app/lib/core/body/body_decode.dart` (schrumpft auf das Lesen von `encoding_left`), `app/lib/core/body/flow_body_provider.dart` (Cache-Schlüssel mit `decoded`; seit HUM-116 in `core/body`, der geparste Rumpf in `app/lib/core/body/body_providers.dart`), `app/lib/core/ipc/convert.dart`, `app/lib/core/ipc/fake_daemon_client.dart`, `app/test/features/intercept/body/`
 
 ### Spezifikation
 ```proto
@@ -3512,7 +3512,7 @@ App: `flowBodyProvider` fragt immer `decoded = true`; `body_decode.dart` bildet 
 ### Akzeptanzkriterien
 - [ ] `grep -n 'decoded\|encoding_left\|content_encoding' proto/humanitl/v1/humanitl.proto` trifft in `BodyRef` und `BodyChunk`; `PROTO_MINOR` um eins erhöht; `proto/descriptor.binpb` im selben Commit.
 - [ ] `cargo test -p humanitl-ipc` grün, darunter die fünf `get_body_*`-Tests; ein brotli-Rumpf kommt mit `decoded = true` als Klartext und `encoding_left == ""`, ein zstd-Rumpf roh mit `encoding_left == "zstd"`.
-- [ ] `grep -rn 'GZipCodec\|ZLibCodec\|gzip' app/lib/features/intercept/body/body_decode.dart` ist leer; `flutter test test/features/intercept/body` grün, darunter der brotli-Fall mit korrekter Fundstelle.
+- [ ] `grep -rn 'GZipCodec\|ZLibCodec\|gzip' app/lib/core/body/body_decode.dart` ist leer; `flutter test test/features/intercept/body` grün, darunter der brotli-Fall mit korrekter Fundstelle.
 - [ ] Gegen einen laufenden Daemon: ein `curl --compressed` aus der Sandbox an ein Ziel, das `br` liefert, zeigt in der Karte den lesbaren Rumpf (Blick).
 - [ ] `make check` grün.
 
@@ -3524,4 +3524,4 @@ App: `flowBodyProvider` fragt immer `decoded = true`; `body_decode.dart` bildet 
 - Die beiden Fakes müssen `content_encoding` füllen und `decoded` beachten, sonst prüfen die Widget-Tests weiter das alte Verhalten.
 
 ### Referenzen
-`backlog/sprint-2.md` HUM-030 (`:1176`), HUM-025 (Funde auf entpackten Bytes), HUM-026; `backlog/sprint-5.md` HUM-057 (Ratio-Grenze); `docs/PROTOCOL.md` 5; `proto/humanitl/v1/humanitl.proto:28, 135-141, 548-552`; `daemon/crates/findings/src/decode.rs`; `app/lib/features/intercept/body/body_decode.dart:17, 50-72`.
+`backlog/sprint-2.md` HUM-030 (`:1176`), HUM-025 (Funde auf entpackten Bytes), HUM-026; `backlog/sprint-5.md` HUM-057 (Ratio-Grenze); `docs/PROTOCOL.md` 5; `proto/humanitl/v1/humanitl.proto:28, 135-141, 548-552`; `daemon/crates/findings/src/decode.rs`; `app/lib/core/body/body_decode.dart:17, 50-72`.

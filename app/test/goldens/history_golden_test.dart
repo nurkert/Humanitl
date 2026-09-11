@@ -20,6 +20,14 @@ import 'package:humanitl/l10n/l10n.dart';
 /// allowed and answered.
 const FlowId goldenDetailFlow = FlowId('018f0004-0000-7000-8000-00000000000a');
 
+/// Ein JSON-Rumpf mit einem Fund darin: der Baum und seine Markierung
+/// (HUM-116). Zeile 28 des Szenarios, ein PATCH mit zwei Funden.
+const FlowId goldenJsonFlow = FlowId('018f0004-0000-7000-8000-00000000001d');
+
+/// Ein Rumpf, der kein Text ist: die Telemetrie als Protobuf, in der
+/// Hex-Ansicht (HUM-116). Zeile 15 des Szenarios, freigegeben, ohne Fund.
+const FlowId goldenHexFlow = FlowId('018f0004-0000-7000-8000-000000000010');
+
 /// A query that does not change.
 class FixedQuery extends HistoryQueryNotifier {
   /// Stays on [query].
@@ -93,6 +101,16 @@ void main() {
     width: 1400,
     height: 900,
   );
+  // Die beiden Rumpf-Goldens zeigen die Rumpf-Ansicht selbst, nicht die
+  // Aufteilung des Fensters. Bei 900 Pixeln bekommt das Detail seinen Anteil
+  // von 40 Prozent, und davon bleiben dem Rumpf unter Kopf, Tabs und
+  // Kopfzeilen knapp hundert Pixel: genug für Titel und Umschalter, nicht für
+  // Baum oder Hex. Das höhere Fenster gibt ihm Platz, ohne das Layout zu
+  // ändern, das `history_detail_request_*` festhält.
+  const BoxConstraints bodyWindow = BoxConstraints.tightFor(
+    width: 1400,
+    height: 1500,
+  );
 
   for (final (String name, HTokens tokens) in <(String, HTokens)>[
     ('dark', HTokens.dark),
@@ -110,6 +128,20 @@ void main() {
       fileName: 'history_detail_request_$name',
       constraints: window,
       builder: () => historyGolden(tokens: tokens, selected: goldenDetailFlow),
+    );
+
+    goldenTest(
+      'history_detail_body_json_$name',
+      fileName: 'history_detail_body_json_$name',
+      constraints: bodyWindow,
+      builder: () => historyGolden(tokens: tokens, selected: goldenJsonFlow),
+    );
+
+    goldenTest(
+      'history_detail_body_hex_$name',
+      fileName: 'history_detail_body_hex_$name',
+      constraints: bodyWindow,
+      builder: () => historyGolden(tokens: tokens, selected: goldenHexFlow),
     );
 
     goldenTest(

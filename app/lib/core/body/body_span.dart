@@ -15,7 +15,7 @@ library;
 import 'dart:convert';
 import 'dart:typed_data';
 
-import '../../../core/domain/domain.dart';
+import '../domain/domain.dart';
 
 /// Der Kanal, in dem ein Fund markiert wird.
 ///

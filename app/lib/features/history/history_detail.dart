@@ -8,7 +8,6 @@
 library;
 
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/services.dart';
 // `Flow` is a domain type here, not the Flutter layout widget of the same
@@ -16,6 +15,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/body/body_view.dart';
 import '../../core/domain/domain.dart';
 import '../../core/ipc/daemon_client.dart';
 import '../../core/ui/h_diagnostic_card.dart';
@@ -323,6 +323,13 @@ class _TabBody extends ConsumerWidget {
       HistoryDetailTab.edited => detail.editedRequest?.body,
       HistoryDetailTab.response => detail.responseBody,
     };
+    // Die Funde des Daemons liegen im Rumpf der Anfrage, so wie sie ankam.
+    // Eine Antwort durchsucht er nicht, und im bearbeiteten Rumpf stehen die
+    // Stellen nicht mehr dort, wo er sie gefunden hat.
+    final List<Finding> findings = switch (tab) {
+      HistoryDetailTab.request => detail.findings,
+      HistoryDetailTab.response || HistoryDetailTab.edited => const <Finding>[],
+    };
     final bool missing =
         tab == HistoryDetailTab.response && detail.response == null;
     return LayoutBuilder(
@@ -344,7 +351,14 @@ class _TabBody extends ConsumerWidget {
               ),
             ),
             const HHairline(),
-            Expanded(child: _Body(reference: body)),
+            Expanded(
+              child: _Body(
+                flowId: detail.summary.id,
+                reference: body,
+                headers: headers,
+                findings: findings,
+              ),
+            ),
           ],
         );
       },
@@ -476,133 +490,50 @@ class _HeadersState extends State<_Headers> {
       );
 }
 
-/// The recorded body of one tab.
-class _Body extends ConsumerWidget {
-  const _Body({required this.reference});
+/// The recorded body of one tab, in the view the queue uses.
+///
+/// Baum, Formular, Roh und Hex, ausgepackt nach dem `Content-Encoding` der
+/// eigenen Seite, mit den Funden an ihrer Stelle (`backlog/sprint-2.md`,
+/// HUM-116). Die Bytes kommen über den einen Rumpf-Provider in `core`, mit
+/// seinem Zwischenspeicher und seinen Grenzen; dieser Bildschirm fügt keine
+/// eigenen hinzu, auch kein zweites `Isolate.run`.
+class _Body extends StatelessWidget {
+  const _Body({
+    required this.flowId,
+    required this.reference,
+    required this.headers,
+    required this.findings,
+  });
 
+  final FlowId flowId;
   final BodyRef? reference;
-
-  /// Width of one monospace character at 12 px; the body scrolls sideways
-  /// rather than wrapping, so its width has to be known before it is laid
-  /// out (`docs/UX.md` 3.2). The advance is a token, not an estimate.
-  static final double _charWidth = HSize.monoAdvance * HType.mono12.fontSize!;
+  final List<Header> headers;
+  final List<Finding> findings;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
-    final AppLocalizations l10n = context.l10n;
     final BodyRef? reference = this.reference;
     if (reference == null || reference.isEmpty) {
+      // Eine Aussage über eine abgeschlossene Anfrage, keine Lücke: das
+      // Detail ist da, und aufgezeichnet wurde nichts. Die Rumpf-Ansicht
+      // wartet bei `null` auf ein Detail, das hier längst angekommen ist.
       return Padding(
         padding: EdgeInsets.all(tokens.spacing.x3),
         child: Text(
-          l10n.historyDetailNoBody,
+          context.l10n.historyDetailNoBody,
           style: tokens.typography.ui13.tinted(tokens.colors.fg1),
         ),
       );
     }
-    final AsyncValue<HistoryBody> body = ref.watch(
-      historyBodyProvider(reference),
-    );
-    return switch (body) {
-      AsyncData<HistoryBody>(:final HistoryBody value) => _lines(
-        context,
-        tokens,
-        l10n,
-        value,
+    return SingleChildScrollView(
+      padding: EdgeInsets.all(tokens.spacing.x3),
+      child: BodyView(
+        flowId: flowId,
+        body: reference,
+        headers: headers,
+        findings: findings,
       ),
-      AsyncError<HistoryBody>(:final Object error) => Padding(
-        padding: EdgeInsets.all(tokens.spacing.x3),
-        child: _Failure(error: error),
-      ),
-      _ => const HistoryWaitGate(child: _BodySkeleton(lines: 10)),
-    };
-  }
-
-  Widget _lines(
-    BuildContext context,
-    HTokens tokens,
-    AppLocalizations l10n,
-    HistoryBody body,
-  ) {
-    if (body.binary) {
-      return Padding(
-        padding: EdgeInsets.all(tokens.spacing.x3),
-        child: Text(
-          l10n.historyDetailBinaryBody(
-            formatHistoryCompactSize(body.byteCount),
-          ),
-          style: tokens.typography.ui13.tinted(tokens.colors.fg1),
-        ),
-      );
-    }
-    int longest = 0;
-    for (final String line in body.lines) {
-      longest = math.max(longest, line.length);
-    }
-    final double width = math.max(
-      longest * _charWidth + tokens.spacing.x6,
-      MediaQuery.sizeOf(context).width,
-    );
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        // Two causes, two sentences: the recorder stopping early is not the
-        // same event as this view capping the lines it draws, and a sentence
-        // that blamed the recorder for the view would send somebody looking
-        // in the wrong place.
-        if (body.truncated || body.linesCapped)
-          Padding(
-            padding: EdgeInsets.fromLTRB(
-              tokens.spacing.x3,
-              tokens.spacing.x1,
-              tokens.spacing.x3,
-              0,
-            ),
-            child: Text(
-              // Both can be true at once, and then both are said: the
-              // recorder stopped early *and* this view draws only the first
-              // lines of what it kept.
-              <String>[
-                if (body.truncated)
-                  l10n.historyDetailBodyTruncated(
-                    formatHistoryCompactSize(body.byteCount),
-                  ),
-                if (body.linesCapped)
-                  l10n.historyDetailLinesCapped(
-                    l10n.historyTotalExact(body.lines.length),
-                  ),
-              ].join(' '),
-              style: tokens.typography.ui12.tinted(
-                tokens.stateTextColor(HFlowState.error),
-              ),
-            ),
-          ),
-        Expanded(
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: SizedBox(
-              width: width,
-              child: ListView.builder(
-                itemExtent: historyBodyRowHeight,
-                itemCount: body.lines.length,
-                itemBuilder: (BuildContext context, int index) => Padding(
-                  padding: EdgeInsets.symmetric(horizontal: tokens.spacing.x3),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      body.lines[index],
-                      style: tokens.typography.mono12.tinted(tokens.colors.fg0),
-                      maxLines: 1,
-                      softWrap: false,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
     );
   }
 }

@@ -10,8 +10,8 @@
 /// Nothing here draws, so both sentences can be checked without a tree.
 library;
 
-import '../../core/domain/domain.dart';
 import '../../l10n/l10n.dart';
+import '../domain/domain.dart';
 
 /// The kind of [finding] without its parameter: `api_key:github` becomes
 /// `api_key`.

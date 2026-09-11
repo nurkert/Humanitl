@@ -1,9 +1,6 @@
 // Der Detailbereich: Kopfzeilen, Body über GetBody, Binärinhalt, und die
 // Zahlen aus Abschnitt 6 — Textskalierung, Semantik, Trefferflächen.
 
-import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:flutter/semantics.dart';
 import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -32,121 +29,7 @@ Future<void> _select(
 }
 
 void main() {
-  group('the body is decoded off the widget tree', () {
-    test('text becomes lines, and the line count is capped', () {
-      final HistoryBody body = decodeHistoryBody(
-        Uint8List.fromList(utf8.encode('a\nb\nc')),
-        false,
-      );
-      expect(body.lines, <String>['a', 'b', 'c']);
-      expect(body.binary, isFalse);
-      expect(body.byteCount, 5);
-      expect(body.linesTruncated, isFalse);
-    });
-
-    test('a NUL byte makes it binary, and nothing is shown as text', () {
-      final HistoryBody body = decodeHistoryBody(
-        Uint8List.fromList(<int>[0x89, 0x50, 0x00, 0x0d]),
-        false,
-      );
-      expect(body.binary, isTrue);
-      expect(body.lines, isEmpty);
-      expect(body.byteCount, 4);
-    });
-
-    test('the view capping its lines is not the recorder stopping', () {
-      final HistoryBody capped = HistoryBody(
-        lines: List<String>.filled(historyBodyMaxLines, 'x'),
-        byteCount: 999999,
-        binary: false,
-        truncated: false,
-      );
-      expect(capped.linesCapped, isTrue);
-      expect(capped.truncated, isFalse, reason: 'the recorder kept it all');
-      expect(capped.linesTruncated, isTrue);
-
-      final HistoryBody short = decodeHistoryBody(
-        Uint8List.fromList(utf8.encode('a\nb')),
-        false,
-      );
-      expect(short.linesCapped, isFalse);
-    });
-
-    testWidgets('both causes at once are both said', (
-      WidgetTester tester,
-    ) async {
-      // A body the recorder cut short *and* this view draws only the first
-      // lines of: two facts, two sentences, both on screen.
-      final FakeDaemonClient client = FakeDaemonClient.history(count: 12);
-      final Flow post = client.state.flows.values.firstWhere(
-        (Flow flow) => flow.method == Method.post,
-      );
-      final FlowDetail detail = client.state.details[post.id]!;
-      final BodyRef ref = detail.request!.body;
-      client.state.details[post.id] = detail.copyWith(
-        request: detail.request!.copyWith(
-          body: ref.copyWith(truncated: true, size: 8 * 1024 * 1024),
-        ),
-      );
-      client.state.bodies[ref.sha256
-          .map((int b) => b.toRadixString(16).padLeft(2, '0'))
-          .join()] = Uint8List.fromList(
-        utf8.encode(
-          // One character per line: more than the view draws, and still
-          // under the 64 KiB that would send the decoding to an isolate,
-          // which a widget test's fake clock never lets return.
-          List<String>.filled(historyBodyMaxLines + 10, 'a').join('\n'),
-        ),
-      );
-
-      final ProviderContainer container = await pumpHistory(
-        tester,
-        client: client,
-      );
-      await _select(
-        tester,
-        container,
-        container
-            .read(historyPageProvider)
-            .rows
-            .firstWhere((Flow flow) => flow.id == post.id),
-      );
-      // The body arrives through a future; give it a turn before reading
-      // what the pane says about it.
-      final HistoryBody body = await container.read(
-        historyBodyProvider(client.state.details[post.id]!.request!.body)
-            .future,
-      );
-      expect(body.truncated, isTrue);
-      expect(body.linesCapped, isTrue);
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 600));
-
-      expect(find.textContaining('The recorder stopped after'), findsOneWidget);
-      expect(find.textContaining('lines are shown'), findsOneWidget);
-    });
-
-    test('a truncated recording says so', () {
-      final HistoryBody body = decodeHistoryBody(
-        Uint8List.fromList(utf8.encode('{')),
-        true,
-      );
-      expect(body.truncated, isTrue);
-      expect(body.linesTruncated, isTrue);
-    });
-
-    test('invalid UTF-8 is replaced, never thrown', () {
-      final HistoryBody body = decodeHistoryBody(
-        Uint8List.fromList(<int>[0x61, 0xff, 0x62]),
-        false,
-      );
-      expect(body.binary, isFalse);
-      expect(body.lines.single, contains('a'));
-      expect(body.lines.single, contains('b'));
-    });
-  });
-
-  testWidgets('the detail reaches the recorded body through GetBody', (
+  testWidgets('the head and the headers answer before the body', (
     WidgetTester tester,
   ) async {
     final FakeDaemonClient client = FakeDaemonClient.history(count: 24);
@@ -162,17 +45,9 @@ void main() {
 
     // The head answers at once, from the row that is already loaded.
     expect(find.text(withBody.url), findsOneWidget);
-    // The headers come from the daemon and stand in the header table.
+    // The headers come from the daemon and stand in the header table. Was
+    // der Rumpf zeigt, prüft `history_body_test.dart`.
     expect(find.text('accept'), findsOneWidget);
-    // And the body comes through `GetBody`, decoded into lines.
-    final FlowDetail detail = await container.read(
-      historyDetailProvider(withBody.id).future,
-    );
-    final HistoryBody body = await container.read(
-      historyBodyProvider(detail.request!.body).future,
-    );
-    expect(body.binary, isFalse);
-    expect(body.lines.single, contains(withBody.id.value));
   });
 
   testWidgets('a request without a body says so as a fact, not as a gap', (

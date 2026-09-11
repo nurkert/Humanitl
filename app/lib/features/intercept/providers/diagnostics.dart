@@ -39,9 +39,9 @@ library;
 import 'package:flutter/foundation.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import '../../../core/body/body_span.dart';
 import '../../../core/domain/domain.dart';
 import '../../../core/ipc/flow_events.dart';
-import '../body/body_span.dart';
 
 part 'diagnostics.g.dart';
 
