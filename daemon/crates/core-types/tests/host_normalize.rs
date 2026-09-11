@@ -118,3 +118,53 @@ fn is_private_table() {
     let address: IpAddr = "10.1.2.3".parse().unwrap_or_else(|err| panic!("{err}"));
     assert!(humanitl_core::ip_is_private(address));
 }
+
+/// HUM-146: Sonderbereiche und IPv6-Adressen, die eine IPv4-Adresse in sich
+/// tragen. Je Bereich eine Adresse innen und eine knapp außerhalb, damit eine
+/// zu weite Maske genauso auffällt wie eine fehlende.
+#[test]
+fn is_private_covers_special_ranges_and_embedded_ipv4() {
+    let cases = [
+        ("192.0.0.1", true),
+        ("192.0.1.1", false),
+        ("198.18.0.1", true),
+        ("198.19.255.254", true),
+        ("198.17.255.255", false),
+        ("198.20.0.1", false),
+        ("240.0.0.1", true),
+        ("239.255.255.255", false),
+        ("[fec0::1]", true),
+        ("[feff::1]", true),
+        ("[ff00::1]", false),
+        ("[fe7f::1]", false),
+        // NAT64, 64:ff9b::/96: über das Gateway die Metadaten-Adresse.
+        ("[64:ff9b::a9fe:a9fe]", true),
+        ("[64:ff9b::a00:1]", true),
+        ("[64:ff9b::808:808]", false),
+        ("[64:ff9b:0:1::a9fe:a9fe]", false),
+        // Lokales NAT64, 64:ff9b:1::/48, gilt ganz als privat.
+        ("[64:ff9b:1::808:808]", true),
+        ("[64:ff9b:2::1]", false),
+        // IPv4-translated, ::ffff:0:0/96.
+        ("[::ffff:0:a9fe:a9fe]", true),
+        ("[::ffff:0:808:808]", false),
+        // 6to4, 2002::/16: die IPv4-Adresse steht in den Bits 16 bis 48.
+        ("[2002:a9fe:a9fe::1]", true),
+        ("[2002:a00:1::1]", true),
+        ("[2002:808:808::1]", false),
+        ("[2003:a9fe:a9fe::1]", false),
+        // ISATAP-Kennung unter beliebigem Präfix.
+        ("[2001:db8::5efe:a9fe:a9fe]", true),
+        ("[2001:db8::200:5efe:a00:1]", true),
+        ("[2001:db8::5efe:808:808]", false),
+        ("[2001:db8::5eff:a9fe:a9fe]", false),
+        // Teredo, 2001::/32; 2001:1:: und 2001:4860:: gehören nicht dazu.
+        ("[2001:0:4136:e378:8000:63bf:3fff:fdd2]", true),
+        ("[2001:1::1]", false),
+        ("[2001:4860:4860::8888]", false),
+    ];
+    for (input, expected) in cases {
+        let host = HostName::parse(input).unwrap_or_else(|err| panic!("{input}: {err}"));
+        assert_eq!(host.is_private(), expected, "input {input}");
+    }
+}

@@ -203,7 +203,7 @@ pub fn ip_is_private(ip: IpAddr) -> bool {
 }
 
 fn ipv4_is_private(ip: Ipv4Addr) -> bool {
-    let [a, b, _, _] = ip.octets();
+    let [a, b, c, _] = ip.octets();
     ip.is_private()
         || ip.is_loopback()
         || ip.is_link_local()
@@ -212,16 +212,60 @@ fn ipv4_is_private(ip: Ipv4Addr) -> bool {
         || a == 0
         // CGNAT, 100.64.0.0/10.
         || (a == 100 && (64..128).contains(&b))
+        // IETF-Protokollzuweisungen, 192.0.0.0/24 (RFC 6890).
+        || (a == 192 && b == 0 && c == 0)
+        // Benchmark-Netze, 198.18.0.0/15 (RFC 2544).
+        || (a == 198 && (b & 0xfe) == 18)
+        // Reserviert, 240.0.0.0/4 (RFC 1112).
+        || a >= 240
 }
 
 fn ipv6_is_private(ip: Ipv6Addr) -> bool {
-    let first = ip.segments()[0];
+    let segments = ip.segments();
+    let first = segments[0];
     ip.is_loopback()
         || ip.is_unspecified()
         // Unique Local, fc00::/7.
         || (first & 0xfe00) == 0xfc00
         // Link-Local Unicast, fe80::/10.
         || (first & 0xffc0) == 0xfe80
+        // Site-Local, fec0::/10: veraltet (RFC 3879), aber nie öffentlich.
+        || (first & 0xffc0) == 0xfec0
+        // Teredo, 2001::/32 (RFC 4380), und lokales NAT64, 64:ff9b:1::/48
+        // (RFC 8215): Die eingebettete Adresse lässt sich nicht eindeutig
+        // lesen, also gilt die Adresse als privat.
+        || (first == 0x2001 && segments[1] == 0)
+        || (first == 0x0064 && segments[1] == 0xff9b && segments[2] == 0x0001)
+        || embedded_ipv4(ip).is_some_and(ipv4_is_private)
+}
+
+/// Die IPv4-Adresse, die eine IPv6-Adresse mit festem Muster in sich trägt:
+/// NAT64 (`64:ff9b::/96`, RFC 6052), IPv4-translated (`::ffff:0:0/96`,
+/// RFC 2765), 6to4 (`2002::/16`, RFC 3056) oder eine ISATAP-Kennung
+/// (`…:0:5efe:a.b.c.d` oder `…:200:5efe:a.b.c.d` unter beliebigem Präfix,
+/// RFC 5214). IPv4-mapped und IPv4-compatible entpackt schon `to_ipv4`.
+///
+/// In einem Netz mit DNS64 und NAT64 erreicht `64:ff9b::a9fe:a9fe` über das
+/// Gateway die Cloud-Metadaten-Adresse `169.254.169.254`; ohne diese Prüfung
+/// wäre der Satz „private Bereiche sind gesperrt" dort falsch. 6rd (RFC 5969)
+/// hat kein festes Präfix und lässt sich ohne Netzkonfiguration nicht erkennen.
+fn embedded_ipv4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
+    let segments = ip.segments();
+    let join = |high: u16, low: u16| {
+        let [a, b] = high.to_be_bytes();
+        let [c, d] = low.to_be_bytes();
+        Ipv4Addr::new(a, b, c, d)
+    };
+    let nat64 = segments[..6] == [0x0064, 0xff9b, 0, 0, 0, 0];
+    let translated = segments[..6] == [0, 0, 0, 0, 0xffff, 0];
+    let isatap = matches!(segments[4], 0 | 0x0200) && segments[5] == 0x5efe;
+    if nat64 || translated || isatap {
+        Some(join(segments[6], segments[7]))
+    } else if segments[0] == 0x2002 {
+        Some(join(segments[1], segments[2]))
+    } else {
+        None
+    }
 }
 
 /// Wahr, wenn das letzte Label eine Zahl im Sinne der URL-Host-Grammatik ist.
