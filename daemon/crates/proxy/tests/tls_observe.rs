@@ -22,7 +22,7 @@ use hyper::{Method, Request, StatusCode};
 use hyper_util::rt::TokioIo;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, RootCertStore};
-use tokio::io::AsyncWriteExt as _;
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::UnixStream;
 use tokio_rustls::TlsConnector;
 
@@ -166,6 +166,200 @@ async fn a_client_without_a_trust_store_gets_one_tls_001_and_a_flow_with_an_erro
             .any(|(name, value)| name.eq_ignore_ascii_case("user-agent") && value == "curl/8.5.0"),
         "{:?}",
         request.headers
+    );
+}
+
+/// Öffnet einen Tunnel, schließt den Handschlag mit einem Client ab, der der
+/// CA des Proxys vertraut, und geht ohne Anfrage wieder.
+///
+/// So sieht curl mit OpenSSL für den Proxy aus: Es prüft das Zertifikat erst
+/// nach dem Handschlag, legt dann auf und hat kein Byte gesendet (HUM-149).
+async fn handshake_then_leave(proxy: &Proxy, host: &str, agent: &str) {
+    let stream = UnixStream::connect(&proxy.socket).await.unwrap();
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+        .await
+        .unwrap();
+    let outer = tokio::spawn(async move {
+        let _ = conn.with_upgrades().await;
+    });
+    let connect = Request::builder()
+        .method(Method::CONNECT)
+        .uri(format!("{host}:443"))
+        .header(hyper::header::USER_AGENT, agent)
+        .body(Full::new(Bytes::new()))
+        .unwrap();
+    let response = sender.send_request(connect).await.unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "CONNECT must be accepted"
+    );
+    let upgraded = hyper::upgrade::on(response).await.unwrap();
+    let name = ServerName::try_from(host.to_owned()).unwrap();
+    let mut tls = TlsConnector::from(proxy.client_tls_config())
+        .connect(name, TokioIo::new(upgraded))
+        .await
+        .expect("a client that trusts the proxy CA finishes the handshake");
+    // Einen Augenblick lesen, bevor aufgelegt wird: Ohne das ginge das
+    // `Finished` des Clients zusammen mit dem Schließen hinaus, der Server
+    // läse ein Dateiende mitten im Handschlag, und der Test prüfte den
+    // abgerissenen Handschlag statt des leeren Tunnels. curl prüft das
+    // Zertifikat ebenfalls erst nach dem Handschlag, also ein wenig später.
+    // Eine Faustregel und keine Synchronisation: Der Server sendet nach dem
+    // Handschlag nichts, woran der Client erkennen könnte, dass er fertig
+    // ist. 500 ms sind das Vielfache dessen, was der Handschlag auf dem
+    // Loopback braucht.
+    let mut byte = [0_u8; 1];
+    let _ = tokio::time::timeout(Duration::from_millis(500), tls.read(&mut byte)).await;
+    // Kein Byte, dann zu -- wie curl nach seiner Prüfung.
+    tls.shutdown().await.ok();
+    drop(tls);
+    outer.abort();
+}
+
+#[tokio::test]
+async fn a_tunnel_closed_after_the_handshake_gets_one_tls_001_and_a_flow() {
+    let proxy = ProxyBuilder::new().recording(true).start().await;
+    let mut events = proxy.events();
+
+    handshake_then_leave(&proxy, "example.com", "curl/8.22.0").await;
+
+    let diagnostic = next_diagnostic(&mut events).await;
+    assert_eq!(diagnostic.code.as_str(), "TLS_001");
+    assert!(
+        diagnostic.why.contains("without sending a request"),
+        "the sentence says what was seen, not a rejection nobody spoke: {}",
+        diagnostic.why
+    );
+    assert!(
+        diagnostic.why.contains("calls itself curl"),
+        "{}",
+        diagnostic.why
+    );
+    assert!(
+        matches!(
+            diagnostic.fix,
+            Some(humanitl_core::FixAction::SetEnv { ref key, .. }) if key == "CURL_CA_BUNDLE"
+        ),
+        "{:?}",
+        diagnostic.fix
+    );
+
+    let flow_id = events
+        .seen
+        .iter()
+        .find_map(|event| match event {
+            FlowEvent::Diagnostic { flow_id, .. } => *flow_id,
+            _ => None,
+        })
+        .expect("the diagnostic belongs to a flow");
+    let recorder = proxy.recorder.as_ref().expect("recording is on");
+    recorder.flush().await;
+    let detail = recorder
+        .get_flow(flow_id)
+        .await
+        .unwrap()
+        .expect("the empty tunnel is in the history");
+    assert_eq!(detail.summary.method, "CONNECT");
+    assert_eq!(
+        detail.summary.error.as_deref(),
+        Some("tls_handshake_failed")
+    );
+}
+
+/// Ob seit Beginn des Tests ein `TLS_001` im Strom stand.
+fn saw_tls_001(events: &support::Events) -> bool {
+    events.seen.iter().any(|event| {
+        matches!(
+            event,
+            FlowEvent::Diagnostic { diagnostic, .. } if diagnostic.code.as_str() == "TLS_001"
+        )
+    })
+}
+
+/// Die Gegenprobe zu HUM-149: Ein Client, der eine Anfrage gestellt hat, hat
+/// der CA vertraut. Rot, sobald jeder kurze Tunnel eine Karte bekommt.
+///
+/// Die Anfrage wird von einer Regel sofort geblockt und nicht gehalten: Nur so
+/// endet der Tunnel, während der Test noch zusieht, und die Prüfung nach
+/// `serve_connection` läuft wirklich (Review).
+#[tokio::test]
+async fn a_tunnel_that_carried_a_request_gets_no_finding() {
+    let proxy = ProxyBuilder::new()
+        .rules("version: 1\nrules:\n  - action: block\n    match:\n      host: example.com\n")
+        .start()
+        .await;
+    let mut events = proxy.events();
+
+    let mut tunnel = proxy
+        .tls_tunnel("example.com", 443, Some("example.com"))
+        .await;
+    let request = Request::builder()
+        .uri("/")
+        .header(hyper::header::HOST, "example.com")
+        .body(Full::new(Bytes::new()))
+        .unwrap();
+    let response = tunnel.client.send(request).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "the rule answers at once"
+    );
+    drop(tunnel);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    events.drain();
+    assert!(
+        !saw_tls_001(&events),
+        "a tunnel with a request is no rejection: {:?}",
+        events.names()
+    );
+}
+
+/// Unlesbares im Tunnel ist kein Misstrauen gegen die CA: hyper verwirft den
+/// Vorspann von HTTP/2, bevor der Handler je gerufen wird, und ohne die
+/// Prüfung auf ein ruhiges Ende sähe das aus wie ein leerer Tunnel (Review).
+#[tokio::test]
+async fn a_tunnel_that_carried_garbage_gets_no_finding() {
+    let proxy = ProxyBuilder::new().start().await;
+    let mut events = proxy.events();
+
+    let stream = UnixStream::connect(&proxy.socket).await.unwrap();
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+        .await
+        .unwrap();
+    let outer = tokio::spawn(async move {
+        let _ = conn.with_upgrades().await;
+    });
+    let connect = Request::builder()
+        .method(Method::CONNECT)
+        .uri("example.com:443")
+        .header(hyper::header::USER_AGENT, "curl/8.22.0")
+        .body(Full::new(Bytes::new()))
+        .unwrap();
+    let response = sender.send_request(connect).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let upgraded = hyper::upgrade::on(response).await.unwrap();
+    let name = ServerName::try_from("example.com".to_owned()).unwrap();
+    let mut tls = TlsConnector::from(proxy.client_tls_config())
+        .connect(name, TokioIo::new(upgraded))
+        .await
+        .expect("a client that trusts the proxy CA finishes the handshake");
+    tls.write_all(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+        .await
+        .unwrap();
+    tls.flush().await.unwrap();
+    let mut byte = [0_u8; 64];
+    let _ = tokio::time::timeout(Duration::from_millis(500), tls.read(&mut byte)).await;
+    tls.shutdown().await.ok();
+    drop(tls);
+    outer.abort();
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    events.drain();
+    assert!(
+        !saw_tls_001(&events),
+        "a parse failure is no rejection: {:?}",
+        events.names()
     );
 }
 
