@@ -754,8 +754,14 @@ getroffene Entscheidung sofort gilt. Die Fallen sind alle bekannt und alle getes
 - **IP-Literale passen nie auf ein Host-Glob.** Für sie braucht es eine ausdrückliche Regel mit
   `host: "ip:192.168.1.50"` oder `host: "cidr:192.168.0.0/16"`.
 - **Private Bereiche sind gesperrt.** Löst ein Name auf RFC-1918, `127/8`, `169.254/16`
-  (einschließlich `169.254.169.254`, der Cloud-Metadaten-Adresse), `100.64/10`, `fc00::/7` oder
-  `::1` auf, wird die Verbindung verweigert, außer die passende Regel trägt `allow_private: true`.
+  (einschließlich `169.254.169.254`, der Cloud-Metadaten-Adresse), `100.64/10`, `0/8`,
+  `192.0.0/24`, `198.18/15`, `240/4`, `::`, `::1`, `fc00::/7`, `fe80::/10` oder `fec0::/10`
+  auf, wird die Verbindung verweigert, außer die passende Regel trägt `allow_private: true`.
+  Dasselbe gilt für IPv6-Adressen, die eine solche IPv4-Adresse nach festem Muster in sich tragen
+  (IPv4-mapped, IPv4-compatible, IPv4-translated `::ffff:0:0/96`, NAT64 `64:ff9b::/96`, 6to4
+  `2002::/16`, ISATAP-Kennung `…:0:5efe:a.b.c.d`), und für Teredo (`2001::/32`) und lokales
+  NAT64 (`64:ff9b:1::/48`), deren eingebettete Adresse sich nicht eindeutig lesen lässt. 6rd hat
+  kein festes Präfix und wird deshalb nicht erkannt.
 - **Authority-Konsistenz.** Nach der TLS-Terminierung wird pro Anfrage der Host-Header
   beziehungsweise `:authority` gegen das CONNECT-Ziel und die SNI geprüft. Ein Mismatch wird ohne
   Rückfrage geblockt (`BlockReason::AuthorityMismatch`, `403`). Das ist die Abwehr gegen Domain
