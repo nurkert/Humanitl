@@ -22,8 +22,12 @@ import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/domain/domain.dart';
+import '../../core/ipc/client_providers.dart';
+import '../../core/ipc/connection.dart';
 import '../../core/ipc/flow_handoff.dart';
+import '../../core/ipc/flow_reveal.dart';
 import '../../core/shortcuts/intents.dart';
+import '../../core/ui/fix_control.dart';
 import '../../core/ui/h_diagnostic_card.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
@@ -103,6 +107,9 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
   Flow? _sheetFlow;
   late bool _exportOpen = widget.exportOpen;
 
+  /// Why the last flow another screen asked for could not be opened, or null.
+  Diagnostic? _revealFailure;
+
   late final Map<Type, Action<Intent>> _actions = <Type, Action<Intent>>{
     OpenFlowIntent: _SingleKeyAction<OpenFlowIntent>(_openSelected),
     FilterIntent: _SingleKeyAction<FilterIntent>(_focusFilter),
@@ -176,6 +183,94 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
     }
   }
 
+  /// Opens a flow another screen asked for (HUM-039).
+  ///
+  /// The flow may be in no row of this table: a passthrough behind `LLM_005`
+  /// is recorded but never listed with the held requests, and the page may
+  /// not have reached it. The sheet therefore takes the summary from
+  /// `GetFlow`, not from the rows. The note is cleared once the fetch has
+  /// ended, so it is carried out once.
+  ///
+  /// Only the note that is still current acts: a newer one that arrived
+  /// while this fetch ran owns the sheet. A fetch that fails is said over the
+  /// list with the daemon's own sentence and never swallowed; a click that
+  /// seems to do nothing is the one thing `docs/UX.md` 4.4 rules out.
+  void _takeReveal(FlowId? previous, FlowId? next) {
+    if (next == null) {
+      return;
+    }
+    ref.read(historySelectionProvider.notifier).select(next);
+    // A new request replaces what the last one left: its failure card and
+    // its sheet. An old sheet next to a new failure would show the wrong
+    // request under the right complaint.
+    setState(() {
+      _revealFailure = null;
+      _sheetFlow = null;
+    });
+    bool current() => mounted && ref.read(flowRevealProvider) == next;
+    // The client itself and not `historyDetailProvider`: that one disposes
+    // itself as soon as nobody watches it, and a one-shot read of its future
+    // then ends in "the provider was disposed" instead of the daemon's
+    // answer -- measured in the test of the failure path.
+    unawaited(
+      ref
+          .read(daemonClientProvider)
+          .getFlow(next)
+          .then(
+            (FlowDetail detail) {
+              if (!current()) {
+                return;
+              }
+              _tableFocus.unfocus();
+              setState(() => _sheetFlow = detail.summary);
+            },
+            onError: (Object error) {
+              if (!current()) {
+                return;
+              }
+              setState(
+                () => _revealFailure = DaemonConnection.diagnosticOf(error),
+              );
+            },
+          )
+          .whenComplete(() {
+            // Nur die eigene Notiz: Kam während des Abrufs eine neue, gehört
+            // sie dem nächsten Durchlauf und bleibt stehen.
+            if (mounted && ref.read(flowRevealProvider) == next) {
+              ref.read(flowRevealProvider.notifier).clear();
+            }
+          }),
+    );
+  }
+
+  /// What the failure card offers: the daemon's own proposal, if it made one,
+  /// and always the way to hide the card. A diagnostic that carries a
+  /// `FixAction` without a visible action is a defect (`docs/UX.md` 4.4).
+  Widget _revealActions(
+    HTokens tokens,
+    AppLocalizations l10n,
+    Diagnostic failure,
+  ) {
+    final Widget dismiss = HButton(
+      variant: HButtonVariant.secondary,
+      onPressed: () => setState(() => _revealFailure = null),
+      child: Text(l10n.historyRevealFailedDismiss),
+    );
+    final FixAction? fix = failure.fix;
+    if (fix == null) {
+      return dismiss;
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        FixControl(fix: fix, copyKey: const Key('history-reveal-failure-fix')),
+        SizedBox(height: tokens.spacing.x2),
+        dismiss,
+      ],
+    );
+  }
+
   void _closeSheet() {
     setState(() => _sheetFlow = null);
     _tableFocus.requestFocus();
@@ -204,6 +299,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
     // is taken back in the next frame is a focus nobody can move away, and
     // the rail of the shell is one Tab away.
     _claimFocusOnceVisible(TickerMode.valuesOf(context).enabled);
+    ref.listen<FlowId?>(flowRevealProvider, _takeReveal);
     final FlowId? selected = ref.watch(historySelectionProvider);
     final Flow? selectedFlow = selected == null
         ? null
@@ -234,6 +330,27 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                       ),
                     ),
                     const HHairline(),
+                    if (_revealFailure case final Diagnostic revealFailure)
+                      Padding(
+                        padding: EdgeInsets.all(tokens.spacing.x3),
+                        child: HDiagnosticCard(
+                          key: const Key('history-reveal-failure'),
+                          code: revealFailure.code,
+                          severityLabel: historySeverityLabel(
+                            l10n,
+                            revealFailure.severity,
+                          ),
+                          color: historySeverityColor(
+                            tokens,
+                            revealFailure.severity,
+                          ),
+                          title: l10n.historyRevealFailedTitle,
+                          why: revealFailure.why,
+                          docsUrl: revealFailure.docsUrl,
+                          width: double.infinity,
+                          fix: _revealActions(tokens, l10n, revealFailure),
+                        ),
+                      ),
                     if (dataError)
                       Padding(
                         padding: EdgeInsets.all(tokens.spacing.x3),
