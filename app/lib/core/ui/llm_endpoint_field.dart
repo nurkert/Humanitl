@@ -16,9 +16,10 @@
 /// - **The button says what it will do.** It is the only control here that
 ///   opens a connection, and it is labelled for that and not for "save".
 /// - **The field never writes anything.** There is no write path into
-///   `config.toml` yet (`SetConfig` answers `unimplemented` until HUM-069),
-///   so the text lives for this session and the control does not pretend
-///   otherwise.
+///   `config.toml` for it (`SetConfig` accepts only a CA variable under
+///   `sandbox.env` since HUM-151 and refuses `llm.endpoint` with `CONFIG_014`
+///   until HUM-069), so the text lives for this session and the control does
+///   not pretend otherwise.
 ///
 /// It lives in `core/ui` because setup and, later, the settings screen show
 /// the same field, and no feature imports another one (ARCHITECTURE 5).

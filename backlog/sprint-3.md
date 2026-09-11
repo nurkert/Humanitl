@@ -49,6 +49,7 @@ Voraussetzungen aus Sprint 0 bis 2: `humanitl-core` (HUM-004, HUM-063), `humanit
 | 13 | HUM-046 | Demo-Skript M3 | L |
 | 14 | HUM-135 | Ein genanntes Kommando bekommt den Adapter nicht | M | HUM-037 |
 | 15 | HUM-149 | curl lehnt die CA erst nach dem Handschlag ab, und der Proxy sieht es nicht | M | HUM-045 |
+| 16 | HUM-151 | Der Fix für eine CA-Variable schreibt in `config.toml` | M | HUM-045 |
 
 Demo-Ziel am Sprint-Ende (HUM-046): CI startet einen Ollama-Mock, `humanitl run --profile default` startet OpenCode, der erste Prompt geht per Passthrough ans Mock-LLM, der models.dev-Aufruf wird per Default-Regel geblockt, ein `webfetch` wird gehalten, per gRPC erlaubt, und die Antwort erscheint im Terminal-Stream.
 
@@ -1756,7 +1757,7 @@ Die `SetEnv`-Fix-Aktion wird in der UI als „Für nächste Session setzen" gere
 
 ### Akzeptanzkriterien
 - [x] `curl --cacert <fremde Wurzel> https://example.com` in der Sandbox erzeugt `TLS_001` mit `CURL_CA_BUNDLE`-Fix im UI und in `humanitl flows list --json` (Feld `error`). **Umformuliert und gemessen am 2026-09-11, nach HUM-149.** Die frühere Fassung nannte `--cacert /dev/null`; mit dem echten curl kann sie nie `TLS_001` ergeben, weil curl dabei gar kein Zertifikat sieht. Mit einer vorhandenen, fremden Wurzel (`ISRG_Root_X1.crt`) stehen Karte und Flow, gemessen gegen einen echten Daemon (Einzelheiten unter HUM-149). **Die Vorgeschichte, wie sie am 2026-09-11 aufgeschrieben wurde:** Abgehakt war das Kästchen auf den Integrationstest hin, und der nimmt einen rustls-Client, der mitten im Handschlag mit `unknown_ca` abbricht. curl 8.22 mit OpenSSL 3.6 tut das nicht: Mit `--cacert /dev/null` scheitert es schon beim Laden der Datei (Exit 77), der Proxy verbucht einen Flow mit `tls_handshake_failed`, aber als abgerissenen Handschlag und ohne `TLS_001`. Mit einer vorhandenen, fremden Wurzel (`--cacert …/ISRG_Root_X1.crt`) schließt curl den TLS-1.3-Handschlag vollständig ab, prüft das Zertifikat danach und legt ohne Alert auf (Exit 60); der Proxy sieht eine gelungene Verbindung ohne Anfrage und verbucht nichts. `openssl s_client -verify_return_error` dagegen erzeugt Flow und Befund. Die Oberflächen-Hälfte steht seit HUM-106; was fehlt, ist die Erkennung im Proxy, und die liegt als HUM-149.
-- [ ] Fix „Für nächste Session setzen" schreibt `[sandbox.env]` ins globale Profil, sichtbar in `humanitl config get sandbox.env`. Lesen geht: `humanitl config get sandbox.env` antwortet `{}`, lokal aufgelöst ohne Daemon (`cmd/config.rs:115-119`). Geschrieben wird nichts — es gibt weder den Knopf noch einen Schreibweg. **Offen, und zwar gesperrt:** Der Knopf braucht einen Schreibweg in die Konfiguration, und `SetConfig` antwortet bis HUM-069 `unimplemented`; die Begründung samt Messung steht im Stand-Abschnitt dieses Issues. Die Karte verspricht deshalb heute nur, was sie hält.
+- [x] Fix „In config.toml schreiben" schreibt `[sandbox.env]` nach `config.toml`, sichtbar in `humanitl config get sandbox.env`. **Umformuliert und gemessen am 2026-09-11, mit HUM-151.** Die frühere Fassung nannte „Für nächste Session setzen" und das globale Profil. Seit HUM-066 ist ein globales Profil aber eine eigene Ebene über `config.toml`, und ein Knopf, der das Profil verspräche, versprach mehr, als er hält (Stand-Abschnitt unten). Gemessen gegen einen echten `humanitld` in `app/test/features/sandbox/daemon_live_test.dart`, `the_ca_write_of_the_button_is_what_config_get_reads`: Der Schreiber des Knopfes schreibt über den echten Client, und `humanitl --json config get sandbox.env` antwortet danach mit `CURL_CA_BUNDLE` auf `/etc/humanitl/ca.crt` und der Herkunft `config.toml`. Einzelheiten unter HUM-151. **Die Vorgeschichte:** Lesen ging schon vorher (`humanitl config get sandbox.env` antwortete `{}`, lokal aufgelöst ohne Daemon), geschrieben wurde nichts, weil `SetConfig` bis dahin `unimplemented` antwortete.
 
 ### Stand (2026-09-04): nur die Daemon-Hälfte
 
@@ -4281,3 +4282,42 @@ Eine neue Art in `TlsFailure`, `ClosedAfterHandshake`: Der Handschlag stand, die
 
 ### Referenzen
 Messungen vom 2026-09-11 (`curl -v` in der Sandbox, `openssl s_client`, Trace-Protokoll des Proxys); `daemon/crates/proxy/src/handler.rs` (`handle_connect`, `note_handshake_failure`, `serve_connection`); `daemon/crates/proxy/src/tls_observe.rs` (`TlsFailure`, `classify`).
+
+---
+
+## HUM-151 · Der Fix für eine CA-Variable schreibt in `config.toml`
+Sprint: 3 · Größe: M · Abhängigkeiten: HUM-045, HUM-106 · Blockiert: das zweite Akzeptanzkriterium von HUM-045
+
+### Kontext
+`TLS_001` schlägt vor, eine CA-Variable wie `CURL_CA_BUNDLE` auf das Zertifikat zu richten, das Humanitl in der Sandbox einhängt (`FixAction::SetEnv`). Die Karte kann heute nur den Export-Befehl für die laufende Sitzung kopieren. Das zweite Kriterium von HUM-045 verlangt, dass der Fix für künftige Sitzungen in die Konfiguration schreibt und `humanitl config get sandbox.env` ihn danach zeigt. Einen Schreibweg gibt es nicht: `SetConfig` antwortet `unimplemented` und wartet auf den Einstellungen-Bildschirm (HUM-069), und im Repository schreibt nichts `config.toml`.
+
+### Ziel
+Ein schmaler Schreibweg, gerade breit genug für diesen Fix. `SetConfig` nimmt genau eine Art Auftrag an: eine Variable unter `sandbox.env`, deren Wert das Zertifikat in der Sandbox ist (`/etc/humanitl/ca.crt`). Die Karte bekommt dafür einen Knopf, der sagt, wohin er schreibt.
+
+### Nicht-Ziel
+Der allgemeine `SetConfig` und `GetConfig` (HUM-069), `humanitl config set`, ein Schreiben in ein Profil. Eine Wirkung auf die laufende Sitzung: Deren Umgebung steht mit ihrem Start fest.
+
+### Spezifikation
+- `humanitl-config` bekommt ein Modul `edit` mit `set_sandbox_env(path, name, value)`. Es liest `config.toml` (eine fehlende Datei gilt als leer) und ändert das Dokument mit `toml_edit`, der Bibliothek aus derselben Familie wie `toml`, damit Kommentare, Reihenfolge und Schreibweise des Menschen bleiben. Das Ergebnis wird mit `toml` geparst und muss genau der alten Tabelle mit dem einen neuen Wert entsprechen; sonst schreibt es nichts und meldet `CONFIG_015`, ebenso wenn `sandbox` oder `sandbox.env` dort etwas anderes als eine Tabelle ist. Eine Datei, die schon vorher kein TOML ist, bleibt unberührt (`CONFIG_001`). Geschrieben wird atomar über eine Nebendatei und `rename`, mit den Rechten der alten Datei oder `0600`. Ein Symlink wird bis zu seinem Ziel verfolgt, damit eine verlinkte `config.toml` verlinkt bleibt. Steht der Wert schon so da, wird nichts geschrieben.
+- `SetConfig` im Daemon nimmt `key = sandbox.env.<NAME>` mit `NAME` aus Großbuchstaben, Ziffern und `_`, der kein Loader-Schlüssel ist, und `value` genau gleich dem Zertifikatspfad der Sandbox. Alles andere ist `CONFIG_014` mit `INVALID_ARGUMENT` und dem Hinweis, dass der Rest mit HUM-069 kommt. Die Antwort ist ein `ConfigSnapshot` aus einer neuen Auflösung ohne Profilwunsch: `toml`, `origins`, `diagnostics`.
+- Die App: `DaemonClient.setConfig(key, value)` in gRPC-Client und Fake. `FixControl` zeigt für ein `SetEnv`, dessen Wert der Zertifikatspfad ist, den Knopf „In config.toml schreiben", danach entweder, was geschrieben wurde, oder den Grund, warum nicht. Der Export-Befehl für die laufende Sitzung bleibt. Für jedes andere `SetEnv` gibt es keinen Knopf; `XDG_RUNTIME_DIR` etwa meint die Umgebung des Daemons und nicht die der Sandbox.
+- Der `why` von `TLS_001` sagt zusätzlich, dass ein Profil mit eigenem `sandbox.env` die Tabelle aus `config.toml` ersetzt. Das ist die Pflicht aus dem Stand-Abschnitt von HUM-045.
+
+### Tests
+- Unit-Tests des Schreibers: neue Datei, Kommentare bleiben, Zeile ersetzt, Zeile ergänzt, Block angehängt, Inline-Tabelle, kaputte Datei bleibt unberührt, gleicher Wert schreibt nichts, Rechte, Symlink.
+- Integrationstest des RPC: abgelehnter Schlüssel, abgelehnter Wert, gelungenes Schreiben mit der Variable in der neuen Auflösung.
+- Widget-Tests des Knopfes: Aufruf mit `sandbox.env.<NAME>`, Erfolg, Fehler, kein Knopf für einen anderen Wert.
+- Messung gegen einen echten Daemon: Nach dem Schreiben steht die Variable in `humanitl config get sandbox.env`.
+
+### Akzeptanzkriterien
+- [x] `SetConfig` schreibt `sandbox.env.<NAME>` mit dem Zertifikatspfad nach `config.toml`, Kommentare bleiben, und jeder andere Schlüssel oder Wert ist `CONFIG_014`. **Gemessen am 2026-09-11.** Über den echten Socket: `set_config_writes_the_ca_variable_and_a_new_resolution_sees_it`, `set_config_refuses_everything_but_the_ca_path_and_writes_nothing` (anderer Wert, anderer Schlüssel, `LD_PRELOAD`, kleingeschriebener Name, jedes Mal `INVALID_ARGUMENT` mit `CONFIG_014`, und keine Datei entsteht) und `set_config_on_a_file_it_cannot_edit_is_config_015_and_the_file_stays` in `daemon/crates/ipc/tests/ipc_server.rs`. Der Schreiber in `daemon/crates/config/tests/edit.rs` mit 16 Tests: Kommentare, Reihenfolge und Leerzeilen bleiben, ein ersetzter Wert behält seinen Kommentar, Inline-Tabelle und gepunkteter Schlüssel bleiben in ihrer Form, eine Datei nur aus Kommentaren behält sie oben, CRLF und eine Markierung der Byte-Reihenfolge bleiben, eine Datei ohne TOML oder mit `sandbox` als Nicht-Tabelle bleibt unberührt, derselbe Wert schreibt nichts (gleicher Inode), Rechte bleiben, ein Symlink bleibt ein Symlink, acht Schreiber zugleich verlieren nichts. Zehn Mutationen, jede macht genau den gemeinten Test rot: ohne die Abkürzung bei gleichem Wert, ohne den Kommentar am ersetzten Wert, ohne das Folgen des Symlinks, ohne die alten Rechte, ohne die Sperre, ohne CRLF, ohne die Markierung, ohne das Verschieben der Schlusskommentare, und in `config_rpc.rs` ohne die Prüfung des Werts und ohne die der Loader-Variablen. Der Fake nimmt dieselbe Tür (`config_rpc::accepted`, Test `config_answers_and_keeps_only_what_the_daemon_accepts`). Grundlage im Review: Codex vor seinem Limit (der Fake nahm jeden Schlüssel an) und der Ersatz-Review (CRLF, Markierung).
+- [x] Der Knopf der Karte schreibt, und `humanitl config get sandbox.env` zeigt danach die Variable. **Gemessen am 2026-09-11**, in zwei Hälften, die sich an einer Stelle treffen. Der Widget-Test `the_default_writes_sandbox_env_through_the_client` zeigt, dass der Knopf über den Standard-Schreiber `SetConfig` mit `sandbox.env.CURL_CA_BUNDLE` und dem Zertifikatspfad ruft. `daemon_live_test.dart`, `the_ca_write_of_the_button_is_what_config_get_reads`, ruft denselben Schreiber gegen einen echten `humanitld`, und `humanitl --json config get sandbox.env` antwortet danach mit der Variable und der Herkunft `config.toml`. Ein Klick auf Pixel gegen den echten Daemon ist nicht gemessen: Auf diesem Rechner gibt es kein `xdotool`.
+- [x] Der `why` von `TLS_001` nennt das Profil, das den Fix überstimmt, und keine Beschriftung verspricht ein Profil. **Gemessen am 2026-09-11.** Der Satz „a profile that sets sandbox.env of its own replaces that table from config.toml" steht im `why` jeder CA-Variable; `tls_observe.rs` sichert ihn im Test über alle Werkzeughinweise zu. Die Beschriftung lautet „Write to config.toml" beziehungsweise „In config.toml schreiben", und `fix_control_test.dart` findet genau diesen Text. Ein Profil nennt nur die Zeile nach dem Erfolg, und zwar als den Fall, in dem der Wert nicht ankommt.
+
+### Fallstricke
+- Eine Profilebene mit `sandbox.env` ersetzt die ganze Tabelle, denn `sandbox.env` ist eine freie Tabelle und damit ein einziges Blatt. Der Knopf verspricht deshalb nur, was er tut: in `config.toml` schreiben.
+- Zwei Aufträge zugleich: Ein Mutex im Daemon ordnet sie, und `rename` lässt nie eine halbe Datei zurück.
+- Der Daemon schreibt damit zum ersten Mal in die Konfiguration des Menschen. Die Tür ist deshalb so schmal wie der Fix: ein Pfad als Wert, der nur auf das eigene Zertifikat zeigen kann.
+
+### Referenzen
+HUM-045 (Stand-Abschnitt), HUM-069, `docs/profiles.md` (Ebenen), `daemon/crates/proxy/src/tls_observe.rs` (`rejected_ca`), `daemon/crates/proxy/src/ca.rs` (`write_atomic`), `toml_edit` (https://docs.rs/toml_edit).

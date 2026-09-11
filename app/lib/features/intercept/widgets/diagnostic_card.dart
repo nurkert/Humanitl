@@ -18,10 +18,12 @@
 ///   Rumpf-Ansichten benutzen.
 /// * **Die Karte verspricht nichts, was sie nicht tut.** Für `SetEnv` steht
 ///   das Abzeichen und darunter die Zeile, die `export KEY=VALUE` in die
-///   Zwischenablage legt. Ein Knopf „für die nächste Sitzung setzen" fehlt
-///   bewusst: Er bräuchte `SetConfig`, und dieser RPC antwortet bis HUM-069
-///   `unimplemented` (`docs/UX.md` 6, vierter weiter geltender Punkt;
-///   `backlog/CONVENTIONS.md` 4.13).
+///   Zwischenablage legt. Der Knopf „In config.toml schreiben" steht seit
+///   HUM-151 nur für den einen Wert, den `SetConfig` annimmt: eine
+///   CA-Variable, die auf das Zertifikat der Sandbox zeigt (`FixControl`).
+///   Für jeden anderen `SetEnv` fehlt er bewusst, weil `SetConfig` ihn bis
+///   HUM-069 mit `CONFIG_014` ablehnt (`docs/UX.md` 6, vierter weiter
+///   geltender Punkt; `backlog/CONVENTIONS.md` 4.13).
 /// * **Der Befehl wird gebaut, nicht interpoliert.** Der Wert kommt aus
 ///   derselben Leitung wie der Satz darüber, und ein Knopf legt ihn in eine
 ///   Shell. `core/ui/shell_command.dart` quotiert ihn und verweigert die

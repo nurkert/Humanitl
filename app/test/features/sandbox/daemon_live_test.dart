@@ -30,6 +30,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/core/ipc/launch_options.dart';
+import 'package:humanitl/core/ui/fix_control.dart';
 import 'package:humanitl/features/sandbox/providers/sandbox_status_provider.dart';
 
 /// Ob dieser Lauf einen echten Daemon starten darf.
@@ -100,14 +101,7 @@ class LiveDaemon {
     final Process process = await Process.start(
       binary.path,
       <String>['--socket', socket],
-      environment: <String, String>{
-        'XDG_RUNTIME_DIR': '${root.path}/runtime',
-        'XDG_DATA_HOME': '${root.path}/data',
-        'XDG_CONFIG_HOME': '${root.path}/config',
-        'XDG_STATE_HOME': '${root.path}/state',
-        'HOME': '${root.path}/home',
-        'PATH': Platform.environment['PATH'] ?? '/usr/local/bin:/usr/bin:/bin',
-      },
+      environment: _environment(root),
     );
     // `utf8.decode` und nicht `String.fromCharCodes`: Die Befunde des Daemons
     // sind deutsche Sätze, und aus einem Umlaut würde sonst Zeichensalat --
@@ -139,6 +133,20 @@ class LiveDaemon {
     }
     return LiveDaemon._(root, process, socket);
   }
+
+  /// Die Umgebung des Daemons unter [root]: alle XDG-Pfade dort, dazu `PATH`.
+  static Map<String, String> _environment(Directory root) => <String, String>{
+    'XDG_RUNTIME_DIR': '${root.path}/runtime',
+    'XDG_DATA_HOME': '${root.path}/data',
+    'XDG_CONFIG_HOME': '${root.path}/config',
+    'XDG_STATE_HOME': '${root.path}/state',
+    'HOME': '${root.path}/home',
+    'PATH': Platform.environment['PATH'] ?? '/usr/local/bin:/usr/bin:/bin',
+  };
+
+  /// Dieselbe Umgebung für ein anderes Programm, das dieselbe Konfiguration
+  /// lesen soll wie der Daemon, etwa `humanitl config get`.
+  Map<String, String> get environment => _environment(root);
 
   /// Das Wurzelverzeichnis dieses Laufs.
   final Directory root;
@@ -358,5 +366,32 @@ void main() {
       contains('127.0.0.1'),
       reason: 'and it points at the bridge inside the sandbox',
     );
+  });
+
+  // HUM-151: der Knopf „In config.toml schreiben" gegen den echten Dienst.
+  //
+  // Derselbe Schreiber, den der Knopf ruft ([envWriterProvider] ohne
+  // Ersetzung), über den echten Client an diesen Daemon; danach liest die
+  // Kommandozeile die Konfiguration so, wie ein Mensch es täte, lokal und ohne
+  // Daemon. Dass der Knopf genau diesen Schreiber mit diesem Paar ruft, messen
+  // die Widget-Tests von `FixControl`; hier steht die Fuge dahinter.
+  test('the_ca_write_of_the_button_is_what_config_get_reads', () async {
+    final Diagnostic? refused = await container!.read(envWriterProvider)(
+      'CURL_CA_BUNDLE',
+      sandboxCaPath,
+    );
+    expect(refused, isNull, reason: 'the daemon wrote it: $refused');
+
+    final ProcessResult read = await Process.run(
+      '${_repoRoot()}/daemon/target/debug/humanitl',
+      <String>['--json', 'config', 'get', 'sandbox.env'],
+      environment: daemon!.environment,
+    );
+    expect(read.exitCode, 0, reason: '${read.stdout}\n${read.stderr}');
+    final Object? answer = jsonDecode(read.stdout as String);
+    expect(answer, isA<Map<String, Object?>>());
+    final Map<String, Object?> json = answer! as Map<String, Object?>;
+    expect(json['value'], containsPair('CURL_CA_BUNDLE', sandboxCaPath));
+    expect(json['origin'], 'config.toml', reason: 'written where it says');
   });
 }

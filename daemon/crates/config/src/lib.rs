@@ -23,6 +23,7 @@
 //! - [`profile`] Profile: `default`, `llm-only`, eigene und das des Projekts
 //! - [`mod@resolve`] welche Profile gelten und woher sie kommen
 //! - [`origin`] die Herkunft je Feld
+//! - [`edit`] der eine Wert, den der Daemon in `config.toml` schreibt
 //!
 //! ```
 //! use humanitl_config::{Env, Sources, load};
@@ -42,6 +43,7 @@
 #![deny(missing_docs)]
 
 pub mod alias;
+pub mod edit;
 pub mod env;
 pub mod load;
 pub mod model;

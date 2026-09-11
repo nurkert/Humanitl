@@ -479,7 +479,8 @@ fn rejected_ca(host: &HostName, hint: ToolHint, since_last: u32, closed: bool) -
              variable: the client overrode it on its command line, keeps its own certificate \
              pool, pins a certificate, or does not read {key} at all. Setting {key} under \
              [sandbox.env] in config.toml helps only where the sandbox profile in use does not \
-             carry the variable."
+             carry the variable, and a profile that sets sandbox.env of its own replaces that \
+             table from config.toml."
         ),
         None => String::new(),
     };
@@ -1044,6 +1045,12 @@ mod tests {
             assert!(
                 !why.contains("in your global profile"),
                 "{hint:?} must not send anyone to the profile file: {why}"
+            );
+            // Und wer ihn überstimmt: Ein Profil mit eigenem `sandbox.env`
+            // ersetzt die Tabelle aus `config.toml` als Ganzes (HUM-151).
+            assert!(
+                why.contains("a profile that sets sandbox.env of its own replaces that table"),
+                "{hint:?} must name what overrides the fix: {why}"
             );
         }
     }

@@ -868,7 +868,7 @@ fn with_token<T>(message: T) -> Request<T> {
 }
 
 #[tokio::test]
-async fn config_answers_and_keeps_accepted_overrides() {
+async fn config_answers_and_keeps_only_what_the_daemon_accepts() {
     let daemon = daemon("mixed.jsonl", FakeOptions::default());
 
     let snapshot = daemon
@@ -886,40 +886,41 @@ async fn config_answers_and_keeps_accepted_overrides() {
             .any(|origin| origin.key == "hold.timeout_secs" && origin.origin == "default")
     );
 
+    // Dieselbe Tür wie beim Daemon (HUM-151): die CA-Variable mit dem
+    // Zertifikat der Sandbox, und nichts sonst.
     let changed = daemon
         .set_config(v1::SetConfigRequest {
-            key: "hold.timeout_secs".to_owned(),
-            value: "42".to_owned(),
+            key: "sandbox.env.CURL_CA_BUNDLE".to_owned(),
+            value: "/etc/humanitl/ca.crt".to_owned(),
         })
         .await
         .expect("set");
     assert!(
-        changed.toml.contains("timeout_secs = 42"),
+        changed
+            .toml
+            .contains("CURL_CA_BUNDLE = \"/etc/humanitl/ca.crt\""),
         "{}",
         changed.toml
     );
-    assert!(
-        changed
-            .origins
-            .iter()
-            .any(|origin| origin.key == "hold.timeout_secs" && origin.origin == "cli")
-    );
 
-    let refused = daemon
-        .set_config(v1::SetConfigRequest {
-            key: "hold.no_such_key".to_owned(),
-            value: "1".to_owned(),
-        })
-        .await
-        .expect_err("an unknown key is refused");
-    assert!(refused.code.as_str().starts_with("CONFIG_"), "{refused}");
+    for (key, value) in [("hold.timeout_secs", "42"), ("hold.no_such_key", "1")] {
+        let refused = daemon
+            .set_config(v1::SetConfigRequest {
+                key: key.to_owned(),
+                value: value.to_owned(),
+            })
+            .await
+            .expect_err("the daemon refuses it, so the fake does too");
+        assert_eq!(refused.code.as_str(), "CONFIG_014", "{key}: {refused}");
+    }
     let still = daemon
         .get_config(v1::GetConfigRequest::default())
         .await
         .expect("config");
     assert!(
-        still.toml.contains("timeout_secs = 42"),
-        "the refusal changed nothing"
+        still.toml.contains("CURL_CA_BUNDLE") && !still.toml.contains("timeout_secs = 42"),
+        "the refusals changed nothing: {}",
+        still.toml
     );
 }
 

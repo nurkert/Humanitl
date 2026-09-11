@@ -100,6 +100,52 @@ pub fn diagnostic_to_proto(diagnostic: &Diagnostic) -> v1::Diagnostic {
     }
 }
 
+/// Eine aufgelöste Konfiguration als `ConfigSnapshot`, die Herkunft je Feld in
+/// den Wörtern von [`humanitl_config::Origin::kind`].
+///
+/// Der Fake und `SetConfig` (HUM-151) antworten in derselben Form; eine zweite
+/// Fassung daneben liefe von dieser weg.
+///
+/// # Errors
+///
+/// `CONFIG_001`, wenn sich die Konfiguration nicht als TOML schreiben lässt.
+pub fn config_snapshot_to_proto(
+    resolved: &humanitl_config::Resolved,
+    include_schema: bool,
+) -> Result<v1::ConfigSnapshot, Diagnostic> {
+    let toml = toml::to_string_pretty(&resolved.config).map_err(|error| {
+        Diagnostic::builder(
+            humanitl_core::diagnostics::codes::CONFIG_001,
+            Severity::Error,
+        )
+        .why(format!(
+            "the effective configuration is not valid TOML: {error}"
+        ))
+        .build()
+    })?;
+    Ok(v1::ConfigSnapshot {
+        toml,
+        json_schema: if include_schema {
+            humanitl_config::json_schema().to_string()
+        } else {
+            String::new()
+        },
+        origins: resolved
+            .origins
+            .iter()
+            .map(|(key, origin)| v1::FieldOrigin {
+                key: key.clone(),
+                origin: origin.kind().to_owned(),
+            })
+            .collect(),
+        diagnostics: resolved
+            .diagnostics
+            .iter()
+            .map(diagnostic_to_proto)
+            .collect(),
+    })
+}
+
 /// Übersetzt eine Dringlichkeit in ihre Wire-Form.
 #[must_use]
 pub const fn severity_to_proto(severity: Severity) -> v1::Severity {

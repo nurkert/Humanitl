@@ -4,17 +4,22 @@
 // `docs/UX.md` 4.4 sagt, ein `Diagnostic` mit `FixAction` und ohne sichtbare
 // Aktion sei ein Defekt; `backlog/CONVENTIONS.md` 4.13 sagt, ein Control, das
 // etwas verspricht, was nicht geschieht, sei schlimmer als keines. Für
-// `SetEnv` liegt genau ein ausführbarer Teil dazwischen: den Befehl kopieren.
-// Das Schreiben in die Konfiguration braucht `SetConfig` und kommt mit
-// HUM-069.
+// `SetEnv` ist der Befehl zum Kopieren immer ausführbar; für den einen Wert,
+// den `SetConfig` bis HUM-069 annimmt, das Zertifikat der Sandbox, schreibt
+// ein Knopf zusätzlich nach `config.toml` (HUM-151).
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+// `Override` lebt in riverpod 3 im Nebeneingang `misc.dart`.
+import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
+import 'package:humanitl/core/ipc/client_providers.dart';
+import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/fix_control.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/l10n/l10n.dart';
@@ -22,28 +27,33 @@ import 'package:humanitl/l10n/l10n.dart';
 import 'shell_command_test.dart' show shellWords;
 
 /// Ein Wirt mit Theme und Sprache, so schmal wie das Control es braucht.
-Widget host(Widget child) => ProviderScope(
-  // Seit HUM-044 liest `FixControl` seinen Installer aus
-  // `serviceInstallerProvider`, wenn kein Parameter ihn setzt. Ohne Bereich
-  // gäbe es keinen Provider, den es lesen könnte; die Vorgabe bleibt
-  // `runInstallService`, und genau die misst
-  // `install_service_without_a_stand_in_runs_the_real_command`.
-  child: WidgetsApp(
-    color: HColors.bg0,
-    debugShowCheckedModeBanner: false,
-    locale: const Locale('en'),
-    localizationsDelegates: AppLocalizations.localizationsDelegates,
-    supportedLocales: AppLocalizations.supportedLocales,
-    onGenerateTitle: (BuildContext context) => 'fix control',
-    builder: (BuildContext context, Widget? _) => HTheme(
-      tokens: HTokens.dark,
-      child: Align(
-        alignment: Alignment.topLeft,
-        child: SizedBox(width: 480, child: child),
+///
+/// [overrides] setzt Provider für einen Test, der den Weg bis zum Client
+/// messen will, etwa [daemonClientProvider] für den Schreibknopf.
+Widget host(Widget child, {List<Override> overrides = const <Override>[]}) =>
+    ProviderScope(
+      // Seit HUM-044 liest `FixControl` seinen Installer aus
+      // `serviceInstallerProvider`, wenn kein Parameter ihn setzt. Ohne Bereich
+      // gäbe es keinen Provider, den es lesen könnte; die Vorgabe bleibt
+      // `runInstallService`, und genau die misst
+      // `install_service_without_a_stand_in_runs_the_real_command`.
+      overrides: overrides,
+      child: WidgetsApp(
+        color: HColors.bg0,
+        debugShowCheckedModeBanner: false,
+        locale: const Locale('en'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        onGenerateTitle: (BuildContext context) => 'fix control',
+        builder: (BuildContext context, Widget? _) => HTheme(
+          tokens: HTokens.dark,
+          child: Align(
+            alignment: Alignment.topLeft,
+            child: SizedBox(width: 480, child: child),
+          ),
+        ),
       ),
-    ),
-  ),
-);
+    );
 
 /// Fängt ab, was in die Zwischenablage geschrieben wird.
 List<String> captureClipboard(WidgetTester tester) {
@@ -542,12 +552,224 @@ void main() {
     });
   });
 
+  group('write_env', () {
+    const FixAction caFix = FixAction.setEnv(
+      key: 'CURL_CA_BUNDLE',
+      value: sandboxCaPath,
+    );
+
+    testWidgets('the_button_hands_the_name_and_the_ca_path_to_the_writer', (
+      WidgetTester tester,
+    ) async {
+      // Rot, sobald der Knopf fehlt oder den Wert unterwegs verändert.
+      final List<(String, String)> calls = <(String, String)>[];
+      await tester.pumpWidget(
+        host(
+          FixControl(
+            fix: caFix,
+            writeEnv: (String key, String value) async {
+              calls.add((key, value));
+              return null;
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Write to config.toml'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('setup-fix-write-env')));
+      await tester.pumpAndSettle();
+
+      expect(calls, <(String, String)>[
+        ('CURL_CA_BUNDLE', '/etc/humanitl/ca.crt'),
+      ]);
+    });
+
+    testWidgets('the_default_writes_sandbox_env_through_the_client', (
+      WidgetTester tester,
+    ) async {
+      // Ohne eingesetzte Fassung geht der Klick über `envWriterProvider` an
+      // `DaemonClient.setConfig`. Der Fake hält die Tür so schmal wie der
+      // Daemon: Ohne das Präfix `sandbox.env.` lehnte er ab, und die Liste
+      // bliebe leer. Rot, sobald der Provider das Präfix verliert.
+      final FakeDaemonClient client = FakeDaemonClient.empty();
+      await tester.pumpWidget(
+        host(
+          const FixControl(fix: caFix),
+          overrides: <Override>[daemonClientProvider.overrideWithValue(client)],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('setup-fix-write-env')));
+      await tester.pumpAndSettle();
+
+      expect(client.configWrites, <(String, String)>[
+        ('sandbox.env.CURL_CA_BUNDLE', '/etc/humanitl/ca.crt'),
+      ]);
+      expect(find.byKey(const Key('setup-fix-write-env-done')), findsOneWidget);
+      expect(find.byKey(const Key('setup-fix-write-env-failed')), findsNothing);
+    });
+
+    testWidgets('a_refusal_of_the_client_arrives_as_its_why', (
+      WidgetTester tester,
+    ) async {
+      // Die Ausnahme des Clients wird zum Befund und nicht verschluckt; der
+      // Knopf bleibt an, damit man es noch einmal versuchen kann.
+      final FakeDaemonClient client = FakeDaemonClient.empty()
+        ..setConfigFailure = const Diagnostic(
+          code: 'CONFIG_014',
+          severity: Severity.error,
+          why: 'the daemon takes only the certificate path for now',
+        );
+      await tester.pumpWidget(
+        host(
+          const FixControl(fix: caFix),
+          overrides: <Override>[daemonClientProvider.overrideWithValue(client)],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('setup-fix-write-env')));
+      await tester.pumpAndSettle();
+
+      expect(client.configWrites, isEmpty);
+      expect(
+        find.text(
+          'Not written: the daemon takes only the certificate path for now',
+        ),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('setup-fix-write-env-done')), findsNothing);
+      expect(
+        tester
+            .widget<HButton>(find.byKey(const Key('setup-fix-write-env')))
+            .onPressed,
+        isNotNull,
+      );
+    });
+
+    testWidgets('success_says_where_it_went_and_turns_the_button_off', (
+      WidgetTester tester,
+    ) async {
+      // Solange der Auftrag läuft, ist der Knopf aus, und ein zweiter Klick
+      // schreibt nicht ein zweites Mal; danach bleibt er aus. Die Kopierzeile
+      // für die laufende Sitzung bleibt stehen.
+      final Completer<Diagnostic?> pending = Completer<Diagnostic?>();
+      int calls = 0;
+      await tester.pumpWidget(
+        host(
+          FixControl(
+            fix: caFix,
+            writeEnv: (String key, String value) {
+              calls++;
+              return pending.future;
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      HButton button() =>
+          tester.widget<HButton>(find.byKey(const Key('setup-fix-write-env')));
+
+      await tester.tap(find.byKey(const Key('setup-fix-write-env')));
+      await tester.pump();
+      expect(find.text('Writing…'), findsOneWidget);
+      expect(button().onPressed, isNull);
+      await tester.tap(
+        find.byKey(const Key('setup-fix-write-env')),
+        warnIfMissed: false,
+      );
+      await tester.pump();
+      expect(calls, 1);
+
+      pending.complete(null);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text(
+          'Written to config.toml. Sessions started from now on get '
+          'CURL_CA_BUNDLE, unless a profile brings its own sandbox.env.',
+        ),
+        findsOneWidget,
+      );
+      expect(button().onPressed, isNull);
+      expect(find.text('Write to config.toml'), findsOneWidget);
+      expect(
+        find.text('export CURL_CA_BUNDLE=/etc/humanitl/ca.crt'),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('setup-fix-write-env-failed')), findsNothing);
+    });
+
+    testWidgets('failure_shows_the_why_and_nothing_claims_success', (
+      WidgetTester tester,
+    ) async {
+      await tester.pumpWidget(
+        host(
+          FixControl(
+            fix: caFix,
+            writeEnv: (String key, String value) async => const Diagnostic(
+              code: 'CONFIG_015',
+              severity: Severity.error,
+              why: 'sandbox.env in config.toml is not a table',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('setup-fix-write-env')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('setup-fix-write-env-failed')),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Not written: sandbox.env in config.toml is not a table'),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('setup-fix-write-env-done')), findsNothing);
+    });
+
+    testWidgets('another_value_gets_no_write_button', (
+      WidgetTester tester,
+    ) async {
+      // `XDG_RUNTIME_DIR` meint die Umgebung des Daemons, nicht die der
+      // Sandbox, und `SetConfig` lehnte den Wert ohnehin ab. Die Kopierzeile
+      // bleibt. Rot, sobald der Knopf ohne Blick auf den Wert erscheint.
+      await tester.pumpWidget(
+        host(
+          FixControl(
+            fix: const FixAction.setEnv(
+              key: 'XDG_RUNTIME_DIR',
+              value: '/run/user/1000',
+            ),
+            writeEnv: (String key, String value) async =>
+                throw StateError('must not write'),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('setup-fix-write-env')), findsNothing);
+      expect(find.text('Write to config.toml'), findsNothing);
+      expect(
+        find.text('export XDG_RUNTIME_DIR=/run/user/1000'),
+        findsOneWidget,
+      );
+    });
+  });
+
   testWidgets('change_setting_stays_a_badge_without_a_button', (
     WidgetTester tester,
   ) async {
-    // `SetConfig` ist bis HUM-069 `unimplemented`. Ein Knopf hier wäre ein
-    // Versprechen ohne Wirkung; das Abzeichen sagt nur, was zu tun ist.
-    // Rot, sobald jemand dieser Aktion einen Knopf gibt, bevor der RPC steht.
+    // `SetConfig` nimmt bis HUM-069 nur die CA-Variable unter `sandbox.env`
+    // an, keinen allgemeinen Schlüssel. Ein Knopf hier wäre ein Versprechen
+    // ohne Wirkung; das Abzeichen sagt nur, was zu tun ist. Rot, sobald
+    // jemand dieser Aktion einen Knopf gibt, bevor der RPC sie annimmt.
     await tester.pumpWidget(
       host(
         const FixControl(

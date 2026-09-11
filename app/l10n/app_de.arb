@@ -660,5 +660,9 @@
   "setupStartRefused": "Der Start kam nicht hoch, es läuft also kein Agent. An den vier Zeilen hat sich nichts geändert; der Befund steht darunter.",
   "interceptDiagnosticOpenFlow": "Anfrage öffnen",
   "historyRevealFailedTitle": "Die Anfrage ließ sich nicht öffnen",
-  "historyRevealFailedDismiss": "Ausblenden"
+  "historyRevealFailedDismiss": "Ausblenden",
+  "setupFixWriteEnv": "In config.toml schreiben",
+  "setupFixWriteEnvRunning": "Wird geschrieben …",
+  "setupFixWriteEnvDone": "In config.toml geschrieben. Sitzungen, die ab jetzt starten, bekommen {key}, außer ein Profil bringt ein eigenes sandbox.env mit.",
+  "setupFixWriteEnvFailed": "Nicht geschrieben: {why}"
 }
