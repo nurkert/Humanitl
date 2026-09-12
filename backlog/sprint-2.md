@@ -2282,7 +2282,7 @@ Schritt 10 zählt damit zwei Behauptungen mehr (Name, Katalogzeile); HAR geschri
 - [ ] (HUM-097) `jq -r '.log.entries | length' "$M2_HAR"` liefert 17, die Datei ist nicht leer.
 - [ ] (HUM-097) Ein Lauf ohne `app/integration_test/m2_first_decision_test.dart` (Datei versetzen, danach zurück) endet mit 1 und der Meldung, dass sie fehlt, nicht mehr mit 0.
 - [ ] `grep -n 'bis HUM-031 den Katalog liefert' backlog/CONVENTIONS.md` liefert null Treffer, und 4.22 führt die Oberflächen-Hälfte von HUM-036 nicht mehr als ausstehend.
-- [ ] `grep -n 'Allow/Edit/Block' BACKLOG.md` liefert null Treffer; die M2-Zeile nennt den Editor als M4 mit Verweis auf HUM-047.
+- [x] `grep -n 'Allow/Edit/Block' BACKLOG.md` liefert null Treffer; die M2-Zeile nennt den Editor als M4 mit Verweis auf HUM-047. (Gemessen 2026-09-12: `grep -n 'Allow/Edit/Block' BACKLOG.md` ist leer, und Zeile 395 liest „Allow/Block (Editor ab M4, HUM-047)".)
 - [ ] `make check` grün.
 
 ### Stand (2026-09-04): Größe XL, die e2e-Hälfte gehört HUM-097, der Gruppenkopf hat keinen Draht
