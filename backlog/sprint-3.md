@@ -344,10 +344,10 @@ Metrik-Test: Sandbox-Start mit OpenCode-Adapter gegen Fake-LLM (HUM-046 liefert 
 
 ### Akzeptanzkriterien
 - [x] `humanitl rules list` zeigt die Regeln mit `bundled`. **Zwei Angaben des Kriteriums sind überholt, gemessen am 2026-09-06 gegen einen laufenden Daemon:** Es sind **zehn** statt acht — der Adapter aus HUM-037 bringt `models.opencode.ai` und `opencode.ai/share/**` mit —, und sie stehen **hinter** den Nutzerregeln statt davor. Die Reihenfolge ist die spätere Entscheidung aus HUM-027 und steht in `backlog/CONVENTIONS.md` 4.5: Durchreiche zum Sprachmodell, Sitzungsregeln, Nutzerregeln, mitgelieferte. Eine eigene Regel muss eine mitgelieferte überstimmen können, ohne sie zu löschen. Gemessen: `humanitl rules list` sagt „no rules of your own; 10 bundled rules also apply", `--all` zeigt sie mit Herkunft `bundled` auf den Positionen 1 bis 10, und eine eigene Regel erscheint als eigene Gruppe darüber.
-- [x] Rules-Screen zeigt Badge „Bundled" und „Deaktivieren" statt „Löschen" für diese Regeln. Abzeichen, Schloss, eigener Block und der fehlende Papierkorb stehen; der Schalter „Deaktivieren" fehlt, weil die Dart-`Rule` das Feld `disabled` nicht kennt.
+- [x] Rules-Screen zeigt Badge „Bundled" und „Deaktivieren" statt „Löschen" für diese Regeln. Abzeichen, Schloss, eigener Block und der fehlende Papierkorb stehen; den Schalter „Deaktivieren" hat die Oberflächen-Hälfte HUM-105 nachgeliefert (gemergt als `8953dc8`). Nachgesehen am 2026-09-12: `disabled` in `app/lib/core/domain/rule.dart:83`, die Zeile in `app/lib/core/ipc/convert.dart:459`, `setRuleDisabled` in `DaemonClient`, `GrpcDaemonClient` und `FakeDaemonClient`, `_DisableSwitch` in `app/lib/features/rules/widgets/rule_row.dart:269`.
 - [x] Das Rauschbudget des ersten Starts ist gemessen und grün im Job, der den M3-Lauf fährt. **Anders gebaut als die Spezifikation es nannte, und zwar dort, wo es etwas misst:** Ein Rust-Test hinter dem Feature `agent-e2e` hätte einen Sandbox-Start mit echtem OpenCode gebraucht, und den gibt es auf keinem Läufer; der Job heißt außerdem `e2e-agent` und fährt `tests/e2e/run.sh`. Das Budget steht deshalb als Schritt 5b im M3-Lauf: Der Skript-Agent ruft die vier Adressen ab, die ein frisch gestartetes OpenCode von sich aus abruft — Release-Check auf GitHub, Telemetrie, Modellkatalog der eigenen Adresse, Freigabe-Seite —, und der Lauf verlangt für jede `403` samt Entscheidung einer mitgelieferten Regel und danach eine leere Warteschlange. Gemessen am 2026-09-06: 105 Zusicherungen, `state:held` = 0, sechs von neun Flüssen von einer Regel entschieden. Der `ask` auf `registry.npmjs.org` ist mit Absicht nicht im Bündel: Er hielte zwanzig Sekunden auf eine Entscheidung, die das Skript danach treffen müsste; null ist die schärfere Zahl als das erlaubte `held <= 1`.
 
-### Stand (2026-09-04): Regelsatz und Kommandozeile stehen, Reihenfolge offen (HUM-104), Oberfläche halb
+### Stand (2026-09-04, Nachtrag 2026-09-12): Regelsatz und Kommandozeile stehen, Reihenfolge entschieden (HUM-104), Oberfläche vollständig (HUM-105)
 
 Umgesetzt und gemessen ist alles, was ohne die Dart-Seite prüfbar ist:
 
@@ -412,25 +412,33 @@ gerufen.
 
 **Offen und ausdrücklich nicht gedeckt:**
 
-- **Der Schalter „Deaktivieren" im Rules-Screen.** Der Daemon kann es, die
-  Oberfläche nicht: `app/lib/core/domain/rule.dart` kennt kein `disabled`,
-  `app/lib/core/ipc/convert.dart` liest es nicht aus der Proto, und
-  `DaemonClient` hat keine Operation dafür. Solange das fehlt, zeichnet der
-  Bildschirm eine abgeschaltete mitgelieferte Regel wie eine wirksame und
-  behauptet damit etwas, das nicht stimmt (CONVENTIONS 4.13). Es fehlen: ein
-  Feld in `Rule`, eine Zeile in `RuleToDomain`, eine Methode
-  `setRuleDisabled` in `DaemonClient`, `GrpcDaemonClient` und
-  `FakeDaemonClient`, dann der Schalter in `rule_row.dart` samt seinen
-  ARB-Schlüsseln. Das ist **HUM-105** (`BACKLOG.md`, Sprint-2-Tabelle), angelegt am
-  2026-09-04.
+- **Der Schalter „Deaktivieren" im Rules-Screen — seit HUM-105 nachgeliefert,
+  dieser Punkt ist zu.** Als dieser Abschnitt entstand, kannte
+  `app/lib/core/domain/rule.dart` kein `disabled`, `app/lib/core/ipc/convert.dart`
+  las es nicht aus der Proto, und `DaemonClient` hatte keine Operation dafür;
+  solange das fehlte, zeichnete der Bildschirm eine abgeschaltete mitgelieferte
+  Regel wie eine wirksame (CONVENTIONS 4.13). HUM-105 (`backlog/sprint-2.md`,
+  gemergt als `8953dc8`) hat alles Genannte gebaut. Nachgesehen am 2026-09-12:
+  das Feld in `rule.dart:83`, die Zeile in `convert.dart:459`, `setRuleDisabled`
+  in `DaemonClient`, `GrpcDaemonClient` und `FakeDaemonClient`, `_DisableSwitch`
+  in `rule_row.dart:269` samt ARB-Schlüsseln.
 - **`startup_noise_budget`.** Der Metriktest braucht einen Endpunkt, der
   `/v1/models` beantwortet; den liefert HUM-046. Bis dahin gibt es weder
   `daemon/crates/sandbox/tests/startup_noise.rs` noch das Feature `agent-e2e`
-  noch einen CI-Job dieses Namens.
+  noch einen CI-Job dieses Namens. Nachgesehen am 2026-09-12: Das gilt wörtlich
+  weiter — keine Datei `startup_noise*` im Baum, kein Abschnitt `[features]` in
+  `daemon/crates/sandbox/Cargo.toml`, kein Job dieses Namens in
+  `.github/workflows/ci.yml`. Der Test entsteht auch nicht mehr: Das Rauschbudget
+  steht seit dem 2026-09-06 als Schritt 5b des M3-Laufs im Job `e2e-agent`
+  (drittes Akzeptanzkriterium oben), und deshalb bleiben die drei genannten
+  Stellen absichtlich leer.
 
-**Die Reihenfolge ist keine falsche Anforderung, sondern eine offene
-Entscheidung. Sie wird in HUM-104 getroffen, und bis dahin bleibt das
-Kästchen leer.** Das Repository widerspricht sich über genau diese Frage:
+**Die Reihenfolge war keine falsche Anforderung, sondern eine offene
+Entscheidung. Sie ist in HUM-104 getroffen — vier Ränge in
+`backlog/CONVENTIONS.md` 4.5 —, und das Kästchen ist seit dem 2026-09-06
+getickt (Commit 931021d, gemessen an einem laufenden Daemon).** Was folgt, ist
+die Vorgeschichte dieser Entscheidung: Das Repository widersprach sich über
+genau diese Frage:
 
 - **Für „mitgeliefert zuletzt":** HUM-027 (`backlog/sprint-2.md`) legt
   Sitzung, Nutzer, mitgeliefert fest, damit eine eigene Regel eine
