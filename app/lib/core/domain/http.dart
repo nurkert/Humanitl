@@ -116,6 +116,13 @@ abstract class Header with _$Header {
 
 /// Reference to a body. Bodies never travel inline in events; the content
 /// comes through `GetBody`.
+///
+/// `contentEncoding` is what lies on the recorded bytes, empty for identity;
+/// the daemon fills it in `FlowDetail` from the headers of the message the
+/// body belongs to. A client hands it back in `GetBody` together with
+/// `decoded` and gets the unpacked bytes, which is the byte space the findings
+/// of the daemon point into (HUM-119). `size` counts the recorded, still
+/// packed bytes either way.
 @freezed
 abstract class BodyRef with _$BodyRef {
   /// Creates a body reference.
@@ -124,12 +131,24 @@ abstract class BodyRef with _$BodyRef {
     required int size,
     @Default(false) bool truncated,
     @Default('') String contentType,
+    @Default('') String contentEncoding,
+    @Default(false) bool decoded,
   }) = _BodyRef;
 
   const BodyRef._();
 
   /// True when the body is empty and there is nothing to fetch.
   bool get isEmpty => size == 0;
+
+  /// The same reference, asking `GetBody` to take [contentEncoding] off.
+  ///
+  /// [encoding] wins when this reference carries none: a detail built by hand
+  /// or read from an older daemon has the value only in its headers, and
+  /// asking without it would hand back packed bytes.
+  BodyRef asking(String encoding) => copyWith(
+    decoded: true,
+    contentEncoding: contentEncoding.isEmpty ? encoding : contentEncoding,
+  );
 }
 
 /// A complete request without its body content.

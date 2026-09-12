@@ -99,7 +99,20 @@ abstract class DaemonClient {
   Future<FlowDetail> getFlow(FlowId id);
 
   /// `GetBody`: the content behind a body reference, in chunks.
+  ///
+  /// The bytes as the recording holds them. Use [getBodyChunks] when the
+  /// reference asks the daemon to unpack: only a chunk says what is still on
+  /// the bytes that arrive.
   Stream<Uint8List> getBody(BodyRef ref);
+
+  /// `GetBody`, with what each chunk says about the encoding.
+  ///
+  /// The same RPC as [getBody]; the difference is only that the answer keeps
+  /// `BodyChunk.encoding_left`. A reference built with [BodyRef.asking] comes
+  /// back unpacked and with an empty [BodyChunk.encodingLeft]; one whose
+  /// encoding the daemon cannot take off comes back as it was recorded, with
+  /// the name of that encoding (HUM-119).
+  Stream<BodyChunk> getBodyChunks(BodyRef ref);
 
   /// `Sandbox(Status)`: what the agent gets right now.
   ///
@@ -304,6 +317,37 @@ bool _same<T>(List<T> a, List<T> b) {
     }
   }
   return true;
+}
+
+/// One chunk of `GetBody`.
+///
+/// [encodingLeft] is the same in every chunk of one answer: empty when the
+/// bytes are what the findings of the daemon point into — either nothing was
+/// packed or the daemon took the packing off — and otherwise the name of the
+/// encoding that is still on them, such as `zstd` or the chain `gzip, br`
+/// (HUM-119). A view that places a finding must look at it: a span into
+/// unpacked bytes lands anywhere in packed ones.
+final class BodyChunk {
+  /// Creates a chunk.
+  const BodyChunk({
+    required this.data,
+    required this.last,
+    this.encodingLeft = '',
+  });
+
+  /// The bytes of this chunk.
+  final Uint8List data;
+
+  /// True for the chunk that ends the body (`BodyChunk.last`).
+  ///
+  /// Required, not defaulted: a stream that stops without one stopped in the
+  /// middle, and a client that forgets to say so turns a body cut short on
+  /// the wire into a body that merely looks complete. Every answer of the
+  /// daemon carries exactly one, an empty body included.
+  final bool last;
+
+  /// The encoding still on [data], empty when there is none.
+  final String encodingLeft;
 }
 
 /// A daemon call failed. [diagnostic] says why in a form a person can read.

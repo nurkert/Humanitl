@@ -9,6 +9,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/body/body_decode.dart';
 import 'package:humanitl/core/body/body_kind.dart';
@@ -21,10 +23,28 @@ import 'package:humanitl/core/body/hex_view.dart';
 import 'package:humanitl/core/body/json_tree_view.dart';
 import 'package:humanitl/core/body/raw_view.dart';
 import 'package:humanitl/core/domain/domain.dart';
+import 'package:humanitl/core/ipc/client_providers.dart';
+import 'package:humanitl/core/ipc/daemon_client.dart';
+import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/hover_label.dart';
 import 'package:humanitl/core/ui/ui.dart';
+import 'package:humanitl/l10n/l10n.dart';
 
 import 'harness.dart';
+
+/// Ein Fake, der jeden `GetBody`-Aufruf mitschreibt.
+///
+/// Damit lässt sich zählen, was sonst niemand sieht: wie oft die Karte
+/// dieselben Bytes über die Leitung holt.
+class _CountingClient extends FakeDaemonClient {
+  final List<BodyRef> asked = <BodyRef>[];
+
+  @override
+  Stream<BodyChunk> getBodyChunks(BodyRef ref) {
+    asked.add(ref);
+    return super.getBodyChunks(ref);
+  }
+}
 
 /// Ein JSON-Rumpf mit drei Funden an bekannten Stellen.
 ({ParsedBody parsed, Uint8List bytes}) jsonWithFindings() {
@@ -133,6 +153,81 @@ void main() {
     });
   });
 
+  group('one body, one fetch', () {
+    testWidgets('the card asks for the same body once, unpacked', (
+      WidgetTester tester,
+    ) async {
+      // Vor der Korrektur fragte die Karte zweimal: `parsedBodyProvider` mit
+      // `decoded`, die Hex-Ansicht daneben mit dem rohen Verweis. Weil der
+      // Cache-Schlüssel `decoded` trägt, war das ein zweiter Treffer über die
+      // Leitung je angesehenem Rumpf -- und der Hinweis auf den
+      // aufgezeichneten Präfix las die Länge des falschen Abrufs.
+      final _CountingClient client = _CountingClient();
+      addTearDown(client.close);
+      final Uint8List wire = Uint8List.fromList(<int>[1, 2, 3, 4, 5, 6, 7, 8]);
+      final Uint8List plain = bytesOf('{"note": "unpacked by the daemon"}');
+      final BodyRef body = BodyRef(
+        sha256: List<int>.filled(32, 17),
+        size: wire.length,
+        contentType: 'application/json',
+        contentEncoding: 'br',
+      );
+      final String key = body.sha256
+          .map((int byte) => byte.toRadixString(16).padLeft(2, '0'))
+          .join();
+      client.state.bodies[key] = wire;
+      client.state.unpacked[key] = plain;
+
+      await tester.binding.setSurfaceSize(const Size(700, 600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: <Override>[daemonClientProvider.overrideWithValue(client)],
+          child: WidgetsApp(
+            color: HTokens.dark.colors.bg0,
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            builder: (BuildContext context, Widget? _) => HTheme(
+              tokens: HTokens.dark,
+              child: Overlay(
+                initialEntries: <OverlayEntry>[
+                  OverlayEntry(
+                    builder: (BuildContext context) => BodyView(
+                      flowId: const FlowId(
+                        '018f0001-0000-7000-8000-0000000a0000',
+                      ),
+                      body: body,
+                      headers: <Header>[
+                        Header(
+                          name: 'content-encoding',
+                          value: utf8.encode('br'),
+                        ),
+                      ],
+                      findings: const <Finding>[],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      for (int i = 0; i < 6; i++) {
+        await tester.pump(const Duration(milliseconds: 200));
+      }
+
+      expect(client.asked, hasLength(1), reason: 'one body, one GetBody');
+      expect(client.asked.single.decoded, isTrue);
+      expect(client.asked.single.contentEncoding, 'br');
+      // Und was auf dem Schirm steht, ist der entpackte Inhalt.
+      expect(find.byKey(const Key('body-tree')), findsOneWidget);
+      expect(
+        find.textContaining('unpacked by the daemon', findRichText: true),
+        findsWidgets,
+      );
+    });
+  });
+
   group('what the notes say', () {
     test('a lying content type is named, over the whole way', () {
       // Nicht `disputedType: true` einsetzen: geprüft wird der Weg von den
@@ -156,7 +251,6 @@ void main() {
           size: png.length,
           contentType: 'application/json',
         ),
-        '',
       );
       expect(load.kind, BodyKind.binary);
       expect(load.disputedType, isTrue);

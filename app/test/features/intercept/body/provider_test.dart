@@ -1,76 +1,100 @@
-// Der Weg vom Verweis zur Ansicht: holen, auspacken, merken -- und die Frage,
+// Der Weg vom Verweis zur Ansicht: fragen, einordnen, merken -- und die Frage,
 // ob diese Bytes überhaupt die sind, auf denen der Daemon gesucht hat.
-// Geprüft an den Strömen, die diesen Weg täuschen sollen: eine Bombe, ein
-// abgeschnittenes gzip, ein zweigliedriges gzip, eine Kodierung, die es hier
-// nicht gibt, und Magic Bytes ohne Kopfzeile.
+//
+// Seit HUM-119 packt die App nicht mehr selbst aus. Sie fragt `GetBody` mit
+// `decoded = true` und liest `BodyChunk.encoding_left`: leer heißt „das ist der
+// Byteraum der Funde", ein Name heißt „hier liegt noch etwas darauf". Geprüft
+// wird deshalb nicht mehr ein Entpacker, sondern dass genau diese Auskunft
+// gefragt, weitergereicht und geglaubt wird. Der Entpacker selbst steht im
+// Daemon und wird dort geprüft (`daemon/crates/ipc/tests/get_body.rs`).
 
 import 'dart:convert';
-import 'dart:io';
+import 'dart:io' show gzip;
 import 'dart:typed_data';
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/body/body_decode.dart';
 import 'package:humanitl/core/body/body_kind.dart';
 import 'package:humanitl/core/body/body_parser.dart';
+import 'package:humanitl/core/body/body_providers.dart';
 import 'package:humanitl/core/body/body_view.dart';
-import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/body/flow_body_provider.dart';
+import 'package:humanitl/core/domain/domain.dart';
+import 'package:humanitl/core/ipc/client_providers.dart';
+import 'package:humanitl/core/ipc/daemon_client.dart';
+import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 
 import 'harness.dart';
 
-BodyRef refFor(int size, {String contentType = '', bool truncated = false}) =>
-    BodyRef(
-      sha256: List<int>.filled(32, size % 251),
-      size: size,
-      contentType: contentType,
-      truncated: truncated,
-    );
+BodyRef refFor(
+  int size, {
+  String contentType = '',
+  bool truncated = false,
+  String contentEncoding = '',
+}) => BodyRef(
+  sha256: List<int>.filled(32, size % 251),
+  size: size,
+  contentType: contentType,
+  truncated: truncated,
+  contentEncoding: contentEncoding,
+);
 
-Uint8List packed(String text) =>
-    Uint8List.fromList(gzip.encode(utf8.encode(text)));
+/// Ein Fake, dessen `GetBody` mitten im Strom aufhört.
+///
+/// Kein Stück trägt `last`; der Daemon täte das nur, wenn die Verbindung
+/// abbricht. Genau dann darf die Ansicht den Rumpf nicht für vollständig
+/// halten.
+class _EndlessClient extends FakeDaemonClient {
+  @override
+  Stream<BodyChunk> getBodyChunks(BodyRef ref) => Stream<BodyChunk>.value(
+    BodyChunk(
+      data: bytesOf('{"half": "arrived and then nothing"}'),
+      last: false,
+    ),
+  );
+}
 
-Uint8List cut(Uint8List bytes, int off) =>
-    Uint8List.sublistView(bytes, 0, bytes.length - off);
+/// Der Schlüssel, unter dem der Fake die Bytes zu [reference] hält.
+String keyOf(BodyRef reference) => reference.sha256
+    .map((int byte) => byte.toRadixString(16).padLeft(2, '0'))
+    .join();
 
 void main() {
-  group('what the header says decides', () {
-    test('a gzip body is unpacked when the header says so', () {
-      final Uint8List body = packed('{"a":1}');
+  group('what the daemon says about the bytes decides', () {
+    test('bytes the daemon unpacked carry the findings', () {
+      // `encoding_left` ist leer: Der Daemon hat `br` abgenommen, und der
+      // Bereich des Fundes zeigt in genau diese Bytes.
+      const String plain = '{"email":"a@b.de"}';
+      final int start = plain.indexOf('a@b.de');
       final BodyLoad load = buildBodyLoad(
-        RawBody(bytes: body),
-        refFor(body.length, contentType: 'application/json'),
-        'gzip',
+        RawBody(bytes: bytesOf(plain)),
+        refFor(85, contentType: 'application/json', contentEncoding: 'br'),
       );
+      expect(load.aligned, isTrue);
       expect(load.decompressed, isTrue);
-      expect(load.aligned, isTrue);
-      expect(utf8.decode(load.bytes), '{"a":1}');
-      expect(load.kind, BodyKind.json);
       expect(load.problem, isNull);
+      expect(load.kind, BodyKind.json);
+      final ParsedBody parsed = parseLoadedBody(load, <Finding>[
+        bodyFinding(start: start, end: start + 6),
+      ]);
+      expect(parsed.findingsPlaced, isTrue);
+      expect(parsed.placedFindings, hasLength(1));
     });
 
-    test('magic bytes without a header are left alone', () {
-      // Der Daemon durchsucht die Rohbytes, wenn die Anfrage nichts ankündigt.
-      // Wer hier trotzdem auspackt, zeichnet Fundstellen aus einem Byteraum,
-      // den der Daemon nie gesehen hat.
-      final Uint8List body = packed('{"a":1}');
-      final BodyLoad load = buildBodyLoad(
-        RawBody(bytes: body),
-        refFor(body.length),
-        '',
-      );
-      expect(load.decompressed, isFalse);
-      expect(load.aligned, isTrue);
-      expect(load.bytes, body);
-    });
-
-    test('an encoding this view cannot unpack places no finding', () {
+    test('unsupported_encoding_names_itself', () {
+      // `zstd` bleibt auf den Bytes liegen. Dann werden die Rohbytes gezeigt,
+      // der Fund behält seinen Namen und verliert seine Stelle, und der Satz
+      // nennt die Kodierung.
       final Uint8List body = Uint8List.fromList(<int>[1, 2, 3, 4, 5, 6]);
       final BodyLoad load = buildBodyLoad(
-        RawBody(bytes: body),
-        refFor(body.length, contentType: 'application/json'),
-        'br',
+        RawBody(bytes: body, encodingLeft: 'zstd'),
+        refFor(6, contentType: 'application/json', contentEncoding: 'zstd'),
       );
       expect(load.aligned, isFalse);
+      expect(load.decompressed, isFalse);
+      expect(load.encoding, 'zstd');
       expect(load.problem, BodyProblem.undecodedEncoding);
       expect(load.bytes, body);
       final ParsedBody parsed = parseLoadedBody(load, <Finding>[
@@ -81,23 +105,101 @@ void main() {
       for (final BodyPane pane in BodyPane.values) {
         expect(unmarkedFindings(parsed, pane, load.bytes.length), <int>{0});
       }
-      expect(
-        bodyNotes(parsed, BodyPane.hex, load.bytes.length, english),
-        contains(english.interceptBodyFindingsNotPlaced(1)),
+      final List<String> notes = bodyNotes(
+        parsed,
+        BodyPane.hex,
+        load.bytes.length,
+        english,
       );
+      expect(notes, contains(english.interceptBodyEncodingUndecoded('zstd')));
+      expect(notes, contains(english.interceptBodyFindingsNotPlaced(1)));
     });
 
-    test('a chain of encodings counts as unsupported', () {
-      expect(encodingOf('gzip, br'), BodyEncoding.unsupported);
-      expect(encodingOf('GZIP'), BodyEncoding.unsupported);
-      expect(encodingOf('gzip'), BodyEncoding.gzip);
-      expect(encodingOf('x-gzip'), BodyEncoding.gzip);
-      expect(encodingOf('deflate'), BodyEncoding.zlib);
-      expect(encodingOf(''), BodyEncoding.identity);
-      expect(encodingOf('identity'), BodyEncoding.identity);
+    test('a chain keeps its whole name', () {
+      final BodyLoad load = buildBodyLoad(
+        RawBody(bytes: bytesOf('packed twice'), encodingLeft: 'gzip, br'),
+        refFor(12, contentEncoding: 'gzip, br'),
+      );
+      expect(load.encoding, 'gzip, br');
+      expect(load.aligned, isFalse);
     });
 
-    test('the header is read case-insensitively from the request', () {
+    test('magic bytes without an encoding are left alone', () {
+      // Der Daemon durchsucht die Rohbytes, wenn die Anfrage nichts
+      // ankündigt. Wer hier trotzdem etwas vermutete, zeichnete Fundstellen
+      // aus einem Byteraum, den der Daemon nie gesehen hat.
+      final Uint8List body = Uint8List.fromList(<int>[
+        0x1f,
+        0x8b,
+        0x08,
+        ...List<int>.filled(32, 0),
+      ]);
+      final BodyLoad load = buildBodyLoad(
+        RawBody(bytes: body),
+        refFor(body.length),
+      );
+      expect(load.aligned, isTrue);
+      expect(load.decompressed, isFalse);
+      expect(load.bytes, body);
+    });
+
+    test('a body still packed is not called a lying content type', () {
+      // Vorher las der Mensch hier "content type says text, bytes are not
+      // text" -- eine falsche Erklärung für ein echtes Problem.
+      final Uint8List body = Uint8List.fromList(<int>[
+        0x28,
+        0xb5,
+        0x2f,
+        0xfd,
+        ...List<int>.generate(64, (int i) => (i * 13) % 256),
+      ]);
+      final BodyLoad load = buildBodyLoad(
+        RawBody(bytes: body, encodingLeft: 'zstd'),
+        refFor(body.length, contentType: 'text/plain', contentEncoding: 'zstd'),
+      );
+      expect(load.disputedType, isFalse);
+      expect(load.problem, BodyProblem.undecodedEncoding);
+    });
+  });
+
+  group('the request the provider sends', () {
+    test('it always asks the daemon to unpack', () {
+      final BodyRef reference = refFor(
+        85,
+        contentType: 'application/json',
+        contentEncoding: 'br',
+      );
+      final BodyRef asked = reference.asking('br');
+      expect(asked.decoded, isTrue);
+      expect(asked.contentEncoding, 'br');
+    });
+
+    test('a reference without the field falls back to the headers', () {
+      // Ein Detail aus einem älteren Daemon oder eines, das ein Test von Hand
+      // gebaut hat: Ohne diesen Rückfall käme der gepackte Rumpf zurück.
+      final BodySource source = BodySource.of(
+        refFor(40, contentType: 'application/json'),
+        headers: <Header>[
+          Header(name: 'Content-Encoding', value: ' GZIP '.codeUnits),
+        ],
+        findings: const <Finding>[],
+      );
+      expect(source.encoding, 'gzip');
+      expect(source.reference.asking(source.encoding).contentEncoding, 'gzip');
+    });
+
+    test('the reference wins over the headers when it carries the field', () {
+      final BodySource source = BodySource.of(
+        refFor(40, contentEncoding: 'br'),
+        headers: <Header>[
+          Header(name: 'content-encoding', value: 'gzip'.codeUnits),
+        ],
+        findings: const <Finding>[],
+      );
+      expect(source.encoding, 'br');
+    });
+
+    test('the header is read case-insensitively', () {
       expect(
         contentEncodingOf(<Header>[
           Header(name: 'Content-Type', value: 'application/json'.codeUnits),
@@ -109,119 +211,228 @@ void main() {
     });
   });
 
-  group('a stream that does not end where it says', () {
-    test('a halved gzip is named, not passed off as complete', () {
-      // Der Dekodierer von Dart wirft dabei nicht: er liefert die Teilausgabe
-      // und meldet Erfolg. Erst der Abschluss verrät den Abbruch.
-      final Uint8List whole = packed('x' * 4096);
-      final Uint8List half = Uint8List.sublistView(whole, 0, whole.length ~/ 2);
-      final InflatedBody inflated = inflateBody(half, BodyEncoding.gzip);
-      expect(inflated.aborted, isTrue);
-      expect(inflated.aligned, isFalse);
-      final BodyLoad load = buildBodyLoad(
-        RawBody(bytes: half),
-        refFor(half.length, contentType: 'text/plain'),
-        'gzip',
+  group('the fake answers like the daemon', () {
+    test('a brotli body comes back as plain text', () async {
+      final FakeDaemonClient client = FakeDaemonClient();
+      addTearDown(client.close);
+      final BodyRef packed = refFor(0);
+      // Den Rumpf des Skripts von Hand ablegen, damit der Test nicht auf die
+      // Uhr des Abspielers wartet.
+      final Uint8List wire = Uint8List.fromList(<int>[1, 2, 3, 4]);
+      final Uint8List plain = bytesOf('{"token": "eyJhbGciOi"}');
+      final String key = keyOf(packed);
+      client.state.bodies[key] = wire;
+      client.state.unpacked[key] = plain;
+
+      final BodyRef reference = packed.copyWith(size: wire.length).asking('br');
+      final List<BodyChunk> chunks = await client
+          .getBodyChunks(reference)
+          .toList();
+      expect(chunks.single.encodingLeft, '');
+      expect(utf8.decode(chunks.single.data), '{"token": "eyJhbGciOi"}');
+    });
+
+    test('gzip is really unpacked, and zstd is not', () async {
+      final FakeDaemonClient client = FakeDaemonClient();
+      addTearDown(client.close);
+      final Uint8List packed = Uint8List.fromList(
+        gzip.encode(utf8.encode('{"a":1234567890}')),
+      );
+      final BodyRef reference = refFor(packed.length);
+      client.state.bodies[keyOf(reference)] = packed;
+
+      final List<BodyChunk> unpacked = await client
+          .getBodyChunks(reference.asking('gzip'))
+          .toList();
+      expect(unpacked.single.encodingLeft, '');
+      expect(utf8.decode(unpacked.single.data), '{"a":1234567890}');
+
+      final List<BodyChunk> left = await client
+          .getBodyChunks(reference.asking('zstd'))
+          .toList();
+      expect(left.single.encodingLeft, 'zstd');
+      expect(left.single.data, packed);
+    });
+
+    test('the provider hands the encoding of the chunk to the view', () async {
+      // Der Weg, den keine der Funktionen oben abdeckt: vom Stück über
+      // `flowBodyProvider` in `RawBody.encodingLeft`. Ohne ihn fragte die
+      // Ansicht zwar mit `decoded`, wüsste aber nie, dass etwas liegen blieb,
+      // und markierte in gepackten Bytes.
+      final FakeDaemonClient client = FakeDaemonClient();
+      addTearDown(client.close);
+      final Uint8List wire = Uint8List.fromList(<int>[9, 8, 7, 6, 5]);
+      final BodyRef reference = refFor(wire.length)
+          .copyWith(contentEncoding: 'zstd');
+      client.state.bodies[keyOf(reference)] = wire;
+
+      final ProviderContainer container = ProviderContainer(
+        overrides: <Override>[daemonClientProvider.overrideWithValue(client)],
+      );
+      addTearDown(container.dispose);
+      final RawBody raw = await container.read(
+        flowBodyProvider(reference.asking('zstd')).future,
+      );
+      expect(raw.encodingLeft, 'zstd');
+      expect(raw.bytes, wire);
+      expect(raw.short, isFalse, reason: 'the bytes are the recorded ones');
+      expect(buildBodyLoad(raw, reference).aligned, isFalse);
+    });
+
+    test('a body the daemon unpacked is never called short', () async {
+      // `size` zählt die gepackten Bytes. Ein Vergleich gegen die Länge des
+      // Entpackten meldete jeden gut komprimierten Rumpf als abgebrochen.
+      final FakeDaemonClient client = FakeDaemonClient();
+      addTearDown(client.close);
+      final String pad = List<String>.filled(512, 'a').join();
+      final Uint8List packed = Uint8List.fromList(
+        gzip.encode(utf8.encode('{"pad":"$pad"}')),
+      );
+      final BodyRef reference = refFor(packed.length)
+          .copyWith(contentEncoding: 'gzip');
+      client.state.bodies[keyOf(reference)] = packed;
+
+      final ProviderContainer container = ProviderContainer(
+        overrides: <Override>[daemonClientProvider.overrideWithValue(client)],
+      );
+      addTearDown(container.dispose);
+      final RawBody raw = await container.read(
+        flowBodyProvider(reference.asking('gzip')).future,
+      );
+      expect(raw.bytes.length, greaterThan(reference.size));
+      // Auf dem Inhalt bestehen, nicht nur auf der Länge: Rohe Bytes wären
+      // ebenfalls länger als nichts, und `short` bliebe auch dann falsch.
+      expect(utf8.decode(raw.bytes), '{"pad":"$pad"}');
+      expect(raw.encodingLeft, '');
+      expect(raw.short, isFalse);
+      expect(buildBodyLoad(raw, reference).problem, isNull);
+    });
+
+    test('a body that unpacks smaller than it arrived is not short', () async {
+      // Der Fall, den der Längenvergleich allein falsch entscheidet: brotli
+      // über einem kurzen Rumpf wird größer, nicht kleiner (38 Bytes Klartext
+      // wurden zu 42 gepackten). Wer nach dem Auspacken weiter gegen `size`
+      // misst, meldet hier einen Abbruch, den es nicht gab.
+      final FakeDaemonClient client = FakeDaemonClient();
+      addTearDown(client.close);
+      final Uint8List wire = Uint8List.fromList(
+        List<int>.generate(42, (int i) => (i * 7) % 256),
+      );
+      final Uint8List plain = bytesOf('{"token":"eyJhbGciOiJIUzI1NiJ9.e30.x"}');
+      expect(plain.length, 38);
+      expect(wire.length, greaterThan(plain.length));
+      final BodyRef reference = refFor(wire.length)
+          .copyWith(contentEncoding: 'br');
+      client.state.bodies[keyOf(reference)] = wire;
+      client.state.unpacked[keyOf(reference)] = plain;
+
+      final ProviderContainer container = ProviderContainer(
+        overrides: <Override>[daemonClientProvider.overrideWithValue(client)],
+      );
+      addTearDown(container.dispose);
+      final RawBody raw = await container.read(
+        flowBodyProvider(reference.asking('br')).future,
+      );
+      expect(raw.bytes, plain);
+      expect(raw.encodingLeft, '');
+      expect(raw.short, isFalse);
+      expect(buildBodyLoad(raw, reference).problem, isNull);
+    });
+
+    test('a recorded prefix is not called short, a cut stream is', () async {
+      // Beide Male kommen weniger Bytes an, als der Verweis nennt, und nur
+      // einer der beiden Fälle ist ein Abbruch. Die Unterscheidung trifft
+      // `flowBody`, nicht `buildBodyLoad`: Dort steht, was wirklich ankam.
+      final FakeDaemonClient client = FakeDaemonClient();
+      addTearDown(client.close);
+      final Uint8List prefix = bytesOf('0123456789');
+      final ProviderContainer container = ProviderContainer(
+        overrides: <Override>[daemonClientProvider.overrideWithValue(client)],
+      );
+      addTearDown(container.dispose);
+
+      final BodyRef recorded = refFor(100, truncated: true);
+      client.state.bodies[keyOf(recorded)] = prefix;
+      final RawBody kept = await container.read(
+        flowBodyProvider(recorded).future,
+      );
+      expect(kept.bytes, prefix);
+      expect(kept.short, isFalse, reason: 'the recording kept only a prefix');
+      expect(buildBodyLoad(kept, recorded).problem, isNull);
+
+      final BodyRef whole = refFor(101);
+      client.state.bodies[keyOf(whole)] = prefix;
+      final RawBody cut = await container.read(flowBodyProvider(whole).future);
+      expect(cut.short, isTrue, reason: 'less arrived than the reference says');
+      expect(buildBodyLoad(cut, whole).problem, BodyProblem.incomplete);
+    });
+
+    test('a packed body cut short on the wire is short too', () async {
+      // Der rohe Abruf: `decoded` ist nicht gesetzt, der Daemon schickt
+      // `encoding_left` leer, und trotzdem liegt `gzip` noch auf den Bytes.
+      // Wer daraus schließt, die Bytes seien entpackt, verschweigt hier den
+      // Abbruch.
+      final FakeDaemonClient client = FakeDaemonClient();
+      addTearDown(client.close);
+      final Uint8List half = Uint8List.fromList(<int>[0x1f, 0x8b, 0x08, 0x00]);
+      final BodyRef reference = refFor(4096).copyWith(contentEncoding: 'gzip');
+      client.state.bodies[keyOf(reference)] = half;
+
+      final ProviderContainer container = ProviderContainer(
+        overrides: <Override>[daemonClientProvider.overrideWithValue(client)],
+      );
+      addTearDown(container.dispose);
+      final RawBody raw = await container.read(
+        flowBodyProvider(reference).future,
       );
       expect(
-        load.problem,
-        anyOf(BodyProblem.truncatedStream, BodyProblem.undecodedEncoding),
+        raw.encodingLeft,
+        '',
+        reason: 'a raw fetch never claims an encoding',
       );
-      expect(load.aligned, isFalse);
+      expect(raw.short, isTrue);
     });
 
-    test('a gzip without its trailer is named', () {
-      final Uint8List whole = packed('x' * 4096);
-      final InflatedBody inflated = inflateBody(
-        cut(whole, 8),
-        BodyEncoding.gzip,
+    test('a stream that never ends is short, even unpacked', () async {
+      // Ein entpackter Rumpf lässt sich nicht mehr an `size` messen -- das
+      // zählt die gepackten Bytes. Die einzige Auskunft, die dann noch gilt,
+      // ist das letzte Stück, und dieser Strom schickt keines.
+      // `size` absichtlich kleiner als das, was ankommt: Dann kann der
+      // Längenvergleich nicht der Grund sein, aus dem der Rumpf als
+      // abgebrochen gilt.
+      final BodyRef reference = refFor(20)
+          .copyWith(contentEncoding: 'br', decoded: true);
+      final _EndlessClient client = _EndlessClient();
+      addTearDown(client.close);
+      final ProviderContainer container = ProviderContainer(
+        overrides: <Override>[daemonClientProvider.overrideWithValue(client)],
       );
-      expect(inflated.aligned, isFalse);
-      expect(inflated.aborted, isTrue);
-    });
-
-    test('a zlib without its adler is named', () {
-      final Uint8List whole = Uint8List.fromList(
-        zlib.encode(utf8.encode('y' * 4096)),
+      addTearDown(container.dispose);
+      final RawBody raw = await container.read(
+        flowBodyProvider(reference).future,
       );
-      expect(inflateBody(whole, BodyEncoding.zlib).aligned, isTrue);
-      expect(inflateBody(cut(whole, 4), BodyEncoding.zlib).aligned, isFalse);
-    });
-
-    test('a two member gzip is not treated as the same bytes', () {
-      // Dart entpackt beide Glieder, `flate2` im Daemon heute nur das erste.
-      // Solange das so ist, sind die Byteräume verschieden, und diese Ansicht
-      // markiert lieber nichts als etwas Falsches.
-      final Uint8List two = Uint8List.fromList(<int>[
-        ...packed('first member '),
-        ...packed('second member'),
-      ]);
-      final InflatedBody inflated = inflateBody(two, BodyEncoding.gzip);
-      expect(inflated.aligned, isFalse);
-    });
-
-    test('a complete stream verifies', () {
-      expect(inflateBody(packed('hello'), BodyEncoding.gzip).aligned, isTrue);
+      expect(raw.bytes, isNotEmpty, reason: 'what arrived stays readable');
+      expect(raw.encodingLeft, '');
       expect(
-        utf8.decode(inflateBody(packed('hello'), BodyEncoding.gzip).bytes),
-        'hello',
+        raw.bytes.length,
+        greaterThan(reference.size),
+        reason:
+            'the length says nothing here; only the missing last chunk does',
       );
+      expect(raw.short, isTrue);
     });
 
-    test('adler32 matches the value zlib writes', () {
-      final Uint8List body = Uint8List.fromList(utf8.encode('Wikipedia'));
-      // Bekannter Wert der Referenzimplementierung.
-      expect(adler32(body), 0x11E60398);
-    });
-  });
-
-  group('a bomb and a broken stream', () {
-    test('a gzip bomb stops at the cap', () {
-      // Vierundsechzig Mebibyte Nullen: achtmal die Grenze, damit die
-      // Zusicherung ohne Abbruch nicht zufällig trotzdem hielte.
-      final Uint8List bomb = Uint8List.fromList(
-        gzip.encode(Uint8List(64 * 1024 * 1024)),
+    test('without the flag the recorded bytes come back', () async {
+      final FakeDaemonClient client = FakeDaemonClient();
+      addTearDown(client.close);
+      final Uint8List packed = Uint8List.fromList(
+        gzip.encode(utf8.encode('{"a":1}')),
       );
-      expect(bomb.length, lessThan(bodyMaxBytes));
-      final InflatedBody inflated = inflateBody(bomb, BodyEncoding.gzip);
-      expect(inflated.overflowed, isTrue);
-      expect(inflated.aborted, isTrue);
-      expect(inflated.aligned, isFalse);
-      expect(inflated.bytes.length, lessThan(64 * 1024 * 1024));
-      final BodyLoad load = buildBodyLoad(
-        RawBody(bytes: bomb),
-        refFor(bomb.length),
-        'gzip',
-      );
-      expect(load.kind, BodyKind.tooLarge);
-      expect(load.problem, BodyProblem.tooLarge);
-    });
-
-    test('a broken gzip is not reported as a lying content type', () {
-      // Vorher las der Mensch hier "content type says text, bytes are not
-      // text" -- eine falsche Erklärung für ein echtes Problem.
-      final Uint8List whole = packed('x' * 4096);
-      final Uint8List broken = Uint8List.fromList(whole)
-        ..[whole.length - 5] ^= 0xFF;
-      final BodyLoad load = buildBodyLoad(
-        RawBody(bytes: broken),
-        refFor(broken.length, contentType: 'text/plain'),
-        'gzip',
-      );
-      expect(load.disputedType, isFalse);
-      expect(load.aligned, isFalse);
-      expect(
-        load.problem,
-        anyOf(BodyProblem.truncatedStream, BodyProblem.undecodedEncoding),
-      );
-    });
-
-    test('garbage that only looks like zlib keeps its bytes', () {
-      final Uint8List bytes = Uint8List.fromList(<int>[0x78, 0x9C, 1, 2, 3, 4]);
-      final InflatedBody inflated = inflateBody(bytes, BodyEncoding.zlib);
-      expect(inflated.bytes, bytes);
-      expect(inflated.decompressed, isFalse);
-      expect(inflated.aligned, isFalse);
+      final BodyRef reference = refFor(packed.length)
+          .copyWith(contentEncoding: 'gzip');
+      client.state.bodies[keyOf(reference)] = packed;
+      final List<Uint8List> chunks = await client.getBody(reference).toList();
+      expect(chunks.single, packed);
     });
   });
 
@@ -230,27 +441,16 @@ void main() {
       final BodyLoad load = buildBodyLoad(
         RawBody(bytes: bytesOf('0123456789'), short: true),
         refFor(100),
-        '',
       );
       expect(load.problem, BodyProblem.incomplete);
       expect(load.kind, isNot(BodyKind.empty));
       expect(load.bytes, isNotEmpty);
     });
 
-    test('a recorded prefix is not called incomplete', () {
-      final BodyLoad load = buildBodyLoad(
-        RawBody(bytes: bytesOf('0123456789')),
-        refFor(100, truncated: true),
-        '',
-      );
-      expect(load.problem, isNull);
-    });
-
     test('a body over the cap is too large and keeps what arrived', () {
       final BodyLoad load = buildBodyLoad(
         RawBody(bytes: bytesOf('{"a":1}'), overflowed: true),
         refFor(bodyMaxBytes + 1),
-        '',
       );
       expect(load.kind, BodyKind.tooLarge);
       expect(load.problem, BodyProblem.tooLarge);
@@ -271,6 +471,14 @@ void main() {
       expect(
         cacheKeyOf(base),
         isNot(cacheKeyOf(base.copyWith(truncated: true))),
+      );
+      // Derselbe Digest einmal gepackt und einmal entpackt sind zwei
+      // Anzeigen. Ohne `decoded` im Schlüssel zeigte die History die Bytes
+      // der Warteschlange oder umgekehrt.
+      expect(cacheKeyOf(base), isNot(cacheKeyOf(base.copyWith(decoded: true))));
+      expect(
+        cacheKeyOf(base),
+        isNot(cacheKeyOf(base.copyWith(contentEncoding: 'br'))),
       );
     });
 

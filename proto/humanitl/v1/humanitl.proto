@@ -143,6 +143,13 @@ message BodyRef {
   // Der Recorder hat nur einen Praefix gespeichert.
   bool truncated = 3;
   string content_type = 4;
+  // Content-Encoding der aufgezeichneten Bytes, leer fuer identity. Fuellt der
+  // Daemon in FlowDetail; der Client reicht es in GetBody zurueck.
+  string content_encoding = 5;
+  // Nur in GetBody gelesen: wahr, wenn der Daemon nach content_encoding
+  // entpacken soll. Kann er das nicht, liefert er die rohen Bytes und nennt
+  // die Kodierung in BodyChunk.encoding_left.
+  bool decoded = 6;
 }
 
 // Ziel einer Anfrage, normalisiert (A-Label, lowercase, ohne trailing dot).
@@ -577,6 +584,12 @@ message BodyChunk {
   bytes data = 1;
   uint64 offset = 2;
   bool last = 3;
+  // Kodierung, die noch auf data liegt: leer nach erfolgreichem Entpacken
+  // oder bei identity; sonst der Name aus BodyRef.content_encoding. Bricht das
+  // Entpacken am Budget ab, endet der Strom mit last = true auf dem, was
+  // entpackt wurde, und encoding_left bleibt leer: die Bytes sind echt
+  // entpackt, es sind nur weniger.
+  string encoding_left = 4;
 }
 
 // ---------- Decide ----------

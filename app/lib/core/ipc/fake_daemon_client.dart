@@ -10,7 +10,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show gzip;
+import 'dart:io' show gzip, zlib;
 import 'dart:typed_data';
 
 import '../domain/domain.dart';
@@ -39,8 +39,22 @@ class FakeSessionState {
   /// Request details by flow id.
   final Map<FlowId, FlowDetail> details = <FlowId, FlowDetail>{};
 
-  /// Body content by hex digest.
+  /// Body content by hex digest, as the recording holds it: still packed when
+  /// the message named a `Content-Encoding`.
   final Map<String, Uint8List> bodies = <String, Uint8List>{};
+
+  /// What `GetBody` with `decoded` answers for a body this process cannot
+  /// unpack itself, by hex digest.
+  ///
+  /// The daemon unpacks `gzip`, `deflate` and `br`
+  /// (`daemon/crates/findings/src/decode.rs`); Dart brings a decoder for the
+  /// first two and none for brotli. A fake that therefore handed brotli bytes
+  /// back packed would play a daemon that does not exist, and every widget
+  /// test would keep checking the old behaviour (CONVENTIONS 4.7). So the
+  /// scenario puts the unpacked form here next to the packed one, and the
+  /// fake answers from it. Empty for every body whose encoding this process
+  /// can take off for real.
+  final Map<String, Uint8List> unpacked = <String, Uint8List>{};
 
   /// The flow with [id], or null.
   Flow? flow(FlowId id) => flows[id];
@@ -1006,11 +1020,50 @@ class FakeDaemonClient implements DaemonClient {
   }
 
   @override
-  Stream<Uint8List> getBody(BodyRef ref) async* {
+  Stream<Uint8List> getBody(BodyRef ref) =>
+      getBodyChunks(ref).map((BodyChunk chunk) => chunk.data);
+
+  @override
+  Stream<BodyChunk> getBodyChunks(BodyRef ref) async* {
     _check();
-    final Uint8List? body = state.bodies[_hex(ref.sha256)];
-    if (body != null && body.isNotEmpty) {
-      yield body;
+    final String key = _hex(ref.sha256);
+    final Uint8List? body = state.bodies[key];
+    if (body == null || body.isEmpty) {
+      return;
+    }
+    if (!ref.decoded || ref.contentEncoding.isEmpty) {
+      yield BodyChunk(data: body, last: true);
+      return;
+    }
+    // Dieselbe Reihenfolge wie im Daemon (`humanitl_ipc::body::deliver`):
+    // erst wirklich auspacken, dann das, was dieses Verfahren hier nicht
+    // kann, und zuletzt die rohen Bytes mit dem Namen der Kodierung.
+    final Uint8List? inflated = _inflate(body, ref.contentEncoding);
+    if (inflated != null) {
+      yield BodyChunk(data: inflated, last: true);
+      return;
+    }
+    final Uint8List? prepared = state.unpacked[key];
+    if (prepared != null) {
+      yield BodyChunk(data: prepared, last: true);
+      return;
+    }
+    yield BodyChunk(data: body, last: true, encodingLeft: ref.contentEncoding);
+  }
+
+  /// Packt [bytes] aus, wenn dieser Prozess die Kodierung kann.
+  ///
+  /// Null für alles andere und für einen Strom, der nicht aufgeht: Der Daemon
+  /// gibt dann die rohen Bytes samt Namen zurück, und der Fake tut dasselbe.
+  static Uint8List? _inflate(Uint8List bytes, String encoding) {
+    try {
+      return switch (encoding) {
+        'gzip' || 'x-gzip' => Uint8List.fromList(gzip.decode(bytes)),
+        'deflate' => Uint8List.fromList(zlib.decode(bytes)),
+        _ => null,
+      };
+    } on Object {
+      return null;
     }
   }
 
@@ -1826,6 +1879,26 @@ class FakeDaemonClient implements DaemonClient {
     return buffer.toString();
   }
 
+  /// Der Rumpf der httpbin-Anfrage des Standardskripts, ungepackt.
+  ///
+  /// Der Bereich des Fundes zeigt hierhin: `indexOf` des Tokens ist 11, sein
+  /// Ende 37.
+  static const String _httpbinBody =
+      '{"token": "eyJhbGciOiJIUzI1NiJ9.e30.x", '
+      '"note": "uploaded from the sandbox", '
+      '"pad": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}';
+
+  /// Derselbe Rumpf, wie er auf der Leitung lag: 85 Bytes brotli.
+  ///
+  /// Als Konstante und nicht gepackt zur Laufzeit, weil Dart keinen
+  /// brotli-Packer mitbringt. Erzeugt mit `brotli.compress(..., quality=5)`;
+  /// wer den Text ändert, erzeugt die Zeile neu, sonst zeigt der Fake einen
+  /// Rumpf, der zu seiner Vorschau nicht passt.
+  static final Uint8List _httpbinPacked = base64.decode(
+    'G34AAMT/3Jbqv5c3T1soDiSuizaiu8EBe0VhkS00DSJ7jD3bMiSmvgjzAZ6w3Hkfw3R0'
+    'R079k3R7ZCcWq8QFRngyQCkPa5mTqf/8aQxGOIcZFwMFPw==',
+  );
+
   /// The default script: a cousin of `fixtures/sessions/mixed.jsonl`.
   ///
   /// Three held requests (GitHub with two findings, httpbin with a JWT, a
@@ -1884,7 +1957,19 @@ class FakeDaemonClient implements DaemonClient {
       // keine registrierbare Domain, und der Daemon antwortet leer.
       path: '/post',
       originTool: 'opencode',
-      body: '{"token":"eyJhbGciOiJIUzI1NiJ9.e30.x"}',
+      headers: <Header>[
+        Header(name: 'content-type', value: utf8.encode('application/json')),
+        Header(name: 'content-encoding', value: utf8.encode('br')),
+      ],
+      // Der eine gepackte Rumpf des Skripts, und zwar mit `br`: Die App
+      // bringt keinen brotli-Entpacker mit, der Daemon schon. Vor HUM-119
+      // behielt der Fund hier seinen Namen und verlor seine Stelle; jetzt
+      // zeigt die Karte den Klartext, und der Bereich 11..37 trifft den
+      // Token. Die gepackten Bytes sind echt (`brotli.compress`, Qualität 5),
+      // damit auch ein echter Entpacker sie lesen könnte.
+      body: _httpbinBody,
+      encoding: 'br',
+      packedBody: _httpbinPacked,
     );
     final _ScriptedFlow ws = _ScriptedFlow(
       id: const FlowId('018f0001-0000-7000-8000-000000070000'),
@@ -1956,11 +2041,13 @@ class FakeDaemonClient implements DaemonClient {
       ),
       httpbin.received(const Duration(milliseconds: 4000)),
       httpbin.analyzed(const Duration(milliseconds: 4030), const <Finding>[
+        // Der Bereich zeigt in die **entpackten** Bytes, wie beim Daemon
+        // (`humanitl_findings::decode`): `_httpbinBody.indexOf(token)` ist 11.
         Finding(
           kind: 'jwt',
           location: FindingLocation.body,
-          spanStart: 10,
-          spanEnd: 38,
+          spanStart: 11,
+          spanEnd: 37,
           tier: FindingTier.regex,
           displayPrefix: 'eyJhbGci',
         ),
@@ -2023,8 +2110,11 @@ class _ScriptedFlow {
     this.passthrough = false,
     this.headers = const <Header>[],
     String body = '',
+    this.encoding = '',
+    Uint8List? packedBody,
   }) : port = port ?? scheme.defaultPort,
-       bodyBytes = Uint8List.fromList(utf8.encode(body));
+       plainBytes = Uint8List.fromList(utf8.encode(body)),
+       bodyBytes = packedBody ?? Uint8List.fromList(utf8.encode(body));
 
   final FlowId id;
   final Method method;
@@ -2044,12 +2134,23 @@ class _ScriptedFlow {
   final String originTool;
   final bool passthrough;
   final List<Header> headers;
+
+  /// Die Bytes, wie die Aufzeichnung sie hält: gepackt, wenn [encoding] eine
+  /// Kodierung nennt. `GetBody` ohne `decoded` liefert genau diese.
   final Uint8List bodyBytes;
+
+  /// Dieselben Bytes ohne die Kodierung, also der Byteraum, in den die
+  /// Bereiche der Funde zeigen.
+  final Uint8List plainBytes;
+
+  /// Der `Content-Encoding` der Anfrage, leer für keinen.
+  final String encoding;
 
   BodyRef get bodyRef => BodyRef(
     sha256: List<int>.filled(32, id.value.hashCode & 0xff),
     size: bodyBytes.length,
     contentType: bodyBytes.isEmpty ? '' : 'application/json',
+    contentEncoding: encoding,
   );
 
   Flow summary(DateTime now) => Flow(
@@ -2083,7 +2184,11 @@ class _ScriptedFlow {
           ),
           bodyPreview: utf8.decode(bodyBytes, allowMalformed: true),
         );
-        state.bodies[_hexOf(bodyRef.sha256)] = bodyBytes;
+        final String key = _hexOf(bodyRef.sha256);
+        state.bodies[key] = bodyBytes;
+        if (encoding.isNotEmpty && !identical(bodyBytes, plainBytes)) {
+          state.unpacked[key] = plainBytes;
+        }
         return FlowEvent.received(at: now, flow: flow);
       });
 
@@ -2857,6 +2962,9 @@ class _SeededFlow {
     sha256: _digest('request'),
     size: bodyBytes.length,
     contentType: bodyBytes.isEmpty ? '' : _contentType,
+    // Dieselbe Auskunft wie die Kopfzeile der Anfrage; der Daemon füllt sie
+    // aus derselben Quelle (HUM-119).
+    contentEncoding: _bodyForm == _SeededBody.gzip ? 'gzip' : '',
   );
 
   /// Ein Schlüssel, der zu genau einem Rumpf gehört.

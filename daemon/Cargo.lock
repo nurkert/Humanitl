@@ -1008,9 +1008,11 @@ name = "humanitl-ipc"
 version = "0.0.0"
 dependencies = [
  "base64",
+ "brotli",
  "bytes",
  "chrono",
  "dashmap",
+ "flate2",
  "humanitl-audit",
  "humanitl-catalog",
  "humanitl-config",

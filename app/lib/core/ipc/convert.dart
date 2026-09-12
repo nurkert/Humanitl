@@ -124,6 +124,8 @@ extension BodyRefToDomain on pb.BodyRef {
     size: size.toInt(),
     truncated: truncated,
     contentType: contentType,
+    contentEncoding: contentEncoding,
+    decoded: decoded,
   );
 }
 
@@ -134,7 +136,9 @@ extension BodyRefToProto on BodyRef {
     ..sha256 = sha256
     ..size = Int64(size)
     ..truncated = truncated
-    ..contentType = contentType;
+    ..contentType = contentType
+    ..contentEncoding = contentEncoding
+    ..decoded = decoded;
 }
 
 /// `HttpRequest` to [HttpRequest].
