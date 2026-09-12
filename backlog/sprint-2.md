@@ -1697,33 +1697,16 @@ Das Skript ist der Test.
 ### Akzeptanzkriterien
 - [x] `tests/e2e/m2_first_decision/run.sh` Exit 0 lokal und in CI (Job `e2e-xvfb`).
 - [x] Laufzeit < 4 min in CI (gemessen: 15 bis 20 Sekunden ohne den Bau).
-- [ ] Bei Fehlschlag: Screenshot und Daemon-Log als CI-Artefakt. Das Daemon-Log, das Protokoll des Ziels und die Antworten des Agenten stehen unter `target/e2e/m2`; Screenshots gibt es erst mit der Oberflächen-Hälfte (HUM-097).
+- [ ] Bei Fehlschlag: Screenshot und Daemon-Log als CI-Artefakt. Das Daemon-Log, das Protokoll des Ziels, die Antworten des Agenten, das Protokoll des Bildschirm-Treibers und, nach einem Fehlschlag, das Bild des Bildschirms stehen unter `target/e2e/m2` (HUM-097, gemessen 2026-09-12: `m2-failure.png`, 148243 Bytes). Offen bleibt der Beweis im hochgeladenen Artefakt des Jobs `e2e-xvfb`.
 - [x] Sprint-Gate in `CONTRIBUTING.md` dokumentiert, samt dem, was es heute **nicht** deckt.
 
-### Stand (2026-09-04): nur die Daemon-Hälfte
-
-Umgesetzt und in CI grün ist die Hälfte, die ohne Oberfläche prüfbar ist:
-Gruppierung nach registrierbarer Domäne, Funde vor der Entscheidung,
-Stapel-Freigabe mit Sitzungsregel, Block mit Notiz, Zeitüberschreitung, was die
-Regel danach entscheidet, die Historie und die Menge, aus der der Export
-entsteht — 59 Zusicherungen, jede mit ihrer Zahl im Protokoll.
-
-**Offen und ausdrücklich nicht gedeckt:**
-
-- Die Oberfläche. Warteschlange, Aktionsleiste, Regel-Bildschirm und Historie
-  werden nicht bedient, und es wird keine HAR-Datei geschrieben oder geprüft.
-  Das ist **HUM-097**; `run.sh` überspringt seinen Schritt 10 mit einer
-  ausdrücklichen Meldung, solange `app/integration_test/m2_first_decision_test.dart`
-  fehlt, und `M2_UI=1` macht daraus einen Fehlschlag.
-- Der MITM-Pfad — **erledigt mit HUM-087 (2026-09-05)**. Bis dahin liefen
-  sechzehn der siebzehn Anfragen über Klartext-HTTP, weil der Daemon
-  `resolver.test_ca` nicht las; Blatt-Erzeugung aus der eigenen CA, Handschlag
-  mit dem Agenten und TLS-Sitzung nach oben wurden für keinen freigegebenen
-  oder geblockten Fluss ausgeführt. Seit `--allow-test-ca` steht jede Anfrage
-  des Laufs auf `https://`, und das Ziel bedient sechzehn davon über TLS.
-
-Ein grünes `e2e-xvfb` heißt bis dahin „die Daemon-Hälfte von M2 hält", nicht
-„M2 hält". Die dauerhaften Abweichungen stehen in `backlog/CONVENTIONS.md` 4.22.
+Die dauerhaften Abweichungen dieses Laufs stehen in
+`backlog/CONVENTIONS.md` 4.22. Der Abschnitt „Stand (2026-09-04): nur die
+Daemon-Hälfte" ist mit HUM-097 (2026-09-12) entfallen: Der Bildschirm-Treiber
+läuft seither vor dem Agenten und trifft die Entscheidungen der Abschnitte 2
+bis 4, während gehalten wird; die HAR-Datei wird geschrieben und in Schritt 10
+zurückgelesen. Der MITM-Pfad war die zweite offene Hälfte und ist mit HUM-087
+(2026-09-05) erledigt.
 
 ### Fallstricke
 - Timing: alle Wartezeiten mit `pumpUntil`-Helfer und Timeout, keine festen `sleep`s außer dem Timeout-Schritt.
@@ -2652,12 +2635,12 @@ cd app && \
 Das Skript ist der Test. Zusätzlich: `flutter test integration_test/...` muss auch allein gegen einen laufenden Daemon grün sein, damit ein Entwickler ihn ohne den ganzen Lauf fahren kann.
 
 ### Akzeptanzkriterien
-- [ ] `tests/e2e/m2_first_decision/run.sh` Exit 0 mit der Oberflächen-Hälfte, lokal und im Job `e2e-xvfb`.
-- [ ] `M2_UI=1 tests/e2e/m2_first_decision/run.sh` läuft durch, statt mit „the integration test of the screen is not there" zu sterben.
-- [ ] Die HAR-Datei hat 17 Einträge, und `_humanitl.decision` verteilt sich auf 15 `allow` (davon 2 mit `rule_id`), 1 `block` mit `block_reason: user` und 1 `timed_out`. Heute schreibt `har.dart:75-76` `flow.decision?.name`, also `timedOut`, und den Schlüssel `block_reason`; `har.dart` bekommt die Wire-Namen des Daemons (`timed_out`, CONVENTIONS 4.22 bei `:1410`), und `history_export_flow_test.dart` prüft sie. Eine `jq`-Prüfung nach dem alten Wortlaut fiel gegen den heutigen Encoder durch.
-- [ ] Laufzeit unter 4 Minuten in CI.
-- [ ] Bei Fehlschlag: Daemon-Log als CI-Artefakt und ein Bild des Bildschirms. Entweder ein Treiber-Paar unter `app/test_driver` mit `flutter drive` in Schritt 10 (Voraussetzung für `takeScreenshot`; heute gibt es weder das Verzeichnis noch den Aufruf, `run.sh:705` ruft `flutter test`), oder ein `RenderRepaintBoundary`-Dump, den der Test selbst nach `target/e2e/m2` schreibt. Welcher Weg, entscheidet der Bau; das Kriterium ist das Bild im Artefakt.
-- [ ] Der Absatz „nur die Daemon-Hälfte" ist aus `CONTRIBUTING.md`, aus 4.22 und aus HUM-036 verschwunden.
+- [ ] `tests/e2e/m2_first_decision/run.sh` Exit 0 mit der Oberflächen-Hälfte, lokal und im Job `e2e-xvfb`. (Lokal erfüllt: `E2E_SKIP_BUILD=1 ./tests/e2e/m2_first_decision/run.sh` endet mit 0, 75 Behauptungen, 47 s, 2026-09-12. Offen bleibt die zweite Hälfte des Kriteriums: der Job `e2e-xvfb` hat diesen Stand noch nicht gefahren.)
+- [x] `M2_UI=1 tests/e2e/m2_first_decision/run.sh` läuft durch, statt mit „the integration test of the screen is not there" zu sterben. (`M2_UI=1` und `M2_UI=auto` sind derselbe Zweig; eine fehlende Datei ist jetzt ein harter Fehler statt eines stillen Übersprungs. Gemessen 2026-09-12: Exit 0, 75 Behauptungen.)
+- [x] Die HAR-Datei hat 17 Einträge, und `_humanitl.decision` verteilt sich auf 15 `allow` (davon 2 mit `rule_id`), 1 `block` mit `block_reason: user` und 1 `timed_out`. (`jq '.log.entries | length' target/e2e/m2/m2.har` = 17; `jq '[.log.entries[]._humanitl.decision] | group_by(.) | ...'` = `{allow: 15, block: 1, timed_out: 1}`; zwei Einträge tragen die Id der Sitzungsregel; der geblockte trägt `block_reason: "user"`. `har.dart` schreibt die Wire-Namen über `harWireName`, geprüft in `history_export_test.dart`. Schritt 10 prüft dieselben fünf Zahlen selbst, gemessen 2026-09-12.)
+- [ ] Laufzeit unter 4 Minuten in CI. (Lokal 47 s für den ganzen Lauf, davon 20 s für den Bildschirm-Treiber selbst, mit warmem CMake-Baum und `E2E_SKIP_BUILD=1`, 2026-09-12. In CI ungemessen; der Job baut die Anwendung in einem eigenen Schritt davor.)
+- [ ] Bei Fehlschlag: Daemon-Log als CI-Artefakt und ein Bild des Bildschirms. (Der Weg ist entschieden und gebaut: ein `RenderRepaintBoundary`-Abzug, den der Test selbst nach `$HUMANITL_E2E_SHOTS` schreibt; `collect` legt ihn zu den übrigen Artefakten unter `target/e2e/m2`. Gemessen an einem echten Fehlschlag am 2026-09-12: `target/e2e/m2/m2-failure.png`, 148243 Bytes, zeigte den Bildschirm im Moment des Abbruchs. Offen bleibt der Beweis im Artefakt des Jobs `e2e-xvfb`.)
+- [x] Der Absatz „nur die Daemon-Hälfte" ist aus `CONTRIBUTING.md`, aus 4.22 und aus HUM-036 verschwunden. (`grep -n "Daemon-Hälfte\|half built" CONTRIBUTING.md backlog/CONVENTIONS.md backlog/sprint-2.md` findet keine Zusage mehr, die Oberfläche fehle; 2026-09-12.)
 
 ### Stand (2026-09-04): Größe L, die Naht steht nicht
 
@@ -2680,6 +2663,51 @@ Geprüft am Code (Audit 2026-09-04, Zeilen gegen den heutigen Baum gezogen). Was
 **Minor, im Text korrigiert:** Die Karte „unbekannte Domäne" ist keine Eigenschaft von `evil.example` (`domain_pane_placeholder.dart:79`). `HUMANITL_TOKEN` hat keinen Leser, `launchOptionsProvider` ist nur in `main()` überschrieben (`main.dart:51`).
 
 **Voraussetzungen, in dieser Reihenfolge** (Schritte oben): (1) Beweis, dass `flutter test integration_test/<file> -d linux` in diesem Repository überhaupt läuft; das Harness ist bis heute nie ausgeführter Code. (2) App-Bau und Paket-Cache im Job `e2e-xvfb`. (3) Exportziel nach `HUMANITL_E2E_HAR`. (4) `har.dart` Wire-Namen. (5) `run.sh`-Umbau. (6) Der Test selbst. (7) Screenshot-Weg. Erst danach die Absätze zur halben Abnahme aus `CONTRIBUTING.md:51-65`, CONVENTIONS 4.22 und HUM-036 „Stand" streichen.
+
+### Gebaut (2026-09-12)
+
+Der Bildschirm-Treiber steht: `app/integration_test/m2_first_decision_test.dart`
+startet **vor** dem Agenten, trifft die Entscheidungen der Abschnitte 2 bis 4,
+während gehalten wird, filtert die Historie und schreibt den HAR-Export über
+den Produktivweg. `run.sh` führt beide Zweige mit eigener Zahl
+(`M2_EXPECTED_ASSERTIONS_CLI` 70, `M2_EXPECTED_ASSERTIONS_SCREEN` 75) und
+verlangt die Datei des Treibers, statt Schritt 10 still zu überspringen.
+
+Die Naht sind zwei Handschläge über Dateien, und beide sind nötig:
+`HUMANITL_E2E_READY` hält den Agenten auf, bis der Bildschirm steht (`flutter
+test` baut die Anwendung, und das dauert länger als die Haltefrist);
+`HUMANITL_E2E_GO` hält den Bildschirm auf, bis `run.sh` die Ids des Stapels
+festgehalten hat (ohne sie vergleichen drei Behauptungen in 6 und 8 gegen
+einen leeren Text).
+
+**Was der erste echte Lauf gefunden hat**, und was jeder Punkt gekostet hat:
+
+- **Der Filter der Historie war auf einem laufenden Bildschirm unbenutzbar.**
+  `history_filter_bar.dart` glich das Feld in jedem Aufbau mit der zuletzt
+  abgeschickten Abfrage ab, und `onChanged` baut die Zeile bei jedem Zeichen
+  neu auf: Das gerade Getippte verschwand wieder. In einem Widget-Test fiel das
+  nie auf, weil dort zwischen Tippen und Abschicken kein Bild gezeichnet wird.
+  Der Abgleich läuft jetzt über `ref.listen`, also nur bei einer Änderung der
+  Abfrage; `history_screen_test.dart` bewacht es mit einem `pump` dazwischen.
+- **Der Setup-Bildschirm holte die Shell zu sich.** `DOCTOR_004` hielt den
+  Start an, weil das Laufzeitverzeichnis des Wegwerf-Baums unter der `umask`
+  des Aufrufers entsteht und 0775 hatte. `run.sh` setzt es jetzt auf 0700, so
+  wie `$XDG_RUNTIME_DIR` auf einem echten Rechner; der Test wechselt zusätzlich
+  über die Rail zurück zur Warteschlange.
+- **`flutter test` löste ohne Netz seine Pakete neu auf** und hing. Der Aufruf
+  trägt jetzt `--no-pub` und `--no-version-check`; aufgelöst und gebaut wird
+  vorher, außerhalb des Namensraums, und `PUB_CACHE` wird durchgereicht.
+- **`enterText` holt den Fokus nur beim ersten Mal.** `showKeyboard` merkt sich
+  das zuletzt bediente `EditableText`; nimmt der Bildschirm die Tastatur
+  dazwischen für seine Tabelle, schreibt das zweite `enterText` ins Leere. Der
+  Test fordert den Fokus deshalb über den Knoten des Feldes selbst an.
+- **Der Block über die Tastatur geht mit `Strg+Eingabe`**, nicht mit `B`: `N`
+  öffnet das Notizfeld und gibt ihm die Tastatur, ein blankes `B` landete im
+  Text. Die Notiz ist wörtlich dieselbe wie im Zweig ohne Oberfläche, damit
+  Abschnitt 5 treiberunabhängig bleibt.
+
+Nicht gebaut, weil es nicht zu diesem Issue gehört: die zwei
+Namens-Behauptungen des Katalogs (HUM-094) und `Edit + Allow` (HUM-047).
 
 ### Fallstricke
 - Alle Wartezeiten über `pumpUntil` mit Frist. Ein `pumpAndSettle` läuft in einer Oberfläche mit laufenden Animationen nicht aus.
