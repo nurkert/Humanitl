@@ -28,8 +28,13 @@
 # zwölf Prozesse. Punkt 2 fällt erst weg, wenn ein Aufruf mehrere Ids trägt
 # (HUM-090); dann reichen 8 Sekunden wieder.
 #
-# `run.sh` setzt denselben Wert zusätzlich über die Umgebung, weil
-# `start_daemon` die Frist so entgegennimmt.
+# Für den Bildschirm-Zweig gilt Punkt 2 doppelt: Der Treiber muss zeichnen, auf
+# Ereignisse warten und klicken, statt zwölf Prozesse zu starten. `run.sh` setzt
+# deshalb je Zweig einen eigenen Wert über die Umgebung — 10 Sekunden ohne
+# Oberfläche, 30 mit —, und dieser Wert gewinnt über den hier. Die Zahl hier
+# bleibt die des Zweigs ohne Oberfläche; die Rechnung für die 30 steht beim
+# Block `M2_HOLD_TIMEOUT_*` in `run.sh`, zusammen mit dem CI-Lauf, der sie
+# erzwungen hat.
 timeout_secs = 10
 
 [ui]
