@@ -327,7 +327,7 @@ Die Sprint-Files wurden parallel geschrieben und haben an einigen Stellen die Ab
 - `Held`-Event trägt zusätzlich `queue_bytes`, `queue_count` (HUM-057).
 
 ### 4.3 Proto-Erweiterungen gegenüber BACKLOG.md 3.3
-`GetConfig`/`SetConfig`; `FlowEvent` hat die Varianten `Diagnostic`, `RulesChanged`, `AgentAsk`; `Received` trägt `DomainInfo`; `DecideRequest.remember: Rule`, `DecideRequest.block.note`; `DecideResponse.created_rule`; `RulesRequest.make_permanent`; `SandboxRequest.argv`; eigene Datei `rules.proto`, importiert von `humanitl.proto`.
+`GetConfig`/`SetConfig`; `FlowEvent` hat die Varianten `Diagnostic`, `RulesChanged`, `AgentAsk`; `Received` trägt `DomainInfo`; `FlowSummary.apex` (Feld 26, HUM-091: die registrierbare Domain des Hosts nach der Public Suffix List, leer wenn der Daemon sie nicht kennt, derselbe Wert, den `apex:` im Filter vergleicht; die Katalog-Karte mit `catalog_id` und `tranco_rank` bleibt an `FlowDetail` und `Received`); `DecideRequest.remember: Rule`, `DecideRequest.block.note`; `DecideResponse.created_rule`; `RulesRequest.make_permanent`; `SandboxRequest.argv`; eigene Datei `rules.proto`, importiert von `humanitl.proto`.
 
 ### 4.4 Config-Schlüssel (Ergänzung zu 3.7)
 - Gruppe `limits` (HUM-057) ist die Heimat aller Caps und Timeouts: `limits.hold_body_cap_bytes` (Alias `hold.body_cap_bytes`), `limits.preview_cap_bytes` (Alias `preview.cap_bytes`), `limits.event_buffer` (Alias `ipc.event_buffer`), `limits.max_decompress_ratio`, `limits.hold_max_flows`, `limits.hold_max_bytes`, `limits.connect_timeout_secs`, `limits.header_timeout_secs`, `limits.body_timeout_secs`, `limits.recorder_max_body_bytes` (Alias `recorder.max_body_bytes`), `limits.max_client_connections` (HUM-120, Vorgabe 256).
@@ -667,16 +667,24 @@ Dinge. `display` ist der eine Host der Gruppe und sonst leer; der Kopf
 schreibt dann „Host und n weitere". Eine Domäne steht nur dort, wo der Daemon
 sie geliefert hat.
 
-**Die Tabelle in `psl.dart` ist ein Rat und wird nie zu einer Regel.** Sie
-gruppiert die Ansicht, mehr nicht. Was eine Regel trifft, kommt aus
-`selectedApexProvider`, also aus dem Katalog des Daemons; ohne dessen Antwort
-ist der Domain-Scope ausgegraut und nennt beim Anklicken den Grund. Restrisiko
-der Gruppierung: außerhalb der Tabelle kann der Rat ein Public Suffix als
-Domäne nehmen (`a.foo.com.pl` und `b.evil.com.pl` fallen beide auf `com.pl`),
-also zwei fremde Registranten in eine Gruppe legen. Deshalb fragt jede
-Entscheidung, die mehrere Hosts umfasst, immer erst im Modal, das die Hosts
-auflistet — unabhängig davon, wie wenige Anfragen sie umfasst. Mit dem Katalog
-aus HUM-031 entfällt der Rat und mit ihm diese Sonderregel.
+**Die registrierbare Domäne kommt aus der Zeile, nicht aus einem Rat.**
+`FlowSummary.apex` trägt sie seit HUM-091: die Antwort der Public Suffix List
+im Daemon, dieselbe, gegen die `apex:` im Filter vergleicht. Die Gruppierung
+nimmt `flow.apex`, und ist er leer — IP-Literal, ein Name, der nur aus einem
+Suffix besteht, kein Katalog —, steht die Zeile unter ihrem eigenen Host;
+ergänzt wird nichts. Damit ist die Handtabelle `app/lib/features/intercept/psl.dart`
+entfallen und mit ihr das Restrisiko, dass `a.foo.com.pl` und `b.evil.com.pl`
+unter `com.pl` in einer Gruppe landen. Was eine Regel trifft, kommt weiter aus
+`selectedApexProvider`, jetzt aus derselben Zeile und ohne zweiten Aufruf; ohne
+Apex ist der Domain-Scope ausgegraut und nennt beim Anklicken den Grund.
+
+**Eine Entscheidung über mehrere Hosts fragt trotzdem immer erst im Modal.**
+Der Grund ist nicht mehr das Restrisiko der geratenen Domäne, sondern 4.13,
+„Freigeben nie leichter als Blocken": Eine Gruppe deckt mehrere Hosts —
+`a.b.github.io` und `c.b.github.io` gehören beide zu `b.github.io` —, und wer
+über mehrere entscheidet, soll sie gelesen haben. Das Modal ist der Ort, an dem
+sie aufgelistet stehen, unabhängig davon, wie wenige Anfragen die Entscheidung
+umfasst. Diese Regel bleibt also bestehen, obwohl der Rat weggefallen ist.
 
 **Der Kopf zählt nur gehaltene Anfragen.** Eine entschiedene Zeile ruht drei
 Sekunden an ihrem Platz (`docs/UX.md` 2.8), gehört aber zu keiner Entscheidung
@@ -1952,9 +1960,10 @@ die Regel jede Methode und jeden Pfad des Hosts abdeckt.
 `TextOverflow.ellipsis` in der Karte; aus `pypi.org.attacker.com` wurde
 `pypi.org…`. Das ist Domain-Täuschung durch die eigene Oberfläche, genau in dem
 Augenblick, in dem ein Mensch entscheidet. Der Name bricht jetzt um. Die
-registrierbare Domäne wird auch nicht hervorgehoben: `app/lib/features/intercept/psl.dart`
-rät sie aus einer kurzen Tabelle, und ein falsch geratener Apex wäre dieselbe
-Täuschung mit umgekehrtem Vorzeichen.
+registrierbare Domäne wird auch nicht hervorgehoben: Der Vorschlag des Agenten
+ist ein Text aus der Sandbox und gehört zu keinem Flow, also sagt der Daemon zu
+ihm keinen Apex — `FlowSummary.apex` (HUM-091) hängt an einer Anfrage —, und
+ein hier abgeleiteter wäre dieselbe Täuschung mit umgekehrtem Vorzeichen.
 
 **Gestapelte kombinierende Zeichen werden begrenzt, und die Karte clippt
 trotzdem.** `sanitize_note` lässt höchstens `MAX_COMBINING_MARKS` (zwei)

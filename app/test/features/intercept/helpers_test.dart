@@ -1,12 +1,15 @@
 // Die kleinen Funktionen hinter Zeile und Karte: Kürzen in der Mitte, Diff
-// für die AnimatedList, Formate, Query-Parser und der PSL-Ersatz.
+// für die AnimatedList, Formate und der Query-Parser.
+//
+// Die registrierbare Domain steht nicht mehr darunter: Sie kommt seit HUM-091
+// aus `FlowSummary.apex`, und die geratene Tabelle `psl.dart` ist mit ihren
+// Tests entfallen.
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/text/format.dart';
 import 'package:humanitl/core/ui/middle_ellipsis.dart';
 import 'package:humanitl/features/intercept/list_diff.dart';
-import 'package:humanitl/features/intercept/psl.dart';
 import 'package:humanitl/features/intercept/widgets/key_value_table.dart';
 import 'package:humanitl/features/intercept/widgets/section_headers.dart';
 import 'package:humanitl/features/intercept/widgets/section_query.dart';
@@ -78,31 +81,6 @@ void main() {
     // Ein kaputtes Escape bleibt roh stehen, statt zu verschwinden.
     expect(parseQuery('/x?a=%zz').single.value, '%zz');
     expect(parseQuery('/x?flag').single, const KeyValue('flag', ''));
-  });
-
-  test('registrableDomain', () {
-    expect(registrableDomain('api.github.com'), 'github.com');
-    expect(registrableDomain('github.com'), 'github.com');
-    expect(registrableDomain('foo.bar.co.uk'), 'bar.co.uk');
-    expect(registrableDomain('a.b.c.pages.dev'), 'c.pages.dev');
-    // Ein dreiteiliges Suffix wird geprüft, bevor das zweiteilige greift;
-    // sonst gruppierten fremde Buckets unter `amazonaws.com`.
-    expect(
-      registrableDomain('my-bucket.s3.amazonaws.com'),
-      'my-bucket.s3.amazonaws.com',
-    );
-    expect(registrableDomain('eu.amazonaws.com'), 'amazonaws.com');
-    // Stehen beide Längen in der Tabelle, gewinnt die längere; mit der
-    // umgekehrten Reihenfolge käme `foo.com.pl` heraus, also die Domain eines
-    // fremden Registranten.
-    const Set<String> both = <String>{'com.pl', 'foo.com.pl'};
-    expect(registrableDomain('a.foo.com.pl', suffixes: both), 'a.foo.com.pl');
-    expect(registrableDomain('x.com.pl', suffixes: both), 'x.com.pl');
-    expect(suffixLengths(both), <int>[3, 2]);
-    expect(
-      registrableDomain('192.168.1.50', isIpLiteral: true),
-      '192.168.1.50',
-    );
   });
 
   test('isMaskedHeader', () {

@@ -23,6 +23,7 @@ FlowDetail github() => detailFor(
     deadline: testStart.add(const Duration(minutes: 5)),
     method: Method.post,
     host: 'api.github.com',
+    apex: 'github.com',
     path: '/graphql',
     requestSize: 428,
   ),

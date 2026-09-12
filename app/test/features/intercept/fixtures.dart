@@ -25,12 +25,19 @@ FlowId testFlowId(int n) =>
     FlowId('018f0020-0000-7000-8000-${n.toString().padLeft(12, '0')}');
 
 /// Ein angehaltener Flow mit Frist [deadline].
+///
+/// [apex] ist die registrierbare Domain, die der Daemon zu [host] nennt
+/// (`FlowSummary.apex`, HUM-091). Die Vorgabe ist leer, also „der Daemon weiß
+/// es nicht": Wer die Gruppierung oder das Regel-Ziel „Domäne" prüft, schreibt
+/// den Wert hin, statt ihn aus [host] ableiten zu lassen — eine Ableitung hier
+/// wäre eine zweite Public Suffix List neben der des Daemons.
 Flow heldFlow({
   required int n,
   required DateTime deadline,
   DateTime? receivedAt,
   Method method = Method.get,
   String host = 'api.github.com',
+  String apex = '',
   String path = '/graphql',
   int requestSize = 0,
 }) {
@@ -42,6 +49,7 @@ Flow heldFlow({
     method: method,
     scheme: Scheme.https,
     authority: Authority(host: host, port: 443),
+    apex: apex,
     path: path,
     state: FlowState.held,
     requestSize: requestSize,

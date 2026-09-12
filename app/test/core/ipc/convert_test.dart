@@ -94,6 +94,25 @@ void main() {
     expect(info.hasSession, isTrue);
   });
 
+  test('a row carries the apex, and a missing field is the empty string', () {
+    final Flow known =
+        (pb.FlowSummary()
+              ..flowId = '018f0000-0000-7000-8000-000000000002'
+              ..authority = (pb.Authority()..host = 'a.b.github.io')
+              ..apex = 'b.github.io')
+            .toDomain();
+    expect(known.apex, 'b.github.io');
+
+    // Ein Daemon, der nichts sagt, sagt nicht „unbedenklich": Das Feld bleibt
+    // leer, und der Client leitet nichts aus dem Host ab (HUM-091).
+    final Flow unknown =
+        (pb.FlowSummary()
+              ..flowId = '018f0000-0000-7000-8000-000000000003'
+              ..authority = (pb.Authority()..host = 'a.b.github.io'))
+            .toDomain();
+    expect(unknown.apex, isEmpty);
+  });
+
   test('FlowEvent.received carries the summary and the deadline', () {
     final DateTime deadline = DateTime.utc(2026, 9, 3, 10, 5);
     final pb.FlowEvent event = pb.FlowEvent()

@@ -516,10 +516,12 @@ class InterceptDecision extends _$InterceptDecision {
   /// apply, the wider one names the modal (`docs/UX.md` 5.4).
   ///
   /// A decision that spans several hosts always asks, however few requests it
-  /// covers: the queue groups by the registrable domain of `psl.dart`, and
-  /// that table guesses. Two strangers under one guessed domain are two
-  /// registrants, and the modal is where their hosts are listed before
-  /// anything leaves (`backlog/CONVENTIONS.md` 4.13).
+  /// covers. The registrable domain is no longer a guess — it comes from the
+  /// daemon (`FlowSummary.apex`, HUM-091) — but a group still holds several
+  /// hosts, and whoever decides over them should read them. The modal is
+  /// where they are listed before anything leaves
+  /// (`backlog/CONVENTIONS.md` 4.13, "allowing is never easier than
+  /// blocking").
   ConfirmReason? _reasonToAsk(List<Flow> flows, bool remember) {
     if (flows.length > modalAboveReach || batchHosts(flows).length > 1) {
       return ConfirmReason.reach;
@@ -967,29 +969,33 @@ FindingSet selectedFindings(Ref ref) {
 
 /// The registrable domain of the selected flow, as the daemon knows it.
 ///
-/// Empty while the daemon has not said one. The answer belongs to the catalog
-/// (HUM-031), which carries the public suffix list; a client that guessed it
-/// would write a rule for a domain nobody registered, and the sentence above
-/// the bar would promise a rule the daemon never creates. The bundled table in
-/// `psl.dart` groups the queue and does nothing else.
+/// Straight from the row (`FlowSummary.apex`, HUM-091), so no second call is
+/// needed and every held request has an answer, not only the one that has
+/// been looked at. Empty while the daemon has not said one; the answer
+/// belongs to the catalog, which carries the public suffix list, and a client
+/// that guessed it would write a rule for a domain nobody registered
+/// (`backlog/CONVENTIONS.md` 4.13).
 @Riverpod(keepAlive: true)
-String selectedApex(Ref ref) {
-  final FlowId? id = ref.watch(selectedFlowIdProvider);
-  if (id == null) {
-    return '';
-  }
-  return ref.watch(flowDetailProvider(id)).value?.domain?.apex ?? '';
-}
+String selectedApex(Ref ref) => ref.watch(selectedFlowProvider)?.apex ?? '';
 
 /// The registrable domain of a host, as the rule draft needs it.
 ///
-/// Answers only for the host of the selected flow, and only what the daemon
-/// said; every other host and every unknown apex comes back empty, and an
-/// empty apex means the scope is not available (see [selectedApex]).
+/// Answers for every host in the queue, because every row carries its own
+/// apex: a batch over twelve hosts can draw its `**.<apex>` rule without
+/// asking the daemon again. An unknown host and an empty apex both come back
+/// empty, and an empty apex means the scope is not available
+/// (see [selectedApex]).
 @Riverpod(keepAlive: true)
 String Function(String host) apexResolver(Ref ref) {
-  final Flow? flow = ref.watch(selectedFlowProvider);
-  final String apex = ref.watch(selectedApexProvider);
-  return (String host) =>
-      apex.isNotEmpty && flow != null && host == flow.host ? apex : '';
+  final Map<String, String> byHost = <String, String>{
+    for (final Flow flow in ref.watch(heldFlowsProvider))
+      if (flow.apex.isNotEmpty) flow.host: flow.apex,
+  };
+  // The selected flow may have left the queue a moment ago while its row is
+  // still on screen; its own answer stays available that long.
+  final Flow? selected = ref.watch(selectedFlowProvider);
+  if (selected != null && selected.apex.isNotEmpty) {
+    byHost[selected.host] = selected.apex;
+  }
+  return (String host) => byHost[host] ?? '';
 }
