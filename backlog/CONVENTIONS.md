@@ -517,7 +517,7 @@ Entscheidungen, die beim Bauen fielen und ab jetzt gelten. Wo 3.x oder 4.11 ande
 
 **CLI (HUM-064).**
 - `humanitl sandbox run`, `sandbox argv` und `sandbox check` laufen in M1 im Prozess der CLI gegen die Sandbox-Crate, nicht über den Daemon: Der `Sandbox`-RPC kommt erst in Sprint 3. Das ist eine bewusste, auf genau diese drei Unterkommandos begrenzte Abweichung von ADR-018; die Naht ist in `daemon/bin/humanitl/src/cmd/sandbox.rs` markiert, und mit dem RPC wandert die Logik hinter ihn, ohne dass sich die Kommandozeile ändert. `daemon status`, `flows list|show|decide` und `config get|schema` gehen schon jetzt über den gRPC-Client.
-- `flows decide ID allow|block [--note TEXT]` bleibt im Produkt: Es ist der Vorläufer von `--ask terminal` (HUM-067) und das Werkzeug, mit dem das Demoskript und die Escape-Tests entscheiden.
+- `flows decide ID allow|block [--note TEXT]` bleibt im Produkt: Es ist der Vorläufer von `--ask terminal` (HUM-067) und das Werkzeug, mit dem das Demoskript und die Escape-Tests entscheiden. Seit HUM-095 trägt derselbe Aufruf wahlfrei die Regel, die die Entscheidung hinterlässt: `--remember PATTERN [--remember-method M]… [--remember-path P] [--remember-expires WHEN] [--remember-note TEXT]`, mit `created_from_flow_id` gleich der entschiedenen Id und ohne eigenes Flag mit Ablauf `session` (4.22).
 
 **Oberfläche, Nachtrag 2026-09-03.**
 - `shadcn_flutter` war bis zum 2026-09-04 nie in einer Pubspec-Datei, obwohl ADR-0009 es von Anfang an als gesetzt beschrieb. HUM-035 hat auf diesem tatsächlichen Stand entschieden, es nicht aufzunehmen (88,3 % der gewichteten Punkte für die eigene Schicht gegen 48,3 % und 51,7 %, ohne den vorgesehenen Prototyp-Branch, siehe 4.20). Der Projekteigentümer hat das am selben Tag zurückgenommen; seither steht die Bibliothek exakt gepinnt in `app/packages/ui/pubspec.yaml` (ADR-0009, Abschnitt „Revidiert am 2026-09-04 durch den Projekteigentümer"). Der Wrapper bleibt Pflicht: ein Feature importiert `lib/core/ui/ui.dart`, nie ein fremdes Widget-Paket, und `tools/check-deps.sh` erzwingt das.
@@ -1516,21 +1516,24 @@ steht sie seit HUM-024 (`CONFIG_016`, Stufe `WARN`, mit den Namen der Tabelle
 in der Zeile); gemessen von `a_table_of_fixed_names_is_announced_at_the_start`
 und seinem Gegenfall in `daemon/bin/humanitld/tests/daemon_end_to_end.rs`.
 
-**Die Stapel-Freigabe geht über zwei Aufrufe, nicht über einen.**
-`DecideRequest` trägt `repeated flow_ids` und `remember`, kann eine Gruppe also
-in einem Zug freigeben und die Regel dabei anlegen. `humanitl flows decide`
-kennt weder mehrere Ids noch `--remember`; die Kommandozeile hat für die
-Fähigkeit, die es im RPC und in der Oberfläche gibt, kein Gegenstück. Der Lauf
-legt deshalb erst die Sitzungsregel über `humanitl rules add --expires session`
-an und entscheidet dann die zwölf wartenden Anfragen einzeln. Die Wirkung ist
-dieselbe — entschieden wird beim Eintreffen, die zwölf gehen also über die
-Entscheidung und alles Spätere über die Regel —, der Preis ist größer als er
-zunächst aussieht: Die Regel trägt kein `created_from_flow_id`, und das
-Abzeichen „from #n" des Regel-Bildschirms hat für sie nichts anzuzeigen. Das
-ist eine Lücke in der Parität von Oberfläche und Kommandozeile (ADR-018,
-`docs/ARCHITECTURE.md` 3b); sie wird in **HUM-095** geschlossen, das
-`humanitl flows decide <id> allow --remember <PATTERN>` nachliefert und den
-M2-Lauf die Sitzungsregel über die Entscheidung anlegen lässt.
+**Die Sitzungsregel entsteht in der Entscheidung, seit HUM-095 auch auf der
+Kommandozeile.** `DecideRequest` trägt `remember`, legt die Regel also im selben
+Aufruf an, in dem die Entscheidung fällt, und nimmt sie zurück, wenn kein Flow
+entschieden wurde. Bis HUM-095 erreichte `humanitl flows decide` das Feld nicht:
+Der Lauf legte die Regel über `humanitl rules add --expires session` daneben an,
+und sie trug kein `created_from_flow_id` — das Abzeichen „from #n" des
+Regel-Bildschirms hatte für sie nichts anzuzeigen. Jetzt trägt
+`humanitl flows decide <ID> allow|block --remember <PATTERN>
+[--remember-method M]… [--remember-path P] [--remember-expires WHEN]
+[--remember-note TEXT]` die Regel mit, setzt `created_from_flow_id` auf die
+entschiedene Id und lässt die Regel ohne eigenes Flag für die Sitzung gelten.
+Der Lauf entscheidet den Stapel weiter in einer Schleife, und nur ihr erster
+Durchlauf trägt `--remember`: Eine Id je Aufruf bleibt die Regel der
+Kommandozeile (`daemon/bin/humanitl/src/cmd/flows.rs`), zwölf Aufrufe mit dem
+Flag legten zwölf Regeln an. Ohne `--remember` bleibt `--json` das Objekt aus
+`{flow_id, decision, note, applied}`; mit ihm kommen `created_rule_id` und
+`created_rule` dazu. Nie `rules add` und danach `decide`: Der Rücknahmeweg des
+Dienstes gilt nur für die Regel aus `remember`.
 
 **Der Akzeptanzschritt 8 gilt trotzdem, seit HUM-097 den Bildschirm fährt.**
 Hier stand, er sei „auch für die Oberflächen-Hälfte unerfüllbar, solange die
@@ -1539,7 +1542,9 @@ Kommandozeile: Die Oberfläche legt die Regel *in* der Entscheidung an
 (`decision.dart` `remember: i == 0 ? rule : null`, `rule_sentence.dart`
 `createdFrom: flow.id`, über die Leitung `convert.dart`), und das Abzeichen
 zeichnet `rule_row.dart`. Der Bildschirm-Zweig des Laufs prüft beides: das Feld
-`created_from_flow_id` am Daemon und das Abzeichen am Regel-Bildschirm.
+`created_from_flow_id` am Daemon und das Abzeichen am Regel-Bildschirm. Seit
+HUM-095 gilt der Schritt auch für den Kommandozeilen-Zweig, der dieselbe
+Herkunft über `--remember` setzt.
 
 **Die Haltefrist des Laufs ist 10 Sekunden, nicht 8, und sie ist zweierlei.**
 Sie ist die Zeit, nach der die eine unentschiedene Anfrage 504 bekommt — dafür
@@ -1548,8 +1553,10 @@ zwölf gehaltenen Anfragen entscheiden muss, bevor die erste von ihnen verfällt
 Ein eigener Prozess je Entscheidung braucht davon gemessen 21 bis 30 Prozent;
 auf einem langsamen Läufer wird der Lauf rot, ohne dass am Produkt etwas falsch
 wäre. Das ist der eine Punkt, an dem dieses Gate an fremder Hardware wackeln
-kann, und er verschwindet mit HUM-095: Mit einem einzigen `Decide` für den
-Stapel ist das Budget kein Faktor mehr, und 8 Sekunden reichen wieder.
+kann. HUM-095 nimmt ihn nicht weg: Es bringt `--remember` in die Entscheidung,
+lässt es aber bei genau einer Id je Aufruf, also bleiben es zwölf Prozesse. Das
+Budget verschwindet erst, wenn ein Aufruf mehrere Ids trägt (HUM-090 `--also`);
+dann reichen 8 Sekunden wieder.
 
 **`state:blocked` und `findings:>0` sind nicht dasselbe Paar wie in der
 Spezifikation.** `state:` vergleicht gegen die sieben Zustände des Automaten,

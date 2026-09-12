@@ -2602,3 +2602,347 @@ fn a_foreign_unit_is_refused_without_announcing_a_write() {
         "nothing is started, so nothing announces a start: {announced}"
     );
 }
+
+// --- humanitl flows decide --remember (HUM-095) -----------------------------
+
+/// Der Flow, den die aufgezeichnete Sitzung nach 450 ms hält.
+const HELD_FLOW: &str = "018f0001-0000-7000-8000-000000010000";
+
+/// Wartet, bis der Abspieler diesen Flow hält, und gibt seine Id zurück.
+///
+/// Der Fake spielt `fixtures/sessions/mixed.jsonl` in Echtzeit ab; vor der
+/// `hold`-Zeile wartet nichts, und ein Test, der sofort entscheidet, prüfte den
+/// leeren Fall.
+fn wait_for_held_flow(harness: &Harness) -> String {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        if held_ids(harness).iter().any(|id| id == HELD_FLOW) {
+            return HELD_FLOW.to_owned();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the recorded session held no flow {HELD_FLOW}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Die Ids aller Flows, die gerade warten.
+fn held_ids(harness: &Harness) -> Vec<String> {
+    let output = harness.run(["--json", "flows", "list", "state:held"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    json_of(&output)["flows"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|flow| flow["flow_id"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// Alle Regeln, die der Daemon führt, mitgelieferte eingeschlossen.
+///
+/// Sitzungsregeln stehen im Speicher und nie in `rules.yaml` (CONVENTIONS 4.5);
+/// `rules list --json` ist deshalb der einzige Ort, an dem ein Test sie sieht.
+fn rules_of(harness: &Harness) -> Vec<serde_json::Value> {
+    let output = harness.run(["--json", "rules", "list", "--all"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    json_of(&output)["rules"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Die Regel mit dieser Id, wie der Daemon sie führt.
+fn rule_with_id(harness: &Harness, rule_id: &str) -> serde_json::Value {
+    rules_of(harness)
+        .into_iter()
+        .find(|rule| rule["rule_id"] == rule_id)
+        .unwrap_or_else(|| panic!("the daemon lists a rule {rule_id}"))
+}
+
+/// Die Regel aus einer Freigabe nennt die Anfrage, aus der sie entstand.
+///
+/// Ohne sie ist die Sitzungsregel der Kommandozeile von einer handgeschriebenen
+/// nicht zu unterscheiden, und das Abzeichen „from {id}" des Regel-Bildschirms
+/// hat nichts anzuzeigen (ADR-0007, `rules.proto` Feld 6).
+#[test]
+fn decide_remember_carries_origin() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+    let id = wait_for_held_flow(&harness);
+
+    let output = harness.run([
+        "--json",
+        "flows",
+        "decide",
+        &id,
+        "allow",
+        "--remember",
+        "**.npmjs.org",
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let value = json_of(&output);
+    assert_eq!(value["created_rule"]["created_from_flow_id"], id, "{value}");
+    assert_eq!(value["created_rule"]["action"], "allow", "{value}");
+    assert_eq!(value["created_rule"]["host"], "**.npmjs.org", "{value}");
+
+    let rule_id = value["created_rule_id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(!rule_id.is_empty(), "the daemon names the rule: {value}");
+    assert_eq!(value["created_rule"]["rule_id"], rule_id, "{value}");
+
+    // Nicht nur die Antwort, auch der Regelbestand trägt die Herkunft: Die
+    // Antwort könnte eine Behauptung über etwas sein, das gar nicht abgelegt
+    // wurde.
+    let listed = rule_with_id(&harness, &rule_id);
+    assert_eq!(listed["created_from_flow_id"], id, "{listed}");
+    assert_eq!(listed["host"], "**.npmjs.org", "{listed}");
+
+    // Im Klartext steht die Regel in einer zweiten Zeile; wer ohne `--json`
+    // arbeitet, soll nicht erst `rules list` fragen müssen, was entstanden ist.
+    let plain = Harness::new();
+    let _plain_server = FakeServer::start(&plain);
+    let plain_id = wait_for_held_flow(&plain);
+    let output = plain.run([
+        "flows",
+        "decide",
+        &plain_id,
+        "allow",
+        "--remember",
+        "**.npmjs.org",
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let lines: Vec<String> = stdout(&output).lines().map(str::to_owned).collect();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[0], "allow 018f0001", "{lines:?}");
+    let rule_line = &lines[1];
+    assert!(
+        rule_line.starts_with("rule "),
+        "the second line names the rule: {rule_line}"
+    );
+    assert!(
+        rule_line.ends_with(" allow **.npmjs.org session"),
+        "with action, host and expiry: {rule_line}"
+    );
+}
+
+/// Ohne `--remember` ist die Anfrage die von vorher, und es entsteht nichts.
+///
+/// Genau die vier Schlüssel wie vor HUM-095, kein `created_rule_id`, kein
+/// `created_rule`, und dieselbe Zahl Regeln wie davor.
+#[test]
+fn decide_without_remember_creates_no_rule() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+    let id = wait_for_held_flow(&harness);
+    let before = rules_of(&harness).len();
+
+    let output = harness.run(["--json", "flows", "decide", &id, "allow"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let value = json_of(&output);
+
+    let mut keys: Vec<String> = value
+        .as_object()
+        .expect("one JSON object")
+        .keys()
+        .cloned()
+        .collect();
+    keys.sort();
+    assert_eq!(keys, ["applied", "decision", "flow_id", "note"], "{value}");
+    assert_eq!(value["flow_id"], id, "{value}");
+    assert_eq!(value["applied"], true, "{value}");
+
+    assert_eq!(
+        rules_of(&harness).len(),
+        before,
+        "a decision without --remember adds no rule"
+    );
+}
+
+/// Ohne `--remember-expires` gilt die Regel für die Sitzung, nicht für immer.
+///
+/// Ein leeres `expires` liest `expiry_from_proto` als `never`; eine dauerhafte
+/// Regel als Nebenwirkung einer einzelnen Freigabe ist genau die Überraschung,
+/// die das Produkt nicht macht. Mit dem Flag steht darin, was gefordert wurde —
+/// der Vorgabewert ist eine Vorgabe und keine Konstante.
+#[test]
+fn decide_remember_defaults_to_session() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+    let id = wait_for_held_flow(&harness);
+
+    let output = harness.run([
+        "--json",
+        "flows",
+        "decide",
+        &id,
+        "allow",
+        "--remember",
+        "**.npmjs.org",
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let value = json_of(&output);
+    let rule_id = value["created_rule_id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert_eq!(
+        value["created_rule"]["expires"]["kind"], "session",
+        "{value}"
+    );
+
+    let listed = rule_with_id(&harness, &rule_id);
+    assert_eq!(listed["expires"]["kind"], "session", "{listed}");
+    assert_eq!(listed["created_from_flow_id"], id, "{listed}");
+
+    // Und mit dem Flag das, was darin steht.
+    let other = Harness::new();
+    let _other_server = FakeServer::start(&other);
+    let other_id = wait_for_held_flow(&other);
+    let output = other.run([
+        "--json",
+        "flows",
+        "decide",
+        &other_id,
+        "allow",
+        "--remember",
+        "**.npmjs.org",
+        "--remember-expires",
+        "never",
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let value = json_of(&output);
+    assert_eq!(value["created_rule"]["expires"]["kind"], "never", "{value}");
+}
+
+/// `--note` und `--remember-note` kreuzen sich nicht.
+///
+/// `--note` ist die Begründung an den Agenten im 403-Body (HUM-072),
+/// `--remember-note` die Notiz der Regel. Geprüft wird zugleich, dass Methode
+/// und Pfad in der Regel ankommen.
+#[test]
+fn decide_remember_note_is_not_the_agent_note() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+    let id = wait_for_held_flow(&harness);
+
+    let output = harness.run([
+        "--json",
+        "flows",
+        "decide",
+        &id,
+        "block",
+        "--remember",
+        "**.evil.example",
+        "--note",
+        "use PyPI",
+        "--remember-note",
+        "blocked group",
+        "--remember-method",
+        "GET",
+        "--remember-path",
+        "/packages/**",
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let value = json_of(&output);
+    let rule_id = value["created_rule_id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+
+    let listed = rule_with_id(&harness, &rule_id);
+    assert_eq!(listed["action"], "block", "{listed}");
+    assert_eq!(listed["note"], "blocked group", "{listed}");
+    assert_ne!(listed["note"], "use PyPI", "{listed}");
+    assert_eq!(listed["methods"], serde_json::json!(["GET"]), "{listed}");
+    assert_eq!(listed["path"], "/packages/**", "{listed}");
+    // Die Notiz an den Agenten bleibt, wo sie hingehört.
+    assert_eq!(value["note"], "use PyPI", "{value}");
+}
+
+/// Ein Muster, das der Daemon nicht lesen kann, entscheidet nichts.
+///
+/// Der Dienst legt die Regel vor der Entscheidung an; scheitert sie, ist der
+/// ganze Aufruf gescheitert, und der Flow wartet weiter.
+#[test]
+fn decide_remember_bad_pattern_decides_nothing() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+    let id = wait_for_held_flow(&harness);
+    let before = rules_of(&harness).len();
+
+    let output = harness.run([
+        "flows",
+        "decide",
+        &id,
+        "allow",
+        "--remember",
+        "cidr:not-an-address",
+    ]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    // Der Befund kommt vom Daemon und nennt das Muster; die Kommandozeile
+    // erklärt Host-Muster nicht selbst (`docs/ARCHITECTURE.md` 4).
+    assert!(text.contains("RULES_003"), "{text}");
+    assert!(text.contains("cidr:not-an-address"), "{text}");
+
+    assert_eq!(rules_of(&harness).len(), before, "no rule was added");
+    assert!(
+        held_ids(&harness).iter().any(|held| held == &id),
+        "the flow is still waiting, so nobody decided it"
+    );
+}
+
+/// Eine unlesbare Flow-Id bleibt `IPC_004` über die Id.
+///
+/// Die Kommandozeile schickt dann keine Regel mit: Sonst wiese
+/// `rule_from_proto` `created_from_flow_id` mit `IPC_005` ab, und der Befund
+/// spräche über ein Feld, das der Aufrufer nie gesetzt hat.
+#[test]
+fn decide_remember_bad_flow_id_keeps_ipc_004() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+    wait_for_held_flow(&harness);
+    let before = rules_of(&harness).len();
+
+    let output = harness.run([
+        "flows",
+        "decide",
+        "not-a-uuid",
+        "allow",
+        "--remember",
+        "**.example.com",
+    ]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.contains("IPC_004"), "{text}");
+    assert!(!text.contains("IPC_005"), "{text}");
+    assert!(text.contains("not-a-uuid"), "{text}");
+
+    assert_eq!(rules_of(&harness).len(), before, "no rule was added");
+}
+
+/// Die Zusatz-Flags gibt es nur zusammen mit `--remember`.
+///
+/// Ohne das Muster gäbe es nichts, woran sie hingen; `clap` sagt das, bevor
+/// irgendjemand den Daemon fragt.
+#[test]
+fn remember_flags_without_a_pattern_are_a_usage_error() {
+    let harness = Harness::new();
+    for flag in [
+        vec!["--remember-method", "GET"],
+        vec!["--remember-path", "/x/**"],
+        vec!["--remember-expires", "never"],
+        vec!["--remember-note", "why"],
+    ] {
+        let mut args = vec!["flows", "decide", HELD_FLOW, "allow"];
+        args.extend_from_slice(&flag);
+        let output = harness.run(args.clone());
+        let text = stderr(&output);
+        assert_eq!(code(&output), 1, "{flag:?}: {text}");
+        assert!(text.starts_with("error[CLI_004]: "), "{flag:?}: {text}");
+    }
+}

@@ -23,8 +23,10 @@
 # Läuft das Budget über, wird der Lauf rot, ohne dass am Produkt etwas falsch
 # wäre. Die Spezifikation nennt 8 Sekunden; hier stehen 10, und die Rechnung
 # steht hier, damit ein späterer Leser weiß, welche Schraube er dreht, wenn der
-# Lauf auf fremder Hardware wackelt. Mit `Decide{flow_ids, remember}` in der
-# Kommandozeile (HUM-095) fällt Punkt 2 weg, und 8 Sekunden reichen wieder.
+# Lauf auf fremder Hardware wackelt. HUM-095 ändert daran nichts: Es bringt
+# `--remember` in die Entscheidung, aber weiterhin genau eine Id je Aufruf, also
+# zwölf Prozesse. Punkt 2 fällt erst weg, wenn ein Aufruf mehrere Ids trägt
+# (HUM-090); dann reichen 8 Sekunden wieder.
 #
 # `run.sh` setzt denselben Wert zusätzlich über die Umgebung, weil
 # `start_daemon` die Frist so entgegennimmt.
