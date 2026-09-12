@@ -215,6 +215,9 @@ extension FlowSummaryToDomain on pb.FlowSummary {
     // What the daemon says, or the empty string: a missing field means "the
     // daemon does not know", and the client never derives one (HUM-091).
     apex: apex,
+    // The service the daemon's catalog named, or the empty string: the client
+    // never works one out from the host (HUM-094).
+    catalogId: catalogId,
     path: path,
     state: enumFromWire(FlowState.values, state.value) ?? FlowState.received,
     decision: enumFromWire(DecisionKind.values, decision.value),

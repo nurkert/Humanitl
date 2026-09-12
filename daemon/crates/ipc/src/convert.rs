@@ -934,6 +934,24 @@ fn flow_apex(domains: Option<&DomainTable>, id: FlowId, host: &HostName) -> Stri
     })
 }
 
+/// Die Katalog-Kennung eines Flows, wie der Katalog sie kennt.
+///
+/// Dieselben zwei Wege wie bei [`flow_apex`] und dieselbe Antwort wie in
+/// [`domain_to_proto`]: Für einen Flow dieser Sitzung die Auskunft, die beim
+/// Eintreffen entstand ([`DomainTable::get`]), für jeden anderen dieselbe ohne
+/// die Zähler ([`DomainTable::describe`]). Ohne Katalog und ohne Treffer
+/// bleibt das Feld leer; ein leeres Feld heißt „der Daemon kennt den Dienst
+/// nicht", nie „unbedenklich" (HUM-094).
+fn flow_catalog_id(domains: Option<&DomainTable>, id: FlowId, host: &HostName) -> String {
+    domains.map_or_else(String::new, |domains| {
+        domains
+            .get(id)
+            .unwrap_or_else(|| domains.describe(host))
+            .catalog_id
+            .unwrap_or_default()
+    })
+}
+
 /// Rechnet eine Frist des Kerns in die Wanduhrzeit des Vertrags um.
 ///
 /// Der Kern misst Fristen als [`Instant`], weil nur diese Uhr monoton ist und
@@ -1085,6 +1103,10 @@ pub fn record_to_summary(record: &FlowRecord, domains: Option<&DomainTable>) -> 
         // der 403-Antwort gelesen hat. Eine Sperre des Systems mit eigenem
         // Text bleibt leer (HUM-117).
         decision_note: human_block_note(record.decision.as_ref(), record.decision_source),
+        // Die Kennung des Katalogeintrags aus derselben Auskunft, aus der auch
+        // `apex` kommt; Zeile und Karte nennen damit denselben Dienst, ohne
+        // dass die Oberfläche ein zweites Mal fragt (HUM-094).
+        catalog_id: flow_catalog_id(domains, record.id, &request.authority.host),
     }
 }
 
@@ -1475,6 +1497,7 @@ fn received_summary(
         state: v1::FlowState::Received as i32,
         request_size: request.body.size,
         apex: flow_apex(domains, id, &request.authority.host),
+        catalog_id: flow_catalog_id(domains, id, &request.authority.host),
         ..v1::FlowSummary::default()
     }
 }
@@ -1796,6 +1819,11 @@ pub fn recorded_summary_to_proto(row: &RecordedSummary) -> v1::FlowSummary {
         // zum leeren Text; der Leser rät nichts und säubert nicht nach, denn
         // die Spalte trägt schon, was der Agent gelesen hat (HUM-117).
         decision_note: row.decision_note.clone().unwrap_or_default(),
+        // Die Spalte, die der Katalog beim Eintreffen gefüllt hat
+        // (`Recorder::set_domain`). `NULL` heißt „der Daemon kannte den Dienst
+        // nicht" und wird zum leeren String, nie zu einem Rat aus dem
+        // Hostnamen (HUM-094).
+        catalog_id: row.catalog_id.clone().unwrap_or_default(),
     }
 }
 
@@ -2659,6 +2687,101 @@ mod tests {
             let domain = detail.domain.expect("a detail carries its domain card");
             assert_eq!(summary.apex, apex, "{host}");
             assert_eq!(summary.apex, domain.apex, "{host}");
+        }
+    }
+
+    /// Eine Tabelle über einem Katalog, der den npm-Eintrag kennt.
+    ///
+    /// Der Gegenstück zu [`catalog`]: Dort steht kein Eintrag, hier genau
+    /// einer, damit sich `catalog_id` gefüllt und leer prüfen lässt, ohne die
+    /// ganze Datei zu laden.
+    fn catalog_with_npm() -> DomainTable {
+        let entry = humanitl_catalog::CatalogEntry {
+            id: "npm".to_owned(),
+            name: "npm registry".to_owned(),
+            hosts: vec!["registry.npmjs.org".to_owned(), "**.npmjs.org".to_owned()],
+            category: humanitl_catalog::Category::Registry,
+            description: humanitl_catalog::Text {
+                en: "Package registry for Node.js.".to_owned(),
+                de: "Paket-Registry für Node.js.".to_owned(),
+            },
+            typical: vec!["npm install".to_owned()],
+            icon: "registry.svg".to_owned(),
+            homepage: "https://www.npmjs.com".to_owned(),
+            source: "https://docs.npmjs.com/".to_owned(),
+            risk_note: None,
+        };
+        let catalog = Catalog::build(vec![entry], humanitl_catalog::Ranks::empty())
+            .expect("ein Eintrag mit einem Muster baut");
+        DomainTable::new(Arc::new(catalog), None)
+    }
+
+    /// Der History-Pfad reicht die Spalte durch, statt sie wegzuwerfen.
+    #[test]
+    fn recorded_summary_carries_the_catalog_id() {
+        let row = RecordedSummary {
+            host: "registry.npmjs.org".to_owned(),
+            host_display: "registry.npmjs.org".to_owned(),
+            apex: Some("npmjs.org".to_owned()),
+            catalog_id: Some("npm".to_owned()),
+            ..recorded_row()
+        };
+        assert_eq!(recorded_summary_to_proto(&row).catalog_id, "npm");
+
+        let unknown = RecordedSummary {
+            catalog_id: None,
+            ..row
+        };
+        assert_eq!(
+            recorded_summary_to_proto(&unknown).catalog_id,
+            "",
+            "NULL heisst unbekannt, nie ein Rat aus dem Hostnamen"
+        );
+    }
+
+    /// Ohne Katalog bleibt die Kennung leer, statt aus dem Namen zu folgen.
+    #[test]
+    fn live_summary_catalog_id_is_empty_without_catalog() {
+        let session = SessionId::new();
+        let flow = flow(session, "registry.npmjs.org");
+        let record = FlowRecord::new(&flow, &ConnMeta::plain(session));
+
+        assert_eq!(
+            record_to_summary(&record, None).catalog_id,
+            "",
+            "ohne Katalog kennt der Daemon den Dienst nicht"
+        );
+        assert_eq!(
+            record_to_summary(&record, Some(&catalog())).catalog_id,
+            "",
+            "ein leerer Katalog trifft nichts"
+        );
+    }
+
+    /// Zeile und Katalog-Karte desselben Details nennen denselben Dienst.
+    ///
+    /// Das ist der Grund für das Feld: Der Kopf der Warteschlange liest die
+    /// Zeile, die Karte das Detail, und beide sollen denselben Dienst nennen,
+    /// ohne dass die Oberfläche zweimal fragt (HUM-094).
+    #[test]
+    fn detail_summary_and_domain_agree_on_the_catalog_id() {
+        for (host, id) in [("registry.npmjs.org", "npm"), ("evil.example", "")] {
+            let session = SessionId::new();
+            let request = HttpRequest::new(
+                Method::GET,
+                Scheme::Https,
+                Authority::with_scheme(HostName::parse(host).unwrap(), Scheme::Https),
+                "/",
+            );
+            let flow = Flow::new(FlowId::new(), session, SystemTime::now(), request);
+            let record = FlowRecord::new(&flow, &ConnMeta::plain(session));
+            let domains = catalog_with_npm();
+
+            let detail = record_to_detail(&record, Some(&domains));
+            let summary = detail.summary.expect("a detail carries its row");
+            let domain = detail.domain.expect("a detail carries its domain card");
+            assert_eq!(summary.catalog_id, id, "{host}");
+            assert_eq!(summary.catalog_id, domain.catalog_id, "{host}");
         }
     }
 

@@ -113,6 +113,26 @@ void main() {
     expect(unknown.apex, isEmpty);
   });
 
+  test('a row carries the catalog id, and a missing field is empty', () {
+    final Flow known =
+        (pb.FlowSummary()
+              ..flowId = '018f0000-0000-7000-8000-000000000005'
+              ..authority = (pb.Authority()..host = 'registry.npmjs.org')
+              ..apex = 'npmjs.org'
+              ..catalogId = 'npm')
+            .toDomain();
+    expect(known.catalogId, 'npm');
+
+    // Ein Daemon, der keinen Dienst kennt, sagt nicht „unbedenklich": Das Feld
+    // bleibt leer, und der Client schlägt nichts aus dem Host nach (HUM-094).
+    final Flow unknown =
+        (pb.FlowSummary()
+              ..flowId = '018f0000-0000-7000-8000-000000000006'
+              ..authority = (pb.Authority()..host = 'evil.example'))
+            .toDomain();
+    expect(unknown.catalogId, isEmpty);
+  });
+
   test(
     'a row carries the note of a block, and no note is the empty string',
     () {

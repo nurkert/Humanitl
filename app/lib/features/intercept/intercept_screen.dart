@@ -37,7 +37,7 @@ import 'widgets/action_bar.dart';
 import 'widgets/agent_ask_card.dart';
 import 'widgets/batch_modal.dart';
 import 'widgets/coach_mark.dart';
-import 'widgets/domain_pane_placeholder.dart';
+import 'widgets/domain_panel.dart';
 import 'widgets/queue_pane.dart';
 import 'widgets/request_card.dart';
 import 'widgets/selection_card.dart';
@@ -508,7 +508,7 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
                         selection: chosen,
                         queueEmpty: queueEmpty,
                       ),
-                      DomainPanePlaceholder(flow: selected),
+                      DomainPanel(flow: selected),
                     ],
                   ),
                   // The sheet hangs on the right edge and leaves the panes

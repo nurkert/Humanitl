@@ -664,6 +664,13 @@ pub fn summary_json(summary: &v1::FlowSummary) -> Value {
         // Skript, das ihn liest, soll nicht zwei Formen von „nichts"
         // unterscheiden muessen (HUM-091).
         "apex": summary.apex,
+        // Der Dienst, den der Domain-Katalog des Daemons erkannt hat, als
+        // Kennung und nicht als Name: Der Name steht in `catalog/domains.yaml`
+        // und kann sich ändern, die Kennung ist der Schlüssel. Unbekannt ist
+        // auch hier der leere String (HUM-094). Ohne diese Zeile zeigte der
+        // Bildschirm einen Dienst, den `--json` nicht nennt, und die beiden
+        // Clients derselben Proto sagten Verschiedenes (ADR-018).
+        "catalog_id": summary.catalog_id,
         "duration_ms": summary.duration.as_ref().map(|duration| {
             duration.seconds * 1_000 + i64::from(duration.nanos) / 1_000_000
         }),
@@ -800,6 +807,7 @@ mod tests {
             meta: false,
             apex: "github.com".to_owned(),
             decision_note: String::new(),
+            catalog_id: String::new(),
         }
     }
 

@@ -93,6 +93,22 @@ abstract class Flow with _$Flow {
     /// host instead (HUM-091). The same string the filter term `apex:`
     /// compares against.
     @Default('') String apex,
+
+    /// The id of the catalog entry the daemon found for the host; empty when
+    /// it found none (`FlowSummary.catalog_id`, HUM-031, HUM-094).
+    ///
+    /// The daemon asks the catalog once, when the request arrives, and the
+    /// answer travels in the row. Whoever names a group after the service it
+    /// stands for reads it here: the same value the card of the selected flow
+    /// reads, without a second call, and a restart of the app does not lose it
+    /// because the recording keeps the column.
+    ///
+    /// Empty means "the daemon does not know the service": no catalog, an IP
+    /// literal, or a host no pattern matches. It never means "harmless", and
+    /// the client never derives one from the host. The name, the description
+    /// and what is typical for this id stand in the bundled
+    /// `catalog/domains.yaml`, not on the wire.
+    @Default('') String catalogId,
     required String path,
     required FlowState state,
     DecisionKind? decision,
