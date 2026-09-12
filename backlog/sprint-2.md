@@ -1552,7 +1552,7 @@ Sound (Setting existiert, Default aus, Implementierung Post-MVP), globale Hotkey
 
 ### Akzeptanzkriterien
 - [x] Tests grün. (`attention_test.dart`, `tray_host_test.dart`, `tray_icon_test.dart`; Namen nach CONVENTIONS 4.19)
-- [ ] Manuell unter GNOME mit AppIndicator-Extension: Tray-Zähler sichtbar; unter GNOME ohne Extension: genau ein Diagnostic in der Diagnostics-Ansicht, App läuft normal. Das Protokoll belegt `dbus_live_test.dart` auf einem privaten Bus (Watcher, Status, ToolTip, Menü); unter GNOME mit und ohne Extension hat niemand gemessen, und eine Diagnostics-Ansicht gibt es nicht: `UI_002` landet in einer wegklickbaren `AttentionNoticeCard` (CONVENTIONS 4.19). Die Hints der Notification kamen doppelt verpackt an; HUM-118 hat das behoben und belegt es mit `dbus_notifications_test.dart` und `make flutter-test-dbus`.
+- [ ] Manuell unter GNOME mit AppIndicator-Extension: Tray-Zähler sichtbar; unter GNOME ohne Extension: genau eine `AttentionNoticeCard` mit `UI_002` („This desktop has no tray"), wegklickbar über `attention-notice-dismiss`, App läuft normal. Das Protokoll belegt `dbus_live_test.dart` auf einem privaten Bus (Watcher, Status, ToolTip, Menü); unter GNOME mit und ohne Extension hat niemand gemessen, und eine Diagnostics-Ansicht gibt es nicht: `UI_002` landet in einer wegklickbaren `AttentionNoticeCard` (CONVENTIONS 4.19). Die Hints der Notification kamen doppelt verpackt an; HUM-118 hat das behoben und belegt es mit `dbus_notifications_test.dart` und `make flutter-test-dbus`.
 - [x] Notification-Aktion `Allow` entscheidet den Flow ohne dass das Fenster in den Vordergrund kommt.
 
 ### Fallstricke
