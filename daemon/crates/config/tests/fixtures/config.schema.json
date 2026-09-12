@@ -492,7 +492,7 @@
             "type": "string"
           },
           "default": {},
-          "description": "Feste Zuordnungen von Hostname zu Adresse, vor jeder Abfrage.",
+          "description": "Feste Zuordnungen von Hostname zu Adresse, vor jeder Abfrage. Nicht leer meldet der Start als `CONFIG_016`, damit der Testhebel nicht unbemerkt in einem Alltagslauf steht.",
           "type": "object",
           "x-project-scope": "denied",
           "x-tier": "expert"
