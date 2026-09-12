@@ -207,6 +207,7 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
     // Start hier, und weder `daemon.sock` noch `proxy.sock` entstehen
     // (HUM-087).
     let test_ca = announce_test_ca(cli.allow_test_ca, &config)?;
+    announce_overrides(&config.resolver);
 
     // Die Aufzeichnung zuerst: Ohne sie hat der Daemon kein Gedächtnis, und
     // eine Sitzung, die aufzeichnen soll und es nicht kann, startet nicht
@@ -777,6 +778,44 @@ fn load_config(xdg: &XdgPaths) -> Result<humanitl_config::Resolved, Diagnostic> 
         tracing::info!(code = %diagnostic.code, why = %diagnostic.why, "runtime directory");
     }
     Ok(resolved)
+}
+
+/// Die Zeile, mit der der Start zu `resolver.overrides` Stellung nimmt.
+///
+/// Eine nicht leere Tabelle beantwortet Namen aus der Konfiguration, statt zu
+/// fragen, und schickt den Verkehr an die Adresse, die dort steht. Das ist ein
+/// Testhebel wie `resolver.test_ca`, und er bekommt dieselbe Stufe: `warn`,
+/// damit wer sucht, warum ein Ziel erreicht oder nicht erreicht wird, die
+/// Zeile neben dem Fehler findet, den sie erklärt (`backlog/CONVENTIONS.md`
+/// 4.22, HUM-024).
+///
+/// Zurück kommt der Befund, damit der Test ihn ohne Protokoll lesen kann;
+/// `None` heißt: die Tabelle ist leer, und es gibt nichts zu sagen.
+fn announce_overrides(resolver: &ResolverConfig) -> Option<Diagnostic> {
+    if resolver.overrides.is_empty() {
+        return None;
+    }
+    // Die Namen selbst und nicht nur ihre Zahl: Wer die Zeile liest, sucht
+    // meist einen bestimmten Namen und will wissen, ob dieser darunter ist.
+    let hosts: Vec<&str> = resolver
+        .overrides
+        .keys()
+        .map(std::string::String::as_str)
+        .collect();
+    let note = Diagnostic::builder(codes::CONFIG_016, Severity::Warning)
+        .why(format!(
+            "resolver.overrides answers {} name(s) from the configuration instead of asking the \
+             name service: {}",
+            hosts.len(),
+            hosts.join(", ")
+        ))
+        .fix(FixAction::ChangeSetting {
+            key: "resolver.overrides".to_owned(),
+            value: "an empty table, unless the fixed addresses are meant".to_owned(),
+        })
+        .build();
+    tracing::warn!(code = %note.code, why = %note.why, "name overrides");
+    Some(note)
 }
 
 /// [`test_ca_roots`] und die Zeilen, mit denen der Start dazu Stellung nimmt.
@@ -1514,8 +1553,8 @@ mod tests {
 
     use super::{
         ADVICE_DAEMON_SOCKET, Config, DirOwner, ResolverConfig, Runtime, XdgPaths,
-        check_private_dir, fix_hint, free_socket, load_rules, parse_speed, probe_with_roots,
-        test_ca_roots,
+        announce_overrides, check_private_dir, fix_hint, free_socket, load_rules, parse_speed,
+        probe_with_roots, test_ca_roots,
     };
 
     fn mode_of(path: &Path) -> u32 {
@@ -1903,6 +1942,38 @@ mod tests {
         };
         assert_eq!(key, "resolver.test_ca");
         assert!(value.contains("absolute"), "{value}");
+    }
+
+    #[test]
+    fn a_table_of_fixed_names_is_announced_with_its_names() {
+        let mut resolver = ResolverConfig::default();
+        resolver
+            .overrides
+            .insert("registry.npmjs.test".to_owned(), "127.0.0.1".to_owned());
+        resolver
+            .overrides
+            .insert("pypi.test".to_owned(), "127.0.0.2".to_owned());
+
+        let note = announce_overrides(&resolver).expect("a non-empty table says so");
+
+        assert_eq!(note.code, codes::CONFIG_016);
+        assert_eq!(note.severity, Severity::Warning);
+        assert!(note.why.contains("registry.npmjs.test"), "{}", note.why);
+        assert!(note.why.contains("pypi.test"), "{}", note.why);
+        assert!(
+            note.why.contains('2'),
+            "the count belongs in it: {}",
+            note.why
+        );
+        let Some(FixAction::ChangeSetting { key, .. }) = note.fix else {
+            panic!("the way out is the setting itself: {:?}", note.fix);
+        };
+        assert_eq!(key, "resolver.overrides");
+    }
+
+    #[test]
+    fn an_empty_table_of_fixed_names_says_nothing() {
+        assert!(announce_overrides(&ResolverConfig::default()).is_none());
     }
 
     #[test]
