@@ -159,6 +159,7 @@ void main() {
           'session_id',
           'decision',
           'block_reason',
+          'note',
           'rule_id',
           'findings_count',
           'edited',
@@ -167,6 +168,35 @@ void main() {
           expect(humanitl.containsKey(field), isTrue, reason: field);
         }
       }
+    });
+
+    test('har_carries_the_note', () {
+      // Die Notiz an den Agenten hat im HAR-Format kein Feld; sie gehört
+      // deshalb in `_humanitl`, neben die Entscheidung, die sie erklärt
+      // (HUM-117).
+      final Map<String, Object?> noted =
+          harEntry(
+                testEntry(
+                  testFlow(
+                    id: '018f0004-0000-7000-8000-000000000004',
+                    decision: DecisionKind.block,
+                    source: DecisionSource.user,
+                    blockReason: BlockReason.user,
+                    decisionNote: 'use PyPI',
+                    status: 403,
+                  ),
+                ),
+              )['_humanitl']!
+              as Map<String, Object?>;
+      expect(noted['note'], 'use PyPI');
+
+      // Ohne Notiz steht dort `null` und nicht der leere Text: Ein Export ist
+      // Beweismittel, und „nichts geschrieben" ist nicht dasselbe wie „einen
+      // leeren Satz geschrieben".
+      final Map<String, Object?> silent =
+          harEntry(_threeFlows()[0])['_humanitl']! as Map<String, Object?>;
+      expect(silent.containsKey('note'), isTrue);
+      expect(silent['note'], isNull);
     });
 
     test('a blocked flow answers 403, whatever the recorder stored', () {

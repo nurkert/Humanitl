@@ -37,7 +37,8 @@ const POOL_SIZE: usize = 8;
 /// Die Spalten von `flows`, in der Reihenfolge von [`row_to_summary`].
 const FLOW_COLUMNS: &str = "id, session_id, seq, ts, method, scheme, host, host_display, port, \
      path, upgrade, state, decision, block_reason, rule_id, passthrough, status, duration_ms, \
-     held_ms, edited, findings_count, request_size, response_size, apex, catalog_id, error, meta";
+     held_ms, edited, findings_count, request_size, response_size, apex, catalog_id, error, meta, \
+     decision_note";
 
 /// Ein kleiner Vorrat an Nur-Lese-Verbindungen.
 ///
@@ -492,6 +493,10 @@ fn row_to_summary(row: &Row<'_>) -> rusqlite::Result<FlowSummary> {
         catalog_id: row.get(24)?,
         error: row.get(25)?,
         meta: row.get::<_, i64>(26)? != 0,
+        // `NULL` bleibt `None`: Die Spalte gibt es erst seit
+        // `V8__decision_note.sql`, und eine ältere Zeile hat keine Notiz, statt
+        // eine leere zu behaupten (HUM-117).
+        decision_note: row.get(27)?,
     })
 }
 

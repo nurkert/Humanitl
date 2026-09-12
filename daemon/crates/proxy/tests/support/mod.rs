@@ -192,6 +192,8 @@ pub struct ProxyBuilder {
     hard_block_checksum_secrets: bool,
     recording: bool,
     meta: bool,
+    /// Datenordner und Sitzung eines frueheren Proxys (`restart_of`).
+    restart: Option<(PathBuf, SessionId)>,
 }
 
 impl Default for ProxyBuilder {
@@ -218,6 +220,7 @@ impl Default for ProxyBuilder {
             // Test, der zeigen will, was ohne ihn geschieht, schaltet ihn ab.
             meta: true,
             recording: false,
+            restart: None,
         }
     }
 }
@@ -361,26 +364,58 @@ impl ProxyBuilder {
         self
     }
 
+    /// Derselbe Datenordner und dieselbe Sitzung wie `proxy`, aber ein neuer
+    /// Prozesszustand: leere Registry, leere Warteschlange, neuer Socket.
+    ///
+    /// Das ist der Zustand nach einem Neustart des Daemons. `proxy` muss am
+    /// Leben bleiben, solange der neue laeuft: Ihm gehoert das Verzeichnis.
+    pub fn restart_of(mut self, proxy: &Proxy) -> Self {
+        self.recording = true;
+        self.restart = Some((proxy.data_dir(), proxy.session));
+        self
+    }
+
+    /// Derselbe Datenordner wie `proxy`, aber eine **eigene** Sitzung.
+    ///
+    /// Der Fall „ein zweiter Agent sieht dieselbe Aufzeichnung": Die
+    /// Datenbank kennt den Flow, die Sitzung ist eine andere.
+    pub fn data_dir_of(mut self, proxy: &Proxy) -> Self {
+        self.recording = true;
+        self.restart = Some((proxy.data_dir(), SessionId::new()));
+        self
+    }
+
     pub async fn start(self) -> Proxy {
         let tmp = tempfile::tempdir().unwrap();
         let ca = Arc::new(CaStore::load_or_create(&tmp.path().join("ca")).unwrap());
         let leaves = Arc::new(LeafCache::new(Arc::clone(&ca), 16));
-        let session = SessionId::new();
+        let restart = self.restart.clone();
+        let data_dir = restart
+            .as_ref()
+            .map_or_else(|| tmp.path().join("data"), |(dir, _)| dir.clone());
+        let session = restart
+            .as_ref()
+            .map_or_else(SessionId::new, |(_, session)| *session);
         let recorder = self.recording.then(|| {
             let recorder = Recorder::open(
-                &tmp.path().join("data").join("humanitl.db"),
-                &tmp.path().join("data").join("blobs"),
+                &data_dir.join("humanitl.db"),
+                &data_dir.join("blobs"),
                 RecorderSettings::default(),
             )
             .unwrap();
-            recorder.start_session(&SessionMeta {
-                id: session,
-                started_at: std::time::SystemTime::now(),
-                sandbox_profile: "test".to_owned(),
-                llm_endpoint: None,
-                work_dir: tmp.path().display().to_string(),
-                agent: "test".to_owned(),
-            });
+            // Nach einem Neustart steht die Sitzung schon in der Datenbank;
+            // sie ein zweites Mal zu eroeffnen waere eine zweite Zeile fuer
+            // dieselbe Sitzung.
+            if restart.is_none() {
+                recorder.start_session(&SessionMeta {
+                    id: session,
+                    started_at: std::time::SystemTime::now(),
+                    sandbox_profile: "test".to_owned(),
+                    llm_endpoint: None,
+                    work_dir: tmp.path().display().to_string(),
+                    agent: "test".to_owned(),
+                });
+            }
             recorder
         });
         let queue = Arc::new(match recorder.clone() {
@@ -522,6 +557,7 @@ impl ProxyBuilder {
             core,
             recorder,
             rules_store: store,
+            data_dir,
             tmp,
         }
     }
@@ -543,10 +579,17 @@ pub struct Proxy {
     pub recorder: Option<Recorder>,
     /// Der Regelspeicher, falls `ProxyBuilder::rules_store` gesetzt war.
     pub rules_store: Option<Arc<RulesStore>>,
+    data_dir: PathBuf,
     tmp: TempDir,
 }
 
 impl Proxy {
+    /// Der Ordner mit Datenbank und Blobs; Griff fuer
+    /// [`ProxyBuilder::restart_of`].
+    pub fn data_dir(&self) -> PathBuf {
+        self.data_dir.clone()
+    }
+
     /// Ein Zuhörer am Ereignisstrom; vor der Anfrage anlegen.
     pub fn events(&self) -> Events {
         Events {

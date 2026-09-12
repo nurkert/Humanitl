@@ -1786,5 +1786,10 @@
   "aboutLegalese": "Free software under the GNU General Public License, version 3 only (GPL-3.0-only). It comes without any warranty.",
   "@aboutLegalese": {"description": "The program's own licence in the About dialog and at the top of the licence page. The SPDX identifier GPL-3.0-only stays verbatim; the file LICENSE in the repository is the full text (HUM-031)."},
   "aboutRanks": "The popularity ranks are an excerpt of the Majestic Million by Majestic-12 Ltd., https://majestic.com/reports/majestic-million, used under the Creative Commons Attribution 3.0 Unported licence (CC BY 3.0), https://creativecommons.org/licenses/by/3.0/. Humanitl ships ranks 1 to 100,000, cut down to rank and domain; every change is listed under “Majestic Million” on the licence page.",
-  "@aboutRanks": {"description": "CC BY 3.0 attribution of the bundled popularity ranking in the About dialog (catalog/RANKS-LICENSE). It must name the source, the licence with its link, and that the shipped file is an edited excerpt. Keep both addresses, the name Majestic Million and CC BY 3.0 verbatim: they are the attribution the licence asks for, and the licence page lists the entry under that name (HUM-031)."}
+  "@aboutRanks": {"description": "CC BY 3.0 attribution of the bundled popularity ranking in the About dialog (catalog/RANKS-LICENSE). It must name the source, the licence with its link, and that the shipped file is an edited excerpt. Keep both addresses, the name Majestic Million and CC BY 3.0 verbatim: they are the attribution the licence asks for, and the licence page lists the entry under that name (HUM-031)."},
+  "historyDetailNote": "Note to the agent: {note}",
+  "@historyDetailNote": {
+    "description": "One line under the decision in the history detail: the sentence the person wrote to the agent when they blocked the request. It is shown only when there is one, as plain text and never as markup, exactly as the agent read it in the 403 response (HUM-072, HUM-117).",
+    "placeholders": {"note": {"type": "String"}}
+  }
 }

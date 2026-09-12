@@ -47,7 +47,11 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `9` seit dem entpackten Body: `BodyRef.content_encoding` nennt die
+/// `10` seit der Notiz einer Entscheidung: `FlowSummary.decision_note` und
+/// `FlowDetail.decision_note` tragen den Satz, den der Mensch beim Blocken an
+/// den Agenten gerichtet hat, aus der Aufzeichnung in jede Zeile und in jedes
+/// Detail; er überdauert damit einen Neustart des Daemons (HUM-117);
+/// `9` war der entpackte Body: `BodyRef.content_encoding` nennt die
 /// Kodierung der aufgezeichneten Bytes, `BodyRef.decoded` bittet `GetBody`
 /// darum, sie abzunehmen, und `BodyChunk.encoding_left` sagt, was danach noch
 /// auf den Bytes liegt (HUM-119);
@@ -75,7 +79,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 9;
+pub const PROTO_MINOR: u32 = 10;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

@@ -31,9 +31,12 @@ abstract final class ProtoVersion {
   /// names the encoding of the recorded bytes, `BodyRef.decoded` asks `GetBody`
   /// to take it off, and `BodyChunk.encoding_left` says what is still on the
   /// bytes that arrive, which is what places a finding of a brotli body at its
-  /// column (HUM-119). Raising the number without a reader would claim
+  /// column (HUM-119). Raised to 10 with the note of a decision:
+  /// `FlowSummary.decision_note` carries the sentence the person wrote to the
+  /// agent when they blocked, and the history detail shows it under the
+  /// decision (HUM-117). Raising the number without a reader would claim
   /// otherwise.
-  static const int minor = 9;
+  static const int minor = 10;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';
