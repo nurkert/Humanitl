@@ -1517,13 +1517,14 @@ Kein Onboarding-Video, keine Tour durch alle Screens. Keine Installation von Ope
 - `app/lib/features/shell/connection_gate.dart`, `shell_screen.dart`: Setup als Zustand **in** der Shell (sechster Abschnitt oder Overlay über dem `IndexedStack`), nicht als Ersatz — heute rendert `ConnectionGate` `SetupScreen` statt `ShellScreen`, und Header wie `Shortcuts(shellShortcuts())` entstehen erst in `ShellScreen.build`
 - `app/lib/features/shell/providers/connection.dart`: Timer, der bei `ConnectionFailed` alle 2 s `retry()` ruft; der Doc-Kommentar dort begründet heute das Gegenteil und wird ergänzt
 - `app/lib/core/ipc/daemon_client.dart`, `grpc_daemon_client.dart`, `fake_daemon_client.dart`: `doctor()` und `probeLlm(endpoint)` (beide fehlen; der Daemon implementiert `ProbeLlm` seit HUM-039)
-- `daemon/crates/sandbox/src/preflight.rs` (neu): alle fünf Ergebnisse statt des ersten Fehlers (`BwrapBackend::detect` bricht beim ersten ab)
+- `daemon/crates/sandbox/src/doctor/checks.rs`: Die Maschinen-Hälfte hat HUM-075 vor diesem Issue gebaut (`doctor.rs` plus `doctor/{checks,probe}.rs`, alle Ergebnisse statt des ersten Fehlers, bei dem `BwrapBackend::detect` abbricht); hier kommen nur die distributionsspezifischen Befehle dazu. Eine eigene `preflight.rs` gibt es nicht und wird es nicht geben (nachgesehen am 2026-09-12: keine Datei `preflight*` im Baum)
+- `daemon/crates/sandbox/src/os_release.rs` (neu), `daemon/crates/sandbox/tests/os_release.rs` (neu)
 - `daemon/crates/ipc/src/server.rs`: `Doctor` implementieren (heute `unimplemented("Doctor", "HUM-075")`), `daemon/crates/ipc/tests/fake_parity.rs`
 - `daemon/bin/humanitl/src/cmd/doctor.rs` (neu), `cli.rs`: `humanitl doctor [--json]` (ADR-018; die CLI-Hälfte fehlte in der ersten Fassung)
 - `daemon/bin/humanitl/src/cmd/daemon.rs`, `cli.rs`: `daemon install` (heute nur `Status`)
 - `daemon/crates/sandbox/src/bwrap.rs`: `INSTALL_COMMAND` (Konstante `"sudo apt install bubblewrap"`) wird zur Funktion über `/etc/os-release`
 - `packaging/systemd/humanitld.service` (neu; das Verzeichnis hält nur `.gitkeep`)
-- `daemon/crates/core-types/src/diagnostics/codes.rs`: `SANDBOX_017`, `SANDBOX_018`, `LLM_008`, ein `CONFIG_0xx` (geteilte Datei; anhängen), `docs/DIAGNOSTICS.md` neu erzeugen
+- `daemon/crates/core-types/src/diagnostics/codes.rs`: `CONFIG_013` („Kein Projektordner gewählt") und `DAEMON_005..008` für die Unit-Datei von `daemon install` (geteilte Datei; anhängen), `docs/DIAGNOSTICS.md` neu erzeugen. Seccomp und `$XDG_RUNTIME_DIR` bekommen keine eigenen Nummern: Sie prüft der Doctor aus HUM-075 unter `DOCTOR_003` und `DOCTOR_004` (nachgesehen am 2026-09-12)
 - ARB: `setup*` (camelCase)
 
 ### Spezifikation
@@ -1544,11 +1545,11 @@ App start
         │ fail                      │ major mismatch
         ▼                           ▼
      DAEMON_001                  DAEMON_002
-  └─ llm:  Sandbox(Status).llm_endpoint leer? ──ja──> LLM_008 (Info: "Not configured")
+  └─ llm:  Sandbox(Status).llm_endpoint leer? ──ja──> DOCTOR_013 (Info: nicht angesprochen)
         └─ gesetzt ──> ProbeLlm ──ok──> [llm ok, models chip]   / fail ──> LLM_001..003, LLM_006, LLM_007
   └─ project: Sandbox(Status).work_dir gesetzt und Sandbox(Plan) ohne Blocking? ──nein──> CONFIG_0xx "kein Ordner" bzw. SANDBOX_005
   └─ sandbox: Doctor() ──> bwrap (SANDBOX_001), version ≥ 0.8 (SANDBOX_002), userns (SANDBOX_003),
-        seccomp im Kernel (SANDBOX_017), $XDG_RUNTIME_DIR gesetzt und 0700 (SANDBOX_018), llm; agent preflight (AGENT_001..002)
+        seccomp im Kernel (DOCTOR_003), $XDG_RUNTIME_DIR gesetzt und 0700 (DOCTOR_004), llm; agent preflight (AGENT_001..002)
 All ok ──> "Start agent" enabled ──> Sandbox(Start) ──> Isolation checks (HUM-041) ──> Intercept screen
 ```
 
@@ -1565,11 +1566,13 @@ Diagnostics dieses Issues (Register `codes.rs`; eine Nummer wird nie wiederverwe
 | `SANDBOX_001` | Blocking | "bubblewrap (bwrap) is not installed. It is the sandbox Humanitl runs the agent in." | `CopyCommand(<paketmanager> install bubblewrap)`, Distribution aus `/etc/os-release` (`ID`, `ID_LIKE`: apt / dnf / pacman / zypper, sonst apt) |
 | `SANDBOX_002` | Blocking | "bwrap {found} is too old; 0.8.0 or newer is required for --file and seccomp." | wie oben |
 | `SANDBOX_003` | Blocking | "Unprivileged user namespaces are disabled on this system. Rootless sandboxes need them." | `CopyCommand("sudo sysctl -w kernel.unprivileged_userns_clone=1")` bzw. AppArmor-Hinweis auf Ubuntu ≥ 23.10: `CopyCommand("sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0")` mit `docs` |
-| `SANDBOX_017` (neu) | Blocking | "The kernel has no seccomp filter support." | `docs` |
-| `SANDBOX_018` (neu) | Blocking | "$XDG_RUNTIME_DIR is not set or not writable; Humanitl keeps its sockets there." | `CopyCommand("loginctl enable-linger $USER")` |
-| `LLM_008` (neu) | Info | "Not configured" | kein `ChangeSetting`, die Zeile zeigt das Feld |
+| `DOCTOR_003` (aus HUM-075, nicht neu) | Blocking | "The kernel has no seccomp filter support." | `docs` |
+| `DOCTOR_004` (aus HUM-075, nicht neu) | Blocking | "$XDG_RUNTIME_DIR is not set or not writable; Humanitl keeps its sockets there." | `CopyCommand("loginctl enable-linger $USER")` |
+| `DOCTOR_008`/`DOCTOR_013` (aus HUM-075, nicht neu) | Info | Sprachmodell nicht erreichbar bzw. gar nicht angesprochen | kein `ChangeSetting`, die Zeile zeigt das Feld |
 
-`PROJECT_001`/`PROJECT_002` entfallen: es gibt keinen Bereich `PROJECT` in `AREAS`, und `codes_stay_inside_their_area` bricht mit „has no reserved area". `SANDBOX_004` („Isolation-Check fehlgeschlagen") und `SANDBOX_005` („Projektordner nicht beschreibbar") sind vergeben; deshalb 017/018. `LLM_000` liegt außerhalb des Bereichs `LLM` (001..009); 008 und 009 sind frei.
+`PROJECT_001`/`PROJECT_002` entfallen: es gibt keinen Bereich `PROJECT` in `AREAS`, und `codes_stay_inside_their_area` bricht mit „has no reserved area". `SANDBOX_004` („Isolation-Check fehlgeschlagen") und `SANDBOX_005` („Projektordner nicht beschreibbar") sind vergeben; deshalb sah die erste Fassung 017/018 vor. `LLM_000` liegt außerhalb des Bereichs `LLM` (001..009); 008 und 009 waren damals frei.
+
+**Nachtrag 2026-09-12: die Codes dieses Issues heißen anders als die Tabelle oben.** Nachgesehen in `daemon/crates/core-types/src/diagnostics/codes.rs`: `SANDBOX_017` und `SANDBOX_018` wurden nie registriert, der Bereich springt von `SANDBOX_016` (Zeile 445) auf `SANDBOX_020` (Zeile 451), und 017 bis 019 sind frei. Seccomp und `$XDG_RUNTIME_DIR` prüft der Doctor, und die Befunde heißen seit HUM-075 `DOCTOR_003` (Zeile 991) und `DOCTOR_004` (Zeile 1000); HUM-075 wurde vor diesem Issue gebaut, deshalb brauchte es keine eigenen Nummern. Die LLM-Zeile nimmt ihre Info aus derselben Reihe (`DOCTOR_008`, `DOCTOR_013`); `LLM_008` hat danach HUM-076 mit der Bedeutung „Die Suche im Netz kann nicht stattfinden" belegt (Zeile 892). Aus diesem Issue stehen in `codes.rs`: `CONFIG_013` „Kein Projektordner gewählt" (Zeile 388) und `DAEMON_005..008` für die Unit-Datei von `daemon install` (Zeilen 245 bis 273).
 
 `Doctor` ist der Preflight-RPC: `rpc Doctor(Empty) returns (DoctorReport)` mit `DoctorCheck { id, status, evidence, diagnostic }` und `CheckStatus { OK, WARN, FAIL }` steht in der Proto, und der Fake antwortet schon mit den fünf Kennungen `bwrap`, `userns`, `seccomp`, `runtime_dir`, `llm` (`fake/mod.rs`). Der echte Server liefert `unimplemented("Doctor", "HUM-075")`; HUM-075 erklärt „Blockiert: HUM-044" und muss deshalb vorher gebaut werden — oder seine Maschinen-Hälfte wird hier gebaut. Keine Proto-Änderung.
 
@@ -1600,8 +1603,8 @@ Modell-Chip: `ProbeLlmResponse.models` sind Namen, die ein unauthentifizierter S
 Coach-Mark: Beim ersten `Held`-Flow einer Installation erscheint über der Aktionsleiste ein Popover mit `setupCoachFirstHold` en "Held because no rule matches (default: ask). Allow sends it unchanged; the response is recorded, not held. Use the arrow to remember a rule." de "Angehalten, weil keine Regel passt (Standard: ask). Senden schickt die Anfrage unverändert; die Antwort wird aufgezeichnet, nicht angehalten. Über den Pfeil kannst du eine Regel merken." Schließen per Klick oder `Esc`, danach nie wieder. Das Flag lebt in der App, bis ein Konfigurations-Schreibweg existiert: `UiConfig` hat genau `language`, `theme`, `notifications`, `sound` und `deny_unknown_fields`; ein `ui.coach_marks_seen` in `config.toml` wäre heute `CONFIG_001`.
 
 ### Schritte
-1. Codes zuerst: `SANDBOX_017`, `SANDBOX_018`, `LLM_008`, `CONFIG_0xx` in `codes.rs` anhängen, `docs/DIAGNOSTICS.md` neu erzeugen.
-2. `preflight.rs` mit allen fünf Ergebnissen (Wiederverwendung von `find_program`, `query_version`/`MIN_BWRAP_VERSION`, `probe_user_namespaces` aus `bwrap.rs`; neu: Kernel-seccomp, `$XDG_RUNTIME_DIR`), `Doctor` in `server.rs` mit den fünf Kennungen des Fakes, `fake_parity.rs`, `humanitl doctor [--json]` (Exit 0 bei ok/warn, 3 bei fail), `/etc/os-release`-Leser mit Tabellentest über Fixture-Dateien.
+1. Codes zuerst: `CONFIG_013` und `DAEMON_005..008` in `codes.rs` anhängen, `docs/DIAGNOSTICS.md` neu erzeugen. Seccomp und `$XDG_RUNTIME_DIR` bringen keine neuen Nummern mit; sie stehen als `DOCTOR_003` und `DOCTOR_004` aus HUM-075 schon dort.
+2. Maschinen-Hälfte: entfällt, HUM-075 hat sie vor diesem Issue gebaut (`doctor.rs`, `doctor/checks.rs`, `doctor/probe.rs`, `Doctor` in `server.rs`, `fake_parity.rs`, `humanitl doctor [--json]` mit Exit 0 bei ok/warn und 3 bei fail). Hier bleibt der `/etc/os-release`-Leser mit Tabellentest über Fixture-Dateien und seine Anbindung in `doctor/checks.rs` und `bwrap.rs`.
 3. `doctor()` und `probeLlm()` in `DaemonClient`, `GrpcDaemonClient`, `FakeDaemonClient` (geteilte Datei: neu lesen, anhängen).
 4. Setup als Zustand in der Shell (`connection_gate.dart`, `shell_screen.dart`), Retry-Timer in `connection.dart`.
 5. `setupProvider`: vier Checks parallel aus `connectionStateProvider`, `Sandbox(Status)`/`Sandbox(Plan)`, `ProbeLlm`, `Doctor`.
@@ -1615,7 +1618,7 @@ Coach-Mark: Beim ersten `Held`-Flow einer Installation erscheint über der Aktio
 - `llm_row_uses_probe`, `llm_row_shows_llm_006_and_007`, `model_chip_is_clamped`.
 - `coach_mark_shown_once`: erster Held ⇒ Popover; zweiter Held ⇒ kein Popover.
 - `setup_keeps_header_and_ctrl_1_while_flows_are_held`.
-- Daemon-Unit: `preflight_reports_all_five`, `preflight_detects_missing_bwrap` (PATH leer), `preflight_parses_bwrap_version`, `install_command_per_os_release`.
+- Daemon-Unit: `install_command_per_os_release` (`daemon/crates/sandbox/tests/os_release.rs:183`). Die Prüfergebnisse selbst misst HUM-075 in `daemon/crates/sandbox/tests/doctor.rs` (`a_healthy_machine_is_green_everywhere_and_says_what_it_measured`, `a_broken_machine_names_every_defect_with_a_way_out`, `the_report_of_a_machine_where_nothing_answers_is_still_eleven_lines`); die drei `preflight_*`-Namen der ersten Fassung gibt es nicht (nachgesehen am 2026-09-12).
 - CLI: `daemon install` schreibt die Unit in ein temporäres `XDG_CONFIG_HOME`, `ExecStart` zeigt auf `current_exe()`-Nachbarn, keine Socket-Unit; `humanitl doctor --json` liefert fünf Zeilen.
 
 ### Akzeptanzkriterien
@@ -1685,9 +1688,9 @@ Audit von 28 Agenten gegen den Code: 20 Widersprüche, 7 blockierend, oben im Te
 
 **Blockierend in der ersten Fassung, jetzt korrigiert:**
 
-- `SANDBOX_004` und `SANDBOX_005` mit neuer Bedeutung („kein seccomp", „`$XDG_RUNTIME_DIR`"): beide sind vergeben („Isolation-Check fehlgeschlagen", „Projektordner nicht beschreibbar", letzterer erzeugt in `bwrap.rs`). Jetzt `SANDBOX_017`/`018`.
+- `SANDBOX_004` und `SANDBOX_005` mit neuer Bedeutung („kein seccomp", „`$XDG_RUNTIME_DIR`"): beide sind vergeben („Isolation-Check fehlgeschlagen", „Projektordner nicht beschreibbar", letzterer erzeugt in `bwrap.rs`). Jetzt `DOCTOR_003`/`DOCTOR_004` aus HUM-075; `SANDBOX_017`/`018` sind nie vergeben worden (Nachtrag 2026-09-12).
 - `PROJECT_001`/`002`: kein Bereich `PROJECT` in `AREAS`, Test `codes_stay_inside_their_area` bricht. Entfallen; „kein Ordner" bekommt einen `CONFIG`-Code, „nicht benutzbar" ist `SANDBOX_005`.
-- `LLM_000`: außerhalb des Bereichs. Jetzt `LLM_008`.
+- `LLM_000`: außerhalb des Bereichs. Jetzt `DOCTOR_008`/`DOCTOR_013` aus HUM-075; `LLM_008` trägt seit HUM-076 eine andere Bedeutung (Nachtrag 2026-09-12).
 - LLM- und Projekt-Zeile lasen `config.llm.endpoint` und `config.sandbox.work_dir`: `GetConfig` ist unimplementiert, `DaemonClient` hat keine Konfigurationsmethode. Jetzt `Sandbox(Status)`.
 - Drei Kriterien schrieben in `config.toml` (`ChangeSetting`, Endpoint-Feld, `ui.coach_marks_seen`): kein Schreibweg im Repository, `UiConfig` mit `deny_unknown_fields`. Gestrichen und in Nicht-Ziel benannt.
 - Schritt 1 erfand `SandboxPreflight` als zweiten RPC: `Doctor` steht im Vertrag, der Fake antwortet, HUM-075 hält ihn und erklärt „Blockiert: HUM-044", stand aber hinter HUM-044 in der Reihenfolge. HUM-075 ist jetzt Abhängigkeit und rückt in der Tabelle davor.
@@ -1702,7 +1705,7 @@ Audit von 28 Agenten gegen den Code: 20 Widersprüche, 7 blockierend, oben im Te
 **Feindliche Eingabe:** (1) die Modellliste aus dem LAN (siehe Spezifikation; Säuberung in `probe_result_to_proto`, Deckel, `maxLines`, nie `CopyCommand`); (2) das Projekt-Profil aus dem geklonten Repository — die Zeile darf einen `FixAction`, dessen Text auf Projekt-Ebene entstand, nie zu einem Klick machen, vor allem keinen `CopyCommand` und kein `ChangeSetting` für einen dort gesperrten Schlüssel; (3) der getippte Endpoint geht in DNS, bevor jemand entscheidet (`ProbeLlm` löst absichtlich außerhalb der Warteschlange auf) — keine Probe je Tastendruck, `LLM_006`/`LLM_007` sichtbar. Kleiner: `SANDBOX_003` bettet bwraps stderr wörtlich in `why` (`bwrap.rs`); klemmen wie alles andere.
 
 ### Fallstricke
-- `systemctl --user` funktioniert nicht in Umgebungen ohne User-Session-Bus (SSH ohne Linger). `SANDBOX_018`/`DAEMON_001` decken das ab; Fix-Text nennt `loginctl enable-linger`.
+- `systemctl --user` funktioniert nicht in Umgebungen ohne User-Session-Bus (SSH ohne Linger). `DOCTOR_004`/`DAEMON_001` decken das ab; Fix-Text nennt `loginctl enable-linger`.
 - Ubuntu ≥ 23.10 blockiert unprivilegierte User-Namespaces per AppArmor; bwrap aus dem Paket hat ein AppArmor-Profil, das es erlaubt. Preflight prüft erst, ob `bwrap --unshare-user true` funktioniert, bevor es sysctl-Hinweise gibt.
 - Der Daemon darf nie mit `sudo` installiert werden; die Fix-Befehle enthalten kein `sudo` für Humanitl selbst, nur für Paketinstallation.
 - Setup-Screen darf gehaltene Flows nicht verstecken; deshalb Setup als Zustand in der Shell.
