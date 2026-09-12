@@ -519,6 +519,25 @@ kein Fehlschlag sind, stehen unter der Ausgabe und der Lauf endet mit `0`:
 einen Server, der antwortet, aber als keine bekannte API — dann steht dort
 `flavor: unknown` und keine Modellliste. Wer geantwortet hat, hat geantwortet.
 
+## Die globalen Schalter
+
+Fünf Schalter gelten für jedes Unterkommando, weil `clap` sie als `global`
+führt (`daemon/bin/humanitl/src/cli.rs`, `GlobalOpts`). Sie stehen vor oder
+hinter dem Unterkommando, beides geht.
+
+| Schalter | Wirkung |
+|---|---|
+| `--json` | Maschinenlesbare Ausgabe: genau ein JSON-Wert auf `stdout`, Befunde eingeschlossen. Hinweise auf `stderr` entfallen; was ein Unterkommando im JSON-Modus schreibt, steht bei ihm. |
+| `--config PATH` | Liest diese Konfigurationsdatei statt der im Konfigurationsverzeichnis des Nutzers. Der Pfad gilt für diesen Aufruf und ändert nichts an der Datei des Nutzers. |
+| `-v`, `--verbose` | Erklärt, was gerade geschieht: Hinweise, die sonst stumm bleiben (`Renderer::detail`). Mehrfach angeben geht (`-vv`), heute ohne weitere Stufe. |
+| `-q`, `--quiet` | Nur das Ergebnis, keine Hinweise: `Renderer::note` schreibt nichts mehr auf `stderr`. Schließt `-v` aus; Befunde und Fehler bleiben. |
+| `--profile NAME` | Das Profil der Sitzung. Unter `humanitl sandbox` benennt dasselbe Flag das bwrap-Profil; welche Bedeutung gilt, entscheidet das Unterkommando. |
+
+Der Ergebnistext eines Unterkommandos steht auf `stdout` und bleibt auch mit
+`-q` stehen; `-q` nimmt nur die begleitenden Hinweise weg. Ein Befund
+(`Diagnostic`) geht auf `stderr` und lässt sich mit keinem der Schalter
+abstellen, weil er den Exit-Code erklärt.
+
 ## Was `run` mit den anderen Unterkommandos teilt
 
 - `humanitl sandbox run` startet die Sandbox im Prozess der Kommandozeile und
