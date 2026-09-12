@@ -32,6 +32,9 @@ FlowDetail goldenDetail() => detailFor(
     deadline: testStart.add(const Duration(minutes: 5)),
     method: Method.post,
     host: 'api.github.com',
+    // Seit HUM-091 trägt die Zeile die registrierbare Domain selbst; das
+    // Ziel „Domäne" steht damit ohne einen zweiten Aufruf zur Verfügung.
+    apex: 'github.com',
     path: '/graphql?first=20',
     requestSize: 428,
   ),

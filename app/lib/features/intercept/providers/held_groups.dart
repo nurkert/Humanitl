@@ -15,7 +15,6 @@ import 'package:flutter/foundation.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/domain/domain.dart';
-import '../psl.dart';
 import 'flows.dart';
 
 part 'held_groups.g.dart';
@@ -47,16 +46,21 @@ class HeldGroup {
     this.earliestDeadline,
   });
 
-  /// The registrable domain the group is keyed by.
+  /// The key of the group: the registrable domain the daemon named, or the
+  /// host itself where it named none ([apexOfHost]).
+  ///
+  /// It is an identity, not a claim: nothing draws it as a domain, and the
+  /// header names hosts (see [display]).
   final String apex;
 
   /// The one host of the group, or an empty string when it spans several.
   ///
-  /// A group that spans two hosts is not named by the domain under them: that
-  /// domain is a guess of `psl.dart`, and outside its table the guess can name
-  /// a public suffix (`a.foo.com.pl` and `b.foo.com.pl` would become
-  /// `com.pl`). Whoever draws the group says "host and n more" instead
-  /// (`backlog/CONVENTIONS.md` 4.13).
+  /// A group that spans two hosts is not named by the domain under them, even
+  /// though the domain now comes from the daemon (`FlowSummary.apex`,
+  /// HUM-091): whoever decides over several hosts has to read them, and the
+  /// header that says "host and n more" is where they are counted
+  /// (`backlog/CONVENTIONS.md` 4.13, "allowing is never easier than
+  /// blocking"). The hosts themselves stand in [hosts].
   final String display;
 
   /// The held flows, earliest deadline first: everything a decision on this
@@ -174,15 +178,16 @@ HeldGroups groupFlows(List<Flow> flows) {
   ]);
 }
 
-/// The registrable domain of [flow], from the bundled table.
+/// The key [flow] is grouped under: the daemon's apex, or the host.
 ///
-/// The catalog of HUM-031 answers this from the public suffix list; until it
-/// exists the table of [registrableDomain] stands in, in one place. It groups
-/// the queue and nothing else: what a rule matches on comes from the daemon
-/// (`selectedApexProvider`), never from this table
-/// (`backlog/CONVENTIONS.md` 4.13).
-String apexOfHost(Flow flow) =>
-    registrableDomain(flow.host, isIpLiteral: flow.authority.isIpLiteral);
+/// The registrable domain comes from the daemon, which carries the public
+/// suffix list (`FlowSummary.apex`, HUM-091); the client never derives one.
+/// An empty apex means the daemon does not know one — an IP literal, a host
+/// that is itself a public suffix — and then the flow stands under its own
+/// host. It is not filled in from a guess: `a.foo.com.pl` and `b.evil.com.pl`
+/// are two registrants, and a table that put them under `com.pl` would draw
+/// one decision over both (`backlog/CONVENTIONS.md` 4.13).
+String apexOfHost(Flow flow) => flow.apex.isEmpty ? flow.host : flow.apex;
 
 HeldGroup _group(String apex, List<Flow> rows) {
   // Everything below counts held requests only: the header says what a

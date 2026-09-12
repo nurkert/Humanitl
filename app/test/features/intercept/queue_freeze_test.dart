@@ -20,7 +20,7 @@ import 'harness.dart';
 List<ScriptedEvent> twoArrivals() => <ScriptedEvent>[
   ...arriveAt(held(1, host: 'registry.npmjs.org'), Duration.zero),
   ...arriveAt(
-    held(2, host: 'api.github.com', path: '/graphql'),
+    held(2, host: 'api.github.com', apex: 'github.com', path: '/graphql'),
     const Duration(seconds: 1),
   ),
 ];
@@ -129,10 +129,13 @@ void main() {
     final FakeDaemonClient client = fakeDaemon(<ScriptedEvent>[
       ...arriveAt(held(1, host: 'registry.npmjs.org'), Duration.zero),
       ...arriveAt(
-        held(2, host: 'api.github.com'),
+        held(2, host: 'api.github.com', apex: 'github.com'),
         const Duration(milliseconds: 20),
       ),
-      ...arriveAt(held(3, host: 'pypi.org'), const Duration(milliseconds: 40)),
+      ...arriveAt(
+        held(3, host: 'pypi.org', apex: 'pypi.org'),
+        const Duration(milliseconds: 40),
+      ),
     ]);
     await pumpIntercept(tester, client: client);
     final List<String> said = captureAnnouncements(tester);

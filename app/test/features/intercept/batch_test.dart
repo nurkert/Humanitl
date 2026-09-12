@@ -170,20 +170,29 @@ void main() {
   testWidgets('a group of several hosts is named by hosts, not by a guess', (
     WidgetTester tester,
   ) async {
-    // Befund 4: `psl.dart` rät; außerhalb seiner Tabelle nennt es ein Public
-    // Suffix als Domain. Ein Satz, der eine unumkehrbare Sendung bewacht,
-    // nennt Hosts (CONVENTIONS 4.13).
+    // Befund 4: Ein Satz, der eine unumkehrbare Sendung bewacht, nennt Hosts
+    // (CONVENTIONS 4.13). Die Domain kennt der Daemon seit HUM-091 genau —
+    // `com.pl` ist ein Public Suffix, `foo.com.pl` die Domain darunter —, und
+    // trotzdem steht im Kopf der Host: Wer über mehrere entscheidet, soll sie
+    // lesen.
     final FakeDaemonClient client = fakeDaemon(<ScriptedEvent>[
       for (int i = 1; i <= 6; i++)
         ...arriveAt(
-          held(i, host: i.isEven ? 'a.foo.com.pl' : 'b.foo.com.pl', path: '/x'),
+          held(
+            i,
+            host: i.isEven ? 'a.foo.com.pl' : 'b.foo.com.pl',
+            // Beide gehören demselben Registranten: `com.pl` ist ein Public
+            // Suffix, `foo.com.pl` die Domain darunter.
+            apex: 'foo.com.pl',
+            path: '/x',
+          ),
           Duration(milliseconds: 10 * i),
         ),
     ]);
     await pumpIntercept(tester, client: client);
     await playScript(tester);
 
-    // `psl.dart` würde `com.pl` raten — ein Public Suffix, keine Domain.
+    // Der Kopf nennt nie das Public Suffix, unter dem zwei Fremde lägen.
     expect(find.text('com.pl'), findsNothing);
     expect(find.text('b.foo.com.pl and 1 more host'), findsOneWidget);
 
@@ -310,13 +319,18 @@ void main() {
   testWidgets('a group of several hosts always asks first', (
     WidgetTester tester,
   ) async {
-    // Befund 7: `psl.dart` rät die Domain, also können zwei fremde
-    // Registranten in einer Gruppe landen. Unter sechs Anfragen schützt sonst
-    // nur das Halten; über mehrere Hosts fragt das Modal immer.
+    // Befund 7: Eine Gruppe deckt mehrere Hosts, auch wenn die Domain vom
+    // Daemon kommt: `a.b.github.io` und `c.b.github.io` gehören beide zu
+    // `b.github.io`. Unter sechs Anfragen schützt sonst nur das Halten; über
+    // mehrere Hosts fragt das Modal immer (HUM-091 hat den geratenen Apex
+    // abgeschafft, nicht diese Regel).
     final FakeDaemonClient client = fakeDaemon(<ScriptedEvent>[
-      ...arriveAt(held(1, host: 'a.foo.com.pl', path: '/x'), Duration.zero),
       ...arriveAt(
-        held(2, host: 'b.evil.com.pl', path: '/y'),
+        held(1, host: 'a.b.github.io', apex: 'b.github.io', path: '/x'),
+        Duration.zero,
+      ),
+      ...arriveAt(
+        held(2, host: 'c.b.github.io', apex: 'b.github.io', path: '/y'),
         const Duration(milliseconds: 10),
       ),
     ]);

@@ -36,6 +36,7 @@ List<FlowDetail> goldenDetails() => <FlowDetail>[
       deadline: testStart.add(const Duration(minutes: 5)),
       method: Method.post,
       host: 'api.github.com',
+      apex: 'github.com',
       path: '/graphql?first=20',
       requestSize: 428,
     ),
@@ -52,6 +53,7 @@ List<FlowDetail> goldenDetails() => <FlowDetail>[
       n: 2,
       deadline: testStart.add(const Duration(minutes: 8)),
       host: 'registry.npmjs.org',
+      apex: 'npmjs.org',
       path: '/react/-/react-19.2.0.tgz',
     ),
   ),
@@ -61,6 +63,9 @@ List<FlowDetail> goldenDetails() => <FlowDetail>[
       deadline: testStart.add(const Duration(minutes: 12)),
       method: Method.delete,
       host: 'storage.googleapis.com',
+      // `googleapis.com` steht selbst in der Public Suffix List, also ist der
+      // Host seine eigene registrierbare Domain.
+      apex: 'storage.googleapis.com',
       path: '/humanitl-cache/very/long/path/to/object-42.json',
       requestSize: 96,
     ),

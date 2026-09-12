@@ -1730,17 +1730,26 @@ class FakeDaemonClient implements DaemonClient {
     required Duration spacing,
     required Duration budget,
   }) {
-    const List<(Method, String, String)> targets = <(Method, String, String)>[
-      (Method.get, 'registry.npmjs.org', '/react'),
-      (Method.post, 'api.github.com', '/graphql'),
-      (Method.get, 'pypi.org', '/simple/requests/'),
-      (Method.put, 'storage.googleapis.com', '/bucket/object.json'),
-      (Method.get, 'crates.io', '/api/v1/crates/serde'),
-      (Method.delete, 'api.example.org', '/v1/items/42'),
-    ];
+    // Host und die registrierbare Domain, die der Katalog des Daemons dazu
+    // nennt. `googleapis.com` steht selbst in der Public Suffix List, also ist
+    // `storage.googleapis.com` die Domain und nicht ihre Unterdomain.
+    const List<(Method, String, String, String)> targets =
+        <(Method, String, String, String)>[
+          (Method.get, 'registry.npmjs.org', 'npmjs.org', '/react'),
+          (Method.post, 'api.github.com', 'github.com', '/graphql'),
+          (Method.get, 'pypi.org', 'pypi.org', '/simple/requests/'),
+          (
+            Method.put,
+            'storage.googleapis.com',
+            'storage.googleapis.com',
+            '/bucket/object.json',
+          ),
+          (Method.get, 'crates.io', 'crates.io', '/api/v1/crates/serde'),
+          (Method.delete, 'api.example.org', 'example.org', '/v1/items/42'),
+        ];
     final List<ScriptedEvent> events = <ScriptedEvent>[];
     for (int i = 0; i < count; i++) {
-      final (Method method, String host, String path) =
+      final (Method method, String host, String apex, String path) =
           targets[i % targets.length];
       final _ScriptedFlow flow = _ScriptedFlow(
         id: FlowId(
@@ -1748,6 +1757,7 @@ class FakeDaemonClient implements DaemonClient {
         ),
         method: method,
         host: host,
+        apex: apex,
         path: '$path?n=$i',
         originTool: 'burst',
         body: method == Method.get ? '' : '{"n": $i}',
@@ -1774,6 +1784,7 @@ class FakeDaemonClient implements DaemonClient {
       id: const FlowId('018f0004-0000-7000-8000-000000000001'),
       method: Method.post,
       host: 'api.example.org',
+      apex: 'example.org',
       path: '/v1/import',
       originTool: 'opencode',
       headers: const <Header>[Header(name: 'content-type', value: <int>[])],
@@ -1826,6 +1837,7 @@ class FakeDaemonClient implements DaemonClient {
       id: const FlowId('018f0001-0000-7000-8000-000000010000'),
       method: Method.post,
       host: 'api.github.com',
+      apex: 'github.com',
       path: '/graphql',
       originTool: 'opencode',
       headers: const <Header>[
@@ -1840,6 +1852,7 @@ class FakeDaemonClient implements DaemonClient {
       id: const FlowId('018f0001-0000-7000-8000-000000020000'),
       method: Method.get,
       host: 'models.dev',
+      apex: 'models.dev',
       path: '/api.json',
       originTool: 'opencode',
     );
@@ -1848,6 +1861,7 @@ class FakeDaemonClient implements DaemonClient {
       method: Method.post,
       scheme: Scheme.http,
       host: '192.168.1.50',
+      // Eine Adresse hat keine registrierbare Domain.
       port: 11434,
       isIp: true,
       path: '/api/chat',
@@ -1858,6 +1872,7 @@ class FakeDaemonClient implements DaemonClient {
       id: const FlowId('018f0001-0000-7000-8000-000000040000'),
       method: Method.get,
       host: 'example.org',
+      apex: 'example.org',
       path: '/',
       originTool: 'curl',
     );
@@ -1865,6 +1880,8 @@ class FakeDaemonClient implements DaemonClient {
       id: const FlowId('018f0001-0000-7000-8000-000000050000'),
       method: Method.post,
       host: 'httpbin.org',
+      // `httpbin.org` steht selbst in der Public Suffix List; darunter gibt es
+      // keine registrierbare Domain, und der Daemon antwortet leer.
       path: '/post',
       originTool: 'opencode',
       body: '{"token":"eyJhbGciOiJIUzI1NiJ9.e30.x"}',
@@ -1874,6 +1891,7 @@ class FakeDaemonClient implements DaemonClient {
       method: Method.get,
       scheme: Scheme.wss,
       host: 'ws.example.org',
+      apex: 'example.org',
       path: '/agent',
       originTool: 'opencode',
     );
@@ -1997,6 +2015,7 @@ class _ScriptedFlow {
     required this.method,
     this.scheme = Scheme.https,
     required this.host,
+    this.apex = '',
     int? port,
     this.isIp = false,
     required this.path,
@@ -2011,6 +2030,14 @@ class _ScriptedFlow {
   final Method method;
   final Scheme scheme;
   final String host;
+
+  /// The registrable domain the daemon's catalog would answer for [host].
+  ///
+  /// Written down per scenario, not derived: the public suffix list lives in
+  /// the daemon, and a table here would be a second answer to the same
+  /// question (HUM-091). Empty where there is none — an IP literal, or a host
+  /// that is itself a public suffix.
+  final String apex;
   final int port;
   final bool isIp;
   final String path;
@@ -2032,6 +2059,7 @@ class _ScriptedFlow {
     method: method,
     scheme: scheme,
     authority: Authority(host: host, port: port, isIpLiteral: isIp),
+    apex: apex,
     path: path,
     state: FlowState.received,
     requestSize: bodyBytes.length,
@@ -2415,9 +2443,16 @@ class FakeFlowFilter {
     final String lower = value.toLowerCase();
     switch (key) {
       case 'host':
-      case 'apex':
         _rejectCmp(cmp, key, term);
         return (Flow flow) => _suffixMatch(flow.host, lower);
+      // `apex:` compares exactly, like the daemon's `apex = ?`: the value in
+      // the term and the value in the row are the same string. A suffix match
+      // would put two strangers' registrations into one answer, and
+      // `apex:github.io` would find `b.github.io`, which the daemon never
+      // does (HUM-091).
+      case 'apex':
+        _rejectCmp(cmp, key, term);
+        return (Flow flow) => flow.apex.toLowerCase() == lower;
       case 'state':
         _rejectCmp(cmp, key, term);
         return (Flow flow) => _snake(flow.state.name) == lower;
@@ -2672,16 +2707,38 @@ const RuleId historyRule = RuleId('018f0005-0000-7000-8000-0000000000b7');
 ///
 /// Acht, und alle sechs Methoden, die ein Badge hat: die Methodenspalte wird
 /// sonst nie breit genug getestet.
-const List<(Method, String, String)> _historyTargets =
-    <(Method, String, String)>[
-      (Method.get, 'registry.npmjs.org', '/react/-/react-19.2.0.tgz'),
-      (Method.post, 'api.github.com', '/graphql'),
-      (Method.get, 'pypi.org', '/simple/requests/'),
-      (Method.put, 'storage.googleapis.com', '/bucket/object.json'),
-      (Method.patch, 'gitlab.com', '/api/v4/projects/9/merge_requests/3'),
-      (Method.delete, 'api.example.org', '/v1/items/42'),
-      (Method.head, 'example.org', '/'),
-      (Method.post, 'telemetry.vendor.io', '/v2/collect'),
+/// Methode, Host, registrierbare Domain und Pfad einer aufgezeichneten Zeile.
+///
+/// Die Domain steht daneben, statt aus dem Host zu folgen: Sie kommt im echten
+/// Betrieb aus der Public Suffix List des Daemons, und eine zweite Ableitung
+/// hier waere eine zweite Antwort auf dieselbe Frage (HUM-091).
+/// `googleapis.com` steht selbst in der Liste, also ist
+/// `storage.googleapis.com` die Domain und nicht ihre Unterdomain.
+const List<(Method, String, String, String)> _historyTargets =
+    <(Method, String, String, String)>[
+      (
+        Method.get,
+        'registry.npmjs.org',
+        'npmjs.org',
+        '/react/-/react-19.2.0.tgz',
+      ),
+      (Method.post, 'api.github.com', 'github.com', '/graphql'),
+      (Method.get, 'pypi.org', 'pypi.org', '/simple/requests/'),
+      (
+        Method.put,
+        'storage.googleapis.com',
+        'storage.googleapis.com',
+        '/bucket/object.json',
+      ),
+      (
+        Method.patch,
+        'gitlab.com',
+        'gitlab.com',
+        '/api/v4/projects/9/merge_requests/3',
+      ),
+      (Method.delete, 'api.example.org', 'example.org', '/v1/items/42'),
+      (Method.head, 'example.org', 'example.org', '/'),
+      (Method.post, 'telemetry.vendor.io', 'vendor.io', '/v2/collect'),
     ];
 
 /// Legt [count] aufgezeichnete Flows in [state], ab [start], einen alle
@@ -2722,12 +2779,16 @@ class _SeededFlow {
   final int index;
   final DateTime receivedAt;
 
-  (Method, String, String) get _target =>
+  (Method, String, String, String) get _target =>
       _historyTargets[index % _historyTargets.length];
 
   Method get method => passthrough ? Method.post : _target.$1;
   String get host => _target.$2;
-  String get path => _target.$3;
+
+  /// Die registrierbare Domain der Zeile; leer fuer die Durchreiche, weil dort
+  /// eine IP-Adresse steht und eine Adresse keine Domain hat.
+  String get apex => passthrough ? '' : _target.$3;
+  String get path => _target.$4;
 
   /// Welche der zwölf Zeilenformen diese ist.
   ///
@@ -2930,6 +2991,7 @@ class _SeededFlow {
               isIpLiteral: true,
             )
           : Authority(host: host, port: 443),
+      apex: apex,
       path: _pathAndQuery,
       state: FlowState.recorded,
       status: _status,

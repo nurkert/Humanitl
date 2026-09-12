@@ -1944,7 +1944,7 @@ Bezahlt wird das an drei Stellen im Produkt. Die Warteschlange gruppiert nach re
 Billig ist die Behebung nur auf dem History-Pfad: `daemon/crates/recorder/src/types.rs:327` `pub apex: Option<String>` ist gefüllt (`query.rs:407`), der Wert wird beim Übersetzen weggeworfen statt zu fehlen. Auf dem Live-Pfad muss er neu beschafft werden.
 
 ### Ziel
-`v1::FlowSummary` trägt `string apex = 25`: die registrierbare Domäne des Hosts nach der Public Suffix List, als A-Label wie `authority.host`, leer wenn der Daemon sie nicht kennt. Der History-Pfad füllt sie aus der Spalte, der Live-Pfad aus der `DomainTable`. `humanitl flows list --json` und `flows show --json` zeigen sie, der Dart-`Flow` trägt sie, und beide Fakes beantworten `apex:` exakt so wie der Daemon. Die Warteschlange gruppiert auf dem gelieferten Feld statt auf einer Handtabelle, `psl.dart` entfällt, und das Regel-Ziel „Domäne" steht für jede gehaltene Anfrage ohne zweiten Aufruf zur Verfügung.
+`v1::FlowSummary` trägt `string apex = 26` (die 25 gehört seit HUM-103 `meta`, siehe Stand 2026-09-12): die registrierbare Domäne des Hosts nach der Public Suffix List, als A-Label wie `authority.host`, leer wenn der Daemon sie nicht kennt. Der History-Pfad füllt sie aus der Spalte, der Live-Pfad aus der `DomainTable`. `humanitl flows list --json` und `flows show --json` zeigen sie, der Dart-`Flow` trägt sie, und beide Fakes beantworten `apex:` exakt so wie der Daemon. Die Warteschlange gruppiert auf dem gelieferten Feld statt auf einer Handtabelle, `psl.dart` entfällt, und das Regel-Ziel „Domäne" steht für jede gehaltene Anfrage ohne zweiten Aufruf zur Verfügung.
 
 ### Nicht-Ziel
 Kein `catalog_id`, kein `popularity_rank`, kein ganzes `DomainInfo` in der Zeile: die Katalog-Karte bleibt an `FlowDetail` und `Received` (HUM-031). Keine neue Spalte und keine Änderung an Grammatik oder Semantik des Filters — `apex:v` bleibt `apex = ?`, exakt. Keine neue Spalte in der Tabelle von `flows list`, nur in `--json`. Kein Umbenennen von `tranco_rank` auf `popularity_rank` (eigener Chore, CONVENTIONS 4.13). Keine neuen ARB-Schlüssel; `interceptRefusedApexUnknown` bleibt stehen und behält seinen Zweck.
@@ -1981,7 +1981,7 @@ Nicht berührt: `daemon/crates/recorder/*` (Spalte und Filter stehen), `daemon/c
   // IP-Literal oder ein Name, der nur aus einem Suffix besteht. Leer heisst
   // nie „unbedenklich" und wird nie geraten; wer gruppiert, nimmt dann den
   // Host selbst. Derselbe Wert, den `apex:` im Filter vergleicht.
-  string apex = 25;
+  string apex = 26;
 ```
 
 Woher der Wert je Pfad kommt:
@@ -2052,14 +2052,14 @@ Gruppierung: `apexOfHost(Flow flow) => flow.apex.isEmpty ? flow.host : flow.apex
 - `app/test/features/intercept/held_groups_test.dart`: `a.foo.com.pl` und `b.evil.com.pl` ergeben zwei Gruppen; `a.b.github.io` und `c.b.github.io` eine Gruppe `b.github.io`; zwei Flows mit leerem Apex und verschiedenen Hosts ergeben zwei Gruppen.
 
 ### Akzeptanzkriterien
-- [ ] Nach je einer Anfrage an `a.b.github.io`, `api.github.com` und `192.168.1.50` zeigt `humanitl flows list --json` die drei Zeilen mit `"apex": "b.github.io"`, `"apex": "github.com"` und `"apex": ""`.
-- [ ] `humanitl flows list --filter apex:b.github.io --json` liefert genau diese eine Zeile, `--filter apex:github.io` null Zeilen; der Wert im Filter und der Wert in der Zeile sind derselbe String.
-- [ ] Derselbe Lauf, zwei Wege: `Subscribe` (`Received.summary.apex`) und `ListFlows` liefern für dieselbe `flow_id` denselben Wert, und nach einem Neustart des Daemons steht er weiter in der Zeile (e2e-Assertionen in `daemon_end_to_end.rs`).
-- [ ] Kein Pfad rät mehr, auch der Fake nicht: `rg "apex_of" daemon/crates/ipc/src` trifft nichts; `domain_of` und `fake/state.rs` nutzen `humanitl_catalog::psl::apex`, `live_summary_apex_is_empty_without_catalog`, `summary_and_domain_agree_on_the_apex` und `detail_summary_and_domain_agree_on_the_apex` sind grün. (Das frühere Kriterium „trifft nur `fake/` und `domain_of`" war heute schon grün und bewies nichts, siehe Stand.)
-- [ ] `rg "multiLabelSuffixes|registrableDomain" app/` trifft nichts; `app/lib/features/intercept/psl.dart` existiert nicht mehr.
-- [ ] Warteschlange mit vier gehaltenen Anfragen an `a.foo.com.pl`, `b.evil.com.pl`, `a.b.github.io` und `c.b.github.io`: drei Gruppen, die letzten beiden zusammen unter `b.github.io`.
-- [ ] Ohne vorherige Auswahl und ohne einen `GetFlow`-Aufruf ist das Ziel „Domäne" in der Aktionsleiste für jede gehaltene Anfrage mit nicht-leerem Apex wählbar und die Regelvorschau nennt `**.<apex>`; bei leerem Apex bleibt es ausgegraut und nennt beim Anklicken den Grund.
-- [ ] `make check` grün, `proto/descriptor.binpb` im selben Commit erneuert, `tools/verify-commit.sh` vor dem Push grün.
+- [x] Nach je einer Anfrage an `a.b.github.io`, `api.github.com` und `192.168.1.50` zeigt `humanitl flows list --json` die drei Zeilen mit `"apex": "b.github.io"`, `"apex": "github.com"` und `"apex": ""`. (Gemessen 2026-09-12 von Hand: `humanitld` in einem eigenen XDG-Baum mit `HUMANITL_HOLD__TIMEOUT_SECS=1`, drei Anfragen in den Proxy-Socket, alle drei `HTTP/1.1 504`, dann `humanitl flows list --json`: `/one 'b.github.io'`, `/two 'github.com'`, `/three ''`. `humanitl flows show <id> --json` zeigt für `/one` ebenfalls `apex: 'b.github.io'`.)
+- [x] `humanitl flows list --filter apex:b.github.io --json` liefert genau diese eine Zeile, `--filter apex:github.io` null Zeilen; der Wert im Filter und der Wert in der Zeile sind derselbe String. (Derselbe Lauf, 2026-09-12: `humanitl flows list apex:b.github.io --json` ergibt `rows: 1` (`/one`), `humanitl flows list apex:github.io --json` ergibt `rows: 0`. Der Filter ist ein positionales Argument, nicht `--filter`; die Schreibweise oben stand nie in `cli.rs`.)
+- [x] Derselbe Lauf, zwei Wege: `Subscribe` (`Received.summary.apex`) und `ListFlows` liefern für dieselbe `flow_id` denselben Wert, und nach einem Neustart des Daemons steht er weiter in der Zeile (e2e-Assertionen in `daemon_end_to_end.rs`). (Gemessen 2026-09-12: `cargo test -p humanitld --test daemon_end_to_end -- the_apex_reaches_both_ways_and_survives_a_restart`, 1 passed in 13.72s; der Test vergleicht je `flow_id` den Wert aus `Subscribe` mit dem aus `ListFlows`, prüft ihn nach dem Neustart erneut und filtert mit `apex:b.github.io` (eine Zeile) und `apex:github.io` (keine).)
+- [x] Kein Pfad rät mehr, auch der Fake nicht: `rg "apex_of" daemon/crates/ipc/src` trifft nichts; `domain_of` und `fake/state.rs` nutzen `humanitl_catalog::psl::apex`, `live_summary_apex_is_empty_without_catalog`, `summary_and_domain_agree_on_the_apex` und `detail_summary_and_domain_agree_on_the_apex` sind grün. (Das frühere Kriterium „trifft nur `fake/` und `domain_of`" war heute schon grün und bewies nichts, siehe Stand.) (Gemessen 2026-09-12: `grep -rn "apex_of" daemon/crates/ipc/src` ohne Treffer; beide Stellen rufen `apex_string`, das `humanitl_catalog::psl::apex` ist; `cargo test -p humanitl-ipc`: 118 passed, 0 failed, darunter die drei genannten Tests.)
+- [x] `rg "multiLabelSuffixes|registrableDomain" app/` trifft nichts; `app/lib/features/intercept/psl.dart` existiert nicht mehr. (Gemessen 2026-09-12: `grep -rn "multiLabelSuffixes\|registrableDomain" app/` ohne Treffer, `ls app/lib/features/intercept/psl.dart` meldet „No such file or directory".)
+- [x] Warteschlange mit vier gehaltenen Anfragen an `a.foo.com.pl`, `b.evil.com.pl`, `a.b.github.io` und `c.b.github.io`: drei Gruppen, die letzten beiden zusammen unter `b.github.io`. (Gemessen 2026-09-12: `flutter test test/features/intercept/held_groups_test.dart`, 10 passed, darunter `four held requests to four hosts become three groups`; Mutationsprobe: `apexOfHost => flow.host` macht genau diesen Test rot.)
+- [x] Ohne vorherige Auswahl und ohne einen `GetFlow`-Aufruf ist das Ziel „Domäne" in der Aktionsleiste für jede gehaltene Anfrage mit nicht-leerem Apex wählbar und die Regelvorschau nennt `**.<apex>`; bei leerem Apex bleibt es ausgegraut und nennt beim Anklicken den Grund. (Gemessen 2026-09-12 als Widget-Test: `flutter test test/features/intercept/guards_test.dart`, 14 passed; `the scope comes from the row, without a second call` nimmt ein Detail ohne `DomainInfo` und bekommt trotzdem `allow · ∗ · **.b.github.io · this session`, `without an apex the scope refuses and says why` bleibt beim Host und nennt den Grund. Nicht gemessen: dieselbe Geste an einem laufenden Daemon auf dem Bildschirm — das ist der Lauf aus HUM-097.)
+- [ ] `make check` grün, `proto/descriptor.binpb` im selben Commit erneuert, `tools/verify-commit.sh` vor dem Push grün. (Stand 2026-09-12: `make check` ist grün — siehe Commit-Body —, und `proto/descriptor.binpb` samt `proto/generated.sha256` liegt im selben Stand wie die `.proto`-Datei (`cargo test -p humanitl-ipc --test proto_contract`, 23 passed, prüft das Byte für Byte). Offen bleibt `tools/verify-commit.sh`: es prüft einen Commit, und committet wird zentral.)
 
 ### Stand (2026-09-04): Größe L, ein fünfter Aufrufer, die Fakes raten weiter
 
@@ -2077,8 +2077,33 @@ Geprüft am Code (Audit 2026-09-04, Zeilen gegen den heutigen Baum gezogen). Der
 
 **Bauabfolge (aus dem Audit):** (1) Feld 25, `cargo xtask proto`, `proto_contract` grün. (2) `recorded_summary_to_proto` füllt `row.apex`; eine Zeile, macht den History-Pfad allein ehrlich und ist für sich lieferbar. (3) `record_to_summary`, `received_summary` und `record_to_detail` bekommen `domains`; Aufrufer `server.rs:297`, `:356`, `:962`. (4) `apex_of` durch `humanitl_catalog::psl::apex` ersetzen, `fake/state.rs::summary` füllen. (5) `matches_filter`, `summary_json` (`flows.rs:548`, `apex` direkt nach `authority`). (6) Dart: `Flow.apex` neben `authority` (`flow.dart:85`), `convert.dart`, Fake-Fall `apex` von `host` trennen, `apex` in die Szenarien. (7) `apex`-Parameter in `heldFlow` und `flowOf`, 15 Testdateien, drei Goldens neu abnehmen. (8) `psl.dart` und `helpers_test.dart:9,83-104` raus, `held_groups.dart:184`, `decision.dart:981` und `:990`, Kommentare. (9) `daemon_end_to_end.rs`: `the_recording_outlives_the_daemon` (`:328`) erweitern, Harness liegt in `spawn` (`:108`); `a.b.github.io`, `api.github.com`, `192.168.1.50`; `ListFlows` gegen `Subscribe`, Neustart, `filter: "apex:b.github.io"`. (10) CONVENTIONS 4.3 (`:325`), 4.15 (`:650`), 4.16 (`:1808`); `make check`; `tools/verify-commit.sh`.
 
+### Stand (2026-09-12): gebaut, mit drei Abweichungen
+
+Die Feldnummer ist **26**, nicht 25: `FlowSummary.meta` (HUM-103) hat die 25
+genommen, nachdem diese Spezifikation geschrieben war. Eine Nummer wird nie
+recycelt (`docs/PROTOCOL.md`), also steht `apex` daneben;
+`proto_contract::the_apex_keeps_its_field_number` friert sie ein. Die
+Nebenversion des Vertrags steigt damit auf `1.8` (`PROTO_MINOR`,
+`docs/PROTOCOL.md`, `app/lib/core/ipc/proto_version.dart`), weil das Feld
+additiv ist und die Oberfläche es liest.
+
+`convert::apex_of` ist nicht durch einen direkten Aufruf ersetzt, sondern durch
+`convert::apex_string` (eine Zeile: `humanitl_catalog::psl::apex(host)
+.unwrap_or_default()`). Das Akzeptanzkriterium verlangt, dass `apex_of`
+nirgends mehr steht, und ein Helfer namens `apex_of_flow` hätte darauf
+getroffen. Daneben steht `convert::flow_apex`, das die Tabelle einmal fragt
+(`get`, sonst `describe`) und für jede der drei Zeilen-Funktionen dasselbe
+antwortet.
+
+Der Filter der CLI ist ein positionales Argument
+(`humanitl flows list apex:b.github.io --json`), nicht `--filter`; die
+Akzeptanzkriterien sind entsprechend gemessen. Und `heldFlow`/`flowOf` in den
+Tests bekommen den Apex geschrieben statt abgeleitet: Eine Ableitung im
+Testgerüst wäre die zweite Public Suffix List, die dieses Issue gerade
+abgeschafft hat.
+
 ### Fallstricke
-- Feldnummer 25, sonst nichts umnummerieren. `proto/descriptor.binpb` gehört in denselben Commit: `proto_contract.rs` vergleicht Byte für Byte, und ein Arbeitsbaum mit erneuertem Descriptor ist grün, während derselbe Commit auf `main` rot ist.
+- Feldnummer 26 (die Spezifikation nannte 25; die trägt seit HUM-103 `meta`), sonst nichts umnummerieren. `proto/descriptor.binpb` gehört in denselben Commit: `proto_contract.rs` vergleicht Byte für Byte, und ein Arbeitsbaum mit erneuertem Descriptor ist grün, während derselbe Commit auf `main` rot ist.
 - `convert::apex_of` (`convert.rs:631-643`) entfällt, statt Rückfall des Fakes zu bleiben. Er nimmt die letzten zwei Labels, macht aus `a.b.github.io` also `github.io` und legt zwei fremde Registranten unter einen Namen; für ein IP-Literal gibt er die Adresse zurück, wo `catalog::psl::apex` `None` sagt. Mit dem exakten Vergleich fände `apex:b.github.io` im Fake nichts und `apex:github.io` die Zeile, umgekehrt zum Daemon und zum eigenen Test `filter_apex_is_exact`. `humanitl_catalog::psl::apex` ist von `humanitl-ipc` aus erreichbar (`ipc/Cargo.toml:13`, `tools/deps-allow.toml:22`); eine Zeile. Beide Antworten dürfen in derselben Nachricht nicht nebeneinander stehen.
 - Ein leerer Apex ist keine Einladung zum Raten. Die Gruppierung nimmt dann den Host, der Kopf schreibt den Host, und niemand ergänzt „unbekannt" durch eine Ableitung; genau das verbietet CONVENTIONS 4.13.
 - `apex` ist das A-Label wie `authority.host`, nie die Anzeigeform. Die Spalte hält das A-Label, und der Filter vergleicht dagegen; eine Anzeigeform im Feld würde bei internationalisierten Namen dazu führen, dass man nach dem filtert, was man sieht, und nichts findet.

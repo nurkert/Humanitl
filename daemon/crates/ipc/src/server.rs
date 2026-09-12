@@ -377,9 +377,9 @@ impl IpcServer {
             let hidden = !include_passthrough
                 && !matches!(event, FlowEvent::Diagnostic { .. })
                 && event.flow_id().is_some_and(|id| {
-                    registry
-                        .get(id)
-                        .is_some_and(|record| convert::record_to_summary(&record).passthrough)
+                    registry.get(id).is_some_and(|record| {
+                        convert::record_to_summary(&record, domains.as_deref()).passthrough
+                    })
                 });
             (!hidden).then(|| {
                 Ok(convert::flow_event_to_proto(
@@ -438,7 +438,7 @@ impl IpcServer {
         rows.sort_unstable_by_key(|row| row.id);
         rows.into_iter()
             .filter_map(|row| self.registry.get(row.id))
-            .map(|record| convert::record_to_summary(&record))
+            .map(|record| convert::record_to_summary(&record, self.domains.as_deref()))
             .collect()
     }
 
@@ -1094,7 +1094,9 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         }
         self.registry
             .get(id)
-            .map(|record| Response::new(convert::record_to_detail(&record)))
+            .map(|record| {
+                Response::new(convert::record_to_detail(&record, self.domains.as_deref()))
+            })
             .ok_or_else(|| unknown_flow(id))
     }
 
