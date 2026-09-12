@@ -3018,3 +3018,46 @@ Satz. Beides ist Text, den ein Mensch liest, und beides gehört in das Issue,
 das die Datei als Nächstes anfasst. Dazu kommt eine dritte Zeile ausserhalb
 des Daemons: `make e2e` beschreibt sich selbst noch mit `E2E_ONLY=m1|m2`
 (`Makefile`), obwohl `m3` dazugekommen ist.
+
+### 4.30 Die Notiz einer Entscheidung wird aufgezeichnet (HUM-117, 2026-09-12)
+
+Schritt 6 von HUM-117 verlangt diesen Absatz: er hält fest, was am 2026-09-12
+entschieden wurde, damit die Frage nicht ein zweites Mal aufgemacht wird.
+
+**Die Notiz wird gespeichert.** Was ein Mensch beim Blocken schreibt, liegt in
+der Spalte `flows.decision_note` (Migration `V8__decision_note.sql`) und reist
+als `FlowSummary.decision_note` und `FlowDetail.decision_note` über die
+Leitung. Der Grund ist keine Bequemlichkeit: Die Notiz ist der eigene Satz des
+Menschen an den Agenten, sie geht ohnehin im Klartext in die 403-Antwort und in
+den Kopf `X-Humanitl-Note`, und eine Aufzeichnung, die die Entscheidung ohne
+ihre Begründung zeigt, ist die halbe Aufzeichnung. Der frühere Recorder-Test
+„the note of the user has no column and must not leak into one" ist damit
+hinfällig und ersetzt.
+
+**Nur ein Block, den ein Mensch entschieden hat, trägt eine Notiz.** Die
+Bedingung lautet `Decision::Block { reason: BlockReason::User, .. }` zusammen
+mit `DecisionSource::User`, und sie steht an allen drei Stellen, die eine Notiz
+schreiben könnten: der Spalte im Recorder (`recorder::writer::decision_note`),
+der Zeile, die der Daemon live baut (`ipc::convert::human_block_note`), und den
+beiden Reduzierern in Dart, die beide durch `humanBlockNote`
+(`app/lib/core/domain/flow_event.dart`) gehen: `history_page.dart` und
+`fake_daemon_client.dart`. Ein Block der Maschine hat
+denselben Typ und trägt trotzdem einen Satz — `block_checksum_secret` schreibt
+„a checksum-confirmed secret was found in this request and
+hold.hard_block_checksum_secrets is on" —, und ein solcher Satz darf nirgends
+als Notiz eines Menschen erscheinen. Die Quelle wird nie geraten:
+Wo sie unbekannt ist, bleibt das Feld leer.
+
+**Ins Audit-Log kommt die Notiz nicht.** `docs/SECURITY.md` 8 und HUM-050
+schließen das aus. `FlowDecided::new` (`daemon/crates/audit/src/kinds.rs`)
+bekommt die ganze `Decision` und nimmt daraus die Art der Entscheidung, wer sie
+traf, die Regel, wenn eine sie trug, und ob die Anfrage bearbeitet wurde — den
+Satz nicht.
+
+**`/why/<id>` bleibt an der Sitzung.** Der Rückfall auf die Aufzeichnung ändert
+nichts an 4.24: Beantwortet wird nur, was zur Sitzung des Fragenden gehört. Da
+`humanitld` bei jedem Start mit `SessionId::new` eine neue Sitzung anlegt und
+keine alte fortsetzen kann, antwortet `/why` nach einem Neustart des Daemons
+`404`. Das ist die Zusage und kein Mangel. Was der Rückfall trägt, ist ein
+Flow, den die Registry innerhalb einer laufenden Sitzung nicht mehr hält. Über
+`ListFlows` und `GetFlow` steht die Notiz auch nach dem Neustart.
