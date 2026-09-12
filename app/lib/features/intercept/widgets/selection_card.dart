@@ -9,15 +9,17 @@ library;
 // `Flow` is a domain type here, not the Flutter layout widget of the same
 // name; the widget is never used in this feature.
 import 'package:flutter/widgets.dart' hide Flow;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
+import '../providers/catalog.dart';
 import '../providers/held_groups.dart';
 import 'group_header_row.dart';
 
 /// The summary of a multi-selection.
-class SelectionCard extends StatelessWidget {
+class SelectionCard extends ConsumerWidget {
   /// Creates the card for [flows].
   const SelectionCard({required this.flows, super.key});
 
@@ -25,7 +27,7 @@ class SelectionCard extends StatelessWidget {
   final List<Flow> flows;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     final HeldGroups groups = groupFlows(flows);
@@ -48,11 +50,14 @@ class SelectionCard extends StatelessWidget {
             Padding(
               padding: EdgeInsets.only(bottom: tokens.spacing.x1),
               child: Text(
-                l10n.interceptGroupSummary(
-                  groupTitle(group, l10n),
-                  group.length,
-                  methodMix(group, l10n),
-                  l10n.interceptGroupFindings(group.findingsTotal),
+                // The same sentence the header of that group carries, from the
+                // same function: the card beside the action bar and the line
+                // in the queue may never name the group differently
+                // (`docs/UX.md` 3.5).
+                groupSummary(
+                  group,
+                  ref.watch(catalogEntryProvider(group.catalogId)),
+                  l10n,
                 ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,

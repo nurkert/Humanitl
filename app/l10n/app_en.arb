@@ -1791,5 +1791,82 @@
   "@historyDetailNote": {
     "description": "One line under the decision in the history detail: the sentence the person wrote to the agent when they blocked the request. It is shown only when there is one, as plain text and never as markup, exactly as the agent read it in the 403 response (HUM-072, HUM-117).",
     "placeholders": {"note": {"type": "String"}}
+  },
+
+  "interceptGroupLooksLike": "Looks like: {typical}",
+  "@interceptGroupLooksLike": {
+    "description": "The catalog line of a group of held requests: what an agent usually does at this service, taken verbatim from `typical` in catalog/domains.yaml (`npm install`, `git clone`). It says where an agent normally ends up here, never that this is what is being held (HUM-031, HUM-094).",
+    "placeholders": {"typical": {"type": "String"}}
+  },
+  "interceptGroupSummaryCatalog": "{name} · {looksLike} · {count, plural, =1{1 request} other{{count} requests}} · {methods} · {findings}",
+  "@interceptGroupSummaryCatalog": {
+    "description": "The group as one sentence, for a group the daemon named a catalog service for: like interceptGroupSummary with the catalog line between the name and the count. A second message rather than an optional placeholder, because an empty placeholder would leave its separators standing (HUM-094).",
+    "placeholders": {
+      "name": {"type": "String"},
+      "looksLike": {"type": "String"},
+      "count": {"type": "int"},
+      "methods": {"type": "String"},
+      "findings": {"type": "String"}
+    }
+  },
+  "catalogCategoryRegistry": "Package registry",
+  "@catalogCategoryRegistry": {"description": "Chip on the catalog card for `category: registry`. It says what a service is for, never how safe it is (HUM-031)."},
+  "catalogCategoryScm": "Source hosting",
+  "@catalogCategoryScm": {"description": "Chip on the catalog card for `category: scm`."},
+  "catalogCategoryDocs": "Documentation",
+  "@catalogCategoryDocs": {"description": "Chip on the catalog card for `category: docs`."},
+  "catalogCategoryCi": "Continuous integration",
+  "@catalogCategoryCi": {"description": "Chip on the catalog card for `category: ci`."},
+  "catalogCategoryCloud": "Cloud service",
+  "@catalogCategoryCloud": {"description": "Chip on the catalog card for `category: cloud`."},
+  "catalogCategoryAi": "Model or inference service",
+  "@catalogCategoryAi": {"description": "Chip on the catalog card for `category: ai`."},
+  "catalogCategoryCdn": "Content delivery network",
+  "@catalogCategoryCdn": {"description": "Chip on the catalog card for `category: cdn`."},
+  "catalogCategorySearch": "Web search",
+  "@catalogCategorySearch": {"description": "Chip on the catalog card for `category: search`."},
+  "catalogCategoryOs": "Operating system packages",
+  "@catalogCategoryOs": {"description": "Chip on the catalog card for `category: os`."},
+  "catalogCategoryOther": "Other",
+  "@catalogCategoryOther": {"description": "Chip on the catalog card for `category: other`, and for a category this version of the app does not know. An unknown category is shown as `other`, never dropped: the chip says what the entry claims."},
+  "domainTypicalFor": "Typical for: {typical}",
+  "@domainTypicalFor": {
+    "description": "Line on the catalog card of the domain pane: what an agent usually does at this service, from `typical` in catalog/domains.yaml. Not a statement about the request that is held (HUM-031).",
+    "placeholders": {"typical": {"type": "String"}}
+  },
+  "domainRank": "#{rank}",
+  "@domainRank": {
+    "description": "The popularity rank of the registrable domain as a badge, from the bundled excerpt of the Majestic Million. Ranks below 1000 are exact, above that they are shortened to `1.2k`. A rank is how widespread a domain is, never how trustworthy it is (HUM-031).",
+    "placeholders": {"rank": {"type": "String"}}
+  },
+  "domainRankUnranked": "unranked",
+  "@domainRankUnranked": {"description": "Stands where the popularity rank would, for a domain outside the bundled excerpt. It means `not in the first 100,000`, never `suspicious`."},
+  "domainSeenCount": "Seen {count, plural, =1{once} other{{count}×}} this session",
+  "@domainSeenCount": {
+    "description": "Line on both cards of the domain pane: how often this host was met since the daemon started. A count of this session, not of all time.",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "domainIpAddress": "IP address",
+  "@domainIpAddress": {"description": "Stands where the registrable domain would, for a host that is an address and not a name. An address has no registrable domain, and none is invented for it (HUM-031)."},
+  "domainPreviewButton": "Fetch preview",
+  "@domainPreviewButton": {"description": "Disabled button on the unknown-domain card. It stays disabled and says why in its hover label; nothing about a target is ever fetched automatically (ADR-006)."},
+  "domainPreviewDisabled": "Coming in a later version; nothing is fetched automatically.",
+  "@domainPreviewDisabled": {"description": "Hover label of the disabled preview button. A dead control without a reason is worse than a missing one (CONVENTIONS 4.13)."},
+  "domainSessionHosts": "{count, plural, =0{No host yet} =1{1 host this session} other{{count} hosts this session}}",
+  "@domainSessionHosts": {
+    "description": "Heading of the session summary in the domain pane, shown while nothing is selected: how many distinct hosts this session has met.",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "domainSessionTop": "Most requests",
+  "@domainSessionTop": {"description": "Heading above the five hosts with the most requests, in the session summary of the domain pane."},
+  "domainQuickAllow": "Allow {pattern} this session",
+  "@domainQuickAllow": {
+    "description": "Quick rule under the card of the domain pane. It creates a rule (`Rules(add)`) and decides nothing: the request on the table is decided in the action bar. The pattern is the one the rule will carry, from the same function the rule takes it from; the whole sentence of the rule stands in the hover label (HUM-031, HUM-094).",
+    "placeholders": {"pattern": {"type": "String"}}
+  },
+  "domainQuickBlock": "Block {pattern}",
+  "@domainQuickBlock": {
+    "description": "Quick rule under the card of the domain pane, the blocking one. It covers the host, not the registrable domain: blocking from a button at the edge stays as narrow as the request that is on the screen.",
+    "placeholders": {"pattern": {"type": "String"}}
   }
 }

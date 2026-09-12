@@ -28,6 +28,11 @@ import '../harness/ui_state.dart';
 final DateTime goldenNow = testStart.add(const Duration(seconds: 40));
 
 /// Ein Schwall an eine Domain plus zwei einzelne Anfragen.
+///
+/// Beide Gruppen tragen die Katalog-Kennung, die der Daemon zu ihrem Host
+/// nennt (`FlowSummary.catalog_id`, HUM-094): Der Kopf zeichnet damit „npm
+/// registry" und „GitHub" statt eines Hosts, und die Goldens bewachen genau
+/// das Bild, das dieses Issue geändert hat.
 List<FlowDetail> burstDetails() => <FlowDetail>[
   for (int i = 1; i <= 12; i++)
     detailFor(
@@ -39,7 +44,7 @@ List<FlowDetail> burstDetails() => <FlowDetail>[
         apex: 'npmjs.org',
         path: '/react/-/react-19.$i.tgz',
         requestSize: 128 * i,
-      ),
+      ).copyWith(catalogId: 'npm'),
     ),
   detailFor(
     heldFlow(
@@ -50,7 +55,7 @@ List<FlowDetail> burstDetails() => <FlowDetail>[
       apex: 'github.com',
       path: '/graphql?first=20',
       requestSize: 428,
-    ).copyWith(findingCount: 1),
+    ).copyWith(findingCount: 1, catalogId: 'github'),
     apex: 'github.com',
     findings: <Finding>[testFinding()],
   ),

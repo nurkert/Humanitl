@@ -34,9 +34,12 @@ abstract final class ProtoVersion {
   /// column (HUM-119). Raised to 10 with the note of a decision:
   /// `FlowSummary.decision_note` carries the sentence the person wrote to the
   /// agent when they blocked, and the history detail shows it under the
-  /// decision (HUM-117). Raising the number without a reader would claim
-  /// otherwise.
-  static const int minor = 10;
+  /// decision (HUM-117). Raised to 11 with the service in the row:
+  /// `FlowSummary.catalog_id` carries the id of the catalog entry the daemon
+  /// found for the host, and the queue names a group after the service it
+  /// stands for instead of after one of its hosts (HUM-094). Raising the
+  /// number without a reader would claim otherwise.
+  static const int minor = 11;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

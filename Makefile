@@ -7,12 +7,12 @@ SHELL := /bin/bash
 .PHONY: help check rust-fmt rust-clippy rust-build rust-test rust-doc rust-deny typed-errors-lint \
         flutter-get flutter-analyze flutter-test flutter-test-dbus flutter-test-daemon \
         flutter-test-integration flutter-build proto escape e2e \
-        deps-lint docs-lint clean
+        deps-lint docs-lint catalog-assets catalog-lint clean
 
 help: ## List targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | sort | awk -F':.*?## ' '{printf "  %-18s %s\n", $$1, $$2}'
 
-check: rust-fmt rust-clippy rust-build rust-test rust-doc deps-lint docs-lint typed-errors-lint flutter-analyze flutter-test flutter-build ## Full local gate (same steps as CI)
+check: rust-fmt rust-clippy rust-build rust-test rust-doc deps-lint docs-lint typed-errors-lint catalog-lint flutter-analyze flutter-test flutter-build ## Full local gate (same steps as CI)
 
 # A rustup toolchain may exist without rustup on PATH (this machine): put its
 # bin directory first so `cargo fmt` and `cargo clippy` find their components.
@@ -69,7 +69,7 @@ flutter-get: ## Fetch Dart packages (app and packages/ui)
 # Repository. Analyse, Test und Bau haengen daran: In einem frischen Auscheckstand
 # fehlen sonst alle .g.dart- und .freezed.dart-Dateien, und `flutter analyze`
 # meldet Hunderte Fehler, die keine sind.
-flutter-codegen: flutter-get proto ## Generated Dart code: riverpod, freezed, ARB
+flutter-codegen: flutter-get proto catalog-assets ## Generated Dart code: riverpod, freezed, ARB
 	@if grep -qE '^[[:space:]]*build_runner[[:space:]]*:' app/pubspec.yaml; then \
 	  cd app && dart run build_runner build --delete-conflicting-outputs; \
 	else \
@@ -151,6 +151,21 @@ escape: ## Run the sandbox escape tests (HUM-006)
 
 e2e: ## Run the demo scripts of every milestone reached (E2E_ONLY=m1|m2|m3 picks one)
 	./tests/e2e/run.sh
+
+# Der Katalog ist eine Quelle, die Kopie unter `app/assets/` ist es nicht
+# (ARCHITECTURE 4). Sie steht trotzdem im Repository, weil ein Auscheckstand
+# ohne sie nicht baut: `flutter build` liest den Asset-Block der pubspec und
+# bricht ab, wenn eine gelistete Datei fehlt. Damit sie nie driftet, erzeugt
+# `catalog-assets` sie und `catalog-lint` haelt sie Byte fuer Byte gegen das
+# Original; driftet sie doch, nennt der Bildschirm einen anderen Dienst, als
+# der Daemon zugeordnet hat (HUM-094).
+catalog-assets: ## Copy the domain catalog into the Flutter asset bundle
+	install -D -m 0644 catalog/domains.yaml app/assets/catalog/domains.yaml
+
+catalog-lint: ## The bundled catalog matches the source byte for byte
+	@cmp -s catalog/domains.yaml app/assets/catalog/domains.yaml || \
+	  { echo "app/assets/catalog/domains.yaml differs from catalog/domains.yaml; run make catalog-assets" >&2; exit 1; }
+	@echo "catalog-lint: app/assets/catalog/domains.yaml matches catalog/domains.yaml"
 
 clean: ## Remove build artefacts
 	cd daemon && cargo clean
