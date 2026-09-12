@@ -442,6 +442,156 @@ void main() {
     expect(find.text(DiagnosticCodes.ruleBundled), findsWidgets);
   });
 
+  testWidgets('the_command_line_and_the_screen_show_one_state', (
+    WidgetTester tester,
+  ) async {
+    final RulesTestClient client = seeded();
+    await pumpRules(tester, client: client);
+
+    /// Was `humanitl --json rules list --all` über die mitgelieferte Regel
+    /// druckte. Gefragt wird derselbe RPC, den die Kommandozeile fragt
+    /// (`Rules(list)`, ADR-018: beide Clients sind dünn), nicht die
+    /// Buchhaltung des Fakes.
+    Future<bool> disabledInDaemon() async {
+      final RuleSet answered = await client.listRules();
+      return answered.rules
+          .firstWhere(
+            (Rule rule) => rule.id == FakeDaemonClient.bundledBlockRule,
+          )
+          .disabled;
+    }
+
+    expect(await disabledInDaemon(), isFalse);
+
+    // Erste Hälfte: `humanitl rules disable <id>` an diesem Bildschirm vorbei.
+    // Der Zustand des Daemons ändert sich, während der Bildschirm steht.
+    client.bundledRules[0] = client.bundledRules[0].copyWith(disabled: true);
+    expect(await disabledInDaemon(), isTrue);
+    // Ungefragt erfährt der Bildschirm davon nichts: `RulesChanged` hat keinen
+    // Verbraucher (HUM-033, `rules.dart`). Er zeigt weiter die letzte Antwort,
+    // und das ist immer noch eine Antwort des Daemons und keine Vermutung.
+    expect(drawnBundled(tester).disabled, isFalse);
+
+    // Sobald die Sektion wieder sichtbar wird, fragt der Bildschirm von sich
+    // aus (`rules_screen.dart`, `_isVisible`). Hier wird derselbe Aufruf
+    // ausgelöst, weil dieser Baum ohne Shell keinen `IndexedStack` über sich
+    // hat, in dem eine Sektion verschwinden könnte.
+    final ProviderContainer container = ProviderScope.containerOf(
+      tester.element(find.byType(RuleRow).first),
+    );
+    await container.read(rulesProvider.notifier).refresh();
+    await tester.pump();
+
+    // Und nun steht auf dem Bildschirm, was die Kommandozeile gesetzt hat:
+    // gedämpft, mit dem Wort, das den Zustand trägt, und mit einem Schalter,
+    // der „Einschalten" liest.
+    expect(drawnBundled(tester).disabled, isTrue);
+    expect(find.text(l10n.rulesOriginOff), findsOneWidget);
+    expect(
+      tester
+          .widget<HRow>(
+            find.descendant(of: bundledRow(), matching: find.byType(HRow)),
+          )
+          .state,
+      HFlowState.timedOut,
+    );
+    await hoverOver(tester, bundledRow());
+    expect(
+      tester
+          .widget<HoverLabel>(
+            find
+                .ancestor(
+                  of: bundledSwitch(),
+                  matching: find.byType(HoverLabel),
+                )
+                .first,
+          )
+          .label,
+      l10n.rulesEnable,
+    );
+
+    // Zweite Hälfte: der Klick. Danach sagt derselbe RPC, den die
+    // Kommandozeile fragt, dass die Regel wieder gilt -- der Bildschirm hat
+    // den Zustand im Daemon geändert und nicht nur bei sich.
+    await tester.tap(bundledSwitch(), kind: PointerDeviceKind.mouse);
+    await tester.pump();
+    await tester.pump();
+    expect(client.setDisabledCalls.last, (
+      FakeDaemonClient.bundledBlockRule,
+      false,
+    ));
+    expect(await disabledInDaemon(), isFalse);
+    expect(drawnBundled(tester).disabled, isFalse);
+    expect(find.text(l10n.rulesOriginOff), findsNothing);
+
+    // Noch ein Klick, und beide Seiten sind wieder aus: der Schalter ist sein
+    // eigenes Rückgängig, und die Kommandozeile liest dasselbe.
+    await tester.tap(bundledSwitch(), kind: PointerDeviceKind.mouse);
+    await tester.pump();
+    await tester.pump();
+    expect(await disabledInDaemon(), isTrue);
+    expect(drawnBundled(tester).disabled, isTrue);
+    expect(find.text(l10n.rulesOriginOff), findsOneWidget);
+  });
+
+  testWidgets('the_row_follows_the_answer_not_the_click', (
+    WidgetTester tester,
+  ) async {
+    final MeanwhileRulesClient client = MeanwhileRulesClient();
+    client.savedRules.add(testRule(n: 1, host: 'registry.npmjs.org'));
+    // Die geklickte Regel ist schon aus; der Klick schaltet sie **ein**,
+    // verlangt also `disabled: false`.
+    client.bundledRules.add(
+      testRule(n: 7, host: 'registry.npmjs.org', bundled: true, disabled: true),
+    );
+    client.bundledRules.add(
+      testRule(n: 8, host: 'pypi.org', bundled: true),
+    );
+    // Zwischen Klick und Antwort schaltet jemand an der Kommandozeile die
+    // zweite mitgelieferte Regel aus. Die Antwort trägt damit beide Werte:
+    // die geklickte Zeile an, die andere aus.
+    client.alsoDisabled = testRuleId(8);
+    await pumpRules(tester, client: client);
+
+    final Finder clicked = find.byKey(ValueKey<String>(testRuleId(7).value));
+    final Finder other = find.byKey(ValueKey<String>(testRuleId(8).value));
+    expect(tester.widget<RuleRow>(clicked).rule.disabled, isTrue);
+
+    await hoverOver(tester, clicked);
+    // Den Schalter dieser Zeile, nicht den mit der Nummer null: Die Nummer
+    // zählt den Block der mitgelieferten Regeln, und welche Zeile darin zuerst
+    // steht, entscheidet die Sortierung, nicht dieser Test.
+    final Finder theSwitch = find.descendant(
+      of: clicked,
+      matching: find.byWidgetPredicate(
+        (Widget widget) =>
+            widget.key is ValueKey<String> &&
+            (widget.key! as ValueKey<String>).value.startsWith('rule-disable-'),
+      ),
+    );
+    expect(theSwitch, findsOneWidget);
+    await tester.tap(theSwitch, kind: PointerDeviceKind.mouse);
+    await tester.pump();
+
+    // Solange der Aufruf unterwegs ist, steht die Zeile, wie sie stand: Ein
+    // Schalter, der vor der Antwort umspringt, behauptet einen Zustand, den
+    // niemand bestätigt hat (CONVENTIONS 4.13).
+    expect(tester.widget<RuleRow>(clicked).rule.disabled, isTrue);
+
+    client.gate.complete();
+    await tester.pump();
+    await tester.pump();
+
+    // Nach der Antwort trägt die geklickte Zeile den verlangten Wert ...
+    expect(tester.widget<RuleRow>(clicked).rule.disabled, isFalse);
+    // ... und die zweite den entgegengesetzten, den kein Klick getroffen hat.
+    // Eine Oberfläche, die den geklickten Wert auf alle mitgelieferten Zeilen
+    // malt, statt den Regelsatz der Antwort zu zeichnen, käme hier nicht
+    // durch (CONVENTIONS 4.13).
+    expect(tester.widget<RuleRow>(other).rule.disabled, isTrue);
+    expect(find.text(l10n.rulesOriginOff), findsOneWidget);
+  });
+
   testWidgets('delete_undo_restores_position', (WidgetTester tester) async {
     final RulesTestClient client = seeded();
     await pumpRules(tester, client: client);
@@ -1040,6 +1190,36 @@ class GatedRulesClient extends RulesTestClient {
   Future<RuleSet> setRuleDisabled(RuleId id, {required bool disabled}) async {
     started++;
     await gate.future;
+    return super.setRuleDisabled(id, disabled: disabled);
+  }
+}
+
+/// Ein Client, an dem zwischen Klick und Antwort noch jemand anders dreht:
+/// während `Rules(set_disabled)` unterwegs ist, schaltet die Kommandozeile
+/// eine zweite mitgelieferte Regel aus. Die Antwort trägt beide Änderungen,
+/// und nur ein Bildschirm, der die Antwort zeichnet statt seines eigenen
+/// Klicks, zeigt beide.
+class MeanwhileRulesClient extends RulesTestClient {
+  /// Die mitgelieferte Regel, die der Daemon nebenher ebenfalls ausschaltet.
+  RuleId? alsoDisabled;
+
+  /// Öffnet die Antwort. Solange das Tor zu ist, ist der Aufruf unterwegs, und
+  /// der Test kann nachsehen, was der Bildschirm in dieser Zeit zeichnet.
+  final Completer<void> gate = Completer<void>();
+
+  @override
+  Future<RuleSet> setRuleDisabled(RuleId id, {required bool disabled}) async {
+    await gate.future;
+    final RuleId? other = alsoDisabled;
+    if (other != null) {
+      final int at = bundledRules.indexWhere((Rule rule) => rule.id == other);
+      if (at >= 0) {
+        // Immer `true`, egal was der Klick verlangt: Die Antwort trägt damit
+        // zwei verschiedene Werte, und eine Oberfläche, die einfach den
+        // geklickten Wert auf alle Zeilen malt, fällt auf.
+        bundledRules[at] = bundledRules[at].copyWith(disabled: true);
+      }
+    }
     return super.setRuleDisabled(id, disabled: disabled);
   }
 }

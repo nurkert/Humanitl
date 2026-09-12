@@ -2764,13 +2764,13 @@ ARB-Schlüssel, `en` Quelle, `de` Übersetzung, ans Ende beider Dateien angehän
 - `rules_golden_test.dart`: `rules_list_saved_*` mit einer abgeschalteten mitgelieferten Regel im Block.
 
 ### Akzeptanzkriterien
-- [x] `grep -n "bool disabled" app/lib/core/domain/rule.dart` trifft einmal; `grep -c "disabled" app/lib/core/ipc/convert.dart` ist mindestens 2 (lesen und schreiben).
-- [x] `grep -n "setRuleDisabled" app/lib/core/ipc/daemon_client.dart app/lib/core/ipc/grpc_daemon_client.dart app/lib/core/ipc/fake_daemon_client.dart` trifft in jeder der drei Dateien.
-- [x] `cd app && flutter test test/core/ipc test/features/rules test/goldens/rules_golden_test.dart` grün, darunter die sechs oben benannten Fälle.
-- [ ] Gegen einen laufenden Daemon: `humanitl rules disable <Id einer mitgelieferten Regel>`, dann der Bildschirm: die Zeile ist gedämpft, liest „mitgeliefert, ausgeschaltet", der Schalter „Einschalten" (Blick). Klick darauf, dann gibt `humanitl --json rules list --all | jq -r --arg id <Id> '.rules[] | select(.rule_id == $id) | .disabled'` `false` aus; noch ein Klick, `true`.
-- [x] Eine eigene Regel hat keinen Schalter: `find.byKey(const ValueKey<String>('rule-disable-<i>'))` findet für sie nichts (Test `own_rule_has_no_switch`).
-- [x] `grep -c '"rulesDisable"\|"rulesEnable"\|"rulesOriginBundledOff"' app/l10n/app_en.arb app/l10n/app_de.arb` ergibt je 3; `make flutter-codegen` läuft ohne Warnung.
-- [x] `make check` grün.
+- [x] `grep -n "bool disabled" app/lib/core/domain/rule.dart` trifft einmal; `grep -c "disabled" app/lib/core/ipc/convert.dart` ist mindestens 2 (lesen und schreiben). **Gemessen am 2026-09-12:** ein Treffer, `rule.dart:83`; `grep -c` sagt 2 (`convert.dart:456` liest, `:480` schreibt).
+- [x] `grep -n "setRuleDisabled" app/lib/core/ipc/daemon_client.dart app/lib/core/ipc/grpc_daemon_client.dart app/lib/core/ipc/fake_daemon_client.dart` trifft in jeder der drei Dateien. **Gemessen am 2026-09-12:** `daemon_client.dart:89`, `grpc_daemon_client.dart:192`, `fake_daemon_client.dart:660`.
+- [x] `cd app && flutter test test/core/ipc test/features/rules test/goldens/rules_golden_test.dart` grün, darunter die sechs oben benannten Fälle. **Gemessen am 2026-09-12:** 156 Tests grün, 0 rot, darunter die sechs benannten Fälle und die beiden am 2026-09-12 ergänzten (`the_command_line_and_the_screen_show_one_state`, `the_row_follows_the_answer_not_the_click`); die sechs Goldens des Regel-Bildschirms unverändert grün, also keines neu abgenommen. Die ganze Anwendung im selben Zustand: 1032 grün, 4 übersprungen, 0 rot.
+- [ ] Gegen einen laufenden Daemon: `humanitl rules disable <Id einer mitgelieferten Regel>`, dann der Bildschirm: die Zeile ist gedämpft, liest „mitgeliefert, ausgeschaltet", der Schalter „Einschalten" (Blick). Klick darauf, dann gibt `humanitl --json rules list --all | jq -r --arg id <Id> '.rules[] | select(.rule_id == $id) | .disabled'` `false` aus; noch ein Klick, `true`. **Offen, und offen bleibt genau zweierlei: die beiden echten Prozesse und der Blick (Stand 2026-09-12).** Was ein Mensch dafür tun und sehen muss: das Fenster mindestens 1600 px breit ziehen, sonst steht in der Zeile nicht „mitgeliefert, ausgeschaltet", sondern nur „aus" — unterhalb von 420 px Panebreite weicht das Herkunftswort, und im Standardfenster von 1280 px ist die Pane rund 370 px breit (CONVENTIONS 4.16). Dann `humanitl rules disable <Id>` in einem Terminal, zurück zum Regel-Bildschirm, Tab „Gespeichert", Block der mitgelieferten Regeln: Die Zeile steht gedämpft zwischen wirksamen, links trägt sie statt des Zeichens ihrer Aktion ein Kreuz, das Herkunftswort liest „mitgeliefert, ausgeschaltet", und wenn der Zeiger auf der Zeile steht, liest der Schalter am rechten Rand „Einschalten" (er erscheint nur bei Hover und bei Fokus). Ein Klick darauf, dann druckt `humanitl --json rules list --all | jq -r --arg id <Id> '.rules[] | select(.rule_id == $id) | .disabled'` `false`, noch ein Klick, `true`. Als Widget-Test gemessen ist davon alles, was in einem Prozess Platz hat: `disabled_bundled_row_is_drawn_off` (Dämpfung `HFlowState.timedOut`, Kreuz statt Aktionszeichen und nicht die Uhr, Schalter liest „Einschalten"), `a_wide_pane_spells_the_origin_out` (ab 1600 px steht das ganze Wort), `the_command_line_and_the_screen_show_one_state` (ein Zustand, der am Bildschirm vorbei gesetzt wurde, steht nach der nächsten Frage des Bildschirms da; nach dem Klick antwortet derselbe RPC, den die Kommandozeile fragt, `false`, nach dem zweiten `true`), `the_row_follows_the_answer_not_the_click` (die Zeile zeigt den Regelsatz der Antwort, auch wo er mehr trägt als der Klick verlangt hat; aus den zwei Reviews kamen zwei Schärfungen dazu: Der Aufruf hängt an einem Tor, und solange er unterwegs ist, steht die Zeile, wie sie stand — ein Schalter, der vor der Antwort umspringt, fällt damit auf —, und Klick und Antwort tragen verschiedene Werte, der Klick schaltet eine Regel ein, während der Daemon eine andere ausschaltet, sodass auch eine Oberfläche auffällt, die den geklickten Wert auf alle mitgelieferten Zeilen malt. Beide Mutationen am 2026-09-12 rot gesehen) und die Goldens `rules_list_saved_{dark,light}`. Einem Menschen vorbehalten bleibt, was kein Test in einem Prozess hat: die echte Kommandozeile über den Unix-Socket gegen `humanitld`, die Ids aus `rules/default.yaml` und das Bild selbst statt der Token dahinter.
+- [x] Eine eigene Regel hat keinen Schalter: `find.byKey(const ValueKey<String>('rule-disable-<i>'))` findet für sie nichts (Test `own_rule_has_no_switch`). **Gemessen am 2026-09-12:** `own_rule_has_no_switch` grün im Lauf oben; er hält den Papierkorb der eigenen Regel und den fehlenden Schalter auf demselben Index 0 fest.
+- [x] `grep -c '"rulesDisable"\|"rulesEnable"\|"rulesOriginBundledOff"' app/l10n/app_en.arb app/l10n/app_de.arb` ergibt je 3; `make flutter-codegen` läuft ohne Warnung. **Gemessen am 2026-09-12:** je 3 in beiden Dateien. `make flutter-codegen` erzeugt ARB, Freezed und Riverpod ohne eine Warnung über einen Schlüssel dieses Issues, druckt aber zwei Zeilen, die nicht hierher gehören: `W These options have been removed and were ignored: --delete-conflicting-outputs` (die neue `build_runner`-Fassung kennt die Option des Makefiles nicht mehr) und `SKIP dart: protoc-gen-dart not found in PATH` auf einem Rechner, der `protoc-gen-dart` nur unter `~/.pub-cache/bin` hat. Beides ist Werkzeugstand, kein Befund über die Schlüssel.
+- [x] `make check` grün. **Am 2026-09-12 nur zur Hälfte nachgemessen**, weil der Stand dieses Datums allein `app/test/features/rules/rules_screen_test.dart` ändert: `flutter analyze` ohne Befund, `dart format --output=none --set-exit-if-changed lib test packages/ui/lib packages/ui/test` über 392 Dateien ohne Änderung, `flutter test` über die ganze Anwendung 1032 grün und 4 übersprungen. Die Rust-Hälfte des Gates lief an diesem Datum nicht; sie ist seit dem Merge `8953dc8` unberührt.
 
 ### Stand (2026-09-05): umgesetzt, zwei Abweichungen von der Spezifikation
 
@@ -2859,6 +2859,25 @@ belegt war die Zusicherung nur an der einen Regel, die die Vorrichtung anlegt.
 Sie wird jetzt über alle Aktionen geprüft (`rules_a11y_test.dart`, „the
 switched-off glyph is no action glyph"), und der Bildschirmtest stellt eine
 eingeschaltete mitgelieferte `allow`-Regel daneben.
+
+**Nachtrag 2026-09-12: zwei Tests für die Hälfte des offenen Kästchens, die in
+einen Prozess passt.** Das Kästchen mit dem laufenden Daemon behauptet
+zweierlei, und nur eines davon braucht wirklich zwei Prozesse. Der Zustand
+wandert in beide Richtungen: von der Kommandozeile an den Bildschirm und vom
+Bildschirm an die Kommandozeile. Beides misst jetzt
+`the_command_line_and_the_screen_show_one_state` gegen den Dart-Fake — erst ein
+Ausschalten am Bildschirm vorbei, das der Bildschirm bei seiner nächsten Frage
+zeigt (`refresh`, wie beim Sichtbarwerden der Sektion), dann der Klick, nach dem
+derselbe RPC, den `humanitl rules list --all` fragt, `false` und nach dem
+zweiten Klick wieder `true` antwortet. Der zweite Test,
+`the_row_follows_the_answer_not_the_click`, misst die Zusage, die der bisherige
+Bestand auf dem Erfolgsweg nicht belegen konnte: ein Client, bei dem zwischen
+Klick und Antwort eine zweite mitgelieferte Regel ausgeschaltet wird, bringt
+eine Antwort zurück, die mehr trägt als der Klick verlangt hat, und der
+Bildschirm zeigt beide Zeilen aus. Eine Fassung, die den geklickten Zustand
+lokal vorwegnimmt und die Antwort verwirft, kommt an den bisherigen Tests
+vorbei und stirbt an diesem. Was auch danach einem Menschen bleibt, steht am
+Kästchen selbst.
 
 ### Fallstricke
 - `convert.dart`, `fake_daemon_client.dart` und `daemon_client.dart` sind geteilte Dateien (CLAUDE.md): nur den eigenen Abschnitt ändern, neue Einträge ans Ende, die Datei unmittelbar vor jedem Schreiben neu einlesen, nie im Ganzen neu schreiben.
