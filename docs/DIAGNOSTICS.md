@@ -271,6 +271,14 @@ config.toml nicht geschrieben
 
 **Fix.** Kein Fix: Der Text nennt die Zeile, die von Hand in den Block `[sandbox.env]` gehört.
 
+#### CONFIG_016
+
+Feste Namenszuordnungen gesetzt
+
+**Auslöser.** `resolver.overrides` beantwortet die genannten Namen aus der Konfiguration, statt zu fragen; der Verkehr geht an die Adresse, die dort steht.
+
+**Fix.** `ChangeSetting` auf eine leere Tabelle, wenn die festen Adressen nicht gemeint waren.
+
 ### Bereich sandbox
 
 #### SANDBOX_001

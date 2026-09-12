@@ -1491,8 +1491,8 @@ Die Zahlen des Laufs nach der Umstellung: 69 geprüfte Behauptungen
 (`M2_EXPECTED_ASSERTIONS`), 17 bediente Anfragen am Ziel (vorher 16), davon 16
 über TLS, und 14 mit `200` an die Paket-Registry (vorher 13).
 
-**Der Daemon warnt nur für `resolver.test_ca`, nicht für die anderen
-Test-Hebel.** Der Fallstrick der Spezifikation verlangt eine Warnung beim
+**Der Daemon warnt für beide verbliebenen Test-Hebel** (bis HUM-024 nur für
+`resolver.test_ca`). Der Fallstrick der Spezifikation verlangt eine Warnung beim
 Start, damit `resolver.overrides` und `experimental.upstream_port_map` „nie
 unbemerkt in Produktion landen". `humanitld` meldet beim Start nur
 `resolver.test_ca` ohne sein Flag (`CONFIG_011`, seit HUM-087) und, seit
@@ -1504,7 +1504,9 @@ verlangt. `resolver.test_ca` ist mit HUM-087 aus diesem Bündel heraus: Der
 Schlüssel hat einen Leser, und der Daemon meldet mit `CONFIG_011`, wenn er ohne
 sein Flag gesetzt ist. `experimental.upstream_port_map` ist mit HUM-088
 entfallen und braucht deshalb keine Warnung mehr. Für `resolver.overrides`
-steht sie weiterhin aus.
+steht sie seit HUM-024 (`CONFIG_016`, Stufe `WARN`, mit den Namen der Tabelle
+in der Zeile); gemessen von `a_table_of_fixed_names_is_announced_at_the_start`
+und seinem Gegenfall in `daemon/bin/humanitld/tests/daemon_end_to_end.rs`.
 
 **Die Stapel-Freigabe geht über zwei Aufrufe, nicht über einen.**
 `DecideRequest` trägt `repeated flow_ids` und `remember`, kann eine Gruppe also

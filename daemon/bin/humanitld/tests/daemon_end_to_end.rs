@@ -535,12 +535,11 @@ async fn without_an_endpoint_there_is_no_passthrough_rule() {
 // `--allow-test-ca` (HUM-087)
 // ---------------------------------------------------------------------------
 
-/// Ein XDG-Baum mit einer `config.toml`, die `resolver.test_ca` setzt.
+/// Ein XDG-Baum mit dieser `config.toml`.
 ///
 /// Über die Datei und nicht über eine Umgebungsvariable: Genau diesen Weg
-/// nimmt eine Konfiguration im Alltag, und genau er darf das Vertrauen nicht
-/// allein herstellen.
-fn tree_with_test_ca(test_ca: &Path) -> tempfile::TempDir {
+/// nimmt eine Konfiguration im Alltag.
+fn tree_with_config(toml: &str) -> tempfile::TempDir {
     let dir = tempfile::Builder::new()
         .prefix("hum")
         .tempdir_in("/tmp")
@@ -550,12 +549,19 @@ fn tree_with_test_ca(test_ca: &Path) -> tempfile::TempDir {
     }
     let config = dir.path().join("config").join("humanitl");
     std::fs::create_dir_all(&config).unwrap();
-    std::fs::write(
-        config.join("config.toml"),
-        format!("[resolver]\ntest_ca = \"{}\"\n", test_ca.display()),
-    )
-    .unwrap();
+    std::fs::write(config.join("config.toml"), toml).unwrap();
     dir
+}
+
+/// Ein XDG-Baum mit einer `config.toml`, die `resolver.test_ca` setzt.
+///
+/// Derselbe Weg wie oben, und genau er darf das Vertrauen nicht allein
+/// herstellen.
+fn tree_with_test_ca(test_ca: &Path) -> tempfile::TempDir {
+    tree_with_config(&format!(
+        "[resolver]\ntest_ca = \"{}\"\n",
+        test_ca.display()
+    ))
 }
 
 /// Startet das Binary in `dir` mit den zusätzlichen Argumenten und gibt seine
@@ -752,6 +758,44 @@ fn a_relative_test_ca_stops_the_start_even_next_to_a_valid_root() {
         !runtime.join("proxy").join("proxy.sock").exists(),
         "and no proxy socket either"
     );
+}
+
+/// Eine nicht leere Tabelle `resolver.overrides` steht beim Start im
+/// Protokoll, mit Code und Namen, und der Daemon läuft trotzdem.
+///
+/// Der Hebel beantwortet Namen aus der Konfiguration, statt zu fragen; ohne
+/// diese Zeile stünde er unbemerkt in einem Alltagslauf
+/// (`backlog/CONVENTIONS.md` 4.22, HUM-024).
+#[test]
+fn a_table_of_fixed_names_is_announced_at_the_start() {
+    let dir = tree_with_config("[resolver.overrides]\n\"registry.npmjs.test\" = \"127.0.0.1\"\n");
+
+    let (_status, log) = run_daemon(dir.path(), &[], true);
+
+    assert!(log.contains("CONFIG_016"), "{log}");
+    assert!(log.contains("registry.npmjs.test"), "{log}");
+    assert!(log.contains("\"level\":\"WARN\""), "not INFO: {log}");
+    assert!(
+        dir.path()
+            .join("run")
+            .join("humanitl")
+            .join("daemon.sock")
+            .exists()
+            || log.contains("listening"),
+        "the warning does not stop the start: {log}"
+    );
+}
+
+/// Ohne die Tabelle sagt der Start nichts über sie.
+///
+/// Der Gegenfall zum Test darüber: Eine Zeile, die immer steht, sagt nichts.
+#[test]
+fn without_fixed_names_the_start_stays_quiet_about_them() {
+    let dir = tree_with_config("");
+
+    let (_status, log) = run_daemon(dir.path(), &[], true);
+
+    assert!(!log.contains("CONFIG_016"), "{log}");
 }
 
 /// Eine unbrauchbare Testwurzel beendet den Start, und zwar bevor ein Socket

@@ -1151,6 +1151,16 @@ registry! {
     AUDIT_007 => "audit", "Audit-Kette hinter dem letzten Anker fortgesetzt", "#audit_007",
         "Beim Start endet `audit.jsonl` vor einem Anker aus `audit_anchors`; die Kette läuft hinter diesem Anker weiter, und die Prüfung meldet die Lücke weiter als Bruch.",
         "Kein Fix nötig: Der Text nennt, wo das Log endete und hinter welchem Anker die Kette weiterläuft.";
+    /// Die Tabelle `resolver.overrides` ist nicht leer.
+    ///
+    /// Für die Namen darin antwortet die Konfiguration und nicht der
+    /// Namensdienst, und der Verkehr geht an die Adresse, die dort steht. Das
+    /// ist ein Testhebel; der Start sagt es, damit er nicht unbemerkt in einem
+    /// Alltagslauf steht, so wie `CONFIG_011` es für `resolver.test_ca` tut
+    /// (HUM-024).
+    CONFIG_016 => "config", "Feste Namenszuordnungen gesetzt", "#config_016",
+        "`resolver.overrides` beantwortet die genannten Namen aus der Konfiguration, statt zu fragen; der Verkehr geht an die Adresse, die dort steht.",
+        "`ChangeSetting` auf eine leere Tabelle, wenn die festen Adressen nicht gemeint waren.";
 }
 
 /// Sucht einen Code im Register.
