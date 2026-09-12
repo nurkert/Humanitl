@@ -875,7 +875,7 @@ Nach jeder Änderung: `FlowEvent`-Stream bekommt kein Event; stattdessen eigener
 
 ### Akzeptanzkriterien
 - [x] Alle Tests grün; `buf lint` sauber. **Gemessen am 2026-09-11.** `rules_rpc` 12 von 12, lokal und im CI-Job `rust-test`. `buf lint` ist lokal nicht ausführbar; die CI fährt es im Job `proto-lint-and-gen` als Schritt 8, und der ist im Lauf 34596057818 über `784bc7e` grün (öffentliche Actions-API, Schrittliste des Jobs).
-- [x] `grpcurl -unix … humanitl.v1.Humanitl/Rules` mit `{"list":{}}` liefert bundled Regeln mit `bundled: true`. (belegt über `rules_rpc.rs:352` und live über `humanitl --json rules list --all`; grpcurl fehlt hier)
+- [x] `grpcurl -unix … humanitl.v1.Humanitl/Rules` mit `{"list":{}}` liefert bundled Regeln mit `bundled: true`. (belegt über den Test `bundled_remove_rejected` in `daemon/crates/ipc/tests/rules_rpc.rs`, dessen `List`-Antwort `listed.rules[0].bundled` prüft, am 2026-09-12 in Zeile 349; die früher genannte Zeile 352 trägt heute den `Remove`-Aufruf, deshalb steht hier der Testname. Live belegt über `humanitl --json rules list --all`; grpcurl fehlt hier)
 - [x] `rules.yaml` wird nie mit Session-Regeln geschrieben (Test greift Datei-Inhalt).
 
 ### Fallstricke
