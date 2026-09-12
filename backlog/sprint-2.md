@@ -1609,7 +1609,7 @@ keine (Dokument).
 ### Akzeptanzkriterien
 - [x] ADR-Nachtrag enthält beide ausgefüllten Matrizen mit Datum und Versionsnummern. (eine Tabelle mit drei bewerteten Spalten, Versionsstand 2026-09-04)
 - [x] Entscheidung ist ein Satz; Begründung ≤ 10 Zeilen.
-- [x] Kein Spike-Branch. Die Abweichung ist im ADR unter „Entschieden ohne Prototyp" und in `backlog/CONVENTIONS.md` 4.20 begründet, und der ADR nennt, was ohne Messung offen bleibt und woran ein Fehlurteil auffiele. (das Ergebnis „weder noch" hat der Projekteigentümer am selben Tag zurückgenommen, siehe Kopf dieses Issues)
+- [x] Kein Spike-Branch. Die Abweichung ist im ADR unter „Entschieden ohne Prototyp" und in `backlog/CONVENTIONS.md` 4.20 begründet, und der ADR nennt, was ohne Messung offen bleibt und woran ein Fehlurteil auffiele. (das Ergebnis „weder noch" hat der Projekteigentümer am selben Tag zurückgenommen, nachzulesen in `docs/adr/0009-ui-stack.md`, Abschnitt „Revidiert am 2026-09-04 durch den Projekteigentümer", und in `BACKLOG.md` Zeile 475; der Kopf dieses Issues, auf den hier früher verwiesen wurde, sagt dazu nichts, am 2026-09-12 geprüft)
 
 ### Fallstricke
 - Nicht nach Gefühl entscheiden; die Matrix ist verbindlich. Sie braucht dafür einen Punkte-Maßstab: Der ADR legt je Kriterium Schwellen für 0 bis 3 Punkte fest, sonst ist jede Einzelwertung ein Prosa-Urteil.
