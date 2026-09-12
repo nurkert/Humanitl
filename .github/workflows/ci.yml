@@ -598,6 +598,20 @@ jobs:
         # it itself when this step is missing; here it happens once, outside
         # the namespace, and the step name says where the time went.
         run: cd app && flutter build linux --debug
+      - name: Build the daemon the integration tests drive
+        # `make flutter-test-integration` refuses to start without
+        # daemon/target/debug/humanitld. The M2 demo below builds the same
+        # binary into the same target directory (tests/e2e/lib.sh), so this
+        # step is the one build and not a second one.
+        run: cd daemon && cargo build -p humanitld --bin humanitld
+      - name: The app on a screen against a real daemon (HUM-144)
+        # The frozen queue of HUM-029, measured against a real `humanitld
+        # --fake` playing fixtures/sessions/npm-install.jsonl, plus the shell
+        # test next to it. Without this step nothing runs app/integration_test
+        # except the M2 driver, and a file that no gate runs goes stale in
+        # silence. The resolution is not a suggestion: below 1400x900 the
+        # narrow layout takes over and the selectors miss.
+        run: xvfb-run -a --server-args='-screen 0 1600x1000x24' make flutter-test-integration
       - name: Allow unprivileged user namespaces
         # Ubuntu 24.04 restricts them through AppArmor (HUM-002). Without this
         # neither bwrap nor `unshare -rn` starts; the demo says so and fails,
