@@ -1203,3 +1203,211 @@ async fn audit_truncate_is_detected() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Die Notiz einer Entscheidung (HUM-117)
+// ---------------------------------------------------------------------------
+
+/// Der Satz, den der Mensch beim Blocken an den Agenten richtet.
+const HUMAN_NOTE: &str = "use PyPI";
+
+/// Die Zeile des geblockten Flows, sobald die Aufzeichnung sie führt.
+///
+/// Mit Aufzeichnung beantwortet `ListFlows` jede Seite aus `SQLite`
+/// (`recorded_page` in `ipc/src/server.rs`), der Schreiber arbeitet aber
+/// nebenläufig. Ohne dieses Warten hinge der Test daran, wer zuerst fertig
+/// ist, und ein Test, der ein Rennen abwartet, misst das Rennen.
+///
+/// `when` steht in der Fehlermeldung, damit beide Aufrufstellen — vor und nach
+/// dem Neustart — auseinanderzuhalten sind.
+async fn blocked_row(grpc: &mut client::Client, flow_id: &str, when: &str) -> v1::FlowSummary {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let page = grpc
+                .list_flows(v1::ListFlowsRequest::default())
+                .await
+                .unwrap()
+                .into_inner();
+            let row = page.flows.iter().find(|row| {
+                row.flow_id == flow_id && row.decision == v1::DecisionKind::Block as i32
+            });
+            if let Some(row) = row {
+                return row.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_elapsed| {
+        panic!("the blocked flow reaches ListFlows within ten seconds, {when}")
+    })
+}
+
+/// Fragt den Meta-Endpunkt über den Proxy-Socket, so wie ein Agent es täte.
+///
+/// `humanitl.internal` wird nie aufgelöst und nie verbunden; der Proxy
+/// beantwortet den Namen selbst (ADR-014). Zurück kommt die ganze Antwort
+/// samt Statuszeile.
+async fn meta_get(daemon: &Daemon, path: &str) -> String {
+    let mut agent = UnixStream::connect(daemon.proxy_socket()).await.unwrap();
+    agent
+        .write_all(
+            format!("GET {path} HTTP/1.1\r\nHost: humanitl.internal\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut raw = Vec::new();
+    tokio::time::timeout(Duration::from_secs(10), agent.read_to_end(&mut raw))
+        .await
+        .expect("the meta endpoint answers within ten seconds")
+        .unwrap();
+    String::from_utf8_lossy(&raw).into_owned()
+}
+
+/// Was der neu gestartete Daemon über den geblockten Flow sagt.
+///
+/// Die zweite Hälfte des Tests darunter, als eigene Funktion: Der Prozess ist
+/// ein anderer, die Verbindung ist eine neue, und was hier geprüft wird, kann
+/// aus nichts anderem als der Aufzeichnung stammen.
+async fn the_note_after_the_restart(daemon: &Daemon, flow_id: &str) {
+    let token = auth::read_token(&daemon.token_path()).unwrap();
+    let mut grpc = client::connect_at(&daemon.socket(), &token).await.unwrap();
+
+    let after = blocked_row(&mut grpc, flow_id, "after the restart").await;
+    assert_eq!(
+        after.decision_note, HUMAN_NOTE,
+        "the note came out of the column, not out of the registry: {after:?}"
+    );
+    let detail = grpc
+        .get_flow(v1::FlowRef {
+            flow_id: flow_id.to_owned(),
+        })
+        .await
+        .expect("GetFlow answers after the restart")
+        .into_inner();
+    assert_eq!(
+        detail.decision_note, HUMAN_NOTE,
+        "GetFlow after the restart: {detail:?}"
+    );
+    assert_eq!(
+        detail
+            .summary
+            .as_ref()
+            .map(|row| row.decision_note.as_str()),
+        Some(HUMAN_NOTE),
+        "detail and row say the same thing: {detail:?}"
+    );
+
+    // Und die Sitzungsgrenze steht auch über den Neustart hinweg.
+    let why = meta_get(daemon, &format!("/why/{flow_id}")).await;
+    assert!(
+        why.starts_with("HTTP/1.1 404"),
+        "a new session does not get the flows of the old one: {why}"
+    );
+}
+
+/// Was ein Mensch beim Blocken schreibt, überlebt den Daemon (HUM-117).
+///
+/// Der Weg geht durch den echten Prozess und nicht durch einen Fake: eine
+/// Anfrage in den Proxy-Socket, das `Held`-Ereignis über gRPC, der Block mit
+/// Notiz über `Decide`, die 403-Antwort an den wartenden Agenten — und danach
+/// derselbe Baum, ein neuer Prozess. Der zweite Prozess hat eine leere
+/// Registry und eine neue Sitzung; was er über die Notiz sagt, kann er nur aus
+/// der Spalte `decision_note` haben, die `V8__decision_note.sql` angelegt hat.
+///
+/// `/why/<flow-id>` wird auf beiden Seiten des Neustarts gemessen, und die
+/// beiden Antworten sind verschieden: vorher die Zeile aus der Registry,
+/// nachher `404`. Der Rückfall auf die Aufzeichnung beantwortet nur Flows der
+/// eigenen Sitzung (`backlog/CONVENTIONS.md` 4.24), und ein neu gestarteter
+/// Daemon legt eine neue Sitzung an (`SessionId::new` in
+/// `humanitld/src/main.rs`). Eine Sandbox ändert daran nichts: die Sitzung
+/// gehört dem Prozess, nicht dem Agenten, und mit dem Prozess endet sie. Das
+/// `404` ist hier also die Zusage und kein Mangel; was der Rückfall auf die
+/// Aufzeichnung trägt, ist ein Flow, den die Registry innerhalb einer
+/// laufenden Sitzung nicht mehr hält.
+#[tokio::test]
+async fn the_note_of_a_human_block_outlives_the_daemon() {
+    let mut daemon = Daemon::start(120);
+    daemon.ready().await;
+
+    let token = auth::read_token(&daemon.token_path()).unwrap();
+    let mut grpc = client::connect_at(&daemon.socket(), &token).await.unwrap();
+    let mut events = grpc
+        .subscribe(v1::SubscribeRequest::default())
+        .await
+        .unwrap()
+        .into_inner();
+
+    let mut agent = UnixStream::connect(daemon.proxy_socket()).await.unwrap();
+    agent
+        .write_all(
+            b"GET /simple/requests/ HTTP/1.1\r\nHost: files.example.com\r\n\
+              Connection: close\r\n\r\n",
+        )
+        .await
+        .unwrap();
+
+    let flow_id = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let event = events.next().await.unwrap().unwrap();
+            if let Some(v1::flow_event::Event::Held(held)) = event.event {
+                break held.flow_id;
+            }
+        }
+    })
+    .await
+    .expect("the request must be held within ten seconds");
+
+    let response = grpc
+        .decide(v1::DecideRequest {
+            flow_ids: vec![flow_id.clone()],
+            decision: Some(v1::decide_request::Decision::Block(
+                v1::decide_request::Block {
+                    note: HUMAN_NOTE.to_owned(),
+                },
+            )),
+            ..v1::DecideRequest::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(response.results[0].applied);
+
+    // Der Agent liest die Notiz so, wie er sie immer gelesen hat.
+    let mut raw = Vec::new();
+    tokio::time::timeout(Duration::from_secs(10), agent.read_to_end(&mut raw))
+        .await
+        .expect("the blocked client must be answered")
+        .unwrap();
+    let text = String::from_utf8_lossy(&raw);
+    assert!(text.starts_with("HTTP/1.1 403"), "{text}");
+    let (head, _) = text
+        .split_once("\r\n\r\n")
+        .expect("the answer has a header block");
+    assert!(
+        head.lines()
+            .any(|line| line == format!("X-Humanitl-Note: {HUMAN_NOTE}")),
+        "the note is a header of its own, not only text in the body: {text}"
+    );
+
+    let before = blocked_row(&mut grpc, &flow_id, "before the restart").await;
+    assert_eq!(before.decision_note, HUMAN_NOTE, "ListFlows: {before:?}");
+    let why = meta_get(&daemon, &format!("/why/{flow_id}")).await;
+    assert!(
+        why.starts_with("HTTP/1.1 200"),
+        "/why answers the running session: {why}"
+    );
+    assert!(
+        why.ends_with(&format!("decision=block reason=user note={HUMAN_NOTE}\n")),
+        "/why answers from the registry while the session runs: {why}"
+    );
+
+    // Neuer Prozess, leere Registry, neue Sitzung.
+    drop(events);
+    drop(grpc);
+    daemon.restart(120).await;
+    the_note_after_the_restart(&daemon, &flow_id).await;
+
+    daemon.terminate();
+}
