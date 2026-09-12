@@ -2118,7 +2118,7 @@ Das rechte Pane des Intercept-Bildschirms zeigt für eine Anfrage an `registry.n
 
 ### Entscheidung des Projekteigentümers (2026-09-12)
 
-Der Katalogname für **jede** gehaltene Anfrage kommt aus dem Daemon, nicht aus einer Zuordnung, die die Oberfläche sich merkt: `FlowSummary` bekommt `string catalog_id = 28` neben `apex = 26` (HUM-091) und `decision_note = 27` (HUM-117). Damit liest der Gruppenkopf denselben Wert wie die Karte, ohne zweiten Aufruf, und ein Neustart der Oberfläche verliert ihn nicht. Das Nicht-Ziel von HUM-091 („kein `catalog_id` in der Zeile") gilt weiter für HUM-091 selbst; die Zeile wächst hier, in HUM-094, und zwar nach HUM-117, damit die Proto-Kette in einer Reihenfolge bleibt (`PROTO_MINOR` 8 für HUM-091, 9 für HUM-117, 10 für HUM-119, 11 für dieses Issue).
+Der Katalogname für **jede** gehaltene Anfrage kommt aus dem Daemon, nicht aus einer Zuordnung, die die Oberfläche sich merkt: `FlowSummary` bekommt `string catalog_id = 28` neben `apex = 26` (HUM-091) und `decision_note = 27` (HUM-117). Damit liest der Gruppenkopf denselben Wert wie die Karte, ohne zweiten Aufruf, und ein Neustart der Oberfläche verliert ihn nicht. Das Nicht-Ziel von HUM-091 („kein `catalog_id` in der Zeile") gilt weiter für HUM-091 selbst; die Zeile wächst hier, in HUM-094, und zwar nach HUM-117, damit die Proto-Kette in einer Reihenfolge bleibt (`PROTO_MINOR` 8 für HUM-091, 9 für HUM-119, 10 für HUM-117, 11 für dieses Issue; die Reihenfolge 9/10 stand hier vertauscht, nachgezogen am 2026-09-12 gegen `daemon/crates/ipc/src/lib.rs` und `docs/PROTOCOL.md` 5).
 
 ### Nicht-Ziel
 Kein Request-Editor. `Edit + Allow` bleibt bis HUM-047 (Sprint 4) ohne Control, und die Karte zeigt den Body weiter nur lesend; hier fällt allein die falsche Zusage in `BACKLOG.md:395`. Kein Live-Fetch von Favicon oder Vorschau, keine Screenshots, keine Nutzer-Kataloge (M9, M7, wie in HUM-031). Keine neuen Einträge in `catalog/domains.yaml` über die vorhandenen hinaus (HUM-059). Kein Umbenennen von `tranco_rank` nach `popularity_rank` (eigener Chore, siehe HUM-031 Kontext). Nicht der zu weit gefasste Satz in `CONTRIBUTING.md:46-47` („a run that skipped a branch fails instead of reporting success"); der M2-Lauf überspringt heute den Bildschirm-Zweig und endet trotzdem mit 0, meldet das aber laut und bricht mit `M2_UI=1` ab, also ist dort kein Loch, sondern ein zu weiter Satz — eigenes Issue.
@@ -2284,18 +2284,18 @@ Schritt 10 zählt damit zwei Behauptungen mehr (Name, Katalogzeile); HAR geschri
 - e2e: Schritt 10 von `tests/e2e/m2_first_decision/run.sh`, vier gezählte Behauptungen.
 
 ### Akzeptanzkriterien
-- [ ] `grep -rn 'DomainPanePlaceholder' app/lib app/test` liefert null Treffer, und `app/lib/features/intercept/widgets/domain_pane_placeholder.dart` existiert nicht mehr.
-- [ ] `grep -n 'interceptGroupLooksLike' app/l10n/app_en.arb app/l10n/app_de.arb` liefert je einen Treffer, `make flutter-codegen` läuft ohne Warnung, und `grep -rn 'interceptGroupLooksLike' app/lib` liefert mindestens den Treffer in `group_header_row.dart`.
-- [ ] `make flutter-test` grün, inklusive der drei Goldens `domain_panel_known`, `domain_panel_unknown`, `domain_panel_session_summary` und der Tests `quick_rule_calls_rules_add`, `group_title_uses_catalog_name`, `group_title_keeps_host_when_catalog_ids_differ`.
-- [ ] `make catalog-lint` endet 0. Nach `printf '\n' >> app/assets/catalog/domains.yaml` endet es 1 mit einer Meldung, die beide Pfade nennt (danach `git checkout app/assets/catalog/domains.yaml`).
-- [ ] (nach HUM-097) `M2_UI=1 tests/e2e/m2_first_decision/run.sh` endet mit 0. Die Ausgabe enthält keine Zeile mit `SKIPPED:` und keine mit `raise M2_EXPECTED_ASSERTIONS`.
-- [ ] Der Bildschirm-Zweig meldet zwei Behauptungen mehr als vor diesem Issue, und `M2_EXPECTED_ASSERTIONS` in `tests/e2e/m2_first_decision/run.sh:112` (bzw. der Wert je Zweig nach HUM-097) trägt genau die gemeldete Zahl. (Die frühere Zahl „mindestens 51" bezog sich auf einen Stand von 47; heute sind es 59 ohne Oberfläche.)
-- [ ] Zwei dieser Behauptungen betreffen den Namen: die Datei aus `$HUMANITL_E2E_GROUP_SUMMARY` enthält `npm registry` und `Looks like: npm install`. Gegenprobe von Hand: liefert `groupTitle` wieder `group.display`, fallen beide aus und der Lauf endet mit 1.
+- [x] `grep -rn 'DomainPanePlaceholder' app/lib app/test` liefert null Treffer, und `app/lib/features/intercept/widgets/domain_pane_placeholder.dart` existiert nicht mehr. (Gemessen 2026-09-12: 0 Treffer, `ls` der Datei meldet „No such file or directory"; `intercept_screen.dart` zeichnet jetzt `DomainPanel`.)
+- [x] `grep -n 'interceptGroupLooksLike' app/l10n/app_en.arb app/l10n/app_de.arb` liefert je einen Treffer, `make flutter-codegen` läuft ohne Warnung, und `grep -rn 'interceptGroupLooksLike' app/lib` liefert mindestens den Treffer in `group_header_row.dart`. (Gemessen 2026-09-12: `app_en.arb` 2 Zeilen — der Schlüssel und seine `@`-Beschreibung, wie bei jedem Schlüssel dieser Datei —, `app_de.arb` 1 Zeile; `make flutter-codegen` endet 0 ohne Warnung; in `app/lib` genau ein Treffer, `group_header_row.dart:177` in `groupLooksLike`.)
+- [x] `make flutter-test` grün, inklusive der drei Goldens `domain_panel_known`, `domain_panel_unknown`, `domain_panel_session_summary` und der Tests `quick_rule_calls_rules_add`, `group_title_uses_catalog_name`, `group_title_keeps_host_when_catalog_ids_differ`. (Gemessen 2026-09-12 nach beiden Reviews: `cd app && flutter test` 1087 grün, 4 übersprungen, 3:40 min; die drei Goldens liegen je hell und dunkel unter `app/test/goldens/goldens/ci/domain_panel_*.png`; `catalog_test.dart` 8 Tests, `domain_panel_test.dart` 12 Tests.)
+- [x] `make catalog-lint` endet 0. Nach `printf '\n' >> app/assets/catalog/domains.yaml` endet es 1 mit einer Meldung, die beide Pfade nennt. (Gemessen 2026-09-12: sauber Exit 0 mit „catalog-lint: app/assets/catalog/domains.yaml matches catalog/domains.yaml"; nach dem angehängten Byte meldet das Rezept beide Pfade und endet mit 1, `make` selbst gibt dafür wie immer 2 zurück. `make catalog-assets` stellt die Kopie wieder her, danach endet `make catalog-lint` wieder 0.)
+- [ ] (nach HUM-097) `M2_UI=1 tests/e2e/m2_first_decision/run.sh` endet mit 0. Die Ausgabe enthält keine Zeile mit `SKIPPED:` und keine mit `raise M2_EXPECTED_ASSERTIONS`. **Nicht gemessen:** Der Lauf liegt unter `tests/e2e/**`, das zur Zeit ein anderer Agent umbaut; dieses Issue hat dort keine Zeile geändert und den Lauf nicht gefahren.
+- [ ] Der Bildschirm-Zweig meldet zwei Behauptungen mehr als vor diesem Issue, und `M2_EXPECTED_ASSERTIONS` in `tests/e2e/m2_first_decision/run.sh:112` (bzw. der Wert je Zweig nach HUM-097) trägt genau die gemeldete Zahl. **Nicht gemessen, und die Zahlen sind andere:** `run.sh` führt seit HUM-097 zwei Konstanten, `M2_EXPECTED_ASSERTIONS_CLI=70` (Zeile 110) und `M2_EXPECTED_ASSERTIONS_SCREEN=75` (Zeile 111); mit den zwei Namens-Behauptungen wären es im Bildschirm-Zweig 77, im Kommandozeilen-Zweig unverändert 70. Die Änderung liegt als anwendbarer Patch bereit und ist nicht eingespielt, weil `tests/e2e/**` einem anderen Agenten gehört.
+- [ ] Zwei dieser Behauptungen betreffen den Namen: die Datei aus `$HUMANITL_E2E_GROUP_SUMMARY` enthält `npm registry` und `Looks like: npm install`. **Halb gemessen:** Die Oberflächen-Hälfte steht — `app/integration_test/m2_first_decision_test.dart` schreibt die Summary-Zeile der npm-Gruppe nach `$HUMANITL_E2E_GROUP_SUMMARY`, sobald die Variable gesetzt ist, und prüft sie vorher selbst auf `npm registry`. Die zwei zählenden `e2e_check` in `run.sh` fehlen noch (Patch bereit, siehe oben), und der Lauf selbst wurde nicht gefahren. Die Gegenprobe ist im Widget-Test gefahren, nicht im Lauf: Mit `groupTitle` zurück auf `group.display` meldet `domain_panel_test.dart` „Expected: 'npm registry' / Actual: 'registry.npmjs.org'", und der Descendant-Finder im Kopf der Gruppe — dieselbe Form, die jetzt auch im Bildschirm-Lauf steht — findet 0 Treffer. Der Lauf selbst braucht Daemon und xvfb und wurde nicht gefahren.
 - [ ] (HUM-097) `jq -r '.log.entries | length' "$M2_HAR"` liefert 17, die Datei ist nicht leer.
 - [ ] (HUM-097) Ein Lauf ohne `app/integration_test/m2_first_decision_test.dart` (Datei versetzen, danach zurück) endet mit 1 und der Meldung, dass sie fehlt, nicht mehr mit 0.
-- [ ] `grep -n 'bis HUM-031 den Katalog liefert' backlog/CONVENTIONS.md` liefert null Treffer, und 4.22 führt die Oberflächen-Hälfte von HUM-036 nicht mehr als ausstehend.
+- [x] `grep -n 'bis HUM-031 den Katalog liefert' backlog/CONVENTIONS.md` liefert null Treffer, und 4.22 führt die Oberflächen-Hälfte von HUM-036 nicht mehr als ausstehend. (Gemessen 2026-09-12: 0 Treffer; 4.15 trägt statt dessen den Absatz zum Katalognamen im Gruppenkopf, 4.22 nennt die Oberflächen-Hälfte als stehend seit HUM-097.)
 - [x] `grep -n 'Allow/Edit/Block' BACKLOG.md` liefert null Treffer; die M2-Zeile nennt den Editor als M4 mit Verweis auf HUM-047. (Gemessen 2026-09-12: `grep -n 'Allow/Edit/Block' BACKLOG.md` ist leer, und Zeile 395 liest „Allow/Block (Editor ab M4, HUM-047)".)
-- [ ] `make check` grün.
+- [ ] `make check` grün. **Nicht gemessen, und heute nicht erreichbar:** `daemon/bin/humanitl/src/cmd/flows.rs:681` baut ein `v1::FlowSummary` als vollständiges Struct-Literal ohne `..Default::default()`; mit dem neuen Feld `catalog_id = 28` fehlt dort genau eine Zeile (`catalog_id: String::new(),`), und ohne sie übersetzt der Workspace nicht. `daemon/bin/humanitl/**` gehört zur Zeit einem anderen Agenten und wurde deshalb nicht angefasst. Grün sind: `cargo test -p humanitl-ipc`, `cd app && flutter analyze --fatal-infos`, `dart format --output=none --set-exit-if-changed lib test integration_test`, `cd app && flutter test`, `make catalog-lint`, `tools/check-deps.sh` und `scripts/ci/lint-docs.sh`.
 
 ### Stand (2026-09-04): Größe XL, die e2e-Hälfte gehört HUM-097, der Gruppenkopf hat keinen Draht
 
@@ -2329,6 +2329,116 @@ Geprüft am Code (Audit 2026-09-04, Zeilen gegen den heutigen Baum gezogen). Die
 
 ### Referenzen
 BACKLOG.md Abschnitt 7 (M2), Zeilen 395, 457, 459; `backlog/sprint-2.md` HUM-029, HUM-031, HUM-036 (Zeilen 1605-1695, Schritte `:1659-1667`); `backlog/CONVENTIONS.md` Abschnitt 3 (Provider-Namen), 4.13, 4.15, 4.22; `docs/UX.md` 2.8; `catalog/README.md`, `catalog/domains.schema.json`, `catalog/RANKS-LICENSE`; `yaml` (https://pub.dev/packages/yaml); Flutter integration_test (https://docs.flutter.dev/testing/integration-tests).
+
+### Gebaut (2026-09-12)
+
+**Die Kennung reist in der Zeile.** `FlowSummary.catalog_id = 28` steht im
+Proto, `PROTO_MINOR` auf `11` (Kette: 8 HUM-091, 9 HUM-119, 10 HUM-117, 11
+dieses Issue), gespiegelt in `app/lib/core/ipc/proto_version.dart` und
+beschrieben in `docs/PROTOCOL.md` 5. Gefüllt wird sie an allen drei Wegen:
+`recorded_summary_to_proto` aus der Spalte `catalog_id`, `record_to_summary`
+und `received_summary` über `flow_catalog_id` aus derselben `DomainTable`, aus
+der auch `apex` kommt. Der Fake bleibt leer, weil er keinen Katalog lädt.
+
+**Zwei ARB-Schlüssel statt eines Platzhalters mehr.** Die Spezifikation wollte
+`interceptGroupSummary` um einen Platzhalter erweitern. Ohne Katalogeintrag
+bliebe dieser Platzhalter leer und seine beiden Trennzeichen stünden trotzdem
+da; ICU kann ein Trennzeichen nicht an einen leeren Wert binden. Gebaut sind
+deshalb zwei ganze Sätze: `interceptGroupSummary` wie bisher und
+`interceptGroupSummaryCatalog` mit der Katalogzeile zwischen Name und Anzahl.
+`groupSummary` in `group_header_row.dart` wählt; beide Aufrufer — Kopf und
+Auswahl-Karte — gehen durch diese eine Funktion.
+
+**Die Schnellregeln rufen den Klienten geradewegs.** `Rules(add)` über
+`daemonClientProvider`, nicht über den Notifier des Regel-Bildschirms: Ein
+Feature darf kein anderes importieren (`docs/ARCHITECTURE.md` 5, geprüft von
+`tools/check-deps.sh`). Die Aufschrift nennt das Muster
+(`domainQuickAllow`, `domainQuickBlock`), der ganze Satz der Regel steht im
+Hover und kommt aus `ruleSentence`, also aus demselben Generator wie die Regel.
+Ohne Domäne des Daemons fehlt der Domänen-Knopf, statt ausgegraut etwas zu
+versprechen, das nie entstünde.
+
+**Kein Zeichen des Dienstes auf der Karte.** `HGlyph` kennt keinen Globus, die
+Anwendung bringt keinen SVG-Renderer mit, und ein geholtes Favicon wäre ein
+Abruf, den niemand erlaubt hat (ADR-006). Der Name steht deshalb allein. Der
+offene Punkt des Audits — `icon` tot, `source` fehlt der Karte — bleibt offen.
+
+**Der Test muss `rootBundle` leeren.** `rootBundle` merkt sich das geladene
+Asset als Future, und ein Future aus der abgelaufenen Zeitzone eines vorigen
+Widget-Tests hält den nächsten auf: Die Karte blieb dann bei der
+Unbekannt-Karte stehen, obwohl der Katalog den Dienst kennt. `setUp(rootBundle.clear)`
+in `domain_panel_test.dart` und `domain_panel_golden_test.dart`.
+
+**Zwei Änderungen liegen als Patch bereit, nicht im Baum**, weil ihre Pfade zur
+Zeit anderen Agenten gehören: die zwei Namens-Behauptungen samt
+`M2_EXPECTED_ASSERTIONS_SCREEN=77` in `tests/e2e/m2_first_decision/run.sh`, und
+die eine Zeile `catalog_id: String::new(),` im Test-Literal
+`daemon/bin/humanitl/src/cmd/flows.rs:681`, ohne die der Workspace nicht
+übersetzt. Die Oberflächen-Hälfte dazu steht:
+`app/integration_test/m2_first_decision_test.dart` schreibt die Summary-Zeile
+der npm-Gruppe nach `$HUMANITL_E2E_GROUP_SUMMARY`, sobald die Variable gesetzt
+ist, und prüft sie vorher selbst.
+
+**`HeldGroup.apexFromDaemon` gibt es nicht.** Die Spezifikation nennt das Feld
+und Schritt 4 wollte die Sonderregel des Modals „nur noch für Gruppen ohne
+Daemon-Apex" gelten lassen. Beides ist zurückgenommen: `_reasonToAsk`
+(`decision.dart`) fragt nach Reichweite und Host-Spanne, und beides ist vom
+Apex unabhängig; die Regel an den Apex zu binden, könnte sie nur lockern, und
+`backlog/CONVENTIONS.md` 4.13 und 4.15 sowie HUM-091 sagen ausdrücklich, dass
+eine Entscheidung über mehrere Hosts immer fragt. Ein Feld, das niemand liest,
+mit einem Kommentar über eine Regel, die es nicht bewacht, ist tote Zusage
+(4.13). Gefunden im Review von Antigravity, der auch die Probe dazu lieferte:
+Die Mutation „`apexFromDaemon` fest auf `true`" wurde nur von zwei
+Zusicherungen rot, die den Wert selbst lasen — ein Test, der einen Wert
+bewacht, den kein Produktcode benutzt.
+
+**Der Bildschirm-Lauf prüft jetzt den gezeichneten Kopf.**
+`m2_first_decision_test.dart` rechnete die Summary-Zeile in einer Funktion aus
+und prüfte danach nur den Zähler; der Kopf hätte auf `group.display`
+zurückfallen können, ohne dass der Lauf es merkt. Dazu stehen jetzt zwei
+Finder gegen `queue-group-npmjs.org`: `npm registry` genau einmal darin,
+`registry.npmjs.org` gar nicht.
+
+**Der Modal-Test misst den Fall, den dieses Issue neu schafft.** Er hieß
+`group_modal_still_asks_without_daemon_apex` und baute sechs Anfragen an sechs
+Hosts — das Modal erschien wegen der Zahl und der Host-Spanne, nicht wegen des
+fehlenden Apex, und mit Apex wäre er grün geblieben. Jetzt:
+`group_modal_still_asks_when_one_name_covers_two_hosts`, zwei Anfragen (unter
+`modalAboveReach`) an zwei Hosts mit derselben Kennung. Der Kopf nennt einen
+Dienst, die Gruppe sieht aus wie ein Ding, und das Modal listet trotzdem beide
+Hosts auf.
+
+**`catalogProvider` wirft nicht mehr.** Ein fehlendes Asset lässt
+`rootBundle.loadString` werfen, eine kaputte Datei `loadYaml`; beides kam bis
+zum Review als Provider-Fehler heraus. Beide Wege enden jetzt in einer leeren
+Abbildung, und leer heißt überall dasselbe wie eine unbekannte Kennung: Der
+Kopf nennt den Host, die rechte Spalte zeigt die Unbekannt-Karte. Gefunden im
+Review von Codex.
+
+**Sechs Mutationen, jede rot.** Der Gruppenkopf zurück auf `group.display`
+(„Expected: 'npm registry' / Actual: 'registry.npmjs.org'", dazu der
+Descendant-Finder im Kopf mit 0 Treffern und die Zusammenfassung als
+„registry.npmjs.org · 2 requests · …"); `catalogId` aus `convert.dart`
+gestrichen („Expected: 'npm' / Actual: ''"); `descriptionFor` ohne
+Sprachkennung (zwei Zusicherungen in `catalog_test.dart`); die Unbekannt-Karte
+auch für ein bekanntes Ziel (`intercept-domain-name` nicht gefunden, dazu beide
+`domain_panel_known`-Goldens mit 46,99 Prozent Abweichung); `sharedCatalogId`
+nimmt die Kennung des ersten Flusses statt Einigkeit zu verlangen (zwei
+Zusicherungen, „Expected: '' / Actual: 'npm'"); `_reasonToAsk` winkt eine
+Gruppe mit gemeinsamer Kennung durch (kein `BatchModal` mehr auf dem Schirm).
+Dazu die zwei zum Schutz des Katalog-Assets: ohne den Schutz um
+`rootBundle.loadString` fällt der Test mit „Unable to load asset:
+\"assets/catalog/domains.yaml\"", ohne den Schutz um `loadYaml` mit „Error on
+line 3, column 4". Jede Datei danach zurückgelegt und mit `cmp` geprüft.
+
+**Was ein Golden hier nicht leisten kann.** `burstDetails()` in
+`intercept_group_golden_test.dart` trägt jetzt die Kennungen `npm` und
+`github`, damit die Bilder die Gruppen so zeigen, wie das Produkt sie zeichnet.
+Bewachen können sie den Namen nicht: Die CI-Variante von Alchemist zeichnet
+Text als Blöcke, und mit dem Kopf zurück auf `group.display` blieben alle zehn
+Goldens dieser Datei grün (gemessen). Den Namen bewachen der Widget-Test
+`the header of a group names the service, not a host` und die zwei Finder im
+Bildschirm-Lauf.
 
 ---
 

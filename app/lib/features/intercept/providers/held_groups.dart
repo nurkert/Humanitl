@@ -38,6 +38,7 @@ class HeldGroup {
   const HeldGroup({
     required this.apex,
     required this.display,
+    required this.catalogId,
     required this.flows,
     required this.rows,
     required this.hosts,
@@ -62,6 +63,16 @@ class HeldGroup {
   /// (`backlog/CONVENTIONS.md` 4.13, "allowing is never easier than
   /// blocking"). The hosts themselves stand in [hosts].
   final String display;
+
+  /// The catalog id every held flow of the group carries, or an empty string.
+  ///
+  /// It comes from the daemon, one answer per request
+  /// (`FlowSummary.catalog_id`, HUM-094), and it is only kept where every held
+  /// request of the group agrees on it. Two services under one header would be
+  /// a name that covers a decision it does not describe, and a group without
+  /// held requests carries none at all: a header is a claim about what a
+  /// decision would reach (`backlog/CONVENTIONS.md` 4.13).
+  final String catalogId;
 
   /// The held flows, earliest deadline first: everything a decision on this
   /// group covers, and everything the counter counts.
@@ -108,6 +119,7 @@ class HeldGroup {
       other is HeldGroup &&
       other.apex == apex &&
       other.display == display &&
+      other.catalogId == catalogId &&
       listEquals(other.flows, flows) &&
       listEquals(other.rows, rows) &&
       listEquals(other.hosts, hosts) &&
@@ -119,6 +131,7 @@ class HeldGroup {
   int get hashCode => Object.hash(
     apex,
     display,
+    catalogId,
     Object.hashAll(flows),
     Object.hashAll(rows),
     Object.hashAll(hosts),
@@ -189,6 +202,25 @@ HeldGroups groupFlows(List<Flow> flows) {
 /// one decision over both (`backlog/CONVENTIONS.md` 4.13).
 String apexOfHost(Flow flow) => flow.apex.isEmpty ? flow.host : flow.apex;
 
+/// The one catalog id every flow of [flows] carries, or the empty string.
+///
+/// The empty string stands for all three ways of not knowing: no flow at all,
+/// a flow the daemon named no service for, or two services under one header.
+/// None of them may be filled in — the header of a group is read before a
+/// decision that covers every request under it, and a name that fits only some
+/// of them would make the decision look narrower than it is
+/// (`backlog/CONVENTIONS.md` 4.13).
+String sharedCatalogId(List<Flow> flows) {
+  if (flows.isEmpty) {
+    return '';
+  }
+  final String first = flows.first.catalogId;
+  if (first.isEmpty) {
+    return '';
+  }
+  return flows.every((Flow flow) => flow.catalogId == first) ? first : '';
+}
+
 HeldGroup _group(String apex, List<Flow> rows) {
   // Everything below counts held requests only: the header says what a
   // decision on it would cover, and a decided row covers nothing any more.
@@ -219,6 +251,7 @@ HeldGroup _group(String apex, List<Flow> rows) {
   return HeldGroup(
     apex: apex,
     display: hosts.length == 1 ? hosts.single : '',
+    catalogId: sharedCatalogId(flows),
     flows: flows,
     rows: rows,
     hosts: hosts,

@@ -19,9 +19,11 @@ import 'dart:math' as math;
 import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/domain/domain.dart';
 import '../../../core/ui/hold_to_confirm.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
+import '../providers/catalog.dart';
 import '../providers/decision.dart';
 import '../providers/held_groups.dart';
 import 'countdown_ring.dart';
@@ -63,24 +65,26 @@ class _GroupHeaderRowState extends ConsumerState<GroupHeaderRow> {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     final HeldGroup group = widget.group;
+    // The service the daemon named for every held request of this group, or
+    // null. The lookup is the bundled catalog, never a guess from the host
+    // (HUM-094).
+    final CatalogEntry? entry = ref.watch(
+      catalogEntryProvider(group.catalogId),
+    );
+    final String title = groupTitle(group, entry, l10n);
     return HRow(
       key: Key('queue-group-${group.apex}'),
       state: HFlowState.held,
       tintedRail: true,
       inSelection: widget.selected,
       onTap: widget.onSelect,
-      semanticsLabel: l10n.interceptGroupSummary(
-        groupTitle(group, l10n),
-        group.length,
-        methodMix(group, l10n),
-        l10n.interceptGroupFindings(group.findingsTotal),
-      ),
+      semanticsLabel: groupSummary(group, entry, l10n),
       // The chevron stands first, where the eye starts the line, and the
       // countdown of the earliest deadline stands right, in the same column
       // as the countdowns of the rows underneath (HUM-029).
       leading: _Chevron(
         open: widget.open,
-        label: l10n.interceptGroupToggle(groupTitle(group, l10n)),
+        label: l10n.interceptGroupToggle(title),
         onToggle: widget.onToggle,
       ),
       title: ExcludeSemantics(
@@ -88,7 +92,7 @@ class _GroupHeaderRowState extends ConsumerState<GroupHeaderRow> {
           children: <Widget>[
             Flexible(
               child: Text(
-                groupTitle(group, l10n),
+                title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: tokens.typography.ui13.medium.tinted(tokens.colors.fg0),
@@ -142,14 +146,67 @@ class _GroupHeaderRowState extends ConsumerState<GroupHeaderRow> {
 
 /// What a group is called on the screen.
 ///
-/// One host is named; several are named by the first plus how many follow. The
-/// registrable domain appears only where the daemon said it (the rule and its
-/// sentence), never as a guess in a line that guards a decision
+/// The service first, where the daemon named one for every held request of the
+/// group ([HeldGroup.catalogId], HUM-094): "npm registry" is what the person
+/// recognises, and twelve rows that all say `registry.npmjs.org` are not.
+/// Where there is none, one host is named; several are named by the first plus
+/// how many follow.
+///
+/// Every one of those comes from the daemon. Neither the service nor the
+/// registrable domain is ever worked out here, because this line guards a
+/// decision and a guessed name in it would be a claim nobody checked
 /// (`backlog/CONVENTIONS.md` 4.13).
-String groupTitle(HeldGroup group, AppLocalizations l10n) =>
-    group.display.isNotEmpty
+String groupTitle(
+  HeldGroup group,
+  CatalogEntry? entry,
+  AppLocalizations l10n,
+) => entry != null
+    ? entry.name
+    : group.display.isNotEmpty
     ? group.display
     : l10n.interceptGroupHosts(group.hosts.first, group.hosts.length - 1);
+
+/// What the group looks like, from the catalog: "Looks like: npm install".
+///
+/// Empty where no entry holds for the whole group, and empty where the entry
+/// names nothing typical. The sentence is about the service, not about this
+/// request: it says where an agent usually ends up here, and it never says
+/// that what is held is that.
+String groupLooksLike(CatalogEntry? entry, AppLocalizations l10n) {
+  final String typical = entry?.firstTypical ?? '';
+  return typical.isEmpty ? '' : l10n.interceptGroupLooksLike(typical);
+}
+
+/// The group as one sentence: what the header line says, and what a screen
+/// reader hears.
+///
+/// Two messages, not one with an optional part: without a catalog entry the
+/// catalog line is not empty text between two separators, it is absent, and an
+/// ICU message cannot drop its own separator. Each of the two reads as a whole
+/// sentence for whoever translates it.
+String groupSummary(
+  HeldGroup group,
+  CatalogEntry? entry,
+  AppLocalizations l10n,
+) {
+  final String title = groupTitle(group, entry, l10n);
+  final String findings = l10n.interceptGroupFindings(group.findingsTotal);
+  final String looksLike = groupLooksLike(entry, l10n);
+  return looksLike.isEmpty
+      ? l10n.interceptGroupSummary(
+          title,
+          group.length,
+          methodMix(group, l10n),
+          findings,
+        )
+      : l10n.interceptGroupSummaryCatalog(
+          title,
+          looksLike,
+          group.length,
+          methodMix(group, l10n),
+          findings,
+        );
+}
 
 /// The method mix as one monospace line: `12× GET · 2× POST`.
 String methodMix(HeldGroup group, AppLocalizations l10n) => group

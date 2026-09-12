@@ -395,6 +395,21 @@ message FlowSummary {
   // eine Anfrage ohne Entscheidung lassen das Feld leer, und leer heisst hier
   // immer "es gibt keine", nie "der Daemon weiss es nicht".
   string decision_note = 27;
+  // Die Kennung des Katalogeintrags, den der Daemon zum Host gefunden hat;
+  // leer, wenn er keinen gefunden hat (HUM-031, HUM-094).
+  //
+  // Derselbe Wert, den `DomainInfo.catalog_id` zu demselben Fluss traegt: der
+  // Daemon fragt den Katalog einmal, beim Eintreffen, und die Antwort steht
+  // danach in der Zeile. Ein Client, der eine Gruppe nach dem Dienst benennen
+  // will, liest sie hier und nicht aus einer zweiten Abfrage; ein Neustart der
+  // Oberflaeche verliert sie nicht, denn die Aufzeichnung fuehrt die Spalte.
+  //
+  // Leer heisst "der Daemon kennt den Dienst nicht": kein Katalog geladen, ein
+  // IP-Literal oder ein Host, auf den kein Muster passt. Leer heisst nie
+  // "unbedenklich", und geraten wird nichts. Der Name, die Beschreibung und
+  // das Typische zu dieser Kennung stehen im gebuendelten `catalog/domains.yaml`,
+  // nicht auf der Leitung.
+  string catalog_id = 28;
 }
 
 // Alles, was der Detail-Bereich zu einem Flow zeigt.

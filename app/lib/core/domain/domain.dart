@@ -2,6 +2,7 @@
 /// without a Flutter import. Screens and providers import this file.
 library;
 
+export 'catalog.dart';
 export 'daemon_info.dart';
 export 'decision.dart';
 export 'diagnostic.dart';

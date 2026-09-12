@@ -47,7 +47,11 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `10` seit der Notiz einer Entscheidung: `FlowSummary.decision_note` und
+/// `11` seit dem Dienst in der Zeile: `FlowSummary.catalog_id` trägt die
+/// Kennung des Katalogeintrags, den der Daemon zum Host gefunden hat, leer
+/// wenn er keinen gefunden hat. Damit benennt die Warteschlange eine Gruppe
+/// nach dem Dienst, ohne den Katalog ein zweites Mal zu fragen (HUM-094);
+/// `10` war die Notiz einer Entscheidung: `FlowSummary.decision_note` und
 /// `FlowDetail.decision_note` tragen den Satz, den der Mensch beim Blocken an
 /// den Agenten gerichtet hat, aus der Aufzeichnung in jede Zeile und in jedes
 /// Detail; er überdauert damit einen Neustart des Daemons (HUM-117);
@@ -79,7 +83,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 10;
+pub const PROTO_MINOR: u32 = 11;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

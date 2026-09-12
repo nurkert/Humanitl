@@ -20,6 +20,11 @@
 //   * `HUMANITL_E2E_GO` schreibt `run.sh`, sobald es die Ids des npm-Stapels
 //     festgehalten hat. Erst danach entscheidet dieser Test, sonst wären die
 //     zwölf Flüsse weg, bevor das Skript sie lesen konnte.
+//   * `HUMANITL_E2E_GROUP_SUMMARY` ist der Pfad, in den dieser Test die
+//     Summary-Zeile der npm-Gruppe schreibt. Damit prüft das zählende Skript
+//     selbst, dass auf dem Bildschirm der Dienst stand und nicht der Host
+//     (HUM-094); fehlt die Variable, wird nichts geschrieben und nichts
+//     geprüft.
 //   * `HUMANITL_E2E_HAR` ist der Pfad des Exports. Er kommt nicht in diesen
 //     Test, sondern in die Startoptionen der Anwendung: Das Exportziel wird im
 //     Produktivcode gewählt, damit der Lauf denselben Weg prüft, den ein
@@ -48,13 +53,16 @@ import 'package:humanitl/features/history/history_table.dart';
 import 'package:humanitl/features/history/providers/history_export.dart';
 import 'package:humanitl/features/history/providers/history_page.dart';
 import 'package:humanitl/features/history/providers/history_query.dart';
+import 'package:humanitl/features/intercept/providers/catalog.dart';
 import 'package:humanitl/features/intercept/providers/decision.dart';
 import 'package:humanitl/features/intercept/providers/held_groups.dart';
 import 'package:humanitl/features/intercept/providers/selection.dart';
 import 'package:humanitl/features/intercept/rule_sentence.dart';
+import 'package:humanitl/features/intercept/widgets/group_header_row.dart';
 import 'package:humanitl/features/intercept/widgets/queue_row.dart';
 import 'package:humanitl/features/rules/providers/rules.dart';
 import 'package:humanitl/features/shell/section.dart';
+import 'package:humanitl/l10n/l10n.dart';
 import 'package:humanitl/features/shell/widgets/icon_rail.dart';
 import 'package:integration_test/integration_test.dart';
 
@@ -103,6 +111,7 @@ void main() {
     final String? readyPath = env['HUMANITL_E2E_READY'];
     final String? goPath = env['HUMANITL_E2E_GO'];
     final String? shotDir = env['HUMANITL_E2E_SHOTS'];
+    final String? summaryPath = env['HUMANITL_E2E_GROUP_SUMMARY'];
 
     tester.view.physicalSize = screenSize;
     tester.view.devicePixelRatio = 1;
@@ -147,6 +156,7 @@ void main() {
         harPath: harPath,
         readyPath: readyPath,
         goPath: goPath,
+        summaryPath: summaryPath,
       );
     } on Object {
       await _screenshot(tester, shotDir, 'm2-failure.png');
@@ -161,6 +171,7 @@ Future<void> _run(
   required String harPath,
   required String? readyPath,
   required String? goPath,
+  required String? summaryPath,
 }) async {
   // --- Der Bildschirm steht, und der Daemon antwortet ------------------------
 
@@ -237,6 +248,45 @@ Future<void> _run(
   );
   expect(_group(container, githubApex)!.findingsTotal, 1);
   expect(_group(container, evilApex)!.findingsTotal, 1);
+
+  // Die Summary-Zeile der npm-Gruppe, so wie der Kopf sie führt, in die Datei,
+  // die `run.sh` liest. Der Name des Dienstes wird damit im zählenden Skript
+  // geprüft und nicht nur hier: Ein Dart-Test, der als einziger davon weiß,
+  // zählt in der Bilanz des Laufs nicht mit (HUM-094).
+  final HeldGroup npmGroup = _group(container, npmApex)!;
+  final String npmSummary = groupSummary(
+    npmGroup,
+    container.read(catalogEntryProvider(npmGroup.catalogId)),
+    tester.element(find.byKey(const Key('queue-group-$npmApex'))).l10n,
+  );
+  expect(
+    npmSummary,
+    contains('npm registry'),
+    reason: 'the head of the group names the service the daemon assigned',
+  );
+  if (summaryPath != null && summaryPath.isNotEmpty) {
+    File(summaryPath).writeAsStringSync('$npmSummary\n', flush: true);
+  }
+
+  // Und dasselbe auf dem Bildschirm statt im Container: Ein Satz, der aus einer
+  // Funktion kommt, beweist nicht, dass jemand ihn sehen kann. Erst der
+  // gezeichnete Kopf tut das, und darin steht der Dienst und nicht der Host.
+  expect(
+    find.descendant(
+      of: find.byKey(const Key('queue-group-$npmApex')),
+      matching: find.text('npm registry'),
+    ),
+    findsOneWidget,
+    reason: 'the head of the npm group draws the service name',
+  );
+  expect(
+    find.descendant(
+      of: find.byKey(const Key('queue-group-$npmApex')),
+      matching: find.text(npmHost),
+    ),
+    findsNothing,
+    reason: 'and not the host it would fall back to',
+  );
 
   // Und dasselbe noch einmal auf dem Bildschirm statt im Container. Ein Zähler
   // im Anbieter beweist nicht, dass jemand ihn sehen kann; erst das Abzeichen
