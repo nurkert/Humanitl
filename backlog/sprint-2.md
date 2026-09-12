@@ -273,7 +273,7 @@ impl RuleSet {
 - Property-Test (`proptest`): zufällige Hosts aus Labels `[a-z0-9-]{1,10}`, Muster `*.X` matcht genau dann, wenn Host genau ein Label vor `X` hat.
 
 ### Akzeptanzkriterien
-- [x] `cargo test -p humanitl-rules` grün, 42 Host-Fälle plus alle Parse- und Eval-Tests vorhanden. (44 Host-Fälle, 32 Parse-, 26 Eval-Tests)
+- [x] `cargo test -p humanitl-rules` grün, 42 Host-Fälle plus alle Parse- und Eval-Tests vorhanden. (44 Host-Fälle, 33 Parse-, 26 Eval-Tests; am 2026-09-12 über die `#[test]`-Attribute in `daemon/crates/rules/tests/` nachgezählt, keines davon `#[ignore]`. Die 32 stammt vom 2026-09-05 und war 21 Minuten später überholt, als `170c038` einen weiteren Parse-Test anhängte; die Greenness selbst ist ohne Lauf nicht prüfbar.)
 - [x] `cargo clippy -p humanitl-rules -- -D warnings` sauber; Crate hat keine Abhängigkeit auf tokio, std::fs oder std::net außer `IpAddr`. **Beide Hälften gemessen am 2026-09-07.** `cargo clippy -p humanitl-rules --all-targets -- -D warnings` endet mit 0 (die Clippy-Hälfte war beim Schreiben dieses Kastens lokal nicht prüfbar, weil die Komponente fehlte; sie ist da). Die Abhängigkeiten stehen unverändert: aus `std::net` genau `IpAddr` (`daemon/crates/rules/src/host.rs:12`, mit der Begründung in Zeile 174), kein `tokio`, kein `std::fs`.
 - [x] `parse_rules` liefert für eine Datei mit `host: "*foo.com"` genau ein `Diagnostic` mit `code == RULES_003` und `why` enthält den Muster-String.
 - [x] Escape-Test 4 (`tests/escape/esc-4.sh`) grün in CI. (heute `esc-4-rules.sh`, seit HUM-114 24 von 24: acht Fälle gegen die Engine und den Proxy, fünfzehn über `humanitl rules test` gegen den Daemon des Laufs, dazu `llm_cli_unreachable`)
