@@ -663,5 +663,6 @@
   "interceptBodyRecorderStopped": "Die Aufzeichnung endete nach {size}; die Anzeige endet dort.",
   "shellPaletteAbout": "Über Humanitl",
   "aboutLegalese": "Freie Software unter der GNU General Public License, nur Version 3 (GPL-3.0-only). Ohne jede Gewährleistung.",
-  "aboutRanks": "Die Verbreitungsränge sind ein Ausschnitt der Majestic Million von Majestic-12 Ltd., https://majestic.com/reports/majestic-million, genutzt unter der Lizenz Creative Commons Namensnennung 3.0 Unported (CC BY 3.0), https://creativecommons.org/licenses/by/3.0/. Humanitl liefert die Ränge 1 bis 100 000, gekürzt auf Rang und Domain; jede Änderung steht unter „Majestic Million“ auf der Lizenzseite."
+  "aboutRanks": "Die Verbreitungsränge sind ein Ausschnitt der Majestic Million von Majestic-12 Ltd., https://majestic.com/reports/majestic-million, genutzt unter der Lizenz Creative Commons Namensnennung 3.0 Unported (CC BY 3.0), https://creativecommons.org/licenses/by/3.0/. Humanitl liefert die Ränge 1 bis 100 000, gekürzt auf Rang und Domain; jede Änderung steht unter „Majestic Million“ auf der Lizenzseite.",
+  "historyDetailNote": "Notiz an den Agenten: {note}"
 }

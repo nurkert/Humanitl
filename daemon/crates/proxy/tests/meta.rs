@@ -21,7 +21,7 @@ mod support;
 use std::time::Duration;
 
 use bytes::Bytes;
-use humanitl_core::FlowEvent;
+use humanitl_core::{BlockReason, Decision, FlowEvent};
 use hyper::{Request, StatusCode};
 
 use support::{FakeUpstream, ProxyBuilder, body_string, get, header, post};
@@ -360,6 +360,108 @@ async fn why_answers_for_a_flow_of_this_session() {
         ))
         .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+/// Die Notiz überlebt den Neustart, weil sie in der Aufzeichnung liegt.
+///
+/// Der erste Proxy blockt mit einer Notiz; der zweite hat dieselbe Datenbank
+/// und dieselbe Sitzung, aber eine leere Registry — genau der Zustand nach
+/// einem Neustart des Daemons. `/why` liest die Zeile dann über
+/// `Recorder::get_flow` (HUM-117).
+#[tokio::test(flavor = "multi_thread")]
+async fn why_survives_a_restart() {
+    let first = ProxyBuilder::new()
+        .ask(Duration::from_secs(30))
+        .recording(true)
+        .start()
+        .await;
+    let mut events = first.events();
+    let _decider = first.decide_with(Decision::Block {
+        reason: BlockReason::User,
+        note: Some("use PyPI".to_owned()),
+    });
+
+    let mut client = first.client().await;
+    let response = client.send(get("http://api.github.com/repos")).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let flow = header(&response, "x-humanitl-flow")
+        .expect("the block response names its flow")
+        .to_owned();
+    events.wait_for("recorded").await;
+    first
+        .recorder
+        .as_ref()
+        .expect("recording was switched on")
+        .flush()
+        .await;
+
+    let restarted = ProxyBuilder::new().restart_of(&first).start().await;
+    assert_eq!(
+        restarted.queue.registry().get(flow.parse().unwrap()),
+        None,
+        "a fresh daemon starts with an empty registry; otherwise this test would \
+         still be reading the registry"
+    );
+
+    let mut client = restarted.client().await;
+    let response = client
+        .send(get(&format!("http://humanitl.internal/why/{flow}")))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_string(response.into_body()).await,
+        "decision=block reason=user note=use PyPI\n",
+        "the note is the last field, and it survived the restart"
+    );
+}
+
+/// Derselbe Rückfall beantwortet keinen Flow einer fremden Sitzung.
+///
+/// Die Aufzeichnung führt alle Sitzungen nebeneinander. Ohne die Prüfung wäre
+/// der Neustart die Lücke, durch die ein Agent erfährt, was in einer anderen
+/// Sitzung geschah (`backlog/CONVENTIONS.md` 4.24).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_recorded_fallback_still_answers_only_for_this_session() {
+    let first = ProxyBuilder::new()
+        .ask(Duration::from_secs(30))
+        .recording(true)
+        .start()
+        .await;
+    let mut events = first.events();
+    let _decider = first.decide_with(Decision::Block {
+        reason: BlockReason::User,
+        note: Some("use PyPI".to_owned()),
+    });
+
+    let mut client = first.client().await;
+    let response = client.send(get("http://api.github.com/repos")).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let flow = header(&response, "x-humanitl-flow")
+        .expect("the block response names its flow")
+        .to_owned();
+    events.wait_for("recorded").await;
+    first
+        .recorder
+        .as_ref()
+        .expect("recording was switched on")
+        .flush()
+        .await;
+
+    // Derselbe Datenordner, eine andere Sitzung: der Fall „ein zweiter Agent
+    // fragt nach dem Flow des ersten".
+    let stranger = ProxyBuilder::new()
+        .recording(true)
+        .data_dir_of(&first)
+        .start()
+        .await;
+    assert_ne!(stranger.session, first.session);
+
+    let mut client = stranger.client().await;
+    let response = client
+        .send(get(&format!("http://humanitl.internal/why/{flow}")))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(body_string(response.into_body()).await, "no such flow\n");
 }
 
 #[tokio::test(flavor = "multi_thread")]

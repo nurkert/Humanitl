@@ -755,6 +755,14 @@ Scan unvollständig
 
 **Fix.** `ChangeSetting` auf `limits.preview_cap_bytes` beziehungsweise `limits.max_decompress_ratio`.
 
+#### FINDINGS_003
+
+Fund in einer Notiz
+
+**Auslöser.** In der Notiz an den Agenten steckt ein möglicher Geheimniswert; sie geht trotzdem hinaus.
+
+**Fix.** Kein Fix: Die Entscheidung steht. Wer den Wert nicht senden will, blockt erneut mit einer anderen Notiz.
+
 ### Bereich catalog
 
 #### CATALOG_001

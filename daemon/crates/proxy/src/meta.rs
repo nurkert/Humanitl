@@ -150,6 +150,53 @@ pub struct MetaRequest<'a> {
     /// Die Sitzung der Verbindung; sie begrenzt `/why` und trägt das
     /// Ratenlimit.
     pub session: SessionId,
+    /// Was die Aufzeichnung über den Flow aus `/why/<flow-id>` weiß, falls der
+    /// Aufrufer nachgesehen hat (HUM-117).
+    ///
+    /// Der Handler füllt das Feld nur, wenn die Registry den Flow nicht mehr
+    /// führt — nach einem Neustart des Daemons ist sie leer. Wer keinen
+    /// Recorder hat, lässt es `None`, und `/why` antwortet dann wie zuvor.
+    /// Über die Sitzung entscheidet der Endpunkt, nicht der Aufrufer.
+    pub archived: Option<&'a ArchivedFlow>,
+}
+
+/// Was die Aufzeichnung über einen entschiedenen Flow weiß.
+///
+/// Die [`FlowRegistry`] führt die Flows der laufenden Sitzung, über die noch
+/// entschieden werden kann; nach einem Neustart des Daemons ist sie leer. Die
+/// Entscheidung und die Notiz an den Agenten stehen dann nur noch in der
+/// Aufzeichnung, und `/why/<flow-id>` beantwortet mit dieser Zeile dieselbe
+/// Frage wie vorher (HUM-117).
+///
+/// Die Felder sind die Spalten von `flows`, als Text wie dort. Der Endpunkt
+/// rät nichts dazu: Die Tabelle führt keine Herkunft einer Entscheidung, also
+/// nennt `/why` für eine aufgezeichnete Freigabe `rule`, `passthrough` oder
+/// `unknown`, nie `user`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchivedFlow {
+    /// Die Sitzung, in der der Flow lief.
+    ///
+    /// `/why` beantwortet nur Flows der eigenen Sitzung; der Rückfall auf die
+    /// Aufzeichnung weicht das nicht auf (`backlog/CONVENTIONS.md` 4.24).
+    pub session: SessionId,
+    /// Der Zustand, benannt wie [`humanitl_core::FlowState::name`].
+    pub state: String,
+    /// Die Entscheidung (`allow`, `allow_edited`, `block`, `timed_out`), sonst
+    /// `None`.
+    pub decision: Option<String>,
+    /// Der Grund eines Blocks, benannt wie
+    /// [`humanitl_core::BlockReason::as_str`].
+    pub block_reason: Option<String>,
+    /// Die Regel, die entschied, falls eine entschied.
+    pub rule_id: Option<String>,
+    /// Wahr für die Durchreichregel zum Sprachmodell.
+    pub passthrough: bool,
+    /// Die Notiz an den Agenten, leer wenn es keine gibt.
+    ///
+    /// Sie steht in der Spalte, wie der Agent sie gelesen hat: Der Schreiber
+    /// der Aufzeichnung hat sie durch [`sanitize_note`] geschickt. Hier wird
+    /// nicht nachgesäubert und nichts geraten.
+    pub note: String,
 }
 
 /// Die Antwort des Endpunkts, noch ohne HTTP-Verpackung.
@@ -493,44 +540,113 @@ fn route(path: &str) -> Option<MetaRoute> {
     }
 }
 
+/// Die Flow-Id, zu der `/why` eine Auskunft geben soll, sonst `None`.
+///
+/// Der Handler braucht sie, **bevor** er [`MetaEndpoint::respond`] ruft:
+/// Steht der Flow nicht mehr in der [`FlowRegistry`], holt er die Zeile aus
+/// der Aufzeichnung und legt sie als [`MetaRequest::archived`] dazu. Die
+/// Weiche über die Pfade bleibt damit an dieser einen Stelle; der Handler
+/// vergleicht keinen Pfad selbst (HUM-117).
+#[must_use]
+pub fn why_target(path_and_query: &str) -> Option<FlowId> {
+    match route(path_only(path_and_query)) {
+        Some(MetaRoute::Why(flow)) => Some(flow),
+        Some(MetaRoute::Status | MetaRoute::Ask) | None => None,
+    }
+}
+
 /// `/why/<flow-id>`: die Entscheidung zu einem Flow dieser Sitzung.
+///
+/// Zuerst die [`FlowRegistry`], dann die Aufzeichnung: Die Registry kennt den
+/// Flow, solange die Sitzung läuft, und sie kennt ihn auch, während noch
+/// niemand entschieden hat. Erst wenn sie ihn nicht (mehr) führt — nach einem
+/// Neustart des Daemons —, antwortet die Zeile aus der Aufzeichnung, die der
+/// Aufrufer mitgebracht hat (HUM-117).
+///
+/// Die Sitzung wird auf beiden Wegen gleich geprüft: Ein Flow einer fremden
+/// Sitzung ist `404`, und zwar bevor irgendetwas über ihn gesagt wird
+/// (`backlog/CONVENTIONS.md` 4.24).
 fn why_body(flow: FlowId, request: &MetaRequest<'_>, registry: &FlowRegistry) -> MetaOutcome {
     // Ein Flow einer fremden Sitzung wird behandelt, als gäbe es ihn nicht:
     // Die Antwort darf nicht verraten, dass er existiert.
-    let Some(record) = registry
+    if let Some(record) = registry
         .get(flow)
         .filter(|record| record.session == request.session)
-    else {
-        return MetaOutcome {
-            reply: text(404, "no such flow\n"),
-            event: None,
+    {
+        let (decision, reason, note) = match &record.decision {
+            // Noch nicht entschieden: Der Zustand ist die ganze Auskunft. Der
+            // Agent wartet ohnehin gerade auf genau diese Antwort.
+            None => (
+                "pending".to_owned(),
+                record.state.name().to_owned(),
+                String::new(),
+            ),
+            Some(Decision::Block { reason, note }) => (
+                "block".to_owned(),
+                reason.as_str().to_owned(),
+                note.as_deref().map(sanitize_note).unwrap_or_default(),
+            ),
+            Some(Decision::TimedOut) => {
+                ("timed_out".to_owned(), "timeout".to_owned(), String::new())
+            }
+            Some(decision @ (Decision::Allow | Decision::AllowEdited { .. })) => (
+                decision.as_str().to_owned(),
+                record
+                    .decision_source
+                    .map_or("unknown", humanitl_core::DecisionSource::as_str)
+                    .to_owned(),
+                String::new(),
+            ),
         };
+        return why_reply(&decision, &reason, &note);
+    }
+    if let Some(archived) = request
+        .archived
+        .filter(|archived| archived.session == request.session)
+    {
+        let (decision, reason, note) = archived_fields(archived);
+        return why_reply(&decision, &reason, &note);
+    }
+    MetaOutcome {
+        reply: text(404, "no such flow\n"),
+        event: None,
+    }
+}
+
+/// Entscheidung, Grund und Notiz einer aufgezeichneten Zeile.
+///
+/// Die Tabelle `flows` führt keine Herkunft einer Entscheidung, nur die Regel
+/// und den Passthrough-Vermerk. Für eine aufgezeichnete Freigabe heißt der
+/// Grund deshalb `rule`, `passthrough` oder `unknown`; `user` würde behauptet,
+/// nicht gewusst (`backlog/CONVENTIONS.md` 4.13).
+fn archived_fields(archived: &ArchivedFlow) -> (String, String, String) {
+    let source = if archived.passthrough {
+        "passthrough"
+    } else if archived.rule_id.is_some() {
+        "rule"
+    } else {
+        "unknown"
     };
-    let (decision, reason, note) = match &record.decision {
-        // Noch nicht entschieden: Der Zustand ist die ganze Auskunft. Der
-        // Agent wartet ohnehin gerade auf genau diese Antwort.
-        None => (
-            "pending".to_owned(),
-            record.state.name().to_owned(),
-            String::new(),
-        ),
-        Some(Decision::Block { reason, note }) => (
+    match archived.decision.as_deref() {
+        None => ("pending".to_owned(), archived.state.clone(), String::new()),
+        Some("block") => (
             "block".to_owned(),
-            reason.as_str().to_owned(),
-            note.as_deref().map(sanitize_note).unwrap_or_default(),
+            archived
+                .block_reason
+                .clone()
+                .unwrap_or_else(|| "unknown".to_owned()),
+            archived.note.clone(),
         ),
-        Some(Decision::TimedOut) => ("timed_out".to_owned(), "timeout".to_owned(), String::new()),
-        Some(decision @ (Decision::Allow | Decision::AllowEdited { .. })) => (
-            decision.as_str().to_owned(),
-            record
-                .decision_source
-                .map_or("unknown", humanitl_core::DecisionSource::as_str)
-                .to_owned(),
-            String::new(),
-        ),
-    };
-    // `note` steht am Ende der Zeile, weil es das einzige Feld mit
-    // Leerzeichen ist: So bleibt die Zeile für den Agenten zerlegbar.
+        Some("timed_out") => ("timed_out".to_owned(), "timeout".to_owned(), String::new()),
+        Some(other) => (other.to_owned(), source.to_owned(), String::new()),
+    }
+}
+
+/// Die eine Zeile, die `/why` antwortet.
+///
+/// `note` steht am Ende, weil es das einzige Feld mit Leerzeichen ist: So
+/// bleibt die Zeile für den Agenten zerlegbar.
+fn why_reply(decision: &str, reason: &str, note: &str) -> MetaOutcome {
     MetaOutcome {
         reply: text(
             200,
@@ -928,6 +1044,7 @@ mod tests {
             body: b"",
             body_over_cap: false,
             session,
+            archived: None,
         }
     }
 
@@ -938,6 +1055,7 @@ mod tests {
             body,
             body_over_cap: false,
             session,
+            archived: None,
         }
     }
 
@@ -1305,6 +1423,7 @@ mod tests {
             body: b"",
             body_over_cap: true,
             session,
+            archived: None,
         };
         let out = endpoint(RuleSet::new()).respond(&request, &registry());
         assert_eq!(out.reply.status, 413);
@@ -1583,6 +1702,7 @@ mod tests {
             body: b"",
             body_over_cap: true,
             session,
+            archived: None,
         };
         for _ in 0..ASK_PER_WINDOW {
             assert_eq!(end.respond(&too_big, &registry()).reply.status, 413);

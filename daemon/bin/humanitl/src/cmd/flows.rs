@@ -528,6 +528,19 @@ fn detail_rows(summary: &v1::FlowSummary) -> Vec<Vec<String>> {
         ],
         vec!["findings".to_owned(), summary.finding_count.to_string()],
     ];
+    // Die Notiz steht unmittelbar unter der Entscheidung, zu der sie gehört,
+    // und nur dort: Die Liste (`summary_row`) führt sie nicht, weil eine Zeile
+    // mit 500 Zeichen Freitext keine Tabelle mehr wäre (HUM-117).
+    if !summary.decision_note.is_empty() {
+        let after_decision = rows
+            .iter()
+            .position(|row| row.first().is_some_and(|field| field == "decision"))
+            .map_or(rows.len(), |index| index.saturating_add(1));
+        rows.insert(
+            after_decision,
+            vec!["note".to_owned(), summary.decision_note.clone()],
+        );
+    }
     if !summary.rule_id.is_empty() {
         rows.push(vec!["rule".to_owned(), summary.rule_id.clone()]);
     }
@@ -582,6 +595,11 @@ pub fn summary_json(summary: &v1::FlowSummary) -> Value {
         // (HUM-103).
         "meta": summary.meta,
         "rule_id": summary.rule_id,
+        // Der Satz, den der Mensch beim Blocken an den Agenten gerichtet hat,
+        // so wie der Agent ihn in der 403-Antwort gelesen hat. Der leere
+        // String heißt „es gibt keine", nie `null`, wie bei `origin_tool` und
+        // `error` (HUM-117).
+        "decision_note": summary.decision_note,
         "origin_tool": summary.origin_tool,
         "error": summary.error,
     })
@@ -656,8 +674,8 @@ mod tests {
     use humanitl_ipc::v1;
 
     use super::{
-        FLOW_HEADERS, PATH_WIDTH, authority, decision_name, method_name, order_by, short_id,
-        summary_json, summary_row, truncate_middle,
+        FLOW_HEADERS, PATH_WIDTH, authority, decision_name, detail_rows, method_name, order_by,
+        short_id, summary_json, summary_row, truncate_middle,
     };
 
     fn summary() -> v1::FlowSummary {
@@ -693,7 +711,47 @@ mod tests {
             error: String::new(),
             meta: false,
             apex: "github.com".to_owned(),
+            decision_note: String::new(),
         }
+    }
+
+    /// `humanitl flows show` druckt die Notiz unter der Entscheidung.
+    ///
+    /// Die Liste zeigt sie nicht: Eine Spalte mit bis zu 500 Zeichen Freitext
+    /// wäre keine Tabelle mehr (HUM-117).
+    #[test]
+    fn flows_show_prints_the_note() {
+        let blocked = v1::FlowSummary {
+            state: v1::FlowState::Recorded as i32,
+            decision: v1::DecisionKind::Block as i32,
+            block_reason: v1::BlockReason::User as i32,
+            decision_note: "use PyPI".to_owned(),
+            ..summary()
+        };
+        let rows = detail_rows(&blocked);
+        let decision = rows
+            .iter()
+            .position(|row| row[0] == "decision")
+            .unwrap_or_else(|| panic!("no decision row"));
+        assert_eq!(rows[decision][1], "block");
+        assert_eq!(
+            rows[decision + 1],
+            vec!["note".to_owned(), "use PyPI".to_owned()],
+            "the note belongs under the decision it explains"
+        );
+        assert_eq!(summary_json(&blocked)["decision_note"], "use PyPI");
+
+        assert!(
+            !summary_row(&blocked).iter().any(|cell| cell == "use PyPI"),
+            "the list is a table and carries no free text"
+        );
+
+        let without = detail_rows(&summary());
+        assert!(
+            !without.iter().any(|row| row[0] == "note"),
+            "no note, no row"
+        );
+        assert_eq!(summary_json(&summary())["decision_note"], "");
     }
 
     /// `humanitl flows list --json` zeigt die registrierbare Domain.

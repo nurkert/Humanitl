@@ -492,6 +492,7 @@ class HistoryPageNotifier extends Notifier<HistoryPageState> {
         :final DecisionSource? source,
         :final BlockReason? blockReason,
         :final RuleId? ruleId,
+        :final String note,
       ):
         _update(
           flowId,
@@ -500,6 +501,16 @@ class HistoryPageNotifier extends Notifier<HistoryPageState> {
             decision: kind,
             decisionSource: source,
             blockReason: blockReason,
+            // The note travels with the decision; without this line the row
+            // would only carry it after a reload from the recording. Only a
+            // block a person decided leaves one — the same line the daemon's
+            // recorder draws (HUM-117).
+            decisionNote: humanBlockNote(
+              kind: kind,
+              blockReason: blockReason,
+              source: source,
+              note: note,
+            ),
             ruleId: ruleId,
             edited: kind == DecisionKind.allowEdited,
             decidedAt: event.at,

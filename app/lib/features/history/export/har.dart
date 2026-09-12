@@ -115,6 +115,11 @@ Map<String, Object?> humanitlBlock(
       ? null
       : harWireName(flow.blockReason!),
   'rule_id': flow.ruleId?.value,
+  // The sentence the person wrote to the agent when they blocked, as the agent
+  // read it in the 403 response. `null` where there is none, like `decision`
+  // and `rule_id` above: an export is evidence, and an empty string would read
+  // as "they wrote nothing" (HUM-117).
+  'note': flow.decisionNote.isEmpty ? null : flow.decisionNote,
   'findings_count': flow.findingCount,
   'edited': flow.edited,
   'passthrough': flow.passthrough,

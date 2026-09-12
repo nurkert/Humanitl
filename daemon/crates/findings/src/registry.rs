@@ -154,6 +154,39 @@ impl DetectorRegistry {
     pub fn scan_request(&self, request: &HttpRequest, body: &[u8]) -> Vec<Finding> {
         self.scan(request, body).findings
     }
+
+    /// Sucht in einem Text des Menschen statt in einer Anfrage.
+    ///
+    /// Für die Notiz, die jemand beim Blocken an den Agenten richtet: Sie
+    /// geht im Klartext in die 403-Antwort, und ein Schlüssel darin verlässt
+    /// damit den Rechner (HUM-117). Es gilt dasselbe wie für jeden anderen
+    /// Fund: Der Wert bleibt hier, nach außen gehen Art, Bereich und die
+    /// ersten Zeichen.
+    ///
+    /// Kein Zerlegen, kein Entpacken, keine Grenze: Ein Text ist ein Text,
+    /// und eine Notiz ist durch `sanitize_note` ohnehin auf 500 Zeichen
+    /// begrenzt. Der Ort steht auf [`FindingLocation::Body`], weil ein Fund
+    /// ohne Ort nicht aufzuräumen wäre; er wird nie zu einem `Finding` am
+    /// Fluss, denn die gehören zur Anfrage. Der Aufrufer macht aus jedem Fund
+    /// einen Befund.
+    #[must_use]
+    pub fn scan_note(&self, note: &str) -> Vec<Finding> {
+        let input = ScanInput {
+            location: FindingLocation::Body,
+            bytes: note.as_bytes(),
+            content_type: None,
+        };
+        let mut findings = Vec::new();
+        for detector in &self.detectors {
+            for finding in detector.scan(&input) {
+                if self.ignored.contains(&finding.value_hash) {
+                    continue;
+                }
+                findings.push(finding);
+            }
+        }
+        tidy(findings)
+    }
 }
 
 /// Wie stark ein Fund wiegt, wenn zwei an derselben Stelle stehen.
