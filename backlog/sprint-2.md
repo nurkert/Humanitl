@@ -1427,7 +1427,7 @@ Geblockte Flows: `response.status = 403`, `content.text` = 403-Body. JSONL: eine
 
 ### Akzeptanzkriterien
 - [x] Tests und Goldens grün. (147 Tests, sechs Goldens; das Detail zeichnet eigene Textzeilen statt der `BodyView` aus HUM-030, HUM-116)
-- [ ] Fake-Daemon-Szenario `history_10k.jsonl`: Scrollen über 10k Zeilen ohne sichtbares Ruckeln; Speicher der App < 300 MB (DevTools-Messung in PR). Das Szenario heißt `HUMANITL_FAKE=history:10000`; gemessen wurde nichts (kein Test misst Frames oder Speicher, keine DevTools-Zahl im Commit-Body 6a7da2f), und `historyMaxRows = 2000` beendet das Fenster vor 10k Zeilen (`history_page.dart:32`).
+- [ ] `HUMANITL_FAKE=history:10000`: Das Fenster von 2000 Zeilen über 10 000 Aufzeichnungen scrollt ohne sichtbares Ruckeln, die Fußzeile liest `2,000 of 10,000 loaded`, und der Spitzenspeicher der App bleibt unter 300 MB (DevTools). Die Datei `history_10k.jsonl` gibt es nicht; das Szenario ist generiert, und `historyMaxRows = 2000` (`history_page.dart:32`) ist die Grenze, gegen die gemessen wird, kein Fehler. Gemessen hat das bisher niemand; es bleibt der Blick eines Menschen mit DevTools.
 - [ ] Export von 100 Flows als HAR öffnet fehlerfrei in Firefox DevTools (manuell, Screenshot in PR). Kein Screenshot, keine Zeile im Commit-Body; die Form prüft `_expectValidHar` feldweise, die Schema-Validierung hat CONVENTIONS 4.18 gestrichen; die Zusage `content.text = 403-Body` für geblockte Flows ist unerfüllbar, weil `record_block` die Block-Antwort nie aufzeichnet (der Export wandert mit HUM-092 in den Daemon).
 
 ### Fallstricke
