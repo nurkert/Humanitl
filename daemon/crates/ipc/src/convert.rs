@@ -32,6 +32,7 @@ use humanitl_core::{
     BlockReason, Decision, DecisionSource, Diagnostic, Finding, FixAction, FlowEvent, FlowId,
     FlowState, HostName, RuleId, SessionId, Severity, UpstreamError, sanitize_note,
 };
+use humanitl_findings::decode::ContentEncoding;
 use humanitl_proxy::registry::{FlowRecord, FlowRegistry};
 use humanitl_proxy::rules_store::StoredRule;
 use humanitl_proxy::{Found, LlmFlavor, ProbeResult};
@@ -622,14 +623,49 @@ pub fn headers_from_proto(headers: &[v1::Header]) -> HeaderMap {
     map
 }
 
-/// Übersetzt einen Body-Verweis in seine Wire-Form.
+/// Der Name einer Kodierung, wie der Vertrag ihn führt.
+///
+/// Leer für `identity` und für eine fehlende Kopfzeile, sonst der Wert, den
+/// [`ContentEncoding`] daraus liest: kleingeschrieben, und eine Kette wie
+/// `gzip, br` bleibt eine Kette. `GetBody` entpackt genau die Kodierungen, die
+/// hier einen bekannten Namen haben, und nennt jede andere in
+/// `BodyChunk.encoding_left` (HUM-119).
 #[must_use]
-pub fn body_to_proto(body: &BodyRef) -> v1::BodyRef {
+pub fn encoding_name(value: &str) -> String {
+    let encoding = ContentEncoding::parse(value);
+    if encoding.is_identity() {
+        String::new()
+    } else {
+        encoding.as_str().to_owned()
+    }
+}
+
+/// Der `Content-Encoding` einer Kopfzeilen-Tabelle, als Name des Vertrags.
+#[must_use]
+pub fn encoding_of_headers(headers: &HeaderMap) -> String {
+    headers
+        .get("content-encoding")
+        .and_then(|value| value.to_str().ok())
+        .map_or_else(String::new, encoding_name)
+}
+
+/// Übersetzt einen Body-Verweis in seine Wire-Form.
+///
+/// `content_encoding` steht nicht im [`BodyRef`] des Kerns, sondern in den
+/// Kopfzeilen der Nachricht, zu der der Body gehört; der Aufrufer reicht es
+/// deshalb herein. Der Klient schickt es in `GetBody` zurück und bekommt damit
+/// die entpackten Bytes (HUM-119).
+#[must_use]
+pub fn body_to_proto(body: &BodyRef, content_encoding: &str) -> v1::BodyRef {
     v1::BodyRef {
         sha256: body.sha256.to_vec(),
         size: body.size,
         truncated: body.truncated,
         content_type: body.content_type.clone().unwrap_or_default(),
+        content_encoding: content_encoding.to_owned(),
+        // Nur eine Anfrage an den Daemon trägt dieses Feld; eine Antwort des
+        // Daemons sagt über `BodyChunk.encoding_left`, was er getan hat.
+        decoded: false,
     }
 }
 
@@ -643,7 +679,10 @@ pub fn request_to_proto(request: &HttpRequest) -> v1::HttpRequest {
         authority: Some(authority_to_proto(&request.authority)),
         path_and_query: request.path_and_query.clone(),
         headers: headers_to_proto(&request.headers),
-        body: Some(body_to_proto(&request.body)),
+        body: Some(body_to_proto(
+            &request.body,
+            &encoding_of_headers(&request.headers),
+        )),
         version: HTTP_VERSION.to_owned(),
     }
 }
@@ -1104,7 +1143,8 @@ pub fn recorded_detail_to_proto(
             headers: recorded_headers_to_proto(message),
             version: HTTP_VERSION.to_owned(),
         }),
-        response_body: response.map(|message| body_to_proto(&message.body)),
+        response_body: response
+            .map(|message| body_to_proto(&message.body, &recorded_encoding(message))),
         findings: detail
             .findings
             .iter()
@@ -1152,9 +1192,25 @@ fn recorded_request_to_proto(
         authority: summary.authority.clone(),
         path_and_query: summary.path.clone(),
         headers: message.map(recorded_headers_to_proto).unwrap_or_default(),
-        body: message.map(|message| body_to_proto(&message.body)),
+        body: message.map(|message| body_to_proto(&message.body, &recorded_encoding(message))),
         version: HTTP_VERSION.to_owned(),
     }
+}
+
+/// Der `Content-Encoding` einer aufgezeichneten Nachricht.
+///
+/// Die Aufzeichnung führt den Wert als eigene Spalte; fehlt sie (eine Zeile
+/// aus einer älteren Fassung), stehen die Kopfzeilen daneben und werden
+/// gelesen, statt `identity` zu behaupten.
+fn recorded_encoding(message: &MessageRecord) -> String {
+    if let Some(value) = message.content_encoding.as_deref() {
+        return encoding_name(value);
+    }
+    message
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-encoding"))
+        .map_or_else(String::new, |(_, value)| encoding_name(value))
 }
 
 /// Ein aufgezeichneter Fund in der Wire-Form.

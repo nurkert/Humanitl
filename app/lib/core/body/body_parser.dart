@@ -75,14 +75,11 @@ enum BodyProblem {
   /// Der Daemon hat weniger Bytes geliefert, als der Verweis nennt.
   incomplete,
 
-  /// Der gepackte Strom endet nicht dort, wo sein Abschluss es sagt.
+  /// Der Daemon konnte die angekündigte Kodierung nicht abnehmen.
   ///
-  /// Nicht dasselbe wie [incomplete]: dort brach der Transport ab, hier ist
-  /// der Inhalt selbst abgeschnitten oder mehrgliedrig, und der Daemon hat
-  /// dann etwas anderes gesehen als diese Ansicht.
-  truncatedStream,
-
-  /// Die Anfrage kündigt eine Kodierung an, die diese Ansicht nicht auspackt.
+  /// `zstd`, eine Kette wie `gzip, br` oder ein Strom, der nicht aufgeht: Dann
+  /// kommen die Bytes der Leitung an, und keine Fundstelle wird gezeichnet
+  /// (`BodyChunk.encoding_left`, HUM-119).
   undecodedEncoding,
 }
 

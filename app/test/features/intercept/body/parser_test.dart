@@ -2,16 +2,20 @@
 // Anzeige anhalten oder täuschen sollen: Millionen Knoten, tausend Ebenen,
 // eine einzige Zeile von Megabytes, doppelte Schlüssel, JSON, das keines ist.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:humanitl/core/body/body_decode.dart';
 import 'package:humanitl/core/body/body_kind.dart';
 import 'package:humanitl/core/body/body_parser.dart';
 import 'package:humanitl/core/body/body_span.dart';
 import 'package:humanitl/core/body/form_view.dart';
 import 'package:humanitl/core/body/json_tree_view.dart';
 import 'package:humanitl/core/domain/domain.dart';
+import 'package:humanitl/core/ipc/daemon_client.dart';
+import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 
 import 'harness.dart';
 
@@ -28,6 +32,90 @@ void main() {
     expect(
       parsed.text!.text.substring(finding.charStart, finding.charEnd),
       'a@b.de',
+    );
+  });
+
+  test('brotli_body_shows_its_finding_at_the_right_place', () {
+    // Der Fall, an dem HUM-119 hängt. Der Rumpf lag als `br` auf der Leitung;
+    // der Daemon hat ihn entpackt, bevor er suchte, und `GetBody` mit
+    // `decoded = true` liefert genau diese Bytes zurück (`encoding_left` leer).
+    // Der Bereich des Fundes ist ein Versatz **in den entpackten** Bytes.
+    //
+    // Vorher fiel `br` in `BodyEncoding.unsupported`: Die Ansicht hielt die
+    // gepackten Bytes, `placeFindings` war falsch, und der Fund bekam keine
+    // Stelle. Wer `encodingLeft: 'br'` einsetzt, sieht genau das wieder.
+    const String plain =
+        '{"token": "eyJhbGciOiJIUzI1NiJ9.e30.x", "note": "from the sandbox"}';
+    final int start = plain.indexOf('eyJhbGciOiJIUzI1NiJ9.e30.x');
+    final int end = start + 'eyJhbGciOiJIUzI1NiJ9.e30.x'.length;
+    final BodyLoad load = buildBodyLoad(
+      RawBody(bytes: bytesOf(plain)),
+      BodyRef(
+        sha256: List<int>.filled(32, 5),
+        // Die Größe zählt die gepackten Bytes und ist deshalb kleiner als der
+        // Klartext; das darf die Anzeige nicht als Abbruch lesen.
+        size: 62,
+        contentType: 'application/json',
+        contentEncoding: 'br',
+      ),
+    );
+    expect(load.aligned, isTrue);
+    expect(load.problem, isNull);
+    final ParsedBody parsed = parseLoadedBody(load, <Finding>[
+      bodyFinding(start: start, end: end, kind: 'jwt'),
+    ]);
+    expect(parsed.findingsPlaced, isTrue);
+    final BodyFinding finding = parsed.findings.single;
+    expect(
+      parsed.text!.text.substring(finding.charStart, finding.charEnd),
+      'eyJhbGciOiJIUzI1NiJ9.e30.x',
+    );
+  });
+
+  test('the default scenario really carries a brotli body', () async {
+    // Das Skript des Fakes trägt den einen gepackten Rumpf, an dem die
+    // Oberfläche das prüfen kann: httpbin.org, `Content-Encoding: br`, ein
+    // JWT bei 11..37 der entpackten Bytes.
+    final FakeDaemonClient client = FakeDaemonClient();
+    addTearDown(client.close);
+    final List<FlowEvent> events = <FlowEvent>[];
+    final StreamSubscription<FlowEvent> subscription = client
+        .subscribe()
+        .listen(events.add);
+    await Future<void>.delayed(const Duration(milliseconds: 4200));
+    await subscription.cancel();
+
+    final FlowDetail detail = client.state.details.values.firstWhere(
+      (FlowDetail detail) => detail.summary.host == 'httpbin.org',
+    );
+    final BodyRef reference = detail.request!.body;
+    expect(reference.contentEncoding, 'br');
+
+    final List<BodyChunk> packed = await client
+        .getBodyChunks(reference)
+        .toList();
+    expect(packed.single.encodingLeft, '');
+    expect(packed.single.data.length, reference.size);
+    expect(
+      utf8.decode(packed.single.data, allowMalformed: true),
+      isNot(contains('eyJhbGci')),
+      reason: 'without the flag the wire bytes come back, and they are packed',
+    );
+
+    final List<BodyChunk> plain = await client
+        .getBodyChunks(reference.asking('br'))
+        .toList();
+    expect(plain.single.encodingLeft, '');
+    final String text = utf8.decode(plain.single.data);
+    expect(text.indexOf('eyJhbGciOiJIUzI1NiJ9.e30.x'), 11);
+
+    final Finding finding = events
+        .whereType<FlowEventAnalyzed>()
+        .expand((FlowEventAnalyzed event) => event.findings)
+        .firstWhere((Finding found) => found.kind == 'jwt');
+    expect(
+      text.substring(finding.spanStart, finding.spanEnd),
+      'eyJhbGciOiJIUzI1NiJ9.e30.x',
     );
   });
 

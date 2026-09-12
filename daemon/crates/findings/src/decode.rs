@@ -295,8 +295,20 @@ pub enum InflateError {
     #[error("für \"{0}\" gibt es keinen Entpacker")]
     UnsupportedEncoding(String),
     /// Der Strom endet zu früh oder ist beschädigt.
-    #[error("der Strom ist unvollständig oder beschädigt ({0})")]
-    BrokenStream(#[from] std::io::Error),
+    ///
+    /// `partial` trägt, was bis zum Abbruch entstanden ist. Der Scan wirft es
+    /// weg und meldet `FINDINGS_002`: Ein halber Body führt zu halben Funden,
+    /// und ein Fund ohne Ende ist keiner. `GetBody` dagegen darf den Anfang
+    /// ausliefern, wenn die Aufzeichnung ohnehin nur einen Präfix hat
+    /// (HUM-119); ein Mensch liest lieber den Anfang als eine Wand aus Hex.
+    #[error("der Strom ist unvollständig oder beschädigt ({source})")]
+    BrokenStream {
+        /// Der Fehler des Entpackers.
+        #[source]
+        source: std::io::Error,
+        /// Was bis zum Abbruch entpackt wurde.
+        partial: Vec<u8>,
+    },
 }
 
 /// Was beim Entpacken herauskam.
@@ -364,15 +376,22 @@ fn read_limited<R: Read>(mut reader: R, budget: &mut Budget) -> Result<Inflated,
         let left = budget.remaining();
         if left == 0 {
             // Ein Byte mehr lesen, um "genau voll" von "zu viel" zu trennen.
+            let more = match reader.read(&mut chunk[..1]) {
+                Ok(more) => more,
+                Err(source) => return Err(broken(source, bytes)),
+            };
             return Ok(Inflated {
-                stopped: reader.read(&mut chunk[..1])? > 0,
+                stopped: more > 0,
                 bytes,
             });
         }
         // Ein Byte über das Budget hinaus anfragen: kommt es, war der Strom
         // länger als erlaubt, und der Scan ist unvollständig.
         let want = DECOMPRESS_CHUNK.min(left.saturating_add(1));
-        let read = reader.read(&mut chunk[..want])?;
+        let read = match reader.read(&mut chunk[..want]) {
+            Ok(read) => read,
+            Err(source) => return Err(broken(source, bytes)),
+        };
         if read == 0 {
             return Ok(Inflated {
                 bytes,
@@ -390,6 +409,11 @@ fn read_limited<R: Read>(mut reader: R, budget: &mut Budget) -> Result<Inflated,
         bytes.extend_from_slice(&chunk[..read]);
         budget.take(read);
     }
+}
+
+/// Der Abbruch eines Stroms samt dem, was bis dahin entstanden ist.
+fn broken(source: std::io::Error, partial: Vec<u8>) -> InflateError {
+    InflateError::BrokenStream { source, partial }
 }
 
 /// Der Befund für einen Body über `limits.preview_cap_bytes`.

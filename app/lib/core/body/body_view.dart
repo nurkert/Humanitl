@@ -187,7 +187,11 @@ class _Loaded extends ConsumerWidget {
           ? const SizedBox.shrink()
           : _Panes(
               flowId: flowId,
-              body: source.reference,
+              // Derselbe Verweis, den `parsedBodyProvider` gefragt hat. Der
+              // rohe daneben wäre ein zweiter Schlüssel im Zwischenspeicher:
+              // ein zweites `GetBody` je angesehenem Rumpf, und in der
+              // Hex-Ansicht die gepackten statt der entpackten Bytes.
+              body: source.asked,
               parsed: value,
               hovered: hovered,
               focused: focused,
@@ -461,8 +465,6 @@ List<String> bodyNotes(
       notes.add(l10n.interceptBodyTooLarge(parsed.findings.length));
     case BodyProblem.incomplete:
       notes.add(l10n.interceptBodyIncomplete);
-    case BodyProblem.truncatedStream:
-      notes.add(l10n.interceptBodyStreamTruncated);
     case BodyProblem.undecodedEncoding:
       notes.add(l10n.interceptBodyEncodingUndecoded(parsed.encodingLabel));
     case BodyProblem.notJson:
