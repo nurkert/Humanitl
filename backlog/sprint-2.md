@@ -3524,10 +3524,12 @@ macht `har_carries_the_note` rot; `decisionNote` aus dem Reduzierer des
 Dart-Fakes entfernt macht `fake_records_the_note` rot; `decisionNote` aus
 `convert.dart` entfernt macht den Zeilentest in `convert_test.dart` rot.
 
-Nicht umgesetzt: Schritt 6 nennt einen Absatz in `backlog/CONVENTIONS.md` 4.x.
-Die Entscheidung steht im Kriterium von HUM-072, in dieser Spezifikation, im
-Kommentar von `V8__decision_note.sql` und im Proto; ein Eintrag in CONVENTIONS
-gehört in einen Lauf, der jene Datei anfassen darf.
+Schritt 6 ist am 2026-09-12 nachgezogen: `backlog/CONVENTIONS.md` 4.30 hält
+fest, dass die Notiz gespeichert wird und warum, dass nur ein Block eines
+Menschen eine trägt und an welchen drei Stellen diese Bedingung steht, dass sie
+nicht ins Audit-Log kommt, und dass `/why` an der Sitzung bleibt. Dieselbe
+Entscheidung steht im Kriterium von HUM-072, in dieser Spezifikation, im
+Kommentar von `V8__decision_note.sql` und im Proto.
 
 ---
 
