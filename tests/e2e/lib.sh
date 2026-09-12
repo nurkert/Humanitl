@@ -459,12 +459,35 @@ flow_row() {
     printf '%s\n' "$flow_row_out"
 }
 
-# flow_decide ID allow|block [NOTE] — einen wartenden Flow entscheiden.
+# flow_decide ID allow|block [NOTE] [ARG...] — einen wartenden Flow entscheiden.
+#
+# Was hinter der Notiz steht, geht unverändert an `humanitl flows decide`.
+# Damit legt derselbe Aufruf mit `--remember <PATTERN>` die Regel an, die die
+# Entscheidung hinterlässt, und die Regel trägt die Id dieses Flows als
+# Herkunft (HUM-095). Eine leere Notiz heißt weiterhin „keine Notiz"; so kann
+# ein Aufrufer Remember-Argumente nennen, ohne eine Notiz zu erfinden.
+#
+# Ohne solche Argumente bleibt der Aufruf still, wie vorher. Mit ihnen steht
+# die Antwort als eine Zeile JSON auf stdout, denn nur dort steht die Id der
+# angelegten Regel (`created_rule_id`).
 flow_decide() {
-    if [ -n "${3:-}" ]; then
-        humanitl --json flows decide "$1" "$2" --note "$3" > /dev/null
+    flow_decide_id="$1"
+    flow_decide_verdict="$2"
+    flow_decide_note="${3:-}"
+    if [ "$#" -ge 3 ]; then
+        shift 3
     else
-        humanitl --json flows decide "$1" "$2" > /dev/null
+        shift "$#"
+    fi
+    flow_decide_quiet=1
+    [ "$#" -eq 0 ] || flow_decide_quiet=0
+    if [ -n "$flow_decide_note" ]; then
+        set -- --note "$flow_decide_note" "$@"
+    fi
+    if [ "$flow_decide_quiet" = 1 ]; then
+        humanitl --json flows decide "$flow_decide_id" "$flow_decide_verdict" "$@" > /dev/null
+    else
+        humanitl --json flows decide "$flow_decide_id" "$flow_decide_verdict" "$@"
     fi
 }
 

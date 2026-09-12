@@ -107,7 +107,7 @@ M2_UI_TEST="$E2E_ROOT/app/integration_test/m2_first_decision_test.dart"
 # weil dort der Bildschirm entscheidet, und Schritt 10 kommt dazu. Eine
 # gemeinsame Konstante müsste die kleinere der beiden sein und ließe den
 # größeren Zweig unbewacht (HUM-097).
-M2_EXPECTED_ASSERTIONS_CLI=70
+M2_EXPECTED_ASSERTIONS_CLI=71
 M2_EXPECTED_ASSERTIONS_SCREEN=75
 
 # Die Ports des Ziels. Im eigenen Netz-Namensraum ist der Lauf root und darf
@@ -716,20 +716,40 @@ if [ "$M2_SCREEN" = 0 ]; then
 
 e2e_step "2. a human releases the whole group and remembers it for this session"
 
-# Erst die Regel, dann die Freigabe. `DecideRequest.remember` legt beides in
-# einem Aufruf an; `humanitl flows decide` kennt weder mehrere Ids noch
-# `--remember`, und dieser Lauf geht deshalb über zwei Schritte
-# (`backlog/CONVENTIONS.md` 4.22). Die Wirkung ist dieselbe: Die zwölf schon
-# gehaltenen Anfragen gehen über die Entscheidung hinaus, denn entschieden wird
-# beim Eintreffen; alles, was danach kommt, geht über die Regel.
-rule_json=$(humanitl --json rules add \
-    --action allow \
-    --host '**.npmjs.org' \
-    --expires session \
-    --note 'e2e: the whole npm group, for this session') ||
-    e2e_die "the daemon refused the session rule"
-M2_RULE_ID=$(printf '%s' "$rule_json" | jq -r '.added.rule_id')
-e2e_say "session rule $M2_RULE_ID"
+# Die Regel entsteht in der Entscheidung, nicht daneben. `DecideRequest.remember`
+# legt beides in einem Aufruf an, und seit HUM-095 erreicht `humanitl flows
+# decide --remember <PATTERN>` das auch von der Kommandozeile aus. Die Regel
+# hängt damit am ersten Flow des Stapels und trägt seine Id als Herkunft; der
+# Dienst nimmt sie zurück, wenn dieser Flow nicht mehr entschieden werden kann.
+# Mehrere Ids je Aufruf gibt es weiter nicht, der Stapel bleibt die Schleife,
+# und nur ihr erster Durchlauf trägt das Flag — zwölf Aufrufe mit `--remember`
+# legten zwölf Regeln an. Die Wirkung auf die zwölf wartenden Anfragen ist
+# dieselbe wie vorher: Entschieden wird beim Eintreffen, sie gehen also über die
+# Entscheidung, alles Spätere über die Regel.
+
+# Die Ids des Stapels werden festgehalten, bevor sie entschieden werden: Sie
+# sind später die einzige Möglichkeit, den Teil der Freigaben, den ein Mensch
+# ausgesprochen hat, vom Teil zu trennen, den die Regel übernommen hat. Der
+# Filter kann das nicht — er kennt keinen Term für „ohne Regel".
+m2_ids "state:held apex:npmjs.org" > "$M2_BATCH_IDS"
+M2_RULE_ID=""
+M2_RULE_FROM=""
+while read -r flow; do
+    [ -n "$flow" ] || continue
+    if [ -z "$M2_RULE_ID" ]; then
+        m2_decide_json=$(flow_decide "$flow" allow "" \
+            --remember '**.npmjs.org' \
+            --remember-note 'e2e: the whole npm group, for this session') ||
+            e2e_die "the daemon refused the allow that carries the session rule"
+        M2_RULE_ID=$(printf '%s' "$m2_decide_json" | jq -r '.created_rule_id // ""')
+        [ -n "$M2_RULE_ID" ] ||
+            e2e_die "the decision went through without creating the session rule"
+        M2_RULE_FROM="$flow"
+        e2e_say "session rule $M2_RULE_ID, created from $flow"
+    else
+        flow_decide "$flow" allow || e2e_say "the daemon refused the allow for $flow"
+    fi
+done < "$M2_BATCH_IDS"
 
 rules_json=$(humanitl --json rules list)
 e2e_expect "the rule store holds exactly one session rule" 1 \
@@ -743,16 +763,11 @@ e2e_expect "with the action a release means" allow \
     "$(printf '%s' "$rule_row" | jq -r '.action')"
 e2e_expect "and it is temporary, not permanent" session \
     "$(printf '%s' "$rule_row" | jq -r '.expires.kind')"
-
-# Die Ids des Stapels werden festgehalten, bevor sie entschieden werden: Sie
-# sind später die einzige Möglichkeit, den Teil der Freigaben, den ein Mensch
-# ausgesprochen hat, vom Teil zu trennen, den die Regel übernommen hat. Der
-# Filter kann das nicht — er kennt keinen Term für „ohne Regel".
-m2_ids "state:held apex:npmjs.org" > "$M2_BATCH_IDS"
-while read -r flow; do
-    [ -n "$flow" ] || continue
-    flow_decide "$flow" allow || e2e_say "the daemon refused the allow for $flow"
-done < "$M2_BATCH_IDS"
+# Die Zusage aus ADR-0007: Eine Regel kann nennen, woraus sie entstand. Ohne
+# sie wäre diese Sitzungsregel von einer handgeschriebenen nicht zu
+# unterscheiden, und das Abzeichen „from #n" des Regel-Bildschirms bliebe leer.
+e2e_expect "and it names the request a human released first" "$M2_RULE_FROM" \
+    "$(printf '%s' "$rule_row" | jq -r '.created_from_flow_id')"
 
 # Gefragt wird der Daemon, nicht die Schleife: Ein Rückgabewert von `humanitl`
 # sagt, dass der Aufruf durchging, nicht, dass der Fluss entschieden ist.
@@ -841,8 +856,8 @@ e2e_expect "with the action a release means" allow \
     "$(printf '%s' "$rule_row" | jq -r '.action')"
 e2e_expect "and it is temporary, not permanent" session \
     "$(printf '%s' "$rule_row" | jq -r '.expires.kind')"
-# Die Herkunft, die nur die Oberfläche stiften kann: Sie legt die Regel in der
-# Entscheidung an, die Kommandozeile daneben (HUM-095). Das Abzeichen `from`
+# Die Herkunft: Die Oberfläche legt die Regel in der Entscheidung an, und seit
+# HUM-095 tut die Kommandozeile im Zweig darüber dasselbe. Das Abzeichen `from`
 # am Regel-Bildschirm zeichnet genau dieses Feld.
 e2e_expect_match "and it names the request it was made from" \
     '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' \
