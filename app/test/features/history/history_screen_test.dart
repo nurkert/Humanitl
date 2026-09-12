@@ -690,4 +690,76 @@ void main() {
     };
     expect(bound, handled);
   });
+  testWidgets('a frame between typing and submitting does not eat the text', (
+    WidgetTester tester,
+  ) async {
+    // Auf einem laufenden Bildschirm zeichnet sich zwischen zwei Tastendrücken
+    // ein Bild, und `onChanged` baut die Zeile ohnehin bei jedem Zeichen neu
+    // auf. Glich das Feld sich dabei mit der zuletzt **abgeschickten** Abfrage
+    // ab, verschwand das gerade Getippte wieder und `Enter` schickte den
+    // leeren Text los. Der M2-Lauf über den Bildschirm ist darüber gestolpert
+    // (HUM-097); ein Widget-Test ohne dieses `pump` sah es nicht.
+    final ProviderContainer container = await pumpHistory(
+      tester,
+      client: FakeDaemonClient.history(count: 8),
+    );
+
+    await tester.enterText(
+      find.byKey(const Key('history-filter-input')),
+      'decision:block',
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 16));
+
+    expect(
+      tester
+          .widget<EditableText>(find.byKey(const Key('history-filter-input')))
+          .controller
+          .text,
+      'decision:block',
+      reason: 'the frame in between must not reset the field',
+    );
+
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await settleHistory(tester, container);
+
+    expect(container.read(historyQueryProvider).filter, 'decision:block');
+  });
+  testWidgets('a chip toggled while typing does not eat the typed text', (
+    WidgetTester tester,
+  ) async {
+    // Der Durchreiche-Chip ändert `includePassthrough`, nicht `filter`, und
+    // eine Spalte zu sortieren ändert `sort` und `descending`. Wer auf die
+    // ganze `HistoryQuery` horcht, gleicht das Feld trotzdem mit dem alten
+    // Ausdruck ab und wirft weg, was gerade getippt wurde (HUM-097).
+    final ProviderContainer container = await pumpHistory(
+      tester,
+      client: FakeDaemonClient.history(count: 8),
+    );
+
+    await tester.enterText(
+      find.byKey(const Key('history-filter-input')),
+      'decision:blo',
+    );
+    await tester.pump();
+
+    await tester.tap(
+      find.byKey(Key('history-chip-${HistoryChip.passthrough.name}')),
+    );
+    await settleHistory(tester, container);
+
+    expect(
+      container.read(historyQueryProvider).includePassthrough,
+      isTrue,
+      reason: 'the chip really did change the query',
+    );
+    expect(
+      tester
+          .widget<EditableText>(find.byKey(const Key('history-filter-input')))
+          .controller
+          .text,
+      'decision:blo',
+      reason: 'a change that leaves the expression alone must not touch it',
+    );
+  });
 }
