@@ -208,6 +208,9 @@ extension FlowSummaryToDomain on pb.FlowSummary {
     methodRaw: methodRaw,
     scheme: enumFromWire(Scheme.values, scheme.value) ?? Scheme.https,
     authority: authority.toDomain(),
+    // What the daemon says, or the empty string: a missing field means "the
+    // daemon does not know", and the client never derives one (HUM-091).
+    apex: apex,
     path: path,
     state: enumFromWire(FlowState.values, state.value) ?? FlowState.received,
     decision: enumFromWire(DecisionKind.values, decision.value),

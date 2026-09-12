@@ -832,19 +832,35 @@ pub fn duration_between(from: SystemTime, to: SystemTime) -> prost_types::Durati
     }
 }
 
-/// Der registrierbare Teil eines Hostnamens, grob geschätzt.
-pub(crate) fn apex_of(host: &HostName) -> String {
-    match host {
-        HostName::Ip(ip) => ip.to_string(),
-        HostName::Dns(name) => {
-            let labels: Vec<&str> = name.split('.').collect();
-            if labels.len() <= 2 {
-                name.clone()
-            } else {
-                labels[labels.len() - 2..].join(".")
-            }
-        }
-    }
+/// Die registrierbare Domain eines Hosts, in der Wire-Form.
+///
+/// Genau eine Quelle: [`humanitl_catalog::psl::apex`], dieselbe Liste, gegen
+/// die der Recorder seine Spalte `apex` füllt und gegen die `apex:` im Filter
+/// vergleicht. Ein leerer String heißt „der Daemon weiß es nicht" — ein
+/// IP-Literal, ein Name, der nur aus einem Suffix besteht, oder ein Suffix, das
+/// die Liste nicht kennt. Er heißt nie „unbedenklich", und geraten wird nichts:
+/// Die frühere Schätzung aus den letzten zwei Labels legte `a.b.github.io` und
+/// `c.b.github.io` unter `github.io`, also zwei fremde Registranten unter einen
+/// Namen (HUM-091).
+#[must_use]
+pub fn apex_string(host: &HostName) -> String {
+    humanitl_catalog::psl::apex(host).unwrap_or_default()
+}
+
+/// Die registrierbare Domain eines Flows, wie der Katalog sie kennt.
+///
+/// Zwei Wege, und der erste ist der genaue: Für einen Flow dieser Sitzung die
+/// Antwort, die beim Eintreffen entstand ([`DomainTable::get`]); für jeden
+/// anderen dieselbe Auskunft ohne die Zähler ([`DomainTable::describe`]).
+/// Ohne Katalog bleibt das Feld leer, statt einen Apex zu raten.
+fn flow_apex(domains: Option<&DomainTable>, id: FlowId, host: &HostName) -> String {
+    domains.map_or_else(String::new, |domains| {
+        domains
+            .get(id)
+            .unwrap_or_else(|| domains.describe(host))
+            .apex
+            .unwrap_or_default()
+    })
 }
 
 /// Rechnet eine Frist des Kerns in die Wanduhrzeit des Vertrags um.
@@ -886,14 +902,15 @@ pub fn domain_to_proto(info: &humanitl_catalog::DomainInfo) -> v1::DomainInfo {
 /// Was ein Daemon ohne Katalog über die Ziel-Domain sagen kann.
 ///
 /// Der Rückfall für den Fake (`humanitld --fake`), der keinen Katalog lädt:
-/// Die Antwort trägt nur den Apex, den `apex_of` aus dem Hostnamen ableitet.
-/// Rang und Katalog-Eintrag bleiben „unbekannt" (0 und leer): eine erfundene
-/// Zahl sähe in der Oberfläche wie eine gemessene aus. Der echte Daemon nimmt
+/// Die Antwort trägt nur den Apex aus [`apex_string`], also aus derselben
+/// Public Suffix List, die der echte Daemon liest. Rang und Katalog-Eintrag
+/// bleiben „unbekannt" (0 und leer): eine erfundene Zahl sähe in der
+/// Oberfläche wie eine gemessene aus. Der echte Daemon nimmt
 /// [`domain_to_proto`] über der [`DomainTable`].
 #[must_use]
 pub fn domain_of(authority: &Authority, first_seen: SystemTime) -> v1::DomainInfo {
     v1::DomainInfo {
-        apex: apex_of(&authority.host),
+        apex: apex_string(&authority.host),
         catalog_id: String::new(),
         tranco_rank: 0,
         first_seen: Some(timestamp(first_seen)),
@@ -926,8 +943,14 @@ pub fn domain_of(authority: &Authority, first_seen: SystemTime) -> v1::DomainInf
 ///   [`humanitl_core::DecisionSource::Passthrough`]
 ///   (HUM-039). Solange nichts entschieden ist, ist das Feld `false` — was
 ///   noch offen ist, wurde nicht durchgereicht.
+///
+/// `domains` ist der Katalog dieser Sitzung ([`DomainTable`]). Er füllt allein
+/// `apex`, und ohne ihn bleibt das Feld leer: Die Zeile sagt dann „unbekannt",
+/// statt eine registrierbare Domain zu raten (HUM-091). Jeder Aufrufer reicht
+/// dieselbe Tabelle durch; eine Zeile in zwei Formen fiele erst auf, wenn ein
+/// Client zwei Antworten auf dieselbe Frage sieht.
 #[must_use]
-pub fn record_to_summary(record: &FlowRecord) -> v1::FlowSummary {
+pub fn record_to_summary(record: &FlowRecord, domains: Option<&DomainTable>) -> v1::FlowSummary {
     let request = &record.request;
     let (kind, block_reason, rule_id) = decision_fields(record.decision.as_ref(), None);
     v1::FlowSummary {
@@ -984,6 +1007,7 @@ pub fn record_to_summary(record: &FlowRecord) -> v1::FlowSummary {
         // Vermerk sucht, liest die Aufzeichnung
         // ([`recorded_summary_to_proto`], HUM-103).
         meta: false,
+        apex: flow_apex(domains, record.id, &request.authority.host),
     }
 }
 
@@ -1009,10 +1033,15 @@ const fn implied_source(decision: Option<&Decision>) -> v1::DecisionSource {
 /// Die Vorschau des Bodys steht nur hier, nie in einem Ereignis
 /// (`backlog/CONVENTIONS.md` 3.6). Antwort-Kopfzeilen und Funde führt die
 /// Registry nicht; sie kommen mit dem Recorder (HUM-026).
+///
+/// `domains` füllt beide Stellen, an denen der Apex steht: die Zeile
+/// ([`record_to_summary`]) und die Katalog-Karte. Beide Antworten stammen
+/// damit aus derselben Liste; nebeneinander stehende Apexe, die sich
+/// widersprechen, waren der Grund für HUM-091.
 #[must_use]
-pub fn record_to_detail(record: &FlowRecord) -> v1::FlowDetail {
+pub fn record_to_detail(record: &FlowRecord, domains: Option<&DomainTable>) -> v1::FlowDetail {
     v1::FlowDetail {
-        summary: Some(record_to_summary(record)),
+        summary: Some(record_to_summary(record, domains)),
         request: Some(request_to_proto(&record.request)),
         edited_request: None,
         response: record.response_status.map(|status| v1::HttpResponseHead {
@@ -1026,7 +1055,19 @@ pub fn record_to_detail(record: &FlowRecord) -> v1::FlowDetail {
             _ => Vec::new(),
         },
         diagnostics: Vec::new(),
-        domain: Some(domain_of(&record.request.authority, record.created)),
+        domain: Some(
+            domains
+                .map(|domains| {
+                    domains
+                        .get(record.id)
+                        .unwrap_or_else(|| domains.describe(&record.request.authority.host))
+                })
+                .as_ref()
+                .map_or_else(
+                    || domain_of(&record.request.authority, record.created),
+                    domain_to_proto,
+                ),
+        ),
         body_preview: body_preview(record.request.body.inline.as_deref().unwrap_or_default()),
         findings_truncated: record.findings_truncated,
     }
@@ -1179,8 +1220,8 @@ pub fn flow_event_to_proto(
             request,
         } => Event::Received(v1::flow_event::Received {
             summary: Some(registry.get(*id).map_or_else(
-                || received_summary(*id, *at, request),
-                |r| record_to_summary(&r),
+                || received_summary(*id, *at, request, domains),
+                |r| record_to_summary(&r, domains),
             )),
             domain: Some(
                 domains
@@ -1317,7 +1358,12 @@ fn agent_ask_to_proto(event: &FlowEvent) -> v1::flow_event::AgentAsk {
 /// `Received` entsteht im Handler, bevor die Pipeline den Datensatz anlegt.
 /// Was nur die Registry wüsste — die Sitzung —, bleibt hier leer; der Zustand
 /// ist der eines gerade angekommenen Flows.
-fn received_summary(id: FlowId, at: SystemTime, request: &HttpRequest) -> v1::FlowSummary {
+fn received_summary(
+    id: FlowId,
+    at: SystemTime,
+    request: &HttpRequest,
+    domains: Option<&DomainTable>,
+) -> v1::FlowSummary {
     v1::FlowSummary {
         flow_id: id.to_string(),
         session_id: String::new(),
@@ -1329,6 +1375,7 @@ fn received_summary(id: FlowId, at: SystemTime, request: &HttpRequest) -> v1::Fl
         path: request.path_and_query.clone(),
         state: v1::FlowState::Received as i32,
         request_size: request.body.size,
+        apex: flow_apex(domains, id, &request.authority.host),
         ..v1::FlowSummary::default()
     }
 }
@@ -1364,9 +1411,14 @@ pub fn before(summary: &v1::FlowSummary, anchor: Option<FlowId>) -> bool {
 
 /// Ob ein Flow zum Filtertext passt.
 ///
-/// Unterstützt `host:<text>`, `state:<name>` und `session:<id>`; alles andere ist eine
-/// Teilzeichenkette über Host und Pfad. Die vollständige Filtersprache des
-/// History-Screens baut HUM-030.
+/// Unterstützt `host:<text>`, `apex:<domain>`, `state:<name>` und
+/// `session:<id>`; alles andere ist eine Teilzeichenkette über Host und Pfad.
+/// Die vollständige Filtersprache des History-Screens baut HUM-030.
+///
+/// `apex:` vergleicht genau, wie `apex = ?` im Recorder
+/// (`daemon/crates/recorder/src/filter.rs`): `apex:github.io` trifft eine
+/// Zeile mit `b.github.io` nicht. Ein Suffix-Treffer wie bei `host:` würde
+/// zwei fremde Registranten in dieselbe Antwort legen (HUM-091).
 #[must_use]
 pub fn matches_filter(summary: &v1::FlowSummary, filter: &str) -> bool {
     filter.split_whitespace().all(|token| {
@@ -1377,6 +1429,7 @@ pub fn matches_filter(summary: &v1::FlowSummary, filter: &str) -> bool {
             .unwrap_or_default();
         match token.split_once(':') {
             Some(("host", value)) => host.contains(value),
+            Some(("apex", value)) => summary.apex.eq_ignore_ascii_case(value),
             Some(("state", value)) => state_name(summary.state).eq_ignore_ascii_case(value),
             Some(("session", value)) => summary.session_id.contains(value),
             _ => host.contains(token) || summary.path.contains(token),
@@ -1635,6 +1688,11 @@ pub fn recorded_summary_to_proto(row: &RecordedSummary) -> v1::FlowSummary {
         // niemand, `decision` bleibt an ihr `DECISION_KIND_UNSPECIFIED`
         // (HUM-103).
         meta: row.meta,
+        // Die Spalte, die auch `apex:` im Filter vergleicht
+        // (`daemon/crates/recorder/src/filter.rs`). `NULL` heißt „der Daemon
+        // wusste es nicht" und wird zum leeren String, nie zu einem Rat aus
+        // dem Hostnamen (HUM-091).
+        apex: row.apex.clone().unwrap_or_default(),
     }
 }
 
@@ -1796,8 +1854,10 @@ fn summary_finding_to_proto(finding: &SummaryFinding) -> v1::SummaryFinding {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+    use std::sync::Arc;
     use std::time::{Duration, Instant, SystemTime};
 
+    use humanitl_catalog::Catalog;
     use humanitl_config::Limits;
     use humanitl_core::{
         Authority, BodyRef, Decision, DecisionSource, Diagnostic, Flow, FlowEvent, FlowId,
@@ -1812,6 +1872,7 @@ mod tests {
         flow_event_to_proto, matches_filter, record_to_detail, record_to_summary,
         recorded_summary_to_proto, rule_from_proto, rule_to_proto, wall_clock,
     };
+    use crate::domains::DomainTable;
     use crate::v1;
 
     /// Was von der Leitung kommt, darf sich keine Durchreiche ausstellen.
@@ -1904,7 +1965,7 @@ mod tests {
     fn the_filter_knows_session_host_and_state() {
         let session = SessionId::new();
         let flow = flow(session, "api.example.com");
-        let row = record_to_summary(&FlowRecord::new(&flow, &ConnMeta::plain(session)));
+        let row = record_to_summary(&FlowRecord::new(&flow, &ConnMeta::plain(session)), None);
         let id = session.to_string();
 
         assert!(matches_filter(&row, &format!("session:{id}")));
@@ -1921,7 +1982,7 @@ mod tests {
         let flow = flow(session, "api.example.com");
         let record = FlowRecord::new(&flow, &ConnMeta::plain(session));
 
-        let row = record_to_summary(&record);
+        let row = record_to_summary(&record, None);
         assert_eq!(row.flow_id, flow.id.to_string());
         assert_eq!(row.session_id, session.to_string());
         assert_eq!(row.method, v1::Method::Post as i32);
@@ -1975,7 +2036,7 @@ mod tests {
         let recorded = flow.apply(TransitionInput::Record, end).unwrap();
         registry.record(&recorded);
 
-        let row = record_to_summary(&registry.get(flow.id).unwrap());
+        let row = record_to_summary(&registry.get(flow.id).unwrap(), None);
         assert_eq!(row.decision_source, v1::DecisionSource::User as i32);
         assert_eq!(row.response_size, 1024);
         let duration = row.duration.expect("the flow has ended");
@@ -1989,7 +2050,7 @@ mod tests {
         let flow = flow(session, "cdn.api.example.com");
         let record = FlowRecord::new(&flow, &ConnMeta::plain(session));
 
-        let detail = record_to_detail(&record);
+        let detail = record_to_detail(&record, None);
         assert_eq!(detail.domain.unwrap().apex, "example.com");
         let request = detail.request.unwrap();
         assert_eq!(request.body.unwrap().size, 42);
@@ -2024,7 +2085,7 @@ mod tests {
             registry.record(&event);
         }
 
-        let row = record_to_summary(&registry.get(flow.id).unwrap());
+        let row = record_to_summary(&registry.get(flow.id).unwrap(), None);
         assert_eq!(row.state, v1::FlowState::Forwarded as i32);
         assert_eq!(row.decision, v1::DecisionKind::Allow as i32);
         assert!(!row.edited);
@@ -2141,7 +2202,7 @@ mod tests {
 
         let record = registry.get(flow.id).unwrap();
         assert!(matches!(record.state, FlowState::Failed { .. }));
-        let row = record_to_summary(&record);
+        let row = record_to_summary(&record, None);
         assert_eq!(row.state, v1::FlowState::Failed as i32);
         assert_eq!(row.upstream_error, v1::UpstreamError::Dns as i32);
     }
@@ -2323,5 +2384,111 @@ mod tests {
             error: None,
             meta: false,
         }
+    }
+
+    /// Eine Tabelle über einem leeren Katalog.
+    ///
+    /// Leer heißt „kein Eintrag und kein Rang"; den Apex beantwortet die
+    /// Public Suffix List trotzdem, und genau den prüfen diese Tests. Die
+    /// Tabelle hat den Flow nicht gesehen, die Auskunft läuft also über
+    /// [`DomainTable::describe`] — den Weg für jeden Flow, der nicht aus
+    /// dieser Sitzung stammt. Den anderen Weg ([`DomainTable::get`], der Flow
+    /// wurde beim Eintreffen beobachtet) fährt der Daemon selbst; er steht in
+    /// `daemon/bin/humanitld/tests/daemon_end_to_end.rs`
+    /// (`the_apex_reaches_both_ways_and_survives_a_restart`), weil nur dort
+    /// der Proxy die Beobachtung meldet.
+    fn catalog() -> DomainTable {
+        DomainTable::new(Arc::new(Catalog::empty()), None)
+    }
+
+    /// Der History-Pfad reicht die Spalte durch, statt sie wegzuwerfen.
+    #[test]
+    fn recorded_summary_carries_the_apex() {
+        let row = RecordedSummary {
+            host: "a.b.github.io".to_owned(),
+            host_display: "a.b.github.io".to_owned(),
+            apex: Some("b.github.io".to_owned()),
+            ..recorded_row()
+        };
+        assert_eq!(recorded_summary_to_proto(&row).apex, "b.github.io");
+
+        let unknown = RecordedSummary { apex: None, ..row };
+        assert_eq!(
+            recorded_summary_to_proto(&unknown).apex,
+            "",
+            "NULL heisst unbekannt, nie ein Rat aus dem Hostnamen"
+        );
+    }
+
+    /// Ohne Katalog bleibt der Apex leer, statt aus dem Namen zu folgen.
+    #[test]
+    fn live_summary_apex_is_empty_without_catalog() {
+        let session = SessionId::new();
+        let flow = flow(session, "a.b.github.io");
+        let record = FlowRecord::new(&flow, &ConnMeta::plain(session));
+
+        let row = record_to_summary(&record, None);
+        assert_eq!(
+            row.apex, "",
+            "ohne Katalog weiss der Daemon den Apex nicht; `github.io` waere geraten"
+        );
+    }
+
+    /// Dieselbe Zeile über beide Wege: derselbe String.
+    #[test]
+    fn live_and_recorded_summary_agree_on_the_apex() {
+        let session = SessionId::new();
+        let flow = flow(session, "a.b.github.io");
+        let record = FlowRecord::new(&flow, &ConnMeta::plain(session));
+        let domains = catalog();
+
+        let live = record_to_summary(&record, Some(&domains));
+        let recorded = recorded_summary_to_proto(&RecordedSummary {
+            id: flow.id,
+            session,
+            host: "a.b.github.io".to_owned(),
+            host_display: "a.b.github.io".to_owned(),
+            apex: Some(live.apex.clone()),
+            ..recorded_row()
+        });
+        assert_eq!(live.apex, "b.github.io");
+        assert_eq!(live.apex, recorded.apex);
+    }
+
+    /// Zeile und Katalog-Karte desselben Details sagen denselben Apex.
+    #[test]
+    fn detail_summary_and_domain_agree_on_the_apex() {
+        for (host, apex) in [("a.b.github.io", "b.github.io"), ("192.168.1.50", "")] {
+            let session = SessionId::new();
+            let request = HttpRequest::new(
+                Method::GET,
+                Scheme::Https,
+                Authority::with_scheme(HostName::parse(host).unwrap(), Scheme::Https),
+                "/",
+            );
+            let flow = Flow::new(FlowId::new(), session, SystemTime::now(), request);
+            let record = FlowRecord::new(&flow, &ConnMeta::plain(session));
+            let domains = catalog();
+
+            let detail = record_to_detail(&record, Some(&domains));
+            let summary = detail.summary.expect("a detail carries its row");
+            let domain = detail.domain.expect("a detail carries its domain card");
+            assert_eq!(summary.apex, apex, "{host}");
+            assert_eq!(summary.apex, domain.apex, "{host}");
+        }
+    }
+
+    /// `apex:` vergleicht genau, wie die Spalte im Recorder.
+    #[test]
+    fn filter_apex_is_exact() {
+        let row = v1::FlowSummary {
+            apex: "b.github.io".to_owned(),
+            ..v1::FlowSummary::default()
+        };
+
+        assert!(!matches_filter(&row, "apex:github.io"));
+        assert!(matches_filter(&row, "apex:b.github.io"));
+        assert!(matches_filter(&row, "apex:B.GitHub.IO"));
+        assert!(!matches_filter(&row, "apex:a.b.github.io"));
     }
 }

@@ -82,6 +82,33 @@ fn flow_event_received_carries_domain_info() {
     );
 }
 
+/// Der Apex ueberlebt Encode und Decode (HUM-091).
+#[test]
+fn flow_summary_carries_the_apex() {
+    let summary = v1::FlowSummary {
+        flow_id: "018f0000-0000-7000-8000-000000000003".to_owned(),
+        authority: Some(v1::Authority {
+            host: "a.b.github.io".to_owned(),
+            port: 443,
+            is_ip_literal: false,
+            display_host: "a.b.github.io".to_owned(),
+        }),
+        state: v1::FlowState::Recorded as i32,
+        apex: "b.github.io".to_owned(),
+        ..Default::default()
+    };
+
+    let decoded = roundtrip(&summary);
+    assert_eq!(decoded.apex, "b.github.io");
+
+    // Leer bleibt leer: „unbekannt" ist ein Wert des Vertrags, kein Fehler.
+    let unknown = v1::FlowSummary {
+        apex: String::new(),
+        ..summary
+    };
+    assert_eq!(roundtrip(&unknown).apex, "");
+}
+
 #[test]
 fn flow_event_failed_roundtrip() {
     // Ein Upstream-Fehler ist ein eigenes Ereignis, nie ein Responded{502}

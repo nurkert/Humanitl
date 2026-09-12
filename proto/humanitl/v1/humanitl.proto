@@ -365,6 +365,16 @@ message FlowSummary {
   // bevor ein Zuhoerer etwas mit ihm anfangen koennte, und erscheint deshalb
   // nur in der Aufzeichnung (ListFlows, GetFlow).
   bool meta = 25;
+  // Die registrierbare Domain des Hosts nach der Public Suffix List, als
+  // A-Label wie `authority.host`: `b.github.io` fuer `a.b.github.io`, denn
+  // `github.io` steht im privaten Abschnitt der Liste und jede Unterdomain
+  // darunter hat einen eigenen Betreiber.
+  //
+  // Leer heisst "der Daemon weiss es nicht": keine Antwort des Katalogs, ein
+  // IP-Literal oder ein Name, der nur aus einem Suffix besteht. Leer heisst
+  // nie "unbedenklich" und wird nie geraten; wer gruppiert, nimmt dann den
+  // Host selbst. Derselbe Wert, den `apex:` im Filter vergleicht.
+  string apex = 26;
 }
 
 // Alles, was der Detail-Bereich zu einem Flow zeigt.

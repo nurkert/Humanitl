@@ -557,6 +557,12 @@ pub fn summary_json(summary: &v1::FlowSummary) -> Value {
             "port": authority.port,
             "is_ip_literal": authority.is_ip_literal,
         })),
+        // Die registrierbare Domain, wie der Daemon sie kennt, und derselbe
+        // Wert, den die Suchzeile `apex:<domain>` vergleicht. Unbekannt ist der
+        // leere String, nie `null`, wie bei `origin_tool` und `error`: Ein
+        // Skript, das ihn liest, soll nicht zwei Formen von „nichts"
+        // unterscheiden muessen (HUM-091).
+        "apex": summary.apex,
         "duration_ms": summary.duration.as_ref().map(|duration| {
             duration.seconds * 1_000 + i64::from(duration.nanos) / 1_000_000
         }),
@@ -686,7 +692,37 @@ mod tests {
             upstream_error: 0,
             error: String::new(),
             meta: false,
+            apex: "github.com".to_owned(),
         }
+    }
+
+    /// `humanitl flows list --json` zeigt die registrierbare Domain.
+    ///
+    /// Sie steht neben `authority`, weil sie zum Ziel gehört und weil
+    /// die Suchzeile `apex:<domain>` genau gegen diesen String vergleicht
+    /// (HUM-091).
+    #[test]
+    fn summary_json_carries_the_apex() {
+        let row = v1::FlowSummary {
+            apex: "b.github.io".to_owned(),
+            ..summary()
+        };
+        assert_eq!(summary_json(&row)["apex"], "b.github.io");
+    }
+
+    /// Unbekannt ist der leere String, nie `null`.
+    #[test]
+    fn summary_json_apex_is_empty_string_when_unknown() {
+        let row = v1::FlowSummary {
+            apex: String::new(),
+            ..summary()
+        };
+        let value = summary_json(&row);
+        assert!(
+            value["apex"].is_string(),
+            "ein Skript soll nicht zwei Formen von nichts unterscheiden muessen"
+        );
+        assert_eq!(value["apex"], "");
     }
 
     #[test]

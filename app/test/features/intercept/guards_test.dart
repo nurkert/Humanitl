@@ -29,6 +29,9 @@ FlowDetail known(
     deadline: testStart.add(Duration(minutes: 5, seconds: n)),
     method: Method.post,
     host: host,
+    // Die Zeile selbst trägt den Apex (`FlowSummary.apex`, HUM-091); die
+    // Katalog-Karte des Details nennt denselben.
+    apex: apex,
     path: '/graphql',
     requestSize: 428,
   ),
@@ -42,6 +45,7 @@ FlowDetail withFinding(int n) => detailFor(
     deadline: testStart.add(const Duration(minutes: 5)),
     method: Method.post,
     host: 'api.example.com',
+    apex: 'example.com',
     path: '/v1/upload',
     requestSize: 512,
   ).copyWith(findingCount: 1),
@@ -290,6 +294,45 @@ void main() {
       expect(
         find.text('allow · ∗ · **.github.com · this session'),
         findsOneWidget,
+      );
+    });
+
+    testWidgets('the scope comes from the row, without a second call', (
+      WidgetTester tester,
+    ) async {
+      // Die Zeile trägt den Apex selbst (`FlowSummary.apex`, HUM-091). Das
+      // Detail dieses Flows nennt keine Domain — `detailFor` ohne `apex` —,
+      // und trotzdem steht das Ziel „Domäne" bereit: Vorher kostete es einen
+      // zweiten Aufruf und stand für jeden anderen Host einer Gruppe gar
+      // nicht zur Verfügung.
+      final FakeDaemonClient client = fakeDaemon(
+        holdScript(<FlowDetail>[
+          detailFor(
+            heldFlow(
+              n: 1,
+              deadline: testStart.add(const Duration(minutes: 5)),
+              host: 'a.b.github.io',
+              apex: 'b.github.io',
+            ),
+          ),
+        ]),
+      );
+      await pumpIntercept(tester, client: client);
+      await playScript(tester);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.digit2);
+      await tester.pump();
+      await pressShiftKey(tester, LogicalKeyboardKey.digit3);
+
+      expect(
+        find.text('allow · ∗ · **.b.github.io · this session'),
+        findsOneWidget,
+      );
+      expect(
+        find.text(
+          'The registrable domain is not known yet · the rule can cover the host',
+        ),
+        findsNothing,
       );
     });
   });

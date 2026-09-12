@@ -17,7 +17,12 @@ check: rust-fmt rust-clippy rust-build rust-test rust-doc deps-lint docs-lint ty
 # A rustup toolchain may exist without rustup on PATH (this machine): put its
 # bin directory first so `cargo fmt` and `cargo clippy` find their components.
 RUSTUP_BIN := $(firstword $(wildcard $(HOME)/.rustup/toolchains/*/bin))
-TOOLS_PATH := $(if $(RUSTUP_BIN),$(RUSTUP_BIN):)$(PATH)
+# `protoc-gen-dart` liegt nach `dart pub global activate` unter `~/.pub-cache/bin`
+# und steht dort in keiner Standard-PATH. Ohne diesen Eintrag überspringt
+# `scripts/gen-proto.sh` die Dart-Hälfte still, und der erzeugte Code bleibt auf
+# dem Stand von gestern (Befund des Reviews zu HUM-091).
+PUB_CACHE_BIN := $(HOME)/.pub-cache/bin
+TOOLS_PATH := $(if $(RUSTUP_BIN),$(RUSTUP_BIN):)$(PUB_CACHE_BIN):$(PATH)
 
 rust-fmt: ## cargo fmt --check (skipped when rustfmt is absent)
 	@export PATH="$(TOOLS_PATH)"; if cd daemon && cargo fmt --version >/dev/null 2>&1; then cargo fmt --all -- --check; \
@@ -126,7 +131,7 @@ flutter-test-integration: flutter-codegen ## The app on a screen, against a real
 # script skips the Dart half and exits 0 (with STRICT=1 or CI=true it exits 1),
 # so `make check` keeps working on a machine without them.
 proto: ## Regenerate protobuf code for Rust and Dart (HUM-003)
-	./scripts/gen-proto.sh
+	@export PATH="$(TOOLS_PATH)"; ./scripts/gen-proto.sh
 
 escape: ## Run the sandbox escape tests (HUM-006)
 	./tests/escape/run.sh

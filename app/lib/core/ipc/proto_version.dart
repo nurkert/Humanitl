@@ -24,8 +24,11 @@ abstract final class ProtoVersion {
   /// reason: the session summary of a sandbox run — the diff over the project,
   /// the secret scan across it and the symlinks leaving it (HUM-043) — arrives
   /// on the wire and has no reader here until the sheet that shows it is
-  /// built. Raising the number without a reader would claim otherwise.
-  static const int minor = 5;
+  /// built, and so is minor 7, the notice beside the terminal bytes (HUM-042).
+  /// Raised to 8 with `FlowSummary.apex`, the registrable domain of the host,
+  /// which the queue groups by and the rule scope writes into a rule
+  /// (HUM-091). Raising the number without a reader would claim otherwise.
+  static const int minor = 8;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

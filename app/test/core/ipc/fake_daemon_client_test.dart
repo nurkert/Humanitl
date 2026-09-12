@@ -136,6 +136,60 @@ void main() {
     expect(page.flows.single.id, id);
   });
 
+  test('apex: compares exactly, host: keeps its suffix match', () {
+    fakeAsync((FakeAsync async) {
+      final FakeDaemonClient client = FakeDaemonClient(
+        clock: () => DateTime(2026, 9, 3, 10),
+      );
+      client.subscribe().listen((FlowEvent event) {});
+      async.elapse(const Duration(seconds: 30));
+
+      List<Flow> rows(String query) {
+        FlowPage? page;
+        client
+            .listFlows(FlowFilter(query: query))
+            .then((FlowPage result) => page = result);
+        async.flushMicrotasks();
+        return page!.flows;
+      }
+
+      // Der Daemon vergleicht `apex:` gegen die Spalte, Zeichen für Zeichen;
+      // der Fake tut dasselbe. Eine Unterdomain ist kein Treffer, eine
+      // Obermenge auch nicht (HUM-091).
+      expect(rows('apex:github.com').map((Flow f) => f.host), <String>[
+        'api.github.com',
+      ]);
+      expect(rows('apex:api.github.com'), isEmpty);
+      expect(rows('apex:GitHub.COM').length, 1, reason: 'case does not count');
+
+      // Zwei Hosts unter einer Domain: genau dafür gibt es den Schlüssel.
+      expect(rows('apex:example.org').map((Flow f) => f.host).toSet(), <String>{
+        'example.org',
+        'ws.example.org',
+      });
+
+      // `host:` bleibt der Suffix-Treffer, den es immer war.
+      expect(rows('host:github.com').length, 1);
+
+      // `httpbin.org` steht selbst in der Public Suffix List; der Daemon nennt
+      // dafür keine Domain, und der Fake erfindet keine.
+      expect(rows('apex:httpbin.org'), isEmpty);
+
+      // Ein Vergleichsoperator gehört zu `status:` und `findings:`, nicht zu
+      // `apex:`; der Fake lehnt ihn ab wie der Daemon.
+      Object? refusal;
+      client.listFlows(const FlowFilter(query: 'apex:>github.com')).catchError((
+        Object error,
+      ) {
+        refusal = error;
+        return const FlowPage(flows: <Flow>[], total: 0);
+      });
+      async.flushMicrotasks();
+      expect(refusal, isA<DaemonException>());
+      expect((refusal! as DaemonException).code, 'RECORDER_002');
+    });
+  });
+
   test('scenarios', () async {
     await expectLater(
       FakeDaemonClient.scenario('unavailable').getInfo(),

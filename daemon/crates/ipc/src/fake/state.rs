@@ -19,7 +19,7 @@ use humanitl_core::{
 use tokio::sync::broadcast;
 
 use crate::convert::{
-    apex_of, authority_to_proto, block_note, body_preview, body_to_proto, decision_fields,
+    apex_string, authority_to_proto, block_note, body_preview, body_to_proto, decision_fields,
     diagnostic_to_proto, duration_between, finding_to_proto, flow_state_to_proto, headers_to_proto,
     method_raw, method_to_proto, request_to_proto, scheme_to_proto, source_to_proto, timestamp,
     upstream_error_to_proto,
@@ -157,6 +157,9 @@ impl FakeFlow {
             // Meta-Anfrage steht in keiner: Sie entsteht im Proxy und geht ohne
             // Ereignis in die Aufzeichnung (HUM-103).
             meta: false,
+            // Dieselbe Public Suffix List wie im echten Daemon, damit `apex:`
+            // im Fake genau das findet, was es dort findet (HUM-091).
+            apex: apex_string(&request.authority.host),
         }
     }
 
@@ -187,15 +190,20 @@ impl FakeFlow {
 
     /// Was der Katalog über die Ziel-Domain wüsste.
     ///
-    /// Der Fake kennt keinen Katalog. Der Apex ist die einfache Ableitung aus
-    /// den letzten beiden Labels des Hosts aus der Sitzungsdatei; Rang und
-    /// Katalog-Eintrag bleiben „unbekannt" (0 und leer), weil ein erfundener
-    /// Rang in einem Screenshot wie ein gemessener aussähe. Eine Entscheidung
-    /// trifft darauf im echten Daemon `humanitl-catalog`.
+    /// Der Fake kennt keinen Katalog. Der Apex kommt trotzdem aus der Public
+    /// Suffix List, also aus derselben Quelle wie im echten Daemon
+    /// ([`apex_string`], HUM-091); Rang und Katalog-Eintrag bleiben
+    /// „unbekannt" (0 und leer), weil ein erfundener Rang in einem Screenshot
+    /// wie ein gemessener aussähe. Eine Entscheidung trifft darauf im echten
+    /// Daemon `humanitl-catalog`.
+    ///
+    /// Derselbe Wert steht in der Zeile ([`FakeFlow::summary`]); zwei Apexe,
+    /// die sich in derselben Nachricht widersprechen, waren der Grund für
+    /// HUM-091.
     #[must_use]
     pub fn domain(&self) -> v1::DomainInfo {
         v1::DomainInfo {
-            apex: apex_of(&self.flow.request.authority.host),
+            apex: apex_string(&self.flow.request.authority.host),
             catalog_id: String::new(),
             tranco_rank: 0,
             first_seen: Some(timestamp(self.flow.received_at)),
@@ -792,7 +800,7 @@ mod tests {
 
     use super::{FakeFlow, FakeState, SessionMeta, deadline_instant, event_to_proto};
     use crate::convert::{
-        BODY_PREVIEW_CHARS, EditedRequestError, apex_of, body_preview, request_from_proto,
+        BODY_PREVIEW_CHARS, EditedRequestError, apex_string, body_preview, request_from_proto,
         timestamp,
     };
     use crate::v1;
@@ -940,25 +948,47 @@ mod tests {
                 domain.catalog_id.is_empty(),
                 "{host}: no catalog entry exists"
             );
-            assert_eq!(domain.apex, apex_of(&HostName::parse(host).unwrap()));
+            assert_eq!(domain.apex, apex_string(&HostName::parse(host).unwrap()));
             assert_eq!(domain.first_seen, Some(timestamp(at)));
         }
     }
 
+    /// Der Apex des Fakes kommt aus der Public Suffix List, nicht aus den
+    /// letzten zwei Labels: `a.b.github.io` gehört zu `b.github.io`, und ein
+    /// IP-Literal hat keinen Apex (HUM-091).
     #[test]
-    fn apex_takes_the_last_two_labels() {
+    fn apex_comes_from_the_public_suffix_list() {
         assert_eq!(
-            apex_of(&HostName::parse("registry.npmjs.org").unwrap()),
+            apex_string(&HostName::parse("registry.npmjs.org").unwrap()),
             "npmjs.org"
         );
         assert_eq!(
-            apex_of(&HostName::parse("example.org").unwrap()),
-            "example.org"
+            apex_string(&HostName::parse("a.b.github.io").unwrap()),
+            "b.github.io"
         );
         assert_eq!(
-            apex_of(&HostName::parse("192.168.1.50").unwrap()),
-            "192.168.1.50"
+            apex_string(&HostName::parse("example.org").unwrap()),
+            "example.org"
         );
+        assert_eq!(apex_string(&HostName::parse("192.168.1.50").unwrap()), "");
+    }
+
+    /// Zeile und Katalog-Karte derselben Nachricht sagen denselben Apex.
+    ///
+    /// Zwei Antworten auf dieselbe Frage in einer Nachricht waren der Bruch,
+    /// den HUM-091 behebt: Der Fake füllt beide Felder aus derselben Liste.
+    #[test]
+    fn summary_and_domain_agree_on_the_apex() {
+        let at = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+        for (host, apex) in [
+            ("a.b.github.io", "b.github.io"),
+            ("api.github.com", "github.com"),
+            ("192.168.1.50", ""),
+        ] {
+            let flow = FakeFlow::new(FlowId::new(), SessionId::new(), at, request(host));
+            assert_eq!(flow.summary().apex, apex, "{host}");
+            assert_eq!(flow.summary().apex, flow.domain().apex, "{host}");
+        }
     }
 
     #[test]
