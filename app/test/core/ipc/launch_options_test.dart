@@ -96,4 +96,25 @@ void main() {
     // Ein `--socket` ohne Wert ist kein Socket.
     expect(resolve(const <String>['--socket']).socketPath, isNull);
   });
+
+  test('HUMANITL_E2E_HAR names the file an export writes without a dialog', () {
+    // Der Pfad kommt nur aus der Umgebung: Er gehört dem Lauf, der die
+    // Anwendung startet, nicht der Kommandozeile eines Menschen (HUM-097).
+    expect(
+      resolve(
+        const <String>[],
+        env: <String, String>{'HUMANITL_E2E_HAR': '/tmp/m2.har'},
+      ).harExportPath,
+      '/tmp/m2.har',
+    );
+    // Leer und nur aus Leerzeichen bestehend heißt beides: nicht gesetzt.
+    expect(resolve(const <String>[]).harExportPath, isNull);
+    expect(
+      resolve(
+        const <String>[],
+        env: <String, String>{'HUMANITL_E2E_HAR': '   '},
+      ).harExportPath,
+      isNull,
+    );
+  });
 }

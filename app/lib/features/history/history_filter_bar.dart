@@ -61,12 +61,30 @@ class _HistoryFilterBarState extends ConsumerState<HistoryFilterBar> {
     ref.read(historyQueryProvider.notifier).reset();
   }
 
-  /// Keeps the field in step with the query when a chip changed it.
-  void _syncField(HistoryQuery query) {
-    if (_controller.text != query.filter) {
+  /// Keeps the field in step with the expression when a chip changed it.
+  ///
+  /// Aufgerufen wird das nur, wenn sich der **Ausdruck** geändert hat, nie in
+  /// jedem Aufbau und nie bei jeder anderen Änderung der Abfrage. Beides hat
+  /// dasselbe Feld schon einmal unbenutzbar gemacht:
+  ///
+  ///   * Im Aufbau abgeglichen, setzte `onChanged` — das bei jedem Zeichen
+  ///     neu aufbaut — den Text auf die zuletzt abgeschickte Abfrage zurück,
+  ///     und das gerade Getippte verschwand. In einem Widget-Test fiel das
+  ///     nicht auf, weil dort zwischen Tippen und Abschicken kein Bild
+  ///     gezeichnet wird; auf einem laufenden Bildschirm zeichnet es sich
+  ///     sofort, und der Lauf aus HUM-097 fand es.
+  ///   * Auf die ganze [HistoryQuery] gehorcht, genügte danach jede andere
+  ///     Änderung daran: Eine Spalte sortieren oder den Durchreiche-Chip
+  ///     umlegen ändert `sort`, `descending` oder `includePassthrough` und
+  ///     lässt `filter` in Ruhe — der halb getippte Ausdruck wurde trotzdem
+  ///     durch den alten ersetzt.
+  ///
+  /// Gehorcht wird deshalb auf `filter` allein.
+  void _syncField(String filter) {
+    if (_controller.text != filter) {
       _controller.value = TextEditingValue(
-        text: query.filter,
-        selection: TextSelection.collapsed(offset: query.filter.length),
+        text: filter,
+        selection: TextSelection.collapsed(offset: filter.length),
       );
     }
   }
@@ -81,7 +99,10 @@ class _HistoryFilterBarState extends ConsumerState<HistoryFilterBar> {
     );
     final bool filterRefused =
         failure != null && failure.code == historyFilterInvalidCode;
-    _syncField(query);
+    ref.listen<String>(
+      historyQueryProvider.select((HistoryQuery query) => query.filter),
+      (String? previous, String next) => _syncField(next),
+    );
     final bool focused = widget.focusNode.hasFocus;
     return Padding(
       padding: EdgeInsets.fromLTRB(

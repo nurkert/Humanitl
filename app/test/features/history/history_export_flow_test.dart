@@ -15,6 +15,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
+import 'package:humanitl/core/ipc/launch_options.dart';
 import 'package:humanitl/features/history/export/export_entry.dart';
 import 'package:humanitl/features/history/export/curl.dart';
 import 'package:humanitl/features/history/export/har.dart';
@@ -651,4 +652,72 @@ void main() {
     expect(back, hasLength(target.saved!.flowCount));
     expect(back.first['flow_id'], isA<String>());
   });
+  // --- HUM-097: das zweite Exportziel -----------------------------------
+
+  test('without HUMANITL_E2E_HAR the export asks the desktop', () {
+    final ProviderContainer container = ProviderContainer();
+    addTearDown(container.dispose);
+    expect(
+      container.read(historyExportTargetProvider),
+      isA<FilePickerExportTarget>(),
+    );
+  });
+
+  test(
+    'the launch options choose the target, and it writes the file',
+    () async {
+      final Directory dir = await Directory.systemTemp.createTemp(
+        'humanitl-har',
+      );
+      addTearDown(() => dir.delete(recursive: true));
+      final String path = '${dir.path}/nested/m2.har';
+
+      final FakeDaemonClient client = FakeDaemonClient.history(count: 4);
+      final ProviderContainer container = ProviderContainer(
+        overrides: <Override>[
+          daemonClientProvider.overrideWithValue(client),
+          // Kein Override des Exportziels: Genau das ist der Punkt. Der Weg vom
+          // Pfad in der Umgebung zum geschriebenen Byte geht durch den
+          // Produktivcode, sonst bliebe er ungeprüft (CONVENTIONS 4.13).
+          launchOptionsProvider.overrideWithValue(
+            LaunchOptions(harExportPath: path),
+          ),
+          historyExportEncoderProvider.overrideWithValue(_syncEncoder),
+        ],
+      );
+      addTearDown(container.dispose);
+      expect(
+        container.read(historyExportTargetProvider),
+        isA<FileExportTarget>(),
+      );
+
+      container.listen(historyPageProvider, (_, _) {}, fireImmediately: true);
+      for (int i = 0; i < 200; i++) {
+        if (!container.read(historyPageProvider).loading) {
+          break;
+        }
+        await Future<void>.delayed(Duration.zero);
+      }
+      await container
+          .read(historyExportProvider.notifier)
+          .run(
+            format: HistoryExportFormat.har,
+            scope: HistoryExportScope.filtered,
+            fileName: 'ignored-by-this-target.har',
+            dialogTitle: 'x',
+          );
+
+      final HistoryExportState job = container.read(historyExportProvider);
+      expect(job.phase, HistoryExportPhase.done);
+      expect(job.written, <String>[path]);
+      // Der Ordner darunter gab es nicht; das Ziel legt ihn an, statt still zu
+      // scheitern.
+      final Map<String, Object?> document =
+          jsonDecode(await File(path).readAsString()) as Map<String, Object?>;
+      final List<Object?> entries =
+          (document['log']! as Map<String, Object?>)['entries']!
+              as List<Object?>;
+      expect(entries, hasLength(job.total));
+    },
+  );
 }

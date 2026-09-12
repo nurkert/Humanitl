@@ -1365,7 +1365,7 @@ Kommando neben einer fehlenden Grundlage niemandem hilft. Beide gibt es jetzt:
 Daemon `2` meldet — das ist verabredetermaßen keine Störung
 (`docs/PROTOCOL.md` 5), und die Oberflächen-Hälfte zieht die Zahl nach.
 
-### 4.22 Aus der Umsetzung des M2-Demoskripts (HUM-036, Daemon-Hälfte, 2026-09-04)
+### 4.22 Aus der Umsetzung des M2-Demoskripts (HUM-036 2026-09-04, Oberflächen-Hälfte HUM-097 2026-09-12)
 
 Abweichungen von `backlog/sprint-2.md`, die dauerhaft gelten. Wo die
 Spezifikation anderes sagt, gilt dieser Abschnitt. Die Oberflächen-Hälfte des
@@ -1525,16 +1525,21 @@ legt deshalb erst die Sitzungsregel über `humanitl rules add --expires session`
 an und entscheidet dann die zwölf wartenden Anfragen einzeln. Die Wirkung ist
 dieselbe — entschieden wird beim Eintreffen, die zwölf gehen also über die
 Entscheidung und alles Spätere über die Regel —, der Preis ist größer als er
-zunächst aussieht: Die Regel trägt kein `created_from_flow_id`, das Abzeichen
-„from #n" des Regel-Bildschirms hat für sie nichts anzuzeigen, und damit ist
-der Akzeptanzschritt 8 der Spezifikation („Rules-Screen: Temporär-Tab zeigt die
-Session-Regel mit `from #1`") auch für die Oberflächen-Hälfte unerfüllbar,
-solange die Regel neben der Entscheidung entsteht statt in ihr. Das ist eine
-Lücke in der Parität von Oberfläche und Kommandozeile (ADR-018,
+zunächst aussieht: Die Regel trägt kein `created_from_flow_id`, und das
+Abzeichen „from #n" des Regel-Bildschirms hat für sie nichts anzuzeigen. Das
+ist eine Lücke in der Parität von Oberfläche und Kommandozeile (ADR-018,
 `docs/ARCHITECTURE.md` 3b); sie wird in **HUM-095** geschlossen, das
 `humanitl flows decide <id> allow --remember <PATTERN>` nachliefert und den
-M2-Lauf die Sitzungsregel über die Entscheidung anlegen lässt. Bis dahin gilt
-Schritt 8 als offen und nicht als erfüllt.
+M2-Lauf die Sitzungsregel über die Entscheidung anlegen lässt.
+
+**Der Akzeptanzschritt 8 gilt trotzdem, seit HUM-097 den Bildschirm fährt.**
+Hier stand, er sei „auch für die Oberflächen-Hälfte unerfüllbar, solange die
+Regel neben der Entscheidung entsteht statt in ihr". Das galt nur für die
+Kommandozeile: Die Oberfläche legt die Regel *in* der Entscheidung an
+(`decision.dart` `remember: i == 0 ? rule : null`, `rule_sentence.dart`
+`createdFrom: flow.id`, über die Leitung `convert.dart`), und das Abzeichen
+zeichnet `rule_row.dart`. Der Bildschirm-Zweig des Laufs prüft beides: das Feld
+`created_from_flow_id` am Daemon und das Abzeichen am Regel-Bildschirm.
 
 **Die Haltefrist des Laufs ist 10 Sekunden, nicht 8, und sie ist zweierlei.**
 Sie ist die Zeit, nach der die eine unentschiedene Anfrage 504 bekommt — dafür
@@ -1611,29 +1616,40 @@ die leeren Agentenfelder an den siebzehn Zeilen seiner Ausgabe, der
 gescheiterte Handschlag an dem, der mit derselben Wurzel gelingt. Wer eine
 weitere Zusicherung dieser Form hinzufügt, bringt ihr Gegenstück mit.
 
-**Heute steht nur die Daemon-Hälfte des M2-Gates.** HUM-036 verlangt den vollen
-Kreislauf mit echtem Daemon, echter Sandbox **und echtem UI unter xvfb**, samt
-gültiger HAR-Datei, und `CONTRIBUTING.md` erklärt M2 zur Voraussetzung für
-jeden Merge ab Sprint 3. Gebaut ist die Hälfte, die ohne Oberfläche prüfbar
-ist; `run.sh` überspringt seinen Schritt 10 mit einer ausdrücklichen Meldung
-und meldet trotzdem Erfolg. Damit gälte das Gate als erfüllt, ohne es zu sein —
-genau die Sorte Behauptung, die 4.13 verbietet. Die Lücke hat deshalb eine
-Nummer (**HUM-097**), und drei Stellen sagen sie laut: der Kopf von `run.sh`,
-der Abschnitt „Stand" in HUM-036 und der Absatz „The M2 gate is half built" in
-`CONTRIBUTING.md`. Ein grünes `e2e-xvfb` heißt bis dahin „die Daemon-Hälfte von
-M2 hält", nicht „M2 hält". Wer sich darauf beruft, sagt dazu, worauf.
+**Beide Hälften des M2-Gates stehen (HUM-097, 2026-09-12).** HUM-036 verlangt
+den vollen Kreislauf mit echtem Daemon, echter Sandbox **und echtem UI unter
+xvfb**, samt gültiger HAR-Datei, und `CONTRIBUTING.md` erklärt M2 zur
+Voraussetzung für jeden Merge ab Sprint 3. Bis HUM-097 lief nur die Hälfte, die
+ohne Oberfläche prüfbar war, und `run.sh` meldete trotzdem Erfolg — genau die
+Sorte Behauptung, die 4.13 verbietet. Jetzt startet der Bildschirm-Treiber
+(`app/integration_test/m2_first_decision_test.dart`) **vor** dem Agenten,
+entscheidet die Abschnitte 2 bis 4, während gehalten wird, und schreibt am Ende
+die HAR-Datei, die Schritt 10 zurückliest. Ein grünes `e2e-xvfb` heißt damit
+„M2 hält".
+
+**Die Naht zwischen Skript und Bildschirm sind zwei Handschläge über Dateien.**
+Beide Seiten warten aufeinander, und beide Wartezeiten haben einen Grund:
+`HUMANITL_E2E_READY` schreibt der Treiber, sobald der Bildschirm steht und der
+Daemon ihm geantwortet hat — erst danach startet `run.sh` den Agenten, denn der
+Stapel hat ab der ersten Anfrage nur die Haltefrist, und ein `flutter`, das in
+dieser Zeit noch baut, verbrauchte sie. `HUMANITL_E2E_GO` schreibt `run.sh`,
+sobald es die Ids des Stapels festgehalten hat — erst danach entscheidet der
+Treiber, denn die Abschnitte 6 und 8 vergleichen gegen diese Ids und gegen die
+Id der Sitzungsregel, und beide gäbe es nicht mehr, wenn der Bildschirm
+schneller wäre. `M2_EXPECTED_ASSERTIONS` wird deshalb je Zweig geführt: Mit
+Oberfläche entfallen die Abschnitte 2 bis 4 und Schritt 10 kommt dazu.
 
 **Was ein grüner M2-Lauf trägt, und was nicht.** Ein Gate ist nur so viel wert,
 wie ein späterer Leser über seine Reichweite weiß; der Kopf von `run.sh`
 wiederholt das, damit niemand dafür diesen Abschnitt suchen muss. Er sagt
-nichts über den Bildschirm — Warteschlange, Aktionsleiste, Regel-Bildschirm und
-Historie werden nicht bedient (HUM-097). Er sagt nichts über das HAR-Format;
-geprüft wird die Menge, aus der der Export entsteht, nicht eine Datei und kein
-Feld darin. Er sagt nichts über eine zweite Sitzung, über Neustarts (das prüft
-M1), über OpenCode (HUM-046) und über Benachrichtigungen (abgeschaltet). Und er
-sagt nichts über die Richtung „ohne Flag gilt die Wurzel nicht": Er fährt mit
+nichts über eine zweite Sitzung, über Neustarts (das prüft M1), über OpenCode
+(HUM-046) und über Benachrichtigungen (abgeschaltet). Und er sagt nichts über
+die Richtung „ohne Flag gilt die Wurzel nicht": Er fährt mit
 `--allow-test-ca`, und die andere Richtung misst der Rust-Test
-`a_test_ca_is_only_trusted_with_the_flag` (HUM-087, Absatz oben).
+`a_test_ca_is_only_trusted_with_the_flag` (HUM-087, Absatz oben). Mit `M2_UI=0`
+sagt er zusätzlich nichts über den Bildschirm und nichts über das HAR-Format;
+der Schalter ist für Maschinen ohne `flutter` oder `xvfb`, die CI fährt ohne
+ihn.
 
 Den MITM-Pfad übt er seit HUM-087 (2026-09-05): Alle siebzehn Anfragen gehen
 über `https://`, das Ziel bedient sechzehn davon über TLS, und die beiden Funde

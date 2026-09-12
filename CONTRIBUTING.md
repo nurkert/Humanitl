@@ -101,24 +101,25 @@ The M2 script also counts them and fails when fewer ran than it expects, so a
 run that skipped a branch cannot report success; the M1 script carries the same
 counter but does not yet check it.
 
-**The M2 gate is half built, and the half that is missing is named.** HUM-036
-asks for the whole loop — real daemon, real sandbox **and the real screen under
-xvfb**, ending in a valid HAR file. What runs today is the daemon half: request
-grouping, a batch release with a session rule, block with a note, the hold
-deadline, the recorded history and the set the export is built from. Not
-covered, and therefore not vouched for by a green run:
+**The M2 gate runs the whole loop.** HUM-036 asks for real daemon, real
+sandbox **and the real screen under xvfb**, ending in a valid HAR file, and
+since HUM-097 that is what happens: the screen driver
+(`app/integration_test/m2_first_decision_test.dart`) starts before the agent
+and takes the decisions of sections 2 to 4 while the requests are held — the
+batch release with a session rule, the block, the single allow — then filters
+the history and writes the HAR file that step 10 reads back. A green
+`e2e-xvfb` means "M2 holds".
 
-- **the screen.** Queue, action bar, rules screen and history are never driven;
-  no HAR file is written or validated. That is HUM-097.
+Two paths used to be on the list of things a green run did not vouch for and
+no longer are. HUM-087 gave the daemon `--allow-test-ca`; every one of the
+seventeen requests now goes over `https://`, so leaf minting from Humanitl's
+own CA, the handshake with the agent and the upstream TLS session run for
+every released and blocked flow, and both findings are made in bodies the
+proxy decrypted itself. HUM-097 added the screen half.
 
-The MITM path used to be on this list and no longer is. HUM-087 gave the daemon
-`--allow-test-ca`; every one of the seventeen requests now goes over `https://`,
-so leaf minting from Humanitl's own CA, the handshake with the agent and the
-upstream TLS session run for every released and blocked flow, and both findings
-are made in bodies the proxy decrypted itself.
-
-Until the screen half lands, a green `e2e-xvfb` means "the daemon half of M2
-holds", not "M2 holds". Say so when you lean on it.
+`M2_UI=0` switches the screen off, for a machine without `flutter` or
+`xvfb-run`. Such a run says nothing about the screen and nothing about the HAR
+format, and it says so in its own output; CI never takes that branch.
 
 ## Commit messages
 

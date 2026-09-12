@@ -31,6 +31,7 @@ class LaunchOptions {
     this.mode = ClientMode.daemon,
     this.scenario,
     this.socketPath,
+    this.harExportPath,
   });
 
   /// The value of `--dart-define=HUMANITL_FAKE=...`, empty when unset.
@@ -57,6 +58,15 @@ class LaunchOptions {
 
   /// The environment variable read when the socket define is empty.
   static const String socketVariable = 'HUMANITL_SOCKET';
+
+  /// Die Umgebungsvariable, die den Pfad des Exports dieses Laufs nennt.
+  ///
+  /// Gesetzt wird sie nur von `tests/e2e/m2_first_decision/run.sh`. Steht sie,
+  /// schreibt der Export ohne Dialog dorthin; sonst fragt er das Portal des
+  /// Schreibtischs. Ein Lauf unter `xvfb` hat kein Portal, und ein Export, den
+  /// nur der Test selbst umleitet, prüfte den Weg nicht, den ein Mensch geht
+  /// (`backlog/CONVENTIONS.md` 4.13, 4.22).
+  static const String harExportVariable = 'HUMANITL_E2E_HAR';
 
   /// Resolves the options from [args], the dart-defines and [environment].
   ///
@@ -98,10 +108,13 @@ class LaunchOptions {
       mode = ClientMode.fakeClient;
       scenario = fake;
     }
+    final String harExport = (env[harExportVariable] ?? '').trim();
+
     return LaunchOptions(
       mode: mode,
       scenario: scenario,
       socketPath: socket.isEmpty ? null : socket,
+      harExportPath: harExport.isEmpty ? null : harExport,
     );
   }
 
@@ -113,6 +126,11 @@ class LaunchOptions {
 
   /// An explicit socket path, otherwise null for the XDG default.
   final String? socketPath;
+
+  /// Der Pfad, unter den ein Export ohne Dialog geschrieben wird, sonst null.
+  ///
+  /// Null heißt: der Export fragt den Schreibtisch, wohin er darf.
+  final String? harExportPath;
 
   /// True when a fake of either kind is in use.
   bool get isFake => mode != ClientMode.daemon;
@@ -132,5 +150,6 @@ class LaunchOptions {
 
   @override
   String toString() =>
-      'LaunchOptions(mode: $mode, scenario: $scenario, socket: $socketPath)';
+      'LaunchOptions(mode: $mode, scenario: $scenario, socket: $socketPath, '
+      'harExport: $harExportPath)';
 }

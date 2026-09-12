@@ -207,19 +207,58 @@ class FilePickerExportTarget implements HistoryExportTarget {
   Future<List<String>> writeBeside(
     HistoryExportResult result,
     String path,
-  ) async {
-    final List<String> paths = <String>[path];
-    // The dialog wrote the chosen file itself; only the second one is ours.
-    final Uint8List? body = result.bodyFile;
-    if (body != null && body.isNotEmpty) {
-      // The command reads the body from a file beside it. The name is said
-      // in the modal before the export runs, and an existing file is never
-      // overwritten: nobody asked for that file, so nothing of theirs may
-      // disappear under it.
-      final File beside = _freeName(File(path).parent.path, curlBodyFileName);
-      await beside.writeAsBytes(body, flush: true);
-      paths.add(beside.path);
+  ) async => writeBodyBeside(result, path);
+}
+
+/// The paths of [path] and of the body file a `curl` export needs beside it.
+///
+/// The caller has already put the document itself at [path]; only the second
+/// file is written here. An existing file is never overwritten: nobody asked
+/// for that file, so nothing of theirs may disappear under it.
+Future<List<String>> writeBodyBeside(
+  HistoryExportResult result,
+  String path,
+) async {
+  final List<String> paths = <String>[path];
+  final Uint8List? body = result.bodyFile;
+  if (body != null && body.isNotEmpty) {
+    final File beside = _freeName(File(path).parent.path, curlBodyFileName);
+    await beside.writeAsBytes(body, flush: true);
+    paths.add(beside.path);
+  }
+  return paths;
+}
+
+/// Ein Ziel, das ohne Dialog an einen vorher genannten Pfad schreibt.
+///
+/// Der Weg, den ein Lauf ohne Bildschirm-Dialog nimmt: `HUMANITL_E2E_HAR`
+/// nennt den Pfad, [LaunchOptions.harExportPath] trägt ihn, und der Anbieter
+/// des Exportziels wählt diese Klasse statt [FilePickerExportTarget]. Der
+/// Rest des Weges bleibt derselbe wie für einen Menschen — dieselbe Menge,
+/// derselbe Kodierer, dieselben Bytes —, denn nur der Dialog fehlt hier, nicht
+/// der Export (`backlog/CONVENTIONS.md` 4.13, 4.22). Unter `xvfb` gibt es
+/// kein XDG-Portal, und `FilePicker.saveFile` hätte dort niemanden zu fragen.
+///
+/// [LaunchOptions.harExportPath]: ../../../core/ipc/launch_options.dart
+class FileExportTarget implements HistoryExportTarget {
+  /// Creates a target that writes to [path].
+  const FileExportTarget(this.path);
+
+  /// The file every export of this run is written to.
+  final String path;
+
+  @override
+  Future<List<String>> save(
+    HistoryExportResult result, {
+    required String fileName,
+    required String dialogTitle,
+  }) async {
+    final File file = File(path);
+    final Directory parent = file.parent;
+    if (!parent.existsSync()) {
+      await parent.create(recursive: true);
     }
-    return paths;
+    await file.writeAsBytes(result.bytes, flush: true);
+    return writeBodyBeside(result, file.path);
   }
 }
