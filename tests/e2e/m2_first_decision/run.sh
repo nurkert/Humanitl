@@ -42,9 +42,10 @@
 #   ./tests/e2e/m2_first_decision/run.sh   bauen und laufen
 #   E2E_SKIP_BUILD=1 …                     die Binaries nehmen, wie sie sind
 #   E2E_TRACE=1 …                          zusätzlich `set -x` (die CI setzt es)
-#   M2_UI=0|1 …                            die Oberflächen-Hälfte aus- oder
-#                                          erzwingen; ohne Angabe läuft sie,
-#                                          sobald ihr Test existiert
+#   M2_UI=0 …                              ohne Oberfläche; dann entscheidet
+#                                          die Kommandozeile, und über den
+#                                          Bildschirm und über das HAR-Format
+#                                          sagt der Lauf nichts
 #
 # Exit-Codes: 0 alles belegt, 1 eine Behauptung hielt nicht oder eine
 # Voraussetzung fehlte, 130 ein Abbruch durch ein Signal. Jede geprüfte
@@ -53,22 +54,18 @@
 #
 # --- Was ein grüner Lauf trägt, und was nicht --------------------------------
 #
-# **Heute steht nur die Daemon-Hälfte des M2-Gates.** Die Spezifikation von
-# HUM-036 verlangt den vollen Kreislauf samt Oberfläche unter xvfb und einer
-# gültigen HAR-Datei; die gibt es noch nicht (HUM-097). Wer sich auf dieses
-# Gate beruft, beruft sich auf die Liste oben und auf nichts darüber hinaus.
-# `CONTRIBUTING.md` sagt dasselbe an der Stelle, an der das Gate zur
-# Merge-Voraussetzung erklärt wird.
+# Seit HUM-097 fährt der Lauf beide Hälften: Der Bildschirm läuft unter `xvfb`
+# mit, **während** gehalten wird, trifft die Entscheidungen der Abschnitte 2
+# bis 4 und schreibt am Ende die HAR-Datei, die Schritt 10 liest. Ein grünes
+# `e2e-xvfb` heißt damit „M2 hält" und nicht mehr „die Daemon-Hälfte von M2
+# hält".
 #
 # Ein Gate ist nur so viel wert, wie ein späterer Leser über seine Reichweite
 # weiß. Deshalb ausdrücklich:
 #
-#   * Er sagt **nichts über den Bildschirm**. Warteschlange, Aktionsleiste,
-#     Regel-Bildschirm und Historie werden nicht bedient; Schritt 10
-#     überspringt sich, solange die Oberflächen-Hälfte fehlt, und sagt es.
-#     Das ist HUM-097, nicht ein Rest, den jemand nebenbei nachreicht.
-#   * Er sagt **nichts über das HAR-Format**. Geprüft wird die Menge, aus der
-#     der Export entsteht, nicht eine geschriebene Datei und kein Feld darin.
+#   * Mit `M2_UI=0` entscheidet die Kommandozeile, und dann sagt der Lauf
+#     nichts über den Bildschirm und nichts über das HAR-Format. Der Schalter
+#     ist für Maschinen ohne `flutter` oder `xvfb` da; die CI fährt ohne ihn.
 #   * Er sagt **nichts über eine Verweigerung ohne das Flag**. Dieser Lauf
 #     fährt mit `--allow-test-ca`; dass dieselbe Wurzel ohne das Flag **nicht**
 #     gilt, misst der Rust-Test `a_test_ca_is_only_trusted_with_the_flag` in
@@ -97,17 +94,21 @@ fi
 
 # --- Was dieser Lauf erwartet ------------------------------------------------
 
-# Die Oberflächen-Hälfte des Issues. Sie treibt dieselben Entscheidungen über
-# den Bildschirm und schreibt danach die HAR-Datei. Solange es sie nicht gibt,
-# fährt dieses Skript die Entscheidungen selbst und sagt an der Stelle, was
-# ungeprüft geblieben ist.
+# Die Oberflächen-Hälfte des Laufs. Sie treibt dieselben Entscheidungen über
+# den Bildschirm und schreibt danach die HAR-Datei.
 M2_UI_TEST="$E2E_ROOT/app/integration_test/m2_first_decision_test.dart"
 
-# So viele Behauptungen prüft ein vollständiger Lauf ohne die Oberfläche. Die
+# So viele Behauptungen prüft ein vollständiger Lauf, je Zweig. Die
 # Selbstprüfung am Ende vergleicht die Zahl mit dem Zähler aus `lib.sh`. Ein
 # Skript, das grün ist, weil ein Zweig übersprungen wurde, ist schlimmer als
 # keines; deshalb steht die Zahl hier und nicht im Kopf eines Menschen.
-M2_EXPECTED_ASSERTIONS=70
+#
+# Zwei Zahlen und nicht eine: Mit Oberfläche entfallen die Abschnitte 2 bis 4,
+# weil dort der Bildschirm entscheidet, und Schritt 10 kommt dazu. Eine
+# gemeinsame Konstante müsste die kleinere der beiden sein und ließe den
+# größeren Zweig unbewacht (HUM-097).
+M2_EXPECTED_ASSERTIONS_CLI=70
+M2_EXPECTED_ASSERTIONS_SCREEN=75
 
 # Die Ports des Ziels. Im eigenen Netz-Namensraum ist der Lauf root und darf
 # auch die privilegierten binden; damit braucht der Proxy keine Portumlenkung
@@ -142,7 +143,72 @@ for tool in bwrap curl jq python3 ip unshare openssl; do
         e2e_die "$tool is missing; the demo needs bubblewrap, curl, jq, python3, iproute2, util-linux and openssl"
 done
 
+# --- Wer entscheidet ---------------------------------------------------------
+#
+# Zwei Treiber zugleich wären ein Wettlauf: Der Bildschirm und die
+# Kommandozeile griffen nach denselben gehaltenen Anfragen. Der Lauf wählt
+# deshalb einen von beiden und sagt welchen. Mit Oberfläche entscheidet der
+# Bildschirm, und die Abschnitte 2 bis 4 dieses Skripts entfallen; ohne sie
+# bleibt es beim Weg über `humanitl`.
+case "${M2_UI:-auto}" in
+0)
+    M2_SCREEN=0
+    ;;
+1 | auto)
+    M2_SCREEN=1
+    ;;
+*)
+    e2e_die "M2_UI must be 0, 1 or auto, not \"$M2_UI\""
+    ;;
+esac
+
+if [ "$M2_SCREEN" = 1 ] && [ ! -f "$M2_UI_TEST" ]; then
+    # Kein stiller Übersprung mehr: Das Gate gälte sonst als erfüllt, während
+    # über den Bildschirm und über die HAR-Datei nichts geprüft wäre.
+    e2e_die "the integration test of the screen is missing: $M2_UI_TEST. Restore it, or run with M2_UI=0 and know that nothing about the screen and nothing about the HAR export is verified."
+fi
+
+if [ "$M2_SCREEN" = 1 ]; then
+    command -v flutter > /dev/null 2>&1 ||
+        e2e_die "the screen half needs flutter on PATH; run with M2_UI=0 to leave it out"
+    command -v xvfb-run > /dev/null 2>&1 ||
+        e2e_die "the screen half needs xvfb-run on PATH; run with M2_UI=0 to leave it out"
+fi
+
+# m2_build_app — Pakete und die Anwendung, vor dem Wechsel in den Namensraum.
+#
+# Im Namensraum gibt es kein Netz und der Bildschirm bekommt ein frisches
+# `HOME`; ein `flutter pub get` löste dort aus einem leeren Cache nichts mehr
+# auf, und das erste `flutter test -d linux` baute die GTK-Anwendung von Null.
+# Beides gehört deshalb hierher, und der Paket-Cache des Aufrufers wird dem
+# Treiber später ausdrücklich weitergereicht.
+m2_build_app() {
+    # Die beiden Voraussetzungen gelten auch mit `E2E_SKIP_BUILD=1`: Der
+    # Treiber läuft mit `--no-pub`, und im Namensraum gibt es kein Netz. Fehlt
+    # eine von beiden, soll die Meldung hier stehen und nicht in einem
+    # Protokoll, das niemand aufmacht.
+    [ -d "$E2E_ROOT/app/lib/core/ipc/generated" ] ||
+        e2e_die "app/lib/core/ipc/generated is missing; run 'make flutter-codegen' first (it needs protoc and protoc-gen-dart)"
+    if [ "${E2E_SKIP_BUILD:-0}" = 1 ]; then
+        [ -f "$E2E_ROOT/app/.dart_tool/package_config.json" ] ||
+            e2e_die "app/.dart_tool/package_config.json is missing; run 'make flutter-get' first, or drop E2E_SKIP_BUILD"
+        e2e_say "E2E_SKIP_BUILD=1, using the Flutter app as it is"
+        return 0
+    fi
+    e2e_step "building the Flutter app for the screen half"
+    (cd "$E2E_ROOT/app" && flutter pub get) ||
+        e2e_die "flutter pub get failed; the screen half cannot run without its packages"
+    (cd "$E2E_ROOT/app" && flutter build linux --debug) ||
+        e2e_die "flutter build linux --debug failed"
+}
+
+# Der Paket-Cache des Aufrufers, festgehalten, solange `HOME` noch seines ist.
+M2_PUB_CACHE="${PUB_CACHE:-$HOME/.pub-cache}"
+
 # Gebaut wird vor dem Wechsel in den Namensraum, weil es dort kein Netz gibt.
+if [ "${E2E_IN_NAMESPACE:-0}" != 1 ] && [ "$M2_SCREEN" = 1 ]; then
+    m2_build_app
+fi
 e2e_build
 e2e_enter_namespace "$@"
 
@@ -160,6 +226,71 @@ M2_UPSTREAM_LOG="$E2E_WORKDIR/out/upstream.log"
 M2_HAR="$E2E_WORKDIR/out/m2.har"
 M2_AGENT_PID=""
 M2_RULE_ID=""
+M2_BATCH_IDS="$E2E_WORKDIR/npm-batch.txt"
+
+# Die drei Dateien, über die Skript und Bildschirm sich verständigen. Zwei
+# Handschläge, weil beide Seiten aufeinander warten müssen: Der Agent darf
+# nicht starten, bevor der Bildschirm steht (sonst verfällt der Stapel, während
+# `flutter` noch baut), und der Bildschirm darf nicht entscheiden, bevor das
+# Skript die Ids des Stapels festgehalten hat (sonst vergleichen die
+# Abschnitte 6 und 8 gegen einen leeren Text). Das Protokoll des Treibers ist
+# das dritte und liegt im Artefakt-Ordner.
+M2_UI_READY="$E2E_WORKDIR/ui-ready"
+M2_UI_GO="$E2E_WORKDIR/ui-go"
+M2_UI_LOG="$E2E_WORKDIR/out/ui.log"
+M2_UI_PID=""
+
+# So lange darf der Treiber nach seiner Bereitschaft noch laufen. Der Test
+# selbst bricht nach vier Minuten ab; diese Frist ist der Riegel darüber, damit
+# ein hängender Flutter-Läufer nicht den ganzen Job blockiert, bis dessen
+# eigenes Zeitlimit ihn erschlägt.
+M2_UI_WAIT_SECS=600
+
+# Die Prozessgruppe dieses Skripts. Der Treiber bekommt eine eigene (`setsid`),
+# und nur weil die beiden verschieden sind, darf das Aufräumen eine ganze
+# Gruppe erschlagen: `kill $M2_UI_PID` träfe sonst die Zwischenschale und ließe
+# `xvfb-run` und `Xvfb` darunter stehen.
+M2_OWN_PGID=$(ps -o pgid= -p $$ 2> /dev/null | tr -d ' ') || M2_OWN_PGID=""
+
+# m2_kill_screen — den Bildschirm-Treiber und alles unter ihm beenden.
+#
+# Steht vor `collect`, weil der Trap `collect` schon greifen kann, bevor die
+# übrigen Helfer dieses Laufs definiert sind; eine fehlende Funktion nähme dem
+# Aufräumen sonst auch `stop_daemon`.
+#
+# Erschlagen wird die **Prozessgruppe**, nicht der eine Prozess: Unter dem
+# Treiber hängen `xvfb-run`, `Xvfb` und der Flutter-Läufer, und ein `kill` auf
+# die Zwischenschale ließe sie stehen. Die Gruppe ist eine eigene, weil
+# `m2_start_screen` mit `setsid` startet; taugt die Auskunft von `ps` nicht
+# oder ist es doch die Gruppe dieses Skripts, wird nur der Treiber selbst
+# erschlagen — ein Lauf, der sich selbst umbrächte, wäre schlimmer als ein
+# übrig gebliebener X-Server.
+m2_kill_screen() {
+    [ -n "${M2_UI_PID:-}" ] || return 0
+    # `|| m2_kill_pgid=""` ist Pflicht und keine Vorsicht: Dieses Skript läuft
+    # mit `set -euo pipefail`, und `ps` auf einen längst beendeten Treiber gibt
+    # 1 zurück. Ohne den Auffang stürbe das Aufräumen genau hier — vor dem
+    # Kopieren der Artefakte und vor `stop_daemon`. Gemessen am 2026-09-12: ein
+    # roter Lauf hinterließ ein leeres `target/e2e/m2`.
+    m2_kill_pgid=$(ps -o pgid= -p "$M2_UI_PID" 2> /dev/null | tr -d ' ') ||
+        m2_kill_pgid=""
+    if [ -n "$m2_kill_pgid" ] && [ "$m2_kill_pgid" != "${M2_OWN_PGID:-}" ]; then
+        m2_kill_target="-$m2_kill_pgid"
+    else
+        m2_kill_target="$M2_UI_PID"
+    fi
+    kill -TERM "$m2_kill_target" 2> /dev/null || true
+    # Eine Sekunde für den geordneten Abgang, dann hart. `xvfb-run` räumt
+    # seinen X-Server und sein Xauthority nur beim geordneten auf.
+    m2_kill_left=10
+    while [ "$m2_kill_left" -gt 0 ] && kill -0 "$M2_UI_PID" 2> /dev/null; do
+        sleep 0.1
+        m2_kill_left=$((m2_kill_left - 1))
+    done
+    kill -KILL "$m2_kill_target" 2> /dev/null || true
+    wait "$M2_UI_PID" 2> /dev/null || true
+    M2_UI_PID=""
+}
 
 # Aufräumen, das auch nach einem Fehlschlag greift: erst die Prozesse dieses
 # Laufs, dann die Protokolle in den Artefakt-Ordner, dann der Wegwerf-Baum. Was
@@ -171,6 +302,7 @@ collect() {
         wait "$M2_AGENT_PID" 2> /dev/null || true
         M2_AGENT_PID=""
     fi
+    m2_kill_screen
     stop_daemon
     stop_fake_upstream
     if [ -n "${E2E_WORKDIR:-}" ] && [ -d "$E2E_WORKDIR" ]; then
@@ -305,6 +437,111 @@ m2_write_config() {
     e2e_say "config $E2E_WORKDIR/config/humanitl/config.toml"
 }
 
+# m2_wait_file PATH SECONDS WHAT — warten, bis die Datei da ist.
+#
+# Gepollt alle 200 ms. Der Rückgabewert sagt, ob sie kam; der Aufrufer
+# entscheidet, ob das ein Abbruch ist.
+m2_wait_file() {
+    m2_file_left=$(($2 * 5))
+    while [ "$m2_file_left" -gt 0 ]; do
+        if [ -e "$1" ]; then
+            return 0
+        fi
+        # Ein Treiber, der schon gestorben ist, kommt nicht mehr wieder.
+        if [ -n "$M2_UI_PID" ] && ! kill -0 "$M2_UI_PID" 2> /dev/null; then
+            return 1
+        fi
+        sleep 0.2
+        m2_file_left=$((m2_file_left - 1))
+    done
+    return 1
+}
+
+# m2_start_screen — den Bildschirm-Treiber im Hintergrund starten.
+#
+# Er läuft, **während** gehalten wird, und nicht danach: Ein Bildschirm, der
+# sich erst nach dem Ende des Agenten verbände, fände nichts mehr vor, worüber
+# er entscheiden könnte.
+#
+# Der Treiber bekommt genau den XDG-Baum, in dem der Daemon dieses Laufs
+# Socket, Token und CA abgelegt hat. `XDG_RUNTIME_DIR` allein genügt dafür:
+# `DaemonPaths.resolve` in `app/lib/core/ipc/daemon_paths.dart` leitet Socket
+# und Token daraus ab, genau wie `humanitl_config::Paths` es auf der Rust-Seite
+# tut. `HUMANITL_SOCKET` und `HUMANITL_TOKEN` stehen daneben, damit der Test
+# die beiden Pfade nehmen kann, ohne sie noch einmal herzuleiten;
+# `HUMANITL_E2E_HAR` sagt, wohin die Export-Datei gehört, und die Anwendung
+# wählt daraufhin ihr zweites Exportziel — der Test überschreibt dafür keinen
+# Provider, sonst bliebe der Produktivweg ungeprüft.
+#
+# `PUB_CACHE` muss mit: Der Treiber läuft mit einem frischen `HOME` und ohne
+# Netz, und `flutter` suchte seine Pakete sonst in einem leeren Verzeichnis.
+# `--no-pub` und `--no-version-check` gehören zur selben Tatsache: Ein
+# `flutter test`, das seine Abhängigkeiten noch einmal auflösen oder nach einer
+# neueren SDK-Fassung sehen will, hängt hier ohne Erklärung, bis eine
+# Zeitüberschreitung greift. Aufgelöst und gebaut ist vorher, außerhalb des
+# Namensraums (`m2_build_app`).
+#
+# Die Auflösung ist Absicht — unter 1400x900 greift das schmale Layout, und die
+# Selektoren des Tests fänden ihre Elemente nicht.
+m2_start_screen() {
+    rm -f "$M2_UI_READY" "$M2_UI_GO"
+    # `setsid` gibt dem Treiber eine eigene Prozessgruppe, damit das Aufräumen
+    # ihn samt `xvfb-run` und `Xvfb` erschlagen kann, ohne dieses Skript mit zu
+    # treffen; `env -C` erspart die Zwischenschale, die dafür nur im Weg stünde.
+    setsid env -C "$E2E_ROOT/app" \
+        XDG_RUNTIME_DIR="$E2E_XDG_RUNTIME" \
+        XDG_DATA_HOME="$E2E_XDG_DATA" \
+        XDG_CONFIG_HOME="$E2E_XDG_CONFIG" \
+        HOME="$E2E_HOME" \
+        PUB_CACHE="$M2_PUB_CACHE" \
+        FLUTTER_SUPPRESS_ANALYTICS=1 \
+        HUMANITL_SOCKET="$DAEMON_SOCK" \
+        HUMANITL_TOKEN="$DAEMON_TOKEN" \
+        HUMANITL_E2E_HAR="$M2_HAR" \
+        HUMANITL_E2E_READY="$M2_UI_READY" \
+        HUMANITL_E2E_GO="$M2_UI_GO" \
+        HUMANITL_E2E_SHOTS="$E2E_WORKDIR/out" \
+        xvfb-run -a --server-args='-screen 0 1600x1000x24' \
+        flutter --no-version-check test --no-pub \
+        integration_test/m2_first_decision_test.dart -d linux \
+        > "$M2_UI_LOG" 2>&1 &
+    M2_UI_PID=$!
+    e2e_say "screen driver started (pid $M2_UI_PID), log $M2_UI_LOG"
+    # Erst wenn der Bildschirm steht und der Daemon ihm geantwortet hat, darf
+    # der Agent loslegen: Sein Stapel hat ab der ersten Anfrage nur die
+    # Haltefrist, und ein Treiber, der in dieser Zeit noch startet, verbrauchte
+    # sie für den Bau der Anwendung.
+    m2_wait_file "$M2_UI_READY" 600 ||
+        e2e_die "the screen did not come up within 600s; its log is in $M2_UI_LOG"
+    e2e_say "the screen is up and the daemon answered it"
+}
+
+# m2_wait_screen — auf das Ende des Treibers warten, aber nicht endlos.
+#
+# Ein `wait` ohne Riegel hinge, bis das Zeitlimit des ganzen CI-Jobs zuschlägt,
+# und das Protokoll des Treibers landete nie in den Artefakten. Der Wachhund
+# erschlägt ihn nach `M2_UI_WAIT_SECS`; `wait` kommt dann zurück und der
+# Aufrufer sieht einen Fehlschlag statt eines hängenden Jobs.
+#
+# Der Rückgabewert ist der des Treibers, 143 nach einem `SIGTERM` des
+# Wachhunds.
+m2_wait_screen() {
+    (
+        sleep "$M2_UI_WAIT_SECS"
+        kill -0 "$M2_UI_PID" 2> /dev/null || exit 0
+        printf 'e2e: the screen driver still runs after %ss; ending it\n' \
+            "$M2_UI_WAIT_SECS" >&2
+        m2_kill_screen
+    ) &
+    m2_screen_watchdog=$!
+    m2_screen_status=0
+    wait "$M2_UI_PID" || m2_screen_status=$?
+    kill "$m2_screen_watchdog" 2> /dev/null || true
+    wait "$m2_screen_watchdog" 2> /dev/null || true
+    M2_UI_PID=""
+    return "$m2_screen_status"
+}
+
 # --- Zertifikat, Ziel, Daemon ------------------------------------------------
 
 e2e_step "the run brings its own certificate authority, its own target and its own daemon"
@@ -322,6 +559,14 @@ m2_write_config
 # Stelle stehen. Ohne es scheiterte jeder Handschlag nach oben mit `502
 # upstream_tls`, und der Lauf käme über Schritt 1 nicht hinaus.
 start_daemon "$E2E_WORKDIR/state" "$E2E_WORKDIR" "$M2_HOLD_TIMEOUT" --allow-test-ca
+
+# Das Laufzeitverzeichnis gehört dem Menschen allein. Socket und Sitzungstoken
+# liegen darin, und der Setup-Bildschirm hält den Start an, solange Gruppe oder
+# Welt hineindürfen (`DOCTOR_004`). Auf einem echten Rechner ist
+# `$XDG_RUNTIME_DIR` 0700; der Wegwerf-Baum dieses Laufs entsteht unter der
+# `umask` des Aufrufers und wäre es sonst nicht — mit `umask 002` bekäme der
+# Bildschirm-Treiber statt der Warteschlange den Setup-Bildschirm zu sehen.
+chmod 700 "$E2E_XDG_RUNTIME"
 
 # Der Beleg, dass das Ziel antwortet, bevor irgendwo behauptet wird, eine
 # Anfrage sei nicht bei ihm angekommen. Ohne diese Zeile hieße ein
@@ -419,6 +664,11 @@ e2e_expect_match "the sandbox has the client the agent speaks through" \
 
 # --- Der Agent ---------------------------------------------------------------
 
+if [ "$M2_SCREEN" = 1 ]; then
+    e2e_step "the screen connects before anything is held"
+    m2_start_screen
+fi
+
 e2e_step "the agent starts and its requests pile up"
 
 cp "$E2E_ROOT/tests/e2e/fake-agent/fake_agent.py" "$E2E_WORKDIR/work/fake_agent.py"
@@ -441,6 +691,21 @@ m2_expect_count "twelve requests to the package registry are held" \
 # nur zwölf gleiche Namen gezählt.
 npm_by_host=$(m2_count "state:held host:registry.npmjs.org")
 e2e_expect "and the same twelve when asked by host" 12 "$npm_by_host"
+
+# --- Die Ids des Stapels, bevor irgendwer sie entscheidet --------------------
+#
+# Sie sind später die einzige Möglichkeit, den Teil der Freigaben, den ein
+# Mensch ausgesprochen hat, vom Teil zu trennen, den die Regel übernommen hat.
+# Der Filter kann das nicht — er kennt keinen Term für „ohne Regel". Mit
+# Oberfläche werden sie hier festgehalten und der Bildschirm bekommt danach
+# sein Zeichen; ohne sie tut es Abschnitt 2 unten an derselben Stelle.
+if [ "$M2_SCREEN" = 1 ]; then
+    m2_ids "state:held apex:npmjs.org" > "$M2_BATCH_IDS"
+    : > "$M2_UI_GO"
+    e2e_say "the screen may decide now; $(wc -l < "$M2_BATCH_IDS" | tr -d ' ') ids of the batch are written down"
+fi
+
+if [ "$M2_SCREEN" = 0 ]; then
 
 # --- 2. Stapel-Freigabe mit Sitzungsregel ------------------------------------
 #
@@ -483,7 +748,6 @@ e2e_expect "and it is temporary, not permanent" session \
 # sind später die einzige Möglichkeit, den Teil der Freigaben, den ein Mensch
 # ausgesprochen hat, vom Teil zu trennen, den die Regel übernommen hat. Der
 # Filter kann das nicht — er kennt keinen Term für „ohne Regel".
-M2_BATCH_IDS="$E2E_WORKDIR/npm-batch.txt"
 m2_ids "state:held apex:npmjs.org" > "$M2_BATCH_IDS"
 while read -r flow; do
     [ -n "$flow" ] || continue
@@ -536,6 +800,60 @@ flow_decide "$graphql_flow" allow ||
 # Die dritte, `/repos/x/y`, bleibt absichtlich liegen: Sie ist die Anfrage, die
 # in die Zeitüberschreitung laufen soll.
 e2e_say "leaving /repos/x/y undecided; its deadline is ${M2_HOLD_TIMEOUT}s"
+
+else
+
+# --- 2 bis 4 über den Bildschirm ---------------------------------------------
+#
+# Der Treiber läuft seit vor dem Agenten und hat sein Zeichen bekommen. Was er
+# tut, prüft er selbst; hier wird nur abgewartet, was die Abschnitte 5 bis 9
+# als Grundlage brauchen: dass der Stapel durch ist und welche Regel dabei
+# entstanden ist. Die Id kommt aus dem Daemon und nicht aus dem Protokoll des
+# Treibers — gefragt wird, was gilt, nicht was jemand gemeldet hat.
+
+e2e_step "2. to 4. the screen decides, and the run waits for what it did"
+
+m2_expect_count "no request to the registry is waiting any more" \
+    30 0 "state:held apex:npmjs.org"
+m2_expect_count "and the daemon has all twelve of them decided allow" \
+    20 12 "apex:npmjs.org decision:allow"
+
+m2_rules_left=100
+while [ "$m2_rules_left" -gt 0 ]; do
+    M2_RULE_ID=$(humanitl --json rules list 2> /dev/null |
+        jq -r '[.rules[] | select(.expires.kind == "session")] | .[0].rule_id // ""' 2> /dev/null || true)
+    [ -z "$M2_RULE_ID" ] || break
+    sleep 0.2
+    m2_rules_left=$((m2_rules_left - 1))
+done
+[ -n "$M2_RULE_ID" ] ||
+    e2e_die "the screen released the group but no session rule reached the daemon; its log is in $M2_UI_LOG"
+e2e_say "session rule $M2_RULE_ID, created on the screen"
+
+rules_json=$(humanitl --json rules list)
+e2e_expect "the rule store holds exactly one session rule" 1 \
+    "$(printf '%s' "$rules_json" | jq '[.rules[] | select(.expires.kind == "session")] | length')"
+rule_row=$(printf '%s' "$rules_json" |
+    jq -c --arg id "$M2_RULE_ID" '.rules[] | select(.rule_id == $id)')
+e2e_expect "it allows the whole registrable domain" '**.npmjs.org' \
+    "$(printf '%s' "$rule_row" | jq -r '.host')"
+e2e_expect "with the action a release means" allow \
+    "$(printf '%s' "$rule_row" | jq -r '.action')"
+e2e_expect "and it is temporary, not permanent" session \
+    "$(printf '%s' "$rule_row" | jq -r '.expires.kind')"
+# Die Herkunft, die nur die Oberfläche stiften kann: Sie legt die Regel in der
+# Entscheidung an, die Kommandozeile daneben (HUM-095). Das Abzeichen `from`
+# am Regel-Bildschirm zeichnet genau dieses Feld.
+e2e_expect_match "and it names the request it was made from" \
+    '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' \
+    "$(printf '%s' "$rule_row" | jq -r '.created_from_flow_id // ""')"
+
+m2_expect_count "the request with the AWS key was blocked" \
+    30 1 "path:/exfil decision:block"
+m2_expect_count "and the POST with the mail address was allowed" \
+    30 1 "path:/graphql decision:allow"
+
+fi
 
 # --- Warten, bis der Agent fertig ist ----------------------------------------
 
@@ -741,40 +1059,19 @@ e2e_expect "and so did the control that went past it" 1 \
 
 e2e_step "10. the screen shows the same run"
 
-if [ "${M2_UI:-auto}" = 0 ]; then
+if [ "$M2_SCREEN" = 0 ]; then
     e2e_say "M2_UI=0: the screen half is switched off for this run"
-elif [ ! -f "$M2_UI_TEST" ]; then
-    e2e_say "SKIPPED: $M2_UI_TEST does not exist yet (HUM-036, screen half)."
     e2e_say "         Nothing about the screen and nothing about the HAR export was verified."
-    if [ "${M2_UI:-auto}" = 1 ]; then
-        e2e_die "M2_UI=1 was asked for, but the integration test of the screen is not there"
-    fi
 else
-    command -v flutter > /dev/null 2>&1 ||
-        e2e_die "the integration test of the screen is there but flutter is not on PATH"
-    command -v xvfb-run > /dev/null 2>&1 ||
-        e2e_die "the integration test of the screen is there but xvfb-run is not on PATH"
-    # Der Bildschirm bekommt genau den XDG-Baum, in dem der Daemon dieses Laufs
-    # Socket, Token und CA abgelegt hat. `XDG_RUNTIME_DIR` allein genügt dafür:
-    # `DaemonPaths.resolve` in `app/lib/core/ipc/daemon_paths.dart` leitet
-    # Socket und Token daraus ab, genau wie `humanitl_config::Paths` es auf der
-    # Rust-Seite tut. `HUMANITL_SOCKET` und `HUMANITL_TOKEN` stehen daneben,
-    # damit ein Test die beiden Pfade nehmen kann, ohne sie noch einmal
-    # herzuleiten; `HUMANITL_E2E_HAR` sagt, wohin die Export-Datei gehört.
-    # Die Auflösung ist Absicht — unter 1400x900 greift das schmale Layout, und
-    # die Selektoren des Tests fänden ihre Elemente nicht.
-    (
-        cd "$E2E_ROOT/app" &&
-            XDG_RUNTIME_DIR="$E2E_XDG_RUNTIME" \
-                XDG_DATA_HOME="$E2E_XDG_DATA" \
-                XDG_CONFIG_HOME="$E2E_XDG_CONFIG" \
-                HOME="$E2E_HOME" \
-                HUMANITL_SOCKET="$DAEMON_SOCK" \
-                HUMANITL_TOKEN="$DAEMON_TOKEN" \
-                HUMANITL_E2E_HAR="$M2_HAR" \
-                xvfb-run -a --server-args='-screen 0 1600x1000x24' \
-                flutter test integration_test/m2_first_decision_test.dart -d linux
-    ) || e2e_die "the integration test of the screen failed"
+    # Der Treiber läuft seit dem Anfang. Jetzt, wo alles entschieden ist und
+    # die Historie steht, ist auch sein Export fällig; hier wird sein Ende
+    # abgewartet und danach die Datei gelesen, die er geschrieben hat.
+    if ! m2_wait_screen; then
+        e2e_say "--- the last lines of the screen driver ---"
+        tail -n 40 "$M2_UI_LOG" >&2 || true
+        e2e_die "the integration test of the screen failed or ran past ${M2_UI_WAIT_SECS}s; its whole log is in $M2_UI_LOG"
+    fi
+
     if [ -s "$M2_HAR" ]; then
         e2e_check "the screen wrote the HAR export" ok
     else
@@ -782,6 +1079,25 @@ else
     fi
     e2e_expect "the export holds every request of the run" 17 \
         "$(jq -r '.log.entries | length' "$M2_HAR")"
+
+    # Und die Entscheidungen stehen darin, mit den Namen, unter denen der
+    # Daemon sie führt. Ein Export, der `timedOut` statt `timed_out` schriebe,
+    # ließe sich neben keine Filterzeile und neben keine CLI-Ausgabe legen
+    # (`backlog/CONVENTIONS.md` 4.22).
+    har_decisions() {
+        jq -r --arg value "$1" \
+            '[.log.entries[] | select(._humanitl.decision == $value)] | length' \
+            "$M2_HAR"
+    }
+    e2e_expect "fifteen entries say allow" 15 "$(har_decisions allow)"
+    e2e_expect "one says block" 1 "$(har_decisions block)"
+    e2e_expect "and one says timed_out, the name the daemon uses" 1 \
+        "$(har_decisions timed_out)"
+    e2e_expect "two of the allowed ones carry the id of the session rule" 2 \
+        "$(jq -r --arg id "$M2_RULE_ID" \
+            '[.log.entries[] | select(._humanitl.rule_id == $id)] | length' "$M2_HAR")"
+    e2e_expect "the blocked one names the human as its reason" user \
+        "$(jq -r '[.log.entries[] | select(._humanitl.decision == "block")][0]._humanitl.block_reason // ""' "$M2_HAR")"
 fi
 
 # --- Der geordnete Abschied --------------------------------------------------
@@ -815,13 +1131,21 @@ e2e_step "the run checks itself"
 
 # Ein Lauf, der grün ist, weil ein Zweig übersprungen wurde, wäre schlimmer als
 # gar keiner. Der Zähler steht in `lib.sh` und wächst mit jeder geprüften
-# Behauptung, gleich ob sie hielt.
+# Behauptung, gleich ob sie hielt. Die Erwartung hängt am Treiber: Mit
+# Oberfläche entfallen die Abschnitte 2 bis 4 und Schritt 10 kommt dazu.
+if [ "$M2_SCREEN" = 1 ]; then
+    M2_EXPECTED_ASSERTIONS="$M2_EXPECTED_ASSERTIONS_SCREEN"
+    M2_EXPECTED_NAME=M2_EXPECTED_ASSERTIONS_SCREEN
+else
+    M2_EXPECTED_ASSERTIONS="$M2_EXPECTED_ASSERTIONS_CLI"
+    M2_EXPECTED_NAME=M2_EXPECTED_ASSERTIONS_CLI
+fi
 if [ "$E2E_ASSERTIONS" -lt "$M2_EXPECTED_ASSERTIONS" ]; then
     e2e_die "only $E2E_ASSERTIONS of $M2_EXPECTED_ASSERTIONS assertions ran; a branch was skipped"
 fi
 if [ "$E2E_ASSERTIONS" -gt "$M2_EXPECTED_ASSERTIONS" ]; then
     e2e_say "note: $E2E_ASSERTIONS assertions ran, $M2_EXPECTED_ASSERTIONS were expected;"
-    e2e_say "      raise M2_EXPECTED_ASSERTIONS in this script so the number keeps its meaning"
+    e2e_say "      raise $M2_EXPECTED_NAME in this script so the number keeps its meaning"
 fi
 e2e_say "$E2E_ASSERTIONS assertions checked"
 

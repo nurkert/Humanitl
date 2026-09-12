@@ -82,6 +82,20 @@ Map<String, Object?> harEntry(HistoryExportEntry entry) {
   };
 }
 
+/// Der Name, unter dem der Daemon [value] auf der Leitung führt.
+///
+/// Dart schreibt die Konstanten seiner Aufzählungen in gemischter Schreibweise
+/// (`timedOut`), der Daemon und die Kommandozeile schreiben sie mit
+/// Unterstrich (`timed_out`, `daemon/bin/humanitl/src/cmd/flows.rs`,
+/// `decision_name`). Ein Export ist Beweismittel: Wer ihn neben eine
+/// Filterzeile oder neben die Ausgabe von `humanitl --json flows list` legt,
+/// muss denselben Namen lesen (`backlog/CONVENTIONS.md` 4.22). Deshalb wird
+/// hier umgeschrieben und nicht `Enum.name` ausgegeben.
+String harWireName(Enum value) => value.name.replaceAllMapped(
+  RegExp('[A-Z]'),
+  (Match match) => '_${match[0]!.toLowerCase()}',
+);
+
 /// The `_humanitl` block: what the format has no field for.
 ///
 /// `responseTruncated` comes from the recorded body reference and not from the
@@ -94,8 +108,12 @@ Map<String, Object?> humanitlBlock(
 }) => <String, Object?>{
   'flow_id': flow.id.value,
   'session_id': flow.sessionId.value,
-  'decision': flow.decision?.name,
-  'block_reason': flow.blockReason?.name,
+  // Die Wire-Namen des Daemons, nicht die Dart-Schreibweise: `timed_out` und
+  // `allow_edited` stehen so in jedem Filter und in jeder CLI-Ausgabe.
+  'decision': flow.decision == null ? null : harWireName(flow.decision!),
+  'block_reason': flow.blockReason == null
+      ? null
+      : harWireName(flow.blockReason!),
   'rule_id': flow.ruleId?.value,
   'findings_count': flow.findingCount,
   'edited': flow.edited,

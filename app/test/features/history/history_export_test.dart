@@ -178,6 +178,32 @@ void main() {
       );
     });
 
+    test('the decision carries the name the daemon uses, not the Dart one', () {
+      // `timedOut` in Dart, `timed_out` überall sonst: in jedem Filter
+      // (`decision:timed_out`), in jeder Zeile von `humanitl --json flows
+      // list` und im Recorder. Ein Export, der die dritte Schreibweise
+      // erfände, ließe sich neben keines davon legen
+      // (`backlog/CONVENTIONS.md` 4.22).
+      final Map<String, Object?> timedOut =
+          harEntry(_threeFlows()[2])['_humanitl']! as Map<String, Object?>;
+      expect(timedOut['decision'], 'timed_out');
+      expect(timedOut['block_reason'], 'timeout');
+
+      final Map<String, Object?> blocked =
+          harEntry(_threeFlows()[1])['_humanitl']! as Map<String, Object?>;
+      expect(blocked['decision'], 'block');
+      expect(blocked['block_reason'], 'rule');
+    });
+
+    test('every wire name of both enums is snake_case', () {
+      expect(harWireName(DecisionKind.allowEdited), 'allow_edited');
+      expect(harWireName(DecisionKind.allow), 'allow');
+      expect(harWireName(BlockReason.bodyCap), 'body_cap');
+      expect(harWireName(BlockReason.authorityMismatch), 'authority_mismatch');
+      expect(harWireName(BlockReason.holdMaxFlows), 'hold_max_flows');
+      expect(harWireName(BlockReason.user), 'user');
+    });
+
     test('the query string is parsed out of the path and decoded', () {
       expect(harQueryString('/graphql?first=10&q=a%20b'), <Object?>[
         <String, Object?>{'name': 'first', 'value': '10'},

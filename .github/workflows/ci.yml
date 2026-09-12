@@ -538,10 +538,12 @@ jobs:
   e2e-xvfb:
     name: e2e-xvfb
     runs-on: ubuntu-24.04
-    # The M2 demo itself is around twenty seconds; the rest of the budget is the
-    # Rust build and the Flutter setup. A job that hangs instead of failing
-    # would hide exactly the kind of defect this gate exists for.
-    timeout-minutes: 30
+    # The M2 demo itself is under a minute with a warm tree (measured 47 s on a
+    # six-core desktop, 2026-09-12); the rest of the budget is the Rust build,
+    # the Flutter setup and the debug build of the GTK application the screen
+    # half drives. A job that hangs instead of failing would hide exactly the
+    # kind of defect this gate exists for.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/setup-rust
@@ -550,6 +552,15 @@ jobs:
       - uses: ./.github/actions/setup-flutter
         with:
           linux-desktop: "true"
+          protoc-plugin: "true"
+      - name: Install protoc
+        # The screen half builds the app, and the app imports
+        # app/lib/core/ipc/generated, which is gitignored (HUM-003). Without
+        # protoc there is nothing to import and `flutter build linux` fails.
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "27.x"
+          repo-token: ${{ github.token }}
       - name: Install the runtime tooling
         # Same set as the M1 job, plus openssl for the test certificate the
         # fake upstream shows on 443 and xvfb for the screen half. bubblewrap
@@ -561,6 +572,32 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             xvfb bubblewrap curl jq python3 openssl iproute2 util-linux musl-tools
+      - name: Fetch packages
+        # The demo runs inside `unshare -rn` and has no network there. Every
+        # package it needs is resolved here, into the pub cache the run hands
+        # the screen driver through PUB_CACHE.
+        run: make flutter-get
+      - name: Generate the Dart proto code
+        env:
+          STRICT: "1"
+        run: ./scripts/gen-proto.sh
+      - name: Code generation
+        # riverpod, freezed and json_serializable: the app does not analyze
+        # and does not build without them.
+        run: |
+          set -euo pipefail
+          if grep -qE '^\s*build_runner\s*:' app/pubspec.yaml; then
+            cd app && dart run build_runner build --delete-conflicting-outputs
+          else
+            echo "::notice::no build_runner dependency yet, skipping code generation"
+          fi
+      - name: Build the Linux app for the screen half
+        # `flutter test integration_test/... -d linux` would otherwise build
+        # the GTK application from nothing inside the namespace, where the
+        # run has neither network nor its own package cache. The demo builds
+        # it itself when this step is missing; here it happens once, outside
+        # the namespace, and the step name says where the time went.
+        run: cd app && flutter build linux --debug
       - name: Allow unprivileged user namespaces
         # Ubuntu 24.04 restricts them through AppArmor (HUM-002). Without this
         # neither bwrap nor `unshare -rn` starts; the demo says so and fails,
@@ -572,11 +609,11 @@ jobs:
           fi
       - name: bwrap is usable
         run: bwrap --version
-      - name: M2 demo (grouping, batch release, block, timeout, history)
-        # The demo runs its own daemon, its own target and its own sandbox in a
-        # throwaway tree and needs no network. It skips its screen half with a
-        # loud notice while app/integration_test/m2_first_decision_test.dart
-        # does not exist, and it fails when fewer assertions ran than it expects.
+      - name: M2 demo (grouping, batch release, block, timeout, history, screen)
+        # The demo runs its own daemon, its own target, its own sandbox and its
+        # own screen under xvfb in a throwaway tree and needs no network. It
+        # fails when the integration test of the screen is missing and when
+        # fewer assertions ran than the branch it took expects.
         env:
           E2E_TRACE: "1"
           E2E_ONLY: m2
@@ -586,8 +623,8 @@ jobs:
         with:
           name: e2e-artifacts
           # The daemon log, the access log of the target, what the agent got
-          # back for every request and, once the screen half is there, the HAR
-          # export and the screenshots of a failed run.
+          # back for every request, the log of the screen driver, the HAR
+          # export and, after a failure, the picture of the screen.
           path: target/e2e
           if-no-files-found: ignore
 

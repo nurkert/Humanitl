@@ -30,8 +30,21 @@ import 'history_query.dart';
 const String historyExportCreatorVersion = '0.0.0';
 
 /// Where an export ends up. Overridden in tests, which write nowhere.
+///
+/// Zwei Ziele, und die Startoptionen wählen: Nennt `HUMANITL_E2E_HAR` einen
+/// Pfad, schreibt der Export dorthin, sonst fragt er den Dialog des
+/// Schreibtischs. Die Wahl steht hier und nicht im Test, damit ein Lauf über
+/// den Bildschirm denselben Weg nimmt wie ein Mensch: dieselbe Menge,
+/// derselbe Kodierer, dieselben Bytes. Ein Test, der nur diesen Anbieter
+/// überschriebe, ließe genau den Weg ungeprüft, den er belegen soll
+/// (`backlog/CONVENTIONS.md` 4.13, 4.22).
 final Provider<HistoryExportTarget> historyExportTargetProvider =
-    Provider<HistoryExportTarget>((Ref ref) => const FilePickerExportTarget());
+    Provider<HistoryExportTarget>((Ref ref) {
+      final String? path = ref.watch(launchOptionsProvider).harExportPath;
+      return path == null
+          ? const FilePickerExportTarget()
+          : FileExportTarget(path);
+    });
 
 /// How an export turns entries into bytes.
 typedef HistoryExportEncoder = Future<HistoryExportResult> Function({
