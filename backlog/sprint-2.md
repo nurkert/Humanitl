@@ -3282,7 +3282,7 @@ Die Notiz einer Block-Entscheidung liegt in der Aufzeichnung, erscheint in `huma
 Der Audit-Eintrag (HUM-050, HUM-051). Notizen an Allow-Entscheidungen. Bearbeiten einer Notiz nach der Entscheidung.
 
 ### Betroffene Pfade
-- `daemon/crates/recorder/migrations/V5__decision_note.sql` (neu), `daemon/crates/recorder/src/writer.rs`, `src/read.rs` (oder wo `get_flow`/`list_flows` bauen), `tests/recorder.rs:836-879`
+- `daemon/crates/recorder/migrations/V8__decision_note.sql` (neu; V5 bis V7 sind belegt, und `migrations_are_numbered_without_gaps` erzwingt Lückenlosigkeit), `daemon/crates/recorder/src/writer.rs`, `src/read.rs` (oder wo `get_flow`/`list_flows` bauen), `tests/recorder.rs:836-879`
 - `proto/humanitl/v1/humanitl.proto` (`FlowDetail.decision_note`, `FlowSummary.decision_note`), `PROTO_MINOR`, `proto/descriptor.binpb`
 - `daemon/crates/ipc/src/convert.rs`, `src/fake/state.rs`
 - `daemon/crates/proxy/src/meta.rs` (`/why` liest nach dem Registry-Fehlschlag den Recorder), `src/handler.rs` (Findings-Scan der Notiz bei `Decide`)
@@ -3292,11 +3292,11 @@ Der Audit-Eintrag (HUM-050, HUM-051). Notizen an Allow-Entscheidungen. Bearbeite
 
 ### Spezifikation
 ```sql
--- V5__decision_note.sql
+-- V8__decision_note.sql
 ALTER TABLE flows ADD COLUMN decision_note TEXT;  -- kein Index: angezeigt, nicht gefiltert
 ```
 
-Der Writer schreibt `decision_note` beim `Decided`-Ereignis mit `Decision::Block { note: Some(_) }`, gesäubert über `sanitize_note` (dieselbe Funktion wie für die 403-Antwort, damit die Aufzeichnung genau das trägt, was der Agent gesehen hat). Proto: `string decision_note = <nächste Nummer>` in `FlowSummary` und `FlowDetail`, leer wenn keine. `humanitl flows show` druckt `note: …` nach der Entscheidung, `--json` das Feld. History-Detail: eine Zeile unter der Entscheidung, ARB `historyDetailNote` („Note to the agent: {note}"). HAR: `_humanitl.note`. `/why`: `note=` aus dem Registry, sonst aus dem Recorder.
+Der Writer schreibt `decision_note` beim `Decided`-Ereignis mit `Decision::Block { note: Some(_) }`, gesäubert über `sanitize_note` (dieselbe Funktion wie für die 403-Antwort, damit die Aufzeichnung genau das trägt, was der Agent gesehen hat). Proto: `string decision_note = 27` in `FlowSummary` (25 trägt `meta`, 26 nimmt `apex` aus HUM-091) und `string decision_note = 11` in `FlowDetail`, leer wenn keine. `PROTO_MINOR` geht dabei von 8 auf 9, und der Dart-Spiegel `ProtoVersion.minor` zieht mit. `humanitl flows show` druckt `note: …` nach der Entscheidung, `--json` das Feld. History-Detail: eine Zeile unter der Entscheidung, ARB `historyDetailNote` („Note to the agent: {note}"). HAR: `_humanitl.note`. `/why`: `note=` aus dem Registry, sonst aus dem Recorder. **Entschieden am 2026-09-12 vom Projekteigentümer:** Die Notiz überdauert den Neustart, sie liegt dafür in der Aufzeichnung; `/why` liest sie nach einem Neustart über `Recorder::get_flow`. Ins Audit-Log kommt sie nicht — `docs/SECURITY.md` 8 und HUM-050 schließen das aus, und HUM-072 hält diese Entscheidung fest.
 
 Findings-Scan: beim `Decide` mit Notiz läuft die Registry aus HUM-025 über den Text; jeder Fund ergibt genau ein `FlowEvent::Diagnostic` `FINDINGS_003` (Warning) am Flow mit Art und Präfix des Funds, ohne den Wert; die Entscheidung fällt unverändert (die Notiz ist Wille des Menschen). Ein Fund in der Notiz erscheint nicht als `Finding` am Flow (die gehören zur Anfrage).
 
@@ -3318,7 +3318,7 @@ Findings-Scan: beim `Decide` mit Notiz läuft die Registry aus HUM-025 über den
 ### Akzeptanzkriterien
 - [ ] Nach `humanitl flows decide <id> block --note 'use PyPI'` druckt `humanitl --json flows show <id> | jq -r .decision_note` `use PyPI`, auch nach einem Neustart des Daemons.
 - [ ] Aus der Sandbox liefert `curl http://humanitl.internal/why/<id>` nach dem Neustart `note=use PyPI` als letztes Feld.
-- [ ] `grep -n 'must not leak' daemon/crates/recorder/tests/recorder.rs` ist leer; `daemon/crates/recorder/migrations/V5__decision_note.sql` existiert; `cargo test -p humanitl-recorder` grün.
+- [ ] `grep -n 'must not leak' daemon/crates/recorder/tests/recorder.rs` ist leer; `daemon/crates/recorder/migrations/V8__decision_note.sql` existiert; `cargo test -p humanitl-recorder` grün.
 - [ ] Das History-Detail zeigt die Notiz unter der Entscheidung (`history_detail_shows_block_note`, Golden `history_detail_note_{dark,light}`); `grep -c '"historyDetailNote"' app/l10n/app_en.arb app/l10n/app_de.arb` ergibt je 1.
 - [ ] Eine Notiz mit einem GitHub-Token erzeugt genau einen Befund `FINDINGS_003` im Ereignisstrom, der Block fällt, und `FlowDetail.findings` bleibt unverändert.
 - [ ] `PROTO_MINOR` um eins erhöht, `proto/descriptor.binpb` im selben Commit; `make check` grün.
