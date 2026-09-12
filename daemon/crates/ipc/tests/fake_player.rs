@@ -637,9 +637,7 @@ async fn get_body_chunks_and_answers_an_empty_body() {
     let chunks: Vec<v1::BodyChunk> = daemon
         .get_body(v1::BodyRef {
             sha256: empty.sha256.to_vec(),
-            size: 0,
-            truncated: false,
-            content_type: String::new(),
+            ..v1::BodyRef::default()
         })
         .expect("a 32 byte hash is readable")
         .collect()
@@ -661,9 +659,7 @@ async fn get_body_chunks_and_answers_an_empty_body() {
     let unknown: Vec<v1::BodyChunk> = daemon
         .get_body(v1::BodyRef {
             sha256: vec![7u8; 32],
-            size: 0,
-            truncated: false,
-            content_type: String::new(),
+            ..v1::BodyRef::default()
         })
         .expect("a 32 byte hash is readable")
         .collect()

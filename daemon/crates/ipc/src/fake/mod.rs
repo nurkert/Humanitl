@@ -36,8 +36,6 @@ pub use crate::convert::EditedRequestError;
 pub use player::{PlayerOptions, Session, SessionError};
 pub use state::{FakeFlow, FakeState, SessionMeta, StoredResponse};
 
-use state::BODY_CHUNK_BYTES;
-
 /// Die mitgelieferte Regel, die `models.dev` blockt.
 ///
 /// Die Sitzungsdatei `fixtures/sessions/mixed.jsonl` verweist auf diese Id;
@@ -100,6 +98,12 @@ pub struct FakeDaemon {
     /// Anfrage beliebiger Größe käme durch, die der Daemon mit `IPC_004`
     /// ablehnt.
     body_cap_bytes: u64,
+    /// Dasselbe Budget, mit dem der echte Dienst einen Body für
+    /// `BodyRef.decoded` entpackt (`limits.preview_cap_bytes` und
+    /// `limits.max_decompress_ratio`). Ohne es entpackte der Fake ohne Grenze,
+    /// und eine Bombe im Skript fiele erst gegen den Daemon auf (HUM-119).
+    decode_cap_bytes: usize,
+    max_decompress_ratio: u32,
 }
 
 impl FakeDaemon {
@@ -114,6 +118,9 @@ impl FakeDaemon {
             session: Arc::new(session),
             options,
             body_cap_bytes: humanitl_config::Limits::default().hold_body_cap_bytes,
+            decode_cap_bytes: usize::try_from(humanitl_config::Limits::default().preview_cap_bytes)
+                .unwrap_or(usize::MAX),
+            max_decompress_ratio: humanitl_config::Limits::default().max_decompress_ratio,
         }
     }
 
@@ -293,7 +300,18 @@ impl DaemonApi for FakeDaemon {
         // `IPC_005` ab, und hier gilt dasselbe.
         let sha256 = validate::body_hash(&body)?;
         let data = self.state.blob(&sha256).unwrap_or_default();
-        Ok(Box::pin(tokio_stream::iter(chunks(&data))))
+        // Entpacken über dieselbe Funktion wie der echte Dienst: Der Fake soll
+        // hier nichts eigenes können und nichts weniger (HUM-119).
+        let (data, encoding_left) = crate::body::deliver(
+            &body,
+            data,
+            self.decode_cap_bytes,
+            self.max_decompress_ratio,
+        );
+        Ok(Box::pin(tokio_stream::iter(crate::body::chunks(
+            &data,
+            &encoding_left,
+        ))))
     }
 
     async fn decide(&self, request: v1::DecideRequest) -> Result<v1::DecideResponse, Diagnostic> {
@@ -1179,29 +1197,6 @@ fn reorder(rules: &mut Vec<v1::Rule>, order: &[String]) {
     }
     sorted.append(rules);
     *rules = sorted;
-}
-
-/// Der Body in Stücken von 64 KiB; ein leerer Body ist genau ein Stück.
-fn chunks(data: &[u8]) -> Vec<v1::BodyChunk> {
-    if data.is_empty() {
-        return vec![v1::BodyChunk {
-            data: Vec::new(),
-            offset: 0,
-            last: true,
-        }];
-    }
-    let mut out = Vec::new();
-    let mut offset = 0usize;
-    while offset < data.len() {
-        let end = (offset + BODY_CHUNK_BYTES).min(data.len());
-        out.push(v1::BodyChunk {
-            data: data[offset..end].to_vec(),
-            offset: u64::try_from(offset).unwrap_or(u64::MAX),
-            last: end == data.len(),
-        });
-        offset = end;
-    }
-    out
 }
 
 /// Das Präfix jedes Belegs aus dem Fake: hier wurde nichts gemessen.

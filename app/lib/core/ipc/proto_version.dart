@@ -27,8 +27,13 @@ abstract final class ProtoVersion {
   /// built, and so is minor 7, the notice beside the terminal bytes (HUM-042).
   /// Raised to 8 with `FlowSummary.apex`, the registrable domain of the host,
   /// which the queue groups by and the rule scope writes into a rule
-  /// (HUM-091). Raising the number without a reader would claim otherwise.
-  static const int minor = 8;
+  /// (HUM-091). Raised to 9 with the unpacked body: `BodyRef.content_encoding`
+  /// names the encoding of the recorded bytes, `BodyRef.decoded` asks `GetBody`
+  /// to take it off, and `BodyChunk.encoding_left` says what is still on the
+  /// bytes that arrive, which is what places a finding of a brotli body at its
+  /// column (HUM-119). Raising the number without a reader would claim
+  /// otherwise.
+  static const int minor = 9;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

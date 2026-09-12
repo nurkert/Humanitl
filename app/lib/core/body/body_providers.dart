@@ -1,23 +1,23 @@
 /// Ein Rumpf auf dem Weg in die Ansicht: ausgepackt, zerlegt, mit seinen
 /// Funden, und welche der vier Ansichten er gerade zeigt.
 ///
-/// Die Bytes kommen aus `flowBodyProvider`, dem einen Rumpf-Provider in
-/// `core/ipc`. Was diese Bytes sind, wissen sie selbst nicht: ob sie gepackt
-/// sind, steht in den Kopfzeilen der Seite, zu der der Rumpf gehört, und
-/// welche Funde in ihnen liegen, im Detail des Flows. Beides reicht der
-/// Aufrufer als [BodySource] herein. Warteschlange und History lesen ihr
-/// Detail aus je eigenem Provider, und keines der beiden Features darf den
-/// des anderen kennen (`docs/ARCHITECTURE.md` 5).
+/// Die Bytes kommen aus `flowBodyProvider`, dem einen Rumpf-Provider der App.
+/// Was diese Bytes sind, wissen sie selbst nicht: welche Kodierung auf dem
+/// Aufgezeichneten lag, steht im Verweis (und, wo der es nicht trägt, in den
+/// Kopfzeilen der Seite), und welche Funde darin liegen, im Detail des Flows.
+/// Beides reicht der Aufrufer als [BodySource] herein. Warteschlange und
+/// History lesen ihr Detail aus je eigenem Provider, und keines der beiden
+/// Features darf den des anderen kennen (`docs/ARCHITECTURE.md` 5).
 ///
 /// Zwei Dinge, die dieser Weg gegen einen feindlichen Rumpf tut:
 ///
-/// * **Er packt begrenzt und nur auf Ansage aus.** Ein gzip-Rumpf von zwei
-///   Mebibyte kann sich zu Gigabyte entfalten; das Auspacken läuft gestückelt
-///   und bricht an [bodyMaxBytes] ab. Ausgepackt wird nur, was der Header
-///   nennt (`body_decode.dart`).
-/// * **Er verschweigt keinen Abbruch.** Endet der gepackte Inhalt nicht an
-///   seinem Abschluss oder nennt die Seite eine Kodierung, die hier fehlt,
-///   kommt das Ergebnis mit einem [BodyProblem] zurück, nie als leerer Rumpf.
+/// * **Er packt nicht selbst aus.** Das tut der Daemon, mit dem Budget des
+///   Scans (`limits.preview_cap_bytes`, `limits.max_decompress_ratio`); eine
+///   Bombe entfaltet sich damit nie im Prozess der Oberfläche. Was ankommt,
+///   begrenzt zusätzlich [bodyMaxBytes] (`flow_body_provider.dart`).
+/// * **Er verschweigt keinen Abbruch.** Bleibt eine Kodierung auf den Bytes
+///   liegen, weil der Daemon sie nicht kennt, kommt das Ergebnis mit einem
+///   [BodyProblem] zurück und ohne Markierungen, nie als leerer Rumpf.
 library;
 
 import 'dart:isolate';
@@ -50,20 +50,33 @@ class BodySource {
   /// Die Quelle für [reference], mit dem `Content-Encoding` aus [headers].
   ///
   /// [headers] sind die Kopfzeilen der Seite, zu der der Rumpf gehört: die der
-  /// Anfrage für den Anfrage-Rumpf, die der Antwort für den Antwort-Rumpf.
-  /// Wer die falschen reicht, packt einen gzip-Rumpf nicht aus oder einen
-  /// ungepackten ein zweites Mal.
+  /// Anfrage für den Anfrage-Rumpf, die der Antwort für den Antwort-Rumpf. Sie
+  /// gelten nur noch, wo [reference] die Kodierung nicht selbst trägt — ein
+  /// Detail aus einem älteren Daemon oder eines, das ein Test von Hand baut.
+  /// Der Daemon füllt `BodyRef.content_encoding` aus genau diesen Kopfzeilen
+  /// (HUM-119).
   BodySource.of(
     this.reference, {
     required List<Header> headers,
     required this.findings,
-  }) : encoding = contentEncodingOf(headers);
+  }) : encoding = reference.contentEncoding.isEmpty
+           ? contentEncodingOf(headers)
+           : reference.contentEncoding;
 
   /// Der Verweis auf die Bytes.
   final BodyRef reference;
 
   /// Der `Content-Encoding` der Seite, kleingeschrieben; leer für keinen.
   final String encoding;
+
+  /// Der Verweis, mit dem gefragt wird: entpackt, mit der Kodierung der Seite.
+  ///
+  /// Der eine Verweis dieser Quelle. `parsedBodyProvider` und jede Ansicht,
+  /// die dieselben Bytes noch einmal braucht, gehen über ihn; ein zweiter,
+  /// roher Verweis daneben wäre ein zweiter Schlüssel im Zwischenspeicher,
+  /// also ein zweites `GetBody` über die Leitung und in der Hex-Ansicht die
+  /// gepackten Bytes (HUM-119).
+  BodyRef get asked => reference.asking(encoding);
 
   /// Die Funde, deren Stellen in diesen Bytes liegen.
   ///
@@ -85,20 +98,22 @@ class BodySource {
 }
 
 /// Der Rumpf aus [source], ausgepackt, zerlegt und mit seinen Funden.
+///
+/// Gefragt wird immer mit `decoded`: Die Bereiche der Funde zeigen in die
+/// entpackten Bytes, also muss die Ansicht die entpackten halten. Was der
+/// Daemon nicht abnehmen konnte, sagt er im Stück, und dann wird nichts
+/// markiert (HUM-119).
 @riverpod
 Future<ParsedBody> parsedBody(Ref ref, BodySource source) async {
-  final BodyRef reference = source.reference;
+  final BodyRef reference = source.asked;
   final RawBody raw = await ref.watch(flowBodyProvider(reference).future);
-  final String encoding = source.encoding;
   final List<Finding> findings = source.findings;
   if (raw.bytes.length <= bodyIsolateThreshold) {
-    return decodeAndParseBody(raw, reference, encoding, findings);
+    return decodeAndParseBody(raw, reference, findings);
   }
-  // Auspacken und Zerlegen zusammen auf das andere Isolat: das Auspacken von
-  // acht Mebibyte kostet hier genauso viel wie das Zerlegen (`docs/UX.md` 7).
-  return Isolate.run(
-    () => decodeAndParseBody(raw, reference, encoding, findings),
-  );
+  // Das Zerlegen von acht Mebibyte gehört nicht auf das Isolat der
+  // Oberfläche (`docs/UX.md` 7).
+  return Isolate.run(() => decodeAndParseBody(raw, reference, findings));
 }
 
 /// Die zuletzt gewählte Ansicht der Sitzung, oder null.
