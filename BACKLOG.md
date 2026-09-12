@@ -392,7 +392,7 @@ Regel: kein Erweiterungspunkt bekommt im MVP mehr als ein Trait, eine Registry u
 |---|---|---|
 | M0 | Fundament | Monorepo, CI grün, Proto v1, Fake-Daemon spielt Session ab, Escape-Test-Harness, SECURITY.md-Entwurf, Design-Tokens |
 | M1 | Sealed Box | Sandbox nachweislich dicht (Escape-Tests 1 bis 3 grün, 4 und 5 ab M2), `curl` aus der Sandbox landet als gehaltener Request im Daemon. Noch keine dauerhafte Aufzeichnung (Recorder kommt M2); der Sicherheitssatz „alles wird aufgezeichnet" gilt ab M2 |
-| M2 | First Decision | Vollständiger Moderationskreislauf mit echtem UI: Queue, Karte, Allow/Edit/Block, Merken mit Scope, Regeln, History, Notification |
+| M2 | First Decision | Vollständiger Moderationskreislauf mit echtem UI: Queue, Karte, Allow/Block (Editor ab M4, HUM-047), Merken mit Scope, Regeln, History, Notification |
 | M3 | Agent Inside | OpenCode läuft in der Sandbox gegen Ollama im LAN, Terminal im UI, Isolation-Check-Panel, Default-Regeln, Setup-Screen, `humanitl run --profile llm-only` liefert eine reine Inferenz-Instanz im aktuellen Verzeichnis |
 | M4 | Trusted Editor | Pseudonymisierungs-Editor mit Findings, Mapping, Audit-Hash-Kette, Export, DE/EN, Settings-Screen mit Progressive Disclosure, Packaging deb + systemd |
 | M5 | MVP 0.1 | Härtung, Fuzzing, Docs, e2e-Demo-Skript in CI, Release |
