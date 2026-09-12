@@ -1697,7 +1697,7 @@ Das Skript ist der Test.
 ### Akzeptanzkriterien
 - [x] `tests/e2e/m2_first_decision/run.sh` Exit 0 lokal und in CI (Job `e2e-xvfb`).
 - [x] Laufzeit < 4 min in CI (gemessen: 15 bis 20 Sekunden ohne den Bau).
-- [ ] Bei Fehlschlag: Screenshot und Daemon-Log als CI-Artefakt. Das Daemon-Log, das Protokoll des Ziels, die Antworten des Agenten, das Protokoll des Bildschirm-Treibers und, nach einem Fehlschlag, das Bild des Bildschirms stehen unter `target/e2e/m2` (HUM-097, gemessen 2026-09-12: `m2-failure.png`, 148243 Bytes). Offen bleibt der Beweis im hochgeladenen Artefakt des Jobs `e2e-xvfb`.
+- [x] Bei Fehlschlag: Screenshot und Daemon-Log als CI-Artefakt. Das Daemon-Log, das Protokoll des Ziels, die Antworten des Agenten, das Protokoll des Bildschirm-Treibers und, nach einem Fehlschlag, das Bild des Bildschirms stehen unter `target/e2e/m2` (HUM-097, gemessen 2026-09-12: `m2-failure.png`, 148243 Bytes lokal, 38274 Bytes im letzten roten Lauf). **Im CI gemessen am 2026-09-12:** Der Schritt `actions/upload-artifact` des Jobs `e2e-xvfb` steht auf `if: always()`, lädt `target/e2e` hoch und ist im Lauf 34688379715 grün; das Artefakt `e2e-artifacts` liegt dort mit 6960 Bytes. Sein Inhalt ließe sich nur mit Zugangsdaten herunterladen; dass darin nach einem roten Lauf auch das Bild liegt, ist lokal belegt und nicht im CI, weil dafür ein Lauf absichtlich rot gemacht werden müsste.
 - [x] Sprint-Gate in `CONTRIBUTING.md` dokumentiert, samt dem, was es heute **nicht** deckt.
 
 Die dauerhaften Abweichungen dieses Laufs stehen in
