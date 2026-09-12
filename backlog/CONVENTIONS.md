@@ -718,9 +718,17 @@ Bestätigung.
 
 **`Edit + Allow` fehlt bis HUM-047.** Das Control konnte nie gedrückt werden;
 ein toter Zustand ohne Grund ist schlimmer als ein fehlender (4.13). Der Body
-steht bis dahin read-only in der Karte. Aus demselben Grund fehlen der
-Katalogname („Looks like: npm install", `intercept_group_looks_like`) und
-`CatalogEntry`, bis HUM-031 den Katalog liefert.
+steht bis dahin read-only in der Karte.
+
+**Der Katalogname steht im Kopf, sobald jede gehaltene Anfrage der Gruppe
+dieselbe Kennung des Daemons trägt (HUM-094).** `CatalogEntry` und
+`interceptGroupLooksLike` („Looks like: npm install") gibt es seit diesem
+Issue; der Schlüssel heißt camelCase wie jeder andere in `app/l10n/`, nicht
+`intercept_group_looks_like`. Die Kennung kommt aus `FlowSummary.catalog_id`
+und wird nie aus dem Host erraten: Tragen zwei Anfragen einer Gruppe
+verschiedene Kennungen oder gar keine, bleibt es bei „Host und n weitere"
+(4.13). Name, Beschreibung und das Typische stehen im gebündelten
+`catalog/domains.yaml`; über die Leitung reist nur die Kennung.
 
 ### 4.16 Aus der Umsetzung des Regel-Bildschirms (HUM-033, 2026-09-04)
 
@@ -1369,10 +1377,13 @@ Daemon `2` meldet — das ist verabredetermaßen keine Störung
 
 Abweichungen von `backlog/sprint-2.md`, die dauerhaft gelten. Wo die
 Spezifikation anderes sagt, gilt dieser Abschnitt. Die Oberflächen-Hälfte des
-Issues (`app/integration_test/m2_first_decision_test.dart` und der HAR-Export
-aus dem Lauf) steht noch aus; `tests/e2e/m2_first_decision/run.sh` überspringt
-sie mit einer ausdrücklichen Meldung, solange die Datei fehlt, und prüft sie,
-sobald es sie gibt.
+Issues steht seit HUM-097: `app/integration_test/m2_first_decision_test.dart`
+fährt den Bildschirm, während der Agent hält, und der HAR-Export entsteht im
+Lauf. Fehlt die Datei, überspringt `tests/e2e/m2_first_decision/run.sh` den
+Zweig nicht mehr stillschweigend, sondern bricht ab; nur `M2_UI=0` schaltet ihn
+ausdrücklich aus und sagt dann, was ungeprüft blieb. Der Kopf einer Gruppe
+nennt seit HUM-094 den Dienst aus dem Katalog, und der Bildschirm-Zweig prüft
+das an der Datei, die der Treiber schreibt.
 
 **Fake-Upstream und Fake-Agent sind Python, keine Rust-Binaries.** Die
 Spezifikation nennt einen axum-Server und ein statisch gelinktes

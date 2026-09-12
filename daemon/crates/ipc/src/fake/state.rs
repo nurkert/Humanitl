@@ -161,6 +161,11 @@ impl FakeFlow {
             // kommt aus der Entscheidung selbst, ist beim Eintreffen gesäubert
             // worden und steht nur da, wo ein Mensch geblockt hat (HUM-117).
             decision_note: human_block_note(self.decision.as_ref(), self.source),
+            // Der Fake lädt keinen Katalog, also kennt er keinen Dienst. Leer
+            // heißt hier dasselbe wie überall: „der Daemon kennt ihn nicht",
+            // und die Warteschlange benennt die Gruppe dann nach dem Host
+            // (HUM-094). Derselbe Wert steht in [`FakeFlow::domain`].
+            catalog_id: String::new(),
         }
     }
 

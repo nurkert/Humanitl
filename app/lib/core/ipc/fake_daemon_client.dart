@@ -1792,27 +1792,42 @@ class FakeDaemonClient implements DaemonClient {
     required Duration spacing,
     required Duration budget,
   }) {
-    // Host und die registrierbare Domain, die der Katalog des Daemons dazu
-    // nennt. `googleapis.com` steht selbst in der Public Suffix List, also ist
-    // `storage.googleapis.com` die Domain und nicht ihre Unterdomain.
-    const List<(Method, String, String, String)> targets =
-        <(Method, String, String, String)>[
-          (Method.get, 'registry.npmjs.org', 'npmjs.org', '/react'),
-          (Method.post, 'api.github.com', 'github.com', '/graphql'),
-          (Method.get, 'pypi.org', 'pypi.org', '/simple/requests/'),
+    // Host, die registrierbare Domain und die Katalog-Kennung, die der Daemon
+    // dazu nennt. `googleapis.com` steht selbst in der Public Suffix List, also
+    // ist `storage.googleapis.com` die Domain und nicht ihre Unterdomain. Die
+    // Kennungen sind die aus `catalog/domains.yaml`; ein Ziel, das dort nicht
+    // steht, trägt hier die leere Kennung, wie der Daemon sie schickte
+    // (HUM-094).
+    const List<(Method, String, String, String, String)> targets =
+        <(Method, String, String, String, String)>[
+          (Method.get, 'registry.npmjs.org', 'npmjs.org', 'npm', '/react'),
+          (Method.post, 'api.github.com', 'github.com', 'github', '/graphql'),
+          (Method.get, 'pypi.org', 'pypi.org', 'pypi', '/simple/requests/'),
           (
             Method.put,
             'storage.googleapis.com',
             'storage.googleapis.com',
+            '',
             '/bucket/object.json',
           ),
-          (Method.get, 'crates.io', 'crates.io', '/api/v1/crates/serde'),
-          (Method.delete, 'api.example.org', 'example.org', '/v1/items/42'),
+          (
+            Method.get,
+            'crates.io',
+            'crates.io',
+            'crates-io',
+            '/api/v1/crates/serde',
+          ),
+          (Method.delete, 'api.example.org', 'example.org', '', '/v1/items/42'),
         ];
     final List<ScriptedEvent> events = <ScriptedEvent>[];
     for (int i = 0; i < count; i++) {
-      final (Method method, String host, String apex, String path) =
-          targets[i % targets.length];
+      final (
+        Method method,
+        String host,
+        String apex,
+        String catalogId,
+        String path,
+      ) = targets[i % targets.length];
       final _ScriptedFlow flow = _ScriptedFlow(
         id: FlowId(
           '018f0002-0000-7000-8000-${(i + 1).toRadixString(16).padLeft(12, '0')}',
@@ -1820,6 +1835,7 @@ class FakeDaemonClient implements DaemonClient {
         method: method,
         host: host,
         apex: apex,
+        catalogId: catalogId,
         path: '$path?n=$i',
         originTool: 'burst',
         body: method == Method.get ? '' : '{"n": $i}',
@@ -2112,6 +2128,7 @@ class _ScriptedFlow {
     this.scheme = Scheme.https,
     required this.host,
     this.apex = '',
+    this.catalogId = '',
     int? port,
     this.isIp = false,
     required this.path,
@@ -2137,6 +2154,14 @@ class _ScriptedFlow {
   /// question (HUM-091). Empty where there is none — an IP literal, or a host
   /// that is itself a public suffix.
   final String apex;
+
+  /// Die Katalog-Kennung, die der Daemon zu [host] nennen würde.
+  ///
+  /// Wie [apex] je Szenario hingeschrieben und nicht abgeleitet: Die Zuordnung
+  /// Host zu Eintrag trifft der Katalog des Daemons, und eine zweite hier wäre
+  /// eine zweite Antwort auf dieselbe Frage (HUM-094). Leer, wo der Katalog
+  /// nichts findet.
+  final String catalogId;
   final int port;
   final bool isIp;
   final String path;
@@ -2170,6 +2195,7 @@ class _ScriptedFlow {
     scheme: scheme,
     authority: Authority(host: host, port: port, isIpLiteral: isIp),
     apex: apex,
+    catalogId: catalogId,
     path: path,
     state: FlowState.received,
     requestSize: bodyBytes.length,

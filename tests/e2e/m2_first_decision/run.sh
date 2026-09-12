@@ -108,7 +108,7 @@ M2_UI_TEST="$E2E_ROOT/app/integration_test/m2_first_decision_test.dart"
 # gemeinsame Konstante müsste die kleinere der beiden sein und ließe den
 # größeren Zweig unbewacht (HUM-097).
 M2_EXPECTED_ASSERTIONS_CLI=71
-M2_EXPECTED_ASSERTIONS_SCREEN=75
+M2_EXPECTED_ASSERTIONS_SCREEN=77
 
 # Die Ports des Ziels. Im eigenen Netz-Namensraum ist der Lauf root und darf
 # auch die privilegierten binden; damit braucht der Proxy keine Portumlenkung
@@ -251,6 +251,7 @@ M2_AGENT_LOG="$E2E_WORKDIR/out/agent.jsonl"
 M2_AGENT_ERR="$E2E_WORKDIR/out/agent.log"
 M2_UPSTREAM_LOG="$E2E_WORKDIR/out/upstream.log"
 M2_HAR="$E2E_WORKDIR/out/m2.har"
+M2_GROUP_SUMMARY="$E2E_WORKDIR/out/npm-group-summary.txt"
 M2_AGENT_PID=""
 M2_RULE_ID=""
 M2_BATCH_IDS="$E2E_WORKDIR/npm-batch.txt"
@@ -525,6 +526,7 @@ m2_start_screen() {
         HUMANITL_SOCKET="$DAEMON_SOCK" \
         HUMANITL_TOKEN="$DAEMON_TOKEN" \
         HUMANITL_E2E_HAR="$M2_HAR" \
+        HUMANITL_E2E_GROUP_SUMMARY="$M2_GROUP_SUMMARY" \
         HUMANITL_E2E_READY="$M2_UI_READY" \
         HUMANITL_E2E_GO="$M2_UI_GO" \
         HUMANITL_E2E_SHOTS="$E2E_WORKDIR/out" \
@@ -1121,6 +1123,18 @@ else
     fi
     e2e_expect "the export holds every request of the run" 17 \
         "$(jq -r '.log.entries | length' "$M2_HAR")"
+
+    # Und der Bildschirm hat den Dienst benannt, nicht den Host. Die Zeile steht
+    # in einer Datei, die der Bildschirm-Treiber geschrieben hat, damit die
+    # Prüfung des Namens im zählenden Skript liegt und nicht nur in Dart: Ein
+    # Dart-Test, der als einziger davon weiß, zählt in der Bilanz dieses Laufs
+    # nicht mit (HUM-094).
+    e2e_check "the screen names the service, not the host" \
+        "$(grep -q 'npm registry' "$M2_GROUP_SUMMARY" 2> /dev/null && echo ok)" \
+        "$M2_GROUP_SUMMARY does not name the service; the head of the group fell back to a host"
+    e2e_check "and says what the group looks like" \
+        "$(grep -q 'Looks like: npm install' "$M2_GROUP_SUMMARY" 2> /dev/null && echo ok)" \
+        "$M2_GROUP_SUMMARY carries no catalog line"
 
     # Und die Entscheidungen stehen darin, mit den Namen, unter denen der
     # Daemon sie führt. Ein Export, der `timedOut` statt `timed_out` schriebe,

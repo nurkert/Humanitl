@@ -59,6 +59,10 @@ dependencies:
   # den Umfang der Escape-Folgen, die er versteht. Die Bytes kommen gefiltert
   # aus dem Daemon; das Widget registriert zusaetzlich keinen OSC-Handler.
   xterm2: 5.2.0
+  # Liest den gebuendelten Domain-Katalog (`assets/catalog/domains.yaml`,
+  # HUM-094). Genau die Fassung, die die Werkzeugkette ohnehin aufloest;
+  # `yaml` ist eine reine Dart-Bibliothek ohne Plugin und ohne Netz.
+  yaml: 3.1.4
 
 dev_dependencies:
   flutter_test:
@@ -85,3 +89,9 @@ flutter:
   # dem Original und nennt den Befehl, der sie nachzieht.
   assets:
     - assets/catalog/RANKS-LICENSE
+    # Der Domain-Katalog, aus dem die Karte Name, Beschreibung und das
+    # Typische liest; der Daemon schickt nur die Kennung (HUM-031, HUM-094).
+    # Eine erzeugte Kopie von `catalog/domains.yaml`, nie von Hand gepflegt:
+    # `make catalog-assets` zieht sie nach, `make catalog-lint` haelt sie Byte
+    # fuer Byte dagegen.
+    - assets/catalog/domains.yaml
