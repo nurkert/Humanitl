@@ -12,7 +12,7 @@
 //!
 //! Drei Regeln gelten für alles, was hier durchläuft:
 //!
-//! 1. **Kein Wert verlässt den Scan.** Ein [`Finding`](humanitl_core::Finding)
+//! 1. **Kein Wert verlässt den Scan.** Ein [`Finding`]
 //!    trägt Art, Ort, Bereich und Hash, nie den gefundenen Text. Auch das
 //!    Protokoll bekommt ihn nicht: Wer einen Fund meldet, nennt `kind`,
 //!    `location`, `span` und `value_hash`, sonst nichts.
@@ -23,7 +23,7 @@
 //!    unbrauchbar, kommt [`Tier1Scanner::new`] gar nicht erst zustande
 //!    (`FINDINGS_001`), und der Daemon startet nicht.
 
-use humanitl_core::{Diagnostic, HttpRequest};
+use humanitl_core::{Diagnostic, Finding, HttpRequest};
 use humanitl_findings::{DetectorRegistry, FindingsSettings, ScanReport};
 
 /// Sucht in einer Anfrage nach Secrets und personenbezogenen Daten.
@@ -38,6 +38,16 @@ pub trait Scanner: Send + Sync {
     /// `body` ist der gepufferte Request-Body; er ist durch
     /// `limits.hold_body_cap_bytes` gedeckelt.
     fn scan(&self, request: &HttpRequest, body: &[u8]) -> ScanReport;
+
+    /// Alles, was in einem Text des Menschen gefunden wurde.
+    ///
+    /// Für die Notiz einer Block-Entscheidung: Sie geht im Klartext an den
+    /// Agenten, und ein Schlüssel darin verlässt damit den Rechner (HUM-117).
+    /// Ein Fund daraus wird nie ein [`Finding`] am
+    /// Fluss — die gehören zur Anfrage —, sondern genau ein Befund
+    /// `FINDINGS_003` im Ereignisstrom. Regel 1 des Moduls gilt unverändert:
+    /// Der Wert bleibt hier.
+    fn scan_note(&self, note: &str) -> Vec<Finding>;
 }
 
 /// Die Tier-1-Detektoren aus `humanitl-findings`.
@@ -72,6 +82,10 @@ impl Scanner for Tier1Scanner {
     fn scan(&self, request: &HttpRequest, body: &[u8]) -> ScanReport {
         self.registry.scan(request, body)
     }
+
+    fn scan_note(&self, note: &str) -> Vec<Finding> {
+        self.registry.scan_note(note)
+    }
 }
 
 /// Ein Scanner, der nichts sucht.
@@ -89,5 +103,9 @@ impl Scanner for NoScan {
             truncated: false,
             diagnostics: Vec::new(),
         }
+    }
+
+    fn scan_note(&self, _note: &str) -> Vec<Finding> {
+        Vec::new()
     }
 }

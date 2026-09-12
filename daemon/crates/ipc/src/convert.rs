@@ -507,9 +507,41 @@ pub(crate) fn decision_fields(
 }
 
 /// Die Notiz einer Block-Entscheidung, sonst leer.
+///
+/// Das ist die Notiz, die **der Agent liest**: der Text aus dem 403-Rumpf und
+/// aus `X-Humanitl-Note` (HUM-072). Sie gehört in `FlowEvent.Decided.note`,
+/// gleich wer geblockt hat. Für die Zeile und das Detail gilt etwas anderes:
+/// dort steht, was ein Mensch geschrieben hat, und dafür gibt es
+/// [`human_block_note`].
 pub(crate) fn block_note(decision: &Decision) -> String {
     match decision {
         Decision::Block { note, .. } => note.clone().unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+/// Der Satz, den ein **Mensch** beim Blocken an den Agenten gerichtet hat.
+///
+/// Genau eine Entscheidung trägt einen: `Decision::Block` mit
+/// [`BlockReason::User`] aus der Quelle [`DecisionSource::User`] — der Weg
+/// über `Decide`, also Oberfläche und Terminal (`crate::validate` setzt den
+/// Grund fest auf `User`, `HoldQueue::decide` die Quelle). Alles andere ist
+/// leer, auch eine Sperre mit Text: Der harte Block auf ein
+/// prüfsummen-sicheres Geheimnis (`BlockReason::Secret`,
+/// `DecisionSource::System`) schreibt seinen Satz selbst, und `decision_note`
+/// wird als Wort des Menschen angezeigt und exportiert (HUM-117). Dieselbe
+/// Regel wie im Schreiber der Aufzeichnung (`humanitl_recorder`), damit die
+/// Zeile aus der Registry und die Zeile aus der Datenbank dasselbe sagen.
+#[must_use]
+pub fn human_block_note(decision: Option<&Decision>, source: Option<DecisionSource>) -> String {
+    match (decision, source) {
+        (
+            Some(Decision::Block {
+                reason: BlockReason::User,
+                note,
+            }),
+            Some(DecisionSource::User),
+        ) => note.clone().unwrap_or_default(),
         _ => String::new(),
     }
 }
@@ -1047,6 +1079,12 @@ pub fn record_to_summary(record: &FlowRecord, domains: Option<&DomainTable>) -> 
         // ([`recorded_summary_to_proto`], HUM-103).
         meta: false,
         apex: flow_apex(domains, record.id, &request.authority.host),
+        // Der Satz, den der Mensch beim Blocken an den Agenten gerichtet hat.
+        // Er ist beim Eintreffen der Entscheidung gesäubert worden
+        // (`validate::decision_of`) und steht hier so, wie der Agent ihn in
+        // der 403-Antwort gelesen hat. Eine Sperre des Systems mit eigenem
+        // Text bleibt leer (HUM-117).
+        decision_note: human_block_note(record.decision.as_ref(), record.decision_source),
     }
 }
 
@@ -1109,6 +1147,9 @@ pub fn record_to_detail(record: &FlowRecord, domains: Option<&DomainTable>) -> v
         ),
         body_preview: body_preview(record.request.body.inline.as_deref().unwrap_or_default()),
         findings_truncated: record.findings_truncated,
+        // Dieselbe Notiz wie in der Zeile; das Detail trägt sie mit, damit ein
+        // Client, der nur diese Nachricht hat, sie nicht nachschlagen muss.
+        decision_note: human_block_note(record.decision.as_ref(), record.decision_source),
     }
 }
 
@@ -1154,6 +1195,8 @@ pub fn recorded_detail_to_proto(
         domain,
         body_preview,
         findings_truncated,
+        // Dieselbe Notiz wie in der Zeile, aus derselben Spalte.
+        decision_note: summary.decision_note.clone(),
         summary: Some(summary),
     }
 }
@@ -1749,6 +1792,10 @@ pub fn recorded_summary_to_proto(row: &RecordedSummary) -> v1::FlowSummary {
         // wusste es nicht" und wird zum leeren String, nie zu einem Rat aus
         // dem Hostnamen (HUM-091).
         apex: row.apex.clone().unwrap_or_default(),
+        // `NULL` heißt „zu dieser Entscheidung gibt es keine Notiz" und wird
+        // zum leeren Text; der Leser rät nichts und säubert nicht nach, denn
+        // die Spalte trägt schon, was der Agent gelesen hat (HUM-117).
+        decision_note: row.decision_note.clone().unwrap_or_default(),
     }
 }
 
@@ -1916,17 +1963,17 @@ mod tests {
     use humanitl_catalog::Catalog;
     use humanitl_config::Limits;
     use humanitl_core::{
-        Authority, BodyRef, Decision, DecisionSource, Diagnostic, Flow, FlowEvent, FlowId,
-        FlowState, HostName, HttpRequest, Method, Scheme, SessionId, Severity, TransitionInput,
-        UpstreamError,
+        Authority, BlockReason, BodyRef, Decision, DecisionSource, Diagnostic, Flow, FlowEvent,
+        FlowId, FlowState, HostName, HttpRequest, Method, Scheme, SessionId, Severity,
+        TransitionInput, UpstreamError,
     };
     use humanitl_proxy::ConnMeta;
     use humanitl_proxy::registry::{FlowRecord, FlowRegistry};
 
     use super::{
-        CheckResult, IsolationCheck, RecordedSummary, check_result_to_proto, diagnostic_to_proto,
-        flow_event_to_proto, matches_filter, record_to_detail, record_to_summary,
-        recorded_summary_to_proto, rule_from_proto, rule_to_proto, wall_clock,
+        CheckResult, IsolationCheck, RecordedSummary, block_note, check_result_to_proto,
+        diagnostic_to_proto, flow_event_to_proto, matches_filter, record_to_detail,
+        record_to_summary, recorded_summary_to_proto, rule_from_proto, rule_to_proto, wall_clock,
     };
     use crate::domains::DomainTable;
     use crate::v1;
@@ -2439,6 +2486,7 @@ mod tests {
             catalog_id: None,
             error: None,
             meta: false,
+            decision_note: None,
         }
     }
 
@@ -2473,6 +2521,86 @@ mod tests {
             recorded_summary_to_proto(&unknown).apex,
             "",
             "NULL heisst unbekannt, nie ein Rat aus dem Hostnamen"
+        );
+    }
+
+    /// Die Notiz reist auf beiden Wegen mit: aus der Registry und aus der
+    /// Aufzeichnung, in der Zeile und im Detail (HUM-117).
+    #[test]
+    fn both_ways_carry_the_note_of_a_block() {
+        let session = SessionId::new();
+        let flow = flow(session, "api.github.com");
+        let mut record = FlowRecord::new(&flow, &ConnMeta::plain(session));
+        record.decision = Some(Decision::Block {
+            reason: BlockReason::User,
+            note: Some("use PyPI".to_owned()),
+        });
+        record.decision_source = Some(DecisionSource::User);
+        assert_eq!(record_to_summary(&record, None).decision_note, "use PyPI");
+        assert_eq!(record_to_detail(&record, None).decision_note, "use PyPI");
+
+        let allowed = FlowRecord::new(&flow, &ConnMeta::plain(session));
+        assert_eq!(
+            record_to_summary(&allowed, None).decision_note,
+            "",
+            "nichts entschieden heisst keine Notiz"
+        );
+
+        let row = RecordedSummary {
+            decision: Some("block".to_owned()),
+            block_reason: Some("user".to_owned()),
+            decision_note: Some("use PyPI".to_owned()),
+            ..recorded_row()
+        };
+        assert_eq!(recorded_summary_to_proto(&row).decision_note, "use PyPI");
+
+        let without = RecordedSummary {
+            decision_note: None,
+            ..row
+        };
+        assert_eq!(
+            recorded_summary_to_proto(&without).decision_note,
+            "",
+            "NULL heisst: zu dieser Entscheidung gibt es keine Notiz"
+        );
+    }
+
+    /// Ein Text der Maschine ist keine Notiz, auch nicht in der Zeile.
+    ///
+    /// `block_checksum_secret` im Proxy blockt als System und schickt dem
+    /// Agenten einen eigenen Satz mit (`BlockReason::Secret`,
+    /// `DecisionSource::System`). Er steht in der 403-Antwort und im Ereignis,
+    /// aber nicht in `decision_note`: Das Feld wird als Wort des Menschen
+    /// gelesen, angezeigt und exportiert (HUM-117).
+    #[test]
+    fn a_block_the_system_decided_carries_no_note_in_the_row() {
+        let session = SessionId::new();
+        let flow = flow(session, "api.github.com");
+        let machine = Decision::Block {
+            reason: BlockReason::Secret,
+            note: Some("a checksum-confirmed secret was found in this request".to_owned()),
+        };
+
+        let mut record = FlowRecord::new(&flow, &ConnMeta::plain(session));
+        record.decision = Some(machine.clone());
+        record.decision_source = Some(DecisionSource::System);
+        assert_eq!(record_to_summary(&record, None).decision_note, "");
+        assert_eq!(record_to_detail(&record, None).decision_note, "");
+
+        // Das Ereignis behält ihn: Der Agent hat genau diesen Satz gelesen,
+        // und `FlowEvent.Decided.note` ist die Notiz an ihn (HUM-072).
+        assert!(block_note(&machine).contains("checksum-confirmed"));
+
+        // Ohne bekannte Herkunft wird nichts geraten.
+        let mut unknown = FlowRecord::new(&flow, &ConnMeta::plain(session));
+        unknown.decision = Some(Decision::Block {
+            reason: BlockReason::User,
+            note: Some("use PyPI".to_owned()),
+        });
+        assert_eq!(
+            record_to_summary(&unknown, None).decision_note,
+            "",
+            "ohne Herkunft steht nicht fest, dass ein Mensch entschieden hat"
         );
     }
 

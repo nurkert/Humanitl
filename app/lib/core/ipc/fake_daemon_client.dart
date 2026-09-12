@@ -1712,6 +1712,7 @@ class FakeDaemonClient implements DaemonClient {
         :final source,
         :final blockReason,
         :final ruleId,
+        :final note,
       ):
         state.update(
           flowId,
@@ -1720,6 +1721,14 @@ class FakeDaemonClient implements DaemonClient {
             decision: kind,
             decisionSource: source,
             blockReason: blockReason,
+            // The note of a block belongs to the row, exactly as the recorder
+            // stores it in the daemon: only where a person decided (HUM-117).
+            decisionNote: humanBlockNote(
+              kind: kind,
+              blockReason: blockReason,
+              source: source,
+              note: note,
+            ),
             ruleId: ruleId,
             edited: kind == DecisionKind.allowEdited,
             deadline: null,
@@ -3136,10 +3145,15 @@ class _SeededFlow {
         decisionSource: DecisionSource.user,
         edited: true,
       ),
+      // Von Hand blockiert, mit der Notiz an den Agenten. Nur diese Form
+      // trägt eine: Eine Freigabe, ein Ablauf und eine Regel-Sperre haben
+      // keine, und eine Aufzeichnung, in der jede Zeile eine hätte, zeigte
+      // nicht mehr, wo der Mensch etwas dazugesagt hat (HUM-117).
       6 => base.copyWith(
         decision: DecisionKind.block,
         decisionSource: DecisionSource.user,
         blockReason: BlockReason.user,
+        decisionNote: 'use PyPI, this endpoint is not approved',
       ),
       // Von einer Regel blockiert, der häufigste automatische Fall.
       7 => base.copyWith(

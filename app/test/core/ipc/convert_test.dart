@@ -113,6 +113,31 @@ void main() {
     expect(unknown.apex, isEmpty);
   });
 
+  test(
+    'a row carries the note of a block, and no note is the empty string',
+    () {
+      final Flow blocked =
+          (pb.FlowSummary()
+                ..flowId = '018f0000-0000-7000-8000-000000000004'
+                ..authority = (pb.Authority()..host = 'api.github.com')
+                ..decision = pb.DecisionKind.DECISION_KIND_BLOCK
+                ..blockReason = pb.BlockReason.BLOCK_REASON_USER
+                ..decisionNote = 'use PyPI')
+              .toDomain();
+      expect(blocked.decisionNote, 'use PyPI');
+
+      // Kein Feld heißt: zu dieser Entscheidung gibt es keine Notiz. Der Client
+      // erfindet keine und säubert keine nach (HUM-117).
+      final Flow allowed =
+          (pb.FlowSummary()
+                ..flowId = '018f0000-0000-7000-8000-000000000005'
+                ..authority = (pb.Authority()..host = 'api.github.com')
+                ..decision = pb.DecisionKind.DECISION_KIND_ALLOW)
+              .toDomain();
+      expect(allowed.decisionNote, isEmpty);
+    },
+  );
+
   test('FlowEvent.received carries the summary and the deadline', () {
     final DateTime deadline = DateTime.utc(2026, 9, 3, 10, 5);
     final pb.FlowEvent event = pb.FlowEvent()

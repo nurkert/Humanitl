@@ -85,6 +85,11 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "audit_anchors",
         sql: include_str!("../migrations/V7__audit_anchors.sql"),
     },
+    Migration {
+        version: 8,
+        name: "decision_note",
+        sql: include_str!("../migrations/V8__decision_note.sql"),
+    },
 ];
 
 /// Der Stand, den eine frisch migrierte Datenbank hat.

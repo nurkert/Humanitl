@@ -21,8 +21,8 @@ use tokio::sync::broadcast;
 use crate::convert::{
     apex_string, authority_to_proto, block_note, body_preview, body_to_proto, decision_fields,
     diagnostic_to_proto, duration_between, encoding_of_headers, finding_to_proto,
-    flow_state_to_proto, headers_to_proto, method_raw, method_to_proto, request_to_proto,
-    scheme_to_proto, source_to_proto, timestamp, upstream_error_to_proto,
+    flow_state_to_proto, headers_to_proto, human_block_note, method_raw, method_to_proto,
+    request_to_proto, scheme_to_proto, source_to_proto, timestamp, upstream_error_to_proto,
 };
 use crate::v1;
 
@@ -157,6 +157,10 @@ impl FakeFlow {
             // Dieselbe Public Suffix List wie im echten Daemon, damit `apex:`
             // im Fake genau das findet, was es dort findet (HUM-091).
             apex: apex_string(&request.authority.host),
+            // Die Notiz einer Block-Entscheidung, wie im echten Daemon: Sie
+            // kommt aus der Entscheidung selbst, ist beim Eintreffen gesäubert
+            // worden und steht nur da, wo ein Mensch geblockt hat (HUM-117).
+            decision_note: human_block_note(self.decision.as_ref(), self.source),
         }
     }
 
@@ -184,6 +188,8 @@ impl FakeFlow {
             // Eine aufgezeichnete Sitzung kennt keinen Scan, der abgebrochen
             // wäre: Die Funde stehen in der Datei, wie sie dort stehen.
             findings_truncated: false,
+            // Dieselbe Notiz wie in der Zeile.
+            decision_note: human_block_note(self.decision.as_ref(), self.source),
         }
     }
 

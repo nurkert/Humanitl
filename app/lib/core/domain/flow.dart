@@ -98,6 +98,17 @@ abstract class Flow with _$Flow {
     DecisionKind? decision,
     DecisionSource? decisionSource,
     BlockReason? blockReason,
+
+    /// The sentence the person wrote to the agent when they blocked the
+    /// request; empty when there is none (HUM-072, HUM-117).
+    ///
+    /// It reads exactly as the agent read it in the 403 body and in
+    /// `X-Humanitl-Note`: the daemon cleans it once, on the way in, and the
+    /// recording keeps that text. The client never cleans it again and never
+    /// guesses one. Only a block carries a note; an allow, a timeout and an
+    /// undecided request leave it empty, and empty always means "there is
+    /// none", never "the daemon does not know".
+    @Default('') String decisionNote,
     RuleId? ruleId,
     @Default(0) int status,
     @Default(0) int requestSize,
