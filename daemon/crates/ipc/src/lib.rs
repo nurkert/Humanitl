@@ -47,7 +47,11 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `8` seit `FlowSummary.apex`: die registrierbare Domain des Hosts nach der
+/// `9` seit dem entpackten Body: `BodyRef.content_encoding` nennt die
+/// Kodierung der aufgezeichneten Bytes, `BodyRef.decoded` bittet `GetBody`
+/// darum, sie abzunehmen, und `BodyChunk.encoding_left` sagt, was danach noch
+/// auf den Bytes liegt (HUM-119);
+/// `8` war `FlowSummary.apex`: die registrierbare Domain des Hosts nach der
 /// Public Suffix List steht in jeder Zeile, leer wenn der Daemon sie nicht
 /// kennt, und ist derselbe Wert, den `apex:` im Filter vergleicht (HUM-091);
 /// `7` war die Hinweiszeile als eigener Rahmen: `TerminalOutput.notice`
@@ -71,7 +75,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 8;
+pub const PROTO_MINOR: u32 = 9;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
@@ -95,6 +99,7 @@ pub mod v1 {
 }
 
 pub mod auth;
+pub mod body;
 pub mod client;
 pub mod config_rpc;
 pub mod convert;

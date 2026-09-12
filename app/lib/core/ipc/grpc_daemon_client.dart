@@ -247,14 +247,22 @@ class GrpcDaemonClient implements DaemonClient {
   }
 
   @override
-  Stream<Uint8List> getBody(BodyRef ref) async* {
+  Stream<Uint8List> getBody(BodyRef ref) =>
+      getBodyChunks(ref).map((BodyChunk chunk) => chunk.data);
+
+  @override
+  Stream<BodyChunk> getBodyChunks(BodyRef ref) async* {
     final CallOptions options = await _options(timeout: null);
     try {
       await for (final pb.BodyChunk chunk in _stub.getBody(
         ref.toProto(),
         options: options,
       )) {
-        yield Uint8List.fromList(chunk.data);
+        yield BodyChunk(
+          data: Uint8List.fromList(chunk.data),
+          last: chunk.last,
+          encodingLeft: chunk.encodingLeft,
+        );
       }
     } on GrpcError catch (error) {
       throw DaemonException(_translate(error));

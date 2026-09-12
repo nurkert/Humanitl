@@ -57,6 +57,10 @@ protox.workspace = true
 tonic-prost-build.workspace = true
 
 [dev-dependencies]
+# Die Tests zu `GetBody` mit `decoded` (HUM-119) packen ihre Rümpfe selbst;
+# entpackt wird im Code nur über `humanitl-findings`.
+brotli.workspace = true
+flate2.workspace = true
 # `tests/proto_contract.rs` uebersetzt die `.proto`-Dateien selbst und
 # vergleicht das Ergebnis mit dem eingecheckten `proto/descriptor.binpb`.
 protox.workspace = true

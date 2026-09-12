@@ -1,57 +1,40 @@
 /// Vom Transport zum Byteraum, in dem der Daemon gesucht hat.
 ///
-/// `GetBody` liefert die Bytes so, wie der Recorder sie gespeichert hat: roh,
-/// also gepackt, wenn die Anfrage gepackt war. Der Daemon dagegen entpackt vor
-/// dem Suchen und meldet seine Fundstellen auf den **entpackten** Bytes
-/// (`daemon/crates/findings/src/decode.rs`). Beide Seiten müssen deshalb im
-/// selben Byteraum landen, sonst zeigt eine Markierung auf einen Wert, der
-/// dort nie stand.
+/// Der Daemon entpackt vor dem Suchen und meldet seine Fundstellen auf den
+/// **entpackten** Bytes (`daemon/crates/findings/src/decode.rs`). Damit eine
+/// Markierung auf denselben Wert zeigt, muss diese Ansicht dieselben Bytes
+/// halten. Seit HUM-119 bittet sie deshalb `GetBody` darum, die Kodierung
+/// abzunehmen (`BodyRef.decoded`), statt selbst auszupacken:
 ///
-/// Daraus folgt alles hier:
-///
-/// * **Der Header entscheidet, nicht die ersten zwei Bytes.** Ein Upload ohne
-///   `Content-Encoding`, der zufällig mit `1F 8B` beginnt, wird nicht
-///   ausgepackt — der Daemon hat ihn roh durchsucht. Umgekehrt wird ein
-///   deklariertes `gzip` ausgepackt, auch wenn es nicht danach aussieht.
-/// * **Was diese Ansicht nicht auspacken kann, bekommt keine Fundstelle.**
-///   `br` und `zstd` stehen im Vertrag, aber nicht in `dart:io`. Dann werden
-///   die Rohbytes gezeigt, jeder Fund behält seinen Namen, und keiner bekommt
-///   eine Stelle.
-/// * **Ein Strom, der nicht dort endet, wo er es sagt, gilt als abgeschnitten.**
-///   Der Dekodierer von Dart wirft dabei nicht; er liefert die Teilausgabe und
-///   meldet Erfolg. Geprüft wird deshalb der Abschluss selbst: bei gzip die
-///   `ISIZE` der letzten vier Bytes, bei zlib die Adler-32-Summe. Passt sie
-///   nicht, ist der Inhalt unvollständig oder mehrgliedrig, und in beiden
-///   Fällen hat der Daemon etwas anderes gesehen als wir.
+/// * **Der Daemon kann mehr.** `br` gehört zum Vertrag und fehlt in `dart:io`.
+///   Vorher behielt jeder Fund in einem brotli-Rumpf seinen Namen und verlor
+///   seine Stelle; jetzt kommt der Klartext an, und der Bereich trifft.
+/// * **Ein Entpacker weniger.** Bomben, abgeschnittene Ströme und mehrgliedrige
+///   Archive prüft der Daemon, mit dem Budget aus `limits.preview_cap_bytes`
+///   und `limits.max_decompress_ratio`. Ein zweiter Entpacker hier hieße ein
+///   zweites Urteil über dieselben Bytes, und zwei Urteile widersprechen sich
+///   irgendwann.
+/// * **Was übrig bleibt, steht im Stück.** `BodyChunk.encoding_left` ist leer,
+///   wenn die Bytes der Byteraum der Funde sind, und nennt sonst die Kodierung,
+///   die der Daemon nicht abnehmen konnte (`zstd` oder eine Kette aus zwei
+///   Schichten). Dann werden die Rohbytes gezeigt, jeder Fund behält seinen
+///   Namen, und keiner bekommt eine Stelle.
 ///
 /// Frei von Flutter: der ganze Weg läuft über [bodyIsolateThreshold] in
 /// `Isolate.run` (`docs/UX.md` 7).
 library;
 
-import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 
 import '../domain/domain.dart';
 import 'body_kind.dart';
 import 'body_parser.dart';
 
-/// Die Kodierungen, die dieser Weg kennt.
-enum BodyEncoding {
-  /// Kein `Content-Encoding`, oder `identity`.
-  identity,
-
-  /// `gzip` oder `x-gzip`.
-  gzip,
-
-  /// `deflate`, als zlib-Strom.
-  zlib,
-
-  /// Etwas, das diese Ansicht nicht auspacken kann: `br`, `zstd`, eine Kette.
-  unsupported,
-}
-
 /// Der Wert des `Content-Encoding` in [headers], kleingeschrieben.
+///
+/// Die Quelle, aus der auch der Daemon `BodyRef.content_encoding` füllt. Sie
+/// wird noch gebraucht, wo ein Verweis das Feld nicht trägt: ein Detail, das
+/// ein Test von Hand baut, oder ein Daemon mit einer älteren Nebenversion.
 String contentEncodingOf(List<Header> headers) {
   for (final Header header in headers) {
     if (header.name.toLowerCase() == 'content-encoding') {
@@ -61,22 +44,12 @@ String contentEncodingOf(List<Header> headers) {
   return '';
 }
 
-/// Wie [value] zu behandeln ist.
-///
-/// Eine Kette wie `gzip, br` gilt als nicht auspackbar: die zweite Schicht
-/// fehlt hier, und halb ausgepackt ist kein Byteraum.
-BodyEncoding encodingOf(String value) => switch (value) {
-  '' || 'identity' => BodyEncoding.identity,
-  'gzip' || 'x-gzip' => BodyEncoding.gzip,
-  'deflate' => BodyEncoding.zlib,
-  _ => BodyEncoding.unsupported,
-};
-
 /// Die Bytes, wie sie über `GetBody` ankamen.
 class RawBody {
   /// Creates a transport result.
   const RawBody({
     required this.bytes,
+    this.encodingLeft = '',
     this.overflowed = false,
     this.short = false,
   });
@@ -87,6 +60,13 @@ class RawBody {
   /// Die Bytes, höchstens [bodyMaxBytes] plus ein Stück.
   final Uint8List bytes;
 
+  /// Die Kodierung, die noch auf [bytes] liegt; leer für keine.
+  ///
+  /// Leer heißt: Diese Bytes sind die, auf denen der Daemon gesucht hat.
+  /// Steht ein Name darin, konnte der Daemon die Kodierung nicht abnehmen, und
+  /// die Bytes sind die der Leitung.
+  final String encodingLeft;
+
   /// Wahr, wenn der Strom an der Obergrenze abgebrochen wurde.
   final bool overflowed;
 
@@ -95,37 +75,6 @@ class RawBody {
 
   /// Wie viel Platz dieser Eintrag im Zwischenspeicher belegt.
   int get weight => bytes.lengthInBytes;
-}
-
-/// Das Ergebnis des Auspackens.
-class InflatedBody {
-  /// Creates a result.
-  const InflatedBody(
-    this.bytes, {
-    this.decompressed = false,
-    this.aborted = false,
-    this.overflowed = false,
-    this.undecoded = false,
-    this.aligned = true,
-  });
-
-  /// Die Bytes, ausgepackt oder unverändert.
-  final Uint8List bytes;
-
-  /// Wahr, wenn ausgepackt wurde.
-  final bool decompressed;
-
-  /// Wahr, wenn der Strom vorzeitig endet oder sein Abschluss nicht stimmt.
-  final bool aborted;
-
-  /// Wahr, wenn die Grenze gerissen wurde.
-  final bool overflowed;
-
-  /// Wahr, wenn eine angekündigte Kodierung nicht ausgepackt wurde.
-  final bool undecoded;
-
-  /// Wahr, wenn diese Bytes die sind, auf denen der Daemon gesucht hat.
-  final bool aligned;
 }
 
 /// Ein geladener Rumpf, so wie er in die Ansicht geht.
@@ -164,13 +113,16 @@ class BodyLoad {
   /// Der `Content-Type` des Verweises.
   final String contentType;
 
-  /// Der `Content-Encoding` der Anfrage, kleingeschrieben.
+  /// Die Kodierung, um die es geht, kleingeschrieben.
+  ///
+  /// Die, die noch auf den Bytes liegt, wenn der Daemon sie nicht abnehmen
+  /// konnte; sonst die, die er abgenommen hat. Leer, wenn es keine gab.
   final String encoding;
 
   /// Wahr, wenn der `Content-Type` etwas anderes sagt als die Bytes zeigen.
   final bool disputedType;
 
-  /// Wahr, wenn der Rumpf ausgepackt wurde.
+  /// Wahr, wenn der Daemon den Rumpf ausgepackt hat.
   final bool decompressed;
 
   /// Wahr, wenn diese Bytes die sind, auf denen der Daemon gesucht hat.
@@ -180,56 +132,50 @@ class BodyLoad {
   final BodyProblem? problem;
 }
 
-/// Was aus [raw] und [reference] wird, wenn die Anfrage [encoding] ankündigt.
-BodyLoad buildBodyLoad(RawBody raw, BodyRef reference, String encoding) {
-  final BodyEncoding declared = encodingOf(encoding);
-  final InflatedBody inflated = inflateBody(raw.bytes, declared);
-  final Uint8List bytes = inflated.bytes;
+/// Was aus [raw] und [reference] wird.
+///
+/// Die Kodierung kommt nicht mehr aus den Kopfzeilen der Seite, sondern aus
+/// der Antwort selbst: [RawBody.encodingLeft] sagt, was der Daemon liegen
+/// lassen musste, und [BodyRef.contentEncoding], worum es überhaupt ging.
+BodyLoad buildBodyLoad(RawBody raw, BodyRef reference) {
+  final String left = raw.encodingLeft;
+  final bool aligned = left.isEmpty;
+  final Uint8List bytes = raw.bytes;
   BodyProblem? problem;
-  if (raw.overflowed || inflated.overflowed) {
+  if (raw.overflowed) {
     problem = BodyProblem.tooLarge;
-  } else if (inflated.undecoded) {
+  } else if (!aligned) {
     problem = BodyProblem.undecodedEncoding;
-  } else if (inflated.aborted) {
-    problem = BodyProblem.truncatedStream;
-  } else if (!reference.truncated && raw.bytes.length < reference.size) {
+  } else if (raw.short) {
     problem = BodyProblem.incomplete;
   }
-  final int size = raw.overflowed || inflated.overflowed
-      ? bodyMaxBytes + 1
-      : bytes.length;
+  final int size = raw.overflowed ? bodyMaxBytes + 1 : bytes.length;
   return BodyLoad(
     bytes: bytes,
     kind: detectBodyKind(bytes, reference.contentType, totalSize: size),
     declaredSize: reference.size,
     contentType: reference.contentType,
-    encoding: encoding,
-    // Die Streitfrage stellt sich nur bei ungepackten Bytes. Ein deklariertes
-    // gzip, das nicht aufgeht, ist keine falsche Typangabe, und der Satz
-    // dazu wäre eine falsche Erklärung für ein echtes Problem.
-    disputedType:
-        declared == BodyEncoding.identity &&
-        !inflated.undecoded &&
-        bodyTypeIsDisputed(bytes, reference.contentType),
-    decompressed: inflated.decompressed,
-    aligned: inflated.aligned,
+    encoding: left.isEmpty ? reference.contentEncoding : left,
+    // Die Streitfrage stellt sich nur, wenn die Bytes das sind, was sie zu
+    // sein behaupten. Auf einem Rumpf, der noch gepackt ist, wäre der Satz
+    // „content type says text, bytes are not text" eine falsche Erklärung für
+    // ein echtes Problem.
+    disputedType: aligned && bodyTypeIsDisputed(bytes, reference.contentType),
+    decompressed: aligned && reference.contentEncoding.isNotEmpty,
+    aligned: aligned,
     problem: problem,
   );
 }
 
-/// Holt, packt aus und zerlegt in einem Zug.
+/// Holt, ordnet ein und zerlegt in einem Zug.
 ///
-/// Eine Funktion, damit der ganze Weg in `Isolate.run` passt: das Auspacken
-/// von acht Mebibyte kostet auf dem UI-Isolat genauso viel wie das Zerlegen.
+/// Eine Funktion, damit der ganze Weg in `Isolate.run` passt: das Zerlegen von
+/// acht Mebibyte gehört nicht auf das Isolat der Oberfläche.
 ParsedBody decodeAndParseBody(
   RawBody raw,
   BodyRef reference,
-  String encoding,
   List<Finding> findings,
-) {
-  final BodyLoad load = buildBodyLoad(raw, reference, encoding);
-  return parseLoadedBody(load, findings);
-}
+) => parseLoadedBody(buildBodyLoad(raw, reference), findings);
 
 /// Zerlegt, was [load] trägt.
 ParsedBody parseLoadedBody(BodyLoad load, List<Finding> findings) {
@@ -258,126 +204,4 @@ ParsedBody parseLoadedBody(BodyLoad load, List<Finding> findings) {
     placeFindings: load.aligned,
     encodingLabel: load.encoding,
   );
-}
-
-/// Packt [bytes] aus, wenn [encoding] es verlangt.
-InflatedBody inflateBody(Uint8List bytes, BodyEncoding encoding) {
-  switch (encoding) {
-    case BodyEncoding.identity:
-      return InflatedBody(bytes);
-    case BodyEncoding.unsupported:
-      // Der Daemon hat den entpackten Inhalt durchsucht, diese Ansicht hat
-      // ihn nicht. Die Rohbytes sind ehrlicher als ein geratener Inhalt, und
-      // ohne gemeinsamen Byteraum wird nichts markiert.
-      return InflatedBody(bytes, undecoded: true, aligned: false);
-    case BodyEncoding.gzip:
-    case BodyEncoding.zlib:
-      break;
-  }
-  final BytesBuilder out = BytesBuilder(copy: false);
-  bool overflowed = false;
-  final _ChunkSink sink = _ChunkSink((List<int> chunk) {
-    out.add(chunk);
-    // Erst anhängen, dann prüfen: ein Strom, dessen letztes Stück die Grenze
-    // reißt, muss auch abbrechen, und nicht erst das Stück danach.
-    if (out.length > bodyMaxBytes) {
-      overflowed = true;
-      throw const _BombException();
-    }
-  });
-  try {
-    final ByteConversionSink inflater =
-        (encoding == BodyEncoding.gzip ? gzip.decoder : zlib.decoder)
-            .startChunkedConversion(sink);
-    inflater
-      ..add(bytes)
-      ..close();
-  } on _BombException {
-    return InflatedBody(
-      out.takeBytes(),
-      decompressed: true,
-      overflowed: overflowed,
-      aborted: true,
-      aligned: false,
-    );
-  } on Object {
-    // Kein gültiger Strom. Was schon ausgepackt ist, ist weniger wert als die
-    // Wahrheit darüber, also bleiben die Rohbytes stehen und der Fall bekommt
-    // seinen eigenen Namen.
-    return InflatedBody(bytes, undecoded: true, aborted: true, aligned: false);
-  }
-  final Uint8List result = out.takeBytes();
-  if (result.isEmpty && bytes.isNotEmpty) {
-    return InflatedBody(bytes, undecoded: true, aborted: true, aligned: false);
-  }
-  final bool complete = encoding == BodyEncoding.gzip
-      ? _gzipTrailerFits(bytes, result)
-      : _zlibTrailerFits(bytes, result);
-  return InflatedBody(
-    result,
-    decompressed: true,
-    aborted: !complete,
-    aligned: complete,
-  );
-}
-
-/// Wahr, wenn die `ISIZE` am Ende von [packed] zur Länge von [out] passt.
-///
-/// Der Dekodierer meldet bei einem abgeschnittenen Strom Erfolg mit
-/// Teilausgabe; erst diese Zahl verrät den Abbruch. Sie schlägt auch bei einem
-/// mehrgliedrigen gzip an — dort steht die Länge des letzten Glieds —, und das
-/// ist gewollt: `flate2` im Daemon liest heute nur das erste Glied, also
-/// stimmen die Byteräume dann ohnehin nicht überein.
-bool _gzipTrailerFits(Uint8List packed, Uint8List out) {
-  if (packed.length < 8) {
-    return false;
-  }
-  final int isize =
-      packed[packed.length - 4] |
-      (packed[packed.length - 3] << 8) |
-      (packed[packed.length - 2] << 16) |
-      (packed[packed.length - 1] << 24);
-  return (isize & 0xFFFFFFFF) == (out.length & 0xFFFFFFFF);
-}
-
-/// Wahr, wenn die Adler-32-Summe am Ende von [packed] zu [out] passt.
-bool _zlibTrailerFits(Uint8List packed, Uint8List out) {
-  if (packed.length < 6) {
-    return false;
-  }
-  final int stored =
-      (packed[packed.length - 4] << 24) |
-      (packed[packed.length - 3] << 16) |
-      (packed[packed.length - 2] << 8) |
-      packed[packed.length - 1];
-  return (stored & 0xFFFFFFFF) == adler32(out);
-}
-
-/// Die Adler-32-Summe von [bytes].
-int adler32(Uint8List bytes) {
-  int a = 1;
-  int b = 0;
-  for (final int byte in bytes) {
-    a = (a + byte) % 65521;
-    b = (b + a) % 65521;
-  }
-  return ((b << 16) | a) & 0xFFFFFFFF;
-}
-
-/// Reicht die ausgepackten Stücke weiter.
-class _ChunkSink implements Sink<List<int>> {
-  _ChunkSink(this._onChunk);
-
-  final void Function(List<int> chunk) _onChunk;
-
-  @override
-  void add(List<int> data) => _onChunk(data);
-
-  @override
-  void close() {}
-}
-
-/// Das Auspacken hat die Grenze gerissen.
-class _BombException implements Exception {
-  const _BombException();
 }

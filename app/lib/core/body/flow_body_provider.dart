@@ -19,6 +19,9 @@
 ///   Größe ab, trägt das Ergebnis [RawBody.short] und kommt nie als leerer
 ///   Rumpf zurück. „Leer" und „nicht lesbar" sind zwei Aussagen, und die
 ///   zweite darf nie wie die erste aussehen.
+/// * **Er sagt weiter, was noch auf den Bytes liegt.** `BodyChunk.encoding_left`
+///   landet in [RawBody.encodingLeft]; nur daran erkennt die Ansicht, ob eine
+///   Fundstelle in diese Bytes zeigt (HUM-119).
 library;
 
 import 'dart:collection';
@@ -46,7 +49,9 @@ const int bodyCacheBytes = 64 * 1024 * 1024;
 /// Gemerkt wird über den Digest **und** über alles, was den Verweis sonst noch
 /// ausmacht: zwei Anfragen mit demselben Inhalt sind derselbe Rumpf, aber
 /// derselbe Digest mit anderem `Content-Type` oder anderer Kürzung ist eine
-/// andere Anzeige.
+/// andere Anzeige. Dazu gehört seit HUM-119 auch `decoded`: Derselbe Digest
+/// einmal gepackt und einmal entpackt sind zwei Anzeigen, und ohne das Feld
+/// im Schlüssel zeigte die eine die Bytes der anderen.
 class BodyCache {
   final LinkedHashMap<String, RawBody> _entries =
       LinkedHashMap<String, RawBody>();
@@ -102,18 +107,47 @@ Future<RawBody> flowBody(Ref ref, BodyRef reference) async {
   final DaemonClient client = ref.watch(daemonClientProvider);
   final BytesBuilder buffer = BytesBuilder(copy: false);
   bool overflowed = false;
-  await for (final Uint8List chunk in client.getBody(reference)) {
-    buffer.add(chunk);
+  bool ended = false;
+  String encodingLeft = '';
+  await for (final BodyChunk chunk in client.getBodyChunks(reference)) {
+    encodingLeft = chunk.encodingLeft;
+    ended = chunk.last;
+    buffer.add(chunk.data);
     if (buffer.length > bodyMaxBytes) {
       overflowed = true;
       break;
     }
   }
   final Uint8List received = buffer.takeBytes();
+  // Hat der Daemon wirklich ausgepackt? Nur dann zählt `size` etwas anderes
+  // als das, was ankommt: die gepackte Länge.
+  final bool unpacked =
+      reference.decoded &&
+      reference.contentEncoding.isNotEmpty &&
+      encodingLeft.isEmpty;
   final RawBody raw = RawBody(
     bytes: received,
+    encodingLeft: encodingLeft,
     overflowed: overflowed,
-    short: !reference.truncated && received.length < reference.size,
+    // Zwei Wege, auf denen weniger ankommt als angekündigt, und beide müssen
+    // gesagt werden:
+    //
+    // * Der Strom endet ohne sein letztes Stück. Das ist die einzige Auskunft,
+    //   die auch für einen entpackten Rumpf gilt -- dort hat `size` keine
+    //   Aussagekraft mehr.
+    // * Die Bytes sind die der Leitung und es sind weniger, als der Verweis
+    //   nennt. Gilt für jeden rohen Abruf, auch für einen gepackten: `decoded`
+    //   ist dann nicht gesetzt, der Daemon schickt `encoding_left` leer, und
+    //   trotzdem liegt die Kodierung noch auf den Bytes.
+    //
+    // Ein Abbruch an [bodyMaxBytes] ist keines von beidem: Dort hat die
+    // Ansicht aufgehört zu lesen, nicht der Daemon zu senden.
+    short:
+        !overflowed &&
+        (!ended ||
+            (!unpacked &&
+                !reference.truncated &&
+                received.length < reference.size)),
   );
   cache.write(key, raw);
   return raw;
@@ -126,5 +160,6 @@ String cacheKeyOf(BodyRef reference) {
     buffer.write(byte.toRadixString(16).padLeft(2, '0'));
   }
   return '$buffer:${reference.size}:${reference.truncated}'
-      ':${reference.contentType}';
+      ':${reference.contentType}:${reference.contentEncoding}'
+      ':${reference.decoded}';
 }

@@ -20,14 +20,11 @@ use tokio::sync::broadcast;
 
 use crate::convert::{
     apex_string, authority_to_proto, block_note, body_preview, body_to_proto, decision_fields,
-    diagnostic_to_proto, duration_between, finding_to_proto, flow_state_to_proto, headers_to_proto,
-    method_raw, method_to_proto, request_to_proto, scheme_to_proto, source_to_proto, timestamp,
-    upstream_error_to_proto,
+    diagnostic_to_proto, duration_between, encoding_of_headers, finding_to_proto,
+    flow_state_to_proto, headers_to_proto, method_raw, method_to_proto, request_to_proto,
+    scheme_to_proto, source_to_proto, timestamp, upstream_error_to_proto,
 };
 use crate::v1;
-
-/// So viele Bytes trägt ein Stück aus `GetBody`.
-pub const BODY_CHUNK_BYTES: usize = 64 * 1024;
 
 /// So viele Flows behält der Fake höchstens.
 ///
@@ -175,7 +172,9 @@ impl FakeFlow {
                 headers: headers_to_proto(&response.headers),
                 version: "HTTP/1.1".to_owned(),
             }),
-            response_body: self.response.as_ref().map(|r| body_to_proto(&r.body)),
+            response_body: self.response.as_ref().map(|response| {
+                body_to_proto(&response.body, &encoding_of_headers(&response.headers))
+            }),
             findings: self.findings.iter().map(finding_to_proto).collect(),
             diagnostics: Vec::new(),
             domain: Some(self.domain()),
@@ -933,6 +932,59 @@ mod tests {
             Authority::with_scheme(host, Scheme::Https),
             "/",
         )
+    }
+
+    /// Der Fake füllt `content_encoding` aus denselben Kopfzeilen wie der
+    /// echte Dienst, und je Seite aus den eigenen.
+    ///
+    /// Ohne diesen Test prüfte jeder Widget-Test gegen den Fake weiter das
+    /// alte Verhalten: Die Oberfläche schickte `decoded = true` mit leerer
+    /// Kodierung und bekäme die gepackten Bytes zurück, ohne dass irgendetwas
+    /// rot würde (HUM-119).
+    #[test]
+    fn the_fake_detail_carries_the_content_encoding_of_each_side() {
+        let mut request = request("api.github.com");
+        request.headers.insert(
+            humanitl_core::http::HeaderName::from_static("content-encoding"),
+            humanitl_core::http::HeaderValue::from_static("GZIP"),
+        );
+        let mut flow = FakeFlow::new(
+            FlowId::new(),
+            SessionId::new(),
+            SystemTime::now(),
+            request.with_body(BodyRef::from_bytes(Bytes::from_static(b"packed"))),
+        );
+        let mut response_headers = humanitl_core::http::HeaderMap::new();
+        response_headers.insert(
+            humanitl_core::http::HeaderName::from_static("content-encoding"),
+            humanitl_core::http::HeaderValue::from_static("br"),
+        );
+        flow.response = Some(super::StoredResponse {
+            status: 200,
+            headers: response_headers,
+            body: BodyRef::from_bytes(Bytes::from_static(b"also packed")),
+            streaming: false,
+        });
+
+        let detail = flow.detail();
+        assert_eq!(
+            detail
+                .request
+                .expect("a request")
+                .body
+                .expect("a body")
+                .content_encoding,
+            "gzip",
+            "the name is the one of the contract, lower case"
+        );
+        assert_eq!(
+            detail
+                .response_body
+                .expect("a response body")
+                .content_encoding,
+            "br",
+            "the response carries its own encoding, not the one of the request"
+        );
     }
 
     /// Die Domain-Anzeige des Fakes trägt nur, was aus der Datei folgt: den

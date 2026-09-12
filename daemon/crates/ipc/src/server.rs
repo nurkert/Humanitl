@@ -87,8 +87,9 @@ pub const MAX_PAGE_LIMIT: u32 = 1000;
 /// So viele Bytes trägt ein Stück eines Bodys über die Leitung (`GetBody`).
 ///
 /// Groß genug, damit ein Body von einigen Megabyte nicht in tausend Nachrichten
-/// zerfällt, klein genug, damit der erste Teil sofort beim Client ist.
-pub const BODY_CHUNK_BYTES: usize = 64 * 1024;
+/// zerfällt, klein genug, damit der erste Teil sofort beim Client ist. Die
+/// Zahl steht in [`crate::body`], weil der Fake dieselbe braucht.
+pub use crate::body::BODY_CHUNK_BYTES;
 
 /// So lange darf eine offene Verbindung den Abbau nach dem Signal aufhalten.
 ///
@@ -109,6 +110,12 @@ pub struct IpcServer {
     queue: Arc<HoldQueue>,
     info: v1::Info,
     body_cap_bytes: u64,
+    /// `limits.preview_cap_bytes` und `limits.max_decompress_ratio`: das
+    /// Budget, mit dem `GetBody` einen Body für `decoded = true` entpackt.
+    /// Dasselbe wie beim Scan, damit ein Rumpf, den die Detektoren gesehen
+    /// haben, in der Oberfläche genauso weit reicht (HUM-119).
+    decode_cap_bytes: usize,
+    max_decompress_ratio: u32,
     rules: Option<RulesService>,
     recorder: Option<Recorder>,
     domains: Option<Arc<DomainTable>>,
@@ -210,6 +217,9 @@ impl IpcServer {
                 session_id: session.map(|id| id.to_string()).unwrap_or_default(),
             },
             body_cap_bytes: config.limits.hold_body_cap_bytes,
+            decode_cap_bytes: usize::try_from(config.limits.preview_cap_bytes)
+                .unwrap_or(usize::MAX),
+            max_decompress_ratio: config.limits.max_decompress_ratio,
             rules: None,
             recorder: None,
             domains: None,
@@ -230,6 +240,21 @@ impl IpcServer {
             },
             bodies: BodyIndex::new(),
         }
+    }
+
+    /// Derselbe Dienst über einer Warteschlange, in der nie etwas hängt.
+    ///
+    /// Für einen Aufrufer, der nur aus der Aufzeichnung antwortet — `GetFlow`,
+    /// `GetBody`, `ListFlows` — und keinen laufenden Proxy hat. Die
+    /// Warteschlange gehört sonst dem Proxy, und ohne ihn gibt es nichts zu
+    /// halten. Sie steht hier, damit ein solcher Aufrufer sie nicht selbst
+    /// bauen und dafür `humanitl-proxy` kennen muss: Die Kopplung an dieses
+    /// Crate wächst nicht mehr (`tools/coupling-baseline.toml`, HUM-145).
+    #[must_use]
+    pub fn over_the_recording(config: &Config, session: Option<SessionId>) -> Self {
+        let registry = Arc::new(FlowRegistry::new(&config.limits));
+        let queue = Arc::new(HoldQueue::with_registry(&config.limits, registry));
+        Self::new(queue, config, session)
     }
 
     /// Derselbe Dienst über der Sandbox dieser Sitzung (HUM-040).
@@ -909,29 +934,13 @@ async fn preview_of(recorder: &Recorder, detail: &RecordedDetail) -> String {
 
 /// Zerlegt einen Body in die Stücke, die `GetBody` streamt.
 ///
-/// Auch ein leerer Body ergibt genau ein Stück mit `last = true`: Der Klient
-/// soll das Ende sehen und nicht auf ein nächstes warten.
-fn body_stream(bytes: &Bytes) -> BoxStream<Result<v1::BodyChunk, Status>> {
-    let total = bytes.len();
-    let chunks: Vec<Result<v1::BodyChunk, Status>> = if total == 0 {
-        vec![Ok(v1::BodyChunk {
-            data: Vec::new(),
-            offset: 0,
-            last: true,
-        })]
-    } else {
-        (0..total)
-            .step_by(BODY_CHUNK_BYTES)
-            .map(|offset| {
-                let end = (offset + BODY_CHUNK_BYTES).min(total);
-                Ok(v1::BodyChunk {
-                    data: bytes.slice(offset..end).to_vec(),
-                    offset: offset as u64,
-                    last: end == total,
-                })
-            })
-            .collect()
-    };
+/// Die Stückelung selbst steht in [`crate::body::chunks`], damit der Fake
+/// dieselbe benutzt; hier wird sie nur in den Strom gelegt, den tonic will.
+fn body_stream(bytes: &Bytes, encoding_left: &str) -> BoxStream<Result<v1::BodyChunk, Status>> {
+    let chunks: Vec<Result<v1::BodyChunk, Status>> = crate::body::chunks(bytes, encoding_left)
+        .into_iter()
+        .map(Ok)
+        .collect();
     Box::pin(tokio_stream::iter(chunks))
 }
 
@@ -1106,6 +1115,12 @@ impl v1::humanitl_server::Humanitl for IpcServer {
     /// hält ihn nur, solange die Anfrage läuft. Das ist dann kein
     /// `UNIMPLEMENTED` — die RPC gibt es —, sondern der Befund, dass dieser
     /// Daemon ohne Aufzeichnung läuft.
+    ///
+    /// Mit `BodyRef.decoded` nimmt der Daemon die Kodierung aus
+    /// `BodyRef.content_encoding` ab, soweit er sie kann, und sagt in jedem
+    /// Stück, was noch darauf liegt ([`crate::body::deliver`], HUM-119).
+    /// Gespeichert bleibt, was auf der Leitung war; entpackt wird erst hier,
+    /// beim Ausliefern.
     async fn get_body(
         &self,
         request: Request<v1::BodyRef>,
@@ -1131,7 +1146,13 @@ impl v1::humanitl_server::Humanitl for IpcServer {
             .read_body(recorder, &wire)
             .await
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
-        Ok(Response::new(body_stream(&bytes)))
+        let (bytes, encoding_left) = crate::body::deliver(
+            &wire,
+            bytes,
+            self.decode_cap_bytes,
+            self.max_decompress_ratio,
+        );
+        Ok(Response::new(body_stream(&bytes, &encoding_left)))
     }
 
     /// Liest oder ändert den Regelsatz.
@@ -2093,9 +2114,7 @@ mod tests {
         let refused = server
             .get_body(Request::new(v1::BodyRef {
                 sha256: vec![0u8; 32],
-                size: 0,
-                truncated: false,
-                content_type: String::new(),
+                ..v1::BodyRef::default()
             }))
             .await;
         let Err(status) = refused else {

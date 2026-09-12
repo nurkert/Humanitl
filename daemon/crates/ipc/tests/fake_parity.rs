@@ -359,9 +359,7 @@ fn table() -> Vec<Case> {
                 get_body,
                 v1::BodyRef {
                     sha256: vec![1, 2, 3],
-                    size: 0,
-                    truncated: false,
-                    content_type: String::new(),
+                    ..v1::BodyRef::default()
                 }
             ),
         },

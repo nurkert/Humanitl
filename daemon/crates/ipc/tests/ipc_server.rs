@@ -730,9 +730,7 @@ async fn every_other_rpc_says_which_issue_brings_it() {
     let without_recording = client
         .get_body(v1::BodyRef {
             sha256: vec![0u8; 32],
-            size: 0,
-            truncated: false,
-            content_type: String::new(),
+            ..v1::BodyRef::default()
         })
         .await
         .map(|_| ())
