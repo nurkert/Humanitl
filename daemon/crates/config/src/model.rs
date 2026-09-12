@@ -207,7 +207,7 @@ pub struct ResolverConfig {
     /// Nameserver als `IP:Port`, ohne Port gilt 53. Gesetzt fragt der Daemon nach einer Freigabe nur noch diesen Server, über UDP mit TCP-Rückfall, und weder `/etc/resolv.conf` noch `/etc/hosts`. Leer bedeutet: der Namensdienst des Systems.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub nameserver: Option<String>,
-    /// Feste Zuordnungen von Hostname zu Adresse, vor jeder Abfrage.
+    /// Feste Zuordnungen von Hostname zu Adresse, vor jeder Abfrage. Nicht leer meldet der Start als `CONFIG_016`, damit der Testhebel nicht unbemerkt in einem Alltagslauf steht.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub overrides: BTreeMap<String, String>,
     /// Sekunden, die eine Antwort im Zwischenspeicher bleibt.

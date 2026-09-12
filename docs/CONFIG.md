@@ -185,7 +185,7 @@ Namensauflösung nach der Entscheidung.
 |---|---|---|---|---|---|---|
 | `resolver.cache_ttl_secs` | integer | `300` | expert | denied | ja | Sekunden, die eine Antwort im Zwischenspeicher bleibt. |
 | `resolver.nameserver` | string, optional | `-` | expert | denied | ja | Nameserver als `IP:Port`, ohne Port gilt 53. Gesetzt fragt der Daemon nach einer Freigabe nur noch diesen Server, über UDP mit TCP-Rückfall, und weder `/etc/resolv.conf` noch `/etc/hosts`. Leer bedeutet: der Namensdienst des Systems. |
-| `resolver.overrides` | table of string | `{}` | expert | denied | ja | Feste Zuordnungen von Hostname zu Adresse, vor jeder Abfrage. |
+| `resolver.overrides` | table of string | `{}` | expert | denied | ja | Feste Zuordnungen von Hostname zu Adresse, vor jeder Abfrage. Nicht leer meldet der Start als `CONFIG_016`, damit der Testhebel nicht unbemerkt in einem Alltagslauf steht. |
 | `resolver.prefer` | ipv4 \| ipv6 | `"ipv4"` | expert | denied | ja | Welche Adressfamilie bevorzugt wird, wenn beide vorliegen. |
 | `resolver.test_ca` | string, optional | `-` | expert | denied | ja | Zusätzliche CA für Tests, als PEM und mit absolutem Pfad. Gilt nur, wenn der Daemon mit `--allow-test-ca` gestartet wurde; ohne das Flag wird der Schlüssel nicht angenommen, und ein nicht absoluter Pfad beendet den Start, statt gegen das Arbeitsverzeichnis aufgelöst zu werden. Nur in Testläufen setzen, nie im Alltag. |
 
