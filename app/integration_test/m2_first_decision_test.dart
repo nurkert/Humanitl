@@ -466,10 +466,17 @@ Future<void> _run(
   // Niemand entscheidet sie. Die Karte sagt es, sobald die Frist um ist; drei
   // Sekunden später räumt die Warteschlange die Zeile ab, also wird hier auf
   // den Text gewartet und nicht auf einen Zustand danach.
+  //
+  // Die Frist hier muss größer sein als die Haltefrist des Laufs, nicht gleich
+  // groß: Die Anfrage geht 4,4 Sekunden nach dem Start hinaus und verfällt
+  // 30 Sekunden danach, während dieser Schritt schon nach wenigen Sekunden
+  // erreicht ist. Mit 30 Sekunden blieben unter zwei Sekunden Abstand, und je
+  // schneller die Schritte davor liefen, desto knapper würde es — ein Test,
+  // der auf einem schnellen Rechner scheitert, wäre der falsche Wächter.
   await pumpUntil(
     tester,
     () => find.text('Blocked (timed out)').evaluate().isNotEmpty,
-    timeout: const Duration(seconds: 30),
+    timeout: const Duration(seconds: 60),
     what: 'the request nobody decided says it ran out of time',
   );
 

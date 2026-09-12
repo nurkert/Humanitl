@@ -2747,6 +2747,58 @@ Das Skript ist der Test. Zusätzlich: `flutter test integration_test/...` muss a
 - [x] Bei Fehlschlag: Daemon-Log als CI-Artefakt und ein Bild des Bildschirms. (Der Weg ist entschieden und gebaut: ein `RenderRepaintBoundary`-Abzug, den der Test selbst nach `$HUMANITL_E2E_SHOTS` schreibt; `collect` legt ihn zu den übrigen Artefakten unter `target/e2e/m2`. Gemessen an einem echten Fehlschlag am 2026-09-12: `target/e2e/m2/m2-failure.png`, 148243 Bytes, zeigte den Bildschirm im Moment des Abbruchs. Offen bleibt der Beweis im Artefakt des Jobs `e2e-xvfb`.) **Gemessen 2026-09-12:** Lokal hinterlässt ein roter Lauf `target/e2e/m2/` mit `daemon.log`, `ui.log`, `agent.log`, `agent.jsonl`, `upstream.log` und `m2-failure.png` (38274 Bytes im letzten roten Lauf); der CI-Job lädt genau dieses Verzeichnis hoch (`actions/upload-artifact`, Schritt im Lauf 34688379715 vorhanden und grün). Dass der Abzug bei einem roten Lauf entsteht, ist lokal belegt; im CI ist bisher kein Lauf rot gewesen, und ein roter Lauf nur zum Beweis wird nicht erzwungen.
 - [x] Der Absatz „nur die Daemon-Hälfte" ist aus `CONTRIBUTING.md`, aus 4.22 und aus HUM-036 verschwunden. (`grep -n "Daemon-Hälfte\|half built" CONTRIBUTING.md backlog/CONVENTIONS.md backlog/sprint-2.md` findet keine Zusage mehr, die Oberfläche fehle; 2026-09-12.)
 
+### Nachtrag (2026-09-12): die Haltefrist gehört zum Zweig
+
+Der Lauf 34700824623 ist in CI im Schritt „M2 demo" rot geworden, bei einem
+Stand, der lokal grün war und dessen einzige Änderung am Bildschirm-Zweig ein
+Kommentar war (HUM-095). Der Schritt brauchte dort 101 Sekunden statt der 73 bis
+80 der grünen Läufe davor; der Läufer war langsamer, und der Treiber kam mit den
+zwölf gehaltenen Anfragen nicht mehr innerhalb der Haltefrist von 10 Sekunden
+durch.
+
+Nachgestellt am 2026-09-12 auf dem Entwicklungsrechner, ohne den Rechner
+künstlich zu belasten: mit `M2_HOLD_TIMEOUT=4` statt 10 scheitert der
+Bildschirm-Zweig mit „and the daemon has all twelve of them decided allow:
+expected 12, got 0" — dieselbe Stelle wie in CI. Damit ist die Frist als
+Druckstelle belegt und nicht vermutet.
+
+`run.sh` führt die Frist seitdem je Zweig: 10 Sekunden ohne Oberfläche, 30 mit.
+Die Kommandozeile startet zwölf Prozesse und ist in wenigen Sekunden durch; der
+Bildschirm muss zeichnen, auf Ereignisse warten und klicken, und er braucht hier
+rund drei Sekunden. Drei Sekunden Bedarf gegen zehn Sekunden Frist überlebt
+keinen dreifach langsameren Läufer. Bezahlt wird mit zwanzig Sekunden mehr im
+Schritt mit der Zeitüberschreitung, denn dort wartet der Lauf die Frist ab.
+
+Gemessen nach der Änderung: beide Zweige grün, `E2E_ONLY=m2 ./tests/e2e/run.sh`
+mit 75 Behauptungen und `M2_UI=0 E2E_ONLY=m2 ./tests/e2e/run.sh` mit 71.
+
+Eine Frist im Treiber musste mit: Schritt 5 wartet auf „Blocked (timed out)"
+und stand auf denselben 30 Sekunden wie die Haltefrist. Die unentschiedene
+Anfrage geht 4,4 Sekunden nach dem Start hinaus und verfällt 30 Sekunden später,
+während der Schritt schon nach wenigen Sekunden erreicht ist — es blieben unter
+zwei Sekunden Abstand, und je schneller die Schritte davor liefen, desto
+knapper. Die Frist steht jetzt auf 60 Sekunden.
+
+**Was die 30 Sekunden verdecken, und was deshalb ein eigenes Issue braucht.**
+Der Vertrag kann den Stapel in einem Aufruf: `DecideRequest.flow_ids` ist
+`repeated`, und `daemon/crates/ipc/src/server.rs` legt erst die Regel an und
+entscheidet dann alle Ids derselben Anfrage. Die Oberfläche nutzt das nicht.
+`DaemonClient.decide` (`app/lib/core/ipc/daemon_client.dart`) nimmt genau eine
+Id, `convert.dart` packt genau eine in `flowIds`, und `InterceptDecision._many`
+(`app/lib/features/intercept/providers/decision.dart`) schickt zwölf Aufrufe
+nacheinander. Der Doc-Kommentar dort nennt den Grund — die Regel muss vor den
+Entscheidungen stehen, die sie deckt —, und der Grund stimmt; er schließt aber
+nur `Future.wait` aus, nicht den Stapel im Vertrag, der genau diese Reihenfolge
+im Daemon herstellt. Der Preis sind zwölf Umläufe über den Socket, zwölf
+Ereignisse und zwölf Neuzeichnungen der Warteschlange, und das ist der Grund,
+warum die Haltefrist für den Bildschirm-Zweig auf 30 Sekunden muss. Die
+30 Sekunden sind damit ein Pflaster: Sie machen den Lauf verlässlich, sie
+beheben nicht, dass die Oberfläche eine Fähigkeit des Vertrags nicht erreicht
+(ADR-0018). Gefunden am 2026-09-12 im Review dieser Änderung; die Behebung
+gehört in ein eigenes Issue, weil sie `daemon_client.dart`,
+`grpc_daemon_client.dart`, `convert.dart`, `decision.dart` und den Fake
+zugleich anfasst.
+
 ### Stand (2026-09-04): Größe L, die Naht steht nicht
 
 Geprüft am Code (Audit 2026-09-04, Zeilen gegen den heutigen Baum gezogen). Was hält: `app/integration_test/` existiert (`shell_test.dart`, 43 Zeilen, `FakeDaemonClient`, `IntegrationTestWidgetsFlutterBinding`), `integration_test` ist Dev-Abhängigkeit (`app/pubspec.yaml:61`), der Job `e2e-xvfb` installiert `xvfb` (`ci.yml:516`, `:541`), Schritt 10 steht mit dem zitierten Env-Block und dem Schalter `M2_UI=0|1|auto` (`run.sh:671-716`), `DaemonPaths.resolve` ist echt (`app/lib/core/ipc/daemon_paths.dart:38`), die Keys der Bildschirme sind dicht (`intercept-allow`, `intercept-block`, `intercept-remember`, `intercept-remember-duration`, `intercept-remember-target`, `intercept-batch-modal`, `intercept-batch-confirm`, `queue-group-<apex>`, `queue-group-findings-<apex>`, `queue-group-block-<apex>`, `history-filter-input`, `history-chip-<name>`, `history-export-open`, `history-export-save`, `rules-filter`), Tastatur-Allow übergibt `confirmed: true` (`intercept_screen.dart:310`), das Ziel `apex` ergibt `**.npmjs.org` (`rule_sentence.dart:136`), der Temporär-Tab existiert (`rules_screen.dart:243-246`), und Filterstrings gehen wörtlich an den Daemon (`history_query.dart`), sodass `decision:block`, `decision:timed_out` und `findings:>0` funktionieren (`run.sh:615-621` beweist die Daemon-Seite).
@@ -2775,7 +2827,7 @@ Der Bildschirm-Treiber steht: `app/integration_test/m2_first_decision_test.dart`
 startet **vor** dem Agenten, trifft die Entscheidungen der Abschnitte 2 bis 4,
 während gehalten wird, filtert die Historie und schreibt den HAR-Export über
 den Produktivweg. `run.sh` führt beide Zweige mit eigener Zahl
-(`M2_EXPECTED_ASSERTIONS_CLI` 70, `M2_EXPECTED_ASSERTIONS_SCREEN` 75) und
+(`M2_EXPECTED_ASSERTIONS_CLI` 71, `M2_EXPECTED_ASSERTIONS_SCREEN` 75) und
 verlangt die Datei des Treibers, statt Schritt 10 still zu überspringen.
 
 Die Naht sind zwei Handschläge über Dateien, und beide sind nötig:
