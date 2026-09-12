@@ -2475,7 +2475,7 @@ Kein Briefing-Editor im UI (Post-MVP, Settings `expert`). Keine Adapter außer O
 
 ### Betroffene Pfade
 - `agents/opencode/briefing.en.md`, `briefing.de.md` (neu)
-- `daemon/crates/core-types/src/agent/opencode.rs` (`files()` erweitern)
+- `daemon/crates/sandbox/src/agent/opencode.rs` (`files()` erweitern), `daemon/crates/sandbox/src/agent/briefing.rs` (neu): Vorlagen, Platzhalterersetzung, `TOKEN_BUDGET`. Ein Verzeichnis `daemon/crates/core-types/src/agent/` gibt es nicht (nachgesehen am 2026-09-12)
 - `daemon/crates/config/src/schema.rs`: `agent.briefing` (`enabled: bool`, Default true, Tier `advanced`)
 
 ### Spezifikation
@@ -2498,8 +2498,8 @@ You run inside an isolated sandbox with no direct internet access. Every HTTP(S)
 3. Prüfen, dass OpenCode die Datei liest: Sandbox starten, im Terminal `opencode` fragen „Wo läufst du?", Antwort enthält „Humanitl".
 
 ### Tests
-- `opencode::tests::briefing_written_outside_work`: `files()` enthält Pfad unter `$HOME/.config/opencode/`, keiner unter `/work`.
-- `opencode::tests::briefing_placeholders_replaced`: kein `{` im Ergebnis.
+- `opencode_adapter::briefing_written_outside_work` (`daemon/crates/sandbox/tests/opencode_adapter.rs:322`): `files()` enthält Pfad unter `$HOME/.config/opencode/`, keiner unter `/work`.
+- `opencode_adapter::briefing_placeholders_replaced` (dieselbe Datei, Zeile 353): kein `{` im Ergebnis.
 - e2e in HUM-046: Frage „Wo läufst du?" ⇒ Antwort enthält „Humanitl" oder „sandbox".
 
 ### Akzeptanzkriterien
