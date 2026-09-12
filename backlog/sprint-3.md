@@ -1792,7 +1792,9 @@ Erkennung, Zuordnung und Aufzeichnung sind fertig:
 
 **Offen und ausdrücklich nicht gedeckt:**
 
-- **Die Oberfläche.** Es gibt keinen `diagnosticsProvider` und keine Karte im
+**Nachtrag 2026-09-12: die ersten beiden Punkte sind zu; was darunter steht, ist Vorgeschichte.** Den `diagnosticsProvider` und die Karte im Feed gibt es seit HUM-106 (`app/lib/features/intercept/providers/diagnostics.dart`, gelesen in `app/lib/features/intercept/widgets/diagnostic_card.dart:93`). `SetConfig` ist seit HUM-151 für `sandbox.env.<NAME>` implementiert (`daemon/crates/ipc/src/server.rs`, `set_config` über `config_rpc::set`). Offen bleibt nur, was der zweite Punkt zuletzt nennt: `humanitl config set` gibt es nicht (`daemon/bin/humanitl/src/cli.rs`, `ConfigCmd` kennt `Get` und `Schema`), und `GetConfig` antwortet weiter `unimplemented` und wartet auf HUM-069.
+
+- **Die Oberfläche.** Es gab keinen `diagnosticsProvider` und keine Karte im
   Feed. `FlowEvent.diagnostic` kommt in der App an und wird verworfen
   (`app/lib/features/intercept/providers/flows.dart`,
   `app/lib/features/history/providers/history_page.dart`). Bis dahin sieht ein
@@ -1802,9 +1804,11 @@ Erkennung, Zuordnung und Aufzeichnung sind fertig:
   **HUM-106** (`BACKLOG.md`, Sprint-2-Tabelle), angelegt am 2026-09-04;
   HUM-068 hängt für seinen `Flow`-Scope daran.
 - **Der Knopf „Für nächste Session setzen".** Er bräuchte einen
-  Schreibweg in die Konfiguration, und den gibt es nicht: der RPC `SetConfig`
-  antwortet `unimplemented` und wartet auf den Einstellungen-Bildschirm
-  (HUM-069), `humanitl config set` gibt es noch nicht (`CLI_004:
+  Schreibweg in die Konfiguration, und den gab es nicht: der RPC `SetConfig`
+  antwortete `unimplemented` und wartete auf den Einstellungen-Bildschirm
+  (HUM-069); seit HUM-151 schreibt er `sandbox.env.<NAME>` nach `config.toml`
+  (`daemon/crates/ipc/src/server.rs`, `set_config` über `config_rpc::set`,
+  nachgesehen am 2026-09-12). `humanitl config set` gibt es weiterhin nicht (`CLI_004:
   unrecognized subcommand 'set'`, gemessen). Das betrifft nur das Schreiben:
   `humanitl config get` löst lokal auf und braucht den Daemon nicht, nur der
   RPC `GetConfig` ist ebenfalls unimplementiert.
