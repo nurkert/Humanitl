@@ -220,6 +220,9 @@ extension FlowSummaryToDomain on pb.FlowSummary {
     decision: enumFromWire(DecisionKind.values, decision.value),
     decisionSource: enumFromWire(DecisionSource.values, decisionSource.value),
     blockReason: enumFromWire(BlockReason.values, blockReason.value),
+    // What the person wrote to the agent, already cleaned by the daemon; the
+    // empty string means there is no note (HUM-117).
+    decisionNote: decisionNote,
     ruleId: ruleId.isEmpty ? null : RuleId(ruleId),
     status: status,
     requestSize: requestSize.toInt(),

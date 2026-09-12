@@ -24,6 +24,10 @@ const FlowId goldenDetailFlow = FlowId('018f0004-0000-7000-8000-00000000000a');
 /// (HUM-116). Zeile 28 des Szenarios, ein PATCH mit zwei Funden.
 const FlowId goldenJsonFlow = FlowId('018f0004-0000-7000-8000-00000000001d');
 
+/// Der Flow, an dem die Notiz hängt: von Hand geblockt, mit dem Satz an den
+/// Agenten unter der Entscheidung (HUM-117). Zeile 7 des Szenarios.
+const FlowId goldenNoteFlow = FlowId('018f0004-0000-7000-8000-000000000007');
+
 /// Ein Rumpf, der kein Text ist: die Telemetrie als Protobuf, in der
 /// Hex-Ansicht (HUM-116). Zeile 15 des Szenarios, freigegeben, ohne Fund.
 const FlowId goldenHexFlow = FlowId('018f0004-0000-7000-8000-000000000010');
@@ -128,6 +132,13 @@ void main() {
       fileName: 'history_detail_request_$name',
       constraints: window,
       builder: () => historyGolden(tokens: tokens, selected: goldenDetailFlow),
+    );
+
+    goldenTest(
+      'history_detail_note_$name',
+      fileName: 'history_detail_note_$name',
+      constraints: window,
+      builder: () => historyGolden(tokens: tokens, selected: goldenNoteFlow),
     );
 
     goldenTest(

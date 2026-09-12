@@ -382,6 +382,19 @@ message FlowSummary {
   // nie "unbedenklich" und wird nie geraten; wer gruppiert, nimmt dann den
   // Host selbst. Derselbe Wert, den `apex:` im Filter vergleicht.
   string apex = 26;
+  // Die Notiz, die der Mensch beim Blocken an den Agenten gerichtet hat; leer,
+  // wenn es keine gibt (HUM-072, HUM-117).
+  //
+  // Sie steht so hier, wie der Agent sie im 403-Rumpf und in
+  // `X-Humanitl-Note` gelesen hat: durch dieselbe Saeuberung gegangen
+  // (`humanitl_core::block::sanitize_note`), also ohne Zeilenumbrueche, ohne
+  // Steuerzeichen und auf 500 Zeichen begrenzt. Der Daemon saeubert vor dem
+  // Speichern, nie beim Lesen; wer sie anzeigt, zeigt sie als Klartext.
+  //
+  // Nur eine Block-Entscheidung traegt eine. Eine Freigabe, ein Ablauf und
+  // eine Anfrage ohne Entscheidung lassen das Feld leer, und leer heisst hier
+  // immer "es gibt keine", nie "der Daemon weiss es nicht".
+  string decision_note = 27;
 }
 
 // Alles, was der Detail-Bereich zu einem Flow zeigt.
@@ -414,6 +427,10 @@ message FlowDetail {
   // einen Flow aus einer frueheren Sitzung ist das Feld deshalb `false`, und
   // `false` heisst hier "nicht als gekuerzt bekannt".
   bool findings_truncated = 10;
+  // Dieselbe Notiz wie `summary.decision_note`, damit ein Client, der nur das
+  // Detail in der Hand haelt, sie nicht aus der Zeile nachschlagen muss
+  // (HUM-117). Leer heisst "es gibt keine".
+  string decision_note = 11;
 }
 
 // Abonnement des Ereignisstroms.

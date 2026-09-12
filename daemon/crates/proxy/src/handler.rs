@@ -27,7 +27,7 @@ use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
 use humanitl_config::{HoldConfig, Limits, RecorderConfig};
-use humanitl_core::diagnostics::codes::{PROXY_005, PROXY_008, PROXY_011};
+use humanitl_core::diagnostics::codes::{FINDINGS_003, PROXY_005, PROXY_008, PROXY_011};
 use humanitl_core::{
     Action, AnswerRefused, Authority, BlockReason, BodyRef, Decision, DecisionSource, Diagnostic,
     Finding, FixAction, Flow, FlowEvent, FlowId, FlowState, HeaderMap, HostName, HostPattern,
@@ -48,7 +48,7 @@ use crate::ca::LeafCache;
 use crate::connect::{AuthorityError, AuthorityRefusal, ConnectionContext, RequestTarget};
 use crate::findings::{NoScan, Scanner};
 use crate::hold::HoldQueue;
-use crate::meta::{self, MetaEndpoint, MetaReply, MetaRequest};
+use crate::meta::{self, ArchivedFlow, MetaEndpoint, MetaReply, MetaRequest};
 use crate::pipeline::FlowPipeline;
 use crate::registry::FlowRecord;
 use crate::tls_observe::{self, HandshakeWatch};
@@ -904,6 +904,9 @@ impl FlowHandler {
                 self.forward(flow, edited, edited_body, meta).await
             }
             Decision::Block { reason, note } => {
+                // Vor der Antwort, damit der Befund am Fluss steht, bevor er
+                // abgeschlossen wird; geblockt wird davon unabhängig.
+                self.warn_about_the_note(flow.id, note.as_deref());
                 self.record_block(&mut flow, reason, note.as_deref())
             }
             Decision::TimedOut => self.record_block(&mut flow, BlockReason::Timeout, None),
@@ -981,6 +984,10 @@ impl FlowHandler {
                 }
             }
         };
+        // Vor der Antwort, nicht darin: Was die Registry nicht mehr führt,
+        // steht nach einem Neustart nur noch in der Aufzeichnung, und deren
+        // Lesevorgang ist asynchron (HUM-117).
+        let archived = self.archived_for_why(path_and_query, &parts.method).await;
         let outcome = endpoint.respond(
             &MetaRequest {
                 method: &parts.method,
@@ -988,6 +995,7 @@ impl FlowHandler {
                 body: &body,
                 body_over_cap: over_cap,
                 session: conn.session,
+                archived: archived.as_ref(),
             },
             self.inner.queue.registry(),
         );
@@ -1021,6 +1029,57 @@ impl FlowHandler {
             "the meta endpoint answered"
         );
         meta_to_response(&outcome.reply)
+    }
+
+    /// Was die Aufzeichnung über den Flow einer `/why`-Anfrage weiß.
+    ///
+    /// Nur für `GET /why/<flow-id>`, nur wenn die
+    /// [`FlowRegistry`](crate::registry::FlowRegistry) den Flow nicht (mehr)
+    /// führt, und nur wenn dieser Daemon aufzeichnet. Genau das ist der
+    /// Zustand nach einem Neustart: Die Registry beginnt leer, die
+    /// Entscheidung und die Notiz an den Agenten stehen in `flows` (HUM-117).
+    ///
+    /// Über die Sitzung entscheidet hier nichts. Die eine Stelle, die sagt,
+    /// wem eine Auskunft zusteht, bleibt `why_body` im Endpunkt
+    /// (`backlog/CONVENTIONS.md` 4.24); eine zweite Prüfung an einer zweiten
+    /// Stelle wäre eine zweite Gelegenheit, sie zu vergessen.
+    async fn archived_for_why(
+        &self,
+        path_and_query: &str,
+        method: &Method,
+    ) -> Option<ArchivedFlow> {
+        if method != Method::GET {
+            return None;
+        }
+        let flow = meta::why_target(path_and_query)?;
+        if self.inner.queue.registry().get(flow).is_some() {
+            return None;
+        }
+        let recorder = self.inner.recorder.as_ref()?;
+        let detail = match recorder.get_flow(flow).await {
+            Ok(detail) => detail?,
+            // Eine unlesbare Aufzeichnung endet hier als `404`, also so, wie
+            // ein unbekannter Flow endet. Der Agent bekommt keine Auskunft
+            // über den Zustand der Datenbank, und der Betreiber sieht den
+            // Fehler im Log; ein Befund im Ereignisstrom hinge an keinem
+            // Fluss, über den jemand entscheidet.
+            Err(err) => {
+                tracing::warn!(%flow, %err, "could not read the recorded flow for /why");
+                return None;
+            }
+        };
+        let row = detail.summary;
+        Some(ArchivedFlow {
+            session: row.session,
+            state: row.state,
+            decision: row.decision,
+            block_reason: row.block_reason,
+            rule_id: row.rule_id,
+            passthrough: row.passthrough,
+            // Die Spalte trägt, was der Agent in der 403-Antwort gelesen hat;
+            // gesäubert wurde beim Schreiben, und hier wird nichts nachgeholt.
+            note: row.decision_note.unwrap_or_default(),
+        })
     }
 
     /// Schreibt die Meta-Anfrage in die Aufzeichnung, ohne eine Entscheidung zu
@@ -1465,6 +1524,36 @@ impl FlowHandler {
                 self.publish_invalid_transition(flow, err);
                 Err(err)
             }
+        }
+    }
+
+    /// Meldet jeden Fund in der Notiz an den Agenten als `FINDINGS_003`.
+    ///
+    /// Die Notiz ist der eigene Satz des Menschen und geht im Klartext in die
+    /// 403-Antwort; steckt ein Schlüssel darin, verlässt er mit ihr den
+    /// Rechner. Der Befund sagt das, und er sagt es **einmal je Fund**, mit
+    /// Art und den ersten Zeichen — nie mit dem Wert (HUM-025-Regel für
+    /// Funde, HUM-117).
+    ///
+    /// Eine Warnung, keine Sperre: Der Block fällt unverändert, denn die
+    /// Notiz ist der Wille des Menschen. Und kein
+    /// [`Finding`](humanitl_core::Finding) am Fluss: Die gehören zur Anfrage,
+    /// und ein Fund in der Notiz stünde sonst in der Fundliste einer Anfrage,
+    /// die ihn nie enthielt.
+    fn warn_about_the_note(&self, flow_id: FlowId, note: Option<&str>) {
+        let Some(note) = note.filter(|note| !note.is_empty()) else {
+            return;
+        };
+        for finding in self.inner.scanner.scan_note(note) {
+            let diagnostic = Diagnostic::builder(FINDINGS_003, Severity::Warning)
+                .why(format!(
+                    "the note you wrote to the agent contains a possible {kind} starting with \
+                     {prefix}; it leaves with the 403 response exactly as you wrote it",
+                    kind = finding.kind,
+                    prefix = finding.display_prefix
+                ))
+                .build();
+            self.publish_diagnostic(flow_id, diagnostic);
         }
     }
 

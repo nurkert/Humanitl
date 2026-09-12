@@ -240,6 +240,20 @@ class _Head extends StatelessWidget {
               ),
             ],
           ),
+          // The note stands under the decision it explains, on its own line:
+          // it is free text of up to 500 characters and would break the row of
+          // short facts above (HUM-117). No note, no line — an empty one would
+          // read as "there was nothing to say".
+          if (flow.decisionNote.isNotEmpty) ...<Widget>[
+            SizedBox(height: tokens.spacing.x2),
+            SelectableRegion(
+              selectionControls: emptyTextSelectionControls,
+              child: Text(
+                l10n.historyDetailNote(flow.decisionNote),
+                style: tokens.typography.ui12.tinted(tokens.colors.fg1),
+              ),
+            ),
+          ],
         ],
       ),
     );

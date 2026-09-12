@@ -121,6 +121,42 @@ void main() {
     });
   });
 
+  test('fake_records_the_note', () {
+    fakeAsync((FakeAsync async) {
+      final FakeDaemonClient client = FakeDaemonClient();
+      final List<FlowEvent> seen = <FlowEvent>[];
+      client.subscribe().listen(seen.add);
+      async.elapse(const Duration(seconds: 1));
+      final FlowId id = seen.whereType<FlowEventHeld>().first.flowId;
+
+      client.decide(id, const Decision.block(note: 'use PyPI'));
+      async.flushMicrotasks();
+
+      // Nicht nur im Ereignis: Die Zeile trägt die Notiz, wie sie im Daemon
+      // aus der Spalte `decision_note` käme (HUM-117).
+      expect(client.state.flow(id)?.decisionNote, 'use PyPI');
+      expect(client.state.details[id]?.summary.decisionNote, 'use PyPI');
+    });
+  });
+
+  test('a recorded session carries the note of a manual block', () {
+    final FakeDaemonClient client = FakeDaemonClient.history(count: 24);
+    final Iterable<Flow> noted = client.state.flows.values.where(
+      (Flow flow) => flow.decisionNote.isNotEmpty,
+    );
+    expect(noted, isNotEmpty);
+    for (final Flow flow in noted) {
+      expect(flow.decision, DecisionKind.block);
+      expect(flow.decisionSource, DecisionSource.user);
+    }
+    // Keine Freigabe und kein Ablauf trägt eine.
+    for (final Flow flow in client.state.flows.values) {
+      if (flow.decision != DecisionKind.block) {
+        expect(flow.decisionNote, isEmpty, reason: flow.id.value);
+      }
+    }
+  });
+
   test('getFlow and getBody return what the script stored', () async {
     final FakeDaemonClient client = FakeDaemonClient();
     final FlowEvent first = await client.subscribe().first;

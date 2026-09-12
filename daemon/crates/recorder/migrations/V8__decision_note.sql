@@ -1,0 +1,25 @@
+-- Die Notiz, die ein Mensch beim Blocken an den Agenten gerichtet hat
+-- (HUM-072, HUM-117).
+--
+-- Bis hierher hatte dieser Satz keinen Ort außer der 403-Antwort: Der Agent
+-- las ihn im Rumpf und in `X-Humanitl-Note`, und danach war er weg. Ein
+-- Verlaufs- oder Audit-Bildschirm, der die Entscheidung ohne ihre Begründung
+-- zeigt, ist die halbe Aufzeichnung, und `/why/<flow-id>` konnte ihn nach
+-- einem Neustart des Daemons nicht mehr nennen, weil er nur in der Registry
+-- im Speicher stand.
+--
+-- Gespeichert wird genau das, was der Agent gesehen hat: Der Schreiber schickt
+-- die Notiz durch dieselbe Säuberung wie die 403-Antwort
+-- (`humanitl_core::block::sanitize_note`), also ohne Zeilenumbrüche, ohne
+-- Steuerzeichen und auf 500 Zeichen begrenzt. Beim Lesen wird nichts geraten
+-- und nichts nachgeholt.
+--
+-- Kein Index: Die Notiz wird angezeigt, nicht gefiltert und nicht sortiert.
+-- `NULL` heißt "zu dieser Entscheidung gibt es keine Notiz"; das gilt für jede
+-- Zeile, die vor dieser Migration entstanden ist, für jede Freigabe und für
+-- jeden Ablauf. Der Leser bildet `NULL` auf den leeren Text ab.
+--
+-- Ins Audit-Log kommt die Notiz nicht: `docs/SECURITY.md` 8 und HUM-050
+-- schließen das aus, und `FlowDecided::new` in
+-- `daemon/crates/audit/src/kinds.rs` lässt sie fallen.
+ALTER TABLE flows ADD COLUMN decision_note TEXT;

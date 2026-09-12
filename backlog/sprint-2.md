@@ -1759,7 +1759,7 @@ Keine Notiz bei Allow. Kein Meta-Endpoint (HUM-073). Keine Mehrzeiligkeit.
 ### Akzeptanzkriterien
 - [x] `curl -x 127.0.0.1:3128 http://blocked.example` in der Sandbox liefert nach Block mit Notiz den Body mit `note:` und den Header. **Gemessen am 2026-09-11** im M2-Lauf, mit einer Einschränkung beim Schema. Der Fake-Agent hält jetzt die Kopfzeilen der letzten Antwort fest (`curl -D`, `last_headers` in `tests/e2e/fake-agent/fake_agent.py`), und Schritt 5 prüft neben `note: not in this run` im Body den Header `X-Humanitl-Note: not in this run`; der Lauf endet mit `M2 demo: OK` und 70 Zusicherungen. Gemessen ist das an `https://evil.example/exfil?…`, also über die HTTPS-Interception nach dem `CONNECT`, nicht an einem Klartext-`http://`-Ziel wie im Kriterium. Beide Schemata bauen die Blockantwort an derselben Stelle (`record_block` und `block_to_response` in `daemon/crates/proxy/src/handler.rs`), und host-seitig hält `block_returns_403_with_the_canonical_body_and_note` Body und Header für Klartext-HTTP fest. Die Zusicherung vergleicht den genauen Wert: Fehlt der Header, steht dort der leere Rückfall, und sie wird rot. Einen eigenen Mutationslauf am Proxy dafür gibt es nicht. **Die Vorgeschichte:** Die Body-Hälfte war aus der Sandbox schon belegt, den Header sah der Fake-Agent nie, weil er keine Antwort-Header protokollierte.
 - [x] Notiz mit 600 Zeichen wird im UI auf 500 begrenzt (Zähler sichtbar).
-- [ ] Audit-Export enthält die Notiz. **Überholt, seit HUM-050 die Kette gebaut hat (Stand 2026-09-12).** Das Audit-Log gibt es jetzt, und es trägt die Notiz mit Absicht nicht: `FlowDecided::new` (`daemon/crates/audit/src/kinds.rs`) lässt sie fallen, und `docs/SECURITY.md` 8 sagt zu, dass Bodies, Klartext-Werte von Funden und die Notiz einer Blockierung nie im Log stehen. Dieses Kriterium und jene Zusage widersprechen sich; die Zusage ist die jüngere, gereviewte und die sicherere, also gilt sie. Der Ort der Notiz ist damit HUM-117: Recorder, History-Detail, `humanitl flows show` und der Meta-Endpunkt. Dieses Kästchen wird dort abgehakt, mit dem Text „die Notiz steht in der Aufzeichnung und in der Ansicht, nicht im Audit-Log"; der Export selbst bleibt HUM-070 (Sprint 4). Bis dahin bleibt es offen, damit die Lücke sichtbar bleibt.
+- [x] Audit-Export enthält die Notiz. **Abgehakt am 2026-09-12 in HUM-117: die Notiz steht in der Aufzeichnung und in der Ansicht, nicht im Audit-Log.** Das Kriterium und `docs/SECURITY.md` 8 widersprachen sich, seit HUM-050 die Kette gebaut hat; die Zusage ist die jüngere, gereviewte und die sicherere, also gilt sie. Belegt am Code: `FlowDecided::new` (`daemon/crates/audit/src/kinds.rs:277`) nimmt `&Decision` entgegen, liest daraus nur `reason` und den Namen der Entscheidung und lässt die Notiz fallen; `decisions_map_to_the_words_of_the_table` in derselben Datei hält das fest („the note stays out", gemessen an einem `Decision::Block` mit Notiz). Ihr Ort ist seit HUM-117 die Spalte `flows.decision_note` (`daemon/crates/recorder/migrations/V8__decision_note.sql`), das Feld `FlowSummary.decision_note` des Vertrags, `humanitl flows show`, das History-Detail unter der Entscheidung und `/why/<flow-id>`. Der Audit-**Export** selbst bleibt HUM-070 (Sprint 4) und wird die Notiz weiterhin nicht enthalten.
 - [x] Kein Header-Injection möglich (Test grün).
 
 ### Fallstricke
@@ -3368,7 +3368,7 @@ Der Audit-Eintrag (HUM-050, HUM-051). Notizen an Allow-Entscheidungen. Bearbeite
 ALTER TABLE flows ADD COLUMN decision_note TEXT;  -- kein Index: angezeigt, nicht gefiltert
 ```
 
-Der Writer schreibt `decision_note` beim `Decided`-Ereignis mit `Decision::Block { note: Some(_) }`, gesäubert über `sanitize_note` (dieselbe Funktion wie für die 403-Antwort, damit die Aufzeichnung genau das trägt, was der Agent gesehen hat). Proto: `string decision_note = 27` in `FlowSummary` (25 trägt `meta`, 26 nimmt `apex` aus HUM-091) und `string decision_note = 11` in `FlowDetail`, leer wenn keine. `PROTO_MINOR` geht dabei von 8 auf 9, und der Dart-Spiegel `ProtoVersion.minor` zieht mit. `humanitl flows show` druckt `note: …` nach der Entscheidung, `--json` das Feld. History-Detail: eine Zeile unter der Entscheidung, ARB `historyDetailNote` („Note to the agent: {note}"). HAR: `_humanitl.note`. `/why`: `note=` aus dem Registry, sonst aus dem Recorder. **Entschieden am 2026-09-12 vom Projekteigentümer:** Die Notiz überdauert den Neustart, sie liegt dafür in der Aufzeichnung; `/why` liest sie nach einem Neustart über `Recorder::get_flow`. Ins Audit-Log kommt sie nicht — `docs/SECURITY.md` 8 und HUM-050 schließen das aus, und HUM-072 hält diese Entscheidung fest.
+Der Writer schreibt `decision_note` beim `Decided`-Ereignis mit `Decision::Block { note: Some(_) }`, gesäubert über `sanitize_note` (dieselbe Funktion wie für die 403-Antwort, damit die Aufzeichnung genau das trägt, was der Agent gesehen hat). Proto: `string decision_note = 27` in `FlowSummary` (25 trägt `meta`, 26 nimmt `apex` aus HUM-091) und `string decision_note = 11` in `FlowDetail`, leer wenn keine. `PROTO_MINOR` geht dabei von 9 auf 10 — HUM-119 hat die 9 vorher genommen (korrigiert am 2026-09-12; die Kette in HUM-094 nennt noch die alte Reihenfolge) —, und der Dart-Spiegel `ProtoVersion.minor` zieht mit. `humanitl flows show` druckt `note: …` nach der Entscheidung, `--json` das Feld. History-Detail: eine Zeile unter der Entscheidung, ARB `historyDetailNote` („Note to the agent: {note}"). HAR: `_humanitl.note`. `/why`: `note=` aus dem Registry, sonst aus dem Recorder. **Entschieden am 2026-09-12 vom Projekteigentümer:** Die Notiz überdauert den Neustart, sie liegt dafür in der Aufzeichnung; `/why` liest sie nach einem Neustart über `Recorder::get_flow`. Ins Audit-Log kommt sie nicht — `docs/SECURITY.md` 8 und HUM-050 schließen das aus, und HUM-072 hält diese Entscheidung fest.
 
 Findings-Scan: beim `Decide` mit Notiz läuft die Registry aus HUM-025 über den Text; jeder Fund ergibt genau ein `FlowEvent::Diagnostic` `FINDINGS_003` (Warning) am Flow mit Art und Präfix des Funds, ohne den Wert; die Entscheidung fällt unverändert (die Notiz ist Wille des Menschen). Ein Fund in der Notiz erscheint nicht als `Finding` am Flow (die gehören zur Anfrage).
 
@@ -3388,13 +3388,13 @@ Findings-Scan: beim `Decide` mit Notiz läuft die Registry aus HUM-025 über den
 - `flows_show_prints_the_note` (cli), `history_detail_shows_block_note` (dart), `har_carries_the_note` (dart), `fake_records_the_note` (dart).
 
 ### Akzeptanzkriterien
-- [ ] Nach `humanitl flows decide <id> block --note 'use PyPI'` druckt `humanitl --json flows show <id> | jq -r .decision_note` `use PyPI`, auch nach einem Neustart des Daemons.
-- [ ] Aus der Sandbox liefert `curl http://humanitl.internal/why/<id>` nach dem Neustart `note=use PyPI` als letztes Feld.
-- [ ] `grep -n 'must not leak' daemon/crates/recorder/tests/recorder.rs` ist leer; `daemon/crates/recorder/migrations/V8__decision_note.sql` existiert; `cargo test -p humanitl-recorder` grün.
-- [ ] Das History-Detail zeigt die Notiz unter der Entscheidung (`history_detail_shows_block_note`, Golden `history_detail_note_{dark,light}`); `grep -c '"historyDetailNote"' app/l10n/app_en.arb app/l10n/app_de.arb` ergibt je 1.
-- [ ] Eine Notiz mit einem GitHub-Token erzeugt genau einen Befund `FINDINGS_003` im Ereignisstrom, der Block fällt, und `FlowDetail.findings` bleibt unverändert.
-- [ ] `PROTO_MINOR` um eins erhöht, `proto/descriptor.binpb` im selben Commit; `make check` grün.
-- [ ] Bei Entscheidung „nicht speichern" statt der Punkte oben: HUM-072 Ziel und Schritt 4, `docs/ARCHITECTURE.md` 8.2 und `backlog/sprint-4.md` HUM-051 sind korrigiert, CONVENTIONS 4.x nennt den Grund, und `docs/PROTOCOL.md` bleibt unberührt.
+- [ ] Nach `humanitl flows decide <id> block --note 'use PyPI'` druckt `humanitl --json flows show <id> | jq -r .decision_note` `use PyPI`, auch nach einem Neustart des Daemons. **Halb gemessen am 2026-09-12, offen für die andere Hälfte.** Gemessen gegen `humanitld --fake fixtures/sessions/mixed.jsonl`: `humanitl flows decide 018f0001-0000-7000-8000-000000040000 block --note 'use PyPI'` gefolgt von `humanitl --json flows show <id>` liefert `decision_note = 'use PyPI'`, und `humanitl flows show <id>` druckt `note      use PyPI` unmittelbar unter `decision  block`. Was fehlt: der Neustart. Der Fake führt keine Aufzeichnung, also beweist dieser Lauf die Leitung und die Ausgabe, nicht die Spalte. Dafür braucht es einen laufenden `humanitld` mit Recorder, eine Anfrage durch den Proxy und einen zweiten Start desselben Prozesses — vorhanden ist die Maschinerie in `daemon/bin/humanitld/tests/daemon_end_to_end.rs` (`Daemon::restart`), ein Test dieser Art gehört aber in ein Issue, das jene Datei anfassen darf. Host-seitig belegt ist der Weg über die Spalte durch `the_note_of_the_user_is_recorded_as_sent` (Recorder) und `why_survives_a_restart` (Proxy).
+- [ ] Aus der Sandbox liefert `curl http://humanitl.internal/why/<id>` nach dem Neustart `note=use PyPI` als letztes Feld. **Offen: braucht eine laufende Sandbox.** Host-seitig gemessen am 2026-09-12 durch `why_survives_a_restart` (`daemon/crates/proxy/tests/meta.rs`): ein zweiter Proxy über derselben Datenbank und derselben Sitzung, mit leerer Registry, antwortet auf `GET http://humanitl.internal/why/<flow>` mit genau `decision=block reason=user note=use PyPI\n`. Was fehlt, ist derselbe Aufruf aus einer echten Sandbox durch den Shim, also ein Handlauf oder eine Erweiterung von `tests/e2e/`.
+- [x] `grep -n 'must not leak' daemon/crates/recorder/tests/recorder.rs` ist leer; `daemon/crates/recorder/migrations/V8__decision_note.sql` existiert; `cargo test -p humanitl-recorder` grün. **Gemessen am 2026-09-12:** `grep` ohne Treffer (Rückgabewert 1), die Migration liegt als Datei und als achter Eintrag in `MIGRATIONS` (`daemon/crates/recorder/src/schema.rs`), und `cargo test -p humanitl-recorder` meldet 0 gescheitert (lib 37, Integration 38, Doc 1). Neu darunter: `the_note_of_the_user_is_recorded_as_sent`, `note_is_sanitised_before_it_is_stored` und `only_a_block_carries_a_note_and_it_is_sanitised_before_it_is_stored`.
+- [x] Das History-Detail zeigt die Notiz unter der Entscheidung (`history_detail_shows_block_note`, Golden `history_detail_note_{dark,light}`); `grep -c '"historyDetailNote"' app/l10n/app_en.arb app/l10n/app_de.arb` ergibt je 1. **Gemessen am 2026-09-12:** `flutter test test/features/history/history_detail_test.dart` grün mit 25 Tests, darunter `history_detail_shows_block_note`; die beiden Goldens liegen unter `app/test/goldens/goldens/ci/` und laufen in `flutter test test/goldens/history_golden_test.dart` (16 Fälle) grün; `grep -c` ergibt 1 und 1. Der ganze Lauf `cd app && flutter test` endet mit 1060 bestanden, 4 übersprungen, 0 gescheitert.
+- [x] Eine Notiz mit einem GitHub-Token erzeugt genau einen Befund `FINDINGS_003` im Ereignisstrom, der Block fällt, und `FlowDetail.findings` bleibt unverändert. **Gemessen am 2026-09-12** durch `a_secret_in_the_note_warns_and_still_blocks` (`daemon/crates/proxy/tests/findings.rs`, 6 Tests grün): genau ein `FlowEvent::Diagnostic` mit `FINDINGS_003` und `Severity::Warning`, sein Text nennt `api_key:github` und trägt weder den Token noch seinen Anfang; die Antwort ist `403` mit der Notiz im Rumpf, der Upstream sah null Anfragen; die Fundliste aus `Analyzed` — die Quelle von `FlowDetail.findings` — ist leer, denn die Anfrage selbst trug kein Geheimnis.
+- [x] `PROTO_MINOR` um eins erhöht, `proto/descriptor.binpb` im selben Commit; `make check` grün. **Gemessen am 2026-09-12:** `PROTO_MINOR` steht auf `10` (vorher `9`, HUM-119), `ProtoVersion.minor` ebenso, `docs/PROTOCOL.md` 5 nennt `1.10`; `proto/descriptor.binpb` und `proto/generated.sha256` sind aus `make proto` neu erzeugt und liegen im selben Commit. `make check` lief in seinen Teilen grün: `rust-fmt`, `rust-clippy` (`-D warnings`), `rust-build`, `rust-test` (100 Testbinaries, keine gescheitert), `rust-doc`, `deps-lint`, `docs-lint`, `typed-errors-lint`, `flutter-analyze` (keine Meldung, `dart format` ohne Änderung), `flutter-test` (app 1060 bestanden, 4 übersprungen, `packages/ui` 129 bestanden), `flutter-build` (Linux-Debug-Bundle gebaut).
+- [ ] Bei Entscheidung „nicht speichern" statt der Punkte oben: HUM-072 Ziel und Schritt 4, `docs/ARCHITECTURE.md` 8.2 und `backlog/sprint-4.md` HUM-051 sind korrigiert, CONVENTIONS 4.x nennt den Grund, und `docs/PROTOCOL.md` bleibt unberührt. **Nicht zutreffend:** Der Projekteigentümer hat am 2026-09-12 für das Speichern entschieden, also gilt der Zweig oben. Dieses Kästchen bleibt leer, weil es eine Alternative beschreibt, die nicht gewählt wurde.
 
 ### Fallstricke
 - Die Notiz ist Eingabe des Menschen und wird dem Agenten gezeigt, aber im History-Detail und in `/why` auch wieder dem Menschen; `sanitize_note` vor dem Speichern, nie beim Lesen raten.
@@ -3405,6 +3405,128 @@ Findings-Scan: beim `Decide` mit Notiz läuft die Registry aus HUM-025 über den
 
 ### Referenzen
 `backlog/sprint-2.md` HUM-072 (Ziel, Schritt 4, Kriterium 3); `backlog/sprint-3.md` HUM-073; `backlog/sprint-4.md` HUM-050, HUM-051; `docs/ARCHITECTURE.md` 8.2; CONVENTIONS 4.13, 4.24; `daemon/crates/recorder/tests/recorder.rs:836-879`; `daemon/crates/proxy/src/meta.rs:476-504`; `proto/humanitl/v1/humanitl.proto:446-458, 601-609`.
+
+### Stand (2026-09-12): umgesetzt, mit fünf Abweichungen von der Spezifikation
+
+Die Notiz liegt in der Spalte `flows.decision_note`
+(`daemon/crates/recorder/migrations/V8__decision_note.sql`, kein Index),
+geschrieben beim `Decided`-Ereignis einer Block-Entscheidung und dabei durch
+`humanitl_core::block::sanitize_note` geschickt — dieselbe Funktion, die die
+403-Antwort baut. Sie reist als `FlowSummary.decision_note = 27` und
+`FlowDetail.decision_note = 11`, erscheint in `humanitl flows show` als Zeile
+`note` unter `decision` und in `--json` als Feld `decision_note`, im
+History-Detail als Zeile unter der Entscheidung (`historyDetailNote`) und im
+HAR-Export als `_humanitl.note`. `/why/<flow-id>` liest sie nach einem Neustart
+aus der Aufzeichnung. Ins Audit-Log kommt sie nicht.
+
+**Erstens: `PROTO_MINOR` geht von 9 auf 10, nicht von 8 auf 9.** HUM-119 hat die
+9 vorher genommen (`BodyRef.decoded`). Die Reihenfolge der Proto-Kette in
+HUM-094 („8 für HUM-091, 9 für HUM-117, 10 für HUM-119, 11 für dieses Issue")
+ist damit überholt; sie lautet jetzt 8, 9 für HUM-119, 10 für HUM-117 und 11 für
+HUM-094.
+
+**Zweitens: `/why` bekommt die aufgezeichnete Zeile gereicht, es holt sie
+nicht selbst.** `MetaEndpoint::respond` ist synchron und kennt keinen Recorder;
+`Recorder::get_flow` ist asynchron. Der Handler schlägt deshalb **vor** der
+Antwort nach (`FlowHandler::archived_for_why`) und legt das Ergebnis als
+`MetaRequest::archived` dazu — aber nur für `GET /why/<flow-id>` und nur, wenn
+die Registry den Flow nicht mehr führt. Die Weiche über die Pfade bleibt in
+`meta::why_target`, und die Prüfung der Sitzung bleibt an der einen Stelle, die
+sie vorher schon hatte (`why_body`): Der Handler prüft sie nicht ein zweites
+Mal, denn zwei Stellen wären zwei Gelegenheiten, sie zu vergessen.
+
+**Drittens: die aufgezeichnete Antwort nennt für eine Freigabe nie `user`.** Die
+Tabelle `flows` führt keine Herkunft einer Entscheidung, nur `rule_id` und
+`passthrough`. `/why` antwortet aus der Aufzeichnung deshalb mit `rule`,
+`passthrough` oder `unknown`; `user` wäre geraten
+(`backlog/CONVENTIONS.md` 4.13). Für einen Block und einen Ablauf ändert sich
+nichts, denn deren Grund steht in der Spalte.
+
+**Viertens: ein Fund in der Notiz bekommt keinen eigenen `FindingLocation`.**
+`DetectorRegistry::scan_note` läuft über den Text mit `FindingLocation::Body`
+und liefert nur Funde; daraus wird je Fund genau ein `FINDINGS_003` am Fluss.
+Ein neuer Ort im Enum hätte Proto, Konverter und die Dart-Seite nach sich
+gezogen, und die Spezifikation verlangt ausdrücklich, dass ein Fund in der
+Notiz **kein** `Finding` am Fluss wird.
+
+**Welche Entscheidung eine Notiz trägt und welche nicht.** Genau eine:
+`Decision::Block` mit `BlockReason::User` aus der Quelle `DecisionSource::User`
+— der Weg über `Decide`, also Oberfläche und Terminal
+(`humanitl_ipc::validate::decision_of` setzt den Grund fest auf `User`,
+`HoldQueue::decide` die Quelle). Alles andere lässt `flows.decision_note` auf
+`NULL` und `FlowSummary.decision_note` leer:
+
+| Entscheidung | Quelle | Notiz in der Zeile |
+| --- | --- | --- |
+| `Block { reason: User }` über `Decide` | `User` | ja, gesäubert wie die 403-Antwort |
+| `Block { reason: Secret }`, harter Block auf ein prüfsummen-sicheres Geheimnis | `System` | **nein** — den Satz hat die Maschine geschrieben |
+| `Block { reason: Rule(..) }` | `Rule` | nein; eine Regel-Sperre führt ohnehin keine Notiz, und die Notiz **einer Regel** erreicht den Agenten nie (HUM-073) |
+| `Block { reason: NoRoute / AuthorityMismatch / BodyCap / HoldMemory / HoldMaxFlows / ClientTimeout / PrivateAddress }` | `System` | nein |
+| `Allow`, `AllowEdited` | beliebig | nein |
+| `TimedOut` | `Timeout` | nein |
+| entschieden, aber Herkunft unbekannt | `None` | nein; geraten wird nichts |
+
+Der Unterschied ist nicht kosmetisch. `block_checksum_secret`
+(`daemon/crates/proxy/src/handler.rs`) blockt als System und schickt dem Agenten
+einen Satz mit, den der Daemon selbst geschrieben hat. Er gehört in die
+403-Antwort und in `FlowEvent.Decided.note` — das ist die Notiz **an** den
+Agenten, gleich wer geblockt hat (HUM-072). Er gehört nicht in
+`decision_note`: Diese Spalte wird als Wort eines Menschen gelesen, im
+History-Detail unter „Note to the agent" angezeigt, nach `_humanitl.note`
+exportiert und über den Rückfall von `/why` wieder ausgegeben. Dieselbe Grenze
+ziehen deshalb drei Stellen mit derselben Bedingung: `decision_note` im
+Schreiber der Aufzeichnung, `human_block_note` in
+`daemon/crates/ipc/src/convert.rs` für die Zeile aus der Registry und den
+Rust-Fake, und `humanBlockNote` in `app/lib/core/domain/flow_event.dart` für die
+beiden Reduzierer, die aus `FlowEvent.Decided` eine Zeile fortschreiben.
+
+`/why` aus der **Registry** gibt den Satz der Maschine weiter, so wie vor
+diesem Issue (HUM-073): Der Agent hat ihn ohnehin schon in der 403-Antwort
+gelesen. Nach einem Neustart antwortet der Rückfall an derselben Stelle mit
+`note=` leer, weil die Spalte leer ist. Das ist keine Verschlechterung — vor
+diesem Issue war dieselbe Anfrage nach einem Neustart `404`.
+
+**Fünftens: die Oberfläche liest die Notiz aus der Zeile, nicht aus dem
+Detail.** Der Dart-`Flow` bekommt `decisionNote` (aus
+`FlowSummary.decision_note`), und das History-Detail zeigt sie von dort.
+`FlowDetail.decision_note` füllt der Daemon wie spezifiziert, damit ein Client
+mit nur dieser Nachricht sie hat; in der App hat das Feld deshalb keinen Leser.
+
+Mutationsproben, alle einzeln angewandt und wieder zurückgenommen:
+die Bedingung im Writer auf `Decision::Block { .. }` gelockert (also ohne
+`BlockReason::User` und ohne `DecisionSource::User`) macht
+`a_block_the_system_decided_leaves_the_column_empty` rot und
+`a_hard_blocked_checksum_secret_leaves_no_note_in_the_recording` (Proxy,
+über die echte Aufzeichnung) ebenso — beide mit dem Satz der Maschine in der
+Spalte; nur die Hälfte gelockert (Grund geprüft, Quelle nicht) macht denselben
+Einheitentest rot (`use PyPI` bei `DecisionSource::System`);
+`humanBlockNote` in Dart auf `kind == DecisionKind.block` gelockert macht
+`only a block a person decided leaves a note on the row` rot;
+`note.as_deref().map(str::to_owned)` statt `map(sanitize_note)` im Writer macht
+`note_is_sanitised_before_it_is_stored` rot (`"nein\r\ndecision=allow …"` statt
+`"nein decision=allow …"`) und ebenso den Einheitentest;
+`Decision::Block { .. } => None` macht zusätzlich
+`the_note_of_the_user_is_recorded_as_sent` und
+`the_state_machine_is_mirrored_into_the_columns` rot; der Rückfall auf die
+Aufzeichnung ausgeschaltet macht `why_survives_a_restart` rot; der
+Sitzungsvergleich am Rückfall auf sich selbst gesetzt macht
+`the_recorded_fallback_still_answers_only_for_this_session` rot (200 statt 404);
+ein leerer Fundlauf über die Notiz macht `a_secret_in_the_note_warns_and_still_blocks`
+rot (0 statt 1 Befund), und der ganze Notiztext statt `display_prefix` im
+Befundtext macht denselben Test rot („a finding never carries its value");
+`decision_note: String::new()` in `recorded_summary_to_proto` macht
+`both_ways_carry_the_note_of_a_block` rot; die Notizzeile in `detail_rows`
+ausgeschaltet macht `flows_show_prints_the_note` rot; die Zeile im
+History-Detail ausgeschaltet macht `history_detail_shows_block_note` und beide
+Goldens rot (6,87 % Pixel Unterschied); `'note'` aus `humanitlBlock` entfernt
+macht `har_carries_the_note` rot; `decisionNote` aus dem Reduzierer des
+Dart-Fakes entfernt macht `fake_records_the_note` rot; `decisionNote` aus
+`convert.dart` entfernt macht den Zeilentest in `convert_test.dart` rot.
+
+Nicht umgesetzt: Schritt 6 nennt einen Absatz in `backlog/CONVENTIONS.md` 4.x.
+Die Entscheidung steht im Kriterium von HUM-072, in dieser Spezifikation, im
+Kommentar von `V8__decision_note.sql` und im Proto; ein Eintrag in CONVENTIONS
+gehört in einen Lauf, der jene Datei anfassen darf.
 
 ---
 

@@ -35,6 +35,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
 use bytes::Bytes;
+use humanitl_core::block::sanitize_note;
 use humanitl_core::ids::SandboxId;
 use humanitl_core::{
     BlockReason, Decision, DecisionSource, Diagnostic, Finding, FixAction, FlowEvent, FlowId,
@@ -530,7 +531,7 @@ impl Writer {
             flow_id,
             "UPDATE flows SET state = 'decided', decision = ?2, block_reason = ?3, \
              rule_id = COALESCE(?4, rule_id), held_ms = COALESCE(?5, held_ms), edited = ?6, \
-             passthrough = MAX(passthrough, ?7) WHERE id = ?1",
+             passthrough = MAX(passthrough, ?7), decision_note = ?8 WHERE id = ?1",
             rusqlite::params![
                 flow_id.to_string(),
                 decision.as_str(),
@@ -539,6 +540,7 @@ impl Writer {
                 held_ms,
                 i64::from(matches!(decision, Decision::AllowEdited { .. })),
                 i64::from(source == DecisionSource::Passthrough),
+                decision_note(decision, source),
             ],
         )
     }
@@ -1054,14 +1056,54 @@ fn rule_of(source: DecisionSource, reason: Option<BlockReason>) -> Option<String
     }
 }
 
+/// Der Satz, den ein **Mensch** beim Blocken an den Agenten gerichtet hat.
+///
+/// Genau eine Entscheidung trägt einen: `Decision::Block` mit
+/// [`BlockReason::User`] aus der Quelle [`DecisionSource::User`]. Das ist der
+/// Weg über `Decide` (`humanitl_ipc::validate::decision_of` setzt den Grund
+/// fest auf `User`, und `HoldQueue::decide` die Quelle auf `User`), also die
+/// Oberfläche und das Terminal. Die Spalte heißt „was der Mensch geschrieben
+/// hat", und nur dieser Weg belegt das.
+///
+/// Alles andere ergibt `NULL`, auch wenn es eine Sperre mit Text ist:
+///
+/// - eine Freigabe, eine bearbeitete Freigabe und ein Ablauf haben keine Notiz;
+/// - eine Sperre des Systems hat einen Text, aber keinen Verfasser. Der harte
+///   Block auf ein prüfsummen-sicheres Geheimnis
+///   (`hold.hard_block_checksum_secrets`, `BlockReason::Secret`,
+///   `DecisionSource::System`) schreibt seinen Satz selbst; er steht in der
+///   403-Antwort, damit der Agent ihn liest, und er gehört nicht in eine
+///   Spalte, die als Wort des Menschen gelesen, angezeigt und exportiert wird
+///   (HUM-117);
+/// - eine Sperre durch eine Regel führt ohnehin keine Notiz
+///   (`humanitl_proxy::pipeline`), und die Notiz **einer Regel** ist eine
+///   andere Sache, die den Agenten nie erreicht (HUM-073).
+///
+/// Gesäubert wird hier, beim Schreiben, und mit derselben Funktion, die auch
+/// die 403-Antwort baut ([`sanitize_note`]): Die Aufzeichnung trägt damit
+/// genau den Text, den der Agent im Rumpf und in `X-Humanitl-Note` gesehen
+/// hat, und der Leser muss später nichts raten.
+fn decision_note(decision: &Decision, source: DecisionSource) -> Option<String> {
+    match (decision, source) {
+        (
+            Decision::Block {
+                reason: BlockReason::User,
+                note,
+            },
+            DecisionSource::User,
+        ) => note.as_deref().map(sanitize_note),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use humanitl_core::http::HeaderValue;
-    use humanitl_core::{BlockReason, DecisionSource, HeaderMap, RuleId, Scheme};
+    use humanitl_core::{BlockReason, Decision, DecisionSource, HeaderMap, RuleId, Scheme};
 
-    use super::{rule_of, upgrade_of};
+    use super::{decision_note, rule_of, upgrade_of};
 
     #[test]
     fn a_websocket_upgrade_is_recognised_from_header_and_scheme() {
@@ -1090,5 +1132,82 @@ mod tests {
             Some(id.to_string())
         );
         assert_eq!(rule_of(DecisionSource::User, Some(BlockReason::User)), None);
+    }
+
+    #[test]
+    fn only_a_block_carries_a_note_and_it_is_sanitised_before_it_is_stored() {
+        let plain = Decision::Block {
+            reason: BlockReason::User,
+            note: Some("use PyPI".to_owned()),
+        };
+        assert_eq!(
+            decision_note(&plain, DecisionSource::User),
+            Some("use PyPI".to_owned())
+        );
+
+        // Genau die Säuberung der 403-Antwort: Ein Zeilenumbruch wird zum
+        // Leerzeichen, damit die Aufzeichnung trägt, was der Agent gelesen hat.
+        let two_lines = Decision::Block {
+            reason: BlockReason::User,
+            note: Some("nein\r\ndecision=allow".to_owned()),
+        };
+        assert_eq!(
+            decision_note(&two_lines, DecisionSource::User),
+            Some("nein decision=allow".to_owned())
+        );
+
+        assert_eq!(decision_note(&Decision::Allow, DecisionSource::User), None);
+        assert_eq!(
+            decision_note(&Decision::TimedOut, DecisionSource::Timeout),
+            None
+        );
+        assert_eq!(
+            decision_note(
+                &Decision::Block {
+                    reason: BlockReason::Timeout,
+                    note: None,
+                },
+                DecisionSource::Timeout
+            ),
+            None
+        );
+    }
+
+    /// Ein Text, den die Maschine geschrieben hat, ist keine Notiz.
+    ///
+    /// Der harte Block auf ein prüfsummen-sicheres Geheimnis schickt seinen
+    /// eigenen Satz an den Agenten (`hold.hard_block_checksum_secrets`). Er
+    /// steht in der 403-Antwort und gehört nicht in eine Spalte, die als Wort
+    /// des Menschen angezeigt und exportiert wird (HUM-117).
+    #[test]
+    fn a_block_the_system_decided_leaves_the_column_empty() {
+        let hard = Decision::Block {
+            reason: BlockReason::Secret,
+            note: Some(
+                "a checksum-confirmed secret was found in this request and \
+                 hold.hard_block_checksum_secrets is on"
+                    .to_owned(),
+            ),
+        };
+        assert_eq!(decision_note(&hard, DecisionSource::System), None);
+
+        // Auch nicht, wenn ein Weg denselben Grund einmal mit einer anderen
+        // Quelle meldet: beide Hälften müssen stimmen.
+        assert_eq!(decision_note(&hard, DecisionSource::User), None);
+        let by_rule = Decision::Block {
+            reason: BlockReason::Rule(RuleId::new()),
+            note: Some("intern: Kunde Meier".to_owned()),
+        };
+        assert_eq!(decision_note(&by_rule, DecisionSource::User), None);
+        assert_eq!(
+            decision_note(
+                &Decision::Block {
+                    reason: BlockReason::User,
+                    note: Some("use PyPI".to_owned()),
+                },
+                DecisionSource::System
+            ),
+            None
+        );
     }
 }

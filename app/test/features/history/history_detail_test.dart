@@ -91,6 +91,34 @@ void main() {
     expect(find.text('content-type'), findsOneWidget);
   });
 
+  testWidgets('history_detail_shows_block_note', (WidgetTester tester) async {
+    final FakeDaemonClient client = FakeDaemonClient.history(count: 24);
+    final ProviderContainer container = await pumpHistory(
+      tester,
+      client: client,
+    );
+    final List<Flow> rows = container.read(historyPageProvider).rows;
+    final Flow noted = rows.firstWhere(
+      (Flow flow) => flow.decisionNote.isNotEmpty,
+    );
+    expect(noted.decision, DecisionKind.block);
+    await _select(tester, container, noted);
+
+    expect(
+      find.text('Note to the agent: ${noted.decisionNote}'),
+      findsOneWidget,
+      reason: 'the note stands under the decision it explains',
+    );
+
+    // A row without a note shows no line at all: an empty one would read as
+    // "there was nothing to say".
+    final Flow silent = rows.firstWhere(
+      (Flow flow) => flow.decision == DecisionKind.allow,
+    );
+    await _select(tester, container, silent);
+    expect(find.textContaining('Note to the agent:'), findsNothing);
+  });
+
   group('accessibility as numbers', () {
     testWidgets('a row carries state, method, host and path in its label', (
       WidgetTester tester,

@@ -701,6 +701,19 @@ registry! {
     FINDINGS_002 => "findings", "Scan unvollständig", "#findings_002",
         "Der Scan war unvollständig: Der Rumpf war größer als die Vorschau-Grenze oder das Entpacken lief gegen die Verhältnis-Grenze.",
         "`ChangeSetting` auf `limits.preview_cap_bytes` beziehungsweise `limits.max_decompress_ratio`.";
+    /// In der Notiz, die ein Mensch beim Blocken an den Agenten gerichtet hat,
+    /// steckt ein Fund der Detektoren: ein Schlüssel, ein Token, ein Begriff
+    /// aus `findings.user_terms`. Die Notiz geht im Klartext in die
+    /// 403-Antwort, der Agent liest sie also; der Befund sagt, dass sie
+    /// mitgeht, und nennt Art und Anfang des Funds, nie seinen Wert
+    /// (HUM-025-Regel für Funde, HUM-117).
+    ///
+    /// Eine Warnung, keine Sperre: Die Notiz ist der Wille des Menschen, und
+    /// wer ein Geheimnis darin abschicken will, darf das. Die Entscheidung
+    /// fällt unverändert.
+    FINDINGS_003 => "findings", "Fund in einer Notiz", "#findings_003",
+        "In der Notiz an den Agenten steckt ein möglicher Geheimniswert; sie geht trotzdem hinaus.",
+        "Kein Fix: Die Entscheidung steht. Wer den Wert nicht senden will, blockt erneut mit einer anderen Notiz.";
 
     /// `catalog/domains.yaml` fehlt oder lässt sich nicht als Katalog lesen:
     /// unbekannte `version`, ungültiges YAML, doppelte `id`, ein Host-Muster,

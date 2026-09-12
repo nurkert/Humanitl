@@ -378,6 +378,16 @@ pub struct FlowSummary {
     /// zählt einen Meta-Fluss nie mit; wer ihn sucht, filtert mit `meta:true`,
     /// wer ihn ausschließt, mit `meta:false`.
     pub meta: bool,
+    /// Die Notiz, die der Mensch beim Blocken an den Agenten gerichtet hat,
+    /// sonst `None` (HUM-072, HUM-117).
+    ///
+    /// Sie steht so in der Spalte, wie der Agent sie im 403-Rumpf gelesen hat:
+    /// Der Schreiber schickt sie durch dieselbe Säuberung
+    /// (`humanitl_core::block::sanitize_note`). Beim Lesen wird nichts
+    /// geraten. `None` heißt „zu dieser Entscheidung gibt es keine Notiz" —
+    /// für jede Freigabe, jeden Ablauf und jede Zeile aus der Zeit vor
+    /// `V8__decision_note.sql`.
+    pub decision_note: Option<String>,
 }
 
 /// Eine aufgezeichnete Nachricht: Kopfzeilen plus Verweis auf den Body.

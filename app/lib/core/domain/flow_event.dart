@@ -153,3 +153,26 @@ sealed class FlowEvent with _$FlowEvent {
     FlowEventLagged() || FlowEventRulesChanged() || FlowEventAgentAsk() => null,
   };
 }
+
+/// The sentence a **person** wrote to the agent when they blocked, or the
+/// empty string.
+///
+/// `FlowEvent.Decided.note` carries whatever the agent read in the 403 answer,
+/// no matter who blocked (HUM-072). A row keeps something narrower: only a
+/// block a human decided, that is `DecisionKind.block` with
+/// `BlockReason.user` from `DecisionSource.user`. The daemon's recorder and
+/// its converters draw the same line, and for the same reason: a hard block on
+/// a checksum-confirmed secret (`BlockReason.secret`, `DecisionSource.system`)
+/// writes its own sentence, and `Flow.decisionNote` is shown and exported as
+/// the word of a person (HUM-117).
+String humanBlockNote({
+  required DecisionKind kind,
+  required BlockReason? blockReason,
+  required DecisionSource? source,
+  required String note,
+}) =>
+    kind == DecisionKind.block &&
+        blockReason == BlockReason.user &&
+        source == DecisionSource.user
+    ? note
+    : '';

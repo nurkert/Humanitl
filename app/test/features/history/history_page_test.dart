@@ -246,6 +246,57 @@ void main() {
     );
   });
 
+  test('only a block a person decided leaves a note on the row', () async {
+    // 24 statt 12: Jede zwölfte Zeile wartet noch, und dieser Test braucht
+    // zwei davon — eine für den Menschen, eine für die Maschine.
+    final FakeDaemonClient client = FakeDaemonClient.history(count: 24);
+    final ProviderContainer container = _container(client);
+    await settle(container);
+
+    Future<Flow> decideAndRead(Flow held, Decision decision) async {
+      await client.decide(held.id, decision);
+      for (int i = 0; i < 50; i++) {
+        final Flow current = container
+            .read(historyPageProvider)
+            .rows
+            .firstWhere((Flow flow) => flow.id == held.id);
+        if (current.decision != null) {
+          return current;
+        }
+        await Future<void>.delayed(Duration.zero);
+      }
+      fail('the decision never reached the row');
+    }
+
+    final List<Flow> waiting = container
+        .read(historyPageProvider)
+        .rows
+        .where((Flow flow) => flow.isHeld)
+        .toList();
+    expect(waiting, hasLength(greaterThanOrEqualTo(2)));
+
+    final Flow byPerson = await decideAndRead(
+      waiting[0],
+      const Decision.block(note: 'use PyPI'),
+    );
+    expect(byPerson.decisionNote, 'use PyPI');
+
+    // A hard block on a checksum-confirmed secret sends the agent a sentence
+    // the machine wrote (`BlockReason.secret`). It belongs in the 403 answer,
+    // not in a column that is read, shown and exported as the word of a
+    // person (HUM-117).
+    final Flow byMachine = await decideAndRead(
+      waiting[1],
+      const Decision.block(
+        reason: BlockReason.secret,
+        note: 'a checksum-confirmed secret was found in this request',
+      ),
+    );
+    expect(byMachine.decision, DecisionKind.block);
+    expect(byMachine.blockReason, BlockReason.secret);
+    expect(byMachine.decisionNote, isEmpty);
+  });
+
   test(
     'an arrival joins the rows at once while the list is at its head',
     () async {
