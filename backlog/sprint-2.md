@@ -1136,7 +1136,7 @@ Einfrieren (`queueFreezeProvider`): Die Queue rendert einen Snapshot `frozenOrde
 
 ### Akzeptanzkriterien
 - [x] Tests und Goldens grün. (154 Tests, sechs Goldens `queue_grouped_*`, `queue_new_pill_*`)
-- [ ] Manuell mit Fake-Daemon (Szenario `npm_install.jsonl`, 15 Flows/20 s): keine Zeile bewegt sich, während der Zeiger über der Queue steht; Pill zählt hoch. Das Szenario liegt als `fixtures/sessions/npm-install.jsonl` (Bindestrich); das Einfrieren belegen `queue_freeze_test.dart:44,70` mit zwei Ankünften, der manuelle Lauf mit 15 Flows ist nirgends dokumentiert.
+- [x] Manuell mit Fake-Daemon (Szenario `npm_install.jsonl`, 15 Flows/20 s): keine Zeile bewegt sich, während der Zeiger über der Queue steht; Pill zählt hoch. **Gemessen am 2026-09-12, und nicht mehr manuell:** `app/integration_test/queue_freeze_test.dart` (HUM-144) fährt die echte Anwendung unter `xvfb` gegen den echten `humanitld --fake fixtures/sessions/npm-install.jsonl`, ohne Zeitraffer und damit im Tempo der Aufzeichnung (fünfzehn Anfragen in 20,6 s), und misst mit **aufgeklappter** Gruppe; eingeklappt bliebe die Gruppe eine einzige Zeile, auch wenn gar nicht eingefroren würde. Behauptet werden Verhältnisse und keine festen Zahlen: Solange der Zeiger in der Warteschlange steht, bleiben die gezeichneten Zeilen dieselben und an denselben Stellen -- auch über ein Fenster, in dem der Daemon nachweislich eine weitere Anfrage angenommen hat --, die Pille erscheint, ihre Zahl wächst, und sie nennt genau die Differenz aus gehaltenen und gezeichneten Anfragen; nach dem Verlassen des Zeigers ist die vorher gesehene Pille fort, und die Liste ist gewachsen. Ein Lauf vom 2026-09-12 als Beispiel und nicht als Zusage: eingefroren bei 6 von 15 Anfragen mit 6 Einträgen, Pille 2, dann 4, am Ende 10, danach 16 Einträge. Die Mutationsprobe `_frozen = false` färbt alle neun Messpunkte rot (siehe HUM-144). **Ungemessen bleiben** die übrigen Zusagen dieses Issues: der Zähler der Gruppe, `12× GET · 2× POST`, das Einklappen ab drei, die Stapel-Entscheidungen samt Modal über fünf, die Mehrfachauswahl und die beiden anderen Einfrier-Gründe (Tastatur-Navigation, Auswahl über eins).
 - [x] Kein Button mit Text „Allow all" existiert außerhalb des Palette-Modals (`grep -r "allow_all" app/l10n` zeigt nur `palette_queue_allow_all`). (das grep-Muster ist veraltet, ARB-Schlüssel sind camelCase; der einzige Treffer für „Allow all" ist `paletteQueueAllowAll`, und `askAllowAll` öffnet immer das Modal)
 
 ### Fallstricke
@@ -2546,10 +2546,10 @@ Die Gruppe wird vor dem Messen aufgeklappt (ein Tipp auf den Gruppenkopf), danac
 Der Test selbst ist die Messung. Mutationsprobe, schon gefahren: `_frozen` in `queue_pane.dart` fest auf `false`, Test rot -- allerdings nur an der Pille, und genau das ist Punkt 1 oben.
 
 ### Akzeptanzkriterien
-- [ ] Der Test liegt in `app/integration_test/` und läuft unter `make flutter-test-integration` grün, und ein Schritt in CI fährt ihn ebenfalls.
-- [ ] Er misst mit aufgeklappter Gruppe, und die Mutationsprobe `_frozen = false` färbt **alle** Zusicherungen über die Zeilen rot, nicht nur die Pille.
-- [ ] Nach dem Lauf sind weder Prozess noch Verzeichnis übrig, und keine Ausnahme steht im Bericht.
-- [ ] Das Kästchen von HUM-029 trägt danach die Messung.
+- [ ] Der Test liegt in `app/integration_test/` und läuft unter `make flutter-test-integration` grün, und ein Schritt in CI fährt ihn ebenfalls. (Erste Hälfte gemessen am 2026-09-12: `xvfb-run -a --server-args='-screen 0 1600x1000x24' make flutter-test-integration` endet mit 0 in 103 s, davon 25 s für `queue_freeze_test.dart` (das Szenario läuft ohne Zeitraffer) und 6 s für `shell_test.dart`; der Rest sind `flutter pub get`, Codeerzeugung und zwei Bündelbauten. `m2_first_decision_test.dart` überspringt das Ziel laut, solange `HUMANITL_E2E_HAR` fehlt: Es ist der Bildschirm-Treiber von `tests/e2e/m2_first_decision/run.sh` (HUM-097) und stirbt ohne dessen Umgebung sofort, sein Gate ist der Lauf selbst. Zweite Hälfte offen: Der Schritt „The app on a screen against a real daemon (HUM-144)" steht im Job `e2e-xvfb` samt dem Bau von `humanitld` davor; gefahren hat ihn die CI noch nicht.)
+- [x] Er misst mit aufgeklappter Gruppe, und die Mutationsprobe `_frozen = false` färbt **alle** Zusicherungen über die Zeilen rot, nicht nur die Pille. (Gemessen am 2026-09-12. Aufgeklappt: Vor dem Tipp auf das Faltdreieck findet `find.byType(QueueRow)` nichts, danach steht jede Anfrage der Gruppe als eigene Zeile; gemessen wird also an Zeilen und nicht an einem Gruppenkopf. Mutationsprobe `_frozen => false`: **alle neun** gewerteten Messpunkte rot -- eine Zeile kam während des Ruhefensters dazu, die Zahl der Einträge stieg von 8 auf 16, die Rechteck-Karte trug zusätzliche Schlüssel, die Pille fehlte dreimal, nach dem Verlassen wurde nichts zusammengeführt und nichts wuchs, und die Pille, die vorher gezählt haben sollte, hatte es nie gegeben. Zwei Punkte waren dafür zu ändern, beide aus dem Review vom 2026-09-12: „keine eingefrorene Zeile ging verloren" behauptet eine Obermenge und steht jetzt außerhalb der Wertung, hinter dem `expect`, das die Messung zusammenfasst; und „die Pille ist fort" wird nicht mehr gegen ihr bloßes Fehlen geprüft, sondern gegen die vorher gemessene Pille, denn ohne Einfrieren erscheint sie nie.)
+- [x] Nach dem Lauf sind weder Prozess noch Verzeichnis übrig, und keine Ausnahme steht im Bericht. (Gemessen nach dem grünen Lauf vom 2026-09-12: `pgrep -c humanitld` = 0, kein `/tmp/hum-fake-*` und kein `/tmp/hum-freeze-*`, und der Bericht endet mit „All tests passed!" ohne einen Block „EXCEPTION CAUGHT BY FLUTTER TEST FRAMEWORK". Der Weg dorthin ist ein anderer als der von Punkt 3 des Reviews; siehe „Gebaut".)
+- [x] Das Kästchen von HUM-029 trägt danach die Messung. (Kriterium 2 von HUM-029, mit den Zahlen des Laufs und der Liste dessen, was ungemessen bleibt.)
 
 ### Fallstricke
 - Der Zeitraffer (`--speed`) ändert die Reihenfolge nicht, aber die Abstände: Wer zu spät hinsieht, misst eine fertige Warteschlange.
@@ -2559,6 +2559,111 @@ Der Test selbst ist die Messung. Mutationsprobe, schon gefahren: `_frozen` in `q
 Geparkter Stand: `~/hum-parked-queue_freeze_test.dart` (2026-09-07). Reviews zu HUM-029 vom selben Tag, beide mit eigenen Messungen: 46 Zeilen im Szenario, 15 Anfragen an **einen** Host, Zeitraffer 4 macht aus 20,6 s knapp 5 s, und der Daemon hält unter `--loop` nach zwölf Sekunden 41 Flüsse. `docs/UX.md` 2.8.
 
 **Was der Kasten von HUM-029 nach diesem Issue sagen darf, und was nicht.** Gemessen wären dann: die Pille erscheint und wächst, während der Zeiger in der Warteschlange steht, und sie ist danach fort; die Reihenfolge bleibt bei aufgeklappter Gruppe. Ungemessen bleiben die übrigen Zusagen von HUM-029 -- der Zähler der Gruppe, `12× GET · 2× POST`, das Einklappen ab drei, die Stapel-Entscheidungen samt Modal über fünf, Mehrfachauswahl, die beiden anderen Einfrier-Gründe (Tastatur-Navigation, Auswahl über eins) und das Tempo von fünfzehn Flüssen in zwanzig Sekunden statt im Zeitraffer.
+
+### Gebaut (2026-09-12)
+
+Der Test steht als `app/integration_test/queue_freeze_test.dart` im
+Repository. Ein grüner Lauf vom 2026-09-12: eingefroren bei 6 von 15
+Anfragen, 6 Einträge stehen still, die Pille zählt 2, dann 4, am Ende 10, und
+nach dem Verlassen des Zeigers hat die Liste 16 Einträge. Keine dieser Zahlen
+ist eine Zusage -- sie hängen daran, wie schnell die Anwendung stand --, und
+der Test behauptet sie deshalb nicht, sondern misst gegen sich selbst. Er
+schreibt sie am Ende in eine Zeile des Berichts, damit nicht nur ein grüner
+Haken dasteht. Gewertet werden neun Messpunkte; sie stehen in `_Marks`, und
+dort steht nur, was unter `_frozen => false` rot wird. Eine Zusicherung, die
+auch ohne Einfrieren grün bliebe, steht ausdrücklich daneben und nicht darin
+(das gilt für „keine eingefrorene Zeile ging beim Zusammenführen verloren").
+
+**Die sechs Punkte des Reviews, einzeln.**
+
+1. **Aufgeklappt.** Der Test wartet, bis die Gruppe drei Flüsse hält (dann
+   steht sie eingeklappt), behauptet, dass keine Zeile gezeichnet ist, tippt
+   das Faltdreieck des Gruppenkopfs an und misst danach an zehn Zeilen. Damit
+   haben die Zeilen-Zusicherungen Zähne, und die Mutationsprobe belegt es.
+2. **Kein `--loop`,** und am Ende auch kein Zeitraffer. Bei 4 ist das Szenario
+   nach knapp fünf Sekunden durch; Start der Anwendung, vergebliche Suche nach
+   dem Daemon und der erste Wiederverbindungsversuch (alle zwei Sekunden,
+   `connection.dart`) fressen davon den größten Teil. Mit 2 fror ein Lauf auf
+   diesem Rechner bei 10 von 15 Anfragen ein, also gut fünf Sekunden vor der
+   zwölften -- auf einem langsamen Läufer zu wenig, und der Lauf stürbe in
+   einer Frist statt an einer Zusicherung (Review vom 2026-09-12). Jetzt läuft
+   das Szenario in seinem eigenen Tempo (20,6 s), die Anwendung fragt nach dem
+   Start des Daemons sofort nach (`DaemonConnection.retry`, derselbe Weg wie
+   „Erneut verbinden") statt den Zwei-Sekunden-Takt abzuwarten, und der Test
+   fror danach bei 6 von 15 Anfragen ein. Bis zur zwölften sind das rund acht
+   Sekunden Luft. Der Lauf kostet dafür 25 s statt 14 s. Zusätzlich steht eine
+   Schranke im Test: Sind beim Einfrieren schon mehr als zwölf der fünfzehn
+   Anfragen da, bricht er sofort mit dieser Begründung ab, statt dreißig
+   Sekunden in einer Frist zu stehen; und die Zahl der Ankünfte, auf die er
+   danach wartet, rechnet er aus dem Rest. Nebenbei gemessen: Ohne Daemon gibt
+   es keine Shell und keine Rail --
+   `ConnectionGate` zeigt bis zur ersten Antwort den Einrichten-Bildschirm.
+   Gewartet wird deshalb erst darauf, dass die Anwendung steht und vergeblich
+   gesucht hat, dann startet der Daemon, und erst danach führt der Tipp auf
+   die Rail in die Warteschlange; er wird wiederholt, weil `_offerSetup` die
+   Weiche einmal auf den Einrichten-Bildschirm stellen kann.
+3. **Das Abräumen: Der Vorschlag des Reviews hält nicht.** Gemessen wurden am
+   2026-09-12 fünf Läufe -- Auflegen als eigener `addTearDown` nach
+   `daemon.stop` mit 0,5 s und mit 2 s Nachlauf, Auflegen **nach** dem Tod des
+   Daemons, gar kein Auflegen, und `SIGTERM` statt `SIGKILL`. Alle fünf enden
+   mit `DAEMON_001` im Bericht. Der Grund steht in zwei Zeilen fremden Codes:
+   `GrpcDaemonClient.subscribe` ist ein `async*`-Erzeuger, der in einem
+   `await for` hängt, und Dart beendet einen solchen Erzeuger erst beim
+   nächsten `yield`. Ein abbestellter Strom hält also weiter eine offene
+   gRPC-Antwort; stirbt der Daemon danach, wirft der Erzeuger ins Leere, und
+   die Ausnahme landet im Zonen-Fehlerpfad des Testgerüsts, der weder über
+   `FlutterError.onError` noch über `takeException` abzufangen ist. Abbestellt
+   wird ohne Zutun des Tests: Das Testgerüst räumt den Baum nach dem letzten
+   Bild des Rumpfes selbst ab, also **vor** jedem `addTearDown` (gemessen mit
+   einem Probedruck in `flowEventsProvider`). `SIGTERM` hilft nicht, weil der
+   Daemon beim geordneten Abschied auf genau diesen Strom wartet und in die
+   Frist läuft. Was gilt: Der Daemon fällt im **Rumpf**, solange die Anwendung
+   steht und ihr Hörer einen `onError` hat -- sie nimmt den Verlust also
+   selbst entgegen, so wie sie es auf einem Schreibtisch täte --, und der Test
+   behauptet danach, dass sie es gemerkt hat (`linkLiveProvider` wird falsch).
+   `addTearDown(daemon.stop)` bleibt als Netz für den Fall, dass eine Messung
+   vorher fällt. Das ist die zweite Hälfte der Spezifikation („oder der Test
+   nimmt die erwartete Ausnahme ausdrücklich entgegen"), und sie ist hier
+   nicht die bequemere, sondern die einzige.
+4. **Der Import ist nicht überflüssig.** Ohne `package:flutter/widgets.dart`
+   fehlen `Size`, `Rect`, `Key`, `ValueKey`, `Element`, `Widget` und
+   `SizedBox`: 18 Fehler in `flutter analyze`. Was am geparkten Stand hing,
+   war das `hide Flow` an einem Import, dessen `Flow` nirgends auftauchte; der
+   Test nennt den Namen nicht mehr, der Import steht ohne Klausel da, und
+   `flutter analyze --fatal-infos` ist grün.
+5. **Die Pille** wird über `Key('intercept-new-pill')` gefunden, und gemessen
+   wird ihr Zähler über das `NewArrivalsPill` darüber: erscheint, wächst
+   (2 auf 4), nennt am Ende genau die Zahl der zurückgehaltenen Ankünfte
+   (5 = 15 gehalten minus 10 gezeichnete), ist nach dem Verlassen fort.
+6. **Ein Schritt fährt die Datei.** `ci.yml`, Job `e2e-xvfb`: ein Bau von
+   `humanitld` (dasselbe Zielverzeichnis, das der M2-Lauf danach benutzt, also
+   kein zweiter Bau) und darunter `xvfb-run -a --server-args='-screen 0
+   1600x1000x24' make flutter-test-integration`. Das Ziel und nicht der nackte
+   `flutter test`-Aufruf, weil das Kriterium dieses Ziel nennt und weil so
+   auch `shell_test.dart` zum ersten Mal in einem Gate läuft. Das Ziel
+   überspringt dafür `m2_first_decision_test.dart` laut, solange
+   `HUMANITL_E2E_HAR` fehlt: Der Treiber gehört `run.sh`, und ohne dessen
+   Umgebung stürbe er sofort und färbte das Ziel rot.
+
+**Zwei Stellen, an denen die Spezifikation zu schwach war.** „Rechteck der
+ersten Zeile bleibt" hat für sich keine Zähne: Die Gruppe ist nach Frist
+sortiert, Ankünfte hängen sich hinten an, und die erste Zeile steht auch dann
+still, wenn gar nicht eingefroren wird. Gemessen wird deshalb die ganze Karte
+aus Zeilenschlüssel und Rechteck; sie wird falsch, sobald eine Zeile dazukommt,
+verschwindet oder sich verschiebt, und sie ist unter der Mutationsprobe rot.
+Und die Grundlinie wird nicht sofort abgelesen: Die Zeilen, die kurz vor dem
+Zeiger hereinkamen, gleiten noch in ihre Lage, und mitten in dieser Bewegung
+sind die Rechtecke um 0,2 px daneben (gemessen). Gewartet wird deshalb, bis
+der Daemon eine weitere Anfrage hält, und erst dann steht die Grundlinie --
+womit das Ruhefenster selbst ein Messpunkt wird: Es enthält nachweislich eine
+Ankunft, und wenn die Zeilen danach dieselben sind, hat die Warteschlange sie
+wirklich zurückgehalten. Ein festes Fenster von einer halben Sekunde war das
+nicht: Unter der Mutationsprobe blieb der Punkt grün, wenn zufällig keine
+Anfrage hineinfiel (gemessen am 2026-09-12).
+
+Nebenbei prüft der Test als Vorbedingung, dass die Gruppe ab drei Flüssen
+eingeklappt steht. Der Kasten von HUM-029 behauptet das trotzdem nicht: Die
+Zusage dort meint mehr als diesen einen Fall.
 
 ## HUM-097 · Oberflächen-Hälfte des M2-Demoskripts
 Sprint: 2 · Größe: L · Abhängigkeiten: HUM-036, HUM-028, HUM-029, HUM-032, HUM-033, HUM-035; vorher zu bauen: Beweis des `integration_test`-Harness, App-Bau im Job `e2e-xvfb`, Exportziel nach `HUMANITL_E2E_HAR` (siehe Stand) · Blockiert: das vollständige M2-Sprint-Gate, HUM-094 (Namens-Behauptungen im Bildschirm-Lauf)

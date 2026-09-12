@@ -121,7 +121,20 @@ flutter-test-integration: flutter-codegen ## The app on a screen, against a real
 	@# Eine Datei nach der anderen: Mehrere Dateien in einem Aufruf starten die
 	@# Anwendung mehrfach auf demselben Geraet, und der zweite Start scheitert
 	@# mit "Unable to start the app on the device" (gemessen 2026-09-07).
+	@#
+	@# Eine Datei faehrt hier nicht mit: `m2_first_decision_test.dart` ist der
+	@# Bildschirm-Treiber von `tests/e2e/m2_first_decision/run.sh` (HUM-097) und
+	@# verlangt Daemon, Agent und drei Dateipfade in der Umgebung; ohne sie
+	@# stirbt er sofort mit "HUMANITL_E2E_HAR is not set". Sein Gate ist der Job
+	@# `e2e-xvfb`, der `run.sh` faehrt. Uebersprungen wird laut, nicht still.
 	cd app && for file in integration_test/*_test.dart; do \
+		case "$$file" in \
+		*/m2_first_decision_test.dart) \
+			if [ -z "$$HUMANITL_E2E_HAR" ]; then \
+				echo "== $$file SKIPPED: driven by tests/e2e/m2_first_decision/run.sh (HUMANITL_E2E_HAR is unset)"; \
+				continue; \
+			fi ;; \
+		esac; \
 		echo "== $$file"; \
 		flutter test "$$file" -d linux || exit 1; \
 	done
