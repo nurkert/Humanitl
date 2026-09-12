@@ -363,6 +363,9 @@ pub enum FlowsCmd {
         /// Begründung für den Agenten; sie steht im Block-Body unter `note:`.
         #[arg(long, value_name = "TEXT")]
         note: Option<String>,
+        /// Die Regel, die die Entscheidung hinterlässt; ohne `--remember` keine.
+        #[command(flatten)]
+        remember: RememberArgs,
     },
 }
 
@@ -534,6 +537,91 @@ pub struct RuleArgs {
         default_missing_value = "true"
     )]
     pub allow_private: Option<bool>,
+}
+
+/// Die Regel, die eine Entscheidung hinterlässt.
+///
+/// Eigene Flags statt `#[command(flatten)] RuleArgs`: `RuleArgs` trägt ein
+/// `--note`, und `flows decide` hat `--note` schon als Notiz an den Agenten
+/// (HUM-072). Zwei Argumente mit demselben langen Namen lässt `clap` nicht zu
+/// und bricht beim Start ab. Aus demselben Grund trägt hier jedes Argument ein
+/// eigenes `id`: `clap` leitet die Kennung sonst aus dem Feldnamen ab, und
+/// `note` gäbe es dann zweimal in `flows decide`. Die Brücke zurück ist
+/// [`RememberArgs::rule_args`], damit `crate::cmd::rules::rule_from_args` die
+/// einzige Stelle bleibt, die aus Flags eine Wire-Regel baut.
+///
+/// Es gibt kein Flag für die Aktion: Die Regel bekommt sie aus dem Verdikt,
+/// damit keine Regel entstehen kann, die dem gerade gefällten Urteil
+/// widerspricht.
+#[derive(Debug, Clone, Args)]
+pub struct RememberArgs {
+    /// Host pattern of the rule to remember. Without it nothing is remembered.
+    #[arg(id = "remember_host", long = "remember", value_name = "PATTERN")]
+    pub host: Option<String>,
+
+    /// One HTTP method for the rule; repeat the flag for more.
+    #[arg(
+        id = "remember_method",
+        long = "remember-method",
+        value_name = "M",
+        requires = "remember_host",
+        value_parser = PossibleValuesParser::new(RULE_METHODS),
+        ignore_case = true
+    )]
+    pub method: Vec<String>,
+
+    /// Path glob of the rule, or a regular expression when it starts with `~`.
+    #[arg(
+        id = "remember_path",
+        long = "remember-path",
+        value_name = "P",
+        requires = "remember_host"
+    )]
+    pub path: Option<String>,
+
+    /// never, session, or a point in time in RFC 3339. Without it: session.
+    #[arg(
+        id = "remember_expires",
+        long = "remember-expires",
+        value_name = "WHEN",
+        requires = "remember_host"
+    )]
+    pub expires: Option<String>,
+
+    /// Why the rule exists. It ends up in rules.yaml and in the window.
+    #[arg(
+        id = "remember_note",
+        long = "remember-note",
+        value_name = "TEXT",
+        requires = "remember_host"
+    )]
+    pub note: Option<String>,
+}
+
+impl RememberArgs {
+    /// Die Flags als [`RuleArgs`], oder `None`, wenn `--remember` fehlt.
+    ///
+    /// Ohne `--remember-expires` steht `session` in der Regel: Ein leeres
+    /// `expires` liest `humanitl_ipc::convert::expiry_from_proto` als `never`,
+    /// und eine dauerhafte Regel als Nebenwirkung einer einzelnen Freigabe ist
+    /// genau die Überraschung, die das Produkt nicht macht.
+    #[must_use]
+    pub fn rule_args(&self, verdict: &str) -> Option<RuleArgs> {
+        let host = self.host.clone()?;
+        Some(RuleArgs {
+            action: Some(verdict.to_owned()),
+            host: Some(host),
+            method: self.method.clone(),
+            path: self.path.clone(),
+            scheme: None,
+            port: None,
+            upgrade: None,
+            expires: Some(self.expires.clone().unwrap_or_else(|| "session".to_owned())),
+            note: self.note.clone(),
+            position: None,
+            allow_private: None,
+        })
+    }
 }
 
 /// Die Unterkommandos von `humanitl config`.

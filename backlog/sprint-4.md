@@ -1652,7 +1652,7 @@ Keine automatische Generierung von CLI-Subkommandos aus der Proto (bewusst: die 
 Tabellenformat:
 | RPC | CLI | UI |
 |---|---|---|
-| `Humanitl.Decide` | `humanitl flows decide <id> allow|block [--note]` | `intercept/action_bar` |
+| `Humanitl.Decide` | `humanitl flows decide <id> allow|block [--note] [--remember PATTERN]` | `intercept/action_bar` |
 Ausnahmen (RPCs ohne CLI-Sinn, z. B. `Terminal`-Stream) stehen in `xtask/parity_exempt.toml` mit Begründung; die Liste wird in der Tabelle als Abschnitt „Ausnahmen" ausgegeben.
 
 ### Schritte

@@ -703,7 +703,7 @@ fn origin(rule: &v1::Rule) -> &'static str {
 ///
 /// Der Host steht so da, wie die Regel ihn führt (A-Label bei einem
 /// internationalisierten Namen); für Augen ist die Tabelle da.
-fn rule_json(rule: &v1::Rule) -> Value {
+pub(crate) fn rule_json(rule: &v1::Rule) -> Value {
     let matcher = rule.matcher.clone().unwrap_or_default();
     json!({
         "rule_id": rule.rule_id,
@@ -792,7 +792,10 @@ fn upgrade_name(upgrade: i32) -> &'static str {
 /// entsteht eine neue Regel, und `--action` und `--host` müssen dabei sein.
 /// Geprüft wird hier nur, was die Wire-Form überhaupt tragen kann; ob das
 /// Host-Muster gültig ist und ob der Pfad übersetzbar ist, sagt der Daemon.
-fn rule_from_args(args: &RuleArgs, base: Option<&v1::Rule>) -> Result<v1::Rule, Failure> {
+pub(crate) fn rule_from_args(
+    args: &RuleArgs,
+    base: Option<&v1::Rule>,
+) -> Result<v1::Rule, Failure> {
     let mut rule = base.cloned().unwrap_or_default();
     let mut matcher = rule.matcher.clone().unwrap_or_default();
 

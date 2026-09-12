@@ -24,14 +24,14 @@
 use std::io::Write as _;
 
 use humanitl_core::diagnostics::codes;
-use humanitl_core::{Diagnostic, FixAction, Severity};
+use humanitl_core::{Diagnostic, FixAction, FlowId, Severity};
 use humanitl_ipc::client::Client;
 use humanitl_ipc::convert::state_name;
 use humanitl_ipc::v1;
 use serde_json::{Value, json};
 use tonic::Code;
 
-use crate::cli::FlowsCmd;
+use crate::cli::{FlowsCmd, RememberArgs};
 use crate::cmd::{Context, EXIT_OK, Failure, from_proto, status_diagnostic};
 use crate::render::table;
 
@@ -63,9 +63,12 @@ pub async fn run(ctx: &Context, cmd: &FlowsCmd) -> Result<u8, Failure> {
             asc,
         } => list(ctx, client, filter, *limit, sort, *asc).await,
         FlowsCmd::Show { id, body, raw } => show(ctx, client, id, body.as_deref(), *raw).await,
-        FlowsCmd::Decide { id, verdict, note } => {
-            decide(ctx, client, id, verdict, note.as_deref()).await
-        }
+        FlowsCmd::Decide {
+            id,
+            verdict,
+            note,
+            remember,
+        } => decide(ctx, client, id, verdict, note.as_deref(), remember).await,
     }
 }
 
@@ -303,12 +306,22 @@ async fn body_bytes(client: &mut Client, reference: &v1::BodyRef) -> Result<Vec<
     Ok(out)
 }
 
-/// `flows decide ID allow|block [--note TEXT]`.
+/// `flows decide ID allow|block [--note TEXT] [--remember PATTERN ...]`.
 ///
-/// Genau eine Id je Aufruf. Der Vertrag erlaubt einen Stapel, aber auf der
-/// Kommandozeile wäre er die bequeme Art, versehentlich mehr freizugeben als
-/// gemeint; wer einen Stapel will, ruft das Kommando in einer Schleife auf und
-/// sieht dabei jede Entscheidung.
+/// Genau eine Id je Aufruf, auch mit `--remember`. Der Vertrag erlaubt einen
+/// Stapel, aber auf der Kommandozeile wäre er die bequeme Art, versehentlich
+/// mehr freizugeben als gemeint; wer einen Stapel will, ruft das Kommando in
+/// einer Schleife auf und sieht dabei jede Entscheidung. Wie in der Oberfläche
+/// trägt dann nur der erste Durchlauf `--remember`: Zwölf Aufrufe mit dem Flag
+/// legen zwölf Regeln an.
+///
+/// `--remember` schickt die Regel in derselben Anfrage, in der die
+/// Entscheidung steht. Der Dienst legt sie vor der Entscheidung an und nimmt
+/// sie zurück, wenn kein Flow entschieden wurde
+/// (`humanitl_ipc::server`, `humanitl_ipc::rules::RulesService::remember`).
+/// Deshalb nie `rules add` und danach `decide`: Dieser Rücknahmeweg gilt nur
+/// für die Regel aus `remember`, und sonst bliebe eine Regel stehen, obwohl
+/// kein Flow mehr wartete.
 ///
 /// Ein Flow, der nicht mehr wartet, ist kein Erfolg mit leerem Inhalt: Der
 /// Dienst antwortet dann mit `FailedPrecondition` und `IPC_003`, und das wird
@@ -319,6 +332,7 @@ async fn decide(
     id: &str,
     verdict: &str,
     note: Option<&str>,
+    remember: &RememberArgs,
 ) -> Result<u8, Failure> {
     // `clap` lässt nur `allow` und `block` durch (`value_parser` in
     // `cli::FlowsCmd::Decide`); alles andere kommt hier nie an. Ein Zweig, der
@@ -335,7 +349,7 @@ async fn decide(
         .decide(v1::DecideRequest {
             flow_ids: vec![id.to_owned()],
             decision: Some(decision),
-            remember: None,
+            remember: remembered_rule(id, verdict, remember)?,
         })
         .await
         .map(tonic::Response::into_inner)
@@ -367,17 +381,91 @@ async fn decide(
     }
 
     if ctx.render.is_json() {
-        ctx.render.value(&json!({
-            "flow_id": result.flow_id,
-            "decision": verdict,
-            "note": note.unwrap_or_default(),
-            "applied": true,
-        }));
+        ctx.render
+            .value(&decide_json(verdict, note, &result.flow_id, &response));
         return Ok(EXIT_OK);
     }
     ctx.render
         .line(&format!("{} {}", verdict, short_id(&result.flow_id)));
+    if let Some(rule) = response.created_rule.as_ref() {
+        ctx.render.line(&rule_line(rule));
+    }
     Ok(EXIT_OK)
+}
+
+/// Die Regel, die die Entscheidung hinterlässt, oder `None` ohne `--remember`.
+///
+/// Die Herkunft setzt die Kommandozeile selbst: Der Dienst leitet sie nicht
+/// aus `flow_ids` ab, er legt die Regel des Clients ab, wie sie kommt. Die
+/// Ableitung im Server wäre dieselbe Rechnung ein zweites Mal, einmal im
+/// echten Dienst und einmal im Fake.
+///
+/// Ist die Id keine Flow-Id, geht die Anfrage ohne Regel hinaus. Der Daemon
+/// antwortet dann wie ohne das Flag mit `IPC_004` auf die Id statt mit
+/// `IPC_005` auf `created_from_flow_id`, und es entsteht keine Regel für einen
+/// Flow, den es nicht gibt.
+fn remembered_rule(
+    id: &str,
+    verdict: &str,
+    remember: &RememberArgs,
+) -> Result<Option<v1::Rule>, Failure> {
+    let Some(args) = remember.rule_args(verdict) else {
+        return Ok(None);
+    };
+    if FlowId::parse(id).is_err() {
+        return Ok(None);
+    }
+    let mut rule = crate::cmd::rules::rule_from_args(&args, None)?;
+    // Die volle Id, nicht die gekürzte aus `short_id`: `rule_from_proto` weist
+    // ein Präfix mit `IPC_005` ab.
+    id.clone_into(&mut rule.created_from_flow_id);
+    Ok(Some(rule))
+}
+
+/// Die Antwort auf `decide` als JSON.
+///
+/// `created_rule_id` und `created_rule` stehen nur darin, wenn der Dienst eine
+/// Regel angelegt hat. Ohne `--remember` sieht ein Aufrufer damit genau die
+/// vier Schlüssel, die er vorher sah.
+fn decide_json(
+    verdict: &str,
+    note: Option<&str>,
+    flow_id: &str,
+    response: &v1::DecideResponse,
+) -> Value {
+    let mut value = json!({
+        "flow_id": flow_id,
+        "decision": verdict,
+        "note": note.unwrap_or_default(),
+        "applied": true,
+    });
+    if let (Some(object), Some(rule)) = (value.as_object_mut(), response.created_rule.as_ref()) {
+        object.insert(
+            "created_rule_id".to_owned(),
+            Value::String(response.created_rule_id.clone()),
+        );
+        object.insert(
+            "created_rule".to_owned(),
+            crate::cmd::rules::rule_json(rule),
+        );
+    }
+    value
+}
+
+/// Die zweite Klartextzeile: die Regel, die die Entscheidung hinterlassen hat.
+///
+/// Die Felder kommen aus derselben Abbildung wie `rules list --json`, damit
+/// Aktion und Ablauf hier nicht ein zweites Mal benannt werden.
+fn rule_line(rule: &v1::Rule) -> String {
+    let json = crate::cmd::rules::rule_json(rule);
+    let text = |value: &Value| value.as_str().unwrap_or_default().to_owned();
+    format!(
+        "rule {} {} {} {}",
+        short_id(&rule.rule_id),
+        text(&json["action"]),
+        text(&json["host"]),
+        text(&json["expires"]["kind"])
+    )
 }
 
 /// Die Sortierung, wie `ListFlows.order_by` sie erwartet.
