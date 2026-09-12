@@ -571,7 +571,7 @@ Config (`findings.*`): `findings.enabled` (Liste Detektor-IDs, Default alle sieb
 - Benchmark (criterion, nicht in CI-Gate): 8 MiB JSON in < 200 ms.
 
 ### Akzeptanzkriterien
-- [x] Alle Tests grün; Benchmark-Zahl in der PR-Beschreibung. (Merge-Body 5a677d1: rund 160 ms für 8 MiB; der Durchsatz-Test ist `#[ignore]` mit 2-s-Schranke, kein Gatter)
+- [x] Alle Tests grün; Benchmark-Zahl in der PR-Beschreibung. (Commit-Body `ca724b2`: „Acht MiB JSON brauchen rund 160 ms"; der Merge-Body `5a677d1` trägt nur seine Betreffzeile, am 2026-09-12 geprüft. Der Durchsatz-Test `eight_mebibyte_json_stays_fast` ist `#[ignore]` mit 2-s-Schranke, kein Gatter)
 - [x] `secrets.toml` hat für jede Regel ein Feld `source` mit gitleaks-Regel-ID oder „humanitl". (13 Regeln, 13 `source`)
 - [x] Spans sind immer innerhalb `bytes.len()` (Property-Test mit zufälligen Eingaben). (200 deterministische Eingaben, kein proptest)
 - [x] Config-Schema enthält die vier `findings.*`-Schlüssel mit Tier. (`findings.enabled` ist ein `bool` für alles, nicht die Liste der Detektor-IDs; so registriert in CONVENTIONS 4.4)
