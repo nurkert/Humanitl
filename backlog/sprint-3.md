@@ -769,7 +769,7 @@ Sprint: 3 · Größe: M · Abhängigkeiten: HUM-019, HUM-008, HUM-018, HUM-066 �
 Der Sandbox-Screen ist der Ort, an dem der Nutzer sieht, was der Agent bekommt: Projektordner, Modus, Mounts, Env, Status. Usability-Review: der Nutzer fürchtet „bekommt der Agent meine ganze Platte?", also steht dort wörtlich „Der Agent sieht nur `/work` = ~/clients/acme. Nichts sonst." Start/Stop lebt hier; Stop bei laufendem Agent ist eine der wenigen Modal-Bestätigungen (BACKLOG.md Abschnitt 5).
 
 ### Ziel
-Screen `SandboxScreen` unter `features/sandbox` mit Header (Status, Start/Stop, Profil-Chip), Terminal-Bereich oben (Platzhalter bis HUM-042), Tabs unten: Mounts, Env, Isolation (Platzhalter bis HUM-041), Log. Alle Daten kommen über `sandboxStatusProvider` und `configProvider` vom Daemon.
+Screen `SandboxScreen` unter `features/sandbox` mit Header (Status, Start/Stop, Profil-Chip), Terminal-Bereich oben (Platzhalter bis HUM-042), Tabs unten: Mounts, Env, Isolation (Platzhalter bis HUM-041), Log. Alle Daten kommen über `sandboxStatusProvider` vom Daemon; einen `configProvider` gibt es nicht (nachgesehen am 2026-09-12: keine Fundstelle unter `app/lib`).
 
 ### Nicht-Ziel
 Terminal-Inhalt (HUM-042), Isolation-Panel (HUM-041), Diagnostics-Inhalte (HUM-068). Keine Profil-Bearbeitung.
@@ -834,6 +834,8 @@ Stop-Dialog (einzige Modal in diesem Screen): Titel `sandbox_stop_title` ("Stop 
 
 `WorkDirPicker`: `file_picker.getDirectoryPath()`, danach Toggle `ro | rw` (Default aus Profil). Schreibt `sandbox.work_dir`, `sandbox.work_mode` über `configProvider.set(...)` (Origin `Cli`-äquivalent „UI", persistiert in `config.toml`). Deaktiviert bei `running`.
 
+**Seit der Umsetzung überholt (nachgetragen 2026-09-12):** Einen `configProvider` gibt es nicht — keine Fundstelle unter `app/lib` —, und `GetConfig` antwortet weiter `unimplemented` (`daemon/crates/ipc/src/server.rs`, `get_config`, wartet auf HUM-069). Der Picker schreibt deshalb nichts: Er liegt als `app/lib/core/ui/work_dir_picker.dart`, und der gewählte Ordner geht über `sandboxStatusProvider.plan(workDir: …)` in `Sandbox(Plan)` und `Sandbox(Start)`, wo der Dienst ihn für die laufende Sitzung merkt (CONVENTIONS 4.17). Gemessen in `workdir_picker_asks_the_daemon_instead_of_computing` (`app/test/features/sandbox/sandbox_screen_test.dart:233`).
+
 ### Schritte
 1. Proto-Messages ergänzen, Codegen. Daemon: `Sandbox`-RPC-Handler liefert `Status` aus dem laufenden `SessionManager`.
 2. Domain-Typen in Dart (freezed), Mapping aus Proto.
@@ -863,7 +865,7 @@ Stop-Dialog (einzige Modal in diesem Screen): Titel `sandbox_stop_title` ("Stop 
 - Tabs behalten Scrollposition (`AutomaticKeepAliveClientMixin` oder `PageStorageKey`).
 
 ### Referenzen
-BACKLOG.md Abschnitt 5 (IA, Modal-Regel, Usability §1 Projektordner); CONVENTIONS.md 3.9. file_picker (https://pub.dev/packages/file_picker).
+BACKLOG.md Abschnitt 5 (IA, Modal-Regel, Usability §1 Projektordner); CONVENTIONS.md 3.9 und 4.17 (der Ordnerwunsch reist in `Plan`/`Start`, es gibt keinen Schreibweg in die Konfiguration). file_picker (https://pub.dev/packages/file_picker).
 
 ---
 
