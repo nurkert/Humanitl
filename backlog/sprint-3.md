@@ -4299,6 +4299,8 @@ Eine neue Art in `TlsFailure`, `ClosedAfterHandshake`: Der Handschlag stand, die
 ### Referenzen
 Messungen vom 2026-09-11 (`curl -v` in der Sandbox, `openssl s_client`, Trace-Protokoll des Proxys); `daemon/crates/proxy/src/handler.rs` (`handle_connect`, `note_handshake_failure`, `serve_connection`); `daemon/crates/proxy/src/tls_observe.rs` (`TlsFailure`, `classify`).
 
+**Korrektur zum Commit 775d789 (nachgetragen 2026-09-12):** Der Satz „`make check` does not run rustdoc" im Commit-Text ist falsch. `rust-doc` steht seit `96f8214` (2026-09-03) im Ziel `check` (`Makefile` Zeile 15), und das Ziel selbst fährt `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` (`Makefile` Zeilen 43 und 44). Richtig ist: Vor dem Commit liefen lokal nur `cargo test` und `clippy`, nicht `make check`; gefunden hat den Fehler `tools/verify-commit.sh` auf `11c9743`. Dasselbe gilt für `51aa7b1`: `dart format --output=none --set-exit-if-changed` steht in `flutter-analyze` (`Makefile` Zeile 82) und damit ebenfalls in `check`. Die Begründung für den ausgelassenen Review bleibt davon unberührt, und kein Akzeptanzkriterium dieses Issues hängt an dem Satz.
+
 ---
 
 ## HUM-151 · Der Fix für eine CA-Variable schreibt in `config.toml`
