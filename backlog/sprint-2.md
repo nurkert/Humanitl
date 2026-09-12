@@ -1211,7 +1211,7 @@ Umschalter: Segmented Control `Tree | Form | Raw | Hex` je nach Kind (json: Tree
 
 ### Akzeptanzkriterien
 - [x] Tests und Goldens grün. (acht benannte Tests, vier Golden-Paare `body_*`)
-- [ ] 8 MiB JSON im Fake-Daemon-Szenario `big_body.jsonl`: UI bleibt bedienbar (Scrollen in der Queue ruckelt nicht sichtbar), Tree erscheint nach < 1 s. Das Szenario ist `HUMANITL_FAKE=big_body` (generiert, keine Datei); Bedienbarkeit belegt `perf_test.dart` (der Baum baut nur den Ausschnitt), die Zeit nicht: gemessen 3157 ms für 8 MiB statt < 1 s, und ein Wanduhr-Gatter lehnt `perf_test.dart:80-86` bewusst ab (`docs/UX.md:526`). Das `decoded`-Flag an `GetBody` aus der Spezifikation fehlt (HUM-119).
+- [ ] 8 MiB JSON im Fake (`HUMANITL_FAKE=big_body`): Der Baum zeigt nur den Ausschnitt samt Hinweis auf die Kürzung, die Warteschlange bleibt während des Aufbaus bedienbar, und ein Integrationstest misst beides mit Zahlen statt mit dem Auge. **Entscheidung des Eigentümers vom 2026-09-12:** Das Kriterium wird auf messbare Zahlen umgeschrieben, nach dem Vorbild von HUM-144, statt einen Profile-Lauf mit Treiberpaar zu bauen. Welche Zahlen es sind, legt der Bau fest und schreibt sie hier hin; ein Wanduhr-Gatter über der Aufbauzeit bleibt ausgeschlossen (`perf_test.dart:80-86`, `docs/UX.md:526`), gemessen wurden dort 3157 ms für 8 MiB. Dass der Baum nur den Ausschnitt baut, belegt heute `perf_test.dart`. Das `decoded`-Flag an `GetBody` kommt mit HUM-119.
 - [x] Findings-Chips in der Karte (HUM-020) springen bei Klick zur ersten Fundstelle in der aktiven Ansicht (Raw scrollt, Tree klappt Pfad auf). (`jump_test.dart:95,111`; die Chips sitzen im Kopf der `BodyView`, die in der Karte steckt)
 
 ### Fallstricke
