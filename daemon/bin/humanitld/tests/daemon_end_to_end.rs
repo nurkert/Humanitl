@@ -410,6 +410,146 @@ async fn the_recording_outlives_the_daemon() {
     daemon.terminate();
 }
 
+/// Schickt eine Anfrage an `host`, die niemand entscheidet, und wartet auf die
+/// Antwort nach der Frist.
+///
+/// Nichts verlässt den Rechner: Der Flow läuft in die Frist und wird
+/// geblockt, also wird `host` nie aufgelöst und nie verbunden.
+async fn get_and_time_out(daemon: &Daemon, host: &str, path: &str) {
+    let mut agent = UnixStream::connect(daemon.proxy_socket()).await.unwrap();
+    agent
+        .write_all(
+            format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n").as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut raw = Vec::new();
+    tokio::time::timeout(Duration::from_secs(20), agent.read_to_end(&mut raw))
+        .await
+        .expect("the timeout must end the wait")
+        .unwrap();
+    let text = String::from_utf8_lossy(&raw);
+    assert!(text.starts_with("HTTP/1.1 504"), "{text}");
+}
+
+/// Die registrierbare Domain erreicht beide Wege und überlebt den Neustart.
+///
+/// Der Apex ist eine Zusage über eine Zeile, und eine Zeile kommt auf zwei
+/// Wegen an: als `Received` im Ereignisstrom und als Zeile aus `ListFlows`.
+/// Sagen die beiden Verschiedenes, sieht ein Mensch je nach Fenster etwas
+/// anderes; genau das war der Bruch, den HUM-091 behebt. Nach dem Neustart
+/// kann der Wert nur aus der Spalte `apex` kommen, und `--filter apex:` muss
+/// denselben String vergleichen, der in der Zeile steht.
+#[tokio::test]
+async fn the_apex_reaches_both_ways_and_survives_a_restart() {
+    let mut daemon = Daemon::start(1);
+    daemon.ready().await;
+
+    let token = auth::read_token(&daemon.token_path()).unwrap();
+    let mut grpc = client::connect_at(&daemon.socket(), &token).await.unwrap();
+    let mut events = grpc
+        .subscribe(v1::SubscribeRequest::default())
+        .await
+        .unwrap()
+        .into_inner();
+
+    // `github.io` steht im privaten Abschnitt der Public Suffix List, also
+    // gehört `a.b.github.io` zu `b.github.io`; eine IP hat keinen Apex.
+    let targets = [
+        ("a.b.github.io", "/one", "b.github.io"),
+        ("api.github.com", "/two", "github.com"),
+        ("192.168.1.50", "/three", ""),
+    ];
+    for (host, path, _) in targets {
+        get_and_time_out(&daemon, host, path).await;
+    }
+
+    // Weg eins: der Ereignisstrom.
+    let live: std::collections::HashMap<String, String> =
+        tokio::time::timeout(Duration::from_secs(20), async {
+            let mut seen = std::collections::HashMap::new();
+            while seen.len() < targets.len() {
+                let event = events.next().await.unwrap().unwrap();
+                if let Some(v1::flow_event::Event::Received(received)) = event.event {
+                    let summary = received.summary.expect("Received carries its row");
+                    seen.insert(summary.flow_id.clone(), summary.apex);
+                }
+            }
+            seen
+        })
+        .await
+        .expect("three requests arrive within twenty seconds");
+
+    // Weg zwei: die Liste. Für dieselbe `flow_id` derselbe String.
+    let page = grpc
+        .list_flows(v1::ListFlowsRequest::default())
+        .await
+        .unwrap()
+        .into_inner();
+    for (host, path, apex) in targets {
+        let row = page
+            .flows
+            .iter()
+            .find(|row| row.path == path)
+            .unwrap_or_else(|| panic!("{host} is in the history"));
+        assert_eq!(row.apex, apex, "ListFlows: {host}");
+        assert_eq!(
+            live.get(&row.flow_id).map(String::as_str),
+            Some(apex),
+            "Subscribe and ListFlows disagree about {host}"
+        );
+    }
+
+    // Neuer Prozess, leere Registry: Der Apex kann nur aus der Spalte kommen.
+    drop(events);
+    drop(grpc);
+    daemon.restart(1).await;
+    let token = auth::read_token(&daemon.token_path()).unwrap();
+    let mut grpc = client::connect_at(&daemon.socket(), &token).await.unwrap();
+
+    let page = grpc
+        .list_flows(v1::ListFlowsRequest::default())
+        .await
+        .unwrap()
+        .into_inner();
+    for (host, path, apex) in targets {
+        let row = page
+            .flows
+            .iter()
+            .find(|row| row.path == path)
+            .unwrap_or_else(|| panic!("{host} survives the restart"));
+        assert_eq!(row.apex, apex, "after the restart: {host}");
+    }
+
+    // Und der Filter vergleicht genau diesen String, nicht ein Suffix.
+    let filtered = grpc
+        .list_flows(v1::ListFlowsRequest {
+            filter: "apex:b.github.io".to_owned(),
+            ..v1::ListFlowsRequest::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let paths: Vec<&str> = filtered.flows.iter().map(|row| row.path.as_str()).collect();
+    assert_eq!(paths, vec!["/one"], "apex: selects exactly the one row");
+
+    let suffix = grpc
+        .list_flows(v1::ListFlowsRequest {
+            filter: "apex:github.io".to_owned(),
+            ..v1::ListFlowsRequest::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(
+        suffix.flows.is_empty(),
+        "apex: is exact; `github.io` is a public suffix, not a registrable domain"
+    );
+
+    drop(grpc);
+    daemon.terminate();
+}
+
 /// Ein Flow, den niemand kennt, ist `NOT_FOUND` und kein leeres Detail.
 #[tokio::test]
 async fn a_flow_that_never_existed_is_not_found() {

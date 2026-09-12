@@ -83,6 +83,16 @@ abstract class Flow with _$Flow {
     @Default('') String methodRaw,
     required Scheme scheme,
     required Authority authority,
+
+    /// The registrable domain of the host, as the daemon knows it from the
+    /// public suffix list: `b.github.io` for `a.b.github.io`.
+    ///
+    /// Empty means "the daemon does not know": an IP literal, a name that is
+    /// only a suffix, or no answer from the catalog. Empty never means
+    /// "harmless", and the client never guesses one; whoever groups takes the
+    /// host instead (HUM-091). The same string the filter term `apex:`
+    /// compares against.
+    @Default('') String apex,
     required String path,
     required FlowState state,
     DecisionKind? decision,

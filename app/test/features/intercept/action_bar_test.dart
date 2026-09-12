@@ -39,6 +39,7 @@ FlowDetail github({int n = 1, int findings = 0}) => detailFor(
     deadline: testStart.add(const Duration(minutes: 5)),
     method: Method.post,
     host: 'api.github.com',
+    apex: 'github.com',
     path: '/graphql?first=20',
     requestSize: 428,
   ).copyWith(findingCount: findings),
@@ -55,6 +56,7 @@ FlowDetail npm({int n = 2}) => detailFor(
     n: n,
     deadline: testStart.add(const Duration(minutes: 8)),
     host: 'registry.npmjs.org',
+    apex: 'npmjs.org',
     path: '/react',
   ),
 );
@@ -476,6 +478,7 @@ void main() {
           n: 1,
           deadline: testStart.add(const Duration(seconds: 30)),
           host: 'registry.npmjs.org',
+          apex: 'npmjs.org',
           path: '/react',
         ).copyWith(
           heldAt: testStart.subtract(const Duration(minutes: 4, seconds: 30)),

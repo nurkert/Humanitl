@@ -24,9 +24,16 @@ FakeDaemonClient fakeDaemon([List<ScriptedEvent>? script]) =>
     FakeDaemonClient(script: script, clock: () => testStart);
 
 /// Ein angehaltener Flow mit Host [host] und Pfad [path].
+///
+/// [apex] ist die registrierbare Domain, die der Daemon zu [host] nennt
+/// (`FlowSummary.apex`, HUM-091). Die Vorgabe gehört zur Vorgabe von [host];
+/// **wer [host] überschreibt, überschreibt auch [apex]**, sonst trüge die Zeile
+/// die Domain eines fremden Hosts. Leer heißt „der Daemon weiß sie nicht", und
+/// die Zeile steht dann unter ihrem eigenen Host.
 FlowDetail held(
   int n, {
   String host = 'registry.npmjs.org',
+  String apex = 'npmjs.org',
   String path = '/react',
   Method method = Method.get,
   Duration deadline = const Duration(minutes: 5),
@@ -38,6 +45,7 @@ FlowDetail held(
     deadline: testStart.add(deadline + Duration(seconds: n)),
     method: method,
     host: host,
+    apex: apex,
     path: path,
     requestSize: requestSize,
   ).copyWith(findingCount: findings),

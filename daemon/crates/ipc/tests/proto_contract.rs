@@ -588,6 +588,37 @@ fn the_meta_mark_keeps_its_field_number() {
     assert_eq!(holders, vec!["meta"]);
 }
 
+/// `FlowSummary.apex` steht auf Nummer 26 und ist ein `string` (HUM-091).
+///
+/// Aus demselben Grund wie die Nummer von `meta`: Eine neu erzeugte Datei mit
+/// vertauschten Nummern bliebe im Frische-Test gruen, und ein aelterer Client
+/// laese fuer jede Zeile einen leeren Apex, also „der Daemon weiss es nicht".
+/// Die 25 gehoert `meta`; die Spezifikation des Issues nannte sie noch fuer
+/// `apex`, weil HUM-103 danach kam.
+#[test]
+fn the_apex_keeps_its_field_number() {
+    let summary = message("FlowSummary");
+    let apex = summary
+        .field
+        .iter()
+        .find(|f| f.name() == "apex")
+        .expect("FlowSummary.apex is missing");
+    assert_eq!(
+        apex.number(),
+        26,
+        "the field number is part of the contract"
+    );
+    assert_eq!(apex.r#type(), Type::String);
+
+    let holders: Vec<&str> = summary
+        .field
+        .iter()
+        .filter(|f| f.number() == 26)
+        .map(prost_types::FieldDescriptorProto::name)
+        .collect();
+    assert_eq!(holders, vec!["apex"]);
+}
+
 #[test]
 fn failed_event_mirrors_the_core_state_machine() {
     // CONVENTIONS.md 3.2 und 4.10: `Failed` ist ein eigener Zustand mit

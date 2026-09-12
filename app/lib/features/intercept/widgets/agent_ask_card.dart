@@ -171,9 +171,11 @@ class AgentAskCard extends ConsumerWidget {
                       // Name bricht deshalb um; sichtbar ist immer der ganze.
                       //
                       // Die registrierbare Domäne wird auch nicht
-                      // hervorgehoben: `psl.dart` rät sie aus einer kurzen
-                      // Tabelle, und ein falsch geratener Apex wäre dieselbe
-                      // Täuschung mit umgekehrtem Vorzeichen
+                      // hervorgehoben: Der Vorschlag des Agenten ist ein Text
+                      // aus der Sandbox und gehört zu keinem Flow, also sagt
+                      // der Daemon zu ihm keinen Apex (`FlowSummary.apex`
+                      // hängt an einer Anfrage, HUM-091). Ein hier abgeleiteter
+                      // wäre dieselbe Täuschung mit umgekehrtem Vorzeichen
                       // (`backlog/CONVENTIONS.md` 4.13).
                       Flexible(
                         child: Text(
