@@ -544,9 +544,7 @@ void main() {
     client.bundledRules.add(
       testRule(n: 7, host: 'registry.npmjs.org', bundled: true, disabled: true),
     );
-    client.bundledRules.add(
-      testRule(n: 8, host: 'pypi.org', bundled: true),
-    );
+    client.bundledRules.add(testRule(n: 8, host: 'pypi.org', bundled: true));
     // Zwischen Klick und Antwort schaltet jemand an der Kommandozeile die
     // zweite mitgelieferte Regel aus. Die Antwort trägt damit beide Werte:
     // die geklickte Zeile an, die andere aus.
