@@ -118,8 +118,27 @@ M2_HTTPS_PORT=443
 
 # Die Haltefrist dieses Laufs, in Sekunden. Sie steht auch in `config.toml`;
 # hier wird sie zusätzlich über die Umgebung gesetzt, weil `start_daemon` sie so
-# entgegennimmt.
-M2_HOLD_TIMEOUT=10
+# entgegennimmt, und der Wert von hier gewinnt.
+#
+# Zwei Werte, weil die beiden Zweige verschieden viel Zeit brauchen, um
+# dieselben zwölf Anfragen zu entscheiden. Die Kommandozeile schickt zwölf
+# `humanitl`-Aufrufe hintereinander; das ist auf jeder Hardware in wenigen
+# Sekunden durch. Der Bildschirm muss dafür zeichnen, auf Ereignisse warten und
+# klicken, und er tut das in einem Xvfb auf einem geteilten Läufer. Am
+# 2026-09-12 ist der Lauf 34700824623 in CI genau daran gescheitert: derselbe
+# Stand war lokal grün, in CI brauchte der Schritt 101 Sekunden statt der 73 bis
+# 80 der grünen Läufe, und der Treiber kam mit den zwölf Anfragen nicht mehr
+# innerhalb der Frist durch. Nachgestellt mit `M2_HOLD_TIMEOUT=4` auf dem
+# Entwicklungsrechner: „and the daemon has all twelve of them decided allow:
+# expected 12, got 0", also genau der Fehlschlag aus CI.
+#
+# 30 Sekunden sind nicht großzügig gemeint, sondern gemessen: Der Bildschirm
+# braucht hier rund drei, und drei Sekunden Bedarf gegen zehn Sekunden Frist ist
+# kein Abstand, der einen dreifach langsameren Läufer überlebt. Der Preis sind
+# zwanzig Sekunden mehr Laufzeit im Schritt mit der Zeitüberschreitung, denn
+# dort wartet der Lauf die Frist ab.
+M2_HOLD_TIMEOUT_CLI=10
+M2_HOLD_TIMEOUT_SCREEN=30
 
 # Die Hosts, für die das Testzertifikat gilt.
 M2_HOSTS="registry.npmjs.org api.github.com evil.example"
@@ -161,6 +180,14 @@ case "${M2_UI:-auto}" in
     e2e_die "M2_UI must be 0, 1 or auto, not \"$M2_UI\""
     ;;
 esac
+
+# Die Frist gehört zum Zweig, nicht zum Lauf: siehe die Rechnung beim Block
+# `M2_HOLD_TIMEOUT_*` weiter oben.
+if [ "$M2_SCREEN" = 1 ]; then
+    M2_HOLD_TIMEOUT="$M2_HOLD_TIMEOUT_SCREEN"
+else
+    M2_HOLD_TIMEOUT="$M2_HOLD_TIMEOUT_CLI"
+fi
 
 if [ "$M2_SCREEN" = 1 ] && [ ! -f "$M2_UI_TEST" ]; then
     # Kein stiller Übersprung mehr: Das Gate gälte sonst als erfüllt, während
