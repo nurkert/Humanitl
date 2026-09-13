@@ -9,9 +9,12 @@
 // Jede Zusicherung, die eine Schutzmaßnahme prüft, nennt in ihrem Kommentar
 // die Änderung, die sie rot macht; die Proben sind von Hand gefahren worden.
 
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+// `Override` lebt in riverpod 3 im Nebeneingang `misc.dart`.
+import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
@@ -26,6 +29,7 @@ import 'package:humanitl/features/intercept/widgets/diagnostic_card.dart';
 import 'package:humanitl/features/intercept/widgets/queue_pane.dart';
 import 'package:humanitl/features/shell/providers/navigation.dart';
 import 'package:humanitl/features/shell/section.dart';
+import 'package:humanitl/l10n/l10n.dart';
 
 import 'fixtures.dart';
 import 'harness.dart';
@@ -566,4 +570,509 @@ void main() {
     expect(tester.widget<FadeTransition>(fading).opacity.value, lessThan(1.0));
     await tester.pumpAndSettle();
   });
+
+  // Der lange Satz des Daemons (HUM-150).
+  //
+  // Gemessen am 2026-09-13, ehe hier etwas geändert wurde: Die Schätzung von
+  // `IntrinsicHeight` ist richtig — bei 280 und 560 Pixeln Breite und bei
+  // Textskalierung 1 und 2 stimmt sie auf das Pixel mit der Höhe überein, die
+  // die Zeile dann bekommt. Falsch war, was `IntrinsicHeight` mit der Zahl
+  // tut: `BoxConstraints.tighten` klemmt sie in die Schranke des Elternteils.
+  // In einer Kiste von 560 mal 200 Pixeln stand danach „A RenderFlex
+  // overflowed by 420 pixels on the bottom", der Absatz war 520 Pixel hoch,
+  // sichtbar blieben 116, und das `ClipRRect` der Karte schnitt den Rest ohne
+  // Auslassungszeichen ab.
+  //
+  // **Dieser erste Test war auch mit dem alten Aufbau grün, in jeder
+  // Zusicherung.** Im Streifen steht die Karte in einer Liste ohne
+  // Höhenschranke, und dort hat die Klemme nie zugeschlagen; rot wird der
+  // Aufbau erst in `a_card_with_too_little_room_scrolls_instead_of_cutting`.
+  // Was dieser Test hält, ist der Satz selbst: Er ist vollständig, er ist
+  // nicht gekürzt, und sein Ende ist zu erreichen.
+  testWidgets('the_longest_tls_001_sentence_stands_whole_in_a_280_px_strip', (
+    WidgetTester tester,
+  ) async {
+    await pumpStrip(tester, found: <SessionDiagnostic>[longestTlsFinding()]);
+    expect(tester.takeException(), isNull);
+    expect(tester.getSize(find.byType(DiagnosticStrip)).width, 280);
+
+    // Der Absatz trägt den Satz ganz und ist so hoch, wie er sein muss.
+    // Jede Zeile hier kann fallen: die erste, sobald jemand den Satz vor der
+    // Karte kürzt; die zweite, sobald die Karte ein `maxLines` bekommt (ohne
+    // `maxLines` kürzt ein `Text` nie, auch mit `TextOverflow` nicht, deshalb
+    // steht hier `didExceedMaxLines` und nicht eine Aussage über das Kürzen);
+    // die dritte, sobald eine Höhenschranke oder ein Schnitt den Absatz
+    // kleiner macht, als sein Text braucht.
+    final RenderParagraph why = tester.renderObject<RenderParagraph>(
+      find.text(longestTlsWhy),
+    );
+    expect(why.text.toPlainText(), longestTlsWhy);
+    expect(why.didExceedMaxLines, isFalse);
+    expect(why.size.height, why.getMaxIntrinsicHeight(why.size.width));
+
+    // Und der letzte Satz des Befundes steht auf dem Bildschirm, sobald der
+    // Streifen dorthin gescrollt ist: ganz, innerhalb des Ausschnitts.
+    final ScrollableState strip = stripScroll(tester);
+    final Rect window = tester.getRect(find.byType(DiagnosticStrip));
+    Rect words = boxOf(tester, longestTlsWhy, lastWords);
+    strip.position.jumpTo(
+      (strip.position.pixels + words.bottom - window.bottom + HSpace.x2).clamp(
+        0,
+        strip.position.maxScrollExtent,
+      ),
+    );
+    await tester.pump();
+    words = boxOf(tester, longestTlsWhy, lastWords);
+    expect(words.top, greaterThanOrEqualTo(window.top));
+    expect(words.bottom, lessThanOrEqualTo(window.bottom));
+    expect(words.left, greaterThanOrEqualTo(window.left));
+    expect(words.right, lessThanOrEqualTo(window.right));
+  });
+
+  testWidgets('a_card_with_too_little_room_scrolls_instead_of_cutting', (
+    WidgetTester tester,
+  ) async {
+    // Die Karte in einer Kiste, die kleiner ist als ihr Satz: genau der Fall,
+    // in dem die alte Karte den Satz stumm abschnitt. Rot mit dem alten
+    // Aufbau, gleich dreifach: `A RenderFlex overflowed by ... pixels`, kein
+    // `Scrollable` in der Karte, und der letzte Satz nirgends zu erreichen.
+    await pumpCard(
+      tester,
+      const HDiagnosticCard(
+        code: 'TLS_001',
+        severityLabel: 'Warning',
+        color: HColors.held,
+        title: 'The daemon reports',
+        why: longestTlsWhy,
+      ),
+      width: 280,
+      height: interceptStripsMaxHeight,
+    );
+    expect(tester.takeException(), isNull);
+    expect(
+      tester.getSize(find.byType(HDiagnosticCard)),
+      const Size(280, interceptStripsMaxHeight),
+    );
+
+    final RenderParagraph why = tester.renderObject<RenderParagraph>(
+      find.text(longestTlsWhy),
+    );
+    expect(why.size.height, why.getMaxIntrinsicHeight(why.size.width));
+
+    final ScrollableState inside = tester.state<ScrollableState>(
+      find.descendant(
+        of: find.byType(HDiagnosticCard),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    expect(inside.position.maxScrollExtent, greaterThan(0));
+    final Rect card = tester.getRect(find.byType(HDiagnosticCard));
+    Rect words = boxOf(tester, longestTlsWhy, lastWords);
+    inside.position.jumpTo(
+      (inside.position.pixels + words.bottom - card.bottom + HSpace.x2).clamp(
+        0,
+        inside.position.maxScrollExtent,
+      ),
+    );
+    await tester.pump();
+    words = boxOf(tester, longestTlsWhy, lastWords);
+    expect(words.top, greaterThanOrEqualTo(card.top));
+    expect(words.bottom, lessThanOrEqualTo(card.bottom));
+  });
+
+  testWidgets('the_strip_shows_that_something_stands_below_its_edge', (
+    WidgetTester tester,
+  ) async {
+    // Der Streifen scrollte auch vorher; nur sagte das Bild es nicht. Rot,
+    // sobald der Balken fällt oder nur beim Scrollen erscheint.
+    await pumpStrip(tester, found: <SessionDiagnostic>[longestTlsFinding()]);
+    final Finder bar = find.descendant(
+      of: find.byType(DiagnosticStrip),
+      matching: find.byType(RawScrollbar),
+    );
+    expect(bar, findsOneWidget);
+    expect(tester.widget<RawScrollbar>(bar).thumbVisibility, isTrue);
+    expect(stripScroll(tester).position.maxScrollExtent, greaterThan(0));
+  });
+
+  testWidgets('on_linux_the_strip_carries_exactly_one_bar', (
+    WidgetTester tester,
+  ) async {
+    // Die ausgelieferte Plattform, und die einzige, auf der dieser Defekt zu
+    // sehen ist: `ScrollBehavior.buildScrollbar` hängt auf Linux, macOS und
+    // Windows über **jedes** `Scrollable` einen eigenen `RawScrollbar`, weil
+    // `app.dart` `WidgetsApp` ohne `scrollBehavior` baut. `flutter test` läuft
+    // sonst als `TargetPlatform.android`, wo die Vorgabe keinen Balken baut;
+    // ohne diese Variante kann kein Test dieses Verzeichnisses den Fehler je
+    // sehen. Rot mit zwei Balken, sobald das `ScrollConfiguration` im Streifen
+    // fällt. Nicht rot, wenn die Karte wieder in jeder Lage eine eigene
+    // Ansicht mitbringt: Dasselbe `ScrollConfiguration` nimmt auch dieser den
+    // Balken der Plattform ab; dagegen stehen
+    // `a_card_with_room_enough_brings_no_bar_of_its_own` und
+    // `and_the_page_key_still_reaches_the_strip`.
+    await pumpStrip(tester, found: <SessionDiagnostic>[longestTlsFinding()]);
+    final Finder bars = find.descendant(
+      of: find.byType(DiagnosticStrip),
+      matching: find.byType(RawScrollbar),
+    );
+    expect(bars, findsOneWidget);
+    final RawScrollbar bar = tester.widget<RawScrollbar>(bars);
+    expect(bar.thumbVisibility, isTrue);
+    expect(bar.thickness, interceptStripScrollbarWidth);
+    expect(bar.thumbColor, HTokens.dark.colors.fg2);
+    // Der Balken ist die einzige Auskunft darüber, dass unter der Kante noch
+    // etwas steht, also hält er die 3:1 für nicht-textliche Auskünfte, auf
+    // jeder Fläche, auf der er liegen kann, in beiden Themes.
+    for (final HTokens tokens in <HTokens>[HTokens.dark, HTokens.light]) {
+      for (final Color surface in <Color>[
+        tokens.colors.bg1,
+        tokens.colors.bg2,
+      ]) {
+        expect(
+          HColorDerivation.contrast(tokens.colors.fg2, surface),
+          greaterThanOrEqualTo(3),
+        );
+      }
+    }
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+  testWidgets('and_the_page_key_still_reaches_the_strip', (
+    WidgetTester tester,
+  ) async {
+    // `ScrollAction` nimmt zu „Bild ab" das innerste `Scrollable` vom Fokus
+    // aus, verbraucht die Taste und bewegt nichts, wenn dieses nichts zu
+    // scrollen hat. Eine Ansicht in jeder Karte machte die Taste damit tot
+    // (`docs/UX.md` 5.3: Jede belegte Taste tut etwas). Gemessen mit einer
+    // Ansicht in der Karte: Der Fokus im Kartenrahmen findet als nächstes
+    // `Scrollable` eines mit `maxScrollExtent` 0.0, und der Streifen bleibt
+    // nach „Bild ab" auf 1486.0 stehen; ohne sie findet er den Streifen mit
+    // 1680.0 und fährt auf 1680.0. Rot, sobald die Karte ihre Ansicht wieder
+    // ohne Höhenschranke baut.
+    await pumpStrip(
+      tester,
+      found: <SessionDiagnostic>[longestTlsFinding()],
+      scale: 1,
+    );
+    expect(
+      find.descendant(
+        of: find.byType(HDiagnosticCard),
+        matching: find.byType(Scrollable),
+      ),
+      findsNothing,
+    );
+    final ScrollableState strip = stripScroll(tester);
+    expect(strip.position.maxScrollExtent, greaterThan(0));
+
+    // Der erste Halt der Tabulatorkette liegt auf dem Ausblenden-Knopf, der
+    // neben dem Kartenrahmen steht; der zweite steht im Rahmen selbst, und
+    // nur dort greift der Defekt.
+    Element focused = tester.element(find.byType(DiagnosticStrip));
+    for (int stop = 0; stop < 8; stop++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      focused = primaryFocus!.context! as Element;
+      if (find
+          .descendant(
+            of: find.byType(HDiagnosticCard),
+            matching: find.byWidget(focused.widget),
+          )
+          .evaluate()
+          .isNotEmpty) {
+        break;
+      }
+    }
+    expect(
+      find.descendant(
+        of: find.byType(HDiagnosticCard),
+        matching: find.byWidget(focused.widget),
+      ),
+      findsOneWidget,
+    );
+    // Das nächste `Scrollable` vom Fokus aus ist der Streifen und nicht eine
+    // taube Ansicht in der Karte: genau die Frage, die `ScrollAction` stellt.
+    expect(
+      Scrollable.maybeOf(focused)?.position.maxScrollExtent,
+      strip.position.maxScrollExtent,
+    );
+
+    // `ScrollAction` fährt die Strecke in 100 ms, nicht in einem Sprung. Der
+    // Vergleich geht gegen den Stand vor der Taste: Der Fokuswechsel selbst
+    // hat den Streifen schon bewegt.
+    final double before = strip.position.pixels;
+    await tester.sendKeyEvent(LogicalKeyboardKey.pageDown);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(strip.position.pixels, greaterThan(before));
+    final double down = strip.position.pixels;
+    await tester.sendKeyEvent(LogicalKeyboardKey.pageUp);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(strip.position.pixels, lessThan(down));
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+  testWidgets('a_card_with_room_enough_brings_no_bar_of_its_own', (
+    WidgetTester tester,
+  ) async {
+    // Dieselbe Karte wird an achtzehn Stellen gebaut. Wo ihr Elternteil keine
+    // Höhenschranke setzt — der Streifen, eine Spalte, ein Blatt —, bringt sie
+    // gar keine Ansicht mit, die scrollen könnte, und damit auch keinen
+    // Balken, den `ScrollBehavior.buildScrollbar` auf Linux über jedes
+    // `Scrollable` hängt. Rot mit einer Ansicht in jeder Lage: dann steht hier
+    // ein `Scrollable` und darüber ein zweiter Balken.
+    await pumpCard(
+      tester,
+      const HDiagnosticCard(
+        code: 'TLS_001',
+        severityLabel: 'Warning',
+        color: HColors.held,
+        title: 'The daemon reports',
+        why: scenarioWhy,
+      ),
+      width: 280,
+      height: null,
+    );
+    expect(tester.takeException(), isNull);
+    expect(
+      find.descendant(
+        of: find.byType(HDiagnosticCard),
+        matching: find.byType(Scrollable),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: find.byType(HDiagnosticCard),
+        matching: find.byType(RawScrollbar),
+      ),
+      findsNothing,
+    );
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+  testWidgets('and_where_everything_fits_there_is_nothing_to_scroll', (
+    WidgetTester tester,
+  ) async {
+    // Geprüft wird die Bedingung, an der `ScrollbarPainter` den Daumen malt
+    // (`_needPaint`: `maxScrollExtent - minScrollExtent > 0`), nicht das Bild:
+    // Ein kurzer Befund unter dem Deckel hat nichts zu scrollen, und der
+    // Streifen bleibt so leer wie vorher.
+    await pumpStrip(
+      tester,
+      found: <SessionDiagnostic>[
+        SessionDiagnostic(
+          id: 1,
+          at: testStart,
+          diagnostic: const Diagnostic(
+            code: 'TLS_003',
+            severity: Severity.info,
+            why: 'a handshake arrived without SNI',
+          ),
+        ),
+      ],
+      scale: 1,
+    );
+    expect(stripScroll(tester).position.maxScrollExtent, 0);
+  });
+}
+
+/// Die letzten Worte des Befundes.
+///
+/// Das Ende von [lastSentence]. Der ganze Satz mit dem Zähler ist bei 280
+/// Pixeln Breite und Textskalierung 2 höher als der Ausschnitt des Streifens;
+/// auf dem Bildschirm gesucht wird deshalb sein Ende.
+const String lastWords = 'since the previous card, this one included.';
+
+/// Der letzte Satz des längsten Befundes, der Satz mit dem Zähler.
+const String lastSentence =
+    '7 failed TLS connections have been counted for this host and this tool '
+    'hint since the previous card, this one included.';
+
+/// Der längste `why`-Satz, den `TLS_001` heute schicken kann.
+///
+/// Zusammengesetzt wie in `daemon/crates/proxy/src/tls_observe.rs`
+/// (`rejected_ca`): der längere der beiden Anfänge (der Tunnel, der nach dem
+/// Handschlag leer geschlossen wurde), der Absatz zur schon gesetzten
+/// Variablen, die Anmerkung zu curl (`ToolHint::note`) und der Satz mit dem
+/// Wiederholungszähler (`repeat_sentence`). Wörtlich und nicht gekürzt: Der
+/// Satz gehört dem Daemon, und die Karte zeichnet ihn, wie er ist
+/// (`docs/UX.md` 4.4).
+const String longestTlsWhy =
+    'A client that calls itself curl inside the sandbox finished the TLS '
+    'handshake for api.github.com and then closed the connection without '
+    "sending a request. Most clients that do this do not trust Humanitl's "
+    'certificate: they check it only after the handshake. Nothing left the '
+    'sandbox. Humanitl already sets CURL_CA_BUNDLE=/etc/humanitl/ca.crt in '
+    'the sandbox, so this is not a missing variable: the client overrode it '
+    'on its command line, keeps its own certificate pool, pins a certificate, '
+    'or does not read CURL_CA_BUNDLE at all. Setting CURL_CA_BUNDLE under '
+    '[sandbox.env] in config.toml helps only where the sandbox profile in use '
+    'does not carry the variable, and a profile that sets sandbox.env of its '
+    "own replaces that table from config.toml. curl's --cacert and --capath "
+    'override CURL_CA_BUNDLE, and --insecure skips the check altogether. '
+    '$lastSentence';
+
+/// Der Befund zu [longestTlsWhy], mit Vorschlag und mit Fluss: beide Knöpfe,
+/// also die höchste Karte, die dieser Code baut.
+SessionDiagnostic longestTlsFinding() => SessionDiagnostic(
+  id: 0,
+  at: testStart,
+  flowId: const FlowId('018f0001-0000-7000-8000-000000060000'),
+  diagnostic: const Diagnostic(
+    code: 'TLS_001',
+    severity: Severity.warning,
+    why: longestTlsWhy,
+    fix: FixAction.setEnv(key: 'CURL_CA_BUNDLE', value: sandboxCaPath),
+  ),
+);
+
+/// Ein Streifen, der nicht am Ereignisstrom hängt.
+class FixedDiagnostics extends Diagnostics {
+  /// Hält [found].
+  FixedDiagnostics(this.found);
+
+  /// Die Befunde des Tests.
+  final List<SessionDiagnostic> found;
+
+  @override
+  List<SessionDiagnostic> build() => found;
+}
+
+/// Die Liste des Streifens.
+///
+/// `.first` aus Vorsicht und nicht, weil es mehrere gäbe: Im Streifen hat
+/// heute keine Karte eine eigene Ansicht — zwei Tests dieser Datei halten das
+/// fest —, aber eine Karte unter einer Höhenschranke brächte eine mit, und
+/// die äußere ist dann immer noch die Liste des Streifens.
+ScrollableState stripScroll(WidgetTester tester) =>
+    tester.state<ScrollableState>(
+      find
+          .descendant(
+            of: find.byType(DiagnosticStrip),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+
+/// Das Rechteck, in dem [part] von [text] steht, in globalen Koordinaten.
+Rect boxOf(WidgetTester tester, String text, String part) {
+  final RenderParagraph paragraph = tester.renderObject<RenderParagraph>(
+    find.text(text),
+  );
+  final int start = text.indexOf(part);
+  expect(start, isNonNegative);
+  final List<TextBox> boxes = paragraph.getBoxesForSelection(
+    TextSelection(baseOffset: start, extentOffset: start + part.length),
+  );
+  expect(boxes, isNotEmpty);
+  final Offset origin = paragraph.localToGlobal(Offset.zero);
+  Rect box = boxes.first.toRect();
+  for (final TextBox next in boxes.skip(1)) {
+    box = box.expandToInclude(next.toRect());
+  }
+  return box.shift(origin);
+}
+
+/// Ein Wirt mit Theme, Sprache und Overlay, wie ihn die Anwendung mitbringt.
+Widget stripHost(Widget child, {required double scale}) => WidgetsApp(
+  color: HColors.bg0,
+  debugShowCheckedModeBanner: false,
+  locale: const Locale('en'),
+  localizationsDelegates: AppLocalizations.localizationsDelegates,
+  supportedLocales: AppLocalizations.supportedLocales,
+  onGenerateTitle: (BuildContext context) => 'diagnostic strip',
+  builder: (BuildContext context, Widget? _) => MediaQuery(
+    data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+    child: HTheme(
+      tokens: HTokens.dark,
+      child: Overlay(
+        initialEntries: <OverlayEntry>[
+          OverlayEntry(
+            // Ein Bereich, der den Fokus annimmt: ohne ihn hat `Tab` keinen
+            // Ausgangspunkt, und die Anwendung hat ihn über ihre Route.
+            builder: (BuildContext context) => FocusScope(
+              autofocus: true,
+              child: Align(alignment: Alignment.topLeft, child: child),
+            ),
+          ),
+        ],
+      ),
+    ),
+  ),
+);
+
+/// Der Streifen allein, [width] Pixel breit, unter dem Deckel des
+/// Warteschlangen-Panes.
+///
+/// Dieselbe Verschachtelung wie in `queue_pane.dart`: ein `ConstrainedBox` mit
+/// [interceptStripsMaxHeight] und der Streifen als einziges `Flexible`. Der
+/// Streifen steht hier allein, weil die Akzeptanz von HUM-150 eine Breite von
+/// 280 Pixeln nennt; über die ganze Anwendung hinge die Breite am Splitter.
+Future<void> pumpStrip(
+  WidgetTester tester, {
+  required List<SessionDiagnostic> found,
+  double width = 280,
+  double scale = 2,
+}) async {
+  await tester.binding.setSurfaceSize(Size(width + HSpace.x6, 900));
+  addTearDown(() => tester.binding.setSurfaceSize(null));
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: <Override>[
+        diagnosticsProvider.overrideWith(() => FixedDiagnostics(found)),
+      ],
+      child: stripHost(
+        SizedBox(
+          width: width,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              maxHeight: interceptStripsMaxHeight,
+            ),
+            child: const Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[Flexible(child: DiagnosticStrip())],
+            ),
+          ),
+        ),
+        scale: scale,
+      ),
+    ),
+  );
+  await tester.pump();
+  await tester.pump();
+}
+
+/// Eine Karte allein, in einer Kiste von [width] mal [height]; ohne [height]
+/// in einer Spalte, also ohne Schranke nach unten.
+Future<void> pumpCard(
+  WidgetTester tester,
+  Widget card, {
+  required double width,
+  required double? height,
+  double scale = 2,
+}) async {
+  await tester.binding.setSurfaceSize(
+    Size(width + HSpace.x6, (height ?? 600) + 200),
+  );
+  addTearDown(() => tester.binding.setSurfaceSize(null));
+  await tester.pumpWidget(
+    ProviderScope(
+      child: stripHost(
+        // Ohne [height] steht die Karte in einer Spalte und bekommt keine
+        // Schranke nach unten, so wie an den meisten ihrer Stellen.
+        height == null
+            ? SizedBox(
+                width: width,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[card],
+                ),
+              )
+            : SizedBox(width: width, height: height, child: card),
+        scale: scale,
+      ),
+    ),
+  );
+  await tester.pump();
+  await tester.pump();
 }
