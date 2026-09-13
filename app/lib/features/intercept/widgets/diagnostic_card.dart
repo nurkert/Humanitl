@@ -52,10 +52,26 @@ import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/diagnostics.dart';
 
+/// Wie breit der Balken am rechten Rand des Streifens ist.
+///
+/// Vier Pixel, so breit wie die Zustands-Schiene einer Zeile
+/// ([HSize.stateRail]). Ein Maß und kein Abstand: Der Wert gehört als
+/// `HSize.scrollbar` nach `packages/ui`; er steht hier, solange dieses Paket
+/// nicht angefasst wird — dieselbe Übergabe, unter der `HDiagnosticCard` in
+/// `core/ui` liegt (HUM-019 Schritt 6).
+const double interceptStripScrollbarWidth = 4;
+
 /// Die Befunde dieser Sitzung, über der Warteschlange.
 ///
 /// Zeichnet gar nichts, solange es keinen gibt: Ein leerer Streifen nähme der
 /// Warteschlange eine Zeile für etwas, das nicht da ist.
+///
+/// Was nicht unter den Deckel des Panes passt
+/// (`interceptStripsMaxHeight`, 420 Pixel), wird gescrollt und nicht
+/// abgeschnitten, und der Balken am rechten Rand sagt, dass dort mehr steht
+/// (HUM-150). Ein langer Satz des Daemons ist bei schmalem Pane und doppelter
+/// Textskalierung um ein Vielfaches höher als der Streifen; ohne den Balken
+/// endete der Satz für den Leser an der Kante.
 class DiagnosticStrip extends ConsumerStatefulWidget {
   /// Creates the strip.
   const DiagnosticStrip({super.key});
@@ -84,9 +100,22 @@ class DiagnosticStripState extends ConsumerState<DiagnosticStrip> {
   /// gegen das [maxSessionDiagnostics] gebaut ist, eine Ebene höher.
   final Set<int> _fresh = <int>{};
 
+  /// Die Steuerung der Liste, die der Balken am Rand braucht.
+  ///
+  /// `RawScrollbar` zeichnet nur, was es messen kann, und messen kann es nur
+  /// eine Position, die es kennt. Dieselbe Steuerung geht deshalb an den
+  /// Balken und an die Liste (HUM-150).
+  final ScrollController _scroll = ScrollController();
+
   /// Wie viele Ankünfte noch auf ihr Einblenden warten.
   @visibleForTesting
   int get pendingArrivals => _fresh.length;
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -139,23 +168,55 @@ class DiagnosticStripState extends ConsumerState<DiagnosticStrip> {
             ),
           // `ListView.builder` und nicht `Column` in einem
           // `SingleChildScrollView`: Bis zu [maxSessionDiagnostics] Karten
-          // stünden dort, und jede von ihnen misst sich über `IntrinsicHeight`
-          // in jedem Frame neu. Gebaut wird, was zu sehen ist.
+          // stünden dort, und jede von ihnen misst sich in jedem Frame neu.
+          // Gebaut wird, was zu sehen ist.
+          //
+          // Der Balken steht immer, sobald mehr da ist als der Deckel von
+          // [interceptStripsMaxHeight] zeigt (HUM-150): Ein Satz des Daemons
+          // ist bei 280 Pixeln Breite und doppelter Textskalierung höher als
+          // die 420 Pixel des Streifens, der Streifen scrollte auch vorher
+          // schon, aber nichts im Bild sagte, dass unter der Kante noch etwas
+          // steht. `RawScrollbar` zeichnet den Daumen nur, solange es etwas
+          // zu scrollen gibt (`ScrollbarPainter._needPaint`); wo die Karten
+          // hineinpassen, bleibt der Streifen so leer wie vorher.
           if (found.isNotEmpty)
             Flexible(
-              child: ListView.builder(
-                shrinkWrap: true,
-                padding: EdgeInsets.zero,
-                itemCount: found.length,
-                itemBuilder: (BuildContext context, int index) {
-                  final SessionDiagnostic entry = found[index];
-                  return DiagnosticCard(
-                    key: ValueKey<String>('intercept-diagnostic:${entry.id}'),
-                    entry: entry,
-                    animate: _fresh.contains(entry.id),
-                    onShown: () => _fresh.remove(entry.id),
-                  );
-                },
+              child: RawScrollbar(
+                controller: _scroll,
+                thumbVisibility: true,
+                thickness: interceptStripScrollbarWidth,
+                radius: Radius.circular(tokens.radii.badge),
+                // `fg2` und nicht `lineStrong`: Der Balken ist kein Strich
+                // zwischen zwei Flächen, er ist die einzige Auskunft darüber,
+                // dass unter der Kante noch etwas steht, und muss deshalb die
+                // 3:1 für nicht-textliche Auskünfte halten.
+                thumbColor: tokens.colors.fg2,
+                // Ohne diese Zeile stünden auf Linux drei Balken im Streifen:
+                // dieser und je einer, den `ScrollBehavior.buildScrollbar`
+                // über jedes `Scrollable` darunter hängt. `flutter test` läuft
+                // als `TargetPlatform.android` und baut keinen davon, also
+                // fällt es nur auf der ausgelieferten Plattform auf.
+                child: ScrollConfiguration(
+                  behavior: ScrollConfiguration.of(context)
+                      .copyWith(scrollbars: false),
+                  child: ListView.builder(
+                    controller: _scroll,
+                    shrinkWrap: true,
+                    padding: EdgeInsets.zero,
+                    itemCount: found.length,
+                    itemBuilder: (BuildContext context, int index) {
+                      final SessionDiagnostic entry = found[index];
+                      return DiagnosticCard(
+                        key: ValueKey<String>(
+                          'intercept-diagnostic:${entry.id}',
+                        ),
+                        entry: entry,
+                        animate: _fresh.contains(entry.id),
+                        onShown: () => _fresh.remove(entry.id),
+                      );
+                    },
+                  ),
+                ),
               ),
             ),
         ],
