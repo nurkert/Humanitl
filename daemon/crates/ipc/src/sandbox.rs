@@ -1940,15 +1940,22 @@ impl Inner {
                     ),
             )
             .with_config_home(config.sandbox.env.get("XDG_CONFIG_HOME").map(PathBuf::from))
-            .with_sandbox_ro_paths(
-                profile
-                    .mounts
-                    .ro
-                    .iter()
-                    .chain(&profile.mounts.extra_ro)
-                    .cloned()
-                    .collect(),
-            );
+            // Was die Sandbox sieht, kommt aus dem Profil: Einhängungen, Verweise
+            // und Überdeckungen in einem Stück (HUM-139). Der Suchpfad ist der
+            // wirksame, also `sandbox.env` vor `[env]` des Profils — dieselbe
+            // Reihenfolge, die der Start selbst anwendet; eine Vorprüfung gegen
+            // einen anderen PATH als den, unter dem das `exec` läuft, beantwortet
+            // die falsche Frage.
+            .with_sandbox_view(humanitl_sandbox::SandboxView::of_profile(profile))
+            .with_sandbox_path(
+                config
+                    .sandbox
+                    .env
+                    .get("PATH")
+                    .or_else(|| profile.env.get("PATH"))
+                    .map(OsString::from),
+            )
+            .with_work_dir_sandbox(profile.mounts.work.dst.clone());
         let ctx = if command.is_empty() {
             ctx.with_command_override(
                 config

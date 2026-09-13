@@ -856,8 +856,8 @@ registry! {
     /// und zwar erst nach dem Start. Der Befund nennt den gefundenen Pfad und
     /// einen Ort, an dem er erreichbar wäre (HUM-037).
     AGENT_004 => "agent", "Agent-Kommando in der Sandbox nicht erreichbar", "#agent_004",
-        "Das Kommando liegt auf dem Rechner, aber nicht in dem, was die Sandbox einhängt.",
-        "`CopyCommand`, das es an eine eingehängte Stelle installiert, sonst der Verweis auf die Dokumentation.";
+        "Gesucht wird zuerst in der Sandbox: ihr Suchpfad (`sandbox.env` vor `[env]` des Profils), ihre Einhängungen und die Verweise des Profils, relative Einträge gegen `[mounts].work.dst`. Erst wenn dort nichts liegt, gilt der Host, und der Befund nennt beides. Zwei Fälle: das Kommando liegt unter keiner Einhängung, oder es liegt unter einer, deren Verzeichnis der Suchpfad nicht nennt. Was sich nicht entscheiden lässt, erzeugt keinen Befund (HUM-139).",
+        "`CopyCommand`, das es an eine eingehängte Stelle installiert, oder `ChangeSetting` auf `sandbox.env.PATH`, wenn die Einhängung steht und nur der Suchpfad fehlt.";
 
     // HUM-039: die Durchreiche zum Sprachmodell und die Probe ihres Endpunkts.
     /// Eine durchgereichte Anfrage an das Sprachmodell trägt Funde: mögliche

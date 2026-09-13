@@ -56,8 +56,7 @@
 //! („`/work`-Härtung"). Neue Ziele, die eine Projekt-Konfiguration hinzufügt,
 //! gehen ohnehin durch den Proxy und werden gehalten.
 
-use std::ffi::OsString;
-use std::os::unix::fs::PermissionsExt as _;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use humanitl_config::LlmConfig;
@@ -71,7 +70,9 @@ use crate::agent::briefing;
 use crate::agent::opencode_models::{
     DEFAULT_RULES, PROVIDER_ID, effective_models, permission_json, render_config, render_models,
 };
-use crate::agent::{AgentAdapter, AgentContext, SandboxFile, find_in_path};
+use crate::agent::{
+    AgentAdapter, AgentContext, SandboxFile, SandboxLookup, find_in_path, is_executable_file,
+};
 
 pub use crate::agent::opencode_models::PLACEHOLDER_MODEL;
 
@@ -407,6 +408,227 @@ fn not_executable(command: &OsString, from_caller: bool) -> Diagnostic {
         .build()
 }
 
+/// Der Befund, wenn das Kommando auf dem Host liegt und die Sandbox es nicht
+/// erreicht (`AGENT_004`).
+///
+/// Genannt werden beide Seiten: was auf dem Host liegt, was die Sandbox
+/// einhängt und welcher Suchpfad drinnen gilt. Ohne den Suchpfad stünde dort
+/// ein Pfad des Hosts und keine Antwort auf die Frage, die der Befund stellt
+/// (HUM-139).
+fn not_reachable_in_sandbox(ctx: &AgentContext, binary: &Path) -> Diagnostic {
+    Diagnostic::builder(AGENT_004, Severity::Blocking)
+        .why(format!(
+            "{} is on this machine, but the sandbox mounts only {} and its PATH is {}, so the \
+             command is not there and the exec would fail after the start. Put the binary under \
+             one of those paths, or add its directory to `[mounts].extra_ro` of the sandbox \
+             profile **and** to the PATH the sandbox uses (`[env].PATH` or `sandbox.env.PATH`) \
+             — mounting alone does not put it on the search path.",
+            binary.display(),
+            mounts_of(ctx),
+            ctx.sandbox_path_display()
+        ))
+        // Der Name am Ziel ist der des Binaries und nicht der
+        // des Adapters: Ein `agent.command = ["mycode"]` würde
+        // sonst zu `install … /usr/local/bin/opencode`, und der
+        // Vorschlag benennte die Datei beim Kopieren um.
+        .fix(FixAction::CopyCommand(format!(
+            "sudo install -m 0755 {} /usr/local/bin/{}",
+            binary.display(),
+            binary
+                .file_name()
+                .unwrap_or(OsStr::new(DEFAULT_COMMAND))
+                .to_string_lossy()
+        )))
+        .docs(DOCS_URL)
+        .build()
+}
+
+/// Der Befund, wenn die Datei im Suchpfad der Sandbox liegt und nicht startet
+/// (`AGENT_002`).
+///
+/// Genannt wird der aufgelöste Pfad auf dem Host und der Suchpfad, über den
+/// die Sandbox dorthin kommt. Ohne diesen Zweig stünde hier `AGENT_001`, „nicht
+/// gefunden" — eine Aussage über eine Datei, die sehr wohl da ist (HUM-139).
+fn not_executable_in_sandbox(ctx: &AgentContext, binary: &Path) -> Diagnostic {
+    Diagnostic::builder(AGENT_002, Severity::Warning)
+        .why(format!(
+            "{} lies in the sandbox PATH {}, and this user cannot execute it; the exec would \
+             fail after the start",
+            binary.display(),
+            ctx.sandbox_path_display()
+        ))
+        .fix(FixAction::CopyCommand(format!(
+            "chmod +x {}",
+            binary.display()
+        )))
+        .docs(DOCS_URL)
+        .build()
+}
+
+/// Die Einhängungen der Sandbox als Text, für die Befunde.
+fn mounts_of(ctx: &AgentContext) -> String {
+    ctx.sandbox_view
+        .mounts
+        .iter()
+        .map(|mount| mount.dst.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Der Befund, wenn das Verzeichnis eingehängt ist und der Suchpfad der
+/// Sandbox es nicht nennt (`AGENT_004`).
+///
+/// Entscheidbar und deshalb kein Fall für das Schweigen: Der Suchpfad ist
+/// bekannt, die Einhängungen sind bekannt, und die Suche darin war
+/// vollständig. Drinnen sucht `execvp` nur in diesem Pfad, und der Start endet
+/// mit 127. Genau hierher läuft, wer dem Vorschlag von
+/// [`not_reachable_in_sandbox`] folgt und nur `[mounts].extra_ro` ergänzt
+/// (HUM-139).
+fn not_on_the_sandbox_path(ctx: &AgentContext, binary: &Path) -> Diagnostic {
+    let dir = binary.parent().unwrap_or(Path::new("/")).display();
+    Diagnostic::builder(AGENT_004, Severity::Blocking)
+        .why(format!(
+            "{} is on this machine and the sandbox mounts {}, but its PATH is {} and does not \
+             name {dir}; inside, execvp searches only that PATH, so the exec would fail after \
+             the start.",
+            binary.display(),
+            mounts_of(ctx),
+            ctx.sandbox_path_display()
+        ))
+        // Der nackte Pfad, nicht die erklärte Fassung: Der Wert wird kopiert
+        // und eingetragen, und ein Satz in Klammern gehört nicht in die
+        // Konfiguration des Nutzers.
+        .fix(FixAction::ChangeSetting {
+            key: "sandbox.env.PATH".to_owned(),
+            value: format!("{dir}:{}", ctx.sandbox_path_value()),
+        })
+        .docs(DOCS_URL)
+        .build()
+}
+
+/// Die Vorprüfung des Kommandos: Ist der Agent dort, wo er startet?
+///
+/// Gesucht wird zuerst im Suchpfad der Sandbox, denn dort sucht der Agent
+/// selbst. Liegt das Kommando in einem Verzeichnis, das dieser Pfad nennt
+/// **und** eine Nur-Lese-Einhängung deckt, ist die Frage beantwortet und es
+/// gibt nichts zu melden. Erst wenn dort nichts liegt, gilt der Weg über den
+/// Host: Was dort gefunden wird, aber keine Einhängung deckt, ist `AGENT_004`
+/// — der Fall, den HUM-135 gebaut hat.
+///
+/// **Warum nicht nur über den Host.** Bis zum 2026-09-07 löste die Vorprüfung
+/// ein nacktes Kommando gegen den `$PATH` des Hosts auf und fragte dann, ob
+/// **diese** Datei in der Sandbox sichtbar ist. Auf dem Rechner des Nutzers lag
+/// unter `~/.local/bin/opencode` ein Wrapper-Skript, das keine Einhängung
+/// deckt, während das eingehängte `~/.opencode/bin` im PATH der Sandbox stand:
+/// Der Start hätte funktioniert, und ein blockierender Befund verhinderte ihn
+/// (HUM-139).
+fn command_preflight(ctx: &AgentContext) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let path = ctx.host_path.as_deref();
+    let mut resolved: Option<PathBuf> = None;
+
+    let requested = ctx.agent_command_override.as_ref().and_then(|c| c.first());
+    // Erst die Sandbox: Dort startet das Kommando, und dort sucht `execvp` es
+    // über den Suchpfad des Profils und das Arbeitsverzeichnis.
+    let named = requested.map_or_else(|| OsStr::new(DEFAULT_COMMAND), OsString::as_os_str);
+    let lookup = ctx.look_up_in_sandbox_path(named);
+    // Vollständig gesucht und nichts gefunden: Der Suchpfad ist bekannt, die
+    // Einhängungen sind bekannt, und das Kommando trägt keinen Pfad.
+    let searched_the_path =
+        lookup == SandboxLookup::Missing && Path::new(named).components().count() == 1;
+    match lookup {
+        // Erreichbar: Die Frage der Vorprüfung ist beantwortet.
+        //
+        // Unentscheidbar: Der Host gibt über eine Stelle des Weges keine
+        // Auskunft. Dann wird ebenfalls nichts gemeldet — weder über die
+        // Sandbox noch über den Host (`backlog/CONVENTIONS.md` 4.13).
+        // Scheitert das `exec` doch, meldet HUM-137 es mit seinem Exit-Code.
+        SandboxLookup::Startable(_) | SandboxLookup::Unknown => return diagnostics,
+        // Da und ohne Ausführungsrecht. Das ist kein „nicht gefunden": Das
+        // `exec` findet die Datei und endet mit 126.
+        SandboxLookup::NotExecutable(binary) => {
+            diagnostics.push(not_executable_in_sandbox(ctx, &binary));
+            return diagnostics;
+        }
+        SandboxLookup::Missing => {}
+    }
+
+    match requested {
+        Some(command) => {
+            let found = find_in_path(command, path);
+            resolved.clone_from(&found);
+            if !found.as_deref().is_some_and(is_executable_file) {
+                diagnostics.push(not_executable(command, ctx.agent_command_from_caller));
+            }
+        }
+        // Ohne Suchpfad gibt es nichts zu durchsuchen. „Pfad unbekannt"
+        // ist nicht „Programm fehlt": ein Befund braucht einen Beleg, und
+        // was der Daemon nicht weiß, steht nicht als Fehler da
+        // (`backlog/CONVENTIONS.md` 4.13). Der Aufrufer reicht
+        // `AgentContext::host_path` herein; tut er es nicht, unterbleibt
+        // die Prüfung, und das `exec` in der Sandbox entscheidet.
+        None if path.is_none() => {}
+        None => {
+            let found = find_in_path(OsStr::new(DEFAULT_COMMAND), path);
+            resolved.clone_from(&found);
+            match found.as_deref() {
+                None => diagnostics.push(
+                    Diagnostic::builder(AGENT_001, Severity::Blocking)
+                        .why(format!(
+                            "{DEFAULT_COMMAND} is not in PATH={} and agent.command is not set; \
+                             the sandbox searches PATH={}",
+                            path.map(|p| p.to_string_lossy().into_owned())
+                                .unwrap_or_default(),
+                            ctx.sandbox_path_display()
+                        ))
+                        .fix(FixAction::CopyCommand(INSTALL_COMMAND.to_owned()))
+                        .docs(DOCS_URL)
+                        .build(),
+                ),
+                // Eine Datei, die da ist, aber nicht startet, galt bis zum
+                // 2026-09-13 als gefunden: Es kam kein einziger Befund heraus,
+                // und das `exec` endete drinnen mit 126.
+                Some(binary) if !is_executable_file(binary) => diagnostics.push(
+                    Diagnostic::builder(AGENT_002, Severity::Warning)
+                        .why(format!(
+                            "{} is the first {DEFAULT_COMMAND} in PATH, and this user cannot \
+                             execute it; the exec would fail after the start",
+                            binary.display()
+                        ))
+                        .fix(FixAction::CopyCommand(format!(
+                            "chmod +x {}",
+                            binary.display()
+                        )))
+                        .docs(DOCS_URL)
+                        .build(),
+                ),
+                Some(_) => {}
+            }
+        }
+    }
+
+    // Auf dem Host gefunden heißt nicht: in der Sandbox erreichbar. Die
+    // Sandbox hängt `/usr` und was sonst in `[mounts]` steht nur lesbar
+    // ein; ein Programm unter `$HOME` ist dort nicht da, und das `exec`
+    // scheiterte erst nach dem Start.
+    if let Some(binary) = resolved.as_deref()
+        && !ctx.sandbox_view.mounts.is_empty()
+    {
+        if ctx.reaches_program(binary) {
+            // Die Datei ist drinnen unter demselben Pfad da, und trotzdem
+            // findet `execvp` sie nicht: Ihr Verzeichnis steht nicht im
+            // Suchpfad der Sandbox.
+            if searched_the_path {
+                diagnostics.push(not_on_the_sandbox_path(ctx, binary));
+            }
+        } else {
+            diagnostics.push(not_reachable_in_sandbox(ctx, binary));
+        }
+    }
+
+    diagnostics
+}
+
 impl AgentAdapter for OpenCodeAdapter {
     fn id(&self) -> &'static str {
         ADAPTER_ID
@@ -538,85 +760,7 @@ impl AgentAdapter for OpenCodeAdapter {
     }
 
     fn preflight(&self, ctx: &AgentContext) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
-        let path = ctx.host_path.as_deref();
-        let mut resolved: Option<PathBuf> = None;
-
-        match ctx.agent_command_override.as_ref().and_then(|c| c.first()) {
-            Some(command) => {
-                let found = find_in_path(command, path);
-                resolved.clone_from(&found);
-                let executable = found.as_ref().is_some_and(|full| {
-                    std::fs::metadata(full).is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0)
-                });
-                if !executable {
-                    diagnostics.push(not_executable(command, ctx.agent_command_from_caller));
-                }
-            }
-            // Ohne Suchpfad gibt es nichts zu durchsuchen. „Pfad unbekannt"
-            // ist nicht „Programm fehlt": ein Befund braucht einen Beleg, und
-            // was der Daemon nicht weiß, steht nicht als Fehler da
-            // (`backlog/CONVENTIONS.md` 4.13). Der Aufrufer reicht
-            // `AgentContext::host_path` herein; tut er es nicht, unterbleibt
-            // die Prüfung, und das `exec` in der Sandbox entscheidet.
-            None if path.is_none() => {}
-            None => {
-                let found = find_in_path(std::ffi::OsStr::new(DEFAULT_COMMAND), path);
-                resolved.clone_from(&found);
-                if found.is_none() {
-                    diagnostics.push(
-                        Diagnostic::builder(AGENT_001, Severity::Blocking)
-                            .why(format!(
-                                "{DEFAULT_COMMAND} is not in PATH={} and agent.command is not set",
-                                path.map(|p| p.to_string_lossy().into_owned())
-                                    .unwrap_or_default()
-                            ))
-                            .fix(FixAction::CopyCommand(INSTALL_COMMAND.to_owned()))
-                            .docs(DOCS_URL)
-                            .build(),
-                    );
-                }
-            }
-        }
-
-        // Auf dem Host gefunden heißt nicht: in der Sandbox erreichbar. Die
-        // Sandbox hängt `/usr` und was sonst in `[mounts]` steht nur lesbar
-        // ein; ein Programm unter `$HOME` ist dort nicht da, und das `exec`
-        // scheiterte erst nach dem Start.
-        if let Some(binary) = resolved.as_deref()
-            && !ctx.sandbox_ro_paths.is_empty()
-            && !ctx.is_visible_in_sandbox(binary)
-        {
-            diagnostics.push(
-                Diagnostic::builder(AGENT_004, Severity::Blocking)
-                    .why(format!(
-                        "{} is on this machine, but the sandbox mounts only {} read-only, \
-                         so the command is not there and the exec would fail after the start. \
-                         Put the binary under one of those paths, or add its directory to \
-                         `[mounts].extra_ro` of the sandbox profile.",
-                        binary.display(),
-                        ctx.sandbox_ro_paths
-                            .iter()
-                            .map(|path| path.display().to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ))
-                    // Der Name am Ziel ist der des Binaries und nicht der
-                    // des Adapters: Ein `agent.command = ["mycode"]` würde
-                    // sonst zu `install … /usr/local/bin/opencode`, und der
-                    // Vorschlag benennte die Datei beim Kopieren um.
-                    .fix(FixAction::CopyCommand(format!(
-                        "sudo install -m 0755 {} /usr/local/bin/{}",
-                        binary.display(),
-                        binary
-                            .file_name()
-                            .unwrap_or(std::ffi::OsStr::new(DEFAULT_COMMAND))
-                            .to_string_lossy()
-                    )))
-                    .docs(DOCS_URL)
-                    .build(),
-            );
-        }
+        let mut diagnostics = command_preflight(ctx);
 
         if effective_models(&ctx.llm.models) == vec![PLACEHOLDER_MODEL.to_owned()] {
             // Der Vorschlag ist der Weg zu den Namen, nicht ein erfundener
