@@ -77,15 +77,16 @@ guarantees do not cover; the attacker model is in
 
 | Capability | Description | Status |
 |---|---|---|
-| Intercept queue | Every request held as a card: method, host, path, query, headers, body as JSON tree, form or raw; secrets and personal data highlighted inline | planned, M2 |
-| Decide | Allow, allow edited, or block with a note the agent can read; remember as a rule for once, this session, or forever, scoped to URL, host, domain or domain and method | planned, M2 |
-| Rules | Ordered allow, block and ask rules on host globs, method, path, scheme and port; default is ask; temporary session rules shown separately | planned, M2 |
-| History and export | Everything recorded in SQLite, searchable, exportable as HAR, JSONL and CSV | planned, M2 |
-| Agent inside | OpenCode running in the sandbox against Ollama, vLLM, LM Studio or llama.cpp on your LAN; terminal in the app; agent briefing so it knows where it runs | planned, M3 |
-| Isolation check | The three guarantees verified live in the running sandbox, shown as a ring in the header | planned, M3 |
-| `humanitl run` | The same thing from the command line, in any directory, with a profile that allows only the language model | planned, M3 |
+| Intercept queue | Every request held as a card: method, host, path, query, headers, body as JSON tree, form or raw; secrets and personal data highlighted inline | built, M2 |
+| Decide | Allow or block with a note the agent can read; remember as a rule for once, this session, an hour, or forever, scoped to URL, host, domain, or host and method | built, M2 |
+| Rules | Ordered allow, block and ask rules on host globs, method, path, scheme and port; default is ask; temporary session rules shown separately | built, M2 |
+| History and export | Everything recorded in SQLite, searchable, exportable as HAR, JSONL and CSV, and as a curl command for a single request | built, M2 |
+| Agent inside | An agent running in the sandbox against Ollama, vLLM, LM Studio or llama.cpp on your LAN; terminal in the app; agent briefing so it knows where it runs. The OpenCode adapter is built and runs where the binary is present; CI proves the isolation and the moderation path with a scripted agent | built, M3 |
+| Isolation check | The three guarantees verified live in the running sandbox, shown as a ring in the header | built, M3 |
+| `humanitl run` | The same thing from the command line, in any directory, with a profile that allows only the language model | built, M3 |
+| Edit before sending | Open a held request in an editor, change it, and send the edited version instead | in progress, M4 |
 | Pseudonymisation | Replace personal data before sending, stable per session, translated back in text responses; mapping stays on the host, encrypted | planned, M4 |
-| Audit log | Append-only, hash-chained, exportable; honest about what it proves | planned, M4 |
+| Audit log | Append-only, hash-chained, exportable; honest about what it proves | chain built, screen and export planned, M4 |
 | Settings | Three decisions to get started; everything else configurable with progressive disclosure, one schema feeding the app, the CLI and the docs | planned, M4 |
 | Packages | `.deb` and AppImage, one click to enable the background service | planned, M4 |
 
@@ -120,8 +121,9 @@ plan with milestones, sprints and every issue is in [`BACKLOG.md`](BACKLOG.md).
 - **Sandbox**: bubblewrap with `--unshare-all`, a tiny dependency-free shim
   that brings up the socket bridge, applies seccomp and executes the agent.
 - **Clients** (`app/`, `daemon/bin/humanitl`): the Flutter desktop application
-  and the command line are thin clients of the same contract. Every capability
-  is an RPC first; neither client contains domain logic.
+  and the command line are thin clients of the same contract. Every capability is
+  meant to be an RPC first (ADR-0018); the history export is the open exception
+  and still lives in the app until it moves. Neither client carries domain logic.
 - **Core crates** carry no IO, no async and no protobuf, so the rules engine,
   the flow state machine, the findings detectors and the audit chain are pure
   functions with table-driven tests.
@@ -162,7 +164,9 @@ Toolchain: Rust 1.88 or newer, Flutter 3.47.2. See
 [`CONTRIBUTING.md`](CONTRIBUTING.md) for the details, including how the local
 gate behaves when `rustfmt` or `clippy` are absent.
 
-When the first milestones land, the everyday start will be:
+The everyday start, working from a source build today and from a package once
+M4 builds one and M5 signs and publishes it. `humanitl run` talks to a running
+`humanitld`; without one it stops with `DAEMON_001` and says how to start it:
 
 ```sh
 cd ~/projects/client-acme
@@ -177,9 +181,9 @@ the agent may see, and start. Everything else is configurable and lives in one
 place.
 
 - `~/.config/humanitl/config.toml` holds the settings. Every key has a tier
-  (basic, advanced, expert), a description and a default; the settings screen,
-  the CLI flags and the reference documentation are generated from the same
-  schema.
+  (basic, advanced, expert), a description and a default. The CLI flags and the
+  reference documentation come from that schema; the settings screen that will
+  read it too is M4 and not built yet.
 - `~/.config/humanitl/rules.yaml` holds persistent rules. Session rules live
   only in memory and are shown separately.
 - Profiles bundle sandbox, rules, agent, language model and timeouts. A
@@ -202,24 +206,37 @@ To report a vulnerability, do not open a public issue. Use the contact given in
 
 Humanitl is in early development. Nothing is released and nothing should be
 relied upon yet. The work is organised in six sprints towards a first usable
-version:
+version; four of them have landed:
 
-| Milestone | Delivers |
-|---|---|
-| M0 Foundation | monorepo, CI, protobuf contract, core types, fake daemon, escape-test harness |
-| M1 Sealed box | sandbox provably closed, proxy holds a request |
-| M2 First decision | rules, findings, recorder, intercept and history screens |
-| M3 Agent inside | OpenCode against a LAN model, terminal, isolation check, `humanitl run` |
-| M4 Trusted editor | pseudonymisation, audit chain, settings, German and English, packages |
-| M5 Release 0.1 | fuzzing, limits, error paths, documentation, signed release |
+| Milestone | Delivers | Status |
+|---|---|---|
+| M0 Foundation | monorepo, CI, protobuf contract, core types, fake daemon, escape-test harness | delivered |
+| M1 Sealed box | sandbox provably closed, proxy holds a request | delivered |
+| M2 First decision | rules, findings, recorder, intercept and history screens | delivered |
+| M3 Agent inside | OpenCode against a LAN model, terminal, isolation check, `humanitl run` | delivered |
+| M4 Trusted editor | pseudonymisation, audit chain, settings, German and English, packages | in progress |
+| M5 Release 0.1 | fuzzing, limits, error paths, documentation, signed release | planned |
+
+A milestone counts as delivered when its demo script runs green in CI against a
+real daemon and a real sandbox, not when its code exists. The scripts live in
+`tests/e2e/`, one per milestone from M1 on — M0 is the build itself, gated by
+`rust-check`, `rust-test`, `flutter-analyze-test` and `proto-lint-and-gen` — and
+the jobs that run them are `e2e`, `e2e-xvfb` and `e2e-agent`. M2 drives the app on
+a screen under Xvfb and exports a HAR file. M3 drives an agent inside the sandbox
+against a mock language model in the run's own network namespace; the OpenCode
+variant runs only where the image carries the binary and reports itself as
+skipped otherwise, so what CI proves for M3 is the isolation and the moderation
+path, not OpenCode.
 
 Progress is visible in the commit history, one issue per commit.
 
 ## Contributing
 
-Contributions are welcome once the foundation has landed. Until then the most
-useful thing is to read [`BACKLOG.md`](BACKLOG.md) and
-[`docs/SECURITY.md`](docs/SECURITY.md) and tell us where the reasoning is wrong.
+The foundation has landed: M0 to M3 are delivered, and the demo scripts of M1 to
+M3 run in CI. Contributions are welcome. The most useful thing is still to read
+[`BACKLOG.md`](BACKLOG.md) and [`docs/SECURITY.md`](docs/SECURITY.md) and tell us
+where the reasoning is wrong — a wrong guarantee costs more than a missing
+feature.
 
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): toolchain, workflow, commit format,
   definition of done.
