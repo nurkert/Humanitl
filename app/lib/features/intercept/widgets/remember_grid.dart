@@ -214,34 +214,43 @@ class _SegmentState extends State<_Segment> {
         : const Color(0x00000000);
     return Opacity(
       opacity: opacity,
-      child: FocusRing(
-        visible: _focused,
-        radius: tokens.radii.control,
-        child: FocusableActionDetector(
-          enabled: widget.enabled,
-          mouseCursor: widget.enabled
-              ? SystemMouseCursors.click
-              : MouseCursor.defer,
-          onFocusChange: (bool value) => setState(() => _focused = value),
-          onShowHoverHighlight: (bool value) =>
-              setState(() => _hovered = value),
-          actions: <Type, Action<Intent>>{
-            ActivateIntent: CallbackAction<ActivateIntent>(
-              onInvoke: (ActivateIntent intent) {
-                widget.onSelect();
-                return null;
-              },
-            ),
-          },
-          child: Semantics(
-            button: true,
-            inMutuallyExclusiveGroup: true,
-            selected: widget.selected,
-            enabled: widget.enabled,
-            label: widget.label,
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: widget.enabled ? widget.onSelect : null,
+      // Die Reihenfolge von Detektor und Ring ist eine Trefferfläche, keine
+      // Verschachtelung: `FocusRing` legt seine Reserve als Padding um sein
+      // Kind, und wer erst innerhalb des Rings zuhört, hört diese zwei Pixel
+      // nicht. Zwischen zwei Segmenten stehen dann 4 px, in denen ein Klick
+      // nichts tut, mitten in einer Fläche, die zusammenhängend aussieht --
+      // genau die Stille, die `docs/UX.md` 5.3 verbietet (HUM-143). Der
+      // Detektor liegt deshalb außen, wie in `history_table.dart`, und die
+      // Reserve gehört zum Ziel. Zeiger und Tastatur sehen dieselbe Fläche:
+      // `FocusableActionDetector` liegt darüber, also decken Cursor und
+      // Hover-Füllung auch die Reserve ab.
+      child: FocusableActionDetector(
+        enabled: widget.enabled,
+        mouseCursor: widget.enabled
+            ? SystemMouseCursors.click
+            : MouseCursor.defer,
+        onFocusChange: (bool value) => setState(() => _focused = value),
+        onShowHoverHighlight: (bool value) => setState(() => _hovered = value),
+        actions: <Type, Action<Intent>>{
+          ActivateIntent: CallbackAction<ActivateIntent>(
+            onInvoke: (ActivateIntent intent) {
+              widget.onSelect();
+              return null;
+            },
+          ),
+        },
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: widget.enabled ? widget.onSelect : null,
+          child: FocusRing(
+            visible: _focused,
+            radius: tokens.radii.control,
+            child: Semantics(
+              button: true,
+              inMutuallyExclusiveGroup: true,
+              selected: widget.selected,
+              enabled: widget.enabled,
+              label: widget.label,
               child: AnimatedContainer(
                 duration: HMotion.press,
                 curve: HMotion.enter,

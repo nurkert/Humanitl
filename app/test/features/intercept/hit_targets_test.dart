@@ -71,6 +71,18 @@ RememberGrid grid({bool enabled = true}) => RememberGrid(
   onTarget: (RememberTarget _) {},
 );
 
+/// Die gemalte Fläche eines Segments: der Kasten mit Füllung und Hairline,
+/// nicht die Trefferfläche darum. Zwischen zwei gemalten Kästen liegt der
+/// Raum, um den es in HUM-143 geht.
+Rect paintedBox(WidgetTester tester, String label) => tester.getRect(
+  find.ancestor(of: find.text(label), matching: find.byType(AnimatedContainer)),
+);
+
+/// Die Trefferfläche eines Segments: der Detektor, den ein Zeiger trifft.
+Rect hitBox(WidgetTester tester, String label) => tester.getRect(
+  find.ancestor(of: find.text(label), matching: find.byType(GestureDetector)),
+);
+
 void main() {
   testWidgets(
     'every_segment_of_the_remember_grid_is_at_least_the_hit_minimum',
@@ -226,6 +238,190 @@ void main() {
         size.width,
         greaterThanOrEqualTo(HSize.hitMin),
         reason: 'the disabled segment $label is $size',
+      );
+    }
+  });
+
+  testWidgets('a_tap_between_two_segments_reaches_a_segment', (
+    WidgetTester tester,
+  ) async {
+    // **Gemessen wird die Lücke, nicht das Segment.** Die Messungen darüber
+    // tippen in die Mitte einer Zelle und bleiben grün, während zwischen zwei
+    // Zellen 4 px liegen, in denen ein Klick nichts tut: `FocusRing` legte
+    // seine Reserve außerhalb des Detektors, also endete `Once` bei 352,5 und
+    // `Session` begann bei 356,5 (Review am 2026-09-07, drei Taps bei 353,0,
+    // 354,5 und 356,0 erreichten niemanden). Was aussieht wie eine
+    // zusammenhängende Fläche, ist eine -- sonst schluckt ein sichtbar
+    // durchgehendes Bedienelement den Klick, und das ist die Stille, die
+    // `docs/UX.md` 5.3 verbietet.
+    RememberDuration? chosen;
+    await pumpControl(
+      tester,
+      RememberGrid(
+        heading: 'Remember',
+        durationLabel: 'Duration',
+        targetLabel: 'Scope',
+        duration: RememberDuration.session,
+        target: RememberTarget.host,
+        durationLabels: durationLabels,
+        targetLabels: targetLabels,
+        onDuration: (RememberDuration duration) => chosen = duration,
+        onTarget: (RememberTarget _) {},
+      ),
+    );
+
+    final Rect once = paintedBox(tester, 'Once');
+    final Rect session = paintedBox(tester, 'Session');
+    final double band = session.left - once.right;
+    // Ohne diese Zusicherung wäre der Test wertlos: Läge kein Raum zwischen
+    // den gemalten Kästen, tippte er in ein Segment und bliebe immer grün.
+    expect(
+      band,
+      greaterThan(0),
+      reason:
+          'Once endet bei ${once.right}, Session beginnt bei $band px '
+          'weiter rechts -- ohne Raum dazwischen misst dieser Test nichts',
+    );
+
+    final double y = once.center.dy;
+    for (final double x in <double>[
+      once.right + 0.5,
+      once.right + band / 2,
+      session.left - 0.5,
+    ]) {
+      chosen = null;
+      await tester.tapAt(Offset(x, y));
+      await tester.pump();
+      expect(
+        chosen,
+        anyOf(RememberDuration.once, RememberDuration.session),
+        reason:
+            'ein Tap bei ($x, $y), zwischen Once (bis ${once.right}) und '
+            'Session (ab ${session.left}), erreicht kein Segment',
+      );
+    }
+  });
+
+  testWidgets('a_tap_on_the_upper_and_lower_edge_of_a_segment_reaches_it', (
+    WidgetTester tester,
+  ) async {
+    // Dieselbe Frage senkrecht: Oben und unten reserviert der Ring je 2 px,
+    // und sie gehörten bis HUM-143 zu niemandem. Die Zeile darunter misst den
+    // Raum zwischen zwei Segmenten, die untereinander stehen.
+    RememberDuration? chosen;
+    await pumpControl(
+      tester,
+      RememberGrid(
+        heading: 'Remember',
+        durationLabel: 'Duration',
+        targetLabel: 'Scope',
+        duration: RememberDuration.session,
+        target: RememberTarget.host,
+        durationLabels: durationLabels,
+        targetLabels: targetLabels,
+        onDuration: (RememberDuration duration) => chosen = duration,
+        onTarget: (RememberTarget _) {},
+      ),
+    );
+
+    final Rect box = paintedBox(tester, 'Once');
+    final Rect hit = hitBox(tester, 'Once');
+    expect(
+      hit.top,
+      lessThan(box.top),
+      reason:
+          'über dem gemalten Kasten (${box.top}) liegt keine Reserve; '
+          'die Trefferfläche beginnt bei ${hit.top}',
+    );
+
+    for (final double y in <double>[box.top - 0.5, box.bottom + 0.5]) {
+      chosen = null;
+      await tester.tapAt(Offset(box.center.dx, y));
+      await tester.pump();
+      expect(
+        chosen,
+        RememberDuration.once,
+        reason:
+            'ein Tap bei (${box.center.dx}, $y), am waagerechten Rand von '
+            'Once (${box.top} bis ${box.bottom}), erreicht das Segment nicht',
+      );
+    }
+  });
+
+  testWidgets('a_tap_between_two_rows_of_segments_reaches_a_segment', (
+    WidgetTester tester,
+  ) async {
+    // Bricht die Gruppe in zwei Zeilen um -- schmale Leiste, große Schrift --,
+    // stehen zwei Segmente übereinander, und zwischen ihnen lag dieselbe
+    // 4-px-Lücke wie nebeneinander (`_Segments` ist ein `Wrap`).
+    RememberDuration? chosen;
+    await pumpControl(
+      tester,
+      SizedBox(
+        width: 140,
+        child: RememberGrid(
+          heading: 'Remember',
+          durationLabel: 'Duration',
+          targetLabel: 'Scope',
+          duration: RememberDuration.session,
+          target: RememberTarget.host,
+          durationLabels: durationLabels,
+          targetLabels: targetLabels,
+          onDuration: (RememberDuration duration) => chosen = duration,
+          onTarget: (RememberTarget _) {},
+        ),
+      ),
+    );
+
+    final List<Rect> boxes = <Rect>[
+      for (final String label in durationLabels) paintedBox(tester, label),
+    ];
+    Rect? upper;
+    Rect? lower;
+    for (final Rect a in boxes) {
+      for (final Rect b in boxes) {
+        if (b.top < a.bottom) {
+          continue;
+        }
+        final double overlap =
+            (a.right < b.right ? a.right : b.right) -
+            (a.left > b.left ? a.left : b.left);
+        if (overlap > 0 && (upper == null || b.top - a.bottom > 0)) {
+          upper ??= a;
+          lower ??= b;
+        }
+      }
+    }
+    expect(
+      upper,
+      isNotNull,
+      reason: 'bei 140 px Breite bricht die Gruppe nicht um: $boxes',
+    );
+    final double band = lower!.top - upper!.bottom;
+    expect(
+      band,
+      greaterThan(0),
+      reason: 'zwischen den beiden Zeilen liegt kein Raum ($upper, $lower)',
+    );
+
+    final double x =
+        ((upper.left > lower.left ? upper.left : lower.left) +
+            (upper.right < lower.right ? upper.right : lower.right)) /
+        2;
+    for (final double y in <double>[
+      upper.bottom + 0.5,
+      upper.bottom + band / 2,
+      lower.top - 0.5,
+    ]) {
+      chosen = null;
+      await tester.tapAt(Offset(x, y));
+      await tester.pump();
+      expect(
+        chosen,
+        isNotNull,
+        reason:
+            'ein Tap bei ($x, $y), zwischen den Zeilen '
+            '(${upper.bottom} bis ${lower.top}), erreicht kein Segment',
       );
     }
   });

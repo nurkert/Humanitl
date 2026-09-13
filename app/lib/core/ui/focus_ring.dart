@@ -39,6 +39,21 @@ double focusRingReserved(Color? fill, Color ring) =>
 /// never replaces it, and over an opaque [fill] it keeps `HFocusRing.gap` of
 /// surface between itself and the control. There is no animation: a focus ring
 /// appears in the frame the focus does.
+///
+/// **Die Reserve liegt außerhalb von [child] und damit außerhalb von allem,
+/// was [child] abtastet.** Ein Control, dessen `GestureDetector` unter dem
+/// Ring sitzt, verliert auf jeder Seite zwei Pixel Trefferfläche, und zwischen
+/// zwei solchen Controls nebeneinander stehen vier Pixel, in denen ein Klick
+/// nichts tut (HUM-143). Wo zwei Ziele aneinanderstoßen -- die Segmente einer
+/// Gruppe --, gehört der abtastende Detektor deshalb um den Ring herum
+/// (`GestureDetector(behavior: HitTestBehavior.opaque, child: FocusRing(...))`,
+/// so in `remember_grid.dart` und `history_table.dart`), damit die Reserve zum
+/// Ziel gehört. Wo zwei Ziele absichtlich Abstand halten, etwa Erlauben und
+/// Blockieren (`docs/UX.md` 5.4), bleibt sie außerhalb des Ziels; dort ist
+/// jeder Pixel Wachstum ein Pixel näher an der unumkehrbaren Handlung. Wo ein
+/// Control für sich allein steht und keinen Nachbarn hat, an den ein Klick
+/// verloren gehen könnte -- das Notizfeld etwa --, ist die Frage offen und die
+/// vorhandene Schachtelung bleibt, bis jemand sie misst.
 class FocusRing extends StatelessWidget {
   /// Wraps [child].
   const FocusRing({
