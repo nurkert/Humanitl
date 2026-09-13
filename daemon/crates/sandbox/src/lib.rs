@@ -97,8 +97,8 @@ pub mod summary;
 pub mod worktree;
 
 pub use crate::agent::{
-    AdapterRegistry, AgentAdapter, AgentContext, OpenCodeAdapter, SandboxFile, files_inside_work,
-    find_in_path,
+    AdapterRegistry, AgentAdapter, AgentContext, Mount, OpenCodeAdapter, Reach, SandboxFile,
+    SandboxLookup, SandboxView, files_inside_work, find_in_path,
 };
 pub use crate::bridge_env::{
     CHECK_BRIDGE_LISTENING, CHECK_FAMILIES, CHECK_NAMES, CHECK_NO_INTERFACES, CHECK_PREFIX,

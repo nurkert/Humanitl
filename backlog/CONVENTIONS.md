@@ -918,6 +918,54 @@ aber außerhalb der nur lesbaren Einhängungen des Profils, ist das `AGENT_004`:
 in der Sandbox gäbe es das Programm nicht, und das `exec` scheiterte erst nach
 dem Start.
 
+**Die Vorprüfung fragt den Suchpfad der Sandbox, nicht den des Hosts**
+(HUM-139, 2026-09-13). Ein nacktes Kommando löst der Agent in der Sandbox gegen
+`[env].PATH` des Profils auf, und die Vorprüfung tut dasselbe:
+`AgentContext::look_up_in_sandbox_path` sucht in den Einträgen dieses Pfades
+und unterscheidet dabei „nicht da", „da, aber nicht ausführbar" und
+„unentscheidbar"; `resolve_in_sandbox_path` ist die Kurzform davon für den
+Fall, dass nur der startbare Treffer zählt.
+Ein Treffer beendet die Prüfung ohne Befund; erst wenn dort nichts liegt, gilt
+der Weg über den Host, und `AGENT_004` nennt dann beides — den Pfad auf dem
+Host und den Suchpfad der Sandbox. Wer sonst nur auf dem Host suchte, verbot
+einen Start, der funktioniert.
+
+Was die Sandbox sieht, steht in `SandboxView`: die Einhängungen als
+`Mount { src, dst }` (`[mounts].ro`, `extra_ro` **und** `extra_rw` — schreibbar
+eingehängt ist eingehängt), die Verweise aus `[mounts].symlinks` und die
+Überdeckungen aus `[mounts].tmpfs` und den Masken (`SandboxView::of_profile`).
+Ein tmpfs verdeckt nicht nur Inhalte, es verdeckt Einhängungen: Unter
+`/work/.direnv` ist drinnen nichts, was der Host dort hat. **Gerechnet wird in Pfaden der Sandbox**, denn ein
+Verweis trägt den Text seines Ziels, und den liest der Kern drinnen: Ein
+`bin/opencode` im Projektbaum, das auf `/work/tools/opencode` zeigt, startet;
+dasselbe auf den Host-Pfad desselben Baums nicht. Aufgelöst wird Stück für
+Stück, nicht über den kanonischen Pfad des Hosts: Ein Verweis, dessen
+Zwischenschritt die Einhängungen verlässt, endet auf dem Host wieder drinnen
+und in der Sandbox mit 127; ein Verweis oberhalb einer Einhängung (`/home` auf
+`/var/home`) zählt nicht, weil die Sandbox dort ein echtes Verzeichnis anlegt;
+ein Verweis des Profils (`/bin` auf `usr/bin`) führt in die Einhängung hinein;
+und `..` wirkt beim Gehen, nach dem Verweis davor. Zurück kommt der aufgelöste
+Ort auf dem Host. Relative und leere Einträge des Suchpfads zeigen auf das
+Arbeitsverzeichnis der Sandbox (`[mounts].work.dst`, `--chdir`), ebenso ein
+relatives `agent.command`. Der Suchpfad ist der wirksame: `sandbox.env` vor
+`[env]` des Profils; nennt keiner von beiden einen, gilt die Vorgabe der
+C-Bibliothek (`confstr(_CS_PATH)`, gemessen `/bin:/usr/bin`). Eingehängt heißt
+nicht im Suchpfad: Liegt das Programm unter einer Einhängung, die der Suchpfad
+nicht nennt, ist auch das `AGENT_004`, und der Weg hinaus ist
+`sandbox.env.PATH`, nicht eine weitere Einhängung. Ausführbar heißt `access(EXEC_OK)`, nicht `mode & 0o111`.
+
+**Was das Modell nicht weiß, meldet es nicht.** `Reach::Unknown` steht für eine
+Stelle, über die der Host keine Auskunft gibt (ein Verzeichnis ohne Leserecht,
+eine zu lange Kette von Verweisen); dann bleibt die Vorprüfung stumm, statt
+einen Start zu verbieten (4.13). Dasselbe gilt für alles, was die Sandbox aus
+anderen Quellen bekommt als aus Einhängungen und Verweisen des Profils. Ein
+`exec`, das doch scheitert, meldet HUM-137 mit `126`/`127`.
+
+Derselbe Weg gilt im Doctor (`Probe::with_sandbox`): Er sucht den Agenten erst
+in der Sandbox und dann auf dem Host. Liegt er auf beiden Seiten, ist die
+Fassung der Sandbox die, die startet, und `DOCTOR_007` widerspricht der
+Vorprüfung nicht mehr.
+
 **Neue Diagnose-Codes.** Bereich `agent` (`AGENT_001` bis `AGENT_009`):
 `AGENT_001` Kommando nicht gefunden, `AGENT_002` nicht ausführbar, `AGENT_003`
 gebündelte Vorlage unbrauchbar, `AGENT_004` in der Sandbox nicht erreichbar.

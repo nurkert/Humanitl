@@ -46,6 +46,7 @@ use super::{
     RendererFacts, RunOutcome, RuntimeDirFacts, SeccompFacts, SeccompLine, SystemdFacts, TrayFacts,
     UsernsFacts,
 };
+use crate::agent::SandboxView;
 use crate::agent::opencode;
 use crate::bwrap::{BwrapBackend, Version};
 
@@ -155,6 +156,8 @@ pub struct Probe<'a> {
     timeout: Duration,
     adapter: String,
     agent_command: Option<String>,
+    sandbox_view: SandboxView,
+    sandbox_path: Option<String>,
 }
 
 impl<'a> Probe<'a> {
@@ -167,6 +170,8 @@ impl<'a> Probe<'a> {
             timeout: DEFAULT_TIMEOUT,
             adapter: opencode::ADAPTER_ID.to_owned(),
             agent_command: None,
+            sandbox_view: SandboxView::default(),
+            sandbox_path: None,
         }
     }
 
@@ -198,6 +203,21 @@ impl<'a> Probe<'a> {
         self
     }
 
+    /// Legt fest, was die Sandbox vom Dateibaum sieht (Einhängungen und
+    /// Verweise des Profils) und welchen Suchpfad sie hat (`[env].PATH`).
+    ///
+    /// Ohne diese Angaben sucht der Doctor den Agenten nur im `PATH` des Hosts
+    /// und meldet `DOCTOR_007`, wo die Vorprüfung schweigt: Ein Agent, der nur
+    /// über den Suchpfad der Sandbox in einem eingehängten Verzeichnis liegt,
+    /// ist erreichbar, und zwei Antworten in derselben Crate, die einander
+    /// widersprechen, sind schlimmer als eine falsche (HUM-139).
+    #[must_use]
+    pub fn with_sandbox(mut self, view: SandboxView, path: Option<String>) -> Self {
+        self.sandbox_view = view;
+        self.sandbox_path = path;
+        self
+    }
+
     /// Liest alles, was diese Maschine über sich preisgibt.
     ///
     /// `daemon` und `llm` kommen vom Aufrufer: Über den Daemon weiß der
@@ -215,7 +235,13 @@ impl<'a> Probe<'a> {
             .agent_command
             .clone()
             .unwrap_or_else(|| default_command(&self.adapter));
-        let agent_program = self.find_executable(&agent_command);
+        // Erst die Sandbox, dann der Host: Dort läuft der Agent, und wenn
+        // beide etwas haben, ist die Fassung der Sandbox die, die startet. Ein
+        // Wrapper unter `~/.local/bin` hat auf dem Host Vorrang und ist
+        // drinnen nicht da; der Doctor nennte sonst seine Fassung (HUM-139).
+        let agent_program = self
+            .find_in_sandbox(&agent_command)
+            .or_else(|| self.find_executable(&agent_command));
 
         let (bwrap_version, userns_probe, systemd_state, agent_version) =
             std::thread::scope(|scope| {
@@ -270,7 +296,7 @@ impl<'a> Probe<'a> {
                 &agent_command,
                 agent_program.as_deref(),
                 agent_version,
-                self.path(),
+                &self.agent_searched(),
             ),
             llm,
             tray: self.tray(),
@@ -307,6 +333,36 @@ impl<'a> Probe<'a> {
             .filter(|dir| !dir.is_empty())
             .map(|dir| Path::new(dir).join(name))
             .find(|full| full.is_file() && access(full, Access::EXEC_OK).is_ok())
+    }
+
+    /// Sucht ein nacktes Kommando im Suchpfad der Sandbox.
+    ///
+    /// Nur absolute Einträge, die eine Nur-Lese-Einhängung deckt: Dort sind
+    /// Quelle und Ziel derselbe Pfad, und was dort liegt, startet auch
+    /// drinnen. Ein relativer Eintrag wird beim `exec` gegen das
+    /// Arbeitsverzeichnis der Sandbox aufgelöst, also gegen den Projektbaum
+    /// einer Sitzung; der Doctor kennt keine Sitzung und lässt ihn deshalb aus.
+    /// Die Vorprüfung des Adapters, die den Projektbaum kennt, beantwortet
+    /// diesen Fall ([`crate::agent::AgentContext::look_up_in_sandbox_path`]).
+    fn find_in_sandbox(&self, name: &str) -> Option<PathBuf> {
+        if Path::new(name).components().count() > 1 {
+            return None;
+        }
+        let path = self.sandbox_path.as_deref()?;
+        path.split(':')
+            .filter(|dir| !dir.is_empty())
+            .map(Path::new)
+            .filter(|dir| dir.is_absolute())
+            .map(|dir| dir.join(name))
+            .find_map(|full| self.sandbox_view.startable(&full))
+    }
+
+    /// Wo nach dem Agenten gesucht wurde, für den Befund.
+    fn agent_searched(&self) -> String {
+        self.sandbox_path.as_ref().map_or_else(
+            || self.path().to_owned(),
+            |sandbox| format!("{} (sandbox PATH={sandbox})", self.path()),
+        )
     }
 
     /// Liest eine Datei, die dieses Modul selbst benennt.
@@ -1261,6 +1317,75 @@ mod tests {
         };
         assert_eq!(command, "my-agent");
         assert_eq!(version, Reading::Found("9.9.9".to_owned()));
+    }
+
+    /// Liegt der Agent auf beiden Seiten, gilt die Fassung der Sandbox
+    /// (HUM-139).
+    ///
+    /// Genau die Lage der Vorführung am 2026-09-07: ein Wrapper unter
+    /// `~/.local/bin` auf dem Host, das eingehängte Programm in
+    /// `~/.opencode/bin`. Gestartet wird das der Sandbox, und der Doctor nennt
+    /// dessen Fassung.
+    #[test]
+    fn the_sandbox_wins_over_the_host_when_both_have_an_agent() {
+        let host = tempfile::tempdir().unwrap();
+        let mounted = tempfile::tempdir().unwrap();
+        script(host.path(), "opencode", "echo 'host-wrapper'");
+        script(mounted.path(), "opencode", "echo 'sandbox-1.2.3'");
+        let env = env_with(&[("PATH", &host.path().display().to_string())]);
+        let (daemon, llm) = nothing();
+
+        let facts = probe(&env)
+            .with_sandbox(
+                crate::agent::SandboxView::same_path(
+                    vec![mounted.path().to_path_buf()],
+                    Vec::new(),
+                ),
+                Some(mounted.path().display().to_string()),
+            )
+            .collect(daemon, llm);
+
+        let super::AgentFacts::Found {
+            program, version, ..
+        } = facts.agent
+        else {
+            panic!("both sides have the agent: {:?}", facts.agent);
+        };
+        assert_eq!(program, mounted.path().join("opencode"));
+        assert_eq!(version, Reading::Found("sandbox-1.2.3".to_owned()));
+    }
+
+    /// Ein Agent, den nur der Suchpfad der Sandbox erreicht, gilt als da
+    /// (HUM-139).
+    ///
+    /// Sonst stünden zwei Antworten nebeneinander: Die Vorprüfung des Adapters
+    /// schweigt, weil das Kommando in der Sandbox erreichbar ist, und der
+    /// Doctor meldete `DOCTOR_007`, weil es im `PATH` des Hosts nicht liegt.
+    #[test]
+    fn an_agent_only_on_the_sandbox_path_is_found() {
+        let dir = tempfile::tempdir().unwrap();
+        script(dir.path(), "opencode", "echo '1.2.3'");
+        let env = env_with(&[("PATH", "/does/not/exist")]);
+        let (daemon, llm) = nothing();
+
+        let facts = probe(&env)
+            .with_sandbox(
+                crate::agent::SandboxView::same_path(vec![dir.path().to_path_buf()], Vec::new()),
+                Some(dir.path().display().to_string()),
+            )
+            .collect(daemon, llm);
+
+        let super::AgentFacts::Found {
+            program, version, ..
+        } = facts.agent
+        else {
+            panic!(
+                "the agent is under a read-only mount that the sandbox PATH names: {:?}",
+                facts.agent
+            );
+        };
+        assert_eq!(program, dir.path().join("opencode"));
+        assert_eq!(version, Reading::Found("1.2.3".to_owned()));
     }
 
     #[test]
