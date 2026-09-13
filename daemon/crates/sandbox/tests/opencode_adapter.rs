@@ -23,7 +23,7 @@ use humanitl_sandbox::agent::opencode::{
 use humanitl_sandbox::agent::opencode_models::PROVIDER_ID;
 use humanitl_sandbox::{
     AdapterRegistry, AgentAdapter, AgentContext, OpenCodeAdapter, SandboxBackend, SandboxProfile,
-    files_inside_work,
+    SandboxView, files_inside_work,
 };
 use serde_json::Value;
 
@@ -193,7 +193,12 @@ fn opencode_preflight_missing_binary() {
     let empty = tempfile::tempdir().unwrap();
     let ctx = context(Some("http://192.168.1.50:11434"))
         .with_models(vec!["qwen3".to_owned()])
-        .with_host_path(Some(OsString::from(empty.path())));
+        .with_host_path(Some(OsString::from(empty.path())))
+        .with_sandbox_view(SandboxView::same_path(
+            vec![PathBuf::from("/usr")],
+            Vec::new(),
+        ))
+        .with_sandbox_path(Some(OsString::from("/usr/local/bin:/usr/bin")));
 
     let diagnostics = adapter.preflight(&ctx);
     let agent_001 = diagnostics
@@ -201,6 +206,13 @@ fn opencode_preflight_missing_binary() {
         .find(|diagnostic| diagnostic.code.as_str() == "AGENT_001")
         .expect("AGENT_001 is missing");
     assert_eq!(agent_001.severity, Severity::Blocking);
+    // Gesucht wurde in beiden Pfaden, und der Befund nennt beide: Wer ihn
+    // liest, sieht, wo die Sandbox nachgesehen hat (HUM-139).
+    assert!(
+        agent_001.why.contains("/usr/local/bin:/usr/bin"),
+        "AGENT_001 names the PATH of the sandbox: {}",
+        agent_001.why
+    );
     assert!(
         agent_001.docs.is_some() && agent_001.fix.is_some(),
         "a blocking finding names a way out"
@@ -221,6 +233,299 @@ fn opencode_preflight_is_quiet_when_everything_is_there() {
         .with_models(vec!["qwen3".to_owned()])
         .with_host_path(Some(dir));
     assert_eq!(adapter.preflight(&ctx), Vec::new());
+    drop(keep);
+}
+
+/// Ein Kommando, das nur über den PATH der Sandbox erreichbar ist, ist
+/// erreichbar (HUM-139).
+///
+/// Die Lage der Vorführung am 2026-09-07: Auf dem Host liegt unter
+/// `~/.local/bin` ein Wrapper, den keine Einhängung deckt; das Profil hängt
+/// `~/.opencode/bin` nur lesbar ein und nennt es in `[env].PATH`. Ein `exec`
+/// in der Sandbox fände die eingehängte Datei. Die Vorprüfung darf den Start
+/// deshalb nicht verhindern.
+#[test]
+fn opencode_preflight_accepts_a_command_on_the_sandbox_path() {
+    let adapter = OpenCodeAdapter::new();
+    let (mounted, mounted_keep) = bin_dir_with_opencode();
+    let (host_only, host_keep) = bin_dir_with_opencode();
+
+    let ctx = context(Some("http://192.168.1.50:11434"))
+        .with_models(vec!["qwen3".to_owned()])
+        // Auf dem Host gewinnt der Wrapper, den keine Einhängung deckt.
+        .with_host_path(Some(host_only.clone()))
+        .with_sandbox_view(SandboxView::same_path(
+            vec![PathBuf::from("/usr"), PathBuf::from(&mounted)],
+            Vec::new(),
+        ))
+        .with_sandbox_path(Some(OsString::from(format!(
+            "/usr/local/bin:/usr/bin:{}",
+            Path::new(&mounted).display()
+        ))));
+
+    assert_eq!(
+        adapter.preflight(&ctx),
+        Vec::new(),
+        "the command is under a read-only mount that the sandbox PATH names"
+    );
+    drop((mounted_keep, host_keep));
+}
+
+/// Der PATH der Sandbox zählt nur, wo eine Einhängung ihn deckt, und
+/// `AGENT_004` nennt ihn (HUM-139, HUM-135).
+///
+/// Der Fallstrick des Issues: Ein Eintrag im PATH der Sandbox, den keine
+/// Einhängung deckt, ist drinnen nicht da. Zählte er als Treffer, verschwände
+/// genau der Befund, für den es `AGENT_004` gibt.
+#[test]
+fn opencode_preflight_reports_a_sandbox_path_entry_without_a_mount() {
+    let adapter = OpenCodeAdapter::new();
+    let (home_bin, keep) = bin_dir_with_opencode();
+    let sandbox_path = format!("/usr/local/bin:/usr/bin:{}", Path::new(&home_bin).display());
+
+    let ctx = context(Some("http://192.168.1.50:11434"))
+        .with_models(vec!["qwen3".to_owned()])
+        .with_host_path(Some(home_bin.clone()))
+        // Das Verzeichnis steht im PATH der Sandbox, aber keine Einhängung
+        // deckt es.
+        .with_sandbox_view(SandboxView::same_path(
+            vec![PathBuf::from("/usr")],
+            Vec::new(),
+        ))
+        .with_sandbox_path(Some(OsString::from(&sandbox_path)));
+
+    let agent_004 = adapter
+        .preflight(&ctx)
+        .into_iter()
+        .find(|diagnostic| diagnostic.code.as_str() == "AGENT_004")
+        .expect("AGENT_004 is missing");
+    assert_eq!(agent_004.severity, Severity::Blocking);
+    assert!(
+        agent_004.why.contains(&sandbox_path),
+        "AGENT_004 names the PATH of the sandbox: {}",
+        agent_004.why
+    );
+    assert!(
+        agent_004
+            .why
+            .contains(&Path::new(&home_bin).join("opencode").display().to_string()),
+        "AGENT_004 names what is on the host: {}",
+        agent_004.why
+    );
+    assert!(
+        agent_004.fix.is_some() && agent_004.docs.is_some(),
+        "a blocking finding names a way out"
+    );
+    drop(keep);
+}
+
+/// Ein Symlink, der aus der Einhängung herausführt, macht den Agenten nicht
+/// erreichbar (HUM-139).
+///
+/// Auf dem Host ist die Datei da und ausführbar, in der Sandbox fehlt ihr
+/// Ziel. Am 2026-09-13 an einer echten Sandbox gemessen: `exec` endet mit 127
+/// („No such file or directory"). Die Vorprüfung darf dazu nicht schweigen.
+#[test]
+fn opencode_preflight_does_not_trust_a_symlink_that_leaves_the_mount() {
+    let adapter = OpenCodeAdapter::new();
+    let mounted = tempfile::tempdir().unwrap();
+    let (outside, outside_keep) = bin_dir_with_opencode();
+    std::os::unix::fs::symlink(
+        Path::new(&outside).join("opencode"),
+        mounted.path().join("opencode"),
+    )
+    .unwrap();
+
+    let ctx = context(Some("http://192.168.1.50:11434"))
+        .with_models(vec!["qwen3".to_owned()])
+        .with_host_path(Some(OsString::from(mounted.path())))
+        .with_sandbox_view(SandboxView::same_path(
+            vec![mounted.path().to_path_buf()],
+            Vec::new(),
+        ))
+        .with_sandbox_path(Some(OsString::from(mounted.path())));
+
+    let agent_004 = adapter
+        .preflight(&ctx)
+        .into_iter()
+        .find(|diagnostic| diagnostic.code.as_str() == "AGENT_004")
+        .expect("a symlink out of the mount is not reachable");
+    assert_eq!(agent_004.severity, Severity::Blocking);
+    drop(outside_keep);
+}
+
+/// Auch ein Kommando aus `agent.command` wird im PATH der Sandbox gesucht
+/// (HUM-139).
+#[test]
+fn opencode_preflight_accepts_a_bare_override_on_the_sandbox_path() {
+    let adapter = OpenCodeAdapter::new();
+    let mounted = tempfile::tempdir().unwrap();
+    let binary = mounted.path().join("mycode");
+    std::fs::write(&binary, b"#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let empty = tempfile::tempdir().unwrap();
+
+    let ctx = context(Some("http://192.168.1.50:11434"))
+        .with_models(vec!["qwen3".to_owned()])
+        .with_host_path(Some(OsString::from(empty.path())))
+        .with_command_override(Some(vec![OsString::from("mycode")]))
+        .with_sandbox_view(SandboxView::same_path(
+            vec![mounted.path().to_path_buf()],
+            Vec::new(),
+        ))
+        .with_sandbox_path(Some(OsString::from(mounted.path())));
+
+    assert_eq!(
+        adapter.preflight(&ctx),
+        Vec::new(),
+        "the command of agent.command lies under a mount that the sandbox PATH names"
+    );
+}
+
+/// Eine Datei, die da ist, aber nicht startet, ist ein Befund und kein
+/// Schweigen (HUM-139).
+#[test]
+fn opencode_preflight_reports_a_default_command_that_cannot_be_executed() {
+    let adapter = OpenCodeAdapter::new();
+    let mounted = tempfile::tempdir().unwrap();
+    let binary = mounted.path().join("opencode");
+    std::fs::write(&binary, b"#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    // Der `PATH` des Hosts ist leer: Der Befund muss über den Suchpfad der
+    // Sandbox entstehen, sonst misst der Test den Weg über den Host.
+    let empty = tempfile::tempdir().unwrap();
+    let ctx = context(Some("http://192.168.1.50:11434"))
+        .with_models(vec!["qwen3".to_owned()])
+        .with_host_path(Some(OsString::from(empty.path())))
+        .with_sandbox_view(SandboxView::same_path(
+            vec![mounted.path().to_path_buf()],
+            Vec::new(),
+        ))
+        .with_sandbox_path(Some(OsString::from(mounted.path())));
+
+    let agent_002 = adapter
+        .preflight(&ctx)
+        .into_iter()
+        .find(|diagnostic| diagnostic.code.as_str() == "AGENT_002")
+        .expect("a file that cannot be executed is a finding");
+    assert!(
+        agent_002
+            .why
+            .contains(&mounted.path().display().to_string()),
+        "the finding names the sandbox PATH it was found in: {}",
+        agent_002.why
+    );
+    assert!(
+        agent_002.why.contains(&binary.display().to_string()),
+        "the finding names the file: {}",
+        agent_002.why
+    );
+    assert!(agent_002.fix.is_some(), "a finding names a way out");
+}
+
+/// Ein relatives Kommando aus `agent.command` läuft und wird nicht verboten
+/// (HUM-139).
+///
+/// `./bin/opencode` startet in der Sandbox `/work/bin/opencode`. Vor dem
+/// 2026-09-13 suchte die Vorprüfung es im Arbeitsverzeichnis des Daemons und
+/// meldete `AGENT_004`.
+#[test]
+fn opencode_preflight_accepts_a_relative_command_in_the_project() {
+    let adapter = OpenCodeAdapter::new();
+    let work = tempfile::tempdir().unwrap();
+    std::fs::create_dir(work.path().join("bin")).unwrap();
+    let binary = work.path().join("bin/opencode");
+    std::fs::write(&binary, b"#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let empty = tempfile::tempdir().unwrap();
+
+    let llm = LlmConfig {
+        endpoint: Some(url::Url::parse("http://192.168.1.50:11434").unwrap()),
+        models: vec!["qwen3".to_owned()],
+        ..LlmConfig::default()
+    };
+    let ctx = AgentContext::new(SessionId::nil(), work.path().to_path_buf(), llm)
+        .with_command_override(Some(vec![OsString::from("./bin/opencode")]))
+        .with_host_path(Some(OsString::from(empty.path())))
+        .with_sandbox_view(SandboxView::same_path(
+            vec![PathBuf::from("/usr")],
+            Vec::new(),
+        ))
+        .with_sandbox_path(Some(OsString::from("/usr/local/bin:/usr/bin")));
+
+    assert_eq!(
+        adapter.preflight(&ctx),
+        Vec::new(),
+        "the command lies in the project, which the sandbox mounts as its work directory"
+    );
+}
+
+/// Eingehängt heißt nicht: im Suchpfad (HUM-139).
+///
+/// Wer dem Vorschlag von `AGENT_004` folgt und nur `[mounts].extra_ro`
+/// ergänzt, landet hier: Die Datei ist drinnen unter demselben Pfad da, und
+/// `execvp` sucht sie nie, weil ihr Verzeichnis nicht im Suchpfad der Sandbox
+/// steht. Das ist entscheidbar — Suchpfad bekannt, Einhängungen bekannt — und
+/// deshalb kein Fall für das Schweigen.
+#[test]
+fn opencode_preflight_reports_a_mounted_directory_that_the_path_does_not_name() {
+    let adapter = OpenCodeAdapter::new();
+    let (mounted, keep) = bin_dir_with_opencode();
+
+    let ctx = context(Some("http://192.168.1.50:11434"))
+        .with_models(vec!["qwen3".to_owned()])
+        .with_host_path(Some(mounted.clone()))
+        // Eingehängt, aber der Suchpfad der Sandbox nennt nur `/usr/bin`.
+        .with_sandbox_view(SandboxView::same_path(
+            vec![PathBuf::from(&mounted)],
+            Vec::new(),
+        ))
+        .with_sandbox_path(Some(OsString::from("/usr/local/bin:/usr/bin")));
+
+    let agent_004 = adapter
+        .preflight(&ctx)
+        .into_iter()
+        .find(|diagnostic| diagnostic.code.as_str() == "AGENT_004")
+        .expect("mounted but not on the search path is a finding");
+    assert_eq!(agent_004.severity, Severity::Blocking);
+    assert!(
+        agent_004.why.contains("does not name"),
+        "the finding says what is missing: {}",
+        agent_004.why
+    );
+    assert!(
+        matches!(
+            agent_004.fix,
+            Some(humanitl_core::FixAction::ChangeSetting { ref key, .. }) if key == "sandbox.env.PATH"
+        ),
+        "the way out is the search path, not another mount: {:?}",
+        agent_004.fix
+    );
+
+    // Ohne `[env].PATH` gilt die Vorgabe der C-Bibliothek. Der Vorschlag wird
+    // kopiert und eingetragen: Er trägt den nackten Pfad, nicht den Satz, mit
+    // dem der Befund ihn erklärt.
+    let without_a_path = context(Some("http://192.168.1.50:11434"))
+        .with_models(vec!["qwen3".to_owned()])
+        .with_host_path(Some(mounted.clone()))
+        .with_sandbox_view(SandboxView::same_path(
+            vec![PathBuf::from(&mounted)],
+            Vec::new(),
+        ));
+    let finding = adapter
+        .preflight(&without_a_path)
+        .into_iter()
+        .find(|diagnostic| diagnostic.code.as_str() == "AGENT_004")
+        .expect("the default search path names the directory just as little");
+    let Some(humanitl_core::FixAction::ChangeSetting { value, .. }) = finding.fix else {
+        panic!("the way out is a setting: {:?}", finding.fix);
+    };
+    assert_eq!(
+        value,
+        format!("{}:/bin:/usr/bin", Path::new(&mounted).display()),
+        "the value is a PATH and nothing else"
+    );
     drop(keep);
 }
 

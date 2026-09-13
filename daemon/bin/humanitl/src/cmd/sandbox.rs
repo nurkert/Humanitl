@@ -47,7 +47,7 @@ use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_sandbox::{
     AdapterRegistry, AgentContext, BwrapBackend, CheckResult, INTERRUPT_GRACE, LaunchInputs,
     MIN_BWRAP_VERSION, MountPolicy, SANDBOX_SHELL, SandboxBackend, SandboxFile, SandboxHandle,
-    SandboxProfile, SessionContext, StdioMode, shell_line,
+    SandboxProfile, SandboxView, SessionContext, StdioMode, shell_line,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -596,6 +596,40 @@ struct AgentContribution {
 /// Befund verhindert den Start; alles Darunter wird angezeigt, und der Start
 /// läuft weiter.
 ///
+/// Trägt in den Kontext ein, was die Sandbox vom Dateibaum sieht.
+///
+/// Die Sicht des Profils (`SandboxView::of_profile`: Einhängungen, Verweise,
+/// Überdeckungen), der wirksame Suchpfad und das Arbeitsverzeichnis
+/// (`[mounts].work.dst`). Ein nacktes Kommando löst der Agent in der Sandbox
+/// gegen diese Angaben auf, und die Vorprüfung muss dieselbe Frage stellen;
+/// ohne sie suchte sie nur im `PATH` des Hosts und verweigerte einen Start,
+/// der funktioniert (HUM-139).
+fn with_sandbox_view(ctx: AgentContext, config: &Config, profile: &SandboxProfile) -> AgentContext {
+    ctx.with_sandbox_view(SandboxView::of_profile(profile))
+        .with_sandbox_path(effective_sandbox_path(config, profile).map(OsString::from))
+        .with_work_dir_sandbox(profile.mounts.work.dst.clone())
+}
+
+/// Der Suchpfad, der in der Sandbox wirklich gilt.
+///
+/// `sandbox.env` gewinnt über das `[env]` des Profils, weil
+/// `SandboxProfile::effective_env` die Sitzungsumgebung zuletzt einträgt. Wer
+/// hier nur das Profil läse,
+/// prüfte gegen einen Pfad, den der Start gar nicht setzt: Ein
+/// `sandbox.env.PATH` auf ein eingehängtes Verzeichnis wäre ein Befund, obwohl
+/// es läuft, und einer auf ein leeres Verzeichnis bliebe unbemerkt, obwohl das
+/// `exec` mit 127 endet (HUM-139).
+fn effective_sandbox_path<'a>(
+    config: &'a Config,
+    profile: &'a SandboxProfile,
+) -> Option<&'a String> {
+    config
+        .sandbox
+        .env
+        .get("PATH")
+        .or_else(|| profile.env.get("PATH"))
+}
+
 /// Die Vorschau ([`Wiring::Preview`]) hält kein Befund auf. `sandbox argv` ist
 /// genau das Kommando, mit dem man vor der Installation nachsieht, was passieren
 /// wird; es wäre die falsche Stelle, um einen fehlenden Agenten zu melden. Die
@@ -663,18 +697,10 @@ fn agent_contribution(
         )
         // Nur `sandbox.env`: ein `XDG_CONFIG_HOME` im `[env]` des Profils
         // überschreibt der Adapter selbst und kann es deshalb nicht verlieren.
-        .with_config_home(config.sandbox.env.get("XDG_CONFIG_HOME").map(PathBuf::from))
-        // Nur-Lese-Einhängungen mit gleicher Quelle und gleichem Ziel: nur
-        // darunter findet der Agent sein eigenes Programm wieder.
-        .with_sandbox_ro_paths(
-            profile
-                .mounts
-                .ro
-                .iter()
-                .chain(&profile.mounts.extra_ro)
-                .cloned()
-                .collect(),
-        );
+        .with_config_home(config.sandbox.env.get("XDG_CONFIG_HOME").map(PathBuf::from));
+    // Was die Sandbox vom Dateibaum sieht, ihr Suchpfad und ihr
+    // Arbeitsverzeichnis.
+    let agent_ctx = with_sandbox_view(agent_ctx, config, profile);
     let agent_ctx = if command.is_empty() {
         agent_ctx.with_command_override(
             config
@@ -844,7 +870,7 @@ fn placeholder_failed(what: &str, error: &std::io::Error) -> Failure {
 /// Das Arbeitsverzeichnis steht nicht darunter. Der zweite Ort hängt am Ort
 /// des Binaries, nicht am Ort des Aufrufs; wer ein fremdes Repository klont
 /// und darin `humanitl` aufruft, bringt damit kein Profil mit.
-fn profile_path(ctx: &Context, name: &str) -> Result<PathBuf, Failure> {
+pub(crate) fn profile_path(ctx: &Context, name: &str) -> Result<PathBuf, Failure> {
     let file = format!("{name}.toml");
     let mut candidates = vec![ctx.paths.profiles_dir().join("sandbox").join(&file)];
     candidates.extend(tree_dirs().map(|dir| dir.join(&file)));
@@ -952,7 +978,94 @@ mod tests {
 
     use super::{
         CHECK_COMMAND, TESTS_DIR_DST, agent_command, exit_code_of, placeholder, rebind_source,
+        with_sandbox_view,
     };
+
+    /// Der Kontext des Adapters trägt, was das Profil über die Sandbox sagt
+    /// (HUM-139).
+    ///
+    /// Ohne diese Angaben löste die Vorprüfung ein nacktes Kommando gegen den
+    /// `PATH` des Hosts auf und verweigerte den Start eines Agenten, den die
+    /// Sandbox erreicht.
+    #[test]
+    fn the_agent_context_carries_the_view_of_the_profile() {
+        let profile = humanitl_sandbox::SandboxProfile::parse(
+            concat!(
+                "version = 1\n",
+                "name = \"test\"\n",
+                "[mounts]\n",
+                "symlinks = [[\"usr/bin\", \"/bin\"]]\n",
+                "extra_rw = [\"/opt/tools\"]\n",
+                "[mounts.work]\n",
+                "dst = \"/workspace\"\n",
+                "[env]\n",
+                "PATH = \"/usr/local/bin:/usr/bin:/bin\"\n",
+            ),
+            Path::new("<test>"),
+        )
+        .unwrap();
+
+        let ctx = with_sandbox_view(
+            humanitl_sandbox::AgentContext::new(
+                humanitl_core::SessionId::nil(),
+                std::path::PathBuf::from("/home/u/proj"),
+                humanitl_config::LlmConfig::default(),
+            ),
+            &Config::default(),
+            &profile,
+        );
+
+        assert_eq!(
+            ctx.sandbox_path,
+            Some(OsString::from("/usr/local/bin:/usr/bin:/bin"))
+        );
+        assert_eq!(
+            ctx.sandbox_view.symlinks,
+            vec![(
+                std::path::PathBuf::from("/bin"),
+                std::path::PathBuf::from("usr/bin")
+            )]
+        );
+        // Schreibbar eingehängt ist eingehängt: `extra_rw` gehört in die Sicht
+        // (HUM-139).
+        assert!(
+            ctx.sandbox_view
+                .mounts
+                .iter()
+                .any(|mount| mount.dst == Path::new("/opt/tools")),
+            "extra_rw belongs to what the sandbox sees: {:?}",
+            ctx.sandbox_view.mounts
+        );
+        assert_eq!(ctx.work_dir_sandbox, Path::new("/workspace"));
+    }
+
+    /// `sandbox.env` gewinnt über das Profil, und die Vorprüfung prüft gegen
+    /// den Pfad, den der Start wirklich setzt (HUM-139).
+    #[test]
+    fn the_sandbox_env_decides_the_search_path_of_the_precheck() {
+        let profile = humanitl_sandbox::SandboxProfile::parse(
+            "version = 1\nname = \"test\"\n[env]\nPATH = \"/usr/bin\"\n",
+            Path::new("<test>"),
+        )
+        .unwrap();
+        let mut config = Config::default();
+        config
+            .sandbox
+            .env
+            .insert("PATH".to_owned(), "/mounted/bin".to_owned());
+
+        let ctx = with_sandbox_view(
+            humanitl_sandbox::AgentContext::new(
+                humanitl_core::SessionId::nil(),
+                std::path::PathBuf::from("/home/u/proj"),
+                humanitl_config::LlmConfig::default(),
+            ),
+            &config,
+            &profile,
+        );
+
+        assert_eq!(ctx.sandbox_path, Some(OsString::from("/mounted/bin")));
+    }
 
     #[test]
     fn the_exit_code_is_the_one_of_the_command() {

@@ -2371,9 +2371,111 @@ Die Prüfung streichen -- sie hat einen echten Fall gefunden (ein Programm unter
 - Der bestehende Fall bleibt: Programm unter `$HOME`, nicht gemountet, kein Eintrag im Sandbox-PATH ⇒ `AGENT_004`.
 
 ### Akzeptanzkriterien
-- [ ] Ein Kommando, das über den Sandbox-PATH in einem gemounteten Verzeichnis liegt, erzeugt keinen Befund.
-- [ ] `AGENT_004` nennt bei einem echten Fehlschlag den PATH der Sandbox.
-- [ ] `make check` grün.
+- [x] Ein Kommando, das über den Sandbox-PATH in einem gemounteten Verzeichnis liegt, erzeugt keinen Befund. **Gemessen am 2026-09-13** mit `opencode_preflight_accepts_a_command_on_the_sandbox_path` und `opencode_preflight_accepts_a_bare_override_on_the_sandbox_path` (`daemon/crates/sandbox/tests/opencode_adapter.rs`): `preflight` liefert je 0 Befunde, obwohl auf dem Host ein zweites, nicht eingehängtes `opencode` zuerst käme. Mutationsproben: früher Rücksprung in `command_preflight` gestrichen — rot mit `AGENT_004`; die Suche auf das Standardkommando beschränkt, sodass `agent.command` sie nicht mehr benutzt — rot mit `AGENT_002`.
+- [x] `AGENT_004` nennt bei einem echten Fehlschlag den PATH der Sandbox. **Gemessen am 2026-09-13** mit `opencode_preflight_reports_a_sandbox_path_entry_without_a_mount`: `why` enthält den vollständigen PATH der Sandbox und den Pfad auf dem Host, `severity` ist `Blocking`, `fix` und `docs` sind gesetzt. Mutationsprobe: den PATH aus `why` gestrichen — rot. `AGENT_001` nennt ihn ebenfalls (`opencode_preflight_missing_binary`, eigene Mutationsprobe).
+- [ ] `make check` grün. **Offen:** gemessen sind `cargo build --workspace --all-targets`, `cargo test -p humanitl-sandbox -p humanitl` (356 + 248 Tests, 0 rot), `cargo clippy -p humanitl-sandbox -p humanitl --all-targets -- -D warnings`, `RUSTDOCFLAGS=-D warnings cargo doc -p humanitl-sandbox`, `rustfmt --check` über die sieben geänderten Dateien, `tools/check-deps.sh`, `scripts/ci/lint-docs.sh`, `scripts/ci/lint-no-string-errors.sh` und `tools/check_coupling.py`; der ganze Lauf inklusive Flutter steht noch aus.
+
+### Wie die Vorprüfung auflöst (Messungen vom 2026-09-13)
+Drei Review-Runden haben sich an dieser Stelle widersprochen; entschieden wurde
+mit `bwrap`, einem Projektbaum als `/work` und `env` als Testprogramm.
+
+| Messung | Ergebnis |
+|---|---|
+| `bwrap … --chdir /work … -- /usr/bin/pwd` | `/work` |
+| `--setenv PATH bin`, Datei in `<work>/bin/opencode` | startet `/work/bin/opencode` |
+| `--setenv PATH :/usr/bin`, Datei in `<work>/opencode` | startet `/work/opencode` |
+| `env -i PATH=bin env prog` auf dem Host, `prog` in `./bin` | startet `./bin/prog` (glibc `execvp`) |
+| Verweis in der Einhängung auf eine Datei außerhalb | `exec` endet mit 127 |
+| Kette Einhängung → außerhalb → Einhängung | `readlink -f` endet drinnen, `exec` endet mit 127 |
+| `--symlink usr/bin /bin`, `--setenv PATH /bin` | startet das Programm aus `/usr/bin` |
+
+**Das Modell rechnet in Pfaden der Sandbox** (`SandboxView`, `Mount { src, dst }`).
+Ein Verweis trägt den Text seines Ziels, und den liest der Kern drinnen: `/work`
+gibt es dort, den Host-Pfad des Projektbaums nicht. Aufgelöst wird Stück für
+Stück, `..` wirkt beim Gehen und nicht vorher, und der zurückgegebene Pfad ist
+der aufgelöste Ort auf dem Host — nur den kann der Aufrufer selbst anfassen.
+
+### Was das Modell beantwortet und was es offen lässt
+Beantwortet, jeweils mit Test und Mutationsprobe:
+
+| Fall | Antwort |
+|---|---|
+| Nackter Name im Sandbox-PATH unter einer Einhängung | erreichbar, kein Befund |
+| Einhängung aus `[mounts].extra_rw` | zählt wie jede andere |
+| Verzeichnis eingehängt, aber nicht im Sandbox-PATH | `AGENT_004` mit `sandbox.env.PATH` als Weg hinaus |
+| Ort unter einem tmpfs oder einer Maske (`/work/.direnv`, `/work/.envrc`) | nicht erreichbar |
+| Profil ohne `[env].PATH` | Vorgabe der C-Bibliothek, gemessen `/bin:/usr/bin` |
+| Eintrag, den keine Einhängung deckt | kein Treffer; `AGENT_004` bleibt möglich |
+| Relativer oder leerer Eintrag | gegen `[mounts].work.dst` aufgelöst |
+| Absoluter Eintrag über einen Verweis des Profils (`/bin`) | erreichbar |
+| Relatives Kommando (`./bin/opencode`) | im Projektbaum gesucht |
+| Verweis aus der Einhängung heraus, auch über mehrere Schritte | nicht erreichbar |
+| Verweis oberhalb einer Einhängung (`/home` auf `/var/home`) | zählt nicht, Einhängung bleibt erreichbar |
+| Verweis im Projektbaum auf `/work/…` | erreichbar; auf den Host-Pfad desselben Baums: nicht |
+| `..` hinter einem Verweis | wie im Kern, nach dem Verweis |
+| Datei ohne Ausführungsrecht | `AGENT_002`, nicht `AGENT_001` |
+| `sandbox.env.PATH` | gewinnt über `[env].PATH` des Profils |
+
+Bewusst **stumm**, weil ein Befund einen Beleg braucht
+(`backlog/CONVENTIONS.md` 4.13) und ein falscher Block schlimmer ist als ein
+später sichtbarer Fehlschlag (HUM-137 meldet ihn mit `126`/`127`):
+
+- Ein Verzeichnis oder ein Verweis, den dieser Prozess nicht lesen darf
+  (`Reach::Unknown`); ebenso eine Kette, die den Deckel von 40 Verweisen reißt.
+- Ein Suchpfad der Sandbox, den der Aufrufer nicht hereingereicht hat: dann
+  gilt die Vorgabe der C-Bibliothek, und was sie nicht findet, geht den alten
+  Weg über den Host.
+- Was die Sandbox aus Quellen bekommt, die kein Pfad des Hosts sind: der
+  Inhalt der tmpfs, die `--ro-bind-data`-Dateien des Adapters, `/proc`, `/dev`,
+  der Proxy-Socket, die CA, der Shim. Ein Kommando, das dort läge, meldet die
+  Vorprüfung nicht als fehlend, sondern gar nicht — sie sucht nur, was sie
+  kennt. Die **Orte** dieser Überdeckungen kennt sie dagegen: Ein tmpfs über
+  `/work/.direnv` macht alles darunter unerreichbar, und genau das sagt sie.
+- Ein Wechsel des Dateibaums zwischen Vorprüfung und Start. Die Prüfung ist
+  eine Aussage über den Augenblick, in dem sie läuft.
+
+### Wer wobei recht hatte
+Codex hatte recht mit den relativen und leeren Einträgen, mit der Kette über
+zwei Verweise, mit den Verweisen des Profils im Kontext, mit `..` vor der
+Auflösung, mit dem wirksamen `PATH` aus `sandbox.env` und mit den
+Sandbox-Koordinaten für `/work`. Antigravity hatte recht mit dem Verweis aus
+der Einhängung heraus, mit den unkanonisierten Wurzeln (gelöst, indem gar nicht
+mehr kanonisiert wird), mit `/bin`, mit der Reihenfolge im Doctor, mit dem
+zurückgegebenen Pfad, mit `AGENT_001` statt `AGENT_002` und mit zwei Tests, die
+aus einem anderen Grund grün waren als ihrem Namen nach. Nicht übernommen wurde
+Antigravitys Schluss, ein unbekannter Host-PATH mache das Fehlen des Kommandos
+sicher; beide Reviewer haben dieser Ablehnung danach zugestimmt.
+
+### Offene Punkte
+
+**Der Doctor des Daemons fragt weiter zuerst den Host.** Beim Merge am 2026-09-13 verdrahtet, was ohne Bedeutungsfrage ging: `daemon/crates/ipc/src/sandbox.rs` baut die Sicht jetzt aus dem Profil (`SandboxView::of_profile`), nimmt den wirksamen Suchpfad (`sandbox.env` vor `[env]`) und kennt `[mounts].work.dst`; die Übergangsform `with_sandbox_ro_paths` ist damit ohne Aufrufer und entfernt. Nicht verdrahtet ist `Probe::with_sandbox` im Daemon (`daemon/crates/ipc/src/server.rs`, `DoctorSetup`): `DoctorSetup` trägt kein Profil, und die Profilsuche liegt als Methode an `SandboxService`. Das ist nicht nur eine fehlende Zeile — es müsste entschieden werden, welches Profil der Doctor meint, wenn gerade keine Sitzung läuft. Diese Frage gehört in ein Issue, das sie entscheiden darf, nicht in einen Merge. Bis dahin antwortet der Doctor des Daemons für einen Agenten, der nur über den Suchpfad der Sandbox erreichbar ist, anders als die Vorprüfung; der Doctor der Kommandozeile ist verdrahtet und antwortet richtig.
+
+*Eine Verdrahtung fehlt im Daemon.** `daemon/crates/ipc/src/sandbox.rs` gehört
+gerade einem anderen Issue; dort braucht der Aufbau des `AgentContext` neben
+`.with_sandbox_ro_paths(…)` dasselbe wie
+`daemon/bin/humanitl/src/cmd/sandbox.rs` (`with_sandbox_view`): den wirksamen
+Suchpfad (`config.sandbox.env` vor `profile.env`), die Verweise des Profils und
+`[mounts].work.dst`.
+
+**Der Doctor des Daemons kennt sein Profil nicht.** `DoctorSetup`
+(`daemon/crates/ipc/src/server.rs`) wird aus der Konfiguration gebaut, und die
+Suche nach der Profildatei liegt als private Methode in
+`daemon/crates/ipc/src/sandbox.rs`. Damit `Probe::with_sandbox` auch dort
+gesetzt werden kann, muss diese Suche erreichbar werden; nachbauen wäre eine
+zweite Kopie einer Suchreihenfolge, die es nur einmal geben darf. Der lokale
+Doctor (`humanitl doctor` ohne Daemon) ist verdrahtet.
+
+**`docs/DIAGNOSTICS.md`** beschreibt `AGENT_004` noch host-seitig; die Datei
+gehört gerade einem anderen Issue. Der Satz, der dort hingehört, steht im
+Bericht zu diesem Issue.
+
+**`AGENT_002` aus der Sandbox-Suche bleibt eine Warnung**, obwohl der
+Fehlschlag feststeht (die Datei liegt im Suchpfad, ist nicht ausführbar, und
+`exec` endet mit 126). Zwei Gründe: Der Registereintrag in
+`daemon/crates/core-types/src/diagnostics/codes.rs` sagt „die Sandbox startet
+trotzdem", und die Sitzung ist auch ohne Agenten gültig — ein Mensch startet
+darin etwas anderes (Nicht-Ziel von HUM-137). Den Exit-Code meldet HUM-137 mit
+einem eigenen Befund. Wer das ändert, ändert den Registereintrag mit.
 
 ### Fallstricke
 - Der PATH der Sandbox kann Verzeichnisse nennen, die kein Mount abdeckt; die dürfen nicht als Treffer zählen, sonst verschwindet der Befund, den HUM-135 gebaut hat.

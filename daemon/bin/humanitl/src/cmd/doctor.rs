@@ -237,9 +237,16 @@ async fn local(ctx: &Context, config: &humanitl_config::Config) -> v1::DoctorRep
     // `async fn` gehört das in einen Blocking-Thread, auch in einem Prozess,
     // der sonst nichts tut: Sonst stünde die Laufzeit still, solange eine
     // Probe an ihrer Frist hängt.
+    // Was die Sandbox vom Dateibaum sieht und welchen Suchpfad sie hat. Ohne
+    // diese Angaben suchte der Doctor den Agenten nur im `PATH` des Hosts und
+    // meldete `DOCTOR_007`, wo die Vorprüfung des Adapters schweigt, weil das
+    // Kommando in der Sandbox erreichbar ist (HUM-139). Fehlt das Profil, ist
+    // die Antwort dieselbe wie vorher: eine Aussage über den Host.
+    let (view, sandbox_path) = sandbox_view(ctx, config);
     let facts = tokio::task::spawn_blocking(move || {
         Probe::new(&env)
             .with_agent(adapter, command)
+            .with_sandbox(view, sandbox_path)
             .collect(untried(), llm)
     })
     .await;
@@ -247,6 +254,33 @@ async fn local(ctx: &Context, config: &humanitl_config::Config) -> v1::DoctorRep
         return v1::DoctorReport::default();
     };
     convert::doctor_report_to_proto(&doctor::run(&facts))
+}
+
+/// Die Sicht der Sandbox auf den Dateibaum und ihr Suchpfad, aus dem Profil.
+///
+/// Ein leeres Ergebnis heißt „unbekannt": Lässt sich das Profil nicht lesen,
+/// sagt der Doctor weiter nur, was auf dem Host liegt, statt etwas über eine
+/// Sandbox zu behaupten, die er nicht kennt.
+fn sandbox_view(
+    ctx: &Context,
+    config: &humanitl_config::Config,
+) -> (humanitl_sandbox::SandboxView, Option<String>) {
+    let policy = humanitl_sandbox::MountPolicy::from_paths(&ctx.paths);
+    let Ok(path) = crate::cmd::sandbox::profile_path(ctx, &config.sandbox.profile) else {
+        return (humanitl_sandbox::SandboxView::default(), None);
+    };
+    let Ok(profile) = humanitl_sandbox::SandboxProfile::load_validated(&path, &policy) else {
+        return (humanitl_sandbox::SandboxView::default(), None);
+    };
+    // `sandbox.env` gewinnt über das `[env]` des Profils, genau wie beim
+    // Start (`SandboxProfile::effective_env`).
+    let path = config
+        .sandbox
+        .env
+        .get("PATH")
+        .or_else(|| profile.env.get("PATH"))
+        .cloned();
+    (humanitl_sandbox::SandboxView::of_profile(&profile), path)
 }
 
 /// Die Tatsache, die beide Zeilen aus dem Client später ersetzen.
