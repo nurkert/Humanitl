@@ -204,6 +204,7 @@ void main() {
                         ),
                       ],
                       findings: const <Finding>[],
+                      pending: false,
                     ),
                   ),
                 ],

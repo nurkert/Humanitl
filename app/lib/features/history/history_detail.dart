@@ -60,6 +60,61 @@ class _HistoryDetailState extends ConsumerState<HistoryDetail> {
     if (oldWidget.flow.id != widget.flow.id) {
       _tab = HistoryDetailTab.request;
       _copied = false;
+      return;
+    }
+    // Das Detail wird je Auswahl einmal geholt, die Zeile darüber lebt. Wird
+    // sie zum Datensatz, ist der Abzug von vorhin überholt: der Recorder hat
+    // Antwort und bearbeitete Anfrage geschrieben, und ohne dieses Nachfassen
+    // bliebe unter einem fertigen Kopf ein Skelett stehen, das nie durch das
+    // ersetzt wird, was es beschrieben hat (`docs/UX.md` 2.11). Gefragt wird
+    // `isTerminal` und nicht `responseIsFinal`: ein Flow, der oben scheitert,
+    // ist schon `failed`, wenn er `recorded` wird, und der Schritt nach
+    // `failed` allein brächte nur den laufenden Stand ohne Datensatz.
+    //
+    // Die bearbeitete Anfrage steht früher fest, aber nicht so früh, wie die
+    // Zeile es meldet. Der Daemon veröffentlicht `Decided` zuerst; erst
+    // danach übergibt der Proxy `Dir::RequestEdited` dem Schreiber
+    // (`daemon/crates/proxy/src/handler.rs`), und der schreibt in Stapeln
+    // alle 50 ms (`daemon/crates/recorder/src/writer.rs`, `BATCH_INTERVAL`).
+    // Ein `GetFlow` gleich nach `Decided` kann deshalb noch ohne sie
+    // zurückkommen. Nachgefasst wird darum bei jedem Schritt, den der Flow
+    // danach noch macht — `forwarded`, `responded` —, solange die
+    // bearbeitete Anfrage fehlt. Das verkleinert das Fenster, schließt es
+    // aber nicht: fallen beide Schritte in dieselben 50 ms, wartet der Tab
+    // bis `recorded`. Schließen kann es nur der Daemon, der sie für einen
+    // laufenden Flow unabhängig vom Schreiber ausliefert (offen nach HUM-154
+    // in `backlog/sprint-4.md`).
+    //
+    // Nachgefasst wird nur, was noch nicht da ist. Das Blatt kann den
+    // Datensatz schon geholt haben, bevor es seine Zeile weiterreicht (siehe
+    // `_refreshSheetFlow` im Bildschirm); ein zweites `GetFlow` für dasselbe
+    // Ende wäre eine Frage, deren Antwort schon auf dem Tisch liegt.
+    final FlowDetail? held = ref
+        .read(historyDetailProvider(widget.flow.id))
+        .value;
+    final bool recordWritten =
+        !oldWidget.flow.state.isTerminal &&
+        widget.flow.state.isTerminal &&
+        !(held?.summary.state.isTerminal ?? false);
+    final bool editedArrived =
+        oldWidget.flow.edited != widget.flow.edited &&
+        held?.editedRequest == null;
+    final bool editedStillMissing =
+        widget.flow.edited &&
+        held?.editedRequest == null &&
+        oldWidget.flow.state != widget.flow.state &&
+        (widget.flow.state == FlowState.forwarded ||
+            widget.flow.state == FlowState.responded);
+    if (recordWritten || editedArrived || editedStillMissing) {
+      // Nach dem Bild, nicht mittendrin: `didUpdateWidget` läuft innerhalb
+      // eines Baus, und ein Provider, der dort ungültig gemacht wird, ruft
+      // `markNeedsBuild` während desselben Baus.
+      final FlowId id = widget.flow.id;
+      WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+        if (mounted) {
+          ref.invalidate(historyDetailProvider(id));
+        }
+      });
     }
   }
 
@@ -112,6 +167,9 @@ class _HistoryDetailState extends ConsumerState<HistoryDetail> {
             child: switch (detail) {
               AsyncData<FlowDetail>(:final FlowDetail value) => _TabBody(
                 tab: _tab,
+                // Die lebende Zeile, nicht die Zusammenfassung im Abzug: nur
+                // sie weiß, ob gerade noch etwas ankommt (HUM-154).
+                flow: flow,
                 detail: value,
                 copied: _copied,
                 onCopy: (String text) {
@@ -313,12 +371,17 @@ class _Fact extends StatelessWidget {
 class _TabBody extends ConsumerWidget {
   const _TabBody({
     required this.tab,
+    required this.flow,
     required this.detail,
     required this.copied,
     required this.onCopy,
   });
 
   final HistoryDetailTab tab;
+
+  /// Die Zeile, wie sie jetzt steht; sie folgt den Ereignissen des Daemons.
+  final Flow flow;
+
   final FlowDetail detail;
   final bool copied;
   final ValueChanged<String> onCopy;
@@ -346,6 +409,33 @@ class _TabBody extends ConsumerWidget {
     };
     final bool missing =
         tab == HistoryDetailTab.response && detail.response == null;
+    // Solange am Flow noch etwas geschrieben werden kann, hat eine fehlende
+    // Seite nichts zu bedeuten. Das ist Warten, keine Aussage
+    // (`docs/UX.md` 2.11) — aber die beiden Seiten warten auf Verschiedenes,
+    // und deshalb stehen hier zwei Fragen:
+    //
+    // * Die Antwort wartet, solange noch Bytes kommen können.
+    //   `responseIsFinal` ist genau die Frage, die die Größe im Kopf stellt,
+    //   und sie wird an derselben Stelle gestellt, damit Kopf und Abschnitt
+    //   nicht auseinanderlaufen.
+    // * Die bearbeitete Anfrage wartet, solange sie fehlt und der Datensatz
+    //   nicht geschrieben ist: ein `GetFlow` auf einen laufenden Flow trägt
+    //   sie erst, wenn der Schreiber sie übernommen hat, bis dahin kann dort
+    //   `None` stehen; sicher da ist sie erst bei `recorded`. Gefragt wird
+    //   also `isTerminal`, und das ist allein `recorded`. `failed` ist kein Ende
+    //   (`daemon/crates/core-types/src/flow.rs`: `Failed` + `Record` =
+    //   `Recorded`, und `fail_closed` bringt jeden Zustand dorthin), also
+    //   behauptet ein oben gescheiterter Flow hier nichts über eine Anfrage,
+    //   die jemand von Hand bearbeitet hat.
+    //
+    // Die Anfrage selbst ist nie „noch unterwegs": ohne sie gäbe es den Flow
+    // nicht.
+    final bool pending = switch (tab) {
+      HistoryDetailTab.request => false,
+      HistoryDetailTab.response => !responseIsFinal(flow),
+      HistoryDetailTab.edited =>
+        detail.editedRequest == null && !flow.state.isTerminal,
+    };
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         return Column(
@@ -362,6 +452,7 @@ class _TabBody extends ConsumerWidget {
                 emptyLabel: missing
                     ? l10n.historyDetailNoResponse
                     : l10n.historyDetailNoHeaders,
+                pending: pending,
               ),
             ),
             const HHairline(),
@@ -371,6 +462,7 @@ class _TabBody extends ConsumerWidget {
                 reference: body,
                 headers: headers,
                 findings: findings,
+                pending: pending,
               ),
             ),
           ],
@@ -387,12 +479,23 @@ class _Headers extends StatefulWidget {
     required this.copied,
     required this.onCopy,
     required this.emptyLabel,
+    required this.pending,
   });
 
   final List<Header> headers;
   final bool copied;
   final ValueChanged<String> onCopy;
+
+  /// Was an der Stelle der Kopfzeilen steht, wenn keine da sind und keine
+  /// mehr kommen.
   final String emptyLabel;
+
+  /// True, solange diese Seite noch einläuft; siehe [BodyView.pending].
+  ///
+  /// Dann steht statt [emptyLabel] ein Skelett: auf Warten antwortet dieser
+  /// Bildschirm mit der Skizze der Zeilen, die gleich kommen, nicht mit einem
+  /// Satz über etwas, das noch niemand weiß (`docs/UX.md` 2.11).
+  final bool pending;
 
   @override
   State<_Headers> createState() => _HeadersState();
@@ -425,6 +528,22 @@ class _HeadersState extends State<_Headers> {
           return _title(tokens, l10n, sorted);
         }
         if (sorted.isEmpty) {
+          if (widget.pending) {
+            // Dasselbe Warten wie unter den Tabs, mit derselben Schwelle: ein
+            // Skelett, das kürzer stünde als eine Reaktionszeit, wäre ein
+            // Flackern (`docs/UX.md` 2.11). Die Höhe steht fest, weil das
+            // Skelett selbst eine Liste ist und in einer Liste keine
+            // unbegrenzte Höhe bekommen darf.
+            return const SizedBox(
+              height: historyBodyRowHeight * 4,
+              child: HistoryWaitGate(
+                child: _BodySkeleton(
+                  key: Key('history-detail-headers-pending'),
+                  lines: 4,
+                ),
+              ),
+            );
+          }
           return Padding(
             padding: EdgeInsets.symmetric(horizontal: tokens.spacing.x3),
             child: Text(
@@ -511,12 +630,17 @@ class _HeadersState extends State<_Headers> {
 /// HUM-116). Die Bytes kommen über den einen Rumpf-Provider in `core`, mit
 /// seinem Zwischenspeicher und seinen Grenzen; dieser Bildschirm fügt keine
 /// eigenen hinzu, auch kein zweites `Isolate.run`.
+///
+/// Auch der Satz über einen Rumpf, der nichts enthält, kommt von dort: das
+/// Detail beschriftet ihn seit HUM-154 nicht mehr selbst. Was es beisteuert,
+/// ist [pending] — nur es weiß, ob eine Seite noch einläuft.
 class _Body extends StatelessWidget {
   const _Body({
     required this.flowId,
     required this.reference,
     required this.headers,
     required this.findings,
+    required this.pending,
   });
 
   final FlowId flowId;
@@ -524,22 +648,12 @@ class _Body extends StatelessWidget {
   final List<Header> headers;
   final List<Finding> findings;
 
+  /// True, solange diese Seite noch ankommt; siehe [BodyView.pending].
+  final bool pending;
+
   @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
-    final BodyRef? reference = this.reference;
-    if (reference == null || reference.isEmpty) {
-      // Eine Aussage über eine abgeschlossene Anfrage, keine Lücke: das
-      // Detail ist da, und aufgezeichnet wurde nichts. Die Rumpf-Ansicht
-      // wartet bei `null` auf ein Detail, das hier längst angekommen ist.
-      return Padding(
-        padding: EdgeInsets.all(tokens.spacing.x3),
-        child: Text(
-          context.l10n.historyDetailNoBody,
-          style: tokens.typography.ui13.tinted(tokens.colors.fg1),
-        ),
-      );
-    }
     return SingleChildScrollView(
       padding: EdgeInsets.all(tokens.spacing.x3),
       child: BodyView(
@@ -547,6 +661,7 @@ class _Body extends StatelessWidget {
         body: reference,
         headers: headers,
         findings: findings,
+        pending: pending,
       ),
     );
   }
@@ -598,7 +713,7 @@ class _HistoryWaitGateState extends State<HistoryWaitGate> {
 
 /// Hairlines in the body density while the body is on its way.
 class _BodySkeleton extends StatelessWidget {
-  const _BodySkeleton({required this.lines});
+  const _BodySkeleton({required this.lines, super.key});
 
   final int lines;
 

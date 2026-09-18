@@ -195,7 +195,7 @@ String formatHistoryCompactSize(int bytes) {
 /// has not seen the response yet.
 String formatHistorySizePair(Flow flow, {required String unknown}) {
   final String request = formatHistoryCompactSize(flow.requestSize);
-  final bool hasResponse = flow.responseSize > 0 || _responseIsFinal(flow);
+  final bool hasResponse = flow.responseSize > 0 || responseIsFinal(flow);
   final String response = hasResponse
       ? formatHistoryCompactSize(flow.responseSize)
       : unknown;
@@ -207,8 +207,14 @@ String formatHistorySizePair(Flow flow, {required String unknown}) {
 /// Only [FlowState.recorded] and [FlowState.failed]. `responded` means the
 /// head came back and the body is still running in: response chunks keep
 /// raising the size after it, so a zero there would be a claim about a
-/// number nobody has yet (`backlog/CONVENTIONS.md` 4.13).
-bool _responseIsFinal(Flow flow) =>
+/// number nobody has yet (`backlog/CONVENTIONS.md` 4.13). Every other state —
+/// received, held, decided — can still be given an answer.
+///
+/// The size in the head and the body section below it ask this one question
+/// in this one place. Two predicates would let the head print an em dash for
+/// "still on its way" while the section claims zero bytes about the same flow
+/// (HUM-154).
+bool responseIsFinal(Flow flow) =>
     flow.state == FlowState.recorded || flow.state == FlowState.failed;
 
 /// True while the answer is still coming in.

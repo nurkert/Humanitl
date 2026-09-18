@@ -83,6 +83,16 @@ class RequestCard extends ConsumerWidget {
                         body: request?.body,
                         headers: request?.headers ?? const <Header>[],
                         findings: detail.value?.findings ?? const <Finding>[],
+                        // Solange kein Detail da ist, ist der fehlende Rumpf
+                        // Warten und keine Aussage (HUM-154). Gefragt wird
+                        // nach dem Wert, nicht nach `isLoading`: riverpod
+                        // wiederholt einen gescheiterten Provider von selbst,
+                        // und die Karte spränge sonst zwischen Skelett und
+                        // „kein Rumpf" hin und her. Ein Detail, das dauerhaft
+                        // scheitert, wartet hier weiter, statt zu behaupten;
+                        // die Meldung dazu gehört an die Stelle des Skeletts
+                        // und fehlt noch, so wie den Abschnitten daneben.
+                        pending: detail.value == null,
                       ),
                     ],
                   ),
