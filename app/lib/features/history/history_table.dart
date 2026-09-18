@@ -27,6 +27,7 @@ import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/domain/domain.dart';
+import '../../core/ui/edited_badge.dart';
 import '../../core/ui/focus_ring.dart';
 import '../../core/ui/hover_label.dart';
 import '../../core/ui/middle_ellipsis.dart';
@@ -531,18 +532,15 @@ class _Cell extends StatelessWidget {
         if (!flow.edited) {
           return const SizedBox.shrink();
         }
+        // Der Chip der Warteschlange und des Details, nicht mehr der
+        // Akzentpunkt: Ein Punkt sagte „bearbeitet“ nur dem, der die Spalte
+        // kennt (HUM-047). Der Screenreader hört weiter das eine Wort.
         return Semantics(
           label: l10n.historyEditedMark,
-          child: Align(
-            child: SizedBox.square(
-              dimension: HSpace.x1,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: tokens.colors.accent,
-                  shape: BoxShape.circle,
-                ),
-              ),
-            ),
+          excludeSemantics: true,
+          child: const Align(
+            alignment: Alignment.centerLeft,
+            child: EditedBadge(),
           ),
         );
     }

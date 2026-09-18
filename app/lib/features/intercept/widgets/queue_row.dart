@@ -21,6 +21,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
 import '../../../core/text/format.dart';
+import '../../../core/ui/edited_badge.dart';
 import '../../../core/ui/flow_visual_state.dart';
 import '../../../core/ui/hold_to_confirm.dart';
 import '../../../core/ui/middle_ellipsis.dart';
@@ -237,6 +238,12 @@ class _ConfirmationStrip extends StatelessWidget {
           style: tokens.typography.mono12.tinted(tokens.colors.fg0),
         ),
       ),
+      // Farbe und Stift-Glyph sagen „bearbeitet“ nur dem, der sie kennt; der
+      // Chip sagt es in Worten, derselbe wie in Historie und Detail
+      // (HUM-047). Der Screenreader hört es schon im Zustand der Zeile.
+      trailing: flow.edited
+          ? const ExcludeSemantics(child: EditedBadge())
+          : null,
     );
   }
 }
