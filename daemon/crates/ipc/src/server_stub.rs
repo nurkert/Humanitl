@@ -209,7 +209,9 @@ pub fn grpc_code(code: DiagnosticCode) -> Code {
         // Eine Regel, die der Client so geschickt hat, wie die Engine sie
         // nicht annimmt, oder eine Einstellung, die `SetConfig` nicht schreibt
         // (HUM-151): dasselbe Urteil wie bei einer unlesbaren Anfrage.
-        "RULES_001" | "RULES_003" | "RULES_005" | "RULES_006" | "RULES_007" | "CONFIG_014" => {
+        "RULES_001" | "RULES_003" | "RULES_005" | "RULES_006" | "RULES_007" | "CONFIG_014"
+        | "AUDIT_009" => {
+            // `AUDIT_009`: eine `Audit`-Anfrage, die so nicht gilt (HUM-156).
             Code::InvalidArgument
         }
         // Der Zustand verbietet es, nicht das Argument: die Regel ist

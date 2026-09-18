@@ -17,6 +17,8 @@
 //! - [`key`] der HMAC-Schlüssel, bis HUM-048 den Keyring bringt eine Datei
 //! - [`writer`] der eine Schreiber mit fsync-Politik, Sperre und Wiederaufnahme
 //! - [`verify`] die Prüfung mit jedem Grund, aus dem eine Kette bricht
+//! - [`query`] das Ende der Kette und Seiten ihrer Records, ohne Prüfung
+//! - [`export`] der Export als JSONL oder CSV, der nie etwas überschreibt
 //!
 //! Was die Kette beweist und was nicht, steht in `docs/SECURITY.md` unter „Was
 //! die Audit-Kette beweist". Kurz: Sie zeigt eine Änderung, Löschung oder
@@ -28,15 +30,19 @@
 #![deny(missing_docs)]
 
 pub mod canonical;
+pub mod export;
 pub mod key;
 pub mod kinds;
+pub mod query;
 pub mod record;
 pub mod verify;
 pub mod writer;
 
 pub use crate::canonical::{CanonicalError, canonical_json};
+pub use crate::export::{CSV_COLUMNS, ExportFormat};
 pub use crate::key::AuditKey;
 pub use crate::kinds::{KeyOrigin, RecordKind};
+pub use crate::query::{QueryFilter, TimeRange};
 pub use crate::record::{AuditRecord, GENESIS_PREV, NO_SESSION, RecordBody, format_ts, sha256_hex};
 pub use crate::verify::{AuditVerifier, BreakReason, VerifyReport, VerifyStatus, VerifyWarning};
 pub use crate::writer::{AnchorMirror, AuditHandle, AuditWriter, Head, WriterOptions};

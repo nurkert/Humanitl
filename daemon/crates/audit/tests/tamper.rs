@@ -255,6 +255,33 @@ fn a_broken_report_becomes_audit_001() {
     assert!(ten().verify().diagnostic(&chain.log).is_none());
 }
 
+/// Bis zum gemeldeten Ende geprüft, zählen Anker dahinter nicht: Sie gehören
+/// zu Records, die diese Prüfung noch nicht liest (HUM-156). Ohne Ende wären
+/// sie ein Bruch.
+#[test]
+fn anchors_behind_the_reported_end_do_not_count() {
+    let chain = ten();
+    let mut anchors = chain.anchors();
+    let end = chain.records().last().unwrap().body.seq;
+    anchors.push(humanitl_audit::Anchor {
+        seq: end + 1,
+        hash: "0".repeat(64),
+        ts: "2026-09-18T10:00:00.000000Z".to_owned(),
+    });
+    let until = AuditVerifier::verify_until(&chain.log, Some(&KEY), &anchors, Some(end)).unwrap();
+    assert_eq!(until.status, VerifyStatus::Ok);
+    let whole = AuditVerifier::verify(&chain.log, Some(&KEY), &anchors).unwrap();
+    assert_eq!(
+        whole.status,
+        broken(
+            end,
+            BreakReason::TruncatedBelowAnchor {
+                anchor_seq: end + 1
+            }
+        )
+    );
+}
+
 #[test]
 fn a_missing_log_with_anchors_is_truncated_to_nothing() {
     let chain = ten();
