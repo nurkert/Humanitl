@@ -32,6 +32,10 @@ const FlowId goldenNoteFlow = FlowId('018f0004-0000-7000-8000-000000000007');
 /// Hex-Ansicht (HUM-116). Zeile 15 des Szenarios, freigegeben, ohne Fund.
 const FlowId goldenHexFlow = FlowId('018f0004-0000-7000-8000-000000000010');
 
+/// Bearbeitet freigegeben (HUM-047): Zeile 6 des Szenarios, die Form
+/// `allowEdited` der Aufzeichnung.
+const FlowId goldenEditedFlow = FlowId('018f0004-0000-7000-8000-000000000006');
+
 /// A query that does not change.
 class FixedQuery extends HistoryQueryNotifier {
   /// Stays on [query].
@@ -132,6 +136,15 @@ void main() {
       fileName: 'history_detail_request_$name',
       constraints: window,
       builder: () => historyGolden(tokens: tokens, selected: goldenDetailFlow),
+    );
+
+    // Der Kopf eines bearbeitet hinausgegangenen Flusses: der Chip „Edited“
+    // neben dem Zustand, dazu der Reiter „Edited“ (HUM-047).
+    goldenTest(
+      'history_detail_edited_$name',
+      fileName: 'history_detail_edited_$name',
+      constraints: window,
+      builder: () => historyGolden(tokens: tokens, selected: goldenEditedFlow),
     );
 
     goldenTest(

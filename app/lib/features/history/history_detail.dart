@@ -18,6 +18,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/body/body_view.dart';
 import '../../core/domain/domain.dart';
 import '../../core/ipc/daemon_client.dart';
+import '../../core/ui/edited_badge.dart';
 import '../../core/ui/h_diagnostic_card.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
@@ -240,6 +241,24 @@ class _Head extends StatelessWidget {
                   tokens.stateTextColor(state),
                 ),
               ),
+              // Derselbe Chip wie in der Zeile darüber und in der
+              // Warteschlange (HUM-047). Er hängt an `edited` und nicht am
+              // Zustand: Eine bearbeitete Anfrage, deren Ziel danach
+              // scheiterte, steht als Fehler da und ging trotzdem bearbeitet
+              // hinaus.
+              //
+              // Für den Screenreader ist er stumm, in jedem Zustand: Das Wort
+              // steht schon im Zustand daneben („Allowed, edited“) und, auch
+              // nach einem Fehler des Ziels, in der Tatsache „Decision“
+              // darunter, die `historyDecisionLabelState` aus der Entscheidung
+              // und nicht aus dem Zustand liest. Ein drittes „Edited“ wäre nur
+              // Wiederholung.
+              if (flow.edited) ...<Widget>[
+                SizedBox(width: tokens.spacing.x2),
+                const ExcludeSemantics(
+                  child: EditedBadge(key: Key('history-detail-edited')),
+                ),
+              ],
             ],
           ),
           SizedBox(height: tokens.spacing.x1),

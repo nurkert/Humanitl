@@ -46,7 +46,7 @@ use humanitl_core::http::HeaderValue;
 use humanitl_core::{BodyRef, Diagnostic, HeaderMap, HeaderName, HttpRequest, Severity};
 
 use crate::findings::Scanner;
-use crate::upstream::host_header;
+use crate::upstream::{host_header, wire_content_length};
 
 /// Die Kopfzeilen, die eine Bearbeitung nicht mitbringen darf.
 ///
@@ -225,21 +225,15 @@ fn daemon_headers(edited: &HttpRequest, host: &str, body_len: usize) -> HeaderMa
     if let Ok(value) = HeaderValue::from_str(host) {
         headers.insert(HeaderName::from_static("host"), value);
     }
-    // Kein `content-length` für eine Anfrage ohne Rumpf, deren Methode nie
-    // einen hat: `GET / HTTP/1.1` mit `content-length: 0` ist zwar erlaubt,
-    // aber manche Server behandeln es als Rumpf-Ankündigung.
-    if body_len > 0 || carries_a_body(edited.method.as_str()) {
+    // Dieselbe Regel wie auf dem Draht (`upstream::build_outgoing`): kein
+    // `content-length` nur für `GET` und `HEAD` ohne Rumpf.
+    if let Some(length) = wire_content_length(edited.method.as_str(), body_len) {
         headers.insert(
             HeaderName::from_static("content-length"),
-            HeaderValue::from(body_len),
+            HeaderValue::from(length),
         );
     }
     headers
-}
-
-/// Wahr für jede Methode außer `GET` und `HEAD`.
-const fn carries_a_body(method: &str) -> bool {
-    !matches!(method.as_bytes(), b"GET" | b"HEAD")
 }
 
 #[cfg(test)]
