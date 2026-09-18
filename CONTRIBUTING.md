@@ -148,3 +148,60 @@ Dependencies point inward only; `make deps-lint` enforces it. The core crates
 carry no IO, no async and no protobuf. Every capability is an RPC first: the
 desktop application and the command line are thin clients of the same service.
 Details in `docs/ARCHITECTURE.md`.
+
+## Vorabversionen 0.0.x
+
+Bis zum ersten richtigen Release 0.1.0 gibt es Vorabversionen mit der Nummer
+0.0.N. Sie entstehen aus einem Tag und dem Workflow
+`.github/workflows/release.yml`. Das Release enthält das Paket
+`humanitl_0.0.N_amd64.deb`, das Archiv `humanitl-0.0.N-linux-x86_64.tar.gz`
+und `SHA256SUMS`. Es ist auf GitHub als Vorabversion markiert, nicht signiert
+und nicht für den produktiven Einsatz gedacht.
+
+So wird eine Vorabversion geschnitten:
+
+1. Auf GitHub nachsehen, dass der CI-Lauf des Commits auf `main` grün ist.
+   Am sichersten ist der jüngste Commit von `main`: `ci.yml` bricht den Lauf
+   eines älteren Commits ab, sobald ein neuerer kommt, und ein abgebrochener
+   Lauf zählt nicht als grün.
+2. Den Tag auf genau diesen Commit setzen und nur den Tag pushen:
+
+   ```sh
+   git fetch origin
+   git tag -a v0.0.3 -m "Humanitl 0.0.3" origin/main
+   git push origin v0.0.3
+   ```
+
+3. Den Lauf beobachten. Der Job `guard` bricht ab, wenn der Tag nicht die Form
+   `v0.0.N` hat, der Commit nicht auf `main` liegt oder sein CI-Lauf nicht mit
+   `success` endete; läuft CI noch, wartet er bis zu 45 Minuten. `check-deb`
+   installiert das Paket in einem frischen Ubuntu-24.04-Container, prüft es und
+   entfernt es wieder, und erst danach legt `release` das Release an.
+
+Ein Tag wird nie verschoben oder neu gesetzt. Schlägt ein Lauf fehl, wird der
+Fehler auf `main` behoben und die nächste Nummer getaggt; der misslungene Tag
+kann gelöscht werden, seine Nummer wird nicht wieder vergeben.
+
+Die Versionsnummer steht im Repository weiter als `0.0.0`. Der Workflow setzt
+sie nur in seinem eigenen Auscheckstand in `daemon/Cargo.toml` und
+`daemon/Cargo.lock` (`packaging/release/stamp-version.sh`) und übergibt sie
+der App mit `flutter build linux --build-name`. Dass `humanitl --version`,
+`humanitld --version` und die App dieselbe Nummer tragen, prüft der Lauf und
+scheitert sonst.
+
+**Probelauf.** Unter „Actions", Workflow „release", „Run workflow" mit einer
+Version wie `0.0.3` baut alles, prüft das Paket im Container und lädt die
+Dateien als Workflow-Artefakt `humanitl-dry-run-<commit>` hoch (ein Tag-Lauf
+nennt sein Artefakt `humanitl-release`), legt aber kein Release
+an. Der Probelauf darf auch einen Zweig bauen; dass der Commit nicht auf
+`main` liegt oder CI nicht grün ist, steht dann als Warnung im Lauf statt als
+Fehler. Die Schritte lassen sich lokal einzeln nachfahren, die Skripte liegen
+unter `packaging/release/` und `packaging/deb/`. Das Paket wird dabei nie auf
+dem eigenen Rechner installiert, sondern nur in einem Wegwerf-Container, so wie
+es `packaging/deb/check-install.sh` verlangt.
+
+**0.1.0 ist etwas anderes.** Der erste richtige Release folgt HUM-060 in
+`backlog/sprint-5.md`: eine `VERSION`-Datei als einzige Quelle aller
+Versionsstellen, `CHANGELOG.md`, minisign-Signaturen, AppImage und die
+Abnahme-Checkliste. Dieser Workflow reagiert nur auf `v0.0.*`; ein Tag
+`v0.1.0` löst hier nichts aus, bis HUM-060 den Workflow erweitert.

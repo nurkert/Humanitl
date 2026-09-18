@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Humanitl application icon. Drawn for Humanitl, GPL-3.0-only like the rest
+     of the project. The shape follows the tray icon of HUM-034: a rounded chip
+     in the held amber (HColors.held) on the darkest surface (HColors.bg0),
+     with an opening in the frame, the one place a request may pass. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <rect x="8" y="8" width="240" height="240" rx="48" fill="#0F1115"/>
+  <path d="M112 56 H84 A28 28 0 0 0 56 84 V172 A28 28 0 0 0 84 200 H172 A28 28 0 0 0 200 172 V84 A28 28 0 0 0 172 56 H144"
+        fill="none" stroke="#E0B24A" stroke-width="20" stroke-linecap="round"/>
+  <circle cx="128" cy="128" r="26" fill="#E0B24A"/>
+</svg>

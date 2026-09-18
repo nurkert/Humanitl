@@ -1,21 +1,49 @@
-# Release skeleton.
+# Vorabversionen 0.0.x: vom Tag auf einem gruenen `main`-Commit zum
+# GitHub-Release mit .deb, Archiv und Pruefsummen.
 #
-# The job graph is the deliverable, not the content: guard -> check -> package ->
-# draft-release. Packaging (HUM-053) and asset upload (HUM-060) fill in `package`
-# and hang files on the draft. Until then the workflow produces a draft release
-# without assets, which is honest about what exists.
+#   guard -> build -> check-deb -> release
 #
-# Every action is pinned to a commit SHA with the release tag as a trailing
-# comment, as in ci.yml.
+# guard      Tag hat die Form v0.0.N, der Commit liegt auf `main`, und der
+#            ci.yml-Lauf dieses Commits ist mit `success` beendet.
+# build      Version in den Auscheckstand stempeln, Release-Bau von humanitld,
+#            humanitl, humanitl-shim und der Flutter-App, `--version` pruefen,
+#            .deb und tar.gz bauen, SHA256SUMS, Release-Notes.
+# check-deb  Das .deb in einem frischen Ubuntu-24.04-Container installieren,
+#            pruefen, mit --purge entfernen; lintian ohne Fehler und Warnungen.
+# release    Nur fuer Tags: GitHub-Release, als Vorabversion markiert.
+#
+# `workflow_dispatch` ist der Probelauf: Er baut und prueft alles mit der
+# eingegebenen Version, laedt die Artefakte als Workflow-Artefakt hoch und
+# legt kein Release an. Wie man eine Vorabversion schneidet, steht in
+# CONTRIBUTING.md.
+#
+# Vorher stand hier das Geruest aus HUM-002 fuer alle `v*`-Tags (guard, make
+# check, leerer package-Schritt, Draft-Release ohne Dateien). Der Trigger ist
+# jetzt auf v0.0.* verengt: Ein Tag v0.1.0 loest hier nichts aus. 0.1.0 ist
+# HUM-060 (backlog/sprint-5.md) mit VERSION-Datei, Changelog, minisign und
+# AppImage; das Issue erweitert diese Datei, statt eine zweite anzulegen.
+#
+# Sicherheit: Tag-Name und Eingabe gelangen nur ueber `env:` in Skripte und
+# werden dort gegen ^0\.0\.N$ geprueft, bevor sie irgendwo anders stehen.
+# Nur der Job `release` darf schreiben (contents: write). Jede Action ist auf
+# einen Commit-SHA gepinnt, das Container-Abbild auf einen Digest; der Tag im
+# Kommentar ist Dokumentation, beide werden zusammen angehoben.
 
 name: release
 
 on:
   push:
     tags:
-      - "v*"
+      - "v0.0.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version for the dry run, 0.0.N. Builds and checks everything, creates no release."
+        required: true
+        type: string
 
-# Never two releases for the same tag at once, and never cancel one halfway.
+# Nie zwei Laeufe fuer dieselbe Referenz gleichzeitig, und nie einen halb
+# abbrechen: Ein halb angelegtes Release waere schlimmer als ein spaetes.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -25,81 +53,385 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-D warnings"
   RUST_BACKTRACE: "1"
   CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "10"
   STRICT: "1"
 
 jobs:
   guard:
     name: guard
     runs-on: ubuntu-24.04
-    # A fork or a mirror that pushes a v* tag must not cut a release in its own
-    # name, and must never reach the job that holds contents: write. The test
-    # is the repository name, not `github.event.repository.fork`: a mirror is
-    # not a fork, and a skipped guard takes every `needs: guard` job with it.
+    timeout-minutes: 60
+    # Ein Fork oder Spiegel, der einen v0.0.*-Tag schiebt, soll kein Release in
+    # seinem Namen anlegen und nie den Job mit contents: write erreichen. Der
+    # Test ist der Repository-Name, nicht `github.event.repository.fork`: Ein
+    # Spiegel ist kein Fork, und ein uebersprungener guard nimmt jeden Job mit,
+    # der ihn braucht.
     if: github.repository == 'nurkert/Humanitl'
+    permissions:
+      contents: read
+      # Die Laeufe von ci.yml lesen.
+      actions: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.version.outputs.publish }}
+      # Der Commit, den guard geprueft hat. Der Job release vergleicht den Tag
+      # unmittelbar vor dem Anlegen noch einmal damit.
+      sha: ${{ steps.version.outputs.sha }}
+      # Ein Probelauf heisst anders als ein Release-Bau, damit sein Artefakt
+      # nie mit einem geprueften verwechselt wird.
+      artifact: ${{ steps.version.outputs.artifact }}
     steps:
-      - name: Refuse malformed tags
+      - name: Version from the tag or the dry-run input
+        id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          SHA: ${{ github.sha }}
+          # Unter einer UTF-8-Locale passt [0-9] in bash auch auf Ziffern
+          # anderer Schriften; das Muster unten nennt die Ziffern ausdruecklich,
+          # und C haelt auch den Rest des Skripts bei ASCII.
+          LC_ALL: C
         run: |
           set -euo pipefail
-          case "${GITHUB_REF}" in
-            refs/tags/v*) echo "releasing ${GITHUB_REF_NAME}" ;;
-            *) echo "::error::not a v* tag: ${GITHUB_REF}"; exit 1 ;;
-          esac
+          if [[ "$EVENT" == "push" ]]; then
+            if [[ "$REF_TYPE" != "tag" ]]; then
+              echo "::error::release runs on tags only, got a push of $REF_TYPE"
+              exit 1
+            fi
+            candidate="${REF_NAME#v}"
+            publish=true
+          else
+            candidate="$INPUT_VERSION"
+            publish=false
+          fi
+          # Das enge Muster ist die eigentliche Sperre gegen einen praeparierten
+          # Tag-Namen: Nach dieser Zeile ist die Version nur noch Ziffern und Punkte.
+          if [[ ! "$candidate" =~ ^0\.0\.(0|[123456789][0123456789]{0,5})$ ]]; then
+            echo "::error::'$candidate' is not a 0.0.N version. This workflow publishes 0.0.x pre-releases only; 0.1.0 is HUM-060."
+            exit 1
+          fi
+          if [[ ! "$SHA" =~ ^[0123456789abcdef]{40}$ ]]; then
+            echo "::error::unexpected commit id '$SHA'"
+            exit 1
+          fi
+          if [[ "$publish" == "true" ]]; then
+            artifact=humanitl-release
+          else
+            artifact="humanitl-dry-run-$SHA"
+          fi
+          {
+            echo "version=$candidate"
+            echo "publish=$publish"
+            echo "sha=$SHA"
+            echo "artifact=$artifact"
+          } >> "$GITHUB_OUTPUT"
+          echo "version $candidate, publish $publish, commit $SHA, artifact $artifact"
 
-  check:
-    name: check
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # merge-base braucht die Historie von main.
+          fetch-depth: 0
+
+      - name: The commit is on main and its CI run is green
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+          PUBLISH: ${{ steps.version.outputs.publish }}
+        run: |
+          set -euo pipefail
+          # Im Probelauf ist ein Verstoss eine Warnung: Er soll auch einen
+          # Zweig bauen koennen. Fuer einen Tag ist er ein Fehler.
+          complain() {
+            if [[ "$PUBLISH" == "true" ]]; then
+              echo "::error::$1"
+              exit 1
+            fi
+            echo "::warning::dry run continues although: $1"
+          }
+
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            complain "commit $SHA is not on main. Tag a commit of main that CI has passed."
+          fi
+
+          # Der juengste push-Lauf von ci.yml fuer genau diesen Commit auf
+          # main. Laeuft er noch, wird bis zu 45 Minuten gewartet: Ein Tag
+          # direkt nach dem Merge soll nicht an der Reihenfolge scheitern.
+          for attempt in $(seq 1 45); do
+            run="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&branch=main&event=push&per_page=20" \
+              --jq '.workflow_runs | sort_by(.run_number) | last | if . == null then "none" else "\(.status) \(.conclusion) \(.html_url)" end')"
+            read -r status conclusion url <<<"$run"
+            if [[ "$status" != "none" && "$status" != "completed" ]]; then
+              echo "ci.yml run for $SHA is $status ($url), waiting ($attempt/45)"
+              sleep 60
+              continue
+            fi
+            break
+          done
+          if [[ "$status" == "none" ]]; then
+            complain "no ci.yml run on main for commit $SHA. Push the commit to main first and let CI finish."
+          elif [[ "$status" != "completed" ]]; then
+            complain "the ci.yml run for $SHA did not finish within 45 minutes ($url). Re-run this workflow once it is green."
+          elif [[ "$conclusion" != "success" ]]; then
+            complain "the ci.yml run for $SHA concluded '$conclusion' ($url). Only a green main commit is released."
+          else
+            echo "ci.yml run for $SHA: success ($url)"
+          fi
+
+  build:
+    name: build
     needs: guard
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Die Release-Notes listen die Commits seit dem vorigen v0.0.*-Tag,
+          # und die Build-Nummer der App ist die Zahl der Commits.
+          fetch-depth: 0
       - uses: ./.github/actions/setup-rust
         with:
-          cargo-deny: "true"
           cache-key: release
       - uses: ./.github/actions/setup-flutter
         with:
           linux-desktop: "true"
           protoc-plugin: "true"
       - name: Install protoc
-        # `make check` regenerates app/lib/core/ipc/generated before flutter
-        # analyze (HUM-003); with STRICT=1 a missing protoc is a failure.
+        # Die App importiert app/lib/core/ipc/generated, das gitignored ist
+        # (HUM-003); ohne protoc gibt es nichts zu importieren.
         uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
         with:
           version: "27.x"
           repo-token: ${{ github.token }}
-      - name: Full gate
-        run: make check
-
-  package:
-    name: package
-    needs: check
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Build the packages
-        # HUM-053 replaces this with the deb, AppImage and systemd unit build.
+      - name: Install the packaging tools
+        # dpkg-dev bringt dpkg-shlibdeps, patchelf entfernt den RUNPATH des
+        # Build-Rechners aus den Plugin-Bibliotheken, musl-tools baut den Shim
+        # statisch wie im CI-Job rust-test.
         run: |
           set -euo pipefail
-          echo "::notice::packaging not yet implemented (HUM-053)"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dpkg-dev patchelf musl-tools
+
+      - name: Stamp the version into this checkout
+        # Nur in diesem Auscheckstand; committet wird nichts. Im Repository
+        # bleibt 0.0.0 stehen, bis HUM-060 die VERSION-Datei einfuehrt.
+        run: |
+          set -euo pipefail
+          ./packaging/release/stamp-version.sh "$VERSION"
+
+      - name: Build humanitld, humanitl and humanitl-shim
+        run: |
+          set -euo pipefail
+          ./packaging/release/build-binaries.sh "$RUNNER_TEMP/bin"
+
+      - name: Generate the Dart code
+        # Proto, riverpod, freezed, ARB und die Katalog-Assets; ohne sie baut
+        # die App nicht (Ziel flutter-codegen im Makefile).
+        run: |
+          set -euo pipefail
+          make flutter-codegen
+
+      - name: Build the Linux app
+        # --build-name traegt die Version in data/flutter_assets/version.json,
+        # die Build-Nummer ist die Zahl der Commits, damit sie monoton steigt
+        # (HUM-060, Fallstricke).
+        run: |
+          set -euo pipefail
+          build_number="$(git rev-list --count HEAD)"
+          cd app
+          flutter build linux --release --build-name "$VERSION" --build-number "$build_number"
+
+      - name: The export names the same version
+        # Der HAR-Export schreibt die Version der App in seinen Creator-Block.
+        # Dieser Test scheitert, wenn sie dort fest eingetragen ist statt aus
+        # FLUTTER_BUILD_NAME zu kommen. `flutter test` nimmt FLUTTER_BUILD_NAME
+        # aus app/pubspec.yaml, das stamp-version.sh oben gesetzt hat; per
+        # --dart-define laesst sich die Variable nicht setzen.
+        run: |
+          set -euo pipefail
+          cd app
+          flutter test \
+            --dart-define=HUMANITL_EXPECTED_VERSION="$VERSION" \
+            test/features/history/history_export_version_test.dart
+
+      - name: The binaries and the app carry the version
+        run: |
+          set -euo pipefail
+          ./packaging/release/check-version.sh "$VERSION" "$RUNNER_TEMP/bin" \
+            app/build/linux/x64/release/bundle
+
+      - name: Build the .deb and the archive
+        run: |
+          set -euo pipefail
+          bundle=app/build/linux/x64/release/bundle
+          ./packaging/deb/build-deb.sh "$VERSION" "$RUNNER_TEMP/bin" "$bundle" dist
+          ./packaging/release/build-tarball.sh "$VERSION" "$RUNNER_TEMP/bin" "$bundle" dist
+          ./packaging/release/checksums.sh dist
+          dpkg-deb --info "dist/humanitl_${VERSION}_amd64.deb"
+          mkdir -p dist-meta
+          dpkg-deb --contents "dist/humanitl_${VERSION}_amd64.deb" > dist-meta/deb-contents.txt
+          tar -tzf "dist/humanitl-${VERSION}-linux-x86_64.tar.gz" > dist-meta/tar-contents.txt
           {
-            echo "### package: skipped"
+            echo "### humanitl $VERSION"
             echo
-            echo "Packaging arrives with HUM-053. No artefacts were built."
+            echo '```'
+            ls -l dist
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  draft-release:
-    name: draft-release
-    needs: [check, package]
+      - name: Release notes
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ./packaging/release/release-notes.sh "$VERSION" "$SHA" > dist-meta/RELEASE_NOTES.md
+          cat dist-meta/RELEASE_NOTES.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ needs.guard.outputs.artifact }}
+          path: |
+            dist/
+            dist-meta/
+          if-no-files-found: error
+          # Zwei Wochen genuegen fuer einen Probelauf; das Release selbst
+          # haelt seine Dateien auf GitHub.
+          retention-days: 14
+
+  check-deb:
+    name: check-deb
+    needs: [guard, build]
     runs-on: ubuntu-24.04
-    permissions:
-      # The only place in the repository that writes. Assets follow in HUM-060.
-      contents: write
+    timeout-minutes: 30
+    # Ein frisches Ubuntu 24.04, dieselbe Ausgabe wie der Runner, auf dem das
+    # Paket gebaut wurde. Hier darf installiert und entfernt werden; auf einem
+    # echten Rechner nie. Der Digest pinnt das Abbild wie der SHA eine Action.
+    container:
+      image: ubuntu:24.04@sha256:b3cc40b72b93588182b5410f723c7aaf142363311c2aa993d8a453ddcbb3ae15
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          draft: true
-          generate_release_notes: true
-          name: ${{ github.ref_name }}
+          name: ${{ needs.guard.outputs.artifact }}
+          path: artefacts
+      - name: Install, check and purge the .deb
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./packaging/deb/check-install.sh "artefacts/dist/humanitl_${VERSION}_amd64.deb" "$VERSION"
+      - name: lintian
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./packaging/deb/lintian.sh "artefacts/dist/humanitl_${VERSION}_amd64.deb"
+
+  release:
+    name: release
+    needs: [guard, build, check-deb]
+    # Nur ein Tag legt ein Release an. Der Probelauf endet mit check-deb.
+    if: needs.guard.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      # Die einzige Stelle im Repository, die schreibt.
+      contents: write
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+      CHECKED_SHA: ${{ needs.guard.outputs.sha }}
+      REF_NAME: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.guard.outputs.artifact }}
+          path: artefacts
+      - name: Create the pre-release, if the tag still points at the checked commit
+        # Pruefung und Anlegen in einem Schritt, damit zwischen beiden nichts
+        # liegt. Zwischen guard und hier liegt der ganze Bau: Wer den Tag in der
+        # Zeit verschiebt oder einen alten Lauf neu startet, bekaeme sonst ein
+        # Release, dessen Tag auf einen ungeprueften Commit zeigt, waehrend die
+        # Dateien vom geprueften stammen. Der Tag wird deshalb unmittelbar vor
+        # dem Anlegen ueber die API aufgeloest, annotierte Tags bis zum Commit.
+        #
+        # `--target` schuetzt dabei nicht: Existiert der Tag schon, und
+        # `--verify-tag` verlangt das, ignoriert GitHub `target_commitish`.
+        # Zwischen Pruefung und Anlegen bleibt also ein kurzes Fenster. Es
+        # wird danach geschlossen: Das Release entsteht als Entwurf, der Tag
+        # wird noch einmal aufgeloest, und zeigt er dann woanders hin, wird
+        # der Entwurf wieder geloescht (der Tag bleibt, er gehoert nicht diesem
+        # Lauf). Nur wenn er stimmt, wird der Entwurf veroeffentlicht.
+        #
+        # gh statt einer weiteren Action: eine Abhaengigkeit weniger, die
+        # contents: write in die Hand bekommt. Gibt es das Release schon
+        # (erneuter Lauf), scheitert der Befehl, statt etwas zu ueberschreiben;
+        # ein Tag wird nie neu gesetzt, stattdessen steigt die Patch-Nummer.
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
+          if [[ "$REF_NAME" != "$tag" ]]; then
+            echo "::error::ref '$REF_NAME' is not the checked tag '$tag'"
+            exit 1
+          fi
+          cd artefacts/dist
+          sha256sum -c SHA256SUMS
+
+          # `git/ref/` (Einzahl) ist der dokumentierte Endpunkt "Get a
+          # reference" und liefert genau ein Objekt oder 404. Die Mehrzahl
+          # `git/refs/` ist die alte Form, die bei einem Praefix-Treffer
+          # (v0.0.1 neben v0.0.10) eine Liste liefert.
+          # Gibt "commit <sha>" aus, annotierte Tags bis zum Commit aufgeloest.
+          tag_commit() {
+            local type sha
+            read -r type sha <<<"$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq '"\(.object.type) \(.object.sha)"')"
+            for _ in 1 2 3 4 5; do
+              [[ "$type" == "tag" ]] || break
+              read -r type sha <<<"$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq '"\(.object.type) \(.object.sha)"')"
+            done
+            echo "$type $sha"
+          }
+
+          before="$(tag_commit)"
+          if [[ "$before" != "commit $CHECKED_SHA" ]]; then
+            echo "::error::tag $tag now points at $before, but guard checked $CHECKED_SHA. Nothing is released; tag a new patch number instead of moving a tag."
+            exit 1
+          fi
+          echo "tag $tag points at $CHECKED_SHA, the commit guard checked"
+
+          # Erst als Entwurf: Ein Entwurf ist nicht oeffentlich und loest kein
+          # "published" aus. `--verify-tag` bindet ihn an den vorhandenen Tag.
+          gh release create "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --draft \
+            --prerelease \
+            --title "Humanitl $VERSION (Vorabversion)" \
+            --notes-file ../dist-meta/RELEASE_NOTES.md \
+            "humanitl_${VERSION}_amd64.deb" \
+            "humanitl-${VERSION}-linux-x86_64.tar.gz" \
+            SHA256SUMS
+
+          # Das Fenster zwischen Pruefung und Anlegen schliessen: Zeigt der Tag
+          # jetzt woanders hin, gehoert der Entwurf nicht zum geprueften
+          # Commit und wird wieder geloescht. Den Tag loescht dieser Lauf nicht.
+          after="$(tag_commit)"
+          if [[ "$after" != "commit $CHECKED_SHA" ]]; then
+            if ! gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag=false; then
+              echo "::error::tag $tag moved to $after; guard checked $CHECKED_SHA. Deleting the draft FAILED: delete the draft release $tag by hand, it was never published."
+              exit 1
+            fi
+            echo "::error::tag $tag moved to $after while the release was created; guard checked $CHECKED_SHA. The draft was deleted, nothing was published."
+            exit 1
+          fi
+          echo "after creating the draft, tag $tag still points at $CHECKED_SHA"
+
+          # Erst jetzt veroeffentlichen, als Vorabversion.
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
+          echo "published $tag as a pre-release"
