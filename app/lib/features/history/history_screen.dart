@@ -24,6 +24,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/domain/domain.dart';
 import '../../core/ipc/client_providers.dart';
 import '../../core/ipc/connection.dart';
+import '../../core/ipc/flow_events.dart';
 import '../../core/ipc/flow_handoff.dart';
 import '../../core/ipc/flow_reveal.dart';
 import '../../core/shortcuts/intents.dart';
@@ -105,6 +106,19 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
   );
 
   Flow? _sheetFlow;
+
+  /// Die Id, die gerade für das Blatt geholt wird, oder null.
+  FlowId? _revealing;
+
+  /// True, wenn dieser Flow fertig wurde, während er geholt wurde.
+  bool _revealEnded = false;
+
+  /// Die Nummer des jüngsten Abrufs für das Blatt; ein Doppelklick zählt mit.
+  ///
+  /// Nur der Abruf mit dieser Nummer darf das Blatt noch setzen und hinter
+  /// sich aufräumen.
+  int _revealGeneration = 0;
+
   late bool _exportOpen = widget.exportOpen;
 
   /// Why the last flow another screen asked for could not be opened, or null.
@@ -153,14 +167,26 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
   /// A held request belongs on the screen where it can be decided, so the
   /// history asks for it to be shown there and the shell carries the request
   /// out: a feature may not reach into another feature, and the shell is what
-  /// composes the sections (ARCHITECTURE 5). Anything else is finished, and a
-  /// sheet is the place to read it at full height.
+  /// composes the sections (ARCHITECTURE 5). Everything else is read in a
+  /// sheet, at full height — finished or not: a row whose answer is still
+  /// running in opens here too, and the sheet follows it while it arrives.
   void _open(Flow flow) {
     if (flow.isHeld) {
       ref.read(flowHandoffProvider.notifier).request(flow.id);
       return;
     }
     ref.read(historySelectionProvider.notifier).select(flow.id);
+    // Ein Doppelklick schlägt einen Abruf, der noch unterwegs ist: dessen
+    // Antwort gehört zu einem Blatt, das es nicht mehr gibt, und überschriebe
+    // sonst dieses mit dem Stand eines anderen Flows. Die Notiz wird
+    // zurückgenommen, damit `_takeReveal` die Antwort als veraltet erkennt,
+    // und das Abruffenster geschlossen (HUM-154).
+    _revealGeneration++;
+    _revealing = null;
+    _revealEnded = false;
+    if (ref.read(flowRevealProvider) != null) {
+      ref.read(flowRevealProvider.notifier).clear();
+    }
     // The sheet keeps the focus with itself and closes on `Escape`, but only
     // once the focus is inside it; the table is holding it right now.
     _tableFocus.unfocus();
@@ -182,6 +208,93 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
       _open(flow);
     }
   }
+
+  /// Keeps the sheet current for a flow that stands in no loaded row.
+  ///
+  /// Der übliche Weg ist die Zeile: das Blatt liest sie aus der Seite und ist
+  /// damit so frisch wie die Tabelle. Ein Flow über `flowRevealProvider`
+  /// steht aber in keiner Zeile (siehe [_takeReveal]), und für ihn gäbe es
+  /// sonst keine Quelle als den Abzug vom Öffnen — der Rumpf-Abschnitt
+  /// wartete dann für immer auf eine Antwort, die längst aufgezeichnet ist
+  /// (HUM-154).
+  ///
+  /// Gehorcht wird genau zwei Ereignissen. `Recorded` schickt der Daemon für
+  /// jeden fertigen Flow, auch für den gescheiterten und den abgelaufenen —
+  /// auf `Failed` zusätzlich zu horchen hieße, zweimal hintereinander
+  /// dasselbe zu fragen, und die zweite Abfrage liefe in die erste hinein.
+  /// `Lagged` trägt keine Id: was in der Lücke geschah, weiß niemand, also
+  /// fragt das Blatt nach seinem eigenen Flow, so wie die Seite dort neu
+  /// lädt. Ein `ResponseChunk` je Paket würde den Daemon einmal je Paket
+  /// fragen und am Zustand nichts ändern.
+  void _followSheetFlow(
+    AsyncValue<FlowEvent>? previous,
+    AsyncValue<FlowEvent> next,
+  ) {
+    // Auch der Flow, der gerade geholt wird: zwischen `_sheetFlow = null` und
+    // der Antwort von `GetFlow` liegt ein Fenster, und ein Ende, das darin
+    // fällt, käme nie wieder — die Antwort trüge dann die Zusammenfassung von
+    // vor dem Ende, und das Blatt wartete für immer.
+    final FlowId? watched = _sheetFlow?.id ?? _revealing;
+    if (watched == null) {
+      return;
+    }
+    final FlowId? id = switch (next.value) {
+      FlowEventRecorded(:final FlowId flowId) => flowId,
+      FlowEventLagged() => watched,
+      _ => null,
+    };
+    if (id != watched) {
+      return;
+    }
+    final Flow? sheet = _sheetFlow;
+    if (sheet == null) {
+      // Der Abruf läuft noch. Gemerkt, und sobald er zurück ist, nachgeholt;
+      // jetzt nachzufassen hieße, gegen die eigene Antwort zu laufen.
+      _revealEnded = true;
+      return;
+    }
+    if (sheet.state.isTerminal) {
+      // Fertig ist fertig; eine Lücke ändert daran nichts mehr.
+      return;
+    }
+    if (ref.read(historyPageProvider).rows.any((Flow row) => row.id == id)) {
+      // Die Zeile trägt den Zustand schon; ein zweites Nachfassen wäre eine
+      // zweite Abfrage für dasselbe.
+      return;
+    }
+    _refreshSheetFlow(watched);
+  }
+
+  /// Holt die Zusammenfassung zu [id] neu und übernimmt sie ins Blatt.
+  ///
+  /// Über denselben Provider, den das Detail im Blatt ohnehin liest: eine
+  /// Abfrage, ein Ergebnis, und ein Fehler steht als Diagnose im Blatt selbst
+  /// (`_Failure`). Schlägt sie fehl, bleibt der Abzug stehen und das Blatt
+  /// wartet weiter, statt etwas zu behaupten.
+  void _refreshSheetFlow(FlowId id) {
+    ref.invalidate(historyDetailProvider(id));
+    unawaited(
+      ref.read(historyDetailProvider(id).future).then((FlowDetail detail) {
+        if (mounted && _sheetFlow?.id == detail.summary.id) {
+          setState(() => _sheetFlow = detail.summary);
+        }
+      }, onError: (Object _) {}),
+    );
+  }
+
+  /// [live] mit allem, was [kept] schon wusste — für zwei Zusammenfassungen
+  /// desselben fertigen Flows.
+  ///
+  /// Fertig ist fertig, also können beide nur verschieden viel wissen, nicht
+  /// Verschiedenes: eine fehlende Dauer und ein fehlender Status werden aus
+  /// [kept] genommen, und die Größen wachsen nur, weil ein Flow nach dem
+  /// Ende keine Bytes verliert (HUM-154).
+  static Flow _fullerOf(Flow kept, Flow live) => live.copyWith(
+    duration: live.duration ?? kept.duration,
+    status: live.status != 0 ? live.status : kept.status,
+    requestSize: math.max(live.requestSize, kept.requestSize),
+    responseSize: math.max(live.responseSize, kept.responseSize),
+  );
 
   /// Opens a flow another screen asked for (HUM-039).
   ///
@@ -207,7 +320,20 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
       _revealFailure = null;
       _sheetFlow = null;
     });
-    bool current() => mounted && ref.read(flowRevealProvider) == next;
+    // Solange geholt wird, gibt es keinen Abzug, an dem [_followSheetFlow]
+    // ein Ende erkennen könnte. Es merkt sich deshalb diese Id, und was
+    // während des Abrufs endet, wird danach nachgeholt.
+    _revealing = next;
+    _revealEnded = false;
+    // Die Notiz allein unterscheidet zwei Abrufe desselben Flows nicht: wird
+    // er nach einem Doppelklick ein zweites Mal aufgedeckt, sähe der erste
+    // Abruf wieder aktuell aus und überschriebe das Blatt mit seinem älteren
+    // Stand. Jeder Abruf trägt deshalb seine Nummer (HUM-154).
+    final int generation = ++_revealGeneration;
+    bool current() =>
+        mounted &&
+        _revealGeneration == generation &&
+        ref.read(flowRevealProvider) == next;
     // The client itself and not `historyDetailProvider`: that one disposes
     // itself as soon as nobody watches it, and a one-shot read of its future
     // then ends in "the provider was disposed" instead of the daemon's
@@ -223,6 +349,12 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
               }
               _tableFocus.unfocus();
               setState(() => _sheetFlow = detail.summary);
+              if (_revealEnded && !detail.summary.state.isTerminal) {
+                // Der Flow ist fertig geworden, während diese Antwort
+                // unterwegs war: sie trägt den Stand von vorher, und ohne
+                // dieses Nachholen bliebe das Blatt darauf sitzen.
+                _refreshSheetFlow(next);
+              }
             },
             onError: (Object error) {
               if (!current()) {
@@ -234,8 +366,14 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
             },
           )
           .whenComplete(() {
-            // Nur die eigene Notiz: Kam während des Abrufs eine neue, gehört
-            // sie dem nächsten Durchlauf und bleibt stehen.
+            // Nur der eigene Durchlauf räumt auf: Kam während des Abrufs ein
+            // neuer, gehören ihm Fenster und Notiz, auch wenn er denselben
+            // Flow meint.
+            if (_revealGeneration != generation) {
+              return;
+            }
+            _revealing = null;
+            _revealEnded = false;
             if (mounted && ref.read(flowRevealProvider) == next) {
               ref.read(flowRevealProvider.notifier).clear();
             }
@@ -300,6 +438,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
     // the rail of the shell is one Tab away.
     _claimFocusOnceVisible(TickerMode.valuesOf(context).enabled);
     ref.listen<FlowId?>(flowRevealProvider, _takeReveal);
+    ref.listen<AsyncValue<FlowEvent>>(flowEventsProvider, _followSheetFlow);
     final FlowId? selected = ref.watch(historySelectionProvider);
     final Flow? selectedFlow = selected == null
         ? null
@@ -309,7 +448,59 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                   page.rows.where((Flow row) => row.id == selected).firstOrNull,
             ),
           );
-    final Flow? sheetFlow = _sheetFlow;
+    // Das Blatt hält einen Abzug der Zeile, mit der es geöffnet wurde, und
+    // Ereignisse des Daemons erreichen ihn nie. Gesucht wird deshalb dieselbe
+    // Id in den geladenen Zeilen, nicht in der Auswahl: die Auswahl kann
+    // weiterziehen, während das Blatt offen bleibt, und dann wartete sein
+    // Rumpf-Abschnitt für immer auf eine Antwort, die längst da ist
+    // (HUM-154).
+    //
+    // Was die Seite hergibt, wird zugleich zum neuen Abzug. Die Zeile kann
+    // aus der Seite verschwinden — ein Neuladen leert sie, ein Filter
+    // schließt sie aus, die Fensterkante schiebt sie hinaus —, und dann fiele
+    // das Blatt sonst auf den Stand vom Öffnen zurück, also von „fertig"
+    // wieder auf „kommt noch". Kein `setState`: gebaut wird ohnehin gerade,
+    // und gelesen wird in diesem Bau der frischere Wert.
+    final Flow? snapshot = _sheetFlow;
+    final Flow? live = snapshot == null
+        ? null
+        : ref.watch(
+            historyPageProvider.select(
+              (HistoryPageState page) => page.rows
+                  .where((Flow row) => row.id == snapshot.id)
+                  .firstOrNull,
+            ),
+          );
+    //
+    // Einmal fertig, immer fertig. Eine Seite, die nicht aufgefrischt ist,
+    // ein Fenster, ein Neuladen nach einem Abriss: sie alle können für
+    // dieselbe Id eine ältere Zeile führen, und das Blatt fiele von
+    // `recorded` auf `forwarded` zurück — mitsamt Skelett, das nie wieder
+    // verschwindet, weil das Endereignis schon verbraucht ist.
+    //
+    // Eingefroren wird der Zustand, nicht die ganze Zeile: eine Zeile, die
+    // selbst fertig ist, darf den Abzug ersetzen. `Recorded` setzt in der
+    // Seite nur den Zustand; Dauer und Größe bringt erst ein späteres
+    // Neuladen, und ohne diese Ausnahme stünde im Kopf des Blatts weiter „—",
+    // während die Tabelle daneben die Dauer zeigt.
+    //
+    // Und zwischen zwei fertigen Zeilen gilt: was einmal bekannt war, bleibt
+    // bekannt. Hat das Blatt die volle Zusammenfassung schon geholt, während
+    // die Seite noch eine dünne führt, darf die dünne nichts wegnehmen,
+    // nur ergänzen.
+    final bool frozen = snapshot != null && snapshot.state.isTerminal;
+    final bool liveIsFinal = live?.state.isTerminal ?? false;
+    final Flow? candidate = live != null && frozen && liveIsFinal
+        ? _fullerOf(snapshot, live)
+        : live;
+    if (candidate != null &&
+        candidate != snapshot &&
+        (liveIsFinal || !frozen)) {
+      _sheetFlow = candidate;
+    }
+    final Flow? sheetFlow = frozen && !liveIsFinal
+        ? snapshot
+        : (candidate ?? snapshot);
     return Shortcuts(
       shortcuts: historyShortcuts(),
       child: Actions(
