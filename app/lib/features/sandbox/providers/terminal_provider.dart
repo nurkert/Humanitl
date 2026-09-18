@@ -56,6 +56,31 @@ enum TerminalPhase {
 
   /// The agent ended, and [TerminalSessionState.exitCode] carries its code.
   ended,
+
+  /// The stream ended, and no exit code came with it (HUM-136).
+  ///
+  /// What this phase says is only that this client is no longer attached.
+  /// It does **not** say that the session is still running, because this app
+  /// cannot know that (`backlog/CONVENTIONS.md` 4.13): the pane words the two
+  /// ways in differently, and neither sentence promises a live session.
+  ///
+  /// * **No daemon answers.** `DAEMON_001`, the only registered code that
+  ///   means a lost connection rather than an answer; a transport drop carries
+  ///   no trailer, so nothing else can arrive. The sandbox lives inside that
+  ///   daemon, so what became of the session is unknown.
+  /// * **The stream ended without an exit code** while the daemon was still
+  ///   answering (`_onDone`), including a stream that ended before its first
+  ///   frame.
+  ///
+  /// What does *not* land here is a refusal: `IPC_001` for a rejected token
+  /// as a status error, `TERM_001` for a second writer as an ordinary frame.
+  /// Those are answers about this client, they keep [refused], and naming a
+  /// way back there would be a lie -- the next attempt is refused again.
+  ///
+  /// Falling silently back to [idle] -- what happened before this phase
+  /// existed -- left a person with a window that had gone quiet and nothing
+  /// to report.
+  detached,
 }
 
 /// What the pane needs to know about its session.
@@ -148,6 +173,9 @@ class TerminalSession extends _$TerminalSession {
     if (_input != null) {
       return;
     }
+    // Ein `DAEMON_001` aus dem letzten Anschluss bleibt hier stehen: Der
+    // Versuch ist noch keine Antwort. Geräumt wird er erst, wenn der Daemon
+    // wirklich antwortet -- in `_onFrame` bei der ersten Geometrie.
     state = state.copyWith(readOnly: readOnly);
     final Terminal terminal = state.terminal;
     final StreamController<TerminalCommand> input =
@@ -210,7 +238,32 @@ class TerminalSession extends _$TerminalSession {
       case TerminalOutput(bytes: final Uint8List bytes):
         _decoder?.add(bytes);
       case TerminalGeometry(cols: final int cols, rows: final int rows):
-        state = state.copyWith(
+        // **Die erste Geometrie ist die Antwort, die `DAEMON_001` widerlegt**
+        // (HUM-136). Der Befund hieß „es antwortet kein Daemon"; eine
+        // Geometrie kann nur ein Daemon schicken. Bliebe er stehen, stünde
+        // über einem lebenden Terminal die Meldung, es gebe keinen Daemon,
+        // und endete der Strom später gewöhnlich, sagte der Streifen
+        // darunter, die Verbindung sei fort -- während der Daemon antwortet.
+        //
+        // Hier und nicht beim Anhängen: Ein Daemon, der die Verbindung
+        // annimmt und dann schweigt, hielte sonst ein Fenster ohne Befund,
+        // ohne Streifen und mit einer Tastatur ins Leere -- genau die Stille,
+        // gegen die dieses Issue gebaut ist. Bis zur Antwort bleibt der alte
+        // Befund die letzte wahre Aussage.
+        //
+        // Nur dieser eine Code. `TERM_001` setzt `_watchInstead` vor dem
+        // neuen Anschluss, damit das Fenster sagen kann, warum es zusieht;
+        // der Befund gehört zum neuen Anschluss und muss bleiben.
+        // `copyWith` kann ein Feld nicht leeren, also wird der Zustand neu
+        // gebaut; Terminal, Rücklauf und die Wahl der Tastatur bleiben.
+        final TerminalSessionState answered =
+            state.diagnostic?.code == DiagnosticCodes.daemonUnreachable
+            ? TerminalSessionState(
+                terminal: state.terminal,
+                readOnly: state.readOnly,
+              )
+            : state;
+        state = answered.copyWith(
           phase: TerminalPhase.attached,
           cols: cols,
           rows: rows,
@@ -240,16 +293,43 @@ class TerminalSession extends _$TerminalSession {
 
   void _onError(Object error) {
     if (error is DaemonException) {
+      // **Der Code entscheidet, nicht die Art der Ausnahme** (HUM-136).
+      // `GrpcDaemonClient.terminal` verpackt jeden Fehlschlag in eine
+      // `DaemonException`: `GrpcError` und `IOException` gleichermaßen, und
+      // was keinen eigenen Befund mitbringt, wird `DAEMON_001`. Ein früherer
+      // Entwurf unterschied nach dem Typ der Ausnahme und traf damit den Fall
+      // nie, um den es geht -- eine abgerissene Leitung kam als
+      // `DaemonException` an und sah aus wie eine Absage des Daemons.
+      //
+      // `DAEMON_001` heißt: Die Leitung ist fort. Was aus der Sitzung wurde,
+      // weiß der Client nicht -- die Sandbox lebt in genau dem Daemon, der
+      // nicht mehr antwortet --, und der Weg zurück ist ein neuer Anschluss,
+      // sobald er wieder antwortet. Jeder andere Code
+      // ist eine Aussage des Daemons über diesen Client -- `TERM_001` für den
+      // zweiten Schreiber, `IPC_001` für das Token --, und die gehört als
+      // Befund an ihren Platz.
+      final bool transport =
+          error.diagnostic.code == DiagnosticCodes.daemonUnreachable;
       state = state.copyWith(
-        phase: TerminalPhase.refused,
+        phase: transport ? TerminalPhase.detached : TerminalPhase.refused,
         diagnostic: error.diagnostic,
       );
+      return;
     }
+    // Ein Fehler, den kein Client von heute wirft. Er steht hier, weil ein
+    // Strom, der ohne Befund abbricht, dieselbe Frage stellt wie einer mit.
+    state = state.copyWith(phase: TerminalPhase.detached);
   }
 
   void _onDone() {
-    if (state.phase == TerminalPhase.attached) {
-      state = state.copyWith(phase: TerminalPhase.idle);
+    // Auch aus `idle`: Ein Strom, der endet, **bevor** die erste Geometrie
+    // ankommt, war offen -- sonst gäbe es dieses Ereignis nicht. Hinge der
+    // Übergang allein an `attached`, bliebe genau der früheste Fehlschlag
+    // stumm, und still zu sein ist das, wogegen dieses Issue gebaut ist.
+    // `refused` und `ended` bleiben stehen: Die haben schon eine Antwort.
+    if (state.phase == TerminalPhase.attached ||
+        state.phase == TerminalPhase.idle) {
+      state = state.copyWith(phase: TerminalPhase.detached);
     }
     unawaited(_detach());
   }
