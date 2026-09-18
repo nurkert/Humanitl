@@ -9,6 +9,11 @@ project(runner LANGUAGES CXX)
 add_executable(${BINARY_NAME}
   "main.cc"
   "my_application.cc"
+  # Schreibt Signal und nativen Absturz nach
+  # `$XDG_STATE_HOME/humanitl/app.log` (HUM-136). Haengt an nichts ausser
+  # POSIX, damit `exit_log_test.cc` es ohne GTK uebersetzen kann; der Test
+  # selbst gehoert nicht in dieses Ziel.
+  "exit_log.cc"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
 )
 

@@ -339,6 +339,12 @@ jobs:
           flutter pub get
           flutter analyze --fatal-infos
           flutter test
+      - name: Runner exit log
+        # Der einzige C++-Test des Repositories (HUM-136). `flutter test`
+        # erreicht ihn nicht, und `flutter build linux` uebersetzt ihn nicht:
+        # Er misst, was der Runner beim Signal und beim Absturz schreibt, und
+        # ohne diesen Schritt liefe er nirgends, wo er einen Merge aufhaelt.
+        run: make runner-test
       - name: Build the Linux bundle
         run: cd app && flutter build linux --debug
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
