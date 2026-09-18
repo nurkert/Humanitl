@@ -863,8 +863,13 @@ Für stärkere Garantien braucht es externes Anchoring (nach dem MVP).
 Getrennt davon liegt das Pseudonymisierungs-Mapping: verschlüsselt, nur auf dem Host, nie in der
 Sandbox und nie in einer Anfrage.
 
-*Prüfung.* Die Prüfung steht im Daemon (`AuditVerifier`); `humanitl audit verify` und
-`humanitl audit export` baut HUM-070. ESC-5 fährt `audit_delete_is_detected` und
+*Prüfung.* Die Prüfung steht im Daemon (`AuditVerifier`). `humanitl audit verify` und
+`humanitl audit export` gibt es seit HUM-070; beide fragen zuerst den Daemon, weil nur er den
+Schlüssel und die Anker hat. Solange dessen `Audit`-RPC nicht gebaut ist, fällt die Kommandozeile
+auf die Datei zurück und prüft **ohne Schlüssel und ohne Anker** — also Kette und kanonische Form,
+und nicht die MACs. Ihre Ausgabe sagt das (`no HMAC key (file mode)`, `no anchors (file mode)`);
+eine schwächere Prüfung, die sich nicht als schwächer zu erkennen gibt, wiegt einen Menschen in
+Sicherheit. ESC-5 fährt `audit_delete_is_detected` und
 `audit_truncate_is_detected` gegen einen echten Daemon: Er schreibt seine Kette, der Test löscht
 einen Eintrag aus der Mitte beziehungsweise kürzt das verankerte Ende und prüft mit dem Schlüssel
 und den Ankern des Daemons. Beides meldet die Prüfung als Bruch (`SeqGap`,

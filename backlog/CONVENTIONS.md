@@ -3127,3 +3127,76 @@ keine alte fortsetzen kann, antwortet `/why` nach einem Neustart des Daemons
 `404`. Das ist die Zusage und kein Mangel. Was der Rückfall trägt, ist ein
 Flow, den die Registry innerhalb einer laufenden Sitzung nicht mehr hält. Über
 `ListFlows` und `GetFlow` steht die Notiz auch nach dem Neustart.
+
+### 4.31 Aus der Umsetzung von `config`, `audit` und `daemon` (HUM-070, 2026-09-18)
+
+**Codes, die von der Spezifikation abweichen.** Die Spezifikation von HUM-070
+ist vor dem Register geschrieben und vergibt Codes nach ihrer eigenen
+Zählung; es gilt das Register (Abschnitt 4.6).
+
+| Spezifikation | Gebaut | Grund |
+|---|---|---|
+| `config set` mit ungültigem Wert: `CONFIG_001` | `CONFIG_003` | `CONFIG_001` heißt „Config-Datei ungültig", `CONFIG_003` „Wert außerhalb des Bereichs"; die Datei ist in Ordnung, der Wert nicht. |
+| `config edit`, Datei danach kaputt: `CONFIG_002` | `CONFIG_001` | `CONFIG_002` heißt „Unbekannter Schlüssel". |
+| `daemon install` ohne Nutzersitzung: `DAEMON_002` | `DAEMON_010` | `DAEMON_002` ist „Proto-Version inkompatibel", `DAEMON_009` gehört dem Abschied (HUM-142). |
+| `daemon install`, Binary fehlt: `DAEMON_003` | `DAEMON_007` | `DAEMON_003` ist „Socket bereits belegt"; `DAEMON_007` (HUM-044) sagt genau das. |
+
+Neu im Register: `DAEMON_010` (keine Nutzersitzung), `DAEMON_011` (Binaries
+aus dem `AppImage` nicht ablegbar), `DAEMON_012` (`journalctl` fehlt),
+`AUDIT_008` (Export nicht schreibbar), `CONFIG_017` (kein Editor),
+`CONFIG_018` (Schlüssel ist eine Gruppe).
+
+**Die Form eines Fehlers unter `--json`.** Die Spezifikation schreibt
+`{"diagnostic": {code, severity, title, why, fix}}`. Die Kommandozeile schreibt
+seit HUM-064 das Objekt selbst, ohne die Hülle, und jeder Test und jedes
+Skript liest `code` auf oberster Ebene. Die Hülle kommt nicht: Sie änderte die
+Form jedes Fehlers jedes Unterkommandos, um einen Namen zu tragen, den ein
+Leser ohnehin an `code` erkennt. Wo ein Befund Teil eines Ergebnisses ist
+(`audit verify` bei gebrochener Kette), steht er als Feld `diagnostic` im
+Ergebnis.
+
+**`daemon install` aktiviert den Dienst, nicht den Socket.** Die
+Spezifikation nennt `enable --now humanitld.socket`. Der Daemon liest
+`LISTEN_FDS` noch nicht; ein von systemd gehaltener Socket sähe für ihn wie
+eine zweite Instanz aus (`DAEMON_003`). `packaging/systemd/humanitld.socket`
+liegt bereit und wird nicht geschrieben; HUM-053 stellt um.
+
+**Unter `--json` entfällt die Ankündigung von `daemon install`.** HUM-044
+schrieb sie „an jedem Ausgabeschalter vorbei" auf `stderr`, auch unter
+`--json`. Seit HUM-070 gehört `install` zum JSON-Vertrag (ein Objekt auf
+`stdout`, `stderr` leer); Text und Befehle stehen dann im Objekt
+(`unit_text`, `commands`). `-q` schaltet die Ankündigung weiterhin nicht ab.
+
+**Ein Weg in `config.toml`.** `humanitl config set` und `SetConfig` des
+Daemons schreiben beide über `humanitl_config::edit::set_value`: Kommentare,
+Verweise, Byte-Reihenfolge und CRLF bleiben, eine `flock`-Sperre auf dem
+Verzeichnis ordnet Schreiber über Prozesse hinweg, und ein Prüfschritt vor dem
+`rename` lädt die Nebendatei mit allen übrigen Ebenen. Ein zweiter Schreiber
+neben diesem wird nicht gebaut.
+
+**Die Probe von `config set` bestimmt die Quellen neu.** Welches
+Projekt-Profil gilt, hängt an `sandbox.work_dir`; die Probe ruft deshalb
+`humanitl_config::sources_with_global` mit der Nebendatei auf, statt die
+Datei in einem vorab bestimmten Satz zu tauschen. Lädt die Konfiguration mit
+dem neuen Wert nicht, zählt die Probe alle Befunde vorher und nachher: Die
+Ladung meldet nur ihren ersten, also nimmt die Probe den Schlüssel jedes
+Befunds (der früheste Blattpfad in `why`) aus globaler Datei, Projekt-Profil
+und Umgebung und lädt neu, höchstens 16 Mal. Geschrieben wird, wenn nachher
+kein Befund steht, den es vorher nicht gab (gleicher Code am gleichen
+Schlüssel), und keiner den gesetzten Schlüssel nennt. Ein Befund ohne
+Schlüssel beendet das Zählen und verhindert das Schreiben. Die Prüfung in
+`validate.rs` selbst meldet weiter nur den ersten Befund; sie alle sammeln zu
+lassen hieße, jede Stufe der Ladung (Parsen, Schema, Vertrauensgrenze, Werte)
+auf eine Liste umzustellen.
+
+**Kopien aus einem `AppImage` heißen `<version>.<stempel>`.** Die
+Spezifikation nennt `~/.local/lib/humanitl/<version>/`. Wer dieselbe Fassung
+ein zweites Mal installiert, müsste dann das Verzeichnis ersetzen, auf das
+`current` gerade zeigt, und ein Abbruch zwischen den beiden Umbenennungen
+ließe `current` ins Leere zeigen. Jede Kopie bekommt deshalb ein eigenes
+Verzeichnis; `current` wird erst umgehängt, wenn sie vollständig ist, und erst
+danach geht die alte.
+
+**`output.rs` heißt `render.rs`, `docs/CLI.md` heißt `docs/cli.md`.** Beide
+gab es vor HUM-070 unter diesem Namen; ein zweiter Renderer oder ein zweites
+Dokument, das sich nur in der Schreibweise unterscheidet, wäre schlechter.

@@ -4,8 +4,9 @@
 zuerst ein RPC; die Kommandozeile ruft ihn auf und formatiert die Antwort. Sie
 enthält keine Fachlogik, und sie erfindet nichts dazu.
 
-Dieses Dokument beschreibt `humanitl run` und `humanitl doctor` vollständig und
-die übrigen Unterkommandos nur so weit, wie sie `run` betreffen. Die kanonische
+Dieses Dokument beschreibt `humanitl run`, `humanitl doctor`, `humanitl config`,
+`humanitl audit` und die drei `humanitl daemon`-Kommandos vollständig und die
+übrigen Unterkommandos nur so weit, wie sie `run` betreffen. Die kanonische
 Liste aller Unterkommandos steht in `backlog/CONVENTIONS.md` 3.8, das Schema
 aller Konfigurations-Flags in `docs/CONFIG.md`.
 
@@ -328,7 +329,7 @@ Es ist der eingriffsreichste Befehl dieses Produkts außerhalb der Sandbox, und
 deshalb steht hier vollständig, was er tut.
 
 ```
-humanitl daemon install [--print] [--no-start]
+humanitl daemon install [--print] [--no-start] [--bin-dir DIR]
 ```
 
 **Genau eine Datei, an einem genannten Ort.**
@@ -338,11 +339,65 @@ System-Unit, kein `sudo`, keine zweite Datei, keine `humanitld.socket`. Ihr
 `ExecStart` nennt das `humanitld` **neben der laufenden Kommandozeile** — nie
 eines aus `PATH` und nie eines aus einem Konfigurationswert, damit beim
 Anmelden dieselbe Fassung startet wie die, die die Unit geschrieben hat.
+`--bin-dir DIR` nennt statt dessen ein anderes Verzeichnis, etwa das Bundle
+eines Pakets, das die Kommandozeile über einen Verweis erreicht hat.
+
+**Die Socket-Unit wird nicht geschrieben.** `packaging/systemd/humanitld.socket`
+liegt im Repository und geht mit dem Paket mit (HUM-053), aber dieser Befehl
+legt sie nicht an und aktiviert sie nicht. Der Daemon liest `LISTEN_FDS` noch
+nicht: Er bindet seinen Socket selbst und prüft beim Start, ob dort schon
+jemand antwortet — ein von systemd gehaltener Socket sähe für ihn wie eine
+zweite Instanz aus, und er bräche mit `DAEMON_003` ab. Sobald der Daemon den
+Deskriptor übernimmt (HUM-053, Schritt 2), tritt `enable --now humanitld.socket`
+an die Stelle von `enable --now humanitld.service`.
+
+**Aus einem AppImage wird kopiert.** Läuft die Kommandozeile aus einem
+AppImage (`$APPIMAGE` ist gesetzt), liegen `humanitld` und `humanitl-shim`
+unter `/tmp/.mount_*`, und dieser Pfad verschwindet mit dem Prozess. Ein
+`ExecStart` darauf zeigte beim nächsten Anmelden ins Leere. Beide Binaries
+werden deshalb nach `~/.local/lib/humanitl/<version>.<stempel>/` kopiert, der
+Verweis `~/.local/lib/humanitl/current` zeigt auf diese Kopie, und `ExecStart`
+nennt den Verweis: Ein Update legt eine neue Kopie daneben und hängt den
+Verweis um, ohne die Unit anzufassen. Fehlt eines der beiden Binaries, endet
+der Befehl mit `DAEMON_007`. Kopiert wird erst nach der Ankündigung und nach
+jeder Prüfung, die den Lauf ablehnen kann; eine fremde Unit (`DAEMON_005`) oder
+eine fehlende Nutzersitzung (`DAEMON_010`) lassen `~/.local/lib/humanitl` also
+unberührt.
+
+Jede Kopie bekommt ein neues Verzeichnis (`<stempel>` aus Zeit und
+Prozessnummer), auch wenn dieselbe Fassung ein zweites Mal installiert wird:
+Das Verzeichnis, auf das `current` gerade zeigt, wird nie angefasst, bevor
+`current` auf eine vollständige neue Kopie zeigt. Ein Abbruch mittendrin lässt
+also nie einen Verweis ins Leere. `current` wird über einen zweiten Verweis und
+`rename` umgehängt, nie gelöscht und neu angelegt; erst danach geht die Kopie,
+auf die es vorher zeigte. Ist `~/.local/lib/humanitl` ein Verweis oder gehört
+es einem anderen Konto als das Heimatverzeichnis, wird nichts kopiert
+(`DAEMON_011`). Scheitert nach der Kopie noch etwas — die Unit, `systemctl` —,
+zeigt `current` wieder dorthin, wohin es vorher zeigte, und die neue Kopie
+geht wieder. `--print` nennt denselben Pfad `…/current/humanitld`, den die
+Unit bekäme, und kopiert nichts.
+
+**Ohne Nutzersitzung wird nichts geschrieben.** Fehlt `XDG_RUNTIME_DIR` und
+soll die Unit gestartet werden (kein `--print`, kein `--no-start`), endet der
+Befehl vor dem ersten Schreibzugriff mit `DAEMON_010` und dem Vorschlag
+`loginctl enable-linger $USER`. Dasselbe gilt, wenn `systemctl --user` den Bus
+der Sitzung nicht findet („Failed to connect to bus"); dann ist die Unit schon
+zurückgenommen, wenn der Befund erscheint.
+
+**Am Ende wird gewartet.** Hat systemd die Unit genommen, fragt der Befehl bis
+zu fünf Sekunden lang `GetInfo`, bis der Daemon antwortet, und schreibt die
+Fassung, die er nennt, als letzte Zeile. Antwortet er nicht, steht dort
+`no answer within 5000 ms`; das ist eine Beobachtung und kein Grund, die
+Installation zurückzunehmen — die Unit liegt, und `humanitl daemon logs` sagt,
+woran es hängt.
 
 **Sichtbar, bevor es geschieht.** Der ganze Text der Unit und beide
 `systemctl`-Aufrufe gehen vor dem ersten Schreibzugriff auf `stderr`, an der
-Ausgabesteuerung vorbei: Weder `--json` noch `-q` können das abschalten.
-`--print` zeigt dieselbe Datei und schreibt nichts.
+Ausgabesteuerung vorbei: `-q` schaltet das nicht ab. Unter `--json` liest ein
+Programm, und für das gilt der Vertrag dieser Kommandozeile — ein Objekt auf
+`stdout`, `stderr` leer —; Text und Befehle stehen dann im Objekt als
+`unit_text` und `commands`. `--print` zeigt dieselbe Datei und schreibt
+nichts.
 
 **Wiederholbar.** Ein zweiter Aufruf mit demselben Ergebnis schreibt nicht
 noch einmal; die Ausgabe sagt dann `unchanged` statt `created`.
@@ -403,6 +458,328 @@ oder irgendwo sonst außerhalb von `/tmp` — oder startet den Daemon von Hand
 gemeinsames `/tmp` ist der Weg, auf dem ein anderer Prozess des Nutzers dem
 Daemon eine Datei unterschiebt, und ein Projektordner in einem Verzeichnis, das
 beim nächsten Start verschwindet, ist ohnehin kein Ort für Arbeit.
+
+## `humanitl daemon status`
+
+Fragt den Daemon, wer er ist.
+
+```
+humanitl daemon status [--json]
+```
+
+```
+FIELD         VALUE
+socket        /run/user/1000/humanitl/daemon.sock
+unit          active
+daemon        0.0.0
+proto         1.0
+session       7b1c…
+capabilities  hold, rules, sandbox
+```
+
+`socket` ist der Pfad, an dem der Client sucht; `unit` ist die Antwort von
+`systemctl --user is-active humanitld.service` und steht als `-`, wenn es kein
+`systemctl` gibt — ein Daemon, den jemand von Hand gestartet hat, ist kein
+Fehler, und ein erfundenes `inactive` wäre eine falsche Auskunft über eine
+Unit, die niemand installiert hat. Alles Übrige kommt aus `GetInfo` und wird
+nicht ergänzt.
+
+Antwortet niemand, endet der Befehl mit **2** und `DAEMON_001`; spricht der
+Daemon eine andere Hauptversion des Vertrags, ebenfalls mit 2 und
+`DAEMON_002`. Ein Skript, das auf den Dienst wartet, fragt also nur diese eine
+Zahl ab.
+
+## `humanitl daemon logs`
+
+Reicht das Journal des Dienstes durch.
+
+```
+humanitl daemon logs [-f] [-n N]
+```
+
+Der Befehl startet `journalctl --user -u humanitld.service` als Kind und gibt
+ihm das eigene Terminal. `-n N` und `-f` gehen unverändert weiter. Endet
+`journalctl` mit 0, endet der Befehl mit 0, sonst mit 1: Eine 2 oder 4 von
+`journalctl` hieße hier „Daemon nicht erreichbar" oder
+„Sicherheitsverletzung", und beides wäre falsch. Einen eigenen Leser für Journal-Einträge gibt es nicht: Er
+wäre eine zweite Quelle für dieselbe Wahrheit, mit eigenen Formaten und eigenen
+Fehlern.
+
+Weil das Kind schreibt, hat `--json` hier keine Wirkung; wer JSON-Zeilen will,
+bekommt sie von `journalctl` selbst (`humanitl daemon logs -- -o json` gibt es
+nicht, dafür ruft man `journalctl --user -u humanitld.service -o json` direkt).
+
+Fehlt `XDG_RUNTIME_DIR`, endet der Befehl mit `DAEMON_010` und dem einzig
+sinnvollen Vorschlag: `loginctl enable-linger $USER`. Über SSH ohne Linger gibt
+es keine Nutzersitzung, in der ein Nutzerdienst leben könnte, und damit auch
+kein Journal. Liegt kein `journalctl` im `PATH`, fehlt dagegen ein Programm und
+keine Sitzung: `DAEMON_012` mit `sudo apt-get install systemd`.
+
+## `humanitl config`
+
+Die aufgelöste Konfiguration lesen, einen Wert schreiben, das Schema ausgeben,
+die Datei von Hand öffnen.
+
+```
+humanitl config get [KEY] [--origin] [--json]
+humanitl config set KEY VALUE [--project]
+humanitl config schema [--profiles] [--json]
+humanitl config edit
+```
+
+### `config get`
+
+Ohne `KEY` steht jedes Blattfeld als Zeile da:
+
+```
+$ humanitl config get --origin
+KEY                    VALUE    ORIGIN
+hold.ask_mode          ui       default
+hold.timeout_secs      300      default
+llm.endpoint           -        default
+sandbox.work_mode      rw       config.toml
+```
+
+Ohne `--origin` bleibt die dritte Spalte weg, damit die Tabelle in ein Terminal
+passt; mit `--json` steht sie immer, dort kostet eine Spalte keine Breite.
+
+Mit `KEY` steht auf `stdout` nur der Wert — `$(humanitl config get
+hold.timeout_secs)` ist damit die Zahl und nicht ein Satz darüber. Welche Ebene
+ihn gesetzt hat, geht auf `stderr`; in eine Pipe gerät sie nicht.
+
+Aufgelöst wird lokal, über dieselben sieben Ebenen, die der Daemon beim Start
+fährt (ADR-011). Ein laufender Daemon kann Werte tragen, die nur er kennt —
+`hold.timeout_secs` aus einer Sitzung etwa —; was hier steht, ist die
+Auflösung dieses Aufrufs.
+
+### `config set`
+
+Der Wert wird nach dem Typ des Schemas gelesen:
+
+| Feld | Eingabe | steht in der Datei als |
+|---|---|---|
+| `hold.timeout_secs` | `5m` | `300` |
+| `limits.hold_body_cap_bytes` | `32MiB` | `33554432` |
+| `findings.enabled` | `true` | `true` |
+| `ui.theme` | `dark` | `"dark"` |
+| `llm.passthrough_paths` | `'["/v1/","/api/"]'` | die Liste |
+| `sandbox.env` | `'{"FOO":"bar"}'` | die Tabelle |
+| `llm.endpoint` | `null` oder `-` | nichts: der Schlüssel geht, der Vorgabewert gilt |
+
+Ein Wert, der mit `-` beginnt, ist ein Wert und kein Flag
+(`humanitl config set hold.timeout_secs -5m` wird gelesen und abgelehnt, nicht
+als unbekannte Option).
+
+Eine Dauer nimmt `s`, `m`, `h` und `d`, eine Größe `KiB`, `MiB`, `GiB` und die
+Formen ohne `i`. Beides gilt nur für Felder, deren Name darauf endet (`_secs`,
+`_ms`, `_bytes`); das Schema selbst kennt keine Einheiten.
+
+```
+$ humanitl config set hold.timeout_secs 5m
+hold.timeout_secs = 300 (global)
+```
+
+Geschrieben wird `$XDG_CONFIG_HOME/humanitl/config.toml` (mit `--config` die
+dort genannte Datei), und zwar über denselben Schreiber, den der Daemon für
+`SetConfig` benutzt (`humanitl_config::edit::set_value`). Dabei gelten vier
+Zusagen:
+
+- **Nur der eine Wert ändert sich.** Das Dokument wird mit `toml_edit`
+  geändert und nicht neu serialisiert; Kommentare, Reihenfolge und
+  Schreibweise bleiben, auch ein Kommentar hinter dem Wert, eine Markierung
+  der Byte-Reihenfolge und Zeilenenden mit CRLF. Eine verlinkte Datei bleibt
+  verlinkt; geändert wird ihr Ziel. Danach wird das Ergebnis noch einmal
+  gelesen und mit der alten Datei samt dem neuen Wert verglichen; weicht es ab,
+  wird nichts geschrieben (`CONFIG_015`).
+- **Nie eine halbe Datei.** Geschrieben wird in eine Nebendatei im selben
+  Verzeichnis, dann `rename`.
+- **Kein Schreiber verliert einen Wert.** Während des Schreibens ist das
+  Verzeichnis der Datei mit `flock` gesperrt; ein zweites `config set` oder
+  ein `SetConfig` des Daemons wartet, statt einen Wert zu überschreiben, den es
+  nie gelesen hat.
+- **Geprüft, bevor es in der Datei steht.** Erst gegen das Schema — Typ,
+  Aufzählung, Grenzen —, dann wird die fertige Nebendatei mit allen übrigen
+  Ebenen geladen, wie der nächste Start sie lädt: Profile, Umgebung und die
+  anderen Werte der Datei. Ein Wert, der für sich richtig ist, aber mit einem
+  anderen nicht zusammenpasst (`limits.hold_body_cap_bytes` über
+  `limits.hold_max_bytes`), landet so nie in der Datei. Die Quellen werden
+  dafür mit der neuen Datei neu bestimmt: `config set sandbox.work_dir` wird
+  mit dem Profil des Projekts geprüft, das es nennt, nicht mit dem des alten.
+  Lädt die Konfiguration schon ohne die Änderung nicht — ein anderer Wert der
+  Datei, eine Umgebungsvariable wie `HUMANITL_HOLD__TIMEOUT_SECS=0` —, zählt
+  `config set` alle Befunde vorher und nachher: Die Ladung meldet nur ihren
+  ersten, also nimmt die Prüfung den Schlüssel jedes Befunds aus Datei,
+  Projekt-Profil und Umgebung und lädt neu. Geschrieben wird, wenn der neue
+  Wert keinen Befund mitbringt, den es vorher nicht gab, und keiner den
+  gesetzten Schlüssel nennt; auf `stderr` steht dann, dass die Konfiguration
+  weiter nicht lädt. Derselbe Befund heißt gleicher Code, gleicher Schlüssel
+  und gleiche Begründung: Verschiebt der neue Wert die Schranke eines alten
+  Befunds (`limits.hold_max_bytes` neu gesetzt, während
+  `limits.hold_body_cap_bytes` schon darüber lag), ist das ein neuer Befund. So lässt sich eine Datei mit zwei falschen Werten
+  Schlüssel für Schlüssel reparieren, und ein älterer Fehler verdeckt keinen
+  neuen. Ein Befund, der keinen Schlüssel nennt (ein unbekannter Schlüssel in
+  der Datei, ein Profil, das nicht lädt), lässt sich so nicht zählen; dann
+  wird nicht geschrieben, und der Vorschlag ist `humanitl config edit`, nie ein
+  Wert aus einer anderen Ebene. Ein Wert, der schon genau so dasteht, wird
+  ebenso geprüft; stand er falsch da, endet `config set` mit dem Befund. Ein Wert, der nicht passt, ist `CONFIG_003` und Exit 1, und die Datei
+  bleibt unberührt:
+
+```
+$ humanitl config set hold.ask_mode banana
+error[CONFIG_003]: Wert außerhalb des Bereichs
+  why: banana is not a value of hold.ask_mode; it takes one of ui, terminal, none
+  fix: humanitl config set hold.ask_mode ui
+  docs: https://github.com/nurkert/Humanitl/blob/main/docs/DIAGNOSTICS.md#config_003
+```
+
+Jeder Vorschlag ist ein Befehl, der gelingt: bei einer Aufzählung ihr erster
+Wert, sonst der Vorgabewert des Feldes (bei `-5m` für `hold.timeout_secs` also
+`300`, nicht die Grenze `0`, die die Prüfung ebenso ablehnte), und Listen oder
+Tabellen darin stehen in einfachen Anführungszeichen.
+
+Steht der Wert schon so da, wird nicht geschrieben; `--json` sagt dann
+`"written": "unchanged"`.
+
+Auf `stderr` steht danach, wann der neue Wert wirkt: Läuft ein Daemon,
+übernimmt er ihn beim nächsten Start; läuft keiner, liest er ihn, sobald er
+startet. Beides ist richtig, und deshalb sagt die Ausgabe, welcher Fall
+vorliegt.
+
+`--project` schreibt statt dessen in `<projekt>/.humanitl/profile.toml` unter
+`[config]`. Das geht nur für Schlüssel, die das Projekt-Profil setzen darf:
+Diese Datei liegt im geklonten Repository und ist fremder Text, und ein
+gesperrter Schlüssel ist dort `CONFIG_003` — dieselbe Grenze, an der auch der
+Start eine solche Datei zurückweist (`backlog/CONVENTIONS.md` 4.11). Die
+Grenze wird vor allem anderen geprüft: Wer einen gesperrten Schlüssel ins
+Projekt schreiben will, erfährt die Grenze und nicht, dass sein Wert falsch
+geschrieben ist.
+
+### `config schema`
+
+Gibt das JSON-Schema aus, immer als JSON; ohne `--json` eingerückt. Jedes
+Blattfeld trägt `description`, `x-tier` (die Sichtbarkeitsstufe des
+Einstellungs-Bildschirms) und `x-project-scope` (die Vertrauensgrenze oben).
+`--profiles` gibt statt dessen die Profile aus, die `--profile` wählen kann.
+
+### `config edit`
+
+Öffnet `config.toml` in `$VISUAL`, sonst `$EDITOR`, sonst `nano`, sonst `vi`,
+und prüft die Datei nach dem Schließen: erst, ob sie TOML ist, dann, ob sie
+sich auflösen lässt. Geht das nicht, steht der Befund da, und an einem Terminal
+folgt die einzige interaktive Frage dieser Kommandozeile — „open it again?
+[y/N]". Ohne Terminal und unter `--json` gibt es keine Frage; dann endet der
+Befehl mit dem Befund und Exit 1. Der Befund steht in jedem Fall genau einmal
+da, unter `--json` als ein Objekt. Findet sich kein Editor, ist das
+`CONFIG_017` mit dem Vorschlag `export EDITOR=nano`.
+
+## `humanitl audit`
+
+Die Hash-Kette prüfen und die Records exportieren.
+
+```
+humanitl audit verify [--file PATH] [--json]
+humanitl audit export --format jsonl|csv --out FILE [--since TS] [--until TS] [--file PATH]
+```
+
+### Was `verify` beweist und was nicht
+
+Die Kette zeigt eine Änderung, Löschung oder Umordnung vor dem letzten Anker,
+solange der Angreifer den HMAC-Schlüssel nicht hat (`docs/SECURITY.md`, „Was
+die Audit-Kette beweist"). Diese Aussage hängt an drei Dingen: der Kette
+selbst, den MACs und den Ankern. Alle drei hat nur der Daemon — den Schlüssel
+aus dem Schlüsselspeicher, die Anker aus der Tabelle `audit_anchors`.
+
+Deshalb fragt der Befehl zuerst den Daemon. Antwortet der nicht, prüft die
+Kommandozeile die Datei selbst, und das ist die **schwächere** Prüfung: Kette
+und kanonische Form, aber keine MACs und keine Anker. Die Ausgabe sagt das, in
+jeder Fassung:
+
+```
+$ humanitl audit verify
+audit chain: OK
+records:     4213
+head:        a3f9…c2e1 (seq 4213, 2026-09-02T10:42:01.000000Z)
+anchors:     not checked
+warnings:    the daemon is not reachable (cannot stat the session token /run/user/1000/humanitl/token: No such file or directory (os error 2)), so this is the file-mode check; no HMAC key (file mode); unanchored tail: 4213 records; no anchors (file mode)
+checked by:  file:/home/nik/.local/share/humanitl/audit/audit.jsonl
+```
+
+Die erste Warnung sagt, warum die Datei geprüft wurde: „is not reachable",
+wenn kein Daemon da ist, „answered but did not verify", wenn er antwortet,
+aber nicht prüft — solange seine `Audit`-RPC nicht gebaut ist, ist das der
+Normalfall. Der Rest der Datei-Prüfung kennt keine Anker, also zählt jeder
+Record als unverankert. Prüft der Daemon selbst, steht dort
+`anchors: checked by the daemon` und keine dieser Warnungen.
+
+`--file PATH` prüft ausdrücklich diese Datei, ebenfalls ohne Schlüssel und
+Anker — der Weg für ein Log, das von woanders kommt.
+
+Bricht die Kette, endet der Befehl mit **4** (Sicherheitsverletzung nach
+`backlog/CONVENTIONS.md` 3.8), nennt die Stelle und schreibt `AUDIT_001` auf
+`stderr`:
+
+```
+$ humanitl audit verify --file audit.jsonl
+audit chain: BROKEN at seq 4012 (hash_mismatch)
+records:     4011
+anchors:     not checked
+warnings:    no HMAC key (file mode); no anchors (file mode)
+checked by:  file:audit.jsonl
+error[AUDIT_001]: Hash-Kette gebrochen
+  why: audit.jsonl: hash_mismatch at seq 4012; 4011 records before it hold
+  fix: mv audit.jsonl audit.jsonl.broken-$(date -u +%Y%m%dT%H%M%SZ)
+  docs: https://github.com/nurkert/Humanitl/blob/main/docs/DIAGNOSTICS.md#audit_001
+```
+
+Die ersten sechs Zeilen stehen auf `stdout`, der Befund auf `stderr`.
+
+Mit `--json` steht alles davon in einem Objekt auf `stdout`, der Befund als
+Feld `diagnostic`; `stderr` bleibt leer. `mode` sagt, welche Prüfung lief:
+`full` beim Daemon mit Schlüssel und Ankern, `file` ohne beides.
+
+### `audit export`
+
+```
+$ humanitl audit export --format csv --out audit.csv
+exported 4213 records to audit.csv
+```
+
+`jsonl` schreibt jede Zeile des Logs wörtlich — der Export bleibt damit gegen
+die Datei nachrechenbar. `csv` schreibt eine Kopfzeile und eine Zeile je
+Record, mit denselben acht Spalten, die ein Record hat:
+
+```
+seq,ts,session,kind,data,prev,hash,mac
+```
+
+Felder mit Komma oder Anführungszeichen stehen nach RFC 4180 in
+Anführungszeichen, doppelte Anführungszeichen verdoppelt, und jede Zeile endet
+mit CRLF. JSON-Zeilen enden mit LF, wie im Log.
+
+Eine Datei, die schon da ist, wird nie überschrieben (`AUDIT_008`): Ein Export
+ist ein Beleg, und ein `--force` gibt es aus demselben Grund nicht wie bei
+`daemon install`. Geschrieben wird in eine Nebendatei, und erst der fertige
+Export bekommt seinen Namen; ein Log, das mittendrin bricht (`AUDIT_001`),
+hinterlässt keine halbe Datei, die den nächsten Versuch abwiese. Die
+Nebendatei eines abgebrochenen Exports räumt der nächste Export in dasselbe
+Verzeichnis weg, aber nur, wenn das Verzeichnis dem eigenen Konto gehört und
+weder Gruppe noch andere hineinschreiben dürfen; in einem geteilten
+Verzeichnis bleibt sie liegen. Ein relativer
+`--out` wird vor dem Aufruf beim Daemon gegen das eigene Verzeichnis
+aufgelöst: Der Daemon läuft woanders.
+
+`--since` und `--until` nehmen RFC-3339-Zeitpunkte und schneiden halboffen
+(`since` gehört dazu, `until` nicht), damit ein Record nie in zwei
+aufeinanderfolgenden Exporten steht. Beide gelten nur für die Fassung über die
+Datei: Der Vertrag (`AuditRequest.Export`) trägt keine Zeitgrenzen, und ein
+Bereich, den die Kommandozeile nachträglich aus einem fertigen Export
+schnitte, wäre eine zweite Wahrheit über denselben Export. Wer sie setzt,
+bekommt deshalb die lokale Fassung.
+
+Was in keinem Record steht und damit auch in keinem Export: Bodies,
+Klartext-Werte, die Originale von Pseudonymen — und die Notiz einer
+Entscheidung. Sie steht in der Aufzeichnung (`flows.decision_note`,
+`humanitl flows show`), nicht im Audit-Log (HUM-117).
 
 ## `humanitl llm discover`
 
