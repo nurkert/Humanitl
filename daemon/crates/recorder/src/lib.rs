@@ -55,6 +55,7 @@ mod filter;
 mod hostkey;
 mod message;
 mod query;
+mod retention;
 mod schema;
 mod settings;
 mod sink;
@@ -64,7 +65,7 @@ mod writer;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use bytes::Bytes;
 use humanitl_core::ids::SandboxId;
@@ -79,6 +80,7 @@ pub use crate::error::RecorderError;
 pub use crate::filter::KEYS as FILTER_KEYS;
 pub use crate::hostkey::{host_key, suffix_range};
 pub use crate::query::ReadPool;
+pub use crate::retention::{DAY_SECS, RETENTION_INTERVAL, Retention};
 pub use crate::schema::{MIGRATIONS, Migration, latest_version};
 pub use crate::settings::RecorderSettings;
 pub use crate::sink::ResponseSink;
@@ -95,9 +97,6 @@ use crate::writer::{MessageWrite, Writer, WriterCmd, WriterHandle};
 /// So viele Befunde warten höchstens im Strom, bevor der langsamste Zuhörer
 /// Ereignisse verliert.
 const DIAGNOSTIC_BUFFER: usize = 256;
-
-/// Ein Tag in Sekunden, für die Aufbewahrungsfrist.
-const DAY_SECS: u64 = 24 * 60 * 60;
 
 /// Das Handle auf die Aufzeichnung.
 ///
@@ -529,17 +528,22 @@ impl Recorder {
     /// Gelöscht wird genau das: Flows mit `ts` vor der Grenze samt ihren
     /// Nachrichten und Funden, beendete Sitzungen ohne Flows und
     /// Regel-Schnappschüsse, die vorher gelöscht wurden. Ein Blob fällt erst,
-    /// wenn keine Zeile mehr auf ihn zeigt.
+    /// wenn keine Zeile mehr auf ihn zeigt. Die Audit-Kette bleibt unberührt:
+    /// weder `audit.jsonl` noch `audit_anchors` stehen in einer der
+    /// Anweisungen des Laufs (HUM-051).
+    ///
+    /// `recorder.retention_days == 0` heißt **nie löschen**
+    /// ([`Retention::Forever`]); dann tut dieser Aufruf nichts und meldet
+    /// einen leeren Bericht. Die Frist als Grenze zu lesen, ohne diesen Fall
+    /// zu kennen, ergäbe `jetzt − 0 Tage` und löschte die ganze Aufzeichnung.
     ///
     /// # Errors
     ///
     /// [`RecorderError::Storage`] bei einem Fehler der Datenbank.
     pub async fn purge_expired(&self, now: SystemTime) -> Result<PurgeReport, RecorderError> {
-        let horizon = now
-            .checked_sub(Duration::from_secs(
-                u64::from(self.settings.retention_days) * DAY_SECS,
-            ))
-            .unwrap_or(SystemTime::UNIX_EPOCH);
+        let Some(horizon) = Retention::from_days(self.settings.retention_days).horizon(now) else {
+            return Ok(PurgeReport::default());
+        };
         self.purge_before(horizon).await
     }
 

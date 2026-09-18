@@ -41,9 +41,9 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use clap::Parser;
-use humanitl_audit::kinds::{DaemonStarted, SessionStarted};
+use humanitl_audit::kinds::{DaemonStarted, RetentionApplied, SessionStarted};
 use humanitl_audit::{
-    Anchor, AnchorMirror, AuditKey, AuditWriter, RecordKind, WriterOptions, sha256_hex,
+    Anchor, AnchorMirror, AuditHandle, AuditKey, AuditWriter, RecordKind, WriterOptions, sha256_hex,
 };
 use humanitl_catalog::Catalog;
 use humanitl_config::{Config, DIR_MODE, Paths as XdgPaths, ResolverConfig, WorkMode};
@@ -68,7 +68,8 @@ use humanitl_proxy::{
     RulesPipeline, Scanner, Tier1Scanner, Upstream,
 };
 use humanitl_recorder::{
-    AnchorStore, AuditAnchor, Recorder, RecorderSettings, SessionMeta, read_anchors,
+    AnchorStore, AuditAnchor, PurgeReport, Recorder, RecorderError, RecorderSettings, Retention,
+    SessionMeta, read_anchors,
 };
 use tokio::net::UnixListener;
 // tonic bringt `tokio-stream` mit dem Feature `net` bereits mit (über sein
@@ -734,7 +735,7 @@ impl Watchers {
                 audit.diagnostics(),
                 Arc::clone(queue),
             )),
-            purge: tokio::spawn(purge_daily(recorder.clone())),
+            purge: tokio::spawn(purge_daily(recorder.clone(), audit.handle())),
         }
     }
 
@@ -789,16 +790,14 @@ async fn report_diagnostics(
 /// Jeder Lauf erhebt zugleich die Statistiken des Abfrageplaners neu
 /// (`backlog/CONVENTIONS.md` 4.14). Ein Fehler beendet die Aufgabe nicht: Am
 /// nächsten Tag wird es wieder versucht, und der Befund steht schon im Strom.
-async fn purge_daily(recorder: Recorder) {
-    let mut every_day = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
+async fn purge_daily(recorder: Recorder, audit: AuditHandle) {
+    let mut every_day = tokio::time::interval(humanitl_recorder::RETENTION_INTERVAL);
     loop {
         // Der erste Tick kommt sofort; das ist der Lauf beim Start.
         every_day.tick().await;
-        match recorder.purge_expired(SystemTime::now()).await {
-            Ok(report) if report == humanitl_recorder::PurgeReport::default() => {
-                tracing::debug!("nothing to purge");
-            }
-            Ok(report) => tracing::info!(
+        match purge_once(&recorder, &audit, SystemTime::now()).await {
+            Ok(None) => tracing::debug!("retention is off, nothing is purged"),
+            Ok(Some(report)) => tracing::info!(
                 flows = report.flows,
                 messages = report.messages,
                 findings = report.findings,
@@ -808,6 +807,201 @@ async fn purge_daily(recorder: Recorder) {
             ),
             Err(error) => tracing::warn!(why = %error, "the recording could not be purged"),
         }
+    }
+}
+
+/// Ein Aufräumlauf der Aufzeichnung und sein Record im Audit-Log (HUM-051).
+///
+/// Jeder Lauf, der eine Grenze hat, hinterlässt `recorder.retention_applied`
+/// mit der Zahl der gelöschten Flows und Blobs und der Grenze selbst, auch
+/// wenn nichts zu löschen war: Die dokumentierte Löschung ist auch der Beleg,
+/// dass gelöscht **worden wäre** — ein Lauf ohne Record sähe von außen aus wie
+/// ein Lauf, der gar nicht stattfand. Bei `recorder.retention_days = 0` gibt
+/// es keine Grenze und keinen Lauf, also auch keinen Record.
+///
+/// Die Aufzeichnung kennt die Audit-Crate nicht (`backlog/CONVENTIONS.md`
+/// 3.1); deshalb schreibt der Daemon den Record, der beide kennt.
+///
+/// # Errors
+///
+/// Der Fehler der Aufzeichnung. Dann steht kein Record im Log, denn es wurde
+/// nichts gelöscht.
+async fn purge_once(
+    recorder: &Recorder,
+    audit: &AuditHandle,
+    now: SystemTime,
+) -> Result<Option<PurgeReport>, RecorderError> {
+    let Some(horizon) = Retention::from_days(recorder.settings().retention_days).horizon(now)
+    else {
+        return Ok(None);
+    };
+    let report = recorder.purge_before(horizon).await?;
+    audit.record(
+        None,
+        RecordKind::RetentionApplied(RetentionApplied::new(report.flows, report.blobs, horizon)),
+    );
+    Ok(Some(report))
+}
+
+/// Die Prüfung von [`purge_once`]: Neben dem Aufräumlauf steht sein Record.
+///
+/// Ein eigenes Modul neben der Funktion und nicht am Ende von `tests`: Das
+/// Ende jener Datei ist die Stelle, an die jedes Issue anhängt.
+#[cfg(test)]
+mod retention_record_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use std::time::{Duration, SystemTime};
+
+    use humanitl_audit::{AuditKey, AuditRecord, AuditWriter, KeyOrigin, WriterOptions};
+    use humanitl_core::{
+        Authority, FlowEvent, FlowId, HostName, HttpRequest, Method, Scheme, SessionId,
+    };
+    use humanitl_recorder::{Recorder, RecorderSettings, SessionMeta};
+
+    use super::purge_once;
+
+    const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+
+    /// Eine Aufzeichnung mit einem Flow von vor [`age`], und ein Audit-Log.
+    fn setup(
+        retention_days: u32,
+        age: Duration,
+        now: SystemTime,
+    ) -> (tempfile::TempDir, Recorder, AuditWriter) {
+        let dir = tempfile::tempdir().unwrap();
+        let recorder = Recorder::open(
+            &dir.path().join("humanitl.db"),
+            &dir.path().join("blobs"),
+            RecorderSettings::new(64, 4_096, retention_days),
+        )
+        .unwrap();
+        let session = SessionId::new();
+        recorder.start_session(&SessionMeta {
+            id: session,
+            started_at: now,
+            sandbox_profile: "default".to_owned(),
+            llm_endpoint: None,
+            work_dir: "/work".to_owned(),
+            agent: "opencode".to_owned(),
+        });
+        recorder.apply(&FlowEvent::Received {
+            flow_id: FlowId::new(),
+            at: now - age,
+            request: Box::new(HttpRequest::new(
+                Method::GET,
+                Scheme::Https,
+                Authority::with_scheme(HostName::Dns("old.example".to_owned()), Scheme::Https),
+                "/x",
+            )),
+        });
+        let key = AuditKey::from_bytes([7; 32], KeyOrigin::File);
+        let (writer, _) = AuditWriter::open(
+            &dir.path().join("audit.jsonl"),
+            &key,
+            WriterOptions::default(),
+            &[],
+            None,
+        )
+        .unwrap();
+        (dir, recorder, writer)
+    }
+
+    /// Die Records der Art `recorder.retention_applied`.
+    fn retention_records(writer: AuditWriter) -> Vec<AuditRecord> {
+        writer.handle().sync().unwrap();
+        let text = std::fs::read_to_string(writer.path()).unwrap();
+        drop(writer);
+        text.lines()
+            .map(|line| AuditRecord::from_line(line.as_bytes()).unwrap())
+            .filter(|record| record.body.kind == "recorder.retention_applied")
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_retention_run_writes_retention_applied() {
+        let now = SystemTime::now();
+        let (_dir, recorder, writer) = setup(180, 200 * DAY, now);
+        recorder.flush().await;
+
+        let report = purge_once(&recorder, &writer.handle(), now)
+            .await
+            .unwrap()
+            .expect("180 days is a horizon");
+        assert_eq!(report.flows, 1, "the flow from 200 days ago went");
+
+        let records = retention_records(writer);
+        assert_eq!(records.len(), 1, "one run, one record");
+        let data = &records[0].body.data;
+        assert_eq!(data["deleted_flows"], 1);
+        assert_eq!(data["deleted_blobs"], 0);
+        let cutoff =
+            humanitl_audit::format_ts(chrono::DateTime::<chrono::Utc>::from(now - 180 * DAY));
+        assert_eq!(data["cutoff"], cutoff.as_str(), "the horizon of the run");
+        assert_eq!(records[0].body.session, humanitl_audit::NO_SESSION);
+    }
+
+    #[tokio::test]
+    async fn a_retention_run_keeps_the_audit_log_and_its_chain() {
+        // Das Kriterium „Audit-Records bleiben" am Log selbst gemessen, nicht
+        // nur an `audit_anchors`: Was vor dem Lauf im Log stand, steht danach
+        // Byte für Byte noch da, der Record des Laufs hängt dahinter, und die
+        // Kette prüft sich mit Schlüssel grün.
+        let now = SystemTime::now();
+        let (_dir, recorder, writer) = setup(180, 200 * DAY, now);
+        recorder.flush().await;
+        writer.handle().record(
+            None,
+            humanitl_audit::RecordKind::DaemonStopped(humanitl_audit::kinds::DaemonStopped {
+                reason: "earlier record".to_owned(),
+            }),
+        );
+        writer.handle().sync().unwrap();
+        let path = writer.path().to_path_buf();
+        let before = std::fs::read(&path).unwrap();
+        assert!(!before.is_empty(), "the log holds the earlier record");
+
+        let report = purge_once(&recorder, &writer.handle(), now)
+            .await
+            .unwrap()
+            .expect("180 days is a horizon");
+        assert_eq!(report.flows, 1, "the old flow did go");
+        writer.handle().sync().unwrap();
+        let after = std::fs::read(&path).unwrap();
+        drop(writer);
+
+        assert!(
+            after.starts_with(&before),
+            "the retention pass leaves every earlier byte of the audit log as it was"
+        );
+        let appended = std::str::from_utf8(&after[before.len()..]).unwrap();
+        let lines: Vec<&str> = appended.lines().collect();
+        assert_eq!(lines.len(), 1, "exactly the record of the run is appended");
+        let record = AuditRecord::from_line(lines[0].as_bytes()).unwrap();
+        assert_eq!(record.body.kind, "recorder.retention_applied");
+
+        let report = humanitl_audit::AuditVerifier::verify(&path, Some(&[7; 32]), &[]).unwrap();
+        assert!(report.is_ok(), "the chain still holds: {report:?}");
+        assert_eq!(report.records, 2);
+    }
+
+    #[tokio::test]
+    async fn no_horizon_no_run_no_record() {
+        let now = SystemTime::now();
+        let (_dir, recorder, writer) = setup(0, 3_650 * DAY, now);
+        recorder.flush().await;
+
+        assert!(
+            purge_once(&recorder, &writer.handle(), now)
+                .await
+                .unwrap()
+                .is_none(),
+            "0 days means never"
+        );
+        assert!(
+            retention_records(writer).is_empty(),
+            "a run that did not happen leaves no record"
+        );
     }
 }
 

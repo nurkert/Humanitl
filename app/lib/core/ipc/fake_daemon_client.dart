@@ -1651,6 +1651,197 @@ class FakeDaemonClient implements DaemonClient {
     return octets;
   }
 
+  // --- Audit (HUM-051) -------------------------------------------------------
+  //
+  // Die Kette des Fakes ist erfunden, und sie sagt das auch: Die Hashes sind
+  // aus der Nummer gerechnet, nicht aus dem Inhalt. Was sie richtig nachbildet,
+  // ist die **Form** -- kanonische Zeile mit acht Feldern nach Schlüsseln
+  // sortiert, laufende Nummern ohne Lücke, Anker alle `auditAnchorEvery`
+  // Records --, denn genau diese Form liest der Bildschirm.
+
+  /// Wie viele Records die Kette des Fakes hat.
+  int auditRecordCount = fakeAuditRecordCount;
+
+  /// Jeder wievielte Record ein Anker ist; die Vorgabe von
+  /// `audit.anchor_every`.
+  int auditAnchorEvery = 100;
+
+  /// Wahr, wenn die Prüfung eine gebrochene Kette melden soll.
+  ///
+  /// Das ist die Flagge aus Schritt 1 von HUM-051: Ohne sie antwortet
+  /// `Audit(verify)` mit `Ok`, mit ihr mit dem Bruch ab
+  /// [auditBreakSeq] und dem Befund `AUDIT_001`, so wie ihn
+  /// `humanitl_audit::VerifyReport::diagnostic` baut.
+  bool auditChainBroken = false;
+
+  /// Ab welcher Nummer die Kette bricht, wenn [auditChainBroken] gesetzt ist.
+  int auditBreakSeq = 150;
+
+  /// Warum sie bricht.
+  AuditBreakReason auditBreakReason = AuditBreakReason.hashMismatch;
+
+  /// Was `Audit(verify)` an Warnungen meldet, auch wenn die Kette hält.
+  List<AuditWarning> auditWarnings = const <AuditWarning>[];
+
+  /// Jeder Export, den der Fake angenommen hat, in der Reihenfolge der Aufrufe.
+  ///
+  /// Ein Test misst daran, dass der Zeitraum der Filterleiste wirklich an den
+  /// Daemon geht und nicht in der Oberfläche stecken bleibt.
+  final List<FakeAuditExport> auditExports = <FakeAuditExport>[];
+
+  /// Jede Abfrage, die der Fake bekommen hat, mit Filter und Cursor.
+  final List<({AuditFilter filter, int limit, String cursor})> auditQueries =
+      <({AuditFilter filter, int limit, String cursor})>[];
+
+  /// Der Befund, mit dem jede Audit-Operation scheitert. `null` heißt: keiner.
+  Diagnostic? auditFailure;
+
+  /// Falsch spielt einen Daemon, der die Anker nicht meldet
+  /// (`AuditResponse.anchors_reported`): Der Kopf trägt dann keine Zahl der
+  /// Anker und keinen Zeitpunkt des letzten, statt einer erfundenen Null.
+  bool auditAnchorsReported = true;
+
+  /// Wie oft `Audit(verify)` gerufen wurde. Eine Prüfung, die sich von selbst
+  /// wiederholte, fiele hier auf.
+  int auditVerifyCalls = 0;
+
+  /// Die Kette, jüngster Record zuerst.
+  List<AuditRecordRow> get auditRecords =>
+      fakeAuditChain(count: auditRecordCount);
+
+  @override
+  Future<AuditHead> auditHead() async {
+    _check();
+    _raiseAuditFailure();
+    final List<AuditRecordRow> chain = auditRecords;
+    if (chain.isEmpty) {
+      return AuditHead.empty;
+    }
+    final AuditRecordRow head = chain.first;
+    final int anchors = auditAnchorEvery <= 0
+        ? 0
+        : head.seq ~/ auditAnchorEvery;
+    final int lastAnchorSeq = anchors * auditAnchorEvery;
+    return AuditHead(
+      seq: head.seq,
+      hash: fakeAuditHash(head.seq),
+      records: chain.length,
+      anchors: auditAnchorsReported ? anchors : null,
+      lastAnchorAt: !auditAnchorsReported || lastAnchorSeq == 0
+          ? null
+          : fakeAuditTimestamp(lastAnchorSeq),
+    );
+  }
+
+  @override
+  Future<AuditReport> auditVerify() async {
+    auditVerifyCalls++;
+    _check();
+    _raiseAuditFailure();
+    final List<AuditRecordRow> chain = auditRecords;
+    if (!auditChainBroken) {
+      return AuditReport(
+        ok: true,
+        records: chain.length,
+        warnings: List<AuditWarning>.unmodifiable(auditWarnings),
+      );
+    }
+    // Vor dem Bruch halten die Records; das ist genau die Zahl, die der
+    // Bericht des Daemons in `records` trägt.
+    final int held = auditBreakSeq > 0 ? auditBreakSeq - 1 : 0;
+    return AuditReport(
+      ok: false,
+      records: held,
+      firstBadSeq: auditBreakSeq,
+      reason: auditBreakReason,
+      warnings: List<AuditWarning>.unmodifiable(auditWarnings),
+      diagnostic: fakeAuditBrokenDiagnostic(
+        firstBadSeq: auditBreakSeq,
+        reason: auditBreakReason,
+        held: held,
+      ),
+    );
+  }
+
+  @override
+  Future<AuditPage> auditQuery(
+    AuditFilter filter, {
+    int limit = auditPageSize,
+    String? cursor,
+  }) async {
+    _check();
+    auditQueries.add((filter: filter, limit: limit, cursor: cursor ?? ''));
+    _raiseAuditFailure();
+    final List<AuditRecordRow> matching = auditRecords
+        .where((AuditRecordRow row) => _auditMatches(row, filter))
+        .toList();
+    final int size = limit <= 0 ? auditPageSize : limit;
+    // Der Cursor gehört dem untersten Record der letzten Seite: Die nächste
+    // Seite beginnt unter seiner Nummer. Eine Nummer und kein Index, damit
+    // ein Record, der dazwischen wegfällt, keine Seite verschiebt.
+    final int after = int.tryParse(cursor ?? '') ?? 0;
+    final List<AuditRecordRow> rest = after <= 0
+        ? matching
+        : matching.where((AuditRecordRow row) => row.seq < after).toList();
+    final List<AuditRecordRow> rows = rest.take(size).toList();
+    return AuditPage(
+      rows: List<AuditRecordRow>.unmodifiable(rows),
+      nextCursor: rows.length < rest.length ? '${rows.last.seq}' : '',
+      total: matching.length,
+    );
+  }
+
+  @override
+  Future<AuditExport> auditExport({
+    required AuditExportFormat format,
+    required String outPath,
+    DateTime? from,
+    DateTime? to,
+  }) async {
+    _check();
+    auditExports.add(
+      FakeAuditExport(format: format, outPath: outPath, from: from, to: to),
+    );
+    _raiseAuditFailure();
+    final int records = auditRecords
+        .where(
+          (AuditRecordRow row) =>
+              _auditMatches(row, AuditFilter(from: from, to: to)),
+        )
+        .length;
+    return AuditExport(path: outPath, records: records);
+  }
+
+  /// Wirft den eingestellten Befund, falls einer eingestellt ist.
+  void _raiseAuditFailure() {
+    final Diagnostic? failure = auditFailure;
+    if (failure != null) {
+      throw DaemonException(failure);
+    }
+  }
+
+  /// Ob [row] dem Filter entspricht. Beide Zeitgrenzen schließen ein.
+  bool _auditMatches(AuditRecordRow row, AuditFilter filter) {
+    if (filter.kindPrefix.isNotEmpty &&
+        !row.kind.startsWith(filter.kindPrefix)) {
+      return false;
+    }
+    if (filter.session.isNotEmpty && row.session != filter.session) {
+      return false;
+    }
+    final DateTime? at = row.time;
+    if (at == null) {
+      return filter.from == null && filter.to == null;
+    }
+    if (filter.from case final DateTime from when at.isBefore(from.toUtc())) {
+      return false;
+    }
+    if (filter.to case final DateTime to when at.isAfter(to.toUtc())) {
+      return false;
+    }
+    return true;
+  }
+
   @override
   Future<void> close() async {
     _closed = true;
@@ -3587,4 +3778,229 @@ enum _SeededBody {
 
   /// Protobuf: Bytes, die kein Text sind.
   binary,
+}
+
+// --- Audit-Kette des Fakes (HUM-051) -----------------------------------------
+//
+// Zweihundert Records, immer dieselben. Die Hashes sind aus der Nummer
+// gerechnet und nicht aus dem Inhalt; die Kette des Fakes beweist nichts und
+// soll das auch nicht. Was sie nachbildet, ist die Form, die der Bildschirm
+// liest: acht Felder je Zeile, nach Schlüsseln sortiert, laufende Nummern ohne
+// Lücke.
+
+/// Wie viele Records die Kette des Fakes hat (HUM-051 Schritt 1).
+const int fakeAuditRecordCount = 200;
+
+/// Der Zeitpunkt des ersten Records der gespielten Kette.
+final DateTime fakeAuditEpoch = DateTime.utc(2026, 9, 11, 8);
+
+/// Der Abstand zwischen zwei Records der gespielten Kette.
+const Duration fakeAuditSpacing = Duration(seconds: 3);
+
+/// Die zweite Sitzung der gespielten Kette, damit der Sitzungsfilter etwas zu
+/// trennen hat.
+const SessionId fakeAuditSecondSession = SessionId(
+  '018f0001-0000-7000-8000-000000000002',
+);
+
+/// Der Zeitpunkt des Records [seq].
+DateTime fakeAuditTimestamp(int seq) =>
+    fakeAuditEpoch.add(fakeAuditSpacing * (seq - 1));
+
+/// Der Zeitstempel des Records [seq] im Format des Logs: UTC, Mikrosekunden,
+/// immer `Z` (`humanitl_audit::record::TS_FORMAT`).
+String fakeAuditTs(int seq) {
+  final DateTime at = fakeAuditTimestamp(seq);
+  String two(int value) => value.toString().padLeft(2, '0');
+  final String micros = (at.millisecond * 1000 + at.microsecond)
+      .toString()
+      .padLeft(6, '0');
+  return '${at.year.toString().padLeft(4, '0')}-${two(at.month)}-'
+      '${two(at.day)}T${two(at.hour)}:${two(at.minute)}:${two(at.second)}'
+      '.${micros}Z';
+}
+
+/// Der gespielte Hash des Records [seq]: 64 Hex-Zeichen, aus der Nummer
+/// gerechnet.
+///
+/// Ausdrücklich keine Prüfsumme über den Inhalt. Ein Fake, der echte Hashes
+/// rechnete, behauptete eine Kette, die niemand geschrieben hat
+/// (`backlog/CONVENTIONS.md` 4.7).
+String fakeAuditHash(int seq) {
+  final StringBuffer out = StringBuffer();
+  int value = seq * 2654435761 + 0x9e3779b9;
+  while (out.length < 64) {
+    value = (value * 1103515245 + 12345) & 0x7fffffff;
+    out.write(value.toRadixString(16).padLeft(8, '0'));
+  }
+  return out.toString().substring(0, 64);
+}
+
+/// Die Art des Records [seq] der gespielten Kette.
+String fakeAuditKind(int seq) {
+  if (seq == 1) {
+    return 'session.started';
+  }
+  return switch (seq % 5) {
+    0 => 'flow.received',
+    1 => 'flow.decided',
+    2 => 'rule.added',
+    3 => 'config.changed',
+    _ => 'audit.anchor',
+  };
+}
+
+/// Die gespielte Kette, jüngster Record zuerst.
+List<AuditRecordRow> fakeAuditChain({int count = fakeAuditRecordCount}) =>
+    List<AuditRecordRow>.unmodifiable(<AuditRecordRow>[
+      for (int seq = count; seq >= 1; seq--) fakeAuditRecord(seq),
+    ]);
+
+/// Der Record [seq] der gespielten Kette.
+AuditRecordRow fakeAuditRecord(int seq) {
+  final String kind = fakeAuditKind(seq);
+  // Die erste Hälfte gehört der ersten Sitzung, die zweite der zweiten; ein
+  // Anker gehört zu keiner.
+  final String session = kind == 'audit.anchor'
+      ? '-'
+      : (seq * 2 <= fakeAuditRecordCount
+            ? FakeDaemonClient.defaultSession.value
+            : fakeAuditSecondSession.value);
+  final Map<String, Object?> data = switch (kind) {
+    'session.started' => <String, Object?>{
+      'agent': 'opencode',
+      'profile': 'default',
+      'work_dir_hash': fakeAuditHash(seq),
+      'work_mode': 'rw',
+    },
+    'flow.received' => <String, Object?>{
+      'flow': '018f0003-0000-7000-8000-${seq.toString().padLeft(12, '0')}',
+      'method': switch (seq % 3) {
+        0 => 'GET',
+        1 => 'POST',
+        _ => 'PUT',
+      },
+      'scheme': 'https',
+      'host': seq.isEven ? 'api.github.com' : 'registry.npmjs.org',
+      'port': 443,
+      'findings': 0,
+    },
+    'flow.decided' => <String, Object?>{
+      'flow': '018f0003-0000-7000-8000-${seq.toString().padLeft(12, '0')}',
+      'decision': seq % 7 == 0 ? 'block' : 'allow',
+      'decided_by': seq % 7 == 0 ? 'rule' : 'user',
+      'edited': false,
+    },
+    'rule.added' => <String, Object?>{
+      'rule': '018f0004-0000-7000-8000-${seq.toString().padLeft(12, '0')}',
+      'action': seq % 4 == 0 ? 'block' : 'allow',
+      'match_host': '**.github.com',
+      'expires': 'never',
+      'origin': 'ui',
+    },
+    'config.changed' => <String, Object?>{
+      'key': seq.isEven ? 'hold.timeout_secs' : 'llm.endpoint',
+      'origin': 'global',
+      'secret': !seq.isEven,
+      if (seq.isEven) 'value': '300',
+    },
+    _ => <String, Object?>{'seq': seq, 'hash': fakeAuditHash(seq)},
+  };
+  final String dataJson = jsonEncode(data);
+  return AuditRecordRow(
+    seq: seq,
+    ts: fakeAuditTs(seq),
+    kind: kind,
+    session: session,
+    dataJson: dataJson,
+    line: fakeAuditLine(
+      seq: seq,
+      ts: fakeAuditTs(seq),
+      kind: kind,
+      session: session,
+      dataJson: dataJson,
+    ),
+  );
+}
+
+/// Die kanonische Zeile eines Records: acht Felder, nach Schlüsseln sortiert
+/// (`data`, `hash`, `kind`, `mac`, `prev`, `seq`, `session`, `ts`).
+String fakeAuditLine({
+  required int seq,
+  required String ts,
+  required String kind,
+  required String session,
+  required String dataJson,
+}) => jsonEncode(<String, Object?>{
+  'data': jsonDecode(dataJson),
+  'hash': fakeAuditHash(seq),
+  'kind': kind,
+  'mac': fakeAuditHash(seq + 1000000),
+  'prev': seq == 1
+      ? '0000000000000000000000000000000000000000000000000000000000000000'
+      : fakeAuditHash(seq - 1),
+  'seq': seq,
+  'session': session,
+  'ts': ts,
+});
+
+/// Der Befund einer gebrochenen Kette, so wie ihn der Daemon baut
+/// (`humanitl_audit::VerifyReport::diagnostic`).
+///
+/// Der `why` trägt den Satz des Daemons: Pfad, Grund, Nummer und wie viele
+/// Records davor halten. Der Vorschlag legt die Datei beiseite, statt sie zu
+/// löschen — sie ist der Beleg.
+Diagnostic fakeAuditBrokenDiagnostic({
+  required int firstBadSeq,
+  required AuditBreakReason reason,
+  required int held,
+}) {
+  const String path = '/home/nik/.local/share/humanitl/audit/audit.jsonl';
+  final String detail = switch (reason) {
+    AuditBreakReason.seqGap => 'seq_gap at seq $firstBadSeq',
+    AuditBreakReason.prevMismatch => 'prev_mismatch at seq $firstBadSeq',
+    AuditBreakReason.hashMismatch => 'hash_mismatch at seq $firstBadSeq',
+    AuditBreakReason.macMismatch => 'mac_mismatch at seq $firstBadSeq',
+    AuditBreakReason.nonCanonicalLine =>
+      'non_canonical_line at seq $firstBadSeq',
+    AuditBreakReason.anchorMismatch =>
+      'the anchor at seq $firstBadSeq names another hash',
+    AuditBreakReason.truncatedBelowAnchor =>
+      'the log ends at seq $firstBadSeq, below the anchor at seq $firstBadSeq',
+    AuditBreakReason.unknown => 'the chain does not hold at seq $firstBadSeq',
+  };
+  return Diagnostic(
+    code: DiagnosticCodes.auditChainBroken,
+    severity: Severity.error,
+    title: 'Hash-Kette gebrochen',
+    why: '$path: $detail; $held records before it hold',
+    // Der Aufruf von `date` gehört der Shell, nicht Dart: Der Backslash hält
+    // ihn aus der Interpolation heraus, der Pfad geht durch sie hindurch.
+    fix: FixAction.copyCommand(
+      command: 'mv $path $path.broken-\$(date -u +%Y%m%dT%H%M%SZ)',
+    ),
+  );
+}
+
+/// Ein Export, den der Fake angenommen hat.
+class FakeAuditExport {
+  /// Legt den Vermerk eines Export-Aufrufs an.
+  const FakeAuditExport({
+    required this.format,
+    required this.outPath,
+    this.from,
+    this.to,
+  });
+
+  /// Welches der beiden Dokumente verlangt war.
+  final AuditExportFormat format;
+
+  /// Wohin der Daemon schreiben sollte.
+  final String outPath;
+
+  /// Die untere Zeitgrenze, oder null.
+  final DateTime? from;
+
+  /// Die obere Zeitgrenze, oder null.
+  final DateTime? to;
 }
