@@ -44,7 +44,7 @@ description = "Ask for everything no rule decides. Full moderation with the desk
 
 # [config.recorder]
 # inline_max_bytes = 262144
-# retention_days = 90
+# retention_days = 180   # 0 heißt nie löschen (HUM-051)
 
 [rules]
 # Dateien werden relativ zu dieser Profildatei aufgelöst, nie zum

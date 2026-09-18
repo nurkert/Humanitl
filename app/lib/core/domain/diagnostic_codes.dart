@@ -97,4 +97,16 @@ abstract final class DiagnosticCodes {
   /// own, because an open step of the setup is not a fault of the daemon
   /// (HUM-044).
   static const String noProjectFolder = 'CONFIG_013';
+
+  /// The hash chain of the audit log is broken: a record was changed, removed
+  /// or reordered after it was written. Raised by the daemon while checking
+  /// (`humanitl_audit::VerifyReport::diagnostic`); the audit screen shows that
+  /// finding and writes none of its own (HUM-050, HUM-051).
+  static const String auditChainBroken = 'AUDIT_001';
+
+  /// The daemon has the RPC but not what it needs for it: no audit log in the
+  /// fake daemon, no sandbox in a daemon started without one. The client also
+  /// raises it for an `Audit` answer that says `ok: false` without a finding,
+  /// because a refusal without a reason is still a refusal (HUM-051).
+  static const String capabilityUnavailable = 'IPC_006';
 }

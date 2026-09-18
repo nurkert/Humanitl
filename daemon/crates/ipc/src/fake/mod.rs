@@ -381,19 +381,27 @@ impl DaemonApi for FakeDaemon {
         Box::pin(UnboundedReceiverStream::new(rx))
     }
 
+    /// Dieser Fake hat kein Audit-Log und sagt das (`IPC_006`).
+    ///
+    /// Bis HUM-051 antwortete er mit `ok: true` und lauter Nullen. Die
+    /// Oberfläche las daraus „Verifiziert · 0 Records" und nach einem Export
+    /// „Exportiert · 0 Records · Pfad", obwohl nichts geprüft und nichts
+    /// geschrieben war. Eine Kette, die es nicht gibt, ist weder heil noch
+    /// leer; sie fehlt (`backlog/CONVENTIONS.md` 4.13).
     async fn audit(&self, request: v1::AuditRequest) -> Result<v1::AuditResponse, Diagnostic> {
-        let out_path = match request.op {
-            Some(v1::audit_request::Op::Export(export)) => export.out_path,
-            _ => String::new(),
+        let operation = match request.op {
+            Some(v1::audit_request::Op::Verify(())) => "verify",
+            Some(v1::audit_request::Op::Export(_)) => "export",
+            Some(v1::audit_request::Op::Head(())) => "head",
+            Some(v1::audit_request::Op::Query(_)) => "query",
+            None => "no operation",
         };
-        Ok(v1::AuditResponse {
-            ok: true,
-            entries: 0,
-            head_hash: Vec::new(),
-            first_bad_seq: 0,
-            out_path,
-            diagnostic: None,
-        })
+        Err(Diagnostic::builder(codes::IPC_006, Severity::Error)
+            .why(format!(
+                "the fake daemon keeps no audit log, so Audit({operation}) has nothing to \
+                 check, list or write"
+            ))
+            .build())
     }
 
     async fn get_config(

@@ -344,6 +344,39 @@ class TestDaemonClient implements DaemonClient {
     List<int> ports = const <int>[],
   }) => const Stream<LlmServer>.empty();
 
+  // Die vier Audit-Aufrufe (HUM-051) gehören dem Audit-Bildschirm. Dieser
+  // Client steht unter der Warteschlange und hat keine Kette. Er lehnt ab wie
+  // der Rust-Fake (`IPC_006`), statt eine heile, leere Kette zu behaupten, die
+  // es hier nicht gibt (`backlog/CONVENTIONS.md` 4.13).
+  static const Diagnostic _noAuditLog = Diagnostic(
+    code: DiagnosticCodes.capabilityUnavailable,
+    severity: Severity.error,
+    why: 'the test client keeps no audit log',
+  );
+
+  @override
+  Future<AuditHead> auditHead() async =>
+      throw const DaemonException(_noAuditLog);
+
+  @override
+  Future<AuditReport> auditVerify() async =>
+      throw const DaemonException(_noAuditLog);
+
+  @override
+  Future<AuditPage> auditQuery(
+    AuditFilter filter, {
+    int limit = auditPageSize,
+    String? cursor,
+  }) async => throw const DaemonException(_noAuditLog);
+
+  @override
+  Future<AuditExport> auditExport({
+    required AuditExportFormat format,
+    required String outPath,
+    DateTime? from,
+    DateTime? to,
+  }) async => throw const DaemonException(_noAuditLog);
+
   @override
   Future<void> close() async {
     for (final StreamController<FlowEvent> controller in streams) {

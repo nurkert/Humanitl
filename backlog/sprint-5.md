@@ -2291,11 +2291,11 @@ Audit-Protokoll. Begrenzt ist heute jede einzelne Zeile, aber nicht die Summe:
   Body; alles darüber wird nur mit Prüfsumme vermerkt.
 - `recorder.inline_max_bytes` (Vorgabe 262 144) entscheidet nur, ob ein Body in
   der Datenbank oder als Datei liegt — nicht, ob er überhaupt liegt.
-- `recorder.retention_days` (Vorgabe 90) räumt nach Alter auf, einmal beim
+- `recorder.retention_days` (Vorgabe 180 seit HUM-051, vorher 90) räumt nach Alter auf, einmal beim
   Start und danach täglich (`humanitld/src/main.rs`, `purge_daily`).
 
 Ein Alter begrenzt keine Menge. Ein Agent, der einen Tag lang große Antworten
-zieht, füllt bis zu 90 Tage lang, bevor überhaupt etwas gelöscht wird; ein
+zieht, füllt bis zu 180 Tage lang, bevor überhaupt etwas gelöscht wird; ein
 zweiter Agent daneben verdoppelt das. Es gibt keine Obergrenze in Bytes, keine
 Verdrängung des Ältesten bei Überschreitung und keine Untergrenze für den
 freien Platz, bei der Humanitl aufhört, Rümpfe zu schreiben, statt die Platte

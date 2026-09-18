@@ -48,6 +48,8 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-153 | Im History-Detail bleibt dem Body kaum Platz | S | HUM-032, HUM-116 |
 | HUM-154 | „No body." steht in einer Farbe, die für Sätze zu schwach ist | S | HUM-030 |
 | HUM-156 | Der Daemon beantwortet `Audit` nicht | M | HUM-050, HUM-070, HUM-051 |
+| HUM-157 | `audit.retention_days` hat keinen Leser | M | HUM-050, HUM-051, HUM-156 |
+| HUM-158 | Ein Export ohne freien Namen meldet `IPC_006` | S | HUM-051, HUM-070 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -978,6 +980,7 @@ Felder: `seq` (u64, beginnt bei 1, lückenlos), `ts` (RFC 3339 UTC mit Mikroseku
 | `audit.anchor` | `anchored_seq`, `anchored_hash` |
 | `audit.verified` | `result`, `first_bad_seq` (oder null), `records` |
 | `audit.resumed` | `log_seq`, `anchor_seq` — der erste Record hinter einer Lücke, wenn das Log beim Start vor einem Anker endet (`AUDIT_007`, aus dem Review von HUM-050) |
+| `recorder.retention_applied` | `deleted_flows`, `deleted_blobs`, `cutoff` (Zeitpunkt im Format des Logs) — nach jedem Aufräumlauf der Aufzeichnung, auch wenn nichts zu löschen war; bei `recorder.retention_days = 0` läuft keiner (nachgetragen von HUM-051) |
 
 **Writer** (`AuditWriter`): Öffnet die Datei `O_APPEND`, hält `last_seq` und `last_hash` im Speicher (beim Start durch Lesen der letzten Zeile ermittelt; ist die Datei leer, `seq = 0`, `prev = 0…0`). Schreibt jede Zeile mit `write_all` + `fsync` alle 50 Records oder 1 s (konfigurierbar `audit.fsync_every`, `expert`). Ein einzelner `tokio::sync::mpsc`-Consumer serialisiert alle Schreibvorgänge; kein paralleler Zugriff. Bei jedem `anchor_every`-ten Record und bei `daemon.stopped` wird ein `audit.anchor`-Record geschrieben **und** derselbe Anker in die SQLite-Tabelle:
 
@@ -1127,11 +1130,11 @@ Widget: `status_ok_green`, `status_broken_shows_seq_and_reason`, `filter_by_kind
 Unit (`retention.rs`): `deletes_older_than_cutoff_only`, `orphan_blobs_removed`, `zero_means_never`, `audit_untouched`.
 
 ### Akzeptanzkriterien
-- [ ] `Ctrl+5` öffnet den Screen; Status-Karte zeigt nach ≤ 2 s ein Ergebnis.
-- [ ] Nach Manipulation der JSONL-Datei (Test aus HUM-050) zeigt der Screen „gebrochen ab Sequenz n" mit Grund.
-- [ ] Head-Hash im UI == `humanitl audit verify --json | jq .head` (HUM-070).
-- [ ] CSV-Export enthält die zwölf Spalten aus HUM-050, JSONL ist bytegleich mit der Quelldatei für den Zeitraum.
-- [ ] Retention: Flow mit `ts` vor 200 Tagen ist nach Job weg, Audit-Records bleiben.
+- [ ] `Ctrl+5` öffnet den Screen; Status-Karte zeigt nach ≤ 2 s ein Ergebnis. Offen: `Ctrl+5` und Rail-Eintrag 5 bestanden schon (`Section.audit`, `navigationKeys`), von diesem Issue nicht neu gemessen; gegen den Fake steht das Ergebnis nach rund 0,5 s (`settleAudit`), gegen einen echten Daemon ist es nicht messbar, solange `Audit` dort `unimplemented` antwortet (HUM-156).
+- [ ] Nach Manipulation der JSONL-Datei (Test aus HUM-050) zeigt der Screen „gebrochen ab Sequenz n" mit Grund. Offen: Die Anzeige des Bruchs ist gegen den Fake gemessen (`status_broken_shows_seq_and_reason`), die manipulierte Datei über einen echten Daemon nicht (HUM-156).
+- [ ] Head-Hash im UI == `humanitl audit verify --json | jq .head` (HUM-070). Offen: braucht den Dienst `Audit` im Daemon (HUM-156).
+- [ ] CSV-Export enthält die zwölf Spalten aus HUM-050, JSONL ist bytegleich mit der Quelldatei für den Zeitraum. Offen: Die Datei schreibt der Daemon (HUM-156); gemessen ist nur, dass Format, Pfad und Zeitraum bei ihm ankommen (`export_csv_calls_export_with_range`).
+- [x] Retention: Flow mit `ts` vor 200 Tagen ist nach Job weg, Audit-Records bleiben. Gemessen: Der Flow geht in `deletes_older_than_cutoff_only` (`daemon/crates/recorder/tests/retention.rs`, echte SQLite-Datenbank). Die Audit-Records bleiben in `a_retention_run_keeps_the_audit_log_and_its_chain` (`daemon/bin/humanitld/src/main.rs`): Ein Record, der vor dem Lauf im Log stand, steht danach Byte für Byte noch da, dahinter genau `recorder.retention_applied`, und `AuditVerifier::verify` mit Schlüssel meldet die Kette als heil; `audit_untouched` belegt dasselbe für `audit_anchors`.
 
 ### Fallstricke
 - `verify` über die gesamte Datei kann bei sehr großen Logs Sekunden dauern; UI zeigt Fortschritt aus dem Daemon? Im MVP: Spinner und Ergebnis, `verify` läuft in `spawn_blocking`.
@@ -1140,6 +1143,83 @@ Unit (`retention.rs`): `deletes_older_than_cutoff_only`, `orphan_blobs_removed`,
 
 ### Referenzen
 - HUM-050 Spezifikation, BACKLOG.md Abschnitt 5 (IA), DSGVO Art. 5 Abs. 1 lit. e
+
+### Stand (2026-09-18): gebaut gegen den Fake, der Daemon antwortet noch nicht
+
+Gebaut sind Bildschirm, Port, Proto und die Aufbewahrungsregel. Der Dienst
+`Audit` im Daemon antwortet weiterhin `unimplemented`; ihn baut HUM-156. Drei
+der fünf Kriterien (Ergebnis nach höchstens 2 s gegen einen echten Daemon,
+Head-Hash gleich `humanitl audit verify --json`, Export-Inhalt) sind deshalb
+nur gegen `FakeDaemonClient` gemessen und bleiben offen, bis HUM-156 steht. Das
+Kriterium zur Aufbewahrung ist erfüllt (`daemon/crates/recorder/tests/retention.rs`).
+
+Abweichungen von dieser Spezifikation, jede mit Grund:
+
+- **`AUDIT_001` statt `AUDIT_010`, mit `CopyCommand` statt `OpenUrl`.** Der
+  Bereich `AUDIT_001..009` ist reserviert (`backlog/CONVENTIONS.md` 4.6), und
+  `AUDIT_001` „Hash-Kette gebrochen" ist genau dieser Befund. Der Bildschirm
+  zeigt den Befund des Daemons unverändert (`VerifyReport::diagnostic` in
+  `daemon/crates/audit/src/verify.rs`), samt dessen Vorschlag, die Datei
+  beiseitezulegen. Einen eigenen Satz erfindet die Oberfläche nicht.
+- **`ListView` mit `itemExtent` statt `TableView`.** Dieselbe Begründung wie
+  bei der History-Tabelle (`history_table.dart`): Die Zeilenhöhe steht fest,
+  also bleibt das Blättern billig, und eine Zeile ist ein Semantik-Knoten.
+- **Ein Punkt statt eines Hakens bei `Ok`.** `HGlyph` kennt keinen Haken; eine
+  neue Form gehört nach `packages/ui`. Der gebrochene Fall zeigt `shield-x`.
+- **Zusammenfassung von `flow.decided`.** Der Record trägt weder Methode noch
+  Host (`FlowDecided` in `daemon/crates/audit/src/kinds.rs`); die stehen in
+  `flow.received`. Die Spalte zeigt, was im Record steht: Entscheidung und wer
+  entschied, Methode und Host erst, wenn ein Record sie führt.
+- **Aufbewahrung mit der Vorgabe statt des geltenden Werts, und ohne Knopf
+  „Einstellungen".** Die beiden Sätze folgen der Skizze. Der Client hat aber
+  kein `GetConfig` (HUM-069) und kann die geltende Frist nicht lesen; der
+  erste Satz nennt deshalb 180 als Vorgabe zusammen mit dem Schlüssel, der
+  sie ändert, und dass 0 nie heißt. Der zweite sagt, dass die Kette nie
+  gelöscht wird, und dass `audit.retention_days` in dieser Fassung nicht
+  wirkt. Statt des Knopfs „Einstellungen" kopiert ein Knopf den Befehl, der
+  beide Werte ausgibt; einen Einstellungs-Bildschirm gibt es noch nicht.
+- **Der Export schränkt nur nach Zeitraum ein.** Art und Sitzung der
+  Filterleiste gelten für die Tabelle, nicht für die Datei; `Export` im Proto
+  kennt nur den Zeitraum.
+- **Der Export fragt nach einem Ordner, nicht nach einer Datei.** Der
+  Speichern-Dialog von `file_picker` legt die Datei selbst an und hätte eine
+  gewählte vorhandene Datei geleert, bevor der Daemon gefragt war. Die
+  Anwendung wählt im Ordner einen freien Namen und schreibt nichts; der Daemon
+  überschreibt nie (HUM-156).
+- **`recorder.retention_applied` schreibt der Daemon, nicht `retention.rs`.**
+  Die Aufzeichnung darf die Audit-Crate nicht kennen
+  (`backlog/CONVENTIONS.md` 3.1). `humanitld::purge_once` hat beide: Er
+  bestimmt die Grenze über `Retention::horizon`, lässt die Aufzeichnung
+  löschen und schreibt danach den Record mit `deleted_flows`, `deleted_blobs`
+  und `cutoff`, auch wenn nichts zu löschen war. Die Art steht in `kinds.rs`
+  und in der Tabelle von HUM-050.
+- **`recorder.retention_days`: Vorgabe 180 statt vorher 90, und 0 ist
+  erlaubt.** Die Vorgabe stand in `humanitl-config` und in
+  `humanitl_recorder::RecorderSettings` bei 90; beide stehen jetzt bei 180.
+  Die Prüfung nahm 1 bis 3650 an und nimmt jetzt 0 bis 3650, weil die
+  Spezifikation „0 = nie" verlangt. Die Beschreibung im Schema nennt DSGVO
+  Art. 5 Abs. 1 lit. e; `docs/CONFIG.md` ist daraus neu erzeugt.
+- **`audit.retention_days` hat weiter keinen Leser.** Die Spezifikation
+  verlangt nur, dass die Kette bei `0` unberührt bleibt, und das tut sie. Die
+  Löschung aus der Kette mit dokumentierter Lücke ist HUM-157; Register
+  (`config_readers.rs`) und `x-pending-issue` nennen jetzt HUM-157.
+- **`PROTO_MINOR` bleibt bei 11, obwohl `docs/PROTOCOL.md` 5 für additive
+  Felder eine höhere Nebenversion verlangt.** Das ist eine bewusste Abweichung
+  von der Versionsregel: `humanitl_ipc::PROTO_MINOR`
+  (`daemon/crates/ipc/src/lib.rs`) und `ProtoVersion.minor`
+  (`app/lib/core/ipc/proto_version.dart`) stehen weiter auf 11, weil kein
+  Daemon `Audit` beantwortet und eine 12 eine Fähigkeit behauptete, die es
+  nicht gibt. HUM-156 baut den Dienst und hebt beide im selben Zug auf 12. Damit
+  ein älterer Daemon nicht als „null Anker" gelesen wird, trägt die Antwort
+  `anchors_reported`; ohne das Feld zeigt die Karte „Anker nicht gemeldet".
+- **`recorder.retention_days = 0` heißt in der Aufzeichnung „nie".**
+  `Recorder::purge_expired` rechnete vorher `jetzt − 0 Tage` und hätte alles
+  gelöscht; das war ein echter Fehler, solange die Konfiguration die Null
+  abwies nur verdeckt. Mit der erlaubten Null ist `Retention::from_days` die
+  Stelle, die ihn verhindert (`zero_means_never`).
+- **Der Code für einen Exportnamen ohne freien Platz ist `IPC_006`.** Passender
+  wäre `AUDIT_008` „Audit-Export nicht schreibbar" aus HUM-070, das zur Zeit
+  dieses Issues noch nicht auf `main` stand. Der Wechsel ist HUM-158.
 
 ---
 
@@ -3122,3 +3202,88 @@ Neue Felder im Proto: Die hat HUM-051 schon angelegt. Ein signierter Export (nac
 - [ ] Der Head-Hash im Audit-Screen ist derselbe wie in `humanitl audit verify --json`.
 - [ ] Der CSV-Export hat die Spalten aus HUM-051, der JSONL-Export ist Byte für Byte die Kette.
 - [ ] `make check` grün.
+
+---
+
+## HUM-157 · `audit.retention_days` hat keinen Leser
+Sprint: 4 · Größe: M · Abhängigkeiten: HUM-050, HUM-051, HUM-156 · Blockiert: keine
+
+### Kontext
+HUM-050 hat den Schlüssel `audit.retention_days` angelegt, Vorgabe `0` („für immer"), und HUM-051 hat nur verlangt, dass die Kette bei `0` unberührt bleibt. Das tut sie. Einen Wert größer als `0` liest aber niemand: Wer `audit.retention_days = 365` setzt, bekommt keine Löschung und keine Warnung. Das Register der Leser (`daemon/crates/config/tests/config_readers.rs`) führt den Schlüssel deshalb als `pending`. Aufgefallen am 2026-09-18 beim Abschluss von HUM-051.
+
+Aus einer Hash-Kette zu löschen bricht sie absichtlich: Jeder Record trägt den Hash seines Vorgängers, und der erste verbliebene Record zeigt danach auf einen Hash, den es nicht mehr gibt. Eine Löschung ist darum nur ehrlich, wenn sie die Lücke selbst dokumentiert, und wenn `verify` sie danach als dokumentierte Lücke erkennt statt als Bruch.
+
+### Ziel
+Entweder löscht der Daemon Records der Kette, die älter sind als `audit.retention_days` Tage, und hinterlässt einen Record, der die Lücke dokumentiert, den `verify` als erlaubten Neuanfang anerkennt. Oder der Schlüssel wird gestrichen (`alias::RETIRED` mit Grund), und das Audit-Log wächst ohne Löschung, wie heute. Die Entscheidung fällt am Anfang dieses Issues und steht in `docs/SECURITY.md`.
+
+### Nicht-Ziel
+Löschen einzelner Records oder Löschen nach Inhalt. Die Aufbewahrung der Aufzeichnung (`recorder.retention_days`, HUM-051).
+
+### Betroffene Pfade
+- `daemon/crates/audit/src/` (Löschung, neuer Record, `verify`)
+- `daemon/bin/humanitld/src/main.rs` (täglicher Lauf)
+- `daemon/crates/config/src/model.rs`, `daemon/crates/config/tests/config_readers.rs`, `docs/CONFIG.md`
+- `docs/SECURITY.md`, `docs/THREAT-MODEL.md`
+- `app/l10n/*.arb`: der zweite Satz des Abschnitts „Aufbewahrung" im Audit-Screen (`auditRetentionChain`) sagt heute, der Schlüssel wirke nicht
+
+### Spezifikation
+Zu entscheiden: Wie ein Neuanfang aussieht, den `verify` von einem Bruch unterscheidet, und welche Anker dabei gelten. Wie `audit_anchors` gekürzt wird, ohne dass die Tabelle ihre Beweiskraft für die verbleibenden Records verliert. Ob die Löschung die Datei umschreibt oder rotiert.
+
+### Schritte
+1. Entscheidung Löschen oder Streichen, mit Begründung in `docs/SECURITY.md`.
+2. Umsetzung oder Streichung samt Register und `docs/CONFIG.md`.
+3. Satz im Audit-Screen anpassen.
+
+### Tests
+Bei Löschung: ein Log mit Records älter als die Frist, danach `verify` grün mit dokumentierter Lücke; eine Lücke ohne dokumentierenden Record bleibt ein Bruch. Bei Streichung: `CONFIG_005` als Warnung beim Laden.
+
+### Akzeptanzkriterien
+- [ ] `audit.retention_days` ist im Register `effective` oder gestrichen, nie mehr `pending`.
+- [ ] `docs/SECURITY.md` sagt, was die Kette nach einer Löschung noch beweist.
+- [ ] Der Abschnitt „Aufbewahrung" im Audit-Screen sagt dasselbe wie der Code.
+- [ ] `make check` grün.
+
+### Fallstricke
+- Eine Löschung, die `verify` als Bruch meldet, macht jeden Audit-Screen dauerhaft rot.
+- Die Anker in `audit_anchors` sind der Beleg gegen das Kürzen der Datei; wer sie mitlöscht, löscht den Beleg.
+
+### Referenzen
+HUM-050, HUM-051; `daemon/crates/audit/src/verify.rs`; `docs/SECURITY.md` („Was die Audit-Kette beweist").
+
+---
+
+## HUM-158 · Ein Export ohne freien Namen meldet `IPC_006`
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-051, HUM-070 · Blockiert: keine
+
+### Kontext
+Der Export im Audit-Screen (HUM-051) wählt im Ordner einen freien Dateinamen (`name`, `name-2` und so weiter, höchstens 1000 Versuche). Findet er keinen, meldet die Oberfläche `IPC_006` „Fähigkeit in diesem Daemon nicht verfügbar". Der Code passt nicht: Die Fähigkeit ist da, nur der Ordner ist voll. HUM-070 bringt `AUDIT_008` „Audit-Export nicht schreibbar", das zur Zeit von HUM-051 noch nicht auf `main` stand.
+
+### Ziel
+Ein Export ohne freien Namen meldet `AUDIT_008` mit `why` und dem Vorschlag, den Ordner anzusehen.
+
+### Nicht-Ziel
+Andere Fehler des Exports; die schreibt der Daemon (HUM-156).
+
+### Betroffene Pfade
+- `app/lib/features/audit/providers/audit_provider.dart` (`AuditExportNotifier`)
+- `app/lib/core/domain/diagnostic_codes.dart`: Konstante für `AUDIT_008` anhängen
+
+### Spezifikation
+Der Befund im Zweig `path == null` von `AuditExportNotifier` trägt `AUDIT_008` statt `DiagnosticCodes.capabilityUnavailable`; `why` und `fix` bleiben.
+
+### Schritte
+1. Konstante anhängen, Zweig umstellen.
+2. Test mit einem Ordner, in dem jeder Name belegt ist.
+
+### Tests
+`a_full_folder_reports_audit_008`: `auditPathTakenProvider` meldet jeden Pfad als belegt, der Export endet mit `AUDIT_008`, der Daemon wird nicht gefragt.
+
+### Akzeptanzkriterien
+- [ ] Ein voller Ordner ergibt `AUDIT_008`, nicht `IPC_006`.
+- [ ] `make check` grün.
+
+### Fallstricke
+- `AUDIT_008` muss im Register stehen, bevor die Oberfläche es benutzt (`backlog/CONVENTIONS.md` 4.6).
+
+### Referenzen
+HUM-051, HUM-070; `daemon/crates/core-types/src/diagnostics/codes.rs`.

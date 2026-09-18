@@ -391,7 +391,7 @@ pub struct RecorderConfig {
     /// Bodies bis zu dieser Größe stehen in der Datenbank, größere als Datei im Blob-Speicher.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "allowed"))]
     pub inline_max_bytes: u64,
-    /// Tage, die eine Aufzeichnung aufgehoben wird.
+    /// Tage, die eine Aufzeichnung (Anfragen, Antworten, Bodies) aufgehoben wird; 0 heißt nie löschen. Ein täglicher Lauf löscht, was älter ist, und vermerkt jede Löschung im Audit-Log (`recorder.retention_applied`). Die Frist setzt die Speicherbegrenzung aus DSGVO Art. 5 Abs. 1 lit. e um: Personenbezogenes in Anfragen bleibt nicht länger als nötig liegen. Die Audit-Kette löscht dieser Lauf nie.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub retention_days: u32,
 }
@@ -400,7 +400,8 @@ impl Default for RecorderConfig {
     fn default() -> Self {
         Self {
             inline_max_bytes: 256 * KIB,
-            retention_days: 90,
+            // 180 Tage, festgelegt in HUM-051. Bis dahin standen hier 90.
+            retention_days: 180,
         }
     }
 }
@@ -421,7 +422,7 @@ pub struct AuditConfig {
     #[schemars(extend(
         "x-tier" = "expert",
         "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-051"
+        "x-pending-issue" = "HUM-157"
     ))]
     pub retention_days: u32,
     /// Nach wie vielen Records der Daemon das Audit-Log auf die Platte zwingt (fsync). Spätestens nach einer Sekunde und vor jedem Anker geschieht es ohnehin.

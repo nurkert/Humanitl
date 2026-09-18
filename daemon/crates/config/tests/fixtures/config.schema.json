@@ -91,7 +91,7 @@
           "format": "uint32",
           "minimum": 0,
           "type": "integer",
-          "x-pending-issue": "HUM-051",
+          "x-pending-issue": "HUM-157",
           "x-project-scope": "denied",
           "x-tier": "expert"
         }
@@ -430,7 +430,7 @@
       "additionalProperties": false,
       "default": {
         "inline_max_bytes": 262144,
-        "retention_days": 90
+        "retention_days": 180
       },
       "description": "Aufzeichnung der Flows.",
       "properties": {
@@ -444,8 +444,8 @@
           "x-tier": "expert"
         },
         "retention_days": {
-          "default": 90,
-          "description": "Tage, die eine Aufzeichnung aufgehoben wird.",
+          "default": 180,
+          "description": "Tage, die eine Aufzeichnung (Anfragen, Antworten, Bodies) aufgehoben wird; 0 heißt nie löschen. Ein täglicher Lauf löscht, was älter ist, und vermerkt jede Löschung im Audit-Log (`recorder.retention_applied`). Die Frist setzt die Speicherbegrenzung aus DSGVO Art. 5 Abs. 1 lit. e um: Personenbezogenes in Anfragen bleibt nicht länger als nötig liegen. Die Audit-Kette löscht dieser Lauf nie.",
           "format": "uint32",
           "minimum": 0,
           "type": "integer",

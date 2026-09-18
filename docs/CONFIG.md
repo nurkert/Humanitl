@@ -100,7 +100,7 @@ Die Audit-Kette: Anker, Synchronisation, Aufbewahrung.
 |---|---|---|---|---|---|---|
 | `audit.anchor_every` | integer | `100` | advanced | denied | ja | Jeder wievielte Record ein Anker ist, in der Datei und zugleich in der Datenbank. Records hinter dem letzten Anker kann jemand mit Zugriff auf die Datei am Ende abschneiden, ohne dass die Prüfung es merkt; ein kleinerer Wert macht dieses Fenster kleiner. Beim Beenden des Daemons wird immer geankert. |
 | `audit.fsync_every` | integer | `50` | expert | denied | ja | Nach wie vielen Records der Daemon das Audit-Log auf die Platte zwingt (fsync). Spätestens nach einer Sekunde und vor jedem Anker geschieht es ohnehin. |
-| `audit.retention_days` | integer | `0` | expert | denied | offen (HUM-051) | Tage, die das Audit-Log aufgehoben wird; 0 heißt für immer. Löschen bricht die Kette absichtlich, und im MVP wird nichts gelöscht. |
+| `audit.retention_days` | integer | `0` | expert | denied | offen (HUM-157) | Tage, die das Audit-Log aufgehoben wird; 0 heißt für immer. Löschen bricht die Kette absichtlich, und im MVP wird nichts gelöscht. |
 
 ### `experimental`
 
@@ -175,7 +175,7 @@ Aufzeichnung der Flows.
 | Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
 |---|---|---|---|---|---|---|
 | `recorder.inline_max_bytes` | integer | `262144` | expert | allowed | ja | Bodies bis zu dieser Größe stehen in der Datenbank, größere als Datei im Blob-Speicher. |
-| `recorder.retention_days` | integer | `90` | advanced | denied | ja | Tage, die eine Aufzeichnung aufgehoben wird. |
+| `recorder.retention_days` | integer | `180` | advanced | denied | ja | Tage, die eine Aufzeichnung (Anfragen, Antworten, Bodies) aufgehoben wird; 0 heißt nie löschen. Ein täglicher Lauf löscht, was älter ist, und vermerkt jede Löschung im Audit-Log (`recorder.retention_applied`). Die Frist setzt die Speicherbegrenzung aus DSGVO Art. 5 Abs. 1 lit. e um: Personenbezogenes in Anfragen bleibt nicht länger als nötig liegen. Die Audit-Kette löscht dieser Lauf nie. |
 
 ### `resolver`
 

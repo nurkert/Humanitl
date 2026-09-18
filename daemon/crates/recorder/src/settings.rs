@@ -32,7 +32,7 @@ impl Default for RecorderSettings {
         Self {
             inline_max_bytes: 256 * KIB,
             max_body_bytes: 32 * MIB,
-            retention_days: 90,
+            retention_days: 180,
         }
     }
 }
@@ -88,7 +88,7 @@ mod tests {
         let settings = RecorderSettings::default();
         assert_eq!(settings.inline_max_bytes, 256 * 1024);
         assert_eq!(settings.max_body_bytes, 32 * 1024 * 1024);
-        assert_eq!(settings.retention_days, 90);
+        assert_eq!(settings.retention_days, 180);
     }
 
     #[test]
