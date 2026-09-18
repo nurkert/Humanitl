@@ -907,6 +907,8 @@ version = "0.0.0"
 dependencies = [
  "chrono",
  "clap",
+ "hex",
+ "humanitl-audit",
  "humanitl-config",
  "humanitl-core",
  "humanitl-ipc",
@@ -918,6 +920,8 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-stream",
+ "toml",
+ "toml_edit",
  "tonic",
 ]
 
@@ -966,6 +970,7 @@ dependencies = [
  "chrono",
  "humanitl-core",
  "humanitl-rules",
+ "rustix",
  "schemars",
  "serde",
  "serde_json",

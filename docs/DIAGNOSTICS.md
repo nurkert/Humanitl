@@ -12,9 +12,9 @@ Entfernen eines Codes.
 
 | Bereich | Präfix | Von | Bis | Wofür |
 |---|---|---|---|---|
-| daemon | `DAEMON` | 001 | 019 | 001-004 Start, Erreichbarkeit, Version des Daemons, 005-008 die Nutzer-Unit von `daemon install` (HUM-044) |
+| daemon | `DAEMON` | 001 | 019 | 001-004 Start, Erreichbarkeit, Version des Daemons, 005-008 die Nutzer-Unit von `daemon install` (HUM-044), 009 Abschied (HUM-142), 010 Nutzersitzung, 011 Binaries aus dem `AppImage`, 012 `journalctl` (HUM-070) |
 | ipc | `IPC` | 001 | 009 | gRPC-Schnittstelle, Token, Aufrufe gegen den Zustand |
-| config | `CONFIG` | 001 | 019 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), 010-012 Test-Wurzel und ihr Flag (HUM-087), 013 der Projektordner der Einrichtung (HUM-044) |
+| config | `CONFIG` | 001 | 019 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), 010-012 Test-Wurzel und ihr Flag (HUM-087), 013 der Projektordner der Einrichtung (HUM-044), 017-018 Editor und Gruppenschlüssel (HUM-070) |
 | sandbox | `SANDBOX` | 001 | 029 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 020-025 /work-Härtung (HUM-043) |
 | proxy | `PROXY` | 001 | 019 | Anfragen, Caps, Protokoll, 010-011 Grenzen der Verbindung (HUM-120) |
 | tls | `TLS` | 001 | 009 | CA, Zertifikate, Handschlag |
@@ -107,6 +107,30 @@ Aufgaben beim Abschied abgebrochen
 **Auslöser.** Beim Beenden liefen nach der Frist noch Aufgaben des Daemons; der Prozess endet trotzdem.
 
 **Fix.** Kein Fix für Nutzer: Der Text nennt die Frist; ein Bericht mit dem Protokoll dieses Laufs hilft weiter.
+
+#### DAEMON_010
+
+Keine systemd-Nutzersitzung
+
+**Auslöser.** `XDG_RUNTIME_DIR` fehlt, oder `systemctl --user` findet den Bus der Sitzung nicht, und der Befehl braucht die Nutzersitzung.
+
+**Fix.** `CopyCommand`: `loginctl enable-linger $USER`, damit die Sitzung auch ohne Anmeldung steht.
+
+#### DAEMON_011
+
+Binaries aus dem AppImage nicht ablegbar
+
+**Auslöser.** `daemon install` aus einem `AppImage` kann Daemon und Shim nicht nach `~/.local/lib/humanitl/<version>.<stempel>/` kopieren oder `current` nicht umhängen.
+
+**Fix.** `CopyCommand` mit `ls -ln` auf das Verzeichnis; der Text nennt den Grund.
+
+#### DAEMON_012
+
+journalctl nicht gefunden
+
+**Auslöser.** `humanitl daemon logs` findet kein `journalctl` im `PATH`.
+
+**Fix.** `CopyCommand`: `sudo apt-get install systemd`, das Paket, das `journalctl` mitbringt.
 
 ### Bereich ipc
 
@@ -287,6 +311,22 @@ Feste Namenszuordnungen gesetzt
 **Auslöser.** `resolver.overrides` beantwortet die genannten Namen aus der Konfiguration, statt zu fragen; der Verkehr geht an die Adresse, die dort steht.
 
 **Fix.** `ChangeSetting` auf eine leere Tabelle, wenn die festen Adressen nicht gemeint waren.
+
+#### CONFIG_017
+
+Kein Editor gefunden
+
+**Auslöser.** Weder `$VISUAL` noch `$EDITOR` ist gesetzt und weder `nano` noch `vi` liegt im `PATH`, oder der genannte Editor startet nicht.
+
+**Fix.** `SetEnv`: `EDITOR=nano`.
+
+#### CONFIG_018
+
+Schlüssel ist eine Gruppe
+
+**Auslöser.** `humanitl config set` bekommt einen Pfad wie `hold`, unter dem weitere Schlüssel stehen, statt eines einzelnen Werts.
+
+**Fix.** `CopyCommand`: `humanitl config get <gruppe>` zeigt die Schlüssel darunter.
 
 ### Bereich sandbox
 
@@ -907,6 +947,14 @@ Audit-Kette hinter dem letzten Anker fortgesetzt
 **Auslöser.** Beim Start endet `audit.jsonl` vor einem Anker aus `audit_anchors`; die Kette läuft hinter diesem Anker weiter, und die Prüfung meldet die Lücke weiter als Bruch.
 
 **Fix.** Kein Fix nötig: Der Text nennt, wo das Log endete und hinter welchem Anker die Kette weiterläuft.
+
+#### AUDIT_008
+
+Audit-Export nicht schreibbar
+
+**Auslöser.** Die Zieldatei von `humanitl audit export` liegt schon da, ihr Verzeichnis fehlt, oder das Schreiben scheitert.
+
+**Fix.** `CopyCommand`, das die vorhandene Datei beiseitelegt; sonst nennt der Text den Pfad und den Grund.
 
 ### Bereich doctor
 

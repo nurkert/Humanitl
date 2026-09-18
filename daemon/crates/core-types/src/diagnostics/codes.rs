@@ -61,7 +61,9 @@ pub static AREAS: &[AreaInfo] = &[
         first: 1,
         last: 19,
         note: "001-004 Start, Erreichbarkeit, Version des Daemons, \
-               005-008 die Nutzer-Unit von `daemon install` (HUM-044)",
+               005-008 die Nutzer-Unit von `daemon install` (HUM-044), \
+               009 Abschied (HUM-142), 010 Nutzersitzung, 011 Binaries aus \
+               dem `AppImage`, 012 `journalctl` (HUM-070)",
     },
     AreaInfo {
         area: "ipc",
@@ -77,7 +79,8 @@ pub static AREAS: &[AreaInfo] = &[
         last: 19,
         note: "001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), \
                010-012 Test-Wurzel und ihr Flag (HUM-087), 013 der Projektordner \
-               der Einrichtung (HUM-044)",
+               der Einrichtung (HUM-044), 017-018 Editor und Gruppenschlüssel \
+               (HUM-070)",
     },
     AreaInfo {
         area: "sandbox",
@@ -1247,6 +1250,59 @@ registry! {
     EDIT_005 => "edit", "Bearbeiteter Body über der Grenze", "#edit_005",
         "Der Body der bearbeiteten Anfrage ist größer als die Grenze, gegen die der Hold gepuffert hat (`limits.hold_body_cap_bytes`).",
         "`ChangeSetting` auf `limits.hold_body_cap_bytes`, oder weniger schicken.";
+    // HUM-070: `humanitl config`, `humanitl audit` und `humanitl daemon`.
+    // `DAEMON_009` gehört HUM-142 (Abschied des Daemons); die Nummern hier
+    // folgen darauf.
+    /// Es gibt keine systemd-Nutzersitzung, in der ein Nutzerdienst leben
+    /// könnte.
+    ///
+    /// `systemctl --user` und `journalctl --user` brauchen `XDG_RUNTIME_DIR`
+    /// und einen laufenden `systemd --user`. Über SSH ohne Linger fehlt
+    /// beides, und dann ist der einzig sinnvolle Vorschlag
+    /// `loginctl enable-linger` (HUM-070). `DOCTOR_005` sagt dasselbe als
+    /// Zeile des Selbsttests; dieser Code ist der Abbruch eines Befehls, der
+    /// die Sitzung wirklich gebraucht hätte: `daemon install` bricht damit ab,
+    /// bevor es etwas schreibt, und ebenso, wenn `systemctl` den Bus der
+    /// Sitzung nicht findet.
+    DAEMON_010 => "daemon", "Keine systemd-Nutzersitzung", "#daemon_010",
+        "`XDG_RUNTIME_DIR` fehlt, oder `systemctl --user` findet den Bus der Sitzung nicht, und der Befehl braucht die Nutzersitzung.",
+        "`CopyCommand`: `loginctl enable-linger $USER`, damit die Sitzung auch ohne Anmeldung steht.";
+    /// Die Binaries aus einem `AppImage` ließen sich nicht nach
+    /// `~/.local/lib/humanitl/` legen.
+    ///
+    /// Das Verzeichnis ist ein Verweis, gehört einem anderen Konto oder lässt
+    /// sich nicht schreiben. Die Unit ist dann nicht geschrieben und der
+    /// Verweis `current` zeigt, wohin er vorher zeigte (HUM-070).
+    DAEMON_011 => "daemon", "Binaries aus dem AppImage nicht ablegbar", "#daemon_011",
+        "`daemon install` aus einem `AppImage` kann Daemon und Shim nicht nach `~/.local/lib/humanitl/<version>.<stempel>/` kopieren oder `current` nicht umhängen.",
+        "`CopyCommand` mit `ls -ln` auf das Verzeichnis; der Text nennt den Grund.";
+    /// `journalctl` liegt nicht im `PATH`.
+    ///
+    /// Das ist kein Fehler der Sitzung, sondern ein fehlendes Programm; der
+    /// Vorschlag ist deshalb das Paket und nicht `loginctl` (HUM-070).
+    DAEMON_012 => "daemon", "journalctl nicht gefunden", "#daemon_012",
+        "`humanitl daemon logs` findet kein `journalctl` im `PATH`.",
+        "`CopyCommand`: `sudo apt-get install systemd`, das Paket, das `journalctl` mitbringt.";
+    /// Der Audit-Export ließ sich nicht schreiben.
+    ///
+    /// Die Zieldatei gibt es schon, ihr Verzeichnis fehlt, oder das Schreiben
+    /// scheitert. Ein vorhandener Export wird nie überschrieben: Er ist ein
+    /// Beleg, und ein `--force` gibt es aus demselben Grund nicht wie bei
+    /// `daemon install`. Ein gescheiterter Export lässt keine halbe Datei
+    /// liegen (HUM-070).
+    AUDIT_008 => "audit", "Audit-Export nicht schreibbar", "#audit_008",
+        "Die Zieldatei von `humanitl audit export` liegt schon da, ihr Verzeichnis fehlt, oder das Schreiben scheitert.",
+        "`CopyCommand`, das die vorhandene Datei beiseitelegt; sonst nennt der Text den Pfad und den Grund.";
+    /// `humanitl config edit` findet keinen Editor oder kann ihn nicht
+    /// starten (HUM-070).
+    CONFIG_017 => "config", "Kein Editor gefunden", "#config_017",
+        "Weder `$VISUAL` noch `$EDITOR` ist gesetzt und weder `nano` noch `vi` liegt im `PATH`, oder der genannte Editor startet nicht.",
+        "`SetEnv`: `EDITOR=nano`.";
+    /// Ein Schlüssel, der eine Gruppe von Einstellungen benennt, soll einen
+    /// Wert bekommen (HUM-070).
+    CONFIG_018 => "config", "Schlüssel ist eine Gruppe", "#config_018",
+        "`humanitl config set` bekommt einen Pfad wie `hold`, unter dem weitere Schlüssel stehen, statt eines einzelnen Werts.",
+        "`CopyCommand`: `humanitl config get <gruppe>` zeigt die Schlüssel darunter.";
 }
 
 /// Sucht einen Code im Register.

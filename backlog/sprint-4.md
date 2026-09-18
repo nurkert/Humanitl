@@ -1608,12 +1608,19 @@ Exit 0 bei `Ok`, 4 bei `Broken` (Sicherheitsverletzung), Ausgabe dann `audit cha
 - `daemon_install_writes_units_and_calls_systemctl` (Mock protokolliert `daemon-reload`, `enable --now humanitld.socket`), `daemon_install_appimage_copies_binaries` (`APPIMAGE` gesetzt), `daemon_status_exit_2_when_down`.
 
 ### Akzeptanzkriterien
-- [ ] `humanitl config set hold.timeout_secs 5m && humanitl config get hold.timeout_secs` ⇒ `300`.
-- [ ] `humanitl config set hold.ask_mode banana` ⇒ Exit 1, stderr enthält `CONFIG_001`.
-- [ ] `humanitl audit verify` nach Manipulation ⇒ Exit 4 und `BROKEN at seq`.
-- [ ] `humanitl daemon install` auf einer frischen Debian-VM mit systemd-user-Session ⇒ Socket aktiv, `humanitl daemon status` Exit 0.
-- [ ] `NO_COLOR=1` und Pipe ⇒ keine ANSI-Sequenzen (Test mit Regex).
-- [ ] `docs/CLI.md` enthält jedes Subkommando mit einem Beispiel.
+- [x] `humanitl config set hold.timeout_secs 5m && humanitl config get hold.timeout_secs` ⇒ `300`. Test `config_set_duration_parsing`.
+- [x] `humanitl config set hold.ask_mode banana` ⇒ Exit 1, stderr enthält `CONFIG_003`. Umformuliert: Die Spezifikation nannte `CONFIG_001`, das im Register „Config-Datei ungültig" heißt; der Wert ist falsch, nicht die Datei (`backlog/CONVENTIONS.md` 4.31). Test `config_set_invalid_exit_1_with_config_003` prüft, dass der Zweig der Aufzählung ablehnt, und `config_set_an_enum_value_is_written`, dass jeder erlaubte Wert durchgeht.
+- [x] `humanitl audit verify` nach Manipulation ⇒ Exit 4 und `BROKEN at seq`. Gemessen mit `--file` und über den Rückfall auf die Datei (`audit_verify_broken_exit_4`, `audit_verify_ok_exit_0`); nicht gegen einen Daemon, dessen `Audit`-RPC noch `unimplemented` ist.
+- [ ] `humanitl daemon install` auf einer frischen Debian-VM mit systemd-user-Session ⇒ Socket aktiv, `humanitl daemon status` Exit 0. **Offen, aus zwei Gründen.** Keine VM gemessen; die Unit ist nur in einem Wegwerf-`HOME` mit einem `systemctl`-Ersatz geprüft. Und „Socket aktiv" gibt es nicht: `daemon install` aktiviert `humanitld.service`, weil der Daemon `LISTEN_FDS` noch nicht liest und ein von systemd gehaltener Socket ihn mit `DAEMON_003` stilllegte. HUM-053 stellt auf den Socket um.
+- [x] `NO_COLOR=1` und Pipe ⇒ keine ANSI-Sequenzen (Test mit Regex). Test `no_color_and_a_pipe_carry_no_ansi`; die Kommandozeile färbt gar nicht.
+- [x] `docs/cli.md` enthält jedes Subkommando mit einem Beispiel. Das Dokument heißt seit HUM-064 `docs/cli.md`; Test `docs_cli_names_every_subcommand_with_an_example`.
+
+**Stand 2026-09-18.** Gebaut: `config get|set|schema|edit`, `audit verify|export`, `daemon install|status|logs`, `packaging/systemd/humanitld.socket` (liegt bereit, wird nicht installiert), `humanitl_config::edit::set_value` als der eine Schreiber von `config.toml` für Kommandozeile und `SetConfig`. Abweichungen von der Spezifikation stehen in `backlog/CONVENTIONS.md` 4.31. Offen und benannt:
+
+- **Metaschema.** `config_schema_is_valid_json_schema` prüft die Form (`$schema`, Objekte bis zum Blatt, `x-tier` und Typ an jedem Blatt), nicht gegen das Metaschema von JSON Schema: Die Crate `jsonschema` ist keine Abhängigkeit des Workspace. Folgearbeit: sie aufnehmen und das Schema gegen Draft 2020-12 prüfen.
+- **`Audit`-RPC im Daemon.** Solange sie `unimplemented` ist, prüft `audit verify` ohne `--file` die Datei ohne Schlüssel und Anker und sagt das in `warnings` und `mode: "file"`.
+- **Socket-Aktivierung** mit HUM-053, siehe oben.
+- **Messung auf einer VM** für `daemon install`, siehe oben.
 
 ### Fallstricke
 - `systemctl --user` braucht `XDG_RUNTIME_DIR` und einen laufenden `systemd --user`; über SSH ohne Linger fehlt beides. Diagnostic mit `loginctl enable-linger` ist der einzig sinnvolle Fix.

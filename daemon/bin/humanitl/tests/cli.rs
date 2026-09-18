@@ -87,9 +87,16 @@ fn every_subcommand_has_a_help_of_its_own() {
         vec!["rules", "test", "--help"],
         vec!["config", "--help"],
         vec!["config", "get", "--help"],
+        vec!["config", "set", "--help"],
         vec!["config", "schema", "--help"],
+        vec!["config", "edit", "--help"],
+        vec!["audit", "--help"],
+        vec!["audit", "verify", "--help"],
+        vec!["audit", "export", "--help"],
         vec!["daemon", "--help"],
         vec!["daemon", "status", "--help"],
+        vec!["daemon", "install", "--help"],
+        vec!["daemon", "logs", "--help"],
     ] {
         let output = harness.run(command.clone());
         assert_eq!(code(&output), 0, "{command:?} has no help");
@@ -458,15 +465,16 @@ fn a_missing_daemon_with_json_is_one_line_on_stdout() {
     assert!(stderr(&output).is_empty(), "stderr must stay clean");
 }
 
+/// Ohne Daemon und ohne Audit-Log hat `audit verify` nichts zu pruefen und
+/// sagt es mit dem Befund des Daemons, nicht mit einem erfundenen Ergebnis.
 #[test]
-fn a_placeholder_subcommand_is_a_diagnostic_block_and_exit_one() {
+fn audit_verify_without_a_daemon_and_without_a_log_is_daemon_001() {
     let harness = Harness::new();
     let output = harness.run(["audit", "verify"]);
     let text = stderr(&output);
 
-    assert_eq!(code(&output), 1, "{text}");
-    assert!(text.starts_with("error[CLI_003]: "), "{text}");
-    assert!(text.contains("arrives in HUM-070"), "{text}");
+    assert_eq!(code(&output), 2, "{text}");
+    assert!(text.starts_with("blocking[DAEMON_001]: "), "{text}");
     assert!(text.contains("\n  fix: "), "{text}");
     assert!(stdout(&output).is_empty(), "stdout must stay clean");
 }
@@ -497,28 +505,17 @@ fn an_unreadable_command_line_is_a_diagnostic_not_bare_clap_text() {
     assert_eq!(code(&output), 0, "help is not an error");
 }
 
+/// Und dasselbe mit `--json`: eine Zeile auf stdout, stderr bleibt leer.
 #[test]
-fn a_placeholder_subcommand_with_json_is_one_line_on_stdout() {
+fn audit_verify_without_a_daemon_with_json_is_one_line_on_stdout() {
     let harness = Harness::new();
     let output = harness.run(["--json", "audit", "verify"]);
     let text = stdout(&output);
 
-    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
     assert_eq!(text.lines().count(), 1, "{text}");
     let value: serde_json::Value = serde_json::from_str(text.trim()).expect("one JSON value");
-    assert_eq!(value["code"], "CLI_003");
-    assert!(
-        value["why"]
-            .as_str()
-            .is_some_and(|why| why.contains("humanitl audit") && why.contains("HUM-070")),
-        "{value}"
-    );
-    assert!(
-        value["fix"]["command"]
-            .as_str()
-            .is_some_and(|fix| fix.contains("HUM-070")),
-        "{value}"
-    );
+    assert_eq!(value["code"], "DAEMON_001");
     assert!(stderr(&output).is_empty(), "stderr must stay clean");
 }
 
@@ -918,18 +915,6 @@ fn the_schema_is_json_and_names_every_key_of_conventions_37() {
 }
 
 #[test]
-fn a_subcommand_that_does_not_exist_yet_names_its_issue_and_exits_one() {
-    let harness = Harness::new();
-    let output = harness.run(["audit", "verify"]);
-    assert_eq!(code(&output), 1);
-    assert!(
-        stderr(&output).contains("HUM-070"),
-        "the placeholder does not name its issue: {}",
-        stderr(&output)
-    );
-}
-
-#[test]
 fn an_unknown_flag_is_exit_one_not_the_two_of_clap() {
     let harness = Harness::new();
     let output = harness.run(["--nonsense", "daemon", "status"]);
@@ -1025,11 +1010,21 @@ fn daemon_status_and_flows_list_speak_to_a_running_daemon() {
     let harness = Harness::new();
     let _server = FakeServer::start(&harness);
 
-    let status = harness.run(["--json", "daemon", "status"]);
+    // Ein `systemctl`, das `active` antwortet: Der Test fragt nie den
+    // systemd des Rechners, und die Zeile `unit` hat einen Wert, den er prüfen
+    // kann.
+    let (fake, _log) = answering_program(&harness, "systemctl", "active");
+    let status = harness
+        .command()
+        .args(["--json", "daemon", "status"])
+        .env("PATH", &fake)
+        .output()
+        .expect("the binary runs");
     assert_eq!(code(&status), 0, "{}", stderr(&status));
     let info: serde_json::Value = serde_json::from_str(&stdout(&status)).expect("JSON");
     assert_eq!(info["proto_major"], 1);
     assert!(info["daemon_version"].as_str().is_some());
+    assert_eq!(info["unit"], "active");
 
     let table = harness.run(["daemon", "status"]);
     assert_eq!(code(&table), 0);
@@ -2191,10 +2186,10 @@ fn daemon_install_writes_one_unit_into_xdg_config_home() {
 #[test]
 fn daemon_install_shows_the_unit_before_it_writes_it() {
     let harness = Harness::new();
-    // Auch unter `--json`: Ein Ausgabeschalter darf nicht bestimmen, ob ein
-    // Mensch sieht, welche Datei sein Rechner gleich bekommt.
+    // `-q` schaltet die Ankündigung nicht ab: Ein Ausgabeschalter darf nicht
+    // bestimmen, ob ein Mensch sieht, welche Datei sein Rechner gleich bekommt.
     let bin = installed_tree(&harness);
-    let output = install_run(&harness, &bin, &["--json", "daemon", "install", "--print"]);
+    let output = install_run(&harness, &bin, &["-q", "daemon", "install", "--print"]);
 
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     let announced = stderr(&output);
@@ -2206,10 +2201,18 @@ fn daemon_install_shows_the_unit_before_it_writes_it() {
     );
     // `--print` schreibt nichts.
     assert!(!unit_path(&harness).exists(), "--print writes nothing");
-    // Und `stdout` bleibt ein einziger JSON-Wert.
+
+    // Unter `--json` liest ein Programm: Dasselbe steht im einen Objekt auf
+    // `stdout`, und `stderr` bleibt leer (`docs/cli.md`).
+    let output = install_run(&harness, &bin, &["--json", "daemon", "install", "--print"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stderr(&output).is_empty(), "{}", stderr(&output));
     let value: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("one JSON value");
     assert_eq!(value["action"], "print");
+    let text = value["unit_text"].as_str().expect("the unit text");
+    assert!(text.contains("ExecStart="), "{text}");
+    assert!(text.contains("WantedBy=default.target"), "{text}");
 }
 
 #[test]
@@ -2265,6 +2268,12 @@ fn daemon_install_without_systemctl_leaves_the_unit_and_starts_nothing() {
         serde_json::from_str(stdout(&output).trim()).expect("one JSON value");
     assert_eq!(value["activation"], "no systemctl");
     assert!(unit_path(&harness).is_file(), "the unit is in place anyway");
+    // Unter `--json` steht das im Objekt; `stderr` bleibt leer.
+    assert!(stderr(&output).is_empty(), "{}", stderr(&output));
+
+    // Ohne `--json` sagt die Ankündigung es einem Menschen.
+    let output = install_run(&harness, &bin, &["daemon", "install"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(
         stderr(&output).contains("no systemctl in PATH"),
         "{}",
@@ -2945,4 +2954,1781 @@ fn remember_flags_without_a_pattern_are_a_usage_error() {
         assert_eq!(code(&output), 1, "{flag:?}: {text}");
         assert!(text.starts_with("error[CLI_004]: "), "{flag:?}: {text}");
     }
+}
+
+// --- `humanitl config`, `humanitl audit`, `humanitl daemon` (HUM-070) --------
+//
+// Die drei Unterkommandos aus CONVENTIONS.md 3.8, die bis hierher Platzhalter
+// waren. Was daran haengt: eine Datei des Menschen wird geschrieben (`config
+// set`), eine Sicherheitsaussage wird geprueft (`audit verify`), und ein
+// Dienst wird eingerichtet (`daemon install`). Jede dieser drei Zusagen hat
+// unten ihren eigenen Test.
+
+/// Der Schlüssel, mit dem die Ketten dieser Tests versiegelt sind.
+///
+/// Ein fester Schlüssel und kein zufälliger: Die Tests prüfen die Kette und
+/// die Kanonik, nicht die MACs — `audit verify --file` hat den Schlüssel
+/// ohnehin nicht, und ein zufälliger machte die Datei von Lauf zu Lauf anders,
+/// ohne dass ein Test mehr sähe.
+const AUDIT_KEY: [u8; 32] = [7_u8; 32];
+
+/// Schreibt eine gültige Kette mit `records` Zeilen und gibt ihren Pfad zurück.
+fn audit_chain(path: &Path, records: u64) {
+    use humanitl_audit::{GENESIS_PREV, NO_SESSION, RecordBody};
+
+    std::fs::create_dir_all(path.parent().expect("the log has a directory"))
+        .expect("the audit directory");
+    let mut file = std::fs::File::create(path).expect("the audit log");
+    let mut prev = GENESIS_PREV.to_owned();
+    for seq in 1..=records {
+        let record = RecordBody {
+            seq,
+            ts: format!("2026-09-02T10:{seq:02}:00.000000Z"),
+            session: NO_SESSION.to_owned(),
+            kind: "flow.decided".to_owned(),
+            data: serde_json::json!({ "n": seq, "note": "a, \"quoted\" note" }),
+            prev: prev.clone(),
+        }
+        .seal(&AUDIT_KEY)
+        .expect("the record seals");
+        prev.clone_from(&record.hash);
+        file.write_all(&record.to_line().expect("the canonical line"))
+            .expect("the line is written");
+        file.write_all(b"\n").expect("the newline is written");
+    }
+    file.flush().expect("the log is flushed");
+}
+
+/// `config get` ohne Schlüssel: die Tabelle und dasselbe als ein JSON-Objekt.
+#[test]
+fn config_get_table_and_json() {
+    let harness = Harness::new();
+
+    let table = harness.run(["config", "get"]);
+    assert_eq!(code(&table), 0, "{}", stderr(&table));
+    let text = stdout(&table);
+    let head = text.lines().next().unwrap_or_default();
+    assert!(head.starts_with("KEY"), "{text}");
+    assert!(head.contains("VALUE"), "{text}");
+    assert!(
+        !head.contains("ORIGIN"),
+        "the origin is a column of its own: {text}"
+    );
+    assert!(
+        text.lines()
+            .any(|line| line.starts_with("hold.timeout_secs") && line.contains("300")),
+        "{text}"
+    );
+    // Keine Zeile endet auf Leerraum: die Tabelle geht auch durch eine Pipe.
+    assert!(text.lines().all(|line| !line.ends_with(' ')), "{text}");
+
+    let with_origin = harness.run(["config", "get", "--origin"]);
+    assert_eq!(code(&with_origin), 0, "{}", stderr(&with_origin));
+    let text = stdout(&with_origin);
+    assert!(
+        text.lines().next().unwrap_or_default().contains("ORIGIN"),
+        "{text}"
+    );
+    assert!(
+        text.lines()
+            .any(|line| line.starts_with("hold.timeout_secs") && line.contains("default")),
+        "{text}"
+    );
+
+    let json = harness.run(["--json", "config", "get"]);
+    assert_eq!(code(&json), 0, "{}", stderr(&json));
+    let body = stdout(&json);
+    assert_eq!(body.lines().count(), 1, "one JSON value per call: {body}");
+    let value: serde_json::Value = serde_json::from_str(body.trim()).expect("one JSON value");
+    let values = value["values"].as_array().expect("an array of leaves");
+    let timeout = values
+        .iter()
+        .find(|row| row["key"] == "hold.timeout_secs")
+        .expect("hold.timeout_secs is a leaf");
+    assert_eq!(timeout["value"], 300);
+    assert_eq!(timeout["origin"], "default");
+    assert!(stderr(&json).is_empty(), "stderr must stay clean");
+}
+
+/// `config set hold.timeout_secs 5m` schreibt 300 und lässt die Datei sonst,
+/// wie sie war.
+#[test]
+fn config_set_duration_parsing() {
+    let harness = Harness::new();
+    let file = harness.path("config/humanitl/config.toml");
+    std::fs::create_dir_all(file.parent().expect("a directory")).expect("the config directory");
+    std::fs::write(
+        &file,
+        "# Der Kommentar eines Menschen.\n[hold]\ntimeout_secs = 42 # mit Notiz\n",
+    )
+    .expect("the config file");
+
+    let output = harness.run(["config", "set", "hold.timeout_secs", "5m"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output).trim(),
+        "hold.timeout_secs = 300 (global)",
+        "{}",
+        stderr(&output)
+    );
+
+    let written = std::fs::read_to_string(&file).expect("the file is still there");
+    assert!(written.contains("timeout_secs = 300"), "{written}");
+    assert!(
+        written.contains("# Der Kommentar eines Menschen."),
+        "the comment of a human survives: {written}"
+    );
+    assert!(
+        written.contains("# mit Notiz"),
+        "the note behind the value survives: {written}"
+    );
+
+    let back = harness.run(["config", "get", "hold.timeout_secs"]);
+    assert_eq!(stdout(&back).trim(), "300", "{}", stderr(&back));
+
+    // Zweimal derselbe Wert schreibt nicht zweimal.
+    let again = harness.run(["--json", "config", "set", "hold.timeout_secs", "300"]);
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&again).trim()).expect("one JSON value");
+    assert_eq!(value["written"], "unchanged");
+    assert_eq!(value["value"], 300);
+
+    // Und eine Größe nimmt ihre Einheit.
+    let bytes = harness.run([
+        "--json",
+        "config",
+        "set",
+        "limits.hold_body_cap_bytes",
+        "2MiB",
+    ]);
+    assert_eq!(code(&bytes), 0, "{}", stderr(&bytes));
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&bytes).trim()).expect("one JSON value");
+    assert_eq!(value["value"], 2 * 1024 * 1024);
+}
+
+/// Ein Wert, den das Schema nicht kennt, endet mit 1 und einem Befund — und
+/// die Datei bleibt unberührt.
+///
+/// Der Code ist `CONFIG_003` („Wert außerhalb des Bereichs") und nicht das
+/// `CONFIG_001` aus der Spezifikation von HUM-070: `CONFIG_001` heißt in
+/// diesem Register „Config-Datei ungültig", und die Datei ist hier in Ordnung.
+/// `backlog/CONVENTIONS.md` 4.6 ist für Namen die jüngere Quelle.
+#[test]
+fn config_set_invalid_exit_1_with_config_003() {
+    let harness = Harness::new();
+    let file = harness.path("config/humanitl/config.toml");
+
+    let output = harness.run(["config", "set", "hold.ask_mode", "banana"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.starts_with("error[CONFIG_003]: "), "{text}");
+    // Der Zweig der Aufzählung hat abgelehnt, nicht das Lesen des Typs: Nur
+    // er nennt die erlaubten Werte und schlägt einen davon vor.
+    assert!(
+        text.contains("banana is not a value of hold.ask_mode; it takes one of ui, terminal, none"),
+        "{text}"
+    );
+    assert!(
+        text.contains("\n  fix: humanitl config set hold.ask_mode ui\n"),
+        "{text}"
+    );
+    assert!(!file.exists(), "nothing is written when nothing is valid");
+
+    // Auch die Untergrenze einer Zahl ist ein Befund und keine stille 0. Sie
+    // steht nicht im Schema, sondern in der Prüfung von `humanitl-config`;
+    // `config set` legt den Wert deshalb einmal als Ebene auf und löst auf,
+    // statt den Bereich ein zweites Mal aufzuschreiben.
+    let below = harness.run(["config", "set", "hold.timeout_secs", "0"]);
+    let text = stderr(&below);
+    assert_eq!(code(&below), 1, "{text}");
+    assert!(text.starts_with("error[CONFIG_003]: "), "{text}");
+    assert!(text.contains("hold.timeout_secs"), "{text}");
+    assert!(!file.exists(), "{text}");
+
+    // Und ein Schlüssel, den es nicht gibt, bleibt `CONFIG_002`.
+    let unknown = harness.run(["config", "set", "hold.nonsense", "1"]);
+    assert_eq!(code(&unknown), 1);
+    assert!(
+        stderr(&unknown).starts_with("error[CONFIG_002]: "),
+        "{}",
+        stderr(&unknown)
+    );
+}
+
+/// `config schema` ist ein JSON-Schema, und jedes Blatt trägt seine Stufe.
+///
+/// Geprüft wird die Form und nicht mit der Crate `jsonschema`: Sie steht nicht
+/// unter den Abhängigkeiten des Workspace, und das Schema kommt ohnehin aus
+/// `schemars`. Was ein Test hier wirklich halten kann, ist die Zusage aus
+/// ADR-011: ein Dokument mit `$schema`, Objekten bis zum Blatt und `x-tier` an
+/// jedem Blatt.
+#[test]
+fn config_schema_is_valid_json_schema() {
+    let harness = Harness::new();
+    let output = harness.run(["--json", "config", "schema"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let schema: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("one JSON value");
+    assert!(
+        schema["$schema"]
+            .as_str()
+            .is_some_and(|text| text.contains("json-schema.org")),
+        "{schema}"
+    );
+    assert_eq!(schema["type"], "object");
+
+    let mut leaves = 0;
+    schema_walk(&schema, "root", &mut leaves);
+    assert!(leaves > 20, "only {leaves} leaves in the schema");
+
+    // Ohne `--json` dasselbe Dokument, nur eingerückt.
+    let pretty = harness.run(["config", "schema"]);
+    assert_eq!(code(&pretty), 0);
+    let same: serde_json::Value =
+        serde_json::from_str(&stdout(&pretty)).expect("the pretty form is JSON too");
+    assert_eq!(same, schema);
+}
+
+/// Läuft durch ein JSON-Schema bis zu den Blättern und prüft jedes davon.
+fn schema_walk(node: &serde_json::Value, path: &str, leaves: &mut usize) {
+    let object = node
+        .as_object()
+        .unwrap_or_else(|| panic!("{path} is no schema object"));
+    if let Some(properties) = object.get("properties").and_then(|value| value.as_object()) {
+        assert!(!properties.is_empty(), "{path} has an empty properties");
+        for (name, child) in properties {
+            schema_walk(child, &format!("{path}.{name}"), leaves);
+        }
+        return;
+    }
+    *leaves += 1;
+    assert!(
+        object.contains_key("x-tier"),
+        "{path} is a leaf without x-tier"
+    );
+    assert!(
+        object.contains_key("type")
+            || object.contains_key("enum")
+            || object.contains_key("anyOf")
+            || object.contains_key("oneOf"),
+        "{path} is a leaf without a type"
+    );
+}
+
+/// Eine heile Kette endet mit 0 und sagt, was sie nicht geprüft hat.
+#[test]
+fn audit_verify_ok_exit_0() {
+    let harness = Harness::new();
+    let log = harness.paths().audit_path();
+    audit_chain(&log, 4);
+
+    let output = harness.run(["audit", "verify", "--file", &log.display().to_string()]);
+    let text = stdout(&output);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(text.contains("audit chain: OK"), "{text}");
+    assert!(text.contains("records:     4"), "{text}");
+    assert!(text.contains("head:"), "{text}");
+    // Die schwächere Prüfung sagt, dass sie die schwächere ist.
+    assert!(text.contains("no HMAC key (file mode)"), "{text}");
+    assert!(text.contains("no anchors (file mode)"), "{text}");
+
+    // Ohne Daemon und ohne `--file` fällt der Befehl auf die Datei zurück und
+    // sagt auch das.
+    let fallback = harness.run(["audit", "verify"]);
+    assert_eq!(code(&fallback), 0, "{}", stderr(&fallback));
+    assert!(
+        stdout(&fallback).contains("audit chain: OK"),
+        "{}",
+        stdout(&fallback)
+    );
+    assert!(
+        stdout(&fallback).contains("no HMAC key (file mode)"),
+        "{}",
+        stdout(&fallback)
+    );
+
+    let json = harness.run([
+        "--json",
+        "audit",
+        "verify",
+        "--file",
+        &log.display().to_string(),
+    ]);
+    assert_eq!(code(&json), 0, "{}", stderr(&json));
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&json).trim()).expect("one JSON value");
+    assert_eq!(value["chain"], "ok");
+    assert_eq!(value["mode"], "file");
+    assert_eq!(value["anchors"], "not_checked");
+    assert_eq!(value["records"], 4);
+    assert_eq!(value["head"]["seq"], 4);
+    assert!(stderr(&json).is_empty(), "stderr must stay clean");
+}
+
+/// Eine veränderte Zeile endet mit 4 und nennt die Stelle.
+#[test]
+fn audit_verify_broken_exit_4() {
+    let harness = Harness::new();
+    let log = harness.paths().audit_path();
+    audit_chain(&log, 4);
+
+    // Ein Zeichen in Record 2, und der Hash der Zeile passt nicht mehr.
+    let text = std::fs::read_to_string(&log).expect("the log reads");
+    let tampered = text.replacen("\"n\":2", "\"n\":9", 1);
+    assert_ne!(tampered, text, "the fixture must really change");
+    std::fs::write(&log, &tampered).expect("the tampered log");
+
+    let output = harness.run(["audit", "verify", "--file", &log.display().to_string()]);
+    assert_eq!(code(&output), 4, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("audit chain: BROKEN at seq 2"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stdout(&output).contains("hash_mismatch"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).starts_with("error[AUDIT_001]: "),
+        "{}",
+        stderr(&output)
+    );
+
+    let json = harness.run([
+        "--json",
+        "audit",
+        "verify",
+        "--file",
+        &log.display().to_string(),
+    ]);
+    assert_eq!(code(&json), 4, "{}", stderr(&json));
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&json).trim()).expect("one JSON value");
+    assert_eq!(value["chain"], "broken");
+    assert_eq!(value["first_bad_seq"], 2);
+    assert_eq!(value["diagnostic"]["code"], "AUDIT_001");
+    assert!(stderr(&json).is_empty(), "stderr must stay clean");
+}
+
+/// Der CSV-Export hat eine Kopfzeile mit acht Spalten und eine Zeile je Record.
+#[test]
+fn audit_export_csv_columns() {
+    let harness = Harness::new();
+    let log = harness.paths().audit_path();
+    audit_chain(&log, 4);
+    let out = harness.path("export.csv");
+
+    let output = harness.run([
+        "audit",
+        "export",
+        "--format",
+        "csv",
+        "--file",
+        &log.display().to_string(),
+        "--out",
+        &out.display().to_string(),
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("exported 4 records to"),
+        "{}",
+        stdout(&output)
+    );
+
+    let csv = std::fs::read_to_string(&out).expect("the export is there");
+    // RFC 4180: jede Zeile endet mit CRLF, auch die letzte.
+    assert!(csv.ends_with("\r\n"), "{csv:?}");
+    assert_eq!(csv.matches("\r\n").count(), 5, "{csv:?}");
+    let mut lines = csv.lines();
+    assert_eq!(
+        lines.next(),
+        Some("seq,ts,session,kind,data,prev,hash,mac"),
+        "{csv}"
+    );
+    assert_eq!(lines.clone().count(), 4, "{csv}");
+    let first = lines.next().unwrap_or_default();
+    assert!(
+        first.starts_with("1,2026-09-02T10:01:00.000000Z,-,flow.decided,"),
+        "{csv}"
+    );
+    // Ein Feld mit Komma und Anführungszeichen steht nach RFC 4180 da.
+    assert!(first.contains("\"\""), "the quotes are doubled: {csv}");
+
+    // Ein vorhandener Export wird nie überschrieben.
+    let again = harness.run([
+        "audit",
+        "export",
+        "--format",
+        "csv",
+        "--file",
+        &log.display().to_string(),
+        "--out",
+        &out.display().to_string(),
+    ]);
+    assert_eq!(code(&again), 1, "{}", stderr(&again));
+    assert!(
+        stderr(&again).starts_with("error[AUDIT_008]: "),
+        "{}",
+        stderr(&again)
+    );
+    // Der Vorschlag überschreibt keinen älteren Beleg und nimmt einen Namen
+    // mit `-` am Anfang als Namen.
+    assert!(
+        stderr(&again).contains("\n  fix: mv -n -- "),
+        "{}",
+        stderr(&again)
+    );
+
+    // Der Bereich schneidet, und `jsonl` gibt die Zeilen wörtlich zurück.
+    let jsonl = harness.path("export.jsonl");
+    let ranged = harness.run([
+        "audit",
+        "export",
+        "--format",
+        "jsonl",
+        "--file",
+        &log.display().to_string(),
+        "--out",
+        &jsonl.display().to_string(),
+        "--since",
+        "2026-09-02T10:02:00Z",
+        "--until",
+        "2026-09-02T10:04:00Z",
+    ]);
+    assert_eq!(code(&ranged), 0, "{}", stderr(&ranged));
+    let body = std::fs::read_to_string(&jsonl).expect("the jsonl export");
+    assert_eq!(body.lines().count(), 2, "{body}");
+    for line in body.lines() {
+        assert!(
+            text_of(&log).contains(line),
+            "a jsonl row is the line of the log, byte for byte: {line}"
+        );
+    }
+}
+
+/// Der Text einer Datei, für den Vergleich Zeile gegen Zeile.
+fn text_of(path: &Path) -> String {
+    std::fs::read_to_string(path).unwrap_or_default()
+}
+
+/// Ein `systemctl`, das nur protokolliert und mit 0 endet.
+fn logging_systemctl(harness: &Harness, name: &str) -> (PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let bin = harness.path(&format!("fakebin-{name}"));
+    std::fs::create_dir_all(&bin).expect("the fake bin directory");
+    let log = harness.path(&format!("{name}.log"));
+    let script = format!(
+        "#!/bin/sh\necho \"$*\" >>'{log}'\nexit 0\n",
+        log = log.display()
+    );
+    let path = bin.join(name);
+    std::fs::write(&path, script).expect("the fake program");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("0755");
+    (bin, log)
+}
+
+/// `daemon install` schreibt die Unit und sagt systemd davon.
+///
+/// **Geprüft wird `humanitld.service` und nicht `humanitld.socket`.** Die
+/// Spezifikation von HUM-070 nennt `enable --now humanitld.socket`; die
+/// Socket-Aktivierung kommt mit HUM-053, und bis der Daemon `LISTEN_FDS` liest,
+/// nähme ein von systemd gehaltener Socket ihm seinen eigenen weg — er bräche
+/// mit `DAEMON_003` ab. `packaging/systemd/humanitld.socket` liegt deshalb da,
+/// wird aber nicht geschrieben; der Test hält beides fest.
+#[test]
+fn daemon_install_writes_units_and_calls_systemctl() {
+    let harness = Harness::new();
+    let bin = installed_tree(&harness);
+    let (fake, log) = logging_systemctl(&harness, "systemctl");
+
+    let output = install_run_with_path(&harness, &bin, &fake, &["daemon", "install"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let calls = fake_systemctl_log(&log);
+    assert!(calls.contains("--user daemon-reload"), "{calls}");
+    assert!(
+        calls.contains("--user enable --now humanitld.service"),
+        "{calls}"
+    );
+
+    let unit = unit_path(&harness);
+    assert!(unit.is_file(), "the unit is written");
+    let dir = unit.parent().expect("the unit directory");
+    let written: Vec<String> = std::fs::read_dir(dir)
+        .expect("the directory is readable")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    assert!(
+        !written.iter().any(|name| name == "humanitld.socket"),
+        "the socket unit waits for LISTEN_FDS in HUM-053: {written:?}"
+    );
+
+    // Der Daemon antwortet in dieser Umgebung nicht; das steht als Zeile da
+    // und ist kein Fehlschlag.
+    assert!(
+        stdout(&output).contains("no answer within 5000 ms"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+/// Aus einem `AppImage` heraus werden Daemon und Shim herauskopiert, und
+/// `ExecStart` zeigt auf die Kopie.
+#[test]
+fn daemon_install_appimage_copies_binaries() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let harness = Harness::new();
+    let bin = installed_tree(&harness);
+    let shim = bin.join("humanitl-shim");
+    std::fs::write(&shim, b"#!/bin/sh\nexit 0\n").expect("the shim");
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("0755");
+
+    let mut command = Command::new(bin.join("humanitl"));
+    command
+        .args(["daemon", "install"])
+        .current_dir(harness.path("work"))
+        .env_clear()
+        .env("PATH", "")
+        .env("APPIMAGE", "/tmp/Humanitl-0.0.0-x86_64.AppImage")
+        .env("HOME", harness.path("home"))
+        .env("XDG_CONFIG_HOME", harness.path("config"))
+        .env("XDG_DATA_HOME", harness.path("data"))
+        .env("XDG_RUNTIME_DIR", harness.path("run"));
+    let output = output_when_not_busy(command);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let link = harness.path("home").join(".local/lib/humanitl/current");
+    let lib = std::fs::read_link(&link).expect("current is a symlink");
+    assert_eq!(
+        lib.parent(),
+        Some(harness.path("home").join(".local/lib/humanitl").as_path()),
+        "current points into ~/.local/lib/humanitl"
+    );
+    assert!(
+        lib.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(concat!(env!("CARGO_PKG_VERSION"), "."))),
+        "the copy carries the version: {}",
+        lib.display()
+    );
+    for name in ["humanitld", "humanitl-shim"] {
+        assert!(
+            lib.join(name).is_file(),
+            "{name} is not in {}",
+            lib.display()
+        );
+    }
+
+    // `ExecStart` nennt den Verweis und nie den Einhängepunkt des AppImages.
+    let unit = std::fs::read_to_string(unit_path(&harness)).expect("the unit is written");
+    assert!(
+        unit.contains(&format!("ExecStart={}/humanitld\n", link.display())),
+        "{unit}"
+    );
+    assert!(!unit.contains("/tmp/.mount_"), "{unit}");
+}
+
+/// Ohne Daemon endet `daemon status` mit 2 und einem Befund.
+#[test]
+fn daemon_status_exit_2_when_down() {
+    let harness = Harness::new();
+
+    let output = harness.run(["daemon", "status"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 2, "{text}");
+    assert!(text.starts_with("blocking[DAEMON_001]: "), "{text}");
+    assert!(stdout(&output).is_empty(), "stdout must stay clean");
+
+    let json = harness.run(["--json", "daemon", "status"]);
+    assert_eq!(code(&json), 2, "{}", stderr(&json));
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&json).trim()).expect("one JSON value");
+    assert_eq!(value["code"], "DAEMON_001");
+    assert!(stderr(&json).is_empty(), "stderr must stay clean");
+}
+
+/// Ohne Nutzersitzung liest `daemon logs` kein Journal und sagt, warum.
+#[test]
+fn daemon_logs_without_a_user_session_is_daemon_010() {
+    let harness = Harness::new();
+    let mut command = harness.command();
+    command
+        .args(["daemon", "logs", "-n", "5"])
+        .env_remove("XDG_RUNTIME_DIR");
+    let output = command.output().expect("the binary runs");
+    let text = stderr(&output);
+
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.starts_with("blocking[DAEMON_010]: "), "{text}");
+    assert!(text.contains("loginctl enable-linger"), "{text}");
+}
+
+/// `daemon logs` reicht seine Argumente an `journalctl` durch.
+#[test]
+fn daemon_logs_hands_its_arguments_to_journalctl() {
+    let harness = Harness::new();
+    let (fake, log) = logging_systemctl(&harness, "journalctl");
+
+    let mut command = harness.command();
+    command
+        .args(["daemon", "logs", "-n", "5"])
+        .env("PATH", &fake);
+    let output = command.output().expect("the binary runs");
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let calls = fake_systemctl_log(&log);
+    assert!(
+        calls.contains("--user -u humanitld.service -n 5"),
+        "{calls}"
+    );
+    assert!(
+        !calls.contains("-f"),
+        "without --follow nothing follows: {calls}"
+    );
+}
+
+/// Mit `NO_COLOR` und in einer Pipe geht keine einzige ANSI-Sequenz hinaus.
+#[test]
+fn no_color_and_a_pipe_carry_no_ansi() {
+    let harness = Harness::new();
+    let log = harness.paths().audit_path();
+    audit_chain(&log, 2);
+
+    for args in [
+        vec!["config", "get"],
+        vec!["config", "get", "--origin"],
+        vec!["config", "set", "hold.ask_mode", "banana"],
+        vec!["audit", "verify", "--file", &log.display().to_string()],
+        vec!["daemon", "status"],
+    ] {
+        let mut command = harness.command();
+        command.args(&args).env("NO_COLOR", "1");
+        let output = command.output().expect("the binary runs");
+        for (stream, text) in [("stdout", stdout(&output)), ("stderr", stderr(&output))] {
+            assert!(
+                !text.contains('\u{1b}'),
+                "{args:?} wrote an escape to {stream}: {text:?}"
+            );
+        }
+    }
+}
+
+/// Die Socket-Unit hört dort, wo der Client den Socket sucht.
+///
+/// Sie wird heute nicht installiert (siehe
+/// `daemon_install_writes_units_and_calls_systemctl`), geht aber mit dem Paket
+/// mit (HUM-053). Ein `ListenStream`, der woandershin zeigt als
+/// `Paths::daemon_socket`, wäre der Fehler, den ein Paket am spätesten zeigt.
+#[test]
+fn the_socket_unit_listens_where_the_client_looks() {
+    let unit = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../packaging/systemd/humanitld.socket"),
+    )
+    .expect("the socket unit is in the repository");
+
+    assert!(
+        unit.contains("ListenStream=%t/humanitl/daemon.sock\n"),
+        "{unit}"
+    );
+    assert!(unit.contains("SocketMode=0600"), "{unit}");
+
+    let harness = Harness::new();
+    let socket = harness.paths().daemon_socket();
+    let tail = socket
+        .strip_prefix(harness.path("run"))
+        .expect("the socket lives under XDG_RUNTIME_DIR");
+    assert_eq!(
+        tail,
+        Path::new("humanitl/daemon.sock"),
+        "%t plus this tail is where the client looks"
+    );
+}
+
+/// `docs/cli.md` nennt jedes Unterkommando aus CONVENTIONS.md 3.8 mit einem
+/// Beispiel.
+#[test]
+fn docs_cli_names_every_subcommand_with_an_example() {
+    let docs =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../docs/cli.md"))
+            .expect("docs/cli.md is in the repository");
+
+    for example in [
+        "humanitl config get",
+        "humanitl config set",
+        "humanitl config schema",
+        "humanitl config edit",
+        "humanitl audit verify",
+        "humanitl audit export",
+        "humanitl daemon install",
+        "humanitl daemon status",
+        "humanitl daemon logs",
+    ] {
+        assert!(
+            docs.contains(example),
+            "docs/cli.md has no example for {example}"
+        );
+    }
+}
+
+// --- HUM-070, Nachbesserung nach dem Review ---------------------------------
+
+/// Ein Programm auf `PATH`, das seine Argumente protokolliert und dann tut,
+/// was `body` sagt (Shell, eine Zeile oder mehrere).
+fn fake_program(harness: &Harness, name: &str, body: &str) -> (PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let bin = harness.path(&format!("fakebin-{name}"));
+    std::fs::create_dir_all(&bin).expect("the fake bin directory");
+    let log = harness.path(&format!("{name}.log"));
+    let script = format!(
+        "#!/bin/sh\necho \"$*\" >>'{log}'\n{body}\n",
+        log = log.display()
+    );
+    let path = bin.join(name);
+    std::fs::write(&path, script).expect("the fake program");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("0755");
+    (bin, log)
+}
+
+/// Ein Programm, das `answer` ausgibt und mit 0 endet.
+fn answering_program(harness: &Harness, name: &str, answer: &str) -> (PathBuf, PathBuf) {
+    fake_program(harness, name, &format!("echo '{answer}'\nexit 0"))
+}
+
+/// `config set` ruft das Binary in der Umgebung der Testumgebung.
+fn config_set(harness: &Harness, args: &[&str]) -> Output {
+    let mut all = vec!["config", "set"];
+    all.extend_from_slice(args);
+    harness.run(all)
+}
+
+/// Die `config.toml` der Testumgebung.
+fn config_file(harness: &Harness) -> PathBuf {
+    harness.path("config/humanitl/config.toml")
+}
+
+/// Eine Aufzählung nimmt jeden ihrer Werte an.
+///
+/// Im Schema ist eine Aufzählung ein `oneOf` aus Konstanten und hat keinen Typ
+/// `string`; bis zum Review lehnte `config set` deshalb jeden gültigen Wert
+/// ab, und der Test für „banana" bestand, weil schon das Lesen des Typs
+/// scheiterte.
+#[test]
+fn config_set_an_enum_value_is_written() {
+    let harness = Harness::new();
+    for (key, value) in [
+        ("hold.ask_mode", "terminal"),
+        ("ui.theme", "dark"),
+        ("sandbox.work_mode", "ro"),
+    ] {
+        let output = config_set(&harness, &[key, value]);
+        assert_eq!(code(&output), 0, "{key} {value}: {}", stderr(&output));
+        let back = harness.run(["config", "get", key]);
+        assert_eq!(stdout(&back).trim(), value, "{}", stderr(&back));
+    }
+    let text = std::fs::read_to_string(config_file(&harness)).expect("the file");
+    assert!(text.contains("ask_mode = \"terminal\""), "{text}");
+}
+
+/// Geprüft wird gegen die wirkliche Datei, nicht gegen die Vorgaben.
+///
+/// `limits.hold_max_bytes` muss mindestens `limits.hold_body_cap_bytes` sein.
+/// Jeder der beiden Werte ist für sich richtig; erst zusammen mit dem, was
+/// schon in der Datei steht, ist einer falsch, und der landet nie darin.
+#[test]
+fn config_set_checks_against_the_real_file() {
+    let harness = Harness::new();
+    let first = config_set(&harness, &["limits.hold_max_bytes", "64MiB"]);
+    assert_eq!(code(&first), 0, "{}", stderr(&first));
+
+    let second = config_set(&harness, &["limits.hold_body_cap_bytes", "128MiB"]);
+    let text = stderr(&second);
+    assert_eq!(code(&second), 1, "{text}");
+    assert!(text.starts_with("error[CONFIG_003]: "), "{text}");
+    assert!(text.contains("limits.hold_max_bytes"), "{text}");
+    // Der Befund nennt die Datei des Menschen, nicht die Nebendatei.
+    assert!(!text.contains(".tmp-"), "{text}");
+    let file = std::fs::read_to_string(config_file(&harness)).expect("the file");
+    assert!(!file.contains("hold_body_cap_bytes"), "{file}");
+    let get = harness.run(["config", "get", "limits.hold_max_bytes"]);
+    assert_eq!(code(&get), 0, "the file still loads: {}", stderr(&get));
+
+    // Und andersherum: Mit Platz genug ist derselbe Wert richtig.
+    let wide = config_set(&harness, &["limits.hold_max_bytes", "2GiB"]);
+    assert_eq!(code(&wide), 0, "{}", stderr(&wide));
+    let fits = config_set(&harness, &["limits.hold_body_cap_bytes", "128MiB"]);
+    assert_eq!(code(&fits), 0, "{}", stderr(&fits));
+}
+
+/// Eine Tabelle wird als Tabelle geschrieben, `null` entfernt den Schlüssel.
+#[test]
+fn config_set_writes_a_table_and_null_removes_the_key() {
+    let harness = Harness::new();
+    let table = config_set(&harness, &["sandbox.env", r#"{"FOO":"bar"}"#]);
+    assert_eq!(code(&table), 0, "{}", stderr(&table));
+    let text = std::fs::read_to_string(config_file(&harness)).expect("the file");
+    let parsed: toml::Table = text.parse().expect("TOML");
+    assert_eq!(
+        parsed["sandbox"]["env"]["FOO"].as_str(),
+        Some("bar"),
+        "{text}"
+    );
+
+    let set = config_set(&harness, &["llm.endpoint", "http://192.168.1.20:11434"]);
+    assert_eq!(code(&set), 0, "{}", stderr(&set));
+    let removed = config_set(&harness, &["llm.endpoint", "null"]);
+    assert_eq!(code(&removed), 0, "{}", stderr(&removed));
+    let text = std::fs::read_to_string(config_file(&harness)).expect("the file");
+    assert!(!text.contains("endpoint"), "{text}");
+    assert!(text.contains("FOO"), "the rest stays: {text}");
+    let back = harness.run(["config", "get", "llm.endpoint"]);
+    assert_eq!(stdout(&back).trim(), "-", "{}", stderr(&back));
+}
+
+/// Eine verlinkte `config.toml` bleibt verlinkt, ihre Byte-Reihenfolge und
+/// ihre Zeilenenden bleiben.
+#[test]
+fn config_set_keeps_a_linked_file_linked_with_its_bom_and_crlf() {
+    let harness = Harness::new();
+    let dotfiles = harness.path("dotfiles");
+    std::fs::create_dir_all(&dotfiles).expect("the dotfile directory");
+    let real = dotfiles.join("humanitl.toml");
+    std::fs::write(&real, "\u{feff}[hold]\r\ntimeout_secs = 42\r\n").expect("the real file");
+    let link = config_file(&harness);
+    std::fs::create_dir_all(link.parent().expect("a directory")).expect("the config directory");
+    std::os::unix::fs::symlink(&real, &link).expect("the link");
+
+    let output = config_set(&harness, &["hold.timeout_secs", "5m"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .expect("the link is there")
+            .file_type()
+            .is_symlink(),
+        "the link stays a link"
+    );
+    let text = std::fs::read_to_string(&real).expect("the real file");
+    assert!(text.starts_with('\u{feff}'), "{text:?}");
+    assert!(text.contains("timeout_secs = 300\r\n"), "{text:?}");
+    assert!(!text.replace("\r\n", "").contains('\n'), "{text:?}");
+}
+
+/// `--project` schreibt unter `[config]` in das Profil des Projekts, und ein
+/// Schlüssel hinter der Vertrauensgrenze kommt dort nie an.
+#[test]
+fn config_set_project_writes_the_profile_and_respects_the_trust_boundary() {
+    let harness = Harness::new();
+    let profile = harness.path("work/.humanitl/profile.toml");
+
+    let output = config_set(&harness, &["--project", "hold.timeout_secs", "90s"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(stdout(&output).trim(), "hold.timeout_secs = 90 (project)");
+    let text = std::fs::read_to_string(&profile).expect("the project profile");
+    let parsed: toml::Table = text.parse().expect("TOML");
+    assert_eq!(
+        parsed["config"]["hold"]["timeout_secs"].as_integer(),
+        Some(90),
+        "{text}"
+    );
+    assert!(
+        !config_file(&harness).exists(),
+        "the global file stays untouched"
+    );
+
+    std::fs::remove_file(&profile).expect("the profile goes");
+    let denied = config_set(
+        &harness,
+        &["--project", "llm.endpoint", "http://evil.example"],
+    );
+    let text = stderr(&denied);
+    assert_eq!(code(&denied), 1, "{text}");
+    assert!(text.starts_with("error[CONFIG_003]: "), "{text}");
+    assert!(text.contains("trust boundary"), "{text}");
+    assert!(
+        !profile.exists(),
+        "no file for a key the project may not set"
+    );
+
+    // Auch eine gesperrte Aufzählung meldet die Grenze und keinen Lesefehler.
+    let denied_enum = config_set(&harness, &["--project", "sandbox.work_mode", "nonsense"]);
+    assert!(
+        stderr(&denied_enum).contains("trust boundary"),
+        "{}",
+        stderr(&denied_enum)
+    );
+}
+
+/// Ein Wert, der mit `-` beginnt, ist ein Wert; sein Vorschlag besteht.
+#[test]
+fn config_set_a_negative_value_is_refused_with_a_fix_that_works() {
+    let harness = Harness::new();
+    let output = config_set(&harness, &["hold.timeout_secs", "-5m"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.starts_with("error[CONFIG_003]: "), "{text}");
+    assert!(
+        text.contains("\n  fix: humanitl config set hold.timeout_secs 300\n"),
+        "{text}"
+    );
+    let fixed = config_set(&harness, &["hold.timeout_secs", "300"]);
+    assert_eq!(
+        code(&fixed),
+        0,
+        "the suggested command works: {}",
+        stderr(&fixed)
+    );
+}
+
+/// `config edit` meldet einen Fehler genau einmal, unter `--json` als ein
+/// Objekt, und `stderr` bleibt leer.
+#[test]
+fn config_edit_reports_a_broken_file_once() {
+    let harness = Harness::new();
+    let (editor, _log) = fake_program(
+        &harness,
+        "breaking-editor",
+        "printf 'this is = = not toml\\n' >\"$1\"\nexit 0",
+    );
+    let output = harness
+        .command()
+        .args(["--json", "config", "edit"])
+        .env("EDITOR", editor.join("breaking-editor"))
+        .stdin(Stdio::null())
+        .output()
+        .expect("the binary runs");
+    let body = stdout(&output);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert_eq!(body.lines().count(), 1, "one object per call: {body}");
+    let value: serde_json::Value = serde_json::from_str(body.trim()).expect("one JSON value");
+    assert_eq!(value["code"], "CONFIG_001");
+    assert!(stderr(&output).is_empty(), "{}", stderr(&output));
+
+    let human = harness
+        .command()
+        .args(["config", "edit"])
+        .env("EDITOR", editor.join("breaking-editor"))
+        .stdin(Stdio::null())
+        .output()
+        .expect("the binary runs");
+    assert_eq!(
+        stderr(&human).matches("[CONFIG_001]").count(),
+        1,
+        "{}",
+        stderr(&human)
+    );
+}
+
+/// Ein Export, der mittendrin bricht, lässt nichts liegen und blockiert den
+/// nächsten Versuch nicht.
+#[test]
+fn audit_export_that_breaks_leaves_no_file_behind() {
+    let harness = Harness::new();
+    let log = harness.paths().audit_path();
+    audit_chain(&log, 4);
+    let good = std::fs::read_to_string(&log).expect("the log");
+    let mut lines: Vec<&str> = good.lines().collect();
+    lines[2] = "not a record";
+    std::fs::write(&log, format!("{}\n", lines.join("\n"))).expect("the broken log");
+    let out = harness.path("export/out.jsonl");
+
+    let args = [
+        "audit",
+        "export",
+        "--format",
+        "jsonl",
+        "--file",
+        &log.display().to_string(),
+        "--out",
+        &out.display().to_string(),
+    ];
+    let broken = harness.run(args);
+    assert_eq!(code(&broken), 1, "{}", stderr(&broken));
+    assert!(
+        stderr(&broken).starts_with("error[AUDIT_001]: "),
+        "{}",
+        stderr(&broken)
+    );
+    assert!(!out.exists(), "no half export");
+    let leftovers: Vec<String> = std::fs::read_dir(out.parent().expect("a directory"))
+        .expect("the directory")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+
+    std::fs::write(&log, good).expect("the log is whole again");
+    let retry = harness.run(args);
+    assert_eq!(code(&retry), 0, "{}", stderr(&retry));
+    assert_eq!(
+        std::fs::read_to_string(&out)
+            .expect("the export")
+            .lines()
+            .count(),
+        4
+    );
+}
+
+/// Ohne Nutzersitzung schreibt `daemon install` nichts und nennt den einen
+/// Fix, der hilft.
+#[test]
+fn daemon_install_without_a_user_session_writes_nothing() {
+    let harness = Harness::new();
+    let bin = installed_tree(&harness);
+    let (fake, log) = logging_systemctl(&harness, "systemctl");
+
+    let mut command = Command::new(bin.join("humanitl"));
+    command
+        .args(["daemon", "install"])
+        .current_dir(harness.path("work"))
+        .env_clear()
+        .env("PATH", &fake)
+        .env("HOME", harness.path("home"))
+        .env("XDG_CONFIG_HOME", harness.path("config"))
+        .env("XDG_DATA_HOME", harness.path("data"));
+    let output = output_when_not_busy(command);
+    let text = stderr(&output);
+
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.contains("[DAEMON_010]"), "{text}");
+    assert!(text.contains("loginctl enable-linger"), "{text}");
+    assert!(!unit_path(&harness).exists(), "nothing is written");
+    assert!(
+        fake_systemctl_log(&log).is_empty(),
+        "systemctl is not called"
+    );
+}
+
+/// Findet `systemctl` den Bus der Sitzung nicht, ist das dieselbe fehlende
+/// Sitzung und kein `DAEMON_008` mit einem Vorschlag, der ebenso scheitert.
+#[test]
+fn daemon_install_without_a_session_bus_is_daemon_010() {
+    let harness = Harness::new();
+    let bin = installed_tree(&harness);
+    let (fake, _log) = fake_program(
+        &harness,
+        "systemctl",
+        "echo 'Failed to connect to bus: No medium found' >&2\nexit 1",
+    );
+
+    let output = install_run_with_path(&harness, &bin, &fake, &["daemon", "install"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.contains("[DAEMON_010]"), "{text}");
+    assert!(!text.contains("[DAEMON_008]"), "{text}");
+    assert!(!unit_path(&harness).exists(), "the unit is taken back");
+}
+
+/// Eine fremde Unit hält auch das Kopieren aus dem `AppImage` auf.
+#[test]
+fn daemon_install_appimage_copies_nothing_before_the_checks() {
+    let harness = Harness::new();
+    let bin = appimage_tree(&harness);
+    let unit = unit_path(&harness);
+    std::fs::create_dir_all(unit.parent().expect("a directory")).expect("the unit directory");
+    std::fs::write(&unit, "[Service]\nExecStart=/mine\n").expect("a foreign unit");
+
+    let output = appimage_install(&harness, &bin, &["daemon", "install"]);
+    assert!(
+        stderr(&output).contains("[DAEMON_005]"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !harness.path("home/.local/lib/humanitl").exists(),
+        "nothing is copied before the refusal"
+    );
+}
+
+/// Ein Verzeichnis der Fassung, das ein Verweis ist, bekommt keine Binaries.
+#[test]
+fn daemon_install_appimage_refuses_a_linked_lib_directory() {
+    let harness = Harness::new();
+    let bin = appimage_tree(&harness);
+    let foreign = harness.path("foreign");
+    std::fs::create_dir_all(&foreign).expect("the foreign directory");
+    let base = harness.path("home/.local/lib/humanitl");
+    std::fs::create_dir_all(base.parent().expect("a parent")).expect("~/.local/lib");
+    std::os::unix::fs::symlink(&foreign, &base).expect("the lib directory is a link");
+
+    let output = appimage_install(&harness, &bin, &["daemon", "install"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("[DAEMON_011]"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        std::fs::read_dir(&foreign)
+            .expect("the foreign directory")
+            .count(),
+        0,
+        "nothing lands where the link points"
+    );
+    assert!(!unit_path(&harness).exists(), "and no unit either");
+}
+
+/// `--print` unter `APPIMAGE` zeigt, was die Unit wirklich bekäme: den
+/// Verweis `current`, nie den Einhängepunkt.
+#[test]
+fn daemon_install_appimage_print_names_the_copy() {
+    let harness = Harness::new();
+    let bin = appimage_tree(&harness);
+    let output = appimage_install(&harness, &bin, &["--json", "daemon", "install", "--print"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("one JSON value");
+    let exec = value["exec_start"].as_str().expect("exec_start");
+    assert!(
+        exec.ends_with(".local/lib/humanitl/current/humanitld"),
+        "{exec}"
+    );
+    assert!(
+        !harness.path("home/.local/lib").exists(),
+        "--print copies nothing"
+    );
+}
+
+/// `daemon install --json` schreibt nichts auf `stderr`.
+#[test]
+fn daemon_install_json_keeps_stderr_empty() {
+    let harness = Harness::new();
+    let bin = installed_tree(&harness);
+    let (fake, _log) = logging_systemctl(&harness, "systemctl");
+    let output = install_run_with_path(&harness, &bin, &fake, &["--json", "daemon", "install"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stderr(&output).is_empty(), "{}", stderr(&output));
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("one JSON value");
+    assert_eq!(value["action"], "created");
+    assert!(
+        value["commands"][1]
+            .as_str()
+            .is_some_and(|command| command.ends_with("--user enable --now humanitld.service")),
+        "{value}"
+    );
+}
+
+/// `daemon logs` übersetzt den Exit-Code von `journalctl`, und ein fehlendes
+/// `journalctl` ist ein fehlendes Paket.
+#[test]
+fn daemon_logs_maps_the_exit_code_and_names_a_missing_journalctl() {
+    let harness = Harness::new();
+    let (fake, _log) = fake_program(&harness, "journalctl", "exit 4");
+    let mut command = harness.command();
+    command.args(["daemon", "logs"]).env("PATH", &fake);
+    let output = command.output().expect("the binary runs");
+    assert_eq!(
+        code(&output),
+        1,
+        "a 4 of journalctl is no security violation: {}",
+        stderr(&output)
+    );
+
+    let mut command = harness.command();
+    command
+        .args(["daemon", "logs"])
+        .env("PATH", harness.path("empty"));
+    let output = command.output().expect("the binary runs");
+    let text = stderr(&output);
+    assert!(text.contains("[DAEMON_012]"), "{text}");
+    assert!(text.contains("apt-get install systemd"), "{text}");
+    assert!(!text.contains("loginctl"), "{text}");
+}
+
+/// Ein Baum wie in einem `AppImage`: Kommandozeile, Daemon und Shim.
+fn appimage_tree(harness: &Harness) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let bin = installed_tree(harness);
+    let shim = bin.join("humanitl-shim");
+    std::fs::write(&shim, b"#!/bin/sh\nexit 0\n").expect("the shim");
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("0755");
+    bin
+}
+
+/// `daemon install` mit gesetztem `APPIMAGE` und leerem `PATH`.
+fn appimage_install(harness: &Harness, bin: &Path, args: &[&str]) -> Output {
+    let mut command = Command::new(bin.join("humanitl"));
+    command
+        .args(args)
+        .current_dir(harness.path("work"))
+        .env_clear()
+        .env("PATH", "")
+        .env("APPIMAGE", "/tmp/Humanitl-0.0.0-x86_64.AppImage")
+        .env("HOME", harness.path("home"))
+        .env("XDG_CONFIG_HOME", harness.path("config"))
+        .env("XDG_DATA_HOME", harness.path("data"))
+        .env("XDG_RUNTIME_DIR", harness.path("run"));
+    output_when_not_busy(command)
+}
+
+// --- HUM-070, zweite Nachbesserung --------------------------------------------
+
+/// `config set sandbox.work_dir` wird mit dem Projekt geprüft, das es nennt.
+///
+/// Welches Projekt-Profil gilt, hängt an `sandbox.work_dir`. Die Probe muss
+/// deshalb die Quellen mit der neuen Datei neu bestimmen; ein Satz, der vor der
+/// Änderung feststand, prüfte das Profil des alten Projekts, und ein Profil
+/// mit einem gesperrten Schlüssel käme in die Konfiguration, die der nächste
+/// Start ablehnt.
+#[test]
+fn config_set_work_dir_is_probed_with_the_project_it_names() {
+    let harness = Harness::new();
+    let project = harness.path("home/evil-repo");
+    std::fs::create_dir_all(project.join(".humanitl")).expect("the project");
+    std::fs::write(
+        project.join(".humanitl/profile.toml"),
+        "[config.sandbox]\nwork_mode = \"ro\"\n",
+    )
+    .expect("a project profile with a key it may not set");
+
+    let output = config_set(
+        &harness,
+        &["sandbox.work_dir", &project.display().to_string()],
+    );
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.contains("[CONFIG_003]"), "{text}");
+    assert!(
+        !config_file(&harness).exists(),
+        "nothing is written: {:?}",
+        std::fs::read_to_string(config_file(&harness))
+    );
+}
+
+/// Ein älterer Fehler verdeckt keinen neuen.
+///
+/// Die Ladung meldet nur ihren ersten Befund. Schriebe `config set`, sobald die
+/// Konfiguration ohne die Änderung genauso scheitert, käme ein falscher Wert
+/// in die Datei, sobald irgendetwas anderes schon falsch ist — auch nur eine
+/// Umgebungsvariable dieses einen Aufrufs.
+#[test]
+fn config_set_refuses_when_an_older_error_would_mask_the_new_one() {
+    let harness = Harness::new();
+    let file = config_file(&harness);
+    std::fs::create_dir_all(file.parent().expect("a directory")).expect("the config directory");
+    let before = "[hold]\ntimeout_secs = 0\n\n[limits]\nhold_max_bytes = 67108864\n";
+    std::fs::write(&file, before).expect("a config with an older error");
+
+    let output = config_set(&harness, &["limits.hold_body_cap_bytes", "128MiB"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(
+        text.contains("did not load before this change either"),
+        "{text}"
+    );
+    // Der neue Befund nennt den gesetzten Schlüssel; sein eigener Vorschlag
+    // gilt.
+    assert!(
+        text.contains("\n  fix: humanitl config set limits.hold_max_bytes "),
+        "{text}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("the file"),
+        before,
+        "the file is untouched"
+    );
+
+    // Dasselbe, wenn der ältere Fehler nur in der Umgebung dieses Aufrufs
+    // steckt: Die Datei bekäme sonst einen Wert, der ohne die Variable nicht
+    // lädt.
+    std::fs::write(&file, "[limits]\nhold_max_bytes = 67108864\n").expect("a clean config");
+    let output = harness
+        .command()
+        .args(["config", "set", "limits.hold_body_cap_bytes", "128MiB"])
+        .env("HUMANITL_HOLD__TIMEOUT_SECS", "0")
+        .output()
+        .expect("the binary runs");
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        !std::fs::read_to_string(&file)
+            .expect("the file")
+            .contains("hold_body_cap_bytes"),
+        "nothing is written"
+    );
+    let get = harness.run(["config", "get", "limits.hold_max_bytes"]);
+    assert_eq!(code(&get), 0, "the file still loads: {}", stderr(&get));
+}
+
+/// Dieselbe Fassung ein zweites Mal: `current` zeigt immer auf eine
+/// vollständige Kopie, und die alte geht erst, wenn die neue steht.
+#[test]
+fn daemon_install_appimage_same_version_again_never_touches_the_live_copy() {
+    let harness = Harness::new();
+    let bin = appimage_tree(&harness);
+    let link = harness.path("home/.local/lib/humanitl/current");
+
+    let first = appimage_install(&harness, &bin, &["daemon", "install"]);
+    assert_eq!(code(&first), 0, "{}", stderr(&first));
+    let old = std::fs::read_link(&link).expect("current after the first run");
+
+    let second = appimage_install(&harness, &bin, &["daemon", "install"]);
+    assert_eq!(code(&second), 0, "{}", stderr(&second));
+    let new = std::fs::read_link(&link).expect("current after the second run");
+
+    assert_ne!(old, new, "the second copy is a directory of its own");
+    assert!(new.join("humanitld").is_file(), "{}", new.display());
+    assert!(
+        !old.exists(),
+        "the copy current pointed at before is retired"
+    );
+    let copies = lib_copies(&harness);
+    assert_eq!(copies, vec![new], "exactly one copy is left");
+}
+
+/// Scheitert `enable` nach der Kopie, geht die Kopie wieder, und `current`
+/// zeigt dorthin, wohin es vorher zeigte.
+#[test]
+fn daemon_install_appimage_failed_enable_takes_the_copy_back() {
+    let harness = Harness::new();
+    let bin = appimage_tree(&harness);
+    let link = harness.path("home/.local/lib/humanitl/current");
+
+    // Eine erste Installation ohne systemctl: Die Unit liegt, `current` zeigt
+    // auf die erste Kopie.
+    let first = appimage_install(&harness, &bin, &["daemon", "install"]);
+    assert_eq!(code(&first), 0, "{}", stderr(&first));
+    let before = std::fs::read_link(&link).expect("current after the first run");
+
+    // Die zweite scheitert an `enable`.
+    let unit_dir = unit_path(&harness)
+        .parent()
+        .expect("the unit directory")
+        .to_path_buf();
+    let (fake, _log) = fake_systemctl(&harness, &unit_dir);
+    let mut command = Command::new(bin.join("humanitl"));
+    command
+        .args(["daemon", "install"])
+        .current_dir(harness.path("work"))
+        .env_clear()
+        .env("PATH", &fake)
+        .env("APPIMAGE", "/tmp/Humanitl-0.0.0-x86_64.AppImage")
+        .env("HOME", harness.path("home"))
+        .env("XDG_CONFIG_HOME", harness.path("config"))
+        .env("XDG_DATA_HOME", harness.path("data"))
+        .env("XDG_RUNTIME_DIR", harness.path("run"));
+    let second = output_when_not_busy(command);
+    assert_ne!(code(&second), 0, "{}", stdout(&second));
+
+    assert_eq!(
+        std::fs::read_link(&link).expect("current is still a link"),
+        before,
+        "current points where it pointed before"
+    );
+    assert_eq!(
+        lib_copies(&harness),
+        vec![before],
+        "the copy of the failed run is gone"
+    );
+}
+
+/// Die Kopien unter `~/.local/lib/humanitl`, ohne `current`.
+fn lib_copies(harness: &Harness) -> Vec<PathBuf> {
+    let base = harness.path("home/.local/lib/humanitl");
+    let mut copies: Vec<PathBuf> = std::fs::read_dir(&base)
+        .expect("the lib directory")
+        .map(|entry| entry.expect("an entry").path())
+        .filter(|path| path.file_name().is_some_and(|name| name != "current"))
+        .collect();
+    copies.sort();
+    copies
+}
+
+/// Eine Nebendatei, deren Export nicht mehr läuft, räumt der nächste Export
+/// weg.
+#[test]
+fn audit_export_sweeps_a_stale_temp_file() {
+    let harness = Harness::new();
+    let log = harness.paths().audit_path();
+    audit_chain(&log, 2);
+    let out = harness.path("export/out.jsonl");
+    std::fs::create_dir_all(out.parent().expect("a directory")).expect("the export directory");
+    // Der Rest des Namens ist zufällig wie bei jedem Export; die Datei hält
+    // niemand gesperrt, ihr Export ist also nicht mehr da.
+    std::fs::set_permissions(
+        out.parent().expect("a directory"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .expect("a private export directory");
+    let stale = harness.path("export/.out.jsonl.tmp-Vb81kQwz3sLe");
+    std::fs::write(&stale, "left behind by a killed export\n").expect("a stale temp file");
+    age(&stale);
+    // Eine zweite Nebendatei, ebenso alt, deren Export aber noch schreibt:
+    // Er hält die Sperre, und sein Prozess ist von hier aus nicht zu sehen
+    // (anderer PID-Namensraum, `hidepid`). Sie bleibt.
+    let busy = harness.path("export/.out.jsonl.tmp-Jd40pNcx7uRa");
+    std::fs::write(&busy, "still being written\n").expect("a busy temp file");
+    age(&busy);
+    let held = std::fs::File::open(&busy).expect("the busy file opens");
+    rustix::fs::flock(&held, rustix::fs::FlockOperation::LockExclusive).expect("the lock");
+    // Eine junge Nebendatei ohne Sperre: Sie kann gerade angelegt worden
+    // sein, und die Sperre folgt einen Augenblick später. Sie bleibt.
+    let young = harness.path("export/.out.jsonl.tmp-young");
+    std::fs::write(&young, "just created\n").expect("a young temp file");
+    // Ein Verweis unter dem Namen einer Nebendatei: Er wird nicht verfolgt
+    // und nicht gelöscht, auch wenn sein Ziel alt ist.
+    let target = harness.path("export-target");
+    std::fs::write(&target, "somebody else's file\n").expect("the target");
+    age(&target);
+    let link = harness.path("export/.out.jsonl.tmp-link");
+    std::os::unix::fs::symlink(&target, &link).expect("the link");
+    // Auch der Verweis selbst ist alt; sonst schützte ihn schon sein Alter,
+    // und der Test sagte nichts darüber, ob ein Verweis verfolgt wird.
+    let old = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("after 1970")
+        .as_secs()
+        .saturating_sub(600);
+    let old = rustix::fs::Timespec {
+        tv_sec: i64::try_from(old).expect("a time that fits"),
+        tv_nsec: 0,
+    };
+    rustix::fs::utimensat(
+        rustix::fs::CWD,
+        &link,
+        &rustix::fs::Timestamps {
+            last_access: old,
+            last_modification: old,
+        },
+        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+    )
+    .expect("the link is aged");
+
+    let output = harness.run([
+        "audit",
+        "export",
+        "--format",
+        "jsonl",
+        "--file",
+        &log.display().to_string(),
+        "--out",
+        &out.display().to_string(),
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(!stale.exists(), "the stale temp file is gone");
+    assert!(busy.exists(), "a temp file under a held lock stays");
+    assert!(young.exists(), "a young temp file stays");
+    assert!(
+        std::fs::symlink_metadata(&link).is_ok() && target.exists(),
+        "a link is neither followed nor removed"
+    );
+    drop(held);
+    assert_eq!(
+        std::fs::read_to_string(&out)
+            .expect("the export")
+            .lines()
+            .count(),
+        2
+    );
+}
+
+/// Setzt die Änderungszeit einer Datei zehn Minuten zurück.
+fn age(path: &Path) {
+    let file = std::fs::File::options()
+        .write(true)
+        .open(path)
+        .expect("the file opens");
+    file.set_modified(std::time::SystemTime::now() - Duration::from_secs(600))
+        .expect("the time is set");
+}
+
+// --- HUM-070, dritte Nachbesserung --------------------------------------------
+
+/// Ein Verweis ins Leere am Ziel ist ein Pfad, der schon da ist: derselbe
+/// Befund samt Vorschlag wie bei einer Datei.
+#[test]
+fn audit_export_refuses_a_dangling_link_at_the_target() {
+    let harness = Harness::new();
+    let log = harness.paths().audit_path();
+    audit_chain(&log, 2);
+    let out = harness.path("dangling.jsonl");
+    std::os::unix::fs::symlink(harness.path("nowhere"), &out).expect("a dangling link");
+
+    let output = harness.run([
+        "audit",
+        "export",
+        "--format",
+        "jsonl",
+        "--file",
+        &log.display().to_string(),
+        "--out",
+        &out.display().to_string(),
+    ]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.starts_with("error[AUDIT_008]: "), "{text}");
+    assert!(text.contains("is already there"), "{text}");
+    assert!(
+        !harness.path("nowhere").exists(),
+        "nothing is written through the link"
+    );
+}
+
+/// Zwei falsche Werte in der Datei: Jeder lässt sich für sich reparieren, auch
+/// wenn der andere noch falsch ist.
+#[test]
+fn config_set_repairs_a_file_with_two_bad_keys_one_at_a_time() {
+    let harness = Harness::new();
+    let file = config_file(&harness);
+    std::fs::create_dir_all(file.parent().expect("a directory")).expect("the config directory");
+    std::fs::write(
+        &file,
+        "[hold]\ntimeout_secs = 0\n\n[resolver]\ncache_ttl_secs = 999999999\n",
+    )
+    .expect("a config with two bad keys");
+
+    // Erst der Schlüssel, den die Prüfung zuerst meldet: Danach lädt die
+    // Konfiguration immer noch nicht, und der verbleibende Befund über
+    // `resolver` stand schon vorher da. Ohne das Zählen aller Befunde sähe
+    // das wie ein neuer Fehler aus.
+    let first = config_set(&harness, &["hold.timeout_secs", "5m"]);
+    assert_eq!(code(&first), 0, "{}", stderr(&first));
+    assert!(
+        stderr(&first).contains("still does not load"),
+        "the note names the older finding: {}",
+        stderr(&first)
+    );
+    let second = config_set(&harness, &["resolver.cache_ttl_secs", "300"]);
+    assert_eq!(code(&second), 0, "{}", stderr(&second));
+    let get = harness.run(["config", "get", "hold.timeout_secs"]);
+    assert_eq!(stdout(&get).trim(), "300", "{}", stderr(&get));
+
+    // Ein neuer falscher Wert bleibt draußen, auch wenn schon etwas falsch ist.
+    std::fs::write(&file, "[hold]\ntimeout_secs = 0\n").expect("one bad key again");
+    let bad = config_set(&harness, &["resolver.cache_ttl_secs", "999999999"]);
+    assert_eq!(code(&bad), 1, "{}", stderr(&bad));
+    assert!(
+        !std::fs::read_to_string(&file)
+            .expect("the file")
+            .contains("cache_ttl_secs"),
+        "nothing is written"
+    );
+}
+
+/// Eine falsche Umgebungsvariable sperrt `config set` nicht für jeden
+/// Schlüssel.
+#[test]
+fn config_set_is_not_locked_out_by_a_bad_environment_variable() {
+    let harness = Harness::new();
+    // Dazu ein zweiter falscher Wert in der Datei, der nach dem der Umgebung
+    // geprüft wird: Das Zählen muss die Variable herausnehmen, um ihn zu
+    // sehen, und darf erst dann schreiben.
+    let file = config_file(&harness);
+    std::fs::create_dir_all(file.parent().expect("a directory")).expect("the config directory");
+    std::fs::write(&file, "[resolver]\ncache_ttl_secs = 999999999\n").expect("a later bad key");
+    let output = harness
+        .command()
+        .args(["config", "set", "ui.theme", "dark"])
+        .env("HUMANITL_HOLD__TIMEOUT_SECS", "0")
+        .output()
+        .expect("the binary runs");
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let text = std::fs::read_to_string(config_file(&harness)).expect("the file");
+    assert!(text.contains("theme = \"dark\""), "{text}");
+}
+
+// --- HUM-070, vierte Nachbesserung --------------------------------------------
+
+/// Ein Schlüssel, den das Schema nicht kennt, hat keinen Schlüssel: Sein Text
+/// nennt nur einen Vorschlag. Solange er in der Datei steht, wird nichts
+/// geschrieben — weder ein harmloser Wert noch der vorgeschlagene.
+#[test]
+fn config_set_refuses_while_the_file_has_an_unknown_key() {
+    let harness = Harness::new();
+    let file = config_file(&harness);
+    std::fs::create_dir_all(file.parent().expect("a directory")).expect("the config directory");
+    let before = "[hold]\ntimeout_secz = 5\n";
+    std::fs::write(&file, before).expect("a config with an unknown key");
+
+    for args in [["ui.theme", "dark"], ["hold.timeout_secs", "300"]] {
+        let output = config_set(&harness, &args);
+        let text = stderr(&output);
+        assert_eq!(code(&output), 1, "{args:?}: {text}");
+        assert!(text.contains("[CONFIG_002]"), "{args:?}: {text}");
+        assert!(
+            text.contains("\n  fix: humanitl config edit\n"),
+            "{args:?}: {text}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("the file"),
+            before,
+            "{args:?}: the file is untouched"
+        );
+    }
+}
+
+/// Ein Paar, dessen Grenze der neue Wert verschiebt, ist ein neuer Befund,
+/// auch wenn derselbe Schlüssel schon vorher falsch war.
+#[test]
+fn config_set_refuses_a_value_that_moves_the_bound_of_an_old_finding() {
+    let harness = Harness::new();
+    let file = config_file(&harness);
+    std::fs::create_dir_all(file.parent().expect("a directory")).expect("the config directory");
+    let before = "[limits]\nhold_max_bytes = 500\n";
+    std::fs::write(&file, before).expect("a config with a broken pair");
+
+    let output = config_set(&harness, &["limits.hold_body_cap_bytes", "1073741824"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.contains("[CONFIG_003]"), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("the file"),
+        before,
+        "the file is untouched"
+    );
+
+    // Derselbe Code am selben Schlüssel, aber ein anderer Text: Das Paar war
+    // schon vorher falsch (16 MiB unter der Vorgabe von 32 MiB), und der neue
+    // Wert verschiebt nur seine Grenze. Das ist ein neuer Befund; ohne den
+    // Vergleich des Textes sähe er aus wie der alte.
+    let before = "[limits]\nhold_max_bytes = 16777216\n";
+    std::fs::write(&file, before).expect("an older broken pair");
+    let output = config_set(&harness, &["limits.hold_body_cap_bytes", "24MiB"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.contains("[CONFIG_003]"), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("the file"),
+        before,
+        "the file is untouched"
+    );
+}
+
+// --- HUM-070, fünfte Nachbesserung --------------------------------------------
+
+/// Ein Wert, der selbst falsch ist, wird nicht geschrieben, auch wenn derselbe
+/// falsche Wert schon dastand: Der Befund nennt den gesetzten Schlüssel.
+#[test]
+fn config_set_refuses_a_wrong_value_that_was_already_there() {
+    let harness = Harness::new();
+    let file = config_file(&harness);
+    std::fs::create_dir_all(file.parent().expect("a directory")).expect("the config directory");
+
+    // Das Schema lässt 0 zu, die Prüfung verlangt mindestens einen Tag.
+    let before = "[recorder]\nretention_days = 0\n";
+    std::fs::write(&file, before).expect("a config with a wrong value");
+    let output = config_set(&harness, &["recorder.retention_days", "0"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.contains("[CONFIG_003]"), "{text}");
+    assert!(!text.contains("is written"), "{text}");
+
+    // Dasselbe für ein Paar: Die Obergrenze liegt schon über dem Maximum,
+    // und sie noch einmal zu setzen, ist kein Wert, der passt.
+    let before = "[limits]\nhold_max_bytes = 10485760\nhold_body_cap_bytes = 20971520\n";
+    std::fs::write(&file, before).expect("a config with a broken pair");
+    let output = config_set(&harness, &["limits.hold_body_cap_bytes", "20MiB"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.contains("[CONFIG_003]"), "{text}");
+    assert!(!text.contains("is written"), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("the file"),
+        before,
+        "the file is untouched"
+    );
+}
+
+/// Ein Befund ohne Schlüssel aus dem Projekt-Profil, das `sandbox.work_dir`
+/// wählt, schlägt nie einen Wert aus dem Projekt für die globale Datei vor.
+#[test]
+fn config_set_work_dir_never_suggests_a_value_from_the_project() {
+    let harness = Harness::new();
+    let project = harness.path("home/near-miss");
+    std::fs::create_dir_all(project.join(".humanitl")).expect("the project");
+    std::fs::write(
+        project.join(".humanitl/profile.toml"),
+        "[config.ui]\nthemee = \"dark\"\n",
+    )
+    .expect("a project profile with an unknown key");
+
+    let output = config_set(
+        &harness,
+        &["sandbox.work_dir", &project.display().to_string()],
+    );
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.contains("[CONFIG_002]"), "{text}");
+    assert!(text.contains("\n  fix: humanitl config edit\n"), "{text}");
+    assert!(!text.contains("config set"), "{text}");
+    assert!(!config_file(&harness).exists(), "nothing is written");
+}
+
+/// In einem Verzeichnis, in das auch andere schreiben dürfen, wird nicht
+/// gefegt: Den Namen, der am Ende gelöscht wird, könnte ein anderer nach der
+/// letzten Prüfung austauschen.
+#[test]
+fn audit_export_leaves_temp_files_in_a_shared_directory() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let harness = Harness::new();
+    let log = harness.paths().audit_path();
+    audit_chain(&log, 2);
+    for mode in [0o775, 0o777] {
+        let dir = harness.path(&format!("shared-{mode:o}"));
+        std::fs::create_dir_all(&dir).expect("the export directory");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode))
+            .expect("a directory others may write");
+        let out = dir.join("out.jsonl");
+        let stale = dir.join(".out.jsonl.tmp-Q7mZr2xLp0aB");
+        std::fs::write(&stale, "left behind by a killed export\n").expect("a stale temp file");
+        age(&stale);
+
+        let output = harness.run([
+            "audit",
+            "export",
+            "--format",
+            "jsonl",
+            "--file",
+            &log.display().to_string(),
+            "--out",
+            &out.display().to_string(),
+        ]);
+        assert_eq!(code(&output), 0, "{mode:o}: {}", stderr(&output));
+        assert!(stale.exists(), "{mode:o}: the temp file stays");
+        assert!(out.exists(), "{mode:o}: the export is written");
+    }
+}
+
+// --- HUM-070, sechste Nachbesserung -------------------------------------------
+
+/// Ein Wert, der wie ein Schlüssel aussieht, macht diesen Schlüssel nicht zum
+/// Teil des Befunds: `hold.timeout_secs` lässt sich setzen, obwohl der falsche
+/// Wert von `ui.theme` genau so heißt.
+#[test]
+fn config_set_is_not_refused_by_a_value_that_looks_like_a_key() {
+    let harness = Harness::new();
+    let file = config_file(&harness);
+    std::fs::create_dir_all(file.parent().expect("a directory")).expect("the config directory");
+    std::fs::write(&file, "[ui]\ntheme = \"hold.timeout_secs\"\n")
+        .expect("a config with a value that looks like a key");
+
+    let output = config_set(&harness, &["hold.timeout_secs", "300"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 0, "{text}");
+    assert!(text.contains("still does not load"), "{text}");
+    let written = std::fs::read_to_string(&file).expect("the file");
+    assert!(written.contains("timeout_secs = 300"), "{written}");
+    assert!(
+        written.contains("theme = \"hold.timeout_secs\""),
+        "{written}"
+    );
 }

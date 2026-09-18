@@ -10,9 +10,13 @@
 //! `flows show`, `sessions summary` und die sieben `rules`-Kommandos sind
 //! gRPC-Aufrufe, `config get` und `config schema` lesen die Konfiguration, und
 //! die drei `sandbox`-Kommandos rufen `humanitl-sandbox` auf, bis die
-//! `Sandbox`-RPC sie ablöst (siehe [`sandbox`]).
+//! `Sandbox`-RPC sie ablöst (siehe [`sandbox`]). `config set`, `config edit`
+//! und `audit verify --file` sind die zweite Ausnahme: Sie arbeiten auf einer
+//! Datei des Menschen, und der Weg dorthin führt nicht durch einen Dienst, der
+//! gerade nicht laufen muss (HUM-070).
 
 pub mod attach;
+pub mod audit;
 pub mod config;
 pub mod daemon;
 pub mod doctor;
@@ -27,7 +31,7 @@ pub mod unit;
 
 use std::path::{Path, PathBuf};
 
-use humanitl_config::{Env, Paths, ProfileSelection, Resolved};
+use humanitl_config::{Env, Paths, ProfileSelection, Resolved, Sources};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_ipc::client::Client;
@@ -221,17 +225,48 @@ impl Context {
     /// `CONFIG_001`, `CONFIG_002` oder `CONFIG_003`, wenn eine Datei, ein
     /// Profil oder ein Flag nicht stimmt.
     pub fn config(&self) -> Result<Resolved, Failure> {
-        let mut sources = humanitl_config::sources_for(
+        let sources = self.sources(&self.cli_pairs()).map_err(Failure::new)?;
+        Ok(self.report(humanitl_config::load(&sources).map_err(Failure::new)?))
+    }
+
+    /// Die Quellen, aus denen die Konfiguration dieses Aufrufs entsteht: die
+    /// Ebenen auf der Platte, die Umgebung und die übergebenen Flags.
+    ///
+    /// `config set` ruft das ohne Flags: Es prüft einen Wert gegen das, was
+    /// der nächste Start lädt, und ein Flag gilt nur für einen Aufruf.
+    ///
+    /// # Errors
+    ///
+    /// Der Befund von [`humanitl_config::sources_for`], wenn schon die Ebenen
+    /// sich nicht zusammenstellen lassen.
+    pub fn sources(&self, cli: &[(String, String)]) -> Result<Sources, Diagnostic> {
+        match self.config_file.as_ref() {
+            Some(file) => self.sources_with_global(cli, Some(file.clone())),
+            None => {
+                humanitl_config::sources_for(&self.selection(), Some(&self.cwd), &self.env, cli)
+            }
+        }
+    }
+
+    /// Wie [`Context::sources`], aber mit dieser Datei als globaler
+    /// `config.toml`, und zwar schon in der Vorabrunde, die das Projekt
+    /// bestimmt ([`humanitl_config::sources_with_global`]).
+    ///
+    /// # Errors
+    ///
+    /// Wie [`Context::sources`].
+    pub fn sources_with_global(
+        &self,
+        cli: &[(String, String)],
+        global: Option<PathBuf>,
+    ) -> Result<Sources, Diagnostic> {
+        humanitl_config::sources_with_global(
             &self.selection(),
             Some(&self.cwd),
             &self.env,
-            &self.cli_pairs(),
+            cli,
+            global,
         )
-        .map_err(Failure::new)?;
-        if let Some(file) = self.config_file.as_ref() {
-            sources.global_toml = Some(file.clone());
-        }
-        Ok(self.report(humanitl_config::load(&sources).map_err(Failure::new)?))
     }
 
     /// Schreibt die Befunde einer Auflösung und gibt sie weiter.
@@ -356,36 +391,6 @@ fn fix_from_proto(fix: &humanitl_ipc::v1::FixAction) -> Option<FixAction> {
     }
 }
 
-/// Die Meldung für ein Unterkommando, das es noch nicht gibt.
-///
-/// Sie nennt das Issue, damit klar ist, worauf man wartet.
-#[must_use]
-pub fn not_yet(what: &str, arrives: &str) -> String {
-    format!("{what} arrives in {arrives}")
-}
-
-/// Ein Unterkommando, das der Vertrag kennt und dieses Binary noch nicht.
-///
-/// Ein [`Failure`] wie jeder andere, damit der Aufrufer denselben Weg
-/// bekommt wie bei jedem Fehlschlag: mit `--json` eine Zeile JSON auf
-/// `stdout`, sonst den Block auf `stderr`. Ein nackter Satz auf `stderr` wäre
-/// für ein Skript unsichtbar gewesen. `why` nennt das Kommando, `fix` das
-/// Issue, das es bringt; der Exit-Code ist [`EXIT_USER`], denn getan hat der
-/// Aufruf nichts.
-#[must_use]
-pub fn not_yet_failure(what: &str, arrives: &str) -> Failure {
-    Failure::with_exit(
-        Diagnostic::builder(codes::CLI_003, Severity::Error)
-            .why(not_yet(what, arrives))
-            .fix(FixAction::OpenUrl(format!(
-                "{}/issues?q={arrives}",
-                env!("CARGO_PKG_REPOSITORY")
-            )))
-            .build(),
-        EXIT_USER,
-    )
-}
-
 /// Prüft, ob ein Pfad auf eine ausführbare Datei zeigt.
 #[must_use]
 pub fn is_executable(path: &Path) -> bool {
@@ -467,17 +472,6 @@ mod tests {
                 "{status:?}"
             );
         }
-    }
-
-    #[test]
-    fn a_missing_subcommand_is_a_diagnostic_with_its_issue() {
-        let failure = super::not_yet_failure("humanitl run", "HUM-067");
-        assert_eq!(failure.exit, EXIT_USER);
-        assert_eq!(failure.diagnostic.code.as_str(), "CLI_003");
-        assert!(failure.diagnostic.why.contains("humanitl run"));
-        assert!(failure.diagnostic.why.contains("HUM-067"));
-        let fix = crate::render::fix_line(failure.diagnostic.fix.as_ref().expect("a fix"));
-        assert!(fix.contains("HUM-067"), "{fix}");
     }
 
     #[test]

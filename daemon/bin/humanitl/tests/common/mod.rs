@@ -119,6 +119,10 @@ impl Harness {
             .env("XDG_CONFIG_HOME", self.path("config"))
             .env("XDG_DATA_HOME", self.path("data"))
             .env("XDG_RUNTIME_DIR", self.path("run"))
+            // Ohne Bus der Sitzung erreicht kein `systemctl --user` dieses
+            // Laufs den systemd des Menschen, auch dort nicht, wo ein Test
+            // sich das `systemctl` aus dem `PATH` des Rechners holt.
+            .env_remove("DBUS_SESSION_BUS_ADDRESS")
             .env_remove("HUMANITL_HOLD__TIMEOUT_SECS");
         command
     }
