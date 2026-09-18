@@ -359,7 +359,12 @@ fn build_outgoing(request: &HttpRequest, body: Bytes) -> Result<Request<Full<Byt
 
 /// Der Wert des `Host`-Kopfes: Host, und der Port nur, wenn er nicht der
 /// Standard des Schemas ist. `IPv6` in eckigen Klammern.
-fn host_header(request: &HttpRequest) -> String {
+///
+/// Öffentlich in der Crate, weil [`crate::edit`] denselben Wert in die
+/// bearbeitete Anfrage schreibt. Zwei Stellen, die den Host formatieren,
+/// liefen auseinander, und die Aufzeichnung zeigte dann eine Anfrage, die so
+/// nie hinausging.
+pub(crate) fn host_header(request: &HttpRequest) -> String {
     let host = &request.authority.host;
     let host_text = match host {
         HostName::Ip(std::net::IpAddr::V6(ip)) => format!("[{ip}]"),

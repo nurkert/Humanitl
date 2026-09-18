@@ -97,6 +97,17 @@ class PrevFlowIntent extends Intent {
   const PrevFlowIntent();
 }
 
+/// Open the request editor for the selected held flow. `E` (HUM-047).
+///
+/// It decides nothing. The editor replaces the card in the middle pane and
+/// lets a person pseudonymise the request before it goes out; the decision is
+/// still taken in the action bar, by the same notifier as every other one
+/// (`backlog/CONVENTIONS.md` 3.9).
+class EditIntent extends Intent {
+  /// Creates the intent.
+  const EditIntent();
+}
+
 /// Focus the queue filter. `/`.
 class FilterIntent extends Intent {
   /// Creates the intent.

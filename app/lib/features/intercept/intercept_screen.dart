@@ -95,10 +95,32 @@ bool focusedControlHandlesActivate() {
       null;
 }
 
+/// Was den Editor in den mittleren Pane baut (HUM-047).
+///
+/// Ein Feature importiert kein anderes (`docs/ARCHITECTURE.md` 5,
+/// `tools/check-deps.sh`); dieser Bildschirm kennt den Editor deshalb nur als
+/// Funktion. Zusammengesetzt wird in der Shell, die beide kennen darf, und die
+/// Signatur führt ausschliesslich Kerntypen, damit sie hier stehen kann, ohne
+/// etwas aus `features/editor` zu holen.
+///
+/// `onClose` schliesst den Editor wieder; der Entwurf bleibt dabei stehen.
+typedef InspectorEditorBuilder = Widget Function(
+  BuildContext context,
+  FlowId flowId,
+  VoidCallback onClose,
+);
+
 /// The Intercept section.
 class InterceptScreen extends ConsumerStatefulWidget {
   /// Creates the section.
-  const InterceptScreen({super.key});
+  const InterceptScreen({this.editorBuilder, super.key});
+
+  /// Baut den Editor fuer eine gehaltene Anfrage, oder null.
+  ///
+  /// Null heisst: Es gibt keinen Editor in diesem Aufbau, und `E` tut nichts.
+  /// Ein Test, der diesen Bildschirm allein haengt, kommt so ohne das
+  /// Editor-Feature aus.
+  final InspectorEditorBuilder? editorBuilder;
 
   @override
   ConsumerState<InterceptScreen> createState() => _InterceptScreenState();
@@ -111,6 +133,15 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
   final Set<LogicalKeyboardKey> _consumed = <LogicalKeyboardKey>{};
 
   bool _visible = true;
+
+  /// Wahr, solange der Editor den mittleren Pane haelt (HUM-047).
+  ///
+  /// Ein Feld und kein Provider: Der Editor gehoert zu genau einer Anfrage und
+  /// zu genau diesem Bildschirm, und niemand sonst fragt danach. Er schliesst
+  /// sich selbst, sobald die Auswahl wegfaellt oder der Fluss entschieden ist
+  /// -- ein Editor ueber einer Anfrage, die schon draussen ist, boete eine
+  /// Bearbeitung an, die niemand mehr senden kann (`docs/UX.md` 4.4).
+  bool _editorOpen = false;
 
   // Both maps are fields, not expressions in `build`: a map rebuilt every
   // frame is a new object for every descendant that depends on it
@@ -318,6 +349,21 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
     ref.read(interceptDecisionProvider.notifier).blockMany(flows);
   }
 
+  /// Oeffnet den Editor, wenn es einen gibt.
+  void _openEditor() {
+    if (widget.editorBuilder == null || _editorOpen) {
+      return;
+    }
+    setState(() => _editorOpen = true);
+  }
+
+  /// Schliesst ihn; der Entwurf bleibt in seinem eigenen Provider stehen.
+  void _closeEditor() {
+    if (_editorOpen) {
+      setState(() => _editorOpen = false);
+    }
+  }
+
   /// Moves the cursor and tells the queue that a key did it: the order stays
   /// frozen for `HMotion.freezeAfterKey` afterwards (`docs/UX.md` 2.8).
   void _move(void Function() step) {
@@ -385,6 +431,19 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
     NoteIntent: _ScreenAction<NoteIntent>(
       active: _keysActive,
       onAct: (NoteIntent intent) => ref.read(blockNoteProvider.notifier).open(),
+    ),
+    // `E` oeffnet den Editor und entscheidet nichts. Er ist deshalb keine
+    // `_DecisionAction`: Keine Arming-Frist, keine Sperre der Taste, kein
+    // Eintrag in `decisionKeys` -- was sich zuruecknehmen laesst, indem man
+    // `Esc` drueckt, braucht keine Sorgfalt gegen die Unumkehrbarkeit
+    // (`docs/UX.md` 5.4). Er wirkt nur auf einer gehaltenen Anfrage; sonst
+    // faellt die Taste durch.
+    EditIntent: _ScreenAction<EditIntent>(
+      active: ({required bool chord}) =>
+          _keysActive(chord: chord) &&
+          widget.editorBuilder != null &&
+          (ref.read(selectedFlowProvider)?.isHeld ?? false),
+      onAct: (EditIntent intent) => _openEditor(),
     ),
     NextFlowIntent: _ScreenAction<NextFlowIntent>(
       active: _keysActive,
@@ -478,6 +537,13 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
     final List<Flow> chosen = ref.watch(selectedFlowsProvider).flows;
     final BatchRequest? asking = ref.watch(batchConfirmProvider);
     final AgentAskRuleDraft? ruleDraft = ref.watch(agentAskRuleDraftProvider);
+    // Der Editor gehoert zu genau einer gehaltenen Anfrage. Faellt die
+    // Auswahl weg oder ist der Flow entschieden, schliesst er sich selbst:
+    // Ein Editor ueber einer Anfrage, die schon draussen ist, boete eine
+    // Bearbeitung an, die niemand mehr senden kann (`docs/UX.md` 4.4).
+    final InspectorEditorBuilder? editorBuilder = widget.editorBuilder;
+    final bool editorOpen =
+        _editorOpen && editorBuilder != null && (selected?.isHeld ?? false);
     return Shortcuts(
       shortcuts: _shortcuts,
       child: Actions(
@@ -507,6 +573,9 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
                         flow: selected,
                         selection: chosen,
                         queueEmpty: queueEmpty,
+                        editor: editorOpen ? editorBuilder : null,
+                        onEdit: editorBuilder == null ? null : _openEditor,
+                        onCloseEditor: _closeEditor,
                       ),
                       DomainPanel(flow: selected),
                     ],
@@ -620,9 +689,25 @@ class _InspectorPane extends StatelessWidget {
     required this.flow,
     required this.selection,
     required this.queueEmpty,
+    this.editor,
+    this.onEdit,
+    this.onCloseEditor,
   });
 
   final Flow? flow;
+
+  /// Baut den Editor von HUM-047, solange er den Pane haelt; sonst null.
+  ///
+  /// Er ersetzt die Karte **und** die Aktionsleiste: Der Editor bringt seine
+  /// eigene Entscheidung mit, und zwei Sende-Knoepfe auf einem Bildschirm
+  /// waeren einer zu viel (`docs/UX.md` 3.1).
+  final InspectorEditorBuilder? editor;
+
+  /// Oeffnet den Editor, oder null, wenn es keinen gibt.
+  final VoidCallback? onEdit;
+
+  /// Schliesst ihn wieder.
+  final VoidCallback? onCloseEditor;
 
   /// Everything the next decision covers. More than one request replaces the
   /// card of one URL with the summary of all of them: a card that showed one
@@ -637,6 +722,10 @@ class _InspectorPane extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final Flow? flow = this.flow;
+    final InspectorEditorBuilder? editor = this.editor;
+    if (editor != null && flow != null) {
+      return editor(context, flow.id, onCloseEditor ?? () {});
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
@@ -671,7 +760,7 @@ class _InspectorPane extends StatelessWidget {
             ),
           ),
         ),
-        ActionBar(flow: flow),
+        ActionBar(flow: flow, onEdit: onEdit),
       ],
     );
   }
