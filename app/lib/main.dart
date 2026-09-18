@@ -1,7 +1,7 @@
 /// Entry point of the Humanitl desktop application.
 library;
 
-import 'dart:async' show unawaited;
+import 'dart:async' show runZonedGuarded, unawaited;
 import 'dart:io' show Platform;
 
 import 'package:flutter/services.dart' show MissingPluginException;
@@ -10,8 +10,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app.dart';
+import 'core/diagnostics/diagnostics.dart';
 import 'core/ipc/client_providers.dart';
 import 'core/ipc/launch_options.dart';
+import 'features/about/about_dialog.dart' show appVersion;
 import 'features/about/licences.dart';
 import 'features/settings/gallery_screen.dart';
 import 'features/tray/desktop_ports.dart';
@@ -37,7 +39,23 @@ const String windowTitle = 'Humanitl';
 const Size windowMinimumSize = Size(1100, 700);
 
 /// Starts the application, or the design gallery when it was asked for.
+///
+/// Everything runs inside one [runZonedGuarded]: the binding, the handlers
+/// and `runApp` have to share a zone, and that zone is the third of the three
+/// places a Dart exception can surface (`core/diagnostics/error_handlers.dart`).
+/// The first line of the log is written before anything else can fail, so
+/// that a run which dies during startup is still a run somebody can see
+/// (HUM-136).
 Future<void> main(List<String> args) async {
+  final AppLog log = AppLog.resolve();
+  runZonedGuarded(() async {
+    installErrorHandlers(log);
+    log.started(version: appVersion);
+    await _run(args);
+  }, zoneErrorHandler(log));
+}
+
+Future<void> _run(List<String> args) async {
   if (galleryRequested(args)) {
     runApp(const GalleryScreen());
     return;

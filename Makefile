@@ -6,13 +6,13 @@ SHELL := /bin/bash
 
 .PHONY: help check rust-fmt rust-clippy rust-build rust-test rust-doc rust-deny typed-errors-lint \
         flutter-get flutter-analyze flutter-test flutter-test-dbus flutter-test-daemon \
-        flutter-test-integration flutter-build proto escape e2e \
+        flutter-test-integration flutter-build runner-test proto escape e2e \
         deps-lint docs-lint catalog-assets catalog-lint clean
 
 help: ## List targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | sort | awk -F':.*?## ' '{printf "  %-18s %s\n", $$1, $$2}'
 
-check: rust-fmt rust-clippy rust-build rust-test rust-doc deps-lint docs-lint typed-errors-lint catalog-lint flutter-analyze flutter-test flutter-build ## Full local gate (same steps as CI)
+check: rust-fmt rust-clippy rust-build rust-test rust-doc deps-lint docs-lint typed-errors-lint catalog-lint flutter-analyze flutter-test runner-test flutter-build ## Full local gate (same steps as CI)
 
 # A rustup toolchain may exist without rustup on PATH (this machine): put its
 # bin directory first so `cargo fmt` and `cargo clippy` find their components.
@@ -87,6 +87,13 @@ flutter-build: flutter-codegen ## Debug build of the Linux desktop app (CI parit
 flutter-test: flutter-codegen ## Flutter unit and widget tests (app and packages/ui)
 	cd app && flutter test
 	cd app/packages/ui && flutter test
+
+# Der einzige C++-Test des Repositories. Er haengt an nichts ausser POSIX --
+# kein GTK, kein Flutter, keine Ephemeral-Header --, laeuft in unter einer
+# Sekunde und misst, was `flutter test` nicht erreicht: das Protokoll, das der
+# Runner beim Signal und beim Absturz schreibt (HUM-136).
+runner-test: ## Test des Runner-Protokolls (app/linux/runner)
+	app/linux/runner/run_exit_log_test.sh
 
 # Nicht Teil von `make check`: der Test braucht einen Session-Bus, den CI nicht
 # hat. `dbus-run-session` stellt einen eigenen, leeren Bus bereit, und nur dort
