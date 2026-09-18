@@ -67,6 +67,66 @@ pub const STDERR_EXCERPT_BYTES: usize = 2048;
 /// scheitert es, bevor der Agent ein Zeichen geschrieben hat.
 pub const PTY_MIRROR_BYTES: usize = 2048;
 
+/// Wie eine Sandbox geendet hat, als [`SandboxHandle::terminate`] sie beendete.
+///
+/// Der Rückgabewert macht die Eskalation messbar statt behauptet: Ein
+/// Aufrufer, der nur `SIGTERM` schickte und danach wartete, könnte bis
+/// HUM-142 nicht unterscheiden, ob der Agent gegangen ist oder ob die Frist
+/// verstrichen ist. Wer den Wert liest, sieht beides — und [`Termination::Stuck`]
+/// ist der Fall, für den es einen Befund geben muss (`SANDBOX_029`), weil
+/// danach ein Prozess übrig bleibt, den niemand mehr einsammelt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Termination {
+    /// Sie war schon beendet; es ging kein Signal hinaus.
+    AlreadyEnded,
+    /// `SIGTERM` hat gereicht, innerhalb der Frist.
+    Term,
+    /// Erst `SIGKILL` nach der Frist hat sie beendet.
+    Kill,
+    /// Auch nach `SIGKILL` und [`KILL_GRACE`] lag **kein Exit-Status** vor.
+    ///
+    /// Das ist weniger, als es klingt, und mehr als nichts. Der Status wird
+    /// von dem Faden gesetzt, der die Sandbox gestartet hat, und zwar erst,
+    /// nachdem er die Leser der Ausgabe eingesammelt hat. Ein Prozess kann
+    /// deshalb längst eingesammelt sein, während ein Leser noch an einem
+    /// Deskriptor hängt, der nicht schließt — dann steht hier `Stuck`, obwohl
+    /// nichts mehr läuft. Wer daraus auf einen überlebenden Prozess schließen
+    /// will, fragt [`SandboxHandle::process_alive`]; dieser Wert allein sagt
+    /// es nicht.
+    Stuck,
+}
+
+impl Termination {
+    /// Ob ein Exit-Status vorliegt, die Sandbox also nachweislich beendet ist.
+    #[must_use]
+    pub const fn ended(self) -> bool {
+        !matches!(self, Self::Stuck)
+    }
+
+    /// Ob es dazu mehr als `SIGTERM` gebraucht hat.
+    #[must_use]
+    pub const fn escalated(self) -> bool {
+        matches!(self, Self::Kill | Self::Stuck)
+    }
+
+    /// Der Name für Protokoll und Befund.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AlreadyEnded => "already_ended",
+            Self::Term => "sigterm",
+            Self::Kill => "sigkill",
+            Self::Stuck => "stuck",
+        }
+    }
+}
+
+impl std::fmt::Display for Termination {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Welcher Strom der Sandbox ein Stück Ausgabe geschrieben hat.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputStream {
@@ -176,6 +236,62 @@ pub(crate) struct Shared {
     pty: OnceLock<OwnedFd>,
     /// Wie viele Bytes der Terminalausgabe schon als Fehlerausgabe zählen.
     mirrored: Mutex<usize>,
+}
+
+/// Das Feld `starttime` aus `/proc/<pid>/stat`, Feld 22 (Ticks seit dem
+/// Systemstart); `None`, wenn sich die Zeile nicht lesen oder nicht deuten
+/// lässt.
+fn read_start_ticks(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    start_ticks_of(&stat)
+}
+
+/// Wie [`read_start_ticks`], aber über eine schon gelesene Zeile.
+///
+/// Gezählt wird hinter der **letzten** schließenden Klammer: Der Name des
+/// Programms steht in Klammern und darf selbst Klammern und Leerzeichen
+/// tragen. Danach ist Feld 3 der Zustand, und `starttime` ist Feld 22, also
+/// das zwanzigste danach.
+fn start_ticks_of(stat: &str) -> Option<u64> {
+    fields_after_comm(stat)?.nth(19)?.parse().ok()
+}
+
+/// Die Felder hinter dem Namen des Programms, oder `None`, wenn die Zeile
+/// keine `stat`-Zeile ist.
+///
+/// Gezählt wird hinter der **letzten** schließenden Klammer: Der Name steht in
+/// Klammern und darf selbst Klammern und Leerzeichen tragen, und wer von vorn
+/// zählt, zählt bei `(od d) ler)` falsch. Ohne Klammer wird nichts geraten.
+fn fields_after_comm(stat: &str) -> Option<std::str::SplitWhitespace<'_>> {
+    Some(stat.get(stat.rfind(')')? + 1..)?.split_whitespace())
+}
+
+/// Ob diese `stat`-Zeile einen laufenden Prozess beschreibt — und ob sie
+/// überhaupt zu dem Prozess gehört, den wir meinen.
+///
+/// Zwei Fragen, eine Zeile:
+///
+/// - **Ist es noch derselbe Prozess?** Eine PID wird nach einem vollen Umlauf
+///   des Zählers neu vergeben. Genau dieses Fenster steht offen, wenn
+///   [`Termination::Stuck`] entsteht: Der Wirt hat das Kind da längst
+///   eingesammelt, und nur der Status fehlt noch. Stimmt die Startzeit nicht
+///   mit der überein, die beim Start gelesen wurde, gehört die Zeile einem
+///   Fremden — unser Prozess ist weg.
+/// - **Läuft er?** Ein Zombie (`Z`) zählt als beendet: kein Programm mehr, nur
+///   noch ein Eintrag, den sein Elternprozess abholt.
+fn alive_from_stat(stat: &str, started_at_ticks: Option<u64>) -> Option<bool> {
+    let state = fields_after_comm(stat)?.next()?;
+    // Wer einen Ausweis hat, muss ihn auch lesen können. Eine Zeile, die
+    // abbricht, bevor Feld 22 kommt, beantwortet die Frage nach der Identität
+    // nicht — und „keine Antwort" ist `None` und nicht „er lebt". Sonst stünde
+    // hinter derselben Tür wieder der fremde Prozess, gegen den der Ausweis
+    // eingeführt wurde.
+    if let Some(expected) = started_at_ticks
+        && start_ticks_of(stat)? != expected
+    {
+        return Some(false);
+    }
+    Some(state != "Z")
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -441,6 +557,14 @@ pub struct SandboxHandle {
     /// Die Kommandozeile, nach POSIX zitiert, mit Programm; für die
     /// Oberfläche und `humanitl sandbox argv`.
     pub argv_display: String,
+    /// Die Startzeit des Prozesses, wie `/proc/<pid>/stat` sie beim Start
+    /// gemeldet hat (Feld 22, in Ticks seit dem Systemstart).
+    ///
+    /// Sie ist der Ausweis der PID: Eine Nummer wird nach einem vollen Umlauf
+    /// des Zählers neu vergeben, und dann trägt sie einen fremden Prozess mit
+    /// einer anderen Startzeit. `None`, wenn sie sich nicht lesen ließ; dann
+    /// gilt die Auskunft ohne diesen Ausweis.
+    started_at_ticks: Option<u64>,
     shared: Arc<Shared>,
 }
 
@@ -450,6 +574,9 @@ impl SandboxHandle {
             id,
             pid,
             argv_display,
+            // Jetzt gelesen und nicht später: Der Prozess läuft gerade, und
+            // später ist die Nummer vielleicht nicht mehr seine.
+            started_at_ticks: read_start_ticks(pid),
             shared,
         }
     }
@@ -489,12 +616,17 @@ impl SandboxHandle {
 
     /// Beendet die Sandbox: `SIGTERM`, nach [`KILL_GRACE`] `SIGKILL`.
     ///
-    /// Kehrt zurück, wenn der Prozess weg ist. `bwrap` reicht `SIGTERM`
-    /// nicht an das Kind durch, aber mit `--die-with-parent` endet mit `bwrap`
-    /// der ganze PID-Namensraum; `SIGKILL` an `bwrap` beendet deshalb auch den
-    /// Agenten.
-    pub fn kill(&self) {
-        self.terminate(KILL_GRACE);
+    /// Kehrt zurück, wenn der Prozess weg ist, und sagt, was es dazu gebraucht
+    /// hat. `bwrap` reicht `SIGTERM` nicht an das Kind durch, aber mit
+    /// `--die-with-parent` endet mit `bwrap` der ganze PID-Namensraum;
+    /// `SIGKILL` an `bwrap` beendet deshalb auch den Agenten.
+    ///
+    /// Der Rückgabewert darf ignoriert werden: Wer nur beenden will, ruft
+    /// weiter `handle.kill();`. Ein `#[must_use]` zwänge jede dieser Stellen
+    /// zu einem `let _`, ohne dass dort jemand die Auskunft braucht.
+    #[allow(clippy::must_use_candidate)]
+    pub fn kill(&self) -> Termination {
+        self.terminate(KILL_GRACE)
     }
 
     /// Bittet den Agenten mit `SIGINT`, selbst aufzuhören, und wartet
@@ -547,25 +679,45 @@ impl SandboxHandle {
     }
 
     /// Wie [`SandboxHandle::kill`], mit eigener Frist zwischen den Signalen.
-    pub fn terminate(&self, grace: Duration) {
+    ///
+    /// Die Frist ist der Punkt: Ein Agent, der `SIGTERM` selbst abfängt — ein
+    /// Vollbild-TUI tut das —, hält den Abschied sonst für immer auf. Nach
+    /// `grace` folgt deshalb `SIGKILL`, und der Rückgabewert sagt, welcher der
+    /// beiden Wege es war (HUM-142). Die obere Schranke ist
+    /// `grace` + [`KILL_GRACE`].
+    ///
+    /// Der Rückgabewert darf ignoriert werden, wie bei [`SandboxHandle::kill`];
+    /// er ist die Messung für den, der sie nennen muss.
+    #[allow(clippy::must_use_candidate)]
+    pub fn terminate(&self, grace: Duration) -> Termination {
         if self.try_wait().is_some() {
-            return;
+            return Termination::AlreadyEnded;
         }
         self.signal(Signal::TERM);
         if self.shared.wait_exit(Some(grace)).is_some() {
-            return;
+            return Termination::Term;
         }
         self.signal(Signal::KILL);
         // Nach SIGKILL bleibt nur das Einsammeln durch den wartenden Thread.
-        let _ = self.shared.wait_exit(Some(KILL_GRACE));
+        if self.shared.wait_exit(Some(KILL_GRACE)).is_some() {
+            Termination::Kill
+        } else {
+            Termination::Stuck
+        }
     }
 
     fn signal(&self, signal: Signal) {
         // ESRCH heißt: schon weg, und ein anderer Fehler ist bei einem eigenen
-        // Kind nicht möglich (EPERM bräuchte eine fremde UID). Ein Signal an
-        // eine PID, die inzwischen ein anderer Prozess trägt, ist
-        // ausgeschlossen, solange der wartende Thread das Kind noch nicht
-        // eingesammelt hat; und hat er es, ist `try_wait` oben `Some`.
+        // Kind nicht möglich (EPERM bräuchte eine fremde UID).
+        //
+        // **Eine neu vergebene Nummer ist nicht ausgeschlossen, nur sehr
+        // unwahrscheinlich.** Der wartende Faden sammelt das Kind ein und setzt
+        // den Exit-Status erst danach; dazwischen steht `try_wait` noch auf
+        // `None`, während die Nummer schon frei ist. Wer sie danach bekäme,
+        // müsste den ganzen PID-Zähler umlaufen haben, und das Signal ginge
+        // dann an einen Prozess desselben Nutzers. Dasselbe Fenster ist es,
+        // gegen das [`alive_from_stat`] die Startzeit prüft — dort kostet es
+        // nichts, hier ließe es sich nur mit einem pidfd schließen.
         if let Some(pid) = Pid::from_raw(i32::try_from(self.pid).unwrap_or(0)) {
             let _ = kill_process(pid, signal);
         }
@@ -589,6 +741,25 @@ impl SandboxHandle {
     #[must_use]
     pub fn status(&self) -> StatusSnapshot {
         lock(&self.shared.status).clone()
+    }
+
+    /// Ob der Prozess der Sandbox auf dem Wirt noch läuft.
+    ///
+    /// `None`, wenn sich das nicht sagen lässt (kein `/proc`). Ein Zombie
+    /// zählt als beendet: Er hat kein Programm mehr, nur noch einen Eintrag,
+    /// den sein Elternprozess abholt.
+    ///
+    /// Gefragt wird das nach [`Termination::Stuck`], und nur dort: Ein
+    /// fehlender Exit-Status heißt nicht, dass der Prozess lebt (siehe
+    /// [`Termination::Stuck`]), und eine Meldung darüber, dass ein Prozess
+    /// stehen geblieben sei, darf nicht auf einer Vermutung stehen.
+    #[must_use]
+    pub fn process_alive(&self) -> Option<bool> {
+        match std::fs::read_to_string(format!("/proc/{}/stat", self.pid)) {
+            Ok(stat) => alive_from_stat(&stat, self.started_at_ticks),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(false),
+            Err(_) => None,
+        }
     }
 
     /// Die PID des Init-Prozesses der Sandbox auf dem Host, sobald `bwrap`
@@ -727,7 +898,10 @@ mod tests {
 
     use humanitl_core::ids::SandboxId;
 
-    use super::{CAPTURE_MAX_BYTES, PTY_MIRROR_BYTES, ReportSnapshot, SandboxHandle, Shared};
+    use super::{
+        CAPTURE_MAX_BYTES, PTY_MIRROR_BYTES, ReportSnapshot, SandboxHandle, Shared, Termination,
+        alive_from_stat, start_ticks_of,
+    };
     use crate::bridge_env::ShimCheck;
 
     fn check(name: &str, ok: bool) -> ShimCheck {
@@ -937,5 +1111,279 @@ mod tests {
         shared.close_status();
         let killed = ExitStatus::from_raw(9);
         assert_eq!(shared.verdict(killed).expect("killed, not failed"), killed);
+    }
+
+    /// Ein Kind für diese Tests, der Faden, der es einsammelt, und das
+    /// Aufräumen, das auch eine gescheiterte Zusicherung überlebt.
+    ///
+    /// Dasselbe Gespann wie im Launcher: Ein Faden wartet auf das Kind und
+    /// legt den Status in den geteilten Zustand; das Handle sieht nur diesen
+    /// Zustand. Ohne den Faden bliebe [`Shared::wait_exit`] für immer stehen,
+    /// und der Test prüfte nur seine eigene Frist.
+    ///
+    /// **Aufgeräumt wird in `Drop` und nicht in der letzten Zeile des Tests.**
+    /// Am 2026-09-13 hat eine Mutationsprobe genau hier ein Kind stehen
+    /// lassen: Die Zusicherung schlug an, der Test brach vor seiner eigenen
+    /// Aufräumzeile ab, und das Kind lief weiter. Es hatte den Deskriptor der
+    /// Sperre geerbt, unter der der Testlauf lief, und hielt sie damit für
+    /// jeden anderen Lauf auf dieser Maschine.
+    struct Deaf {
+        pid: u32,
+        shared: Arc<Shared>,
+        waiter: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Drop for Deaf {
+        fn drop(&mut self) {
+            if let Some(pid) = rustix::process::Pid::from_raw(i32::try_from(self.pid).unwrap_or(0))
+            {
+                let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+            }
+            if let Some(waiter) = self.waiter.take() {
+                let _ = waiter.join();
+            }
+        }
+    }
+
+    /// Ein Kind, das `SIGTERM` abfängt.
+    fn stubborn_child() -> Deaf {
+        deaf_child("trap '' TERM; while :; do sleep 0.05; done")
+    }
+
+    /// Wie [`stubborn_child`], aber mit dem Skript als Argument.
+    fn deaf_child(script: &str) -> Deaf {
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("/bin/sh starts");
+        let pid = child.id();
+        let shared = Arc::new(Shared::default());
+        let waiter = {
+            let shared = Arc::clone(&shared);
+            std::thread::spawn(move || {
+                let status = child.wait().unwrap_or_default();
+                shared.set_exit(status);
+            })
+        };
+        Deaf {
+            pid,
+            shared,
+            waiter: Some(waiter),
+        }
+    }
+
+    /// Wartet, bis das Kind wirklich läuft: `sh` hat den Trap gesetzt, sobald
+    /// die Marke da ist.
+    fn settle() {
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    /// Ein Agent, der `SIGTERM` abfängt, ist nach der Frist trotzdem beendet
+    /// (HUM-142).
+    ///
+    /// Gemessen an drei Dingen, damit kein Zufall als Erfolg durchgeht: der
+    /// gemeldete Weg ist `SIGKILL`, der Status trägt Signal 9, und die Zeit
+    /// liegt zwischen der Frist (ohne die Eskalation wäre sie nie zu Ende) und
+    /// der Frist plus einer Sekunde.
+    #[test]
+    fn a_child_that_ignores_sigterm_is_killed_after_the_grace() {
+        let child = stubborn_child();
+        settle();
+        let handle = SandboxHandle::new(
+            SandboxId::nil(),
+            child.pid,
+            String::new(),
+            Arc::clone(&child.shared),
+        );
+        let grace = Duration::from_millis(300);
+
+        let started = std::time::Instant::now();
+        let ended = handle.terminate(grace);
+        let elapsed = started.elapsed();
+        let status = handle.try_wait();
+
+        assert_eq!(
+            ended,
+            Termination::Kill,
+            "SIGTERM is ignored, so only SIGKILL can end it (took {elapsed:?})"
+        );
+        assert!(ended.escalated(), "{ended} counts as an escalation");
+        assert!(ended.ended(), "{ended} means the process is gone");
+        assert_eq!(
+            status.and_then(|status| status.signal()),
+            Some(9),
+            "the child is reaped and carries SIGKILL"
+        );
+        assert!(
+            elapsed >= grace,
+            "the grace belongs to the agent; it was cut short after {elapsed:?}"
+        );
+        assert!(
+            elapsed < grace + Duration::from_secs(1),
+            "after the grace the kill follows at once, not after {elapsed:?}"
+        );
+    }
+
+    /// Eine Zeile aus `/proc/<pid>/stat`, wie der Kern sie schreibt.
+    ///
+    /// Der Name in Klammern trägt hier selbst eine Klammer und ein
+    /// Leerzeichen: Genau daran scheitert jeder Leser, der von vorn zählt.
+    fn stat_line(state: &str, start_ticks: u64) -> String {
+        let mut fields = vec!["1".to_owned(); 50];
+        fields[0] = "4711".to_owned();
+        fields[1] = "(od d) ler)".to_owned();
+        fields[2] = state.to_owned();
+        fields[21] = start_ticks.to_string();
+        format!("{}\n", fields.join(" "))
+    }
+
+    /// Die Startzeit ist der Ausweis der PID: Ohne sie hielte der Abschied
+    /// einen fremden Prozess für den eigenen (HUM-142).
+    ///
+    /// Das Fenster ist echt, wenn auch schmal: `Stuck` entsteht genau dann,
+    /// wenn der Wirt das Kind schon eingesammelt hat und nur der Status fehlt
+    /// — die Nummer ist da bereits frei. Wer sie nach einem vollen Umlauf des
+    /// Zählers bekommt, bekäme sonst ein blockierendes `SANDBOX_029` und den
+    /// Rat, sich seinen Zustand anzusehen.
+    #[test]
+    fn a_reused_pid_is_not_our_process() {
+        let ours = stat_line("S", 8_800);
+
+        assert_eq!(
+            alive_from_stat(&ours, Some(8_800)),
+            Some(true),
+            "same start time, running: that is our process"
+        );
+        assert_eq!(
+            alive_from_stat(&ours, Some(9_999)),
+            Some(false),
+            "another start time under the same number is a stranger, so ours is gone"
+        );
+        assert_eq!(
+            alive_from_stat(&ours, None),
+            Some(true),
+            "without a recorded start time the state alone decides"
+        );
+        assert_eq!(
+            alive_from_stat(&stat_line("Z", 8_800), Some(8_800)),
+            Some(false),
+            "a zombie has no program any more"
+        );
+        assert_eq!(
+            start_ticks_of(&ours),
+            Some(8_800),
+            "the start time is read behind the last closing bracket, not from the front"
+        );
+        assert_eq!(
+            alive_from_stat("nonsense", None),
+            None,
+            "no field, no answer"
+        );
+
+        // Eine Zeile, die vor Feld 22 abbricht, sagt nichts über die
+        // Identität — und dann sagt auch diese Funktion nichts. Ohne diesen
+        // Zweig stünde hier `Some(true)`, also genau die Behauptung, gegen die
+        // der Ausweis eingeführt wurde.
+        let truncated = "4711 (od d) ler) S 1 1 1 1 1 1 1\n";
+        assert_eq!(
+            alive_from_stat(truncated, Some(8_800)),
+            None,
+            "a line that stops before field 22 cannot confirm the identity"
+        );
+        assert_eq!(
+            alive_from_stat(truncated, None),
+            Some(true),
+            "without a recorded start time there is nothing to confirm"
+        );
+    }
+
+    /// Die Frage nach dem Prozess beantwortet drei Lagen, und ein Zombie zählt
+    /// als beendet (HUM-142).
+    ///
+    /// Daran hängt die Stufe von `SANDBOX_029`: Ohne diese Frage müsste ein
+    /// ausbleibender Exit-Status als überlebender Prozess gelten, und das wäre
+    /// eine Behauptung ohne Beleg.
+    #[test]
+    fn a_zombie_counts_as_ended_and_a_running_child_does_not() {
+        let child = stubborn_child();
+        settle();
+        let handle = SandboxHandle::new(
+            SandboxId::nil(),
+            child.pid,
+            String::new(),
+            Arc::clone(&child.shared),
+        );
+        assert_eq!(handle.process_alive(), Some(true), "the child runs");
+
+        // Ein Kind, das endet und nicht eingesammelt wird, ist ein Zombie: Es
+        // steht in `/proc`, aber es läuft nichts mehr.
+        let mut short = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .expect("/bin/sh starts");
+        let zombie = SandboxHandle::new(
+            SandboxId::nil(),
+            short.id(),
+            String::new(),
+            Arc::new(Shared::default()),
+        );
+        settle();
+        assert_eq!(
+            zombie.process_alive(),
+            Some(false),
+            "a zombie has no program any more"
+        );
+        short.wait().expect("the zombie is reaped");
+
+        // Und eine PID, die es nicht gibt, ist ebenso wenig da. Sie kann in
+        // der Zwischenzeit neu vergeben werden; deshalb erst nach dem
+        // Einsammeln, und deshalb mit einer Nummer, die der Kern nicht
+        // vergibt.
+        let gone = SandboxHandle::new(
+            SandboxId::nil(),
+            0,
+            String::new(),
+            Arc::new(Shared::default()),
+        );
+        assert_eq!(gone.process_alive(), Some(false), "pid 0 is no process");
+    }
+
+    /// Ein Agent, der auf `SIGTERM` selbst geht, bekommt kein `SIGKILL` — die
+    /// Frist gehört ihm, und der Rückgabewert sagt es.
+    #[test]
+    fn a_child_that_obeys_sigterm_keeps_its_grace() {
+        let child = deaf_child("while :; do sleep 0.05; done");
+        settle();
+        let handle = SandboxHandle::new(
+            SandboxId::nil(),
+            child.pid,
+            String::new(),
+            Arc::clone(&child.shared),
+        );
+        let grace = Duration::from_secs(5);
+
+        let started = std::time::Instant::now();
+        let ended = handle.terminate(grace);
+        let elapsed = started.elapsed();
+        let status = handle.try_wait();
+
+        assert_eq!(ended, Termination::Term, "SIGTERM was enough");
+        assert!(!ended.escalated(), "{ended} is no escalation");
+        assert_eq!(
+            status.and_then(|status| status.signal()),
+            Some(15),
+            "the child carries SIGTERM, not SIGKILL"
+        );
+        assert!(
+            elapsed < grace,
+            "an agent that goes does not spend the grace: {elapsed:?}"
+        );
+
+        // Ein zweites Mal ist nichts mehr zu tun, und das ist kein Signal.
+        assert_eq!(handle.terminate(grace), Termination::AlreadyEnded);
     }
 }

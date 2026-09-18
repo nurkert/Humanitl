@@ -57,6 +57,10 @@ protox.workspace = true
 tonic-prost-build.workspace = true
 
 [dev-dependencies]
+# Der Test zum Abschied (HUM-142) liest die erzeugte Protokollzeile als JSON:
+# `took_ms` muss darin eine Zahl sein und keine Zeichenkette, und das sagt nur
+# die Zeile selbst, nicht der Typ im Quelltext.
+tracing-subscriber.workspace = true
 # Die Tests zu `GetBody` mit `decoded` (HUM-119) packen ihre Rümpfe selbst;
 # entpackt wird im Code nur über `humanitl-findings`.
 brotli.workspace = true

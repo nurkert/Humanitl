@@ -307,9 +307,15 @@ registry! {
     /// Konfiguration nicht bauen ließ. Der Unterschied zu `UNIMPLEMENTED` ist
     /// für den Client wichtig: Das eine ändert sich mit einem Update, das
     /// andere mit dem Start (HUM-039).
+    ///
+    /// Seit HUM-142 gehört ein zweiter Fall dazu, und er ist vorübergehend:
+    /// Ein Daemon, der sich gerade verabschiedet, startet keine Sandbox mehr.
+    /// Sie bekäme keinen geordneten Abschied, sondern nur noch das `SIGKILL`
+    /// am Ende des Daemons. Das ist kein `CLI_005`, denn es läuft nichts, was
+    /// im Weg stünde.
     IPC_006 => "ipc", "Fähigkeit in diesem Daemon nicht verfügbar", "#ipc_006",
-        "Dieser Daemon hat die Fähigkeit nicht, nach der gefragt wurde — keine Sandbox, keine Aufzeichnung, keine Endpunkt-Probe.",
-        "Kein Fix: Es ist eine Aussage über diesen Daemon, nicht über die Anfrage.";
+        "Dieser Daemon hat die Fähigkeit nicht, nach der gefragt wurde — keine Sandbox, keine Aufzeichnung, keine Endpunkt-Probe; oder er endet gerade und startet deshalb keine Sandbox mehr.",
+        "Kein Fix: Es ist eine Aussage über diesen Daemon, nicht über die Anfrage. Endet er gerade, hilft ein neuer Start, sobald er wieder läuft.";
 
     /// `config.toml` ließ sich nicht lesen.
     CONFIG_001 => "config", "Config-Datei ungültig", "#config_001",
@@ -1174,6 +1180,35 @@ registry! {
     CONFIG_016 => "config", "Feste Namenszuordnungen gesetzt", "#config_016",
         "`resolver.overrides` beantwortet die genannten Namen aus der Konfiguration, statt zu fragen; der Verkehr geht an die Adresse, die dort steht.",
         "`ChangeSetting` auf eine leere Tabelle, wenn die festen Adressen nicht gemeint waren.";
+    /// Die Sandbox ging erst auf `SIGKILL`, oder danach lag kein Exit-Status
+    /// vor.
+    ///
+    /// Ein Agent darf `SIGTERM` abfangen; ein Vollbild-TUI tut das. Der
+    /// Abschied wartet deshalb `KILL_GRACE` auf ihn und schickt danach
+    /// `SIGKILL` (`SandboxHandle::terminate`). Dass es so weit kam, steht in
+    /// diesem Befund, damit ein Mensch den Unterschied zwischen „der Agent hat
+    /// aufgeräumt" und „der Agent wurde erschlagen" sieht.
+    ///
+    /// Bleibt danach der Exit-Status aus, heißt das zunächst nur das: Der
+    /// Status kommt von dem Faden, der die Sandbox gestartet hat, und der
+    /// sammelt zuerst die Leser der Ausgabe ein. Ob wirklich ein Prozess
+    /// überlebt hat, wird deshalb gefragt (`/proc/<pid>/stat`) und nicht
+    /// geschlossen: Nur wenn er noch da ist, ist der Befund blockierend und
+    /// nennt den Befehl, der seinen Zustand zeigt; sonst bleibt es bei einer
+    /// Warnung über den fehlenden Status (HUM-142).
+    SANDBOX_029 => "sandbox", "Sandbox erst nach der Frist beendet", "#sandbox_029",
+        "Der Agent hat `SIGTERM` nicht beantwortet, und nach der Frist folgte `SIGKILL`; oder danach lag kein Exit-Status vor.",
+        "Kein Fix, wenn `SIGKILL` gewirkt hat oder nur der Status ausblieb; lebt der Prozess weiter, nennt der Text `ps -o stat= -p <pid>`.";
+    /// Der Daemon hat seine Aufgaben beim Abschied abgebrochen, statt weiter
+    /// auf sie zu warten.
+    ///
+    /// Nach dem Signal beendet der Daemon erst die Sandbox und wartet dann
+    /// befristet auf seine eigenen Aufgaben. Wer nach der Frist noch läuft,
+    /// wird fallen gelassen: Ein Abschied ohne Frist ist kein Abschied,
+    /// sondern ein Hänger ohne Meldung (HUM-142).
+    DAEMON_009 => "daemon", "Aufgaben beim Abschied abgebrochen", "#daemon_009",
+        "Beim Beenden liefen nach der Frist noch Aufgaben des Daemons; der Prozess endet trotzdem.",
+        "Kein Fix für Nutzer: Der Text nennt die Frist; ein Bericht mit dem Protokoll dieses Laufs hilft weiter.";
 }
 
 /// Sucht einen Code im Register.

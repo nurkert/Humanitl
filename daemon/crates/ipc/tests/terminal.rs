@@ -629,24 +629,21 @@ where
 
 /// Liest einen Strom bis zum Ende und zählt seine Ereignisse.
 ///
-/// **Bis zum Ende, nicht bis zum ersten Ereignis, und das ist der ganze
-/// Punkt.** `Sandbox(Stop)` meldet zuerst `Stopping` und tötet die Sandbox
-/// **danach** (`ipc/src/sandbox.rs`, `Inner::stop`: erst
-/// `status_event(Stopping)`, dann `handle.terminate(KILL_GRACE)`). Wer den
-/// Strom nach dem ersten Ereignis fallen lässt, lässt `tx.send` scheitern, und
-/// `stop` kehrt an dieser Stelle zurück — **vor** dem Töten.
+/// **Bis zum Ende, nicht bis zum ersten Ereignis.** `Sandbox(Stop)` meldet
+/// zuerst `Stopping` und beendet die Sandbox danach (`ipc/src/sandbox.rs`,
+/// `Inner::stop`); wer den Strom vorher fallen lässt, sieht den Rest nicht
+/// mehr und zählte hier zu wenig.
 ///
-/// Am 2026-09-06 hat genau das drei Testprozesse auf dieser Maschine stehen
+/// **Am Beenden selbst hängt das seit HUM-142 nicht mehr.** Bis dahin kehrte
+/// `stop` zurück, sobald `tx.send` scheiterte — also vor dem Töten —, und am
+/// 2026-09-06 hat genau das drei Testprozesse auf dieser Maschine stehen
 /// lassen: `osc52_does_not_reach_host` und `osc8_and_title_are_inert` starten
 /// Sandboxen, deren Skript mit `while :; do sleep 0.05; done` endet, also von
-/// selbst nie aufhört. Ihre `bwrap`-Prozesse liefen 45 Minuten nach dem
-/// letzten `test result: ok` weiter, und die Testbinärdatei stand im
-/// `waitpid` darauf.
-///
-/// Das ist die Signatur, die die CI viermal gezeigt hat: jeder Test grün, und
-/// danach ein Prozess, der nicht endet. Fristen um die Wartepunkte des
-/// Gerüsts fangen das nicht — es ist kein Warten in `async`, sondern ein
-/// blockierendes `wait` auf ein Kind, das niemand umgebracht hat.
+/// selbst nie aufhört. Ihre Sandbox-Prozesse liefen 45 Minuten nach dem
+/// letzten `test result: ok` weiter, und die Testbinärdatei stand im `waitpid`
+/// darauf. Heute läuft der Abschied zu Ende, auch wenn niemand mehr zusieht;
+/// das Lesen bis zum Ende bleibt trotzdem richtig, weil dieser Helfer die
+/// Ereignisse zählt.
 async fn drain(mut stream: impl tokio_stream::Stream<Item = v1::SandboxEvent> + Unpin) -> usize {
     let mut seen = 0_usize;
     while stream.next().await.is_some() {
