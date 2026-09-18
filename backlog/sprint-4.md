@@ -3286,8 +3286,8 @@ Der Befund im Zweig `path == null` von `AuditExportNotifier` trägt `AUDIT_008` 
 `a_full_folder_reports_audit_008`: `auditPathTakenProvider` meldet jeden Pfad als belegt, der Export endet mit `AUDIT_008`, der Daemon wird nicht gefragt.
 
 ### Akzeptanzkriterien
-- [ ] Ein voller Ordner ergibt `AUDIT_008`, nicht `IPC_006`.
-- [ ] `make check` grün.
+- [x] Ein voller Ordner ergibt `AUDIT_008`, nicht `IPC_006`. Gemessen 2026-09-18, mitgebaut in HUM-156: `a_full_folder_reports_audit_008` (`app/test/features/audit/audit_screen_test.dart`) meldet jeden Pfad als belegt, der Export endet mit `AUDIT_008` samt `why` und `fix`, `auditExports` bleibt leer; mit `capabilityUnavailable` im Zweig wird der Test rot.
+- [x] `make check` grün. Gemessen 2026-09-18 mit `STRICT=1 make check` im Arbeitsbaum von HUM-156.
 
 ### Fallstricke
 - `AUDIT_008` muss im Register stehen, bevor die Oberfläche es benutzt (`backlog/CONVENTIONS.md` 4.6).
