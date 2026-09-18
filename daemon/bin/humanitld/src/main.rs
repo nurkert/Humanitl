@@ -53,7 +53,8 @@ use humanitl_ipc::fake::{FakeDaemon, FakeOptions, Session};
 use humanitl_ipc::sandbox::SandboxPorts;
 use humanitl_ipc::session::{SessionResolver, bundled_rules};
 use humanitl_ipc::{
-    DaemonService, DomainTable, HeldNotices, IpcServer, SandboxService, auth, bind_socket, v1,
+    AuditService, DaemonService, DomainTable, HeldNotices, IpcServer, SandboxService, auth,
+    bind_socket, v1,
 };
 use humanitl_proxy::ca::{CaStore, DEFAULT_LEAF_CAPACITY, LeafCache};
 use humanitl_proxy::egress::Direct;
@@ -296,7 +297,7 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
     recorder.start_session(&session_meta(session, &config));
 
     // Das Audit-Log nach der Aufzeichnung und vor dem Proxy (HUM-050).
-    let (audit, sink) = start_audit(&xdg, &config, &queue, session)?;
+    let (audit, sink, audit_log) = start_audit(&xdg, &config, &queue, session)?;
     let watchers = Watchers::start(&recorder, &queue, &audit);
 
     let proxy = ProxyCore::new();
@@ -366,6 +367,9 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
         .with_domains(Arc::clone(&domains))
         // Regeländerungen und Netzsuchen gehen ins Audit-Log (HUM-050).
         .with_audit(audit.handle())
+        // Und dieselbe Kette beantwortet `Audit`: mit dem Schlüssel des
+        // Schreibers und den Ankern aus derselben Datenbank (HUM-156).
+        .with_audit_log(audit_log)
         // Die Sandbox derselben Sitzung: dasselbe Profil, dasselbe
         // Projektverzeichnis und derselbe Proxy-Socket, den der Proxy oben
         // gerade geöffnet hat (HUM-040). Der Resolver statt einer
@@ -530,15 +534,15 @@ fn start_audit(
     config: &Config,
     queue: &HoldQueue,
     session: SessionId,
-) -> Result<(AuditWriter, AuditSink), Diagnostic> {
-    let audit = open_audit(xdg, config, queue)?;
+) -> Result<(AuditWriter, AuditSink, AuditService), Diagnostic> {
+    let (audit, service) = open_audit(xdg, config, queue)?;
     let sink = AuditSink::start(
         audit.handle(),
         session,
         session_started(config),
         queue.subscribe(),
     );
-    Ok((audit, sink))
+    Ok((audit, sink, service))
 }
 
 /// Beendet das Audit-Log der Sitzung (HUM-050): `session.ended` mit den
@@ -591,6 +595,10 @@ fn stop_reason_of<E>(result: &Result<(), E>, signal: &OnceLock<&'static str>) ->
 
 /// Öffnet das Audit-Log dieses Daemons und schreibt `daemon.started` (HUM-050).
 ///
+/// Zurück kommen der Schreiber und der Dienst, der `Audit` beantwortet
+/// (HUM-156): derselbe Schlüssel, dieselbe Datei, dieselbe Anker-Tabelle, und
+/// vor jeder Antwort ist alles auf der Platte, was der Schreiber bekam.
+///
 /// Der Schlüssel ist bis HUM-048 eine Datei neben den Daten
 /// (`AuditKey::load_or_create_file`), die Anker liegen in der Tabelle
 /// `audit_anchors` der Aufzeichnung. Was das Öffnen zu melden hat, ohne den
@@ -608,8 +616,8 @@ fn open_audit(
     xdg: &XdgPaths,
     config: &Config,
     queue: &HoldQueue,
-) -> Result<AuditWriter, Diagnostic> {
-    let key = AuditKey::load_or_create_file(&xdg.audit_key_path())?;
+) -> Result<(AuditWriter, AuditService), Diagnostic> {
+    let key = Arc::new(AuditKey::load_or_create_file(&xdg.audit_key_path())?);
     let db = xdg.db_path();
     let anchors: Vec<Anchor> = read_anchors(&db)?
         .into_iter()
@@ -667,7 +675,8 @@ fn open_audit(
         anchor_every = config.audit.anchor_every,
         "audit log open"
     );
-    Ok(writer)
+    let service = AuditService::new(path, db, key).with_writer(writer.handle());
+    Ok((writer, service))
 }
 
 /// Das Projektverzeichnis dieser Sitzung: `sandbox.work_dir` oder das

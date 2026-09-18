@@ -16,8 +16,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use humanitl_config::{Env, Paths};
+use humanitl_core::{Diagnostic, FlowId};
 use humanitl_ipc::fake::{FakeDaemon, FakeOptions, Session};
-use humanitl_ipc::{DaemonService, auth, bind_socket, v1};
+use humanitl_ipc::{BoxStream, DaemonApi, DaemonService, auth, bind_socket, v1};
 use tempfile::TempDir;
 
 /// Das gebaute Binary.
@@ -172,6 +173,18 @@ pub struct FakeServer {
 impl FakeServer {
     /// Startet den Dienst und wartet, bis Socket und Token da sind.
     pub fn start(harness: &Harness) -> Self {
+        Self::start_with(harness, false)
+    }
+
+    /// Wie [`FakeServer::start`], aber `Audit(Export)` meldet Erfolg und
+    /// schreibt nichts (HUM-156): ein Daemon, der in eine Sicht der Dateien
+    /// schreibt, die der Aufrufer nicht hat, etwa ein eigenes `/tmp` unter
+    /// `PrivateTmp`.
+    pub fn start_with_silent_export(harness: &Harness) -> Self {
+        Self::start_with(harness, true)
+    }
+
+    fn start_with(harness: &Harness, silent_export: bool) -> Self {
         let paths = harness.paths();
         let socket = paths.daemon_socket();
         let token_path = paths.token_path();
@@ -195,7 +208,10 @@ impl FakeServer {
                     let daemon = FakeDaemon::new(session, FakeOptions::default());
                     daemon.start();
                     let service = v1::humanitl_server::HumanitlServer::new(DaemonService::new(
-                        Arc::new(daemon),
+                        Arc::new(SilentExport {
+                            inner: daemon,
+                            silent: silent_export,
+                        }),
                         token,
                     ));
                     let _ = tonic::transport::Server::builder()
@@ -236,6 +252,157 @@ impl Drop for FakeServer {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+    }
+}
+
+/// Ein Daemon ohne Proxy, der die Kette der Umgebung über `Audit` beantwortet
+/// (HUM-156): derselbe `IpcServer` wie in `humanitld`, mit einem festen
+/// Schlüssel und den Ankern aus der Datenbank der Umgebung.
+pub struct AuditServer {
+    /// Beendet den Dienst beim Aufräumen.
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    /// Der Thread, der die Laufzeit trägt.
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl AuditServer {
+    /// Startet den Dienst mit dem Schlüssel `key` und wartet auf den Socket.
+    pub fn start(harness: &Harness, key: [u8; 32]) -> Self {
+        let paths = harness.paths();
+        let socket = paths.daemon_socket();
+        let token_path = paths.token_path();
+        std::fs::create_dir_all(socket.parent().expect("the socket has a directory"))
+            .expect("the runtime directory");
+        let service = humanitl_ipc::AuditService::new(
+            paths.audit_path(),
+            paths.db_path(),
+            Arc::new(humanitl_audit::AuditKey::from_bytes(
+                key,
+                humanitl_audit::KeyOrigin::File,
+            )),
+        );
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let thread = std::thread::spawn({
+            let socket = socket.clone();
+            let token_path = token_path.clone();
+            move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("a runtime");
+                runtime.block_on(async move {
+                    let server = humanitl_ipc::IpcServer::over_the_recording(
+                        &humanitl_config::Config::default(),
+                        None,
+                    )
+                    .with_audit_log(service);
+                    let _ = humanitl_ipc::serve(&socket, &token_path, server, async {
+                        let _ = stopped.await;
+                    })
+                    .await;
+                });
+            }
+        });
+
+        let deadline = Instant::now() + PATIENCE;
+        while Instant::now() < deadline && !(socket.exists() && token_path.exists()) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(socket.exists(), "the audit daemon did not bind its socket");
+        Self {
+            stop: Some(stop),
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for AuditServer {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Der Fake, bei Bedarf mit einem Export, der Erfolg meldet und nichts
+/// schreibt. Jede andere RPC geht unverändert an den Fake.
+struct SilentExport {
+    inner: FakeDaemon,
+    silent: bool,
+}
+
+#[tonic::async_trait]
+impl DaemonApi for SilentExport {
+    async fn info(&self) -> v1::Info {
+        self.inner.info().await
+    }
+    fn subscribe(&self, request: v1::SubscribeRequest) -> BoxStream<v1::FlowEvent> {
+        self.inner.subscribe(request)
+    }
+    async fn list_flows(&self, request: v1::ListFlowsRequest) -> Result<v1::FlowPage, Diagnostic> {
+        self.inner.list_flows(request).await
+    }
+    async fn get_flow(&self, id: FlowId) -> Result<v1::FlowDetail, Diagnostic> {
+        self.inner.get_flow(id).await
+    }
+    fn get_body(&self, body: v1::BodyRef) -> Result<BoxStream<v1::BodyChunk>, Diagnostic> {
+        self.inner.get_body(body)
+    }
+    async fn decide(&self, request: v1::DecideRequest) -> Result<v1::DecideResponse, Diagnostic> {
+        self.inner.decide(request).await
+    }
+    async fn rules(&self, request: v1::RulesRequest) -> Result<v1::RulesResponse, Diagnostic> {
+        self.inner.rules(request).await
+    }
+    fn sandbox(&self, request: v1::SandboxRequest) -> BoxStream<v1::SandboxEvent> {
+        self.inner.sandbox(request)
+    }
+    fn terminal(&self, input: BoxStream<v1::TerminalInput>) -> BoxStream<v1::TerminalOutput> {
+        self.inner.terminal(input)
+    }
+    async fn audit(&self, request: v1::AuditRequest) -> Result<v1::AuditResponse, Diagnostic> {
+        match request.op.as_ref() {
+            Some(v1::audit_request::Op::Export(export)) if self.silent => Ok(v1::AuditResponse {
+                ok: true,
+                entries: 3,
+                out_path: export.out_path.clone(),
+                ..v1::AuditResponse::default()
+            }),
+            _ => self.inner.audit(request).await,
+        }
+    }
+    async fn get_config(
+        &self,
+        request: v1::GetConfigRequest,
+    ) -> Result<v1::ConfigSnapshot, Diagnostic> {
+        self.inner.get_config(request).await
+    }
+    async fn set_config(
+        &self,
+        request: v1::SetConfigRequest,
+    ) -> Result<v1::ConfigSnapshot, Diagnostic> {
+        self.inner.set_config(request).await
+    }
+    async fn doctor(&self) -> v1::DoctorReport {
+        self.inner.doctor().await
+    }
+    fn discover_llm(&self, request: v1::DiscoverRequest) -> BoxStream<v1::DiscoverResult> {
+        self.inner.discover_llm(request)
+    }
+    async fn probe_llm(
+        &self,
+        request: v1::ProbeLlmRequest,
+    ) -> Result<v1::ProbeLlmResponse, Diagnostic> {
+        self.inner.probe_llm(request).await
+    }
+    async fn get_session_summary(
+        &self,
+        request: v1::SessionSummaryRef,
+    ) -> Result<v1::SessionSummary, Diagnostic> {
+        self.inner.get_session_summary(request).await
     }
 }
 

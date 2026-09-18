@@ -12,6 +12,8 @@
 //!
 //! - [`convert`] mit der Abbildung zwischen Kern-Typen und Wire-Form; jede
 //!   Übersetzung steht dort genau einmal,
+//! - [`audit`] mit der `Audit`-RPC: Prüfung, Ende, Seiten und Export der
+//!   Kette (HUM-156),
 //! - [`auth`] mit dem Sitzungs-Token: erzeugen, ablegen, prüfen,
 //! - [`domains`] mit dem Domain-Katalog am Ereignisstrom (HUM-031),
 //! - [`server`] mit [`IpcServer`], dem Dienst des echten Daemons über
@@ -47,7 +49,12 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `11` seit dem Dienst in der Zeile: `FlowSummary.catalog_id` trägt die
+/// `12` seit der `Audit`-RPC im Daemon: `verify` mit Schlüssel und Ankern,
+/// `head`, `query` mit Filter und Cursor und `export` als JSONL oder CSV
+/// antworten, und `AuditResponse` füllt die Felder 7 bis 14, die HUM-051
+/// angelegt hat (HUM-156); `anchors_reported` sagt einem Client, dass Zahl und
+/// Zeitpunkt der Anker gemeldet sind.
+/// `11` war der Dienst in der Zeile: `FlowSummary.catalog_id` trägt die
 /// Kennung des Katalogeintrags, den der Daemon zum Host gefunden hat, leer
 /// wenn er keinen gefunden hat. Damit benennt die Warteschlange eine Gruppe
 /// nach dem Dienst, ohne den Katalog ein zweites Mal zu fragen (HUM-094);
@@ -83,7 +90,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 11;
+pub const PROTO_MINOR: u32 = 12;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
@@ -106,6 +113,7 @@ pub mod v1 {
     include!(concat!(env!("OUT_DIR"), "/humanitl.v1.rs"));
 }
 
+pub mod audit;
 pub mod auth;
 pub mod body;
 pub mod client;
@@ -129,6 +137,7 @@ pub mod validate;
 /// (`backlog/CONVENTIONS.md` 3.1).
 pub use humanitl_proxy::DEFAULT_PORTS as DEFAULT_DISCOVER_PORTS;
 
+pub use crate::audit::AuditService;
 pub use crate::client::connect;
 pub use crate::convert::diagnostic_to_proto;
 pub use crate::domains::DomainTable;

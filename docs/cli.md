@@ -689,27 +689,50 @@ die Audit-Kette beweist"). Diese Aussage hängt an drei Dingen: der Kette
 selbst, den MACs und den Ankern. Alle drei hat nur der Daemon — den Schlüssel
 aus dem Schlüsselspeicher, die Anker aus der Tabelle `audit_anchors`.
 
-Deshalb fragt der Befehl zuerst den Daemon. Antwortet der nicht, prüft die
-Kommandozeile die Datei selbst, und das ist die **schwächere** Prüfung: Kette
-und kanonische Form, aber keine MACs und keine Anker. Die Ausgabe sagt das, in
-jeder Fassung:
+Deshalb fragt der Befehl zuerst den Daemon (HUM-156). Der prüft jeden Record
+mit seinem Schlüssel und gegen die Anker und sagt das:
+
+```
+$ humanitl audit verify
+audit chain: OK
+records:     4213
+head:        a3f9…c2e1 (seq 4213)
+hmac key:    checked by the daemon
+anchors:     42 (last at 2026-09-02T10:40:00.000000Z), checked by the daemon
+warnings:    unanchored tail: 13 records
+checked by:  daemon
+```
+
+Der Kopf ist derselbe Hash, den der Audit-Screen der Oberfläche zeigt: Beide
+fragen denselben Daemon, und der bringt vor jeder Antwort alles auf die
+Platte, was er bis dahin geschrieben hat.
+
+Antwortet **kein** Daemon — keiner erreichbar, keiner, der das Token annimmt,
+oder einer, der `Audit` noch nicht kennt —, prüft die Kommandozeile die Datei
+selbst, und das ist die **schwächere** Prüfung: Kette und kanonische Form,
+aber keine MACs und keine Anker. Die Ausgabe sagt das, in jeder Fassung:
 
 ```
 $ humanitl audit verify
 audit chain: OK
 records:     4213
 head:        a3f9…c2e1 (seq 4213, 2026-09-02T10:42:01.000000Z)
+hmac key:    not checked
 anchors:     not checked
 warnings:    the daemon is not reachable (cannot stat the session token /run/user/1000/humanitl/token: No such file or directory (os error 2)), so this is the file-mode check; no HMAC key (file mode); unanchored tail: 4213 records; no anchors (file mode)
 checked by:  file:/home/nik/.local/share/humanitl/audit/audit.jsonl
 ```
 
 Die erste Warnung sagt, warum die Datei geprüft wurde: „is not reachable",
-wenn kein Daemon da ist, „answered but did not verify", wenn er antwortet,
-aber nicht prüft — solange seine `Audit`-RPC nicht gebaut ist, ist das der
-Normalfall. Der Rest der Datei-Prüfung kennt keine Anker, also zählt jeder
-Record als unverankert. Prüft der Daemon selbst, steht dort
-`anchors: checked by the daemon` und keine dieser Warnungen.
+wenn kein Daemon da ist, „does not answer Audit", wenn ein älterer Daemon den
+Aufruf nicht kennt. Der Rest der Datei-Prüfung kennt keine Anker, also zählt
+jeder Record als unverankert.
+
+Ein Daemon, der antwortet und **ablehnt** — sein Log oder seine Anker sind
+nicht lesbar, oder er läuft ohne Audit-Log (`IPC_006`) —, bekommt keine
+Datei-Prüfung als Ersatz. Sein Befund steht auf `stderr`, und der Befehl
+endet mit dessen Exit-Code: Eine schwächere Antwort, die eine Ablehnung
+überdeckt, wäre die falsche Auskunft.
 
 `--file PATH` prüft ausdrücklich diese Datei, ebenfalls ohne Schlüssel und
 Anker — der Weg für ein Log, das von woanders kommt.
@@ -722,6 +745,7 @@ Bricht die Kette, endet der Befehl mit **4** (Sicherheitsverletzung nach
 $ humanitl audit verify --file audit.jsonl
 audit chain: BROKEN at seq 4012 (hash_mismatch)
 records:     4011
+hmac key:    not checked
 anchors:     not checked
 warnings:    no HMAC key (file mode); no anchors (file mode)
 checked by:  file:audit.jsonl
@@ -731,11 +755,15 @@ error[AUDIT_001]: Hash-Kette gebrochen
   docs: https://github.com/nurkert/Humanitl/blob/main/docs/DIAGNOSTICS.md#audit_001
 ```
 
-Die ersten sechs Zeilen stehen auf `stdout`, der Befund auf `stderr`.
+Die ersten sieben Zeilen stehen auf `stdout`, der Befund auf `stderr`.
 
 Mit `--json` steht alles davon in einem Objekt auf `stdout`, der Befund als
 Feld `diagnostic`; `stderr` bleibt leer. `mode` sagt, welche Prüfung lief:
-`full` beim Daemon mit Schlüssel und Ankern, `file` ohne beides.
+`full` beim Daemon mit Schlüssel und Ankern, `file` ohne beides; `hmac` und
+`anchors` sagen dasselbe je Teil (`checked` oder `not_checked`). Beim Daemon
+kommen `anchor_count` und `last_anchor_at` dazu. `head.hash` ist der Hash, den
+der Audit-Screen zeigt; `head.ts` steht nur in der Prüfung der Datei, weil die
+Antwort des Daemons keinen Zeitpunkt des Kopfes trägt.
 
 ### `audit export`
 
@@ -744,13 +772,22 @@ $ humanitl audit export --format csv --out audit.csv
 exported 4213 records to audit.csv
 ```
 
-`jsonl` schreibt jede Zeile des Logs wörtlich — der Export bleibt damit gegen
-die Datei nachrechenbar. `csv` schreibt eine Kopfzeile und eine Zeile je
-Record, mit denselben acht Spalten, die ein Record hat:
+Den Export schreibt der Daemon, wenn einer antwortet, sonst die
+Kommandozeile selbst; beide nehmen denselben Code (`humanitl_audit::export`)
+und schreiben dieselbe Datei. `jsonl` schreibt jede Zeile des Logs wörtlich —
+der Export bleibt damit gegen die Datei nachrechenbar. `csv` schreibt eine
+Kopfzeile und eine Zeile je Record, mit den zwölf Spalten aus HUM-050:
 
 ```
-seq,ts,session,kind,data,prev,hash,mac
+seq,ts,session,kind,flow,host,method,decision,rule,status,size,hash
 ```
+
+Die acht Spalten zwischen `kind` und `hash` kommen aus `data` und bleiben leer,
+wo der Record das Feld nicht trägt; `flow.decided` etwa nennt weder Host noch
+Methode, die stehen in `flow.received`. `data` als Ganzes steht nur im JSONL.
+Bis HUM-156 schrieb die Kommandozeile acht Spalten (`seq,ts,session,kind,data,
+prev,hash,mac`); die Übersicht der Oberfläche und die der Kommandozeile sind
+seitdem dieselbe.
 
 Felder mit Komma oder Anführungszeichen stehen nach RFC 4180 in
 Anführungszeichen, doppelte Anführungszeichen verdoppelt, und jede Zeile endet
@@ -766,15 +803,20 @@ Verzeichnis weg, aber nur, wenn das Verzeichnis dem eigenen Konto gehört und
 weder Gruppe noch andere hineinschreiben dürfen; in einem geteilten
 Verzeichnis bleibt sie liegen. Ein relativer
 `--out` wird vor dem Aufruf beim Daemon gegen das eigene Verzeichnis
-aufgelöst: Der Daemon läuft woanders.
+aufgelöst: Der Daemon läuft woanders. Läuft er unter systemd mit
+`PrivateTmp=yes`, hat er ein eigenes `/tmp`; ein Export nach `/tmp` oder
+`/var/tmp` wird dann mit `AUDIT_008` abgelehnt, statt in einem Verzeichnis zu
+landen, das nur der Daemon sieht. Der Daemon legt kein Verzeichnis an und
+schreibt nicht durch einen Verweis im Weg zum Ziel; das Verzeichnis legt die
+Kommandozeile vorher selbst an.
 
 `--since` und `--until` nehmen RFC-3339-Zeitpunkte und schneiden halboffen
 (`since` gehört dazu, `until` nicht), damit ein Record nie in zwei
-aufeinanderfolgenden Exporten steht. Beide gelten nur für die Fassung über die
-Datei: Der Vertrag (`AuditRequest.Export`) trägt keine Zeitgrenzen, und ein
-Bereich, den die Kommandozeile nachträglich aus einem fertigen Export
-schnitte, wäre eine zweite Wahrheit über denselben Export. Wer sie setzt,
-bekommt deshalb die lokale Fassung.
+aufeinanderfolgenden Exporten steht. Sie gehen mit zum Daemon: Der Vertrag
+(`AuditRequest.Export.from` und `.to`) schließt beide Grenzen ein, und weil
+das Log Mikrosekunden schreibt, schickt die Kommandozeile als obere Grenze die
+letzte ganze Mikrosekunde vor `--until`. Das Ergebnis ist dasselbe wie in der
+Fassung über die Datei.
 
 Was in keinem Record steht und damit auch in keinem Export: Bodies,
 Klartext-Werte, die Originale von Pseudonymen — und die Notiz einer

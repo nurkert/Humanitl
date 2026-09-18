@@ -50,6 +50,8 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-156 | Der Daemon beantwortet `Audit` nicht | M | HUM-050, HUM-070, HUM-051 |
 | HUM-157 | `audit.retention_days` hat keinen Leser | M | HUM-050, HUM-051, HUM-156 |
 | HUM-158 | Ein Export ohne freien Namen meldet `IPC_006` | S | HUM-051, HUM-070 |
+| HUM-162 | Der Kopf der Kette hat über den Daemon keinen Zeitpunkt | S | HUM-156 |
+| HUM-163 | Jede Seite der Audit-Tabelle liest die ganze Kette | M | HUM-156 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -1130,10 +1132,10 @@ Widget: `status_ok_green`, `status_broken_shows_seq_and_reason`, `filter_by_kind
 Unit (`retention.rs`): `deletes_older_than_cutoff_only`, `orphan_blobs_removed`, `zero_means_never`, `audit_untouched`.
 
 ### Akzeptanzkriterien
-- [ ] `Ctrl+5` öffnet den Screen; Status-Karte zeigt nach ≤ 2 s ein Ergebnis. Offen: `Ctrl+5` und Rail-Eintrag 5 bestanden schon (`Section.audit`, `navigationKeys`), von diesem Issue nicht neu gemessen; gegen den Fake steht das Ergebnis nach rund 0,5 s (`settleAudit`), gegen einen echten Daemon ist es nicht messbar, solange `Audit` dort `unimplemented` antwortet (HUM-156).
-- [ ] Nach Manipulation der JSONL-Datei (Test aus HUM-050) zeigt der Screen „gebrochen ab Sequenz n" mit Grund. Offen: Die Anzeige des Bruchs ist gegen den Fake gemessen (`status_broken_shows_seq_and_reason`), die manipulierte Datei über einen echten Daemon nicht (HUM-156).
-- [ ] Head-Hash im UI == `humanitl audit verify --json | jq .head` (HUM-070). Offen: braucht den Dienst `Audit` im Daemon (HUM-156).
-- [ ] CSV-Export enthält die zwölf Spalten aus HUM-050, JSONL ist bytegleich mit der Quelldatei für den Zeitraum. Offen: Die Datei schreibt der Daemon (HUM-156); gemessen ist nur, dass Format, Pfad und Zeitraum bei ihm ankommen (`export_csv_calls_export_with_range`).
+- [x] `Ctrl+5` öffnet den Screen; Status-Karte zeigt nach ≤ 2 s ein Ergebnis. Gemessen 2026-09-18 mit HUM-156: Gegen einen echten `humanitld` liefern `auditHeadProvider` und `auditVerifyProvider`, die die Karte beim Öffnen liest, beide nach 25 ms (`a_real_daemon_answers_within_two_seconds_with_the_head_of_the_cli`, `app/test/features/audit/audit_daemon_live_test.dart`, `make flutter-test-daemon`; Frist 2 s im Test). `Ctrl+5` öffnet den Abschnitt `Section.audit` (`test/features/shell/shell_test.dart`, `pressCtrl(… digit5)`); gemessen ist die Kette Taste, Abschnitt, Provider, nicht ein Bildschirm mit einem echten Daemon in einem Widget-Test.
+- [x] Nach Manipulation der JSONL-Datei (Test aus HUM-050) zeigt der Screen „gebrochen ab Sequenz n" mit Grund. Gemessen 2026-09-18 mit HUM-156: Ein geändertes Zeichen im ersten Record eines echten `humanitld` ergibt in den Providern des Bildschirms `firstBadSeq 1`, `hashMismatch` und `AUDIT_001`, und `humanitl audit verify` gegen denselben Daemon dieselbe Nummer und denselben Grund (`a_changed_line_is_broken_at_its_seq_in_the_screen_and_the_cli`). Dass die Karte aus genau diesem Bericht „Kette gebrochen ab Sequenz n (Grund)" macht, misst `status_broken_shows_seq_and_reason`.
+- [x] Head-Hash im UI == `humanitl audit verify --json | jq .head` (HUM-070). Gemessen 2026-09-18 mit HUM-156: `auditHeadProvider` gegen einen echten `humanitld` nennt denselben Hash und dieselbe Nummer wie `.head.hash` und `.head.seq` der Kommandozeile (`a_real_daemon_answers_within_two_seconds_with_the_head_of_the_cli`).
+- [x] CSV-Export enthält die zwölf Spalten aus HUM-050, JSONL ist bytegleich mit der Quelldatei für den Zeitraum. Gemessen 2026-09-18 mit HUM-156 am Dienst, den die Oberfläche ruft: `export_writes_the_chain_and_the_twelve_columns_and_overwrites_nothing` und `export_takes_the_range_inclusively` (`daemon/crates/ipc/tests/audit_rpc.rs`); dass Format, Pfad und Zeitraum der Oberfläche dort ankommen, weiter `export_csv_calls_export_with_range`.
 - [x] Retention: Flow mit `ts` vor 200 Tagen ist nach Job weg, Audit-Records bleiben. Gemessen: Der Flow geht in `deletes_older_than_cutoff_only` (`daemon/crates/recorder/tests/retention.rs`, echte SQLite-Datenbank). Die Audit-Records bleiben in `a_retention_run_keeps_the_audit_log_and_its_chain` (`daemon/bin/humanitld/src/main.rs`): Ein Record, der vor dem Lauf im Log stand, steht danach Byte für Byte noch da, dahinter genau `recorder.retention_applied`, und `AuditVerifier::verify` mit Schlüssel meldet die Kette als heil; `audit_untouched` belegt dasselbe für `audit_anchors`.
 
 ### Fallstricke
@@ -1220,6 +1222,11 @@ Abweichungen von dieser Spezifikation, jede mit Grund:
 - **Der Code für einen Exportnamen ohne freien Platz ist `IPC_006`.** Passender
   wäre `AUDIT_008` „Audit-Export nicht schreibbar" aus HUM-070, das zur Zeit
   dieses Issues noch nicht auf `main` stand. Der Wechsel ist HUM-158.
+
+**Nachtrag 2026-09-18 (HUM-156).** Der Dienst `Audit` antwortet, `PROTO_MINOR`
+und `ProtoVersion.minor` stehen auf 12. Die drei Kriterien, die an ihm hingen,
+und das zum Export sind gegen einen echten Daemon gemessen und oben abgehakt;
+`IPC_006` für einen vollen Ordner ist mit HUM-158 `AUDIT_008`.
 
 ---
 
@@ -1618,7 +1625,7 @@ Exit 0 bei `Ok`, 4 bei `Broken` (Sicherheitsverletzung), Ausgabe dann `audit cha
 **Stand 2026-09-18.** Gebaut: `config get|set|schema|edit`, `audit verify|export`, `daemon install|status|logs`, `packaging/systemd/humanitld.socket` (liegt bereit, wird nicht installiert), `humanitl_config::edit::set_value` als der eine Schreiber von `config.toml` für Kommandozeile und `SetConfig`. Abweichungen von der Spezifikation stehen in `backlog/CONVENTIONS.md` 4.31. Offen und benannt:
 
 - **Metaschema.** `config_schema_is_valid_json_schema` prüft die Form (`$schema`, Objekte bis zum Blatt, `x-tier` und Typ an jedem Blatt), nicht gegen das Metaschema von JSON Schema: Die Crate `jsonschema` ist keine Abhängigkeit des Workspace. Folgearbeit: sie aufnehmen und das Schema gegen Draft 2020-12 prüfen.
-- **`Audit`-RPC im Daemon.** Solange sie `unimplemented` ist, prüft `audit verify` ohne `--file` die Datei ohne Schlüssel und Anker und sagt das in `warnings` und `mode: "file"`.
+- **`Audit`-RPC im Daemon.** Solange sie `unimplemented` ist, prüft `audit verify` ohne `--file` die Datei ohne Schlüssel und Anker und sagt das in `warnings` und `mode: "file"`. Erledigt mit HUM-156: Der Daemon prüft mit Schlüssel und Ankern, der Rückfall greift nur noch, wenn kein Daemon antwortet, und der CSV-Export hat die zwölf Spalten aus HUM-050 statt der acht Felder eines Records.
 - **Socket-Aktivierung** mit HUM-053, siehe oben.
 - **Messung auf einer VM** für `daemon install`, siehe oben.
 
@@ -3204,11 +3211,76 @@ Neue Felder im Proto: Die hat HUM-051 schon angelegt. Ein signierter Export (nac
 - `proto/humanitl/v1/humanitl.proto`: `PROTO_MINOR` von 11 auf 12, mit `docs/PROTOCOL.md` und `app/lib/core/ipc/proto_version.dart`
 
 ### Akzeptanzkriterien
-- [ ] `humanitl audit verify` spricht den Daemon und meldet Schlüssel und Anker; der Rückfall auf die Datei greift nur noch, wenn der Daemon nicht antwortet.
-- [ ] Eine nach dem Schreiben veränderte Zeile ergibt über den Daemon „gebrochen ab Sequenz n" mit Grund, in CLI und Oberfläche gleich.
-- [ ] Der Head-Hash im Audit-Screen ist derselbe wie in `humanitl audit verify --json`.
-- [ ] Der CSV-Export hat die Spalten aus HUM-051, der JSONL-Export ist Byte für Byte die Kette.
-- [ ] `make check` grün.
+- [x] `humanitl audit verify` spricht den Daemon und meldet Schlüssel und Anker; der Rückfall auf die Datei greift nur noch, wenn der Daemon nicht antwortet. Gemessen 2026-09-18: `audit_verify_asks_the_daemon_for_key_and_anchors` (`daemon/bin/humanitl/tests/cli.rs`) fragt einen `IpcServer` mit Audit-Log über den Socket und liest `hmac key: checked by the daemon`, die Zahl der Anker samt Zeitpunkt des letzten und `checked by: daemon`, unter `--json` `mode: full`, `hmac: checked`, `anchor_count` gleich der Tabelle; `audit_verify_through_the_daemon_sees_a_foreign_key` zeigt, dass der Schlüssel wirklich rechnet (fremder Schlüssel: `BROKEN at seq 1 (mac_mismatch)`, dieselbe Datei mit `--file`: `OK`). Der Rückfall: ohne Daemon weiter die Datei (`audit_verify_ok_exit_0`), bei einem Daemon, der ablehnt, nicht (`audit_verify_does_not_replace_a_refusing_daemon_with_the_file`, `only_a_silent_daemon_leads_to_the_file`). Jede Aussage unter ihrer Mutation rot gesehen.
+- [x] Eine nach dem Schreiben veränderte Zeile ergibt über den Daemon „gebrochen ab Sequenz n" mit Grund, in CLI und Oberfläche gleich. Gemessen 2026-09-18 gegen einen echten `humanitld`: `a_changed_line_is_broken_at_its_seq_in_the_screen_and_the_cli` (`app/test/features/audit/audit_daemon_live_test.dart`, `make flutter-test-daemon`) ändert ein Zeichen im ersten Record, und die Provider des Bildschirms melden `firstBadSeq 1`, `hashMismatch`, `AUDIT_001`, `humanitl --json audit verify` gegen denselben Daemon Exit 4, `first_bad_seq 1`, `hash_mismatch`. Dazu `a_changed_line_breaks_at_its_seq_with_the_reason` (`daemon/crates/ipc/tests/audit_rpc.rs`) und `audit_verify_through_the_daemon_reports_a_changed_line` (CLI, `BROKEN at seq 2 (hash_mismatch)`). Wie die Karte den Bruch in Worte fasst, misst weiter `status_broken_shows_seq_and_reason`.
+- [x] Der Head-Hash im Audit-Screen ist derselbe wie in `humanitl audit verify --json`. Gemessen 2026-09-18 gegen einen echten `humanitl`: `a_real_daemon_answers_within_two_seconds_with_the_head_of_the_cli` vergleicht `auditHeadProvider` mit `head.hash` und `head.seq` der Kommandozeile, gleich; `verify_and_head_name_the_same_head_and_the_anchors` hält `Head` und `Verify` des Dienstes auf demselben Hash. Die Mutation „der Kopf ist der erste statt der letzte Record" macht beide rot.
+- [x] Der CSV-Export hat die Spalten aus HUM-051, der JSONL-Export ist Byte für Byte die Kette. Gemessen 2026-09-18: `export_writes_the_chain_and_the_twelve_columns_and_overwrites_nothing` (`audit_rpc.rs`) vergleicht die JSONL-Datei des Daemons mit `cmp`-Strenge gegen `audit.jsonl`, liest die zwölf Spalten `seq,ts,session,kind,flow,host,method,decision,rule,status,size,hash` und sieht einen zweiten Export in denselben Pfad mit `AUDIT_008` scheitern, ohne dass der erste sich ändert; `export_takes_the_range_inclusively` den Zeitraum; `audit_export_goes_through_the_daemon_with_its_range` (CLI) dasselbe über `--since`/`--until` und den Daemon.
+- [x] `make check` grün. Gemessen 2026-09-18 mit `STRICT=1 make check` im Arbeitsbaum dieses Issues.
+
+### Stand (2026-09-18)
+
+Gebaut: `daemon/crates/ipc/src/audit.rs` (`AuditService`, `parse`), verdrahtet in
+`IpcServer::with_audit_log` und in `humanitld` mit dem Schlüssel und der
+Anker-Tabelle des Schreibers; `humanitl_audit::query` (Ende und Seiten) und
+`humanitl_audit::export` (JSONL und CSV, eine Stelle für Daemon und
+Kommandozeile); `VerifyReport.head`. `PROTO_MINOR` 12, `Info.capabilities`
+nennt `audit`, sobald der Dienst ein Log hat. Messungen der offenen Kriterien
+von HUM-051 stehen dort.
+
+Entscheidungen, jede mit Grund:
+
+- **Vor jeder Operation wartet der Dienst auf den Schreiber**
+  (`AuditHandle::sync`). Sonst hinge der Kopf, den Oberfläche und
+  Kommandozeile sehen, daran, wie weit der Schreib-Thread gerade ist.
+- **Eine Prüfung schreibt keinen Record `audit.verified`.** Die Art steht in
+  HUM-050, aber ein Record je Prüfung verschöbe den Kopf mit jeder Frage, und
+  der Hash nach der Prüfung der Oberfläche wäre nie der, den die Kommandozeile
+  danach nennt. Die Art bleibt im Register und ohne Schreiber.
+- **Der Rückfall auf die Datei greift nur, wenn kein Daemon antwortet**:
+  `Unavailable`, `Unauthenticated`, `Unimplemented` (ein Daemon vor diesem
+  Issue). Ein Daemon, der ablehnt (`IPC_006` ohne Audit-Log, `AUDIT_006`,
+  `RECORDER_00x`), bekommt keine schwächere Prüfung als Ersatz.
+- **CSV hat zwölf Spalten statt acht.** HUM-070 schrieb die acht Felder des
+  Records (`seq,ts,session,kind,data,prev,hash,mac`); das Kriterium hier und
+  HUM-051 verlangen die zwölf aus HUM-050. Weil Daemon und Kommandozeile
+  denselben Code nehmen, gilt die neue Form für beide; `docs/cli.md` sagt es.
+- **`--since`/`--until` gehen über den Daemon.** Der Vertrag schließt beide
+  Grenzen ein, die Kommandozeile schneidet halboffen; sie schickt deshalb als
+  obere Grenze die letzte ganze Mikrosekunde vor `--until`. Das Log schreibt
+  Mikrosekunden, das Ergebnis ist dasselbe.
+- **`AUDIT_009` „Audit-Anfrage ungültig"** (neu im Register, gRPC
+  `InvalidArgument`): keine Operation, ein Format außer `jsonl`/`csv`, ein
+  relativer Zielpfad (der Daemon läuft in einem anderen Verzeichnis), eine
+  verlangte Host-Schwärzung (`redact_hosts`, nach MVP; still ignoriert stünden
+  die Hosts im Export), ein unlesbarer Zeitpunkt oder Cursor.
+- **Der Kopf trägt über den Daemon keinen Zeitpunkt**: `AuditResponse` hat kein
+  Feld dafür, und neue Felder sind Nicht-Ziel. `head.ts` steht unter `--json`
+  nur in der Prüfung der Datei. Folgearbeit: HUM-162.
+- **Jede Seite liest die ganze Datei.** Die Abfrage hält nur `limit + 1`
+  Records im Speicher, liest aber jede Zeile; bei sehr langen Ketten wird eine
+  Seite langsam. Ungemessen. Folgearbeit: HUM-163.
+- **Gelesen wird nur bis zu dem Ende, das `AuditHandle::sync` meldet** (aus
+  dem Review). Der Schreiber hängt weiter an, während eine Operation liest; eine
+  halb geschriebene Zeile hinter dem Kopf hieß für die Prüfung
+  `NonCanonicalLine`, Exit 4, und der Vorschlag hätte das laufende Log
+  beiseitegelegt. `AuditVerifier::verify_until`, `query::query`/`tail` und
+  `export::export` nehmen deshalb die gemeldete Nummer und hören dort auf;
+  Anker hinter ihr zählen nicht. Belegt mit
+  `a_line_being_written_behind_the_head_is_no_break` und Mutation.
+- **Kein Export in ein privates `/tmp`** (aus dem Review).
+  `packaging/systemd/humanitld.service` setzt `PrivateTmp=yes`; ein Export
+  nach `/tmp` oder `/var/tmp` landete in `/tmp/systemd-private-*`. Der Daemon
+  lehnt ihn mit `AUDIT_008` ab, wenn `/proc/self/mountinfo` dort eine Wurzel
+  `systemd-private-*` zeigt; ein gewöhnliches `tmpfs` auf `/tmp` bleibt
+  erlaubt. Die Kommandozeile prüft nach einem Export über den Daemon, ob sie
+  die Datei sieht, sonst `AUDIT_008`.
+- **Der Daemon legt keine Verzeichnisse an und folgt keinem Verweis im Weg
+  zum Ziel** (aus dem Review). Ein Agent in der Sandbox hat dieselbe
+  Nutzerkennung und könnte im Projektverzeichnis einen Verweis pflanzen. Das
+  Zielverzeichnis muss es geben und seiner aufgelösten Form gleichen, sonst
+  `AUDIT_008`. Zwischen Prüfung und Schreiben bleibt ein Fenster, benannt im
+  Doc-Kommentar von `refuse_linked_parent`. Die Kommandozeile legt das
+  Verzeichnis weiter selbst an, wie seit HUM-070: Sie läuft als der Mensch.
 
 ---
 
@@ -3294,3 +3366,81 @@ Der Befund im Zweig `path == null` von `AuditExportNotifier` trägt `AUDIT_008` 
 
 ### Referenzen
 HUM-051, HUM-070; `daemon/crates/core-types/src/diagnostics/codes.rs`.
+
+---
+
+## HUM-162 · Der Kopf der Kette hat über den Daemon keinen Zeitpunkt
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-156 · Blockiert: keine
+
+### Kontext
+HUM-070 zeigt den Kopf als `head: a3f9…c2e1 (seq 4213, 2026-09-02T10:42:01Z)`. Seit HUM-156 prüft `humanitl audit verify` über den Daemon, und `AuditResponse` trägt Hash und Nummer des Kopfes (`head_hash`, `head_seq`), aber keinen Zeitpunkt. Über den Daemon fehlt der Zeitpunkt deshalb in Text und JSON (`head.ts: null`); nur die Prüfung der Datei nennt ihn. HUM-156 durfte keine Felder anlegen (Nicht-Ziel).
+
+### Ziel
+`AuditResponse` trägt den Zeitpunkt des Kopfes im Format des Logs, `verify` und `head` füllen ihn, die Kommandozeile zeigt ihn wie in der Spezifikation von HUM-070, und die Karte des Audit-Screens kann ihn zeigen.
+
+### Nicht-Ziel
+Andere Felder am Kopf.
+
+### Betroffene Pfade
+- `proto/humanitl/v1/humanitl.proto`: `AuditResponse.head_ts` (nächste freie Nummer, `string`, dieselben Zeichen wie im Log); `PROTO_MINOR` +1
+- `daemon/crates/audit/src/verify.rs` (`VerifyReport.head` mit Zeitpunkt), `daemon/crates/ipc/src/audit.rs`
+- `daemon/bin/humanitl/src/cmd/audit.rs`
+
+### Spezifikation
+Als `string` und nicht als `Timestamp`, aus demselben Grund wie `AuditEntry.ts`: genau diese Zeichen stehen im Hash.
+
+### Schritte
+1. Feld, `make proto`.
+2. Daemon füllt es für `verify` und `head`.
+3. Kommandozeile liest es.
+
+### Tests
+`the_head_carries_its_time` (`daemon/crates/ipc/tests/audit_rpc.rs`), `audit_verify_asks_the_daemon_for_key_and_anchors` erweitert um `head.ts`.
+
+### Akzeptanzkriterien
+- [ ] `humanitl --json audit verify` gegen einen Daemon nennt `head.ts` gleich dem `ts` der letzten Zeile.
+- [ ] `make check` grün.
+
+### Fallstricke
+- Ein Record, dessen `ts` nicht dem Format entspricht, ist in einer heilen Kette nicht möglich; der Kopf eines gebrochenen Logs trägt, was die Zeile trägt.
+
+### Referenzen
+HUM-070, HUM-156; `docs/PROTOCOL.md` 4 und 5.
+
+---
+
+## HUM-163 · Jede Seite der Audit-Tabelle liest die ganze Kette
+Sprint: 4 · Größe: M · Abhängigkeiten: HUM-156 · Blockiert: keine
+
+### Kontext
+HUM-156 beantwortet `Audit(Query)` und `Audit(Head)` aus der Datei: Jede Seite liest jede Zeile von `audit.jsonl`, parst sie als JSON und behält davon nur `limit + 1` Records. Der Speicher bleibt klein, die Zeit wächst mit der Kette. HUM-050 misst `verify` über 100 000 Records mit 3 s; eine Seite der Tabelle ist billiger als eine Prüfung, aber nicht gemessen, und die Tabelle blättert Seite um Seite. Bei einer Kette, die ein Jahr läuft, wird jedes Blättern so teuer wie ein Lesen der ganzen Datei.
+
+### Ziel
+Eine Seite der Tabelle kostet unabhängig von der Länge der Kette höchstens einen festen Anteil der Datei, gemessen mit einem Bench-Test über 100 000 Records.
+
+### Nicht-Ziel
+Ein Index in `SQLite`, der eine zweite Wahrheit neben der Kette wäre; die Datei bleibt die Quelle.
+
+### Betroffene Pfade
+- `daemon/crates/audit/src/query.rs`
+- `daemon/crates/audit/tests/bench.rs`
+
+### Spezifikation
+Erst messen: Seite ohne Filter und mit Filter über 100 000 Records. Liegt eine Seite ohne Filter über 200 ms, von hinten lesen (die jüngsten Records stehen am Ende, eine Seite ohne Filter braucht nur das Ende; `writer.rs` liest schon so), und `entries` bei gesetztem Filter nur so weit zählen, wie die Oberfläche es braucht, oder ausdrücklich als Schätzung kennzeichnen.
+
+### Schritte
+1. Bench-Test (`#[ignore]`).
+2. Je nach Messung: Lesen von hinten für Seiten ohne Filter.
+
+### Tests
+`a_page_over_100k_records_is_fast` (Bench), `query_pages_newest_first_with_a_cursor` bleibt grün.
+
+### Akzeptanzkriterien
+- [ ] Die Dauer einer Seite über 100 000 Records ist gemessen und steht hier.
+- [ ] `make check` grün.
+
+### Fallstricke
+- Der Cursor ist eine Nummer, keine Position in der Datei; wer von hinten liest, darf sich auf aufsteigende Nummern nur verlassen, solange die Kette heil ist, und muss bei einem Bruch dasselbe liefern wie heute.
+
+### Referenzen
+HUM-050 (Bench), HUM-051 (Seiten von 200), HUM-156.
