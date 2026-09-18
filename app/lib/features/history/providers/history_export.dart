@@ -25,9 +25,14 @@ import 'history_query.dart';
 /// Which version the export writes into its creator block.
 ///
 /// The daemon's version belongs to the daemon; what wrote the file is this
-/// application, and until it carries a version of its own the constant says
-/// so rather than borrowing one.
-const String historyExportCreatorVersion = '0.0.0';
+/// application, so the constant is the version of this build, the same
+/// `FLUTTER_BUILD_NAME` the about dialog shows (`flutter build --build-name`,
+/// otherwise the version in `pubspec.yaml`). `0.0.0` only where the tool set
+/// nothing.
+const String historyExportCreatorVersion = String.fromEnvironment(
+  'FLUTTER_BUILD_NAME',
+  defaultValue: '0.0.0',
+);
 
 /// Where an export ends up. Overridden in tests, which write nowhere.
 ///

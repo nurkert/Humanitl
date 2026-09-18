@@ -17,7 +17,7 @@
 
 [Unit]
 Description=Humanitl moderation daemon
-Documentation=https://github.com/humanitl/humanitl/blob/main/docs/PROTOCOL.md
+Documentation=https://github.com/nurkert/Humanitl/blob/main/docs/PROTOCOL.md
 
 [Service]
 ExecStart={humanitld}
