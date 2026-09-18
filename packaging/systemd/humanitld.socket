@@ -1,0 +1,38 @@
+# humanitl daemon install: written by Humanitl
+#
+# Die Socket-Unit des Daemons (HUM-053, Vorlage angelegt in HUM-070).
+#
+# **`humanitl daemon install` schreibt diese Datei heute nicht.** Sie gehört in
+# das Paket, das sie nach `/usr/lib/systemd/user/` legt, und sie wirkt erst,
+# wenn der Daemon beim Start `LISTEN_FDS` und `LISTEN_PID` liest und den von
+# systemd gehaltenen Deskriptor übernimmt (HUM-053, Schritt 2). Bis dahin
+# bindet der Daemon den Socket selbst und prüft beim Start, ob dort schon
+# jemand antwortet; ein von systemd gehaltener Socket sähe für ihn wie eine
+# zweite Instanz aus, und er bräche mit `DAEMON_003` ab. Eine Socket-Unit, die
+# heute aktiviert würde, legte den Dienst also still.
+#
+# Die Datei liegt trotzdem hier und nicht erst in HUM-053, damit die Fassung im
+# Repository und die des Pakets von Anfang an dieselbe sind. Der Test
+# `the_socket_unit_listens_where_the_client_looks` misst `ListenStream` gegen
+# den Pfad, an dem der Client den Socket sucht (`Paths::daemon_socket`); ein
+# Socket, auf den niemand hört, wäre der Fehler, den ein Paket am spätesten
+# zeigt. Eingebettet wird sie nicht: `cmd/unit.rs` bettet nur ein, was
+# `daemon install` auch schreibt.
+#
+# Die erste Zeile ist die Marke aus `cmd/unit.rs`: Nur eine Datei, die sie
+# trägt, würde von `humanitl daemon install` je ersetzt.
+
+[Unit]
+Description=Humanitl daemon socket
+Documentation=https://github.com/nurkert/Humanitl/blob/main/docs/PROTOCOL.md
+
+[Socket]
+# `%t` ist das Laufzeitverzeichnis des Nutzers, also `$XDG_RUNTIME_DIR`. Genau
+# dort sucht der Client den Socket (`Paths::daemon_socket`).
+ListenStream=%t/humanitl/daemon.sock
+SocketMode=0600
+DirectoryMode=0700
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

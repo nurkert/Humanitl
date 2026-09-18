@@ -10,7 +10,11 @@
 //! 1. **Genau eine Datei, an einem genannten Ort.**
 //!    `$XDG_CONFIG_HOME/systemd/user/humanitld.service`, sonst
 //!    `~/.config/systemd/user/humanitld.service`. Keine System-Unit, kein
-//!    `sudo`, keine zweite Datei, kein Socket.
+//!    `sudo`, keine zweite Datei, kein Socket. `packaging/systemd/humanitld.socket`
+//!    liegt zwar im Repository und geht mit dem Paket mit (HUM-053), aber
+//!    dieser Befehl schreibt sie nicht und aktiviert sie nicht: Der Daemon
+//!    liest `LISTEN_FDS` noch nicht, bindet den Socket selbst und hielte einen
+//!    von systemd gehaltenen für eine zweite Instanz (`DAEMON_003`).
 //! 2. **Sichtbar, bevor es geschieht.** Der Inhalt entsteht hier und wird vom
 //!    Aufrufer angezeigt, bevor irgendetwas geschrieben wird.
 //! 3. **Wiederholbar.** Ein zweiter Aufruf mit demselben Ergebnis schreibt
@@ -146,6 +150,19 @@ pub fn daemon_binary(current_exe: &Path) -> Result<PathBuf, Diagnostic> {
     let Some(dir) = current_exe.parent() else {
         return Err(missing_daemon(current_exe, "it has no directory"));
     };
+    daemon_binary_in(dir)
+}
+
+/// Der Daemon in diesem Verzeichnis, aufgelöst bis zur wirklichen Datei.
+///
+/// Der Regelfall ist das Verzeichnis der laufenden Kommandozeile
+/// ([`daemon_binary`]); `--bin-dir` nennt ein anderes, etwa das Bundle eines
+/// Pakets, das die Kommandozeile über einen Verweis erreicht hat.
+///
+/// # Errors
+///
+/// `DAEMON_007`, wie bei [`daemon_binary`].
+pub fn daemon_binary_in(dir: &Path) -> Result<PathBuf, Diagnostic> {
     let candidate = dir.join(DAEMON_NAME);
     if !candidate.is_file() {
         return Err(missing_daemon(
@@ -167,6 +184,16 @@ pub fn daemon_binary(current_exe: &Path) -> Result<PathBuf, Diagnostic> {
     }
     exec_start_word(&real)?;
     Ok(real)
+}
+
+/// `DAEMON_007` für ein Binary, das nicht dort liegt, wo es liegen müsste.
+///
+/// Derselbe Befund wie für ein fehlendes `humanitld`, nur mit dem Pfad, den
+/// der Aufrufer nennt: `daemon install` aus einem `AppImage` sucht auch den Shim
+/// (HUM-070).
+#[must_use]
+pub fn missing_binary(path: &Path, why: &str) -> Diagnostic {
+    missing_daemon(path, why)
 }
 
 /// Der Pfad als das eine Wort, das er in `ExecStart` sein muss.

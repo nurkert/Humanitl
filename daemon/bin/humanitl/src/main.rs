@@ -28,7 +28,7 @@ use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
 use crate::cli::{Cmd, Invocation};
-use crate::cmd::{Context, EXIT_OK, EXIT_USER, Failure, ProfileMeaning, not_yet_failure};
+use crate::cmd::{Context, EXIT_OK, EXIT_USER, Failure, ProfileMeaning};
 use crate::render::Renderer;
 
 fn main() -> ExitCode {
@@ -162,13 +162,9 @@ async fn run(ctx: &Context, command: Cmd) -> Result<u8, Failure> {
         Cmd::Flows { cmd } => cmd::flows::run(ctx, &cmd).await,
         Cmd::Sessions { cmd } => cmd::sessions::run(ctx, &cmd).await,
         Cmd::Rules { cmd } => cmd::rules::run(ctx, &cmd).await,
-        Cmd::Config { cmd } => cmd::config::run(ctx, &cmd),
-        // Ein Platzhalter ist ein Fehlschlag wie jeder andere und geht
-        // deshalb denselben Weg: [`Renderer::diagnostic`] macht daraus mit
-        // `--json` eine Zeile JSON auf `stdout` und sonst den Block auf
-        // `stderr`.
+        Cmd::Config { cmd } => cmd::config::run(ctx, &cmd).await,
         Cmd::Run(args) => cmd::run::run(ctx, &args).await,
-        Cmd::Audit(_) => Err(not_yet_failure("humanitl audit", "HUM-070")),
+        Cmd::Audit { cmd } => cmd::audit::run(ctx, &cmd).await,
     }
 }
 
@@ -176,20 +172,26 @@ async fn run(ctx: &Context, command: Cmd) -> Result<u8, Failure> {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-    use crate::cmd::{EXIT_USER, not_yet, not_yet_failure};
+    use crate::cli::{Cmd, ConfigCmd};
+    use crate::cmd::ProfileMeaning;
 
+    use super::profile_means;
+
+    /// Unter `humanitl sandbox` benennt `--profile` das Profil des
+    /// Sandbox-Backends, sonst das Profil der Sitzung (`backlog/CONVENTIONS.md` 4.23).
     #[test]
-    fn a_missing_subcommand_names_its_issue() {
+    fn the_profile_flag_keeps_its_meaning_per_subcommand() {
         assert_eq!(
-            not_yet("humanitl run", "HUM-067"),
-            "humanitl run arrives in HUM-067"
+            profile_means(&Cmd::Config {
+                cmd: ConfigCmd::Edit
+            }),
+            ProfileMeaning::Session
         );
-    }
-
-    #[test]
-    fn a_missing_subcommand_ends_with_one_and_a_diagnostic() {
-        let failure = not_yet_failure("humanitl audit", "HUM-070");
-        assert_eq!(failure.exit, EXIT_USER);
-        assert_eq!(failure.diagnostic.code.as_str(), "CLI_003");
+        assert_eq!(
+            profile_means(&Cmd::Sandbox {
+                cmd: crate::cli::SandboxCmd::Check
+            }),
+            ProfileMeaning::Sandbox
+        );
     }
 }

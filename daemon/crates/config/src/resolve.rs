@@ -143,12 +143,34 @@ pub fn sources_for(
     env: &Env,
     cli: &[(String, String)],
 ) -> Result<Sources, Diagnostic> {
+    let global = Paths::new(env.clone()).config_path();
+    sources_with_global(selection, cwd, env, cli, global.is_file().then_some(global))
+}
+
+/// Wie [`sources_for`], aber mit dieser Datei als globaler `config.toml` —
+/// auch in der Vorabrunde, die das Projektverzeichnis bestimmt.
+///
+/// Für alle, die eine andere Datei an die Stelle der globalen setzen: `--config`
+/// der Kommandozeile und die Probe von `humanitl config set`, die eine
+/// Nebendatei lädt, bevor sie die wirkliche ersetzt. Wer die Datei erst nach
+/// [`sources_for`] tauscht, bekommt das Projekt-Profil der alten Datei: Setzt
+/// die neue `sandbox.work_dir`, stünde in den Quellen das Profil des falschen
+/// Projekts (HUM-070).
+///
+/// # Errors
+///
+/// Wie [`sources_for`].
+pub fn sources_with_global(
+    selection: &ProfileSelection,
+    cwd: Option<&Path>,
+    env: &Env,
+    cli: &[(String, String)],
+    global: Option<PathBuf>,
+) -> Result<Sources, Diagnostic> {
     let paths = Paths::new(env.clone());
     if let Some(name) = selection.name.as_deref() {
         check_name(name, "the profile selection")?;
     }
-    let global = paths.config_path();
-    let global = global.is_file().then_some(global);
 
     // Erste Runde, ohne Projekt-Ebene: Sie beantwortet nur eine Frage, nämlich
     // welches Verzeichnis das Projekt ist.

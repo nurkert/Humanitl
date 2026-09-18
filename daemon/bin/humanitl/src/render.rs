@@ -169,8 +169,10 @@ pub fn docs_url(diagnostic: &Diagnostic) -> Option<String> {
 #[must_use]
 pub fn fix_line(fix: &FixAction) -> String {
     match fix {
-        FixAction::SetEnv { key, value } => format!("export {key}={value}"),
-        FixAction::ChangeSetting { key, value } => format!("humanitl config set {key} {value}"),
+        FixAction::SetEnv { key, value } => format!("export {key}={}", shell_word(value)),
+        FixAction::ChangeSetting { key, value } => {
+            format!("humanitl config set {key} {}", shell_word(value))
+        }
         FixAction::CopyCommand(command) | FixAction::OpenUrl(command) => command.clone(),
         FixAction::InstallService => "humanitl daemon install".to_owned(),
         FixAction::AddRule(rule) => format!("add the rule {} ({})", rule.id, rule.action),
@@ -178,6 +180,68 @@ pub fn fix_line(fix: &FixAction) -> String {
             format!("mount {} read-only", path.display())
         }
     }
+}
+
+/// Ein Wert als ein Wort der Shell, so dass der Befehl ihn unverändert
+/// weitergibt.
+///
+/// `humanitl config set llm.passthrough_paths ["/v1/","/api/"]` käme bei `bash` als
+/// `[/v1/,/api/]` an: Die Anführungszeichen gehören der Shell. Ein Wert aus
+/// Zeichen, die sie nicht deutet, bleibt, wie er ist; jeder andere steht in
+/// einfachen Anführungszeichen, und ein einfaches darin wird `'\''`.
+///
+/// Alles außer druckbarem ASCII steht nie wörtlich darin, sondern als Byte in
+/// der Form `$'…\xHH…'` der Shell: Leerraum, Steuerzeichen und jedes Byte über
+/// `0x7e`. Der Block eines Befunds faltet Leerraum zu einem Leerzeichen und
+/// wirft Steuerzeichen weg ([`plain`]), und ein Dateiname mit Zeilenumbruch
+/// oder zwei Leerzeichen käme sonst als ein anderer Name beim `mv` an. `\xHH`
+/// ist ein Byte und kein Zeichen: Es gilt unter jeder Locale, auch unter
+/// `LC_ALL=C`, wo `\u…` nichts bedeutet.
+#[must_use]
+pub fn shell_word(value: &str) -> String {
+    shell_bytes(value.as_bytes())
+}
+
+/// Ein Pfad als ein Wort der Shell, aus seinen Bytes und nicht aus seiner
+/// Anzeige.
+///
+/// `Path::display` ersetzt ein Byte, das kein UTF-8 ist, durch `U+FFFD`; ein
+/// Vorschlag daraus nennte eine Datei, die es nicht gibt.
+#[must_use]
+pub fn shell_path(path: &std::path::Path) -> String {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    shell_bytes(path.as_os_str().as_bytes())
+}
+
+/// Die Bytes als ein Wort der Shell (siehe [`shell_word`]).
+fn shell_bytes(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let bare = |byte: u8| byte.is_ascii_alphanumeric() || b"_-./:@%+=,".contains(&byte);
+    let printable = |byte: u8| (0x21..=0x7e).contains(&byte);
+    // Ein `=` am Anfang bleibt nicht nackt: zsh macht aus `=name` den Pfad
+    // des Programms `name` (EQUALS).
+    if bytes.first().is_some_and(|&first| first != b'=') && bytes.iter().all(|&byte| bare(byte)) {
+        return String::from_utf8_lossy(bytes).into_owned();
+    }
+    if bytes.iter().all(|&byte| printable(byte)) {
+        let text = String::from_utf8_lossy(bytes);
+        return format!("'{}'", text.replace('\'', "'\\''"));
+    }
+    let mut out = String::from("$'");
+    for &byte in bytes {
+        match byte {
+            b'\\' => out.push_str("\\\\"),
+            b'\'' => out.push_str("\\'"),
+            byte if printable(byte) => out.push(char::from(byte)),
+            byte => {
+                let _ = write!(out, "\\x{byte:02x}");
+            }
+        }
+    }
+    out.push('\'');
+    out
 }
 
 /// Der Behebungsvorschlag als JSON: die Art und ihre Werte.
@@ -281,6 +345,35 @@ fn row_line(cells: &[String], widths: &[usize]) -> String {
         .join("  ")
 }
 
+/// Ein Block aus beschrifteten Zeilen: `label:` links, der Wert bündig rechts.
+///
+/// Die zweite Form, in der die Kommandozeile ein Ergebnis zeigt. Eine Tabelle
+/// ([`table`]) ist für viele gleichartige Zeilen richtig; ein Ergebnis aus
+/// wenigen, verschieden benannten Angaben — die Prüfung der Audit-Kette etwa —
+/// liest sich als Block besser, weil jede Zeile ihren eigenen Namen trägt.
+///
+/// Die Werte stehen in einer Spalte, also wird die Beschriftung aufgefüllt;
+/// ein Wert bekommt nie Leerzeichen hinter sich. Jede Zeile endet mit einem
+/// Zeilenumbruch.
+#[must_use]
+pub fn labeled(rows: &[(&str, String)]) -> String {
+    let width = rows
+        .iter()
+        .map(|(label, _)| label.chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut out = String::new();
+    for (label, value) in rows {
+        let pad = (width + 1).saturating_sub(label.chars().count() + 1);
+        out.push_str(label);
+        out.push(':');
+        out.push_str(&" ".repeat(pad + 1));
+        out.push_str(&plain(value));
+        out.push('\n');
+    }
+    out
+}
+
 /// Das Zeichen für eine bestandene oder gescheiterte Prüfung.
 #[must_use]
 pub const fn tick(passed: bool) -> &'static str {
@@ -338,7 +431,7 @@ mod tests {
     use humanitl_core::diagnostics::codes::{DAEMON_001, SANDBOX_003};
     use humanitl_core::{Diagnostic, FixAction, Severity};
 
-    use super::{diagnostic_block, diagnostic_json, one_line, table, tick};
+    use super::{diagnostic_block, diagnostic_json, labeled, one_line, table, tick};
 
     fn sandbox_diagnostic() -> Diagnostic {
         Diagnostic::builder(SANDBOX_003, Severity::Blocking)
@@ -425,6 +518,104 @@ mod tests {
             "unexpected table:\n{text}"
         );
         assert!(text.lines().all(|line| !line.ends_with(' ')));
+    }
+
+    /// Die Werte stehen in einer Spalte, und keine Zeile endet auf Leerzeichen.
+    #[test]
+    fn a_labeled_block_aligns_its_values_and_pads_no_line_end() {
+        let text = labeled(&[
+            ("audit chain", "OK".to_owned()),
+            ("records", "4213".to_owned()),
+            ("warnings", "no HMAC key (file mode)".to_owned()),
+        ]);
+
+        assert_eq!(
+            text, "audit chain: OK\nrecords:     4213\nwarnings:    no HMAC key (file mode)\n",
+            "unexpected block:\n{text}"
+        );
+        assert!(text.lines().all(|line| !line.ends_with(' ')));
+        // Ein Wert, der ein Terminal steuern will, druckt seinen Text und
+        // nicht seine Wirkung -- wie im Befund (HUM-068).
+        let sneaky = labeled(&[("head", "a3f9\u{1b}[31m".to_owned())]);
+        assert!(!sneaky.contains('\u{1b}'), "{sneaky:?}");
+    }
+
+    /// Ein Vorschlag mit einer Liste kommt bei der Shell als diese Liste an.
+    #[test]
+    fn a_fix_with_a_list_is_one_shell_word() {
+        let fix = FixAction::ChangeSetting {
+            key: "llm.passthrough_paths".to_owned(),
+            value: r#"["/v1/","/api/"]"#.to_owned(),
+        };
+        assert_eq!(
+            super::fix_line(&fix),
+            r#"humanitl config set llm.passthrough_paths '["/v1/","/api/"]'"#
+        );
+        assert_eq!(super::shell_word("300"), "300");
+        // zsh macht aus einem nackten `=ls` den Pfad von `ls`.
+        assert_eq!(super::shell_word("=ls"), "'=ls'");
+        assert_eq!(super::shell_word("a=b"), "a=b");
+        assert_eq!(super::shell_word(""), "''");
+        assert_eq!(super::shell_word("it's"), r"'it'\''s'");
+    }
+
+    /// Nur ein `=` am Anfang wird gequotet, eines in der Mitte bleibt nackt.
+    #[test]
+    fn only_a_leading_equals_sign_is_quoted() {
+        assert_eq!(super::shell_word("=foo"), "'=foo'");
+        assert_eq!(super::shell_word("foo=bar"), "foo=bar");
+        assert_eq!(super::shell_path(std::path::Path::new("=foo")), "'=foo'");
+        assert_eq!(
+            super::shell_path(std::path::Path::new("dir/foo=bar")),
+            "dir/foo=bar"
+        );
+    }
+
+    /// Ein Name mit Zeilenumbruch, Tabulator oder zwei Leerzeichen kommt im
+    /// Block des Befunds so an, dass die Shell denselben Namen daraus macht.
+    #[test]
+    fn a_fix_with_whitespace_in_a_name_survives_the_block() {
+        let name = "nl\nx  y\tz.csv";
+        let word = super::shell_word(name);
+        assert_eq!(word, r"$'nl\x0ax\x20\x20y\x09z.csv'");
+        let block = diagnostic_block(
+            &Diagnostic::builder(DAEMON_001, Severity::Error)
+                .why("because")
+                .fix(FixAction::CopyCommand(format!("mv -- {word} out")))
+                .build(),
+        );
+        assert!(
+            block.contains(&format!("  fix: mv -- {word} out\n")),
+            "{block}"
+        );
+        assert_eq!(super::shell_word(r"a\b c"), r"$'a\\b\x20c'");
+    }
+
+    /// Ein Name, der kein UTF-8 ist, und einer mit Umlaut: Der Vorschlag nennt
+    /// genau diese Bytes, und `bash` unter `LC_ALL=C` findet die Datei damit.
+    #[test]
+    fn a_path_is_quoted_from_its_bytes_and_works_under_the_c_locale() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let dir = tempfile::tempdir().expect("a directory");
+        for name in [&b"bad\xffname.csv"[..], "gr\u{fc}n l.csv".as_bytes()] {
+            let path = dir.path().join(OsStr::from_bytes(name));
+            std::fs::write(&path, b"x").expect("the file");
+            let word = super::shell_path(&path);
+            assert!(word.is_ascii(), "{word}");
+            let target = dir.path().join("moved");
+            let status = std::process::Command::new("bash")
+                .arg("-c")
+                .arg(format!("mv -n -- {word} {}", super::shell_path(&target)))
+                .env("LC_ALL", "C")
+                .status()
+                .expect("bash runs");
+            assert!(status.success(), "{word}");
+            assert!(target.is_file(), "{word} named the file");
+            assert!(!path.exists(), "{word}");
+            std::fs::remove_file(&target).expect("clean up");
+        }
     }
 
     #[test]
