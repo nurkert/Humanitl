@@ -228,8 +228,405 @@ abstract class DaemonClient {
   /// would be two promises (`docs/SECURITY.md` 3.3).
   Stream<TerminalFrame> terminal(Stream<TerminalCommand> input);
 
+  /// `Audit(head)`: the end of the chain, without reading it end to end
+  /// (HUM-051).
+  ///
+  /// The cheap half of the audit screen: how many records there are, what the
+  /// last one hashes to, how many anchors stand beside them and when the last
+  /// of those was set. It proves nothing on its own — the head hash of a chain
+  /// somebody rewrote is the head hash of the rewritten chain — and that is why
+  /// [auditVerify] exists next to it.
+  Future<AuditHead> auditHead();
+
+  /// `Audit(verify)`: the chain, checked record by record (HUM-050, HUM-051).
+  ///
+  /// Runs in the daemon and can take seconds over a long log, so a caller
+  /// shows that it is waiting rather than blocking a frame on it. The answer
+  /// says either that every record holds, or the first sequence number that
+  /// does not and why; a chain that holds can still carry warnings about what
+  /// the check could **not** prove.
+  Future<AuditReport> auditVerify();
+
+  /// `Audit(query)`: one page of records, newest first (HUM-051).
+  ///
+  /// Paged over [AuditPage.nextCursor], never fetched whole: the chain grows
+  /// without a ceiling, and a table that loaded it all would be a table that
+  /// stops working the longer the product is used.
+  Future<AuditPage> auditQuery(
+    AuditFilter filter, {
+    int limit = auditPageSize,
+    String? cursor,
+  });
+
+  /// `Audit(export)`: the daemon writes the export to [outPath] (HUM-051).
+  ///
+  /// **The daemon writes the file, not this application.** The chain lives
+  /// beside the daemon, the app only names a path, and a JSONL export that has
+  /// to be byte-identical with the source cannot travel through a second
+  /// encoder on the way. The caller therefore asks a person for a path first
+  /// and passes it here.
+  ///
+  /// [from] and [to] are the range of the table the person is looking at; both
+  /// ends are inclusive, and null means no bound on that side.
+  Future<AuditExport> auditExport({
+    required AuditExportFormat format,
+    required String outPath,
+    DateTime? from,
+    DateTime? to,
+  });
+
   /// Releases the transport. The client is unusable afterwards.
   Future<void> close();
+}
+
+/// How many audit records one page asks for. The wire default of `Query`.
+const int auditPageSize = 200;
+
+/// Which of the two documents an audit export writes.
+enum AuditExportFormat {
+  /// Every record as the chain holds it, one canonical JSON line each.
+  ///
+  /// This is the form the acceptance of HUM-051 measures: for a range, the
+  /// file is byte-identical with the corresponding lines of `audit.jsonl`.
+  jsonl,
+
+  /// One row per record with the twelve columns of HUM-050.
+  csv;
+
+  /// The value the `Export.format` field of the contract carries.
+  String get wireName => switch (this) {
+    AuditExportFormat.jsonl => 'jsonl',
+    AuditExportFormat.csv => 'csv',
+  };
+
+  /// The extension of the file the save dialog offers.
+  String get fileExtension => switch (this) {
+    AuditExportFormat.jsonl => 'jsonl',
+    AuditExportFormat.csv => 'csv',
+  };
+}
+
+/// The end of the audit chain (`Audit(head)`).
+final class AuditHead {
+  /// Creates a head.
+  const AuditHead({
+    this.seq = 0,
+    this.hash = '',
+    this.records = 0,
+    this.anchors,
+    this.lastAnchorAt,
+  });
+
+  /// An empty chain: nothing written, nothing anchored.
+  static const AuditHead empty = AuditHead();
+
+  /// The sequence number of the last record; 0 for an empty chain.
+  final int seq;
+
+  /// The hash of the last record as lowercase hex; empty for an empty chain.
+  ///
+  /// The same string `humanitl audit verify --json | jq .head` prints.
+  final String hash;
+
+  /// How many records the chain holds.
+  final int records;
+
+  /// How many anchors stand beside it, in `audit_anchors`, or null when the
+  /// daemon did not report them.
+  ///
+  /// Null and zero are two different answers. Zero means the daemon looked
+  /// and found no anchor, so every record could be cut off unnoticed; null
+  /// means nobody said, which is what a daemon answers that predates the
+  /// field (`AuditResponse.anchors_reported`, HUM-051).
+  final int? anchors;
+
+  /// When the last anchor was set; null when there is none or when [anchors]
+  /// was not reported.
+  final DateTime? lastAnchorAt;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AuditHead &&
+      other.seq == seq &&
+      other.hash == hash &&
+      other.records == records &&
+      other.anchors == anchors &&
+      other.lastAnchorAt == lastAnchorAt;
+
+  @override
+  int get hashCode => Object.hash(seq, hash, records, anchors, lastAnchorAt);
+}
+
+/// Why a chain broke, in the words of `humanitl_audit::BreakReason`.
+///
+/// The wire carries `snake_case`; an unknown value becomes
+/// [AuditBreakReason.unknown] rather than an exception, because a daemon that
+/// learned a new reason must not take down the screen that reports it.
+enum AuditBreakReason {
+  /// A sequence number is missing or out of place.
+  seqGap,
+
+  /// `prev` is not the hash of the record before it.
+  prevMismatch,
+
+  /// The hash does not match the fields.
+  hashMismatch,
+
+  /// The MAC does not match the hash: the chain was rebuilt without the key.
+  macMismatch,
+
+  /// The line is not a record, or not its own canonical form.
+  nonCanonicalLine,
+
+  /// The anchor for this number names another hash.
+  anchorMismatch,
+
+  /// The file ends below an anchor.
+  truncatedBelowAnchor,
+
+  /// The daemon named a reason this app does not know.
+  unknown;
+
+  /// Reads the `snake_case` name off the wire.
+  static AuditBreakReason parse(String wire) => switch (wire) {
+    'seq_gap' => AuditBreakReason.seqGap,
+    'prev_mismatch' => AuditBreakReason.prevMismatch,
+    'hash_mismatch' => AuditBreakReason.hashMismatch,
+    'mac_mismatch' => AuditBreakReason.macMismatch,
+    'non_canonical_line' => AuditBreakReason.nonCanonicalLine,
+    'anchor_mismatch' => AuditBreakReason.anchorMismatch,
+    'truncated_below_anchor' => AuditBreakReason.truncatedBelowAnchor,
+    _ => AuditBreakReason.unknown,
+  };
+}
+
+/// What the check could not prove, although the chain holds.
+final class AuditWarning {
+  /// Creates a warning.
+  const AuditWarning({required this.kind, this.records = 0});
+
+  /// `no_hmac_key` or `unanchored_tail`.
+  final String kind;
+
+  /// How many records stand behind the last anchor; only for
+  /// `unanchored_tail`.
+  final int records;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AuditWarning && other.kind == kind && other.records == records;
+
+  @override
+  int get hashCode => Object.hash(kind, records);
+}
+
+/// The result of `Audit(verify)`.
+final class AuditReport {
+  /// Creates a report.
+  const AuditReport({
+    required this.ok,
+    this.records = 0,
+    this.firstBadSeq = 0,
+    this.reason = AuditBreakReason.unknown,
+    this.warnings = const <AuditWarning>[],
+    this.diagnostic,
+  });
+
+  /// True when every record holds and no anchor lies beyond the end.
+  final bool ok;
+
+  /// How many records passed the check.
+  final int records;
+
+  /// The first sequence number that does not hold; only when [ok] is false.
+  final int firstBadSeq;
+
+  /// Why it does not hold; only when [ok] is false.
+  final AuditBreakReason reason;
+
+  /// What the check could not prove, although the chain holds.
+  final List<AuditWarning> warnings;
+
+  /// The finding of the daemon for a broken chain (`AUDIT_001`), or null.
+  ///
+  /// The screen shows this one and invents none of its own: the sentence that
+  /// says what happened belongs to the side that read the file
+  /// (`docs/UX.md` 4.4).
+  final Diagnostic? diagnostic;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AuditReport &&
+      other.ok == ok &&
+      other.records == records &&
+      other.firstBadSeq == firstBadSeq &&
+      other.reason == reason &&
+      _same(other.warnings, warnings) &&
+      other.diagnostic == diagnostic;
+
+  @override
+  int get hashCode => Object.hash(
+    ok,
+    records,
+    firstBadSeq,
+    reason,
+    Object.hashAll(warnings),
+    diagnostic,
+  );
+}
+
+/// Which records a query asks for.
+final class AuditFilter {
+  /// Creates a filter. Every field left out means "no bound".
+  const AuditFilter({
+    this.kindPrefix = '',
+    this.session = '',
+    this.from,
+    this.to,
+  });
+
+  /// Nothing filtered.
+  static const AuditFilter none = AuditFilter();
+
+  /// Prefix of the kind, such as `flow.` or `flow.decided`.
+  final String kindPrefix;
+
+  /// The session as UUID text; empty means every session.
+  final String session;
+
+  /// Earliest timestamp, inclusive.
+  final DateTime? from;
+
+  /// Latest timestamp, inclusive.
+  final DateTime? to;
+
+  /// A copy with the named fields replaced; [clearFrom] and [clearTo] remove a
+  /// bound, because null means "unchanged" here as everywhere else.
+  AuditFilter copyWith({
+    String? kindPrefix,
+    String? session,
+    DateTime? from,
+    DateTime? to,
+    bool clearFrom = false,
+    bool clearTo = false,
+  }) => AuditFilter(
+    kindPrefix: kindPrefix ?? this.kindPrefix,
+    session: session ?? this.session,
+    from: clearFrom ? null : (from ?? this.from),
+    to: clearTo ? null : (to ?? this.to),
+  );
+
+  @override
+  bool operator ==(Object other) =>
+      other is AuditFilter &&
+      other.kindPrefix == kindPrefix &&
+      other.session == session &&
+      other.from == from &&
+      other.to == to;
+
+  @override
+  int get hashCode => Object.hash(kindPrefix, session, from, to);
+}
+
+/// One record of the chain, as the table and the sheet show it.
+final class AuditRecordRow {
+  /// Creates a row.
+  const AuditRecordRow({
+    required this.seq,
+    required this.ts,
+    required this.kind,
+    this.session = '',
+    this.dataJson = '{}',
+    this.line = '',
+  });
+
+  /// The sequence number.
+  final int seq;
+
+  /// The timestamp in the format of the log: UTC, microseconds, always `Z`.
+  ///
+  /// Text and not a [DateTime], because these very characters are what the
+  /// hash covers. [time] is the parsed form for anybody who needs to compare.
+  final String ts;
+
+  /// The kind, such as `flow.decided`.
+  final String kind;
+
+  /// The session as UUID text, or `-` for a record that belongs to none.
+  final String session;
+
+  /// `data` of the record as a JSON object.
+  final String dataJson;
+
+  /// The complete canonical line, byte for byte as it stands in the file.
+  final String line;
+
+  /// [ts] parsed, or null when it is not a timestamp this app can read.
+  DateTime? get time => DateTime.tryParse(ts)?.toUtc();
+
+  @override
+  bool operator ==(Object other) =>
+      other is AuditRecordRow &&
+      other.seq == seq &&
+      other.ts == ts &&
+      other.kind == kind &&
+      other.session == session &&
+      other.dataJson == dataJson &&
+      other.line == line;
+
+  @override
+  int get hashCode => Object.hash(seq, ts, kind, session, dataJson, line);
+}
+
+/// One page of `Audit(query)`.
+final class AuditPage {
+  /// Creates a page.
+  const AuditPage({
+    this.rows = const <AuditRecordRow>[],
+    this.nextCursor = '',
+    this.total = 0,
+  });
+
+  /// Nothing loaded.
+  static const AuditPage empty = AuditPage();
+
+  /// The records, newest first.
+  final List<AuditRecordRow> rows;
+
+  /// Where the next page begins; empty when there is none.
+  final String nextCursor;
+
+  /// How many records the filter matches, as the daemon counted them.
+  final int total;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AuditPage &&
+      _same(other.rows, rows) &&
+      other.nextCursor == nextCursor &&
+      other.total == total;
+
+  @override
+  int get hashCode => Object.hash(Object.hashAll(rows), nextCursor, total);
+}
+
+/// What an export wrote.
+final class AuditExport {
+  /// Creates a result.
+  const AuditExport({required this.path, this.records = 0});
+
+  /// The file the daemon wrote.
+  final String path;
+
+  /// How many records went into it.
+  final int records;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AuditExport && other.path == path && other.records == records;
+
+  @override
+  int get hashCode => Object.hash(path, records);
 }
 
 /// How many recorded requests a dry run looks at when the caller says

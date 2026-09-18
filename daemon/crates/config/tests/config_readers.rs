@@ -83,8 +83,8 @@ const REGISTER: &[(&str, &str)] = &[
     ("audit.fsync_every", "effective"),
     // Löschen bricht die Kette absichtlich, und im MVP löscht niemand: `0`
     // heißt „für immer" und ist das Einzige, was heute wirkt. Die Löschung
-    // mit dokumentierter Lücke baut der Audit-Bildschirm.
-    ("audit.retention_days", "pending(HUM-051)"),
+    // mit dokumentierter Lücke ist HUM-157; HUM-051 hat sie nicht gebaut.
+    ("audit.retention_days", "pending(HUM-157)"),
     ("experimental.h2_upstream", "effective"),
     ("findings.email_allow_domains", "effective"),
     ("findings.enabled", "effective"),
@@ -338,7 +338,7 @@ fn the_keys_without_a_reader_are_the_known_ones() {
     // und `ui.sound`, die HUM-121 aus demselben Grund entfernt hat, und
     // abzüglich `resolver.nameserver`, hinter den HUM-115 den Hickory-Adapter
     // gebaut hat, und zuzüglich `audit.retention_days`, den HUM-050 anlegt
-    // und HUM-051 verdrahtet: Im MVP löscht niemand. Sie steht hier, damit ein weiterer
+    // und HUM-157 verdrahtet: Im MVP löscht niemand. Sie steht hier, damit ein weiterer
     // Fall nicht unbemerkt dazukommt: Wer einen Schlüssel verdrahtet oder
     // streicht, zieht ihn hier und im Register zugleich nach.
     let pending: Vec<&str> = register()

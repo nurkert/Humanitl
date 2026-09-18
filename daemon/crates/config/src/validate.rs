@@ -250,10 +250,12 @@ fn recorder_is_well_formed(recorder: &RecorderConfig, limits: &Limits) -> Result
             ),
         ));
     }
+    // 0 heißt nie löschen (HUM-051, `humanitl_recorder::Retention`); bis dahin
+    // war die Untergrenze 1.
     between(
         "recorder.retention_days",
         u64::from(recorder.retention_days),
-        1,
+        0,
         3650,
     )
 }
@@ -422,6 +424,18 @@ mod tests {
     #[test]
     fn the_defaults_are_valid() {
         assert!(Config::default().validate().is_ok());
+    }
+
+    #[test]
+    fn recording_retention_defaults_to_180_and_takes_zero_as_never() {
+        // HUM-051: Vorgabe 180 Tage, 0 heißt nie löschen, mehr als zehn Jahre
+        // bleibt außerhalb.
+        let mut config = Config::default();
+        assert_eq!(config.recorder.retention_days, 180);
+        config.recorder.retention_days = 0;
+        assert!(config.validate().is_ok(), "0 means never and is valid");
+        config.recorder.retention_days = 3651;
+        assert!(why_of(&config).contains("recorder.retention_days = 3651"));
     }
 
     #[test]
