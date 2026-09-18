@@ -103,10 +103,17 @@ class HBadge extends StatelessWidget {
       ),
     );
 
+    // Ohne [onTap] ist der Badge eine Beschriftung, kein Control, und erbt
+    // keinen Zustand von außen. `shad.Clickable` reicht seine Zustände an alle
+    // Nachfahren weiter; in einer Zeile ohne `onTap` (dem Queue-Abgang) kam
+    // dort `disabled` an, und das Wort des Badges stand in `fg2` statt in
+    // seiner Farbe (HUM-047). Die Grenze hält das ab.
     final Widget chip = onTap == null
         ? HTheme.host(
             context,
-            shad.PrimaryBadge(style: styleOf(tokens), child: label()),
+            shad.WidgetStatesProvider.boundary(
+              child: shad.PrimaryBadge(style: styleOf(tokens), child: label()),
+            ),
           )
         : HControl(
             onPressed: onTap,

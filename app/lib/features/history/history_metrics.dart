@@ -50,6 +50,18 @@ enum HistorySort {
 /// sideways.
 const double historyPathMinWidth = 260;
 
+/// Breite der Spalte „Edited“: der Chip `EditedBadge` samt [historyCellGap].
+///
+/// Bis HUM-047 stand hier ein Akzentpunkt in 28 px. Der Chip ist das Wort,
+/// das Warteschlange und Detail auch zeigen; abgeschnitten sagte er nichts
+/// mehr. Bemessen ist die Spalte an der Testschrift, deren Zeichen so breit
+/// wie hoch sind: „Edited“ braucht in ihr 66 px, dazu 16 px Innenabstand des
+/// Chips und die 8 px Abstand zur Nachbarspalte, aufgerundet auf das
+/// Vier-Pixel-Raster der Tabelle. Jede echte Schrift der
+/// Oberfläche ist schmaler, auch für das deutsche „Bearbeitet“ (rund 55 px in
+/// 11/500). `history_edited_chip_test.dart` hält die Zahl fest.
+const double historyEditedColumnWidth = 92;
+
 /// Which value a column shows. The order is the order on screen.
 ///
 /// The `seq` column of `backlog/sprint-2.md` is missing on purpose: the wire
@@ -104,7 +116,7 @@ enum HistoryColumn {
     HistoryColumn.duration => 64,
     HistoryColumn.findings => 64,
     HistoryColumn.rule => 140,
-    HistoryColumn.edited => HSize.rowHistory,
+    HistoryColumn.edited => historyEditedColumnWidth,
   };
 
   /// True for the one column that takes the leftover width.

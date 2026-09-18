@@ -262,6 +262,33 @@ void main() {
       },
     );
 
+    // Der Queue-Abgang nach einer bearbeiteten Freigabe: Zustandsfarbe,
+    // Stift-Glyph und der Chip „Edited“ (HUM-047). Keines der Bilder oben
+    // zeigt eine entschiedene Zeile.
+    goldenTest(
+      'queue_row_edited_$name',
+      fileName: 'queue_row_edited_$name',
+      constraints: rowBox,
+      builder: () {
+        final List<FlowDetail> details = goldenDetails();
+        return piece(
+          mode: mode,
+          details: details,
+          child: QueueRow(
+            flow: details.first.summary.copyWith(
+              state: FlowState.decided,
+              decision: DecisionKind.allowEdited,
+              decisionSource: DecisionSource.user,
+              edited: true,
+              deadline: null,
+            ),
+            selected: false,
+            onSelect: () {},
+          ),
+        );
+      },
+    );
+
     goldenTest(
       'request_card_basic_$name',
       fileName: 'request_card_basic_$name',

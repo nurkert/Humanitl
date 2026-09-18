@@ -728,5 +728,6 @@
   "editorInvalidPath": "Der Pfad muss mit / beginnen und darf keine Leerzeichen tragen; alles andere gehört kodiert.",
   "editorJsonInvalid": "Dieser Rumpf ist kein gültiges JSON mehr. Senden bleibt möglich.",
   "sandboxTerminalDetached": "Der Strom endete ohne Exit-Code. Dieses Fenster hängt nicht mehr daran; läuft die Sitzung noch, führt dieser Bildschirm oder humanitl sandbox attach wieder hin.",
-  "sandboxTerminalConnectionLost": "Die Verbindung zum Daemon ist fort, und damit ist unbekannt, was aus dieser Sitzung geworden ist. Sobald der Daemon wieder antwortet, verbindet humanitl sandbox attach erneut."
+  "sandboxTerminalConnectionLost": "Die Verbindung zum Daemon ist fort, und damit ist unbekannt, was aus dieser Sitzung geworden ist. Sobald der Daemon wieder antwortet, verbindet humanitl sandbox attach erneut.",
+  "flowEditedChip": "Bearbeitet"
 }
