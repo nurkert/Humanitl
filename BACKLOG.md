@@ -588,6 +588,7 @@ Definition of Done für jedes Issue: Tests auf der passenden Ebene, neue Fehlerp
 13. **Flatpak.** UI im Flatpak, Daemon außerhalb.
 14. **OpenTelemetry** hinter Cargo-Feature, Team-Kataloge, Regel-Profile teilen.
 15. **Pseudonym-Mapping dauerhaft (HUM-048).** Verschlüsselte Zuordnungstabelle im Daemon, Schlüssel im System-Keyring, Mapping-Panel in Editor und History, verschlüsselter Export, dazu das Popover am Diff-Glow mit Aktionen je Fund und „Immer ignorieren" samt Allowlist aus HUM-049. Am 2026-09-18 aus dem MVP hierher verschoben; im MVP lebt die Zuordnung je Sitzung im Speicher.
+16. **Settings-Screen vollständig (HUM-069).** Formular aus dem JSON-Schema für alle Felder mit Gruppen, Detailstufen, Suche, Herkunftsanzeige und Zurücksetzen, Live-Neuladen mit `ConfigChanged`, Dateiüberwachung von `config.toml`, Audit-Eintrag je Änderung, Ladebefunde im Formular. Am 2026-09-18 aus dem MVP hierher verschoben; im MVP gibt es ein handgebautes Formular mit neun Einstellungen, wirksam nach Daemon-Neustart.
 
 ---
 
