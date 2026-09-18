@@ -341,9 +341,8 @@ fn build_outgoing(request: &HttpRequest, body: Bytes) -> Result<Request<Full<Byt
             if is_hop_by_hop(name.as_str()) || name.as_str().eq_ignore_ascii_case("host") {
                 continue;
             }
-            // Content-Length und Content-Encoding bleiben; hyper setzt die
-            // Länge aus dem `Full`-Body ohnehin passend, ein vorhandener Wert
-            // stimmt nach dem vollständigen Puffern mit der Länge überein.
+            // `content-length` setzt der Daemon unten selbst, aus der Länge
+            // des gepufferten Rumpfs; ein mitgebrachter Wert könnte lügen.
             if name.as_str().eq_ignore_ascii_case("content-length") {
                 continue;
             }
@@ -352,9 +351,37 @@ fn build_outgoing(request: &HttpRequest, body: Bytes) -> Result<Request<Full<Byt
         if let Ok(host) = HeaderValue::from_str(&host_header(request)) {
             headers.insert(HeaderName::from_static("host"), host);
         }
+        // Ausdrücklich gesetzt und nicht hyper überlassen: hyper schreibt für
+        // einen leeren `Full`-Rumpf gar keinen `content-length`, auch nicht
+        // für einen POST. RFC 9110 8.6 verlangt für eine Methode, die einen
+        // Rumpf trägt, `Content-Length: 0` (SHOULD), und HUM-047 legt es für
+        // die bearbeitete Anfrage fest. Der Wert steht damit auf dem Draht
+        // genau so wie in der Aufzeichnung (`edit::apply_edit`).
+        if let Some(length) = wire_content_length(request.method.as_str(), body.len()) {
+            headers.insert(
+                HeaderName::from_static("content-length"),
+                HeaderValue::from(length),
+            );
+        }
     }
 
     builder.body(Full::new(body)).map_err(|_err| ())
+}
+
+/// Der `content-length`, den eine Anfrage mit `body_len` Bytes Rumpf trägt,
+/// oder keiner.
+///
+/// Die Byte-Länge, auch `0` bei leerem Rumpf — außer bei `GET` und `HEAD`
+/// ohne Rumpf: `GET / HTTP/1.1` mit `content-length: 0` ist zwar erlaubt,
+/// aber manche Server behandeln es als Rumpf-Ankündigung (HUM-047).
+///
+/// Öffentlich in der Crate, weil [`crate::edit`] denselben Wert in die
+/// bearbeitete Anfrage schreibt; zwei Regeln für dieselbe Kopfzeile liefen
+/// auseinander, und die Aufzeichnung zeigte eine Anfrage, die so nie
+/// hinausging.
+pub(crate) fn wire_content_length(method: &str, body_len: usize) -> Option<usize> {
+    let bodiless = matches!(method.as_bytes(), b"GET" | b"HEAD");
+    (body_len > 0 || !bodiless).then_some(body_len)
 }
 
 /// Der Wert des `Host`-Kopfes: Host, und der Port nur, wenn er nicht der
