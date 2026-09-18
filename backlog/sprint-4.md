@@ -301,16 +301,16 @@ Widget (`app/test/features/editor/editor_screen_test.dart`, Fake-Daemon):
 - `open_with_E_shows_editor`, `replace_all_glows` (findet 3 Widgets mit `replaced`-Decoration), `send_edited_calls_decide_with_ALLOW_EDITED` (Fake-Daemon zeichnet Aufruf auf), `esc_keeps_draft` (Editor schließen, wieder öffnen, Entwurf unverändert), `binary_body_disables_editor`.
 
 ### Akzeptanzkriterien
-- [ ] `E` auf einer gehaltenen Anfrage öffnet den Editor im mittleren Pane, `Esc` kehrt zur Karte zurück, Entwurf bleibt.
-- [ ] „Alle ersetzen" ersetzt jeden offenen Fund, gleiche Werte bekommen dasselbe Pseudonym, Format `<TYPE_n>`.
-- [ ] Ersetzte Stellen sind mit Diff-Glow markiert, Hover zeigt maskiertes Original und Pseudonym.
-- [ ] `Ctrl+R` auf einer Auswahl erzeugt ein `<CUSTOM_n>` oder gelabeltes Pseudonym.
-- [ ] `Host` und `Content-Length` sind im Header-Tab sichtbar gesperrt.
-- [ ] Senden mit geändertem Host ist im UI unmöglich und wird vom Daemon mit `EDIT_001` abgelehnt (Test).
-- [ ] Nach dem Senden trägt die Anfrage in Queue-Abgang, History und Detail den Chip „Edited", Zustand `allowedEdited`.
-- [ ] Der Upstream erhält `content-length` passend zur Bytelänge, kein `transfer-encoding`, kein `content-encoding` (Integrationstest mit axum-Fake-Upstream aus HUM-017).
-- [ ] Alle Tests aus dem Abschnitt Tests grün, `flutter analyze` und `cargo clippy -D warnings` sauber.
-- [ ] Neue ARB-Schlüssel `editor*` in `en` und `de`.
+- [x] `E` auf einer gehaltenen Anfrage öffnet den Editor im mittleren Pane, `Esc` kehrt zur Karte zurück, Entwurf bleibt. **Gemessen am 2026-09-13**: `app/test/features/editor/editor_screen_test.dart`, `open_with_E_shows_editor` (nach `E` steht `editor-send`, `intercept-allow` ist weg) und `esc_keeps_draft` (Rumpf von Hand auf „changed by hand" gesetzt, `Esc`, wieder `E`: derselbe Text, `dirty == true`).
+- [x] „Alle ersetzen" ersetzt jeden offenen Fund, gleiche Werte bekommen dasselbe Pseudonym, Format `<TYPE_n>`. **Gemessen**: `replace_all_glows` (drei Funde ⇒ `<EMAIL_1> <EMAIL_2> <EMAIL_3>`), `replaceAllOpen_countersPerType` (2 E-Mails, 1 IBAN ⇒ `<EMAIL_1> <EMAIL_2> <IBAN_1>`), `the same value gets the same pseudonym across locations`, `replaceAllOfValue_sameHashSamePseudonym` (Kopfzeile und Rumpf ⇒ beide `<EMAIL_1>`).
+- [ ] Ersetzte Stellen sind mit Diff-Glow markiert, Hover zeigt maskiertes Original und Pseudonym. **Halb.** Der Diff-Glow steht und ist gemessen: `replace_all_glows` zählt drei Markierungen `HEditorDecorationKind.replaced`, und `HEditorDecorations` malt sie mit Akzent-Unterstrich (1 px) plus Fläche in 10 % Alpha. **Was fehlt, ist das Hover-Popover.** Statt seiner zeigt die `MappingStrip` unter dem Editor Pseudonym, Art und maskiertes Original (`the mapping shows the masked original, never the value`: `an************om` steht da, `anna@example.com` nirgends). Das Popover braucht eine Zeiger-Trefferfläche über einem `TextSpan` — `HPopover` nimmt heute nur zwei Zeichenketten, kein Widget —, und HUM-048 baut die Zuordnung ohnehin aus; es gehört dorthin.
+- [x] `Ctrl+R` auf einer Auswahl erzeugt ein `<CUSTOM_n>` oder gelabeltes Pseudonym. **Gemessen**: `ctrl_r_pseudonymises_the_selection` (Auswahl `[0, 9)`, Label „client" ⇒ `<CLIENT_1> writes`), `replaceSelection_createsCustomFinding` (Label `PROJECT` ⇒ `<PROJECT_1>`, Fund `custom:PROJECT`, Status `replaced`), `an empty label becomes CUSTOM`.
+- [x] `Host` und `Content-Length` sind im Header-Tab sichtbar gesperrt. **Neu gemessen am 2026-09-18**, nachdem der Review gezeigt hatte, dass die erste Messung leer war — damals war *jede* Zeile gesperrt, weil keine sich bearbeiten ließ. Jetzt unterscheiden sich die beiden Arten: `a locked header has no field at all` (die Zeilen `Host` und `Content-Length` haben kein `editor-header-name-*`), `an unlocked header can be typed into` (in `Content-Type` getippt, landet im Entwurf), `an added header can be named and then travels`, `host and content-length are visibly locked` (Schloss-Glyph, „set by Humanitl", kein Löschknopf).
+- [x] Senden mit geändertem Host ist im UI unmöglich und wird vom Daemon mit `EDIT_001` abgelehnt (Test). **Gemessen**: Im UI ist die Authority ein `Text` mit Schloss, kein Feld (`editor-authority`). Im Daemon `daemon/crates/proxy/src/edit.rs`: `authority_change_rejected` (`evil.io` ⇒ `EDIT_001`), `port_change_rejected` (8443), `scheme_downgrade_rejected` (`https` nach `http`), `authority_case_insensitive_ok` (`API.GITHUB.COM.` geht durch).
+- [ ] Nach dem Senden trägt die Anfrage in Queue-Abgang, History und Detail den Chip „Edited", Zustand `allowedEdited`. **Zustand ja, Chip halb.** `send_edited_calls_decide_with_ALLOW_EDITED` misst, dass genau eine Entscheidung mit `DecisionKind.allowEdited` und dem bearbeiteten Rumpf beim Daemon ankommt; von da an zeichnen Warteschlange und Historie den Zustand, den sie schon kennen: `HFlowState.allowedEdited` mit Farbe und dem Stift-Glyph `arrowUpRightPencil`, Screenreader „Allowed, edited". Die Historie hat die Spalte „Edited" und den Detail-Reiter „Edited". **Was fehlt: ein Text-Chip „Edited" im Queue-Abgang** (`queue_row.dart`, `_ConfirmationStrip`) — die Datei gehört in diesem Sprint einem anderen Issue, und der Zustand kommt heute nur über Farbe, Glyph und Semantik an.
+- [ ] Der Upstream erhält `content-length` passend zur Bytelänge, kein `transfer-encoding`, kein `content-encoding` (Integrationstest mit axum-Fake-Upstream aus HUM-017). **Als Einheit gemessen, nicht als Integration.** `daemon/crates/proxy/src/edit.rs`: `content_length_recomputed` („Grüsse an Berlin" = 16 Zeichen, 17 Bytes ⇒ `content-length: 17`), `transfer_encoding_removed` (dazu `content-length: 5`, RFC 9112 6.1), `content_encoding_removed`, `expect_removed`, `host_comes_from_the_held_request`, `get_with_empty_body_no_content_length`, `post_with_empty_body_says_zero`. **Was fehlt: der Lauf gegen den Fake-Upstream** in `daemon/crates/proxy/tests/`; dort misst niemand, dass die Kopfzeilen auch wirklich auf dem Draht stehen.
+- [x] Alle Tests aus dem Abschnitt Tests grün, `flutter analyze` und `cargo clippy -D warnings` sauber. **Neu gemessen am 2026-09-18** nach der Review-Runde: `flutter analyze --fatal-infos` 0 Befunde (App und `packages/ui`), `dart format --set-exit-if-changed` sauber (426 Dateien), `flutter test` 1166 grün / 4 übersprungen / **2 rot** (nach der Delta-Review 1178 grün, nach der dritten 1186 grün, jeweils 4 übersprungen und dieselben 2 rot) — die beiden TLS-Goldens, die gegen den Rollbalken von HUM-150 gezogen sind, den dieser Arbeitsbaum nicht hat; mit dem Code von `main` sind alle 14 Goldens von `intercept_golden_test.dart` grün (siehe Stand). Unter `test/features/editor` 81 grün (nach der Delta-Review 93, nach der dritten 101), `packages/ui` 129 grün, `cargo test -p humanitl-proxy -p humanitl-ipc -p humanitl-core` ohne einen roten Test, darunter 26 in `edit::tests`. `rustfmt --edition 2024 --check` sauber, `tools/check-deps.sh` und `tools/check_coupling.py` grün. **`cargo clippy` ist auf diesem Rechner nicht installiert und wurde nicht gefahren**; CI mit `STRICT=1` ist die Messung.
+- [x] Neue ARB-Schlüssel `editor*` in `en` und `de`. **Gemessen am 2026-09-18**: 35 Schlüssel mit Präfix `editor` (vier neu: `editorMethod`, `editorPath`, `editorTimedOut`, `editorSendFailed`), in beiden Dateien dieselbe Menge; nach der Delta-Review 38 (dazu `editorHeaderOwned`, `editorHeaderInvalidName`, `editorHeaderInvalidValue`), wieder in beiden Dateien dieselbe Menge, dazu `interceptKeyEdit` für die Taste auf dem Control.
 
 ### Fallstricke
 - `Content-Length` ist die **Byte**-Länge des UTF-8-Bodys, nicht die Zeichenanzahl. Dart `String.length` zählt UTF-16-Einheiten. Immer `utf8.encode(body).length`.
@@ -330,6 +330,298 @@ Widget (`app/test/features/editor/editor_screen_test.dart`, Fake-Daemon):
 - re_editor: https://pub.dev/packages/re_editor
 - RFC 9112 Abschnitt 6.1 (Transfer-Encoding und Content-Length): https://www.rfc-editor.org/rfc/rfc9112#section-6.1
 - Caido „Edited"-Zustand: https://docs.caido.io/app/guides/intercept_traffic
+
+### Stand (2026-09-13)
+
+Der Editor steht, der `AllowEdited`-Pfad im Daemon steht, und an fünf Stellen
+weicht die Umsetzung von der Spezifikation ab. Jede Abweichung steht hier mit
+ihrem Grund; drei davon sind Entscheidungen, die für Folge-Issues gelten.
+
+**1. Keine Proto-Änderung, kein `ReplacementProto`, keine neue Minor-Version.**
+Die Spezifikation sieht `repeated ReplacementProto replacements = 10` in
+`DecideRequest` vor. Gebaut ist es nicht, und zwar aus demselben Grund, aus dem
+dieses Proto schon einmal ein Feld zurückgenommen hat: Nummer 6 trug
+`acknowledge_findings`, „kein Handler hat es je gelesen und kein Client hat es
+je gesetzt", und der Kommentar an `reserved 3, 6` sagt, warum das falsch war —
+„ein Feld, das eine Zusage macht und nichts bewirkt, wäre eine falsche Aussage
+über den Vertrag" (`backlog/CONVENTIONS.md` 4.13). Die Ersetzungen hätten in
+diesem Issue keinen Leser: `findings.resolved` und das Audit-Log füllt HUM-048,
+und das Mapping lebt bis dahin ausdrücklich nur im Speicher. Der Editor trägt
+die Liste deshalb bis an die Naht (`EditorHost.onSend` bekommt sie) und legt sie
+dort ab. Wer HUM-048 baut, fügt Feld **10** hinzu (3, 4 und 6 sind belegt oder
+gesperrt, 7 ist `allow_edited`, 8 und 9 gehören HUM-049), hebt `PROTO_MINOR` von
+11 auf 12 und zieht `docs/PROTOCOL.md` und `app/lib/core/ipc/proto_version.dart`
+nach.
+
+**2. Kein `daemon/crates/ipc/src/decide.rs`.** Der Weg von `EditedRequest` zu
+`HttpRequest` gibt es schon, an genau einer Stelle: `validate.rs::decide_plan`
+liest die Entscheidung und ruft `convert::request_from_proto`, prüft den Body
+gegen `limits.hold_body_cap_bytes` und lehnt eine unlesbare Anfrage mit `IPC_004`
+ab, statt sie still zu `allow` zu ergänzen. Eine zweite Datei daneben wäre eine
+zweite Tür in denselben Raum.
+
+**3. `hold.rs` ist unverändert.** Die Warteschlange trägt die `Decision`, sie
+führt sie nicht aus; ausgeführt wird in `FlowHandler::carry_out`
+(`handler.rs`), und dort hängt jetzt `edit::apply_edit`. Die Spezifikation
+nennt `hold.rs`, weil sie vor HUM-015 geschrieben wurde.
+
+**4. Kein `re_editor`.** Das Paket ist keine Abhängigkeit dieser Anwendung, und
+es aufzunehmen hieße, `pubspec.lock` anzufassen — die Datei, die versioniert
+ist, damit ein Release eines fremden Pakets den Bau nicht ohne Commit ändert.
+Flutter kann dasselbe ohne Paket: `TextEditingController.buildTextSpan` ist der
+Haken, den `EditableText` bei jedem Zeichnen ruft, und `HDecoratedTextController`
+in `packages/ui` hängt sich dort ein. Der Unterschied zu `re_editor` ist, dass
+der ganze Text in einem `TextSpan`-Baum steht statt einer sichtbaren Zeile; für
+die Rümpfe, die dieser Editor annimmt — Binärdaten und Übergroßes sind
+ausgeschlossen —, ist das dieselbe Arbeit, die `EditableText` ohnehin tut. Der
+Fallstrick „`re_editor` rendert nur sichtbare Zeilen" entfällt damit, der
+Fallstrick der Offset-Räume nicht: Er ist gelöst, siehe unten.
+
+**5. Die Naht liegt in der Shell, nicht in der Warteschlange.** Der Editor
+ersetzt den mittleren Pane des Intercept-Bildschirms, aber kein Feature
+importiert ein anderes (`docs/ARCHITECTURE.md` 5, `tools/check-deps.sh` prüft
+das und war beim ersten Anlauf rot). `InterceptScreen` nimmt deshalb einen
+`InspectorEditorBuilder` entgegen — eine Funktion über Kerntypen —, die Shell
+reicht `buildEditorPane` aus `features/editor/editor_host.dart` hinein, und
+`ActionBar` bekommt `onEdit` als Rückruf statt eines fremden Providers. Ohne
+Builder tut `E` nichts und das Control steht gar nicht erst da. Der Editor holt
+sein Detail über `editorDetailProvider` selbst aus `core/ipc`; dass jedes
+Feature sein Detail aus einem eigenen Provider liest, steht schon in
+`core/body/body_providers.dart`.
+
+**Die zwei Offset-Räume.** Der Daemon zählt Bytes, Dart zählt
+UTF-16-Code-Units. Umgerechnet wird **einmal beim Laden**, in `buildDraft`: für
+den Rumpf über `mapBodyFindings` aus `core/body/body_span.dart` (derselbe
+Dekodierer, der den Text auch zeichnet, HUM-030), für Kopfzeilen und Query über
+`charSpanOfBytes` mit demselben `byteToCharOffsets`. Zurückgerechnet wird gar
+nicht: Was hinausgeht, ist der fertige Text, und die Bytes zählt der Daemon
+(`utf8.encode` in `buildEditedRequest`, `body.len()` in `apply_edit`).
+
+**Neu im Diagnose-Register**: Bereich `edit` (`EDIT_001..009`), belegt sind
+`EDIT_001` Ziel, `EDIT_002` Methode, `EDIT_003` Pfad, `EDIT_005` Rumpf über der
+Grenze. **`EDIT_004` bleibt mit Absicht frei**: Die Spezifikation gab ihm die
+gesperrte Kopfzeile im Edit, und die wird nicht abgelehnt, sondern still
+verworfen und als `edit.locked_header_dropped` vermerkt — der Daemon setzt diese
+Werte selbst. `backlog/CONVENTIONS.md` 4.6 führt den Bereich noch nicht; die
+Zeile gehört dorthin nachgetragen.
+
+**`EDIT_005` misst gegen `limits.hold_body_cap_bytes`, nicht gegen
+`preview.cap_bytes`.** Das ist die Grenze, gegen die der Hold wirklich gepuffert
+hat und die der Proxy zur Hand hat (`ProxyLimits.body_cap_bytes`);
+`preview.cap_bytes` ist die Anzeigegrenze, und über ihr schaltet der Editor das
+Bearbeiten client-seitig ab (`Draft.bodyIsEditable`).
+
+**Zwei Fehler, die beim Bauen aufgefallen sind und mitbehoben wurden.** Erstens
+fiel `carry_out` bei einer Bearbeitung ohne Inline-Bytes auf den **ursprünglichen**
+Rumpf zurück — wer den ganzen Rumpf löschte, schickte damit genau das hinaus,
+was er entfernt hatte. Jetzt ist ein leerer Rumpf ein leerer Rumpf
+(`an_emptied_body_goes_out_empty`, `a_detached_body_goes_out_empty`). Zweitens
+lief die Aktionsleiste mit dem dritten Control bei 652 px um 142 px über;
+`actionBarWrapWidth` steht deshalb auf 800 statt 640, und achtzehn Goldens sind
+nachgezogen.
+
+**Die Naht zur Shell ist der einzige Eingriff ausserhalb der Pfade dieses
+Issues**, neben `lib.rs` (Modulzeile), `handler.rs` (der `AllowEdited`-Zweig),
+`codes.rs` (Register, angehaengt), `core/shortcuts/intents.dart` (`EditIntent`),
+`features/intercept/intents.dart` (Bindung `E`), `humanitl_ui.dart` (Export) und
+achtzehn Goldens. Wer in derselben Runde `remember_grid.dart` anfasst, muss die
+Goldens der Aktionsleiste nach dem Merge noch einmal ziehen
+(`flutter test --update-goldens test/goldens`).
+
+### Stand nach der Review-Runde (2026-09-18)
+
+Antigravity und der Ersatz-Reviewer für Codex fanden zusammen drei blockierende,
+sechs größere und dreizehn kleinere Punkte. Behoben ist, was hier steht; offen
+ist, was unter „Was offen bleibt" steht, jeweils mit dem Issue, dem es gehört.
+
+**Blockierend, behoben.**
+
+- *`Content-Type` erreichte den Draht nicht.* Der Rückfall auf den Typ der
+  gehaltenen Anfrage stand nur in `BodyRef.content_type`, und
+  `upstream::build_outgoing` baut die Anfrage allein aus `request.headers`.
+  **In der Delta-Review aufgehoben**: Der Rückfall selbst ist entfernt, siehe
+  den nächsten Abschnitt. Die Tests prüfen weiter die **Kopfzeile**, nicht das
+  Feld (`content_type_of_the_edit_wins`, `no_content_type_anywhere_invents_none`,
+  `a_deleted_content_type_stays_deleted`).
+- *Kopfzeilen, Methode und Pfad ließen sich nicht bearbeiten.* Freie Kopfzeilen
+  sind zwei `HTextField` und melden jede Eingabe an `setHeader`; eine
+  hinzugefügte Zeile lässt sich benennen und geht mit (`header_table.dart`).
+  Methode und Pfad stehen im Kopf des Editors als Felder, das Ziel bleibt Text
+  mit Schloss (`editor_screen.dart`, `_Header`). Der Query-Reiter bleibt eine
+  **Ansicht**: Die Query ist Teil des Pfad-Felds, und zwei Ablagen für
+  dieselbe Zeichenkette liefen auseinander (Fallstrick dieses Issues).
+- *Ein abgelehntes Senden war stumm.* `EditorHost` wartet jetzt auf `decide`,
+  fängt die `DaemonException` und zeigt ihren `Diagnostic` im Editor
+  (`editor-send-error`); geschlossen wird erst nach einer Antwort ohne Fehler.
+
+**Größer, behoben.** Gleichnamige Kopfzeilen werden über `DraftLocation.headerIndex`
+unterschieden — eine Ersetzung in der zweiten `Via` lässt die erste stehen, und
+`buildDraft` legt einen Fund in die gleichnamige Zeile, die ihn überhaupt
+enthalten kann. Der Entwurf wird verworfen, sobald der Fluss `Recorded` ist
+(er trägt jeden Originalwert im Klartext); nach `TimedOut` bleibt er lesbar,
+das Senden ist aus und sagt warum (`editorTimedOut`). Der Rumpf hat die
+Zeigergesten des Desktops (`TextSelectionGestureDetectorBuilder`: Doppelklick,
+Ziehen, Kontextmenü), gemessen unter `TargetPlatformVariant.only(linux)`. Die
+Pseudonyme gehören der **Sitzung** (`sessionPseudonymsProvider`): Die zweite
+gehaltene Anfrage zählt weiter, derselbe Wert behält seinen Namen über
+Anfragen hinweg.
+
+**Kleiner, behoben.** Der zweite Scan läuft vor dem `tracing`-Makro und damit
+immer, nicht nur unter `RUST_LOG=debug`; `daemon_headers` nimmt
+`HeaderMap::new()` statt `with_capacity`, das oberhalb von rund 24 577
+Einträgen panikte (`thirty_thousand_headers_do_not_stop_the_daemon`); `Host`
+wird wie auf dem Draht ohne Standard-Port aufgezeichnet (`upstream::host_header`
+ist jetzt `pub(crate)` und die eine Stelle dafür); ein ignorierter Fund
+verbraucht keinen Zähler mehr; der Diff-Glow wandert nach freier Eingabe mit
+seinem Pseudonym; eine IME-Komposition behält ihren Unterstrich; Kopfzeilenwerte
+werden als UTF-8 gelesen und nicht über `Header.text` (das Byte für Byte, also
+Latin-1, liest); die Aktionsleiste ist über Fensterbreiten von 1300 bis 1900 px
+ohne Überlauf gemessen; `backlog/CONVENTIONS.md` 4.6 zählt die Bereiche nicht
+mehr auf, sondern verweist auf `AREAS` — die Aufzählung nannte zehn von
+achtzehn, und nur `edit` nachzutragen hätte sie vollständig aussehen lassen.
+
+**Richtiggestellt.** `apply_edit` setzt `content-length` für die
+**Aufzeichnung**; auf dem Draht setzt hyper ihn aus der Länge von
+`Full<Bytes>`, weil `build_outgoing` den eigenen Wert überspringt. Für einen
+leeren Rumpf lässt hyper die Kopfzeile weg: `post_with_empty_body_says_zero`
+gilt für die Aufzeichnung, nicht für den Draht, und der ausstehende
+Integrationstest muss die Kopfzeile prüfen, die hyper schreibt. `EDIT_005` ist im
+Betrieb nicht erreichbar, weil `validate::decision_of` einen Rumpf über
+derselben Grenze schon mit `IPC_004` ablehnt; er bleibt als zweite Wand im
+Proxy, der die Grenze selbst kennt, und ist genau deshalb eine andere Aussage
+als das unbelegte `EDIT_004`.
+
+### Stand nach der Delta-Review (2026-09-18)
+
+Beide Reviewer fanden unabhängig dieselbe Lücke, dazu drei weitere Punkte;
+alle vier sind behoben.
+
+**Der Entwurf überlebte seinen Editor.** Der Horcher auf `Recorded` stand im
+`EditorHost`, und den gibt es nur, solange der Editor offen ist. Nach dem
+Senden und nach `Esc` ist er zu, bevor `Recorded` kommt — erst nach der
+Antwort des Ziels —, und jeder Originalwert blieb im Klartext bis zum Ende der
+Anwendung liegen. Der grüne Test dazu war grün, weil `FakeDaemonClient.decide`
+`Recorded` schon im Aufruf meldet. Jetzt hört `DraftNotifier` selbst: Er baut
+den Horcher in `build` auf und setzt sich bei `Recorded` seines Flusses auf
+`null`. Gemessen mit einem Fake, dessen `decide` nur mitschreibt, und
+`Recorded` erst drei Sekunden später aus dem Skript: einmal nach dem Senden,
+einmal nach `Esc`. Der Horcher ist ein Abo am Container, kein `ref.listen`:
+Riverpod 3 hält die `ref.listen`-Abos eines Providers an, an dem niemand mehr
+horcht, und nach dem Schließen des Editors horcht am Entwurf niemand mehr. Mit
+`ref.listen` blieb der Test nach dem Senden rot, weil dort sonst niemand am
+Ereignisstrom hing und der Strom mit ruhte; in der App hält ihn der Tray wach,
+darauf soll sich das Aufräumen aber nicht verlassen.
+
+**Der Stand der Sitzung hielt Klartext und endete nie.** Der Schlüssel einer
+Auswahl aus `Ctrl+R` ist `manual:<LABEL>:<Text>`, also der Text selbst, und der
+Stand ist `keepAlive`. Er nimmt solche Schlüssel jetzt nicht an; sie bleiben im
+Entwurf und verschwinden mit ihm. Dieselbe Auswahl heißt innerhalb einer Anfrage
+gleich, über Anfragen hinweg nicht mehr — das ist der Preis, und HUM-048 hebt ihn
+auf, weil dort der Daemon hasht. Außerdem gehört der Stand jetzt **einer**
+Sitzung: `DraftSource.session` trägt die `SessionId` des Flusses, und nennt ein
+Entwurf eine andere, beginnt der Stand leer.
+
+**Der Rückfall auf den `Content-Type` des Originals ist entfernt.** Er war die
+Antwort auf den blockierenden Befund der ersten Runde, dass der Rückfall den
+Draht nicht erreichte — und er war schon als Idee falsch: Der Editor beginnt
+immer mit der Zeile des Originals, nennt die Bearbeitung also keinen Typ, hat
+der Mensch die Zeile gelöscht, und die Spezifikation erlaubt das Löschen
+ausdrücklich. Der Rückfall machte die Löschung rückgängig; ein geleerter Rumpf
+ging weiter als `application/json` hinaus. Jetzt gilt allein, was die
+Bearbeitung nennt (`a_deleted_content_type_stays_deleted`).
+
+**Kopfzeilen, die nie ankämen, meldete der Editor als gesendet.** Eine freie
+Zeile namens `Host` oder `Connection` streicht der Daemon, einen Namen, der kein
+Token ist, oder einen Wert mit Zeilenumbruch lässt `headers_from_proto` fallen
+— der Draht blieb sauber, der Bildschirm nicht. `checkHeaders`
+(`draft_ops.dart`) prüft jetzt Token (RFC 9110 5.6.2), Feldwert (5.5) und die
+gesperrten Namen, hält das Senden an und nennt die Zeile. Die Zeile selbst
+bleibt editierbar; eine, die sich beim Umbenennen sperrte, ließe sich weder
+zurückbenennen noch löschen.
+
+**Nachgetragen, kein Fehler dieses Diffs.** `EDIT_001`, `002`, `003` und `005`
+entstehen in `carry_out`, nachdem `decide` schon `applied` gemeldet hat. Sie
+erreichen `editor-send-error` deshalb nie: Der Fluss wird zu `Block` revidiert,
+und der Editor schließt sich. Methode und Pfad prüft die Oberfläche genauso wie
+`check_method` und `check_path`, ein gewöhnlicher Mensch trifft darauf nicht;
+dass ein Befund des Daemons zu einer bearbeiteten Anfrage den Editor erreicht,
+ist eine eigene Nacharbeit.
+
+**Wo die Pause von Riverpod gemessen ist.** Nur der Test „Recorded after the
+editor closed on send clears the draft" fängt den Rückbau von
+`ref.container.listen` auf `ref.listen`. Im Test nach `Esc` horcht der Bildschirm
+der Warteschlange weiter am Ereignisstrom, und die Pause greift dort nie. Der
+Fall „niemand sonst horcht" hängt damit an diesem einen Test.
+
+### Stand nach der dritten Delta-Review (2026-09-18)
+
+Drei kleinere Befunde, alle behoben:
+
+**Ein alter Entwurf setzte den Stand der Sitzung zurück.** `naming()` leerte
+den Stand bei **jeder** anderen Sitzung, auch einer älteren. Ein Entwurf von
+vor einem Neustart des Daemons, der noch offen war, setzte ihn so auf die alte
+Sitzung, und der nächste Entwurf der laufenden setzte ihn wieder zurück: Ihre
+Zähler begannen von vorn, und `<EMAIL_1>` stand in ihr für zwei Werte. Jetzt
+leert nur eine **neuere** Sitzung den Stand. Eine `SessionId` ist eine UUIDv7,
+der Textvergleich der kanonischen Form ordnet nach der Zeit. Ein alter Entwurf
+bekommt einen Namensgeber nur über seiner eigenen Zuordnung, der von deren
+höchstem Namen weiterzählt (`countersOf`), und `remember` verwirft ihn.
+
+**Drei Kopfzeilen fehlten in der Sperre.** Der Daemon streicht vor dem
+Weiterleiten auch `keep-alive`, `te` und `trailer` (`HOP_BY_HOP` in
+`upstream.rs`). Eine freie Zeile mit diesem Namen kam nie an, ohne dass es
+jemand sah. Sie stehen jetzt in `lockedHeaderNames`. Ein Test liest
+`DAEMON_OWNED_HEADERS` und `HOP_BY_HOP` als Text aus dem Rust-Quelltext und
+hält die Dart-Liste in beide Richtungen dagegen. Die Sperre aller `proxy-*` ist
+bewusst weiter als der Daemon und steht so im Kommentar.
+
+**Das Aufräumen hing an einem einzigen `Recorded`.** Ging es in einer Lücke
+verloren, blieben die Originalwerte bis zum Ende der Anwendung liegen, und
+jeder je geöffnete Entwurf hielt einen Horcher am Strom. Jetzt besteht der
+Horcher nur, solange ein Entwurf steht, und schließt sich beim Wegräumen. Auf
+`Lagged` fragt der Entwurf mit `GetFlow` nach seinem Fluss und räumt sich weg,
+wenn der Daemon ihn nicht mehr kennt (`IPC_003`, nach einem Neustart) oder er
+`recorded` oder `failed` ist. Ein Fluss dazwischen behält ihn, sein `Recorded`
+steht noch aus.
+
+**Die zwei TLS-Goldens stehen auf `main`.** HUM-150 hat nach dem Abzweig
+dieses Arbeitsbaums `intercept_diagnostic_tls_dark.png` und `_light.png` um einen
+Rollbalken an der Befund-Leiste ergänzt. Beide Bilder sind hier gegen den Code
+von `main` neu gezogen — die vier Dateien, die `main` in `app/lib` geändert hat,
+lagen dafür vorübergehend im Baum und sind danach byte-genau zurückgelegt. Der
+Streifen des Rollbalkens (x 385..389, y 85..475) ist in beiden Bildern Pixel
+für Pixel der von `main`; es unterscheiden sich allein 3296 Pixel in y 632..651,
+die Zeile mit dem Edit-Control. Mit dem Code von `main` sind alle 14 Goldens von
+`intercept_golden_test.dart` grün. **In diesem Arbeitsbaum allein** schlagen
+die zwei TLS-Goldens deshalb fehl: Ihm fehlt der Rollbalken-Code von HUM-150.
+Nach dem Zusammenführen stimmen Code und Bild überein.
+
+**Was offen bleibt**, jeweils mit der Stelle:
+
+- *Die Aktionen je Fund* — „Ersetzen", „Alle mit diesem Wert ersetzen",
+  „Ignorieren" — und das Hover-Popover am Diff-Glow. Beide hätten im Popover
+  gewohnt; `DraftNotifier.replace`, `replaceAllOfValue` und `ignore` sind
+  gebaut und getestet, haben in `lib/` aber keinen Aufrufer. Der Satz des
+  Ziels „Jeder Fund kann einzeln ersetzt, für alle Vorkommen ersetzt oder
+  ignoriert werden" ist damit **nicht** erfüllt. `HPopover` nimmt heute nur
+  zwei Zeichenketten; das Popover braucht ein Widget-Popover in
+  `packages/ui` und gehört zu HUM-048, das die Zuordnung ohnehin ausbaut.
+- *Aliasse aus `findings.user_terms`.* `EditorHost` reicht keine herein, weil
+  die Anwendung die Konfiguration noch nicht liest: `GetConfig` bekommt seinen
+  Dart-Client mit HUM-069. Bis dahin bekommt ein Nutzerbegriff `<TERM_n>`, und
+  `replaceAllOpen_userTermAlias` prüft nur die reine Funktion.
+- *Die dauerhafte, verschlüsselte Zuordnung* und die Vergabe der Namen durch
+  den Daemon: HUM-048, samt `ReplacementProto` auf Feld 10 und
+  `PROTO_MINOR` 12. Bis dahin liegt die Zuordnung nur im Speicher der Sitzung.
+- *Senden mit offenen Funden*: HUM-049. Der Editor sendet heute ohne Rückfrage,
+  wie viele Funde auch offen sind; der Zähler daneben sagt es.
+- Der Text-Chip „Edited" im Queue-Abgang (`queue_row.dart`), der
+  Integrationstest gegen den Fake-Upstream (`daemon/crates/proxy/tests/`),
+  `remaining_findings` als Feld am `Decided`-Ereignis (braucht `core-types`,
+  Proto und `ipc`; heute steht die Zahl nur im Tracing), und der Rescan mit
+  300 ms Debounce nach freier Eingabe (heute wandern offene Rumpf-Funde mit
+  ihrem Treffertext mit und werden ignoriert, sobald er verschwindet oder
+  mehrdeutig wird).
 
 ---
 

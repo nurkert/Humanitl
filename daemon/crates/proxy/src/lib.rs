@@ -53,6 +53,7 @@ pub mod body;
 pub mod ca;
 pub mod connect;
 pub mod core;
+pub mod edit;
 pub mod egress;
 pub mod findings;
 pub mod handler;

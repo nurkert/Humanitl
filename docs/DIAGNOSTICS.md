@@ -30,6 +30,7 @@ Entfernen eines Codes.
 | cli | `CLI` | 001 | 009 | Kommandozeile und ihre Vorbedingungen |
 | ui | `UI` | 001 | 009 | Oberflaeche und was ihr die Arbeitsumgebung verweigert |
 | agent | `AGENT` | 001 | 009 | Agent-Adapter: Startkommando, Vorlagen, Vorprüfung vor dem Start |
+| edit | `EDIT` | 001 | 009 | Die bearbeitete Anfrage einer `AllowEdited`-Entscheidung (HUM-047) |
 
 ## Codes
 
@@ -1106,4 +1107,38 @@ Agent-Kommando in der Sandbox nicht erreichbar
 **Auslöser.** Gesucht wird zuerst in der Sandbox: ihr Suchpfad (`sandbox.env` vor `[env]` des Profils), ihre Einhängungen und die Verweise des Profils, relative Einträge gegen `[mounts].work.dst`. Erst wenn dort nichts liegt, gilt der Host, und der Befund nennt beides. Zwei Fälle: das Kommando liegt unter keiner Einhängung, oder es liegt unter einer, deren Verzeichnis der Suchpfad nicht nennt. Was sich nicht entscheiden lässt, erzeugt keinen Befund (HUM-139).
 
 **Fix.** `CopyCommand`, das es an eine eingehängte Stelle installiert, oder `ChangeSetting` auf `sandbox.env.PATH`, wenn die Einhängung steht und nur der Suchpfad fehlt.
+
+### Bereich edit
+
+#### EDIT_001
+
+Ziel der bearbeiteten Anfrage weicht ab
+
+**Auslöser.** Host, Port oder Schema der bearbeiteten Anfrage weichen nach der Normalisierung von der gehaltenen ab.
+
+**Fix.** Kein Fix: Wer ein anderes Ziel will, stellt eine neue Anfrage; über diese hier hat niemand für dieses Ziel entschieden.
+
+#### EDIT_002
+
+Methode der bearbeiteten Anfrage ungültig
+
+**Auslöser.** Die Methode ist leer, länger als 16 Zeichen oder enthält etwas anderes als Großbuchstaben.
+
+**Fix.** Kein Fix-Knopf: Der Text nennt die abgelehnte Methode; die Oberfläche schreibt sie in Großbuchstaben.
+
+#### EDIT_003
+
+Pfad der bearbeiteten Anfrage ungültig
+
+**Auslöser.** Der Pfad beginnt nicht mit `/`, oder er enthält ein Leerzeichen oder ein Steuerzeichen.
+
+**Fix.** Kein Fix-Knopf: Der Text nennt die Stelle; Query-Werte gehören URL-kodiert.
+
+#### EDIT_005
+
+Bearbeiteter Body über der Grenze
+
+**Auslöser.** Der Body der bearbeiteten Anfrage ist größer als die Grenze, gegen die der Hold gepuffert hat (`limits.hold_body_cap_bytes`).
+
+**Fix.** `ChangeSetting` auf `limits.hold_body_cap_bytes`, oder weniger schicken.
 
