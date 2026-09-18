@@ -3235,7 +3235,15 @@ class _SeededFlow {
               version: 'HTTP/1.1',
             )
           : null,
-      responseBody: responseBytes.isEmpty ? null : responseRef,
+      // Dieselbe Bedingung wie beim Kopf darüber, damit die beiden nicht
+      // auseinanderlaufen. Der Daemon setzt `response_body` genau dann,
+      // wenn eine Antwortnachricht aufgezeichnet ist, und dann auch mit
+      // null Bytes (ein 204 etwa); dieses Szenario hat für jeden Status
+      // ungleich 0 eine solche Nachricht, deshalb steht sie hier am
+      // Status. Der Status allein ist dafür kein Beweis: ein geblockter
+      // Flow, eine Meta-Anfrage und ein `GetFlow` auf einen laufenden
+      // Flow haben keine Antwortnachricht.
+      responseBody: flow.status == 0 ? null : responseRef,
       request: HttpRequest(
         method: method,
         scheme: flow.scheme,

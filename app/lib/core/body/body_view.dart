@@ -67,14 +67,32 @@ class BodyView extends ConsumerStatefulWidget {
     required this.body,
     required this.headers,
     required this.findings,
+    required this.pending,
     super.key,
   });
 
   /// Der Flow, zu dem der Rumpf gehört.
   final FlowId flowId;
 
-  /// Der Verweis auf den Rumpf, oder null, solange das Detail unterwegs ist.
+  /// Der Verweis auf den Rumpf, oder null, wenn es keinen gibt.
+  ///
+  /// Null zusammen mit [pending] heißt „die Seite ist noch unterwegs"; null
+  /// ohne [pending] heißt „diese Seite hat keinen Rumpf" und bekommt denselben
+  /// Satz wie ein leerer Rumpf.
   final BodyRef? body;
+
+  /// True, solange die Seite, zu der der Rumpf gehört, noch einläuft.
+  ///
+  /// Die Warteschlange setzt das, solange das Detail zum Flow keinen Wert hat,
+  /// die History, solange an der Zeile noch etwas ankommen kann
+  /// (`responseIsFinal`). Nur dann wird ein fehlender Rumpf als Warten
+  /// gezeichnet; sonst ist er eine Aussage, und die beiden dürfen nie gleich
+  /// aussehen (`docs/UX.md` 2.11).
+  ///
+  /// Ohne Vorgabewert, und das mit Absicht: die Vorgabe wäre „behaupten", und
+  /// eine Aufrufstelle, die das Flag vergisst, machte aus dem Warten eine
+  /// Aussage über einen Rumpf, den niemand gesehen hat.
+  final bool pending;
 
   /// Die Kopfzeilen der Seite, zu der der Rumpf gehört; aus ihnen kommt der
   /// `Content-Encoding`, nach dem ausgepackt wird.
@@ -108,15 +126,33 @@ class _BodyViewState extends ConsumerState<BodyView> {
     final AppLocalizations l10n = context.l10n;
     final HTokens tokens = HTheme.of(context);
     final BodyRef? body = widget.body;
+    // Ein Rumpf, der fertig ist und nichts enthält, und eine Seite, die
+    // keinen Rumpf hat, sind dieselbe Aussage und bekommen denselben Satz —
+    // auf beiden Bildschirmen, damit das Detail der History dafür keinen
+    // eigenen Weg mehr braucht (HUM-154). Der Satz trägt `fg1` oder besser;
+    // `fg2` misst 3,02:1 auf `bg3` und gehört den deaktivierten Controls
+    // (`docs/UX.md` 6, Sekundärtext).
+    final Widget nothingToShow = Text(
+      l10n.interceptBodyEmpty,
+      key: const Key('body-empty'),
+      style: tokens.typography.ui12.tinted(tokens.colors.fg1),
+    );
     if (body == null) {
-      // Solange das Detail fehlt, wird nichts behauptet: weder „kein Rumpf"
-      // noch eine Größe (`docs/UX.md` 2.11).
+      // Ohne Verweis kennt niemand Größe und Art, also nennt der Titel keine:
+      // `interceptSectionBodyPending` ist das blanke Wort, und eine „0 B"
+      // wäre eine Zahl, die nichts gemessen hat
+      // (`backlog/CONVENTIONS.md` 4.13). Den Unterschied sagt das, was
+      // darunter steht — Skelett, solange die Seite einläuft, sonst der Satz
+      // (`docs/UX.md` 2.11).
       return HCollapsible(
         title: l10n.interceptSectionBodyPending,
-        child: const HSkeleton(
-          rows: bodyViewSkeletonRows,
-          rowHeight: HSize.rowBody,
-        ),
+        child: widget.pending
+            ? const HSkeleton(
+                key: Key('body-pending'),
+                rows: bodyViewSkeletonRows,
+                rowHeight: HSize.rowBody,
+              )
+            : nothingToShow,
       );
     }
     final String contentType = body.contentType.isEmpty
@@ -125,10 +161,7 @@ class _BodyViewState extends ConsumerState<BodyView> {
     return HCollapsible(
       title: l10n.interceptSectionBody(formatBytes(body.size), contentType),
       child: body.isEmpty
-          ? Text(
-              l10n.interceptBodyEmpty,
-              style: tokens.typography.ui12.tinted(tokens.colors.fg2),
-            )
+          ? nothingToShow
           : _Loaded(
               flowId: widget.flowId,
               source: BodySource.of(
