@@ -109,4 +109,10 @@ abstract final class DiagnosticCodes {
   /// raises it for an `Audit` answer that says `ok: false` without a finding,
   /// because a refusal without a reason is still a refusal (HUM-051).
   static const String capabilityUnavailable = 'IPC_006';
+
+  /// The audit export could not be written. The daemon raises it for a target
+  /// that exists or a write that fails (HUM-070, HUM-156); the client raises
+  /// it when no free file name is left in the chosen folder, before the
+  /// daemon is asked (HUM-158).
+  static const String auditExportUnwritable = 'AUDIT_008';
 }
