@@ -4,11 +4,19 @@ Ziel des Sprints: Der Nutzer kann eine gehaltene Anfrage pseudonymisieren, bevor
 
 Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnostic`, `FlowState` (HUM-004, HUM-063), `humanitl-findings` Tier 1 (HUM-025), `humanitl-recorder` mit Schema aus BACKLOG.md 3.4 (HUM-026), `humanitl-config` mit Schema und Tiers (HUM-062), CLI-Grundgerüst (HUM-064), Intercept-Screen mit Aktionsleiste (HUM-020, HUM-028), Body-Ansichten (HUM-030).
 
+> **Umfangsentscheidung 2026-09-18: rudimentäre Pseudonymisierung im MVP.** Der Nutzer hat entschieden, das MVP zu beschleunigen und für die Pseudonymisierung mit einer einfachen Fassung auszukommen. Der Editor aus HUM-047 ist gemergt und bleibt: Funde ersetzen, Auswahl mit `Ctrl+R` pseudonymisieren, Kopfzeilen, Methode und Pfad bearbeiten, Prüfung im Daemon. Die Zuordnung Pseudonym zu Original lebt im Speicher und gilt je Sitzung.
+>
+> - **Nach dem MVP verschoben** (BACKLOG.md Abschnitt 9, Punkt 15 und 4): **HUM-048** (dauerhafte, verschlüsselte Zuordnungstabelle, Schlüssel im System-Keyring, Mapping-Panel, Export), **HUM-079** (Rücktausch der Pseudonyme in Antworten) und aus HUM-047 das Popover am Diff-Glow mit den Aktionen je Fund. Ihre Spezifikationen bleiben unten stehen, damit die Arbeit später nicht neu gedacht werden muss; sie zählen nicht mehr zu Sprint 4.
+> - **Verkleinert:** **HUM-049** baut nur die Inline-Pause beim Senden mit offenen Funden („Trotzdem senden", „Pseudonymisieren", „Blockieren") und die harte Sperre `HOLD_004` für bestätigte Geheimnisse. „Ignorieren" und „Immer ignorieren" je Fund samt Allowlist entfallen im MVP. Die Abhängigkeit von HUM-048 entfällt.
+> - **Angepasst:** **HUM-055** prüft den verkleinerten Umfang: Pseudonymisieren, Senden, der Upstream sieht nur Pseudonyme, History zeigt „Editiert". Die Prüfungen „Mapping enthält drei Einträge" und „ein Export enthält keine Originale" entfallen mit HUM-048.
+> - **Was das kostet:** Ohne HUM-079 liest der Agent in Antworten die Platzhalter (`<EMAIL_1>`) statt der Originale. Ohne HUM-048 ist die Zuordnung nach einem Neustart der App verloren; man kann später nicht mehr nachschlagen, wofür ein Platzhalter stand.
+> - **Was es spart** (Schätzung, nicht gemessen): zwei M-Issues mit ihren Review-Runden und etwa die Hälfte von HUM-049, zusammen ungefähr ein bis zwei Arbeitstage bis zum MVP.
+
+
 | ID | Titel | Größe | Abhängigkeiten |
 |---|---|---|---|
 | HUM-047 | Pseudonymisierungs-Editor | L | HUM-025, HUM-028, HUM-030 |
-| HUM-048 | Pseudonym-Mapping und Schlüsselverwaltung | M | HUM-026, HUM-047 |
-| HUM-049 | Senden mit offenen Findings | S | HUM-047, HUM-048, HUM-062 |
+| HUM-049 | Senden mit offenen Findings (verkleinert, siehe Umfangsentscheidung) | S | HUM-047, HUM-062 |
 | HUM-050 | Audit-Hash-Kette | M | HUM-004, HUM-026, HUM-048 |
 | HUM-051 | Audit-Screen | S | HUM-050 |
 | HUM-052 | i18n Deutsch und Englisch | M | HUM-019 |
@@ -16,7 +24,6 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-070 | CLI config, audit, daemon | S | HUM-064, HUM-050, HUM-062 |
 | HUM-077 | Ein-Klick-Installation | M | HUM-053, HUM-075 |
 | HUM-078 | Paritäts-Tabelle und CI-Check | S | HUM-070, HUM-059 |
-| HUM-079 | Rücktausch von Pseudonymen in Text-Antworten | M | HUM-048 |
 | HUM-053 | Packaging deb, AppImage, systemd | M | HUM-070 |
 | HUM-054 | Golden- und Widget-Tests | M | HUM-047, HUM-052, HUM-069 |
 | HUM-055 | Demo-Skript M4 | S | alle oben |
@@ -303,7 +310,7 @@ Widget (`app/test/features/editor/editor_screen_test.dart`, Fake-Daemon):
 ### Akzeptanzkriterien
 - [x] `E` auf einer gehaltenen Anfrage öffnet den Editor im mittleren Pane, `Esc` kehrt zur Karte zurück, Entwurf bleibt. **Gemessen am 2026-09-13**: `app/test/features/editor/editor_screen_test.dart`, `open_with_E_shows_editor` (nach `E` steht `editor-send`, `intercept-allow` ist weg) und `esc_keeps_draft` (Rumpf von Hand auf „changed by hand" gesetzt, `Esc`, wieder `E`: derselbe Text, `dirty == true`).
 - [x] „Alle ersetzen" ersetzt jeden offenen Fund, gleiche Werte bekommen dasselbe Pseudonym, Format `<TYPE_n>`. **Gemessen**: `replace_all_glows` (drei Funde ⇒ `<EMAIL_1> <EMAIL_2> <EMAIL_3>`), `replaceAllOpen_countersPerType` (2 E-Mails, 1 IBAN ⇒ `<EMAIL_1> <EMAIL_2> <IBAN_1>`), `the same value gets the same pseudonym across locations`, `replaceAllOfValue_sameHashSamePseudonym` (Kopfzeile und Rumpf ⇒ beide `<EMAIL_1>`).
-- [ ] Ersetzte Stellen sind mit Diff-Glow markiert, Hover zeigt maskiertes Original und Pseudonym. **Halb.** Der Diff-Glow steht und ist gemessen: `replace_all_glows` zählt drei Markierungen `HEditorDecorationKind.replaced`, und `HEditorDecorations` malt sie mit Akzent-Unterstrich (1 px) plus Fläche in 10 % Alpha. **Was fehlt, ist das Hover-Popover.** Statt seiner zeigt die `MappingStrip` unter dem Editor Pseudonym, Art und maskiertes Original (`the mapping shows the masked original, never the value`: `an************om` steht da, `anna@example.com` nirgends). Das Popover braucht eine Zeiger-Trefferfläche über einem `TextSpan` — `HPopover` nimmt heute nur zwei Zeichenketten, kein Widget —, und HUM-048 baut die Zuordnung ohnehin aus; es gehört dorthin.
+- [ ] Ersetzte Stellen sind mit Diff-Glow markiert, Hover zeigt maskiertes Original und Pseudonym. **Hover-Teil nach dem MVP verschoben** (Umfangsentscheidung 2026-09-18, BACKLOG.md 9 Punkt 15); der Diff-Glow selbst ist gebaut. **Halb.** Der Diff-Glow steht und ist gemessen: `replace_all_glows` zählt drei Markierungen `HEditorDecorationKind.replaced`, und `HEditorDecorations` malt sie mit Akzent-Unterstrich (1 px) plus Fläche in 10 % Alpha. **Was fehlt, ist das Hover-Popover.** Statt seiner zeigt die `MappingStrip` unter dem Editor Pseudonym, Art und maskiertes Original (`the mapping shows the masked original, never the value`: `an************om` steht da, `anna@example.com` nirgends). Das Popover braucht eine Zeiger-Trefferfläche über einem `TextSpan` — `HPopover` nimmt heute nur zwei Zeichenketten, kein Widget —, und HUM-048 baut die Zuordnung ohnehin aus; es gehört dorthin.
 - [x] `Ctrl+R` auf einer Auswahl erzeugt ein `<CUSTOM_n>` oder gelabeltes Pseudonym. **Gemessen**: `ctrl_r_pseudonymises_the_selection` (Auswahl `[0, 9)`, Label „client" ⇒ `<CLIENT_1> writes`), `replaceSelection_createsCustomFinding` (Label `PROJECT` ⇒ `<PROJECT_1>`, Fund `custom:PROJECT`, Status `replaced`), `an empty label becomes CUSTOM`.
 - [x] `Host` und `Content-Length` sind im Header-Tab sichtbar gesperrt. **Neu gemessen am 2026-09-18**, nachdem der Review gezeigt hatte, dass die erste Messung leer war — damals war *jede* Zeile gesperrt, weil keine sich bearbeiten ließ. Jetzt unterscheiden sich die beiden Arten: `a locked header has no field at all` (die Zeilen `Host` und `Content-Length` haben kein `editor-header-name-*`), `an unlocked header can be typed into` (in `Content-Type` getippt, landet im Entwurf), `an added header can be named and then travels`, `host and content-length are visibly locked` (Schloss-Glyph, „set by Humanitl", kein Löschknopf).
 - [x] Senden mit geändertem Host ist im UI unmöglich und wird vom Daemon mit `EDIT_001` abgelehnt (Test). **Gemessen**: Im UI ist die Authority ein `Text` mit Schloss, kein Feld (`editor-authority`). Im Daemon `daemon/crates/proxy/src/edit.rs`: `authority_change_rejected` (`evil.io` ⇒ `EDIT_001`), `port_change_rejected` (8443), `scheme_downgrade_rejected` (`https` nach `http`), `authority_case_insensitive_ok` (`API.GITHUB.COM.` geht durch).
@@ -628,6 +635,8 @@ Nach dem Zusammenführen stimmen Code und Bild überein.
 ## HUM-048 · Pseudonym-Mapping und Schlüsselverwaltung
 Sprint: 4 · Größe: M · Abhängigkeiten: HUM-026, HUM-047 · Blockiert: HUM-049, HUM-050, HUM-055
 
+> **Verschoben nach dem MVP** (Umfangsentscheidung 2026-09-18, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
+
 ### Kontext
 Setzt ADR-008 (Mapping getrennt, verschlüsselt, nur host-seitig) und BACKLOG.md 4.2 sowie den DSGVO-Hinweis um: Was der Editor tut, ist Pseudonymisierung (Art. 4 Nr. 5 DSGVO), keine Anonymisierung. Die Zuordnung Pseudonym ↔ Original ist selbst personenbezogen und muss geschützt sein. Gleichzeitig muss sie stabil und vollständig sein, damit der Nutzer die Antworten des Agenten lesen kann und damit M8 (De-Pseudonymisierung von Responses) später ohne Datenmodell-Änderung möglich ist. Dieses Issue führt außerdem den `KeyStore` ein, den HUM-050 für den Audit-HMAC mitbenutzt.
 
@@ -802,6 +811,8 @@ Widget: `mapping_panel_shows_masked_only` (kein Klartext im Widget-Baum, Suche n
 
 ## HUM-049 · Senden mit offenen Findings
 Sprint: 4 · Größe: S · Abhängigkeiten: HUM-047, HUM-048, HUM-062 · Blockiert: HUM-055
+
+> **Verkleinert** (Umfangsentscheidung 2026-09-18, siehe Kopf dieser Datei): gebaut werden die Inline-Pause mit „Trotzdem senden", „Pseudonymisieren", „Blockieren" und die harte Sperre `HOLD_004`. „Ignorieren", „Immer ignorieren" und die Allowlist entfallen im MVP; Kriterien dazu werden als „verschoben" markiert, nicht abgehakt.
 
 ### Kontext
 Usability-Review, Abschnitt 3 und 5 in BACKLOG.md 5: Der Nutzer darf nicht genervt, aber auch nicht überrascht werden. Bei offenen Funden muss „Allow" sichtbar anders aussehen, und es muss eine Pause geben, keine Modal-Dialoge. Das Security-Review verlangt, dass die Durchsetzung im Daemon liegt, nicht im UI. Dieses Issue liefert den Flow und das Setting `hold.hard_block_checksum_secrets`.
@@ -1809,6 +1820,8 @@ Die Goldens und Widget-Tests sind der Inhalt. Meta-Test: `golden_variants_comple
 ## HUM-055 · Demo-Skript M4
 Sprint: 4 · Größe: S · Abhängigkeiten: alle Sprint-4-Issues · Blockiert: HUM-060
 
+> **Angepasst** (Umfangsentscheidung 2026-09-18, siehe Kopf dieser Datei): Die Prüfungen „Mapping enthält drei Einträge" und „ein Export enthält keine Originale" entfallen mit HUM-048.
+
 ### Kontext
 Jeder Sprint endet mit einem grünen Demo-Skript in CI (BACKLOG.md Abschnitt 8). M4 beweist: Editor, Mapping, Audit, Sprache, Settings und Packaging arbeiten zusammen.
 
@@ -1973,6 +1986,8 @@ BACKLOG.md ADR-018; `docs/ARCHITECTURE.md` 3b; HUM-059.
 
 ## HUM-079 · Rücktausch von Pseudonymen in Text-Antworten
 Sprint: 4 · Größe: M · Abhängigkeiten: HUM-048, HUM-026 · Blockiert: HUM-055
+
+> **Verschoben nach dem MVP** (Umfangsentscheidung 2026-09-18, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
 
 ### Kontext
 Review-Befund: Wer `<EMAIL_1>` in die Anfrage schreibt, bekommt Antworten, die `<EMAIL_1>` enthalten. Ohne Rücktausch sind Pseudonyme für den Agenten unbrauchbar und landen in `/work`. Das Session-Mapping (HUM-048) existiert bereits, der einfache Fall ist billig.
