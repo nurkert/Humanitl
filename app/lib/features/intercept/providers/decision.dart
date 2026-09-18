@@ -20,6 +20,7 @@ import '../../../core/ipc/client_diagnostics.dart';
 import '../../../core/ipc/client_providers.dart';
 import '../../../core/ipc/daemon_client.dart';
 import '../rule_sentence.dart';
+import 'findings_pause.dart';
 import 'flows.dart';
 import 'note.dart';
 import 'selection.dart';
@@ -53,7 +54,8 @@ enum RefusalReason {
   apexUnknown,
 
   /// The release valve was clicked but not held, while a finding is
-  /// unresolved (`docs/UX.md` 4.7).
+  /// unresolved in one of several selected requests (`docs/UX.md` 4.7). A
+  /// single request opens the findings pause instead (HUM-049).
   holdToSend,
 }
 
@@ -367,11 +369,14 @@ class InterceptDecision extends _$InterceptDecision {
   /// [HMotion.rearm]. [remember] forces the rule of the draft even when the
   /// grid is closed; that is what holding the release valve does.
   ///
-  /// [confirmed] says that the person did more than click: they held the
-  /// control down, or they used a key, which cannot slip sideways into the
-  /// wrong control. While a finding is unresolved, only a confirmed send goes
-  /// through (`docs/UX.md` 4.7).
-  Future<void> allow({bool remember = false, bool confirmed = false}) async {
+  /// [acknowledged] says that the person has seen what is unresolved and
+  /// sends anyway: they held the release valve down while the sentence under
+  /// it named the finding (`docs/UX.md` 4.7), or they chose "Send anyway" in
+  /// the findings pause. Anything less -- a click, `Enter`, `A` -- opens the
+  /// pause instead of sending while a finding is unresolved, and nothing
+  /// leaves (HUM-049). The pause is a stop inside the card, not a modal
+  /// (`docs/UX.md` 5.4).
+  Future<void> allow({bool remember = false, bool acknowledged = false}) async {
     final Flow? flow = _decidable();
     if (flow == null) {
       return;
@@ -380,8 +385,8 @@ class InterceptDecision extends _$InterceptDecision {
       _refuse(RefusalReason.notArmed);
       return;
     }
-    if (!confirmed && ref.read(selectedFindingsProvider).isNotEmpty) {
-      _refuse(RefusalReason.holdToSend);
+    if (!acknowledged && ref.read(selectedFindingsProvider).isNotEmpty) {
+      ref.read(openFindingsPauseProvider.notifier).open(flow.id);
       return;
     }
     final RememberState draft = ref.read(rememberDraftProvider);
@@ -456,13 +461,20 @@ class InterceptDecision extends _$InterceptDecision {
   /// (`docs/UX.md` 5.4). [remember] applies the rule of the draft once, with
   /// the first flow; the others are decided explicitly, so none of them
   /// depends on a rule that may not exist yet.
+  ///
+  /// [confirmed] is the care a group with a finding asks for: the valve held
+  /// down, or a key, which cannot slip sideways into the wrong control
+  /// (`docs/UX.md` 4.7). [acknowledged] is the same for one request, where a
+  /// key is not enough and the findings pause stands in between (see
+  /// [allow]).
   Future<void> allowMany(
     List<Flow> flows, {
     bool remember = false,
     bool confirmed = false,
+    bool acknowledged = false,
   }) async {
     if (flows.length == 1) {
-      await allow(remember: remember, confirmed: confirmed);
+      await allow(remember: remember, acknowledged: acknowledged);
       return;
     }
     if (!_batchable(flows)) {
@@ -694,6 +706,7 @@ class InterceptDecision extends _$InterceptDecision {
   void _consumeDrafts() {
     ref.read(rememberDraftProvider.notifier).reset();
     ref.read(blockNoteProvider.notifier).close();
+    ref.read(openFindingsPauseProvider.notifier).close();
   }
 
   /// The selected flow, or null with the reason recorded.
@@ -965,6 +978,27 @@ FindingSet selectedFindings(Ref ref) {
       if (!finding.resolved) finding,
   ];
   return FindingSet(count: open.length, known: open);
+}
+
+/// Whether the findings pause stands open right now (HUM-049).
+///
+/// The one predicate for the pause: the action bar draws it from here and the
+/// keys `S`, `P` and `Esc` act only while it is true. It asks for everything
+/// the pause needs: the pause was opened over exactly this request, the
+/// request is still held and the whole selection, and it still has an open
+/// finding. When the last finding is resolved, or the flow is decided or
+/// leaves the selection, the pause is gone for the eye and for the keys at
+/// the same moment.
+@Riverpod(keepAlive: true)
+bool findingsPauseVisible(Ref ref) {
+  final FlowId? paused = ref.watch(openFindingsPauseProvider);
+  final Flow? flow = ref.watch(selectedFlowProvider);
+  return paused != null &&
+      flow != null &&
+      flow.id == paused &&
+      flow.isHeld &&
+      ref.watch(selectedFlowsProvider).flows.length == 1 &&
+      ref.watch(selectedFindingsProvider).isNotEmpty;
 }
 
 /// The registrable domain of the selected flow, as the daemon knows it.

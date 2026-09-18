@@ -347,11 +347,12 @@ Vor „Merken" steht die Regel als Satz, damit sie geprüft werden kann, die Vor
 
 ### 4.7 Wenn ein Secret mitgeht
 
-Eine Anfrage, die wegen eines Findings gehalten wird, ist der eine Fall, der nicht ruhig sein darf. Sie darf nicht aussehen wie eine Routine-Anfrage, und sie bekommt deshalb drei Abweichungen vom Normalfall — und nur diese drei:
+Eine Anfrage, die wegen eines Findings gehalten wird, ist der eine Fall, der nicht ruhig sein darf. Sie darf nicht aussehen wie eine Routine-Anfrage, und sie bekommt deshalb vier Abweichungen vom Normalfall — und nur diese vier:
 
 - **In der Zeile** steht der Findings-Chip in `HColors.secret` statt in `fg2`. Das ist die einzige Chroma, die eine ruhende Queue-Zeile tragen darf; der Rest der Zeile bleibt neutral.
 - **In der Aktionsleiste** nennt der Haltegrund Art und Fundort in Klartext (4.3), und die Release Valve wechselt auf Amber und beschriftet sich um: en „Send with 2 findings", de „Senden mit 2 Findings" (so bereits in HUM-049 vorgesehen).
 - **Erlauben verlangt dieselbe Halte-Bestätigung wie Blockieren**, solange mindestens ein Finding ungelöst ist, plus einen Satz, der die Folge benennt: en „An AWS access key goes to api.example.com", de „Ein AWS-Zugangsschlüssel geht an api.example.com". Erst wer weiß, was wohin geht, hält gedrückt.
+- **Ein Klick, `Enter` oder `A` öffnen bei einer einzelnen Anfrage die Pause mit den offenen Funden** (HUM-049), statt nur abzuweisen. Sie ersetzt den unteren Teil der Karte, wächst in 200 ms auf und listet je Fund Art, gekürzten Wert und Ort; am Fuß stehen „Trotzdem senden" (`S`), „Pseudonymisieren" (`P`, öffnet den Editor mit allen Funden ersetzt) und „Blockieren" (`B`), `Esc` schließt sie. Die Halte-Bestätigung bleibt der Weg ohne Pause. Über eine Gruppe gibt es keine Pause: Dort fehlt die Liste der Funde, und es bleibt beim Halten oder einer Taste.
 
 Ausdrücklich **kein** Modal. Die Regel „nie ein Modal für eine einzelne Entscheidung" (5.4) gilt hier weiter; ein Modal wäre auch der falsche Schutz, weil es sich wegklicken lässt, ohne den Satz zu lesen. Der Schutz sitzt in der Zeit, nicht in der Fläche (5.4). Abweichung in Abschnitt 8.
 

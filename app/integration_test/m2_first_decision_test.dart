@@ -497,7 +497,17 @@ Future<void> _run(
     () => container.read(allowArmedProvider),
     what: 'the valve armed itself for the single request',
   );
+  // Mit einem offenen Fund sendet `Enter` nicht, sondern öffnet die Pause in
+  // der Karte; erst `S` („Trotzdem senden") schickt die Anfrage (HUM-049).
   await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+  await tester.pump();
+  await pumpUntil(
+    tester,
+    () =>
+        find.byKey(const Key('intercept-findings-pause')).evaluate().isNotEmpty,
+    what: 'Enter opened the findings pause instead of sending',
+  );
+  await tester.sendKeyEvent(LogicalKeyboardKey.keyS);
   await tester.pump();
   await pumpUntil(
     tester,

@@ -50,6 +50,9 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-156 | Der Daemon beantwortet `Audit` nicht | M | HUM-050, HUM-070, HUM-051 |
 | HUM-157 | `audit.retention_days` hat keinen Leser | M | HUM-050, HUM-051, HUM-156 |
 | HUM-158 | Ein Export ohne freien Namen meldet `IPC_006` | S | HUM-051, HUM-070 |
+| HUM-159 | Die harte Sperre blockt, bevor jemand pseudonymisieren kann | M | HUM-049, HUM-156 |
+| HUM-160 | „Trotzdem senden" hinterlässt keine Spur | M | HUM-049, HUM-050 |
+| HUM-161 | Der Editor sendet verbliebene Funde ohne Rückfrage | S | HUM-047, HUM-049 |
 | HUM-162 | Der Kopf der Kette hat über den Daemon keinen Zeitpunkt | S | HUM-156 |
 | HUM-163 | Jede Seite der Audit-Tabelle liest die ganze Kette | M | HUM-156 |
 
@@ -820,25 +823,34 @@ Widget: `mapping_panel_shows_masked_only` (kein Klartext im Widget-Baum, Suche n
 ---
 
 ## HUM-049 · Senden mit offenen Findings
-Sprint: 4 · Größe: S · Abhängigkeiten: HUM-047, HUM-048, HUM-062 · Blockiert: HUM-055
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-047, HUM-062 · Blockiert: HUM-055
 
 > **Verkleinert** (Umfangsentscheidung 2026-09-18, siehe Kopf dieser Datei): gebaut werden die Inline-Pause mit „Trotzdem senden", „Pseudonymisieren", „Blockieren" und die harte Sperre `HOLD_004`. „Ignorieren", „Immer ignorieren" und die Allowlist entfallen im MVP; Kriterien dazu werden als „verschoben" markiert, nicht abgehakt.
+>
+> **Aufteilung 2026-09-19** (nach den Reviews von HUM-049): Kriterium 3 — die Anfrage halten, „Senden nicht möglich" anzeigen und `Decide(Allow)` über gRPC mit `HOLD_004` ablehnen — geht an **HUM-159**; der Teil von Kriterium 2, der `unresolved_findings` in der History verlangt, geht an **HUM-160**. Gründe: Der Daemon blockt eine Anfrage mit bestätigtem Geheimnis unter `hold.hard_block_checksum_secrets` seit HUM-023 sofort und ohne Halten; das ist strenger als die Spezifikation, weil auch eine Regel `allow` und die Durchreiche daran nicht vorbeikommen. Die Weigerung an `Decide(Allow)` gehört nach `daemon/crates/ipc/src/server.rs`, und diese Datei baut HUM-156 gleichzeitig um. HUM-049 liefert deshalb `HOLD_004` an der sofortigen Sperre und an einer bearbeiteten Fassung (`backlog/CONVENTIONS.md` 4.33). Beide Folge-Issues bleiben im MVP und blockieren HUM-055.
 
 ### Kontext
-Usability-Review, Abschnitt 3 und 5 in BACKLOG.md 5: Der Nutzer darf nicht genervt, aber auch nicht überrascht werden. Bei offenen Funden muss „Allow" sichtbar anders aussehen, und es muss eine Pause geben, keine Modal-Dialoge. Das Security-Review verlangt, dass die Durchsetzung im Daemon liegt, nicht im UI. Dieses Issue liefert den Flow und das Setting `hold.hard_block_checksum_secrets`.
+Usability-Review, Abschnitt 3 und 5 in BACKLOG.md 5: Der Nutzer darf nicht genervt, aber auch nicht überrascht werden. Bei offenen Funden muss „Allow" sichtbar anders aussehen, und es muss eine Pause geben, keine Modal-Dialoge. Das Security-Review verlangt, dass die Durchsetzung im Daemon liegt, nicht im UI. Dieses Issue liefert die Pause und die harte Sperre `HOLD_004`; das Setting `hold.hard_block_checksum_secrets` gab es schon seit HUM-023.
 
 ### Ziel
-Hat eine gehaltene Anfrage offene Findings, heißt der Allow-Button „Senden mit 2 Findings" und ist amber. Ein Klick (oder Enter) öffnet statt des Sendens eine Inline-Pause innerhalb der Karte: Liste der offenen Funde mit Typ und maskiertem Wert, drei Buttons „Trotzdem senden", „Pseudonymisieren" (öffnet Editor mit „Alle ersetzen" bereits ausgeführt), „Blockieren". Jeder Fund hat „Ignorieren" (für diese Anfrage) und „Immer ignorieren" (Allowlist). Ist `hold.hard_block_checksum_secrets = true`, verweigert der Daemon `Allow` für Anfragen mit ungelösten Findings der Tier `Checksum` in den Kinds `ApiKey`, `Jwt`, `Iban`, `CreditCard` mit Diagnostic `HOLD_004`; die UI zeigt in diesem Fall „Trotzdem senden" nicht an.
+**Was HUM-049 liefert (Stand 2026-09-19).** Hat eine gehaltene Anfrage offene Findings, heißt der Allow-Button „Senden mit 2 Findings" und ist amber. Ein Klick, `Enter` oder `A` öffnen bei einer einzelnen Anfrage statt des Sendens eine Pause innerhalb der Karte: Liste der offenen Funde mit Art, gekürztem Wert (`display_prefix` des Daemons) und Ort, dazu „Trotzdem senden" (`S`), „Pseudonymisieren" (`P`, öffnet den Editor mit allen Funden ersetzt), „Blockieren" (`B`) und „Zurück" (`Esc`). Das Halten der Freigabe sendet weiter ohne Pause; über eine Gruppe bleibt es beim Halten. Im Daemon trägt die sofortige Sperre unter `hold.hard_block_checksum_secrets` den Befund `HOLD_004`, und dieselbe Prüfung sperrt eine bearbeitete Fassung, die nach dem zweiten Scan noch ein bestätigtes Geheimnis trägt (`backlog/CONVENTIONS.md` 4.32).
+
+**Ziel vor der Aufteilung** (nicht mehr Umfang von HUM-049; „Ignorieren", „Immer ignorieren" nach dem MVP, die Weigerung an `Decide(Allow)` und „Senden nicht möglich" in HUM-159): Hat eine gehaltene Anfrage offene Findings, heißt der Allow-Button „Senden mit 2 Findings" und ist amber. Ein Klick (oder Enter) öffnet statt des Sendens eine Inline-Pause innerhalb der Karte: Liste der offenen Funde mit Typ und maskiertem Wert, drei Buttons „Trotzdem senden", „Pseudonymisieren" (öffnet Editor mit „Alle ersetzen" bereits ausgeführt), „Blockieren". Jeder Fund hat „Ignorieren" (für diese Anfrage) und „Immer ignorieren" (Allowlist). Ist `hold.hard_block_checksum_secrets = true`, verweigert der Daemon `Allow` für Anfragen mit ungelösten Findings der Tier `Checksum` in den Kinds `ApiKey`, `Jwt`, `Iban`, `CreditCard` mit Diagnostic `HOLD_004`; die UI zeigt in diesem Fall „Trotzdem senden" nicht an.
 
 ### Nicht-Ziel
 - Findings in Responses.
 - Automatisches Pseudonymisieren ohne Klick (Regel-Aktion `redact` kommt in einem eigenen Issue nach dem MVP).
 
 ### Betroffene Pfade
-- `app/lib/features/intercept/widgets/action_bar.dart` (ändern)
-- `app/lib/features/intercept/widgets/findings_pause.dart` (neu)
-- `app/lib/features/intercept/providers/decision.dart` (ändern: `acknowledgedFindings`, `ignoreAlways`)
-- `daemon/crates/proxy/src/hold.rs` (ändern: Prüfung vor `Allow`)
+Geliefert:
+- `app/lib/features/intercept/widgets/action_bar.dart`, `app/lib/features/intercept/widgets/findings_pause.dart` (neu), `app/lib/features/intercept/providers/findings_pause.dart` (neu), `app/lib/features/intercept/providers/decision.dart` (`allow({remember, acknowledged})`, `findingsPauseVisibleProvider`), `app/lib/features/intercept/intents.dart`, `app/lib/features/intercept/intercept_screen.dart`
+- `app/lib/features/editor/editor_host.dart`, `app/lib/features/editor/editor_screen.dart` (`replaceAllOnOpen`)
+- `daemon/crates/proxy/src/findings.rs` (`check_allow`, `hard_blocks`), `daemon/crates/proxy/src/handler.rs`, `daemon/crates/proxy/src/edit.rs`
+- `daemon/crates/core-types/src/diagnostics/codes.rs` (`HOLD_004` am Ende), `docs/DIAGNOSTICS.md` (erzeugt), ARB-Dateien
+
+Vor der Aufteilung genannt und nicht angefasst (HUM-160 und nach dem MVP):
+- `app/lib/features/intercept/providers/decision.dart` (`acknowledgedFindings`, `ignoreAlways`)
+- `daemon/crates/proxy/src/hold.rs` (Prüfung vor `Allow`; die Prüfung steht in `findings.rs`, `hold.rs` kennt keine Funde)
 - `daemon/crates/recorder/src/writer.rs` (ändern: `write_findings` schreibt `resolved`) und `daemon/crates/recorder/src/query.rs` (ändern: `findings_of` liest es, Allowlist-Abfrage)
 - `daemon/crates/proxy/src/findings.rs` (Trait `Scanner`) und `daemon/crates/findings/src/registry.rs` (`scan`; ändern: Allowlist beim Scan anwenden)
 - `daemon/crates/config/src/model.rs` (ändern: neues Feld in `HoldConfig`)
@@ -847,7 +859,9 @@ Hat eine gehaltene Anfrage offene Findings, heißt der Allow-Button „Senden mi
 
 ### Spezifikation
 
-**Config**: `hold.hard_block_checksum_secrets: bool`, Default `false`, Tier `advanced`, Beschreibung: „Anfragen mit prüfsummen-verifizierten Secrets (API-Keys, JWT, IBAN, Kreditkarte) können nicht ungeändert gesendet werden." Sicherheitsrelevant, daher im Settings-Screen mit Hinweis.
+> **Stand vor der Aufteilung.** Was hier folgt, ist die ursprüngliche Spezifikation. Geliefert ist davon, was unter „Ziel" steht. `acknowledged_findings`, `unresolved_findings` im `Decided`-Ereignis und im Audit sind **HUM-160**; die Weigerung an `Decide(Allow)`, die Zeile „Senden nicht möglich" der Tabelle und `hard_block_hides_send_anyway` sind **HUM-159**; `ignore_always`, die Allowlist, `allowlisted` und die Knöpfe „Ignorieren" und „Immer ignorieren" je Fund sind **nach dem MVP** (BACKLOG.md Abschnitt 9, Punkt 15). Die Zeile „Editor-Entwurf vorhanden" ist **HUM-161**.
+
+**Config** (gab es schon, HUM-023): `hold.hard_block_checksum_secrets: bool`, Default `false`, Tier `advanced`, Beschreibung: „Anfragen mit prüfsummen-verifizierten Secrets (API-Keys, JWT, IBAN, Kreditkarte) können nicht ungeändert gesendet werden." Sicherheitsrelevant, daher im Settings-Screen mit Hinweis.
 
 **Daemon** (`hold.rs`, vor der Weitergabe von `Decision::Allow`):
 
@@ -880,6 +894,9 @@ fn check_allow(flow: &Flow, req: &DecideRequest, cfg: &HoldConfig) -> Result<(),
 **FindingsPause** (`findings_pause.dart`): Ersetzt den unteren Teil der Karte (nicht die ganze Karte, kein Overlay), Höhe animiert 200 ms. Inhalt: Überschrift „n Funde in dieser Anfrage", Liste (Typ-Chip, maskierter Wert aus `mask()`, Ort `Header: Authorization` / `Body Zeile 12`), pro Zeile Buttons „Ignorieren" und „Immer ignorieren" (letzterer mit Tooltip „Dieser Wert wird in diesem Projekt nicht mehr gemeldet"). Fuß: `[Trotzdem senden] [Pseudonymisieren] [Blockieren]`, Tastatur: `S` senden, `P` pseudonymisieren, `B` blockieren, `Esc` zurück. „Trotzdem senden" sendet `Decide(Allow, acknowledged_findings = alle offenen)`. „Pseudonymisieren" setzt `editorOpenProvider = true` und ruft `draftProvider(id).replaceAllOpen()`.
 
 ### Schritte
+Geliefert: `check_allow` und `hard_blocks` in `findings.rs` mit `HOLD_004` an beiden Sperren; die Pause mit ihrem Provider, ihren Tasten und dem einen Prädikat; „Pseudonymisieren" über `replaceAllOnOpen`; Widget-Tests.
+
+Vor der Aufteilung (siehe Hinweis unter „Spezifikation"):
 1. Config-Feld, die Werte `acknowledged` und `allowlisted` für `findings.resolved` (die Spalte ist schon `TEXT`, keine Migration), Allowlist-Abfrage im Recorder.
 2. `Scanner` wendet Allowlist an; Test.
 3. `check_allow` in `hold.rs` mit `HOLD_004`; Tests.
@@ -889,16 +906,18 @@ fn check_allow(flow: &Flow, req: &DecideRequest, cfg: &HoldConfig) -> Result<(),
 7. Widget-Tests.
 
 ### Tests
-Unit (`hold.rs`): `allow_with_open_regex_findings_ok`, `allow_with_checksum_secret_blocked_when_setting_on` (`HOLD_004`), `allow_with_checksum_secret_ok_when_acknowledged`, `allow_ok_when_setting_off`, `allowlisted_not_counted`.
+Geliefert: Unit in `daemon/crates/proxy/src/findings.rs` (`allow_with_open_regex_findings_ok`, `allow_with_checksum_secret_blocked_when_setting_on`, `allow_ok_when_setting_off`, `only_checksum_secrets_of_the_four_kinds_hard_block`, `the_refusal_names_a_header_by_its_name`, `the_refusal_names_the_query_and_says_it_was_blocked`); Proxy in `daemon/crates/proxy/tests/findings.rs` (`a_checksum_secret_is_blocked_when_the_switch_is_on` mit `HOLD_004`, `an_edited_checksum_secret_is_blocked_when_the_switch_is_on`, `an_edited_checksum_secret_goes_out_when_the_switch_is_off`); Widget in `app/test/features/intercept/findings_pause_test.dart` und `findings_pause_predicate_test.dart`.
+
+Vor der Aufteilung (siehe Hinweis unter „Spezifikation"): Unit (`hold.rs`): `allow_with_open_regex_findings_ok`, `allow_with_checksum_secret_blocked_when_setting_on` (`HOLD_004`), `allow_with_checksum_secret_ok_when_acknowledged`, `allow_ok_when_setting_off`, `allowlisted_not_counted`.
 Unit (`findings`): `allowlist_marks_finding` (Wert in Allowlist mit `scope = global` ⇒ `allowlisted == true`), `allowlist_project_scope_does_not_leak_to_other_project`.
 Widget: `button_label_with_findings`, `enter_opens_pause_not_send` (Fake-Daemon zählt `decide` = 0), `send_anyway_acknowledges_all`, `hard_block_hides_send_anyway`, `ignore_always_calls_decide_with_ignore_always`.
 
 ### Akzeptanzkriterien
-- [ ] Anfrage mit einer E-Mail im Body: Button heißt „Senden mit 1 Finding", Enter öffnet die Pause, kein Request geht raus (Fake-Daemon-Zähler).
-- [ ] „Trotzdem senden" leitet weiter; History zeigt `unresolved_findings = 1`.
-- [ ] Mit `hold.hard_block_checksum_secrets = true` und einer gültigen IBAN: „Senden nicht möglich", Daemon lehnt `Decide(Allow)` über die CLI (`humanitl flows decide` existiert nicht; Test über gRPC-Client) mit `HOLD_004` ab.
-- [ ] „Immer ignorieren" auf einen Wert ⇒ nächste Anfrage mit demselben Wert zeigt ihn in der eingeklappten „ignoriert"-Zeile, Button ist „Senden".
-- [ ] Alle Tests grün, ARB-Schlüssel `interceptFindingsPause*` in `en` und `de`.
+- [x] Anfrage mit einer E-Mail im Body: Button heißt „Senden mit 1 Finding", Enter öffnet die Pause, kein Request geht raus (Fake-Daemon-Zähler). Gemessen: `app/test/features/intercept/findings_pause_test.dart`, `button_label_with_findings` (en), `the valve and the pause speak German` (de: „Senden mit 1 Finding", „1 Fund in dieser Anfrage", die drei Knöpfe), `enter_opens_pause_not_send` und `a click on the valve opens the pause and sends nothing` (`client.decisions` leer).
+- [ ] „Trotzdem senden" leitet weiter; History zeigt `unresolved_findings = 1`. **Verschoben nach HUM-160** (Aufteilung 2026-09-19, oben). Weiterleiten ist gemessen: `send_anyway_sends_the_request_unchanged` und `S in the pause sends` (genau ein `Decide(Allow)` am Fake). Die Zahl in der History fehlt: `acknowledged_findings` ist nicht auf dem Draht, und `Decided` trägt keine `unresolved_findings`.
+- [ ] Mit `hold.hard_block_checksum_secrets = true` und einer gültigen IBAN: „Senden nicht möglich", Daemon lehnt `Decide(Allow)` über die CLI (`humanitl flows decide` existiert nicht; Test über gRPC-Client) mit `HOLD_004` ab. **Verschoben nach HUM-159** (Aufteilung 2026-09-19, oben; `backlog/CONVENTIONS.md` 4.33). Die Anfrage wird mit dem Schalter gar nicht erst gehalten: Das System blockt sie sofort und meldet jetzt `HOLD_004` am Flow, gemessen mit `a_checksum_secret_is_blocked_when_the_switch_is_on` (`daemon/crates/proxy/tests/findings.rs`). Dieselbe Sperre greift an einer bearbeiteten Fassung, gemessen mit `an_edited_checksum_secret_is_blocked_when_the_switch_is_on` und der Gegenprobe `an_edited_checksum_secret_goes_out_when_the_switch_is_off`; die Regel selbst mit den Einheitstests in `daemon/crates/proxy/src/findings.rs`. Gebaut und gemessen ist davon nur `HOLD_004` an beiden Sperren.
+- [ ] „Immer ignorieren" auf einen Wert ⇒ nächste Anfrage mit demselben Wert zeigt ihn in der eingeklappten „ignoriert"-Zeile, Button ist „Senden". **Verschoben** (Umfangsentscheidung 2026-09-18, BACKLOG.md Abschnitt 9, Punkt 15).
+- [x] Alle Tests grün, ARB-Schlüssel `interceptFindingsPause*` in `en` und `de`. Gemessen: `STRICT=1 make check` grün am 2026-09-18 und nach der Review-Runde am 2026-09-19; neun Schlüssel `interceptFindingsPause*` in `app/l10n/app_en.arb` und `app/l10n/app_de.arb` (der zehnte, `interceptFindingsPauseMasked`, ist seit der Review-Runde entfernt: `display_prefix` kommt vom Daemon schon maskiert). Die Beschriftung der Freigabe, `interceptSendWithFindings`, gab es schon vor HUM-049.
 
 ### Fallstricke
 - Die Prüfung muss im Daemon laufen. Ein UI, das `acknowledged_findings` einfach immer füllt, darf `HOLD_004` nicht umgehen können: Daemon prüft Tier und Kind, nicht nur „acknowledged". Deshalb gilt bei `hard_block` `acknowledged` nur für Nicht-Checksum-Findings? Nein: Der Nutzer darf bewusst „Trotzdem senden", wenn das Setting aus ist. Ist es an, gibt es keinen Weg außer Pseudonymisieren oder Setting ändern. Test `allow_with_checksum_secret_ok_when_acknowledged` gilt nur bei Setting aus; bei Setting an muss derselbe Aufruf `HOLD_004` liefern. Beide Fälle testen.
@@ -3444,3 +3463,125 @@ Erst messen: Seite ohne Filter und mit Filter über 100 000 Records. Liegt eine 
 
 ### Referenzen
 HUM-050 (Bench), HUM-051 (Seiten von 200), HUM-156.
+
+## HUM-159 · Die harte Sperre blockt, bevor jemand pseudonymisieren kann
+Sprint: 4 · Größe: M · Abhängigkeiten: HUM-049, HUM-156 · Blockiert: HUM-055
+
+### Kontext
+Aufgefallen bei HUM-049 (2026-09-18). Die Spezifikation von HUM-049 beschreibt die harte Sperre als Weigerung an der Freigabe: Die Anfrage mit einer IBAN wird gehalten, die Oberfläche zeigt „Senden nicht möglich", `Decide(Allow)` endet mit `HOLD_004`, und der Mensch kann pseudonymisieren. Gebaut ist seit HUM-023 etwas Strengeres: Mit `hold.hard_block_checksum_secrets = true` blockt `FlowHandler::analyze` eine solche Anfrage sofort als System (`BlockReason::Secret`), sie wird nie gehalten. HUM-049 hat diesen Weg behalten und ihm `HOLD_004` als Befund mitgegeben, dazu dieselbe Prüfung für eine bearbeitete Fassung. Was fehlt, ist der Weg über den Editor: Wer den Schalter setzt, kann eine Anfrage mit IBAN nicht mehr pseudonymisiert hinausschicken, der Agent bekommt nur `403`.
+
+### Ziel
+Mit dem Schalter wird eine Anfrage mit bestätigtem Geheimnis gehalten, solange keine Regel sie freigibt oder blockt. `Decide(Allow)` auf sie endet über gRPC mit `HOLD_004`, der Flow bleibt gehalten, `AllowEdited` ohne das Geheimnis geht durch. Eine Regel `allow` oder die Durchreiche zum Sprachmodell geben eine solche Anfrage nie frei: Sie blockt weiter sofort. Die Oberfläche liest den Schalter und zeigt „Senden nicht möglich" mit dem `why` von `HOLD_004` als Tooltip; die Pause zeigt „Trotzdem senden" dann nicht.
+
+### Nicht-Ziel
+Die Allowlist aus HUM-049 (nach dem MVP, BACKLOG.md Abschnitt 9, Punkt 15).
+
+### Betroffene Pfade
+- `daemon/crates/proxy/src/handler.rs` (`analyze`), `daemon/crates/proxy/src/pipeline.rs` (Regel-Freigabe bei bestätigtem Geheimnis)
+- `daemon/crates/ipc/src/server.rs` (`decide_one`: Prüfung vor `Allow`, Befund statt `IPC_003`); erst nach HUM-156, das dieselbe Datei umbaut
+- `app/lib/core/ipc/`: `GetConfig` als Dart-Aufruf oder ein Feld am Flow, das die Sperre ansagt; `action_bar.dart`, `findings_pause.dart`
+- `app/lib/core/ipc/fake_daemon_client.dart`: `HOLD_004`, wenn ein Schalter gesetzt ist
+
+### Spezifikation
+`humanitl_proxy::findings::check_allow` (HUM-049) ist die eine Prüfung; `decide_one` ruft sie mit den Funden aus der Registry. Ob die Oberfläche den Schalter über `GetConfig` liest oder der Daemon am Flow ansagt, dass Senden gesperrt ist, entscheidet dieses Issue; das zweite braucht kein Wissen über die Konfiguration im Client und ist deshalb vorzuziehen (ADR-018).
+
+### Schritte
+1. Halten statt blocken, Regel-Freigabe bleibt Block; Tests im Proxy.
+2. `decide_one` mit `HOLD_004`; Test über den gRPC-Client.
+3. Oberfläche und Fake.
+
+### Tests
+`allow_with_checksum_secret_refused_over_grpc` (`HOLD_004`, Flow bleibt gehalten), `allow_edited_without_the_secret_goes_out`, `rule_allow_still_blocks_a_checksum_secret`, Widget `hard_block_hides_send_anyway`.
+
+### Akzeptanzkriterien
+- [ ] Mit Schalter und gültiger IBAN: „Senden nicht möglich", `Decide(Allow)` über gRPC endet mit `HOLD_004`, der Flow bleibt gehalten.
+- [ ] Pseudonymisiert geht dieselbe Anfrage hinaus.
+- [ ] Eine Regel `allow` lässt eine solche Anfrage nie hinaus.
+
+### Fallstricke
+- Eine Regel oder die Durchreiche darf die Sperre nie umgehen; heute schützt die sofortige Sperre auch diesen Weg, und wer auf Halten umstellt, muss ihn eigens schließen.
+- `docs/SECURITY.md` nennt den Schalter; die Aussage „geht nicht ungeändert hinaus" muss danach weiter stimmen.
+
+### Referenzen
+HUM-049 (Spezifikation und Stand), HUM-023, HUM-156.
+
+---
+
+## HUM-160 · „Trotzdem senden" hinterlässt keine Spur
+Sprint: 4 · Größe: M · Abhängigkeiten: HUM-049, HUM-050 · Blockiert: HUM-055
+
+### Kontext
+Aufgefallen bei HUM-049 (2026-09-18). „Trotzdem senden" in der Pause schickt heute ein gewöhnliches `Decide(Allow)`. Dass der Mensch die offenen Funde gesehen und bewusst gesendet hat, steht nirgends: nicht im Proto (`acknowledged_findings = 8` ist nur in der Spezifikation von HUM-049 notiert), nicht in `findings.resolved` (bleibt `NULL`), nicht im `Decided`-Ereignis und nicht im Audit. Das Kriterium „History zeigt `unresolved_findings = 1`" aus HUM-049 ist deshalb offen.
+
+Das eigentliche Loch ist `AllowEdited`: Der Daemon scannt die bearbeitete Fassung ein zweites Mal (`edit::remaining_findings`) und kennt damit die Funde, mit denen sie hinausgeht, schreibt sie aber nirgends hin; im Audit steht nur, dass bearbeitet freigegeben wurde. Wer später prüft, ob eine Anfrage mit offenen Funden den Rechner verlassen hat, kann es für eine bearbeitete nicht sagen.
+
+### Ziel
+`DecideRequest.acknowledged_findings` (Feld 8) trägt die Indizes der bestätigten Funde. Der Daemon schreibt sie als `resolved = 'acknowledged'`, das `Decided`-Ereignis trägt `unresolved_findings`, das Audit `flow.decided` trägt `unresolved_findings` und `acknowledged`, und die History zeigt die Zahl. Bei `AllowEdited` ist `unresolved_findings` die Zahl aus dem zweiten Scan der bearbeiteten Fassung, nicht die der gehaltenen.
+
+### Nicht-Ziel
+`ignore_always` und `allowlisted` (nach dem MVP).
+
+### Betroffene Pfade
+- `proto/humanitl/v1/humanitl.proto` (`PROTO_MINOR` anheben, `docs/PROTOCOL.md`)
+- `daemon/crates/ipc/src/validate.rs`, `daemon/crates/ipc/src/server.rs`
+- `daemon/crates/recorder/src/writer.rs`, `daemon/crates/recorder/src/query.rs`
+- `daemon/crates/audit/src/kinds.rs` (`unresolved_findings` ist dort schon vorgesehen)
+- `app/lib/features/intercept/providers/decision.dart`, `app/lib/features/history/`
+
+### Spezifikation
+Wie HUM-049, Abschnitt „Daemon", ohne Allowlist. Die Indizes beziehen sich auf die Reihenfolge im `Analyzed`-Ereignis; ein Index außerhalb wird mit `IPC_002` abgelehnt.
+
+### Schritte
+1. Proto, Validierung, Handler.
+2. Recorder und Audit.
+3. Oberfläche: die Pause schickt die Indizes aller offenen Funde, die History zeigt die Zahl.
+
+### Tests
+`send_anyway_acknowledges_all` (Widget), `acknowledged_findings_are_recorded` (Recorder), `decided_carries_unresolved_findings` (Proxy).
+
+### Akzeptanzkriterien
+- [ ] „Trotzdem senden" leitet weiter; History zeigt `unresolved_findings = 1` für eine Anfrage mit einer E-Mail, die über das Halten gesendet wurde, und `0` nach der Pause.
+- [ ] Das Audit trägt beide Zahlen.
+- [ ] Eine bearbeitet freigegebene Anfrage, in der eine E-Mail stehen blieb, trägt im Audit und in der History `unresolved_findings = 1`.
+
+### Fallstricke
+- Eine Bestätigung hebt `HOLD_004` nie auf (HUM-049, `check_allow`).
+
+### Referenzen
+HUM-049, HUM-050, HUM-089.
+
+---
+
+## HUM-161 · Der Editor sendet verbliebene Funde ohne Rückfrage
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-047, HUM-049 · Blockiert: keine
+
+### Kontext
+Aufgefallen bei HUM-049 (2026-09-18). Die Tabelle der Knopfzustände in HUM-049 verlangt für „Editierte Version senden" dieselbe Findings-Logik auf den verbliebenen Funden des Entwurfs. Gebaut ist die Pause nur in der Aktionsleiste; der Editor sendet einen Entwurf mit offenen Funden ohne Rückfrage. Nur die harte Sperre greift dort, im Daemon.
+
+### Ziel
+Hat der Entwurf offene Funde, heißt der Knopf „Editierte Version senden mit n Findings", und ein Klick öffnet dieselbe Pause über den Funden des Entwurfs, nicht über denen der gehaltenen Fassung.
+
+### Nicht-Ziel
+Ein zweiter Scan im Client; die Funde des Entwurfs führt der Editor schon (`Draft`).
+
+### Betroffene Pfade
+- `app/lib/features/editor/editor_screen.dart`, `app/lib/features/intercept/widgets/findings_pause.dart` (nach `core/ui`, wenn beide Features sie brauchen)
+
+### Spezifikation
+Die Pause bekommt die offenen Funde des Entwurfs; „Pseudonymisieren" heißt dort „Alle ersetzen".
+
+### Schritte
+1. Pause nach `core/ui` heben, damit kein Feature das andere importiert.
+2. Editor: Zustand und Pause.
+
+### Tests
+`editor_send_with_open_findings_opens_pause`, `editor_send_without_findings_sends`.
+
+### Akzeptanzkriterien
+- [ ] Ein Entwurf mit einer stehengelassenen E-Mail sendet nicht auf den ersten Klick.
+
+### Fallstricke
+- Die Indizes des Entwurfs sind andere als die des `Analyzed`-Ereignisses (HUM-049, Fallstricke).
+
+### Referenzen
+HUM-047, HUM-049.

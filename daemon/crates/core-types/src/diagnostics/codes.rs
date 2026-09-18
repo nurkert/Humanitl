@@ -195,6 +195,16 @@ pub static AREAS: &[AreaInfo] = &[
         last: 9,
         note: "Die bearbeitete Anfrage einer `AllowEdited`-Entscheidung (HUM-047)",
     },
+    AreaInfo {
+        area: "hold",
+        prefix: "HOLD",
+        first: 1,
+        last: 9,
+        note: "Was eine Freigabe verweigert, obwohl ein Mensch sie wollte: \
+               004 ein bestätigtes Geheimnis unter \
+               `hold.hard_block_checksum_secrets` (HUM-049); 001-003 sind nicht \
+               vergeben",
+    },
 ];
 
 macro_rules! registry {
@@ -1312,6 +1322,20 @@ registry! {
     AUDIT_009 => "audit", "Audit-Anfrage ungültig", "#audit_009",
         "Eine `Audit`-Anfrage nennt keine Operation, ein unbekanntes Exportformat, einen relativen Zielpfad, eine Host-Schwärzung oder einen unlesbaren Zeitpunkt oder Cursor.",
         "`CopyCommand` mit `humanitl audit --help`; der Text nennt das Feld, das nicht stimmt.";
+    // HUM-049: Die harte Sperre für bestätigte Geheimnisse.
+    /// Eine Anfrage trägt ein Geheimnis, das eine Prüfsumme bestätigt, und
+    /// `hold.hard_block_checksum_secrets` steht an.
+    ///
+    /// Gilt für IBAN, Kreditkarte, API-Schlüssel und JWT, sobald der Fund die
+    /// Stufe `checksum` hat; ein Muster ohne Bestätigung sperrt nie hart, weil
+    /// Muster Fehlalarme haben (HUM-049). Die Sperre sitzt im Daemon und nicht
+    /// in der Oberfläche: Sie greift an der eingetroffenen Anfrage, bevor jemand
+    /// gefragt wird, und an einer bearbeiteten, die nach dem erneuten Scan ein
+    /// solches Geheimnis noch trägt. Nummern 001 bis 003 sind nicht vergeben;
+    /// der Name stand so in der Spezifikation und in der Oberfläche fest.
+    HOLD_004 => "hold", "Bestätigtes Geheimnis gesperrt", "#hold_004",
+        "Die Anfrage oder ihre bearbeitete Fassung trägt einen prüfsummen-bestätigten Fund der Art IBAN, Kreditkarte, API-Schlüssel oder JWT, und `hold.hard_block_checksum_secrets` ist an.",
+        "`ChangeSetting` auf `hold.hard_block_checksum_secrets = false`; sonst geht die Anfrage nur ohne den Wert hinaus, im Editor ersetzt oder vom Agenten neu gestellt.";
 }
 
 /// Sucht einen Code im Register.
