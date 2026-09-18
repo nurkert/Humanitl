@@ -30,11 +30,13 @@ import '../../../core/ui/h_diagnostic_card.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/decision.dart';
+import '../providers/findings_pause.dart';
 import '../providers/note.dart';
 import '../providers/now.dart';
 import '../providers/selection.dart';
 import '../rule_sentence.dart';
 import 'block_button.dart';
+import 'findings_pause.dart';
 import 'note_field.dart';
 import 'release_valve.dart';
 import 'remember_grid.dart';
@@ -62,7 +64,12 @@ const double actionBarLineHeight = 24;
 /// The action bar.
 class ActionBar extends ConsumerStatefulWidget {
   /// Creates the bar for [flow]; a null flow disables every control.
-  const ActionBar({required this.flow, this.onEdit, super.key});
+  const ActionBar({
+    required this.flow,
+    this.onEdit,
+    this.onPseudonymize,
+    super.key,
+  });
 
   /// The selected flow, or null while nothing is selected.
   final Flow? flow;
@@ -75,6 +82,11 @@ class ActionBar extends ConsumerStatefulWidget {
   /// Grund ist schlechter als ein fehlendes (`backlog/CONVENTIONS.md` 4.13),
   /// und darum steht es dann gar nicht erst da.
   final VoidCallback? onEdit;
+
+  /// Oeffnet den Editor mit allen offenen Funden ersetzt, fuer
+  /// „Pseudonymisieren" in der Pause mit offenen Funden (HUM-049), oder null
+  /// ohne Editor; die Pause laesst den Knopf dann weg.
+  final VoidCallback? onPseudonymize;
 
   @override
   ConsumerState<ActionBar> createState() => _ActionBarState();
@@ -93,10 +105,16 @@ class _ActionBarState extends ConsumerState<ActionBar> {
     required bool remember,
     required List<Flow> flows,
     bool confirmed = false,
+    bool acknowledged = false,
   }) => unawaited(
     ref
         .read(interceptDecisionProvider.notifier)
-        .allowMany(flows, remember: remember, confirmed: confirmed),
+        .allowMany(
+          flows,
+          remember: remember,
+          confirmed: confirmed,
+          acknowledged: acknowledged,
+        ),
   );
 
   void _block(List<Flow> flows) =>
@@ -137,6 +155,11 @@ class _ActionBarState extends ConsumerState<ActionBar> {
     final List<Flow> chosen = ref.watch(selectedFlowsProvider).flows;
     final int reach = chosen.length;
     final bool enabled = flow != null && flow.isHeld;
+    // The pause of HUM-049 belongs to one held request, and only while that
+    // request is the whole selection and still has an open finding.
+    // The same predicate the keys of the pause read: what is drawn and what
+    // `S`, `P` and `Esc` act on can never differ (HUM-049).
+    final bool pauseOpen = ref.watch(findingsPauseVisibleProvider);
     // The control that acted shows the same 120 ms fill as a mouse click,
     // whether a key or the pointer took the decision (`docs/UX.md` 5.3), and
     // keeps it while the answer is on its way (2.5). Nothing greys out: a
@@ -188,9 +211,15 @@ class _ActionBarState extends ConsumerState<ActionBar> {
       accent: anyFinding ? tokens.state.held : null,
       holdRequired: anyFinding,
       holdToken: _reachToken(chosen),
-      onShortPress: () => ref
-          .read(lastRefusalProvider.notifier)
-          .refuse(RefusalReason.holdToSend),
+      // One request with a finding: a click opens the pause, which lists what
+      // would leave (HUM-049). Over a group there is no such list, and the
+      // click keeps asking for the hold (`docs/UX.md` 4.7).
+      onShortPress: reach == 1
+          ? () =>
+                unawaited(ref.read(interceptDecisionProvider.notifier).allow())
+          : () => ref
+                .read(lastRefusalProvider.notifier)
+                .refuse(RefusalReason.holdToSend),
       shortcutHint: l10n.interceptKeyAllow,
       semanticsValue: countdown,
       optionsLabel: l10n.interceptAllowOptions,
@@ -199,11 +228,14 @@ class _ActionBarState extends ConsumerState<ActionBar> {
       pressed:
           acting == DecisionKind.allow || acting == DecisionKind.allowEdited,
       refusals: refusal?.serial ?? 0,
-      // A click sends; while the hold is required, the hold sends.
+      // A click sends; while the hold is required, the hold sends. Holding
+      // with the finding named under the valve is the acknowledgement the
+      // pause would otherwise ask for (`docs/UX.md` 4.7).
       onAllow: () => _allow(
         remember: remember.remembers,
         flows: chosen,
         confirmed: anyFinding,
+        acknowledged: anyFinding,
       ),
       onAllowRemembered: () => _allow(remember: true, flows: chosen),
       onToggleOptions: () => ref.read(rememberDraftProvider.notifier).toggle(),
@@ -348,20 +380,62 @@ class _ActionBarState extends ConsumerState<ActionBar> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            LayoutBuilder(
-              builder: (BuildContext context, BoxConstraints constraints) {
-                // The threshold grows with the text: at twice the scale the
-                // same three controls need twice the room, and the bar breaks
-                // into a column instead of hiding one (`docs/UX.md` 6).
-                final double scale = MediaQuery.textScalerOf(context).scale(1);
-                // An open grid always takes a line of its own: eight segments
-                // and their two frames measure around 800 px, which no pane of
-                // this window ever has left beside the two decisions.
-                return grid == null &&
-                        constraints.maxWidth >= actionBarWrapWidth * scale
-                    ? _wide(tokens, valve, edit, decisions)
-                    : _narrow(tokens, valve, edit, grid, decisions);
-              },
+            // Die Pause mit offenen Funden steht an der Stelle der Controls
+            // und nicht darueber: Sie ersetzt den unteren Teil der Karte,
+            // waechst in 200 ms auf und laesst die Anfrage darueber lesbar
+            // (HUM-049, `docs/UX.md` 5.4). Ein Wechsel und kein
+            // `AnimatedSize`: Animiert wird nur das Auf- und Zugehen der
+            // Pause. Das Raster „Merken" und der Umbruch der Leiste aendern
+            // ihre Hoehe sofort, wie vor HUM-049; ein Raster, das erst
+            // aufwaechst, laege unter dem naechsten Klick noch nicht dort, wo
+            // es gezeichnet ist.
+            AnimatedSwitcher(
+              duration: HReducedMotion.displace(context, HMotion.sweep),
+              switchInCurve: HMotion.enter,
+              switchOutCurve: HMotion.exit,
+              transitionBuilder: (Widget child, Animation<double> animation) =>
+                  SizeTransition(
+                    sizeFactor: animation,
+                    alignment: Alignment.topCenter,
+                    child: child,
+                  ),
+              child: pauseOpen
+                  ? FindingsPause(
+                      key: const ValueKey<String>('pause'),
+                      findings: findings,
+                      enabled: acting == null,
+                      onSendAnyway: () => unawaited(
+                        ref
+                            .read(interceptDecisionProvider.notifier)
+                            .allow(acknowledged: true),
+                      ),
+                      onPseudonymize: widget.onPseudonymize,
+                      onBlock: () => _block(chosen),
+                      onBack: () =>
+                          ref.read(openFindingsPauseProvider.notifier).close(),
+                    )
+                  : LayoutBuilder(
+                      key: const ValueKey<String>('controls'),
+                      builder:
+                          (BuildContext context, BoxConstraints constraints) {
+                            // The threshold grows with the text: at twice the
+                            // scale the same three controls need twice the
+                            // room, and the bar breaks into a column instead
+                            // of hiding one (`docs/UX.md` 6).
+                            final double scale = MediaQuery.textScalerOf(
+                              context,
+                            ).scale(1);
+                            // An open grid always takes a line of its own:
+                            // eight segments and their two frames measure
+                            // around 800 px, which no pane of this window ever
+                            // has left beside the two decisions.
+                            return grid == null &&
+                                    constraints.maxWidth >=
+                                        actionBarWrapWidth * scale
+                                ? _wide(tokens, valve, edit, decisions)
+                                : _narrow(tokens, valve, edit, grid, decisions);
+                          },
+                    ),
             ),
             // The note is temporary: hidden until `N`, gone on `Escape` and on
             // every decision, never a permanent row of the bar

@@ -795,5 +795,14 @@
   "auditRetentionRecordings": "Aufzeichnungen (Anfragen, Antworten, Bodies) werden nach 180 Tagen gelöscht, sofern {key} keine andere Zahl nennt; 0 heißt nie.",
   "auditRetentionChain": "Die Audit-Kette wird nie gelöscht; {key} wirkt in dieser Fassung nicht.",
   "auditFilterInvalid": "Keine Zeitangabe. Etwa 2026-09-11 08:00Z; der Zeitraum bleibt, wie er war.",
-  "auditAnchorsUnknown": "Anker nicht gemeldet"
+  "auditAnchorsUnknown": "Anker nicht gemeldet",
+  "interceptFindingsPauseTitle": "{count, plural, =1{1 Fund in dieser Anfrage} other{{count} Funde in dieser Anfrage}}",
+  "interceptFindingsPauseUndescribed": "{count, plural, =1{1 weiterer Fund ist noch nicht beschrieben} other{{count} weitere Funde sind noch nicht beschrieben}}",
+  "interceptFindingsPauseSendAnyway": "Trotzdem senden",
+  "interceptFindingsPausePseudonymize": "Pseudonymisieren",
+  "interceptFindingsPauseBlock": "Blockieren",
+  "interceptFindingsPauseBack": "Zurück",
+  "interceptFindingsPauseKeySend": "S",
+  "interceptFindingsPauseKeyPseudonymize": "P",
+  "interceptFindingsPauseKeyBack": "Esc"
 }

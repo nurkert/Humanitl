@@ -22,9 +22,77 @@
 //! 3. **Der Scan scheitert nicht still.** Ist das eingebaute Regel-Set
 //!    unbrauchbar, kommt [`Tier1Scanner::new`] gar nicht erst zustande
 //!    (`FINDINGS_001`), und der Daemon startet nicht.
+//!
+//! Was aus einem Fund für die Freigabe folgt, steht ebenfalls hier und nicht
+//! im Handler: [`check_allow`] ist die harte Sperre von
+//! `hold.hard_block_checksum_secrets` (HUM-049), und [`hard_blocks`] sagt, für
+//! welchen Fund sie gilt. Der Handler ruft beide an den zwei Stellen, an denen
+//! eine Anfrage hinausgehen könnte: nach dem ersten Scan, bevor gefragt wird,
+//! und nach dem zweiten Scan einer bearbeiteten Fassung.
 
-use humanitl_core::{Diagnostic, Finding, HttpRequest};
+use humanitl_core::diagnostics::codes::HOLD_004;
+use humanitl_core::{
+    Diagnostic, Finding, FindingKind, FindingLocation, FixAction, HttpRequest, Severity, Tier,
+};
 use humanitl_findings::{DetectorRegistry, FindingsSettings, ScanReport};
+
+/// Ob `finding` unter `hold.hard_block_checksum_secrets` hart sperrt.
+///
+/// Nur ein Fund, den eine Prüfsumme bestätigt ([`Tier::Checksum`]), und nur in
+/// den Arten, deren Verlust nicht zurückzuholen ist: API-Schlüssel, JWT, IBAN,
+/// Kreditkarte (HUM-049). Ein Muster ohne Bestätigung sperrt nie hart:
+/// Telefonnummern und IP-Adressen haben Fehlalarme, und eine Sperre, die
+/// grundlos greift, lernt man zu umgehen.
+#[must_use]
+pub fn hard_blocks(finding: &Finding) -> bool {
+    finding.tier == Tier::Checksum
+        && matches!(
+            finding.kind,
+            FindingKind::ApiKey(_) | FindingKind::Jwt | FindingKind::Iban | FindingKind::CreditCard
+        )
+}
+
+/// Die Prüfung vor jeder Freigabe: Darf eine Anfrage mit diesen Funden
+/// hinaus?
+///
+/// `findings` sind die Funde der Anfrage, die hinausginge — bei einer
+/// bearbeiteten die des zweiten Scans, nicht die der gehaltenen Fassung.
+/// `hard_block` ist `hold.hard_block_checksum_secrets`. Ist der Schalter aus,
+/// geht alles durch, was ein Mensch freigibt; ist er an, sperrt der erste Fund,
+/// für den [`hard_blocks`] gilt. Eine Bestätigung aus der Oberfläche hebt die
+/// Sperre nicht auf: Sie liegt hier, im Daemon, damit ein Client sie nicht
+/// umgehen kann, und der einzige Weg an ihr vorbei ist, den Wert zu ersetzen
+/// oder den Schalter umzulegen.
+///
+/// # Errors
+///
+/// [`HOLD_004`] mit Art und Ort des sperrenden Funds, nie mit seinem Wert,
+/// und dem Vorschlag, den Schalter umzulegen.
+pub fn check_allow(findings: &[Finding], hard_block: bool) -> Result<(), Diagnostic> {
+    if !hard_block {
+        return Ok(());
+    }
+    let Some(secret) = findings.iter().find(|finding| hard_blocks(finding)) else {
+        return Ok(());
+    };
+    let place = match &secret.location {
+        FindingLocation::Header(name) => format!("the {name} header"),
+        FindingLocation::Query => "the query".to_owned(),
+        FindingLocation::Body => "the body".to_owned(),
+    };
+    Err(Diagnostic::builder(HOLD_004, Severity::Blocking)
+        .why(format!(
+            "the request carries a checksum-confirmed {} in {place} and \
+             hold.hard_block_checksum_secrets is on, so it was blocked and did not leave this \
+             machine",
+            secret.kind.as_str(),
+        ))
+        .fix(FixAction::ChangeSetting {
+            key: "hold.hard_block_checksum_secrets".to_owned(),
+            value: "false".to_owned(),
+        })
+        .build())
+}
 
 /// Sucht in einer Anfrage nach Secrets und personenbezogenen Daten.
 ///
@@ -107,5 +175,129 @@ impl Scanner for NoScan {
 
     fn scan_note(&self, _note: &str) -> Vec<Finding> {
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use humanitl_core::{
+        Finding, FindingKind, FindingLocation, FixAction, HeaderName, Severity, Tier,
+    };
+
+    use super::{check_allow, hard_blocks};
+
+    fn finding(kind: FindingKind, tier: Tier, location: FindingLocation) -> Finding {
+        Finding::new(kind, 0..8, location, tier, "value-never-shown")
+    }
+
+    fn iban() -> Finding {
+        finding(FindingKind::Iban, Tier::Checksum, FindingLocation::Body)
+    }
+
+    /// Ein Muster ohne Prüfsumme sperrt nie hart, auch nicht mit Schalter:
+    /// Telefonnummern und E-Mail-Adressen haben Fehlalarme.
+    #[test]
+    fn allow_with_open_regex_findings_ok() {
+        let findings = [
+            finding(FindingKind::Email, Tier::Regex, FindingLocation::Body),
+            finding(FindingKind::Phone, Tier::Regex, FindingLocation::Query),
+            finding(
+                FindingKind::ApiKey("github".to_owned()),
+                Tier::Regex,
+                FindingLocation::Header(HeaderName::from_static("authorization")),
+            ),
+        ];
+        assert_eq!(check_allow(&findings, true), Ok(()));
+    }
+
+    #[test]
+    fn allow_with_checksum_secret_blocked_when_setting_on() {
+        let findings = [
+            finding(FindingKind::Email, Tier::Regex, FindingLocation::Body),
+            iban(),
+        ];
+        let refused = check_allow(&findings, true).expect_err("an IBAN is hard blocked");
+        assert_eq!(refused.code.as_str(), "HOLD_004");
+        assert_eq!(refused.severity, Severity::Blocking);
+        assert!(refused.why.contains("iban in the body"), "{}", refused.why);
+        assert!(
+            !refused.why.contains("value-never-shown"),
+            "the value never reaches a message: {}",
+            refused.why
+        );
+        assert_eq!(
+            refused.fix,
+            Some(FixAction::ChangeSetting {
+                key: "hold.hard_block_checksum_secrets".to_owned(),
+                value: "false".to_owned(),
+            })
+        );
+    }
+
+    /// Ohne Schalter gibt ein Mensch frei, was er will: Dieselbe IBAN geht.
+    #[test]
+    fn allow_ok_when_setting_off() {
+        assert_eq!(check_allow(&[iban()], false), Ok(()));
+    }
+
+    /// Die vier Arten sperren mit Prüfsumme, keine andere, und ohne Prüfsumme
+    /// keine von ihnen.
+    #[test]
+    fn only_checksum_secrets_of_the_four_kinds_hard_block() {
+        for kind in [
+            FindingKind::ApiKey("aws".to_owned()),
+            FindingKind::Jwt,
+            FindingKind::Iban,
+            FindingKind::CreditCard,
+        ] {
+            let confirmed = finding(kind.clone(), Tier::Checksum, FindingLocation::Body);
+            assert!(hard_blocks(&confirmed), "{kind:?} with a checksum");
+            let guessed = finding(kind.clone(), Tier::Regex, FindingLocation::Body);
+            assert!(!hard_blocks(&guessed), "{kind:?} without a checksum");
+        }
+        for kind in [
+            FindingKind::Email,
+            FindingKind::Phone,
+            FindingKind::Ipv4,
+            FindingKind::UserTerm("acme".to_owned()),
+            FindingKind::Custom("x".to_owned()),
+        ] {
+            let confirmed = finding(kind.clone(), Tier::Checksum, FindingLocation::Body);
+            assert!(!hard_blocks(&confirmed), "{kind:?} never hard blocks");
+        }
+    }
+
+    /// Ein Geheimnis in der Query heißt dort auch so, und der Satz sagt, dass
+    /// gesperrt wurde, nicht was noch zu tun wäre: Auf beiden Wegen, die ihn
+    /// bauen, ist die Anfrage schon geblockt.
+    #[test]
+    fn the_refusal_names_the_query_and_says_it_was_blocked() {
+        let jwt = finding(FindingKind::Jwt, Tier::Checksum, FindingLocation::Query);
+        let refused = check_allow(&[jwt], true).expect_err("a JWT is hard blocked");
+        assert!(
+            refused.why.contains(
+                "jwt in the query and hold.hard_block_checksum_secrets is on, so it was blocked"
+            ),
+            "{}",
+            refused.why
+        );
+    }
+
+    /// Der Ort steht im Satz so, wie ein Mensch ihn liest.
+    #[test]
+    fn the_refusal_names_a_header_by_its_name() {
+        let card = finding(
+            FindingKind::CreditCard,
+            Tier::Checksum,
+            FindingLocation::Header(HeaderName::from_static("x-card")),
+        );
+        let refused = check_allow(&[card], true).expect_err("a card is hard blocked");
+        assert!(
+            refused.why.contains("credit_card in the x-card header"),
+            "{}",
+            refused.why
+        );
     }
 }

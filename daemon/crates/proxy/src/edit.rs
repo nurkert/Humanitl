@@ -43,7 +43,7 @@
 use bytes::Bytes;
 use humanitl_core::diagnostics::codes::{EDIT_001, EDIT_002, EDIT_003, EDIT_005};
 use humanitl_core::http::HeaderValue;
-use humanitl_core::{BodyRef, Diagnostic, HeaderMap, HeaderName, HttpRequest, Severity};
+use humanitl_core::{BodyRef, Diagnostic, Finding, HeaderMap, HeaderName, HttpRequest, Severity};
 
 use crate::findings::Scanner;
 use crate::upstream::{host_header, wire_content_length};
@@ -134,17 +134,22 @@ pub fn apply_edit(
     Ok(Edited { request, body })
 }
 
-/// Wie viele Funde nach der Bearbeitung noch offen sind.
+/// Welche Funde nach der Bearbeitung noch offen sind.
 ///
 /// Der Scan läuft ein zweites Mal, über die bearbeitete Anfrage: Was der
 /// Mensch ersetzt hat, ist weg, was er stehen ließ, steht noch da, und nur die
-/// zweite Zahl darf in der Aufzeichnung stehen. Die Funde der ersten Runde
+/// zweite Liste darf für die Freigabe zählen. Die Funde der ersten Runde
 /// zeigen in den **alten** Body; sie nach einer Ersetzung weiterzuführen hieße,
-/// auf Stellen zu zeigen, die es nicht mehr gibt.
+/// auf Stellen zu zeigen, die es nicht mehr gibt. Die Liste und nicht nur ihre
+/// Länge, weil die harte Sperre von HUM-049 nach Art und Stufe fragt
+/// ([`check_allow`](crate::findings::check_allow)).
 #[must_use]
-pub fn remaining_findings(scanner: &dyn Scanner, request: &HttpRequest, body: &[u8]) -> u32 {
-    let report = scanner.scan(request, body);
-    u32::try_from(report.findings.len()).unwrap_or(u32::MAX)
+pub fn remaining_findings(
+    scanner: &dyn Scanner,
+    request: &HttpRequest,
+    body: &[u8],
+) -> Vec<Finding> {
+    scanner.scan(request, body).findings
 }
 
 /// Der Befund für ein verschobenes Ziel.
@@ -587,6 +592,9 @@ mod tests {
             after.as_bytes(),
         );
         let out = apply_edit(&held, edited, CAP).expect("a valid edit");
-        assert_eq!(remaining_findings(&scanner, &out.request, &out.body), 1);
+        assert_eq!(
+            remaining_findings(&scanner, &out.request, &out.body).len(),
+            1
+        );
     }
 }

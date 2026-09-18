@@ -112,6 +112,47 @@ class MergeArrivalsIntent extends Intent {
   const MergeArrivalsIntent();
 }
 
+/// Send the request of the findings pause as it is. `S` (HUM-049).
+class SendAnywayIntent extends Intent {
+  /// Creates the intent.
+  const SendAnywayIntent();
+}
+
+/// Open the editor from the findings pause with every open finding replaced.
+/// `P` (HUM-049).
+class PseudonymizeIntent extends Intent {
+  /// Creates the intent.
+  const PseudonymizeIntent();
+}
+
+/// Close the findings pause without deciding anything. `Esc` (HUM-049).
+class CloseFindingsPauseIntent extends Intent {
+  /// Creates the intent.
+  const CloseFindingsPauseIntent();
+}
+
+/// The bindings that only live while the findings pause is open (HUM-049).
+///
+/// A map of their own, bound by a `Shortcuts` between the screen's actions and
+/// its focus node: that one is asked first, and while no pause is open its
+/// actions are disabled, so every key falls through to [interceptShortcuts].
+/// `Esc` needs that order -- it also closes the one-time hint -- and `S` and
+/// `P` stay free for the note field, which the actions give back as well
+/// (`docs/UX.md` 5.2). `B` needs no binding here: the block key of the screen
+/// already blocks the request the pause stands over.
+Map<ShortcutActivator, Intent> findingsPauseShortcuts() =>
+    <ShortcutActivator, Intent>{
+      const SingleActivator(LogicalKeyboardKey.keyS, includeRepeats: false):
+          const SendAnywayIntent(),
+      // Keine Wiederholungen: Ein festgehaltenes `P` oder `Esc` öffnet den
+      // Editor nicht mehrmals und schließt nach der Pause nicht auch noch den
+      // Hinweis darunter.
+      const SingleActivator(LogicalKeyboardKey.keyP, includeRepeats: false):
+          const PseudonymizeIntent(),
+      const SingleActivator(LogicalKeyboardKey.escape, includeRepeats: false):
+          const CloseFindingsPauseIntent(),
+    };
+
 /// The digits of the two segmented controls, in segment order.
 const List<LogicalKeyboardKey> rememberKeys = <LogicalKeyboardKey>[
   LogicalKeyboardKey.digit1,
@@ -168,7 +209,10 @@ interceptShortcuts() => <ShortcutActivator, Intent>{
       const OpenRememberIntent(),
   const SingleActivator(LogicalKeyboardKey.keyN): const NoteIntent(),
   const SingleActivator(LogicalKeyboardKey.keyE): const EditIntent(),
-  const SingleActivator(LogicalKeyboardKey.escape):
+  // Keine Wiederholungen: Ein festgehaltenes `Esc`, das die Pause mit offenen
+  // Funden schließt, darf mit seiner Wiederholung nicht auch noch den Hinweis
+  // schließen (HUM-049).
+  const SingleActivator(LogicalKeyboardKey.escape, includeRepeats: false):
       const CloseCoachMarkIntent(),
   const SingleActivator(
     LogicalKeyboardKey.keyF,

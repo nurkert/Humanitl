@@ -31,6 +31,7 @@ Entfernen eines Codes.
 | ui | `UI` | 001 | 009 | Oberflaeche und was ihr die Arbeitsumgebung verweigert |
 | agent | `AGENT` | 001 | 009 | Agent-Adapter: Startkommando, Vorlagen, Vorprüfung vor dem Start |
 | edit | `EDIT` | 001 | 009 | Die bearbeitete Anfrage einer `AllowEdited`-Entscheidung (HUM-047) |
+| hold | `HOLD` | 001 | 009 | Was eine Freigabe verweigert, obwohl ein Mensch sie wollte: 004 ein bestätigtes Geheimnis unter `hold.hard_block_checksum_secrets` (HUM-049); 001-003 sind nicht vergeben |
 
 ## Codes
 
@@ -1197,4 +1198,14 @@ Bearbeiteter Body über der Grenze
 **Auslöser.** Der Body der bearbeiteten Anfrage ist größer als die Grenze, gegen die der Hold gepuffert hat (`limits.hold_body_cap_bytes`).
 
 **Fix.** `ChangeSetting` auf `limits.hold_body_cap_bytes`, oder weniger schicken.
+
+### Bereich hold
+
+#### HOLD_004
+
+Bestätigtes Geheimnis gesperrt
+
+**Auslöser.** Die Anfrage oder ihre bearbeitete Fassung trägt einen prüfsummen-bestätigten Fund der Art IBAN, Kreditkarte, API-Schlüssel oder JWT, und `hold.hard_block_checksum_secrets` ist an.
+
+**Fix.** `ChangeSetting` auf `hold.hard_block_checksum_secrets = false`; sonst geht die Anfrage nur ohne den Wert hinaus, im Editor ersetzt oder vom Agenten neu gestellt.
 
