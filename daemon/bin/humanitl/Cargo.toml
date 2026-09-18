@@ -10,6 +10,10 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+# `audit verify --file` und `audit export --file` lesen die Kette selbst, wenn
+# der Daemon nicht antwortet; die Pruefung und das Record-Format stehen in
+# `humanitl-audit` und werden hier nicht nachgebaut (HUM-070).
+humanitl-audit.workspace = true
 humanitl-config.workspace = true
 humanitl-core.workspace = true
 humanitl-ipc.workspace = true
@@ -17,10 +21,19 @@ humanitl-sandbox.workspace = true
 
 chrono.workspace = true
 clap.workspace = true
+# Der Kopf-Hash der Kette kommt ueber die Wire-Form als Bytes und steht in der
+# Ausgabe als Hex, wie ueberall sonst im Audit-Log.
+hex.workspace = true
 # `rules add --expires <RFC 3339>` baut einen `google.protobuf.Timestamp`; die
 # Wire-Form kennt keinen anderen Weg, einen Zeitpunkt zu schreiben.
 prost-types.workspace = true
 serde_json.workspace = true
+# `config set` schreibt genau einen Wert in die `config.toml` des Menschen:
+# `toml_edit` aendert das Dokument, ohne Kommentare und Reihenfolge zu
+# verlieren, und `toml` ist die Gegenprobe, dass wirklich nur dieser eine Wert
+# anders ist (dieselbe Paarung wie in `humanitl_config::edit`).
+toml.workspace = true
+toml_edit.workspace = true
 # `sandbox attach` setzt das eigene Terminal in den Rohmodus und liest seine
 # Groesse (`tcgetattr`, `tcsetattr`, `tcgetwinsize`). Ohne rustix braeuchte das
 # `unsafe`. Noch nicht unter [workspace.dependencies], wie in
@@ -28,7 +41,9 @@ serde_json.workspace = true
 # `event` kommt mit `--ask terminal` dazu: Der Tastenleser wartet mit `poll`
 # statt in einem blockierenden `read`, damit er die Eingabe loslassen kann,
 # solange der `$EDITOR` laeuft.
-rustix = { version = "1.1", features = ["stdio", "termios", "event"] }
+# `fs` kommt mit `audit export` dazu: `renameat2` mit `RENAME_NOREPLACE`, wo ein
+# Dateisystem keine harten Verweise kennt (HUM-070).
+rustix = { version = "1.1", features = ["stdio", "termios", "event", "fs"] }
 # `sandbox check` legt seinen Platzhalter-Socket und die Platzhalter-Dateien
 # der CA in einem eigenen Verzeichnis an, das mit dem Prozess verschwindet:
 # der Selbsttest darf dem laufenden Daemon nichts wegnehmen.

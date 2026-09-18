@@ -138,8 +138,12 @@ pub enum Cmd {
         cmd: SessionsCmd,
     },
 
-    /// Verify and export the audit chain (arrives in HUM-070).
-    Audit(PlaceholderArgs),
+    /// Verify and export the audit chain.
+    Audit {
+        /// Was mit der Audit-Kette geschehen soll.
+        #[command(subcommand)]
+        cmd: AuditCmd,
+    },
 
     /// The resolved configuration and its schema.
     Config {
@@ -232,20 +236,44 @@ pub struct RunArgs {
     pub cmd: Vec<OsString>,
 }
 
-/// Ein Unterkommando, das es noch nicht gibt.
+/// Die Unterkommandos von `humanitl audit`.
 ///
-/// Es nimmt seine Argumente entgegen, statt sie als Tippfehler abzulehnen:
-/// wer `humanitl audit verify` schreibt, soll erfahren, dass das Kommando noch
-/// nicht da ist, und nicht, dass `verify` unbekannt sei.
-#[derive(Debug, Args)]
-pub struct PlaceholderArgs {
-    /// Alles, was hinter dem Unterkommando steht.
-    #[arg(
-        trailing_var_arg = true,
-        allow_hyphen_values = true,
-        value_name = "ARGS"
-    )]
-    pub args: Vec<OsString>,
+/// Beide gehen zuerst an den Daemon: Er prüft mit dem HMAC-Schlüssel und den
+/// Ankern, und nur diese Prüfung ist die ganze. `--file` ist die schwächere
+/// Fassung für eine Datei, die woanders herkommt; sie prüft Kette und Kanonik
+/// und sagt in ihrer Ausgabe, was sie nicht geprüft hat (HUM-070).
+#[derive(Debug, Subcommand)]
+pub enum AuditCmd {
+    /// Check the hash chain: every record, its predecessor and the anchors.
+    Verify {
+        /// Verify this file instead of asking the daemon; without key and
+        /// anchors, so the answer is weaker and says so.
+        #[arg(long, value_name = "PATH")]
+        file: Option<PathBuf>,
+    },
+
+    /// Write the records to a file, as JSON lines or as CSV.
+    Export {
+        /// `jsonl` keeps every record as it stands, `csv` is one row per record.
+        #[arg(long, value_name = "FORMAT", value_parser = ["jsonl", "csv"])]
+        format: String,
+
+        /// Where the export is written. An existing file is not overwritten.
+        #[arg(long, value_name = "FILE")]
+        out: PathBuf,
+
+        /// Only records at or after this point in time (RFC 3339).
+        #[arg(long, value_name = "TS")]
+        since: Option<String>,
+
+        /// Only records before this point in time (RFC 3339).
+        #[arg(long, value_name = "TS")]
+        until: Option<String>,
+
+        /// Export this file instead of asking the daemon.
+        #[arg(long, value_name = "PATH")]
+        file: Option<PathBuf>,
+    },
 }
 
 /// Die Unterkommandos von `humanitl sandbox`.
@@ -627,11 +655,33 @@ impl RememberArgs {
 /// Die Unterkommandos von `humanitl config`.
 #[derive(Debug, Subcommand)]
 pub enum ConfigCmd {
-    /// Print the resolved value of one key, for example the hold timeout.
+    /// Print the resolved value of one key, or of every key without one.
     Get {
+        /// Der Pfad des Feldes, mit Punkten getrennt; ohne ihn alle Blattwerte.
+        #[arg(value_name = "KEY")]
+        key: Option<String>,
+
+        /// Add the layer that set each value.
+        #[arg(long)]
+        origin: bool,
+    },
+
+    /// Write one key into config.toml, after checking it against the schema.
+    Set {
         /// Der Pfad des Feldes, mit Punkten getrennt.
         #[arg(value_name = "KEY")]
         key: String,
+
+        /// Der Wert, gelesen nach dem Typ des Feldes: `5m` für eine Dauer,
+        /// `32MiB` für eine Größe, `true`/`false`, JSON für eine Liste,
+        /// `null` oder `-`, um den Schlüssel zu entfernen. Ein Wert, der mit
+        /// `-` beginnt, ist ein Wert und kein Flag.
+        #[arg(value_name = "VALUE", allow_hyphen_values = true)]
+        value: String,
+
+        /// Write into the profile of this project instead of the global file.
+        #[arg(long)]
+        project: bool,
     },
 
     /// Print the JSON schema of the configuration, or the list of profiles.
@@ -640,6 +690,9 @@ pub enum ConfigCmd {
         #[arg(long)]
         profiles: bool,
     },
+
+    /// Open config.toml in $VISUAL or $EDITOR and check it afterwards.
+    Edit,
 }
 
 /// Die Unterkommandos von `humanitl daemon`.
@@ -650,6 +703,27 @@ pub enum DaemonCmd {
 
     /// Write the systemd user unit that starts the daemon at login.
     Install(InstallArgs),
+
+    /// Show the journal of the daemon: journalctl --user -u humanitld.
+    Logs(LogsArgs),
+}
+
+/// Die Argumente von `humanitl daemon logs`.
+///
+/// Der Befehl ist eine Durchreiche an `journalctl`: Das Terminal geht
+/// unverändert an das Kind, und sein Exit-Code wird der eigene. Ein zweiter
+/// Leser für Journal-Einträge wäre eine zweite Quelle für dieselbe Wahrheit.
+#[derive(Debug, Args)]
+pub struct LogsArgs {
+    // Der Text der Doc-Kommentare ist der Hilfetext von `clap` und deshalb
+    // englisch (CONVENTIONS.md 3.9).
+    /// Keep the journal open and show new lines as they arrive.
+    #[arg(short = 'f', long)]
+    pub follow: bool,
+
+    /// How many lines to show; the default of journalctl without it.
+    #[arg(short = 'n', long = "lines", value_name = "N")]
+    pub lines: Option<u32>,
 }
 
 /// Die Argumente von `humanitl daemon install`.
@@ -673,6 +747,11 @@ pub struct InstallArgs {
     /// with sudo: the daemon is a user service.
     #[arg(long)]
     pub no_start: bool,
+
+    /// Take humanitld and humanitl-shim from this directory instead of from
+    /// the directory of the running humanitl.
+    #[arg(long = "bin-dir", value_name = "DIR")]
+    pub bin_dir: Option<PathBuf>,
 }
 
 /// Ein gelesener Aufruf: die Unterkommandos und die Konfigurations-Flags.
@@ -862,8 +941,8 @@ mod tests {
     use humanitl_config::schema;
 
     use super::{
-        Cmd, ConfigCmd, EXIT_CODES_HELP, FlowsCmd, RulesCmd, SHORT_FLAGS, SandboxCmd, command,
-        flag_name, parse,
+        AuditCmd, Cmd, ConfigCmd, EXIT_CODES_HELP, FlowsCmd, RulesCmd, SHORT_FLAGS, SandboxCmd,
+        command, flag_name, parse,
     };
 
     #[test]
@@ -1069,14 +1148,63 @@ mod tests {
         }
     }
 
+    /// `audit export` nimmt beide Grenzen und das Ziel entgegen; `--format`
+    /// nimmt nur die beiden Formate des Vertrags.
     #[test]
-    fn a_placeholder_subcommand_swallows_its_arguments() {
-        let invocation =
-            parse(["humanitl", "audit", "verify", "--since", "yesterday"]).expect("parses");
-        let Cmd::Audit(args) = invocation.cli.cmd else {
-            panic!("expected audit");
+    fn audit_export_reads_its_range_and_refuses_an_unknown_format() {
+        let invocation = parse([
+            "humanitl",
+            "audit",
+            "export",
+            "--format",
+            "csv",
+            "--out",
+            "/tmp/audit.csv",
+            "--since",
+            "2026-09-01T00:00:00Z",
+        ])
+        .expect("parses");
+        let Cmd::Audit {
+            cmd:
+                AuditCmd::Export {
+                    format,
+                    out,
+                    since,
+                    until,
+                    file,
+                },
+        } = invocation.cli.cmd
+        else {
+            panic!("expected audit export");
         };
-        assert_eq!(args.args, ["verify", "--since", "yesterday"]);
+        assert_eq!(format, "csv");
+        assert_eq!(out, Path::new("/tmp/audit.csv"));
+        assert_eq!(since.as_deref(), Some("2026-09-01T00:00:00Z"));
+        assert_eq!(until, None);
+        assert_eq!(file, None);
+
+        assert!(
+            parse([
+                "humanitl", "audit", "export", "--format", "xml", "--out", "/tmp/a"
+            ])
+            .is_err(),
+            "only jsonl and csv are in the contract"
+        );
+    }
+
+    /// `config get` ohne Schlüssel ist die ganze Konfiguration und kein
+    /// Aufruffehler.
+    #[test]
+    fn config_get_without_a_key_is_every_leaf() {
+        let invocation = parse(["humanitl", "config", "get", "--origin"]).expect("parses");
+        let Cmd::Config {
+            cmd: ConfigCmd::Get { key, origin },
+        } = invocation.cli.cmd
+        else {
+            panic!("expected config get");
+        };
+        assert_eq!(key, None);
+        assert!(origin);
     }
 
     #[test]

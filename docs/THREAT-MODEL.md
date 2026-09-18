@@ -464,7 +464,9 @@ Hash über kanonischem JSON; darüber liegt ein HMAC mit einem Schlüssel, der b
 `keys/audit.key` (`0600`) im Datenverzeichnis liegt und danach im Keyring. Alle
 `audit.anchor_every` Records und beim Beenden steht ein Anker in der Datei und in SQLite
 (`audit_anchors`). Der Daemon prüft die Kette mit `AuditVerifier` (HUM-050); `humanitl audit
-verify` baut HUM-070.
+verify` gibt es seit HUM-070. Es fragt zuerst den Daemon; antwortet der nicht, prüft es die Datei
+ohne Schlüssel und ohne Anker und schreibt das in seine Ausgabe
+([`SECURITY.md`](SECURITY.md) Abschnitt 8).
 
 *Restrisiko.* Ausführlich in [`SECURITY.md`](SECURITY.md) Abschnitt 8. Kurz: Erkannt wird das
 nachträgliche Ändern, Löschen oder Umordnen durch jemanden, der Dateizugriff hat, aber den
