@@ -63,6 +63,7 @@ use tokio_stream::wrappers::{BroadcastStream, UnixListenerStream};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
+use crate::audit::AuditService;
 use crate::domains::DomainTable;
 use crate::rules::RulesService;
 use crate::sandbox::SandboxService;
@@ -137,6 +138,10 @@ pub struct IpcServer {
     /// Wohin Regeländerungen und Netzsuchen als Audit-Records gehen (HUM-050).
     /// `None` im Fake und in Tests ohne Audit-Log.
     audit: Option<AuditHandle>,
+    /// Wer die `Audit`-RPC beantwortet (HUM-156). `None` in einem Daemon ohne
+    /// Audit-Log; `Audit` antwortet dann mit `IPC_006` wie der Fake, statt
+    /// eine leere, heile Kette zu behaupten.
+    audit_log: Option<AuditService>,
     /// Woraus `Doctor` seinen Bericht baut (HUM-075).
     doctor: DoctorSetup,
     bodies: BodyIndex,
@@ -227,6 +232,7 @@ impl IpcServer {
             llm_probe_error: probe.err(),
             sandbox: None,
             audit: None,
+            audit_log: None,
             doctor: DoctorSetup {
                 paths: humanitl_config::Paths::from_process(),
                 adapter: config.agent.adapter.clone(),
@@ -349,6 +355,17 @@ impl IpcServer {
             self.rules = Some(rules.with_audit(audit.clone()));
         }
         self.audit = Some(audit);
+        self
+    }
+
+    /// Derselbe Dienst, der `Audit` beantwortet (HUM-156): Prüfung mit
+    /// Schlüssel und Ankern, Ende, Seiten und Export der Kette. Die Fähigkeit
+    /// `audit` in `Info` kommt erst hier dazu, wie die Fähigkeit der Sandbox
+    /// mit [`IpcServer::with_sandbox`].
+    #[must_use]
+    pub fn with_audit_log(mut self, service: AuditService) -> Self {
+        self.info.capabilities.push("audit".to_owned());
+        self.audit_log = Some(service);
         self
     }
 
@@ -1234,11 +1251,33 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         )))
     }
 
+    /// Prüfung, Ende, Seiten und Export der Audit-Kette (HUM-156,
+    /// [`crate::audit`]).
+    ///
+    /// Eine gebrochene Kette ist eine Antwort (`ok: false` samt `AUDIT_001`),
+    /// kein Fehler. Ein Fehler ist, was nicht geht: eine Anfrage, die so nicht
+    /// gilt, ein Log, das sich nicht lesen lässt, ein Export, der sich nicht
+    /// schreiben lässt.
     async fn audit(
         &self,
-        _request: Request<v1::AuditRequest>,
+        request: Request<v1::AuditRequest>,
     ) -> Result<Response<v1::AuditResponse>, Status> {
-        Err(unimplemented("Audit", "HUM-070 with `humanitl audit`"))
+        let Some(service) = self.audit_log.as_ref() else {
+            return Err(diagnostic_to_status(
+                &Diagnostic::builder(codes::IPC_006, Severity::Error)
+                    .why(
+                        "this daemon runs without an audit log, so there is no chain to check, \
+                         list or write"
+                            .to_owned(),
+                    )
+                    .build(),
+            ));
+        };
+        service
+            .answer(&request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
     }
 
     async fn get_config(
@@ -1892,12 +1931,9 @@ mod tests {
     async fn every_rpc_of_sprint_two_and_later_is_unimplemented() {
         let queue = queue();
         let server = server(&queue);
+        // `Audit` antwortet seit HUM-156; ohne Audit-Log mit `IPC_006`, was
+        // `a_daemon_without_an_audit_log_says_so` in `tests/audit_rpc.rs` misst.
         let codes = [
-            server
-                .audit(Request::new(v1::AuditRequest::default()))
-                .await
-                .err()
-                .map(|status| (status.code(), status.message().to_owned())),
             server
                 .get_config(Request::new(v1::GetConfigRequest::default()))
                 .await

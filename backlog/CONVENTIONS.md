@@ -3200,3 +3200,28 @@ danach geht die alte.
 **`output.rs` heißt `render.rs`, `docs/CLI.md` heißt `docs/cli.md`.** Beide
 gab es vor HUM-070 unter diesem Namen; ein zweiter Renderer oder ein zweites
 Dokument, das sich nur in der Schreibweise unterscheidet, wäre schlechter.
+
+### 4.32 Aus der Umsetzung der `Audit`-RPC (HUM-156, 2026-09-18)
+
+**Ein Rückfall nur bei Schweigen.** Eine Kommandozeile, die zuerst den Daemon
+fragt und sonst selbst rechnet, fällt nur zurück, wenn kein Daemon antwortet:
+`Unavailable`, `Unauthenticated` oder `Unimplemented` (ein Daemon, der den
+Aufruf noch nicht kennt). Eine Ablehnung ist eine Antwort; ihr Befund ist die
+Auskunft und wird nicht durch eine schwächere Rechnung ersetzt. Für
+`humanitl audit` steht das in `Refusal` (`daemon/bin/humanitl/src/cmd/audit.rs`).
+
+**Ein Export, eine Stelle.** Den Audit-Export schreiben Daemon und
+Kommandozeile mit demselben Code (`humanitl_audit::export`). Das CSV hat die
+zwölf Spalten aus HUM-050 (`seq,ts,session,kind,flow,host,method,decision,
+rule,status,size,hash`); die acht Felder eines Records aus HUM-070 gelten nicht
+mehr.
+
+**Zeitraum auf der Leitung einschließlich.** `AuditRequest.Export.from/to` und
+`Query.from/to` schließen beide Grenzen ein; ein Client, der halboffen
+schneidet, schickt als obere Grenze die letzte ganze Mikrosekunde davor.
+
+**Eine Frage verändert die Kette nicht.** `Audit` schreibt keinen Record,
+auch nicht `audit.verified`: Der Kopf, den Oberfläche und Kommandozeile
+vergleichen, bliebe sonst nie stehen.
+
+Neu im Register: `AUDIT_009` (Audit-Anfrage ungültig, gRPC `InvalidArgument`).

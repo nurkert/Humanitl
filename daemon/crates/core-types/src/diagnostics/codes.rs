@@ -1303,6 +1303,15 @@ registry! {
     CONFIG_018 => "config", "Schlüssel ist eine Gruppe", "#config_018",
         "`humanitl config set` bekommt einen Pfad wie `hold`, unter dem weitere Schlüssel stehen, statt eines einzelnen Werts.",
         "`CopyCommand`: `humanitl config get <gruppe>` zeigt die Schlüssel darunter.";
+    /// Eine `Audit`-Anfrage lässt sich so nicht ausführen (HUM-156).
+    ///
+    /// Keine Operation, ein Exportformat außer `jsonl` und `csv`, ein Zielpfad,
+    /// der nicht absolut ist, eine verlangte Host-Schwärzung, die es noch nicht
+    /// gibt, oder ein Zeitpunkt oder Cursor, der sich nicht lesen lässt. Eine
+    /// abgelehnte Anfrage prüft nichts und schreibt nichts.
+    AUDIT_009 => "audit", "Audit-Anfrage ungültig", "#audit_009",
+        "Eine `Audit`-Anfrage nennt keine Operation, ein unbekanntes Exportformat, einen relativen Zielpfad, eine Host-Schwärzung oder einen unlesbaren Zeitpunkt oder Cursor.",
+        "`CopyCommand` mit `humanitl audit --help`; der Text nennt das Feld, das nicht stimmt.";
 }
 
 /// Sucht einen Code im Register.

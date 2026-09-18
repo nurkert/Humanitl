@@ -21,6 +21,9 @@ libc.workspace = true
 rustix.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+# Der Export schreibt in eine Nebendatei mit zufälligem Namen und gibt ihr
+# erst fertig den Zielnamen (HUM-156, vorher in der Kommandozeile).
+tempfile.workspace = true
 thiserror.workspace = true
 # Nur `tokio::sync::broadcast` für den Strom der Befunde, wie in der
 # Aufzeichnung; der Schreiber selbst ist ein Thread ohne Laufzeit.
@@ -37,4 +40,3 @@ bytes.workspace = true
 humanitl-recorder.workspace = true
 # Nur für `anchor_tampered_detected`: Der Test ändert einen Anker in SQLite.
 rusqlite.workspace = true
-tempfile.workspace = true

@@ -3314,7 +3314,8 @@ fn audit_verify_broken_exit_4() {
     assert!(stderr(&json).is_empty(), "stderr must stay clean");
 }
 
-/// Der CSV-Export hat eine Kopfzeile mit acht Spalten und eine Zeile je Record.
+/// Der CSV-Export hat eine Kopfzeile mit den zwölf Spalten aus HUM-050 und
+/// eine Zeile je Record (HUM-156; bis dahin acht).
 #[test]
 fn audit_export_csv_columns() {
     let harness = Harness::new();
@@ -3346,17 +3347,19 @@ fn audit_export_csv_columns() {
     let mut lines = csv.lines();
     assert_eq!(
         lines.next(),
-        Some("seq,ts,session,kind,data,prev,hash,mac"),
+        Some("seq,ts,session,kind,flow,host,method,decision,rule,status,size,hash"),
         "{csv}"
     );
     assert_eq!(lines.clone().count(), 4, "{csv}");
     let first = lines.next().unwrap_or_default();
-    assert!(
-        first.starts_with("1,2026-09-02T10:01:00.000000Z,-,flow.decided,"),
+    // `data` steht nicht im CSV; die Spalten, die der Record nicht trägt,
+    // bleiben leer, und der Hash schließt die Zeile ab.
+    let hash = first_record_hash(&log);
+    assert_eq!(
+        first,
+        format!("1,2026-09-02T10:01:00.000000Z,-,flow.decided,,,,,,,,{hash}"),
         "{csv}"
     );
-    // Ein Feld mit Komma und Anführungszeichen steht nach RFC 4180 da.
-    assert!(first.contains("\"\""), "the quotes are doubled: {csv}");
 
     // Ein vorhandener Export wird nie überschrieben.
     let again = harness.run([
@@ -3408,6 +3411,15 @@ fn audit_export_csv_columns() {
             "a jsonl row is the line of the log, byte for byte: {line}"
         );
     }
+}
+
+/// Der Hash des ersten Records einer Kette.
+fn first_record_hash(path: &Path) -> String {
+    let text = text_of(path);
+    let line = text.lines().next().expect("the log has a record");
+    humanitl_audit::AuditRecord::from_line(line.as_bytes())
+        .expect("the first line is a record")
+        .hash
 }
 
 /// Der Text einer Datei, für den Vergleich Zeile gegen Zeile.
@@ -4732,4 +4744,258 @@ fn config_set_is_not_refused_by_a_value_that_looks_like_a_key() {
         written.contains("theme = \"hold.timeout_secs\""),
         "{written}"
     );
+}
+
+//
+// `audit` gegen einen Daemon, der `Audit` beantwortet (HUM-156). Der Dienst
+// ist derselbe `IpcServer` wie in `humanitld`, ohne Proxy, mit einem festen
+// Schlüssel und den Ankern aus der Datenbank der Umgebung.
+
+/// Schreibt eine Kette mit dem Schreiber des Daemons, Anker alle drei Records
+/// in Datei und Tabelle, und gibt den letzten Record zurück.
+fn anchored_chain(harness: &Harness, records: usize) -> humanitl_audit::AuditRecord {
+    use humanitl_audit::kinds::ConfigChanged;
+    use humanitl_audit::{
+        Anchor, AnchorMirror, AuditKey, AuditWriter, KeyOrigin, RecordKind, WriterOptions,
+    };
+    use humanitl_recorder::{AnchorStore, AuditAnchor};
+
+    let paths = harness.paths();
+    std::fs::create_dir_all(paths.db_path().parent().expect("the data directory"))
+        .expect("the data directory");
+    let store = AnchorStore::open(&paths.db_path()).expect("the anchor table");
+    let mirror: AnchorMirror = Box::new(move |anchor: &Anchor| {
+        store.put(&AuditAnchor {
+            seq: anchor.seq,
+            hash: anchor.hash.clone(),
+            ts: anchor.ts.clone(),
+        })
+    });
+    let (writer, _) = AuditWriter::open(
+        &paths.audit_path(),
+        &AuditKey::from_bytes(AUDIT_KEY, KeyOrigin::File),
+        WriterOptions {
+            anchor_every: 3,
+            ..WriterOptions::default()
+        },
+        &[],
+        Some(mirror),
+    )
+    .expect("the writer opens");
+    for index in 0..records {
+        writer.handle().record(
+            None,
+            RecordKind::ConfigChanged(ConfigChanged {
+                key: format!("hold.timeout_secs.{index}"),
+                origin: "cli".to_owned(),
+                secret: false,
+                value: Some("300".to_owned()),
+            }),
+        );
+    }
+    let _ = writer.stop("test").expect("the writer stops");
+    let text = text_of(&paths.audit_path());
+    let last = text.lines().last().expect("a record");
+    humanitl_audit::AuditRecord::from_line(last.as_bytes()).expect("the last line is a record")
+}
+
+/// `audit verify` fragt den Daemon, und der prüft mit Schlüssel und Ankern;
+/// die Ausgabe sagt beides und nennt den Kopf, den der Daemon nennt.
+#[test]
+fn audit_verify_asks_the_daemon_for_key_and_anchors() {
+    let harness = Harness::new();
+    let last = anchored_chain(&harness, 7);
+    let _daemon = common::AuditServer::start(&harness, AUDIT_KEY);
+
+    let output = harness.run(["audit", "verify"]);
+    let text = stdout(&output);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(text.contains("audit chain: OK"), "{text}");
+    assert!(
+        text.contains("hmac key:    checked by the daemon"),
+        "{text}"
+    );
+    assert!(text.contains("checked by:  daemon"), "{text}");
+    assert!(!text.contains("file mode"), "the daemon checked it: {text}");
+    assert!(text.contains(&format!("(seq {})", last.body.seq)), "{text}");
+
+    let json = harness.run(["--json", "audit", "verify"]);
+    assert_eq!(code(&json), 0, "{}", stderr(&json));
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&json).trim()).expect("one JSON value");
+    assert_eq!(value["mode"], "full");
+    assert_eq!(value["hmac"], "checked");
+    assert_eq!(value["anchors"], "checked");
+    assert_eq!(value["checked_by"], "daemon");
+    assert_eq!(value["head"]["hash"], last.hash);
+    assert_eq!(value["head"]["seq"], last.body.seq);
+    let anchors = humanitl_recorder::read_anchors(&harness.paths().db_path()).expect("anchors");
+    assert_eq!(value["anchor_count"], anchors.len());
+    assert!(value["last_anchor_at"].is_string(), "{value}");
+    assert_eq!(value["warnings"], serde_json::json!([]), "{value}");
+}
+
+/// Der Daemon rechnet die MACs mit seinem Schlüssel nach. Eine Kette, die ein
+/// anderer Schlüssel versiegelt hat, bricht bei ihm am ersten Record; die
+/// Prüfung der Datei ohne Schlüssel sähe sie heil.
+#[test]
+fn audit_verify_through_the_daemon_sees_a_foreign_key() {
+    let harness = Harness::new();
+    anchored_chain(&harness, 4);
+    let _daemon = common::AuditServer::start(&harness, [1_u8; 32]);
+
+    let output = harness.run(["audit", "verify"]);
+    assert_eq!(code(&output), 4, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("audit chain: BROKEN at seq 1 (mac_mismatch)"),
+        "{}",
+        stdout(&output)
+    );
+
+    let log = harness.paths().audit_path();
+    let file = harness.run(["audit", "verify", "--file", &log.display().to_string()]);
+    assert_eq!(code(&file), 0, "{}", stderr(&file));
+}
+
+/// Eine nach dem Schreiben veränderte Zeile: über den Daemon „gebrochen ab
+/// Sequenz n" mit Grund, Exit 4 und `AUDIT_001`.
+#[test]
+fn audit_verify_through_the_daemon_reports_a_changed_line() {
+    let harness = Harness::new();
+    anchored_chain(&harness, 7);
+    let log = harness.paths().audit_path();
+    let text = text_of(&log);
+    let tampered = text.replacen("hold.timeout_secs.1\"", "hold.timeout_secs.9\"", 1);
+    assert_ne!(tampered, text, "the fixture must really change");
+    std::fs::write(&log, &tampered).expect("the tampered log");
+    let _daemon = common::AuditServer::start(&harness, AUDIT_KEY);
+
+    let output = harness.run(["audit", "verify"]);
+    assert_eq!(code(&output), 4, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("audit chain: BROKEN at seq 2 (hash_mismatch)"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stdout(&output).contains("checked by:  daemon"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).starts_with("error[AUDIT_001]: "),
+        "{}",
+        stderr(&output)
+    );
+
+    let json = harness.run(["--json", "audit", "verify"]);
+    assert_eq!(code(&json), 4, "{}", stderr(&json));
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&json).trim()).expect("one JSON value");
+    assert_eq!(value["chain"], "broken");
+    assert_eq!(value["first_bad_seq"], 2);
+    assert_eq!(value["reason"], "hash_mismatch");
+    assert_eq!(value["diagnostic"]["code"], "AUDIT_001");
+}
+
+/// Ein Daemon, der antwortet und ablehnt, wird nicht durch die schwächere
+/// Prüfung der Datei ersetzt: Sein Befund ist die Auskunft.
+#[test]
+fn audit_verify_does_not_replace_a_refusing_daemon_with_the_file() {
+    let harness = Harness::new();
+    audit_chain(&harness.paths().audit_path(), 3);
+    // Der Fake hat kein Audit-Log und sagt das mit `IPC_006`.
+    let _daemon = FakeServer::start(&harness);
+
+    let output = harness.run(["audit", "verify"]);
+    assert_ne!(code(&output), 0, "{}", stdout(&output));
+    assert!(stderr(&output).contains("[IPC_006]"), "{}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("audit chain"),
+        "no file-mode result stands in for the daemon: {}",
+        stdout(&output)
+    );
+}
+
+/// Beim Export dasselbe: Ein Daemon, der ablehnt, wird nicht durch den Export
+/// aus der Datei ersetzt, und es entsteht keine Datei.
+#[test]
+fn audit_export_does_not_replace_a_refusing_daemon_with_the_file() {
+    let harness = Harness::new();
+    audit_chain(&harness.paths().audit_path(), 3);
+    // Der Fake hat kein Audit-Log und sagt das mit `IPC_006`.
+    let _daemon = FakeServer::start(&harness);
+
+    let output = harness.run(["audit", "export", "--format", "jsonl", "--out", "x.jsonl"]);
+    assert_ne!(code(&output), 0, "{}", stdout(&output));
+    assert!(stderr(&output).contains("[IPC_006]"), "{}", stderr(&output));
+    assert!(
+        !harness.path("work/x.jsonl").exists(),
+        "no file-mode export stands in for the daemon"
+    );
+}
+
+/// Ein Daemon, der einen Export meldet, den dieser Aufruf nicht sieht, ist
+/// kein Erfolg: `AUDIT_008`, und „exported" steht nirgends (HUM-156).
+#[test]
+fn audit_export_that_the_caller_cannot_see_is_audit_008() {
+    let harness = Harness::new();
+    audit_chain(&harness.paths().audit_path(), 3);
+    let _daemon = FakeServer::start_with_silent_export(&harness);
+
+    let output = harness.run(["audit", "export", "--format", "jsonl", "--out", "x.jsonl"]);
+    assert_ne!(code(&output), 0, "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("[AUDIT_008]"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("exported"), "{}", stdout(&output));
+    assert!(!harness.path("work/x.jsonl").exists());
+}
+
+/// Der Export geht mit seinem Zeitraum über den Daemon: halboffen wie auf
+/// der Kommandozeile, JSONL Byte für Byte, der relative Pfad beim Aufrufer.
+#[test]
+fn audit_export_goes_through_the_daemon_with_its_range() {
+    let harness = Harness::new();
+    let log = harness.paths().audit_path();
+    audit_chain(&log, 5);
+    let _daemon = common::AuditServer::start(&harness, AUDIT_KEY);
+
+    let output = harness.run([
+        "--json",
+        "audit",
+        "export",
+        "--format",
+        "jsonl",
+        "--out",
+        "range.jsonl",
+        "--since",
+        "2026-09-02T10:02:00Z",
+        "--until",
+        "2026-09-02T10:04:00Z",
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("one JSON value");
+    assert_eq!(value["source"], "daemon", "{value}");
+    assert_eq!(value["exported"], 2, "{value}");
+    let body = text_of(&harness.path("work/range.jsonl"));
+    let log_text = text_of(&log);
+    let expected: Vec<&str> = log_text
+        .lines()
+        .filter(|line| line.contains("10:02:00.000000Z") || line.contains("10:03:00.000000Z"))
+        .collect();
+    assert_eq!(expected.len(), 2);
+    assert_eq!(body, format!("{}\n", expected.join("\n")));
+
+    let csv = harness.run(["audit", "export", "--format", "csv", "--out", "all.csv"]);
+    assert_eq!(code(&csv), 0, "{}", stderr(&csv));
+    let text = text_of(&harness.path("work/all.csv"));
+    assert!(
+        text.starts_with("seq,ts,session,kind,flow,host,method,decision,rule,status,size,hash\r\n"),
+        "{text}"
+    );
+    assert_eq!(text.matches("\r\n").count(), 6, "{text}");
 }

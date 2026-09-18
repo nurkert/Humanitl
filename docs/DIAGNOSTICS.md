@@ -956,6 +956,14 @@ Audit-Export nicht schreibbar
 
 **Fix.** `CopyCommand`, das die vorhandene Datei beiseitelegt; sonst nennt der Text den Pfad und den Grund.
 
+#### AUDIT_009
+
+Audit-Anfrage ungültig
+
+**Auslöser.** Eine `Audit`-Anfrage nennt keine Operation, ein unbekanntes Exportformat, einen relativen Zielpfad, eine Host-Schwärzung oder einen unlesbaren Zeitpunkt oder Cursor.
+
+**Fix.** `CopyCommand` mit `humanitl audit --help`; der Text nennt das Feld, das nicht stimmt.
+
 ### Bereich doctor
 
 #### DOCTOR_001

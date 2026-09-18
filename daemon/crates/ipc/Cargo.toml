@@ -35,6 +35,8 @@ chrono.workspace = true
 
 base64.workspace = true
 dashmap.workspace = true
+# Der Kopf der Audit-Kette steht im Log als Hex und reist als Bytes (HUM-156).
+hex.workspace = true
 bytes.workspace = true
 prost.workspace = true
 prost-types.workspace = true

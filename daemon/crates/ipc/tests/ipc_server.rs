@@ -692,26 +692,14 @@ async fn every_other_rpc_says_which_issue_brings_it() {
     let daemon = Daemon::new().await;
     let mut client = daemon.client().await;
 
-    let mut refusals = Vec::new();
-    refusals.push(
-        client
-            .audit(v1::AuditRequest::default())
-            .await
-            .map(|_| ())
-            .unwrap_err(),
-    );
-    refusals.push(
-        client
-            .get_config(v1::GetConfigRequest::default())
-            .await
-            .map(|_| ())
-            .unwrap_err(),
-    );
-
-    for error in refusals {
-        assert_eq!(error.code(), Code::Unimplemented);
-        assert!(error.message().contains("arrives in"), "{error}");
-    }
+    // `Audit` antwortet seit HUM-156 (`tests/audit_rpc.rs`).
+    let error = client
+        .get_config(v1::GetConfigRequest::default())
+        .await
+        .map(|_| ())
+        .unwrap_err();
+    assert_eq!(error.code(), Code::Unimplemented);
+    assert!(error.message().contains("arrives in"), "{error}");
 
     // `GetFlow` und `GetBody` gibt es seit HUM-026. Dieser Daemon läuft ohne
     // Aufzeichnung: Ein unbekannter Flow ist dann `NOT_FOUND`, und ein Body hat
