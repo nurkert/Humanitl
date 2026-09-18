@@ -186,11 +186,35 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
           ),
         if (_strip(l10n, session) case final Widget strip) strip,
         Expanded(child: _view(tokens, l10n, session)),
+        // Das Ende bekommt einen sichtbaren Platz, und zwar jedes Ende
+        // (HUM-136). Der Exit-Code zuerst, weil er die genaueste Auskunft
+        // ist; danach, was über das Ende des Stroms zu sagen ist.
         if (session.exitCode case final int code)
-          _ExitStrip(text: l10n.sandboxTerminalExited(code)),
+          _ExitStrip(text: l10n.sandboxTerminalExited(code))
+        else if (session.phase == TerminalPhase.detached)
+          _ExitStrip(
+            text: _endText(l10n, session),
+            stripKey: const Key('sandbox-terminal-detached'),
+          ),
       ],
     );
   }
+
+  /// Was unter dem Terminal steht, wenn der Strom endete (HUM-136).
+  ///
+  /// **Zwei Sätze, weil zwei verschiedene Dinge passiert sind, und einer
+  /// davon wäre im anderen Fall eine Behauptung über etwas, das diese
+  /// Anwendung nicht wissen kann** (`backlog/CONVENTIONS.md` 4.13).
+  /// `DAEMON_001` heißt: Es antwortet überhaupt kein Daemon mehr -- und die
+  /// Sandbox lebt in genau diesem Daemon. „Die Sitzung läuft weiter" wäre
+  /// dann eine Beruhigung ohne Deckung; was dort steht, ist deshalb, dass der
+  /// Zustand der Sitzung unbekannt ist. Endete nur der Strom, während der
+  /// Daemon weiter antwortet, bleibt der Satz für diesen Fall -- auch der
+  /// verspricht nicht, dass die Sitzung lebt, sondern nennt die Bedingung.
+  String _endText(AppLocalizations l10n, TerminalSessionState session) =>
+      session.diagnostic?.code == DiagnosticCodes.daemonUnreachable
+      ? l10n.sandboxTerminalConnectionLost
+      : l10n.sandboxTerminalDetached;
 
   /// Die Zeile über dem Terminal, oder keine.
   ///
@@ -385,15 +409,21 @@ class _HeldStrip extends StatelessWidget {
 
 /// The line that says the agent ended.
 class _ExitStrip extends StatelessWidget {
-  const _ExitStrip({required this.text});
+  const _ExitStrip({
+    required this.text,
+    this.stripKey = const Key('sandbox-terminal-exit'),
+  });
 
   final String text;
+
+  /// Woran ein Test diesen Streifen erkennt. Zwei Enden, zwei Schlüssel.
+  final Key stripKey;
 
   @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     return Container(
-      key: const Key('sandbox-terminal-exit'),
+      key: stripKey,
       constraints: const BoxConstraints(minHeight: terminalStripHeight),
       color: tokens.colors.bg2,
       padding: EdgeInsets.symmetric(horizontal: tokens.spacing.x2),
