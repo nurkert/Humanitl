@@ -4622,10 +4622,11 @@ fn config_set_refuses_a_wrong_value_that_was_already_there() {
     let file = config_file(&harness);
     std::fs::create_dir_all(file.parent().expect("a directory")).expect("the config directory");
 
-    // Das Schema lässt 0 zu, die Prüfung verlangt mindestens einen Tag.
-    let before = "[recorder]\nretention_days = 0\n";
+    // Das Schema lässt jede nicht negative Zahl zu, die Prüfung höchstens
+    // 3650 Tage. (Bis HUM-051 war 0 das Beispiel; seitdem heißt 0 „nie".)
+    let before = "[recorder]\nretention_days = 4000\n";
     std::fs::write(&file, before).expect("a config with a wrong value");
-    let output = config_set(&harness, &["recorder.retention_days", "0"]);
+    let output = config_set(&harness, &["recorder.retention_days", "4000"]);
     let text = stderr(&output);
     assert_eq!(code(&output), 1, "{text}");
     assert!(text.contains("[CONFIG_003]"), "{text}");
