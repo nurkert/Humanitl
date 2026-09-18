@@ -576,7 +576,7 @@ Definition of Done für jedes Issue: Tests auf der passenden Ebene, neue Fehlerp
 1. **M6 Docker-Backend + HTTP/2-Upstream.** Zweite `SandboxBackend`-Impl (`--network none` + UDS + eigenes seccomp-JSON), Image-Layering `humanitl/base → agent-opencode → packs`, Cache-Volumes pro Projekt, UID-Mapping. h2 zum Upstream aus `[experimental]` heben.
 2. **M7 Browser.** Issues: HUM-080 Sandbox-Profil `browser` (Chromium-Flags, SPKI-Hash der CA, `AF_UNIX` erlaubt, `humanitl_browser.py` im Pack, Briefing-Zusatz); HUM-081 Reverse-Bridge im Shim und `cdp.sock`; HUM-082 CDP-Client im Daemon (`chromiumoxide`, Screencast, Input, Tab-Liste); HUM-083 gRPC `Browser`-Bidi-Stream (Frame JPEG + Metadaten, Input-Events, Takeover-Flag); HUM-084 Browser-Tab im UI (Frame als `Image.memory`, Klick- und Tastatur-Weiterleitung, Übernahme-Modus mit sichtbarem Rahmen, Tab-Wechsel, „zurück an den Agenten"); HUM-085 Screenshot-Vorschau für das Domain-Panel über denselben Browser (ersetzt M10-Teil). Fallstricke: Chromium braucht `--no-sandbox` in bwrap; Screencast-Frames drosseln (max 10 fps, JPEG 60); Tastatur-Layouts in `dispatchKeyEvent`; nodriver-Versionen pinnen.
 3. **M8 Plugin-API.** Externe Detektoren und Aktionen über gRPC, WASM-Detektoren, Nutzer-Katalog, Panel-Slots. Erst wenn drei echte Bedarfe dokumentiert sind.
-4. **M9 Response-Moderation.** Rücktausch auch in gestreamten Antworten (Token-Grenzen über Chunk-Puffer), optional Responses halten (`ask` auf Response-Ebene). Der einfache Rücktausch für nicht-gestreamte Text-Antworten ist bereits MVP (HUM-079).
+4. **M9 Response-Moderation.** Rücktausch auch in gestreamten Antworten (Token-Grenzen über Chunk-Puffer), optional Responses halten (`ask` auf Response-Ebene). Dazu der einfache Rücktausch für nicht-gestreamte Text-Antworten (HUM-079), am 2026-09-18 aus dem MVP hierher verschoben.
 5. **M10 Domain-Vorschau Live.** Nutzer-getriggerter Favicon/og:title-Fetch host-seitig mit Limits; Screenshot via Playwright in eigener netzwerkbeschränkter Sandbox, als Bild ins UI.
 6. **M11 Credential-Injection.** Echte Tokens (GitHub, Registries) nur im Proxy, Sandbox sieht Platzhalter; Push nur auf konfigurierten Branch.
 7. **OpenCode-Permission-Bridge.** `opencode serve` SSE + `POST /session/:id/permissions/:id`, OpenCodes eigene Tool-Prompts nativ in Flutter rendern. Weitere Agent-Adapter: Aider, Codex (`--oss`), Claude Code (via `ANTHROPIC_BASE_URL`).
@@ -587,6 +587,7 @@ Definition of Done für jedes Issue: Tests auf der passenden Ebene, neue Fehlerp
 12. **Upstream-Proxy und Tor.** `Egress`-Adapter `HttpProxy` und `Socks5h` (`tokio-socks`), Config `egress.via`, Regel-Feld `via`, Tor-Check im Isolation-Panel, Leak-Test: kein lokaler DNS-Lookup im Tor-Modus. Nice-to-have.
 13. **Flatpak.** UI im Flatpak, Daemon außerhalb.
 14. **OpenTelemetry** hinter Cargo-Feature, Team-Kataloge, Regel-Profile teilen.
+15. **Pseudonym-Mapping dauerhaft (HUM-048).** Verschlüsselte Zuordnungstabelle im Daemon, Schlüssel im System-Keyring, Mapping-Panel in Editor und History, verschlüsselter Export, dazu das Popover am Diff-Glow mit Aktionen je Fund und „Immer ignorieren" samt Allowlist aus HUM-049. Am 2026-09-18 aus dem MVP hierher verschoben; im MVP lebt die Zuordnung je Sitzung im Speicher.
 
 ---
 
