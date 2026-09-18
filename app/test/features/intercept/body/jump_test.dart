@@ -69,6 +69,7 @@ Future<void> pumpCard(
                   body: detail.request!.body,
                   headers: detail.request!.headers,
                   findings: detail.findings,
+                  pending: false,
                 ),
               ),
             ],
@@ -159,6 +160,24 @@ void main() {
     await pumpCard(tester, source: '');
     expect(find.text(english.interceptBodyEmpty), findsOneWidget);
     expect(find.text(english.interceptBodyPaneRaw), findsNothing);
+  });
+
+  testWidgets('the sentence about an empty body carries fg1', (
+    WidgetTester tester,
+  ) async {
+    // Ein Satz, den jemand lesen soll, ist `fg1` oder besser; `fg2` misst
+    // 3,02:1 auf `bg3` und gehört den deaktivierten Controls (`docs/UX.md` 6,
+    // Sekundärtext; HUM-154). Ein Golden allein genügt dafür nicht: die
+    // CI-Variante von Alchemist zeichnet Text als Block, in dem kein Wort
+    // mehr steht. Hier wird deshalb der Stil gelesen, nicht ein Bild
+    // verglichen.
+    await pumpCard(tester, source: '');
+    final Text sentence = tester.widget<Text>(
+      find.byKey(const Key('body-empty')),
+    );
+    expect(sentence.data, english.interceptBodyEmpty);
+    expect(sentence.style?.color, HTokens.dark.colors.fg1);
+    expect(sentence.style?.color, isNot(HTokens.dark.colors.fg2));
   });
 
   testWidgets('a body that is not JSON keeps the raw text and says why', (

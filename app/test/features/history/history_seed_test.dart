@@ -177,10 +177,22 @@ void main() {
       if (detail.summary.status == 403 || detail.summary.status == 504) {
         expect(detail.responseBody, isNotNull);
       }
-      // Nothing came back at all where there is no status, and a 204 is an
-      // answer without content by definition.
-      if (detail.summary.status == 0 || detail.summary.status == 204) {
+      // In this scenario a status is written exactly where a response was
+      // recorded, so the reference is missing where the status is zero. A 204
+      // is an answer without content, and a recorded answer always carries a
+      // reference, even one of zero bytes -- the daemon fills `response_body`
+      // from the response message itself (`daemon/crates/ipc/src/convert.rs`,
+      // `response.map(...)`), so a fake that hands back null there would
+      // teach the screens a shape the daemon never sends. What the daemon
+      // does not promise is the reverse: a blocked flow and a meta request
+      // have no response message either, and neither carries a status.
+      if (detail.summary.status == 0) {
         expect(detail.responseBody, isNull);
+        expect(detail.summary.responseSize, 0);
+      }
+      if (detail.summary.status == 204) {
+        expect(detail.responseBody, isNotNull);
+        expect(detail.responseBody!.isEmpty, isTrue);
         expect(detail.summary.responseSize, 0);
       }
       // The number and the bytes agree, always -- checked against what
