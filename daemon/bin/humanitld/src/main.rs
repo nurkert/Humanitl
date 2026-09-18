@@ -13,8 +13,15 @@
 //!
 //! Die Reihenfolge beim Start ist festgelegt und wichtig: Pfade, Konfiguration,
 //! `tracing`, CA, Registry und Warteschlange, Proxy, gRPC-Dienst. Was danach
-//! kommt, ist das Warten auf das Signal; danach werden die Sitzungen gestoppt
-//! und Socket und Token entfernt.
+//! kommt, ist das Warten auf das Signal; danach wird die Sandbox beendet, die
+//! Sitzungen werden gestoppt und Socket und Token entfernt.
+//!
+//! Der Abschied hat selbst eine Reihenfolge und eine Frist (HUM-142): **erst
+//! das Kind, dann der eigene Abschied.** Die Sandbox wird über
+//! [`SandboxService::shutdown`] beendet (`SIGTERM`, nach `KILL_GRACE`
+//! `SIGKILL`), und was danach an Aufgaben übrig ist, bekommt [`TASK_GRACE`]
+//! und wird dann fallen gelassen. Ohne beides wartete der Daemon ohne Frist
+//! auf das Kind der Sandbox, das ihn nicht gehen lässt.
 //!
 //! Jeder Fehlerpfad hier ist ein [`Diagnostic`]: Code, Überschrift, Grund und,
 //! wo es einen gibt, ein Vorschlag zur Behebung. `main` schreibt ihn als eine
@@ -134,9 +141,32 @@ fn parse_speed(text: &str) -> Result<f64, SpeedError> {
     }
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
-    match run().await {
+/// Wie lange der Prozess nach dem Abschied noch auf seine eigenen Aufgaben
+/// wartet, bevor er sie fallen lässt (HUM-142).
+///
+/// Die Laufzeit wartet beim Fallenlassen ohne Frist auf jede blockierende
+/// Aufgabe, die gerade läuft — und eine davon ist das `wait` auf den Prozess
+/// der Sandbox. Am 2026-09-07 stand der Daemon deshalb zweimal hinter seiner
+/// letzten Zeile (`recording flushed`), während die Sandbox weiterlief: ein
+/// Hänger ohne Meldung. Die Sandbox ist zu diesem Zeitpunkt beendet
+/// ([`SandboxService::shutdown`]), diese Frist deckt also nur noch den Rest.
+const TASK_GRACE: Duration = Duration::from_secs(5);
+
+fn main() -> ExitCode {
+    // Eigene Laufzeit statt `#[tokio::main]`: Nur so lässt sich das Warten am
+    // Ende befristen. `#[tokio::main]` lässt die Laufzeit fallen, und das
+    // wartet ohne Frist.
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("humanitld: cannot start the async runtime: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let code = match runtime.block_on(run()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(diagnostic) => {
             eprintln!("humanitld: {diagnostic}");
@@ -145,7 +175,32 @@ async fn main() -> ExitCode {
             }
             ExitCode::FAILURE
         }
+    };
+    if let Some(diagnostic) = shutdown_runtime(runtime, TASK_GRACE) {
+        eprintln!("humanitld: {diagnostic}");
     }
+    code
+}
+
+/// Wartet auf die Aufgaben der Laufzeit, höchstens `grace`, und sagt es, wenn
+/// die Frist nicht gereicht hat.
+///
+/// Was nach `grace` noch läuft, wird fallen gelassen; der Prozess endet
+/// trotzdem. Das ist die Frist aus HUM-142: Ein Abschied, der auf eine
+/// blockierende Aufgabe ohne Ende wartet, ist kein Abschied.
+fn shutdown_runtime(runtime: tokio::runtime::Runtime, grace: Duration) -> Option<Diagnostic> {
+    let started = std::time::Instant::now();
+    runtime.shutdown_timeout(grace);
+    let took = started.elapsed();
+    (took >= grace).then(|| {
+        Diagnostic::builder(codes::DAEMON_009, Severity::Warning)
+            .why(format!(
+                "tasks of this daemon were still running {} s after the farewell began, so they \
+                 were dropped and the process ended anyway",
+                grace.as_secs_f32()
+            ))
+            .build()
+    })
 }
 
 /// Ein Behebungsvorschlag als eine Zeile für das Terminal.
@@ -282,6 +337,28 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
         "proxy session started"
     );
 
+    // Der Dienst bleibt hier greifbar: Der Abschied unten braucht ihn, um die
+    // Sandbox zu beenden, bevor der Daemon selbst geht (HUM-142). Er ist
+    // billig zu klonen; der Zustand liegt hinter einem `Arc`.
+    let sandbox = SandboxService::new(
+        SessionResolver::new(xdg.clone(), base),
+        session,
+        SandboxPorts::none()
+            .with_rules(Arc::clone(&rules))
+            .with_settings(Arc::clone(&settings))
+            // Der Hinweis im Terminal kommt aus dem Ereignisstrom, den
+            // ohnehin alle lesen, und nicht aus einem Kanal vom Proxy zum
+            // Terminal (HUM-042, ARCHITECTURE 1.2).
+            .with_notices(HeldNotices::new(
+                Arc::clone(&queue),
+                Arc::clone(queue.registry()),
+            ))
+            // Was ein Lauf im Projektverzeichnis hinterlässt, bleibt in
+            // derselben Aufzeichnung liegen wie die Flows; ohne sie gäbe es
+            // die Zusammenfassung nur als Ereignis, und
+            // `humanitl sessions summary` fände nichts (HUM-043).
+            .with_recorder(recorder.clone()),
+    );
     let server = IpcServer::new(Arc::clone(&queue), &config, Some(session))
         .with_rules(Arc::clone(&rules), Some(recorder.clone()))
         .with_recorder(recorder.clone())
@@ -294,25 +371,7 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
         // eingefrorenen Konfiguration: Jeder Start löst für seine Sitzung neu
         // auf und schreibt Regeln und Frist dorthin, wo Proxy und
         // Meta-Endpunkt sie lesen (HUM-067).
-        .with_sandbox(SandboxService::new(
-            SessionResolver::new(xdg.clone(), base),
-            session,
-            SandboxPorts::none()
-                .with_rules(Arc::clone(&rules))
-                .with_settings(Arc::clone(&settings))
-                // Der Hinweis im Terminal kommt aus dem Ereignisstrom, den
-                // ohnehin alle lesen, und nicht aus einem Kanal vom Proxy zum
-                // Terminal (HUM-042, ARCHITECTURE 1.2).
-                .with_notices(HeldNotices::new(
-                    Arc::clone(&queue),
-                    Arc::clone(queue.registry()),
-                ))
-                // Was ein Lauf im Projektverzeichnis hinterlässt, bleibt in
-                // derselben Aufzeichnung liegen wie die Flows; ohne sie gäbe es
-                // die Zusammenfassung nur als Ereignis, und
-                // `humanitl sessions summary` fände nichts (HUM-043).
-                .with_recorder(recorder.clone()),
-        ));
+        .with_sandbox(sandbox.clone());
     // Dieselben Wurzeln für die Endpunkt-Probe wie für den Proxy: Zwei
     // verschiedene Vertrauensentscheidungen in einem Prozess wären die
     // Überraschung, die dieses Repository vermeidet, und die Probe spricht mit
@@ -323,7 +382,9 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
         None => server,
     };
     let (signal, stop_reason) = shutdown_with_reason();
+    let (signal, farewell) = signal_that_ends_the_sandbox(signal, sandbox.clone());
     let result = humanitl_ipc::serve(&paths.socket, &paths.token, server, signal).await;
+    join_farewell(farewell, sandbox).await;
 
     // Erst die Sitzungen, dann zurückkehren: der Accept-Loop endet, und mit
     // ihm verschwindet der Socket, den die Sandbox eingehängt hätte.
@@ -341,6 +402,115 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
     // Zuletzt das Audit-Log: `session.ended`, `daemon.stopped`, der Anker.
     stop_audit(sink, audit, stop_reason_of(&result, &stop_reason)).await;
     result
+}
+
+/// Dasselbe Signal, und der Abschied der Sandbox, der mit ihm beginnt.
+///
+/// **Erst das Kind, dann der eigene Abschied** (HUM-142). Das Sandbox-Backend
+/// startet mit `--die-with-parent`: Wer den Daemon härter beendet, ohne das
+/// Kind zu erschlagen, lässt es verwaist zurück; und wer ohne Frist auf ein
+/// Kind wartet, das `SIGTERM` abfängt, steht für immer. Beides hat am
+/// 2026-09-07 je einen M3-Lauf zum Stehen gebracht.
+///
+/// **Der Abschied beginnt mit dem Signal und nicht nach dem Ausklang.**
+/// [`humanitl_ipc::serve`] lässt offenen Aufrufen
+/// `humanitl_ipc::SHUTDOWN_GRACE` (5 s), und ein Agent, der `SIGTERM`
+/// abfängt, bekommt seine eigenen fünf. Nacheinander wartete ein Mensch auf
+/// zwei Fristen, die nichts voneinander wollen: bis zu 5 + 11 + 5 = 21 s.
+/// Nebeneinander laufen sie zusammen, und keine Zusage geht dabei verloren —
+/// eine Sandbox, die noch lebt, während der Dienst seine letzten Clients
+/// verabschiedet, hat nichts mehr zu tun; ihr Ende steht fest, sobald das
+/// Signal da ist.
+///
+/// Zurück kommt das Signal für den Dienst und der Empfänger, über den
+/// [`join_farewell`] die begonnene Aufgabe wieder einsammelt.
+fn signal_that_ends_the_sandbox(
+    signal: impl Future<Output = ()> + Send + 'static,
+    sandbox: SandboxService,
+) -> (
+    impl Future<Output = ()> + Send + 'static,
+    tokio::sync::oneshot::Receiver<tokio::task::JoinHandle<()>>,
+) {
+    let (started, waiting) = tokio::sync::oneshot::channel();
+    let signal = async move {
+        signal.await;
+        // Der Riegel steht **hier** und nicht erst in der Aufgabe: Zwischen
+        // diesem Punkt und ihrem ersten Griff läuft der Ausklang des Dienstes,
+        // und eine Verbindung, die dort noch offen ist, könnte in genau der
+        // Lücke eine Sandbox starten.
+        sandbox.begin_leaving();
+        let _ = started.send(tokio::spawn(farewell_sandbox(sandbox)));
+    };
+    (signal, waiting)
+}
+
+/// Sammelt den Abschied ein, der mit dem Signal begann, und sieht danach ein
+/// zweites Mal nach.
+///
+/// Kam nie ein Signal — der Dienst endete an einem Fehler —, gibt es auch
+/// keine Aufgabe. Der zweite Blick gilt einem `Start`, der beim Signal schon
+/// unterwegs war und sein Handle erst während des Ausklangs ablegt: Ohne ihn
+/// bekäme genau diese Sandbox keinen geordneten Abschied, sondern nur das
+/// `SIGKILL`, das `--die-with-parent` an das Ende des Daemons hängt. Läuft
+/// nichts mehr, kostet er nichts.
+async fn join_farewell(
+    farewell: tokio::sync::oneshot::Receiver<tokio::task::JoinHandle<()>>,
+    sandbox: SandboxService,
+) {
+    if let Ok(task) = farewell.await {
+        let _ = task.await;
+    }
+    farewell_sandbox(sandbox).await;
+}
+
+/// Wie lange der Abschied auf das Ende der Sandbox wartet, bevor der Daemon
+/// ohne sie weitergeht (HUM-142).
+///
+/// [`SandboxService::shutdown`] ist selbst beschränkt — `SIGTERM`, nach
+/// `KILL_GRACE` (5 s) `SIGKILL`, dann noch einmal `KILL_GRACE` auf das
+/// Einsammeln, zusammen zehn Sekunden. Diese Frist liegt eine Sekunde darüber
+/// und deckt nur den Fall, den es nicht geben sollte: ein Prozess, den auch
+/// `SIGKILL` nicht aus dem Kernel holt. Der Daemon endet dann trotzdem, und
+/// mit ihm stirbt wegen `--die-with-parent` alles, was noch an ihm hängt.
+const SANDBOX_FAREWELL: Duration = Duration::from_secs(11);
+
+/// Beendet die Sandbox dieser Sitzung, bevor der Daemon selbst geht.
+///
+/// Was es dazu gebraucht hat, steht im Protokoll: die Zeile des Dienstes mit
+/// dem Weg (`sigterm`, `sigkill`) und, wenn `SIGTERM` nicht gereicht hat, ein
+/// `SANDBOX_029` dazu. Ein Abschied, den niemand nennt, wäre wieder der Hänger
+/// ohne Meldung, den dieses Issue behebt.
+///
+/// Wird zweimal gerufen: einmal mit dem Signal, parallel zum Ausklang des
+/// Dienstes, und einmal danach für den Start, der beim Signal noch unterwegs
+/// war. Der zweite Lauf findet im Normalfall nichts mehr und kostet nichts.
+async fn farewell_sandbox(sandbox: SandboxService) {
+    let ending = tokio::task::spawn_blocking(move || sandbox.shutdown());
+    match tokio::time::timeout(SANDBOX_FAREWELL, ending).await {
+        // Die Zeile zum Ende der Sandbox schreibt der Dienst selbst, und zwar
+        // nur dann, wenn es eine gab.
+        Ok(Ok(None)) => {}
+        Ok(Ok(Some(diagnostic))) => {
+            // Ob die Sandbox dabei geendet hat, steht in der Zeile des
+            // Dienstes; diese hier behauptet es nicht, denn zu den Befunden
+            // gehört auch der Prozess, den auch `SIGKILL` nicht beendet hat.
+            tracing::warn!(
+                code = diagnostic.code.as_str(),
+                why = %diagnostic.why,
+                "the farewell of the sandbox reports a finding"
+            );
+        }
+        Ok(Err(error)) => tracing::warn!(%error, "the farewell of the sandbox did not finish"),
+        Err(_) => {
+            // Die obere Schranke von `shutdown` ist zehn Sekunden; wer hier
+            // steht, hängt an einem Prozess, den auch `SIGKILL` nicht beendet
+            // hat (D-Zustand). Der Daemon endet ohne ihn.
+            tracing::warn!(
+                deadline_secs = SANDBOX_FAREWELL.as_secs(),
+                "the sandbox did not end within the deadline; the daemon goes on without it"
+            );
+        }
+    }
 }
 
 /// Öffnet das Audit-Log und startet den Sink der Sitzung (HUM-050).
@@ -1542,6 +1712,7 @@ mod tests {
     use std::fs::{self, Permissions};
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
     use std::path::Path;
+    use std::time::Duration;
 
     use chrono::Utc;
     use humanitl_config::Env;
@@ -1554,7 +1725,7 @@ mod tests {
     use super::{
         ADVICE_DAEMON_SOCKET, Config, DirOwner, ResolverConfig, Runtime, XdgPaths,
         announce_overrides, check_private_dir, fix_hint, free_socket, load_rules, parse_speed,
-        probe_with_roots, test_ca_roots,
+        probe_with_roots, shutdown_runtime, test_ca_roots,
     };
 
     fn mode_of(path: &Path) -> u32 {
@@ -2171,6 +2342,108 @@ mod tests {
             1,
             "the probe rebuilt with the test root has to reach the server; a probe nobody \
              attaches is the defect this issue fixes"
+        );
+    }
+
+    /// Das Signal schiebt den Riegel vor, und zwar bevor die Aufgabe läuft
+    /// (HUM-142).
+    ///
+    /// Die Reihenfolge ist die Aussage: Zwischen dem Signal und dem ersten
+    /// Griff des Abschieds klingt der gRPC-Dienst aus, und eine Verbindung,
+    /// die dort noch offen ist, könnte in genau dieser Lücke eine Sandbox
+    /// starten. Der Test läuft auf einem Faden; die abgesetzte Aufgabe ist
+    /// deshalb nachweislich noch nicht gelaufen, wenn die Zusicherung greift.
+    #[tokio::test]
+    async fn the_signal_bars_a_new_sandbox_before_the_farewell_task_runs() {
+        let paths =
+            humanitl_config::Paths::new(humanitl_config::Env::from_pairs([("HOME", "/home/u")]));
+        let sandbox = humanitl_ipc::SandboxService::new(
+            humanitl_ipc::session::SessionResolver::for_config(paths, Config::default()),
+            SessionId::nil(),
+            humanitl_ipc::sandbox::SandboxPorts::none(),
+        );
+        assert!(!sandbox.is_leaving(), "nothing has happened yet");
+
+        let (signal, farewell) = super::signal_that_ends_the_sandbox(async {}, sandbox.clone());
+        signal.await;
+
+        assert!(
+            sandbox.is_leaving(),
+            "the signal itself bars the next start; waiting for the task would leave a window"
+        );
+        // Und die Aufgabe gibt es wirklich; sie wird hier nur nicht gebraucht.
+        let task = farewell.await.expect("the signal handed over its task");
+        task.await.expect("the farewell ends");
+    }
+
+    /// Eine blockierende Aufgabe ohne Ende hält den Daemon nicht mehr auf
+    /// (HUM-142).
+    ///
+    /// Das ist der gemessene Hänger vom 2026-09-07 im Kleinen: `wait` auf ein
+    /// Kind der Sandbox ist eine blockierende Aufgabe, und die Laufzeit wartet
+    /// beim Fallenlassen ohne Frist auf sie. Der Test stellt sicher, dass die
+    /// Aufgabe wirklich läuft (sonst prüfte er nur eine leere Laufzeit), misst
+    /// dann die Frist und verlangt den Befund dazu: Eine Frist, die niemand
+    /// nennt, ist wieder ein Ende ohne Meldung.
+    #[test]
+    fn a_blocking_task_without_an_end_does_not_hold_the_daemon() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (never_tx, never_rx) = std::sync::mpsc::channel::<()>();
+        runtime.spawn_blocking(move || {
+            let _ = started_tx.send(());
+            // Wartet auf ein Ereignis, das nie kommt — wie `wait` auf ein Kind,
+            // das niemand erschlagen hat. Die Frist oben deckelt es; die zehn
+            // Sekunden hier sind nur die Notbremse, damit kein Faden bleibt.
+            let _ = never_rx.recv_timeout(Duration::from_secs(10));
+            drop(never_tx);
+        });
+        started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the blocking task really runs");
+
+        let grace = Duration::from_millis(200);
+        let started = std::time::Instant::now();
+        let overdue = shutdown_runtime(runtime, grace);
+        let took = started.elapsed();
+
+        assert!(
+            took < Duration::from_secs(2),
+            "the deadline ends the waiting; it took {took:?}"
+        );
+        assert!(took >= grace, "the deadline belongs to the tasks: {took:?}");
+        let diagnostic = overdue.expect("a deadline that was reached has to be said");
+        assert_eq!(diagnostic.code.as_str(), "DAEMON_009");
+        assert!(
+            diagnostic.why.contains("0.2 s"),
+            "the finding names the deadline: {}",
+            diagnostic.why
+        );
+        assert!(
+            diagnostic.why.contains("dropped"),
+            "the finding says what happened to the tasks: {}",
+            diagnostic.why
+        );
+    }
+
+    /// Ohne eine Aufgabe, die hängt, endet das Warten vor der Frist und es
+    /// gibt nichts zu melden.
+    #[test]
+    fn a_runtime_whose_tasks_are_done_says_nothing() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.spawn_blocking(|| ());
+        let started = std::time::Instant::now();
+        let overdue = shutdown_runtime(runtime, Duration::from_secs(5));
+        assert!(overdue.is_none(), "nothing was overdue");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "it did not wait out the deadline"
         );
     }
 }

@@ -460,30 +460,13 @@ m3_config_uses_opencode_profile() {
 # `humanitl -v run` schreibt sie, sobald der Daemon die Sandbox gestartet hat.
 # Sie ist zugleich die Kennung, mit der später die Zusammenfassung abgerufen
 # wird, und der Zeitpunkt, ab dem sich ein zweites Terminal anhängen kann.
-# m3_end_sandbox_from FILE — die Sandbox dieser Sitzung wirklich beenden.
 #
-# **Warum das nötig ist, und was es über das Produkt sagt.** Endet `humanitl
-# run` an der Schranke von `timeout`, schickt es sein `Sandbox(Stop)`, und der
-# Daemon beendet die Sitzung. Ein kopfloser Agent stirbt dabei an `SIGTERM`;
-# ein Vollbild-TUI nicht, es fängt das Signal selbst ab. `--die-with-parent`
-# hält das bwrap-Kind dann am Daemon fest, der Daemon wartet auf das Kind, und
-# der ganze Lauf steht -- gemessen am 2026-09-07 zweimal unabhängig, einmal
-# hier und einmal im Review, beide Male 8 bis 20 Minuten an derselben Zeile.
-# Der eigentliche Fehler liegt im Daemon: Ein Abschied ohne Frist ist kein
-# Abschied (HUM-142). Solange der nicht behoben ist, räumt der Lauf selbst auf
-# und sagt hier, warum.
-m3_end_sandbox_from() {
-    m3_end_pid=$(grep -o 'started, pid [0-9]\{1,\}' "$1" 2> /dev/null |
-        head -n 1 | cut -d' ' -f3)
-    [ -n "$m3_end_pid" ] || return 0
-    kill -KILL "$m3_end_pid" 2> /dev/null || return 0
-    m3_end_left=100
-    while [ "$m3_end_left" -gt 0 ] && kill -0 "$m3_end_pid" 2> /dev/null; do
-        sleep 0.1
-        m3_end_left=$((m3_end_left - 1))
-    done
-}
-
+# Bis HUM-142 stand hier daneben `m3_end_sandbox_from`: Der Lauf erschlug die
+# Sandbox selbst, weil ein `Sandbox(Stop)` sie nicht zuverlässig beendete und
+# der Daemon danach ohne Frist auf sein Kind wartete. Beides ist behoben, der
+# Daemon beendet die Sandbox mit dem Stopp und mit seinem eigenen Ende, und der
+# Lauf braucht die Hilfskonstruktion nicht mehr.
+#
 # m3_wait_for_started_in FILE SECONDS — dasselbe für eine andere Sitzung.
 m3_wait_for_started_in() {
     m3_started_file="$1"
@@ -1400,7 +1383,6 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
                 "$m3_opencode_path" run 'say the word humanitl' \
                 > "$M3_OC_OUT" 2> "$M3_OC_ERR"
     ) || m3_oc_status=$?
-    m3_end_sandbox_from "$M3_OC_ERR"
 
     # **Der einzige Ausgang, den dieser Zweig nicht auf 0 festnagelt, und der
     # Grund dafür.** `humanitl run` reicht den Exit-Code des Agenten durch, und
@@ -1527,7 +1509,6 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
                 "$m3_opencode_path" run "humanitl-webfetch https://$m3_oc_fetch_host/page" \
                 > "$M3_OC_FETCH_OUT" 2> "$M3_OC_FETCH_ERR"
     ) || m3_oc_fetch_status=$?
-    m3_end_sandbox_from "$M3_OC_FETCH_ERR"
     # Dieselbe Unterscheidung wie beim ersten Lauf des echten Agenten oben:
     # Die drei Codes gehören Humanitl, jeder andere dem Agenten.
     case "$m3_oc_fetch_status" in
@@ -1589,7 +1570,6 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
                 "$E2E_CLI" -v run --profile llm-only --ask none -- "$m3_opencode_path" \
                 > "$M3_OC_TUI_OUT" 2> "$M3_OC_TUI_ERR"
     ) || m3_oc_tui_status=$?
-    m3_end_sandbox_from "$M3_OC_TUI_ERR"
 
     # Und der Beleg, dass diese Sitzung wirklich unter `llm-only` lief: Die
     # Zeile steht im Kopf jedes Laufs, und ohne sie bliebe der Zweig auch

@@ -35,7 +35,7 @@
 "daemon/crates/ipc/src/summary.rs" = 1
 "daemon/crates/ipc/tests/sandbox_rpc.rs" = 1
 "daemon/crates/ipc/tests/sandbox_start.rs" = 9
-"daemon/crates/ipc/tests/terminal.rs" = 6
+"daemon/crates/ipc/tests/terminal.rs" = 5
 "proto/humanitl/v1/humanitl.proto" = 3
 
 [proxy_engine]
