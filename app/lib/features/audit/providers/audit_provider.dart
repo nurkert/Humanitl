@@ -515,7 +515,7 @@ class AuditExportNotifier extends Notifier<AuditExportState> {
         state = AuditExportState(
           phase: AuditExportPhase.failed,
           failure: Diagnostic(
-            code: DiagnosticCodes.capabilityUnavailable,
+            code: DiagnosticCodes.auditExportUnwritable,
             severity: Severity.error,
             why:
                 'no free file name for $fileName in $folder after 1000 '
