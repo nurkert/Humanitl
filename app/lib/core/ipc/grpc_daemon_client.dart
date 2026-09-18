@@ -14,6 +14,8 @@ import 'dart:typed_data';
 import 'package:grpc/grpc.dart';
 import 'package:protobuf/protobuf.dart' show InvalidProtocolBufferException;
 import 'package:protobuf/well_known_types/google/protobuf/empty.pb.dart';
+import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart'
+    as wkt;
 
 import '../domain/domain.dart';
 import 'client_diagnostics.dart';
@@ -428,6 +430,151 @@ class GrpcDaemonClient implements DaemonClient {
   }
 
   @override
+  Future<AuditHead> auditHead() async {
+    final pb.AuditResponse answer = await _audit(
+      pb.AuditRequest()..head = Empty(),
+    );
+    return AuditHead(
+      seq: answer.headSeq.toInt(),
+      hash: _hex(answer.headHash),
+      records: answer.entries.toInt(),
+      // Ohne `anchors_reported` sind beide Felder nicht gemeldet und nicht
+      // null: ein Daemon vor HUM-051 füllt sie nie.
+      anchors: answer.anchorsReported ? answer.anchors.toInt() : null,
+      lastAnchorAt: answer.anchorsReported && answer.hasLastAnchorAt()
+          ? answer.lastAnchorAt.toDateTime(toLocal: true)
+          : null,
+    );
+  }
+
+  @override
+  Future<AuditReport> auditVerify() async {
+    // No `callTimeout`: the check reads the whole chain, and over a long log
+    // that takes seconds. A client that gave up after five would report a
+    // chain as unreadable that is merely long, which is the one answer an
+    // audit screen must never give (CONVENTIONS 4.13).
+    final pb.AuditResponse answer = await _audit(
+      pb.AuditRequest()..verify = Empty(),
+      bounded: false,
+    );
+    return AuditReport(
+      ok: answer.ok,
+      records: answer.entries.toInt(),
+      firstBadSeq: answer.firstBadSeq.toInt(),
+      reason: AuditBreakReason.parse(answer.breakReason),
+      warnings: List<AuditWarning>.unmodifiable(<AuditWarning>[
+        for (final pb.AuditWarning warning in answer.warnings)
+          AuditWarning(kind: warning.kind, records: warning.records.toInt()),
+      ]),
+      diagnostic: answer.hasDiagnostic() ? answer.diagnostic.toDomain() : null,
+    );
+  }
+
+  @override
+  Future<AuditPage> auditQuery(
+    AuditFilter filter, {
+    int limit = auditPageSize,
+    String? cursor,
+  }) async {
+    final pb.AuditRequest_Query query = pb.AuditRequest_Query()
+      ..kindPrefix = filter.kindPrefix
+      ..session = filter.session
+      ..limit = limit
+      ..cursor = cursor ?? '';
+    if (filter.from case final DateTime from) {
+      query.from = wkt.Timestamp.fromDateTime(from.toUtc());
+    }
+    if (filter.to case final DateTime to) {
+      query.to = wkt.Timestamp.fromDateTime(to.toUtc());
+    }
+    final pb.AuditResponse answer = await _audit(
+      pb.AuditRequest()..query = query,
+    );
+    return AuditPage(
+      rows: List<AuditRecordRow>.unmodifiable(<AuditRecordRow>[
+        for (final pb.AuditEntry entry in answer.records)
+          AuditRecordRow(
+            seq: entry.seq.toInt(),
+            ts: entry.ts,
+            kind: entry.kind,
+            session: entry.session,
+            dataJson: entry.dataJson,
+            line: entry.line,
+          ),
+      ]),
+      nextCursor: answer.nextCursor,
+      total: answer.entries.toInt(),
+    );
+  }
+
+  @override
+  Future<AuditExport> auditExport({
+    required AuditExportFormat format,
+    required String outPath,
+    DateTime? from,
+    DateTime? to,
+  }) async {
+    final pb.AuditRequest_Export export = pb.AuditRequest_Export()
+      ..format = format.wireName
+      ..outPath = outPath;
+    if (from != null) {
+      export.from = wkt.Timestamp.fromDateTime(from.toUtc());
+    }
+    if (to != null) {
+      export.to = wkt.Timestamp.fromDateTime(to.toUtc());
+    }
+    // No deadline, for the same reason as the check: the daemon writes the
+    // file, and a long chain takes longer than a unary deadline.
+    final pb.AuditResponse answer = await _audit(
+      pb.AuditRequest()..export = export,
+      bounded: false,
+    );
+    return AuditExport(path: answer.outPath, records: answer.entries.toInt());
+  }
+
+  /// One `Audit` call, with the diagnostic of the answer raised as a failure.
+  ///
+  /// A refused operation arrives as `ok: false` with a `Diagnostic` rather
+  /// than as a gRPC status; it belongs in the same channel as a transport
+  /// error, so the screen has one place to look. The one exception is the
+  /// check itself: a broken chain is an **answer**, not a failed call, and the
+  /// caller wants the report with the finding inside it.
+  Future<pb.AuditResponse> _audit(
+    pb.AuditRequest request, {
+    bool bounded = true,
+  }) async {
+    final CallOptions options = await _options(
+      timeout: bounded ? callTimeout : null,
+    );
+    final pb.AuditResponse answer;
+    try {
+      answer = await _stub.audit(request, options: options);
+    } on GrpcError catch (error) {
+      throw DaemonException(_translate(error));
+    } on IOException catch (error) {
+      throw DaemonException(_unreachable('$error'));
+    }
+    final bool isVerify = request.whichOp() == pb.AuditRequest_Op.verify;
+    if (!isVerify && !answer.ok) {
+      // Eine Ablehnung ohne Befund ist trotzdem eine Ablehnung. Sie als Erfolg
+      // zu lesen hieße, „Exportiert" über eine Datei zu schreiben, die es
+      // nicht gibt (`backlog/CONVENTIONS.md` 4.13).
+      throw DaemonException(
+        answer.hasDiagnostic()
+            ? answer.diagnostic.toDomain()
+            : Diagnostic(
+                code: DiagnosticCodes.capabilityUnavailable,
+                severity: Severity.error,
+                why:
+                    'the daemon refused Audit(${request.whichOp().name}) '
+                    'without saying why',
+              ),
+      );
+    }
+    return answer;
+  }
+
+  @override
   Stream<LlmServer> discoverLlm({
     String? subnet,
     List<int> ports = const <int>[],
@@ -525,6 +672,16 @@ class GrpcDaemonClient implements DaemonClient {
     fake: fake,
     socketFlag: socketFlag,
   );
+
+  /// [bytes] as lowercase hex, the form the audit log and `humanitl audit
+  /// verify --json` both print a hash in (HUM-051).
+  static String _hex(List<int> bytes) {
+    final StringBuffer out = StringBuffer();
+    for (final int byte in bytes) {
+      out.write(byte.toRadixString(16).padLeft(2, '0'));
+    }
+    return out.toString();
+  }
 }
 
 /// Translates a failed call into a [Diagnostic].

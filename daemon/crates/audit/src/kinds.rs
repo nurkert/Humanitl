@@ -18,7 +18,10 @@
 //! `llm_discover`, geschrieben, bevor es die Tabelle gab. `audit.resumed`
 //! kommt aus dem Review von HUM-050 dazu: der erste Record hinter einer
 //! Lücke, die ein gekürztes oder ersetztes Log hinterlässt (siehe
-//! [`crate::writer`]).
+//! [`crate::writer`]). `recorder.retention_applied` kommt aus HUM-051 dazu:
+//! die dokumentierte Löschung eines Aufräumlaufs der Aufzeichnung.
+
+use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use humanitl_core::rule::{Expiry, Rule};
@@ -517,6 +520,53 @@ pub struct AuditResumed {
     pub anchor_seq: u64,
 }
 
+/// `recorder.retention_applied`: Ein Aufräumlauf der Aufzeichnung hat
+/// gelöscht, was älter war als die Frist (HUM-051).
+///
+/// Der Record ist die dokumentierte Löschung, nach der Compliance fragt: wie
+/// viele Flows und wie viele Blob-Dateien fielen und bis zu welchem Zeitpunkt.
+/// Was gelöscht wurde, steht nicht darin; Hosts und Pfade der alten Flows
+/// wären eben die Daten, die der Lauf loswerden sollte.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetentionApplied {
+    /// Gelöschte Zeilen in `flows`.
+    pub deleted_flows: u64,
+    /// Gelöschte Dateien im Blob-Speicher.
+    pub deleted_blobs: u64,
+    /// Die Grenze: Alles davor ist gelöscht, nach [`format_ts`].
+    pub cutoff: String,
+}
+
+impl RetentionApplied {
+    /// Der Record zu einem Lauf mit dieser Grenze.
+    ///
+    /// Die Grenze kommt als [`SystemTime`], so wie die Aufzeichnung sie
+    /// rechnet (`humanitl_recorder::Retention::horizon`), und wird hier in das
+    /// Format des Logs gebracht; der Aufrufer braucht dafür kein `chrono`.
+    #[must_use]
+    pub fn new(deleted_flows: u64, deleted_blobs: u64, cutoff: SystemTime) -> Self {
+        Self {
+            deleted_flows,
+            deleted_blobs,
+            cutoff: format_ts(DateTime::<Utc>::from(cutoff)),
+        }
+    }
+
+    /// `data` dieses Records.
+    ///
+    /// Eine eigene Methode statt eines Arms in [`RecordKind::data`]: Der Match
+    /// dort ist die Tabelle aller Arten und stößt an die Längengrenze, die
+    /// `clippy::too_many_lines` zieht.
+    #[must_use]
+    pub fn data(&self) -> Value {
+        json!({
+            "deleted_flows": self.deleted_flows,
+            "deleted_blobs": self.deleted_blobs,
+            "cutoff": self.cutoff,
+        })
+    }
+}
+
 /// Eine Art von Record samt ihren Daten.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordKind {
@@ -561,6 +611,8 @@ pub enum RecordKind {
     /// Die Kette läuft hinter einem Anker weiter, den das Log nicht mehr
     /// erreichte.
     AuditResumed(AuditResumed),
+    /// Ein Aufräumlauf der Aufzeichnung hat Altes gelöscht.
+    RetentionApplied(RetentionApplied),
 }
 
 impl RecordKind {
@@ -588,11 +640,12 @@ impl RecordKind {
             Self::AuditVerified(_) => "audit.verified",
             Self::LlmDiscover(_) => "llm.discover",
             Self::AuditResumed(_) => "audit.resumed",
+            Self::RetentionApplied(_) => "recorder.retention_applied",
         }
     }
 
     /// Alle Namen, in der Reihenfolge der Tabelle.
-    pub const NAMES: [&'static str; 20] = [
+    pub const NAMES: [&'static str; 21] = [
         "daemon.started",
         "daemon.stopped",
         "session.started",
@@ -613,6 +666,7 @@ impl RecordKind {
         "audit.verified",
         "llm.discover",
         "audit.resumed",
+        "recorder.retention_applied",
     ];
 
     /// `data` dieser Art.
@@ -717,6 +771,7 @@ impl RecordKind {
                 "found": d.found,
             }),
             Self::AuditResumed(d) => json!({ "log_seq": d.log_seq, "anchor_seq": d.anchor_seq }),
+            Self::RetentionApplied(d) => d.data(),
         }
     }
 }
@@ -752,7 +807,7 @@ mod tests {
 
     #[test]
     fn every_kind_has_the_name_of_the_table_and_canonical_data() {
-        assert_eq!(RecordKind::NAMES.len(), 20);
+        assert_eq!(RecordKind::NAMES.len(), 21);
         for name in RecordKind::NAMES {
             let (area, verb) = name.split_once('.').unwrap();
             assert!(!area.is_empty() && !verb.is_empty(), "{name}");

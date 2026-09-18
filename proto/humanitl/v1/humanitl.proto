@@ -1256,6 +1256,7 @@ message AuditRequest {
     google.protobuf.Empty verify = 1;
     Export export = 2;
     google.protobuf.Empty head = 3;
+    Query query = 4;
   }
 
   // Export des Logs.
@@ -1264,18 +1265,90 @@ message AuditRequest {
     string format = 1;
     string out_path = 2;
     bool redact_hosts = 3;
+    // Zeitraum, beide Grenzen einschliesslich; ungesetzt heisst ohne Grenze
+    // (HUM-051). Der Zeitraum ist derselbe, den die Tabelle gerade zeigt.
+    google.protobuf.Timestamp from = 4;
+    google.protobuf.Timestamp to = 5;
   }
+
+  // Eine Seite der Records, aelteste Nummer zuletzt (HUM-051).
+  //
+  // Die Tabelle laedt nie die ganze Kette: Sie fragt Seite um Seite ueber
+  // `cursor`, und der Cursor gehoert dem untersten Record der letzten Seite.
+  message Query {
+    // Praefix der Art, zum Beispiel `flow.` oder `flow.decided`; leer heisst
+    // jede Art.
+    string kind_prefix = 1;
+    // Sitzung als UUID-Text; leer heisst jede Sitzung.
+    string session = 2;
+    // Zeitraum, beide Grenzen einschliesslich; ungesetzt heisst ohne Grenze.
+    google.protobuf.Timestamp from = 3;
+    google.protobuf.Timestamp to = 4;
+    // Groesse der Seite; 0 heisst die Vorgabe des Daemons.
+    uint32 limit = 5;
+    // Der Cursor aus `AuditResponse.next_cursor`; leer heisst von vorn.
+    string cursor = 6;
+  }
+}
+
+// Warum die Pruefung etwas nicht beweisen konnte, obwohl die Kette haelt
+// (HUM-050 `VerifyWarning`, HUM-051).
+message AuditWarning {
+  // `no_hmac_key` oder `unanchored_tail`.
+  string kind = 1;
+  // Wie viele Records hinter dem letzten Anker stehen; nur bei
+  // `unanchored_tail`.
+  uint64 records = 2;
+}
+
+// Ein Record der Kette, so wie er in `audit.jsonl` steht (HUM-051).
+message AuditEntry {
+  uint64 seq = 1;
+  // Der Zeitstempel im Format des Logs: UTC, Mikrosekunden, immer `Z`. Als
+  // Text und nicht als `Timestamp`, weil genau diese Zeichen im Hash stehen.
+  string ts = 2;
+  // Die Art, zum Beispiel `flow.decided`.
+  string kind = 3;
+  // Die Sitzung als UUID-Text oder `-`.
+  string session = 4;
+  // `data` des Records als JSON-Objekt.
+  string data_json = 5;
+  // Die vollstaendige kanonische Zeile, Byte fuer Byte wie in der Datei.
+  string line = 6;
 }
 
 // Antwort auf eine Audit-Operation.
 message AuditResponse {
   bool ok = 1;
+  // Bei `verify` und `head`: wie viele Records die Kette haelt. Bei `query`:
+  // wie viele Records der Filter trifft, ueber alle Seiten, nicht nur die
+  // gelieferte (HUM-051). Bei `export`: wie viele Records in die Datei gingen.
   uint64 entries = 2;
   bytes head_hash = 3;
   // Erster Eintrag, dessen Hash nicht passt. Nur wenn `ok` falsch ist.
   uint64 first_bad_seq = 4;
   string out_path = 5;
   Diagnostic diagnostic = 6;
+  // Die Nummer des letzten Records (HUM-051).
+  uint64 head_seq = 7;
+  // Wie viele Anker es gibt.
+  uint64 anchors = 8;
+  // Wann der letzte Anker entstand; ungesetzt, wenn es keinen gibt.
+  google.protobuf.Timestamp last_anchor_at = 9;
+  // Warum die Kette bricht, in `snake_case` (`hash_mismatch`, `seq_gap`,
+  // `prev_mismatch`, `mac_mismatch`, `non_canonical_line`, `anchor_mismatch`,
+  // `truncated_below_anchor`). Leer, wenn sie haelt.
+  string break_reason = 10;
+  repeated AuditWarning warnings = 11;
+  // Die Records einer `Query`, sonst leer.
+  repeated AuditEntry records = 12;
+  // Wo die naechste Seite beginnt; leer, wenn es keine gibt.
+  string next_cursor = 13;
+  // Wahr, wenn `anchors` und `last_anchor_at` gesetzt sind. Ein Daemon, der
+  // die Felder 7 bis 13 nicht kennt, laesst es falsch; der Client liest dann
+  // „nicht gemeldet" statt „null Anker" (HUM-051). Ein eigenes Feld und kein
+  // `optional`, weil die Anwesenheit an beiden Feldern zugleich haengt.
+  bool anchors_reported = 14;
 }
 
 // ---------- Config ----------

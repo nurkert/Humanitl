@@ -1003,7 +1003,7 @@ async fn sandbox_checks_and_argv_are_marked_as_fake() {
 }
 
 #[tokio::test]
-async fn terminal_echoes_and_audit_is_empty() {
+async fn terminal_echoes_and_audit_is_refused() {
     let daemon = daemon("mixed.jsonl", FakeOptions::default());
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1020,14 +1020,22 @@ async fn terminal_echoes_and_audit_is_empty() {
         Some(v1::terminal_output::Output::Data(b"echo hi\r".to_vec()))
     );
 
-    let audit = daemon
-        .audit(v1::AuditRequest {
-            op: Some(v1::audit_request::Op::Verify(())),
-        })
-        .await
-        .expect("audit");
-    assert!(audit.ok);
-    assert_eq!(audit.entries, 0, "the fake records nothing");
+    // Der Fake hat keine Kette. Er sagt das mit `IPC_006`, statt eine leere,
+    // heile Kette zu behaupten, die die Oberfläche als „Verifiziert" läse
+    // (HUM-051).
+    for op in [
+        v1::audit_request::Op::Verify(()),
+        v1::audit_request::Op::Head(()),
+        v1::audit_request::Op::Query(v1::audit_request::Query::default()),
+        v1::audit_request::Op::Export(v1::audit_request::Export::default()),
+    ] {
+        let refused = daemon
+            .audit(v1::AuditRequest { op: Some(op) })
+            .await
+            .expect_err("the fake keeps no audit log");
+        assert_eq!(refused.code.as_str(), "IPC_006");
+        assert!(refused.why.contains("no audit log"), "{}", refused.why);
+    }
 }
 
 #[tokio::test(start_paused = true)]
