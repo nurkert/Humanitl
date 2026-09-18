@@ -702,6 +702,33 @@ void main() {
     );
     expect(label('Copy'), findsOneWidget);
   }, variant: _linux);
+
+  testWidgets('a_full_folder_reports_audit_008', (WidgetTester tester) async {
+    // Kein Name im Ordner ist frei. Die Fähigkeit ist da, nur der Ordner ist
+    // voll: `AUDIT_008`, nicht `IPC_006`, und der Daemon wird nicht gefragt
+    // (HUM-158).
+    final FakeDaemonClient client = FakeDaemonClient();
+    final _RecordingChooser chooser = _RecordingChooser();
+    final ProviderContainer container = await pumpAudit(
+      tester,
+      client: client,
+      overrides: <Override>[
+        auditFolderChooserProvider.overrideWithValue(chooser.call),
+        auditPathTakenProvider.overrideWithValue((String path) => true),
+      ],
+    );
+    await settleAudit(tester, container);
+
+    await _exportCsv(tester);
+
+    final AuditExportState state = container.read(auditExportProvider);
+    expect(state.phase, AuditExportPhase.failed);
+    expect(state.failure?.code, 'AUDIT_008');
+    expect(state.failure?.why, contains('no free file name'));
+    expect(state.failure?.fix, isNotNull, reason: 'the fix shows the folder');
+    expect(client.auditExports, isEmpty, reason: 'the daemon is not asked');
+    expect(find.byKey(const Key('audit-export-failure')), findsOneWidget);
+  }, variant: _linux);
 }
 
 /// Nimmt den Bildschirm aus dem Baum und baut ihn im selben Container neu auf,
