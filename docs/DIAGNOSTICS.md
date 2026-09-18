@@ -99,6 +99,14 @@ systemd hat die Unit nicht übernommen
 
 **Fix.** `CopyCommand` mit `systemctl --user status humanitld`, dem Aufruf, der sagt, was systemd stört.
 
+#### DAEMON_009
+
+Aufgaben beim Abschied abgebrochen
+
+**Auslöser.** Beim Beenden liefen nach der Frist noch Aufgaben des Daemons; der Prozess endet trotzdem.
+
+**Fix.** Kein Fix für Nutzer: Der Text nennt die Frist; ein Bericht mit dem Protokoll dieses Laufs hilft weiter.
+
 ### Bereich ipc
 
 #### IPC_001
@@ -145,9 +153,9 @@ Rules-Anfrage ungültig
 
 Fähigkeit in diesem Daemon nicht verfügbar
 
-**Auslöser.** Dieser Daemon hat die Fähigkeit nicht, nach der gefragt wurde — keine Sandbox, keine Aufzeichnung, keine Endpunkt-Probe.
+**Auslöser.** Dieser Daemon hat die Fähigkeit nicht, nach der gefragt wurde — keine Sandbox, keine Aufzeichnung, keine Endpunkt-Probe; oder er endet gerade und startet deshalb keine Sandbox mehr.
 
-**Fix.** Kein Fix: Es ist eine Aussage über diesen Daemon, nicht über die Anfrage.
+**Fix.** Kein Fix: Es ist eine Aussage über diesen Daemon, nicht über die Anfrage. Endet er gerade, hilft ein neuer Start, sobald er wieder läuft.
 
 ### Bereich config
 
@@ -464,6 +472,14 @@ Geänderte Datei nicht durchsucht
 **Auslöser.** Geänderte Dateien wurden nicht nach Geheimnissen durchsucht, weil ein Budget zuschlug.
 
 **Fix.** Kein Fix: Der Bericht nennt Zahl und erste Datei.
+
+#### SANDBOX_029
+
+Sandbox erst nach der Frist beendet
+
+**Auslöser.** Der Agent hat `SIGTERM` nicht beantwortet, und nach der Frist folgte `SIGKILL`; oder danach lag kein Exit-Status vor.
+
+**Fix.** Kein Fix, wenn `SIGKILL` gewirkt hat oder nur der Status ausblieb; lebt der Prozess weiter, nennt der Text `ps -o stat= -p <pid>`.
 
 ### Bereich proxy
 

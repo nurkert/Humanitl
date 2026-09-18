@@ -83,7 +83,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use humanitl_config::{Config, WorkMode};
 use humanitl_core::Severity as CoreSeverity;
@@ -98,7 +98,7 @@ use humanitl_sandbox::summary::SessionSummary;
 use humanitl_sandbox::{
     AdapterRegistry, AgentContext, BwrapBackend, CheckResult, IsolationCheck, KILL_GRACE,
     LaunchInputs, MIN_BWRAP_VERSION, MountPolicy, SANDBOX_SHELL, SandboxBackend, SandboxFile,
-    SandboxHandle, SandboxProfile, SessionContext, StdioMode, shell_line,
+    SandboxHandle, SandboxProfile, SessionContext, StdioMode, Termination, shell_line,
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -413,6 +413,13 @@ struct Inner {
     /// nachschlagen lässt sie sich später nicht. Das ist der Fall im
     /// Fake-Modus und in Tests.
     recorder: Option<Recorder>,
+    /// Ob dieser Dienst seinen Abschied schon begonnen hat (HUM-142).
+    ///
+    /// Ab da startet nichts Neues mehr: Eine Sandbox, die nach dem Abschied
+    /// anfinge, bekäme keinen geordneten mehr, sondern nur noch das `SIGKILL`,
+    /// das `--die-with-parent` an das Ende des Daemons hängt. Gesetzt wird das
+    /// in [`Inner::shutdown`], gelesen in [`Inner::claim_start`].
+    leaving: std::sync::atomic::AtomicBool,
 }
 
 /// Woran der Dienst hängt, wenn eine Sitzung startet.
@@ -504,6 +511,7 @@ impl SandboxService {
                 settings: ports.settings,
                 notices: ports.notices,
                 recorder: ports.recorder,
+                leaving: std::sync::atomic::AtomicBool::new(false),
             }),
         }
     }
@@ -521,6 +529,55 @@ impl SandboxService {
     /// Sandbox hat.
     pub fn terminal(&self, sandbox_id: &str) -> Result<TerminalHub, Diagnostic> {
         self.inner.terminal(sandbox_id)
+    }
+
+    /// Beendet die laufende Sandbox dieser Sitzung, mit Frist, und sagt, was
+    /// es dazu gebraucht hat.
+    ///
+    /// Das ist der Abschied des Daemons (HUM-142): Er geht denselben Weg wie
+    /// `Sandbox(Stop)` — `SIGTERM`, nach [`KILL_GRACE`] `SIGKILL` —, nur ohne
+    /// Ereignisstrom, weil ihm niemand mehr zuhört. Die Reihenfolge ist
+    /// festgelegt: **erst das Kind, dann der eigene Abschied.** Das Backend
+    /// startet mit `--die-with-parent`; ein Daemon, der zuerst geht, ließe ein
+    /// Kind zurück, das an ihm hing.
+    ///
+    /// Blockierend und nach oben beschränkt: zweimal [`KILL_GRACE`], also
+    /// höchstens zehn Sekunden. Läuft keine Sandbox, geschieht nichts.
+    ///
+    /// Zurück kommt ein `SANDBOX_029`, wenn `SIGTERM` nicht gereicht hat oder
+    /// der Prozess auch nach `SIGKILL` nicht eingesammelt war; sonst `None`.
+    /// Der Aufrufer protokolliert ihn — ein Abschied, den niemand nennt, ist
+    /// derselbe Hänger ohne Meldung wie vorher, nur kürzer.
+    #[must_use]
+    pub fn shutdown(&self) -> Option<Diagnostic> {
+        self.inner.shutdown()
+    }
+
+    /// Schiebt den Riegel vor, ohne schon zu beenden (HUM-142).
+    ///
+    /// Ab hier bekommt kein `Start` mehr einen Anspruch: Eine Sandbox, die
+    /// jetzt noch anfinge, bekäme keinen geordneten Abschied mehr, sondern nur
+    /// das `SIGKILL`, das `--die-with-parent` an das Ende des Daemons hängt.
+    ///
+    /// Der Riegel gehört an das Signal und nicht in den Abschied selbst:
+    /// Zwischen dem Signal und dem ersten Griff von [`SandboxService::shutdown`]
+    /// läuft der Ausklang des gRPC-Dienstes, und eine Verbindung, die dort noch
+    /// offen ist, könnte in genau dieser Lücke starten.
+    ///
+    /// Mehrfach zu rufen kostet nichts; [`SandboxService::shutdown`] setzt
+    /// denselben Riegel noch einmal.
+    pub fn begin_leaving(&self) {
+        self.inner
+            .leaving
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Ob der Abschied schon begonnen hat.
+    ///
+    /// Für den Aufrufer, der das Signal verdrahtet, und für seine Tests.
+    #[must_use]
+    pub fn is_leaving(&self) -> bool {
+        self.inner.is_leaving()
     }
 
     /// Der Ereignisstrom einer Sandbox-Operation.
@@ -578,7 +635,7 @@ impl Inner {
     /// `profile_name`), also gibt es keinen Weg, sie andersherum zu halten.
     fn claim_start(self: &Arc<Self>) -> Option<StartClaim> {
         let mut pending = lock(&self.pending);
-        if pending.claimed || self.is_running() {
+        if pending.claimed || self.is_running() || self.is_leaving() {
             return None;
         }
         pending.claimed = true;
@@ -821,9 +878,12 @@ impl Inner {
             // Schaltfläche ohnehin ab und sieht ihn selten; `humanitl run`
             // dagegen bekäme sonst nur einen laufenden Zustand ohne Ausgabe
             // und ohne Exit-Code und wüsste nicht, warum (HUM-067).
-            let _ = tx
-                .send(diagnostic_event(&already_running(&self.running_facts())))
-                .await;
+            let refused = if self.is_leaving() {
+                leaving_daemon()
+            } else {
+                already_running(&self.running_facts())
+            };
+            let _ = tx.send(diagnostic_event(&refused)).await;
             let this = Arc::clone(&self);
             let plan = plan.clone();
             let tx = tx.clone();
@@ -1388,6 +1448,13 @@ impl Inner {
     }
 
     /// Beendet die laufende Sandbox und meldet `stopping`, dann `stopped`.
+    ///
+    /// **Das Beenden hängt an nichts, was ein Client tut.** Bis HUM-142 kehrte
+    /// diese Funktion zurück, sobald der Ereignisstrom weg war — und genau das
+    /// ist der Alltagsfall: `humanitl run` schickt an seiner Zeitschranke sein
+    /// `Sandbox(Stop)` und endet, der Empfänger fällt weg, `tx.send`
+    /// scheitert, und die Sandbox lief weiter. Wer den Strom fallen lässt,
+    /// bekommt seither keine Ereignisse mehr, aber der Abschied läuft zu Ende.
     async fn stop(self: Arc<Self>, tx: mpsc::Sender<v1::SandboxEvent>) {
         let plan = v1::sandbox_request::Plan::default();
         let handle = self.running_handle();
@@ -1406,15 +1473,26 @@ impl Inner {
                 this.snapshot_with(&plan, Some(v1::SandboxState::Stopping))
             })
             .await
-                && tx.send(status_event(status)).await.is_err()
             {
-                return;
+                let _ = tx.send(status_event(status)).await;
             }
         }
 
-        let _ = tokio::task::spawn_blocking(move || handle.terminate(KILL_GRACE)).await;
+        let ended = tokio::task::spawn_blocking(move || farewell(&handle)).await;
         let stopped = self.stopped_line();
         self.clear_running();
+        match &ended {
+            Ok(Some(diagnostic)) => {
+                let _ = tx.send(diagnostic_event(diagnostic)).await;
+            }
+            // Ein Faden, der nicht zurückkam, ist derselbe Befund wie überall
+            // sonst in dieser Datei; verschwiegen wäre er ein Stopp, der ohne
+            // Grund nichts gesagt hat.
+            Err(error) => {
+                let _ = tx.send(diagnostic_event(&joined_failed(error))).await;
+            }
+            Ok(None) => {}
+        }
         if let Some(line) = stopped {
             let _ = tx.send(log_event(line)).await;
         }
@@ -1423,6 +1501,24 @@ impl Inner {
         if let Ok(Ok(status)) = tokio::task::spawn_blocking(move || this.snapshot(&plan)).await {
             let _ = tx.send(status_event(status)).await;
         }
+    }
+
+    /// Beendet die laufende Sandbox dieser Sitzung, ohne Ereignisstrom.
+    ///
+    /// Der Weg des Daemons, der selbst endet; siehe
+    /// [`SandboxService::shutdown`].
+    fn shutdown(&self) -> Option<Diagnostic> {
+        // Zuerst der Riegel, dann das Beenden: Ein `Start`, der nach dieser
+        // Zeile anklopft, bekommt keinen Anspruch mehr und läuft deshalb nicht
+        // in einen Abschied hinein, der ihn nicht mehr sieht. Im Daemon steht
+        // er längst ([`SandboxService::begin_leaving`] am Signal); dieser
+        // zweite Griff kostet nichts und deckt jeden anderen Aufrufer.
+        self.leaving
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let handle = self.running_handle()?;
+        let ended = farewell(&handle);
+        self.clear_running();
+        ended
     }
 
     /// Baut die Zusammenfassung dieses Laufs, legt sie ab und schickt sie.
@@ -1745,6 +1841,11 @@ impl Inner {
                 held: true,
                 agent_running: running.handle.try_wait().is_none(),
             })
+    }
+
+    /// Ob der Abschied schon begonnen hat; siehe [`Inner::leaving`].
+    fn is_leaving(&self) -> bool {
+        self.leaving.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     fn is_running(&self) -> bool {
@@ -2381,6 +2482,22 @@ fn already_running(facts: &Facts) -> Diagnostic {
         .build()
 }
 
+/// Dieser Daemon endet gerade und startet nichts mehr (HUM-142).
+///
+/// `IPC_006` und nicht `CLI_005`: Es steht keine Sitzung im Weg, sondern
+/// dieser Daemon kann es nicht mehr — eine Aussage ueber ihn und nicht ueber
+/// die Anfrage. Eine Sandbox, die nach dem Abschied anfinge, bekaeme keinen
+/// geordneten mehr.
+fn leaving_daemon() -> Diagnostic {
+    Diagnostic::builder(codes::IPC_006, Severity::Blocking)
+        .why(
+            "this daemon is shutting down and starts no new sandbox; a session that began now \
+             would not get an orderly end. Start it again once the daemon runs."
+                .to_owned(),
+        )
+        .build()
+}
+
 /// Ein Feld der Leitung als Wunsch: leer heißt „kein Wunsch".
 fn non_empty(text: &str) -> Option<String> {
     let trimmed = text.trim();
@@ -2398,6 +2515,124 @@ fn llm_authority(config: &Config) -> Option<String> {
     Some(match endpoint.port_or_known_default() {
         Some(port) => format!("{host}:{port}"),
         None => host.to_owned(),
+    })
+}
+
+/// Beendet diese Sandbox mit Frist und sagt, wenn es dazu Gewalt gebraucht hat.
+///
+/// **Der eine Weg hinaus.** `Sandbox(Stop)` und der Abschied des Daemons gehen
+/// beide hier hindurch, damit es keinen zweiten Weg gibt, auf dem die Frist
+/// fehlt (HUM-142): `SIGTERM`, nach [`KILL_GRACE`] `SIGKILL`, obere Schranke
+/// zweimal [`KILL_GRACE`]. Der einzige Weg ohne Gnadenfrist bleibt
+/// [`Inner::kill_and_fail`], und der hat seinen Grund (eine rote Garantie).
+///
+/// Bleibt der Exit-Status aus, wird **gefragt statt behauptet**: Erst
+/// [`SandboxHandle::process_alive`] entscheidet, ob hier ein Prozess
+/// überlebt hat oder ob nur sein Status ausblieb (siehe [`Termination::Stuck`]).
+///
+/// Blockierend: `terminate` wartet auf das Einsammeln durch den Faden, der die
+/// Sandbox gestartet hat.
+fn farewell(handle: &SandboxHandle) -> Option<Diagnostic> {
+    let started = Instant::now();
+    let ended = handle.terminate(KILL_GRACE);
+    // `u64` und nicht `u128`: `tracing` kennt keinen `u128` und schriebe die
+    // Zahl als Zeichenkette ins JSON, während jeder Nachbar eine Zahl ist.
+    // Dieselbe Umrechnung wie in `humanitl_proxy::llm_probe`.
+    let took = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let alive = (!ended.ended()).then(|| handle.process_alive()).flatten();
+    log_farewell(handle.id, handle.pid, ended, took, alive);
+    farewell_finding(handle.id, handle.pid, ended, took, alive)
+}
+
+/// Die eine Zeile, die jeder Abschied im Protokoll hinterlässt.
+///
+/// Sie steht im Protokoll des Daemons auch dann, wenn niemand mehr am
+/// Ereignisstrom hängt — und genau dann ist sie die einzige Spur. Ohne
+/// Exit-Status bekommt sie die andere Stufe und den anderen Satz: Beendet ist
+/// die Sandbox dann nicht nachweislich, und das darf keine Zeile behaupten.
+///
+/// `took` ist `u64` und nicht `u128`, weil `tracing` keinen `u128` kennt und
+/// die Zahl sonst als Zeichenkette im JSON stünde, während jeder Nachbar eine
+/// Zahl ist. Der Test dazu liest die erzeugte Zeile und nicht den Typ.
+fn log_farewell(sandbox: SandboxId, pid: u32, ended: Termination, took: u64, alive: Option<bool>) {
+    if ended.ended() {
+        tracing::info!(
+            sandbox = %sandbox,
+            pid = pid,
+            outcome = %ended,
+            took_ms = took,
+            "sandbox ended"
+        );
+    } else {
+        tracing::warn!(
+            sandbox = %sandbox,
+            pid = pid,
+            outcome = %ended,
+            took_ms = took,
+            alive = ?alive,
+            "sandbox without an exit status after SIGKILL"
+        );
+    }
+}
+
+/// Der Befund zu einem Abschied, ohne die Sandbox dazu.
+///
+/// Steht für sich, damit die Zuordnung von Ausgang zu Code, Stufe und Text
+/// geprüft werden kann, ohne eine Sandbox zu starten: Die Verzweigung ist die
+/// Aussage, nicht das Beenden.
+///
+/// `alive` ist, was [`SandboxHandle::process_alive`] nach einem ausbleibenden
+/// Exit-Status gesagt hat: `Some(true)` ein Prozess, der noch da ist,
+/// `Some(false)` einer, der weg oder ein Zombie ist, `None` keine Auskunft.
+fn farewell_finding(
+    sandbox: SandboxId,
+    pid: u32,
+    ended: Termination,
+    took: u64,
+    alive: Option<bool>,
+) -> Option<Diagnostic> {
+    if !ended.escalated() {
+        return None;
+    }
+    if ended.ended() {
+        return Some(
+            Diagnostic::builder(codes::SANDBOX_029, Severity::Warning)
+                .why(format!(
+                    "sandbox {sandbox} (pid {pid}) did not answer SIGTERM within {} s, so it was \
+                     killed; the farewell took {took} ms in total. An agent that catches the \
+                     signal gets that deadline and not a second longer",
+                    KILL_GRACE.as_secs()
+                ))
+                .build(),
+        );
+    }
+    // Kein Exit-Status. Ob das an einem überlebenden Prozess liegt oder an
+    // einem Leser, der noch an einem Deskriptor hängt, entscheidet die Frage
+    // nach dem Prozess — nicht die ausgebliebene Antwort.
+    let survived = alive == Some(true);
+    let severity = if survived {
+        Severity::Blocking
+    } else {
+        Severity::Warning
+    };
+    let state = match alive {
+        Some(true) => "and it is still there",
+        Some(false) => "but it is gone; only its status never arrived",
+        None => "and whether it is still there could not be read from /proc",
+    };
+    let finding = Diagnostic::builder(codes::SANDBOX_029, severity).why(format!(
+        "sandbox {sandbox} (pid {pid}) reported no exit status {took} ms after SIGTERM and \
+         SIGKILL, {state}"
+    ));
+    // Ein Fix nur, wenn es etwas zu sehen gibt. `kill -9` wäre keiner: Genau
+    // das hat `terminate` schon geschickt, und einen Prozess, den es nicht
+    // beendet hat, beendet ein zweites auch nicht.
+    Some(if survived {
+        finding
+            .fix(FixAction::CopyCommand(format!("ps -o stat= -p {pid}")))
+            .build()
+    } else {
+        finding.build()
     })
 }
 
@@ -2992,6 +3227,229 @@ mod tests {
             .map(|&check| code_of(check).as_str())
             .collect();
         assert_eq!(codes, vec!["SANDBOX_014", "SANDBOX_015", "SANDBOX_016"]);
+    }
+
+    /// Jeder Ausgang eines Abschieds bekommt genau den Befund, der zu ihm
+    /// gehört (`SANDBOX_029`, HUM-142).
+    ///
+    /// Geprüft wird die Verzweigung und nicht das Beenden: Ob aus einem
+    /// Ausgang ein Befund wird, welche Stufe er trägt und was er behauptet,
+    /// hängt an [`farewell_finding`] allein. Ein `SIGTERM`, das reichte, ist
+    /// kein Befund; ein `SIGKILL`, das wirkte, ist eine Warnung; und ein
+    /// ausbleibender Exit-Status ist nur dann blockierend, wenn der Prozess
+    /// wirklich noch da ist.
+    #[test]
+    fn every_way_out_of_a_farewell_has_its_own_finding() {
+        let sandbox = SandboxId::nil();
+
+        assert!(
+            farewell_finding(sandbox, 7, Termination::Term, 12, None).is_none(),
+            "SIGTERM was enough; there is nothing to report"
+        );
+        assert!(
+            farewell_finding(sandbox, 7, Termination::AlreadyEnded, 0, None).is_none(),
+            "nothing was running; there is nothing to report"
+        );
+
+        let killed = farewell_finding(sandbox, 7, Termination::Kill, 5_012, None)
+            .expect("an agent that had to be killed is a finding");
+        assert_eq!(killed.code.as_str(), "SANDBOX_029");
+        assert_eq!(killed.severity, Severity::Warning);
+        assert!(killed.why.contains("pid 7"), "{}", killed.why);
+        assert!(
+            killed.why.contains("5012 ms in total"),
+            "the finding names the measured time: {}",
+            killed.why
+        );
+        assert!(killed.fix.is_none(), "a killed process needs no command");
+
+        let survived = farewell_finding(sandbox, 7, Termination::Stuck, 10_004, Some(true))
+            .expect("a process that outlived SIGKILL is a finding");
+        assert_eq!(survived.severity, Severity::Blocking, "{}", survived.why);
+        assert!(
+            survived.why.contains("no exit status") && survived.why.contains("still there"),
+            "the finding says what was measured and what follows from it: {}",
+            survived.why
+        );
+        assert!(
+            matches!(
+                survived.fix.as_ref(),
+                Some(FixAction::CopyCommand(command)) if command == "ps -o stat= -p 7"
+            ),
+            "the fix asks after the state of the process, it does not repeat the kill: {:?}",
+            survived.fix
+        );
+
+        // Derselbe Ausgang, aber der Prozess ist weg: Dann ist nur der Status
+        // ausgeblieben, und das ist keine blockierende Aussage über einen
+        // Prozess, der stehen geblieben wäre.
+        let only_the_status = farewell_finding(sandbox, 7, Termination::Stuck, 10_004, Some(false))
+            .expect("a missing exit status is still worth saying");
+        assert_eq!(
+            only_the_status.severity,
+            Severity::Warning,
+            "{}",
+            only_the_status.why
+        );
+        assert!(
+            only_the_status.why.contains("it is gone"),
+            "{}",
+            only_the_status.why
+        );
+        assert!(
+            !only_the_status.why.contains("still there"),
+            "nothing claims a process that is not there: {}",
+            only_the_status.why
+        );
+        assert!(only_the_status.fix.is_none());
+
+        // Und ohne Auskunft aus `/proc` wird weder das eine noch das andere
+        // behauptet.
+        let unknown = farewell_finding(sandbox, 7, Termination::Stuck, 10_004, None)
+            .expect("a missing exit status is still worth saying");
+        assert_eq!(unknown.severity, Severity::Warning);
+        assert!(unknown.why.contains("could not be read"), "{}", unknown.why);
+    }
+
+    /// Ein Protokoll, das sich nach dem Lauf lesen lässt.
+    #[derive(Clone, Default)]
+    struct Collected(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Collected {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            lock(&self.0).extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Collected {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Die Zeile, die `run` schreibt, als JSON.
+    fn logged_json(run: impl FnOnce()) -> serde_json::Value {
+        let sink = Collected::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(sink.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, run);
+        let written = lock(&sink.0).clone();
+        let line = String::from_utf8(written).expect("the log is text");
+        serde_json::from_str(line.trim()).unwrap_or_else(|error| {
+            panic!("the daemon writes one JSON line per event ({error}): {line}")
+        })
+    }
+
+    /// Die gemessene Zeit steht als **Zahl** im Protokoll (HUM-142).
+    ///
+    /// `tracing` kennt keinen `u128`: Wer die Millisekunden so übergibt,
+    /// bekommt sie als Zeichenkette ins JSON, während jeder Nachbar eine Zahl
+    /// ist — `"took_ms":"0"` neben `"pid":4711`. Wer das Protokoll auswertet,
+    /// müsste dann genau dieses eine Feld anders lesen als alle anderen.
+    /// Geprüft wird deshalb die erzeugte Zeile und nicht der Typ im Quelltext.
+    #[test]
+    fn the_measured_time_is_a_number_in_the_log() {
+        let ended = logged_json(|| {
+            log_farewell(SandboxId::nil(), 4_711, Termination::Kill, 5_012, None);
+        });
+        let fields = &ended["fields"];
+        assert_eq!(fields["message"], "sandbox ended", "{ended}");
+        assert!(
+            fields["took_ms"].is_u64(),
+            "took_ms is a number, like its neighbours: {ended}"
+        );
+        assert_eq!(fields["took_ms"].as_u64(), Some(5_012), "{ended}");
+        assert!(fields["pid"].is_u64(), "{ended}");
+        assert_eq!(fields["outcome"], "sigkill", "{ended}");
+
+        // Und der andere Zweig behauptet kein Ende, sondern nennt den
+        // fehlenden Status.
+        let stuck = logged_json(|| {
+            log_farewell(
+                SandboxId::nil(),
+                4_711,
+                Termination::Stuck,
+                10_004,
+                Some(true),
+            );
+        });
+        assert_eq!(
+            stuck["fields"]["message"], "sandbox without an exit status after SIGKILL",
+            "{stuck}"
+        );
+        assert_eq!(stuck["level"], "WARN", "{stuck}");
+        assert!(stuck["fields"]["took_ms"].is_u64(), "{stuck}");
+    }
+
+    /// Ein Faden, der abgestürzt ist, wird zu einem Befund und nicht zu
+    /// Schweigen (HUM-142).
+    ///
+    /// `Inner::stop` schickt ihn seit diesem Issue in den Ereignisstrom, wie
+    /// es `start` und `report_exit` längst tun. Geprüft wird hier die Quelle
+    /// des Befunds an einem echten `JoinError`; dass der Zweig in `stop` ihn
+    /// sendet, steht als Form neben den beiden anderen Stellen.
+    #[tokio::test]
+    async fn a_thread_that_died_becomes_a_finding() {
+        let error = tokio::task::spawn_blocking(|| panic!("simulated panic"))
+            .await
+            .expect_err("the task panicked");
+        assert!(error.is_panic(), "a panic, not a cancellation");
+
+        let finding = joined_failed(&error);
+
+        assert_eq!(finding.code.as_str(), "SANDBOX_012");
+        assert_eq!(finding.severity, Severity::Blocking);
+        assert!(
+            finding.why.contains("thread preparing the sandbox failed"),
+            "the finding says which thread and that it failed: {}",
+            finding.why
+        );
+    }
+
+    /// Ein Daemon, der sich verabschiedet, startet keine neue Sandbox mehr
+    /// (HUM-142).
+    ///
+    /// Der Riegel schließt das Fenster zwischen dem Abschied und dem Ende des
+    /// Prozesses: Ein `Start`, der dort anklopfte, bekäme keinen geordneten
+    /// Abschied mehr, sondern nur noch das `SIGKILL` am Ende des Daemons.
+    #[test]
+    fn a_daemon_that_is_leaving_starts_no_new_sandbox() {
+        let home = tempfile::tempdir().unwrap();
+        let service = service_for(&home, "opencode");
+
+        let claim = service.inner.claim_start();
+        assert!(claim.is_some(), "a fresh service takes the next start");
+        drop(claim);
+
+        assert!(
+            service.shutdown().is_none(),
+            "nothing was running, so there is nothing to report"
+        );
+
+        assert!(
+            service.inner.is_leaving(),
+            "the farewell has begun and says so"
+        );
+        assert!(
+            service.inner.claim_start().is_none(),
+            "after the farewell no start gets a claim any more"
+        );
+        let refused = leaving_daemon();
+        assert_eq!(refused.code.as_str(), "IPC_006");
+        assert!(
+            refused.why.contains("shutting down"),
+            "the caller is told why, and it is not CLI_005: {}",
+            refused.why
+        );
     }
 
     /// Ohne laufende Sandbox ist nichts gemessen — und nichts gemessen wird
