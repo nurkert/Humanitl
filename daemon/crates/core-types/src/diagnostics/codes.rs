@@ -185,6 +185,13 @@ pub static AREAS: &[AreaInfo] = &[
         last: 9,
         note: "Agent-Adapter: Startkommando, Vorlagen, Vorprüfung vor dem Start",
     },
+    AreaInfo {
+        area: "edit",
+        prefix: "EDIT",
+        first: 1,
+        last: 9,
+        note: "Die bearbeitete Anfrage einer `AllowEdited`-Entscheidung (HUM-047)",
+    },
 ];
 
 macro_rules! registry {
@@ -1209,6 +1216,37 @@ registry! {
     DAEMON_009 => "daemon", "Aufgaben beim Abschied abgebrochen", "#daemon_009",
         "Beim Beenden liefen nach der Frist noch Aufgaben des Daemons; der Prozess endet trotzdem.",
         "Kein Fix für Nutzer: Der Text nennt die Frist; ein Bericht mit dem Protokoll dieses Laufs hilft weiter.";
+    // HUM-047: Die bearbeitete Anfrage. Jede dieser Prüfungen steht zwischen
+    // der Entscheidung eines Menschen und dem Netz; was sie ablehnt, geht
+    // nicht hinaus.
+    /// Die bearbeitete Anfrage nennt ein anderes Ziel als die gehaltene.
+    ///
+    /// Die Sicherheitsgrenze von HUM-047 und der Grund, warum die Prüfung im
+    /// Daemon steht und nicht im gesperrten Eingabefeld der Oberfläche: Ein
+    /// Client, der die Oberfläche nicht ist, darf eine freigegebene Anfrage
+    /// nicht umlenken.
+    EDIT_001 => "edit", "Ziel der bearbeiteten Anfrage weicht ab", "#edit_001",
+        "Host, Port oder Schema der bearbeiteten Anfrage weichen nach der Normalisierung von der gehaltenen ab.",
+        "Kein Fix: Wer ein anderes Ziel will, stellt eine neue Anfrage; über diese hier hat niemand für dieses Ziel entschieden.";
+    /// Die Methode der bearbeiteten Anfrage ist kein Token.
+    EDIT_002 => "edit", "Methode der bearbeiteten Anfrage ungültig", "#edit_002",
+        "Die Methode ist leer, länger als 16 Zeichen oder enthält etwas anderes als Großbuchstaben.",
+        "Kein Fix-Knopf: Der Text nennt die abgelehnte Methode; die Oberfläche schreibt sie in Großbuchstaben.";
+    /// Pfad und Query der bearbeiteten Anfrage sind keine Origin-Form.
+    EDIT_003 => "edit", "Pfad der bearbeiteten Anfrage ungültig", "#edit_003",
+        "Der Pfad beginnt nicht mit `/`, oder er enthält ein Leerzeichen oder ein Steuerzeichen.",
+        "Kein Fix-Knopf: Der Text nennt die Stelle; Query-Werte gehören URL-kodiert.";
+    /// Der bearbeitete Body liegt über der Grenze, gegen die gepuffert wurde.
+    ///
+    /// Die Nummer 004 bleibt mit Absicht frei. Sie stand in der Spezifikation
+    /// von HUM-047 für eine gesperrte Kopfzeile im Edit; die wird nicht
+    /// abgelehnt, sondern still verworfen und im Tracing als
+    /// `edit.locked_header_dropped` vermerkt, weil der Daemon diese Werte
+    /// ohnehin selbst setzt. Ein Code, den niemand auslöst, wäre eine falsche
+    /// Aussage über den Vertrag (`backlog/CONVENTIONS.md` 4.13).
+    EDIT_005 => "edit", "Bearbeiteter Body über der Grenze", "#edit_005",
+        "Der Body der bearbeiteten Anfrage ist größer als die Grenze, gegen die der Hold gepuffert hat (`limits.hold_body_cap_bytes`).",
+        "`ChangeSetting` auf `limits.hold_body_cap_bytes`, oder weniger schicken.";
 }
 
 /// Sucht einen Code im Register.

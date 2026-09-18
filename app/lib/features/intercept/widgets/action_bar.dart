@@ -48,7 +48,13 @@ import 'remember_grid.dart';
 const double decisionGap = 160;
 
 /// Below this width the bar wraps into a column.
-const double actionBarWrapWidth = 640;
+///
+/// Seit HUM-047 stehen drei Controls in der Zeile — die Freigabe, „Bearbeiten"
+/// daneben und die Sperre hinter [decisionGap] —, und die Zahl ist die Breite,
+/// ab der alle drei nebeneinander passen. Sie war 640, solange es zwei waren;
+/// bei 652 px lief die Zeile um 142 px über, und eine Leiste, die überläuft,
+/// versteckt eine Entscheidung, statt sie umzubrechen (`docs/UX.md` 6).
+const double actionBarWrapWidth = 800;
 
 /// Height reserved for each of the two lines under the controls.
 const double actionBarLineHeight = 24;
@@ -56,10 +62,19 @@ const double actionBarLineHeight = 24;
 /// The action bar.
 class ActionBar extends ConsumerStatefulWidget {
   /// Creates the bar for [flow]; a null flow disables every control.
-  const ActionBar({required this.flow, super.key});
+  const ActionBar({required this.flow, this.onEdit, super.key});
 
   /// The selected flow, or null while nothing is selected.
   final Flow? flow;
+
+  /// Oeffnet den Editor von HUM-047, oder null, wenn es keinen gibt.
+  ///
+  /// Der Ruf geht an den Bildschirm und nicht an einen Provider: Der Editor
+  /// belegt dessen mittleren Pane, und wer ihn oeffnet, ist derselbe, der ihn
+  /// zeichnet. Ein `null` schaltet das Control ab -- ein totes Control ohne
+  /// Grund ist schlechter als ein fehlendes (`backlog/CONVENTIONS.md` 4.13),
+  /// und darum steht es dann gar nicht erst da.
+  final VoidCallback? onEdit;
 
   @override
   ConsumerState<ActionBar> createState() => _ActionBarState();
@@ -253,6 +268,31 @@ class _ActionBarState extends ConsumerState<ActionBar> {
       ),
     );
 
+    // "Edit + Allow" ist zurueck, und diesmal steht etwas dahinter: Der Knopf
+    // oeffnet den Editor von HUM-047 und entscheidet nichts. Er steht auf der
+    // Seite der Freigabe und nicht zwischen den beiden Entscheidungen: Er ist
+    // der Weg zu einer Freigabe, nur zu einer bearbeiteten, und der Abstand
+    // von [decisionGap] zwischen Allow und Block bleibt frei (BACKLOG.md 5).
+    final VoidCallback? onEdit = widget.onEdit;
+    final Widget edit = onEdit == null
+        ? const SizedBox.shrink()
+        : HButton(
+            key: const Key('intercept-edit'),
+            variant: HButtonVariant.ghost,
+            onPressed: enabled ? onEdit : null,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text(l10n.interceptEditAllow),
+                SizedBox(width: tokens.spacing.x2),
+                Text(
+                  l10n.interceptKeyEdit,
+                  style: tokens.typography.mono11.tinted(tokens.colors.fg1),
+                ),
+              ],
+            ),
+          );
+
     // Hover over the pair reveals the note slot, and it is read here and not
     // in the block control: a `MouseRegion` reports an enter in every
     // environment, while the hover highlight of a `FocusableActionDetector`
@@ -319,8 +359,8 @@ class _ActionBarState extends ConsumerState<ActionBar> {
                 // this window ever has left beside the two decisions.
                 return grid == null &&
                         constraints.maxWidth >= actionBarWrapWidth * scale
-                    ? _wide(tokens, valve, decisions)
-                    : _narrow(tokens, valve, grid, decisions);
+                    ? _wide(tokens, valve, edit, decisions)
+                    : _narrow(tokens, valve, edit, grid, decisions);
               },
             ),
             // The note is temporary: hidden until `N`, gone on `Escape` and on
@@ -383,19 +423,23 @@ class _ActionBarState extends ConsumerState<ActionBar> {
   /// note of a block and belongs beside it, and the gap between the two
   /// decisions stays what it is.
   ///
-  /// "Edit + Allow" is not here. It was a control that could not be pressed,
-  /// and a dead state without a reason is worse than a missing one
-  /// (`backlog/CONVENTIONS.md` 4.13); the request editor of HUM-047 brings it
-  /// back with something behind it. Until then the body stands read-only in
-  /// the card above.
-  Widget _wide(HTokens tokens, Widget valve, Widget decisions) => Row(
-    children: <Widget>[
-      valve,
-      const Spacer(),
-      const SizedBox(width: decisionGap),
-      decisions,
-    ],
-  );
+  /// "Edit + Allow" steht wieder hier, seit HUM-047 einen Editor dahinter
+  /// gesetzt hat. Es war ein Control, das sich nicht druecken liess, und ein
+  /// toter Zustand ohne Grund ist schlechter als ein fehlender
+  /// (`backlog/CONVENTIONS.md` 4.13); jetzt oeffnet es den Editor im selben
+  /// Pane. Es entscheidet nichts und steht deshalb neben der Freigabe, nicht
+  /// im Abstand zwischen den beiden Entscheidungen.
+  Widget _wide(HTokens tokens, Widget valve, Widget edit, Widget decisions) =>
+      Row(
+        children: <Widget>[
+          valve,
+          SizedBox(width: tokens.spacing.x3),
+          edit,
+          const Spacer(),
+          const SizedBox(width: decisionGap),
+          decisions,
+        ],
+      );
 
   /// The narrow layout: Block moves to its own line, right aligned.
   ///
@@ -406,13 +450,22 @@ class _ActionBarState extends ConsumerState<ActionBar> {
   Widget _narrow(
     HTokens tokens,
     Widget valve,
+    Widget edit,
     Widget? grid,
     Widget decisions,
   ) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     mainAxisSize: MainAxisSize.min,
     children: <Widget>[
-      Align(alignment: Alignment.centerLeft, child: valve),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: tokens.spacing.x3,
+          runSpacing: tokens.spacing.x2,
+          children: <Widget>[valve, edit],
+        ),
+      ),
       if (grid != null) ...<Widget>[
         SizedBox(height: tokens.spacing.x2),
         Align(alignment: Alignment.centerLeft, child: grid),

@@ -46,6 +46,7 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use crate::body::{self, BufferError, ResponseBody};
 use crate::ca::LeafCache;
 use crate::connect::{AuthorityError, AuthorityRefusal, ConnectionContext, RequestTarget};
+use crate::edit;
 use crate::findings::{NoScan, Scanner};
 use crate::hold::HoldQueue;
 use crate::meta::{self, ArchivedFlow, MetaEndpoint, MetaReply, MetaRequest};
@@ -880,17 +881,38 @@ impl FlowHandler {
                 // Host, aber im Klartext, und niemand hat einer Herabstufung
                 // zugestimmt. Das ist dieselbe Aussage wie die Pruefung der
                 // eingehenden Verbindung, nur in die andere Richtung.
-                let edited = *edited;
-                if edited.authority != flow.request.authority
-                    || edited.scheme != flow.request.scheme
-                {
-                    return self.revise_to_block(&mut flow, BlockReason::AuthorityMismatch);
-                }
-                let edited_body = edited
-                    .body
-                    .inline
-                    .clone()
-                    .unwrap_or_else(|| body_bytes.clone());
+                //
+                // Die Pruefung selbst und die Kopfzeilen, die der Daemon
+                // danach setzt, stehen in [`edit::apply_edit`] (HUM-047).
+                let checked =
+                    edit::apply_edit(&flow.request, *edited, self.inner.limits.body_cap_bytes);
+                let edit::Edited {
+                    request: edited,
+                    body: edited_body,
+                } = match checked {
+                    Ok(edited) => edited,
+                    Err(diagnostic) => {
+                        let reason = edit_block_reason(&diagnostic);
+                        self.publish_diagnostic(flow.id, diagnostic);
+                        return self.revise_to_block(&mut flow, reason);
+                    }
+                };
+                // Was nach der Bearbeitung noch an Funden dasteht, steht im
+                // Protokoll: Die Funde der ersten Runde zeigen in den alten
+                // Body, und eine Zahl von vorher waere nach einer Ersetzung
+                // eine falsche Aussage (HUM-047).
+                // Vor dem Makro und nicht als Feld darin: `tracing` wertet
+                // Felder nur aus, wenn die Stufe eingeschaltet ist, und der
+                // zweite Scan liefe im Alltag deshalb nie. Er soll laufen --
+                // die Zahl gehoert zur Entscheidung und nicht zum Protokoll
+                // (HUM-047; das Feld am `Decided`-Ereignis steht noch aus).
+                let remaining =
+                    edit::remaining_findings(self.inner.scanner.as_ref(), &edited, &edited_body);
+                tracing::debug!(
+                    flow = %flow.id,
+                    remaining_findings = remaining,
+                    "the edited request was checked and goes out"
+                );
                 // Die bearbeitete Anfrage steht neben der ursprünglichen, nicht
                 // an ihrer Stelle: Die History zeigt beide, sonst ließe sich
                 // nicht mehr sehen, was der Mensch geändert hat.
@@ -2065,6 +2087,23 @@ pub fn private_address_rule(request: &HttpRequest) -> Result<Rule, NoRule> {
              any other rule for the same host to take effect",
             host = request.authority.host.display(),
         )))
+}
+
+/// Womit eine abgelehnte Bearbeitung geblockt wird.
+///
+/// Der Befund sagt, was falsch war; der `BlockReason` sagt dem Agenten, welche
+/// Art von Wand er getroffen hat, und bestimmt den Status (`backlog/CONVENTIONS.md`
+/// 3.2). Ein verschobenes Ziel ist derselbe Fall wie ein `Host`, der nicht zum
+/// `CONNECT` passt: [`BlockReason::AuthorityMismatch`], `403`. Ein zu großer
+/// Rumpf ist [`BlockReason::BodyCap`], `413`, genau wie beim Puffern. Alles
+/// übrige ist eine Anfrage, die ein Mensch so geschickt hat, also
+/// [`BlockReason::User`], `403`.
+fn edit_block_reason(diagnostic: &Diagnostic) -> BlockReason {
+    match diagnostic.code.as_str() {
+        "EDIT_001" => BlockReason::AuthorityMismatch,
+        "EDIT_005" => BlockReason::BodyCap,
+        _ => BlockReason::User,
+    }
 }
 
 /// Baut die HTTP-Antwort aus einer [`BlockResponse`](humanitl_core::BlockResponse):
