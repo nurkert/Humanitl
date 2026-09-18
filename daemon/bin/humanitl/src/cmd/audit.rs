@@ -458,7 +458,9 @@ async fn export(
 ) -> Result<u8, Failure> {
     refuse_existing(out)?;
 
-    // Der Daemon exportiert nur ohne Zeitgrenzen: Sein Vertrag kennt keine.
+    // Über den Daemon geht der Export nur ohne Zeitgrenzen. Das Proto trägt
+    // seit HUM-051 `from` und `to`, aber der Daemon beantwortet `Audit` erst
+    // mit HUM-156; bis dahin filtert dieser Aufruf die Datei selbst.
     // Er läuft in einem anderen Verzeichnis als dieser Aufruf; ein relativer
     // Pfad landete bei ihm woanders.
     if file.is_none() && !range.is_set() {
@@ -510,6 +512,8 @@ async fn export_over_rpc(ctx: &Context, format: &str, out: &Path) -> Result<u64,
                 format: format.to_owned(),
                 out_path: out.display().to_string(),
                 redact_hosts: false,
+                from: None,
+                to: None,
             })),
         })
         .await
