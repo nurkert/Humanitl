@@ -2151,5 +2151,29 @@
   "auditFilterInvalid": "Not a time. Use 2026-09-11 08:00Z; the range stays as it was.",
   "@auditFilterInvalid": {"description": "Under a time-range field whose text is not a time. The filter keeps the bound it had, so table and export never cover all time while a bound still stands in the field (CONVENTIONS 4.13)."},
   "auditAnchorsUnknown": "anchors not reported",
-  "@auditAnchorsUnknown": {"description": "Stands where the anchor count would, when the daemon did not report anchors (`AuditResponse.anchors_reported` false). Not the same as no anchors: nobody counted."}
+  "@auditAnchorsUnknown": {"description": "Stands where the anchor count would, when the daemon did not report anchors (`AuditResponse.anchors_reported` false). Not the same as no anchors: nobody counted."},
+  "interceptFindingsPauseTitle": "{count, plural, =1{1 finding in this request} other{{count} findings in this request}}",
+  "@interceptFindingsPauseTitle": {
+    "description": "Heading of the findings pause (HUM-049): the stop inside the request card that a click on the amber release valve, Enter or A opens instead of sending, while the request has unresolved findings.",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "interceptFindingsPauseUndescribed": "{count, plural, =1{1 more finding is not described yet} other{{count} more findings are not described yet}}",
+  "@interceptFindingsPauseUndescribed": {
+    "description": "Under the list of the findings pause, while the daemon has counted more findings than it has described so far. Without it a short list would look complete (CONVENTIONS 4.13).",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "interceptFindingsPauseSendAnyway": "Send anyway",
+  "@interceptFindingsPauseSendAnyway": {"description": "Button in the findings pause that sends the request unchanged, with its findings (HUM-049)."},
+  "interceptFindingsPausePseudonymize": "Pseudonymize",
+  "@interceptFindingsPausePseudonymize": {"description": "Button in the findings pause that opens the editor with every open finding already replaced by a placeholder. Never 'anonymize': that is legally something else (BACKLOG.md 5)."},
+  "interceptFindingsPauseBlock": "Block",
+  "@interceptFindingsPauseBlock": {"description": "Button in the findings pause that blocks the request."},
+  "interceptFindingsPauseBack": "Back",
+  "@interceptFindingsPauseBack": {"description": "Button in the findings pause that closes it without deciding anything; the request stays held."},
+  "interceptFindingsPauseKeySend": "S",
+  "@interceptFindingsPauseKeySend": {"description": "Key that sends from the findings pause, shown on the button itself."},
+  "interceptFindingsPauseKeyPseudonymize": "P",
+  "@interceptFindingsPauseKeyPseudonymize": {"description": "Key that pseudonymizes from the findings pause, shown on the button itself."},
+  "interceptFindingsPauseKeyBack": "Esc",
+  "@interceptFindingsPauseKeyBack": {"description": "Key that closes the findings pause, shown on the button itself."}
 }
