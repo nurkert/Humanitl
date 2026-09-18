@@ -111,10 +111,10 @@ flutter-test-dbus: flutter-codegen ## D-Bus protocol tests on a private session 
 # beides gehoert nicht in ein Gate, das auf jedem Rechner in Sekunden gruen
 # sein soll. Er ist die Messung fuer das Kriterium von HUM-040, das frueher
 # "manuell mit echtem Daemon" hiess.
-flutter-test-daemon: flutter-codegen ## Sandbox screen against a real daemon (HUM-040)
+flutter-test-daemon: flutter-codegen ## Sandbox and audit screens against a real daemon (HUM-040, HUM-156)
 	@test -x daemon/target/debug/humanitld || { echo "daemon/target/debug/humanitld missing: cargo build --manifest-path daemon/Cargo.toml" >&2; exit 1; }
 	@command -v bwrap >/dev/null 2>&1 || { echo "bwrap missing: install the bubblewrap package" >&2; exit 1; }
-	cd app && env HUMANITL_DAEMON_TESTS=1 flutter test test/features/sandbox/daemon_live_test.dart
+	cd app && env HUMANITL_DAEMON_TESTS=1 flutter test test/features/sandbox/daemon_live_test.dart test/features/audit/audit_daemon_live_test.dart
 
 # Die Integrationstests: die echte Anwendung auf einem Bildschirm, gegen den
 # echten Daemon. Nicht Teil von `check`, aus denselben zwei Gruenden wie die

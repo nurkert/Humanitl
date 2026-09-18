@@ -37,6 +37,7 @@ use humanitl_core::{Diagnostic, FixAction, Severity};
 use crate::Anchor;
 use crate::key::shell_quote;
 use crate::record::{AuditRecord, GENESIS_PREV, mac_matches};
+use crate::writer::Head;
 
 /// Das Ergebnis einer Prüfung.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +48,11 @@ pub struct VerifyReport {
     pub status: VerifyStatus,
     /// Was die Prüfung nicht beweisen konnte.
     pub warnings: Vec<VerifyWarning>,
+    /// Der letzte Record, der bestanden hat; `None`, wenn keiner bestand.
+    ///
+    /// Bei einer Kette, die hält, ist das ihr Ende. Oberfläche und
+    /// Kommandozeile zeigen seinen Hash als Kopf der Kette (HUM-156).
+    pub head: Option<Head>,
 }
 
 /// Ob die Kette hält.
@@ -186,10 +192,31 @@ impl AuditVerifier {
         hmac_key: Option<&[u8; 32]>,
         anchors: &[Anchor],
     ) -> Result<VerifyReport, Diagnostic> {
+        Self::verify_until(path, hmac_key, anchors, None)
+    }
+
+    /// Wie [`AuditVerifier::verify`], aber nur bis zum Record mit der Nummer
+    /// `until`, dem Ende, das der Schreiber zuletzt gemeldet hat (HUM-156).
+    ///
+    /// Ein Daemon, der seine eigene, laufende Kette prüft, liest sie, während
+    /// der Schreiber weiter anhängt. Was hinter `until` steht, ist noch nicht
+    /// geschrieben und kein Bruch: Eine halbe Zeile dort ist eine, die gerade
+    /// entsteht. Anker jenseits von `until` zählen aus demselben Grund nicht.
+    /// `None` liest bis zum Ende der Datei.
+    ///
+    /// # Errors
+    ///
+    /// Wie [`AuditVerifier::verify`].
+    pub fn verify_until(
+        path: &Path,
+        hmac_key: Option<&[u8; 32]>,
+        anchors: &[Anchor],
+        until: Option<u64>,
+    ) -> Result<VerifyReport, Diagnostic> {
         let result = match File::open(path) {
-            Ok(file) => Self::verify_reader(BufReader::new(file), hmac_key, anchors),
+            Ok(file) => Self::verify_reader_until(BufReader::new(file), hmac_key, anchors, until),
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                Self::verify_reader(io::empty(), hmac_key, anchors)
+                Self::verify_reader_until(io::empty(), hmac_key, anchors, until)
             }
             Err(err) => Err(err),
         };
@@ -213,12 +240,29 @@ impl AuditVerifier {
     ///
     /// Der Fehler des Lesers.
     pub fn verify_reader(
-        mut reader: impl BufRead,
+        reader: impl BufRead,
         hmac_key: Option<&[u8; 32]>,
         anchors: &[Anchor],
     ) -> io::Result<VerifyReport> {
+        Self::verify_reader_until(reader, hmac_key, anchors, None)
+    }
+
+    /// Wie [`AuditVerifier::verify_until`], über einem beliebigen Leser.
+    ///
+    /// # Errors
+    ///
+    /// Der Fehler des Lesers.
+    pub fn verify_reader_until(
+        mut reader: impl BufRead,
+        hmac_key: Option<&[u8; 32]>,
+        anchors: &[Anchor],
+        until: Option<u64>,
+    ) -> io::Result<VerifyReport> {
         let mut by_seq: BTreeMap<u64, Vec<&str>> = BTreeMap::new();
-        for anchor in anchors {
+        for anchor in anchors
+            .iter()
+            .filter(|anchor| until.is_none_or(|until| anchor.seq <= until))
+        {
             by_seq.entry(anchor.seq).or_default().push(&anchor.hash);
         }
         let mut warnings = Vec::new();
@@ -231,6 +275,10 @@ impl AuditVerifier {
         let mut last_hash = GENESIS_PREV.to_owned();
         let mut buffer = Vec::with_capacity(1024);
         loop {
+            if until.is_some_and(|until| last_seq >= until) {
+                // Das gemeldete Ende ist erreicht; der Rest entsteht gerade.
+                break;
+            }
             buffer.clear();
             if reader.read_until(b'\n', &mut buffer)? == 0 {
                 break;
@@ -242,6 +290,7 @@ impl AuditVerifier {
                     reason,
                 },
                 warnings: warnings.clone(),
+                head: head_of(records, last_seq, &last_hash),
             };
             // Eine letzte Zeile ohne `\n` ist unvollständig: Das Format endet
             // jede Zeile mit einem Umbruch.
@@ -266,6 +315,7 @@ impl AuditVerifier {
                     reason: BreakReason::TruncatedBelowAnchor { anchor_seq },
                 },
                 warnings,
+                head: head_of(records, last_seq, &last_hash),
             });
         }
         let anchored = by_seq
@@ -281,8 +331,17 @@ impl AuditVerifier {
             records,
             status: VerifyStatus::Ok,
             warnings,
+            head: head_of(records, last_seq, &last_hash),
         })
     }
+}
+
+/// Das Ende des geprüften Teils; `None`, solange nichts bestanden hat.
+fn head_of(records: u64, last_seq: u64, last_hash: &str) -> Option<Head> {
+    (records > 0).then(|| Head {
+        seq: last_seq,
+        hash: last_hash.to_owned(),
+    })
 }
 
 /// Prüft eine Zeile und liefert Nummer und Hash, oder die Nummer und den
