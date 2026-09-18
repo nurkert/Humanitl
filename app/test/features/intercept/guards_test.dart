@@ -453,11 +453,12 @@ void main() {
       await tester.pump();
 
       expect(client.decisions, isEmpty);
-      expect(
-        find.text('Hold to send: a finding is unresolved'),
-        findsOneWidget,
-      );
-    });
+      // Seit HUM-049 öffnet der Klick die Pause mit den offenen Funden, statt
+      // nur abzuweisen; hinaus geht weiterhin nichts.
+      expect(find.byKey(const Key('intercept-findings-pause')), findsOneWidget);
+      // Als Linux-Desktop, der einzigen Plattform der App: `flutter test`
+      // spielt sonst Android, und Zeiger und Halten verhalten sich dort anders.
+    }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 
     testWidgets('holding the valve sends it', (WidgetTester tester) async {
       final FakeDaemonClient client = fakeDaemon(

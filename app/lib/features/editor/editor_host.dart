@@ -49,23 +49,33 @@ import 'providers/editor_detail.dart';
 ///
 /// Die Signatur ist die des `InspectorEditorBuilder` der Warteschlange. Sie
 /// führt nur Kerntypen, damit der Bildschirm dort sie kennen kann, ohne diese
-/// Datei zu importieren.
+/// Datei zu importieren. [replaceAll] kommt aus der Pause mit offenen Funden
+/// („Pseudonymisieren", HUM-049).
 Widget buildEditorPane(
   BuildContext context,
   FlowId flowId,
-  VoidCallback onClose,
-) => EditorHost(flowId: flowId, onClose: onClose);
+  VoidCallback onClose, {
+  required bool replaceAll,
+}) => EditorHost(flowId: flowId, onClose: onClose, replaceAll: replaceAll);
 
 /// Der Editor samt allem, was er zum Aufbau braucht.
 class EditorHost extends ConsumerStatefulWidget {
   /// Baut den Wirt.
-  const EditorHost({required this.flowId, required this.onClose, super.key});
+  const EditorHost({
+    required this.flowId,
+    required this.onClose,
+    this.replaceAll = false,
+    super.key,
+  });
 
   /// Der Fluss, der bearbeitet wird.
   final FlowId flowId;
 
   /// Schließt den Editor; der Entwurf bleibt stehen.
   final VoidCallback onClose;
+
+  /// Wahr, wenn der Editor mit allen offenen Funden ersetzt aufgehen soll.
+  final bool replaceAll;
 
   @override
   ConsumerState<EditorHost> createState() => _EditorHostState();
@@ -117,6 +127,7 @@ class _EditorHostState extends ConsumerState<EditorHost> {
         aliases: const <String, String>{},
         session: detail.summary.sessionId,
       ),
+      replaceAllOnOpen: widget.replaceAll,
       canSend: !_overdue && !_sending,
       sendDisabledReason: _overdue ? l10n.editorTimedOut : '',
       failure: _failure,

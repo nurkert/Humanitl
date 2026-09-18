@@ -11,6 +11,8 @@
 /// again, and the selection waits while one of them is down.
 library;
 
+import 'dart:async';
+
 // `Flow` is a domain type here, not the Flutter layout widget of the same
 // name; the widget is never used in this feature.
 import 'package:flutter/foundation.dart' show setEquals;
@@ -26,6 +28,7 @@ import '../../l10n/l10n.dart';
 import 'intents.dart';
 import 'providers/coach_mark.dart';
 import 'providers/decision.dart';
+import 'providers/findings_pause.dart';
 import 'providers/flows.dart';
 import 'providers/held_groups.dart';
 import 'providers/note.dart';
@@ -57,6 +60,8 @@ final Set<LogicalKeyboardKey> decisionKeys = <LogicalKeyboardKey>{
   LogicalKeyboardKey.keyB,
   LogicalKeyboardKey.keyF,
   LogicalKeyboardKey.keyL,
+  // `S` sends from the findings pause (HUM-049).
+  LogicalKeyboardKey.keyS,
 };
 
 /// True while the shell actually paints this section.
@@ -104,11 +109,15 @@ bool focusedControlHandlesActivate() {
 /// etwas aus `features/editor` zu holen.
 ///
 /// `onClose` schliesst den Editor wieder; der Entwurf bleibt dabei stehen.
+/// `replaceAll` ist wahr, wenn der Editor aus der Pause mit offenen Funden
+/// kommt („Pseudonymisieren", HUM-049): Er oeffnet dann mit jedem offenen Fund
+/// schon ersetzt.
 typedef InspectorEditorBuilder = Widget Function(
   BuildContext context,
   FlowId flowId,
-  VoidCallback onClose,
-);
+  VoidCallback onClose, {
+  required bool replaceAll,
+});
 
 /// The Intercept section.
 class InterceptScreen extends ConsumerStatefulWidget {
@@ -142,6 +151,13 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
   /// -- ein Editor ueber einer Anfrage, die schon draussen ist, boete eine
   /// Bearbeitung an, die niemand mehr senden kann (`docs/UX.md` 4.4).
   bool _editorOpen = false;
+
+  /// Wahr, wenn der offene Editor aus der Pause mit offenen Funden kam und mit
+  /// allen Funden ersetzt aufgehen soll (HUM-049).
+  bool _editorReplaceAll = false;
+
+  late final Map<ShortcutActivator, Intent> _pauseShortcuts =
+      findingsPauseShortcuts();
 
   // Both maps are fields, not expressions in `build`: a map rebuilt every
   // frame is a new object for every descendant that depends on it
@@ -350,18 +366,45 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
   }
 
   /// Oeffnet den Editor, wenn es einen gibt.
-  void _openEditor() {
+  ///
+  /// [replaceAll] kommt aus der Pause mit offenen Funden: Der Editor geht dann
+  /// mit jedem offenen Fund schon ersetzt auf, und die Pause schliesst sich,
+  /// weil der Editor ihren Platz im Pane nimmt (HUM-049).
+  void _openEditor({bool replaceAll = false}) {
     if (widget.editorBuilder == null || _editorOpen) {
       return;
     }
-    setState(() => _editorOpen = true);
+    ref.read(openFindingsPauseProvider.notifier).close();
+    setState(() {
+      _editorOpen = true;
+      _editorReplaceAll = replaceAll;
+    });
   }
 
   /// Schliesst ihn; der Entwurf bleibt in seinem eigenen Provider stehen.
   void _closeEditor() {
     if (_editorOpen) {
-      setState(() => _editorOpen = false);
+      setState(() {
+        _editorOpen = false;
+        _editorReplaceAll = false;
+      });
     }
+  }
+
+  /// Wahr, solange die Pause mit offenen Funden ueber der ausgewaehlten,
+  /// noch gehaltenen Anfrage steht (HUM-049).
+  ///
+  /// Dasselbe Praedikat, das die Aktionsleiste zeichnet
+  /// ([findingsPauseVisibleProvider]): Eine Taste wirkt nur, wo die Pause auch
+  /// zu sehen ist.
+  bool _pauseOpen() => ref.read(findingsPauseVisibleProvider);
+
+  /// `S` in der Pause: senden, wie die Anfrage ist.
+  void _sendAnyway() {
+    _lockPressedKeys();
+    unawaited(
+      ref.read(interceptDecisionProvider.notifier).allow(acknowledged: true),
+    );
   }
 
   /// Moves the cursor and tells the queue that a key did it: the order stays
@@ -383,6 +426,26 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
   }
 
   Map<Type, Action<Intent>> _buildActions() => <Type, Action<Intent>>{
+    // Die drei Tasten der Pause mit offenen Funden (HUM-049). Aus, solange
+    // keine Pause offen ist; die Taste faellt dann an die Bindungen darunter.
+    SendAnywayIntent: _ScreenAction<SendAnywayIntent>(
+      active: ({required bool chord}) =>
+          _keysActive(chord: chord) && _pauseOpen(),
+      onAct: (SendAnywayIntent intent) => _sendAnyway(),
+    ),
+    PseudonymizeIntent: _ScreenAction<PseudonymizeIntent>(
+      active: ({required bool chord}) =>
+          _keysActive(chord: chord) &&
+          widget.editorBuilder != null &&
+          _pauseOpen(),
+      onAct: (PseudonymizeIntent intent) => _openEditor(replaceAll: true),
+    ),
+    CloseFindingsPauseIntent: _ScreenAction<CloseFindingsPauseIntent>(
+      active: ({required bool chord}) =>
+          _keysActive(chord: chord) && _pauseOpen(),
+      onAct: (CloseFindingsPauseIntent intent) =>
+          ref.read(openFindingsPauseProvider.notifier).close(),
+    ),
     AllowIntent: _DecisionAction<AllowIntent>(
       chord: (AllowIntent intent) => intent.chord,
       active: _keysActive,
@@ -491,6 +554,8 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
       }
       ref.read(interceptDecisionProvider.notifier).clear();
       ref.read(lastRefusalProvider.notifier).clear();
+      // Die Pause gehoert zu der Anfrage, ueber der sie aufging (HUM-049).
+      ref.read(openFindingsPauseProvider.notifier).close();
     });
     // Der Griff nach der Tastatur, wenn die Leitung zurückkommt.
     //
@@ -548,54 +613,65 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
       shortcuts: _shortcuts,
       child: Actions(
         actions: _actions,
-        child: Focus(
-          focusNode: _focus,
-          onKeyEvent: _onKey,
-          child: Listener(
-            behavior: HitTestBehavior.translucent,
-            onPointerDown: (PointerDownEvent _) => _focus.requestFocus(),
-            child: ColoredBox(
-              color: tokens.colors.bg0,
-              child: Stack(
-                fit: StackFit.expand,
-                children: <Widget>[
-                  HResizablePanes(
-                    ratios: ratios,
-                    minWidths: <double>[
-                      tokens.sizes.paneMinQueue,
-                      tokens.sizes.paneMinInspector,
-                      tokens.sizes.paneMinContext,
-                    ],
-                    onRatiosChanged: ref.read(paneRatiosProvider.notifier).set,
-                    children: <Widget>[
-                      const QueuePane(),
-                      _InspectorPane(
-                        flow: selected,
-                        selection: chosen,
-                        queueEmpty: queueEmpty,
-                        editor: editorOpen ? editorBuilder : null,
-                        onEdit: editorBuilder == null ? null : _openEditor,
-                        onCloseEditor: _closeEditor,
-                      ),
-                      DomainPanel(flow: selected),
-                    ],
-                  ),
-                  // The sheet hangs on the right edge and leaves the panes
-                  // where they are: it asks for a rule, it does not decide
-                  // anything, so it never dims the screen behind it
-                  // (`docs/UX.md` 2.2). It comes from the agent's card in the
-                  // queue (HUM-073).
-                  if (ruleDraft != null)
-                    Positioned(
-                      top: 0,
-                      right: 0,
-                      bottom: 0,
-                      child: AgentAskRuleSheet(draft: ruleDraft),
+        // Naeher am Fokus als die Bindungen des Bildschirms und deshalb zuerst
+        // gefragt; siehe [findingsPauseShortcuts].
+        child: Shortcuts(
+          shortcuts: _pauseShortcuts,
+          child: Focus(
+            focusNode: _focus,
+            onKeyEvent: _onKey,
+            child: Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: (PointerDownEvent _) => _focus.requestFocus(),
+              child: ColoredBox(
+                color: tokens.colors.bg0,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: <Widget>[
+                    HResizablePanes(
+                      ratios: ratios,
+                      minWidths: <double>[
+                        tokens.sizes.paneMinQueue,
+                        tokens.sizes.paneMinInspector,
+                        tokens.sizes.paneMinContext,
+                      ],
+                      onRatiosChanged: ref
+                          .read(paneRatiosProvider.notifier)
+                          .set,
+                      children: <Widget>[
+                        const QueuePane(),
+                        _InspectorPane(
+                          flow: selected,
+                          selection: chosen,
+                          queueEmpty: queueEmpty,
+                          editor: editorOpen ? editorBuilder : null,
+                          editorReplaceAll: _editorReplaceAll,
+                          onEdit: editorBuilder == null ? null : _openEditor,
+                          onPseudonymize: editorBuilder == null
+                              ? null
+                              : () => _openEditor(replaceAll: true),
+                          onCloseEditor: _closeEditor,
+                        ),
+                        DomainPanel(flow: selected),
+                      ],
                     ),
-                  // The one modal of this screen, above everything, with the
-                  // background dimmed and nothing behind it reachable.
-                  if (asking != null) BatchModal(request: asking),
-                ],
+                    // The sheet hangs on the right edge and leaves the panes
+                    // where they are: it asks for a rule, it does not decide
+                    // anything, so it never dims the screen behind it
+                    // (`docs/UX.md` 2.2). It comes from the agent's card in the
+                    // queue (HUM-073).
+                    if (ruleDraft != null)
+                      Positioned(
+                        top: 0,
+                        right: 0,
+                        bottom: 0,
+                        child: AgentAskRuleSheet(draft: ruleDraft),
+                      ),
+                    // The one modal of this screen, above everything, with the
+                    // background dimmed and nothing behind it reachable.
+                    if (asking != null) BatchModal(request: asking),
+                  ],
+                ),
               ),
             ),
           ),
@@ -690,7 +766,9 @@ class _InspectorPane extends StatelessWidget {
     required this.selection,
     required this.queueEmpty,
     this.editor,
+    this.editorReplaceAll = false,
     this.onEdit,
+    this.onPseudonymize,
     this.onCloseEditor,
   });
 
@@ -703,8 +781,15 @@ class _InspectorPane extends StatelessWidget {
   /// waeren einer zu viel (`docs/UX.md` 3.1).
   final InspectorEditorBuilder? editor;
 
+  /// Ob der Editor mit allen offenen Funden ersetzt aufgeht (HUM-049).
+  final bool editorReplaceAll;
+
   /// Oeffnet den Editor, oder null, wenn es keinen gibt.
   final VoidCallback? onEdit;
+
+  /// Oeffnet den Editor mit allen offenen Funden ersetzt, fuer die Pause mit
+  /// offenen Funden; null ohne Editor (HUM-049).
+  final VoidCallback? onPseudonymize;
 
   /// Schliesst ihn wieder.
   final VoidCallback? onCloseEditor;
@@ -724,7 +809,12 @@ class _InspectorPane extends StatelessWidget {
     final Flow? flow = this.flow;
     final InspectorEditorBuilder? editor = this.editor;
     if (editor != null && flow != null) {
-      return editor(context, flow.id, onCloseEditor ?? () {});
+      return editor(
+        context,
+        flow.id,
+        onCloseEditor ?? () {},
+        replaceAll: editorReplaceAll,
+      );
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -760,7 +850,7 @@ class _InspectorPane extends StatelessWidget {
             ),
           ),
         ),
-        ActionBar(flow: flow, onEdit: onEdit),
+        ActionBar(flow: flow, onEdit: onEdit, onPseudonymize: onPseudonymize),
       ],
     );
   }

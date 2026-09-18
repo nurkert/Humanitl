@@ -52,6 +52,7 @@ class EditorScreen extends ConsumerStatefulWidget {
     required this.source,
     required this.onClose,
     required this.onSend,
+    this.replaceAllOnOpen = false,
     this.canSend = true,
     this.sendDisabledReason = '',
     this.failure,
@@ -70,6 +71,15 @@ class EditorScreen extends ConsumerStatefulWidget {
   /// Schickt die bearbeitete Fassung.
   final void Function(EditedRequest request, List<Replacement> replacements)
   onSend;
+
+  /// Wahr, wenn der Editor mit jedem offenen Fund schon ersetzt aufgeht.
+  ///
+  /// So kommt er aus der Pause mit offenen Funden („Pseudonymisieren",
+  /// HUM-049): Wer dort pseudonymisieren wollte, soll die Ersetzung sehen und
+  /// nicht erst noch einmal „Alle ersetzen" drücken. Ersetzt wird einmal beim
+  /// Aufgehen und nur, was noch offen ist; eine Ersetzung, die schon im
+  /// Entwurf steht, bleibt, wie sie ist.
+  final bool replaceAllOnOpen;
 
   /// Falsch, solange nicht gesendet werden darf (abgelaufen, schon entschieden).
   final bool canSend;
@@ -106,7 +116,12 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
       if (!mounted) {
         return;
       }
-      ref.read(draftProvider(widget.flowId).notifier).load(widget.source);
+      final DraftNotifier drafts = ref.read(
+        draftProvider(widget.flowId).notifier,
+      )..load(widget.source);
+      if (widget.replaceAllOnOpen) {
+        drafts.replaceAllOpen(aliases: widget.source.aliases);
+      }
       // Der Editor nimmt die Tastatur, sobald er aufgeht, und zwar
       // ausdruecklich: `autofocus` reicht nicht, weil es nur greift, solange
       // im umgebenden Bereich nichts anderes den Fokus hat -- und der

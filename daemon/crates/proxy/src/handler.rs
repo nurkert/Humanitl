@@ -31,7 +31,7 @@ use humanitl_core::diagnostics::codes::{FINDINGS_003, PROXY_005, PROXY_008, PROX
 use humanitl_core::{
     Action, AnswerRefused, Authority, BlockReason, BodyRef, Decision, DecisionSource, Diagnostic,
     Finding, FixAction, Flow, FlowEvent, FlowId, FlowState, HeaderMap, HostName, HostPattern,
-    HttpRequest, InvalidTransition, Matcher, Method, Rule, RuleId, Scheme, Severity, Tier,
+    HttpRequest, InvalidTransition, Matcher, Method, Rule, RuleId, Scheme, Severity,
     TransitionInput, UpstreamError, block_response, failed_response, path_prefix_is_valid,
 };
 use humanitl_recorder::{Dir, Recorder};
@@ -47,7 +47,7 @@ use crate::body::{self, BufferError, ResponseBody};
 use crate::ca::LeafCache;
 use crate::connect::{AuthorityError, AuthorityRefusal, ConnectionContext, RequestTarget};
 use crate::edit;
-use crate::findings::{NoScan, Scanner};
+use crate::findings::{self, NoScan, Scanner};
 use crate::hold::HoldQueue;
 use crate::meta::{self, ArchivedFlow, MetaEndpoint, MetaReply, MetaRequest};
 use crate::pipeline::FlowPipeline;
@@ -908,9 +908,22 @@ impl FlowHandler {
                 // (HUM-047; das Feld am `Decided`-Ereignis steht noch aus).
                 let remaining =
                     edit::remaining_findings(self.inner.scanner.as_ref(), &edited, &edited_body);
+                // Die harte Sperre gilt für das, was hinausginge, also für
+                // die Funde des zweiten Scans: Ein bestätigtes Geheimnis, das
+                // der Mensch stehen ließ oder erst hineingeschrieben hat, geht
+                // unter `hold.hard_block_checksum_secrets` so wenig hinaus wie
+                // eines in der Anfrage des Agenten (HUM-049). Die Freigabe ist
+                // schon getroffen; das System nimmt sie zurück, bevor etwas
+                // weitergeleitet wurde, wie bei einem abgelehnten Edit oben.
+                if let Err(diagnostic) =
+                    findings::check_allow(&remaining, self.inner.limits.hard_block_checksum_secrets)
+                {
+                    self.publish_diagnostic(flow.id, diagnostic);
+                    return self.revise_to_block(&mut flow, BlockReason::Secret);
+                }
                 tracing::debug!(
                     flow = %flow.id,
-                    remaining_findings = remaining,
+                    remaining_findings = remaining.len(),
                     "the edited request was checked and goes out"
                 );
                 // Die bearbeitete Anfrage steht neben der ursprünglichen, nicht
@@ -1204,10 +1217,12 @@ impl FlowHandler {
     ) -> Result<(), Response<ResponseBody>> {
         let report = self.inner.scanner.scan(request, body);
         let truncated = report.truncated;
-        let checksum_secret = report
-            .findings
-            .iter()
-            .any(|finding| finding.tier == Tier::Checksum);
+        // Dieselbe Prüfung wie vor einer bearbeiteten Freigabe, nur früher:
+        // Was sie hier sperrt, wird gar nicht erst gehalten (HUM-049).
+        let hard_block = findings::check_allow(
+            &report.findings,
+            self.inner.limits.hard_block_checksum_secrets,
+        );
         log_findings(flow, &report.findings, truncated);
         // Ohne Fund gibt es nichts aufzuschreiben: Die Zahl der Funde trägt
         // die Zeile des Flows ohnehin, und sie ist dann null.
@@ -1245,8 +1260,8 @@ impl FlowHandler {
         // bestätigt, ist kein Verdacht. Wer den Schalter setzt, hat im Voraus
         // entschieden, dass so etwas den Rechner nicht verlässt; gefragt wird
         // dann nicht mehr.
-        if self.inner.limits.hard_block_checksum_secrets && checksum_secret {
-            return Err(self.block_checksum_secret(flow));
+        if let Err(diagnostic) = hard_block {
+            return Err(self.block_checksum_secret(flow, diagnostic));
         }
         Ok(())
     }
@@ -1260,7 +1275,16 @@ impl FlowHandler {
     /// gab, wäre eine Unwahrheit gegenüber dem Agenten und dem Protokoll
     /// (`backlog/CONVENTIONS.md` 4.13). Die Notiz sagt, was passiert ist, ohne
     /// den Wert zu nennen — der steht in keiner Meldung, nur sein Hash.
-    fn block_checksum_secret(&self, flow: &mut Flow) -> Response<ResponseBody> {
+    ///
+    /// `refusal` ist der Befund [`HOLD_004`](humanitl_core::diagnostics::codes::HOLD_004)
+    /// aus [`findings::check_allow`]. Er steht im Ereignisstrom am Flow, damit
+    /// die Oberfläche nicht nur „geblockt" sagt, sondern warum und was hilft.
+    fn block_checksum_secret(
+        &self,
+        flow: &mut Flow,
+        refusal: Diagnostic,
+    ) -> Response<ResponseBody> {
+        self.publish_diagnostic(flow.id, refusal);
         let reason = BlockReason::Secret;
         let note = "a checksum-confirmed secret was found in this request and \
                     hold.hard_block_checksum_secrets is on";

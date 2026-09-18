@@ -7,7 +7,9 @@
 //! 2. Eine nur teilweise durchsuchte Anfrage sieht nie aus wie eine saubere:
 //!    `findings_truncated` steht am Datensatz, und der Befund, der die Lücke
 //!    erklärt, hängt am selben Flow.
-//! 3. `hold.hard_block_checksum_secrets` blockt, ohne zu fragen.
+//! 3. `hold.hard_block_checksum_secrets` blockt, ohne zu fragen, und mit dem
+//!    Befund `HOLD_004`; dasselbe gilt für eine bearbeitete Fassung, die nach
+//!    dem zweiten Scan noch ein bestätigtes Geheimnis trägt (HUM-049).
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -15,10 +17,11 @@ mod support;
 
 use std::sync::Arc;
 
-use humanitl_core::diagnostics::codes::{FINDINGS_002, FINDINGS_003};
+use bytes::Bytes;
+use humanitl_core::diagnostics::codes::{FINDINGS_002, FINDINGS_003, HOLD_004};
 use humanitl_core::{
-    Decision, Diagnostic, Finding, FindingKind, FindingLocation, FlowEvent, HttpRequest, Severity,
-    Tier,
+    Authority, BlockReason, BodyRef, Decision, Diagnostic, Finding, FindingKind, FindingLocation,
+    FlowEvent, HostName, HttpRequest, Method, Scheme, Severity, Tier,
 };
 use humanitl_findings::{FindingsSettings, ScanReport};
 use humanitl_proxy::{Scanner, Tier1Scanner};
@@ -218,6 +221,108 @@ async fn a_checksum_secret_is_blocked_when_the_switch_is_on() {
     assert_eq!(events.count("held"), 0, "nobody is asked");
     assert_eq!(events.count("forwarded"), 0);
     assert_eq!(upstream.hits(), 0);
+    // Die Sperre sagt am Flow, warum sie griff und was hilft (HUM-049).
+    let refusal = hold_refusals(&events.seen);
+    assert_eq!(refusal.len(), 1, "one block, one HOLD_004");
+    assert!(
+        refusal[0].why.contains("iban in the body") && !refusal[0].why.contains("GB82"),
+        "kind and place, never the value: {}",
+        refusal[0].why
+    );
+}
+
+/// Die Befunde `HOLD_004` unter `seen`.
+fn hold_refusals(seen: &[FlowEvent]) -> Vec<&Diagnostic> {
+    seen.iter()
+        .filter_map(|event| match event {
+            FlowEvent::Diagnostic { diagnostic, .. } => Some(diagnostic.as_ref()),
+            _ => None,
+        })
+        .filter(|diagnostic| diagnostic.code == HOLD_004)
+        .collect()
+}
+
+/// Die Fassung des Menschen: dasselbe Ziel wie die gehaltene Anfrage, ein
+/// anderer Rumpf.
+fn edited_sink(port: u16, body: &'static str) -> HttpRequest {
+    let authority = Authority {
+        host: HostName::parse("127.0.0.1").unwrap(),
+        port,
+    };
+    HttpRequest::new(Method::POST, Scheme::Http, authority, "/sink")
+        .with_body(BodyRef::from_bytes(Bytes::from_static(body.as_bytes())))
+}
+
+/// Schickt eine saubere Anfrage, lässt sie mit einer IBAN im Rumpf bearbeitet
+/// freigeben, und liefert Status, Ereignisse und Treffer beim Ziel.
+async fn send_edited_iban(hard_block: bool) -> (StatusCode, Vec<FlowEvent>, usize) {
+    let upstream = FakeUpstream::plain().await;
+    let proxy = ProxyBuilder::new()
+        .scanner(tier1())
+        .hard_block_checksum_secrets(hard_block)
+        .start()
+        .await;
+    let mut events = proxy.events();
+    let _decider = proxy.decide_with(Decision::AllowEdited {
+        request: Box::new(edited_sink(upstream.port(), IBAN_BODY)),
+    });
+
+    let mut client = proxy.client().await;
+    let response = client
+        .send(post(
+            &format!("http://127.0.0.1:{}/sink", upstream.port()),
+            "nothing to see here",
+        ))
+        .await;
+    let status = response.status();
+    events.wait_for("recorded").await;
+    assert_eq!(
+        events.count("held"),
+        1,
+        "the clean request was asked about, so the edit is the only way a secret got in"
+    );
+    (status, events.seen.clone(), upstream.hits())
+}
+
+/// Eine bearbeitete Fassung, die ein bestätigtes Geheimnis trägt, geht unter
+/// dem Schalter nicht hinaus, obwohl ein Mensch sie freigegeben hat.
+///
+/// Der gehaltene Rumpf ist sauber; die IBAN steht erst in der Bearbeitung. Der
+/// Scan der gehaltenen Fassung sieht sie deshalb nie, und nur der zweite Scan
+/// über das, was hinausginge, kann die Sperre auslösen (HUM-049).
+#[tokio::test(flavor = "multi_thread")]
+async fn an_edited_checksum_secret_is_blocked_when_the_switch_is_on() {
+    let (status, seen, hits) = send_edited_iban(true).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(hits, 0, "nothing reached the target");
+    assert!(
+        !seen.iter().any(|event| event.name() == "forwarded"),
+        "the edit was taken back before anything was forwarded"
+    );
+    let refusal = hold_refusals(&seen);
+    assert_eq!(refusal.len(), 1, "the refusal says why: {seen:?}");
+    assert_eq!(refusal[0].severity, Severity::Blocking);
+    let reasons: Vec<BlockReason> = seen
+        .iter()
+        .filter_map(|event| match event {
+            FlowEvent::Decided {
+                decision: Decision::Block { reason, .. },
+                ..
+            } => Some(*reason),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reasons, vec![BlockReason::Secret]);
+}
+
+/// Ohne den Schalter geht dieselbe Bearbeitung hinaus: Die Sperre ist die des
+/// Schalters, nicht eine zweite Meinung über jede Freigabe.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_edited_checksum_secret_goes_out_when_the_switch_is_off() {
+    let (status, seen, hits) = send_edited_iban(false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(hits, 1);
+    assert!(hold_refusals(&seen).is_empty());
 }
 
 /// Der Satz, den der harte Block selbst schreibt, kommt nicht in die Spalte.
