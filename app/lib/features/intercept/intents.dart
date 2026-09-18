@@ -17,12 +17,19 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import '../../core/shortcuts/intents.dart'
-    show AllowIntent, BlockIntent, NextFlowIntent, NoteIntent, PrevFlowIntent;
+    show
+        AllowIntent,
+        BlockIntent,
+        EditIntent,
+        NextFlowIntent,
+        NoteIntent,
+        PrevFlowIntent;
 
 export '../../core/shortcuts/intents.dart'
     show
         AllowIntent,
         BlockIntent,
+        EditIntent,
         NextFlowIntent,
         NoteIntent,
         PrevFlowIntent,
@@ -160,6 +167,7 @@ interceptShortcuts() => <ShortcutActivator, Intent>{
   const SingleActivator(LogicalKeyboardKey.enter, shift: true):
       const OpenRememberIntent(),
   const SingleActivator(LogicalKeyboardKey.keyN): const NoteIntent(),
+  const SingleActivator(LogicalKeyboardKey.keyE): const EditIntent(),
   const SingleActivator(LogicalKeyboardKey.escape):
       const CloseCoachMarkIntent(),
   const SingleActivator(

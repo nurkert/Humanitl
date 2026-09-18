@@ -13,6 +13,7 @@ import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
 import '../about/about_dialog.dart';
 import '../audit/audit_screen.dart';
+import '../editor/editor_host.dart';
 import '../history/history_screen.dart';
 import '../intercept/intercept_screen.dart';
 import '../intercept/providers/decision.dart';
@@ -255,7 +256,14 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   Widget _sections(Section section, {required bool frozen}) => IndexedStack(
     index: section.index,
     children: <Widget>[
-      _snapshot(frozen, _keys[0], const InterceptScreen()),
+      // Der Editor von HUM-047 wird hier eingehaengt und nicht in der
+      // Warteschlange: Kein Feature importiert ein anderes, und die Shell ist
+      // die eine Stelle, die beide kennen darf (`docs/ARCHITECTURE.md` 5).
+      _snapshot(
+        frozen,
+        _keys[0],
+        const InterceptScreen(editorBuilder: buildEditorPane),
+      ),
       _snapshot(frozen, _keys[1], const HistoryScreen()),
       _snapshot(frozen, _keys[2], const RulesScreen()),
       _snapshot(frozen, _keys[3], const SandboxScreen()),
