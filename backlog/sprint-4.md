@@ -34,6 +34,7 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-150 | Ein langer Befund wird mitten im Wort abgeschnitten | S | HUM-106 |
 | HUM-153 | Im History-Detail bleibt dem Body kaum Platz | S | HUM-032, HUM-116 |
 | HUM-154 | „No body." steht in einer Farbe, die für Sätze zu schwach ist | S | HUM-030 |
+| HUM-156 | Der Daemon beantwortet `Audit` nicht | M | HUM-050, HUM-070, HUM-051 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -2761,3 +2762,27 @@ Ein leerer Body wird in beiden Bildschirmen mit einem Satz in `fg1` benannt, und
 
 ### Referenzen
 HUM-030, HUM-116; `docs/UX.md` (Kontrast von Text); `app/lib/core/body/body_view.dart`, `app/lib/features/history/history_detail.dart`.
+
+## HUM-156 · Der Daemon beantwortet `Audit` nicht
+Sprint: 4 · Größe: M · Abhängigkeiten: HUM-050, HUM-070, HUM-051 · Blockiert: HUM-055
+
+### Kontext
+Die Audit-Kette aus HUM-050 wird geschrieben, verankert und lässt sich aus der Datei prüfen. Wer aber fragt, bekommt vom Daemon keine Antwort: Der Dienst `Audit` in `daemon/crates/ipc/src/server.rs` antwortet `unimplemented`. Aufgefallen ist das am 2026-09-18 an zwei Issues zugleich, die beide annahmen, das jeweils andere liefere ihn. `humanitl audit verify` und `audit export` (HUM-070) fallen deshalb immer auf die schwächere Prüfung aus der Datei zurück, ohne HMAC-Schlüssel und ohne Anker, und sagen das auch. Der Audit-Screen (HUM-051) kann nur gegen den Fake-Daemon gemessen werden; drei seiner fünf Kriterien bleiben dadurch offen.
+
+### Ziel
+Der Daemon beantwortet `Audit` mit allen Operationen, die das Proto nach HUM-051 trägt: `Verify` mit Schlüssel und Ankern, `Head`, `Query` mit Filter nach Art, Sitzung und Zeitraum samt Cursor, und `Export` als JSONL oder CSV in eine Datei, die der Daemon schreibt und nie überschreibt. Danach prüfen CLI und Oberfläche dieselbe Kette mit derselben Stärke.
+
+### Nicht-Ziel
+Neue Felder im Proto: Die hat HUM-051 schon angelegt. Ein signierter Export (nach MVP).
+
+### Betroffene Pfade
+- `daemon/crates/ipc/src/server.rs` und ein eigenes Modul für den Dienst `Audit`
+- `daemon/crates/audit/` nur, soweit Abfrage und Export dort eine Schnittstelle brauchen
+- `proto/humanitl/v1/humanitl.proto`: `PROTO_MINOR` von 11 auf 12, mit `docs/PROTOCOL.md` und `app/lib/core/ipc/proto_version.dart`
+
+### Akzeptanzkriterien
+- [ ] `humanitl audit verify` spricht den Daemon und meldet Schlüssel und Anker; der Rückfall auf die Datei greift nur noch, wenn der Daemon nicht antwortet.
+- [ ] Eine nach dem Schreiben veränderte Zeile ergibt über den Daemon „gebrochen ab Sequenz n" mit Grund, in CLI und Oberfläche gleich.
+- [ ] Der Head-Hash im Audit-Screen ist derselbe wie in `humanitl audit verify --json`.
+- [ ] Der CSV-Export hat die Spalten aus HUM-051, der JSONL-Export ist Byte für Byte die Kette.
+- [ ] `make check` grün.
