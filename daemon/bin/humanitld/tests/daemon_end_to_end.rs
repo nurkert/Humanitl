@@ -13,6 +13,11 @@
 //! Der Socket-Pfad muss in `sun_path` passen (108 Bytes), deshalb liegt das
 //! Wegwerf-Verzeichnis unter `/tmp` und nicht unter einem womöglich tiefen
 //! `TMPDIR`.
+//!
+//! Am Ende der Datei steht der Abschied (HUM-142): Ein Agent, der `SIGTERM`
+//! abfängt, ist nach `Sandbox(Stop)` und nach dem Ende des Daemons in
+//! beschränkter Zeit weg. Gemessen wird an seinen Prozessen in `/proc` und am
+//! Protokoll des Daemons, nicht an dem, was der Ereignisstrom behauptet.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -40,6 +45,21 @@ impl Daemon {
 
     /// Wie [`Daemon::start`], aber mit einem gesetzten `llm.endpoint`.
     fn start_with(hold_timeout_secs: u64, llm_endpoint: Option<&str>) -> Self {
+        Self::build(hold_timeout_secs, llm_endpoint, false)
+    }
+
+    /// Wie [`Daemon::start`], mit der Fehlerausgabe in `daemon.log` statt auf
+    /// dem Terminal.
+    ///
+    /// Das Protokoll ist hier eine Messung und keine Bequemlichkeit: Der
+    /// Abschied sagt darin, ob er die Sandbox beendet hat und ob er Aufgaben
+    /// abbrechen musste (`DAEMON_009`, HUM-142).
+    fn start_logged(hold_timeout_secs: u64) -> Self {
+        Self::build(hold_timeout_secs, None, true)
+    }
+
+    /// Legt den Wegwerf-Baum an und startet das Binary darin.
+    fn build(hold_timeout_secs: u64, llm_endpoint: Option<&str>, log: bool) -> Self {
         let dir = tempfile::Builder::new()
             .prefix("hum")
             .tempdir_in("/tmp")
@@ -47,8 +67,15 @@ impl Daemon {
         for name in ["run", "data", "config", "home"] {
             std::fs::create_dir(dir.path().join(name)).unwrap();
         }
-        let child = spawn(dir.path(), hold_timeout_secs, llm_endpoint);
+        let child = spawn_logging(dir.path(), hold_timeout_secs, llm_endpoint, log);
         Self { dir, child }
+    }
+
+    /// Was der Daemon dieses Laufs auf seine Fehlerausgabe geschrieben hat.
+    ///
+    /// Leer, wenn er nicht mit [`Daemon::start_logged`] gestartet wurde.
+    fn log(&self) -> String {
+        std::fs::read_to_string(self.dir.path().join("daemon.log")).unwrap_or_default()
     }
 
     /// Beendet den Daemon und startet einen neuen im selben Baum.
@@ -86,15 +113,75 @@ impl Daemon {
 
     /// Beendet den Daemon mit `SIGTERM` und wartet auf sein Ende.
     fn terminate(&mut self) {
-        // SIGTERM statt `Child::kill` (`SIGKILL`): nur der geordnete Weg räumt
-        // Socket und Token weg, und genau das soll hier geprüft werden.
+        self.signal_terminate();
+        let status = self.child.wait().expect("the daemon must be reapable");
+        assert!(status.success(), "SIGTERM is an orderly end: {status}");
+    }
+
+    /// Schickt `SIGTERM`, ohne auf das Ende zu warten.
+    ///
+    /// SIGTERM statt `Child::kill` (`SIGKILL`): nur der geordnete Weg räumt
+    /// Socket und Token weg — und seit HUM-142 auch die Sandbox.
+    fn signal_terminate(&self) {
         let pid = i32::try_from(self.child.id()).unwrap();
         // SAFETY: `kill` mit einer eigenen, noch nicht abgeernteten Kind-PID.
         unsafe {
             libc::kill(pid, libc::SIGTERM);
         }
-        let status = self.child.wait().expect("the daemon must be reapable");
-        assert!(status.success(), "SIGTERM is an orderly end: {status}");
+    }
+
+    /// Wartet höchstens `deadline` auf das Ende; `None`, wenn er dann noch
+    /// läuft.
+    ///
+    /// Das Warten hat eine Frist, weil genau das die Messung ist: Ein Daemon,
+    /// der nach `SIGTERM` nicht endet, soll diesen Test rot machen und nicht
+    /// den Testläufer anhalten (HUM-142).
+    fn wait_within(&mut self, deadline: Duration) -> Option<ExitStatus> {
+        let started = std::time::Instant::now();
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(status)) => return Some(status),
+                Ok(None) => {}
+                Err(_) => return None,
+            }
+            if started.elapsed() >= deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// `SIGTERM` und das befristete Warten in einem Schritt.
+    fn terminate_within(&mut self, deadline: Duration) -> Option<ExitStatus> {
+        self.signal_terminate();
+        self.wait_within(deadline)
+    }
+
+    /// Ein Projektverzeichnis im Heimatverzeichnis dieses Laufs.
+    ///
+    /// Unter `HOME`, weil der Dienst nur von dort ein Projekt annimmt
+    /// (`Inner::check_work_dir`).
+    fn work_dir(&self) -> PathBuf {
+        let work = self.dir.path().join("home").join("project");
+        std::fs::create_dir_all(work.join(".git")).unwrap();
+        work
+    }
+
+    /// Legt das mitgelieferte Profil dorthin, wo der Dienst zuerst sucht.
+    fn install_profile(&self) {
+        let profiles = self
+            .dir
+            .path()
+            .join("config")
+            .join("humanitl")
+            .join("profiles")
+            .join("sandbox");
+        std::fs::create_dir_all(&profiles).unwrap();
+        let bundled = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../profiles/sandbox")
+            .join(format!("{PROFILE}.toml"));
+        std::fs::copy(&bundled, profiles.join(format!("{PROFILE}.toml")))
+            .unwrap_or_else(|err| panic!("{} is readable: {err}", bundled.display()));
     }
 }
 
@@ -107,6 +194,17 @@ impl Drop for Daemon {
 
 /// Startet das gebaute Binary in diesem XDG-Baum.
 fn spawn(dir: &Path, hold_timeout_secs: u64, llm_endpoint: Option<&str>) -> Child {
+    spawn_logging(dir, hold_timeout_secs, llm_endpoint, false)
+}
+
+/// Wie [`spawn`], und legt die Fehlerausgabe in `<dir>/daemon.log`, wenn `log`
+/// wahr ist; sonst erbt sie wie bisher das Terminal.
+fn spawn_logging(
+    dir: &Path,
+    hold_timeout_secs: u64,
+    llm_endpoint: Option<&str>,
+    log: bool,
+) -> Child {
     let mut command = Command::new(env!("CARGO_BIN_EXE_humanitld"));
     command
         .env("XDG_RUNTIME_DIR", dir.join("run"))
@@ -116,6 +214,10 @@ fn spawn(dir: &Path, hold_timeout_secs: u64, llm_endpoint: Option<&str>) -> Chil
         .env("HUMANITL_HOLD__TIMEOUT_SECS", hold_timeout_secs.to_string());
     if let Some(endpoint) = llm_endpoint {
         command.env("HUMANITL_LLM__ENDPOINT", endpoint);
+    }
+    if log {
+        let file = std::fs::File::create(dir.join("daemon.log")).expect("a log file");
+        command.stderr(std::process::Stdio::from(file));
     }
     command.spawn().expect("the daemon binary must start")
 }
@@ -1410,4 +1512,480 @@ async fn the_note_of_a_human_block_outlives_the_daemon() {
     the_note_after_the_restart(&daemon, &flow_id).await;
 
     daemon.terminate();
+}
+
+// ---------------------------------------------------------------------------
+// Der Abschied (HUM-142)
+// ---------------------------------------------------------------------------
+
+/// Das mitgelieferte Profil, mit dem diese Tests starten: dasselbe, das im
+/// Produkt startet.
+const PROFILE: &str = "default";
+
+/// Wie lange nach `Sandbox(Stop)` höchstens vergehen darf, bis nichts mehr
+/// läuft: die Gnadenfrist des Agenten plus eine Sekunde für Signal, Abbau des
+/// Namensraums und das Einsammeln.
+///
+/// Die Frist kommt aus derselben Konstante wie im Produkt; eine eigene Zahl
+/// hier wäre eine zweite Wahrheit über dieselbe Frist.
+const STOP_DEADLINE: Duration = Duration::from_secs(humanitl_sandbox::KILL_GRACE.as_secs() + 1);
+
+/// Die Zeile des Dienstes über das Ende der Sandbox (`humanitl_ipc::sandbox`).
+const SANDBOX_ENDED: &str = "sandbox ended";
+
+/// Die Zeile, mit der der gRPC-Dienst seinen Ausklang abschließt
+/// (`humanitl_ipc::server`); sie kommt nach `SHUTDOWN_GRACE`.
+const SERVICE_STOPPED: &str = "stopped, socket and token removed";
+
+/// Wie lange der Daemon nach `SIGTERM` höchstens braucht, bis sein Prozess weg
+/// ist: die Frist des Abschieds (11 s) plus die Frist für die Aufgaben (5 s)
+/// plus vier Sekunden für alles, was dazwischen noch auf die Platte geht
+/// (Aufzeichnung, Audit-Log).
+const DAEMON_DEADLINE: Duration = Duration::from_secs(20);
+
+/// Ein Agent, der `SIGTERM` abfängt — das Verhalten eines Vollbild-TUI, das am
+/// 2026-09-07 zwei M3-Läufe zum Stehen gebracht hat.
+///
+/// **Was der Trap hier belegt und was nicht.** `SandboxHandle::terminate`
+/// schickt sein `SIGTERM` an den Sandbox-Prozess auf dem Wirt und nicht an den
+/// Agenten darin; dieser Prozess hat dafür keinen eigenen Handler, endet, und
+/// mit ihm endet der PID-Namensraum. Der Trap des Agenten hält den Abschied
+/// deshalb **nicht** auf, und die beiden Tests hier messen die Eskalation auf
+/// `SIGKILL` nicht. Sie messen, dass der Abschied überhaupt stattfindet, wann
+/// er beginnt, und dass danach nichts übrig ist. Die Eskalation misst
+/// `a_child_that_ignores_sigterm_is_killed_after_the_grace` in
+/// `daemon/crates/sandbox/src/handle.rs`, an einem Kind ohne Sandbox
+/// dazwischen. Der Trap bleibt trotzdem stehen: Er ist der Agent aus der
+/// Messung vom 2026-09-07, und ein Agent, der von selbst geht, wäre hier der
+/// leichtere Fall.
+///
+/// Das Skript steht als **ein** Element in der Kommandozeile des
+/// Sandbox-Prozesses und in der des Agenten darin ([`marked_processes`]); ein
+/// PID-Namensraum verbirgt keine Prozesse vor dem Wirt, also findet der Test
+/// beide.
+fn deaf_agent(marker: &str) -> Vec<String> {
+    vec!["/bin/sh".to_owned(), "-c".to_owned(), agent_script(marker)]
+}
+
+/// Das Skript des Agenten, Zeichen für Zeichen — der Schlüssel, an dem der
+/// Test seine Prozesse in `/proc` wiedererkennt.
+fn agent_script(marker: &str) -> String {
+    format!("trap '' TERM; : {marker}; while :; do sleep 1; done")
+}
+
+/// Die Anfrage, die diese Sandbox startet.
+fn start_request(work_dir: &Path, marker: &str) -> v1::SandboxRequest {
+    v1::SandboxRequest {
+        op: Some(v1::sandbox_request::Op::Start(v1::sandbox_request::Start {
+            profile: PROFILE.to_owned(),
+            work_dir: work_dir.display().to_string(),
+            work_mode: "rw".to_owned(),
+            command: deaf_agent(marker),
+            session_profile: String::new(),
+            ask_mode: String::new(),
+            cli_overrides: Vec::new(),
+        })),
+    }
+}
+
+/// Die Anfrage, die sie beendet.
+fn stop_request() -> v1::SandboxRequest {
+    v1::SandboxRequest {
+        op: Some(v1::sandbox_request::Op::Stop(())),
+    }
+}
+
+/// Ob der Shim gebaut ist; ohne ihn gäbe es keinen Start, den man messen
+/// könnte.
+///
+/// Ob das Sandbox-Backend auf dieser Maschine läuft, fragt dieser Test nicht
+/// vorab: Der Start selbst sagt es (`SANDBOX_001` bis `SANDBOX_003`, siehe
+/// [`Started`]), und zwar über denselben Weg, den auch ein Mensch nimmt.
+///
+/// **Unter `CI` ist das Fehlen ein Fehler und kein Grund zu überspringen** —
+/// dieselbe Regel wie in `crates/ipc/tests/sandbox_start.rs`: Ein Test, der
+/// zurückkehrt, gilt dem Testläufer als bestanden, und die Zusage von HUM-142
+/// wäre nie geprüft worden.
+fn shim_is_built() -> bool {
+    if !shim_next_to_the_daemon() {
+        return refuse_under_ci(
+            "humanitl-shim is not built next to the daemon binary; build the workspace first \
+             (cargo build --workspace --all-targets)",
+        );
+    }
+    true
+}
+
+/// Ob der Shim dort liegt, wo der Dienst ihn sucht: neben dem Daemon.
+fn shim_next_to_the_daemon() -> bool {
+    Path::new(env!("CARGO_BIN_EXE_humanitld"))
+        .parent()
+        .is_some_and(|dir| dir.join("humanitl-shim").is_file())
+}
+
+/// Meldet, warum dieser Test nicht laufen kann — und scheitert unter `CI`.
+fn refuse_under_ci(why: &str) -> bool {
+    assert!(
+        std::env::var_os("CI").is_none(),
+        "under CI this test must run: {why}"
+    );
+    eprintln!("skipping: {why}");
+    false
+}
+
+/// Ob dieser Prozess noch läuft.
+///
+/// Ein Zombie zählt als beendet: Er hat kein Programm mehr, nur noch einen
+/// Eintrag, den sein Elternprozess abholt. Ohne diese Unterscheidung hinge der
+/// Test an der Frage, wer einen verwaisten Sandbox-Prozess einsammelt.
+fn alive(pid: u32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    // `pid (comm) state ...`; der Name kann Klammern enthalten, der Zustand
+    // steht hinter der letzten schließenden.
+    let rest = &stat[stat.rfind(')').map_or(0, |at| at + 1)..];
+    rest.split_whitespace().next().unwrap_or("Z") != "Z"
+}
+
+/// Alle Prozesse, die das Skript dieses Laufs als eigenes Argument tragen.
+///
+/// **Verglichen wird ein ganzes Argument, kein Teilstück der Zeile.** Eine
+/// Kommandozeile in `/proc` ist eine Folge von Argumenten, getrennt durch
+/// `NUL`; gesucht wird eines, das Zeichen für Zeichen dem Skript aus
+/// [`agent_script`] entspricht. Ein `grep hum142-stop-1234`, das ein Mensch
+/// nebenher tippt, trägt die Marke, aber nicht das Skript — und
+/// [`kill_marked`] erschlägt es deshalb nicht. Getroffen werden genau drei:
+/// der Sandbox-Prozess, der Shim und der Agent.
+///
+/// Was **nicht** getroffen wird, sind Kinder des Agenten ohne eigenes Skript
+/// (sein `sleep`). Sie brauchen keinen eigenen Blick: Sie leben im
+/// PID-Namensraum der Sandbox, dessen Init der Sandbox-Prozess ist. Ist dessen
+/// PID weg — und das prüfen beide Tests neben dieser Liste —, hat der Kern den
+/// Namensraum abgebaut, und darin kann nichts überlebt haben.
+fn marked_processes(marker: &str) -> Vec<u32> {
+    let script = agent_script(marker);
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(|name| name.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Ok(cmdline) = std::fs::read(entry.path().join("cmdline")) else {
+            continue;
+        };
+        if carries_script(&cmdline, &script) {
+            found.push(pid);
+        }
+    }
+    found
+}
+
+/// Ob diese Kommandozeile das Skript als **eigenes** Argument trägt.
+fn carries_script(cmdline: &[u8], script: &str) -> bool {
+    cmdline
+        .split(|byte| *byte == 0)
+        .any(|argument| argument == script.as_bytes())
+}
+
+/// Der Vergleich trifft die Prozesse dieses Laufs und keinen fremden.
+///
+/// Die Marke allein reichte nicht: `kill_marked` schickt `SIGKILL`, und ein
+/// `grep` mit der Marke in seinen Argumenten ist ein fremder Prozess auf dem
+/// Rechner eines Menschen.
+#[test]
+fn only_a_whole_argument_counts_as_this_run() {
+    let script = agent_script("hum142-probe");
+    let agent = format!("/bin/sh\0-c\0{script}\0");
+
+    assert!(
+        carries_script(agent.as_bytes(), &script),
+        "the agent of this run carries the script as its own argument"
+    );
+    assert!(
+        !carries_script(b"grep\0hum142-probe\0", &script),
+        "a grep for the marker is not a process of this run"
+    );
+    assert!(
+        !carries_script(format!("echo\0x{script}y\0").as_bytes(), &script),
+        "the script inside a longer argument is not a process of this run"
+    );
+}
+
+/// Wartet, bis weder der Sandbox-Prozess noch ein markierter Prozess läuft;
+/// liefert die Zeit, die es gebraucht hat, sonst `None`.
+async fn wait_until_gone(pid: u32, marker: &str, deadline: Duration) -> Option<Duration> {
+    let started = std::time::Instant::now();
+    while started.elapsed() < deadline {
+        if !alive(pid) && marked_processes(marker).is_empty() {
+            return Some(started.elapsed());
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    None
+}
+
+/// Erschlägt, was von diesem Lauf noch übrig ist.
+///
+/// Steht vor den Zusicherungen: Ein roter Test soll keinen Prozess auf dem
+/// Rechner zurücklassen, und die Messung ist zu diesem Zeitpunkt gemacht.
+fn kill_marked(marker: &str) {
+    for pid in marked_processes(marker) {
+        // SAFETY: `kill` mit einer PID aus `/proc` und einem gewöhnlichen
+        // Signal; mehr als `ESRCH` kann dabei nicht herauskommen.
+        unsafe {
+            libc::kill(i32::try_from(pid).unwrap_or(0), libc::SIGKILL);
+        }
+    }
+}
+
+/// Was aus einem Startversuch geworden ist.
+#[derive(Debug)]
+enum Started {
+    /// Die Sandbox läuft; die PID ihres Prozesses auf dem Wirt.
+    Running(u32),
+    /// Dieser Rechner kann keine Sandbox starten: kein Sandbox-Backend, eine
+    /// zu alte Fassung oder keine unprivilegierten Nutzer-Namensräume
+    /// (`SANDBOX_001` bis `SANDBOX_003`). Das ist eine Aussage über die
+    /// Maschine und keine über den Abschied.
+    Unusable(String),
+}
+
+/// Die Befunde, die von der Maschine sprechen und nicht vom Daemon.
+const MACHINE_FACTS: &[&str] = &["SANDBOX_001", "SANDBOX_002", "SANDBOX_003"];
+
+/// Liest den Strom eines Starts, bis die Sandbox läuft, und liefert die PID
+/// aus der Startzeile.
+///
+/// Dieselbe Zeile, die der Log-Reiter zeigt: `sandbox <id> started, pid <n>,
+/// profile <p>, work dir <d>`.
+async fn running_sandbox(events: &mut tonic::Streaming<v1::SandboxEvent>, marker: &str) -> Started {
+    let mut pid = None;
+    let mut seen: Vec<String> = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let next = tokio::time::timeout_at(deadline, events.next()).await;
+        let Ok(Some(Ok(event))) = next else {
+            panic!("the start ended before the sandbox ran: {next:?}; findings so far: {seen:?}");
+        };
+        match event.event {
+            Some(v1::sandbox_event::Event::Log(line)) => {
+                if let Some(found) = pid_from(&line.line) {
+                    pid = Some(found);
+                }
+            }
+            Some(v1::sandbox_event::Event::Diagnostic(diagnostic)) => {
+                seen.push(format!("{} {}", diagnostic.code, diagnostic.why));
+            }
+            Some(v1::sandbox_event::Event::Status(status))
+                if status.state == v1::SandboxState::Failed as i32 =>
+            {
+                let fact = seen
+                    .iter()
+                    .find(|text| MACHINE_FACTS.iter().any(|code| text.starts_with(code)));
+                return match fact {
+                    Some(text) => Started::Unusable(text.clone()),
+                    None => {
+                        panic!("the sandbox has to start for this test to say anything: {seen:?}")
+                    }
+                };
+            }
+            Some(v1::sandbox_event::Event::Status(status))
+                if status.state == v1::SandboxState::Running as i32 =>
+            {
+                assert!(
+                    !marked_processes(marker).is_empty(),
+                    "the agent of this test is visible on the host"
+                );
+                return Started::Running(
+                    pid.unwrap_or_else(|| panic!("the start line carries the pid: {seen:?}")),
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Der Zeitstempel der Protokollzeile mit dieser Meldung.
+///
+/// Das Protokoll ist eine JSON-Zeile je Ereignis; gelesen wird das Feld
+/// `timestamp` der ersten Zeile, die die Meldung trägt.
+fn stamp_of(log: &str, message: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    let line = log.lines().find(|line| line.contains(message))?;
+    let (_, rest) = line.split_once("\"timestamp\":\"")?;
+    let (stamp, _) = rest.split_once('"')?;
+    chrono::DateTime::parse_from_rfc3339(stamp).ok()
+}
+
+/// Die PID aus der Startzeile, wenn die Zeile eine trägt.
+fn pid_from(line: &str) -> Option<u32> {
+    let (_, rest) = line.split_once("started, pid ")?;
+    rest.split(|c: char| !c.is_ascii_digit())
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// `Sandbox(Stop)` beendet einen Agenten, der `SIGTERM` abfängt — auch dann,
+/// wenn niemand mehr zusieht (HUM-142).
+///
+/// **Der Strom wird fallen gelassen, und das ist der Punkt.** `humanitl run`
+/// schickt an seiner Zeitschranke sein `Sandbox(Stop)` und endet; der
+/// Empfänger ist damit weg, bevor der Daemon antworten kann. Bis HUM-142 kehrte
+/// `Inner::stop` genau an dieser Stelle zurück — vor dem Töten —, und die
+/// Sandbox lief weiter: 8,5 Minuten im einen, über 19 Minuten im anderen
+/// gemessenen Fall.
+#[tokio::test]
+async fn a_stop_ends_an_agent_that_ignores_sigterm_even_without_a_listener() {
+    if !shim_is_built() {
+        return;
+    }
+    let mut daemon = Daemon::start(120);
+    daemon.ready().await;
+    daemon.install_profile();
+    let work = daemon.work_dir();
+    let marker = format!("hum142-stop-{}", std::process::id());
+
+    let token = auth::read_token(&daemon.token_path()).unwrap();
+    let mut grpc = client::connect_at(&daemon.socket(), &token).await.unwrap();
+    let mut events = grpc
+        .sandbox(start_request(&work, &marker))
+        .await
+        .unwrap()
+        .into_inner();
+    let pid = match running_sandbox(&mut events, &marker).await {
+        Started::Running(pid) => pid,
+        Started::Unusable(why) => {
+            refuse_under_ci(&why);
+            return;
+        }
+    };
+    assert!(alive(pid), "the sandbox process {pid} runs");
+
+    // Wie `humanitl run` an seiner Schranke: Stop schicken und gehen.
+    let stopping = grpc.sandbox(stop_request()).await.unwrap();
+    drop(stopping);
+    drop(events);
+
+    let took = wait_until_gone(pid, &marker, STOP_DEADLINE).await;
+    let left = marked_processes(&marker);
+    let still_alive = alive(pid);
+    kill_marked(&marker);
+    drop(grpc);
+    let ended = daemon.terminate_within(DAEMON_DEADLINE);
+
+    assert!(
+        took.is_some(),
+        "the stop has a deadline: after {STOP_DEADLINE:?} the sandbox process {pid} is \
+         alive={still_alive} and {left:?} still carry the marker"
+    );
+    eprintln!("hum142: the stop ended the sandbox process {pid} and the agent after {took:?}");
+    assert!(
+        ended.is_some(),
+        "the daemon ends as well once the sandbox is gone"
+    );
+}
+
+/// Das Ende des Daemons beendet den Agenten, der `SIGTERM` abfängt, und der
+/// Daemon selbst endet in beschränkter Zeit (HUM-142).
+///
+/// Zwei Aussagen in einem Lauf, und beide waren vor diesem Issue falsch: Der
+/// Daemon blieb hinter seiner letzten Zeile (`recording flushed`) stehen, weil
+/// die Laufzeit beim Fallenlassen ohne Frist auf das blockierende `wait` auf
+/// den Prozess der Sandbox wartete, und das Kind hing über `--die-with-parent`
+/// an genau diesem Daemon.
+#[tokio::test]
+async fn the_end_of_the_daemon_ends_the_agent_it_started() {
+    if !shim_is_built() {
+        return;
+    }
+    let mut daemon = Daemon::start_logged(120);
+    daemon.ready().await;
+    daemon.install_profile();
+    let work = daemon.work_dir();
+    let marker = format!("hum142-shutdown-{}", std::process::id());
+
+    let token = auth::read_token(&daemon.token_path()).unwrap();
+    let mut grpc = client::connect_at(&daemon.socket(), &token).await.unwrap();
+    let mut events = grpc
+        .sandbox(start_request(&work, &marker))
+        .await
+        .unwrap()
+        .into_inner();
+    let pid = match running_sandbox(&mut events, &marker).await {
+        Started::Running(pid) => pid,
+        Started::Unusable(why) => {
+            refuse_under_ci(&why);
+            return;
+        }
+    };
+    assert!(alive(pid), "the sandbox process {pid} runs");
+
+    // Nur das Signal, kein Warten: Wer hier `wait` sagte, hinge an genau dem
+    // Fehler, den dieser Test misst.
+    daemon.signal_terminate();
+    let signalled = std::time::Instant::now();
+    let ended = daemon.wait_within(DAEMON_DEADLINE);
+    let daemon_took = signalled.elapsed();
+    let gone = wait_until_gone(pid, &marker, STOP_DEADLINE).await;
+    let left = marked_processes(&marker);
+    let still_alive = alive(pid);
+    kill_marked(&marker);
+
+    let log = daemon.log();
+    let ended = ended.unwrap_or_else(|| {
+        panic!("the daemon has to end within {DAEMON_DEADLINE:?}, sandbox or not: {log}")
+    });
+    assert!(ended.success(), "SIGTERM is an orderly end: {ended}");
+    assert!(
+        gone.is_some(),
+        "nothing of the sandbox survives the daemon: process {pid} alive={still_alive}, \
+         {left:?} still carry the marker"
+    );
+    // **Die Reihenfolge, nicht nur das Ergebnis.** Dass am Ende kein Prozess
+    // übrig ist, sagt für sich genommen wenig: `--die-with-parent` nimmt die
+    // Sandbox auch dann mit, wenn der Daemon einfach stirbt. Erst das
+    // Protokoll zeigt, ob der Abschied das Kind zuerst beendet hat — dann
+    // steht dort das Ende der Sandbox und **kein** `DAEMON_009`, denn keine
+    // Aufgabe hing mehr an einem `wait`, das nie zurückkehrt.
+    let ended_at = log.find(SANDBOX_ENDED).unwrap_or_else(|| {
+        panic!("the farewell ends the sandbox before the daemon goes: {log}");
+    });
+    assert!(
+        !log.contains("DAEMON_009"),
+        "with the sandbox gone, no task of this daemon has to be dropped at the deadline: {log}"
+    );
+    // **Und die beiden Fristen laufen nebeneinander.** Der Dienst lässt offenen
+    // Aufrufen `humanitl_ipc::SHUTDOWN_GRACE` (5 s); begänne der Abschied der
+    // Sandbox erst danach, addierten sich die Fristen, und ein Mensch wartete
+    // auf beide. Die Zeile über das Ende der Sandbox steht deshalb **vor** der
+    // Zeile, mit der der Dienst seinen Socket abräumt.
+    let served_at = log.find(SERVICE_STOPPED).unwrap_or_else(|| {
+        panic!("the service says when it is done: {log}");
+    });
+    assert!(
+        ended_at < served_at,
+        "the farewell of the sandbox starts with the signal and not after the last client has \
+         gone; instead the sandbox ended at byte {ended_at} and the service at {served_at}: {log}"
+    );
+    if let (Some(ended_at), Some(served_at)) = (
+        stamp_of(&log, SANDBOX_ENDED),
+        stamp_of(&log, SERVICE_STOPPED),
+    ) {
+        eprintln!(
+            "hum142: the sandbox ended {} ms before the service had drained its clients",
+            (served_at - ended_at).num_milliseconds()
+        );
+    }
+    eprintln!(
+        "hum142: the daemon ended as {ended} after {daemon_took:?}, and nothing of the sandbox \
+         was left"
+    );
+    assert!(
+        !daemon.socket().exists(),
+        "the orderly path removed the socket"
+    );
 }
