@@ -70,9 +70,9 @@
 #   * Er sagt **nichts über den Bildschirm**. Sandbox-Bildschirm, Terminal-Reiter
 #     und Isolations-Panel werden nicht bedient; die Oberflächen-Hälfte von M3
 #     gehört in den Job `e2e-xvfb` und ist nicht gebaut.
-#   * Er sagt **nichts über die Audit-Kette**. `humanitl audit` ist ein
-#     Platzhalter (HUM-070); der Lauf hält das mit einem Stolperdraht fest,
-#     der rot wird, sobald es einen gibt.
+#   * Die Audit-Kette prüft er über `humanitl audit` (seit HUM-070): heil,
+#     vollständig exportiert, und die drei Entscheidungen des Menschen stehen
+#     darin, Fluss für Fluss.
 #   * Er sagt **nichts über den Durchreich-Fluss in der Liste**. Die
 #     Kommandozeile hat keinen Schalter für `include_passthrough`
 #     (`daemon/bin/humanitl/src/cmd/flows.rs`, `include_passthrough: false`);
@@ -111,7 +111,7 @@ fi
 # Zähler aus `lib.sh`. Ein Skript, das grün ist, weil ein Zweig übersprungen
 # wurde, ist schlimmer als keines; deshalb steht die Zahl hier und nicht im
 # Kopf eines Menschen.
-M3_EXPECTED_ASSERTIONS=111
+M3_EXPECTED_ASSERTIONS=113
 
 # So viele kommen dazu, wenn die OpenCode-Variante läuft. Der Zweig prüft
 # immer dieselben fünfzehn Dinge — die fünf Verzweigungen darin sind
@@ -1126,7 +1126,7 @@ else
         "$M3_PROJECT/notes.txt is missing or empty"
 fi
 
-# --- 11. Die Historie und die beiden Stolperdrähte ---------------------------
+# --- 11. Die Historie, die Audit-Kette und ein Stolperdraht ---------------------------
 
 e2e_step "11. the history holds every flow the agent made, in the order they arrived"
 
@@ -1137,18 +1137,49 @@ e2e_expect "in the order the agent asked for them" \
     "/api.json /repos/anomalyco/opencode/releases/latest /i/v0/e /api.json /share/abc /docs $M3_PATH_FORGED /secret" \
     "$(jq -r '[.flows[].path] | join(" ")' "$M3_FLOWS_FIRST_JSON")"
 
-# Zwei Stolperdrähte bleiben stehen, weil das, worauf sie warten, noch fehlt.
-# Beide sind so geschrieben, dass sie rot werden, sobald es da ist — eine
-# Prüfung, die nach der Reparatur ersatzlos verschwände, hinterließe eine Lücke
-# genau dort, wo vorher eine Zusicherung stand (`backlog/CONVENTIONS.md` 4.22).
-audit_says=$("$E2E_CLI" audit 2>&1 || true)
-if printf '%s' "$audit_says" | grep -q 'HUM-070'; then
-    e2e_check "humanitl audit is still a placeholder, so this run proves nothing about the chain" ok
+# Die Audit-Kette dieses Laufs (Schritt 8 von HUM-046, seit HUM-070 mit
+# `humanitl audit`): Sie muss heil sein, und die drei Entscheidungen eines
+# Menschen müssen in ihr stehen. Geprüft wird über die Kommandozeile, so wie
+# ein Mensch es täte; antwortet der Daemon nicht, prüft sie die Datei.
+m3_audit_json="$E2E_WORKDIR/out/audit_verify.json"
+m3_audit_export="$E2E_WORKDIR/out/audit.jsonl"
+m3_audit_status=0
+humanitl --json audit verify > "$m3_audit_json" 2> "$E2E_WORKDIR/out/audit_verify.err" ||
+    m3_audit_status=$?
+e2e_expect "humanitl audit verify finds the chain of this run intact" \
+    "0 ok" "$m3_audit_status $(jq -r '.chain' "$m3_audit_json" 2>/dev/null)"
+m3_export_status=0
+humanitl audit export --format jsonl --out "$m3_audit_export" \
+    > /dev/null 2> "$E2E_WORKDIR/out/audit_export.err" || m3_export_status=$?
+e2e_expect "the exported chain holds as many records as the check counted" \
+    "0 $(jq -r '.records' "$m3_audit_json" 2>/dev/null)" \
+    "$m3_export_status $(grep -c . "$m3_audit_export" 2>/dev/null)"
+# Drei Anfragen hat ein Mensch entschieden (Schritt 7): `/docs` und die mit
+# dem gefälschten Pfad frei, `/secret` gesperrt. Gezählt wird nicht irgendein
+# `flow.decided` — die Regeln des Profils entscheiden in derselben Sitzung
+# auch —, sondern genau diese drei Flüsse mit `decided_by = "user"` und der
+# Entscheidung, die der Mensch traf.
+m3_human_expected=$(jq -r --arg forged "$M3_PATH_FORGED" '
+    [.flows[] | select(.path == "/docs" or .path == $forged or .path == "/secret")
+        | "\(.flow_id) \(if .path == "/secret" then "block" else "allow" end)"]
+    | sort | join(",")' "$M3_FLOWS_FIRST_JSON" 2>/dev/null)
+m3_human_actual=$(jq -r '
+    select((.kind // .body.kind) == "flow.decided")
+    | (.data // .body.data) | select(.decided_by == "user")
+    | "\(.flow) \(.decision)"' "$m3_audit_export" 2>/dev/null | sort | paste -sd, -)
+m3_human_count=$(printf '%s' "$m3_human_expected" | tr ',' '\n' | grep -c . || true)
+if [ "$m3_human_count" != 3 ]; then
+    e2e_check "and the three human decisions stand in it, flow by flow" no \
+        "the history names $m3_human_count of the three decided flows, so there is nothing to compare"
 else
-    e2e_check "humanitl audit is still a placeholder, so this run proves nothing about the chain" no \
-        "humanitl audit no longer refers to HUM-070. The audit chain exists now, so this run has to verify it: export the chain of this session and check it end to end (step 8 of backlog/sprint-3.md HUM-046)."
+    e2e_expect "and the three human decisions stand in it, flow by flow" \
+        "$m3_human_expected" "$m3_human_actual"
 fi
 
+# Ein Stolperdraht bleibt stehen, weil das, worauf er wartet, noch fehlt. Er
+# ist so geschrieben, dass er rot wird, sobald es da ist — eine Prüfung, die
+# nach der Reparatur ersatzlos verschwände, hinterließe eine Lücke genau dort,
+# wo vorher eine Zusicherung stand (`backlog/CONVENTIONS.md` 4.22).
 if "$E2E_CLI" flows list --help 2>&1 | grep -q -- '--include-passthrough'; then
     e2e_check "humanitl flows list still hides the passthrough with no way to ask for it" no \
         "humanitl flows list has a switch for include_passthrough now. Step 4 of this run has to stop measuring the passthrough by its absence and assert the flow itself instead (backlog/CONVENTIONS.md 4.29)."
