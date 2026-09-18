@@ -175,17 +175,12 @@ fn check_method(method: &str) -> Result<(), Diagnostic> {
 
 /// Origin-Form: führender Schrägstrich, kein Leerzeichen, kein Steuerzeichen.
 fn check_path(path: &str) -> Result<(), Diagnostic> {
-    let why = if !path.starts_with('/') {
-        Some("it does not start with `/`".to_owned())
-    } else if let Some(byte) = path
-        .bytes()
-        .find(|byte| *byte == b' ' || byte.is_ascii_control() || *byte > 0x7E)
-    {
-        Some(format!(
-            "it carries the byte {byte:#04x}, which has to be percent-encoded"
-        ))
+    let why = if path.starts_with('/') {
+        path.bytes()
+            .find(|byte| *byte == b' ' || byte.is_ascii_control() || *byte > 0x7E)
+            .map(|byte| format!("it carries the byte {byte:#04x}, which has to be percent-encoded"))
     } else {
-        None
+        Some("it does not start with `/`".to_owned())
     };
     match why {
         None => Ok(()),
