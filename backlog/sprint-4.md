@@ -1602,7 +1602,7 @@ Plus `linux/packaging/deb/make_config.yaml` (fastforge-Format) mit den Feldern u
 Package: humanitl
 Version: <aus Tag>
 Architecture: amd64
-Maintainer: Niko Burkert <kreativ@burkert-gestaltung.com>
+Maintainer: Niko Burkert <humanitl@nurkert.de>
 Section: net
 Priority: optional
 Homepage: https://github.com/<org>/humanitl
@@ -1728,6 +1728,8 @@ Begründungen (in `docs/INSTALL.md#hardening`): `ProtectHome=no` statt `read-onl
 - fastforge: https://github.com/fastforgedev/fastforge · Flutter Linux build: https://docs.flutter.dev/platform-integration/linux/building
 - systemd.exec Härtung: https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html · systemd.socket: https://www.freedesktop.org/software/systemd/man/latest/systemd.socket.html
 - AppImage-Portabilität: https://www.industrialflutter.com/blogs/portability-a-case-study-in-flutter-appimage-distribution/
+
+> **Vorgriff 2026-09-18 (Vorabversionen 0.0.x):** `.github/workflows/release.yml` baut mit `packaging/deb/build-deb.sh` schon ein `.deb` nach den Pfaden dieses Issues (ohne fastforge, ohne Maintainer-Skripte, lintian ohne Fehler und Warnungen, Installation und Purge im Container geprüft). Offen bleibt hier: `humanitld.socket` und `LISTEN_FDS`/`sd_notify`, die Härtung der Unit (die ausgelieferte Unit ist die ungehärtete Vorlage aus HUM-044), `daemon install` für System-Units, PNG-Symbole, `CMakeLists.txt`-Install, Setup-Schritt „Dienst aktivieren", `docs/INSTALL.md`, AppImage und die manuelle Test-Matrix.
 
 ---
 

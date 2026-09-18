@@ -1,0 +1,37 @@
+# lintian-Ausnahmen fuer das Paket humanitl. Jede steht mit ihrem Grund da;
+# eine Ausnahme ohne Grund gehoert nicht in diese Datei. Geprueft wird mit
+# `packaging/deb/lintian.sh`, das bei jeder nicht erklaerten Warnung scheitert.
+
+# Die Flutter-Engine bringt FreeType und libjpeg statisch gelinkt mit. Das
+# Bundle ist so, wie `flutter build linux` es baut; eine Engine gegen die
+# Bibliotheken des Systems gibt es von Flutter nicht.
+humanitl: embedded-library freetype [usr/lib/humanitl/lib/libflutter_linux_gtk.so]
+humanitl: embedded-library libjpeg [usr/lib/humanitl/lib/libflutter_linux_gtk.so]
+
+# Kein eingebettetes libyaml, sondern die Rust-Crate unsafe-libyaml (eine
+# Uebersetzung von libyaml nach Rust, gezogen von serde_yaml). lintian erkennt
+# sie an den Zeichenketten der Fehlermeldungen.
+humanitl: embedded-library libyaml [usr/lib/humanitl/bin/humanitld]
+
+# Der Shim ist mit Absicht statisch (HUM-012): Er ist das einzige Programm,
+# das in die Sandbox eingehaengt wird, und dort gibt es keine Bibliotheken des
+# Hosts. CI prueft das mit `ldd` ("not a dynamic executable").
+humanitl: statically-linked-binary [usr/lib/humanitl/bin/humanitl-shim]
+
+# libapp.so ist der AOT-Snapshot des Dart-Codes, kein gewoehnliches Shared
+# Object: Er braucht keine Bibliothek und wird von der Flutter-Engine geladen,
+# die ihrerseits libc mitbringt.
+humanitl: shared-library-lacks-prerequisites [usr/lib/humanitl/lib/libapp.so]
+
+# Man-Pages gibt es noch nicht. Die Kommandozeile beschreibt sich mit
+# `humanitl --help` selbst, die Referenz steht in docs/cli.md; Man-Pages
+# gehoeren zur Dokumentation von HUM-059.
+humanitl: no-manual-page [usr/bin/humanitl]
+humanitl: no-manual-page [usr/bin/humanitl-app]
+
+# Die Schriften sind Assets der Dart-Bibliothek shadcn_flutter und werden von
+# der Flutter-Engine aus dem Asset-Bundle geladen, nie vom System. Name und
+# Einbettungsrecht sind die des Herausgebers; das Paket installiert sie nicht
+# als Systemschriften.
+humanitl: opentype-font-prohibits-installable-embedding * [usr/lib/humanitl/data/flutter_assets/*]
+humanitl: truetype-font-wrong-filename [usr/lib/humanitl/data/flutter_assets/*]

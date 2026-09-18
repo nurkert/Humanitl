@@ -1,0 +1,17 @@
+# HUM-053 nennt Categories=Development;Network;Security;. desktop-file-validate
+# meldet dazu zwei Hinweise: Development und Network sind beide Hauptkategorien,
+# der Eintrag erschiene zweimal im Menue, und Security verlangt Settings oder
+# System daneben. Deshalb nur Development; Netz und Sicherheit stehen in Keywords.
+[Desktop Entry]
+Type=Application
+Name=Humanitl
+GenericName=Agent network moderation
+GenericName[de]=Netzmoderation für Agenten
+Comment=Hold every request of a sandboxed AI coding agent for human review
+Comment[de]=Jede Anfrage eines KI-Agenten in der Sandbox zur Freigabe vorlegen
+Exec=humanitl-app %U
+Icon=humanitl
+Terminal=false
+Categories=Development;
+Keywords=agent;proxy;sandbox;llm;network;security;
+StartupWMClass=humanitl

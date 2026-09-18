@@ -1,0 +1,106 @@
+Humanitl @VERSION@ (Vorabversion) - Archiv fuer Linux x86_64
+=============================================================
+
+Das ist eine Vorabversion vor dem ersten richtigen Release 0.1.0. Sie ist
+nicht fuer den produktiven Einsatz gedacht, nicht signiert und nur mit einer
+SHA-256-Pruefsumme versehen. Bevorzugter Weg ist das Paket
+humanitl_@VERSION@_amd64.deb aus demselben Release; dieses Archiv ist fuer
+Systeme ohne dpkg oder zum Ausprobieren ohne Installation gedacht.
+
+
+Zum Vergleich: das Paket (.deb)
+------------------------------
+
+    sudo apt install ./humanitl_@VERSION@_amd64.deb
+    systemctl --user enable --now humanitld.service
+    humanitl-app
+
+Entfernen, in dieser Reihenfolge:
+
+    systemctl --user disable --now humanitld.service
+    sudo apt purge humanitl
+
+Das Paket richtet den Dienst fuer niemanden von selbst ein. Der erste der
+beiden Entfernen-Befehle nimmt den Verweis zurueck, den `enable` im eigenen
+Konfigurationsverzeichnis angelegt hat; das Paket selbst hinterlaesst nach
+`apt purge` keine Datei.
+
+
+Voraussetzungen fuer dieses Archiv
+----------------------------------
+
+- Linux x86_64 mit glibc und GTK 3 (zum Beispiel Debian 13 oder Ubuntu 24.04).
+- bubblewrap 0.8 oder neuer (Paket `bubblewrap`): ohne `bwrap` startet
+  keine Sandbox.
+- Unprivilegierte User-Namespaces. Ein frisches Ubuntu 24.04 sperrt sie ueber
+  AppArmor (kernel.apparmor_restrict_unprivileged_userns=1); dann scheitert
+  jede Sandbox mit der Diagnose SANDBOX_003. `bin/humanitl doctor` prueft
+  das und nennt die Abhilfe, `bin/humanitl sandbox check` zeigt, ob die
+  Sandbox danach steht.
+
+
+Pruefsumme
+----------
+
+    sha256sum -c SHA256SUMS --ignore-missing
+
+
+Starten
+-------
+
+Im entpackten Verzeichnis humanitl-@VERSION@-linux-x86_64/:
+
+1. Den Daemon in einem eigenen Terminal starten und laufen lassen:
+
+       ./bin/humanitld
+
+2. In einem zweiten Terminal pruefen, ob die Sandbox auf diesem Rechner geht:
+
+       ./bin/humanitl sandbox check
+
+3. Die Anwendung starten:
+
+       ./app/humanitl
+
+Wer den Daemon bei jeder Anmeldung starten will, legt mit
+
+    ./bin/humanitl daemon install
+
+eine systemd-Nutzer-Unit unter ~/.config/systemd/user/ an. Sie zeigt auf den
+Daemon in genau diesem Verzeichnis; wer das Verzeichnis spaeter verschiebt
+oder loescht, entfernt vorher die Unit wieder:
+
+    systemctl --user disable --now humanitld.service
+    rm ~/.config/systemd/user/humanitld.service
+
+
+Was noch nicht dabei ist
+------------------------
+
+- Kein AppImage. Das .deb liegt dem Release bei, dieses Archiv installiert
+  nichts.
+- Keine systemd-Unit wird automatisch eingerichtet; der Daemon startet nur,
+  wenn er von Hand oder ueber `humanitl daemon install` gestartet wird.
+- Keine Socket-Aktivierung (humanitld.socket) und kein Menueeintrag.
+- Die Nutzer-Unit (im Paket wie ueber `humanitl daemon install`) ist noch
+  nicht gehaertet: Es fehlen die Schutzzeilen, die HUM-053 vorsieht
+  (ProtectSystem=strict, ProtectKernel*, LockPersonality,
+  MemoryDenyWriteExecute, SystemCallArchitectures=native und weitere). Sie
+  kommen mit HUM-053, sobald sie gegen die Sandbox getestet sind; bis dahin
+  laeuft der Daemon nur mit NoNewPrivileges, PrivateTmp, einem
+  Systemaufruf-Filter und eingeschraenkten Adressfamilien.
+- Keine Signatur. Die Pruefsumme schuetzt vor einem beschaedigten Download,
+  nicht vor einem manipulierten Release. Signierte Artefakte kommen mit 0.1.0.
+- Keine automatischen Updates; das Programm telefoniert nicht nach Hause.
+
+
+Inhalt
+------
+
+    bin/          humanitld (Daemon), humanitl (Kommandozeile), humanitl-shim
+    app/          die Flutter-Anwendung (./app/humanitl)
+    share/        Domain-Katalog, den der Daemon neben bin/ sucht
+    profiles/     das mitgelieferte Sandbox-Profil
+    README.md     Projektbeschreibung
+    LICENSE       GNU General Public License, Version 3
+    INSTALL.txt   diese Datei

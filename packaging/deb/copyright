@@ -1,0 +1,45 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Humanitl
+Upstream-Contact: Niko Burkert <humanitl@nurkert.de>
+Source: https://github.com/nurkert/Humanitl
+
+Files: *
+Copyright: Niko Burkert and the Humanitl contributors
+License: GPL-3.0-only
+
+Files: usr/share/humanitl/catalog/ranks-top100k.csv.gz
+Copyright: Majestic-12 Ltd
+License: CC-BY-3.0
+ An excerpt of the Majestic Million, https://majestic.com, licensed under
+ the Creative Commons Attribution 3.0 Unported licence,
+ https://creativecommons.org/licenses/by/3.0/. Origin, checksums and the
+ changes made are described in /usr/share/humanitl/catalog/RANKS-LICENSE.
+
+Files: usr/lib/humanitl/lib/libflutter_linux_gtk.so
+Copyright: The Flutter Authors
+License: BSD-3-Clause
+ The Flutter engine, https://github.com/flutter/flutter/blob/main/LICENSE.
+ The licences of the engine's own third-party components ship with the
+ application bundle in usr/lib/humanitl/data/flutter_assets/NOTICES.Z.
+
+Files: usr/lib/humanitl/lib/libscreen_retriever_linux_plugin.so
+ usr/lib/humanitl/lib/libwindow_manager_plugin.so
+Copyright: 2022-present LiJianying <lijy91@foxmail.com>
+License: MIT
+ The Linux plugins of the Dart packages screen_retriever and window_manager.
+ Their licence texts, and those of every other Dart package compiled into
+ the application, are listed in
+ usr/lib/humanitl/data/flutter_assets/NOTICES.Z.
+
+License: GPL-3.0-only
+ This program is free software: you can redistribute it and/or modify it
+ under the terms of the GNU General Public License as published by the Free
+ Software Foundation, version 3.
+ .
+ This program is distributed in the hope that it will be useful, but WITHOUT
+ ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ more details.
+ .
+ On Debian systems, the complete text of the GNU General Public License
+ version 3 can be found in /usr/share/common-licenses/GPL-3.
