@@ -26,10 +26,14 @@
 //! Jeder Fehlerpfad hier ist ein [`Diagnostic`]: Code, Überschrift, Grund und,
 //! wo es einen gibt, ein Vorschlag zur Behebung. `main` schreibt ihn als eine
 //! Zeile (plus eine für den Vorschlag) und endet mit Status 1.
-#![forbid(unsafe_code)]
+// `deny` statt `forbid`: Genau eine Stelle, die Übernahme des Sockets, den
+// systemd als Deskriptor 3 übergibt, braucht `unsafe` und erlaubt es sich dort
+// selbst (`systemd.rs`, HUM-053). Jede andere Stelle bleibt verboten.
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
 
 mod audit_sink;
+mod systemd;
 
 use std::fs::{self, Permissions};
 use std::io;
@@ -155,6 +159,15 @@ fn parse_speed(text: &str) -> Result<f64, SpeedError> {
 const TASK_GRACE: Duration = Duration::from_secs(5);
 
 fn main() -> ExitCode {
+    // Zuerst, was systemd übergeben hat (HUM-053): Die Variablen der Übergabe
+    // müssen aus der Umgebung, bevor irgendein Thread entsteht, der sie lesen
+    // könnte, und bevor ein Kind sie erbt.
+    //
+    // SAFETY: Hier läuft genau ein Thread. Die Tokio-Laufzeit wird erst in der
+    // nächsten Anweisung gebaut, und nichts davor startet einen Thread; das
+    // ist die Bedingung von `claim_from_process` (`std::env::remove_var`).
+    #[allow(unsafe_code)]
+    let passed = unsafe { systemd::claim_from_process() };
     // Eigene Laufzeit statt `#[tokio::main]`: Nur so lässt sich das Warten am
     // Ende befristen. `#[tokio::main]` lässt die Laufzeit fallen, und das
     // wartet ohne Frist.
@@ -168,7 +181,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let code = match runtime.block_on(run()) {
+    let code = match runtime.block_on(run(passed)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(diagnostic) => {
             eprintln!("humanitld: {diagnostic}");
@@ -231,22 +244,51 @@ fn init_tracing() {
 }
 
 /// Der Lauf selbst; jeder Fehler kommt als Befund zurück.
-async fn run() -> Result<(), Diagnostic> {
+async fn run(passed: Result<Option<systemd::Passed>, Diagnostic>) -> Result<(), Diagnostic> {
     let cli = Cli::parse();
     init_tracing();
+    // Vor der Wahl der Betriebsart: Eine unlesbare Übergabe beendet jeden
+    // Start, auch den mit `--fake` (HUM-053).
+    let passed = passed?;
     match cli.fake.clone() {
-        Some(path) => run_fake(&cli, &path).await,
-        None => run_daemon(&cli).await,
+        Some(path) => {
+            refuse_passed_for_fake(passed.as_ref())?;
+            run_fake(&cli, &path).await
+        }
+        None => run_daemon(&cli, passed).await,
     }
+}
+
+/// Weist eine Socket-Übergabe im Modus `--fake` ab (`DAEMON_013`).
+///
+/// Der Fake bindet seinen Socket immer selbst. Eine Übergabe, die er nicht
+/// prüft und nicht bedient, ließe Deskriptor 3 offen und ungeprüft neben einem
+/// Dienst stehen, der lange läuft; deshalb startet er dann gar nicht.
+fn refuse_passed_for_fake(passed: Option<&systemd::Passed>) -> Result<(), Diagnostic> {
+    if passed.is_none() {
+        return Ok(());
+    }
+    Err(Diagnostic::builder(codes::DAEMON_013, Severity::Blocking)
+        .why(
+            "systemd passed a socket (LISTEN_PID and LISTEN_FDS name this process), but \
+             humanitld --fake does not support socket activation and binds its own socket; \
+             start the fake without humanitld.socket"
+                .to_owned(),
+        )
+        .fix(FixAction::CopyCommand(
+            "humanitld --fake <session.jsonl>".to_owned(),
+        ))
+        .build())
 }
 
 /// Der echte Daemon (HUM-018).
 ///
 /// Reihenfolge wie im Modul-Kommentar. Der Proxy startet vor dem gRPC-Dienst,
 /// damit ein Client, der auf `GetInfo` antwortet bekommt, auch eine Sitzung
-/// vorfindet; der gRPC-Dienst räumt am Ende Socket und Token weg, diese
-/// Funktion die Proxy-Sitzung.
-async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
+/// vorfindet; der gRPC-Dienst räumt am Ende das Token weg und den Socket,
+/// wenn er ihn selbst gebunden hat (einen von systemd übergebenen lässt er
+/// liegen, HUM-053), diese Funktion die Proxy-Sitzung.
+async fn run_daemon(cli: &Cli, passed: Option<systemd::Passed>) -> Result<(), Diagnostic> {
     let xdg = XdgPaths::from_process();
 
     // Zuerst die Frage, ob hier schon ein Daemon läuft, und erst dann alles,
@@ -254,7 +296,7 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
     // der Proxy-Socket wird beim Binden ersetzt, und ein später abgebrochener
     // zweiter Lauf hätte dem ersten damit den Weg in die Sandbox abgeschnitten.
     let paths = Runtime::resolve(cli.socket.clone())?;
-    free_socket(&paths.socket, ADVICE_DAEMON_SOCKET)?;
+    let socket = daemon_socket(&paths, passed)?;
     free_socket(&xdg.proxy_socket(), ADVICE_PROXY_SOCKET)?;
 
     let base = load_config(&xdg)?;
@@ -388,7 +430,7 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
     };
     let (signal, stop_reason) = shutdown_with_reason();
     let (signal, farewell) = signal_that_ends_the_sandbox(signal, sandbox.clone());
-    let result = humanitl_ipc::serve(&paths.socket, &paths.token, server, signal).await;
+    let result = systemd::serve(socket, &paths.socket, &paths.token, server, signal).await;
     join_farewell(farewell, sandbox).await;
 
     // Erst die Sitzungen, dann zurückkehren: der Accept-Loop endet, und mit
@@ -418,7 +460,7 @@ async fn run_daemon(cli: &Cli) -> Result<(), Diagnostic> {
 /// 2026-09-07 je einen M3-Lauf zum Stehen gebracht.
 ///
 /// **Der Abschied beginnt mit dem Signal und nicht nach dem Ausklang.**
-/// [`humanitl_ipc::serve`] lässt offenen Aufrufen
+/// [`systemd::serve`] lässt offenen Aufrufen
 /// `humanitl_ipc::SHUTDOWN_GRACE` (5 s), und ein Agent, der `SIGTERM`
 /// abfängt, bekommt seine eigenen fünf. Nacheinander wartete ein Mensch auf
 /// zwei Fristen, die nichts voneinander wollen: bis zu 5 + 11 + 5 = 21 s.
@@ -577,8 +619,11 @@ fn shutdown_with_reason() -> (
     let reason = Arc::new(OnceLock::new());
     let signal = {
         let reason = Arc::clone(&reason);
+        // Hier und nicht erst im `async`-Block: Die Handler stehen damit,
+        // bevor der Daemon `READY=1` meldet (HUM-053).
+        let waiting = shutdown_signal();
         async move {
-            let _ = reason.set(shutdown_signal().await);
+            let _ = reason.set(waiting.await);
         }
     };
     (signal, reason)
@@ -1794,6 +1839,25 @@ const ADVICE_DAEMON_SOCKET: &str = "stop it or pass --socket with another path";
 /// Launcher in die Sandbox einhängt (HUM-011).
 const ADVICE_PROXY_SOCKET: &str = "stop the running daemon before starting another one";
 
+/// Woher der gRPC-Socket dieses Laufs kommt (HUM-053).
+///
+/// Hält systemd ihn (`humanitld.socket`), übernimmt der Daemon ihn, statt
+/// selbst zu binden. Die Frage nach einer zweiten Instanz entfällt dann für
+/// diesen Socket: Auf ihm lauscht systemd, und der Verbindungsversuch in
+/// [`free_socket`] hielte das für einen laufenden Daemon.
+fn daemon_socket(
+    paths: &Runtime,
+    passed: Option<systemd::Passed>,
+) -> Result<systemd::Socket, Diagnostic> {
+    if let Some(passed) = passed {
+        let listener = systemd::adopt(passed, &paths.socket)?;
+        tracing::info!(socket = %paths.socket.display(), "socket passed by systemd");
+        return Ok(systemd::Socket::Activated(listener));
+    }
+    free_socket(&paths.socket, ADVICE_DAEMON_SOCKET)?;
+    Ok(systemd::Socket::Bind)
+}
+
 /// Räumt einen verwaisten Socket weg, weigert sich aber bei einem lebenden
 /// (`DAEMON_003`).
 ///
@@ -1881,27 +1945,43 @@ async fn shutdown() {
 
 /// Wartet auf das Signal, das den Dienst beendet, und nennt es: `sigterm`
 /// oder `sigint`, so wie es in `daemon.stopped` steht.
-async fn shutdown_signal() -> &'static str {
+///
+/// **Die Handler stehen, wenn diese Funktion zurückkehrt**, nicht erst beim
+/// ersten Warten. Ein `async fn` richtete sie erst ein, wenn der Dienst die
+/// Zukunft zum ersten Mal abfragt; ein `SIGTERM` direkt nach `READY=1` träfe
+/// dann noch die Vorgabe des Kerns und beendete den Daemon ohne Abschied
+/// (HUM-053, gemessen in `the_daemon_reports_ready_once_it_listens`).
+fn shutdown_signal() -> impl Future<Output = &'static str> + Send + 'static {
     use tokio::signal::unix::{SignalKind, signal};
 
-    let mut terminate = match signal(SignalKind::terminate()) {
-        Ok(stream) => stream,
-        Err(error) => {
-            tracing::warn!(%error, "cannot listen for SIGTERM, waiting for SIGINT only");
-            let _ = tokio::signal::ctrl_c().await;
-            return "sigint";
-        }
-    };
-    tokio::select! {
-        _ = terminate.recv() => {
-            tracing::info!("SIGTERM received");
-            "sigterm"
-        }
-        result = tokio::signal::ctrl_c() => {
-            if result.is_ok() {
+    let terminate = signal(SignalKind::terminate());
+    let interrupt = signal(SignalKind::interrupt());
+    async move {
+        match (terminate, interrupt) {
+            (Ok(mut terminate), Ok(mut interrupt)) => tokio::select! {
+                _ = terminate.recv() => {
+                    tracing::info!("SIGTERM received");
+                    "sigterm"
+                }
+                _ = interrupt.recv() => {
+                    tracing::info!("SIGINT received");
+                    "sigint"
+                }
+            },
+            (Ok(mut terminate), Err(error)) => {
+                tracing::warn!(%error, "cannot listen for SIGINT, waiting for SIGTERM only");
+                let _ = terminate.recv().await;
+                tracing::info!("SIGTERM received");
+                "sigterm"
+            }
+            (Err(error), Ok(mut interrupt)) => {
+                tracing::warn!(%error, "cannot listen for SIGTERM, waiting for SIGINT only");
+                let _ = interrupt.recv().await;
                 tracing::info!("SIGINT received");
                 "sigint"
-            } else {
+            }
+            (Err(error), Err(_)) => {
+                tracing::warn!(%error, "cannot listen for SIGTERM or SIGINT");
                 "signal_error"
             }
         }

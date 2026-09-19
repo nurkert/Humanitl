@@ -3446,12 +3446,11 @@ fn logging_systemctl(harness: &Harness, name: &str) -> (PathBuf, PathBuf) {
 
 /// `daemon install` schreibt die Unit und sagt systemd davon.
 ///
-/// **Geprüft wird `humanitld.service` und nicht `humanitld.socket`.** Die
-/// Spezifikation von HUM-070 nennt `enable --now humanitld.socket`; die
-/// Socket-Aktivierung kommt mit HUM-053, und bis der Daemon `LISTEN_FDS` liest,
-/// nähme ein von systemd gehaltener Socket ihm seinen eigenen weg — er bräche
-/// mit `DAEMON_003` ab. `packaging/systemd/humanitld.socket` liegt deshalb da,
-/// wird aber nicht geschrieben; der Test hält beides fest.
+/// **Geschrieben wird `humanitld.service` und nicht `humanitld.socket`.** Ohne
+/// Paket (Archiv, `AppImage`) bindet der Daemon seinen Socket selbst; die
+/// Socket-Unit bringt nur das Paket mit, und dann schreibt `daemon install`
+/// gar nichts, sondern aktiviert beide (HUM-053, `unit::SystemUnits`). Dieser
+/// Lauf hat kein Paket, der Test hält den ersten Weg fest.
 #[test]
 fn daemon_install_writes_units_and_calls_systemctl() {
     let harness = Harness::new();
@@ -3483,7 +3482,7 @@ fn daemon_install_writes_units_and_calls_systemctl() {
         .collect();
     assert!(
         !written.iter().any(|name| name == "humanitld.socket"),
-        "the socket unit waits for LISTEN_FDS in HUM-053: {written:?}"
+        "only the package brings the socket unit: {written:?}"
     );
 
     // Der Daemon antwortet in dieser Umgebung nicht; das steht als Zeile da
@@ -3639,9 +3638,9 @@ fn no_color_and_a_pipe_carry_no_ansi() {
 
 /// Die Socket-Unit hört dort, wo der Client den Socket sucht.
 ///
-/// Sie wird heute nicht installiert (siehe
-/// `daemon_install_writes_units_and_calls_systemctl`), geht aber mit dem Paket
-/// mit (HUM-053). Ein `ListenStream`, der woandershin zeigt als
+/// Das Paket legt sie nach `/usr/lib/systemd/user/` (HUM-053), und der Daemon
+/// übernimmt ihren Socket nur, wenn er an genau diesem Pfad liegt
+/// (`DAEMON_013`). Ein `ListenStream`, der woandershin zeigt als
 /// `Paths::daemon_socket`, wäre der Fehler, den ein Paket am spätesten zeigt.
 #[test]
 fn the_socket_unit_listens_where_the_client_looks() {

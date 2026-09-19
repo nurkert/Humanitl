@@ -2,29 +2,30 @@
 #
 # Die Socket-Unit des Daemons (HUM-053, Vorlage angelegt in HUM-070).
 #
-# **`humanitl daemon install` schreibt diese Datei heute nicht.** Sie gehört in
-# das Paket, das sie nach `/usr/lib/systemd/user/` legt, und sie wirkt erst,
-# wenn der Daemon beim Start `LISTEN_FDS` und `LISTEN_PID` liest und den von
-# systemd gehaltenen Deskriptor übernimmt (HUM-053, Schritt 2). Bis dahin
-# bindet der Daemon den Socket selbst und prüft beim Start, ob dort schon
-# jemand antwortet; ein von systemd gehaltener Socket sähe für ihn wie eine
-# zweite Instanz aus, und er bräche mit `DAEMON_003` ab. Eine Socket-Unit, die
-# heute aktiviert würde, legte den Dienst also still.
+# Das Paket legt sie nach `/usr/lib/systemd/user/`, ohne die Marke in der
+# ersten Zeile (`packaging/deb/build-deb.sh`), und `humanitl daemon install`
+# aktiviert sie dann zusammen mit dem Dienst
+# (`systemctl --user enable --now humanitld.socket humanitld.service`). Ohne
+# Paket schreibt der Befehl sie nicht: Dann bindet der Daemon den Socket
+# selbst.
 #
-# Die Datei liegt trotzdem hier und nicht erst in HUM-053, damit die Fassung im
-# Repository und die des Pakets von Anfang an dieselbe sind. Der Test
-# `the_socket_unit_listens_where_the_client_looks` misst `ListenStream` gegen
-# den Pfad, an dem der Client den Socket sucht (`Paths::daemon_socket`); ein
-# Socket, auf den niemand hört, wäre der Fehler, den ein Paket am spätesten
-# zeigt. Eingebettet wird sie nicht: `cmd/unit.rs` bettet nur ein, was
-# `daemon install` auch schreibt.
+# systemd hält den Socket und übergibt ihn dem Dienst als Deskriptor 3
+# (`LISTEN_FDS`); der Daemon übernimmt ihn, statt selbst zu binden
+# (`daemon/bin/humanitld/src/systemd.rs`), und lässt die Datei beim Ende
+# liegen. So bleibt der Pfad über jeden Neustart des Dienstes hinweg derselbe,
+# und wer in dieser Zeit verbindet, wartet, statt abzuprallen.
+#
+# Der Test `the_socket_unit_listens_where_the_client_looks` misst
+# `ListenStream` gegen den Pfad, an dem der Client den Socket sucht
+# (`Paths::daemon_socket`), und der Daemon weist einen übergebenen Socket an
+# einem anderen Pfad mit `DAEMON_013` ab.
 #
 # Die erste Zeile ist die Marke aus `cmd/unit.rs`: Nur eine Datei, die sie
 # trägt, würde von `humanitl daemon install` je ersetzt.
 
 [Unit]
 Description=Humanitl daemon socket
-Documentation=https://github.com/nurkert/Humanitl/blob/main/docs/PROTOCOL.md
+Documentation=https://github.com/nurkert/Humanitl/blob/main/docs/INSTALL.md
 
 [Socket]
 # `%t` ist das Laufzeitverzeichnis des Nutzers, also `$XDG_RUNTIME_DIR`. Genau

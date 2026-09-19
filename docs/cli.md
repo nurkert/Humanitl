@@ -332,7 +332,7 @@ deshalb steht hier vollständig, was er tut.
 humanitl daemon install [--print] [--no-start] [--bin-dir DIR]
 ```
 
-**Genau eine Datei, an einem genannten Ort.**
+**Höchstens eine Datei, an einem genannten Ort.**
 `$XDG_CONFIG_HOME/systemd/user/humanitld.service`, sonst
 `~/.config/systemd/user/humanitld.service`, mit den Rechten `0644`. Keine
 System-Unit, kein `sudo`, keine zweite Datei, keine `humanitld.socket`. Ihr
@@ -342,14 +342,18 @@ Anmelden dieselbe Fassung startet wie die, die die Unit geschrieben hat.
 `--bin-dir DIR` nennt statt dessen ein anderes Verzeichnis, etwa das Bundle
 eines Pakets, das die Kommandozeile über einen Verweis erreicht hat.
 
-**Die Socket-Unit wird nicht geschrieben.** `packaging/systemd/humanitld.socket`
-liegt im Repository und geht mit dem Paket mit (HUM-053), aber dieser Befehl
-legt sie nicht an und aktiviert sie nicht. Der Daemon liest `LISTEN_FDS` noch
-nicht: Er bindet seinen Socket selbst und prüft beim Start, ob dort schon
-jemand antwortet — ein von systemd gehaltener Socket sähe für ihn wie eine
-zweite Instanz aus, und er bräche mit `DAEMON_003` ab. Sobald der Daemon den
-Deskriptor übernimmt (HUM-053, Schritt 2), tritt `enable --now humanitld.socket`
-an die Stelle von `enable --now humanitld.service`.
+**Mit dem Paket wird nichts geschrieben.** Liegt
+`/usr/lib/systemd/user/humanitld.service` da, hat das Paket die Units
+abgelegt, und der Befehl schreibt keine Datei (HUM-053). Er ruft nur, was das
+Paket als root nicht kann: `systemctl --user daemon-reload` und
+`systemctl --user enable --now humanitld.socket humanitld.service`. Beide
+Units, weil ein Client das Token liest, bevor er den Socket öffnet, und das
+Token erst der laufende Daemon schreibt. Die Ausgabe nennt als `unit` die Unit
+des Pakets und als `action` das Wort `packaged`; unter `--json` stehen die
+Namen in `units`. Aus einem AppImage und mit `--bin-dir` gilt dieser Weg nicht:
+Beide nennen ausdrücklich einen anderen Daemon als den des Pakets. Ohne Paket
+schreibt der Befehl nie eine Socket-Unit; der Daemon bindet seinen Socket dann
+selbst.
 
 **Aus einem AppImage wird kopiert.** Läuft die Kommandozeile aus einem
 AppImage (`$APPIMAGE` ist gesetzt), liegen `humanitld` und `humanitl-shim`
@@ -409,41 +413,57 @@ sich mit `DAEMON_005`, statt sie zu überschreiben. Es gibt dafür mit Absicht
 kein `--force`: Wer eine eigene Unit führt, legt sie beiseite.
 
 **Danach `systemctl --user`, nie `sudo`.** Ohne `--no-start` laufen
-`systemctl --user daemon-reload` und `systemctl --user enable --now
-humanitld.service`. Gibt es kein `systemctl` in `PATH`, bleibt die Unit
-liegen, es startet nichts, und die Ausgabe nennt die beiden Befehle.
+`systemctl --user daemon-reload` und `enable --now`, und zwar je nach Weg:
+
+- *Archiv und AppImage:* `systemctl --user enable --now humanitld.service`,
+  auf die eben geschriebene Unit. Der Daemon bindet seinen Socket selbst.
+- *Units des Pakets:* `systemctl --user enable --now humanitld.socket
+  humanitld.service`, auf die Units unter `/usr/lib/systemd/user/`. Geschrieben
+  wird dabei nichts. Beide Units, weil ein Client das Token liest, bevor er
+  den Socket öffnet, und erst der laufende Daemon es schreibt.
+
+Gibt es kein `systemctl` in `PATH`, startet nichts, und die Ausgabe nennt die
+beiden Befehle.
 
 **Ein Fehlschlag lässt nichts liegen.** Nimmt systemd die Unit nicht an, wird
 der Zustand von vorher wiederhergestellt — eine angelegte Datei verschwindet,
-eine ersetzte bekommt ihren alten Inhalt zurück — und `daemon-reload` läuft
-noch einmal, damit auch systemds Bild davon stimmt. Der Befund ist
-`DAEMON_008`.
+eine ersetzte bekommt ihren alten Inhalt zurück, die Units des Pakets bleiben,
+wie sie sind — und `daemon-reload` läuft noch einmal, damit auch systemds Bild
+davon stimmt. Scheitert `enable --now`, werden vorher alle genannten Units
+angehalten (`stop`, `reset-failed`). Der Befund ist `DAEMON_008`.
 
 Zurückgenommen wird dabei auch die Aktivierung. `systemctl --user enable --now`
-ist ein Aufruf mit zwei Schritten: Er legt die Verweise unter
-`<ziel>.wants/humanitld.service` an und startet dann den Dienst. Misslingt der
-Start, stünden die Verweise ohne diese Rücknahme weiter da, und der Dienst
-startete beim nächsten Anmelden, obwohl der Befehl mit `DAEMON_008` abgebrochen
-ist. Entfernt werden nur die Verweise, die dieser Aufruf angelegt hat: Wer den
-Dienst schon vorher aktiviert hatte, behält die Aktivierung.
+ist ein Aufruf mit zwei Schritten: Er legt die Verweise an und startet dann.
+Die Verweise liegen immer im Unit-Verzeichnis des Nutzers, auch für die Units
+des Pakets: `default.target.wants/humanitld.service` und beim Paket zusätzlich
+`sockets.target.wants/humanitld.socket`. Misslingt der Start, stünden sie ohne
+diese Rücknahme weiter da, und der Dienst startete beim nächsten Anmelden,
+obwohl der Befehl mit `DAEMON_008` abgebrochen ist. Entfernt werden nur die
+Verweise, die dieser Aufruf angelegt hat, für beide Units: Wer den Dienst schon
+vorher aktiviert hatte, behält die Aktivierung.
 
-Die Härtung der Unit ist gemessen und nicht behauptet: `bubblewrap` läuft
-unter `SystemCallFilter=@system-service @mount @sandbox` und
-`NoNewPrivileges=yes` durch, braucht aber `AF_NETLINK` in
-`RestrictAddressFamilies`, um die Loopback-Schnittstelle im Namensraum
-hochzubringen — ohne sie bricht es mit „loopback: Failed to create
-NETLINK_ROUTE socket" ab, und ohne `lo` gibt es keine Brücke vom Shim zum
-Proxy. `@sandbox` steht in der Zeile, weil der Filter einer Unit an jedes Kind
-vererbt wird und `humanitl-shim` seinen eigenen seccomp-Filter mit `seccomp(2)`
-installiert; erlaubt der Filter den Aufruf nicht, stirbt der Shim an `SIGSYS`,
-bevor die dritte Sandbox-Garantie steht. Auf systemd 262 käme `seccomp` auch
-ohne das Wort durch — `@system-service` enthält `@default`, und `@default`
-enthält `@sandbox` —, aber diese Verschachtelung steht in keiner Zeile von
-`systemd.exec(5)`, und eine Sandbox-Garantie hängt nicht an einer
-undokumentierten Untergruppe. Jeder Pfad in `ReadWritePaths` trägt ein `-`, weil
-systemd eine Unit mit einem nicht vorhandenen Pfad darin gar nicht erst startet
-und auf einer frischen Installation keiner der drei existiert. Alles gemessen
-am 2026-09-06 auf Debian 14 mit bubblewrap 0.12.0 und systemd 262 (HUM-044).
+Die Härtung der Unit ist gemessen und nicht behauptet (HUM-044, gehärtet in
+HUM-053). Die Escape-Tests laufen unter genau ihren `[Service]`-Zeilen mit 124
+von 124 Fällen grün. Die Zeilen, die dafür stehen müssen:
+`SystemCallFilter=@system-service @mount @sandbox sethostname` —
+`@mount`, weil `bubblewrap` mountet und `pivot_root`t; `@sandbox`, weil der
+Filter einer Unit an jedes Kind vererbt wird und `humanitl-shim` seinen eigenen
+seccomp-Filter mit `seccomp(2)` installiert (ohne den Aufruf stirbt der Shim an
+`SIGSYS`, bevor die dritte Sandbox-Garantie steht; auf systemd 262 enthielte
+`@system-service` ihn über `@default` auch so, aber das steht in keiner Zeile
+von `systemd.exec(5)`); `sethostname`, weil `bubblewrap` den UTS-Namensraum
+der Sandbox `sandbox` nennt und sonst mit „Can't set hostname to sandbox"
+abbricht. `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK` —
+ohne `AF_NETLINK` bringt `bubblewrap` `lo` im Namensraum nicht hoch
+(„loopback: Failed to create NETLINK_ROUTE socket"), und ohne `lo` gibt es
+keine Brücke vom Shim zum Proxy. Dazu `NoNewPrivileges`, `ProtectSystem=strict`,
+`PrivateUsers`, `ProtectProc=invisible`, `CapabilityBoundingSet=CAP_SYS_ADMIN`
+und weitere; jede Zeile, auch jede mit Absicht fehlende, steht mit ihrem
+Grund in `docs/INSTALL.md#hardening`, und `systemd-analyze security` bewertet
+die Unit mit 3,7. Jeder Pfad in `ReadWritePaths` trägt ein `-`, weil systemd
+eine Unit mit einem nicht vorhandenen Pfad darin gar nicht erst startet und auf
+einer frischen Installation keiner der drei existiert. Gemessen am 2026-09-18
+auf Debian 14 mit bubblewrap 0.12.0 und systemd 262.
 
 **`PrivateTmp=yes` hat eine Folge, die man kennen muss: Ein Projektordner
 unter `/tmp` funktioniert nicht.** Die Unit gibt dem Daemon ein eigenes,
