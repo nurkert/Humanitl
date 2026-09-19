@@ -1,9 +1,16 @@
 # humanitl daemon install: written by Humanitl
 #
-# Die Vorlage der Nutzer-Unit des Daemons (HUM-044). `humanitl daemon install`
-# setzt in `ExecStart` den Pfad des Daemons neben der laufenden Kommandozeile
-# ein und legt das Ergebnis unter
-# `$XDG_CONFIG_HOME/systemd/user/humanitld.service` ab.
+# Die Nutzer-Unit des Daemons (HUM-044, gehärtet in HUM-053). Dieselbe Datei
+# hat zwei Wege auf den Rechner:
+#
+# - Das Paket legt sie nach `/usr/lib/systemd/user/humanitld.service`, mit dem
+#   Pfad des Pakets in `ExecStart` und ohne die Marke in der ersten Zeile
+#   (`packaging/deb/build-deb.sh`). `humanitl daemon install` schreibt dann
+#   nichts, sondern aktiviert nur (`systemctl --user enable --now`).
+# - Ohne Paket (Archiv, `AppImage`) setzt `humanitl daemon install` in
+#   `ExecStart` den Pfad des Daemons neben der laufenden Kommandozeile ein und
+#   legt das Ergebnis unter `$XDG_CONFIG_HOME/systemd/user/humanitld.service`
+#   ab.
 #
 # **Die erste Zeile ist die Marke.** Solange sie dasteht, darf `humanitl daemon
 # install` die Datei ersetzen. Fehlt sie, gehört die Datei jemand anderem, und
@@ -14,21 +21,84 @@
 # Laufzeitverzeichnis, die Konfiguration und die Aufzeichnung genau eines
 # Menschen zu, und eine System-Unit gäbe ihm mehr Rechte, als die Sache
 # braucht (`docs/SECURITY.md`).
+#
+# **Socket-Aktivierung.** Liegt `humanitld.socket` daneben und ist aktiv,
+# übergibt systemd den gRPC-Socket als Deskriptor 3, und der Daemon übernimmt
+# ihn (`LISTEN_FDS`). Diese Datei nennt die Socket-Unit mit Absicht nicht:
+# Eine Socket-Unit desselben Namens ordnet sich selbst vor den Dienst und
+# reicht ihm ihren Socket, und ohne sie (Archiv, `AppImage`) bindet der Daemon
+# selbst. Eine Zeile `Requires=humanitld.socket` legte genau diesen zweiten
+# Weg still.
+#
+# **Jede Zeile der Härtung ist gemessen**, am 2026-09-18 auf Debian 14 mit
+# systemd 262 und bubblewrap 0.12.0, mit `systemd-run --user` und denselben
+# Eigenschaften: Die Escape-Tests laufen darunter mit 124 von 124 Fällen grün,
+# ein schreibbares Projekt unter `$HOME` ist in der Sandbox schreibbar, und
+# node, python3 und java laufen darunter. Die
+# Begründungen, auch für die Zeilen, die hier **fehlen**, stehen in
+# `docs/INSTALL.md#hardening`. Der Wert von `systemd-analyze security` steht
+# ebenda und wird im Test `the_exposure_stays_at_or_below_the_documented_value`
+# nachgemessen.
+#
+# Wichtig für jede spätere Zeile: Filter und Einschränkungen einer Unit erbt
+# jedes Kind des Daemons, also auch bubblewrap und der Agent in der Sandbox.
+# Was hier steht, gilt für den Agenten mit.
 
 [Unit]
 Description=Humanitl moderation daemon
-Documentation=https://github.com/nurkert/Humanitl/blob/main/docs/PROTOCOL.md
+Documentation=https://github.com/nurkert/Humanitl/blob/main/docs/INSTALL.md
 
 [Service]
+# `Type=notify`: Der Daemon meldet `READY=1`, sobald Token und Socket stehen
+# (`daemon/bin/humanitld/src/systemd.rs`). Ohne die Meldung bräche systemd den
+# Start nach 90 s ab.
+Type=notify
 ExecStart={humanitld}
 Restart=on-failure
+RestartSec=2
 
 # Der Daemon startet `bwrap` als eigenes Kind und braucht dafür nichts
 # Zusätzliches: Unprivilegierte Nutzer-Namensräume kosten keine Rechte, die
-# `NoNewPrivileges` nähme. Gemessen am 2026-09-06 auf Debian 14 mit
-# bubblewrap 0.12.0.
+# `NoNewPrivileges` nähme.
 NoNewPrivileges=yes
 PrivateTmp=yes
+
+# In einer Nutzer-Unit macht `strict` alles schreibgeschützt außer `$HOME`, dem
+# Laufzeitverzeichnis und den API-Dateisystemen; gemessen, nicht gelesen. Ein
+# Projekt unter `$HOME` bleibt damit schreibbar. Ein Projekt außerhalb von
+# `$HOME` braucht eine eigene `ReadWritePaths`-Zeile (`docs/INSTALL.md`).
+ProtectSystem=strict
+
+# Die drei Verzeichnisse, die der Daemon beschreibt: Aufzeichnung, eigene
+# Konfiguration und Laufzeitverzeichnis mit Socket und Token. Jedes mit `-`
+# davor, weil systemd eine Unit mit einem nicht vorhandenen `ReadWritePaths`
+# sonst gar nicht erst startet (Exit 226 `EXIT_NAMESPACE`) — und auf einer
+# frischen Installation gibt es keines der drei, bevor der Daemon einmal
+# gelaufen ist.
+ReadWritePaths=-%h/.local/share/humanitl -%h/.config/humanitl -%t/humanitl
+
+# Kein `ProtectHome`: Das Projektverzeichnis des Menschen liegt unter `$HOME`
+# und wird per Vorgabe schreibbar eingehängt (`sandbox.work_mode = rw`). Mit
+# `ProtectHome=read-only` wäre jedes Projekt unter `$HOME` unbrauchbar.
+
+PrivateIPC=yes
+PrivateMounts=yes
+PrivateUsers=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectProc=invisible
+KeyringMode=private
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictFileSystems=~@privileged-api
+
+# Ein Benutzerdienst hat keine Capabilities; die Grenze wirkt auf das, was ein
+# Kind über `execve` einer Datei mit Capabilities bekäme. Das Sandbox-Backend
+# bekommt seine Rechte im eigenen Nutzer-Namensraum und nicht über diese
+# Grenze; `CAP_SYS_ADMIN` bleibt trotzdem darin, weil eine leere Grenze
+# (`CapabilityBoundingSet=`) es nachweislich nicht mehr starten lässt.
+CapabilityBoundingSet=CAP_SYS_ADMIN
 
 # `@mount` gehört nicht zu `@system-service`; bubblewrap mountet und
 # `pivot_root`t.
@@ -49,32 +119,38 @@ PrivateTmp=yes
 # `@sandbox` hier genannt und nicht geerbt. Der Test
 # `the_filter_lets_the_shim_install_its_own_seccomp_filter` misst die Zeile
 # gegen `systemd-analyze`, statt sie mit sich selbst zu vergleichen.
-SystemCallFilter=@system-service @mount @sandbox
+#
+# `sethostname` steht einzeln da: Er gehört zu `@privileged`, und bubblewrap
+# gibt der Sandbox im eigenen UTS-Namensraum den Namen `sandbox`. Ohne ihn
+# bricht bubblewrap mit „Can't set hostname to sandbox: Operation not
+# permitted" ab, gemessen am 2026-09-18 mit den Escape-Tests unter dieser
+# Unit. Den Namen des Rechners ändert der Aufruf nicht: Dafür bräuchte der
+# Dienst `CAP_SYS_ADMIN` im ersten Nutzer-Namensraum, und den hat ein
+# Benutzerdienst nicht.
+SystemCallFilter=@system-service @mount @sandbox sethostname
+SystemCallErrorNumber=EPERM
 
 # `AF_NETLINK` steht hier, weil bubblewrap ohne diese Familie die
 # Loopback-Schnittstelle im Namensraum nicht hochbringt und mit „loopback:
 # Failed to create NETLINK_ROUTE socket: Address family not supported by
 # protocol" abbricht — gemessen am 2026-09-06. Ohne `lo` gibt es keine Brücke
 # vom Shim zum Proxy, also keine einzige Anfrage; die Zeile ohne `AF_NETLINK`
-# hätte das Produkt stillgelegt.
+# hätte das Produkt stillgelegt. IPv4 und IPv6 braucht der Proxy für den
+# Verkehr zum Ziel.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 
-# Die drei Verzeichnisse, die der Daemon beschreibt: Aufzeichnung, eigene
-# Konfiguration und Laufzeitverzeichnis mit Socket und Token. Jedes mit `-`
-# davor, weil systemd eine Unit mit einem nicht vorhandenen `ReadWritePaths`
-# sonst gar nicht erst startet (Exit 226 `EXIT_NAMESPACE`) — und auf einer
-# frischen Installation gibt es keines der drei, bevor der Daemon einmal
-# gelaufen ist.
-ReadWritePaths=-%h/.local/share/humanitl -%h/.config/humanitl -%t/humanitl
-
-# Kein `ProtectHome=read-only`: Das Projektverzeichnis des Menschen liegt unter
-# `$HOME` und wird per Vorgabe schreibbar eingehängt (`sandbox.work_mode = rw`).
-# Mit `ProtectHome=read-only` wäre jedes Projekt unter `$HOME` unbrauchbar.
-
-# Keine `humanitld.socket`: Der Daemon kennt kein `LISTEN_FDS`, und beim Start
-# prüft er, ob auf dem Socket schon jemand antwortet; ein von systemd
-# gehaltener Socket sähe für ihn wie eine zweite Instanz aus (`DAEMON_003`).
-# Socket-Aktivierung ist ein eigenes Issue.
+# Was hier mit Absicht fehlt, jeweils gemessen (docs/INSTALL.md#hardening):
+# RestrictNamespaces (bubblewrap braucht user, mnt, pid, net, ipc, uts),
+# ProtectKernelTunables, ProtectKernelLogs und ProtectHostname (bubblewrap kann
+# danach kein eigenes /proc mehr einhängen), RestrictSUIDSGID (bubblewrap
+# scheitert an „Can't open source /usr"), MemoryDenyWriteExecute (vererbt:
+# node und jede andere JIT-Laufzeit des Agenten stirbt beim Start),
+# CapabilityBoundingSet= (bubblewrap startet nicht), UMask (vererbt: Jede
+# Datei, die der Agent im Projekt anlegt, bekäme andere Rechte),
+# SystemCallArchitectures=native (der Shim prüft seinen eigenen Filter mit
+# einem x32-Aufruf und stirbt dabei an SIGSYS; die Sandbox startet nicht) und
+# PrivateDevices (ohne /dev/ptmx öffnet der Daemon kein Terminal für den
+# Agenten, TERM_002).
 
 [Install]
 WantedBy=default.target
