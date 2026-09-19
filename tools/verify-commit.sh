@@ -252,6 +252,9 @@ step "Bau und Tests" make rust-build rust-test
 step "Dokumentation" env RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --manifest-path daemon/Cargo.toml
 step "Abhängigkeiten" make deps-lint
 step "Dokumente" make docs-lint
+# Wie der CI-Job parity-check (HUM-078): jede RPC mit Unterkommando, und die
+# eingecheckte Tabelle ist die erzeugte.
+step "Parität" make parity-check
 step "Lizenzen" make rust-deny
 # Wie im CI-Job escape-tests: eine rote Probe ist erlaubt, solange sie zu einem
 # Issue gehoert, das noch aussteht; eine Sandbox, die gar nicht startet, nicht.
