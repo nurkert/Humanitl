@@ -97,6 +97,20 @@ install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
 install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   COMPONENT Runtime)
 
+# Daemon, Kommandozeile und Shim liegen im Bundle unter bin/ (HUM-053). Sie
+# kommen nicht aus diesem Build, sondern aus `cargo` (`make package` legt sie
+# mit packaging/release/build-binaries.sh nach linux/bundle-extra/). Fehlt das
+# Verzeichnis, bleibt das Bundle ohne sie, wie bei jedem Entwicklungsbau: Die
+# Anwendung findet die Kommandozeile dann nicht neben sich und bietet den
+# Befehl zum Kopieren an statt des Knopfs (`installServiceCandidate`).
+set(BUNDLE_EXTRA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/bundle-extra")
+foreach(extra humanitld humanitl humanitl-shim)
+  if(EXISTS "${BUNDLE_EXTRA_DIR}/${extra}")
+    install(PROGRAMS "${BUNDLE_EXTRA_DIR}/${extra}"
+      DESTINATION "${CMAKE_INSTALL_PREFIX}/bin" COMPONENT Runtime)
+  endif()
+endforeach(extra)
+
 install(FILES "${FLUTTER_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
 

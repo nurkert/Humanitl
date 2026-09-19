@@ -3237,3 +3237,38 @@ Verkleinerter Umfang, siehe Kopf von `backlog/sprint-4.md`. Die Abweichungen von
 - **Die Pause in der Oberfläche.** `openFindingsPauseProvider` (Flow-Id oder null) sagt, über welcher Anfrage sie steht; `FindingsPause` in `app/lib/features/intercept/widgets/findings_pause.dart` ersetzt die Controls der Aktionsleiste. Ein Klick auf die amberfarbene Freigabe, `Enter` und `A` öffnen sie bei **einer** Anfrage; über eine Gruppe bleibt es beim Halten oder einer Taste (`docs/UX.md` 4.7). Das Halten der Freigabe sendet weiter ohne Pause. `InterceptDecision.allow` heißt dafür `allow({remember, acknowledged})`; `allowMany` behält `confirmed` für Gruppen und reicht `acknowledged` an die einzelne Anfrage weiter. Ob die Pause steht, sagt genau ein Prädikat, `findingsPauseVisibleProvider` in `providers/decision.dart`: geöffnet über dieser Anfrage, sie ist gehalten, sie ist die ganze Auswahl, und sie hat noch einen offenen Fund. Die Leiste zeichnet danach, und `S`, `P`, `Esc` wirken nur danach; sonst wäre eine unsichtbare Pause über die Tastatur noch bedienbar. Den gekürzten Wert zeigt die Pause, wie `display_prefix` ihn bringt (`daemon/crates/findings/src/display.rs`, maskiert und mit eigenem `…`); die Liste scrollt ab 160 px, damit die Knöpfe sichtbar bleiben.
 - **Tasten der Pause.** `SendAnywayIntent` (`S`, in `decisionKeys`), `PseudonymizeIntent` (`P`), `CloseFindingsPauseIntent` (`Esc`) liegen in `findingsPauseShortcuts()`, gebunden von einem eigenen `Shortcuts` zwischen den Actions und dem Fokus des Bildschirms. Solange keine Pause offen ist, sind ihre Actions aus und die Tasten fallen durch, `Esc` also an den einmaligen Hinweis und `S`, `P` ins Notizfeld. `B` braucht keine eigene Bindung.
 - **Pseudonymisieren.** `InspectorEditorBuilder` trägt `{required bool replaceAll}`; `EditorScreen.replaceAllOnOpen` ruft nach dem Laden einmal `DraftNotifier.replaceAllOpen`. Der Editor-Knopf „Editierte Version senden" fragt bei verbliebenen Funden noch nicht (HUM-161).
+
+### 4.34 Aus der Umsetzung der Pakete und der Unit (HUM-053, 2026-09-18)
+
+**Abweichungen von der Spezifikation, jede mit Grund.**
+
+| Spezifikation | Gebaut | Grund |
+|---|---|---|
+| `fastforge release`, `distribute_options.yaml`, `justfile` | `make package` mit `packaging/deb/build-deb.sh` und `packaging/appimage/build-appimage.sh` | Das `.deb` der Vorabversionen baut seit 0.0.1 Debians eigenes Werkzeug, lintian ohne Fehler und Warnungen; ein zweiter Weg zum selben Paket wäre eine zweite Wahrheit. Das Repository hat ein `Makefile` und kein `just`. |
+| `daemon install` beim Paket: nur `enable --now humanitld.socket` | `enable --now humanitld.socket humanitld.service` | Ein Client liest das Token vor dem Verbinden; ein Socket allein weckt den Dienst also nie (HUM-164). |
+| `humanitld.service` mit `Requires=humanitld.socket`, `After=humanitld.socket` | keine Zeile zur Socket-Unit | Eine Socket-Unit gleichen Namens ordnet sich selbst vor den Dienst und reicht ihm ihren Socket; `Requires=` legte den Weg ohne Paket (Archiv, `AppImage`) still, auf dem es keine Socket-Unit gibt. |
+| `ProtectKernelTunables`, `ProtectKernelLogs`, `ProtectHostname`, `RestrictSUIDSGID`, `MemoryDenyWriteExecute`, `SystemCallArchitectures=native` | nicht gesetzt | Gemessen mit `systemd-run --user` und den Escape-Tests unter der Unit: Die ersten drei verhindern das `/proc` der Sandbox, `RestrictSUIDSGID` lässt bubblewrap an `/usr` scheitern, `MemoryDenyWriteExecute` erbt der Agent, und node stirbt beim Start, `SystemCallArchitectures=native` tötet den Shim bei der Prüfung seines Filters (`docs/INSTALL.md#hardening`). Ungefragt ebenfalls weggelassen: `PrivateDevices` (kein Terminal für den Agenten, `TERM_002`). Dazugekommen: `sethostname` im `SystemCallFilter`, weil bubblewrap die Sandbox benennt. |
+| `postinst` mit `update-desktop-database` und `gtk-update-icon-cache` | kein `postinst` | Die Trigger von `desktop-file-utils` und `hicolor-icon-theme` tun dasselbe, ohne ein Skript, das als root läuft. |
+| `packaging/appimage/humanitl.desktop` | die Desktop-Datei des Pakets | Eine zweite Fassung liefe der ersten davon. |
+| Setup-Schritt „Dienst aktivieren" mit eigenem Knopf | der Knopf aus HUM-044 („Installieren und starten") | Er ruft `humanitl daemon install`, und das erkennt die Units des Pakets selbst; eine zweite Entscheidung in der Oberfläche wäre Fachlogik im Client (ADR-018). |
+
+Neu im Register: `DAEMON_013` (der von systemd übergebene Socket ist nicht
+zu bedienen: mehr als einer, keiner an einem Pfad, oder ein anderer Pfad als
+der, an dem die Clients suchen).
+
+**`humanitld` erlaubt `unsafe` nur in `systemd.rs` und in `main`.**
+`#![forbid(unsafe_code)]` ist `#![deny(unsafe_code)]` geworden. Erlaubt ist es
+für die Übernahme des übergebenen Sockets: `fcntl(F_DUPFD_CLOEXEC)` auf die
+Nummer 3, besessen wird nur das Duplikat; `getsockopt` für `SO_TYPE` und
+`SO_ACCEPTCONN`; `close(3)` erst nach bestandener Prüfung; und
+`std::env::remove_var` für `LISTEN_PID`, `LISTEN_FDS` und `LISTEN_FDNAMES`.
+Das Entfernen geschieht in `main` vor dem Bau der Tokio-Laufzeit, solange der
+Prozess einen einzigen Thread hat; deshalb ist `claim_from_process` selbst
+`unsafe fn` mit diesem Vertrag. `libc` ist dafür von den Dev- in die normalen
+Abhängigkeiten von `humanitld` gewandert. Die Standardbibliothek hat für keinen
+dieser Schritte einen sicheren Weg, und eine Bibliothek wie `listenfd` täte an
+derselben Stelle dasselbe, ohne die Prüfungen auf Typ und `listen`.
+
+**`daemon install --json` trägt `units`.** Die Namen, die `enable --now`
+bekommt; `action` ist `packaged`, wenn nichts geschrieben, sondern nur die
+Units des Pakets aktiviert wurden.

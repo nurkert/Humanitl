@@ -37,6 +37,11 @@ humanitl-catalog.workspace = true
 humanitl-sandbox.workspace = true
 
 clap.workspace = true
+# Die Übernahme des Sockets, den systemd übergibt (HUM-053): `fcntl` auf
+# Deskriptor 3, `getsockopt` für Typ und `SO_ACCEPTCONN`, `close` nach der
+# Prüfung. Die Standardbibliothek hat für keins davon einen Weg; schon der
+# End-to-End-Test brauchte die Crate für `kill`.
+libc.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tonic.workspace = true
@@ -49,8 +54,5 @@ bytes.workspace = true
 # Die Tests zu `load_rules` werten den geladenen Regelsatz aus; `evaluate`
 # nimmt den Zeitpunkt als Argument (HUM-104).
 chrono.workspace = true
-# Der End-to-End-Test schickt dem gestarteten Binary ein `SIGTERM`; nur der
-# geordnete Weg raeumt Socket und Token weg.
-libc.workspace = true
 tempfile.workspace = true
 tokio-stream.workspace = true

@@ -63,7 +63,8 @@ pub static AREAS: &[AreaInfo] = &[
         note: "001-004 Start, Erreichbarkeit, Version des Daemons, \
                005-008 die Nutzer-Unit von `daemon install` (HUM-044), \
                009 Abschied (HUM-142), 010 Nutzersitzung, 011 Binaries aus \
-               dem `AppImage`, 012 `journalctl` (HUM-070)",
+               dem `AppImage`, 012 `journalctl` (HUM-070), 013 der von \
+               systemd übergebene Socket (HUM-053)",
     },
     AreaInfo {
         area: "ipc",
@@ -1336,6 +1337,18 @@ registry! {
     HOLD_004 => "hold", "Bestätigtes Geheimnis gesperrt", "#hold_004",
         "Die Anfrage oder ihre bearbeitete Fassung trägt einen prüfsummen-bestätigten Fund der Art IBAN, Kreditkarte, API-Schlüssel oder JWT, und `hold.hard_block_checksum_secrets` ist an.",
         "`ChangeSetting` auf `hold.hard_block_checksum_secrets = false`; sonst geht die Anfrage nur ohne den Wert hinaus, im Editor ersetzt oder vom Agenten neu gestellt.";
+    // HUM-053: Socket-Aktivierung durch `humanitld.socket`.
+    /// Den Socket, den systemd übergeben hat, kann der Daemon nicht bedienen.
+    ///
+    /// `LISTEN_PID` nennt diesen Prozess, aber `LISTEN_FDS` ist keine Zahl
+    /// oder größer als eins, Deskriptor 3 ist nicht offen, kein lauschender
+    /// Unix-Stream-Socket, oder er liegt an einem anderen Pfad als dem, an dem
+    /// die Clients suchen. Der Daemon
+    /// startet dann nicht: Ein Dienst, der auf einem Socket lauscht, den
+    /// niemand findet, wäre der Fehler, den ein Paket am spätesten zeigt.
+    DAEMON_013 => "daemon", "Übergebener Socket unbrauchbar", "#daemon_013",
+        "systemd übergibt per Socket-Aktivierung mehr als einen Socket, eine Nummer 3, die nicht offen ist, keinen lauschenden Unix-Stream-Socket, oder einen an einem anderen Pfad als `$XDG_RUNTIME_DIR/humanitl/daemon.sock`.",
+        "`CopyCommand`: `systemctl --user cat humanitld.socket` zeigt, worauf `ListenStream` zeigt.";
 }
 
 /// Sucht einen Code im Register.

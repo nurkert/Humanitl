@@ -1,0 +1,27 @@
+#!/bin/sh
+# Der Einstieg des AppImage (HUM-053).
+#
+#   ./Humanitl-<version>-x86_64.AppImage              startet die Anwendung
+#   ./Humanitl-<version>-x86_64.AppImage --cli ARGS   startet die Kommandozeile
+#
+# `--cli` ist der Weg zu `humanitl` im Bild, etwa fuer
+# `./Humanitl.AppImage --cli daemon install`: Die Kommandozeile erkennt das
+# AppImage an `$APPIMAGE` und kopiert Daemon und Shim nach
+# `~/.local/lib/humanitl/`, weil der Einhaengepunkt mit dem Prozess
+# verschwindet (HUM-070).
+#
+# Kein `LD_LIBRARY_PATH`: GTK, GLib, Mesa und die Wayland-Bibliotheken kommen
+# vom System, das Bild bringt nur die Bibliotheken des Flutter-Bundles mit, und
+# die findet die Anwendung ueber ihren eigenen RUNPATH (`$ORIGIN/lib`). Ein
+# gebuendeltes GTK bricht auf Wayland und bei abweichenden Mesa-Fassungen
+# (HUM-053, Fallstricke).
+set -eu
+
+here="$(dirname "$(readlink -f "$0")")"
+app="$here/usr/lib/humanitl"
+
+if [ "${1:-}" = "--cli" ]; then
+  shift
+  exec "$app/bin/humanitl" "$@"
+fi
+exec "$app/humanitl" "$@"

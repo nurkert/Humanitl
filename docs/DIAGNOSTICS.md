@@ -12,7 +12,7 @@ Entfernen eines Codes.
 
 | Bereich | Präfix | Von | Bis | Wofür |
 |---|---|---|---|---|
-| daemon | `DAEMON` | 001 | 019 | 001-004 Start, Erreichbarkeit, Version des Daemons, 005-008 die Nutzer-Unit von `daemon install` (HUM-044), 009 Abschied (HUM-142), 010 Nutzersitzung, 011 Binaries aus dem `AppImage`, 012 `journalctl` (HUM-070) |
+| daemon | `DAEMON` | 001 | 019 | 001-004 Start, Erreichbarkeit, Version des Daemons, 005-008 die Nutzer-Unit von `daemon install` (HUM-044), 009 Abschied (HUM-142), 010 Nutzersitzung, 011 Binaries aus dem `AppImage`, 012 `journalctl` (HUM-070), 013 der von systemd übergebene Socket (HUM-053) |
 | ipc | `IPC` | 001 | 009 | gRPC-Schnittstelle, Token, Aufrufe gegen den Zustand |
 | config | `CONFIG` | 001 | 019 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), 010-012 Test-Wurzel und ihr Flag (HUM-087), 013 der Projektordner der Einrichtung (HUM-044), 017-018 Editor und Gruppenschlüssel (HUM-070) |
 | sandbox | `SANDBOX` | 001 | 029 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 020-025 /work-Härtung (HUM-043) |
@@ -132,6 +132,14 @@ journalctl nicht gefunden
 **Auslöser.** `humanitl daemon logs` findet kein `journalctl` im `PATH`.
 
 **Fix.** `CopyCommand`: `sudo apt-get install systemd`, das Paket, das `journalctl` mitbringt.
+
+#### DAEMON_013
+
+Übergebener Socket unbrauchbar
+
+**Auslöser.** systemd übergibt per Socket-Aktivierung mehr als einen Socket, eine Nummer 3, die nicht offen ist, keinen lauschenden Unix-Stream-Socket, oder einen an einem anderen Pfad als `$XDG_RUNTIME_DIR/humanitl/daemon.sock`.
+
+**Fix.** `CopyCommand`: `systemctl --user cat humanitld.socket` zeigt, worauf `ListenStream` zeigt.
 
 ### Bereich ipc
 

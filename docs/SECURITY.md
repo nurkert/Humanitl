@@ -581,8 +581,11 @@ unabhängig von jeder Konfigurationsdatei:
    `"level":"WARN"` und `--allow-test-ca` im Text. Ohne das Flag steht dort stattdessen
    `CONFIG_011`, sobald der Schlüssel gesetzt ist. `WARN` und nicht `INFO`: Wer sucht, warum ein
    Ziel angenommen wird, das eigentlich keines sein sollte, findet die Zeile auf derselben Stufe
-   wie den Fehler, den sie erklärt. (Eine systemd-Unit, unter der `journalctl` danach suchen
-   könnte, gibt es noch nicht; sie kommt mit HUM-053.)
+   wie den Fehler, den sie erklärt. Läuft der Daemon als Dienst (HUM-053), steht die Zeile im
+   Journal der Nutzersitzung: `journalctl --user -u humanitld.service`, oder kürzer
+   `humanitl daemon logs`. Das Flag selbst steht in keiner Unit; wer es dort eintrüge, täte das
+   mit `systemctl --user edit humanitld.service`, und die Ergänzung ist dann mit
+   `systemctl --user cat humanitld.service` sichtbar.
 
 Beide Wege setzen Zugriff auf die Maschine voraus, auf der der Daemon läuft. **Wer nur seine
 Schnittstelle benutzt, sieht es nicht:** `GetInfo` trägt keine Fähigkeit dafür, `humanitl daemon
@@ -721,11 +724,42 @@ abgleicht. Für `limits.hold_max_flows` nennt HUM-057 abweichend 500; welcher We
 `Expect: 100-continue` beantwortet der Proxy sofort selbst; der Body landet im Hold-Puffer und
 nicht beim Ziel. Vor der Entscheidung erreicht kein Byte den Upstream.
 
-**Härtung des Dienstes.** Die systemd-Unit läuft als Benutzerdienst mit `NoNewPrivileges`,
-`PrivateTmp`, `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6` und
-`SystemCallFilter=@system-service`. Für den Schutz des Heimatverzeichnisses gilt eine Einschränkung:
-`ProtectHome=read-only` verträgt sich nicht mit Bind-Mounts von Projekten unterhalb von `$HOME`;
-die endgültige Kombination wird in HUM-053 festgelegt und hier nachgetragen.
+**Härtung des Dienstes.** Die systemd-Unit (`packaging/systemd/humanitld.service`) läuft als
+Benutzerdienst, nie als System-Unit, und ist so weit gehärtet, wie das Sandbox-Backend es zulässt
+(HUM-053): unter anderem `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=strict`, `PrivateMounts`,
+`PrivateUsers`, `ProtectProc=invisible`, `CapabilityBoundingSet=CAP_SYS_ADMIN`,
+`RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK` und
+`SystemCallFilter=@system-service @mount @sandbox sethostname`. `systemd-analyze security` bewertet die Unit
+mit 3,7 (Stand und Messung in `docs/INSTALL.md#hardening`). Diese Einschränkungen erbt jedes Kind
+des Daemons, also auch die Sandbox und der Agent darin; sie kommen zu den drei Garantien der
+Sandbox hinzu und ersetzen keine davon.
+
+Mit Absicht **nicht** gesetzt, jeweils gemessen: `RestrictNamespaces` (die Sandbox braucht die
+Namensräume), `ProtectKernelTunables`, `ProtectKernelLogs` und `ProtectHostname` (danach kann die
+Sandbox kein eigenes `/proc` mehr einhängen), `RestrictSUIDSGID`, `MemoryDenyWriteExecute` (vererbt
+auf den Agenten; node und jede andere JIT-Laufzeit stirbt beim Start),
+`SystemCallArchitectures=native` (der Shim stirbt beim Prüfen seines eigenen Filters),
+`PrivateDevices` (kein Terminal für den Agenten) und `ProtectHome`. Unter genau dieser Unit
+laufen die Escape-Tests mit 124 von 124 Fällen grün (gemessen 2026-09-18).
+`ProtectHome=read-only` verträgt sich nicht mit Projekten unterhalb von `$HOME`, die schreibbar in
+die Sandbox eingehängt werden. Der Daemon kann das Heimatverzeichnis also schreiben; das ist
+keine neue Fähigkeit, denn er läuft ohnehin als derselbe Nutzer. `ProtectSystem=strict` macht in
+einer Benutzer-Unit alles außer `$HOME` und dem Laufzeitverzeichnis schreibgeschützt: Ein Projekt
+außerhalb von `$HOME` ist in der Sandbox nur lesbar, bis der Mensch es mit einer eigenen
+`ReadWritePaths`-Zeile freigibt (`docs/INSTALL.md`).
+
+**Socket-Aktivierung.** Das Paket bringt `humanitld.socket` mit: systemd bindet
+`$XDG_RUNTIME_DIR/humanitl/daemon.sock` mit Modus 0600 in einem Verzeichnis mit 0700 und reicht den
+Deskriptor an den Daemon. Der Daemon übernimmt ihn nur, wenn `LISTEN_PID` ihn selbst nennt, genau
+ein Socket übergeben wurde und dieser ein lauschender Unix-Stream-Socket (`SO_TYPE`,
+`SO_ACCEPTCONN`) an genau dem Pfad ist, an dem die Clients suchen; sonst startet er nicht
+(`DAEMON_013`). Den Variablen traut er dabei nicht: Er dupliziert die Nummer 3 mit
+`F_DUPFD_CLOEXEC`, prüft nur das Duplikat und schließt die Nummer selbst erst nach bestandener
+Prüfung; eine geschlossene oder fremde Nummer ergibt `DAEMON_013` und wird nicht angefasst.
+`LISTEN_PID`, `LISTEN_FDS` und `LISTEN_FDNAMES` entfernt er vor dem ersten Thread aus seiner
+Umgebung, damit kein Kind sie erbt. Er setzt 0600 erneut, und weder das Sandbox-Backend noch der
+Agent erben den lauschenden Socket (`FD_CLOEXEC`). Das Token schreibt weiterhin der Daemon
+selbst, und ohne Token nimmt der Dienst keinen Aufruf an.
 
 **Protokoll-Umfang.** In Milestone 1 spricht der Proxy HTTP/1.1 auf beiden Seiten; die
 ALPN-Aushandlung bietet dem Client nur `http/1.1` an. Damit scheitert gRPC über TLS sichtbar
@@ -987,7 +1021,9 @@ Ehrliche Liste dessen, was heute fehlt oder schwächer ist, als man annehmen kö
 9. **Nur eine Sandbox-Technik.** bubblewrap ist die einzige Implementierung im MVP. Docker- und
    microVM-Backends sind vorgesehen, aber nicht bewertet — die Architektur hält den Platz frei
    (`SandboxBackend`), mehr nicht.
-10. **`ProtectHome` in der systemd-Unit** ist noch nicht abschließend festgelegt (Abschnitt 5).
+10. **Kein `ProtectHome` in der systemd-Unit** (Abschnitt 5, HUM-053). Der Daemon kann das
+    Heimatverzeichnis schreiben, weil Projekte darunter schreibbar in die Sandbox eingehängt werden.
+    Projekte außerhalb von `$HOME` sind unter der Unit nur lesbar, bis der Mensch sie freigibt.
 ## 11. Ausdrücklich außerhalb des Geltungsbereichs
 
 Humanitl beansprucht nicht, gegen Folgendes zu schützen. Wer das braucht, braucht andere Mittel:

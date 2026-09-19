@@ -55,6 +55,11 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-161 | Der Editor sendet verbliebene Funde ohne Rückfrage | S | HUM-047, HUM-049 |
 | HUM-162 | Der Kopf der Kette hat über den Daemon keinen Zeitpunkt | S | HUM-156 |
 | HUM-163 | Jede Seite der Audit-Tabelle liest die ganze Kette | M | HUM-156 |
+| HUM-164 | Ein Client weckt den Daemon über den Socket nicht | S | HUM-053 |
+| HUM-165 | Der Daemon aus dem AppImage findet Katalog und Sandbox-Profil nicht | S | HUM-053, HUM-070 |
+| HUM-166 | `humanitl_ipc::serve` und `systemd::serve` sind zwei Fassungen desselben Dienstes | S | HUM-053, HUM-156 |
+| HUM-167 | Eine alte Nutzer-Unit verdeckt die Units des Pakets | S | HUM-053 |
+| HUM-168 | Ein Rückfall für Impeller fehlt im Release-Bau | S | HUM-053 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -1819,12 +1824,12 @@ Begründungen (in `docs/INSTALL.md#hardening`): `ProtectHome=no` statt `read-onl
 - AppImage: `./Humanitl.AppImage --cli daemon status` läuft; `APPIMAGE`-Erkennung im Install-Test aus HUM-070.
 
 ### Akzeptanzkriterien
-- [ ] `just package` erzeugt `dist/humanitl_<ver>_amd64.deb` und `dist/Humanitl-<ver>-x86_64.AppImage`.
-- [ ] Frische Debian-13-VM: `sudo dpkg -i …deb && humanitl daemon install && humanitl daemon status` ⇒ Exit 0; Setup-Screen zeigt Daemon grün.
-- [ ] Unter der Unit läuft eine Session mit `rw`-Projekt unter `$HOME` und Escape-Tests 1–3 sind grün (Härtung bricht bwrap nicht).
-- [ ] `systemd-analyze security` Wert dokumentiert, `RestrictNamespaces` nicht gesetzt.
-- [ ] `lintian` ohne Errors.
-- [ ] AppImage startet auf Wayland (GNOME) ohne gebündeltes GTK.
+- [ ] `just package` erzeugt `dist/humanitl_<ver>_amd64.deb` und `dist/Humanitl-<ver>-x86_64.AppImage`. Offen: Das Ziel heißt `make package` (kein `just` im Repository, `backlog/CONVENTIONS.md` 4.34) und lief nicht in einem Stück, weil auf diesem Rechner `patchelf` fehlt. Gemessen am 2026-09-19 sind seine Schritte einzeln: `build-binaries.sh` nach `app/linux/bundle-extra/`, `flutter build linux --release` (das Bundle hat danach `bin/humanitld`, `bin/humanitl`, `bin/humanitl-shim`, gelegt von `CMakeLists.txt`), dann `build-deb.sh` und `build-appimage.sh` in einem Ubuntu-24.04-Container; heraus kamen `dist/humanitl_0.0.0_amd64.deb` und `dist/Humanitl-0.0.0-x86_64.AppImage`, und `check-appimage.sh` bestand.
+- [ ] Frische Debian-13-VM: `sudo dpkg -i …deb && humanitl daemon install && humanitl daemon status` ⇒ Exit 0; Setup-Screen zeigt Daemon grün. Offen: braucht eine VM mit systemd-Sitzung und Bildschirm (Test-Matrix in `docs/INSTALL.md`). Gemessen sind die Teile: `check-install.sh` im Container (Paket installiert, `daemon install --print` plant `enable --now humanitld.socket humanitld.service` und schreibt nichts, Purge sauber) und derselbe Daemon unter echtem systemd per Socket-Aktivierung mit `humanitl daemon status` Exit 0 (siehe nächste Zeile).
+- [x] Unter der Unit läuft eine Session mit `rw`-Projekt unter `$HOME` und Escape-Tests 1–3 sind grün (Härtung bricht bwrap nicht). Gemessen am 2026-09-18: `tests/escape/run.sh` unter `systemd-run --user` mit genau den `[Service]`-Zeilen von `packaging/systemd/humanitld.service`: 124 von 124 Fällen grün (ohne Unit ebenfalls 124). Der Daemon als socket-aktivierter Transient-Dienst mit denselben Zeilen und `Type=notify`: `systemctl --user` zeigt `active (running)`, das Protokoll `socket passed by systemd`, `humanitl daemon status` endet mit 0, und `humanitl sandbox run --work <Projekt unter $HOME> -- touch /work/x` legt die Datei an. Auf dem Weg dahin fielen drei Zeilen, die jede für sich die Sandbox stilllegten: `SystemCallArchitectures=native`, `PrivateDevices`, und `sethostname` fehlte im Filter.
+- [x] `systemd-analyze security` Wert dokumentiert, `RestrictNamespaces` nicht gesetzt. Gemessen am 2026-09-18: `systemd-analyze --user security --offline=true` nennt 3.7 (Grenze 4.0), festgehalten in `docs/INSTALL.md#hardening`; `the_exposure_stays_at_or_below_the_documented_value` misst nach (Mutant ohne `CapabilityBoundingSet`: 4.8, rot). `the_hardening_lets_bubblewrap_work` verbietet `RestrictNamespaces` und die übrigen gemessen schädlichen Zeilen.
+- [x] `lintian` ohne Errors. Gemessen am 2026-09-19: `packaging/deb/lintian.sh` (lintian 2.117.0ubuntu1.5 im Ubuntu-24.04-Container) auf `humanitl_0.0.0_amd64.deb`: keine Fehler, keine Warnungen; nur Hinweise (`I:`) und die begründeten Ausnahmen aus `lintian-overrides`.
+- [ ] AppImage startet auf Wayland (GNOME) ohne gebündeltes GTK. Offen: braucht eine Wayland-Sitzung (Test-Matrix in `docs/INSTALL.md`). Gemessen am 2026-09-19 nur ohne Bildschirm: `check-appimage.sh` findet im Bild keine `libgtk*`, `libglib*`, `libwayland*`, `libEGL*`, `AppRun` setzt kein `LD_LIBRARY_PATH`, `--cli --version` erreicht die Kommandozeile.
 
 ### Fallstricke
 - `ProtectHome=read-only` klingt richtig, bricht aber jeden `rw`-Mount eines Projekts unter `$HOME` in bwrap (Bind-Mounts erben die Read-only-Eigenschaft des Daemon-Mount-Namespaces). Deshalb `no` plus `ProtectSystem=strict`. Das ist eine bewusste Abwägung und steht so in der Doku.
@@ -1843,6 +1848,8 @@ Begründungen (in `docs/INSTALL.md#hardening`): `ProtectHome=no` statt `read-onl
 - AppImage-Portabilität: https://www.industrialflutter.com/blogs/portability-a-case-study-in-flutter-appimage-distribution/
 
 > **Vorgriff 2026-09-18 (Vorabversionen 0.0.x):** `.github/workflows/release.yml` baut mit `packaging/deb/build-deb.sh` schon ein `.deb` nach den Pfaden dieses Issues (ohne fastforge, ohne Maintainer-Skripte, lintian ohne Fehler und Warnungen, Installation und Purge im Container geprüft). Offen bleibt hier: `humanitld.socket` und `LISTEN_FDS`/`sd_notify`, die Härtung der Unit (die ausgelieferte Unit ist die ungehärtete Vorlage aus HUM-044), `daemon install` für System-Units, PNG-Symbole, `CMakeLists.txt`-Install, Setup-Schritt „Dienst aktivieren", `docs/INSTALL.md`, AppImage und die manuelle Test-Matrix.
+
+> **Stand 2026-09-19 (HUM-053):** Gebaut sind `humanitld.socket` im Paket, `LISTEN_FDS` und `READY=1`/`STOPPING=1` im Daemon (`daemon/bin/humanitld/src/systemd.rs`, `DAEMON_013`), die gehärtete Unit (Exposure 3.7, Escape-Tests unter ihr 124/124), `daemon install` für die Units des Pakets (schreibt nichts, `enable --now humanitld.socket humanitld.service`), PNG-Symbole, der `CMakeLists.txt`-Install nach `bin/`, `make package`, das AppImage mit `AppRun --cli` und `check-appimage.sh`, `docs/INSTALL.md` mit Härtung und Test-Matrix. Der Setup-Schritt blieb der Knopf aus HUM-044: Er ruft `humanitl daemon install`, und das erkennt die Units des Pakets selbst. Abweichungen mit Grund in `backlog/CONVENTIONS.md` 4.34, Folgearbeit in HUM-164 bis HUM-168. Das AppImage ist nicht Teil von `release.yml`; das gehört HUM-060.
 
 ---
 
@@ -3585,3 +3592,106 @@ Die Pause bekommt die offenen Funde des Entwurfs; „Pseudonymisieren" heißt do
 
 ### Referenzen
 HUM-047, HUM-049.
+
+## HUM-164 · Ein Client weckt den Daemon über den Socket nicht
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-053 · Blockiert: keine
+
+### Kontext
+Seit HUM-053 hält `humanitld.socket` den gRPC-Socket, und der Daemon übernimmt ihn (`LISTEN_FDS`). Der eigentliche Nutzen der Socket-Aktivierung, ein Dienst, der erst beim ersten Client startet, greift trotzdem nicht: `humanitl_ipc::client::connect` liest zuerst das Token aus `$XDG_RUNTIME_DIR/humanitl/token` und öffnet den Socket erst danach, und das Token schreibt der laufende Daemon. Ohne laufenden Daemon gibt es kein Token, ohne Token keine Verbindung, ohne Verbindung keinen Start. `humanitl daemon install` aktiviert deshalb Socket **und** Dienst, und der Dienst startet mit jeder Sitzung. Die Oberfläche liest das Token ebenso vorab (`app/lib/core/ipc/`).
+
+### Ziel
+Ein Client, der kein Token findet, öffnet den Socket trotzdem einmal, wartet kurz auf das Token und versucht es dann erneut. Danach genügt `enable --now humanitld.socket`, und der Dienst startet beim ersten Client.
+
+### Nicht-Ziel
+Ein Token über den Socket auszuliefern; das Token bleibt eine Datei mit `0600`.
+
+### Betroffene Pfade
+- `daemon/crates/ipc/src/client.rs`
+- `app/lib/core/ipc/` (Verbindungsaufbau)
+- `daemon/bin/humanitl/src/cmd/unit.rs` (`SystemUnits::names`), `docs/INSTALL.md`
+
+### Akzeptanzkriterien
+- [ ] Unter `systemd-socket-activate` ohne laufenden Daemon endet `humanitl daemon status` mit Exit 0.
+- [ ] `daemon install` aktiviert beim Paket nur noch den Socket; `docs/INSTALL.md` sagt es.
+- [ ] `make check` grün.
+
+### Fallstricke
+- Ein Client, der auf das Token wartet, braucht eine Frist; sonst hängt `daemon status` an einem Socket, hinter dem kein Dienst mehr startet.
+
+---
+
+## HUM-165 · Der Daemon aus dem AppImage findet Katalog und Sandbox-Profil nicht
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-053, HUM-070 · Blockiert: keine
+
+### Kontext
+`humanitl daemon install` aus einem AppImage kopiert nur `humanitld` und `humanitl-shim` nach `~/.local/lib/humanitl/<version>.<stempel>/` (HUM-070). Der Daemon sucht den Domain-Katalog aber relativ zu seinem eigenen Pfad (`catalog_dir` in `daemon/bin/humanitld/src/main.rs`: `<exe>/../../share/humanitl/catalog`) und das Profil `default` ebenso (`tree_dirs` in `daemon/crates/ipc/src/sandbox.rs`: `<vorfahre>/profiles/sandbox`). Im Bild liegen beide unter `usr/lib/humanitl/` (HUM-053, `packaging/appimage/build-appimage.sh`), in der Kopie fehlen sie. Der kopierte Daemon läuft dann mit leerem Katalog und ohne Sandbox-Profil. Aufgefallen beim Bau des AppImage in HUM-053, nicht gemessen.
+
+### Ziel
+Die Kopie ist vollständig: `share/humanitl/catalog/` und `profiles/sandbox/default.toml` liegen neben `bin/`, im selben Aufbau wie im Archiv, und der kopierte Daemon findet beide.
+
+### Betroffene Pfade
+- `daemon/bin/humanitl/src/cmd/daemon.rs` (`stage`, `STAGED_BINARIES`)
+- `daemon/bin/humanitl/tests/cli.rs` (`daemon_install_appimage_copies_binaries`)
+
+### Akzeptanzkriterien
+- [ ] Nach `--cli daemon install` aus dem AppImage meldet der Daemon beim Start einen Katalog mit Einträgen und startet eine Sandbox mit dem Profil `default`.
+- [ ] `make check` grün.
+
+---
+
+## HUM-166 · `humanitl_ipc::serve` und `systemd::serve` sind zwei Fassungen desselben Dienstes
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-053, HUM-156 · Blockiert: keine
+
+### Kontext
+HUM-053 brauchte einen gRPC-Dienst auf einem übergebenen Socket, der die Datei am Ende liegen lässt und nach dem Binden `READY=1` meldet. `humanitl_ipc::serve` bindet selbst und hat dafür keine Naht, und `daemon/crates/ipc/src/server.rs` war zur selben Zeit Arbeitsgebiet von HUM-156. `daemon/bin/humanitld/src/systemd.rs` enthält deshalb eine zweite Fassung von Token, Interceptor, Signal und Frist (`drain`). Zwei Fassungen laufen auseinander.
+
+### Ziel
+`humanitl_ipc` bekommt `serve_on(listener, owns_socket, on_ready)`, `serve` ruft es nach dem Binden auf, und `systemd::serve` schrumpft auf die Wahl des Listeners und die Meldung an systemd.
+
+### Betroffene Pfade
+- `daemon/crates/ipc/src/server.rs`, `daemon/crates/ipc/src/lib.rs`
+- `daemon/bin/humanitld/src/systemd.rs`
+
+### Akzeptanzkriterien
+- [ ] Token schreiben, Interceptor, Frist und Aufräumen stehen an genau einer Stelle.
+- [ ] Die Tests aus `daemon/bin/humanitld/tests/socket_activation.rs` bleiben grün.
+- [ ] `make check` grün.
+
+---
+
+## HUM-167 · Eine alte Nutzer-Unit verdeckt die Units des Pakets
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-053 · Blockiert: keine
+
+### Kontext
+Wer Humanitl erst aus dem Archiv oder dem AppImage installiert hat, hat `~/.config/systemd/user/humanitld.service` mit der Marke von `daemon install`. Installiert er danach das Paket, verdeckt diese Datei die Unit unter `/usr/lib/systemd/user/` (`systemd.unit(5)`). `daemon install` erkennt seit HUM-053 die Units des Pakets und aktiviert sie, sieht aber nicht nach, ob eine eigene ältere Kopie darüber liegt; gestartet wird dann der alte Daemon mit der ungehärteten Unit. Dazu kommt: Die Tests von `daemon install` in `daemon/bin/humanitl/tests/cli.rs` nehmen an, dass `/usr/lib/systemd/user/humanitld.service` fehlt; auf einem Rechner mit installiertem Paket liefen sie den Weg des Pakets.
+
+### Ziel
+Im Weg des Pakets meldet `daemon install` eine eigene Kopie (erste Zeile ist die Marke) unter `~/.config/systemd/user/`, kündigt an, sie beiseitezulegen, und tut das mit derselben Rücknahme wie beim Schreiben. Eine fremde Kopie ohne Marke bleibt liegen und ergibt einen Befund mit `CopyCommand`. Das Verzeichnis der Paket-Units lässt sich für Tests setzen, ohne den Befehl für Menschen zu ändern.
+
+### Betroffene Pfade
+- `daemon/bin/humanitl/src/cmd/daemon.rs` (`install_packaged`), `daemon/bin/humanitl/src/cmd/unit.rs`
+- `daemon/bin/humanitl/tests/cli.rs`
+
+### Akzeptanzkriterien
+- [ ] Mit Paket und eigener alter Kopie startet nach `daemon install` die Unit des Pakets.
+- [ ] Eine fremde Kopie wird nie angefasst.
+- [ ] `make check` grün.
+
+---
+
+## HUM-168 · Ein Rückfall für Impeller fehlt im Release-Bau
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-053 · Blockiert: keine
+
+### Kontext
+HUM-053 verlangt, den Rückfall `--no-enable-impeller` zu dokumentieren. Der Linux-Runner (`app/linux/runner/my_application.cc`) reicht seine Argumente als Dart-Einstiegsargumente weiter, nicht an die Engine, und die Umgebungsvariablen der Engine (`FLUTTER_ENGINE_SWITCHES`) gelten nach ihrem Quelltext nur außerhalb von Release-Bauten. `docs/INSTALL.md` sagt deshalb, dass es heute keinen Rückfall gibt, statt einen Schalter zu nennen, der nichts tut. `DOCTOR_010` erkennt den bekannten schwarzen Bildschirm (NVIDIA unter Wayland) und verweist auf eine Dokumentation, die diesen Weg noch nicht hat. Nicht gemessen in HUM-053.
+
+### Ziel
+Gemessen, ob der Release-Bau Impeller abschalten kann, und wenn ja wie; der Weg steht in `docs/INSTALL.md` und im Fix von `DOCTOR_010`. Wenn nein, reicht der Runner einen eigenen Schalter an die Engine weiter (`FlDartProject` bzw. die Engine-Argumente).
+
+### Betroffene Pfade
+- `app/linux/runner/`
+- `docs/INSTALL.md`, `daemon/crates/sandbox/src/doctor/` (Fix von `DOCTOR_010`)
+
+### Akzeptanzkriterien
+- [ ] Unter Xvfb meldet der Release-Bau mit dem dokumentierten Weg ein anderes Rendering-Backend als „Impeller" (dieselbe Zeile, die `packaging/deb/check-install.sh` liest).
+- [ ] `make check` grün.

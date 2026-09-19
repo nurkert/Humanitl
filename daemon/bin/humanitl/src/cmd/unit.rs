@@ -7,14 +7,14 @@
 //! Modul hält die vier Zusagen, die daran hängen, und hält sie an einer
 //! Stelle, damit sie prüfbar sind, ohne dass ein Test systemd braucht:
 //!
-//! 1. **Genau eine Datei, an einem genannten Ort.**
+//! 1. **Höchstens eine Datei, an einem genannten Ort.**
 //!    `$XDG_CONFIG_HOME/systemd/user/humanitld.service`, sonst
 //!    `~/.config/systemd/user/humanitld.service`. Keine System-Unit, kein
-//!    `sudo`, keine zweite Datei, kein Socket. `packaging/systemd/humanitld.socket`
-//!    liegt zwar im Repository und geht mit dem Paket mit (HUM-053), aber
-//!    dieser Befehl schreibt sie nicht und aktiviert sie nicht: Der Daemon
-//!    liest `LISTEN_FDS` noch nicht, bindet den Socket selbst und hielte einen
-//!    von systemd gehaltenen für eine zweite Instanz (`DAEMON_003`).
+//!    `sudo`, keine zweite Datei, kein Socket. Hat das Paket die Units schon
+//!    unter [`SYSTEM_UNIT_DIR`] abgelegt, schreibt der Befehl **gar nichts**
+//!    und aktiviert nur, was dort liegt ([`SystemUnits`], HUM-053): Eine
+//!    Kopie unter `~/.config` verdeckte die Fassung des Pakets, und jedes
+//!    Update des Pakets liefe an ihr vorbei.
 //! 2. **Sichtbar, bevor es geschieht.** Der Inhalt entsteht hier und wird vom
 //!    Aufrufer angezeigt, bevor irgendetwas geschrieben wird.
 //! 3. **Wiederholbar.** Ein zweiter Aufruf mit demselben Ergebnis schreibt
@@ -50,6 +50,17 @@ pub const MARKER: &str = "# humanitl daemon install: written by Humanitl";
 
 /// Der Name der Unit.
 pub const UNIT_NAME: &str = "humanitld.service";
+
+/// Der Name der Socket-Unit, die das Paket neben die Dienst-Unit legt.
+pub const SOCKET_NAME: &str = "humanitld.socket";
+
+/// Wo das Paket die Units ablegt (HUM-053, `packaging/deb/build-deb.sh`).
+///
+/// Das ist der Ort, den systemd für Nutzer-Units aus Paketen vorsieht
+/// (`systemd.unit(5)`, „User Unit Search Path"). `/etc/systemd/user` gehört
+/// dem Verwalter des Rechners und `/usr/local` keinem Paket; beide sind kein
+/// Hinweis auf eine Installation durch das Paket.
+pub const SYSTEM_UNIT_DIR: &str = "/usr/lib/systemd/user";
 
 /// Der Name des Daemons, wie er neben der Kommandozeile liegt.
 pub const DAEMON_NAME: &str = "humanitld";
@@ -362,28 +373,33 @@ const ENABLEMENT_DIR_SUFFIXES: [&str; 2] = [".wants", ".requires"];
 /// die Rücknahme auch dann, wenn `systemctl` selbst gerade der Grund des
 /// Fehlschlags ist.
 ///
-/// [`Enablement::read`] nimmt den Zustand **vor** dem ersten `systemctl`-Aufruf
+/// [`Enablement::read_for`] nimmt den Zustand **vor** dem ersten `systemctl`-Aufruf
 /// auf, [`Enablement::rollback`] entfernt danach genau das, was seither
 /// dazugekommen ist. Was schon vorher dalag, bleibt liegen: `daemon install`
 /// nimmt nur zurück, was dieser Lauf angerichtet hat.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Enablement {
+    /// Die Namen der Units, deren Verweise zählen.
+    names: Vec<String>,
     /// Die `*.wants`- und `*.requires`-Verzeichnisse, die es schon gab.
     dirs: BTreeSet<PathBuf>,
-    /// Die Verweise auf [`UNIT_NAME`] darin, die es schon gab.
+    /// Die Verweise auf eine der Units darin, die es schon gab.
     links: BTreeSet<PathBuf>,
 }
 
 impl Enablement {
-    /// Liest den Zustand der Aktivierung unter `dir`.
+    /// Liest den Zustand der Aktivierung der genannten Units unter `dir`.
     ///
     /// Ein Verzeichnis, das sich nicht lesen lässt, ergibt einen leeren
     /// Zustand: Es gibt dann nichts, was dieser Lauf später als „schon vorher
     /// da" verschonen müsste, und die Rücknahme entfernt lieber einen Verweis
     /// zu viel als einen zu wenig.
     #[must_use]
-    pub fn read(dir: &Path) -> Self {
-        let mut state = Self::default();
+    pub fn read_for(dir: &Path, names: &[&str]) -> Self {
+        let mut state = Self {
+            names: names.iter().map(|name| (*name).to_owned()).collect(),
+            ..Self::default()
+        };
         let Ok(entries) = std::fs::read_dir(dir) else {
             return state;
         };
@@ -402,9 +418,11 @@ impl Enablement {
             if !path.is_dir() {
                 continue;
             }
-            let link = path.join(UNIT_NAME);
-            if link.symlink_metadata().is_ok() {
-                state.links.insert(link);
+            for unit in &state.names {
+                let link = path.join(unit);
+                if link.symlink_metadata().is_ok() {
+                    state.links.insert(link);
+                }
             }
             state.dirs.insert(path);
         }
@@ -424,7 +442,8 @@ impl Enablement {
     /// nennt alle, die stehen blieben; ein halb zurückgenommener Zustand wird
     /// gemeldet und nicht verschwiegen.
     pub fn rollback(&self, dir: &Path) -> Result<(), Diagnostic> {
-        let now = Self::read(dir);
+        let names: Vec<&str> = self.names.iter().map(String::as_str).collect();
+        let now = Self::read_for(dir, &names);
         let mut left: Vec<String> = Vec::new();
         for link in now.links.difference(&self.links) {
             match std::fs::remove_file(link) {
@@ -448,6 +467,70 @@ impl Enablement {
                 left.join(", ")
             ),
         ))
+    }
+}
+
+/// Die Units, die das Paket unter [`SYSTEM_UNIT_DIR`] abgelegt hat.
+///
+/// Liegen sie da, gibt es für `daemon install` nichts zu schreiben: Die
+/// Dienst-Unit trägt den Pfad des Pakets, und eine Kopie unter `~/.config`
+/// verdeckte sie (`systemd.unit(5)`: eine Nutzer-Unit gleichen Namens gewinnt).
+/// Übrig bleibt das Aktivieren, und das tut jeder Mensch für sich selbst: Das
+/// Paket läuft als root und kann `systemctl --user` nicht rufen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SystemUnits {
+    /// Die Dienst-Unit des Pakets.
+    pub service: PathBuf,
+    /// Die Socket-Unit daneben, wenn es sie gibt. Pakete vor HUM-053 brachten
+    /// keine mit.
+    pub socket: Option<PathBuf>,
+    /// Der Text der Dienst-Unit, für die Ankündigung.
+    pub text: String,
+}
+
+impl SystemUnits {
+    /// Die Units, die das Paket unter `dir` abgelegt hat; `None`, wenn dort
+    /// keine lesbare `humanitld.service` liegt.
+    #[must_use]
+    pub fn find(dir: &Path) -> Option<Self> {
+        let service = dir.join(UNIT_NAME);
+        let text = std::fs::read_to_string(&service).ok()?;
+        let socket = dir.join(SOCKET_NAME);
+        Some(Self {
+            service,
+            socket: socket.is_file().then_some(socket),
+            text,
+        })
+    }
+
+    /// Die Namen, die `systemctl --user enable --now` bekommt: erst der
+    /// Socket, dann der Dienst.
+    ///
+    /// **Beide, nicht nur der Socket.** Ein Client liest das Token, bevor er
+    /// den Socket öffnet (`humanitl_ipc::client::connect`), und das Token
+    /// schreibt erst der laufende Daemon. Ein Socket, an den sich niemand
+    /// wendet, weckt den Dienst nie; er muss deshalb mit der Sitzung starten.
+    /// Der Socket hält den Pfad trotzdem über jeden Neustart des Dienstes
+    /// hinweg, und wer in dieser Zeit verbindet, wartet, statt abzuprallen.
+    #[must_use]
+    pub fn names(&self) -> Vec<&'static str> {
+        let mut names = Vec::with_capacity(2);
+        if self.socket.is_some() {
+            names.push(SOCKET_NAME);
+        }
+        names.push(UNIT_NAME);
+        names
+    }
+
+    /// Das Programm, das die Dienst-Unit startet, wie es in `ExecStart` steht.
+    #[must_use]
+    pub fn exec_start(&self) -> PathBuf {
+        self.text
+            .lines()
+            .map(str::trim)
+            .find_map(|line| line.strip_prefix("ExecStart="))
+            .and_then(|value| value.split_whitespace().next())
+            .map_or_else(|| self.service.clone(), PathBuf::from)
     }
 }
 
@@ -514,8 +597,9 @@ mod tests {
     use humanitl_config::{Env, Paths};
 
     use super::{
-        DAEMON_NAME, Enablement, MARKER, PLACEHOLDER, TEMPLATE, UNIT_NAME, Written, carries_marker,
-        daemon_binary, exec_start_word, prepare, render, rollback, unit_dir, write,
+        DAEMON_NAME, Enablement, MARKER, PLACEHOLDER, SOCKET_NAME, SystemUnits, TEMPLATE,
+        UNIT_NAME, Written, carries_marker, daemon_binary, exec_start_word, prepare, render,
+        rollback, unit_dir, write,
     };
 
     /// Die Zeilen der Vorlage ohne Kommentare und Leerzeilen.
@@ -571,6 +655,57 @@ mod tests {
         assert!(
             TEMPLATE.contains("RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK"),
             "bwrap needs AF_NETLINK for the loopback interface"
+        );
+        // Jede dieser Zeilen legt, gemessen am 2026-09-18 mit `systemd-run
+        // --user`, das Sandbox-Backend oder den Agenten still
+        // (`docs/INSTALL.md#hardening`). Geprüft werden nur Anweisungen; in
+        // den Kommentaren stehen die Namen mit Absicht, samt Grund.
+        for (refused, why) in [
+            (
+                "RestrictNamespaces",
+                "the sandbox needs user, mnt, pid, net, ipc and uts namespaces",
+            ),
+            (
+                "ProtectKernelTunables",
+                "a masked /proc/sys stops the sandbox from mounting its own /proc",
+            ),
+            (
+                "ProtectKernelLogs",
+                "a masked /proc/kmsg stops the sandbox from mounting its own /proc",
+            ),
+            (
+                "ProtectHostname",
+                "together with the rest it stops the sandbox from mounting its own /proc",
+            ),
+            (
+                "RestrictSUIDSGID",
+                "the sandbox fails with \"Can't open source /usr\"",
+            ),
+            (
+                "MemoryDenyWriteExecute",
+                "the filter is inherited, and node dies in the sandbox",
+            ),
+            (
+                "UMask",
+                "inherited: every file the agent writes would change its mode",
+            ),
+            (
+                "SystemCallArchitectures",
+                "the shim probes its filter with an x32 call and dies of SIGSYS",
+            ),
+            (
+                "PrivateDevices",
+                "without /dev/ptmx the daemon opens no terminal for the agent (TERM_002)",
+            ),
+        ] {
+            assert!(
+                !directives(TEMPLATE).any(|line| line.starts_with(refused)),
+                "{refused} is set, but {why}"
+            );
+        }
+        assert!(
+            !directives(TEMPLATE).any(|line| line == "CapabilityBoundingSet="),
+            "an empty bounding set stops the sandbox from starting"
         );
         for path in [
             "-%h/.local/share/humanitl",
@@ -693,6 +828,134 @@ mod tests {
             "SystemCallFilter={} does not reach pivot_root, and bubblewrap needs it",
             words.join(" ")
         );
+        // Gemessen am 2026-09-18 mit den Escape-Tests unter der Unit (HUM-053):
+        // bubblewrap benennt den UTS-Namensraum der Sandbox und scheitert ohne
+        // `sethostname` mit „Can't set hostname to sandbox".
+        assert!(
+            allowed.contains("sethostname"),
+            "SystemCallFilter={} does not reach sethostname, and bubblewrap names the sandbox",
+            words.join(" ")
+        );
+    }
+
+    /// `Type=notify` und der Daemon, der `READY=1` schickt, gehören zusammen:
+    /// Ohne die Zeile wartet systemd nicht auf die Meldung, und eine Unit, die
+    /// nach dem Dienst startet, fände ihn womöglich ohne Socket.
+    #[test]
+    fn the_unit_waits_for_the_ready_notification() {
+        let types: Vec<&str> = directives(TEMPLATE)
+            .filter_map(|line| line.strip_prefix("Type="))
+            .collect();
+        assert_eq!(types, ["notify"], "one Type=, and it is notify");
+    }
+
+    /// Die Zahl, die `systemd-analyze security` für die gerenderte Unit nennt.
+    ///
+    /// `None`, wenn es `systemd-analyze` hier nicht gibt oder es seine
+    /// Suchpfade nicht anlegen kann (etwa in einer Umgebung mit
+    /// schreibgeschütztem Dateisystem); dann ist nichts gemessen.
+    fn exposure(unit: &str) -> Option<f64> {
+        let dir = tempfile::tempdir().ok()?;
+        let path = dir.path().join(UNIT_NAME);
+        std::fs::write(&path, unit).ok()?;
+        let output = std::process::Command::new("systemd-analyze")
+            .args(["--user", "security", "--offline=true"])
+            .arg(&path)
+            .env("XDG_RUNTIME_DIR", dir.path())
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        let line = text
+            .lines()
+            .find(|line| line.contains("Overall exposure level"))?;
+        let value = line.rsplit(':').next()?.split_whitespace().next()?;
+        value.parse().ok()
+    }
+
+    /// Der Wert aus `systemd-analyze security` bleibt bei 4.0 oder darunter
+    /// (HUM-053, Test „Exposure ≤ 4.0"), und `docs/INSTALL.md` nennt einen
+    /// Wert, der das auch tut.
+    ///
+    /// Gemessen und nicht behauptet: Eine Zeile weniger in der Härtung hebt
+    /// die Zahl, und der Test wird rot. Die Messung braucht `systemd-analyze`
+    /// mit `--offline`; wo es fehlt, sagt der Test das und prüft nur die
+    /// Dokumentation.
+    #[test]
+    fn the_exposure_stays_at_or_below_the_documented_value() {
+        let docs = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../docs/INSTALL.md"),
+        )
+        .expect("docs/INSTALL.md is in the repository");
+        let documented: f64 = docs
+            .lines()
+            .find_map(|line| line.strip_prefix("Overall exposure level: "))
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|value| value.parse().ok())
+            .expect("docs/INSTALL.md names the exposure as 'Overall exposure level: N.N'");
+        assert!(
+            documented <= 4.0,
+            "docs/INSTALL.md documents {documented}, above the 4.0 of HUM-053"
+        );
+
+        let unit = render(Path::new("/usr/lib/humanitl/bin/humanitld")).expect("a unit");
+        let Some(measured) = exposure(&unit) else {
+            eprintln!(
+                "SKIP the_exposure_stays_at_or_below_the_documented_value: no usable \
+                 systemd-analyze security --offline here, so the exposure was not measured"
+            );
+            return;
+        };
+        assert!(
+            measured <= 4.0,
+            "systemd-analyze security rates the unit {measured}, above the 4.0 of HUM-053"
+        );
+    }
+
+    /// Das Paket legt die Units ab; `daemon install` findet beide und nennt
+    /// erst den Socket, dann den Dienst.
+    #[test]
+    fn packaged_units_are_found_and_enabled_socket_first() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        assert_eq!(SystemUnits::find(dir.path()), None, "nothing installed");
+
+        let unit = render(Path::new("/usr/lib/humanitl/bin/humanitld")).expect("a unit");
+        std::fs::write(dir.path().join(UNIT_NAME), &unit).expect("the service");
+        let only_service = SystemUnits::find(dir.path()).expect("the service alone counts");
+        assert_eq!(
+            only_service.names(),
+            [UNIT_NAME],
+            "a package before HUM-053"
+        );
+
+        std::fs::write(dir.path().join(SOCKET_NAME), "[Socket]\n").expect("the socket");
+        let both = SystemUnits::find(dir.path()).expect("both units");
+        assert_eq!(both.names(), [SOCKET_NAME, UNIT_NAME]);
+        assert_eq!(
+            both.exec_start(),
+            PathBuf::from("/usr/lib/humanitl/bin/humanitld")
+        );
+    }
+
+    /// Die Rücknahme kennt jede genannte Unit, nicht nur den Dienst: Ein
+    /// gescheitertes `enable --now humanitld.socket humanitld.service` darf
+    /// keinen Verweis auf den Socket zurücklassen.
+    #[test]
+    fn the_rollback_takes_back_the_socket_link_as_well() {
+        let home = tempfile::tempdir().expect("a temporary directory");
+        let dir = home.path().join("systemd").join("user");
+        std::fs::create_dir_all(&dir).expect("the unit directory");
+        let before = Enablement::read_for(&dir, &[SOCKET_NAME, UNIT_NAME]);
+
+        let sockets = dir.join("sockets.target.wants");
+        std::fs::create_dir_all(&sockets).expect("the sockets directory");
+        std::fs::write(sockets.join(SOCKET_NAME), "link").expect("the socket link");
+        let default = dir.join("default.target.wants");
+        std::fs::create_dir_all(&default).expect("the default directory");
+        std::fs::write(default.join(UNIT_NAME), "link").expect("the service link");
+
+        before.rollback(&dir).expect("the rollback");
+        assert!(!sockets.exists(), "the socket link and its directory go");
+        assert!(!default.exists(), "the service link and its directory go");
     }
 
     #[test]
@@ -801,7 +1064,7 @@ mod tests {
         let kept = older.join(UNIT_NAME);
         std::fs::write(&kept, "an enablement from before").expect("the older link");
 
-        let before = Enablement::read(&dir);
+        let before = Enablement::read_for(&dir, &[UNIT_NAME]);
 
         // Was ein `enable --now` anlegt, das danach am Start scheitert.
         let fresh = dir.join("default.target.wants");
