@@ -60,6 +60,8 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-166 | `humanitl_ipc::serve` und `systemd::serve` sind zwei Fassungen desselben Dienstes | S | HUM-053, HUM-156 |
 | HUM-167 | Eine alte Nutzer-Unit verdeckt die Units des Pakets | S | HUM-053 |
 | HUM-168 | Ein Rückfall für Impeller fehlt im Release-Bau | S | HUM-053 |
+| HUM-171 | Tests lassen ihre Verzeichnisse in `/tmp` liegen | S | — |
+| HUM-185 | Der Bildschirm-Test gegen den echten Daemon fällt in CI zufällig aus | S | HUM-144 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -3695,3 +3697,66 @@ Gemessen, ob der Release-Bau Impeller abschalten kann, und wenn ja wie; der Weg 
 ### Akzeptanzkriterien
 - [ ] Unter Xvfb meldet der Release-Bau mit dem dokumentierten Weg ein anderes Rendering-Backend als „Impeller" (dieselbe Zeile, die `packaging/deb/check-install.sh` liest).
 - [ ] `make check` grün.
+
+---
+
+## HUM-171 · Tests lassen ihre Verzeichnisse in `/tmp` liegen
+Sprint: 4 · Größe: S · Abhängigkeiten: — · Blockiert: —
+
+### Kontext
+Am 2026-09-19 wurde `tools/verify-commit.sh` über den Merge von HUM-053 rot,
+obwohl der Diff nichts damit zu tun hatte: `report::tests::the_socket_walk_finds_a_socket_within_its_bounds`
+im Shim legt einen Socket direkt unter `/tmp` an und erwartet, dass der
+Suchlauf ihn findet. Der Suchlauf bricht nach `SOCKET_WALK_MAX_ENTRIES` (2000)
+Einträgen ab, und in `/tmp` lagen über 4300. Gut 1700 davon waren
+`humanitl-ui-state*` aus `app/test/harness/ui_state.dart`
+(`Directory.systemTemp.createTempSync`, nie gelöscht) und gut 500
+`coupling-*` aus `tools/tests/check_coupling_test.py` (`tempfile.mkdtemp`,
+nie gelöscht). Jeder Lauf der Suite lässt also Verzeichnisse zurück, und ab
+einer gewissen Menge wird ein Test rot, der mit ihnen nichts zu tun hat.
+
+### Ziel
+Die beiden Helfer räumen ihre Verzeichnisse selbst weg, und der Test des
+Suchlaufs hängt nicht mehr davon ab, wie voll `/tmp` gerade ist.
+
+### Akzeptanzkriterien
+- [ ] Nach `flutter test` und `python3 tools/tests/check_coupling_test.py` liegt in `/tmp` kein neues `humanitl-ui-state*` und kein neues `coupling-*`.
+- [ ] Der Test des Socket-Suchlaufs ist grün, auch wenn `/tmp` mehr als 2000 Einträge hat (gemessen mit einem Baum aus 2500 leeren Verzeichnissen, zum Beispiel unter `bwrap --tmpfs /tmp`).
+- [ ] Mutationsprobe: ohne das Aufräumen bleibt ein Verzeichnis liegen, und ein Test sagt es.
+- [ ] `make check` grün.
+
+### Fallstricke
+- Der Suchlauf selbst soll seine Grenze behalten; sie schützt die Sandbox vor einem riesigen Baum. Zu ändern ist der Test, nicht die Grenze.
+
+### Referenzen
+HUM-053 (der Lauf, an dem es auffiel); `daemon/bin/humanitl-shim/src/report.rs`, `app/test/harness/ui_state.dart`, `tools/tests/check_coupling_test.py`.
+
+---
+
+## HUM-185 · Der Bildschirm-Test gegen den echten Daemon fällt in CI zufällig aus
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-144 · Blockiert: —
+
+### Kontext
+Der CI-Schritt „The app on a screen against a real daemon (HUM-144)" im Job
+`e2e-xvfb` (`make flutter-test-integration` unter Xvfb) war zweimal rot, ohne
+dass der Commit etwas daran geändert hätte: am 2026-09-18 über `a27962e`
+(HUM-047, Lauf 35383298554) und am 2026-09-19 über `f9dff18` (HUM-053, Lauf
+35412854835). Beide Male liefen dieselben Tests lokal unter Xvfb grün
+(`queue_freeze` und `shell_test`), und die Läufe danach waren in CI wieder
+grün. Das Log des Jobs ist ohne Admin-Rechte nicht lesbar; welcher der beiden
+Tests fiel und woran, ist deshalb nicht bekannt. Der Kandidat ist
+`queue_freeze` (`no_row_moves_under_the_pointer_while_fifteen_flows_arrive`),
+weil er gegen die Zeit misst.
+
+### Ziel
+Der Schritt ist in CI stabil, oder er sagt bei einem Ausfall genug, dass man
+die Ursache aus dem Artefakt lesen kann.
+
+### Akzeptanzkriterien
+- [ ] Das Artefakt des Jobs enthält bei einem Ausfall die Ausgabe des Tests und das Log des Daemons.
+- [ ] Die Ursache ist benannt und behoben, oder der Test wartet auf Zustände statt auf Zeit.
+- [ ] Zwanzig Läufe des Schritts hintereinander lokal unter Last (`stress -c 6` oder ein paralleler Bau) sind grün.
+- [ ] `make check` grün.
+
+### Referenzen
+HUM-144; `app/integration_test/`, `.github/workflows/ci.yml` (Job `e2e-xvfb`).
