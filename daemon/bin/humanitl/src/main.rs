@@ -18,6 +18,10 @@
 mod ask_terminal;
 mod cli;
 mod cmd;
+// Nur die Tabelle für `cargo xtask docs` und ihre Prüfung gegen `clap`
+// (HUM-078); im Binary hat sie keine Aufgabe.
+#[cfg(test)]
+mod parity;
 mod render;
 mod tty;
 

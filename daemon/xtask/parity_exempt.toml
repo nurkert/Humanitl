@@ -1,0 +1,21 @@
+# RPCs, die kein Unterkommando der Kommandozeile als gRPC-Client haben (HUM-078,
+# ADR-018). `cargo xtask docs` liest diese Datei und gibt sie in
+# `docs/reference/parity.md` als Abschnitt "Ausnahmen" aus.
+#
+# Jede Ausnahme nennt ihre RPC und einen Grund, der nicht leer ist:
+#
+#   [[exempt]]
+#   rpc = "Humanitl.Beispiel"
+#   reason = "Warum die Kommandozeile hier nichts anbietet."
+#
+# Eine RPC, die hier steht und zugleich eine Zeile in `PARITY`
+# (`daemon/bin/humanitl/src/parity.rs`) hat, ist ein Fehler, ebenso eine RPC,
+# die der Vertrag nicht kennt.
+
+[[exempt]]
+rpc = "Humanitl.GetConfig"
+reason = "CLI liest und schreibt die Konfiguration lokal über denselben Lader wie der Daemon; eine echte Anbindung an GetConfig/SetConfig folgt mit HUM-069/HUM-170."
+
+[[exempt]]
+rpc = "Humanitl.SetConfig"
+reason = "CLI liest und schreibt die Konfiguration lokal über denselben Lader wie der Daemon; eine echte Anbindung an GetConfig/SetConfig folgt mit HUM-069/HUM-170."
