@@ -544,6 +544,8 @@ Definition of Done für jedes Issue: Tests auf der passenden Ebene, neue Fehlerp
 | HUM-158 | Ein Export ohne freien Namen meldet `IPC_006` | S | Ein Ordner, in dem jeder Exportname belegt ist, ergibt `AUDIT_008` aus HUM-070 statt `IPC_006`, ohne dass der Daemon gefragt wird (Bestandsaufnahme 2026-09-18, Spezifikation in `backlog/sprint-4.md`) |
 | HUM-162 | Der Kopf der Kette hat über den Daemon keinen Zeitpunkt | S | `AuditResponse` trägt den Zeitpunkt des Kopfes, `humanitl --json audit verify` gegen einen Daemon nennt `head.ts` wie die letzte Zeile (aus HUM-156, Spezifikation in `backlog/sprint-4.md`) |
 | HUM-163 | Jede Seite der Audit-Tabelle liest die ganze Kette | M | Die Dauer einer Seite über 100 000 Records ist gemessen, und eine Seite ohne Filter liest nur das Ende der Datei, wenn sie über 200 ms liegt (aus HUM-156, Spezifikation in `backlog/sprint-4.md`) |
+| HUM-169 | `flows watch`: der Ereignisstrom auf der Kommandozeile | S | `humanitl flows watch [--passthrough] [--since ID] [--json]` schreibt jedes `FlowEvent` als eine Zeile, `PARITY` nennt es bei `Humanitl.Subscribe` (aus HUM-078, Spezifikation in `backlog/sprint-4.md`) |
+| HUM-170 | `GetConfig` und `GetSessionSummary` haben keinen Ort in der Oberfläche | S | Beide RPCs haben einen Ort in der Oberfläche und eine Zeile in `app/lib/core/parity.dart`, `cargo xtask docs --check` läuft ohne Warnung (aus HUM-078, Spezifikation in `backlog/sprint-4.md`) |
 
 ### Sprint 5 — Härtung und Release (M5)
 

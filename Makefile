@@ -7,12 +7,12 @@ SHELL := /bin/bash
 .PHONY: help check rust-fmt rust-clippy rust-build rust-test rust-doc rust-deny typed-errors-lint \
         flutter-get flutter-analyze flutter-test flutter-test-dbus flutter-test-daemon \
         flutter-test-integration flutter-build runner-test proto escape e2e \
-        deps-lint docs-lint catalog-assets catalog-lint clean package
+        deps-lint docs-lint parity-check catalog-assets catalog-lint clean package
 
 help: ## List targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | sort | awk -F':.*?## ' '{printf "  %-18s %s\n", $$1, $$2}'
 
-check: rust-fmt rust-clippy rust-build rust-test rust-doc deps-lint docs-lint typed-errors-lint catalog-lint flutter-analyze flutter-test runner-test flutter-build ## Full local gate (same steps as CI)
+check: rust-fmt rust-clippy rust-build rust-test rust-doc deps-lint docs-lint parity-check typed-errors-lint catalog-lint flutter-analyze flutter-test runner-test flutter-build ## Full local gate (same steps as CI)
 
 # A rustup toolchain may exist without rustup on PATH (this machine): put its
 # bin directory first so `cargo fmt` and `cargo clippy` find their components.
@@ -60,6 +60,9 @@ deps-lint: ## Enforce the dependency direction (HUM-074) and the coupling ratche
 
 docs-lint: ## Check the security documents (HUM-007)
 	./scripts/ci/lint-docs.sh
+
+parity-check: ## Every RPC has a CLI subcommand; docs/reference/parity.md is current (HUM-078)
+	./scripts/ci/parity-check.sh
 
 flutter-get: ## Fetch Dart packages (app and packages/ui)
 	cd app && flutter pub get
