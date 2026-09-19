@@ -22,6 +22,11 @@
 //!   die neue Kopie geht ([`Staged`]).
 //! - **`--print` schreibt nichts.** Wer erst lesen will, bekommt genau
 //!   dieselbe Datei zu sehen, die der Aufruf ohne den Schalter schriebe.
+//! - **Die Units des Pakets werden nicht kopiert.** Liegen sie unter
+//!   `/usr/lib/systemd/user`, schreibt der Befehl nichts und aktiviert Socket
+//!   und Dienst des Pakets ([`install_packaged`], HUM-053). Das gilt nicht aus
+//!   einem `AppImage` und nicht mit `--bin-dir`: Beide nennen ausdrücklich
+//!   einen anderen Daemon.
 //! - **Nie mit `sudo`.** Der Daemon ist ein Nutzerdienst; jeder Aufruf hier
 //!   ist `systemctl --user`.
 //! - **Ein Fehlschlag lässt nichts liegen.** Nimmt systemd die Unit nicht an,
@@ -56,6 +61,10 @@ const SYSTEMCTL_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Das Wort, unter dem `--print` in der Ausgabe steht.
 const PRINT_ACTION: &str = "print";
+
+/// Das Wort, unter dem ein Lauf steht, der die Units des Pakets nur
+/// aktiviert und nichts geschrieben hat (HUM-053).
+const PACKAGED_ACTION: &str = "packaged";
 
 /// Wie lange `daemon install` auf die erste Antwort des Daemons wartet.
 ///
@@ -150,28 +159,28 @@ async fn install(ctx: &Context, args: &InstallArgs) -> Result<u8, Failure> {
             .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
     });
     let appimage = ctx.env.non_empty("APPIMAGE").is_some();
+    if let Some(units) = packaged_units(args, appimage) {
+        return install_packaged(ctx, args, &units).await;
+    }
     let daemon = exec_start(ctx, args, &current, &source, appimage)?;
     let contents = unit::render(&daemon).map_err(Failure::new)?;
     let path = unit::unit_path(&ctx.paths);
     let systemctl = find_in_path(ctx, "systemctl");
-    let commands = planned_commands(args.no_start, systemctl.as_deref());
+    let names = [unit::UNIT_NAME];
+    let commands = planned_commands(args.no_start, systemctl.as_deref(), &names);
 
     // Ohne Nutzersitzung nimmt systemd die Unit nicht an. Das steht vor dem
     // ersten Schreibzugriff fest, und der Befund nennt den einen Fix, der
     // hilft, statt nach einem gescheiterten `systemctl` ein `DAEMON_008` mit
     // `systemctl --user status` vorzuschlagen, das ebenso scheitert.
-    if !args.print && !args.no_start && ctx.env.non_empty("XDG_RUNTIME_DIR").is_none() {
-        return Err(Failure::new(no_user_session(
-            "XDG_RUNTIME_DIR is not set, so systemctl --user has no user session to hand the \
-             unit to; nothing was written",
-        )));
-    }
+    require_user_session(ctx, args)?;
 
     let mut result = InstallReport {
         unit: &path,
         exec_start: &daemon,
         unit_text: &contents,
         commands: &commands,
+        enable: &names,
         action: PRINT_ACTION,
         activation: Activation::Skipped,
         binaries: None,
@@ -179,7 +188,13 @@ async fn install(ctx: &Context, args: &InstallArgs) -> Result<u8, Failure> {
     };
     if args.print {
         if !ctx.render.is_json() {
-            announce(&path, &contents, None, args.no_start, systemctl.as_deref());
+            announce(
+                &headline(&path, None),
+                &contents,
+                args,
+                systemctl.as_deref(),
+                &names,
+            );
         }
         report(ctx, &result);
         return Ok(EXIT_OK);
@@ -194,11 +209,11 @@ async fn install(ctx: &Context, args: &InstallArgs) -> Result<u8, Failure> {
     let plan = unit::prepare(&path, &contents).map_err(Failure::new)?;
     if !ctx.render.is_json() {
         announce(
-            &path,
+            &headline(&path, Some(&plan)),
             &contents,
-            Some(&plan),
-            args.no_start,
+            args,
             systemctl.as_deref(),
+            &names,
         );
     }
 
@@ -207,18 +222,14 @@ async fn install(ctx: &Context, args: &InstallArgs) -> Result<u8, Failure> {
     } else {
         None
     };
-    let finished = async {
-        unit::write(&path, &contents, &plan).map_err(Failure::new)?;
-        match (args.no_start, systemctl.as_deref()) {
-            (true, _) => Ok(Activation::Skipped),
-            (false, None) => Ok(Activation::NoSystemctl),
-            (false, Some(systemctl)) => {
-                activate(ctx, systemctl, &path, &plan).await?;
-                Ok(Activation::Enabled)
-            }
-        }
-    }
-    .await;
+    let written = UnitOnDisk {
+        path: &path,
+        plan: &plan,
+    };
+    let finished = match unit::write(&path, &contents, &plan) {
+        Ok(()) => start(ctx, args, systemctl.as_deref(), &names, &written).await,
+        Err(diagnostic) => Err(Failure::new(diagnostic)),
+    };
     let activation = match finished {
         Ok(activation) => activation,
         Err(failure) => {
@@ -246,6 +257,120 @@ async fn install(ctx: &Context, args: &InstallArgs) -> Result<u8, Failure> {
     result.ready = ready.as_deref();
     report(ctx, &result);
     Ok(EXIT_OK)
+}
+
+/// `daemon install`, wenn das Paket die Units unter
+/// [`unit::SYSTEM_UNIT_DIR`] abgelegt hat (HUM-053).
+///
+/// Es wird nichts geschrieben: Die Units gehören dem Paket, und eine Kopie
+/// unter `~/.config/systemd/user` verdeckte sie. Übrig bleibt, was das Paket
+/// nicht kann, weil es als root läuft: `systemctl --user daemon-reload` und
+/// `enable --now` für Socket und Dienst. Dieselben Zusagen wie beim Schreiben
+/// gelten: Die Ankündigung kommt vorher, `--print` ruft nichts, und ein
+/// gescheitertes `enable` nimmt die Verweise zurück, die es angelegt hat.
+async fn install_packaged(
+    ctx: &Context,
+    args: &InstallArgs,
+    units: &unit::SystemUnits,
+) -> Result<u8, Failure> {
+    let systemctl = find_in_path(ctx, "systemctl");
+    let names = units.names();
+    let commands = planned_commands(args.no_start, systemctl.as_deref(), &names);
+    require_user_session(ctx, args)?;
+
+    let exec = units.exec_start();
+    let mut result = InstallReport {
+        unit: &units.service,
+        exec_start: &exec,
+        unit_text: &units.text,
+        commands: &commands,
+        enable: &names,
+        action: PRINT_ACTION,
+        activation: Activation::Skipped,
+        binaries: None,
+        ready: None,
+    };
+    if !ctx.render.is_json() {
+        let shown = match units.socket.as_ref() {
+            Some(socket) => format!("{} and {}", units.service.display(), socket.display()),
+            None => units.service.display().to_string(),
+        };
+        announce(
+            &format!(
+                "humanitl daemon install writes nothing: the package installed {shown}, and \
+                 {} is:",
+                unit::UNIT_NAME
+            ),
+            &units.text,
+            args,
+            systemctl.as_deref(),
+            &names,
+        );
+    }
+    if args.print {
+        report(ctx, &result);
+        return Ok(EXIT_OK);
+    }
+
+    let nothing = UnitOnDisk {
+        path: &units.service,
+        plan: &unit::Written::Unchanged,
+    };
+    let activation = start(ctx, args, systemctl.as_deref(), &names, &nothing).await?;
+    let ready = if activation == Activation::Enabled {
+        Some(wait_for_daemon(ctx).await)
+    } else {
+        None
+    };
+    result.action = PACKAGED_ACTION;
+    result.activation = activation;
+    result.ready = ready.as_deref();
+    report(ctx, &result);
+    Ok(EXIT_OK)
+}
+
+/// Die Units des Pakets, wenn dieser Lauf sie aktivieren soll (HUM-053).
+///
+/// Nicht aus einem `AppImage` und nicht mit `--bin-dir`: Beide nennen
+/// ausdrücklich einen anderen Daemon als den des Pakets.
+fn packaged_units(args: &InstallArgs, appimage: bool) -> Option<unit::SystemUnits> {
+    if appimage || args.bin_dir.is_some() {
+        return None;
+    }
+    unit::SystemUnits::find(Path::new(unit::SYSTEM_UNIT_DIR))
+}
+
+/// Sagt systemd von den Units, wenn der Lauf das soll und kann.
+async fn start(
+    ctx: &Context,
+    args: &InstallArgs,
+    systemctl: Option<&Path>,
+    names: &[&str],
+    written: &UnitOnDisk<'_>,
+) -> Result<Activation, Failure> {
+    match (args.no_start, systemctl) {
+        (true, _) => Ok(Activation::Skipped),
+        (false, None) => Ok(Activation::NoSystemctl),
+        (false, Some(systemctl)) => {
+            activate(ctx, systemctl, names, written).await?;
+            Ok(Activation::Enabled)
+        }
+    }
+}
+
+/// `DAEMON_010`, wenn systemd gleich gebraucht wird und es keine
+/// Nutzersitzung gibt.
+///
+/// Das steht vor dem ersten Schreibzugriff fest: `--print` und `--no-start`
+/// brauchen die Sitzung nicht, alles andere schon.
+fn require_user_session(ctx: &Context, args: &InstallArgs) -> Result<(), Failure> {
+    if !args.print && !args.no_start && ctx.env.non_empty("XDG_RUNTIME_DIR").is_none() {
+        return Err(Failure::new(no_user_session(
+            "XDG_RUNTIME_DIR is not set, so systemctl --user has no user session to hand the \
+             unit to; nothing was written",
+        )));
+    }
+    Ok(())
 }
 
 /// Was in `ExecStart` steht.
@@ -284,18 +409,30 @@ fn exec_start(
 }
 
 /// Die Aufrufe, die nach dem Schreiben folgen, als Text für die Ausgabe.
-fn planned_commands(no_start: bool, systemctl: Option<&Path>) -> Vec<String> {
+fn planned_commands(no_start: bool, systemctl: Option<&Path>, names: &[&str]) -> Vec<String> {
     match (no_start, systemctl) {
         (false, Some(systemctl)) => vec![
             format!("{} --user daemon-reload", systemctl.display()),
             format!(
                 "{} --user enable --now {}",
                 systemctl.display(),
-                unit::UNIT_NAME
+                names.join(" ")
             ),
         ],
         _ => Vec::new(),
     }
+}
+
+/// Die Unit, die ein Lauf geschrieben hat, und wie sie zurückgeht.
+///
+/// Für das Paket steht hier dessen Unit mit [`unit::Written::Unchanged`]:
+/// Geschrieben wurde nichts, also gibt es nichts zurückzunehmen außer den
+/// Verweisen der Aktivierung.
+struct UnitOnDisk<'a> {
+    /// Der Pfad der Unit.
+    path: &'a Path,
+    /// Was dieser Lauf mit ihr gemacht hat.
+    plan: &'a unit::Written,
 }
 
 /// `~/.local/lib/humanitl`, wo die Binaries eines `AppImage`s liegen.
@@ -613,20 +750,24 @@ fn no_bus(why: &str) -> bool {
 /// [`unit::Enablement`] nimmt den Zustand vor dem ersten Aufruf auf, damit
 /// wirklich nur zurückgenommen wird, was dieser Lauf angelegt hat: Wer den
 /// Dienst schon vorher aktiviert hatte, behält ihn.
+///
+/// `names` sind die Units, die `enable --now` bekommt: der Dienst, und bei
+/// den Units des Pakets davor der Socket. Die Verweise der Aktivierung legt
+/// `systemctl --user enable` immer im Unit-Verzeichnis des Nutzers an
+/// ([`unit::unit_dir`]), auch für eine Unit des Pakets; dort sieht die
+/// Rücknahme nach.
 async fn activate(
     ctx: &Context,
     systemctl: &Path,
-    path: &Path,
-    plan: &unit::Written,
+    names: &[&str],
+    written: &UnitOnDisk<'_>,
 ) -> Result<(), Failure> {
-    let dir = path
-        .parent()
-        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-    let before = unit::Enablement::read(&dir);
-    for step in [
-        vec!["--user", "daemon-reload"],
-        vec!["--user", "enable", "--now", unit::UNIT_NAME],
-    ] {
+    let UnitOnDisk { path, plan } = *written;
+    let dir = unit::unit_dir(&ctx.paths);
+    let before = unit::Enablement::read_for(&dir, names);
+    let mut enable = vec!["--user", "enable", "--now"];
+    enable.extend_from_slice(names);
+    for step in [vec!["--user", "daemon-reload"], enable] {
         if let Err(why) = systemctl_run(ctx, systemctl, &step).await {
             // Zuerst den Dienst anhalten, aber nur, wenn dieser Lauf ihn
             // gestartet haben kann.
@@ -647,9 +788,11 @@ async fn activate(
             // ein Fehler dabei ändert nichts an dem Befund, der gleich
             // zurückgeht.
             if step.contains(&"enable") {
-                let _ = systemctl_run(ctx, systemctl, &["--user", "stop", unit::UNIT_NAME]).await;
-                let _ = systemctl_run(ctx, systemctl, &["--user", "reset-failed", unit::UNIT_NAME])
-                    .await;
+                for verb in ["stop", "reset-failed"] {
+                    let mut call = vec!["--user", verb];
+                    call.extend_from_slice(names);
+                    let _ = systemctl_run(ctx, systemctl, &call).await;
+                }
             }
             // Reihenfolge: erst die Verweise, dann die Unit. Andersherum stünde
             // zwischendurch ein Verweis auf eine Datei, die es nicht mehr gibt.
@@ -763,30 +906,30 @@ fn not_taken(
 /// `stdout` bleibt unberührt, ein einziger JSON-Wert also weiterhin ein
 /// einziger.
 fn announce(
-    path: &Path,
+    headline: &str,
     contents: &str,
-    plan: Option<&unit::Written>,
-    no_start: bool,
+    args: &InstallArgs,
     systemctl: Option<&Path>,
+    names: &[&str],
 ) {
-    eprintln!("{}", headline(path, plan));
+    eprintln!("{headline}");
     eprintln!();
     for line in contents.lines() {
         eprintln!("  {line}");
     }
     eprintln!();
-    match (plan, no_start, systemctl) {
-        (None, _, _) => eprintln!("--print: nothing is written and nothing is started"),
-        (Some(_), true, _) => eprintln!("--no-start: systemd is not told about the unit"),
-        (Some(_), false, None) => {
+    match (args.print, args.no_start, systemctl) {
+        (true, _, _) => eprintln!("--print: nothing is written and nothing is started"),
+        (false, true, _) => eprintln!("--no-start: systemd is not told about the unit"),
+        (false, false, None) => {
             eprintln!("no systemctl in PATH: nothing is started");
         }
-        (Some(_), false, Some(systemctl)) => {
+        (false, false, Some(systemctl)) => {
             let shown = systemctl.display();
             eprintln!("then: {shown} --user daemon-reload");
             eprintln!(
                 "then: {shown} --user enable --now {} (never with sudo)",
-                unit::UNIT_NAME
+                names.join(" ")
             );
         }
     }
@@ -822,7 +965,9 @@ struct InstallReport<'a> {
     unit_text: &'a str,
     /// Die `systemctl`-Aufrufe, die folgen.
     commands: &'a [String],
-    /// `created`, `replaced`, `unchanged` oder `print`.
+    /// Die Units, die `enable --now` bekommt.
+    enable: &'a [&'a str],
+    /// `created`, `replaced`, `unchanged`, `packaged` oder `print`.
     action: &'a str,
     /// Was aus der Aktivierung wurde.
     activation: Activation,
@@ -844,6 +989,7 @@ fn report(ctx: &Context, result: &InstallReport<'_>) {
             "exec_start": result.exec_start.display().to_string(),
             "unit_text": result.unit_text,
             "commands": result.commands,
+            "units": result.enable,
             "action": result.action,
             "activation": result.activation.as_str(),
             "binaries": result.binaries.map(|dir| dir.display().to_string()),
@@ -887,7 +1033,7 @@ fn report(ctx: &Context, result: &InstallReport<'_>) {
         ctx.render.note(&format!(
             "the unit is in place; systemctl --user daemon-reload and systemctl --user enable \
              --now {} start it",
-            unit::UNIT_NAME
+            result.enable.join(" ")
         ));
     }
 }

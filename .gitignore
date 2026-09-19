@@ -31,3 +31,9 @@ target/e2e/
 
 # Arbeitsbäume und Zwischenstände der KI-Agenten; nie Teil eines Commits.
 .claude/
+
+# Daemon, Kommandozeile und Shim fuer das Flutter-Bundle, von `make package`
+# dorthin gelegt (HUM-053); gebaut, nie eingecheckt.
+app/linux/bundle-extra/
+# Ausgabe von `make package`.
+dist/

@@ -15,7 +15,11 @@
 #      Ausnahmen im Dart-Code);
 #      die Desktop-Datei ist gueltig (`desktop-file-validate`);
 #   5. nichts liegt unter /usr/local, /home, /root, /etc oder /var;
-#   6. nach `apt-get remove --purge` ist keine Datei des Pakets mehr da, und
+#   6. Dienst- und Socket-Unit liegen unter /usr/lib/systemd/user, ohne die
+#      Marke von `daemon install`, die PNG-Symbole haben ihre Groesse, und
+#      `humanitl daemon install` plant Socket und Dienst des Pakets, ohne eine
+#      Kopie unter ~/.config zu schreiben (HUM-053);
+#   7. nach `apt-get remove --purge` ist keine Datei des Pakets mehr da, und
 #      nirgends im Dateisystem steht noch etwas mit "humanitl" im Namen.
 set -euo pipefail
 
@@ -30,7 +34,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 # Das Werkzeug der Pruefung kommt vor der Bestandsaufnahme, damit es nicht als
 # Rest des Pakets zaehlt.
-apt-get install -y -qq --no-install-recommends desktop-file-utils file xvfb xauth x11-utils procps >/dev/null
+apt-get install -y -qq --no-install-recommends desktop-file-utils file xvfb xauth x11-utils procps python3 >/dev/null
 # Die Anwendung startet nie als root; der Starttest laeuft als eigener Nutzer.
 id smoke >/dev/null 2>&1 || useradd --create-home smoke
 
@@ -187,10 +191,59 @@ echo "== desktop entry"
 desktop-file-validate /usr/share/applications/humanitl.desktop
 echo "desktop-file-validate: ok"
 
-echo "== unit"
+echo "== units"
 grep -q '^ExecStart=/usr/lib/humanitl/bin/humanitld$' /usr/lib/systemd/user/humanitld.service \
   || { echo "error: the user unit does not start the packaged daemon" >&2; exit 1; }
 echo "ExecStart points at the packaged daemon"
+grep -q '^Type=notify$' /usr/lib/systemd/user/humanitld.service \
+  || { echo "error: the user unit is not Type=notify" >&2; exit 1; }
+grep -q '^ListenStream=%t/humanitl/daemon.sock$' /usr/lib/systemd/user/humanitld.socket \
+  || { echo "error: the socket unit does not listen where the client looks" >&2; exit 1; }
+for name in humanitld.service humanitld.socket; do
+  if [[ "$(head -n 1 "/usr/lib/systemd/user/$name")" == "# humanitl daemon install: written by Humanitl" ]]; then
+    echo "error: /usr/lib/systemd/user/$name carries the marker of daemon install; the package owns it" >&2
+    exit 1
+  fi
+done
+echo "both units are in place, Type=notify, ListenStream at %t/humanitl/daemon.sock, no marker"
+
+echo "== icons"
+for size in 64 128 256; do
+  png="/usr/share/icons/hicolor/${size}x${size}/apps/humanitl.png"
+  file -b "$png" | grep -q "^PNG image data, $size x $size," \
+    || { echo "error: $png is not a ${size}x${size} PNG: $(file -b "$png" 2>&1)" >&2; exit 1; }
+done
+echo "PNG icons at 64, 128 and 256 pixels, plus the SVG under scalable"
+
+echo "== daemon install finds the units of the package"
+# Als gewoehnlicher Nutzer, mit --print: Es darf nichts geschrieben werden,
+# und der Plan nennt Socket und Dienst des Pakets. Ohne systemd im Container
+# gibt es kein systemctl; die Namen stehen trotzdem in `units`.
+plan="$(runuser -u smoke -- env -i HOME=/home/smoke PATH=/usr/bin:/bin humanitl --json daemon install --print)"
+echo "$plan"
+PLAN="$plan" python3 - <<'PY'
+import json, os, sys
+plan = json.loads(os.environ["PLAN"])
+want = {
+    "action": "print",
+    "unit": "/usr/lib/systemd/user/humanitld.service",
+    "exec_start": "/usr/lib/humanitl/bin/humanitld",
+    "units": ["humanitld.socket", "humanitld.service"],
+}
+bad = {key: (plan.get(key), value) for key, value in want.items() if plan.get(key) != value}
+if bad:
+    sys.exit(f"error: daemon install --print planned something else: {bad}")
+PY
+if [[ -e /home/smoke/.config/systemd ]]; then
+  echo "error: daemon install --print wrote below /home/smoke/.config/systemd" >&2
+  exit 1
+fi
+runuser -u smoke -- env -i HOME=/home/smoke PATH=/usr/bin:/bin humanitl daemon install --no-start
+if [[ -e /home/smoke/.config/systemd ]]; then
+  echo "error: daemon install wrote a user unit although the package brings its own" >&2
+  exit 1
+fi
+echo "daemon install plans socket and service of the package and writes no copy"
 
 echo "== remove --purge"
 apt-get remove --purge -y humanitl

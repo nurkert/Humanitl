@@ -13,21 +13,28 @@
 #   /usr/bin/humanitl                  Symlink auf die Kommandozeile
 #   /usr/bin/humanitl-app              Symlink auf die Anwendung
 #   /usr/lib/systemd/user/humanitld.service
+#   /usr/lib/systemd/user/humanitld.socket
 #   /usr/share/applications/humanitl.desktop
 #   /usr/share/icons/hicolor/scalable/apps/humanitl.svg
+#   /usr/share/icons/hicolor/{64x64,128x128,256x256}/apps/humanitl.png
 #   /usr/share/humanitl/catalog/       Domain-Katalog (PACKAGED_CATALOG in humanitld)
 #   /usr/share/humanitl/profiles/sandbox/  Sandbox-Profile (PROFILE_DIRS)
 #   /usr/share/doc/humanitl/           copyright, changelog.gz
 #
-# Bewusst nicht dabei, jeweils mit Grund:
-# - keine `humanitld.socket`: Der Daemon kennt `LISTEN_FDS` noch nicht, siehe
-#   den Kommentar am Ende von `packaging/systemd/humanitld.service`.
+# Bewusst nicht dabei, mit Grund:
 # - kein `postinst`/`prerm`: Es gibt nichts, was als root beim Installieren
 #   geschehen muesste. Die Trigger von `desktop-file-utils` und
-#   `hicolor-icon-theme` aktualisieren Menue und Symbol-Cache selbst, und einen
-#   Nutzerdienst aktiviert nie das Paket, sondern der Mensch
-#   (`systemctl --user enable --now humanitld.service`), HUM-053 Fallstricke.
-# - keine PNG-Symbole: Das SVG unter `scalable` genuegt jedem heutigen Desktop.
+#   `hicolor-icon-theme` aktualisieren Menue und Symbol-Cache selbst; das ist
+#   genau das, was HUM-053 vom `postinst` verlangt (`update-desktop-database`,
+#   `gtk-update-icon-cache`), nur ohne Skript, das lintian pruefen muesste.
+#   Einen Nutzerdienst aktiviert nie das Paket, sondern jeder Mensch fuer sich
+#   mit `humanitl daemon install` (HUM-053 Fallstricke: `postinst` laeuft als
+#   root, und `systemctl --user` geht dort nicht).
+#
+# Die PNG-Symbole liegen fertig gerechnet unter `packaging/deb/icons/`, aus
+# `humanitl.svg` mit Inkscape (`docs/INSTALL.md`, Abschnitt Paket). Eingecheckt
+# statt beim Bau gerechnet: Der Bau braucht dann kein Grafikprogramm, und
+# dasselbe SVG ergibt nicht auf jedem Rechner dieselben Bytes.
 set -euo pipefail
 
 [[ $# -eq 4 ]] || { echo "usage: $0 <0.0.N> <bin-dir> <flutter-bundle> <out-dir>" >&2; exit 2; }
@@ -70,19 +77,35 @@ ln -s ../lib/humanitl/humanitl "$pkg/usr/bin/humanitl-app"
 # RUNPATH des Build-Rechners entfernen und Symbole strippen, an der Kopie.
 "$root/packaging/release/tidy-elf.sh" "$lib" "$lib/bin"
 
-# Die Nutzer-Unit ist dieselbe Vorlage, die `humanitl daemon install` schreibt
-# (HUM-044); hier steht in `ExecStart` der Pfad des Pakets. Die erste Zeile,
-# die Marke fuer `daemon install`, wird ersetzt: Diese Datei gehoert dem Paket.
-unit_src="$root/packaging/systemd/humanitld.service"
-[[ "$(grep -c '{humanitld}' "$unit_src")" -eq 1 ]] \
-  || { echo "error: $unit_src must contain the placeholder {humanitld} exactly once" >&2; exit 1; }
-sed -e '1s|.*|# Installed by the humanitl package. To change it, copy it to ~/.config/systemd/user/ and edit the copy.|' \
-  -e 's|{humanitld}|/usr/lib/humanitl/bin/humanitld|' \
-  "$unit_src" >"$pkg/usr/lib/systemd/user/humanitld.service"
-chmod 0644 "$pkg/usr/lib/systemd/user/humanitld.service"
+# Die Nutzer-Units sind dieselben Vorlagen, die `humanitl daemon install`
+# kennt (HUM-044, HUM-053); in `ExecStart` steht der Pfad des Pakets. Die
+# erste Zeile, die Marke fuer `daemon install`, wird ersetzt: Diese Dateien
+# gehoeren dem Paket, und `daemon install` aktiviert sie nur.
+first_line='# Installed by the humanitl package. To change it, run systemctl --user edit NAME; do not copy it.'
+marker='# humanitl daemon install: written by Humanitl'
+for name in humanitld.service humanitld.socket; do
+  src="$root/packaging/systemd/$name"
+  [[ "$(head -n 1 "$src")" == "$marker" ]] \
+    || { echo "error: $src must start with the marker line of humanitl daemon install" >&2; exit 1; }
+  sed -e "1s|.*|${first_line/NAME/$name}|" \
+    -e 's|{humanitld}|/usr/lib/humanitl/bin/humanitld|' \
+    "$src" >"$pkg/usr/lib/systemd/user/$name"
+  chmod 0644 "$pkg/usr/lib/systemd/user/$name"
+done
+unit="$pkg/usr/lib/systemd/user/humanitld.service"
+[[ "$(grep -c '^ExecStart=/usr/lib/humanitl/bin/humanitld$' "$unit")" -eq 1 ]] \
+  || { echo "error: $unit must start /usr/lib/humanitl/bin/humanitld exactly once" >&2; exit 1; }
+if grep -q '{humanitld}' "$pkg/usr/lib/systemd/user/"*; then
+  echo "error: a placeholder is left in the units of the package" >&2
+  exit 1
+fi
 
 install -m 0644 "$here/humanitl.desktop" "$pkg/usr/share/applications/humanitl.desktop"
 install -m 0644 "$here/humanitl.svg" "$pkg/usr/share/icons/hicolor/scalable/apps/humanitl.svg"
+for size in 64 128 256; do
+  install -d -m 0755 "$pkg/usr/share/icons/hicolor/${size}x${size}/apps"
+  install -m 0644 "$here/icons/humanitl-$size.png" "$pkg/usr/share/icons/hicolor/${size}x${size}/apps/humanitl.png"
+done
 install -m 0644 "$root/catalog/domains.yaml" "$root/catalog/ranks-top100k.csv.gz" \
   "$root/catalog/RANKS-LICENSE" "$pkg/usr/share/humanitl/catalog/"
 # Nur das Profil "default". "test" gehoert den Escape-Tests und traegt einen
