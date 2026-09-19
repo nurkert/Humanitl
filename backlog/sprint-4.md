@@ -60,6 +60,8 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-166 | `humanitl_ipc::serve` und `systemd::serve` sind zwei Fassungen desselben Dienstes | S | HUM-053, HUM-156 |
 | HUM-167 | Eine alte Nutzer-Unit verdeckt die Units des Pakets | S | HUM-053 |
 | HUM-168 | Ein Rückfall für Impeller fehlt im Release-Bau | S | HUM-053 |
+| HUM-169 | `flows watch`: der Ereignisstrom auf der Kommandozeile | S | HUM-078 |
+| HUM-170 | `GetConfig` und `GetSessionSummary` haben keinen Ort in der Oberfläche | S | HUM-078 |
 | HUM-171 | Tests lassen ihre Verzeichnisse in `/tmp` liegen | S | — |
 | HUM-185 | Der Bildschirm-Test gegen den echten Daemon fällt in CI zufällig aus | S | HUM-144 |
 
@@ -2104,9 +2106,9 @@ Ausnahmen (RPCs ohne CLI-Sinn, z. B. `Terminal`-Stream) stehen in `xtask/parity_
 - `xtask::parity::tests::exempt_listed`.
 
 ### Akzeptanzkriterien
-- [ ] `docs/reference/parity.md` existiert, ist eingecheckt, deckt alle RPCs ab.
-- [ ] Neuer RPC ohne CLI-Zeile bricht `parity-check`.
-- [ ] Ausnahmen haben Begründung.
+- [x] `docs/reference/parity.md` existiert, ist eingecheckt, deckt alle RPCs ab. Gemessen 2026-09-19: `cargo xtask docs` erzeugt 16 Zeilen, eine je Methode von `Humanitl` im Vertrag (`the_real_contract_lists_the_service_methods` liest dieselben Methoden aus `proto/`), 14 mit Unterkommando, `GetConfig` und `SetConfig` als begründete Ausnahme; `make parity-check` (Paritätstests der CLI, dann `cargo xtask docs --check`) meldet `unchanged`. Löschen oder von Hand ändern der Datei macht die Prüfung rot („is missing or stale").
+- [x] Neuer RPC ohne CLI-Zeile bricht `parity-check`. Gemessen 2026-09-19: `rpc Watch` im Vertrag ohne Zeile in `PARITY` lässt `scripts/ci/parity-check.sh` mit Exit 1 enden, „`Humanitl.Watch` has no CLI subcommand" (`make parity-check` meldet daraufhin Exit 2); ebenso eine gelöschte Zeile (`Humanitl.Decide`), eine umbrochene Zeile, ein Eintrag auf der Anfangszeile, eine Zeile zu einer RPC, die es nicht gibt, und ein UI-Ort ohne Datei. Test `missing_cli_fails`; wird mit ausgeschalteter Prüfung rot. Ein Eintrag in `PARITY`, den `clap` nicht kennt (`flows watch`, `run --ask terminal bogus`), macht `every_entry_names_a_subcommand_and_its_flags` rot und damit das Skript (Exit 101 aus `cargo test`, `make` meldet Exit 2). Eine fehlende UI-Zeile bleibt eine Warnung (`warn: parity: …`, Exit 0).
+- [x] Ausnahmen haben Begründung. Gemessen 2026-09-19: Eine Ausnahme mit leerer Begründung lässt das Skript mit Exit 1 enden („has no reason"), eine ohne das Feld `reason` scheitert schon beim Lesen (`an_exemption_needs_a_reason_and_a_real_rpc`, rot mit ausgeschalteter Prüfung); eine begründete Ausnahme steht im Abschnitt „Ausnahmen" mit ihrem Grund (`exempt_listed`). Heute sind es zwei, `GetConfig` und `SetConfig`, beide mit Grund (`backlog/CONVENTIONS.md` 4.35).
 
 ### Fallstricke
 - Die Dart-Registry kann nicht aus Rust gelesen werden; der Generator parst die `.dart`-Datei mit einer Regex auf `'Humanitl.X': '…'`; Format deshalb strikt halten.
@@ -2180,7 +2182,7 @@ Prinzip 10 (BACKLOG.md 52) und ADR-018 sagen zu, dass jede Fähigkeit genau einm
 
 Messbar ist die Folge an einer Stelle, an der Belege verloren gehen. Die Oberfläche hängt beim Merken `createdFrom: flow.id` an die Regel (`app/lib/features/intercept/rule_sentence.dart:117`); der Regel-Bildschirm zeigt daraus das Herkunfts-Abzeichen, das zurück auf die Anfrage springt (`app/lib/features/rules/widgets/rule_row.dart:378-395`). Über die Kommandozeile entsteht dieselbe Regel nur über den Umweg `rules add`, und `rule_from_args` kennt kein Herkunftsfeld (`daemon/bin/humanitl/src/cmd/rules.rs:632`). Genau so läuft das M2-Skript: erst `rules add --expires session`, dann zwölf Einzelentscheidungen (`tests/e2e/m2_first_decision/run.sh:337-375`). Die Regel trägt kein `created_from_flow_id`, das Abzeichen hat für sie nichts anzuzeigen, und der Lauf kann nicht zeigen, was er zeigen soll.
 
-Zwei Dinge werden dabei oft falsch erzählt, und dieses Issue behauptet sie nicht. **Erstens** nutzt `repeated flow_ids` kein einziger Client: `Future<Rule?> decide(FlowId id, Decision decision, {Rule? remember})` (`app/lib/core/ipc/daemon_client.dart:39`) und `..flowIds.add(flowId.value)` (`app/lib/core/ipc/convert.dart:501-502`) schicken je eine Id, und die Oberfläche schleift selbst über die Flows und hängt `remember: i == 0 ? rule : null` an den ersten Aufruf (`app/lib/features/intercept/providers/decision.dart:615-620`). Der Unterschied zwischen Oberfläche und Kommandozeile ist nicht eine Stapel-Anfrage, sondern dass die Oberfläche die Schleife und das Anlegen der Regel selbst fährt und die Kommandozeile beides nicht hat. **Zweitens** meldet keine Prüfung die Lücke, auch nicht die geplante: Der CI-Job `parity-check` ruft `scripts/ci/parity-placeholder.sh` (`.github/workflows/ci.yml:572-582`), das Skript endet mit `exit 0`, solange `daemon/xtask/src/parity.rs` fehlt — und es fehlt, `daemon/xtask/src/` enthält nur `main.rs`. HUM-078 vergleicht auf RPC-Ebene („CI-Job `parity-check` schlägt fehl, wenn ein RPC keine CLI-Zeile hat", `backlog/sprint-4.md:1614`), und seine Beispielzeile `| Humanitl.Decide | humanitl flows decide <id> allow oder block [--note] | intercept/action_bar |` (`:1629`) ist der heutige Stand: grün, mit Lücke.
+Zwei Dinge werden dabei oft falsch erzählt, und dieses Issue behauptet sie nicht. **Erstens** nutzt `repeated flow_ids` kein einziger Client: `Future<Rule?> decide(FlowId id, Decision decision, {Rule? remember})` (`app/lib/core/ipc/daemon_client.dart:39`) und `..flowIds.add(flowId.value)` (`app/lib/core/ipc/convert.dart:501-502`) schicken je eine Id, und die Oberfläche schleift selbst über die Flows und hängt `remember: i == 0 ? rule : null` an den ersten Aufruf (`app/lib/features/intercept/providers/decision.dart:615-620`). Der Unterschied zwischen Oberfläche und Kommandozeile ist nicht eine Stapel-Anfrage, sondern dass die Oberfläche die Schleife und das Anlegen der Regel selbst fährt und die Kommandozeile beides nicht hat. **Zweitens** meldet keine Prüfung die Lücke, auch nicht die geplante: Der CI-Job `parity-check` ruft `scripts/ci/parity-placeholder.sh` (`.github/workflows/ci.yml:572-582`), das Skript endet mit `exit 0`, solange `daemon/xtask/src/parity.rs` fehlt — und es fehlt, `daemon/xtask/src/` enthält nur `main.rs`. HUM-078 vergleicht auf RPC-Ebene („CI-Job `parity-check` schlägt fehl, wenn ein RPC keine CLI-Zeile hat", `backlog/sprint-4.md:1614`), und seine Beispielzeile `| Humanitl.Decide | humanitl flows decide <id> allow oder block [--note] | intercept/action_bar |` (`:1629`) ist der heutige Stand: grün, mit Lücke. *Stand 2026-09-19, nach HUM-078:* `parity-check` läuft jetzt auf `scripts/ci/parity-check.sh`: die Paritätstests der Kommandozeile gegen `clap`, dann `cargo xtask docs --check` mit `daemon/xtask/src/parity.rs`. Er bricht bei einer RPC ohne Unterkommando und ohne begründete Ausnahme; eine Prüfung auf Feld-Ebene (ob `flows decide` alle Felder von `DecideRequest` anbietet) macht er weiterhin nicht, die Lücke oben bliebe grün.
 
 Zu klären ist außerdem ein Widerspruch im Repository. Der Doc-Kommentar `daemon/bin/humanitl/src/cmd/flows.rs:308-311` nennt die Ein-Id-Regel Absicht („auf der Kommandozeile wäre er die bequeme Art, versehentlich mehr freizugeben als gemeint"), `backlog/CONVENTIONS.md:1305-1318` (4.22) nennt dieselbe Sache eine Paritätslücke, die in ein eigenes Issue gehört. Beides stimmt für verschiedene Hälften: Die Sorge gilt einem Stapel, den niemand einzeln benannt hat; für `--remember` gibt es nirgends eine Begründung. Dieses Issue löst den Widerspruch auf, statt eine der beiden Stellen zu überschreiben.
 
@@ -2271,7 +2273,7 @@ Das ist kein Versäumnis der Umsetzung, sondern ein Widerspruch zwischen zwei Do
 
 Das Muster für die richtige Seite existiert bereits: `AuditRequest.Export` (`humanitl.proto:863`) exportiert `jsonl` und `csv` daemon-seitig, und `backlog/sprint-4.md:789` hält für den Audit-Screen fest: „der Daemon schreibt die Datei (`ExportOp.out_path`), das UI zeigt Inline-Bestätigung". Der Export fehlt also nicht generell, die Historie weicht von einem vorhandenen Muster ab. CSV kam dabei ohne Spezifikation dazu (`backlog/CONVENTIONS.md:865`: „**CSV ist ein vierter Export.** Die Spezifikation nennt HAR, JSONL und curl.") — ein zusätzlicher Beleg dafür, dass Formate dort wachsen, wo niemand sie über den Vertrag sieht.
 
-Maschinell ist die Klasse unsichtbar. Der CI-Job `parity-check` (`.github/workflows/ci.yml:572-582`) läuft auf `scripts/ci/parity-placeholder.sh` und überspringt bis HUM-078; auch danach prüft er nach ADR-0018 Zeile 39 bis 42 nur „RPC ohne CLI-Zeile", nie „Fähigkeit nur im Client". Ein Export ohne RPC fällt keiner Prüfung auf.
+Maschinell ist die Klasse unsichtbar. Der CI-Job `parity-check` läuft seit HUM-078 (2026-09-19) auf `scripts/ci/parity-check.sh`: Paritätstests der Kommandozeile gegen `clap`, dann `cargo xtask docs --check`. Er prüft nach ADR-0018 Zeile 39 bis 42 nur „RPC ohne CLI-Zeile" und ob `docs/reference/parity.md` aktuell ist, nie „Fähigkeit nur im Client" und nie Parität auf Feld-Ebene. Ein Export ohne RPC fällt keiner Prüfung auf.
 
 Schweregrad **major**, nicht blocking: Die Produktzusage aus `README.md:83` („exportable as HAR, JSONL and CSV") ist erfüllt, Nutzer bekommen ihre Dateien, und die Sicherheitsaussage bleibt unberührt. Unwahr ist allein die Architektur-Aussage — und ein dokumentierter Satz, der nicht gilt, ist in diesem Repository ein Fehler und keine Geschmacksfrage.
 
@@ -3760,3 +3762,84 @@ die Ursache aus dem Artefakt lesen kann.
 
 ### Referenzen
 HUM-144; `app/integration_test/`, `.github/workflows/ci.yml` (Job `e2e-xvfb`).
+
+---
+
+## HUM-169 · `flows watch`: der Ereignisstrom auf der Kommandozeile
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-078 · Blockiert: keine
+
+### Kontext
+HUM-078 ordnet jeder RPC ein Unterkommando zu. `Subscribe` hat heute nur `humanitl run --ask terminal` als Client auf der Kommandozeile: die Moderation liest den Strom, zeigt aber nur gehaltene Anfragen. Wer den Strom beobachten will, ohne selbst eine Sitzung zu starten, hat keinen Weg; die Fallstricke von HUM-078 verlangen `flows watch` ausdrücklich.
+
+### Ziel
+`humanitl flows watch [--passthrough] [--since ID] [--json]` schreibt jedes `FlowEvent` als eine Zeile, bis Ctrl+C oder der Daemon den Strom beendet.
+
+### Nicht-Ziel
+Kein Entscheiden aus dem Strom heraus; dafür gibt es `flows decide` und `--ask terminal`.
+
+### Betroffene Pfade
+- `daemon/bin/humanitl/src/cli.rs` (`FlowsCmd::Watch`)
+- `daemon/bin/humanitl/src/cmd/flows.rs`
+- `daemon/bin/humanitl/src/parity.rs` (Zeile `("Humanitl.Subscribe", "flows watch")`)
+- `docs/reference/parity.md` (neu erzeugt)
+
+### Spezifikation
+Textform: Zeitstempel, Art des Ereignisses, Flow-Id, eine kurze Angabe je Art (Host und Pfad bei `Received`, Entscheidung bei `Decided`, Code bei `Diagnostic`). Unter `--json` ein Objekt je Zeile mit `at`, `kind`, `flow_id` und den Feldern der Art; `summary_json` aus `cmd/flows.rs` für `Received`. `Lagged` wird als Befund gemeldet, nicht verschwiegen.
+
+### Schritte
+1. Unterkommando und Ausgabe, Tests gegen den Fake-Daemon.
+2. `PARITY` ergänzen, `cargo xtask docs`.
+
+### Tests
+- `flows_watch_prints_one_line_per_event` gegen den Fake-Daemon.
+- `flows_watch_json_is_one_object_per_line`.
+
+### Akzeptanzkriterien
+- [ ] `flows watch` zeigt jedes Ereignis des Stroms.
+- [ ] `docs/reference/parity.md` nennt `flows watch` bei `Humanitl.Subscribe`.
+
+### Fallstricke
+- Ctrl+C muss den Strom sauber schließen; Exit 0, nicht 130, wenn der Nutzer das Beobachten beendet.
+
+### Referenzen
+ADR-018; HUM-078; `backlog/CONVENTIONS.md` 4.35.
+
+---
+
+## HUM-170 · `GetConfig` und `GetSessionSummary` haben keinen Ort in der Oberfläche
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-078 · Blockiert: keine
+
+### Kontext
+`cargo xtask docs` warnt seit HUM-078 bei zwei RPCs, die die Oberfläche nicht aufruft: `GetConfig` (die aufgelöste Konfiguration mit Herkunft je Feld) und `GetSessionSummary` (was ein Sandbox-Lauf im Projektverzeichnis hinterlassen hat, HUM-043). ADR-018 gibt der Oberfläche dafür höchstens einen Sprint Rückstand auf die Kommandozeile.
+
+### Ziel
+Beide RPCs haben einen Ort in der Oberfläche und eine Zeile in `app/lib/core/parity.dart`; `cargo xtask docs` warnt nicht mehr.
+
+### Nicht-Ziel
+Kein neuer Einstellungsbildschirm über das hinaus, was die Spezifikation des Settings-Bildschirms ohnehin vorsieht.
+
+### Betroffene Pfade
+- `app/lib/core/ipc/daemon_client.dart` und die beiden Clients (`getConfig`, `getSessionSummary`)
+- der Settings-Bildschirm (Konfiguration mit Herkunft) und der Sandbox-Bildschirm (Zusammenfassung nach dem Lauf)
+- `app/lib/core/parity.dart`, `docs/reference/parity.md`
+
+### Spezifikation
+`getConfig` liefert die Werte samt `Origin`, die der Settings-Bildschirm neben jedem Feld zeigt. `getSessionSummary` wird nach dem Ende eines Laufs im Sandbox-Bildschirm gezeigt, mit denselben Angaben wie `humanitl sessions summary`.
+
+### Schritte
+1. Methoden im `DaemonClient`, Fake und gRPC.
+2. Anzeige in den beiden Bildschirmen, ARB-Schlüssel `en` und `de`.
+3. Registry ergänzen, `cargo xtask docs`.
+
+### Tests
+Widget-Tests für beide Anzeigen gegen den Fake-Client.
+
+### Akzeptanzkriterien
+- [ ] `cargo xtask docs --check` läuft ohne Warnung.
+- [ ] `docs/reference/parity.md` hat keinen Abschnitt „UI-Lücken" mehr mit Einträgen.
+
+### Fallstricke
+- `app/lib/core/ipc/fake_daemon_client.dart` ist eine gemeinsam genutzte Datei (CLAUDE.md): nur anhängen.
+
+### Referenzen
+ADR-018; HUM-043; HUM-078; `backlog/CONVENTIONS.md` 4.35.

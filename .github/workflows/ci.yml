@@ -727,5 +727,8 @@ jobs:
         with:
           cache-key: parity
       - name: UI and CLI parity
-        # Explicit skip until HUM-078 generates docs/reference/parity.md.
-        run: ./scripts/ci/parity-placeholder.sh
+        # HUM-078: runs the CLI parity tests against clap, then
+        # `cargo xtask docs --check`; fails on an RPC without a CLI subcommand,
+        # on a stale entry and on a table that moved. RPCs without a UI
+        # location show up as warnings.
+        run: ./scripts/ci/parity-check.sh

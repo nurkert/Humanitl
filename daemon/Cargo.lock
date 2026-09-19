@@ -1146,6 +1146,9 @@ name = "humanitl-xtask"
 version = "0.0.0"
 dependencies = [
  "protox",
+ "regex",
+ "serde",
+ "toml",
 ]
 
 [[package]]
