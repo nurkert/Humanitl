@@ -4363,13 +4363,13 @@ m2, Schwere minor, von zwei unabhängigen Prüfern bestätigt). Ort: `tests/esca
 Der Befund ist behoben, und ein Test hält ihn behoben.
 
 ### Akzeptanzkriterien
-- [ ] Den Fall hinter `cli_setup=$(install_cli_rules …)` verschieben. `run.sh:395` hat das DNS-Log dann schon gelesen.
-- [ ] Erwartung: `'^allow_rule=matched over_cap=413/body_cap at_cap=502/upstream_dns'`.
-- [ ] Kommentare 24-30, 148-153 und `README.md:78-83` anpassen.
-- [ ] Rust-Test in `proxy/tests/proxy.rs` mit `.body_cap(1024).rules_store(<allow Zielhost>, …)` ohne Decider:
-- [ ] Nach `stream: true` die Formulierung einengen.
-- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
-- [ ] `make check` grün.
+- [x] Den Fall hinter `cli_setup=$(install_cli_rules …)` verschieben. `run.sh:395` hat das DNS-Log dann schon gelesen.
+- [x] Erwartung: `'^allow_rule=matched over_cap=413/body_cap at_cap=502/upstream_dns'`.
+- [x] Kommentare 24-30, 148-153 und `README.md:78-83` anpassen.
+- [x] Rust-Test in `proxy/tests/proxy.rs` mit `.body_cap(1024).rules_store(<allow Zielhost>, …)` ohne Decider:
+- [x] Nach `stream: true` die Formulierung einengen.
+- [x] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [x] `make check` grün.
 
 ### Referenzen
 Sicherheitsdurchlauf 2026-09-23, Befund m2; `tests/escape/esc-4-rules.sh:143`.
