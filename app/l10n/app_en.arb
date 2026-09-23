@@ -2879,5 +2879,10 @@
   "diagSANDBOX019Title": "Refused connection attempts are not reported",
   "@diagSANDBOX019Title": {"description": "Title of the diagnostic SANDBOX_019 (docs/DIAGNOSTICS.md). Shown instead of the daemon's register title, which is German (DiagnosticL10n.resolve, HUM-052)."},
   "diagSANDBOX019Why": "The kernel gave the agent''s filter no listener; sockets are still refused with EPERM, but nothing is counted or reported.",
-  "@diagSANDBOX019Why": {"description": "Generic cause of SANDBOX_019. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own; the daemon's measured sentence always wins there (docs/UX.md 4.4, HUM-052)."}
+  "@diagSANDBOX019Why": {"description": "Generic cause of SANDBOX_019. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own; the daemon's measured sentence always wins there (docs/UX.md 4.4, HUM-052)."},
+  "interceptBatchWithheld": "{count, plural, =1{1 request with an unresolved finding stays held. Send it from its card.} other{{count} requests with unresolved findings stay held. Send each from its card.}}",
+  "@interceptBatchWithheld": {
+    "description": "In the allow-all modal: how many held requests the batch leaves out because a finding is unresolved in them (HUM-207). A modal is not the care a finding needs (docs/UX.md 4.7).",
+    "placeholders": {"count": {"type": "int"}}
+  }
 }

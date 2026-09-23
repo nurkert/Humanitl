@@ -181,6 +181,16 @@ class _BatchModalState extends ConsumerState<BatchModal>
                     l10n.interceptBatchMore(rest),
                     style: tokens.typography.ui12.tinted(tokens.colors.fg1),
                   ),
+                // Was nicht mitgeht, steht hier: Ein Fund braucht das Ventil
+                // oder die Pause, kein Modal (HUM-207, `docs/UX.md` 4.7).
+                if (request.withheld > 0) ...<Widget>[
+                  SizedBox(height: tokens.spacing.x2),
+                  Text(
+                    l10n.interceptBatchWithheld(request.withheld),
+                    key: const Key('intercept-batch-withheld'),
+                    style: tokens.typography.ui12.tinted(tokens.colors.fg0),
+                  ),
+                ],
               ],
             ),
           ),
