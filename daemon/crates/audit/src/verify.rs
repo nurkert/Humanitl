@@ -19,6 +19,20 @@
 //! fehlen, ohne dass es jemand merkt, und genau das ist die dokumentierte
 //! Grenze (`docs/SECURITY.md`, „Was die Audit-Kette beweist").
 //!
+//! **Ein dokumentierter Anfang** (HUM-157). Beginnt die Datei nicht bei
+//! Nummer 1, gilt ihr erster Record vorläufig als Anfang: Seine Nummer minus
+//! eins und sein `prev` sind der Schnitt. Ein Anker unter genau dieser Nummer
+//! muss denselben Hash nennen. Nach der letzten Zeile muss ein `audit.pruned`
+//! in der Kette stehen, der genau diesen Schnitt nennt; dann hält die Kette,
+//! mit der Warnung [`VerifyWarning::Pruned`]. Fehlt er, ist der Anfang eine
+//! Lücke wie jede andere: [`BreakReason::SeqGap`] am ersten Record, und keiner
+//! davor hat bestanden. Ein Anfang, den niemand dokumentiert hat, sieht damit
+//! genauso aus wie vor HUM-157. Mit `until` liest die Prüfung über das
+//! gemeldete Ende hinaus weiter, bis sie den dokumentierenden Record gefunden
+//! hat: Ein Lauf der Aufbewahrung kann zwischen dem Melden des Endes und dem
+//! Lesen die Datei ersetzt haben, und sein `audit.pruned` steht dann hinter
+//! dem gemeldeten Ende.
+//!
 //! **Welche Nummer ein Bruch nennt.** `first_bad_seq` ist die Nummer des
 //! ersten Records, der nicht besteht, so wie sie in ihm steht. Fehlt Record 4,
 //! nennt die Prüfung 5: Record 5 ist der erste, der nicht passt. Ist eine
@@ -37,6 +51,7 @@ use humanitl_core::{Diagnostic, FixAction, Severity};
 use crate::Anchor;
 use crate::key::shell_quote;
 use crate::record::{AuditRecord, GENESIS_PREV, mac_matches};
+use crate::retention::AuditPruned;
 use crate::writer::Head;
 
 /// Das Ergebnis einer Prüfung.
@@ -121,6 +136,14 @@ pub enum VerifyWarning {
     UnanchoredTail {
         /// Wie viele.
         records: u64,
+    },
+    /// Die Records bis einschließlich `through_seq` hat ein Lauf von
+    /// `audit.retention_days` gelöscht, und ein `audit.pruned` in der Kette
+    /// dokumentiert es (HUM-157). Was in ihnen stand, beweist die Kette nicht
+    /// mehr.
+    Pruned {
+        /// Die Nummer des letzten gelöschten Records.
+        through_seq: u64,
     },
 }
 
@@ -273,9 +296,13 @@ impl AuditVerifier {
         let mut records = 0_u64;
         let mut last_seq = 0_u64;
         let mut last_hash = GENESIS_PREV.to_owned();
+        // Der Schnitt eines Anfangs hinter Nummer 1, und ob ein
+        // `audit.pruned` ihn schon dokumentiert hat (siehe Modulkommentar).
+        let mut start: Option<Start> = None;
         let mut buffer = Vec::with_capacity(1024);
         loop {
-            if until.is_some_and(|until| last_seq >= until) {
+            let past_until = until.is_some_and(|until| last_seq >= until);
+            if past_until && start.as_ref().is_none_or(|start| start.documented) {
                 // Das gemeldete Ende ist erreicht; der Rest entsteht gerade.
                 break;
             }
@@ -283,57 +310,179 @@ impl AuditVerifier {
             if reader.read_until(b'\n', &mut buffer)? == 0 {
                 break;
             }
-            let broken = |first_bad_seq, reason| VerifyReport {
-                records,
-                status: VerifyStatus::Broken {
-                    first_bad_seq,
-                    reason,
+            if records == 0
+                && let Some(first) = cut_start(&buffer)
+            {
+                // Der Anfang einer gekürzten Kette. Ein Anker auf dem Schnitt
+                // nennt den Hash des letzten gelöschten Records.
+                if by_seq.get(&first.through_seq).is_some_and(|hashes| {
+                    hashes
+                        .iter()
+                        .any(|anchored| *anchored != first.through_hash)
+                }) {
+                    return Ok(VerifyReport {
+                        records,
+                        status: VerifyStatus::Broken {
+                            first_bad_seq: first.through_seq + 1,
+                            reason: BreakReason::AnchorMismatch {
+                                anchor_seq: first.through_seq,
+                            },
+                        },
+                        warnings,
+                        head: None,
+                    });
+                }
+                last_seq = first.through_seq;
+                last_hash.clone_from(&first.through_hash);
+                start = Some(first);
+            }
+            let broken = |first_bad_seq, reason| match start.as_ref() {
+                // Ein Anfang, den noch kein Record dokumentiert hat, ist der
+                // erste Befund, auch wenn danach noch einer käme.
+                Some(start) if !start.documented => undocumented(start, warnings.clone()),
+                _ => VerifyReport {
+                    records,
+                    status: VerifyStatus::Broken {
+                        first_bad_seq,
+                        reason,
+                    },
+                    warnings: warnings.clone(),
+                    head: head_of(records, last_seq, &last_hash),
                 },
-                warnings: warnings.clone(),
-                head: head_of(records, last_seq, &last_hash),
             };
             // Eine letzte Zeile ohne `\n` ist unvollständig: Das Format endet
             // jede Zeile mit einem Umbruch.
             let Some(line) = buffer.strip_suffix(b"\n") else {
+                if past_until {
+                    // Hinter dem gemeldeten Ende entsteht diese Zeile gerade.
+                    break;
+                }
                 return Ok(broken(last_seq + 1, BreakReason::NonCanonicalLine));
             };
             match check_line(line, last_seq, &last_hash, hmac_key, &by_seq) {
-                Ok((seq, hash)) => {
+                Ok(record) => {
+                    if let Some(start) = start.as_mut().filter(|start| !start.documented) {
+                        start.documented =
+                            AuditPruned::documents(&record, start.through_seq, &start.through_hash);
+                    }
                     records += 1;
-                    last_seq = seq;
-                    last_hash = hash;
+                    last_seq = record.body.seq;
+                    last_hash = record.hash;
                 }
                 Err((first_bad_seq, reason)) => return Ok(broken(first_bad_seq, reason)),
             }
         }
 
-        if let Some((&anchor_seq, _)) = by_seq.range(last_seq + 1..).next() {
-            return Ok(VerifyReport {
+        Ok(conclude(
+            Tail {
                 records,
-                status: VerifyStatus::Broken {
-                    first_bad_seq: last_seq,
-                    reason: BreakReason::TruncatedBelowAnchor { anchor_seq },
-                },
-                warnings,
-                head: head_of(records, last_seq, &last_hash),
-            });
+                last_seq,
+                last_hash,
+            },
+            start,
+            &by_seq,
+            warnings,
+        ))
+    }
+}
+
+/// Wo die Prüfung nach der letzten Zeile steht.
+struct Tail {
+    /// Wie viele Records bestanden haben.
+    records: u64,
+    /// Die Nummer des letzten.
+    last_seq: u64,
+    /// Sein Hash.
+    last_hash: String,
+}
+
+/// Das Urteil nach der letzten Zeile: ein Anfang ohne Beleg, ein Anker hinter
+/// dem Ende, oder eine Kette, die hält, mit ihren Warnungen.
+fn conclude(
+    tail: Tail,
+    start: Option<Start>,
+    by_seq: &BTreeMap<u64, Vec<&str>>,
+    mut warnings: Vec<VerifyWarning>,
+) -> VerifyReport {
+    let Tail {
+        records,
+        last_seq,
+        last_hash,
+    } = tail;
+    let mut cut = 0_u64;
+    if let Some(start) = start {
+        if !start.documented {
+            return undocumented(&start, warnings);
         }
-        let anchored = by_seq
-            .range(..=last_seq)
-            .next_back()
-            .map_or(0, |(&seq, _)| seq);
-        if last_seq > anchored {
-            warnings.push(VerifyWarning::UnanchoredTail {
-                records: last_seq - anchored,
-            });
-        }
-        Ok(VerifyReport {
+        cut = start.through_seq;
+        warnings.push(VerifyWarning::Pruned {
+            through_seq: start.through_seq,
+        });
+    }
+
+    if let Some((&anchor_seq, _)) = by_seq.range(last_seq + 1..).next() {
+        return VerifyReport {
             records,
-            status: VerifyStatus::Ok,
+            status: VerifyStatus::Broken {
+                first_bad_seq: last_seq,
+                reason: BreakReason::TruncatedBelowAnchor { anchor_seq },
+            },
             warnings,
             head: head_of(records, last_seq, &last_hash),
-        })
+        };
     }
+    // Ein Anker unter dem Schnitt verankert keinen Record, der noch da ist.
+    let anchored = by_seq
+        .range(..=last_seq)
+        .next_back()
+        .map_or(0, |(&seq, _)| seq)
+        .max(cut);
+    if last_seq > anchored {
+        warnings.push(VerifyWarning::UnanchoredTail {
+            records: last_seq - anchored,
+        });
+    }
+    VerifyReport {
+        records,
+        status: VerifyStatus::Ok,
+        warnings,
+        head: head_of(records, last_seq, &last_hash),
+    }
+}
+
+/// Der Schnitt am Anfang einer gekürzten Kette.
+struct Start {
+    /// Die Nummer des letzten gelöschten Records.
+    through_seq: u64,
+    /// Sein Hash, wie ihn der erste Record als `prev` nennt.
+    through_hash: String,
+    /// Ob ein `audit.pruned` in der Kette genau diesen Schnitt nennt.
+    documented: bool,
+}
+
+/// Kein Record nennt diesen Schnitt: ein Anfang, der fehlt. Derselbe Befund
+/// wie vor HUM-157, als jeder Anfang hinter Nummer 1 eine Lücke war.
+fn undocumented(start: &Start, warnings: Vec<VerifyWarning>) -> VerifyReport {
+    VerifyReport {
+        records: 0,
+        status: VerifyStatus::Broken {
+            first_bad_seq: start.through_seq + 1,
+            reason: BreakReason::SeqGap,
+        },
+        warnings,
+        head: None,
+    }
+}
+
+/// Der Schnitt, wenn `line` ein Record hinter Nummer 1 ist; sonst `None`, und
+/// die Prüfung beginnt wie immer bei 1 und [`GENESIS_PREV`].
+fn cut_start(line: &[u8]) -> Option<Start> {
+    let record = AuditRecord::from_line(line.strip_suffix(b"\n")?).ok()?;
+    (record.body.seq > 1).then(|| Start {
+        through_seq: record.body.seq - 1,
+        through_hash: record.body.prev,
+        documented: false,
+    })
 }
 
 /// Das Ende des geprüften Teils; `None`, solange nichts bestanden hat.
@@ -344,15 +493,15 @@ fn head_of(records: u64, last_seq: u64, last_hash: &str) -> Option<Head> {
     })
 }
 
-/// Prüft eine Zeile und liefert Nummer und Hash, oder die Nummer und den
-/// Grund des Bruchs.
+/// Prüft eine Zeile und liefert den Record, oder die Nummer und den Grund des
+/// Bruchs.
 fn check_line(
     line: &[u8],
     last_seq: u64,
     last_hash: &str,
     hmac_key: Option<&[u8; 32]>,
     anchors: &BTreeMap<u64, Vec<&str>>,
-) -> Result<(u64, String), (u64, BreakReason)> {
+) -> Result<AuditRecord, (u64, BreakReason)> {
     let expected = last_seq + 1;
     let record =
         AuditRecord::from_line(line).map_err(|_| (expected, BreakReason::NonCanonicalLine))?;
@@ -384,5 +533,5 @@ fn check_line(
     {
         return Err((seq, BreakReason::AnchorMismatch { anchor_seq: seq }));
     }
-    Ok((seq, record.hash))
+    Ok(record)
 }

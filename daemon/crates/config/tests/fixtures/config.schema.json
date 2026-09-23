@@ -87,11 +87,10 @@
         },
         "retention_days": {
           "default": 0,
-          "description": "Tage, die das Audit-Log aufgehoben wird; 0 heißt für immer. Löschen bricht die Kette absichtlich, und im MVP wird nichts gelöscht.",
+          "description": "Tage, die ein Record im Audit-Log aufgehoben wird; 0 heißt für immer. Ein täglicher Lauf löscht die Records am Anfang der Kette, die älter sind, und dokumentiert den Schnitt mit einem Record `audit.pruned` samt Anker; die Prüfung erkennt den so dokumentierten Anfang an, einen Anfang ohne ihn meldet sie weiter als Bruch. Eine Kette, die nicht hält, wird nicht gekürzt. Was in den gelöschten Records stand, beweist die Kette danach nicht mehr; die Anker in `audit_anchors` bleiben stehen.",
           "format": "uint32",
           "minimum": 0,
           "type": "integer",
-          "x-pending-issue": "HUM-157",
           "x-project-scope": "denied",
           "x-tier": "expert"
         }

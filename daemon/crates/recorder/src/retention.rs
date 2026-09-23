@@ -25,7 +25,9 @@
 //! Anweisungen des Aufräumlaufs, und ein gelöschter Anker wäre ein Loch in
 //! genau der Aussage, für die es die Tabelle gibt (`V7__audit_anchors.sql`).
 //! `audit.retention_days` ist eine zweite, eigene Zahl; solange sie `0` ist,
-//! wird an der Kette nichts gelöscht.
+//! wird an der Kette nichts gelöscht. Ihren Lauf macht der Daemon über den
+//! Schreiber des Audit-Logs (HUM-157, `humanitl_audit::retention`), und auch
+//! der lässt `audit_anchors` stehen.
 
 use std::num::NonZeroU32;
 use std::time::{Duration, SystemTime};

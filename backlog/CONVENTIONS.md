@@ -3301,3 +3301,56 @@ Units des Pakets aktiviert wurden.
 - **Der `PATH` im Befund folgt der Regel der Umgebungstabelle (4.17).** `sandbox_path_of` liest denselben Wert wie `env_of` und zeigt ihn nur, wenn auch die Tabelle ihn zeigt; einen von Hand geschriebenen (`sandbox.env`, eigenes Profil) ersetzt `<withheld>`. `AGENT_004` aus der Vorprüfung (HUM-139) nennt den `PATH` dagegen ohne diese Prüfung; beide Befunde reden über dieselbe Zeile und sollten es auf dieselbe Weise tun.
 - **Der Vorschlag fragt die Sandbox selbst.** `fix` ist `CopyCommand` mit `humanitl sandbox run -- /bin/sh -c 'command -v <kommando> || echo …'`, beide Ebenen mit `shell_quote` zitiert. Was eingehängt wird, entscheidet das Profil; den Pfad eines Programms auf dem Host vorzuschlagen, wäre die Aufgabe der Vorprüfung (HUM-129), nicht die eines Befunds über einen Lauf, der schon vorbei ist.
 - **Der Test gegen den echten Daemon setzt `agent.command` auf ein Kommando, das es nirgends gibt.** `app/test/features/sandbox/daemon_live_test.dart` verließ sich bis dahin darauf, dass `opencode` in der Sandbox fehlt; auf einem Rechner, auf dem es unter `/usr/local/bin` liegt, wäre der Strom des Starts erst mit dem Agenten zu Ende gegangen.
+
+### 4.40 Aus der Umsetzung von `audit.retention_days` (HUM-157, 2026-09-23)
+
+**Entscheidung: löschen, nicht streichen.** Die Spezifikation stellt beides zur
+Wahl. Gebaut ist das Löschen, aus drei Gründen: Das Log trägt Hosts im
+Klartext und Sitzungen, für die dieselbe Speicherbegrenzung gilt wie für die
+Aufzeichnung (`recorder.retention_days`); ohne Löschung wächst es ohne Grenze;
+und ein Schnitt lässt sich so belegen, dass `verify` ihn von einem Bruch
+unterscheidet, ohne die Aussage über die übrigen Records zu schwächen. Die
+Vorgabe bleibt `0` (für immer), die Obergrenze 3650 wie bei der Aufzeichnung.
+Mit der Vorgabe bleibt die Datei append-only wie bisher. Begründung und
+Beweisumfang stehen in `docs/SECURITY.md` Abschnitt 8, „Aufbewahrung der Kette".
+
+- **Der Beleg ist ein Record, kein Anker.** `audit.pruned` (`through_seq`,
+  `through_hash`, `records`, `cutoff`) steht hinter dem Schnitt am Ende der
+  Kette, versiegelt wie jeder Record und gleich danach verankert. Die Prüfung
+  nimmt einen Anfang hinter Nummer 1 nur an, wenn ein solcher Record genau
+  diesen Schnitt nennt; sonst `SeqGap` am ersten Record mit `records = 0`,
+  derselbe Befund wie vor HUM-157. Ein Anker auf der Nummer des Schnitts muss
+  den Hash nennen, den der erste Record als `prev` trägt
+  (`AnchorMismatch`). Das Handle nimmt `audit.pruned` von außen nicht an, wie
+  `audit.anchor`.
+- **Umschreiben, nicht rotieren.** Der Rest geht in eine gesperrte Nebendatei
+  mit dem festen Namen `audit.jsonl.prune`, die über `audit.jsonl` umbenannt
+  wird; der Schreiber hängt danach an sie an. Ein Rest dieses Namens aus einem
+  abgebrochenen Lauf wird vorher entfernt. Die Sperre steht vor dem Umbenennen,
+  damit ein zweiter Daemon im Augenblick dazwischen `AUDIT_004` bekommt. Das
+  Umbenennen ist der Punkt, ab dem es gilt: Scheitert danach das `fsync` des
+  Verzeichnisses, gilt trotzdem die neue Datei, und bis ein späterer Anker das
+  Verzeichnis synchronisieren kann, geht kein Anker in `audit_anchors`.
+- **Reihenfolge: prüfen, belegen, schneiden.** Eine Kette, die nicht hält, wird
+  nicht gekürzt (`AUDIT_001`, der Befund ist die Auskunft über die Kette; der
+  Bereich `AUDIT` ist mit 009 voll, ein eigener Code hätte `AREAS` erweitern
+  müssen). Der Beleg steht vor dem Schnitt auf der Platte; ein Absturz
+  dazwischen lässt einen Beleg ohne Schnitt zurück, und das ist kein Bruch.
+- **`audit_anchors` bleibt ganz.** Anker unter dem Schnitt prüft `verify` nicht
+  mehr, weil ihre Records fehlen, und zählt sie nicht als Verankerung für das
+  unverankerte Ende.
+- **Prüfen über das gemeldete Ende hinaus.** `verify_until` liest weiter, bis es
+  den Beleg eines gekürzten Anfangs gefunden hat: Ein Lauf kann zwischen dem
+  Melden des Endes und dem Lesen die Datei ersetzt haben. Eine halbe Zeile
+  hinter dem gemeldeten Ende ist dabei kein Bruch.
+- **Warnung `pruned` auf der Leitung.** `AuditWarning.kind = "pruned"`, und
+  `records` trägt die Nummer des letzten gelöschten Records; der Vertrag hat
+  für Warnungen nur diese eine Zahl, und sein Kommentar folgt mit HUM-195.
+  Kommandozeile: `pruned: records 1 to <n> deleted by audit.retention_days,
+  unproven`; Oberfläche: `auditWarningPruned`.
+- **Takt.** Der Lauf hängt am täglichen Aufräumen der Aufzeichnung
+  (`purge_daily`), nach ihm, damit `recorder.retention_applied` schon in der
+  Kette steht. Verdrahtung in `daemon/bin/humanitld/src/audit_retention.rs`,
+  weil nur der Daemon Audit-Schreiber und Anker-Tabelle zugleich kennt.
+
+Nicht gebaut: eine Grenze in Bytes (HUM-194).

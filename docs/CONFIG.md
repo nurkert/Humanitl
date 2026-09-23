@@ -100,7 +100,7 @@ Die Audit-Kette: Anker, Synchronisation, Aufbewahrung.
 |---|---|---|---|---|---|---|
 | `audit.anchor_every` | integer | `100` | advanced | denied | ja | Jeder wievielte Record ein Anker ist, in der Datei und zugleich in der Datenbank. Records hinter dem letzten Anker kann jemand mit Zugriff auf die Datei am Ende abschneiden, ohne dass die Prüfung es merkt; ein kleinerer Wert macht dieses Fenster kleiner. Beim Beenden des Daemons wird immer geankert. |
 | `audit.fsync_every` | integer | `50` | expert | denied | ja | Nach wie vielen Records der Daemon das Audit-Log auf die Platte zwingt (fsync). Spätestens nach einer Sekunde und vor jedem Anker geschieht es ohnehin. |
-| `audit.retention_days` | integer | `0` | expert | denied | offen (HUM-157) | Tage, die das Audit-Log aufgehoben wird; 0 heißt für immer. Löschen bricht die Kette absichtlich, und im MVP wird nichts gelöscht. |
+| `audit.retention_days` | integer | `0` | expert | denied | ja | Tage, die ein Record im Audit-Log aufgehoben wird; 0 heißt für immer. Ein täglicher Lauf löscht die Records am Anfang der Kette, die älter sind, und dokumentiert den Schnitt mit einem Record `audit.pruned` samt Anker; die Prüfung erkennt den so dokumentierten Anfang an, einen Anfang ohne ihn meldet sie weiter als Bruch. Eine Kette, die nicht hält, wird nicht gekürzt. Was in den gelöschten Records stand, beweist die Kette danach nicht mehr; die Anker in `audit_anchors` bleiben stehen. |
 
 ### `experimental`
 

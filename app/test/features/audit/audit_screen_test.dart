@@ -298,14 +298,21 @@ void main() {
       ..auditWarnings = const <AuditWarning>[
         AuditWarning(kind: 'no_hmac_key'),
         AuditWarning(kind: 'unanchored_tail', records: 12),
+        // HUM-157: `records` trägt hier die Nummer des letzten gelöschten
+        // Records.
+        AuditWarning(kind: 'pruned', records: 40),
       ];
     await pumpAudit(tester, client: client);
 
     final Finder noKey = find.textContaining('the MACs are unchecked');
     final Finder tail = find.textContaining('12 records stand behind');
+    final Finder pruned = find.textContaining(
+      'Records 1 to 40 were deleted by audit.retention_days',
+    );
     expect(noKey, findsOneWidget);
     expect(tail, findsOneWidget);
-    for (final Finder finder in <Finder>[noKey, tail]) {
+    expect(pruned, findsOneWidget);
+    for (final Finder finder in <Finder>[noKey, tail, pruned]) {
       expect(
         tester.widget<Text>(finder).style?.color,
         HTokens.dark.state.held,
