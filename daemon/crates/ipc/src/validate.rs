@@ -74,10 +74,42 @@ pub fn decide_plan(
     }
     let decision = decision_of(request, body_cap_bytes)?;
     let count = request.flow_ids.len();
+    acknowledgement(request, &decision)?;
     if matches!(decision, Decision::AllowEdited { .. }) && count > 1 {
         return Ok(DecidePlan::RefuseEach(edited_for_many(count)));
     }
     Ok(DecidePlan::Decide(decision))
+}
+
+/// Prüft `acknowledged_findings`, soweit es ohne den Flow geht (HUM-160).
+///
+/// Die Indizes zeigen in die Funde **eines** Flows, also nur mit genau einer
+/// Id; und sie bestätigen, was unverändert hinausgeht, also nur mit `allow`.
+/// Bei `allow_edited` zeigten sie in die gehaltene Fassung, nicht in die, die
+/// hinausgeht. Ob jeder Index einen Fund trifft, weiß erst die Warteschlange
+/// (`NotHeld::UnknownFinding`).
+///
+/// `IPC_004` und nicht `IPC_002`, wie die Spezifikation von HUM-160 schrieb:
+/// `IPC_002` heißt „`AllowEdited` nur für genau einen Flow" und sagte hier
+/// etwas Falsches (`backlog/CONVENTIONS.md` 4.37).
+fn acknowledgement(request: &v1::DecideRequest, decision: &Decision) -> Result<(), Diagnostic> {
+    if request.acknowledged_findings.is_empty() {
+        return Ok(());
+    }
+    if !matches!(decision, Decision::Allow) {
+        return Err(bad_decide(format!(
+            "findings are acknowledged with allow only, not with {}; with allow_edited the \
+             indices would point into the held request instead of the one that goes out",
+            decision.as_str()
+        )));
+    }
+    let count = request.flow_ids.len();
+    if count != 1 {
+        return Err(bad_decide(format!(
+            "acknowledged findings name the findings of one flow, but decide came for {count}"
+        )));
+    }
+    Ok(())
 }
 
 /// Die Entscheidung aus der Anfrage, ohne die Zahl der Flows anzusehen.

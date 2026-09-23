@@ -125,6 +125,17 @@ abstract class Flow with _$Flow {
     /// undecided request leave it empty, and empty always means "there is
     /// none", never "the daemon does not know".
     @Default('') String decisionNote,
+
+    /// How many findings left with the allow, neither replaced nor
+    /// acknowledged (`FlowSummary.unresolved_findings`, HUM-160): 0 after
+    /// "Send anyway", the number of open findings after holding the release
+    /// valve, and for an edited request the findings of the daemon's second
+    /// scan over what went out.
+    ///
+    /// Null when nothing left, when nobody counted, or for a row older than
+    /// the count; null never means zero, and the client never works one out
+    /// from [findingCount].
+    int? unresolvedFindings,
     RuleId? ruleId,
     @Default(0) int status,
     @Default(0) int requestSize,

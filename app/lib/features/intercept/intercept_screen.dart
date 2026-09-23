@@ -402,9 +402,7 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
   /// `S` in der Pause: senden, wie die Anfrage ist.
   void _sendAnyway() {
     _lockPressedKeys();
-    unawaited(
-      ref.read(interceptDecisionProvider.notifier).allow(acknowledged: true),
-    );
+    unawaited(ref.read(interceptDecisionProvider.notifier).sendAnyway());
   }
 
   /// Moves the cursor and tells the queue that a key did it: the order stays

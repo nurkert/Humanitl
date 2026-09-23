@@ -90,6 +90,11 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "decision_note",
         sql: include_str!("../migrations/V8__decision_note.sql"),
     },
+    Migration {
+        version: 9,
+        name: "unresolved_findings",
+        sql: include_str!("../migrations/V9__unresolved_findings.sql"),
+    },
 ];
 
 /// Der Stand, den eine frisch migrierte Datenbank hat.

@@ -905,7 +905,9 @@ impl FlowHandler {
                 // Felder nur aus, wenn die Stufe eingeschaltet ist, und der
                 // zweite Scan liefe im Alltag deshalb nie. Er soll laufen --
                 // die Zahl gehoert zur Entscheidung und nicht zum Protokoll
-                // (HUM-047; das Feld am `Decided`-Ereignis steht noch aus).
+                // (HUM-047). Im `Decided`-Ereignis steht sie schon: Die
+                // Warteschlange zaehlt denselben Scan ueber
+                // [`edit::SecondScan`], bevor sie es veroeffentlicht (HUM-160).
                 let remaining =
                     edit::remaining_findings(self.inner.scanner.as_ref(), &edited, &edited_body);
                 // Die harte Sperre gilt für das, was hinausginge, also für

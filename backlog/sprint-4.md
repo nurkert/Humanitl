@@ -3551,9 +3551,9 @@ Wie HUM-049, Abschnitt „Daemon", ohne Allowlist. Die Indizes beziehen sich auf
 `send_anyway_acknowledges_all` (Widget), `acknowledged_findings_are_recorded` (Recorder), `decided_carries_unresolved_findings` (Proxy).
 
 ### Akzeptanzkriterien
-- [ ] „Trotzdem senden" leitet weiter; History zeigt `unresolved_findings = 1` für eine Anfrage mit einer E-Mail, die über das Halten gesendet wurde, und `0` nach der Pause.
-- [ ] Das Audit trägt beide Zahlen.
-- [ ] Eine bearbeitet freigegebene Anfrage, in der eine E-Mail stehen blieb, trägt im Audit und in der History `unresolved_findings = 1`.
+- [x] „Trotzdem senden" leitet weiter; History zeigt `unresolved_findings = 1` für eine Anfrage mit einer E-Mail, die über das Halten gesendet wurde, und `0` nach der Pause. Gemessen: `decided_carries_unresolved_findings` (`daemon/crates/proxy/tests/findings.rs`, echter Proxy mit Aufzeichnung: Halten `1`, Pause `0` in `Decided`, Registry und `flows.unresolved_findings`, Status 200); Oberfläche `send_anyway_acknowledges_all`, `over the valve the history counts 1 unresolved`, `after the pause the history counts 0 unresolved` (`app/test/features/intercept/findings_pause_test.dart`), `history_shows_unresolved_findings` (`app/test/features/history/history_detail_test.dart`), `the row takes the count of open findings from the decision` (`history_page_test.dart`). `STRICT=1 make check` grün am 2026-09-19.
+- [x] Das Audit trägt beide Zahlen. Gemessen: `flow_decided_carries_unresolved_and_acknowledged` (`daemon/bin/humanitld/src/audit_sink.rs`): Pause `0`/`1`, Halten `1`/`0`, Block ohne beide.
+- [x] Eine bearbeitet freigegebene Anfrage, in der eine E-Mail stehen blieb, trägt im Audit und in der History `unresolved_findings = 1`. Gemessen: `decided_carries_unresolved_findings`, Fall `Release::Edited` (zweiter Scan: stehengelassene Adresse `1`, ersetzte `0`, in `Decided` und `flows.unresolved_findings`); das Audit schreibt `unresolved_findings` aus demselben `Decided` (`FlowDecided::with_findings`, Sink-Test oben).
 
 ### Fallstricke
 - Eine Bestätigung hebt `HOLD_004` nie auf (HUM-049, `check_allow`).

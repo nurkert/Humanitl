@@ -120,6 +120,7 @@ fn decided_flow(harness: &Harness, host: &str, decision: Decision, status: u16) 
         at,
         decision,
         source: DecisionSource::User,
+        findings: humanitl_core::DecidedFindings::default(),
     });
     harness.recorder.apply(&FlowEvent::ResponseHeaders {
         flow_id: flow,

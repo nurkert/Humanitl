@@ -297,6 +297,33 @@ void main() {
     expect(byMachine.decisionNote, isEmpty);
   });
 
+  test('the row takes the count of open findings from the decision', () async {
+    // Die erste Zeile wartet und trägt zwei Funde; einer wird bestätigt, der
+    // andere geht offen hinaus (HUM-160). Die Zeile zeigt das sofort, nicht
+    // erst nach dem Nachladen aus der Aufzeichnung.
+    final FakeDaemonClient client = FakeDaemonClient.history(count: 12);
+    final ProviderContainer container = _container(client);
+    await settle(container);
+    final Flow held = container
+        .read(historyPageProvider)
+        .rows
+        .firstWhere((Flow flow) => flow.isHeld && flow.findingCount == 2);
+    expect(held.unresolvedFindings, isNull, reason: 'nothing decided yet');
+
+    await client.decide(
+      held.id,
+      const Decision.allow(acknowledgedFindings: <int>[0]),
+    );
+    Flow row() => container
+        .read(historyPageProvider)
+        .rows
+        .firstWhere((Flow flow) => flow.id == held.id);
+    for (int i = 0; i < 50 && row().decision == null; i++) {
+      await Future<void>.delayed(Duration.zero);
+    }
+    expect(row().unresolvedFindings, 1);
+  });
+
   test(
     'an arrival joins the rows at once while the list is at its head',
     () async {

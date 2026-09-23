@@ -2175,5 +2175,7 @@
   "interceptFindingsPauseKeyPseudonymize": "P",
   "@interceptFindingsPauseKeyPseudonymize": {"description": "Key that pseudonymizes from the findings pause, shown on the button itself."},
   "interceptFindingsPauseKeyBack": "Esc",
-  "@interceptFindingsPauseKeyBack": {"description": "Key that closes the findings pause, shown on the button itself."}
+  "@interceptFindingsPauseKeyBack": {"description": "Key that closes the findings pause, shown on the button itself."},
+  "historyDetailUnresolvedFindings": "Sent unresolved",
+  "@historyDetailUnresolvedFindings": {"description": "Label in the history detail head: how many findings left with the allow, neither replaced nor acknowledged in the findings pause (HUM-160). The value next to it is a number."}
 }

@@ -112,6 +112,13 @@ pub struct FlowRecord {
     /// die die Lücke erklären (`FINDINGS_002`), stehen zusätzlich als
     /// [`FlowEvent::Diagnostic`] am selben Flow.
     pub findings_truncated: bool,
+    /// Wie viele Funde mit der Freigabe hinausgingen, ohne ersetzt oder
+    /// bestätigt zu sein (HUM-160); aus dem letzten [`FlowEvent::Decided`].
+    ///
+    /// `None`, solange nicht entschieden ist, wenn nichts hinausging, und wenn
+    /// niemand gezählt hat. Nimmt das System eine Freigabe zurück, steht hier
+    /// wieder `None`: Hinausgegangen ist dann nichts.
+    pub unresolved_findings: Option<u32>,
 }
 
 impl FlowRecord {
@@ -132,6 +139,7 @@ impl FlowRecord {
             response_bytes: 0,
             finished: None,
             findings_truncated: false,
+            unresolved_findings: None,
         };
         record.refresh_deadline();
         record
@@ -164,10 +172,14 @@ impl FlowRecord {
     fn absorb(&mut self, event: &FlowEvent) {
         match event {
             FlowEvent::Decided {
-                decision, source, ..
+                decision,
+                source,
+                findings,
+                ..
             } => {
                 self.decision = Some(decision.clone());
                 self.decision_source = Some(*source);
+                self.unresolved_findings = findings.unresolved;
             }
             FlowEvent::TimedOut { .. } => {
                 self.decision = Some(Decision::TimedOut);

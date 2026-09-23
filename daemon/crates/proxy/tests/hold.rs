@@ -1125,3 +1125,72 @@ fn the_fail_closed_answer_says_what_the_flow_says() {
         );
     }
 }
+
+/// Eine Bestätigung nennt nur Funde, die der Flow hat, und kommt nur mit
+/// `Allow` (HUM-160). Jede andere lässt den Flow warten; die gültige zählt
+/// jeden Fund einmal und steht im `Decided`-Ereignis.
+#[tokio::test]
+async fn an_acknowledgement_names_findings_the_flow_has() {
+    let queue = HoldQueue::new(&Limits::default());
+    let mut rx = queue.subscribe();
+    let mut flow = received_flow(FlowId::new(), 12);
+    let id = flow.id;
+    let email = |address: &str| {
+        humanitl_core::Finding::new(
+            humanitl_core::FindingKind::Email,
+            0..address.len(),
+            humanitl_core::FindingLocation::Body,
+            humanitl_core::Tier::Regex,
+            address,
+        )
+    };
+    flow.apply(
+        TransitionInput::Analyze {
+            findings: vec![email("alice@example.org"), email("bob@example.org")],
+        },
+        SystemTime::now(),
+    )
+    .unwrap();
+    let held = queue.hold(&mut flow, in_(Duration::from_secs(60))).unwrap();
+
+    assert_eq!(
+        queue.decide_acknowledging(id, Decision::Allow, DecisionSource::User, &[2]),
+        Err(NotHeld::UnknownFinding {
+            id,
+            index: 2,
+            findings: 2,
+        })
+    );
+    assert_eq!(
+        queue.decide_acknowledging(id, block(BlockReason::User), DecisionSource::User, &[0]),
+        Err(NotHeld::AcknowledgedWithout {
+            id,
+            decision: "block",
+        })
+    );
+    assert_eq!(
+        queue.pending_ids(),
+        vec![id],
+        "a wrong acknowledgement decides nothing"
+    );
+
+    queue
+        .decide_acknowledging(id, Decision::Allow, DecisionSource::User, &[1, 1])
+        .unwrap();
+    assert_eq!(held.await, Decision::Allow);
+    let decided = drain(&mut rx)
+        .into_iter()
+        .find_map(|event| match event {
+            FlowEvent::Decided { findings, .. } => Some(findings),
+            _ => None,
+        })
+        .expect("a Decided event");
+    assert_eq!(
+        decided,
+        humanitl_core::DecidedFindings {
+            unresolved: Some(1),
+            acknowledged: vec![1],
+        },
+        "one of two findings acknowledged, counted once"
+    );
+}

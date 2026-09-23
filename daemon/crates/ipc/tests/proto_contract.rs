@@ -622,6 +622,35 @@ fn the_apex_keeps_its_field_number() {
     assert_eq!(holders, vec!["apex"]);
 }
 
+/// Die Spur einer Freigabe mit offenen Funden (HUM-160) steht auf festen
+/// Nummern und traegt Anwesenheit: `optional uint32`, weil "nicht gezaehlt"
+/// etwas anderes ist als "null offen".
+///
+/// Aus demselben Grund wie bei `meta` und `apex`: Der Frische-Test bliebe
+/// gruen, wenn jemand Nummer oder Anwesenheit aendert und neu erzeugt, und ein
+/// aelterer Client laese dann still eine Null.
+#[test]
+fn the_trail_of_open_findings_keeps_its_field_numbers() {
+    for (holder, number) in [("FlowEvent.Decided", 7), ("FlowSummary", 29)] {
+        let message = message(holder);
+        let field = message
+            .field
+            .iter()
+            .find(|f| f.name() == "unresolved_findings")
+            .unwrap_or_else(|| panic!("{holder}.unresolved_findings is missing"));
+        assert_eq!(
+            field.number(),
+            number,
+            "{holder}: the number is part of the contract"
+        );
+        assert_eq!(field.r#type(), Type::Uint32, "{holder}");
+        assert!(
+            field.proto3_optional(),
+            "{holder}.unresolved_findings must carry presence; absent is not zero"
+        );
+    }
+}
+
 #[test]
 fn failed_event_mirrors_the_core_state_machine() {
     // CONVENTIONS.md 3.2 und 4.10: `Failed` ist ein eigener Zustand mit
@@ -824,6 +853,9 @@ const DECIDE_REQUEST_FIELDS: &FieldTable = &[
         Some("decision"),
     ),
     ("remember", 5, ".humanitl.v1.Rule", None),
+    // HUM-160: die bestaetigten Funde, auf der Nummer, die HUM-089 fuer sie
+    // freigehalten hat.
+    ("acknowledged_findings", 8, "repeated uint32", None),
 ];
 
 /// `EditedRequest` vollstaendig: die bearbeitete Anfrage samt Body als
