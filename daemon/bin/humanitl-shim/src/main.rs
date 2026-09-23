@@ -57,7 +57,10 @@
 //!    shim can neither remove an interface nor unmount a socket, bwrap's
 //!    `--unshare-net` and the profile's mounts are the guarantee, and the
 //!    launcher's isolation check is the enforcement point.
-//! 3. Fork. The child dies with the parent (`PR_SET_PDEATHSIG`), closes
+//! 3. Before the fork the shim closes every descriptor it inherited except
+//!    0, 1, 2, the report, the exec gate and the bridge listeners, so
+//!    neither process holds what a careless launcher leaked without
+//!    `CLOEXEC`. Fork. The child dies with the parent (`PR_SET_PDEATHSIG`), closes
 //!    every inherited descriptor but 0, 1, 2 and the report, sets
 //!    `PR_SET_NO_NEW_PRIVS`, installs the filter with `TSYNC`, proves it
 //!    (`seccomp_applied`, `families`), and `execvp`s the command. The parent
@@ -316,6 +319,20 @@ fn launch(prepared: Prepared, report: Report, command: &[OsString]) -> i32 {
         ));
         return EXIT_SETUP;
     };
+    // Whatever the launcher left open without `CLOEXEC` goes before the
+    // fork, in both processes at once: the agent could otherwise reopen it
+    // through `/proc/<ppid>/fd`, and a stray line in a pipe of the launcher
+    // is a line in someone else's protocol. Kept are the report, the gate
+    // and the bridge listeners; the bridges open their Unix sockets per
+    // connection. Single-threaded here, so nothing opens a descriptor while
+    // the range closes.
+    let mut keep: Vec<c_int> = prepared.bound.iter().map(Bound::listener_fd).collect();
+    keep.extend([
+        report.fd().unwrap_or(-1),
+        gate_read.as_raw_fd(),
+        gate_write.as_raw_fd(),
+    ]);
+    close_inherited(&keep);
     // SAFETY: the process is single-threaded here (the bridge threads start
     // after the fork), so the child inherits a consistent image.
     let pid = unsafe { libc::fork() };
