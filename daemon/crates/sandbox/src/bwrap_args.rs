@@ -11,7 +11,8 @@
 //!
 //! 1. `--unshare-*` in der festen Reihenfolge von [`Namespace::ALL`], nicht
 //!    der des Profils, damit ein Profil die Flags weder umordnen noch doppeln
-//!    kann,
+//!    kann, danach immer `--as-pid-1`: der Shim ist PID 1 der Sandbox
+//!    (HUM-203),
 //! 2. `--die-with-parent`, `--new-session`, `--cap-drop ALL`,
 //!    `--disable-userns`, `--hostname`; die ersten vier stehen immer da, das
 //!    Profil kann sie nicht abwählen,
@@ -264,6 +265,15 @@ impl SandboxProfile {
         for namespace in Namespace::ALL {
             args.flag(namespace.flag());
         }
+        // Der Shim wird PID 1 der Sandbox, nicht das Init von bwrap (HUM-203).
+        // Jenes Init trug keinen seccomp-Filter, war dumpable und lief unter
+        // derselben UID wie der Agent; bei `ptrace_scope=0` öffnete der Agent
+        // `/proc/1/mem` zum Schreiben und führte Code ohne Filter aus. Der
+        // Shim-Elternprozess dagegen trägt den Filter der Brücke und macht sich
+        // nicht-dumpable, bevor der Agent startet. Nicht abschaltbar; das Flag
+        // verlangt `--unshare-pid`, das jedes Profil setzen muss, und verträgt
+        // sich nicht mit `--lock-file`, das hier nie vorkommt.
+        args.flag("--as-pid-1");
         // Nicht abschaltbar, auch nicht über die Felder des Profils: eine
         // Sandbox, die den Daemon überlebt oder ins Terminal des Nutzers
         // schreibt, ist keine, und eine mit Capabilities auch nicht
@@ -637,6 +647,28 @@ mod tests {
     fn window_at(args: &[String], window: &[&str]) -> Option<usize> {
         args.windows(window.len())
             .position(|w| w.iter().zip(window).all(|(a, b)| a == b))
+    }
+
+    /// Der Shim ist PID 1 der Sandbox, in jedem Profil und ohne Schalter
+    /// (HUM-203): genau ein `--as-pid-1`, nach `--unshare-pid`, vor dem
+    /// ersten Mount und nie zusammen mit `--lock-file`.
+    #[test]
+    fn as_pid_1_is_always_set() {
+        let profile =
+            SandboxProfile::parse("version = 1\nname = \"x\"\n", Path::new("<t>")).expect("parses");
+        let args = strings(&profile, &LaunchInputs::preview());
+        let at: Vec<usize> = args
+            .iter()
+            .enumerate()
+            .filter(|(_, arg)| *arg == "--as-pid-1")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(at.len(), 1, "{args:?}");
+        let unshare_pid = args.iter().position(|a| a == "--unshare-pid");
+        assert!(unshare_pid.is_some_and(|pid| pid < at[0]), "{args:?}");
+        let first_mount = args.iter().position(|a| a == "--ro-bind");
+        assert!(first_mount.is_none_or(|mount| at[0] < mount), "{args:?}");
+        assert!(!args.iter().any(|a| a == "--lock-file"), "{args:?}");
     }
 
     /// Nur was auf dem Host existiert, wird unter `/work` überdeckt.

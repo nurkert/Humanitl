@@ -353,6 +353,7 @@ fn the_hard_floor_is_in_every_shipped_profile() {
             "--unshare-ipc",
             "--unshare-uts",
             "--unshare-cgroup",
+            "--as-pid-1",
             "--die-with-parent",
             "--new-session",
             "--disable-userns",
@@ -482,8 +483,9 @@ fn die_with_parent_and_new_session_are_never_optional() {
     profile.sandbox.new_session = false;
     let args = strings(&profile.to_bwrap_args(&context(WorkMode::Rw), &LaunchInputs::preview()));
     assert_eq!(
-        &args[6..11],
+        &args[6..12],
         [
+            "--as-pid-1",
             "--die-with-parent",
             "--new-session",
             "--cap-drop",
