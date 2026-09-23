@@ -1029,3 +1029,101 @@ async fn a_command_name_with_a_newline_is_still_said() {
         .unwrap_or_else(|| panic!("the split line does not hide it: {:?}", diagnostics(&seen)));
     assert!(finding.why.contains("never started"), "{}", finding.why);
 }
+
+/// Was der Filter dem Agenten verweigert, steht im `Sandbox`-Strom:
+/// zusammengefasst je Familie und Typ, mit Zahl, und vor dem Exit-Code
+/// (HUM-138).
+///
+/// Der Befehl versucht dreimal `socket(AF_UNIX)` und zweimal
+/// `socket(AF_INET, SOCK_DGRAM)`; jeder Versuch muss `EPERM` bekommen, und der
+/// letzte Stand im Strom muss genau diese Zahlen tragen. Die Proben, mit denen
+/// der Shim selbst seinen Filter prüft, zählen nicht mit.
+#[tokio::test(flavor = "multi_thread")]
+async fn refused_sockets_reach_the_stream_counted_before_the_exit() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    let Some(python) = ["/usr/bin/python3", "/bin/python3"]
+        .into_iter()
+        .find(|path| Path::new(path).is_file())
+    else {
+        refuse_under_ci("python3 is not installed", "apt-get install -y python3");
+        return;
+    };
+    let service = fixture.service();
+    let mut start = fixture.start();
+    if let Some(v1::sandbox_request::Op::Start(inner)) = start.op.as_mut() {
+        inner.command = vec![
+            python.to_owned(),
+            "-c".to_owned(),
+            "import errno, socket, sys\n\
+             def probe(*a):\n\
+             \ttry:\n\
+             \t\tsocket.socket(*a).close(); return 0\n\
+             \texcept OSError as e:\n\
+             \t\treturn e.errno\n\
+             codes = [probe(socket.AF_UNIX, socket.SOCK_STREAM) for _ in range(3)]\n\
+             codes += [probe(socket.AF_INET, socket.SOCK_DGRAM) for _ in range(2)]\n\
+             sys.exit(0 if all(c == errno.EPERM for c in codes) else 9)\n"
+                .to_owned(),
+        ];
+    }
+    let seen = events_to_end(&service, start).await;
+
+    let exit_at = seen
+        .iter()
+        .position(|event| matches!(event.event, Some(v1::sandbox_event::Event::Exit(_))))
+        .expect("the agent reports its exit code");
+    assert!(
+        matches!(
+            &seen[exit_at].event,
+            Some(v1::sandbox_event::Event::Exit(exit)) if exit.code == 0
+        ),
+        "every attempt came back EPERM: {seen:?}"
+    );
+    let last = seen[..exit_at]
+        .iter()
+        .rev()
+        .find_map(|event| match &event.event {
+            Some(v1::sandbox_event::Event::Refusals(refusals)) => Some(refusals),
+            _ => None,
+        })
+        .expect("the tally arrives before the exit code");
+    assert_eq!(last.reporting, v1::RefusalReporting::On as i32, "{last:?}");
+    let counts: Vec<(&str, &str, i32, u64)> = last
+        .entries
+        .iter()
+        .map(|entry| {
+            (
+                entry.family.as_str(),
+                entry.socket_type.as_str(),
+                entry.reason,
+                entry.count,
+            )
+        })
+        .collect();
+    assert_eq!(
+        counts,
+        [
+            (
+                "AF_UNIX",
+                "SOCK_STREAM",
+                v1::RefusalReason::Family as i32,
+                3
+            ),
+            ("AF_INET", "SOCK_DGRAM", v1::RefusalReason::Type as i32, 2),
+        ],
+        "counted by pair, and the shim's own probes are not in it: {last:?}"
+    );
+    assert!(
+        last.entries
+            .iter()
+            .all(|entry| entry.first_at.is_some() && entry.last_at.is_some()),
+        "{last:?}"
+    );
+    assert!(
+        !carries(&seen, "SANDBOX_019"),
+        "a sandbox that reports says nothing about not reporting: {seen:?}"
+    );
+}

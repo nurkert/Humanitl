@@ -173,6 +173,7 @@ async fn drive(
 
     let mut failure: Option<Failure> = None;
     let mut exit: Option<i32> = None;
+    let mut last_refusals: Option<v1::sandbox_event::Refusals> = None;
     let mut interrupted = false;
 
     let mut clock = tokio::time::interval(std::time::Duration::from_secs(1));
@@ -262,8 +263,17 @@ async fn drive(
                 break;
             }
         };
+        if let Some(v1::sandbox_event::Event::Refusals(refusals)) = event.event.as_ref() {
+            last_refusals = Some(refusals.clone());
+        }
         if let Some(v1::sandbox_event::Event::Exit(ended)) = event.event.as_ref() {
             exit = Some(ended.code);
+            // Nach dem Lauf, für jeden und nicht nur mit `-v`: was die
+            // Sandbox dem Agenten verweigert hat (HUM-138). Der Daemon schickt
+            // den letzten Stand vor dem Exit-Code.
+            if let Some(line) = last_refusals.as_ref().and_then(refusal_summary) {
+                ctx.render.note(&line);
+            }
             continue;
         }
         // Solange ein Kasten steht, hält die Moderation die Ausgabe des
@@ -548,8 +558,45 @@ fn handle(ctx: &Context, event: v1::SandboxEvent) -> Option<Failure> {
             }
             None
         }
+        // Der ganze Stand der verweigerten Versuche, jedes Mal (HUM-138). Er
+        // unterbricht das Terminal des Agenten nicht; wer ihn laufend sehen
+        // will, nimmt `-v`. Die Zusammenfassung nach dem Lauf schreibt die
+        // Schleife beim Exit (`refusal_summary`). Meldet die Sandbox nicht,
+        // kam `SANDBOX_019` schon als eigener Befund.
+        Event::Refusals(refusals) => {
+            if let Some(line) = refusal_summary(&refusals) {
+                ctx.render.detail(&format!("[humanitl] {line}"));
+            }
+            None
+        }
         Event::Exit(_) => None,
     }
+}
+
+/// Eine Zeile über die verweigerten Versuche, oder `None`, wenn nichts
+/// verweigert wurde (HUM-138).
+fn refusal_summary(refusals: &v1::sandbox_event::Refusals) -> Option<String> {
+    let total = refusals
+        .entries
+        .iter()
+        .fold(0u64, |sum, entry| sum.saturating_add(entry.count));
+    (total > 0).then(|| {
+        format!(
+            "the sandbox refused {total} socket(s) outside the proxy: {}",
+            refusals
+                .entries
+                .iter()
+                .map(|entry| format!(
+                    "{}x {}({}, {})",
+                    entry.count,
+                    sanitize_note(&entry.syscall),
+                    sanitize_note(&entry.family),
+                    sanitize_note(&entry.socket_type)
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })
 }
 
 /// Schreibt ein Stück Ausgabe des Agenten dorthin, wo es hingehört.
@@ -798,10 +845,46 @@ mod tests {
     use humanitl_ipc::session::SESSION_OVERRIDE_KEYS;
 
     use super::{
-        Config, chain, check_line, inline_rules, refuse_terminal_ask, session_lines, state_name,
+        Config, chain, check_line, inline_rules, refusal_summary, refuse_terminal_ask,
+        session_lines, state_name,
     };
     use crate::cli::RunArgs;
     use crate::cmd::{EXIT_CHECK, EXIT_USER};
+
+    /// The summary after the run names every pair and the total, and says
+    /// nothing when nothing was refused (HUM-138).
+    #[test]
+    fn the_refusal_summary_counts_and_stays_quiet_on_zero() {
+        use humanitl_ipc::v1::sandbox_event::{Refusal, Refusals};
+
+        assert_eq!(refusal_summary(&Refusals::default()), None);
+        let refusals = Refusals {
+            entries: vec![
+                Refusal {
+                    syscall: "socket".to_owned(),
+                    family: "AF_UNIX".to_owned(),
+                    socket_type: "SOCK_STREAM".to_owned(),
+                    count: 3,
+                    ..Refusal::default()
+                },
+                Refusal {
+                    syscall: "socket".to_owned(),
+                    family: "AF_INET".to_owned(),
+                    socket_type: "SOCK_DGRAM".to_owned(),
+                    count: 2,
+                    ..Refusal::default()
+                },
+            ],
+            ..Refusals::default()
+        };
+        assert_eq!(
+            refusal_summary(&refusals).as_deref(),
+            Some(
+                "the sandbox refused 5 socket(s) outside the proxy: \
+                 3x socket(AF_UNIX, SOCK_STREAM), 2x socket(AF_INET, SOCK_DGRAM)"
+            )
+        );
+    }
 
     fn resolved(name: &str) -> humanitl_config::Resolved {
         let empty = tempfile::tempdir().expect("tempdir");

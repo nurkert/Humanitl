@@ -374,6 +374,10 @@ class GrpcDaemonClient implements DaemonClient {
             // thing that tells this client when the contract grows a ninth
             // event. A `default` would swallow it silently.
             break;
+          case pb.SandboxEvent_Event.refusals:
+            // What the filter refused the agent, the whole tally each time
+            // (HUM-138).
+            yield SandboxUpdate.refusals(event.refusals.toDomain());
           case pb.SandboxEvent_Event.notSet:
             break;
         }

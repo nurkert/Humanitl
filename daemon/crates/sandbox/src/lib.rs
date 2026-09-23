@@ -31,6 +31,8 @@
 //!   und dem Bericht des Shims
 //! - [`worktree`] der Blick des Hosts in `/work`: Schnappschuss, Diff,
 //!   Symlink-Erkennung und das sichere Öffnen mit `openat2` (HUM-043)
+//! - [`refusals`] was der Filter dem Agenten verweigert hat, gezählt und aus
+//!   dem Bericht des Shims gelesen (HUM-138)
 //! - [`summary`] was ein Sandbox-Lauf im Projekt hinterlassen hat, in der Form,
 //!   die ein Mensch zu sehen bekommt (HUM-043)
 //! - [`doctor`] die Vorbedingungen dieser Maschine, eine Zeile je Prüfung mit
@@ -98,6 +100,7 @@ pub mod handle;
 pub mod launcher;
 pub mod os_release;
 pub mod profile;
+pub mod refusals;
 pub mod summary;
 pub mod worktree;
 
@@ -139,6 +142,10 @@ pub use crate::profile::{
     SOCKET_WALK_MAX_DEPTH, SOCKET_WALK_MAX_ENTRIES, SandboxProfile, SandboxSection, SeccompSection,
     SessionContext, SocketFamily, SocketFloor, SocketType, Symlink, WORK_DST, WorkMount,
     is_mandatory_mask,
+};
+pub use crate::refusals::{
+    MAX_REFUSAL_ENTRIES, REFUSALS_PREFIX, REFUSED_PREFIX, Refusal, RefusalLine, RefusalReason,
+    RefusalReporting, Refusals, parse_refusal_line, refusals_unreported,
 };
 pub use crate::summary::{
     ChangeKind, FileChangeRecord, SCAN_MAX_BYTES, SessionSummary, SummaryFinding, SymlinkEscape,

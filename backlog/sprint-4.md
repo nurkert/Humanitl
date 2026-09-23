@@ -3018,11 +3018,11 @@ Ein `connect`, das an `ENETUNREACH` scheitert, sieht der Filter nicht (es ist ke
 - Ein Widget-Test für die Zeile.
 
 ### Akzeptanzkriterien
-- [ ] Ein verweigerter `socket()`-Aufruf des Agenten erscheint im `Sandbox`-Strom, zusammengefasst und mit Zahl.
-- [ ] Die Oberfläche zeigt ihn, ohne die Warteschlange der Flüsse zu berühren.
-- [ ] Die drei Garantien bleiben gemessen grün (`tests/escape/`).
-- [ ] `docs/SECURITY.md` sagt, was sichtbar wird und was nicht.
-- [ ] `make check` grün.
+- [x] Ein verweigerter `socket()`-Aufruf des Agenten erscheint im `Sandbox`-Strom, zusammengefasst und mit Zahl.
+- [x] Die Oberfläche zeigt ihn, ohne die Warteschlange der Flüsse zu berühren.
+- [x] Die drei Garantien bleiben gemessen grün (`tests/escape/`).
+- [x] `docs/SECURITY.md` sagt, was sichtbar wird und was nicht.
+- [x] `make check` grün.
 
 ### Fallstricke
 - `SECCOMP_RET_USER_NOTIF` hält den Aufruf an, bis jemand antwortet: Wer den Shim damit verzögert, verlangsamt jeden Aufruf des Agenten. Antwortzeit messen, sonst wird aus einer Meldung eine Bremse.
@@ -4748,3 +4748,116 @@ Den Mapper dort bereitstellen, wo `HTheme.host` die übrigen Voraussetzungen der
 
 ### Referenzen
 HUM-052 (`backlog/CONVENTIONS.md` 4.36), ADR-0009.
+
+---
+
+## HUM-200 · Verweigerte Versuche als eigene Art von Eintrag in der Historie
+Sprint: 4 · Größe: M · Abhängigkeiten: HUM-138, HUM-026 · Blockiert: keine
+
+### Kontext
+HUM-138 macht verweigerte `socket()`-Aufrufe des Agenten sichtbar, aber nur, solange die Sitzung läuft: im `Sandbox`-Strom, im Isolations-Reiter und nach `humanitl sandbox run`. Das Ziel von HUM-138 nannte auch die Historie („als eigene Art von Eintrag, nicht als Fluss"); gebaut ist sie nicht, weil der Stand bisher nirgends aufgezeichnet wird. Nach dem Ende einer Sitzung ist er weg.
+
+### Ziel
+Der letzte Stand der verweigerten Versuche eines Laufs steht in der Aufzeichnung, neben der Zusammenfassung des Laufs, und die Historie zeigt ihn als eigene Zeile, die kein Fluss ist.
+
+### Nicht-Ziel
+Jeden Versuch einzeln aufzeichnen. Ein `connect()` mit `ENETUNREACH` (kein verweigerter Aufruf).
+
+### Betroffene Pfade
+- `daemon/crates/recorder/` (Tabelle oder Feld an `session_summaries`, Migration)
+- `daemon/crates/ipc/src/sandbox.rs` (den letzten Stand beim Ende des Laufs schreiben)
+- `proto/humanitl/v1/humanitl.proto` (`SessionSummary.refusals`)
+- `app/lib/features/history/`
+
+### Spezifikation
+`SessionSummary` bekommt `SandboxEvent.Refusals refusals`. Der Dienst übernimmt den Stand, den `forward_refusals` zuletzt gesendet hat, in die Zusammenfassung, bevor sie gespeichert wird. Die Historie zeigt je Lauf mit Verweigerungen eine Zeile „N Versuche am Proxy vorbei" mit Verweis auf die Zusammenfassung.
+
+### Schritte
+1. Migration und Recorder-Feld. 2. Proto und Umwandlung. 3. Dienst. 4. Historie, ARB `en` und `de`.
+
+### Tests
+Recorder-Rundlauf; `sandbox_start.rs` liest die Zusammenfassung nach einem Lauf mit Verweigerungen; Widget-Test der Zeile.
+
+### Akzeptanzkriterien
+- [ ] `humanitl sessions summary <id>` nennt die Verweigerungen eines beendeten Laufs.
+- [ ] Die Historie zeigt sie als eigene Zeile, die in keiner Fluss-Liste zählt.
+
+### Fallstricke
+- Die History-Oberfläche gehört gerade HUM-153; Reihenfolge abstimmen.
+
+### Referenzen
+HUM-138; `backlog/CONVENTIONS.md` 4.42; `docs/SECURITY.md` Abschnitt 10, Punkt 11.
+
+---
+
+## HUM-201 · Verweigerungen der Sperrliste und der x32-Aufrufe bleiben still
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-138 · Blockiert: keine
+
+### Kontext
+HUM-138 meldet nur, was die Socket-Sperre verweigert. `ptrace`, `io_uring_*`, `bpf`, `keyctl`, `process_vm_*` und jeder x32-Aufruf werden weiter vom Kernel allein mit `EPERM` beantwortet und nicht gezählt. Ein Agent, der `ptrace` oder `io_uring` versucht, versucht ebenfalls, an einer Tür vorbei zu kommen, und bleibt unsichtbar.
+
+### Ziel
+Die Sperrliste und die x32-Regel antworten wie die Socket-Sperre über den Zuhörer; der Bericht zählt sie je Aufruf.
+
+### Nicht-Ziel
+Den Filter weiter oder enger machen. Aufrufe zählen, die erlaubt sind.
+
+### Betroffene Pfade
+- `daemon/bin/humanitl-shim/src/seccomp.rs` (Match-Aktion des seccompiler-Programms, x32-Zweig des Präludiums)
+- `daemon/bin/humanitl-shim/src/refusals.rs` (Schlüssel je Aufruf)
+- `daemon/crates/sandbox/src/refusals.rs` (`syscall` außer `socket` annehmen)
+
+### Spezifikation
+`Gate::Reported` gilt auch für die Sperrliste; seccompiler bekommt als Match-Aktion `UserNotif`, falls die Version es kann, sonst schreibt das Präludium die Liste selbst. `REFUSED <syscall> - - syscall <anzahl> ...` für einen Aufruf ohne Familie. Die `families`-Probe `io_uring_setup` zählt nicht (vor dem Zeichen `X`).
+
+### Schritte
+1. Messen, ob seccompiler 0.5 `SECCOMP_RET_USER_NOTIF` als Aktion kennt. 2. Filter und Tabelle. 3. Zähler und Zeilenformat. 4. Oberfläche.
+
+### Tests
+Interpreter-Test der Aktionen; Kindprozess-Test mit `ptrace(PTRACE_TRACEME)`; ESC-1 bleibt grün.
+
+### Akzeptanzkriterien
+- [ ] Ein `ptrace` des Agenten erscheint im `Sandbox`-Strom, gezählt.
+- [ ] `make escape` bleibt grün.
+
+### Fallstricke
+- Die Tabelle, die `docs/SECURITY.md` zitiert, ändert sich; Dokument im selben Commit.
+
+### Referenzen
+HUM-138; `backlog/CONVENTIONS.md` 4.42.
+
+---
+
+## HUM-202 · Der Sandbox-Bildschirm sieht Verweigerungen eines fremden Starts erst beim Neuladen
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-138 · Blockiert: keine
+
+### Kontext
+Die Oberfläche bekommt `SandboxEvent.refusals` nur auf dem Strom eines Starts, den sie selbst begonnen hat. Startet `humanitl run` die Sitzung, sieht der Bildschirm den Stand nur über `Status.refusals`, also wenn er die Momentaufnahme neu holt (Abschnitt sichtbar, Neuladen). Ein Agent, der danach weiter anklopft, erscheint dort nicht, bis jemand neu lädt. Dasselbe gilt für `humanitl run`, das die Zahlen nur mit `-v` zeigt.
+
+### Ziel
+Wer die laufende Sitzung beobachtet, sieht neue Verweigerungen ohne Neuladen, egal wer gestartet hat.
+
+### Nicht-Ziel
+Ein zweiter Ereignisstrom neben `Sandbox`.
+
+### Betroffene Pfade
+- `daemon/crates/ipc/src/sandbox.rs` (eine Operation, die den laufenden Strom einer fremden Sitzung begleitet, oder `Status` mit Folgeereignissen)
+- `app/lib/features/sandbox/providers/sandbox_status_provider.dart`
+
+### Spezifikation
+Offen: entweder `SandboxRequest.Watch`, das Status, Verweigerungen und Exit einer laufenden Sitzung liefert, oder ein Abo über `Subscribe`. Die Entscheidung gehört in dieses Issue.
+
+### Schritte
+1. Entscheidung. 2. Daemon. 3. Oberfläche.
+
+### Tests
+Ein Test im Dienst, der eine laufende Sitzung von einem zweiten Strom aus beobachtet.
+
+### Akzeptanzkriterien
+- [ ] Eine Verweigerung in einer per `humanitl run` gestarteten Sitzung erscheint im Bildschirm ohne Neuladen.
+
+### Fallstricke
+- HUM-137 ändert `Running` in `daemon/crates/ipc/src/sandbox.rs`; danach bauen.
+
+### Referenzen
+HUM-138; HUM-040; HUM-067.

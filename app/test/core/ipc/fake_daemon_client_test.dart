@@ -396,4 +396,22 @@ void main() {
       ('sandbox.env.CURL_CA_BUNDLE', '/etc/humanitl/ca.crt'),
     ]);
   });
+
+  // HUM-138: wie der Fake-Daemon meldet ein laufender Fake, dass gezählt wird,
+  // und dass nichts verweigert wurde; die Oberfläche zeigt sonst "noch nicht
+  // gemeldet" über einer Sandbox, die läuft.
+  test('a running fake sandbox says it counts refused sockets', () async {
+    final FakeDaemonClient client = FakeDaemonClient();
+    SandboxStatus? last;
+    await for (final SandboxUpdate update in client.startSandbox()) {
+      if (update is SandboxUpdateStatus) {
+        last = update.status;
+      }
+    }
+    expect(last?.state, SandboxState.running);
+    expect(
+      last?.refusals,
+      const SandboxRefusals(reporting: SandboxRefusalReporting.on),
+    );
+  });
 }

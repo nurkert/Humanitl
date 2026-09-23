@@ -226,16 +226,21 @@ fn rules_prints_the_effective_table() {
     assert_eq!(code(output.status), 0);
     let table = String::from_utf8_lossy(&output.stdout);
     let rows: Vec<&str> = table.lines().collect();
-    assert_eq!(rows.len(), 4 + FLOOR_LEN, "{table}");
+    assert_eq!(rows.len(), 5 + FLOOR_LEN, "{table}");
+    // No agent may ask for a listener of its own (HUM-138).
     assert!(
-        rows[2].contains("family (arg0) not in {AF_INET, AF_INET6}"),
+        rows[2].starts_with("seccomp ") && rows[2].contains("NEW_LISTENER"),
         "{table}"
     );
     assert!(
-        rows[3].contains("type (arg1 & 0xff) not in {SOCK_STREAM}"),
+        rows[3].contains("family (arg0) not in {AF_INET, AF_INET6}"),
         "{table}"
     );
-    assert!(rows[4].starts_with("ptrace"), "{table}");
+    assert!(
+        rows[4].contains("type (arg1 & 0xff) not in {SOCK_STREAM}"),
+        "{table}"
+    );
+    assert!(rows[5].starts_with("ptrace"), "{table}");
     // The hardening list of the specification is part of the floor, so it is
     // in the table without any profile asking for it.
     for name in [
@@ -262,7 +267,7 @@ fn rules_prints_the_effective_table() {
         .output()
         .unwrap();
     let table = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(table.lines().count(), 4 + FLOOR_LEN + 1, "{table}");
+    assert_eq!(table.lines().count(), 5 + FLOOR_LEN + 1, "{table}");
     assert!(table.contains("{AF_UNIX, AF_INET}"), "{table}");
     assert!(
         table.lines().last().unwrap().starts_with("mount"),
@@ -318,18 +323,24 @@ fn exec_failure_is_reported_on_the_report_channel() {
     drop(write_end);
     assert_eq!(code(status), 127);
     let lines = read_report(read_end);
-    assert_eq!(lines.len(), 6, "five checks and the exec line: {lines:?}");
-    assert_eq!(lines[5], "EXEC fail errno=2", "{lines:?}");
+    // Five checks, the parent's word on refusals (HUM-138), and the exec
+    // line last: the parent writes `REFUSALS on` before it opens the gate.
+    assert_eq!(check_lines(&lines).len(), 5, "{lines:?}");
+    assert!(lines.contains(&"REFUSALS on".to_owned()), "{lines:?}");
+    assert_eq!(lines.len(), 7, "{lines:?}");
+    assert_eq!(lines[6], "EXEC fail errno=2", "{lines:?}");
 }
 
-/// When the agent starts, its parent shim holds no report writer any more.
+/// When the agent starts, it cannot reach the report writer of its parent.
 ///
 /// The parent is in the agent's PID namespace, and `/proc/<ppid>/fd/<n>`
-/// reopens a pipe it holds. The child waits at a gate the parent opens only
-/// after dropping its copy of the report (Review von Codex zu HUM-137): the
-/// agent's first look at its parent's descriptors never finds the pipe.
+/// reopens a pipe it holds. Until HUM-138 the parent dropped its copy of the
+/// report before it opened the gate (Review von Codex zu HUM-137). Since
+/// HUM-138 it keeps the copy for the refusals of the agent, and the gate
+/// opens once it is non-dumpable instead: the agent's look at its parent's
+/// descriptors finds nothing at all, the pipe included.
 #[test]
-fn the_parent_holds_no_report_writer_when_the_agent_starts() {
+fn the_agent_cannot_reach_the_report_writer_of_its_parent() {
     use std::os::unix::fs::MetadataExt as _;
     let socket = socket_path("exec-gate");
     let mut command = shim_with_bridge(
@@ -337,7 +348,7 @@ fn the_parent_holds_no_report_writer_when_the_agent_starts() {
         &[
             "sh",
             "-c",
-            "for f in /proc/$PPID/fd/*; do readlink \"$f\"; done",
+            "for f in /proc/$PPID/fd/*; do readlink \"$f\"; done; exit 0",
         ],
     );
     let (read_end, write_end) = report_pipe(&mut command);
@@ -354,30 +365,37 @@ fn the_parent_holds_no_report_writer_when_the_agent_starts() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         !stdout.lines().any(|line| line == pipe),
-        "the parent still held the report {pipe} when the agent ran: {stdout}"
+        "the agent reached the report {pipe} of its parent: {stdout}"
     );
-    assert_eq!(read_report(read_end).len(), 5);
+    let lines = read_report(read_end);
+    assert_eq!(check_lines(&lines).len(), 5, "{lines:?}");
 }
 
 /// Whatever the launcher leaves open without `CLOEXEC` is gone from the
-/// parent shim before the agent runs: the agent could reopen it through
-/// `/proc/<ppid>/fd`. In CI such a leak was the runner's own control pipe,
-/// and a test agent writing into its parent's descriptors broke the runner.
+/// parent shim and from the agent while the agent runs: the agent could
+/// otherwise reopen it through `/proc/<ppid>/fd`. In CI such a leak was the
+/// runner's own control pipe, and a test agent writing into its parent's
+/// descriptors broke the runner.
+///
+/// Measured through the pipe itself and not through `/proc`: since HUM-138
+/// the parent is non-dumpable, and nobody without `CAP_SYS_PTRACE` can list
+/// its descriptors any more, this test included. Once the test drops its own
+/// write end, the read end sees EOF only if no process of the sandbox still
+/// holds one. The agent says `up` once it runs; the pipe must be at EOF at
+/// that moment already, read once and without waiting, so a close that came
+/// only after the gate opened is caught and not hidden by a retry loop.
 #[test]
 fn the_parent_drops_what_the_launcher_leaked() {
-    use std::os::unix::fs::MetadataExt as _;
+    use std::os::fd::AsRawFd as _;
     let socket = socket_path("leak");
-    let mut command = shim_with_bridge(
-        &socket,
-        &[
-            "sh",
-            "-c",
-            "for f in /proc/$PPID/fd/* /proc/self/fd/*; do readlink \"$f\"; done; exit 0",
-        ],
-    );
+    let mut command = shim_with_bridge(&socket, &["sh", "-c", "echo up; sleep 3"]);
+    command.stdout(Stdio::piped());
     let mut fds = [0 as libc::c_int; 2];
     // SAFETY: `fds` is a valid two-element array for pipe2.
-    assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
+    assert_eq!(
+        unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) },
+        0
+    );
     let [leak_r, leak_w] = fds;
     // SAFETY: runs in the forked child before exec and only clears CLOEXEC
     // on both ends, so they leak into this shim like a careless launcher's,
@@ -395,24 +413,23 @@ fn the_parent_drops_what_the_launcher_leaked() {
     // SAFETY: both descriptors were just created and belong to this test.
     let (leak_read, leak_write) =
         unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
-    let pipe = format!(
-        "pipe:[{}]",
-        fs::File::from(leak_read.try_clone().unwrap())
-            .metadata()
-            .unwrap()
-            .ino()
-    );
-    let output = command.output().unwrap();
-    drop((leak_read, leak_write));
-    assert_eq!(code(output.status), 0);
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut child = command.spawn().unwrap();
+    drop(leak_write);
+    let mut up = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut up)
+        .unwrap();
+    assert_eq!(up, "up\n", "the agent did not start");
+    let mut byte = [0u8; 1];
+    // SAFETY: a one-byte buffer on a descriptor this test owns; the
+    // descriptor is non-blocking, so this read never waits.
+    let n = unsafe { libc::read(leak_read.as_raw_fd(), byte.as_mut_ptr().cast(), 1) };
+    let eof_while_running = n == 0 && child.try_wait().unwrap().is_none();
+    let status = wait_with_timeout(&mut child);
+    assert_eq!(code(status), 0);
     assert!(
-        stdout.lines().any(|line| line.starts_with("socket:")),
-        "{stdout}"
-    );
-    assert!(
-        !stdout.lines().any(|line| line == pipe),
-        "the leaked {pipe} reached the agent's side: {stdout}"
+        eof_while_running,
+        "a process of the sandbox still held the leaked write end when the agent started (read returned {n})"
     );
 }
 
@@ -441,7 +458,11 @@ fn an_agent_that_ran_leaves_no_exec_line() {
     drop(write_end);
     assert_eq!(code(status), 127);
     let lines = read_report(read_end);
-    assert_eq!(lines.len(), 5, "only the five checks: {lines:?}");
+    assert_eq!(
+        check_lines(&lines).len(),
+        5,
+        "only the five checks: {lines:?}"
+    );
     assert!(
         !lines.iter().any(|line| line.starts_with("EXEC")),
         "{lines:?}"
@@ -592,8 +613,20 @@ fn agent_inherits_no_descriptors_and_none_of_the_shim_variables() {
         env.contains(&"HUMANITL_TEST=1"),
         "other variables pass: {stdout}"
     );
-    // The report descriptor was used before it was closed.
-    assert_eq!(read_report(read_end).len(), 5);
+    // The report descriptor was used before it was closed: five checks, and
+    // the parent's word on refusals (HUM-138).
+    let report = read_report(read_end);
+    assert_eq!(check_lines(&report).len(), 5, "{report:?}");
+    assert!(report.contains(&"REFUSALS on".to_owned()), "{report:?}");
+}
+
+/// The `CHECK` lines of a report, in order.
+fn check_lines(lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .filter(|line| line.starts_with("CHECK "))
+        .cloned()
+        .collect()
 }
 
 // ---- the report -----------------------------------------------------------------
@@ -606,7 +639,17 @@ fn report_has_one_line_per_check() {
     let status = command.status().unwrap();
     drop(write_end);
     assert_eq!(code(status), 0);
-    let lines = read_report(read_end);
+    let report = read_report(read_end);
+    // Besides the checks, exactly one line from the parent: the refusals are
+    // reported. The refusals the `families` probe provokes on purpose are the
+    // shim's, not the agent's, and `true` makes none: no `REFUSED` line
+    // (HUM-138).
+    let others: Vec<&String> = report
+        .iter()
+        .filter(|line| !line.starts_with("CHECK "))
+        .collect();
+    assert_eq!(others, ["REFUSALS on"], "{report:?}");
+    let lines = check_lines(&report);
     assert_eq!(lines.len(), 5, "{lines:?}");
     assert!(
         lines[0].starts_with("CHECK bridge_listening ok proxy=127.0.0.1:"),
@@ -657,6 +700,92 @@ fn report_has_one_line_per_check() {
             "evidence carries no spaces: {line}"
         );
     }
+}
+
+/// What the agent tried outside HTTP reaches the report, counted by family
+/// and type, and the agent still gets `EPERM` for every attempt (HUM-138).
+#[test]
+fn refused_sockets_of_the_agent_are_counted_in_the_report() {
+    if Command::new("python3").arg("--version").output().is_err() {
+        eprintln!("skipped: no python3");
+        return;
+    }
+    let socket = socket_path("refusals");
+    let script = "import socket, errno\n\
+                  def probe(*a):\n\
+                  \ttry:\n\
+                  \t\tsocket.socket(*a).close(); return 'ok'\n\
+                  \texcept OSError as e:\n\
+                  \t\treturn errno.errorcode.get(e.errno, str(e.errno))\n\
+                  seen = [probe(socket.AF_UNIX, socket.SOCK_STREAM) for _ in range(3)]\n\
+                  seen += [probe(socket.AF_INET, socket.SOCK_DGRAM) for _ in range(2)]\n\
+                  seen.append(probe(socket.AF_INET, socket.SOCK_STREAM))\n\
+                  print(' '.join(seen))\n";
+    let mut command = shim_with_bridge(&socket, &["python3", "-c", script]);
+    let (read_end, write_end) = report_pipe(&mut command);
+    let output = command.output().unwrap();
+    drop(write_end);
+    assert_eq!(
+        code(output.status),
+        0,
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "EPERM EPERM EPERM EPERM EPERM ok\n"
+    );
+    let report = read_report(read_end);
+    let refused: Vec<Vec<&str>> = report
+        .iter()
+        .filter(|line| line.starts_with("REFUSED "))
+        .map(|line| line.split(' ').collect())
+        .collect();
+    // The last line per pair carries the total; earlier ones may repeat it.
+    let last = |family: &str, sock_type: &str| {
+        refused
+            .iter()
+            .rev()
+            .find(|fields| fields[2] == family && fields[3] == sock_type)
+            .map(|fields| (fields[4].to_owned(), fields[5].to_owned()))
+    };
+    assert_eq!(
+        last("AF_UNIX", "SOCK_STREAM"),
+        Some(("family".to_owned(), "3".to_owned())),
+        "{report:?}"
+    );
+    assert_eq!(
+        last("AF_INET", "SOCK_DGRAM"),
+        Some(("type".to_owned(), "2".to_owned())),
+        "{report:?}"
+    );
+    assert!(
+        refused
+            .iter()
+            .all(|fields| fields.len() == 8 && fields[1] == "socket"),
+        "{report:?}"
+    );
+}
+
+/// The parent holds the listener and the report while the agent runs; the
+/// agent must reach neither through `/proc/<parent>/fd` (HUM-138). The
+/// parent is not dumpable, so the kernel refuses the agent, even with
+/// `kernel.yama.ptrace_scope = 0` and the same uid.
+#[test]
+fn the_agent_cannot_reach_the_descriptors_of_the_parent() {
+    let socket = socket_path("dumpable");
+    let output = shim_with_bridge(
+        &socket,
+        &[
+            "sh",
+            "-c",
+            "ls /proc/$PPID/fd > /dev/null 2>&1 && echo open || echo closed",
+        ],
+    )
+    .output()
+    .unwrap();
+    assert_eq!(code(output.status), 0);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "closed\n");
 }
 
 /// The second guarantee, measured: the shim names every Unix socket it finds

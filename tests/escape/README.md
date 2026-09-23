@@ -54,6 +54,7 @@ erscheint im XML als `<error>`, eine durchgekommene Probe als `<failure>`.
 | `esc-3-egress.sh` | ESC-3: kein Egress ohne Proxy, über den Proxy landet alles in der Warteschlange; am Ende die zwei Anfragen des DNS-Beweises (`held.esc3.test`, `allowed.esc3.test`) |
 | `dns-stub.py` | der aufzeichnende Nameserver des Laufs (HUM-115): UDP auf einem freien Port von `127.0.0.1`, eine Zeile `<epoch-ms> <qname> <qtype>` je Frage nach `target/escape/dns.log`, Antwort immer `NXDOMAIN` |
 | `dns-proof.sh` | von `run.sh` eingelesen: startet den Stub, lässt neben ESC-3 einen Beobachter auf dem Host laufen und entscheidet die drei Fälle `esc-3/dns_not_before_decision`, `esc-3/dns_after_allow_once`, `esc-3/meta_no_dns_lookup` am Protokoll des Stubs |
+| `refusals-proof.sh` | von `run.sh` eingelesen: startet nach den Suiten eine weitere Sandbox, lässt sie genau dreimal `socket(AF_UNIX)` und zweimal `socket(AF_INET, SOCK_DGRAM)` versuchen und entscheidet `esc-1/refusals_reported` an dem, was `humanitl sandbox run` danach über die verweigerten Versuche sagt (HUM-138) |
 | `esc-4-rules.sh` | ESC-4: die Regel-Tabelle, gegen die Regel-Engine aus HUM-022, für den Body-Cap gegen den laufenden Proxy und seit HUM-114 fünfzehnmal über `humanitl rules test` gegen den Daemon des Laufs; dazu `llm_cli_unreachable`, die einzige Probe der Sammlung für `humanitl llm test` |
 | `body_cap.py` | die zwei Anfragen von `rule_body_over_cap`: eine über dem Cap, eine genau auf dem Cap, über den Proxy-Socket |
 | `esc-5-filesystem.sh` | ESC-5: sieben Fälle gegen die gleichnamigen Integrationstests — fünf zu Dateisystem und Terminal (HUM-042, HUM-043), zwei zur Audit-Kette eines echten Daemons (HUM-050) |
@@ -159,6 +160,22 @@ Namensraum des Hosts, genau deshalb steht der Syscall auf der Liste),
 bevor ein Filter gefragt ist; wie bei `io_uring_disabled` ist der Fall dann ein
 `skip`.
 
+### Verweigert heißt auch gemeldet (HUM-138)
+
+Bis HUM-138 war jede Verweigerung still: Der Agent las sein `EPERM`, der Mensch sah eine ruhige
+Oberfläche. Seit HUM-138 legt der Filter des Agenten einen verweigerten `socket()`-Aufruf dem
+Elternprozess des Shims vor, der ihn zählt und `EPERM` antwortet. `esc-1/refusals_reported`
+misst beide Hälften in einer eigenen Sandbox: Jeder der fünf Versuche muss `EPERM` bekommen
+(sonst endet der Befehl mit 9), und der Bericht muss genau `3x socket(AF_UNIX, SOCK_STREAM)` und
+`2x socket(AF_INET, SOCK_DGRAM)` nennen. Genau, nicht mindestens: Zählte der Bericht die eigenen
+Proben des Shims mit (`families`), stünde dort eine höhere Zahl. Ohne `python3` ist der Fall ein
+`skip`.
+
+`seccomp_no_own_listener` fragt aus der Sandbox nach einem Filter mit eigenem Zuhörer
+(`SECCOMP_FILTER_FLAG_NEW_LISTENER`) und verlangt `EPERM`. `EBUSY` ist rot: Dann hat nur der
+lebende Zuhörer des Eltern-Shims den Aufruf abgewiesen, und stirbt der, bekäme der Agent seinen
+Zuhörer und könnte seine verweigerten Sockets selbst freigeben.
+
 ## Was ESC-2 behauptet
 
 Genau ein Unix-Socket ist in der Sandbox zu finden, und er ist der Proxy. Die
@@ -234,8 +251,9 @@ ESC-3 ein `skip`.
 
 ## Erwartetes Ergebnis in Sprint 0
 
-Stand nach HUM-050: 124 Fälle, 124 grün, 0 rot, 0 übersprungen, gemessen am
-2026-09-11. HUM-050 macht aus den zwei übersprungenen ESC-5-Fällen
+Stand nach HUM-138: 126 Fälle, 126 grün, 0 rot, 0 übersprungen, gemessen am
+2026-09-23; HUM-138 bringt `esc-1/refusals_reported` und `esc-1/seccomp_no_own_listener`. Davor, nach HUM-050:
+124 Fälle, 124 grün, 0 rot, 0 übersprungen, gemessen am 2026-09-11. HUM-050 macht aus den zwei übersprungenen ESC-5-Fällen
 `audit_delete_is_detected` und `audit_truncate_is_detected` grüne. Davor,
 nach HUM-115, waren es 124/122/0/2. HUM-115 macht aus den zwei übersprungenen Fällen
 `dns_not_before_decision` und `meta_no_dns_lookup` die drei grünen

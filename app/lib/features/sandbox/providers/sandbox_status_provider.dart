@@ -210,6 +210,12 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
           ? current.sandboxId
           : current.checksSandboxId,
     ),
+    // The whole tally of refused attempts; it replaces the last one, never
+    // adds to it (HUM-138). It does not touch the queue of flows: a refused
+    // socket never became a request, so there is nothing to decide.
+    SandboxUpdateRefusals(:final SandboxRefusals refusals) => current.copyWith(
+      refusals: refusals,
+    ),
   };
 
   /// [checks] with [result] in the place of the earlier result for the same
