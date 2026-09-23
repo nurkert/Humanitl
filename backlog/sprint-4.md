@@ -69,6 +69,22 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-198 | Die History des Fakes nennt eine Anfragegröße, die ihr Rumpf nicht hat | S | HUM-032 |
 | HUM-194 | Das Audit-Log hat keine Obergrenze in Bytes | S | HUM-157 |
 | HUM-195 | `AuditWarning` nennt im Vertrag nur zwei Arten | S | HUM-157, HUM-160 |
+| HUM-203 | PID 1 der Sandbox trägt keinen Filter und ist für den Agenten beschreibbar | M | — |
+| HUM-204 | Eine Allow-Regel mit Pfad-Glob reicht über `..` aus ihrem Pfad hinaus | M | — |
+| HUM-205 | Jede Änderung einer Regel in der App löscht ihre Pfadpräfixe | M | — |
+| HUM-206 | Eine Taste auf dem fokussierten Ventil sendet einen Fund ohne Pause | M | — |
+| HUM-207 | „Allow all“ aus der Palette sendet Funde, die das Modal nicht zeigt | M | — |
+| HUM-208 | Ein Projektprofil hebt die harte Sperre für Geheimnisse mit Prüfsumme auf | M | — |
+| HUM-209 | Ein Projektprofil bestimmt, wie viel vom gehaltenen Body der Mensch sieht | M | — |
+| HUM-210 | Ein Update aus dem AppImage nimmt dem laufenden Daemon den Shim weg | M | HUM-077 |
+| HUM-211 | Nach dem Paket läuft weiter die alte Unit aus dem Home-Verzeichnis | M | HUM-077, HUM-167 |
+| HUM-212 | Das Laufzeitverzeichnis im `/tmp`-Rückfall wird nicht auf Besitzer und Symlink geprüft, Clients vertrauen fremdem Socket und Token | S | — |
+| HUM-213 | ESC-4 `rule_body_over_cap` misst den Body-Deckel nie gegen eine live Allow-Regel, die Belegzeile `allow_rule=matched` stimmt nicht | S | — |
+| HUM-214 | Der Doc-Kommentar des Audit-Exports verspricht eine Prüfung der Kette, die es nicht gibt | S | — |
+| HUM-215 | `plain()` über die ganze Fix-Zeile verändert Pfade in Anführungszeichen, der Deckel von 500 Zeichen schneidet Befehle ab | S | — |
+| HUM-216 | Die Probe von `config set` ignoriert Schreibfehler der Scratch-Dateien, eine leere Datei besteht die Prüfung | S | — |
+| HUM-217 | Unit-Verzeichnis und Rollback nutzen das `XDG_CONFIG_HOME` der CLI, nicht das des systemd-Managers | S | HUM-077 |
+| HUM-218 | Eine Entscheidung aus der Benachrichtigung löscht Notiz, Merk-Entwurf und Findings-Pause eines anderen ausgewählten Flows | S | — |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -3979,3 +3995,508 @@ Vertrag wurde in HUM-157 nicht angefasst, weil HUM-160 ihn gleichzeitig auf
 ### Referenzen
 HUM-157; `daemon/crates/ipc/src/audit.rs` (`verify_response`).
 
+---
+
+## HUM-203 · PID 1 der Sandbox trägt keinen Filter und ist für den Agenten beschreibbar
+Sprint: 4 · Größe: M · Abhängigkeiten: — · Blockiert: M4 (Sicherheit)
+
+### Kontext
+Aus dem Sicherheitsdurchlauf vom 2026-09-23 über `main` bei 241f6cd (Befund
+M1, Schwere major, von zwei unabhängigen Prüfern bestätigt). Ort: `daemon/crates/sandbox/src/bwrap_args.rs:264`.
+
+- **Ausgangslage:** `to_bwrap_args` setzt alle Namespaces, `--cap-drop ALL` und `--disable-userns`, aber kein `--as-pid-1`. Das ist Absicht (ADR-0002:104-108, CONVENTIONS:453). PID 1 in der Sandbox ist damit das Init von bwrap.
+- **Kein Filter auf PID 1:** Es trägt keinen seccomp-Filter, `tests/escape/esc-1-sockets.sh:465-478` nimmt `/proc/1` ausdrücklich aus. Es läuft unter derselben UID in derselben User-Namespace wie der Agent.
+- **Lücke in FLOOR:** FLOOR (`daemon/bin/humanitl-shim/src/seccomp.rs:70-88`) sperrt `ptrace` und `process_vm_*`. `/proc/<pid>/mem` ist aber kein Syscall, und `pidfd_getfd` steht nicht auf der Liste. Beide Wege prüft nur `ptrace_may_access`.
+- **Angriff:** Bei `kernel.yama.ptrace_scope=0` (auf diesem Host gemessen, Debian-Standard) und einem dumpable bwrap-init (nicht verifiziert) öffnet der Agent `/proc/1/mem` mit `O_RDWR`. Er schreibt Code in PID 1 und führt ihn ohne Filter aus.
+- **Folge:** io_uring, keyctl, bpf, userfaultfd und perf_event_open sind wieder erreichbar, Satz 3 fällt. `AF_VSOCK` ist an keine Netz-Namespace gebunden und wäre ein Weg am Proxy vorbei, aber nur mit geladenem vsock-Transport und Listener auf dem Host.
+- **Warum major:** Die tragende Wand (leere Netz-Namespace, Mount-Allowlist) bleibt stehen, deshalb major und nicht blocking.
+- **Doku:** THREAT-MODEL.md:225-232 (K-04) nennt den Weg nur für den gefilterten Shim-Elternprozess. K-06 (280-287) meldet kein Restrisiko.
+
+### Ziel
+Der Befund ist behoben, und ein Test hält ihn behoben.
+
+### Akzeptanzkriterien
+- [ ] bwrap mit `--as-pid-1` starten. Der Shim wird PID 1 und übernimmt das Reapen.
+- [ ] In ESC-1 die Ausnahme für `/proc/1` entfernen. `seccomp_parent_mode_2` wieder auf `/proc/1/status` prüfen, wie `esc-1-sockets.sh:473-475` ankündigt.
+- [ ] Im Shim-Elternprozess direkt nach `fork` `prctl(PR_SET_DUMPABLE, 0)` setzen (`humanitl-shim/src/main.rs:642`). `pidfd_getfd` in FLOOR und `SYSCALLS` aufnehmen.
+- [ ] Neue ESC-Probe: `open("/proc/1/mem", O_RDWR)` und `pidfd_getfd` auf PID 1 und auf den Elternprozess müssen scheitern.
+- [ ] ADR-0002, CONVENTIONS 4.11, SECURITY.md:218 und THREAT-MODEL K-04/K-06 im selben Commit anpassen. Bis zur Behebung PID 1 als Restrisiko in K-04 führen.
+- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [ ] `make check` grün.
+
+### Referenzen
+Sicherheitsdurchlauf 2026-09-23, Befund M1; `daemon/crates/sandbox/src/bwrap_args.rs:264`.
+
+---
+
+## HUM-204 · Eine Allow-Regel mit Pfad-Glob reicht über 
+Sprint: 4 · Größe: M · Abhängigkeiten: — · Blockiert: M4 (Sicherheit)
+
+### Kontext
+Aus dem Sicherheitsdurchlauf vom 2026-09-23 über `main` bei 241f6cd (Befund
+M2, Schwere major, von zwei unabhängigen Prüfern bestätigt). Ort: `daemon/crates/rules/src/path.rs:82`.
+
+- **Regel:** Nutzerregel `allow api.github.com` mit Pfad-Glob `/repos/me/**`.
+- **Anfrage:** Der Agent schickt `GET /repos/me/../../user/keys` (mit `curl --path-as-is` oder `http.client`) oder `/repos/me/%2e%2e/%2e%2e/user/keys` (mit jedem Client).
+- **Warum die Regel trifft:** `handler.rs:772-775` übernimmt den Pfad roh, `pipeline.rs:277-283` baut daraus den `RequestKey`. `PathMatcher::matches` (82-88) entfernt nur die Query, und globset übersetzt `/**` in `/.*`. Ergebnis: `Matched{Allow}` ohne Halt.
+- **Weiterleitung:** `upstream.rs:333-336` sendet den Pfad unverändert. Ein Origin, der Punktsegmente auflöst (nginx, Apache, Tomcat), bedient `/user/keys`. Mit einer POST-Regel wird daraus ein hostweiter Schreibzugriff, den kein Mensch sieht.
+- **Schutz nur für Präfixe:** Nur `prefix_matches` (`path.rs:124`) hat `has_dot_dot_segment`. SECURITY.md 3.1 und CONVENTIONS:396/1255-1256 nennen die Regel nur für Präfixe, ohne Begründung.
+- **Warum major:** Ab Werk tragen nur Block-Regeln Pfad-Globs.
+
+### Ziel
+Der Befund ist behoben, und ein Test hält ihn behoben.
+
+### Akzeptanzkriterien
+- [ ] `has_dot_dot_segment` auf `pub(crate)` setzen.
+- [ ] In `eval.rs` `CompiledRule::matches` (um Zeile 345) eine Regel überspringen, die nicht `Block` ist, wenn der Pfad `..` trägt und die Regel eine Pfad- oder Präfixbedingung hat. Die Anfrage fällt dann auf `ask`, Block-Regeln greifen weiter. Alternative: Punktsegmente nach RFC 3986 auflösen, dagegen matchen und genau diesen Pfad weiterleiten.
+- [ ] Test neben `a_dot_dot_segment_never_matches_a_prefix` (`path.rs:185`):
+- [ ] SECURITY.md 3.1 und CONVENTIONS nachziehen.
+- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [ ] `make check` grün.
+
+### Referenzen
+Sicherheitsdurchlauf 2026-09-23, Befund M2; `daemon/crates/rules/src/path.rs:82`.
+
+---
+
+## HUM-205 · Jede Änderung einer Regel in der App löscht ihre Pfadpräfixe
+Sprint: 4 · Größe: M · Abhängigkeiten: — · Blockiert: M4 (Sicherheit)
+
+### Kontext
+Aus dem Sicherheitsdurchlauf vom 2026-09-23 über `main` bei 241f6cd (Befund
+M3, Schwere major, von zwei unabhängigen Prüfern bestätigt). Ort: `app/lib/core/ipc/convert.dart:404`.
+
+- **Wo das Feld verloren geht:** Der Domain-`RuleMatcher` (`rule.dart:31-38`) hat kein `pathPrefixes`. `RuleMatcherToDomain` (404-413) liest es nicht, `RuleMatcherToProto` (419-434) setzt es nie.
+- **Daemon:** Er übernimmt die Liste 1:1 (`ipc/src/convert.rs:1652`). `RulesStore::update` (`rules_store.rs:399-435`) ersetzt die Regel und schreibt `rules.yaml` neu. Leere Liste heißt `Any`.
+- **Auslöser, alles normale Klicks:**
+  - „Dauerhaft machen“ bei `at`-Frist (`rules.dart:171-176`)
+  - Editor-Änderung (90-92)
+  - Frist wiederherstellen (146-156)
+  - Löschen mit Undo (125-130)
+- **Folge:** Danach steht `allow api.x.com` ohne Präfix in der Datei, jeder Pfad geht ohne Halt hinaus. Die Liste zeigt keinen Unterschied, weil sie Präfixe nie angezeigt hat. Auch der Dry-Run prüft den breiteren Matcher.
+- **Wer das auslöst:** Der Agent kann es nicht selbst, profitiert aber davon. Mitgelieferte Regeln sind geschützt (RULES_010).
+- **Gleiche Ursache:** `FixAction.addRule` (`convert.dart:72`) verliert das Präfix eines PROXY_008-Vorschlags. Auch `passthrough_llm` fehlt, das ist aber unkritisch, weil der Daemon es auf `false` zwingt.
+
+### Ziel
+Der Befund ist behoben, und ein Test hält ihn behoben.
+
+### Akzeptanzkriterien
+- [ ] `@Default(<String>[]) List<String> pathPrefixes` im Domain-`RuleMatcher`, freezed/json neu erzeugen.
+- [ ] toDomain: `List<String>.unmodifiable(pathPrefixes)`. toProto: `out.pathPrefixes.addAll(pathPrefixes)`. `passthroughLlm` analog.
+- [ ] Präfixe in rule_row, rule_sentence und Editor zeigen, mindestens nur lesend.
+- [ ] `convert_test` mit Namensparität Feld für Feld. Round-Trip-Test: list, dann `updateRule`/`makePermanent`, dann `path_prefixes` unverändert. Mutationsbeweis ohne die Zuweisung in toProto.
+- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [ ] `make check` grün.
+
+### Referenzen
+Sicherheitsdurchlauf 2026-09-23, Befund M3; `app/lib/core/ipc/convert.dart:404`.
+
+---
+
+## HUM-206 · Eine Taste auf dem fokussierten Ventil sendet einen Fund ohne Pause
+Sprint: 4 · Größe: M · Abhängigkeiten: — · Blockiert: M4 (Sicherheit)
+
+### Kontext
+Aus dem Sicherheitsdurchlauf vom 2026-09-23 über `main` bei 241f6cd (Befund
+M4, Schwere major, von zwei unabhängigen Prüfern bestätigt). Ort: `app/lib/features/intercept/widgets/action_bar.dart:238`, dazu `release_valve.dart:212-216`.
+
+- **Tastenweg:** Eine gehaltene Anfrage mit offenem Fund, der Fokus liegt per Tab auf dem Ventil. Die Enter-Bindung des Screens gibt nach, weil `focusedControlHandlesActivate()` wahr ist (`intercept_screen.dart:94-101`, `isEnabled` bei 743-746; der Befund nannte 712-716). Die Leertaste ist auf dem Screen nicht gebunden. Die Taste wird bei den `WidgetsApp`-Defaults zum `ActivateIntent`.
+- **Wo der Schutz fehlt:** Das Ventil ruft `widget.onAllow()` auf und ignoriert `holdRequired`, der Zeigerpfad (238-243) beachtet es. `onAllow` übergibt `confirmed: anyFinding, acknowledged: anyFinding` (234-239). `allowMany` ruft bei einem Flow `allow(acknowledged: true)` auf (`decision.dart:476-477`), und die Pause (388) wird übersprungen.
+- **Folge:** Der Fund geht unumkehrbar hinaus.
+- **Widerspruch zur Spezifikation:** UX.md 4.7, `decision.dart:372-378` und `sprint-4.md:925`. Kein Test deckt den Fall ab.
+- **Wer das auslöst:** Weder Agent noch lokaler Client. Es bleibt ein menschlicher Fehlgriff auf einem beschrifteten, bernsteinfarbenen Bedienelement.
+
+### Ziel
+Der Befund ist behoben, und ein Test hält ihn behoben.
+
+### Akzeptanzkriterien
+- [ ] Eigener Callback `onActivate` im Ventil, verdrahtet als `_allow(remember: remember.remembers, flows: chosen, confirmed: true)` ohne `acknowledged`, wie in `intercept_screen.dart`. Bei einer Anfrage öffnet das die Pause, bei einer Gruppe gilt die Taste als Bestätigung.
+- [ ] `onAllow` bleibt nur für das Halten.
+- [ ] `holdRequired ? onShortPress : onAllow` schließt das Leck ebenfalls, verweigert aber bei Gruppen Tasten, die der Screen annimmt.
+- [ ] Widget-Test: Ventil per Tab fokussieren, Enter und dann Leertaste mit Fund. Erwartet: Pause sichtbar, `client.decisions` leer, Mutationsbeweis.
+- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [ ] `make check` grün.
+
+### Referenzen
+Sicherheitsdurchlauf 2026-09-23, Befund M4; `app/lib/features/intercept/widgets/action_bar.dart:238`, dazu `release_valve.dart:212-216`.
+
+---
+
+## HUM-207 · „Allow all“ aus der Palette sendet Funde, die das Modal nicht zeigt
+Sprint: 4 · Größe: M · Abhängigkeiten: — · Blockiert: M4 (Sicherheit)
+
+### Kontext
+Aus dem Sicherheitsdurchlauf vom 2026-09-23 über `main` bei 241f6cd (Befund
+M5, Schwere major, von zwei unabhängigen Prüfern bestätigt). Ort: `app/lib/features/intercept/providers/decision.dart:554`.
+
+- **Ablauf:** Drei gehaltene Flows, einer mit `findingCount` 2. Strg+K, „Queue: allow all…“ (`shell_screen.dart:123-131`).
+- **Fehlende Prüfung:** `askAllowAll` (554-560) prüft nur `held.isEmpty` und `isSending`.
+- **Modal:** `BatchModal` (118-187) zeigt Anzahl, Hosts und bis zu 8 Pfade, keinen Fund. Bestätigt wird mit einem einfachen Knopf ohne Halten. `confirmBatch` (563-574) gibt über `_many` alle frei.
+- **Kein Rückhalt im Daemon:** `Decide` kennt noch kein `acknowledged_findings` (HUM-159/160). `check_allow` blockt nur Checksum-Funde und ist per Default aus.
+- **Vergleich:** `allowMany` verweigert denselben Fall mit `holdToSend` (490-495). UX.md 4.7 lehnt ein Modal als Schutz ausdrücklich ab.
+- **Rolle des Agenten:** Er kann die Queue füllen, damit der Mensch zu „allow all“ greift.
+
+### Ziel
+Der Befund ist behoben, und ein Test hält ihn behoben.
+
+### Akzeptanzkriterien
+- [ ] `askAllowAll` teilt in saubere Flows und Flows mit Funden. Nur die sauberen kommen in den `BatchRequest`, dazu ein Zähler `withheld`, den das Modal nennt. Ist keiner sauber, gilt `RefusalReason.holdToSend`.
+- [ ] `confirmBatch` bei `kind == allow` verwirft Flows mit Funden, außer der Batch kam über den bestätigten Pfad von `allowMany` (Flag `findingsConfirmed`).
+- [ ] Widget-Test: Kein `Decide{allow}` für den Flow mit Fund.
+- [ ] Langfristig macht HUM-159 das im Daemon für jeden Client zu.
+- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [ ] `make check` grün.
+
+### Referenzen
+Sicherheitsdurchlauf 2026-09-23, Befund M5; `app/lib/features/intercept/providers/decision.dart:554`.
+
+---
+
+## HUM-208 · Ein Projektprofil hebt die harte Sperre für Geheimnisse mit Prüfsumme auf
+Sprint: 4 · Größe: M · Abhängigkeiten: — · Blockiert: M4 (Sicherheit)
+
+### Kontext
+Aus dem Sicherheitsdurchlauf vom 2026-09-23 über `main` bei 241f6cd (Befund
+M6, Schwere major, von zwei unabhängigen Prüfern bestätigt). Ort: `daemon/crates/config/src/model.rs:120`.
+
+- **Ablauf:** Global gilt `[hold] hard_block_checksum_secrets = true`. Ein geklontes Repo bringt `.humanitl/profile.toml` mit `[config.hold] hard_block_checksum_secrets = false` mit.
+- **Warum der Wert gilt:** Das Feld hat `x-project-scope = "allowed"`, `load.rs:550-554` sperrt nur `Denied`, und Ebene 5 überschreibt Ebene 2.
+- **Wirkung im Proxy:** `humanitld` lädt beim Start mit cwd als Projekt (`main.rs:1185-1186`, `resolve.rs:186-194`). `main.rs:1488` verdrahtet den Wert in `with_hold`, und `handler.rs:1222-1263` blockt nicht mehr. IBAN und Karte gehen dann über eine vorhandene Allow-Regel und über die LLM-Durchreiche ungefragt hinaus, entgegen CONVENTIONS:3233.
+- **Sichtbarkeit:** Keine. Es gibt keine Diagnose, und die Lücke ist in SECURITY.md und THREAT-MODEL.md nicht genannt.
+- **Vergleich:** Gleiche Art Schwächung, wie sie CONVENTIONS 4.11 für `findings.enabled` verbietet.
+- **Korrekturen am Szenario:**
+  - Nicht GitHub-Token: `Tier::Checksum` tragen nur IBAN (`iban.rs:69`) und Karte (`card.rs:69`).
+  - Die Auflösung je Sitzung (`SessionState`, `session.rs:30-42`) trägt den Schalter nicht. `humanitl run` im Repo schaltet nichts um, nur das Startprojekt des Daemons zählt.
+  - Die systemd-Unit startet in `$HOME`. Offen bleiben der manuelle Start von `humanitld` im Repo (Fix-Hinweis von `DAEMON_001`, SECURITY.md:558-561) und ein globales `sandbox.work_dir`, das auf das Repo zeigt.
+  - Der Agent bräuchte zusätzlich einen Daemon-Neustart.
+
+### Ziel
+Der Befund ist behoben, und ein Test hält ihn behoben.
+
+### Akzeptanzkriterien
+- [ ] `model.rs:120` auf `"x-project-scope" = "denied"` setzen.
+- [ ] Den Schlüssel aufnehmen in:
+- [ ] Schema-Fixture und `docs/CONFIG.md:131` neu erzeugen.
+- [ ] Test: Das Projektprofil ergibt `CONFIG_003`.
+- [ ] Soll ein Projekt die Sperre nur einschalten dürfen: In `Merge::apply` (nach `load.rs:554`) liefert `ProfileProject` mit dem Wert `false` den Fehler `project_scope_denied`. Beide Richtungen testen.
+- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [ ] `make check` grün.
+
+### Referenzen
+Sicherheitsdurchlauf 2026-09-23, Befund M6; `daemon/crates/config/src/model.rs:120`.
+
+---
+
+## HUM-209 · Ein Projektprofil bestimmt, wie viel vom gehaltenen Body der Mensch sieht
+Sprint: 4 · Größe: M · Abhängigkeiten: — · Blockiert: M4 (Sicherheit)
+
+### Kontext
+Aus dem Sicherheitsdurchlauf vom 2026-09-23 über `main` bei 241f6cd (Befund
+M7, Schwere major, von zwei unabhängigen Prüfern bestätigt). Ort: `daemon/crates/config/src/model.rs:179` (`limits.recorder_max_body_bytes`, 177-179).
+
+- **Ablauf:** Ein Repo setzt `[config.limits] recorder_max_body_bytes = 1024` und, wegen `validate.rs:243`, `[config.recorder] inline_max_bytes = 1024`. Beide sind `allowed`, `validate.rs:212-216` verlangt nur ≥ 1024.
+- **Wirkung:** Ein Daemon, der im Repo startet (`main.rs:1185`, `open_recorder` 1074-1084), zeichnet von jedem Body nur 1 KiB auf (`recorder/src/lib.rs:271-274`, Antworten `sink.rs:154-163`).
+- **Schwerer als gemeldet:** `preview_of` (`ipc/src/server.rs:925-940`) und `GetBody`/`read_body` (662-698) lesen aus dem Recorder. Der Mensch sieht beim Halten nur 1 KiB, `Allow` schickt den ganzen Body. Das unterläuft SECURITY.md:634-636. CONVENTIONS 4.11 sperrt `recorder.retention_days` aus demselben Grund, dieser Schlüssel fehlt.
+- **Einschränkungen:**
+  - Die Kürzung ist markiert (`truncated = 1`, volle `size`).
+  - Die Detektoren sehen den vollen Body (`handler.rs:848-850`).
+  - Der Wert wirkt erst nach einem Neustart und nicht unter der systemd-Unit.
+  - Der Angreifer ist der Autor eines Repos, nicht der Agent.
+- **Kein Defekt:** `recorder.inline_max_bytes` wählt nur zwischen DB und Blob (`lib.rs:277-278`, `sprint-5.md:2292-2293`) und bleibt `allowed`.
+
+### Ziel
+Der Befund ist behoben, und ein Test hält ihn behoben.
+
+### Akzeptanzkriterien
+- [ ] Nur `limits.recorder_max_body_bytes` (`model.rs:178`) auf `denied` setzen. Die Gruppe `limits` bleibt `allowed`.
+- [ ] CONVENTIONS 4.11 (472) ergänzen, mit der Begründung „wie viel die Aufzeichnung belegt, und was der Mensch beim Halten sieht“.
+- [ ] `docs/CONFIG.md:150` und die Schema-Fixture neu erzeugen.
+- [ ] Test: Ergibt `CONFIG_003`.
+- [ ] Die Alternative (nicht unter den unteren Ebenen) braucht neue Loader-Logik. Die Sperre ist einfacher.
+- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [ ] `make check` grün.
+
+### Referenzen
+Sicherheitsdurchlauf 2026-09-23, Befund M7; `daemon/crates/config/src/model.rs:179` (`limits.recorder_max_body_bytes`, 177-179).
+
+---
+
+## HUM-210 · Ein Update aus dem AppImage nimmt dem laufenden Daemon den Shim weg
+Sprint: 4 · Größe: M · Abhängigkeiten: HUM-077 · Blockiert: M4 (Sicherheit)
+
+### Kontext
+Aus dem Sicherheitsdurchlauf vom 2026-09-23 über `main` bei 241f6cd (Befund
+M8, Schwere major, von zwei unabhängigen Prüfern bestätigt). Ort: `daemon/bin/humanitl/src/cmd/daemon.rs:252`.
+
+Der Befund stammt vom Stand vor HUM-077. Zuerst prüfen, ob HUM-077 ihn schon behebt; dann den Test nachziehen und das Issue schließen.
+
+- **Ausgangslage:** Der Daemon läuft aus `~/.local/lib/humanitl/current -> X`. Erneutes `humanitl daemon install` ist der dokumentierte Update-Weg (`docs/cli.md:364`, `INSTALL.md:63`).
+- **Ablauf:**
+  - `stage()` legt Y an und hängt `current` auf Y um. Die Unit bleibt `Unchanged`.
+  - `activate()` (759-826) ruft nur `daemon-reload` und `enable --now` auf, bei einer aktiven Unit also nichts.
+  - `wait_for_daemon` (652-666) meldet die alte Version als Erfolg.
+  - `retire_previous()` (482-502) löscht X per `remove_dir_all`, ohne Versions- oder Prozessprüfung, auch bei `Skipped` und `NoSystemctl`.
+- **Folge:** `shim_path()` (`ipc/src/sandbox.rs:2666-2687`) sucht den Shim neben `X/humanitld (deleted)` und in `SHIM_DIRS` und findet keinen. `check_shim` (`bwrap.rs:442`) meldet `SANDBOX_011`. Jede Sandbox scheitert bis zum manuellen Neustart, und auch das Update wirkt erst danach.
+- **Widerspruch zur Spezifikation:** `sprint-4.md:2066` verbietet genau das.
+
+### Ziel
+Der Befund ist behoben, und ein Test hält ihn behoben.
+
+### Akzeptanzkriterien
+- [ ] Nach erfolgreichem `activate` bei `staged.is_some()` `systemctl --user try-restart humanitld.service` ausführen.
+- [ ] `retire_previous()` nur bei `Activation::Enabled` aufrufen und nur, wenn `wait_for_daemon` `env!("CARGO_PKG_VERSION")` meldet und kein `/proc/<pid>/exe` unter dem alten Verzeichnis liegt.
+- [ ] Sonst die Kopie behalten und beim nächsten Install aufräumen.
+- [ ] Test: Eine Neuinstallation bei aktiver Unit lässt das Verzeichnis der laufenden Binärdatei stehen.
+- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [ ] `make check` grün.
+
+### Referenzen
+Sicherheitsdurchlauf 2026-09-23, Befund M8; `daemon/bin/humanitl/src/cmd/daemon.rs:252`.
+
+---
+
+## HUM-211 · Nach dem Paket läuft weiter die alte Unit aus dem Home-Verzeichnis
+Sprint: 4 · Größe: M · Abhängigkeiten: HUM-077, HUM-167 · Blockiert: M4 (Sicherheit)
+
+### Kontext
+Aus dem Sicherheitsdurchlauf vom 2026-09-23 über `main` bei 241f6cd (Befund
+M9, Schwere major, von zwei unabhängigen Prüfern bestätigt). Ort: `daemon/bin/humanitl/src/cmd/daemon.rs:336`.
+
+Überschneidet sich mit HUM-167; wer eines der beiden baut, schließt beide.
+
+- **Ausgangslage:** Zuerst Archiv oder AppImage, also liegt `~/.config/systemd/user/humanitld.service` mit Marker vor (`packaging/systemd/humanitld.service:1`). Später kommen das `.deb` und `humanitl daemon install`.
+- **Wo die Prüfung fehlt:** `install()` springt bei 162-163 in `install_packaged`, bevor `unit_path` berechnet wird (167). `packaged_units()` (336-341) sieht nur `/usr/lib/systemd/user`. `install_packaged` (271-329) meldet „writes nothing“ und `action=packaged` mit `exec_start` aus der Paketdatei.
+- **Folge:** systemd lädt die Kopie in `~/.config` zuerst. Alte `ExecStart` und alte Härtung bleiben aktiv. `humanitld.socket` wird daneben aktiviert, vielleicht neben einem Binary ohne Socket-Aktivierung.
+- **Stand der Doku und Tests:** `unit.rs:15-17`, `unit.rs:477` und `INSTALL.md:48-51` beschreiben die Verdeckung, geprüft wird sie nicht. Kein Test, weil der Pfad fest verdrahtet ist.
+
+### Ziel
+Der Befund ist behoben, und ein Test hält ihn behoben.
+
+### Akzeptanzkriterien
+- [ ] Mit Marker:
+- [ ] Ohne Marker: Verweigern mit `DAEMON_005` („verdeckt die Paket-Unit“), Fix-Hinweis `systemctl --user edit` oder die Datei wegräumen.
+- [ ] `exec_start` und Unit für den Bericht aus `systemctl --user show -p FragmentPath,ExecStart humanitld.service` lesen.
+- [ ] Den Pfad der System-Units injizierbar machen und beide Fälle testen.
+- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [ ] `make check` grün.
+
+### Referenzen
+Sicherheitsdurchlauf 2026-09-23, Befund M9; `daemon/bin/humanitl/src/cmd/daemon.rs:336`.
+
+---
+
+## HUM-212 · Das Laufzeitverzeichnis im `/tmp`-Rückfall wird nicht auf Besitzer und Symlink geprüft, Clients vertrauen fremdem Socket und Token
+Sprint: 4 · Größe: S · Abhängigkeiten: — · Blockiert: M4 (Sicherheit)
+
+### Kontext
+Aus dem Sicherheitsdurchlauf vom 2026-09-23 über `main` bei 241f6cd (Befund
+m1, Schwere minor, von zwei unabhängigen Prüfern bestätigt). Ort: `daemon/bin/humanitld/src/main.rs:1737`.
+
+- **Pfadwahl:** Ohne `XDG_RUNTIME_DIR` und `/run/user/<uid>` wählt `paths.rs:202-237` `$TMPDIR/humanitl-<uid>`. Der Name ist vorhersagbar, `daemon_paths.dart:44-55` spiegelt ihn.
+- **Vorbereitung durch einen fremden Nutzer:** Er legt das Verzeichnis vorab an (0755), mit eigenem `daemon.sock` und lesbarem `token`.
+- **Opfer-Daemon:** `prepare_dir` (1736-1741) akzeptiert das Verzeichnis, `set_permissions` scheitert mit EPERM, Ergebnis `DAEMON_004`.
+- **Opfer-Clients:** `client::connect` (`client.rs:51-53`) liest das Token (`read_token`, `auth.rs:104-127`, prüft nur die letzte Komponente als reguläre Datei) und verbindet sich. Es gibt nirgends `SO_PEERCRED` und keine Besitzerprüfung.
+- **Folgen:** Der Fremde bekommt:
+  - Tastenanschläge (`TerminalInput.data`, `humanitl.proto:1197`)
+  - `work_dir` und argv von `humanitl run`
+  - `SetConfig`-Inhalte
+
+  Er kann Flows, Decide-Ergebnisse und ein „audit verify ok“ fälschen. SECURITY.md 11 verspricht Schutz „gegenüber anderen Konten“.
+- **Einengung:**
+  - Nur ein anderer lokaler Nutzer, nur ohne logind, nur vor dem ersten Start des Opfer-Daemons oder nach dem Aufräumen von `/tmp`. Der Agent kann es nicht.
+  - Die Symlink-Variante wirkt nur bei `fs.protected_symlinks=0`.
+  - `proxy/src/listener.rs:107-117` ist nicht eigenständig erreichbar.
+  - Die Sandbox-Garantien bleiben unberührt.
+
+### Ziel
+Der Befund ist behoben, und ein Test hält ihn behoben.
+
+### Akzeptanzkriterien
+- [ ] `DirOwner::Daemon`:
+- [ ] Denselben Helfer in `listener.rs` `ensure_dir` nutzen.
+- [ ] Clients (`client.rs` vor `read_token`, Dart über stat-FFI, weil `FileStat` keine UID kennt): Verzeichnis und Token per lstat prüfen, eigene UID und keine Rechte für Gruppe oder Andere, sonst `DAEMON_001`. Mit geprüftem Verzeichnis ist `SO_PEERCRED` optional.
+- [ ] Tests mit fremdem Besitzer und mit Symlink, auf beiden Seiten.
+- [ ] Solange der Rückfall besteht, in SECURITY.md 10 nennen.
+- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [ ] `make check` grün.
+
+### Referenzen
+Sicherheitsdurchlauf 2026-09-23, Befund m1; `daemon/bin/humanitld/src/main.rs:1737`.
+
+---
+
+## HUM-213 · ESC-4 `rule_body_over_cap` misst den Body-Deckel nie gegen eine live Allow-Regel, die Belegzeile `allow_rule=matched` stimmt nicht
+Sprint: 4 · Größe: S · Abhängigkeiten: — · Blockiert: M4 (Sicherheit)
+
+### Kontext
+Aus dem Sicherheitsdurchlauf vom 2026-09-23 über `main` bei 241f6cd (Befund
+m2, Schwere minor, von zwei unabhängigen Prüfern bestätigt). Ort: `tests/escape/esc-4-rules.sh:143`.
+
+- **Engine-Hälfte:** Sie prüft nur die Fixture (`escape_table.rs:230`).
+- **Proxy-Hälfte:** `body_cap.py` spricht mit dem live Proxy, der noch den Regelsatz von ESC-1 bis ESC-3 fährt. Dort ist `blocked.example` gehalten, der Kommentar bei 148-152 sagt das selbst. `esc4.yaml` wird erst bei 215 live.
+- **Warum die Erwartung täuscht:** `at_cap=(504|403)` ist ein Hold-Timeout. „no rule lifts it“ (Kopf 24-27, `README.md:78-83`, SECURITY.md:959) wird nie gemessen.
+- **Keine Rust-Abdeckung:** `proxy.rs:193`, `authority.rs:550` und `dns_after_allow.rs:180` nutzen `decide_with(Allow)` ohne Regelsatz, conf_04 die `PassthroughPipeline`.
+- **Heute sicher:** `handler.rs:785-822` prüft den Deckel vor der Pipeline.
+- **Risiko:** Eine Mutation „Regeln vor dem Deckel, regelerlaubte Anfragen streamen“ bleibt grün. Genau diesen Pfad baut HUM-057 mit `stream: true` (`sprint-5.md:280`, SECURITY.md:641).
+
+### Ziel
+Der Befund ist behoben, und ein Test hält ihn behoben.
+
+### Akzeptanzkriterien
+- [ ] Den Fall hinter `cli_setup=$(install_cli_rules …)` verschieben. `run.sh:395` hat das DNS-Log dann schon gelesen.
+- [ ] Erwartung: `'^allow_rule=matched over_cap=413/body_cap at_cap=502/upstream_dns'`.
+- [ ] Kommentare 24-30, 148-153 und `README.md:78-83` anpassen.
+- [ ] Rust-Test in `proxy/tests/proxy.rs` mit `.body_cap(1024).rules_store(<allow Zielhost>, …)` ohne Decider:
+- [ ] Nach `stream: true` die Formulierung einengen.
+- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [ ] `make check` grün.
+
+### Referenzen
+Sicherheitsdurchlauf 2026-09-23, Befund m2; `tests/escape/esc-4-rules.sh:143`.
+
+---
+
+## HUM-214 · Der Doc-Kommentar des Audit-Exports verspricht eine Prüfung der Kette, die es nicht gibt
+Sprint: 4 · Größe: S · Abhängigkeiten: — · Blockiert: M4 (Sicherheit)
+
+### Kontext
+Aus dem Sicherheitsdurchlauf vom 2026-09-23 über `main` bei 241f6cd (Befund
+m3, Schwere minor, von zwei unabhängigen Prüfern bestätigt). Ort: `daemon/crates/audit/src/export.rs:97` (Kommentar 93-96).
+
+- **Was der Kommentar sagt:** „Aus einer Kette, die nicht hält, wird nichts exportiert“.
+- **Was `export()` tut:** Es prüft nur, ob jede Zeile sich parsen lässt (173-176), nicht Hash, `prev`, MAC oder Anker. Eine von `block` auf `allow` geänderte Zeile wird ohne Markierung exportiert.
+- **Warum das ein Defekt ist:** Nach der Repo-Regel (HUM-092) ist ein dokumentierter Satz, der nicht hält, ein Defekt.
+- **Warum das Verhalten selbst stimmt:**
+  - Es ist spezifiziert: JSONL ist Byte für Byte die Kette (HUM-051, HUM-156), und `verify` findet die Manipulation im Export.
+  - Der Agent erreicht `audit.jsonl` nicht (`profile.rs:812-851`).
+  - Ein Prozess derselben UID liest auch den Schlüssel (SECURITY.md:889-893), ein Tor davor hält ihn nicht auf.
+
+### Ziel
+Der Befund ist behoben, und ein Test hält ihn behoben.
+
+### Akzeptanzkriterien
+- [ ] Den vorgeschlagenen Fix (bei gebrochener Kette mit `AUDIT_001` verweigern) **nicht** umsetzen. Er bricht das Byte-für-Byte-Kriterium und verhindert die Übergabe eines gebrochenen Logs als Beweis (SECURITY.md:869).
+- [ ] Stattdessen `export.rs:93-96` umformulieren: „[`AUDIT_001`], wenn eine Zeile des Logs kein Record ist. Der Export prüft weder Hash noch MAC noch Anker; ob die Kette hält, sagt `verify`.“
+- [ ] Optional ein Hinweis in `cmd/audit.rs:634-645`.
+- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [ ] `make check` grün.
+
+### Referenzen
+Sicherheitsdurchlauf 2026-09-23, Befund m3; `daemon/crates/audit/src/export.rs:97` (Kommentar 93-96).
+
+---
+
+## HUM-215 · `plain()` über die ganze Fix-Zeile verändert Pfade in Anführungszeichen, der Deckel von 500 Zeichen schneidet Befehle ab
+Sprint: 4 · Größe: S · Abhängigkeiten: — · Blockiert: M4 (Sicherheit)
+
+### Kontext
+Aus dem Sicherheitsdurchlauf vom 2026-09-23 über `main` bei 241f6cd (Befund
+m4, Schwere minor, von zwei unabhängigen Prüfern bestätigt). Ort: `daemon/bin/humanitl/src/render.rs:122`.
+
+- **Mechanik:** `diagnostic_block` rendert `plain(&fix_line(fix))`. `sanitize_note` (`core-types/src/block.rs:79-110`) macht aus CR, LF und Unicode-Leerraum ein Leerzeichen, fasst Leerzeichen zusammen, entfernt Steuer- und Bidi-Zeichen und kürzt auf 500.
+- **Beispiel:** Ein zweites `audit export --out '/home/u/Audit  2026/a.jsonl'` ergibt `AUDIT_008` mit `mv -n -- '/home/u/Audit 2026/a.jsonl' …`, also einer anderen Datei.
+- **Ebenso betroffen:**
+  - `rm '<key>'` (`key.rs:322`)
+  - `rm -r '<ca dir>'` (`ca.rs:945/971`)
+  - `mkdir -p '<work_dir>'` (`validate.rs:99-102, 175`)
+- **Abschneiden:** `mkdir -p Q && chmod 700 Q` (`key.rs:308`) kann ohne `chmod` enden.
+- **Einordnung:** `render.rs:193-199` beschreibt die Gefahr selbst. `--json` ist nicht betroffen. Der Agent kontrolliert keinen dieser Pfade.
+
+### Ziel
+Der Befund ist behoben, und ein Test hält ihn behoben.
+
+### Akzeptanzkriterien
+- [ ] `CopyCommand`/`OpenUrl` nur zeigen, wenn `plain(cmd) == cmd` gilt und der Befehl höchstens `NOTE_MAX_CHARS` lang ist. Sonst auf `--json` oder die Doku-URL verweisen, wie `sandbox/src/doctor.rs:101-157`.
+- [ ] Längerfristig `shell_bytes` (`$'..\xHH..'`) nach `humanitl-core` verschieben und in `key.rs`, `export.rs`, `ca.rs` und `validate.rs` nutzen.
+- [ ] Tests mit doppeltem Leerzeichen und einem Befehl über 500 Zeichen.
+- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [ ] `make check` grün.
+
+### Referenzen
+Sicherheitsdurchlauf 2026-09-23, Befund m4; `daemon/bin/humanitl/src/render.rs:122`.
+
+---
+
+## HUM-216 · Die Probe von `config set` ignoriert Schreibfehler der Scratch-Dateien, eine leere Datei besteht die Prüfung
+Sprint: 4 · Größe: S · Abhängigkeiten: — · Blockiert: M4 (Sicherheit)
+
+### Kontext
+Aus dem Sicherheitsdurchlauf vom 2026-09-23 über `main` bei 241f6cd (Befund
+m5, Schwere minor, von zwei unabhängigen Prüfern bestätigt). Ort: `daemon/bin/humanitl/src/cmd/config.rs:712` (und 745).
+
+- **Ursache:** `Layers::load` schreibt die Scratch-Dateien mit `let _ = std::fs::write(..)` in `tempfile::tempdir()` (614), also unter `TMPDIR`.
+- **Auslöser:** `/tmp` ist ein volles tmpfs mit freien Inodes. `create` gelingt, `write` scheitert mit ENOSPC, zurück bleibt eine leere Datei.
+- **Warum die Probe durchgeht:** Die leere Datei lädt als Default, `validate()` ist Ok, `findings()` ist leer, und `probe` (489-491) meldet Ok.
+- **Folge:** Der Kandidat (`edit.rs:409-422`, neben `config.toml`) ersetzt die Datei. Geprüft wurden nur Einzelwerte, nicht die feldübergreifenden Prüfungen (`validate.rs:386ff`). Der nächste Daemon-Start meldet `CONFIG_003`. Das bricht das Versprechen in `config.rs:11-15`.
+- **Einordnung:** Nicht durch den Agenten auslösbar, weil die Sandbox ein eigenes tmpfs hat. Schlägt geschlossen fehl.
+
+### Ziel
+Der Befund ist behoben, und ein Test hält ihn behoben.
+
+### Akzeptanzkriterien
+- [ ] Beide Writes fehlerbewusst machen: `.map_err(|e| Diagnostic::builder(codes::CONFIG_015, Severity::Error).why(format!("{}: the check could not write its scratch copy: {e}", path.display())).build())?`. Ohne Schlüssel in der `why` verweigert `probe` (`config.rs:497`).
+- [ ] Alternative: `tempfile::tempdir_in(file.parent())`.
+- [ ] Test mit einem Scratch-Schreiber, der fehlschlägt.
+- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [ ] `make check` grün.
+
+### Referenzen
+Sicherheitsdurchlauf 2026-09-23, Befund m5; `daemon/bin/humanitl/src/cmd/config.rs:712` (und 745).
+
+---
+
+## HUM-217 · Unit-Verzeichnis und Rollback nutzen das `XDG_CONFIG_HOME` der CLI, nicht das des systemd-Managers
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-077 · Blockiert: M4 (Sicherheit)
+
+### Kontext
+Aus dem Sicherheitsdurchlauf vom 2026-09-23 über `main` bei 241f6cd (Befund
+m6, Schwere minor, von zwei unabhängigen Prüfern bestätigt). Ort: `daemon/bin/humanitl/src/cmd/daemon.rs:766`.
+
+Der Befund stammt vom Stand vor HUM-077. Zuerst prüfen, ob HUM-077 ihn schon behebt; dann den Test nachziehen und das Issue schließen.
+
+- **Ausgangslage:** `XDG_CONFIG_HOME` steht nur in der Shell-rc. `unit_dir` (`unit.rs:119-126`) kommt aus der Umgebung der CLI. `systemctl_run` (822-828) leert die Umgebung, und `enable` geht über D-Bus mit den Suchpfaden des Managers.
+- **Nicht paketiert:** Die Unit landet dort, wo systemd nicht sucht. Ergebnis ist jedes Mal `DAEMON_008` mit einer Fix-Zeile, die nicht passt.
+  - Mit `--no-start`: Erfolg für eine Unit, die systemd nie lädt.
+  - Mit AppImage oder `--bin-dir` neben dem `.deb`: Die Paket-Unit wird aktiviert und als Erfolg gemeldet.
+- **Paketiert:** `enable` legt Links unter `~/.config/systemd/user/*.target.wants` an. Scheitert der Start, sucht `Enablement::rollback` (`unit.rs:444-470`) im Verzeichnis der CLI und lässt die Links liegen. Der Dienst startet dann bei jedem Login trotz `DAEMON_008`. Das bricht `daemon.rs:33-35`/`unit.rs:376-379`.
+
+### Ziel
+Der Befund ist behoben, und ein Test hält ihn behoben.
+
+### Akzeptanzkriterien
+- [ ] `systemctl --user show -p UnitPath` nutzen, oder nach `daemon-reload` `show -p FragmentPath humanitld.service` mit dem geschriebenen Pfad vergleichen. Bei Abweichung eine eigene Diagnose, die beide Verzeichnisse nennt.
+- [ ] Rollback über systemd: Vorher `is-enabled` merken, bei Fehlschlag `disable` für die Namen, die vorher nicht aktiv waren. Oder die Zeilen „Created symlink“ parsen. Die Datei-Suche bleibt nur als Rückfall.
+- [ ] Test mit einem abweichenden `XDG_CONFIG_HOME`.
+- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [ ] `make check` grün.
+
+### Referenzen
+Sicherheitsdurchlauf 2026-09-23, Befund m6; `daemon/bin/humanitl/src/cmd/daemon.rs:766`.
+
+---
+
+## HUM-218 · Eine Entscheidung aus der Benachrichtigung löscht Notiz, Merk-Entwurf und Findings-Pause eines anderen ausgewählten Flows
+Sprint: 4 · Größe: S · Abhängigkeiten: — · Blockiert: M4 (Sicherheit)
+
+### Kontext
+Aus dem Sicherheitsdurchlauf vom 2026-09-23 über `main` bei 241f6cd (Befund
+m7, Schwere minor, von zwei unabhängigen Prüfern bestätigt). Ort: `app/lib/features/intercept/providers/decision.dart:774`.
+
+- **Ablauf:** A ist ausgewählt, mit Notiz oder mit Raster auf „forever“. Der Mensch klickt in der Benachrichtigung für B auf Block oder Allow (`tray_host.dart:211-214, 243-274`).
+- **Wo es schiefgeht:** `_decide` ändert die Auswahl bewusst nicht und ruft `send()` auf. Bei Erfolg läuft `_consumeDrafts()` bedingungslos (`decision.dart:706-710, 774`).
+- **Folge:** Die Notiz von A ist weg (`note.dart:74`), das Raster steht wieder auf Default, die Pause ist zu. Das widerspricht `decision.dart:704-705` und CONVENTIONS:710.
+- **Nicht betroffen:** Der Weg über die Queue-Zeile (`queue_row.dart:111-117`), weil er B vorher auswählt, wie gewollt.
+- **Sicherer Ausgang:** Danach gilt `RememberDuration.once`, es wird keine Regel geschrieben.
+
+### Ziel
+Der Befund ist behoben, und ein Test hält ihn behoben.
+
+### Akzeptanzkriterien
+- [ ] In `_send` vor dem `await` `final bool ownsDrafts = flowId == ref.read(selectedFlowIdProvider);` festhalten.
+- [ ] `_consumeDrafts()` nur aufrufen, wenn `ownsDrafts` gilt.
+- [ ] Test in `tray_host_test`: A mit Notiz, B per Benachrichtigung blocken, `blockNoteProvider.text` bleibt unverändert.
+- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [ ] `make check` grün.
+
+### Referenzen
+Sicherheitsdurchlauf 2026-09-23, Befund m7; `app/lib/features/intercept/providers/decision.dart:774`.
