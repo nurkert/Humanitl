@@ -85,6 +85,7 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-216 | Die Probe von `config set` ignoriert Schreibfehler der Scratch-Dateien, eine leere Datei besteht die Prüfung | S | — |
 | HUM-217 | Unit-Verzeichnis und Rollback nutzen das `XDG_CONFIG_HOME` der CLI, nicht das des systemd-Managers | S | HUM-077 |
 | HUM-218 | Eine Entscheidung aus der Benachrichtigung löscht Notiz, Merk-Entwurf und Findings-Pause eines anderen ausgewählten Flows | S | — |
+| HUM-221 | Die Suche nach LLM-Servern lässt `.0` und `.255` im eigenen Netz aus | S | HUM-076 |
 | HUM-186 | Einrichtung: Versionsabgleich mit „Dienst neu starten" und Fortschritt beim Einrichten | S | HUM-077 |
 | HUM-187 | Nightly: Paket und AppImage auf einem frischen Debian mit systemd-Nutzersitzung | M | HUM-077, HUM-053 |
 | HUM-188 | `INSTALL.txt` im Archiv beschreibt Aktivierung und Entfernen des Pakets veraltet | XS | HUM-053, HUM-077 |
@@ -4643,3 +4644,35 @@ gleichzeitige Auffrischungen starten ihn höchstens einmal neu.
 
 ### Referenzen
 HUM-077; `backlog/CONVENTIONS.md` 4.38.
+
+---
+
+## HUM-221 · Die Suche nach LLM-Servern lässt `.0` und `.255` im eigenen Netz aus
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-076 · Blockiert: —
+
+### Kontext
+Die CI über `22c40fc` (Lauf 35879474302, 2026-09-23) war im Job `rust-test` rot:
+`the_local_network_belongs_to_the_own_address` (`daemon/crates/proxy/tests/llm_discover.rs:302`)
+meldete „the own address is one of the addresses that get asked". Der Lauf davor über
+`d432474` war grün, und der Commit dazwischen berührt den Proxy nicht. Die Adresse des Läufers
+wechselt von Lauf zu Lauf.
+
+Ursache: `Subnet::local_24` (`daemon/crates/proxy/src/llm_discover.rs:87`) legt um die eigene
+Adresse ein `/24`, und `Subnet::hosts` (`:147`) nimmt dort die erste und die letzte Adresse als
+Netz- und Broadcast-Adresse heraus. Das `/24` ist aber nur ein Ausschnitt; das echte Netz der
+Schnittstelle ist oft größer (die Läufer von GitHub hängen in einem `/16`). Dann sind `.0` und
+`.255` gewöhnliche Hosts, und eine Maschine mit einer solchen Adresse fragt sich selbst nicht.
+Ein LLM-Server auf einer solchen Adresse im Netz wird ebenfalls nie gefunden.
+
+### Ziel
+Die Suche fragt im eigenen Netz jede Adresse, die dort ein Host sein kann, und der Test ist auf
+jedem Läufer stabil.
+
+### Akzeptanzkriterien
+- [ ] `local_net` liest die echte Präfixlänge der Schnittstelle (Netlink oder `getifaddrs`) und nimmt aus dem `/24`-Ausschnitt nur die Adressen heraus, die im echten Netz Netz- oder Broadcast-Adresse sind; bei einem Netz größer als `/24` gehören `.0` und `.255` dazu.
+- [ ] Unit-Test mit festen Werten: eigene Adresse `10.1.0.0` in `10.1.0.0/16` und `10.1.3.255` in `10.1.0.0/16` sind unter den gefragten Adressen; `192.168.1.0` und `192.168.1.255` in `192.168.1.0/24` nicht. Mutationsprobe: die alte Regel `first + 1 ..= first + count - 2` zurück, rot.
+- [ ] `the_local_network_belongs_to_the_own_address` bleibt auf jedem Läufer grün.
+- [ ] `make check` grün.
+
+### Referenzen
+HUM-076 (Suche im lokalen Netz); `daemon/crates/proxy/src/llm_discover.rs`; `daemon/crates/proxy/tests/llm_discover.rs`.
