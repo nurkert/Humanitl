@@ -35,6 +35,16 @@ abstract class RuleMatcher with _$RuleMatcher {
     Scheme? scheme,
     @Default(0) int port,
     Upgrade? upgrade,
+
+    /// Path prefixes; empty means any path. A request matches when its path
+    /// without the query starts with one of them, and a `path` next to them
+    /// must match as well (`rules.proto` field 7, HUM-039).
+    ///
+    /// The app never builds these, but it must carry them: every rule the
+    /// screen changes goes back to the daemon whole, and a matcher that came
+    /// back without its prefixes would allow every path of the host
+    /// (HUM-205).
+    @Default(<String>[]) List<String> pathPrefixes,
   }) = _RuleMatcher;
 
   /// Reads a matcher from JSON.
@@ -86,6 +96,12 @@ abstract class Rule with _$Rule {
     @Default(0) int position,
     @Default(0) int hitCount,
     @Default(false) bool allowPrivate,
+
+    /// The declared passthrough to the language model (`rules.proto` field
+    /// 14). Read-only: the daemon ignores it in a request and sets it itself,
+    /// the app only carries it so that a round trip does not change the rule
+    /// it shows (HUM-205).
+    @Default(false) bool passthroughLlm,
   }) = _Rule;
 
   /// Reads a rule from JSON.

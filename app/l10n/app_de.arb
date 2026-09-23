@@ -806,5 +806,8 @@
   "interceptFindingsPauseKeyPseudonymize": "P",
   "interceptFindingsPauseKeyBack": "Esc",
   "historyDetailUnresolvedFindings": "Offen gesendet",
-  "auditWarningPruned": "Die Records 1 bis {seq} hat audit.retention_days gelöscht; die Kette belegt den Schnitt, beweist aber nicht mehr, was in ihnen stand."
+  "auditWarningPruned": "Die Records 1 bis {seq} hat audit.retention_days gelöscht; die Kette belegt den Schnitt, beweist aber nicht mehr, was in ihnen stand.",
+  "rulesMatchPathPrefixes": "Präfix {prefixes}",
+  "rulesFieldPathPrefixes": "Pfadpräfixe",
+  "rulesPathPrefixesReadOnly": "Nur Pfade unter diesen Präfixen treffen. Der Editor ändert sie nicht; Speichern behält sie."
 }

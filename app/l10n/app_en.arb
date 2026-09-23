@@ -2182,5 +2182,14 @@
   "@auditWarningPruned": {
     "description": "Warning of the check after a retention run of the audit chain (HUM-157, `VerifyWarning::Pruned`): the chain holds from the cut on, and a record `audit.pruned` names the cut. `seq` is the last deleted record, carried in `AuditWarning.records`.",
     "placeholders": {"seq": {"type": "int"}}
-  }
+  },
+  "rulesMatchPathPrefixes": "prefix {prefixes}",
+  "@rulesMatchPathPrefixes": {
+    "description": "Part of the match summary of a rule that only matches paths starting with one of its prefixes (HUM-205). `prefixes` is the list, joined with commas, for example `/v1/, /v2/`.",
+    "placeholders": {"prefixes": {"type": "String"}}
+  },
+  "rulesFieldPathPrefixes": "Path prefixes",
+  "@rulesFieldPathPrefixes": {"description": "Label of the read-only line in the rule editor that shows the path prefixes of a rule (HUM-205)."},
+  "rulesPathPrefixesReadOnly": "Only paths under these prefixes match. The editor cannot change them; saving keeps them.",
+  "@rulesPathPrefixesReadOnly": {"description": "Hint under the path prefixes in the rule editor: the prefixes narrow the rule, cannot be edited here, and survive a save (HUM-205)."}
 }
