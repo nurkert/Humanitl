@@ -4130,12 +4130,12 @@ M4, Schwere major, von zwei unabhängigen Prüfern bestätigt). Ort: `app/lib/fe
 Der Befund ist behoben, und ein Test hält ihn behoben.
 
 ### Akzeptanzkriterien
-- [ ] Eigener Callback `onActivate` im Ventil, verdrahtet als `_allow(remember: remember.remembers, flows: chosen, confirmed: true)` ohne `acknowledged`, wie in `intercept_screen.dart`. Bei einer Anfrage öffnet das die Pause, bei einer Gruppe gilt die Taste als Bestätigung.
-- [ ] `onAllow` bleibt nur für das Halten.
-- [ ] `holdRequired ? onShortPress : onAllow` schließt das Leck ebenfalls, verweigert aber bei Gruppen Tasten, die der Screen annimmt.
-- [ ] Widget-Test: Ventil per Tab fokussieren, Enter und dann Leertaste mit Fund. Erwartet: Pause sichtbar, `client.decisions` leer, Mutationsbeweis.
-- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
-- [ ] `make check` grün.
+- [x] Eigener Callback `onActivate` im Ventil, verdrahtet als `_allow(remember: remember.remembers, flows: chosen, confirmed: true)` ohne `acknowledged`, wie in `intercept_screen.dart`. Bei einer Anfrage öffnet das die Pause, bei einer Gruppe gilt die Taste als Bestätigung.
+- [x] `onAllow` bleibt nur für das Halten.
+- [x] `holdRequired ? onShortPress : onAllow` schließt das Leck ebenfalls, verweigert aber bei Gruppen Tasten, die der Screen annimmt.
+- [x] Widget-Test: Ventil per Tab fokussieren, Enter und dann Leertaste mit Fund. Erwartet: Pause sichtbar, `client.decisions` leer, Mutationsbeweis.
+- [x] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [x] `make check` grün.
 
 ### Referenzen
 Sicherheitsdurchlauf 2026-09-23, Befund M4; `app/lib/features/intercept/widgets/action_bar.dart:238`, dazu `release_valve.dart:212-216`.
