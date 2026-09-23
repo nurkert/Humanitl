@@ -4099,12 +4099,12 @@ M3, Schwere major, von zwei unabhängigen Prüfern bestätigt). Ort: `app/lib/co
 Der Befund ist behoben, und ein Test hält ihn behoben.
 
 ### Akzeptanzkriterien
-- [ ] `@Default(<String>[]) List<String> pathPrefixes` im Domain-`RuleMatcher`, freezed/json neu erzeugen.
-- [ ] toDomain: `List<String>.unmodifiable(pathPrefixes)`. toProto: `out.pathPrefixes.addAll(pathPrefixes)`. `passthroughLlm` analog.
-- [ ] Präfixe in rule_row, rule_sentence und Editor zeigen, mindestens nur lesend.
-- [ ] `convert_test` mit Namensparität Feld für Feld. Round-Trip-Test: list, dann `updateRule`/`makePermanent`, dann `path_prefixes` unverändert. Mutationsbeweis ohne die Zuweisung in toProto.
-- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
-- [ ] `make check` grün.
+- [x] `@Default(<String>[]) List<String> pathPrefixes` im Domain-`RuleMatcher`, freezed/json neu erzeugen.
+- [x] toDomain: `List<String>.unmodifiable(pathPrefixes)`. toProto: `out.pathPrefixes.addAll(pathPrefixes)`. `passthroughLlm` analog.
+- [x] Präfixe in rule_row, rule_sentence und Editor zeigen, mindestens nur lesend.
+- [x] `convert_test` mit Namensparität Feld für Feld. Round-Trip-Test: list, dann `updateRule`/`makePermanent`, dann `path_prefixes` unverändert. Mutationsbeweis ohne die Zuweisung in toProto.
+- [x] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [x] `make check` grün.
 
 ### Referenzen
 Sicherheitsdurchlauf 2026-09-23, Befund M3; `app/lib/core/ipc/convert.dart:404`.
