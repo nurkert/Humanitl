@@ -418,12 +418,8 @@ pub struct AuditConfig {
     /// Jeder wievielte Record ein Anker ist, in der Datei und zugleich in der Datenbank. Records hinter dem letzten Anker kann jemand mit Zugriff auf die Datei am Ende abschneiden, ohne dass die Prüfung es merkt; ein kleinerer Wert macht dieses Fenster kleiner. Beim Beenden des Daemons wird immer geankert.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub anchor_every: u32,
-    /// Tage, die das Audit-Log aufgehoben wird; 0 heißt für immer. Löschen bricht die Kette absichtlich, und im MVP wird nichts gelöscht.
-    #[schemars(extend(
-        "x-tier" = "expert",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-157"
-    ))]
+    /// Tage, die ein Record im Audit-Log aufgehoben wird; 0 heißt für immer. Ein täglicher Lauf löscht die Records am Anfang der Kette, die älter sind, und dokumentiert den Schnitt mit einem Record `audit.pruned` samt Anker; die Prüfung erkennt den so dokumentierten Anfang an, einen Anfang ohne ihn meldet sie weiter als Bruch. Eine Kette, die nicht hält, wird nicht gekürzt. Was in den gelöschten Records stand, beweist die Kette danach nicht mehr; die Anker in `audit_anchors` bleiben stehen.
+    #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub retention_days: u32,
     /// Nach wie vielen Records der Daemon das Audit-Log auf die Platte zwingt (fsync). Spätestens nach einer Sekunde und vor jedem Anker geschieht es ohnehin.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]

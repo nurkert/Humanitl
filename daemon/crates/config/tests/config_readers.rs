@@ -84,7 +84,7 @@ const REGISTER: &[(&str, &str)] = &[
     // Löschen bricht die Kette absichtlich, und im MVP löscht niemand: `0`
     // heißt „für immer" und ist das Einzige, was heute wirkt. Die Löschung
     // mit dokumentierter Lücke ist HUM-157; HUM-051 hat sie nicht gebaut.
-    ("audit.retention_days", "pending(HUM-157)"),
+    ("audit.retention_days", "effective"),
     ("experimental.h2_upstream", "effective"),
     ("findings.email_allow_domains", "effective"),
     ("findings.enabled", "effective"),
@@ -337,8 +337,9 @@ fn the_keys_without_a_reader_are_the_known_ones() {
     // nachträglich einen Leser zu geben, und abzüglich `experimental.ws_hold`
     // und `ui.sound`, die HUM-121 aus demselben Grund entfernt hat, und
     // abzüglich `resolver.nameserver`, hinter den HUM-115 den Hickory-Adapter
-    // gebaut hat, und zuzüglich `audit.retention_days`, den HUM-050 anlegt
-    // und HUM-157 verdrahtet: Im MVP löscht niemand. Sie steht hier, damit ein weiterer
+    // gebaut hat, und zuzüglich `audit.retention_days`, den HUM-050 anlegt,
+    // und wieder abzüglich, seit HUM-157 ihn verdrahtet hat (täglicher Lauf im
+    // Daemon, `audit.pruned`). Sie steht hier, damit ein weiterer
     // Fall nicht unbemerkt dazukommt: Wer einen Schlüssel verdrahtet oder
     // streicht, zieht ihn hier und im Register zugleich nach.
     let pending: Vec<&str> = register()
@@ -349,7 +350,6 @@ fn the_keys_without_a_reader_are_the_known_ones() {
     assert_eq!(
         pending,
         vec![
-            "audit.retention_days",
             "pseudonyms.max_response_bytes",
             "pseudonyms.translate_responses",
             "ui.notifications",

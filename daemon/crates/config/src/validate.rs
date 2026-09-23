@@ -276,6 +276,14 @@ fn audit_is_well_formed(audit: &AuditConfig) -> Result<(), Diagnostic> {
         u64::from(audit.fsync_every),
         1,
         100_000,
+    )?;
+    // 0 heißt für immer, wie bei `recorder.retention_days`, und dieselbe
+    // Obergrenze von zehn Jahren (HUM-157).
+    between(
+        "audit.retention_days",
+        u64::from(audit.retention_days),
+        0,
+        3650,
     )
 }
 
@@ -436,6 +444,18 @@ mod tests {
         assert!(config.validate().is_ok(), "0 means never and is valid");
         config.recorder.retention_days = 3651;
         assert!(why_of(&config).contains("recorder.retention_days = 3651"));
+    }
+
+    #[test]
+    fn audit_retention_defaults_to_forever_and_stops_at_ten_years() {
+        // HUM-157: Vorgabe 0 (für immer), dieselbe Obergrenze wie die
+        // Aufzeichnung.
+        let mut config = Config::default();
+        assert_eq!(config.audit.retention_days, 0);
+        config.audit.retention_days = 3650;
+        assert!(config.validate().is_ok(), "ten years is the limit");
+        config.audit.retention_days = 3651;
+        assert!(why_of(&config).contains("audit.retention_days = 3651"));
     }
 
     #[test]

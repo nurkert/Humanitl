@@ -2143,9 +2143,9 @@
     "description": "First sentence of the retention section, the wording of the HUM-051 wireframe. 180 is the default of `recorder.retention_days`, stated as the default: the app cannot read the value that applies on this machine yet (there is no `GetConfig`, HUM-069), so the sentence names the key that can change it. The configuration accepts 0 to 3650, and 0 means never (config/src/validate.rs, humanitl_recorder::Retention).",
     "placeholders": {"key": {"type": "String"}}
   },
-  "auditRetentionChain": "The audit chain is never deleted; this version does not act on {key}.",
+  "auditRetentionChain": "The audit chain keeps every record unless {key} sets a number of days; older records are then deleted and the cut is recorded in the chain, so the check still holds.",
   "@auditRetentionChain": {
-    "description": "Second sentence of the retention section, the wording of the HUM-051 wireframe. True in this build: the retention pass of the recording touches neither audit.jsonl nor the table audit_anchors, and nothing reads `audit.retention_days` yet (HUM-157 decides it). The second half says so, so that a person who set the key is not misled.",
+    "description": "Second sentence of the retention section. Since HUM-157 the daemon reads `audit.retention_days` (default 0, forever): a daily run deletes older records at the start of the chain and appends an `audit.pruned` record, which the check accepts as a documented start (warning `pruned`). The anchors in audit_anchors stay.",
     "placeholders": {"key": {"type": "String"}}
   },
   "auditFilterInvalid": "Not a time. Use 2026-09-11 08:00Z; the range stays as it was.",
@@ -2177,5 +2177,10 @@
   "interceptFindingsPauseKeyBack": "Esc",
   "@interceptFindingsPauseKeyBack": {"description": "Key that closes the findings pause, shown on the button itself."},
   "historyDetailUnresolvedFindings": "Sent unresolved",
-  "@historyDetailUnresolvedFindings": {"description": "Label in the history detail head: how many findings left with the allow, neither replaced nor acknowledged in the findings pause (HUM-160). The value next to it is a number."}
+  "@historyDetailUnresolvedFindings": {"description": "Label in the history detail head: how many findings left with the allow, neither replaced nor acknowledged in the findings pause (HUM-160). The value next to it is a number."},
+  "auditWarningPruned": "Records 1 to {seq} were deleted by audit.retention_days; the chain documents the cut, but no longer proves what they said.",
+  "@auditWarningPruned": {
+    "description": "Warning of the check after a retention run of the audit chain (HUM-157, `VerifyWarning::Pruned`): the chain holds from the cut on, and a record `audit.pruned` names the cut. `seq` is the last deleted record, carried in `AuditWarning.records`.",
+    "placeholders": {"seq": {"type": "int"}}
+  }
 }

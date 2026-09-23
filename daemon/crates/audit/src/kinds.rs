@@ -20,6 +20,8 @@
 //! Lücke, die ein gekürztes oder ersetztes Log hinterlässt (siehe
 //! [`crate::writer`]). `recorder.retention_applied` kommt aus HUM-051 dazu:
 //! die dokumentierte Löschung eines Aufräumlaufs der Aufzeichnung.
+//! `audit.pruned` kommt aus HUM-157 dazu: die dokumentierte Löschung am Anfang
+//! der Kette selbst; die Struktur steht in [`crate::retention`].
 
 use std::time::SystemTime;
 
@@ -29,6 +31,8 @@ use humanitl_core::{DecidedFindings, Decision, DecisionSource, Finding, FlowId, 
 use serde_json::{Value, json};
 
 use crate::record::{format_ts, sha256_hex};
+pub use crate::retention::AuditPruned;
+use crate::retention::PRUNED_KIND;
 
 /// Woher der HMAC-Schlüssel stammt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -632,6 +636,8 @@ pub enum RecordKind {
     AuditResumed(AuditResumed),
     /// Ein Aufräumlauf der Aufzeichnung hat Altes gelöscht.
     RetentionApplied(RetentionApplied),
+    /// Ein Lauf von `audit.retention_days` hat den Anfang der Kette gelöscht.
+    AuditPruned(AuditPruned),
 }
 
 impl RecordKind {
@@ -660,11 +666,12 @@ impl RecordKind {
             Self::LlmDiscover(_) => "llm.discover",
             Self::AuditResumed(_) => "audit.resumed",
             Self::RetentionApplied(_) => "recorder.retention_applied",
+            Self::AuditPruned(_) => PRUNED_KIND,
         }
     }
 
     /// Alle Namen, in der Reihenfolge der Tabelle.
-    pub const NAMES: [&'static str; 21] = [
+    pub const NAMES: [&'static str; 22] = [
         "daemon.started",
         "daemon.stopped",
         "session.started",
@@ -686,6 +693,7 @@ impl RecordKind {
         "llm.discover",
         "audit.resumed",
         "recorder.retention_applied",
+        PRUNED_KIND,
     ];
 
     /// `data` dieser Art.
@@ -791,6 +799,7 @@ impl RecordKind {
             }),
             Self::AuditResumed(d) => json!({ "log_seq": d.log_seq, "anchor_seq": d.anchor_seq }),
             Self::RetentionApplied(d) => d.data(),
+            Self::AuditPruned(d) => d.data(),
         }
     }
 }
@@ -826,7 +835,7 @@ mod tests {
 
     #[test]
     fn every_kind_has_the_name_of_the_table_and_canonical_data() {
-        assert_eq!(RecordKind::NAMES.len(), 21);
+        assert_eq!(RecordKind::NAMES.len(), 22);
         for name in RecordKind::NAMES {
             let (area, verb) = name.split_once('.').unwrap();
             assert!(!area.is_empty() && !verb.is_empty(), "{name}");

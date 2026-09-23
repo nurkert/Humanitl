@@ -39,13 +39,20 @@ void main() {
       'Aufzeichnungen (Anfragen, Antworten, Bodies) werden nach 180 Tagen '
       'gelöscht, sofern {key} keine andere Zahl nennt; 0 heißt nie.',
     );
+    // HUM-157: Der Daemon liest `audit.retention_days` (Vorgabe 0, für
+    // immer); ein Lauf löscht den Anfang der Kette und vermerkt den Schnitt
+    // mit `audit.pruned`, den die Prüfung als dokumentierten Anfang anerkennt.
     expect(
       en['auditRetentionChain'],
-      'The audit chain is never deleted; this version does not act on {key}.',
+      'The audit chain keeps every record unless {key} sets a number of '
+      'days; older records are then deleted and the cut is recorded in the '
+      'chain, so the check still holds.',
     );
     expect(
       de['auditRetentionChain'],
-      'Die Audit-Kette wird nie gelöscht; {key} wirkt in dieser Fassung nicht.',
+      'Die Audit-Kette behält jeden Record, sofern {key} keine Zahl von '
+      'Tagen nennt; dann werden ältere Records gelöscht, und die Kette '
+      'vermerkt den Schnitt, sodass die Prüfung weiter hält.',
     );
   });
 
@@ -65,6 +72,7 @@ void main() {
     expect(de['auditWarningNoHmacKey'], contains('ungeprüft'));
     for (final Map<String, Object?> arb in <Map<String, Object?>>[en, de]) {
       expect(arb['auditWarningUnanchoredTail'], contains('{count'));
+      expect(arb['auditWarningPruned'], contains('{seq}'));
     }
   });
 }

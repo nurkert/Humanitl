@@ -472,13 +472,21 @@ ohne Schlüssel und ohne Anker und schreibt das in seine Ausgabe
 nachträgliche Ändern, Löschen oder Umordnen durch jemanden, der Dateizugriff hat, aber den
 Schlüssel nicht. Nicht erkannt wird ein Angreifer, der als derselbe Nutzer läuft und damit
 Schlüssel, Datei **und** Datenbank besitzt — er baut Kette und Anker neu. Ebenso wenig erkannt wird
-das Kürzen des Endes hinter dem letzten Anker.
+das Kürzen des Endes hinter dem letzten Anker. Mit `audit.retention_days` über `0` löscht der
+Daemon den Anfang der Kette selbst und dokumentiert den Schnitt mit einem versiegelten
+`audit.pruned` (HUM-157). Die Prüfung erkennt nur einen so dokumentierten Anfang an; einen anderen
+meldet sie weiter als Bruch. Was in den gelöschten Records stand, belegt die Kette danach nicht
+mehr, und eine Kette, die nicht hält, kürzt der Lauf nicht
+([`SECURITY.md`](SECURITY.md) Abschnitt 8, „Aufbewahrung der Kette").
 
-*Status.* MVP (Kette, Anker in Datei und SQLite), externes Anchoring später.
+*Status.* MVP (Kette, Anker in Datei und SQLite, dokumentierte Löschung am Anfang), externes
+Anchoring später.
 
 *Prüfung.* ESC-5 (`audit_delete_is_detected`, `audit_truncate_is_detected`) löscht in der Kette
 eines echten Daemons einen Eintrag und kürzt ihr verankertes Ende und erwartet in beiden Fällen
-einen Bruch.
+einen Bruch. `daemon/crates/audit/tests/retention.rs` kürzt den Anfang ohne dokumentierenden
+Record, weiter als der Record sagt, und mit einem ohne Schlüssel gefälschten `audit.pruned`, und
+erwartet jedes Mal `SeqGap`.
 
 ---
 
