@@ -192,6 +192,7 @@ void main() {
         semanticsValue: '4:59 left',
         optionsLabel: 'Duration and scope of the rule',
         onAllow: () {},
+        onActivate: () {},
         onAllowRemembered: () {},
         onToggleOptions: () {},
       ),

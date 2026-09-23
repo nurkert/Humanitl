@@ -748,4 +748,90 @@ void main() {
     );
     expect(client.decisions.single.remember?.expires, const RuleExpiry.never());
   }, variant: linux);
+
+  // HUM-206: Liegt der Fokus per `Tab` auf dem Ventil, gibt die
+  // `Enter`-Bindung des Screens nach, und die Taste wird über die Vorgaben von
+  // `WidgetsApp` zum `ActivateIntent` des Ventils; die Leertaste bindet der
+  // Screen gar nicht. Die Taste ist kein Halten und darf den Fund nicht an der
+  // Pause vorbei hinausschicken.
+  for (final (String name, LogicalKeyboardKey key)
+      in <(String, LogicalKeyboardKey)>[
+        ('Enter', LogicalKeyboardKey.enter),
+        ('Space', LogicalKeyboardKey.space),
+      ]) {
+    testWidgets('$name on the focused valve opens the pause', (
+      WidgetTester tester,
+    ) async {
+      final FakeDaemonClient client = mailClient();
+      await pumpIntercept(tester, client: client);
+      await playScript(tester);
+      await armed(tester);
+      await focusValve(tester);
+
+      await tester.sendKeyEvent(key);
+      await settle(tester);
+
+      expect(client.decisions, isEmpty, reason: 'nothing left');
+      expect(pause, findsOneWidget);
+    }, variant: linux);
+  }
+
+  testWidgets('a key on the focused valve still sends a group', (
+    WidgetTester tester,
+  ) async {
+    // Über eine Gruppe gibt es keine Pause; die Taste gilt dort als die
+    // Bestätigung, die auch `Enter` auf dem Screen ist (`docs/UX.md` 4.7).
+    // Ein Ventil, das Tasten bei Funden schlicht verweigerte, hielte dicht,
+    // nähme dem Screen aber diesen Weg.
+    final FakeDaemonClient client = mailClient(
+      holdScript(<FlowDetail>[withMail(1), withMail(2)]),
+    );
+    await pumpIntercept(tester, client: client);
+    await playScript(tester);
+    await pressControl(tester, LogicalKeyboardKey.keyA);
+    await armed(tester);
+    await focusValve(tester);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await settle(tester);
+
+    expect(pause, findsNothing);
+    expect(client.decisions, hasLength(2));
+  }, variant: linux);
+}
+
+/// Setzt den Fokus per `Tab` auf die linke Hälfte des Ventils.
+///
+/// Die linke Hälfte ist der `FocusableActionDetector` über dem Halten; der
+/// Chevron daneben hat seinen eigenen und klappt nur das Raster auf.
+Future<void> focusValve(WidgetTester tester) async {
+  final Element left = tester.element(
+    find
+        .ancestor(
+          of: find.byKey(const Key('intercept-valve-hold')),
+          matching: find.byType(FocusableActionDetector),
+        )
+        .first,
+  );
+  bool onValve() {
+    final BuildContext? context = FocusManager.instance.primaryFocus?.context;
+    if (context == null) {
+      return false;
+    }
+    Element? nearest;
+    context.visitAncestorElements((Element element) {
+      if (element.widget is FocusableActionDetector) {
+        nearest = element;
+        return false;
+      }
+      return true;
+    });
+    return identical(nearest, left);
+  }
+
+  for (int i = 0; i < 24 && !onValve(); i++) {
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+  }
+  expect(onValve(), isTrue, reason: 'focus never reached the valve');
 }
