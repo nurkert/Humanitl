@@ -64,7 +64,8 @@ Wer eine Einstellung der Unit ändern will, kopiert sie nicht, sondern legt eine
 `systemctl --user edit humanitld.service`. Eine Kopie unter `~/.config/systemd/user/` verdeckte
 die Fassung des Pakets, und jedes Update liefe an ihr vorbei.
 
-Entfernen: `systemctl --user disable --now humanitld.socket humanitld.service`, dann
+Entfernen: `humanitl daemon uninstall` (meldet Socket und Dienst ab, dasselbe wie
+`systemctl --user disable --now humanitld.socket humanitld.service`), dann
 `sudo apt remove --purge humanitl`. Konfiguration, Aufzeichnung und Audit-Log unter
 `~/.config/humanitl` und `~/.local/share/humanitl` bleiben liegen; sie gehören dem Menschen, nicht
 dem Paket.
@@ -81,6 +82,26 @@ chmod +x Humanitl-<version>-x86_64.AppImage
 erkennt das AppImage an `$APPIMAGE` und kopiert Daemon und Shim nach
 `~/.local/lib/humanitl/<version>.<stempel>/`, denn der Einhängepunkt `/tmp/.mount_*` verschwindet
 mit dem Prozess. `ExecStart` der Unit nennt den Verweis `~/.local/lib/humanitl/current`.
+Statt des zweiten Befehls geht auch der Knopf „Installieren und starten" in der Einrichtung der
+Anwendung; er ruft dieselbe Kommandozeile.
+
+**Eine neue Fassung erneuert den Dienst beim Start.** Wer später ein neueres AppImage startet,
+muss nichts tun: `AppRun` ruft vor der Anwendung `daemon install --refresh`. Zeigt `current` auf
+eine andere Fassung, kopiert es Daemon und Shim der neuen heraus, hängt `current` um, startet den
+Dienst mit `systemctl --user restart humanitld.service` neu und entfernt erst danach die alte
+Kopie. Ist der Dienst nicht eingerichtet oder schon diese Fassung, tut der Aufruf nichts. Die erste
+Einrichtung macht ein Programmstart nie von selbst.
+
+Entfernen:
+
+```sh
+./Humanitl-<version>-x86_64.AppImage --cli daemon uninstall --purge-binaries
+```
+
+Das meldet den Dienst ab und entfernt die Unit, ihre Verweise, einen liegengebliebenen Socket und
+alles unter `~/.local/lib/humanitl/`, was `daemon install` dort angelegt hat. Danach zeigt
+`humanitl doctor` die Zeile `daemon` mit `DOCTOR_006` und dem Vorschlag, den Dienst wieder
+einzurichten.
 
 Das Bild enthält nur das Flutter-Bundle und die drei Programme. GTK, GLib, Mesa und die
 Wayland-Bibliotheken kommen vom System; ein gebündeltes GTK bricht auf Wayland und bei
@@ -105,7 +126,8 @@ humanitl-<version>-linux-x86_64/bin/humanitl daemon install
 `daemon install` schreibt dann `~/.config/systemd/user/humanitld.service` mit dem Pfad des Daemons
 im Archiv und aktiviert sie. Eine Socket-Unit gibt es auf diesem Weg nicht; der Daemon bindet den
 Socket selbst. Die Datei trägt in der ersten Zeile die Marke von `daemon install`, und nur eine
-Datei mit dieser Marke ersetzt der Befehl je (`DAEMON_005`).
+Datei mit dieser Marke ersetzt der Befehl je (`DAEMON_005`). Entfernen:
+`humanitl-<version>-linux-x86_64/bin/humanitl daemon uninstall`, dann das Verzeichnis.
 
 ## Einrichtung in der Anwendung
 

@@ -37,7 +37,10 @@ impl Harness {
     /// Legt Heimat-, Konfigurations-, Daten- und Laufzeitverzeichnis an.
     pub fn new() -> Self {
         let dir = TempDir::new().expect("a temporary directory");
-        for sub in ["home", "config", "data", "run", "work"] {
+        // `system-units` steht für `/usr/lib/systemd/user` und bleibt leer:
+        // Ein installiertes Paket auf dem Rechner des Tests lenkte
+        // `daemon install` sonst auf den Weg des Pakets (HUM-077).
+        for sub in ["home", "config", "data", "run", "work", "system-units"] {
             std::fs::create_dir_all(dir.path().join(sub)).expect("a subdirectory");
         }
         // Die Profile liegen dort, wo humanitl sie beim Nutzer sucht, statt
@@ -120,6 +123,7 @@ impl Harness {
             .env("XDG_CONFIG_HOME", self.path("config"))
             .env("XDG_DATA_HOME", self.path("data"))
             .env("XDG_RUNTIME_DIR", self.path("run"))
+            .env("HUMANITL_SYSTEM_UNIT_DIR", self.path("system-units"))
             // Ohne Bus der Sitzung erreicht kein `systemctl --user` dieses
             // Laufs den systemd des Menschen, auch dort nicht, wo ein Test
             // sich das `systemctl` aus dem `PATH` des Rechners holt.
