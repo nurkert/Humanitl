@@ -201,7 +201,7 @@ class SandboxStartStop extends ConsumerWidget {
     // it (`docs/UX.md` 5.3).
     return HoverLabel(
       label: l10n.sandboxStartBlocked(
-        blocking.title.isEmpty ? blocking.code : blocking.title,
+        DiagnosticL10n.resolve(blocking, l10n).title,
       ),
       child: start,
     );

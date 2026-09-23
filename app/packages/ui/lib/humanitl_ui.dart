@@ -33,6 +33,7 @@ library;
 
 export 'src/gallery/gallery_page.dart';
 export 'src/h_editor_decorations.dart';
+export 'src/theme/h_localizations.dart';
 export 'src/theme/h_theme.dart';
 export 'src/tokens/colors.dart';
 export 'src/tokens/flow_state.dart';

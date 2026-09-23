@@ -22,6 +22,7 @@ import '../rules/rules_screen.dart';
 import '../sandbox/sandbox_screen.dart';
 import '../setup/providers/setup_provider.dart';
 import 'providers/connection.dart';
+import 'providers/language.dart';
 import 'providers/navigation.dart';
 import 'providers/setup_state.dart';
 import 'providers/theme.dart';
@@ -98,6 +99,14 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   List<PaletteCommand> _commands(BuildContext context, {required bool live}) {
     final AppLocalizations l10n = context.l10n;
     final Navigation navigation = ref.read(navigationProvider.notifier);
+    // Die andere der beiden Sprachen, gemessen an der, in der das Fenster
+    // gerade spricht, und nicht an der Wahl: Ohne Wahl spricht es die des
+    // Desktops (HUM-052).
+    final AppLanguage otherLanguage =
+        AppLanguage.fromLocale(Localizations.localeOf(context)) ==
+            AppLanguage.de
+        ? AppLanguage.en
+        : AppLanguage.de;
     return <PaletteCommand>[
       for (final Section section in Section.values)
         PaletteCommand(
@@ -111,6 +120,11 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
         run: () => ref
             .read(themeModeProvider.notifier)
             .toggle(MediaQuery.platformBrightnessOf(context)),
+      ),
+      PaletteCommand(
+        id: 'switch-language',
+        label: l10n.shellPaletteSwitchLanguage(otherLanguage.endonym(l10n)),
+        run: () => ref.read(languageProvider.notifier).set(otherLanguage),
       ),
       PaletteCommand(
         id: 'reconnect',

@@ -80,7 +80,8 @@ void main() {
 
     expect(
       ringLabel(tester),
-      'Isolation check failed: Isolation check 2: more than one door',
+      // Die Überschrift aus ARB, nicht die des Daemons (HUM-052).
+      'Isolation check failed: Isolation check 2: more than one socket',
     );
   });
 

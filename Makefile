@@ -7,12 +7,12 @@ SHELL := /bin/bash
 .PHONY: help check rust-fmt rust-clippy rust-build rust-test rust-doc rust-deny typed-errors-lint \
         flutter-get flutter-analyze flutter-test flutter-test-dbus flutter-test-daemon \
         flutter-test-integration flutter-build runner-test proto escape e2e \
-        deps-lint docs-lint parity-check catalog-assets catalog-lint clean package
+        deps-lint docs-lint parity-check l10n-lint catalog-assets catalog-lint clean package
 
 help: ## List targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | sort | awk -F':.*?## ' '{printf "  %-18s %s\n", $$1, $$2}'
 
-check: rust-fmt rust-clippy rust-build rust-test rust-doc deps-lint docs-lint parity-check typed-errors-lint catalog-lint flutter-analyze flutter-test runner-test flutter-build ## Full local gate (same steps as CI)
+check: rust-fmt rust-clippy rust-build rust-test rust-doc deps-lint docs-lint parity-check typed-errors-lint catalog-lint l10n-lint flutter-analyze flutter-test runner-test flutter-build ## Full local gate (same steps as CI)
 
 # A rustup toolchain may exist without rustup on PATH (this machine): put its
 # bin directory first so `cargo fmt` and `cargo clippy` find their components.
@@ -57,6 +57,11 @@ deps-lint: ## Enforce the dependency direction (HUM-074) and the coupling ratche
 	python3 tools/tests/check_offline_test.py
 	python3 tools/check_coupling.py
 	python3 tools/tests/check_coupling_test.py
+
+# Die Sprachprüfung braucht nur `dart` und keine erzeugten Dateien (HUM-052): ARB-Parität,
+# Literale in den Features, Titel und Grund jedes Diagnose-Codes, das Glossar.
+l10n-lint: flutter-get ## Localization lint: ARB parity, literals, diagnostic codes, glossary (HUM-052)
+	cd app && dart run tool/l10n_lint.dart
 
 docs-lint: ## Check the security documents (HUM-007)
 	./scripts/ci/lint-docs.sh

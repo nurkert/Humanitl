@@ -265,26 +265,26 @@ class _Diagnostics extends StatelessWidget {
           // keys" abstürzen (gefunden beim Bau des Deckels, HUM-068).
           for (final (int place, Diagnostic diagnostic)
               in status.diagnostics.indexed)
-            SandboxArrive(
-              key: ValueKey<String>('diagnostic-$place-${diagnostic.code}'),
-              child: Padding(
-                padding: EdgeInsets.only(bottom: tokens.spacing.x2),
-                child: HDiagnosticCard(
-                  code: diagnostic.code,
-                  severityLabel: severityLabel(l10n, diagnostic.severity),
-                  color: severityColor(tokens, diagnostic.severity),
-                  title: diagnostic.title.isEmpty
-                      ? diagnostic.code
-                      : diagnostic.title,
-                  // The daemon's own sentence. The application writes the
-                  // title, never the reason (`docs/UX.md` 4.4).
-                  why: diagnostic.why,
-                  docsUrl: diagnostic.docsUrl,
-                  fix: FixControl(fix: diagnostic.fix),
-                  width: double.infinity,
+            if (DiagnosticL10n.resolve(diagnostic, l10n)
+                case final DiagnosticText text)
+              SandboxArrive(
+                key: ValueKey<String>('diagnostic-$place-${diagnostic.code}'),
+                child: Padding(
+                  padding: EdgeInsets.only(bottom: tokens.spacing.x2),
+                  child: HDiagnosticCard(
+                    code: diagnostic.code,
+                    severityLabel: severityLabel(l10n, diagnostic.severity),
+                    color: severityColor(tokens, diagnostic.severity),
+                    title: text.title,
+                    // The daemon's own sentence. The application writes the
+                    // title, never the reason (`docs/UX.md` 4.4).
+                    why: text.cause,
+                    docsUrl: diagnostic.docsUrl,
+                    fix: FixControl(fix: diagnostic.fix),
+                    width: double.infinity,
+                  ),
                 ),
               ),
-            ),
         ],
       ),
     );

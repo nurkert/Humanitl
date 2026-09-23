@@ -153,6 +153,9 @@ class _CheckLine extends StatelessWidget {
     final AppLocalizations l10n = context.l10n;
     final IsolationCheckResult? result = this.result;
     final Diagnostic? diagnostic = result?.diagnostic;
+    final DiagnosticText? text = diagnostic == null
+        ? null
+        : DiagnosticL10n.resolve(diagnostic, l10n);
     final bool missing =
         expected && result == null && segment == IsolationSegment.unknown;
     return Padding(
@@ -214,7 +217,7 @@ class _CheckLine extends StatelessWidget {
               ),
               color: tokens.stateText.held,
             ),
-          if (diagnostic != null)
+          if (diagnostic != null && text != null)
             Padding(
               padding: EdgeInsets.only(top: tokens.spacing.x2),
               child: HDiagnosticCard(
@@ -226,12 +229,10 @@ class _CheckLine extends StatelessWidget {
                 // "this guarantee does not hold", not "here is a finding"
                 // (`docs/UX.md` 3.3, rule 6).
                 color: tokens.state.error,
-                title: diagnostic.title.isEmpty
-                    ? diagnostic.code
-                    : diagnostic.title,
+                title: text.title,
                 // The daemon's own sentence: it names the guarantee, not the
                 // check that produced it (`docs/UX.md` 4.4).
-                why: diagnostic.why,
+                why: text.cause,
                 docsUrl: diagnostic.docsUrl,
                 fix: FixControl(fix: diagnostic.fix),
                 width: double.infinity,
