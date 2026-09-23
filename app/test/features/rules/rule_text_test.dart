@@ -70,6 +70,28 @@ void main() {
         '∗ · ws.example.org · wss · :8443 · websocket',
       );
     });
+
+    test('names the path prefixes that narrow the rule (HUM-205)', () {
+      // Zeile und Satz lesen denselben Generator. Fehlten die Präfixe hier,
+      // sähe die enge Regel aus wie die weite, und niemand bemerkte, wenn
+      // sie verloren gingen.
+      const Rule rule = Rule(
+        action: RuleAction.allow,
+        matcher: RuleMatcher(
+          host: 'api.example.com',
+          pathPrefixes: <String>['/v1/', '/v2/admin'],
+        ),
+        expires: RuleExpiry.never(),
+      );
+      expect(
+        ruleMatchSummary(rule, en),
+        '∗ · api.example.com · prefix /v1/, /v2/admin',
+      );
+      expect(
+        ruleSentence(rule, de, now: rulesTestNow),
+        'Erlauben · ∗ · api.example.com · Präfix /v1/, /v2/admin · immer',
+      );
+    });
   });
 
   group('rule_sentence', () {

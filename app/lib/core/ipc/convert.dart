@@ -416,6 +416,7 @@ extension RuleMatcherToDomain on pb.RuleMatcher {
     scheme: enumFromWire(Scheme.values, scheme.value),
     port: port,
     upgrade: enumFromWire(Upgrade.values, upgrade.value),
+    pathPrefixes: List<String>.unmodifiable(pathPrefixes),
   );
 }
 
@@ -428,6 +429,9 @@ extension RuleMatcherToProto on RuleMatcher {
       ..path = path
       ..port = port;
     out.methods.addAll(methods.map((m) => pb.Method.valueOf(enumToWire(m))!));
+    // Without this line every rule the screen changes goes back without its
+    // prefixes, and the daemon reads an empty list as "any path" (HUM-205).
+    out.pathPrefixes.addAll(pathPrefixes);
     final Scheme? scheme = this.scheme;
     if (scheme != null) {
       out.scheme = pb.Scheme.valueOf(enumToWire(scheme))!;
@@ -478,6 +482,7 @@ extension RuleToDomain on pb.Rule {
     position: position,
     hitCount: hitCount.toInt(),
     allowPrivate: allowPrivate,
+    passthroughLlm: passthroughLlm,
   );
 }
 
@@ -500,7 +505,10 @@ extension RuleToProto on Rule {
       ..note = note ?? ''
       ..position = position
       ..hitCount = Int64(hitCount)
-      ..allowPrivate = allowPrivate;
+      ..allowPrivate = allowPrivate
+      // Symmetric for the same reason as `disabled`; the daemon ignores it in
+      // a request (HUM-205).
+      ..passthroughLlm = passthroughLlm;
     final DateTime? created = createdAt;
     if (created != null) {
       out.createdAt = _timestamp(created);
