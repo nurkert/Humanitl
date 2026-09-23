@@ -13,6 +13,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-147 | verify-commit baut inkrementell, die CI nicht | S | — |
 | HUM-152 | Der M3-Lauf tippt nicht ins TUI des echten Agenten | S | HUM-141 |
 | HUM-155 | Der Audit-Schreiber lebt im Kern | M | HUM-050 |
+| HUM-220 | Das Terminal der Oberfläche zeigt OpenCode nicht sauber an | L | HUM-042, HUM-067, HUM-136 |
 | HUM-059 | Dokumentation | M | alle vorherigen |
 | HUM-086 | Repository auf Englisch | M | HUM-059 |
 | HUM-060 | Release 0.1.0 | S | HUM-053, HUM-059 |
@@ -424,6 +425,97 @@ Alle in der Tabelle genannten Tests. Zusätzlich:
 - BACKLOG.md Prinzip 7, ADR-012, Abschnitt 5 (Modal-Regel), Usability-Review 6 (Fehler und Randfälle)
 - CONVENTIONS.md 3.2 (`Diagnostic`, `FixAction`), 3.9 (Provider-Namen)
 - HUM-034 (Notification, Tray), HUM-045, HUM-047, HUM-049, HUM-063, HUM-068
+
+---
+
+## HUM-220 · Das Terminal der Oberfläche zeigt OpenCode nicht sauber an
+Sprint: 5 · Größe: L · Abhängigkeiten: HUM-042, HUM-067, HUM-136 · Blockiert: HUM-060
+
+### Kontext
+Am 2026-09-18 meldete der Nutzer, dass OpenCode im Terminal der Oberfläche „nicht sauber in der gui angezeigt“ wird. HUM-042 hat das Bild nur für einen Fall abgenommen: Die Sitzung startet über den Knopf, und die Oberfläche ist der einzige Schreiber. Das vierte Kriterium von HUM-042 hält selbst fest: „Die dritte Aussage des Kriteriums, das Neuzeichnen ohne Zeilensalat, ist nicht gemessen“ (`backlog/sprint-3.md:1130`).
+
+Die Codelektüre vom 2026-09-23 (Stand `main` 2a8df37, keine Messung) findet sechs mögliche Ursachen, geordnet nach Wahrscheinlichkeit. Welche den Bericht erklären, entscheidet Schritt 1. Das Issue behebt jede, die sich bestätigt.
+
+1. **Leser rendern nicht letterboxed.** CONVENTIONS 4.10 (`backlog/CONVENTIONS.md:407`) und das Nicht-Ziel von HUM-042 versprechen: „Geometrie ist die des Schreibers, Leser erhalten `Resize`-Events und rendern letterboxed.“ `TerminalSession._onFrame` (`app/lib/features/sandbox/providers/terminal_provider.dart:240-270`) legt die Geometrie aber nur in den Zustand, und `TerminalPane` (`terminal_pane.dart:276-296`) liest sie nie. `TerminalView` folgt mit `autoResize` dem Fenster. Die Oberfläche wird zum Leser, sobald `humanitl run` schreibt (`TERM_001`, dann `_watchInstead`, `terminal_provider.dart:282`). Laut HUM-067 Kriterium 4 ist das der Normalfall.
+2. **Der Rückstand stellt dem Agenten alte Fragen, und der Emulator beantwortet sie als Tastendrücke.** In der Politik `FullScreen` lässt der Filter jede CSI außer `t` hinaus (`daemon/crates/core-types/src/terminal.rs:724-757`). Der Ring hält die Fragen (`daemon/crates/ipc/src/terminal.rs:364-368`), und jeder Anschluss bekommt ihn, der Schreiber eingeschlossen (`:333`, `:599-603`). `xterm2` 5.2.0 beantwortet DA1/DA2, DSR 6, XTVERSION und DECRQM über `onOutput` (`xterm2/lib/src/terminal.dart:1525-1553`, `:1686`, `:2835`). `onOutput` ist die Tastatur (`terminal_provider.dart:155`).
+3. **Der Ring beginnt irgendwo, und ein langsamer Client verliert Bytes ohne Ausgleich.** `emit` schneidet an einer beliebigen Byte-Grenze ab (`ipc/src/terminal.rs:366-367`). Nach mehr als 64 KiB fehlen dann die Moduswahl vom Start (`?1049h`, `?1000`/`?1006`, `?2004`) und der Anfang der ersten Folge. `forward` verwirft `RecvError::Lagged` stillschweigend (`:686`). Ein Differenz-Renderer zeichnet die verlorenen Zellen nicht von selbst neu.
+4. **Das erste Bild entsteht für 80x24, bevor jemand zusieht.** Der Start läuft mit `DEFAULT_TERMINAL_SIZE` (`ipc/src/sandbox.rs:244`), und die Oberfläche hängt sich erst nach ihrem ersten Frame an (`terminal_pane.dart:82-89`). Bis dahin beantwortet niemand die Startfragen des TUI. Der Rückstand läuft danach im alten Raster in einen größeren Emulator.
+5. **Farbfragen bleiben unbeantwortet.** Der Provider baut `Terminal` ohne `onColorQuery` und ohne `onColorSchemeQuery` (`terminal_provider.dart:152`). Deshalb schweigt `xterm2` auf `OSC 10/11 ; ?`, `OSC 4 ; n ; ?` und `CSI ? 996 n` (`xterm2/lib/src/terminal.dart:3607`, `:3733-3735`, `:1675-1677`), obwohl der Filter diese Fragen hinauslässt (`OSC_ALLOWED`). Eine Hell/Dunkel-Erkennung im TUI läuft damit ins Leere.
+6. **Die Schrift ist nicht die entworfene.** `JetBrains Mono` (`app/packages/ui/lib/src/tokens/typography.dart:27`) ist weder gebündelt noch auf der Maschine des Nutzers installiert, also greift `Fira Code`. `TerminalStyle` läuft mit der Vorgabe `height: 1.2`.
+
+Geprüft und bisher keine Ursache: `TERM=xterm-256color`, `COLORTERM=truecolor` und `LANG=C.UTF-8` setzt der Adapter (`daemon/crates/sandbox/src/agent/opencode.rs:670-672`). terminfo liegt unter dem ro gebundenen `/usr` (`profiles/sandbox/default.toml:43`). `SIGWINCH` geht an die Prozessgruppe des Sandbox-Init (`daemon/crates/sandbox/src/handle.rs:880-899`). Gemessen ist das nur mit `/bin/sh` als Agent (`daemon/crates/sandbox/tests/pty.rs:206-244`), und dieser Test endet grün, wenn `stty` fehlt. Keine dieser drei Aussagen hat heute einen Test, der am echten Agenten rot werden kann.
+
+### Ziel
+OpenCode steht im Terminal der Oberfläche so da wie in einem gewöhnlichen Terminalfenster derselben Größe, und zwar in allen drei Lagen: Die Oberfläche schreibt. Die Oberfläche sieht nur zu, während `humanitl run` schreibt. Die Oberfläche hängt sich spät oder erneut an. Kein Anschluss schickt dem Agenten Bytes, die kein Mensch getippt hat.
+
+### Nicht-Ziel
+- Kein Feld für die Geometrie in `SandboxRequest.Start` und kein Aufschub des Agentenstarts bis zum ersten Schreiber. Beides wäre eine Vertragsänderung mit eigener Entscheidung. Zeigt Schritt 1, dass es nötig ist, bekommt es ein eigenes Issue.
+- Kein zweiter Filter in der Oberfläche (CONVENTIONS 4.28). Was aus dem Rückstand fällt, nimmt der Daemon heraus.
+- Keine Änderung an `OSC_ALLOWED` und an dem, was live hinausgeht. Die Sicherheitsaussage in `README.md` und `docs/SECURITY.md` 3.3 bleibt wörtlich.
+- Kein Wechsel weg von `xterm2`.
+
+### Betroffene Pfade
+- `daemon/crates/core-types/src/terminal.rs`: Der Filter ordnet jede ausgegebene Folge ein (Frage, Modus setzen, sonst).
+- `daemon/crates/ipc/src/terminal.rs`: Ring ohne Fragen, Ringanfang an einer Grenze, Modus-Schnappschuss vor dem Rückstand, Neuzeichnen nach `Lagged`.
+- `daemon/crates/sandbox/src/handle.rs`: `redraw()`, falls `resize` mit gleicher Größe nicht genügt.
+- `daemon/crates/ipc/tests/terminal.rs`, `daemon/crates/sandbox/tests/pty.rs`: neue Tests.
+- `app/lib/features/sandbox/providers/terminal_provider.dart`: Leser übernehmen die Geometrie; `onColorQuery` und `onColorSchemeQuery` antworten aus der Palette.
+- `app/lib/features/sandbox/widgets/terminal_pane.dart`: Letterbox für Leser, `TerminalStyle.height` ausdrücklich gesetzt.
+- `app/packages/ui` (`pubspec.yaml`, `typography.dart`, OFL-Lizenztext): `JetBrains Mono` Regular gebündelt, falls Schritt 1 die Schrift als Anteil bestätigt.
+- `app/test/features/sandbox/terminal_pane_test.dart`, `app/test/features/sandbox/harness.dart`, `app/test/goldens/`, `fixtures/terminal/`.
+- `backlog/CONVENTIONS.md`: Abschnitt „Aus der Umsetzung“.
+- `app/lib/core/ipc/fake_daemon_client.dart` nur bei Bedarf. Die Datei wird geteilt: vor jedem Schreiben neu lesen, nur anhängen.
+
+### Spezifikation
+**Schritt 1 misst, bevor gebaut wird.** Gegen den echten Daemon und OpenCode werden drei Lagen aufgenommen, jeweils mit dem Rohstrom von `humanitl sandbox attach --read-only` und einem Bildschirmfoto der Oberfläche: (a) Start über den Knopf, Fenster unverändert. (b) `humanitl run` in einem Terminal von 200x50, die Oberfläche danach geöffnet. (c) wie (a), dann mehr als 64 KiB Ausgabe, die Oberfläche schließen und neu öffnen. Gezählt werden die Fragen an das Terminal (`CSI c`, `CSI > c`, `CSI 6 n`, `CSI ? … $ p`, `CSI ? u`, `CSI > q`, `OSC 4/10/11 ; ?`, `CSI ? 996 n`), die ersten 64 Bytes des Rückstands und das, was OpenCode auf `SIGWINCH` schreibt (`CSI 2 J` oder ein vollständiges Bild). Die Rohströme von (a) und (b) werden, gekürzt auf ein stabiles Bild, als `fixtures/terminal/opencode-a.bin` und `opencode-b.bin` eingecheckt. Sie enthalten keine Geheimnisse, denn der Agent spricht nur mit dem Mock. Das Ergebnis steht mit Datum in diesem Issue, bevor Code geändert wird.
+
+**Leser rendern letterboxed.** Kommt `TerminalGeometry` bei einer lesenden Sitzung an, ruft der Provider `terminal.resize(cols, rows)`. `TerminalPane` setzt `autoResize: false` und zeichnet eine Fläche von genau `cols` mal `rows` Zellen, zentriert auf `tokens.terminal.background`. Fehlt der Platz, wird die Fläche verkleinert, nie beschnitten. Ein Leser schickt kein `TerminalResize` hinauf. Ein Schreiber behält `autoResize`.
+
+**Der Ring ist ein Bild, keine Fragenliste.** Der Filter kennt die Grenzen jeder Folge und ordnet jede hinausgehende Folge ein. `TerminalHub::emit` legt keine Frage in den Ring. Live geht weiter alles hinaus, was die Politik erlaubt, denn ein Schreiber, der beim Start dabei ist, muss antworten können. Die Liste der Fragen steht als Konstante neben `OSC_ALLOWED`, mit einer Zeile Begründung je Eintrag.
+
+**Der Ring beginnt an einer Grenze und bringt die Modi mit.** Beim Abschneiden läuft `emit` bis zur nächsten Folgen- oder Zeichengrenze vor. Der Hub merkt sich den letzten Zustand einer geschlossenen Liste von DEC-Privatmodi (`25`, `47`, `1047`, `1049`, `1000`, `1002`, `1003`, `1004`, `1006`, `2004`, `2026`) und das zuletzt gesetzte kitty-Tastaturprotokoll. `attach` schickt diesen Zustand vor dem Rückstand.
+
+**Nach einem Verlust und bei jedem Schreiber-Anschluss zeichnet der Agent neu.** `Lagged` löst gleiche Größe plus `SIGWINCH` aus, gedrosselt mit `RESIZE_INTERVAL`. Zeichnet OpenCode laut Schritt 1 bei unveränderter Größe nicht neu, geht der Hub kurz über `rows - 1` und zurück. Der Kommentar an `ipc/src/terminal.rs:681-686` wird berichtigt.
+
+**Farbfragen bekommen eine Antwort.** `onColorQuery` antwortet für 4, 10, 11 und 12 aus `HTerminalPalette`, `onColorSchemeQuery` aus der Helligkeit des Hintergrunds. Das ist keine OSC-Behandlung im Sinn von `docs/SECURITY.md` 3.3: Die Antwort geht nur an den Agenten und nie in Zwischenablage oder Titel.
+
+**Schrift.** Nur wenn Schritt 1 sie bestätigt: `JetBrains Mono` Regular wird in `app/packages/ui` gebündelt, samt OFL-Text, und die Größe der Datei steht im Commit-Body. `TerminalStyle.height` wird auf den Wert gesetzt, den das Bildschirmfoto begründet.
+
+### Tests
+- `a_tui_frame_renders_at_the_writers_geometry` (`terminal_pane_test.dart`, Widget-Test unter `TargetPlatformVariant.only(TargetPlatform.linux)`): Der Fake spielt `fixtures/terminal/opencode-b.bin` einer lesenden Sitzung mit `TerminalGeometry(200, 50)` in ein Fenster, das 120x30 Zellen böte. Zusicherungen: `terminal.viewWidth == 200` und `viewHeight == 50`; die Pufferzeile mit dem oberen Rand des Eingabefelds trägt ihre Rahmenzeichen in Spalte 0 und Spalte 199; keine Zeile enthält `[?`, `;1R`, `rgb:` oder `$y`; die Fläche ist kleiner als das Fenster und nicht beschnitten. Mutationsprobe: `terminal.resize` im Leserzweig entfernen, rot.
+- `opencode_frame` (`app/test/goldens/`, Golden unter `TargetPlatformVariant linux`): Dasselbe Bild aus `opencode-a.bin` als Schreiber in 120x30, mit gebündelter oder Test-Schrift. Mutationsprobe: `TerminalStyle.height` ändern, Golden rot.
+- `a_writer_keeps_its_own_geometry` und `a_reader_sends_no_resize` (`terminal_pane_test.dart`, linux): Ein Schreiber folgt dem Fenster und nicht der Nachricht. Ändert sich das Fenster eines Lesers, sieht `SandboxTestClient` kein `TerminalResize`. Mutationsprobe je Test.
+- `a_colour_query_is_answered_from_the_palette` (Provider-Test): Auf `OSC 11 ; ? BEL` im Strom folgt ein `TerminalKeys` mit dem Hintergrund der Palette. Mutationsprobe: `onColorQuery` entfernen, rot.
+- `a_replay_asks_nothing` (`ipc/tests/terminal.rs`, echte Sandbox): Der Agent schreibt `CSI c`, `CSI 6 n`, `OSC 11 ; ? BEL`, `CSI ? 2026 $ p` und danach `READY`. Ein früher Client bekommt alle vier Fragen live. Ein später Client bekommt `READY` und keine der vier. Mutationsprobe: den Ausschluss in `emit` entfernen, rot.
+- `a_late_client_gets_the_modes` (`ipc/tests/terminal.rs`): `?1049h`, `?1006h` und `?2004h`, danach 80 KiB Text. Der Rückstand beginnt mit genau diesen Modi, sein Text beginnt nicht mit einem Folgebyte `0x80..=0xbf`, und nichts im Rückstand ist eine Folge ohne Einleiter. Zwei Mutationsproben: Schnappschuss weglassen, Vorlauf zur Grenze weglassen.
+- `a_lagging_client_triggers_a_redraw` (`ipc/tests/terminal.rs`): Ein Agent, der auf `SIGWINCH` `stty size` meldet, und ein Client, der nicht liest, bis `Lagged` eintritt. Danach steht eine neue `SIZE`-Zeile im Strom. Mutationsprobe: der `Lagged`-Zweig wieder `{}`, rot.
+- `a_resize_reaches_a_grandchild_of_the_shim` (`sandbox/tests/pty.rs`): Wie `a_resize_reaches_the_agent`, aber der Agent meldet seine Größe aus einem Enkelprozess (`sh -c 'sh -c "…"'`), wie bei OpenCode mit seinem Starter. `stty` und `bwrap` fehlen: Der Test schlägt fehl, statt grün zu überspringen. Mutationsprobe: `kill_process_group` in `resize` entfernen, rot.
+- `the_agent_sees_a_usable_terminal` (`sandbox/tests/pty.rs`, Profile `default` und `llm-only`, Umgebung aus dem OpenCode-Adapter): In der Sandbox gibt `tput -T "$TERM" colors` `256` aus, `test -t 0` gilt, `$COLORTERM` ist `truecolor` und `$LANG` ist `C.UTF-8`. Mutationsprobe: `TERM` im Adapter auf `dumb`, rot; `/usr` aus `ro`, rot.
+
+### Akzeptanzkriterien
+- [ ] Schritt 1 ist gemessen: drei Transkripte und drei Bildschirmfotos liegen vor, zwei Fixtures sind eingecheckt, und für jede der sechs Ursachen steht mit Datum und Fundstelle „bestätigt“ oder „nicht beobachtet“.
+- [ ] Ein Leser zeigt das Bild in der Geometrie des Schreibers, zentriert und nie beschnitten. Belegt durch den Widget-Test über `opencode-b.bin` unter `TargetPlatformVariant linux`.
+- [ ] Ein Bild von OpenCode ist als Golden unter `TargetPlatformVariant linux` festgehalten und wird bei geänderter Zellhöhe rot.
+- [ ] Ein Resize erreicht den Agenten auch als Enkel des Shims. `a_resize_reaches_the_agent` und der neue Test werden nie still übersprungen.
+- [ ] TERM, COLORTERM, LANG und terminfo sind in der Sandbox für beide Profile per Test belegt, nicht per Lektüre.
+- [ ] Ein später oder erneuter Anschluss schickt dem Agenten kein einziges Byte, das kein Mensch getippt hat. In Lage (c) steht im Eingabefeld von OpenCode nach dem Wiederöffnen derselbe Text wie davor, gemessen am Transkript und nicht am Bild.
+- [ ] Jeder Test aus „Tests“ ist grün, jede genannte Mutationsprobe ist einmal rot gelaufen, und der Commit-Body nennt sie.
+- [ ] Menschenauge: Der Nutzer prüft gegen den echten Daemon (1) Start über den Knopf, (2) `humanitl run` im eigenen Terminal bei offener Oberfläche, (3) Fenster ziehen, (4) Schließen und Wiederöffnen, während OpenCode antwortet. In allen vier Fällen: kein Zeilensalat, keine Reste alter Bilder, Rahmen durchgezogen, Farben wie im Terminal des Nutzers. Sein Wortlaut steht im Kriterium.
+- [ ] Die Sicherheitsaussage ist unverändert: `OSC_ALLOWED` unverändert, `tests/escape/` grün, live geht keine Folge hinaus, die vorher nicht hinausging.
+- [ ] `make check` und `make flutter-analyze` grün, `tools/verify-commit.sh` auf dem Commit grün, `python3 tools/check_coupling.py` ohne steigende Zahl.
+
+### Fallstricke
+- Fragen fallen nur aus dem Ring, nie aus dem Live-Strom. Sonst läuft die Erkennung von OpenCode auch dann ins Leere, wenn jemand zusieht.
+- `autoResize: false` nur beim Leser. Ein Schreiber ohne `autoResize` meldet nie eine neue Größe, und `a_resize_of_the_window_goes_up_as_a_command` muss grün bleiben.
+- `flutter test` läuft als Android. Ohne `TargetPlatformVariant linux` prüft der Widget-Test eine Tastatur- und Schriftwelt, die der Nutzer nie sieht.
+- Ein Golden ohne feste Schrift ist ein Golden der Test-Maschine. Die Schrift wird im Test geladen, sonst misst der Golden nichts.
+- Der Modus-Schnappschuss ist eine geschlossene Liste. Jeder weitere Eintrag ist eine Behauptung des Daemons über den Agenten.
+- `TerminalSessionState.copyWith` kann kein Feld leeren. Wer beim Wechsel zwischen Leser und Schreiber etwas zurücksetzt, baut den Zustand neu, wie `_onFrame` es für `DAEMON_001` tut.
+- Der Ring hält weiter **gefilterte** Bytes. Das Herausnehmen der Fragen ist ein Schritt nach dem Filter, kein zweiter Filter davor.
+- Tests mit echter Sandbox laufen einzeln, mit `nice -n 19`, im eigenen `CARGO_TARGET_DIR` und nie in einem privilegierten Container.
+
+### Referenzen
+Bericht des Nutzers vom 2026-09-18; HUM-042 (`backlog/sprint-3.md:1024`, `:1130`); HUM-067 Kriterium 4; HUM-136 (`backlog/sprint-4.md`); HUM-152; CONVENTIONS 4.10 und 4.28; `daemon/crates/ipc/src/terminal.rs`; `daemon/crates/core-types/src/terminal.rs`; `daemon/crates/sandbox/src/handle.rs:880-899`; `daemon/crates/sandbox/tests/pty.rs`; `app/lib/features/sandbox/providers/terminal_provider.dart`; `app/lib/features/sandbox/widgets/terminal_pane.dart`; `xterm2` 5.2.0 (`lib/src/terminal.dart`, `lib/src/ui/terminal_text_style.dart`). Zeilennummern aus der Lektüre vom 2026-09-23, vor dem Bau gegenlesen.
 
 ---
 

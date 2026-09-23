@@ -4033,6 +4033,14 @@ Der Befund ist behoben, und ein Test hält ihn behoben.
 - [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
 - [ ] `make check` grün.
 
+### Umsetzungsplan (gemessen am 2026-09-23 gegen bwrap 0.13.0, `ptrace_scope=0`)
+- Der Befund ist echt: Das Init von bwrap ist dumpable, `/proc/1/mem` öffnet sich mit `O_RDWR`.
+- `--as-pid-1` allein schließt die Lücke nicht, denn dann ist der Shim-Elternprozess das beschreibbare PID 1. Nötig sind beide Schritte: `--as-pid-1` (verlangt `--unshare-pid`, verbietet `--lock-file`) und `prctl(PR_SET_DUMPABLE, 0)` als erste Anweisung in `parent()`, vor `drop(gate)`, mit Gegenprobe über `PR_GET_DUMPABLE`. Danach geben beide Wege `EACCES` beziehungsweise `EPERM`.
+- Als PID 1 muss der Shim Waisen ernten: `waitpid(-1)`, bis der eigene Kindprozess endet. `SIGCHLD` bleibt `SIG_DFL`. Die Weiterleitung von `SIGTERM` und `SIGHUP` wird tragend, weil PID 1 Signale ohne Handler verwirft.
+- `pidfd_getfd` kommt in `FLOOR` und `SYSCALLS`; `pidfd_open` nur in `SYSCALLS`, weil asyncio, Go und libuv es abtasten. Die Kopien der Liste (`profile.rs`, `profiles/sandbox/*.toml`, `shim_contract.rs`, `shim.rs`) ziehen mit.
+- ESC-1 verliert die Ausnahme für `/proc/1` und bekommt `pid1_mem_rdwr`, `pid1_pidfd_getfd`, `pidfd_getfd_self` und `pid1_not_dumpable`. Bei `ptrace_scope >= 1` blockt schon Yama; die Proben auf Speicher und Deskriptoren werden dort übersprungen, `pid1_not_dumpable` trägt.
+- Im selben Commit: Nachtrag zu ADR-0002 (Zeilen 104 bis 108), CONVENTIONS 4.11, `docs/SECURITY.md` (Prozessmodell, Liste des Bodens, Prüfblock), `docs/THREAT-MODEL.md` K-04 und K-06, `tests/escape/README.md`. Tests mit Mutationsprobe: `--as-pid-1` fehlt, `prctl` fehlt oder steht nach `drop(gate)`, `waitpid(child)` statt `waitpid(-1)`, Weiterleitung von `SIGTERM` fehlt, `pidfd_getfd` fehlt im Boden.
+
 ### Referenzen
 Sicherheitsdurchlauf 2026-09-23, Befund M1; `daemon/crates/sandbox/src/bwrap_args.rs:264`.
 
