@@ -79,6 +79,19 @@
 //! eigenen Zeilen nachschieben kann. Der Launcher wartet nicht auf das Ende
 //! der Pipe, sondern auf die fünf Namen; `bwrap` selbst erbt die Schreibseite
 //! und hält sie, solange die Sandbox läuft.
+//!
+//! Eine Zeile gibt es nur, wenn `execvp` zurückkam (HUM-137):
+//!
+//! ```text
+//! EXEC fail errno=<n>
+//! ```
+//!
+//! Sie ist der Beleg, dass der Agent nie lief, und [`parse_exec_line`] liest
+//! sie. Schreiben kann sie nur das Kind des Shims nach einem gescheiterten
+//! `exec`: Ein gelungenes schließt den Deskriptor (`FD_CLOEXEC`), bevor der
+//! Agent seinen ersten Befehl ausführt, und vor dem `exec` wartet das Kind an
+//! einem Tor, bis der Eltern-Shim seine Kopie geschlossen hat. Was der Agent in sein Terminal
+//! schreibt, kann deshalb nie für diese Zeile gehalten werden.
 
 use std::os::fd::RawFd;
 
@@ -153,6 +166,35 @@ pub const EXIT_SETUP: i32 = 126;
 
 /// Exit-Code des Shims, wenn `execvp` scheiterte.
 pub const EXIT_EXEC: i32 = 127;
+
+/// Das Präfix der Zeile, mit der der Shim ein gescheitertes `exec` meldet.
+pub const EXEC_PREFIX: &str = "EXEC";
+
+/// Der Shim meldet: `execvp` kam zurück, der Agent ist nie gelaufen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExecFailure {
+    /// Die Fehlernummer von `execvp`, wenn der Shim eine hatte.
+    pub errno: Option<i32>,
+}
+
+/// Liest eine Zeile `EXEC fail errno=<n>`.
+///
+/// Alles andere ergibt `None`, auch eine Zeile mit dem Präfix, deren zweites
+/// Wort nicht `fail` ist. Eine Nummer, die sich nicht lesen lässt, bleibt
+/// `None` in [`ExecFailure::errno`]; die Zeile zählt trotzdem.
+#[must_use]
+pub fn parse_exec_line(line: &str) -> Option<ExecFailure> {
+    let line = line.trim_end_matches(['\r', '\n']);
+    let mut words = line.splitn(3, ' ');
+    if words.next()? != EXEC_PREFIX || words.next()? != "fail" {
+        return None;
+    }
+    let errno = words
+        .next()
+        .and_then(|rest| rest.strip_prefix("errno="))
+        .and_then(|number| number.parse().ok());
+    Some(ExecFailure { errno })
+}
 
 /// Eine Zeile des Berichts, gelesen.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,9 +300,34 @@ mod tests {
 
     use super::{
         CHECK_NAMES, ENV_BRIDGES, ENV_REPORT_FD, ENV_SECCOMP_DENY, ENV_SECCOMP_FAMILIES,
-        ENV_SECCOMP_TYPES, RESERVED_ENV, ShimCheck, bridges_json, parse_check_line, shim_env,
+        ENV_SECCOMP_TYPES, ExecFailure, RESERVED_ENV, ShimCheck, bridges_json, parse_check_line,
+        parse_exec_line, shim_env,
     };
     use crate::profile::{Bridge, SandboxProfile};
+
+    #[test]
+    fn the_exec_line_parses_and_nothing_else_does() {
+        assert_eq!(
+            parse_exec_line("EXEC fail errno=2\n"),
+            Some(ExecFailure { errno: Some(2) })
+        );
+        assert_eq!(
+            parse_exec_line("EXEC fail -"),
+            Some(ExecFailure { errno: None })
+        );
+        for bad in [
+            "",
+            "EXEC",
+            "EXEC ok errno=2",
+            "CHECK families ok x",
+            "humanitl-shim: exec failed: x: No such file or directory (os error 2)",
+            " EXEC fail errno=2",
+        ] {
+            assert_eq!(parse_exec_line(bad), None, "{bad:?} must not parse");
+        }
+        // Und umgekehrt: die Zeile ist keine Prüfung.
+        assert_eq!(parse_check_line("EXEC fail errno=2"), None);
+    }
 
     #[test]
     fn the_proxy_bridge_serializes_in_the_documented_shape() {

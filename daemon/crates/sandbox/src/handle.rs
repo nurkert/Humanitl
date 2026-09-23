@@ -33,7 +33,7 @@ use humanitl_core::{Diagnostic, Severity};
 use rustix::process::{Pid, Signal, kill_process, kill_process_group};
 use rustix::termios::{Winsize, tcsetwinsize};
 
-use crate::bridge_env::{CHECK_NAMES, ShimCheck};
+use crate::bridge_env::{CHECK_NAMES, ExecFailure, ShimCheck};
 use crate::bwrap::{is_userns_failure, userns_diagnostic};
 
 /// Wie lange [`SandboxHandle::kill`] nach `SIGTERM` wartet, bevor `SIGKILL` folgt.
@@ -177,6 +177,9 @@ pub struct ReportSnapshot {
     pub other_lines: usize,
     /// Die Pipe ist zu: alle Schreibseiten sind geschlossen.
     pub closed: bool,
+    /// Der Shim meldet ein gescheitertes `exec`: Der Agent ist nie gelaufen
+    /// (HUM-137, [`crate::bridge_env::parse_exec_line`]).
+    pub exec_failed: Option<ExecFailure>,
 }
 
 impl ReportSnapshot {
@@ -312,6 +315,33 @@ impl Shared {
     pub(crate) fn push_other_line(&self) {
         lock(&self.report).other_lines += 1;
         self.report_changed.notify_all();
+    }
+
+    pub(crate) fn set_exec_failed(&self, failure: ExecFailure) {
+        lock(&self.report).exec_failed = Some(failure);
+        self.report_changed.notify_all();
+    }
+
+    /// Wartet, bis die Berichts-Pipe zu ist, höchstens `timeout`. Anders als
+    /// [`Shared::wait_report`] beendet das Ende der Sandbox das Warten nicht:
+    /// Genau dann liest der Leser noch die letzten Zeilen.
+    pub(crate) fn wait_report_closed(&self, timeout: Duration) -> ReportSnapshot {
+        let deadline = Instant::now() + timeout;
+        let mut report = lock(&self.report);
+        loop {
+            if report.closed {
+                return report.clone();
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return report.clone();
+            }
+            report = self
+                .report_changed
+                .wait_timeout(report, deadline - now)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
     }
 
     pub(crate) fn close_report(&self) {
@@ -727,6 +757,17 @@ impl SandboxHandle {
     #[must_use]
     pub fn report(&self) -> ReportSnapshot {
         lock(&self.shared.report).clone()
+    }
+
+    /// Der ganze Bericht einer beendeten Sandbox: wartet höchstens `timeout`,
+    /// bis die Pipe zu ist, damit auch die letzte Zeile gelesen ist.
+    ///
+    /// Für die Frage, ob der Shim ein gescheitertes `exec` gemeldet hat
+    /// ([`ReportSnapshot::exec_failed`]); die Zeile kommt nach allen `CHECK`,
+    /// und wer nur bis zu den fünf Namen wartet, sieht sie nicht.
+    #[must_use]
+    pub fn report_after_exit(&self, timeout: Duration) -> ReportSnapshot {
+        self.shared.wait_report_closed(timeout)
     }
 
     /// Wartet, bis der Bericht vollständig ist ([`ReportSnapshot::is_complete`]),
