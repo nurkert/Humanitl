@@ -6,10 +6,13 @@
 //! einen Grund:
 //!
 //! - **Leere Umgebung.** `bwrap` bekommt keine einzige Variable des Hosts.
-//!   `--clearenv` räumt nur die Umgebung des Befehls in der Sandbox auf;
-//!   `bwrap` selbst bleibt als PID 1 des Namensraums stehen, und
-//!   `/proc/1/environ` zeigte sonst Tokens, `DISPLAY` und
+//!   `--clearenv` räumt nur die Umgebung des Befehls in der Sandbox auf.
+//!   Ohne `--as-pid-1` blieb `bwrap` als PID 1 des Namensraums stehen, und
+//!   `/proc/1/environ` zeigte Tokens, `DISPLAY` und
 //!   `DBUS_SESSION_BUS_ADDRESS` des Nutzers (ESC-2-Befund, CONVENTIONS 4.11).
+//!   Seit HUM-203 ist der Shim PID 1 und nicht dumpable; die leere Umgebung
+//!   bleibt trotzdem, für die Proben des Doctors, die ohne `--as-pid-1`
+//!   starten, und damit ein künftiger Fehler im Prozessmodell nichts preisgibt.
 //! - **Geerbte Deskriptoren, keine Umnummerierung.** Die Masken und die drei
 //!   Identitätsdateien kommen aus versiegelten memfds, einer je Datei
 //!   (`bwrap` schließt jeden nach dem Lesen); der Bericht des Shims und der

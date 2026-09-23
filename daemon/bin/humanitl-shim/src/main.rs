@@ -1,7 +1,12 @@
 //! Launcher inside the sandbox: bridges first, then the seccomp filter, then
 //! the agent (HUM-012, ADR-002, `docs/SECURITY.md` Satz 3).
 //!
-//! The shim is the first process the launcher starts under bwrap's init. It
+//! The shim is PID 1 of the sandbox: the launcher starts bwrap with
+//! `--as-pid-1`, so no init of bwrap sits above it (HUM-203). That init carried
+//! no filter and was dumpable; the shim's parent carries the bridge filter and
+//! makes itself non-dumpable before the agent starts. As PID 1 it also reaps
+//! every orphan of the sandbox and relays `SIGTERM` and `SIGHUP`, which the
+//! kernel would otherwise drop at a namespace init without a handler. It
 //! resolves the review finding "seccomp after socat" by process separation:
 //! the bridge to the proxy needs `socket(2)` and lives in the parent; the
 //! agent is a child that carries the filter before `exec` and can never shed
@@ -71,11 +76,14 @@
 //!    listener and hands the listener to the parent (without a listener the
 //!    same filter with `TSYNC`), proves it (`seccomp_applied`, `families`),
 //!    tells the parent the agent is next, waits at the gate, and `execvp`s
-//!    the command. The parent makes itself non-dumpable, installs its own,
+//!    the command. The parent, PID 1 of the sandbox, makes itself
+//!    non-dumpable as its first step, installs its own,
 //!    slightly wider filter (the agent's plus `AF_UNIX`), counts and answers
 //!    the refused sockets of the agent (`refusals.rs`), serves the bridges,
-//!    opens the gate, forwards `SIGTERM`, `SIGINT` and `SIGHUP` to the
-//!    child, waits, and writes the last tally.
+//!    opens the gate, forwards `SIGTERM` and `SIGHUP` to the child (`SIGINT`
+//!    reaches the agent through the process group and is ignored here), reaps
+//!    every orphan while it waits for its own child (`waitpid(-1)`), and
+//!    writes the last tally.
 //! 4. Exit status: 125 usage, 126 seccomp or bridge setup failed (the message
 //!    names which), 127 `exec` failed (and the child writes `EXEC fail
 //!    errno=<n>` to the report first, see `report.rs`), otherwise the
@@ -861,7 +869,11 @@ fn parent(
     // A process that is not dumpable passes `ptrace_may_access` for nobody
     // without `CAP_SYS_PTRACE`, which the sandbox has dropped. After the fork,
     // so the child and its `exec` keep the default, and first of all, well
-    // before `drop(gate)` (HUM-138; the plan of HUM-203 puts it here too).
+    // before `drop(gate)` (HUM-138). Since HUM-203 this process is PID 1 of
+    // the sandbox, and the same flag is what keeps `/proc/1/mem` and
+    // `pidfd_getfd(2)` on PID 1 closed to the agent: an init that stays
+    // dumpable would be a process without the agent's filter that the agent
+    // could write into.
     let report = Arc::new(report);
     if let Err(err) = set_undumpable() {
         return refuse_to_open(child, report, &format!("set:{err}"));
@@ -1017,6 +1029,10 @@ extern "C" fn relay(signal: c_int) {
 }
 
 fn forward_signals() {
+    // Tragend, seit der Shim PID 1 der Sandbox ist (HUM-203): Der Kernel stellt
+    // einem Namensraum-Init kein Signal zu, für das es keinen Handler hat,
+    // außer SIGKILL und SIGSTOP von außerhalb. Ohne diese Weiterleitung
+    // verpuffte ein SIGTERM an den Shim, und der Agent hörte es nie.
     // SIGINT fehlt hier mit Absicht: Ein Terminal schickt es an die ganze
     // Vordergrund-Prozessgruppe, und der Launcher (SandboxHandle::interrupt)
     // an die Prozessgruppe der Sandbox; der Agent hat es dann schon. Reichte
@@ -1057,11 +1073,20 @@ fn kill_and_reap(child: libc::pid_t) {
 
 /// Waits for the child and turns its status into ours: the exit code, or
 /// 128 + signal.
+///
+/// Der Shim ist PID 1 der Sandbox (`--as-pid-1`, HUM-203), und jede Waise im
+/// Namensraum wird sein Kind. Deshalb `waitpid(-1)` und nicht
+/// `waitpid(child)`: Eine Waise, die niemand erntet, bleibt als Zombie
+/// liegen, und ein Agent, der viele Prozesse abkoppelt, füllt so die
+/// Prozesstabelle. Der Status einer Waise wird verworfen; nur der eigene
+/// Kindprozess entscheidet über den Exit-Code. `ECHILD`, ohne dass das Kind
+/// geerntet wurde, kann nicht vorkommen und endet mit 126.
 fn reap(child: libc::pid_t) -> i32 {
     loop {
         let mut status: c_int = 0;
-        // SAFETY: waitpid on our own child with a valid status pointer.
-        let waited = unsafe { libc::waitpid(child, &raw mut status, 0) };
+        // SAFETY: waitpid on any child of this process with a valid status
+        // pointer.
+        let waited = unsafe { libc::waitpid(-1, &raw mut status, 0) };
         if waited == child {
             if libc::WIFEXITED(status) {
                 return libc::WEXITSTATUS(status);
@@ -1069,6 +1094,10 @@ fn reap(child: libc::pid_t) -> i32 {
             if libc::WIFSIGNALED(status) {
                 return 128 + libc::WTERMSIG(status);
             }
+            continue;
+        }
+        if waited > 0 {
+            // Eine Waise des Agenten, geerntet und vergessen.
             continue;
         }
         if io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {

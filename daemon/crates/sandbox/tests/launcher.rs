@@ -698,8 +698,12 @@ fn launch_true_exits_zero() {
     assert!(err.why.contains("already launched"), "{}", err.why);
 }
 
-/// Der ESC-2-Befund: `/proc/1/environ` ist die Umgebung von `bwrap`, und die
-/// ist leer; der Befehl sieht genau die `--setenv`-Paare.
+/// Der ESC-2-Befund: `/proc/1/environ` zeigte die Umgebung von `bwrap`. Seit
+/// HUM-203 ist PID 1 der Shim (`--as-pid-1`), hier der Shim-Ersatz, der sich
+/// per `exec` in den Befehl verwandelt; seine Umgebung ist genau die der
+/// `--setenv`-Paare und nichts vom Host. Der echte Shim ist nicht dumpable,
+/// dort ist `/proc/1/environ` für den Agenten gar nicht lesbar (Test
+/// `pid_1_is_the_filtered_non_dumpable_shim` im Shim-Crate).
 #[test]
 fn launch_env_is_clean() {
     let fx = fixture();
@@ -721,9 +725,20 @@ fn launch_env_is_clean() {
 
     let stdout = text(&output.stdout);
     let (pid1, agent) = stdout.split_once("---MARK---\n").expect("marker");
-    assert!(
-        pid1.trim().is_empty(),
-        "/proc/1/environ must be empty, got: {pid1}"
+    let mut planned = plan.env.clone();
+    planned.sort();
+    let mut pid1_env: Vec<(String, String)> = pid1
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+    pid1_env.sort();
+    // Der Shim-Ersatz ist ein bash-Skript, das `PWD`, `SHLVL` und `_`
+    // exportiert, bevor es per `exec` zum Befehl wird.
+    pid1_env.retain(|(k, _)| !matches!(k.as_str(), "PWD" | "OLDPWD" | "SHLVL" | "_"));
+    assert_eq!(
+        pid1_env, planned,
+        "PID 1 carries exactly the planned environment, nothing of bwrap's: {pid1}"
     );
 
     let mut seen: Vec<(String, String)> = agent
@@ -732,8 +747,6 @@ fn launch_env_is_clean() {
         .map(|(k, v)| (k.to_owned(), v.to_owned()))
         .collect();
     seen.sort();
-    let mut planned = plan.env.clone();
-    planned.sort();
     // `env` zeigt auch `PWD`, das die Shell setzt; alles andere ist der Plan.
     seen.retain(|(k, _)| !matches!(k.as_str(), "PWD" | "OLDPWD" | "SHLVL" | "_"));
     assert_eq!(

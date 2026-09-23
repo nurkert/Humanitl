@@ -4,6 +4,7 @@
 --unshare-ipc
 --unshare-uts
 --unshare-cgroup
+--as-pid-1
 --die-with-parent
 --new-session
 --cap-drop
@@ -164,7 +165,7 @@ HUMANITL_REPORT_FD
 10
 --setenv
 HUMANITL_SECCOMP_DENY
-ptrace,io_uring_setup,io_uring_enter,io_uring_register,process_vm_readv,process_vm_writev,keyctl,add_key,request_key,kexec_load,kexec_file_load,init_module,finit_module,delete_module,bpf,perf_event_open,userfaultfd
+ptrace,io_uring_setup,io_uring_enter,io_uring_register,process_vm_readv,process_vm_writev,pidfd_getfd,keyctl,add_key,request_key,kexec_load,kexec_file_load,init_module,finit_module,delete_module,bpf,perf_event_open,userfaultfd
 --setenv
 HUMANITL_SECCOMP_FAMILIES
 AF_INET,AF_INET6

@@ -25,7 +25,7 @@ const SHIM: &str = env!("CARGO_BIN_EXE_humanitl-shim");
 /// How many syscalls the floor of `seccomp::FLOOR` refuses. The binary is a
 /// separate crate here, so the number is written out; the unit test
 /// `the_hardening_syscalls_are_on_the_floor` guards the list itself.
-const FLOOR_LEN: usize = 17;
+const FLOOR_LEN: usize = 18;
 
 /// The five variables of the contract; every test starts without them.
 const SHIM_VARS: [&str; 5] = [
@@ -1058,4 +1058,161 @@ fn a_port_that_is_taken_is_a_bridge_setup_failure() {
     assert!(stderr.contains("bridge setup failed"), "{stderr}");
     assert!(stderr.contains("cannot listen"), "{stderr}");
     drop(taken);
+}
+
+// ---- the shim as PID 1 of the sandbox (HUM-203) ---------------------------------
+
+/// The shim as PID 1 of a fresh PID namespace, the way the launcher starts it
+/// (`bwrap --as-pid-1`), with the host's file system and network so that the
+/// bridge binds as it does above. `None`, with the reason on stderr, where
+/// `bwrap` or unprivileged user namespaces are missing.
+fn shim_as_pid_1(tag: &str, command: &[&str]) -> Option<Command> {
+    let usable = Command::new("bwrap")
+        .args([
+            "--unshare-user",
+            "--unshare-pid",
+            "--as-pid-1",
+            "--dev-bind",
+            "/",
+            "/",
+            "--proc",
+            "/proc",
+            "--",
+            "true",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    if !usable {
+        eprintln!("skipping: bwrap --as-pid-1 is not usable on this machine");
+        return None;
+    }
+    let socket = socket_path(tag);
+    let mut cmd = Command::new("bwrap");
+    for var in SHIM_VARS {
+        cmd.env_remove(var);
+    }
+    cmd.stdin(Stdio::null());
+    cmd.env(
+        "HUMANITL_BRIDGES",
+        format!(
+            r#"[{{"name":"proxy","dir":"in","listen":"127.0.0.1:0","socket":"{}"}}]"#,
+            socket.display()
+        ),
+    );
+    cmd.args([
+        "--unshare-user",
+        "--unshare-pid",
+        "--as-pid-1",
+        "--die-with-parent",
+        "--dev-bind",
+        "/",
+        "/",
+        "--proc",
+        "/proc",
+        "--",
+        SHIM,
+        "--proxy-port",
+        "0",
+        "--",
+    ])
+    .args(command);
+    Some(cmd)
+}
+
+/// PID 1 is the shim, it wears the bridge filter, and it is not dumpable: the
+/// agent can neither open `/proc/1/mem` for writing nor read `/proc/1/environ`
+/// nor does it own `/proc/1/mem` (HUM-203, finding M1). The owner is read on
+/// a file below `/proc/1`, not on the directory: the kernel keeps the
+/// directory of a non-dumpable process with its effective uid
+/// (`task_dump_owner`), only the files in it go to root. Before, PID 1 was bwrap's
+/// init, without a filter and writable through `/proc/1/mem` at
+/// `ptrace_scope=0`.
+#[test]
+fn pid_1_is_the_filtered_non_dumpable_shim() {
+    let script = concat!(
+        "cat /proc/1/comm; ",
+        "grep '^Seccomp:' /proc/1/status | tr -d '\\t '; ",
+        "o=$(stat -c %u /proc/1/mem) && u=$(id -u) && echo \"owner $o $u\" || echo owner-unknown; ",
+        "( exec 3<>/proc/1/mem ) 2>/dev/null && echo mem-open || echo mem-refused; ",
+        "( : < /proc/1/environ ) 2>/dev/null && echo environ-read || echo environ-refused"
+    );
+    let Some(mut command) = shim_as_pid_1("pid1", &["sh", "-c", script]) else {
+        return;
+    };
+    let output = command.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        code(output.status),
+        0,
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 5, "{stdout}");
+    assert_eq!(lines[..2], ["humanitl-shim", "Seccomp:2"], "{stdout}");
+    // Two real uids or no verdict: a missing or failing `stat` must never
+    // read as "someone else owns it".
+    let owner: Vec<u32> = lines[2]
+        .strip_prefix("owner ")
+        .unwrap_or_else(|| panic!("no owner verdict: {stdout}"))
+        .split(' ')
+        .map(|uid| {
+            uid.parse()
+                .unwrap_or_else(|_| panic!("not a uid: {uid:?}: {stdout}"))
+        })
+        .collect();
+    assert_eq!(owner.len(), 2, "{stdout}");
+    assert_ne!(owner[0], owner[1], "the agent owns /proc/1/mem: {stdout}");
+    assert_eq!(lines[3..], ["mem-refused", "environ-refused"], "{stdout}");
+}
+
+/// As PID 1 the shim reaps every orphan, and only its own child's status is
+/// the exit code: the orphan below ends with 3 before the agent ends with 7,
+/// and it must be gone, not a zombie, when the agent looks.
+#[test]
+fn pid_1_reaps_orphans_and_answers_with_its_own_childs_status() {
+    let script = concat!(
+        "p=$(sh -c '(sleep 0.2; exit 3) >/dev/null 2>&1 & echo $!'); ",
+        "sleep 1; ",
+        "if [ -e /proc/$p ]; then echo \"state-$(cut -d' ' -f3 /proc/$p/stat)\"; else echo gone; fi; ",
+        "exit 7"
+    );
+    let Some(mut command) = shim_as_pid_1("orphan", &["sh", "-c", script]) else {
+        return;
+    };
+    let output = command.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "gone", "the orphan was not reaped: {stdout}");
+    assert_eq!(code(output.status), 7, "{stdout}");
+}
+
+/// A namespace init hears only the signals it has a handler for. The shim's
+/// relay is therefore what carries a `SIGTERM` to the agent: sent here to
+/// PID 1 from inside, it must come back as the agent's own trap.
+#[test]
+fn sigterm_to_pid_1_reaches_the_agent() {
+    let script = concat!(
+        "trap 'exit 42' TERM; ",
+        "kill -TERM 1; ",
+        "i=0; while [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; ",
+        "exit 9"
+    );
+    let Some(mut command) = shim_as_pid_1("sigterm", &["sh", "-c", script]) else {
+        return;
+    };
+    let started = Instant::now();
+    let status = command.status().unwrap();
+    assert_eq!(
+        code(status),
+        42,
+        "the relayed SIGTERM did not reach the agent"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "{:?}",
+        started.elapsed()
+    );
 }

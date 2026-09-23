@@ -4028,13 +4028,13 @@ M1, Schwere major, von zwei unabhängigen Prüfern bestätigt). Ort: `daemon/cra
 Der Befund ist behoben, und ein Test hält ihn behoben.
 
 ### Akzeptanzkriterien
-- [ ] bwrap mit `--as-pid-1` starten. Der Shim wird PID 1 und übernimmt das Reapen.
-- [ ] In ESC-1 die Ausnahme für `/proc/1` entfernen. `seccomp_parent_mode_2` wieder auf `/proc/1/status` prüfen, wie `esc-1-sockets.sh:473-475` ankündigt.
-- [ ] Im Shim-Elternprozess direkt nach `fork` `prctl(PR_SET_DUMPABLE, 0)` setzen (`humanitl-shim/src/main.rs:642`). `pidfd_getfd` in FLOOR und `SYSCALLS` aufnehmen.
-- [ ] Neue ESC-Probe: `open("/proc/1/mem", O_RDWR)` und `pidfd_getfd` auf PID 1 und auf den Elternprozess müssen scheitern.
-- [ ] ADR-0002, CONVENTIONS 4.11, SECURITY.md:218 und THREAT-MODEL K-04/K-06 im selben Commit anpassen. Bis zur Behebung PID 1 als Restrisiko in K-04 führen.
-- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
-- [ ] `make check` grün.
+- [x] bwrap mit `--as-pid-1` starten. Der Shim wird PID 1 und übernimmt das Reapen.
+- [x] In ESC-1 die Ausnahme für `/proc/1` entfernen. `seccomp_parent_mode_2` wieder auf `/proc/1/status` prüfen, wie `esc-1-sockets.sh:473-475` ankündigt.
+- [x] Im Shim-Elternprozess direkt nach `fork` `prctl(PR_SET_DUMPABLE, 0)` setzen (`humanitl-shim/src/main.rs:642`). `pidfd_getfd` in FLOOR und `SYSCALLS` aufnehmen.
+- [x] Neue ESC-Probe: `open("/proc/1/mem", O_RDWR)` und `pidfd_getfd` auf PID 1 und auf den Elternprozess müssen scheitern.
+- [x] ADR-0002, CONVENTIONS 4.11, SECURITY.md:218 und THREAT-MODEL K-04/K-06 im selben Commit anpassen. Bis zur Behebung PID 1 als Restrisiko in K-04 führen.
+- [x] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [x] `make check` grün.
 
 ### Umsetzungsplan (gemessen am 2026-09-23 gegen bwrap 0.13.0, `ptrace_scope=0`)
 - Der Befund ist echt: Das Init von bwrap ist dumpable, `/proc/1/mem` öffnet sich mit `O_RDWR`.

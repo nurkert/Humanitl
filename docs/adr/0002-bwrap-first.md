@@ -101,11 +101,11 @@ Fehlermeldung.
 - Ein Agent in der Sandbox erreicht den Proxy über `127.0.0.1:3128`, weil im
   leeren Netzwerk-Namespace nur Loopback existiert. Die Übersetzung von diesem
   TCP-Endpunkt auf den Unix-Socket des Hosts leistet der Shim (`humanitl-shim`).
-  Das Prozessmodell kommt ohne `--as-pid-1` aus: PID 1 in der Sandbox ist das
-  Init von bwrap; der Shim läuft darunter und hält die Brücke selbst ohne
-  Filter; nur sein Kind, der Agent, trägt `Seccomp: 2`. Der Isolation-Check
-  liest deshalb ein gefiltertes Kind, nie `/proc/1/status`. Details in
-  ADR-0016, das die Bridge-Liste verallgemeinert.
+  Das Prozessmodell kam ursprünglich ohne `--as-pid-1` aus: PID 1 in der
+  Sandbox war das Init von bwrap, der Shim lief darunter. Seit HUM-203 gilt
+  der Nachtrag unten: bwrap startet mit `--as-pid-1`, der Shim ist PID 1. Der
+  Isolation-Check liest weiterhin das gefilterte Kind. Details zur Bridge-Liste
+  in ADR-0016.
 - Weil im Namespace nur `lo` existiert, darf seccomp `AF_INET`/`AF_INET6` mit
   `SOCK_STREAM` erlauben, ohne die Garantie zu schwächen. Der Filter verhält
   sich genau so (`backlog/CONVENTIONS.md` 4.10 und 4.11): `socket()` ist nur
@@ -132,10 +132,36 @@ Fehlermeldung.
   prüfen sie in der laufenden Sandbox, das Isolation-Panel zeigt dieselben
   Prüfungen live im UI.
 
+## Nachtrag 2026-09-23: Der Shim ist PID 1 (HUM-203)
+
+Der Sicherheitsdurchlauf vom 2026-09-23 (Befund M1) hat gezeigt, dass das
+Prozessmodell ohne `--as-pid-1` eine Lücke hatte. Das Init von bwrap trug keinen
+seccomp-Filter, war „dumpable" und lief unter derselben UID in derselben
+Nutzer-Namespace wie der Agent. Bei `kernel.yama.ptrace_scope = 0` öffnete der
+Agent `/proc/1/mem` mit `O_RDWR` (gemessen gegen bwrap 0.13.0) und hätte Code
+ohne Filter ausführen können. `/proc/<pid>/mem` ist kein Syscall, und
+`pidfd_getfd` stand nicht im Boden; beide Wege prüft nur `ptrace_may_access`.
+
+Entscheidung: `to_bwrap_args` setzt `--as-pid-1` in jeder Kommandozeile, ohne
+Schalter. Das Flag verlangt `--unshare-pid`, das jedes Profil ohnehin setzen
+muss, und verträgt sich nicht mit `--lock-file`, das Humanitl nicht benutzt.
+`--as-pid-1` allein genügt nicht, denn dann wäre der Shim-Elternprozess das
+beschreibbare PID 1. Deshalb setzt der Elternprozess als ersten Schritt nach dem
+`fork` `PR_SET_DUMPABLE` auf 0 und öffnet das Tor zum Agenten erst, wenn
+`PR_GET_DUMPABLE` das bestätigt (seit HUM-138 schon so, jetzt tragend für
+PID 1). `pidfd_getfd` kommt in den Boden, `pidfd_open` nur in die Liste der
+benennbaren Syscalls, weil asyncio, Go und libuv es abtasten.
+
+Folgen: Der Shim erntet als PID 1 jede Waise (`waitpid(-1)`) und zählt nur den
+Status des eigenen Kindes. Die Weiterleitung von `SIGTERM` und `SIGHUP` ist
+tragend, weil der Kernel einem Namensraum-Init Signale ohne Handler nicht
+zustellt. Endet der Shim, endet die Sandbox. `/proc/1/status` zeigt jetzt
+`Seccomp: 2`, und ESC-1 prüft PID 1 ohne Ausnahme.
+
 ## Betroffene Issues
 
 `HUM-010` (Sandbox-Profil-Format), `HUM-011` (bwrap-Launcher), `HUM-012`
 (humanitl-shim mit seccomp), `HUM-013` (Proxy-Socket-Bind), `HUM-006`
 (Escape-Test-Harness), `HUM-040` (Sandbox-Screen), `HUM-041`
 (Isolation-Check-Panel), `HUM-043` (`/work`-Härtung), `HUM-075`
-(`humanitl doctor`).
+(`humanitl doctor`), `HUM-203` (`--as-pid-1`, Nachtrag).
