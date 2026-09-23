@@ -131,8 +131,9 @@ SetupCheckState doctorLineState(DoctorCheck line) => switch (line.status) {
 
 /// Title and cause of a diagnostic, in the person's language.
 ///
-/// Localised for the four codes the client raises itself, the daemon's own
-/// words for everything else. It is the same split the whole product uses: the
+/// Localised for the four codes the client raises itself. Every other code
+/// takes its title from ARB (`DiagnosticL10n`, HUM-052) and keeps the daemon's
+/// own sentence as the cause. It is the same split the whole product uses: the
 /// generic sentence is the title, the measured one is the cause
 /// (`docs/UX.md` 4.4).
 (String, String) setupDiagnosticText(
@@ -160,8 +161,8 @@ SetupCheckState doctorLineState(DoctorCheck line) => switch (line.status) {
     l10n.setupProjectNoFolderTitle,
     l10n.setupProjectNoFolderWhy,
   ),
-  _ => (
-    diagnostic.title.isEmpty ? diagnostic.code : diagnostic.title,
-    diagnostic.why,
-  ),
+  _ => _titleAndCause(DiagnosticL10n.resolve(diagnostic, l10n)),
 };
+
+(String, String) _titleAndCause(DiagnosticText text) =>
+    (text.title, text.cause);

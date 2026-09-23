@@ -7,3 +7,10 @@ output-dir: lib/l10n/generated
 output-localization-file: app_localizations.dart
 output-class: AppLocalizations
 nullable-getter: false
+# Ein einfaches Anfuehrungszeichen leitet einen woertlichen Abschnitt ein, in
+# dem auch `{` und `}` nicht als Platzhalter gelten; ein Apostroph im Text wird
+# deshalb als `''` geschrieben (HUM-052).
+use-escaping: true
+# Englisch zuerst: `supportedLocales.first` ist der Rueckfall, wenn der
+# Desktop keine der beiden Sprachen nennt, auch bei `C` und `POSIX` (HUM-052).
+preferred-supported-locales: [en]

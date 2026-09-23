@@ -7,6 +7,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
+import 'package:humanitl/core/ui/hover_label.dart';
 import 'package:humanitl/features/sandbox/widgets/env_tab.dart';
 import 'package:humanitl/features/sandbox/widgets/isolation_panel.dart';
 import 'package:humanitl/features/sandbox/widgets/sandbox_header.dart';
@@ -23,8 +24,17 @@ void main() {
 
     final HButtonFinder start = HButtonFinder(tester, 'sandbox-start');
     expect(start.enabled, isFalse, reason: 'a blocking finding forbids it');
-    // Der Grund steht nicht nur auf der Karte, sondern auch am Control.
-    expect(find.textContaining('bwrap not found'), findsWidgets);
+    // Der Grund steht nicht nur auf der Karte, sondern auch am Control, mit
+    // der Überschrift aus ARB statt der des Daemons (HUM-052).
+    expect(find.textContaining('Sandbox tool not found'), findsWidgets);
+    expect(find.textContaining('bwrap not found'), findsNothing);
+    final HoverLabel reason = tester.widget<HoverLabel>(
+      find.ancestor(
+        of: find.byKey(const Key('sandbox-start')),
+        matching: find.byType(HoverLabel),
+      ),
+    );
+    expect(reason.label, contains('Sandbox tool not found'));
     expect(client.starts, 0);
   });
 

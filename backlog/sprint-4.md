@@ -91,6 +91,8 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-188 | `INSTALL.txt` im Archiv beschreibt Aktivierung und Entfernen des Pakets veraltet | XS | HUM-053, HUM-077 |
 | HUM-189 | `DAEMON_001` schlägt überall `humanitld` im Vordergrund vor | S | HUM-077 |
 | HUM-219 | Ein gescheitertes Update stellt den Dienst nicht so her, wie er vorher lief | S | HUM-077 |
+| HUM-172 | Die Sprache des Fensters kommt nicht aus `ui.language` | S | HUM-052, HUM-069 |
+| HUM-173 | Das Kontextmenü eines Eingabefelds stürzt ab | S | HUM-035 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -1420,11 +1422,11 @@ Deutsch verwendet die Du-Form. Protokollbegriffe (GET, POST, Header, Body, Query
 - Unit `diagnostic_fallback_to_daemon_text` (unbekannter Code).
 
 ### Akzeptanzkriterien
-- [ ] `grep -rn "Text('" app/lib/features | grep -v l10n-exempt` liefert nichts.
-- [ ] `app_de.arb` hat dieselbe Schlüsselmenge wie `app_en.arb` (Lint).
-- [ ] Alle 44 Glossar-Einträge sind in beiden ARB-Dateien als Schlüssel vorhanden (Lint prüft eine Liste aus `docs/GLOSSARY.md`).
-- [ ] Sprachwechsel im laufenden Programm ohne Neustart.
-- [ ] Jeder bis Sprint 3 existierende Diagnostic-Code hat `Title` und `Why` in beiden Sprachen.
+- [x] `grep -rn "Text('" app/lib/features | grep -v l10n-exempt` liefert nichts. Gemessen: 0 Zeilen (vorher 1, der Mittelpunkt in `chain_status_card.dart`, jetzt `_middleDot`); die strengere Prüfung `literal` in `app/tool/l10n_lint.dart` deckt auch `"…"`, Zeilenumbrüche, `label:`, `tooltip:`, `semanticsLabel:` und `app/packages/ui/lib` ab.
+- [x] `app_de.arb` hat dieselbe Schlüsselmenge wie `app_en.arb` (Lint). Gemessen: `make l10n-lint` (Prüfung `parity`, dazu gleiche Platzhalter), 1090 Schlüssel je Datei; Negativtests in `app/test/tool/l10n_lint_test.dart`.
+- [x] Alle 44 Glossar-Einträge sind in beiden ARB-Dateien als Schlüssel vorhanden (Lint prüft eine Liste aus `docs/GLOSSARY.md`). Gemessen: 55 Zeilen in `docs/GLOSSARY.md` (die Stufen einzeln), Prüfung `glossary` verlangt Schlüssel und Begriff als ganzes Wort in beiden Sprachen; Test `has at least the 44 glossary entries of the specification`. Abweichung: englischer Knopf „Allow“ nach `docs/UX.md` 4.6.
+- [x] Sprachwechsel im laufenden Programm ohne Neustart. Gemessen: `language_switch_updates_texts` und `the palette switches the language and back` (`app/test/features/shell/language_switch_test.dart`). Die Wahl wird noch nicht in `ui.language` gespeichert (HUM-172).
+- [x] Jeder bis Sprint 3 existierende Diagnostic-Code hat `Title` und `Why` in beiden Sprachen. Gemessen: alle 141 Codes des Registers plus `HOLD_004` (HUM-049) und `DAEMON_013` (HUM-053), die auf `main` hinzukamen; Prüfung `diagnostic` in `make l10n-lint` und `every code of the register resolves in both languages`.
 
 ### Fallstricke
 - shadcn_flutter bringt eigene Lokalisierung für seine Komponenten (`ShadcnLocalizations`); ihre Delegates müssen zusätzlich registriert werden, sonst stürzen Komponenten wie DatePicker in `de` ab.
@@ -4676,3 +4678,73 @@ jedem Läufer stabil.
 
 ### Referenzen
 HUM-076 (Suche im lokalen Netz); `daemon/crates/proxy/src/llm_discover.rs`; `daemon/crates/proxy/tests/llm_discover.rs`.
+
+---
+
+## HUM-172 · Die Sprache des Fensters kommt nicht aus `ui.language`
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-052, HUM-069 · Blockiert: —
+
+### Kontext
+HUM-052 schaltet die Sprache zur Laufzeit um (`languageProvider`, Palette „Sprache wechseln zu …"), und ohne Wahl folgt das Fenster dem Desktop mit Englisch als Rückfall. Die Spezifikation von HUM-052 verlangte darüber hinaus, dass `configProvider.select((c) => c.ui.language)` die Sprache steuert und der erste Start den aus `Platform.localeName` erkannten Wert in die globale Config schreibt. Beides war nicht zu bauen: Dem Client fehlt `GetConfig`, es gibt keinen `configProvider`, und `SetConfig` nimmt bis HUM-069 nur eine Variable unter `sandbox.env` an (`CONFIG_014`). Die Wahl in der Palette gilt deshalb nur bis zum Schließen des Fensters, und ein `ui.language = "de"` in `config.toml` erreicht die Oberfläche nicht, obwohl das Leser-Register des Daemons den Schlüssel als `effective` führt (gelesen wird er nur für die Sandbox).
+
+### Ziel
+`languageProvider` startet aus `ui.language`, eine Wahl in der Palette wird über `SetConfig` in die globale Config geschrieben, und beim ersten Start ohne gesetzten Schlüssel schreibt die Oberfläche den erkannten Wert (`de*` ergibt `de`, sonst `en`, auch bei `C` und `POSIX`).
+
+### Nicht-Ziel
+Weitere Sprachen; ein Wert `system`.
+
+### Betroffene Pfade
+- `app/lib/features/shell/providers/language.dart`
+- `app/lib/core/ipc/daemon_client.dart`, `grpc_daemon_client.dart`, `fake_daemon_client.dart` (Lesen der Config, falls HUM-069 es nicht schon liefert)
+- `daemon/crates/ipc/src/config_rpc.rs` (die Tür für `ui.language`, falls HUM-069 sie nicht schon öffnet)
+
+### Spezifikation
+Gelesen wird einmal beim Verbinden und nach jedem Schreiben; ist der Daemon nicht erreichbar, bleibt es bei der Sprache des Desktops. Der erste Start erkennt „nicht gesetzt" an der Herkunft `Default`, nicht am Wert `en`.
+
+### Tests
+`language_follows_config` (Fake mit `ui.language = de` ergibt „Senden"), `palette_choice_is_written` (ein `SetConfig` mit `ui.language`), `first_start_writes_detected_language` (Herkunft `Default`, Desktop `de_AT` ergibt ein Schreiben von `de`; Herkunft `Global` ergibt kein Schreiben).
+
+### Akzeptanzkriterien
+- [ ] Eine Wahl in der Palette überlebt einen Neustart der Oberfläche.
+- [ ] `ui.language` in `config.toml` bestimmt die Sprache beim Start.
+- [ ] `make check` grün.
+
+### Fallstricke
+- Ein Schreiben beim ersten Start darf keinen Wert überschreiben, den jemand von Hand gesetzt hat; deshalb die Herkunft und nicht der Wert.
+
+### Referenzen
+HUM-052 (Sprachwahl, `backlog/CONVENTIONS.md` 4.36), HUM-069 (Config lesen und schreiben), HUM-151 (`SetConfig`).
+
+---
+
+## HUM-173 · Das Kontextmenü eines Eingabefelds stürzt ab
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-035 · Blockiert: —
+
+### Kontext
+Gefunden bei HUM-052. Ein Rechtsklick auf ein `HTextField` öffnet das Kontextmenü von `shadcn_flutter` (`DesktopEditableTextContextMenu`), und dessen `MenuShortcut` verlangt einen `KeyboardShortcutDisplayMapper` im Baum: `Failed assertion: 'displayMapper != null'` (`shadcn_flutter-0.0.54/lib/src/components/menu/menu.dart:78`). Gemessen in `app/packages/ui` mit `harness(..., overlay: true)` und `hLocalizationsDelegates`, unter `de` und unter `en` gleich; die Sprache ist es also nicht. Ob der Baum der Anwendung den Mapper irgendwo bereitstellt, ist nicht gemessen; `HTheme.host` stellt ihn im Harness nicht bereit.
+
+### Ziel
+Ein Rechtsklick auf jedes `HTextField` öffnet ein Kontextmenü mit Ausschneiden, Kopieren, Einfügen und Alles auswählen, in beiden Sprachen, ohne Assertion.
+
+### Nicht-Ziel
+Eigene Übersetzungen der Menüwörter der Bibliothek (sie bleiben englisch, bis die Bibliothek Deutsch mitbringt; `hLocalizationsDelegates`).
+
+### Betroffene Pfade
+- `app/packages/ui/lib/src/theme/h_theme.dart` oder `app/packages/ui/lib/src/widgets/h_text_field.dart`
+- `app/packages/ui/test/`
+
+### Spezifikation
+Den Mapper dort bereitstellen, wo `HTheme.host` die übrigen Voraussetzungen der Bibliothek legt, oder dem Feld ein eigenes `contextMenuBuilder` geben, das ohne ihn auskommt. Erst messen, ob die Anwendung (`app.dart`) denselben Absturz hat.
+
+### Tests
+`context_menu_opens_under_de` und `..._under_en` unter `TargetPlatformVariant.only(TargetPlatform.linux)`: Rechtsklick auf ein `HTextField`, keine Ausnahme, „Copy" sichtbar. Ein App-Test mit Rechtsklick auf ein Feld des Regel-Formulars.
+
+### Akzeptanzkriterien
+- [ ] Rechtsklick auf ein Eingabefeld öffnet das Menü in beiden Sprachen.
+- [ ] `make check` grün.
+
+### Fallstricke
+- `flutter test` läuft als Android; das Desktop-Menü entsteht nur unter der Linux-Variante.
+
+### Referenzen
+HUM-052 (`backlog/CONVENTIONS.md` 4.36), ADR-0009.

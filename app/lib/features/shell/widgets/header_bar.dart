@@ -219,9 +219,9 @@ class _IsolationRingState extends ConsumerState<IsolationRing>
         IsolationCheck.values.length,
       ),
       _ => l10n.shellIsolationFailed(
-        diagnostic == null || diagnostic.title.isEmpty
+        diagnostic == null
             ? isolationCheckSentence(l10n, failed.check)
-            : diagnostic.title,
+            : DiagnosticL10n.resolve(diagnostic, l10n).title,
       ),
     };
     // Nothing measured is not a count of zero out of three: it is no answer
