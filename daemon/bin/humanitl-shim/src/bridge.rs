@@ -344,6 +344,14 @@ impl Bound {
         &self.bridge
     }
 
+    /// The listener's descriptor, which the shim keeps open when it closes
+    /// everything else it inherited.
+    #[must_use]
+    pub fn listener_fd(&self) -> std::os::fd::RawFd {
+        use std::os::fd::AsRawFd as _;
+        self.listener.as_raw_fd()
+    }
+
     /// The address the listener actually got (differs from the declared one
     /// only for port 0, which tests use).
     #[must_use]

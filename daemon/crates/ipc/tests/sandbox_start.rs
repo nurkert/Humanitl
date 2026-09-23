@@ -980,14 +980,19 @@ async fn whitespace_before_127_is_output_and_no_finding() {
 ///
 /// Der Agent versucht vom ersten Augenblick an und fünfzigmal hintereinander,
 /// die Zeile `EXEC fail` in jeden Deskriptor zu schreiben, den er unter
-/// `/proc` findet, auch in die des Eltern-Shims, und endet mit `127`. Käme
+/// `/proc` findet, auch in die des Eltern-Shims, und endet mit `127`. Die
+/// Standardströme lässt er aus, sie gehören dem Testlauf; der Bericht liegt
+/// nie auf 0 bis 2. Käme
 /// eine davon im Bericht an, stünde hier ein Befund. Seine eigene Ausgabe ist
 /// nicht leer (`x`), damit der Fall ohne Bericht nicht greift.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_agent_cannot_write_the_exec_line_into_the_report() {
     let seen = run_script(
         "i=0; while [ $i -lt 50 ]; do \
-           for f in /proc/[0-9]*/fd/*; do printf 'EXEC fail errno=2\\n' > \"$f\" 2>/dev/null; done; \
+           for f in /proc/[0-9]*/fd/*; do \
+             case \"$f\" in */fd/[012]) continue ;; esac; \
+             printf 'EXEC fail errno=2\\n' 2>/dev/null > \"$f\"; \
+           done; \
            i=$((i + 1)); \
          done; \
          printf x; exit 127",
