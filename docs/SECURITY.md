@@ -746,7 +746,7 @@ folgt eine Reihe harter Grenzen:
 
 | Grenze | Default | Verhalten beim Überschreiten |
 |---|---|---|
-| `limits.hold_body_cap_bytes` | 32 MiB | `413`, `BlockReason::BodyCap`, außer die Regel sagt `stream: true` |
+| `limits.hold_body_cap_bytes` | 32 MiB | `413`, `BlockReason::BodyCap`, auch wenn eine Regel den Host erlaubt (ESC-4 `rule_body_over_cap`); die Ausnahme `stream: true` beachtet der Proxy erst mit HUM-057 |
 | `limits.preview_cap_bytes` | 8 MiB | Vorschau wird abgeschnitten, Entscheidung bleibt möglich |
 | `limits.max_decompress_ratio` | 100 | Dekompression bricht ab (Schutz gegen Zip-Bomben) |
 | `limits.hold_max_bytes` | 256 MiB | neue Anfrage `503`, `BlockReason::HoldMemory`; gehaltene werden nie verworfen |

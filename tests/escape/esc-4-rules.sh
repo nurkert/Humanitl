@@ -21,13 +21,18 @@
 # from the engine and one from the whole way through the daemon; a difference
 # between them would be the second rule engine ADR-018 forbids.
 #
-# `rule_body_over_cap` has two halves and needs both: the engine says `allow`
-# for the host in question, and the running proxy answers `413` with
-# `reason: body_cap` regardless (HUM-016, ADR-005). The cap is decided before a
-# rule is asked, and no rule lifts it. The probe speaks to the proxy over its
-# unix socket with the same bytes curl sends through the bridge inside the
-# sandbox (see esc-3-egress.sh); run.sh hands it the socket and the cap of this
-# run in ESC_PROXY_SOCK and ESC_BODY_CAP.
+# `rule_body_over_cap` asks three things and needs all three: the engine says
+# `allow` for the host in question, the daemon of this run says the same over
+# the command line, with the rule set of the fixture live, and the running
+# proxy then answers `413` with `reason: body_cap` one byte over the cap while
+# the same request exactly at the cap goes out under that rule and ends as
+# `502` with `reason: upstream_dns` (HUM-016, ADR-005, HUM-213). The cap is
+# decided before a rule is asked, and no rule lifts it; that holds as long as
+# the rule does not say `stream: true`, which the proxy does not honour yet
+# (HUM-057). The rule of the fixture does not say it. The probe speaks to the
+# proxy over its unix socket with the same bytes curl sends through the bridge
+# inside the sandbox (see esc-3-egress.sh); run.sh hands it the socket and the
+# cap of this run in ESC_PROXY_SOCK and ESC_BODY_CAP.
 #
 # Unlike ESC-1 to ESC-3 this runs on the HOST, not in the sandbox: the rule
 # engine decides before anything leaves the machine, and a decision needs no
@@ -67,11 +72,13 @@ rules_case() {
 # body_cap_case — what the running proxy answers to a body over the cap.
 #
 # Two requests: one byte over the cap, and exactly the cap. The second is what
-# makes the first mean something — at the cap the request is held and becomes
-# the timeout block of this run (run.sh sets a hold timeout of two seconds), so
-# the 413 is provably the cap and not a blanket refusal. Without a socket or
-# without python3 the case is a skip (exit 127): "no daemon" must never read as
-# "the cap held".
+# makes the first mean something: at the cap the allow rule of the fixture lets
+# the request through, the proxy resolves `blocked.example` only then, and the
+# recording name server of the run answers NXDOMAIN, so the answer is
+# `502/upstream_dns`. That is the live rule at work, and it proves the `413`
+# one byte above is the cap and not a blanket refusal or a missing rule.
+# Without a socket or without python3 the case is a skip (exit 127): "no
+# daemon" must never read as "the cap held".
 body_cap_case() {
     if [ -z "$PROXY_SOCK" ] || [ ! -S "$PROXY_SOCK" ]; then
         echo "no proxy socket at '${PROXY_SOCK:-<unset>}'; nothing to ask"
@@ -84,26 +91,6 @@ body_cap_case() {
     python3 "$HERE/body_cap.py" "$PROXY_SOCK" "$BODY_CAP"
 }
 
-# rule_body_over_cap — both halves in one line of evidence.
-body_cap_probe() {
-    engine=$(rules_case rule_body_over_cap)
-    case "$engine" in
-        *"1 passed; 0 failed"*)
-            ;;
-        *)
-            echo "the rule engine does not allow this host, the probe would prove nothing: $engine"
-            return 1
-            ;;
-    esac
-    proxy=$(body_cap_case)
-    proxy_code=$?
-    if [ "$proxy_code" -ne 0 ]; then
-        echo "$proxy"
-        return "$proxy_code"
-    fi
-    echo "allow_rule=matched $proxy"
-}
-
 if ! command -v cargo > /dev/null 2>&1; then
     for case_name in \
         rule_table_first_match_wins \
@@ -112,8 +99,7 @@ if ! command -v cargo > /dev/null 2>&1; then
         rule_homograph_host \
         rule_ip_literal_host \
         rule_unknown_method_asks \
-        rule_websocket_upgrade \
-        rule_body_over_cap
+        rule_websocket_upgrade
     do
         skip "$case_name" "no cargo on this image; the rule engine cannot be asked"
     done
@@ -139,17 +125,17 @@ else
         '1 passed; 0 failed' rules_case rule_unknown_method_asks
     expect_output rule_websocket_upgrade \
         '1 passed; 0 failed' rules_case rule_websocket_upgrade
-    expect_output rule_body_over_cap \
-        '^allow_rule=matched over_cap=413/body_cap at_cap=(504|403)/' body_cap_probe
 fi
 
 # --- the same table over the command line (HUM-114) ---------------------------
 #
 # The rule set of this run becomes the fixture, and it becomes it HERE and not
 # in run.sh: until this line the daemon of the run answers with the rules ESC-1
-# to ESC-3 need, and `blocked.example` must be held there, not allowed. The
-# body-cap probe above is the last case that speaks to the live proxy, so
-# nothing after this reload depends on the rules before it.
+# to ESC-3 need, and `blocked.example` must be held there, not allowed. By the
+# time ESC-4 starts, run.sh has read the log of the recording name server
+# (dns_host_cases), so a name resolved after this reload is no longer evidence
+# of anything in ESC-3. The body-cap probe runs after the reload, because it
+# needs the allow rule of the fixture live in the proxy.
 install_cli_rules() {
     if [ -z "$CLI" ] || [ ! -x "$CLI" ]; then
         echo "no humanitl binary at '${CLI:-<unset>}'"
@@ -212,6 +198,49 @@ llm_cli() {
         "$(printf '%s' "$llm_cli_out" | tr '\n' ' ')"
 }
 
+# rule_body_over_cap — the rule and the cap in one line of evidence.
+#
+# `allow_rule=matched` is written only when the daemon of this run says so for
+# exactly the request body_cap.py sends (`POST http://blocked.example/upload`),
+# with the verdict line and exit code 0 of `humanitl rules test`. The engine
+# test of the same name runs first when cargo is there; without cargo the live
+# answer alone carries the case. A missing helper is exit 127 and a skip,
+# never a pass.
+body_cap_probe() {
+    if command -v cargo > /dev/null 2>&1; then
+        engine=$(rules_case rule_body_over_cap)
+        case "$engine" in
+            *"1 passed; 0 failed"*)
+                ;;
+            *)
+                echo "the rule engine does not allow this host, the probe would prove nothing: $engine"
+                return 1
+                ;;
+        esac
+    fi
+    live=$(rules_cli http://blocked.example/upload --method POST)
+    live_code=$?
+    if [ "$live_code" -ne 0 ]; then
+        echo "$live"
+        return "$live_code"
+    fi
+    case "$live" in
+        "exit=0 verdict=allow "*)
+            ;;
+        *)
+            echo "the live rule set does not allow this request, the probe would prove nothing: $live"
+            return 1
+            ;;
+    esac
+    proxy=$(body_cap_case)
+    proxy_code=$?
+    if [ "$proxy_code" -ne 0 ]; then
+        echo "$proxy"
+        return "$proxy_code"
+    fi
+    echo "allow_rule=matched $proxy"
+}
+
 cli_setup=$(install_cli_rules 2>&1)
 cli_setup_code=$?
 if [ "$cli_setup_code" -ne 0 ]; then
@@ -222,6 +251,7 @@ if [ "$cli_setup_code" -ne 0 ]; then
         n=$((n + 1))
     done
     skip llm_cli_unreachable "the command line of this run is not available: $cli_setup"
+    skip rule_body_over_cap "the rule set of this run could not be installed: $cli_setup"
 else
     # Rows 1 to 7: `*.github.com` matches exactly one label, and a name is
     # compared label by label after normalisation.
@@ -270,6 +300,11 @@ else
     # und nie durch die Sandbox.
     expect_output llm_cli_unreachable '^exit=1 code=LLM_001 ' \
         llm_cli http://127.0.0.1:1/
+
+    # The body cap against the live allow rule of the fixture (HUM-213). It is
+    # the last case that speaks to the proxy.
+    expect_output rule_body_over_cap \
+        '^allow_rule=matched over_cap=413/body_cap at_cap=502/upstream_dns$' body_cap_probe
 fi
 
 esc_end

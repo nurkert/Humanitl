@@ -239,6 +239,96 @@ async fn body_exactly_at_the_cap_is_held_and_forwarded() {
     assert_eq!(body_bytes(response.into_body()).await.len(), 1024);
 }
 
+/// Keine Regel hebt den Body-Cap auf (HUM-213, ADR-005).
+///
+/// Die Tests darüber erlauben über einen Decider, also erst nach dem Halten.
+/// Hier erlaubt eine Regel aus dem echten Ladeweg den Zielhost, und es gibt
+/// keinen Decider: Ein Body über dem Cap bekommt trotzdem `413`, und der Fluss
+/// ist vom System entschieden, nicht von der Regel. Derselbe Body genau auf dem
+/// Cap geht unter derselben Regel ungehalten hinaus; ohne diese Gegenprobe
+/// wäre das `413` auch mit einer Regel, die nie trifft, grün. Eine Pipeline,
+/// die Regeln vor dem Cap fragt und regelerlaubte Anfragen streamt, macht den
+/// ersten Teil rot. `stream: true` beachtet der Proxy noch nicht (HUM-057);
+/// die Regel hier setzt es nicht.
+#[tokio::test(flavor = "multi_thread")]
+async fn body_over_the_cap_is_refused_even_under_an_allow_rule() {
+    let upstream = FakeUpstream::plain().await;
+    let proxy = ProxyBuilder::new()
+        .body_cap(1024)
+        .rules_store(
+            "version: 1\n\
+             rules:\n\
+             \x20 - action: allow\n\
+             \x20   match:\n\
+             \x20     host: \"ip:127.0.0.1\"\n",
+            "version: 1\nrules: []\n",
+        )
+        // Trifft die Regel nicht, läuft die Anfrage schnell in die
+        // Zeitüberschreitung, statt den Test dreißig Sekunden aufzuhalten.
+        .ask(Duration::from_secs(2))
+        .start()
+        .await;
+    let mut events = proxy.events();
+    let url = format!("http://127.0.0.1:{}/echo", upstream.port());
+
+    let mut client = proxy.client().await;
+    let response = client.send(post(&url, vec![b'x'; 1025])).await;
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let flow = header(&response, "x-humanitl-flow").unwrap().to_owned();
+    let body = body_string(response.into_body()).await;
+    assert_eq!(body, canonical_block("body_cap", &flow, "127.0.0.1", None));
+    assert_eq!(
+        upstream.hits(),
+        0,
+        "nothing over the cap leaves the machine"
+    );
+
+    let decided = events.wait_for("decided").await;
+    let FlowEvent::Decided {
+        decision, source, ..
+    } = decided
+    else {
+        panic!("decided is decided");
+    };
+    assert!(
+        matches!(
+            decision,
+            Decision::Block {
+                reason: BlockReason::BodyCap,
+                ..
+            }
+        ),
+        "{decision:?}"
+    );
+    assert_eq!(
+        source,
+        humanitl_core::DecisionSource::System,
+        "the cap decides before the allow rule is asked"
+    );
+    events.wait_for("recorded").await;
+
+    let mut client = proxy.client().await;
+    let response = client.send(post(&url, vec![b'y'; 1024])).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "at the cap the allow rule lets the same request through"
+    );
+    assert_eq!(header(&response, "x-echo-len"), Some("1024"));
+    let _ = body_bytes(response.into_body()).await;
+    assert_eq!(upstream.hits(), 1);
+
+    let decided = events.wait_for("decided").await;
+    let FlowEvent::Decided { source, .. } = decided else {
+        panic!("decided is decided");
+    };
+    assert!(
+        matches!(source, humanitl_core::DecisionSource::Rule(_)),
+        "the rule decided, not a human: {source:?}"
+    );
+    assert_eq!(events.count("held"), 0, "a rule decision is never held");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn expect_100_continue_body_lands_in_the_hold_buffer_before_the_decision() {
     let upstream = FakeUpstream::plain().await;

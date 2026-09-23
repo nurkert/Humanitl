@@ -76,11 +76,21 @@ jeder Probe den gleichnamigen Test aus
 `daemon/crates/rules/tests/escape_table.rs` auf, der `tests/fixtures/esc4.yaml`
 auswertet; die Crate ist rein, also befragt kein Werkzeug die Regel-Datei
 unmittelbar. Ohne `cargo` auf der Maschine sind die Fälle ein `skip`, nie ein Grün. Der
-achte Fall, `rule_body_over_cap`, hat zwei Hälften: die Engine erlaubt den Host
-per Regel, und der laufende Proxy antwortet auf einen Body über
+achte Fall, `rule_body_over_cap`, misst den Deckel gegen eine live
+Allow-Regel (HUM-213). Er läuft deshalb erst hinter `rules reload`, wenn
+`esc4.yaml` im Daemon des Laufs gilt, und schreibt `allow_rule=matched` nur,
+wenn `humanitl rules test` für genau die Anfrage der Probe
+(`POST http://blocked.example/upload`) `allow` mit Exit-Code 0 meldet; ist
+`cargo` da, muss zusätzlich der gleichnamige Engine-Test grün sein. Dann
+antwortet der laufende Proxy auf einen Body ein Byte über
 `limits.hold_body_cap_bytes` trotzdem mit `413` und `reason: body_cap`, während
-ein Body genau auf dem Cap gehalten wird und in die Zeitüberschreibung läuft.
-Deshalb laufen die Host-Suiten seit HUM-022 vor `stop_escape_daemon`, und
+derselbe Body genau auf dem Cap unter der Regel hinausgeht, erst dann
+aufgelöst wird und am NXDOMAIN des aufzeichnenden Nameservers als `502` mit
+`reason: upstream_dns` endet. Keine Regel hebt den Deckel auf, solange sie
+nicht `stream: true` sagt; der Proxy beachtet dieses Feld noch nicht (HUM-057),
+und die Regel der Fixture setzt es nicht. Das DNS-Log von ESC-3 hat `run.sh`
+zu diesem Zeitpunkt schon gelesen (`dns_host_cases`), die Auflösung stört es
+also nicht. Die Host-Suiten laufen seit HUM-022 vor `stop_escape_daemon`, und
 `run.sh` reicht Socket und Cap dieses Laufs in `ESC_PROXY_SOCK` und
 `ESC_BODY_CAP` weiter (`limits.hold_body_cap_bytes` steht für den Lauf auf
 1024 Bytes, damit die Probe schnell bleibt).

@@ -4,7 +4,14 @@ Aufruf: ``python3 body_cap.py <proxy.sock> <cap>``. Geschickt werden zwei
 Anfragen an denselben Host: eine mit einem Byte mehr als ``cap``, eine mit
 genau ``cap`` Bytes. Ausgegeben wird eine Zeile, die ESC-4 prüft::
 
-    over_cap=413/body_cap at_cap=504/timeout
+    over_cap=413/body_cap at_cap=502/upstream_dns
+
+ESC-4 ruft das Skript erst, wenn der Regelsatz ``esc4.yaml`` im Daemon des
+Laufs gilt und ``humanitl rules test`` für genau diese Anfrage ``allow`` sagt
+(HUM-213). Die Anfrage auf dem Cap geht dann unter der Regel hinaus, der Proxy
+löst ``blocked.example`` erst danach auf, und der aufzeichnende Nameserver des
+Laufs antwortet NXDOMAIN: daher ``502/upstream_dns``. Die Anfrage ein Byte
+darüber bekommt trotz derselben Regel ``413/body_cap``.
 
 Die Bytes auf der Leitung sind dieselben, die ``curl -x http://127.0.0.1:3128``
 in der Sandbox schickt: Anfragezeile in absoluter Form, ``Host``-Kopfzeile,
