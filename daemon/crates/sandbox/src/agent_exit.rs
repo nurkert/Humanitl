@@ -15,8 +15,10 @@
 //! kann der Agent nicht fälschen: Der Deskriptor trägt `FD_CLOEXEC`, ein
 //! gelungenes `exec` schließt ihn, bevor der Agent seinen ersten Befehl
 //! ausführt, und das Kind wartet vor dem `exec` an einem Tor, das erst
-//! aufgeht, wenn der Eltern-Shim seine Kopie abgegeben hat. Über
-//! `/proc/<pid>/fd` findet der Agent deshalb keinen Schreiber mehr. Mit dieser Zeile ist der Agent nie gelaufen, und was im Terminal
+//! aufgeht, wenn der Eltern-Shim nicht mehr „dumpable" ist und seinen Filter
+//! trägt. Der Eltern-Shim behält seine Kopie seit HUM-138 für die
+//! verweigerten Versuche des Agenten; über `/proc/<pid>/fd` oder
+//! `pidfd_getfd(2)` erreicht der Agent sie trotzdem nicht. Mit dieser Zeile ist der Agent nie gelaufen, und was im Terminal
 //! steht, hat der Shim geschrieben — auch dann, wenn ein Kommandoname mit
 //! Zeilenumbruch die Zeile des Shims in zwei zerlegt.
 //!

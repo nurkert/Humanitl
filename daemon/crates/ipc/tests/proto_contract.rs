@@ -436,6 +436,8 @@ fn all_contract_messages_exist() {
         "SandboxEvent",
         "SandboxEvent.Status",
         "SandboxEvent.LogLine",
+        "SandboxEvent.Refusals",
+        "SandboxEvent.Refusal",
         "SessionSummaryRef",
         "SessionSummary",
         "FileChange",
@@ -493,6 +495,8 @@ fn all_contract_enums_exist() {
         "LlmProduct",
         "FileChangeKind",
         "ScanSkip",
+        "RefusalReporting",
+        "RefusalReason",
     ];
 
     let present: Vec<String> = enums().into_iter().map(|(name, _)| name).collect();
@@ -896,7 +900,64 @@ const SANDBOX_EVENT_FIELDS: &FieldTable = &[
     // HUM-043: der achte Arm, nicht der sechste — `output` und `exit` kamen
     // mit HUM-067 dazu.
     ("summary", 8, ".humanitl.v1.SessionSummary", Some("event")),
+    // HUM-138: der neunte Arm, der ganze Stand der verweigerten Versuche.
+    (
+        "refusals",
+        9,
+        ".humanitl.v1.SandboxEvent.Refusals",
+        Some("event"),
+    ),
 ];
+
+/// `SandboxEvent.Refusals` und `SandboxEvent.Refusal` vollständig (HUM-138).
+const REFUSALS_FIELDS: &FieldTable = &[
+    ("reporting", 1, ".humanitl.v1.RefusalReporting", None),
+    ("off_reason", 2, "string", None),
+    (
+        "entries",
+        3,
+        "repeated .humanitl.v1.SandboxEvent.Refusal",
+        None,
+    ),
+];
+
+/// Ein Eintrag je Paar aus Familie und Typ (HUM-138).
+const REFUSAL_FIELDS: &FieldTable = &[
+    ("syscall", 1, "string", None),
+    ("family", 2, "string", None),
+    ("socket_type", 3, "string", None),
+    ("reason", 4, ".humanitl.v1.RefusalReason", None),
+    ("count", 5, "uint64", None),
+    ("first_at", 6, ".google.protobuf.Timestamp", None),
+    ("last_at", 7, ".google.protobuf.Timestamp", None),
+];
+
+#[test]
+fn refused_attempts_keep_their_shape() {
+    assert_eq!(
+        check_fields(
+            "SandboxEvent.Refusals",
+            &message("SandboxEvent.Refusals"),
+            REFUSALS_FIELDS
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        check_fields(
+            "SandboxEvent.Refusal",
+            &message("SandboxEvent.Refusal"),
+            REFUSAL_FIELDS
+        ),
+        Ok(())
+    );
+    let status = message("SandboxEvent.Status");
+    assert!(
+        status.field.iter().any(|field| field.name() == "refusals"
+            && field.number() == 14
+            && field.type_name() == ".humanitl.v1.SandboxEvent.Refusals"),
+        "SandboxEvent.Status carries the tally in field 14"
+    );
+}
 
 /// `SessionSummary` vollstaendig (HUM-043).
 ///

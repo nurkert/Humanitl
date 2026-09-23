@@ -235,6 +235,15 @@ const ENV_SESSION: &str = "HUMANITL_SESSION";
 /// ab, der langsamer liest, als der Start meldet.
 const EVENT_BUFFER: usize = 32;
 
+/// Wie lange der Faden der verweigerten Versuche auf einen neuen Stand
+/// wartet, bevor er nachsieht, ob noch jemand zuhört (HUM-138).
+const REFUSALS_POLL: Duration = Duration::from_secs(1);
+
+/// Wie lange nach dem Ende der Sandbox noch auf die letzten Zeilen über
+/// verweigerte Versuche gewartet wird. Der Shim schreibt sie, nachdem der
+/// Agent gegangen ist; die Pipe schließt kurz danach mit der Sandbox.
+const REFUSALS_DRAIN: Duration = Duration::from_secs(2);
+
 /// Die Geometrie, mit der eine Sitzung startet, bevor ein Client seine eigene
 /// nennt.
 ///
@@ -1064,9 +1073,15 @@ impl Inner {
             .notices
             .clone()
             .map(|notices| tokio::spawn(notices.run(hub.clone())));
+        let refusals = self.forward_refusals(tx);
         let first = self.stream_output(output, hub, tx).await;
         if let Some(task) = notices {
             task.abort();
+        }
+        // Der letzte Stand der verweigerten Versuche vor dem Exit-Code, damit
+        // ein Client, der beim Exit aufhört zu lesen, ihn noch hat (HUM-138).
+        if let Some(task) = refusals {
+            let _ = tokio::time::timeout(REFUSALS_DRAIN + REFUSALS_POLL, task).await;
         }
         self.report_exit(&first, tx).await;
     }
@@ -1828,6 +1843,7 @@ impl Inner {
             env: env_of(&prepared),
             argv_preview: shell_line(&argv),
             agent_running,
+            refusals: self.running_refusals(),
         })
     }
 
@@ -1868,6 +1884,7 @@ impl Inner {
             env: Vec::new(),
             argv_preview: String::new(),
             agent_running,
+            refusals: self.running_refusals(),
         }
     }
 
@@ -1956,6 +1973,70 @@ impl Inner {
         lock(&self.running)
             .as_ref()
             .map(|running| Arc::clone(&running.handle))
+    }
+
+    /// Der Stand der verweigerten Versuche der laufenden Sandbox, für die
+    /// Momentaufnahme (HUM-138); `None`, wenn keine läuft.
+    fn running_refusals(&self) -> Option<v1::sandbox_event::Refusals> {
+        self.running_handle()
+            .map(|handle| crate::convert::refusals_to_proto(&handle.report().refusals))
+    }
+
+    /// Reicht jeden neuen Stand der verweigerten Versuche in den Strom dieses
+    /// Starts, bis der Bericht der Sandbox zu ist (HUM-138).
+    ///
+    /// **Nur dieser eine Strom bekommt die laufenden Stände**, der des Starts,
+    /// der die Sitzung begonnen hat. Ein zweites Fenster oder `humanitl run`
+    /// neben der Oberfläche sieht den Stand nur in der Momentaufnahme
+    /// (`Status.refusals`), wenn es sie holt; ihn über den Hub an jeden
+    /// Zuhörer zu verteilen, ist HUM-202.
+    ///
+    /// Jede Nachricht trägt den ganzen Stand; der Shim fasst höchstens alle
+    /// zwei Sekunden zusammen, also kommt auch hier keine Flut an. Meldet die
+    /// Sandbox nicht (`REFUSALS off`), geht einmal `SANDBOX_019` voraus, damit
+    /// eine leere Liste nicht als „nichts versucht" gelesen wird.
+    ///
+    /// Der Faden endet, wenn die Pipe des Berichts zu ist, wenn niemand mehr
+    /// zuhört, oder [`REFUSALS_DRAIN`] nach dem Ende der Sandbox, falls die
+    /// Pipe dann noch jemand hält.
+    fn forward_refusals(
+        &self,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) -> Option<tokio::task::JoinHandle<()>> {
+        let handle = self.running_handle()?;
+        let tx = tx.clone();
+        Some(tokio::task::spawn_blocking(move || {
+            let mut seen = 0;
+            let mut warned = false;
+            let mut ended: Option<Instant> = None;
+            loop {
+                let (refusals, closed) = handle.wait_refusals(seen, REFUSALS_POLL);
+                if refusals.generation > seen {
+                    seen = refusals.generation;
+                    if !warned && let Some(diagnostic) = refusals.unreported() {
+                        warned = true;
+                        let _ = tx.blocking_send(diagnostic_event(&diagnostic));
+                    }
+                    let event = v1::SandboxEvent {
+                        event: Some(v1::sandbox_event::Event::Refusals(
+                            crate::convert::refusals_to_proto(&refusals),
+                        )),
+                    };
+                    if tx.blocking_send(event).is_err() {
+                        return;
+                    }
+                }
+                if closed || tx.is_closed() {
+                    return;
+                }
+                if handle.try_wait().is_some() {
+                    let since = *ended.get_or_insert_with(Instant::now);
+                    if since.elapsed() >= REFUSALS_DRAIN {
+                        return;
+                    }
+                }
+            }
+        }))
     }
 
     /// Das Backend, das gestartet hat, und sein Handle; beides oder nichts.

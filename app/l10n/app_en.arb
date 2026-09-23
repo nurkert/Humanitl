@@ -2837,5 +2837,47 @@
   "diagDAEMON014Title": "Uninstall incomplete",
   "@diagDAEMON014Title": {"description": "Title of the diagnostic DAEMON_014 (docs/DIAGNOSTICS.md). Shown instead of the daemon's register title, which is German (DiagnosticL10n.resolve, HUM-052)."},
   "diagDAEMON014Why": "humanitl daemon uninstall did not get through: the service was not disabled, or a file that daemon install created stayed behind.",
-  "@diagDAEMON014Why": {"description": "Generic cause of DAEMON_014. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own; the daemon's measured sentence always wins there (docs/UX.md 4.4, HUM-052)."}
+  "@diagDAEMON014Why": {"description": "Generic cause of DAEMON_014. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own; the daemon's measured sentence always wins there (docs/UX.md 4.4, HUM-052)."},
+  "isolationRefusalsTitle": "Attempts past the one door",
+  "@isolationRefusalsTitle": {"description": "Heading of the section on the isolation tab that lists the sockets the filter refused the agent (HUM-138)."},
+  "isolationRefusalsIntro": "What the agent tried outside HTTP and the filter refused, counted per kind of socket. Refused means it never left the sandbox.",
+  "@isolationRefusalsIntro": {"description": "Sentence under the heading of the refusals section. Counted, not logged: one line per family and type."},
+  "isolationRefusalsNone": "No socket refused so far.",
+  "@isolationRefusalsNone": {"description": "The refusals section while the sandbox reports and nothing was refused."},
+  "isolationRefusalsPending": "Not reported yet.",
+  "@isolationRefusalsPending": {"description": "The refusals section while the sandbox runs and has not said whether it reports. Never the same words as 'nothing refused'."},
+  "isolationRefusalsOff": "Refused as before, but not counted in this sandbox: {reason}.",
+  "@isolationRefusalsOff": {
+    "description": "The refusals section when the sandbox refuses without counting (SANDBOX_019). The reason is the shim's own word, such as errno16.",
+    "placeholders": {"reason": {"type": "String"}}
+  },
+  "isolationRefusalsCount": "{count, plural, =1{1 attempt} other{{count} attempts}}",
+  "@isolationRefusalsCount": {
+    "description": "How often one kind of socket was refused.",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "isolationRefusalsSocket": "socket({family}, {type})",
+  "@isolationRefusalsSocket": {
+    "description": "The refused call as C spells it. Family and type are the names from <sys/socket.h> and stay untranslated.",
+    "placeholders": {"family": {"type": "String"}, "type": {"type": "String"}}
+  },
+  "isolationRefusalsReasonFamily": "family not allowed",
+  "@isolationRefusalsReasonFamily": {"description": "Why a socket was refused: its family is not in the allowed list."},
+  "isolationRefusalsReasonType": "type not allowed",
+  "@isolationRefusalsReasonType": {"description": "Why a socket was refused: its family is allowed, its type is not."},
+  "isolationRefusalsReasonOverflow": "further kinds, counted together",
+  "@isolationRefusalsReasonOverflow": {"description": "The pooled line for every kind of socket beyond the sixteen the sandbox keeps apart."},
+  "isolationRefusalsReasonUnknown": "refused",
+  "@isolationRefusalsReasonUnknown": {"description": "A reason this build of the app does not know."},
+  "isolationRefusalsLast": "last at {time}",
+  "@isolationRefusalsLast": {
+    "description": "When the last attempt of this kind happened, hh:mm:ss local time.",
+    "placeholders": {"time": {"type": "String"}}
+  },
+  "isolationRefusalsNetworkNote": "A connection to an address outside is not in this list: with no route it fails before any filter is asked. That is the first guarantee above, a state and not an event.",
+  "@isolationRefusalsNetworkNote": {"description": "Why a refused connect() is not counted: ENETUNREACH is no refused syscall. The honest half of HUM-138."},
+  "diagSANDBOX019Title": "Refused connection attempts are not reported",
+  "@diagSANDBOX019Title": {"description": "Title of the diagnostic SANDBOX_019 (docs/DIAGNOSTICS.md). Shown instead of the daemon's register title, which is German (DiagnosticL10n.resolve, HUM-052)."},
+  "diagSANDBOX019Why": "The kernel gave the agent''s filter no listener; sockets are still refused with EPERM, but nothing is counted or reported.",
+  "@diagSANDBOX019Why": {"description": "Generic cause of SANDBOX_019. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own; the daemon's measured sentence always wins there (docs/UX.md 4.4, HUM-052)."}
 }

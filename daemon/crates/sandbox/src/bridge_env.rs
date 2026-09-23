@@ -90,8 +90,18 @@
 //! sie. Schreiben kann sie nur das Kind des Shims nach einem gescheiterten
 //! `exec`: Ein gelungenes schließt den Deskriptor (`FD_CLOEXEC`), bevor der
 //! Agent seinen ersten Befehl ausführt, und vor dem `exec` wartet das Kind an
-//! einem Tor, bis der Eltern-Shim seine Kopie geschlossen hat. Was der Agent in sein Terminal
-//! schreibt, kann deshalb nie für diese Zeile gehalten werden.
+//! einem Tor, bis der Eltern-Shim nicht mehr „dumpable" ist und seinen Filter
+//! trägt. Was der Agent in sein Terminal schreibt, kann deshalb nie für diese
+//! Zeile gehalten werden.
+//!
+//! Seit HUM-138 hält der Elternprozess des Shims seine Schreibseite, bis der
+//! Agent gegangen ist, und schreibt darauf, was der Filter dem Agenten
+//! verweigert hat: `REFUSALS on|off <grund>` und `REFUSED socket ...`
+//! ([`crate::refusals`]). Der Agent erreicht diese Schreibseite nicht: Der
+//! Elternprozess ist nicht „dumpable", also bleiben ihm `/proc/<pid>/fd` und
+//! `pidfd_getfd(2)` verschlossen. Das ersetzt das frühere Argument von
+//! HUM-137, der Eltern-Shim habe seine Kopie vor dem Start des Agenten
+//! geschlossen.
 
 use std::os::fd::RawFd;
 

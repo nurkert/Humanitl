@@ -570,4 +570,62 @@ void main() {
       ]);
     });
   });
+
+  // HUM-138: der Stand der verweigerten Versuche, aus der Momentaufnahme und
+  // als eigenes Ereignis.
+  test('refused sockets reach the domain with count, reason and time', () {
+    final pb.SandboxEvent_Refusals wire = pb.SandboxEvent_Refusals(
+      reporting: pb.RefusalReporting.REFUSAL_REPORTING_ON,
+      entries: <pb.SandboxEvent_Refusal>[
+        pb.SandboxEvent_Refusal(
+          syscall: 'socket',
+          family: 'AF_UNIX',
+          socketType: 'SOCK_STREAM',
+          reason: pb.RefusalReason.REFUSAL_REASON_FAMILY,
+          count: Int64(3),
+          lastAt: Timestamp(seconds: Int64(1_790_000_000)),
+        ),
+        pb.SandboxEvent_Refusal(
+          family: 'AF_INET',
+          socketType: 'SOCK_DGRAM',
+          reason: pb.RefusalReason.REFUSAL_REASON_TYPE,
+          count: Int64(2),
+        ),
+      ],
+    );
+    final SandboxStatus status = pb.SandboxEvent_Status(
+      state: pb.SandboxState.SANDBOX_STATE_RUNNING,
+      refusals: wire,
+    ).toDomain();
+    final SandboxRefusals? refusals = status.refusals;
+    expect(refusals, isNotNull);
+    expect(refusals!.reporting, SandboxRefusalReporting.on);
+    expect(refusals.total, 5);
+    expect(refusals.entries.first.family, 'AF_UNIX');
+    expect(refusals.entries.first.reason, SandboxRefusalReason.family);
+    expect(
+      refusals.entries.first.lastAt!.toUtc(),
+      DateTime.fromMillisecondsSinceEpoch(1_790_000_000_000, isUtc: true),
+    );
+    expect(refusals.entries.last.reason, SandboxRefusalReason.type);
+    expect(refusals.entries.last.lastAt, isNull);
+
+    // Without the field the snapshot says nothing, not "nothing refused".
+    expect(
+      pb.SandboxEvent_Status(state: pb.SandboxState.SANDBOX_STATE_RUNNING)
+          .toDomain()
+          .refusals,
+      isNull,
+    );
+    expect(
+      pb.SandboxEvent_Refusals(
+        reporting: pb.RefusalReporting.REFUSAL_REPORTING_OFF,
+        offReason: 'errno16',
+      ).toDomain(),
+      const SandboxRefusals(
+        reporting: SandboxRefusalReporting.off,
+        offReason: 'errno16',
+      ),
+    );
+  });
 }

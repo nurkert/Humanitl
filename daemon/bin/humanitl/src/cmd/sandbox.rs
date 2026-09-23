@@ -46,8 +46,9 @@ use humanitl_core::ids::SessionId;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_sandbox::{
     AdapterRegistry, AgentContext, BwrapBackend, CheckResult, INTERRUPT_GRACE, LaunchInputs,
-    MIN_BWRAP_VERSION, MountPolicy, SANDBOX_SHELL, SandboxBackend, SandboxFile, SandboxHandle,
-    SandboxProfile, SandboxView, SessionContext, StdioMode, shell_line,
+    MIN_BWRAP_VERSION, MountPolicy, Refusal, RefusalReason, RefusalReporting, Refusals,
+    SANDBOX_SHELL, SandboxBackend, SandboxFile, SandboxHandle, SandboxProfile, SandboxView,
+    SessionContext, StdioMode, shell_line,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -234,7 +235,86 @@ async fn start(
         .detail(&format!("sandbox {} pid {}", handle.id, handle.pid));
 
     enforce_isolation(ctx, &setup.backend, &handle)?;
-    wait_or_interrupt(handle, interrupts).await
+    let ended = wait_or_interrupt(Arc::clone(&handle), interrupts).await;
+    report_refusals(ctx, &handle).await;
+    ended
+}
+
+/// Wie lange nach dem Ende auf die letzten Zeilen über verweigerte Versuche
+/// gewartet wird; der Shim schreibt sie, nachdem der Agent gegangen ist.
+const REFUSALS_DRAIN: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Sagt nach dem Lauf, was die Sandbox dem Befehl an Sockets verweigert hat
+/// (HUM-138).
+///
+/// Die Zahlen stammen aus dem Bericht des Shims, dieselben, die der Daemon
+/// als `SandboxEvent.refusals` sendet; hier wird nur gezeigt. Meldet die
+/// Sandbox nicht, steht dort `SANDBOX_019` statt einer leeren Liste. Eine
+/// Zeile je Paar aus Familie und Typ, damit ein Mensch und `tests/escape/`
+/// dieselbe Zeile lesen.
+async fn report_refusals(ctx: &Context, handle: &Arc<SandboxHandle>) {
+    let waiting = Arc::clone(handle);
+    let Ok((refusals, _)) =
+        tokio::task::spawn_blocking(move || waiting.wait_refusals(u64::MAX, REFUSALS_DRAIN)).await
+    else {
+        return;
+    };
+    if let Some(diagnostic) = refusals.unreported() {
+        ctx.render.diagnostic(&diagnostic);
+        return;
+    }
+    match refusal_notes(&refusals) {
+        RefusalNotes::Quiet(line) => ctx.render.detail(&line),
+        RefusalNotes::Loud(lines) => {
+            for line in &lines {
+                ctx.render.note(line);
+            }
+        }
+    }
+}
+
+/// Was nach dem Lauf über die verweigerten Versuche zu sagen ist.
+#[derive(Debug, PartialEq, Eq)]
+enum RefusalNotes {
+    /// Eine Zeile für `-v`: nichts verweigert, oder nichts gemeldet.
+    Quiet(String),
+    /// Zeilen für jeden: Es wurde verweigert.
+    Loud(Vec<String>),
+}
+
+/// Die Zeilen zu `refusals`, ohne den Fall `off`, den `SANDBOX_019` sagt.
+///
+/// „Nichts verweigert" darf nur stehen, wenn die Sandbox gesagt hat, dass sie
+/// zählt. Hat sie gar nichts gesagt (`Unknown`), ist das eine eigene Zeile:
+/// Ein Bericht, der ausblieb, ist kein Bericht über null Versuche.
+fn refusal_notes(refusals: &Refusals) -> RefusalNotes {
+    if refusals.entries.is_empty() {
+        return RefusalNotes::Quiet(match refusals.reporting {
+            RefusalReporting::On => "the sandbox refused no socket outside the proxy".to_owned(),
+            RefusalReporting::Unknown | RefusalReporting::Off(_) => {
+                "the sandbox did not say whether it counts refused sockets".to_owned()
+            }
+        });
+    }
+    let mut lines = vec![format!(
+        "the sandbox refused {} attempt(s) to open a socket outside the proxy:",
+        refusals.total()
+    )];
+    lines.extend(refusals.entries.iter().map(refusal_line));
+    RefusalNotes::Loud(lines)
+}
+
+/// Eine Zeile je Paar: `  3x socket(AF_UNIX, SOCK_STREAM)  family not allowed`.
+fn refusal_line(entry: &Refusal) -> String {
+    let why = match entry.reason {
+        RefusalReason::Family => "family not allowed",
+        RefusalReason::Type => "type not allowed",
+        RefusalReason::Overflow => "further pairs, counted together",
+    };
+    format!(
+        "  {}x {}({}, {})  {why}",
+        entry.count, entry.syscall, entry.family, entry.socket_type
+    )
 }
 
 /// `sandbox check`: eine kurzlebige Sandbox und die drei Garantien.
@@ -977,9 +1057,38 @@ mod tests {
     use humanitl_config::Config;
 
     use super::{
-        CHECK_COMMAND, TESTS_DIR_DST, agent_command, exit_code_of, placeholder, rebind_source,
-        with_sandbox_view,
+        CHECK_COMMAND, RefusalNotes, TESTS_DIR_DST, agent_command, exit_code_of, placeholder,
+        rebind_source, refusal_notes, with_sandbox_view,
     };
+
+    /// „Nichts verweigert" steht nur, wenn die Sandbox gesagt hat, dass sie
+    /// zählt; ein Bericht, der ausblieb, ist eine eigene Zeile (HUM-138).
+    #[test]
+    fn nothing_refused_is_said_only_when_the_sandbox_counts() {
+        use humanitl_sandbox::{RefusalLine, RefusalReporting, Refusals, parse_refusal_line};
+
+        let mut refusals = Refusals::default();
+        assert_eq!(
+            refusal_notes(&refusals),
+            RefusalNotes::Quiet(
+                "the sandbox did not say whether it counts refused sockets".to_owned()
+            )
+        );
+        refusals.apply(RefusalLine::Reporting(RefusalReporting::On));
+        assert_eq!(
+            refusal_notes(&refusals),
+            RefusalNotes::Quiet("the sandbox refused no socket outside the proxy".to_owned())
+        );
+        let line = parse_refusal_line("REFUSED socket AF_UNIX SOCK_STREAM family 3 1 2").unwrap();
+        refusals.apply(line);
+        assert_eq!(
+            refusal_notes(&refusals),
+            RefusalNotes::Loud(vec![
+                "the sandbox refused 3 attempt(s) to open a socket outside the proxy:".to_owned(),
+                "  3x socket(AF_UNIX, SOCK_STREAM)  family not allowed".to_owned(),
+            ])
+        );
+    }
 
     /// Der Kontext des Adapters trägt, was das Profil über die Sandbox sagt
     /// (HUM-139).

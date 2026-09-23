@@ -1206,6 +1206,9 @@ class FakeDaemonClient implements DaemonClient {
       agentRunning: true,
       startedAt: _clock(),
       sandboxId: defaultSandbox,
+      // Like the fake daemon (HUM-138): the played agent tries nothing past
+      // the proxy, and the sandbox says it counts.
+      refusals: const SandboxRefusals(reporting: SandboxRefusalReporting.on),
     );
     yield SandboxUpdate.log(
       SandboxLogLine(at: _clock(), text: 'sandbox started, pid 4711 (fake)'),
