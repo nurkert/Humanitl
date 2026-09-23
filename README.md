@@ -88,7 +88,7 @@ guarantees do not cover; the attacker model is in
 | Pseudonymisation | Replace personal data before sending, stable per session, translated back in text responses; mapping stays on the host, encrypted | planned, M4 |
 | Audit log | Append-only while `audit.retention_days = 0`, otherwise the oldest records are pruned and the cut is recorded as `audit.pruned`; hash-chained, exportable; honest about what it proves | chain built, screen and export planned, M4 |
 | Settings | Three decisions to get started; everything else configurable with progressive disclosure, one schema feeding the app, the CLI and the docs | planned, M4 |
-| Packages | `.deb` and AppImage, one click to enable the background service | planned, M4 |
+| Packages | `.deb` and AppImage, one click to enable the background service | pre-release packages published, one-click service in progress, M4 |
 
 Later: Docker sandbox backend, a browser for the agent with live view and
 takeover, upstream proxy and Tor, macOS, micro-VM isolation, plugins. The full
@@ -134,16 +134,26 @@ ADRs under [`docs/adr/`](docs/adr/).
 
 ## Installation
 
-There is no release yet. When the first snapshot ships it will be available
-from the [releases page](https://github.com/nurkert/Humanitl/releases) as a
-`.deb` for Debian and Ubuntu and as an AppImage, built by GitHub Actions from
-a signed tag.
+Pre-releases are on the [releases page](https://github.com/nurkert/Humanitl/releases)
+as a `.deb` for Debian and Ubuntu and as an AppImage, built by GitHub Actions
+from a tag. These pre-release tags are not signed yet; signed tags and signed
+release artifacts come with 0.1.0 (M5). The `.deb` is also published to the
+APT repository at `apt.nurkert.de`, whose index is signed with the
+repository's own key, so `apt upgrade` brings later releases. The script below
+runs as root: read it before you pipe it to a shell.
 
 ```sh
-sudo apt install ./humanitl_<version>_amd64.deb
+curl -fsSL https://apt.nurkert.de/install/humanitl | sudo sh
 humanitl            # starts the desktop application
 humanitl doctor     # checks bubblewrap, user namespaces, seccomp, systemd
 ```
+
+The script adds the repository's signing key to
+`/usr/share/keyrings/nurkert-archive-keyring.gpg`, the source to
+`/etc/apt/sources.list.d/nurkert.list`, and installs the package. Without the
+repository, install a downloaded package with `sudo apt install ./humanitl_<version>_amd64.deb`.
+[`docs/INSTALL.md`](docs/INSTALL.md) covers the AppImage, the background
+service and removal.
 
 Runtime requirements: Linux with unprivileged user namespaces, `bubblewrap`
 0.8 or newer, a systemd user session, and a language model reachable on your
@@ -164,8 +174,7 @@ Toolchain: Rust 1.88 or newer, Flutter 3.47.2. See
 [`CONTRIBUTING.md`](CONTRIBUTING.md) for the details, including how the local
 gate behaves when `rustfmt` or `clippy` are absent.
 
-The everyday start, working from a source build today and from a package once
-M4 builds one and M5 signs and publishes it. `humanitl run` talks to a running
+The everyday start, from an installed package or a source build. `humanitl run` talks to a running
 `humanitld`; without one it stops with `DAEMON_001` and says how to start it:
 
 ```sh
@@ -204,8 +213,8 @@ To report a vulnerability, do not open a public issue. Use the contact given in
 
 ## Project status and roadmap
 
-Humanitl is in early development. Nothing is released and nothing should be
-relied upon yet. The work is organised in six sprints towards a first usable
+Humanitl is in early development. Pre-releases exist to try it out; nothing
+should be relied upon yet. The work is organised in six sprints towards a first usable
 version; four of them have landed:
 
 | Milestone | Delivers | Status |

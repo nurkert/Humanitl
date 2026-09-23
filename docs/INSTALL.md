@@ -20,6 +20,20 @@ sich, mit einem Befehl oder einem Klick in der Einrichtung.
 
 ## Paket (.deb)
 
+Aus dem APT-Repository `apt.nurkert.de`, das jedes Release übernimmt; spätere Versionen kommen dann
+mit `apt upgrade`:
+
+```sh
+curl -fsSL https://apt.nurkert.de/install/humanitl | sudo sh
+humanitl daemon install
+humanitl daemon status
+```
+
+Das Skript legt den Signaturschlüssel des Repositorys nach
+`/usr/share/keyrings/nurkert-archive-keyring.gpg`, die Quelle nach
+`/etc/apt/sources.list.d/nurkert.list` und installiert das Paket. Wer einer Pipe in eine
+Root-Shell nicht traut, liest es vorher oder nimmt das Paket von der Release-Seite:
+
 ```sh
 sudo apt install ./humanitl_<version>_amd64.deb
 humanitl daemon install
