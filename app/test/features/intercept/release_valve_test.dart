@@ -33,6 +33,7 @@ Future<void> hold(WidgetTester tester, Finder finder, Duration duration) async {
 ReleaseValve valve({
   required VoidCallback onAllow,
   required VoidCallback onAllowRemembered,
+  VoidCallback? onActivate,
   VoidCallback? onToggleOptions,
   VoidCallback? onShortPress,
   bool holdRequired = false,
@@ -46,6 +47,7 @@ ReleaseValve valve({
   semanticsValue: '4:59 left',
   optionsLabel: 'Duration and scope of the rule',
   onAllow: onAllow,
+  onActivate: onActivate ?? () {},
   onAllowRemembered: onAllowRemembered,
   onToggleOptions: onToggleOptions ?? () {},
   onShortPress: onShortPress,
