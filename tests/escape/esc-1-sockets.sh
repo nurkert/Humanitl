@@ -218,6 +218,9 @@ else:
 #   userfaultfd        flags zero: a bare kernel with
 #                      vm.unprivileged_userfaultfd = 1 hands out a descriptor,
 #                      which is exactly the leak the filter closes.
+#   pidfd_getfd        descriptor 0 of this very process, through a pidfd from
+#                      pidfd_open (allowed): a process may always reach
+#                      itself, so a bare kernel hands out a copy (HUM-203).
 esc_syscall() {
     python3 -c '
 import ctypes, errno, os, sys
@@ -235,7 +238,8 @@ TABLE = {
     "aarch64": GENERIC,
     "riscv64": GENERIC,
 }
-COMMON = {"io_uring_setup": 425, "io_uring_enter": 426, "io_uring_register": 427}
+COMMON = {"io_uring_setup": 425, "io_uring_enter": 426, "io_uring_register": 427,
+          "pidfd_open": 434, "pidfd_getfd": 438}
 name = sys.argv[1]
 machine = os.uname().machine
 numbers = dict(COMMON)
@@ -285,6 +289,21 @@ CALLS = {
     "perf_event_open": (ctypes.byref(perf_attr), 0, -1, -1, 0),
     "userfaultfd": (0,),
 }
+libc = ctypes.CDLL(None, use_errno=True)
+libc.syscall.restype = ctypes.c_long
+if name == "pidfd_getfd":
+    # A descriptor of this process for its own stdin: ptrace_may_access
+    # always lets a process at itself, so only the filter can refuse.
+    # pidfd_open is allowed on purpose (asyncio, Go and libuv probe it). If
+    # it fails, pidfd_getfd was never called: that is a `pidfd_open:` line,
+    # which probe_pidfd_getfd reads as a skip (ENOSYS) or as no verdict,
+    # never as the verdict on pidfd_getfd.
+    pidfd = libc.syscall(ctypes.c_long(COMMON["pidfd_open"]), ctypes.c_long(os.getpid()), ctypes.c_long(0))
+    if pidfd < 0:
+        code = ctypes.get_errno()
+        print("pidfd_open: %s" % errno.errorcode.get(code, "errno=%d" % code))
+        sys.exit(3)
+    CALLS["pidfd_getfd"] = (pidfd, 0, 0)
 args = CALLS.get(name)
 if args is None:
     print("%s: esc_syscall has no argument recipe for it" % name)
@@ -299,8 +318,6 @@ def carg(value):
     if isinstance(value, int):
         return ctypes.c_long(value)
     return value
-libc = ctypes.CDLL(None, use_errno=True)
-libc.syscall.restype = ctypes.c_long
 value = libc.syscall(ctypes.c_long(nr), *[carg(arg) for arg in args])
 if value < 0:
     code = ctypes.get_errno()
@@ -310,6 +327,67 @@ print("%s returned %d" % (name, value))
 sys.stdout.flush()
 os._exit(0)
 ' "$1"
+}
+
+# probe_pidfd_getfd CASE HELPER... - the verdict of probe_syscall, but only on
+# a `pidfd_getfd: <ERRNO>` line. The helpers need pidfd_open first; when it
+# fails they print `pidfd_open: <ERRNO>` instead, and that is a skip for
+# ENOSYS (the kernel has no pidfds) and a failure for anything else, because
+# pidfd_getfd was never called and nothing about it was measured. probe_syscall
+# alone would accept `pidfd_open: EPERM` as a pass.
+probe_pidfd_getfd() {
+    esc_pg_name="$1"
+    shift
+    esc_capture "$@"
+    # Fehlt das Hilfsprogramm, ist das kein Urteil über den Filter (CONVENTIONS 4.11).
+    if [ "$ESC_CODE" -eq 127 ]; then
+        esc_record "$esc_pg_name" skip "no such helper on this image: $ESC_OUT"
+        return
+    fi
+    esc_pg_open=$(printf '%s\n' "$ESC_OUT" | sed -n 's/^pidfd_open: \([A-Za-z0-9_=]*\)$/\1/p' | tail -n 1)
+    case "$esc_pg_open" in
+    '') ;;
+    ENOSYS)
+        esc_record "$esc_pg_name" skip "kernel lacks pidfd_open (ENOSYS), pidfd_getfd was never called: $ESC_OUT"
+        return ;;
+    *)
+        esc_record "$esc_pg_name" fail "no verdict: pidfd_open was refused with $esc_pg_open, pidfd_getfd was never called: $ESC_OUT"
+        return ;;
+    esac
+    esc_pg_errno=$(printf '%s\n' "$ESC_OUT" | sed -n 's/^pidfd_getfd: \([A-Za-z0-9_=]*\)$/\1/p' | tail -n 1)
+    case "$esc_pg_errno" in
+    EPERM)
+        esc_record "$esc_pg_name" pass "denied with EPERM: $ESC_OUT" ;;
+    ENOSYS)
+        esc_record "$esc_pg_name" skip "kernel lacks pidfd_getfd (ENOSYS), the filter was never asked: $ESC_OUT" ;;
+    '')
+        if [ "$ESC_CODE" -eq 0 ]; then
+            esc_record "$esc_pg_name" fail "LEAK: the attempt succeeded: $ESC_OUT"
+        else
+            esc_record "$esc_pg_name" fail "no verdict, the helper exited $ESC_CODE without a pidfd_getfd: ERRNO line: $ESC_OUT"
+        fi ;;
+    *)
+        esc_record "$esc_pg_name" fail "refused with $esc_pg_errno, not EPERM; the filter is not what answered: $ESC_OUT" ;;
+    esac
+}
+
+# esc_pidfd_open - pidfd_open(2) on this process. It stays allowed (asyncio,
+# Go and libuv probe it), and the pidfd_getfd probes depend on it. Exit 0 with
+# `pidfd_open ok`, exit 127 on a kernel without it (ENOSYS: skip), exit 1 with
+# the errno otherwise.
+esc_pidfd_open() {
+    python3 -c '
+import ctypes, errno, os, sys
+libc = ctypes.CDLL(None, use_errno=True)
+libc.syscall.restype = ctypes.c_long
+fd = libc.syscall(ctypes.c_long(434), ctypes.c_long(os.getpid()), ctypes.c_long(0))
+if fd >= 0:
+    print("pidfd_open ok: descriptor %d" % fd)
+    sys.exit(0)
+code = ctypes.get_errno()
+print("pidfd_open: %s" % errno.errorcode.get(code, "errno=%d" % code))
+sys.exit(127 if code == errno.ENOSYS else 1)
+'
 }
 
 # denied_syscall CASE NAME — one probe_syscall, or a skip on a machine whose
@@ -421,6 +499,7 @@ if [ "${ESC_PTRACE_SCOPE:-0}" -ge 2 ] 2>/dev/null; then
 else
     denied_syscall ptrace_traceme ptrace
 fi
+expect_ok      pidfd_open_allowed   esc_pidfd_open
 denied_syscall process_vm_readv     process_vm_readv
 denied_syscall process_vm_writev    process_vm_writev
 denied_syscall keyctl_get_keyring_id keyctl
@@ -428,6 +507,14 @@ denied_syscall add_key              add_key
 denied_syscall request_key          request_key
 denied_syscall io_uring_enter       io_uring_enter
 denied_syscall io_uring_register    io_uring_register
+# pidfd_getfd needs a pidfd first. probe_pidfd_getfd (below) keeps the two
+# apart, so that a refused pidfd_open can never pass for a refused
+# pidfd_getfd; pidfd_open_allowed says the first step works at all.
+if [ "$ESC_SYSCALL_TABLE" = 1 ]; then
+    probe_pidfd_getfd pidfd_getfd_self esc_syscall pidfd_getfd
+else
+    skip pidfd_getfd_self "esc_syscall has no syscall numbers for $ESC_MACHINE; add them to its table"
+fi
 
 # The hardening list of the specification (backlog/sprint-1.md, the table of
 # HUM-012), the same names the Docker default profile refuses: a new kernel,
@@ -464,23 +551,125 @@ expect_output no_new_privs         '^NoNewPrivs:[[:space:]]+1$' sh -c 'grep ^NoN
 # --- the filter is on -----------------------------------------------------------
 #
 # Mode 2 is SECCOMP_MODE_FILTER. The second case walks every process, because a
-# filter that only the first one carries is not a boundary. PID 1 is the one
-# exception: with --unshare-pid and no --as-pid-1 that is bwrap itself, which
-# stays behind to reap children and never installs a filter of its own. The
-# carve-out is keyed on the PID, not on /proc/PID/comm: comm is writable by the
-# process itself (prctl PR_SET_NAME), so a name-based exception would let
-# anything that escaped the filter hide by calling itself bwrap. The name is
-# still printed, as evidence only. Once HUM-011/012 make the shim PID 1 the
-# carve-out goes, and the issue's seccomp_parent_mode_2 on /proc/1/status
-# comes back in its place.
+# filter that only the first one carries is not a boundary. PID 1 included:
+# since HUM-203 the launcher starts bwrap with --as-pid-1, so PID 1 is the
+# shim's parent with the bridge filter, not bwrap's init, which carried none.
+# seccomp_parent_mode_2 names PID 1 on its own, so that a regression reads as
+# what it is. The name is printed as evidence only.
 ESC_SECCOMP_ALL='for p in /proc/[0-9]*; do
-  [ "$p" = /proc/1 ] && continue
   c=$(cat "$p/comm" 2>/dev/null) || continue
   s=$(sed -n "s/^Seccomp:[[:space:]]*//p" "$p/status" 2>/dev/null) || continue
   [ -n "$s" ] && echo "${p#/proc/}:$c=$s"
 done'
 expect_output seccomp_mode_2 '^Seccomp:[[:space:]]+2$' sh -c 'grep ^Seccomp /proc/self/status'
+expect_output seccomp_parent_mode_2 '^Seccomp:[[:space:]]+2$' sh -c 'grep ^Seccomp /proc/1/status'
 expect_only   seccomp_every_process '=2$' sh -c "$ESC_SECCOMP_ALL"
+
+# --- PID 1 and the shim's parent are closed to the agent (HUM-203) -------------
+#
+# Finding M1 of the security pass on 2026-09-23: bwrap's init was PID 1,
+# carried no filter, was dumpable and ran under the agent's uid, so at
+# kernel.yama.ptrace_scope=0 the agent opened /proc/1/mem for writing and ran
+# code without a filter. Now the shim is PID 1 (--as-pid-1), and its parent
+# half is not dumpable before the agent starts.
+#
+# esc_shim_parent prints the pid of the shim process above the agent: the
+# topmost ancestor of this shell named humanitl-shim. With --as-pid-1 that is
+# 1; without it, it would be the process below bwrap's init, and the probes on
+# it keep measuring the parent even if PID 1 changes again.
+esc_shim_parent() {
+    esc_p=$$
+    esc_found=
+    while [ "${esc_p:-0}" -gt 0 ] 2>/dev/null; do
+        if [ "$(cat "/proc/$esc_p/comm" 2>/dev/null)" = humanitl-shim ]; then
+            esc_found=$esc_p
+        fi
+        [ "$esc_p" = 1 ] && break
+        esc_p=$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/$esc_p/status" 2>/dev/null)
+    done
+    [ -n "$esc_found" ] && echo "$esc_found"
+}
+
+# esc_foreign_pid PID mem|getfd - one attempt on another process of the
+# sandbox. `mem` opens /proc/PID/mem with O_RDWR and prints `mem: <ERRNO>`;
+# `getfd` asks pidfd_getfd for its descriptor 0 and prints
+# `pidfd_getfd: <ERRNO>`. Exit 0 with a LEAK line when the attempt succeeds.
+esc_foreign_pid() {
+    python3 -c '
+import ctypes, errno, os, sys
+pid, what = int(sys.argv[1]), sys.argv[2]
+def name(code):
+    return errno.errorcode.get(code, "errno=%d" % code)
+if what == "mem":
+    try:
+        fd = os.open("/proc/%d/mem" % pid, os.O_RDWR)
+    except OSError as exc:
+        print("mem: %s" % name(exc.errno))
+        sys.exit(1)
+    print("LEAK: /proc/%d/mem open for writing as descriptor %d" % (pid, fd))
+    sys.exit(0)
+libc = ctypes.CDLL(None, use_errno=True)
+libc.syscall.restype = ctypes.c_long
+pidfd = libc.syscall(ctypes.c_long(434), ctypes.c_long(pid), ctypes.c_long(0))
+if pidfd < 0:
+    print("pidfd_open: %s" % name(ctypes.get_errno()))
+    sys.exit(3)
+fd = libc.syscall(ctypes.c_long(438), ctypes.c_long(pidfd), ctypes.c_long(0), ctypes.c_long(0))
+if fd < 0:
+    print("pidfd_getfd: %s" % name(ctypes.get_errno()))
+    sys.exit(1)
+print("LEAK: descriptor 0 of %d copied as %d" % (pid, fd))
+' "$1" "$2"
+}
+
+# esc_owned_by_agent FILE - `agent uid=N` when FILE belongs to this uid,
+# `other uid=N agent=M` when not. For a non-dumpable process the kernel hands
+# every file below /proc/PID to root (task_dump_owner), which inside the
+# sandbox reads as the overflow uid 65534; the directory itself keeps the
+# process's uid, which is why the probe reads mem and not the directory.
+# Only two real numbers make a verdict: a missing stat or id is exit 127 (a
+# skip), a failed or empty answer exit 2 (a failure), never `other`.
+esc_owned_by_agent() {
+    command -v stat > /dev/null 2>&1 || { echo "no stat on this image"; return 127; }
+    command -v id > /dev/null 2>&1 || { echo "no id on this image"; return 127; }
+    esc_ow_file=$(stat -c %u "$1" 2>&1) || { echo "stat $1 failed: $esc_ow_file"; return 2; }
+    esc_ow_self=$(id -u 2>&1) || { echo "id -u failed: $esc_ow_self"; return 2; }
+    case "$esc_ow_file" in '' | *[!0-9]*) echo "stat $1 gave no uid: '$esc_ow_file'"; return 2 ;; esac
+    case "$esc_ow_self" in '' | *[!0-9]*) echo "id -u gave no uid: '$esc_ow_self'"; return 2 ;; esac
+    if [ "$esc_ow_file" = "$esc_ow_self" ]; then
+        echo "agent uid=$esc_ow_file"
+    else
+        echo "other uid=$esc_ow_file agent=$esc_ow_self"
+    fi
+}
+
+expect_output pid1_is_shim '^humanitl-shim$' cat /proc/1/comm
+ESC_SHIM_PARENT=$(esc_shim_parent)
+if [ -z "$ESC_SHIM_PARENT" ]; then
+    esc_record shim_parent_found fail "no ancestor of this shell is called humanitl-shim"
+    ESC_SHIM_PARENT=1
+fi
+ESC_OWNER_OTHER='^other uid=[0-9]+ agent=[0-9]+$'
+expect_output pid1_not_dumpable        "$ESC_OWNER_OTHER" esc_owned_by_agent /proc/1/mem
+expect_output shim_parent_not_dumpable "$ESC_OWNER_OTHER" esc_owned_by_agent "/proc/$ESC_SHIM_PARENT/mem"
+
+# At ptrace_scope 1 and above Yama refuses the open of /proc/PID/mem by itself,
+# before dumpability is asked. For pidfd_getfd the filter answers first (it
+# runs at syscall entry, Yama only inside ptrace_may_access), but the same
+# EPERM would come from Yama if the filter ever lost the name, so the probe
+# could no longer tell the two apart: the same false pass as ptrace_traceme
+# above, and the same skip. pid1_not_dumpable and pidfd_getfd_self carry the
+# guarantee there.
+if [ "${ESC_PTRACE_SCOPE:-0}" -ge 1 ] 2>/dev/null; then
+    for esc_case in pid1_mem_rdwr shim_parent_mem_rdwr pid1_pidfd_getfd shim_parent_pidfd_getfd; do
+        skip "$esc_case" "kernel.yama.ptrace_scope=$ESC_PTRACE_SCOPE refuses it itself; pid1_not_dumpable carries the guarantee"
+    done
+else
+    expect_output pid1_mem_rdwr        '^mem: (EACCES|EPERM)$' esc_foreign_pid 1 mem
+    expect_output shim_parent_mem_rdwr '^mem: (EACCES|EPERM)$' esc_foreign_pid "$ESC_SHIM_PARENT" mem
+    probe_pidfd_getfd pid1_pidfd_getfd        esc_foreign_pid 1 getfd
+    probe_pidfd_getfd shim_parent_pidfd_getfd esc_foreign_pid "$ESC_SHIM_PARENT" getfd
+fi
 
 # esc_own_listener — seccomp(SET_MODE_FILTER, NEW_LISTENER) with a one-line
 # "allow" program, the first step of taking over the socket gate (HUM-138):

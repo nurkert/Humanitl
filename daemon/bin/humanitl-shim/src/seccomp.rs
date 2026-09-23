@@ -69,8 +69,13 @@ pub const SOCK_TYPE_MASK: u32 = 0xff;
 /// Syscalls the filter refuses in every profile, even when the launcher
 /// forgets them: the floor from CONVENTIONS.md 4.8, in the profile's order.
 ///
-/// Die ersten neun Namen halten fremde Prozesse, den Schlüsselbund und die
-/// Ein- und Ausgabe an seccomp vorbei fern. Die acht danach sind die
+/// Die ersten zehn Namen halten fremde Prozesse, den Schlüsselbund und die
+/// Ein- und Ausgabe an seccomp vorbei fern. `pidfd_getfd` gehört dazu
+/// (HUM-203): wie `process_vm_*` prüft es nur `ptrace_may_access`, und ohne
+/// den Eintrag hinge es allein daran, dass kein Prozess der Sandbox dumpable
+/// ist. `pidfd_open` steht bewusst nur in [`SYSCALLS`] und nicht hier:
+/// asyncio, Go und libuv tasten es ab, und ohne `pidfd_getfd` öffnet ein
+/// Prozess-Deskriptor nichts, was nicht auch ein `kill` erreicht. Die acht danach sind die
 /// Standard-Härtung aus der Tabelle in `backlog/sprint-1.md` (HUM-012), die
 /// dasselbe verbietet wie das Docker-Standardprofil: einen neuen Kern laden
 /// (`kexec_*`), Kernmodule tauschen (`*_module`), BPF-Programme laden
@@ -86,6 +91,7 @@ pub const FLOOR: &[&str] = &[
     "io_uring_register",
     "process_vm_readv",
     "process_vm_writev",
+    "pidfd_getfd",
     "keyctl",
     "add_key",
     "request_key",
@@ -145,6 +151,7 @@ pub const SYSCALLS: &[Syscall] = &[
     Syscall::new("io_uring_register", libc::SYS_io_uring_register),
     Syscall::new("process_vm_readv", libc::SYS_process_vm_readv),
     Syscall::new("process_vm_writev", libc::SYS_process_vm_writev),
+    Syscall::new("pidfd_getfd", libc::SYS_pidfd_getfd),
     Syscall::new("keyctl", libc::SYS_keyctl),
     Syscall::new("add_key", libc::SYS_add_key),
     Syscall::new("request_key", libc::SYS_request_key),
@@ -188,6 +195,7 @@ pub const SYSCALLS: &[Syscall] = &[
     Syscall::new("open_tree", libc::SYS_open_tree),
     Syscall::new("mount_setattr", libc::SYS_mount_setattr),
     Syscall::new("vhangup", libc::SYS_vhangup),
+    Syscall::new("pidfd_open", libc::SYS_pidfd_open),
     Syscall::new("socket", libc::SYS_socket),
 ];
 
@@ -456,8 +464,9 @@ impl Policy {
     /// The parent shim holds the bridge and must `connect(2)` to the proxy
     /// socket for every accepted connection, which needs
     /// `socket(AF_UNIX, SOCK_STREAM)`. Everything else stays as strict as for
-    /// the agent, so every process in the sandbox below PID 1 carries a filter
-    /// (ESC-1 `seccomp_every_process`).
+    /// the agent, so every process in the sandbox carries a filter, PID 1
+    /// included: since HUM-203 the parent shim is PID 1 (`--as-pid-1`), and
+    /// ESC-1 `seccomp_every_process` no longer makes an exception for it.
     #[must_use]
     pub fn for_bridge(&self) -> Self {
         let mut bridge = self.clone();
@@ -1019,6 +1028,7 @@ mod tests {
             "io_uring_register  | always                                         | EPERM        | seccompiler".to_owned(),
             "process_vm_readv   | always                                         | EPERM        | seccompiler".to_owned(),
             "process_vm_writev  | always                                         | EPERM        | seccompiler".to_owned(),
+            "pidfd_getfd        | always                                         | EPERM        | seccompiler".to_owned(),
             "keyctl             | always                                         | EPERM        | seccompiler".to_owned(),
             "add_key            | always                                         | EPERM        | seccompiler".to_owned(),
             "request_key        | always                                         | EPERM        | seccompiler".to_owned(),
