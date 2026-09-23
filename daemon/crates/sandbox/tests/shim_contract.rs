@@ -15,13 +15,13 @@
 //! Der wichtigste Fall ist der Syscall-Boden. `DEFAULT_DENY_SYSCALLS` in
 //! `daemon/crates/sandbox/src/profile.rs` und `FLOOR` in
 //! `daemon/bin/humanitl-shim/src/seccomp.rs` sind zwei von Hand getippte
-//! Listen derselben siebzehn Namen, und vor diesem Test verglich sie nichts:
+//! Listen derselben achtzehn Namen, und vor diesem Test verglich sie nichts:
 //! Jede Zusicherung auf der Launcher-Seite war auf `DEFAULT_DENY_SYSCALLS`
 //! selbst bezogen, jede auf der Shim-Seite auf `FLOOR` selbst. Ein Name, der
 //! aus einer der beiden Listen verschwindet, hätte alle bestehenden Tests grün
 //! gelassen — der Boden kann nach unten driften, ohne dass es auffällt. Das ist
 //! die zweite Stelle, an der das möglich ist: die Laufzeitprobe des Shims
-//! (`CHECK families`) beweist genau einen der siebzehn Aufrufe
+//! (`CHECK families`) beweist genau einen der achtzehn Aufrufe
 //! (`io_uring_setup`), und der Launcher macht daraus `SANDBOX_016`. Der volle
 //! Laufzeitbeweis steht in `tests/escape/esc-1-sockets.sh` und braucht `bwrap`;
 //! hier wird stattdessen die Regeltabelle des Binaries verglichen, die derselbe

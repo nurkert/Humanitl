@@ -220,12 +220,12 @@ Reihenfolge im Shim durcheinanderbringt.
 Namespace: darin existiert nur `lo`, die Routing-Tabelle ist leer, alle Capabilities sind
 gedroppt (`--cap-drop ALL`), also gibt es keine Adresse, zu der eine TCP-Verbindung aufgebaut
 werden könnte, außer der Loopback-Adresse. Ein `connect()` auf eine LAN-Adresse endet in
-`ENETUNREACH`. Zusätzlich sperrt der Filter `ptrace`, `io_uring_*`, `process_vm_*`, `keyctl`,
+`ENETUNREACH`. Zusätzlich sperrt der Filter `ptrace`, `io_uring_*`, `process_vm_*`, `pidfd_getfd`, `keyctl`,
 `add_key`, `request_key`, die Standard-Härtung `kexec_load`, `kexec_file_load`, `init_module`,
 `finit_module`, `delete_module`, `bpf`, `perf_event_open`, `userfaultfd` und alle x32-Syscalls
 und setzt `PR_SET_NO_NEW_PRIVS` vor der Anwendung.
 
-*Restrisiko.* Zwei benannte Punkte. Erstens: Der Elternprozess des Shims, der die Brücke hält,
+*Restrisiko.* Zwei benannte Punkte und ein behobener. Erstens: Der Elternprozess des Shims, der die Brücke hält,
 darf als einziger Prozess in der Sandbox `AF_UNIX` öffnen; sonst käme er nicht an den
 Proxy-Socket. Er trägt seit HUM-012 selbst einen Filter mit derselben Sperrliste, um genau diese
 eine Familie weiter (`SandboxSeccomp::for_bridge`), denn `TSYNC` erfasst Threads und keine
@@ -242,6 +242,19 @@ Zielsocket, den Proxy, und der zeichnet auf. Zweitens:
 ein Loopback-Dienst, den der Agent selbst in der Sandbox startet, ist für ihn erreichbar. Das ist
 kein Egress, sondern nur Kommunikation zwischen zwei Prozessen, die ohnehin beide dem Angreifer
 gehören.
+
+Behoben mit HUM-203 (Sicherheitsdurchlauf vom 2026-09-23, Befund M1): PID 1 der Sandbox war das
+Init von bwrap. Es trug keinen Filter, war „dumpable" und lief unter derselben UID wie der
+Agent. Bei `kernel.yama.ptrace_scope = 0` (Debian-Standard) öffnete der Agent `/proc/1/mem` mit
+`O_RDWR`, schrieb Code in PID 1 und führte ihn ohne Filter aus; `io_uring`, `keyctl`, `bpf`,
+`userfaultfd` und `perf_event_open` wären wieder erreichbar gewesen, Satz 3 gefallen. Die leere
+Netz-Namespace und die Mount-Allowlist blieben stehen. Seither startet bwrap mit `--as-pid-1`, der
+Shim-Elternprozess ist PID 1, trägt den Filter der Brücke und setzt `PR_SET_DUMPABLE` auf 0, bevor
+der Agent startet; `pidfd_getfd` steht im Boden. Die Proben `pid1_mem_rdwr`,
+`pid1_pidfd_getfd` und `pid1_not_dumpable` in ESC-1 halten das fest. Was bleibt: Die Wand
+gegen `/proc/1/mem` ist allein das Flag „nicht dumpable" (Yama ≥ 1 kommt auf manchen Hosts
+hinzu). Setzt der Shim es nicht, startet der Agent nicht: Der Shim liest das Flag vor dem Tor
+zurück und meldet sonst `CHECK seccomp_applied fail dumpable:…`, der Launcher bricht ab.
 
 *Status.* MVP.
 
@@ -289,15 +302,25 @@ IPC-Namespace erreicht er SysV-Shared-Memory und POSIX-Message-Queues anderer Pr
 
 *Minderung im MVP.* `--unshare-pid --unshare-ipc --unshare-uts`, ein frisch gemountetes `/proc`
 für das neue Namespace, `--new-session` (kein gemeinsames Controlling-Terminal, damit
-`TIOCSTI`-Einschleusung ausscheidet) und `--die-with-parent`. PID 1 in der Sandbox ist das
-Init von bwrap, darunter läuft der Shim; kein Host-Prozess ist sichtbar.
+`TIOCSTI`-Einschleusung ausscheidet) und `--die-with-parent`. PID 1 in der Sandbox ist seit
+HUM-203 der Shim selbst (`--as-pid-1`), nicht das Init von bwrap; kein Host-Prozess ist sichtbar.
+Der Shim erntet als PID 1 jede Waise (`waitpid(-1)`), sodass ein Agent die Prozesstabelle nicht
+mit Zombies füllt, und reicht `SIGTERM` und `SIGHUP` weiter. PID 1 ist nicht „dumpable":
+`/proc/1/environ` und `/proc/1/mem` gehören root (vom Host aus gesehen; in der Sandbox die Überlauf-UID 65534) und sind für den Agenten nicht
+lesbar.
 
-*Restrisiko.* Keines bekannt, solange bwrap die Optionen wie dokumentiert umsetzt.
+*Restrisiko.* Bis HUM-203 war PID 1 das ungefilterte, beschreibbare Init von bwrap (K-04,
+Befund M1); das ist behoben. Endet der Shim, endet mit ihm als Namensraum-Init die ganze
+Sandbox — gewollt, denn ohne ihn gibt es weder Brücke noch Zuhörer. Signale des Agenten an
+PID 1 treffen nur einen Prozess, der `SIGINT` ignoriert und `SIGTERM` und `SIGHUP` an den Agenten
+selbst zurückreicht; `SIGKILL` aus dem eigenen Namensraum stellt der Kernel einem Init nicht zu.
+Darüber hinaus keines bekannt, solange bwrap die Optionen wie dokumentiert umsetzt.
 
 *Status.* MVP.
 
-*Prüfung.* In der Sandbox: `ls /proc` zeigt nur Sandbox-Prozesse, `cat /proc/1/environ` ist leer
-oder die Umgebung von bwrap, nie die des Hosts, `hostname` liefert `sandbox` (ESC-2).
+*Prüfung.* In der Sandbox: `ls /proc` zeigt nur Sandbox-Prozesse, `cat /proc/1/environ` scheitert
+mit `Permission denied` (PID 1 ist der nicht-dumpable Shim, HUM-203), `hostname` liefert `sandbox`
+(ESC-2, ESC-1 `pid1_not_dumpable`).
 
 ### K-07 `/proc` und `/sys`
 

@@ -703,12 +703,13 @@ impl SandboxHandle {
     ///   `bwrap`-Prozess beendet ihn sofort, und mit `--die-with-parent`
     ///   bekommt der Namensraum darunter ein `SIGKILL`. Der Agent käme nie
     ///   dazu, aufzuräumen.
-    /// - Das Init des PID-Namensraums ist wieder `bwrap`
-    ///   ([`SandboxHandle::child_pid`]), und ein Signal mit Standardwirkung an
-    ///   ein Namensraum-Init verwirft der Kernel. Es trägt aber wegen
-    ///   `--new-session` die Sitzung und die Prozessgruppe der Sandbox, und
-    ///   der Agent hängt darin. `kill(-child_pid, SIGINT)` erreicht deshalb
-    ///   genau den Agenten, dessen `SIGINT` der Shim an sein Kind weiterreicht.
+    /// - Das Init des PID-Namensraums ist der Shim (`--as-pid-1`, HUM-203;
+    ///   [`SandboxHandle::child_pid`]). Er ignoriert `SIGINT`, und ein Signal
+    ///   ohne Handler an ein Namensraum-Init verwirft der Kernel ohnehin. Das
+    ///   Init trägt aber wegen `--new-session` die Sitzung und die
+    ///   Prozessgruppe der Sandbox, und der Agent hängt darin.
+    ///   `kill(-child_pid, SIGINT)` erreicht deshalb genau den Agenten, ohne
+    ///   dass der Shim es weiterreichen muss.
     ///
     /// Die eigene Prozessgruppe ist nie betroffen: das Sandbox-Init hat mit
     /// `setsid` eine eigene aufgemacht. Kennt das Handle die PID des Init noch

@@ -155,10 +155,14 @@ nach dem Filter ist `AF_UNIX` ohnehin gesperrt.
 ### Satz 3 — Keine neuen Türen
 
 **Mechanismus.** Der `humanitl-shim` ist ein kleines Programm ohne Laufzeitumgebung (nur `libc`
-und `seccompiler`), das in der Sandbox unter bwraps Init-Prozess startet. Sein Prozessmodell ist der
+und `seccompiler`), das in der Sandbox als PID 1 startet: Der Launcher ruft bwrap mit
+`--as-pid-1` auf, es gibt kein Init von bwrap darüber (HUM-203). Sein Prozessmodell ist der
 eigentliche Trick (HUM-012, „Variante B", verbindlich): Die Brücke lebt im Elternprozess, der
 Agent ist ein Kind mit Filter vor `exec`. Beide tragen einen Filter; der des Elternprozesses ist
-um genau eine Familie weiter, weil die Brücke `AF_UNIX` braucht.
+um genau eine Familie weiter, weil die Brücke `AF_UNIX` braucht. Als PID 1 erntet der
+Elternprozess jede Waise der Sandbox (`waitpid(-1)`), zählt nur den Status des eigenen Kindes
+und reicht `SIGTERM` und `SIGHUP` an den Agenten weiter; ohne Handler verwürfe der Kernel sie an
+einem Namensraum-Init.
 
 1. Er öffnet die im Profil deklarierten Brücken selbst, ohne `socat`: Richtung „in" lauscht auf
    `127.0.0.1:3128` und reicht jede TCP-Verbindung an den gebundenen Unix-Socket weiter. Der
@@ -167,8 +171,9 @@ um genau eine Familie weiter, weil die Brücke `AF_UNIX` braucht.
 2. Er schließt jeden geerbten Deskriptor außer 0, 1, 2, dem Bericht, dem Tor vor dem `exec`
    und den Brücken-Listenern; so hält auch der Elternprozess nichts, was der Agent über
    `/proc/<ppid>/fd` wieder öffnen könnte. Danach legt er das `socketpair` an, über das der
-   Zuhörer des Filters kommt (HUM-138), und forkt. Das Tor geht auf, sobald der Elternprozess
-   nicht mehr „dumpable" ist und seinen Filter trägt: Er behält den Bericht für die
+   Zuhörer des Filters kommt (HUM-138), und forkt. Der erste Schritt des Elternprozesses nach
+   dem Fork ist `prctl(PR_SET_DUMPABLE, 0)`, vor dem Tor gegengeprüft mit `PR_GET_DUMPABLE`.
+   Das Tor geht auf, sobald der Elternprozess nicht mehr „dumpable" ist und seinen Filter trägt: Er behält den Bericht für die
    verweigerten Versuche des Agenten, und `/proc/<ppid>/fd` wie `pidfd_getfd(2)` bleiben dem
    Agenten verschlossen. Das ersetzt das Argument von HUM-137, der Elternprozess halte beim
    Start des Agenten gar keinen Schreiber mehr. Der Elternprozess bleibt als Brücke stehen, wartet auf das Kind und endet mit
@@ -195,8 +200,11 @@ um genau eine Familie weiter, weil die Brücke `AF_UNIX` braucht.
 Der Elternprozess trägt eine eigene Fassung desselben Filters, weil `TSYNC` Threads erfasst,
 keine Kinder: Der Agent kann seinen Filter nicht an den Elternprozess weiterreichen, und der
 Elternprozess kann den engeren Filter des Agenten nicht selbst tragen, weil er `AF_UNIX`
-braucht. Beide Filter sperren dieselben Systemaufrufe; unter bwraps Init-Prozess trägt damit
-jeder Prozess in der Sandbox einen Filter (ESC-1 `seccomp_every_process`). Was das für den
+braucht. Beide Filter sperren dieselben Systemaufrufe; damit trägt jeder Prozess in der Sandbox
+einen Filter, PID 1 eingeschlossen (ESC-1 `seccomp_every_process`, `seccomp_parent_mode_2`).
+Bis HUM-203 war PID 1 das Init von bwrap: ohne Filter, „dumpable" und unter der UID des Agenten.
+Bei `kernel.yama.ptrace_scope = 0` konnte der Agent `/proc/1/mem` zum Schreiben öffnen und dort
+Code ohne Filter ausführen (Sicherheitsdurchlauf vom 2026-09-23, Befund M1). Was das für den
 Agenten bedeutet, steht in [`THREAT-MODEL.md`](THREAT-MODEL.md) K-04.
 
 Der Filter erlaubt `socket()` ausschließlich für die Familien aus `allow_families` (`AF_INET`,
@@ -215,10 +223,14 @@ Kindprozess-IPC von Node und Bun, `CONVENTIONS.md` 4.11). Belegt wird das von
 Familien-Probe des Shims (`probe_families`) prüft es **nicht**, und Check 3 von HUM-041 sagt
 darüber nichts. Zusätzlich verweigert werden `ptrace`, `io_uring_setup`,
 `io_uring_enter`, `io_uring_register`,
-`process_vm_readv`, `process_vm_writev`, `keyctl`, `add_key`, `request_key`, dazu die
+`process_vm_readv`, `process_vm_writev`, `pidfd_getfd`, `keyctl`, `add_key`, `request_key`, dazu die
 Standard-Härtung `kexec_load`, `kexec_file_load`, `init_module`, `finit_module`,
 `delete_module`, `bpf`, `perf_event_open`, `userfaultfd` (dieselben Namen, die das
-Docker-Standardprofil sperrt), sowie **alle**
+Docker-Standardprofil sperrt). `pidfd_getfd` steht seit HUM-203 im Boden: Es kopiert einen
+Deskriptor aus einem fremden Prozess und prüft dafür wie `process_vm_*` nur
+`ptrace_may_access`. `pidfd_open` bleibt erlaubt, weil asyncio, Go und libuv es abtasten und ein
+Prozess-Deskriptor ohne `pidfd_getfd` nichts öffnet, was nicht auch `kill` erreicht. Außerdem
+verweigert werden **alle**
 x32-Syscalls (Nummern mit gesetztem Bit `0x40000000`, abgefangen von einem handgeschriebenen
 BPF-Präludium vor dem erzeugten Programm), und `seccomp()` mit dem Flag
 `SECCOMP_FILTER_FLAG_NEW_LISTENER` (seit HUM-138, ebenfalls im Präludium, in beiden Filtern): Der
@@ -235,17 +247,22 @@ die Datei.
 ```sh
 grep Seccomp /proc/self/status                       # "Seccomp: 2" (Filter-Modus)
 grep NoNewPrivs /proc/self/status                    # "NoNewPrivs: 1"
-# PID 1 ist bwraps Init-Prozess und trägt keinen Filter. Der Shim darunter trägt den weiteren
-# Brücken-Filter, der Agent den engeren. Der Beweis liest deshalb den Agenten, nie /proc/1/status:
-grep Seccomp /proc/$(pgrep -n -P "$(pgrep -o humanitl-shim)")/status   # "Seccomp: 2"
+# PID 1 ist der Shim-Elternprozess (--as-pid-1) mit dem weiteren Brücken-Filter, der Agent
+# trägt den engeren:
+cat /proc/1/comm                                     # "humanitl-shim"
+grep Seccomp /proc/1/status                          # "Seccomp: 2"
+stat -c %u /proc/1/mem; id -u                        # verschieden: PID 1 ist nicht „dumpable"
+python3 -c 'import os; os.open("/proc/1/mem", os.O_RDWR)'                 # PermissionError
 python3 -c 'import socket; socket.socket(socket.AF_UNIX)'                 # PermissionError
 python3 -c 'import socket; socket.socket(socket.AF_INET, socket.SOCK_DGRAM)'  # PermissionError
 python3 -c 'import socket; socket.socket(socket.AF_INET, socket.SOCK_STREAM)' # gelingt
 python3 -c 'import socket; socket.create_connection(("10.0.0.1",80),2)'   # ENETUNREACH
 ```
 
-**Automatisiert.** ESC-1 deckt genau diese Proben ab, einschließlich `io_uring_setup` und eines
-x32-Syscalls. Zur Laufzeit `IsolationCheck::SeccompActive`: Der Shim meldet beim Start auf einem
+**Automatisiert.** ESC-1 deckt genau diese Proben ab, einschließlich `io_uring_setup`, eines
+x32-Syscalls und der Proben auf PID 1 und den Shim-Elternprozess (`pid1_*`, `shim_parent_*`,
+`pidfd_getfd_self`; bei `ptrace_scope` ≥ 1 verweigert Yama `mem` und `pidfd_getfd` schon selbst,
+diese Fälle sind dort `skip`, und `pid1_not_dumpable` trägt). Zur Laufzeit `IsolationCheck::SeccompActive`: Der Shim meldet beim Start auf einem
 eigenen Deskriptor (`HUMANITL_REPORT_FD`) Prüfzeilen aus der laufenden Sandbox, unter anderem
 dass der Filter geladen ist und welche Familien er erlaubt; der Launcher liest sie und macht
 daraus die drei Ergebnisse. Der Beweis stammt damit aus der Sandbox, in der der Agent wirklich
@@ -256,7 +273,10 @@ läuft, und nicht aus einer zweiten, nur zu Prüfzwecken gestarteten.
 `io_uring` Systemaufrufe an der Filterung vorbei einreihen — die drei `io_uring_*`-Aufrufe sind
 gesperrt. Denselben Syscall unter der x32-Nummer aufrufen, ein klassischer Filter-Bypass — das
 Präludium fängt ihn ab. Einen Thread starten, der den Filter nicht hat — `TSYNC` sorgt dafür, dass
-es keinen solchen Thread gibt. Den Elternprozess des Shims kapern, der die Brücke hält — siehe
+es keinen solchen Thread gibt. PID 1 über `/proc/1/mem` oder `pidfd_getfd(2)` beschreiben, um
+Code ohne den Filter des Agenten auszuführen — PID 1 ist seit HUM-203 der Shim, trägt den Filter
+der Brücke und ist nicht „dumpable", und `pidfd_getfd` steht im Boden (ESC-1 `pid1_mem_rdwr`,
+`pid1_pidfd_getfd`). Den Elternprozess des Shims kapern, der die Brücke hält — siehe
 die ehrliche Einschränkung in [`THREAT-MODEL.md`](THREAT-MODEL.md) K-04; gewonnen ist damit
 nichts, weil auch er einen Filter trägt und die Brücke genau ein Ziel kennt, den aufzeichnenden
 Proxy. Den Zuhörer des Filters an sich bringen, um die eigenen Aufrufe mit „weiter" zu

@@ -155,7 +155,12 @@ Aufruf durchlässt oder mit genau so einem errno antwortet, nie mit `EINVAL`:
 `keyctl(KEYCTL_GET_KEYRING_ID)` und `add_key` auf den Prozess-Schlüsselring,
 `request_key` ohne Callout (ein Callout liefe als `/sbin/request-key` im
 Namensraum des Hosts, genau deshalb steht der Syscall auf der Liste),
-`io_uring_enter` und `io_uring_register` auf eine eigene Pipe. Yama mit
+`io_uring_enter` und `io_uring_register` auf eine eigene Pipe, `pidfd_getfd`
+auf Deskriptor 0 des eigenen Prozesses über einen Prozess-Deskriptor aus
+`pidfd_open` (HUM-203). Scheitert schon `pidfd_open`, ist `pidfd_getfd` nie
+gefragt worden: `probe_pidfd_getfd` wertet das als `skip` (`ENOSYS`) oder als
+rot, nie als Verweigerung von `pidfd_getfd`; `pidfd_open_allowed` hält fest,
+dass der erste Schritt erlaubt bleibt. Yama mit
 `kernel.yama.ptrace_scope` ≥ 2 verweigert `PTRACE_TRACEME` selbst mit `EPERM`,
 bevor ein Filter gefragt ist; wie bei `io_uring_disabled` ist der Fall dann ein
 `skip`.
@@ -251,7 +256,13 @@ ESC-3 ein `skip`.
 
 ## Erwartetes Ergebnis in Sprint 0
 
-Stand nach HUM-138: 126 Fälle, 126 grün, 0 rot, 0 übersprungen, gemessen am
+Stand nach HUM-203: 136 Fälle, 136 grün, 0 rot, 0 übersprungen, gemessen am
+2026-09-23 bei `kernel.yama.ptrace_scope = 0`; HUM-203 bringt zehn Fälle in ESC-1
+(`seccomp_parent_mode_2`, `pidfd_open_allowed`, `pidfd_getfd_self`, `pid1_is_shim`,
+`pid1_not_dumpable`, `shim_parent_not_dumpable`, `pid1_mem_rdwr`,
+`shim_parent_mem_rdwr`, `pid1_pidfd_getfd`, `shim_parent_pidfd_getfd`). Bei
+`ptrace_scope` ≥ 1 sind die letzten vier ein `skip`, weil Yama dort selbst
+verweigert. Davor, nach HUM-138: 126 Fälle, 126 grün, 0 rot, 0 übersprungen, gemessen am
 2026-09-23; HUM-138 bringt `esc-1/refusals_reported` und `esc-1/seccomp_no_own_listener`. Davor, nach HUM-050:
 124 Fälle, 124 grün, 0 rot, 0 übersprungen, gemessen am 2026-09-11. HUM-050 macht aus den zwei übersprungenen ESC-5-Fällen
 `audit_delete_is_detected` und `audit_truncate_is_detected` grüne. Davor,
@@ -293,7 +304,13 @@ nicht (`CONFIG_003`, Exit 2); ein kurzer symbolischer Link auf das Repository,
 | ESC-1 | `request_key` | `ENOKEY` statt `EPERM`: der Kernel hat gesucht, kein Filter hat verweigert | HUM-012 (`deny_syscalls`) |
 | ESC-1 | `x32_syscall_eperm` | `ENOSYS` statt `EPERM` | HUM-012 (BPF-Präludium, CONVENTIONS 4.10) |
 | ESC-1 | `seccomp_mode_2` | `Seccomp: 0` | HUM-012 |
-| ESC-1 | `seccomp_every_process` | jeder Prozess `Seccomp: 0` (PID 1, also `bwrap`, ist die per PID benannte Ausnahme, nicht per `comm`: den Namen kann sich jeder Prozess selbst geben) | HUM-012 |
+| ESC-1 | `seccomp_every_process` | jeder Prozess `Seccomp: 0`; seit HUM-203 ohne Ausnahme, auch PID 1 | HUM-012, HUM-203 |
+| ESC-1 | `seccomp_parent_mode_2` | `/proc/1/status` zeigt `Seccomp: 0`: PID 1 war das Init von `bwrap` | HUM-203 (`--as-pid-1`, der Shim ist PID 1) |
+| ESC-1 | `pidfd_getfd_self` | kopiert Deskriptor 0 des eigenen Prozesses | HUM-203 (`pidfd_getfd` im Boden) |
+| ESC-1 | `pid1_is_shim` | `/proc/1/comm` ist `bwrap` | HUM-203 |
+| ESC-1 | `pid1_not_dumpable`, `shim_parent_not_dumpable` | `/proc/1/mem` gehört der UID des Agenten, der Prozess ist dumpable | HUM-203 (`PR_SET_DUMPABLE 0` als erster Schritt in `parent()`) |
+| ESC-1 | `pid1_mem_rdwr`, `shim_parent_mem_rdwr` | `open("/proc/1/mem", O_RDWR)` gelingt bei `kernel.yama.ptrace_scope=0` (bei ≥ 1 verweigert Yama selbst, also `skip`) | HUM-203 |
+| ESC-1 | `pid1_pidfd_getfd`, `shim_parent_pidfd_getfd` | `pidfd_getfd` auf PID 1 liefert dessen Deskriptor (bei `ptrace_scope` ≥ 1: `skip`) | HUM-203 |
 | ESC-2 | `exactly_one_socket` | null Sockets | HUM-011/013 (Daemon reicht den Proxy-Socket durch) |
 | ESC-2 | `socket_is_proxy` | kein Socket zu benennen | HUM-011/013 |
 | ESC-2 | `no_marker_leak` | `/proc/1/environ` trägt die Host-Umgebung | HUM-011 (siehe unten) |
@@ -325,6 +342,20 @@ Token, alles.
 HUM-011 muss `bwrap` deshalb mit einer bereinigten Umgebung starten (nur das, was
 für den Start nötig ist) oder `--as-pid-1` verwenden. Bis dahin bleibt die Probe
 rot — sie ist der Grund, warum sie existiert.
+
+Nachtrag HUM-203: HUM-011 hat die bereinigte Umgebung gebaut, seit HUM-203 kommt
+`--as-pid-1` dazu. PID 1 ist jetzt der Shim-Elternprozess; er trägt den Filter
+der Brücke und ist nicht dumpable, `/proc/1/environ` und `/proc/1/mem` gehören
+damit root (vom Host aus gesehen; in der Sandbox die Überlauf-UID 65534) und sind für den Agenten weder lesbar noch beschreibbar. Das Init von
+`bwrap` war ungefiltert und dumpable, bei `ptrace_scope=0` öffnete der Agent
+`/proc/1/mem` zum Schreiben (Sicherheitsdurchlauf vom 2026-09-23, Befund M1).
+Die Proben `pid1_*` und `shim_parent_*` in ESC-1 halten das fest; bei
+`ptrace_scope` ≥ 1 verweigert schon Yama, dort trägt `pid1_not_dumpable`.
+Gelesen wird der Besitzer von `/proc/1/mem`, nicht der des Verzeichnisses
+`/proc/1`: Das Verzeichnis behält auch bei einem nicht-dumpable Prozess dessen
+UID (`task_dump_owner` im Kernel), nur die Dateien darin gehen an root. Die Probe
+urteilt nur über zwei echte UIDs: Fehlt `stat` oder `id`, ist sie ein `skip`,
+scheitert eines davon, ist sie rot, nie grün.
 
 ### Übersprungen, und was sie einlöst
 

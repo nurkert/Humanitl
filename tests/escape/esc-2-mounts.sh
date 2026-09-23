@@ -66,8 +66,8 @@ probe no_host_env_leak sh -c 'env | grep -qE "^(XDG_RUNTIME_DIR|DBUS_SESSION_BUS
 # --- own namespaces -----------------------------------------------------------
 #
 # With --unshare-pid the process that enters the namespace becomes PID 1. That
-# is bwrap (later the shim), never the host init: seeing systemd there would
-# mean the PID namespace was not entered at all.
+# is the shim (bwrap --as-pid-1, HUM-203), never the host init: seeing systemd
+# there would mean the PID namespace was not entered at all.
 probe         pid1_is_not_host_init sh -c 'grep -qxE "systemd|init" /proc/1/comm'
 expect_output hostname_sandbox '^sandbox$' sh -c 'cat /proc/sys/kernel/hostname'
 expect_output shm_is_tmpfs 'tmpfs' sh -c 'grep " /dev/shm " /proc/self/mountinfo'

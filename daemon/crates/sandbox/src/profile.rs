@@ -198,7 +198,9 @@ pub const REQUIRED_SOCKET_TYPES: &[SocketType] = &[SocketType::SockStream];
 
 /// Syscalls, die in keinem Profil erlaubt sind (`CONVENTIONS.md` 4.8).
 ///
-/// `ptrace` und `process_vm_*` lesen fremde Prozesse aus, `io_uring_*` führt
+/// `ptrace`, `process_vm_*` und `pidfd_getfd` greifen in fremde Prozesse
+/// (`pidfd_getfd` seit HUM-203: ein Deskriptor eines anderen Prozesses in
+/// den eigenen kopiert, geprüft nur über `ptrace_may_access`), `io_uring_*` führt
 /// Ein- und Ausgabe an seccomp vorbei, die `key`-Aufrufe erreichen den
 /// Schlüsselbund des Kernels. Danach folgt die Standard-Härtung aus der
 /// Tabelle von HUM-012 (`backlog/sprint-1.md`), dieselbe, die das
@@ -211,7 +213,7 @@ pub const REQUIRED_SOCKET_TYPES: &[SocketType] = &[SocketType::SockStream];
 /// `daemon/bin/humanitl-shim/src/seccomp.rs`: [`SandboxProfile::parse`]
 /// vereinigt sie mit `seccomp.deny_syscalls` des Profils, die Liste hier zuerst,
 /// dann die Ergänzungen des Profils, ohne Doppelungen. Ein Profil, das nur
-/// `["mount"]` schreibt, verbietet damit achtzehn Syscalls, nicht einen.
+/// `["mount"]` schreibt, verbietet damit neunzehn Syscalls, nicht einen.
 pub const DEFAULT_DENY_SYSCALLS: &[&str] = &[
     "ptrace",
     "io_uring_setup",
@@ -219,6 +221,7 @@ pub const DEFAULT_DENY_SYSCALLS: &[&str] = &[
     "io_uring_register",
     "process_vm_readv",
     "process_vm_writev",
+    "pidfd_getfd",
     "keyctl",
     "add_key",
     "request_key",
