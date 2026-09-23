@@ -89,6 +89,8 @@ class BatchRequest {
     this.reason = ConfirmReason.reach,
     this.withNote = true,
     this.acknowledgedFindings = const <int>[],
+    this.withheld = 0,
+    this.findingsConfirmed = false,
   });
 
   /// Allow or block; nothing else reaches a group.
@@ -111,6 +113,20 @@ class BatchRequest {
   /// survive the question (HUM-160). Only ever set for a single request.
   final List<int> acknowledgedFindings;
 
+  /// Wie viele angehaltene Anfragen der Batch auslässt, weil in ihnen ein
+  /// Fund offen ist; das Modal nennt die Zahl (HUM-207).
+  ///
+  /// Nur „allow all" setzt ihn: Es umfasst die ganze Queue, und eine Anfrage
+  /// mit Fund braucht die Sorgfalt des Ventils oder der Fundpause, die ein
+  /// einfacher Knopf im Modal nicht gibt (`docs/UX.md` 4.7).
+  final int withheld;
+
+  /// Wahr, wenn die Funde in [flows] schon vor dem Modal bestätigt wurden:
+  /// das gehaltene Ventil über einer Gruppe oder die Fundpause einer
+  /// einzelnen Anfrage. Ohne das lässt [InterceptDecision.confirmBatch] nur
+  /// Anfragen ohne Fund hinaus (HUM-207).
+  final bool findingsConfirmed;
+
   /// The one host of the batch, or an empty string when it spans several.
   ///
   /// Never a registrable domain worked out here: the public suffix list lives
@@ -132,6 +148,8 @@ class BatchRequest {
       other.remember == remember &&
       other.reason == reason &&
       other.withNote == withNote &&
+      other.withheld == withheld &&
+      other.findingsConfirmed == findingsConfirmed &&
       listEquals(other.flows, flows) &&
       listEquals(other.acknowledgedFindings, acknowledgedFindings);
 
@@ -141,6 +159,8 @@ class BatchRequest {
     remember,
     reason,
     withNote,
+    withheld,
+    findingsConfirmed,
     Object.hashAll(flows),
     Object.hashAll(acknowledgedFindings),
   );
@@ -424,6 +444,10 @@ class InterceptDecision extends _$InterceptDecision {
         remember,
         ConfirmReason.forever,
         acknowledgedFindings: acknowledgedFindings,
+        // Die Pause oben hat die Anfrage durchgelassen: Sie wurde bestätigt,
+        // oder das Detail kennt keinen offenen Fund. Der Zähler der Zeile kann
+        // noch Funde nennen, die inzwischen aufgelöst sind (HUM-207).
+        findingsConfirmed: true,
       );
       return;
     }
@@ -483,6 +507,8 @@ class InterceptDecision extends _$InterceptDecision {
     ConfirmReason reason, {
     bool withNote = true,
     List<int> acknowledgedFindings = const <int>[],
+    int withheld = 0,
+    bool findingsConfirmed = false,
   }) => ref
       .read(batchConfirmProvider.notifier)
       .ask(
@@ -493,6 +519,8 @@ class InterceptDecision extends _$InterceptDecision {
           reason: reason,
           withNote: withNote,
           acknowledgedFindings: acknowledgedFindings,
+          withheld: withheld,
+          findingsConfirmed: findingsConfirmed,
         ),
       );
 
@@ -543,7 +571,13 @@ class InterceptDecision extends _$InterceptDecision {
     }
     final ConfirmReason? asks = _reasonToAsk(flows, remember);
     if (asks != null) {
-      _ask(DecisionKind.allow, flows, remember, asks);
+      _ask(
+        DecisionKind.allow,
+        flows,
+        remember,
+        asks,
+        findingsConfirmed: confirmed,
+      );
       return;
     }
     await _many(flows, DecisionKind.allow, remember: remember);
@@ -599,13 +633,38 @@ class InterceptDecision extends _$InterceptDecision {
   /// and nowhere else: no control on the screen carries that label, and this
   /// one never sends silently -- it always opens the modal, which names the
   /// hosts and lists the requests first (HUM-029, `docs/UX.md` 4.6).
+  ///
+  /// Eine Anfrage mit offenem Fund geht nie mit: Das Modal ist ein einfacher
+  /// Knopf, und `docs/UX.md` 4.7 lehnt ein Modal als Schutz für einen Fund
+  /// ab. Nur die sauberen Anfragen kommen in den Batch, und das Modal sagt,
+  /// wie viele draußen blieben. Ist keine sauber, gilt dieselbe Abweisung
+  /// wie bei [allowMany] über dieselbe Gruppe (HUM-207).
   void askAllowAll() {
     final List<Flow> held = ref.read(heldFlowsProvider);
     if (held.isEmpty || state.isSending) {
       return;
     }
-    _ask(DecisionKind.allow, held, false, ConfirmReason.reach);
+    final List<Flow> clean = _withoutFindings(held);
+    if (clean.isEmpty) {
+      _refuse(RefusalReason.holdToSend);
+      return;
+    }
+    _ask(
+      DecisionKind.allow,
+      clean,
+      false,
+      ConfirmReason.reach,
+      withheld: held.length - clean.length,
+    );
   }
+
+  /// Die Anfragen aus [flows], deren Zeile keinen Fund zählt.
+  ///
+  /// Der Zähler der Zeile ist alles, was über eine Anfrage bekannt ist, deren
+  /// Detail nie geholt wurde, und ein Fund, den niemand angesehen hat, gilt
+  /// als offen (`docs/UX.md` 4.7).
+  static List<Flow> _withoutFindings(List<Flow> flows) =>
+      flows.where((Flow flow) => flow.findingCount == 0).toList();
 
   /// Carries out the batch the modal was asking about.
   Future<void> confirmBatch() async {
@@ -614,8 +673,19 @@ class InterceptDecision extends _$InterceptDecision {
       return;
     }
     ref.read(batchConfirmProvider.notifier).cancel();
+    // Das Modal bestätigt Reichweite, nie einen Fund: Eine Anfrage mit Fund
+    // geht nur hinaus, wenn Ventil oder Fundpause sie vor dem Modal bestätigt
+    // haben (HUM-207). Jeder andere Weg zu einem Batch unterliegt dem auch.
+    final List<Flow> flows =
+        request.kind == DecisionKind.allow && !request.findingsConfirmed
+        ? _withoutFindings(request.flows)
+        : request.flows;
+    if (flows.isEmpty) {
+      _refuse(RefusalReason.holdToSend);
+      return;
+    }
     await _many(
-      request.flows,
+      flows,
       request.kind,
       remember: request.remember,
       withNote: request.withNote,

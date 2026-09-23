@@ -4160,12 +4160,12 @@ M5, Schwere major, von zwei unabhängigen Prüfern bestätigt). Ort: `app/lib/fe
 Der Befund ist behoben, und ein Test hält ihn behoben.
 
 ### Akzeptanzkriterien
-- [ ] `askAllowAll` teilt in saubere Flows und Flows mit Funden. Nur die sauberen kommen in den `BatchRequest`, dazu ein Zähler `withheld`, den das Modal nennt. Ist keiner sauber, gilt `RefusalReason.holdToSend`.
-- [ ] `confirmBatch` bei `kind == allow` verwirft Flows mit Funden, außer der Batch kam über den bestätigten Pfad von `allowMany` (Flag `findingsConfirmed`).
-- [ ] Widget-Test: Kein `Decide{allow}` für den Flow mit Fund.
+- [x] `askAllowAll` teilt in saubere Flows und Flows mit Funden. Nur die sauberen kommen in den `BatchRequest`, dazu ein Zähler `withheld`, den das Modal nennt. Ist keiner sauber, gilt `RefusalReason.holdToSend`.
+- [x] `confirmBatch` bei `kind == allow` verwirft Flows mit Funden, außer der Batch kam über den bestätigten Pfad von `allowMany` (Flag `findingsConfirmed`).
+- [x] Widget-Test: Kein `Decide{allow}` für den Flow mit Fund.
 - [ ] Langfristig macht HUM-159 das im Daemon für jeden Client zu.
-- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
-- [ ] `make check` grün.
+- [x] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [x] `make check` grün.
 
 ### Referenzen
 Sicherheitsdurchlauf 2026-09-23, Befund M5; `app/lib/features/intercept/providers/decision.dart:554`.
