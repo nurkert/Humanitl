@@ -600,6 +600,14 @@ die CLI und kann die Sandbox nicht schwächen. Sie ist allerdings vertrauenswür
 darstellt, führt zu einer falschen Freigabe. Deshalb rendert sie Bodies als Text und niemals in
 einer WebView.
 
+**Ebenfalls nicht in der Vertrauensbasis:** das Projekt-Profil `<projekt>/.humanitl/profile.toml`.
+Es liegt im geklonten Repository und darf keinen Schlüssel setzen, der eine Schutzwirkung des
+Nutzers aufhebt; ein solcher Schlüssel ist dort `CONFIG_003`, und der Daemon startet nicht. Dazu
+gehört seit HUM-208 `hold.hard_block_checksum_secrets`: Vorher konnte ein Projekt-Profil die harte
+Sperre für IBAN und Kartennummer still abschalten, sobald `humanitld` in diesem Verzeichnis
+gestartet wurde (Sicherheitsdurchlauf vom 2026-09-23, Befund M6). Die vollständige Liste steht in
+[`CONFIG.md`](CONFIG.md), Spalte „Projekt".
+
 Toolchain-Anforderungen für Reproduzierbarkeit: Rust 1.85+ (gepinnt in
 `daemon/rust-toolchain.toml`), Flutter 3.47.2 (gepinnt in `app/.fvmrc`), `bubblewrap` 0.8+.
 `socat` wird **nicht** benötigt; die Brücke steckt im Shim, damit kein weiteres Programm in der

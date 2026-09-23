@@ -16,7 +16,8 @@
 //!
 //! `x-project-scope = "denied"` steht an jedem Schlüssel, den das Projekt-Profil
 //! nicht setzen darf (`backlog/CONVENTIONS.md` 4.11): `llm.*`, `sandbox.*`,
-//! `agent.adapter`, `agent.command`, `hold.ask_mode`, `findings.enabled`,
+//! `agent.adapter`, `agent.command`, `hold.ask_mode`,
+//! `hold.hard_block_checksum_secrets`, `findings.enabled`,
 //! `findings.ignored_hashes`, `findings.email_allow_domains`, `pseudonyms.*`,
 //! `resolver.*`, `experimental.*`, `recorder.retention_days`, `audit.*`. Eine Gruppe ist
 //! `denied`, wenn jedes Blatt darunter es ist.
@@ -117,7 +118,9 @@ pub struct HoldConfig {
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub ask_mode: AskMode,
     /// Blockt Anfragen mit prüfsummen-sicheren Geheimnissen sofort, ohne zu fragen.
-    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
+    // Gesperrt für das Projekt-Profil (HUM-208): Ein geklontes Repository soll
+    // die harte Sperre des Nutzers nicht still aufheben können.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub hard_block_checksum_secrets: bool,
 }
 

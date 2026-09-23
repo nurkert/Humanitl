@@ -16,7 +16,9 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use humanitl_config::scope::ProjectScope;
-use humanitl_config::{Env, Origin, ProfileSource, Sources, alias, load, schema};
+use humanitl_config::{
+    Env, Origin, ProfileSelection, ProfileSource, Sources, alias, load, resolve, schema,
+};
 use humanitl_core::{Diagnostic, Severity};
 use serde_json::Value;
 
@@ -31,6 +33,7 @@ const DENIED_BY_CONVENTION: &[&str] = &[
     "agent.adapter",
     "agent.command",
     "hold.ask_mode",
+    "hold.hard_block_checksum_secrets",
     "findings.enabled",
     "findings.ignored_hashes",
     "findings.email_allow_domains",
@@ -362,4 +365,77 @@ fn an_alias_is_judged_by_its_canonical_key() {
             }
         }
     }
+}
+
+/// Der Weg aus dem Sicherheitsdurchlauf vom 2026-09-23 (Befund M6, HUM-208):
+/// Global steht die harte Sperre für Geheimnisse mit Prüfsumme an, und ein
+/// geklontes Repository bringt ein Projekt-Profil mit, das sie abschaltet.
+/// `humanitld` löst beim Start mit dem Arbeitsverzeichnis als Projekt auf;
+/// genau diesen Weg geht der Test über [`resolve`]. Vor dem Fix überschrieb
+/// Ebene 5 die Ebene 2 still, und IBAN oder Kartennummer gingen über eine
+/// vorhandene Freigabe ungefragt hinaus.
+#[test]
+fn a_cloned_project_cannot_lift_the_hard_block_of_the_user() {
+    let scratch = Scratch::new();
+    scratch.write(
+        "cfg/humanitl/config.toml",
+        "[hold]\nhard_block_checksum_secrets = true\n",
+    );
+    let project = scratch.dir.path().join("project");
+    std::fs::create_dir_all(&project).expect("mkdir");
+    let env = Env::from_pairs([
+        ("HOME", scratch.dir.path().display().to_string()),
+        (
+            "XDG_CONFIG_HOME",
+            scratch.dir.path().join("cfg").display().to_string(),
+        ),
+    ]);
+
+    // Ohne Projekt-Profil gilt der Wert des Nutzers.
+    let resolved = resolve(&ProfileSelection::any(), Some(&project), &env, &[])
+        .expect("the global config alone loads");
+    assert!(resolved.config.hold.hard_block_checksum_secrets);
+    assert_eq!(
+        resolved.origin("hold.hard_block_checksum_secrets"),
+        Some(&Origin::Global)
+    );
+
+    // Das Projekt-Profil aus dem Befund lässt das Laden scheitern, statt die
+    // Sperre aufzuheben.
+    let profile = scratch.write(
+        "project/.humanitl/profile.toml",
+        "[config.hold]\nhard_block_checksum_secrets = false\n",
+    );
+    let diagnostic = match resolve(&ProfileSelection::any(), Some(&project), &env, &[]) {
+        Ok(resolved) => panic!(
+            "a project profile lifted the hard block: hard_block_checksum_secrets = {}",
+            resolved.config.hold.hard_block_checksum_secrets
+        ),
+        Err(diagnostic) => diagnostic,
+    };
+    assert_denied(&diagnostic, "hold.hard_block_checksum_secrets", &profile);
+}
+
+/// Die Sperre gilt in beide Richtungen: Auch ein Projekt, das den Schalter
+/// einschalten will, setzt ihn nicht. Der Schalter gehört dem Nutzer wie
+/// `findings.enabled`; wer ihn für ein Projekt braucht, setzt ihn im globalen
+/// Profil.
+#[test]
+fn a_project_profile_cannot_switch_the_hard_block_on_either() {
+    let scratch = Scratch::new();
+    let profile = scratch.project_profile("hold.hard_block_checksum_secrets = true");
+    let diagnostic = expect_err(&Sources {
+        profile_project: Some(profile.clone()),
+        ..Sources::empty()
+    });
+    assert_denied(&diagnostic, "hold.hard_block_checksum_secrets", &profile);
+
+    // Aus dem globalen Profil bleibt der Schlüssel erlaubt.
+    let global = scratch.global_profile("hold.hard_block_checksum_secrets = true");
+    let resolved = load(&Sources {
+        profiles: vec![ProfileSource::File(global)],
+        ..Sources::empty()
+    })
+    .expect("a global profile may set the hard block");
+    assert!(resolved.config.hold.hard_block_checksum_secrets);
 }

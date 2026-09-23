@@ -128,7 +128,7 @@ Wie lange und auf welchem Weg gefragt wird, bevor eine Anfrage weiterläuft.
 | Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
 |---|---|---|---|---|---|---|
 | `hold.ask_mode` | ui \| terminal \| none | `"ui"` | advanced | denied | ja | Wo gefragt wird: in der Oberfläche, im Terminal oder gar nicht. |
-| `hold.hard_block_checksum_secrets` | boolean | `false` | advanced | allowed | ja | Blockt Anfragen mit prüfsummen-sicheren Geheimnissen sofort, ohne zu fragen. |
+| `hold.hard_block_checksum_secrets` | boolean | `false` | advanced | denied | ja | Blockt Anfragen mit prüfsummen-sicheren Geheimnissen sofort, ohne zu fragen. |
 | `hold.timeout_secs` | integer | `300` | basic | allowed | ja | Sekunden, die eine angehaltene Anfrage auf eine Entscheidung wartet, bevor sie als Zeitüberschreitung endet. |
 
 ### `limits`
