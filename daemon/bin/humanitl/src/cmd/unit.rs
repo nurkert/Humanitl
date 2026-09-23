@@ -62,6 +62,23 @@ pub const SOCKET_NAME: &str = "humanitld.socket";
 /// Hinweis auf eine Installation durch das Paket.
 pub const SYSTEM_UNIT_DIR: &str = "/usr/lib/systemd/user";
 
+/// Die Variable, die [`SYSTEM_UNIT_DIR`] ersetzt (HUM-077).
+///
+/// Für Tests: Auf einem Rechner mit installiertem Paket liefen die Tests von
+/// `daemon install` und `daemon uninstall` sonst den Weg des Pakets. Ein
+/// einfacher Unterstrich, also kein Konfigurationsschlüssel; der Lader
+/// übergeht sie (`humanitl_config::load`). Sie ändert nur, wo die
+/// Kommandozeile nach den Units des Pakets sucht, nicht, was systemd lädt.
+pub const SYSTEM_UNIT_DIR_ENV: &str = "HUMANITL_SYSTEM_UNIT_DIR";
+
+/// Wo die Units des Pakets gesucht werden: [`SYSTEM_UNIT_DIR`], außer
+/// [`SYSTEM_UNIT_DIR_ENV`] nennt ein anderes Verzeichnis.
+#[must_use]
+pub fn system_unit_dir(env: &humanitl_config::Env) -> PathBuf {
+    env.non_empty(SYSTEM_UNIT_DIR_ENV)
+        .map_or_else(|| PathBuf::from(SYSTEM_UNIT_DIR), PathBuf::from)
+}
+
 /// Der Name des Daemons, wie er neben der Kommandozeile liegt.
 pub const DAEMON_NAME: &str = "humanitld";
 
@@ -468,6 +485,18 @@ impl Enablement {
             ),
         ))
     }
+}
+
+/// Jeder Verweis der Aktivierung der genannten Units unter `dir`
+/// (`<ziel>.wants/<name>`, `<ziel>.requires/<name>`).
+///
+/// Für `daemon uninstall` (HUM-077): Ohne `systemctl` entfernt der Befehl sie
+/// selbst, und danach prüft er, dass keiner stehen blieb. Derselbe Leser wie
+/// [`Enablement::read_for`], damit Anlegen und Entfernen dieselben Verweise
+/// meinen.
+#[must_use]
+pub fn enablement_links(dir: &Path, names: &[&str]) -> Vec<PathBuf> {
+    Enablement::read_for(dir, names).links.into_iter().collect()
 }
 
 /// Die Units, die das Paket unter [`SYSTEM_UNIT_DIR`] abgelegt hat.

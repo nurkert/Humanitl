@@ -706,6 +706,24 @@ pub enum DaemonCmd {
 
     /// Show the journal of the daemon: journalctl --user -u humanitld.
     Logs(LogsArgs),
+
+    /// Stop and disable the service and remove the unit daemon install wrote.
+    Uninstall(UninstallArgs),
+}
+
+/// Die Argumente von `humanitl daemon uninstall` (HUM-077).
+///
+/// Entfernt wird nur, was `daemon install` angelegt hat: die Unit mit der
+/// Marke, die Verweise der Aktivierung und mit `--purge-binaries` die Kopien
+/// aus einem `AppImage`. Die Units des Pakets gehören dem Paket; sie werden
+/// abgemeldet, aber nicht gelöscht.
+#[derive(Debug, Args)]
+pub struct UninstallArgs {
+    // Der Text der Doc-Kommentare ist der Hilfetext von `clap` und deshalb
+    // englisch (CONVENTIONS.md 3.9).
+    /// Also remove the copies an `AppImage` placed under `~/.local/lib/humanitl`.
+    #[arg(long)]
+    pub purge_binaries: bool,
 }
 
 /// Die Argumente von `humanitl daemon logs`.
@@ -752,6 +770,15 @@ pub struct InstallArgs {
     /// the directory of the running humanitl.
     #[arg(long = "bin-dir", value_name = "DIR")]
     pub bin_dir: Option<PathBuf>,
+
+    /// Only from an `AppImage`, and only when daemon install ran before: if the
+    /// installed copy is another version, copy this one and restart the
+    /// service. Otherwise do nothing.
+    ///
+    /// The `AppImage` runs this at every start (`AppRun`, HUM-077); the first
+    /// install stays a click in the setup or `--cli daemon install`.
+    #[arg(long, conflicts_with_all = ["print", "no_start", "bin_dir"])]
+    pub refresh: bool,
 }
 
 /// Ein gelesener Aufruf: die Unterkommandos und die Konfigurations-Flags.

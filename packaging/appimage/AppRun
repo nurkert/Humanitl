@@ -1,5 +1,5 @@
 #!/bin/sh
-# Der Einstieg des AppImage (HUM-053).
+# Der Einstieg des AppImage (HUM-053, HUM-077).
 #
 #   ./Humanitl-<version>-x86_64.AppImage              startet die Anwendung
 #   ./Humanitl-<version>-x86_64.AppImage --cli ARGS   startet die Kommandozeile
@@ -9,6 +9,21 @@
 # AppImage an `$APPIMAGE` und kopiert Daemon und Shim nach
 # `~/.local/lib/humanitl/`, weil der Einhaengepunkt mit dem Prozess
 # verschwindet (HUM-070).
+#
+# Vor der Anwendung laeuft `daemon install --refresh` (HUM-077): Hat dieses
+# oder ein frueheres AppImage den Dienst schon eingerichtet und liegt unter
+# `~/.local/lib/humanitl/current` eine andere Fassung als diese, kopiert die
+# Kommandozeile Daemon und Shim dieser Fassung heraus, haengt `current` um,
+# startet den Dienst neu und raeumt erst danach die alte Kopie weg. Ist nichts
+# eingerichtet oder dieselbe Fassung, tut der Aufruf nichts und kehrt sofort
+# zurueck. Die erste Einrichtung bleibt ein Klick in der Einrichtung der
+# Anwendung (oder `--cli daemon install`): Eine Unit, die bei jeder Anmeldung
+# einen Dienst startet, legt ein Programmstart nicht ungefragt an.
+#
+# Scheitert die Erneuerung, startet die Anwendung trotzdem. Der Befund steht
+# auf stderr, und die Einrichtung der Anwendung zeigt, ob der Dienst antwortet.
+# `-q` nimmt nur die Notiz "nothing to do"; die Ankuendigung einer Unit, die
+# geschrieben wird, und jeder Befund bleiben sichtbar.
 #
 # Kein `LD_LIBRARY_PATH`: GTK, GLib, Mesa und die Wayland-Bibliotheken kommen
 # vom System, das Bild bringt nur die Bibliotheken des Flutter-Bundles mit, und
@@ -23,5 +38,8 @@ app="$here/usr/lib/humanitl"
 if [ "${1:-}" = "--cli" ]; then
   shift
   exec "$app/bin/humanitl" "$@"
+fi
+if [ -n "${APPIMAGE:-}" ]; then
+  "$app/bin/humanitl" -q daemon install --refresh >/dev/null || true
 fi
 exec "$app/humanitl" "$@"
