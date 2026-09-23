@@ -50,7 +50,7 @@ String ruleActionWord(RuleAction action, AppLocalizations l10n) =>
 /// Was [rule] trifft, in einer Zeile: Methoden, Host, Pfad und was der Matcher
 /// sonst festnagelt.
 ///
-/// `GET,HEAD · **.npmjs.org · /**`. Ein Teil, den die Regel nicht nennt, fällt
+/// `GET,HEAD · **.npmjs.org · /** · prefix /v1/`. Ein Teil, den die Regel nicht nennt, fällt
 /// weg: eine Regel ohne Pfad trifft jeden Pfad, und eine Zeile, die das zweimal
 /// sagte, wäre länger, ohne mehr zu sagen. Die Methoden sind die eine Ausnahme;
 /// eine fehlende Methodenliste wird als [AppLocalizations.rulesAnyMethod]
@@ -63,6 +63,10 @@ String ruleMatchSummary(Rule rule, AppLocalizations l10n) {
         : matcher.methods.map((Method m) => m.token).join(','),
     matcher.host,
     if (matcher.path.isNotEmpty) matcher.path,
+    // Die Präfixe verengen die Regel. Eine Zeile ohne sie läse sich wie die
+    // weitere Regel, und genau so blieb ihr Verlust unbemerkt (HUM-205).
+    if (matcher.pathPrefixes.isNotEmpty)
+      l10n.rulesMatchPathPrefixes(matcher.pathPrefixes.join(', ')),
     if (matcher.scheme case final Scheme scheme) scheme.name,
     if (matcher.port != 0) ':${matcher.port}',
     if (matcher.upgrade == Upgrade.websocket) l10n.rulesUpgradeWebsocketShort,

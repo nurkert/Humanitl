@@ -10,7 +10,9 @@ import 'package:humanitl/core/ipc/generated/humanitl/v1/common.pbenum.dart'
     as pb;
 import 'package:humanitl/core/ipc/generated/humanitl/v1/humanitl.pb.dart' as pb;
 import 'package:humanitl/core/ipc/generated/humanitl/v1/rules.pb.dart' as pb;
-import 'package:protobuf/protobuf.dart' show ProtobufEnum;
+import 'package:protobuf/protobuf.dart'
+    show FieldInfo, GeneratedMessage, ProtobufEnum;
+import 'package:protobuf/well_known_types/google/protobuf/empty.pb.dart';
 import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart';
 
 /// `FLOW_STATE_HELD` → `held`, `BLOCK_REASON_HOLD_MAX_FLOWS` → `holdMaxFlows`.
@@ -438,5 +440,134 @@ void main() {
     expect(request.limit, 50);
     expect(request.cursor, 'c1');
     expect(request.includePassthrough, isTrue);
+  });
+
+  group('HUM-205: nothing of a rule is lost on the way', () {
+    /// Die Feldnamen einer Proto-Nachricht, wie `protoc-gen-dart` sie nennt.
+    Set<String> wireFields(GeneratedMessage message) => message
+        .info_
+        .fieldInfo
+        .values
+        .map((FieldInfo<Object?> f) => f.name)
+        .toSet();
+
+    test('rule_matcher_names_every_wire_field', () {
+      // Voll besetzt, damit `toJson` jeden Schlüssel schreibt.
+      const RuleMatcher matcher = RuleMatcher(
+        host: 'api.example.com',
+        methods: <Method>[Method.get],
+        path: '/**',
+        scheme: Scheme.https,
+        port: 443,
+        upgrade: Upgrade.none,
+        pathPrefixes: <String>['/v1/'],
+      );
+      expect(matcher.toJson().keys.toSet(), wireFields(pb.RuleMatcher()));
+    });
+
+    test('rule_names_every_wire_field', () {
+      final Rule rule = Rule(
+        id: const RuleId('018f0000-0000-7000-8000-0000000000a1'),
+        action: RuleAction.allow,
+        matcher: const RuleMatcher(host: 'api.example.com'),
+        createdFrom: const FlowId('018f0000-0000-7000-8000-000000000002'),
+        note: 'n',
+        createdAt: DateTime.utc(2026, 9, 23),
+      );
+      // Zwei Namen weichen ab, weil die Domäne Id-Typen trägt.
+      const Map<String, String> renamed = <String, String>{
+        'id': 'ruleId',
+        'createdFrom': 'createdFromFlowId',
+      };
+      expect(
+        rule.toJson().keys.map((String k) => renamed[k] ?? k).toSet(),
+        wireFields(pb.Rule()),
+      );
+    });
+
+    // Die Namensgleichheit oben schützt keine Zuweisung im Konverter. Dieser
+    // Rundlauf tut es: jedes Feld trägt einen Wert, der nicht der Vorgabe
+    // entspricht, also fällt jede fehlende Zuweisung in `toDomain` oder
+    // `toProto` als Unterschied auf.
+    pb.RuleMatcher fullMatcher() {
+      final pb.RuleMatcher m = pb.RuleMatcher()
+        ..host = '**.example.com'
+        ..path = '/api/**'
+        ..scheme = pb.Scheme.SCHEME_WSS
+        ..port = 8443
+        ..upgrade = pb.Upgrade.UPGRADE_WEBSOCKET;
+      m.methods.addAll(<pb.Method>[
+        pb.Method.METHOD_GET,
+        pb.Method.METHOD_POST,
+      ]);
+      m.pathPrefixes.addAll(<String>['/v1/', '/v2/admin']);
+      return m;
+    }
+
+    test('a fully populated matcher survives toDomain then toProto', () {
+      final pb.RuleMatcher p = fullMatcher();
+      expect(p.toDomain().toProto(), p);
+    });
+
+    test('a fully populated rule survives toDomain then toProto', () {
+      final List<pb.RuleExpiry> expiries = <pb.RuleExpiry>[
+        pb.RuleExpiry()..never = Empty(),
+        pb.RuleExpiry()..session = Empty(),
+        pb.RuleExpiry()
+          ..at = Timestamp.fromDateTime(DateTime.utc(2099, 1, 2, 3, 4, 5)),
+      ];
+      for (final pb.RuleExpiry expiry in expiries) {
+        final pb.Rule p = pb.Rule()
+          ..ruleId = '018f0000-0000-7000-8000-0000000002a5'
+          ..action = pb.RuleAction.RULE_ACTION_ALLOW
+          ..matcher = fullMatcher()
+          ..expires = expiry
+          ..stream = true
+          ..createdFromFlowId = '018f0000-0000-7000-8000-000000000002'
+          ..bundled = true
+          ..note = 'npm install'
+          ..createdAt = Timestamp.fromDateTime(DateTime.utc(2026, 9, 23, 11))
+          ..position = 3
+          ..hitCount = Int64(14)
+          ..allowPrivate = true
+          ..disabled = true
+          ..passthroughLlm = true;
+        expect(p.toDomain().toProto(), p, reason: expiry.whichExpiry().name);
+      }
+    });
+
+    test('path_prefixes_survive_list_then_make_permanent', () {
+      // Wie `list` sie liefert: eine Regel mit Frist und zwei Präfixen.
+      final pb.Rule listed = pb.Rule()
+        ..ruleId = '018f0000-0000-7000-8000-0000000002a5'
+        ..action = pb.RuleAction.RULE_ACTION_ALLOW
+        ..matcher = (pb.RuleMatcher()..host = 'api.example.com')
+        ..expires = (pb.RuleExpiry()
+          ..at = Timestamp.fromDateTime(DateTime.utc(2099)))
+        ..passthroughLlm = true;
+      listed.matcher.pathPrefixes.addAll(<String>['/v1/', '/v2/admin']);
+
+      final Rule rule = listed.toDomain();
+      expect(rule.matcher.pathPrefixes, <String>['/v1/', '/v2/admin']);
+      expect(rule.passthroughLlm, isTrue);
+
+      // „Dauerhaft machen" bei einer Frist schickt `update` mit `never`.
+      final pb.Rule sent = rule
+          .copyWith(expires: const RuleExpiry.never())
+          .toProto();
+      expect(sent.matcher.pathPrefixes, <String>['/v1/', '/v2/admin']);
+      expect(sent.passthroughLlm, isTrue);
+    });
+
+    test('a proposed rule in a fix keeps its path prefix', () {
+      final pb.Rule proposed = pb.Rule()
+        ..action = pb.RuleAction.RULE_ACTION_ALLOW
+        ..matcher = (pb.RuleMatcher()..host = 'api.example.com');
+      proposed.matcher.pathPrefixes.add('/v1/');
+      final FixAction? fix = (pb.FixAction()..addRule = proposed).toDomain();
+      expect((fix! as FixActionAddRule).rule.matcher.pathPrefixes, <String>[
+        '/v1/',
+      ]);
+    });
   });
 }

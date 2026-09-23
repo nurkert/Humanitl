@@ -262,6 +262,19 @@ class _RuleEditorState extends ConsumerState<RuleEditor> {
                   },
                 ),
               ),
+              // Nur lesend: das Formular baut keine Präfixe, aber es zeigt,
+              // dass die Regel sie trägt, und `copyWith` am Matcher lässt sie
+              // beim Speichern stehen (HUM-205).
+              if (draft.matcher.pathPrefixes.isNotEmpty)
+                RuleField(
+                  label: l10n.rulesFieldPathPrefixes,
+                  hint: l10n.rulesPathPrefixesReadOnly,
+                  child: Text(
+                    draft.matcher.pathPrefixes.join(', '),
+                    key: const Key('rule-path-prefixes'),
+                    style: tokens.typography.mono13.tinted(tokens.colors.fg0),
+                  ),
+                ),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[

@@ -452,4 +452,50 @@ void main() {
     expect(client.updated, isEmpty);
     expect(find.text(l10n.rulesEndsAtPast), findsOneWidget);
   });
+
+  testWidgets('path prefixes show in row and editor and survive a save', (
+    WidgetTester tester,
+  ) async {
+    // HUM-205: Das Formular baut keine Präfixe, aber eine Regel, die sie
+    // trägt, zeigt sie überall, wo sie steht, und behält sie beim Speichern.
+    final RulesTestClient client = RulesTestClient();
+    await client.addRule(
+      const Rule(
+        action: RuleAction.allow,
+        matcher: RuleMatcher(
+          host: 'api.example.com',
+          pathPrefixes: <String>['/v1/'],
+        ),
+        expires: RuleExpiry.never(),
+      ),
+    );
+    await pumpRules(tester, client: client);
+
+    final Finder row = find.ancestor(
+      of: find.textContaining('prefix /v1/', findRichText: true),
+      matching: find.byType(RuleRow),
+    );
+    expect(row, findsOneWidget);
+    await tester.tap(row);
+    await tester.pump();
+
+    await tester.enterText(
+      find.byKey(const Key('rule-host')),
+      'api2.example.com',
+    );
+    await tester.pump();
+
+    final Finder shown = find.byKey(const Key('rule-path-prefixes'));
+    await reveal(tester, shown);
+    expect(tester.widget<Text>(shown).data, '/v1/');
+    expect(find.text(l10n.rulesPathPrefixesReadOnly), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('rule-save')));
+    await tester.pump();
+    await tester.pump();
+
+    expect(client.updated, hasLength(1));
+    expect(client.updated.single.matcher.host, 'api2.example.com');
+    expect(client.updated.single.matcher.pathPrefixes, <String>['/v1/']);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 }
