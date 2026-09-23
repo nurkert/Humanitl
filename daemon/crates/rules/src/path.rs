@@ -109,32 +109,117 @@ pub fn strip_query(path_and_query: &str) -> &str {
 ///
 /// # Punkt-Segmente
 ///
-/// Ein Pfad mit einem `..`-Segment trifft nie ein Präfix. `/api/chat/../pull`
-/// beginnt zwar mit `/api/chat`, meint aber `/api/pull`, und der Server dahinter
-/// löst das auf, bevor er antwortet. Die Präfix-Bedingung ist die Grenze der
-/// Durchreichregel (HUM-039); ein Pfad, dessen Ziel erst nach einer
-/// Normalisierung feststeht, darf sie nicht überschreiten. Geprüft wird auf
-/// einer Kopie, in der `%2e` zu `.` und `%2f`, `%5c` sowie `\` zu `/` werden,
-/// damit die verschleierten Schreibweisen dieselbe Antwort bekommen. Der
-/// Vergleich selbst läuft danach wieder auf dem unveränderten Pfad: Die Regel
-/// entscheidet über den Pfad, der wirklich hinausgeht.
+/// Diese Funktion vergleicht nur Zeichen. Was ein Pfad mit einem `..`-Segment
+/// für eine Regel bedeutet, entscheidet allein die Auswertung in
+/// [`crate::eval`] (HUM-204): Eine Regel, die durchlässt, trifft ihn nie; eine
+/// Regel, die blockt oder fragt, prüft zusätzlich den aufgelösten Pfad aus
+/// `normalize_path`. Wer ein Präfix aus einem Pfad ableiten will, fragt
+/// vorher [`has_dot_dot_segment`].
 #[must_use]
 pub fn prefix_matches(prefixes: &[String], path_and_query: &str) -> bool {
     let path = strip_query(path_and_query);
-    if has_dot_dot_segment(path) {
-        return false;
-    }
     prefixes.iter().any(|prefix| path.starts_with(prefix))
 }
 
 /// Wahr, wenn der Pfad ein `..`-Segment enthält, auch verschleiert.
 ///
-/// Entschlüsselt wird genau so viel, wie für diese Frage nötig ist: `%2e` wird
-/// zu `.`, `%2f` und `%5c` werden zu `/`, ein `\\` ebenso. Alles andere bleibt
-/// stehen. Eine doppelte Kodierung (`%252e`) wird dabei zu `%2e` und damit zu
-/// keinem Punkt — richtig so, denn auch der Server dahinter dekodiert nur
-/// einmal.
-fn has_dot_dot_segment(path: &str) -> bool {
+/// `/api/chat/../pull` beginnt zwar mit `/api/chat`, meint aber `/api/pull`,
+/// und der Server dahinter löst das auf, bevor er antwortet. Geprüft wird auf
+/// einer Kopie, in der nur `%2e` zu `.` und `%2f`, `%5c` sowie `\` zu `/`
+/// werden, damit die verschleierten Schreibweisen dieselbe Antwort bekommen.
+/// Eine doppelte Kodierung (`%252e`) bleibt kodiert.
+///
+/// Ein Segment zählt auch dann als `..`, wenn ihm Pfadparameter nach `;`
+/// folgen: Tomcat und Spring lesen `/a/..;x/b` als `/b` (HUM-204).
+///
+/// Übergeben wird der Pfad ohne Query.
+#[must_use]
+pub fn has_dot_dot_segment(path: &str) -> bool {
+    decode_dot_forms(path)
+        .split('/')
+        .any(|segment| without_parameters(segment) == "..")
+}
+
+/// Der Pfad so, wie ein Server ihn nach dem Auflösen der Punktsegmente sieht.
+///
+/// Vier Schritte, in dieser Reihenfolge, auf dem Pfad ohne Query:
+///
+/// 1. Einmal entschlüsselt werden die Punkt- und Trennerformen wie in
+///    [`decode_dot_forms`] und zusätzlich die nicht reservierten Zeichen nach
+///    RFC 3986, Abschnitt 6.2.2.2 (Buchstaben, Ziffern, `-._~`): `/%61dmin`
+///    wird zu `/admin`. Eine doppelte Kodierung (`%252e`) bleibt `%252e`.
+/// 2. In jedem Segment fallen Pfadparameter ab dem ersten `;` weg, wie Tomcat
+///    es tut.
+/// 3. Leere Segmente fallen weg, wie bei nginx (`merge_slashes`), Tomcat und
+///    Spring: `//admin` wird zu `/admin`. Ein abschließender `/` bleibt.
+/// 4. `remove_dot_segments` nach RFC 3986, Abschnitt 5.2.4.
+///
+/// Das Ergebnis dient nur dem zusätzlichen Vergleich einer Regel, die blockt
+/// oder fragt. Trifft es mehr als der Server, blockt oder fragt die Regel
+/// öfter; eine Freigabe entsteht daraus nie. Weitergeleitet wird immer der
+/// unveränderte Pfad.
+#[must_use]
+pub(crate) fn normalize_path(path: &str) -> String {
+    let decoded = decode(path, Decode::WithUnreserved);
+    let (absolute, rest) = match decoded.strip_prefix('/') {
+        Some(rest) => (true, rest),
+        None => (false, decoded.as_str()),
+    };
+    let mut kept: Vec<&str> = Vec::new();
+    let mut ends_in_directory = false;
+    for segment in rest.split('/').map(without_parameters) {
+        ends_in_directory = matches!(segment, "" | "." | "..");
+        match segment {
+            "" | "." => {}
+            ".." => {
+                kept.pop();
+            }
+            other => kept.push(other),
+        }
+    }
+    let mut normalized = String::with_capacity(decoded.len());
+    if absolute {
+        normalized.push('/');
+    }
+    normalized.push_str(&kept.join("/"));
+    if ends_in_directory && !kept.is_empty() {
+        normalized.push('/');
+    }
+    normalized
+}
+
+/// Ein Segment ohne seine Pfadparameter: alles bis zum ersten `;`.
+fn without_parameters(segment: &str) -> &str {
+    match segment.split_once(';') {
+        Some((name, _)) => name,
+        None => segment,
+    }
+}
+
+/// Eine Kopie des Pfads, in der nur die Punkt- und Trennerformen entschlüsselt
+/// sind.
+///
+/// `%2e` wird zu `.`, `%2f` und `%5c` werden zu `/`, ein `\\` ebenso, jeweils
+/// ohne Rücksicht auf Groß- und Kleinschreibung. Alles andere bleibt stehen;
+/// das ist keine allgemeine Prozent-Dekodierung. Eine doppelte Kodierung
+/// (`%252e`) wird dabei zu keinem Punkt — richtig so, denn auch der Server
+/// dahinter dekodiert nur einmal.
+fn decode_dot_forms(path: &str) -> String {
+    decode(path, Decode::DotFormsOnly)
+}
+
+/// Entschlüsselt einmal die Punkt- und Trennerformen, mit `unreserved` auch
+/// die nicht reservierten Zeichen nach RFC 3986, Abschnitt 6.2.2.2.
+/// Was [`decode`] außer den Punkt- und Schrägstrichformen noch entschlüsselt.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Decode {
+    /// Nur `%2e`, `%2f`, `%5c` und `\\`: die Formen, die ein Segment zu `..` machen.
+    DotFormsOnly,
+    /// Dazu einmal die nicht reservierten Zeichen nach RFC 3986 6.2.2.2.
+    WithUnreserved,
+}
+
+fn decode(path: &str, mode: Decode) -> String {
     let mut decoded = String::with_capacity(path.len());
     let mut rest = path;
     while let Some(character) = rest.chars().next() {
@@ -152,18 +237,26 @@ fn has_dot_dot_segment(path: &str) -> bool {
                 }
                 _ => {}
             }
+            if mode == Decode::WithUnreserved
+                && let Ok(byte) = u8::from_str_radix(&rest[1..3], 16)
+                && (byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'~'))
+            {
+                decoded.push(char::from(byte));
+                rest = &rest[3..];
+                continue;
+            }
         }
         decoded.push(if character == '\\' { '/' } else { character });
         rest = &rest[character.len_utf8()..];
     }
-    decoded.split('/').any(|segment| segment == "..")
+    decoded
 }
 
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-    use super::prefix_matches;
+    use super::{has_dot_dot_segment, normalize_path, prefix_matches};
 
     fn prefixes() -> Vec<String> {
         vec!["/v1/".to_owned(), "/api/chat".to_owned()]
@@ -181,27 +274,87 @@ mod tests {
         );
     }
 
+    /// Die verschleierten Schreibweisen eines `..`-Segments. Dass eine
+    /// durchlassende Regel sie nie trifft, entscheidet die Auswertung
+    /// (`tests/eval.rs`); hier steht, dass die Erkennung sie alle sieht.
     #[test]
-    fn a_dot_dot_segment_never_matches_a_prefix() {
+    fn a_dot_dot_segment_is_seen_in_every_spelling() {
         for path in [
             "/api/chat/../pull",
             "/api/chat/%2e%2e/pull",
             "/api/chat%2f..%2fpull",
             "/api/chat/..%5cpull",
+            "/api/chat\\..\\pull",
+            "/api/chat/..;x/pull",
             "/v1/../admin",
         ] {
-            assert!(
-                !prefix_matches(&prefixes(), path),
-                "{path} would leave the boundary of the rule"
-            );
+            assert!(has_dot_dot_segment(path), "{path} leaves its prefix");
         }
         assert!(
-            prefix_matches(&prefixes(), "/v1/a..b"),
+            !has_dot_dot_segment("/v1/a..b"),
             "two dots inside a segment are just characters"
         );
         assert!(
-            prefix_matches(&prefixes(), "/v1/%252e%252e/x"),
+            !has_dot_dot_segment("/v1/%252e%252e/x"),
             "a double encoding stays encoded for the server as well"
         );
+    }
+
+    /// `normalize_path` löst auf wie ein Server: Punkt- und Trennerformen
+    /// entschlüsselt, Pfadparameter weg, dann RFC 3986 5.2.4.
+    #[test]
+    fn normalize_path_resolves_like_the_server() {
+        for (path, expected) in [
+            ("/x/../admin", "/admin"),
+            ("/x/%2E%2E/admin", "/admin"),
+            ("/x/%2e%2e%2fadmin", "/admin"),
+            ("/x\\..\\admin", "/admin"),
+            ("/repos/me/../../user/keys", "/user/keys"),
+            ("/repos/me/..;x/..;y/user/keys", "/user/keys"),
+            ("/admin;jsessionid=1/x", "/admin/x"),
+            ("/a/./b/.", "/a/b/"),
+            ("/a/b/..", "/a/"),
+            ("/../../etc/passwd", "/etc/passwd"),
+            ("/..", "/"),
+            ("/", "/"),
+            ("/a//b/", "/a/b/"),
+            ("//admin", "/admin"),
+            ("/x/..//admin", "/admin"),
+            ("/;x/admin", "/admin"),
+            ("/%61dmin", "/admin"),
+            ("/%41DMIN/%7Eu%2dx%5F1", "/ADMIN/~u-x_1"),
+            ("/%2Fadmin", "/admin"),
+            ("/a%20b/%3Fq", "/a%20b/%3Fq"),
+            ("/v1/%252e%252e/admin", "/v1/%252e%252e/admin"),
+        ] {
+            assert_eq!(normalize_path(path), expected, "{path}");
+        }
+    }
+
+    /// Die Pfade aus dem Befund HUM-204: Ein Glob `/repos/me/**` trifft sie
+    /// Zeichen für Zeichen, also muss die Punkt-Erkennung sie sehen, damit
+    /// die Auswertung eine Freigabe verweigert.
+    #[test]
+    fn the_paths_of_the_glob_finding_carry_a_dot_dot_segment() {
+        for path in [
+            "/repos/me/../../user/keys",
+            "/repos/me/%2e%2e/%2e%2e/user/keys",
+            "/repos/me/%2E%2e/user/keys",
+            "/repos/me/.%2e/user/keys",
+            "/repos/me/..;/..;/user/keys",
+            "/repos/me/..",
+        ] {
+            assert!(has_dot_dot_segment(path), "{path} leaves /repos/me/");
+        }
+        for path in [
+            "/repos/me/x",
+            "/repos/me/a..b",
+            "/repos/me/./x",
+            "/repos/me/...",
+            "/repos/me/%252e%252e/x",
+            "/repos/me/;..",
+        ] {
+            assert!(!has_dot_dot_segment(path), "{path} stays inside");
+        }
     }
 }
