@@ -1147,5 +1147,6 @@
   "isolationRefusalsLast": "zuletzt um {time}",
   "isolationRefusalsNetworkNote": "Eine Verbindung zu einer Adresse draußen steht nicht in dieser Liste: Ohne Route scheitert sie, bevor ein Filter gefragt wird. Das ist die erste Garantie oben, ein Zustand und kein Ereignis.",
   "diagSANDBOX019Title": "Verweigerte Verbindungsversuche werden nicht gemeldet",
-  "diagSANDBOX019Why": "Der Kernel hat dem Filter des Agenten keinen Zuhörer gegeben; verweigert wird weiter mit EPERM, gezählt und gemeldet wird nichts."
+  "diagSANDBOX019Why": "Der Kernel hat dem Filter des Agenten keinen Zuhörer gegeben; verweigert wird weiter mit EPERM, gezählt und gemeldet wird nichts.",
+  "interceptBatchWithheld": "{count, plural, =1{1 Anfrage mit offenem Fund bleibt angehalten. Sende sie aus ihrer Karte.} other{{count} Anfragen mit offenen Funden bleiben angehalten. Sende jede aus ihrer Karte.}}"
 }
