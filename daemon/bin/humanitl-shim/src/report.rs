@@ -17,6 +17,21 @@
 //! `name` is one of [`Check`]'s names; `evidence` is free text without
 //! whitespace (the report sanitises it), so a reader may split on spaces.
 //! Without `HUMANITL_REPORT_FD` there is no report and nothing is written.
+//!
+//! One more line exists, and only when `execvp` returned (HUM-137):
+//!
+//! ```text
+//! EXEC fail errno=<n>
+//! ```
+//!
+//! It is the launcher's proof that the agent never started. Only the child
+//! can write it, and only after a failed `exec`: the descriptor carries
+//! `CLOEXEC`, so a successful `exec` closes it before the agent's first
+//! instruction. The parent keeps its own copy until its setup is done, and
+//! the child waits at a gate before `exec` that opens only once the parent
+//! has dropped it (`launch` in `main.rs`): no process in the agent's PID
+//! namespace holds a report writer by the time the agent runs. Whatever the
+//! agent prints on its terminal is therefore never mistaken for it.
 
 use std::collections::VecDeque;
 use std::ffi::OsStr;
@@ -145,6 +160,25 @@ impl Report {
             sanitize(evidence)
         );
         write_all(fd.as_raw_fd(), line.as_bytes());
+    }
+}
+
+impl Report {
+    /// Writes the `EXEC fail` line: `execvp` returned with `err`.
+    ///
+    /// The line carries the error number and nothing the caller chose, so a
+    /// command name with a newline or a space in it cannot shape the report.
+    pub fn exec_failed(&self, err: &io::Error) {
+        let Some(fd) = self.fd.as_ref() else {
+            return;
+        };
+        let errno = err
+            .raw_os_error()
+            .map_or_else(|| "-".to_owned(), |n| n.to_string());
+        write_all(
+            fd.as_raw_fd(),
+            format!("EXEC fail errno={errno}\n").as_bytes(),
+        );
     }
 }
 

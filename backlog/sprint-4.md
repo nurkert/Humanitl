@@ -64,6 +64,7 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-170 | `GetConfig` und `GetSessionSummary` haben keinen Ort in der Oberfläche | S | HUM-078 |
 | HUM-171 | Tests lassen ihre Verzeichnisse in `/tmp` liegen | S | — |
 | HUM-185 | Der Bildschirm-Test gegen den echten Daemon fällt in CI zufällig aus | S | HUM-144 |
+| HUM-190 | `AGENT_004` zeigt einen PATH, den der Bildschirm zurückhält | S | HUM-139, HUM-137 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -3030,9 +3031,9 @@ Endet der Agent, bevor er das erste Byte geschrieben hat, und ist sein Exit-Code
 - Eine Ergänzung in `app/test/features/sandbox/daemon_live_test.dart`: Die Momentaufnahme trägt den Befund, wenn der Agent fehlt.
 
 ### Akzeptanzkriterien
-- [ ] Eine Sitzung mit einem Kommando, das es nicht gibt, erzeugt einen Befund mit Code, `why` und `fix`.
-- [ ] Der Bildschirm zeigt ihn, und der Ring bleibt bei der Wahrheit über die Sandbox.
-- [ ] `make check` grün.
+- [x] Eine Sitzung mit einem Kommando, das es nicht gibt, erzeugt einen Befund mit Code, `why` und `fix`. **Vorher gemessen am 2026-09-19:** kein Befund; der Daemon-Weg sendete nach dem Exit-Code `127` nur `Exit`, und die Vorprüfung des Adapters läuft für ein fremdes Kommando nicht. **Gemessen am 2026-09-19** mit `a_command_that_does_not_exist_is_said_in_the_stream` (`daemon/crates/ipc/tests/sandbox_start.rs`, echter Shim): `AGENT_005` als `Error` vor dem Exit-Code `127`, `why` mit Kommando und `PATH` der Sandbox, `fix` gesetzt, drei grüne Garantien, `running`, kein `failed`. Gegenprobe `an_agent_that_wrote_before_127_is_no_finding`: `/bin/sh -c gibt-es-nicht` endet mit `127`, schreibt aber, also kein Befund. Mutationsproben: Zweig in `report_exit` stillgelegt — rot; `first.observe` gestrichen — Gegenprobe rot; Shim-Zeile als Ausgabe gezählt — rot; `Blocking` statt `Error` — rot; `PATH` ohne Rückhalt — rot. **Nachgemessen am 2026-09-23 nach dem Review** (Codex blockierend, Antigravity): Das gescheiterte `exec` meldet der Shim jetzt auf dem Berichtskanal (`EXEC fail errno=<n>`), der Text im Terminal entscheidet nie. Neue Tests `a_forged_shim_line_on_the_terminal_is_no_finding`, `whitespace_before_127_is_output_and_no_finding`, `the_agent_cannot_write_the_exec_line_into_the_report`, `a_command_name_with_a_newline_is_still_said`, dazu `exec_failure_is_reported_on_the_report_channel` und `an_agent_that_ran_leaves_no_exec_line` im Shim; jede mit Mutationsprobe (Meldung im Shim gestrichen, `FD_CLOEXEC` entfernt, Leser ignoriert die Zeile, Daemon ignoriert den Bericht, Ausgabe egal, Leerraum zählt nicht, Exit-Code ungeprüft).
+- [x] Der Bildschirm zeigt ihn, und der Ring bleibt bei der Wahrheit über die Sandbox. **Gemessen am 2026-09-19** mit `app/test/features/sandbox/agent_never_ran_test.dart` (Linux-Variante): Karte `AGENT_005` unter dem Kopf mit dem Satz des Daemons, Zustand `running`, alle drei Segmente `passed`, kein blockierender Befund; und gegen den echten Daemon mit `a_missing_agent_is_a_finding_in_the_snapshot` in `daemon_live_test.dart` (`PATH=/usr/local/bin:/usr/bin:/bin` aus dem mitgelieferten Profil). Mutationsproben: Befundblock nicht gezeichnet — rot; Ring färbt sich an einem Fehlerbefund — rot; Provider verwirft den Befund — Widget- und Live-Test rot; Zweig im Daemon stillgelegt — Live-Test rot.
+- [x] `make check` grün. **Gemessen am 2026-09-19** mit `STRICT=1 make check` in einem privaten `/tmp`: Exit 0. `make escape` dazu: 124 bestanden, 0 rot.
 
 ### Fallstricke
 - Ein Agent, der sich selbst sofort beendet (`--version`), ist kein Fehler: Unterschieden wird an `126`/`127` und daran, dass nichts geschrieben wurde.
@@ -3843,3 +3844,22 @@ Widget-Tests für beide Anzeigen gegen den Fake-Client.
 
 ### Referenzen
 ADR-018; HUM-043; HUM-078; `backlog/CONVENTIONS.md` 4.35.
+
+---
+
+## HUM-190 · `AGENT_004` zeigt einen PATH, den der Bildschirm zurückhält
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-139, HUM-137 · Blockiert: —
+
+### Kontext
+Beim Bau von HUM-137 aufgefallen. `AGENT_005` nennt den `PATH` der Sandbox nur, wenn auch die Umgebungstabelle ihn zeigt (`sandbox_path_of` in `daemon/crates/ipc/src/sandbox.rs`, Regel aus `backlog/CONVENTIONS.md` 4.17): Steht er in `sandbox.env` oder in einem eigenen Profil, ersetzt ihn `<withheld>`. `AGENT_004` aus der Vorprüfung (HUM-139, `daemon/crates/sandbox/src/agent/opencode.rs`, `AgentContext::sandbox_path_display`) schreibt denselben Wert ohne diese Prüfung in `why` und in den Vorschlag `ChangeSetting` auf `sandbox.env.PATH`. Zwei Befunde reden über dieselbe Zeile und behandeln sie verschieden; der Bildschirm zeigt einen Wert in der Karte, den er zwei Reiter weiter als zurückgehalten ausweist.
+
+### Ziel
+Beide Befunde folgen einer Regel. Entweder gilt `PATH` als Wert, der unabhängig von seiner Herkunft gezeigt werden darf (dann steht die Ausnahme in 4.17 und in `VISIBLE_ENV`, und `sandbox_path_of` fällt weg), oder `AGENT_004` hält ihn zurück wie `AGENT_005`.
+
+### Akzeptanzkriterien
+- [ ] Die Entscheidung steht in `backlog/CONVENTIONS.md` 4.17.
+- [ ] Ein Test belegt für `AGENT_004` und `AGENT_005` dasselbe Verhalten bei einem `PATH` aus `sandbox.env`, mit Mutationsprobe.
+- [ ] `make check` grün.
+
+### Referenzen
+HUM-137; HUM-139; `backlog/CONVENTIONS.md` 4.17 und 4.39.

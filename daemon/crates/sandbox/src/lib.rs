@@ -16,6 +16,10 @@
 //! - [`agent`] der Port [`AgentAdapter`] mit [`AgentContext`],
 //!   [`SandboxFile`] und [`AdapterRegistry`]; der einzige Adapter des MVP ist
 //!   [`OpenCodeAdapter`] (HUM-037)
+//! - [`agent_exit`] woran sich ein Agent erkennen lässt, der nie gelaufen ist:
+//!   die Zeile `EXEC fail` im Bericht des Shims, sonst Exit-Code `126`/`127`
+//!   ohne ein Byte Ausgabe; Befund `AGENT_005`
+//!   (HUM-137)
 //! - [`bwrap_args`] die Übersetzung in die Argumentliste
 //! - [`bridge_env`] der Vertrag zwischen Launcher und Shim: Umgebung,
 //!   Bericht, Exit-Codes (HUM-011, HUM-012, HUM-013)
@@ -85,6 +89,7 @@
 pub(crate) mod test_support;
 
 pub mod agent;
+pub mod agent_exit;
 pub mod bridge_env;
 pub mod bwrap;
 pub mod bwrap_args;
@@ -100,11 +105,13 @@ pub use crate::agent::{
     AdapterRegistry, AgentAdapter, AgentContext, Mount, OpenCodeAdapter, Reach, SandboxFile,
     SandboxLookup, SandboxView, files_inside_work, find_in_path,
 };
+pub use crate::agent_exit::{FirstOutput, did_not_start};
 pub use crate::bridge_env::{
     CHECK_BRIDGE_LISTENING, CHECK_FAMILIES, CHECK_NAMES, CHECK_NO_INTERFACES, CHECK_PREFIX,
     CHECK_SECCOMP_APPLIED, CHECK_SINGLE_SOCKET, ENV_BRIDGES, ENV_REPORT_FD, ENV_SECCOMP_DENY,
-    ENV_SECCOMP_FAMILIES, ENV_SECCOMP_TYPES, EXIT_EXEC, EXIT_SETUP, EXIT_USAGE, RESERVED_ENV,
-    ShimCheck, bridges_json, parse_check_line, shim_env,
+    ENV_SECCOMP_FAMILIES, ENV_SECCOMP_TYPES, EXEC_PREFIX, EXIT_EXEC, EXIT_SETUP, EXIT_USAGE,
+    ExecFailure, RESERVED_ENV, ShimCheck, bridges_json, parse_check_line, parse_exec_line,
+    shim_env,
 };
 pub use crate::bwrap::{
     BwrapBackend, EARLY_EXIT_WINDOW, MIN_BWRAP_VERSION, REPORT_TIMEOUT, USERNS_DOCS_URL,

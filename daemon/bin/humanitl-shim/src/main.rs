@@ -65,7 +65,9 @@
 //!    forwards `SIGTERM`, `SIGINT` and `SIGHUP` to the child, serves the
 //!    bridges and waits.
 //! 4. Exit status: 125 usage, 126 seccomp or bridge setup failed (the message
-//!    names which), 127 `exec` failed, otherwise the child's status, or
+//!    names which), 127 `exec` failed (and the child writes `EXEC fail
+//!    errno=<n>` to the report first, see `report.rs`), otherwise the
+//!    child's status, or
 //!    128 + signal when the child was killed. A bridge with direction `out`
 //!    is 126 with "bridge direction out not supported yet".
 //!
@@ -87,6 +89,7 @@ use std::ffi::{CString, OsString, c_char, c_int, c_uint};
 use std::fmt;
 use std::fs;
 use std::io::{self, Write};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::ptr;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -300,6 +303,19 @@ fn list<'a>(values: impl Iterator<Item = &'a str>) -> String {
 fn launch(prepared: Prepared, report: Report, command: &[OsString]) -> i32 {
     // SAFETY: getpid has no preconditions.
     let parent_pid = unsafe { libc::getpid() };
+    // The gate the child waits at before `exec` (HUM-137): it opens when the
+    // parent has closed its write end, and the parent closes it only after
+    // its copy of the report is gone. Until then the agent does not exist,
+    // so no process it could reach through `/proc/<pid>/fd` still holds a
+    // report writer by the time it runs, and it cannot forge `EXEC fail`.
+    let Some((gate_read, gate_write)) = gate() else {
+        let err = io::Error::last_os_error();
+        report.check(Check::SeccompApplied, false, &format!("gate-failed:{err}"));
+        say(&format!(
+            "humanitl-shim: cannot create the exec gate: {err}\n"
+        ));
+        return EXIT_SETUP;
+    };
     // SAFETY: the process is single-threaded here (the bridge threads start
     // after the fork), so the child inherits a consistent image.
     let pid = unsafe { libc::fork() };
@@ -310,15 +326,53 @@ fn launch(prepared: Prepared, report: Report, command: &[OsString]) -> i32 {
         return EXIT_SETUP;
     }
     if pid == 0 {
+        // Explicitly, not only through `close_inherited`: should that fail
+        // to close it, the child would hold a write end of its own gate and
+        // wait there for ever, and the parent with it in `reap`.
+        drop(gate_write);
         child(
             parent_pid,
             &prepared.agent_program,
             &prepared.policy,
             &report,
+            gate_read,
             command,
         )
     }
-    parent(pid, &prepared.bridge_program, prepared.bound, report)
+    drop(gate_read);
+    parent(
+        pid,
+        &prepared.bridge_program,
+        prepared.bound,
+        report,
+        gate_write,
+    )
+}
+
+/// A pipe with `CLOEXEC` on both ends, as `(read, write)`.
+fn gate() -> Option<(OwnedFd, OwnedFd)> {
+    let mut fds = [0 as c_int; 2];
+    // SAFETY: `fds` is a valid two-element array for pipe2.
+    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+        return None;
+    }
+    // SAFETY: pipe2 just created both descriptors, and nothing else owns them.
+    Some(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
+}
+
+/// Blocks until every write end of the gate is closed.
+fn wait_at_gate(gate: &OwnedFd) {
+    let mut byte = [0u8; 1];
+    loop {
+        // SAFETY: the buffer is one byte long and outlives the call.
+        let n = unsafe { libc::read(gate.as_raw_fd(), byte.as_mut_ptr().cast(), 1) };
+        if n == 0 {
+            return;
+        }
+        if n < 0 && io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+            return;
+        }
+    }
 }
 
 // ---- the child --------------------------------------------------------------
@@ -330,6 +384,7 @@ fn child(
     program: &BpfProgram,
     policy: &Policy,
     report: &Report,
+    gate: OwnedFd,
     command: &[OsString],
 ) -> ! {
     // SAFETY: prctl with PR_SET_PDEATHSIG only records a signal number.
@@ -343,7 +398,7 @@ fn child(
         exit_now(EXIT_SETUP);
     }
 
-    close_inherited(report.fd());
+    close_inherited(&[report.fd().unwrap_or(-1), gate.as_raw_fd()]);
     reset_signal_mask();
 
     if let Err(err) = seccomp::apply(program) {
@@ -394,7 +449,13 @@ fn child(
     // a closed pipe.
     reset_signal_dispositions();
 
+    // Not a line earlier than here, and not skipped: see `launch`.
+    wait_at_gate(&gate);
+    drop(gate);
     let err = exec(command);
+    // Out of band first: the terminal line below is for the person, the
+    // report line is the launcher's proof that the agent never ran (HUM-137).
+    report.exec_failed(&err);
     say(&format!(
         "humanitl-shim: exec failed: {}: {err}\n",
         command
@@ -508,26 +569,25 @@ fn show(value: Option<u32>) -> String {
     value.map_or_else(|| "?".to_owned(), |v| v.to_string())
 }
 
-/// Closes every descriptor from 3 upwards except `keep`, which gets
-/// `CLOEXEC` so that `exec` closes it.
+/// Closes every descriptor from 3 upwards except those in `keep`, which get
+/// `CLOEXEC` so that `exec` closes them.
 ///
 /// `close_range(2)` (Linux 5.9) through `syscall(2)`, so the binary does not
 /// depend on the C library's version; on `ENOSYS` the fallback walks
 /// `/proc/self/fd`.
-fn close_inherited(keep: Option<c_int>) {
-    let ranges: Vec<(c_int, c_int)> = match keep {
-        Some(fd) if fd >= 3 => vec![(3, fd - 1), (fd + 1, c_int::MAX)],
-        _ => vec![(3, c_int::MAX)],
-    };
-    for (first, last) in ranges {
-        if first > last {
-            continue;
+fn close_inherited(keep: &[c_int]) {
+    let mut kept: Vec<c_int> = keep.iter().copied().filter(|fd| *fd >= 3).collect();
+    kept.sort_unstable();
+    kept.dedup();
+    let mut first = 3;
+    for &fd in kept.iter().chain(std::iter::once(&c_int::MAX)) {
+        let last = if fd == c_int::MAX { fd } else { fd - 1 };
+        if first <= last && !close_range(first, last) {
+            close_by_listing(first, last, &kept);
         }
-        if !close_range(first, last) {
-            close_by_listing(first, last, keep);
-        }
+        first = fd.saturating_add(1);
     }
-    if let Some(fd) = keep {
+    for &fd in &kept {
         // SAFETY: F_SETFD with FD_CLOEXEC changes one flag of one descriptor.
         unsafe {
             libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
@@ -543,7 +603,7 @@ fn close_range(first: c_int, last: c_int) -> bool {
     unsafe { libc::syscall(libc::SYS_close_range, first, last, 0 as c_uint) == 0 }
 }
 
-fn close_by_listing(first: c_int, last: c_int, keep: Option<c_int>) {
+fn close_by_listing(first: c_int, last: c_int, keep: &[c_int]) {
     let Ok(entries) = fs::read_dir("/proc/self/fd") else {
         return;
     };
@@ -552,7 +612,7 @@ fn close_by_listing(first: c_int, last: c_int, keep: Option<c_int>) {
         .filter_map(|entry| entry.file_name().to_str()?.parse().ok())
         .collect();
     for fd in fds {
-        if fd >= first && fd <= last && Some(fd) != keep {
+        if fd >= first && fd <= last && !keep.contains(&fd) {
             // SAFETY: closing a descriptor the child inherited and does not
             // use; a stale number (the listing's own directory) is EBADF.
             unsafe {
@@ -644,6 +704,7 @@ fn parent(
     bridge_program: &BpfProgram,
     bound: Vec<Bound>,
     report: Report,
+    gate: OwnedFd,
 ) -> i32 {
     CHILD.store(child, Ordering::SeqCst);
     forward_signals();
@@ -651,8 +712,9 @@ fn parent(
     // The parent keeps its copy of the report descriptor until its own filter
     // is on and the bridges are served: a failure here is the last one that
     // can still be told, and telling it after the descriptor was closed would
-    // mean losing it. The child holds its own copy until `exec`, so the
-    // reader sees EOF once the agent runs either way.
+    // mean losing it. The child waits at the gate until this copy is gone, so
+    // the agent never runs next to a report writer it could open through
+    // `/proc` (HUM-137), and the reader sees EOF once the agent runs.
     if let Err(err) = seccomp::apply(bridge_program) {
         report.check(
             Check::SeccompApplied,
@@ -687,6 +749,9 @@ fn parent(
         }
     }
     drop(report);
+    // Only now may the agent start: this process no longer holds a report
+    // writer it could reach (HUM-137).
+    drop(gate);
     reap(child)
 }
 
