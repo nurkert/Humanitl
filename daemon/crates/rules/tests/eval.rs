@@ -491,6 +491,230 @@ fn a_path_pattern_and_prefixes_both_have_to_match() {
     }
 }
 
+fn with_glob(action: Action, host_pattern: &str, glob: &str) -> Rule {
+    let mut matcher = Matcher::host(pattern(host_pattern));
+    matcher.path = Some(PathPattern::Glob(glob.to_owned()));
+    Rule::new(RuleId::new(), action, matcher)
+}
+
+/// Befund HUM-204: Der Proxy reicht den Pfad unverändert weiter, und ein
+/// Server, der Punktsegmente auflöst, bedient für diese Pfade `/user/keys`.
+/// Eine Freigabe für `/repos/me/**` darf sie deshalb nicht treffen, weder als
+/// Glob noch als regulärer Ausdruck noch über ein Präfix; die Anfrage geht an
+/// den Menschen.
+#[test]
+fn an_allow_rule_with_a_path_condition_never_matches_a_dot_dot_segment() {
+    let mut regex = Matcher::host(pattern("api.github.com"));
+    regex.path = Some(PathPattern::parse("~^/repos/me/"));
+    let prefix =
+        Matcher::host(pattern("api.github.com")).with_path_prefixes(vec!["/repos/me/".to_owned()]);
+    let target = host("api.github.com");
+
+    for bounded in [
+        with_glob(Action::Allow, "api.github.com", "/repos/me/**"),
+        with_glob(Action::Redact, "api.github.com", "/repos/me/**"),
+        Rule::new(RuleId::new(), Action::Allow, regex),
+        Rule::new(RuleId::new(), Action::Allow, prefix),
+    ] {
+        let id = bounded.id;
+        let rules = RuleSet::from_rules([bounded]);
+        let inside = RequestKey::new(&target, &Method::POST, "/repos/me/x", Scheme::Https, 443);
+        assert!(
+            matches!(rules.evaluate(&inside, now(), SessionId::new()), Verdict::Matched { rule, .. } if rule == id),
+            "the rule itself has to work"
+        );
+        for path in [
+            "/repos/me/../../user/keys",
+            "/repos/me/%2e%2e/%2e%2e/user/keys",
+            "/repos/me/..;/..;/user/keys",
+            "/repos/me/../../user/keys?page=1",
+        ] {
+            let key = RequestKey::new(&target, &Method::POST, path, Scheme::Https, 443);
+            assert_eq!(
+                rules.evaluate(&key, now(), SessionId::new()),
+                Verdict::Default,
+                "{path} must reach the human"
+            );
+        }
+    }
+}
+
+/// Die Kehrseite von HUM-204: Was nichts durchlässt, trifft weiter. Fiele die
+/// `ask`-Regel weg, entschiede die hostweite Freigabe dahinter.
+#[test]
+fn block_and_ask_rules_still_match_a_dot_dot_segment() {
+    let target = host("api.github.com");
+    let path = "/repos/me/../../user/keys";
+    let key = RequestKey::new(&target, &Method::GET, path, Scheme::Https, 443);
+
+    for action in [Action::Block, Action::Ask] {
+        let bounded = with_glob(action, "api.github.com", "/repos/me/**");
+        let id = bounded.id;
+        let rules = RuleSet::from_rules([bounded, rule(Action::Allow, "api.github.com")]);
+        assert_eq!(
+            rules.evaluate(&key, now(), SessionId::new()),
+            Verdict::Matched { rule: id, action },
+            "{action} has to keep deciding"
+        );
+    }
+
+    let host_wide = rule(Action::Allow, "api.github.com");
+    let id = host_wide.id;
+    let rules = RuleSet::from_rules([host_wide]);
+    assert_eq!(
+        rules.evaluate(&key, now(), SessionId::new()),
+        Verdict::Matched {
+            rule: id,
+            action: Action::Allow
+        },
+        "a rule without a path condition has no boundary to cross"
+    );
+}
+
+fn with_prefix(action: Action, host_pattern: &str, prefix: &str) -> Rule {
+    let matcher = Matcher::host(pattern(host_pattern)).with_path_prefixes(vec![prefix.to_owned()]);
+    Rule::new(RuleId::new(), action, matcher)
+}
+
+/// Der Befund aus dem Review von HUM-204: Ein Präfix von `block` oder `ask`
+/// traf keinen Pfad mit `..`, und die hostweite Freigabe dahinter entschied.
+/// Jetzt prüfen beide auch den aufgelösten Pfad.
+#[test]
+fn block_and_ask_prefixes_catch_a_dot_dot_path_before_a_host_wide_allow() {
+    let target = host("api.github.com");
+    for action in [Action::Block, Action::Ask] {
+        let bounded = with_prefix(action, "api.github.com", "/user/");
+        let id = bounded.id;
+        let rules = RuleSet::from_rules([bounded, rule(Action::Allow, "api.github.com")]);
+        for path in [
+            "/repos/me/../../user/keys",
+            "/repos/me/%2e%2e/%2e%2e/user/keys",
+            "/repos/me/..;x/..;x/user/keys",
+            "/repos/me/../../user/keys?page=1",
+        ] {
+            let key = RequestKey::new(&target, &Method::POST, path, Scheme::Https, 443);
+            assert_eq!(
+                rules.evaluate(&key, now(), SessionId::new()),
+                Verdict::Matched { rule: id, action },
+                "{action} /user/ has to catch {path}"
+            );
+        }
+
+        // Der unveränderte Pfad trifft ein Präfix weiter Zeichen für Zeichen.
+        let raw = with_prefix(action, "api.github.com", "/repos/me/");
+        let raw_id = raw.id;
+        let rules = RuleSet::from_rules([raw, rule(Action::Allow, "api.github.com")]);
+        let key = RequestKey::new(
+            &target,
+            &Method::POST,
+            "/repos/me/../../user/keys",
+            Scheme::Https,
+            443,
+        );
+        assert_eq!(
+            rules.evaluate(&key, now(), SessionId::new()),
+            Verdict::Matched {
+                rule: raw_id,
+                action
+            },
+            "{action} /repos/me/ keeps matching the raw path"
+        );
+    }
+}
+
+/// `block` mit Präfix `/admin` vor einer hostweiten Freigabe fängt jeden
+/// Umweg, den erst der Server auflöst: Punktsegmente, auch kodiert oder mit
+/// Pfadparametern, doppelte Schrägstriche und kodierte nicht reservierte
+/// Zeichen.
+#[test]
+fn a_block_prefix_matches_the_resolved_path() {
+    let target = host("example.com");
+    let block = with_prefix(Action::Block, "example.com", "/admin");
+    let id = block.id;
+    let host_wide = rule(Action::Allow, "example.com");
+    let allowed = host_wide.id;
+    let rules = RuleSet::from_rules([block, host_wide]);
+    for (path, blocked) in [
+        ("/admin/users", true),
+        ("/x/../admin", true),
+        ("/x/%2E%2E/admin", true),
+        ("/x/%2e%2e%2fadmin", true),
+        ("/x/..;y/admin", true),
+        ("//admin", true),
+        ("/x/..//admin", true),
+        ("/%61dmin", true),
+        ("/x/admin", false),
+    ] {
+        let key = RequestKey::new(&target, &Method::GET, path, Scheme::Https, 443);
+        let expected = if blocked {
+            Verdict::Matched {
+                rule: id,
+                action: Action::Block,
+            }
+        } else {
+            Verdict::Matched {
+                rule: allowed,
+                action: Action::Allow,
+            }
+        };
+        assert_eq!(
+            rules.evaluate(&key, now(), SessionId::new()),
+            expected,
+            "{path}"
+        );
+    }
+}
+
+/// Eine doppelte Kodierung zählt nicht als Punkt: Der Server dekodiert nur
+/// einmal und sieht `/x/%2e%2e/admin`, keinen Umweg. Eine Freigabe für `/x/`
+/// trifft den Pfad deshalb weiter.
+#[test]
+fn a_double_encoding_is_no_dot_dot_segment_for_an_allow_rule() {
+    let target = host("example.com");
+    let allow = with_prefix(Action::Allow, "example.com", "/x/");
+    let id = allow.id;
+    let rules = RuleSet::from_rules([allow]);
+    let key = RequestKey::new(
+        &target,
+        &Method::GET,
+        "/x/%252e%252e/admin",
+        Scheme::Https,
+        443,
+    );
+    assert_eq!(
+        rules.evaluate(&key, now(), SessionId::new()),
+        Verdict::Matched {
+            rule: id,
+            action: Action::Allow
+        }
+    );
+}
+
+/// Dasselbe für ein Pfadmuster: Ein Glob einer Block-Regel trifft den
+/// aufgelösten Pfad.
+#[test]
+fn a_block_glob_matches_the_resolved_path() {
+    let target = host("api.github.com");
+    let block = with_glob(Action::Block, "api.github.com", "/user/keys");
+    let id = block.id;
+    let rules = RuleSet::from_rules([block, rule(Action::Allow, "api.github.com")]);
+    for path in [
+        "/repos/me/../../user/keys",
+        "/repos/me/%2E%2E/%2e%2e/user/keys",
+        "/user/keys;jsessionid=1",
+    ] {
+        let key = RequestKey::new(&target, &Method::DELETE, path, Scheme::Https, 443);
+        assert_eq!(
+            rules.evaluate(&key, now(), SessionId::new()),
+            Verdict::Matched {
+                rule: id,
+                action: Action::Block
+            },
+            "{path}"
+        );
+    }
+}
+
 // --- Abgeschaltete und mitgelieferte Regeln (HUM-038) -----------------------
 
 /// Eine abgeschaltete Regel entscheidet nichts, und die nächste kommt dran.
