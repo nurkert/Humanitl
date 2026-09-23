@@ -472,6 +472,12 @@ class _StatusDot extends StatelessWidget {
 }
 
 /// Der Mittelpunkt zwischen zwei Zahlen der Kopfzeile.
+///
+/// Ein Satzzeichen und kein Wort: Es steht in beiden Sprachen gleich und
+/// gehört deshalb nicht nach ARB (HUM-052).
+const String _middleDot = '\u00B7';
+
+/// Der Trenner zwischen zwei Zahlen der Kopfzeile.
 class _Separator extends StatelessWidget {
   const _Separator();
 
@@ -480,7 +486,10 @@ class _Separator extends StatelessWidget {
     final HTokens tokens = HTheme.of(context);
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: tokens.spacing.x2),
-      child: Text('·', style: tokens.typography.ui13.tinted(tokens.colors.fg2)),
+      child: Text(
+        _middleDot,
+        style: tokens.typography.ui13.tinted(tokens.colors.fg2),
+      ),
     );
   }
 }

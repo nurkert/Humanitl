@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/ui/ui.dart';
 import 'features/shell/connection_gate.dart';
+import 'features/shell/providers/language.dart';
 import 'features/shell/providers/theme.dart';
 import 'l10n/l10n.dart';
 
@@ -44,11 +45,21 @@ class HumanitlApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final HThemeMode mode = ref.watch(themeModeProvider);
+    final AppLanguage? language = ref.watch(languageProvider);
     return WidgetsApp(
       color: HColors.bg0,
       debugShowCheckedModeBanner: false,
-      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      // Die Delegates der Komponentenbibliothek stehen mit darin: Ohne sie
+      // bricht unter `de` jede ihrer Komponenten ab, die eigene Wörter
+      // braucht (HUM-052, `hLocalizationsDelegates`).
+      localizationsDelegates: <LocalizationsDelegate<Object?>>[
+        ...AppLocalizations.localizationsDelegates,
+        ...hLocalizationsDelegates,
+      ],
       supportedLocales: AppLocalizations.supportedLocales,
+      // Gewählt gilt sofort und ohne Neustart; ohne Wahl folgt die Sprache
+      // dem Desktop, mit Englisch als Rückfall (`l10n/language.dart`).
+      locale: language?.locale,
       onGenerateTitle: (BuildContext context) => context.l10n.appTitle,
       pageRouteBuilder: _page,
       home: const ConnectionGate(),

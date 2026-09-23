@@ -1,3 +1,4 @@
+// l10n-exempt: developer gallery, English literals (CONVENTIONS 4.11).
 import 'package:flutter/widgets.dart';
 
 import '../theme/h_theme.dart';

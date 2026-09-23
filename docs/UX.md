@@ -292,7 +292,7 @@ Der erste Bildschirm ist nicht die leere Queue, sondern die Frage, ob überhaupt
 
 1. **Der Daemon antwortet noch nicht.** Splash, ganzflächig, nach den Schwellen aus 2.11: unter `HMotion.waitVisible` nichts, danach sichtbar und mindestens `HMotion.waitMinVisible` stehend. Kein Spinner, kein Fortschrittsbalken für etwas, dessen Dauer niemand kennt. Ein Splash, der bei einem schnellen Start aufblitzt, ist schlimmer als kein Splash.
 2. **Der Daemon fehlt beim Start.** Setup-Screen. Das `Diagnostic` ist das eine Wichtige des Screens (3.1): `why` aus dem Daemon oder aus dem Transportfehler, `fix` als gefülltes Control. Nichts anderes auf diesem Screen konkurriert darum.
-3. **Der Daemon läuft, aber keine Sitzung.** Die Queue sagt nicht, der Agent arbeite ohne Netz — es arbeitet niemand. Sie nennt das nächste Ereignis, das der Mensch auslöst: en „Once a session runs, every request the agent makes appears here.", de „Sobald eine Sitzung läuft, erscheint hier jede Anfrage des Agenten." Die einzige Aktion ist en „Start session" / de „Sitzung starten", und sie ist gefüllt, weil der Screen leer ist (3.1).
+3. **Der Daemon läuft, aber keine Sitzung.** Die Queue sagt nicht, der Agent arbeite ohne Netz — es arbeitet niemand. Sie nennt das nächste Ereignis, das der Mensch auslöst: en „Once a session runs, every request the agent makes appears here.", de „Sobald eine Session läuft, erscheint hier jede Anfrage des Agenten." Die einzige Aktion ist en „Start session" / de „Session starten", und sie ist gefüllt, weil der Screen leer ist (3.1).
 4. **Die Verbindung bricht während laufender Queue ab.** Die Shell bleibt stehen. Der Setup-Screen ersetzt sie nur beim Kaltstart, nie mitten in der Arbeit — wer zwölf wartende Anfragen auf dem Schirm hat, verliert sonst den Bildschirm und erfährt nicht, was mit dem Agenten passiert ist. Statt dessen: die Queue wird als eingefrorener Schnappschuss markiert (Zeitstempel im Kopf, alle Countdowns stehen, alle Entscheidungstasten still), darüber ein Banner mit Grund, Folge für den Agenten und der einen Aktion en „Reconnect" / de „Erneut verbinden".
 
 Sobald Verkehr da ist, aber nichts ausgewählt, zeigt der Kontext-Pane die Zusammenfassung der Sitzung, die seine Sektion besitzt (gesehene Hosts, die häufigsten fünf, Findings gesamt) — ein Pane, dessen einziger Inhalt seine eigene Überschrift ist, liest sich als kaputt.
@@ -305,7 +305,7 @@ Der Satz wird aus dem Haltegrund des Flows gebaut, nicht aus einer Konstanten:
 
 | Grund | en | de |
 |---|---|---|
-| keine Regel traf zu | „Held: no rule matches · default: ask" | „Angehalten: keine Regel trifft zu · Vorgabe: fragen" |
+| keine Regel traf zu | „Held: no rule matches · default: ask" | „Angehalten: keine Regel · Vorgabe: fragen" (HUM-052: kürzer, damit der Satz in der Aktionsleiste nicht abgeschnitten wird) |
 | eine Regel sagt fragen | „Held: rule `<Regelsatz>` says ask" | „Angehalten: Regel `<Regelsatz>` sagt fragen" |
 | ein Finding | „Held: an AWS access key was found in the body" | „Angehalten: im Body steht ein AWS-Zugangsschlüssel" |
 | unbekannt | benennt, was bekannt ist, und erfindet keinen Grund | dito |
@@ -350,7 +350,7 @@ Vor „Merken" steht die Regel als Satz, damit sie geprüft werden kann, die Vor
 Eine Anfrage, die wegen eines Findings gehalten wird, ist der eine Fall, der nicht ruhig sein darf. Sie darf nicht aussehen wie eine Routine-Anfrage, und sie bekommt deshalb vier Abweichungen vom Normalfall — und nur diese vier:
 
 - **In der Zeile** steht der Findings-Chip in `HColors.secret` statt in `fg2`. Das ist die einzige Chroma, die eine ruhende Queue-Zeile tragen darf; der Rest der Zeile bleibt neutral.
-- **In der Aktionsleiste** nennt der Haltegrund Art und Fundort in Klartext (4.3), und die Release Valve wechselt auf Amber und beschriftet sich um: en „Send with 2 findings", de „Senden mit 2 Findings" (so bereits in HUM-049 vorgesehen).
+- **In der Aktionsleiste** nennt der Haltegrund Art und Fundort in Klartext (4.3), und die Release Valve wechselt auf Amber und beschriftet sich um: en „Send with 2 findings", de „Senden mit 2 Funden" (so bereits in HUM-049 vorgesehen).
 - **Erlauben verlangt dieselbe Halte-Bestätigung wie Blockieren**, solange mindestens ein Finding ungelöst ist, plus einen Satz, der die Folge benennt: en „An AWS access key goes to api.example.com", de „Ein AWS-Zugangsschlüssel geht an api.example.com". Erst wer weiß, was wohin geht, hält gedrückt.
 - **Ein Klick, `Enter` oder `A` öffnen bei einer einzelnen Anfrage die Pause mit den offenen Funden** (HUM-049), statt nur abzuweisen. Sie ersetzt den unteren Teil der Karte, wächst in 200 ms auf und listet je Fund Art, gekürzten Wert und Ort; am Fuß stehen „Trotzdem senden" (`S`), „Pseudonymisieren" (`P`, öffnet den Editor mit allen Funden ersetzt) und „Blockieren" (`B`), `Esc` schließt sie. Die Halte-Bestätigung bleibt der Weg ohne Pause. Über eine Gruppe gibt es keine Pause: Dort fehlt die Liste der Funde, und es bleibt beim Halten oder einer Taste.
 
@@ -362,7 +362,7 @@ Ein Timeout ist keine Entscheidung eines Menschen, sondern das Ausbleiben einer.
 
 - **Vorher** warnt die App einmal, an der Zeile und in der Aktionsleiste des betroffenen Flows, nie als Toast: Host, Folge und Restzeit in einem Satz — en „registry.npmjs.org auto-blocks in 0:30", de „registry.npmjs.org wird in 0:30 blockiert". Sobald der Daemon Verlängern kennt, steht daneben genau eine Verlängerung. Bis dahin ist die Warnung mit benannter Folge das Minimum.
 - **Im Augenblick des Ablaufs** wischt der Rail auf `timedOut` wie bei jeder anderen Entscheidung, und die Zeile bleibt drei Sekunden als graue Zeile mit dem Streifen en „Blocked (timed out)" / de „Blockiert (Zeit abgelaufen)" stehen. So steht es bereits in HUM-029; hier steht, dass es dieselbe Choreografie ist wie bei einer menschlichen Entscheidung, weil die Folge für den Agenten dieselbe ist.
-- **Danach** trägt die Statusleiste dauerhaft einen Zähler: en „{n} timed out this session", de „{n} abgelaufen in dieser Sitzung". Ein Klick filtert History darauf. Wer fünf Minuten weg war, muss beim Zurückkommen sehen, dass sechs Anfragen abgewiesen wurden, ohne History zu öffnen und ohne sich an ein Banner zu erinnern, das er nie gesehen hat.
+- **Danach** trägt die Statusleiste dauerhaft einen Zähler: en „{n} timed out this session", de „{n} abgelaufen in dieser Session". Ein Klick filtert History darauf. Wer fünf Minuten weg war, muss beim Zurückkommen sehen, dass sechs Anfragen abgewiesen wurden, ohne History zu öffnen und ohne sich an ein Banner zu erinnern, das er nie gesehen hat.
 
 ### 4.9 Tray, Notification und Rückkehr
 

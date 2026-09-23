@@ -3282,6 +3282,99 @@ Units des Pakets aktiviert wurden.
 - **Ein Tor, zwei Schritte.** `scripts/ci/parity-check.sh` (CI-Job `parity-check`, lokal `make parity-check` in `make check` und in `tools/verify-commit.sh`) fährt zuerst die Tests in `daemon/bin/humanitl/src/parity.rs`, weil der Generator `PARITY` nur als Text liest und nicht sieht, ob es ein Unterkommando gibt, dann `cargo xtask docs --check` statt eines Vergleichs über die Versionsverwaltung: Der Generator vergleicht die erzeugte Tabelle mit der Datei auf der Platte und schreibt nichts. In der CI ist das die eingecheckte Datei; lokal läuft die Prüfung auch in einem Arbeitsbaum mit offenen Änderungen. Das Skript endet bei einem Befund mit Exit 1 (bei einem roten Test mit 101), `make` meldet daraufhin Exit 2. Nicht geprüft werden Parität auf Feld-Ebene (bietet ein Unterkommando alle Felder seiner RPC an, vergleiche HUM-090) und Fähigkeiten, die nur in einem Client stehen und keine RPC haben (HUM-092).
 - **Stand der Zuordnung.** In `PARITY` steht nur ein Unterkommando, das die RPC wirklich über gRPC aufruft. `Subscribe` hat als CLI-Entsprechung `run --ask terminal`, bis es `flows watch` gibt (HUM-169). `GetConfig` und `SetConfig` sind Ausnahmen in `daemon/xtask/parity_exempt.toml`: `config get` und `config set` lesen und schreiben die Konfiguration lokal über denselben Lader und `humanitl_config::edit::set_value` wie der Daemon (4.31), fragen ihn aber nicht, und `SetConfig` nimmt im Daemon heute nur `sandbox.env.*` an (HUM-151). Die echte Anbindung folgt mit HUM-069/HUM-170. `GetConfig` und `GetSessionSummary` haben noch keinen Ort in der Oberfläche (HUM-170).
 
+### 4.36 Aus der Umsetzung der Sprachen (HUM-052, 2026-09-19)
+
+**Das Glossar steht in `docs/GLOSSARY.md` und wird geprüft.** Jede Zeile nennt
+den ARB-Schlüssel, der den Begriff trägt; `app/tool/l10n_lint.dart`
+(`make l10n-lint`, CI-Schritt „Localizations") verlangt, dass der Schlüssel in
+beiden Dateien steht und den Begriff der Sprache als ganzes Wort enthält, und
+dass kein deutscher Text ein Wort der Tabelle „Verbotene Wörter" benutzt
+(„abgefangen", „Treffer", „anonymisier…", „ablehn…"). Wer einen Begriff ändert,
+ändert zuerst diese Datei. Mit dem Glossar sind im Deutschen nachgezogen:
+„Nachfragen" statt „Fragen", „Pseudonymisieren" statt „Schwärzen", „Zeit
+abgelaufen", „LLM-Durchleitung", „Editiert", „Anhalten" als Rail-Label, „Fund"
+statt „Finding", „Secret" statt „Geheimnis", „Session" statt „Sitzung" und die
+Du-Form in den sieben Texten, die noch siezten.
+
+**Englisch „Allow" auf dem Knopf, nicht „Send".** Die Spezifikation von HUM-052
+nannte „Send"; `docs/UX.md` 4.6 legt die drei Orte mit Begründung fest, und
+das Glossar folgt UX.md.
+
+**Die Sprachprüfung hat fünf Teile:** Schlüsselgleichheit und gleiche
+Platzhalter in `en` und `de` (ICU wird geparst, Zweigtexte eines Plurals sind
+keine Platzhalter), `description` an jedem englischen Schlüssel, keine
+Literale mit einem Wort in dem, was angezeigt wird, unter `app/lib/features`
+und `app/packages/ui/lib` (außer `// l10n-exempt` in Zeile 1, heute nur die
+beiden Galerien), Titel und Grund für jeden Code des Registers, das Glossar.
+Angezeigt ist das erste Argument von `Text`, `SelectableText`, `RichText` und
+ihren `.rich`-Formen und jedes benannte Argument `text:`, `title:`, `hint:`,
+`body:`, `message:`, `tooltip:`, `why:`, `detail:`, `semanticsValue:` oder auf
+`Label`; gezählt wird der ganze Ausdruck bis zum nächsten Komma (Bedingung,
+Verkettung, Literale in einer Interpolation). Ausgenommen, jeweils mit Grund in
+`tool/l10n_lint.dart`: Argumente von `Key`/`ValueKey` (Bezeichner),
+`debugLabel` (nie auf dem Schirm) und `title:`/`why:` eines `Diagnostic` (die
+Worte des Absenders, übersetzt wird am Code). Ein Literal ohne Buchstaben
+außerhalb seiner Interpolationen ist kein Wort und bleibt erlaubt. Der Nachweis
+des Daemons in der Einrichtung („humanitld 0.4.0, contract 1.9") steht deshalb
+nicht mehr als Satz im Provider: `SetupCheck.daemon` trägt die Daten, die Zeile
+baut `setupEvidenceDaemon`.
+
+Listen sichtbarer Texte zählen ebenso: benannte Argumente `labels:`,
+`columns:`, `options:`, `items:` und alles auf `Labels` (`tabLabels`,
+`durationLabels`, `targetLabels`), jeweils nur die Elemente der Liste selbst,
+nicht Argumente eines Aufrufs darin (`HSegmentOption(value: 'allow')` bleibt
+frei, sein `label:` prüft sich selbst). Eine Konstante derselben Datei
+(`const`, `static const`, `final` mit String- oder Listen-Initialisierer)
+zählt an einer Textposition wie ihr Literal, außer als Eingabe eines Aufrufs
+(`l10n.auditRetentionChain(auditRetentionKey)` zeigt die ARB-Nachricht).
+**Grenze:** Konstanten aus anderen Dateien löst die Prüfung nicht auf; dafür
+bräuchte sie den Analyzer. Ein Anzeigetext gehört ohnehin nicht in eine
+geteilte Konstante, sondern nach ARB. Ebenso ohne Analyzer: `title: title` gilt als
+Weitergabe eines Parameters gleichen Namens, nicht als die Konstante, aber nur,
+wenn die Datei einen Parameter oder ein Feld dieses Namens ohne
+Initialisierer deklariert; sonst zählt die Konstante. Flutters eigene
+Textparameter zählen mit: jeder Name auf `Text` (`hintText`, `labelText`,
+`errorText`, `helperText`) und `value:` nur innerhalb von `Semantics`. Eine
+Konstante zählt auch im `?`-Zweig einer Bedingung, als Wert einer `const`-Map
+(`{K.a: 'Allow'}`), in einer Interpolation (`'$_g'`, `'${_g}'`) und als zweite
+Konstante einer Deklaration (`const _a = 'x', _b = 'Hello'`). Die einzige
+Aufruf-Ausnahme ist `l10n.<member>(...)`: Dort ist die Konstante ein
+Platzhalter der ARB-Nachricht. In jedem anderen Aufruf (`emphasize(_title)`,
+`Wrap(_g)`, `(_g)`) zählt sie.
+
+**`use-escaping: true`.** Ein Apostroph in einer Nachricht wird in ARB als `''`
+geschrieben; ein einzelnes `'` beginnt einen wörtlichen Abschnitt. Die
+Beschreibung unter `@schlüssel` ist davon nicht betroffen.
+
+**Diagnosen werden am Code übersetzt.** `DiagnosticL10n.resolve`
+(`app/lib/l10n/diagnostic_l10n.dart`) liefert `title` (`diag<CODE>Title`, sonst
+der Titel des Daemons, sonst der Code), `why` (`diag<CODE>Why`, sonst der Satz
+des Daemons) und `cause`: den gemessenen Satz des Daemons, wenn er einen
+mitschickt, sonst `why`. In den Grund-Platz einer Karte gehört `cause`
+(`docs/UX.md` 4.4); der übersetzte Grundsatz ersetzt nie Pfad, Host und
+Fehlertext des Daemons. Ein Fix-Label je Code gibt es nicht, weil `FixControl`
+nach Art der `FixAction` beschriftet. Wer einen Code ins Register aufnimmt,
+legt im selben Commit `diag<CODE>Title` und `diag<CODE>Why` in beiden
+ARB-Dateien an und die Zeile in `diagnosticTexts`; Lint und
+`test/l10n/diagnostic_l10n_test.dart` fallen sonst.
+
+**Sprachwahl.** `languageProvider` (`features/shell/providers/language.dart`)
+hält die Wahl, `null` heißt „wie der Desktop". `WidgetsApp.locale` folgt ihm,
+ein Wechsel gilt sofort im ganzen Fenster; die Palette bietet „Sprache
+wechseln zu …". Ohne Wahl fällt jede Sprache außer Deutsch auf Englisch
+zurück, auch `C` und `POSIX`: `preferred-supported-locales: [en]` in
+`app/l10n.yaml`, weil `flutter gen-l10n` die Liste sonst alphabetisch sortiert
+und ein französischer Desktop Deutsch bekam. Einen `configProvider` gibt es
+nicht; `ui.language` zu lesen und zu schreiben ist HUM-172.
+
+**Die Wörter der Komponentenbibliothek.** `hLocalizationsDelegates` aus
+`packages/ui` steht in `app.dart` neben den eigenen Delegates. `shadcn_flutter`
+0.0.54 kennt nur Englisch, und ohne den Delegate bricht `ShadcnLocalizations.of`
+unter `de` mit einem Null-Check ab; er lädt für jede fremde Sprache die
+englischen Wörter der Bibliothek. Das Kontextmenü eines `HTextField` stürzt
+unabhängig davon in jeder Sprache ab, weil ihm der
+`KeyboardShortcutDisplayMapper` der Bibliothek fehlt (HUM-173).
+
 ### 4.37 Aus der Umsetzung der Spur offener Funde (HUM-160, 2026-09-19)
 
 - **Die Zahl steht im `Decided`-Ereignis, und die Warteschlange zählt sie.** `FlowEvent::Decided` trägt `findings: DecidedFindings` mit `unresolved: Option<u32>` und `acknowledged: Vec<u32>` (`daemon/crates/core-types/src/event.rs`). Der Automat kennt nur, was sein Zustand weiß: Aus `Analyzed` gibt eine Regel oder die Durchreiche jeden Fund offen frei, eine Sperre trägt keine Zahl. Über einen gehaltenen Flow zählt die `HoldQueue`, denn nur dort kommen die Zahl der Funde beim Halten, die Bestätigung aus `Decide` und die bearbeitete Fassung zusammen, bevor `Decided` hinausgeht. `None` heißt „nichts ging hinaus oder niemand zählte" und ist nie eine geratene Null; auf dem Draht ist das Feld deshalb `optional uint32`.

@@ -46,7 +46,11 @@ class AttentionNoticeCard extends StatelessWidget {
             color: severityColor(tokens, diagnostic.severity),
             title: title,
             why: why,
-            detail: diagnostic.why.isEmpty ? null : diagnostic.why,
+            // Der Satz des Daemons nur dann als Detail, wenn er nicht schon
+            // im Grund-Platz steht (`docs/UX.md` 4.4).
+            detail: diagnostic.why.isEmpty || why == diagnostic.why
+                ? null
+                : diagnostic.why,
             fix: FixControl(fix: diagnostic.fix),
             docsUrl: diagnostic.docsUrl,
           ),
@@ -80,9 +84,11 @@ class AttentionNoticeCard extends StatelessWidget {
           l10n.trayNoticeFindingsTitle,
           l10n.trayNoticeFindingsWhy,
         ),
-        _ => (
-          diagnostic.title.isEmpty ? diagnostic.code : diagnostic.title,
-          diagnostic.why,
-        ),
+        // Jeder andere Code: Überschrift aus ARB (HUM-052), im Grund-Platz der
+        // gemessene Satz des Daemons (`docs/UX.md` 4.4, CONVENTIONS 4.36).
+        _ => _titleAndCause(DiagnosticL10n.resolve(diagnostic, l10n)),
       };
+
+  static (String, String) _titleAndCause(DiagnosticText text) =>
+      (text.title, text.cause);
 }

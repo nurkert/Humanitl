@@ -157,10 +157,16 @@ class SetupCheckRow extends StatelessWidget {
   /// carries code, cause and proposal, and a line above it claiming "no
   /// detail" would be plainly false.
   Widget _evidence(HTokens tokens, AppLocalizations l10n) {
-    if (check.detail.isEmpty && showDiagnostic && check.diagnostic != null) {
+    final DaemonInfo? daemon = check.daemon;
+    if (daemon == null &&
+        check.detail.isEmpty &&
+        showDiagnostic &&
+        check.diagnostic != null) {
       return const SizedBox.shrink();
     }
-    final String text = check.detail.isEmpty
+    final String text = daemon != null
+        ? l10n.setupEvidenceDaemon(daemon.daemonVersion, daemon.protoVersion)
+        : check.detail.isEmpty
         ? setupNoEvidence(l10n, check.state)
         : check.detail;
     return Text(

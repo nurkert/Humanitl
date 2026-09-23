@@ -44,7 +44,7 @@ class IconRail extends StatelessWidget {
                 active: section == active,
                 label: l10n.shellNavShortcut(
                   section.label(l10n),
-                  'Ctrl+${section.shortcutDigit}',
+                  l10n.shellNavShortcutKey(section.shortcutDigit),
                 ),
                 onTap: () => onSelect(section),
               ),
