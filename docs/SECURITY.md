@@ -267,7 +267,16 @@ vLLM `POST /v1/load_lora_adapter`. Der Default zählt stattdessen die dreizehn E
 Inferenz machen oder Auskunft geben: `/v1/chat/completions`, `/v1/completions`, `/v1/responses`,
 `/v1/embeddings`, `/v1/models` sowie `/api/chat`, `/api/generate`, `/api/embed`, `/api/embeddings`,
 `/api/tags`, `/api/show`, `/api/ps` und `/api/version`. Genauso wenig trifft ein Pfad mit einem
-`..`-Segment ein Präfix, denn erst der Server löst es auf. Jede andere Anfrage an denselben Host
+`..`-Segment ein Präfix, denn erst der Server löst es auf. Dasselbe gilt für jede Regel, die
+durchlässt (`allow`, `redact`) und ein Pfadmuster oder Präfixe trägt, auch verschleiert als `%2e%2e`
+oder `..;`: Eine Freigabe für `/repos/me/**` trifft `/repos/me/../../user/keys` nicht, die Anfrage
+geht an einen Menschen (HUM-204). Umgekehrt prüft eine Regel, die blockt oder fragt, zusätzlich den
+Pfad, wie ihn ein Server nach dem Auflösen sieht (Punktsegmente, doppelte Schrägstriche, kodierte
+nicht reservierte Zeichen): Ein `block` für `/admin` fängt auch `/x/../admin`, `/x/%2E%2E/admin`,
+`//admin` und `/%61dmin`. Weitergeleitet wird immer der unveränderte Pfad; eine doppelte Kodierung
+wie `%252e` zählt nicht als Punkt, weil der Server nur einmal dekodiert. Pfadpräfixe und -muster
+unterscheiden Groß- und Kleinschreibung: Bei einem Server, der das nicht tut (etwa IIS), umgeht
+`/ADMIN` eine Regel für `/admin`. Jede andere Anfrage an denselben Host
 wird normal gehalten, also einem Menschen gezeigt. Wer eine davon ohne Rückfrage braucht, schreibt
 ihren Pfad selbst in `llm.passthrough_paths`.
 

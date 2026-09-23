@@ -1247,13 +1247,39 @@ bestehen (beginnt mit `/`, mindestens zwei Zeichen); `rules.yaml` lehnt einen
 anderen mit `RULES_005` ab, und eine im Programm gebaute Regel, von der kein
 gültiges Präfix übrig bleibt, trifft nichts statt alles.
 
-**Ein `..`-Segment trifft nie ein Präfix.** `/api/chat/../pull` beginnt mit
-`/api/chat` und meint `/api/pull`; der Server dahinter löst das auf, bevor er
-antwortet. `humanitl_rules::path::prefix_matches` prüft deshalb auf einer
-Kopie, in der `%2e` zu `.` und `%2f`, `%5c` sowie `\` zu `/` werden, und lehnt
-jeden Pfad mit einem `..`-Segment ab. Der Vergleich selbst läuft danach wieder
-auf dem unveränderten Pfad. Die Prüfung gilt nur für `path_prefixes`; Glob und
-regulärer Ausdruck bleiben, wie sie waren.
+**Über `..`-Segmente entscheidet die Aktion der Regel (HUM-204).**
+`/api/chat/../pull` beginnt mit `/api/chat` und meint `/api/pull`; der Server
+dahinter löst das auf, bevor er antwortet. Der Proxy reicht den Pfad
+unverändert weiter. Entschieden wird an einer Stelle,
+`CompiledRule::path_matches` in `humanitl_rules::eval`;
+`humanitl_rules::path::prefix_matches` vergleicht nur Zeichen.
+
+- Als `..` zählt ein Segment auf einer Kopie, in der nur `%2e` zu `.` und
+  `%2f`, `%5c` sowie `\` zu `/` werden, ohne Rücksicht auf Groß- und
+  Kleinschreibung; das ist keine allgemeine Prozent-Dekodierung. Pfadparameter
+  ab dem ersten `;` fallen weg (`..;x` zählt als `..`, wie bei Tomcat und
+  Spring). Eine doppelte Kodierung (`%252e`) zählt nicht, der Server dekodiert
+  nur einmal (`humanitl_rules::path::has_dot_dot_segment`).
+- `allow` und `redact` mit Pfadmuster (Glob oder regulärer Ausdruck) oder
+  Präfixen treffen nie einen Pfad mit `..`-Segment. Ein Glob `/repos/me/**`
+  träfe `/repos/me/../../user/keys` sonst Zeichen für Zeichen, und ein Server,
+  der auflöst, bediente `/user/keys`. Die Anfrage fällt an die nächste Regel
+  und ohne sie an den Menschen.
+- `block` und `ask` mit Pfadbedingung treffen den unveränderten Pfad **oder**
+  den aufgelösten (`normalize_path`, ohne Query): einmal entschlüsselt werden
+  die Punkt- und Trennerformen und zusätzlich die nicht reservierten Zeichen
+  nach RFC 3986 6.2.2.2 (Buchstaben, Ziffern, `-._~`); Pfadparameter in jedem
+  Segment entfernt; leere Segmente entfernt wie bei nginx `merge_slashes`,
+  Tomcat und Spring, ein abschließender `/` bleibt; danach
+  `remove_dot_segments` nach RFC 3986 5.2.4. Ein `block` mit Präfix `/admin`
+  fängt so `/x/../admin`, `/x/%2E%2E/admin`, `//admin` und `/%61dmin`, eine
+  `ask`-Regel vor einer hostweiten Freigabe lässt `/repos/me/../../user/keys`
+  nicht an ihr vorbei. Trifft der aufgelöste Pfad mehr als der Server, blockt
+  oder fragt die Regel öfter; eine Freigabe entsteht daraus nie. Groß- und
+  Kleinschreibung bleiben unterschieden.
+- Eine Regel ohne Pfadbedingung ist hostweit und von alldem nicht berührt.
+- Ein Regelvorschlag (`PROXY_008`) übernimmt aus einem Pfad mit `..`-Segment
+  kein Präfix.
 
 **`Rule.passthrough_llm` kommt nie von der Leitung.** `rule_from_proto` setzt
 das Feld immer auf `false`, aus demselben Grund wie bei `bundled`: Ein Client,

@@ -36,7 +36,7 @@ use humanitl_core::{
 };
 use humanitl_recorder::{Dir, Recorder};
 use humanitl_rules::is_known_method;
-use humanitl_rules::path::{prefix_matches, strip_query};
+use humanitl_rules::path::{has_dot_dot_segment, prefix_matches, strip_query};
 use hyper::body::Incoming;
 use hyper::header::{HeaderName, HeaderValue};
 use hyper::service::service_fn;
@@ -2013,11 +2013,11 @@ pub fn idle_request_body(idle: Duration, since_last: u64) -> Diagnostic {
 ///   Prüfungen besteht: [`path_prefix_is_valid`], sonst lehnt `parse_rules` die
 ///   Datei ab, und [`prefix_matches`] gegen die gescheiterte Anfrage selbst,
 ///   sonst stünde in der Regel eine Bedingung, die genau diese Anfrage nicht
-///   erfüllt. Die zweite Prüfung ist die schärfere: Ein Pfad mit einem
-///   `..`-Segment trifft nie ein Präfix, auch verschleiert nicht (`%2e`, `%5c`,
-///   `\`), weil erst der Server dahinter auflöst. Ein Vorschlag, der aus dem
-///   Pfad ein Präfix zöge, das ihn nicht trifft, wäre wirkungslos — dieselbe
-///   Falle wie eine Regel mit `action: ask` vor HUM-102.
+///   erfüllt. Ein Pfad mit einem `..`-Segment gibt nie ein Präfix her, auch
+///   verschleiert nicht (`%2e`, `%5c`, `\`, `..;x`; [`has_dot_dot_segment`]),
+///   weil erst der Server dahinter auflöst: Ein Präfix wie `/api/chat/../pull`
+///   benennte eine Grenze, die es nicht gibt, und dieselbe Regel mit `allow`
+///   träfe den Pfad nie (HUM-204).
 ///
 ///   Bleibt das Feld weg, gilt die Regel für jeden Pfad dieses Hosts
 ///   (`CompiledPrefixes::Any`), und [`private_address_refused`] schreibt das in
@@ -2102,7 +2102,10 @@ pub fn private_address_rule(request: &HttpRequest) -> Result<Rule, NoRule> {
     }
     let prefix = strip_query(&request.path_and_query);
     let prefixes = vec![prefix.to_owned()];
-    if path_prefix_is_valid(prefix) && prefix_matches(&prefixes, &request.path_and_query) {
+    if path_prefix_is_valid(prefix)
+        && !has_dot_dot_segment(prefix)
+        && prefix_matches(&prefixes, &request.path_and_query)
+    {
         matcher = matcher.with_path_prefixes(prefixes);
     }
     Ok(Rule::new(RuleId::new(), Action::Ask, matcher)

@@ -304,6 +304,70 @@ impl CompiledRule {
         }
     }
 
+    /// Wahr, wenn die Regel eine Anfrage durchlässt (`allow`, `redact`).
+    const fn lets_through(&self) -> bool {
+        matches!(self.rule.action, Action::Allow | Action::Redact)
+    }
+
+    /// Wahr, wenn die Regel ein Pfadmuster oder Präfixe trägt.
+    const fn bounded(&self) -> bool {
+        !matches!(self.path, CompiledPath::Any) || !matches!(self.prefixes, CompiledPrefixes::Any)
+    }
+
+    /// Wahr, wenn diese Regel den Pfad wegen eines `..`-Segments nicht treffen
+    /// darf (HUM-204). Das ist die eine Stelle, die über Punktsegmente
+    /// entscheidet; [`crate::path::prefix_matches`] vergleicht nur Zeichen.
+    ///
+    /// Eine Pfad- oder Präfixbedingung ist eine Grenze, und der Proxy reicht
+    /// den Pfad unverändert weiter. `/repos/me/../../user/keys` trifft den
+    /// Glob `/repos/me/**` Zeichen für Zeichen, aber ein Server, der
+    /// Punktsegmente auflöst, bedient `/user/keys`. Deshalb trifft eine Regel,
+    /// die durchlässt, einen solchen Pfad nie, auch verschleiert nicht
+    /// (`%2e%2e`, `..;x`); die Anfrage geht an die nächste Regel und ohne sie
+    /// an den Menschen. Eine Regel ohne Pfadbedingung meint ohnehin den ganzen
+    /// Host; dort verschiebt ein `..` keine Grenze.
+    fn refuses_dot_segments(&self, path_and_query: &str) -> bool {
+        self.lets_through()
+            && self.bounded()
+            && crate::path::has_dot_dot_segment(crate::path::strip_query(path_and_query))
+    }
+
+    /// Pfadmuster und Präfixe gegen einen Pfad. Sie stehen nebeneinander und
+    /// schränken beide ein: Wer beides schreibt, meint beides.
+    fn path_conditions_hold(&self, path_and_query: &str) -> bool {
+        if !self.prefixes.matches(path_and_query) {
+            return false;
+        }
+        match &self.path {
+            CompiledPath::Any => true,
+            CompiledPath::Matcher(matcher) => matcher.matches(path_and_query),
+            CompiledPath::Broken => false,
+        }
+    }
+
+    /// Wahr, wenn die Pfadbedingungen der Regel auf die Anfrage zutreffen.
+    ///
+    /// Eine Regel, die blockt oder fragt, trifft den unveränderten Pfad
+    /// **oder** den aufgelösten aus [`crate::path::normalize_path`] (HUM-204).
+    /// So fängt ein `block` mit Präfix `/admin` auch `/x/../admin` und
+    /// `/x/%2E%2E/admin`, und eine `ask`-Regel vor einer hostweiten Freigabe
+    /// lässt `/repos/me/../../user/keys` nicht an ihr vorbei. Weitergeleitet
+    /// wird trotzdem der unveränderte Pfad.
+    fn path_matches(&self, path_and_query: &str) -> bool {
+        if self.refuses_dot_segments(path_and_query) {
+            return false;
+        }
+        if self.path_conditions_hold(path_and_query) {
+            return true;
+        }
+        if self.lets_through() || !self.bounded() {
+            return false;
+        }
+        let path = crate::path::strip_query(path_and_query);
+        let normalized = crate::path::normalize_path(path);
+        normalized != path && self.path_conditions_hold(&normalized)
+    }
+
     fn matches(&self, key: &RequestKey<'_>) -> bool {
         let matcher: &Matcher = &self.rule.matcher;
 
@@ -337,16 +401,7 @@ impl CompiledRule {
         {
             return false;
         }
-        // Pfadmuster und Präfixe stehen nebeneinander und schränken beide
-        // ein: Wer beides schreibt, meint beides.
-        if !self.prefixes.matches(key.path) {
-            return false;
-        }
-        match &self.path {
-            CompiledPath::Any => true,
-            CompiledPath::Matcher(matcher) => matcher.matches(key.path),
-            CompiledPath::Broken => false,
-        }
+        self.path_matches(key.path)
     }
 }
 
