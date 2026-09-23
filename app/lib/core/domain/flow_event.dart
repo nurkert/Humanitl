@@ -47,6 +47,10 @@ sealed class FlowEvent with _$FlowEvent {
     BlockReason? blockReason,
     RuleId? ruleId,
     @Default('') String note,
+
+    /// How many findings leave with this allow, neither replaced nor
+    /// acknowledged (HUM-160); null when nothing leaves or nobody counted.
+    int? unresolvedFindings,
   }) = FlowEventDecided;
 
   /// The request went upstream.

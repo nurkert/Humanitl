@@ -12,7 +12,15 @@ part 'decision.freezed.dart';
 @freezed
 sealed class Decision with _$Decision {
   /// Allowed unchanged.
-  const factory Decision.allow() = DecisionAllow;
+  ///
+  /// [acknowledgedFindings] are the findings the person saw and sends anyway
+  /// ("Send anyway" in the findings pause), as indices into the findings of
+  /// the flow in the order the daemon reported them (HUM-160). Holding the
+  /// release valve acknowledges nothing: the daemon then counts every
+  /// finding as unresolved.
+  const factory Decision.allow({
+    @Default(<int>[]) List<int> acknowledgedFindings,
+  }) = DecisionAllow;
 
   /// Allowed after editing; carries the whole request including the body.
   const factory Decision.allowEdited({required EditedRequest request}) =

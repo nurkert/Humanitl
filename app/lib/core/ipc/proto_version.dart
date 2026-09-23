@@ -41,9 +41,12 @@ abstract final class ProtoVersion {
   /// with the `Audit` service in the daemon: `verify` with key and anchors,
   /// `head`, `query` and `export` answer, and the audit screen reads
   /// `AuditResponse.anchors_reported` to tell "no anchors" from "not
-  /// reported" (HUM-156). Raising the number without a reader would claim
-  /// otherwise.
-  static const int minor = 12;
+  /// reported" (HUM-156). Raised to 13 with the trail of open findings:
+  /// "Send anyway" sends `DecideRequest.acknowledged_findings`, and the
+  /// history detail reads `FlowSummary.unresolved_findings` to say how many
+  /// findings left unresolved (HUM-160). Raising the number without a reader
+  /// would claim otherwise.
+  static const int minor = 13;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

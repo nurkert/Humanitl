@@ -407,7 +407,7 @@ class _ActionBarState extends ConsumerState<ActionBar> {
                       onSendAnyway: () => unawaited(
                         ref
                             .read(interceptDecisionProvider.notifier)
-                            .allow(acknowledged: true),
+                            .sendAnyway(),
                       ),
                       onPseudonymize: widget.onPseudonymize,
                       onBlock: () => _block(chosen),

@@ -315,6 +315,16 @@ class _Head extends StatelessWidget {
                 value: '${flow.findingCount}',
                 findings: flow.findingCount > 0,
               ),
+              // How many findings left unresolved with the allow (HUM-160):
+              // 0 after "Send anyway", the open ones after holding the valve.
+              // Only where the daemon counted; no count, no fact, never a
+              // guessed zero.
+              if (flow.unresolvedFindings case final int unresolved)
+                _Fact(
+                  label: l10n.historyDetailUnresolvedFindings,
+                  value: '$unresolved',
+                  findings: unresolved > 0,
+                ),
             ],
           ),
           // The note stands under the decision it explains, on its own line:

@@ -49,7 +49,12 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `12` seit der `Audit`-RPC im Daemon: `verify` mit Schlüssel und Ankern,
+/// `13` seit der Spur offener Funde: `DecideRequest.acknowledged_findings`
+/// trägt die Funde, die der Mensch mit „Trotzdem senden" bestätigt, und
+/// `FlowEvent.Decided.unresolved_findings` wie `FlowSummary.unresolved_findings`
+/// sagen, wie viele ohne Ersetzung und ohne Bestätigung hinausgingen; bei
+/// einer bearbeiteten Freigabe die des zweiten Scans (HUM-160).
+/// `12` war die `Audit`-RPC im Daemon: `verify` mit Schlüssel und Ankern,
 /// `head`, `query` mit Filter und Cursor und `export` als JSONL oder CSV
 /// antworten, und `AuditResponse` füllt die Felder 7 bis 14, die HUM-051
 /// angelegt hat (HUM-156); `anchors_reported` sagt einem Client, dass Zahl und
@@ -90,7 +95,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 12;
+pub const PROTO_MINOR: u32 = 13;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

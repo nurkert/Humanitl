@@ -11,6 +11,7 @@
 // und Tastatur und Zeiger verhalten sich dort anders als in der App, die es
 // nur für Linux gibt.
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/services.dart';
@@ -18,6 +19,7 @@ import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
+import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/editor/model/draft.dart';
 import 'package:humanitl/features/editor/providers/draft_provider.dart';
 import 'package:humanitl/features/intercept/providers/decision.dart';
@@ -118,6 +120,28 @@ Future<void> settle(WidgetTester tester) async {
 
 final Finder pause = find.byKey(const Key('intercept-findings-pause'));
 
+/// Ein Fake, der das Detail erst nach [release] herausgibt.
+///
+/// Bis dahin kennt die Oberfläche nur die Zahl aus der Zeile, nicht die Funde
+/// selbst und damit nicht ihre Indizes (HUM-160).
+class SlowDetailClient extends FakeDaemonClient {
+  /// Hält die Anfrage mit der E-Mail-Adresse an.
+  SlowDetailClient()
+    : super(
+        script: holdScript(<FlowDetail>[withMail(1)]),
+        clock: () => testStart,
+      );
+
+  /// Gibt das Detail frei.
+  final Completer<void> release = Completer<void>();
+
+  @override
+  Future<FlowDetail> getFlow(FlowId id) async {
+    await release.future;
+    return super.getFlow(id);
+  }
+}
+
 void main() {
   testWidgets('button_label_with_findings', (WidgetTester tester) async {
     await pumpIntercept(tester, client: mailClient());
@@ -185,7 +209,12 @@ void main() {
     await settle(tester);
 
     expect(client.decisions, hasLength(1));
-    expect(client.decisions.single.decision, const Decision.allow());
+    // Sent unchanged, and the one finding the pause showed is acknowledged
+    // (HUM-160).
+    expect(
+      client.decisions.single.decision,
+      const Decision.allow(acknowledgedFindings: <int>[0]),
+    );
   }, variant: linux);
 
   testWidgets('S in the pause sends', (WidgetTester tester) async {
@@ -200,7 +229,12 @@ void main() {
     await settle(tester);
 
     expect(client.decisions, hasLength(1));
-    expect(client.decisions.single.decision, const Decision.allow());
+    // Sent unchanged, and the one finding the pause showed is acknowledged
+    // (HUM-160).
+    expect(
+      client.decisions.single.decision,
+      const Decision.allow(acknowledgedFindings: <int>[0]),
+    );
   }, variant: linux);
 
   testWidgets('S without an open pause sends nothing', (
@@ -567,5 +601,150 @@ void main() {
     expect(pause, findsNothing);
     expect(mark, findsOneWidget);
     expect(client.decisions, isEmpty);
+  }, variant: linux);
+  testWidgets('send_anyway_acknowledges_all', (WidgetTester tester) async {
+    // Drei Funde, der mittlere schon erledigt: Bestätigt werden genau die
+    // offenen, mit ihrem Platz in der Liste des Daemons, nicht mit ihrem
+    // Platz in der Pause (HUM-160).
+    final FakeDaemonClient client = mailClient(
+      holdScript(<FlowDetail>[
+        withMail(
+          1,
+          findings: <Finding>[
+            mailFinding(),
+            mailFinding(resolved: true),
+            mailFinding(),
+          ],
+        ),
+      ]),
+    );
+    await pumpIntercept(tester, client: client);
+    await playScript(tester);
+    await armed(tester);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await settle(tester);
+    expect(pause, findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('intercept-findings-pause-send')));
+    await settle(tester);
+
+    expect(client.decisions, hasLength(1));
+    expect(
+      client.decisions.single.decision,
+      const Decision.allow(acknowledgedFindings: <int>[0, 2]),
+    );
+  }, variant: linux);
+
+  testWidgets('over the valve the history counts 1 unresolved', (
+    WidgetTester tester,
+  ) async {
+    // Das Halten der Freigabe sendet, bestätigt aber nichts (HUM-160).
+    final FakeDaemonClient client = mailClient();
+    await pumpIntercept(tester, client: client);
+    await playScript(tester);
+    await armed(tester);
+    final TestGesture gesture = await tester.startGesture(
+      tester.getCenter(find.byKey(const Key('intercept-valve-hold'))),
+    );
+    await tester.pump();
+    await tester.pump(HMotion.holdToConfirm + const Duration(milliseconds: 50));
+    await gesture.up();
+    await settle(tester);
+
+    expect(client.decisions, hasLength(1));
+    expect(client.decisions.single.decision, const Decision.allow());
+    final FlowId id = client.decisions.single.flowId;
+    expect(client.state.flow(id)?.unresolvedFindings, 1);
+  }, variant: linux);
+
+  testWidgets('after the pause the history counts 0 unresolved', (
+    WidgetTester tester,
+  ) async {
+    final FakeDaemonClient client = mailClient();
+    await pumpIntercept(tester, client: client);
+    await playScript(tester);
+    await armed(tester);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await settle(tester);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyS);
+    await settle(tester);
+
+    expect(client.decisions, hasLength(1));
+    final FlowId id = client.decisions.single.flowId;
+    expect(client.state.flow(id)?.unresolvedFindings, 0);
+    expect(
+      client.state.details[id]?.findings.single.resolved,
+      isTrue,
+      reason: 'an acknowledged finding is resolved, as the daemon records it',
+    );
+  }, variant: linux);
+
+  testWidgets('send anyway waits until every open finding is described', (
+    WidgetTester tester,
+  ) async {
+    // Solange das Detail fehlt, kennt die Pause nur die Zahl. Senden hieße,
+    // nichts zu bestätigen, was der Mensch aber getan hätte (HUM-160).
+    final SlowDetailClient client = SlowDetailClient();
+    await pumpIntercept(tester, client: client);
+    await playScript(tester);
+    await armed(tester);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await settle(tester);
+    expect(pause, findsOneWidget);
+    expect(
+      find.byKey(const Key('intercept-findings-pause-undescribed')),
+      findsOneWidget,
+    );
+
+    HButton sendButton() => tester.widget<HButton>(
+      find.descendant(
+        of: find.byKey(const Key('intercept-findings-pause-send')),
+        matching: find.byType(HButton),
+      ),
+    );
+    expect(sendButton().onPressed, isNull, reason: 'the button waits');
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyS);
+    await settle(tester);
+    expect(client.decisions, isEmpty, reason: 'nothing leaves unseen');
+
+    client.release.complete();
+    await settle(tester);
+    expect(sendButton().onPressed, isNotNull);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyS);
+    await settle(tester);
+    expect(client.decisions, hasLength(1));
+    expect(
+      client.decisions.single.decision,
+      const Decision.allow(acknowledgedFindings: <int>[0]),
+    );
+  }, variant: linux);
+
+  testWidgets('send anyway keeps its acknowledgement through a forever rule', (
+    WidgetTester tester,
+  ) async {
+    // Eine Regel für immer fragt erst im Modal; die Bestätigung der Pause
+    // muss die Frage überstehen (HUM-160).
+    final FakeDaemonClient client = mailClient();
+    await pumpIntercept(tester, client: client);
+    await playScript(tester);
+    await armed(tester);
+    await tester.sendKeyEvent(LogicalKeyboardKey.digit4);
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await settle(tester);
+    expect(pause, findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('intercept-findings-pause-send')));
+    await tester.pumpAndSettle();
+    expect(client.decisions, isEmpty, reason: 'the modal asks first');
+    await tester.tap(find.byKey(const Key('intercept-batch-confirm')));
+    await tester.pumpAndSettle();
+
+    expect(client.decisions, hasLength(1));
+    expect(
+      client.decisions.single.decision,
+      const Decision.allow(acknowledgedFindings: <int>[0]),
+    );
+    expect(client.decisions.single.remember?.expires, const RuleExpiry.never());
   }, variant: linux);
 }

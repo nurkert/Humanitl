@@ -284,6 +284,7 @@ async fn remember_atomic() {
             flow_ids: vec![flow.to_string()],
             decision: Some(v1::decide_request::Decision::Allow(())),
             remember: Some(wire_rule("*bad.example.com", v1::RuleAction::Allow)),
+            acknowledged_findings: Vec::new(),
         })
         .await
         .expect_err("a broken rule stops the decision");
@@ -300,6 +301,7 @@ async fn remember_atomic() {
             flow_ids: vec![flow.to_string()],
             decision: Some(v1::decide_request::Decision::Allow(())),
             remember: Some(wire_rule("api.github.com", v1::RuleAction::Allow)),
+            acknowledged_findings: Vec::new(),
         })
         .await
         .expect("decide")
@@ -322,6 +324,7 @@ async fn a_remembered_rule_does_not_outlive_a_decision_that_never_happened() {
             flow_ids: vec![FlowId::new().to_string()],
             decision: Some(v1::decide_request::Decision::Allow(())),
             remember: Some(wire_rule("api.github.com", v1::RuleAction::Allow)),
+            acknowledged_findings: Vec::new(),
         })
         .await
         .expect_err("an unknown flow cannot be decided");

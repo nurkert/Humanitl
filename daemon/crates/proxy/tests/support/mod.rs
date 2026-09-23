@@ -50,7 +50,8 @@ use humanitl_proxy::rules_store::RulesStore;
 use humanitl_proxy::{
     AskPipeline, AsyncStream, ClientTls, ConnectionContext, Direct, Egress, FlowHandler,
     FlowPipeline, HandlerPorts, HoldQueue, MetaEndpoint, MetaStatus, PassthroughPipeline,
-    ProxyCore, ProxyLimits, ResolveError, Resolver, ResolverPort, RulesPipeline, Scanner, Upstream,
+    ProxyCore, ProxyLimits, ResolveError, Resolver, ResolverPort, RulesPipeline, Scanner,
+    SecondScan, Upstream,
 };
 use humanitl_recorder::{Recorder, RecorderSettings, SessionMeta};
 use hyper::body::Incoming;
@@ -418,9 +419,18 @@ impl ProxyBuilder {
             }
             recorder
         });
-        let queue = Arc::new(match recorder.clone() {
+        let queue = match recorder.clone() {
             Some(recorder) => HoldQueue::new(&self.limits).recording(recorder),
             None => HoldQueue::new(&self.limits),
+        };
+        // Wie im Daemon: Mit Detektoren zaehlt die Warteschlange auch die
+        // Funde einer bearbeiteten Freigabe (HUM-160).
+        let queue = Arc::new(match self.scanner.as_ref() {
+            Some(scanner) => queue.counting_edits(Arc::new(SecondScan::new(
+                Arc::clone(scanner),
+                self.limits.hold_body_cap_bytes,
+            ))),
+            None => queue,
         });
         let inner: Arc<dyn FlowPipeline> = match self.pipe {
             Pipe::Ask(timeout) => Arc::new(AskPipeline::new(Arc::clone(&queue), timeout)),
@@ -602,6 +612,26 @@ impl Proxy {
     /// sein `Held`-Ereignis erscheint. Vor der Anfrage anlegen.
     pub fn decide_with(&self, decision: Decision) -> Decider {
         self.decide_each(move |_index| decision.clone())
+    }
+
+    /// Wie [`Proxy::decide_with`], als Mensch, der die Funde `acknowledged`
+    /// gesehen hat und trotzdem sendet (HUM-160).
+    pub fn decide_acknowledging(&self, decision: Decision, acknowledged: Vec<u32>) -> Decider {
+        let mut rx = self.queue.subscribe();
+        let queue = Arc::clone(&self.queue);
+        let task = tokio::spawn(async move {
+            while let Some(event) = next_event(&mut rx).await {
+                if let FlowEvent::Held { flow_id, .. } = event {
+                    let _ = queue.decide_acknowledging(
+                        flow_id,
+                        decision.clone(),
+                        humanitl_core::DecisionSource::User,
+                        &acknowledged,
+                    );
+                }
+            }
+        });
+        Decider { task }
     }
 
     /// Wie [`Proxy::decide_with`], aber die Entscheidung hängt davon ab, der

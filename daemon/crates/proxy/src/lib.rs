@@ -75,12 +75,13 @@ pub use crate::connect::{
     AuthorityError, AuthorityRefusal, ConnMeta, ConnectionContext, RequestTarget, check_authority,
 };
 pub use crate::core::{ProxyCore, connection_limit_reached};
+pub use crate::edit::SecondScan;
 pub use crate::egress::{AsyncStream, Direct, Egress};
 pub use crate::findings::{NoScan, Scanner, Tier1Scanner};
 pub use crate::handler::{
     ConnectionSlot, FlowHandler, HandlerPorts, PressureWatch, ProxyLimits, idle_request_body,
 };
-pub use crate::hold::{DomainSink, HoldQueue};
+pub use crate::hold::{DomainSink, EditCount, HoldQueue};
 pub use crate::listener::SessionSocket;
 pub use crate::llm_discover::{
     CONNECT_TIMEOUT, DEFAULT_PORTS, Found, LocalNet, PARALLEL, PROBE_TIMEOUT, Scan, Subnet,

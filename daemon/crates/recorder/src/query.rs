@@ -38,7 +38,7 @@ const POOL_SIZE: usize = 8;
 const FLOW_COLUMNS: &str = "id, session_id, seq, ts, method, scheme, host, host_display, port, \
      path, upgrade, state, decision, block_reason, rule_id, passthrough, status, duration_ms, \
      held_ms, edited, findings_count, request_size, response_size, apex, catalog_id, error, meta, \
-     decision_note";
+     decision_note, unresolved_findings";
 
 /// Ein kleiner Vorrat an Nur-Lese-Verbindungen.
 ///
@@ -497,6 +497,11 @@ fn row_to_summary(row: &Row<'_>) -> rusqlite::Result<FlowSummary> {
         // `V8__decision_note.sql`, und eine ältere Zeile hat keine Notiz, statt
         // eine leere zu behaupten (HUM-117).
         decision_note: row.get(27)?,
+        // `NULL` bleibt `None`: nichts ging hinaus, niemand zählte, oder die
+        // Zeile ist älter als `V9__unresolved_findings.sql` (HUM-160).
+        unresolved_findings: row
+            .get::<_, Option<i64>>(28)?
+            .map(|value| u32::try_from(value).unwrap_or(u32::MAX)),
     })
 }
 

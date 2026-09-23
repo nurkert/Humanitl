@@ -63,7 +63,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::diagnostics::codes::PROXY_009;
 use crate::diagnostics::{Diagnostic, Severity};
-use crate::event::FlowEvent;
+use crate::event::{DecidedFindings, FlowEvent};
 use crate::finding::Finding;
 use crate::http::HttpRequest;
 use crate::ids::{FlowId, RuleId, SessionId};
@@ -428,9 +428,15 @@ impl FlowState {
 
     /// Der gemeinsame Ausgang jeder Entscheidung: der neue Zustand und das
     /// Ereignis, das ihn trägt.
+    ///
+    /// `findings` ist, was der Zustand selbst über die Funde weiß: aus
+    /// `Analyzed` ihre Zahl, sonst nichts. Wer mehr weiß, schreibt es vor dem
+    /// Veröffentlichen ins Ereignis: Die Warteschlange kennt die bestätigten
+    /// Funde und den zweiten Scan einer bearbeiteten Fassung (HUM-160).
     fn decided(
         decision: Decision,
         source: DecisionSource,
+        findings: DecidedFindings,
         flow_id: FlowId,
         at: SystemTime,
     ) -> (Self, FlowEvent) {
@@ -441,6 +447,7 @@ impl FlowState {
                 at,
                 decision,
                 source,
+                findings,
             },
         )
     }
@@ -497,15 +504,17 @@ impl FlowState {
                     queue_count,
                 },
             )),
-            (Self::Analyzed { .. }, TransitionInput::Decide { decision, source })
+            (Self::Analyzed { findings }, TransitionInput::Decide { decision, source })
                 if may_decide(false, source, &decision) =>
             {
-                Ok(Self::decided(decision, source, flow_id, at))
+                let open = unseen(&decision, &findings);
+                Ok(Self::decided(decision, source, open, flow_id, at))
             }
             (Self::Held { .. }, TransitionInput::Decide { decision, source })
                 if may_decide(true, source, &decision) =>
             {
-                Ok(Self::decided(decision, source, flow_id, at))
+                let open = DecidedFindings::default();
+                Ok(Self::decided(decision, source, open, flow_id, at))
             }
             (Self::Held { .. }, TransitionInput::Timeout) => Ok((
                 Self::Decided(Decision::TimedOut),
@@ -523,7 +532,13 @@ impl FlowState {
                     decision: decision @ Decision::Block { .. },
                     source: DecisionSource::System,
                 },
-            ) => Ok(Self::decided(decision, DecisionSource::System, flow_id, at)),
+            ) => Ok(Self::decided(
+                decision,
+                DecisionSource::System,
+                DecidedFindings::default(),
+                flow_id,
+                at,
+            )),
             (
                 Self::Decided(Decision::Allow | Decision::AllowEdited { .. }),
                 TransitionInput::Forward,
@@ -551,6 +566,20 @@ impl FlowState {
             ) => Ok((Self::Recorded, FlowEvent::Recorded { flow_id, at })),
             _ => Err(invalid),
         }
+    }
+}
+
+/// Die Funde einer Entscheidung aus `Analyzed` (HUM-160).
+///
+/// Eine Freigabe dort (eine Regel, die Durchreiche) lässt jeden Fund hinaus:
+/// Niemand hat ihn gesehen, also hat ihn auch niemand bestätigt. Eine Sperre
+/// lässt nichts hinaus und trägt keine Zahl.
+fn unseen(decision: &Decision, findings: &[Finding]) -> DecidedFindings {
+    DecidedFindings {
+        unresolved: decision
+            .is_allow()
+            .then(|| u32::try_from(findings.len()).unwrap_or(u32::MAX)),
+        acknowledged: Vec::new(),
     }
 }
 

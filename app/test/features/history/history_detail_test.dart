@@ -119,6 +119,57 @@ void main() {
     expect(find.textContaining('Note to the agent:'), findsNothing);
   });
 
+  testWidgets('history_shows_unresolved_findings', (WidgetTester tester) async {
+    // Zwei freigegebene Zeilen mit Funden: eine über das Halten gesendet (1
+    // offen), eine nach der Pause (0 offen), und eine, für die niemand gezählt
+    // hat (HUM-160). 48 Zeilen, damit zwei Freigaben Funde tragen.
+    final FakeDaemonClient client = FakeDaemonClient.history(count: 48);
+    final List<Flow> allowed = client.state.flows.values
+        .where(
+          (Flow flow) =>
+              flow.decision == DecisionKind.allow && flow.findingCount > 0,
+        )
+        .toList();
+    expect(allowed.length, greaterThanOrEqualTo(2));
+    client.state.update(
+      allowed[0].id,
+      (Flow flow) => flow.copyWith(unresolvedFindings: 1),
+    );
+    client.state.update(
+      allowed[1].id,
+      (Flow flow) => flow.copyWith(unresolvedFindings: 0),
+    );
+    final ProviderContainer container = await pumpHistory(
+      tester,
+      client: client,
+    );
+    Flow row(FlowId id) => container
+        .read(historyPageProvider)
+        .rows
+        .firstWhere((Flow flow) => flow.id == id);
+    final Finder label = find.text('Sent unresolved');
+    Finder valueNextToLabel(String value) => find.descendant(
+      of: find.ancestor(of: label, matching: find.byType(Row)).first,
+      matching: find.text(value),
+    );
+
+    await _select(tester, container, row(allowed[0].id));
+    expect(label, findsOneWidget);
+    expect(valueNextToLabel('1'), findsOneWidget);
+
+    await _select(tester, container, row(allowed[1].id));
+    expect(label, findsOneWidget);
+    expect(valueNextToLabel('0'), findsOneWidget);
+
+    // Niemand hat gezählt: kein Fakt, keine geratene Null.
+    final Flow uncounted = container
+        .read(historyPageProvider)
+        .rows
+        .firstWhere((Flow flow) => flow.decision == DecisionKind.block);
+    await _select(tester, container, uncounted);
+    expect(label, findsNothing);
+  });
+
   group('accessibility as numbers', () {
     testWidgets('a row carries state, method, host and path in its label', (
       WidgetTester tester,

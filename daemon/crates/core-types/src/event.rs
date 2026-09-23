@@ -22,6 +22,38 @@ use crate::flow::{Decision, DecisionSource, UpstreamError};
 use crate::http::HttpRequest;
 use crate::ids::{AskId, FlowId};
 
+/// Was von den Funden einer Anfrage bei der Entscheidung offen blieb (HUM-160).
+///
+/// Die Spur einer Freigabe mit offenen Funden: wie viele ohne Ersetzung und
+/// ohne Bestätigung hinausgehen, und welche der Mensch gesehen und bewusst
+/// stehen gelassen hat („Trotzdem senden"). Aufzeichnung, Audit und Oberfläche
+/// lesen beides aus [`FlowEvent::Decided`]; niemand zählt ein zweites Mal.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DecidedFindings {
+    /// Wie viele Funde die Anfrage trägt, die hinausgeht, ohne die bestätigten.
+    ///
+    /// Bei `Allow` sind es die Funde aus [`FlowEvent::Analyzed`], bei
+    /// `AllowEdited` die des zweiten Scans über die bearbeitete Fassung; die
+    /// der gehaltenen Fassung zeigten nach einer Ersetzung in einen Body, den
+    /// es nicht mehr gibt. `None`, wo nichts hinausgeht (Block, Ablauf) oder
+    /// wo niemand gezählt hat; nie eine geratene Null.
+    pub unresolved: Option<u32>,
+    /// Die bestätigten Funde als Indizes in die Liste aus
+    /// [`FlowEvent::Analyzed`], aufsteigend und ohne Doppel.
+    pub acknowledged: Vec<u32>,
+}
+
+impl DecidedFindings {
+    /// Eine Freigabe mit `count` offenen Funden, von denen keiner bestätigt ist.
+    #[must_use]
+    pub const fn unresolved(count: u32) -> Self {
+        Self {
+            unresolved: Some(count),
+            acknowledged: Vec::new(),
+        }
+    }
+}
+
 /// Ein Ereignis aus dem Leben eines Flows.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FlowEvent {
@@ -66,6 +98,8 @@ pub enum FlowEvent {
         decision: Decision,
         /// Wer entschieden hat.
         source: DecisionSource,
+        /// Mit welchen Funden eine Freigabe hinausgeht (HUM-160).
+        findings: DecidedFindings,
     },
     /// Die Anfrage ist auf dem Weg zum Ziel.
     Forwarded {
