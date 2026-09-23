@@ -38,6 +38,7 @@ class ReleaseValve extends StatefulWidget {
     required this.semanticsValue,
     required this.optionsLabel,
     required this.onAllow,
+    required this.onActivate,
     required this.onAllowRemembered,
     required this.onToggleOptions,
     this.onShortPress,
@@ -68,7 +69,19 @@ class ReleaseValve extends StatefulWidget {
   final String optionsLabel;
 
   /// Sends the request once, unchanged.
+  ///
+  /// Nur der Zeiger erreicht diesen Weg: der Klick, solange kein Halten
+  /// verlangt ist, sonst das volle Halten. Das Halten ist die Kenntnisnahme
+  /// eines offenen Funds (`docs/UX.md` 4.7) und darf die Pause überspringen,
+  /// deshalb erreicht keine Taste diesen Callback (HUM-206).
   final VoidCallback onAllow;
+
+  /// `Enter` or `Space` while the left half has the focus.
+  ///
+  /// Eine Taste ist kein Halten. Sie nimmt denselben Weg wie die
+  /// `Enter`-Bindung des Screens: Bei einer Anfrage mit offenem Fund öffnet
+  /// dieser Weg die Pause und sendet nie an ihr vorbei (HUM-049, HUM-206).
+  final VoidCallback onActivate;
 
   /// Sends the request and creates the rule the label names.
   final VoidCallback onAllowRemembered;
@@ -211,7 +224,10 @@ class _ReleaseValveState extends State<ReleaseValve> {
       actions: <Type, Action<Intent>>{
         ActivateIntent: CallbackAction<ActivateIntent>(
           onInvoke: (ActivateIntent intent) {
-            widget.onAllow();
+            // Die Taste ist kein Halten und gilt deshalb nie als Kenntnisnahme
+            // eines Funds; sie nimmt denselben Weg wie `Enter` auf dem Screen
+            // (HUM-206).
+            widget.onActivate();
             return null;
           },
         ),

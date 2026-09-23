@@ -237,6 +237,11 @@ class _ActionBarState extends ConsumerState<ActionBar> {
         confirmed: anyFinding,
         acknowledged: anyFinding,
       ),
+      // Eine Taste auf dem fokussierten Ventil ist kein Halten. Sie nimmt den
+      // Weg von `Enter` auf dem Screen: Bei einer Anfrage mit Fund öffnet sie
+      // die Pause, über eine Gruppe gilt sie als Bestätigung (HUM-206).
+      onActivate: () =>
+          _allow(remember: remember.remembers, flows: chosen, confirmed: true),
       onAllowRemembered: () => _allow(remember: true, flows: chosen),
       onToggleOptions: () => ref.read(rememberDraftProvider.notifier).toggle(),
     );
