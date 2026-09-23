@@ -46,8 +46,9 @@ use std::thread;
 use humanitl_sandbox::{
     Bridge, CHECK_BRIDGE_LISTENING, CHECK_FAMILIES, CHECK_NAMES, CHECK_PREFIX,
     DEFAULT_DENY_SYSCALLS, ENV_BRIDGES, ENV_REPORT_FD, ENV_SECCOMP_DENY, EXIT_USAGE, PROXY_BRIDGE,
-    PROXY_SOCKET_DST, REQUIRED_SOCKET_FAMILIES, REQUIRED_SOCKET_TYPES, RESERVED_ENV,
-    SandboxProfile, ShimCheck, bridges_json, parse_check_line, shim_env,
+    PROXY_SOCKET_DST, REFUSALS_PREFIX, REQUIRED_SOCKET_FAMILIES, REQUIRED_SOCKET_TYPES,
+    RESERVED_ENV, SandboxProfile, ShimCheck, bridges_json, parse_check_line, parse_refusal_line,
+    shim_env,
 };
 
 /// Der Deskriptor, über den der Shim in diesen Tests seinen Bericht schreibt.
@@ -261,14 +262,23 @@ fn run_with_report(with_bridge: bool) -> String {
 }
 
 /// Die `CHECK`-Zeilen eines Laufs, gelesen mit dem Parser des Launchers.
+///
+/// Seit HUM-138 schreibt der Elternprozess des Shims daneben Zeilen über
+/// verweigerte Versuche; auch sie muss der Launcher lesen können, sonst zählen
+/// sie als fremde Zeilen.
 fn report_lines(with_bridge: bool) -> Vec<ShimCheck> {
     BufReader::new(run_with_report(with_bridge).into_bytes().as_slice())
         .lines()
         .map_while(Result::ok)
-        .map(|line| {
-            parse_check_line(&line).unwrap_or_else(|| {
-                panic!("the launcher's parser does not read the shim's line {line:?}")
-            })
+        .filter_map(|line| {
+            if let Some(check) = parse_check_line(&line) {
+                return Some(check);
+            }
+            assert!(
+                parse_refusal_line(&line).is_some(),
+                "the launcher's parser does not read the shim's line {line:?}"
+            );
+            None
         })
         .collect()
 }
@@ -510,9 +520,20 @@ fn the_report_carries_exactly_the_launcher_check_names() {
 fn every_report_line_starts_with_the_check_prefix() {
     let text = run_with_report(true);
     assert!(!text.is_empty(), "the report is empty");
+    // `/bin/true` refuses nothing, so the parent says only that it counts
+    // (HUM-138); the refusals the shim's own probe provokes are not the
+    // agent's and never reach the report.
+    assert_eq!(
+        text.lines()
+            .filter(|line| !line.starts_with(&format!("{CHECK_PREFIX} ")))
+            .collect::<Vec<_>>(),
+        [format!("{REFUSALS_PREFIX} on")],
+        "{text}"
+    );
     for line in text.lines() {
         assert!(
-            line.starts_with(&format!("{CHECK_PREFIX} ")),
+            line.starts_with(&format!("{CHECK_PREFIX} "))
+                || line.starts_with(&format!("{REFUSALS_PREFIX} ")),
             "line {line:?} is not a report line"
         );
         assert!(

@@ -482,4 +482,48 @@ done'
 expect_output seccomp_mode_2 '^Seccomp:[[:space:]]+2$' sh -c 'grep ^Seccomp /proc/self/status'
 expect_only   seccomp_every_process '=2$' sh -c "$ESC_SECCOMP_ALL"
 
+# esc_own_listener — seccomp(SET_MODE_FILTER, NEW_LISTENER) with a one-line
+# "allow" program, the first step of taking over the socket gate (HUM-138):
+# with a listener of its own, a newer filter of the agent could answer its
+# refused sockets with "go ahead". The shim's parent holds the listener of the
+# agent's filter, and the kernel refuses a second one with EBUSY while that
+# one lives; the case demands EPERM, the filter's own answer, which holds
+# whether the parent's listener lives or not. EBUSY is red: it means only the
+# living listener stood in the way. Prints `seccomp: <ERRNO>` for
+# probe_syscall; exit 0 with no such line when a listener was handed out.
+esc_own_listener() {
+    python3 -c '
+import ctypes, errno, os, sys
+NR = {"x86_64": 317, "aarch64": 277, "riscv64": 277}.get(os.uname().machine)
+if NR is None:
+    print("seccomp: no syscall number known for %s" % os.uname().machine)
+    sys.exit(3)
+class sock_filter(ctypes.Structure):
+    _fields_ = [("code", ctypes.c_uint16), ("jt", ctypes.c_uint8),
+                ("jf", ctypes.c_uint8), ("k", ctypes.c_uint32)]
+class sock_fprog(ctypes.Structure):
+    _fields_ = [("len", ctypes.c_uint16), ("filter", ctypes.POINTER(sock_filter))]
+BPF_RET_K = 0x06
+SECCOMP_RET_ALLOW = 0x7fff0000
+SECCOMP_SET_MODE_FILTER = 1
+SECCOMP_FILTER_FLAG_NEW_LISTENER = 8
+allow = (sock_filter * 1)(sock_filter(BPF_RET_K, 0, 0, SECCOMP_RET_ALLOW))
+prog = sock_fprog(1, allow)
+libc = ctypes.CDLL(None, use_errno=True)
+libc.syscall.restype = ctypes.c_long
+rc = libc.syscall(ctypes.c_long(NR), ctypes.c_ulong(SECCOMP_SET_MODE_FILTER),
+                  ctypes.c_ulong(SECCOMP_FILTER_FLAG_NEW_LISTENER), ctypes.byref(prog))
+if rc < 0:
+    code = ctypes.get_errno()
+    print("seccomp: %s" % errno.errorcode.get(code, "errno=%d" % code))
+    sys.exit(1)
+print("listener handed out: descriptor %d" % rc)
+'
+}
+if [ "$ESC_SYSCALL_TABLE" = 1 ]; then
+    probe_syscall seccomp_no_own_listener esc_own_listener
+else
+    skip seccomp_no_own_listener "esc_own_listener has no syscall number for $ESC_MACHINE"
+fi
+
 esc_end

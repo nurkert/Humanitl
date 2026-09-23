@@ -49,7 +49,11 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `13` seit der Spur offener Funde: `DecideRequest.acknowledged_findings`
+/// `14` seit den verweigerten Versuchen (HUM-138): `SandboxEvent.refusals`
+/// und `SandboxEvent.Status.refusals` tragen, was der Filter dem Agenten an
+/// `socket(2)` verweigert hat, je Paar aus Familie und Typ gezählt, samt
+/// `RefusalReporting` und `RefusalReason`.
+/// `13` war die Spur offener Funde: `DecideRequest.acknowledged_findings`
 /// trägt die Funde, die der Mensch mit „Trotzdem senden" bestätigt, und
 /// `FlowEvent.Decided.unresolved_findings` wie `FlowSummary.unresolved_findings`
 /// sagen, wie viele ohne Ersetzung und ohne Bestätigung hinausgingen; bei
@@ -95,7 +99,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 13;
+pub const PROTO_MINOR: u32 = 14;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

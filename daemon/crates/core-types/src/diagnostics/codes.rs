@@ -90,7 +90,7 @@ pub static AREAS: &[AreaInfo] = &[
         first: 1,
         last: 29,
         note: "001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, \
-               020-025 /work-Härtung (HUM-043)",
+               019 verweigerte Versuche ungemeldet (HUM-138), 020-025 /work-Härtung (HUM-043)",
     },
     AreaInfo {
         area: "proxy",
@@ -1379,6 +1379,21 @@ registry! {
     DAEMON_014 => "daemon", "Deinstallation unvollständig", "#daemon_014",
         "`humanitl daemon uninstall` konnte den Dienst nicht abmelden oder eine Datei, die `daemon install` angelegt hat, nicht entfernen.",
         "`CopyCommand` mit dem genauen `systemctl`-Aufruf, der scheiterte, sonst `ls -ld` auf den Pfad, der stehen blieb.";
+    // HUM-138: Verweigerte Versuche außerhalb von HTTP werden sichtbar.
+    /// Die Sandbox meldet verweigerte `socket(2)`-Aufrufe nicht.
+    ///
+    /// Der Filter des Agenten legt einen verweigerten Aufruf dem Shim vor
+    /// (`SECCOMP_RET_USER_NOTIF`), der ihn zählt und mit `EPERM` beantwortet.
+    /// Verweigert der Kernel dafür den Zuhörer, etwa weil schon ein Filter
+    /// weiter oben einen hat (`EBUSY`, eine Sandbox in einer Sandbox), lädt
+    /// der Shim denselben Filter ohne Zuhörer. Verweigert wird dann genauso,
+    /// nur sieht es niemand mehr. Der Befund sagt das, damit eine ruhige
+    /// Anzeige nicht als „der Agent hat nichts versucht" gelesen wird. Die
+    /// Nummer ist die dritte der freien 017 bis 019 (Nachtrag vom 2026-09-12
+    /// in `backlog/sprint-3.md`).
+    SANDBOX_019 => "sandbox", "Verweigerte Verbindungsversuche werden nicht gemeldet", "#sandbox_019",
+        "Der Kernel hat dem Filter des Agenten keinen Zuhörer gegeben; verweigert wird weiter mit `EPERM`, gezählt und gemeldet wird nichts.",
+        "Kein Fix-Knopf: Der Text nennt den errno; `EBUSY` heißt, dass Humanitl selbst in einer Umgebung mit eigenem seccomp-Zuhörer läuft.";
 }
 
 /// Sucht einen Code im Register.

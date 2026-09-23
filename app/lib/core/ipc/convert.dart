@@ -664,6 +664,42 @@ extension SandboxStatusToDomain on pb.SandboxEvent_Status {
     ),
     argvPreview: argvPreview,
     agentRunning: agentRunning,
+    refusals: hasRefusals() ? refusals.toDomain() : null,
+  );
+}
+
+/// `SandboxEvent.Refusals` to [SandboxRefusals] (HUM-138).
+extension SandboxRefusalsToDomain on pb.SandboxEvent_Refusals {
+  /// The domain form. An entry with a reason this build does not know keeps
+  /// its count under [SandboxRefusalReason.unknown]: dropping it would make the
+  /// total smaller than what the daemon counted.
+  SandboxRefusals toDomain() => SandboxRefusals(
+    reporting: switch (reporting) {
+      pb.RefusalReporting.REFUSAL_REPORTING_ON => SandboxRefusalReporting.on,
+      pb.RefusalReporting.REFUSAL_REPORTING_OFF => SandboxRefusalReporting.off,
+      _ => SandboxRefusalReporting.unknown,
+    },
+    offReason: offReason,
+    entries: List<SandboxRefusal>.unmodifiable(
+      entries.map(
+        (pb.SandboxEvent_Refusal entry) => SandboxRefusal(
+          syscall: entry.syscall,
+          family: entry.family,
+          socketType: entry.socketType,
+          reason: switch (entry.reason) {
+            pb.RefusalReason.REFUSAL_REASON_FAMILY =>
+              SandboxRefusalReason.family,
+            pb.RefusalReason.REFUSAL_REASON_TYPE => SandboxRefusalReason.type,
+            pb.RefusalReason.REFUSAL_REASON_OVERFLOW =>
+              SandboxRefusalReason.overflow,
+            _ => SandboxRefusalReason.unknown,
+          },
+          count: entry.count.toInt(),
+          firstAt: entry.hasFirstAt() ? _dateTime(entry.firstAt) : null,
+          lastAt: entry.hasLastAt() ? _dateTime(entry.lastAt) : null,
+        ),
+      ),
+    ),
   );
 }
 

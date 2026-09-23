@@ -15,7 +15,7 @@ Entfernen eines Codes.
 | daemon | `DAEMON` | 001 | 019 | 001-004 Start, Erreichbarkeit, Version des Daemons, 005-008 die Nutzer-Unit von `daemon install` (HUM-044), 009 Abschied (HUM-142), 010 Nutzersitzung, 011 Binaries aus dem `AppImage`, 012 `journalctl` (HUM-070), 013 der von systemd übergebene Socket (HUM-053), 014 `daemon uninstall` (HUM-077) |
 | ipc | `IPC` | 001 | 009 | gRPC-Schnittstelle, Token, Aufrufe gegen den Zustand |
 | config | `CONFIG` | 001 | 019 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), 010-012 Test-Wurzel und ihr Flag (HUM-087), 013 der Projektordner der Einrichtung (HUM-044), 017-018 Editor und Gruppenschlüssel (HUM-070) |
-| sandbox | `SANDBOX` | 001 | 029 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 020-025 /work-Härtung (HUM-043) |
+| sandbox | `SANDBOX` | 001 | 029 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 019 verweigerte Versuche ungemeldet (HUM-138), 020-025 /work-Härtung (HUM-043) |
 | proxy | `PROXY` | 001 | 019 | Anfragen, Caps, Protokoll, 010-011 Grenzen der Verbindung (HUM-120) |
 | tls | `TLS` | 001 | 009 | CA, Zertifikate, Handschlag |
 | llm | `LLM` | 001 | 009 | LLM-Endpunkt und seine Antworten |
@@ -538,6 +538,14 @@ Sandbox erst nach der Frist beendet
 **Auslöser.** Der Agent hat `SIGTERM` nicht beantwortet, und nach der Frist folgte `SIGKILL`; oder danach lag kein Exit-Status vor.
 
 **Fix.** Kein Fix, wenn `SIGKILL` gewirkt hat oder nur der Status ausblieb; lebt der Prozess weiter, nennt der Text `ps -o stat= -p <pid>`.
+
+#### SANDBOX_019
+
+Verweigerte Verbindungsversuche werden nicht gemeldet
+
+**Auslöser.** Der Kernel hat dem Filter des Agenten keinen Zuhörer gegeben; verweigert wird weiter mit `EPERM`, gezählt und gemeldet wird nichts.
+
+**Fix.** Kein Fix-Knopf: Der Text nennt den errno; `EBUSY` heißt, dass Humanitl selbst in einer Umgebung mit eigenem seccomp-Zuhörer läuft.
 
 ### Bereich proxy
 
