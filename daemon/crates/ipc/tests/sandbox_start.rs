@@ -799,3 +799,228 @@ async fn a_read_only_project_ends_without_a_summary() {
         "nothing can change under --ro-bind: {seen:?}"
     );
 }
+
+/// Der Befund `AGENT_005` im Strom, den für einen Agenten, der nie gelaufen
+/// ist (HUM-137), falls es ihn gibt.
+fn never_ran(events: &[v1::SandboxEvent]) -> Option<&v1::Diagnostic> {
+    diagnostics(events)
+        .into_iter()
+        .find(|diagnostic| diagnostic.code == "AGENT_005")
+}
+
+/// Ob der Strom diesen Exit-Code meldet.
+fn exited_with(events: &[v1::SandboxEvent], code: i32) -> bool {
+    events.iter().any(|event| {
+        matches!(&event.event, Some(v1::sandbox_event::Event::Exit(exit)) if exit.code == code)
+    })
+}
+
+/// Ein Kommando, das es in der Sandbox nicht gibt, wird gesagt und nicht
+/// verschwiegen (HUM-137).
+///
+/// Vorher startete die Sandbox, die drei Garantien waren grün, der Zustand
+/// hieß `running` — und der Agent war nie gelaufen: Der Shim scheiterte am
+/// `exec`, endete mit `127`, und im Strom stand kein einziger Befund. Der Test
+/// startet den echten Shim, also auch dessen eigene Zeile über das
+/// gescheiterte `exec`; sie darf nicht als Ausgabe des Agenten zählen.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_command_that_does_not_exist_is_said_in_the_stream() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    let service = fixture.service();
+    let mut start = fixture.start();
+    if let Some(v1::sandbox_request::Op::Start(inner)) = start.op.as_mut() {
+        inner.command = vec!["gibt-es-nicht".to_owned()];
+    }
+    let seen = events_to_end(&service, start).await;
+
+    // Die Sandbox selbst stand: drei belegte Garantien, dann `running`. Der
+    // Befund ändert daran nichts, und der Ring darf grün sein.
+    let measured = checks(&seen);
+    assert_eq!(measured.len(), 3, "{seen:?}");
+    assert!(measured.iter().all(|check| check.passed), "{measured:?}");
+    assert!(
+        states(&seen).contains(&v1::SandboxState::Running),
+        "the sandbox is up although its agent never ran: {seen:?}"
+    );
+    assert!(
+        !states(&seen).contains(&v1::SandboxState::Failed),
+        "a missing agent does not fail the sandbox: {seen:?}"
+    );
+
+    let finding = never_ran(&seen)
+        .unwrap_or_else(|| panic!("the agent that never ran is said: {:?}", diagnostics(&seen)));
+    assert_eq!(finding.severity, v1::Severity::Error as i32, "{finding:?}");
+    assert!(finding.why.contains("gibt-es-nicht"), "{}", finding.why);
+    // Der Befund kommt aus dem Bericht des Shims, nicht aus dem Terminal.
+    assert!(finding.why.contains("never started"), "{}", finding.why);
+    // Der PATH der Sandbox, nicht der des Hosts. Die Fixture legt das Profil
+    // als eigenes des Nutzers ab, und dessen Werte hält der Bildschirm zurück
+    // (`backlog/CONVENTIONS.md` 4.17); der Befund hält sich an dieselbe
+    // Regel. Gezeigt wird der Wert eines mitgelieferten Profils, das misst
+    // `the_sandbox_path_in_a_finding_obeys_the_table` in `src/sandbox.rs`.
+    assert!(finding.why.contains("PATH=<withheld>"), "{}", finding.why);
+    if let Some(host) = std::env::var("PATH").ok().filter(|path| !path.is_empty()) {
+        assert!(
+            !finding.why.contains(&host),
+            "the host PATH is not the question: {}",
+            finding.why
+        );
+    }
+    assert!(finding.why.contains("profile mounts"), "{}", finding.why);
+    assert!(finding.fix.is_some(), "{finding:?}");
+
+    // Der Befund steht vor dem Exit-Code: Wer den Code liest, hat den Grund
+    // schon gesehen.
+    let finding_at = seen
+        .iter()
+        .position(|event| {
+            matches!(&event.event, Some(v1::sandbox_event::Event::Diagnostic(d))
+                if d.code == "AGENT_005")
+        })
+        .expect("the finding");
+    let exit_at = seen
+        .iter()
+        .position(|event| matches!(event.event, Some(v1::sandbox_event::Event::Exit(_))))
+        .expect("the exit code");
+    assert!(finding_at < exit_at, "{seen:?}");
+    assert!(exited_with(&seen, 127), "{seen:?}");
+}
+
+/// Ein Agent, der schreibt und dann mit `127` endet, ist kein Befund
+/// (HUM-137, Fallstrick der Spezifikation).
+///
+/// Die Shell findet `gibt-es-nicht` nicht, schreibt ihre eigene Meldung und
+/// endet mit `127`. Der Agent — die Shell — ist gelaufen, und ihre Zeile sagt
+/// dem Menschen schon, was fehlt.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_that_wrote_before_127_is_no_finding() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    let service = fixture.service();
+    let mut start = fixture.start();
+    if let Some(v1::sandbox_request::Op::Start(inner)) = start.op.as_mut() {
+        inner.command = vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            "gibt-es-nicht".to_owned(),
+        ];
+    }
+    let seen = events_to_end(&service, start).await;
+    assert!(
+        exited_with(&seen, 127),
+        "the shell ended with 127: {seen:?}"
+    );
+    assert!(
+        never_ran(&seen).is_none(),
+        "the shell ran and said so itself: {:?}",
+        diagnostics(&seen)
+    );
+}
+
+/// Startet eine Sitzung mit `/bin/sh -c <script>` und liefert den ganzen Strom;
+/// leer, wenn dieser Rechner keine Sandbox tragen kann.
+async fn run_script(script: &str) -> Vec<v1::SandboxEvent> {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return Vec::new();
+    }
+    let service = fixture.service();
+    let mut start = fixture.start();
+    if let Some(v1::sandbox_request::Op::Start(inner)) = start.op.as_mut() {
+        inner.command = vec!["/bin/sh".to_owned(), "-c".to_owned(), script.to_owned()];
+    }
+    events_to_end(&service, start).await
+}
+
+/// Ein Agent, der die Zeile des Shims nachdruckt und mit `127` endet, stellt
+/// sich keinen Befund aus (Review von Codex zu HUM-137, blockierend).
+///
+/// Ob das `exec` scheiterte, sagt der Berichtskanal des Shims, nicht der
+/// Text im Terminal.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_forged_shim_line_on_the_terminal_is_no_finding() {
+    let seen = run_script(
+        "printf 'humanitl-shim: exec failed: gibt-es-nicht: No such file or directory (os error 2)\\n'; \
+         exit 127",
+    )
+    .await;
+    if seen.is_empty() {
+        return;
+    }
+    assert!(exited_with(&seen, 127), "{seen:?}");
+    assert!(
+        never_ran(&seen).is_none(),
+        "the agent ran and printed the line itself: {:?}",
+        diagnostics(&seen)
+    );
+}
+
+/// Leerraum ist Ausgabe: Ein Agent, der nur eine Leerzeile schreibt und mit
+/// `127` endet, ist gelaufen.
+#[tokio::test(flavor = "multi_thread")]
+async fn whitespace_before_127_is_output_and_no_finding() {
+    let seen = run_script("printf ' \\n'; exit 127").await;
+    if seen.is_empty() {
+        return;
+    }
+    assert!(exited_with(&seen, 127), "{seen:?}");
+    assert!(
+        never_ran(&seen).is_none(),
+        "a blank line is a byte: {:?}",
+        diagnostics(&seen)
+    );
+}
+
+/// Auch der Berichtskanal selbst ist für den Agenten nicht erreichbar.
+///
+/// Der Agent versucht vom ersten Augenblick an und fünfzigmal hintereinander,
+/// die Zeile `EXEC fail` in jeden Deskriptor zu schreiben, den er unter
+/// `/proc` findet, auch in die des Eltern-Shims, und endet mit `127`. Käme
+/// eine davon im Bericht an, stünde hier ein Befund. Seine eigene Ausgabe ist
+/// nicht leer (`x`), damit der Fall ohne Bericht nicht greift.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_agent_cannot_write_the_exec_line_into_the_report() {
+    let seen = run_script(
+        "i=0; while [ $i -lt 50 ]; do \
+           for f in /proc/[0-9]*/fd/*; do printf 'EXEC fail errno=2\\n' > \"$f\" 2>/dev/null; done; \
+           i=$((i + 1)); \
+         done; \
+         printf x; exit 127",
+    )
+    .await;
+    if seen.is_empty() {
+        return;
+    }
+    assert!(exited_with(&seen, 127), "{seen:?}");
+    assert!(
+        never_ran(&seen).is_none(),
+        "the report is out of the agent's reach: {:?}",
+        diagnostics(&seen)
+    );
+}
+
+/// Ein Kommandoname mit Zeilenumbruch zerlegt die Zeile des Shims im
+/// Terminal in zwei. Der Befund hängt nicht an ihr, sondern am Bericht
+/// (Review von Antigravity zu HUM-137).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_command_name_with_a_newline_is_still_said() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    let service = fixture.service();
+    let mut start = fixture.start();
+    if let Some(v1::sandbox_request::Op::Start(inner)) = start.op.as_mut() {
+        inner.command = vec!["gibt\nes-nicht".to_owned()];
+    }
+    let seen = events_to_end(&service, start).await;
+    assert!(exited_with(&seen, 127), "{seen:?}");
+    let finding = never_ran(&seen)
+        .unwrap_or_else(|| panic!("the split line does not hide it: {:?}", diagnostics(&seen)));
+    assert!(finding.why.contains("never started"), "{}", finding.why);
+}

@@ -1349,6 +1349,23 @@ registry! {
     DAEMON_013 => "daemon", "Übergebener Socket unbrauchbar", "#daemon_013",
         "systemd übergibt per Socket-Aktivierung mehr als einen Socket, eine Nummer 3, die nicht offen ist, keinen lauschenden Unix-Stream-Socket, oder einen an einem anderen Pfad als `$XDG_RUNTIME_DIR/humanitl/daemon.sock`.",
         "`CopyCommand`: `systemctl --user cat humanitld.socket` zeigt, worauf `ListenStream` zeigt.";
+    // HUM-137: Ein Agent, den es nicht gibt, fällt nicht mehr lautlos aus.
+    /// Der Agent ist nie gelaufen: Der Shim meldet auf seinem Berichtskanal
+    /// ein gescheitertes `exec` (`EXEC fail errno=<n>`), oder das Kommando
+    /// endete mit `127` oder `126`, bevor es ein einziges Byte geschrieben
+    /// hat.
+    ///
+    /// Die Sandbox steht und ihre drei Garantien gelten; nur das Kommando
+    /// darin ließ sich nicht starten, meist weil es nicht auf dem `PATH` der
+    /// Sandbox liegt. Was im Terminal steht, entscheidet nie: Die Zeile des
+    /// Shims kann ein Agent nachdrucken, den Bericht nicht, und ohne Bericht
+    /// zählt jedes Byte, auch Leerraum. Ein Agent, der schreibt und sich dann
+    /// beendet (`--version`), ist kein Fall dieses Codes. Fehler und nicht
+    /// blockierend: Die Sandbox ist auch ohne Agenten eine gültige Sitzung
+    /// (HUM-137).
+    AGENT_005 => "agent", "Agent startete nicht", "#agent_005",
+        "Der Shim meldet auf dem Berichtskanal `EXEC fail`, oder das Kommando endet ohne dieses Signal mit Exit-Code `127` oder `126`, ohne ein einziges Byte geschrieben zu haben. Der Befund nennt das Kommando und den `PATH` der Sandbox; den `PATH` hält er zurück, wenn ein Mensch ihn geschrieben hat (`sandbox.env` oder ein eigenes Profil), wie die Umgebungstabelle.",
+        "`CopyCommand` mit `humanitl sandbox run -- /bin/sh -c 'command -v …'`: fragt dieselbe Sandbox, wo das Kommando liegt. Was eingehängt wird, entscheidet das Profil.";
 }
 
 /// Sucht einen Code im Register.

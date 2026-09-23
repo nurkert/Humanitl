@@ -307,6 +307,85 @@ fn exec_failure_exits_127() {
     );
 }
 
+/// A failed `exec` is reported out of band, as the last report line, with
+/// the error number and nothing the caller chose (HUM-137).
+#[test]
+fn exec_failure_is_reported_on_the_report_channel() {
+    let socket = socket_path("exec-report");
+    let mut command = shim_with_bridge(&socket, &["humanitl-no-such\nagent"]);
+    let (read_end, write_end) = report_pipe(&mut command);
+    let status = command.status().unwrap();
+    drop(write_end);
+    assert_eq!(code(status), 127);
+    let lines = read_report(read_end);
+    assert_eq!(lines.len(), 6, "five checks and the exec line: {lines:?}");
+    assert_eq!(lines[5], "EXEC fail errno=2", "{lines:?}");
+}
+
+/// When the agent starts, its parent shim holds no report writer any more.
+///
+/// The parent is in the agent's PID namespace, and `/proc/<ppid>/fd/<n>`
+/// reopens a pipe it holds. The child waits at a gate the parent opens only
+/// after dropping its copy of the report (Review von Codex zu HUM-137): the
+/// agent's first look at its parent's descriptors never finds the pipe.
+#[test]
+fn the_parent_holds_no_report_writer_when_the_agent_starts() {
+    use std::os::unix::fs::MetadataExt as _;
+    let socket = socket_path("exec-gate");
+    let mut command = shim_with_bridge(
+        &socket,
+        &[
+            "sh",
+            "-c",
+            "for f in /proc/$PPID/fd/*; do readlink \"$f\"; done",
+        ],
+    );
+    let (read_end, write_end) = report_pipe(&mut command);
+    let pipe = format!(
+        "pipe:[{}]",
+        fs::File::from(read_end.try_clone().unwrap())
+            .metadata()
+            .unwrap()
+            .ino()
+    );
+    let output = command.output().unwrap();
+    drop(write_end);
+    assert_eq!(code(output.status), 0);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.lines().any(|line| line == pipe),
+        "the parent still held the report {pipe} when the agent ran: {stdout}"
+    );
+    assert_eq!(read_report(read_end).len(), 5);
+}
+
+/// An agent that ran never writes the exec line, whatever it prints and
+/// however it ends: the report descriptor is gone after a successful `exec`.
+#[test]
+fn an_agent_that_ran_leaves_no_exec_line() {
+    let socket = socket_path("exec-forged");
+    let mut command = shim_with_bridge(
+        &socket,
+        &[
+            "sh",
+            "-c",
+            "echo 'humanitl-shim: exec failed: x'; \
+             for f in /proc/self/fd/*; do echo 'EXEC fail errno=2' > \"$f\" 2>/dev/null; done; \
+             exit 127",
+        ],
+    );
+    let (read_end, write_end) = report_pipe(&mut command);
+    let status = command.status().unwrap();
+    drop(write_end);
+    assert_eq!(code(status), 127);
+    let lines = read_report(read_end);
+    assert_eq!(lines.len(), 5, "only the five checks: {lines:?}");
+    assert!(
+        !lines.iter().any(|line| line.starts_with("EXEC")),
+        "{lines:?}"
+    );
+}
+
 #[test]
 fn bridge_direction_out_exits_126() {
     let output = shim()

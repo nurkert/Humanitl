@@ -1173,6 +1173,14 @@ Agent-Kommando in der Sandbox nicht erreichbar
 
 **Fix.** `CopyCommand`, das es an eine eingehängte Stelle installiert, oder `ChangeSetting` auf `sandbox.env.PATH`, wenn die Einhängung steht und nur der Suchpfad fehlt.
 
+#### AGENT_005
+
+Agent startete nicht
+
+**Auslöser.** Der Shim meldet auf dem Berichtskanal `EXEC fail`, oder das Kommando endet ohne dieses Signal mit Exit-Code `127` oder `126`, ohne ein einziges Byte geschrieben zu haben. Der Befund nennt das Kommando und den `PATH` der Sandbox; den `PATH` hält er zurück, wenn ein Mensch ihn geschrieben hat (`sandbox.env` oder ein eigenes Profil), wie die Umgebungstabelle.
+
+**Fix.** `CopyCommand` mit `humanitl sandbox run -- /bin/sh -c 'command -v …'`: fragt dieselbe Sandbox, wo das Kommando liegt. Was eingehängt wird, entscheidet das Profil.
+
 ### Bereich edit
 
 #### EDIT_001
