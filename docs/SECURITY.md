@@ -92,7 +92,8 @@ sie nicht als laufend gelten. **Das ist kein „der Agent startet nicht":** sieh
 **Was ein Angreifer versuchen würde.** Ein `veth`-Paar oder ein TUN-Gerät anlegen — scheitert ohne
 `CAP_NET_ADMIN`. Ein UDP-Paket an einen DNS-Server senden — scheitert schon am Filter, spätestens
 an der fehlenden Route. Einen vom Host geerbten Dateideskriptor benutzen — der Daemon übergibt
-ausschließlich die Deskriptoren aus `LaunchPlan::fds` und schließt die übrigen; eine
+ausschließlich die Deskriptoren aus `LaunchPlan::fds` und schließt die übrigen, und der Shim
+schließt vor dem Fork zusätzlich alles, was ein Launcher ohne `CLOEXEC` durchreicht; eine
 FD-Enumeration beim Agent-Start ist als zusätzliche Kontrolle vorgesehen (`BACKLOG.md` 10). Ein abstraktes Unix-Socket verwenden, weil es keinen Pfad im Dateisystem braucht — abstrakte
 Sockets sind an das Netz-Namespace gebunden und dort leer.
 
@@ -163,7 +164,9 @@ um genau eine Familie weiter, weil die Brücke `AF_UNIX` braucht.
    `127.0.0.1:3128` und reicht jede TCP-Verbindung an den gebundenen Unix-Socket weiter. Der
    Listener entsteht vor dem Fork, damit der Agent nie `ECONNREFUSED` sieht, und trägt
    `CLOEXEC`, damit der Agent ihn nicht erbt.
-2. Er forkt. Der Elternprozess bleibt als Brücke stehen, wartet auf das Kind und endet mit
+2. Er schließt jeden geerbten Deskriptor außer 0, 1, 2, dem Bericht, dem Tor vor dem `exec`
+   und den Brücken-Listenern; so hält auch der Elternprozess nichts, was der Agent über
+   `/proc/<ppid>/fd` wieder öffnen könnte. Dann forkt er. Der Elternprozess bleibt als Brücke stehen, wartet auf das Kind und endet mit
    dessen Exit-Code. Sobald das Kind läuft, legt auch er einen Filter an: dieselbe Politik wie
    für den Agenten, nur zusätzlich mit `AF_UNIX`, weil er für jede angenommene Verbindung den
    Proxy-Socket öffnet. Alles Weitere passiert im Kind.
