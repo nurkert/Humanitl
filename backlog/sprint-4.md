@@ -65,6 +65,8 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-171 | Tests lassen ihre Verzeichnisse in `/tmp` liegen | S | — |
 | HUM-185 | Der Bildschirm-Test gegen den echten Daemon fällt in CI zufällig aus | S | HUM-144 |
 | HUM-190 | `AGENT_004` zeigt einen PATH, den der Bildschirm zurückhält | S | HUM-139, HUM-137 |
+| HUM-197 | Im schmalen History-Detail bleibt dem Body weiter kaum Platz | S | HUM-153 |
+| HUM-198 | Die History des Fakes nennt eine Anfragegröße, die ihr Rumpf nicht hat | S | HUM-032 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -3182,8 +3184,8 @@ Wer im Verlauf eine Anfrage öffnet, sieht bei 1400 × 900 den Anfang ihres Body
 Eine andere `BodyView`. Die Aufteilung zwischen Tabelle und Detail als Ganzes neu zu entwerfen.
 
 ### Akzeptanzkriterien
-- [ ] Ein Golden bei 1400 × 900 zeigt den Titel des Bodys und mindestens zehn Zeilen des JSON-Baums.
-- [ ] Die Rumpf-Goldens laufen wieder im Standardfenster des Tests; der Kommentar dazu entfällt.
+- [x] Ein Golden bei 1400 × 900 zeigt den Titel des Bodys und mindestens zehn Zeilen des JSON-Baums.
+- [x] Die Rumpf-Goldens laufen wieder im Standardfenster des Tests; der Kommentar dazu entfällt.
 
 ### Referenzen
 HUM-032 (Split von Tabelle und Detail), HUM-116; `app/lib/features/history/history_detail.dart`, `app/test/goldens/history_golden_test.dart`.
@@ -3863,3 +3865,69 @@ Beide Befunde folgen einer Regel. Entweder gilt `PATH` als Wert, der unabhängig
 
 ### Referenzen
 HUM-137; HUM-139; `backlog/CONVENTIONS.md` 4.17 und 4.39.
+
+---
+
+## HUM-197 · Im schmalen History-Detail bleibt dem Body weiter kaum Platz
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-153 · Blockiert: nichts; der Body ist erreichbar, nur nicht auf einen Blick
+
+### Kontext
+HUM-153 stellt den Rumpf neben Kopf, Tabs und Kopfzeilen, sobald das Detail
+mindestens doppelt so breit ist wie das Textmaß von `mono12` (90 Zeichen, rund
+648 px, also ab rund 1296 px). Darunter bleibt alles untereinander, wie vorher.
+Gemessen wurde das Ziel nur bei 1400 × 900. Ein Fenster von 1280 px Breite mit
+der Icon-Rail daneben liegt unter der Schwelle, und dort bekommt der Rumpf bei
+900 px Höhe weiter nur knapp hundert Pixel: Titel und Umschalter, kein Inhalt.
+Dasselbe gilt bei `TextScaler.linear(2.0)` in jeder Fensterbreite, weil das
+Textmaß mit der Schrift wächst.
+
+### Ziel
+Wer im Verlauf eine Anfrage öffnet, sieht auch bei 1280 × 800 den Anfang ihres
+Bodys ohne zu scrollen.
+
+### Nicht-Ziel
+Eine andere `BodyView`. Die Aufteilung zwischen Tabelle und Detail als Ganzes
+neu zu entwerfen.
+
+### Akzeptanzkriterien
+- [ ] Ein Golden bei 1280 × 800 (mit Icon-Rail) zeigt den Titel des Bodys und mindestens fünf Zeilen des JSON-Baums.
+- [ ] Die Anordnung bei 1400 × 900 aus HUM-153 bleibt unverändert (`history_detail_body_tree_*`).
+
+### Fallstricke
+- Die Kopfzeilen einzuklappen spart Platz, versteckt aber `content-encoding`
+  und `content-type`, nach denen der Rumpf ausgepackt wird. Wer das tut, zeigt
+  beide weiter an.
+
+### Referenzen
+HUM-153; `app/lib/features/history/history_detail.dart`, `docs/UX.md` 3.2.
+
+---
+
+## HUM-198 · Die History des Fakes nennt eine Anfragegröße, die ihr Rumpf nicht hat
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-032 · Blockiert: —
+
+### Kontext
+Gefunden bei HUM-153. Der Recorder schreibt `request_size` aus der Größe des
+Anfrage-Rumpfs (`daemon/crates/recorder/src/writer.rs`, „erst hier stimmen
+`FlowSummary::request_size` und die Sortierung nach Größe"). Der Fake im
+History-Szenario setzt die Zeile dagegen auf `_requestSize` (`180 + (index % 17) * 64`)
+und legt einen Rumpf von rund siebzig Bytes daneben
+(`app/lib/core/ipc/fake_daemon_client.dart`, `_SeededFlow`). Im Detail steht
+dadurch im Kopf eine andere Anfragegröße als im Titel des Rumpfs darunter,
+bei Zeile 10 des Szenarios 756 B gegen 75 B, ein Widerspruch, den `backlog/CONVENTIONS.md` 4.13 verbietet und den jedes
+History-Golden festhält.
+
+### Ziel
+Anfragegröße der Zeile und Größe des Rumpfs im History-Szenario sind dieselbe
+Zahl, so wie beim echten Daemon.
+
+### Akzeptanzkriterien
+- [ ] Ein Test prüft für jede Zeile des Szenarios, dass `Flow.requestSize` gleich `FlowDetail.request.body.size` ist (bei einer bearbeiteten Anfrage gleich der Größe der bearbeiteten Fassung).
+- [ ] Die Sortierung nach Größe unterscheidet weiterhin Zeilen (die Rümpfe bekommen dafür wechselnde Längen, nicht die Zeile eine erfundene Zahl).
+- [ ] Die betroffenen History-Goldens sind neu erzeugt, und jede geänderte PNG ist im Commit begründet.
+
+### Fallstricke
+- `app/lib/core/ipc/fake_daemon_client.dart` ist eine gemeinsam genutzte Datei (CLAUDE.md): nur den eigenen Abschnitt ändern.
+
+### Referenzen
+HUM-032, HUM-153; `backlog/CONVENTIONS.md` 4.13.
