@@ -844,7 +844,9 @@ Schlüssel fragt, gilt derselbe Aufrufpunkt nach der Entscheidung; ihn belegt de
 
 Aufgezeichnet wird lokal: Flows, Entscheidungen und Bodies in SQLite unter
 `$XDG_DATA_HOME/humanitl/humanitl.db`, große Bodies inhaltsadressiert unter `blobs/`, und
-zusätzlich ein append-only-Protokoll `audit/audit.jsonl` (HUM-050). Jeder Eintrag ist eine Zeile
+zusätzlich ein Protokoll `audit/audit.jsonl` (HUM-050), append-only, solange
+`audit.retention_days = 0` gilt; sonst löscht ein täglicher Lauf den Anfang und vermerkt den
+Schnitt als `audit.pruned` (siehe „Aufbewahrung der Kette" unten). Jeder Eintrag ist eine Zeile
 kanonisches JSON mit `seq`, `ts`, `session`, `kind`, `data`, dem Hash des Vorgängers (`prev`) und
 dem eigenen `hash`; darüber liegt ein HMAC-SHA256. Bodies, Header, Klartext-Werte von Funden und
 die Notiz einer Blockierung stehen nie im Log, der Pfad einer Anfrage nur als SHA-256; der Host
@@ -893,6 +895,51 @@ Sie beweist **nicht**:
    hat beides.
 
 Für stärkere Garantien braucht es externes Anchoring (nach dem MVP).
+
+### Aufbewahrung der Kette: löschen, nicht streichen (HUM-157)
+
+`audit.retention_days` wirkt. Vorgabe ist `0`: Die Kette behält jeden Record, und an ihr ändert
+sich nichts. Nennt der Schlüssel Tage (1 bis 3650), löscht ein täglicher Lauf des Daemons die
+Records am **Anfang** der Kette, die älter sind; Löschen einzelner Records oder nach Inhalt gibt
+es nicht.
+
+*Warum löschen und nicht den Schlüssel streichen.* Das Log trägt Hosts im Klartext und Sitzungen,
+also Personenbezogenes, und wächst ohne Löschung ohne Grenze. Für die Aufzeichnung setzt
+`recorder.retention_days` die Speicherbegrenzung aus DSGVO Art. 5 Abs. 1 lit. e um; dieselbe
+Begründung trägt für die Kette. Ein Schnitt lässt sich so dokumentieren, dass die Prüfung ihn von
+einem Bruch unterscheidet, ohne dass die Aussage über die übrigen Records schwächer wird. Wer die
+Kette vollständig behalten will, lässt die Vorgabe `0` stehen.
+
+*Ein Lauf*, im Schreib-Thread des Audit-Logs (`humanitl_audit::retention`):
+
+1. Alles auf die Platte, dann die ganze Kette prüfen, mit Schlüssel und Ankern. **Eine Kette, die
+   nicht hält, wird nicht gekürzt** (`AUDIT_001`): Die Löschung würde den Beleg der Manipulation
+   mitlöschen und eine rote Kette grün machen.
+2. `audit.pruned` anhängen: Nummer und Hash des letzten gelöschten Records, ihre Zahl und die
+   Grenze. Der Record ist gehasht und mit dem Schlüssel versiegelt wie jeder andere, und gleich
+   dahinter steht ein Anker in Datei und `audit_anchors`; er liegt also nie im unverankerten Ende.
+3. Den Rest in eine neue, gesperrte Datei daneben schreiben, auf die Platte bringen und über
+   `audit.jsonl` umbenennen. Die Datei wird umgeschrieben, nicht rotiert.
+
+`audit_anchors` wird **nicht** gekürzt: Die Anker sind der Beleg gegen das Kürzen der Datei.
+
+*Was `verify` danach prüft.* Beginnt die Datei nicht bei 1, gilt ihr erster Record als Anfang, wenn
+ein `audit.pruned` in der Kette genau diesen Schnitt nennt (Nummer und Hash, den der erste Record
+als `prev` trägt) und ein Anker auf der Nummer des Schnitts, falls es ihn gibt, denselben Hash
+nennt. Dann hält die Kette, mit der Warnung `pruned` („Records 1 bis n gelöscht"). Ohne einen
+solchen Record ist der Anfang eine Lücke wie vor HUM-157: `SeqGap` am ersten Record, und nichts
+davor hat bestanden.
+
+*Was die Kette nach einer Löschung noch beweist.* Für die Records ab dem Schnitt dasselbe wie
+oben: keine Änderung, Löschung oder Umordnung bis zum letzten Anker, ohne dass `verify` es meldet,
+solange der Angreifer den Schlüssel nicht hat. Über die gelöschten Records beweist sie nur noch,
+dass der Daemon sie mit dem Schlüssel als gelöscht verbucht hat, wie viele es waren und welchen
+Hash der letzte trug; **was in ihnen stand, beweist sie nicht mehr**, und ein Export davon ist die
+einzige Kopie. Ein Angreifer ohne Schlüssel kann einen Schnitt nicht erfinden (der `audit.pruned`
+bräuchte einen gültigen MAC) und nicht weiter vorn schneiden, als ein solcher Record nennt. Er kann
+aber vorn genau so weit kürzen, wie ein `audit.pruned` es ankündigt, auch wenn der Lauf danach
+abbrach, bevor er die Datei ersetzte: Das löscht nur, was der Daemon ohnehin löschen wollte. Die
+Grenzen 1 bis 4 oben gelten unverändert.
 
 Getrennt davon liegt das Pseudonymisierungs-Mapping: verschlüsselt, nur auf dem Host, nie in der
 Sandbox und nie in einer Anfrage.

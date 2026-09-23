@@ -793,7 +793,7 @@
   "auditRecordCopied": "Kopiert",
   "auditRetentionTitle": "Aufbewahrung",
   "auditRetentionRecordings": "Aufzeichnungen (Anfragen, Antworten, Bodies) werden nach 180 Tagen gelöscht, sofern {key} keine andere Zahl nennt; 0 heißt nie.",
-  "auditRetentionChain": "Die Audit-Kette wird nie gelöscht; {key} wirkt in dieser Fassung nicht.",
+  "auditRetentionChain": "Die Audit-Kette behält jeden Record, sofern {key} keine Zahl von Tagen nennt; dann werden ältere Records gelöscht, und die Kette vermerkt den Schnitt, sodass die Prüfung weiter hält.",
   "auditFilterInvalid": "Keine Zeitangabe. Etwa 2026-09-11 08:00Z; der Zeitraum bleibt, wie er war.",
   "auditAnchorsUnknown": "Anker nicht gemeldet",
   "interceptFindingsPauseTitle": "{count, plural, =1{1 Fund in dieser Anfrage} other{{count} Funde in dieser Anfrage}}",
@@ -805,5 +805,6 @@
   "interceptFindingsPauseKeySend": "S",
   "interceptFindingsPauseKeyPseudonymize": "P",
   "interceptFindingsPauseKeyBack": "Esc",
-  "historyDetailUnresolvedFindings": "Offen gesendet"
+  "historyDetailUnresolvedFindings": "Offen gesendet",
+  "auditWarningPruned": "Die Records 1 bis {seq} hat audit.retention_days gelöscht; die Kette belegt den Schnitt, beweist aber nicht mehr, was in ihnen stand."
 }

@@ -4,9 +4,12 @@
 /// der Code: Die **Aufzeichnung** (Anfragen, Antworten, Bodies) wird nach 180
 /// Tagen gelöscht, sofern `recorder.retention_days` nichts anderes sagt, und
 /// `0` heißt nie (`humanitl_recorder::Retention`, Konfiguration 0 bis 3650).
-/// Die **Audit-Kette** wird nie gelöscht: Der Aufräumlauf fasst weder
-/// `audit.jsonl` noch `audit_anchors` an, und `audit.retention_days` hat in
-/// dieser Fassung keinen Leser (HUM-157 entscheidet ihn).
+/// Die **Audit-Kette** behält jeden Record, solange `audit.retention_days`
+/// auf der Vorgabe `0` steht. Nennt der Schlüssel Tage, löscht ein täglicher
+/// Lauf im Daemon die älteren Records am Anfang der Kette und hängt
+/// `audit.pruned` an, den die Prüfung als dokumentierten Anfang anerkennt
+/// (HUM-157, `humanitl_audit::retention`); `audit_anchors` bleibt, wie es ist.
+/// Der Satz nennt deshalb die Vorgabe und den Schlüssel, nicht eine Zahl.
 ///
 /// **Warum die 180 als Vorgabe dasteht und nicht als Wert.** Der Client kennt
 /// heute nur `SetConfig`, nicht `GetConfig` (`app/lib/core/ipc/daemon_client.dart`,

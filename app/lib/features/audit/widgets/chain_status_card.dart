@@ -397,6 +397,8 @@ class _WarningLine extends StatelessWidget {
     final String text = switch (warning.kind) {
       'no_hmac_key' => l10n.auditWarningNoHmacKey,
       'unanchored_tail' => l10n.auditWarningUnanchoredTail(warning.records),
+      // `records` ist hier die Nummer des letzten gelöschten Records (HUM-157).
+      'pruned' => l10n.auditWarningPruned(warning.records),
       _ => l10n.auditWarningUnknown(warning.kind),
     };
     return Row(

@@ -330,6 +330,12 @@ pub fn verify_response(report: &VerifyReport, log: &Path, anchors: &[Anchor]) ->
                 kind: "unanchored_tail".to_owned(),
                 records,
             },
+            // `records` trägt hier die Nummer des letzten gelöschten Records
+            // (HUM-157); der Vertrag hat für Warnungen nur diese eine Zahl.
+            VerifyWarning::Pruned { through_seq } => v1::AuditWarning {
+                kind: "pruned".to_owned(),
+                records: through_seq,
+            },
         })
         .collect();
     answer.diagnostic = report.diagnostic(log).as_ref().map(diagnostic_to_proto);
@@ -670,5 +676,32 @@ mod tests {
         assert_eq!(limit, 20);
         assert_eq!(filter.kind_prefix, "flow.");
         assert!(!filter.range.is_bounded());
+    }
+
+    /// Eine gekürzte Kette hält, und die Warnung `pruned` trägt in `records`
+    /// die Nummer des letzten gelöschten Records (HUM-157).
+    #[test]
+    fn a_pruned_chain_is_ok_with_the_warning_pruned() {
+        use humanitl_audit::{Head, VerifyReport, VerifyStatus, VerifyWarning};
+
+        let report = VerifyReport {
+            records: 5,
+            status: VerifyStatus::Ok,
+            warnings: vec![VerifyWarning::Pruned { through_seq: 10 }],
+            head: Some(Head {
+                seq: 15,
+                hash: "ab".repeat(32),
+            }),
+        };
+        let answer = super::verify_response(&report, std::path::Path::new("/x/audit.jsonl"), &[]);
+        assert!(answer.ok);
+        assert!(answer.diagnostic.is_none());
+        assert_eq!(
+            answer.warnings,
+            [v1::AuditWarning {
+                kind: "pruned".to_owned(),
+                records: 10,
+            }]
+        );
     }
 }

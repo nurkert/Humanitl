@@ -405,11 +405,11 @@ final class AuditWarning {
   /// Creates a warning.
   const AuditWarning({required this.kind, this.records = 0});
 
-  /// `no_hmac_key` or `unanchored_tail`.
+  /// `no_hmac_key`, `unanchored_tail` or `pruned` (HUM-157).
   final String kind;
 
-  /// How many records stand behind the last anchor; only for
-  /// `unanchored_tail`.
+  /// For `unanchored_tail`, how many records stand behind the last anchor;
+  /// for `pruned`, the number of the last record the retention run deleted.
   final int records;
 
   @override
