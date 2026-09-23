@@ -4194,13 +4194,13 @@ M6, Schwere major, von zwei unabhängigen Prüfern bestätigt). Ort: `daemon/cra
 Der Befund ist behoben, und ein Test hält ihn behoben.
 
 ### Akzeptanzkriterien
-- [ ] `model.rs:120` auf `"x-project-scope" = "denied"` setzen.
-- [ ] Den Schlüssel aufnehmen in:
-- [ ] Schema-Fixture und `docs/CONFIG.md:131` neu erzeugen.
-- [ ] Test: Das Projektprofil ergibt `CONFIG_003`.
-- [ ] Soll ein Projekt die Sperre nur einschalten dürfen: In `Merge::apply` (nach `load.rs:554`) liefert `ProfileProject` mit dem Wert `false` den Fehler `project_scope_denied`. Beide Richtungen testen.
-- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
-- [ ] `make check` grün.
+- [x] `model.rs:120` auf `"x-project-scope" = "denied"` setzen.
+- [x] Den Schlüssel aufnehmen in: `backlog/CONVENTIONS.md` 4.11, Doc-Kommentar von `model.rs`, `DENIED_BY_CONVENTION` in `daemon/crates/config/tests/project_scope.rs`.
+- [x] Schema-Fixture und `docs/CONFIG.md:131` neu erzeugen.
+- [x] Test: Das Projektprofil ergibt `CONFIG_003`.
+- [ ] Soll ein Projekt die Sperre nur einschalten dürfen: In `Merge::apply` (nach `load.rs:554`) liefert `ProfileProject` mit dem Wert `false` den Fehler `project_scope_denied`. Beide Richtungen testen. Entfällt: Der Schlüssel ist ganz gesperrt (`denied`), auch `true` aus dem Projekt ist `CONFIG_003`, wie bei `findings.enabled`; beide Richtungen getestet.
+- [x] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [x] `make check` grün.
 
 ### Referenzen
 Sicherheitsdurchlauf 2026-09-23, Befund M6; `daemon/crates/config/src/model.rs:120`.

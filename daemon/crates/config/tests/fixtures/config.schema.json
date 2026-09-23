@@ -206,7 +206,7 @@
           "default": false,
           "description": "Blockt Anfragen mit prüfsummen-sicheren Geheimnissen sofort, ohne zu fragen.",
           "type": "boolean",
-          "x-project-scope": "allowed",
+          "x-project-scope": "denied",
           "x-tier": "advanced"
         },
         "timeout_secs": {
