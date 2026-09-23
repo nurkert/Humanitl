@@ -359,8 +359,67 @@ fn the_parent_holds_no_report_writer_when_the_agent_starts() {
     assert_eq!(read_report(read_end).len(), 5);
 }
 
+/// Whatever the launcher leaves open without `CLOEXEC` is gone from the
+/// parent shim before the agent runs: the agent could reopen it through
+/// `/proc/<ppid>/fd`. In CI such a leak was the runner's own control pipe,
+/// and a test agent writing into its parent's descriptors broke the runner.
+#[test]
+fn the_parent_drops_what_the_launcher_leaked() {
+    use std::os::unix::fs::MetadataExt as _;
+    let socket = socket_path("leak");
+    let mut command = shim_with_bridge(
+        &socket,
+        &[
+            "sh",
+            "-c",
+            "for f in /proc/$PPID/fd/* /proc/self/fd/*; do readlink \"$f\"; done; exit 0",
+        ],
+    );
+    let mut fds = [0 as libc::c_int; 2];
+    // SAFETY: `fds` is a valid two-element array for pipe2.
+    assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
+    let [leak_r, leak_w] = fds;
+    // SAFETY: runs in the forked child before exec and only clears CLOEXEC
+    // on both ends, so they leak into this shim like a careless launcher's,
+    // and into no other test's child.
+    unsafe {
+        command.pre_exec(move || {
+            for fd in [leak_r, leak_w] {
+                if libc::fcntl(fd, libc::F_SETFD, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        });
+    }
+    // SAFETY: both descriptors were just created and belong to this test.
+    let (leak_read, leak_write) =
+        unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
+    let pipe = format!(
+        "pipe:[{}]",
+        fs::File::from(leak_read.try_clone().unwrap())
+            .metadata()
+            .unwrap()
+            .ino()
+    );
+    let output = command.output().unwrap();
+    drop((leak_read, leak_write));
+    assert_eq!(code(output.status), 0);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.lines().any(|line| line.starts_with("socket:")),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.lines().any(|line| line == pipe),
+        "the leaked {pipe} reached the agent's side: {stdout}"
+    );
+}
+
 /// An agent that ran never writes the exec line, whatever it prints and
 /// however it ends: the report descriptor is gone after a successful `exec`.
+/// The agent tries every descriptor it holds except the standard streams,
+/// which belong to the test run.
 #[test]
 fn an_agent_that_ran_leaves_no_exec_line() {
     let socket = socket_path("exec-forged");
@@ -370,7 +429,10 @@ fn an_agent_that_ran_leaves_no_exec_line() {
             "sh",
             "-c",
             "echo 'humanitl-shim: exec failed: x'; \
-             for f in /proc/self/fd/*; do echo 'EXEC fail errno=2' > \"$f\" 2>/dev/null; done; \
+             for f in /proc/self/fd/*; do \
+               case ${f##*/} in 0|1|2) continue ;; esac; \
+               echo 'EXEC fail errno=2' 2>/dev/null >\"$f\"; \
+             done; \
              exit 127",
         ],
     );
