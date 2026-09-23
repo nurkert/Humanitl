@@ -1107,6 +1107,9 @@ pub fn record_to_summary(record: &FlowRecord, domains: Option<&DomainTable>) -> 
         // `apex` kommt; Zeile und Karte nennen damit denselben Dienst, ohne
         // dass die Oberfläche ein zweites Mal fragt (HUM-094).
         catalog_id: flow_catalog_id(domains, record.id, &request.authority.host),
+        // Aus dem letzten `Decided` dieses Flows; fehlt, solange nichts
+        // hinausging oder niemand gezählt hat (HUM-160).
+        unresolved_findings: record.unresolved_findings,
     }
 }
 
@@ -1367,7 +1370,10 @@ pub fn flow_event_to_proto(
             queue_count: *queue_count,
         }),
         FlowEvent::Decided {
-            decision, source, ..
+            decision,
+            source,
+            findings,
+            ..
         } => {
             let (kind, reason, rule_id) = decision_fields(Some(decision), Some(*source));
             Event::Decided(v1::flow_event::Decided {
@@ -1377,6 +1383,7 @@ pub fn flow_event_to_proto(
                 block_reason: reason as i32,
                 rule_id,
                 note: block_note(decision),
+                unresolved_findings: findings.unresolved,
             })
         }
         FlowEvent::Forwarded { .. } => Event::Forwarded(v1::FlowRef { flow_id }),
@@ -1824,6 +1831,9 @@ pub fn recorded_summary_to_proto(row: &RecordedSummary) -> v1::FlowSummary {
         // nicht" und wird zum leeren String, nie zu einem Rat aus dem
         // Hostnamen (HUM-094).
         catalog_id: row.catalog_id.clone().unwrap_or_default(),
+        // `NULL` bleibt ein fehlendes Feld, nie eine Null: nichts ging hinaus,
+        // niemand zählte, oder die Zeile ist älter als die Spalte (HUM-160).
+        unresolved_findings: row.unresolved_findings,
     }
 }
 
@@ -2515,7 +2525,35 @@ mod tests {
             error: None,
             meta: false,
             decision_note: None,
+            unresolved_findings: None,
         }
+    }
+
+    /// Die Zahl der offenen Funde reist aus der Spalte in die Zeile, und ein
+    /// `NULL` bleibt ein fehlendes Feld statt einer Null (HUM-160).
+    #[test]
+    fn the_open_findings_of_a_row_travel_and_absence_stays_absence() {
+        let counted = RecordedSummary {
+            unresolved_findings: Some(1),
+            ..recorded_row()
+        };
+        assert_eq!(
+            recorded_summary_to_proto(&counted).unresolved_findings,
+            Some(1)
+        );
+        let sent_anyway = RecordedSummary {
+            unresolved_findings: Some(0),
+            ..recorded_row()
+        };
+        assert_eq!(
+            recorded_summary_to_proto(&sent_anyway).unresolved_findings,
+            Some(0)
+        );
+        assert_eq!(
+            recorded_summary_to_proto(&recorded_row()).unresolved_findings,
+            None,
+            "an uncounted row claims no zero"
+        );
     }
 
     /// Eine Tabelle über einem leeren Katalog.

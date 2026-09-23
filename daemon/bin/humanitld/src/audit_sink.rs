@@ -11,7 +11,7 @@
 //! |---|---|
 //! | Start des Sinks | `session.started` |
 //! | `Received`, dann `Analyzed` | `flow.received`, sobald die Funde feststehen, spätestens mit der Entscheidung |
-//! | `Decided`, `TimedOut` | `flow.decided`; bei einem Block des Daemons zusätzlich `flow.blocked_reason` |
+//! | `Decided`, `TimedOut` | `flow.decided` mit `unresolved_findings` und `acknowledged` (HUM-160); bei einem Block des Daemons zusätzlich `flow.blocked_reason` |
 //! | `Forwarded`, `ResponseHeaders`, `ResponseChunk`, `Recorded` | `flow.responded` |
 //! | Ende des Sinks | `session.ended` mit den Zahlen der Sitzung |
 //!
@@ -36,7 +36,7 @@ use humanitl_audit::kinds::{
     SessionStarted,
 };
 use humanitl_audit::{AuditHandle, RecordKind};
-use humanitl_core::{Decision, DecisionSource, FlowEvent, FlowId, SessionId};
+use humanitl_core::{DecidedFindings, Decision, DecisionSource, FlowEvent, FlowId, SessionId};
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::{broadcast, oneshot};
 
@@ -109,7 +109,8 @@ fn lagged(n: u64) {
 struct Pending {
     /// Der Record des Eintreffens, solange die Funde noch fehlen.
     received: Option<FlowReceived>,
-    decided: bool,
+    /// Wie zuletzt entschieden wurde, sobald entschieden ist.
+    decided: Option<DecisionKind>,
     forwarded_at: Option<SystemTime>,
     status: Option<u16>,
     response_bytes: u64,
@@ -181,12 +182,18 @@ impl Tally {
                 flow_id,
                 decision,
                 source,
+                findings,
                 ..
-            } => self.decided(*flow_id, decision, *source),
+            } => self.decided(*flow_id, decision, *source, findings),
             // Der Ablauf der Frist kommt als eigenes Ereignis, nicht als
             // `Decided` (`FlowState::on`, Übergang `Timeout`).
             FlowEvent::TimedOut { flow_id, .. } => {
-                self.decided(*flow_id, &Decision::TimedOut, DecisionSource::Timeout);
+                self.decided(
+                    *flow_id,
+                    &Decision::TimedOut,
+                    DecisionSource::Timeout,
+                    &DecidedFindings::default(),
+                );
             }
             FlowEvent::Forwarded { flow_id, at } => {
                 self.flows.entry(*flow_id).or_default().forwarded_at = Some(*at);
@@ -208,25 +215,38 @@ impl Tally {
         }
     }
 
-    fn decided(&mut self, flow: FlowId, decision: &Decision, source: DecisionSource) {
+    fn decided(
+        &mut self,
+        flow: FlowId,
+        decision: &Decision,
+        source: DecisionSource,
+        findings: &DecidedFindings,
+    ) {
         self.flush_received(flow);
+        let kind = DecisionKind::of(decision, source);
         let pending = self.flows.entry(flow).or_default();
-        if pending.decided {
-            return;
+        match pending.decided {
+            None => {}
+            // Das System nimmt eine Freigabe zurück, bevor etwas hinausging
+            // (abgelehnter Edit, bestätigtes Geheimnis in der bearbeiteten
+            // Fassung). Das ist eine zweite Entscheidung und kein Echo: Sie
+            // steht als eigener `flow.decided` im Log, und die Sitzung zählt
+            // den Flow danach als Block statt als Freigabe (HUM-160).
+            Some(before) if is_retraction(before, decision, source) => {
+                *counter(&mut self.counts, before) =
+                    counter(&mut self.counts, before).saturating_sub(1);
+            }
+            // Jedes andere zweite Wort über denselben Flow zählt nicht noch
+            // einmal, etwa `Decided(TimedOut)` nach `TimedOut`.
+            Some(_) => return,
         }
-        pending.decided = true;
-        let counter = match DecisionKind::of(decision, source) {
-            DecisionKind::Allow => &mut self.counts.allowed,
-            DecisionKind::AllowEdited => &mut self.counts.allowed_edited,
-            DecisionKind::Block => &mut self.counts.blocked,
-            DecisionKind::TimedOut => &mut self.counts.timed_out,
-            DecisionKind::AutoAllow | DecisionKind::AutoBlock => &mut self.counts.auto_rule,
-            DecisionKind::Passthrough => &mut self.counts.passthrough,
-        };
-        *counter += 1;
-        self.record(RecordKind::FlowDecided(FlowDecided::new(
-            flow, decision, source,
-        )));
+        pending.decided = Some(kind);
+        *counter(&mut self.counts, kind) += 1;
+        // Mit der Spur der Funde (HUM-160): wie viele offen hinausgingen und
+        // wie viele davon der Mensch bestätigt hat.
+        self.record(RecordKind::FlowDecided(
+            FlowDecided::new(flow, decision, source).with_findings(findings),
+        ));
         if let Some(reason) = FlowBlockedReason::of(flow, decision, source) {
             self.record(RecordKind::FlowBlockedReason(reason));
         }
@@ -267,6 +287,33 @@ impl Tally {
         self.record(RecordKind::SessionEnded(self.counts));
         self.counts
     }
+}
+
+/// Der Zähler der Sitzung, unter dem eine Entscheidung steht.
+fn counter(counts: &mut SessionEnded, kind: DecisionKind) -> &mut u64 {
+    match kind {
+        DecisionKind::Allow => &mut counts.allowed,
+        DecisionKind::AllowEdited => &mut counts.allowed_edited,
+        DecisionKind::Block => &mut counts.blocked,
+        DecisionKind::TimedOut => &mut counts.timed_out,
+        DecisionKind::AutoAllow | DecisionKind::AutoBlock => &mut counts.auto_rule,
+        DecisionKind::Passthrough => &mut counts.passthrough,
+    }
+}
+
+/// Wahr, wenn das System eine Freigabe zurücknimmt: auf eine Entscheidung,
+/// die hinausließe, folgt ein Block durch `System`. Der Automat erlaubt genau
+/// diesen zweiten Übergang (`FlowState::on`, `Decided(Allow|AllowEdited)` nach
+/// `Decided(Block)`), und nur ihn.
+fn is_retraction(before: DecisionKind, decision: &Decision, source: DecisionSource) -> bool {
+    let let_out = matches!(
+        before,
+        DecisionKind::Allow
+            | DecisionKind::AllowEdited
+            | DecisionKind::AutoAllow
+            | DecisionKind::Passthrough
+    );
+    let_out && matches!(decision, Decision::Block { .. }) && source == DecisionSource::System
 }
 
 #[cfg(test)]
@@ -365,6 +412,7 @@ mod tests {
                 note: Some("nicht ohne mich".to_owned()),
             },
             source: DecisionSource::User,
+            findings: humanitl_core::DecidedFindings::default(),
         });
         tally.apply(&FlowEvent::Recorded {
             flow_id: flow,
@@ -409,6 +457,7 @@ mod tests {
             at: start,
             decision: Decision::Allow,
             source: DecisionSource::Rule(RuleId::new()),
+            findings: humanitl_core::DecidedFindings::default(),
         });
         tally.apply(&FlowEvent::Forwarded {
             flow_id: flow,
@@ -464,6 +513,7 @@ mod tests {
             at: SystemTime::now(),
             decision: Decision::TimedOut,
             source: DecisionSource::Timeout,
+            findings: humanitl_core::DecidedFindings::default(),
         });
         let big = FlowId::new();
         tally.apply(&received(big, "/upload", b""));
@@ -475,6 +525,7 @@ mod tests {
                 note: None,
             },
             source: DecisionSource::System,
+            findings: humanitl_core::DecidedFindings::default(),
         });
         // Der gewöhnliche Weg einer Frist: nur `TimedOut`, kein `Decided`.
         let lone = FlowId::new();
@@ -508,5 +559,122 @@ mod tests {
         assert_eq!(records[4].body.data["reason"], "body_cap");
         assert_eq!(records[6].body.data["decision"], "timed_out");
         assert_eq!(records[7].body.data["timed_out"], 2);
+    }
+
+    /// `flow.decided` trägt beide Zahlen (HUM-160): wie viele Funde offen
+    /// hinausgingen und wie viele davon der Mensch bestätigt hat. Ein Block
+    /// trägt keine, denn nichts ging hinaus; und welcher Fund es war, steht
+    /// nie im Log.
+    #[test]
+    fn flow_decided_carries_unresolved_and_acknowledged() {
+        let (_dir, writer) = log();
+        let mut tally = Tally::new(writer.handle(), SessionId::new());
+        let decisions = [
+            (
+                Decision::Allow,
+                humanitl_core::DecidedFindings {
+                    unresolved: Some(0),
+                    acknowledged: vec![0],
+                },
+            ),
+            (
+                Decision::Allow,
+                humanitl_core::DecidedFindings::unresolved(1),
+            ),
+            (block_by_user(), humanitl_core::DecidedFindings::default()),
+        ];
+        for (decision, findings) in decisions {
+            let flow = FlowId::new();
+            tally.apply(&received(flow, "/", b"alice@example.org"));
+            tally.apply(&FlowEvent::Decided {
+                flow_id: flow,
+                at: SystemTime::now(),
+                decision,
+                source: DecisionSource::User,
+                findings,
+            });
+        }
+        let _ended = tally.finish();
+
+        let (_, records) = records(writer);
+        let decided: Vec<(Option<u64>, Option<u64>)> = records
+            .iter()
+            .filter(|r| r.body.kind == "flow.decided")
+            .map(|r| {
+                (
+                    r.body.data["unresolved_findings"].as_u64(),
+                    r.body.data["acknowledged"].as_u64(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            decided,
+            vec![(Some(0), Some(1)), (Some(1), Some(0)), (None, None)],
+            "sent anyway, sent over the hold, blocked"
+        );
+    }
+
+    /// Nimmt das System eine bearbeitete Freigabe zurück, steht das im Log:
+    /// ein zweiter `flow.decided` als Block durch `system` ohne Zahl der Funde,
+    /// der Grund, und die Sitzung zählt den Flow als Block (HUM-160).
+    #[test]
+    fn a_revised_allow_is_audited_as_a_block() {
+        let (_dir, writer) = log();
+        let mut tally = Tally::new(writer.handle(), SessionId::new());
+        let flow = FlowId::new();
+        tally.apply(&received(flow, "/", b"alice@example.org"));
+        let edited = HttpRequest::new(
+            Method::POST,
+            Scheme::Https,
+            Authority::with_scheme(HostName::Dns("api.example.com".to_owned()), Scheme::Https),
+            "/",
+        );
+        tally.apply(&FlowEvent::Decided {
+            flow_id: flow,
+            at: SystemTime::now(),
+            decision: Decision::AllowEdited {
+                request: Box::new(edited),
+            },
+            source: DecisionSource::User,
+            findings: humanitl_core::DecidedFindings::unresolved(1),
+        });
+        tally.apply(&FlowEvent::Decided {
+            flow_id: flow,
+            at: SystemTime::now(),
+            decision: Decision::Block {
+                reason: BlockReason::Secret,
+                note: None,
+            },
+            source: DecisionSource::System,
+            findings: humanitl_core::DecidedFindings::default(),
+        });
+        let counts = tally.finish();
+        assert_eq!(
+            (counts.allowed_edited, counts.blocked),
+            (0, 1),
+            "nothing went out, so the session counts a block"
+        );
+
+        let (_, records) = records(writer);
+        let decided: Vec<&AuditRecord> = records
+            .iter()
+            .filter(|r| r.body.kind == "flow.decided")
+            .collect();
+        assert_eq!(decided.len(), 2, "the retraction has its own record");
+        assert_eq!(decided[1].body.data["decision"], "block");
+        assert_eq!(decided[1].body.data["decided_by"], "system");
+        assert!(decided[1].body.data["unresolved_findings"].is_null());
+        let reason = records
+            .iter()
+            .find(|r| r.body.kind == "flow.blocked_reason")
+            .expect("the reason of the retraction");
+        assert_eq!(reason.body.data["reason"], "secret");
+    }
+
+    fn block_by_user() -> Decision {
+        Decision::Block {
+            reason: BlockReason::User,
+            note: None,
+        }
     }
 }

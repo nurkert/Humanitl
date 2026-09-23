@@ -126,7 +126,12 @@ class FindingsPause extends StatelessWidget {
                     variant: HButtonVariant.secondary,
                     label: l10n.interceptFindingsPauseSendAnyway,
                     shortcut: l10n.interceptFindingsPauseKeySend,
-                    onPressed: enabled ? onSendAnyway : null,
+                    // Erst wenn jeder offene Fund beschrieben ist: Bestätigt
+                    // wird, was zu sehen war, mit seinem Platz in der Liste
+                    // des Daemons (HUM-160).
+                    onPressed: enabled && findings.complete
+                        ? onSendAnyway
+                        : null,
                   ),
                   if (onPseudonymize != null)
                     _PauseButton(

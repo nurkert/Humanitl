@@ -493,12 +493,16 @@ class HistoryPageNotifier extends Notifier<HistoryPageState> {
         :final BlockReason? blockReason,
         :final RuleId? ruleId,
         :final String note,
+        :final int? unresolvedFindings,
       ):
         _update(
           flowId,
           (Flow flow) => flow.copyWith(
             state: FlowState.decided,
             decision: kind,
+            // The trail of open findings travels with the decision, so the
+            // row shows it before a reload from the recording (HUM-160).
+            unresolvedFindings: unresolvedFindings,
             decisionSource: source,
             blockReason: blockReason,
             // The note travels with the decision; without this line the row

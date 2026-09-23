@@ -218,6 +218,7 @@ fn table() -> Vec<Case> {
                         action: v1::RuleAction::Allow as i32,
                         ..v1::Rule::default()
                     }),
+                    acknowledged_findings: Vec::new(),
                 }
             ),
         },
@@ -229,6 +230,36 @@ fn table() -> Vec<Case> {
                 v1::DecideRequest {
                     flow_ids: vec![UNKNOWN_FLOW.to_owned()],
                     decision: None,
+                    ..v1::DecideRequest::default()
+                }
+            ),
+        },
+        Case {
+            // HUM-160: bestätigt wird, was unverändert hinausgeht.
+            what: "decide block with acknowledged findings",
+            expected: refused(Code::InvalidArgument, codes::IPC_004),
+            call: both!(
+                decide,
+                v1::DecideRequest {
+                    flow_ids: vec![UNKNOWN_FLOW.to_owned()],
+                    decision: Some(v1::decide_request::Decision::Block(
+                        v1::decide_request::Block::default()
+                    )),
+                    acknowledged_findings: vec![0],
+                    ..v1::DecideRequest::default()
+                }
+            ),
+        },
+        Case {
+            // HUM-160: die Indizes zeigen in die Funde eines einzigen Flows.
+            what: "decide allow for two flows with acknowledged findings",
+            expected: refused(Code::InvalidArgument, codes::IPC_004),
+            call: both!(
+                decide,
+                v1::DecideRequest {
+                    flow_ids: vec![UNKNOWN_FLOW.to_owned(), UNKNOWN_FLOW.to_owned()],
+                    decision: Some(v1::decide_request::Decision::Allow(())),
+                    acknowledged_findings: vec![0],
                     ..v1::DecideRequest::default()
                 }
             ),
@@ -705,6 +736,7 @@ async fn allow_edited_for_two_flows_refuses_each_the_same_way() {
             action: v1::RuleAction::Allow as i32,
             ..v1::Rule::default()
         }),
+        acknowledged_findings: Vec::new(),
     };
 
     let (real, _dir) = real();
@@ -859,6 +891,7 @@ async fn no_door_lets_a_rule_claim_to_be_bundled_or_passthrough() {
             flow_ids: vec![held],
             decision: Some(v1::decide_request::Decision::Allow(())),
             remember: Some(overreaching("")),
+            acknowledged_findings: Vec::new(),
         }))
         .await
         .expect("deciding a held flow works")

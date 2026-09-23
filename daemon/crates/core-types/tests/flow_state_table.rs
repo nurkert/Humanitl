@@ -807,3 +807,54 @@ fn the_meta_path_ends_recorded_without_a_decision() {
     let names: Vec<&str> = flow.history.iter().map(|(_, name)| *name).collect();
     assert_eq!(names, vec!["received", "recorded"]);
 }
+
+/// Eine Regel, die aus `Analyzed` freigibt, lässt jeden Fund offen hinaus:
+/// Niemand hat ihn gesehen (HUM-160). Eine Sperre lässt nichts hinaus und
+/// trägt deshalb keine Zahl.
+#[test]
+fn a_rule_allow_counts_every_finding_as_unresolved() {
+    let email = humanitl_core::Finding::new(
+        humanitl_core::FindingKind::Email,
+        0..17,
+        humanitl_core::FindingLocation::Body,
+        humanitl_core::Tier::Regex,
+        "alice@example.org",
+    );
+    for (decision, expected) in [
+        (Decision::Allow, Some(1)),
+        (
+            Decision::Block {
+                reason: BlockReason::Rule(humanitl_core::RuleId::new()),
+                note: None,
+            },
+            None,
+        ),
+    ] {
+        let at = SystemTime::now();
+        let mut flow = Flow::new(FlowId::new(), SessionId::new(), at, request());
+        flow.apply(
+            TransitionInput::Analyze {
+                findings: vec![email.clone()],
+            },
+            at,
+        )
+        .unwrap();
+        let event = flow
+            .apply(
+                TransitionInput::Decide {
+                    decision,
+                    source: DecisionSource::Rule(humanitl_core::RuleId::new()),
+                },
+                at,
+            )
+            .unwrap();
+        let FlowEvent::Decided { findings, .. } = event else {
+            panic!("a decision decides: {event:?}");
+        };
+        assert_eq!(findings.unresolved, expected);
+        assert!(
+            findings.acknowledged.is_empty(),
+            "a rule acknowledges nothing"
+        );
+    }
+}

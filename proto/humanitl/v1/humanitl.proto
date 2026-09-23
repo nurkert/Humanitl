@@ -410,6 +410,15 @@ message FlowSummary {
   // das Typische zu dieser Kennung stehen im gebuendelten `catalog/domains.yaml`,
   // nicht auf der Leitung.
   string catalog_id = 28;
+  // Wie viele Funde mit der Freigabe hinausgingen, ohne ersetzt und ohne
+  // bestaetigt zu sein; derselbe Wert wie `FlowEvent.Decided.unresolved_findings`
+  // (HUM-160). Nach "Trotzdem senden" steht hier 0, nach dem Halten der
+  // Freigabe die Zahl der offenen Funde.
+  //
+  // Fehlt das Feld, ging nichts hinaus, oder die Zeile stammt aus der Zeit, als
+  // der Daemon noch nicht zaehlte. Es fehlt nie an einer Stelle, an der eine
+  // Null richtig waere, und eine Null wird nie geraten.
+  optional uint32 unresolved_findings = 29;
 }
 
 // Alles, was der Detail-Bereich zu einem Flow zeigt.
@@ -522,6 +531,14 @@ message FlowEvent {
     // LF werden zu Leerzeichen, andere Steuerzeichen (< 0x20 ausser Tab)
     // entfernt, bevor der Text in den Header geht (HUM-072).
     string note = 6;
+    // Wie viele Funde mit dieser Freigabe hinausgehen, ohne ersetzt und ohne
+    // bestaetigt zu sein (HUM-160). Bei `allow` die Funde aus `Analyzed`
+    // ohne `DecideRequest.acknowledged_findings`, bei `allow_edited` die des
+    // zweiten Scans ueber die bearbeitete Fassung.
+    //
+    // Fehlt das Feld, geht nichts hinaus (Block, Ablauf) oder niemand hat
+    // gezaehlt; eine Null heisst dagegen "gezaehlt, keiner offen".
+    optional uint32 unresolved_findings = 7;
   }
 
   // Die Antwort-Header sind da.
@@ -657,10 +674,8 @@ message DecideRequest {
   //
   // Feld 6 trug `acknowledge_findings` als `bool`. Kein Handler hat es je
   // gelesen und kein Client hat es je gesetzt; die Bestaetigung offener
-  // Funde wird in HUM-049 als `repeated uint32 acknowledged_findings = 8`
-  // gebaut, mit unvertraeglichem Typ. Bis dahin waere ein Feld, das eine
-  // Zusage macht und nichts bewirkt, eine falsche Aussage ueber den Vertrag
-  // (backlog/CONVENTIONS.md 4.13).
+  // Funde steht seit HUM-160 als `repeated uint32 acknowledged_findings = 8`
+  // da, mit unvertraeglichem Typ.
   //
   // Beide Nummern werden nicht wiederverwendet (docs/PROTOCOL.md 4).
   reserved 3, 6;
@@ -678,6 +693,17 @@ message DecideRequest {
   // Optionale Regel, die vor dem Fortsetzen angelegt wird. Scheitert das
   // Anlegen, wird nicht entschieden.
   Rule remember = 5;
+
+  // Die Funde, die der Mensch gesehen hat und bewusst stehen laesst
+  // ("Trotzdem senden", HUM-160): Indizes in die Liste aus `Analyzed`
+  // (dieselbe Reihenfolge wie `FlowDetail.findings`). Der Daemon verbucht sie
+  // als bestaetigt, und `Decided.unresolved_findings` zaehlt sie nicht mehr.
+  //
+  // Nur mit `allow` und genau einer `flow_id`; mit `allow_edited` zeigten die
+  // Indizes in eine Fassung, die nicht hinausgeht. Sonst, und fuer einen Index
+  // ausserhalb der Liste, `IPC_004`. Doppelte Indizes zaehlen einmal. Eine
+  // Bestaetigung hebt die harte Sperre `HOLD_004` nie auf.
+  repeated uint32 acknowledged_findings = 8;
 
   // Blockieren mit optionaler Begruendung fuer den Agenten.
   message Block {

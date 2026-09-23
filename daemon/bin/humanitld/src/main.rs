@@ -327,12 +327,8 @@ async fn run_daemon(cli: &Cli, passed: Option<systemd::Passed>) -> Result<(), Di
         Arc::clone(&catalog),
         Some(recorder.clone()),
     ));
-    let registry = Arc::new(FlowRegistry::new(&config.limits));
-    let queue = Arc::new(
-        HoldQueue::with_registry(&config.limits, registry)
-            .recording(recorder.clone())
-            .with_domains(Arc::clone(&domains) as Arc<dyn DomainSink>),
-    );
+    let scanner = build_scanner(&config)?;
+    let queue = build_queue(&config, &recorder, &domains, &scanner);
 
     // Die Sitzung steht in der Aufzeichnung, bevor der erste Flow kommt:
     // `flows.session_id` ist ein Fremdschlüssel.
@@ -353,7 +349,6 @@ async fn run_daemon(cli: &Cli, passed: Option<systemd::Passed>) -> Result<(), Di
         config.hold.timeout_secs,
         llm_authority(&config),
     )));
-    let scanner = build_scanner(&config)?;
     // Ein Port fuer den ganzen Lauf: Der Zaehler, den `daemon status` zeigt,
     // und der Zwischenspeicher gehoeren derselben Instanz (HUM-024).
     let resolver = Arc::new(ResolverPort::from_config(&config.resolver)?);
@@ -1544,6 +1539,27 @@ fn llm_authority(config: &Config) -> Option<String> {
         Some(port) => format!("{host}:{port}"),
         None => host.to_owned(),
     })
+}
+
+/// Die Halte-Warteschlange der Sitzung, mit Aufzeichnung, Domain-Katalog und
+/// dem zweiten Scan einer bearbeiteten Freigabe.
+///
+/// Die Detektoren stehen deshalb vor der Warteschlange: Sie zählt mit ihnen
+/// die Funde einer bearbeiteten Fassung, bevor `Decided` hinausgeht, mit
+/// derselben Grenze wie der Handler (HUM-160).
+fn build_queue(
+    config: &Config,
+    recorder: &Recorder,
+    domains: &Arc<DomainTable>,
+    scanner: &Arc<dyn Scanner>,
+) -> Arc<HoldQueue> {
+    let registry = Arc::new(FlowRegistry::new(&config.limits));
+    Arc::new(
+        HoldQueue::with_registry(&config.limits, registry)
+            .recording(recorder.clone())
+            .with_domains(Arc::clone(domains) as Arc<dyn DomainSink>)
+            .scanning_edits(Arc::clone(scanner), config.limits.hold_body_cap_bytes),
+    )
 }
 
 /// Baut die Detektoren aus der Konfiguration, einmal beim Start.

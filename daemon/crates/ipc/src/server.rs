@@ -701,19 +701,26 @@ impl IpcServer {
     ///
     /// Der Befund kommt zusätzlich zum Ergebnis zurück, weil `Decide`
     /// ihn braucht, falls die Anfrage als Ganzes nichts bewirkt hat.
+    ///
+    /// `acknowledged` sind die bestätigten Funde aus
+    /// `DecideRequest.acknowledged_findings`; [`validate::decide_plan`] hat
+    /// schon geprüft, dass sie nur mit `allow` und einer Id kommen (HUM-160).
     fn decide_one(
         &self,
         text: &str,
         decision: &Decision,
+        acknowledged: &[u32],
     ) -> (v1::DecideResult, Option<Diagnostic>) {
         let id = match validate::flow_id(text) {
             Ok(id) => id,
             Err(diagnostic) => return refused(text, diagnostic),
         };
-        match self
-            .queue
-            .decide_as(id, decision.clone(), DecisionSource::User)
-        {
+        match self.queue.decide_acknowledging(
+            id,
+            decision.clone(),
+            DecisionSource::User,
+            acknowledged,
+        ) {
             Ok(()) => (
                 v1::DecideResult {
                     flow_id: text.to_owned(),
@@ -752,8 +759,16 @@ pub(crate) fn unknown_summary(sandbox: SandboxId) -> Diagnostic {
 }
 
 /// Ein Befund für einen Flow, der nicht mehr wartet (`FailedPrecondition`).
+///
+/// Eine Bestätigung, die zu diesem Flow nicht passt, ist dagegen ein Fehler der
+/// Anfrage: `IPC_004` (`InvalidArgument`), und der Flow wartet weiter (HUM-160).
 fn not_held(error: &NotHeld) -> Diagnostic {
-    Diagnostic::builder(codes::IPC_003, Severity::Error)
+    let code = if error.is_bad_request() {
+        codes::IPC_004
+    } else {
+        codes::IPC_003
+    };
+    Diagnostic::builder(code, Severity::Error)
         .why(error.to_string())
         .build()
 }
@@ -1067,7 +1082,7 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         let (results, refusals): (Vec<v1::DecideResult>, Vec<Option<Diagnostic>>) = request
             .flow_ids
             .iter()
-            .map(|text| self.decide_one(text, &decision))
+            .map(|text| self.decide_one(text, &decision, &request.acknowledged_findings))
             .unzip();
 
         if results.iter().all(|result| !result.applied) {

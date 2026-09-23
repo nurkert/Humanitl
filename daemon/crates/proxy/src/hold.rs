@@ -39,9 +39,15 @@
 //!
 //! # Was hier nicht ist
 //!
-//! Keine Regelauswertung (HUM-022), keine Findings (HUM-025). Die Liste aller
-//! Flows einer laufenden Sitzung steht nebenan in der [`FlowRegistry`]; nach
-//! einem Neustart ist sie leer.
+//! Keine Regelauswertung (HUM-022), keine Detektoren (HUM-025). Die Liste
+//! aller Flows einer laufenden Sitzung steht nebenan in der [`FlowRegistry`];
+//! nach einem Neustart ist sie leer.
+//!
+//! Gezählt wird trotzdem, weil nur hier alles zusammenkommt, bevor `Decided`
+//! hinausgeht: wie viele Funde der Flow beim Halten trug, welche der Mensch mit
+//! seiner Freigabe bestätigt hat ([`HoldQueue::decide_acknowledging`]) und, über
+//! [`EditCount`], wie viele in einer bearbeiteten Fassung stehen blieben. Das
+//! Ergebnis steht als [`DecidedFindings`] im Ereignis (HUM-160).
 //!
 //! Was bleibt, schreibt die Aufzeichnung: [`HoldQueue::recording`] hängt einen
 //! [`Recorder`] in den Trichter, und jedes veröffentlichte Ereignis läuft
@@ -58,8 +64,8 @@ use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
 use humanitl_config::Limits;
 use humanitl_core::{
-    BlockReason, Decision, DecisionSource, Flow, FlowEvent, FlowId, FlowState, HostName,
-    InvalidTransition, Transition, TransitionInput,
+    BlockReason, DecidedFindings, Decision, DecisionSource, Flow, FlowEvent, FlowId, FlowState,
+    HostName, HttpRequest, InvalidTransition, Transition, TransitionInput,
 };
 use humanitl_recorder::Recorder;
 use tokio::sync::{broadcast, oneshot};
@@ -95,6 +101,30 @@ pub enum NotHeld {
         /// Wer sie treffen wollte.
         by: DecisionSource,
     },
+    /// Die Bestätigung nennt einen Fund, den der Flow nicht hat: Der Index
+    /// liegt außerhalb der Liste aus `Analyzed` (HUM-160). Entschieden wird
+    /// nichts; die gRPC-Schicht meldet das als `IPC_004`.
+    #[error("flow {id} has {findings} finding(s), so there is no finding {index} to acknowledge")]
+    UnknownFinding {
+        /// Der Flow, um den es ging.
+        id: FlowId,
+        /// Der Index, den es nicht gibt.
+        index: u32,
+        /// Wie viele Funde der Flow beim Halten trug.
+        findings: u32,
+    },
+    /// Eine Bestätigung kam mit einer anderen Entscheidung als `Allow`.
+    ///
+    /// Bestätigt wird, was unverändert hinausgeht; bei einem Block geht nichts
+    /// hinaus, und bei `AllowEdited` zeigten die Indizes in die gehaltene
+    /// Fassung statt in die, die hinausgeht (HUM-160).
+    #[error("flow {id}: findings are acknowledged with allow only, not with {decision}")]
+    AcknowledgedWithout {
+        /// Der Flow, um den es ging.
+        id: FlowId,
+        /// Die Entscheidung, siehe [`Decision::as_str`].
+        decision: &'static str,
+    },
 }
 
 impl NotHeld {
@@ -102,9 +132,52 @@ impl NotHeld {
     #[must_use]
     pub const fn id(&self) -> FlowId {
         match self {
-            Self::Unknown { id } | Self::Forbidden { id, .. } => *id,
+            Self::Unknown { id }
+            | Self::Forbidden { id, .. }
+            | Self::UnknownFinding { id, .. }
+            | Self::AcknowledgedWithout { id, .. } => *id,
         }
     }
+
+    /// Wahr, wenn die Anfrage selbst nicht stimmte und nicht der Zustand des
+    /// Flows: eine Bestätigung, die zu diesem Flow oder dieser Entscheidung
+    /// nicht passt.
+    #[must_use]
+    pub const fn is_bad_request(&self) -> bool {
+        matches!(
+            self,
+            Self::UnknownFinding { .. } | Self::AcknowledgedWithout { .. }
+        )
+    }
+}
+
+/// Zählt die Funde einer bearbeiteten Fassung, bevor `Decided` hinausgeht.
+///
+/// Die Warteschlange kennt keine Detektoren; sie weiß nur, dass eine Zahl zur
+/// Entscheidung gehört. Bei `AllowEdited` ist das die Zahl des zweiten Scans
+/// über die bearbeitete Fassung, nicht die der gehaltenen (HUM-160). Die
+/// Umsetzung steht in [`crate::edit::SecondScan`]; der Daemon hängt sie mit
+/// [`HoldQueue::scanning_edits`] ein.
+///
+/// Kein Port im Sinne von ADR-015: kein Fremdsystem, kein zweiter Adapter,
+/// sondern dieselbe Naht wie [`DomainSink`], damit die Warteschlange ohne
+/// Scanner auskommt.
+pub trait EditCount: Send + Sync {
+    /// Wie viele Funde `edited` trüge, wenn es anstelle von `held` hinausginge.
+    ///
+    /// `None`, wenn die Bearbeitung so nicht hinausgehen kann (anderes Ziel,
+    /// zu großer Body): Der Handler nimmt die Freigabe dann ohnehin zurück,
+    /// und eine Zahl über eine Anfrage, die nie hinausgeht, wäre erfunden.
+    fn unresolved(&self, held: &HttpRequest, edited: &HttpRequest) -> Option<u32>;
+}
+
+/// Was eine Entscheidung über einen gehaltenen Flow zur wartenden Task trägt.
+#[derive(Debug)]
+struct Verdict {
+    decision: Decision,
+    source: DecisionSource,
+    /// Die bestätigten Funde, aufsteigend und ohne Doppel.
+    acknowledged: Vec<u32>,
 }
 
 /// Warum ein Flow gar nicht erst gehalten werden konnte.
@@ -127,10 +200,13 @@ pub enum HoldError {
 
 /// Ein wartender Flow: der Kanal zur Proxy-Task und die aktuelle Frist.
 struct Pending {
-    /// Trägt Entscheidung und Herkunft zur wartenden Task.
-    tx: oneshot::Sender<(Decision, DecisionSource)>,
+    /// Trägt Entscheidung, Herkunft und Bestätigungen zur wartenden Task.
+    tx: oneshot::Sender<Verdict>,
     /// Bis wann gewartet wird; [`HoldQueue::extend`] schiebt sie.
     deadline: Instant,
+    /// Wie viele Funde der Flow beim Halten trug; die Grenze für die Indizes
+    /// einer Bestätigung.
+    findings: u32,
 }
 
 /// Wer den Domain-Katalog zu einem eingetroffenen Flow befragt.
@@ -170,6 +246,7 @@ pub struct HoldQueue {
     events: broadcast::Sender<FlowEvent>,
     recorder: Option<Recorder>,
     domains: Option<Arc<dyn DomainSink>>,
+    edits: Option<Arc<dyn EditCount>>,
 }
 
 impl fmt::Debug for HoldQueue {
@@ -182,6 +259,7 @@ impl fmt::Debug for HoldQueue {
             .field("max_bytes", &self.max_bytes)
             .field("recorder", &self.recorder.is_some())
             .field("domains", &self.domains.is_some())
+            .field("edits", &self.edits.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -219,6 +297,7 @@ impl HoldQueue {
             events,
             recorder: None,
             domains: None,
+            edits: None,
         }
     }
 
@@ -240,6 +319,32 @@ impl HoldQueue {
     pub fn with_domains(mut self, domains: Arc<dyn DomainSink>) -> Self {
         self.domains = Some(domains);
         self
+    }
+
+    /// Dieselbe Warteschlange, die bei `AllowEdited` die Funde der
+    /// bearbeiteten Fassung zählt (siehe [`EditCount`], HUM-160).
+    ///
+    /// Ohne sie trägt das `Decided`-Ereignis einer bearbeiteten Freigabe keine
+    /// Zahl: nicht gezählt, und das steht dann auch so da, statt einer Null.
+    #[must_use]
+    pub fn counting_edits(mut self, edits: Arc<dyn EditCount>) -> Self {
+        self.edits = Some(edits);
+        self
+    }
+
+    /// [`HoldQueue::counting_edits`] mit dem zweiten Scan der Detektoren
+    /// ([`crate::edit::SecondScan`]) bis `cap_bytes`
+    /// (`limits.hold_body_cap_bytes`, dieselbe Grenze wie im Handler).
+    ///
+    /// Der Weg des Daemons: Er nennt damit keinen weiteren Typ dieser Crate
+    /// (`tools/check_coupling.py`).
+    #[must_use]
+    pub fn scanning_edits(
+        self,
+        scanner: Arc<dyn crate::findings::Scanner>,
+        cap_bytes: u64,
+    ) -> Self {
+        self.counting_edits(Arc::new(crate::edit::SecondScan::new(scanner, cap_bytes)))
     }
 
     /// Die Aufzeichnung dieser Warteschlange, sofern eine verdrahtet ist.
@@ -376,12 +481,62 @@ impl HoldQueue {
         decision: Decision,
         by: DecisionSource,
     ) -> Result<(), NotHeld> {
+        self.decide_acknowledging(id, decision, by, &[])
+    }
+
+    /// Wie [`HoldQueue::decide_as`], mit den Funden, die der Mensch gesehen hat
+    /// und bewusst hinausgehen lässt („Trotzdem senden", HUM-160).
+    ///
+    /// `acknowledged` sind Indizes in die Funde aus `Analyzed`; doppelte zählen
+    /// einmal. Das `Decided`-Ereignis trägt sie und zählt sie nicht mehr zu den
+    /// offenen. Eine Bestätigung ändert nichts an der Entscheidung selbst: Sie
+    /// ist eine Spur, keine Erlaubnis.
+    ///
+    /// # Errors
+    ///
+    /// Wie [`HoldQueue::decide_as`]; dazu [`NotHeld::UnknownFinding`] für einen
+    /// Index außerhalb der Funde und [`NotHeld::AcknowledgedWithout`] für eine
+    /// Bestätigung zu einer anderen Entscheidung als `Allow`. In beiden Fällen
+    /// wird nichts entschieden, und der Flow wartet weiter.
+    pub fn decide_acknowledging(
+        &self,
+        id: FlowId,
+        decision: Decision,
+        by: DecisionSource,
+        acknowledged: &[u32],
+    ) -> Result<(), NotHeld> {
         if !decidable(&decision, by) {
             return Err(NotHeld::Forbidden {
                 id,
                 decision: decision.as_str(),
                 by,
             });
+        }
+        let mut acknowledged = acknowledged.to_vec();
+        acknowledged.sort_unstable();
+        acknowledged.dedup();
+        if !acknowledged.is_empty() {
+            if !matches!(decision, Decision::Allow) {
+                return Err(NotHeld::AcknowledgedWithout {
+                    id,
+                    decision: decision.as_str(),
+                });
+            }
+            // Die Zahl der Funde steht seit dem Halten fest; gelesen wird sie
+            // vor dem Entfernen, damit eine falsche Bestätigung den Flow
+            // weiter warten lässt, statt ihn zu entscheiden.
+            let findings = self
+                .pending
+                .get(&id)
+                .map(|pending| pending.findings)
+                .ok_or(NotHeld::Unknown { id })?;
+            if let Some(&index) = acknowledged.iter().find(|index| **index >= findings) {
+                return Err(NotHeld::UnknownFinding {
+                    id,
+                    index,
+                    findings,
+                });
+            }
         }
         // Erst entfernen, dann senden: kein Guard über den Kanal hinweg, und
         // wer den Eintrag hat, hat die Entscheidung. Entfernt wird nur, solange
@@ -394,7 +549,11 @@ impl HoldQueue {
             .ok_or(NotHeld::Unknown { id })?;
         pending
             .tx
-            .send((decision, by))
+            .send(Verdict {
+                decision,
+                source: by,
+                acknowledged,
+            })
             .map_err(|_gone| NotHeld::Unknown { id })
     }
 
@@ -532,6 +691,16 @@ impl HoldQueue {
                 Ok(Admission::Refused(decision))
             }
             Ok(reservation) => {
+                // Die Funde stehen nur in `Analyzed`; nach dem Übergang nach
+                // `Held` kennt der Zustand sie nicht mehr. Ihre Zahl ist die
+                // Grenze jeder Bestätigung und der Ausgangspunkt der Zählung
+                // in `Decided` (HUM-160).
+                let findings = match &flow.state {
+                    FlowState::Analyzed { findings } => {
+                        u32::try_from(findings.len()).unwrap_or(u32::MAX)
+                    }
+                    _ => 0,
+                };
                 // Scheitert der Übergang, fällt `reservation` hier aus dem
                 // Gültigkeitsbereich und gibt das Budget zurück; `entry` hat
                 // nichts eingefügt.
@@ -544,12 +713,17 @@ impl HoldQueue {
                     now,
                 )?;
                 let (tx, rx) = oneshot::channel();
-                entry.insert(Pending { tx, deadline });
+                entry.insert(Pending {
+                    tx,
+                    deadline,
+                    findings,
+                });
                 self.publish(event);
                 Ok(Admission::Held {
                     ticket: Ticket {
                         queue: self,
                         flow,
+                        findings,
                         reservation: Some(reservation),
                         settled: false,
                     },
@@ -639,14 +813,14 @@ enum Admission<'a> {
     /// Der Flow wird gehalten.
     Held {
         ticket: Ticket<'a>,
-        rx: oneshot::Receiver<(Decision, DecisionSource)>,
+        rx: oneshot::Receiver<Verdict>,
     },
 }
 
 /// Womit das Warten endete.
 enum Outcome {
     /// Jemand hat entschieden.
-    Decided(Decision, DecisionSource),
+    Decided(Verdict),
     /// Die Frist ist abgelaufen.
     TimedOut,
     /// Der Eintrag ist weg, aber es kam keine Entscheidung. Durch die
@@ -663,13 +837,15 @@ enum Outcome {
 struct Ticket<'a> {
     queue: &'a HoldQueue,
     flow: &'a mut Flow,
+    /// Wie viele Funde der Flow beim Halten trug.
+    findings: u32,
     reservation: Option<Reservation<'a>>,
     settled: bool,
 }
 
 impl Ticket<'_> {
     /// Wartet auf Entscheidung oder Frist und schließt den Flow ab.
-    async fn wait(mut self, mut rx: oneshot::Receiver<(Decision, DecisionSource)>) -> Decision {
+    async fn wait(mut self, mut rx: oneshot::Receiver<Verdict>) -> Decision {
         let id = self.flow.id;
         let outcome = loop {
             // Der Eintrag ist weg: `decide` hat ihn genommen und sendet.
@@ -704,14 +880,20 @@ impl Ticket<'_> {
     fn settle(&mut self, outcome: Outcome) -> Decision {
         self.settled = true;
         drop(self.reservation.take());
+        // Nur eine Entscheidung von außen bringt etwas über die Funde mit;
+        // Ablauf und Verlust gehen ohne Zahl hinaus, weil nichts hinausgeht.
+        let mut findings = None;
         let (input, decision) = match outcome {
-            Outcome::Decided(decision, source) => (
-                TransitionInput::Decide {
-                    decision: decision.clone(),
-                    source,
-                },
-                decision,
-            ),
+            Outcome::Decided(verdict) => {
+                findings = Some(self.tally(&verdict));
+                (
+                    TransitionInput::Decide {
+                        decision: verdict.decision.clone(),
+                        source: verdict.source,
+                    },
+                    verdict.decision,
+                )
+            }
             Outcome::TimedOut => (TransitionInput::Timeout, Decision::TimedOut),
             Outcome::Lost => {
                 tracing::error!(flow = %self.flow.id, "hold entry vanished without a decision; blocking");
@@ -729,7 +911,12 @@ impl Ticket<'_> {
             }
         };
         match self.flow.apply(input, SystemTime::now()) {
-            Ok(event) => {
+            Ok(mut event) => {
+                if let (FlowEvent::Decided { findings: slot, .. }, Some(counted)) =
+                    (&mut event, findings)
+                {
+                    *slot = counted;
+                }
                 self.queue.publish(event);
                 decision
             }
@@ -742,6 +929,33 @@ impl Ticket<'_> {
                     note: None,
                 }
             }
+        }
+    }
+
+    /// Was von den Funden offen bleibt, wenn so entschieden wird (HUM-160).
+    ///
+    /// `Allow` lässt die gehaltene Anfrage hinaus: offen sind ihre Funde ohne
+    /// die bestätigten. `AllowEdited` lässt eine andere hinaus; gezählt wird
+    /// deren zweiter Scan, und ohne [`EditCount`] steht keine Zahl da statt
+    /// einer falschen. Alles andere lässt nichts hinaus.
+    fn tally(&self, verdict: &Verdict) -> DecidedFindings {
+        match &verdict.decision {
+            Decision::Allow => {
+                let acknowledged = u32::try_from(verdict.acknowledged.len()).unwrap_or(u32::MAX);
+                DecidedFindings {
+                    unresolved: Some(self.findings.saturating_sub(acknowledged)),
+                    acknowledged: verdict.acknowledged.clone(),
+                }
+            }
+            Decision::AllowEdited { request } => DecidedFindings {
+                unresolved: self
+                    .queue
+                    .edits
+                    .as_ref()
+                    .and_then(|edits| edits.unresolved(&self.flow.request, request)),
+                acknowledged: Vec::new(),
+            },
+            Decision::Block { .. } | Decision::TimedOut => DecidedFindings::default(),
         }
     }
 }
@@ -773,11 +987,9 @@ impl Drop for Ticket<'_> {
 
 impl Outcome {
     /// Was der Kanal geliefert hat.
-    fn from_channel(
-        received: Result<(Decision, DecisionSource), oneshot::error::RecvError>,
-    ) -> Self {
+    fn from_channel(received: Result<Verdict, oneshot::error::RecvError>) -> Self {
         match received {
-            Ok((decision, source)) => Self::Decided(decision, source),
+            Ok(verdict) => Self::Decided(verdict),
             Err(_closed) => Self::Lost,
         }
     }

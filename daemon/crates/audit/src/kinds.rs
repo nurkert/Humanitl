@@ -25,7 +25,7 @@ use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use humanitl_core::rule::{Expiry, Rule};
-use humanitl_core::{Decision, DecisionSource, Finding, FlowId, HttpRequest};
+use humanitl_core::{DecidedFindings, Decision, DecisionSource, Finding, FlowId, HttpRequest};
 use serde_json::{Value, json};
 
 use crate::record::{format_ts, sha256_hex};
@@ -259,9 +259,14 @@ pub struct FlowDecided {
     /// Zahl der Ersetzungen im Editor. `None`, solange der Editor sie nicht
     /// meldet: Die Entscheidung trägt die bearbeitete Anfrage, nicht die Zahl.
     pub replacements: Option<u64>,
-    /// Funde, die ohne Ersetzung hinausgingen. `None` aus demselben Grund.
+    /// Funde, die ohne Ersetzung und ohne Bestätigung hinausgingen (HUM-160).
+    ///
+    /// Bei `allow_edited` die des zweiten Scans über die bearbeitete Fassung.
+    /// `None`, wo nichts hinausging oder niemand gezählt hat.
     pub unresolved_findings: Option<u64>,
-    /// Bestätigte Funde. `None`, bis die Oberfläche Bestätigungen meldet.
+    /// Wie viele Funde der Mensch gesehen und bewusst hinausgelassen hat
+    /// („Trotzdem senden", HUM-160). Steht bei jeder gezählten Freigabe, auch
+    /// als Null; `None` genau dann, wenn `unresolved_findings` fehlt.
     pub acknowledged: Option<u64>,
     /// Werte, die mit dieser Entscheidung auf die Ausnahmeliste kamen. `None`,
     /// bis es diesen Weg gibt.
@@ -300,6 +305,20 @@ impl FlowDecided {
             allowlisted_added: None,
             decided_by,
         }
+    }
+
+    /// Dieselbe Entscheidung mit der Spur ihrer Funde aus
+    /// [`FlowEvent::Decided`](humanitl_core::FlowEvent) (HUM-160).
+    ///
+    /// Aus den Indizes wird eine Zahl: Welcher Fund bestätigt wurde, steht in
+    /// der Aufzeichnung; ins Log gehört, dass und wie viele.
+    #[must_use]
+    pub fn with_findings(mut self, findings: &DecidedFindings) -> Self {
+        self.unresolved_findings = findings.unresolved.map(u64::from);
+        self.acknowledged = findings
+            .unresolved
+            .map(|_| u64::try_from(findings.acknowledged.len()).unwrap_or(u64::MAX));
+        self
     }
 }
 

@@ -499,6 +499,7 @@ class FakeDaemonClient implements DaemonClient {
     // The rule first, the decision second, exactly as the daemon does it: a
     // decision that is refused must not leave a rule behind (HUM-027). The
     // flow above is held, so nothing is refused after this point.
+    final Set<int> acknowledged = _acknowledged(flow, decision);
     final Rule? created = _remember(remember);
     decisions.add(RecordedDecision(id, decision, remember));
     final DateTime now = _clock();
@@ -511,6 +512,12 @@ class FakeDaemonClient implements DaemonClient {
         source: DecisionSource.user,
         blockReason: decision is DecisionBlock ? decision.reason : null,
         note: decision is DecisionBlock ? decision.note ?? '' : '',
+        // Like the daemon's hold queue: an allow leaves with its findings
+        // minus the acknowledged ones. An edited request is not counted here;
+        // the fake has no detectors for a second scan (HUM-160).
+        unresolvedFindings: kind == DecisionKind.allow
+            ? flow.findingCount - acknowledged.length
+            : null,
       ),
     );
     if (kind == DecisionKind.allow || kind == DecisionKind.allowEdited) {
@@ -525,6 +532,42 @@ class FakeDaemonClient implements DaemonClient {
     }
     _emit(FlowEvent.recorded(at: now, flowId: id));
     return created;
+  }
+
+  /// The findings [decision] acknowledges, checked as the daemon checks them
+  /// (HUM-160): with an allow only, and every index must name a finding of
+  /// [flow]. An acknowledged finding is resolved in the detail afterwards.
+  Set<int> _acknowledged(Flow flow, Decision decision) {
+    if (decision is! DecisionAllow || decision.acknowledgedFindings.isEmpty) {
+      return const <int>{};
+    }
+    final Set<int> indices = decision.acknowledgedFindings.toSet();
+    final int? outside = indices
+        .where((int index) => index < 0 || index >= flow.findingCount)
+        .firstOrNull;
+    if (outside != null) {
+      throw DaemonException(
+        Diagnostic(
+          code: DiagnosticCodes.decideRequestInvalid,
+          severity: Severity.error,
+          why:
+              'flow ${flow.id.value} has ${flow.findingCount} finding(s), so '
+              'there is no finding $outside to acknowledge',
+        ),
+      );
+    }
+    final FlowDetail? detail = state.details[flow.id];
+    if (detail != null) {
+      state.details[flow.id] = detail.copyWith(
+        findings: <Finding>[
+          for (final (int index, Finding finding) in detail.findings.indexed)
+            indices.contains(index)
+                ? finding.copyWith(resolved: true)
+                : finding,
+        ],
+      );
+    }
+    return indices;
   }
 
   @override
@@ -1904,6 +1947,7 @@ class FakeDaemonClient implements DaemonClient {
         :final blockReason,
         :final ruleId,
         :final note,
+        :final unresolvedFindings,
       ):
         state.update(
           flowId,
@@ -1912,6 +1956,8 @@ class FakeDaemonClient implements DaemonClient {
             decision: kind,
             decisionSource: source,
             blockReason: blockReason,
+            // The trail of open findings, as the daemon records it (HUM-160).
+            unresolvedFindings: unresolvedFindings,
             // The note of a block belongs to the row, exactly as the recorder
             // stores it in the daemon: only where a person decided (HUM-117).
             decisionNote: humanBlockNote(
