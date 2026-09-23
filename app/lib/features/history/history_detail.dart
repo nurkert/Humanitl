@@ -129,66 +129,143 @@ class _HistoryDetailState extends ConsumerState<HistoryDetail> {
     );
     final bool hasEdited = flow.edited;
     return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) => Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          // The head is capped and scrolls rather than pushing the tabs out of
-          // the pane: the split can be dragged small, and at
-          // `TextScaler.linear(2.0)` the six facts alone are taller than a
-          // short pane (`docs/UX.md` 6, no fixed height around text).
-          ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: constraints.maxHeight * 0.5),
-            child: SingleChildScrollView(child: _Head(flow: flow)),
+      builder: (BuildContext context, BoxConstraints constraints) {
+        // The head is capped and scrolls rather than pushing the tabs out of
+        // the pane: the split can be dragged small, and at
+        // `TextScaler.linear(2.0)` the six facts alone are taller than a
+        // short pane (`docs/UX.md` 6, no fixed height around text).
+        final Widget head = ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: constraints.maxHeight * 0.5),
+          child: SingleChildScrollView(child: _Head(flow: flow)),
+        );
+        final Widget tabs = Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: tokens.spacing.x3,
+            vertical: tokens.spacing.x2,
           ),
-          const HHairline(),
-          Padding(
-            padding: EdgeInsets.symmetric(
-              horizontal: tokens.spacing.x3,
-              vertical: tokens.spacing.x2,
-            ),
-            child: Row(
-              children: <Widget>[
-                for (final HistoryDetailTab tab in HistoryDetailTab.values)
-                  if (tab != HistoryDetailTab.edited || hasEdited)
-                    Padding(
-                      padding: EdgeInsets.only(right: tokens.spacing.x2),
-                      child: HButton(
-                        key: Key('history-tab-${tab.name}'),
-                        variant: _tab == tab
-                            ? HButtonVariant.secondary
-                            : HButtonVariant.ghost,
-                        onPressed: () => setState(() => _tab = tab),
-                        child: Text(_tabLabel(l10n, tab)),
-                      ),
+          child: Row(
+            children: <Widget>[
+              for (final HistoryDetailTab tab in HistoryDetailTab.values)
+                if (tab != HistoryDetailTab.edited || hasEdited)
+                  Padding(
+                    padding: EdgeInsets.only(right: tokens.spacing.x2),
+                    child: HButton(
+                      key: Key('history-tab-${tab.name}'),
+                      variant: _tab == tab
+                          ? HButtonVariant.secondary
+                          : HButtonVariant.ghost,
+                      onPressed: () => setState(() => _tab = tab),
+                      child: Text(_tabLabel(l10n, tab)),
                     ),
-              ],
-            ),
+                  ),
+            ],
           ),
-          Flexible(
-            child: switch (detail) {
-              AsyncData<FlowDetail>(:final FlowDetail value) => _TabBody(
-                tab: _tab,
-                // Die lebende Zeile, nicht die Zusammenfassung im Abzug: nur
-                // sie weiß, ob gerade noch etwas ankommt (HUM-154).
-                flow: flow,
-                detail: value,
-                copied: _copied,
-                onCopy: (String text) {
-                  unawaited(Clipboard.setData(ClipboardData(text: text)));
-                  setState(() => _copied = true);
-                },
+        );
+        // Ist das Detail breit genug, steht der Rumpf rechts neben Kopf,
+        // Tabs und Kopfzeilen und bekommt die ganze Höhe des Detailbereichs
+        // (HUM-153). Untereinander blieben ihm bei 1400 × 900 knapp hundert
+        // Pixel: genug für Titel und Umschalter, nicht für den Inhalt. Die
+        // linke Spalte ist so breit wie das Textmaß der Fakten und
+        // Kopfzeilen (`docs/UX.md` 3.2, 90 Zeichen `mono12`); was darüber
+        // hinausginge, wäre dort Rinne und ist hier Platz für den Rumpf.
+        // Nebeneinander stehen beide nur, wenn der Rumpf mindestens so breit
+        // wird wie die linke Spalte, also nicht im schmalen Blatt und nicht
+        // bei großer Schrift. Wechselt die Anordnung, weil das Fenster oder
+        // die Schrift sich ändert, baut sich der Rumpf neu auf und beginnt
+        // wieder oben; die Ansicht (Baum, Text, Hex) bleibt, sie steht im
+        // Provider.
+        final double headWidth = HSize.measureWidth(
+          MediaQuery.textScalerOf(context)
+              .scale(tokens.typography.mono12.fontSize!),
+        );
+        if (constraints.maxWidth < headWidth * 2) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              head,
+              const HHairline(),
+              tabs,
+              Flexible(child: _pane(tokens, detail, _TabPart.both)),
+            ],
+          );
+        }
+        // Die Tab-Taste geht erst durch die linke Spalte, dann durch den
+        // Rumpf, wie im schmalen Detail. Nach Lesereihenfolge käme der Rumpf,
+        // der oben beginnt, vor den Tabs, die tiefer stehen.
+        return FocusTraversalGroup(
+          policy: OrderedTraversalPolicy(),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              FocusTraversalOrder(
+                order: const NumericFocusOrder(1),
+                child: FocusTraversalGroup(
+                  child: SizedBox(
+                    key: const Key('history-detail-head-column'),
+                    width: headWidth,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: <Widget>[
+                        head,
+                        const HHairline(),
+                        tabs,
+                        Expanded(
+                          child: _pane(tokens, detail, _TabPart.headers),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               ),
-              AsyncError<FlowDetail>(:final Object error) => Padding(
-                padding: EdgeInsets.all(tokens.spacing.x3),
-                child: _Failure(error: error),
+              const HHairline(vertical: true),
+              Expanded(
+                key: const Key('history-detail-body-column'),
+                child: FocusTraversalOrder(
+                  order: const NumericFocusOrder(2),
+                  child: FocusTraversalGroup(
+                    child: _pane(tokens, detail, _TabPart.body),
+                  ),
+                ),
               ),
-              _ => const HistoryWaitGate(child: _BodySkeleton(lines: 10)),
-            },
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
+
+  /// Was unter den Tabs steht, ganz oder zur Hälfte ([part]), für den Stand
+  /// [detail] des Abzugs.
+  ///
+  /// Warten und Fehlschlag stehen dort, wo der Inhalt stünde: das Skelett in
+  /// beiden Spalten in deren Dichte, die Fehlerkarte am Rumpf, wo der Blick
+  /// ohnehin hingeht (`docs/UX.md` 2.11, 4.4).
+  Widget _pane(HTokens tokens, AsyncValue<FlowDetail> detail, _TabPart part) =>
+      switch (detail) {
+        AsyncData<FlowDetail>(:final FlowDetail value) => _TabBody(
+          tab: _tab,
+          part: part,
+          // Die lebende Zeile, nicht die Zusammenfassung im Abzug: nur
+          // sie weiß, ob gerade noch etwas ankommt (HUM-154).
+          flow: widget.flow,
+          detail: value,
+          copied: _copied,
+          onCopy: (String text) {
+            unawaited(Clipboard.setData(ClipboardData(text: text)));
+            setState(() => _copied = true);
+          },
+        ),
+        AsyncError<FlowDetail>(:final Object error) =>
+          part == _TabPart.headers
+              ? const SizedBox.shrink()
+              : Padding(
+                  padding: EdgeInsets.all(tokens.spacing.x3),
+                  child: _Failure(error: error),
+                ),
+        _ => HistoryWaitGate(
+          child: _BodySkeleton(lines: part == _TabPart.headers ? 4 : 10),
+        ),
+      };
 
   String _tabLabel(AppLocalizations l10n, HistoryDetailTab tab) =>
       switch (tab) {
@@ -396,10 +473,23 @@ class _Fact extends StatelessWidget {
   }
 }
 
-/// Headers and body of one tab.
+/// Welcher Teil eines Tabs an einer Stelle steht.
+enum _TabPart {
+  /// Kopfzeilen und Rumpf untereinander, im schmalen Detail.
+  both,
+
+  /// Nur die Kopfzeilen, in der linken Spalte des breiten Details.
+  headers,
+
+  /// Nur der Rumpf, in der rechten Spalte des breiten Details.
+  body,
+}
+
+/// Headers and body of one tab, or one of the two ([part]).
 class _TabBody extends ConsumerWidget {
   const _TabBody({
     required this.tab,
+    required this.part,
     required this.flow,
     required this.detail,
     required this.copied,
@@ -407,6 +497,9 @@ class _TabBody extends ConsumerWidget {
   });
 
   final HistoryDetailTab tab;
+
+  /// Ob Kopfzeilen, Rumpf oder beides.
+  final _TabPart part;
 
   /// Die Zeile, wie sie jetzt steht; sie folgt den Ereignissen des Daemons.
   final Flow flow;
@@ -465,39 +558,43 @@ class _TabBody extends ConsumerWidget {
       HistoryDetailTab.edited =>
         detail.editedRequest == null && !flow.state.isTerminal,
     };
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            ConstrainedBox(
-              constraints: BoxConstraints(
-                maxHeight: constraints.maxHeight * 0.45,
-              ),
-              child: _Headers(
-                headers: headers,
-                copied: copied,
-                onCopy: onCopy,
-                emptyLabel: missing
-                    ? l10n.historyDetailNoResponse
-                    : l10n.historyDetailNoHeaders,
-                pending: pending,
-              ),
-            ),
-            const HHairline(),
-            Expanded(
-              child: _Body(
-                flowId: detail.summary.id,
-                reference: body,
-                headers: headers,
-                findings: findings,
-                pending: pending,
-              ),
-            ),
-          ],
-        );
-      },
+    final Widget headerTable = _Headers(
+      headers: headers,
+      copied: copied,
+      onCopy: onCopy,
+      emptyLabel: missing
+          ? l10n.historyDetailNoResponse
+          : l10n.historyDetailNoHeaders,
+      pending: pending,
     );
+    final Widget bodyView = _Body(
+      flowId: detail.summary.id,
+      reference: body,
+      headers: headers,
+      findings: findings,
+      pending: pending,
+    );
+    return switch (part) {
+      _TabPart.headers => headerTable,
+      _TabPart.body => bodyView,
+      _TabPart.both => LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: constraints.maxHeight * 0.45,
+                ),
+                child: headerTable,
+              ),
+              const HHairline(),
+              Expanded(child: bodyView),
+            ],
+          );
+        },
+      ),
+    };
   }
 }
 
