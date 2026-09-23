@@ -48,6 +48,10 @@
 //!
 //! **fsync.** Nach `fsync_every` Records oder spätestens nach
 //! `fsync_interval`, außerdem vor jedem Anker und beim Beenden.
+//!
+//! **Aufbewahrung.** [`AuditHandle::prune`] löscht den Anfang der Kette im
+//! selben Thread, der anhängt (HUM-157); wie und mit welchem Beleg, steht in
+//! [`crate::retention`].
 
 use std::fmt;
 use std::fs::{self, DirBuilder, File, OpenOptions};
@@ -58,9 +62,9 @@ use std::os::unix::fs::{
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use humanitl_core::diagnostics::codes::{
     AUDIT_001, AUDIT_002, AUDIT_003, AUDIT_004, AUDIT_006, AUDIT_007,
 };
@@ -74,7 +78,8 @@ use crate::canonical::canonical_json;
 use crate::key::{AuditKey, KEY_LEN, shell_quote};
 use crate::kinds::{AnchorData, AuditResumed, DaemonStopped, RecordKind};
 use crate::record::{AuditRecord, GENESIS_PREV, NO_SESSION, RecordBody, format_ts, mac_matches};
-use crate::verify::set_aside_fix;
+use crate::retention::{self, PruneReport};
+use crate::verify::{AuditVerifier, set_aside_fix};
 
 /// Vorgabe für `audit.anchor_every`.
 pub const DEFAULT_ANCHOR_EVERY: u32 = 100;
@@ -141,6 +146,11 @@ enum Command {
         reason: String,
         reply: mpsc::Sender<Head>,
     },
+    Prune {
+        cutoff: DateTime<Utc>,
+        anchors: Vec<Anchor>,
+        reply: mpsc::Sender<Result<Option<PruneReport>, Diagnostic>>,
+    },
     Close,
 }
 
@@ -163,10 +173,18 @@ impl AuditHandle {
     /// Schickt einen Record. `None` als Sitzung steht im Log als `-`.
     ///
     /// Einen `audit.anchor` nimmt das Handle nicht an: Anker schreibt nur der
-    /// Schreiber, weil nur er ihn auch in die zweite Ablage legt.
+    /// Schreiber, weil nur er ihn auch in die zweite Ablage legt. Ebenso
+    /// `audit.pruned`: Er gilt der Prüfung als Beleg eines Schnitts, und den
+    /// schreibt nur der Lauf, der wirklich schneidet ([`AuditHandle::prune`]).
     pub fn record(&self, session: Option<SessionId>, kind: RecordKind) {
-        if matches!(kind, RecordKind::AuditAnchor(_)) {
-            tracing::warn!("an audit.anchor from outside the writer was refused");
+        if matches!(
+            kind,
+            RecordKind::AuditAnchor(_) | RecordKind::AuditPruned(_)
+        ) {
+            tracing::warn!(
+                kind = kind.name(),
+                "a record only the writer writes was refused from outside it"
+            );
             return;
         }
         if self.tx.send(Command::Record { session, kind }).is_err() {
@@ -181,6 +199,45 @@ impl AuditHandle {
         let (reply, answer) = mpsc::channel();
         self.tx.send(Command::Sync(reply)).ok()?;
         answer.recv().ok()
+    }
+
+    /// Löscht den Anfang der Kette: jeden Record, der vor `before`
+    /// geschrieben wurde, und dokumentiert den Schnitt mit `audit.pruned`
+    /// (HUM-157, [`crate::retention`]). Blockiert, bis der Lauf durch ist.
+    ///
+    /// `anchors` sind die Anker aus `audit_anchors`; gegen sie und den
+    /// Schlüssel wird die Kette vor dem Löschen geprüft. `None`, wenn kein
+    /// Record alt genug war; dann steht auch kein Record im Log.
+    ///
+    /// # Errors
+    ///
+    /// [`AUDIT_001`], wenn die Kette nicht hält; dann wird nichts gelöscht.
+    /// [`AUDIT_006`], wenn Lesen, Schreiben oder Umbenennen scheitert oder der
+    /// Schreiber schon beendet ist.
+    pub fn prune(
+        &self,
+        before: SystemTime,
+        anchors: Vec<Anchor>,
+    ) -> Result<Option<PruneReport>, Diagnostic> {
+        let (reply, answer) = mpsc::channel();
+        let ended = || {
+            Diagnostic::builder(AUDIT_006, Severity::Error)
+                .why(
+                    "the audit writer has ended, so the retention run could not reach the log; \
+                     nothing was deleted"
+                        .to_owned(),
+                )
+                .fix(FixAction::CopyCommand("humanitl daemon logs".to_owned()))
+                .build()
+        };
+        self.tx
+            .send(Command::Prune {
+                cutoff: DateTime::<Utc>::from(before),
+                anchors,
+                reply,
+            })
+            .map_err(|_| ended())?;
+        answer.recv().map_err(|_| ended())?
     }
 }
 
@@ -269,6 +326,7 @@ impl AuditWriter {
             path: path.to_owned(),
             broken: false,
             last_was_anchor: false,
+            dir_unsynced: false,
         };
         if let Some(gap) = gap {
             // Der erste Record hinter der Lücke sagt, dass sie da ist, noch
@@ -392,6 +450,11 @@ struct Chain {
     /// Eine Zeile ließ sich weder schreiben noch zurücknehmen. Danach wird
     /// nichts mehr angehängt: Jede weitere Zeile hinge hinter einem Rest.
     broken: bool,
+    /// Nach einem Lauf der Aufbewahrung ließ sich das Verzeichnis nicht
+    /// synchronisieren: Nach einem Absturz könnte das alte, längere Log
+    /// zurückkommen, ohne die Records seitdem. Solange das gilt, geht kein
+    /// Anker in die zweite Ablage; er wäre dann ein falscher Befund „gekürzt".
+    dir_unsynced: bool,
     /// Der letzte Record ist ein Anker; beim Beenden braucht es keinen zweiten.
     last_was_anchor: bool,
 }
@@ -427,11 +490,22 @@ impl Chain {
                 Command::Stop { reason, reply } => {
                     self.record(None, &RecordKind::DaemonStopped(DaemonStopped { reason }));
                     if !self.last_was_anchor {
-                        self.anchor();
+                        self.anchor_or_report();
                     }
                     self.sync();
                     let _ = reply.send(self.head());
                     return;
+                }
+                Command::Prune {
+                    cutoff,
+                    anchors,
+                    reply,
+                } => {
+                    let outcome = self.prune(cutoff, &anchors);
+                    if let Err(diagnostic) = &outcome {
+                        self.report(diagnostic.clone());
+                    }
+                    let _ = reply.send(outcome);
                 }
                 Command::Close => break,
             }
@@ -467,33 +541,59 @@ impl Chain {
             // Sofort und nicht erst vor dem nächsten Record: Ein Anker, der
             // auf den nächsten Vorgang wartet, fehlt genau dann, wenn danach
             // nichts mehr kommt.
-            self.anchor();
+            self.anchor_or_report();
+        }
+    }
+
+    /// Ein Anker nach bestem Bemühen: Ein Fehler geht in den Strom der
+    /// Befunde, und das Schreiben geht weiter.
+    fn anchor_or_report(&mut self) {
+        if let Err(Some(diagnostic)) = self.anchor() {
+            self.report(diagnostic);
         }
     }
 
     /// Schreibt den Anker: einen `audit.anchor`, der seinen Vorgänger nennt,
     /// und seine eigene Nummer samt Hash in die zweite Ablage.
-    fn anchor(&mut self) {
+    ///
+    /// `Err(None)`: Die Zeile ließ sich nicht anhängen, und `append` hat den
+    /// Befund schon gemeldet. `Err(Some(_))`: Die Zeile steht, aber die zweite
+    /// Ablage hat den Anker nicht genommen. Wer auf den Anker baut, etwa die
+    /// Aufbewahrung, prüft beides (HUM-157).
+    fn anchor(&mut self) -> Result<(), Option<Diagnostic>> {
         let data = RecordKind::AuditAnchor(AnchorData {
             anchored_seq: self.last_seq,
             anchored_hash: self.last_hash.clone(),
         })
         .data();
         let Some(record) = self.append(NO_SESSION.to_owned(), "audit.anchor", data) else {
-            return;
+            return Err(None);
         };
-        // Erst auf die Platte, dann in die Datenbank.
-        self.sync();
+        // Erst auf die Platte, dann in die Datenbank: Ein Anker auf eine Zeile,
+        // die ein Absturz noch verlieren kann, wäre ein falscher Befund.
+        self.sync_now().map_err(Some)?;
         let anchor = Anchor {
             seq: record.body.seq,
             hash: record.hash,
             ts: record.body.ts,
         };
-        if let Some(mirror) = self.mirror.as_mut()
-            && let Err(diagnostic) = mirror(&anchor)
-        {
-            self.report(diagnostic);
+        if self.dir_unsynced {
+            retention::sync_dir(&self.path).map_err(|err| {
+                Some(not_writable(
+                    &self.path,
+                    &format!(
+                        "the directory of the log is still not synced after a retention run \
+                         ({err}); the anchor at seq {} stays out of audit_anchors until it is",
+                        anchor.seq
+                    ),
+                ))
+            })?;
+            self.dir_unsynced = false;
         }
+        if let Some(mirror) = self.mirror.as_mut() {
+            mirror(&anchor).map_err(Some)?;
+        }
+        Ok(())
     }
 
     fn append(&mut self, session: String, kind: &str, data: Value) -> Option<AuditRecord> {
@@ -545,16 +645,129 @@ impl Chain {
         Some(record)
     }
 
+    /// Ein Lauf der Aufbewahrung; die Schritte stehen in [`crate::retention`].
+    fn prune(
+        &mut self,
+        cutoff: DateTime<Utc>,
+        anchors: &[Anchor],
+    ) -> Result<Option<PruneReport>, Diagnostic> {
+        self.sync();
+        if self.broken {
+            return Err(not_writable(
+                &self.path,
+                "an earlier record could neither be written nor taken back; nothing was deleted",
+            ));
+        }
+        let report = AuditVerifier::verify_until(
+            &self.path,
+            Some(&*self.key),
+            anchors,
+            Some(self.last_seq),
+        )?;
+        if let Some(broken) = report.diagnostic(&self.path) {
+            return Err(Diagnostic::builder(AUDIT_001, Severity::Error)
+                .why(format!(
+                    "{}; audit.retention_days deletes nothing from a chain that does not hold, \
+                     because the deletion would remove the evidence of the break",
+                    broken.why
+                ))
+                .fix(set_aside_fix(&self.path))
+                .build());
+        }
+        let Some(cut) = retention::find_cut(&self.file, self.len, cutoff)
+            .map_err(|err| unreadable(&self.path, &err))?
+        else {
+            return Ok(None);
+        };
+        // Über `append` und nicht `record`: Der Anker dahinter kommt immer und
+        // hier, damit sein Ergebnis zählt.
+        let data = RecordKind::AuditPruned(cut.record(cutoff)).data();
+        if self
+            .append(NO_SESSION.to_owned(), retention::PRUNED_KIND, data)
+            .is_none()
+        {
+            return Err(not_writable(
+                &self.path,
+                "cannot append the audit.pruned record; nothing was deleted",
+            ));
+        }
+        // Geschnitten wird erst, wenn der Beleg in Datei **und** Tabelle
+        // verankert ist; sonst läge er im unverankerten Ende, das jemand
+        // unbemerkt abschneiden könnte (`docs/SECURITY.md` Abschnitt 8).
+        if let Err(problem) = self.anchor() {
+            let detail = problem.map_or_else(
+                || "the anchor could not be appended".to_owned(),
+                |diagnostic| {
+                    format!(
+                        "the anchor is not secured on disk and in audit_anchors ({})",
+                        diagnostic.why
+                    )
+                },
+            );
+            return Err(not_writable(
+                &self.path,
+                &format!(
+                    "{detail}, so the audit.pruned record is not anchored; the audit.pruned \
+                     record stays, and nothing was deleted"
+                ),
+            ));
+        }
+        self.sync();
+        let rewritten =
+            retention::rewrite(&self.file, &self.path, cut.offset, self.len).map_err(|err| {
+                not_writable(
+                    &self.path,
+                    &format!(
+                        "cannot write the shortened log next to it: {err}; the audit.pruned \
+                         record stays, and nothing was deleted"
+                    ),
+                )
+            })?;
+        // Ab dem Umbenennen gilt die neue Datei, auch wenn das Verzeichnis
+        // danach nicht synchronisiert werden konnte.
+        self.file = rewritten.file;
+        self.len -= cut.offset;
+        if let Some(err) = rewritten.dir_sync {
+            self.dir_unsynced = true;
+            self.report(not_writable(
+                &self.path,
+                &format!(
+                    "the shortened log is in place, but its directory could not be synced \
+                     ({err}); after a crash the old, longer log may come back under the name, \
+                     without the records written since. Until a later anchor manages to sync \
+                     the directory, no anchor goes to audit_anchors"
+                ),
+            ));
+        }
+        Ok(Some(PruneReport {
+            through_seq: cut.through_seq,
+            records: cut.records,
+            bytes: cut.offset,
+        }))
+    }
+
     fn sync(&mut self) {
         if self.unsynced == 0 {
             return;
         }
-        if let Err(err) = self.file.sync_data() {
-            let diagnostic = not_writable(&self.path, &format!("fsync failed: {err}"));
+        if let Err(diagnostic) = self.sync_now() {
             self.report(diagnostic);
         }
+    }
+
+    /// Synchronisiert immer, auch wenn nichts als offen gezählt ist, und gibt
+    /// den Fehler zurück statt in den Strom: für den Anker, auf den die
+    /// Aufbewahrung baut (HUM-157). Ein vorher gescheitertes `fsync` nach
+    /// bestem Bemühen hat den Zähler schon auf null gesetzt; hier zählt nur,
+    /// ob die Datei jetzt auf der Platte ist.
+    fn sync_now(&mut self) -> Result<(), Diagnostic> {
+        let result = self
+            .file
+            .sync_data()
+            .map_err(|err| not_writable(&self.path, &format!("fsync failed: {err}")));
         self.unsynced = 0;
         self.last_sync = Instant::now();
+        result
     }
 
     fn report(&self, diagnostic: Diagnostic) {

@@ -67,6 +67,8 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-190 | `AGENT_004` zeigt einen PATH, den der Bildschirm zurückhält | S | HUM-139, HUM-137 |
 | HUM-197 | Im schmalen History-Detail bleibt dem Body weiter kaum Platz | S | HUM-153 |
 | HUM-198 | Die History des Fakes nennt eine Anfragegröße, die ihr Rumpf nicht hat | S | HUM-032 |
+| HUM-194 | Das Audit-Log hat keine Obergrenze in Bytes | S | HUM-157 |
+| HUM-195 | `AuditWarning` nennt im Vertrag nur zwei Arten | S | HUM-157, HUM-160 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -3350,10 +3352,10 @@ Zu entscheiden: Wie ein Neuanfang aussieht, den `verify` von einem Bruch untersc
 Bei Löschung: ein Log mit Records älter als die Frist, danach `verify` grün mit dokumentierter Lücke; eine Lücke ohne dokumentierenden Record bleibt ein Bruch. Bei Streichung: `CONFIG_005` als Warnung beim Laden.
 
 ### Akzeptanzkriterien
-- [ ] `audit.retention_days` ist im Register `effective` oder gestrichen, nie mehr `pending`.
-- [ ] `docs/SECURITY.md` sagt, was die Kette nach einer Löschung noch beweist.
-- [ ] Der Abschnitt „Aufbewahrung" im Audit-Screen sagt dasselbe wie der Code.
-- [ ] `make check` grün.
+- [x] `audit.retention_days` ist im Register `effective` oder gestrichen, nie mehr `pending`. Entschieden 2026-09-23: löschen, nicht streichen (`backlog/CONVENTIONS.md` 4.40). `config_readers.rs` führt den Schlüssel als `effective`, `docs/CONFIG.md` ist neu erzeugt. Gebaut: täglicher Lauf im Daemon (`humanitld/src/audit_retention.rs`), `audit.pruned` samt Anker, `verify` erkennt den dokumentierten Anfang an. 13 Mutationen in `humanitl_audit` (Tests in `daemon/crates/audit/tests/retention.rs`), `humanitld`, `humanitl-ipc` und `humanitl-config`, jede rot gesehen: eine Lücke ohne dokumentierenden Record bleibt `SeqGap`, eine Kette, die nicht hält, wird nicht gekürzt.
+- [x] `docs/SECURITY.md` sagt, was die Kette nach einer Löschung noch beweist: Abschnitt 8, „Aufbewahrung der Kette"; dazu K-14 in `docs/THREAT-MODEL.md`.
+- [x] Der Abschnitt „Aufbewahrung" im Audit-Screen sagt dasselbe wie der Code: `auditRetentionChain` neu, Warnung `pruned` in der Statuskarte (`auditWarningPruned`). `audit_arb_test.dart` und `warnings_are_shown_in_amber` werden unter ihrer Mutation rot.
+- [x] `make check` grün. Gemessen 2026-09-23 mit `STRICT=1 make check` im Arbeitsbaum dieses Issues, unter `bwrap --tmpfs /tmp`.
 
 ### Fallstricke
 - Eine Löschung, die `verify` als Bruch meldet, macht jeden Audit-Screen dauerhaft rot.
@@ -3931,3 +3933,49 @@ Zahl, so wie beim echten Daemon.
 
 ### Referenzen
 HUM-032, HUM-153; `backlog/CONVENTIONS.md` 4.13.
+
+---
+
+## HUM-194 · Das Audit-Log hat keine Obergrenze in Bytes
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-157 · Blockiert: —
+
+### Kontext
+Seit HUM-157 löscht `audit.retention_days` den Anfang der Kette nach Alter. Eine
+Frist in Tagen begrenzt aber keinen vollen Tag: Ein Agent, der viele Anfragen
+stellt, schreibt je Flow mehrere Records, und die Datei wächst bis zum nächsten
+täglichen Lauf ohne Grenze. Neben jede Aufbewahrung gehört eine Grenze in Bytes
+samt Reihenfolge des Löschens und dem Verhalten bei fast voller Platte.
+
+### Ziel
+Ein Schlüssel `audit.max_bytes` (Vorgabe 0, keine Grenze), den derselbe Lauf wie
+`audit.retention_days` liest: Ist die Datei größer, schneidet er vorn so viel,
+dass sie darunter liegt, mit demselben `audit.pruned` als Beleg.
+
+### Akzeptanzkriterien
+- [ ] Ein Log über der Grenze ist nach dem Lauf darunter, und `verify` hält mit der Warnung `pruned`.
+- [ ] Eine Kette, die nicht hält, wird auch hier nicht gekürzt (`AUDIT_001`).
+- [ ] `make check` grün.
+
+### Referenzen
+HUM-157; `daemon/crates/audit/src/retention.rs` (`find_cut`).
+
+---
+
+## HUM-195 · `AuditWarning` nennt im Vertrag nur zwei Arten
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-157, HUM-160 · Blockiert: —
+
+### Kontext
+HUM-157 hat die Warnung `pruned` hinzugefügt. Der Kommentar an
+`AuditWarning` in `proto/humanitl/v1/humanitl.proto` nennt nur `no_hmac_key`
+und `unanchored_tail`, und dass `records` bei `pruned` die Nummer des letzten
+gelöschten Records trägt, steht nur in `backlog/CONVENTIONS.md` 4.40. Der
+Vertrag wurde in HUM-157 nicht angefasst, weil HUM-160 ihn gleichzeitig auf
+1.13 hebt.
+
+### Akzeptanzkriterien
+- [ ] Der Kommentar nennt alle drei Arten und die Bedeutung von `records` je Art; die erzeugten Dateien sind nachgezogen.
+- [ ] `make check` grün.
+
+### Referenzen
+HUM-157; `daemon/crates/ipc/src/audit.rs` (`verify_response`).
+

@@ -258,6 +258,7 @@ async fn verify_over_rpc(ctx: &Context) -> Result<Summary, Refusal> {
         .map(|warning| match warning.kind.as_str() {
             "no_hmac_key" => "no HMAC key".to_owned(),
             "unanchored_tail" => format!("unanchored tail: {} records", warning.records),
+            "pruned" => pruned_warning(warning.records),
             other => other.to_owned(),
         })
         .collect();
@@ -271,6 +272,12 @@ async fn verify_over_rpc(ctx: &Context) -> Result<Summary, Refusal> {
     })
 }
 
+/// Die Warnung einer Kette, deren Anfang `audit.retention_days` gelöscht hat
+/// (HUM-157): bis zu welcher Nummer, und dass deren Inhalt unbewiesen bleibt.
+fn pruned_warning(through_seq: u64) -> String {
+    format!("pruned: records 1 to {through_seq} deleted by audit.retention_days, unproven")
+}
+
 /// Die Prüfung einer Datei: Kette und Kanonik, kein Schlüssel, keine Anker.
 fn verify_file(path: &Path, mut warnings: Vec<String>) -> Result<Summary, Failure> {
     let report = AuditVerifier::verify(path, None, &[]).map_err(Failure::new)?;
@@ -280,6 +287,7 @@ fn verify_file(path: &Path, mut warnings: Vec<String>) -> Result<Summary, Failur
             VerifyWarning::UnanchoredTail { records } => {
                 format!("unanchored tail: {records} records")
             }
+            VerifyWarning::Pruned { through_seq } => pruned_warning(through_seq),
         });
     }
     // Die Anker stehen in der Aufzeichnung des Daemons, nicht in der Datei.

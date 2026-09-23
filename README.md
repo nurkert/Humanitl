@@ -86,7 +86,7 @@ guarantees do not cover; the attacker model is in
 | `humanitl run` | The same thing from the command line, in any directory, with a profile that allows only the language model | built, M3 |
 | Edit before sending | Open a held request in an editor, change it, and send the edited version instead | in progress, M4 |
 | Pseudonymisation | Replace personal data before sending, stable per session, translated back in text responses; mapping stays on the host, encrypted | planned, M4 |
-| Audit log | Append-only, hash-chained, exportable; honest about what it proves | chain built, screen and export planned, M4 |
+| Audit log | Append-only while `audit.retention_days = 0`, otherwise the oldest records are pruned and the cut is recorded as `audit.pruned`; hash-chained, exportable; honest about what it proves | chain built, screen and export planned, M4 |
 | Settings | Three decisions to get started; everything else configurable with progressive disclosure, one schema feeding the app, the CLI and the docs | planned, M4 |
 | Packages | `.deb` and AppImage, one click to enable the background service | planned, M4 |
 

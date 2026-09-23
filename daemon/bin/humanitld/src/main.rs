@@ -32,6 +32,7 @@
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 
+mod audit_retention;
 mod audit_sink;
 mod systemd;
 
@@ -83,6 +84,7 @@ use tokio::net::UnixListener;
 use tonic::codegen::tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::Server;
 
+use crate::audit_retention::AuditRetention;
 use crate::audit_sink::AuditSink;
 
 /// Der Hintergrunddienst von Humanitl.
@@ -336,7 +338,7 @@ async fn run_daemon(cli: &Cli, passed: Option<systemd::Passed>) -> Result<(), Di
 
     // Das Audit-Log nach der Aufzeichnung und vor dem Proxy (HUM-050).
     let (audit, sink, audit_log) = start_audit(&xdg, &config, &queue, session)?;
-    let watchers = Watchers::start(&recorder, &queue, &audit);
+    let watchers = Watchers::start(&recorder, &queue, &audit, &xdg, &config);
 
     let proxy = ProxyCore::new();
     let rules = load_rules(&xdg, &base, session);
@@ -763,7 +765,8 @@ fn session_started(config: &Config) -> SessionStarted {
 /// Die laufenden Nebenaufgaben von Aufzeichnung und Audit-Log.
 ///
 /// Drei, und alle enden mit dem Daemon: die Ströme der Befunde der beiden
-/// Schreib-Threads und der tägliche Aufräumlauf der Aufzeichnung.
+/// Schreib-Threads und der tägliche Aufräumlauf von Aufzeichnung und
+/// Audit-Kette.
 struct Watchers {
     diagnostics: tokio::task::JoinHandle<()>,
     audit: tokio::task::JoinHandle<()>,
@@ -771,8 +774,15 @@ struct Watchers {
 }
 
 impl Watchers {
-    /// Startet alle drei Aufgaben.
-    fn start(recorder: &Recorder, queue: &Arc<HoldQueue>, audit: &AuditWriter) -> Self {
+    /// Startet alle drei Aufgaben. `audit.retention_days` und die
+    /// Anker-Tabelle der Aufzeichnung gehen an den täglichen Lauf (HUM-157).
+    fn start(
+        recorder: &Recorder,
+        queue: &Arc<HoldQueue>,
+        audit: &AuditWriter,
+        xdg: &XdgPaths,
+        config: &Config,
+    ) -> Self {
         Self {
             diagnostics: tokio::spawn(report_diagnostics(
                 "recorder",
@@ -784,7 +794,11 @@ impl Watchers {
                 audit.diagnostics(),
                 Arc::clone(queue),
             )),
-            purge: tokio::spawn(purge_daily(recorder.clone(), audit.handle())),
+            purge: tokio::spawn(purge_daily(
+                recorder.clone(),
+                audit.handle(),
+                AuditRetention::new(config.audit.retention_days, xdg.db_path()),
+            )),
         }
     }
 
@@ -839,7 +853,15 @@ async fn report_diagnostics(
 /// Jeder Lauf erhebt zugleich die Statistiken des Abfrageplaners neu
 /// (`backlog/CONVENTIONS.md` 4.14). Ein Fehler beendet die Aufgabe nicht: Am
 /// nächsten Tag wird es wieder versucht, und der Befund steht schon im Strom.
-async fn purge_daily(recorder: Recorder, audit: AuditHandle) {
+///
+/// Danach kommt die Audit-Kette an die Reihe (`audit.retention_days`,
+/// HUM-157): nach der Aufzeichnung, damit deren `recorder.retention_applied`
+/// schon in der Kette steht, wenn sie geprüft und gekürzt wird. Befunde des
+/// Schreib-Threads (eine Kette, die nicht hält, `AUDIT_001`; Lesen und
+/// Schreiben, `AUDIT_006`) legt er selbst in den Strom; ein Fehler beim Lesen
+/// der Anker steht nur im Protokoll, und am nächsten Tag wird es wieder
+/// versucht.
+async fn purge_daily(recorder: Recorder, audit: AuditHandle, audit_retention: AuditRetention) {
     let mut every_day = tokio::time::interval(humanitl_recorder::RETENTION_INTERVAL);
     loop {
         // Der erste Tick kommt sofort; das ist der Lauf beim Start.
@@ -855,6 +877,23 @@ async fn purge_daily(recorder: Recorder, audit: AuditHandle) {
                 "recording purged"
             ),
             Err(error) => tracing::warn!(why = %error, "the recording could not be purged"),
+        }
+        let (handle, retention) = (audit.clone(), audit_retention.clone());
+        let now = SystemTime::now();
+        match tokio::task::spawn_blocking(move || retention.run_once(&handle, now)).await {
+            Ok(Ok(None)) => tracing::debug!("the audit chain keeps every record"),
+            Ok(Ok(Some(report))) => tracing::info!(
+                through_seq = report.through_seq,
+                records = report.records,
+                bytes = report.bytes,
+                "audit chain pruned"
+            ),
+            Ok(Err(diagnostic)) => tracing::warn!(
+                code = diagnostic.code.as_str(),
+                why = %diagnostic.why,
+                "the audit chain was not pruned"
+            ),
+            Err(error) => tracing::warn!(%error, "the audit retention run failed"),
         }
     }
 }
