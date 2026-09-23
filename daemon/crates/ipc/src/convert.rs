@@ -43,7 +43,7 @@ use humanitl_sandbox::doctor::{CheckOutcome, CheckStatus, DoctorReport};
 use humanitl_sandbox::summary::{
     ChangeKind, FileChangeRecord, ScanSkip, SessionSummary, SummaryFinding, SymlinkEscape,
 };
-use humanitl_sandbox::{CheckResult, IsolationCheck};
+use humanitl_sandbox::{CheckResult, IsolationCheck, RefusalReason, RefusalReporting, Refusals};
 
 use crate::domains::DomainTable;
 use crate::v1;
@@ -220,6 +220,40 @@ pub fn check_result_to_proto(result: &CheckResult) -> v1::CheckResult {
         passed: result.passed,
         evidence: sanitize_note(&result.evidence),
         diagnostic: result.diagnostic.as_ref().map(diagnostic_to_proto),
+    }
+}
+
+/// Übersetzt den Stand der verweigerten Versuche in seine Wire-Form (HUM-138).
+///
+/// Familie und Typ sind hier schon Namen, die der Wirt geprüft hat
+/// (`humanitl_sandbox::parse_refusal_line`); sie gehen unverändert hinaus.
+#[must_use]
+pub fn refusals_to_proto(refusals: &Refusals) -> v1::sandbox_event::Refusals {
+    let (reporting, off_reason) = match &refusals.reporting {
+        RefusalReporting::Unknown => (v1::RefusalReporting::Unspecified, String::new()),
+        RefusalReporting::On => (v1::RefusalReporting::On, String::new()),
+        RefusalReporting::Off(why) => (v1::RefusalReporting::Off, why.clone()),
+    };
+    v1::sandbox_event::Refusals {
+        reporting: reporting as i32,
+        off_reason,
+        entries: refusals
+            .entries
+            .iter()
+            .map(|entry| v1::sandbox_event::Refusal {
+                syscall: entry.syscall.clone(),
+                family: entry.family.clone(),
+                socket_type: entry.socket_type.clone(),
+                reason: match entry.reason {
+                    RefusalReason::Family => v1::RefusalReason::Family,
+                    RefusalReason::Type => v1::RefusalReason::Type,
+                    RefusalReason::Overflow => v1::RefusalReason::Overflow,
+                } as i32,
+                count: entry.count,
+                first_at: Some(timestamp(entry.first)),
+                last_at: Some(timestamp(entry.last)),
+            })
+            .collect(),
     }
 }
 

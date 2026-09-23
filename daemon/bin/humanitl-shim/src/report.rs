@@ -27,11 +27,14 @@
 //! It is the launcher's proof that the agent never started. Only the child
 //! can write it, and only after a failed `exec`: the descriptor carries
 //! `CLOEXEC`, so a successful `exec` closes it before the agent's first
-//! instruction. The parent keeps its own copy until its setup is done, and
-//! the child waits at a gate before `exec` that opens only once the parent
-//! has dropped it (`launch` in `main.rs`): no process in the agent's PID
-//! namespace holds a report writer by the time the agent runs. Whatever the
-//! agent prints on its terminal is therefore never mistaken for it.
+//! instruction. The parent keeps its own copy for the refusals of the agent
+//! (HUM-138), and the child waits at a gate before `exec` that opens only
+//! once the parent is non-dumpable and wears its own filter (`launch` in
+//! `main.rs`): the one process in the agent's PID namespace that still holds
+//! a report writer is closed to the agent's `/proc/<pid>/fd` and
+//! `pidfd_getfd(2)`. Until HUM-138 the parent dropped its copy before the
+//! gate opened; non-dumpable replaces that argument. Whatever the agent
+//! prints on its terminal is therefore never mistaken for it.
 
 use std::collections::VecDeque;
 use std::ffi::OsStr;
@@ -159,6 +162,23 @@ impl Report {
             if ok { "ok" } else { "fail" },
             sanitize(evidence)
         );
+        write_all(fd.as_raw_fd(), line.as_bytes());
+    }
+
+    /// Writes one line that is not a `CHECK` line: `REFUSALS` and `REFUSED`
+    /// from the parent while the agent runs (HUM-138, `refusals.rs`). The
+    /// caller builds `text` from fields without whitespace; a control
+    /// character is replaced, so the line stays one line. One `write(2)`, so
+    /// it never interleaves with another.
+    pub fn line(&self, text: &str) {
+        let Some(fd) = self.fd.as_ref() else {
+            return;
+        };
+        let mut line: String = text
+            .chars()
+            .map(|c| if c.is_control() { '?' } else { c })
+            .collect();
+        line.push('\n');
         write_all(fd.as_raw_fd(), line.as_bytes());
     }
 }

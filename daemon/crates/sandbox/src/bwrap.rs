@@ -1186,6 +1186,8 @@ fn read_report(reader: PipeReader, shared: &Shared) {
             shared.push_check(check);
         } else if let Some(failure) = parse_exec_line(&line) {
             shared.set_exec_failed(failure);
+        } else if let Some(refusal) = crate::refusals::parse_refusal_line(&line) {
+            shared.push_refusal(refusal);
         } else {
             shared.push_other_line();
         }

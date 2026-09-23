@@ -39,11 +39,23 @@
 //! agent's plus `AF_UNIX`, because `connect(2)` to the proxy socket needs
 //! `socket(AF_UNIX, SOCK_STREAM)`. The bridge is the only process in the
 //! sandbox that may open a Unix socket, and it knows exactly one target.
+//!
+//! Two gates leave this file as well ([`Gate`], HUM-138). The bridge's filter
+//! answers a refused `socket(2)` with `EPERM` at once ([`Gate::Silent`]). The
+//! agent's filter hands the same call to the shim's parent first
+//! (`SECCOMP_RET_USER_NOTIF`, [`Gate::Reported`]): the kernel parks the call,
+//! the parent counts it and answers `EPERM` (`refusals.rs`). The verdict is the
+//! same `EPERM` either way; what changes is that somebody learns of the
+//! attempt. The parent never answers anything else, and without a listener the
+//! kernel answers `ENOSYS` itself, so the gate stays closed whatever happens to
+//! the parent. Everything outside the socket gate (x32, the floor, the
+//! architecture) is answered by the kernel alone, as before.
 
 use std::collections::BTreeMap;
 use std::ffi::{c_long, c_uint};
 use std::fmt;
 use std::io;
+use std::os::fd::{FromRawFd, OwnedFd};
 
 use seccompiler::{BpfProgram, SeccompAction, SeccompFilter, SeccompRule, TargetArch, sock_filter};
 
@@ -205,9 +217,48 @@ const DATA_NR: u32 = 0;
 const DATA_ARCH: u32 = 4;
 const DATA_ARG0_LOW: u32 = 16;
 const DATA_ARG1_LOW: u32 = 24;
+/// `SECCOMP_FILTER_FLAG_NEW_LISTENER` as the prelude compares it: the low word
+/// of arg1 of `seccomp(2)`.
+const NEW_LISTENER: u32 = 1 << 3;
+/// Instructions of the prelude that do not depend on the number of families
+/// and types.
+const PRELUDE_FIXED: usize = 17;
 const RET_KILL_PROCESS: u32 = libc::SECCOMP_RET_KILL_PROCESS;
 const RET_EPERM: u32 =
     libc::SECCOMP_RET_ERRNO | (libc::EPERM.unsigned_abs() & libc::SECCOMP_RET_DATA);
+/// The kernel parks the call and asks the listener (`refusals.rs`).
+const RET_USER_NOTIF: u32 = libc::SECCOMP_RET_USER_NOTIF;
+
+/// How the socket gate answers a call it refuses (HUM-138).
+///
+/// Both answers end in `EPERM` for the caller. They differ in who knows: with
+/// [`Gate::Silent`] only the caller does, with [`Gate::Reported`] the shim's
+/// parent counts the attempt before it answers, and the host shows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Gate {
+    /// `SECCOMP_RET_ERRNO | EPERM` straight from the kernel. The bridge's
+    /// filter, and the agent's when the kernel refuses a listener.
+    Silent,
+    /// `SECCOMP_RET_USER_NOTIF`: the listener answers `EPERM` and counts. The
+    /// agent's filter.
+    Reported,
+}
+
+impl Gate {
+    const fn refuse(self) -> u32 {
+        match self {
+            Self::Silent => RET_EPERM,
+            Self::Reported => RET_USER_NOTIF,
+        }
+    }
+
+    const fn verdict(self) -> Verdict {
+        match self {
+            Self::Silent => Verdict::Eperm,
+            Self::Reported => Verdict::ReportedEperm,
+        }
+    }
+}
 
 /// A socket family by the name the profile uses and the number `socket(2)`
 /// receives.
@@ -273,6 +324,8 @@ pub enum Subject {
     Every,
     /// `socket(2)`.
     Socket,
+    /// `seccomp(2)` (HUM-138).
+    Seccomp,
     /// One named syscall.
     Named(Syscall),
 }
@@ -284,6 +337,8 @@ pub enum Condition {
     ArchMismatch,
     /// `seccomp_data.nr & 0x40000000` is set.
     X32Bit,
+    /// arg1 (low 32 bits) carries `SECCOMP_FILTER_FLAG_NEW_LISTENER`.
+    ListenerFlag,
     /// arg0 (low 32 bits) is none of these families.
     FamilyNotIn(Vec<Family>),
     /// `arg1 & 0xff` is none of these types.
@@ -299,6 +354,9 @@ pub enum Verdict {
     KillProcess,
     /// `SECCOMP_RET_ERRNO | EPERM`.
     Eperm,
+    /// `SECCOMP_RET_USER_NOTIF`, which the shim's parent answers with `EPERM`
+    /// after counting the attempt ([`Gate::Reported`]).
+    ReportedEperm,
 }
 
 /// Which part of the program carries a rule.
@@ -330,6 +388,10 @@ pub enum Error {
     NoNewPrivs(io::Error),
     /// `seccomp(2)` refused the program.
     Apply(seccompiler::Error),
+    /// `seccomp(2)` refused the program with a listener
+    /// (`SECCOMP_FILTER_FLAG_NEW_LISTENER`); the errno says why, `EBUSY`
+    /// when a filter further up already has one.
+    Listener(io::Error),
 }
 
 impl fmt::Display for Error {
@@ -343,6 +405,9 @@ impl fmt::Display for Error {
             Self::Build(err) => write!(f, "cannot build the filter: {err}"),
             Self::NoNewPrivs(err) => write!(f, "PR_SET_NO_NEW_PRIVS failed: {err}"),
             Self::Apply(err) => write!(f, "seccomp(2) refused the filter: {err}"),
+            Self::Listener(err) => {
+                write!(f, "seccomp(2) refused the filter with a listener: {err}")
+            }
         }
     }
 }
@@ -414,12 +479,13 @@ impl Policy {
         &self.types
     }
 
-    /// The rule table, in the order the kernel evaluates it.
+    /// The rule table for the socket gate `gate`, in the order the kernel
+    /// evaluates it.
     ///
     /// This is what `docs/SECURITY.md` cites. [`Policy::program`] renders it
     /// and nothing else.
     #[must_use]
-    pub fn rules(&self) -> Vec<Rule> {
+    pub fn rules(&self, gate: Gate) -> Vec<Rule> {
         let mut rules = vec![
             Rule {
                 subject: Subject::Every,
@@ -434,15 +500,21 @@ impl Policy {
                 origin: Origin::Prelude,
             },
             Rule {
-                subject: Subject::Socket,
-                condition: Condition::FamilyNotIn(self.families.clone()),
+                subject: Subject::Seccomp,
+                condition: Condition::ListenerFlag,
                 verdict: Verdict::Eperm,
                 origin: Origin::Prelude,
             },
             Rule {
                 subject: Subject::Socket,
+                condition: Condition::FamilyNotIn(self.families.clone()),
+                verdict: gate.verdict(),
+                origin: Origin::Prelude,
+            },
+            Rule {
+                subject: Subject::Socket,
                 condition: Condition::TypeNotIn(self.types.clone()),
-                verdict: Verdict::Eperm,
+                verdict: gate.verdict(),
                 origin: Origin::Prelude,
             },
         ];
@@ -455,9 +527,10 @@ impl Policy {
         rules
     }
 
-    /// The BPF program: the prelude, then the seccompiler program.
-    pub fn program(&self) -> Result<BpfProgram, Error> {
-        let mut program = prelude(&self.families, &self.types)?;
+    /// The BPF program for the socket gate `gate`: the prelude, then the
+    /// seccompiler program.
+    pub fn program(&self, gate: Gate) -> Result<BpfProgram, Error> {
+        let mut program = prelude(&self.families, &self.types, gate)?;
         let mut map: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
         for syscall in &self.deny {
             // An empty rule vector is seccompiler's "always": the syscall gets
@@ -484,11 +557,13 @@ impl fmt::Display for Rule {
         let subject = match &self.subject {
             Subject::Every => "every syscall".to_owned(),
             Subject::Socket => "socket".to_owned(),
+            Subject::Seccomp => "seccomp".to_owned(),
             Subject::Named(syscall) => syscall.name.to_owned(),
         };
         let condition = match &self.condition {
             Condition::ArchMismatch => format!("arch is not {}", std::env::consts::ARCH),
             Condition::X32Bit => format!("nr has the x32 bit {X32_SYSCALL_BIT:#x}"),
+            Condition::ListenerFlag => format!("flags (arg1) have NEW_LISTENER {NEW_LISTENER:#x}"),
             Condition::FamilyNotIn(families) => format!(
                 "family (arg0) not in {{{}}}",
                 families
@@ -510,6 +585,7 @@ impl fmt::Display for Rule {
         let verdict = match self.verdict {
             Verdict::KillProcess => "kill process",
             Verdict::Eperm => "EPERM",
+            Verdict::ReportedEperm => "notify:EPERM",
         };
         let origin = match self.origin {
             Origin::Prelude => "prelude",
@@ -538,6 +614,54 @@ pub fn apply(program: &BpfProgram) -> Result<(), Error> {
         return Err(Error::NoNewPrivs(io::Error::last_os_error()));
     }
     seccompiler::apply_filter_all_threads(program).map_err(Error::Apply)
+}
+
+/// Installs `program` for the calling process with a listener and returns
+/// the listener (`SECCOMP_FILTER_FLAG_NEW_LISTENER`, HUM-138).
+///
+/// Sets `PR_SET_NO_NEW_PRIVS` first, like [`apply`]. Without `TSYNC`: the
+/// kernel refuses `TSYNC` together with a listener before Linux 5.7
+/// (`SECCOMP_FILTER_FLAG_TSYNC_ESRCH`), and the only caller is the child right
+/// after `fork(2)`, which has exactly one thread. Every thread and process the
+/// agent starts later inherits the filter either way.
+///
+/// Whoever holds the returned descriptor answers every call the program parks
+/// with `SECCOMP_RET_USER_NOTIF`; once nobody holds it, the kernel answers
+/// those calls with `ENOSYS`. It is created with `O_CLOEXEC`, and it must never
+/// reach the agent: a listener may answer "go ahead"
+/// (`SECCOMP_USER_NOTIF_FLAG_CONTINUE`), and the agent would answer itself.
+///
+/// Allocates nothing, so a freshly forked child may call it.
+pub fn apply_reporting(program: &BpfProgram) -> Result<OwnedFd, Error> {
+    // SAFETY: as in `apply`: constant arguments, the calling process's flags.
+    let rc = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+    if rc != 0 {
+        return Err(Error::NoNewPrivs(io::Error::last_os_error()));
+    }
+    let len = u16::try_from(program.len()).map_err(|_| Error::TooManyEntries)?;
+    let fprog = libc::sock_fprog {
+        len,
+        // seccompiler's `sock_filter` is the kernel's layout, field for
+        // field; the kernel only reads through the pointer.
+        filter: program.as_ptr().cast_mut().cast::<libc::sock_filter>(),
+    };
+    // SAFETY: `fprog` points at `program`, which outlives the call; the kernel
+    // copies the instructions before it returns.
+    let rc = unsafe {
+        libc::syscall(
+            libc::SYS_seccomp,
+            libc::c_ulong::from(libc::SECCOMP_SET_MODE_FILTER),
+            libc::SECCOMP_FILTER_FLAG_NEW_LISTENER,
+            &raw const fprog,
+        )
+    };
+    if rc < 0 {
+        return Err(Error::Listener(io::Error::last_os_error()));
+    }
+    let fd = libc::c_int::try_from(rc)
+        .map_err(|_| Error::Listener(io::Error::from_raw_os_error(libc::EBADF)))?;
+    // SAFETY: the kernel just created this descriptor for the caller.
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
 /// `socket(family, type, 0)` as a probe: `Ok` when the kernel handed out a
@@ -734,20 +858,37 @@ const fn jump(code: u16, k: u32, jt: u8, jf: u8) -> sock_filter {
 /// 3      ld   nr
 /// 4      jset X32_SYSCALL_BIT   -> 5, else 6
 /// 5      ret  EPERM
-/// 6      jeq  SYS_socket        -> 7, else past the gate (seccompiler program)
-/// 7      ld   arg0 (low word)
-/// 8+i    jeq  family[i]         -> 9+F (type check), else next
-/// 8+F    ret  EPERM
-/// 9+F    ld   arg1 (low word)
-/// 10+F   and  0xff
-/// 11+F+i jeq  type[i]           -> 12+F+T (seccompiler program), else next
-/// 11+F+T ret  EPERM
-/// 12+F+T <seccompiler program>
+/// 6      jeq  SYS_seccomp       -> 7, else 10
+/// 7      ld   arg1 (low word)
+/// 8      jset NEW_LISTENER      -> 9, else 10
+/// 9      ret  EPERM
+/// 10     ld   nr
+/// 11     jeq  SYS_socket        -> 12, else past the gate (seccompiler program)
+/// 12     ld   arg0 (low word)
+/// 13+i   jeq  family[i]         -> 14+F (type check), else next
+/// 13+F   ret  REFUSE
+/// 14+F   ld   arg1 (low word)
+/// 15+F   and  0xff
+/// 16+F+i jeq  type[i]           -> 17+F+T (seccompiler program), else next
+/// 16+F+T ret  REFUSE
+/// 17+F+T <seccompiler program>
 /// ```
+///
+/// `REFUSE` is `EPERM` or `USER_NOTIF`, as `gate` says; the x32 answer at 5
+/// and the listener answer at 9 are `EPERM` either way.
+///
+/// Lines 6 to 10 keep the agent from installing a filter with a listener of
+/// its own (`SECCOMP_FILTER_FLAG_NEW_LISTENER`, HUM-138). The kernel allows
+/// one listener per filter chain; while the shim's parent holds the one of
+/// the agent's filter, a second is refused anyway (`EBUSY`), but a listener
+/// that closed would lift that, and the agent's own, newer filter could then
+/// answer its refused sockets with "go ahead". `prctl(PR_SET_SECCOMP)` cannot
+/// set flags, so this is the only way to ask for a listener, and the rule
+/// stands in both gates, whatever becomes of the parent.
 ///
 /// Every jump is relative, so the seccompiler program that follows needs no
 /// relocation; it starts with its own architecture check and reloads `nr`.
-fn prelude(families: &[Family], types: &[SockType]) -> Result<Vec<sock_filter>, Error> {
+fn prelude(families: &[Family], types: &[SockType], gate: Gate) -> Result<Vec<sock_filter>, Error> {
     let n_f = u8::try_from(families.len()).map_err(|_| Error::TooManyEntries)?;
     let n_t = u8::try_from(types.len()).map_err(|_| Error::TooManyEntries)?;
     let past_gate = n_f
@@ -755,13 +896,23 @@ fn prelude(families: &[Family], types: &[SockType]) -> Result<Vec<sock_filter>, 
         .and_then(|n| n.checked_add(5))
         .ok_or(Error::TooManyEntries)?;
 
-    let mut out = Vec::with_capacity(12 + families.len() + types.len());
+    let mut out = Vec::with_capacity(PRELUDE_FIXED + families.len() + types.len());
     out.push(stmt(BPF_LD_W_ABS, DATA_ARCH));
     out.push(jump(BPF_JMP_JEQ_K, AUDIT_ARCH, 1, 0));
     out.push(stmt(BPF_RET_K, RET_KILL_PROCESS));
     out.push(stmt(BPF_LD_W_ABS, DATA_NR));
     out.push(jump(BPF_JMP_JSET_K, X32_SYSCALL_BIT, 0, 1));
     out.push(stmt(BPF_RET_K, RET_EPERM));
+    out.push(jump(
+        BPF_JMP_JEQ_K,
+        u32::try_from(libc::SYS_seccomp).map_err(|_| Error::TooManyEntries)?,
+        0,
+        3,
+    ));
+    out.push(stmt(BPF_LD_W_ABS, DATA_ARG1_LOW));
+    out.push(jump(BPF_JMP_JSET_K, NEW_LISTENER, 0, 1));
+    out.push(stmt(BPF_RET_K, RET_EPERM));
+    out.push(stmt(BPF_LD_W_ABS, DATA_NR));
     out.push(jump(
         BPF_JMP_JEQ_K,
         u32::try_from(libc::SYS_socket).map_err(|_| Error::TooManyEntries)?,
@@ -772,13 +923,13 @@ fn prelude(families: &[Family], types: &[SockType]) -> Result<Vec<sock_filter>, 
     for (i, family) in (0u8..).zip(families) {
         out.push(jump(BPF_JMP_JEQ_K, family.number, n_f - i, 0));
     }
-    out.push(stmt(BPF_RET_K, RET_EPERM));
+    out.push(stmt(BPF_RET_K, gate.refuse()));
     out.push(stmt(BPF_LD_W_ABS, DATA_ARG1_LOW));
     out.push(stmt(BPF_ALU_AND_K, SOCK_TYPE_MASK));
     for (i, sock_type) in (0u8..).zip(types) {
         out.push(jump(BPF_JMP_JEQ_K, sock_type.number, n_t - i, 0));
     }
-    out.push(stmt(BPF_RET_K, RET_EPERM));
+    out.push(stmt(BPF_RET_K, gate.refuse()));
     Ok(out)
 }
 
@@ -843,12 +994,12 @@ mod tests {
     }
 
     /// The table `docs/SECURITY.md` cites, row by row, for the default
-    /// profile. A change here is a change to guarantee three: update the
-    /// document in the same commit.
+    /// profile and the agent's gate. A change here is a change to guarantee
+    /// three: update the document in the same commit.
     #[test]
     fn rule_table_lists_every_rule() {
         let rows: Vec<String> = default_policy()
-            .rules()
+            .rules(Gate::Reported)
             .iter()
             .map(ToString::to_string)
             .collect();
@@ -859,8 +1010,9 @@ mod tests {
         let expected = [
             format!("every syscall      | arch is not {arch:<34} | kill process | prelude"),
             "every syscall      | nr has the x32 bit 0x40000000                  | EPERM        | prelude".to_owned(),
-            "socket             | family (arg0) not in {AF_INET, AF_INET6}       | EPERM        | prelude".to_owned(),
-            "socket             | type (arg1 & 0xff) not in {SOCK_STREAM}        | EPERM        | prelude".to_owned(),
+            "seccomp            | flags (arg1) have NEW_LISTENER 0x8             | EPERM        | prelude".to_owned(),
+            "socket             | family (arg0) not in {AF_INET, AF_INET6}       | notify:EPERM | prelude".to_owned(),
+            "socket             | type (arg1 & 0xff) not in {SOCK_STREAM}        | notify:EPERM | prelude".to_owned(),
             "ptrace             | always                                         | EPERM        | seccompiler".to_owned(),
             "io_uring_setup     | always                                         | EPERM        | seccompiler".to_owned(),
             "io_uring_enter     | always                                         | EPERM        | seccompiler".to_owned(),
@@ -880,10 +1032,26 @@ mod tests {
             "userfaultfd        | always                                         | EPERM        | seccompiler".to_owned(),
         ];
         assert_eq!(rows, expected);
+        // The bridge's gate answers the same two rows with a plain EPERM.
+        let silent: Vec<String> = default_policy()
+            .rules(Gate::Silent)
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(
+            silent[4],
+            expected[4].replace("notify:EPERM", "EPERM       ")
+        );
+        assert_eq!(
+            silent[3],
+            expected[3].replace("notify:EPERM", "EPERM       ")
+        );
+        assert_eq!(silent[5..], expected[5..]);
+        assert_eq!(silent[..3], expected[..3]);
         // socketpair is deliberately absent: no rule, hence allowed.
         assert!(
             !default_policy()
-                .rules()
+                .rules(Gate::Reported)
                 .iter()
                 .any(|rule| matches!(&rule.subject, Subject::Named(s) if s.name == "socketpair"))
         );
@@ -1067,7 +1235,7 @@ mod tests {
 
     #[test]
     fn program_decides_socket_by_family_and_masked_type() {
-        let program = default_policy().program().unwrap();
+        let program = default_policy().program(Gate::Silent).unwrap();
         let socket = |family: u64, sock_type: u64| {
             evaluate(
                 &program,
@@ -1097,7 +1265,7 @@ mod tests {
 
     #[test]
     fn program_refuses_x32_numbers_and_kills_foreign_architectures() {
-        let program = default_policy().program().unwrap();
+        let program = default_policy().program(Gate::Silent).unwrap();
         let args = [AF_INET, SOCK_STREAM, 0, 0, 0, 0];
         assert_eq!(
             evaluate(&program, NR_SOCKET | X32_SYSCALL_BIT, AUDIT_ARCH, args),
@@ -1111,10 +1279,74 @@ mod tests {
         assert_eq!(evaluate(&program, NR_READ, 0, args), KILL);
     }
 
+    /// The agent's gate parks exactly the two refusals of the socket gate and
+    /// leaves every other answer to the kernel (HUM-138).
+    #[test]
+    fn reported_gate_parks_refused_sockets_and_nothing_else() {
+        let program = default_policy().program(Gate::Reported).unwrap();
+        let socket = |family: u64, sock_type: u64| {
+            evaluate(
+                &program,
+                NR_SOCKET,
+                AUDIT_ARCH,
+                [family, sock_type, 0, 0, 0, 0],
+            )
+        };
+        assert_eq!(socket(AF_UNIX, SOCK_STREAM), RET_USER_NOTIF);
+        assert_eq!(socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC), RET_USER_NOTIF);
+        assert_eq!(socket(AF_INET6, SOCK_STREAM | SOCK_NONBLOCK), ALLOW);
+        let unix = [AF_UNIX, SOCK_STREAM, 0, 0, 0, 0];
+        assert_eq!(
+            evaluate(&program, NR_SOCKET | X32_SYSCALL_BIT, AUDIT_ARCH, unix),
+            RET_EPERM
+        );
+        assert_eq!(
+            evaluate(&program, libc::SYS_ptrace as u32, AUDIT_ARCH, [0; 6]),
+            RET_EPERM
+        );
+        assert_eq!(evaluate(&program, NR_SOCKET, FOREIGN_ARCH, unix), KILL);
+        // Only the two refusal slots differ from the bridge's gate.
+        let silent = default_policy().program(Gate::Silent).unwrap();
+        let differing: Vec<usize> = (0..program.len())
+            .filter(|&i| program[i] != silent[i])
+            .collect();
+        assert_eq!(differing, [15, 19], "{differing:?}");
+    }
+
+    /// Neither gate lets the agent ask for a listener of its own (HUM-138):
+    /// with one, a newer filter of the agent could answer its refused
+    /// sockets with "go ahead" once the parent's listener is gone.
+    #[test]
+    fn no_gate_hands_out_a_listener() {
+        const NR_SECCOMP: u32 = libc::SYS_seccomp as u32;
+        const SET_MODE_FILTER: u64 = libc::SECCOMP_SET_MODE_FILTER as u64;
+        let listener = libc::SECCOMP_FILTER_FLAG_NEW_LISTENER;
+        let tsync = libc::SECCOMP_FILTER_FLAG_TSYNC;
+        for gate in [Gate::Silent, Gate::Reported] {
+            let program = default_policy().program(gate).unwrap();
+            let seccomp = |flags: u64| {
+                evaluate(
+                    &program,
+                    NR_SECCOMP,
+                    AUDIT_ARCH,
+                    [SET_MODE_FILTER, flags, 0, 0, 0, 0],
+                )
+            };
+            assert_eq!(seccomp(listener), RET_EPERM, "{gate:?}");
+            assert_eq!(seccomp(listener | tsync), RET_EPERM, "{gate:?}");
+            // The high word does not hide the flag: the kernel reads an
+            // `unsigned int`.
+            assert_eq!(seccomp(listener | (1 << 32)), RET_EPERM, "{gate:?}");
+            // A filter without a listener stays the agent's own business.
+            assert_eq!(seccomp(tsync), ALLOW, "{gate:?}");
+            assert_eq!(seccomp(0), ALLOW, "{gate:?}");
+        }
+    }
+
     #[test]
     fn program_denies_the_floor_and_allows_the_rest() {
         let policy = default_policy();
-        let program = policy.program().unwrap();
+        let program = policy.program(Gate::Silent).unwrap();
         let args = [0; 6];
         for syscall in policy.deny {
             let nr = u32::try_from(syscall.nr).unwrap();
@@ -1161,7 +1393,7 @@ mod tests {
             Some("mount"),
         )
         .unwrap();
-        let program = policy.program().unwrap();
+        let program = policy.program(Gate::Silent).unwrap();
         let socket = |family: u64, sock_type: u64| {
             evaluate(
                 &program,
@@ -1188,7 +1420,7 @@ mod tests {
     #[test]
     fn denying_socket_by_name_beats_the_gate() {
         let policy = Policy::from_env(None, None, Some("socket")).unwrap();
-        let program = policy.program().unwrap();
+        let program = policy.program(Gate::Silent).unwrap();
         assert_eq!(
             evaluate(
                 &program,
@@ -1203,18 +1435,22 @@ mod tests {
     #[test]
     fn prelude_has_the_documented_layout() {
         let policy = default_policy();
-        let prelude = prelude(policy.families(), policy.types()).unwrap();
-        // 12 fixed instructions plus one per family and type.
-        assert_eq!(prelude.len(), 12 + 2 + 1);
+        let prelude = prelude(policy.families(), policy.types(), Gate::Silent).unwrap();
+        // The fixed instructions plus one per family and type.
+        assert_eq!(prelude.len(), PRELUDE_FIXED + 2 + 1);
         assert_eq!(prelude[0], stmt(BPF_LD_W_ABS, DATA_ARCH));
         assert_eq!(prelude[2].k, RET_KILL_PROCESS);
         assert_eq!(prelude[4].code, BPF_JMP_JSET_K);
         assert_eq!(prelude[4].k, X32_SYSCALL_BIT);
-        assert_eq!(prelude[6].k, NR_SOCKET);
-        assert_eq!(usize::from(prelude[6].jf), prelude.len() - 7);
-        assert_eq!(prelude[10 + 2].k, SOCK_TYPE_MASK);
+        assert_eq!(prelude[6].k, libc::SYS_seccomp as u32);
+        assert_eq!(prelude[8].code, BPF_JMP_JSET_K);
+        assert_eq!(prelude[8].k, NEW_LISTENER);
+        assert_eq!(prelude[9].k, RET_EPERM);
+        assert_eq!(prelude[11].k, NR_SOCKET);
+        assert_eq!(usize::from(prelude[11].jf), prelude.len() - 12);
+        assert_eq!(prelude[15 + 2].k, SOCK_TYPE_MASK);
         assert_eq!(prelude.last().unwrap().k, RET_EPERM);
-        let whole = policy.program().unwrap();
+        let whole = policy.program(Gate::Silent).unwrap();
         assert_eq!(&whole[..prelude.len()], &prelude[..]);
         assert!(whole.len() < 4096);
     }
@@ -1262,7 +1498,75 @@ mod tests {
     }
 
     fn default_program() -> BpfProgram {
-        default_policy().program().unwrap()
+        default_policy().program(Gate::Silent).unwrap()
+    }
+
+    /// `seccomp(SET_MODE_FILTER, NEW_LISTENER, prog)` with a one-line
+    /// "allow" program: 0 when the kernel handed out a listener (closed at
+    /// once), otherwise the errno.
+    fn try_own_listener() -> i32 {
+        let allow = [sock_filter {
+            code: BPF_RET_K,
+            jt: 0,
+            jf: 0,
+            k: libc::SECCOMP_RET_ALLOW,
+        }];
+        let fprog = libc::sock_fprog {
+            len: 1,
+            filter: allow.as_ptr().cast_mut().cast::<libc::sock_filter>(),
+        };
+        // SAFETY: `fprog` points at `allow`, which outlives the call.
+        let rc = unsafe {
+            libc::syscall(
+                libc::SYS_seccomp,
+                libc::c_ulong::from(libc::SECCOMP_SET_MODE_FILTER),
+                libc::SECCOMP_FILTER_FLAG_NEW_LISTENER,
+                &raw const fprog,
+            )
+        };
+        if rc < 0 {
+            return errno();
+        }
+        // SAFETY: a listener the kernel just handed out.
+        unsafe {
+            libc::close(c_int_from(rc));
+        }
+        0
+    }
+
+    /// The attack of the review on HUM-138, measured: the agent's filter
+    /// carries a listener, the listener is gone (the parent died, or gave
+    /// up), and the agent asks for a listener of its own. Without the
+    /// prelude's rule the kernel would hand one out, because only a live
+    /// listener makes it refuse (`EBUSY`).
+    #[test]
+    fn a_dropped_listener_does_not_free_the_agent_to_take_one() {
+        // Built before the fork, so the child allocates nothing: the harness
+        // is multi-threaded. Not `in_filtered_child`, which would install the
+        // filter without a listener.
+        let program = default_policy().program(Gate::Reported).unwrap();
+        // SAFETY: the child calls prctl, seccomp, close, syscall and _exit.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0);
+        if pid == 0 {
+            let code = match apply_reporting(&program) {
+                Ok(listener) => {
+                    drop(listener);
+                    try_own_listener() & 0xff
+                }
+                Err(_) => 251,
+            };
+            // SAFETY: _exit without the harness's destructors.
+            unsafe { libc::_exit(code) }
+        }
+        let mut status = 0;
+        // SAFETY: our own child, valid pointer.
+        assert_eq!(unsafe { libc::waitpid(pid, &raw mut status, 0) }, pid);
+        assert!(libc::WIFEXITED(status));
+        assert_eq!(libc::WEXITSTATUS(status), EPERM);
+        // Under the bridge's gate as well.
+        let silent = default_policy().program(Gate::Silent).unwrap();
+        assert_eq!(in_filtered_child(&silent, try_own_listener), EPERM);
     }
 
     #[test]
@@ -1408,7 +1712,7 @@ mod tests {
         fn netlink() -> i32 {
             code(probe_socket(AF_NETLINK, SOCK_RAW))
         }
-        let program = default_policy().for_bridge().program().unwrap();
+        let program = default_policy().for_bridge().program(Gate::Silent).unwrap();
         assert_eq!(in_filtered_child(&program, unix_stream), 0);
         assert_eq!(in_filtered_child(&program, unix_dgram), EPERM);
         assert_eq!(in_filtered_child(&program, netlink), EPERM);

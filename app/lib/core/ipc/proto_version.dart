@@ -44,9 +44,12 @@ abstract final class ProtoVersion {
   /// reported" (HUM-156). Raised to 13 with the trail of open findings:
   /// "Send anyway" sends `DecideRequest.acknowledged_findings`, and the
   /// history detail reads `FlowSummary.unresolved_findings` to say how many
-  /// findings left unresolved (HUM-160). Raising the number without a reader
-  /// would claim otherwise.
-  static const int minor = 13;
+  /// findings left unresolved (HUM-160). Raised to 14 with the refused
+  /// attempts: `SandboxEvent.refusals` and `SandboxEvent.Status.refusals`
+  /// carry what the filter refused the agent, counted by family and type,
+  /// and the isolation tab of the sandbox screen shows them (HUM-138).
+  /// Raising the number without a reader would claim otherwise.
+  static const int minor = 14;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

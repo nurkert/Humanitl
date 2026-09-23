@@ -6,9 +6,11 @@
 //! the bridge to the proxy needs `socket(2)` and lives in the parent; the
 //! agent is a child that carries the filter before `exec` and can never shed
 //! it. Deliberately dependency-free (`libc` and `seccompiler` only, no tokio,
-//! no workspace crate) so the security-critical steps stay auditable in four
+//! no workspace crate) so the security-critical steps stay auditable in six
 //! short files: this one (process model), `seccomp.rs` (the filter as data),
-//! `bridge.rs` (the bytes), `report.rs` (the evidence).
+//! `bridge.rs` (the bytes), `report.rs` (the evidence), `refusals.rs` (what
+//! the filter refused, counted) and `channel.rs` (how its listener reaches
+//! the parent).
 //!
 //! # Launcher <-> shim contract (binding for HUM-011, HUM-012, HUM-013)
 //!
@@ -45,7 +47,9 @@
 //!   stderr: an unreadable policy or bridge list, a port that is taken, a
 //!   listener that does not accept and the parent's own filter all end in
 //!   `CHECK seccomp_applied fail ...` or `CHECK bridge_listening fail ...`
-//!   before the shim exits 126.
+//!   before the shim exits 126. While the agent runs, the parent writes
+//!   `REFUSALS on|off <why>` and `REFUSED socket ...` lines on the same
+//!   descriptor (HUM-138, `refusals.rs`).
 //!
 //! **Behaviour, in order.**
 //!
@@ -60,13 +64,18 @@
 //! 3. Before the fork the shim closes every descriptor it inherited except
 //!    0, 1, 2, the report, the exec gate and the bridge listeners, so
 //!    neither process holds what a careless launcher leaked without
-//!    `CLOEXEC`. Fork. The child dies with the parent (`PR_SET_PDEATHSIG`), closes
-//!    every inherited descriptor but 0, 1, 2 and the report, sets
-//!    `PR_SET_NO_NEW_PRIVS`, installs the filter with `TSYNC`, proves it
-//!    (`seccomp_applied`, `families`), and `execvp`s the command. The parent
-//!    installs its own, slightly wider filter (the agent's plus `AF_UNIX`),
-//!    forwards `SIGTERM`, `SIGINT` and `SIGHUP` to the child, serves the
-//!    bridges and waits.
+//!    `CLOEXEC`; then it makes the refusal channel (HUM-138). Fork. The
+//!    child dies with the parent (`PR_SET_PDEATHSIG`), closes every inherited
+//!    descriptor but 0, 1, 2, the report, the gate and its end of the refusal
+//!    channel, sets `PR_SET_NO_NEW_PRIVS`, installs the filter with a
+//!    listener and hands the listener to the parent (without a listener the
+//!    same filter with `TSYNC`), proves it (`seccomp_applied`, `families`),
+//!    tells the parent the agent is next, waits at the gate, and `execvp`s
+//!    the command. The parent makes itself non-dumpable, installs its own,
+//!    slightly wider filter (the agent's plus `AF_UNIX`), counts and answers
+//!    the refused sockets of the agent (`refusals.rs`), serves the bridges,
+//!    opens the gate, forwards `SIGTERM`, `SIGINT` and `SIGHUP` to the
+//!    child, waits, and writes the last tally.
 //! 4. Exit status: 125 usage, 126 seccomp or bridge setup failed (the message
 //!    names which), 127 `exec` failed (and the child writes `EXEC fail
 //!    errno=<n>` to the report first, see `report.rs`), otherwise the
@@ -84,6 +93,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod bridge;
+mod channel;
+mod refusals;
 mod report;
 mod seccomp;
 
@@ -92,17 +103,20 @@ use std::ffi::{CString, OsString, c_char, c_int, c_uint};
 use std::fmt;
 use std::fs;
 use std::io::{self, Write};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::ptr;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::thread;
 
 use seccompiler::BpfProgram;
 
 use crate::bridge::{Bound, Bridge};
+use crate::channel::Received;
+use crate::refusals::Tally;
 use crate::report::{Check, Report};
-use crate::seccomp::Policy;
+use crate::seccomp::{Gate, Policy};
 
 /// Exit status for a command line the shim does not understand.
 const EXIT_USAGE: i32 = 125;
@@ -178,7 +192,7 @@ fn print_rules() -> i32 {
     match policy_from_env() {
         Ok(policy) => {
             let mut out = io::stdout().lock();
-            for rule in policy.rules() {
+            for rule in policy.rules(Gate::Reported) {
                 let _ = writeln!(out, "{rule}");
             }
             0
@@ -193,7 +207,11 @@ fn print_rules() -> i32 {
 /// Everything that exists before the fork.
 struct Prepared {
     policy: Policy,
+    /// The agent's filter, refused sockets reported ([`Gate::Reported`]).
     agent_program: BpfProgram,
+    /// The same filter answering `EPERM` itself, for a kernel that refuses
+    /// the agent a listener.
+    agent_fallback: BpfProgram,
     bridge_program: BpfProgram,
     bound: Vec<Bound>,
 }
@@ -204,8 +222,14 @@ struct Prepared {
 /// report is already open when this starts.
 fn prepare(cli: &Cli, report: &Report) -> Result<Prepared, SetupError> {
     let policy = policy_from_env()?;
-    let agent_program = policy.program().map_err(SetupError::seccomp)?;
-    let bridge_program = policy.for_bridge().program().map_err(SetupError::seccomp)?;
+    let agent_program = policy
+        .program(Gate::Reported)
+        .map_err(SetupError::seccomp)?;
+    let agent_fallback = policy.program(Gate::Silent).map_err(SetupError::seccomp)?;
+    let bridge_program = policy
+        .for_bridge()
+        .program(Gate::Silent)
+        .map_err(SetupError::seccomp)?;
 
     let bridges = match env_utf8("HUMANITL_BRIDGES").map_err(SetupError::bridge)? {
         Some(json) => bridge::parse(&json).map_err(SetupError::bridge)?,
@@ -248,6 +272,7 @@ fn prepare(cli: &Cli, report: &Report) -> Result<Prepared, SetupError> {
     Ok(Prepared {
         policy,
         agent_program,
+        agent_fallback,
         bridge_program,
         bound,
     })
@@ -307,10 +332,11 @@ fn launch(prepared: Prepared, report: Report, command: &[OsString]) -> i32 {
     // SAFETY: getpid has no preconditions.
     let parent_pid = unsafe { libc::getpid() };
     // The gate the child waits at before `exec` (HUM-137): it opens when the
-    // parent has closed its write end, and the parent closes it only after
-    // its copy of the report is gone. Until then the agent does not exist,
-    // so no process it could reach through `/proc/<pid>/fd` still holds a
-    // report writer by the time it runs, and it cannot forge `EXEC fail`.
+    // parent has closed its write end. The parent closes it once nothing it
+    // holds is reachable for the agent any more: its own filter is on and it
+    // is no longer dumpable (HUM-138), so neither the report writer nor the
+    // listener of the refusals can be opened through `/proc/<pid>/fd` or
+    // `pidfd_getfd(2)`, and the agent cannot forge `EXEC fail`.
     let Some((gate_read, gate_write)) = gate() else {
         let err = io::Error::last_os_error();
         report.check(Check::SeccompApplied, false, &format!("gate-failed:{err}"));
@@ -333,6 +359,20 @@ fn launch(prepared: Prepared, report: Report, command: &[OsString]) -> i32 {
         gate_write.as_raw_fd(),
     ]);
     close_inherited(&keep);
+    // The pair over which the child hands its listener to the parent
+    // (HUM-138), made after the close above and right before the fork, so
+    // that close cannot take it. Without it the agent still gets its filter,
+    // only one that answers `EPERM` itself and tells nobody.
+    let pair = match channel::channel() {
+        Ok(pair) => Some(pair),
+        Err(err) => {
+            say(&format!(
+                "humanitl-shim: warning: refused sockets will not be reported: {err}\n"
+            ));
+            None
+        }
+    };
+    let (parent_end, child_end) = pair.map_or((None, None), |(p, c)| (Some(p), Some(c)));
     // SAFETY: the process is single-threaded here (the bridge threads start
     // after the fork), so the child inherits a consistent image.
     let pid = unsafe { libc::fork() };
@@ -347,9 +387,14 @@ fn launch(prepared: Prepared, report: Report, command: &[OsString]) -> i32 {
         // to close it, the child would hold a write end of its own gate and
         // wait there for ever, and the parent with it in `reap`.
         drop(gate_write);
+        drop(parent_end);
         child(
             parent_pid,
-            &prepared.agent_program,
+            &AgentFilter {
+                reported: &prepared.agent_program,
+                fallback: &prepared.agent_fallback,
+                control: child_end,
+            },
             &prepared.policy,
             &report,
             gate_read,
@@ -357,13 +402,90 @@ fn launch(prepared: Prepared, report: Report, command: &[OsString]) -> i32 {
         )
     }
     drop(gate_read);
+    drop(child_end);
+    let tally = Tally::new(
+        prepared
+            .policy
+            .families()
+            .iter()
+            .map(|family| family.number)
+            .collect(),
+    );
     parent(
         pid,
         &prepared.bridge_program,
         prepared.bound,
         report,
         gate_write,
+        &Refusals {
+            control: parent_end,
+            tally: Arc::new(tally),
+        },
     )
+}
+
+/// The agent's two filters and the child's end of the channel to the parent.
+struct AgentFilter<'a> {
+    reported: &'a BpfProgram,
+    fallback: &'a BpfProgram,
+    control: Option<OwnedFd>,
+}
+
+impl AgentFilter<'_> {
+    /// Installs the reported gate and hands its listener to the parent; falls
+    /// back to the silent gate when the kernel refuses a listener, and says
+    /// so over the channel (HUM-138).
+    ///
+    /// The fallback is not a weaker filter: both answer `EPERM` to the same
+    /// calls, and both refuse the agent a listener of its own. What it loses
+    /// is the report, and the parent turns the reason into a `REFUSALS off`
+    /// line the host shows.
+    fn install(&self) -> Result<(), seccomp::Error> {
+        let Some(control) = self.control.as_ref().map(AsRawFd::as_raw_fd) else {
+            return seccomp::apply(self.fallback);
+        };
+        let listener = refusals::kernel_fits()
+            .map_err(|errno| seccomp::Error::Listener(io::Error::from_raw_os_error(errno)))
+            .and_then(|()| seccomp::apply_reporting(self.reported));
+        match listener {
+            Ok(listener) => {
+                // If the hand-over fails, the listener dies with this scope
+                // and the kernel answers the parked calls with `ENOSYS`; the
+                // `families` probe then refuses to start the agent.
+                channel::send_listener(control, listener.as_raw_fd());
+                Ok(())
+            }
+            Err(err) => {
+                let errno = match &err {
+                    seccomp::Error::Listener(io) | seccomp::Error::NoNewPrivs(io) => {
+                        io.raw_os_error().unwrap_or(0)
+                    }
+                    _ => 0,
+                };
+                seccomp::apply(self.fallback)?;
+                channel::send_unavailable(control, errno);
+                Ok(())
+            }
+        }
+    }
+
+    /// Tells the parent that the probes are over; the next refusal is the
+    /// agent's.
+    fn before_exec(&self) {
+        if let Some(control) = self.control.as_ref() {
+            channel::send_exec_marker(control.as_raw_fd());
+        }
+    }
+
+    fn control_fd(&self) -> Option<RawFd> {
+        self.control.as_ref().map(AsRawFd::as_raw_fd)
+    }
+}
+
+/// The parent's half of the report on refused sockets.
+struct Refusals {
+    control: Option<OwnedFd>,
+    tally: Arc<Tally>,
 }
 
 /// A pipe with `CLOEXEC` on both ends, as `(read, write)`.
@@ -398,7 +520,7 @@ fn wait_at_gate(gate: &OwnedFd) {
 /// filter, prove it, become the agent. Never returns.
 fn child(
     parent_pid: libc::pid_t,
-    program: &BpfProgram,
+    filter: &AgentFilter<'_>,
     policy: &Policy,
     report: &Report,
     gate: OwnedFd,
@@ -415,10 +537,14 @@ fn child(
         exit_now(EXIT_SETUP);
     }
 
-    close_inherited(&[report.fd().unwrap_or(-1), gate.as_raw_fd()]);
+    let keep: Vec<c_int> = [report.fd(), Some(gate.as_raw_fd()), filter.control_fd()]
+        .into_iter()
+        .flatten()
+        .collect();
+    close_inherited(&keep);
     reset_signal_mask();
 
-    if let Err(err) = seccomp::apply(program) {
+    if let Err(err) = filter.install() {
         report.check(Check::SeccompApplied, false, &err.to_string());
         say(&format!("humanitl-shim: seccomp setup failed: {err}\n"));
         exit_now(EXIT_SETUP);
@@ -459,6 +585,10 @@ fn child(
             env::remove_var(var);
         }
     }
+    // From here on every refused socket is the agent's. The channel itself
+    // carries `CLOEXEC` and closes with the `exec`; the agent never holds it,
+    // and never the listener, which went to the parent in `install`.
+    filter.before_exec();
     // The agent starts with the defaults. Last, and not a line earlier: the
     // report writes above must survive a launcher that stopped reading, and
     // they do that because Rust ignores SIGPIPE at start-up. Resetting the
@@ -722,16 +852,30 @@ fn parent(
     bound: Vec<Bound>,
     report: Report,
     gate: OwnedFd,
+    refusals: &Refusals,
 ) -> i32 {
+    // The parent holds the listener and the report descriptor while the agent
+    // runs. Neither may be reachable from the agent through
+    // `/proc/<pid>/fd` or `pidfd_getfd(2)`: with the listener it could answer
+    // its own refused calls, with the report it could write lines of its own.
+    // A process that is not dumpable passes `ptrace_may_access` for nobody
+    // without `CAP_SYS_PTRACE`, which the sandbox has dropped. After the fork,
+    // so the child and its `exec` keep the default, and first of all, well
+    // before `drop(gate)` (HUM-138; the plan of HUM-203 puts it here too).
+    let report = Arc::new(report);
+    if let Err(err) = set_undumpable() {
+        return refuse_to_open(child, report, &format!("set:{err}"));
+    }
     CHILD.store(child, Ordering::SeqCst);
     forward_signals();
 
-    // The parent keeps its copy of the report descriptor until its own filter
-    // is on and the bridges are served: a failure here is the last one that
-    // can still be told, and telling it after the descriptor was closed would
-    // mean losing it. The child waits at the gate until this copy is gone, so
-    // the agent never runs next to a report writer it could open through
-    // `/proc` (HUM-137), and the reader sees EOF once the agent runs.
+    // The parent keeps its copy of the report descriptor while the agent runs:
+    // the refusals of the agent are written on it, the last tally after
+    // `reap` (HUM-138). The child waits at the gate until this process is
+    // non-dumpable (above) and wears its own filter (below). Non-dumpable
+    // replaces HUM-137's "no report writer exists when the agent runs": a
+    // writer still exists, but the agent can no longer reach it through
+    // `/proc/<pid>/fd` or `pidfd_getfd(2)`, so it still cannot forge a line.
     if let Err(err) = seccomp::apply(bridge_program) {
         report.check(
             Check::SeccompApplied,
@@ -745,6 +889,7 @@ fn parent(
         kill_and_reap(child);
         return EXIT_SETUP;
     }
+    watch_refusals(&report, refusals);
     for listener in bound {
         let bridge_name = listener.bridge().name.clone();
         let name = format!("bridge-{bridge_name}");
@@ -765,11 +910,100 @@ fn parent(
             return EXIT_SETUP;
         }
     }
-    drop(report);
-    // Only now may the agent start: this process no longer holds a report
-    // writer it could reach (HUM-137).
+    // Only now may the agent start: this process is non-dumpable, wears its
+    // filter and serves the listener (HUM-137, HUM-138). The gate never opens
+    // on a premise that is not proven: the flag is read back right here.
+    if let Err(err) = check_undumpable() {
+        return refuse_to_open(child, report, &format!("get:{err}"));
+    }
     drop(gate);
-    reap(child)
+    let code = reap(child);
+    // The last word on the refusals: everything that changed since the last
+    // periodic flush, once the agent can make no further attempt.
+    refusals::flush(&report, &refusals.tally);
+    drop(report);
+    code
+}
+
+/// Makes this process non-dumpable (HUM-138).
+fn set_undumpable() -> Result<(), io::Error> {
+    // SAFETY: prctl with PR_SET_DUMPABLE only sets a flag of this process.
+    let rc = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+/// Reads the flag back: the gate opens only when this process is proven
+/// non-dumpable, not merely asked to be (HUM-138).
+fn check_undumpable() -> Result<(), String> {
+    // SAFETY: prctl with PR_GET_DUMPABLE only reads a flag of this process.
+    let rc = unsafe { libc::prctl(libc::PR_GET_DUMPABLE, 0, 0, 0, 0) };
+    match rc {
+        0 => Ok(()),
+        -1 => Err(io::Error::last_os_error().to_string()),
+        other => Err(format!("still-{other}")),
+    }
+}
+
+/// Ends the run before the gate opens, because a premise of the gate does not
+/// hold: the failed check goes on the report, the child dies unstarted.
+fn refuse_to_open(child: libc::pid_t, report: Arc<Report>, why: &str) -> i32 {
+    report.check(Check::SeccompApplied, false, &format!("dumpable:{why}"));
+    say(&format!(
+        "humanitl-shim: setup failed: the parent is not non-dumpable: {why}\n"
+    ));
+    drop(report);
+    kill_and_reap(child);
+    EXIT_SETUP
+}
+
+/// Takes the listener from the child and starts counting (HUM-138).
+///
+/// Writes `REFUSALS on` when the listener is served, `REFUSALS off <why>`
+/// when it is not, and nothing when the child ended before it said either:
+/// then the child has written its own failed check line.
+fn watch_refusals(report: &Arc<Report>, refusals: &Refusals) {
+    let Some(control) = refusals.control.as_ref() else {
+        report.line("REFUSALS off no-channel");
+        return;
+    };
+    let listener = match channel::receive(control) {
+        Received::Listener(listener) => listener,
+        Received::Unavailable(errno) => {
+            report.line(&format!("REFUSALS off errno{errno}"));
+            say(&format!(
+                "humanitl-shim: warning: refused sockets will not be reported: {}\n",
+                io::Error::from_raw_os_error(errno)
+            ));
+            return;
+        }
+        Received::Closed => return,
+    };
+    let Ok(control) = control.try_clone() else {
+        report.line("REFUSALS off no-channel");
+        return;
+    };
+    let tally = Arc::clone(&refusals.tally);
+    let served = thread::Builder::new()
+        .name("refusals".to_owned())
+        .spawn(move || refusals::serve(&listener, &control, &tally));
+    if let Err(err) = served {
+        // The listener went down with the closure; the kernel now answers the
+        // parked calls with `ENOSYS`, and the child's `families` probe stops
+        // the agent from starting. Nor could the agent claim a listener of
+        // its own: both gates refuse the flag (`seccomp.rs`).
+        report.line(&format!("REFUSALS off thread:{err}"));
+        return;
+    }
+    report.line("REFUSALS on");
+    let flusher_report = Arc::clone(report);
+    let tally = Arc::clone(&refusals.tally);
+    let _ = thread::Builder::new()
+        .name("refusals-flush".to_owned())
+        .spawn(move || refusals::flush_every(&flusher_report, &tally));
 }
 
 extern "C" fn relay(signal: c_int) {

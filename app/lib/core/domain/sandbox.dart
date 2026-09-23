@@ -248,6 +248,10 @@ abstract class SandboxStatus with _$SandboxStatus {
     @Default(<Diagnostic>[]) List<Diagnostic> diagnostics,
     @Default(<IsolationCheckResult>[]) List<IsolationCheckResult> checks,
     SandboxId? checksSandboxId,
+
+    /// What the filter refused the agent, counted (HUM-138); null while no
+    /// sandbox runs or the daemon did not say.
+    SandboxRefusals? refusals,
   }) = _SandboxStatus;
 
   const SandboxStatus._();
@@ -458,4 +462,76 @@ sealed class SandboxUpdate with _$SandboxUpdate {
   /// One measured guarantee.
   const factory SandboxUpdate.check(IsolationCheckResult result) =
       SandboxUpdateCheck;
+
+  /// The whole tally of refused attempts; replaces the one before (HUM-138).
+  const factory SandboxUpdate.refusals(SandboxRefusals refusals) =
+      SandboxUpdateRefusals;
+}
+
+/// Whether the sandbox reports refused attempts, mirror of the proto enum
+/// `RefusalReporting`. The Dart name carries `Sandbox` because the intercept
+/// feature already has a `RefusalReason` of its own.
+enum SandboxRefusalReporting {
+  /// The daemon has not said yet.
+  unknown,
+
+  /// Refused attempts are counted and reported.
+  on,
+
+  /// Refused as before, but nobody counts them (`SANDBOX_019`).
+  off,
+}
+
+/// Which half of the socket gate refused, mirror of the proto enum
+/// `RefusalReason`.
+enum SandboxRefusalReason {
+  /// The family is not allowed.
+  family,
+
+  /// The family is allowed, the type is not.
+  type,
+
+  /// Every pair beyond the limit of the sandbox, counted together.
+  overflow,
+
+  /// A reason this build does not know.
+  unknown,
+}
+
+/// The attempts of one family and type, mirror of `SandboxEvent.Refusal`.
+@freezed
+abstract class SandboxRefusal with _$SandboxRefusal {
+  /// Creates one entry.
+  const factory SandboxRefusal({
+    @Default('socket') String syscall,
+    required String family,
+    required String socketType,
+    required SandboxRefusalReason reason,
+    required int count,
+    DateTime? firstAt,
+    DateTime? lastAt,
+  }) = _SandboxRefusal;
+}
+
+/// What the filter refused the agent, mirror of `SandboxEvent.Refusals`.
+///
+/// Counted, not logged: one entry per family and type. A `connect(2)` that
+/// fails on the empty routing table is not in here; that is the first
+/// guarantee, a state and not an event (HUM-138).
+@freezed
+abstract class SandboxRefusals with _$SandboxRefusals {
+  /// Creates a tally.
+  const factory SandboxRefusals({
+    @Default(SandboxRefusalReporting.unknown) SandboxRefusalReporting reporting,
+    @Default('') String offReason,
+    @Default(<SandboxRefusal>[]) List<SandboxRefusal> entries,
+  }) = _SandboxRefusals;
+
+  const SandboxRefusals._();
+
+  /// Every attempt together.
+  int get total => entries.fold<int>(
+    0,
+    (int sum, SandboxRefusal entry) => sum + entry.count,
+  );
 }

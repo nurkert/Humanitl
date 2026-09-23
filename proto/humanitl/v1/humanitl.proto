@@ -845,6 +845,26 @@ enum SandboxState {
   SANDBOX_STATE_FAILED = 5;
 }
 
+// Ob die Sandbox verweigerte Versuche meldet (HUM-138).
+enum RefusalReporting {
+  // Der Shim hat noch nichts dazu gesagt.
+  REFUSAL_REPORTING_UNSPECIFIED = 0;
+  REFUSAL_REPORTING_ON = 1;
+  // Verweigert wird weiter, gemeldet nicht (`SANDBOX_019`).
+  REFUSAL_REPORTING_OFF = 2;
+}
+
+// Welche Haelfte der Socket-Sperre verweigert hat (HUM-138).
+enum RefusalReason {
+  REFUSAL_REASON_UNSPECIFIED = 0;
+  // Die Familie steht nicht in `allow_families`.
+  REFUSAL_REASON_FAMILY = 1;
+  // Die Familie ist erlaubt, der Typ nicht.
+  REFUSAL_REASON_TYPE = 2;
+  // Der Sammelposten fuer alle Paare ueber der Grenze des Shims.
+  REFUSAL_REASON_OVERFLOW = 3;
+}
+
 // Die drei Garantien, die nach dem Start geprueft werden.
 enum IsolationCheck {
   ISOLATION_CHECK_UNSPECIFIED = 0;
@@ -1016,6 +1036,44 @@ message SandboxEvent {
     // fragen muss. Dieselbe Nachricht liefert `GetSessionSummary` spaeter
     // wieder; sie steht in der Aufzeichnung.
     SessionSummary summary = 8;
+    // Was der Filter dem Agenten an Sockets verweigert hat, zusammengefasst
+    // (HUM-138). Kommt, wenn sich der Stand aendert, hoechstens alle zwei
+    // Sekunden, und einmal nach dem Ende des Agenten. Jede Nachricht traegt
+    // den ganzen Stand und ersetzt die vorige. Nur auf dem Strom des Starts,
+    // der die Sitzung begonnen hat; jeder andere Client liest den Stand aus
+    // `Status.refusals`, wenn er die Momentaufnahme holt (HUM-202).
+    Refusals refusals = 9;
+  }
+
+  // Die verweigerten `socket(2)`-Aufrufe eines Laufs (HUM-138).
+  //
+  // Gezaehlt, nicht protokolliert: ein Eintrag je Paar aus Familie und Typ,
+  // hoechstens sechzehn plus ein Sammelposten. Nicht darin steht ein
+  // `connect(2)`, das an der leeren Routing-Tabelle scheitert: das ist kein
+  // verweigerter Aufruf, sondern die Netzlosigkeit der Sandbox, und die steht
+  // als Garantie 1 im Isolations-Reiter.
+  message Refusals {
+    RefusalReporting reporting = 1;
+    // Warum nicht gemeldet wird, wie der Shim es nennt (`errno16`); leer,
+    // solange gemeldet wird.
+    string off_reason = 2;
+    repeated Refusal entries = 3;
+  }
+
+  // Die Versuche eines Paares aus Familie und Typ.
+  message Refusal {
+    // Der verweigerte Aufruf; heute immer `socket`.
+    string syscall = 1;
+    // `AF_UNIX`, `AF_NETLINK`, `AF_<n>` fuer eine Familie ohne Namen, `*`
+    // fuer den Sammelposten.
+    string family = 2;
+    // `SOCK_DGRAM`, `SOCK_RAW`, `SOCK_<n>`, `*` fuer den Sammelposten.
+    string socket_type = 3;
+    RefusalReason reason = 4;
+    // Wie oft, seit der Agent laeuft.
+    uint64 count = 5;
+    google.protobuf.Timestamp first_at = 6;
+    google.protobuf.Timestamp last_at = 7;
   }
 
   // Ein Stueck Ausgabe des Agenten.
@@ -1061,6 +1119,11 @@ message SandboxEvent {
     // den ein Stopp unterbrechen koennte; die Oberflaeche fragt dann nicht
     // nach (HUM-040).
     bool agent_running = 13;
+    // Der Stand der verweigerten Versuche der laufenden Sandbox, fuer einen
+    // Client, der den Start nicht selbst begleitet hat (HUM-138): zum
+    // Zeitpunkt der Momentaufnahme, ohne Folgeereignisse. Fehlt, solange
+    // keine Sandbox laeuft.
+    Refusals refusals = 14;
   }
 
   // Eine Zeile aus dem Log der Sandbox.

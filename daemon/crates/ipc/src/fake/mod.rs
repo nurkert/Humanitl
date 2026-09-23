@@ -1080,6 +1080,13 @@ impl FakeDaemon {
                     agent_running: running,
                     work_dir,
                     work_mode,
+                    // Der gespielte Agent versucht nichts am Proxy vorbei; die
+                    // Meldung steht trotzdem, wie in einer echten Sandbox
+                    // (HUM-138).
+                    refusals: running.then(|| v1::sandbox_event::Refusals {
+                        reporting: v1::RefusalReporting::On as i32,
+                        ..Default::default()
+                    }),
                 },
             )),
         }

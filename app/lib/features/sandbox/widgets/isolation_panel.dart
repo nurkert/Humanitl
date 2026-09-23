@@ -31,6 +31,7 @@ import '../../../core/ui/diagnostic_severity.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../sandbox_text.dart';
+import 'refusals_section.dart';
 
 /// Diameter of the dot in front of a guarantee.
 const double isolationDotSize = 8;
@@ -109,6 +110,7 @@ class IsolationPanel extends StatelessWidget {
               expected: !nothingRuns,
             ),
           _ExceptionLine(endpoint: status.llmEndpoint),
+          RefusalsSection(status: status),
           SizedBox(height: tokens.spacing.x3),
           const HHairline(),
           SizedBox(height: tokens.spacing.x2),

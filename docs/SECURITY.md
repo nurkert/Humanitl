@@ -166,7 +166,12 @@ um genau eine Familie weiter, weil die Brücke `AF_UNIX` braucht.
    `CLOEXEC`, damit der Agent ihn nicht erbt.
 2. Er schließt jeden geerbten Deskriptor außer 0, 1, 2, dem Bericht, dem Tor vor dem `exec`
    und den Brücken-Listenern; so hält auch der Elternprozess nichts, was der Agent über
-   `/proc/<ppid>/fd` wieder öffnen könnte. Dann forkt er. Der Elternprozess bleibt als Brücke stehen, wartet auf das Kind und endet mit
+   `/proc/<ppid>/fd` wieder öffnen könnte. Danach legt er das `socketpair` an, über das der
+   Zuhörer des Filters kommt (HUM-138), und forkt. Das Tor geht auf, sobald der Elternprozess
+   nicht mehr „dumpable" ist und seinen Filter trägt: Er behält den Bericht für die
+   verweigerten Versuche des Agenten, und `/proc/<ppid>/fd` wie `pidfd_getfd(2)` bleiben dem
+   Agenten verschlossen. Das ersetzt das Argument von HUM-137, der Elternprozess halte beim
+   Start des Agenten gar keinen Schreiber mehr. Der Elternprozess bleibt als Brücke stehen, wartet auf das Kind und endet mit
    dessen Exit-Code. Sobald das Kind läuft, legt auch er einen Filter an: dieselbe Politik wie
    für den Agenten, nur zusätzlich mit `AF_UNIX`, weil er für jede angenommene Verbindung den
    Proxy-Socket öffnet. Alles Weitere passiert im Kind.
@@ -174,7 +179,16 @@ um genau eine Familie weiter, weil die Brücke `AF_UNIX` braucht.
    Damit kann kein späterer `exec` mehr Rechte gewinnen, etwa über ein setuid-Programm — ohne
    dieses Flag darf ein unprivilegierter Prozess gar keinen seccomp-Filter setzen.
 4. Das Kind lädt den seccomp-Filter (ein kleines Kernel-Programm, das Systemaufrufe prüft, bevor
-   sie ausgeführt werden) mit `TSYNC`, sodass er für alle Threads gilt.
+   sie ausgeführt werden). Seit HUM-138 mit einem Zuhörer (`SECCOMP_FILTER_FLAG_NEW_LISTENER`):
+   Ein verweigerter `socket()`-Aufruf wird dem Elternprozess vorgelegt, der ihn zählt und mit
+   `EPERM` beantwortet (siehe „Was sichtbar wird" unten). Den Zuhörer reicht das Kind über ein
+   `socketpair` an den Elternprozess weiter und schließt ihn selbst, bevor der Agent startet; der
+   Agent hält ihn nie. Ohne `TSYNC`, weil der Kernel `TSYNC` und Zuhörer vor Linux 5.7 nicht
+   zusammen annimmt und das Kind unmittelbar nach dem `fork` genau einen Thread hat; jeder Thread
+   und jeder Prozess, den der Agent später startet, erbt den Filter trotzdem. Verweigert der
+   Kernel den Zuhörer (etwa `EBUSY`, weil Humanitl selbst in einer Sandbox mit eigenem Zuhörer
+   läuft), lädt das Kind denselben Filter ohne Zuhörer, mit `TSYNC`, und der Wirt meldet
+   `SANDBOX_019`: verweigert wird dann genauso, nur zählt es niemand.
 5. Erst dann `execvp` auf den Agenten. Der Agent erbt den Filter und kann ihn nicht ablegen; jeder
    Prozess, den er startet, erbt ihn ebenfalls.
 
@@ -206,8 +220,11 @@ Standard-Härtung `kexec_load`, `kexec_file_load`, `init_module`, `finit_module`
 `delete_module`, `bpf`, `perf_event_open`, `userfaultfd` (dieselben Namen, die das
 Docker-Standardprofil sperrt), sowie **alle**
 x32-Syscalls (Nummern mit gesetztem Bit `0x40000000`, abgefangen von einem handgeschriebenen
-BPF-Präludium vor dem erzeugten Programm). Ein Architektur-Mismatch führt nicht zu `EPERM`,
-sondern zu `KillProcess`.
+BPF-Präludium vor dem erzeugten Programm), und `seccomp()` mit dem Flag
+`SECCOMP_FILTER_FLAG_NEW_LISTENER` (seit HUM-138, ebenfalls im Präludium, in beiden Filtern): Der
+Agent darf eigene Filter laden, aber keinen mit eigenem Zuhörer. `prctl(PR_SET_SECCOMP)` kann
+dieses Flag nicht setzen, also ist das der einzige Weg zu einem Zuhörer. Ein Architektur-Mismatch
+führt nicht zu `EPERM`, sondern zu `KillProcess`.
 
 Die verbindliche Liste steht im Quelltext, nicht hier: `daemon/bin/humanitl-shim/src/seccomp.rs`
 mit einer `#[cfg(test)]`-Tabelle aller Regeln. Dieses Dokument zitiert sie; bei Abweichung gilt
@@ -242,7 +259,58 @@ Präludium fängt ihn ab. Einen Thread starten, der den Filter nicht hat — `TS
 es keinen solchen Thread gibt. Den Elternprozess des Shims kapern, der die Brücke hält — siehe
 die ehrliche Einschränkung in [`THREAT-MODEL.md`](THREAT-MODEL.md) K-04; gewonnen ist damit
 nichts, weil auch er einen Filter trägt und die Brücke genau ein Ziel kennt, den aufzeichnenden
-Proxy.
+Proxy. Den Zuhörer des Filters an sich bringen, um die eigenen Aufrufe mit „weiter" zu
+beantworten (`SECCOMP_USER_NOTIF_FLAG_CONTINUE`) — der Zuhörer liegt nur im Elternprozess, und
+der ist seit HUM-138 nicht „dumpable": `/proc/<pid>/fd`, `/proc/<pid>/mem` und `pidfd_getfd(2)`
+verweigert der Kernel dem Agenten, auch bei gleicher UID und `kernel.yama.ptrace_scope = 0`
+(`the_agent_cannot_reach_the_descriptors_of_the_parent` in
+`daemon/bin/humanitl-shim/tests/shim.rs`). Der Elternprozess selbst antwortet nie etwas anderes
+als `EPERM`, und stirbt er, antwortet der Kernel `ENOSYS`: Die Tür bleibt zu, was auch mit dem
+Zuhörer geschieht. Einen eigenen Zuhörer holen und damit, sobald der des Elternprozesses weg
+ist, die eigenen Aufrufe in einem neueren Filter selbst mit „weiter" beantworten — beide Filter
+verweigern `seccomp()` mit `SECCOMP_FILTER_FLAG_NEW_LISTENER` (siehe oben), und der
+Elternprozess lässt seinen Zuhörer nie los: `serve` kehrt nicht zurück, auch nicht nach Fehlern,
+die der Agent auslöst, etwa indem er Threads in `socket()` parkt und beendet (`ENOENT`); es
+wartet dann nur kurz, bevor es weiterliest (`a_dropped_listener_does_not_free_the_agent_to_take_one`
+in `seccomp.rs`, ESC-1 `seccomp_no_own_listener`).
+
+### Was sichtbar wird und was nicht (HUM-138)
+
+Blockiert zu werden heißt für den Agenten nicht, gesehen zu werden. Was an der einen Tür vorbei
+will — ein `ssh` auf eine nackte Adresse, ein UDP-Paket, `git://`, ein Unix-Socket —, erreicht
+den Proxy nie, wird also kein Fluss, steht nicht in der Warteschlange und nicht in der Historie.
+Damit die Oberfläche trotzdem zeigt, was der Agent **versucht** hat, zählt der Shim, was der
+Filter verweigert:
+
+- **Sichtbar:** jeder verweigerte `socket()`-Aufruf des Agenten und seiner Kindprozesse, gezählt
+  je Paar aus Familie und Typ (`AF_UNIX`/`SOCK_STREAM`, `AF_INET`/`SOCK_DGRAM`, …), mit Zahl,
+  erstem und letztem Zeitpunkt und der Hälfte der Sperre, die verweigert hat (Familie oder Typ).
+  Der Shim schreibt den Stand höchstens alle zwei Sekunden und einmal nach dem Ende des Agenten
+  in seinen Bericht; der Daemon reicht ihn als `SandboxEvent.refusals` weiter, die Oberfläche
+  zeigt ihn im Isolations-Reiter, `humanitl sandbox run` nach dem Lauf. Gezählt wird, nicht
+  protokolliert: höchstens sechzehn Paare plus ein Sammelposten, damit ein Agent in einer
+  Schleife keine Flut erzeugt. Die Antwort kostet einen Kontextwechsel mehr als vorher, gemessen
+  rund 5 bis 30 µs je verweigertem Aufruf (`the_listener_counts_the_agent_and_answers_eperm_quickly`
+  in `daemon/bin/humanitl-shim/src/refusals.rs`); erlaubte Aufrufe berührt der Zuhörer nicht.
+  Eine Flut kostet höchstens einen Kern: Ein Agent in einer Schleife hält den einen Faden des
+  Elternprozesses beschäftigt, der die verweigerten Aufrufe beantwortet. Die Brücke zum Proxy
+  läuft auf eigenen Fäden und wird davon nicht aufgehalten, und der Agent bremst dabei nur sich
+  selbst.
+- **Nicht sichtbar:** ein `connect()` auf eine Adresse draußen. Er ist kein verweigerter Aufruf —
+  das `socket(AF_INET, SOCK_STREAM)` davor ist erlaubt —, sondern scheitert an der leeren
+  Routing-Tabelle mit `ENETUNREACH`. Die Netzlosigkeit steht als Zustand daneben (Satz 1), nicht
+  als Ereignis je Versuch; einen anderen Weg gäbe es nur über `ptrace`, und das bleibt verboten.
+  Ebenso nicht gezählt werden die Aufrufe, die der Kernel ohne Rückfrage verweigert: die Sperrliste
+  (`ptrace`, `io_uring_*`, `bpf`, …) und alle x32-Aufrufe.
+- **Ein Bericht, keine Garantie.** Ein Angreifer (b), der seine Versuche verbergen will, kann vor
+  seinen eigenen Aufrufen einen weiteren Filter laden, der `socket()` selbst mit `EPERM`
+  beantwortet; der Kernel nimmt dann dessen Antwort, und der Zuhörer hört nichts. Verweigert
+  wird trotzdem. Die drei Garantien hängen an keiner Zeile dieses Berichts.
+
+Automatisiert: `esc-1/refusals_reported` (`tests/escape/refusals-proof.sh`) lässt eine Sandbox
+dreimal `socket(AF_UNIX)` und zweimal `socket(AF_INET, SOCK_DGRAM)` versuchen und verlangt genau
+diese Zahlen im Bericht; `refused_sockets_reach_the_stream_counted_before_the_exit` in
+`daemon/crates/ipc/tests/sandbox_start.rs` verlangt sie im `Sandbox`-Strom.
 
 ---
 
@@ -1083,6 +1151,11 @@ Ehrliche Liste dessen, was heute fehlt oder schwächer ist, als man annehmen kö
 10. **Kein `ProtectHome` in der systemd-Unit** (Abschnitt 5, HUM-053). Der Daemon kann das
     Heimatverzeichnis schreiben, weil Projekte darunter schreibbar in die Sandbox eingehängt werden.
     Projekte außerhalb von `$HOME` sind unter der Unit nur lesbar, bis der Mensch sie freigibt.
+11. **Verweigerte Versuche stehen nicht in der Historie** (HUM-138). Der Isolations-Reiter und
+    `humanitl sandbox run` zeigen, was der Filter verweigert hat, solange die Sitzung läuft;
+    aufgezeichnet wird es noch nicht, und ein verweigerter `connect()` erscheint nie einzeln
+    (Abschnitt 2, „Was sichtbar wird und was nicht"). Die eigene Art von Eintrag in der Historie
+    ist ein eigenes Issue.
 ## 11. Ausdrücklich außerhalb des Geltungsbereichs
 
 Humanitl beansprucht nicht, gegen Folgendes zu schützen. Wer das braucht, braucht andere Mittel:

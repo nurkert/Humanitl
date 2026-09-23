@@ -1132,5 +1132,20 @@
   "diagAGENT005Title": "Agent startete nicht",
   "diagAGENT005Why": "Die Sandbox stand und ihre Garantien galten, aber das Agent-Kommando darin ließ sich nicht starten, meist weil es nicht im Suchpfad der Sandbox liegt.",
   "diagDAEMON014Title": "Deinstallation unvollständig",
-  "diagDAEMON014Why": "humanitl daemon uninstall ist nicht ganz durchgekommen: Der Dienst wurde nicht abgemeldet, oder eine Datei, die daemon install angelegt hat, blieb stehen."
+  "diagDAEMON014Why": "humanitl daemon uninstall ist nicht ganz durchgekommen: Der Dienst wurde nicht abgemeldet, oder eine Datei, die daemon install angelegt hat, blieb stehen.",
+  "isolationRefusalsTitle": "Versuche an der einen Tür vorbei",
+  "isolationRefusalsIntro": "Was der Agent außerhalb von HTTP versucht und der Filter verweigert hat, gezählt je Art von Socket. Verweigert heißt: Es hat die Sandbox nie verlassen.",
+  "isolationRefusalsNone": "Bisher kein Socket verweigert.",
+  "isolationRefusalsPending": "Noch nicht gemeldet.",
+  "isolationRefusalsOff": "Verweigert wird wie immer, gezählt wird in dieser Sandbox nicht: {reason}.",
+  "isolationRefusalsCount": "{count, plural, =1{1 Versuch} other{{count} Versuche}}",
+  "isolationRefusalsSocket": "socket({family}, {type})",
+  "isolationRefusalsReasonFamily": "Familie nicht erlaubt",
+  "isolationRefusalsReasonType": "Typ nicht erlaubt",
+  "isolationRefusalsReasonOverflow": "weitere Arten, zusammen gezählt",
+  "isolationRefusalsReasonUnknown": "verweigert",
+  "isolationRefusalsLast": "zuletzt um {time}",
+  "isolationRefusalsNetworkNote": "Eine Verbindung zu einer Adresse draußen steht nicht in dieser Liste: Ohne Route scheitert sie, bevor ein Filter gefragt wird. Das ist die erste Garantie oben, ein Zustand und kein Ereignis.",
+  "diagSANDBOX019Title": "Verweigerte Verbindungsversuche werden nicht gemeldet",
+  "diagSANDBOX019Why": "Der Kernel hat dem Filter des Agenten keinen Zuhörer gegeben; verweigert wird weiter mit EPERM, gezählt und gemeldet wird nichts."
 }

@@ -35,6 +35,7 @@ use rustix::termios::{Winsize, tcsetwinsize};
 
 use crate::bridge_env::{CHECK_NAMES, ExecFailure, ShimCheck};
 use crate::bwrap::{is_userns_failure, userns_diagnostic};
+use crate::refusals::{RefusalLine, Refusals};
 
 /// Wie lange [`SandboxHandle::kill`] nach `SIGTERM` wartet, bevor `SIGKILL` folgt.
 pub const KILL_GRACE: Duration = Duration::from_secs(5);
@@ -173,8 +174,11 @@ pub struct CapturedOutput {
 pub struct ReportSnapshot {
     /// Die gelesenen Zeilen, in Reihenfolge.
     pub checks: Vec<ShimCheck>,
-    /// Zeilen, die keine `CHECK`-Zeile waren.
+    /// Zeilen, die weder eine `CHECK`-Zeile noch eine über Verweigerungen
+    /// waren.
     pub other_lines: usize,
+    /// Was der Filter dem Agenten verweigert hat, gezählt (HUM-138).
+    pub refusals: Refusals,
     /// Die Pipe ist zu: alle Schreibseiten sind geschlossen.
     pub closed: bool,
     /// Der Shim meldet ein gescheitertes `exec`: Der Agent ist nie gelaufen
@@ -310,6 +314,33 @@ impl Shared {
     pub(crate) fn push_check(&self, check: ShimCheck) {
         lock(&self.report).checks.push(check);
         self.report_changed.notify_all();
+    }
+
+    /// Nimmt eine Zeile über Verweigerungen auf (HUM-138); weckt Wartende nur,
+    /// wenn sich etwas geändert hat.
+    pub(crate) fn push_refusal(&self, line: RefusalLine) {
+        if lock(&self.report).refusals.apply(line) {
+            self.report_changed.notify_all();
+        }
+    }
+
+    pub(crate) fn wait_refusals(&self, after: u64, timeout: Duration) -> (Refusals, bool) {
+        let deadline = Instant::now() + timeout;
+        let mut report = lock(&self.report);
+        loop {
+            if report.refusals.generation > after || report.closed {
+                return (report.refusals.clone(), report.closed);
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return (report.refusals.clone(), report.closed);
+            }
+            report = self
+                .report_changed
+                .wait_timeout(report, deadline - now)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
     }
 
     pub(crate) fn push_other_line(&self) {
@@ -776,6 +807,19 @@ impl SandboxHandle {
     pub fn wait_for_report(&self, timeout: Duration) -> ReportSnapshot {
         self.shared
             .wait_report(timeout, ReportSnapshot::is_complete)
+    }
+
+    /// Wartet auf einen neueren Stand der Verweigerungen als `after`
+    /// ([`Refusals::generation`]), höchstens `timeout` (HUM-138).
+    ///
+    /// Endet auch, wenn die Pipe des Berichts zu ist: Dann kommt nichts mehr,
+    /// und der Stand ist der letzte. Das Ende der Sandbox allein beendet das
+    /// Warten nicht — die letzten Zeilen schreibt der Shim erst, wenn der Agent
+    /// gegangen ist, und der Leser ist ihnen dann womöglich noch hinterher.
+    /// Zurück kommt der Stand und ob die Pipe zu ist.
+    #[must_use]
+    pub fn wait_refusals(&self, after: u64, timeout: Duration) -> (Refusals, bool) {
+        self.shared.wait_refusals(after, timeout)
     }
 
     /// Was `bwrap` über seine Status-Pipe gemeldet hat.

@@ -229,10 +229,16 @@ und setzt `PR_SET_NO_NEW_PRIVS` vor der Anwendung.
 darf als einziger Prozess in der Sandbox `AF_UNIX` öffnen; sonst käme er nicht an den
 Proxy-Socket. Er trägt seit HUM-012 selbst einen Filter mit derselben Sperrliste, um genau diese
 eine Familie weiter (`SandboxSeccomp::for_bridge`), denn `TSYNC` erfasst Threads und keine
-Kinder. Der Agent kann ihn nicht per `ptrace` übernehmen, aber `/proc/<pid>/mem` unterliegt der
-Kernel-Prüfung `ptrace_may_access` und nicht dem Filter; bei gleicher UID und
-`kernel.yama.ptrace_scope = 0` ist ein Zugriff denkbar. Gewonnen ist damit nichts: die Bridge
-kennt genau einen Zielsocket, den Proxy, und der zeichnet auf. Zweitens:
+Kinder. Der Agent kann ihn nicht per `ptrace` übernehmen, und seit HUM-138 auch nicht über
+`/proc/<pid>/mem`, `/proc/<pid>/fd` oder `pidfd_getfd(2)`: Der Elternprozess setzt nach dem
+`fork` `PR_SET_DUMPABLE` auf 0, und `ptrace_may_access` lässt dann niemanden ohne
+`CAP_SYS_PTRACE` zu, auch nicht bei gleicher UID und `kernel.yama.ptrace_scope = 0`. Das ist
+nötig geworden, weil der Elternprozess jetzt den Zuhörer des Filters hält, der verweigerte
+`socket()`-Aufrufe zählt und beantwortet; wer ihn hätte, könnte seine eigenen Aufrufe mit „weiter"
+beantworten. Einen eigenen Zuhörer bekommt der Agent ebenso wenig: Beide Filter verweigern
+`seccomp()` mit `SECCOMP_FILTER_FLAG_NEW_LISTENER`, und der Zuhörer des Elternprozesses bleibt bis
+zum Ende des Prozesses offen. Gewonnen wäre auch mit dem Elternprozess wenig: die Bridge kennt genau einen
+Zielsocket, den Proxy, und der zeichnet auf. Zweitens:
 ein Loopback-Dienst, den der Agent selbst in der Sandbox startet, ist für ihn erreichbar. Das ist
 kein Egress, sondern nur Kommunikation zwischen zwei Prozessen, die ohnehin beide dem Angreifer
 gehören.
@@ -451,9 +457,18 @@ gebunden und damit ebenfalls tot.
 
 *Restrisiko.* Ein Kernel-Fehler. Nichts, was Humanitl abfangen könnte.
 
+*Sichtbarkeit (HUM-138).* Verweigert war der Kanal schon immer; seit HUM-138 wird der Versuch
+auch gezeigt. Jeder `socket()`-Aufruf, den der Filter verweigert, wird im Shim gezählt, je Paar
+aus Familie und Typ, und erscheint im `Sandbox`-Strom und im Isolations-Reiter. Nicht gezählt
+wird ein `connect()`, der an der leeren Routing-Tabelle scheitert (kein verweigerter Aufruf),
+und ein Angreifer (b), der vor seinen Aufrufen einen eigenen Filter lädt, kann seine Versuche
+unsichtbar machen, aber nicht erfolgreich. Die Sichtbarkeit ist ein Bericht und trägt keine der drei
+Garantien ([`SECURITY.md`](SECURITY.md) Abschnitt 2, „Was sichtbar wird und was nicht").
+
 *Status.* MVP.
 
-*Prüfung.* ESC-1 (Sockets, Interfaces, Routing) und ESC-3 (Egress ohne Proxy).
+*Prüfung.* ESC-1 (Sockets, Interfaces, Routing, und `refusals_reported` für den Bericht) und
+ESC-3 (Egress ohne Proxy).
 
 ### K-14 Audit-Datei auf dem Host
 
@@ -594,6 +609,7 @@ Sitzungs-Historie steht.
 | 2026-09-02 | Review-Korrekturen: Shim-Prozessmodell (Brücke im Elternprozess, Filter im Kind), CA-Schlüssel bleibt auf dem Host, kein Loopback-Port auf dem Host, Mount-Allowlist als Auszug der Argv-Tabelle, `socketpair()` bleibt unberührt und erlaubt (CONVENTIONS.md 4.11) | HUM-007 Review |
 | 2026-09-04 | K-15 aufgenommen: der Isolations-Check läuft, nachdem der Shim den Agenten gestartet hat, also beendet ein roter Check die Sitzung, statt sie zu verhindern. Der Halbsatz „Check 3 prüft, dass `socketpair` gelingt" gestrichen — `probe_families` probt es nicht | HUM-041, externer Review |
 | 2026-09-23 | K-02: Eine `allow`- oder `redact`-Regel mit Pfadmuster oder Präfixen trifft keinen Pfad mit `..`-Segment mehr, auch verschleiert; vorher galt das nur für Präfixe, und ein Glob `/repos/me/**` gab `/repos/me/../../user/keys` frei. `block` und `ask` prüfen zusätzlich den nach RFC 3986 aufgelösten Pfad (Punktsegmente, doppelte Schrägstriche, kodierte nicht reservierte Zeichen); vorher traf ihr Präfix keinen Pfad mit `..`, und eine hostweite Freigabe dahinter entschied | HUM-204, Sicherheitsdurchlauf vom selben Tag |
+| 2026-09-23 | K-13 sichtbar: verweigerte `socket()`-Aufrufe des Agenten gehen über `SECCOMP_RET_USER_NOTIF` an den Elternprozess des Shims, der zählt und `EPERM` antwortet; ohne Zuhörer (`EBUSY`) derselbe Filter wie zuvor und `SANDBOX_019`. K-04: der Elternprozess ist nicht mehr „dumpable", `/proc/<pid>/mem` und `/proc/<pid>/fd` sind dem Agenten verschlossen. Beide Filter verweigern `seccomp()` mit `SECCOMP_FILTER_FLAG_NEW_LISTENER`, damit der Agent nie einen eigenen Zuhörer bekommt, und der Zuhörer des Elternprozesses bleibt bis zum Ende offen. Das Tor von HUM-137 geht auf, sobald der Elternprozess nicht mehr „dumpable" ist, statt wenn er den Bericht schließt | HUM-138 |
 
 Geplante Fortschreibung: HUM-059 bringt das Dokument zum Release auf den Stand des Codes. Jede
 sicherheitsrelevante Änderung am Shim, an der Mount-Allowlist, am Filter oder am Passthrough

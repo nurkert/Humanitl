@@ -286,6 +286,10 @@ stop_escape_daemon() {
 # shellcheck source=tests/escape/dns-proof.sh
 . "$HERE/dns-proof.sh"
 
+# The report of refused sockets (HUM-138): one more sandbox after the suites.
+# shellcheck source=tests/escape/refusals-proof.sh
+. "$HERE/refusals-proof.sh"
+
 # The order matters: the watcher asks the daemon, and the daemon may still ask
 # the stub until it has stopped.
 stop_escape_services() {
@@ -393,6 +397,10 @@ done
 # The host half of ESC-3 (HUM-115): the log of the recording name server,
 # read before ESC-4 and ESC-5 send anything more through the daemon.
 dns_host_cases
+
+# ESC-1, second half (HUM-138): what the filter refuses is also reported.
+echo "== esc-1 refusals (one more sandbox) =="
+refusals_case
 
 # ESC-4 and ESC-5 run on the host, and before the daemon is stopped. ESC-4 asks
 # the rule engine (HUM-022), which decides before anything leaves the machine
