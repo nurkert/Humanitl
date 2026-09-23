@@ -64,7 +64,8 @@ pub static AREAS: &[AreaInfo] = &[
                005-008 die Nutzer-Unit von `daemon install` (HUM-044), \
                009 Abschied (HUM-142), 010 Nutzersitzung, 011 Binaries aus \
                dem `AppImage`, 012 `journalctl` (HUM-070), 013 der von \
-               systemd übergebene Socket (HUM-053)",
+               systemd übergebene Socket (HUM-053), 014 `daemon uninstall` \
+               (HUM-077)",
     },
     AreaInfo {
         area: "ipc",
@@ -1366,6 +1367,18 @@ registry! {
     AGENT_005 => "agent", "Agent startete nicht", "#agent_005",
         "Der Shim meldet auf dem Berichtskanal `EXEC fail`, oder das Kommando endet ohne dieses Signal mit Exit-Code `127` oder `126`, ohne ein einziges Byte geschrieben zu haben. Der Befund nennt das Kommando und den `PATH` der Sandbox; den `PATH` hält er zurück, wenn ein Mensch ihn geschrieben hat (`sandbox.env` oder ein eigenes Profil), wie die Umgebungstabelle.",
         "`CopyCommand` mit `humanitl sandbox run -- /bin/sh -c 'command -v …'`: fragt dieselbe Sandbox, wo das Kommando liegt. Was eingehängt wird, entscheidet das Profil.";
+    // HUM-077: `humanitl daemon uninstall`.
+    /// `humanitl daemon uninstall` ist nicht ganz durchgekommen.
+    ///
+    /// Entweder hat `systemctl --user disable --now` den Dienst nicht
+    /// abgemeldet, dann ist nichts entfernt worden; oder eine Datei, die
+    /// `daemon install` angelegt hat (Unit, Verweis der Aktivierung, Kopie aus
+    /// einem `AppImage`), ließ sich nicht entfernen, dann nennt der Befund jede,
+    /// die stehen blieb. Ein halb entfernter Dienst wird gemeldet und nicht
+    /// verschwiegen (HUM-077).
+    DAEMON_014 => "daemon", "Deinstallation unvollständig", "#daemon_014",
+        "`humanitl daemon uninstall` konnte den Dienst nicht abmelden oder eine Datei, die `daemon install` angelegt hat, nicht entfernen.",
+        "`CopyCommand` mit dem genauen `systemctl`-Aufruf, der scheiterte, sonst `ls -ld` auf den Pfad, der stehen blieb.";
 }
 
 /// Sucht einen Code im Register.

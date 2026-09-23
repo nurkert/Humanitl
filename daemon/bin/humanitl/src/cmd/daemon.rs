@@ -1,4 +1,5 @@
-//! `humanitl daemon status` und `humanitl daemon install`.
+//! `humanitl daemon status` und `humanitl daemon install`, und sein
+//! Gegenstück `humanitl daemon uninstall` (HUM-077).
 //!
 //! `status` ist ein dünner Client (ADR-018): verbinden, `GetInfo` rufen,
 //! ausgeben. Was der Daemon kann, sagt er selbst; die Kommandozeile erfindet
@@ -51,6 +52,10 @@ use serde_json::json;
 use crate::cli::{DaemonCmd, InstallArgs, LogsArgs};
 use crate::cmd::{Context, EXIT_OK, Failure, status_diagnostic, unit};
 use crate::render::{table, tick};
+
+mod uninstall;
+
+use uninstall::uninstall;
 
 /// Wie lange ein `systemctl`-Aufruf höchstens dauern darf.
 ///
@@ -110,12 +115,23 @@ const SESSION_ENV_KEYS: &[&str] = &[
 /// `DAEMON_001`, wenn kein Daemon antwortet, `DAEMON_002`, wenn er eine
 /// andere Major-Version des Vertrags spricht, `DAEMON_005` bis `DAEMON_008`,
 /// `DAEMON_010` und `DAEMON_011` für die Wege, auf denen `install` nicht
-/// durchkommt, `DAEMON_010` und `DAEMON_012` für `logs`.
+/// durchkommt, `DAEMON_010` und `DAEMON_012` für `logs`, `DAEMON_005`,
+/// `DAEMON_010` und `DAEMON_014` für `uninstall`.
 pub async fn run(ctx: &Context, cmd: &DaemonCmd) -> Result<u8, Failure> {
     match cmd {
         DaemonCmd::Status => status(ctx).await,
-        DaemonCmd::Install(args) => install(ctx, args).await,
+        DaemonCmd::Install(args) => {
+            let appimage = ctx.env.non_empty("APPIMAGE").is_some();
+            match args.refresh.then(|| refresh_skip(ctx, appimage)).flatten() {
+                Some(skip) => {
+                    report_refresh_skip(ctx, &skip);
+                    Ok(EXIT_OK)
+                }
+                None => install(ctx, args).await,
+            }
+        }
         DaemonCmd::Logs(args) => logs(ctx, args),
+        DaemonCmd::Uninstall(args) => uninstall(ctx, args).await,
     }
 }
 
@@ -159,7 +175,7 @@ async fn install(ctx: &Context, args: &InstallArgs) -> Result<u8, Failure> {
             .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
     });
     let appimage = ctx.env.non_empty("APPIMAGE").is_some();
-    if let Some(units) = packaged_units(args, appimage) {
+    if let Some(units) = packaged_units(ctx, args, appimage) {
         return install_packaged(ctx, args, &units).await;
     }
     let daemon = exec_start(ctx, args, &current, &source, appimage)?;
@@ -184,6 +200,7 @@ async fn install(ctx: &Context, args: &InstallArgs) -> Result<u8, Failure> {
         action: PRINT_ACTION,
         activation: Activation::Skipped,
         binaries: None,
+        restarted: false,
         ready: None,
     };
     if args.print {
@@ -226,37 +243,284 @@ async fn install(ctx: &Context, args: &InstallArgs) -> Result<u8, Failure> {
         path: &path,
         plan: &plan,
     };
+    // Der Stand der Aktivierung vor diesem Lauf, für die Rücknahme nach einem
+    // gescheiterten Neustart ([`restart_service`]).
+    let enabled_before = unit::Enablement::read_for(&unit::unit_dir(&ctx.paths), &names);
     let finished = match unit::write(&path, &contents, &plan) {
         Ok(()) => start(ctx, args, systemctl.as_deref(), &names, &written).await,
         Err(diagnostic) => Err(Failure::new(diagnostic)),
     };
-    let activation = match finished {
-        Ok(activation) => activation,
-        Err(failure) => {
-            // Die Unit ist zurückgenommen (`activate`) oder nie geschrieben
-            // worden; also zeigt auch `current` wieder dorthin, wohin es
-            // vorher zeigte. Sonst startete die alte Unit die neuen Binaries.
-            if let Some(staged) = staged.as_ref() {
-                staged.restore();
-            }
-            return Err(failure);
+    // Scheitert es, ist die Unit zurückgenommen (`activate`) oder nie
+    // geschrieben worden; also zeigt auch `current` wieder dorthin, wohin es
+    // vorher zeigte. Sonst startete die alte Unit die neuen Binaries.
+    //
+    // Ohne Prüfung des Ergebnisses: Hier startet danach nichts mehr, und der
+    // Befund, der gleich zurückgeht, sagt, warum.
+    let activation = finished.inspect_err(|_| {
+        if let Some(staged) = staged.as_ref() {
+            let _ = staged.restore();
         }
-    };
+    })?;
 
-    let ready = if activation == Activation::Enabled {
+    let (restarted, ready) = settle(
+        ctx,
+        systemctl.as_deref(),
+        activation,
+        &written,
+        staged.as_ref(),
+        &enabled_before,
+    )
+    .await?;
+    result.action = plan.as_str();
+    result.activation = activation;
+    result.binaries = staged.as_ref().map(|staged| staged.dir.as_path());
+    result.restarted = restarted;
+    result.ready = ready.as_deref();
+    report(ctx, &result);
+    Ok(EXIT_OK)
+}
+
+/// Was nach einer gelungenen Aktivierung noch geschieht: der Neustart, wenn
+/// dieser Lauf geändert hat, was der Dienst startet, und danach das Aufräumen
+/// alter Kopien. Dazu, ob neu gestartet wurde, und was der Daemon danach
+/// sagt ([`wait_for_daemon`]).
+///
+/// `enable --now` startet einen Dienst, der nicht läuft, und lässt einen
+/// laufenden in Ruhe. Hat dieser Lauf geändert, was `ExecStart` startet --
+/// eine neue Kopie hinter `current` oder eine ersetzte Unit --, liefe der alte
+/// Daemon sonst weiter, bis sich jemand abmeldet (HUM-077).
+///
+/// Alte Kopien gehen erst, wenn kein Dienst mehr aus ihnen laufen kann: nach
+/// dem Neustart oder wenn es vor diesem Lauf keine gab. Ohne Aktivierung
+/// (`--no-start`, kein `systemctl`) läuft womöglich noch der alte Daemon aus
+/// der vorigen Kopie, und die bleibt liegen (HUM-077, Fallstricke).
+async fn settle(
+    ctx: &Context,
+    systemctl: Option<&Path>,
+    activation: Activation,
+    written: &UnitOnDisk<'_>,
+    staged: Option<&Staged>,
+    enabled_before: &unit::Enablement,
+) -> Result<(bool, Option<String>), Failure> {
+    let enabled = activation == Activation::Enabled;
+    let restart = enabled
+        && (staged.is_some_and(|staged| staged.previous.is_some())
+            || matches!(written.plan, unit::Written::Replaced { .. }));
+    if restart && let Some(systemctl) = systemctl {
+        restart_service(ctx, systemctl, written, staged, enabled_before).await?;
+    }
+    if let Some(staged) = staged
+        && (enabled || staged.previous.is_none())
+    {
+        staged.retire_previous();
+        staged.retire_strays();
+    }
+    let ready = if enabled {
         Some(wait_for_daemon(ctx).await)
     } else {
         None
     };
-    if let Some(staged) = staged.as_ref() {
-        staged.retire_previous();
+    Ok((restart, ready))
+}
+
+/// Startet den Dienst neu, nachdem dieser Lauf geändert hat, was er startet.
+///
+/// Scheitert der Neustart, geht alles auf den Stand von vorher: `current`
+/// zeigt wieder auf die vorige Kopie, die Unit bekommt ihren alten Text, die
+/// Verweise der Aktivierung, die dieser Lauf angelegt hat, gehen wieder, und
+/// ein zweiter Neustart bringt den alten Daemon zurück.
+///
+/// **Der zweite Neustart nur, wenn beides nachweislich zurück ist** (HUM-077,
+/// Review). Zeigt `current` noch auf die neue Kopie oder trägt die Unit noch
+/// den neuen Text, startete er genau das, was eben gescheitert ist, und der
+/// Befund behauptete trotzdem den alten Stand. Dann bleibt der Dienst aus, und
+/// `DAEMON_008` sagt, was nicht zurückging.
+///
+/// **Hat dieser Lauf die Unit erst angelegt, gibt es keinen alten Dienst**, den
+/// ein zweiter Neustart zurückbrächte: Die Unit ist nach der Rücknahme weg.
+/// Dann wird der Dienst angehalten statt neu gestartet, damit
+/// `Restart=on-failure` nicht auf eine Unit losgeht, die es nicht mehr gibt.
+///
+/// Der Satz im Befund entsteht aus dem, was der zweite Neustart wirklich
+/// geantwortet hat.
+async fn restart_service(
+    ctx: &Context,
+    systemctl: &Path,
+    written: &UnitOnDisk<'_>,
+    staged: Option<&Staged>,
+    enabled_before: &unit::Enablement,
+) -> Result<(), Failure> {
+    let call = ["--user", "restart", unit::UNIT_NAME];
+    let Err(why) = systemctl_run(ctx, systemctl, &call).await else {
+        return Ok(());
+    };
+    let created = matches!(written.plan, unit::Written::Created);
+    let stopped = if created {
+        let stop = systemctl_run(ctx, systemctl, &["--user", "stop", unit::UNIT_NAME]).await;
+        // Räumt nur systemds Bild auf; ein Fehler dabei ist kein Befund.
+        let _ = systemctl_run(ctx, systemctl, &["--user", "reset-failed", unit::UNIT_NAME]).await;
+        Some(stop)
+    } else {
+        None
+    };
+    let copy_back = staged.map_or(Ok(()), Staged::restore);
+    let links_back = enabled_before
+        .rollback(&unit::unit_dir(&ctx.paths))
+        .map_err(|diagnostic| diagnostic.why);
+    let unit_back = unit::rollback(written.path, written.plan).map_err(|diagnostic| diagnostic.why);
+    let failed: Vec<String> = [copy_back.err(), links_back.err(), unit_back.err()]
+        .into_iter()
+        .flatten()
+        .collect();
+    let reload = systemctl_run(ctx, systemctl, &["--user", "daemon-reload"]).await;
+    let undone = if !failed.is_empty() {
+        format!(
+            "putting the previous state back failed ({}), so the service was not restarted \
+             again",
+            failed.join("; ")
+        )
+    } else if let Some(stop) = stopped {
+        // Der Satz entsteht aus dem, was `stop` und `daemon-reload` sagten
+        // (CONVENTIONS 4.38).
+        let stop = match stop {
+            Ok(()) => "the service was stopped rather than restarted".to_owned(),
+            Err(error) => format!("stopping the service failed as well ({error})"),
+        };
+        let reload = match reload {
+            Ok(()) => String::new(),
+            Err(error) => format!("; systemctl --user daemon-reload failed ({error})"),
+        };
+        format!("the unit this run created is gone again with its enablement, and {stop}{reload}")
+    } else {
+        // Ohne `daemon-reload` hielte systemd noch die gescheiterte Unit im
+        // Speicher; ein Neustart liefe dann auf ihr.
+        match reload {
+            Err(error) => format!(
+                "the previous copy and unit are back in place, but systemctl --user \
+                 daemon-reload failed ({error}), so the service was not restarted again"
+            ),
+            Ok(()) => match systemctl_run(ctx, systemctl, &call).await {
+                Ok(()) => "the previous copy and unit are back in place and the service was \
+                           restarted on them"
+                    .to_owned(),
+                Err(again) => format!(
+                    "the previous copy and unit are back in place, but restarting the service \
+                     on them failed as well ({again})"
+                ),
+            },
+        }
+    };
+    Err(Failure::new(
+        Diagnostic::builder(codes::DAEMON_008, Severity::Blocking)
+            .why(format!(
+                "systemctl {} did not go through ({why}); {undone}",
+                call.join(" ")
+            ))
+            .fix(unit_fix(&[
+                "systemctl",
+                "--user",
+                "status",
+                unit::UNIT_NAME,
+            ]))
+            .build(),
+    ))
+}
+
+/// Warum `daemon install --refresh` nichts zu tun hat.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RefreshSkip {
+    /// Der Lauf kommt nicht aus einem `AppImage`.
+    NotAppImage,
+    /// Es gibt keine Installation aus einem `AppImage`, die zu erneuern wäre:
+    /// Die erste bleibt ein Klick in der Einrichtung.
+    NotInstalled,
+    /// Die installierte Kopie ist schon diese Fassung.
+    UpToDate(String),
+}
+
+impl RefreshSkip {
+    /// Das Wort für die Ausgabe.
+    const fn as_str(&self) -> &'static str {
+        match self {
+            Self::NotAppImage => "not_appimage",
+            Self::NotInstalled => "not_installed",
+            Self::UpToDate(_) => "up_to_date",
+        }
     }
-    result.action = plan.as_str();
-    result.activation = activation;
-    result.binaries = staged.as_ref().map(|staged| staged.dir.as_path());
-    result.ready = ready.as_deref();
-    report(ctx, &result);
-    Ok(EXIT_OK)
+}
+
+/// `None`, wenn `--refresh` die installierte Kopie ersetzen soll; sonst der
+/// Grund, aus dem nichts geschieht.
+///
+/// Erneuert wird nur, was schon da ist, und nur, was ein `AppImage`
+/// angelegt hat: Die Unit unter `~/.config/systemd/user` muss den Verweis
+/// `current` in `ExecStart` nennen, und `current` muss auf eine Kopie einer
+/// anderen Fassung zeigen. Hat jemand den Dienst mit `daemon uninstall`
+/// entfernt, fehlt die Unit, und der nächste Start des `AppImage` legt ihn
+/// nicht still wieder an.
+fn refresh_skip(ctx: &Context, appimage: bool) -> Option<RefreshSkip> {
+    if !appimage {
+        return Some(RefreshSkip::NotAppImage);
+    }
+    let link = lib_base(ctx).join(CURRENT_LINK);
+    let exec = format!("ExecStart={}", link.join(unit::DAEMON_NAME).display());
+    let unit = std::fs::read_to_string(unit::unit_path(&ctx.paths)).unwrap_or_default();
+    if !unit::carries_marker(&unit) || !unit.lines().any(|line| line.trim_end() == exec) {
+        return Some(RefreshSkip::NotInstalled);
+    }
+    let installed = std::fs::read_link(&link).ok().and_then(|target| {
+        target
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(copy_version)
+            .map(str::to_owned)
+    });
+    match installed {
+        None => Some(RefreshSkip::NotInstalled),
+        Some(version) if version == env!("CARGO_PKG_VERSION") => {
+            Some(RefreshSkip::UpToDate(version))
+        }
+        Some(_) => None,
+    }
+}
+
+/// Die Fassung aus dem Namen einer Kopie `<version>.<nanos>-<pid>`; `None`
+/// für jeden anderen Namen.
+///
+/// Dieselbe Form, die [`stage`] vergibt. Nur Verzeichnisse mit einem solchen
+/// Namen hat `daemon install` angelegt, und nur solche räumt es wieder weg.
+fn copy_version(name: &str) -> Option<&str> {
+    let (version, stamp) = name.rsplit_once('.')?;
+    let (nanos, pid) = stamp.split_once('-')?;
+    let digits = |text: &str| !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit());
+    (!version.is_empty() && digits(nanos) && digits(pid)).then_some(version)
+}
+
+/// Sagt, dass `--refresh` nichts getan hat, und warum.
+fn report_refresh_skip(ctx: &Context, skip: &RefreshSkip) {
+    let installed = match skip {
+        RefreshSkip::UpToDate(version) => Some(version.as_str()),
+        _ => None,
+    };
+    if ctx.render.is_json() {
+        ctx.render.value(&json!({
+            "action": skip.as_str(),
+            "installed": installed,
+            "version": env!("CARGO_PKG_VERSION"),
+        }));
+        return;
+    }
+    ctx.render.note(&match skip {
+        RefreshSkip::NotAppImage => {
+            "--refresh: this humanitl does not run from an AppImage; nothing to do".to_owned()
+        }
+        RefreshSkip::NotInstalled => "--refresh: no service installed from an AppImage; \
+                                       nothing to do"
+            .to_owned(),
+        RefreshSkip::UpToDate(version) => {
+            format!("--refresh: the installed copy is already {version}; nothing to do")
+        }
+    });
 }
 
 /// `daemon install`, wenn das Paket die Units unter
@@ -288,6 +552,7 @@ async fn install_packaged(
         action: PRINT_ACTION,
         activation: Activation::Skipped,
         binaries: None,
+        restarted: false,
         ready: None,
     };
     if !ctx.render.is_json() {
@@ -333,11 +598,11 @@ async fn install_packaged(
 ///
 /// Nicht aus einem `AppImage` und nicht mit `--bin-dir`: Beide nennen
 /// ausdrücklich einen anderen Daemon als den des Pakets.
-fn packaged_units(args: &InstallArgs, appimage: bool) -> Option<unit::SystemUnits> {
+fn packaged_units(ctx: &Context, args: &InstallArgs, appimage: bool) -> Option<unit::SystemUnits> {
     if appimage || args.bin_dir.is_some() {
         return None;
     }
-    unit::SystemUnits::find(Path::new(unit::SYSTEM_UNIT_DIR))
+    unit::SystemUnits::find(&unit::system_unit_dir(&ctx.env))
 }
 
 /// Sagt systemd von den Units, wenn der Lauf das soll und kann.
@@ -451,28 +716,53 @@ struct Staged {
     previous: Option<PathBuf>,
     /// Das Konto, dem das Heimatverzeichnis gehört; nur dessen Kopien gehen.
     owner: u32,
+    /// Die Sperre auf `~/.local/lib/humanitl` ([`lock_lib`]), gehalten von
+    /// der Kopie bis zum Aufräumen; `None` nur in Tests.
+    _lock: Option<std::fs::File>,
 }
 
 impl Staged {
+    /// Wohin `current` in diesem Augenblick zeigt, als absoluter Pfad.
+    ///
+    /// Das Aufräumen fragt das jedes Mal neu und lässt dieses Verzeichnis
+    /// stehen, was auch immer es über die eigene Kopie und die vorige weiß:
+    /// Ein Verweis ins Leere startete beim nächsten Anmelden nichts (HUM-077,
+    /// Review).
+    fn current_target(&self) -> Option<PathBuf> {
+        let target = std::fs::read_link(&self.link).ok()?;
+        Some(if target.is_absolute() {
+            target
+        } else {
+            self.link.parent()?.join(target)
+        })
+    }
+
     /// Nimmt die Kopie zurück: `current` zeigt wieder dorthin, wohin es vorher
     /// zeigte, und das neue Verzeichnis geht. Es hat es vorher nicht gegeben —
     /// jede Kopie bekommt ein eigenes —, also bleibt nichts liegen, was dieser
     /// Lauf angelegt hat.
     ///
-    /// Ohne Prüfung des Ergebnisses: Es räumt auf, und der Befund, der gleich
-    /// zurückgeht, sagt, warum.
-    ///
     /// Die neue Kopie geht nur, wenn `current` nicht mehr auf sie zeigt:
     /// Misslingt das Zurückhängen, bleibt sie liegen, und `current` zeigt
     /// weiter auf vollständige Binaries statt ins Leere.
-    fn restore(&self) {
+    ///
+    /// # Errors
+    ///
+    /// Der Satz, warum `current` nicht zurückging (HUM-077). Wer danach einen
+    /// Dienst startet, startet sonst die neue Kopie und nicht die alte; der
+    /// Aufrufer darf das nur nach einem `Ok`. Ein Verzeichnis, das nach
+    /// gelungenem Zurückhängen nicht weggeht, ist kein Fehler: `current` zeigt
+    /// dann schon auf die vorige Fassung.
+    fn restore(&self) -> Result<(), String> {
         let released = match self.previous.as_ref() {
-            Some(previous) => repoint(&self.link, previous).is_ok(),
-            None => std::fs::remove_file(&self.link).is_ok(),
+            Some(previous) => repoint(&self.link, previous).map_err(|diagnostic| diagnostic.why),
+            None => std::fs::remove_file(&self.link)
+                .map_err(|error| format!("{} cannot be removed: {error}", self.link.display())),
         };
-        if released {
+        if released.is_ok() {
             let _ = std::fs::remove_dir_all(&self.dir);
         }
+        released
     }
 
     /// Nach dem Erfolg: Die Fassung, auf die `current` vorher zeigte, geht —
@@ -496,10 +786,54 @@ impl Staged {
             use std::os::unix::fs::MetadataExt as _;
             meta.is_dir() && !meta.file_type().is_symlink() && meta.uid() == self.owner
         });
-        if inside && real_dir && previous != self.dir {
+        if inside
+            && real_dir
+            && previous != self.dir
+            && Some(&previous) != self.current_target().as_ref()
+        {
             let _ = std::fs::remove_dir_all(&previous);
         }
     }
+
+    /// Räumt ältere Kopien auf, auf die `current` nicht mehr zeigt: jedes
+    /// eigene Verzeichnis unter `~/.local/lib/humanitl`, dessen Name die Form
+    /// hat, die [`stage`] vergibt, außer der neuen Kopie (HUM-077).
+    ///
+    /// Solche Reste entstehen, wenn ein früherer Lauf seine vorige Kopie
+    /// liegen lassen musste, weil der Dienst nicht neu gestartet wurde. Was
+    /// einen anderen Namen trägt, ein Verweis ist oder einem anderen Konto
+    /// gehört, bleibt liegen.
+    fn retire_strays(&self) {
+        let Some(base) = self.link.parent() else {
+            return;
+        };
+        let live = self.current_target();
+        for stray in own_copies(base, self.owner) {
+            if stray != self.dir && Some(&stray) != live.as_ref() {
+                let _ = std::fs::remove_dir_all(&stray);
+            }
+        }
+    }
+}
+
+/// Die Kopien unter `base`, die `daemon install` angelegt hat: echte
+/// Verzeichnisse dieses Kontos mit einem Namen `<version>.<nanos>-<pid>`.
+fn own_copies(base: &Path, owner: u32) -> Vec<PathBuf> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.file_name().to_str().and_then(copy_version).is_some())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            std::fs::symlink_metadata(path).is_ok_and(|meta| {
+                meta.is_dir() && !meta.file_type().is_symlink() && meta.uid() == owner
+            })
+        })
+        .collect()
 }
 
 /// Kopiert Daemon und Shim aus dem `AppImage` nach `~/.local/lib/humanitl/`.
@@ -531,6 +865,7 @@ fn stage(ctx: &Context, source: &Path) -> Result<Staged, Diagnostic> {
         .map_err(|error| not_staged(&base, &format!("cannot be created: {error}")))?;
     let owner = owner_of(&ctx.paths.home())?;
     own_directory(&base, owner)?;
+    let lock = lock_lib(&base)?;
 
     let dir = base.join(format!("{}.{}", env!("CARGO_PKG_VERSION"), stamp()));
     std::fs::create_dir(&dir)
@@ -566,7 +901,35 @@ fn stage(ctx: &Context, source: &Path) -> Result<Staged, Diagnostic> {
         link,
         previous,
         owner,
+        _lock: Some(lock),
     })
+}
+
+/// Sperrt `~/.local/lib/humanitl` gegen einen zweiten `daemon install` oder
+/// `daemon uninstall --purge-binaries` (HUM-077, Review).
+///
+/// Zwei Läufe nebeneinander hielten sonst die frische Kopie des anderen für
+/// einen Rest und räumten sie weg, womöglich genau die, auf die `current` dann
+/// zeigt. Gesperrt wird das Verzeichnis selbst mit `flock`, wie
+/// `humanitl_config::edit` das Verzeichnis der Konfiguration sperrt; es
+/// entsteht keine Sperrdatei, die jemand wegräumen müsste. Die Sperre gilt,
+/// solange die Datei offen ist.
+///
+/// # Errors
+///
+/// `DAEMON_011`, wenn sich das Verzeichnis nicht öffnen oder sperren lässt.
+pub(super) fn lock_lib(base: &Path) -> Result<std::fs::File, Diagnostic> {
+    use rustix::fs::{FlockOperation, flock};
+
+    let handle = std::fs::File::open(base)
+        .map_err(|error| not_staged(base, &format!("cannot be opened for locking: {error}")))?;
+    flock(&handle, FlockOperation::LockExclusive).map_err(|error| {
+        not_staged(
+            base,
+            &format!("cannot be locked against a second install: {error}"),
+        )
+    })?;
+    Ok(handle)
 }
 
 /// Ein Stempel, den kein anderer Lauf trägt: Nanosekunden seit 1970 und die
@@ -973,6 +1336,9 @@ struct InstallReport<'a> {
     activation: Activation,
     /// Das Verzeichnis mit den Kopien aus einem `AppImage`.
     binaries: Option<&'a Path>,
+    /// Ob dieser Lauf den Dienst neu gestartet hat, weil sich geändert hat,
+    /// was er startet (HUM-077).
+    restarted: bool,
     /// Die Fassung, die der Daemon nennt, oder warum er nicht antwortete.
     ready: Option<&'a str>,
 }
@@ -993,6 +1359,7 @@ fn report(ctx: &Context, result: &InstallReport<'_>) {
             "action": result.action,
             "activation": result.activation.as_str(),
             "binaries": result.binaries.map(|dir| dir.display().to_string()),
+            "restarted": result.restarted,
             "daemon": result.ready,
         }));
         return;
@@ -1014,6 +1381,9 @@ fn report(ctx: &Context, result: &InstallReport<'_>) {
             "binaries".to_owned(),
             format!("{} {}", tick(true), dir.display()),
         ]);
+    }
+    if result.restarted {
+        rows.push(vec!["restarted".to_owned(), tick(true).to_owned()]);
     }
     if let Some(ready) = result.ready {
         let answered = !ready.starts_with("no answer");
@@ -1181,6 +1551,7 @@ mod tests {
             link,
             previous: Some(old),
             owner,
+            _lock: None,
         };
         (base, staged)
     }
@@ -1198,13 +1569,51 @@ mod tests {
                 .join(format!("current.tmp-{}", std::process::id())),
         )
         .expect("the blocking directory");
-        staged.restore();
+        assert!(staged.restore().is_err(), "a failed repoint is reported");
 
         assert!(staged.dir.is_dir(), "the copy current points at stays");
         assert_eq!(
             std::fs::read_link(&staged.link).expect("current"),
             staged.dir
         );
+    }
+
+    /// Worauf `current` gerade zeigt, bleibt beim Aufräumen stehen, auch wenn
+    /// es weder die eigene Kopie ist noch die, auf die `current` vorher zeigte:
+    /// So sieht es aus, wenn ein zweiter Lauf daneben `current` umgehängt hat
+    /// (HUM-077, Review).
+    #[test]
+    fn retiring_never_removes_what_current_points_at_now() {
+        let (base, staged) = two_copies();
+        let other = base.path().join("0.0.0.1000-2");
+        std::fs::create_dir(&other).expect("the copy of another run");
+        let tmp = base.path().join("current.swap");
+        std::os::unix::fs::symlink(&other, &tmp).expect("a link");
+        std::fs::rename(&tmp, &staged.link).expect("current points at the other copy");
+
+        staged.retire_strays();
+        assert!(other.is_dir(), "the copy current points at went");
+
+        let previous = staged.previous.clone().expect("a previous copy");
+        std::fs::rename(
+            base.path().join("0.0.0.old"),
+            base.path().join("0.0.0.2000-3"),
+        )
+        .expect("the previous copy gets a copy name");
+        let previous_now = base.path().join("0.0.0.2000-3");
+        let staged = super::Staged {
+            previous: Some(previous_now.clone()),
+            ..staged
+        };
+        let tmp = base.path().join("current.swap");
+        std::os::unix::fs::symlink(&previous_now, &tmp).expect("a link");
+        std::fs::rename(&tmp, &staged.link).expect("current points at the previous copy");
+        staged.retire_previous();
+        assert!(
+            previous_now.is_dir(),
+            "the previous copy current points at went"
+        );
+        assert!(!previous.exists());
     }
 
     /// Eine ältere Kopie eines anderen Kontos wird nicht entfernt.
@@ -1233,6 +1642,29 @@ mod tests {
             proto_minor: PROTO_MINOR,
             capabilities: vec!["hold".to_owned()],
             session_id: String::new(),
+        }
+    }
+
+    /// Nur ein Name in der Form, die `stage` vergibt, ist eine Kopie; nur
+    /// solche räumen `install` und `uninstall --purge-binaries` weg.
+    #[test]
+    fn only_names_stage_gives_are_copies() {
+        use super::copy_version;
+
+        assert_eq!(copy_version("0.0.12.1726000000123-4242"), Some("0.0.12"));
+        assert_eq!(copy_version("0.1.0-rc.1.17-2"), Some("0.1.0-rc.1"));
+        for name in [
+            "current",
+            "current.tmp-12",
+            "0.0.0.old",
+            "0.0.0.12",
+            "0.0.0.12-",
+            "0.0.0.-12",
+            ".12-34",
+            "0.0.0.1x-2",
+            "notes.txt",
+        ] {
+            assert_eq!(copy_version(name), None, "{name} is taken for a copy");
         }
     }
 

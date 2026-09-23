@@ -329,6 +329,46 @@ void main() {
     await tester.pumpAndSettle();
   });
 
+  // HUM-077: Die Karte eines Fehlschlags zeigt den Code der Kommandozeile und
+  // bietet deren Befehl zum Kopieren an, nicht pauschal denselben Knopf noch
+  // einmal. Rot, sobald die Kopierzeile wieder `humanitl daemon install`
+  // hart verdrahtet.
+  testWidgets('install_service_offers_the_command_its_finding_names', (
+    WidgetTester tester,
+  ) async {
+    final List<String> written = captureClipboard(tester);
+    await tester.pumpWidget(
+      host(
+        FixControl(
+          fix: const FixAction.installService(),
+          installService: () async => const Diagnostic(
+            code: 'DAEMON_008',
+            severity: Severity.blocking,
+            why: 'systemctl --user enable --now humanitld.service failed',
+            fix: FixAction.copyCommand(
+              command: 'systemctl --user status humanitld.service',
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('setup-fix-install')));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('DAEMON_008: systemctl'), findsOneWidget);
+    expect(
+      find.text('systemctl --user status humanitld.service'),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const Key('setup-fix-copy')));
+    await tester.pump();
+    expect(written, <String>['systemctl --user status humanitld.service']);
+    await tester.pump(HMotion.copyFeedback);
+    await tester.pumpAndSettle();
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
   group('installServiceCandidate', () {
     // 0o755 ueberall: die Datei und jedes Verzeichnis darueber gehoeren dem
     // Eigentuemer allein. Wer einen Modus pruefen will, setzt ihn je Test.
@@ -505,9 +545,89 @@ void main() {
 
       expect(failure, isNull);
       expect(seenExecutable, '/opt/humanitl/humanitl');
-      // Eine Liste, keine Zeile: Nichts davon geht durch eine Shell.
-      expect(seenArguments, <String>['daemon', 'install']);
+      // Eine Liste, keine Zeile: Nichts davon geht durch eine Shell. `--json`
+      // davor, damit ein Fehlschlag als Befund zurückkommt (HUM-077).
+      expect(seenArguments, <String>['--json', 'daemon', 'install']);
       expect(seenArguments, isNot(contains('sudo')));
+    });
+
+    // HUM-077: Die Kommandozeile weiß, welcher Schritt scheiterte, und nennt
+    // den genauen Befehl dafür. Rot, sobald die Anwendung ihren Befund wieder
+    // durch einen eigenen `DAEMON_001` mit `humanitl daemon install` ersetzt.
+    test('passes the finding of the command line through', () async {
+      final Diagnostic? failure = await runInstallService(
+        resolve: () => (path: '/opt/humanitl/humanitl', refusal: null),
+        run: (String executable, List<String> arguments) async => ProcessResult(
+          1,
+          1,
+          '{"code":"DAEMON_008","severity":"blocking",'
+              '"title":"systemd hat die Unit nicht übernommen",'
+              '"why":"systemctl --user enable --now humanitld.service did not '
+              'go through (exit 1: Job failed)",'
+              '"fix":{"kind":"copy_command",'
+              '"command":"systemctl --user status humanitld.service"},'
+              '"docs":"https://example.invalid/DIAGNOSTICS.md#daemon_008"}\n',
+          '',
+        ),
+      );
+
+      expect(failure, isNotNull);
+      expect(failure!.code, 'DAEMON_008');
+      expect(failure.severity, Severity.blocking);
+      expect(failure.why, contains('enable --now'));
+      expect(
+        failure.fix,
+        const FixAction.copyCommand(
+          command: 'systemctl --user status humanitld.service',
+        ),
+      );
+      expect(
+        failure.docsUrl,
+        'https://example.invalid/DIAGNOSTICS.md#daemon_008',
+      );
+    });
+
+    test('a stdout that is no finding falls back to its own', () async {
+      for (final String stdout in <String>[
+        'not json',
+        '[1, 2]',
+        '{"why": "no code"}',
+        '{"code": "DAEMON_008"}',
+      ]) {
+        final Diagnostic? failure = await runInstallService(
+          resolve: () => (path: '/opt/humanitl/humanitl', refusal: null),
+          run: (String executable, List<String> arguments) async =>
+              ProcessResult(1, 1, stdout, ''),
+        );
+        expect(
+          failure!.code,
+          DiagnosticCodes.daemonUnreachable,
+          reason: stdout,
+        );
+        expect(
+          failure.fix,
+          const FixAction.copyCommand(command: installServiceCommand),
+          reason: stdout,
+        );
+      }
+    });
+
+    test('a fix it cannot carry out becomes its command to copy', () {
+      final Diagnostic? loop = commandLineDiagnostic(
+        '{"code":"DAEMON_010","severity":"blocking","why":"no session",'
+        '"fix":{"kind":"install_service","command":"humanitl daemon install"}}',
+      );
+      expect(
+        loop!.fix,
+        const FixAction.copyCommand(command: 'humanitl daemon install'),
+      );
+      final Diagnostic? link = commandLineDiagnostic(
+        '{"code":"DAEMON_006","severity":"error","why":"x",'
+        '"fix":{"kind":"open_url","command":"https://a.invalid",'
+        '"url":"https://a.invalid"}}',
+      );
+      expect(link!.fix, const FixAction.openUrl(url: 'https://a.invalid'));
+      expect(link.severity, Severity.error);
     });
 
     test('turns a non-zero exit into a diagnostic with the reason', () async {
