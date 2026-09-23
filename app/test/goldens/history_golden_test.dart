@@ -16,6 +16,8 @@ import 'package:humanitl/features/history/providers/history_detail.dart';
 import 'package:humanitl/features/history/providers/history_query.dart';
 import 'package:humanitl/l10n/l10n.dart';
 
+import '../features/history/long_body.dart';
+
 /// The flow the detail golden shows: the fourth recorded one, a POST that was
 /// allowed and answered.
 const FlowId goldenDetailFlow = FlowId('018f0004-0000-7000-8000-00000000000a');
@@ -60,7 +62,8 @@ class FixedSelection extends HistorySelectionNotifier {
   FlowId? build() => id;
 }
 
-/// The history screen in [tokens], over a recorded session of [count] flows.
+/// The history screen in [tokens], over a recorded session of [count] flows,
+/// or over [client] when a golden needs a session of its own.
 Widget historyGolden({
   required HTokens tokens,
   int count = 60,
@@ -68,10 +71,11 @@ Widget historyGolden({
   FlowId? selected,
   TextScaler textScaler = TextScaler.noScaling,
   bool exportOpen = false,
+  FakeDaemonClient? client,
 }) => ProviderScope(
   overrides: <Override>[
     daemonClientProvider.overrideWithValue(
-      FakeDaemonClient.history(count: count),
+      client ?? FakeDaemonClient.history(count: count),
     ),
     if (query != null)
       historyQueryProvider.overrideWith(() => FixedQuery(query)),
@@ -104,22 +108,19 @@ Widget historyGolden({
   ),
 );
 
+/// Die Sitzung der übrigen Goldens, mit dem langen JSON-Rumpf an
+/// [goldenDetailFlow].
+FakeDaemonClient _longBodyClient() {
+  final FakeDaemonClient client = FakeDaemonClient.history(count: 60);
+  recordLongJsonRequest(client, goldenDetailFlow);
+  return client;
+}
+
 void main() {
   const BoxConstraints window = BoxConstraints.tightFor(
     width: 1400,
     height: 900,
   );
-  // Die beiden Rumpf-Goldens zeigen die Rumpf-Ansicht selbst, nicht die
-  // Aufteilung des Fensters. Bei 900 Pixeln bekommt das Detail seinen Anteil
-  // von 40 Prozent, und davon bleiben dem Rumpf unter Kopf, Tabs und
-  // Kopfzeilen knapp hundert Pixel: genug für Titel und Umschalter, nicht für
-  // Baum oder Hex. Das höhere Fenster gibt ihm Platz, ohne das Layout zu
-  // ändern, das `history_detail_request_*` festhält.
-  const BoxConstraints bodyWindow = BoxConstraints.tightFor(
-    width: 1400,
-    height: 1500,
-  );
-
   for (final (String name, HTokens tokens) in <(String, HTokens)>[
     ('dark', HTokens.dark),
     ('light', HTokens.light),
@@ -157,15 +158,28 @@ void main() {
     goldenTest(
       'history_detail_body_json_$name',
       fileName: 'history_detail_body_json_$name',
-      constraints: bodyWindow,
+      constraints: window,
       builder: () => historyGolden(tokens: tokens, selected: goldenJsonFlow),
     );
 
     goldenTest(
       'history_detail_body_hex_$name',
       fileName: 'history_detail_body_hex_$name',
-      constraints: bodyWindow,
+      constraints: window,
       builder: () => historyGolden(tokens: tokens, selected: goldenHexFlow),
+    );
+
+    // Ein Rumpf mit dreizehn Baumzeilen im Standardfenster: Titel und
+    // mindestens zehn Zeilen stehen ohne Scrollen da (HUM-153).
+    goldenTest(
+      'history_detail_body_tree_$name',
+      fileName: 'history_detail_body_tree_$name',
+      constraints: window,
+      builder: () => historyGolden(
+        tokens: tokens,
+        selected: goldenDetailFlow,
+        client: _longBodyClient(),
+      ),
     );
 
     goldenTest(
