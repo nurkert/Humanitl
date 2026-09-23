@@ -85,6 +85,11 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-216 | Die Probe von `config set` ignoriert Schreibfehler der Scratch-Dateien, eine leere Datei besteht die Prüfung | S | — |
 | HUM-217 | Unit-Verzeichnis und Rollback nutzen das `XDG_CONFIG_HOME` der CLI, nicht das des systemd-Managers | S | HUM-077 |
 | HUM-218 | Eine Entscheidung aus der Benachrichtigung löscht Notiz, Merk-Entwurf und Findings-Pause eines anderen ausgewählten Flows | S | — |
+| HUM-186 | Einrichtung: Versionsabgleich mit „Dienst neu starten" und Fortschritt beim Einrichten | S | HUM-077 |
+| HUM-187 | Nightly: Paket und AppImage auf einem frischen Debian mit systemd-Nutzersitzung | M | HUM-077, HUM-053 |
+| HUM-188 | `INSTALL.txt` im Archiv beschreibt Aktivierung und Entfernen des Pakets veraltet | XS | HUM-053, HUM-077 |
+| HUM-189 | `DAEMON_001` schlägt überall `humanitld` im Vordergrund vor | S | HUM-077 |
+| HUM-219 | Ein gescheitertes Update stellt den Dienst nicht so her, wie er vorher lief | S | HUM-077 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -2077,9 +2082,13 @@ Kein Flatpak (Post-MVP). Keine systemweite Unit (nur user). Kein Autostart des U
 
 ### Akzeptanzkriterien
 - [ ] Frisches System: `.deb` installieren, App starten, ein Klick, Sandbox-Start möglich; kein Terminal nötig.
+  Offen, braucht eine VM mit Sitzung (`docs/INSTALL.md`, Test-Matrix). Gemessen 2026-09-23 nur die Teile ohne systemd: Der Knopf ruft `humanitl --json daemon install`, und ein Fehlschlag zeigt den Befund der Kommandozeile samt ihrem Befehl (`app/test/core/ui/fix_control_test.dart`).
 - [ ] AppImage: erster Start richtet Unit ein, zweiter Start mit neuer Version aktualisiert sie.
+  Offen. Der erste Start richtet mit Absicht nichts ein, sondern zeigt den Knopf (`backlog/CONVENTIONS.md` 4.38). Gemessen 2026-09-23 gegen ein protokollierendes `systemctl`: `AppRun` erneuert vor der Anwendung, kopiert die neue Fassung, startet neu und entfernt die alte Kopie erst danach (`daemon/bin/humanitl/tests/daemon_lifecycle.rs`). Gegen einen echten Nutzer-systemd nicht gemessen.
 - [ ] `humanitl doctor` zeigt Dienst ok.
+  Offen, braucht einen Dienst unter einem echten Nutzer-systemd. Die Zeile selbst ist seit HUM-075 gemessen.
 - [ ] Deinstallation entfernt Unit, Socket und Binaries; `doctor` zeigt danach `DOCTOR_006` mit Fix.
+  Teilweise gemessen 2026-09-23: `daemon uninstall --purge-binaries` entfernt Unit, Verweis der Aktivierung, liegengebliebenen Socket und Kopien, und `humanitl doctor` zeigt danach `DOCTOR_006` mit `InstallService` (`uninstall_removes_unit_links_socket_and_binaries_and_doctor_says_daemon_006`). `disable --now` nur gegen ein protokollierendes `systemctl`.
 
 ### Fallstricke
 - `systemctl --user` braucht `DBUS_SESSION_BUS_ADDRESS`/`XDG_RUNTIME_DIR` im Kindprozess; aus einem AppImage heraus können sie fehlen. Aus der Umgebung des UI durchreichen, sonst Diagnostic.
@@ -4500,3 +4509,129 @@ Der Befund ist behoben, und ein Test hält ihn behoben.
 
 ### Referenzen
 Sicherheitsdurchlauf 2026-09-23, Befund m7; `app/lib/features/intercept/providers/decision.dart:774`.
+
+---
+
+## HUM-186 · Einrichtung: Versionsabgleich mit „Dienst neu starten" und Fortschritt beim Einrichten
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-077 · Blockiert: keine
+
+### Kontext
+HUM-077 verlangt drei Dinge in der Oberfläche, die nicht gebaut sind (`backlog/CONVENTIONS.md` 4.38): Die Anwendung vergleicht `GetInfo.daemon_version` mit ihrer eigenen Fassung und bietet bei Abweichung „Dienst neu starten" mit einem Klick an; `InstallService` zeigt die Ausgabe der Kommandozeile als Fortschritt; nach dem Erfolg wird die Karte grün und verschwindet nach 2 s. Der Abgleich ist nach einem Update des Pakets nötig: `apt upgrade` ersetzt `/usr/lib/humanitl/bin/humanitld`, der laufende Dienst bleibt aber der alte, bis sich jemand abmeldet. Beim `AppImage` erledigt das seit HUM-077 `daemon install --refresh`, beim Paket nichts.
+
+### Ziel
+Weicht die Fassung des Daemons von der der Anwendung ab, zeigt die Einrichtung einen Befund mit einem Knopf, der den Dienst neu startet, und danach die neue Fassung. `InstallService` zeigt, woran es gerade arbeitet.
+
+### Betroffene Pfade
+- `app/lib/features/setup/providers/setup_provider.dart` (`_daemonCheck`), `app/lib/core/ui/fix_control.dart`
+- `daemon/crates/core-types/src/diagnostics/codes.rs` (ein Code für „andere Fassung", nur anhängen)
+- eine Aktion für den Neustart: entweder eine `FixAction` mit RPC oder `humanitl daemon install`, das nach einem Paket-Update neu startet (wie in HUM-077 für eine ersetzte Unit)
+- `app/l10n/*.arb` (nur anhängen)
+
+### Spezifikation
+`appVersion` (`FLUTTER_BUILD_NAME`) leer heißt Entwicklungsbau: kein Abgleich. Die Fortschrittszeilen kommen aus der Kommandozeile, nicht aus der Anwendung (ADR-018); unter `--json` gibt es heute keine, also braucht `daemon install` dafür eine Form (etwa Zeilen je Schritt auf `stderr` auch unter `--json`, oder JSON-Zeilen).
+
+### Tests
+- Widget-Test unter `TargetPlatformVariant.only(TargetPlatform.linux)`: Fassung weicht ab, Karte erscheint, Klick ruft den Neustart, Karte verschwindet mit der neuen Fassung.
+- Widget-Test: Nach dem Erfolg von `InstallService` ist die Karte grün und nach 2 s weg.
+
+### Akzeptanzkriterien
+- [ ] Nach einem Update des Pakets bringt ein Klick den neuen Daemon, ohne Terminal.
+- [ ] `make check` grün.
+
+### Fallstricke
+- HUM-052 arbeitet in `app/lib/features/**` und den ARB-Dateien; nur anhängen.
+
+### Referenzen
+HUM-077; `backlog/CONVENTIONS.md` 4.34, 4.38; ADR-018.
+
+---
+
+## HUM-187 · Nightly: Paket und AppImage auf einem frischen Debian mit systemd-Nutzersitzung
+Sprint: 4 · Größe: M · Abhängigkeiten: HUM-077, HUM-053 · Blockiert: keine
+
+### Kontext
+HUM-077 nennt einen nächtlichen Test in einem privilegierten Container mit systemd: `.deb` installieren, Anwendung unter Xvfb starten, einmal klicken, keine Fehlerkarte. Gebaut ist er nicht. `packaging/deb/check-install.sh` prüft das Paket ohne systemd und ruft `daemon install` nur mit `--print` und `--no-start`; `daemon uninstall`, `daemon install --refresh` und `AppRun` sind nur gegen ein `systemctl` gemessen, das Aufrufe protokolliert (`daemon/bin/humanitl/tests/daemon_lifecycle.rs`).
+
+### Ziel
+Ein geplanter CI-Job (`schedule`, nicht bei jedem Push) fährt in einem Wegwerf-Container mit systemd als PID 1 und einer Nutzersitzung (`loginctl enable-linger`): Paket installieren, `humanitl daemon install`, `humanitl doctor` mit Zeile `daemon` ok, Sandbox-Start, `humanitl daemon uninstall`, `humanitl doctor` mit `DOCTOR_006`; danach dasselbe mit dem `AppImage` (`--appimage-extract-and-run`) einschließlich des zweiten Starts mit einer anderen Fassung.
+
+### Betroffene Pfade
+- `.github/workflows/` (neuer Job mit `schedule`)
+- `packaging/deb/check-install.sh` oder ein neues `packaging/check-systemd.sh`
+
+### Akzeptanzkriterien
+- [ ] Der Job läuft nachts und ist grün; ein roter Lauf nennt den Schritt.
+- [ ] Nichts davon läuft auf einem Arbeitsrechner, nur im Container (wie `check-install.sh`).
+
+### Referenzen
+HUM-077 (Tests, Nightly); HUM-053.
+
+---
+
+## HUM-188 · `INSTALL.txt` im Archiv beschreibt Aktivierung und Entfernen des Pakets veraltet
+Sprint: 4 · Größe: XS · Abhängigkeiten: HUM-053, HUM-077 · Blockiert: keine
+
+### Kontext
+`packaging/release/INSTALL.txt` nennt für das Paket `systemctl --user enable --now humanitld.service` und zum Entfernen `systemctl --user disable --now humanitld.service`. Seit HUM-053 bringt das Paket eine Socket-Unit mit, `humanitl daemon install` aktiviert Socket und Dienst, und seit HUM-077 nimmt `humanitl daemon uninstall` beides zurück. Wer dem Text folgt, lässt `humanitld.socket` aktiv. Aufgefallen in HUM-077, nicht dessen Umfang.
+
+### Ziel
+Der Text nennt `humanitl daemon install` und `humanitl daemon uninstall`, für das Archiv zusätzlich `bin/humanitl daemon install` statt eines Daemons im Vordergrund als ersten Weg.
+
+### Betroffene Pfade
+- `packaging/release/INSTALL.txt`
+
+### Akzeptanzkriterien
+- [ ] Die Befehle im Text sind dieselben wie in `docs/INSTALL.md`.
+
+---
+
+## HUM-189 · `DAEMON_001` schlägt überall `humanitld` im Vordergrund vor
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-077 · Blockiert: keine
+
+### Kontext
+Wenn die Kommandozeile keinen Daemon erreicht, trägt der Befund `DAEMON_001` den Vorschlag `CopyCommand("humanitld")` (`daemon/crates/ipc/src/client.rs`, `daemon/crates/ipc/src/auth.rs`, `daemon/bin/humanitl/src/cmd/mod.rs`, `daemon/bin/humanitl/src/cmd/doctor.rs`). Das startet den Daemon im Vordergrund eines Terminals, das offen bleiben muss. Die Einrichtung der Anwendung bietet für denselben Code `InstallService` an, und seit HUM-077 schlägt auch die Zeile `daemon` des Doctors das vor. `humanitl daemon status`, `rules`, `flows` und die anderen Unterkommandos sagen noch `humanitld`.
+
+### Ziel
+Ein Vorschlag für „kein Daemon" in allen Clients: `humanitl daemon install`, wenn keine Unit eingerichtet ist, sonst `systemctl --user start humanitld.service` (oder beim Paket den Socket). `humanitld` im Vordergrund bleibt in der Dokumentation als Weg für die Fehlersuche.
+
+### Betroffene Pfade
+- `daemon/crates/ipc/src/client.rs`, `daemon/crates/ipc/src/auth.rs`
+- `daemon/bin/humanitl/src/cmd/mod.rs`, `daemon/bin/humanitl/src/cmd/doctor.rs`
+
+### Akzeptanzkriterien
+- [ ] `humanitl daemon status` ohne Daemon schlägt einen Befehl vor, der den Dienst auf Dauer einrichtet oder startet.
+- [ ] `make check` grün.
+
+### Referenzen
+HUM-044, HUM-077; `backlog/CONVENTIONS.md` 4.38.
+
+---
+
+## HUM-219 · Ein gescheitertes Update stellt den Dienst nicht so her, wie er vorher lief
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-077 · Blockiert: —
+
+### Kontext
+Aus dem letzten Review von HUM-077 (Ersatzprüfer für Codex, 2026-09-23), zwei
+kleinere Befunde, die über die Runde hinausgingen:
+
+- `restart_service` in `daemon/bin/humanitl/src/cmd/daemon.rs`, Fall
+  `Written::Replaced`: Scheitert der Neustart, nimmt der Befehl Kopie, Unit und
+  Verweise zurück und startet den Dienst dann neu, auch wenn er vor dem Lauf
+  gar nicht lief (Unit da, aber gestoppt oder abgemeldet). Danach läuft ein
+  Dienst, den der Mensch angehalten hatte.
+- `--refresh`: `refresh_skip` entscheidet vor der Sperre auf
+  `~/.local/lib/humanitl`. Starten zwei AppImages gleichzeitig, frischen beide
+  auf; der zweite Lauf legt noch einmal eine Kopie an und startet den Dienst
+  ein zweites Mal neu, was frische Sitzungen beendet.
+
+### Ziel
+Ein gescheitertes Update hinterlässt den Dienst im Zustand von vorher, und zwei
+gleichzeitige Auffrischungen starten ihn höchstens einmal neu.
+
+### Akzeptanzkriterien
+- [ ] Vor dem Aktivieren wird `is-active` festgehalten; nach dem Zurücknehmen wird nur neu gestartet, wenn der Dienst vorher lief, sonst gestoppt. Test mit Fake-`systemctl`, der ohne den Fix rot ist.
+- [ ] `refresh_skip` wird unter der Sperre entschieden oder nach dem Nehmen der Sperre noch einmal geprüft. Test, der zwei Läufe nacheinander mit gehaltener Sperre nachstellt.
+- [ ] `make check` grün.
+
+### Referenzen
+HUM-077; `backlog/CONVENTIONS.md` 4.38.

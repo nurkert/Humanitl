@@ -22,6 +22,7 @@
 /// green.
 library;
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
@@ -91,7 +92,18 @@ const String installServiceBinary = 'humanitl';
 ///
 /// Eine Liste und keine Zeile: `Process.run` bekommt sie ohne Shell, so dass
 /// nichts an ihnen erst noch ausgewertet wird.
-const List<String> installServiceArguments = <String>['daemon', 'install'];
+///
+/// `--json` steht davor, damit ein Fehlschlag als Befund zurückkommt und nicht
+/// als Text (HUM-077): Die Kommandozeile schreibt dann genau ein Objekt auf
+/// `stdout` -- bei Erfolg den Bericht, sonst den `Diagnostic` mit Code, Grund
+/// und dem genauen Befehl zum Kopieren --, und `stderr` bleibt leer. Ohne den
+/// Schalter stünde auf `stderr` die ganze Ankündigung samt Text der Unit, und
+/// die Karte zeigte sie als Grund.
+const List<String> installServiceArguments = <String>[
+  '--json',
+  'daemon',
+  'install',
+];
 
 /// Was die Anwendung startet, wenn sie [FixAction.installService] ausführt.
 ///
@@ -260,6 +272,14 @@ Future<Diagnostic?> runInstallService({
     if (result.exitCode == 0) {
       return null;
     }
+    // Der Befund der Kommandozeile selbst, wenn sie einen geschrieben hat: Sie
+    // weiß, welcher Schritt scheiterte (`DAEMON_008`, `DAEMON_010`, ...), und
+    // ihr Vorschlag ist der genaue Befehl dafür. Diese Anwendung ersetzt ihn
+    // nicht durch einen eigenen (ADR-018).
+    final Diagnostic? reported = commandLineDiagnostic(result.stdout);
+    if (reported != null) {
+      return reported;
+    }
     final String detail = <String>[
       '$executable exited with ${result.exitCode}',
       if (_text(result.stderr) case final String message
@@ -280,6 +300,69 @@ Future<ProcessResult> _runWithoutShell(
 
 /// Die Ausgabe eines Prozesses als Zeile, ohne Rand.
 String _text(Object? output) => output is String ? output.trim() : '';
+
+/// Der Befund, den `humanitl --json` bei einem Fehlschlag auf `stdout`
+/// schreibt, oder null, wenn dort keiner steht.
+///
+/// Die Form ist die von `diagnostic_json` in
+/// `daemon/bin/humanitl/src/render.rs`: `code`, `severity`, `title`, `why`,
+/// dazu `fix` mit `kind` und `command` und `docs`. Ein `fix`, den diese
+/// Anwendung nicht ausführen kann, wird zu seinem `command` zum Kopieren; die
+/// Kommandozeile schreibt ihn für jede Art als eine Zeile hin. Ohne Code oder
+/// Grund ist es kein Befund, und der Aufrufer fällt auf seinen eigenen zurück.
+Diagnostic? commandLineDiagnostic(Object? stdout) {
+  final String text = _text(stdout);
+  if (text.isEmpty) {
+    return null;
+  }
+  final Object? decoded;
+  try {
+    decoded = jsonDecode(text);
+  } on FormatException {
+    return null;
+  }
+  if (decoded is! Map<String, Object?>) {
+    return null;
+  }
+  final Object? code = decoded['code'];
+  final Object? why = decoded['why'];
+  if (code is! String || code.isEmpty || why is! String) {
+    return null;
+  }
+  final Object? title = decoded['title'];
+  final Object? docs = decoded['docs'];
+  final Object? severity = decoded['severity'];
+  return Diagnostic(
+    code: code,
+    severity: Severity.values.firstWhere(
+      (Severity known) => known.name == severity,
+      orElse: () => Severity.error,
+    ),
+    title: title is String ? title : '',
+    why: why,
+    fix: _commandLineFix(decoded['fix']),
+    docsUrl: docs is String ? docs : null,
+  );
+}
+
+/// Der Vorschlag aus dem Befund der Kommandozeile als [FixAction].
+///
+/// Eine Adresse bleibt eine Adresse; alles andere wird der Befehl, den die
+/// Kommandozeile dafür hinschreibt. Fehlt auch der, bleibt der Weg von Hand:
+/// [installServiceCommand] zum Kopieren.
+FixAction _commandLineFix(Object? fix) {
+  if (fix is Map<String, Object?>) {
+    final Object? url = fix['url'];
+    if (fix['kind'] == 'open_url' && url is String && url.isNotEmpty) {
+      return FixAction.openUrl(url: url);
+    }
+    final Object? command = fix['command'];
+    if (command is String && command.isNotEmpty) {
+      return FixAction.copyCommand(command: command);
+    }
+  }
+  return const FixAction.copyCommand(command: installServiceCommand);
+}
 
 /// Der Befund eines fehlgeschlagenen Versuchs.
 ///
@@ -569,17 +652,27 @@ class _FixControlState extends ConsumerState<FixControl> {
         if (failure != null) ...<Widget>[
           SizedBox(height: tokens.spacing.x2),
           Text(
-            l10n.setupFixInstallServiceFailed(failure.why),
+            l10n.setupFixInstallServiceFailed(
+              '${failure.code}: ${failure.why}',
+            ),
             key: const Key('setup-fix-install-failed'),
             style: tokens.typography.ui12.tinted(
               tokens.stateTextColor(HFlowState.error),
             ),
           ),
           SizedBox(height: tokens.spacing.x2),
+          // Der Vorschlag des Befunds, nicht pauschal derselbe Befehl: Hat
+          // `systemctl` den Dienst nicht angenommen, hilft
+          // `systemctl --user status humanitld.service` weiter und nicht ein
+          // zweites `humanitl daemon install` (HUM-077).
           _copyRow(
             tokens,
             label: _copied ? l10n.setupFixCopied : l10n.setupFixCopyCommand,
-            text: installServiceCommand,
+            text: switch (failure.fix) {
+              FixActionCopyCommand(:final String command) => command,
+              FixActionOpenUrl(:final String url) => url,
+              _ => installServiceCommand,
+            },
             style: style,
             reflow: true,
           ),

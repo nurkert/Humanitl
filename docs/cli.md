@@ -330,6 +330,7 @@ deshalb steht hier vollständig, was er tut.
 
 ```
 humanitl daemon install [--print] [--no-start] [--bin-dir DIR]
+humanitl daemon install --refresh
 ```
 
 **Höchstens eine Datei, an einem genannten Ort.**
@@ -373,13 +374,41 @@ Prozessnummer), auch wenn dieselbe Fassung ein zweites Mal installiert wird:
 Das Verzeichnis, auf das `current` gerade zeigt, wird nie angefasst, bevor
 `current` auf eine vollständige neue Kopie zeigt. Ein Abbruch mittendrin lässt
 also nie einen Verweis ins Leere. `current` wird über einen zweiten Verweis und
-`rename` umgehängt, nie gelöscht und neu angelegt; erst danach geht die Kopie,
-auf die es vorher zeigte. Ist `~/.local/lib/humanitl` ein Verweis oder gehört
+`rename` umgehängt, nie gelöscht und neu angelegt. Zeigte `current` vorher auf
+eine andere Kopie, läuft der Dienst womöglich noch aus ihr; der Befehl startet
+ihn deshalb nach `enable --now` mit `systemctl --user restart
+humanitld.service` neu, und erst danach gehen die vorige Kopie und jede ältere,
+die ein früherer Lauf liegen lassen musste (HUM-077). Ohne Neustart
+(`--no-start`, kein `systemctl`) bleibt die vorige Kopie liegen. Scheitert der
+Neustart, zeigt `current` wieder auf die vorige Kopie, die Unit bekommt ihren
+alten Text, der alte Daemon wird noch einmal gestartet, und der Befund ist
+`DAEMON_008`. Geht `current` oder die Unit nicht nachweislich zurück, startet
+der Befehl nichts mehr, denn er startete sonst die eben gescheiterte Kopie;
+der Befund nennt dann, was nicht zurückging. Dasselbe gilt für eine ersetzte Unit auf dem Weg ohne AppImage:
+Wer `daemon install` aus einem neuen Archiv ruft, bekommt den Daemon des neuen
+Archivs auch sofort und nicht erst bei der nächsten Anmeldung. Ist
+`~/.local/lib/humanitl` ein Verweis oder gehört
 es einem anderen Konto als das Heimatverzeichnis, wird nichts kopiert
 (`DAEMON_011`). Scheitert nach der Kopie noch etwas — die Unit, `systemctl` —,
 zeigt `current` wieder dorthin, wohin es vorher zeigte, und die neue Kopie
 geht wieder. `--print` nennt denselben Pfad `…/current/humanitld`, den die
 Unit bekäme, und kopiert nichts.
+
+**`--refresh`: ein neueres AppImage erneuert den Dienst.** `AppRun` ruft bei
+jedem Start der Anwendung `humanitl -q daemon install --refresh` (HUM-077).
+Der Schalter tut nur dann etwas, wenn der Lauf aus einem AppImage kommt, die
+Unit unter `~/.config/systemd/user/` die Marke trägt und
+`ExecStart=~/.local/lib/humanitl/current/humanitld` nennt, und `current` auf
+die Kopie einer anderen Fassung zeigt; dann läuft alles wie oben beschrieben,
+samt Neustart. Sonst endet er sofort mit 0 und schreibt, warum nicht:
+`not_appimage`, `not_installed` oder `up_to_date` (unter `--json` als `action`,
+dazu `installed` und `version`). Die erste Einrichtung macht er nie: Eine Unit,
+die bei jeder Anmeldung einen Dienst startet, legt ein Programmstart nicht
+ungefragt an; das bleibt der Knopf in der Einrichtung oder
+`--cli daemon install`. Und wer den Dienst mit `daemon uninstall` entfernt hat,
+bekommt ihn vom nächsten Start des AppImage nicht still zurück, weil die Unit
+fehlt. `--refresh` verträgt sich nicht mit `--print`, `--no-start` und
+`--bin-dir`.
 
 **Ohne Nutzersitzung wird nichts geschrieben.** Fehlt `XDG_RUNTIME_DIR` und
 soll die Unit gestartet werden (kein `--print`, kein `--no-start`), endet der
@@ -478,6 +507,65 @@ oder irgendwo sonst außerhalb von `/tmp` — oder startet den Daemon von Hand
 gemeinsames `/tmp` ist der Weg, auf dem ein anderer Prozess des Nutzers dem
 Daemon eine Datei unterschiebt, und ein Projektordner in einem Verzeichnis, das
 beim nächsten Start verschwindet, ist ohnehin kein Ort für Arbeit.
+
+## `humanitl daemon uninstall`
+
+Das Gegenstück zu `daemon install` (HUM-077): meldet den Dienst ab und nimmt
+weg, was `daemon install` angelegt hat.
+
+```
+humanitl daemon uninstall [--purge-binaries]
+```
+
+**Erst abmelden, dann entfernen.** Zuerst läuft `systemctl --user disable
+--now` für die Units, die es gibt: `humanitld.service`, wenn die Unit mit der
+Marke unter `~/.config/systemd/user/` liegt, beim Paket
+`humanitld.socket humanitld.service`. Scheitert der Aufruf, ist noch nichts
+entfernt, und der Befund `DAEMON_014` nennt genau diesen Aufruf zum Kopieren;
+findet `systemctl` den Bus der Sitzung nicht, ist es `DAEMON_010`. Danach
+gehen:
+
+- jeder Verweis der Aktivierung unter `~/.config/systemd/user/*.wants/` und
+  `*.requires/` für diese Units (ohne `systemctl` entfernt der Befehl sie
+  selbst, sonst die Reste, die `disable` übrig ließ);
+- die Unit `~/.config/systemd/user/humanitld.service`, nur wenn sie die Marke
+  trägt;
+- der Socket `$XDG_RUNTIME_DIR/humanitl/daemon.sock`, nur wenn es ein Socket
+  ist und niemand mehr an ihm lauscht. Antwortet dort noch ein Daemon, den
+  jemand von Hand gestartet hat, bleibt er unberührt;
+- mit `--purge-binaries` die Kopien aus einem AppImage: der Verweis
+  `~/.local/lib/humanitl/current`, liegengebliebene Zwischenverweise
+  `current.tmp-*` und jedes eigene Verzeichnis der Form
+  `<version>.<stempel>`, danach `~/.local/lib/humanitl` selbst, wenn es leer
+  ist. Was anders heißt, ein Verweis ist oder einem anderen Konto gehört,
+  bleibt liegen. Die Kopien gehen erst hier, weil erst jetzt kein Dienst mehr
+  aus ihnen läuft.
+
+Antwortet nach dem Abmelden noch ein Daemon am Socket, etwa einer, den
+jemand von Hand gestartet hat, entfernt `--purge-binaries` nichts: Er läuft
+womöglich aus genau diesen Kopien. Der Befund ist `DAEMON_014` mit dem
+Vorschlag `pkill -x humanitld`.
+
+Danach `daemon-reload` und `reset-failed`, deren Ergebnis nicht zählt.
+Bleibt etwas stehen, endet der Befehl mit `DAEMON_014` und nennt jeden Pfad,
+der blieb.
+
+**Nie über fremdes Eigentum.** Eine Unit ohne die Marke hat Humanitl nicht
+geschrieben; der Befehl meldet nichts ab, entfernt nichts und endet mit
+`DAEMON_005`. Die Units des Pakets unter `/usr/lib/systemd/user/` werden
+abgemeldet, bleiben aber liegen, bis das Paket geht
+(`sudo apt remove humanitl`); eine Notiz sagt das. Konfiguration,
+Aufzeichnung und Audit-Log bleiben ebenfalls liegen, sie gehören dem Menschen.
+
+Ohne Unit und ohne Kopie endet der Befehl mit 0 und `activation: nothing`.
+Die Ausgabe nennt `unit`, `units`, `activation` (`disabled`, `no systemctl`,
+`nothing`), `removed`, `binaries` und unter `--json` `package`, den Pfad der
+Dienst-Unit des Pakets oder `null`.
+
+Danach zeigt `humanitl doctor` in der Zeile `daemon` den Befund `DOCTOR_006`
+mit dem Vorschlag `InstallService`, also `humanitl daemon install`: Ohne
+erreichbaren Daemon schlägt der Doctor den Weg vor, der den Dienst auf Dauer
+einrichtet, und nicht `humanitld` im Vordergrund eines Terminals.
 
 ## `humanitl daemon status`
 

@@ -2078,6 +2078,7 @@ fn install_run(harness: &Harness, bin: &Path, args: &[&str]) -> Output {
         .args(args)
         .current_dir(harness.path("work"))
         .env_clear()
+        .env("HUMANITL_SYSTEM_UNIT_DIR", harness.path("system-units"))
         .env("PATH", "")
         .env("HOME", harness.path("home"))
         .env("XDG_CONFIG_HOME", harness.path("config"))
@@ -2292,6 +2293,7 @@ fn daemon_install_refuses_when_no_humanitld_lies_next_to_it() {
     command
         .args(["daemon", "install"])
         .env_clear()
+        .env("HUMANITL_SYSTEM_UNIT_DIR", harness.path("system-units"))
         .env("PATH", "")
         .env("HOME", harness.path("home"))
         .env("XDG_CONFIG_HOME", harness.path("config"));
@@ -2368,6 +2370,7 @@ fn install_run_with_path(harness: &Harness, bin: &Path, path: &Path, args: &[&st
         .args(args)
         .current_dir(harness.path("work"))
         .env_clear()
+        .env("HUMANITL_SYSTEM_UNIT_DIR", harness.path("system-units"))
         .env("PATH", path)
         .env("HOME", harness.path("home"))
         .env("XDG_CONFIG_HOME", harness.path("config"))
@@ -3511,6 +3514,7 @@ fn daemon_install_appimage_copies_binaries() {
         .args(["daemon", "install"])
         .current_dir(harness.path("work"))
         .env_clear()
+        .env("HUMANITL_SYSTEM_UNIT_DIR", harness.path("system-units"))
         .env("PATH", "")
         .env("APPIMAGE", "/tmp/Humanitl-0.0.0-x86_64.AppImage")
         .env("HOME", harness.path("home"))
@@ -4010,6 +4014,7 @@ fn daemon_install_without_a_user_session_writes_nothing() {
         .args(["daemon", "install"])
         .current_dir(harness.path("work"))
         .env_clear()
+        .env("HUMANITL_SYSTEM_UNIT_DIR", harness.path("system-units"))
         .env("PATH", &fake)
         .env("HOME", harness.path("home"))
         .env("XDG_CONFIG_HOME", harness.path("config"))
@@ -4182,6 +4187,7 @@ fn appimage_install(harness: &Harness, bin: &Path, args: &[&str]) -> Output {
         .args(args)
         .current_dir(harness.path("work"))
         .env_clear()
+        .env("HUMANITL_SYSTEM_UNIT_DIR", harness.path("system-units"))
         .env("PATH", "")
         .env("APPIMAGE", "/tmp/Humanitl-0.0.0-x86_64.AppImage")
         .env("HOME", harness.path("home"))
@@ -4297,12 +4303,19 @@ fn daemon_install_appimage_same_version_again_never_touches_the_live_copy() {
 
     assert_ne!(old, new, "the second copy is a directory of its own");
     assert!(new.join("humanitld").is_file(), "{}", new.display());
+    // Seit HUM-077 geht die alte Kopie erst nach einem Neustart des Dienstes:
+    // Ohne `systemctl` (leerer `PATH`) startet niemand neu, und ein Daemon,
+    // der noch aus ihr läuft, verlöre sonst seine Datei. Dass sie nach dem
+    // Neustart geht, misst
+    // `refresh_replaces_an_older_copy_restarts_and_only_then_retires_it` in
+    // `tests/daemon_lifecycle.rs`.
     assert!(
-        !old.exists(),
-        "the copy current pointed at before is retired"
+        old.join("humanitld").is_file(),
+        "the copy current pointed at before stays complete without a restart"
     );
-    let copies = lib_copies(&harness);
-    assert_eq!(copies, vec![new], "exactly one copy is left");
+    let mut expected = vec![old, new];
+    expected.sort();
+    assert_eq!(lib_copies(&harness), expected, "the old and the new copy");
 }
 
 /// Scheitert `enable` nach der Kopie, geht die Kopie wieder, und `current`
@@ -4330,6 +4343,7 @@ fn daemon_install_appimage_failed_enable_takes_the_copy_back() {
         .args(["daemon", "install"])
         .current_dir(harness.path("work"))
         .env_clear()
+        .env("HUMANITL_SYSTEM_UNIT_DIR", harness.path("system-units"))
         .env("PATH", &fake)
         .env("APPIMAGE", "/tmp/Humanitl-0.0.0-x86_64.AppImage")
         .env("HOME", harness.path("home"))

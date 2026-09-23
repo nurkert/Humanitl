@@ -183,7 +183,7 @@ async fn daemon_facts(
     let Some(client) = client else {
         // Der Befund des Verbindungsversuchs, nicht ein neuer: Er weiß, ob das
         // Token fehlte, der Socket fehlte oder niemand antwortete.
-        let diagnostic = refused.unwrap_or_else(|| {
+        let mut diagnostic = refused.unwrap_or_else(|| {
             Diagnostic::builder(
                 humanitl_core::diagnostics::codes::DAEMON_001,
                 humanitl_core::Severity::Blocking,
@@ -191,6 +191,14 @@ async fn daemon_facts(
             .why(format!("no daemon answered on {}", socket.display()))
             .build()
         });
+        // Nur der Vorschlag geht, der Grund bleibt. Der Verbindungsversuch
+        // schlägt `humanitld` vor, also den Daemon im Vordergrund dieses
+        // Terminals; die Zeile des Doctors sagt, was auf Dauer hilft, und
+        // fällt ohne eigenen Vorschlag auf `InstallService` zurück
+        // (`humanitl_sandbox::doctor`, Prüfung 6) -- dieselbe Abhilfe, die die
+        // Einrichtung der Anwendung für `DAEMON_001` anbietet. Das ist der
+        // Zustand nach `daemon uninstall` (HUM-077, Akzeptanzkriterium 4).
+        diagnostic.fix = None;
         return DaemonFacts::Unreachable {
             socket: socket.to_path_buf(),
             diagnostic: Box::new(diagnostic),
