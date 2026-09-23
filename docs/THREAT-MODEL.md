@@ -161,7 +161,10 @@ Inferenz deckt. Aufgezählt werden dort dreizehn Endpunkte (`/v1/chat/completion
 Flächen `/api/` und `/v1/` fehlen mit Absicht, weil sie auch `POST /api/pull`, `DELETE /api/delete`,
 `POST /v1/files` und `POST /v1/load_lora_adapter` deckten und einen Agenten ungefragt am Bestand
 des Servers arbeiten ließen. Alles andere an denselben Host wird
-normal gehalten. Der Verkehr wird vollständig aufgezeichnet und durch die Findings-Detektoren
+normal gehalten, auch ein Pfad mit `..`-Segment (offen, `%2e%2e` oder `..;`), weil erst der Server
+ihn auflöst. Dieselbe Grenze gilt für jede Nutzerregel, die durchlässt und ein Pfadmuster oder
+Präfixe trägt. Eine Regel, die blockt oder fragt, prüft dagegen zusätzlich den aufgelösten Pfad
+und fängt so auch den Umweg (HUM-204). Der Verkehr wird vollständig aufgezeichnet und durch die Findings-Detektoren
 geschickt; ein Treffer erzeugt eine Warnung (`LLM_005`), hält aber nicht an. Im Isolations-Panel
 steht der Kanal als vierte, bernsteinfarbene Zeile mit dem konkreten Endpunkt.
 
@@ -590,6 +593,7 @@ Sitzungs-Historie steht.
 | 2026-09-02 | Erstfassung: vier Angreifer, vierzehn Kanäle, sechs Annahmen | HUM-007, Sicherheits-Review vom selben Tag |
 | 2026-09-02 | Review-Korrekturen: Shim-Prozessmodell (Brücke im Elternprozess, Filter im Kind), CA-Schlüssel bleibt auf dem Host, kein Loopback-Port auf dem Host, Mount-Allowlist als Auszug der Argv-Tabelle, `socketpair()` bleibt unberührt und erlaubt (CONVENTIONS.md 4.11) | HUM-007 Review |
 | 2026-09-04 | K-15 aufgenommen: der Isolations-Check läuft, nachdem der Shim den Agenten gestartet hat, also beendet ein roter Check die Sitzung, statt sie zu verhindern. Der Halbsatz „Check 3 prüft, dass `socketpair` gelingt" gestrichen — `probe_families` probt es nicht | HUM-041, externer Review |
+| 2026-09-23 | K-02: Eine `allow`- oder `redact`-Regel mit Pfadmuster oder Präfixen trifft keinen Pfad mit `..`-Segment mehr, auch verschleiert; vorher galt das nur für Präfixe, und ein Glob `/repos/me/**` gab `/repos/me/../../user/keys` frei. `block` und `ask` prüfen zusätzlich den nach RFC 3986 aufgelösten Pfad (Punktsegmente, doppelte Schrägstriche, kodierte nicht reservierte Zeichen); vorher traf ihr Präfix keinen Pfad mit `..`, und eine hostweite Freigabe dahinter entschied | HUM-204, Sicherheitsdurchlauf vom selben Tag |
 
 Geplante Fortschreibung: HUM-059 bringt das Dokument zum Release auf den Stand des Codes. Jede
 sicherheitsrelevante Änderung am Shim, an der Mount-Allowlist, am Filter oder am Passthrough

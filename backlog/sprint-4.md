@@ -4067,12 +4067,12 @@ M2, Schwere major, von zwei unabhängigen Prüfern bestätigt). Ort: `daemon/cra
 Der Befund ist behoben, und ein Test hält ihn behoben.
 
 ### Akzeptanzkriterien
-- [ ] `has_dot_dot_segment` auf `pub(crate)` setzen.
-- [ ] In `eval.rs` `CompiledRule::matches` (um Zeile 345) eine Regel überspringen, die nicht `Block` ist, wenn der Pfad `..` trägt und die Regel eine Pfad- oder Präfixbedingung hat. Die Anfrage fällt dann auf `ask`, Block-Regeln greifen weiter. Alternative: Punktsegmente nach RFC 3986 auflösen, dagegen matchen und genau diesen Pfad weiterleiten.
-- [ ] Test neben `a_dot_dot_segment_never_matches_a_prefix` (`path.rs:185`):
-- [ ] SECURITY.md 3.1 und CONVENTIONS nachziehen.
-- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
-- [ ] `make check` grün.
+- [x] `has_dot_dot_segment` auf `pub(crate)` setzen. Umgesetzt als `pub`: der Regelvorschlag in `humanitl-proxy` (`handler.rs`) braucht die Prüfung, seit `prefix_matches` nur noch Zeichen vergleicht.
+- [x] In `eval.rs` `CompiledRule::matches` (um Zeile 345) eine Regel überspringen, die nicht `Block` ist, wenn der Pfad `..` trägt und die Regel eine Pfad- oder Präfixbedingung hat. Die Anfrage fällt dann auf `ask`, Block-Regeln greifen weiter. Alternative: Punktsegmente nach RFC 3986 auflösen, dagegen matchen und genau diesen Pfad weiterleiten. Umgesetzt für `allow` und `redact`; `ask` trifft wie `block` weiter, weil sonst eine hostweite Freigabe dahinter entschiede. `block` und `ask` prüfen zusätzlich den nach RFC 3986 aufgelösten Pfad (Review-Befund).
+- [x] Test neben `a_dot_dot_segment_never_matches_a_prefix` (`path.rs:185`):
+- [x] SECURITY.md 3.1 und CONVENTIONS nachziehen.
+- [x] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [x] `make check` grün.
 
 ### Referenzen
 Sicherheitsdurchlauf 2026-09-23, Befund M2; `daemon/crates/rules/src/path.rs:82`.
