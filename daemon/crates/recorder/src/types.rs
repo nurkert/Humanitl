@@ -388,6 +388,13 @@ pub struct FlowSummary {
     /// für jede Freigabe, jeden Ablauf und jede Zeile aus der Zeit vor
     /// `V8__decision_note.sql`.
     pub decision_note: Option<String>,
+    /// Wie viele Funde mit der Freigabe hinausgingen, ohne ersetzt oder
+    /// bestätigt zu sein (HUM-160).
+    ///
+    /// `None` für jede Anfrage, bei der nichts hinausging, bei der niemand
+    /// gezählt hat, und für jede Zeile aus der Zeit vor
+    /// `V9__unresolved_findings.sql`. Nie eine geratene Null.
+    pub unresolved_findings: Option<u32>,
 }
 
 /// Eine aufgezeichnete Nachricht: Kopfzeilen plus Verweis auf den Body.
@@ -424,7 +431,8 @@ pub struct FindingRecord {
     pub value_hash: [u8; 32],
     /// Die ersten Zeichen des Werts für die Anzeige.
     pub display_prefix: String,
-    /// Was aus dem Fund wurde: `replaced`, `ignored` oder nichts.
+    /// Was aus dem Fund wurde: `replaced`, `ignored`, `acknowledged` (der
+    /// Mensch hat ihn gesehen und trotzdem gesendet, HUM-160) oder nichts.
     pub resolved: Option<String>,
 }
 

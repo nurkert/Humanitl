@@ -896,3 +896,82 @@ async fn set_config_on_a_file_it_cannot_edit_is_config_015_and_the_file_stays() 
     drop(client);
     daemon.shutdown().await;
 }
+
+/// „Trotzdem senden" über den Draht (HUM-160): Eine Bestätigung, die keinen
+/// Fund trifft oder nicht zu `allow` gehört, ist `IPC_004` und lässt den Flow
+/// warten; die gültige kommt als `unresolved_findings = 0` im Strom an.
+#[tokio::test]
+async fn an_acknowledgement_travels_and_a_wrong_one_is_ipc_004() {
+    let daemon = Daemon::new().await;
+    let mut client = daemon.client().await;
+    let mut stream = client
+        .subscribe(v1::SubscribeRequest::default())
+        .await
+        .unwrap()
+        .into_inner();
+
+    let session = SessionId::new();
+    let mut flow = received(session, "api.example.com");
+    flow.apply(
+        TransitionInput::Analyze {
+            findings: vec![humanitl_core::Finding::new(
+                humanitl_core::FindingKind::Email,
+                0..17,
+                humanitl_core::FindingLocation::Body,
+                humanitl_core::Tier::Regex,
+                "alice@example.org",
+            )],
+        },
+        SystemTime::now(),
+    )
+    .unwrap();
+    let id = flow.id;
+    daemon
+        .queue
+        .registry()
+        .insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+    let held = daemon
+        .queue
+        .hold(&mut flow, Instant::now() + Duration::from_secs(30))
+        .unwrap();
+    assert_eq!(event_name(&next_event(&mut stream).await), "held");
+
+    let decide = |decision, acknowledged: Vec<u32>| v1::DecideRequest {
+        flow_ids: vec![id.to_string()],
+        decision: Some(decision),
+        acknowledged_findings: acknowledged,
+        ..v1::DecideRequest::default()
+    };
+    for (decision, acknowledged) in [
+        (v1::decide_request::Decision::Allow(()), vec![1]),
+        (
+            v1::decide_request::Decision::Block(v1::decide_request::Block::default()),
+            vec![0],
+        ),
+    ] {
+        let error = client
+            .decide(decide(decision, acknowledged))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::InvalidArgument);
+        let diagnostic = humanitl_ipc::diagnostic_from_status(&error).expect("details");
+        assert_eq!(diagnostic.code, "IPC_004", "{diagnostic:?}");
+    }
+    assert_eq!(daemon.queue.pending_ids(), vec![id], "still held");
+
+    let (decision, response) = tokio::join!(
+        held,
+        client.decide(decide(v1::decide_request::Decision::Allow(()), vec![0]))
+    );
+    assert_eq!(decision, Decision::Allow);
+    assert!(response.unwrap().into_inner().results[0].applied);
+    let event = next_event(&mut stream).await;
+    let Some(v1::flow_event::Event::Decided(details)) = event.event else {
+        panic!("decided");
+    };
+    assert_eq!(details.unresolved_findings, Some(0));
+
+    drop(stream);
+    drop(client);
+    daemon.shutdown().await;
+}

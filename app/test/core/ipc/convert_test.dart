@@ -158,6 +158,40 @@ void main() {
     },
   );
 
+  test('the trail of open findings travels both ways (HUM-160)', () {
+    const FlowId id = FlowId('018f0000-0000-7000-8000-000000000006');
+    expect(
+      const Decision.allow(acknowledgedFindings: <int>[0, 2])
+          .toProto(id)
+          .acknowledgedFindings,
+      <int>[0, 2],
+    );
+    expect(const Decision.allow().toProto(id).acknowledgedFindings, isEmpty);
+
+    final Flow counted =
+        (pb.FlowSummary()
+              ..flowId = id.value
+              ..authority = (pb.Authority()..host = 'api.example.com')
+              ..unresolvedFindings = 0)
+            .toDomain();
+    expect(counted.unresolvedFindings, 0, reason: 'a zero is a count');
+    final Flow uncounted =
+        (pb.FlowSummary()
+              ..flowId = id.value
+              ..authority = (pb.Authority()..host = 'api.example.com'))
+            .toDomain();
+    expect(uncounted.unresolvedFindings, isNull, reason: 'absent is not zero');
+
+    final FlowEvent? decided =
+        (pb.FlowEvent()
+              ..decided = (pb.FlowEvent_Decided()
+                ..flowId = id.value
+                ..kind = pb.DecisionKind.DECISION_KIND_ALLOW
+                ..unresolvedFindings = 1))
+            .toDomain();
+    expect((decided as FlowEventDecided).unresolvedFindings, 1);
+  });
+
   test('FlowEvent.received carries the summary and the deadline', () {
     final DateTime deadline = DateTime.utc(2026, 9, 3, 10, 5);
     final pb.FlowEvent event = pb.FlowEvent()

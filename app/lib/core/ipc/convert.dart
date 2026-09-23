@@ -226,6 +226,8 @@ extension FlowSummaryToDomain on pb.FlowSummary {
     // What the person wrote to the agent, already cleaned by the daemon; the
     // empty string means there is no note (HUM-117).
     decisionNote: decisionNote,
+    // Absent means "nothing left or nobody counted", never zero (HUM-160).
+    unresolvedFindings: hasUnresolvedFindings() ? unresolvedFindings : null,
     ruleId: ruleId.isEmpty ? null : RuleId(ruleId),
     status: status,
     requestSize: requestSize.toInt(),
@@ -325,6 +327,10 @@ extension FlowEventToDomain on pb.FlowEvent {
         ),
         ruleId: decided.ruleId.isEmpty ? null : RuleId(decided.ruleId),
         note: decided.note,
+        // Absent means "nothing left or nobody counted", never zero (HUM-160).
+        unresolvedFindings: decided.hasUnresolvedFindings()
+            ? decided.unresolvedFindings
+            : null,
       ),
       pb.FlowEvent_Event.forwarded => FlowEvent.forwarded(
         at: when,
@@ -529,8 +535,9 @@ extension DecisionToProto on Decision {
   pb.DecideRequest toProto(FlowId flowId, {Rule? remember}) {
     final pb.DecideRequest out = pb.DecideRequest()..flowIds.add(flowId.value);
     switch (this) {
-      case DecisionAllow():
+      case DecisionAllow(:final List<int> acknowledgedFindings):
         out.allow = wkt.Empty();
+        out.acknowledgedFindings.addAll(acknowledgedFindings);
       case DecisionAllowEdited(:final request):
         out.allowEdited = request.toProto();
       case DecisionBlock(:final note):

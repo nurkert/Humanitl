@@ -336,7 +336,8 @@ impl DaemonApi for FakeDaemon {
         let mut results = Vec::with_capacity(request.flow_ids.len());
         let mut refusals = Vec::new();
         for text in &request.flow_ids {
-            let (result, refusal) = self.decide_one(text, &decision);
+            let (result, refusal) =
+                self.decide_one(text, &decision, &request.acknowledged_findings);
             results.push(result);
             refusals.push(refusal);
         }
@@ -664,6 +665,7 @@ impl FakeDaemon {
         &self,
         text: &str,
         decision: &Decision,
+        acknowledged: &[u32],
     ) -> (v1::DecideResult, Option<Diagnostic>) {
         let id = match validate::flow_id(text) {
             Ok(id) => id,
@@ -676,6 +678,18 @@ impl FakeDaemon {
                 "is unknown to the fake daemon"
             };
             let diagnostic = not_held(id, reason);
+            return (refused(text, &diagnostic), Some(diagnostic));
+        }
+
+        // Ein Index, der keinen Fund trifft, ist ein Fehler der Anfrage und
+        // entscheidet nichts, wie im echten Daemon (`IPC_004`, HUM-160).
+        if let Err((index, findings)) = self.state.set_acknowledged(id, acknowledged) {
+            let diagnostic = Diagnostic::builder(codes::IPC_004, Severity::Error)
+                .why(format!(
+                    "flow {id} has {findings} finding(s), so there is no finding {index} to \
+                     acknowledge"
+                ))
+                .build();
             return (refused(text, &diagnostic), Some(diagnostic));
         }
 

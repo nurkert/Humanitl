@@ -152,6 +152,46 @@ pub fn remaining_findings(
     scanner.scan(request, body).findings
 }
 
+/// Der zweite Scan als Zahl für das `Decided`-Ereignis (HUM-160).
+///
+/// Die Warteschlange veröffentlicht `Decided`, bevor der Handler die
+/// bearbeitete Fassung prüft und weiterleitet; die Zahl der Funde, mit denen
+/// sie hinausgeht, gehört aber in genau dieses Ereignis. Deshalb läuft
+/// derselbe Weg zweimal: hier für die Zahl, im Handler für die harte Sperre.
+/// Beide gehen durch [`apply_edit`] und [`remaining_findings`] mit demselben
+/// Scanner und derselben Grenze, also sehen beide dieselbe Anfrage. Der
+/// doppelte Scan trifft nur bearbeitete Freigaben, und die kommen im Takt
+/// eines Menschen.
+pub struct SecondScan {
+    scanner: std::sync::Arc<dyn Scanner>,
+    cap_bytes: u64,
+}
+
+impl SecondScan {
+    /// Zählt mit `scanner` über Bearbeitungen bis `cap_bytes`
+    /// (`limits.hold_body_cap_bytes`, dieselbe Grenze wie im Handler).
+    #[must_use]
+    pub fn new(scanner: std::sync::Arc<dyn Scanner>, cap_bytes: u64) -> Self {
+        Self { scanner, cap_bytes }
+    }
+}
+
+impl core::fmt::Debug for SecondScan {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SecondScan")
+            .field("cap_bytes", &self.cap_bytes)
+            .finish_non_exhaustive()
+    }
+}
+
+impl crate::hold::EditCount for SecondScan {
+    fn unresolved(&self, held: &HttpRequest, edited: &HttpRequest) -> Option<u32> {
+        let Edited { request, body } = apply_edit(held, edited.clone(), self.cap_bytes).ok()?;
+        let remaining = remaining_findings(self.scanner.as_ref(), &request, &body);
+        Some(u32::try_from(remaining.len()).unwrap_or(u32::MAX))
+    }
+}
+
 /// Der Befund für ein verschobenes Ziel.
 fn target_changed(original: &HttpRequest, edited: &HttpRequest) -> Diagnostic {
     Diagnostic::builder(EDIT_001, Severity::Error)

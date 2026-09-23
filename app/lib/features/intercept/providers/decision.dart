@@ -88,6 +88,7 @@ class BatchRequest {
     this.remember = false,
     this.reason = ConfirmReason.reach,
     this.withNote = true,
+    this.acknowledgedFindings = const <int>[],
   });
 
   /// Allow or block; nothing else reaches a group.
@@ -104,6 +105,11 @@ class BatchRequest {
 
   /// Whether the note of the action bar travels with it.
   final bool withNote;
+
+  /// The findings "Send anyway" acknowledged, when the pause led here: a
+  /// rule draft set to forever asks first, and the acknowledgement has to
+  /// survive the question (HUM-160). Only ever set for a single request.
+  final List<int> acknowledgedFindings;
 
   /// The one host of the batch, or an empty string when it spans several.
   ///
@@ -126,11 +132,18 @@ class BatchRequest {
       other.remember == remember &&
       other.reason == reason &&
       other.withNote == withNote &&
-      listEquals(other.flows, flows);
+      listEquals(other.flows, flows) &&
+      listEquals(other.acknowledgedFindings, acknowledgedFindings);
 
   @override
-  int get hashCode =>
-      Object.hash(kind, remember, reason, withNote, Object.hashAll(flows));
+  int get hashCode => Object.hash(
+    kind,
+    remember,
+    reason,
+    withNote,
+    Object.hashAll(flows),
+    Object.hashAll(acknowledgedFindings),
+  );
 }
 
 /// The distinct hosts of [flows], in the order they were met.
@@ -376,7 +389,16 @@ class InterceptDecision extends _$InterceptDecision {
   /// pause instead of sending while a finding is unresolved, and nothing
   /// leaves (HUM-049). The pause is a stop inside the card, not a modal
   /// (`docs/UX.md` 5.4).
-  Future<void> allow({bool remember = false, bool acknowledged = false}) async {
+  ///
+  /// [acknowledgedFindings] are the indices the daemon records as seen and
+  /// sent anyway; only the pause names them ([sendAnyway]). Holding the valve
+  /// sends none, and the history then counts every finding as unresolved
+  /// (HUM-160).
+  Future<void> allow({
+    bool remember = false,
+    bool acknowledged = false,
+    List<int> acknowledgedFindings = const <int>[],
+  }) async {
     final Flow? flow = _decidable();
     if (flow == null) {
       return;
@@ -396,14 +418,38 @@ class InterceptDecision extends _$InterceptDecision {
     if (duration == RememberDuration.forever) {
       // A rule that outlives the session is the second reach the modal exists
       // for (`docs/UX.md` 5.4).
-      _ask(DecisionKind.allow, <Flow>[flow], remember, ConfirmReason.forever);
+      _ask(
+        DecisionKind.allow,
+        <Flow>[flow],
+        remember,
+        ConfirmReason.forever,
+        acknowledgedFindings: acknowledgedFindings,
+      );
       return;
     }
     await _send(
       flow,
-      const Decision.allow(),
+      Decision.allow(acknowledgedFindings: acknowledgedFindings),
       _rule(flow, draft, duration, RuleAction.allow),
     );
+  }
+
+  /// "Send anyway" in the findings pause: sends the request unchanged and
+  /// acknowledges every open finding the detail names (HUM-160).
+  ///
+  /// The pause is the one place where the person has seen each finding with
+  /// its kind and place, so only here does the daemon record them as
+  /// acknowledged. While the detail is still on its way only the number is
+  /// known, and nothing is sent: the person has not seen what they would
+  /// acknowledge, and a send without the indices would record the opposite
+  /// of what they did. The button stays disabled until then
+  /// ([FindingSet.complete]); this check holds the key `S` to the same.
+  Future<void> sendAnyway() async {
+    final FindingSet findings = ref.read(selectedFindingsProvider);
+    if (!findings.complete) {
+      return;
+    }
+    await allow(acknowledged: true, acknowledgedFindings: findings.indices);
   }
 
   /// Refuses the selected request.
@@ -436,6 +482,7 @@ class InterceptDecision extends _$InterceptDecision {
     bool remember,
     ConfirmReason reason, {
     bool withNote = true,
+    List<int> acknowledgedFindings = const <int>[],
   }) => ref
       .read(batchConfirmProvider.notifier)
       .ask(
@@ -445,6 +492,7 @@ class InterceptDecision extends _$InterceptDecision {
           remember: remember,
           reason: reason,
           withNote: withNote,
+          acknowledgedFindings: acknowledgedFindings,
         ),
       );
 
@@ -571,6 +619,7 @@ class InterceptDecision extends _$InterceptDecision {
       request.kind,
       remember: request.remember,
       withNote: request.withNote,
+      acknowledgedFindings: request.acknowledgedFindings,
     );
   }
 
@@ -597,6 +646,7 @@ class InterceptDecision extends _$InterceptDecision {
     DecisionKind kind, {
     bool remember = false,
     bool withNote = true,
+    List<int> acknowledgedFindings = const <int>[],
   }) async {
     if (flows.isEmpty || state.isSending) {
       return;
@@ -618,7 +668,13 @@ class InterceptDecision extends _$InterceptDecision {
         ? Decision.block(
             note: withNote ? ref.read(blockNoteProvider).outgoing : null,
           )
-        : const Decision.allow();
+        // The indices name the findings of one request; over a group there
+        // are none to carry (HUM-160).
+        : Decision.allow(
+            acknowledgedFindings: flows.length == 1
+                ? acknowledgedFindings
+                : const <int>[],
+          );
     ref.read(lastRefusalProvider.notifier).clear();
     state = DecisionProgress.sending(flowId: flows.first.id, kind: kind);
     final DaemonClient client = ref.read(daemonClientProvider);
@@ -931,8 +987,13 @@ class LastDecision extends _$LastDecision {
 /// as soon as the daemon has answered (`docs/UX.md` 4.7).
 @immutable
 class FindingSet {
-  /// Creates a set of [count] findings, of which [known] are described.
-  const FindingSet({this.count = 0, this.known = const <Finding>[]});
+  /// Creates a set of [count] findings, of which [known] are described, at
+  /// [indices] in the list the daemon reported.
+  const FindingSet({
+    this.count = 0,
+    this.known = const <Finding>[],
+    this.indices = const <int>[],
+  });
 
   /// Nothing was found.
   static const FindingSet none = FindingSet();
@@ -943,8 +1004,17 @@ class FindingSet {
   /// The ones the detail describes, in the order the daemon found them.
   final List<Finding> known;
 
+  /// Where each of [known] stands in the daemon's list of findings, which is
+  /// what `DecideRequest.acknowledged_findings` names (HUM-160).
+  final List<int> indices;
+
   /// True while at least one finding is unresolved.
   bool get isNotEmpty => count > 0;
+
+  /// True once the detail describes every unresolved finding, so that each
+  /// of them has its index (HUM-160). Before, only the number from the row is
+  /// known, and nothing may be acknowledged.
+  bool get complete => known.length == count;
 
   /// The first described finding, or null while only the number is known.
   Finding? get first => known.isEmpty ? null : known.first;
@@ -953,10 +1023,12 @@ class FindingSet {
   bool operator ==(Object other) =>
       other is FindingSet &&
       other.count == count &&
-      listEquals(other.known, known);
+      listEquals(other.known, known) &&
+      listEquals(other.indices, indices);
 
   @override
-  int get hashCode => Object.hash(count, Object.hashAll(known));
+  int get hashCode =>
+      Object.hash(count, Object.hashAll(known), Object.hashAll(indices));
 }
 
 /// The unresolved findings of the selected flow.
@@ -973,11 +1045,15 @@ FindingSet selectedFindings(Ref ref) {
   if (found == null) {
     return FindingSet(count: flow.findingCount);
   }
-  final List<Finding> open = <Finding>[
-    for (final Finding finding in found)
-      if (!finding.resolved) finding,
+  final List<int> indices = <int>[
+    for (final (int index, Finding finding) in found.indexed)
+      if (!finding.resolved) index,
   ];
-  return FindingSet(count: open.length, known: open);
+  return FindingSet(
+    count: indices.length,
+    known: <Finding>[for (final int index in indices) found[index]],
+    indices: indices,
+  );
 }
 
 /// Whether the findings pause stands open right now (HUM-049).

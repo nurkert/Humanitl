@@ -13,8 +13,8 @@ use std::time::{Duration, Instant, SystemTime};
 use bytes::Bytes;
 use humanitl_core::http::{BodyRef, HeaderMap, HttpRequest};
 use humanitl_core::{
-    Decision, DecisionSource, Diagnostic, Finding, Flow, FlowEvent, FlowId, FlowState,
-    InvalidTransition, SandboxId, SessionId, TransitionInput, UpstreamError,
+    DecidedFindings, Decision, DecisionSource, Diagnostic, Finding, Flow, FlowEvent, FlowId,
+    FlowState, InvalidTransition, SandboxId, SessionId, TransitionInput, UpstreamError,
 };
 use tokio::sync::broadcast;
 
@@ -93,6 +93,12 @@ pub struct FakeFlow {
     pub upstream_error: Option<UpstreamError>,
     /// Wann zuletzt etwas geschah; speist die Dauer in der Liste.
     pub last_at: SystemTime,
+    /// Die Funde, die der Mensch mit seiner Freigabe bestätigt hat, als
+    /// Indizes in [`FakeFlow::findings`] (HUM-160).
+    pub acknowledged: Vec<u32>,
+    /// Wie viele Funde mit der Freigabe hinausgingen, ohne ersetzt oder
+    /// bestätigt zu sein; aus dem `Decided`-Ereignis (HUM-160).
+    pub unresolved_findings: Option<u32>,
 }
 
 impl FakeFlow {
@@ -111,6 +117,8 @@ impl FakeFlow {
             deadline_at: None,
             upstream_error: None,
             last_at: at,
+            acknowledged: Vec::new(),
+            unresolved_findings: None,
         }
     }
 
@@ -166,6 +174,8 @@ impl FakeFlow {
             // und die Warteschlange benennt die Gruppe dann nach dem Host
             // (HUM-094). Derselbe Wert steht in [`FakeFlow::domain`].
             catalog_id: String::new(),
+            // Aus dem `Decided`-Ereignis, wie im echten Daemon (HUM-160).
+            unresolved_findings: self.unresolved_findings,
         }
     }
 
@@ -184,7 +194,17 @@ impl FakeFlow {
             response_body: self.response.as_ref().map(|response| {
                 body_to_proto(&response.body, &encoding_of_headers(&response.headers))
             }),
-            findings: self.findings.iter().map(finding_to_proto).collect(),
+            // Ein bestätigter Fund ist erledigt, wie im echten Daemon
+            // (`findings.resolved = 'acknowledged'`, HUM-160).
+            findings: self
+                .findings
+                .iter()
+                .zip(0_u32..)
+                .map(|(finding, index)| v1::Finding {
+                    resolved: self.acknowledged.contains(&index),
+                    ..finding_to_proto(finding)
+                })
+                .collect(),
             diagnostics: Vec::new(),
             domain: Some(self.domain()),
             body_preview: body_preview(
@@ -349,7 +369,10 @@ impl FakeState {
         // Vor dem Übergang festhalten, ob der Flow in der Warteschlange stand:
         // nur dann darf eine Entscheidung ihn wieder herausrechnen.
         let was_held = flow.is_held();
-        let event = flow.flow.apply(input, at)?;
+        let mut event = flow.flow.apply(input, at)?;
+        if was_held {
+            count_findings(flow, &mut event);
+        }
         flow.last_at = at;
         apply_side_effects(flow, &event);
         let wire = event_to_proto(&event, flow);
@@ -385,6 +408,28 @@ impl FakeState {
         if let Some(flow) = self.lock().flows.get_mut(&id) {
             flow.edited = Some(request);
         }
+    }
+
+    /// Hinterlegt die bestätigten Funde einer `Allow`-Entscheidung (HUM-160).
+    ///
+    /// # Errors
+    ///
+    /// Der Index, der keinen Fund trifft, und die Zahl der Funde; dann bleibt
+    /// alles, wie es war, und der Aufrufer entscheidet nicht.
+    pub fn set_acknowledged(&self, id: FlowId, acknowledged: &[u32]) -> Result<(), (u32, u32)> {
+        let mut inner = self.lock();
+        let Some(flow) = inner.flows.get_mut(&id) else {
+            return Ok(());
+        };
+        let total = u32::try_from(flow.findings.len()).unwrap_or(u32::MAX);
+        if let Some(&index) = acknowledged.iter().find(|index| **index >= total) {
+            return Err((index, total));
+        }
+        let mut sorted = acknowledged.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        flow.acknowledged = sorted;
+        Ok(())
     }
 
     /// Markiert einen Flow als Durchreiche zum LLM.
@@ -650,16 +695,44 @@ fn with_hold_counters(mut event: v1::FlowEvent, bytes: u64, count: u32) -> v1::F
     event
 }
 
+/// Zählt die Funde einer Entscheidung über einen gehaltenen Flow, wie die
+/// Warteschlange des echten Daemons (HUM-160).
+///
+/// `Allow` lässt die gehaltene Anfrage hinaus, offen sind ihre Funde ohne die
+/// bestätigten. Eine bearbeitete Fassung zählt der Fake nicht: Er hat keine
+/// Detektoren, und eine erfundene Zahl sähe aus wie eine gemessene. Das Feld
+/// fehlt dann, wie im echten Daemon ohne `EditCount`.
+fn count_findings(flow: &FakeFlow, event: &mut FlowEvent) {
+    let FlowEvent::Decided {
+        decision: Decision::Allow,
+        findings,
+        ..
+    } = event
+    else {
+        return;
+    };
+    let total = u32::try_from(flow.findings.len()).unwrap_or(u32::MAX);
+    let acknowledged = u32::try_from(flow.acknowledged.len()).unwrap_or(u32::MAX);
+    *findings = DecidedFindings {
+        unresolved: Some(total.saturating_sub(acknowledged)),
+        acknowledged: flow.acknowledged.clone(),
+    };
+}
+
 /// Schreibt fort, was ein Ereignis über den Flow hinaus festhält.
 fn apply_side_effects(flow: &mut FakeFlow, event: &FlowEvent) {
     match event {
         FlowEvent::Analyzed { findings, .. } => flow.findings.clone_from(findings),
         FlowEvent::Decided {
-            decision, source, ..
+            decision,
+            source,
+            findings,
+            ..
         } => {
             flow.decision = Some(decision.clone());
             flow.source = Some(*source);
             flow.deadline_at = None;
+            flow.unresolved_findings = findings.unresolved;
         }
         FlowEvent::TimedOut { .. } => {
             flow.decision = Some(Decision::TimedOut);
@@ -709,7 +782,10 @@ pub fn event_to_proto(event: &FlowEvent, flow: &FakeFlow) -> v1::FlowEvent {
             queue_count: 0,
         }),
         FlowEvent::Decided {
-            decision, source, ..
+            decision,
+            source,
+            findings,
+            ..
         } => {
             let (kind, reason, rule_id) = decision_fields(Some(decision), Some(*source));
             Event::Decided(v1::flow_event::Decided {
@@ -719,6 +795,7 @@ pub fn event_to_proto(event: &FlowEvent, flow: &FakeFlow) -> v1::FlowEvent {
                 block_reason: reason as i32,
                 rule_id,
                 note: block_note(decision),
+                unresolved_findings: findings.unresolved,
             })
         }
         FlowEvent::Forwarded { .. } => Event::Forwarded(v1::FlowRef { flow_id }),

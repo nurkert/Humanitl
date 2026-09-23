@@ -38,8 +38,8 @@ use bytes::Bytes;
 use humanitl_core::block::sanitize_note;
 use humanitl_core::ids::SandboxId;
 use humanitl_core::{
-    BlockReason, Decision, DecisionSource, Diagnostic, Finding, FixAction, FlowEvent, FlowId,
-    HeaderMap, HttpRequest, Scheme, SessionId,
+    BlockReason, DecidedFindings, Decision, DecisionSource, Diagnostic, Finding, FixAction,
+    FlowEvent, FlowId, HeaderMap, HttpRequest, Scheme, SessionId,
 };
 use rusqlite::Connection;
 use tokio::sync::{broadcast, oneshot};
@@ -517,12 +517,20 @@ impl Writer {
     }
 
     /// Schreibt die Entscheidung samt ihrer Herkunft fort.
+    ///
+    /// Dazu die Spur der Funde (HUM-160): `unresolved_findings` in der Zeile,
+    /// und jeder bestätigte Fund bekommt `resolved = 'acknowledged'`. Die
+    /// Indizes sind die aus `Analyzed`, also dieselben wie `findings.idx`; die
+    /// Zeilen dort stehen schon, weil der Handler die Funde vor `Analyzed`
+    /// durch denselben Kanal schickt. Ein Fund, den es nicht gibt, trifft
+    /// keine Zeile; die Warteschlange hat ihn vorher abgewiesen.
     fn on_decided(
         &mut self,
         flow_id: &FlowId,
         at: SystemTime,
         decision: &Decision,
         source: DecisionSource,
+        findings: &DecidedFindings,
     ) -> Result<(), RecorderError> {
         let held_ms = self.held.remove(flow_id).map(|held| millis(at) - held);
         let reason = decision.block_reason();
@@ -531,7 +539,8 @@ impl Writer {
             flow_id,
             "UPDATE flows SET state = 'decided', decision = ?2, block_reason = ?3, \
              rule_id = COALESCE(?4, rule_id), held_ms = COALESCE(?5, held_ms), edited = ?6, \
-             passthrough = MAX(passthrough, ?7), decision_note = ?8 WHERE id = ?1",
+             passthrough = MAX(passthrough, ?7), decision_note = ?8, unresolved_findings = ?9 \
+             WHERE id = ?1",
             rusqlite::params![
                 flow_id.to_string(),
                 decision.as_str(),
@@ -541,8 +550,17 @@ impl Writer {
                 i64::from(matches!(decision, Decision::AllowEdited { .. })),
                 i64::from(source == DecisionSource::Passthrough),
                 decision_note(decision, source),
+                findings.unresolved.map(i64::from),
             ],
-        )
+        )?;
+        for index in &findings.acknowledged {
+            self.update(
+                flow_id,
+                "UPDATE findings SET resolved = 'acknowledged' WHERE flow_id = ?1 AND idx = ?2",
+                rusqlite::params![flow_id.to_string(), i64::from(*index)],
+            )?;
+        }
+        Ok(())
     }
 
     /// Schreibt fort, was ein Ereignis über den Flow sagt.
@@ -576,7 +594,8 @@ impl Writer {
                 at,
                 decision,
                 source,
-            } => self.on_decided(flow_id, *at, decision, *source),
+                findings,
+            } => self.on_decided(flow_id, *at, decision, *source, findings),
             FlowEvent::Forwarded { flow_id, .. } => self.update(
                 flow_id,
                 "UPDATE flows SET state = 'forwarded' WHERE id = ?1",

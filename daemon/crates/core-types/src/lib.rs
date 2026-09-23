@@ -40,7 +40,7 @@ pub use crate::block::{
 pub use crate::diagnostics::{
     Diagnostic, DiagnosticBuilder, DiagnosticCode, FixAction, Severity, lookup,
 };
-pub use crate::event::FlowEvent;
+pub use crate::event::{DecidedFindings, FlowEvent};
 pub use crate::finding::{Finding, FindingKind, FindingLocation, Tier};
 pub use crate::flow::{
     AnswerRefused, BlockReason, Decision, DecisionSource, Flow, FlowState, InvalidTransition,

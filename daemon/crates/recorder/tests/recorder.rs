@@ -96,6 +96,7 @@ fn full_flow(recorder: &Recorder, host: &str, path: &str, at: SystemTime) -> Flo
         at: at + Duration::from_millis(1_200),
         decision: Decision::Allow,
         source: DecisionSource::User,
+        findings: humanitl_core::DecidedFindings::default(),
     });
     recorder.apply(&FlowEvent::Forwarded { flow_id: flow, at });
     recorder.apply(&FlowEvent::ResponseHeaders {
@@ -523,6 +524,7 @@ async fn a_block_for_a_secret_keeps_its_reason() {
             note: None,
         },
         source: DecisionSource::System,
+        findings: humanitl_core::DecidedFindings::default(),
     });
     harness.recorder.flush().await;
 
@@ -842,6 +844,7 @@ async fn the_state_machine_is_mirrored_into_the_columns() {
             note: Some("nein".to_owned()),
         },
         source: DecisionSource::User,
+        findings: humanitl_core::DecidedFindings::default(),
     });
     harness.recorder.apply(&FlowEvent::Recorded {
         flow_id: blocked,
@@ -898,6 +901,7 @@ async fn the_note_of_the_user_is_recorded_as_sent() {
             note: Some("nein".to_owned()),
         },
         source: DecisionSource::User,
+        findings: humanitl_core::DecidedFindings::default(),
     });
 
     // Eine Freigabe trägt keine Notiz: Das Feld ist an ihr `None`, nicht der
@@ -912,6 +916,7 @@ async fn the_note_of_the_user_is_recorded_as_sent() {
         at: base + Duration::from_millis(10),
         decision: Decision::Allow,
         source: DecisionSource::User,
+        findings: humanitl_core::DecidedFindings::default(),
     });
     harness.recorder.flush().await;
 
@@ -952,6 +957,7 @@ async fn note_is_sanitised_before_it_is_stored() {
             note: Some("nein\r\ndecision=allow reason=user note=".to_owned()),
         },
         source: DecisionSource::User,
+        findings: humanitl_core::DecidedFindings::default(),
     });
     harness.recorder.flush().await;
 
@@ -984,6 +990,7 @@ async fn a_rule_decision_keeps_the_rule_and_a_passthrough_is_marked() {
         at: base,
         decision: Decision::Allow,
         source: DecisionSource::Rule(rule),
+        findings: humanitl_core::DecidedFindings::default(),
     });
 
     let passthrough = FlowId::new();
@@ -998,6 +1005,7 @@ async fn a_rule_decision_keeps_the_rule_and_a_passthrough_is_marked() {
         at: base,
         decision: Decision::Allow,
         source: DecisionSource::Passthrough,
+        findings: humanitl_core::DecidedFindings::default(),
     });
     harness.recorder.flush().await;
 
@@ -1500,6 +1508,7 @@ async fn an_edited_request_is_marked_and_stored_separately() {
             request: Box::new(request("api.github.com", "/user")),
         },
         source: DecisionSource::User,
+        findings: humanitl_core::DecidedFindings::default(),
     });
     harness
         .recorder
@@ -1625,6 +1634,7 @@ async fn a_flow_can_carry_the_reason_it_failed() {
             note: None,
         },
         source: DecisionSource::System,
+        findings: humanitl_core::DecidedFindings::default(),
     });
     harness
         .recorder
@@ -1798,4 +1808,82 @@ async fn a_session_holds_one_summary_per_sandbox_run() {
             .unwrap_or_else(|err| panic!("{err}"))
             .is_none()
     );
+}
+
+/// „Trotzdem senden" hinterlässt eine Spur (HUM-160): Der bestätigte Fund steht
+/// als `acknowledged` in `findings.resolved`, der andere bleibt offen, und die
+/// Zeile trägt die Zahl, mit der die Anfrage hinausging. Nimmt das System die
+/// Freigabe danach zurück, verschwindet die Zahl: Hinausgegangen ist nichts.
+#[tokio::test]
+async fn acknowledged_findings_are_recorded() {
+    let harness = Harness::open();
+    let at = SystemTime::now();
+    let flow = FlowId::new();
+    harness
+        .recorder
+        .apply(&received(flow, "api.example.com", "/send", at));
+    let email = |address: &str| {
+        Finding::new(
+            FindingKind::Email,
+            0..address.len(),
+            FindingLocation::Body,
+            Tier::Regex,
+            address,
+        )
+    };
+    let findings = vec![email("alice@example.org"), email("bob@example.org")];
+    harness.recorder.store_findings(flow, &findings);
+    harness.recorder.apply(&FlowEvent::Analyzed {
+        flow_id: flow,
+        at,
+        findings,
+    });
+    harness.recorder.apply(&FlowEvent::Decided {
+        flow_id: flow,
+        at,
+        decision: Decision::Allow,
+        source: DecisionSource::User,
+        findings: humanitl_core::DecidedFindings {
+            unresolved: Some(1),
+            acknowledged: vec![0],
+        },
+    });
+    harness.recorder.flush().await;
+
+    let detail = harness
+        .recorder
+        .get_flow(flow)
+        .await
+        .unwrap_or_else(|err| panic!("{err}"))
+        .unwrap_or_else(|| panic!("flow missing"));
+    assert_eq!(detail.summary.unresolved_findings, Some(1));
+    let resolved: Vec<Option<&str>> = detail
+        .findings
+        .iter()
+        .map(|finding| finding.resolved.as_deref())
+        .collect();
+    assert_eq!(
+        resolved,
+        vec![Some("acknowledged"), None],
+        "only the acknowledged finding is marked"
+    );
+
+    harness.recorder.apply(&FlowEvent::Decided {
+        flow_id: flow,
+        at,
+        decision: Decision::Block {
+            reason: BlockReason::Secret,
+            note: None,
+        },
+        source: DecisionSource::System,
+        findings: humanitl_core::DecidedFindings::default(),
+    });
+    harness.recorder.flush().await;
+    let revised = harness
+        .recorder
+        .get_flow(flow)
+        .await
+        .unwrap_or_else(|err| panic!("{err}"))
+        .unwrap_or_else(|| panic!("flow missing"));
+    assert_eq!(revised.summary.unresolved_findings, None);
 }

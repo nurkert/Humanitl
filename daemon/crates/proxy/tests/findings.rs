@@ -20,8 +20,8 @@ use std::sync::Arc;
 use bytes::Bytes;
 use humanitl_core::diagnostics::codes::{FINDINGS_002, FINDINGS_003, HOLD_004};
 use humanitl_core::{
-    Authority, BlockReason, BodyRef, Decision, Diagnostic, Finding, FindingKind, FindingLocation,
-    FlowEvent, HostName, HttpRequest, Method, Scheme, Severity, Tier,
+    Authority, BlockReason, BodyRef, DecidedFindings, Decision, Diagnostic, Finding, FindingKind,
+    FindingLocation, FlowEvent, HostName, HttpRequest, Method, Scheme, Severity, Tier,
 };
 use humanitl_findings::{FindingsSettings, ScanReport};
 use humanitl_proxy::{Scanner, Tier1Scanner};
@@ -492,5 +492,127 @@ async fn a_secret_in_the_note_warns_and_still_blocks() {
     assert!(
         analyzed.is_empty(),
         "the request carried no secret: {analyzed:?}"
+    );
+}
+
+/// Eine Mailadresse im Rumpf: ein Fund der Stufe `Regex`, der nie hart blockt.
+const EMAIL_BODY: &str = "please write to alice@example.org today";
+
+/// Wie der Mensch die gehaltene Anfrage mit der Mailadresse hinauslässt.
+enum Release {
+    /// Die Freigabe gehalten, ohne die Pause: nichts bestätigt.
+    Hold,
+    /// „Trotzdem senden" in der Pause: den einen Fund bestätigt.
+    SendAnyway,
+    /// Im Editor bearbeitet und mit diesem Rumpf freigegeben.
+    Edited(&'static str),
+}
+
+/// Schickt die Anfrage mit der Mailadresse, gibt sie auf `release` frei und
+/// liefert die Funde aus `Decided` und die Zahl, die die Aufzeichnung führt.
+async fn release_the_email(release: Release) -> (DecidedFindings, Option<u32>) {
+    let upstream = FakeUpstream::plain().await;
+    let proxy = ProxyBuilder::new()
+        .scanner(tier1())
+        .recording(true)
+        .start()
+        .await;
+    let mut events = proxy.events();
+    let _decider = match release {
+        Release::Hold => proxy.decide_with(Decision::Allow),
+        Release::SendAnyway => proxy.decide_acknowledging(Decision::Allow, vec![0]),
+        Release::Edited(body) => proxy.decide_with(Decision::AllowEdited {
+            request: Box::new(edited_sink(upstream.port(), body)),
+        }),
+    };
+
+    let mut client = proxy.client().await;
+    let response = client
+        .send(post(
+            &format!("http://127.0.0.1:{}/sink", upstream.port()),
+            EMAIL_BODY,
+        ))
+        .await;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "a mail address never blocks"
+    );
+    let FlowEvent::Recorded { flow_id, .. } = events.wait_for("recorded").await else {
+        panic!("recorded carries a flow id");
+    };
+    let decided = events
+        .seen
+        .iter()
+        .find_map(|event| match event {
+            FlowEvent::Decided { findings, .. } => Some(findings.clone()),
+            _ => None,
+        })
+        .expect("a Decided event");
+    let recorder = proxy.recorder.as_ref().expect("recording was switched on");
+    recorder.flush().await;
+    let detail = recorder
+        .get_flow(flow_id)
+        .await
+        .expect("the recording is readable")
+        .expect("the flow is recorded");
+    assert_eq!(
+        detail.summary.unresolved_findings, decided.unresolved,
+        "the recording says what the event said"
+    );
+    assert_eq!(
+        proxy
+            .queue
+            .registry()
+            .get(flow_id)
+            .expect("the flow is in the registry")
+            .unresolved_findings,
+        decided.unresolved,
+        "the live row says what the event said"
+    );
+    for index in &decided.acknowledged {
+        let finding = &detail.findings[usize::try_from(*index).unwrap()];
+        assert_eq!(finding.resolved.as_deref(), Some("acknowledged"));
+    }
+    (decided, detail.summary.unresolved_findings)
+}
+
+/// Das `Decided`-Ereignis sagt, mit wie vielen offenen Funden eine Freigabe
+/// hinausging (HUM-160): eine über das Halten, keine nach der Pause, und bei
+/// einer bearbeiteten Fassung die Zahl des zweiten Scans, nicht die der
+/// gehaltenen.
+#[tokio::test(flavor = "multi_thread")]
+async fn decided_carries_unresolved_findings() {
+    let (held, recorded) = release_the_email(Release::Hold).await;
+    assert_eq!(
+        held,
+        DecidedFindings::unresolved(1),
+        "the valve acknowledges nothing"
+    );
+    assert_eq!(recorded, Some(1));
+
+    let (paused, recorded) = release_the_email(Release::SendAnyway).await;
+    assert_eq!(
+        paused,
+        DecidedFindings {
+            unresolved: Some(0),
+            acknowledged: vec![0],
+        }
+    );
+    assert_eq!(recorded, Some(0));
+
+    let (left, recorded) = release_the_email(Release::Edited("still for alice@example.org")).await;
+    assert_eq!(
+        left.unresolved,
+        Some(1),
+        "the mail address was left standing"
+    );
+    assert_eq!(recorded, Some(1));
+
+    let (replaced, _) = release_the_email(Release::Edited("for [EMAIL_1]")).await;
+    assert_eq!(
+        replaced.unresolved,
+        Some(0),
+        "the second scan counts the edited request, not the held one"
     );
 }

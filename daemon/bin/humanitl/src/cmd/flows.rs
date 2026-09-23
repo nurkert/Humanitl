@@ -350,6 +350,7 @@ async fn decide(
             flow_ids: vec![id.to_owned()],
             decision: Some(decision),
             remember: remembered_rule(id, verdict, remember)?,
+            acknowledged_findings: Vec::new(),
         })
         .await
         .map(tonic::Response::into_inner)
@@ -808,6 +809,7 @@ mod tests {
             apex: "github.com".to_owned(),
             decision_note: String::new(),
             catalog_id: String::new(),
+            unresolved_findings: None,
         }
     }
 

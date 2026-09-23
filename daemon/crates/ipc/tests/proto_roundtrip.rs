@@ -180,6 +180,7 @@ fn decide_request_carries_note_and_remembered_rule() {
             }),
             ..Default::default()
         }),
+        acknowledged_findings: Vec::new(),
     };
 
     let decoded = roundtrip(&request);

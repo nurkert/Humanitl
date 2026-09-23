@@ -1,0 +1,18 @@
+-- Wie viele Funde mit einer Freigabe hinausgingen, ohne ersetzt oder
+-- bestätigt zu sein (HUM-160).
+--
+-- Bis hierher stand nirgends, ob eine Anfrage mit offenen Funden den Rechner
+-- verlassen hat: nicht in der Zeile, nicht im Audit. Bei einer bearbeiteten
+-- Freigabe war es gar nicht zu rekonstruieren, weil die Funde der
+-- bearbeiteten Fassung nirgends stehen; `findings` trägt nur die der
+-- gehaltenen. Die Zahl kommt aus `FlowEvent::Decided` und ist bei `allow` die
+-- Zahl der Funde ohne die bestätigten, bei `allow_edited` die des zweiten
+-- Scans über das, was hinausging.
+--
+-- `NULL` heißt: Es ging nichts hinaus (Block, Ablauf), niemand hat gezählt,
+-- oder die Zeile entstand vor dieser Migration. Eine Null wird nie geraten.
+--
+-- Welche Funde der Mensch bestätigt hat, steht nicht hier, sondern in
+-- `findings.resolved = 'acknowledged'`; die Spalte ist schon `TEXT`, dafür
+-- braucht es keine Migration (HUM-089).
+ALTER TABLE flows ADD COLUMN unresolved_findings INTEGER;
