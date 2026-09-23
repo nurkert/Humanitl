@@ -326,13 +326,14 @@ void main() {
   testWidgets('the valve and the pause speak German', (
     WidgetTester tester,
   ) async {
-    // Das Kriterium nennt die deutsche Beschriftung: „Senden mit 1 Finding".
+    // Das Kriterium nannte „Senden mit 1 Finding"; seit HUM-052 heißt der
+    // Begriff laut Glossar (`docs/GLOSSARY.md`) auf Deutsch „Fund".
     tester.platformDispatcher.localesTestValue = const <Locale>[Locale('de')];
     addTearDown(tester.platformDispatcher.clearLocalesTestValue);
     final FakeDaemonClient client = mailClient();
     await pumpIntercept(tester, client: client);
     await playScript(tester);
-    expect(find.text('Senden mit 1 Finding'), findsOneWidget);
+    expect(find.text('Senden mit 1 Fund'), findsOneWidget);
     await armed(tester);
 
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);

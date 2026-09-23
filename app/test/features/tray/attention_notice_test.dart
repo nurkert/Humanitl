@@ -9,6 +9,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
+import 'package:humanitl/core/ui/h_diagnostic_card.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/tray/tray_diagnostics.dart';
 import 'package:humanitl/features/tray/widgets/attention_notice.dart';
@@ -234,5 +235,29 @@ void main() {
     );
 
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('another_code_keeps_the_daemon_sentence_in_the_cause_slot', (
+    WidgetTester tester,
+  ) async {
+    // HUM-052: Die Überschrift kommt aus ARB, der gemessene Satz des Daemons
+    // bleibt der Grund (`docs/UX.md` 4.4) und steht nicht ein zweites Mal
+    // als Detail darunter.
+    final AppLocalizations en = lookupAppLocalizations(const Locale('en'));
+    const Diagnostic diagnostic = Diagnostic(
+      code: 'CONFIG_001',
+      severity: Severity.error,
+      title: 'Config-Datei ungültig',
+      why: '/home/a/.config/humanitl/config.toml: expected `=` at line 3',
+    );
+    await tester.pumpWidget(card(diagnostic: diagnostic));
+    await tester.pump();
+
+    final HDiagnosticCard shown = tester.widget<HDiagnosticCard>(
+      find.byType(HDiagnosticCard),
+    );
+    expect(shown.title, en.diagCONFIG001Title);
+    expect(shown.why, diagnostic.why);
+    expect(shown.detail, isNull);
   });
 }

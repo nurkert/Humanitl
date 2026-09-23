@@ -8,7 +8,9 @@ import 'package:flutter/widgets.dart';
 import '../core/ui/ui.dart';
 import 'generated/app_localizations.dart';
 
+export 'diagnostic_l10n.dart';
 export 'generated/app_localizations.dart';
+export 'language.dart';
 
 /// `context.l10n` instead of `AppLocalizations.of(context)`.
 extension L10nContext on BuildContext {

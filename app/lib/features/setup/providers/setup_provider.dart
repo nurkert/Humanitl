@@ -102,6 +102,7 @@ class SetupCheck {
     required this.state,
     this.diagnostic,
     this.detail = '',
+    this.daemon,
   });
 
   /// Which of the four.
@@ -113,8 +114,16 @@ class SetupCheck {
   /// The finding of the daemon, when the row is not green.
   final Diagnostic? diagnostic;
 
-  /// The evidence, in one line: the version, the folder, the endpoint.
+  /// The evidence, in one line: the folder, the endpoint, the line of the
+  /// doctor. Measured text in the sender's words; the application adds none of
+  /// its own here.
   final String detail;
+
+  /// The daemon that answered, for the row of the daemon.
+  ///
+  /// Kept as data and not as a sentence, so the row can say it in the
+  /// person's language (HUM-052); [detail] stays empty then.
+  final DaemonInfo? daemon;
 
   /// True when this row is green: measured, and in order.
   ///
@@ -129,10 +138,11 @@ class SetupCheck {
       other.kind == kind &&
       other.state == state &&
       other.diagnostic == diagnostic &&
-      other.detail == detail;
+      other.detail == detail &&
+      other.daemon == daemon;
 
   @override
-  int get hashCode => Object.hash(kind, state, diagnostic, detail);
+  int get hashCode => Object.hash(kind, state, diagnostic, detail, daemon);
 }
 
 /// The finding of the last `Sandbox` call, and whether that call arrived.
@@ -487,7 +497,7 @@ SetupCheck _daemonCheck(DaemonLink daemon) => switch (daemon) {
   DaemonLinkUp(:final DaemonInfo info) => SetupCheck(
     kind: SetupCheckKind.daemon,
     state: SetupCheckState.ok,
-    detail: 'humanitld ${info.daemonVersion}, contract ${info.protoVersion}',
+    daemon: info,
   ),
   // Ein Versuch läuft, und der Knopf, der ihn ausgelöst hat, ruht solange:
   // `DaemonCheck` schaltet ihn an genau diesem Zustand aus, damit niemand
