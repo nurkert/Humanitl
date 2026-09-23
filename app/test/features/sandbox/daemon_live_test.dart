@@ -46,6 +46,16 @@ const Duration startBudget = Duration(seconds: 2);
 /// Wie lange auf den Socket des Daemons gewartet wird.
 const Duration socketPatience = Duration(seconds: 20);
 
+/// Das Kommando des Agenten in diesem Lauf: eines, das es nirgends gibt.
+///
+/// Es steht als `agent.command` in der Konfiguration des Daemons, und zwar mit
+/// Absicht (HUM-137). Bis dahin verließ sich dieser Test darauf, dass
+/// `opencode` in der Sandbox fehlt; auf einem Rechner, auf dem es unter
+/// `/usr/local/bin` liegt, wäre der Agent gelaufen, und der Strom des Starts
+/// hätte erst mit ihm geendet. So ist der Fall auf jedem Rechner derselbe, und
+/// er ist genau der, über den der Daemon seit HUM-137 einen Befund schickt.
+const String missingAgent = 'humanitl-hum137-gibt-es-nicht';
+
 /// Der Daemon dieses Laufs, mit allem, was er auf der Platte anfasst.
 ///
 /// Alles liegt unter einem eigenen Wurzelverzeichnis: eigener
@@ -90,6 +100,8 @@ class LiveDaemon {
     ]) {
       Directory('${root.path}/$path').createSync(recursive: true);
     }
+    File('${root.path}/config/humanitl/config.toml')
+        .writeAsStringSync('[agent]\ncommand = ["$missingAgent"]\n');
     // Der Daemon besteht auf `0700` für das Verzeichnis von Socket und Token
     // (`DAEMON_004`), und `Directory.create` legt nach der umask an. Dart hat
     // kein `chmod`, also übernimmt es das Programm, das es kann.
@@ -251,12 +263,12 @@ void main() {
     //
     // **Und der Start wird nicht abgewartet.** `Sandbox(Start)` hält seinen
     // Strom offen, bis der Agent endet und die Zusammenfassung geschrieben
-    // ist; `await sandbox.start()` bliebe also für die ganze Sitzung stehen.
-    // Heute käme der Test damit durch, weil in dieser Sandbox kein
-    // `opencode` auf dem PATH liegt und der Start des Agenten sofort
-    // fehlschlägt -- auf einem Rechner, auf dem er liegt, hinge der Lauf.
-    // Gewartet wird deshalb auf das, was gemessen werden soll, und das Ende
-    // des Stroms holt der Abbau.
+    // ist; `await sandbox.start()` bliebe also für die Dauer des Agenten
+    // stehen. Hier ist das kurz, denn [missingAgent] gibt es nicht, aber
+    // gemessen wird die Zeit bis `running` und nicht die Lebenszeit der
+    // Sitzung. Gewartet wird deshalb auf das, was gemessen werden soll; das
+    // Ende des Stroms holt der Test über den fehlenden Agenten, sonst der
+    // Abbau.
     starting = sandbox.start();
     try {
       await Future.any(<Future<void>>[reachedRunning.future, starting!])
@@ -365,6 +377,52 @@ void main() {
       contains('127.0.0.1'),
       reason: 'and it points at the bridge inside the sandbox',
     );
+  });
+
+  // HUM-137: Ein Agent, den es nicht gibt, fällt nicht lautlos aus.
+  //
+  // Die Sandbox steht, die drei Garantien sind belegt, und das Kommando darin
+  // lässt sich nicht starten. Am 2026-09-07 trug die Momentaufnahme an dieser
+  // Stelle `agentRunning = false` und `diagnostics = []`. Jetzt trägt sie
+  // `AGENT_005`, und der Ring bleibt grün, weil die Sandbox es ist.
+  test('a_missing_agent_is_a_finding_in_the_snapshot', () async {
+    // Der Strom des Starts endet, sobald der Agent geendet hat und die
+    // Zusammenfassung geschrieben ist; bei einem Agenten, den es nicht gibt,
+    // ist das nach Millisekunden.
+    await starting!.timeout(socketPatience);
+    final SandboxStatus after = container!
+        .read(sandboxStatusProvider)
+        .requireValue;
+
+    final Iterable<Diagnostic> found = after.diagnostics.where(
+      (Diagnostic finding) => finding.code == 'AGENT_005',
+    );
+    expect(
+      found,
+      hasLength(1),
+      reason:
+          'the agent never ran, and the daemon said so: ${after.diagnostics}',
+    );
+    final Diagnostic finding = found.single;
+    expect(finding.severity, Severity.error);
+    expect(finding.why, contains(missingAgent));
+    expect(
+      finding.why,
+      contains('PATH=/usr/local/bin:/usr/bin:/bin'),
+      reason: 'the PATH of the sandbox from the bundled profile',
+    );
+    expect(finding.fix, isNotNull, reason: 'a way to ask the sandbox itself');
+
+    // Und die Wahrheit über die Sandbox bleibt stehen.
+    expect(after.state, SandboxState.running);
+    expect(after.agentRunning, isFalse);
+    for (final IsolationCheck check in IsolationCheck.values) {
+      expect(
+        after.segmentFor(check),
+        IsolationSegment.passed,
+        reason: '$check',
+      );
+    }
   });
 
   // HUM-151: der Knopf „In config.toml schreiben" gegen den echten Dienst.

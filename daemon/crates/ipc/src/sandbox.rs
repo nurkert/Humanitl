@@ -308,6 +308,22 @@ struct Running {
     /// Das Terminal dieser Sitzung: der eine Filter, der Ringpuffer und die
     /// Clients, die zusehen (HUM-042).
     terminal: TerminalHub,
+    /// Was ein Befund braucht, wenn der Agent nie läuft (HUM-137).
+    agent: AgentFacts,
+}
+
+/// Das Kommando dieser Sitzung und der `PATH`, unter dem es gesucht wird.
+///
+/// Beides wird beim Start festgehalten und nicht beim Ende neu gebaut: Am Ende
+/// kann die Konfiguration schon eine andere sein, und der Befund
+/// [`humanitl_sandbox::did_not_start`] muss über das Kommando reden, das
+/// wirklich gestartet wurde.
+#[derive(Debug, Clone)]
+struct AgentFacts {
+    /// Das erste Wort hinter dem Shim.
+    command: String,
+    /// Der `PATH` der Sandbox, wie der Bildschirm ihn zeigen darf.
+    path: String,
 }
 
 /// Was die `Sandbox`-RPC beantwortet.
@@ -1048,11 +1064,11 @@ impl Inner {
             .notices
             .clone()
             .map(|notices| tokio::spawn(notices.run(hub.clone())));
-        self.stream_output(output, hub, tx).await;
+        let first = self.stream_output(output, hub, tx).await;
         if let Some(task) = notices {
             task.abort();
         }
-        self.report_exit(tx).await;
+        self.report_exit(&first, tx).await;
     }
 
     /// Löst die Konfiguration dieser Sitzung auf, sendet ihre Befunde und sagt,
@@ -1206,19 +1222,25 @@ impl Inner {
     ///
     /// Blockierend, denn der Kanal des Lesers ist einer der Standardbibliothek;
     /// das Warten gehört deshalb auf einen eigenen Faden.
+    ///
+    /// Zurück kommt, ob überhaupt ein Byte kam. Daran entscheidet
+    /// [`Inner::report_exit`] den Fall ohne Bericht des Shims (HUM-137);
+    /// gelesen wird es hier, weil nur dieser Faden jedes Stück sieht.
     async fn stream_output(
         &self,
         rx: std::sync::mpsc::Receiver<humanitl_sandbox::OutputChunk>,
         hub: TerminalHub,
         tx: &mpsc::Sender<v1::SandboxEvent>,
-    ) {
+    ) -> humanitl_sandbox::FirstOutput {
         let tx = tx.clone();
         let handle = self.running_handle();
-        let _ = tokio::task::spawn_blocking(move || {
+        let read = tokio::task::spawn_blocking(move || {
+            let mut first = humanitl_sandbox::FirstOutput::default();
             let mut stdout = humanitl_core::TerminalFilter::new();
             let mut stderr = humanitl_core::TerminalFilter::new();
             let mut forward = true;
             while let Ok(chunk) = rx.recv() {
+                first.observe(&chunk.bytes);
                 // Am Pseudoterminal gibt es einen Strom; die Unterscheidung
                 // bleibt für einen Aufrufer, der Pipes benutzt.
                 hub.feed(&chunk.bytes);
@@ -1265,18 +1287,35 @@ impl Inner {
                 };
                 hub.finish(code);
             }
+            first
         })
         .await;
+        // Ein Faden, der nicht zurückkam, hat nichts gesehen, das sich belegen
+        // ließe. Gezählt wird das als geschrieben: Ohne Beleg, dass der Agent
+        // schwieg, steht kein Befund, der das behauptet.
+        read.unwrap_or_else(|_| humanitl_sandbox::FirstOutput::unknown())
     }
 
     /// Meldet den Exit-Code des Agenten, sobald er beendet ist.
     ///
     /// Ein Signal wird nach POSIX-Sitte auf `128 + n` abgebildet; so liest es
     /// jede Shell, und so gibt `humanitl run` es weiter.
-    async fn report_exit(&self, tx: &mpsc::Sender<v1::SandboxEvent>) {
-        let Some(handle) = self.running_handle() else {
+    ///
+    /// **Ein Agent, der nie gelaufen ist, wird gesagt** (HUM-137). Meldet der
+    /// Shim auf dem Berichtskanal ein gescheitertes `exec`, oder endet der
+    /// Agent mit `127` oder `126`, ohne dass [`Inner::stream_output`] ein
+    /// einziges Byte gesehen hat, geht vor dem Exit-Code `AGENT_005` hinaus,
+    /// denselben Weg wie jeder andere Befund des Starts. Der Zustand bleibt,
+    /// was er ist: Die Sandbox steht, und ihre Garantien gelten.
+    async fn report_exit(
+        &self,
+        first: &humanitl_sandbox::FirstOutput,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) {
+        let Some((handle, agent)) = self.running_agent() else {
             return;
         };
+        let report = Arc::clone(&handle);
         let waited = tokio::task::spawn_blocking(move || handle.wait()).await;
         let code = match waited {
             Ok(Ok(status)) => exit_code_of(status),
@@ -1290,6 +1329,26 @@ impl Inner {
                 return;
             }
         };
+        // Der ganze Bericht, bis die Pipe zu ist: Die Zeile `EXEC fail` kommt
+        // nach den Prüfungen, und nur sie belegt, dass das `exec` scheiterte.
+        let exec = tokio::task::spawn_blocking(move || {
+            report
+                .report_after_exit(humanitl_sandbox::STATUS_DRAIN)
+                .exec_failed
+        })
+        .await
+        .unwrap_or_default();
+        if let Some(diagnostic) =
+            humanitl_sandbox::did_not_start(code, exec, first, &agent.command, &agent.path)
+        {
+            tracing::warn!(
+                session = %self.session,
+                code,
+                command = %agent.command,
+                "the agent ended before it wrote anything"
+            );
+            let _ = tx.send(diagnostic_event(&diagnostic)).await;
+        }
         let _ = tx
             .send(v1::SandboxEvent {
                 event: Some(v1::sandbox_event::Event::Exit(v1::sandbox_event::Exit {
@@ -1678,6 +1737,15 @@ impl Inner {
                 "project snapshot taken before the sandbox starts"
             );
         }
+        let agent = AgentFacts {
+            command: prepared
+                .session
+                .command
+                .first()
+                .map(|command| command.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            path: sandbox_path_of(&prepared),
+        };
         let handle = launcher.launch(&launch)?;
         drop(launcher);
         let sandbox = handle.id;
@@ -1697,6 +1765,7 @@ impl Inner {
             work_dir: prepared.session.work_src.clone(),
             work_mode: prepared.session.work_mode,
             terminal,
+            agent,
         });
         Ok(Launched {
             warnings,
@@ -1873,6 +1942,14 @@ impl Inner {
             )));
         }
         Ok(running)
+    }
+
+    /// Das Handle der laufenden Sandbox und was ein Befund über ihren Agenten
+    /// braucht, unter einem Schloss.
+    fn running_agent(&self) -> Option<(Arc<SandboxHandle>, AgentFacts)> {
+        lock(&self.running)
+            .as_ref()
+            .map(|running| (Arc::clone(&running.handle), running.agent.clone()))
     }
 
     fn running_handle(&self) -> Option<Arc<SandboxHandle>> {
@@ -2406,6 +2483,29 @@ fn mounts_of(argv: &[OsString], prepared: &Prepared) -> Vec<v1::Mount> {
 }
 
 /// Die Umgebung, die `--setenv` setzt, alphabetisch, zurückgehaltene ohne Wert.
+/// Der `PATH` der Sandbox, so wie der Bildschirm ihn zeigen darf.
+///
+/// Dieselbe Quelle wie die Umgebungstabelle ([`env_of`]) und dieselbe Regel:
+/// Ein Wert, den die Tabelle zurückhält, steht auch in keinem Befund. Setzt
+/// niemand `PATH`, gilt der Rückfall der C-Bibliothek, und der Satz sagt das.
+fn sandbox_path_of(prepared: &Prepared) -> String {
+    let path = prepared
+        .profile
+        .effective_env(&prepared.session, Some(0))
+        .into_iter()
+        .find(|(key, _)| key == "PATH");
+    match path {
+        None => format!(
+            "{} (no PATH is set, the C library falls back to this)",
+            humanitl_sandbox::agent::DEFAULT_SANDBOX_PATH
+        ),
+        Some((_, value)) if prepared.shows("PATH") => value,
+        Some(_) => {
+            format!("{WITHHELD_PLACEHOLDER} (set by hand in sandbox.env or a profile of your own)")
+        }
+    }
+}
+
 fn env_of(prepared: &Prepared) -> Vec<v1::EnvVar> {
     prepared
         .profile
@@ -3084,6 +3184,36 @@ mod tests {
             env_origin: BTreeMap::new(),
             adapter_files: BTreeSet::new(),
         }
+    }
+
+    /// Der `PATH` im Befund `AGENT_005` folgt derselben Regel wie die
+    /// Umgebungstabelle (HUM-137): gezeigt, wenn das mitgelieferte Profil ihn
+    /// setzt, zurückgehalten, wenn ein Mensch ihn geschrieben hat, und der
+    /// Rückfall der C-Bibliothek, wenn niemand ihn setzt.
+    #[test]
+    fn the_sandbox_path_in_a_finding_obeys_the_table() {
+        let mut prepared = preview_prepared();
+        assert!(
+            sandbox_path_of(&prepared).starts_with(humanitl_sandbox::agent::DEFAULT_SANDBOX_PATH),
+            "{}",
+            sandbox_path_of(&prepared)
+        );
+
+        prepared
+            .profile
+            .env
+            .insert("PATH".to_owned(), "/opt/agent/bin:/usr/bin".to_owned());
+        prepared
+            .env_origin
+            .insert("PATH".to_owned(), v1::ValueOrigin::Profile);
+        assert_eq!(sandbox_path_of(&prepared), "/opt/agent/bin:/usr/bin");
+
+        prepared
+            .env_origin
+            .insert("PATH".to_owned(), v1::ValueOrigin::User);
+        let withheld = sandbox_path_of(&prepared);
+        assert!(withheld.starts_with(WITHHELD_PLACEHOLDER), "{withheld}");
+        assert!(!withheld.contains("/opt/agent/bin"), "{withheld}");
     }
 
     #[test]

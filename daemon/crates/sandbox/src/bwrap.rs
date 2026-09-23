@@ -60,7 +60,7 @@ use rustix::termios::{Winsize, tcsetwinsize};
 
 use crate::bridge_env::{
     CHECK_BRIDGE_LISTENING, CHECK_FAMILIES, CHECK_NO_INTERFACES, CHECK_SECCOMP_APPLIED,
-    CHECK_SINGLE_SOCKET, parse_check_line,
+    CHECK_SINGLE_SOCKET, parse_check_line, parse_exec_line,
 };
 use crate::bwrap_args::{IdentityFds, LaunchInputs, MaskFds};
 use crate::handle::{OutputSink, ReportSnapshot, SandboxHandle, Shared};
@@ -1182,9 +1182,12 @@ fn read_report(reader: PipeReader, shared: &Shared) {
         let Ok(line) = line else {
             break;
         };
-        match parse_check_line(&line) {
-            Some(check) => shared.push_check(check),
-            None => shared.push_other_line(),
+        if let Some(check) = parse_check_line(&line) {
+            shared.push_check(check);
+        } else if let Some(failure) = parse_exec_line(&line) {
+            shared.set_exec_failed(failure);
+        } else {
+            shared.push_other_line();
         }
     }
     shared.close_report();
