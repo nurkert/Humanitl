@@ -192,8 +192,13 @@ impl FakeServer {
         let paths = harness.paths();
         let socket = paths.daemon_socket();
         let token_path = paths.token_path();
-        std::fs::create_dir_all(socket.parent().expect("the socket has a directory"))
-            .expect("the runtime directory");
+        // Wie der Daemon: das Laufzeitverzeichnis ist 0700, sonst traut der
+        // Client dem Token darin nicht (HUM-212).
+        humanitl_config::private_dir::ensure_private_dir(
+            socket.parent().expect("the socket has a directory"),
+            humanitl_config::private_dir::process_uid(),
+        )
+        .expect("the runtime directory");
 
         let session = Session::load(&fixture()).expect("the recorded session loads");
         let (stop, stopped) = tokio::sync::oneshot::channel();
@@ -275,8 +280,13 @@ impl AuditServer {
         let paths = harness.paths();
         let socket = paths.daemon_socket();
         let token_path = paths.token_path();
-        std::fs::create_dir_all(socket.parent().expect("the socket has a directory"))
-            .expect("the runtime directory");
+        // Wie der Daemon: das Laufzeitverzeichnis ist 0700, sonst traut der
+        // Client dem Token darin nicht (HUM-212).
+        humanitl_config::private_dir::ensure_private_dir(
+            socket.parent().expect("the socket has a directory"),
+            humanitl_config::private_dir::process_uid(),
+        )
+        .expect("the runtime directory");
         let service = humanitl_ipc::AuditService::new(
             paths.audit_path(),
             paths.db_path(),

@@ -41,9 +41,9 @@ Entfernen eines Codes.
 
 Daemon nicht erreichbar
 
-**Auslöser.** Der Client findet keinen Socket oder kein Token unter dem Laufzeitpfad, oder die Verbindung dorthin scheitert.
+**Auslöser.** Der Client findet keinen Socket oder kein Token unter dem Laufzeitpfad, oder die Verbindung dorthin scheitert. Oder Laufzeitverzeichnis und Token gehören nicht dem eigenen Konto, sind ein Symlink oder für Gruppe und Andere offen; dann liest der Client das Token nicht (HUM-212).
 
-**Fix.** `InstallService` richtet die Nutzer-Unit ein; sonst nennt der Befund `humanitld`.
+**Fix.** `InstallService` richtet die Nutzer-Unit ein; sonst nennt der Befund `humanitld`. Bei offenen Rechten `CopyCommand` mit `chmod go-rwx`; bei fremdem Besitzer oder Symlink kein Fix. Nur im `/tmp`-Rückfall `OpenUrl` auf die Anleitung, wie man ein eigenes `XDG_RUNTIME_DIR` unter dem Heimatverzeichnis für die ganze Sitzung setzt (`docs/INSTALL.md`); es gilt nach einer neuen Anmeldung.
 
 #### DAEMON_002
 
@@ -67,7 +67,7 @@ Laufzeitverzeichnis oder Socket nicht anlegbar
 
 **Auslöser.** Das Laufzeitverzeichnis fehlt, ist nicht privat, lässt sich nicht anlegen, oder der Socket-Pfad ist länger als `sun_path` erlaubt.
 
-**Fix.** Meist ohne Fix — der Text nennt Pfad und Grund; beim zu langen Pfad `SetEnv` für ein kürzeres `XDG_RUNTIME_DIR`.
+**Fix.** Meist ohne Fix — der Text nennt Pfad und Grund; beim zu langen Pfad `SetEnv` für ein kürzeres `XDG_RUNTIME_DIR`. Gehört das Laufzeitverzeichnis einem anderen Konto oder ist es ein Symlink (HUM-212), ohne Fix; nur im `/tmp`-Rückfall `OpenUrl` auf die Anleitung, wie man ein eigenes `XDG_RUNTIME_DIR` unter dem Heimatverzeichnis für die ganze Sitzung setzt (`docs/INSTALL.md`); es gilt nach einer neuen Anmeldung.
 
 #### DAEMON_005
 

@@ -86,6 +86,7 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-217 | Unit-Verzeichnis und Rollback nutzen das `XDG_CONFIG_HOME` der CLI, nicht das des systemd-Managers | S | HUM-077 |
 | HUM-218 | Eine Entscheidung aus der Benachrichtigung löscht Notiz, Merk-Entwurf und Findings-Pause eines anderen ausgewählten Flows | S | — |
 | HUM-221 | Die Suche nach LLM-Servern lässt `.0` und `.255` im eigenen Netz aus | S | HUM-076 |
+| HUM-222 | Clients finden das eigene Laufzeitverzeichnis unter dem Heimatverzeichnis nicht von selbst, wenn der `/tmp`-Rückfall fremd ist | S | HUM-212 |
 | HUM-186 | Einrichtung: Versionsabgleich mit „Dienst neu starten" und Fortschritt beim Einrichten | S | HUM-077 |
 | HUM-187 | Nightly: Paket und AppImage auf einem frischen Debian mit systemd-Nutzersitzung | M | HUM-077, HUM-053 |
 | HUM-188 | `INSTALL.txt` im Archiv beschreibt Aktivierung und Entfernen des Pakets veraltet | XS | HUM-053, HUM-077 |
@@ -4350,13 +4351,13 @@ m1, Schwere minor, von zwei unabhängigen Prüfern bestätigt). Ort: `daemon/bin
 Der Befund ist behoben, und ein Test hält ihn behoben.
 
 ### Akzeptanzkriterien
-- [ ] `DirOwner::Daemon`:
-- [ ] Denselben Helfer in `listener.rs` `ensure_dir` nutzen.
-- [ ] Clients (`client.rs` vor `read_token`, Dart über stat-FFI, weil `FileStat` keine UID kennt): Verzeichnis und Token per lstat prüfen, eigene UID und keine Rechte für Gruppe oder Andere, sonst `DAEMON_001`. Mit geprüftem Verzeichnis ist `SO_PEERCRED` optional.
-- [ ] Tests mit fremdem Besitzer und mit Symlink, auf beiden Seiten.
-- [ ] Solange der Rückfall besteht, in SECURITY.md 10 nennen.
-- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
-- [ ] `make check` grün.
+- [x] `DirOwner::Daemon`:
+- [x] Denselben Helfer in `listener.rs` `ensure_dir` nutzen.
+- [x] Clients (`client.rs` vor `read_token`, Dart über stat-FFI, weil `FileStat` keine UID kennt): Verzeichnis und Token per lstat prüfen, eigene UID und keine Rechte für Gruppe oder Andere, sonst `DAEMON_001`. Mit geprüftem Verzeichnis ist `SO_PEERCRED` optional.
+- [x] Tests mit fremdem Besitzer und mit Symlink, auf beiden Seiten.
+- [x] Solange der Rückfall besteht, in SECURITY.md 10 nennen.
+- [x] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [x] `make check` grün.
 
 ### Referenzen
 Sicherheitsdurchlauf 2026-09-23, Befund m1; `daemon/bin/humanitld/src/main.rs:1737`.
@@ -5022,3 +5023,32 @@ Im Review von HUM-211 fiel auf, dass `daemon uninstall` die Verweise der Aktivie
 
 ### Fallstricke
 - `renameat2` mit `RENAME_NOREPLACE` lehnt NFS mit `EINVAL` ab; der Befund muss dann sagen, dass nichts entfernt wurde.
+
+---
+
+## HUM-222 · Clients finden das eigene Laufzeitverzeichnis unter dem Heimatverzeichnis nicht von selbst, wenn der `/tmp`-Rückfall fremd ist
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-212 · Blockiert: —
+
+### Kontext
+Seit HUM-212 weisen Daemon, CLI und Oberfläche ein fremdes oder offenes Laufzeitverzeichnis unter `$TMPDIR/humanitl-<uid>` ab. Der Befund schlägt vor, `XDG_RUNTIME_DIR` für die ganze Sitzung auf `~/.cache/humanitl-run` zu setzen, und das gilt erst nach einer neuen Anmeldung. Bis dahin, und für Programme, die die Variable nicht erben, bleibt Humanitl unbenutzbar, solange das fremde Verzeichnis liegt.
+
+### Ziel
+Ist der `/tmp`-Rückfall fremd, nehmen Daemon und Clients ohne neue Anmeldung ein eigenes Verzeichnis unter dem Heimatverzeichnis, und alle drei finden dasselbe.
+
+### Nicht-Ziel
+Das fremde Verzeichnis entfernen; das kann das eigene Konto nicht.
+
+### Betroffene Pfade
+- `daemon/crates/config/src/paths.rs` (`runtime_dir_with`)
+- `app/lib/core/ipc/daemon_paths.dart`
+
+### Spezifikation
+Offen: eine feste Reihenfolge (`$XDG_RUNTIME_DIR`, `/run/user/<uid>`, `~/.cache/humanitl-run`, erst dann `/tmp`) oder die Prüfung des `/tmp`-Rückfalls schon bei der Pfadwahl. Beide Seiten müssen dieselbe Regel spiegeln (CONVENTIONS 3.4, 4.11).
+
+### Akzeptanzkriterien
+- [ ] Mit fremdem `$TMPDIR/humanitl-<uid>` und ohne `XDG_RUNTIME_DIR` starten Daemon, CLI und Oberfläche ohne neue Anmeldung und sprechen miteinander.
+- [ ] Rust- und Dart-Pfadwahl sind durch einen Test auf beiden Seiten gleich.
+- [ ] `docs/SECURITY.md` Abschnitt 10 Punkt 12 ist angepasst.
+
+### Referenzen
+HUM-212 (Review-Befund Runde 3).
