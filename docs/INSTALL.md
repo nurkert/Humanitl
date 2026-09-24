@@ -64,6 +64,18 @@ Wer eine Einstellung der Unit ändern will, kopiert sie nicht, sondern legt eine
 `systemctl --user edit humanitld.service`. Eine Kopie unter `~/.config/systemd/user/` verdeckte
 die Fassung des Pakets, und jedes Update liefe an ihr vorbei.
 
+Wer vorher aus dem Archiv oder dem AppImage installiert hatte, hat dort noch die Unit, die
+`humanitl daemon install` damals geschrieben hat. Der Befehl erkennt sie an ihrer ersten Zeile,
+kündigt es an, legt sie samt ihrem Verweis der Aktivierung als `humanitld.service.bak` beiseite (gibt
+es den Namen schon, als `humanitld.service.bak.1`, `.bak.2` und so weiter) und startet den Dienst neu,
+damit die Unit des Pakets läuft. Unter `--no-start` oder ohne `systemctl` bleibt sie liegen, und die
+Ausgabe sagt, dass sie die Unit des Pakets weiter verdeckt. Das Beiseitelegen nutzt
+`renameat2` mit `RENAME_NOREPLACE`; liegt `~/.config` auf NFS, das diesen Aufruf mit `EINVAL`
+ablehnt, bricht der Befehl mit `DAEMON_006` ab und lässt alles, wie es war. Eine Datei ohne diese
+erste Zeile rührt er nicht an und bricht mit `DAEMON_005` ab: Sie gehört dann jemand anderem, und
+wer sie nicht mehr braucht, räumt sie selbst weg oder überführt seine Änderungen in
+`systemctl --user edit`.
+
 Entfernen: `humanitl daemon uninstall` (meldet Socket und Dienst ab, dasselbe wie
 `systemctl --user disable --now humanitld.socket humanitld.service`), dann
 `sudo apt remove --purge humanitl`. Konfiguration, Aufzeichnung und Audit-Log unter

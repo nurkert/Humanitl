@@ -263,18 +263,21 @@ registry! {
     /// Erkannt an der Marke in der ersten Zeile. Der Befehl weigert sich dann
     /// und überschreibt nichts: Die Datei bestimmt, was beim Anmelden startet,
     /// und wer sie von Hand geschrieben hat, hat einen Grund dafür gehabt. Der
-    /// Vorschlag ist, sie beiseitezulegen (HUM-044).
+    /// Vorschlag ist, sie beiseitezulegen (HUM-044). Dasselbe gilt, wenn das
+    /// Paket seine Units mitbringt und eine fremde Datei unter
+    /// `~/.config/systemd/user` sie verdeckt (HUM-211).
     DAEMON_005 => "daemon", "Fremde Unit-Datei wird nicht überschrieben", "#daemon_005",
-        "Unter dem Unit-Pfad liegt eine Datei, deren erste Zeile nicht die Marke von Humanitl trägt.",
-        "`CopyCommand`, das die fremde Datei beiseitelegt (`mv … .bak`); ein `--force` gibt es mit Absicht nicht.";
+        "Unter dem Unit-Pfad liegt eine Datei, deren erste Zeile nicht die Marke von Humanitl trägt, oder etwas anderes als eine gewöhnliche Datei; mit dem Paket verdeckt sie dessen Unit. Oder die eigene Unit änderte sich zwischen Ansage und Verschieben (dann liegt sie womöglich unter `.bak`, der Befund sagt es).",
+        "`CopyCommand`, das die fremde Datei unter einen freien Namen beiseitelegt (`mv -n -- … .bak`); ein `--force` gibt es mit Absicht nicht.";
     /// Die Unit-Datei ließ sich nicht schreiben.
     ///
     /// Das Verzeichnis war nicht anlegbar, die Datei nicht schreibbar oder das
     /// Umbenennen scheiterte. Geschrieben wird über eine Nachbardatei und
     /// `rename`, also bleibt im Fehlerfall entweder die alte Fassung stehen
-    /// oder gar keine — nie eine halbe (HUM-044).
+    /// oder gar keine — nie eine halbe (HUM-044). Auch, wenn eine eigene
+    /// ältere Unit sich nicht lesen oder beiseitelegen lässt (HUM-211).
     DAEMON_006 => "daemon", "Unit-Datei nicht schreibbar", "#daemon_006",
-        "Die Unit-Datei lässt sich nicht schreiben (Rechte, Verzeichnis, Dateisystem).",
+        "Die Unit-Datei lässt sich nicht lesen, schreiben oder beiseitelegen (Rechte, Verzeichnis, Dateisystem, kein freier Name).",
         "`CopyCommand` mit dem Pfad, sonst der Verweis auf die Dokumentation.";
     /// Neben der laufenden Kommandozeile liegt kein `humanitld`.
     ///

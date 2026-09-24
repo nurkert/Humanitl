@@ -2276,7 +2276,7 @@
   "@diagDAEMON005Why": {"description": "Generic cause of DAEMON_005. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own; the daemon's measured sentence always wins there (docs/UX.md 4.4, HUM-052)."},
   "diagDAEMON006Title": "Unit file cannot be written",
   "@diagDAEMON006Title": {"description": "Title of the diagnostic DAEMON_006 (docs/DIAGNOSTICS.md). Shown instead of the daemon's register title, which is German (DiagnosticL10n.resolve, HUM-052)."},
-  "diagDAEMON006Why": "The unit file cannot be written: permissions, directory or file system.",
+  "diagDAEMON006Why": "The unit file cannot be read, written or moved aside: permissions, directory or file system.",
   "@diagDAEMON006Why": {"description": "Generic cause of DAEMON_006. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own; the daemon's measured sentence always wins there (docs/UX.md 4.4, HUM-052)."},
   "diagDAEMON007Title": "humanitld is not next to humanitl",
   "@diagDAEMON007Title": {"description": "Title of the diagnostic DAEMON_007 (docs/DIAGNOSTICS.md). Shown instead of the daemon's register title, which is German (DiagnosticL10n.resolve, HUM-052)."},

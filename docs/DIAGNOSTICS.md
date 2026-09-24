@@ -73,15 +73,15 @@ Laufzeitverzeichnis oder Socket nicht anlegbar
 
 Fremde Unit-Datei wird nicht überschrieben
 
-**Auslöser.** Unter dem Unit-Pfad liegt eine Datei, deren erste Zeile nicht die Marke von Humanitl trägt.
+**Auslöser.** Unter dem Unit-Pfad liegt eine Datei, deren erste Zeile nicht die Marke von Humanitl trägt, oder etwas anderes als eine gewöhnliche Datei; mit dem Paket verdeckt sie dessen Unit. Oder die eigene Unit änderte sich zwischen Ansage und Verschieben (dann liegt sie womöglich unter `.bak`, der Befund sagt es).
 
-**Fix.** `CopyCommand`, das die fremde Datei beiseitelegt (`mv … .bak`); ein `--force` gibt es mit Absicht nicht.
+**Fix.** `CopyCommand`, das die fremde Datei unter einen freien Namen beiseitelegt (`mv -n -- … .bak`); ein `--force` gibt es mit Absicht nicht.
 
 #### DAEMON_006
 
 Unit-Datei nicht schreibbar
 
-**Auslöser.** Die Unit-Datei lässt sich nicht schreiben (Rechte, Verzeichnis, Dateisystem).
+**Auslöser.** Die Unit-Datei lässt sich nicht lesen, schreiben oder beiseitelegen (Rechte, Verzeichnis, Dateisystem, kein freier Name).
 
 **Fix.** `CopyCommand` mit dem Pfad, sonst der Verweis auf die Dokumentation.
 
