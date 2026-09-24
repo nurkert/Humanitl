@@ -43,6 +43,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use humanitl_config::Paths;
 use humanitl_core::diagnostics::codes::{TLS_004, TLS_005};
+use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, HostName, SessionId, Severity};
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
@@ -939,7 +940,7 @@ fn check_key_mode(dir: &Path, key_path: &Path) -> Result<(), Diagnostic> {
 }
 
 fn not_writable(dir: &Path, why: String) -> Diagnostic {
-    let quoted = shell_quote(&dir.display().to_string());
+    let quoted = shell_path(dir);
     Diagnostic::builder(TLS_004, Severity::Error)
         .why(why)
         .fix(FixAction::CopyCommand(format!(
@@ -962,7 +963,7 @@ fn leaf_error(host: &HostName, err: &dyn fmt::Display) -> Diagnostic {
 }
 
 fn corrupt(dir: &Path, why: impl fmt::Display) -> Diagnostic {
-    let quoted = shell_quote(&dir.display().to_string());
+    let quoted = shell_path(dir);
     Diagnostic::builder(TLS_005, Severity::Error)
         .why(format!(
             "{why}; removing the directory makes the next start create a fresh CA, and the \
@@ -972,28 +973,6 @@ fn corrupt(dir: &Path, why: impl fmt::Display) -> Diagnostic {
         .build()
 }
 
-/// Setzt einen Pfad in einfache Anführungszeichen, wenn `sh` ihn sonst nicht
-/// als ein Wort läse.
-fn shell_quote(arg: &str) -> String {
-    let safe = |c: char| {
-        c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '+' | ':' | '@' | '~')
-    };
-    if !arg.is_empty() && arg.chars().all(safe) {
-        return arg.to_owned();
-    }
-    let mut out = String::with_capacity(arg.len() + 2);
-    out.push('\'');
-    for c in arg.chars() {
-        if c == '\'' {
-            out.push_str("'\\''");
-        } else {
-            out.push(c);
-        }
-    }
-    out.push('\'');
-    out
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -1001,10 +980,10 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use humanitl_core::HostName;
+    use humanitl_core::{FixAction, HostName};
     use time::{Duration, OffsetDateTime};
 
-    use super::{CaStore, LeafCache, RENEW_MARGIN, pem_block, shell_quote, short_id};
+    use super::{CaStore, LeafCache, RENEW_MARGIN, pem_block, short_id};
 
     /// Ein Zertifikat, das in weniger als [`RENEW_MARGIN`] abläuft, wird beim
     /// nächsten Zugriff verworfen und neu ausgestellt. Ohne diesen Test bliebe
@@ -1049,11 +1028,22 @@ mod tests {
     }
 
     #[test]
-    fn shell_quote_leaves_plain_paths_and_quotes_the_rest() {
-        assert_eq!(shell_quote("/home/x/.local/share"), "/home/x/.local/share");
-        assert_eq!(shell_quote("/tmp/a b"), "'/tmp/a b'");
-        assert_eq!(shell_quote("it's"), "'it'\\''s'");
-        assert_eq!(shell_quote(""), "''");
+    fn the_fix_names_the_ca_directory_byte_for_byte() {
+        let fix = |dir: &str| super::corrupt(Path::new(dir), "broken").fix;
+        assert_eq!(
+            fix("/home/x/.local/share"),
+            Some(FixAction::CopyCommand(
+                "rm -r /home/x/.local/share".to_owned()
+            ))
+        );
+        // Zwei Leerzeichen blieben im Block des Befunds nicht stehen
+        // (HUM-215); als Bytes geschrieben, nennt `rm -r` dasselbe Verzeichnis.
+        assert_eq!(
+            fix("/tmp/a  b"),
+            Some(FixAction::CopyCommand(
+                r"rm -r $'/tmp/a\x20\x20b'".to_owned()
+            ))
+        );
     }
 
     #[test]

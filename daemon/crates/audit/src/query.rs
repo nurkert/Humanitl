@@ -27,9 +27,9 @@ use std::path::Path;
 
 use chrono::{DateTime, DurationRound as _, TimeDelta, Utc};
 use humanitl_core::diagnostics::codes::AUDIT_006;
+use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
-use crate::key::shell_quote;
 use crate::record::{AuditRecord, format_ts};
 
 /// So viele Records hat eine Seite, wenn der Aufrufer keine Zahl nennt.
@@ -250,7 +250,7 @@ fn for_each_record(
             .why(format!("cannot {doing} {}: {err}", path.display()))
             .fix(FixAction::CopyCommand(format!(
                 "ls -ln {}",
-                shell_quote(&path.display().to_string())
+                shell_path(path)
             )))
             .build()
     })

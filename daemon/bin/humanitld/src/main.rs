@@ -53,6 +53,7 @@ use humanitl_audit::{
 use humanitl_catalog::Catalog;
 use humanitl_config::{Config, DIR_MODE, Paths as XdgPaths, ResolverConfig, WorkMode};
 use humanitl_core::diagnostics::codes;
+use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, FlowEvent, SessionId, Severity};
 use humanitl_ipc::fake::{FakeDaemon, FakeOptions, Session};
 use humanitl_ipc::sandbox::SandboxPorts;
@@ -1425,7 +1426,7 @@ fn unusable(path: &Path, why: &str) -> Diagnostic {
         ))
         .fix(FixAction::CopyCommand(format!(
             "openssl x509 -in {} -noout -subject",
-            path.display()
+            shell_path(path)
         )))
         .build()
 }
@@ -1829,7 +1830,7 @@ fn check_private_dir(dir: &Path, uid: u32) -> Result<(), Diagnostic> {
         ))
         .fix(FixAction::CopyCommand(format!(
             "humanitld --fake <session.jsonl> --socket {}",
-            own.display()
+            shell_path(&own)
         )))
         .build());
     }
@@ -1842,7 +1843,7 @@ fn check_private_dir(dir: &Path, uid: u32) -> Result<(), Diagnostic> {
         ))
         .fix(FixAction::CopyCommand(format!(
             "chmod 700 {}",
-            dir.display()
+            shell_path(dir)
         )))
         .build());
     }
@@ -2782,6 +2783,27 @@ mod tests {
         assert!(
             started.elapsed() < Duration::from_secs(5),
             "it did not wait out the deadline"
+        );
+    }
+
+    /// Der Vorschlag für ein unbrauchbares CA-Zertifikat nennt den Pfad aus
+    /// seinen Bytes (HUM-215).
+    #[test]
+    fn an_unusable_certificate_is_named_from_its_bytes() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt as _;
+
+        assert_eq!(
+            super::unusable(Path::new("/etc/My CA/ca.pem"), "broken").fix,
+            Some(FixAction::CopyCommand(
+                "openssl x509 -in '/etc/My CA/ca.pem' -noout -subject".to_owned()
+            ))
+        );
+        assert_eq!(
+            super::unusable(Path::new(OsStr::from_bytes(b"/etc/c\xff.pem")), "broken").fix,
+            Some(FixAction::CopyCommand(
+                r"openssl x509 -in $'/etc/c\xff.pem' -noout -subject".to_owned()
+            ))
         );
     }
 }
