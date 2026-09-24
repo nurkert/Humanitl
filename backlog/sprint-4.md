@@ -95,6 +95,9 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-173 | Das Kontextmenü eines Eingabefelds stürzt ab | S | HUM-035 |
 | HUM-225 | Die Release-Notes der Vorabversionen sind deutsch | S | HUM-053 |
 | HUM-226 | Eine Seite der Audit-Tabelle liest von hinten, solange die Kette heil ist | M | HUM-163 |
+| HUM-223 | `daemon install` ist mit 123 Zeilen eine Funktion zu viel | S | HUM-211 |
+| HUM-224 | Der Kanal-Test des Shims fällt unter Last zufällig aus | S | — |
+| HUM-227 | `humanitl daemon uninstall` löscht Aktivierungsverweise nach Namen | S | HUM-077, HUM-211 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -3725,9 +3728,9 @@ Im Weg des Pakets meldet `daemon install` eine eigene Kopie (erste Zeile ist die
 - `daemon/bin/humanitl/tests/cli.rs`
 
 ### Akzeptanzkriterien
-- [ ] Mit Paket und eigener alter Kopie startet nach `daemon install` die Unit des Pakets.
-- [ ] Eine fremde Kopie wird nie angefasst.
-- [ ] `make check` grün.
+- [x] Mit Paket und eigener alter Kopie startet nach `daemon install` die Unit des Pakets.
+- [x] Eine fremde Kopie wird nie angefasst.
+- [x] `make check` grün.
 
 ---
 
@@ -4308,12 +4311,12 @@ M9, Schwere major, von zwei unabhängigen Prüfern bestätigt). Ort: `daemon/bin
 Der Befund ist behoben, und ein Test hält ihn behoben.
 
 ### Akzeptanzkriterien
-- [ ] Mit Marker:
-- [ ] Ohne Marker: Verweigern mit `DAEMON_005` („verdeckt die Paket-Unit“), Fix-Hinweis `systemctl --user edit` oder die Datei wegräumen.
-- [ ] `exec_start` und Unit für den Bericht aus `systemctl --user show -p FragmentPath,ExecStart humanitld.service` lesen.
-- [ ] Den Pfad der System-Units injizierbar machen und beide Fälle testen.
-- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
-- [ ] `make check` grün.
+- [x] Mit Marker: ankündigen, samt Verweisen der Aktivierung als `humanitld.service.bak` beiseitelegen, Dienst neu starten; scheitert der Neustart, kommt alles zurück.
+- [x] Ohne Marker: Verweigern mit `DAEMON_005` („verdeckt die Paket-Unit“), Fix-Hinweis `systemctl --user edit` oder die Datei wegräumen.
+- [x] `exec_start` und Unit für den Bericht aus `systemctl --user show -p FragmentPath,ExecStart humanitld.service` lesen.
+- [x] Den Pfad der System-Units injizierbar machen und beide Fälle testen.
+- [x] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [x] `make check` grün.
 
 ### Referenzen
 Sicherheitsdurchlauf 2026-09-23, Befund M9; `daemon/bin/humanitl/src/cmd/daemon.rs:336`.
@@ -4952,3 +4955,70 @@ Der bekannte Stand nennt mindestens Nummer, Byte-Versatz hinter ihrer Zeile und 
 
 ### Referenzen
 HUM-163 (Messung, schneller Weg), HUM-156 (Seiten aus der Datei), HUM-050 (Prüfung), HUM-157 (Aufbewahrung).
+
+---
+
+## HUM-223 · `daemon install` ist mit 123 Zeilen eine Funktion zu viel
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-211 · Blockiert: —
+
+### Kontext
+Im Review von HUM-211 fiel auf, dass `install()` in `daemon/bin/humanitl/src/cmd/daemon.rs` 123 Zeilen hat. Die Grenze des Projekts liegt bei 100 Zeilen je Funktion; diese lag schon vor HUM-211 darüber und bündelt Prüfung, Ankündigung, Kopie aus dem `AppImage`, Schreiben, Aktivierung und Bericht. HUM-211 hat den Weg des Pakets schon nach `cmd/daemon/packaged.rs` ausgelagert; der eigene Weg steht noch in einem Stück.
+
+### Ziel
+`install()` ist eine kurze Folge benannter Schritte, jeder unter 100 Zeilen, ohne dass sich Verhalten oder Ausgabe ändern.
+
+### Betroffene Pfade
+- `daemon/bin/humanitl/src/cmd/daemon.rs`
+
+### Akzeptanzkriterien
+- [ ] Keine Funktion in `cmd/daemon.rs` und `cmd/daemon/` über 100 Zeilen.
+- [ ] `tests/daemon_lifecycle.rs` und die Tests von `daemon install` in `tests/cli.rs` laufen unverändert grün.
+- [ ] `make check` grün.
+
+### Fallstricke
+- Die Reihenfolge „erst der Plan, dann die Ankündigung, dann die Kopie" ist eine Zusage (Modulkommentar von `cmd/daemon.rs`); sie darf beim Zerlegen nicht verrutschen.
+
+---
+
+## HUM-224 · Der Kanal-Test des Shims fällt unter Last zufällig aus
+Sprint: 4 · Größe: S · Abhängigkeiten: — · Blockiert: —
+
+### Kontext
+`channel::tests::the_messages_cross_the_pair_in_their_shape` in `daemon/bin/humanitl-shim/src/channel.rs` war während HUM-211 in drei Läufen von `make check` rot, jedes Mal mit „a closed end counts as over" (Zeile 227), und einzeln fünfmal hintereinander grün. Der Test schließt das Kind-Ende des Paars und erwartet, dass das Eltern-Ende das Ende sieht. Verdacht: Ein paralleler Test-Thread forkt in genau diesem Augenblick und erbt den Deskriptor des Kind-Endes, solange er noch offen ist; dann ist das Ende für das Eltern-Ende nicht zu. Dieselbe Sorte Vererbung ist in `tests/cli.rs` schon als `ETXTBSY` bekannt (`output_when_not_busy`).
+
+### Ziel
+Der Test ist unter Last stabil, und falls der Verdacht stimmt, entsteht das Paar so, dass kein fremder Fork das Kind-Ende erbt.
+
+### Betroffene Pfade
+- `daemon/bin/humanitl-shim/src/channel.rs`
+
+### Akzeptanzkriterien
+- [ ] Die Ursache ist gemessen, nicht vermutet (etwa mit `/proc/<pid>/fd` eines Kindprozesses im Augenblick des Fehlschlags).
+- [ ] 100 Läufe der Test-Suite des Shims unter Last (`cargo test -p humanitl-shim` parallel zu einem Build) sind grün.
+- [ ] `make check` grün.
+
+### Fallstricke
+- `SOCK_CLOEXEC` am Paar hilft nur gegen `exec`, nicht gegen einen Fork, der noch nicht `exec` gerufen hat.
+
+---
+
+## HUM-227 · `humanitl daemon uninstall` löscht Aktivierungsverweise nach Namen
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-077, HUM-211 · Blockiert: —
+
+### Kontext
+Im Review von HUM-211 fiel auf, dass `daemon uninstall` die Verweise der Aktivierung und die Verweise unter `~/.local/lib/humanitl` per Name entfernt (`daemon/bin/humanitl/src/cmd/daemon/uninstall.rs`, Schleife über `unit::enablement_links` bei Zeile 113 und über die Verweise bei Zeile 338): `std::fs::remove_file(&link)` trifft, was in diesem Augenblick unter dem Namen liegt, auch einen Verweis, der inzwischen woandershin zeigt, oder eine gewöhnliche Datei. HUM-211 hat für `daemon install` dafür `unit::remove_link_if` gebaut: Der Verweis wird mit `renameat2(RENAME_NOREPLACE)` auf einen eigenen Namen gezogen, dort gelesen und nur gelöscht, wenn er auf die erwartete Unit zeigt (`unit::points_at`, auch über einen Verweis im Pfad oder ein relatives Ziel); sonst geht er zurück.
+
+### Ziel
+`daemon uninstall` entfernt nur Verweise, die auf die Units von Humanitl zeigen, und lässt alles andere unter demselben Namen liegen, mit einer Zeile im Bericht.
+
+### Betroffene Pfade
+- `daemon/bin/humanitl/src/cmd/daemon/uninstall.rs`
+
+### Akzeptanzkriterien
+- [ ] Ein Verweis `default.target.wants/humanitld.service`, der auf eine fremde Unit zeigt, bleibt nach `daemon uninstall` liegen und steht im Bericht.
+- [ ] Eine gewöhnliche Datei unter diesem Namen bleibt ebenso liegen.
+- [ ] Die bestehenden Tests in `tests/daemon_lifecycle.rs` bleiben grün; jeder neue Test ist ohne den Fix rot (Mutationsbeweis).
+- [ ] `make check` grün.
+
+### Fallstricke
+- `renameat2` mit `RENAME_NOREPLACE` lehnt NFS mit `EINVAL` ab; der Befund muss dann sagen, dass nichts entfernt wurde.
