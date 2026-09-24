@@ -225,6 +225,9 @@ impl AuditService {
             // Ein Feld, das kein Hex ist, gibt keinen Kopf: Was die Datei an
             // dieser Stelle trägt, sagt die Prüfung, nicht der Kopf.
             answer.head_hash = last.hash_bytes().map(Vec::from).unwrap_or_default();
+            // Die Zeichen der Zeile, auch wenn sie kein Zeitpunkt sind: Was
+            // an ihr nicht stimmt, sagt die Prüfung (HUM-162).
+            answer.head_ts = last.body.ts;
         }
         Ok(answer)
     }
@@ -310,6 +313,7 @@ pub fn verify_response(report: &VerifyReport, log: &Path, anchors: &[Anchor]) ->
     if let Some(head) = report.head.as_ref() {
         answer.head_seq = head.seq;
         answer.head_hash = hex::decode(&head.hash).unwrap_or_default();
+        answer.head_ts.clone_from(&head.ts);
     }
     if let VerifyStatus::Broken {
         first_bad_seq,
@@ -683,15 +687,16 @@ mod tests {
     /// die Nummer des letzten gelöschten Records (HUM-157).
     #[test]
     fn a_pruned_chain_is_ok_with_the_warning_pruned() {
-        use humanitl_audit::{Head, VerifyReport, VerifyStatus, VerifyWarning};
+        use humanitl_audit::{VerifiedHead, VerifyReport, VerifyStatus, VerifyWarning};
 
         let report = VerifyReport {
             records: 5,
             status: VerifyStatus::Ok,
             warnings: vec![VerifyWarning::Pruned { through_seq: 10 }],
-            head: Some(Head {
+            head: Some(VerifiedHead {
                 seq: 15,
                 hash: "ab".repeat(32),
+                ts: "2026-09-24T08:00:00.000000Z".to_owned(),
             }),
         };
         let answer = super::verify_response(&report, std::path::Path::new("/x/audit.jsonl"), &[]);

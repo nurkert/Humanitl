@@ -49,7 +49,10 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `14` seit den verweigerten Versuchen (HUM-138): `SandboxEvent.refusals`
+/// `15` seit dem Zeitpunkt des Kopfes (HUM-162): `AuditResponse.head_ts`
+/// trägt bei `verify` und `head` den Zeitstempel des letzten Records mit den
+/// Zeichen seiner Zeile.
+/// `14` waren die verweigerten Versuche (HUM-138): `SandboxEvent.refusals`
 /// und `SandboxEvent.Status.refusals` tragen, was der Filter dem Agenten an
 /// `socket(2)` verweigert hat, je Paar aus Familie und Typ gezählt, samt
 /// `RefusalReporting` und `RefusalReason`.
@@ -99,7 +102,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 14;
+pub const PROTO_MINOR: u32 = 15;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

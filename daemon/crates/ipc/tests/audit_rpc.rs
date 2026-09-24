@@ -188,6 +188,61 @@ async fn verify_and_head_name_the_same_head_and_the_anchors() {
     );
 }
 
+/// `verify` und `head` nennen den Zeitpunkt des Kopfes mit genau den Zeichen,
+/// die in seiner Zeile stehen (HUM-162). Bei einem gebrochenen Log trägt der
+/// Kopf von `head`, was die letzte Zeile trägt, auch wenn es kein Zeitpunkt
+/// ist; der von `verify` ist der letzte Record, der bestanden hat.
+#[tokio::test]
+async fn the_head_carries_its_time() {
+    let chain = Chain::write(7, SessionId::new());
+    let records = chain.records();
+    let last = records.last().unwrap();
+    assert!(
+        last.body.ts.ends_with('Z') && last.body.ts.contains('.'),
+        "the fixture has a time in the format of the log: {}",
+        last.body.ts
+    );
+    let server = chain.server();
+
+    let verified = answer(&server, Op::Verify(())).await;
+    assert!(verified.ok, "{verified:?}");
+    assert_eq!(verified.head_seq, last.body.seq);
+    assert_eq!(verified.head_ts, last.body.ts);
+    let top = answer(&server, Op::Head(())).await;
+    assert_eq!(top.head_seq, last.body.seq);
+    assert_eq!(top.head_ts, last.body.ts);
+
+    // Die letzte Zeile trägt danach etwas, das kein Zeitpunkt ist.
+    let mut lines = chain.lines();
+    let stale = format!("\"ts\":\"{}\"", last.body.ts);
+    let changed = lines
+        .last()
+        .unwrap()
+        .replacen(&stale, "\"ts\":\"not a time\"", 1);
+    assert_ne!(
+        &changed,
+        lines.last().unwrap(),
+        "the fixture must really change"
+    );
+    *lines.last_mut().unwrap() = changed;
+    chain.set_lines(&lines);
+
+    let verified = answer(&server, Op::Verify(())).await;
+    assert!(!verified.ok, "{verified:?}");
+    let held = &records[records.len() - 2];
+    assert_eq!(verified.head_seq, held.body.seq);
+    assert_eq!(
+        verified.head_ts, held.body.ts,
+        "the head of a broken chain is the last record that held"
+    );
+    let top = answer(&server, Op::Head(())).await;
+    assert_eq!(top.head_seq, last.body.seq);
+    assert_eq!(
+        top.head_ts, "not a time",
+        "head carries what the line carries"
+    );
+}
+
 /// Eine nach dem Schreiben veränderte Zeile ist ein Bruch ab ihrer Nummer,
 /// mit Grund und Befund; die Antwort ist trotzdem eine Antwort.
 #[tokio::test]

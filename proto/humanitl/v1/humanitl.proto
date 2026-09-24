@@ -1438,6 +1438,12 @@ message AuditResponse {
   // „nicht gemeldet" statt „null Anker" (HUM-051). Ein eigenes Feld und kein
   // `optional`, weil die Anwesenheit an beiden Feldern zugleich haengt.
   bool anchors_reported = 14;
+  // Bei `verify` und `head`: der Zeitstempel des Records in `head_seq`, mit
+  // genau den Zeichen, die in seiner Zeile stehen (HUM-162). Als Text und
+  // nicht als `Timestamp`, aus demselben Grund wie `AuditEntry.ts`: diese
+  // Zeichen stehen im Hash. Leer, wenn es keinen Kopf gibt, und bei einem
+  // Daemon, der das Feld nicht kennt.
+  string head_ts = 15;
 }
 
 // ---------- Config ----------
