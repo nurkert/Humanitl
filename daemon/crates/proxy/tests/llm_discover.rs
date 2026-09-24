@@ -284,8 +284,11 @@ async fn a_scan_over_a_full_24_stays_in_the_budget() {
 /// Das eigene Netz, so wie diese Maschine es beschreibt.
 ///
 /// Der Test läuft überall: Auf einem Rechner mit Vorgaberoute muss das
-/// Ergebnis in sich stimmen — das `/24` gehört zur eigenen Adresse, und die
-/// Schnittstelle hat einen Namen. Auf einem Läufer ohne Vorgaberoute (ein
+/// Ergebnis in sich stimmen — der Ausschnitt gehört zur eigenen Adresse und
+/// zum echten Netz, und die Schnittstelle hat einen Namen. Die eigene Adresse
+/// ist darin immer ein Host, auch wenn sie auf `.0` oder `.255` endet und das
+/// Netz weiter als ein `/24` ist (HUM-221, ein Läufer von GitHub in einem
+/// `/16`). Auf einem Läufer ohne Vorgaberoute (ein
 /// Container ohne Netz) ist die Weigerung `LLM_008` das richtige Ergebnis und
 /// keine Panne. Was der Test ausschließt, ist das Dazwischen: ein Netz, das
 /// nicht zur Adresse passt, oder eine Weigerung ohne Begründung.
@@ -295,8 +298,8 @@ async fn the_local_network_belongs_to_the_own_address() {
         Ok(local) => {
             assert_eq!(
                 local.subnet,
-                Subnet::local_24(local.own),
-                "the /24 must be the one around the own address"
+                Subnet::local(local.own, local.prefix),
+                "the search must be the part of the real network around the own address"
             );
             assert!(!local.interface.is_empty(), "the interface has a name");
             assert!(

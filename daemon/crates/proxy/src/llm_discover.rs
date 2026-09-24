@@ -75,20 +75,44 @@ const ROUTE_TABLE: &str = "/proc/net/route";
 ///
 /// Immer ein `/24` oder enger. Der Typ hält die Grenze fest, damit sie nicht
 /// an jeder Aufrufstelle neu geprüft werden muss.
+///
+/// Der Ausschnitt, in dem gesucht wird, und das echte Netz, in dem er liegt,
+/// sind zwei verschiedene Dinge (HUM-221): Ein Rechner in einem `/16` sucht in
+/// seinem `/24`, aber Netz- und Broadcast-Adresse sind die des `/16`. Dort sind
+/// `.0` und `.255` des Ausschnitts gewöhnliche Hosts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Subnet {
     network: Ipv4Addr,
     prefix: u8,
+    /// Die Präfixlänge des echten Netzes, nie länger als `prefix`. Sie allein
+    /// entscheidet, welche Adressen Netz- und Broadcast-Adresse sind.
+    real_prefix: u8,
 }
 
 impl Subnet {
-    /// Das Netz um `address` herum, auf `/24` geschnitten.
+    /// Das Netz um `address` herum, auf `/24` geschnitten, in einem echten
+    /// Netz, das selbst ein `/24` ist.
     #[must_use]
     pub fn local_24(address: Ipv4Addr) -> Self {
-        let octets = address.octets();
+        Self::local(address, 24)
+    }
+
+    /// Der Ausschnitt um `address` in einem echten Netz mit der Präfixlänge
+    /// `real_prefix`.
+    ///
+    /// Ist das echte Netz weiter als ein `/24`, bleibt die Suche im `/24` um
+    /// die Adresse, und nur Netz- und Broadcast-Adresse des echten Netzes
+    /// fallen heraus. Ist es enger, ist der Ausschnitt das echte Netz selbst:
+    /// Adressen daneben liegen nicht mehr an derselben Leitung. Eine
+    /// Präfixlänge über 32 wird als `/32` gelesen.
+    #[must_use]
+    pub fn local(address: Ipv4Addr, real_prefix: u8) -> Self {
+        let real_prefix = real_prefix.min(32);
+        let prefix = real_prefix.max(24);
         Self {
-            network: Ipv4Addr::new(octets[0], octets[1], octets[2], 0),
-            prefix: 24,
+            network: masked(address, prefix),
+            prefix,
+            real_prefix,
         }
     }
 
@@ -98,6 +122,7 @@ impl Subnet {
         Self {
             network: address,
             prefix: 32,
+            real_prefix: 32,
         }
     }
 
@@ -137,25 +162,47 @@ impl Subnet {
         Ok(Self {
             network: masked(address, prefix),
             prefix,
+            real_prefix: prefix,
         })
     }
 
     /// Die Adressen, an denen ein Server stehen kann.
     ///
-    /// Ohne Netz- und Broadcast-Adresse, denn dort steht keiner. Bei `/31` und
-    /// `/32` gibt es diese Sonderrolle nicht, und beide Adressen zählen.
+    /// Ohne Netz- und Broadcast-Adresse des echten Netzes, denn dort steht
+    /// keiner. Liegen sie außerhalb des Ausschnitts, fällt im Ausschnitt nichts
+    /// heraus. Bei `/31` und `/32` gibt es diese Sonderrolle nicht, und alle
+    /// Adressen zählen.
     pub fn hosts(&self) -> impl Iterator<Item = Ipv4Addr> + use<> {
+        let (first, last) = self.bounds();
+        let reserved = self.reserved();
+        (first..=last)
+            .filter(move |address| {
+                reserved
+                    .is_none_or(|(network, broadcast)| *address != network && *address != broadcast)
+            })
+            .map(Ipv4Addr::from)
+    }
+
+    /// Erste und letzte Adresse des Ausschnitts als Zahl.
+    fn bounds(self) -> (u32, u32) {
         let first = u32::from(self.network);
         let count = 1_u32 << (32 - u32::from(self.prefix));
         // Erst abziehen, dann addieren: `first + count` ist für ein Netz am
         // oberen Ende des Adressraums (255.255.255.0/24) genau 2^32 und läuft
-        // über, bevor die 1 oder die 2 wieder abgezogen wäre.
-        let (from, to) = if self.prefix >= 31 {
-            (first, first + (count - 1))
-        } else {
-            (first + 1, first + (count - 2))
-        };
-        (from..=to).map(Ipv4Addr::from)
+        // über, bevor die 1 wieder abgezogen wäre.
+        (first, first + (count - 1))
+    }
+
+    /// Netz- und Broadcast-Adresse des echten Netzes, wo es sie gibt.
+    fn reserved(self) -> Option<(u32, u32)> {
+        if self.real_prefix >= 31 {
+            return None;
+        }
+        let network = u32::from(masked(self.network, self.real_prefix));
+        // `real_prefix` ist hier höchstens 30, das Schieben um höchstens 30
+        // Bits also sicher; erst ab 32 wäre es ein Panik-Fall.
+        let broadcast = network | (u32::MAX >> u32::from(self.real_prefix));
+        Some((network, broadcast))
     }
 
     /// Ob `other` ganz in diesem Netz liegt.
@@ -171,8 +218,12 @@ impl Subnet {
     /// Wie viele Adressen [`Subnet::hosts`] liefert.
     #[must_use]
     pub fn len(&self) -> u32 {
-        let count = 1_u32 << (32 - u32::from(self.prefix));
-        if self.prefix >= 31 { count } else { count - 2 }
+        let (first, last) = self.bounds();
+        let inside = |address: u32| u32::from((first..=last).contains(&address));
+        let reserved = self.reserved().map_or(0, |(network, broadcast)| {
+            inside(network) + inside(broadcast)
+        });
+        last - first + 1 - reserved
     }
 
     /// Ob das Netz keine Adresse enthält. Kann nicht vorkommen; `clippy` will
@@ -192,10 +243,13 @@ impl std::fmt::Display for Subnet {
 /// Das eigene Netz, wie es die Routing-Tabelle beschreibt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalNet {
-    /// Das `/24` um die eigene Adresse.
+    /// Der Ausschnitt um die eigene Adresse: das `/24` darum oder das echte
+    /// Netz, wenn es enger ist.
     pub subnet: Subnet,
     /// Die eigene Adresse in diesem Netz.
     pub own: Ipv4Addr,
+    /// Die Präfixlänge des echten Netzes, in dem die eigene Adresse liegt.
+    pub prefix: u8,
     /// Die Schnittstelle, über die die Vorgaberoute läuft.
     pub interface: String,
 }
@@ -206,6 +260,12 @@ pub struct LocalNet {
 /// Schnittstelle und das Gateway, und ein verbundener UDP-Socket auf dieses
 /// Gateway nennt die eigene Adresse, die der Kernel dafür wählen würde.
 /// `connect` auf einem UDP-Socket schickt nichts; es setzt nur das Ziel.
+///
+/// Die Präfixlänge des echten Netzes steht in derselben Tabelle, als Route
+/// ohne Gateway, die der Kernel für das Netz der Schnittstelle einträgt
+/// ([`link_prefix`]). Fehlt sie, gilt das `/24` als echtes Netz, wie vor
+/// HUM-221: Dann fallen `.0` und `.255` heraus, und die Suche fragt eher eine
+/// Adresse zu wenig als eine Broadcast-Adresse.
 ///
 /// # Errors
 ///
@@ -227,11 +287,105 @@ pub async fn local_net() -> Result<LocalNet, Diagnostic> {
         )
     })?;
     let own = address_towards(gateway).await?;
+    let prefix = search_prefix(&table, &interface, own);
     Ok(LocalNet {
-        subnet: Subnet::local_24(own),
+        subnet: Subnet::local(own, prefix),
         own,
+        prefix,
         interface,
     })
+}
+
+/// Die Präfixlänge, mit der die Suche um `own` rechnet.
+///
+/// Die aus [`link_prefix`], solange `own` darin ein Host ist. Ist `own` in
+/// diesem Netz Netz- oder Broadcast-Adresse, beschreibt die Route nicht das
+/// Netz der Adresse, und die Suche übersähe ausgerechnet die eigene Adresse;
+/// dann gilt, wie ohne passende Route, das `/24`.
+#[must_use]
+pub fn search_prefix(table: &str, interface: &str, own: Ipv4Addr) -> u8 {
+    link_prefix(table, interface, own)
+        .filter(|&prefix| {
+            let own = u32::from(own);
+            Subnet::local(Ipv4Addr::from(own), prefix)
+                .reserved()
+                .is_none_or(|(network, broadcast)| own != network && own != broadcast)
+        })
+        .unwrap_or(24)
+}
+
+/// Die Präfixlänge des Netzes, in dem `own` an `interface` liegt, aus dem Text
+/// von `/proc/net/route`.
+///
+/// Gesucht ist die Route, die der Kernel für eine Adresse samt Präfix auf der
+/// Schnittstelle einträgt: stehend (`RTF_UP`), ohne Gateway, mit `own` darin.
+/// Passen mehrere, gewinnt die engste — dieselbe Wahl, die der Kernel beim
+/// Weiterleiten trifft. Die Vorgaberoute zählt nicht, und eine Maske, deren
+/// Bits nicht zusammenhängen, ist kein Präfix.
+///
+/// Die Grenze dieses Wegs: Gelesen wird eine Route, nicht die Adresse der
+/// Schnittstelle. Trägt die Schnittstelle mehrere Adressen, etwa
+/// `10.1.3.200/16` und daneben `10.1.3.1/24`, liefert die Tabelle zwei Routen,
+/// die beide `own` enthalten, und die engere gewinnt: `/24` statt `/16`. Das
+/// ist hinnehmbar, denn über genau diese engere Route erreicht der Kernel die
+/// Nachbarn von `own`: Die Suche wird dadurch höchstens enger, im Extremfall
+/// bis auf die engste Route ohne Gateway um `own` (etwa ein `/27` einer
+/// zweiten Adresse oder einer statischen Route an der Leitung), und fragt nie
+/// eine Adresse zu viel. Das setzt voraus, dass der Kernel die Präfixroute der
+/// Adresse selbst einträgt (also ohne `noprefixroute`). Wäre `own` in der
+/// gewählten Route Netz- oder Broadcast-Adresse, passt die Route nicht zur
+/// Adresse; dann fällt [`search_prefix`] auf das `/24` zurück. Eine Route ohne
+/// Gateway mit Maske `/0` (eine Punkt-zu-Punkt-Vorgaberoute) sagt nichts über
+/// das eigene Netz; sie zählt nicht, und ohne andere Route greift der
+/// Rückfall auf das `/24` in [`local_net`].
+///
+/// Die Präfixlänge der Adresse selbst stünde in Netlink oder `getifaddrs`.
+/// Beide gingen nur über `unsafe`, und das Crate verbietet es
+/// (`#![forbid(unsafe_code)]`); eine sichere Hülle darum wäre eine neue
+/// Abhängigkeit. Die Tabelle liest die Suche ohnehin schon.
+#[must_use]
+pub fn link_prefix(table: &str, interface: &str, own: Ipv4Addr) -> Option<u8> {
+    let mut best: Option<u8> = None;
+    for line in table.lines().skip(1) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let [
+            name,
+            destination,
+            _gateway,
+            flags,
+            _refs,
+            _use,
+            _metric,
+            mask,
+            ..,
+        ] = fields[..]
+        else {
+            continue;
+        };
+        let flags = u32::from_str_radix(flags, 16).unwrap_or(0);
+        // `RTF_UP` gesetzt, `RTF_GATEWAY` nicht.
+        if name != interface || flags & 0x0003 != 0x0001 {
+            continue;
+        }
+        let (Some(destination), Some(mask)) = (hex_address(destination), hex_address(mask)) else {
+            continue;
+        };
+        let mask = u32::from(mask);
+        let ones = mask.leading_ones();
+        if ones == 0 || mask.checked_shl(ones).unwrap_or(0) != 0 {
+            continue;
+        }
+        if u32::from(own) & mask != u32::from(destination) {
+            continue;
+        }
+        let Ok(prefix) = u8::try_from(ones) else {
+            continue;
+        };
+        if best.is_none_or(|seen| prefix > seen) {
+            best = Some(prefix);
+        }
+    }
+    best
 }
 
 /// Die Schnittstelle und das Gateway der Vorgaberoute aus dem Text von
@@ -518,7 +672,7 @@ fn refused(why: String) -> Diagnostic {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-    use super::{Subnet, default_route, hex_address, masked};
+    use super::{Subnet, default_route, hex_address, link_prefix, masked, search_prefix};
     use std::net::Ipv4Addr;
 
     /// Der Text stammt von dieser Maschine, gekürzt auf drei Zeilen.
@@ -576,6 +730,191 @@ mod tests {
         // und der Broadcast wäre 254 Antworten auf eine Frage.
         assert!(!hosts.contains(&Ipv4Addr::new(192, 168, 2, 0)));
         assert!(!hosts.contains(&Ipv4Addr::new(192, 168, 2, 255)));
+    }
+
+    /// HUM-221: In einem Netz weiter als `/24` sind `.0` und `.255` des
+    /// Ausschnitts gewöhnliche Hosts und werden gefragt. `10.1.0.0` selbst ist
+    /// die Netzadresse des `/16` und fällt heraus; das prüft
+    /// `only_the_reserved_addresses_of_the_real_network_drop_out`.
+    #[test]
+    fn in_a_network_wider_than_a_24_the_ends_of_the_24_are_hosts() {
+        for own in [Ipv4Addr::new(10, 1, 3, 0), Ipv4Addr::new(10, 1, 3, 255)] {
+            let subnet = Subnet::local(own, 16);
+            let hosts: Vec<Ipv4Addr> = subnet.hosts().collect();
+            assert!(hosts.contains(&own), "{own} in 10.1.0.0/16 gets asked");
+            assert_eq!(
+                hosts.len(),
+                256,
+                "a /24 inside a /16 has no reserved address"
+            );
+            assert_eq!(subnet.len(), 256);
+        }
+    }
+
+    /// Die Gegenprobe: Ist das echte Netz selbst das `/24`, bleiben Netz- und
+    /// Broadcast-Adresse draußen.
+    #[test]
+    fn in_a_24_the_network_and_the_broadcast_address_are_not_asked() {
+        let network = Ipv4Addr::new(192, 168, 1, 0);
+        let broadcast = Ipv4Addr::new(192, 168, 1, 255);
+        for own in [network, broadcast, Ipv4Addr::new(192, 168, 1, 37)] {
+            let subnet = Subnet::local(own, 24);
+            let hosts: Vec<Ipv4Addr> = subnet.hosts().collect();
+            assert!(
+                !hosts.contains(&network),
+                "{network} is the network address"
+            );
+            assert!(
+                !hosts.contains(&broadcast),
+                "{broadcast} is the broadcast address"
+            );
+            assert_eq!(hosts.len(), 254);
+            assert_eq!(subnet.len(), 254);
+        }
+    }
+
+    /// Das `/24` am Anfang und am Ende eines `/16` verliert je genau die eine
+    /// Adresse, die im `/16` Netz- oder Broadcast-Adresse ist.
+    #[test]
+    fn only_the_reserved_addresses_of_the_real_network_drop_out() {
+        let low = Subnet::local(Ipv4Addr::new(10, 1, 0, 7), 16);
+        let hosts: Vec<Ipv4Addr> = low.hosts().collect();
+        assert!(
+            !hosts.contains(&Ipv4Addr::new(10, 1, 0, 0)),
+            "the network address of the /16"
+        );
+        assert_eq!(hosts.first(), Some(&Ipv4Addr::new(10, 1, 0, 1)));
+        assert_eq!(hosts.last(), Some(&Ipv4Addr::new(10, 1, 0, 255)));
+        assert_eq!((hosts.len(), low.len()), (255, 255));
+
+        let high = Subnet::local(Ipv4Addr::new(10, 1, 255, 7), 16);
+        let hosts: Vec<Ipv4Addr> = high.hosts().collect();
+        assert_eq!(hosts.first(), Some(&Ipv4Addr::new(10, 1, 255, 0)));
+        assert_eq!(hosts.last(), Some(&Ipv4Addr::new(10, 1, 255, 254)));
+        assert_eq!((hosts.len(), high.len()), (255, 255));
+    }
+
+    /// Ein echtes Netz enger als `/24` ist selbst der Ausschnitt.
+    #[test]
+    fn a_real_network_narrower_than_a_24_is_the_whole_search() {
+        let subnet = Subnet::local(Ipv4Addr::new(192, 168, 1, 70), 26);
+        assert_eq!(subnet.to_string(), "192.168.1.64/26");
+        let hosts: Vec<Ipv4Addr> = subnet.hosts().collect();
+        assert_eq!(hosts.first(), Some(&Ipv4Addr::new(192, 168, 1, 65)));
+        assert_eq!(hosts.last(), Some(&Ipv4Addr::new(192, 168, 1, 126)));
+        assert_eq!((hosts.len(), subnet.len()), (62, 62));
+
+        let point = Subnet::local(Ipv4Addr::new(10, 0, 0, 1), 31);
+        assert_eq!(point.hosts().count(), 2);
+        assert_eq!(
+            Subnet::local(Ipv4Addr::new(10, 0, 0, 1), 40),
+            Subnet::single(Ipv4Addr::new(10, 0, 0, 1))
+        );
+    }
+
+    /// Die Präfixlänge kommt aus der Route ohne Gateway, die die eigene
+    /// Adresse enthält, auf der Schnittstelle der Vorgaberoute.
+    #[test]
+    fn the_prefix_comes_from_the_link_route_of_the_interface() {
+        // So sieht ein Läufer von GitHub aus: `10.1.0.0/16` an `eth0`.
+        let runner = "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n\
+            eth0\t00000000\t0100010A\t0003\t0\t0\t100\t00000000\t0\t0\t0\n\
+            eth0\t0000010A\t00000000\t0001\t0\t0\t100\t0000FFFF\t0\t0\t0\n\
+            eth0\t0000FEA9\t00000000\t0001\t0\t0\t100\t0000FFFF\t0\t0\t0\n\
+            docker0\t000011AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0\n";
+        assert_eq!(
+            link_prefix(runner, "eth0", Ipv4Addr::new(10, 1, 3, 255)),
+            Some(16)
+        );
+        assert_eq!(
+            link_prefix(ROUTE, "wlan0", Ipv4Addr::new(192, 168, 2, 37)),
+            Some(24)
+        );
+        // Eine andere Schnittstelle, eine fremde Adresse: kein Präfix.
+        assert_eq!(
+            link_prefix(runner, "wlan0", Ipv4Addr::new(10, 1, 3, 255)),
+            None
+        );
+        assert_eq!(
+            link_prefix(runner, "eth0", Ipv4Addr::new(172, 17, 0, 2)),
+            None
+        );
+    }
+
+    /// Mehrere passende Routen: Die engste gewinnt. Eine Route über ein
+    /// Gateway, eine, die nicht steht, und eine Maske mit Lücke zählen nicht.
+    #[test]
+    fn the_narrowest_link_route_wins_and_odd_routes_do_not_count() {
+        let table = "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\n\
+            eth0\t0000010A\t00000000\t0001\t0\t0\t0\t0000FFFF\n\
+            eth0\t0003010A\t00000000\t0001\t0\t0\t0\t00FFFFFF\n\
+            eth0\tC003010A\t0100010A\t0003\t0\t0\t0\tC0FFFFFF\n\
+            eth0\tC003010A\t00000000\t0000\t0\t0\t0\tC0FFFFFF\n\
+            eth0\tC803010A\t00000000\t0001\t0\t0\t0\tFDFFFFFF\n";
+        let own = Ipv4Addr::new(10, 1, 3, 200);
+        assert_eq!(link_prefix(table, "eth0", own), Some(24));
+    }
+
+    /// Zwei Adressen auf derselben Schnittstelle, `10.1.3.200/16` und
+    /// `10.1.3.1/24`: Beide Routen enthalten die eigene Adresse, und die
+    /// engere gewinnt, in welcher Reihenfolge die Tabelle sie auch nennt. Die
+    /// Grenze steht im Doc-Kommentar von [`link_prefix`].
+    #[test]
+    fn overlapping_routes_of_one_interface_yield_the_narrower_prefix() {
+        let wide_first = "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\n\
+            eth0\t00000000\t0100010A\t0003\t0\t0\t100\t00000000\n\
+            eth0\t0000010A\t00000000\t0001\t0\t0\t100\t0000FFFF\n\
+            eth0\t0003010A\t00000000\t0001\t0\t0\t100\t00FFFFFF\n";
+        let narrow_first = "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\n\
+            eth0\t0003010A\t00000000\t0001\t0\t0\t100\t00FFFFFF\n\
+            eth0\t0000010A\t00000000\t0001\t0\t0\t100\t0000FFFF\n";
+        let own = Ipv4Addr::new(10, 1, 3, 200);
+        assert_eq!(link_prefix(wide_first, "eth0", own), Some(24));
+        assert_eq!(link_prefix(narrow_first, "eth0", own), Some(24));
+        // Eine Adresse außerhalb des engeren Netzes bekommt das weite.
+        assert_eq!(
+            link_prefix(wide_first, "eth0", Ipv4Addr::new(10, 1, 7, 9)),
+            Some(16)
+        );
+    }
+
+    /// Eine engere Route, in der die eigene Adresse Netz- oder
+    /// Broadcast-Adresse ist, beschreibt nicht das Netz der Adresse: Die Suche
+    /// fällt auf das `/24` zurück und fragt die eigene Adresse mit. Liegt die
+    /// Adresse als Host in derselben Route, gilt die Route.
+    #[test]
+    fn a_route_in_which_the_own_address_is_reserved_falls_back_to_the_24() {
+        let table = "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\n\
+            eth0\tC003010A\t00000000\t0001\t0\t0\t0\tE0FFFFFF\n";
+        let network = Ipv4Addr::new(10, 1, 3, 192);
+        let broadcast = Ipv4Addr::new(10, 1, 3, 223);
+        for own in [network, broadcast] {
+            assert_eq!(link_prefix(table, "eth0", own), Some(27));
+            let prefix = search_prefix(table, "eth0", own);
+            assert_eq!(prefix, 24, "{own} is reserved in 10.1.3.192/27");
+            assert!(
+                Subnet::local(own, prefix).hosts().any(|host| host == own),
+                "{own} gets asked"
+            );
+        }
+        assert_eq!(
+            search_prefix(table, "eth0", Ipv4Addr::new(10, 1, 3, 200)),
+            27
+        );
+        assert_eq!(
+            search_prefix(table, "wlan0", Ipv4Addr::new(10, 1, 3, 200)),
+            24
+        );
+    }
+
+    /// Eine Route ohne Gateway mit Maske `/0` ist eine Punkt-zu-Punkt-
+    /// Vorgaberoute und sagt nichts über das eigene Netz: kein Präfix, und
+    /// `local_net` fällt auf das `/24` zurück.
+    #[test]
+    fn a_link_route_with_a_zero_mask_gives_no_prefix() {
+        let table = "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\n\
+            wg0\t00000000\t00000000\t0001\t0\t0\t0\t00000000\n";
+        assert_eq!(link_prefix(table, "wg0", Ipv4Addr::new(10, 8, 0, 2)), None);
     }
 
     #[test]
