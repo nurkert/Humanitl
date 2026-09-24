@@ -238,10 +238,14 @@ pub struct RunArgs {
 
 /// Die Unterkommandos von `humanitl audit`.
 ///
-/// Beide gehen zuerst an den Daemon: Er prüft mit dem HMAC-Schlüssel und den
-/// Ankern, und nur diese Prüfung ist die ganze. `--file` ist die schwächere
-/// Fassung für eine Datei, die woanders herkommt; sie prüft Kette und Kanonik
-/// und sagt in ihrer Ausgabe, was sie nicht geprüft hat (HUM-070).
+/// Beide gehen zuerst an den Daemon. Nur `verify` prüft die Kette: Der Daemon
+/// prüft mit dem HMAC-Schlüssel und den Ankern, und nur diese Prüfung ist die
+/// ganze. `--file` ist die schwächere Fassung für eine Datei, die woanders
+/// herkommt; sie prüft Kette und Kanonik und sagt in ihrer Ausgabe, was sie
+/// nicht geprüft hat (HUM-070). `export` prüft nicht: Er verweigert eine
+/// Zeile, die kein Record ist, auch eine leere, mit `AUDIT_001`, und kopiert
+/// oder formatiert sonst die Records, ohne Hash, MAC oder Anker anzusehen
+/// (HUM-214).
 #[derive(Debug, Subcommand)]
 pub enum AuditCmd {
     /// Check the hash chain: every record, its predecessor and the anchors.

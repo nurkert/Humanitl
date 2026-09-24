@@ -4395,11 +4395,11 @@ m3, Schwere minor, von zwei unabhängigen Prüfern bestätigt). Ort: `daemon/cra
 Der Befund ist behoben, und ein Test hält ihn behoben.
 
 ### Akzeptanzkriterien
-- [ ] Den vorgeschlagenen Fix (bei gebrochener Kette mit `AUDIT_001` verweigern) **nicht** umsetzen. Er bricht das Byte-für-Byte-Kriterium und verhindert die Übergabe eines gebrochenen Logs als Beweis (SECURITY.md:869).
-- [ ] Stattdessen `export.rs:93-96` umformulieren: „[`AUDIT_001`], wenn eine Zeile des Logs kein Record ist. Der Export prüft weder Hash noch MAC noch Anker; ob die Kette hält, sagt `verify`.“
+- [x] Den vorgeschlagenen Fix (bei gebrochener Kette mit `AUDIT_001` verweigern) **nicht** umsetzen. Er bricht das Byte-für-Byte-Kriterium und verhindert die Übergabe eines gebrochenen Logs als Beweis (SECURITY.md:869).
+- [x] Stattdessen `export.rs:93-96` umformulieren: „[`AUDIT_001`], wenn eine Zeile des Logs kein Record ist. Der Export prüft weder Hash noch MAC noch Anker; ob die Kette hält, sagt `verify`.“
 - [ ] Optional ein Hinweis in `cmd/audit.rs:634-645`.
-- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
-- [ ] `make check` grün.
+- [x] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [x] `make check` grün.
 
 ### Referenzen
 Sicherheitsdurchlauf 2026-09-23, Befund m3; `daemon/crates/audit/src/export.rs:97` (Kommentar 93-96).

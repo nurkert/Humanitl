@@ -1056,9 +1056,15 @@ Getrennt davon liegt das Pseudonymisierungs-Mapping: verschlüsselt, nur auf dem
 Sandbox und nie in einer Anfrage.
 
 *Prüfung.* Die Prüfung steht im Daemon (`AuditVerifier`). `humanitl audit verify` und
-`humanitl audit export` gibt es seit HUM-070; beide fragen zuerst den Daemon, weil nur er den
-Schlüssel und die Anker hat. Seit HUM-156 beantwortet der Daemon `Audit` und prüft mit beiden;
-Kommandozeile und Audit-Screen sehen dieselbe Kette mit derselben Stärke und denselben Kopf-Hash.
+`humanitl audit export` gibt es seit HUM-070; beide fragen zuerst den Daemon. Nur `verify` prüft,
+und zwar mit Schlüssel und Ankern, die nur der Daemon hat: Seit HUM-156 beantwortet der Daemon
+`Audit(Verify)` mit beiden, und Kommandozeile und Audit-Screen sehen dieselbe Kette mit derselben
+Stärke und denselben Kopf-Hash. `export` prüft weder Hash noch MAC noch Anker, auch nicht im
+Daemon; er kopiert die Records im Zeitraum (JSONL Byte für Byte) oder formatiert sie (CSV) und
+verweigert nur eine Zeile, die gar kein Record ist (`AUDIT_001`). Eine manipulierte Kette geht
+unverändert in den Export, damit auch ein gebrochenes Log als Beleg übergeben werden kann (HUM-214);
+ob sie hält, sagt erst der eigene Schritt `humanitl audit verify`, auf das Log oder auf einen
+JSONL-Export des ganzen Logs.
 Antwortet kein Daemon, fällt die Kommandozeile auf die Datei zurück und prüft **ohne Schlüssel und
 ohne Anker** — also Kette und kanonische Form, und nicht die MACs. Ihre Ausgabe sagt das
 (`no HMAC key (file mode)`, `no anchors (file mode)`); eine schwächere Prüfung, die sich nicht als
