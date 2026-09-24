@@ -14,7 +14,9 @@
 //!    unter [`SYSTEM_UNIT_DIR`] abgelegt, schreibt der Befehl **gar nichts**
 //!    und aktiviert nur, was dort liegt ([`SystemUnits`], HUM-053): Eine
 //!    Kopie unter `~/.config` verdeckte die Fassung des Pakets, und jedes
-//!    Update des Pakets liefe an ihr vorbei.
+//!    Update des Pakets liefe an ihr vorbei. Eine solche Kopie aus einer
+//!    früheren Installation legt `daemon install` deshalb beiseite, eine
+//!    fremde lässt es liegen (`cmd::daemon::packaged`, HUM-211).
 //! 2. **Sichtbar, bevor es geschieht.** Der Inhalt entsteht hier und wird vom
 //!    Aufrufer angezeigt, bevor irgendetwas geschrieben wird.
 //! 3. **Wiederholbar.** Ein zweiter Aufruf mit demselben Ergebnis schreibt
@@ -453,19 +455,36 @@ impl Enablement {
     /// etwas anderes enthält, bleibt unberührt: Darin steht die Aktivierung
     /// anderer Dienste.
     ///
+    /// **Nur Verweise, die dieser Lauf angelegt hat** (HUM-211, Review): neu
+    /// seit dem Zustand und in diesem Augenblick noch ein Verweis auf die Unit
+    /// dieses Namens neben `unit`, also dorthin, wohin `systemctl --user
+    /// enable` ihn gelegt hat ([`points_at`]: auch über einen Verweis im Pfad
+    /// oder ein relatives Ziel). Alles andere unter demselben Namen bleibt
+    /// liegen ([`remove_link_if`]) und steht im Befund.
+    ///
     /// # Errors
     ///
-    /// `DAEMON_006`, wenn sich ein Verweis nicht entfernen lässt. Der Befund
-    /// nennt alle, die stehen blieben; ein halb zurückgenommener Zustand wird
-    /// gemeldet und nicht verschwiegen.
-    pub fn rollback(&self, dir: &Path) -> Result<(), Diagnostic> {
+    /// `DAEMON_006`, wenn sich ein neuer Verweis nicht entfernen lässt oder
+    /// liegen blieb, weil er nicht auf die Unit zeigt. Der Befund nennt alle,
+    /// die stehen blieben; ein halb zurückgenommener Zustand wird gemeldet und
+    /// nicht verschwiegen.
+    pub fn rollback(&self, dir: &Path, unit: &Path) -> Result<(), Diagnostic> {
         let names: Vec<&str> = self.names.iter().map(String::as_str).collect();
         let now = Self::read_for(dir, &names);
         let mut left: Vec<String> = Vec::new();
         for link in now.links.difference(&self.links) {
-            match std::fs::remove_file(link) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            let Some(name) = link.file_name() else {
+                continue;
+            };
+            let expected = unit.with_file_name(name);
+            match remove_link_if(link, |target| points_at(link, target, &expected)) {
+                // Gegangen, oder inzwischen ohnehin fort.
+                Ok(removed) if removed || link.symlink_metadata().is_err() => {}
+                Ok(_) => left.push(format!(
+                    "{} (left alone: it does not point at {})",
+                    link.display(),
+                    expected.display()
+                )),
                 Err(error) => left.push(format!("{} ({error})", link.display())),
             }
         }
@@ -484,6 +503,132 @@ impl Enablement {
                 left.join(", ")
             ),
         ))
+    }
+}
+
+/// Benennt `from` in `to` um, ohne etwas zu überschreiben, das unter `to`
+/// liegt (`renameat2` mit `RENAME_NOREPLACE`, HUM-211).
+///
+/// # Errors
+///
+/// Der Fehler des Aufrufs; `AlreadyExists`, wenn unter `to` etwas liegt.
+pub fn move_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        from,
+        rustix::fs::CWD,
+        to,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(std::io::Error::from)
+}
+
+/// Wohin ein Verweis zeigt, als Pfad neben dem Verweis aufgelöst.
+#[must_use]
+pub fn link_target(link: &Path, target: &Path) -> PathBuf {
+    if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        link.parent()
+            .map_or_else(|| target.to_path_buf(), |dir| dir.join(target))
+    }
+}
+
+/// Wahr, wenn der Verweis `link` mit dem Ziel `target` auf `expected` zeigt:
+/// wörtlich, oder nach Auflösen beider Pfade.
+///
+/// systemd löst seine Suchpfade auf, bevor es Verweise schreibt: Ist
+/// `~/.config` selbst ein Verweis (ein Dotfile-Verwalter), steht im Verweis der
+/// aufgelöste Pfad, und ein relatives Ziel (`../humanitld.service`) gilt
+/// neben dem Verweis. Beide sind Verweise dieses Laufs.
+#[must_use]
+pub fn points_at(link: &Path, target: &Path, expected: &Path) -> bool {
+    let resolved = link_target(link, target);
+    if resolved == expected {
+        return true;
+    }
+    match (
+        std::fs::canonicalize(&resolved),
+        std::fs::canonicalize(expected),
+    ) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+/// Ein Name für einen Verweis, den [`remove_link_if`] kurz beiseitezieht:
+/// versteckt, und je Aufruf ein anderer, auch innerhalb eines Prozesses.
+fn held_name(name: &std::ffi::OsStr) -> std::ffi::OsString {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.subsec_nanos());
+    let mut held = std::ffi::OsString::from(".");
+    held.push(name);
+    held.push(format!(
+        ".humanitl-{}-{}-{nanos}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    held
+}
+
+/// Entfernt `link`, aber nur, wenn es ein Verweis ist, dessen Ziel `ours`
+/// annimmt; `Ok(true)`, wenn er ging, `Ok(false)`, wenn er blieb oder fehlte.
+///
+/// Geprüft wird nicht am Namen, sondern an dem, was entfernt würde: Der
+/// Verweis wird erst mit `renameat2(RENAME_NOREPLACE)` auf einen eigenen Namen
+/// im selben Verzeichnis gezogen, dort gelesen und nur dann gelöscht. Legt
+/// jemand zwischen Prüfung und Löschen etwas anderes unter den Namen, trifft
+/// das Löschen es nicht. Gehört das Gezogene nicht diesem Lauf, geht es auf
+/// demselben Weg zurück (HUM-211, Review).
+///
+/// # Errors
+///
+/// Der Fehler beim Umbenennen oder Löschen, mit dem Zwischennamen, wenn er
+/// daran hing. Scheitert das Löschen, geht der Verweis unter seinen Namen
+/// zurück; scheitert auch das, nennt der Fehler, unter welchem Namen er jetzt
+/// liegt.
+pub fn remove_link_if(link: &Path, ours: impl Fn(&Path) -> bool) -> std::io::Result<bool> {
+    let Some(name) = link.file_name() else {
+        return Ok(false);
+    };
+    let held = link.with_file_name(held_name(name));
+    match move_no_replace(link, &held) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(std::io::Error::new(
+                error.kind(),
+                format!("it cannot be moved to {} ({error})", held.display()),
+            ));
+        }
+    }
+    let put_back = |why: String| {
+        move_no_replace(&held, link).map_or_else(
+            |error| {
+                std::io::Error::new(
+                    error.kind(),
+                    format!("{why}; it now lies at {} ({error})", held.display()),
+                )
+            },
+            |()| std::io::Error::other(why.clone()),
+        )
+    };
+    if std::fs::read_link(&held).is_ok_and(|target| ours(&target)) {
+        return match std::fs::remove_file(&held) {
+            Ok(()) => Ok(true),
+            Err(error) => Err(put_back(format!("it cannot be removed ({error})"))),
+        };
+    }
+    match move_no_replace(&held, link) {
+        Ok(()) => Ok(false),
+        Err(error) => Err(std::io::Error::new(
+            error.kind(),
+            format!("it now lies at {} ({error})", held.display()),
+        )),
     }
 }
 
@@ -977,12 +1122,16 @@ mod tests {
 
         let sockets = dir.join("sockets.target.wants");
         std::fs::create_dir_all(&sockets).expect("the sockets directory");
-        std::fs::write(sockets.join(SOCKET_NAME), "link").expect("the socket link");
+        std::os::unix::fs::symlink(dir.join(SOCKET_NAME), sockets.join(SOCKET_NAME))
+            .expect("the socket link");
         let default = dir.join("default.target.wants");
         std::fs::create_dir_all(&default).expect("the default directory");
-        std::fs::write(default.join(UNIT_NAME), "link").expect("the service link");
+        std::os::unix::fs::symlink(dir.join(UNIT_NAME), default.join(UNIT_NAME))
+            .expect("the service link");
 
-        before.rollback(&dir).expect("the rollback");
+        before
+            .rollback(&dir, &dir.join(UNIT_NAME))
+            .expect("the rollback");
         assert!(!sockets.exists(), "the socket link and its directory go");
         assert!(!default.exists(), "the service link and its directory go");
     }
@@ -1099,14 +1248,91 @@ mod tests {
         let fresh = dir.join("default.target.wants");
         std::fs::create_dir_all(&fresh).expect("the fresh wants directory");
         let link = fresh.join(UNIT_NAME);
-        std::fs::write(&link, "an enablement from this run").expect("the fresh link");
+        std::os::unix::fs::symlink(dir.join(UNIT_NAME), &link).expect("the fresh link");
 
-        before.rollback(&dir).expect("the rollback");
+        before
+            .rollback(&dir, &dir.join(UNIT_NAME))
+            .expect("the rollback");
 
         assert!(!link.exists(), "the link of this run is taken back");
         assert!(!fresh.exists(), "and its empty directory with it");
         assert!(kept.exists(), "an enablement from before this run stays");
         assert!(older.is_dir(), "and so does its directory");
+    }
+
+    /// Die Rücknahme entfernt nur, was `enable` für diese Unit angelegt hat:
+    /// Ein neuer Eintrag unter demselben Namen, der woandershin zeigt oder
+    /// gar kein Verweis ist, bleibt liegen, samt seinem Verzeichnis (HUM-211,
+    /// Review).
+    #[test]
+    fn the_rollback_leaves_what_does_not_point_at_the_unit() {
+        let home = tempfile::tempdir().expect("a temporary directory");
+        let dir = home.path().join("systemd").join("user");
+        std::fs::create_dir_all(&dir).expect("the unit directory");
+        let before = Enablement::read_for(&dir, &[SOCKET_NAME, UNIT_NAME]);
+
+        let default = dir.join("default.target.wants");
+        std::fs::create_dir_all(&default).expect("the default directory");
+        let elsewhere = home.path().join("elsewhere.service");
+        std::os::unix::fs::symlink(&elsewhere, default.join(UNIT_NAME)).expect("a foreign link");
+        let sockets = dir.join("sockets.target.wants");
+        std::fs::create_dir_all(&sockets).expect("the sockets directory");
+        std::fs::write(sockets.join(SOCKET_NAME), "a file").expect("a regular file");
+
+        let error = before
+            .rollback(&dir, &dir.join(UNIT_NAME))
+            .expect_err("a new link left alone is reported");
+        assert_eq!(error.code.as_str(), "DAEMON_006", "{}", error.why);
+        assert!(error.why.contains("left alone"), "{}", error.why);
+
+        assert_eq!(
+            std::fs::read_link(default.join(UNIT_NAME)).expect("the foreign link stays"),
+            elsewhere
+        );
+        assert_eq!(
+            std::fs::read_to_string(sockets.join(SOCKET_NAME)).expect("the file stays"),
+            "a file"
+        );
+        let names: Vec<_> = std::fs::read_dir(&default)
+            .expect("the directory stays")
+            .map(|entry| entry.expect("an entry").file_name())
+            .collect();
+        assert_eq!(names.len(), 1, "nothing held back is left: {names:?}");
+    }
+
+    /// systemd schreibt den aufgelösten Pfad, wenn `~/.config` ein Verweis
+    /// ist, und ein relatives Ziel gilt neben dem Verweis: Beides sind
+    /// Verweise dieses Laufs, und die Rücknahme nimmt sie weg (HUM-211,
+    /// Review).
+    #[test]
+    fn the_rollback_takes_back_resolved_and_relative_links() {
+        let home = tempfile::tempdir().expect("a temporary directory");
+        let real = home.path().join("dotfiles");
+        std::fs::create_dir_all(real.join("systemd").join("user")).expect("the real directory");
+        let config = home.path().join("config");
+        std::os::unix::fs::symlink(&real, &config).expect("~/.config is a link");
+        let dir = config.join("systemd").join("user");
+        std::fs::write(dir.join(UNIT_NAME), "[Service]\n").expect("the unit");
+        std::fs::write(dir.join(SOCKET_NAME), "[Socket]\n").expect("the socket");
+        let before = Enablement::read_for(&dir, &[SOCKET_NAME, UNIT_NAME]);
+
+        let default = dir.join("default.target.wants");
+        std::fs::create_dir_all(&default).expect("the default directory");
+        std::os::unix::fs::symlink(
+            real.join("systemd").join("user").join(UNIT_NAME),
+            default.join(UNIT_NAME),
+        )
+        .expect("a link to the resolved path");
+        let sockets = dir.join("sockets.target.wants");
+        std::fs::create_dir_all(&sockets).expect("the sockets directory");
+        std::os::unix::fs::symlink(format!("../{SOCKET_NAME}"), sockets.join(SOCKET_NAME))
+            .expect("a relative link");
+
+        before
+            .rollback(&dir, &dir.join(UNIT_NAME))
+            .expect("the rollback");
+        assert!(!default.exists(), "the resolved link and its directory go");
+        assert!(!sockets.exists(), "the relative link and its directory go");
     }
 
     #[test]
