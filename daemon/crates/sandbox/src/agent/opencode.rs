@@ -62,6 +62,7 @@ use std::path::{Path, PathBuf};
 use humanitl_config::LlmConfig;
 use humanitl_core::diagnostics::codes::{AGENT_001, AGENT_002, AGENT_004, LLM_004};
 use humanitl_core::rule::{Action, HostPattern, Matcher, Rule};
+use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, HostName, Method, RuleId, Scheme, Severity};
 use url::Url;
 use uuid::Uuid;
@@ -431,16 +432,30 @@ fn not_reachable_in_sandbox(ctx: &AgentContext, binary: &Path) -> Diagnostic {
         // des Adapters: Ein `agent.command = ["mycode"]` würde
         // sonst zu `install … /usr/local/bin/opencode`, und der
         // Vorschlag benennte die Datei beim Kopieren um.
-        .fix(FixAction::CopyCommand(format!(
-            "sudo install -m 0755 {} /usr/local/bin/{}",
-            binary.display(),
-            binary
-                .file_name()
-                .unwrap_or(OsStr::new(DEFAULT_COMMAND))
-                .to_string_lossy()
-        )))
+        .fix(FixAction::CopyCommand(install_fix(binary)))
         .docs(DOCS_URL)
         .build()
+}
+
+/// Der Befehl, der ein Binary an eine Stelle legt, die die Sandbox einhängt.
+///
+/// Quelle und Ziel sind Pfade und werden aus ihren Bytes zitiert
+/// (HUM-215): Ein Name mit Leerzeichen oder einem Byte, das kein UTF-8 ist,
+/// nennte sonst eine andere Datei. Das Ziel entsteht deshalb als Pfad und
+/// nicht als Text.
+fn install_fix(binary: &Path) -> String {
+    let destination =
+        Path::new("/usr/local/bin").join(binary.file_name().unwrap_or(OsStr::new(DEFAULT_COMMAND)));
+    format!(
+        "sudo install -m 0755 {} {}",
+        shell_path(binary),
+        shell_path(&destination)
+    )
+}
+
+/// Der Befehl, der ein Binary ausführbar macht, mit dem Pfad aus seinen Bytes.
+fn chmod_fix(binary: &Path) -> String {
+    format!("chmod +x {}", shell_path(binary))
 }
 
 /// Der Befund, wenn die Datei im Suchpfad der Sandbox liegt und nicht startet
@@ -457,10 +472,7 @@ fn not_executable_in_sandbox(ctx: &AgentContext, binary: &Path) -> Diagnostic {
             binary.display(),
             ctx.sandbox_path_display()
         ))
-        .fix(FixAction::CopyCommand(format!(
-            "chmod +x {}",
-            binary.display()
-        )))
+        .fix(FixAction::CopyCommand(chmod_fix(binary)))
         .docs(DOCS_URL)
         .build()
 }
@@ -595,10 +607,7 @@ fn command_preflight(ctx: &AgentContext) -> Vec<Diagnostic> {
                              execute it; the exec would fail after the start",
                             binary.display()
                         ))
-                        .fix(FixAction::CopyCommand(format!(
-                            "chmod +x {}",
-                            binary.display()
-                        )))
+                        .fix(FixAction::CopyCommand(chmod_fix(binary)))
                         .docs(DOCS_URL)
                         .build(),
                 ),
@@ -821,7 +830,34 @@ mod tests {
 
     use url::Url;
 
-    use super::{OLLAMA_INFERENCE_PATHS, OPENAI_INFERENCE_PATHS, base_url, passthrough_prefixes};
+    use super::{
+        OLLAMA_INFERENCE_PATHS, OPENAI_INFERENCE_PATHS, base_url, chmod_fix, install_fix,
+        passthrough_prefixes,
+    };
+
+    /// Die Vorschläge nennen das Binary aus seinen Bytes (HUM-215): Ein Name
+    /// mit Leerzeichen bleibt ein Wort, und ein Byte, das kein UTF-8 ist,
+    /// bleibt dieses Byte statt `U+FFFD`.
+    #[test]
+    fn the_fixes_quote_the_binary_from_its_bytes() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt as _;
+        use std::path::Path;
+
+        let spaced = Path::new("/opt/My Tools/opencode");
+        assert_eq!(chmod_fix(spaced), "chmod +x '/opt/My Tools/opencode'");
+        assert_eq!(
+            install_fix(spaced),
+            "sudo install -m 0755 '/opt/My Tools/opencode' /usr/local/bin/opencode"
+        );
+
+        let bad = Path::new(OsStr::from_bytes(b"/opt/bin/my code\xff"));
+        assert_eq!(chmod_fix(bad), r"chmod +x $'/opt/bin/my\x20code\xff'");
+        assert_eq!(
+            install_fix(bad),
+            r"sudo install -m 0755 $'/opt/bin/my\x20code\xff' $'/usr/local/bin/my\x20code\xff'"
+        );
+    }
 
     /// Die Vorgabe, so wie sie aus `llm.passthrough_paths` entsteht.
     fn default_prefixes() -> Vec<String> {

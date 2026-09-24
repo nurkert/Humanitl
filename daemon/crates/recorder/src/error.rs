@@ -6,6 +6,7 @@
 //! Datenbank oder der Blob-Speicher.
 
 use humanitl_core::diagnostics::codes::{RECORDER_001, RECORDER_002, RECORDER_003, RECORDER_004};
+use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
 /// Was in der Aufzeichnung schiefging.
@@ -76,7 +77,8 @@ impl RecorderError {
 /// zeigt.
 #[must_use]
 pub fn inspect_path(path: &std::path::Path) -> FixAction {
-    let shown = path.display();
+    // Aus den Bytes des Pfads und nicht aus seiner Anzeige (HUM-215).
+    let shown = shell_path(path);
     FixAction::CopyCommand(format!("ls -ld {shown} && df -h {shown}"))
 }
 
@@ -144,4 +146,28 @@ pub(crate) fn blob_failed(why: impl Into<String>) -> RecorderError {
 /// `RECORDER_004` mit dem Pfad, den man sich ansehen sollte.
 pub(crate) fn blob_failed_at(path: &std::path::Path, why: impl Into<String>) -> RecorderError {
     blob_failed(why).with_fix(inspect_path(path))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt as _;
+    use std::path::Path;
+
+    use humanitl_core::FixAction;
+
+    /// Der Pfad steht aus seinen Bytes im Vorschlag (HUM-215): mit einem
+    /// Leerzeichen als ein Wort, mit einem Byte, das kein UTF-8 ist, als
+    /// dieses Byte.
+    #[test]
+    fn the_inspection_names_the_path_from_its_bytes() {
+        assert_eq!(
+            super::inspect_path(Path::new("/data/Rec 2026")),
+            FixAction::CopyCommand("ls -ld '/data/Rec 2026' && df -h '/data/Rec 2026'".to_owned())
+        );
+        assert_eq!(
+            super::inspect_path(Path::new(OsStr::from_bytes(b"/data/r\xff"))),
+            FixAction::CopyCommand(r"ls -ld $'/data/r\xff' && df -h $'/data/r\xff'".to_owned())
+        );
+    }
 }

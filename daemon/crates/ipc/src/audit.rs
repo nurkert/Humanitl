@@ -61,6 +61,7 @@ use humanitl_audit::{
     canonical_json,
 };
 use humanitl_core::diagnostics::codes;
+use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
 use crate::convert::diagnostic_to_proto;
@@ -412,7 +413,7 @@ pub fn refuse_linked_parent(out: &Path) -> Result<(), Diagnostic> {
             .why(why)
             .fix(FixAction::CopyCommand(format!(
                 "ls -ld {}",
-                parent.display()
+                shell_path(parent)
             )))
             .build()
     };
@@ -702,6 +703,34 @@ mod tests {
                 kind: "pruned".to_owned(),
                 records: 10,
             }]
+        );
+    }
+
+    /// Der Vorschlag nennt das Zielverzeichnis aus seinen Bytes (HUM-215).
+    #[test]
+    fn a_missing_export_directory_is_named_from_its_bytes() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt as _;
+        use std::path::Path;
+
+        let fix = |out: &Path| {
+            super::refuse_linked_parent(out)
+                .expect_err("the directory does not exist")
+                .fix
+        };
+        assert_eq!(
+            fix(Path::new("/nonexistent-hum215/Audit 2026/a.jsonl")),
+            Some(humanitl_core::FixAction::CopyCommand(
+                "ls -ld '/nonexistent-hum215/Audit 2026'".to_owned()
+            ))
+        );
+        assert_eq!(
+            fix(Path::new(OsStr::from_bytes(
+                b"/nonexistent-hum215/a\xff/a.jsonl"
+            ))),
+            Some(humanitl_core::FixAction::CopyCommand(
+                r"ls -ld $'/nonexistent-hum215/a\xff'".to_owned()
+            ))
         );
     }
 }

@@ -27,10 +27,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use humanitl_core::diagnostics::codes::{AUDIT_001, AUDIT_006, AUDIT_008};
+use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use serde_json::Value;
 
-use crate::key::shell_quote;
 use crate::query::TimeRange;
 use crate::record::AuditRecord;
 
@@ -110,7 +110,7 @@ pub fn export(
             ))
             .fix(FixAction::CopyCommand(format!(
                 "ls -ln {}",
-                shell_quote(&log.display().to_string())
+                shell_path(log)
             )))
             .build()
     })?;
@@ -413,7 +413,7 @@ fn refuse_existing(out: &Path) -> Result<(), Diagnostic> {
     if std::fs::symlink_metadata(out).is_err() {
         return Ok(());
     }
-    let quoted = shell_quote(&out.display().to_string());
+    let quoted = shell_path(out);
     Err(Diagnostic::builder(AUDIT_008, Severity::Error)
         .why(format!(
             "{} is already there; the export writes no file over a file that exists",
@@ -433,12 +433,12 @@ fn unwritable(out: &Path, why: &str) -> Diagnostic {
     let dir = out
         .parent()
         .filter(|dir| !dir.as_os_str().is_empty())
-        .map_or_else(|| ".".to_owned(), |dir| dir.display().to_string());
+        .unwrap_or_else(|| Path::new("."));
     Diagnostic::builder(AUDIT_008, Severity::Error)
         .why(format!("{} could not be written: {why}", out.display()))
         .fix(FixAction::CopyCommand(format!(
             "ls -ld {}",
-            shell_quote(&dir)
+            shell_path(dir)
         )))
         .build()
 }
@@ -453,7 +453,7 @@ fn not_a_record(log: &Path, line: usize, why: &str) -> Diagnostic {
         ))
         .fix(FixAction::CopyCommand(format!(
             "humanitl audit verify --file {}",
-            shell_quote(&log.display().to_string())
+            shell_path(log)
         )))
         .build()
 }
@@ -538,6 +538,43 @@ mod tests {
         .expect_err("no directory, no export");
         assert_eq!(refused.code.as_str(), "AUDIT_008");
         assert!(!dir.path().join("gone").exists(), "no directory is created");
+    }
+
+    /// Der Weg des Befunds aus HUM-215: Ein Ziel in einem Verzeichnis mit
+    /// zwei Leerzeichen ist schon da. Der Vorschlag muss genau diese Datei
+    /// beiseiteschieben, und `bash` findet sie damit.
+    #[test]
+    fn the_fix_for_an_existing_target_moves_exactly_that_file() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let spaced = dir.path().join("Audit  2026");
+        std::fs::create_dir(&spaced).expect("the spaced directory");
+        // Die Falle: der Name, den ein gefaltetes Leerzeichen daraus machte.
+        let folded = dir.path().join("Audit 2026");
+        std::fs::create_dir(&folded).expect("the folded directory");
+        std::fs::write(folded.join("a.jsonl"), b"other").expect("a decoy");
+        let out = spaced.join("a.jsonl");
+        std::fs::write(&out, b"first").expect("the first export");
+
+        let refused = super::refuse_existing(&out).expect_err("the target exists");
+        let Some(humanitl_core::FixAction::CopyCommand(command)) = refused.fix else {
+            panic!("expected a command, got {:?}", refused.fix);
+        };
+        assert!(command.contains(r"Audit\x20\x202026"), "{command}");
+        let status = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(&command)
+            .env("LC_ALL", "C")
+            .status()
+            .expect("bash runs");
+        assert!(status.success(), "{command}");
+        assert!(!out.exists(), "{command} moved the export away");
+        let moved = std::fs::read_dir(&spaced)
+            .expect("the spaced directory")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("a.jsonl."))
+            .count();
+        assert_eq!(moved, 1, "{command} kept the export next to itself");
+        assert!(folded.join("a.jsonl").is_file(), "the decoy is untouched");
     }
 
     #[test]

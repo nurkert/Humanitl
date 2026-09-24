@@ -68,6 +68,7 @@ use chrono::{DateTime, Utc};
 use humanitl_core::diagnostics::codes::{
     AUDIT_001, AUDIT_002, AUDIT_003, AUDIT_004, AUDIT_006, AUDIT_007,
 };
+use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, SessionId, Severity};
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
@@ -75,7 +76,7 @@ use zeroize::Zeroizing;
 
 use crate::Anchor;
 use crate::canonical::canonical_json;
-use crate::key::{AuditKey, KEY_LEN, shell_quote};
+use crate::key::{AuditKey, KEY_LEN};
 use crate::kinds::{AnchorData, AuditResumed, DaemonStopped, RecordKind};
 use crate::record::{AuditRecord, GENESIS_PREV, NO_SESSION, RecordBody, format_ts, mac_matches};
 use crate::retention::{self, PruneReport};
@@ -1043,7 +1044,7 @@ fn broken_end(path: &Path, why: &str) -> Diagnostic {
 }
 
 fn not_writable(path: &Path, why: &str) -> Diagnostic {
-    let quoted = shell_quote(&path.display().to_string());
+    let quoted = shell_path(path);
     Diagnostic::builder(AUDIT_006, Severity::Error)
         .why(format!("the audit log {}: {why}", path.display()))
         .fix(FixAction::CopyCommand(format!(

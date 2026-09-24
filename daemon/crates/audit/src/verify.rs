@@ -46,10 +46,10 @@ use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 
 use humanitl_core::diagnostics::codes::{AUDIT_001, AUDIT_006};
+use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
 use crate::Anchor;
-use crate::key::shell_quote;
 use crate::record::{AuditRecord, GENESIS_PREV, mac_matches};
 use crate::retention::AuditPruned;
 use crate::writer::Head;
@@ -190,7 +190,7 @@ impl VerifyReport {
 /// Der Vorschlag für eine gebrochene Kette: die Datei samt Zeitstempel
 /// beiseitelegen. Sie bleibt als Beleg liegen.
 pub(crate) fn set_aside_fix(path: &Path) -> FixAction {
-    let quoted = shell_quote(&path.display().to_string());
+    let quoted = shell_path(path);
     FixAction::CopyCommand(format!(
         "mv {quoted} {quoted}.broken-$(date -u +%Y%m%dT%H%M%SZ)"
     ))
@@ -251,7 +251,7 @@ impl AuditVerifier {
                 ))
                 .fix(FixAction::CopyCommand(format!(
                     "ls -ln {}",
-                    shell_quote(&path.display().to_string())
+                    shell_path(path)
                 )))
                 .build()
         })

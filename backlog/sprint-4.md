@@ -4426,11 +4426,11 @@ m4, Schwere minor, von zwei unabhängigen Prüfern bestätigt). Ort: `daemon/bin
 Der Befund ist behoben, und ein Test hält ihn behoben.
 
 ### Akzeptanzkriterien
-- [ ] `CopyCommand`/`OpenUrl` nur zeigen, wenn `plain(cmd) == cmd` gilt und der Befehl höchstens `NOTE_MAX_CHARS` lang ist. Sonst auf `--json` oder die Doku-URL verweisen, wie `sandbox/src/doctor.rs:101-157`.
-- [ ] Längerfristig `shell_bytes` (`$'..\xHH..'`) nach `humanitl-core` verschieben und in `key.rs`, `export.rs`, `ca.rs` und `validate.rs` nutzen.
-- [ ] Tests mit doppeltem Leerzeichen und einem Befehl über 500 Zeichen.
-- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
-- [ ] `make check` grün.
+- [x] `CopyCommand`/`OpenUrl` nur zeigen, wenn `plain(cmd) == cmd` gilt und der Befehl höchstens `NOTE_MAX_CHARS` lang ist. Sonst auf `--json` oder die Doku-URL verweisen, wie `sandbox/src/doctor.rs:101-157`.
+- [x] Längerfristig `shell_bytes` (`$'..\xHH..'`) nach `humanitl-core` verschieben und in `key.rs`, `export.rs`, `ca.rs` und `validate.rs` nutzen.
+- [x] Tests mit doppeltem Leerzeichen und einem Befehl über 500 Zeichen.
+- [x] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [x] `make check` grün.
 
 ### Referenzen
 Sicherheitsdurchlauf 2026-09-23, Befund m4; `daemon/bin/humanitl/src/render.rs:122`.
