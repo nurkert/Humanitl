@@ -11,8 +11,10 @@
 mod common;
 
 use humanitl_audit::{
-    AuditVerifier, BreakReason, RecordBody, VerifyReport, VerifyStatus, VerifyWarning,
+    AuditVerifier, BreakReason, ExportFormat, RecordBody, TimeRange, VerifyReport, VerifyStatus,
+    VerifyWarning, export,
 };
+use humanitl_core::diagnostics::codes::AUDIT_001;
 
 use common::{Chain, KEY};
 
@@ -290,4 +292,70 @@ fn a_missing_log_with_anchors_is_truncated_to_nothing() {
         chain.verify().status,
         broken(0, BreakReason::TruncatedBelowAnchor { anchor_seq: 5 })
     );
+}
+
+/// HUM-214: Der Export prüft die Kette nicht, er kopiert sie. Eine von `block`
+/// auf `allow` geänderte Zeile geht Byte für Byte in den JSONL-Export, und
+/// `verify` findet den Bruch dort an derselben Stelle wie im Log. Verweigerte
+/// der Export eine gebrochene Kette, ließe sich ein manipuliertes Log nicht
+/// mehr als Beleg übergeben (`docs/SECURITY.md`).
+#[test]
+fn a_tampered_chain_is_exported_unchanged_and_verify_finds_it() {
+    let chain = ten();
+    let mut lines = chain.lines();
+    lines[3] = lines[3].replacen("\"decision\":\"block\"", "\"decision\":\"allow\"", 1);
+    chain.set_lines(&lines);
+    assert_eq!(chain.verify().status, broken(4, BreakReason::HashMismatch));
+
+    let out = chain.dir.path().join("export.jsonl");
+    let count = export::export(&chain.log, ExportFormat::Jsonl, &TimeRange::ALL, &out, None)
+        .expect("the export copies a broken chain");
+    assert_eq!(count, 10);
+    assert_eq!(
+        std::fs::read(&out).unwrap(),
+        std::fs::read(&chain.log).unwrap(),
+        "the export is the chain byte for byte"
+    );
+    let report = AuditVerifier::verify(&out, Some(&KEY), &chain.anchors()).unwrap();
+    assert_eq!(report.status, broken(4, BreakReason::HashMismatch));
+}
+
+/// HUM-214: Was der Export verweigert, ist eine Zeile, die kein Record ist;
+/// dann schreibt er nichts.
+#[test]
+fn a_line_that_is_no_record_stops_the_export_with_audit_001() {
+    let chain = ten();
+    let mut lines = chain.lines();
+    lines[3] = "not a record".to_owned();
+    chain.set_lines(&lines);
+
+    let out = chain.dir.path().join("export.jsonl");
+    let error = export::export(&chain.log, ExportFormat::Jsonl, &TimeRange::ALL, &out, None)
+        .expect_err("a line that is no record is refused");
+    assert_eq!(error.code, AUDIT_001);
+    assert!(!out.exists(), "nothing is written");
+}
+
+/// HUM-214: Eine leere Zeile und eine aus Leerraum sind für `verify` ein
+/// Bruch. Der Export ließe sie nicht still weg, sonst wäre er nicht mehr Byte
+/// für Byte die Kette und der Bruch aus dem Beleg verschwunden.
+#[test]
+fn a_blank_line_stops_the_export_with_audit_001() {
+    for blank in ["", " \t "] {
+        let chain = ten();
+        let mut lines = chain.lines();
+        lines.insert(4, blank.to_owned());
+        chain.set_lines(&lines);
+        assert_eq!(
+            chain.verify().status,
+            broken(5, BreakReason::NonCanonicalLine),
+            "{blank:?}"
+        );
+
+        let out = chain.dir.path().join("export.jsonl");
+        let error = export::export(&chain.log, ExportFormat::Jsonl, &TimeRange::ALL, &out, None)
+            .expect_err("a blank line is no record");
+        assert_eq!(error.code, AUDIT_001, "{blank:?}");
+        assert!(!out.exists(), "nothing is written for {blank:?}");
+    }
 }
