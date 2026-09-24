@@ -15,6 +15,7 @@
 //! - [`event`] der Ereignisstrom
 //! - [`block`] die Antwort an einen geblockten Client
 //! - [`diagnostics`] Befunde mit Code, Grund und Behebung
+//! - [`shell`] Werte als Wörter der Shell für Behebungsvorschläge
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
@@ -29,6 +30,7 @@ pub mod host;
 pub mod http;
 pub mod ids;
 pub mod rule;
+pub mod shell;
 pub mod terminal;
 
 /// Zweiter Name für [`diagnostics`], wie ihn HUM-063 verwendet.

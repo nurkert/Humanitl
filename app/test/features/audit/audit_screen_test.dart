@@ -14,6 +14,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 // `Override` lebt in riverpod 3 im Nebeneingang `misc.dart`.
 import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/daemon_client.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/ui.dart';
@@ -735,6 +736,36 @@ void main() {
     expect(state.failure?.fix, isNotNull, reason: 'the fix shows the folder');
     expect(client.auditExports, isEmpty, reason: 'the daemon is not asked');
     expect(find.byKey(const Key('audit-export-failure')), findsOneWidget);
+  }, variant: _linux);
+
+  testWidgets('a_full_folder_with_a_space_is_one_shell_word', (
+    WidgetTester tester,
+  ) async {
+    // Der Ordner im Vorschlag bleibt ein Wort der Shell, auch mit
+    // Leerzeichen und `'` (HUM-215).
+    final FakeDaemonClient client = FakeDaemonClient();
+    final _RecordingChooser chooser = _RecordingChooser()
+      ..answer = "/home/u/My Exports/it's";
+    final ProviderContainer container = await pumpAudit(
+      tester,
+      client: client,
+      overrides: <Override>[
+        auditFolderChooserProvider.overrideWithValue(chooser.call),
+        auditPathTakenProvider.overrideWithValue((String path) => true),
+      ],
+    );
+    await settleAudit(tester, container);
+
+    await _exportCsv(tester);
+
+    final AuditExportState state = container.read(auditExportProvider);
+    expect(state.failure?.code, 'AUDIT_008');
+    expect(
+      state.failure?.fix,
+      const FixAction.copyCommand(
+        command: r"ls -la '/home/u/My Exports/it'\''s'",
+      ),
+    );
   }, variant: _linux);
 }
 

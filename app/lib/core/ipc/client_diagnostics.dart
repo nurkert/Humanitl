@@ -5,6 +5,7 @@
 library;
 
 import '../domain/domain.dart';
+import '../ui/shell_command.dart';
 import 'proto_version.dart';
 
 /// Factories for the client-side diagnostics of HUM-019.
@@ -57,7 +58,8 @@ abstract final class ClientDiagnostics {
       fake ? startFakeCommand : startDaemonCommand,
     );
     if (socketFlag) {
-      command.write(' --socket $socketPath');
+      // Ein Pfad mit Leerzeichen oder `'` bleibt ein Wort (HUM-215).
+      command.write(' --socket ${shellQuote(socketPath)}');
     }
     final StringBuffer why = StringBuffer('no daemon answers on $socketPath');
     if (detail != null && detail.isNotEmpty) {

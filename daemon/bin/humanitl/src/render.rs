@@ -16,10 +16,12 @@
 //! trägt, was schiefging und was man dagegen tun kann. Wer die Ausgabe in eine
 //! Pipe steckt, verliert damit keinen Befund und bekommt keinen dazu.
 
-use humanitl_core::block::sanitize_note;
+use humanitl_core::block::{NOTE_MAX_CHARS, sanitize_note};
 use humanitl_core::diagnostics::lookup;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use serde_json::{Value, json};
+
+pub use humanitl_core::shell::{shell_path, shell_word};
 
 /// Wo die Befunde erklärt sind. Der Anker kommt aus dem Register.
 pub const DOCS_BASE: &str = concat!(
@@ -119,12 +121,41 @@ pub fn diagnostic_block(diagnostic: &Diagnostic) -> String {
     // Ein `String` nimmt jedes `write!` an; der `Result` kann nicht scheitern.
     let _ = writeln!(out, "{INDENT}why: {}", plain(&diagnostic.why));
     if let Some(fix) = diagnostic.fix.as_ref() {
-        let _ = writeln!(out, "{INDENT}fix: {}", plain(&fix_line(fix)));
+        let _ = writeln!(out, "{INDENT}fix: {}", fix_shown(fix));
     }
     if let Some(docs) = docs_url(diagnostic) {
         let _ = writeln!(out, "{INDENT}docs: {docs}");
     }
     out
+}
+
+/// Was im Block hinter `fix:` steht, wenn der Vorschlag ein Befehl ist.
+const FIX_WITHHELD: &str = "the command cannot be shown here without changing it; \
+                            `--json` carries it verbatim as fix.command, the docs explain the step";
+
+/// Der Behebungsvorschlag, wie ihn der Block zeigt: genau der Befehl oder
+/// gar keiner (HUM-215).
+///
+/// Der Block zeigt nur, was [`plain`] durchlässt, und [`plain`] faltet
+/// Leerraum, wirft Steuerzeichen weg und kürzt auf [`NOTE_MAX_CHARS`]. Auf
+/// einen Befehl angewandt, hieße das: aus `'/home/u/Audit  2026'` würde
+/// `'/home/u/Audit 2026'`, also eine andere Datei, und aus
+/// `mkdir -p … && chmod 700 …` würde bei einem langen Pfad ein `mkdir` ohne
+/// `chmod`. Ein Befehl, den jemand kopiert, muss aber genau der sein, den der
+/// Befund meint. Deshalb erscheint die Zeile nur, wenn [`plain`] sie nicht
+/// verändert; sonst steht an ihrer Stelle ein Verweis auf `--json`, das den
+/// Befehl unverändert trägt, und auf die Doku-Zeile darunter.
+///
+/// Die Längenprüfung ist heute schon in [`plain`] enthalten, weil es auf
+/// [`NOTE_MAX_CHARS`] kürzt; sie steht trotzdem da, weil sie die Zusage ist
+/// und nicht davon abhängen soll, wo [`plain`] einmal kürzt.
+fn fix_shown(fix: &FixAction) -> String {
+    let line = fix_line(fix);
+    if plain(&line) == line && line.chars().count() <= NOTE_MAX_CHARS {
+        line
+    } else {
+        FIX_WITHHELD.to_owned()
+    }
 }
 
 /// Der Befund als JSON-Wert, eine Zeile für Werkzeuge.
@@ -180,68 +211,6 @@ pub fn fix_line(fix: &FixAction) -> String {
             format!("mount {} read-only", path.display())
         }
     }
-}
-
-/// Ein Wert als ein Wort der Shell, so dass der Befehl ihn unverändert
-/// weitergibt.
-///
-/// `humanitl config set llm.passthrough_paths ["/v1/","/api/"]` käme bei `bash` als
-/// `[/v1/,/api/]` an: Die Anführungszeichen gehören der Shell. Ein Wert aus
-/// Zeichen, die sie nicht deutet, bleibt, wie er ist; jeder andere steht in
-/// einfachen Anführungszeichen, und ein einfaches darin wird `'\''`.
-///
-/// Alles außer druckbarem ASCII steht nie wörtlich darin, sondern als Byte in
-/// der Form `$'…\xHH…'` der Shell: Leerraum, Steuerzeichen und jedes Byte über
-/// `0x7e`. Der Block eines Befunds faltet Leerraum zu einem Leerzeichen und
-/// wirft Steuerzeichen weg ([`plain`]), und ein Dateiname mit Zeilenumbruch
-/// oder zwei Leerzeichen käme sonst als ein anderer Name beim `mv` an. `\xHH`
-/// ist ein Byte und kein Zeichen: Es gilt unter jeder Locale, auch unter
-/// `LC_ALL=C`, wo `\u…` nichts bedeutet.
-#[must_use]
-pub fn shell_word(value: &str) -> String {
-    shell_bytes(value.as_bytes())
-}
-
-/// Ein Pfad als ein Wort der Shell, aus seinen Bytes und nicht aus seiner
-/// Anzeige.
-///
-/// `Path::display` ersetzt ein Byte, das kein UTF-8 ist, durch `U+FFFD`; ein
-/// Vorschlag daraus nennte eine Datei, die es nicht gibt.
-#[must_use]
-pub fn shell_path(path: &std::path::Path) -> String {
-    use std::os::unix::ffi::OsStrExt as _;
-
-    shell_bytes(path.as_os_str().as_bytes())
-}
-
-/// Die Bytes als ein Wort der Shell (siehe [`shell_word`]).
-fn shell_bytes(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    let bare = |byte: u8| byte.is_ascii_alphanumeric() || b"_-./:@%+=,".contains(&byte);
-    let printable = |byte: u8| (0x21..=0x7e).contains(&byte);
-    // Ein `=` am Anfang bleibt nicht nackt: zsh macht aus `=name` den Pfad
-    // des Programms `name` (EQUALS).
-    if bytes.first().is_some_and(|&first| first != b'=') && bytes.iter().all(|&byte| bare(byte)) {
-        return String::from_utf8_lossy(bytes).into_owned();
-    }
-    if bytes.iter().all(|&byte| printable(byte)) {
-        let text = String::from_utf8_lossy(bytes);
-        return format!("'{}'", text.replace('\'', "'\\''"));
-    }
-    let mut out = String::from("$'");
-    for &byte in bytes {
-        match byte {
-            b'\\' => out.push_str("\\\\"),
-            b'\'' => out.push_str("\\'"),
-            byte if printable(byte) => out.push(char::from(byte)),
-            byte => {
-                let _ = write!(out, "\\x{byte:02x}");
-            }
-        }
-    }
-    out.push('\'');
-    out
 }
 
 /// Der Behebungsvorschlag als JSON: die Art und ihre Werte.
@@ -588,7 +557,7 @@ mod tests {
             block.contains(&format!("  fix: mv -- {word} out\n")),
             "{block}"
         );
-        assert_eq!(super::shell_word(r"a\b c"), r"$'a\\b\x20c'");
+        assert_eq!(super::shell_word(r"a\b c"), r"'a\b c'");
     }
 
     /// Ein Name, der kein UTF-8 ist, und einer mit Umlaut: Der Vorschlag nennt
@@ -616,6 +585,100 @@ mod tests {
             assert!(!path.exists(), "{word}");
             std::fs::remove_file(&target).expect("clean up");
         }
+    }
+
+    /// Die Zeile hinter `fix:` im Block, ohne Einrückung.
+    fn shown_fix(diagnostic: &Diagnostic) -> String {
+        let block = diagnostic_block(diagnostic);
+        block
+            .lines()
+            .find_map(|line| line.strip_prefix("  fix: "))
+            .unwrap_or_else(|| panic!("a fix line in {block}"))
+            .to_owned()
+    }
+
+    fn with_command(command: String) -> Diagnostic {
+        Diagnostic::builder(DAEMON_001, Severity::Error)
+            .why("because")
+            .fix(FixAction::CopyCommand(command))
+            .build()
+    }
+
+    /// Ein Befehl mit zwei Leerzeichen in einfachen Anführungszeichen wird
+    /// im Block nicht zu einem anderen Befehl gefaltet (HUM-215): Er
+    /// erscheint gar nicht, und an seiner Stelle steht der Verweis auf
+    /// `--json`, das ihn unverändert trägt.
+    #[test]
+    fn a_command_the_block_would_change_is_withheld() {
+        let command = "mv -n -- '/home/u/Audit  2026/a.jsonl' /tmp/x".to_owned();
+        let diagnostic = with_command(command.clone());
+        let shown = shown_fix(&diagnostic);
+        assert_eq!(shown, super::FIX_WITHHELD);
+        assert!(!shown.contains("Audit 2026"), "{shown}");
+        assert_eq!(diagnostic_json(&diagnostic)["fix"]["command"], command);
+
+        let tabbed = with_command("rm '/a\tb'".to_owned());
+        assert_eq!(shown_fix(&tabbed), super::FIX_WITHHELD);
+    }
+
+    /// Randfälle des einzelnen Leerzeichens: am Rand eines Worts und neben
+    /// einem `'`. Beides übersteht den Block unverändert (HUM-215).
+    #[test]
+    fn a_word_with_lone_spaces_survives_the_block() {
+        for value in [" a b ", "a ' b"] {
+            let command = format!("rm -- {}", super::shell_word(value));
+            assert!(!command.contains("$'"), "{command}");
+            assert_eq!(shown_fix(&with_command(command.clone())), command);
+            assert_eq!(super::plain(&command), command);
+        }
+    }
+
+    /// Ein Befehl über [`NOTE_MAX_CHARS`] wird nicht abgeschnitten, so dass
+    /// etwa ein `mkdir` ohne sein `chmod` übrig bliebe, sondern ganz
+    /// zurückgehalten.
+    #[test]
+    fn a_command_over_the_cap_is_withheld_not_cut() {
+        let long = format!("/{}", "d".repeat(260));
+        let command = format!("mkdir -p {long} && chmod 700 {long}");
+        assert!(command.chars().count() > super::NOTE_MAX_CHARS);
+        let diagnostic = with_command(command.clone());
+        assert_eq!(shown_fix(&diagnostic), super::FIX_WITHHELD);
+        assert_eq!(diagnostic_json(&diagnostic)["fix"]["command"], command);
+
+        let fits = format!("mkdir -p /{} && chmod 700 /x", "d".repeat(400));
+        assert!(fits.chars().count() <= super::NOTE_MAX_CHARS);
+        assert_eq!(shown_fix(&with_command(fits.clone())), fits);
+    }
+
+    /// Der Weg des Befunds, von einem Pfad mit zwei Leerzeichen bis zu dem
+    /// Befehl, den ein Mensch aus dem Block kopiert: Er verschiebt genau diese
+    /// Datei und nicht die, deren Name ein Leerzeichen weniger hat.
+    #[test]
+    fn a_copied_fix_moves_the_file_the_diagnostic_means() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let spaced = dir.path().join("Audit  2026");
+        let folded = dir.path().join("Audit 2026");
+        for sub in [&spaced, &folded] {
+            std::fs::create_dir(sub).expect("a directory");
+            std::fs::write(sub.join("a.jsonl"), b"x").expect("a file");
+        }
+        let source = spaced.join("a.jsonl");
+        let target = spaced.join("a.jsonl.old");
+        let command = format!(
+            "mv -n -- {} {}",
+            super::shell_path(&source),
+            super::shell_path(&target)
+        );
+        let copied = shown_fix(&with_command(command));
+        let status = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(&copied)
+            .env("LC_ALL", "C")
+            .status()
+            .expect("bash runs");
+        assert!(status.success(), "{copied}");
+        assert!(target.is_file() && !source.exists(), "{copied}");
+        assert!(folded.join("a.jsonl").is_file(), "{copied}");
     }
 
     #[test]

@@ -21,6 +21,7 @@ import '../../../core/domain/domain.dart';
 import '../../../core/ipc/client_providers.dart';
 import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/daemon_client.dart';
+import '../../../core/ui/shell_command.dart';
 
 /// Der Kopf der Kette: Nummer, Hash, Zahl der Records und der Anker.
 ///
@@ -520,7 +521,8 @@ class AuditExportNotifier extends Notifier<AuditExportState> {
             why:
                 'no free file name for $fileName in $folder after 1000 '
                 'attempts; nothing was written',
-            fix: FixAction.copyCommand(command: 'ls -la $folder'),
+            // Der Ordner als ein Wort der Shell (HUM-215).
+            fix: FixAction.copyCommand(command: 'ls -la ${shellQuote(folder)}'),
           ),
         );
         return;

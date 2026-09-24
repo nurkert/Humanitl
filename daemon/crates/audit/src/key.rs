@@ -41,6 +41,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use humanitl_core::diagnostics::codes::AUDIT_005;
+use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use zeroize::Zeroizing;
 
@@ -251,10 +252,7 @@ fn check_key_file(path: &Path) -> Result<(), Diagnostic> {
                 path.display(),
                 meta.uid()
             ),
-            FixAction::CopyCommand(format!(
-                "ls -ln {}",
-                shell_quote(&path.display().to_string())
-            )),
+            FixAction::CopyCommand(format!("ls -ln {}", shell_path(path))),
         ));
     }
     let mode = meta.permissions().mode() & 0o777;
@@ -299,7 +297,7 @@ fn ensure_dir(dir: &Path) -> Result<(), Diagnostic> {
         Ok(())
     })();
     result.map_err(|err| {
-        let quoted = shell_quote(&dir.display().to_string());
+        let quoted = shell_path(dir);
         Diagnostic::builder(AUDIT_005, Severity::Error)
             .why(format!(
                 "the key directory {} is not usable: {err}",
@@ -319,7 +317,7 @@ fn ensure_dir(dir: &Path) -> Result<(), Diagnostic> {
 /// des alten anzuhängen (`AUDIT_001`); die alte Kette bleibt als Beleg liegen
 /// und lässt sich ohne Schlüssel weiter auf Reihenfolge und Hashes prüfen.
 fn burnt_fix(path: &Path) -> FixAction {
-    FixAction::CopyCommand(format!("rm {}", shell_quote(&path.display().to_string())))
+    FixAction::CopyCommand(format!("rm {}", shell_path(path)))
 }
 
 fn refused(path: &Path, why: &str, fix: FixAction) -> Diagnostic {
@@ -337,31 +335,9 @@ fn unusable(path: &Path, why: &str) -> Diagnostic {
         .why(format!("the audit key {}: {why}", path.display()))
         .fix(FixAction::CopyCommand(format!(
             "ls -ln {}",
-            shell_quote(&path.display().to_string())
+            shell_path(path)
         )))
         .build()
-}
-
-/// Setzt einen Pfad in einfache Anführungszeichen, wenn `sh` ihn sonst nicht
-/// als ein Wort läse.
-pub(crate) fn shell_quote(arg: &str) -> String {
-    let safe = |c: char| {
-        c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '+' | ':' | '@' | '~')
-    };
-    if !arg.is_empty() && arg.chars().all(safe) {
-        return arg.to_owned();
-    }
-    let mut out = String::with_capacity(arg.len() + 2);
-    out.push('\'');
-    for c in arg.chars() {
-        if c == '\'' {
-            out.push_str("'\\''");
-        } else {
-            out.push(c);
-        }
-    }
-    out.push('\'');
-    out
 }
 
 #[cfg(test)]
@@ -370,8 +346,11 @@ mod tests {
 
     use std::fs;
     use std::os::unix::fs::PermissionsExt as _;
+    use std::path::Path;
 
-    use super::{AuditKey, KEY_LEN, shell_quote};
+    use humanitl_core::FixAction;
+
+    use super::{AuditKey, KEY_LEN};
     use crate::kinds::KeyOrigin;
 
     fn mode_of(path: &std::path::Path) -> u32 {
@@ -467,9 +446,16 @@ mod tests {
         assert!(shown.contains("elided"));
     }
 
+    /// Ein Pfad mit zwei Leerzeichen bleibt im Vorschlag derselbe Pfad
+    /// (HUM-215): Leerraum steht als Byte darin, das kein Falten ändert.
     #[test]
-    fn quoting_leaves_plain_paths_alone() {
-        assert_eq!(shell_quote("/a/b.key"), "/a/b.key");
-        assert_eq!(shell_quote("/a b/it's"), "'/a b/it'\\''s'");
+    fn the_fix_names_the_key_byte_for_byte() {
+        let plain = super::burnt_fix(Path::new("/a/b.key"));
+        assert_eq!(plain, FixAction::CopyCommand("rm /a/b.key".to_owned()));
+        let spaced = super::burnt_fix(Path::new("/a  b/it's.key"));
+        assert_eq!(
+            spaced,
+            FixAction::CopyCommand(r"rm $'/a\x20\x20b/it\'s.key'".to_owned())
+        );
     }
 }
