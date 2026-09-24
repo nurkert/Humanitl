@@ -204,7 +204,7 @@
         },
         "hard_block_checksum_secrets": {
           "default": false,
-          "description": "Blockt Anfragen mit prüfsummen-sicheren Geheimnissen sofort, ohne zu fragen.",
+          "description": "Lässt Anfragen mit prüfsummen-sicheren Geheimnissen nur bearbeitet hinaus; keine Regel und keine Freigabe sendet sie unverändert.",
           "type": "boolean",
           "x-project-scope": "denied",
           "x-tier": "advanced"

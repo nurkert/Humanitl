@@ -194,6 +194,28 @@ void main() {
     expect((decided as FlowEventDecided).unresolvedFindings, 1);
   });
 
+  test('the hard block travels in the row (HUM-159)', () {
+    final Flow locked =
+        (pb.FlowSummary()
+              ..flowId = 'f'
+              ..authority = (pb.Authority()..host = 'bank.example.com')
+              ..sendRefusal = (pb.Diagnostic()
+                ..code = 'HOLD_004'
+                ..why = 'the request carries a checksum-confirmed iban'))
+            .toDomain();
+    expect(locked.sendRefusal?.code, 'HOLD_004');
+    expect(
+      locked.sendRefusal?.why,
+      'the request carries a checksum-confirmed iban',
+    );
+    final Flow open =
+        (pb.FlowSummary()
+              ..flowId = 'g'
+              ..authority = (pb.Authority()..host = 'bank.example.com'))
+            .toDomain();
+    expect(open.sendRefusal, isNull, reason: 'absent is no lock');
+  });
+
   test('FlowEvent.received carries the summary and the deadline', () {
     final DateTime deadline = DateTime.utc(2026, 9, 3, 10, 5);
     final pb.FlowEvent event = pb.FlowEvent()

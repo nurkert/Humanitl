@@ -49,7 +49,11 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `15` seit dem Zeitpunkt des Kopfes (HUM-162): `AuditResponse.head_ts`
+/// `16` seit der harten Sperre in der Zeile (HUM-159):
+/// `FlowSummary.send_refusal` trägt den Befund `HOLD_004`, solange ein Flow
+/// der laufenden Sitzung nur bearbeitet hinaus darf; ein Client, der nach der
+/// Ansage im Strom startet, liest ihn aus `ListFlows`.
+/// `15` war der Zeitpunkt des Kopfes (HUM-162): `AuditResponse.head_ts`
 /// trägt bei `verify` und `head` den Zeitstempel des letzten Records mit den
 /// Zeichen seiner Zeile.
 /// `14` waren die verweigerten Versuche (HUM-138): `SandboxEvent.refusals`
@@ -102,7 +106,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 15;
+pub const PROTO_MINOR: u32 = 16;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

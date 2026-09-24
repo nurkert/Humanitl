@@ -370,7 +370,10 @@ ihren Pfad selbst in `llm.passthrough_paths`.
 
 Der Verkehr wird vollständig aufgezeichnet und durch die
 Findings-Detektoren geschickt; ein Treffer erzeugt eine Warnung (`LLM_005`, eine je Anfrage, mit
-Zahl und Host und nie mit dem gefundenen Wert), hält aber nicht an. Weil das
+Zahl und Host und nie mit dem gefundenen Wert), hält aber nicht an. Eine Ausnahme gibt es: Steht
+`hold.hard_block_checksum_secrets` an, blockt die Durchreiche eine Anfrage mit einem
+prüfsummen-bestätigten Geheimnis (API-Schlüssel, JWT, IBAN, Kreditkarte) als System mit `HOLD_004`,
+statt sie durchzulassen (HUM-159). Weil das
 Modell typischerweise im eigenen Netz steht, trägt die Regel `allow_private: true` — sie ist
 damit die einzige Regel, die absichtlich in private Adressbereiche zeigt. Das Recht hängt an dieser
 einen Regel und an dieser einen Anfrage: Die nächste Anfrage derselben Verbindung fängt wieder ohne
@@ -918,6 +921,15 @@ getroffene Entscheidung sofort gilt. Die Fallen sind alle bekannt und alle getes
   neues Ziel, und die läuft erneut durch die Regeln und gegebenenfalls in die Warteschlange. Eine
   Freigabe für `example.com` ist keine Freigabe für den Ort, auf den es weiterleitet.
 - **Unbekannte Methoden führen zu `ask`,** nie zu `allow`.
+- **Keine Regel hebt die harte Sperre auf.** Steht `hold.hard_block_checksum_secrets` an und trägt
+  eine Anfrage ein prüfsummen-bestätigtes Geheimnis (API-Schlüssel, JWT, IBAN, Kreditkarte), geht
+  sie nicht ungeändert hinaus. Eine Regel `allow` und die Durchreiche zum Sprachmodell blocken sie
+  als System (`BlockReason::Secret`, `403`); ohne passende Regel wird sie gehalten, und ein
+  `Decide(Allow)` endet mit `HOLD_004`, auch mit bestätigten Funden, auch in einer Sammelanfrage.
+  Hinaus geht sie nur bearbeitet, und nur wenn der zweite Scan über die bearbeitete Fassung kein
+  solches Geheimnis mehr findet (HUM-049, HUM-159). Die Prüfung sitzt im Daemon, nicht in der
+  Oberfläche: gesetzt wird der Befund im Handler nach dem Scan, geprüft in Pipeline und
+  Warteschlange, und dahinter noch einmal im Handler, bevor weitergeleitet wird.
 
 *Prüfung.* `humanitl rules test https://api.github.com/repos/x/y` liefert die greifende Regel und
 den Exit-Code (0 allow, 10 block, 11 ask). ESC-4 fährt die vollständige Tabelle ab.

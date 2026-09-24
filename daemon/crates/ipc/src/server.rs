@@ -560,7 +560,20 @@ impl IpcServer {
             .rows
             .iter()
             .filter(|row| since.is_none_or(|anchor| row.id > anchor))
-            .map(convert::recorded_summary_to_proto)
+            .map(|row| {
+                let mut summary = convert::recorded_summary_to_proto(row);
+                // Die harte Sperre kennt nur die laufende Sitzung, wie
+                // `findings_truncated`: Die Tabelle `flows` führt sie nicht, und
+                // ein Client, der nach der Ansage im Strom nachlädt, muss sie in
+                // der Zeile finden (HUM-159).
+                summary.send_refusal = self
+                    .registry
+                    .get(row.id)
+                    .and_then(|record| record.send_refusal)
+                    .as_ref()
+                    .map(convert::diagnostic_to_proto);
+                summary
+            })
             .collect();
         Ok(v1::FlowPage {
             flows,
@@ -762,7 +775,16 @@ pub(crate) fn unknown_summary(sandbox: SandboxId) -> Diagnostic {
 ///
 /// Eine Bestätigung, die zu diesem Flow nicht passt, ist dagegen ein Fehler der
 /// Anfrage: `IPC_004` (`InvalidArgument`), und der Flow wartet weiter (HUM-160).
+///
+/// Ein `Allow` auf einen Flow unter der harten Sperre ist keins von beiden: Der
+/// Flow wartet, und die Anfrage war richtig gestellt, nur darf er so nicht
+/// hinaus. Die Antwort ist dann der Befund `HOLD_004` vom Flow selbst, mit Art
+/// und Ort des Geheimnisses und dem Vorschlag, den Schalter umzulegen
+/// (HUM-159).
 fn not_held(error: &NotHeld) -> Diagnostic {
+    if let NotHeld::SendRefused { refusal, .. } = error {
+        return refusal.as_ref().clone();
+    }
     let code = if error.is_bad_request() {
         codes::IPC_004
     } else {
