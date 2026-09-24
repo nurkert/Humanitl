@@ -1103,6 +1103,9 @@ pub fn record_to_summary(record: &FlowRecord, domains: Option<&DomainTable>) -> 
             FlowState::Analyzed { findings } => u32::try_from(findings.len()).unwrap_or(u32::MAX),
             _ => 0,
         },
+        // Die Sperre steht in der Zeile, damit ein Client, der die Ansage im
+        // Strom verpasst hat, sie beim Nachladen liest (HUM-159).
+        send_refusal: record.send_refusal.as_ref().map(diagnostic_to_proto),
         edited: matches!(record.decision, Some(Decision::AllowEdited { .. })),
         passthrough: record.decision_source == Some(humanitl_core::DecisionSource::Passthrough),
         deadline: record.deadline.map(|at| timestamp(wall_clock(at))),
@@ -1868,6 +1871,10 @@ pub fn recorded_summary_to_proto(row: &RecordedSummary) -> v1::FlowSummary {
         // `NULL` bleibt ein fehlendes Feld, nie eine Null: nichts ging hinaus,
         // niemand zählte, oder die Zeile ist älter als die Spalte (HUM-160).
         unresolved_findings: row.unresolved_findings,
+        // Die Tabelle `flows` führt die harte Sperre nicht; für einen Flow der
+        // laufenden Sitzung legt `recorded_page` sie aus der Registry auf
+        // (HUM-159).
+        send_refusal: None,
     }
 }
 
@@ -2667,7 +2674,7 @@ mod tests {
 
     /// Ein Text der Maschine ist keine Notiz, auch nicht in der Zeile.
     ///
-    /// `block_checksum_secret` im Proxy blockt als System und schickt dem
+    /// `hard_block_decision` im Proxy blockt als System und schickt dem
     /// Agenten einen eigenen Satz mit (`BlockReason::Secret`,
     /// `DecisionSource::System`). Er steht in der 403-Antwort und im Ereignis,
     /// aber nicht in `decision_note`: Das Feld wird als Wort des Menschen

@@ -64,8 +64,8 @@ use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
 use humanitl_config::Limits;
 use humanitl_core::{
-    BlockReason, DecidedFindings, Decision, DecisionSource, Flow, FlowEvent, FlowId, FlowState,
-    HostName, HttpRequest, InvalidTransition, Transition, TransitionInput,
+    BlockReason, DecidedFindings, Decision, DecisionSource, Diagnostic, Flow, FlowEvent, FlowId,
+    FlowState, HostName, HttpRequest, InvalidTransition, Transition, TransitionInput,
 };
 use humanitl_recorder::Recorder;
 use tokio::sync::{broadcast, oneshot};
@@ -80,7 +80,7 @@ use crate::registry::FlowRegistry;
 pub const MAX_EVENT_BUFFER: usize = 1 << 16;
 
 /// Warum eine Entscheidung nicht angenommen wurde.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum NotHeld {
     /// Der Flow wird nicht gehalten: unbekannt, schon entschieden oder schon
     /// abgelaufen. Die gRPC-Schicht meldet das als `IPC_003`.
@@ -125,6 +125,21 @@ pub enum NotHeld {
         /// Die Entscheidung, siehe [`Decision::as_str`].
         decision: &'static str,
     },
+    /// Der Flow steht unter der harten Sperre
+    /// (`hold.hard_block_checksum_secrets`, HUM-159): Er trägt ein
+    /// prüfsummen-bestätigtes Geheimnis und darf nicht ungeändert hinaus.
+    ///
+    /// Entschieden wird nichts, und der Flow wartet weiter: Ein Mensch kann
+    /// ihn noch bearbeitet freigeben oder blocken. `refusal` ist der Befund
+    /// `HOLD_004` vom Flow; die gRPC-Schicht meldet genau ihn und nicht
+    /// `IPC_003`.
+    #[error("flow {id} may not leave unchanged: {refusal}")]
+    SendRefused {
+        /// Der Flow, um den es ging.
+        id: FlowId,
+        /// Der Befund `HOLD_004`, so wie er am Flow steht.
+        refusal: Box<Diagnostic>,
+    },
 }
 
 impl NotHeld {
@@ -135,7 +150,8 @@ impl NotHeld {
             Self::Unknown { id }
             | Self::Forbidden { id, .. }
             | Self::UnknownFinding { id, .. }
-            | Self::AcknowledgedWithout { id, .. } => *id,
+            | Self::AcknowledgedWithout { id, .. }
+            | Self::SendRefused { id, .. } => *id,
         }
     }
 
@@ -207,6 +223,12 @@ struct Pending {
     /// Wie viele Funde der Flow beim Halten trug; die Grenze für die Indizes
     /// einer Bestätigung.
     findings: u32,
+    /// Der Befund der harten Sperre, wenn der Flow einen trägt
+    /// ([`Flow::send_refusal`]). Er liegt hier und nicht in der Registry, weil
+    /// er genau so lange gelten muss, wie der Flow gehalten wird: Die Registry
+    /// darf einen Datensatz vergessen, und eine Prüfung, die dann nichts
+    /// fände, ließe das Geheimnis hinaus.
+    refusal: Option<Diagnostic>,
 }
 
 /// Wer den Domain-Katalog zu einem eingetroffenen Flow befragt.
@@ -495,9 +517,11 @@ impl HoldQueue {
     /// # Errors
     ///
     /// Wie [`HoldQueue::decide_as`]; dazu [`NotHeld::UnknownFinding`] für einen
-    /// Index außerhalb der Funde und [`NotHeld::AcknowledgedWithout`] für eine
-    /// Bestätigung zu einer anderen Entscheidung als `Allow`. In beiden Fällen
-    /// wird nichts entschieden, und der Flow wartet weiter.
+    /// Index außerhalb der Funde, [`NotHeld::AcknowledgedWithout`] für eine
+    /// Bestätigung zu einer anderen Entscheidung als `Allow` und
+    /// [`NotHeld::SendRefused`] für ein `Allow` auf einen Flow unter der
+    /// harten Sperre, gleich wer es trifft und was es bestätigt (HUM-159). In
+    /// allen drei Fällen wird nichts entschieden, und der Flow wartet weiter.
     pub fn decide_acknowledging(
         &self,
         id: FlowId,
@@ -510,6 +534,20 @@ impl HoldQueue {
                 id,
                 decision: decision.as_str(),
                 by,
+            });
+        }
+        // Die harte Sperre vor allem anderen, was ein `Allow` begleitet: Eine
+        // Bestätigung hebt sie nie auf (HUM-049), und keine Herkunft, auch
+        // keine Regel, gibt einen solchen Flow unbearbeitet frei. Dies ist die
+        // eine Tür, durch die jede Entscheidung über einen gehaltenen Flow
+        // geht; `AllowEdited` kommt durch und wird im Handler ein zweites Mal
+        // gescannt.
+        if matches!(decision, Decision::Allow)
+            && let Some(refusal) = self.refusal(id)
+        {
+            return Err(NotHeld::SendRefused {
+                id,
+                refusal: Box::new(refusal),
             });
         }
         let mut acknowledged = acknowledged.to_vec();
@@ -555,6 +593,14 @@ impl HoldQueue {
                 acknowledged,
             })
             .map_err(|_gone| NotHeld::Unknown { id })
+    }
+
+    /// Der Befund der harten Sperre eines gehaltenen Flows, falls er einen
+    /// trägt.
+    fn refusal(&self, id: FlowId) -> Option<Diagnostic> {
+        self.pending
+            .get(&id)
+            .and_then(|pending| pending.refusal.clone())
     }
 
     /// Schiebt die Frist um `by` nach hinten und liefert die neue Frist.
@@ -717,6 +763,7 @@ impl HoldQueue {
                     tx,
                     deadline,
                     findings,
+                    refusal: flow.send_refusal.clone(),
                 });
                 self.publish(event);
                 Ok(Admission::Held {

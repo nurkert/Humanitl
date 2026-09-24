@@ -21,6 +21,7 @@ import '../../../core/domain/domain.dart';
 import '../../../core/ipc/client_providers.dart';
 import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/flow_events.dart';
+import 'diagnostics.dart' show sanitizeDiagnostic;
 import 'now.dart';
 
 part 'flows.g.dart';
@@ -168,7 +169,17 @@ class Flows extends _$Flows {
         );
       case FlowEventLagged():
         unawaited(_resync());
-      // A chunk counter, a session diagnostic, a rule revision and an agent
+      // Die Ansage der harten Sperre gehört zum Fluss: Der Daemon schickt
+      // `HOLD_004` mit der Flusskennung vor dem `Held`, und die Freigabe
+      // zeigt danach „Senden nicht möglich" (HUM-159). Die Karte im Streifen
+      // darüber baut `diagnostics.dart` aus demselben Ereignis.
+      case FlowEventDiagnostic(
+            :final Diagnostic diagnostic,
+            flowId: final FlowId id?,
+          )
+          when diagnostic.code == DiagnosticCodes.sendRefused:
+        refuseSend(id, diagnostic);
+      // A chunk counter, any other diagnostic, a rule revision and an agent
       // question change no flow. The first is deliberate (v1 shows no
       // progress bar), the other three belong to other screens.
       case FlowEventResponseChunk() ||
@@ -178,6 +189,18 @@ class Flows extends _$Flows {
         break;
     }
   }
+
+  /// Marks [id] as a request that may leave only edited, with the daemon's
+  /// own [refusal] (`HOLD_004`, HUM-159).
+  ///
+  /// Two ways lead here: the announcement in the stream, and the answer to an
+  /// allow the daemon refused. The second closes the gap of a client that
+  /// started after the announcement went by; the daemon refuses either way,
+  /// this only makes the screen say so before the next click.
+  void refuseSend(FlowId id, Diagnostic refusal) => _update(
+    id,
+    (Flow flow) => flow.copyWith(sendRefusal: sanitizeDiagnostic(refusal)),
+  );
 
   void _update(FlowId id, Flow Function(Flow flow) update) {
     final Flow? current = state[id];
@@ -278,6 +301,9 @@ class Flows extends _$Flows {
         next[flow.id] = flow.copyWith(
           heldAt: flow.heldAt ?? known?.heldAt,
           decidedAt: flow.decidedAt ?? known?.decidedAt,
+          // Die Zeile trägt die Sperre selbst (`FlowSummary.send_refusal`);
+          // was Strom oder Antwort schon gesagt haben, bleibt (HUM-159).
+          sendRefusal: flow.sendRefusal ?? known?.sendRefusal,
         );
       }
       state = next;

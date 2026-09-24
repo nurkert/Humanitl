@@ -176,6 +176,8 @@ impl FakeFlow {
             catalog_id: String::new(),
             // Aus dem `Decided`-Ereignis, wie im echten Daemon (HUM-160).
             unresolved_findings: self.unresolved_findings,
+            // Der Fake scannt nicht und sagt deshalb keine Sperre an (HUM-159).
+            send_refusal: None,
         }
     }
 

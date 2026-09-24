@@ -175,6 +175,9 @@ pub enum Pipe {
     Ask(Duration),
     /// Sofort erlauben.
     Passthrough,
+    /// Eine Pipeline, die der Test selbst baut, über der Warteschlange des
+    /// Proxys (HUM-159: eine Pipeline, die eine Prüfung vergisst).
+    Custom(fn(Arc<HoldQueue>) -> Arc<dyn FlowPipeline>),
 }
 
 /// Baut einen Proxy mit Test-CA, zählendem Resolver und Egress.
@@ -238,6 +241,12 @@ impl ProxyBuilder {
 
     pub fn passthrough(mut self) -> Self {
         self.pipe = Pipe::Passthrough;
+        self
+    }
+
+    /// Eine eigene Pipeline über der Warteschlange des Proxys.
+    pub fn pipeline(mut self, make: fn(Arc<HoldQueue>) -> Arc<dyn FlowPipeline>) -> Self {
+        self.pipe = Pipe::Custom(make);
         self
     }
 
@@ -435,6 +444,7 @@ impl ProxyBuilder {
         let inner: Arc<dyn FlowPipeline> = match self.pipe {
             Pipe::Ask(timeout) => Arc::new(AskPipeline::new(Arc::clone(&queue), timeout)),
             Pipe::Passthrough => Arc::new(PassthroughPipeline::new(Arc::clone(&queue))),
+            Pipe::Custom(make) => make(Arc::clone(&queue)),
         };
         // Ein Handle fuer beide: Der Meta-Endpunkt zeigt denselben Satz, nach
         // dem die Pipeline entscheidet (HUM-073).
@@ -529,7 +539,7 @@ impl ProxyBuilder {
                     humanitl_config::AskMode::Ui,
                     match self.pipe {
                         Pipe::Ask(timeout) => timeout,
-                        Pipe::Passthrough => Duration::ZERO,
+                        Pipe::Passthrough | Pipe::Custom(_) => Duration::ZERO,
                     },
                 ),
                 Arc::clone(&rules),

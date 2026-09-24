@@ -7,9 +7,11 @@
 //! 2. Eine nur teilweise durchsuchte Anfrage sieht nie aus wie eine saubere:
 //!    `findings_truncated` steht am Datensatz, und der Befund, der die Lücke
 //!    erklärt, hängt am selben Flow.
-//! 3. `hold.hard_block_checksum_secrets` blockt, ohne zu fragen, und mit dem
-//!    Befund `HOLD_004`; dasselbe gilt für eine bearbeitete Fassung, die nach
-//!    dem zweiten Scan noch ein bestätigtes Geheimnis trägt (HUM-049).
+//! 3. `hold.hard_block_checksum_secrets` sperrt mit dem Befund `HOLD_004`
+//!    eine bearbeitete Fassung, die nach dem zweiten Scan noch ein
+//!    bestätigtes Geheimnis trägt (HUM-049). Wie die Anfrage selbst gehalten
+//!    wird und dass kein anderer Weg die Sperre umgeht, prüft
+//!    `tests/hard_block.rs` (HUM-159).
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -189,48 +191,6 @@ async fn a_partial_scan_is_never_an_all_clear() {
     assert_eq!(code, FINDINGS_002);
 }
 
-/// Mit `hold.hard_block_checksum_secrets` wird ein prüfsummen-sicherer Fund
-/// geblockt, ohne zu fragen.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_checksum_secret_is_blocked_when_the_switch_is_on() {
-    let upstream = FakeUpstream::plain().await;
-    let proxy = ProxyBuilder::new()
-        .scanner(Arc::new(ChecksumScan))
-        .hard_block_checksum_secrets(true)
-        .start()
-        .await;
-    let mut events = proxy.events();
-    let _decider = proxy.decide_with(Decision::Allow);
-
-    let mut client = proxy.client().await;
-    let response = client
-        .send(post(
-            &format!("http://127.0.0.1:{}/sink", upstream.port()),
-            IBAN_BODY,
-        ))
-        .await;
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    let body = body_string(response.into_body()).await;
-    assert!(
-        body.contains("checksum-confirmed secret"),
-        "the answer says what happened, without the value: {body}"
-    );
-    assert!(!body.contains("GB82"), "no value is echoed: {body}");
-
-    events.wait_for("recorded").await;
-    assert_eq!(events.count("held"), 0, "nobody is asked");
-    assert_eq!(events.count("forwarded"), 0);
-    assert_eq!(upstream.hits(), 0);
-    // Die Sperre sagt am Flow, warum sie griff und was hilft (HUM-049).
-    let refusal = hold_refusals(&events.seen);
-    assert_eq!(refusal.len(), 1, "one block, one HOLD_004");
-    assert!(
-        refusal[0].why.contains("iban in the body") && !refusal[0].why.contains("GB82"),
-        "kind and place, never the value: {}",
-        refusal[0].why
-    );
-}
-
 /// Die Befunde `HOLD_004` unter `seen`.
 fn hold_refusals(seen: &[FlowEvent]) -> Vec<&Diagnostic> {
     seen.iter()
@@ -327,8 +287,9 @@ async fn an_edited_checksum_secret_goes_out_when_the_switch_is_off() {
 
 /// Der Satz, den der harte Block selbst schreibt, kommt nicht in die Spalte.
 ///
-/// `block_checksum_secret` entscheidet als System (`BlockReason::Secret`,
-/// `DecisionSource::System`) und schickt dem Agenten einen Text mit. Der steht
+/// Eine Regel `allow` wird unter dem Schalter zur Sperre des Systems
+/// (`BlockReason::Secret`, `DecisionSource::System`, HUM-159), und die schickt
+/// dem Agenten einen Text mit. Der steht
 /// in der 403-Antwort, damit der Agent weiß, woran er ist — aber `decision_note`
 /// heißt „was der Mensch geschrieben hat", und über diese Anfrage hat kein
 /// Mensch etwas geschrieben. Stünde er dort, reiste er als Wort des Menschen
@@ -340,6 +301,7 @@ async fn a_hard_blocked_checksum_secret_leaves_no_note_in_the_recording() {
     let proxy = ProxyBuilder::new()
         .scanner(Arc::new(ChecksumScan))
         .hard_block_checksum_secrets(true)
+        .rules("version: 1\nrules:\n  - action: allow\n    match:\n      host: \"ip:127.0.0.1\"\n")
         .recording(true)
         .start()
         .await;

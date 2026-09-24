@@ -165,7 +165,10 @@ normal gehalten, auch ein Pfad mit `..`-Segment (offen, `%2e%2e` oder `..;`), we
 ihn auflöst. Dieselbe Grenze gilt für jede Nutzerregel, die durchlässt und ein Pfadmuster oder
 Präfixe trägt. Eine Regel, die blockt oder fragt, prüft dagegen zusätzlich den aufgelösten Pfad
 und fängt so auch den Umweg (HUM-204). Der Verkehr wird vollständig aufgezeichnet und durch die Findings-Detektoren
-geschickt; ein Treffer erzeugt eine Warnung (`LLM_005`), hält aber nicht an. Im Isolations-Panel
+geschickt; ein Treffer erzeugt eine Warnung (`LLM_005`), hält aber nicht an. Eine Ausnahme gibt
+es: Steht `hold.hard_block_checksum_secrets` an, blockt die Durchreiche eine Anfrage mit einem
+prüfsummen-bestätigten Geheimnis (API-Schlüssel, JWT, IBAN, Kreditkarte) als System mit `HOLD_004`,
+statt sie durchzulassen (HUM-159). Im Isolations-Panel
 steht der Kanal als vierte, bernsteinfarbene Zeile mit dem konkreten Endpunkt.
 
 *Restrisiko.* Vollständig. Ein Angreifer, der über Prompt Injection den Agenten steuert, kann
@@ -633,6 +636,7 @@ Sitzungs-Historie steht.
 | 2026-09-04 | K-15 aufgenommen: der Isolations-Check läuft, nachdem der Shim den Agenten gestartet hat, also beendet ein roter Check die Sitzung, statt sie zu verhindern. Der Halbsatz „Check 3 prüft, dass `socketpair` gelingt" gestrichen — `probe_families` probt es nicht | HUM-041, externer Review |
 | 2026-09-23 | K-02: Eine `allow`- oder `redact`-Regel mit Pfadmuster oder Präfixen trifft keinen Pfad mit `..`-Segment mehr, auch verschleiert; vorher galt das nur für Präfixe, und ein Glob `/repos/me/**` gab `/repos/me/../../user/keys` frei. `block` und `ask` prüfen zusätzlich den nach RFC 3986 aufgelösten Pfad (Punktsegmente, doppelte Schrägstriche, kodierte nicht reservierte Zeichen); vorher traf ihr Präfix keinen Pfad mit `..`, und eine hostweite Freigabe dahinter entschied | HUM-204, Sicherheitsdurchlauf vom selben Tag |
 | 2026-09-23 | K-13 sichtbar: verweigerte `socket()`-Aufrufe des Agenten gehen über `SECCOMP_RET_USER_NOTIF` an den Elternprozess des Shims, der zählt und `EPERM` antwortet; ohne Zuhörer (`EBUSY`) derselbe Filter wie zuvor und `SANDBOX_019`. K-04: der Elternprozess ist nicht mehr „dumpable", `/proc/<pid>/mem` und `/proc/<pid>/fd` sind dem Agenten verschlossen. Beide Filter verweigern `seccomp()` mit `SECCOMP_FILTER_FLAG_NEW_LISTENER`, damit der Agent nie einen eigenen Zuhörer bekommt, und der Zuhörer des Elternprozesses bleibt bis zum Ende offen. Das Tor von HUM-137 geht auf, sobald der Elternprozess nicht mehr „dumpable" ist, statt wenn er den Bericht schließt | HUM-138 |
+| 2026-09-24 | Passthrough und Regeln unter `hold.hard_block_checksum_secrets`: Eine Anfrage mit prüfsummen-bestätigtem Geheimnis wird gehalten statt sofort geblockt, damit ein Mensch den Wert ersetzen kann. Eine Regel `allow` und die Durchreiche zum Sprachmodell blocken sie weiter als System, die Warteschlange weist jedes `Allow` mit `HOLD_004` zurück, und der Handler leitet ein `Allow` für einen solchen Flow nie weiter. Die Aussage „geht nicht ungeändert hinaus" gilt unverändert | HUM-159 |
 
 Geplante Fortschreibung: HUM-059 bringt das Dokument zum Release auf den Stand des Codes. Jede
 sicherheitsrelevante Änderung am Shim, an der Mount-Allowlist, am Filter oder am Passthrough
