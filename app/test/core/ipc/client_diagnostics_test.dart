@@ -51,6 +51,19 @@ void main() {
           command: 'humanitld --socket /tmp/own.sock',
         ),
       );
+
+      // Ein Pfad mit Leerzeichen und `'` bleibt ein Wort der Shell
+      // (HUM-215).
+      final Diagnostic spaced = ClientDiagnostics.daemonUnreachable(
+        socketPath: "/tmp/my dir/it's.sock",
+        socketFlag: true,
+      );
+      expect(
+        spaced.fix,
+        const FixAction.copyCommand(
+          command: r"humanitld --socket '/tmp/my dir/it'\''s.sock'",
+        ),
+      );
     });
   });
 

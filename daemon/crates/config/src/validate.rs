@@ -17,6 +17,7 @@
 use std::path::{Component, Path};
 
 use humanitl_core::diagnostics::codes::CONFIG_003;
+use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
 use crate::model::{
@@ -98,7 +99,7 @@ fn work_dir_is_a_directory(work_dir: &Path) -> Result<(), Diagnostic> {
                 ))
                 .fix(FixAction::CopyCommand(format!(
                     "mkdir -p {}",
-                    shell_word(work_dir)
+                    shell_path(work_dir)
                 )))
                 .build());
         }
@@ -168,12 +169,6 @@ fn findings_are_well_formed(findings: &FindingsConfig) -> Result<(), Diagnostic>
         }
     }
     Ok(())
-}
-
-/// Der Pfad als ein Wort für die Shell: in einfachen Anführungszeichen, ein
-/// enthaltenes `'` als `'\''`.
-fn shell_word(path: &Path) -> String {
-    format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
 }
 
 /// Die Obergrenzen und Fristen des Proxys.
@@ -593,7 +588,10 @@ mod tests {
                 diagnostic.fix
             );
         };
-        assert_eq!(command, format!("mkdir -p '{}'", missing.display()));
+        assert_eq!(
+            command,
+            format!("mkdir -p {}", humanitl_core::shell::shell_path(&missing))
+        );
     }
 
     #[test]
@@ -617,8 +615,25 @@ mod tests {
     }
 
     #[test]
-    fn a_shell_word_escapes_single_quotes() {
-        assert_eq!(super::shell_word(Path::new("/a b")), "'/a b'");
-        assert_eq!(super::shell_word(Path::new("/it's")), "'/it'\\''s'");
+    fn a_missing_work_dir_is_named_byte_for_byte_in_the_fix() {
+        let fix = |dir: &str| {
+            super::work_dir_is_a_directory(Path::new(dir))
+                .expect_err("the directory does not exist")
+                .fix
+        };
+        assert_eq!(
+            fix("/nonexistent-hum215/it's"),
+            Some(FixAction::CopyCommand(
+                "mkdir -p '/nonexistent-hum215/it'\\''s'".to_owned()
+            ))
+        );
+        // Zwei Leerzeichen blieben im Block des Befunds nicht stehen
+        // (HUM-215); als Bytes geschrieben, legt `mkdir` genau diesen Pfad an.
+        assert_eq!(
+            fix("/nonexistent-hum215/a  b"),
+            Some(FixAction::CopyCommand(
+                r"mkdir -p $'/nonexistent-hum215/a\x20\x20b'".to_owned()
+            ))
+        );
     }
 }
