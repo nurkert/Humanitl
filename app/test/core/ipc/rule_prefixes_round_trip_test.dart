@@ -80,6 +80,10 @@ void main() {
   setUp(() async {
     dir = Directory.systemTemp.createTempSync('humanitl-hum205-');
     File('${dir.path}/token').writeAsStringSync('secret\n');
+    // Wie der Daemon: Verzeichnis 0700 und Token 0600, sonst traut der
+    // Client ihnen nicht (HUM-212).
+    Process.runSync('chmod', <String>['700', dir.path]);
+    Process.runSync('chmod', <String>['600', '${dir.path}/token']);
     service = RulesOnlyService(narrowedRule());
     server = Server.create(services: <Service>[service]);
     await server.serve(

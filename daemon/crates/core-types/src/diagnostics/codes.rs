@@ -239,8 +239,8 @@ macro_rules! registry {
 registry! {
     /// Der Daemon läuft nicht oder der Socket antwortet nicht.
     DAEMON_001 => "daemon", "Daemon nicht erreichbar", "#daemon_001",
-        "Der Client findet keinen Socket oder kein Token unter dem Laufzeitpfad, oder die Verbindung dorthin scheitert.",
-        "`InstallService` richtet die Nutzer-Unit ein; sonst nennt der Befund `humanitld`.";
+        "Der Client findet keinen Socket oder kein Token unter dem Laufzeitpfad, oder die Verbindung dorthin scheitert. Oder Laufzeitverzeichnis und Token gehören nicht dem eigenen Konto, sind ein Symlink oder für Gruppe und Andere offen; dann liest der Client das Token nicht (HUM-212).",
+        "`InstallService` richtet die Nutzer-Unit ein; sonst nennt der Befund `humanitld`. Bei offenen Rechten `CopyCommand` mit `chmod go-rwx`; bei fremdem Besitzer oder Symlink kein Fix. Nur im `/tmp`-Rückfall `OpenUrl` auf die Anleitung, wie man ein eigenes `XDG_RUNTIME_DIR` unter dem Heimatverzeichnis für die ganze Sitzung setzt (`docs/INSTALL.md`); es gilt nach einer neuen Anmeldung.";
     /// Client und Daemon sprechen unterschiedliche Fassungen der Proto-Datei.
     DAEMON_002 => "daemon", "Proto-Version inkompatibel", "#daemon_002",
         "Der Daemon meldet eine andere Hauptversion des Vertrags als die Kommandozeile spricht.",
@@ -252,7 +252,7 @@ registry! {
     /// Laufzeitverzeichnis oder Socket-Datei konnte nicht angelegt werden.
     DAEMON_004 => "daemon", "Laufzeitverzeichnis oder Socket nicht anlegbar", "#daemon_004",
         "Das Laufzeitverzeichnis fehlt, ist nicht privat, lässt sich nicht anlegen, oder der Socket-Pfad ist länger als `sun_path` erlaubt.",
-        "Meist ohne Fix — der Text nennt Pfad und Grund; beim zu langen Pfad `SetEnv` für ein kürzeres `XDG_RUNTIME_DIR`.";
+        "Meist ohne Fix — der Text nennt Pfad und Grund; beim zu langen Pfad `SetEnv` für ein kürzeres `XDG_RUNTIME_DIR`. Gehört das Laufzeitverzeichnis einem anderen Konto oder ist es ein Symlink (HUM-212), ohne Fix; nur im `/tmp`-Rückfall `OpenUrl` auf die Anleitung, wie man ein eigenes `XDG_RUNTIME_DIR` unter dem Heimatverzeichnis für die ganze Sitzung setzt (`docs/INSTALL.md`); es gilt nach einer neuen Anmeldung.";
     // HUM-044: `humanitl daemon install`. Der Befehl schreibt eine Datei auf
     // den Rechner des Menschen; jeder Weg, auf dem das schiefgehen kann, hat
     // hier seinen eigenen Code, damit die Zeile in der Oberfläche sagt, was
