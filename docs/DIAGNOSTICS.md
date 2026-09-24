@@ -921,9 +921,9 @@ Blob-Speicher nicht benutzbar
 
 Hash-Kette gebrochen
 
-**Auslöser.** Die Prüfung von `audit.jsonl` findet einen Record, der nicht zu Vorgänger, Hash, MAC oder Anker passt, oder die Datei endet vor einem Anker; beim Start ist es der letzte Record, an den der Schreiber anhängen soll.
+**Auslöser.** Die Prüfung von `audit.jsonl` findet einen Record, der nicht zu Vorgänger, Hash, MAC oder Anker passt, oder die Datei endet vor einem Anker; beim Start ist es der letzte Record, an den der Schreiber anhängen soll. Beim Export steht im Log eine Zeile, die kein Record ist, auch eine leere; der Export bricht dann ab und schreibt nichts. Eine Kette, deren Records nicht zusammenpassen, exportiert er dagegen unverändert, den Bruch meldet erst die Prüfung.
 
-**Fix.** `CopyCommand`, der die Datei samt Zeitstempel beiseitelegt; sie bleibt als Beleg liegen, und die Kette beginnt neu.
+**Fix.** `CopyCommand`, der die Datei samt Zeitstempel beiseitelegt; sie bleibt als Beleg liegen, und die Kette beginnt neu. Beim Export ein `CopyCommand` mit `humanitl audit verify --file` auf das Log.
 
 #### AUDIT_002
 

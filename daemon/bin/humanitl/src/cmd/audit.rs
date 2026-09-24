@@ -7,8 +7,15 @@
 //! Schlüssel aus dem Schlüsselspeicher und die Anker aus der Tabelle
 //! `audit_anchors`.
 //!
-//! Deshalb fragt jeder Aufruf zuerst den Daemon, und seine Antwort gilt, auch
-//! eine Ablehnung. Nur wenn **kein** Daemon antwortet — keiner erreichbar,
+//! Prüfen tut nur `verify`. `export` verweigert eine Zeile, die kein Record
+//! ist, auch eine leere, mit `AUDIT_001`, und kopiert (JSONL) oder formatiert
+//! (CSV) sonst die Records im Zeitraum, ohne Hash, MAC oder Anker zu prüfen
+//! (HUM-214); ob die exportierte Kette hält, sagt `verify`.
+//!
+//! Beide fragen zuerst den Daemon, und seine Antwort gilt, auch eine
+//! Ablehnung: bei `verify`, weil nur er Schlüssel und Anker hat, bei `export`,
+//! weil er das Log liest, an das er gerade schreibt, und weiß, bis wohin es
+//! fertig ist. Nur wenn **kein** Daemon antwortet — keiner erreichbar,
 //! keiner, der das Token annimmt, oder einer, der `Audit` noch nicht kennt —,
 //! oder wenn die Datei ausdrücklich genannt ist (`--file`), prüft die
 //! Kommandozeile selbst. Dann aber ohne Schlüssel und ohne Anker, und **die
