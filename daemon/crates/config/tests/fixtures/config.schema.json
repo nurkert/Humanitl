@@ -336,7 +336,7 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer",
-          "x-project-scope": "allowed",
+          "x-project-scope": "denied",
           "x-tier": "expert"
         }
       },

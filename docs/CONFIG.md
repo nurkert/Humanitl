@@ -147,7 +147,7 @@ Alle Caps und Zeitgrenzen an einer Stelle.
 | `limits.max_client_connections` | integer | `256` | expert | allowed | ja | Größte Zahl gleichzeitiger Verbindungen aus der Sandbox je Sitzung. Darüber antwortet der Proxy mit 503 und schließt; eine Uhr je Spanne allein hindert einen Prozess nicht daran, dieselben Ressourcen über viele Verbindungen zu binden. |
 | `limits.max_decompress_ratio` | integer | `100` | expert | allowed | ja | Höchstes erlaubtes Verhältnis von entpackten zu gepackten Bytes einer Vorschau. |
 | `limits.preview_cap_bytes` | integer | `8388608` | expert | allowed | ja | Größte Menge Body, die die Oberfläche als Vorschau bekommt. |
-| `limits.recorder_max_body_bytes` | integer | `33554432` | expert | allowed | ja | Größter Body, den die Aufzeichnung als Blob ablegt. Alles darüber wird nur mit Prüfsumme vermerkt. |
+| `limits.recorder_max_body_bytes` | integer | `33554432` | expert | denied | ja | Größter Body, den die Aufzeichnung als Blob ablegt. Alles darüber wird nur mit Prüfsumme vermerkt. |
 
 ### `llm`
 
