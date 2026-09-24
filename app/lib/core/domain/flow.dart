@@ -164,6 +164,17 @@ abstract class Flow with _$Flow {
     /// When the client learned of the decision; client side, keeps the row
     /// in the queue for a moment so the outcome can be seen.
     DateTime? decidedAt,
+
+    /// Why this request may not leave unchanged, as the daemon said it: the
+    /// finding `HOLD_004` of `hold.hard_block_checksum_secrets` (HUM-159).
+    ///
+    /// The daemon announces the lock on the flow: in the row
+    /// (`FlowSummary.send_refusal`, so it survives a resync), in the event
+    /// stream before `Held`, and with the same finding as the answer to an
+    /// allow it refuses. The client reads no configuration for it (ADR-018).
+    /// Null means the daemon announced no lock, never that sending is
+    /// allowed: the daemon decides that on every allow.
+    Diagnostic? sendRefusal,
   }) = _Flow;
 
   const Flow._();

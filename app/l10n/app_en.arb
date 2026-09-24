@@ -2818,7 +2818,7 @@
   "@diagEDIT005Title": {"description": "Title of the diagnostic EDIT_005 (docs/DIAGNOSTICS.md). Shown instead of the daemon's register title, which is German (DiagnosticL10n.resolve, HUM-052)."},
   "diagEDIT005Why": "The edited body is larger than the limit the held request was buffered against.",
   "@diagEDIT005Why": {"description": "Generic cause of EDIT_005. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own; the daemon's measured sentence always wins there (docs/UX.md 4.4, HUM-052)."},
-  "diagHOLD004Title": "Confirmed secret blocked",
+  "diagHOLD004Title": "Confirmed secret locked",
   "@diagHOLD004Title": {"description": "Title of the diagnostic HOLD_004 (docs/DIAGNOSTICS.md). Shown instead of the daemon's register title, which is German (DiagnosticL10n.resolve, HUM-052)."},
   "diagHOLD004Why": "The request carries a secret confirmed by a checksum, and hold.hard_block_checksum_secrets is on.",
   "@diagHOLD004Why": {"description": "Generic cause of HOLD_004. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own; the daemon's measured sentence always wins there (docs/UX.md 4.4, HUM-052)."},
@@ -2883,6 +2883,15 @@
   "interceptBatchWithheld": "{count, plural, =1{1 request with an unresolved finding stays held. Send it from its card.} other{{count} requests with unresolved findings stay held. Send each from its card.}}",
   "@interceptBatchWithheld": {
     "description": "In the allow-all modal: how many held requests the batch leaves out because a finding is unresolved in them (HUM-207). A modal is not the care a finding needs (docs/UX.md 4.7).",
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "interceptSendRefused": "Cannot send",
+  "@interceptSendRefused": {
+    "description": "The release valve, disabled, while the daemon has announced the hard block on this request: it carries a checksum-confirmed secret and hold.hard_block_checksum_secrets is on (HUM-159). The tooltip carries the daemon's reason; the way out is the editor."
+  },
+  "interceptBatchLocked": "{count, plural, =1{1 request carries a confirmed secret and stays held. It leaves only edited.} other{{count} requests carry a confirmed secret and stay held. They leave only edited.}}",
+  "@interceptBatchLocked": {
+    "description": "In the batch modal: how many selected requests the batch leaves out because the daemon announced the hard block on them (HUM-159). They leave only through the editor.",
     "placeholders": {"count": {"type": "int"}}
   }
 }

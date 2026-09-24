@@ -48,8 +48,12 @@ abstract final class ProtoVersion {
   /// attempts: `SandboxEvent.refusals` and `SandboxEvent.Status.refusals`
   /// carry what the filter refused the agent, counted by family and type,
   /// and the isolation tab of the sandbox screen shows them (HUM-138).
+  /// Minor 15, the time of the audit head (HUM-162), has no reader here yet.
+  /// Raised to 16 with the hard block in the row: `FlowSummary.send_refusal`
+  /// carries `HOLD_004` while a held request may leave only edited, and the
+  /// release valve reads it after a resync (HUM-159).
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 14;
+  static const int minor = 16;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

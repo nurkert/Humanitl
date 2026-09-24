@@ -1336,9 +1336,11 @@ registry! {
     /// Gilt für IBAN, Kreditkarte, API-Schlüssel und JWT, sobald der Fund die
     /// Stufe `checksum` hat; ein Muster ohne Bestätigung sperrt nie hart, weil
     /// Muster Fehlalarme haben (HUM-049). Die Sperre sitzt im Daemon und nicht
-    /// in der Oberfläche: Sie greift an der eingetroffenen Anfrage, bevor jemand
-    /// gefragt wird, und an einer bearbeiteten, die nach dem erneuten Scan ein
-    /// solches Geheimnis noch trägt. Nummern 001 bis 003 sind nicht vergeben;
+    /// in der Oberfläche: Sie wird an der eingetroffenen Anfrage angesagt, die
+    /// gehalten wird, weist dort jedes `Allow` zurück, macht aus einer
+    /// Regel-Freigabe eine Sperre (HUM-159) und greift an einer bearbeiteten
+    /// Fassung, die nach dem erneuten Scan ein solches Geheimnis noch trägt.
+    /// Nummern 001 bis 003 sind nicht vergeben;
     /// der Name stand so in der Spezifikation und in der Oberfläche fest.
     HOLD_004 => "hold", "Bestätigtes Geheimnis gesperrt", "#hold_004",
         "Die Anfrage oder ihre bearbeitete Fassung trägt einen prüfsummen-bestätigten Fund der Art IBAN, Kreditkarte, API-Schlüssel oder JWT, und `hold.hard_block_checksum_secrets` ist an.",

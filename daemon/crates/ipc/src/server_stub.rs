@@ -216,8 +216,10 @@ pub fn grpc_code(code: DiagnosticCode) -> Code {
         }
         // Der Zustand verbietet es, nicht das Argument: die Regel ist
         // mitgeliefert, der Flow wartet nicht mehr, `config.toml` steht in
-        // einer Form, die sich nicht ändern ließ, ohne mehr zu ändern (HUM-151).
-        "IPC_003" | "RULES_010" | "CONFIG_015" => Code::FailedPrecondition,
+        // einer Form, die sich nicht ändern ließ, ohne mehr zu ändern (HUM-151),
+        // der Flow trägt ein bestätigtes Geheimnis unter der harten Sperre und
+        // darf nur bearbeitet hinaus (HUM-159).
+        "IPC_003" | "RULES_010" | "CONFIG_015" | "HOLD_004" => Code::FailedPrecondition,
         "DAEMON_001" => Code::Unavailable,
         _ => Code::Internal,
     }

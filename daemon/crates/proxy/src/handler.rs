@@ -111,8 +111,9 @@ pub struct ProxyLimits {
     /// und dafür bezahlt, öffnet einfach mehr Verbindungen, und jede einzelne
     /// bleibt innerhalb ihrer Frist.
     pub max_client_connections: u32,
-    /// Blockt eine Anfrage sofort, wenn der Scan ein prüfsummen-sicheres
-    /// Geheimnis findet (`hold.hard_block_checksum_secrets`).
+    /// Lässt eine Anfrage nur bearbeitet hinaus, wenn der Scan ein
+    /// prüfsummen-sicheres Geheimnis findet (`hold.hard_block_checksum_secrets`,
+    /// HUM-159).
     pub hard_block_checksum_secrets: bool,
 }
 
@@ -870,6 +871,18 @@ impl FlowHandler {
         meta: &ConnectionContext,
     ) -> Response<ResponseBody> {
         match decision {
+            // Die zweite Linie der harten Sperre: Keine Pipeline und keine
+            // Warteschlange darf einen Flow mit Befund `HOLD_004` freigeben,
+            // und doch prüft der Handler es hier noch einmal, am letzten Punkt
+            // vor dem Weiterleiten. Eine künftige Pipeline, die die Prüfung
+            // vergisst, blockt damit, statt ein Geheimnis zu senden.
+            Decision::Allow if flow.send_refusal.is_some() => {
+                tracing::error!(
+                    flow = %flow.id,
+                    "an allow reached the handler for a flow under the hard block; blocking"
+                );
+                self.revise_to_hard_block(&mut flow)
+            }
             Decision::Allow => self.forward(flow, request, body_bytes, meta).await,
             Decision::AllowEdited { request: edited } => {
                 // Die Bearbeitung darf Methode, Pfad, Kopfzeilen und Body
@@ -1199,7 +1212,7 @@ impl FlowHandler {
     }
 
     /// Der Scan und alles, was aus ihm folgt: `Analyzed`, die Befunde, der
-    /// Datensatz, und der harte Block.
+    /// Datensatz, und die Ansage der harten Sperre.
     ///
     /// Der Scan läuft über die vollständige Anfrage und vor jeder Regel: Was
     /// gefunden wurde, steht in `Analyzed` und damit vor dem Menschen, bevor
@@ -1208,8 +1221,7 @@ impl FlowHandler {
     /// # Errors
     ///
     /// Die fertige Antwort, wenn der Flow hier schon endet: fail-closed nach
-    /// einem abgelehnten Übergang, oder der harte Block auf ein
-    /// prüfsummen-sicheres Geheimnis.
+    /// einem abgelehnten Übergang.
     fn analyze(
         &self,
         flow: &mut Flow,
@@ -1220,7 +1232,7 @@ impl FlowHandler {
         let report = self.inner.scanner.scan(request, body);
         let truncated = report.truncated;
         // Dieselbe Prüfung wie vor einer bearbeiteten Freigabe, nur früher:
-        // Was sie hier sperrt, wird gar nicht erst gehalten (HUM-049).
+        // Was sie hier sperrt, darf nur bearbeitet hinaus (HUM-049, HUM-159).
         let hard_block = findings::check_allow(
             &report.findings,
             self.inner.limits.hard_block_checksum_secrets,
@@ -1251,62 +1263,30 @@ impl FlowHandler {
             self.publish_diagnostic(flow.id, diagnostic);
         }
 
+        // `hold.hard_block_checksum_secrets`: Ein Fund, den eine Prüfsumme
+        // bestätigt, ist kein Verdacht. Wer den Schalter setzt, hat im Voraus
+        // entschieden, dass so etwas den Rechner nicht ungeändert verlässt.
+        // Gehalten wird trotzdem, damit ein Mensch den Wert ersetzen kann
+        // (HUM-159); der Befund am Flow sperrt jede Freigabe außer einer
+        // bearbeiteten. Er steht am Flow, bevor der Datensatz entsteht, damit
+        // auch die Zeile ihn trägt.
+        let refusal = hard_block.err();
+        flow.send_refusal.clone_from(&refusal);
+
         // Der Datensatz entsteht hier, an der einen Stelle, die den Bericht
-        // des Scans kennt: Er trägt `findings_truncated`, und er steht in der
-        // Registry, bevor irgendein `Held` veröffentlicht wird.
+        // des Scans kennt: Er trägt `findings_truncated` und die Sperre, und
+        // er steht in der Registry, bevor irgendein `Held` veröffentlicht wird.
         let mut record = FlowRecord::new(flow, meta);
         record.findings_truncated = truncated;
         self.inner.queue.registry().insert(record);
 
-        // `hold.hard_block_checksum_secrets`: Ein Fund, den eine Prüfsumme
-        // bestätigt, ist kein Verdacht. Wer den Schalter setzt, hat im Voraus
-        // entschieden, dass so etwas den Rechner nicht verlässt; gefragt wird
-        // dann nicht mehr.
-        if let Err(diagnostic) = hard_block {
-            return Err(self.block_checksum_secret(flow, diagnostic));
+        // Derselbe Befund im Strom sagt der Oberfläche vor dem `Held`, dass
+        // „Senden" nicht geht und warum (ADR-018: der Client liest dafür keine
+        // Konfiguration); wer den Strom verpasst, liest ihn aus der Zeile.
+        if let Some(refusal) = refusal {
+            self.publish_diagnostic(flow.id, refusal);
         }
         Ok(())
-    }
-
-    /// Blockt einen Flow, in dem ein prüfsummen-sicheres Geheimnis steckt
-    /// (`hold.hard_block_checksum_secrets`).
-    ///
-    /// Das System entscheidet, ohne zu fragen; erlaubt darf es nie, und hier
-    /// lehnt es ab. Der Grund heißt `secret` und nicht `user`: Es hat niemand
-    /// entschieden, und eine Antwort, die einen Menschen nennt, den es nicht
-    /// gab, wäre eine Unwahrheit gegenüber dem Agenten und dem Protokoll
-    /// (`backlog/CONVENTIONS.md` 4.13). Die Notiz sagt, was passiert ist, ohne
-    /// den Wert zu nennen — der steht in keiner Meldung, nur sein Hash.
-    ///
-    /// `refusal` ist der Befund [`HOLD_004`](humanitl_core::diagnostics::codes::HOLD_004)
-    /// aus [`findings::check_allow`]. Er steht im Ereignisstrom am Flow, damit
-    /// die Oberfläche nicht nur „geblockt" sagt, sondern warum und was hilft.
-    fn block_checksum_secret(
-        &self,
-        flow: &mut Flow,
-        refusal: Diagnostic,
-    ) -> Response<ResponseBody> {
-        self.publish_diagnostic(flow.id, refusal);
-        let reason = BlockReason::Secret;
-        let note = "a checksum-confirmed secret was found in this request and \
-                    hold.hard_block_checksum_secrets is on";
-        let decision = Decision::Block {
-            reason,
-            note: Some(note.to_owned()),
-        };
-        if self
-            .apply(
-                flow,
-                TransitionInput::Decide {
-                    decision,
-                    source: DecisionSource::System,
-                },
-            )
-            .is_err()
-        {
-            return self.fail_closed(flow);
-        }
-        self.record_block(flow, reason, Some(note))
     }
 
     /// Zeichnet eine vollständig gepufferte Nachricht auf.
@@ -1532,6 +1512,20 @@ impl FlowHandler {
             },
         );
         self.record_block(flow, reason, None)
+    }
+
+    /// Nimmt eine Freigabe für einen Flow unter der harten Sperre zurück
+    /// ([`findings::hard_block_decision`]), schließt ihn ab und baut die
+    /// Block-Antwort mit dem Satz an den Agenten.
+    fn revise_to_hard_block(&self, flow: &mut Flow) -> Response<ResponseBody> {
+        let _ = self.apply(
+            flow,
+            TransitionInput::Decide {
+                decision: findings::hard_block_decision(),
+                source: DecisionSource::System,
+            },
+        );
+        self.record_block(flow, BlockReason::Secret, Some(findings::HARD_BLOCK_NOTE))
     }
 
     /// Schließt einen gescheiterten Flow ab (`Record`) und baut die

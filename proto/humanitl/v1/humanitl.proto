@@ -419,6 +419,17 @@ message FlowSummary {
   // der Daemon noch nicht zaehlte. Es fehlt nie an einer Stelle, an der eine
   // Null richtig waere, und eine Null wird nie geraten.
   optional uint32 unresolved_findings = 29;
+  // Warum diese Anfrage nicht ungeaendert hinausgehen darf: der Befund
+  // `HOLD_004` der harten Sperre (`hold.hard_block_checksum_secrets`,
+  // HUM-159). Gesetzt fuer einen Flow der laufenden Sitzung, dessen Scan ein
+  // pruefsummen-bestaetigtes Geheimnis fand, solange der Daemon ihn kennt;
+  // `Decide(Allow)` auf ihn endet mit genau diesem Befund. Die Oberflaeche
+  // zeigt daran „Senden nicht moeglich", ohne die Konfiguration zu lesen
+  // (ADR-018).
+  //
+  // Fehlt das Feld, hat der Daemon keine Sperre angesagt. Das heisst nie, dass
+  // Senden erlaubt ist: Das entscheidet der Daemon bei jedem `Allow`.
+  Diagnostic send_refusal = 30;
 }
 
 // Alles, was der Detail-Bereich zu einem Flow zeigt.

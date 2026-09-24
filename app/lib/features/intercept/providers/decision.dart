@@ -94,6 +94,7 @@ class BatchRequest {
     this.fromSelection = true,
     this.acknowledgedFindings = const <int>[],
     this.withheld = 0,
+    this.locked = 0,
     this.findingsConfirmed = false,
   });
 
@@ -127,6 +128,14 @@ class BatchRequest {
   /// einfacher Knopf im Modal nicht gibt (`docs/UX.md` 4.7).
   final int withheld;
 
+  /// Wie viele Anfragen der Batch auslässt, weil der Daemon an ihnen die
+  /// harte Sperre angesagt hat (`Flow.sendRefusal`, HUM-159); das Modal nennt
+  /// die Zahl.
+  ///
+  /// Sie gehen nur bearbeitet hinaus. Ein unbearbeitetes `Allow` wiese der
+  /// Daemon ohnehin zurück, und mitten im Batch bräche es die übrigen ab.
+  final int locked;
+
   /// Wahr, wenn die Funde in [flows] schon vor dem Modal bestätigt wurden:
   /// das gehaltene Ventil über einer Gruppe oder die Fundpause einer
   /// einzelnen Anfrage. Ohne das lässt [InterceptDecision.confirmBatch] nur
@@ -155,6 +164,7 @@ class BatchRequest {
       other.reason == reason &&
       other.fromSelection == fromSelection &&
       other.withheld == withheld &&
+      other.locked == locked &&
       other.findingsConfirmed == findingsConfirmed &&
       listEquals(other.flows, flows) &&
       listEquals(other.acknowledgedFindings, acknowledgedFindings);
@@ -166,6 +176,7 @@ class BatchRequest {
     reason,
     fromSelection,
     withheld,
+    locked,
     findingsConfirmed,
     Object.hashAll(flows),
     Object.hashAll(acknowledgedFindings),
@@ -444,6 +455,13 @@ class InterceptDecision extends _$InterceptDecision {
     if (flow == null) {
       return;
     }
+    // Unter der harten Sperre gibt es kein unbearbeitetes Senden, auch nicht
+    // bestätigt: Die Freigabe steht dann als „Senden nicht möglich" da, mit
+    // dem Grund des Daemons, und `Enter`, `A` und `S` tun nichts (HUM-159).
+    // Der Weg hinaus ist der Editor.
+    if (flow.sendRefusal != null) {
+      return;
+    }
     if (!ref.read(allowArmedProvider)) {
       _refuse(RefusalReason.notArmed);
       return;
@@ -529,6 +547,7 @@ class InterceptDecision extends _$InterceptDecision {
     bool fromSelection = true,
     List<int> acknowledgedFindings = const <int>[],
     int withheld = 0,
+    int locked = 0,
     bool findingsConfirmed = false,
   }) => ref
       .read(batchConfirmProvider.notifier)
@@ -541,6 +560,7 @@ class InterceptDecision extends _$InterceptDecision {
           fromSelection: fromSelection,
           acknowledgedFindings: acknowledgedFindings,
           withheld: withheld,
+          locked: locked,
           findingsConfirmed: findingsConfirmed,
         ),
       );
@@ -590,18 +610,32 @@ class InterceptDecision extends _$InterceptDecision {
       _refuse(RefusalReason.holdToSend);
       return;
     }
-    final ConfirmReason? asks = _reasonToAsk(flows, remember);
+    // Anfragen unter der harten Sperre bleiben stehen, statt den Batch zu
+    // unterbrechen: Der Daemon wiese ihr `Allow` zurück (HUM-159). Das Modal
+    // nennt, wie viele es sind; sind es alle, steht die Freigabe ohnehin als
+    // „Cannot send" da.
+    final List<Flow> sendable = _unlocked(flows);
+    if (sendable.isEmpty) {
+      return;
+    }
+    final int locked = flows.length - sendable.length;
+    // Eine ausgelassene Anfrage erzwingt das Modal, aber ein Grund, der
+    // schwerer wiegt, bleibt der Grund: Eine Regel für immer fragt als solche.
+    final ConfirmReason? asks =
+        _reasonToAsk(sendable, remember) ??
+        (locked > 0 ? ConfirmReason.reach : null);
     if (asks != null) {
       _ask(
         DecisionKind.allow,
-        flows,
+        sendable,
         remember,
         asks,
+        locked: locked,
         findingsConfirmed: confirmed,
       );
       return;
     }
-    await _many(flows, DecisionKind.allow, remember: remember);
+    await _many(sendable, DecisionKind.allow, remember: remember);
   }
 
   /// Refuses [flows], as one act.
@@ -698,7 +732,10 @@ class InterceptDecision extends _$InterceptDecision {
     if (held.isEmpty || state.isSending) {
       return;
     }
-    final List<Flow> clean = _withoutFindings(held);
+    // Gesperrte und Anfragen mit Fund getrennt gezählt: Das Modal nennt beide
+    // mit ihrem eigenen Grund (HUM-159, HUM-207).
+    final List<Flow> unlocked = _unlocked(held);
+    final List<Flow> clean = _withoutFindings(unlocked);
     if (clean.isEmpty) {
       _refuse(RefusalReason.holdToSend);
       return;
@@ -708,7 +745,8 @@ class InterceptDecision extends _$InterceptDecision {
       clean,
       false,
       ConfirmReason.reach,
-      withheld: held.length - clean.length,
+      withheld: unlocked.length - clean.length,
+      locked: held.length - unlocked.length,
       // Alle angehaltenen Anfragen sind nicht die Auswahl: Merk-Entwurf und
       // Notiz der ausgewählten Anfrage reisen nicht mit (HUM-218).
       fromSelection: false,
@@ -723,6 +761,11 @@ class InterceptDecision extends _$InterceptDecision {
   static List<Flow> _withoutFindings(List<Flow> flows) =>
       flows.where((Flow flow) => flow.findingCount == 0).toList();
 
+  /// Die Anfragen aus [flows], an denen der Daemon keine harte Sperre
+  /// angesagt hat (HUM-159).
+  static List<Flow> _unlocked(List<Flow> flows) =>
+      flows.where((Flow flow) => flow.sendRefusal == null).toList();
+
   /// Carries out the batch the modal was asking about.
   Future<void> confirmBatch() async {
     final BatchRequest? request = ref.read(batchConfirmProvider);
@@ -733,10 +776,21 @@ class InterceptDecision extends _$InterceptDecision {
     // Das Modal bestätigt Reichweite, nie einen Fund: Eine Anfrage mit Fund
     // geht nur hinaus, wenn Ventil oder Fundpause sie vor dem Modal bestätigt
     // haben (HUM-207). Jeder andere Weg zu einem Batch unterliegt dem auch.
-    final List<Flow> flows =
-        request.kind == DecisionKind.allow && !request.findingsConfirmed
-        ? _withoutFindings(request.flows)
-        : request.flows;
+    // Eine Anfrage unter der harten Sperre geht nie mit, auch wenn sie
+    // zwischen dem Öffnen des Modals und dem Klick gesperrt wurde (HUM-159):
+    // Gefiltert wird der Stand von jetzt, nicht der beim Öffnen: Eine Anfrage,
+    // die inzwischen entschieden oder aus der Warteschlange gefallen ist,
+    // geht nicht mehr mit, sonst bräche ihr `FLOW_NOT_HELD` den Rest ab.
+    final Map<FlowId, Flow> known = ref.read(flowsProvider);
+    final List<Flow> current = <Flow>[
+      for (final Flow flow in request.flows)
+        if (known[flow.id] case final Flow now? when now.isHeld) now,
+    ];
+    final List<Flow> flows = request.kind != DecisionKind.allow
+        ? current
+        : request.findingsConfirmed
+        ? _unlocked(current)
+        : _unlocked(_withoutFindings(current));
     if (flows.isEmpty) {
       _refuse(RefusalReason.holdToSend);
       return;
@@ -876,10 +930,19 @@ class InterceptDecision extends _$InterceptDecision {
       _record(flows.sublist(0, done), kind, size, rule);
       _consumeDraftsOf(drafts);
     }
-    state = DecisionProgress.failed(
-      flowId: flows[done < flows.length ? done : flows.length - 1].id,
-      diagnostic: diagnostic,
-    );
+    final FlowId failed =
+        flows[done < flows.length ? done : flows.length - 1].id;
+    _noteRefusal(failed, diagnostic);
+    state = DecisionProgress.failed(flowId: failed, diagnostic: diagnostic);
+  }
+
+  /// Hangs a refusal of the hard block on its flow, so that the valve says
+  /// "Cannot send" from now on instead of offering the same click again
+  /// (HUM-159). Any other failure changes nothing about the flow.
+  void _noteRefusal(FlowId id, Diagnostic diagnostic) {
+    if (diagnostic.code == DiagnosticCodes.sendRefused) {
+      ref.read(flowsProvider.notifier).refuseSend(id, diagnostic);
+    }
   }
 
   /// Die Auswahl, der die Entwürfe gerade gehören, mit ihrer Generation.
@@ -980,6 +1043,7 @@ class InterceptDecision extends _$InterceptDecision {
       _consumeDraftsOf(ownsDrafts ? drafts : null);
     } on DaemonException catch (error) {
       if (ref.mounted) {
+        _noteRefusal(flowId, error.diagnostic);
         state = DecisionProgress.failed(
           flowId: flowId,
           diagnostic: error.diagnostic,

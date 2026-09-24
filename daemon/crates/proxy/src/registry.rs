@@ -119,6 +119,14 @@ pub struct FlowRecord {
     /// niemand gezählt hat. Nimmt das System eine Freigabe zurück, steht hier
     /// wieder `None`: Hinausgegangen ist dann nichts.
     pub unresolved_findings: Option<u32>,
+    /// Der Befund der harten Sperre, wenn der Flow einen trägt
+    /// ([`Flow::send_refusal`], HUM-159).
+    ///
+    /// Hier steht er für die Zeile (`FlowSummary.send_refusal`): Ein Client,
+    /// der die Ansage im Strom verpasst hat, liest ihn beim Nachladen. Die
+    /// Prüfung vor einer Freigabe liest ihn nicht hier, sondern in der
+    /// Warteschlange, denn die Registry darf einen Datensatz vergessen.
+    pub send_refusal: Option<humanitl_core::Diagnostic>,
 }
 
 impl FlowRecord {
@@ -140,6 +148,7 @@ impl FlowRecord {
             finished: None,
             findings_truncated: false,
             unresolved_findings: None,
+            send_refusal: flow.send_refusal.clone(),
         };
         record.refresh_deadline();
         record

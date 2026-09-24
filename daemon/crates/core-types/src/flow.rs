@@ -94,8 +94,10 @@ pub enum BlockReason {
     /// erlaubt das nicht.
     PrivateAddress,
     /// Die Anfrage trägt ein Geheimnis, dessen Prüfsumme aufgeht, und
-    /// `hold.hard_block_checksum_secrets` steht an. Das System blockt ohne
-    /// Rückfrage; niemand wurde gefragt, also darf hier auch nicht `user`
+    /// `hold.hard_block_checksum_secrets` steht an. Das System blockt, wo
+    /// sonst eine Regel oder die Durchreiche freigäbe, und nimmt eine
+    /// bearbeitete Freigabe zurück, die das Geheimnis noch trägt (HUM-159);
+    /// kein Mensch hat so entschieden, also darf hier auch nicht `user`
     /// stehen (`backlog/CONVENTIONS.md` 4.13: nie mehr behaupten als
     /// bewiesen ist).
     Secret,
@@ -791,6 +793,19 @@ pub struct Flow {
     /// Sprachmodell auf der Schleife kann nie greifen. Vorgabe ist `false`:
     /// Wer nichts sagt, erlaubt kein privates Ziel.
     pub allow_private: bool,
+    /// Warum diese Anfrage nicht ungeändert hinausgehen darf, oder `None`.
+    ///
+    /// Der Befund `HOLD_004` der harten Sperre
+    /// (`hold.hard_block_checksum_secrets`, HUM-159): Der Handler setzt ihn
+    /// nach dem Scan, wenn ein prüfsummen-bestätigtes Geheimnis gefunden wurde
+    /// und der Schalter an ist. Wie [`Flow::allow_private`] ist es kein
+    /// Zustand, sondern eine Eigenschaft, die mit dem Flow durch Pipeline,
+    /// Warteschlange und Handler reist: Eine Regel-Freigabe wird daran zur
+    /// Sperre, die Warteschlange weist ein `Allow` damit zurück, und der
+    /// Handler leitet ein `Allow` mit gesetztem Feld nie weiter. Nur eine
+    /// bearbeitete Fassung, deren zweiter Scan kein solches Geheimnis mehr
+    /// findet, kommt daran vorbei. Vorgabe ist `None`: ohne Scan keine Sperre.
+    pub send_refusal: Option<Diagnostic>,
 }
 
 impl Flow {
@@ -810,6 +825,7 @@ impl Flow {
             state: FlowState::Received,
             history: vec![(received_at, "received")],
             allow_private: false,
+            send_refusal: None,
         }
     }
 

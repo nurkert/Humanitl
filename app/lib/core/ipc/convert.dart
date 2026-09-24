@@ -228,6 +228,9 @@ extension FlowSummaryToDomain on pb.FlowSummary {
     decisionNote: decisionNote,
     // Absent means "nothing left or nobody counted", never zero (HUM-160).
     unresolvedFindings: hasUnresolvedFindings() ? unresolvedFindings : null,
+    // The hard block, as the daemon announced it on the flow (HUM-159);
+    // absent means no lock was announced, never that sending is allowed.
+    sendRefusal: hasSendRefusal() ? sendRefusal.toDomain() : null,
     ruleId: ruleId.isEmpty ? null : RuleId(ruleId),
     status: status,
     requestSize: requestSize.toInt(),

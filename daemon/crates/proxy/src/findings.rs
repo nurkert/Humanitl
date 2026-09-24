@@ -26,13 +26,22 @@
 //! Was aus einem Fund für die Freigabe folgt, steht ebenfalls hier und nicht
 //! im Handler: [`check_allow`] ist die harte Sperre von
 //! `hold.hard_block_checksum_secrets` (HUM-049), und [`hard_blocks`] sagt, für
-//! welchen Fund sie gilt. Der Handler ruft beide an den zwei Stellen, an denen
-//! eine Anfrage hinausgehen könnte: nach dem ersten Scan, bevor gefragt wird,
-//! und nach dem zweiten Scan einer bearbeiteten Fassung.
+//! welchen Fund sie gilt. Der Handler ruft sie an zwei Stellen: nach dem
+//! ersten Scan, wo der Befund als
+//! [`Flow::send_refusal`](humanitl_core::Flow::send_refusal) an den Flow
+//! kommt, und nach dem zweiten Scan einer bearbeiteten Fassung.
+//!
+//! Seit HUM-159 wird eine solche Anfrage gehalten und nicht mehr sofort
+//! geblockt, damit ein Mensch sie pseudonymisieren kann. Jeder Weg hinaus
+//! prüft deshalb den Befund am Flow: Die Regel-Pipeline macht aus einer
+//! Freigabe durch Regel oder Durchreiche [`hard_block_decision`], die
+//! Warteschlange weist ein `Allow` zurück, und der Handler leitet ein `Allow`
+//! mit gesetztem Befund nie weiter.
 
 use humanitl_core::diagnostics::codes::HOLD_004;
 use humanitl_core::{
-    Diagnostic, Finding, FindingKind, FindingLocation, FixAction, HttpRequest, Severity, Tier,
+    BlockReason, Decision, Diagnostic, Finding, FindingKind, FindingLocation, FixAction,
+    HttpRequest, Severity, Tier,
 };
 use humanitl_findings::{DetectorRegistry, FindingsSettings, ScanReport};
 
@@ -80,11 +89,15 @@ pub fn check_allow(findings: &[Finding], hard_block: bool) -> Result<(), Diagnos
         FindingLocation::Query => "the query".to_owned(),
         FindingLocation::Body => "the body".to_owned(),
     };
+    // Der Satz gilt auf allen drei Wegen, die ihn bauen: an einer gehaltenen
+    // Anfrage, deren `Allow` zurückgewiesen wird, an einer Regel-Freigabe, die
+    // zur Sperre wird, und an einer bearbeiteten Fassung, deren Freigabe das
+    // System zurücknimmt. Auf keinem davon ist etwas hinausgegangen.
     Err(Diagnostic::builder(HOLD_004, Severity::Blocking)
         .why(format!(
             "the request carries a checksum-confirmed {} in {place} and \
-             hold.hard_block_checksum_secrets is on, so it was blocked and did not leave this \
-             machine",
+             hold.hard_block_checksum_secrets is on, so it cannot leave this machine unchanged; \
+             nothing was sent",
             secret.kind.as_str(),
         ))
         .fix(FixAction::ChangeSetting {
@@ -92,6 +105,29 @@ pub fn check_allow(findings: &[Finding], hard_block: bool) -> Result<(), Diagnos
             value: "false".to_owned(),
         })
         .build())
+}
+
+/// Der Satz an den Agenten, wenn die harte Sperre eine Anfrage blockt.
+///
+/// Er nennt, was geschah, nie den Wert; der steht in keiner Meldung, nur sein
+/// Hash. Er ist ein Satz der Maschine und landet deshalb nie in der Spalte,
+/// die als Notiz eines Menschen gelesen wird (HUM-117).
+pub const HARD_BLOCK_NOTE: &str = "a checksum-confirmed secret was found in this request and \
+                                   hold.hard_block_checksum_secrets is on";
+
+/// Die Sperre, die an die Stelle einer Freigabe tritt, wenn der Flow einen
+/// [`Flow::send_refusal`](humanitl_core::Flow::send_refusal) trägt.
+///
+/// Der Grund heißt `secret` und nicht `user`: Es hat niemand so entschieden,
+/// und eine Antwort, die einen Menschen nennt, den es nicht gab, wäre eine
+/// Unwahrheit gegenüber dem Agenten und dem Protokoll
+/// (`backlog/CONVENTIONS.md` 4.13).
+#[must_use]
+pub fn hard_block_decision() -> Decision {
+    Decision::Block {
+        reason: BlockReason::Secret,
+        note: Some(HARD_BLOCK_NOTE.to_owned()),
+    }
 }
 
 /// Sucht in einer Anfrage nach Secrets und personenbezogenen Daten.
@@ -269,16 +305,18 @@ mod tests {
         }
     }
 
-    /// Ein Geheimnis in der Query heißt dort auch so, und der Satz sagt, dass
-    /// gesperrt wurde, nicht was noch zu tun wäre: Auf beiden Wegen, die ihn
-    /// bauen, ist die Anfrage schon geblockt.
+    /// Ein Geheimnis in der Query heißt dort auch so, und der Satz stimmt auf
+    /// allen drei Wegen, die ihn bauen (HUM-159): Er behauptet keine Sperre,
+    /// die an einer gehaltenen Anfrage noch nicht geschehen ist, und sagt,
+    /// dass nichts hinausging.
     #[test]
-    fn the_refusal_names_the_query_and_says_it_was_blocked() {
+    fn the_refusal_names_the_query_and_says_nothing_was_sent() {
         let jwt = finding(FindingKind::Jwt, Tier::Checksum, FindingLocation::Query);
         let refused = check_allow(&[jwt], true).expect_err("a JWT is hard blocked");
         assert!(
             refused.why.contains(
-                "jwt in the query and hold.hard_block_checksum_secrets is on, so it was blocked"
+                "jwt in the query and hold.hard_block_checksum_secrets is on, so it cannot \
+                 leave this machine unchanged; nothing was sent"
             ),
             "{}",
             refused.why

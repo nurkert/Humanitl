@@ -31,9 +31,9 @@ class FindingsPause extends StatelessWidget {
   /// Baut die Pause über [findings].
   const FindingsPause({
     required this.findings,
-    required this.onSendAnyway,
     required this.onBlock,
     required this.onBack,
+    this.onSendAnyway,
     this.onPseudonymize,
     this.enabled = true,
     super.key,
@@ -42,8 +42,12 @@ class FindingsPause extends StatelessWidget {
   /// Die offenen Funde der Anfrage, soweit der Daemon sie beschrieben hat.
   final FindingSet findings;
 
-  /// Sendet die Anfrage, wie sie ist.
-  final VoidCallback onSendAnyway;
+  /// Sendet die Anfrage, wie sie ist, oder null unter der harten Sperre.
+  ///
+  /// Null lässt „Trotzdem senden" weg: Der Daemon hat angesagt, dass diese
+  /// Anfrage nur bearbeitet hinausgeht (`HOLD_004`, HUM-159), und ein Knopf,
+  /// den er ohnehin zurückwiese, wäre ein totes Control.
+  final VoidCallback? onSendAnyway;
 
   /// Öffnet den Editor mit allen Funden ersetzt, oder null ohne Editor.
   ///
@@ -121,18 +125,17 @@ class FindingsPause extends StatelessWidget {
                 runSpacing: tokens.spacing.x2,
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: <Widget>[
-                  _PauseButton(
-                    key: const Key('intercept-findings-pause-send'),
-                    variant: HButtonVariant.secondary,
-                    label: l10n.interceptFindingsPauseSendAnyway,
-                    shortcut: l10n.interceptFindingsPauseKeySend,
-                    // Erst wenn jeder offene Fund beschrieben ist: Bestätigt
-                    // wird, was zu sehen war, mit seinem Platz in der Liste
-                    // des Daemons (HUM-160).
-                    onPressed: enabled && findings.complete
-                        ? onSendAnyway
-                        : null,
-                  ),
+                  if (onSendAnyway case final VoidCallback send)
+                    _PauseButton(
+                      key: const Key('intercept-findings-pause-send'),
+                      variant: HButtonVariant.secondary,
+                      label: l10n.interceptFindingsPauseSendAnyway,
+                      shortcut: l10n.interceptFindingsPauseKeySend,
+                      // Erst wenn jeder offene Fund beschrieben ist: Bestätigt
+                      // wird, was zu sehen war, mit seinem Platz in der Liste
+                      // des Daemons (HUM-160).
+                      onPressed: enabled && findings.complete ? send : null,
+                    ),
                   if (onPseudonymize != null)
                     _PauseButton(
                       key: const Key('intercept-findings-pause-pseudonymize'),
