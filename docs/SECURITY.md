@@ -605,8 +605,11 @@ Es liegt im geklonten Repository und darf keinen Schlüssel setzen, der eine Sch
 Nutzers aufhebt; ein solcher Schlüssel ist dort `CONFIG_003`, und der Daemon startet nicht. Dazu
 gehört seit HUM-208 `hold.hard_block_checksum_secrets`: Vorher konnte ein Projekt-Profil die harte
 Sperre für IBAN und Kartennummer still abschalten, sobald `humanitld` in diesem Verzeichnis
-gestartet wurde (Sicherheitsdurchlauf vom 2026-09-23, Befund M6). Die vollständige Liste steht in
-[`CONFIG.md`](CONFIG.md), Spalte „Projekt".
+gestartet wurde (Sicherheitsdurchlauf vom 2026-09-23, Befund M6). Ebenso seit HUM-209
+`limits.recorder_max_body_bytes`: Vorher konnte ein Projekt-Profil die Aufzeichnung jedes Bodys
+auf 1 KiB senken. Vorschau und Body-Ansicht lesen aus der Aufzeichnung, der Mensch sah beim Halten
+also nur diesen Rest, während eine Freigabe den ganzen Body schickte (Befund M7). Die vollständige
+Liste steht in [`CONFIG.md`](CONFIG.md), Spalte „Projekt".
 
 Toolchain-Anforderungen für Reproduzierbarkeit: Rust 1.85+ (gepinnt in
 `daemon/rust-toolchain.toml`), Flutter 3.47.2 (gepinnt in `app/.fvmrc`), `bubblewrap` 0.8+.
