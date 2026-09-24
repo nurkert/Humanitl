@@ -12,8 +12,12 @@ import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ipc/flow_events.dart';
+import 'package:humanitl/features/intercept/providers/decision.dart';
+import 'package:humanitl/features/intercept/providers/findings_pause.dart';
 import 'package:humanitl/features/intercept/providers/flows.dart';
+import 'package:humanitl/features/intercept/providers/note.dart';
 import 'package:humanitl/features/intercept/providers/now.dart';
+import 'package:humanitl/features/intercept/rule_sentence.dart';
 import 'package:humanitl/features/shell/providers/connection.dart';
 import 'package:humanitl/features/shell/shell_screen.dart';
 import 'package:humanitl/features/shell/widgets/tray_host.dart';
@@ -179,6 +183,58 @@ void main() {
     expect(desktop.window.reveals, 0);
     await drainDecision(tester);
   });
+
+  testWidgets(
+    'a_decision_from_the_message_leaves_the_drafts_of_the_selected_request',
+    (WidgetTester tester) async {
+      // HUM-218: A ist ausgewählt, mit Notiz, Raster auf „forever“ und offener
+      // Findings-Pause. Die Benachrichtigung nennt B, und ein Block dort
+      // entscheidet B, ohne die Auswahl zu ändern; die Entwürfe gehören A
+      // und bleiben stehen.
+      final FakeDesktop desktop = FakeDesktop();
+      final FakeDaemonClient client = FakeDaemonClient(
+        script: trayHoldScript(2),
+      );
+      final ProviderContainer container = await pumpDesktop(
+        tester,
+        client: client,
+        desktop: desktop,
+        focused: false,
+      );
+      final FlowId b = container.read(attentionProvider).notice!.flowId;
+      final FlowId a = container
+          .read(flowsProvider)
+          .keys
+          .firstWhere((FlowId id) => id != b);
+      container.read(selectedFlowIdProvider.notifier).select(a);
+      await tester.pump();
+      container.read(blockNoteProvider.notifier)
+        ..open()
+        ..write('keep this for A');
+      container
+          .read(rememberDraftProvider.notifier)
+          .setDuration(RememberDuration.forever);
+      container.read(openFindingsPauseProvider.notifier).open(a);
+      await tester.pump();
+
+      desktop.notifications.press(NotificationActionKind.block);
+      await tester.pump();
+      await tester.pump();
+
+      expect(client.decisions.single.flowId, b);
+      expect(client.decisions.single.decision, isA<DecisionBlock>());
+      expect(container.read(selectedFlowIdProvider), a);
+      expect(container.read(blockNoteProvider).text, 'keep this for A');
+      expect(container.read(blockNoteProvider).open, isTrue);
+      expect(
+        container.read(rememberDraftProvider).effective,
+        RememberDuration.forever,
+      );
+      expect(container.read(openFindingsPauseProvider), a);
+      await drainDecision(tester);
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.linux),
+  );
 
   testWidgets('a_message_that_outlived_its_request_decides_nothing', (
     WidgetTester tester,

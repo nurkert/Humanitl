@@ -278,12 +278,13 @@ class _BlockGroup extends ConsumerWidget {
     final bool asks = group.length > modalAboveReach;
     // One notifier decides, from the pointer as from the keyboard: what holds
     // for `Ctrl+Shift+L` holds for this control (ADR-018).
-    // Out of a row, and the note of the action bar belongs to the selected
-    // request, not to this group: it does not travel (HUM-072).
+    // Out of a row, and the note and the rule draft of the action bar belong
+    // to the selected request, not to this group: they neither travel nor
+    // are used up (HUM-072, HUM-218).
     void decide() => unawaited(
       ref
           .read(interceptDecisionProvider.notifier)
-          .blockMany(group.flows, withNote: false),
+          .blockMany(group.flows, fromSelection: false),
     );
     // The glyph alone: the slot measures [HSize.rowActionSlot] and the number
     // it would block already stands in the counter chip of the same line. The
