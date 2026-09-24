@@ -19,6 +19,7 @@
 //! - [`alias`] alte Schlüsselnamen, die weiter funktionieren
 //! - [`mod@env`] die Umgebung als Wert statt als globaler Zustand
 //! - [`paths`] die Pfade nach XDG
+//! - [`private_dir`] das private Laufzeitverzeichnis, angelegt und geprüft
 //! - [`mod@load`] die sieben Ebenen der Präzedenz
 //! - [`profile`] Profile: `default`, `llm-only`, eigene und das des Projekts
 //! - [`mod@resolve`] welche Profile gelten und woher sie kommen
@@ -50,6 +51,7 @@ pub mod model;
 pub mod origin;
 pub mod paths;
 pub mod pending;
+pub mod private_dir;
 pub mod profile;
 pub mod resolve;
 pub mod schema;

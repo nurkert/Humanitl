@@ -6,6 +6,7 @@ library;
 
 import '../domain/domain.dart';
 import '../ui/shell_command.dart';
+import 'private_path.dart';
 import 'proto_version.dart';
 
 /// Factories for the client-side diagnostics of HUM-019.
@@ -75,6 +76,58 @@ abstract final class ClientDiagnostics {
       fix: byHand
           ? FixAction.copyCommand(command: command.toString())
           : const FixAction.installService(),
+    );
+  }
+
+  /// Section behind [runtimeUntrusted] in the fallback to the temporary
+  /// directory, mirror of
+  /// `humanitl_config::private_dir::OWN_RUNTIME_DIR_DOC_URL`.
+  ///
+  /// It explains how to set `XDG_RUNTIME_DIR` to a directory of one's own for
+  /// the whole session, for bash and for zsh. A link and not a command: which
+  /// login file a session reads depends on shell and display manager, and a
+  /// wrong command in such a file can break the session.
+  static const String ownRuntimeDirDocUrl =
+      'https://github.com/nurkert/Humanitl/blob/main/docs/INSTALL.md#xdg_runtime_dir-ohne-logind';
+
+  /// The sentence a [runtimeUntrusted] in the fallback carries in `why`,
+  /// mirror of `humanitl_config::private_dir::OWN_RUNTIME_DIR_HINT`.
+  static const String ownRuntimeDirHint =
+      'daemon, CLI and app must all see the same XDG_RUNTIME_DIR, set for the whole session (see the linked section for bash and zsh), and it takes effect after logging in again; HUM-222 will let the clients find the directory themselves';
+
+  /// `DAEMON_001`: the runtime directory or the token is a symlink, belongs to
+  /// another account or is open to group and others (HUM-212). The token
+  /// there is not read.
+  ///
+  /// Only in the fallback to the temporary directory ([fallback]) does a
+  /// directory of one's own help; in a session with `/run/user/<uid>` another
+  /// `XDG_RUNTIME_DIR` would break Wayland, PipeWire and D-Bus. There the fix
+  /// is `chmod` for open permissions and none for a foreign owner or a
+  /// symlink, which this account cannot repair.
+  static Diagnostic runtimeUntrusted(
+    PrivatePathProblem problem, {
+    required bool fallback,
+  }) {
+    if (fallback) {
+      return Diagnostic(
+        code: DiagnosticCodes.daemonUnreachable,
+        severity: Severity.error,
+        why: '${problem.why}; $ownRuntimeDirHint',
+        fix: const FixAction.openUrl(url: ownRuntimeDirDocUrl),
+      );
+    }
+    return Diagnostic(
+      code: DiagnosticCodes.daemonUnreachable,
+      severity: Severity.error,
+      why: problem.why,
+      // A line break in the path would not survive the copy from the
+      // diagnostic: then there is no command, as in [exportRefusal] and on
+      // the daemon side.
+      fix: problem.open && !problem.path.contains(RegExp('[\r\n]'))
+          ? FixAction.copyCommand(
+              command: 'chmod go-rwx ${shellQuote(problem.path)}',
+            )
+          : null,
     );
   }
 

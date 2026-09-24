@@ -128,6 +128,9 @@ void main() {
       // kein Token heißt kein Daemon, nicht falsches Token.
       final Directory dir = Directory.systemTemp.createTempSync('humanitl-');
       addTearDown(() => dir.deleteSync(recursive: true));
+      // Das Verzeichnis ist privat wie beim Daemon (HUM-212); es fehlt nur
+      // das Token.
+      Process.runSync('chmod', <String>['700', dir.path]);
       final GrpcDaemonClient client = GrpcDaemonClient(
         socketPath: '${dir.path}/daemon.sock',
         tokenPath: '${dir.path}/token',
@@ -150,6 +153,10 @@ void main() {
       final Directory dir = Directory.systemTemp.createTempSync('humanitl-');
       addTearDown(() => dir.deleteSync(recursive: true));
       File('${dir.path}/token').writeAsStringSync('secret\n');
+      // Wie der Daemon: Verzeichnis 0700 und Token 0600, sonst traut der
+      // Client ihnen nicht (HUM-212).
+      Process.runSync('chmod', <String>['700', dir.path]);
+      Process.runSync('chmod', <String>['600', '${dir.path}/token']);
       final GrpcDaemonClient client = GrpcDaemonClient(
         socketPath: '${dir.path}/daemon.sock',
         tokenPath: '${dir.path}/token',

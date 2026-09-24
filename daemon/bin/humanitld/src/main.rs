@@ -36,10 +36,9 @@ mod audit_retention;
 mod audit_sink;
 mod systemd;
 
-use std::fs::{self, Permissions};
+use std::fs;
 use std::io;
 use std::os::unix::ffi::OsStrExt as _;
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Arc, OnceLock};
@@ -51,7 +50,8 @@ use humanitl_audit::{
     Anchor, AnchorMirror, AuditHandle, AuditKey, AuditWriter, RecordKind, WriterOptions, sha256_hex,
 };
 use humanitl_catalog::Catalog;
-use humanitl_config::{Config, DIR_MODE, Paths as XdgPaths, ResolverConfig, WorkMode};
+use humanitl_config::private_dir::{ensure_private_dir, with_own_runtime_dir_fix};
+use humanitl_config::{Config, Paths as XdgPaths, ResolverConfig, WorkMode};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, FlowEvent, SessionId, Severity};
@@ -298,9 +298,9 @@ async fn run_daemon(cli: &Cli, passed: Option<systemd::Passed>) -> Result<(), Di
     // was Dateien anlegt. Ein zweiter Start darf dem ersten nichts wegnehmen:
     // der Proxy-Socket wird beim Binden ersetzt, und ein später abgebrochener
     // zweiter Lauf hätte dem ersten damit den Weg in die Sandbox abgeschnitten.
-    let paths = Runtime::resolve(cli.socket.clone())?;
+    let (paths, proxy_path) = Runtime::for_daemon(cli.socket.clone())?;
     let socket = daemon_socket(&paths, passed)?;
-    free_socket(&xdg.proxy_socket(), ADVICE_PROXY_SOCKET)?;
+    free_socket(&proxy_path, ADVICE_PROXY_SOCKET)?;
 
     let base = load_config(&xdg)?;
     let config = base.config.clone();
@@ -357,7 +357,7 @@ async fn run_daemon(cli: &Cli, passed: Option<systemd::Passed>) -> Result<(), Di
     let resolver = Arc::new(ResolverPort::from_config(&config.resolver)?);
     let proxy_socket = proxy.start_session(
         session,
-        &xdg.proxy_socket(),
+        &proxy_path,
         build_handler(
             &config,
             &HandlerWiring {
@@ -1710,6 +1710,16 @@ async fn run_fake(cli: &Cli, path: &Path) -> Result<(), Diagnostic> {
     serve(daemon, &paths).await
 }
 
+/// Was dieser Lauf bedient: der echte Daemon mit Proxy-Socket unter dem
+/// Laufzeitverzeichnis, oder der Abspieler ohne.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Serve {
+    /// Der echte Daemon; der Proxy-Socket liegt unter dem Laufzeitverzeichnis.
+    Daemon,
+    /// `--fake`: nur gRPC-Socket und Token.
+    Fake,
+}
+
 /// Wem das Verzeichnis gehört, in dem der Socket liegt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DirOwner {
@@ -1742,12 +1752,58 @@ impl Runtime {
     /// Rückfallwege aus `humanitl-config`; mit `--socket` liegt die
     /// Token-Datei neben dem Socket, damit ein Client beides an einer Stelle
     /// findet.
+    ///
+    /// Für den Abspieler (`--fake`), der keinen Proxy-Socket bindet; der echte
+    /// Daemon nimmt [`Runtime::for_daemon`].
     fn resolve(socket: Option<PathBuf>) -> Result<Self, Diagnostic> {
+        Self::resolve_in(&XdgPaths::from_process(), socket, Serve::Fake)
+    }
+
+    /// Die Pfade des echten Daemons samt Proxy-Socket.
+    ///
+    /// Den Pfad des Proxy-Sockets gibt es nur hier, nachdem das
+    /// Laufzeitverzeichnis als eigenes vorbereitet ist, auch mit `--socket`:
+    /// ein fremdes Verzeichnis dort könnte sein Unterverzeichnis `proxy`
+    /// austauschen (HUM-212). Wer den Daemon versehentlich über
+    /// [`Runtime::resolve`] startet, hat keinen Proxy-Pfad und kompiliert
+    /// nicht.
+    fn for_daemon(socket: Option<PathBuf>) -> Result<(Self, PathBuf), Diagnostic> {
+        Self::for_daemon_in(&XdgPaths::from_process(), socket)
+    }
+
+    /// Wie [`Runtime::for_daemon`], mit den XDG-Pfaden als Wert.
+    fn for_daemon_in(
+        xdg: &XdgPaths,
+        socket: Option<PathBuf>,
+    ) -> Result<(Self, PathBuf), Diagnostic> {
+        let runtime = Self::resolve_in(xdg, socket, Serve::Daemon)?;
+        Ok((runtime, xdg.proxy_socket()))
+    }
+
+    /// Wie [`Runtime::resolve`], mit den XDG-Pfaden als Wert.
+    fn resolve_in(
+        xdg: &XdgPaths,
+        socket: Option<PathBuf>,
+        serve: Serve,
+    ) -> Result<Self, Diagnostic> {
+        let runtime = xdg.runtime_dir();
+        // Nur im `/tmp`-Rückfall hilft ein eigenes Laufzeitverzeichnis unter
+        // dem Heimatverzeichnis; sonst bliebe der Befund ohne diesen Vorschlag.
+        let own_runtime = || {
+            ensure_private_dir(&runtime.path, xdg.env().uid()).map_err(|diagnostic| {
+                if runtime.diagnostic.is_some() {
+                    with_own_runtime_dir_fix(diagnostic)
+                } else {
+                    diagnostic
+                }
+            })
+        };
         if let Some(path) = socket {
+            if serve == Serve::Daemon {
+                own_runtime()?;
+            }
             return Self::at(path, DirOwner::User);
         }
-        let xdg = XdgPaths::from_process();
-        let runtime = xdg.runtime_dir();
         if let Some(diagnostic) = &runtime.diagnostic {
             tracing::info!(
                 code = %diagnostic.code,
@@ -1755,6 +1811,8 @@ impl Runtime {
                 "runtime directory"
             );
         }
+        check_sun_path(&xdg.daemon_socket(), DirOwner::Daemon)?;
+        own_runtime()?;
         Self::at(xdg.daemon_socket(), DirOwner::Daemon)
     }
 
@@ -1789,15 +1847,17 @@ impl Runtime {
 /// ~/x.sock` darf das Heimatverzeichnis nicht auf `0700` setzen. Es wird aber
 /// auch nicht hingenommen, wenn es offen ist: Socket und Token gehören in ein
 /// Verzeichnis, das nur der Nutzer öffnen kann ([`check_private_dir`]).
+///
+/// Das eigene Verzeichnis übernimmt der Daemon nur, wenn es kein Symlink ist
+/// und ihm gehört ([`ensure_private_dir`], HUM-212): im Rückfall nach
+/// `$TMPDIR/humanitl-<uid>` ist der Name vorhersagbar, und ein anderes Konto
+/// könnte das Verzeichnis vorab angelegt haben.
 fn prepare_dir(dir: &Path, owner: DirOwner) -> Result<(), Diagnostic> {
+    let uid = XdgPaths::from_process().env().uid();
     if owner == DirOwner::Daemon || !dir.exists() {
-        fs::create_dir_all(dir)
-            .map_err(|error| io_diagnostic("create the runtime directory", dir, &error))?;
-        fs::set_permissions(dir, Permissions::from_mode(DIR_MODE))
-            .map_err(|error| io_diagnostic("set 0700 on the runtime directory", dir, &error))?;
-        return Ok(());
+        return ensure_private_dir(dir, uid);
     }
-    check_private_dir(dir, XdgPaths::from_process().env().uid())
+    check_private_dir(dir, uid)
 }
 
 /// Weist ein vorhandenes Socket-Verzeichnis ab, das nicht `uid` gehört oder
@@ -2062,7 +2122,7 @@ mod tests {
     use humanitl_rules::{RequestKey, Verdict};
 
     use super::{
-        ADVICE_DAEMON_SOCKET, Config, DirOwner, ResolverConfig, Runtime, XdgPaths,
+        ADVICE_DAEMON_SOCKET, Config, DirOwner, ResolverConfig, Runtime, Serve, XdgPaths,
         announce_overrides, check_private_dir, fix_hint, free_socket, load_rules, parse_speed,
         probe_with_roots, shutdown_runtime, test_ca_roots,
     };
@@ -2171,6 +2231,91 @@ mod tests {
         Runtime::at(own.join("daemon.sock"), DirOwner::Daemon).unwrap();
 
         assert_eq!(mode_of(&own), 0o700);
+    }
+
+    /// Mit `--socket` liegt der Proxy-Socket trotzdem unter dem
+    /// Laufzeitverzeichnis. Ein fremdes dort wird abgewiesen, bevor der Proxy
+    /// darunter bindet (HUM-212); hier steht ein Symlink für das fremde
+    /// Verzeichnis, weil ein Test kein fremdes Konto hat.
+    #[test]
+    fn with_socket_the_runtime_directory_of_the_proxy_is_still_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = dir.path().join("run");
+        fs::create_dir(&runtime).unwrap();
+        let elsewhere = dir.path().join("elsewhere");
+        fs::create_dir(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, runtime.join("humanitl")).unwrap();
+        let xdg = XdgPaths::new(humanitl_config::Env::from_pairs([(
+            "XDG_RUNTIME_DIR",
+            runtime.to_str().unwrap(),
+        )]));
+        let socket = dir.path().join("own").join("d.sock");
+
+        // Der Weg, den `run_daemon` nimmt: nur `for_daemon` liefert den
+        // Proxy-Pfad, und es prüft das Laufzeitverzeichnis.
+        let error = Runtime::for_daemon_in(&xdg, Some(socket.clone())).unwrap_err();
+        assert_eq!(error.code.as_str(), "DAEMON_004");
+        assert!(error.why.contains("symlink"), "{}", error.why);
+
+        // Ohne Proxy (`--fake`) bleibt das Laufzeitverzeichnis unberührt.
+        Runtime::resolve_in(&xdg, Some(socket), Serve::Fake).unwrap();
+    }
+
+    /// Im `/tmp`-Rückfall schlägt ein fremdes Laufzeitverzeichnis das eigene
+    /// unter dem Heimatverzeichnis vor, in einer Sitzung mit
+    /// `XDG_RUNTIME_DIR` nicht: dort zerlegte der Befehl die grafische Sitzung.
+    #[test]
+    fn only_the_fallback_proposes_an_own_runtime_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        // Eine UID ohne `/run/user/<uid>`; das Verzeichnis gehört dem echten
+        // Konto und ist für diese UID fremd.
+        let uid = 3_999_999_999;
+        let fallback = dir.path().join(format!("humanitl-{uid}"));
+        fs::create_dir(&fallback).unwrap();
+        let xdg = XdgPaths::new(
+            humanitl_config::Env::from_pairs([("TMPDIR", dir.path().to_str().unwrap())])
+                .with_uid(uid),
+        );
+        assert!(
+            xdg.runtime_dir().diagnostic.is_some(),
+            "the fallback is taken"
+        );
+        let error = Runtime::resolve_in(&xdg, None, Serve::Fake).unwrap_err();
+        assert_eq!(error.code.as_str(), "DAEMON_004");
+        assert_eq!(
+            error.fix,
+            Some(humanitl_config::private_dir::own_runtime_dir_fix())
+        );
+
+        let runtime = dir.path().join("run");
+        fs::create_dir(&runtime).unwrap();
+        std::os::unix::fs::symlink(&fallback, runtime.join("humanitl")).unwrap();
+        let xdg = XdgPaths::new(humanitl_config::Env::from_pairs([(
+            "XDG_RUNTIME_DIR",
+            runtime.to_str().unwrap(),
+        )]));
+        let error = Runtime::resolve_in(&xdg, None, Serve::Fake).unwrap_err();
+        assert_eq!(error.code.as_str(), "DAEMON_004");
+        assert_eq!(error.fix, None);
+    }
+
+    /// Ein Symlink an der Stelle des eigenen Laufzeitverzeichnisses, etwa im
+    /// Rückfall unter `/tmp` von einem anderen Konto gelegt, wird abgewiesen
+    /// und nicht verfolgt (HUM-212).
+    #[test]
+    fn a_symlink_in_place_of_the_daemons_own_directory_is_daemon_004() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("elsewhere");
+        fs::create_dir(&target).unwrap();
+        fs::set_permissions(&target, Permissions::from_mode(0o755)).unwrap();
+        let own = dir.path().join("humanitl");
+        std::os::unix::fs::symlink(&target, &own).unwrap();
+
+        let error = Runtime::at(own.join("daemon.sock"), DirOwner::Daemon).unwrap_err();
+
+        assert_eq!(error.code.as_str(), "DAEMON_004");
+        assert!(error.why.contains("symlink"), "{}", error.why);
+        assert_eq!(mode_of(&target), 0o755, "the link target is not touched");
     }
 
     #[test]

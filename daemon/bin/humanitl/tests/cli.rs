@@ -154,8 +154,13 @@ impl SilentSocket {
     fn start(harness: &Harness) -> Self {
         let paths = harness.paths();
         let socket = paths.daemon_socket();
-        std::fs::create_dir_all(socket.parent().expect("the socket has a directory"))
-            .expect("the runtime directory");
+        // Wie der Daemon: das Laufzeitverzeichnis ist 0700, sonst traut der
+        // Client dem Token darin nicht (HUM-212).
+        humanitl_config::private_dir::ensure_private_dir(
+            socket.parent().expect("the socket has a directory"),
+            humanitl_config::private_dir::process_uid(),
+        )
+        .expect("the runtime directory");
         let token = auth::new_token().expect("a token");
         auth::write_token(&paths.token_path(), &token).expect("the token is written");
         let listener = std::os::unix::net::UnixListener::bind(&socket).expect("the socket binds");
