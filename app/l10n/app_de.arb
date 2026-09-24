@@ -852,7 +852,7 @@
   "diagDAEMON005Title": "Fremde Unit-Datei wird nicht überschrieben",
   "diagDAEMON005Why": "Am Ort der Unit liegt schon eine Datei, die Humanitl nicht geschrieben hat.",
   "diagDAEMON006Title": "Unit-Datei nicht schreibbar",
-  "diagDAEMON006Why": "Die Unit-Datei lässt sich nicht schreiben: Rechte, Verzeichnis oder Dateisystem.",
+  "diagDAEMON006Why": "Die Unit-Datei lässt sich nicht lesen, schreiben oder beiseitelegen: Rechte, Verzeichnis oder Dateisystem.",
   "diagDAEMON007Title": "humanitld liegt nicht neben humanitl",
   "diagDAEMON007Why": "Neben der Kommandozeile liegt kein humanitld, das die Unit starten könnte.",
   "diagDAEMON008Title": "systemd hat die Unit nicht übernommen",

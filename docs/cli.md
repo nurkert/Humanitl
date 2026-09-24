@@ -351,7 +351,21 @@ Paket als root nicht kann: `systemctl --user daemon-reload` und
 Units, weil ein Client das Token liest, bevor er den Socket öffnet, und das
 Token erst der laufende Daemon schreibt. Die Ausgabe nennt als `unit` die Unit
 des Pakets und als `action` das Wort `packaged`; unter `--json` stehen die
-Namen in `units`. Aus einem AppImage und mit `--bin-dir` gilt dieser Weg nicht:
+Namen in `units`. Nach der Aktivierung stehen in `unit` und `exec_start`, was
+systemd wirklich geladen hat (`systemctl --user show -p FragmentPath,ExecStart`),
+nicht, was in der Datei des Pakets steht; `unit_text` ist dann der Text dieser
+geladenen Datei und `null`, wenn sie sich nicht lesen lässt. Liegt unter
+`~/.config/systemd/user/`
+noch die eigene Unit einer früheren Installation (erste Zeile ist die Marke),
+verdeckte sie die des Pakets: Der Befehl kündigt es an, legt sie samt Verweis
+der Aktivierung als `humanitld.service.bak` beiseite (oder `.bak.N`, wenn der
+Name vergeben ist; `set_aside` in der Ausgabe), startet den Dienst neu und
+legt beides zurück, wenn das scheitert (HUM-211). Beiseitegelegt wird nur,
+wenn auch aktiviert wird: Unter `--print`, `--no-start` oder ohne `systemctl`
+bleibt sie liegen und steht als `shadowed_by` in der Ausgabe. Eine Datei dort
+ohne die Marke bleibt liegen, und der Befehl bricht mit `DAEMON_005` ab, auch
+unter `--print`.
+Aus einem AppImage und mit `--bin-dir` gilt dieser Weg nicht:
 Beide nennen ausdrücklich einen anderen Daemon als den des Pakets. Ohne Paket
 schreibt der Befehl nie eine Socket-Unit; der Daemon bindet seinen Socket dann
 selbst.
