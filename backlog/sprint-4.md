@@ -94,6 +94,7 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-172 | Die Sprache des Fensters kommt nicht aus `ui.language` | S | HUM-052, HUM-069 |
 | HUM-173 | Das Kontextmenü eines Eingabefelds stürzt ab | S | HUM-035 |
 | HUM-225 | Die Release-Notes der Vorabversionen sind deutsch | S | HUM-053 |
+| HUM-226 | Eine Seite der Audit-Tabelle liest von hinten, solange die Kette heil ist | M | HUM-163 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -3482,6 +3483,8 @@ HUM-156 beantwortet `Audit(Query)` und `Audit(Head)` aus der Datei: Jede Seite l
 ### Ziel
 Eine Seite der Tabelle kostet unabhängig von der Länge der Kette höchstens einen festen Anteil der Datei, gemessen mit einem Bench-Test über 100 000 Records.
 
+**Neu gefasst am 2026-09-24 nach dem Review:** Gebaut ist eine Seite, deren Kosten weiter linear mit der Datei wachsen, nur mit etwa einem Drittel der alten Steigung (Messung unter Akzeptanzkriterien). Über 100 000 Records liegt eine Seite damit bei rund 150 ms, unter 200 ms; nach dieser Messung erreicht sie die 200 ms bei etwa 130 000 Records. Das ursprüngliche Ziel, Kosten unabhängig von der Länge der Kette, ist nicht erreicht und wandert nach HUM-226.
+
 ### Nicht-Ziel
 Ein Index in `SQLite`, der eine zweite Wahrheit neben der Kette wäre; die Datei bleibt die Quelle.
 
@@ -3500,11 +3503,22 @@ Erst messen: Seite ohne Filter und mit Filter über 100 000 Records. Liegt eine 
 `a_page_over_100k_records_is_fast` (Bench), `query_pages_newest_first_with_a_cursor` bleibt grün.
 
 ### Akzeptanzkriterien
-- [ ] Die Dauer einer Seite über 100 000 Records ist gemessen und steht hier.
-- [ ] `make check` grün.
+- [x] Die Dauer einer Seite über 100 000 Records ist gemessen und steht hier. **Gemessen am 2026-09-24** mit `a_page_over_100k_records_is_fast` (`cargo test -p humanitl-audit --release --test bench -- --ignored --nocapture`, i7-8550U, `nice -n 19` auf 6 Kernen, Datei 58 988 895 Bytes im tmpfs, Seiten von 200). Vorher, jede Zeile als JSON: Seite ohne Filter 451 ms und 404 ms in zwei Läufen, Filter auf jeden hundertsten Record 451 ms und 367 ms. Erste Fassung, nur der Teil hinter `data` byteweise: ohne Filter 117 ms und 100 ms, zweite Seite über den Cursor 117 ms und 98 ms, Filter auf jeden Record 117 ms und 106 ms, Filter auf jeden hundertsten 114 ms und 98 ms; `verify` im selben Lauf 1,7 s und 1,4 s. **Nach dem Review, mit Prüfung von `data`** (Last des Rechners um 8): ohne Filter 152 ms und 148 ms, zweite Seite über den Cursor 163 ms und 148 ms, Filter auf jeden Record 151 ms und 169 ms, Filter auf jeden hundertsten 146 ms und 149 ms.
+- [x] `make check` grün. **Gemessen am 2026-09-24**: `STRICT=1 make check` im Arbeitsbaum mit Exit 0, auch erneut nach der Nachbesserung aus dem Review, darin `query_pages_newest_first_with_a_cursor`, die fünf Tests in `query::quick::tests` und der in `query::data::tests` grün; einzig übersprungen ist die Schema-Prüfung des Katalogs (`check-jsonschema` fehlt auf diesem Rechner).
 
 ### Fallstricke
 - Der Cursor ist eine Nummer, keine Position in der Datei; wer von hinten liest, darf sich auf aufsteigende Nummern nur verlassen, solange die Kette heil ist, und muss bei einem Bruch dasselbe liefern wie heute.
+
+### Stand (2026-09-24)
+Eine Seite ohne Filter lag mit rund 400 ms über der Grenze von 200 ms, also war Handeln nötig. Umgesetzt ist nicht das Lesen von hinten, sondern ein Lesen jeder Zeile ohne JSON (`daemon/crates/audit/src/query/quick.rs`). Der Grund steht im Fallstrick: Die Gesamtzahl einer Seite und das gemeldete Ende hängen an der ganzen Datei, und ob die Kette heil ist, lässt sich vom Ende aus nicht sehen. Eine Zeile mit Lücke oder fremdem Inhalt mitten in der Datei änderte die Gesamtzahl, ohne dass ein Lesen vom Ende sie je träfe.
+
+Stattdessen prüft die Seite jede Zeile Byte für Byte, ohne einen JSON-Wert zu bauen: die sieben Schlüssel hinter `data` in kanonischer Reihenfolge, Strings ohne Escape, die Nummer, und `data` selbst als Objekt in genau der Form, die `crate::canonical` schreibt (`daemon/crates/audit/src/query/data.rs`: kein Leerraum, UTF-8, nur die Escapes `\"`, `\\` und `\u00xx`, Ganzzahlen bis 20 Ziffern, Tiefe bis 100). Diese Form ist eine Teilmenge dessen, was `AuditRecord::from_line` als Record liest. Aus dem festen Teil kommen Nummer, Art, Sitzung und Zeitpunkt, also alles, was Filter, Cursor, Gesamtzahl und gemeldetes Ende brauchen. Ganz als JSON gelesen werden nur die Zeilen der Seite, die erste und die letzte. Folgt eine Nummer nicht lückenlos auf die vorige oder hat eine Zeile diese Form nicht, liest die Seite jede Zeile als JSON wie vor HUM-163. Damit gilt der Weg auch mit Filter, und `entries` bleibt eine genaue Zahl, keine Schätzung.
+
+Die Kosten wachsen weiter mit der Datei, nur etwa ein Drittel so steil wie vorher; die 200 ms erreicht eine Seite bei etwa 130 000 Records. Die Datei bleibt die einzige Quelle, es gibt keinen Index. Das Lesen nur vom Ende, solange die Kette als heil bekannt ist, ist HUM-226.
+
+**Nachgebessert nach dem Review (2026-09-24):** Die erste Fassung prüfte `data` nicht. Eine Zeile mit kaputtem `data`, mit einem Schlüssel neben `data` oder mit ungültigem UTF-8 zählte dann als Record, die Gesamtzahl lag um eins höher. Seit `data.rs` fällt die Seite bei jeder solchen Zeile auf das volle Lesen zurück.
+
+Tests: `a_broken_chain_pages_exactly_as_before` vergleicht bei elf Arten von Bruch (fremde Zeile, fehlender Record, kaputter Zwilling, kaputte erste und letzte Zeile, zweimal geschriebene Kette, nicht kanonischer Record, Escape in der Art, leere Zeile, abgerissene letzte Zeile, fehlendes letztes `\n`) jede Seite mit dem Lesen jeder Zeile, über fünf Filter, sechs Cursor, sechs gemeldete Enden und drei Seitengrößen. `a_line_with_a_broken_data_part_counts_as_before` tut dasselbe für eine Zeile mitten in der Kette, außerhalb der Seite, mit ungültigem JSON in `data`, einem Schlüssel neben `data`, doppeltem `data`, einer Zahl, die JSON nicht kennt, und ungültigem UTF-8, und zeigt, dass der schnelle Weg dort aufgibt. `a_gap_or_a_twin_in_the_numbers_gives_up` zeigt dasselbe für eine Lücke und einen Zwilling in den Nummern. `only_what_serde_json_reads_as_an_object_passes` hält die Prüfung von `data` gegen `serde_json`. `a_whole_chain_pages_from_the_fixed_part_alone` zeigt, dass eine heile Kette den schnellen Weg nimmt und dasselbe liefert, `the_fixed_part_is_read_behind_data` prüft das Lesen des festen Teils. `query_pages_newest_first_with_a_cursor` bleibt grün.
 
 ### Referenzen
 HUM-050 (Bench), HUM-051 (Seiten von 200), HUM-156.
@@ -4892,3 +4906,49 @@ Die Umstellung des übrigen Projekts auf Englisch (BACKLOG.md Abschnitt 9, Punkt
 
 ### Referenzen
 HUM-053; `.github/workflows/release.yml` (Schritt „Release notes").
+
+---
+
+## HUM-226 · Eine Seite der Audit-Tabelle liest von hinten, solange die Kette heil ist
+Sprint: 4 · Größe: M · Abhängigkeiten: HUM-163 · Blockiert: —
+
+### Kontext
+HUM-163 hat eine Seite der Audit-Tabelle über 100 000 Records gemessen: rund 400 ms, solange jede Zeile als JSON gelesen wurde, rund 150 ms, seit jede Zeile nur noch Byte für Byte auf ihre kanonische Form geprüft wird (`daemon/crates/audit/src/query/quick.rs` und `data.rs`, Zahlen unter HUM-163). Die Kosten wachsen weiter linear mit der Datei; bei etwa 130 000 Records liegt eine Seite wieder bei 200 ms. Grund ist, dass die Seite jede Zeile ansehen muss: Ob die Kette heil ist, entscheidet über Gesamtzahl und gemeldetes Ende, und vom Ende aus sieht niemand einen Bruch in der Mitte.
+
+### Ziel
+Eine Seite ohne Filter liest nur das Ende der Datei, wenn schon bekannt ist, dass die Kette bis dahin heil ist. Woher das bekannt ist, klärt das Issue, etwa aus dem Stand der letzten Prüfung (`verify` bis Nummer n mit ihrem Byte-Versatz und Hash) oder aus dem Kopf, den der Schreiber beim Öffnen gelesen und geprüft hat. Ist nichts bekannt oder passt das Bekannte nicht mehr zur Datei, liest die Seite wie nach HUM-163.
+
+### Nicht-Ziel
+Ein Index in `SQLite` als zweite Wahrheit neben der Kette.
+
+### Betroffene Pfade
+- `daemon/crates/audit/src/query/quick.rs`
+- `daemon/crates/audit/src/query/data.rs`
+- der Ort, der den Stand „heil bis Nummer n“ trägt: je nach Entscheidung `daemon/crates/audit/src/verify.rs` (Stand der letzten Prüfung) oder `daemon/crates/audit/src/writer.rs` (geprüfter Kopf beim Öffnen)
+- `daemon/crates/audit/tests/bench.rs`
+
+### Spezifikation
+Der bekannte Stand nennt mindestens Nummer, Byte-Versatz hinter ihrer Zeile und Hash des Records mit dieser Nummer. Eine Seite ohne Filter liest nur von diesem Versatz bis zum gemeldeten Ende und zählt die Records davor aus dem Stand, wenn die Zeile vor dem Versatz noch den genannten Hash trägt und die Datei seitdem nur gewachsen ist. Sonst liest sie wie nach HUM-163. Alles Weitere entscheidet das Issue.
+
+### Schritte
+1. Träger des Stands festlegen und begründen.
+2. Stand an genau diese Datei binden (Versatz, Hash der Zeile, Länge nur wachsend).
+3. Schnellen Weg in `quick.rs` um das Lesen ab dem Versatz ergänzen, Rückfall wie bisher.
+4. Bench über 100 000 und 1 000 000 Records, Zahlen hier eintragen.
+
+### Tests
+- Bench `a_page_over_100k_records_is_fast` und ein Gegenstück über 1 000 000 Records (`#[ignore]`).
+- Ein Bruch vor und hinter dem bekannten Stand liefert dasselbe wie `every_line`, mit Mutationsprobe.
+- Eine Datei, die nach dem Stand ersetzt oder gekürzt wurde, fällt auf das volle Lesen zurück.
+
+### Akzeptanzkriterien
+- [ ] Die Dauer einer Seite ohne Filter ist über 100 000 und über 1 000 000 Records gemessen und unabhängig von der Länge der Kette; die Zahlen stehen hier.
+- [ ] Bei einem Bruch mitten in der Kette, auch hinter dem bekannten Stand, liefert jede Seite dasselbe wie das Lesen jeder Zeile (Test, mit Mutationsprobe).
+- [ ] `make check` grün.
+
+### Fallstricke
+- Ein Bruch mitten in der Kette ändert Gesamtzahl und gemeldetes Ende, ohne dass eine Seite vom Ende aus ihn sieht. Das Bekannte muss deshalb an genau diese Datei gebunden sein: eine ersetzte, gekürzte oder zwischen zwei Seiten neu geschriebene Datei (Aufbewahrung, HUM-157) darf nicht als heil gelten.
+- Der Cursor ist eine Nummer, keine Position in der Datei.
+
+### Referenzen
+HUM-163 (Messung, schneller Weg), HUM-156 (Seiten aus der Datei), HUM-050 (Prüfung), HUM-157 (Aufbewahrung).
