@@ -6,6 +6,7 @@
 /// [daemonClientProvider] mit einem [FakeDaemonClient].
 library;
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import 'daemon_client.dart';
@@ -34,15 +35,28 @@ DaemonClient daemonClient(Ref ref) {
   return client;
 }
 
-GrpcDaemonClient _grpcClient(LaunchOptions options) {
+GrpcDaemonClient _grpcClient(LaunchOptions options) => grpcClientFor(options);
+
+/// The gRPC client for [options]; [resolve] stands in for
+/// [DaemonPaths.resolve] in tests.
+///
+/// The client learns here whether the runtime directory is the fallback below
+/// the temporary directory: only then does an untrusted directory propose one
+/// of the user's own (HUM-212).
+@visibleForTesting
+GrpcDaemonClient grpcClientFor(
+  LaunchOptions options, {
+  DaemonPaths Function() resolve = DaemonPaths.resolve,
+}) {
   final String? socket = options.socketPath;
   final DaemonPaths paths = socket == null
-      ? DaemonPaths.resolve()
+      ? resolve()
       : DaemonPaths.besideSocket(socket);
   return GrpcDaemonClient(
     socketPath: paths.socket,
     tokenPath: paths.token,
     fake: options.mode == ClientMode.fakeDaemon,
     socketFlag: socket != null,
+    runtimeFallback: paths.fallbackUsed,
   );
 }

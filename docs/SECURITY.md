@@ -1193,6 +1193,27 @@ Ehrliche Liste dessen, was heute fehlt oder schwächer ist, als man annehmen kö
     aufgezeichnet wird es noch nicht, und ein verweigerter `connect()` erscheint nie einzeln
     (Abschnitt 2, „Was sichtbar wird und was nicht"). Die eigene Art von Eintrag in der Historie
     ist ein eigenes Issue.
+12. **Der Rückfall nach `/tmp` für das Laufzeitverzeichnis** (HUM-212). Ohne `XDG_RUNTIME_DIR`
+    und ohne `/run/user/<uid>`, also ohne logind, legen Daemon und Clients Socket und Token unter
+    `$TMPDIR/humanitl-<uid>` ab. Der Name ist vorhersagbar, und `/tmp` teilen sich alle Konten.
+    Ein anderes Konto kann das Verzeichnis vor dem ersten Start anlegen oder einen Symlink an
+    seine Stelle legen. Beides wird abgewiesen, nicht hingenommen. Der Daemon übernimmt ein
+    vorhandenes Verzeichnis nur, wenn es kein Symlink ist und ihm gehört, sonst `DAEMON_004`.
+    Das gilt auch mit `--socket`, weil der Proxy-Socket immer unter dem Laufzeitverzeichnis
+    liegt.
+    CLI und Oberfläche lesen das Token erst, wenn Verzeichnis und Token-Datei per `lstat`
+    dem eigenen Konto gehören und für Gruppe und Andere zu sind, sonst `DAEMON_001`. Ein Fremder
+    bekommt so weder Tastenanschläge noch Einstellungen. Er kann den Start aber verhindern,
+    solange sein Verzeichnis dort liegt. Abhilfe ist ein eigenes `XDG_RUNTIME_DIR` unter dem
+    Heimatverzeichnis, für die ganze Sitzung gesetzt; Daemon, CLI und Oberfläche müssen dieselbe
+    Variable sehen, und sie gilt erst nach einer neuen Anmeldung. Der Befund verlinkt dafür nur
+    im `/tmp`-Rückfall die Anleitung in `docs/INSTALL.md` („XDG_RUNTIME_DIR ohne logind“); einen
+    Befehl, der Anmeldedateien ändert, schlägt er nicht vor. In einer Sitzung mit
+    `/run/user/<uid>` schlägt er bei offenen Rechten `chmod` vor und sonst nichts. Dass die
+    Clients das eigene Verzeichnis selbst finden, ist HUM-222. `/run/user/<uid>` hilft hier
+    nicht: Es fehlt ja gerade, und anlegen kann es nur root. Der Rückfall bleibt eine
+    Schwachstelle der Verfügbarkeit, keine der Vertraulichkeit.
+
 ## 11. Ausdrücklich außerhalb des Geltungsbereichs
 
 Humanitl beansprucht nicht, gegen Folgendes zu schützen. Wer das braucht, braucht andere Mittel:

@@ -219,6 +219,44 @@ systemctl --user restart humanitld.service
 
 Ein Projekt unter `/tmp` sieht der Daemon wegen `PrivateTmp` gar nicht.
 
+## XDG_RUNTIME_DIR ohne logind
+
+Socket und Token des Daemons liegen im Laufzeitverzeichnis `$XDG_RUNTIME_DIR/humanitl`. Fehlt
+`XDG_RUNTIME_DIR` und gibt es kein `/run/user/<uid>`, etwa ohne logind, weichen Daemon, CLI und
+Oberfläche auf `$TMPDIR/humanitl-<uid>` aus. Diesen Namen kann jedes andere Konto vorab anlegen.
+Humanitl weist ein solches fremdes Verzeichnis ab (`DAEMON_001`, `DAEMON_004`) und startet dann
+nicht, solange es dort liegt (`docs/SECURITY.md` Abschnitt 10, Punkt 12).
+
+Abhilfe ist ein eigenes Laufzeitverzeichnis unter dem Heimatverzeichnis. Daemon, CLI und
+Oberfläche müssen dieselbe Variable sehen; sie gehört deshalb in die Anmeldung und nicht vor
+einen einzelnen Befehl. Das Verzeichnis einmal anlegen:
+
+```sh
+mkdir -p "$HOME/.cache/humanitl-run"
+chmod 700 "$HOME/.cache/humanitl-run"
+```
+
+Dann die folgende Zeile in die Datei eintragen, die die eigene Anmeldung liest. Sie setzt die
+Variable nur, wenn sie fehlt und `/run/user/<uid>` nicht existiert; eine spätere Sitzung mit
+logind behält so ihre eigenen Sockets für Wayland, PipeWire und D-Bus.
+
+```sh
+[ -n "$XDG_RUNTIME_DIR" ] || [ -d "/run/user/$(id -u)" ] || export XDG_RUNTIME_DIR="$HOME/.cache/humanitl-run"
+```
+
+Welche Datei das ist, hängt von der Shell ab:
+
+- `bash` liest bei der Anmeldung nur die erste vorhandene von `~/.bash_profile`,
+  `~/.bash_login` und `~/.profile`. Die Zeile gehört in genau diese Datei. `~/.profile` nur dann
+  neu anlegen, wenn weder `~/.bash_profile` noch `~/.bash_login` existiert.
+- `zsh` liest `~/.zprofile`, nicht `~/.profile`. Die Zeile gehört nach `~/.zprofile`; die Datei
+  darf dafür neu angelegt werden.
+- Display-Manager ohne systemd-Sitzung lesen meist `~/.profile`. Wer die Oberfläche von dort
+  startet, trägt die Zeile zusätzlich dort ein.
+
+Die Zeile wirkt erst nach einer neuen Anmeldung. Danach finden Daemon, CLI und Oberfläche
+dasselbe Verzeichnis. Dass die Clients es ohne diese Zeile selbst finden, ist HUM-222.
+
 ## Paket bauen
 
 ```sh

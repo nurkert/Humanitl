@@ -14,12 +14,11 @@
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 
+use humanitl_config::private_dir::{ensure_private_dir, process_uid};
 use humanitl_core::diagnostics::codes::DAEMON_004;
 use humanitl_core::{Diagnostic, FixAction, SessionId, Severity};
 use tokio::net::UnixListener;
 
-/// Rechte des Socket-Verzeichnisses.
-pub const DIR_MODE: u32 = 0o700;
 /// Rechte der Socket-Datei.
 pub const SOCKET_MODE: u32 = 0o600;
 /// Obergrenze für einen Unix-Socket-Pfad (`sun_path`, inklusive Nullbyte).
@@ -104,21 +103,45 @@ impl SessionSocket {
         &self.listener
     }
 
+    /// Legt das Socket-Verzeichnis an wie der Daemon sein Laufzeitverzeichnis:
+    /// kein Symlink, eigener Besitzer, danach `0700` (HUM-212).
     fn ensure_dir(dir: &Path) -> Result<(), Diagnostic> {
-        let build = || -> std::io::Result<()> {
-            std::fs::create_dir_all(dir)?;
-            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(DIR_MODE))
-        };
-        build().map_err(|err| {
-            Diagnostic::builder(DAEMON_004, Severity::Error)
-                .why(format!("cannot create {} (0700): {err}", dir.display()))
-                .build()
-        })
+        ensure_private_dir(dir, process_uid())
     }
 }
 
 impl Drop for SessionSocket {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use humanitl_core::diagnostics::codes::DAEMON_004;
+
+    use super::SessionSocket;
+
+    /// Ein Symlink an der Stelle des Socket-Verzeichnisses wird abgewiesen,
+    /// nicht verfolgt: sonst läge der Socket in einem Verzeichnis, das ein
+    /// anderes Konto ausgesucht hat (HUM-212).
+    #[tokio::test]
+    async fn a_symlink_in_place_of_the_socket_dir_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("elsewhere");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let dir = tmp.path().join("proxy");
+        std::os::unix::fs::symlink(&target, &dir).unwrap();
+
+        let error = SessionSocket::bind(&dir.join("proxy.sock")).unwrap_err();
+
+        assert_eq!(error.code, DAEMON_004);
+        assert!(error.why.contains("symlink"), "{}", error.why);
+        assert!(!target.join("proxy.sock").exists());
     }
 }

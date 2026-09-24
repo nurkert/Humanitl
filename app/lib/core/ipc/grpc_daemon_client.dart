@@ -21,10 +21,12 @@ import '../domain/domain.dart';
 import 'client_diagnostics.dart';
 import 'convert.dart';
 import 'daemon_client.dart';
+import 'daemon_paths.dart';
 import 'generated/humanitl/v1/humanitl.pbgrpc.dart' as pb;
 // `Rule` and its parts live in their own wire file, and `humanitl.pb.dart`
 // imports it without re-exporting it. Same prefix, one vocabulary.
 import 'generated/humanitl/v1/rules.pb.dart' as pb;
+import 'private_path.dart';
 import 'proto_version.dart';
 
 /// The trailer in which tonic ships a `Diagnostic` with a failed call.
@@ -34,7 +36,10 @@ const String statusDetailsTrailer = 'grpc-status-details-bin';
 class GrpcDaemonClient implements DaemonClient {
   /// Creates a client for the socket at [socketPath] with the token file at
   /// [tokenPath]. [channel] is injectable for tests; [fake] and [socketFlag]
-  /// only shape the fix proposal of a `DAEMON_001`.
+  /// only shape the fix proposal of a `DAEMON_001`. [uid] is the account
+  /// the runtime directory and token must belong to, by default this
+  /// process's real user id; tests pass another one to stand in for a
+  /// foreign owner.
   GrpcDaemonClient({
     required this.socketPath,
     required this.tokenPath,
@@ -42,7 +47,10 @@ class GrpcDaemonClient implements DaemonClient {
     this.callTimeout = const Duration(seconds: 5),
     this.fake = false,
     this.socketFlag = false,
-  }) : _channel =
+    this.runtimeFallback = false,
+    int? uid,
+  }) : _uid = uid ?? DaemonPaths.currentUid(),
+       _channel =
            channel ??
            ClientChannel(
              InternetAddress(socketPath, type: InternetAddressType.unix),
@@ -57,6 +65,13 @@ class GrpcDaemonClient implements DaemonClient {
 
   /// Path of the token file.
   final String tokenPath;
+
+  final int _uid;
+
+  /// True when the runtime directory is the fallback below the temporary
+  /// directory ([DaemonPaths.fallbackUsed]); only then does an untrusted
+  /// directory propose one of the user's own (HUM-212).
+  final bool runtimeFallback;
 
   /// Deadline of a unary call. Streams have none.
   final Duration callTimeout;
@@ -650,7 +665,29 @@ class GrpcDaemonClient implements DaemonClient {
 
   /// The token file is written by the daemon at start and removed at exit;
   /// an unreadable file therefore means "no daemon", not "bad token".
+  ///
+  /// Before it is read, the directory that holds it and the file itself must
+  /// pass [privatePathProblem]: no symlink, owned by this account, closed to
+  /// group and others (HUM-212). With the directory checked nobody else can
+  /// have put the socket beside it either.
   Future<String> _readToken() async {
+    final int slash = tokenPath.lastIndexOf('/');
+    final String dir = slash < 0
+        ? '.'
+        : (slash == 0 ? '/' : tokenPath.substring(0, slash));
+    final PrivatePathProblem? problem =
+        privatePathProblem(dir, PrivateEntry.directory, uid: _uid) ??
+        privatePathProblem(tokenPath, PrivateEntry.file, uid: _uid);
+    if (problem != null) {
+      throw DaemonException(
+        problem.missing
+            ? _unreachable(problem.why)
+            : ClientDiagnostics.runtimeUntrusted(
+                problem,
+                fallback: runtimeFallback,
+              ),
+      );
+    }
     try {
       final String token = (await File(tokenPath).readAsString()).trim();
       if (token.isEmpty) {
