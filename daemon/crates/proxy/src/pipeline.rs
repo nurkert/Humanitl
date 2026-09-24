@@ -27,6 +27,13 @@
 //! `FlowEvent::Analyzed`, bevor eine Regel greift (`backlog/sprint-2.md`
 //! HUM-023, Schritt 4).
 //!
+//! Trägt der Flow den Befund der harten Sperre
+//! ([`Flow::send_refusal`], `hold.hard_block_checksum_secrets`), gibt keine
+//! Strategie ihn frei: [`RulesPipeline`] macht aus einer Freigabe durch Regel
+//! oder Durchreiche eine Sperre des Systems, [`PassthroughPipeline`] ebenso,
+//! und [`AskPipeline`] hält ihn, wo die Warteschlange ein `Allow` zurückweist
+//! (HUM-159).
+//!
 //! Den Eintrag in die [`FlowRegistry`](crate::registry::FlowRegistry) macht
 //! der Handler, bevor er hierher kommt: Er allein kennt den Bericht des Scans
 //! und trägt `findings_truncated` ein. Danach schreibt sich der Datensatz von
@@ -46,6 +53,7 @@ use humanitl_core::{
 use humanitl_rules::{RequestKey, RuleSet, Verdict};
 
 use crate::connect::requested_upgrade;
+use crate::findings::hard_block_decision;
 use crate::hold::HoldQueue;
 use crate::session::SessionSettings;
 
@@ -133,8 +141,21 @@ impl FlowPipeline for AskPipeline {
     /// mitführt; `Recorded` hängt der Handler an, nachdem die Block-Antwort
     /// steht.
     async fn decide(&self, flow: &mut Flow, _meta: &ConnMeta) -> Decision {
+        let timeout = self.timeout();
+        // Ohne Frist (`ask_mode = none`, `hold.timeout_secs = 0`) fragt
+        // niemand, und ein Flow unter der harten Sperre endete sonst als
+        // Ablauf: Der Agent bekäme keinen Satz, der sagt, warum, und im Audit
+        // stünde `timeout` statt `secret` (HUM-159).
+        if timeout.is_zero() && flow.send_refusal.is_some() {
+            return decide_now(
+                &self.queue,
+                flow,
+                hard_block_decision(),
+                DecisionSource::System,
+            );
+        }
         let deadline = Instant::now()
-            .checked_add(self.timeout())
+            .checked_add(timeout)
             .unwrap_or_else(Instant::now);
         // Das Future aus `hold` leiht `flow` bis zur Entscheidung; im
         // Fehlerfall endet die Leihe mit dem `match`, deshalb die Trennung.
@@ -168,21 +189,40 @@ impl PassthroughPipeline {
 #[async_trait]
 impl FlowPipeline for PassthroughPipeline {
     async fn decide(&self, flow: &mut Flow, _meta: &ConnMeta) -> Decision {
-        match flow.apply(
-            humanitl_core::TransitionInput::Decide {
-                decision: Decision::Allow,
-                source: DecisionSource::Passthrough,
-            },
-            SystemTime::now(),
-        ) {
-            Ok(event) => {
-                self.queue.publish(event);
-                Decision::Allow
-            }
-            Err(err) => {
-                tracing::error!(flow = %flow.id, %err, "passthrough decision refused; blocking");
-                system_block(&self.queue, flow)
-            }
+        // Auch der Test-Hook lässt kein Geheimnis unter der harten Sperre
+        // durch (HUM-159).
+        let (decision, source) = if flow.send_refusal.is_some() {
+            (hard_block_decision(), DecisionSource::System)
+        } else {
+            (Decision::Allow, DecisionSource::Passthrough)
+        };
+        decide_now(&self.queue, flow, decision, source)
+    }
+}
+
+/// Entscheidet einen analysierten Flow sofort und veröffentlicht `Decided`.
+///
+/// Lehnt der Automat den Übergang ab, blockt das System (fail-closed).
+fn decide_now(
+    queue: &HoldQueue,
+    flow: &mut Flow,
+    decision: Decision,
+    source: DecisionSource,
+) -> Decision {
+    match flow.apply(
+        humanitl_core::TransitionInput::Decide {
+            decision: decision.clone(),
+            source,
+        },
+        SystemTime::now(),
+    ) {
+        Ok(event) => {
+            queue.publish(event);
+            decision
+        }
+        Err(err) => {
+            tracing::error!(flow = %flow.id, %err, "immediate decision refused; blocking");
+            system_block(queue, flow)
         }
     }
 }
@@ -224,6 +264,7 @@ fn system_block(queue: &HoldQueue, flow: &mut Flow) -> Decision {
 ///
 /// | Verdict | Ergebnis |
 /// | --- | --- |
+/// | `Matched { Allow }` bei gesetztem [`Flow::send_refusal`] | `Decision::Block { BlockReason::Secret }`, Quelle [`DecisionSource::System`], `403` |
 /// | `Matched { Allow }`, `passthrough_llm` | `Decision::Allow`, Quelle [`DecisionSource::Passthrough`], dazu `LLM_005` bei Funden |
 /// | `Matched { Allow }` | `Decision::Allow`, Quelle [`DecisionSource::Rule`] |
 /// | `Matched { Block }` | `Decision::Block { BlockReason::Rule }`, `403` |
@@ -360,22 +401,29 @@ impl RulesPipeline {
         decision: Decision,
         source: DecisionSource,
     ) -> Decision {
-        match flow.apply(
-            humanitl_core::TransitionInput::Decide {
-                decision: decision.clone(),
-                source,
-            },
-            SystemTime::now(),
-        ) {
-            Ok(event) => {
-                self.queue.publish(event);
-                decision
-            }
-            Err(err) => {
-                tracing::error!(flow = %flow.id, %err, "rule decision refused; blocking");
-                system_block(&self.queue, flow)
-            }
+        decide_now(&self.queue, flow, decision, source)
+    }
+
+    /// Wie eine Regel `allow` entscheidet, ohne die harte Sperre zu umgehen.
+    ///
+    /// Trägt der Flow einen [`Flow::send_refusal`], wird aus der Freigabe
+    /// eine Sperre des Systems: Weder eine Regel noch die Durchreiche zum
+    /// Sprachmodell lassen ein bestätigtes Geheimnis ungeändert hinaus. Vor
+    /// HUM-159 schützte die sofortige Sperre im Handler auch diesen Weg; seit
+    /// dort gehalten wird, schließt ihn diese Stelle. Der Befund `HOLD_004`
+    /// steht schon seit dem Scan am Flow.
+    fn allow_by_rule(&self, flow: &mut Flow, rule: RuleId) -> Decision {
+        if flow.send_refusal.is_some() {
+            return self.decide_by_rule(flow, hard_block_decision(), DecisionSource::System);
         }
+        if self.rule_is_passthrough(rule) {
+            // Erst warnen, dann entscheiden: Nach dem Uebergang steht
+            // der Fluss in `Decided`, und die Funde des Scans sind
+            // dort nicht mehr zu haben.
+            self.warn_about_findings(flow);
+            return self.decide_by_rule(flow, Decision::Allow, DecisionSource::Passthrough);
+        }
+        self.decide_by_rule(flow, Decision::Allow, DecisionSource::Rule(rule))
     }
 }
 
@@ -400,16 +448,7 @@ impl FlowPipeline for RulesPipeline {
         // aendert das nichts: Was geblockt wird, wird nicht verbunden.
         flow.allow_private |= self.rule_allows_private(rule);
         match action {
-            Action::Allow => {
-                if self.rule_is_passthrough(rule) {
-                    // Erst warnen, dann entscheiden: Nach dem Uebergang steht
-                    // der Fluss in `Decided`, und die Funde des Scans sind
-                    // dort nicht mehr zu haben.
-                    self.warn_about_findings(flow);
-                    return self.decide_by_rule(flow, Decision::Allow, DecisionSource::Passthrough);
-                }
-                self.decide_by_rule(flow, Decision::Allow, DecisionSource::Rule(rule))
-            }
+            Action::Allow => self.allow_by_rule(flow, rule),
             Action::Block => self.decide_by_rule(
                 flow,
                 Decision::Block {

@@ -115,4 +115,10 @@ abstract final class DiagnosticCodes {
   /// it when no free file name is left in the chosen folder, before the
   /// daemon is asked (HUM-158).
   static const String auditExportUnwritable = 'AUDIT_008';
+
+  /// The request carries a checksum-confirmed secret and
+  /// `hold.hard_block_checksum_secrets` is on: it may leave only edited. The
+  /// daemon announces it on the held flow and answers an allow with it
+  /// (HUM-159); the client never works it out from the configuration.
+  static const String sendRefused = 'HOLD_004';
 }

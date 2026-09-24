@@ -496,6 +496,13 @@ class FakeDaemonClient implements DaemonClient {
         ),
       );
     }
+    // Die harte Sperre vor allem anderen, wie im Daemon: Ein `Allow` auf einen
+    // Flow mit bestätigtem Geheimnis endet mit `HOLD_004`, auch mit
+    // bestätigten Funden, und der Flow bleibt gehalten (HUM-159).
+    final Diagnostic? refusal = _sendRefusal(flow, decision);
+    if (refusal != null) {
+      throw DaemonException(refusal);
+    }
     // The rule first, the decision second, exactly as the daemon does it: a
     // decision that is refused must not leave a rule behind (HUM-027). The
     // flow above is held, so nothing is refused after this point.
@@ -2013,6 +2020,10 @@ class FakeDaemonClient implements DaemonClient {
           (Flow flow) =>
               flow.copyWith(state: FlowState.failed, upstreamError: error),
         );
+      // Die Ansage der harten Sperre steht am Flow, wie im Daemon (HUM-159).
+      case FlowEventDiagnostic(:final diagnostic, flowId: final FlowId id?)
+          when diagnostic.code == DiagnosticCodes.sendRefused:
+        state.update(id, (Flow flow) => flow.copyWith(sendRefusal: diagnostic));
       case FlowEventResponseChunk() ||
           FlowEventLagged() ||
           FlowEventDiagnostic() ||
@@ -2020,6 +2031,57 @@ class FakeDaemonClient implements DaemonClient {
           FlowEventAgentAsk():
         break;
     }
+  }
+
+  /// `hold.hard_block_checksum_secrets` of this fake (HUM-159).
+  ///
+  /// Mit dem Schalter weist [decide] ein `Allow` auf jeden gehaltenen Flow
+  /// zurück, dessen Detail einen prüfsummen-bestätigten Fund der vier Arten
+  /// trägt (`hard_blocks` im Daemon), auch wenn im Strom keine Ansage kam:
+  /// Das ist der Client, der nach der Ansage startete. Ein Flow, dessen
+  /// Ansage im Skript steht, wird unabhängig vom Schalter zurückgewiesen.
+  bool hardBlockChecksumSecrets = false;
+
+  /// Why [decision] on [flow] is refused under the hard block, or null.
+  Diagnostic? _sendRefusal(Flow flow, Decision decision) {
+    if (decision is! DecisionAllow) {
+      return null;
+    }
+    final Diagnostic? announced = flow.sendRefusal;
+    if (announced != null) {
+      return announced;
+    }
+    if (!hardBlockChecksumSecrets) {
+      return null;
+    }
+    final Finding? secret = state.details[flow.id]?.findings
+        .where(
+          (Finding finding) =>
+              finding.tier == FindingTier.checksum &&
+              (const <String>{
+                    'iban',
+                    'credit_card',
+                    'jwt',
+                  }.contains(finding.kind) ||
+                  finding.kind.startsWith('api_key')),
+        )
+        .firstOrNull;
+    if (secret == null) {
+      return null;
+    }
+    return Diagnostic(
+      code: DiagnosticCodes.sendRefused,
+      severity: Severity.blocking,
+      title: 'Bestätigtes Geheimnis gesperrt',
+      why:
+          'the request carries a checksum-confirmed ${secret.kind} in the '
+          '${secret.location.name} and hold.hard_block_checksum_secrets is '
+          'on, so it cannot leave this machine unchanged; nothing was sent',
+      fix: const FixAction.changeSetting(
+        key: 'hold.hard_block_checksum_secrets',
+        value: 'false',
+      ),
+    );
   }
 
   static String _hex(List<int> bytes) =>

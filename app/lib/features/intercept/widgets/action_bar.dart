@@ -27,9 +27,11 @@ import '../../../core/ui/announce.dart';
 import '../../../core/ui/diagnostic_severity.dart';
 import '../../../core/ui/fix_control.dart';
 import '../../../core/ui/h_diagnostic_card.dart';
+import '../../../core/ui/hover_label.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/decision.dart';
+import '../providers/diagnostics.dart' show sanitizeDiagnostic;
 import '../providers/findings_pause.dart';
 import '../providers/note.dart';
 import '../providers/now.dart';
@@ -195,20 +197,34 @@ class _ActionBarState extends ConsumerState<ActionBar> {
         ? chosen.fold(0, (int sum, Flow flow) => sum + flow.findingCount)
         : findings.count;
     final bool anyFinding = findingReach > 0;
-    final String sendLabel = anyFinding
+    // Die harte Sperre, wie der Daemon sie am Flow angesagt hat: Die Anfrage
+    // geht nur bearbeitet hinaus. Die Freigabe heißt dann „Senden nicht
+    // möglich", ist abgeschaltet und trägt den Grund des Daemons als Tooltip
+    // (HUM-159). Über eine Gruppe gilt das, sobald jede Anfrage darin gesperrt
+    // ist; sonst bleiben die gesperrten beim Senden stehen, und das Modal
+    // nennt sie.
+    final Diagnostic? sendRefusal = reach == 1
+        ? flow?.sendRefusal
+        : chosen.every((Flow each) => each.sendRefusal != null)
+        ? chosen.firstOrNull?.sendRefusal
+        : null;
+    final bool refused = sendRefusal != null;
+    final String sendLabel = refused
+        ? l10n.interceptSendRefused
+        : anyFinding
         ? l10n.interceptSendWithFindings(findingReach)
         : reach > 1
         ? l10n.interceptAllowSelected(reach)
         : allowLabel(remember.effective, l10n);
-    final Widget valve = ReleaseValve(
+    final Widget bareValve = ReleaseValve(
       key: const Key('intercept-allow'),
       label: sendLabel,
-      holdLabel: anyFinding
+      holdLabel: anyFinding || refused
           ? sendLabel
           : reach > 1
           ? l10n.interceptAllowSelected(reach)
           : allowLabel(holdDuration, l10n),
-      accent: anyFinding ? tokens.state.held : null,
+      accent: anyFinding && !refused ? tokens.state.held : null,
       holdRequired: anyFinding,
       holdToken: _reachToken(chosen),
       // One request with a finding: a click opens the pause, which lists what
@@ -223,7 +239,7 @@ class _ActionBarState extends ConsumerState<ActionBar> {
       shortcutHint: l10n.interceptKeyAllow,
       semanticsValue: countdown,
       optionsLabel: l10n.interceptAllowOptions,
-      enabled: enabled,
+      enabled: enabled && !refused,
       optionsOpen: remember.open,
       pressed:
           acting == DecisionKind.allow || acting == DecisionKind.allowEdited,
@@ -245,6 +261,7 @@ class _ActionBarState extends ConsumerState<ActionBar> {
       onAllowRemembered: () => _allow(remember: true, flows: chosen),
       onToggleOptions: () => ref.read(rememberDraftProvider.notifier).toggle(),
     );
+    final Widget valve = _withRefusal(sendRefusal, l10n, bareValve);
 
     final Widget block = BlockButton(
       key: const Key('intercept-block'),
@@ -409,11 +426,16 @@ class _ActionBarState extends ConsumerState<ActionBar> {
                       key: const ValueKey<String>('pause'),
                       findings: findings,
                       enabled: acting == null,
-                      onSendAnyway: () => unawaited(
-                        ref
-                            .read(interceptDecisionProvider.notifier)
-                            .sendAnyway(),
-                      ),
+                      // Unter der harten Sperre gibt es kein „Trotzdem
+                      // senden"; es bleiben Pseudonymisieren, Blockieren und
+                      // Zurück (HUM-159).
+                      onSendAnyway: refused
+                          ? null
+                          : () => unawaited(
+                              ref
+                                  .read(interceptDecisionProvider.notifier)
+                                  .sendAnyway(),
+                            ),
                       onPseudonymize: widget.onPseudonymize,
                       onBlock: () => _block(chosen),
                       onBack: () =>
@@ -493,6 +515,33 @@ class _ActionBarState extends ConsumerState<ActionBar> {
           ],
         ),
       ),
+    );
+  }
+
+  /// [valve] with the daemon's reason of the hard block as its tooltip, or
+  /// [valve] alone while there is none (HUM-159).
+  ///
+  /// The reason is the daemon's own sentence -- kind and place of the secret,
+  /// never its value -- through the same resolution every diagnostic card
+  /// uses, so a screen reader hears what the pointer sees.
+  Widget _withRefusal(
+    Diagnostic? refusal,
+    AppLocalizations l10n,
+    Widget valve,
+  ) {
+    if (refusal == null) {
+      return valve;
+    }
+    // Der Satz kommt vom Daemon und trägt Material von außen; bereinigt wird
+    // er hier, an der einen Stelle, die ihn zeigt.
+    final String why = DiagnosticL10n.resolve(
+      sanitizeDiagnostic(refusal),
+      l10n,
+    ).cause;
+    return HoverLabel(
+      key: const Key('intercept-send-refused'),
+      label: why,
+      child: Semantics(tooltip: why, child: valve),
     );
   }
 

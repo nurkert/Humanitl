@@ -1123,7 +1123,7 @@
   "diagEDIT003Why": "Der Pfad beginnt nicht mit /, oder er enthält ein Leerzeichen oder ein Steuerzeichen.",
   "diagEDIT005Title": "Editierter Body über der Grenze",
   "diagEDIT005Why": "Der editierte Body ist größer als die Grenze, gegen die die angehaltene Anfrage gepuffert wurde.",
-  "diagHOLD004Title": "Bestätigtes Secret blockiert",
+  "diagHOLD004Title": "Bestätigtes Secret gesperrt",
   "diagHOLD004Why": "Die Anfrage trägt ein durch Prüfsumme bestätigtes Secret, und hold.hard_block_checksum_secrets ist an.",
   "diagDAEMON013Title": "Übergebener Socket unbrauchbar",
   "diagDAEMON013Why": "systemd hat mehr als einen Socket übergeben, einen geschlossenen, einen, der nicht lauscht, oder einen an einem anderen Pfad als dem Socket des Daemons.",
@@ -1148,5 +1148,7 @@
   "isolationRefusalsNetworkNote": "Eine Verbindung zu einer Adresse draußen steht nicht in dieser Liste: Ohne Route scheitert sie, bevor ein Filter gefragt wird. Das ist die erste Garantie oben, ein Zustand und kein Ereignis.",
   "diagSANDBOX019Title": "Verweigerte Verbindungsversuche werden nicht gemeldet",
   "diagSANDBOX019Why": "Der Kernel hat dem Filter des Agenten keinen Zuhörer gegeben; verweigert wird weiter mit EPERM, gezählt und gemeldet wird nichts.",
-  "interceptBatchWithheld": "{count, plural, =1{1 Anfrage mit offenem Fund bleibt angehalten. Sende sie aus ihrer Karte.} other{{count} Anfragen mit offenen Funden bleiben angehalten. Sende jede aus ihrer Karte.}}"
+  "interceptBatchWithheld": "{count, plural, =1{1 Anfrage mit offenem Fund bleibt angehalten. Sende sie aus ihrer Karte.} other{{count} Anfragen mit offenen Funden bleiben angehalten. Sende jede aus ihrer Karte.}}",
+  "interceptSendRefused": "Senden nicht möglich",
+  "interceptBatchLocked": "{count, plural, =1{1 Anfrage trägt ein bestätigtes Geheimnis und bleibt angehalten. Sie geht nur bearbeitet hinaus.} other{{count} Anfragen tragen ein bestätigtes Geheimnis und bleiben angehalten. Sie gehen nur bearbeitet hinaus.}}"
 }

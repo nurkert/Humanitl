@@ -118,7 +118,7 @@ pub struct HoldConfig {
     /// Wo gefragt wird: in der Oberfläche, im Terminal oder gar nicht.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub ask_mode: AskMode,
-    /// Blockt Anfragen mit prüfsummen-sicheren Geheimnissen sofort, ohne zu fragen.
+    /// Lässt Anfragen mit prüfsummen-sicheren Geheimnissen nur bearbeitet hinaus; keine Regel und keine Freigabe sendet sie unverändert.
     // Gesperrt für das Projekt-Profil (HUM-208): Ein geklontes Repository soll
     // die harte Sperre des Nutzers nicht still aufheben können.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]

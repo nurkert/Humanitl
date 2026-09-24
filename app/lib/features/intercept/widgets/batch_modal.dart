@@ -200,6 +200,16 @@ class _BatchModalState extends ConsumerState<BatchModal>
                     style: tokens.typography.ui12.tinted(tokens.colors.fg0),
                   ),
                 ],
+                // Was unter der harten Sperre steht, geht nur bearbeitet
+                // hinaus und bleibt deshalb stehen (HUM-159).
+                if (request.locked > 0) ...<Widget>[
+                  SizedBox(height: tokens.spacing.x2),
+                  Text(
+                    l10n.interceptBatchLocked(request.locked),
+                    key: const Key('intercept-batch-locked'),
+                    style: tokens.typography.ui12.tinted(tokens.colors.fg0),
+                  ),
+                ],
               ],
             ),
           ),

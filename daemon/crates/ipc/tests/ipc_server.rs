@@ -975,3 +975,200 @@ async fn an_acknowledgement_travels_and_a_wrong_one_is_ipc_004() {
     drop(client);
     daemon.shutdown().await;
 }
+
+/// Die harte Sperre über den Draht (HUM-159): Ein `Decide(Allow)` auf einen
+/// Flow, der ein bestätigtes Geheimnis trägt, endet mit `HOLD_004` und nicht
+/// mit `IPC_003`, auch mit bestätigtem Fund und auch in einer Sammelanfrage;
+/// der Flow bleibt gehalten, und `AllowEdited` geht durch.
+///
+/// Den Befund setzt im Daemon der Proxy-Handler nach dem Scan an den Flow
+/// (`check_allow` in `humanitl-proxy`); hier steht er von Hand dort, weil
+/// dieser Test Warteschlange und gRPC-Schicht prüft und keinen Proxy startet.
+/// Geprüft wird, dass er unverändert beim Client ankommt.
+#[tokio::test]
+async fn allow_with_checksum_secret_refused_over_grpc() {
+    let daemon = Daemon::new().await;
+    let mut client = daemon.client().await;
+    let session = SessionId::new();
+    let mut flow = secret_flow(session);
+    let id = flow.id;
+    let mut clean = analyzed(session, "api.example.com");
+    let clean_id = clean.id;
+    for held in [&flow, &clean] {
+        daemon
+            .queue
+            .registry()
+            .insert(FlowRecord::new(held, &ConnMeta::plain(session)));
+    }
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let held = daemon.queue.hold(&mut flow, deadline).unwrap();
+    let clean_held = daemon.queue.hold(&mut clean, deadline).unwrap();
+
+    let allow = |ids: Vec<String>, acknowledged: Vec<u32>| v1::DecideRequest {
+        flow_ids: ids,
+        decision: Some(v1::decide_request::Decision::Allow(())),
+        acknowledged_findings: acknowledged,
+        ..v1::DecideRequest::default()
+    };
+    for acknowledged in [vec![], vec![0]] {
+        let error = client
+            .decide(allow(vec![id.to_string()], acknowledged))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::FailedPrecondition);
+        let diagnostic = humanitl_ipc::diagnostic_from_status(&error).expect("details");
+        assert_eq!(diagnostic.code, "HOLD_004", "{diagnostic:?}");
+        assert_eq!(diagnostic.why, SECRET_WHY);
+    }
+    assert!(daemon.queue.pending_ids().contains(&id), "still held");
+
+    // In einer Sammelanfrage geht der andere Flow durch, dieser nicht.
+    let (clean_decision, batch) = tokio::join!(
+        clean_held,
+        client.decide(allow(vec![id.to_string(), clean_id.to_string()], vec![]))
+    );
+    assert_eq!(clean_decision, Decision::Allow);
+    let results = batch.unwrap().into_inner().results;
+    assert!(!results[0].applied);
+    assert_eq!(results[0].diagnostic.as_ref().unwrap().code, "HOLD_004");
+    assert!(results[1].applied);
+    assert_eq!(daemon.queue.pending_ids(), vec![id], "still held");
+
+    let (decision, response) = tokio::join!(
+        held,
+        client.decide(v1::DecideRequest {
+            flow_ids: vec![id.to_string()],
+            decision: Some(v1::decide_request::Decision::AllowEdited(
+                v1::EditedRequest {
+                    method: v1::Method::Post as i32,
+                    url: "https://bank.example/v1/chat".to_owned(),
+                    ..v1::EditedRequest::default()
+                },
+            )),
+            ..v1::DecideRequest::default()
+        })
+    );
+    assert!(response.unwrap().into_inner().results[0].applied);
+    assert!(
+        matches!(decision, Decision::AllowEdited { .. }),
+        "the edited release is not refused: {decision:?}"
+    );
+
+    drop(client);
+    daemon.shutdown().await;
+}
+
+/// Der Satz des Befunds `HOLD_004`, wie der Proxy ihn für eine IBAN im Rumpf
+/// baut.
+const SECRET_WHY: &str = "the request carries a checksum-confirmed iban in the body and \
+                          hold.hard_block_checksum_secrets is on, so it cannot leave this \
+                          machine unchanged; nothing was sent";
+
+/// Ein analysierter Flow mit einer bestätigten IBAN unter der harten Sperre.
+fn secret_flow(session: SessionId) -> Flow {
+    use humanitl_core::diagnostics::codes::HOLD_004;
+    use humanitl_core::{
+        Diagnostic, Finding, FindingKind, FindingLocation, FixAction, Severity, Tier,
+    };
+
+    let mut flow = received(session, "bank.example");
+    flow.apply(
+        TransitionInput::Analyze {
+            findings: vec![Finding::new(
+                FindingKind::Iban,
+                0..22,
+                FindingLocation::Body,
+                Tier::Checksum,
+                "GB82 WEST 1234 5698 7654 32",
+            )],
+        },
+        SystemTime::now(),
+    )
+    .unwrap();
+    flow.send_refusal = Some(
+        Diagnostic::builder(HOLD_004, Severity::Blocking)
+            .why(SECRET_WHY.to_owned())
+            .fix(FixAction::ChangeSetting {
+                key: "hold.hard_block_checksum_secrets".to_owned(),
+                value: "false".to_owned(),
+            })
+            .build(),
+    );
+    flow
+}
+
+/// Die harte Sperre steht in der Zeile (HUM-159): Ein Client, der die Ansage
+/// im Strom verpasst hat, liest `FlowSummary.send_refusal` aus `ListFlows`,
+/// mit Aufzeichnung (Zeile aus der Datenbank, Sperre aus der Registry) und
+/// ohne (Zeile aus der Registry). Ein Flow ohne Sperre trägt das Feld nicht.
+#[tokio::test]
+async fn list_flows_carries_the_hard_block_of_a_held_flow() {
+    use humanitl_recorder::{Recorder, RecorderSettings, SessionMeta};
+
+    let dir = tempfile::tempdir().unwrap();
+    let recorder = Recorder::open(
+        &dir.path().join("humanitl.db"),
+        &dir.path().join("blobs"),
+        RecorderSettings::default(),
+    )
+    .unwrap();
+    let session = SessionId::new();
+    recorder.start_session(&SessionMeta {
+        id: session,
+        started_at: SystemTime::now(),
+        sandbox_profile: "default".to_owned(),
+        llm_endpoint: None,
+        work_dir: "/work".to_owned(),
+        agent: "opencode".to_owned(),
+    });
+    let with_recording = {
+        let recorder = recorder.clone();
+        Daemon::start_with(&Limits::default(), move |server| {
+            server.with_recorder(recorder)
+        })
+        .await
+    };
+    for (daemon, recorded) in [(with_recording, true), (Daemon::new().await, false)] {
+        let mut secret = secret_flow(session);
+        let mut clean = analyzed(session, "api.example.com");
+        for flow in [&secret, &clean] {
+            if recorded {
+                recorder.apply(&flow.received_event());
+            }
+            daemon
+                .queue
+                .registry()
+                .insert(FlowRecord::new(flow, &ConnMeta::plain(session)));
+        }
+        let (secret_id, clean_id) = (secret.id, clean.id);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let held = daemon.queue.hold(&mut secret, deadline).unwrap();
+        let clean_held = daemon.queue.hold(&mut clean, deadline).unwrap();
+
+        let mut client = daemon.client().await;
+        let page = client
+            .list_flows(v1::ListFlowsRequest::default())
+            .await
+            .unwrap()
+            .into_inner();
+        let row = |id: FlowId| {
+            page.flows
+                .iter()
+                .find(|row| row.flow_id == id.to_string())
+                .unwrap_or_else(|| panic!("recorded={recorded}: {id} is listed"))
+        };
+        let refusal = row(secret_id)
+            .send_refusal
+            .as_ref()
+            .unwrap_or_else(|| panic!("recorded={recorded}: the row carries the hard block"));
+        assert_eq!(refusal.code, "HOLD_004", "recorded={recorded}");
+        assert_eq!(refusal.why, SECRET_WHY, "recorded={recorded}");
+        assert!(
+            row(clean_id).send_refusal.is_none(),
+            "recorded={recorded}: a flow without a secret carries no block"
+        );
+
+        drop((held, clean_held, client));
+        daemon.shutdown().await;
+    }
+}

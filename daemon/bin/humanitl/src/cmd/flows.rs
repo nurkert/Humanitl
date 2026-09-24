@@ -810,6 +810,7 @@ mod tests {
             decision_note: String::new(),
             catalog_id: String::new(),
             unresolved_findings: None,
+            send_refusal: None,
         }
     }
 
