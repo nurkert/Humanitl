@@ -52,7 +52,6 @@ use humanitl_core::{Diagnostic, FixAction, Severity};
 use crate::Anchor;
 use crate::record::{AuditRecord, GENESIS_PREV, mac_matches};
 use crate::retention::AuditPruned;
-use crate::writer::Head;
 
 /// Das Ergebnis einer Prüfung.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,7 +66,21 @@ pub struct VerifyReport {
     ///
     /// Bei einer Kette, die hält, ist das ihr Ende. Oberfläche und
     /// Kommandozeile zeigen seinen Hash als Kopf der Kette (HUM-156).
-    pub head: Option<Head>,
+    pub head: Option<VerifiedHead>,
+}
+
+/// Der letzte Record, der die Prüfung bestanden hat.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedHead {
+    /// Seine Nummer.
+    pub seq: u64,
+    /// Sein Hash als Hex.
+    pub hash: String,
+    /// Sein Zeitstempel, genau mit den Zeichen seiner Zeile (HUM-162).
+    ///
+    /// Nicht neu formatiert: Diese Zeichen stehen im Hash, und nur sie
+    /// vergleicht ein Mensch mit der Datei.
+    pub ts: String,
 }
 
 /// Ob die Kette hält.
@@ -293,15 +306,13 @@ impl AuditVerifier {
             warnings.push(VerifyWarning::NoHmacKey);
         }
 
-        let mut records = 0_u64;
-        let mut last_seq = 0_u64;
-        let mut last_hash = GENESIS_PREV.to_owned();
+        let mut tail = Tail::genesis();
         // Der Schnitt eines Anfangs hinter Nummer 1, und ob ein
         // `audit.pruned` ihn schon dokumentiert hat (siehe Modulkommentar).
         let mut start: Option<Start> = None;
         let mut buffer = Vec::with_capacity(1024);
         loop {
-            let past_until = until.is_some_and(|until| last_seq >= until);
+            let past_until = until.is_some_and(|until| tail.last_seq >= until);
             if past_until && start.as_ref().is_none_or(|start| start.documented) {
                 // Das gemeldete Ende ist erreicht; der Rest entsteht gerade.
                 break;
@@ -310,7 +321,7 @@ impl AuditVerifier {
             if reader.read_until(b'\n', &mut buffer)? == 0 {
                 break;
             }
-            if records == 0
+            if tail.records == 0
                 && let Some(first) = cut_start(&buffer)
             {
                 // Der Anfang einer gekürzten Kette. Ein Anker auf dem Schnitt
@@ -321,7 +332,7 @@ impl AuditVerifier {
                         .any(|anchored| *anchored != first.through_hash)
                 }) {
                     return Ok(VerifyReport {
-                        records,
+                        records: 0,
                         status: VerifyStatus::Broken {
                             first_bad_seq: first.through_seq + 1,
                             reason: BreakReason::AnchorMismatch {
@@ -332,8 +343,8 @@ impl AuditVerifier {
                         head: None,
                     });
                 }
-                last_seq = first.through_seq;
-                last_hash.clone_from(&first.through_hash);
+                tail.last_seq = first.through_seq;
+                tail.last_hash.clone_from(&first.through_hash);
                 start = Some(first);
             }
             let broken = |first_bad_seq, reason| match start.as_ref() {
@@ -341,13 +352,13 @@ impl AuditVerifier {
                 // erste Befund, auch wenn danach noch einer käme.
                 Some(start) if !start.documented => undocumented(start, warnings.clone()),
                 _ => VerifyReport {
-                    records,
+                    records: tail.records,
                     status: VerifyStatus::Broken {
                         first_bad_seq,
                         reason,
                     },
                     warnings: warnings.clone(),
-                    head: head_of(records, last_seq, &last_hash),
+                    head: tail.head(),
                 },
             };
             // Eine letzte Zeile ohne `\n` ist unvollständig: Das Format endet
@@ -357,58 +368,77 @@ impl AuditVerifier {
                     // Hinter dem gemeldeten Ende entsteht diese Zeile gerade.
                     break;
                 }
-                return Ok(broken(last_seq + 1, BreakReason::NonCanonicalLine));
+                return Ok(broken(tail.last_seq + 1, BreakReason::NonCanonicalLine));
             };
-            match check_line(line, last_seq, &last_hash, hmac_key, &by_seq) {
+            match check_line(line, tail.last_seq, &tail.last_hash, hmac_key, &by_seq) {
                 Ok(record) => {
                     if let Some(start) = start.as_mut().filter(|start| !start.documented) {
                         start.documented =
                             AuditPruned::documents(&record, start.through_seq, &start.through_hash);
                     }
-                    records += 1;
-                    last_seq = record.body.seq;
-                    last_hash = record.hash;
+                    tail.passed(record);
                 }
                 Err((first_bad_seq, reason)) => return Ok(broken(first_bad_seq, reason)),
             }
         }
 
-        Ok(conclude(
-            Tail {
-                records,
-                last_seq,
-                last_hash,
-            },
-            start,
-            &by_seq,
-            warnings,
-        ))
+        Ok(conclude(&tail, start, &by_seq, warnings))
     }
 }
 
-/// Wo die Prüfung nach der letzten Zeile steht.
+/// Wo die Prüfung steht: nach der letzten Zeile, die bestanden hat.
 struct Tail {
     /// Wie viele Records bestanden haben.
     records: u64,
-    /// Die Nummer des letzten.
+    /// Die Nummer des letzten; vor dem ersten `0` oder die Nummer des
+    /// Schnitts einer gekürzten Kette.
     last_seq: u64,
-    /// Sein Hash.
+    /// Sein Hash; vor dem ersten [`GENESIS_PREV`] oder der des Schnitts.
     last_hash: String,
+    /// Sein Zeitstempel, wie er in der Zeile steht; leer, solange keiner
+    /// bestand.
+    last_ts: String,
+}
+
+impl Tail {
+    /// Der Stand vor der ersten Zeile.
+    fn genesis() -> Self {
+        Self {
+            records: 0,
+            last_seq: 0,
+            last_hash: GENESIS_PREV.to_owned(),
+            last_ts: String::new(),
+        }
+    }
+
+    /// `record` hat bestanden und ist jetzt das Ende.
+    fn passed(&mut self, record: AuditRecord) {
+        self.records += 1;
+        self.last_seq = record.body.seq;
+        self.last_hash = record.hash;
+        self.last_ts = record.body.ts;
+    }
+
+    /// Das Ende des geprüften Teils; `None`, solange nichts bestanden hat.
+    fn head(&self) -> Option<VerifiedHead> {
+        (self.records > 0).then(|| VerifiedHead {
+            seq: self.last_seq,
+            hash: self.last_hash.clone(),
+            ts: self.last_ts.clone(),
+        })
+    }
 }
 
 /// Das Urteil nach der letzten Zeile: ein Anfang ohne Beleg, ein Anker hinter
 /// dem Ende, oder eine Kette, die hält, mit ihren Warnungen.
 fn conclude(
-    tail: Tail,
+    tail: &Tail,
     start: Option<Start>,
     by_seq: &BTreeMap<u64, Vec<&str>>,
     mut warnings: Vec<VerifyWarning>,
 ) -> VerifyReport {
-    let Tail {
-        records,
-        last_seq,
-        last_hash,
-    } = tail;
+    let records = tail.records;
+    let last_seq = tail.last_seq;
     let mut cut = 0_u64;
     if let Some(start) = start {
         if !start.documented {
@@ -428,7 +458,7 @@ fn conclude(
                 reason: BreakReason::TruncatedBelowAnchor { anchor_seq },
             },
             warnings,
-            head: head_of(records, last_seq, &last_hash),
+            head: tail.head(),
         };
     }
     // Ein Anker unter dem Schnitt verankert keinen Record, der noch da ist.
@@ -446,7 +476,7 @@ fn conclude(
         records,
         status: VerifyStatus::Ok,
         warnings,
-        head: head_of(records, last_seq, &last_hash),
+        head: tail.head(),
     }
 }
 
@@ -482,14 +512,6 @@ fn cut_start(line: &[u8]) -> Option<Start> {
         through_seq: record.body.seq - 1,
         through_hash: record.body.prev,
         documented: false,
-    })
-}
-
-/// Das Ende des geprüften Teils; `None`, solange nichts bestanden hat.
-fn head_of(records: u64, last_seq: u64, last_hash: &str) -> Option<Head> {
-    (records > 0).then(|| Head {
-        seq: last_seq,
-        hash: last_hash.to_owned(),
     })
 }
 

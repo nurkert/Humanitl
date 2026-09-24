@@ -3462,8 +3462,8 @@ Als `string` und nicht als `Timestamp`, aus demselben Grund wie `AuditEntry.ts`:
 `the_head_carries_its_time` (`daemon/crates/ipc/tests/audit_rpc.rs`), `audit_verify_asks_the_daemon_for_key_and_anchors` erweitert um `head.ts`.
 
 ### Akzeptanzkriterien
-- [ ] `humanitl --json audit verify` gegen einen Daemon nennt `head.ts` gleich dem `ts` der letzten Zeile.
-- [ ] `make check` grün.
+- [x] `humanitl --json audit verify` gegen einen Daemon nennt `head.ts` gleich dem `ts` der letzten Zeile.
+- [x] `make check` grün.
 
 ### Fallstricke
 - Ein Record, dessen `ts` nicht dem Format entspricht, ist in einer heilen Kette nicht möglich; der Kopf eines gebrochenen Logs trägt, was die Zeile trägt.

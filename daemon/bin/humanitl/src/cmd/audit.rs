@@ -31,15 +31,11 @@
 //! Spalten aus HUM-050.
 
 use std::fmt::Write as _;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, DurationRound as _, TimeDelta, Utc};
 use humanitl_audit::export::{self, ExportFormat};
-use humanitl_audit::{
-    AuditRecord, AuditVerifier, BreakReason, TimeRange, VerifyStatus, VerifyWarning,
-};
+use humanitl_audit::{AuditVerifier, BreakReason, TimeRange, VerifyStatus, VerifyWarning};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_ipc::v1;
@@ -156,7 +152,8 @@ struct Head {
     hash: String,
     /// Seine Nummer.
     seq: u64,
-    /// Sein Zeitpunkt, falls er gelesen werden konnte.
+    /// Sein Zeitstempel mit den Zeichen seiner Zeile; `None`, wenn ein
+    /// Daemon vor HUM-162 ihn nicht meldet.
     ts: Option<String>,
 }
 
@@ -248,7 +245,9 @@ async fn verify_over_rpc(ctx: &Context) -> Result<Summary, Refusal> {
     let head = (broken.is_none() && !answer.head_hash.is_empty()).then(|| Head {
         hash: hex::encode(&answer.head_hash),
         seq: answer.head_seq,
-        ts: None,
+        // Ein Daemon vor HUM-162 lässt das Feld leer; dann ist der Zeitpunkt
+        // nicht gemeldet, und das JSON sagt `null` statt eines leeren Textes.
+        ts: (!answer.head_ts.is_empty()).then(|| answer.head_ts.clone()),
     });
     let anchors = answer.anchors_reported.then(|| Anchors {
         count: answer.anchors,
@@ -319,10 +318,16 @@ fn verify_file(path: &Path, mut warnings: Vec<String>) -> Result<Summary, Failur
     Ok(Summary {
         source: Source::File(path.to_path_buf()),
         records: report.records,
+        // Der Kopf aus der Prüfung selbst, mit den Zeichen seiner Zeile; nur
+        // bei einer Kette, die hält, wie über den Daemon.
         head: if broken.is_some() {
             None
         } else {
-            head_of(path)
+            report.head.map(|head| Head {
+                hash: head.hash,
+                seq: head.seq,
+                ts: Some(head.ts),
+            })
         },
         anchors: None,
         broken,
@@ -339,34 +344,6 @@ fn reason_word(reason: BreakReason) -> String {
         }
         other => other.as_str().to_owned(),
     }
-}
-
-/// Der letzte Record der Datei, für Hash, Nummer und Zeitpunkt des Kopfes.
-///
-/// Wird nur gerufen, wenn die Prüfung gehalten hat; dann ist die letzte Zeile
-/// ein Record, und ein `None` heißt: die Kette ist leer.
-fn head_of(path: &Path) -> Option<Head> {
-    let file = File::open(path).ok()?;
-    let mut last = Vec::new();
-    let mut reader = BufReader::new(file);
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        match reader.read_until(b'\n', &mut line) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {}
-        }
-        let trimmed = line.strip_suffix(b"\n").unwrap_or(&line);
-        if !trimmed.is_empty() {
-            last = trimmed.to_vec();
-        }
-    }
-    let record = AuditRecord::from_line(&last).ok()?;
-    Some(Head {
-        hash: record.hash,
-        seq: record.body.seq,
-        ts: Some(record.body.ts),
-    })
 }
 
 /// Schreibt das Ergebnis: ein JSON-Objekt oder der Block aus der Spezifikation.
