@@ -41,6 +41,7 @@ const DENIED_BY_CONVENTION: &[&str] = &[
     "resolver.*",
     "experimental.*",
     "recorder.retention_days",
+    "limits.recorder_max_body_bytes",
     "audit.*",
 ];
 
@@ -438,4 +439,72 @@ fn a_project_profile_cannot_switch_the_hard_block_on_either() {
     })
     .expect("a global profile may set the hard block");
     assert!(resolved.config.hold.hard_block_checksum_secrets);
+}
+
+/// Der Weg aus dem Sicherheitsdurchlauf vom 2026-09-23 (Befund M7, HUM-209):
+/// Ein geklontes Repository senkt die Aufzeichnung jedes Bodys auf 1 KiB,
+/// zusammen mit `recorder.inline_max_bytes`, das nicht darüber liegen darf.
+/// Vorschau und `GetBody` lesen aus der Aufzeichnung; der Mensch sähe beim
+/// Halten nur diesen Rest, während `Allow` den ganzen Body schickt. Der Test
+/// geht über [`resolve`] wie `humanitld` beim Start im Projektverzeichnis.
+#[test]
+fn a_cloned_project_cannot_shrink_the_body_the_human_sees() {
+    let scratch = Scratch::new();
+    let project = scratch.dir.path().join("project");
+    std::fs::create_dir_all(&project).expect("mkdir");
+    let env = Env::from_pairs([
+        ("HOME", scratch.dir.path().display().to_string()),
+        (
+            "XDG_CONFIG_HOME",
+            scratch.dir.path().join("cfg").display().to_string(),
+        ),
+    ]);
+
+    let profile = scratch.write(
+        "project/.humanitl/profile.toml",
+        "[config.limits]\nrecorder_max_body_bytes = 1024\n\n\
+         [config.recorder]\ninline_max_bytes = 1024\n",
+    );
+    let diagnostic = match resolve(&ProfileSelection::any(), Some(&project), &env, &[]) {
+        Ok(resolved) => panic!(
+            "a project profile shrank the recorded body: recorder_max_body_bytes = {}",
+            resolved.config.limits.recorder_max_body_bytes
+        ),
+        Err(diagnostic) => diagnostic,
+    };
+    assert_denied(&diagnostic, "limits.recorder_max_body_bytes", &profile);
+
+    // Der alte Name führt nicht an der Sperre vorbei.
+    let profile = scratch.write(
+        "project/.humanitl/profile.toml",
+        "[config.recorder]\nmax_body_bytes = 1024\n",
+    );
+    let diagnostic = resolve(&ProfileSelection::any(), Some(&project), &env, &[])
+        .expect_err("the alias of the denied key is denied as well");
+    assert_denied(&diagnostic, "limits.recorder_max_body_bytes", &profile);
+}
+
+/// Nur das eine Blatt ist gesperrt: Die übrigen Grenzen und die Wahl zwischen
+/// Datenbank und Blob (`recorder.inline_max_bytes`) bleiben im Projekt-Profil
+/// erlaubt, und aus dem globalen Profil bleibt der gesperrte Schlüssel erlaubt.
+#[test]
+fn the_rest_of_limits_stays_open_to_a_project_profile() {
+    let scratch = Scratch::new();
+    let profile =
+        scratch.project_profile("limits.hold_max_flows = 50\nrecorder.inline_max_bytes = 1024");
+    let resolved = load(&Sources {
+        profile_project: Some(profile.clone()),
+        ..Sources::empty()
+    })
+    .expect("other limits load from a project profile");
+    assert_eq!(resolved.config.limits.hold_max_flows, 50);
+    assert_eq!(resolved.config.recorder.inline_max_bytes, 1024);
+
+    let global = scratch.global_profile("limits.recorder_max_body_bytes = 1048576");
+    let resolved = load(&Sources {
+        profiles: vec![ProfileSource::File(global)],
+        ..Sources::empty()
+    })
+    .expect("a global profile may set the recorder cap");
+    assert_eq!(resolved.config.limits.recorder_max_body_bytes, 1_048_576);
 }

@@ -19,8 +19,9 @@
 //! `agent.adapter`, `agent.command`, `hold.ask_mode`,
 //! `hold.hard_block_checksum_secrets`, `findings.enabled`,
 //! `findings.ignored_hashes`, `findings.email_allow_domains`, `pseudonyms.*`,
-//! `resolver.*`, `experimental.*`, `recorder.retention_days`, `audit.*`. Eine Gruppe ist
-//! `denied`, wenn jedes Blatt darunter es ist.
+//! `limits.recorder_max_body_bytes`, `resolver.*`, `experimental.*`,
+//! `recorder.retention_days`, `audit.*`. Eine Gruppe ist `denied`, wenn jedes
+//! Blatt darunter es ist.
 //!
 //! Gruppen sind flach und nach Zuständigkeit geschnitten. Caps und Zeitgrenzen
 //! wohnen ausnahmslos in [`Limits`] (`backlog/CONVENTIONS.md` 4.4); die alten
@@ -178,7 +179,11 @@ pub struct Limits {
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "allowed"))]
     pub body_timeout_secs: u64,
     /// Größter Body, den die Aufzeichnung als Blob ablegt. Alles darüber wird nur mit Prüfsumme vermerkt.
-    #[schemars(extend("x-tier" = "expert", "x-project-scope" = "allowed"))]
+    // Gesperrt für das Projekt-Profil (HUM-209): Der Wert bestimmt, wie viel
+    // die Aufzeichnung belegt und was der Mensch beim Halten vom Body sieht.
+    // Ein geklontes Repository könnte ihn sonst auf 1 KiB senken, während
+    // `Allow` den ganzen Body schickt.
+    #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub recorder_max_body_bytes: u64,
     /// Größte Zahl gleichzeitiger Verbindungen aus der Sandbox je Sitzung. Darüber antwortet der Proxy mit 503 und schließt; eine Uhr je Spanne allein hindert einen Prozess nicht daran, dieselben Ressourcen über viele Verbindungen zu binden.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "allowed"))]
