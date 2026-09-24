@@ -4228,13 +4228,13 @@ M7, Schwere major, von zwei unabhängigen Prüfern bestätigt). Ort: `daemon/cra
 Der Befund ist behoben, und ein Test hält ihn behoben.
 
 ### Akzeptanzkriterien
-- [ ] Nur `limits.recorder_max_body_bytes` (`model.rs:178`) auf `denied` setzen. Die Gruppe `limits` bleibt `allowed`.
-- [ ] CONVENTIONS 4.11 (472) ergänzen, mit der Begründung „wie viel die Aufzeichnung belegt, und was der Mensch beim Halten sieht“.
-- [ ] `docs/CONFIG.md:150` und die Schema-Fixture neu erzeugen.
-- [ ] Test: Ergibt `CONFIG_003`.
-- [ ] Die Alternative (nicht unter den unteren Ebenen) braucht neue Loader-Logik. Die Sperre ist einfacher.
-- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
-- [ ] `make check` grün.
+- [x] Nur `limits.recorder_max_body_bytes` (`model.rs:178`) auf `denied` setzen. Die Gruppe `limits` bleibt `allowed`.
+- [x] CONVENTIONS 4.11 (472) ergänzen, mit der Begründung „wie viel die Aufzeichnung belegt, und was der Mensch beim Halten sieht“.
+- [x] `docs/CONFIG.md:150` und die Schema-Fixture neu erzeugen.
+- [x] Test: Ergibt `CONFIG_003`.
+- [x] Die Alternative (nicht unter den unteren Ebenen) braucht neue Loader-Logik. Die Sperre ist einfacher.
+- [x] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [x] `make check` grün.
 
 ### Referenzen
 Sicherheitsdurchlauf 2026-09-23, Befund M7; `daemon/crates/config/src/model.rs:179` (`limits.recorder_max_body_bytes`, 177-179).
