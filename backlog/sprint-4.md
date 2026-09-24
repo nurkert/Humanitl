@@ -93,6 +93,7 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-219 | Ein gescheitertes Update stellt den Dienst nicht so her, wie er vorher lief | S | HUM-077 |
 | HUM-172 | Die Sprache des Fensters kommt nicht aus `ui.language` | S | HUM-052, HUM-069 |
 | HUM-173 | Das Kontextmenü eines Eingabefelds stürzt ab | S | HUM-035 |
+| HUM-225 | Die Release-Notes der Vorabversionen sind deutsch | S | HUM-053 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -4861,3 +4862,33 @@ Ein Test im Dienst, der eine laufende Sitzung von einem zweiten Strom aus beobac
 
 ### Referenzen
 HUM-138; HUM-040; HUM-067.
+
+---
+
+## HUM-225 · Die Release-Notes der Vorabversionen sind deutsch
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-053 · Blockiert: keine
+
+### Kontext
+`packaging/release/release-notes.sh` schreibt die Notes jeder `v0.0.x`-Vorabversion auf Deutsch, auch die Namen der Meilenstein-Zustände („geliefert", „in Arbeit"). Die Releases auf GitHub und im APT-Repository `apt.nurkert.de` lesen Menschen, die kein Deutsch sprechen. Wunsch des Nutzers vom 2026-09-24: Release-Notes immer auf Englisch. `v0.0.2` ist noch mit deutschen Notes erschienen.
+
+### Ziel
+Jede künftige Vorabversion trägt englische Release-Notes mit demselben Inhalt wie heute: Warnung vor dem MVP und zu fehlenden Signaturen, Installation, Stand der Meilensteine aus `README.md`, was noch fehlt, Commits seit dem vorigen Tag.
+
+### Nicht-Ziel
+Die Umstellung des übrigen Projekts auf Englisch (BACKLOG.md Abschnitt 9, Punkt 18).
+
+### Betroffene Pfade
+- `packaging/release/release-notes.sh`
+- ein Test für das Skript (vorhandenes Testgerüst der Release-Skripte, sonst ein neues neben ihnen)
+
+### Akzeptanzkriterien
+- [ ] `packaging/release/release-notes.sh 0.0.3 HEAD` gibt nur englische Prosa aus; die Zustände der Meilensteine erscheinen so, wie sie in `README.md` stehen („delivered", „in progress", „planned").
+- [ ] Ein Test prüft Überschriften und einen Satz der Warnung auf Englisch und ist ohne die Änderung rot (Mutationsbeweis).
+- [ ] `make check` grün.
+
+### Fallstricke
+- Kommentare im Skript bleiben deutsch (CLAUDE.md, Sprache), nur die Ausgabe wird englisch.
+- Der Text muss weiter stimmen: Was dort über Signatur, AppImage und die Härtung der Unit steht, gegen den Stand von HUM-053 prüfen, nicht nur übersetzen.
+
+### Referenzen
+HUM-053; `.github/workflows/release.yml` (Schritt „Release notes").
