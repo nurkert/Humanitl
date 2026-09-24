@@ -4672,10 +4672,10 @@ Die Suche fragt im eigenen Netz jede Adresse, die dort ein Host sein kann, und d
 jedem Läufer stabil.
 
 ### Akzeptanzkriterien
-- [ ] `local_net` liest die echte Präfixlänge der Schnittstelle (Netlink oder `getifaddrs`) und nimmt aus dem `/24`-Ausschnitt nur die Adressen heraus, die im echten Netz Netz- oder Broadcast-Adresse sind; bei einem Netz größer als `/24` gehören `.0` und `.255` dazu.
-- [ ] Unit-Test mit festen Werten: eigene Adresse `10.1.0.0` in `10.1.0.0/16` und `10.1.3.255` in `10.1.0.0/16` sind unter den gefragten Adressen; `192.168.1.0` und `192.168.1.255` in `192.168.1.0/24` nicht. Mutationsprobe: die alte Regel `first + 1 ..= first + count - 2` zurück, rot.
-- [ ] `the_local_network_belongs_to_the_own_address` bleibt auf jedem Läufer grün.
-- [ ] `make check` grün.
+- [x] `local_net` liest die echte Präfixlänge der Schnittstelle (aus der Route ohne Gateway in `/proc/net/route` statt über Netlink oder `getifaddrs`, weil `humanitl-proxy` `#![forbid(unsafe_code)]` setzt und beide nur über `unsafe` gingen) und nimmt aus dem `/24`-Ausschnitt nur die Adressen heraus, die im echten Netz Netz- oder Broadcast-Adresse sind; bei einem Netz größer als `/24` gehören `.0` und `.255` dazu.
+- [x] Unit-Test mit festen Werten: eigene Adresse `10.1.3.0` und `10.1.3.255` in `10.1.0.0/16` sind unter den gefragten Adressen, `10.1.0.0` als Netzadresse des `/16` nicht; `192.168.1.0` und `192.168.1.255` in `192.168.1.0/24` nicht (korrigiert 2026-09-24: `10.1.0.0` ist die Netzadresse des `/16`). Mutationsprobe: die alte Regel `first + 1 ..= first + count - 2` zurück, rot.
+- [ ] `the_local_network_belongs_to_the_own_address` bleibt auf jedem Läufer grün. Lokal grün; das Format des GitHub-Läufers (`10.1.0.0/16` an `eth0`) hält der Unit-Test `the_prefix_comes_from_the_link_route_of_the_interface` fest. Wird nach dem CI-Lauf des Pushs abgehakt.
+- [x] `make check` grün.
 
 ### Referenzen
 HUM-076 (Suche im lokalen Netz); `daemon/crates/proxy/src/llm_discover.rs`; `daemon/crates/proxy/tests/llm_discover.rs`.
