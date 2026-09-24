@@ -99,6 +99,7 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-223 | `daemon install` ist mit 123 Zeilen eine Funktion zu viel | S | HUM-211 |
 | HUM-224 | Der Kanal-Test des Shims fällt unter Last zufällig aus | S | — |
 | HUM-227 | `humanitl daemon uninstall` löscht Aktivierungsverweise nach Namen | S | HUM-077, HUM-211 |
+| HUM-228 | Der brotli-Test des Parsers wartet auf die Uhr und fällt unter Last aus | S | — |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -5052,3 +5053,42 @@ Offen: eine feste Reihenfolge (`$XDG_RUNTIME_DIR`, `/run/user/<uid>`, `~/.cache/
 
 ### Referenzen
 HUM-212 (Review-Befund Runde 3).
+
+---
+
+## HUM-228 · Der brotli-Test des Parsers wartet auf die Uhr und fällt unter Last aus
+Sprint: 4 · Größe: S · Abhängigkeiten: — · Blockiert: keine
+
+### Kontext
+`app/test/features/intercept/body/parser_test.dart`, Test „the default scenario really carries a brotli body" (Zeile 75), abonniert den Fake, wartet fest 4,2 s echte Zeit und sucht dann den Flow zu `httpbin.org`. Unter Last liefert das Skript des Fakes ihn nicht rechtzeitig, `firstWhere` wirft `Bad state: No element`. Am 2026-09-24 zweimal gesehen, im Gate von HUM-212 und von HUM-159, beide Male ohne Bezug zum Diff; einzeln lief der Test grün.
+
+### Ziel
+Der Test wartet auf den Zustand, nicht auf die Uhr, und ist unter Last stabil.
+
+### Nicht-Ziel
+Andere Tests des Fakes; HUM-185 (Bildschirm-Test) und HUM-224 (Kanal-Test des Shims) sind eigene Issues.
+
+### Betroffene Pfade
+- `app/test/features/intercept/body/parser_test.dart`
+- falls nötig `app/lib/core/ipc/fake_daemon_client.dart` (nur ein Hook zum Warten, nichts am Skript)
+
+### Spezifikation
+Warten, bis ein Ereignis zu `httpbin.org` im Strom ist (oder der Zustand des Fakes ihn kennt), mit großzügiger Obergrenze statt fester Wartezeit; alternativ `fakeAsync` mit gesteuerter Uhr, falls der Fake das trägt.
+
+### Schritte
+1. Ursache bestätigen (Log mit Zeitstempel unter Last).
+2. Auf Zustand warten.
+
+### Tests
+Der Test selbst; zwanzig Läufe unter Last grün (Last nur mit `nice` und solange die Maschine unter 80 % liegt).
+
+### Akzeptanzkriterien
+- [ ] Der Test enthält keine feste Wartezeit mehr, die über sein Ergebnis entscheidet.
+- [ ] Zwanzig Läufe hintereinander unter Last sind grün.
+- [ ] `make check` grün.
+
+### Fallstricke
+- Den Fake nicht verlangsamen oder beschleunigen, nur warten; das Skript ist für andere Tests der Takt.
+
+### Referenzen
+HUM-185, HUM-224; Gate-Läufe von HUM-212 und HUM-159 am 2026-09-24.
