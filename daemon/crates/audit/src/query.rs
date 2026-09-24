@@ -19,6 +19,15 @@
 //! zuletzt als geschrieben gemeldet hat; gelesen wird bis zu diesem Record und
 //! nicht weiter. Was dahinter steht, entsteht gerade (HUM-156). `None` liest
 //! bis zum Ende der Datei.
+//!
+//! **Eine Seite liest nicht jede Zeile als JSON** (HUM-163): Bei einer heilen
+//! Kette genügt von jeder Zeile der feste Teil hinter `data`
+//! (`query/quick.rs`); nur die Zeilen der Seite werden ganz gelesen. Bei einer
+//! gebrochenen Kette liest die Seite jede Zeile wie zuvor. Gemessen über
+//! 100 000 Records: HUM-163 in `backlog/sprint-4.md`.
+
+mod data;
+mod quick;
 
 use std::collections::VecDeque;
 use std::fs::File;
@@ -102,9 +111,14 @@ impl QueryFilter {
     /// Ob ein Record dem Filter entspricht.
     #[must_use]
     pub fn matches(&self, record: &AuditRecord) -> bool {
-        record.body.kind.starts_with(&self.kind_prefix)
-            && (self.session.is_empty() || record.body.session == self.session)
-            && self.range.contains(&record.body.ts)
+        self.matches_fields(&record.body.kind, &record.body.session, &record.body.ts)
+    }
+
+    /// Dasselbe über die drei Felder, nach denen gefiltert wird.
+    fn matches_fields(&self, kind: &str, session: &str, ts: &str) -> bool {
+        kind.starts_with(&self.kind_prefix)
+            && (self.session.is_empty() || session == self.session)
+            && self.range.contains(ts)
     }
 }
 
@@ -159,6 +173,22 @@ pub fn query(
         0 => DEFAULT_PAGE,
         n => n.min(MAX_PAGE),
     };
+    if let Some(page) = quick::page(path, filter, limit, before, until)
+        .map_err(|err| unreadable(path, "list", &err))?
+    {
+        return Ok(page);
+    }
+    every_line(path, filter, limit, before, until)
+}
+
+/// Eine Seite aus jeder Zeile als JSON, für jede Kette.
+fn every_line(
+    path: &Path,
+    filter: &QueryFilter,
+    limit: usize,
+    before: Option<u64>,
+    until: Option<u64>,
+) -> Result<Page, Diagnostic> {
     // Die Datei steht aufsteigend. Behalten werden die jüngsten `limit + 1`
     // Treffer unter dem Cursor; der eine zu viel sagt, dass noch eine Seite
     // kommt, und wird nicht geliefert.
@@ -245,15 +275,18 @@ fn for_each_record(
             }
         }
     })();
-    result.map_err(|err| {
-        Diagnostic::builder(AUDIT_006, Severity::Error)
-            .why(format!("cannot {doing} {}: {err}", path.display()))
-            .fix(FixAction::CopyCommand(format!(
-                "ls -ln {}",
-                shell_path(path)
-            )))
-            .build()
-    })
+    result.map_err(|err| unreadable(path, doing, &err))
+}
+
+/// Der Befund, wenn sich `path` nicht lesen lässt; `doing` sagt, wobei.
+fn unreadable(path: &Path, doing: &str, err: &io::Error) -> Diagnostic {
+    Diagnostic::builder(AUDIT_006, Severity::Error)
+        .why(format!("cannot {doing} {}: {err}", path.display()))
+        .fix(FixAction::CopyCommand(format!(
+            "ls -ln {}",
+            shell_path(path)
+        )))
+        .build()
 }
 
 #[cfg(test)]
