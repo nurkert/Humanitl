@@ -50,7 +50,9 @@ pub use crate::kinds::{KeyOrigin, RecordKind};
 pub use crate::query::{QueryFilter, TimeRange};
 pub use crate::record::{AuditRecord, GENESIS_PREV, NO_SESSION, RecordBody, format_ts, sha256_hex};
 pub use crate::retention::{AuditPruned, PruneReport};
-pub use crate::verify::{AuditVerifier, BreakReason, VerifyReport, VerifyStatus, VerifyWarning};
+pub use crate::verify::{
+    AuditVerifier, BreakReason, VerifiedHead, VerifyReport, VerifyStatus, VerifyWarning,
+};
 pub use crate::writer::{AnchorMirror, AuditHandle, AuditWriter, Head, WriterOptions};
 
 /// Ein Anker: Nummer und Hash eines Records, außerhalb der Datei abgelegt.

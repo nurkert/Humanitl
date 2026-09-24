@@ -4830,7 +4830,11 @@ fn audit_verify_asks_the_daemon_for_key_and_anchors() {
     );
     assert!(text.contains("checked by:  daemon"), "{text}");
     assert!(!text.contains("file mode"), "the daemon checked it: {text}");
-    assert!(text.contains(&format!("(seq {})", last.body.seq)), "{text}");
+    // Der Kopf wie in HUM-070, mit dem Zeitpunkt der letzten Zeile (HUM-162).
+    assert!(
+        text.contains(&format!("(seq {}, {})", last.body.seq, last.body.ts)),
+        "{text}"
+    );
 
     let json = harness.run(["--json", "audit", "verify"]);
     assert_eq!(code(&json), 0, "{}", stderr(&json));
@@ -4842,6 +4846,7 @@ fn audit_verify_asks_the_daemon_for_key_and_anchors() {
     assert_eq!(value["checked_by"], "daemon");
     assert_eq!(value["head"]["hash"], last.hash);
     assert_eq!(value["head"]["seq"], last.body.seq);
+    assert_eq!(value["head"]["ts"], last.body.ts, "{value}");
     let anchors = humanitl_recorder::read_anchors(&harness.paths().db_path()).expect("anchors");
     assert_eq!(value["anchor_count"], anchors.len());
     assert!(value["last_anchor_at"].is_string(), "{value}");

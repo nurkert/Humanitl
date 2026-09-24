@@ -804,7 +804,7 @@ mit seinem Schlüssel und gegen die Anker und sagt das:
 $ humanitl audit verify
 audit chain: OK
 records:     4213
-head:        a3f9…c2e1 (seq 4213)
+head:        a3f9…c2e1 (seq 4213, 2026-09-02T10:42:01.000000Z)
 hmac key:    checked by the daemon
 anchors:     42 (last at 2026-09-02T10:40:00.000000Z), checked by the daemon
 warnings:    unanchored tail: 13 records
@@ -870,8 +870,10 @@ Feld `diagnostic`; `stderr` bleibt leer. `mode` sagt, welche Prüfung lief:
 `full` beim Daemon mit Schlüssel und Ankern, `file` ohne beides; `hmac` und
 `anchors` sagen dasselbe je Teil (`checked` oder `not_checked`). Beim Daemon
 kommen `anchor_count` und `last_anchor_at` dazu. `head.hash` ist der Hash, den
-der Audit-Screen zeigt; `head.ts` steht nur in der Prüfung der Datei, weil die
-Antwort des Daemons keinen Zeitpunkt des Kopfes trägt.
+der Audit-Screen zeigt; `head.ts` ist der Zeitstempel der Zeile dieses
+Records, Zeichen für Zeichen wie im Log (HUM-162). Nur ein Daemon, der
+`AuditResponse.head_ts` noch nicht kennt, lässt ihn aus; dann steht dort
+`null`.
 
 ### `audit export`
 
