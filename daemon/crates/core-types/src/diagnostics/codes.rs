@@ -804,10 +804,12 @@ registry! {
     /// wenn der letzte vollständige Record nicht zu Schlüssel oder Ankern
     /// passt. Im zweiten Fall startet der Daemon nicht: Eine Kette auf einem
     /// gebrochenen Ende fortzusetzen hieße, jeden neuen Record auf etwas zu
-    /// bauen, das `verify` ohnehin verwirft.
+    /// bauen, das `verify` ohnehin verwirft. Dazu kommt der Export, wenn eine
+    /// Zeile gar kein Record ist; eine Kette, deren Records nur nicht
+    /// zusammenpassen, exportiert er unverändert (HUM-214).
     AUDIT_001 => "audit", "Hash-Kette gebrochen", "#audit_001",
-        "Die Prüfung von `audit.jsonl` findet einen Record, der nicht zu Vorgänger, Hash, MAC oder Anker passt, oder die Datei endet vor einem Anker; beim Start ist es der letzte Record, an den der Schreiber anhängen soll.",
-        "`CopyCommand`, der die Datei samt Zeitstempel beiseitelegt; sie bleibt als Beleg liegen, und die Kette beginnt neu.";
+        "Die Prüfung von `audit.jsonl` findet einen Record, der nicht zu Vorgänger, Hash, MAC oder Anker passt, oder die Datei endet vor einem Anker; beim Start ist es der letzte Record, an den der Schreiber anhängen soll. Beim Export steht im Log eine Zeile, die kein Record ist, auch eine leere; der Export bricht dann ab und schreibt nichts. Eine Kette, deren Records nicht zusammenpassen, exportiert er dagegen unverändert, den Bruch meldet erst die Prüfung.",
+        "`CopyCommand`, der die Datei samt Zeitstempel beiseitelegt; sie bleibt als Beleg liegen, und die Kette beginnt neu. Beim Export ein `CopyCommand` mit `humanitl audit verify --file` auf das Log.";
 
     /// Der Daemon hat geantwortet, aber den Aufruf abgelehnt: der Aufruf
     /// selbst passt nicht zum Zustand des Daemons.

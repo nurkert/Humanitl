@@ -904,8 +904,10 @@ mit CRLF. JSON-Zeilen enden mit LF, wie im Log.
 Eine Datei, die schon da ist, wird nie überschrieben (`AUDIT_008`): Ein Export
 ist ein Beleg, und ein `--force` gibt es aus demselben Grund nicht wie bei
 `daemon install`. Geschrieben wird in eine Nebendatei, und erst der fertige
-Export bekommt seinen Namen; ein Log, das mittendrin bricht (`AUDIT_001`),
-hinterlässt keine halbe Datei, die den nächsten Versuch abwiese. Die
+Export bekommt seinen Namen; ein Log mit einer Zeile, die kein Record ist
+(`AUDIT_001`), hinterlässt keine halbe Datei, die den nächsten Versuch
+abwiese. Eine gebrochene Kette exportiert er unverändert, den Bruch meldet
+`humanitl audit verify` (HUM-214). Die
 Nebendatei eines abgebrochenen Exports räumt der nächste Export in dasselbe
 Verzeichnis weg, aber nur, wenn das Verzeichnis dem eigenen Konto gehört und
 weder Gruppe noch andere hineinschreiben dürfen; in einem geteilten

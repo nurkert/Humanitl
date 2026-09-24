@@ -16,9 +16,11 @@
 //! **Nie überschreiben.** Ein Export ist ein Beleg. Geschrieben wird in eine
 //! Nebendatei im selben Verzeichnis, mit `fsync`, und erst der fertige Export
 //! bekommt seinen Namen — über `hard_link`, das wie `create_new` an einem
-//! vorhandenen Pfad scheitert, auch an einem Verweis. Ein Log, das mittendrin
-//! bricht, hinterlässt so keine halbe Datei, die den nächsten Versuch mit
-//! [`AUDIT_008`] abwiese; die Nebendatei verschwindet auf jedem Weg.
+//! vorhandenen Pfad scheitert, auch an einem Verweis. Ein Log mit einer Zeile,
+//! die kein Record ist ([`AUDIT_001`]), hinterlässt so keine halbe Datei, die
+//! den nächsten Versuch mit [`AUDIT_008`] abwiese; die Nebendatei verschwindet
+//! auf jedem Weg. Die Kette selbst prüft der Export nicht, das tut `verify`
+//! (HUM-214).
 
 use std::fs::File;
 use std::io::{self, BufRead as _, BufReader, BufWriter, Write as _};
@@ -92,8 +94,14 @@ impl ExportFormat {
 ///
 /// [`AUDIT_008`], wenn `out` schon da ist oder sich nicht schreiben lässt,
 /// [`AUDIT_006`], wenn sich das Log nicht lesen lässt, [`AUDIT_001`], wenn
-/// eine Zeile des Logs kein Record ist: Aus einer Kette, die nicht hält, wird
-/// nichts exportiert.
+/// eine Zeile des Logs kein Record ist, auch eine leere. Der Export prüft
+/// weder Hash noch MAC noch Anker; ob die Kette hält, sagt `verify`. Eine
+/// manipulierte Zeile im Zeitraum geht deshalb unverändert in einen
+/// JSONL-Export (HUM-214): So bleibt er Byte für Byte die Kette, und auch ein
+/// gebrochenes Log lässt sich als Beleg übergeben. Über einen JSONL-Export des
+/// ganzen Logs findet `verify` den Bruch an derselben Stelle wie im Log; ein
+/// Ausschnitt nach Zeitraum oder `until` ist keine vollständige Kette mehr,
+/// und das CSV schreibt die Felder neu und trägt weder `prev` noch MAC.
 pub fn export(
     log: &Path,
     format: ExportFormat,
@@ -166,10 +174,10 @@ fn write_export(
             break;
         }
         number += 1;
+        // Auch eine leere Zeile ist kein Record: `verify` wertet sie als
+        // Bruch, und ein Export, der sie wegließe, wäre nicht mehr Byte für
+        // Byte die Kette (HUM-214).
         let line = buffer.strip_suffix(b"\n").unwrap_or(&buffer);
-        if line.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
         let record = AuditRecord::from_line(line)
             .map_err(|error| not_a_record(log, number, &error.to_string()))?;
         number_seq = record.body.seq;
@@ -447,8 +455,8 @@ fn unwritable(out: &Path, why: &str) -> Diagnostic {
 fn not_a_record(log: &Path, line: usize, why: &str) -> Diagnostic {
     Diagnostic::builder(AUDIT_001, Severity::Error)
         .why(format!(
-            "{} line {line} is not an audit record ({why}); nothing is exported from a log that \
-             does not hold",
+            "{} line {line} is not an audit record ({why}); the export stops and writes \
+             nothing",
             log.display()
         ))
         .fix(FixAction::CopyCommand(format!(
