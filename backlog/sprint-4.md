@@ -4512,11 +4512,11 @@ m7, Schwere minor, von zwei unabhängigen Prüfern bestätigt). Ort: `app/lib/fe
 Der Befund ist behoben, und ein Test hält ihn behoben.
 
 ### Akzeptanzkriterien
-- [ ] In `_send` vor dem `await` `final bool ownsDrafts = flowId == ref.read(selectedFlowIdProvider);` festhalten.
-- [ ] `_consumeDrafts()` nur aufrufen, wenn `ownsDrafts` gilt.
-- [ ] Test in `tray_host_test`: A mit Notiz, B per Benachrichtigung blocken, `blockNoteProvider.text` bleibt unverändert.
-- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
-- [ ] `make check` grün.
+- [x] In `_send` vor dem `await` `final bool ownsDrafts = flowId == ref.read(selectedFlowIdProvider);` festhalten.
+- [x] `_consumeDrafts()` nur aufrufen, wenn `ownsDrafts` gilt.
+- [x] Test in `tray_host_test`: A mit Notiz, B per Benachrichtigung blocken, `blockNoteProvider.text` bleibt unverändert.
+- [x] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [x] `make check` grün.
 
 ### Referenzen
 Sicherheitsdurchlauf 2026-09-23, Befund m7; `app/lib/features/intercept/providers/decision.dart:774`.

@@ -78,6 +78,10 @@ enum ConfirmReason {
   forever,
 }
 
+/// Die Auswahl, mit deren Entwürfen eine Entscheidung begann, und die
+/// Generation dieser Auswahl (HUM-218).
+typedef _DraftsKey = ({FlowId? id, int generation});
+
 /// A decision that waits for the modal.
 @immutable
 class BatchRequest {
@@ -87,7 +91,7 @@ class BatchRequest {
     required this.flows,
     this.remember = false,
     this.reason = ConfirmReason.reach,
-    this.withNote = true,
+    this.fromSelection = true,
     this.acknowledgedFindings = const <int>[],
     this.withheld = 0,
     this.findingsConfirmed = false,
@@ -105,8 +109,10 @@ class BatchRequest {
   /// Why this decision is being asked about.
   final ConfirmReason reason;
 
-  /// Whether the note of the action bar travels with it.
-  final bool withNote;
+  /// Whether the decision comes out of the selection. Only then do the note
+  /// and the rule draft of the action bar travel with it and are used up;
+  /// out of a row they belong to another request (HUM-072, HUM-218).
+  final bool fromSelection;
 
   /// The findings "Send anyway" acknowledged, when the pause led here: a
   /// rule draft set to forever asks first, and the acknowledgement has to
@@ -147,7 +153,7 @@ class BatchRequest {
       other.kind == kind &&
       other.remember == remember &&
       other.reason == reason &&
-      other.withNote == withNote &&
+      other.fromSelection == fromSelection &&
       other.withheld == withheld &&
       other.findingsConfirmed == findingsConfirmed &&
       listEquals(other.flows, flows) &&
@@ -158,7 +164,7 @@ class BatchRequest {
     kind,
     remember,
     reason,
-    withNote,
+    fromSelection,
     withheld,
     findingsConfirmed,
     Object.hashAll(flows),
@@ -191,7 +197,22 @@ List<String> batchHosts(List<Flow> flows) {
 @Riverpod(keepAlive: true)
 class BatchConfirm extends _$BatchConfirm {
   @override
-  BatchRequest? build() => null;
+  BatchRequest? build() {
+    // Eine Frage aus der Auswahl gilt den Entwürfen dieser Auswahl: Das Modal
+    // nennt deren Regel, und ihre Notiz reist mit. Wechselt die Auswahl,
+    // während es steht, etwa über „Anzeigen“ in einer Benachrichtigung,
+    // gehören die Entwürfe einer anderen Anfrage, und die Frage fällt weg,
+    // statt mit fremden oder leeren Entwürfen zu entscheiden (HUM-218).
+    ref.listen<FlowId?>(selectedFlowIdProvider, (
+      FlowId? previous,
+      FlowId? next,
+    ) {
+      if (previous != next && (state?.fromSelection ?? false)) {
+        state = null;
+      }
+    });
+    return null;
+  }
 
   /// Asks before [request] happens.
   void ask(BatchRequest request) => state = request;
@@ -505,7 +526,7 @@ class InterceptDecision extends _$InterceptDecision {
     List<Flow> flows,
     bool remember,
     ConfirmReason reason, {
-    bool withNote = true,
+    bool fromSelection = true,
     List<int> acknowledgedFindings = const <int>[],
     int withheld = 0,
     bool findingsConfirmed = false,
@@ -517,7 +538,7 @@ class InterceptDecision extends _$InterceptDecision {
           flows: flows,
           remember: remember,
           reason: reason,
-          withNote: withNote,
+          fromSelection: fromSelection,
           acknowledgedFindings: acknowledgedFindings,
           withheld: withheld,
           findingsConfirmed: findingsConfirmed,
@@ -588,20 +609,30 @@ class InterceptDecision extends _$InterceptDecision {
   /// Blocking is not gated by the arming -- the agent may retry -- but it is
   /// gated by reach: above [modalAboveReach] the modal names the host and
   /// what the agent gets instead.
-  Future<void> blockMany(List<Flow> flows, {bool withNote = true}) async {
-    if (flows.length == 1 && withNote) {
+  Future<void> blockMany(List<Flow> flows, {bool fromSelection = true}) async {
+    if (flows.length == 1 && fromSelection) {
       await block();
       return;
     }
     if (!_batchable(flows)) {
       return;
     }
-    final ConfirmReason? asks = _reasonToAsk(flows, false);
+    final ConfirmReason? asks = _reasonToAsk(
+      flows,
+      false,
+      fromSelection: fromSelection,
+    );
     if (asks != null) {
-      _ask(DecisionKind.block, flows, false, asks, withNote: withNote);
+      _ask(
+        DecisionKind.block,
+        flows,
+        false,
+        asks,
+        fromSelection: fromSelection,
+      );
       return;
     }
-    await _many(flows, DecisionKind.block, withNote: withNote);
+    await _many(flows, DecisionKind.block, fromSelection: fromSelection);
   }
 
   /// Why this decision has to be asked about first, or null.
@@ -616,16 +647,39 @@ class InterceptDecision extends _$InterceptDecision {
   /// where they are listed before anything leaves
   /// (`backlog/CONVENTIONS.md` 4.13, "allowing is never easier than
   /// blocking").
-  ConfirmReason? _reasonToAsk(List<Flow> flows, bool remember) {
+  ///
+  /// Out of a row ([fromSelection] false) the rule draft is not this
+  /// decision's, so its permanence is no reason to ask (HUM-218).
+  ConfirmReason? _reasonToAsk(
+    List<Flow> flows,
+    bool remember, {
+    bool fromSelection = true,
+  }) {
     if (flows.length > modalAboveReach || batchHosts(flows).length > 1) {
       return ConfirmReason.reach;
     }
-    final RememberState draft = ref.read(rememberDraftProvider);
-    final RememberDuration duration = remember && !draft.open
-        ? RememberDuration.session
-        : draft.effective;
-    return duration == RememberDuration.forever ? ConfirmReason.forever : null;
+    if (!fromSelection) {
+      return null;
+    }
+    return _draftDuration(remember) == RememberDuration.forever
+        ? ConfirmReason.forever
+        : null;
   }
+
+  /// The duration the rule draft gives, with [remember] as the default when
+  /// the grid is closed.
+  RememberDuration _draftDuration(bool remember) {
+    final RememberState draft = ref.read(rememberDraftProvider);
+    return remember && !draft.open ? RememberDuration.session : draft.effective;
+  }
+
+  /// The rule the draft of the selection makes for a decision over [flow].
+  Rule? _draftRule(Flow flow, DecisionKind kind, bool remember) => _rule(
+    flow,
+    ref.read(rememberDraftProvider),
+    _draftDuration(remember),
+    kind == DecisionKind.block ? RuleAction.block : RuleAction.allow,
+  );
 
   /// Asks about sending every held request (`Queue: allow all…`).
   ///
@@ -655,6 +709,9 @@ class InterceptDecision extends _$InterceptDecision {
       false,
       ConfirmReason.reach,
       withheld: held.length - clean.length,
+      // Alle angehaltenen Anfragen sind nicht die Auswahl: Merk-Entwurf und
+      // Notiz der ausgewählten Anfrage reisen nicht mit (HUM-218).
+      fromSelection: false,
     );
   }
 
@@ -688,7 +745,7 @@ class InterceptDecision extends _$InterceptDecision {
       flows,
       request.kind,
       remember: request.remember,
-      withNote: request.withNote,
+      fromSelection: request.fromSelection,
       acknowledgedFindings: request.acknowledgedFindings,
     );
   }
@@ -715,28 +772,24 @@ class InterceptDecision extends _$InterceptDecision {
     List<Flow> flows,
     DecisionKind kind, {
     bool remember = false,
-    bool withNote = true,
+    bool fromSelection = true,
     List<int> acknowledgedFindings = const <int>[],
   }) async {
     if (flows.isEmpty || state.isSending) {
       return;
     }
-    final RememberState draft = ref.read(rememberDraftProvider);
-    final RememberDuration duration = remember && !draft.open
-        ? RememberDuration.session
-        : draft.effective;
-    final Rule? rule = _rule(
-      flows.first,
-      draft,
-      duration,
-      kind == DecisionKind.block ? RuleAction.block : RuleAction.allow,
-    );
+    // Aus einer Zeile gehört der Merk-Entwurf der ausgewählten Anfrage, nicht
+    // dieser Gruppe: Er wird weder zur Regel noch verbraucht (HUM-218).
+    final _DraftsKey? drafts = fromSelection ? _draftsKey() : null;
+    final Rule? rule = drafts == null
+        ? null
+        : _draftRule(flows.first, kind, remember);
     final Decision decision = kind == DecisionKind.block
         // A block out of a row acts on the row under the pointer, not on the
         // selection; the note of the selected request has nothing to do with
         // it and does not travel (HUM-072).
         ? Decision.block(
-            note: withNote ? ref.read(blockNoteProvider).outgoing : null,
+            note: fromSelection ? ref.read(blockNoteProvider).outgoing : null,
           )
         // The indices name the findings of one request; over a group there
         // are none to carry (HUM-160).
@@ -766,7 +819,7 @@ class InterceptDecision extends _$InterceptDecision {
         done++;
       }
     } on DaemonException catch (error) {
-      _abort(flows, done, kind, size, created, error.diagnostic);
+      _abort(flows, done, kind, size, created, drafts, error.diagnostic);
       return;
     } on Object catch (error) {
       _abort(
@@ -775,6 +828,7 @@ class InterceptDecision extends _$InterceptDecision {
         kind,
         size,
         created,
+        drafts,
         ClientDiagnostics.daemonUnreachable(
           socketPath: '?',
           detail: error.toString(),
@@ -784,7 +838,7 @@ class InterceptDecision extends _$InterceptDecision {
     }
     state = const DecisionProgress.idle();
     _record(flows, kind, size, created);
-    _consumeDrafts();
+    _consumeDraftsOf(drafts);
     ref.read(selectionProvider.notifier).clear();
   }
 
@@ -812,6 +866,7 @@ class InterceptDecision extends _$InterceptDecision {
     DecisionKind kind,
     int size,
     Rule? rule,
+    _DraftsKey? drafts,
     Diagnostic diagnostic,
   ) {
     if (!ref.mounted) {
@@ -819,12 +874,30 @@ class InterceptDecision extends _$InterceptDecision {
     }
     if (done > 0) {
       _record(flows.sublist(0, done), kind, size, rule);
-      _consumeDrafts();
+      _consumeDraftsOf(drafts);
     }
     state = DecisionProgress.failed(
       flowId: flows[done < flows.length ? done : flows.length - 1].id,
       diagnostic: diagnostic,
     );
+  }
+
+  /// Die Auswahl, der die Entwürfe gerade gehören, mit ihrer Generation.
+  _DraftsKey _draftsKey() => (
+    id: ref.read(selectedFlowIdProvider),
+    generation: ref.read(selectedFlowIdProvider.notifier).generation,
+  );
+
+  /// Verbraucht die Entwürfe, wenn sie noch [drafts] gehören.
+  ///
+  /// Die Entscheidung hat mit den Entwürfen der Auswahl [drafts] begonnen.
+  /// Hat die Auswahl währenddessen gewechselt, auch weg und wieder zurück,
+  /// gehören die Entwürfe, die jetzt stehen, einer anderen Entscheidung und
+  /// bleiben (HUM-218). Null heißt: Die Entscheidung hat keine benutzt.
+  void _consumeDraftsOf(_DraftsKey? drafts) {
+    if (drafts != null && drafts == _draftsKey()) {
+      _consumeDrafts();
+    }
   }
 
   /// Forgets the rule draft and the note; both belong to the decision that
@@ -878,6 +951,13 @@ class InterceptDecision extends _$InterceptDecision {
     if (flowId == null || state.isSending) {
       return;
     }
+    // Notiz, Merk-Entwurf und Findings-Pause gehören dem ausgewählten Flow.
+    // Eine Antwort aus der Benachrichtigung entscheidet einen anderen, ohne
+    // die Auswahl zu ändern; dann bleiben die Entwürfe des ausgewählten
+    // Flows stehen (HUM-218). Festgehalten vor dem `await`, weil sich die
+    // Auswahl währenddessen ändern kann.
+    final _DraftsKey drafts = _draftsKey();
+    final bool ownsDrafts = flowId == drafts.id;
     ref.read(lastRefusalProvider.notifier).clear();
     state = DecisionProgress.sending(flowId: flowId, kind: decision.kind);
     try {
@@ -897,7 +977,7 @@ class InterceptDecision extends _$InterceptDecision {
             size: flow?.requestSize ?? 0,
             rule: created,
           );
-      _consumeDrafts();
+      _consumeDraftsOf(ownsDrafts ? drafts : null);
     } on DaemonException catch (error) {
       if (ref.mounted) {
         state = DecisionProgress.failed(

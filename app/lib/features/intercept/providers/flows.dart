@@ -422,9 +422,23 @@ class SelectedFlowId extends _$SelectedFlowId {
     // therefore taken here, and `ref.read` is also what starts the queue --
     // a listener alone does not build what it listens to.
     ref.listen(visibleQueueFlowsProvider, _follow);
+    // Jeder Wechsel der Auswahl zählt, auch weg und wieder zurück: Die
+    // Entwürfe beginnen mit jeder neuen Auswahl frisch, und wer eine
+    // Entscheidung abschließt, erkennt daran, ob die Entwürfe noch die sind,
+    // mit denen sie begann (HUM-218).
+    listenSelf((FlowId? previous, FlowId? next) {
+      if (previous != next) {
+        _generation++;
+      }
+    });
     final List<Flow> queue = ref.read(visibleQueueFlowsProvider).flows;
     return queue.isEmpty ? null : queue.first.id;
   }
+
+  int _generation = 0;
+
+  /// Zählt die Wechsel der Auswahl; nur Gleichheit hat eine Bedeutung.
+  int get generation => _generation;
 
   /// True while a decision key is still down; the selection waits for it.
   bool _keyDown = false;
