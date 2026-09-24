@@ -4454,11 +4454,11 @@ m5, Schwere minor, von zwei unabhängigen Prüfern bestätigt). Ort: `daemon/bin
 Der Befund ist behoben, und ein Test hält ihn behoben.
 
 ### Akzeptanzkriterien
-- [ ] Beide Writes fehlerbewusst machen: `.map_err(|e| Diagnostic::builder(codes::CONFIG_015, Severity::Error).why(format!("{}: the check could not write its scratch copy: {e}", path.display())).build())?`. Ohne Schlüssel in der `why` verweigert `probe` (`config.rs:497`).
+- [x] Beide Writes fehlerbewusst machen: `.map_err(|e| Diagnostic::builder(codes::CONFIG_015, Severity::Error).why(format!("{}: the check could not write its scratch copy: {e}", path.display())).build())?`. Ohne Schlüssel in der `why` verweigert `probe` (`config.rs:497`).
 - [ ] Alternative: `tempfile::tempdir_in(file.parent())`.
-- [ ] Test mit einem Scratch-Schreiber, der fehlschlägt.
-- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
-- [ ] `make check` grün.
+- [x] Test mit einem Scratch-Schreiber, der fehlschlägt.
+- [x] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [x] `make check` grün.
 
 ### Referenzen
 Sicherheitsdurchlauf 2026-09-23, Befund m5; `daemon/bin/humanitl/src/cmd/config.rs:712` (und 745).

@@ -617,11 +617,29 @@ fn findings(ctx: &Context, scope: Scope, file_text: Option<&str>, file: &Path) -
             "no temporary directory for the check",
         )];
     };
-    let mut layers = Layers::new(ctx, scope, file_text, file);
+    findings_in(ctx, scope, file_text, file, scratch.path(), |path, text| {
+        std::fs::write(path, text)
+    })
+}
+
+/// Schreibt eine Nebendatei; im Betrieb `std::fs::write`, im Test einer, der
+/// scheitert.
+type ScratchWriter = fn(&Path, &str) -> std::io::Result<()>;
+
+/// [`findings`] mit den Nebendateien in `scratch`, geschrieben von `write`.
+fn findings_in(
+    ctx: &Context,
+    scope: Scope,
+    file_text: Option<&str>,
+    file: &Path,
+    scratch: &Path,
+    write: ScratchWriter,
+) -> Vec<Finding> {
+    let mut layers = Layers::new(ctx, scope, file_text, file, write);
     let mut out: Vec<Finding> = Vec::new();
 
     for round in 0..MAX_FINDINGS {
-        let Err(diagnostic) = layers.load(ctx, scratch.path(), round) else {
+        let Err(diagnostic) = layers.load(ctx, scratch, round) else {
             return out;
         };
         let (key, involved) = keys_named_in(&diagnostic);
@@ -673,12 +691,20 @@ struct Layers {
     env: humanitl_config::Env,
     /// Die schon herausgenommenen Schlüssel, in ihrer Reihenfolge.
     peeled: Vec<String>,
+    /// Was die Nebendateien schreibt.
+    write: ScratchWriter,
 }
 
 impl Layers {
     /// Die Ebenen am Anfang: die Datei, die `config set` schreibt, an ihrer
     /// Stelle, alles andere von der Platte und aus der Umgebung.
-    fn new(ctx: &Context, scope: Scope, file_text: Option<&str>, file: &Path) -> Self {
+    fn new(
+        ctx: &Context,
+        scope: Scope,
+        file_text: Option<&str>,
+        file: &Path,
+        write: ScratchWriter,
+    ) -> Self {
         let (global, project, project_real) = match scope {
             Scope::Global => (file_text.map(ToOwned::to_owned), None, None),
             Scope::Project => (
@@ -698,6 +724,7 @@ impl Layers {
             project_pinned: scope == Scope::Project,
             env: ctx.env.clone(),
             peeled: Vec::new(),
+            write,
         }
     }
 
@@ -707,11 +734,12 @@ impl Layers {
     /// steht: Der Mensch kennt nur seine, und ein Vergleich mit der anderen
     /// Folge darf nicht an einem Namen einer Nebendatei scheitern.
     fn load(&mut self, ctx: &Context, scratch: &Path, round: usize) -> Result<(), Diagnostic> {
-        let global_path = self.global.as_ref().map(|text| {
-            let path = scratch.join(format!("global-{round}.toml"));
-            let _ = std::fs::write(&path, text);
-            path
-        });
+        let write = self.write;
+        let global_path = self
+            .global
+            .as_ref()
+            .map(|text| write_scratch(write, &scratch.join(format!("global-{round}.toml")), text))
+            .transpose()?;
         let mut written: Vec<(PathBuf, PathBuf)> = global_path
             .iter()
             .map(|path| (path.clone(), self.global_real.clone()))
@@ -740,11 +768,13 @@ impl Layers {
                     });
                 self.project_pinned = true;
             }
-            sources.profile_project = self.project.as_ref().map(|text| {
-                let path = scratch.join(format!("project-{round}.toml"));
-                let _ = std::fs::write(&path, text);
-                path
-            });
+            sources.profile_project = self
+                .project
+                .as_ref()
+                .map(|text| {
+                    write_scratch(write, &scratch.join(format!("project-{round}.toml")), text)
+                })
+                .transpose()?;
             if let (Some(temp), Some(real)) = (&sources.profile_project, &self.project_real) {
                 written.push((temp.clone(), real.clone()));
             }
@@ -774,6 +804,25 @@ impl Layers {
         self.env = without_variable(&self.env, key);
         self.peeled.push(key.to_owned());
     }
+}
+
+/// Schreibt eine Nebendatei für [`Layers::load`].
+///
+/// Ein Schreibfehler ist ein Befund ohne Schlüssel und verhindert damit das
+/// Schreiben. Still übergangen bliebe eine leere oder halbe Nebendatei zurück
+/// (etwa bei vollem `TMPDIR`), die als Vorgabe lädt, und die Prüfung meldete
+/// eine Konfiguration als gut, die sie nie gesehen hat. Den Vorschlag setzt
+/// [`refusal`], wie für jeden Befund ohne Schlüssel.
+fn write_scratch(write: ScratchWriter, path: &Path, text: &str) -> Result<PathBuf, Diagnostic> {
+    write(path, text).map_err(|error| {
+        Diagnostic::builder(codes::CONFIG_015, Severity::Error)
+            .why(format!(
+                "{}: the check could not write its scratch copy: {error}",
+                path.display()
+            ))
+            .build()
+    })?;
+    Ok(path.to_path_buf())
 }
 
 /// Ein Befund, der keinen Schlüssel hat, weil die Prüfung selbst nicht zu
@@ -1514,5 +1563,82 @@ mod tests {
         // fast jedem Schlüssel.
         assert!(suggestions("zz.a").is_empty(), "{:?}", suggestions("zz.a"));
         assert!(suggestions(".").is_empty());
+    }
+
+    /// Wie ein volles `TMPDIR`: Die Datei entsteht, der Inhalt nicht.
+    fn full_disk(path: &std::path::Path, _text: &str) -> std::io::Result<()> {
+        std::fs::write(path, "")?;
+        Err(std::io::Error::from_raw_os_error(28))
+    }
+
+    /// Eine Nebendatei, die sich nicht schreiben lässt, ist ein Befund ohne
+    /// Schlüssel (HUM-216). Übergangen, bliebe eine leere Datei zurück, die
+    /// als Vorgabe lädt, und die Prüfung meldete Ok.
+    fn unwritable_scratch(scope: super::Scope) -> Vec<super::Finding> {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let cwd = root.path().join("work");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&cwd).unwrap();
+        let env = Env::from_pairs([
+            ("HOME", home.to_str().unwrap()),
+            ("XDG_CONFIG_HOME", home.join(".config").to_str().unwrap()),
+        ]);
+        let ctx = crate::cmd::Context {
+            paths: humanitl_config::Paths::new(env.clone()),
+            env,
+            cwd: cwd.clone(),
+            cli_config: Vec::new(),
+            config_file: None,
+            profile: None,
+            profile_means: crate::cmd::ProfileMeaning::Session,
+            render: crate::render::Renderer::new(false, 0, true),
+        };
+        let file = match scope {
+            super::Scope::Global => ctx.paths.config_path(),
+            super::Scope::Project => cwd.join(".humanitl").join("profile.toml"),
+        };
+        let text = match scope {
+            super::Scope::Global => "[hold]\ntimeout_secs = 7\n",
+            super::Scope::Project => "[config.hold]\ntimeout_secs = 7\n",
+        };
+        let scratch = root.path().join("scratch");
+        std::fs::create_dir_all(&scratch).unwrap();
+        super::findings_in(&ctx, scope, Some(text), &file, &scratch, full_disk)
+    }
+
+    fn assert_refused_for_scratch(found: &[super::Finding], name: &str) {
+        assert_eq!(found.len(), 1, "{found:?}");
+        let finding = &found[0];
+        assert!(finding.key.is_none(), "{finding:?}");
+        assert_eq!(
+            finding.diagnostic.code,
+            humanitl_core::diagnostics::codes::CONFIG_015
+        );
+        assert!(
+            finding
+                .diagnostic
+                .why
+                .contains("the check could not write its scratch copy"),
+            "{}",
+            finding.diagnostic.why
+        );
+        assert!(
+            finding.diagnostic.why.contains(name),
+            "{}",
+            finding.diagnostic.why
+        );
+    }
+
+    #[test]
+    fn a_global_scratch_copy_that_cannot_be_written_is_a_finding() {
+        let found = unwritable_scratch(super::Scope::Global);
+        assert_refused_for_scratch(&found, "global-0.toml");
+    }
+
+    #[test]
+    fn a_project_scratch_copy_that_cannot_be_written_is_a_finding() {
+        let found = unwritable_scratch(super::Scope::Project);
+        assert_refused_for_scratch(&found, "project-0.toml");
     }
 }
