@@ -66,6 +66,25 @@ class _BatchModalState extends ConsumerState<BatchModal>
   void _confirm() =>
       unawaited(ref.read(interceptDecisionProvider.notifier).confirmBatch());
 
+  /// The rule the draft of the selection would save with [request].
+  String _ruleSentence(BatchRequest request) {
+    final RememberState draft = ref.watch(rememberDraftProvider);
+    return ruleSentence(
+      RuleDraft(
+        duration: request.remember && !draft.open
+            ? RememberDuration.session
+            : draft.effective,
+        target: draft.target,
+        flow: request.flows.first,
+        action: request.kind == DecisionKind.block
+            ? RuleAction.block
+            : RuleAction.allow,
+      ),
+      context.l10n,
+      apexOf: ref.watch(apexResolverProvider),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
@@ -81,21 +100,11 @@ class _BatchModalState extends ConsumerState<BatchModal>
     final String where = request.hostCount == 1
         ? request.host
         : l10n.interceptSeveralHosts(request.hostCount);
-    final RememberState draft = ref.watch(rememberDraftProvider);
     // The rule as a sentence, so that what is about to be saved can be read
-    // before it is saved (`docs/UX.md` 4.6).
-    final String rule = ruleSentence(
-      RuleDraft(
-        duration: request.remember && !draft.open
-            ? RememberDuration.session
-            : draft.effective,
-        target: draft.target,
-        flow: flows.first,
-        action: blocking ? RuleAction.block : RuleAction.allow,
-      ),
-      l10n,
-      apexOf: ref.watch(apexResolverProvider),
-    );
+    // before it is saved (`docs/UX.md` 4.6). Eine Frage, die nicht aus der
+    // Auswahl kommt, speichert keine Regel, also nennt sie auch keine: Der
+    // Merk-Entwurf gehört der ausgewählten Anfrage (HUM-218).
+    final String rule = request.fromSelection ? _ruleSentence(request) : '';
     return CallbackShortcuts(
       bindings: _bindings,
       child: FocusScope(
