@@ -204,10 +204,55 @@ mod tests {
 
     use super::*;
 
+    /// Führt `body` auf einem eigenen Faden aus, dessen Deskriptor-Tabelle
+    /// privat und oberhalb von stderr leer ist (`close_range(2)` mit
+    /// `CLOSE_RANGE_UNSHARE`).
+    ///
+    /// Die Test-Harness ist mehrfädig, und Tests in `seccomp` und `refusals`
+    /// forken Kinder, die ohne `exec` bis zu ihrem `_exit` leben. Ein solcher
+    /// Fork kopiert die gemeinsame Tabelle und damit jeden Deskriptor, den ein
+    /// anderer Test in diesem Augenblick offen hat; `CLOEXEC` hilft ohne
+    /// `exec` nicht. Gemessen für HUM-224: Das Kind von
+    /// `the_listener_counts_the_agent_and_answers_eperm_quickly` hielt das
+    /// Kind-Ende des Paars noch 30 bis 45 ms nach dessen `drop`, und das
+    /// Eltern-Ende sah so lange kein Ende. In einer eigenen Tabelle entsteht
+    /// das Paar dort, wo kein fremder Fork hinsieht. Das Leeren der Kopie
+    /// verhindert die Gegenrichtung: Sie hielte sonst die Deskriptoren der
+    /// anderen Tests offen, bis dieser Faden endet. Der Shim selbst forkt nur
+    /// einfädig, dort gibt es diesen Wettlauf nicht (`main.rs`, `launch`).
+    /// Die Ausgabe-Erfassung der Harness (`set_output_capture`) ist
+    /// fadenlokal; `std::thread::spawn` übernimmt sie vom aufrufenden Faden,
+    /// und die Panik von `body` kommt über `resume_unwind` beim Test an.
+    fn in_private_descriptor_table(body: fn()) {
+        let outcome = std::thread::spawn(move || {
+            let above_stderr: libc::c_uint = 3;
+            // SAFETY: close_range nimmt drei Ganzzahlen; es schließt nur die
+            // frische Kopie der Tabelle dieses Fadens, die sonst niemand nutzt.
+            let rc = unsafe {
+                libc::syscall(
+                    libc::SYS_close_range,
+                    above_stderr,
+                    libc::c_uint::MAX,
+                    libc::CLOSE_RANGE_UNSHARE,
+                )
+            };
+            assert_eq!(rc, 0, "close_range: {}", io::Error::last_os_error());
+            body();
+        })
+        .join();
+        if let Err(panic) = outcome {
+            std::panic::resume_unwind(panic);
+        }
+    }
+
     /// The three messages arrive as the parent expects them, in order, and
     /// the listener arrives as a descriptor of its own.
     #[test]
     fn the_messages_cross_the_pair_in_their_shape() {
+        in_private_descriptor_table(messages_cross_the_pair);
+    }
+
+    fn messages_cross_the_pair() {
         let (parent, child) = channel().unwrap();
         assert!(!exec_marker_arrived(&parent), "nothing sent yet");
 
