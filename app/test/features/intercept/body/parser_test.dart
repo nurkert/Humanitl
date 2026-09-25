@@ -76,14 +76,41 @@ void main() {
     // Das Skript des Fakes trägt den einen gepackten Rumpf, an dem die
     // Oberfläche das prüfen kann: httpbin.org, `Content-Encoding: br`, ein
     // JWT bei 11..37 der entpackten Bytes.
+    //
+    // Der Test wartet auf den Zustand, nicht auf die Uhr (HUM-228): Das Skript
+    // spielt mit echten Timern, und unter Last summieren sich die Verspätungen
+    // der einzelnen Schritte über die nominalen 4,03 s hinaus. Er hört zu, bis
+    // die Analyse des httpbin-Flows im Strom ist; die Obergrenze ist nur das
+    // Netz gegen ein Skript, das den Flow gar nicht mehr liefert.
     final FakeDaemonClient client = FakeDaemonClient();
     addTearDown(client.close);
     final List<FlowEvent> events = <FlowEvent>[];
+    final Completer<void> httpbinAnalyzed = Completer<void>();
     final StreamSubscription<FlowEvent> subscription = client
         .subscribe()
-        .listen(events.add);
-    await Future<void>.delayed(const Duration(milliseconds: 4200));
-    await subscription.cancel();
+        .listen((FlowEvent event) {
+          events.add(event);
+          // `_apply` des Fakes hat den Zustand schon nachgezogen, bevor das
+          // Ereignis im Strom ankommt; der Host steht also fest.
+          if (event is FlowEventAnalyzed &&
+              client.state.flow(event.flowId)?.host == 'httpbin.org' &&
+              !httpbinAnalyzed.isCompleted) {
+            httpbinAnalyzed.complete();
+          }
+        });
+    // Das Abo endet auch dann, wenn die Obergrenze reißt; sonst liefe das
+    // Skript nach dem `fail` weiter in einen Test, der schon vorbei ist.
+    try {
+      await httpbinAnalyzed.future.timeout(
+        const Duration(seconds: 20),
+        onTimeout: () => fail(
+          'the default script delivered no analyzed httpbin.org flow within '
+          '20 s; nominally it arrives after 4.03 s',
+        ),
+      );
+    } finally {
+      await subscription.cancel();
+    }
 
     final FlowDetail detail = client.state.details.values.firstWhere(
       (FlowDetail detail) => detail.summary.host == 'httpbin.org',

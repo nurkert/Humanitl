@@ -5083,9 +5083,9 @@ Warten, bis ein Ereignis zu `httpbin.org` im Strom ist (oder der Zustand des Fak
 Der Test selbst; zwanzig Läufe unter Last grün (Last nur mit `nice` und solange die Maschine unter 80 % liegt).
 
 ### Akzeptanzkriterien
-- [ ] Der Test enthält keine feste Wartezeit mehr, die über sein Ergebnis entscheidet.
-- [ ] Zwanzig Läufe hintereinander unter Last sind grün.
-- [ ] `make check` grün.
+- [x] Der Test enthält keine feste Wartezeit mehr, die über sein Ergebnis entscheidet.
+- [x] Zwanzig Läufe hintereinander unter Last sind grün.
+- [x] `make check` grün.
 
 ### Fallstricke
 - Den Fake nicht verlangsamen oder beschleunigen, nur warten; das Skript ist für andere Tests der Takt.
