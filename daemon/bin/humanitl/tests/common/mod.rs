@@ -432,6 +432,27 @@ pub fn profile_file(name: &str) -> PathBuf {
         .join(format!("{name}.toml"))
 }
 
+/// Die Daten, die im `AppImage` neben `bin/` liegen: `domains.yaml` des
+/// Katalogs unter `share/humanitl/catalog/` und das Profil `default` unter
+/// `profiles/sandbox/` (`packaging/appimage/build-appimage.sh`, HUM-165).
+///
+/// `lib` ist `usr/lib/humanitl` des Baums, das Verzeichnis über `bin/`.
+pub fn image_data(lib: &Path) {
+    let catalog = lib.join("share/humanitl/catalog");
+    let profiles = lib.join("profiles/sandbox");
+    for dir in [&catalog, &profiles] {
+        std::fs::create_dir_all(dir).expect("a data directory in the image");
+    }
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    std::fs::copy(
+        repo.join("catalog/domains.yaml"),
+        catalog.join("domains.yaml"),
+    )
+    .expect("the catalog is copied");
+    std::fs::copy(profile_file("default"), profiles.join("default.toml"))
+        .expect("the profile is copied");
+}
+
 /// Der gebaute Shim neben dem Binary, falls es ihn gibt.
 pub fn shim() -> Option<PathBuf> {
     let path = Path::new(BIN).parent()?.join("humanitl-shim");

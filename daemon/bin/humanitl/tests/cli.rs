@@ -29,7 +29,8 @@ use humanitl_sandbox::{LaunchInputs, SandboxProfile, SessionContext};
 mod common;
 
 use common::{
-    BIN, FakeServer, Harness, PATIENCE, code, profile_file, sandbox_required, stderr, stdout,
+    BIN, FakeServer, Harness, PATIENCE, code, image_data, profile_file, sandbox_required, stderr,
+    stdout,
 };
 
 #[test]
@@ -3502,31 +3503,24 @@ fn daemon_install_writes_units_and_calls_systemctl() {
     );
 }
 
-/// Aus einem `AppImage` heraus werden Daemon und Shim herauskopiert, und
-/// `ExecStart` zeigt auf die Kopie.
+/// Aus einem `AppImage` heraus werden Daemon, Shim, Katalog und Profil
+/// herauskopiert, im Aufbau des Bildes, und `ExecStart` zeigt auf die Kopie
+/// (HUM-070, HUM-165).
+///
+/// Der Daemon sucht den Katalog unter `<exe>/../../share/humanitl/catalog` und
+/// das Profil in einem Vorfahren unter `profiles/sandbox`; beides muss deshalb
+/// relativ zu `bin/humanitld` in der Kopie liegen, nicht nur irgendwo darin.
 #[test]
 fn daemon_install_appimage_copies_binaries() {
-    use std::os::unix::fs::PermissionsExt as _;
-
     let harness = Harness::new();
-    let bin = installed_tree(&harness);
-    let shim = bin.join("humanitl-shim");
-    std::fs::write(&shim, b"#!/bin/sh\nexit 0\n").expect("the shim");
-    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("0755");
+    let bin = appimage_tree(&harness);
+    let image = bin.parent().expect("the image root");
+    // Ein Unterverzeichnis im Katalog: Die Kopie nimmt den ganzen Baum mit.
+    let nested = image.join("share/humanitl/catalog/icons/example.svg");
+    std::fs::create_dir_all(nested.parent().expect("a directory")).expect("the icons");
+    std::fs::write(&nested, b"<svg/>").expect("a nested file");
 
-    let mut command = Command::new(bin.join("humanitl"));
-    command
-        .args(["daemon", "install"])
-        .current_dir(harness.path("work"))
-        .env_clear()
-        .env("HUMANITL_SYSTEM_UNIT_DIR", harness.path("system-units"))
-        .env("PATH", "")
-        .env("APPIMAGE", "/tmp/Humanitl-0.0.0-x86_64.AppImage")
-        .env("HOME", harness.path("home"))
-        .env("XDG_CONFIG_HOME", harness.path("config"))
-        .env("XDG_DATA_HOME", harness.path("data"))
-        .env("XDG_RUNTIME_DIR", harness.path("run"));
-    let output = output_when_not_busy(command);
+    let output = appimage_install(&harness, &bin, &["daemon", "install"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
 
     let link = harness.path("home").join(".local/lib/humanitl/current");
@@ -3543,21 +3537,178 @@ fn daemon_install_appimage_copies_binaries() {
         "the copy carries the version: {}",
         lib.display()
     );
-    for name in ["humanitld", "humanitl-shim"] {
+    for name in ["bin/humanitld", "bin/humanitl-shim"] {
         assert!(
             lib.join(name).is_file(),
             "{name} is not in {}",
             lib.display()
         );
     }
+    let daemon = lib.join("bin/humanitld");
+    // Der Pfad, den eine Unit von vor HUM-165 nennt, führt zum neuen Daemon:
+    // Bricht ein Lauf zwischen Umhängen von `current` und Schreiben der Unit
+    // ab, startet die alte Unit trotzdem etwas.
+    let legacy = link.join("humanitld");
+    assert_eq!(
+        std::fs::read_link(lib.join("humanitld")).ok(),
+        Some(PathBuf::from("bin/humanitld")),
+        "the flat humanitld is a relative link into bin/"
+    );
+    assert_eq!(
+        std::fs::read(&legacy).ok(),
+        std::fs::read(&daemon).ok(),
+        "{} does not lead to the copied daemon",
+        legacy.display()
+    );
+    // Derselbe Weg wie `catalog_dir` in `humanitld`: zwei Ebenen über dem Binary.
+    let catalog = daemon
+        .parent()
+        .and_then(Path::parent)
+        .expect("two levels above the daemon")
+        .join("share/humanitl/catalog");
+    for (copied, original) in [
+        (
+            catalog.join("domains.yaml"),
+            image.join("share/humanitl/catalog/domains.yaml"),
+        ),
+        (catalog.join("icons/example.svg"), nested),
+        (
+            lib.join("profiles/sandbox/default.toml"),
+            image.join("profiles/sandbox/default.toml"),
+        ),
+    ] {
+        assert_eq!(
+            std::fs::read(&copied).ok(),
+            std::fs::read(&original).ok(),
+            "{} is not a copy of {}",
+            copied.display(),
+            original.display()
+        );
+    }
 
     // `ExecStart` nennt den Verweis und nie den Einhängepunkt des AppImages.
     let unit = std::fs::read_to_string(unit_path(&harness)).expect("the unit is written");
     assert!(
-        unit.contains(&format!("ExecStart={}/humanitld\n", link.display())),
+        unit.contains(&format!("ExecStart={}/bin/humanitld\n", link.display())),
         "{unit}"
     );
     assert!(!unit.contains("/tmp/.mount_"), "{unit}");
+}
+
+/// Fehlt im `AppImage` der Katalog oder das Profil, wird nichts kopiert und
+/// keine Unit geschrieben: Der kopierte Daemon liefe sonst mit leerem Katalog
+/// oder ohne Sandbox-Profil (HUM-165).
+#[test]
+fn daemon_install_appimage_without_catalog_or_profile_copies_nothing() {
+    for missing in [
+        "share/humanitl/catalog/domains.yaml",
+        "profiles/sandbox/default.toml",
+    ] {
+        let harness = Harness::new();
+        let bin = appimage_tree(&harness);
+        let absent = bin.parent().expect("the image root").join(missing);
+        std::fs::remove_file(&absent).expect("the file goes");
+
+        let output = appimage_install(&harness, &bin, &["--json", "daemon", "install"]);
+        assert_eq!(code(&output), 1, "{missing}: {}", stdout(&output));
+        let value: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("one JSON value");
+        assert_eq!(value["code"], "DAEMON_011", "{missing}: {value}");
+        assert!(
+            value["why"]
+                .as_str()
+                .is_some_and(|why| why.contains(&absent.display().to_string())),
+            "{missing}: {value}"
+        );
+        // Kein `ls` auf den Einhängepunkt, den es nach dem Lauf nicht mehr
+        // gibt, und kein Satz über Binaries: Es hilft nur ein vollständiges
+        // Bild.
+        assert!(
+            value["why"]
+                .as_str()
+                .is_some_and(|why| why.contains("download it again") && !why.contains("binaries")),
+            "{missing}: {value}"
+        );
+        assert_eq!(value["fix"]["kind"], "open_url", "{missing}: {value}");
+        assert_eq!(
+            value["fix"]["command"], "https://github.com/nurkert/Humanitl/releases",
+            "{missing}: {value}"
+        );
+        assert!(
+            !harness.path("home/.local/lib/humanitl").exists(),
+            "{missing}: something was copied"
+        );
+        assert!(
+            !unit_path(&harness).exists(),
+            "{missing}: a unit was written"
+        );
+    }
+}
+
+/// `--bin-dir .` aus dem Verzeichnis `bin/` heraus: Katalog und Profil liegen
+/// im Verzeichnis darüber, nicht unter dem lexikalischen Elternteil `""` von
+/// `.` (HUM-165, Review).
+#[test]
+fn daemon_install_appimage_resolves_a_relative_bin_dir() {
+    let harness = Harness::new();
+    let bin = appimage_tree(&harness);
+    let mut command = Command::new(bin.join("humanitl"));
+    command
+        .args(["--json", "daemon", "install", "--bin-dir", "."])
+        .current_dir(&bin)
+        .env_clear()
+        .env("HUMANITL_SYSTEM_UNIT_DIR", harness.path("system-units"))
+        .env("PATH", "")
+        .env("APPIMAGE", "/tmp/Humanitl-0.0.0-x86_64.AppImage")
+        .env("HOME", harness.path("home"))
+        .env("XDG_CONFIG_HOME", harness.path("config"))
+        .env("XDG_DATA_HOME", harness.path("data"))
+        .env("XDG_RUNTIME_DIR", harness.path("run"));
+    let output = output_when_not_busy(command);
+    assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
+
+    let copy = harness.path("home/.local/lib/humanitl/current");
+    for file in [
+        "bin/humanitld",
+        "share/humanitl/catalog/domains.yaml",
+        "profiles/sandbox/default.toml",
+    ] {
+        assert!(copy.join(file).is_file(), "{file} is not in the copy");
+    }
+}
+
+/// Lässt sich im Bild etwas nicht lesen, liegt das am Bild: `DAEMON_011` mit
+/// dem Pfad im Bild und dem Weg zu einem neuen, nicht mit einem `ls` auf den
+/// Einhängepunkt und nicht mit der Schuld beim Ziel (HUM-165, Review).
+#[test]
+fn daemon_install_appimage_blames_an_unreadable_image_file_on_the_image() {
+    let harness = Harness::new();
+    let bin = appimage_tree(&harness);
+    // Ein Verweis ins Leere: Er lässt sich auch als root nicht lesen.
+    let broken = bin
+        .parent()
+        .expect("the image root")
+        .join("share/humanitl/catalog/broken.csv");
+    std::os::unix::fs::symlink("does-not-exist", &broken).expect("a dangling link");
+
+    let output = appimage_install(&harness, &bin, &["--json", "daemon", "install"]);
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("one JSON value");
+    assert_eq!(value["code"], "DAEMON_011", "{value}");
+    let why = value["why"].as_str().unwrap_or_default();
+    assert!(
+        why.starts_with(&format!(
+            "{} in the AppImage cannot be read",
+            broken.display()
+        )),
+        "{value}"
+    );
+    assert_eq!(value["fix"]["kind"], "open_url", "{value}");
+    assert!(
+        !unit_path(&harness).exists(),
+        "a unit was written after a failed copy"
+    );
 }
 
 /// Ohne Daemon endet `daemon status` mit 2 und einem Befund.
@@ -4118,7 +4269,7 @@ fn daemon_install_appimage_print_names_the_copy() {
         serde_json::from_str(stdout(&output).trim()).expect("one JSON value");
     let exec = value["exec_start"].as_str().expect("exec_start");
     assert!(
-        exec.ends_with(".local/lib/humanitl/current/humanitld"),
+        exec.ends_with(".local/lib/humanitl/current/bin/humanitld"),
         "{exec}"
     );
     assert!(
@@ -4174,14 +4325,24 @@ fn daemon_logs_maps_the_exit_code_and_names_a_missing_journalctl() {
     assert!(!text.contains("loginctl"), "{text}");
 }
 
-/// Ein Baum wie in einem `AppImage`: Kommandozeile, Daemon und Shim.
+/// Ein Baum wie in einem `AppImage`: `usr/lib/humanitl/bin/` mit
+/// Kommandozeile, Daemon und Shim, daneben Katalog und Profil ([`image_data`]).
+///
+/// Liefert das Verzeichnis `bin/`.
 fn appimage_tree(harness: &Harness) -> PathBuf {
     use std::os::unix::fs::PermissionsExt as _;
 
-    let bin = installed_tree(harness);
-    let shim = bin.join("humanitl-shim");
-    std::fs::write(&shim, b"#!/bin/sh\nexit 0\n").expect("the shim");
-    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("0755");
+    let bin = harness.path("image/usr/lib/humanitl/bin");
+    std::fs::create_dir_all(&bin).expect("the image tree");
+    let cli = bin.join("humanitl");
+    std::fs::copy(BIN, &cli).expect("the binary is copied");
+    std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).expect("0755");
+    for name in ["humanitld", "humanitl-shim"] {
+        let path = bin.join(name);
+        std::fs::write(&path, b"#!/bin/sh\nexit 0\n").expect("a neighbour");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("0755");
+    }
+    image_data(bin.parent().expect("usr/lib/humanitl"));
     bin
 }
 
@@ -4307,7 +4468,7 @@ fn daemon_install_appimage_same_version_again_never_touches_the_live_copy() {
     let new = std::fs::read_link(&link).expect("current after the second run");
 
     assert_ne!(old, new, "the second copy is a directory of its own");
-    assert!(new.join("humanitld").is_file(), "{}", new.display());
+    assert!(new.join("bin/humanitld").is_file(), "{}", new.display());
     // Seit HUM-077 geht die alte Kopie erst nach einem Neustart des Dienstes:
     // Ohne `systemctl` (leerer `PATH`) startet niemand neu, und ein Daemon,
     // der noch aus ihr läuft, verlöre sonst seine Datei. Dass sie nach dem
@@ -4315,7 +4476,7 @@ fn daemon_install_appimage_same_version_again_never_touches_the_live_copy() {
     // `refresh_replaces_an_older_copy_restarts_and_only_then_retires_it` in
     // `tests/daemon_lifecycle.rs`.
     assert!(
-        old.join("humanitld").is_file(),
+        old.join("bin/humanitld").is_file(),
         "the copy current pointed at before stays complete without a restart"
     );
     let mut expected = vec![old, new];

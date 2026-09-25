@@ -6,17 +6,17 @@
 #
 # `--cli` ist der Weg zu `humanitl` im Bild, etwa fuer
 # `./Humanitl.AppImage --cli daemon install`: Die Kommandozeile erkennt das
-# AppImage an `$APPIMAGE` und kopiert Daemon und Shim nach
+# AppImage an `$APPIMAGE` und kopiert Daemon, Shim, Katalog und Profil nach
 # `~/.local/lib/humanitl/`, weil der Einhaengepunkt mit dem Prozess
 # verschwindet (HUM-070).
 #
 # Vor der Anwendung laeuft `daemon install --refresh` (HUM-077): Hat dieses
 # oder ein frueheres AppImage den Dienst schon eingerichtet und liegt unter
 # `~/.local/lib/humanitl/current` eine andere Fassung als diese, kopiert die
-# Kommandozeile Daemon und Shim dieser Fassung heraus, haengt `current` um,
-# startet den Dienst neu und raeumt erst danach die alte Kopie weg. Ist nichts
-# eingerichtet oder dieselbe Fassung, tut der Aufruf nichts und kehrt sofort
-# zurueck. Die erste Einrichtung bleibt ein Klick in der Einrichtung der
+# Kommandozeile Daemon, Shim, Katalog und Profil dieser Fassung heraus,
+# haengt `current` um, startet den Dienst neu und raeumt erst danach die alte
+# Kopie weg. Ist nichts eingerichtet oder dieselbe Fassung, tut der Aufruf
+# nichts und kehrt sofort zurueck. Die erste Einrichtung bleibt ein Klick in der Einrichtung der
 # Anwendung (oder `--cli daemon install`): Eine Unit, die bei jeder Anmeldung
 # einen Dienst startet, legt ein Programmstart nicht ungefragt an.
 #

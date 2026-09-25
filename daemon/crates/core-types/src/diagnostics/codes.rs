@@ -1288,11 +1288,12 @@ registry! {
     /// `~/.local/lib/humanitl/` legen.
     ///
     /// Das Verzeichnis ist ein Verweis, gehört einem anderen Konto oder lässt
-    /// sich nicht schreiben. Die Unit ist dann nicht geschrieben und der
+    /// sich nicht schreiben, oder im Bild fehlen Domain-Katalog oder
+    /// Sandbox-Profil (HUM-165). Die Unit ist dann nicht geschrieben und der
     /// Verweis `current` zeigt, wohin er vorher zeigte (HUM-070).
-    DAEMON_011 => "daemon", "Binaries aus dem AppImage nicht ablegbar", "#daemon_011",
-        "`daemon install` aus einem `AppImage` kann Daemon und Shim nicht nach `~/.local/lib/humanitl/<version>.<stempel>/` kopieren oder `current` nicht umhängen.",
-        "`CopyCommand` mit `ls -ln` auf das Verzeichnis; der Text nennt den Grund.";
+    DAEMON_011 => "daemon", "AppImage-Kopie nicht ablegbar", "#daemon_011",
+        "`daemon install` aus einem `AppImage` kann Daemon, Shim, Katalog und Profil nicht nach `~/.local/lib/humanitl/<version>.<stempel>/` kopieren oder `current` nicht umhängen, oder Katalog oder Profil fehlen im Bild.",
+        "`CopyCommand` mit `ls -ln` auf das Verzeichnis; der Text nennt den Grund. Fehlen Katalog oder Profil im Bild, `OpenUrl` auf die Veröffentlichungen: Nur ein vollständiges `AppImage` hilft.";
     /// `journalctl` liegt nicht im `PATH`.
     ///
     /// Das ist kein Fehler der Sitzung, sondern ein fehlendes Programm; der

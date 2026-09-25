@@ -9,8 +9,9 @@
 #   2. im Bild liegt keine Bibliothek, die vom System kommen muss (GTK, GLib,
 #      Wayland, EGL), und `AppRun` setzt kein `LD_LIBRARY_PATH`;
 #   3. `--cli daemon install --print` erkennt das AppImage an `$APPIMAGE` und
-#      plant `ExecStart` auf die Kopie unter `~/.local/lib/humanitl/current/`,
-#      nie auf den Einhaengepunkt; geschrieben wird dabei nichts.
+#      plant `ExecStart` auf `bin/humanitld` der Kopie unter
+#      `~/.local/lib/humanitl/current/`, nie auf den Einhaengepunkt; geschrieben
+#      wird dabei nichts.
 #
 # Das Bild laeuft mit `--appimage-extract-and-run`: Der Test braucht kein FUSE,
 # und `$APPIMAGE` setzt die Laufzeit in beiden Faellen. Das Heimatverzeichnis
@@ -71,7 +72,7 @@ PLAN="$plan" HOME_DIR="$home" python3 - <<'PY'
 import json, os, sys
 plan = json.loads(os.environ["PLAN"])
 home = os.environ["HOME_DIR"]
-want_exec = f"{home}/.local/lib/humanitl/current/humanitld"
+want_exec = f"{home}/.local/lib/humanitl/current/bin/humanitld"
 if plan.get("exec_start") != want_exec:
     sys.exit(f"error: ExecStart is {plan.get('exec_start')!r}, expected {want_exec!r}")
 if plan.get("action") != "print":
