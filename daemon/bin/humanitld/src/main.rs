@@ -55,7 +55,7 @@ use humanitl_config::{Config, Paths as XdgPaths, ResolverConfig, WorkMode};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, FlowEvent, SessionId, Severity};
-use humanitl_ipc::fake::{FakeDaemon, FakeOptions, Session};
+use humanitl_ipc::fake::{FakeDaemon, FakeOptions, Gates, Session};
 use humanitl_ipc::sandbox::SandboxPorts;
 use humanitl_ipc::session::{SessionResolver, bundled_rules};
 use humanitl_ipc::{
@@ -108,6 +108,12 @@ struct Cli {
     /// Rafft auch die Wartezeiten der `hold`-Zeilen mit `--speed`.
     #[arg(long)]
     scale_timeouts: bool,
+
+    /// Hält den Abspieler an dieser Stelle der Sitzung an (in `t_ms`, vor dem
+    /// Zeitraffer), bis der Prozess ein `SIGUSR1` bekommt. Mehrfach möglich;
+    /// jedes Signal gibt den nächsten Haltepunkt frei. Nur für Testläufe.
+    #[arg(long = "pause-at", value_name = "T_MS")]
+    pause_at: Vec<u64>,
 
     /// Wartezeit für `hold`-Zeilen ohne eigenen Wert, in Sekunden.
     #[arg(long, default_value_t = 300, value_name = "SECS")]
@@ -1706,7 +1712,8 @@ async fn run_fake(cli: &Cli, path: &Path) -> Result<(), Diagnostic> {
             event_buffer: cli.event_buffer,
         },
     );
-    daemon.start();
+    let gates = release_gates_on_sigusr1(Gates::new(cli.pause_at.clone()));
+    daemon.start_with(gates);
     serve(daemon, &paths).await
 }
 
@@ -1718,6 +1725,40 @@ enum Serve {
     Daemon,
     /// `--fake`: nur gRPC-Socket und Token.
     Fake,
+}
+
+/// Gibt bei jedem `SIGUSR1` den nächsten Haltepunkt frei (`--pause-at`) und
+/// liefert die Haltepunkte, mit denen der Abspieler starten soll.
+///
+/// Der Hörer steht, bevor der Socket entsteht: Wer auf den Socket wartet und
+/// dann das Signal schickt, darf den Prozess nicht treffen, solange noch die
+/// Vorgabe für `SIGUSR1` gilt, und die beendet ihn.
+///
+/// Lässt sich der Hörer nicht einrichten, spielt der Abspieler ohne
+/// Haltepunkte, wie `shutdown_signal` ohne den Hörer weiterläuft, der fehlt:
+/// Haltepunkte, die niemand freigeben kann, hielten die Sitzung für immer an.
+/// Ein Test, der auf sie baut, sieht die zu frühen Anfragen und sagt es.
+fn release_gates_on_sigusr1(gates: Gates) -> Gates {
+    use tokio::signal::unix::{SignalKind, signal};
+    if gates.is_empty() {
+        return gates;
+    }
+    match signal(SignalKind::user_defined1()) {
+        Ok(mut signals) => {
+            tracing::info!(at_ms = ?gates.at_ms(), "fake player gates, released by SIGUSR1");
+            let releaser = gates.clone();
+            tokio::spawn(async move {
+                while signals.recv().await.is_some() {
+                    releaser.release();
+                }
+            });
+            gates
+        }
+        Err(error) => {
+            tracing::error!(%error, "cannot listen for SIGUSR1; playing without the --pause-at gates");
+            Gates::default()
+        }
+    }
 }
 
 /// Wem das Verzeichnis gehört, in dem der Socket liegt.

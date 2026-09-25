@@ -89,6 +89,43 @@ class GatedListFlowsClient extends TestDaemonClient {
   }
 }
 
+/// Ein Client, dessen `ListFlows`-Aufrufe jeder für sich warten, bis der Test
+/// sie der Reihe nach loslässt, und der mitzählt, wie viele gleichzeitig
+/// unterwegs sind (HUM-185).
+class QueuedListFlowsClient extends TestDaemonClient {
+  final List<Completer<void>> _waiting = <Completer<void>>[];
+
+  /// Wie viele Aufrufe gerade auf ihre Antwort warten.
+  int inFlight = 0;
+
+  /// Das Höchste, was [inFlight] je war.
+  int maxInFlight = 0;
+
+  /// Lässt den ältesten wartenden Aufruf durch.
+  void releaseOldest() => _waiting.removeAt(0).complete();
+
+  /// Wie viele Aufrufe noch warten.
+  int get waiting => _waiting.length;
+
+  @override
+  Future<FlowPage> listFlows(
+    FlowFilter filter, {
+    int limit = 200,
+    String? cursor,
+  }) async {
+    listFlowsCalls++;
+    inFlight++;
+    if (inFlight > maxInFlight) {
+      maxInFlight = inFlight;
+    }
+    final Completer<void> gate = Completer<void>();
+    _waiting.add(gate);
+    await gate.future;
+    inFlight--;
+    return page;
+  }
+}
+
 void main() {
   test('flows_apply_sequence', () async {
     final TestDaemonClient client = TestDaemonClient();
@@ -345,9 +382,25 @@ void main() {
       <FlowId>[late.id],
     );
 
-    client.release();
+    // Die erste Verbindung verlangt den Abgleich zweimal (die Lücke am
+    // Anfang des Stroms und die lebende Leitung); seit HUM-185 läuft der
+    // zweite erst nach dem ersten. Geprüft wird die Antwort des ersten, also
+    // wartet der zweite am neu vorgelegten Riegel.
+    client
+      ..release()
+      ..rearm();
     await settle();
 
+    expect(
+      container.read(heldFlowsProvider).map((Flow flow) => flow.id).toSet(),
+      <FlowId>{listed.id, late.id},
+    );
+
+    // Und der Folgeabgleich sieht, was der Daemon inzwischen hält.
+    client
+      ..page = FlowPage(flows: <Flow>[listed, late], total: 2)
+      ..release();
+    await settle();
     expect(
       container.read(heldFlowsProvider).map((Flow flow) => flow.id).toSet(),
       <FlowId>{listed.id, late.id},
@@ -652,4 +705,234 @@ void main() {
       DiagnosticCodes.flowNotHeld,
     );
   });
+
+  /// Ein `Held` für eine Anfrage, deren Ankunft dieser Client nie gesehen hat,
+  /// ist eine Lücke und holt die gehaltenen Anfragen neu (HUM-185).
+  ///
+  /// So entsteht sie beim Verbinden: Das `Received` kam, bevor der Strom
+  /// stand, und der Abgleich danach lief, solange die Anfrage noch nicht
+  /// gehalten war. Ihr `Held` fand dann keine Zeile, in die es sich falten
+  /// konnte, und die Anfrage fehlte für immer auf dem Schirm; gemessen im
+  /// Integrationstest der eingefrorenen Warteschlange mit 14 von 15 Anfragen.
+  test(
+    'a Held for a flow this client never saw arrive resyncs the queue',
+    () async {
+      final TestDaemonClient client = TestDaemonClient();
+      final ProviderContainer container = makeContainer(
+        client,
+        FixedNow(testStart),
+      );
+      expect(container.read(heldFlowsProvider), isEmpty);
+      await settle();
+
+      final Flow unseen = heldFlow(
+        n: 7,
+        deadline: testStart.add(const Duration(seconds: 60)),
+      );
+      client.page = FlowPage(flows: <Flow>[unseen], total: 1);
+      final int beforeHeld = client.listFlowsCalls;
+      client.emit(
+        FlowEvent.held(
+          at: testStart,
+          flowId: unseen.id,
+          deadline: testStart.add(const Duration(seconds: 60)),
+        ),
+      );
+      await settle();
+
+      expect(client.listFlowsCalls, beforeHeld + 1);
+      expect(
+        container.read(heldFlowsProvider).map((Flow flow) => flow.id).toList(),
+        <FlowId>[unseen.id],
+        reason: 'the held request whose arrival was missed is on the screen',
+      );
+    },
+  );
+
+  /// Und ein `Held` für eine bekannte Zeile faltet sich wie bisher ein, ohne
+  /// den Daemon nach der ganzen Warteschlange zu fragen.
+  test('a Held for a known flow does not resync', () async {
+    final TestDaemonClient client = TestDaemonClient();
+    final ProviderContainer container = makeContainer(
+      client,
+      FixedNow(testStart),
+    );
+    await settle();
+
+    final Flow flow = heldFlow(
+      n: 8,
+      deadline: testStart.add(const Duration(seconds: 60)),
+    );
+    client.emit(
+      FlowEvent.received(
+        at: testStart,
+        flow: flow.copyWith(
+          state: FlowState.received,
+          deadline: null,
+          heldAt: null,
+        ),
+      ),
+    );
+    await settle();
+    final int beforeHeld = client.listFlowsCalls;
+    client.emit(
+      FlowEvent.held(
+        at: testStart,
+        flowId: flow.id,
+        deadline: testStart.add(const Duration(seconds: 60)),
+      ),
+    );
+    await settle();
+
+    expect(client.listFlowsCalls, beforeHeld);
+    expect(
+      container.read(heldFlowsProvider).map((Flow flow) => flow.id).toList(),
+      <FlowId>[flow.id],
+    );
+  });
+
+  /// Was während eines Abgleichs entschieden wird, kommt nicht als Geist
+  /// zurück, auch wenn dieser Client die Anfrage nie gesehen hat (HUM-185).
+  ///
+  /// Die Seite ist älter als das `Decided`. Für eine bekannte Zeile hält die
+  /// Entscheidung in der Karte sie auf; für eine unbekannte gibt es keine
+  /// Zeile, und ohne eigenes Gedächtnis schriebe die Seite sie als gehalten
+  /// in die Warteschlange, wo jedes `Decide` in `FLOW_NOT_HELD` endete.
+  test(
+    'a flow decided during the resync does not come back as a ghost',
+    () async {
+      final GatedListFlowsClient client = GatedListFlowsClient();
+      final ProviderContainer container = makeContainer(
+        client,
+        FixedNow(testStart),
+      );
+      expect(container.read(heldFlowsProvider), isEmpty);
+      await settle();
+      client.release();
+      await settle();
+
+      client.rearm();
+      final Flow ghost = heldFlow(
+        n: 9,
+        deadline: testStart.add(const Duration(seconds: 60)),
+      );
+      client.page = FlowPage(flows: <Flow>[ghost], total: 1);
+      client.emit(FlowEvent.lagged(at: testStart, dropped: 1));
+      await settle();
+
+      client.emit(
+        FlowEvent.decided(
+          at: testStart,
+          flowId: ghost.id,
+          kind: DecisionKind.allow,
+          source: DecisionSource.user,
+        ),
+      );
+      await settle();
+      client.release();
+      await settle();
+
+      expect(
+        container.read(heldFlowsProvider),
+        isEmpty,
+        reason: 'the page is older than the decision and must not revive it',
+      );
+    },
+  );
+
+  /// Nie zwei Abgleiche zugleich, und was während eines laufenden verlangt
+  /// wird, fällt in genau einen weiteren zusammen (HUM-185).
+  ///
+  /// Zwei Aufrufe unterwegs können in beliebiger Reihenfolge antworten, und
+  /// die ältere Seite überschriebe dann die neuere.
+  test(
+    'resyncs run one at a time and requests in between collapse into one',
+    () async {
+      final QueuedListFlowsClient client = QueuedListFlowsClient();
+      final ProviderContainer container = makeContainer(
+        client,
+        FixedNow(testStart),
+      );
+      expect(container.read(heldFlowsProvider), isEmpty);
+      await settle();
+      // Der Abgleich der ersten Verbindung wartet jetzt; drei weitere Lücken
+      // kommen, während er unterwegs ist.
+      final int before = client.listFlowsCalls;
+      expect(client.waiting, 1);
+      for (int i = 0; i < 3; i++) {
+        client.emit(FlowEvent.lagged(at: testStart, dropped: i + 1));
+      }
+      await settle();
+      expect(client.maxInFlight, 1, reason: 'no second call while one runs');
+      expect(client.listFlowsCalls, before);
+
+      client.releaseOldest();
+      await settle();
+      expect(
+        client.listFlowsCalls,
+        before + 1,
+        reason: 'three requests in the window become exactly one more call',
+      );
+      expect(client.maxInFlight, 1);
+
+      client.releaseOldest();
+      await settle();
+      expect(client.listFlowsCalls, before + 1, reason: 'and then it stops');
+      expect(client.waiting, 0);
+    },
+  );
+
+  /// Auch ein `Decided`, das kurz **vor** dem Abgleich kam, hält eine ältere
+  /// Seite nicht auf, die Anfrage als Geist zurückzubringen, wenn dieser
+  /// Client sie nie gesehen hat (Review zu HUM-185).
+  test(
+    'a flow decided before the resync does not come back as a ghost',
+    () async {
+      final TestDaemonClient client = TestDaemonClient();
+      final ProviderContainer container = makeContainer(
+        client,
+        FixedNow(testStart),
+      );
+      expect(container.read(heldFlowsProvider), isEmpty);
+      await settle();
+
+      final Flow ghost = heldFlow(
+        n: 10,
+        deadline: testStart.add(const Duration(seconds: 60)),
+      );
+      client.emit(
+        FlowEvent.decided(
+          at: testStart,
+          flowId: ghost.id,
+          kind: DecisionKind.block,
+          source: DecisionSource.user,
+        ),
+      );
+      await settle();
+
+      // Die Seite des nächsten Abgleichs ist älter als die Entscheidung.
+      client.page = FlowPage(flows: <Flow>[ghost], total: 1);
+      client.emit(FlowEvent.lagged(at: testStart, dropped: 11));
+      await settle();
+      expect(
+        container.read(heldFlowsProvider),
+        isEmpty,
+        reason: 'the older page must not revive a request that already left',
+      );
+
+      // Sobald eine Seite die Anfrage nicht mehr führt, ist sie vergessen, und
+      // eine spätere Seite, die sie wieder als gehalten führt, gilt.
+      client.page = const FlowPage();
+      client.emit(FlowEvent.lagged(at: testStart, dropped: 12));
+      await settle();
+      client.page = FlowPage(flows: <Flow>[ghost], total: 1);
+      client.emit(FlowEvent.lagged(at: testStart, dropped: 13));
+      await settle();
+      expect(
+        container.read(heldFlowsProvider).map((Flow flow) => flow.id).toList(),
+        <FlowId>[ghost.id],
+        reason: 'the memory ends once the daemon has caught up',
+      );
+    },
+  );
 }

@@ -24,6 +24,7 @@ use humanitl_core::{
     HostName, RuleId, SessionId, Severity, Tier, TransitionInput,
 };
 use serde::Deserialize;
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use super::state::{FakeFlow, FakeState, SessionMeta, StoredResponse, deadline_instant};
@@ -511,6 +512,79 @@ impl PlayerOptions {
     }
 }
 
+/// Haltepunkte des Abspielers (`--pause-at`, HUM-185).
+///
+/// Ein Haltepunkt ist eine Stelle auf der Zeitachse der Datei, in
+/// ungerafften Millisekunden wie `t_ms`. Erreicht der Abspieler sie, spielt er
+/// nichts weiter, bis [`Gates::release`] einmal gerufen wurde; der Rest der
+/// Datei rückt um die Wartezeit nach hinten, die Abstände zwischen ihren
+/// Zeilen bleiben. Eine Freigabe, die kommt, bevor der Abspieler den
+/// Haltepunkt erreicht, wird gezählt und lässt ihn dort ohne Pause
+/// durch: Wer freigibt, muss nicht wissen, ob der Abspieler schon wartet.
+///
+/// Gedacht für Tests, die auf Zustände warten statt auf die Uhr. Der
+/// Integrationstest der eingefrorenen Warteschlange hing an der Zeit, die die
+/// Anwendung bis zum Zeiger in der Warteschlange braucht, und fiel in CI, wenn
+/// der Läufer dafür zu langsam war; mit zwei Haltepunkten kommen die späten
+/// Anfragen erst, wenn der Test so weit ist.
+///
+/// Haltepunkte gelten nur im ersten Durchlauf; mit `--loop` spielen die
+/// folgenden durch.
+#[derive(Debug, Clone)]
+pub struct Gates {
+    /// Die Haltepunkte, aufsteigend und ohne Doppel.
+    at_ms: Vec<u64>,
+    /// Eine Genehmigung je Freigabe.
+    released: Arc<Semaphore>,
+}
+
+impl Default for Gates {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
+}
+
+impl Gates {
+    /// Haltepunkte an den Stellen `at_ms` der Datei, in ungerafften
+    /// Millisekunden.
+    #[must_use]
+    pub fn new(mut at_ms: Vec<u64>) -> Self {
+        at_ms.sort_unstable();
+        at_ms.dedup();
+        Self {
+            at_ms,
+            released: Arc::new(Semaphore::new(0)),
+        }
+    }
+
+    /// Die Haltepunkte, aufsteigend.
+    #[must_use]
+    pub fn at_ms(&self) -> &[u64] {
+        &self.at_ms
+    }
+
+    /// Ob es überhaupt einen Haltepunkt gibt.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.at_ms.is_empty()
+    }
+
+    /// Gibt den nächsten Haltepunkt frei, auch einen, der noch nicht
+    /// erreicht ist.
+    pub fn release(&self) {
+        self.released.add_permits(1);
+    }
+
+    /// Wartet auf eine Freigabe und verbraucht sie.
+    async fn pass(&self) {
+        // Die Semaphore wird nie geschlossen; ein Fehler hier hieße, dass es
+        // sie nicht mehr gibt, und dann gibt es auch nichts mehr zu halten.
+        if let Ok(permit) = self.released.acquire().await {
+            permit.forget();
+        }
+    }
+}
+
 /// Was der Abspieler vor dem Start über die Datei weiß.
 #[derive(Debug, Default)]
 struct Index {
@@ -590,13 +664,22 @@ impl PassStamps {
 }
 
 /// Spielt eine Sitzung ab, bis sie zu Ende ist oder für immer.
-pub async fn play(session: Arc<Session>, state: Arc<FakeState>, options: PlayerOptions) {
+///
+/// [`Gates`] halten den ersten Durchlauf an ihren Stellen an, bis sie
+/// freigegeben werden.
+pub async fn play(
+    session: Arc<Session>,
+    state: Arc<FakeState>,
+    options: PlayerOptions,
+    gates: Gates,
+) {
     let index = Index::build(&session);
     let mut stamps = PassStamps::default();
     let mut iteration: u32 = 0;
     loop {
         let pass = stamps.next(iteration, SystemTime::now());
-        play_once(&session, &state, &index, options, pass).await;
+        let pending: &[u64] = if iteration == 0 { gates.at_ms() } else { &[] };
+        play_once(&session, &state, &index, options, pass, (&gates, pending)).await;
         if !options.repeat {
             return;
         }
@@ -606,18 +689,40 @@ pub async fn play(session: Arc<Session>, state: Arc<FakeState>, options: PlayerO
 }
 
 /// Spielt die Datei genau einmal ab.
+///
+/// `gates` sind die Freigaben und die Haltepunkte, die in diesem Durchlauf
+/// gelten. Jede Pause schiebt alle späteren Zeilen um ihre Länge nach hinten,
+/// auf der Uhr des Abspielers wie auf den Zeitstempeln der Ereignisse.
 async fn play_once(
     session: &Session,
     state: &Arc<FakeState>,
     index: &Index,
     options: PlayerOptions,
     pass: Pass,
+    (gates, mut pending): (&Gates, &[u64]),
 ) {
     let start = tokio::time::Instant::now();
     let started_at = pass.started_at();
+    let mut paused = Duration::ZERO;
     for line in &session.lines {
-        tokio::time::sleep_until(start + options.offset(line.t_ms)).await;
-        let at = started_at + options.offset(line.t_ms);
+        while let Some((&gate, rest)) = pending.split_first() {
+            if line.t_ms < gate {
+                break;
+            }
+            pending = rest;
+            tokio::time::sleep_until(start + paused + options.offset(gate)).await;
+            let reached = tokio::time::Instant::now();
+            tracing::info!(t_ms = gate, "fake player reached a gate");
+            gates.pass().await;
+            paused += reached.elapsed();
+            tracing::info!(
+                t_ms = gate,
+                shifted_ms = u64::try_from(paused.as_millis()).unwrap_or(u64::MAX),
+                "fake player released"
+            );
+        }
+        tokio::time::sleep_until(start + paused + options.offset(line.t_ms)).await;
+        let at = started_at + paused + options.offset(line.t_ms);
         apply_line(state, index, options, line, pass, at);
     }
 }

@@ -33,7 +33,7 @@ use crate::validate;
 use crate::{PROTO_MAJOR, PROTO_MINOR};
 
 pub use crate::convert::EditedRequestError;
-pub use player::{PlayerOptions, Session, SessionError};
+pub use player::{Gates, PlayerOptions, Session, SessionError};
 pub use state::{FakeFlow, FakeState, SessionMeta, StoredResponse};
 
 /// Die mitgelieferte Regel, die `models.dev` blockt.
@@ -145,10 +145,17 @@ impl FakeDaemon {
     // `#[must_use]` würde jeden Aufrufer zu einem `let _` zwingen.
     #[allow(clippy::must_use_candidate)]
     pub fn start(&self) -> tokio::task::JoinHandle<()> {
+        self.start_with(Gates::default())
+    }
+
+    /// Startet den Abspieler wie [`FakeDaemon::start`], aber mit
+    /// Haltepunkten, die der Aufrufer über [`Gates::release`] freigibt.
+    #[allow(clippy::must_use_candidate)]
+    pub fn start_with(&self, gates: Gates) -> tokio::task::JoinHandle<()> {
         let session = Arc::clone(&self.session);
         let state = Arc::clone(&self.state);
         let options = self.options.player();
-        tokio::spawn(async move { player::play(session, state, options).await })
+        tokio::spawn(async move { player::play(session, state, options, gates).await })
     }
 }
 

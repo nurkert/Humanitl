@@ -100,6 +100,8 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-224 | Der Kanal-Test des Shims fällt unter Last zufällig aus | S | — |
 | HUM-227 | `humanitl daemon uninstall` löscht Aktivierungsverweise nach Namen | S | HUM-077, HUM-211 |
 | HUM-228 | Der brotli-Test des Parsers wartet auf die Uhr und fällt unter Last aus | S | — |
+| HUM-229 | `xvfb-run make flutter-test-integration` öffnet unter Wayland ein Fenster auf dem echten Bildschirm | XS | HUM-185 |
+| HUM-230 | Verlauf und Tray könnten Anfragen an derselben Lücke verpassen wie die Warteschlange | S | HUM-185 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -3808,10 +3810,10 @@ Der Schritt ist in CI stabil, oder er sagt bei einem Ausfall genug, dass man
 die Ursache aus dem Artefakt lesen kann.
 
 ### Akzeptanzkriterien
-- [ ] Das Artefakt des Jobs enthält bei einem Ausfall die Ausgabe des Tests und das Log des Daemons.
-- [ ] Die Ursache ist benannt und behoben, oder der Test wartet auf Zustände statt auf Zeit.
-- [ ] Zwanzig Läufe des Schritts hintereinander lokal unter Last (`stress -c 6` oder ein paralleler Bau) sind grün.
-- [ ] `make check` grün.
+- [x] Das Artefakt des Jobs enthält bei einem Ausfall die Ausgabe des Tests und das Log des Daemons.
+- [x] Die Ursache ist benannt und behoben, oder der Test wartet auf Zustände statt auf Zeit.
+- [x] Zwanzig Läufe des Schritts hintereinander lokal unter Last (`stress -c 6` oder ein paralleler Bau) sind grün.
+- [x] `make check` grün.
 
 ### Referenzen
 HUM-144; `app/integration_test/`, `.github/workflows/ci.yml` (Job `e2e-xvfb`).
@@ -5092,3 +5094,95 @@ Der Test selbst; zwanzig Läufe unter Last grün (Last nur mit `nice` und solang
 
 ### Referenzen
 HUM-185, HUM-224; Gate-Läufe von HUM-212 und HUM-159 am 2026-09-24.
+
+---
+
+## HUM-229 · `xvfb-run make flutter-test-integration` öffnet unter Wayland ein Fenster auf dem echten Bildschirm
+Sprint: 4 · Größe: XS · Abhängigkeiten: HUM-185 · Blockiert: —
+
+### Kontext
+Am 2026-09-25 lief `make flutter-test-integration` unter `xvfb-run` auf einem Rechner mit Wayland-Sitzung. `WAYLAND_DISPLAY` war gesetzt, GTK nimmt Wayland vor X11, und das Fenster der Anwendung ging auf den echten Bildschirm des Nutzers statt auf das Xvfb-Display. Der Makefile-Hinweis „start one with `Xvfb :99 …` and export DISPLAY=:99" führt genau dorthin. In CI gibt es kein Wayland, dort fällt das nicht auf.
+
+### Ziel
+Das Ziel `flutter-test-integration` startet die Anwendung nur auf dem Display aus `DISPLAY`, gleich, welche Sitzung drumherum läuft. Ein Entwickler kann es auf seinem Rechner unter `xvfb-run` fahren, ohne dass ein Fenster in seiner Sitzung aufgeht oder die Anwendung seinen Sitzungsbus erreicht.
+
+### Nicht-Ziel
+Eine eigene Xvfb-Verwaltung im Makefile (Display wählen, starten, beenden); das bleibt `xvfb-run` oder dem Aufrufer überlassen. Der Bildschirmteil von `tests/e2e/m2_first_decision/run.sh` nur, falls er denselben Weg nimmt (siehe Fallstricke).
+
+### Betroffene Pfade
+- `Makefile` (Ziel `flutter-test-integration` und sein Hinweistext)
+- eventuell `tests/e2e/m2_first_decision/run.sh`
+
+### Spezifikation
+Jeder Aufruf von `flutter test … -d linux` im Ziel läuft unter
+
+```sh
+env -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS GDK_BACKEND=x11 flutter test "$file" -d linux
+```
+
+`DISPLAY` bleibt, wie der Aufrufer es gesetzt hat. Der Hinweistext bei fehlendem `DISPLAY` nennt `xvfb-run -a --server-args='-screen 0 1600x1000x24' make flutter-test-integration`.
+
+### Schritte
+1. `env -u … GDK_BACKEND=x11` vor den `flutter test`-Aufruf im Ziel setzen; `make flutter-test-integration` läuft unter `xvfb-run` grün.
+2. Hinweistext anpassen.
+3. `tests/e2e/m2_first_decision/run.sh` prüfen und dort dasselbe tun, falls es `flutter test -d linux` außerhalb des Ziels aufruft.
+
+### Tests
+- Probelauf: `xvfb-run -a make flutter-test-integration` auf einer Wayland-Sitzung; die Umgebung des Kindprozesses (zum Beispiel über `/proc/<pid>/environ` der gestarteten Anwendung) enthält kein `WAYLAND_DISPLAY` und kein `DBUS_SESSION_BUS_ADDRESS`, dafür `GDK_BACKEND=x11`.
+- Integrationsschritt in CI unverändert grün.
+
+### Akzeptanzkriterien
+- [ ] Das Ziel ruft `flutter test` mit `env -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS GDK_BACKEND=x11` auf.
+- [ ] Ein Lauf auf einer Wayland-Sitzung unter `xvfb-run` öffnet kein Fenster in der Sitzung; geprüft über die Umgebung des Kindprozesses (`WAYLAND_DISPLAY` fehlt, `GDK_BACKEND=x11`).
+- [ ] `make check` grün.
+
+### Fallstricke
+- `DBUS_SESSION_BUS_ADDRESS` der Nutzersitzung darf die Anwendung im Test nicht erreichen: Tray und Benachrichtigungen liefen sonst über den echten Bus.
+- Ohne `WAYLAND_DISPLAY` versucht GDK trotzdem `wayland-0` unter `XDG_RUNTIME_DIR`, wenn `GDK_BACKEND` nicht gesetzt ist; `GDK_BACKEND=x11` ist deshalb Pflicht, nicht Beiwerk.
+- Prüfen, ob `tests/e2e/m2_first_decision/run.sh` denselben Weg nimmt.
+
+### Referenzen
+HUM-185 (Befund beim Lauf vom 2026-09-25); `Makefile` Ziel `flutter-test-integration`.
+
+---
+
+## HUM-230 · Verlauf und Tray könnten Anfragen an derselben Lücke verpassen wie die Warteschlange
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-185 · Blockiert: —
+
+### Kontext
+HUM-185 hat in der Warteschlange (`Flows`, `app/lib/features/intercept/providers/flows.dart`) drei Lücken geschlossen: Ein `Held` für einen Flow, dessen `Received` vor dem Strom lag, fand keine Zeile und die Anfrage fehlte für immer; jetzt löst es einen Abgleich aus. Abgleiche laufen seither einer nach dem anderen. Und was die Warteschlange verlassen hat, ohne dass der Client es je sah, kommt nicht aus einer älteren Seite als Geist zurück. Verlauf und Tray lesen denselben Strom (`core/ipc/flow_events.dart`) und falten ihn selbst; ob sie an denselben Stellen Ereignisse verwerfen, ist nicht geprüft.
+
+### Ziel
+Verlauf und Tray zeigen nach einem Verbindungsaufbau mitten in einer Sitzung dieselben Anfragen und Zustände wie der Daemon, oder im Issue steht begründet, warum sie es nicht müssen.
+
+### Nicht-Ziel
+Eine gemeinsame Faltung für Warteschlange, Verlauf und Tray; das wäre eine eigene strukturelle Änderung. Änderungen an `Flows` selbst, die HUM-185 abgeschlossen hat.
+
+### Betroffene Pfade
+- `app/lib/features/history/…` (Faltung der Ereignisse)
+- `app/lib/features/tray/…` (Faltung der Ereignisse)
+- die zugehörigen Tests unter `app/test/features/history/` und `app/test/features/tray/`
+
+### Spezifikation
+keine; Umfang und Form des Fixes ergeben sich aus der Prüfung in Schritt 1.
+
+### Schritte
+1. Für Verlauf und Tray aufschreiben, was mit einem Ereignis (`Held`, `Decided`, `TimedOut`, `Failed`) für einen Flow geschieht, dessen `Received` vor dem Strom lag, und ob ein Abgleich es zurückholt.
+2. Für jede Stelle, an der ein Ereignis still verloren geht: Test, der die Lücke zeigt (rot), dann Fix nach dem Muster aus `flows.dart`.
+3. `make check`.
+
+### Tests
+- Je betroffenem Provider ein Test: `Received` vor dem Strom, danach `Held` oder `Decided` über den Strom; erwartet ist der Zustand, den der Daemon meldet. Mit Mutationsbeweis.
+
+### Akzeptanzkriterien
+- [ ] Für Verlauf und Tray ist geprüft, was mit einem Ereignis für einen Flow geschieht, dessen `Received` vor dem Strom lag; das Ergebnis steht im Issue.
+- [ ] Wo Ereignisse still verloren gehen, holt ein Abgleich sie zurück, mit einem Test, der ohne die Änderung rot ist (Mutationsbeweis).
+- [ ] `make check` grün.
+
+### Fallstricke
+- Riverpod meldet ein Ereignis, das gleich dem vorigen ist (`==`), nicht noch einmal; zwei gleiche `Lagged` hintereinander in einem Test lösen nur einen Abgleich aus. Testereignisse deshalb unterscheidbar machen.
+- Abgleiche dürfen nicht parallel laufen, sonst überschreibt eine ältere Seite eine neuere (HUM-185).
+- Eine Seite von `ListFlows` kann älter sein als ein Ereignis, das schon da ist; was schon erledigt ist, darf sie nicht zurückbringen.
+
+### Referenzen
+HUM-185; `app/lib/features/intercept/providers/flows.dart`; `app/test/features/intercept/flows_test.dart` (Tests zu „a Held for a flow this client never saw arrive" und „does not come back as a ghost").

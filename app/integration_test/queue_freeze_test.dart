@@ -35,6 +35,23 @@
 // durch, die Anwendung braucht länger bis zum ersten Bild. Gelöst wird das
 // über die Reihenfolge -- erst die Anwendung, dann der Daemon auf denselben
 // Socket --, nicht über eine Schleife, die das Zeitproblem zudeckt.
+//
+// **Gewartet wird auf Zustände, nicht auf die Uhr (HUM-185).** Bis dahin
+// spielte der Daemon seine fünfzehn Anfragen in Echtzeit, und der Test
+// musste den Zeiger in die Warteschlange bringen, bevor die dreizehnte kam
+// (12,6 s nach dem Start des Daemons). Auf diesem Rechner stand der Zeiger
+// nach gut 4 s; unter Last fror er am 2026-09-25 erst bei der zwölften
+// Anfrage ein, also ohne jede Luft, und ein langsamer CI-Läufer lief über
+// die Grenze: Der Schritt fiel ohne Zutun des Commits aus. Jetzt hält der
+// Daemon an zwei Stellen an ([gates]), und der Test gibt sie frei, wenn er
+// so weit ist.
+//
+// Die zweite Ursache fand erst dieser Test unter Last, und sie lag in der
+// Anwendung: Verband sie sich, während eine Anfrage schon angekommen, aber
+// noch nicht gehalten war, fehlte diese Anfrage für immer in der
+// Warteschlange (14 von 15, „the scenario played its 15 requests"). Behoben
+// in `Flows._apply` (`flows.dart`), bewacht in
+// `test/features/intercept/flows_test.dart`.
 
 import 'dart:async';
 import 'dart:io';
@@ -84,11 +101,30 @@ const int scenarioSpeed = 1;
 /// So viele Anfragen hält das Szenario am Ende.
 const int scenarioFlows = 15;
 
+/// Die Haltepunkte des Daemons (`--pause-at`), in `t_ms` der Aufzeichnung.
+///
+/// Der erste liegt vor der zwölften Anfrage (9,8 s), der zweite vor der
+/// dreizehnten (12,6 s). Der erste fällt, sobald der Zeiger in der
+/// Warteschlange steht: Danach kommt sicher noch eine Anfrage in das Fenster
+/// vor der Grundlinie. Der zweite fällt erst nach der Grundlinie, und so
+/// kommen die letzten drei sicher hinter dem Einfrieren an, gleich, wie lange
+/// die Anwendung bis dahin brauchte.
+const List<int> gates = <int>[9800, 12600];
+
 /// So viele Ankünfte müssen nach dem Einfrieren noch kommen.
 ///
 /// Zwei wären zu wenig: Die Pille soll wachsen, und dafür braucht es zwei
 /// Messungen **und** eine Ankunft dazwischen.
 const int arrivalsBehindTheFreeze = 3;
+
+/// Das Verzeichnis, in das dieser Lauf das Log seines Daemons legt.
+///
+/// `make flutter-test-integration` setzt es auf `target/e2e/integration`, und
+/// der Job `e2e-xvfb` lädt `target/e2e` als Artefakt hoch. Ohne diese Datei
+/// blieb von einem roten Lauf in CI nur „1 failed" übrig: Das Log des Jobs ist
+/// ohne Admin-Rechte nicht lesbar (HUM-185). Ohne die Variable schreibt der
+/// Test nichts auf die Platte.
+const String logDirVariable = 'HUMANITL_INTEGRATION_LOGS';
 
 /// Der Daemon dieses Laufs: `humanitld --fake <szenario>`.
 class FakeDaemon {
@@ -99,6 +135,7 @@ class FakeDaemon {
     String scenario, {
     required String socket,
     int speed = scenarioSpeed,
+    List<int> pauseAt = const <int>[],
   }) async {
     final String repo = Directory.current.path.endsWith('/app')
         ? Directory.current.parent.path
@@ -109,7 +146,15 @@ class FakeDaemon {
     }
     final Directory root = Directory.systemTemp.createTempSync('hum-fake-');
     try {
-      return await _startIn(root, binary, scenario, repo, speed, socket);
+      return await _startIn(
+        root,
+        binary,
+        scenario,
+        repo,
+        speed,
+        socket,
+        pauseAt,
+      );
     } catch (_) {
       // Was zwischen `createTempSync` und dem laufenden Daemon schiefgeht,
       // ließe sonst einen Baum in `/tmp` stehen: `addTearDown` steht erst
@@ -128,6 +173,7 @@ class FakeDaemon {
     String repo,
     int speed,
     String socket,
+    List<int> pauseAt,
   ) async {
     for (final String path in <String>[
       'runtime/humanitl',
@@ -160,6 +206,7 @@ class FakeDaemon {
         // solange dieser Test misst.
         '--speed',
         '$speed',
+        for (final int at in pauseAt) ...<String>['--pause-at', '$at'],
       ],
       environment: <String, String>{
         'XDG_RUNTIME_DIR': '${root.path}/runtime',
@@ -168,11 +215,24 @@ class FakeDaemon {
         'XDG_STATE_HOME': '${root.path}/state',
         'HOME': root.path,
         'PATH': Platform.environment['PATH'] ?? '/usr/local/bin:/usr/bin:/bin',
+        // Wer mehr sehen will als `info`, setzt `RUST_LOG` für den Lauf.
+        if (Platform.environment['RUST_LOG'] case final String level)
+          'RUST_LOG': level,
       },
     );
     final StringBuffer said = StringBuffer();
-    process.stdout.listen((List<int> b) => said.write(String.fromCharCodes(b)));
-    process.stderr.listen((List<int> b) => said.write(String.fromCharCodes(b)));
+    final File? log = _daemonLog();
+    // Jeder Brocken geht sofort und synchron in die Datei: Bricht das
+    // Testgerüst den Lauf an einer Frist ab, endet der Prozess, ohne dass ein
+    // gepufferter `IOSink` noch geleert würde, und gerade dieser Lauf braucht
+    // sein Log.
+    void keep(List<int> bytes) {
+      said.write(String.fromCharCodes(bytes));
+      log?.writeAsBytesSync(bytes, mode: FileMode.append, flush: true);
+    }
+
+    process.stdout.listen(keep);
+    process.stderr.listen(keep);
     bool exited = false;
     unawaited(process.exitCode.then((int _) => exited = true));
     final DateTime until = DateTime.now().add(const Duration(seconds: 20));
@@ -192,6 +252,33 @@ class FakeDaemon {
   final Directory root;
   final Process process;
   final String socket;
+
+  /// Die Datei für das Log des Daemons, oder null ohne [logDirVariable].
+  ///
+  /// Sie beginnt mit einer Zeile, die in UTC sagt, wann der Test den Daemon
+  /// startete. Die Zeitstempel des Daemons und die Zeilen `queue_freeze …` der
+  /// Testausgabe tragen dieselbe absolute UTC-Zeit und lassen sich darüber
+  /// nebeneinanderlegen.
+  static File? _daemonLog() {
+    final String? dir = Platform.environment[logDirVariable];
+    if (dir == null || dir.isEmpty) {
+      return null;
+    }
+    Directory(dir).createSync(recursive: true);
+    return File('$dir/queue_freeze.daemon.log')..writeAsStringSync(
+      '# humanitld --fake started ${DateTime.now().toUtc().toIso8601String()}\n',
+    );
+  }
+
+  /// Gibt den nächsten Haltepunkt (`--pause-at`) frei.
+  ///
+  /// Ein `SIGUSR1` je Haltepunkt. Kommt es, bevor der Daemon dort steht, läuft
+  /// er ohne Pause durch; verloren geht es nicht.
+  void release() {
+    if (!process.kill(ProcessSignal.sigusr1)) {
+      fail('the fake daemon is gone; nothing released its gate');
+    }
+  }
 
   /// Beendet den Daemon und räumt sein Verzeichnis weg.
   ///
@@ -258,6 +345,35 @@ Finder chevronOf(String apex) => find.descendant(
         widget is HGlyphIcon && widget.glyph == HGlyph.chevronRight,
   ),
 );
+
+/// Die Zeitleiste eines Laufs (HUM-185).
+///
+/// Jede Marke schreibt eine Zeile
+/// `queue_freeze 2026-09-25T05:56:18.504Z +9.8s held 11: …` in die
+/// Testausgabe. Die Sekunden zählen ab der ersten Marke, die gleich nach dem
+/// offenen Socket des Daemons steht, und sagen, welcher Schritt wie lange
+/// brauchte. Die Uhrzeit davor ist absolut in UTC, im selben Format wie die
+/// Zeitstempel im Log des Daemons; über sie und nicht über die Sekunden legt
+/// man beide Dateien nebeneinander.
+class _Trace {
+  _Trace(this.container) : clock = Stopwatch()..start();
+
+  final ProviderContainer container;
+  final Stopwatch clock;
+
+  /// Schreibt die Marke [what] mit Zeit und Zahl der gehaltenen Flüsse.
+  void mark(String what) {
+    final String seconds = (clock.elapsedMilliseconds / 1000).toStringAsFixed(
+      1,
+    );
+    // ignore: avoid_print
+    print(
+      'queue_freeze ${DateTime.now().toUtc().toIso8601String()} '
+      '+${seconds}s held '
+      '${container.read(heldFlowsProvider).length}: $what',
+    );
+  }
+}
 
 /// Rote Punkte einer Messung, gesammelt statt beim ersten geworfen.
 class _Marks {
@@ -327,12 +443,15 @@ void main() {
     final FakeDaemon daemon = await FakeDaemon.start(
       'fixtures/sessions/npm-install.jsonl',
       socket: socket,
+      pauseAt: gates,
     );
     // Das Netz für den Fall, dass eine Messung unten fällt: Der Daemon stirbt
     // dann hier, und kein Prozess und kein Verzeichnis bleibt stehen. Im
     // grünen Lauf ist er längst tot -- der letzte Schritt des Rumpfes legt
     // ihn hin, und das muss er dort tun (siehe „Das Ende" unten).
     addTearDown(daemon.stop);
+    final _Trace trace = _Trace(container)
+      ..mark('the daemon opened its socket');
 
     // Und sofort nachfragen, statt den Takt von zwei Sekunden abzuwarten
     // (`connectionReconnectProvider`): Das ist derselbe Weg, den „Erneut
@@ -345,6 +464,7 @@ void main() {
       timeout: const Duration(seconds: 30),
       what: 'the daemon answered',
     );
+    trace.mark('the daemon answered');
 
     await pumpUntil(
       tester,
@@ -352,6 +472,7 @@ void main() {
       what: 'the shell drew its rail',
     );
     await goToQueue(tester, container);
+    trace.mark('the queue is on screen');
 
     // **Die Gruppe aufklappen.** Ab drei Anfragen an denselben Apex steht die
     // Gruppe eingeklappt (`collapseFrom`); erst der Tipp auf das Faltdreieck
@@ -364,6 +485,7 @@ void main() {
       what: 'the scenario reaches the screen',
     );
     final HeldGroup group = _group(container)!;
+    trace.mark('the group of the scenario is drawn');
     expect(
       group.apex,
       'npmjs.org',
@@ -386,6 +508,7 @@ void main() {
       () => find.byType(QueueRow).evaluate().length >= 3,
       what: 'the tap on the group head opened its rows',
     );
+    trace.mark('the group is open');
     expect(
       container.read(expandedGroupsProvider.notifier).isOpen(group),
       isTrue,
@@ -416,6 +539,12 @@ void main() {
     // zufällig grün.
     final Set<String> keysAtEntry = drawnRows(tester).keys.toSet();
     final int heldAtEntry = container.read(heldFlowsProvider).length;
+    trace.mark('the pointer entered the queue');
+    // Der erste Haltepunkt fällt: Stand der Daemon schon vor der zwölften
+    // Anfrage, kommt sie jetzt; stand er noch davor, kommt die nächste
+    // ohnehin. So oder so liegt eine Ankunft im Fenster, auf das unten
+    // gewartet wird, und bis zur dreizehnten kommt keine weitere.
+    daemon.release();
     await pumpUntil(
       tester,
       () => container.read(heldFlowsProvider).length >= heldAtEntry + 1,
@@ -432,11 +561,11 @@ void main() {
     final int frozenEntries = entries();
     final Map<String, Rect> frozenRows = drawnRows(tester);
     final int heldAtFreeze = container.read(heldFlowsProvider).length;
+    trace.mark('the baseline is taken');
     // Gemessen werden kann nur, was noch kommt: Ohne Ankünfte hinter dem
-    // Zeiger sagt der Lauf nichts über das Einfrieren. Steht hier ein
-    // `expect` und kein Messpunkt, weil ein Lauf ohne Rest kein rotes
-    // Ergebnis ist, sondern ein ungültiges -- der Rechner war zu langsam, und
-    // der Test sagt das, statt dreißig Sekunden in einer Frist zu stehen.
+    // Zeiger sagt der Lauf nichts über das Einfrieren. Seit den Haltepunkten
+    // hängt das nicht mehr an der Geschwindigkeit des Rechners; fällt dieser
+    // `expect`, hat der Daemon seine Haltepunkte nicht gehalten.
     expect(
       heldAtFreeze,
       lessThanOrEqualTo(scenarioFlows - arrivalsBehindTheFreeze),
@@ -444,6 +573,9 @@ void main() {
           'the pointer entered while at least $arrivalsBehindTheFreeze of the '
           '$scenarioFlows requests were still to come',
     );
+    // Und jetzt der zweite Haltepunkt: Die letzten drei Anfragen kommen hinter
+    // der Grundlinie.
+    daemon.release();
 
     // Gewartet wird auf den Daemon, nicht auf die Pille: Unter der
     // Mutationsprobe (`_frozen = false`) gäbe es keine Pille, und der Test
@@ -455,6 +587,7 @@ void main() {
       what: 'the first request arrives behind the frozen queue',
     );
     final int? pillAfterFirst = pillCount(tester);
+    trace.mark('the first request arrived behind the freeze');
     await pumpUntil(
       tester,
       () =>
@@ -466,6 +599,7 @@ void main() {
           'queue',
     );
     final int? pillAfterThree = pillCount(tester);
+    trace.mark('$arrivalsBehindTheFreeze requests arrived behind the freeze');
     // **Bis das Szenario durch ist, und mit reichlich Frist.** Erst wenn
     // nichts mehr kommt, hat der letzte Messpunkt Zähne: Käme nach dem
     // Verlassen des Zeigers noch eine Anfrage, wüchse die Liste auch ohne
@@ -485,6 +619,7 @@ void main() {
           'the scenario played its $scenarioFlows requests; the daemon held '
           '${container.read(heldFlowsProvider).length}',
     );
+    trace.mark('the scenario is played');
     final int held = container.read(heldFlowsProvider).length;
     final int entriesAtEnd = entries();
     final int? pillHeldBack = pillCount(tester);
@@ -554,6 +689,7 @@ void main() {
         isTrue,
         reason: 'the pill that counted the arrivals is gone once they came in',
       );
+    trace.mark('the pointer left and the queue merged: $merged');
     final Set<String> keysAfterMerge = drawnRows(tester).keys.toSet();
 
     // Die Zahlen dieses Laufs, damit der Bericht sie trägt und nicht nur ein
