@@ -39,6 +39,33 @@ const FlowFilter heldFlowsFilter = FlowFilter(query: 'state:held');
 /// two projections of one stream (BACKLOG.md 5).
 @Riverpod(keepAlive: true)
 class Flows extends _$Flows {
+  /// Ob gerade ein Abgleich läuft ([_resync]).
+  bool _resyncing = false;
+
+  /// Ob während des laufenden Abgleichs ein weiterer verlangt wurde.
+  bool _resyncAgain = false;
+
+  /// Anfragen, die dieser Client nie gesehen hat und die die Warteschlange
+  /// schon verlassen haben (`Decided`, `TimedOut`, `Failed`).
+  ///
+  /// Eine Seite von `ListFlows` kann älter sein als dieses Ereignis und die
+  /// Anfrage noch als gehalten führen. Für eine bekannte Zeile hält die
+  /// Entscheidung in der Karte sie auf; für eine unbekannte gibt es keine
+  /// Zeile, in die sich das Ereignis hätte falten können, und ohne diese
+  /// Menge käme sie aus der Seite als Geist zurück: gehalten auf dem Schirm,
+  /// beim Daemon längst erledigt, und jedes `Decide` darauf endete in
+  /// `FLOW_NOT_HELD` (Review zu HUM-185). Gemerkt wird immer, nicht nur
+  /// während eines Abgleichs, denn die veraltete Seite kann auch zu einem
+  /// Abgleich gehören, der erst nach dem Ereignis beginnt.
+  ///
+  /// Eine Id fällt heraus, sobald eine Seite sie nicht mehr führt: Dann hat
+  /// der Daemon aufgeholt. Die Menge ist auf [_recentlyLeftCap] Einträge
+  /// begrenzt, die ältesten gehen zuerst.
+  final Set<FlowId> _recentlyLeft = <FlowId>{};
+
+  /// Wie viele Ids [_recentlyLeft] höchstens hält.
+  static const int _recentlyLeftCap = 256;
+
   @override
   Map<FlowId, Flow> build() {
     // `fireImmediately` is what starts the stream: a listener alone does not
@@ -88,6 +115,15 @@ class Flows extends _$Flows {
       return;
     }
     switch (event) {
+      case FlowEventDecided(:final FlowId flowId) ||
+              FlowEventTimedOut(:final FlowId flowId) ||
+              FlowEventFailed(:final FlowId flowId)
+          when !state.containsKey(flowId):
+        _rememberLeft(flowId);
+      default:
+        break;
+    }
+    switch (event) {
       case FlowEventReceived(:final Flow flow):
         state = <FlowId, Flow>{...state, flow.id: flow};
       case FlowEventAnalyzed(
@@ -103,6 +139,15 @@ class Flows extends _$Flows {
             findingCount: findings.length,
           ),
         );
+      case FlowEventHeld(:final FlowId flowId) when !state.containsKey(flowId):
+        // Eine gehaltene Anfrage, deren Ankunft dieser Client nie gesehen
+        // hat. Das passiert beim Verbinden: Ihr `Received` kam, bevor der
+        // Strom stand oder solange die Leitung noch nicht lebte, und der
+        // Abgleich danach fragte nur nach Gehaltenem, als sie noch nicht
+        // gehalten war. Ohne neuen Abgleich fehlte sie für immer in der
+        // Warteschlange und liefe unbemerkt in ihre Frist (HUM-185: gemessen
+        // unter Last, 14 von 15 Anfragen auf dem Schirm).
+        unawaited(_resync());
       case FlowEventHeld(:final FlowId flowId, :final DateTime deadline):
         _update(
           flowId,
@@ -202,6 +247,18 @@ class Flows extends _$Flows {
     (Flow flow) => flow.copyWith(sendRefusal: sanitizeDiagnostic(refusal)),
   );
 
+  /// Merkt [id] in [_recentlyLeft] und hält die Obergrenze ein.
+  void _rememberLeft(FlowId id) {
+    // Neu einfügen, damit eine wiederholte Id als jüngste zählt; ein
+    // Dart-Set behält die Reihenfolge des Einfügens.
+    _recentlyLeft
+      ..remove(id)
+      ..add(id);
+    while (_recentlyLeft.length > _recentlyLeftCap) {
+      _recentlyLeft.remove(_recentlyLeft.first);
+    }
+  }
+
   void _update(FlowId id, Flow Function(Flow flow) update) {
     final Flow? current = state[id];
     if (current == null) {
@@ -251,7 +308,30 @@ class Flows extends _$Flows {
   /// (`docs/UX.md` 4.6). What the purge exists for is narrower than "held and
   /// not listed": a row the daemon no longer holds **and** this client never
   /// saw decided. That one still goes, and its own test says so.
+  ///
+  /// **One at a time.** Two calls in flight could answer in either order, and
+  /// the older page would be written over the newer one. A request that comes
+  /// while one runs is remembered as a flag, and exactly one more call follows
+  /// once the running one has answered; any number of requests in that window
+  /// collapse into that one.
   Future<void> _resync() async {
+    if (_resyncing) {
+      _resyncAgain = true;
+      return;
+    }
+    _resyncing = true;
+    try {
+      do {
+        _resyncAgain = false;
+        await _resyncOnce();
+      } while (_resyncAgain && ref.mounted);
+    } finally {
+      _resyncing = false;
+    }
+  }
+
+  /// Ein einzelner Abgleich; [_resync] sorgt dafür, dass nie zwei laufen.
+  Future<void> _resyncOnce() async {
     // Kein `ListFlows` gegen einen Daemon, der nicht antwortet: Der Aufruf
     // liefe in denselben Fehler wie der Herzschlag, und die Antwort, die er
     // nicht bekommt, dürfte den Schnappschuss ohnehin nicht anfassen.
@@ -298,6 +378,12 @@ class Flows extends _$Flows {
         if (known != null && known.isDecided) {
           continue;
         }
+        // Und eine Anfrage, die gegangen ist, ohne dass diese Anwendung je
+        // eine Zeile für sie hatte: Die Seite ist auch hier älter als das
+        // Ereignis ([_recentlyLeft]).
+        if (_recentlyLeft.contains(flow.id)) {
+          continue;
+        }
         next[flow.id] = flow.copyWith(
           heldAt: flow.heldAt ?? known?.heldAt,
           decidedAt: flow.decidedAt ?? known?.decidedAt,
@@ -307,6 +393,9 @@ class Flows extends _$Flows {
         );
       }
       state = next;
+      // Was die Seite nicht mehr führt, hat der Daemon auch als erledigt
+      // verbucht; ab hier kann keine Seite es mehr als gehalten bringen.
+      _recentlyLeft.removeWhere((FlowId id) => !listed.contains(id));
     } on Object {
       // The queue keeps what it has; the next event or the next reconnect
       // tries again.

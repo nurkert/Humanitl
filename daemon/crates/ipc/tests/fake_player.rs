@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use humanitl_core::FlowId;
-use humanitl_ipc::fake::{FakeDaemon, FakeOptions, Session};
+use humanitl_ipc::fake::{FakeDaemon, FakeOptions, Gates, Session};
 use humanitl_ipc::server_stub::BoxStream;
 use humanitl_ipc::{DaemonApi, DaemonService, diagnostic_from_status, v1};
 use tokio_stream::StreamExt as _;
@@ -1122,4 +1122,89 @@ async fn descending_pages_continue_before_the_cursor() {
         .iter()
         .any(|s| first.flows.iter().any(|f| f.flow_id == s.flow_id));
     assert!(!overlap, "pages do not overlap");
+}
+
+/// Wie viele Flows der Fake gerade hält.
+fn held_now(daemon: &Arc<FakeDaemon>) -> usize {
+    daemon
+        .state()
+        .summaries()
+        .iter()
+        .filter(|flow| flow.state == v1::FlowState::Held as i32)
+        .count()
+}
+
+/// Zwei Haltepunkte vor der zwölften und der dreizehnten Anfrage der
+/// npm-Sitzung: Ohne Freigabe kommt nichts dahinter, auch nicht nach einer
+/// Minute, und jede Freigabe lässt genau bis zum nächsten Haltepunkt durch
+/// (HUM-185; so wartet `queue_freeze_test.dart` auf Zustände statt auf die
+/// Uhr).
+#[tokio::test(start_paused = true)]
+async fn a_gate_holds_the_rest_of_the_session_until_it_is_released() {
+    let daemon = daemon("npm-install.jsonl", FakeOptions::default());
+    let gates = Gates::new(vec![12_600, 9_800]);
+    daemon.start_with(gates.clone());
+
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert_eq!(
+        held_now(&daemon),
+        11,
+        "eleven requests come before 9.8 s, and the gate holds the twelfth"
+    );
+
+    gates.release();
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert_eq!(
+        held_now(&daemon),
+        12,
+        "one release lets the twelfth through and stops before the thirteenth"
+    );
+
+    gates.release();
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert_eq!(held_now(&daemon), 15, "the second release plays the rest");
+}
+
+/// Nach der Pause rückt der Rest der Sitzung nach hinten und behält seine
+/// Abstände: Die dreizehnte Anfrage liegt 2,8 s hinter der zwölften, also kommt
+/// sie auch nach einer Freigabe erst 2,8 s nach ihr und nicht sofort, weil ihre
+/// Zeit auf der ungerafften Uhr längst vorbei wäre.
+#[tokio::test(start_paused = true)]
+async fn the_rest_of_the_session_keeps_its_spacing_after_a_pause() {
+    let daemon = daemon("npm-install.jsonl", FakeOptions::default());
+    let gates = Gates::new(vec![9_800]);
+    daemon.start_with(gates.clone());
+
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    gates.release();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(
+        held_now(&daemon),
+        12,
+        "one second after the release only the twelfth has come"
+    );
+
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert_eq!(
+        held_now(&daemon),
+        15,
+        "and the rest follows in its own time"
+    );
+}
+
+/// Eine Freigabe, die vor dem Haltepunkt kommt, geht nicht verloren: Der
+/// Abspieler läuft ohne Pause durch, und die Sitzung endet zur gewohnten Zeit.
+#[tokio::test(start_paused = true)]
+async fn a_release_before_the_gate_lets_the_player_through_without_a_pause() {
+    let daemon = daemon("npm-install.jsonl", FakeOptions::default());
+    let gates = Gates::new(vec![9_800]);
+    gates.release();
+    daemon.start_with(gates);
+
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    assert_eq!(
+        held_now(&daemon),
+        15,
+        "all fifteen within the 20.6 s of the session, as without a gate"
+    );
 }
