@@ -3718,7 +3718,9 @@ Die Kopie ist vollständig: `share/humanitl/catalog/` und `profiles/sandbox/defa
 
 ### Akzeptanzkriterien
 - [ ] Nach `--cli daemon install` aus dem AppImage meldet der Daemon beim Start einen Katalog mit Einträgen und startet eine Sandbox mit dem Profil `default`.
-- [ ] `make check` grün.
+- [x] `make check` grün.
+
+**Stand der Messung (2026-09-25).** Gemessen an einem nachgebauten Baum wie in `build-appimage.sh` (Debug-Binaries, Katalog, `default.toml`), nicht an einem gebauten AppImage: `humanitl daemon install --no-start` mit `$APPIMAGE`, Wegwerf-`HOME` und leerem `PATH` legt die Kopie mit `bin/`, `share/humanitl/catalog/` und `profiles/sandbox/default.toml` an (`cmp` gleich). Danach wurde der Baum weggeschoben, wie der Einhängepunkt verschwindet, und der kopierte `humanitld` gestartet: `domain catalog loaded` mit `dir` in der Kopie, `entries` 34; `humanitl run -- /bin/sh -c …` startete eine Sandbox mit `profile default`, alle drei Isolationsprüfungen `ok`. Weder `/usr/share/humanitl` noch `/usr/local/share/humanitl` gab es auf dem Rechner, das Profil kam also aus der Kopie. Offen für ein Menschenauge: derselbe Weg mit einem echten AppImage auf einem Desktop (`./Humanitl-<version>-x86_64.AppImage --cli daemon install`, dann `humanitl daemon logs` und eine Sitzung aus der Anwendung). Deshalb ist das erste Kriterium nicht abgehakt.
 
 ---
 

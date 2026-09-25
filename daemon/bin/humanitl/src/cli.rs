@@ -772,6 +772,10 @@ pub struct InstallArgs {
 
     /// Take humanitld and humanitl-shim from this directory instead of from
     /// the directory of the running humanitl.
+    ///
+    /// From an `AppImage` (`$APPIMAGE` set), DIR/.. must also hold
+    /// share/humanitl/catalog/domains.yaml and profiles/sandbox/default.toml,
+    /// as in the image; they are copied with the binaries.
     #[arg(long = "bin-dir", value_name = "DIR")]
     pub bin_dir: Option<PathBuf>,
 

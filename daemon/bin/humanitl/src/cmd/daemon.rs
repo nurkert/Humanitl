@@ -16,9 +16,10 @@
 //!   ein Objekt auf `stdout` und ein leeres `stderr` (`docs/cli.md`): Text und
 //!   Befehle stehen dann in diesem Objekt (`unit_text`, `commands`).
 //! - **Erst die Prüfungen, dann die Kopie.** Aus einem `AppImage` werden
-//!   Daemon und Shim nach `~/.local/lib/humanitl/<version>.<stempel>/`
-//!   kopiert. Das geschieht erst nach der Ankündigung und nach jeder Prüfung,
-//!   die den Lauf ablehnen kann (`DAEMON_005`, `DAEMON_010`); scheitert danach
+//!   Daemon, Shim, Domain-Katalog und Sandbox-Profil nach
+//!   `~/.local/lib/humanitl/<version>.<stempel>/` kopiert ([`image`]). Das
+//!   geschieht erst nach der Ankündigung und nach jeder Prüfung, die den Lauf
+//!   ablehnen kann (`DAEMON_005`, `DAEMON_010`); scheitert danach
 //!   noch etwas, zeigt `current` wieder dorthin, wohin es vorher zeigte, und
 //!   die neue Kopie geht ([`Staged`]).
 //! - **`--print` schreibt nichts.** Wer erst lesen will, bekommt genau
@@ -56,6 +57,7 @@ use crate::cli::{DaemonCmd, InstallArgs, LogsArgs};
 use crate::cmd::{Context, EXIT_OK, Failure, status_diagnostic, unit};
 use crate::render::{table, tick};
 
+mod image;
 mod packaged;
 mod uninstall;
 
@@ -86,14 +88,12 @@ const READY_PAUSE: Duration = Duration::from_millis(100);
 ///
 /// Der Pfad `/tmp/.mount_*` eines laufenden `AppImage`s verschwindet mit dem
 /// Prozess; ein `ExecStart` darauf zeigte beim nächsten Anmelden ins Leere
-/// (HUM-070). Deshalb werden Daemon und Shim herauskopiert.
+/// (HUM-070). Deshalb werden Daemon und Shim herauskopiert, und mit ihnen
+/// Katalog und Profil, die der Daemon neben sich sucht (HUM-165, [`image`]).
 const LIB_DIR: &str = ".local/lib/humanitl";
 
 /// Der Name des Verweises auf die zuletzt installierte Fassung.
 const CURRENT_LINK: &str = "current";
-
-/// Die Binaries, die ein `AppImage`-Lauf herauskopiert.
-const STAGED_BINARIES: [&str; 2] = [unit::DAEMON_NAME, "humanitl-shim"];
 
 /// Die Variablen, die `systemctl --user` mitbekommt.
 ///
@@ -466,9 +466,16 @@ fn refresh_skip(ctx: &Context, appimage: bool) -> Option<RefreshSkip> {
         return Some(RefreshSkip::NotAppImage);
     }
     let link = lib_base(ctx).join(CURRENT_LINK);
-    let exec = format!("ExecStart={}", link.join(unit::DAEMON_NAME).display());
+    // Bis HUM-165 lag der Daemon flach in der Kopie, und die Unit nannte
+    // `current/humanitld`. Auch eine solche Einrichtung wird erneuert; der
+    // Lauf schreibt ihr dabei die Unit mit `current/bin/humanitld`.
+    let execs = [image::daemon_in(&link), link.join(unit::DAEMON_NAME)]
+        .map(|path| format!("ExecStart={}", path.display()));
     let unit = std::fs::read_to_string(unit::unit_path(&ctx.paths)).unwrap_or_default();
-    if !unit::carries_marker(&unit) || !unit.lines().any(|line| line.trim_end() == exec) {
+    let names_current = unit
+        .lines()
+        .any(|line| execs.iter().any(|exec| line.trim_end() == exec));
+    if !unit::carries_marker(&unit) || !names_current {
         return Some(RefreshSkip::NotInstalled);
     }
     let installed = std::fs::read_link(&link).ok().and_then(|target| {
@@ -575,16 +582,8 @@ fn exec_start(
     appimage: bool,
 ) -> Result<PathBuf, Failure> {
     if appimage {
-        for name in STAGED_BINARIES {
-            let from = source.join(name);
-            if !crate::cmd::is_executable(&from) {
-                return Err(Failure::new(unit::missing_binary(
-                    &from,
-                    "there is no such executable in the AppImage next to the running humanitl",
-                )));
-            }
-        }
-        let exec = lib_base(ctx).join(CURRENT_LINK).join(unit::DAEMON_NAME);
+        image::check(source)?;
+        let exec = image::daemon_in(&lib_base(ctx).join(CURRENT_LINK));
         unit::exec_start_word(&exec).map_err(Failure::new)?;
         return Ok(exec);
     }
@@ -757,7 +756,8 @@ fn own_copies(base: &Path, owner: u32) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Kopiert Daemon und Shim aus dem `AppImage` nach `~/.local/lib/humanitl/`.
+/// Kopiert Daemon, Shim, Katalog und Profil aus dem `AppImage` nach
+/// `~/.local/lib/humanitl/`, im Aufbau des Bildes ([`image`]).
 ///
 /// Ein `AppImage` liegt zur Laufzeit unter `/tmp/.mount_*`, und dieser Pfad
 /// verschwindet mit dem Prozess. Ein `ExecStart` darauf zeigte beim nächsten
@@ -791,12 +791,7 @@ fn stage(ctx: &Context, source: &Path) -> Result<Staged, Diagnostic> {
     let dir = base.join(format!("{}.{}", env!("CARGO_PKG_VERSION"), stamp()));
     std::fs::create_dir(&dir)
         .map_err(|error| not_staged(&dir, &format!("cannot be created: {error}")))?;
-    let copied = STAGED_BINARIES.iter().try_for_each(|name| {
-        std::fs::copy(source.join(name), dir.join(name))
-            .map(|_| ())
-            .map_err(|error| not_staged(&dir.join(name), &format!("cannot be written: {error}")))
-    });
-    if let Err(diagnostic) = copied {
+    if let Err(diagnostic) = image::copy_into(source, &dir) {
         let _ = std::fs::remove_dir_all(&dir);
         return Err(diagnostic);
     }

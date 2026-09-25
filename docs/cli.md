@@ -341,7 +341,10 @@ System-Unit, kein `sudo`, keine zweite Datei, keine `humanitld.socket`. Ihr
 eines aus `PATH` und nie eines aus einem Konfigurationswert, damit beim
 Anmelden dieselbe Fassung startet wie die, die die Unit geschrieben hat.
 `--bin-dir DIR` nennt statt dessen ein anderes Verzeichnis, etwa das Bundle
-eines Pakets, das die Kommandozeile über einen Verweis erreicht hat.
+eines Pakets, das die Kommandozeile über einen Verweis erreicht hat. Aus einem
+AppImage (`$APPIMAGE` gesetzt) müssen unter `DIR/..` außerdem
+`share/humanitl/catalog/domains.yaml` und `profiles/sandbox/default.toml`
+liegen wie im Bild, sonst endet der Befehl mit `DAEMON_011`.
 
 **Mit dem Paket wird nichts geschrieben.** Liegt
 `/usr/lib/systemd/user/humanitld.service` da, hat das Paket die Units
@@ -375,11 +378,20 @@ selbst.
 AppImage (`$APPIMAGE` ist gesetzt), liegen `humanitld` und `humanitl-shim`
 unter `/tmp/.mount_*`, und dieser Pfad verschwindet mit dem Prozess. Ein
 `ExecStart` darauf zeigte beim nächsten Anmelden ins Leere. Beide Binaries
-werden deshalb nach `~/.local/lib/humanitl/<version>.<stempel>/` kopiert, der
-Verweis `~/.local/lib/humanitl/current` zeigt auf diese Kopie, und `ExecStart`
-nennt den Verweis: Ein Update legt eine neue Kopie daneben und hängt den
+werden deshalb nach `~/.local/lib/humanitl/<version>.<stempel>/bin/` kopiert,
+und mit ihnen der Domain-Katalog (`share/humanitl/catalog/`) und das
+Sandbox-Profil (`profiles/sandbox/default.toml`), im selben Aufbau wie im Bild:
+Der Daemon sucht beide relativ zu seinem eigenen Pfad und liefe ohne sie mit
+leerem Katalog und ohne Profil (HUM-165). Der Verweis
+`~/.local/lib/humanitl/current` zeigt auf diese Kopie, und `ExecStart` nennt
+`current/bin/humanitld`: Ein Update legt eine neue Kopie daneben und hängt den
 Verweis um, ohne die Unit anzufassen. Fehlt eines der beiden Binaries, endet
-der Befehl mit `DAEMON_007`. Kopiert wird erst nach der Ankündigung und nach
+der Befehl mit `DAEMON_007`, fehlen Katalog oder Profil im Bild, mit
+`DAEMON_011`; in beiden Fällen ist nichts kopiert. Neben `bin/` liegt in jeder
+Kopie `humanitld` als relativer Verweis auf `bin/humanitld`: Eine Unit von vor
+HUM-165 nennt `current/humanitld`, und bricht ein Lauf ab, nachdem `current`
+umgehängt, aber bevor die neue Unit geschrieben ist, startet sie so trotzdem
+den Daemon der neuen Kopie. Kopiert wird erst nach der Ankündigung und nach
 jeder Prüfung, die den Lauf ablehnen kann; eine fremde Unit (`DAEMON_005`) oder
 eine fehlende Nutzersitzung (`DAEMON_010`) lassen `~/.local/lib/humanitl` also
 unberührt.
@@ -406,14 +418,16 @@ Archivs auch sofort und nicht erst bei der nächsten Anmeldung. Ist
 es einem anderen Konto als das Heimatverzeichnis, wird nichts kopiert
 (`DAEMON_011`). Scheitert nach der Kopie noch etwas — die Unit, `systemctl` —,
 zeigt `current` wieder dorthin, wohin es vorher zeigte, und die neue Kopie
-geht wieder. `--print` nennt denselben Pfad `…/current/humanitld`, den die
+geht wieder. `--print` nennt denselben Pfad `…/current/bin/humanitld`, den die
 Unit bekäme, und kopiert nichts.
 
 **`--refresh`: ein neueres AppImage erneuert den Dienst.** `AppRun` ruft bei
 jedem Start der Anwendung `humanitl -q daemon install --refresh` (HUM-077).
 Der Schalter tut nur dann etwas, wenn der Lauf aus einem AppImage kommt, die
 Unit unter `~/.config/systemd/user/` die Marke trägt und
-`ExecStart=~/.local/lib/humanitl/current/humanitld` nennt, und `current` auf
+`ExecStart=~/.local/lib/humanitl/current/bin/humanitld` nennt (oder
+`current/humanitld`, wie vor HUM-165; die Unit bekommt dabei den neuen Pfad),
+und `current` auf
 die Kopie einer anderen Fassung zeigt; dann läuft alles wie oben beschrieben,
 samt Neustart. Sonst endet er sofort mit 0 und schreibt, warum nicht:
 `not_appimage`, `not_installed` oder `up_to_date` (unter `--json` als `action`,

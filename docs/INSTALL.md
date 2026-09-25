@@ -102,17 +102,18 @@ chmod +x Humanitl-<version>-x86_64.AppImage
 ```
 
 `--cli` reicht alle weiteren Argumente an die Kommandozeile im Bild weiter. `daemon install`
-erkennt das AppImage an `$APPIMAGE` und kopiert Daemon und Shim nach
-`~/.local/lib/humanitl/<version>.<stempel>/`, denn der Einhängepunkt `/tmp/.mount_*` verschwindet
-mit dem Prozess. `ExecStart` der Unit nennt den Verweis `~/.local/lib/humanitl/current`.
+erkennt das AppImage an `$APPIMAGE` und kopiert Daemon, Shim, Domain-Katalog und Sandbox-Profil
+nach `~/.local/lib/humanitl/<version>.<stempel>/`, denn der Einhängepunkt `/tmp/.mount_*`
+verschwindet mit dem Prozess. `ExecStart` der Unit nennt
+`~/.local/lib/humanitl/current/bin/humanitld` über den Verweis `current`.
 Statt des zweiten Befehls geht auch der Knopf „Installieren und starten" in der Einrichtung der
 Anwendung; er ruft dieselbe Kommandozeile.
 
 **Eine neue Fassung erneuert den Dienst beim Start.** Wer später ein neueres AppImage startet,
 muss nichts tun: `AppRun` ruft vor der Anwendung `daemon install --refresh`. Zeigt `current` auf
-eine andere Fassung, kopiert es Daemon und Shim der neuen heraus, hängt `current` um, startet den
-Dienst mit `systemctl --user restart humanitld.service` neu und entfernt erst danach die alte
-Kopie. Ist der Dienst nicht eingerichtet oder schon diese Fassung, tut der Aufruf nichts. Die erste
+eine andere Fassung, kopiert es Daemon, Shim, Katalog und Profil der neuen heraus, hängt
+`current` um, startet den Dienst mit `systemctl --user restart humanitld.service` neu und
+entfernt erst danach die alte Kopie. Ist der Dienst nicht eingerichtet oder schon diese Fassung, tut der Aufruf nichts. Die erste
 Einrichtung macht ein Programmstart nie von selbst.
 
 Entfernen:
