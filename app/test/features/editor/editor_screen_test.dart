@@ -21,6 +21,7 @@ import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/features/editor/editor_host.dart';
 import 'package:humanitl/features/editor/editor_screen.dart';
 import 'package:humanitl/features/editor/model/draft.dart';
+import 'package:humanitl/features/editor/model/draft_ops.dart';
 import 'package:humanitl/features/editor/providers/draft_provider.dart';
 import 'package:humanitl/features/editor/providers/session_pseudonyms.dart';
 import 'package:humanitl/l10n/l10n.dart';
@@ -85,6 +86,60 @@ DraftSource _source({
   bodyBytes: bytes ? Uint8List.fromList(utf8.encode(body)) : null,
 );
 
+/// Eine Anfrage mit einer E-Mail-Adresse im Wert der Kopfzeile `X-Contact`.
+DraftSource _headerSource({List<Header>? headers, String name = 'x-contact'}) =>
+    DraftSource(
+      session: _session,
+      request: HttpRequest(
+        method: Method.post,
+        scheme: Scheme.https,
+        authority: const Authority(host: 'api.example.com', port: 443),
+        pathAndQuery: '/v1/chat',
+        headers: headers ?? <Header>[header('X-Contact', 'mail a@x.de')],
+        body: BodyRef(sha256: List<int>.filled(32, 7), size: 0),
+      ),
+      findings: <Finding>[
+        Finding(
+          kind: 'email',
+          location: FindingLocation.header,
+          headerName: name,
+          spanStart: 5,
+          spanEnd: 11,
+          tier: FindingTier.regex,
+          valueHash: List<int>.filled(32, 1),
+        ),
+      ],
+      bodyText: '',
+      bodyKind: BodyKind.text,
+      bodyBytes: Uint8List(0),
+    );
+
+/// Eine Anfrage mit einer E-Mail-Adresse in der Query.
+DraftSource _querySource() => DraftSource(
+  session: _session,
+  request: HttpRequest(
+    method: Method.get,
+    scheme: Scheme.https,
+    authority: const Authority(host: 'api.example.com', port: 443),
+    pathAndQuery: '/v1/chat?to=a@x.de',
+    headers: const <Header>[],
+    body: BodyRef(sha256: List<int>.filled(32, 7), size: 0),
+  ),
+  findings: <Finding>[
+    Finding(
+      kind: 'email',
+      location: FindingLocation.query,
+      spanStart: 3,
+      spanEnd: 9,
+      tier: FindingTier.regex,
+      valueHash: List<int>.filled(32, 1),
+    ),
+  ],
+  bodyText: '',
+  bodyKind: BodyKind.text,
+  bodyBytes: Uint8List(0),
+);
+
 /// Hängt den Editor allein in ein Fenster.
 Future<ProviderContainer> pumpEditor(
   WidgetTester tester, {
@@ -92,6 +147,7 @@ Future<ProviderContainer> pumpEditor(
   void Function(EditedRequest request, List<Replacement> replacements)? onSend,
   VoidCallback? onClose,
   bool canSend = true,
+  bool sendRefused = false,
 }) async {
   await tester.binding.setSurfaceSize(const Size(1200, 800));
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -129,6 +185,7 @@ Future<ProviderContainer> pumpEditor(
                       flowId: _flowId,
                       source: source,
                       canSend: canSend,
+                      sendRefused: sendRefused,
                       onClose: onClose ?? () {},
                       onSend:
                           onSend ??
@@ -1256,5 +1313,525 @@ void main() {
         'cleaned',
       );
     });
+  });
+  group('the findings pause in the editor (HUM-161)', () {
+    /// Der Knopf „Senden" des Editors.
+    final Finder sendButton = find.byKey(const Key('editor-send'));
+
+    /// Die Pause, wo immer sie steht.
+    final Finder pause = find.byKey(const Key('intercept-findings-pause'));
+
+    /// Die Aufschrift, die [button] gerade trägt.
+    String labelOf(WidgetTester tester, Finder button) => tester
+        .widgetList<Text>(
+          find.descendant(of: button, matching: find.byType(Text)),
+        )
+        .map((Text text) => text.data ?? '')
+        .join();
+
+    /// Ein Entwurf mit einer E-Mail-Adresse, die niemand ersetzt hat.
+    DraftSource oneMail() =>
+        _source(body: 'mail a@x.de', findings: <Finding>[_bodyFinding(5, 11)]);
+
+    testWidgets('editor_send_with_open_findings_opens_pause', (
+      WidgetTester tester,
+    ) async {
+      final List<EditedRequest> sent = <EditedRequest>[];
+      await pumpEditor(
+        tester,
+        source: oneMail(),
+        onSend: (EditedRequest request, List<Replacement> _) =>
+            sent.add(request),
+      );
+      expect(labelOf(tester, sendButton), english.editorSendWithFindings(1));
+
+      await tester.tap(sendButton);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // Der erste Klick sendet nicht; an der Stelle der Leiste steht die
+      // Pause über dem einen offenen Fund des Entwurfs.
+      expect(sent, isEmpty);
+      expect(pause, findsOne);
+      expect(sendButton, findsNothing);
+      expect(find.text(english.interceptFindingsPauseTitle(1)), findsOne);
+      expect(find.byKey(const Key('intercept-findings-pause-row-0')), findsOne);
+      // „Pseudonymisieren" heißt hier „Alle ersetzen", und die Tasten `S`,
+      // `P` und `B` stehen nicht daneben: Im Editor schreiben sie ins Feld.
+      expect(
+        labelOf(
+          tester,
+          find.byKey(const Key('intercept-findings-pause-pseudonymize')),
+        ),
+        english.editorReplaceAll,
+      );
+      expect(
+        labelOf(tester, find.byKey(const Key('intercept-findings-pause-send'))),
+        english.interceptFindingsPauseSendAnyway,
+      );
+      // Ohne Weg zum Blocken kein Knopf dafür.
+      expect(
+        find.byKey(const Key('intercept-findings-pause-block')),
+        findsNothing,
+      );
+
+      await tester.tap(find.byKey(const Key('intercept-findings-pause-send')));
+      await tester.pump();
+
+      expect(sent, hasLength(1));
+      expect(utf8.decode(sent.single.body), 'mail a@x.de');
+    }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+    testWidgets('editor_send_without_findings_sends', (
+      WidgetTester tester,
+    ) async {
+      final List<EditedRequest> sent = <EditedRequest>[];
+      await pumpEditor(
+        tester,
+        source: oneMail(),
+        onSend: (EditedRequest request, List<Replacement> _) =>
+            sent.add(request),
+      );
+      await tester.tap(find.byKey(const Key('editor-replace-all')));
+      await tester.pump();
+      expect(labelOf(tester, sendButton), english.editorSend);
+
+      await tester.tap(sendButton);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(pause, findsNothing);
+      expect(sent, hasLength(1));
+      expect(utf8.decode(sent.single.body), 'mail <EMAIL_1>');
+    }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+    testWidgets(
+      'the pause lists the findings of the draft, not the held ones',
+      (WidgetTester tester) async {
+        final ProviderContainer container = await pumpEditor(
+          tester,
+          source: _source(
+            body: 'a@x.de b@y.de',
+            findings: <Finding>[
+              _bodyFinding(0, 6).copyWith(displayPrefix: 'a***@x.de'),
+              _bodyFinding(7, 13, hash: 2).copyWith(displayPrefix: 'b***@y.de'),
+            ],
+          ),
+        );
+        // Einer von zwei ist im Entwurf ersetzt; die gehaltene Fassung trägt
+        // weiter beide.
+        container.read(draftProvider(_flowId).notifier).replace(0, '<EMAIL_1>');
+        await tester.pump();
+        expect(labelOf(tester, sendButton), english.editorSendWithFindings(1));
+
+        await tester.tap(sendButton);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        expect(find.text(english.interceptFindingsPauseTitle(1)), findsOne);
+        expect(
+          find.byKey(const Key('intercept-findings-pause-row-1')),
+          findsNothing,
+        );
+        // Die Zeile nennt den Fund, der im Entwurf noch offen ist, nicht den
+        // ersten der gehaltenen Fassung.
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('intercept-findings-pause-row-0')),
+            matching: find.text('b***@y.de'),
+          ),
+          findsOne,
+        );
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.linux),
+    );
+
+    testWidgets('ctrl+enter opens the pause and Esc closes only the pause', (
+      WidgetTester tester,
+    ) async {
+      final List<EditedRequest> sent = <EditedRequest>[];
+      int closed = 0;
+      await pumpEditor(
+        tester,
+        source: oneMail(),
+        onClose: () => closed++,
+        onSend: (EditedRequest request, List<Replacement> _) =>
+            sent.add(request),
+      );
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+
+      expect(sent, isEmpty);
+      expect(pause, findsOne);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(pause, findsNothing);
+      expect(closed, 0);
+      expect(sendButton, findsOne);
+      expect(sent, isEmpty);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+    testWidgets('replace all in the pause replaces and sends nothing', (
+      WidgetTester tester,
+    ) async {
+      final List<EditedRequest> sent = <EditedRequest>[];
+      await pumpEditor(
+        tester,
+        source: oneMail(),
+        onSend: (EditedRequest request, List<Replacement> _) =>
+            sent.add(request),
+      );
+      await tester.tap(sendButton);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      await tester.tap(
+        find.byKey(const Key('intercept-findings-pause-pseudonymize')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(sent, isEmpty);
+      expect(pause, findsNothing);
+      expect(bodyField(tester).controller.text, 'mail <EMAIL_1>');
+      expect(labelOf(tester, sendButton), english.editorSend);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+    testWidgets(
+      'the last finding replaced with the pause open lets ctrl+enter send',
+      (WidgetTester tester) async {
+        final List<EditedRequest> sent = <EditedRequest>[];
+        final ProviderContainer container = await pumpEditor(
+          tester,
+          source: oneMail(),
+          onSend: (EditedRequest request, List<Replacement> _) =>
+              sent.add(request),
+        );
+        await tester.tap(sendButton);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(pause, findsOne);
+
+        container.read(draftProvider(_flowId).notifier).replace(0, '<EMAIL_1>');
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(pause, findsNothing);
+
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+        await tester.pump();
+
+        expect(sent, hasLength(1));
+        expect(utf8.decode(sent.single.body), 'mail <EMAIL_1>');
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.linux),
+    );
+
+    testWidgets('a pause on its way out takes no click', (
+      WidgetTester tester,
+    ) async {
+      final List<EditedRequest> sent = <EditedRequest>[];
+      await pumpEditor(
+        tester,
+        source: oneMail(),
+        onSend: (EditedRequest request, List<Replacement> _) =>
+            sent.add(request),
+      );
+      await tester.tap(sendButton);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      final Finder sendAnyway = find.byKey(
+        const Key('intercept-findings-pause-send'),
+      );
+      final Offset where = tester.getCenter(sendAnyway);
+
+      await tester.tap(find.byKey(const Key('intercept-findings-pause-back')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 1));
+      // Die Pause geht noch zu und steht noch da, wo eben geklickt wurde.
+      expect(sendAnyway, findsOne);
+      await tester.tapAt(where);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(sent, isEmpty);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+    testWidgets(
+      'under the hard block a checksum secret leaves no send anyway',
+      (WidgetTester tester) async {
+        await pumpEditor(
+          tester,
+          sendRefused: true,
+          source: _source(
+            body: 'iban GB82WEST12345698765432',
+            findings: <Finding>[
+              _bodyFinding(5, 27, kind: 'iban', tier: FindingTier.checksum),
+            ],
+          ),
+        );
+        await tester.tap(sendButton);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        expect(pause, findsOne);
+        expect(
+          find.byKey(const Key('intercept-findings-pause-send')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const Key('intercept-findings-pause-pseudonymize')),
+          findsOne,
+        );
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.linux),
+    );
+
+    testWidgets('under the hard block an e-mail alone may still go anyway', (
+      WidgetTester tester,
+    ) async {
+      // Die Sperre gilt der Stufe `checksum`, nicht dem ganzen Fluss: Ist nur
+      // die Adresse offen, bleibt „Trotzdem senden".
+      await pumpEditor(tester, sendRefused: true, source: oneMail());
+      await tester.tap(sendButton);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(find.byKey(const Key('intercept-findings-pause-send')), findsOne);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+    testWidgets('a duplicated value keeps the pause', (
+      WidgetTester tester,
+    ) async {
+      final List<EditedRequest> sent = <EditedRequest>[];
+      final ProviderContainer container = await pumpEditor(
+        tester,
+        source: oneMail(),
+        onSend: (EditedRequest request, List<Replacement> _) =>
+            sent.add(request),
+      );
+      // Getippt vor dem Fund, und derselbe Wert steht jetzt zweimal da.
+      container
+          .read(draftProvider(_flowId).notifier)
+          .setBody('a@x.de mail a@x.de');
+      await tester.pump();
+      expect(labelOf(tester, sendButton), english.editorSendWithFindings(1));
+
+      await tester.tap(sendButton);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(sent, isEmpty);
+      expect(pause, findsOne);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+    testWidgets('a value that is really gone no longer holds the send', (
+      WidgetTester tester,
+    ) async {
+      final List<EditedRequest> sent = <EditedRequest>[];
+      final ProviderContainer container = await pumpEditor(
+        tester,
+        source: oneMail(),
+        onSend: (EditedRequest request, List<Replacement> _) =>
+            sent.add(request),
+      );
+      container.read(draftProvider(_flowId).notifier).setBody('mail removed');
+      await tester.pump();
+
+      await tester.tap(sendButton);
+      await tester.pump();
+
+      expect(pause, findsNothing);
+      expect(sent, hasLength(1));
+    }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+    testWidgets(
+      'typing in a header before its finding keeps replace all on the value',
+      (WidgetTester tester) async {
+        final ProviderContainer container = await pumpEditor(
+          tester,
+          source: _headerSource(),
+        );
+        final DraftNotifier drafts = container.read(
+          draftProvider(_flowId).notifier,
+        );
+        final int row = container
+            .read(draftProvider(_flowId))!
+            .headers
+            .indexWhere((HeaderEntry entry) => entry.name == 'X-Contact');
+        drafts.setHeader(row, 'X-Contact', 'my mail a@x.de');
+
+        drafts.replaceAllOpen();
+
+        final Draft draft = container.read(draftProvider(_flowId))!;
+        expect(draft.headers[row].value, 'my mail <EMAIL_1>');
+        expect(openFindings(draft), 0);
+      },
+    );
+
+    testWidgets(
+      'typing in the query before its finding keeps replace all on the value',
+      (WidgetTester tester) async {
+        final ProviderContainer container = await pumpEditor(
+          tester,
+          source: _querySource(),
+        );
+        final DraftNotifier drafts = container.read(
+          draftProvider(_flowId).notifier,
+        );
+        drafts.setPathAndQuery('/v1/chat?cc=1&to=a@x.de');
+
+        drafts.replaceAllOpen();
+
+        final Draft draft = container.read(draftProvider(_flowId))!;
+        expect(draft.pathAndQuery, '/v1/chat?cc=1&to=<EMAIL_1>');
+        expect(openFindings(draft), 0);
+      },
+    );
+
+    testWidgets('removing a header above keeps the finding on its value', (
+      WidgetTester tester,
+    ) async {
+      // Drei gleichnamige Zeilen; der Fund steht in der zweiten. Nach dem
+      // Entfernen der ersten zeigte die alte Nummer auf die dritte, und die
+      // trägt den Wert nicht.
+      final ProviderContainer container = await pumpEditor(
+        tester,
+        source: _headerSource(
+          name: 'via',
+          headers: <Header>[
+            header('Via', 'ab'),
+            header('Via', 'mail a@x.de'),
+            header('Via', 'zz'),
+          ],
+        ),
+      );
+      final DraftNotifier drafts = container.read(
+        draftProvider(_flowId).notifier,
+      );
+
+      drafts.removeHeader(0);
+      expect(openFindings(container.read(draftProvider(_flowId))!), 1);
+      drafts.replaceAllOpen();
+
+      final Draft draft = container.read(draftProvider(_flowId))!;
+      expect(draft.headers[0].value, 'mail <EMAIL_1>');
+      expect(draft.headers[1].value, 'zz');
+      expect(openFindings(draft), 0);
+    });
+
+    testWidgets('a renamed header keeps its finding open', (
+      WidgetTester tester,
+    ) async {
+      final ProviderContainer container = await pumpEditor(
+        tester,
+        source: _headerSource(),
+      );
+      final DraftNotifier drafts = container.read(
+        draftProvider(_flowId).notifier,
+      );
+      final int row = container
+          .read(draftProvider(_flowId))!
+          .headers
+          .indexWhere((HeaderEntry entry) => entry.name == 'X-Contact');
+
+      drafts.setHeader(row, 'X-Reach', 'mail a@x.de');
+
+      // Der Wert steht weiter in der Zeile und ginge mit ihr hinaus.
+      final Draft draft = container.read(draftProvider(_flowId))!;
+      expect(openFindings(draft), 1);
+      drafts.replaceAllOpen();
+      final Draft after = container.read(draftProvider(_flowId))!;
+      expect(after.headers[row].value, 'mail <EMAIL_1>');
+    });
+
+    testWidgets('ctrl+z after replace all brings the pause back', (
+      WidgetTester tester,
+    ) async {
+      final List<EditedRequest> sent = <EditedRequest>[];
+      await pumpEditor(
+        tester,
+        source: oneMail(),
+        onSend: (EditedRequest request, List<Replacement> _) =>
+            sent.add(request),
+      );
+      final Finder body = find.descendant(
+        of: find.byKey(const Key('editor-draft-body')),
+        matching: find.byType(EditableText),
+      );
+      await tester.tap(body);
+      await tester.pump();
+      // Eine echte Eingabe zuerst, damit die Undo-Historie einen Stand hat.
+      await tester.enterText(body, 'mail a@x.de');
+      await tester.pump(const Duration(seconds: 1));
+      await tester.tap(find.byKey(const Key('editor-replace-all')));
+      await tester.pump();
+      // Die Undo-Historie nimmt Änderungen erst nach einer Pause auf.
+      await tester.pump(const Duration(seconds: 1));
+      expect(bodyField(tester).controller.text, 'mail <EMAIL_1>');
+      await tester.tap(body);
+      await tester.pump();
+
+      // `Ctrl+Z` ist nur eine Taste auf dieser Aktion; der Baum dieses Tests
+      // hat keine `WidgetsApp` und damit keine Standardbelegung. Die Aktion
+      // ist dieselbe, die das Feld im Betrieb für `Ctrl+Z` ausführt.
+      Actions.invoke(
+        FocusManager.instance.primaryFocus!.context!,
+        const UndoTextIntent(SelectionChangedCause.keyboard),
+      );
+      await tester.pump();
+
+      expect(bodyField(tester).controller.text, 'mail a@x.de');
+      expect(labelOf(tester, sendButton), english.editorSendWithFindings(1));
+      await tester.tap(sendButton);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(sent, isEmpty);
+      expect(pause, findsOne);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+    testWidgets('block in the editor pause blocks through the daemon', (
+      WidgetTester tester,
+    ) async {
+      final FlowDetail base = held(1);
+      final FlowId id = base.summary.id;
+      final FlowDetail detail = base.copyWith(
+        findings: <Finding>[_bodyFinding(5, 11)],
+        request: base.request!.copyWith(
+          body: BodyRef(
+            sha256: List<int>.filled(32, 7),
+            size: 'mail a@x.de'.length,
+            contentType: 'text/plain',
+          ),
+        ),
+        bodyPreview: 'mail a@x.de',
+      );
+      final _QuietDecide client = _QuietDecide(const <ScriptedEvent>[]);
+      client.state.flows[id] = detail.summary;
+      client.state.details[id] = detail;
+      client.state.bodies[List<String>.filled(32, '07').join()] =
+          Uint8List.fromList(utf8.encode('mail a@x.de'));
+      await pumpHost(tester, client: client, flowId: id);
+
+      await tester.tap(sendButton);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(client.decisions, isEmpty);
+
+      await tester.tap(find.byKey(const Key('intercept-findings-pause-block')));
+      await tester.pump();
+      await tester.pump();
+
+      expect(client.decisions, hasLength(1));
+      expect(client.decisions.single.flowId, id);
+      expect(client.decisions.single.decision, isA<DecisionBlock>());
+    }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
   });
 }

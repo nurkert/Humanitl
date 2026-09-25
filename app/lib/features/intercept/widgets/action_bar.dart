@@ -25,6 +25,7 @@ import '../../../core/text/finding_text.dart';
 import '../../../core/text/format.dart';
 import '../../../core/ui/announce.dart';
 import '../../../core/ui/diagnostic_severity.dart';
+import '../../../core/ui/findings_pause.dart';
 import '../../../core/ui/fix_control.dart';
 import '../../../core/ui/h_diagnostic_card.dart';
 import '../../../core/ui/hover_label.dart';
@@ -38,7 +39,6 @@ import '../providers/now.dart';
 import '../providers/selection.dart';
 import '../rule_sentence.dart';
 import 'block_button.dart';
-import 'findings_pause.dart';
 import 'note_field.dart';
 import 'release_valve.dart';
 import 'remember_grid.dart';
@@ -415,16 +415,12 @@ class _ActionBarState extends ConsumerState<ActionBar> {
               duration: HReducedMotion.displace(context, HMotion.sweep),
               switchInCurve: HMotion.enter,
               switchOutCurve: HMotion.exit,
-              transitionBuilder: (Widget child, Animation<double> animation) =>
-                  SizeTransition(
-                    sizeFactor: animation,
-                    alignment: Alignment.topCenter,
-                    child: child,
-                  ),
+              transitionBuilder: findingsPauseTransition,
               child: pauseOpen
                   ? FindingsPause(
                       key: const ValueKey<String>('pause'),
-                      findings: findings,
+                      count: findings.count,
+                      findings: findings.known,
                       enabled: acting == null,
                       // Unter der harten Sperre gibt es kein „Trotzdem
                       // senden"; es bleiben Pseudonymisieren, Blockieren und

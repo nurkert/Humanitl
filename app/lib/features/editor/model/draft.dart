@@ -151,7 +151,21 @@ enum FindingStatus {
   replaced,
 
   /// Der Mensch hat ihn stehen lassen; er zählt nicht mehr als offen.
+  ///
+  /// Nur eine ausdrückliche Entscheidung setzt diesen Stand (`ignoreFinding`
+  /// in `draft_ops.dart`), nie eine Eingabe: Ein Fund, den das Tippen
+  /// mehrdeutig gemacht hat, bleibt offen, und der Knopf „Senden" hält weiter
+  /// an der Pause (HUM-161).
   ignored,
+
+  /// Der Wert steht an seinem Ort nicht mehr; jemand hat ihn gelöscht oder
+  /// überschrieben.
+  ///
+  /// Gesetzt nur, wenn der Wert in dem, was hinausginge (Rumpf, jede
+  /// Kopfzeile, Pfad, Query), **nirgends** mehr vorkommt. Solange er noch
+  /// irgendwo steht, ist der Fund offen, und steht er wieder da, wird er es
+  /// wieder (HUM-161, `anchoring.dart`).
+  removed,
 }
 
 /// Eine Kopfzeile im Entwurf.
@@ -195,6 +209,24 @@ abstract class FindingView with _$FindingView {
   /// und wandern nie. Die linke Hälfte des Editors steht auf ihnen: Sie zeigt,
   /// was der Agent geschickt hat, und dort verschiebt sich nichts, gleich wie
   /// oft rechts ersetzt wird.
+  ///
+  /// [value] ist der Text des Fundes, wie er beim Laden an seiner Stelle
+  /// stand. Er ist der Anker (HUM-161): Nach jeder Eingabe wird der Fund an
+  /// ihm neu verankert, und ersetzt wird nur, wo er noch genau so steht. Ein
+  /// Span auf veralteten Offsets ersetzte sonst fremden Text, meldete den Fund
+  /// als ersetzt, und der Wert ginge ohne Pause hinaus. Er bleibt, wie
+  /// [Replacement.original], im Entwurf und geht nie auf die Leitung.
+  ///
+  /// [unplaced] ist wahr, wenn sich der Bereich des Daemons nicht auf den
+  /// Text seines Ortes umrechnen ließ, etwa weil der Rumpf nicht vorliegt
+  /// oder der Bereich hinter dem Wert der Kopfzeile endet. Ein solcher Fund
+  /// ist trotzdem da und geht mit hinaus: Er bleibt offen, zählt für den Knopf
+  /// und die Pause und wird nie ersetzt, weil niemand weiß, wo er steht
+  /// (HUM-161).
+  ///
+  /// [alternatives] sind die möglichen Werte eines Fundes, von dem offen ist,
+  /// welche von mehreren gleichnamigen Kopfzeilen ihn trägt. Er gilt erst als
+  /// entfernt, wenn keiner davon mehr hinausginge.
   const factory FindingView({
     required int index,
     required Finding finding,
@@ -206,6 +238,9 @@ abstract class FindingView with _$FindingView {
     @Default('') String valueHash,
     @Default(0) int originalStart,
     @Default(0) int originalEnd,
+    @Default('') String value,
+    @Default(false) bool unplaced,
+    @Default(<String>[]) List<String> alternatives,
   }) = _FindingView;
 
   const FindingView._();

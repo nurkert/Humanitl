@@ -13,17 +13,24 @@
 /// in einem Wort. Verschoben werden Funde **und** schon angewandte
 /// Ersetzungen, denn der Diff-Glow steht auf denselben Offsets.
 ///
-/// Ein Fund, der sich mit `[s, e)` überlappt, wird [FindingStatus.ignored].
-/// Zwei echte Werte überlappen nie; eine Überlappung ist ein Regex-Artefakt
-/// (eine IBAN, die auch als Telefonnummer durchgeht), und ein Rest-Span, der
-/// halb in einem Pseudonym läge, ersetzte beim nächsten Klick Teile davon.
+/// Ein Fund, der sich mit `[s, e)` überlappt, wird nie ignoriert (HUM-161).
+/// Nach jeder Ersetzung ordnet `reanchorFindings` (`anchoring.dart`) die Funde
+/// neu ihren Werten zu: Steht der Wert eines überlappten Fundes noch da, bleibt
+/// er offen; ist er im Pseudonym aufgegangen, ist er
+/// [FindingStatus.removed]. Eine Überlappung ist meist ein Regex-Artefakt
+/// (eine IBAN, die auch als Telefonnummer durchgeht), aber nicht immer: Eine
+/// Auswahl mit `Ctrl+R` kann einen Fund anschneiden, und dessen Wert ginge
+/// sonst ungesehen hinaus.
 library;
 
 import 'dart:convert';
 
 import '../../../core/domain/domain.dart';
+import 'anchoring.dart';
 import 'draft.dart';
 import 'pseudonym_naming.dart';
+
+export 'anchoring.dart' show hasPlace, isAnchored, reanchorFindings;
 
 /// Das Präfix des Schlüssels einer Auswahl aus `Ctrl+R`.
 ///
@@ -114,12 +121,14 @@ int openFindings(Draft draft) =>
 /// Ein Fund, den es nicht gibt oder der nicht mehr offen ist, lässt den
 /// Entwurf unverändert: Ein zweiter Klick auf denselben Chip soll nichts
 /// zerstören, und ein Aufruf mit einer alten Nummer ist kein Fehler des
-/// Menschen.
+/// Menschen. Dasselbe gilt für einen Fund, an dessen Stelle sein Wert nicht
+/// mehr steht ([isAnchored]): Ersetzt würde fremder Text, der Fund hieße
+/// ersetzt, und der Wert ginge ohne Pause hinaus (HUM-161). Er bleibt offen.
 Draft replaceFinding(Draft draft, int findingIndex, String pseudonym) {
   final FindingView? view = draft.findings
       .where((FindingView view) => view.index == findingIndex && view.isOpen)
       .firstOrNull;
-  if (view == null) {
+  if (view == null || !isAnchored(draft, view)) {
     return draft;
   }
   return _apply(
@@ -143,17 +152,44 @@ Draft replaceAllOfValue(Draft draft, String valueHash, String pseudonym) {
   if (valueHash.isEmpty) {
     return draft;
   }
+  // Durchgänge bis nichts mehr ersetzt wird; siehe [replaceAllOpen].
   Draft out = draft;
-  while (true) {
-    final FindingView? next = out.findings
-        .where((FindingView view) => view.isOpen && view.valueHash == valueHash)
-        .firstOrNull;
-    if (next == null) {
-      return out;
+  for (int pass = 0; pass <= _passBound(draft); pass++) {
+    final Draft next = _replaceValueOnce(out, valueHash, pseudonym);
+    if (identical(next, out)) {
+      break;
     }
-    out = replaceFinding(out, next.index, pseudonym);
+    out = next;
   }
+  return out;
 }
+
+/// Ein Durchgang von [replaceAllOfValue]: jeder passende offene Fund
+/// höchstens einmal; einer ohne Stelle bliebe sonst ewig gewählt.
+Draft _replaceValueOnce(Draft draft, String valueHash, String pseudonym) {
+  Draft out = draft;
+  for (final FindingView view in draft.findings) {
+    if (view.valueHash == valueHash) {
+      out = replaceFinding(out, view.index, pseudonym);
+    }
+  }
+  return out;
+}
+
+/// Die Sicherung für die Durchgänge beim Ersetzen.
+///
+/// Jeder Durchgang, der etwas ändert, nimmt eine Kopie eines Wertes weg, und
+/// es kann nicht mehr Kopien geben als Zeichen in dem, was hinausginge. Die
+/// Schleifen enden deshalb lange vorher; die Grenze fängt nur einen Fehler ab.
+int _passBound(Draft draft) =>
+    draft.body.length +
+    draft.pathAndQuery.length +
+    draft.headers.fold<int>(
+      0,
+      (int sum, HeaderEntry entry) =>
+          sum + entry.name.length + entry.value.length,
+    ) +
+    1;
 
 /// Ersetzt jeden offenen Fund; die Namen kommen aus [naming].
 ///
@@ -165,6 +201,25 @@ Draft replaceAllOpen(Draft draft, PseudonymNaming naming) {
   final List<int> order = <int>[
     for (final FindingView view in draft.findings) view.index,
   ]..sort();
+  // Durchgänge, bis nichts mehr ersetzt wird: Eine Ersetzung kann einen Fund
+  // wieder öffnen, dessen Wert ein weiteres Mal im Text steht
+  // (`reanchorFindings`, Regel 4), und ein Fund mit fünf Kopien braucht fünf
+  // Durchgänge. Kopien in stehenden Pseudonymen zählen nicht, also nimmt jede
+  // Ersetzung eine Kopie weg; [_passBound] ist nur die Sicherung.
+  Draft out = draft;
+  for (int pass = 0; pass <= _passBound(draft); pass++) {
+    final Draft next = _replaceAllOnce(out, order, naming);
+    if (identical(next, out)) {
+      break;
+    }
+    out = next;
+  }
+  return out.copyWith(counters: naming.counters);
+}
+
+/// Ein Durchgang von [replaceAllOpen]; gibt [draft] selbst zurück, wenn er
+/// nichts ersetzt hat.
+Draft _replaceAllOnce(Draft draft, List<int> order, PseudonymNaming naming) {
   Draft out = draft;
   for (final int index in order) {
     // Die eine Stelle, an der „offen" hier zählt. Ein ignorierter Fund darf
@@ -175,12 +230,14 @@ Draft replaceAllOpen(Draft draft, PseudonymNaming naming) {
     final FindingView? view = out.findings
         .where((FindingView view) => view.index == index && view.isOpen)
         .firstOrNull;
-    if (view == null) {
+    // Ein Fund ohne seinen Wert an der Stelle wird nicht ersetzt und bekommt
+    // deshalb auch keinen Namen, aus demselben Grund.
+    if (view == null || !isAnchored(out, view)) {
       continue;
     }
     out = replaceFinding(out, index, naming.nameFor(view.kind, view.valueHash));
   }
-  return out.copyWith(counters: naming.counters);
+  return out;
 }
 
 /// Lässt einen Fund stehen; er zählt danach nicht mehr als offen.
@@ -248,6 +305,10 @@ Draft replaceSelection(
         start: start,
         end: end,
         valueHash: key,
+        // Der ausgewählte Text ist der Anker: Nach `Ctrl+Z` steht er wieder
+        // da, und der Fund wird wieder offen, statt als ersetzt ohne Pause
+        // hinauszugehen (HUM-161). Er bleibt wie der Schlüssel im Entwurf.
+        value: original,
       ),
     ],
   );
@@ -317,9 +378,17 @@ Draft _apply(
         )
       else if (view.location != location)
         view
-      else if (view.isOpen && view.start < end && view.end > start)
-        // Überlappung: ein Regex-Artefakt, nie ein zweiter echter Wert.
-        view.copyWith(status: FindingStatus.ignored)
+      else if (view.isOpen &&
+          !view.unplaced &&
+          view.value.isEmpty &&
+          view.start < end &&
+          view.end > start)
+        // Überlappt und ohne Anker: Wo er stand, steht jetzt das Pseudonym.
+        // Ein Fund mit Anker bleibt hier stehen; `reanchorFindings` unten
+        // entscheidet über ihn nach seinem Wert. Ein Fund ohne Stelle
+        // ([FindingView.unplaced]) trägt noch den Bereich des Daemons, der
+        // nichts über den Text sagt; er bleibt offen (HUM-161).
+        view.copyWith(status: FindingStatus.removed)
       else if (view.start >= end)
         view.copyWith(start: view.start + delta, end: view.end + delta)
       else
@@ -342,15 +411,17 @@ Draft _apply(
     ),
   ];
 
-  return draft
-      .withTextAt(location, next)
-      .copyWith(
-        findings: findings,
-        replacements: replacements,
-        pseudonyms: <String, String>{
-          ...draft.pseudonyms,
-          if (valueHash.isNotEmpty) valueHash: pseudonym,
-        },
-        dirty: true,
-      );
+  return reanchorFindings(
+    draft
+        .withTextAt(location, next)
+        .copyWith(
+          findings: findings,
+          replacements: replacements,
+          pseudonyms: <String, String>{
+            ...draft.pseudonyms,
+            if (valueHash.isNotEmpty) valueHash: pseudonym,
+          },
+          dirty: true,
+        ),
+  );
 }

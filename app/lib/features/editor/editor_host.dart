@@ -133,6 +133,8 @@ class _EditorHostState extends ConsumerState<EditorHost> {
       failure: _failure,
       onClose: widget.onClose,
       onSend: _send,
+      onBlock: _block,
+      sendRefused: detail.summary.sendRefusal != null,
     );
   }
 
@@ -170,10 +172,16 @@ class _EditorHostState extends ConsumerState<EditorHost> {
     });
   }
 
-  Future<void> _send(
-    EditedRequest edited,
-    List<Replacement> replacements,
-  ) async {
+  Future<void> _send(EditedRequest edited, List<Replacement> replacements) =>
+      _decide(Decision.allowEdited(request: edited));
+
+  /// „Blockieren" aus der Pause mit offenen Funden (HUM-161).
+  ///
+  /// Derselbe Weg wie das Senden: Er wartet auf die Antwort, und ein Befund
+  /// bleibt im Editor stehen.
+  Future<void> _block() => _decide(const Decision.block());
+
+  Future<void> _decide(Decision decision) async {
     if (_sending) {
       return;
     }
@@ -182,9 +190,7 @@ class _EditorHostState extends ConsumerState<EditorHost> {
       _failure = null;
     });
     try {
-      await ref
-          .read(daemonClientProvider)
-          .decide(widget.flowId, Decision.allowEdited(request: edited));
+      await ref.read(daemonClientProvider).decide(widget.flowId, decision);
     } on DaemonException catch (error) {
       // Der Editor bleibt stehen und zeigt, warum nichts hinausging. Ihn zu
       // schließen hieße, eine Anfrage für gesendet auszugeben, die der Daemon

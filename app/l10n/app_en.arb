@@ -2893,5 +2893,10 @@
   "@interceptBatchLocked": {
     "description": "In the batch modal: how many selected requests the batch leaves out because the daemon announced the hard block on them (HUM-159). They leave only through the editor.",
     "placeholders": {"count": {"type": "int"}}
+  },
+  "editorSendWithFindings": "{count, plural, =1{Send edited version with 1 finding} other{Send edited version with {count} findings}}",
+  "@editorSendWithFindings": {
+    "description": "The send button of the editor while the draft still has open findings; a click opens the findings pause over the findings of the draft instead of sending (HUM-161).",
+    "placeholders": {"count": {"type": "int"}}
   }
 }
