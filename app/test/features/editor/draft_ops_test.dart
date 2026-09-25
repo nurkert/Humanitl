@@ -7,6 +7,7 @@ library;
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
@@ -111,7 +112,7 @@ void main() {
       expect(after.dirty, isTrue);
     });
 
-    test('replaceFinding_overlapIgnored', () {
+    test('replaceFinding_overlapRemoved', () {
       // Zwei Muster, die sich ueberlappen: ein Regex-Artefakt, nie zwei Werte.
       final Draft before = draftOf(
         body: 'DE02120300000000202051 xx',
@@ -123,7 +124,7 @@ void main() {
 
       final Draft after = replaceFinding(before, 0, '<IBAN_1>');
 
-      expect(after.findings[1].status, FindingStatus.ignored);
+      expect(after.findings[1].status, FindingStatus.removed);
       expect(openFindings(after), 0);
     });
 
@@ -159,6 +160,462 @@ void main() {
       final Draft once = replaceFinding(before, 0, '<EMAIL_1>');
 
       expect(replaceFinding(once, 0, '<EMAIL_9>'), once);
+    });
+  });
+
+  group('the anchor of a finding (HUM-161)', () {
+    test(
+      'a finding whose value no longer stands at its place is not replaced',
+      () {
+        // Die Offsets zeigen auf `il a@x`, der Wert steht zwei Zeichen weiter.
+        final Draft draft = draftOf(
+          body: 'my mail a@x.de',
+          findings: <FindingView>[
+            bodyFinding(0, 'email', 5, 11).copyWith(value: 'a@x.de'),
+          ],
+        );
+
+        final Draft after = replaceFinding(draft, 0, '<EMAIL_1>');
+
+        expect(after.body, 'my mail a@x.de');
+        expect(openFindings(after), 1);
+        final Draft all = replaceAllOpen(draft, PseudonymNaming());
+        expect(all.body, 'my mail a@x.de');
+        expect(openFindings(all), 1);
+      },
+    );
+
+    test('reanchoring moves a finding to its value', () {
+      final Draft draft = draftOf(
+        body: 'my mail a@x.de',
+        findings: <FindingView>[
+          bodyFinding(0, 'email', 5, 11).copyWith(value: 'a@x.de'),
+        ],
+      );
+
+      final Draft after = replaceAllOpen(
+        reanchorFindings(draft),
+        PseudonymNaming(),
+      );
+
+      expect(after.body, 'my mail <EMAIL_1>');
+      expect(openFindings(after), 0);
+    });
+
+    test('an ambiguous value stays open at the first free copy', () {
+      final Draft draft = draftOf(
+        body: 'a@x.de xx a@x.de',
+        findings: <FindingView>[
+          bodyFinding(0, 'email', 8, 14).copyWith(value: 'a@x.de'),
+        ],
+      );
+
+      final FindingView view = reanchorFindings(draft).findings.single;
+
+      expect(view.status, FindingStatus.open);
+      expect(view.start, 0);
+    });
+
+    test('a value gone from its place is removed, never ignored', () {
+      final Draft draft = draftOf(
+        body: 'mail nobody',
+        findings: <FindingView>[
+          bodyFinding(0, 'email', 5, 11).copyWith(value: 'a@x.de'),
+        ],
+      );
+
+      final FindingView view = reanchorFindings(draft).findings.single;
+
+      expect(view.status, FindingStatus.removed);
+    });
+  });
+
+  group('anchoring after review round 4 (HUM-161)', () {
+    FindingView mail(int index, int start, {String value = 'a@x.de'}) =>
+        bodyFinding(
+          index,
+          'email',
+          start,
+          start + value.length,
+          hash: 'mail',
+        ).copyWith(value: value);
+
+    test('two findings of one value never share a copy', () {
+      // Kopien bei 3 und 13; fünf Zeichen davor verschieben beide.
+      final Draft draft = draftOf(
+        body: '12345aa a@x.de bb a@x.de',
+        findings: <FindingView>[mail(0, 3), mail(1, 13)],
+      );
+
+      final Draft after = reanchorFindings(draft);
+
+      expect(
+        <int>[for (final FindingView v in after.findings) v.start],
+        <int>[8, 18],
+      );
+      final Draft replaced = replaceAllOpen(after, PseudonymNaming());
+      expect(replaced.body, '12345aa <EMAIL_1> bb <EMAIL_1>');
+      expect(openFindings(replaced), 0);
+    });
+
+    test('a value inside a standing pseudonym is no copy', () {
+      // Der Wert `EMAIL` steht nach dem Ersetzen im Pseudonym `<EMAIL_1>`;
+      // das öffnet den Fund nicht wieder.
+      final Draft draft = draftOf(
+        body: 'id EMAIL',
+        findings: <FindingView>[mail(0, 3, value: 'EMAIL')],
+      );
+
+      final Draft after = replaceAllOpen(draft, PseudonymNaming());
+
+      expect(after.body, 'id <EMAIL_1>');
+      expect(openFindings(after), 0);
+    });
+
+    test('a value deleted and typed again is open again', () {
+      final Draft draft = draftOf(
+        body: 'mail a@x.de',
+        findings: <FindingView>[mail(0, 5)],
+      );
+
+      final Draft gone = reanchorFindings(draft.copyWith(body: 'mail a@x.d'));
+      expect(gone.findings.single.status, FindingStatus.removed);
+      final Draft back = reanchorFindings(gone.copyWith(body: 'mail a@x.de'));
+
+      expect(back.findings.single.status, FindingStatus.open);
+      expect(back.findings.single.start, 5);
+      expect(openFindings(back), 1);
+    });
+
+    test('undo after replace all opens the finding and drops its mapping', () {
+      final Draft draft = draftOf(
+        body: 'mail a@x.de',
+        findings: <FindingView>[mail(0, 5)],
+      );
+      final Draft replaced = replaceAllOpen(draft, PseudonymNaming());
+      expect(replaced.body, 'mail <EMAIL_1>');
+
+      final Draft undone = reanchorFindings(
+        replaced.copyWith(body: 'mail a@x.de'),
+      );
+
+      expect(undone.findings.single.status, FindingStatus.open);
+      expect(undone.replacements, isEmpty);
+    });
+
+    test('a selection that cuts into a finding never ignores it', () {
+      final Draft draft = draftOf(
+        body: 'mail max.muster@x.de ok',
+        findings: <FindingView>[mail(0, 5, value: 'max.muster@x.de')],
+      );
+
+      final Draft after = replaceSelection(
+        draft,
+        DraftLocation.body,
+        5,
+        9,
+        'name',
+        PseudonymNaming(),
+      );
+
+      expect(after.findings.first.status, FindingStatus.removed);
+    });
+
+    test('a value that moved into the path stays open', () {
+      final Draft draft = draftOf(
+        pathAndQuery: '/v1/chat?to=a@x.de',
+        findings: <FindingView>[
+          FindingView(
+            index: 0,
+            finding: Finding(
+              kind: 'email',
+              location: FindingLocation.query,
+              spanStart: 3,
+              spanEnd: 9,
+              tier: FindingTier.regex,
+            ),
+            location: DraftLocation.query,
+            start: 3,
+            end: 9,
+            valueHash: 'mail',
+            value: 'a@x.de',
+          ),
+        ],
+      );
+
+      final Draft after = reanchorFindings(
+        draft.copyWith(pathAndQuery: '/v1/chatto=a@x.de'),
+      );
+
+      expect(after.findings.single.status, FindingStatus.open);
+      expect(openFindings(after), 1);
+      final Draft replaced = replaceAllOpen(after, PseudonymNaming());
+      expect(replaced.pathAndQuery, '/v1/chatto=a@x.de');
+      expect(openFindings(replaced), 1);
+    });
+  });
+
+  group('anchoring after review round 5 (HUM-161)', () {
+    FindingView mail(int index, int start, {String value = 'a@x.de'}) =>
+        bodyFinding(
+          index,
+          'email',
+          start,
+          start + value.length,
+          hash: 'mail',
+        ).copyWith(value: value);
+
+    Draft unplacedDraft() => buildDraft(
+      const FlowId('01930000-0000-7000-8000-00000000000f'),
+      DraftSource(
+        request: HttpRequest(
+          method: Method.post,
+          scheme: Scheme.https,
+          authority: const Authority(host: 'api.example.com', port: 443),
+          pathAndQuery: '/v1/chat',
+          headers: const <Header>[],
+          body: const BodyRef(sha256: <int>[], size: 0),
+        ),
+        findings: <Finding>[
+          Finding(
+            kind: 'email',
+            location: FindingLocation.body,
+            spanStart: 5,
+            spanEnd: 11,
+            tier: FindingTier.checksum,
+          ),
+        ],
+        bodyText: 'mail',
+        bodyKind: BodyKind.text,
+        bodyBytes: Uint8List.fromList(utf8.encode('mail a@x.de')),
+      ),
+    );
+
+    test('a selection over the old span of a finding without a place keeps '
+        'it open', () {
+      final Draft draft = unplacedDraft().copyWith(body: 'hello world');
+
+      final Draft after = replaceSelection(
+        draft,
+        DraftLocation.body,
+        5,
+        11,
+        'name',
+        PseudonymNaming(),
+      );
+
+      expect(openFindings(after), 1);
+    });
+
+    test('ctrl+r then undo opens the selection again', () {
+      final Draft draft = draftOf(body: 'acme corp writes');
+      final Draft replaced = replaceSelection(
+        draft,
+        DraftLocation.body,
+        0,
+        9,
+        'client',
+        PseudonymNaming(),
+      );
+      expect(openFindings(replaced), 0);
+
+      final Draft undone = reanchorFindings(
+        replaced.copyWith(body: 'acme corp writes'),
+      );
+
+      expect(openFindings(undone), 1);
+    });
+
+    test('a value in the method keeps its finding open', () {
+      final Draft draft = draftOf(
+        body: 'mail a@x.de',
+        findings: <FindingView>[mail(0, 5)],
+      );
+
+      final Draft after = reanchorFindings(
+        draft.copyWith(body: 'mail', method: 'POSTa@x.de'),
+      );
+
+      expect(openFindings(after), 1);
+    });
+
+    test('a value in a header name keeps its finding open', () {
+      final Draft draft = draftOf(
+        body: 'mail a@x.de',
+        findings: <FindingView>[mail(0, 5)],
+        headers: const <HeaderEntry>[HeaderEntry(name: 'a@x.de', value: '1')],
+      );
+
+      final Draft after = reanchorFindings(draft.copyWith(body: 'mail'));
+
+      expect(openFindings(after), 1);
+    });
+
+    test('a query value written out in plain keeps its finding open', () {
+      final Draft draft = draftOf(
+        pathAndQuery: '/v1/chat?to=user%40x.de',
+        findings: <FindingView>[
+          FindingView(
+            index: 0,
+            finding: Finding(
+              kind: 'email',
+              location: FindingLocation.query,
+              spanStart: 3,
+              spanEnd: 14,
+              tier: FindingTier.regex,
+            ),
+            location: DraftLocation.query,
+            start: 3,
+            end: 14,
+            valueHash: 'mail',
+            value: 'user%40x.de',
+          ),
+        ],
+      );
+
+      final Draft after = reanchorFindings(
+        draft.copyWith(pathAndQuery: '/v1/chat?to=user@x.de'),
+      );
+
+      expect(openFindings(after), 1);
+    });
+
+    test('replace all takes every copy of one value', () {
+      final Draft draft = draftOf(
+        body: 'a@x.de a@x.de a@x.de a@x.de a@x.de',
+        findings: <FindingView>[mail(0, 0)],
+      );
+
+      final Draft after = replaceAllOpen(draft, PseudonymNaming());
+
+      expect(after.body, isNot(contains('a@x.de')));
+      expect(openFindings(after), 0);
+    });
+
+    test('replace all of a value takes every copy of it', () {
+      final Draft draft = draftOf(
+        body: 'a@x.de a@x.de a@x.de',
+        findings: <FindingView>[mail(0, 0)],
+      );
+
+      final Draft after = replaceAllOfValue(draft, 'mail', '<EMAIL_1>');
+
+      expect(after.body, '<EMAIL_1> <EMAIL_1> <EMAIL_1>');
+    });
+
+    test('an ambiguous finding is removed only when no candidate goes out', () {
+      final Draft draft = buildDraft(
+        const FlowId('01930000-0000-7000-8000-00000000000f'),
+        DraftSource(
+          request: HttpRequest(
+            method: Method.post,
+            scheme: Scheme.https,
+            authority: const Authority(host: 'api.example.com', port: 443),
+            pathAndQuery: '/v1/chat',
+            headers: <Header>[
+              Header(name: 'Via', value: 'proxy.one.de'.codeUnits),
+              Header(name: 'Via', value: 'mail a@x.de'.codeUnits),
+            ],
+            body: const BodyRef(sha256: <int>[], size: 0),
+          ),
+          findings: <Finding>[
+            Finding(
+              kind: 'email',
+              location: FindingLocation.header,
+              headerName: 'Via',
+              spanStart: 5,
+              spanEnd: 11,
+              tier: FindingTier.checksum,
+            ),
+          ],
+          bodyText: '',
+          bodyKind: BodyKind.empty,
+        ),
+      );
+      Draft withRows(String first, String second) => draft.copyWith(
+        headers: <HeaderEntry>[
+          draft.headers[0].copyWith(value: first),
+          draft.headers[1].copyWith(value: second),
+        ],
+      );
+
+      // Nur die erste Zeile verliert ihren Kandidaten; die Adresse steht noch.
+      expect(
+        openFindings(reanchorFindings(withRows('proxy', 'mail a@x.de'))),
+        1,
+      );
+      // Beide weg: nichts davon geht mehr hinaus.
+      expect(openFindings(reanchorFindings(withRows('proxy', 'mail'))), 0);
+    });
+  });
+
+  group('anchoring, minors after round 5 (HUM-161)', () {
+    FindingView queryMail() => FindingView(
+      index: 0,
+      finding: Finding(
+        kind: 'email',
+        location: FindingLocation.query,
+        spanStart: 3,
+        spanEnd: 14,
+        tier: FindingTier.regex,
+      ),
+      location: DraftLocation.query,
+      start: 3,
+      end: 14,
+      valueHash: 'mail',
+      value: 'user%40x.de',
+    );
+
+    test('a stray percent sign does not hide a written-out value', () {
+      final Draft draft = draftOf(
+        pathAndQuery: '/v1/chat?to=user%40x.de&off=50%',
+        findings: <FindingView>[queryMail()],
+      );
+
+      final Draft after = reanchorFindings(
+        draft.copyWith(pathAndQuery: '/v1/chat?to=user@x.de&off=50%'),
+      );
+
+      expect(openFindings(after), 1);
+    });
+
+    test('a written-out value that comes back through undo is open again', () {
+      final Draft draft = draftOf(
+        pathAndQuery: '/v1/chat?to=user%40x.de',
+        findings: <FindingView>[queryMail()],
+      );
+      final Draft written = reanchorFindings(
+        draft.copyWith(pathAndQuery: '/v1/chat?to=user@x.de'),
+      );
+      final Draft gone = reanchorFindings(
+        written.copyWith(pathAndQuery: '/v1/chat?to='),
+      );
+      expect(openFindings(gone), 0);
+
+      final Draft back = reanchorFindings(
+        gone.copyWith(pathAndQuery: '/v1/chat?to=user@x.de'),
+      );
+
+      expect(openFindings(back), 1);
+    });
+
+    test('a manual selection does not reopen at another place', () {
+      final Draft draft = draftOf(
+        body: 'acme writes',
+        headers: const <HeaderEntry>[HeaderEntry(name: 'X-Org', value: 'acme')],
+      );
+
+      final Draft after = replaceSelection(
+        draft,
+        DraftLocation.body,
+        0,
+        4,
+        'client',
+        PseudonymNaming(),
+      );
+
+      expect(after.body, '<CLIENT_1> writes');
+      expect(openFindings(after), 0);
     });
   });
 
@@ -319,6 +776,85 @@ void main() {
       headers: headers,
       body: const BodyRef(sha256: <int>[], size: 0),
     );
+
+    test('a body span past the text leaves the finding open and unplaced', () {
+      // Der Rumpf liegt als Bytes vor, der Text ist kürzer: Der Bereich
+      // `[5, 11)` hat keinen Wert, an dem er sich verankern ließe.
+      final Draft draft = buildDraft(
+        const FlowId('01930000-0000-7000-8000-00000000000f'),
+        DraftSource(
+          request: requestWith(const <Header>[]),
+          findings: <Finding>[
+            Finding(
+              kind: 'email',
+              location: FindingLocation.body,
+              spanStart: 5,
+              spanEnd: 11,
+              tier: FindingTier.regex,
+            ),
+          ],
+          bodyText: 'mail',
+          bodyKind: BodyKind.text,
+          bodyBytes: Uint8List.fromList(utf8.encode('mail a@x.de')),
+        ),
+      );
+
+      final Draft typed = reanchorFindings(draft.copyWith(body: 'hello world'));
+      final Draft after = replaceAllOpen(typed, PseudonymNaming());
+
+      expect(after.body, 'hello world');
+      expect(openFindings(after), 1);
+    });
+
+    test('an ambiguous header row leaves the finding open and unplaced', () {
+      // Beide `Via` fassen `[5, 11)` und tragen dort Verschiedenes; welche
+      // der Daemon meinte, lässt sich ohne den Hash nicht sagen.
+      final Draft draft = buildDraft(
+        const FlowId('01930000-0000-7000-8000-00000000000f'),
+        DraftSource(
+          request: requestWith(<Header>[
+            Header(name: 'Via', value: 'proxy.one.de'.codeUnits),
+            Header(name: 'Via', value: 'mail a@x.de'.codeUnits),
+          ]),
+          findings: <Finding>[headerFind('Via', 5, 11)],
+          bodyText: '',
+          bodyKind: BodyKind.empty,
+        ),
+      );
+
+      final Draft after = replaceAllOpen(draft, PseudonymNaming());
+
+      expect(after.headers[0].value, 'proxy.one.de');
+      expect(after.headers[1].value, 'mail a@x.de');
+      expect(openFindings(after), 1);
+    });
+
+    test('a finding without a place stays open and is never replaced', () {
+      // Der Bereich `[20, 26)` endet hinter dem Wert der Kopfzeile; umrechnen
+      // lässt er sich nicht. Der Wert geht trotzdem mit hinaus (HUM-161).
+      final Draft draft = buildDraft(
+        const FlowId('01930000-0000-7000-8000-00000000000f'),
+        DraftSource(
+          request: requestWith(<Header>[
+            Header(name: 'X-Contact', value: 'a@x.de'.codeUnits),
+          ]),
+          findings: <Finding>[headerFind('X-Contact', 20, 26)],
+          bodyText: '',
+          bodyKind: BodyKind.empty,
+        ),
+      );
+
+      expect(draft.findings.single.status, FindingStatus.open);
+      expect(openFindings(draft), 1);
+
+      final Draft after = replaceAllOpen(
+        reanchorFindings(draft),
+        PseudonymNaming(),
+      );
+
+      expect(after.headers.single.value, 'a@x.de');
+      expect(openFindings(after), 1);
+    });
 
     test('a finding lands in the Via that can hold it, not in the first', () {
       // Die erste `Via` ist zu kurz fuer den Bereich `[0, 6)`; der Fund gehoert

@@ -1150,5 +1150,6 @@
   "diagSANDBOX019Why": "Der Kernel hat dem Filter des Agenten keinen Zuhörer gegeben; verweigert wird weiter mit EPERM, gezählt und gemeldet wird nichts.",
   "interceptBatchWithheld": "{count, plural, =1{1 Anfrage mit offenem Fund bleibt angehalten. Sende sie aus ihrer Karte.} other{{count} Anfragen mit offenen Funden bleiben angehalten. Sende jede aus ihrer Karte.}}",
   "interceptSendRefused": "Senden nicht möglich",
-  "interceptBatchLocked": "{count, plural, =1{1 Anfrage trägt ein bestätigtes Geheimnis und bleibt angehalten. Sie geht nur bearbeitet hinaus.} other{{count} Anfragen tragen ein bestätigtes Geheimnis und bleiben angehalten. Sie gehen nur bearbeitet hinaus.}}"
+  "interceptBatchLocked": "{count, plural, =1{1 Anfrage trägt ein bestätigtes Geheimnis und bleibt angehalten. Sie geht nur bearbeitet hinaus.} other{{count} Anfragen tragen ein bestätigtes Geheimnis und bleiben angehalten. Sie gehen nur bearbeitet hinaus.}}",
+  "editorSendWithFindings": "{count, plural, =1{Editierte Version senden mit 1 Fund} other{Editierte Version senden mit {count} Funden}}"
 }

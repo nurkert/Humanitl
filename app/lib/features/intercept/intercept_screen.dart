@@ -229,10 +229,26 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
   /// single key does not. While the modal of a batch stands, the decision
   /// shortcuts of the screen are out of service altogether: a modal that could
   /// be answered past is no modal (`docs/UX.md` 5.4).
+  ///
+  /// While the editor stands in place of the card, none of them works either
+  /// (HUM-161): the keys the editor does not bind itself would otherwise fall
+  /// through to the queue, and `A` then `S` would send the held request with
+  /// every finding the editor is about to replace.
   bool _keysActive({required bool chord}) =>
       _visible &&
+      !_editorShown() &&
       ref.read(batchConfirmProvider) == null &&
       (chord || !isTextInputFocused());
+
+  /// Wahr, solange der Editor an der Stelle der Karte steht.
+  ///
+  /// Dasselbe Prädikat, nach dem `build` ihn zeigt: Ist die Anfrage nicht mehr
+  /// gehalten, steht er nicht mehr da, und die Tasten gehören wieder der
+  /// Warteschlange.
+  bool _editorShown() =>
+      _editorOpen &&
+      widget.editorBuilder != null &&
+      (ref.read(selectedFlowProvider)?.isHeld ?? false);
 
   /// Reads the decision keys before the shortcuts do.
   ///
@@ -397,7 +413,11 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
   /// Dasselbe Praedikat, das die Aktionsleiste zeichnet
   /// ([findingsPauseVisibleProvider]): Eine Taste wirkt nur, wo die Pause auch
   /// zu sehen ist.
-  bool _pauseOpen() => ref.read(findingsPauseVisibleProvider);
+  ///
+  /// Bei offenem Editor steht sie nie: Dort gibt es nur die Pause des Editors
+  /// über den Funden des Entwurfs (HUM-161).
+  bool _pauseOpen() =>
+      !_editorShown() && ref.read(findingsPauseVisibleProvider);
 
   /// `S` in der Pause: senden, wie die Anfrage ist.
   void _sendAnyway() {

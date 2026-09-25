@@ -12,6 +12,12 @@
 /// zusammenläuft. Ein Editor, der selbst entschiede, wäre die zweite Stelle,
 /// an der eine Anfrage hinausgeht (`docs/ARCHITECTURE.md` 5).
 ///
+/// Trägt der Entwurf noch offene Funde, sendet der erste Klick nicht. Er
+/// öffnet an der Stelle der Leiste dieselbe Pause wie die Karte der
+/// Warteschlange, über den offenen Funden des Entwurfs und nicht über denen
+/// der gehaltenen Fassung (HUM-161). Gezählt wird, was der Entwurf führt; einen
+/// zweiten Scan im Client gibt es nicht, den macht der Daemon beim Senden.
+///
 /// Er kennt auch keinen fremden Provider. Was er zum Bauen braucht, reicht der
 /// Aufrufer als [DraftSource] herein; der Entwurf selbst lebt danach in
 /// `draftProvider(flowId)` und überlebt jedes Schließen mit `Esc`.
@@ -23,6 +29,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/domain/domain.dart';
 import '../../core/domain/http_request.dart';
 import '../../core/ui/diagnostic_severity.dart';
+import '../../core/ui/findings_pause.dart';
 import '../../core/ui/fix_control.dart';
 import '../../core/ui/h_diagnostic_card.dart';
 import '../../core/ui/h_resizable_panes.dart';
@@ -52,6 +59,8 @@ class EditorScreen extends ConsumerStatefulWidget {
     required this.source,
     required this.onClose,
     required this.onSend,
+    this.onBlock,
+    this.sendRefused = false,
     this.replaceAllOnOpen = false,
     this.canSend = true,
     this.sendDisabledReason = '',
@@ -71,6 +80,22 @@ class EditorScreen extends ConsumerStatefulWidget {
   /// Schickt die bearbeitete Fassung.
   final void Function(EditedRequest request, List<Replacement> replacements)
   onSend;
+
+  /// Blockt die Anfrage aus der Pause mit offenen Funden, oder null.
+  ///
+  /// Null lässt „Blockieren" in der Pause weg, statt es tot hinzustellen
+  /// (`backlog/CONVENTIONS.md` 4.13).
+  final VoidCallback? onBlock;
+
+  /// Wahr, wenn der Daemon für diese Anfrage die harte Sperre angesagt hat
+  /// (`FlowSummary.send_refusal`, `HOLD_004`, HUM-159).
+  ///
+  /// Die Pause des Editors bietet „Trotzdem senden" dann nicht an, solange
+  /// ein offener Fund des Entwurfs die Stufe `checksum` trägt: Diese Fassung
+  /// wiese der Daemon zurück. Ist der letzte solche Fund ersetzt, steht der
+  /// Knopf wieder da; ob ein Rest noch sperrt, entscheidet weiter der Daemon
+  /// beim zweiten Scan (ADR-018).
+  final bool sendRefused;
 
   /// Wahr, wenn der Editor mit jedem offenen Fund schon ersetzt aufgeht.
   ///
@@ -105,6 +130,13 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   DraftTab _tab = DraftTab.body;
   bool _prompting = false;
   TextSelection? _selection;
+
+  /// Wahr, nachdem ein Senden mit offenen Funden die Pause geöffnet hat.
+  ///
+  /// Gezeigt wird sie nur, solange es noch einen offenen Fund gibt und
+  /// gesendet werden darf ([_pauseVisible]); dieses Feld sagt nur, dass
+  /// jemand danach gefragt hat.
+  bool _paused = false;
 
   @override
   void initState() {
@@ -157,6 +189,46 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     );
   }
 
+  /// Sendet den Entwurf, oder öffnet die Pause, solange ein Fund offen ist.
+  ///
+  /// Der erste Klick, `Ctrl+Enter` und jeder weitere Weg zum Senden laufen
+  /// hier durch: Ein Entwurf mit einer stehengelassenen E-Mail geht nie auf
+  /// den ersten Klick hinaus (HUM-161). Hinaus geht er dann nur über
+  /// „Trotzdem senden" in der Pause.
+  void _requestSend(Draft draft) {
+    if (openFindings(draft) == 0) {
+      _send(draft);
+      return;
+    }
+    setState(() => _paused = true);
+    // Der Knopf, der eben gedrückt wurde, verschwindet mit der Leiste; ohne
+    // diesen Griff fiele der Fokus aus dem Editor, und `Esc` liefe gegen die
+    // Bindungen des Bildschirms darunter.
+    _focus.requestFocus();
+  }
+
+  /// Wahr, solange die Pause steht.
+  ///
+  /// Das eine Prädikat für Auge und Tasten: Sie steht, wenn jemand senden
+  /// wollte, noch ein Fund offen ist und gesendet werden darf. Ist der letzte
+  /// Fund ersetzt oder die Frist abgelaufen, ist sie für beide zugleich weg,
+  /// und die Leiste sagt wieder, was gilt.
+  ///
+  /// Eine Pause, die nicht mehr steht, bleibt auch nicht vorgemerkt: Sonst
+  /// ginge sie wieder auf, sobald ein Fund erneut offen ist, ohne dass jemand
+  /// senden wollte. Ohne `setState`, weil der Aufruf im Aufbau steht und sich
+  /// an diesem Rahmen dadurch nichts ändert.
+  bool _pauseVisible(Draft draft, {required bool sendable}) {
+    final bool visible = _paused && sendable && openFindings(draft) > 0;
+    if (!visible) {
+      _paused = false;
+    }
+    return visible;
+  }
+
+  /// Schließt die Pause; Schließen entscheidet nichts.
+  void _closePause() => setState(() => _paused = false);
+
   /// Springt zum nächsten offenen Fund im Rumpf.
   ///
   /// „Nächster" heißt: der erste offene, der hinter dem Cursor steht, und
@@ -166,7 +238,10 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   void _nextFinding(Draft draft) {
     final List<FindingView> open = <FindingView>[
       for (final FindingView view in draft.findings)
-        if (view.isOpen && view.location.kind == FindingLocation.body) view,
+        if (view.isOpen &&
+            hasPlace(view) &&
+            view.location.kind == FindingLocation.body)
+          view,
     ]..sort((FindingView a, FindingView b) => a.start.compareTo(b.start));
     if (open.isEmpty) {
       return;
@@ -235,42 +310,14 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
       draft.headers,
     );
     final bool sendable = problem == null && headerProblem == null;
+    final bool paused = _pauseVisible(
+      draft,
+      sendable: widget.canSend && sendable,
+    );
     return Shortcuts(
       shortcuts: editorShortcuts(),
       child: Actions(
-        actions: <Type, Action<Intent>>{
-          CloseEditorIntent: CallbackAction<CloseEditorIntent>(
-            onInvoke: (CloseEditorIntent intent) {
-              if (_prompting) {
-                setState(() => _prompting = false);
-                return null;
-              }
-              widget.onClose();
-              return null;
-            },
-          ),
-          SendEditedIntent: CallbackAction<SendEditedIntent>(
-            onInvoke: (SendEditedIntent intent) {
-              if (widget.canSend && sendable) {
-                _send(draft);
-              }
-              return null;
-            },
-          ),
-          NextFindingIntent: CallbackAction<NextFindingIntent>(
-            onInvoke: (NextFindingIntent intent) {
-              _nextFinding(draft);
-              return null;
-            },
-          ),
-          PseudonymizeSelectionIntent:
-              CallbackAction<PseudonymizeSelectionIntent>(
-                onInvoke: (PseudonymizeSelectionIntent intent) {
-                  _pseudonymize();
-                  return null;
-                },
-              ),
-        },
+        actions: _actions(draft, sendable: sendable, paused: paused),
         child: Focus(
           focusNode: _focus,
           // Der Editor nimmt die Tastatur, sobald er aufgeht. Ohne das bliebe
@@ -303,50 +350,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
                   cleanLabel: l10n.editorNoFindings,
                   chipLabel: l10n.editorFindingChip,
                 ),
-                Expanded(
-                  child: HResizablePanes(
-                    ratios: const <double>[0.5, 0.5],
-                    minWidths: const <double>[
-                      editorHalfMinWidth,
-                      editorHalfMinWidth,
-                    ],
-                    onRatiosChanged: (List<double> _) {},
-                    splitterSemanticsLabel: l10n.editorSplitter,
-                    children: <Widget>[
-                      OriginalView(
-                        text: widget.source.bodyText,
-                        findings: draft.findings,
-                        label: l10n.editorOriginal,
-                      ),
-                      DraftEditor(
-                        key: _editorKey,
-                        draft: draft,
-                        tab: _tab,
-                        enabled: widget.canSend,
-                        onTab: (DraftTab tab) => setState(() => _tab = tab),
-                        onBody: notifier.setBody,
-                        onHeader: notifier.setHeader,
-                        onAddHeader: notifier.addHeader,
-                        onRemoveHeader: notifier.removeHeader,
-                        onPathAndQuery: notifier.setPathAndQuery,
-                        onSelection: (TextSelection selection) =>
-                            _selection = selection,
-                        tabLabels: <String>[
-                          l10n.editorTabBody,
-                          l10n.editorTabHeaders,
-                          l10n.editorTabQuery,
-                        ],
-                        lockedLabel: l10n.editorHeaderLocked,
-                        addHeaderLabel: l10n.editorHeaderAdd,
-                        removeHeaderLabel: l10n.editorHeaderRemove,
-                        nameLabel: l10n.editorHeaderName,
-                        valueLabel: l10n.editorHeaderValue,
-                        bodyLabel: l10n.editorDraft,
-                        notEditableLabel: l10n.editorBodyNotEditable,
-                      ),
-                    ],
-                  ),
-                ),
+                Expanded(child: _panes(draft, notifier, l10n)),
                 if (_prompting) _prompt(tokens, l10n),
                 MappingStrip(
                   replacements: draft.replacements,
@@ -355,25 +359,181 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
                   typeLabel: l10n.editorMappingType,
                   originalLabel: l10n.editorMappingOriginal,
                 ),
-                _ActionBar(
+                _bottom(
+                  context,
                   draft: draft,
-                  failure: widget.failure,
-                  canSend: widget.canSend && sendable,
-                  problem: problem,
-                  headerProblem: headerProblem,
-                  jsonError: rendered.jsonError,
-                  disabledReason: widget.sendDisabledReason,
-                  onSend: () => _send(draft),
-                  onDiscard: () {
-                    notifier.reset(widget.source);
-                    widget.onClose();
-                  },
+                  paused: paused,
+                  bar: _ActionBar(
+                    draft: draft,
+                    failure: widget.failure,
+                    canSend: widget.canSend && sendable,
+                    problem: problem,
+                    headerProblem: headerProblem,
+                    jsonError: rendered.jsonError,
+                    disabledReason: widget.sendDisabledReason,
+                    onSend: () => _requestSend(draft),
+                    onDiscard: () {
+                      notifier.reset(widget.source);
+                      widget.onClose();
+                    },
+                  ),
                 ),
               ],
             ),
           ),
         ),
       ),
+    );
+  }
+
+  /// Die Tasten des Editors: schließen, senden, nächster Fund, `Ctrl+R`.
+  ///
+  /// `Esc` schließt zuerst, was über der Leiste offen ist, die Eingabe von
+  /// `Ctrl+R` und dann die Pause, und erst danach den Editor. `Ctrl+Enter`
+  /// geht denselben Weg wie der Knopf: Mit offenen Funden öffnet es die Pause
+  /// (HUM-161).
+  Map<Type, Action<Intent>> _actions(
+    Draft draft, {
+    required bool sendable,
+    required bool paused,
+  }) => <Type, Action<Intent>>{
+    CloseEditorIntent: CallbackAction<CloseEditorIntent>(
+      onInvoke: (CloseEditorIntent intent) {
+        if (_prompting) {
+          setState(() => _prompting = false);
+          return null;
+        }
+        if (paused) {
+          _closePause();
+          return null;
+        }
+        widget.onClose();
+        return null;
+      },
+    ),
+    SendEditedIntent: CallbackAction<SendEditedIntent>(
+      onInvoke: (SendEditedIntent intent) {
+        if (widget.canSend && sendable) {
+          _requestSend(draft);
+        }
+        return null;
+      },
+    ),
+    NextFindingIntent: CallbackAction<NextFindingIntent>(
+      onInvoke: (NextFindingIntent intent) {
+        _nextFinding(draft);
+        return null;
+      },
+    ),
+    PseudonymizeSelectionIntent: CallbackAction<PseudonymizeSelectionIntent>(
+      onInvoke: (PseudonymizeSelectionIntent intent) {
+        _pseudonymize();
+        return null;
+      },
+    ),
+  };
+
+  /// Links das Original, rechts der Entwurf.
+  Widget _panes(Draft draft, DraftNotifier notifier, AppLocalizations l10n) =>
+      HResizablePanes(
+        ratios: const <double>[0.5, 0.5],
+        minWidths: const <double>[editorHalfMinWidth, editorHalfMinWidth],
+        onRatiosChanged: (List<double> _) {},
+        splitterSemanticsLabel: l10n.editorSplitter,
+        children: <Widget>[
+          OriginalView(
+            text: widget.source.bodyText,
+            findings: draft.findings,
+            label: l10n.editorOriginal,
+          ),
+          DraftEditor(
+            key: _editorKey,
+            draft: draft,
+            tab: _tab,
+            enabled: widget.canSend,
+            onTab: (DraftTab tab) => setState(() => _tab = tab),
+            onBody: notifier.setBody,
+            onHeader: notifier.setHeader,
+            onAddHeader: notifier.addHeader,
+            onRemoveHeader: notifier.removeHeader,
+            onPathAndQuery: notifier.setPathAndQuery,
+            onSelection: (TextSelection selection) => _selection = selection,
+            tabLabels: <String>[
+              l10n.editorTabBody,
+              l10n.editorTabHeaders,
+              l10n.editorTabQuery,
+            ],
+            lockedLabel: l10n.editorHeaderLocked,
+            addHeaderLabel: l10n.editorHeaderAdd,
+            removeHeaderLabel: l10n.editorHeaderRemove,
+            nameLabel: l10n.editorHeaderName,
+            valueLabel: l10n.editorHeaderValue,
+            bodyLabel: l10n.editorDraft,
+            notEditableLabel: l10n.editorBodyNotEditable,
+          ),
+        ],
+      );
+
+  /// Die Leiste oder, solange sie steht, die Pause an ihrer Stelle.
+  ///
+  /// Dieselbe Pause wie in der Karte der Warteschlange und dasselbe Aufgehen
+  /// in 200 ms (HUM-049, `docs/UX.md` 5.4). Sie zeigt die offenen Funde des
+  /// Entwurfs; ihre Nummern sind die des Entwurfs, nicht die des
+  /// `Analyzed`-Ereignisses, und gehen deshalb nirgends hin: Bestätigt wird
+  /// bei `AllowEdited` nichts, der Daemon scannt die bearbeitete Fassung
+  /// selbst ein zweites Mal (HUM-160). „Pseudonymisieren" heißt hier „Alle
+  /// ersetzen": Der Editor ist schon offen.
+  Widget _bottom(
+    BuildContext context, {
+    required Draft draft,
+    required bool paused,
+    required Widget bar,
+  }) {
+    final AppLocalizations l10n = context.l10n;
+    final List<Finding> open = <Finding>[
+      for (final FindingView view in draft.findings)
+        if (view.isOpen) view.finding,
+    ];
+    final VoidCallback? block = widget.onBlock;
+    final bool locked =
+        widget.sendRefused &&
+        open.any((Finding finding) => finding.tier == FindingTier.checksum);
+    return AnimatedSwitcher(
+      duration: HReducedMotion.displace(context, HMotion.sweep),
+      switchInCurve: HMotion.enter,
+      switchOutCurve: HMotion.exit,
+      transitionBuilder: findingsPauseTransition,
+      child: paused
+          ? Padding(
+              key: const ValueKey<String>('editor-pause'),
+              padding: EdgeInsets.all(HTheme.of(context).spacing.x3),
+              child: FindingsPause(
+                count: open.length,
+                findings: open,
+                letterKeys: false,
+                pseudonymizeLabel: l10n.editorReplaceAll,
+                onSendAnyway: locked
+                    ? null
+                    : () {
+                        _closePause();
+                        _send(draft);
+                      },
+                onPseudonymize: () {
+                  _closePause();
+                  ref
+                      .read(draftProvider(widget.flowId).notifier)
+                      .replaceAllOpen(aliases: widget.source.aliases);
+                },
+                onBlock: block == null
+                    ? null
+                    : () {
+                        _closePause();
+                        block();
+                      },
+                onBack: _closePause,
+              ),
+            )
+          : KeyedSubtree(key: const ValueKey<String>('editor-bar'), child: bar),
     );
   }
 
@@ -598,7 +758,11 @@ class _ActionBar extends StatelessWidget {
                     size: lockedGlyphSize,
                     color: tokens.colors.bg0,
                   ),
-                  child: Text(l10n.editorSend),
+                  child: Text(
+                    open > 0
+                        ? l10n.editorSendWithFindings(open)
+                        : l10n.editorSend,
+                  ),
                 ),
                 HButton(
                   key: const Key('editor-discard'),

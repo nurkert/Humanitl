@@ -237,15 +237,16 @@ class DraftNotifier extends _$DraftNotifier {
   /// Übernimmt freie Eingabe im Rumpf.
   ///
   /// Der Entwurf wird `dirty`, und die Funde, die noch offen im Rumpf stehen,
-  /// verlieren ihre Stelle nicht: Sie werden verschoben, soweit das eindeutig
-  /// ist, und sonst ignoriert. Ein erneuter Scan über den getippten Text
-  /// gehört zum Debounce des Bildschirms und nicht hierher.
+  /// verlieren ihre Stelle nicht: `ops.reanchorFindings` verankert sie an
+  /// ihrem Wert neu. Ein erneuter Scan über den getippten Text gehört zum
+  /// Debounce des Bildschirms und nicht hierher.
   void setBody(String body) => _map(
-    (Draft draft) => draft.copyWith(
-      body: body,
-      dirty: true,
-      findings: _shifted(draft, body),
-      replacements: _reglowed(draft, body),
+    (Draft draft) => ops.reanchorFindings(
+      draft.copyWith(
+        body: body,
+        dirty: true,
+        replacements: _reglowed(draft, body),
+      ),
     ),
   );
 
@@ -261,7 +262,23 @@ class DraftNotifier extends _$DraftNotifier {
     }
     final List<HeaderEntry> headers = List<HeaderEntry>.of(draft.headers);
     headers[i] = headers[i].copyWith(name: name, value: value);
-    return draft.copyWith(headers: headers, dirty: true);
+    // Die Funde dieser Zeile stehen auf Offsets in ihrem alten Wert; ohne
+    // neuen Anker ersetzte „Alle ersetzen" danach fremden Text (HUM-161). Sie
+    // bleiben bei **dieser** Zeile, auch wenn sie umbenannt wurde: Ihr Wert
+    // steht weiter darin und geht mit ihr hinaus.
+    return ops.reanchorFindings(
+      draft.copyWith(
+        headers: headers,
+        dirty: true,
+        findings: <FindingView>[
+          for (final FindingView view in draft.findings)
+            if (view.location.indexIn(draft.headers) == i)
+              view.copyWith(location: DraftLocation.header(name, index: i))
+            else
+              view,
+        ],
+      ),
+    );
   });
 
   /// Hängt eine leere Kopfzeile an.
@@ -282,12 +299,41 @@ class DraftNotifier extends _$DraftNotifier {
     }
     final List<HeaderEntry> headers = List<HeaderEntry>.of(draft.headers)
       ..removeAt(i);
-    return draft.copyWith(headers: headers, dirty: true);
+    // Die Zeilen dahinter rücken eine Stelle auf, und die Funde der
+    // entfernten Zeile suchen ihren Wert in der ersten gleichnamigen, die
+    // bleibt. Steht er nirgends mehr, ist er weg (HUM-161).
+    return ops.reanchorFindings(
+      draft.copyWith(
+        headers: headers,
+        dirty: true,
+        findings: <FindingView>[
+          for (final FindingView view in draft.findings)
+            view.copyWith(location: _afterRemoval(view.location, i)),
+        ],
+      ),
+    );
   });
 
+  /// Der Ort [location], nachdem die Kopfzeile [removed] entfernt wurde.
+  static DraftLocation _afterRemoval(DraftLocation location, int removed) {
+    if (location.kind != FindingLocation.header ||
+        location.headerIndex < removed) {
+      return location;
+    }
+    return location.copyWith(
+      headerIndex: location.headerIndex == removed
+          ? -1
+          : location.headerIndex - 1,
+    );
+  }
+
   /// Setzt Pfad und Query.
-  void setPathAndQuery(String value) =>
-      _map((Draft draft) => draft.copyWith(pathAndQuery: value, dirty: true));
+  ///
+  /// Die Funde der Query werden danach neu verankert, wie die des Rumpfes.
+  void setPathAndQuery(String value) => _map(
+    (Draft draft) =>
+        ops.reanchorFindings(draft.copyWith(pathAndQuery: value, dirty: true)),
+  );
 
   /// Setzt die Methode; sie steht immer in Großbuchstaben.
   void setMethod(String method) => _map(
@@ -324,23 +370,6 @@ class DraftNotifier extends _$DraftNotifier {
   void _remember(PseudonymNaming naming) =>
       ref.read(sessionPseudonymsProvider.notifier).remember(_session, naming);
 
-  /// Die Funde des Rumpfes nach freier Eingabe.
-  ///
-  /// Solange der getippte Text den Treffer noch genau so enthält, wandert der
-  /// Fund mit; sonst wird er ignoriert. Eine Markierung auf einer Stelle, an
-  /// der der Wert nicht mehr steht, ist schlimmer als keine — sie ersetzte
-  /// beim nächsten Klick fremden Text (`core/body/body_span.dart` sagt
-  /// dasselbe über Markierungen im falschen Byteraum).
-  List<FindingView> _shifted(Draft draft, String body) => <FindingView>[
-    for (final FindingView view in draft.findings)
-      if (view.location.kind != FindingLocation.body)
-        view
-      else if (view.isOpen)
-        _shiftOne(view, draft.body, body)
-      else
-        view,
-  ];
-
   /// Der Diff-Glow nach freier Eingabe.
   ///
   /// Ein Glow steht auf Offsets, und ein Zeichen vor ihm verschiebt ihn. Bliebe
@@ -370,22 +399,6 @@ class DraftNotifier extends _$DraftNotifier {
     }
     final int at = text.indexOf(needle);
     return at >= 0 && text.indexOf(needle, at + 1) < 0 ? at : -1;
-  }
-
-  FindingView _shiftOne(FindingView view, String before, String after) {
-    if (view.start >= before.length || view.end > before.length) {
-      return view.copyWith(status: FindingStatus.ignored);
-    }
-    final String needle = before.substring(view.start, view.end);
-    if (needle.isEmpty) {
-      return view.copyWith(status: FindingStatus.ignored);
-    }
-    final int at = after.indexOf(needle);
-    if (at < 0 || after.indexOf(needle, at + 1) >= 0) {
-      // Verschwunden oder mehrdeutig geworden: keine Stelle mehr.
-      return view.copyWith(status: FindingStatus.ignored);
-    }
-    return view.copyWith(start: at, end: at + needle.length);
   }
 }
 
@@ -430,6 +443,20 @@ Draft buildDraft(FlowId id, DraftSource source) {
         finding.spanEnd,
       ),
     };
+    final List<String> candidates = finding.location == FindingLocation.header
+        ? _headerCandidates(headers, finding)
+        : const <String>[];
+    final bool ambiguous = candidates.length > 1;
+    // Bei einer mehrdeutigen Kopfzeile wäre der Text der ersten passenden
+    // Zeile ein falscher Anker; der Fund trägt dann alle möglichen Werte.
+    final String value = ambiguous
+        ? ''
+        : _spanText(
+            location.kind == FindingLocation.body
+                ? source.bodyText
+                : _textOf(location, headers, request.pathAndQuery),
+            span,
+          );
     findings.add(
       FindingView(
         index: i,
@@ -437,12 +464,19 @@ Draft buildDraft(FlowId id, DraftSource source) {
         location: location,
         start: span.start,
         end: span.end,
-        status: finding.resolved || span.end <= span.start
-            ? FindingStatus.ignored
-            : FindingStatus.open,
+        // Ein Bereich, der sich nicht umrechnen lässt, macht den Fund nicht
+        // ungeschehen: Der Wert geht mit hinaus. Er bleibt offen und hält das
+        // Senden an der Pause fest (HUM-161). Dasselbe gilt, wenn der Bereich
+        // hinter dem Text endet (dann gibt es keinen Wert als Anker) oder
+        // wenn offen ist, welche von mehreren gleichnamigen Kopfzeilen ihn
+        // trägt.
+        status: finding.resolved ? FindingStatus.ignored : FindingStatus.open,
+        unplaced: span.end <= span.start || value.isEmpty,
+        alternatives: ambiguous ? candidates : const <String>[],
         valueHash: valueHashHex(finding),
         originalStart: span.start,
         originalEnd: span.end,
+        value: value,
       ),
     );
   }
@@ -483,6 +517,31 @@ int _headerOf(List<HeaderEntry> headers, Finding finding) {
   );
 }
 
+/// Was jede gleichnamige Kopfzeile, die den Bereich des Fundes fasst, an
+/// dieser Stelle trägt, ohne Doppelte (HUM-161). Mehr als ein Eintrag heißt
+/// mehrdeutig.
+///
+/// Der Daemon nennt nur den Namen, und die Oberfläche kann den Hash seines
+/// Wertes nicht nachrechnen. [_headerOf] nimmt dann die erste passende Zeile;
+/// steht der Wert in einer anderen, zeigte der Anker auf fremden Text. Ein
+/// solcher Fund bleibt deshalb offen und ohne Stelle: Er hält das Senden an
+/// der Pause fest und wird nie ersetzt. Tragen alle passenden Zeilen an der
+/// Stelle dasselbe, ist die Wahl gleichgültig.
+List<String> _headerCandidates(List<HeaderEntry> headers, Finding finding) {
+  final String name = finding.headerName.toLowerCase();
+  return <String>{
+    for (final HeaderEntry entry in headers)
+      if (entry.name.toLowerCase() == name)
+        if (utf8.encode(entry.value) case final List<int> bytes
+            when bytes.length >= finding.spanEnd &&
+                finding.spanStart < finding.spanEnd)
+          utf8.decode(
+            bytes.sublist(finding.spanStart, finding.spanEnd),
+            allowMalformed: true,
+          ),
+  }.toList();
+}
+
 /// Der Text eines Ortes, bevor es einen [Draft] gibt.
 String _textOf(
   DraftLocation location,
@@ -499,6 +558,12 @@ String _textOf(
   FindingLocation.header => _valueAt(headers, location.indexIn(headers)),
   FindingLocation.body => '',
 };
+
+/// Der Text an [span], oder ein leerer Text, wenn er nicht hineinpasst.
+String _spanText(String text, ({int start, int end}) span) =>
+    span.start >= 0 && span.end <= text.length && span.start < span.end
+    ? text.substring(span.start, span.end)
+    : '';
 
 /// Der Wert an [at], oder ein leerer Text.
 String _valueAt(List<HeaderEntry> headers, int at) =>
