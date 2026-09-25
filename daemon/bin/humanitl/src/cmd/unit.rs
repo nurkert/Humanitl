@@ -677,17 +677,32 @@ impl SystemUnits {
         })
     }
 
-    /// Die Namen, die `systemctl --user enable --now` bekommt: erst der
-    /// Socket, dann der Dienst.
+    /// Die Namen, die `systemctl --user enable --now` bekommt: der Socket,
+    /// und nur ohne Socket der Dienst (HUM-164).
     ///
-    /// **Beide, nicht nur der Socket.** Ein Client liest das Token, bevor er
-    /// den Socket öffnet (`humanitl_ipc::client::connect`), und das Token
-    /// schreibt erst der laufende Daemon. Ein Socket, an den sich niemand
-    /// wendet, weckt den Dienst nie; er muss deshalb mit der Sitzung starten.
-    /// Der Socket hält den Pfad trotzdem über jeden Neustart des Dienstes
-    /// hinweg, und wer in dieser Zeit verbindet, wartet, statt abzuprallen.
+    /// **Nur der Socket.** Ein Client, der kein Token findet, öffnet den
+    /// Socket trotzdem einmal und wartet kurz auf das Token
+    /// (`humanitl_ipc::client::token_or_wake`); diese erste Verbindung startet
+    /// den Dienst. Er muss deshalb nicht mit jeder Sitzung starten. Der Socket
+    /// hält den Pfad über jeden Neustart des Dienstes hinweg, und wer in dieser
+    /// Zeit verbindet, wartet, statt abzuprallen. Pakete vor HUM-053 bringen
+    /// keinen Socket mit; dort bleibt es der Dienst.
     #[must_use]
     pub fn names(&self) -> Vec<&'static str> {
+        if self.socket.is_some() {
+            vec![SOCKET_NAME]
+        } else {
+            vec![UNIT_NAME]
+        }
+    }
+
+    /// Jede Unit des Pakets, die ein früherer Lauf aktiviert haben kann: erst
+    /// der Socket, dann der Dienst.
+    ///
+    /// Für `daemon uninstall`: Vor HUM-164 aktivierte `daemon install` beide,
+    /// und ein Verweis auf den Dienst aus dieser Zeit liegt womöglich noch da.
+    #[must_use]
+    pub fn all_names(&self) -> Vec<&'static str> {
         let mut names = Vec::with_capacity(2);
         if self.socket.is_some() {
             names.push(SOCKET_NAME);
@@ -1085,10 +1100,11 @@ mod tests {
         );
     }
 
-    /// Das Paket legt die Units ab; `daemon install` findet beide und nennt
-    /// erst den Socket, dann den Dienst.
+    /// Das Paket legt die Units ab; `daemon install` findet beide und
+    /// aktiviert nur den Socket, der den Dienst beim ersten Client startet
+    /// (HUM-164). `daemon uninstall` meldet beide ab, erst den Socket.
     #[test]
-    fn packaged_units_are_found_and_enabled_socket_first() {
+    fn packaged_units_are_found_and_only_the_socket_is_enabled() {
         let dir = tempfile::tempdir().expect("a temporary directory");
         assert_eq!(SystemUnits::find(dir.path()), None, "nothing installed");
 
@@ -1100,10 +1116,12 @@ mod tests {
             [UNIT_NAME],
             "a package before HUM-053"
         );
+        assert_eq!(only_service.all_names(), [UNIT_NAME]);
 
         std::fs::write(dir.path().join(SOCKET_NAME), "[Socket]\n").expect("the socket");
         let both = SystemUnits::find(dir.path()).expect("both units");
-        assert_eq!(both.names(), [SOCKET_NAME, UNIT_NAME]);
+        assert_eq!(both.names(), [SOCKET_NAME], "the socket starts the service");
+        assert_eq!(both.all_names(), [SOCKET_NAME, UNIT_NAME]);
         assert_eq!(
             both.exec_start(),
             PathBuf::from("/usr/lib/humanitl/bin/humanitld")

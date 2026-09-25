@@ -291,6 +291,18 @@ impl Context {
     pub async fn connect(&self) -> Result<Client, Failure> {
         client::connect(&self.paths).await.map_err(Failure::new)
     }
+
+    /// Verbindet sich nur mit einem Daemon, der schon läuft, und weckt keinen
+    /// hinter `humanitld.socket` (HUM-164, `client::connect_running`).
+    ///
+    /// # Errors
+    ///
+    /// `DAEMON_001`, wenn kein Daemon läuft, mit Exit-Code [`EXIT_DAEMON`].
+    pub async fn connect_running(&self) -> Result<Client, Failure> {
+        client::connect_running(&self.paths)
+            .await
+            .map_err(Failure::new)
+    }
 }
 
 /// Ein `Status` vom Daemon als Befund.

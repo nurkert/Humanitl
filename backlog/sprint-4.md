@@ -3670,12 +3670,36 @@ Ein Token über den Socket auszuliefern; das Token bleibt eine Datei mit `0600`.
 - `daemon/bin/humanitl/src/cmd/unit.rs` (`SystemUnits::names`), `docs/INSTALL.md`
 
 ### Akzeptanzkriterien
-- [ ] Unter `systemd-socket-activate` ohne laufenden Daemon endet `humanitl daemon status` mit Exit 0.
-- [ ] `daemon install` aktiviert beim Paket nur noch den Socket; `docs/INSTALL.md` sagt es.
-- [ ] `make check` grün.
+- [x] Unter `systemd-socket-activate` ohne laufenden Daemon endet `humanitl daemon status` mit Exit 0.
+- [x] `daemon install` aktiviert beim Paket nur noch den Socket; `docs/INSTALL.md` sagt es.
+- [x] `make check` grün.
 
 ### Fallstricke
 - Ein Client, der auf das Token wartet, braucht eine Frist; sonst hängt `daemon status` an einem Socket, hinter dem kein Dienst mehr startet.
+
+### Stand der Umsetzung
+Gemessen: `daemon_status_wakes_the_socket_and_ends_with_0` und
+`a_client_without_a_token_wakes_the_socket` in
+`daemon/bin/humanitld/tests/socket_activation.rs` laufen gegen den echten
+Daemon hinter `systemd-socket-activate`; die Frist (`WAKE_TIMEOUT`, 10 s) und
+der sofortige Befund ohne lauschenden Socket prüfen die Tests in
+`daemon/crates/ipc/src/client.rs`, die Oberfläche dasselbe in
+`app/test/core/ipc/grpc_client_test.dart`. `daemon install` mit Paket und
+`daemon uninstall` (meldet weiter beide Units ab) prüft
+`with_the_package_install_enables_the_socket_and_uninstall_disables_both`
+gegen ein falsches `systemctl`.
+
+Nach dem Review: Wer nur wissen will, ob ein Daemon läuft, weckt keinen
+(`client::connect_running`, von `config set` benutzt). `daemon install` hält
+seine fünf Sekunden auch hinter einem stummen Socket ein, `doctor` gibt dem
+Verbindungsaufbau die Frist des Weckrufs dazu, und der Herzschlag der
+Oberfläche legt keine Weckversuche übereinander.
+
+Nicht gemessen, braucht einen Menschen mit echter systemd-Sitzung: Nach
+`humanitl daemon install` aus dem Paket und einer neuen Anmeldung läuft
+`humanitld.service` noch nicht (`systemctl --user is-active humanitld.service`
+sagt `inactive`), `humanitl daemon status` und das Öffnen der Anwendung starten
+ihn, und `systemctl --user is-active humanitld.service` sagt danach `active`.
 
 ---
 

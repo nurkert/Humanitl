@@ -311,7 +311,28 @@ class DaemonConnection extends _$DaemonConnection {
     _heartbeat = null;
   }
 
+  /// Ob gerade ein Herzschlag auf `GetInfo` wartet.
+  bool _beating = false;
+
+  /// Ein Herzschlag, aber nie zwei zugleich (HUM-164, Review).
+  ///
+  /// Seit dem Weckruf kann ein `GetInfo` bis zu zehn Sekunden auf das Token
+  /// warten (`GrpcDaemonClient.defaultWakeTimeout`). Der Takt von zwei
+  /// Sekunden legte sonst bis zu fünf Weckversuche übereinander; ein Schlag,
+  /// der fällig wird, während der vorige noch wartet, fällt deshalb aus.
   Future<void> _beat() async {
+    if (_beating) {
+      return;
+    }
+    _beating = true;
+    try {
+      await _beatOnce();
+    } finally {
+      _beating = false;
+    }
+  }
+
+  Future<void> _beatOnce() async {
     try {
       final DaemonInfo info = await ref.read(daemonClientProvider).getInfo();
       if (!ref.mounted) {

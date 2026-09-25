@@ -17,7 +17,7 @@
 #   5. nichts liegt unter /usr/local, /home, /root, /etc oder /var;
 #   6. Dienst- und Socket-Unit liegen unter /usr/lib/systemd/user, ohne die
 #      Marke von `daemon install`, die PNG-Symbole haben ihre Groesse, und
-#      `humanitl daemon install` plant Socket und Dienst des Pakets, ohne eine
+#      `humanitl daemon install` plant nur den Socket des Pakets, ohne eine
 #      Kopie unter ~/.config zu schreiben (HUM-053);
 #   7. nach `apt-get remove --purge` ist keine Datei des Pakets mehr da, und
 #      nirgends im Dateisystem steht noch etwas mit "humanitl" im Namen.
@@ -217,7 +217,7 @@ echo "PNG icons at 64, 128 and 256 pixels, plus the SVG under scalable"
 
 echo "== daemon install finds the units of the package"
 # Als gewoehnlicher Nutzer, mit --print: Es darf nichts geschrieben werden,
-# und der Plan nennt Socket und Dienst des Pakets. Ohne systemd im Container
+# und der Plan nennt nur den Socket des Pakets (HUM-164). Ohne systemd im Container
 # gibt es kein systemctl; die Namen stehen trotzdem in `units`.
 plan="$(runuser -u smoke -- env -i HOME=/home/smoke PATH=/usr/bin:/bin humanitl --json daemon install --print)"
 echo "$plan"
@@ -228,7 +228,7 @@ want = {
     "action": "print",
     "unit": "/usr/lib/systemd/user/humanitld.service",
     "exec_start": "/usr/lib/humanitl/bin/humanitld",
-    "units": ["humanitld.socket", "humanitld.service"],
+    "units": ["humanitld.socket"],
 }
 bad = {key: (plan.get(key), value) for key, value in want.items() if plan.get(key) != value}
 if bad:
@@ -243,7 +243,7 @@ if [[ -e /home/smoke/.config/systemd ]]; then
   echo "error: daemon install wrote a user unit although the package brings its own" >&2
   exit 1
 fi
-echo "daemon install plans socket and service of the package and writes no copy"
+echo "daemon install plans the socket of the package and writes no copy"
 
 echo "== remove --purge"
 apt-get remove --purge -y humanitl
