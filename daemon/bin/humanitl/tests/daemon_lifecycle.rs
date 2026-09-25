@@ -19,7 +19,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use common::{BIN, Harness, code, stderr, stdout};
+use common::{BIN, Harness, code, image_data, stderr, stdout};
 use humanitl_core::shell::shell_path;
 
 /// Was `$APPIMAGE` in diesen Läufen nennt. Den Pfad gibt es nicht; die
@@ -36,8 +36,9 @@ const OLD_COPY: &str = "0.0.0-old.1000-1";
 const NEVER: &str = "__never__";
 
 /// Legt den Baum eines `AppImage` an: `usr/lib/humanitl/bin/` mit
-/// Kommandozeile, Daemon und Shim, `usr/lib/humanitl/humanitl` als Anwendung,
-/// die sich in `app.log` einträgt, und `AppRun` aus dem Repository.
+/// Kommandozeile, Daemon und Shim, daneben Katalog und Profil ([`image_data`]),
+/// `usr/lib/humanitl/humanitl` als Anwendung, die sich in `app.log` einträgt,
+/// und `AppRun` aus dem Repository.
 ///
 /// Liefert das Verzeichnis `bin/`.
 fn image_tree(harness: &Harness) -> PathBuf {
@@ -49,6 +50,7 @@ fn image_tree(harness: &Harness) -> PathBuf {
     for name in ["humanitld", "humanitl-shim"] {
         write_script(&bin.join(name), "#!/bin/sh\nexit 0\n");
     }
+    image_data(&root.join("usr/lib/humanitl"));
     let log = harness.path("app.log");
     write_script(
         &root.join("usr/lib/humanitl/humanitl"),
@@ -311,6 +313,58 @@ fn refresh_replaces_an_older_copy_restarts_and_only_then_retires_it() {
     );
 }
 
+/// Eine Einrichtung von vor HUM-165: Die Kopie trug nur Daemon und Shim,
+/// flach und ohne `bin/`, und die Unit nannte `current/humanitld`. `--refresh`
+/// erkennt sie trotzdem, legt eine vollständige Kopie an und schreibt die Unit
+/// mit `current/bin/humanitld`; sonst bliebe ein solcher Rechner für immer bei
+/// einem Daemon ohne Katalog und Profil.
+#[test]
+fn refresh_replaces_a_flat_copy_from_before_hum_165() {
+    let harness = Harness::new();
+    let bin = image_tree(&harness);
+    let (fakebin, _log) = fake_systemctl(&harness, NEVER);
+    let path = path_with(&fakebin);
+    let old = install_an_older_copy(&harness, &bin, &path);
+    for name in ["humanitld", "humanitl-shim"] {
+        std::fs::rename(old.join("bin").join(name), old.join(name)).expect("a flat binary");
+    }
+    for dir in ["bin", "share", "profiles"] {
+        std::fs::remove_dir_all(old.join(dir)).expect("the old copy had no such directory");
+    }
+    let link = lib_dir(&harness).join("current");
+    let unit = unit_path(&harness);
+    let text = std::fs::read_to_string(&unit).expect("the unit");
+    let new_exec = format!("ExecStart={}/bin/humanitld", link.display());
+    let old_exec = format!("ExecStart={}/humanitld", link.display());
+    assert!(text.contains(&new_exec), "{text}");
+    std::fs::write(&unit, text.replace(&new_exec, &old_exec)).expect("the unit of before");
+
+    let output = run(
+        &harness,
+        &bin.join("humanitl"),
+        &["--json", "daemon", "install", "--refresh"],
+        &path,
+        true,
+    );
+
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let value = json(&output);
+    assert_eq!(value["restarted"], true, "{value}");
+    let text = std::fs::read_to_string(&unit).expect("the unit");
+    assert!(
+        text.lines().any(|line| line == new_exec),
+        "the unit still names the flat copy: {text}"
+    );
+    let copy = lib_dir(&harness).join(current_name(&harness));
+    assert!(
+        copy.join("share/humanitl/catalog/domains.yaml").is_file()
+            && copy.join("profiles/sandbox/default.toml").is_file(),
+        "{} lacks catalog or profile",
+        copy.display()
+    );
+    assert!(!old.exists(), "the flat copy stayed after the restart");
+}
+
 /// Scheitert der Neustart, zeigt `current` wieder auf die ältere Kopie, und
 /// die neue ist weg: Die alte Fassung läuft weiter, statt dass der Dienst ins
 /// Leere startet.
@@ -345,7 +399,10 @@ fn a_failed_restart_puts_the_older_copy_back() {
     assert!(why.contains("failed as well"), "{why}");
     assert!(!why.contains("was restarted on them"), "{why}");
     assert_eq!(current_name(&harness), OLD_COPY);
-    assert!(old.join("humanitld").is_file(), "the older copy is gone");
+    assert!(
+        old.join("bin/humanitld").is_file(),
+        "the older copy is gone"
+    );
     let copies: Vec<String> = std::fs::read_dir(lib_dir(&harness))
         .expect("the lib directory")
         .map(|entry| {
@@ -624,7 +681,7 @@ fn purge_refuses_while_a_daemon_still_answers() {
     assert_eq!(value["code"], "DAEMON_014", "{value}");
     assert_eq!(value["fix"]["command"], "pkill -x humanitld", "{value}");
     assert!(unit_path(&harness).is_file(), "the unit went");
-    assert!(current.join("humanitld").is_file(), "the copy went");
+    assert!(current.join("bin/humanitld").is_file(), "the copy went");
     assert!(socket.exists(), "the live socket went");
 }
 
@@ -698,7 +755,7 @@ fn purge_keeps_the_copies_of_a_daemon_that_started_meanwhile() {
             .is_some_and(|why| why.contains("answers on")),
         "{value}"
     );
-    assert!(current.join("humanitld").is_file(), "the copy went");
+    assert!(current.join("bin/humanitld").is_file(), "the copy went");
     assert!(socket.exists(), "the live socket went");
 }
 

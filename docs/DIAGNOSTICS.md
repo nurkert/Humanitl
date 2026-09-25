@@ -119,11 +119,11 @@ Keine systemd-Nutzersitzung
 
 #### DAEMON_011
 
-Binaries aus dem AppImage nicht ablegbar
+AppImage-Kopie nicht ablegbar
 
-**Auslöser.** `daemon install` aus einem `AppImage` kann Daemon und Shim nicht nach `~/.local/lib/humanitl/<version>.<stempel>/` kopieren oder `current` nicht umhängen.
+**Auslöser.** `daemon install` aus einem `AppImage` kann Daemon, Shim, Katalog und Profil nicht nach `~/.local/lib/humanitl/<version>.<stempel>/` kopieren oder `current` nicht umhängen, oder Katalog oder Profil fehlen im Bild.
 
-**Fix.** `CopyCommand` mit `ls -ln` auf das Verzeichnis; der Text nennt den Grund.
+**Fix.** `CopyCommand` mit `ls -ln` auf das Verzeichnis; der Text nennt den Grund. Fehlen Katalog oder Profil im Bild, `OpenUrl` auf die Veröffentlichungen: Nur ein vollständiges `AppImage` hilft.
 
 #### DAEMON_012
 

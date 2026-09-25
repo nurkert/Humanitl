@@ -1167,21 +1167,36 @@ fn session_meta(session: SessionId, config: &Config) -> SessionMeta {
 /// meldet ihn im Befund. Der Daemon läuft dann mit leerem Katalog weiter: Jede
 /// Domain ist unbekannt, und das steht auch so in der Oberfläche.
 fn catalog_dir(xdg: &XdgPaths) -> PathBuf {
-    let mut candidates = vec![
-        xdg.data_dir().join("catalog"),
-        PathBuf::from(PACKAGED_CATALOG),
-    ];
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent().and_then(Path::parent)
-    {
-        candidates.push(dir.join("share/humanitl/catalog"));
-    }
-    candidates.push(PathBuf::from(REPO_CATALOG));
-    candidates
+    let exe = std::env::current_exe().ok();
+    catalog_candidates(xdg, exe.as_deref())
         .iter()
         .find(|dir| dir.join(humanitl_catalog::DOMAINS_FILE).is_file())
         .cloned()
         .unwrap_or_else(|| PathBuf::from(PACKAGED_CATALOG))
+}
+
+/// Die Kandidaten für den Katalog in der Reihenfolge aus [`catalog_dir`];
+/// `exe` ist der eigene Pfad des Daemons, wenn er sich lesen ließ.
+fn catalog_candidates(xdg: &XdgPaths, exe: Option<&Path>) -> Vec<PathBuf> {
+    let mut candidates = vec![
+        xdg.data_dir().join("catalog"),
+        PathBuf::from(PACKAGED_CATALOG),
+    ];
+    candidates.extend(exe.and_then(tree_catalog));
+    candidates.push(PathBuf::from(REPO_CATALOG));
+    candidates
+}
+
+/// Der Katalog im Baum über dem Binary: `<exe>/../../share/humanitl/catalog`.
+///
+/// Dieselbe Lage im Archiv, im `AppImage` und in der Kopie, die
+/// `humanitl daemon install` daraus unter `~/.local/lib/humanitl/` anlegt
+/// (`bin/humanitld` neben `share/`, HUM-165). Ändert sich eine Seite, muss die
+/// andere mit.
+fn tree_catalog(exe: &Path) -> Option<PathBuf> {
+    exe.parent()
+        .and_then(Path::parent)
+        .map(|dir| dir.join("share/humanitl/catalog"))
 }
 
 /// Wohin das `.deb` den Katalog legt.
@@ -2991,5 +3006,32 @@ mod tests {
                 r"openssl x509 -in $'/etc/c\xff.pem' -noout -subject".to_owned()
             ))
         );
+    }
+
+    /// Der Aufbau, den `humanitl daemon install` aus einem `AppImage`
+    /// kopiert: `bin/humanitld` und daneben `share/humanitl/catalog/`
+    /// (HUM-165). Von dort aus findet der Daemon seinen Katalog.
+    #[test]
+    fn the_catalog_next_to_bin_is_found_from_the_daemon() {
+        let copy = tempfile::tempdir().expect("a temporary directory");
+        let bin = copy.path().join("bin");
+        let catalog = copy.path().join("share/humanitl/catalog");
+        std::fs::create_dir_all(&bin).expect("bin/");
+        std::fs::create_dir_all(&catalog).expect("the catalog directory");
+        std::fs::write(bin.join("humanitld"), b"").expect("the daemon");
+        std::fs::write(catalog.join(humanitl_catalog::DOMAINS_FILE), b"").expect("the catalog");
+
+        let found = super::tree_catalog(&bin.join("humanitld")).expect("a candidate");
+        assert_eq!(found, catalog);
+        assert!(found.join(humanitl_catalog::DOMAINS_FILE).is_file());
+
+        // Und `catalog_dir` fragt genau diesen Kandidaten, nach dem eigenen
+        // Datenordner und dem Paketpfad, vor dem Arbeitsbaum.
+        let xdg = XdgPaths::new(humanitl_config::Env::from_pairs([(
+            "XDG_DATA_HOME",
+            copy.path().join("data").display().to_string(),
+        )]));
+        let candidates = super::catalog_candidates(&xdg, Some(&bin.join("humanitld")));
+        assert_eq!(candidates.get(2), Some(&catalog), "{candidates:?}");
     }
 }
