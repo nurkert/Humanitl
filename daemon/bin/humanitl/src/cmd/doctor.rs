@@ -45,7 +45,7 @@
 use std::time::Duration;
 
 use humanitl_core::{Diagnostic, FixAction};
-use humanitl_ipc::client::Client;
+use humanitl_ipc::client::{self, Client};
 use humanitl_ipc::{PROTO_MAJOR, PROTO_MINOR, convert, v1};
 use humanitl_sandbox::doctor::{
     self, CheckId, CheckOutcome, CheckStatus, DaemonFacts, LlmFacts, PROBE_LLM_COMMAND, Probe,
@@ -66,6 +66,16 @@ use crate::render::{diagnostic_block, diagnostic_json, table};
 /// waere genau die Eigenschaft hin, die den Rueckfall begruendet: dass der
 /// Doctor auch dann arbeitet, wenn der Daemon nicht kann.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Wie lange dieser Befehl auf den Verbindungsaufbau samt Weckruf wartet
+/// (HUM-164).
+///
+/// Hinter `humanitld.socket` startet erst die Verbindung des Doctors den
+/// Dienst, und der Client wartet bis zu [`client::WAKE_TIMEOUT`] auf dessen
+/// Token. Mit [`CONNECT_TIMEOUT`] allein hieße der erste Start eines Dienstes
+/// „hält den Socket, ohne zu antworten". Bleibt das Token aus, sagt der Befund
+/// des Clients das selbst, bevor diese Frist abläuft.
+pub const WAKE_CONNECT_TIMEOUT: Duration = CONNECT_TIMEOUT.saturating_add(client::WAKE_TIMEOUT);
 
 /// Wie lange dieser Befehl auf `Doctor()` wartet.
 ///
@@ -130,10 +140,13 @@ pub async fn run(ctx: &Context, args: &DoctorArgs) -> Result<u8, Failure> {
     let config = ctx.config()?.config;
     let socket = ctx.paths.daemon_socket();
 
-    let (mut client, refused) = match timeout(CONNECT_TIMEOUT, ctx.connect()).await {
+    let (mut client, refused) = match timeout(WAKE_CONNECT_TIMEOUT, ctx.connect()).await {
         Ok(Ok(client)) => (Some(client), None),
         Ok(Err(failure)) => (None, Some(failure.diagnostic)),
-        Err(_elapsed) => (None, Some(timed_out("the daemon socket", CONNECT_TIMEOUT))),
+        Err(_elapsed) => (
+            None,
+            Some(timed_out("the daemon socket", WAKE_CONNECT_TIMEOUT)),
+        ),
     };
     let daemon = daemon_facts(&socket, client.as_mut(), refused).await;
 

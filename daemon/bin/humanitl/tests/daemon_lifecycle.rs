@@ -1119,11 +1119,18 @@ fn an_own_older_user_unit_is_set_aside_and_the_package_unit_runs() {
         calls.contains(&format!("restart loads {}", units.package.display())),
         "{calls}"
     );
+    // Seit HUM-164 wird nur der Socket aktiviert; der Verweis auf den Dienst
+    // ging mit der alten Unit beiseite und kommt nicht wieder.
     assert_eq!(
-        std::fs::read_link(&units.link).expect("the enablement link"),
-        units.package
+        std::fs::read_link(&units.socket_link).expect("the socket link"),
+        units.package.with_file_name("humanitld.socket")
+    );
+    assert!(
+        std::fs::symlink_metadata(&units.link).is_err(),
+        "the service is enabled on its own again"
     );
     let value = json(&output);
+    assert_eq!(value["units"], serde_json::json!(["humanitld.socket"]));
     assert_eq!(
         value["unit"],
         units.package.display().to_string(),
@@ -1390,16 +1397,18 @@ fn a_failed_restart_of_a_stopped_service_leaves_it_stopped() {
     }
 }
 
-/// Liegt am Ziel des Dienst-Verweises eine gewöhnliche Datei, scheitert
+/// Liegt am Ziel des Socket-Verweises eine gewöhnliche Datei, scheitert
 /// `enable`: Die alte Unit und ihr Verweis kommen zurück, die Datei bleibt,
 /// und weil der Dienst vorher lief, läuft er danach wieder (HUM-211, Review).
+/// Seit HUM-164 aktiviert `enable` nur den Socket, also blockiert die Datei
+/// dort und nicht mehr am Verweis des Dienstes.
 #[test]
 fn a_failed_enable_over_a_regular_file_puts_the_own_unit_back_and_restarts_it() {
     let harness = Harness::new();
     let units = upgraded(&harness, &own_old_unit());
-    let wants = units.link.parent().expect("the wants directory");
-    let blocker = wants.join("humanitld.service");
-    std::fs::remove_file(&blocker).expect("the old link goes");
+    let blocker = units.socket_link.clone();
+    std::fs::create_dir_all(blocker.parent().expect("the sockets directory"))
+        .expect("the sockets directory");
     std::fs::write(&blocker, "not a link\n").expect("a regular file in its place");
     std::fs::write(&units.active, "").expect("the service runs");
     let (fakebin, log) = packaged_systemctl(&harness, &units, None);
@@ -1417,6 +1426,10 @@ fn a_failed_enable_over_a_regular_file_puts_the_own_unit_back_and_restarts_it() 
     );
     assert!(!units.user.with_file_name("humanitld.service.bak").exists());
     assert_eq!(
+        std::fs::read_link(&units.link).expect("the old link is back"),
+        units.user
+    );
+    assert_eq!(
         std::fs::read_to_string(&blocker).expect("the file stays"),
         "not a link\n"
     );
@@ -1427,18 +1440,10 @@ fn a_failed_enable_over_a_regular_file_puts_the_own_unit_back_and_restarts_it() 
             .any(|line| line == "--user start humanitld.service"),
         "{calls}"
     );
-    // Der Dienst lief vorher und wird nicht angehalten; nur der Socket, den
-    // erst dieser Lauf aktivieren wollte.
+    // Der Dienst lief vorher und wird nicht angehalten. Den Socket hat dieser
+    // Lauf nicht gestartet: An seinem Verweis lag schon vorher etwas.
     assert!(
-        calls
-            .lines()
-            .any(|line| line == "--user stop humanitld.socket"),
-        "{calls}"
-    );
-    assert!(
-        !calls
-            .lines()
-            .any(|line| line.starts_with("--user stop") && line.contains("humanitld.service")),
+        !calls.lines().any(|line| line.starts_with("--user stop")),
         "{calls}"
     );
 }
@@ -1504,4 +1509,189 @@ fn the_report_names_the_unit_systemd_loaded() {
     assert_eq!(value["exec_start"], "/usr/local/bin/humanitld", "{value}");
     assert_eq!(value["unit_text"], admin_text, "{value}");
     assert_eq!(value["set_aside"], serde_json::Value::Null, "{value}");
+}
+
+/// HUM-164: Mit dem Paket aktiviert `daemon install` nur den Socket; den
+/// Dienst startet systemd beim ersten Client. `daemon uninstall` meldet
+/// trotzdem beide ab und nimmt beide Verweise weg: Ein Lauf vor HUM-164 hat
+/// den Dienst mit aktiviert, und dieser Verweis startete ihn sonst weiter bei
+/// jeder Anmeldung.
+#[test]
+fn with_the_package_install_enables_the_socket_and_uninstall_disables_both() {
+    let harness = Harness::new();
+    let system = harness.path("system-units");
+    let service = system.join("humanitld.service");
+    std::fs::write(&service, "[Service]\nExecStart=/opt/pkg/humanitld\n")
+        .expect("the package unit");
+    std::fs::write(system.join("humanitld.socket"), "[Socket]\n").expect("the package socket");
+    let (fakebin, log) = fake_systemctl(&harness, NEVER);
+    let path = path_with(&fakebin);
+
+    let install = run(
+        &harness,
+        Path::new(BIN),
+        &["--json", "daemon", "install"],
+        &path,
+        false,
+    );
+    assert_eq!(code(&install), 0, "{}", stderr(&install));
+    assert_eq!(
+        json(&install)["units"],
+        serde_json::json!(["humanitld.socket"])
+    );
+    let calls_of_install = calls(&log);
+    assert!(
+        calls_of_install
+            .lines()
+            .any(|line| line == "--user enable --now humanitld.socket"),
+        "{calls_of_install}"
+    );
+
+    // Der Stand nach einem `daemon install` vor HUM-164: Beide Units sind
+    // aktiviert.
+    let dir = harness.path("config").join("systemd/user");
+    let service_link = dir.join("default.target.wants/humanitld.service");
+    let socket_link = dir.join("sockets.target.wants/humanitld.socket");
+    for (link, target) in [
+        (&service_link, service.clone()),
+        (&socket_link, system.join("humanitld.socket")),
+    ] {
+        std::fs::create_dir_all(link.parent().expect("a directory")).expect("the wants directory");
+        std::os::unix::fs::symlink(target, link).expect("an enablement link");
+    }
+    let before = calls(&log).len();
+
+    let output = run(
+        &harness,
+        Path::new(BIN),
+        &["--json", "daemon", "uninstall"],
+        &path,
+        false,
+    );
+
+    assert_eq!(code(&output), 0, "{}", stdout(&output));
+    let since = calls(&log)[before..].to_owned();
+    assert_eq!(
+        since.lines().next(),
+        Some("--user disable --now humanitld.socket humanitld.service"),
+        "{since}"
+    );
+    assert!(
+        std::fs::symlink_metadata(&service_link).is_err(),
+        "the service link of an earlier install stayed"
+    );
+    assert!(
+        std::fs::symlink_metadata(&socket_link).is_err(),
+        "the socket link stayed"
+    );
+    assert!(service.is_file(), "the package unit belongs to the package");
+}
+
+/// HUM-164, Review: Nach `enable --now humanitld.socket` wartet `daemon
+/// install` höchstens fünf Sekunden auf die erste Antwort, auch wenn der
+/// Client hinter dem Socket auf ein Token wartet, das nie kommt. Ohne die
+/// Frist über den ganzen Versuch wartete er zehn Sekunden Weckruf dazu.
+#[test]
+fn install_waits_at_most_its_ready_timeout_behind_a_silent_socket() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let harness = Harness::new();
+    let system = harness.path("system-units");
+    std::fs::write(
+        system.join("humanitld.service"),
+        "[Service]\nExecStart=/opt/pkg/humanitld\n",
+    )
+    .expect("the package unit");
+    std::fs::write(system.join("humanitld.socket"), "[Socket]\n").expect("the package socket");
+    let socket = harness.paths().daemon_socket();
+    let runtime = socket.parent().expect("a runtime directory");
+    std::fs::create_dir_all(runtime).expect("the runtime directory");
+    std::fs::set_permissions(runtime, std::fs::Permissions::from_mode(0o700)).expect("0700");
+    // Nimmt Verbindungen in seine Warteschlange und schreibt nie ein Token.
+    let _silent = std::os::unix::net::UnixListener::bind(&socket).expect("the socket binds");
+    let (fakebin, _) = fake_systemctl(&harness, NEVER);
+
+    let started = std::time::Instant::now();
+    let output = run(
+        &harness,
+        Path::new(BIN),
+        &["--json", "daemon", "install"],
+        &path_with(&fakebin),
+        false,
+    );
+    let took = started.elapsed();
+
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(json(&output)["daemon"], "no answer within 5000 ms");
+    assert!(
+        took < std::time::Duration::from_secs(9),
+        "daemon install waited {took:?} for a socket that never answers"
+    );
+}
+
+/// HUM-164, Review: Scheitert `enable --now humanitld.socket`, nachdem es den
+/// Verweis schon angelegt hat, und lief der alte Dienst vorher, wird nur der
+/// Socket angehalten, den dieser Lauf aktivieren wollte, nie der Dienst. Die
+/// alte Unit kommt zurück und startet wieder.
+#[test]
+fn a_failed_socket_enable_stops_the_new_socket_and_never_the_running_service() {
+    let harness = Harness::new();
+    let units = upgraded(&harness, &own_old_unit());
+    std::fs::write(&units.active, "").expect("the service runs");
+    let dir = harness.path("fakebin-enable-fails");
+    std::fs::create_dir_all(&dir).expect("the fake bin directory");
+    let log = harness.path("systemctl-enable-fails.log");
+    // `enable --now` legt den Verweis an und scheitert dann beim Start, wie
+    // ein Socket, dessen Pfad schon jemand hält.
+    write_script(
+        &dir.join("systemctl"),
+        &format!(
+            "#!/bin/sh\n\
+             PATH=/usr/bin:/bin\n\
+             echo \"$*\" >>'{log}'\n\
+             case \"$*\" in\n\
+             *enable*)\n\
+               mkdir -p \"$(dirname '{socket_link}')\"\n\
+               ln -sfn '{pkgdir}/humanitld.socket' '{socket_link}'\n\
+               echo 'Job for humanitld.socket failed' >&2; exit 1 ;;\n\
+             *is-active*) test -e '{active}'; exit $? ;;\n\
+             esac\n\
+             exit 0\n",
+            log = log.display(),
+            socket_link = units.socket_link.display(),
+            pkgdir = units.package.parent().expect("a directory").display(),
+            active = units.active.display(),
+        ),
+    );
+
+    let output = packaged_install(&harness, &dir, &[]);
+
+    assert_ne!(code(&output), 0, "{}", stdout(&output));
+    let calls = calls(&log);
+    assert!(
+        calls
+            .lines()
+            .any(|line| line == "--user stop humanitld.socket"),
+        "{calls}"
+    );
+    assert!(
+        !calls
+            .lines()
+            .any(|line| line.starts_with("--user stop") && line.contains("humanitld.service")),
+        "{calls}"
+    );
+    assert!(
+        std::fs::symlink_metadata(&units.socket_link).is_err(),
+        "the socket link of this run stayed"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&units.user).expect("the old unit is back"),
+        own_old_unit()
+    );
+    assert!(
+        calls
+            .lines()
+            .any(|line| line == "--user start humanitld.service"),
+        "{calls}"
+    );
 }

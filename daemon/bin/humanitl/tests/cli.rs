@@ -5022,3 +5022,131 @@ fn audit_export_goes_through_the_daemon_with_its_range() {
     );
     assert_eq!(text.matches("\r\n").count(), 6, "{text}");
 }
+
+/// Ein Socket wie hinter `humanitld.socket`: Laufzeitverzeichnis `0700`, ein
+/// Lauscher, kein Token. Die erste Verbindung „startet den Daemon": Der Faden
+/// schreibt nach `start` das Token und endet (HUM-164).
+fn sleeping_socket(harness: &Harness, start: Duration) -> std::thread::JoinHandle<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let paths = harness.paths();
+    let socket = paths.daemon_socket();
+    let dir = socket.parent().expect("a runtime directory").to_owned();
+    std::fs::create_dir_all(&dir).expect("the runtime directory");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("0700");
+    let listener = std::os::unix::net::UnixListener::bind(&socket).expect("the socket binds");
+    let token = paths.token_path();
+    std::thread::spawn(move || {
+        let Ok((_first, _)) = listener.accept() else {
+            return;
+        };
+        std::thread::sleep(start);
+        let staged = token.with_extension("new");
+        std::fs::write(&staged, "secret\n").expect("the token");
+        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o600)).expect("0600");
+        std::fs::rename(&staged, &token).expect("the token in place");
+        std::thread::sleep(Duration::from_secs(1));
+    })
+}
+
+/// Löst den Faden aus [`sleeping_socket`], falls ihn niemand geweckt hat.
+fn release(harness: &Harness, sleeper: std::thread::JoinHandle<()>) {
+    let _ = std::os::unix::net::UnixStream::connect(harness.paths().daemon_socket());
+    sleeper.join().expect("the sleeper ends");
+}
+
+/// HUM-164, Review: `config set` fragt, ob ein Daemon läuft, nur für die
+/// Wortwahl seiner Notiz. Diese Frage darf keinen Daemon hinter dem Socket
+/// wecken, sonst läse der gerade gestartete Daemon den Wert schon, und die
+/// Notiz „beim nächsten Start" wäre falsch.
+#[test]
+fn config_set_does_not_wake_a_sleeping_socket() {
+    let harness = Harness::new();
+    let sleeper = sleeping_socket(&harness, Duration::ZERO);
+
+    let output = harness.run(["config", "set", "hold.timeout_secs", "300"]);
+
+    let woken = harness.paths().token_path().exists();
+    release(&harness, sleeper);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(!woken, "config set woke the daemon behind the socket");
+    assert!(
+        stderr(&output).contains("no daemon is running, so it reads it when it starts"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// HUM-164, Review: Ein Token, das nach einem Absturz liegen blieb, und ein
+/// Socket, der Verbindungen annimmt, sind noch kein laufender Daemon. Erst ein
+/// beantwortetes `GetInfo` ist einer; sonst behauptete `config set`, der
+/// laufende Daemon nehme den Wert beim nächsten Start.
+#[test]
+fn config_set_counts_a_daemon_only_when_it_answers() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let harness = Harness::new();
+    let paths = harness.paths();
+    let socket = paths.daemon_socket();
+    let dir = socket.parent().expect("a runtime directory").to_owned();
+    std::fs::create_dir_all(&dir).expect("the runtime directory");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("0700");
+    let token = paths.token_path();
+    std::fs::write(&token, "left-behind\n").expect("a stale token");
+    std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600)).expect("0600");
+    let listener = std::os::unix::net::UnixListener::bind(&socket).expect("the socket binds");
+    // Nimmt jede Verbindung an, hält sie und sagt nie etwas.
+    let holder = std::thread::spawn(move || {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept() {
+            if stream.peer_addr().is_ok_and(|addr| addr.is_unnamed()) && held.len() > 8 {
+                break;
+            }
+            held.push(stream);
+        }
+    });
+
+    let output = harness.run(["config", "set", "hold.timeout_secs", "300"]);
+
+    // Den Faden lösen: genug Verbindungen, dass er endet.
+    for _ in 0..10 {
+        let _ = std::os::unix::net::UnixStream::connect(&socket);
+    }
+    holder.join().expect("the holder ends");
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no daemon is running, so it reads it when it starts"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// HUM-164, Review: Hinter dem Socket braucht ein geweckter Dienst beim ersten
+/// Start mehr als die drei Sekunden, die der Doctor einem laufenden Daemon
+/// gibt. Der Doctor wartet so lange wie der Client auf das Token und meldet
+/// einen langsamen ersten Start nicht als Socket, der schweigt.
+#[test]
+fn doctor_gives_a_woken_daemon_the_time_of_the_wake_up() {
+    let harness = Harness::new();
+    let sleeper = sleeping_socket(&harness, Duration::from_secs(4));
+
+    let output = harness.run(["doctor", "--json"]);
+
+    let woken = harness.paths().token_path().exists();
+    release(&harness, sleeper);
+    let report: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .unwrap_or_else(|error| panic!("one JSON value ({error}): {}", stdout(&output)));
+    let line = report["checks"]
+        .as_array()
+        .expect("checks")
+        .iter()
+        .find(|check| check["id"] == "daemon")
+        .expect("the daemon line")
+        .clone();
+    assert!(woken, "the doctor did not wait for the token: {line}");
+    let why = line["diagnostic"]["why"].as_str().unwrap_or_default();
+    assert!(
+        !why.contains("did not answer within 3000 ms"),
+        "a slow first start counts as a silent socket: {line}"
+    );
+}

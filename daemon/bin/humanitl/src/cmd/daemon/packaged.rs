@@ -75,7 +75,8 @@ pub(super) fn packaged_units(
 /// Es wird nichts geschrieben: Die Units gehören dem Paket. Übrig bleibt, was
 /// das Paket nicht kann, weil es als root läuft: eine eigene ältere Unit
 /// beiseitelegen ([`Shadow`]), `systemctl --user daemon-reload` und
-/// `enable --now` für Socket und Dienst. Dieselben Zusagen wie beim Schreiben
+/// `enable --now` für den Socket ([`unit::SystemUnits::names`], HUM-164).
+/// Dieselben Zusagen wie beim Schreiben
 /// gelten: Die Ankündigung kommt vorher, `--print` ändert nichts, und ein
 /// Fehlschlag nimmt zurück, was dieser Lauf angelegt oder beiseitegelegt hat.
 pub(super) async fn install_packaged(
@@ -279,10 +280,12 @@ fn headline(units: &unit::SystemUnits, shadow: Option<&Shadow>, plan: Plan) -> S
         ),
         Some(shadow) if plan.moves => format!(
             "humanitl daemon install {} its own older {}, which hides the package unit, to {} \
-             and enables the package units {shown}; {name} of the package is:",
+             and enables {} from the package, which installed {shown}; {name} of the package \
+             is:",
             if plan.print { "would move" } else { "moves" },
             shadow.path.display(),
-            shadow.aside.display()
+            shadow.aside.display(),
+            units.names().join(" ")
         ),
         Some(shadow) => format!(
             "humanitl daemon install leaves its own older {} in place: it hides the package \

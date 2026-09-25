@@ -933,12 +933,19 @@ fn not_staged(path: &Path, what: &str) -> Diagnostic {
 /// Kein Fehlschlag: Die Unit liegt, systemd hat sie genommen, und dass der
 /// Dienst in fünf Sekunden noch nicht redet, ist eine Beobachtung und kein
 /// Grund, die Installation zurückzunehmen.
+///
+/// Die Frist gilt für den ganzen Versuch samt Weckruf (HUM-164): Ein
+/// `connect`, der hinter `humanitld.socket` auf das Token wartet, bekommt nur
+/// die Zeit, die bis zur Frist noch bleibt, sonst würden aus fünf Sekunden
+/// fünfzehn.
 async fn wait_for_daemon(ctx: &Context) -> String {
     let deadline = tokio::time::Instant::now() + READY_TIMEOUT;
     loop {
-        if let Ok(mut client) = ctx.connect().await
-            && let Ok(info) = client.get_info(()).await
-        {
+        let attempt = async {
+            let mut client = ctx.connect().await.ok()?;
+            client.get_info(()).await.ok()
+        };
+        if let Ok(Some(info)) = tokio::time::timeout_at(deadline, attempt).await {
             return info.into_inner().daemon_version;
         }
         if tokio::time::Instant::now() >= deadline {
@@ -1035,8 +1042,8 @@ fn no_bus(why: &str) -> bool {
 /// wirklich nur zurückgenommen wird, was dieser Lauf angelegt hat: Wer den
 /// Dienst schon vorher aktiviert hatte, behält ihn.
 ///
-/// `names` sind die Units, die `enable --now` bekommt: der Dienst, und bei
-/// den Units des Pakets davor der Socket. Die Verweise der Aktivierung legt
+/// `names` sind die Units, die `enable --now` bekommt: der Dienst, beim Paket
+/// nur der Socket (HUM-164). Die Verweise der Aktivierung legt
 /// `systemctl --user enable` immer im Unit-Verzeichnis des Nutzers an
 /// ([`unit::unit_dir`]), auch für eine Unit des Pakets; dort sieht die
 /// Rücknahme nach.

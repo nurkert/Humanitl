@@ -4,10 +4,10 @@
 #
 # Das Paket legt sie nach `/usr/lib/systemd/user/`, ohne die Marke in der
 # ersten Zeile (`packaging/deb/build-deb.sh`), und `humanitl daemon install`
-# aktiviert sie dann zusammen mit dem Dienst
-# (`systemctl --user enable --now humanitld.socket humanitld.service`). Ohne
-# Paket schreibt der Befehl sie nicht: Dann bindet der Daemon den Socket
-# selbst.
+# aktiviert dann nur sie (`systemctl --user enable --now humanitld.socket`,
+# HUM-164): Den Dienst startet systemd bei der ersten Verbindung, und ein
+# Client ohne Token öffnet den Socket genau dafür einmal. Ohne Paket schreibt
+# der Befehl sie nicht: Dann bindet der Daemon den Socket selbst.
 #
 # systemd hält den Socket und übergibt ihn dem Dienst als Deskriptor 3
 # (`LISTEN_FDS`); der Daemon übernimmt ihn, statt selbst zu binden
