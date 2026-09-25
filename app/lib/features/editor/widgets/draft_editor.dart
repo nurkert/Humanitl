@@ -13,6 +13,7 @@ import 'package:flutter/widgets.dart';
 import '../../../core/domain/domain.dart';
 import '../../../core/ui/ui.dart';
 import '../model/draft.dart';
+import '../model/draft_ops.dart' show hasPlace;
 import 'header_table.dart';
 
 /// Welcher Reiter des Entwurfs offen ist.
@@ -183,7 +184,9 @@ class DraftEditorState extends State<DraftEditor> {
   /// die spätere Markierung.
   List<HEditorDecoration> _decorations() => <HEditorDecoration>[
     for (final FindingView view in widget.draft.findings)
-      if (view.location.kind == FindingLocation.body && view.isOpen)
+      if (view.location.kind == FindingLocation.body &&
+          view.isOpen &&
+          hasPlace(view))
         HEditorDecoration(
           start: view.start,
           end: view.end,

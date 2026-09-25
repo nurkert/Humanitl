@@ -102,6 +102,7 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-228 | Der brotli-Test des Parsers wartet auf die Uhr und fällt unter Last aus | S | — |
 | HUM-229 | `xvfb-run make flutter-test-integration` öffnet unter Wayland ein Fenster auf dem echten Bildschirm | XS | HUM-185 |
 | HUM-230 | Verlauf und Tray könnten Anfragen an derselben Lücke verpassen wie die Warteschlange | S | HUM-185 |
+| HUM-231 | Nach dem Entfernen einer Kopfzeile leuchtet und nennt der Editor Ersetzungen an der falschen Zeile | S | HUM-161 |
 | HUM-233 | Der `systemd`-Test auf geschlossene Nummer fällt unter Last zufällig aus | S | — |
 | HUM-234 | Der Socket-Walk des Shims hängt vom Füllstand des Hosts ab | S | — |
 
@@ -955,14 +956,14 @@ Vor der Aufteilung (siehe Hinweis unter „Spezifikation"):
 7. Widget-Tests.
 
 ### Tests
-Geliefert: Unit in `daemon/crates/proxy/src/findings.rs` (`allow_with_open_regex_findings_ok`, `allow_with_checksum_secret_blocked_when_setting_on`, `allow_ok_when_setting_off`, `only_checksum_secrets_of_the_four_kinds_hard_block`, `the_refusal_names_a_header_by_its_name`, `the_refusal_names_the_query_and_says_it_was_blocked`); Proxy in `daemon/crates/proxy/tests/findings.rs` (`a_checksum_secret_is_blocked_when_the_switch_is_on` mit `HOLD_004`, `an_edited_checksum_secret_is_blocked_when_the_switch_is_on`, `an_edited_checksum_secret_goes_out_when_the_switch_is_off`); Widget in `app/test/features/intercept/findings_pause_test.dart` und `findings_pause_predicate_test.dart`.
+Geliefert: Unit in `daemon/crates/proxy/src/findings.rs` (`allow_with_open_regex_findings_ok`, `allow_with_checksum_secret_blocked_when_setting_on`, `allow_ok_when_setting_off`, `only_checksum_secrets_of_the_four_kinds_hard_block`, `the_refusal_names_a_header_by_its_name`, `the_refusal_names_the_query_and_says_it_was_blocked`); Proxy in `daemon/crates/proxy/tests/findings.rs` (`a_checksum_secret_is_blocked_when_the_switch_is_on` mit `HOLD_004`, `an_edited_checksum_secret_is_blocked_when_the_switch_is_on`, `an_edited_checksum_secret_goes_out_when_the_switch_is_off`); Widget in `app/test/core/ui/findings_pause_test.dart` und `findings_pause_predicate_test.dart`.
 
 Vor der Aufteilung (siehe Hinweis unter „Spezifikation"): Unit (`hold.rs`): `allow_with_open_regex_findings_ok`, `allow_with_checksum_secret_blocked_when_setting_on` (`HOLD_004`), `allow_with_checksum_secret_ok_when_acknowledged`, `allow_ok_when_setting_off`, `allowlisted_not_counted`.
 Unit (`findings`): `allowlist_marks_finding` (Wert in Allowlist mit `scope = global` ⇒ `allowlisted == true`), `allowlist_project_scope_does_not_leak_to_other_project`.
 Widget: `button_label_with_findings`, `enter_opens_pause_not_send` (Fake-Daemon zählt `decide` = 0), `send_anyway_acknowledges_all`, `hard_block_hides_send_anyway`, `ignore_always_calls_decide_with_ignore_always`.
 
 ### Akzeptanzkriterien
-- [x] Anfrage mit einer E-Mail im Body: Button heißt „Senden mit 1 Finding", Enter öffnet die Pause, kein Request geht raus (Fake-Daemon-Zähler). Gemessen: `app/test/features/intercept/findings_pause_test.dart`, `button_label_with_findings` (en), `the valve and the pause speak German` (de: „Senden mit 1 Finding", „1 Fund in dieser Anfrage", die drei Knöpfe), `enter_opens_pause_not_send` und `a click on the valve opens the pause and sends nothing` (`client.decisions` leer).
+- [x] Anfrage mit einer E-Mail im Body: Button heißt „Senden mit 1 Finding", Enter öffnet die Pause, kein Request geht raus (Fake-Daemon-Zähler). Gemessen: `app/test/core/ui/findings_pause_test.dart`, `button_label_with_findings` (en), `the valve and the pause speak German` (de: „Senden mit 1 Finding", „1 Fund in dieser Anfrage", die drei Knöpfe), `enter_opens_pause_not_send` und `a click on the valve opens the pause and sends nothing` (`client.decisions` leer).
 - [ ] „Trotzdem senden" leitet weiter; History zeigt `unresolved_findings = 1`. **Verschoben nach HUM-160** (Aufteilung 2026-09-19, oben). Weiterleiten ist gemessen: `send_anyway_sends_the_request_unchanged` und `S in the pause sends` (genau ein `Decide(Allow)` am Fake). Die Zahl in der History fehlt: `acknowledged_findings` ist nicht auf dem Draht, und `Decided` trägt keine `unresolved_findings`.
 - [ ] Mit `hold.hard_block_checksum_secrets = true` und einer gültigen IBAN: „Senden nicht möglich", Daemon lehnt `Decide(Allow)` über die CLI (`humanitl flows decide` existiert nicht; Test über gRPC-Client) mit `HOLD_004` ab. **Verschoben nach HUM-159** (Aufteilung 2026-09-19, oben; `backlog/CONVENTIONS.md` 4.33). Die Anfrage wird mit dem Schalter gar nicht erst gehalten: Das System blockt sie sofort und meldet jetzt `HOLD_004` am Flow, gemessen mit `a_checksum_secret_is_blocked_when_the_switch_is_on` (`daemon/crates/proxy/tests/findings.rs`). Dieselbe Sperre greift an einer bearbeiteten Fassung, gemessen mit `an_edited_checksum_secret_is_blocked_when_the_switch_is_on` und der Gegenprobe `an_edited_checksum_secret_goes_out_when_the_switch_is_off`; die Regel selbst mit den Einheitstests in `daemon/crates/proxy/src/findings.rs`. Gebaut und gemessen ist davon nur `HOLD_004` an beiden Sperren.
 - [ ] „Immer ignorieren" auf einen Wert ⇒ nächste Anfrage mit demselben Wert zeigt ihn in der eingeklappten „ignoriert"-Zeile, Button ist „Senden". **Verschoben** (Umfangsentscheidung 2026-09-18, BACKLOG.md Abschnitt 9, Punkt 16).
@@ -3608,7 +3609,7 @@ Wie HUM-049, Abschnitt „Daemon", ohne Allowlist. Die Indizes beziehen sich auf
 `send_anyway_acknowledges_all` (Widget), `acknowledged_findings_are_recorded` (Recorder), `decided_carries_unresolved_findings` (Proxy).
 
 ### Akzeptanzkriterien
-- [x] „Trotzdem senden" leitet weiter; History zeigt `unresolved_findings = 1` für eine Anfrage mit einer E-Mail, die über das Halten gesendet wurde, und `0` nach der Pause. Gemessen: `decided_carries_unresolved_findings` (`daemon/crates/proxy/tests/findings.rs`, echter Proxy mit Aufzeichnung: Halten `1`, Pause `0` in `Decided`, Registry und `flows.unresolved_findings`, Status 200); Oberfläche `send_anyway_acknowledges_all`, `over the valve the history counts 1 unresolved`, `after the pause the history counts 0 unresolved` (`app/test/features/intercept/findings_pause_test.dart`), `history_shows_unresolved_findings` (`app/test/features/history/history_detail_test.dart`), `the row takes the count of open findings from the decision` (`history_page_test.dart`). `STRICT=1 make check` grün am 2026-09-19.
+- [x] „Trotzdem senden" leitet weiter; History zeigt `unresolved_findings = 1` für eine Anfrage mit einer E-Mail, die über das Halten gesendet wurde, und `0` nach der Pause. Gemessen: `decided_carries_unresolved_findings` (`daemon/crates/proxy/tests/findings.rs`, echter Proxy mit Aufzeichnung: Halten `1`, Pause `0` in `Decided`, Registry und `flows.unresolved_findings`, Status 200); Oberfläche `send_anyway_acknowledges_all`, `over the valve the history counts 1 unresolved`, `after the pause the history counts 0 unresolved` (`app/test/core/ui/findings_pause_test.dart`), `history_shows_unresolved_findings` (`app/test/features/history/history_detail_test.dart`), `the row takes the count of open findings from the decision` (`history_page_test.dart`). `STRICT=1 make check` grün am 2026-09-19.
 - [x] Das Audit trägt beide Zahlen. Gemessen: `flow_decided_carries_unresolved_and_acknowledged` (`daemon/bin/humanitld/src/audit_sink.rs`): Pause `0`/`1`, Halten `1`/`0`, Block ohne beide.
 - [x] Eine bearbeitet freigegebene Anfrage, in der eine E-Mail stehen blieb, trägt im Audit und in der History `unresolved_findings = 1`. Gemessen: `decided_carries_unresolved_findings`, Fall `Release::Edited` (zweiter Scan: stehengelassene Adresse `1`, ersetzte `0`, in `Decided` und `flows.unresolved_findings`); das Audit schreibt `unresolved_findings` aus demselben `Decided` (`FlowDecided::with_findings`, Sink-Test oben).
 
@@ -3646,7 +3647,7 @@ Die Pause bekommt die offenen Funde des Entwurfs; „Pseudonymisieren" heißt do
 `editor_send_with_open_findings_opens_pause`, `editor_send_without_findings_sends`.
 
 ### Akzeptanzkriterien
-- [ ] Ein Entwurf mit einer stehengelassenen E-Mail sendet nicht auf den ersten Klick.
+- [x] Ein Entwurf mit einer stehengelassenen E-Mail sendet nicht auf den ersten Klick. Gemessen: `editor_send_with_open_findings_opens_pause` (`app/test/features/editor/editor_screen_test.dart`: Knopf „Send edited version with 1 finding", der erste Klick sendet nichts, an der Stelle der Leiste steht die Pause mit einer Zeile, „Alle ersetzen" statt „Pseudonymisieren", keine Tasten `S`/`P`/`B`, erst „Trotzdem senden" schickt den unveränderten Entwurf); Gegenprobe `editor_send_without_findings_sends`. Dazu `the pause lists the findings of the draft, not the held ones` (ein Fund von zwei im Entwurf ersetzt, die Pause nennt einen), `ctrl+enter opens the pause and Esc closes only the pause`, `replace all in the pause replaces and sends nothing` und über den Wirt `block in the editor pause blocks through the daemon` (`Decide(Block)` am Fake). Mutationsprobe je Test am 2026-09-25: jeder rot an einer Zusicherung, nach dem Zurücksetzen per `cmp` gleich. Aus der Review-Runde: `a duplicated value keeps the pause`, `a value that is really gone no longer holds the send`, die Anker-Tests für Kopfzeile und Query, `the anchor of a finding (HUM-161)` in `draft_ops_test.dart`, `with the editor open, A then S decide nothing` (`app/test/core/ui/findings_pause_test.dart`), zwei Tests zur harten Sperre in der Editor-Pause und `a pause on its way out takes no click`, ebenfalls je mit Mutationsprobe. Aus der dritten Runde: `a finding without a place stays open and is never replaced` (`draft_ops_test.dart`), `removing a header above keeps the finding on its value` und `a renamed header keeps its finding open`, je mit Mutationsprobe. Aus der vierten Runde: `anchoring after review round 4 (HUM-161)` in `draft_ops_test.dart` (keine geteilte Kopie, Zurücktippen, Undo nach „Alle ersetzen", angeschnittener Fund, Wert im Pfad, Wert im Pseudonym), zwei `buildDraft`-Tests (Bereich hinter dem Text, mehrdeutige Kopfzeile) und `ctrl+z after replace all brings the pause back`, je mit Mutationsprobe. Aus der fünften Runde: `anchoring after review round 5 (HUM-161)` in `draft_ops_test.dart` (Auswahl über dem alten Bereich eines Fundes ohne Stelle, `Ctrl+R` und Undo, Wert in Methode und Kopfzeilenname, ausgeschriebener Query-Wert, jede Kopie eines Wertes, mehrdeutige Kopfzeile erst ohne jeden Kandidaten entfernt), je mit Mutationsprobe. Nachgezogen: `anchoring, minors after round 5 (HUM-161)` (einzelnes `%` in der Query, ausgeschriebener Wert nach Undo, eigene Auswahl öffnet sich nicht anderswo), je mit Mutationsprobe.
 
 ### Fallstricke
 - Die Indizes des Entwurfs sind andere als die des `Analyzed`-Ereignisses (HUM-049, Fallstricke).
@@ -5408,3 +5409,42 @@ keine; Umfang und Form des Fixes ergeben sich aus der Prüfung der möglichen We
 ### Referenzen
 HUM-233 (Fund beim Review am 2026-09-25); `daemon/bin/humanitl-shim/src/report.rs`;
 `tools/verify-commit.sh`.
+
+---
+
+## HUM-231 · Nach dem Entfernen einer Kopfzeile leuchtet und nennt der Editor Ersetzungen an der falschen Zeile
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-161 · Blockiert: keine
+
+### Kontext
+Aufgefallen bei HUM-161 (2026-09-25). `DraftNotifier.removeHeader` verschiebt seit HUM-161 die Zeilennummern der **Funde** (`_afterRemoval` in `app/lib/features/editor/providers/draft_provider.dart`), nicht aber die der schon angewandten **Ersetzungen**: `Replacement.location.headerIndex` zeigt nach dem Entfernen einer Zeile darüber auf die nächste Zeile oder ins Leere. `DraftLocation.indexIn` fällt dann auf die erste gleichnamige Zeile zurück. Betroffen sind der Diff-Glow und die Mapping-Leiste: Eine Ersetzung in der zweiten von drei `Via` leuchtet danach in der dritten, und das Mapping nennt die falsche Stelle. Was hinausgeht, ändert sich nicht: Der Text der Zeilen ist richtig, und die Pause hängt an den Funden, nicht an den Ersetzungen.
+
+### Ziel
+Nach `removeHeader` zeigt jede Ersetzung in einer Kopfzeile auf dieselbe Zeile wie vorher; eine Ersetzung in der entfernten Zeile fällt weg.
+
+### Nicht-Ziel
+Die Funde (HUM-161); ein neuer Scan im Client; der Diff-Glow im Rumpf (`_reglowed`).
+
+### Betroffene Pfade
+- `app/lib/features/editor/providers/draft_provider.dart` (`removeHeader`, `_afterRemoval`)
+- `app/test/features/editor/editor_screen_test.dart` oder `app/test/features/editor/draft_ops_test.dart`
+
+### Spezifikation
+`removeHeader(i)` wendet dieselbe Verschiebung wie auf die Funde auf `Draft.replacements` an: Nummern über `i` sinken um eins, Ersetzungen mit Nummer `i` fallen aus der Liste. Die Zuordnung `Draft.pseudonyms` bleibt, wie sie ist; der Wert ist ersetzt, auch wenn die Zeile weg ist.
+
+### Schritte
+1. Test mit drei gleichnamigen Zeilen, Ersetzung in der zweiten, Entfernen der ersten: Ersetzung zeigt auf die neue erste Zeile.
+2. Verschiebung in `removeHeader`.
+
+### Tests
+`removing_a_header_keeps_replacements_on_their_row`, `a_replacement_in_a_removed_row_leaves_the_mapping`, je mit Mutationsprobe.
+
+### Akzeptanzkriterien
+- [ ] Nach dem Entfernen einer Zeile darüber leuchtet eine Ersetzung in ihrer eigenen Zeile.
+- [ ] Eine Ersetzung in der entfernten Zeile steht nicht mehr in der Mapping-Leiste.
+- [ ] `make check` grün.
+
+### Fallstricke
+- Nicht über den Namen gehen: Gleichnamige Zeilen sind genau der Fall, in dem der Rückfall von `DraftLocation.indexIn` die falsche trifft.
+
+### Referenzen
+HUM-161 (Review-Runde 2, `_afterRemoval`), HUM-047 (Diff-Glow, Mapping).

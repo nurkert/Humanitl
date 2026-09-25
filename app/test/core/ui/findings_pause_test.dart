@@ -19,18 +19,18 @@ import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
+import 'package:humanitl/core/ui/findings_pause.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/editor/model/draft.dart';
 import 'package:humanitl/features/editor/providers/draft_provider.dart';
 import 'package:humanitl/features/intercept/providers/decision.dart';
 import 'package:humanitl/features/intercept/providers/findings_pause.dart';
 import 'package:humanitl/features/intercept/providers/flows.dart';
-import 'package:humanitl/features/intercept/widgets/findings_pause.dart';
 import 'package:humanitl/features/intercept/widgets/note_field.dart';
 
+import '../../features/intercept/fixtures.dart';
+import '../../features/intercept/harness.dart';
 import '../../harness/ui_state.dart';
-import 'fixtures.dart';
-import 'harness.dart';
 
 /// Nur Linux: die einzige Plattform, für die es die App gibt.
 final TargetPlatformVariant linux = TargetPlatformVariant.only(
@@ -797,6 +797,33 @@ void main() {
 
     expect(pause, findsNothing);
     expect(client.decisions, hasLength(2));
+  }, variant: linux);
+
+  testWidgets('with the editor open, A then S decide nothing', (
+    WidgetTester tester,
+  ) async {
+    // Bei offenem Editor fielen Einzeltasten, die er selbst nicht bindet, an
+    // die Warteschlange: `A` öffnete die Pause über der gehaltenen Fassung,
+    // unsichtbar hinter dem Editor, und `S` schickte dann `Decide(Allow)` mit
+    // allen Funden (HUM-161).
+    final FakeDaemonClient client = mailClient();
+    await pumpIntercept(tester, client: client);
+    await playScript(tester);
+    await armed(tester);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyE);
+    await settle(tester);
+    expect(find.byKey(const Key('editor-send')), findsOneWidget);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+    await settle(tester);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyS);
+    await settle(tester);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyB);
+    await settle(tester);
+
+    expect(client.decisions, isEmpty);
+    expect(containerOf(tester).read(openFindingsPauseProvider), isNull);
+    expect(find.byKey(const Key('editor-send')), findsOneWidget);
   }, variant: linux);
 }
 
