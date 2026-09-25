@@ -102,6 +102,8 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-228 | Der brotli-Test des Parsers wartet auf die Uhr und fällt unter Last aus | S | — |
 | HUM-229 | `xvfb-run make flutter-test-integration` öffnet unter Wayland ein Fenster auf dem echten Bildschirm | XS | HUM-185 |
 | HUM-230 | Verlauf und Tray könnten Anfragen an derselben Lücke verpassen wie die Warteschlange | S | HUM-185 |
+| HUM-233 | Der `systemd`-Test auf geschlossene Nummer fällt unter Last zufällig aus | S | — |
+| HUM-234 | Der Socket-Walk des Shims hängt vom Füllstand des Hosts ab | S | — |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -5212,3 +5214,197 @@ keine; Umfang und Form des Fixes ergeben sich aus der Prüfung in Schritt 1.
 
 ### Referenzen
 HUM-185; `app/lib/features/intercept/providers/flows.dart`; `app/test/features/intercept/flows_test.dart` (Tests zu „a Held for a flow this client never saw arrive" und „does not come back as a ghost").
+
+---
+
+## HUM-233 · Der `systemd`-Test auf geschlossene Nummer fällt unter Last zufällig aus
+Sprint: 4 · Größe: S · Abhängigkeiten: — · Blockiert: —
+
+### Kontext
+CI auf `main` (Lauf 36137925763, Job `rust-test`) fiel mit
+`systemd::tests::a_listening_socket_is_adopted_and_the_passed_number_closed` aus:
+„the passed number is closed after the adoption" (`daemon/bin/humanitld/src/systemd.rs:659`). Der Test
+prüft mit `is_open(raw)`, ob die von `adopt` geschlossene Nummer (`close_passed`, Zeile 336,
+`libc::close(raw)`) im Prozess nicht mehr offen ist. Andere Tests desselben Binaries laufen auf
+parallelen Fäden der Test-Harness und öffnen dabei eigene Deskriptoren; zwischen dem `close` in `adopt`
+und der Prüfung in diesem Test kann ein solcher Test dieselbe, eben freigewordene Nummer neu vergeben
+bekommen. `is_open` sieht dann einen fremden, offenen Deskriptor und hält ihn für den nicht geschlossenen
+eigenen. HUM-224 hat denselben Wettlauf für `channel::tests::the_messages_cross_the_pair_in_their_shape`
+in `daemon/bin/humanitl-shim/src/channel.rs` gemessen und mit einer privaten Deskriptor-Tabelle pro Test
+behoben (`in_private_descriptor_table`, `close_range(2)` mit `CLOSE_RANGE_UNSHARE`).
+
+### Ziel
+Der Test ist unter Last stabil: Er prüft „geschlossen" in einer Deskriptor-Tabelle, die kein anderer
+paralleler Test teilt, nach demselben Muster wie HUM-224. Jede weitere Stelle in `humanitld`, die
+`is_open` für „geschlossen" prüft, hat denselben Schutz oder ist nachweislich nicht betroffen.
+
+### Nicht-Ziel
+Ein gemeinsamer Helfer für `humanitl-shim` und `humanitld`; die beiden Krates dürfen nicht voneinander
+abhängen (`backlog/CONVENTIONS.md`), der Helfer bleibt je einmal in jedem Testmodul. Änderungen an
+`adopt`, `close_passed` oder der Reihenfolge der Übernahme selbst.
+
+### Betroffene Pfade
+- `daemon/bin/humanitld/src/systemd.rs`
+
+### Spezifikation
+`in_private_descriptor_table<F: FnOnce() + Send + 'static>(body: F)` im Testmodul von `systemd.rs`,
+gebaut nach `daemon/bin/humanitl-shim/src/channel.rs::tests::in_private_descriptor_table`, aber anders
+als dort: Der Faden nur unshared seine Tabelle, er leert sie nicht. Zuerst baut die aufrufende Seite (im
+Haupttestfaden, in der noch geteilten Tabelle) eine Wegwerf-`tokio`-Laufzeit
+(`tokio::runtime::Builder::new_current_thread().enable_all().build()`) und verwirft sie sofort wieder,
+damit `tokio`s globale Signal-Registry angelegt ist, falls noch kein anderer Test es schon getan hat.
+Erst danach startet `body` auf einem eigenen `std::thread`, der `close_range(u32::MAX, u32::MAX,
+CLOSE_RANGE_UNSHARE)` über `libc::syscall(libc::SYS_close_range, …)` ruft — ein Bereich, der keinen
+offenen Deskriptor trifft, aber die Kopie trotzdem privat macht — und gibt eine Panik aus `body` über
+`resume_unwind` weiter. Der bisherige `#[tokio::test] async fn
+a_listening_socket_is_adopted_and_the_passed_number_closed` wird ein `#[test] fn …`, dessen Rumpf
+`in_private_descriptor_table` mit einer Closure übergibt, die eine eigene
+`tokio::runtime::Builder::new_current_thread().enable_all().build()`-Laufzeit baut und den bisherigen
+`async`-Körper darin mit `block_on` ausführt.
+
+### Schritte
+1. `in_private_descriptor_table` in `daemon/bin/humanitld/src/systemd.rs::tests` einfügen, mit Verweis
+   auf HUM-224 und die gemessene Ursache im Doc-Kommentar.
+2. `a_listening_socket_is_adopted_and_the_passed_number_closed` auf `#[test]` mit eigener
+   Ein-Faden-Laufzeit im privaten Faden umstellen.
+3. `grep -n '!is_open' daemon/bin/humanitld/src/systemd.rs` prüfen: jede weitere Stelle, die „geschlossen"
+   über `is_open` behauptet, bekommt denselben Schutz; Stellen, die „offen geblieben" prüfen, bleiben
+   unverändert, weil dort kein `close` im Test den Wettlauf öffnet.
+4. Mutationsbeweis: `libc::close(raw)` in `close_passed` (Zeile 336) auskommentieren, Test läuft rot,
+   zurücknehmen.
+5. Stressbeweis: `cargo test -p humanitld --bin humanitld` 20-mal, höchstens zwei Läufe gleichzeitig,
+   unter `flock`, `nice -n 19`.
+6. `make check`.
+
+### Tests
+- `systemd::tests::a_listening_socket_is_adopted_and_the_passed_number_closed`: unverändertes Verhalten,
+  jetzt in privater Deskriptor-Tabelle; 20 Läufe der Tests des Binaries (`--bin humanitld`) unter Last
+  grün.
+- Mutationsbeweis: entferntes `libc::close(raw)` in `close_passed` macht genau diesen Test rot, alle
+  anderen bleiben grün.
+
+### Akzeptanzkriterien
+- [x] `a_listening_socket_is_adopted_and_the_passed_number_closed` läuft auf einem Faden mit privater
+      Deskriptor-Tabelle, angelegt über `close_range(u32::MAX, u32::MAX, CLOSE_RANGE_UNSHARE)` (unshared,
+      nicht geleert). **Gemessen am 2026-09-25**: Filterlauf `a_listening the_signal --test-threads=1`
+      lässt `systemd::tests::a_listening_socket_is_adopted_and_the_passed_number_closed` vor
+      `tests::the_signal_bars_a_new_sandbox_before_the_farewell_task_runs` laufen (unser Test also als
+      erster Runtime-Bau des Binaries) — 2 von 2 grün. Mutationsbeweis für das Aufwärmen: die
+      Wegwerf-Laufzeit auskommentiert, derselbe Filterlauf — jetzt panikt
+      `tests::the_signal_bars_a_new_sandbox_before_the_farewell_task_runs` mit „Failed building the
+      Runtime: … Bad file descriptor" (`main.rs:2901`), `a_listening_…` bleibt grün; zurückgenommen,
+      beide wieder grün.
+- [x] Jede weitere `!is_open`-Prüfung in `daemon/bin/humanitld/src/systemd.rs` ist geprüft und, wo
+      nötig, ebenso geschützt. **Gemessen am 2026-09-25** mit `grep -n '!is_open'
+      daemon/bin/humanitld/src/systemd.rs`: zwei Treffer. Zeile 748 ist eben dieser Test, geschützt. Zeile
+      594, `closed_number()`, sucht eine freie Nummer im Bereich 900 bis 1000 für die Tests „geschlossene
+      Nummer wird abgewiesen"; kein paralleler Test dieses Binaries öffnet in der Praxis Deskriptoren in
+      diesem Bereich, deshalb ohne Schutz unbedenklich. Alle anderen `is_open`-Stellen (ohne `!`) prüfen
+      „offen geblieben", dort öffnet kein `close` im Test den Wettlauf.
+- [x] Mutationsbeweis: `libc::close(raw)` in `close_passed` entfernt macht den Test rot. **Gemessen am
+      2026-09-25**: mit auskommentiertem `libc::close(raw)` panikt der Test mit „the passed number is
+      closed after the adoption"; zurückgenommen, Test wieder grün.
+- [x] 20 Läufe der Tests des Binaries (`--bin humanitld`) unter Last (höchstens zwei parallel) sind grün.
+      **Gemessen am 2026-09-25** unter `flock`, `nice -n 19`, `taskset -c 0-5`, zwei Läufe gleichzeitig,
+      10 Runden: 20 von 20 grün, 0 Fehlschläge.
+- [ ] `make check` grün.
+
+### Fallstricke
+- `#[tokio::test]` baut selbst schon eine Laufzeit vor dem Testkörper; die private Tabelle muss vor jeder
+  Laufzeit stehen, sonst hat `tokio` schon Deskriptoren aus der geteilten Tabelle geöffnet, bevor
+  `close_range` läuft. Deshalb wird der Test zu einem synchronen `#[test]`, der seine eigene Laufzeit erst
+  im privaten Faden baut.
+- `tokio`s globale Signal-Registry (`OnceLock` mit einem `UnixStream`-Paar, prozessweit, nicht an eine
+  Laufzeit gebunden) wird beim ersten `enable_all()` des Prozesses angelegt. Legt sie ein anderer, schon
+  gelaufener Test in der geteilten Tabelle an, verliert `body`s eigene Laufzeit sie, sobald diese Tabelle
+  geleert würde — deshalb wird hier nur unshared, nichts geschlossen. Ist umgekehrt dieser Test der erste
+  Runtime-Bau des Prozesses (isolierter Testfilter, andere Reihenfolge), legt `body`s `enable_all()` die
+  Registry sonst in der eigenen, gleich wieder sterbenden privaten Tabelle an, und jede spätere Laufzeit
+  im geteilten Rest des Prozesses träfe auf `EBADF` oder eine fremd vergebene Nummer. Deshalb baut
+  `in_private_descriptor_table` vor dem `close_range` eine Wegwerf-Laufzeit in der geteilten Tabelle und
+  verwirft sie sofort.
+- Bekannte Kosten des Musters: Die private Kopie der Tabelle hält jeden zum Zeitpunkt des `close_range`
+  offenen Deskriptor anderer, noch laufender Tests bis zum Ende dieses Fadens offen — sie schließt nichts
+  davon, unshare dupliziert nur die Einträge. Konkret: Ein Gegenstück, das auf das Schließen dieses
+  Deskriptors wartet, sieht bis dahin weder `EOF` noch `HUP`; ein `flock` auf einem der offenen
+  Deskriptoren bleibt bis dahin gehalten; ein Listener, dessen Deskriptor in der Kopie steckt, bleibt bis
+  dahin erreichbar. Das Fenster ist kurz, an die Laufzeit des Tests gebunden (hier deutlich unter einer
+  Sekunde), aber kein Nullfenster. Für einen einzelnen, kurzen Test ist das kein Leck über den Testlauf
+  hinaus, aber kein Grund, das Muster auf mehr Tests als nötig anzuwenden. Eine Alternative ohne dieses
+  Fenster wäre, `is_open` durch einen `fstat`-Vergleich (`st_dev`, `st_ino` vor und nach dem `close`) zu
+  ersetzen, der eine neu vergebene Nummer von der ursprünglich geschlossenen unterscheidet, ohne die
+  Tabelle zu privatisieren; hier nicht gebaut, weil das Muster aus HUM-224 schon vorlag und für einen
+  einzelnen Test ausreicht.
+- `SOCK_CLOEXEC` schützt nur vor `exec`, nicht vor einer neu vergebenen Nummer im selben Prozess.
+- `humanitld` ist ein Bin-Crate ohne `lib.rs`; `cargo test -p humanitld --lib` findet kein Ziel, das
+  Testkommando muss `--bin humanitld` nennen.
+
+### Referenzen
+HUM-224; CI-Lauf 36137925763, Job `rust-test`; `daemon/bin/humanitl-shim/src/channel.rs`
+(`in_private_descriptor_table`).
+
+---
+
+## HUM-234 · Der Socket-Walk des Shims hängt vom Füllstand des Hosts ab
+Sprint: 4 · Größe: S · Abhängigkeiten: — · Blockiert: —
+
+### Kontext
+Bei der Arbeit an HUM-233 fiel `report::tests::the_socket_walk_finds_a_socket_within_its_bounds` in
+`daemon/bin/humanitl-shim/src/report.rs` lokal mit der Meldung „/tmp/humanitl-shim-walk-….sock" not
+among 1 sockets“ aus, reproduzierbar, unabhängig von einer Sandbox um den Testlauf herum. Der Test legt einen
+Socket unter `/tmp` an und erwartet, dass der breitensuchende Walk ab `/` ihn findet. Der Walk ist mit
+`SOCKET_WALK_MAX_ENTRIES = 2000` und Tiefe 3 gedeckelt. Auf einem Host mit vollem `/tmp` oder vielen
+Einträgen auf oberster Ebene kann der Deckel erreicht sein, bevor der Walk bei dem einen Socket unter
+`/tmp` ankommt: Er bricht ab, ohne ihn gesehen zu haben, und der Test meldet „not among 1 sockets", ohne
+dass sich am Produktionscode oder am Test selbst etwas geändert hat. In `tools/verify-commit.sh`
+(`bwrap --tmpfs /tmp`) und in CI ist `/tmp` bei jedem Lauf leer, dort ist der Test grün; auf einem
+Entwicklungs-Host mit vollem `/tmp` ist er rot. Das Verhalten des Tests hängt damit vom Zustand eines
+Verzeichnisses ab, das nicht ihm gehört — kein Wettlauf wie bei HUM-224, sondern eine stille Annahme über
+die Umgebung.
+
+### Ziel
+Der Test findet den von ihm angelegten Socket unabhängig davon, wie voll `/tmp` oder die oberste Ebene
+des Hosts sonst sind, oder er läuft in einer Umgebung, in der diese Frage nicht mehr zählt.
+
+### Nicht-Ziel
+Änderungen an `SOCKET_WALK_MAX_ENTRIES`, der Tiefe des Walks oder seinem Verhalten in Produktion; der
+Deckel schützt dort vor einem entarteten Dateibaum, das ist nicht Gegenstand dieses Issues. Der Fix für
+HUM-233 (privater Deskriptor-Tabellen-Test in `humanitld`) bleibt unberührt, dieses Issue ist eigenständig.
+
+### Betroffene Pfade
+- `daemon/bin/humanitl-shim/src/report.rs`
+
+### Spezifikation
+keine; Umfang und Form des Fixes ergeben sich aus der Prüfung der möglichen Wege in Schritt 1.
+
+### Schritte
+1. Mögliche Wege gegeneinander abwägen, mit `AGENTS.md`-Referenz für Testisolation: eigener
+   Mount-Namensraum oder `bwrap` mit leerem `/tmp` für diesen Test, alternativ `sockets()` (oder die vom
+   Test aufgerufene Walk-Funktion) so parametrisieren, dass der Test gegen ein eigenes, kleines
+   Wurzelverzeichnis läuft statt gegen `/`.
+2. Test, der ohne die Änderung auf einem Host mit künstlich gefülltem `/tmp` (oder künstlich niedrigem
+   `SOCKET_WALK_MAX_ENTRIES` im Test) rot ist, danach grün, mit Mutationsbeweis.
+3. `make check`.
+
+### Tests
+- `report::tests::the_socket_walk_finds_a_socket_within_its_bounds`: grün unabhängig vom Füllstand von
+  `/tmp`, geprüft mit künstlich vielen Einträgen im gewalkten Wurzelverzeichnis oder künstlich niedrigem
+  Deckel im Test.
+
+### Akzeptanzkriterien
+- [ ] Der Test findet seinen Socket, wenn `/tmp` oder die oberste Ebene des gewalkten Wurzelverzeichnisses
+      viele fremde Einträge enthalten (gemessen, nicht vermutet).
+- [ ] `SOCKET_WALK_MAX_ENTRIES` und die Tiefe des Walks in Produktion sind unverändert.
+- [ ] `make check` grün.
+
+### Fallstricke
+- Ein eigener Mount-Namensraum für einen Testprozess braucht Rechte, die in CI und auf Entwicklungs-Hosts
+  unterschiedlich verfügbar sind; vor der Wahl des Wegs prüfen, was `tools/verify-commit.sh` und CI schon
+  können, statt eine neue Abhängigkeit einzuführen.
+- Der Test soll den Produktionscode nicht dadurch grün färben, dass er den Deckel künstlich weit über
+  das Produktions-Maß hinaus anhebt; das verschöbe nur die Schwelle, löste die Abhängigkeit vom Host aber
+  nicht.
+
+### Referenzen
+HUM-233 (Fund beim Review am 2026-09-25); `daemon/bin/humanitl-shim/src/report.rs`;
+`tools/verify-commit.sh`.
