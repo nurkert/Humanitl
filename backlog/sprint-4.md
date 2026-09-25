@@ -4995,9 +4995,9 @@ Der Test ist unter Last stabil, und falls der Verdacht stimmt, entsteht das Paar
 - `daemon/bin/humanitl-shim/src/channel.rs`
 
 ### Akzeptanzkriterien
-- [ ] Die Ursache ist gemessen, nicht vermutet (etwa mit `/proc/<pid>/fd` eines Kindprozesses im Augenblick des Fehlschlags).
-- [ ] 100 Läufe der Test-Suite des Shims unter Last (`cargo test -p humanitl-shim` parallel zu einem Build) sind grün.
-- [ ] `make check` grün.
+- [x] Die Ursache ist gemessen, nicht vermutet (etwa mit `/proc/<pid>/fd` eines Kindprozesses im Augenblick des Fehlschlags). **Gemessen am 2026-09-25** mit einer vorübergehenden Instrumentierung des Tests, die unmittelbar nach dem `drop` des Kind-Endes die Kinder aus `/proc/self/task/*/children` und deren `/proc/<pid>/fd` las: Ohne Korrektur schlug der Test in 20 von 205 Läufen der Suite fehl; in den Läufen, in denen die Suche den Halter noch antraf, war es das geforkte Kind von `refusals::tests::the_listener_counts_the_agent_and_answers_eperm_quickly` (`comm` `refusals::tests`), das den Socket des Kind-Endes offen hielt, und das Ende wurde 7 bis 45 ms später sichtbar, sobald dieses Kind endete. Der Verdacht stimmt also für den Test; der Produktionscode forkt einfädig und schließt das Kind-Ende im Elternprozess, dort gibt es den Wettlauf nicht. Korrektur im Test: Er läuft auf einem eigenen Faden mit privater, oberhalb von stderr geleerter Deskriptor-Tabelle (`close_range` mit `CLOSE_RANGE_UNSHARE`).
+- [x] 100 Läufe der Test-Suite des Shims unter Last (`cargo test -p humanitl-shim` parallel zu einem Build) sind grün. **Gemessen am 2026-09-25, mit abweichender Last:** nicht parallel zu einem Build, sondern neben vier CPU-Schleifen (`nice -n 19 taskset -c 0-5`, anstelle von `stress -c 4`, das nicht installiert ist), weil die Projektregel zwei Builds gleichzeitig verbietet. Die Forks, die das Paar erben, stammen aus dem Testbinary selbst (`refusals::tests`), nicht aus einem Build; die Last verlängert nur deren Lebensdauer, deshalb trifft diese Messung die Ursache. 100 Läufe beider Testbinaries des Shims (Unit-Tests und `tests/shim.rs`), Lastmittel während der Läufe 11 bis 19: 100 von 100 grün. Ohne die Korrektur waren 20 von 205 Läufen rot; Gegenprobe mit entfernter privater Tabelle unter derselben Last: 1 von 25 rot, mit der ursprünglichen Meldung „a closed end counts as over“.
+- [x] `make check` grün. **Gemessen am 2026-09-25** mit `STRICT=1 make check` in einem privaten `/tmp`: Exit 0.
 
 ### Fallstricke
 - `SOCK_CLOEXEC` am Paar hilft nur gegen `exec`, nicht gegen einen Fork, der noch nicht `exec` gerufen hat.
