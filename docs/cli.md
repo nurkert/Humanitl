@@ -347,10 +347,11 @@ eines Pakets, das die Kommandozeile über einen Verweis erreicht hat.
 `/usr/lib/systemd/user/humanitld.service` da, hat das Paket die Units
 abgelegt, und der Befehl schreibt keine Datei (HUM-053). Er ruft nur, was das
 Paket als root nicht kann: `systemctl --user daemon-reload` und
-`systemctl --user enable --now humanitld.socket humanitld.service`. Beide
-Units, weil ein Client das Token liest, bevor er den Socket öffnet, und das
-Token erst der laufende Daemon schreibt. Die Ausgabe nennt als `unit` die Unit
-des Pakets und als `action` das Wort `packaged`; unter `--json` stehen die
+`systemctl --user enable --now humanitld.socket`. Nur den Socket (HUM-164):
+Findet ein Client kein Token, öffnet er den Socket trotzdem einmal, systemd
+startet darauf den Dienst, und der Client wartet höchstens zehn Sekunden auf
+dessen Token. Pakete ohne Socket-Unit bekommen `humanitld.service`. Die
+Ausgabe nennt als `unit` die Unit des Pakets und als `action` das Wort `packaged`; unter `--json` stehen die
 Namen in `units`. Nach der Aktivierung stehen in `unit` und `exec_start`, was
 systemd wirklich geladen hat (`systemctl --user show -p FragmentPath,ExecStart`),
 nicht, was in der Datei des Pakets steht; `unit_text` ist dann der Text dieser
@@ -478,12 +479,12 @@ angehalten (`stop`, `reset-failed`). Der Befund ist `DAEMON_008`.
 Zurückgenommen wird dabei auch die Aktivierung. `systemctl --user enable --now`
 ist ein Aufruf mit zwei Schritten: Er legt die Verweise an und startet dann.
 Die Verweise liegen immer im Unit-Verzeichnis des Nutzers, auch für die Units
-des Pakets: `default.target.wants/humanitld.service` und beim Paket zusätzlich
-`sockets.target.wants/humanitld.socket`. Misslingt der Start, stünden sie ohne
-diese Rücknahme weiter da, und der Dienst startete beim nächsten Anmelden,
-obwohl der Befehl mit `DAEMON_008` abgebrochen ist. Entfernt werden nur die
-Verweise, die dieser Aufruf angelegt hat, für beide Units: Wer den Dienst schon
-vorher aktiviert hatte, behält die Aktivierung.
+des Pakets: `default.target.wants/humanitld.service` und beim Paket statt
+dessen `sockets.target.wants/humanitld.socket`. Misslingt der Start, stünden
+sie ohne diese Rücknahme weiter da, und der Dienst startete beim nächsten
+Anmelden, obwohl der Befehl mit `DAEMON_008` abgebrochen ist. Entfernt werden
+nur die Verweise, die dieser Aufruf angelegt hat: Wer den Dienst schon vorher
+aktiviert hatte, behält die Aktivierung.
 
 Die Härtung der Unit ist gemessen und nicht behauptet (HUM-044, gehärtet in
 HUM-053). Die Escape-Tests laufen unter genau ihren `[Service]`-Zeilen mit 124
@@ -534,7 +535,9 @@ humanitl daemon uninstall [--purge-binaries]
 **Erst abmelden, dann entfernen.** Zuerst läuft `systemctl --user disable
 --now` für die Units, die es gibt: `humanitld.service`, wenn die Unit mit der
 Marke unter `~/.config/systemd/user/` liegt, beim Paket
-`humanitld.socket humanitld.service`. Scheitert der Aufruf, ist noch nichts
+`humanitld.socket humanitld.service`, auch wenn `daemon install` seit HUM-164
+nur den Socket aktiviert: Ein früherer Lauf hat den Dienst mit aktiviert.
+Scheitert der Aufruf, ist noch nichts
 entfernt, und der Befund `DAEMON_014` nennt genau diesen Aufruf zum Kopieren;
 findet `systemctl` den Bus der Sitzung nicht, ist es `DAEMON_010`. Danach
 gehen:

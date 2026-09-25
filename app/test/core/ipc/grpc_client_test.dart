@@ -8,6 +8,9 @@ import 'package:grpc/grpc.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/daemon_client.dart';
 import 'package:humanitl/core/ipc/generated/humanitl/v1/humanitl.pb.dart' as pb;
+import 'package:humanitl/core/ipc/generated/humanitl/v1/humanitl.pbgrpc.dart'
+    as pbgrpc;
+import 'package:protobuf/well_known_types/google/protobuf/empty.pb.dart';
 import 'package:humanitl/core/ipc/client_diagnostics.dart';
 import 'package:humanitl/core/ipc/grpc_daemon_client.dart';
 
@@ -21,6 +24,21 @@ Diagnostic translate(GrpcError error) =>
 /// Standard-Alphabet ohne Padding.
 String tonicTrailer(pb.Diagnostic diagnostic) =>
     base64.encode(diagnostic.writeToBuffer()).replaceAll('=', '');
+
+/// Ein Daemon, der nur `GetInfo` kennt (HUM-164).
+class InfoOnly extends pbgrpc.HumanitlServiceBase {
+  /// Die Fassung, die er meldet.
+  static const String version = 'hum164-woken';
+
+  @override
+  Future<pb.Info> getInfo(ServiceCall call, Empty request) async =>
+      pb.Info()..daemonVersion = version;
+
+  // Die übrigen Methoden der Schnittstelle ruft dieser Test nie.
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('${invocation.memberName}');
+}
 
 void main() {
   group('grpc_client_translates_status', () {
@@ -142,7 +160,13 @@ void main() {
         throwsA(
           isA<DaemonException>()
               .having((e) => e.code, 'code', DiagnosticCodes.daemonUnreachable)
-              .having((e) => e.diagnostic.why, 'why', contains('/token')),
+              .having((e) => e.diagnostic.why, 'why', contains('/token'))
+              // Ohne Socket gibt es nichts zu wecken (HUM-164).
+              .having(
+                (e) => e.diagnostic.why,
+                'why',
+                contains('nothing listens on'),
+              ),
         ),
       );
     });
@@ -194,6 +218,113 @@ void main() {
           ),
         ),
       );
+    });
+
+    // HUM-164: Hinter `humanitld.socket` läuft noch kein Daemon, und es gibt
+    // kein Token. Der Client öffnet den Socket trotzdem; erst diese
+    // Verbindung weckt den „Daemon", der dann den Socket übernimmt und sein
+    // Token schreibt. Ohne Weckruf käme keine Verbindung an, und der Aufruf
+    // endete mit DAEMON_001.
+    test('a socket without a token wakes the daemon, and the call goes '
+        'through', () async {
+      final Directory dir = Directory.systemTemp.createTempSync('hum164-');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      Process.runSync('chmod', <String>['700', dir.path]);
+      final String socketPath = '${dir.path}/daemon.sock';
+      final InternetAddress address = InternetAddress(
+        socketPath,
+        type: InternetAddressType.unix,
+      );
+      final ServerSocket activator = await ServerSocket.bind(address, 0);
+      final Server server = Server.create(services: <Service>[InfoOnly()]);
+      addTearDown(server.shutdown);
+      final List<Socket> held = <Socket>[];
+      addTearDown(() {
+        for (final Socket socket in held) {
+          socket.destroy();
+        }
+      });
+      final Future<void> woken = activator.first.then((Socket first) async {
+        // Wie systemd: Die erste Verbindung startet den Dienst, er übernimmt
+        // den Socket und schreibt danach sein Token, `0600` vor dem Umbenennen.
+        held.add(first);
+        await activator.close();
+        if (File(socketPath).existsSync()) {
+          File(socketPath).deleteSync();
+        }
+        await server.serve(address: address, port: 0);
+        final File staged = File('${dir.path}/token.new')
+          ..writeAsStringSync('secret\n');
+        Process.runSync('chmod', <String>['600', staged.path]);
+        staged.renameSync('${dir.path}/token');
+      });
+      final GrpcDaemonClient client = GrpcDaemonClient(
+        socketPath: socketPath,
+        tokenPath: '${dir.path}/token',
+        callTimeout: const Duration(seconds: 5),
+      );
+      addTearDown(client.close);
+
+      // Ein Fehler wird zum Wert, damit die Erwartung ihn als Abweichung
+      // meldet und nicht als geworfene Ausnahme.
+      final Object answer = await client
+          .getInfo()
+          .timeout(const Duration(seconds: 20))
+          .then<Object>((DaemonInfo info) => info, onError: (Object e) => e);
+      expect(
+        answer,
+        isA<DaemonInfo>().having(
+          (DaemonInfo info) => info.daemonVersion,
+          'daemonVersion',
+          InfoOnly.version,
+        ),
+      );
+      await woken;
+    });
+
+    // Die Frist aus den Fallstricken: Nimmt der Socket an, aber kein Daemon
+    // schreibt je ein Token, endet der Aufruf mit DAEMON_001, statt zu hängen.
+    test('a socket that wakes nobody ends at the deadline', () async {
+      final Directory dir = Directory.systemTemp.createTempSync('hum164-');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      Process.runSync('chmod', <String>['700', dir.path]);
+      final String socketPath = '${dir.path}/daemon.sock';
+      final ServerSocket silent = await ServerSocket.bind(
+        InternetAddress(socketPath, type: InternetAddressType.unix),
+        0,
+      );
+      addTearDown(silent.close);
+      final List<Socket> held = <Socket>[];
+      silent.listen(held.add);
+      addTearDown(() {
+        for (final Socket socket in held) {
+          socket.destroy();
+        }
+      });
+      final GrpcDaemonClient client = GrpcDaemonClient(
+        socketPath: socketPath,
+        tokenPath: '${dir.path}/token',
+        callTimeout: const Duration(seconds: 2),
+        wakeTimeout: const Duration(milliseconds: 300),
+      );
+      addTearDown(client.close);
+
+      await expectLater(
+        client.getInfo().timeout(const Duration(seconds: 5)),
+        throwsA(
+          isA<DaemonException>()
+              .having((e) => e.code, 'code', DiagnosticCodes.daemonUnreachable)
+              .having(
+                (e) => e.diagnostic.why,
+                'why',
+                allOf(
+                  contains('accepted a connection'),
+                  contains('within 300 ms'),
+                ),
+              ),
+        ),
+      );
+      expect(held, hasLength(1), reason: 'exactly one wake-up connection');
     });
 
     test('the fake flag and --socket shape the proposed command', () {

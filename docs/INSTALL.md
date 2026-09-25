@@ -52,13 +52,23 @@ was das Paket als root nicht kann:
 
 ```sh
 systemctl --user daemon-reload
-systemctl --user enable --now humanitld.socket humanitld.service
+systemctl --user enable --now humanitld.socket
 ```
 
-Beide Units, nicht nur der Socket: Ein Client liest das Token des Daemons, bevor er den Socket
-öffnet, und das Token schreibt erst der laufende Daemon. Ein Socket allein weckte den Dienst also
-nie. Die Socket-Unit hält den Pfad `$XDG_RUNTIME_DIR/humanitl/daemon.sock` über jeden Neustart des
-Dienstes hinweg; wer in dieser Zeit verbindet, wartet, statt abzuprallen.
+Nur der Socket, nicht der Dienst (HUM-164): Der Dienst startet erst beim ersten Client, nicht mit
+jeder Sitzung. Findet ein Client, also die Kommandozeile oder die Anwendung, kein Token des Daemons,
+öffnet er den Socket trotzdem einmal; diese Verbindung lässt systemd den Dienst starten, und der
+Client wartet höchstens zehn Sekunden auf das Token, das der Dienst beim Start schreibt. Kommt es
+in dieser Frist nicht, endet er mit `DAEMON_001` und verweist auf `humanitl daemon logs`, statt zu
+hängen. Das Token kommt nie über den Socket, es bleibt eine Datei mit `0600`. Die Socket-Unit hält
+den Pfad `$XDG_RUNTIME_DIR/humanitl/daemon.sock` über jeden Neustart des Dienstes hinweg; wer in
+dieser Zeit verbindet, wartet, statt abzuprallen. Wer den Dienst trotzdem mit der Sitzung starten
+will, ruft zusätzlich `systemctl --user enable humanitld.service`.
+
+Wer schon vor dieser Änderung `humanitl daemon install` aufgerufen hat, hat den Dienst noch selbst
+aktiviert; ein neuer Aufruf nimmt diesen Verweis nicht weg, und der Dienst startet weiter mit der
+Sitzung. Das schadet nicht. Wer ihn erst beim ersten Client starten lassen will, ruft einmal
+`systemctl --user disable humanitld.service`; der Socket bleibt aktiv.
 
 Wer eine Einstellung der Unit ändern will, kopiert sie nicht, sondern legt eine Ergänzung an:
 `systemctl --user edit humanitld.service`. Eine Kopie unter `~/.config/systemd/user/` verdeckte
@@ -76,7 +86,8 @@ erste Zeile rührt er nicht an und bricht mit `DAEMON_005` ab: Sie gehört dann 
 wer sie nicht mehr braucht, räumt sie selbst weg oder überführt seine Änderungen in
 `systemctl --user edit`.
 
-Entfernen: `humanitl daemon uninstall` (meldet Socket und Dienst ab, dasselbe wie
+Entfernen: `humanitl daemon uninstall` (meldet Socket und Dienst ab, auch einen Dienst, den ein
+früherer `daemon install` mit aktiviert hat, dasselbe wie
 `systemctl --user disable --now humanitld.socket humanitld.service`), dann
 `sudo apt remove --purge humanitl`. Konfiguration, Aufzeichnung und Audit-Log unter
 `~/.config/humanitl` und `~/.local/share/humanitl` bleiben liegen; sie gehören dem Menschen, nicht
