@@ -128,6 +128,13 @@ Datei ab. `severity` ist `info`, `warning` (Vorgabe), `error` oder `blocking`.
 **nicht** gerafft — eine Frist ist Wanduhrzeit, unabhängig vom Abspieltempo.
 Wer auch sie raffen will, gibt zusätzlich `--scale-timeouts` an.
 
+`--pause-at T_MS` ist für Tests, die auf Zustände warten statt auf die Uhr
+(HUM-185). Erreicht der Abspieler die Stelle, spielt er nichts weiter, bis der
+Prozess ein `SIGUSR1` bekommt; alles danach rückt um die Wartezeit nach hinten,
+die Abstände bleiben. Ein Signal, das vor dem Haltepunkt kommt, wird gezählt
+und lässt den Abspieler dort ohne Pause durch. `app/integration_test/queue_freeze_test.dart`
+hält die npm-Sitzung so vor der zwölften und der dreizehnten Anfrage an.
+
 `--loop` startet die Datei nach dem Ende neu. Die Flow-Ids behalten dabei ihren
 zufälligen Teil, bekommen aber den Zeitstempel des neuen Durchlaufs: sie
 bleiben wiedererkennbar und sortieren weiterhin nach Zeit.
@@ -140,6 +147,7 @@ bleiben wiedererkennbar und sortieren weiterhin nach Zeit.
 | `--speed <N>` | `1` | teilt alle `t_ms` durch `N`; eine endliche Zahl über null |
 | `--loop` | aus | Datei nach dem Ende neu starten |
 | `--scale-timeouts` | aus | auch die Wartezeiten mit `--speed` raffen |
+| `--pause-at <T_MS>` | keine | hält den Abspieler vor dieser Stelle der Datei an (`t_ms`, vor dem Zeitraffer), bis ein `SIGUSR1` kommt; mehrfach möglich, ein Signal je Haltepunkt, nur im ersten Durchlauf |
 | `--hold-timeout-secs <N>` | `300` | Wartezeit für `hold`-Zeilen ohne eigenen Wert |
 | `--event-buffer <N>` | `1024` | Kapazität des Rundfunks, mindestens 1; darüber gibt es `Lagged` |
 | `--socket <PATH>` | XDG | abweichender Socket; die Token-Datei liegt daneben |
