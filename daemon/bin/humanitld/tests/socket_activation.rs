@@ -460,3 +460,128 @@ fn the_fake_refuses_a_valid_handover() {
         "no token for a fake that never served"
     );
 }
+
+/// Die Kommandozeile neben diesem Daemon, wenn sie gebaut ist.
+///
+/// `cargo test --workspace` (`make rust-test`) baut jedes Binary des
+/// Arbeitsbereichs, bevor ein Test läuft; `cargo test -p humanitld` allein
+/// baut `humanitl` nicht.
+fn sibling_cli() -> Option<PathBuf> {
+    let cli = Path::new(env!("CARGO_BIN_EXE_humanitld")).with_file_name("humanitl");
+    cli.is_file().then_some(cli)
+}
+
+/// Führt `humanitl daemon status` in der Umgebung von `tree` aus, mit leerem
+/// `PATH`: Kein `systemctl` der echten Sitzung wird erreicht.
+fn daemon_status(tree: &Tree, cli: &Path) -> std::process::Output {
+    let mut command = Command::new(cli);
+    command
+        .args(["daemon", "status"])
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in tree.env() {
+        if key != "PATH" {
+            command.env(key, value);
+        }
+    }
+    command.env("PATH", "");
+    let mut child = command.spawn().expect("humanitl starts");
+    let ended = wait_until(Duration::from_secs(30), || {
+        child.try_wait().expect("the cli is waitable").is_some()
+    });
+    if !ended {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("humanitl daemon status hung; log:\n{}", tree.log());
+    }
+    child.wait_with_output().expect("the output")
+}
+
+/// Ein Socket hinter `systemd-socket-activate`, hinter dem noch kein Daemon
+/// läuft und kein Token liegt (HUM-164). `None`, wenn es
+/// `systemd-socket-activate` hier nicht gibt.
+fn sleeping_socket(test: &str) -> Option<(Tree, Child)> {
+    let tree = Tree::new();
+    let Some(child) = tree.activate(&tree.socket()) else {
+        eprintln!(
+            "SKIP {test}: no systemd-socket-activate in PATH, so the wake-up was not measured"
+        );
+        return None;
+    };
+    assert!(
+        wait_until(Duration::from_secs(10), || tree.socket().exists()),
+        "systemd-socket-activate never bound {}",
+        tree.socket().display()
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !tree.token().exists(),
+        "the daemon runs before any client connected; log:\n{}",
+        tree.log()
+    );
+    Some((tree, child))
+}
+
+/// HUM-164: Ohne laufenden Daemon und ohne Token öffnet
+/// `humanitl_ipc::client::connect` den Socket trotzdem, weckt damit den
+/// Daemon und wartet auf sein Token; danach antwortet `GetInfo`.
+///
+/// Ohne den Weckruf läse der Client nur das fehlende Token und endete mit
+/// `DAEMON_001`, und der Daemon startete nie.
+#[tokio::test]
+async fn a_client_without_a_token_wakes_the_socket() {
+    let Some((tree, mut child)) = sleeping_socket("a_client_without_a_token_wakes_the_socket")
+    else {
+        return;
+    };
+    let paths = humanitl_config::Paths::new(humanitl_config::Env::from_pairs([(
+        "XDG_RUNTIME_DIR",
+        path_text(&tree.path("run")),
+    )]));
+    let connected = client::connect(&paths).await;
+    let mut grpc = match connected {
+        Ok(grpc) => grpc,
+        Err(diagnostic) => {
+            let _ = terminate(&mut child);
+            panic!("the client did not wake the daemon: {}", diagnostic.why);
+        }
+    };
+    let info = grpc.get_info(()).await.expect("GetInfo").into_inner();
+    assert_eq!(info.proto_major, humanitl_ipc::PROTO_MAJOR);
+
+    drop(grpc);
+    let status = terminate(&mut child);
+    assert!(status.success(), "{status}; log:\n{}", tree.log());
+}
+
+/// Das Akzeptanzkriterium von HUM-164 wörtlich: Unter
+/// `systemd-socket-activate` ohne laufenden Daemon endet `humanitl daemon
+/// status` mit 0, ohne dass der Test vorher selbst verbindet.
+#[test]
+fn daemon_status_wakes_the_socket_and_ends_with_0() {
+    let Some(cli) = sibling_cli() else {
+        eprintln!(
+            "SKIP daemon_status_wakes_the_socket_and_ends_with_0: humanitl is not built next \
+             to humanitld; cargo test --workspace builds it"
+        );
+        return;
+    };
+    let Some((tree, mut child)) = sleeping_socket("daemon_status_wakes_the_socket_and_ends_with_0")
+    else {
+        return;
+    };
+    let output = daemon_status(&tree, &cli);
+    let status = terminate(&mut child);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "humanitl daemon status against a sleeping socket; stderr:\n{}\nlog:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+        tree.log()
+    );
+    let table = String::from_utf8_lossy(&output.stdout);
+    assert!(table.contains("daemon"), "{table}");
+    assert!(status.success(), "{status}; log:\n{}", tree.log());
+}

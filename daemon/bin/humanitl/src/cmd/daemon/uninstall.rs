@@ -75,8 +75,10 @@ pub(super) async fn uninstall(ctx: &Context, args: &UninstallArgs) -> Result<u8,
         }
     };
     let packaged = unit::SystemUnits::find(&unit::system_unit_dir(&ctx.env));
+    // Beim Paket beide Units, nicht nur den Socket, den `daemon install` seit
+    // HUM-164 aktiviert: Ein früherer Lauf hat auch den Dienst aktiviert.
     let names: Vec<&str> = match (packaged.as_ref(), own) {
-        (Some(units), _) => units.names(),
+        (Some(units), _) => units.all_names(),
         (None, true) => vec![unit::UNIT_NAME],
         (None, false) => Vec::new(),
     };

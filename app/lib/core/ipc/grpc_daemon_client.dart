@@ -45,6 +45,7 @@ class GrpcDaemonClient implements DaemonClient {
     required this.tokenPath,
     ClientChannel? channel,
     this.callTimeout = const Duration(seconds: 5),
+    this.wakeTimeout = defaultWakeTimeout,
     this.fake = false,
     this.socketFlag = false,
     this.runtimeFallback = false,
@@ -75,6 +76,17 @@ class GrpcDaemonClient implements DaemonClient {
 
   /// Deadline of a unary call. Streams have none.
   final Duration callTimeout;
+
+  /// Wie lange der Client auf das Token wartet, nachdem er den Socket zum
+  /// Wecken des Daemons geöffnet hat (HUM-164).
+  final Duration wakeTimeout;
+
+  /// Der Vorgabewert von [wakeTimeout], derselbe wie
+  /// `humanitl_ipc::client::WAKE_TIMEOUT`: Beim ersten Start legt der Daemon
+  /// noch seine CA an, und auf einem ausgelasteten Rechner dauert das mehr
+  /// als einen Augenblick. Ohne Frist hinge die Anwendung an einem Socket,
+  /// hinter dem kein Daemon mehr startet.
+  static const Duration defaultWakeTimeout = Duration(seconds: 10);
 
   /// Deadline of `ProbeLlm`.
   ///
@@ -666,36 +678,112 @@ class GrpcDaemonClient implements DaemonClient {
   /// The token file is written by the daemon at start and removed at exit;
   /// an unreadable file therefore means "no daemon", not "bad token".
   ///
+  /// Fehlt nur das Token, öffnet [_wakeAndAwait] den Socket einmal und
+  /// wartet darauf (HUM-164).
+  Future<String> _readToken() async {
+    return switch (_tokenState()) {
+      _TokenReady(:final String token) => token,
+      _TokenFailed(:final Diagnostic diagnostic) => throw DaemonException(
+        diagnostic,
+      ),
+      _TokenAbsent(:final String detail) => _wakeAndAwait(detail),
+    };
+  }
+
+  /// Prüft und liest das Token.
+  ///
   /// Before it is read, the directory that holds it and the file itself must
   /// pass [privatePathProblem]: no symlink, owned by this account, closed to
   /// group and others (HUM-212). With the directory checked nobody else can
   /// have put the socket beside it either.
-  Future<String> _readToken() async {
+  _TokenState _tokenState() {
     final int slash = tokenPath.lastIndexOf('/');
     final String dir = slash < 0
         ? '.'
         : (slash == 0 ? '/' : tokenPath.substring(0, slash));
-    final PrivatePathProblem? problem =
-        privatePathProblem(dir, PrivateEntry.directory, uid: _uid) ??
-        privatePathProblem(tokenPath, PrivateEntry.file, uid: _uid);
-    if (problem != null) {
+    final PrivatePathProblem? dirProblem = privatePathProblem(
+      dir,
+      PrivateEntry.directory,
+      uid: _uid,
+    );
+    if (dirProblem != null) {
+      return _TokenFailed(_refusal(dirProblem));
+    }
+    final PrivatePathProblem? fileProblem = privatePathProblem(
+      tokenPath,
+      PrivateEntry.file,
+      uid: _uid,
+    );
+    if (fileProblem != null) {
+      return fileProblem.missing
+          ? _TokenAbsent(fileProblem.why)
+          : _TokenFailed(_refusal(fileProblem));
+    }
+    try {
+      final String token = File(tokenPath).readAsStringSync().trim();
+      // Der Daemon legt die Datei erst an und beschreibt sie danach
+      // (`auth::write_token`): Eine leere Datei ist ein Token unterwegs.
+      return token.isEmpty
+          ? _TokenAbsent('token file $tokenPath is empty')
+          : _TokenReady(token);
+    } on IOException catch (error) {
+      return _TokenFailed(_unreachable('cannot read $tokenPath: $error'));
+    }
+  }
+
+  Diagnostic _refusal(PrivatePathProblem problem) => problem.missing
+      ? _unreachable(problem.why)
+      : ClientDiagnostics.runtimeUntrusted(problem, fallback: runtimeFallback);
+
+  /// Öffnet den Socket einmal und wartet höchstens [wakeTimeout] auf das
+  /// Token (HUM-164), Spiegel von `humanitl_ipc::client::token_or_wake`.
+  ///
+  /// Hinter `humanitld.socket` startet systemd den Daemon erst, wenn der
+  /// erste Client verbindet, und das Token schreibt erst der laufende Daemon.
+  /// Ohne diese Verbindung fände kein Client je ein Token, und der Daemon
+  /// startete nie. Die Verbindung bleibt offen, bis das Token da ist oder die
+  /// Frist abläuft. Lauscht niemand auf dem Socket, kommt der Befund sofort,
+  /// ohne zu warten. Das Token selbst kommt nie über den Socket, es bleibt
+  /// eine Datei mit `0600`.
+  Future<String> _wakeAndAwait(String absent) async {
+    final Socket wake;
+    try {
+      wake = await Socket.connect(
+        InternetAddress(socketPath, type: InternetAddressType.unix),
+        0,
+        timeout: callTimeout,
+      );
+    } on SocketException catch (error) {
       throw DaemonException(
-        problem.missing
-            ? _unreachable(problem.why)
-            : ClientDiagnostics.runtimeUntrusted(
-                problem,
-                fallback: runtimeFallback,
-              ),
+        _unreachable(
+          '$absent; nothing listens on $socketPath either '
+          '(${error.osError?.message ?? error.message})',
+        ),
       );
     }
     try {
-      final String token = (await File(tokenPath).readAsString()).trim();
-      if (token.isEmpty) {
-        throw DaemonException(_unreachable('token file $tokenPath is empty'));
+      final Stopwatch waited = Stopwatch()..start();
+      while (true) {
+        await Future<void>.delayed(_wakePause);
+        switch (_tokenState()) {
+          case _TokenReady(:final String token):
+            return token;
+          case _TokenFailed(:final Diagnostic diagnostic):
+            throw DaemonException(diagnostic);
+          case _TokenAbsent():
+            if (waited.elapsed >= wakeTimeout) {
+              throw DaemonException(
+                _unreachable(
+                  '$socketPath accepted a connection, but no daemon wrote '
+                  'the session token $tokenPath within '
+                  '${wakeTimeout.inMilliseconds} ms',
+                ),
+              );
+            }
+        }
       }
-      return token;
-    } on IOException catch (error) {
-      throw DaemonException(_unreachable('cannot read $tokenPath: $error'));
+    } finally {
+      wake.destroy();
     }
   }
 
@@ -724,6 +812,37 @@ class GrpcDaemonClient implements DaemonClient {
     return out.toString();
   }
 }
+
+/// Wie es um das Token steht, aus [GrpcDaemonClient._tokenState].
+sealed class _TokenState {
+  const _TokenState();
+}
+
+/// Geprüft und gelesen.
+final class _TokenReady extends _TokenState {
+  const _TokenReady(this.token);
+
+  final String token;
+}
+
+/// Das Laufzeitverzeichnis ist geprüft, das Token fehlt aber oder ist noch
+/// leer: Ein Weckruf über den Socket kann das ändern.
+final class _TokenAbsent extends _TokenState {
+  const _TokenAbsent(this.detail);
+
+  final String detail;
+}
+
+/// Alles andere, auch ein fehlendes Laufzeitverzeichnis: Darin liegt kein
+/// Socket, den ein Weckruf erreichte.
+final class _TokenFailed extends _TokenState {
+  const _TokenFailed(this.diagnostic);
+
+  final Diagnostic diagnostic;
+}
+
+/// Der Abstand zweier Blicke auf das Token während des Wartens (HUM-164).
+const Duration _wakePause = Duration(milliseconds: 50);
 
 /// Translates a failed call into a [Diagnostic].
 ///

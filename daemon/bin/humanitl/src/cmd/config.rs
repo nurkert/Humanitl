@@ -1005,13 +1005,33 @@ fn to_toml(field: &schema::Field, value: &Value) -> Result<Option<toml::Value>, 
     })
 }
 
+/// Wie lange [`reach`] auf die Antwort eines laufenden Daemons wartet.
+const REACH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// Der Satz, der sagt, wann der neue Wert wirkt.
 ///
 /// Beide Fälle sind richtig, und genau deshalb muss die Ausgabe sagen, welcher
 /// vorliegt: Wer den Daemon laufen hat, wartet auf den nächsten Start; wer
 /// keinen hat, hat die Datei trotzdem geschrieben.
+///
+/// Gefragt wird ohne Weckruf (HUM-164): Ein Daemon, den erst diese Frage
+/// hinter `humanitld.socket` startete, läse den neuen Wert schon, und der
+/// Satz vom nächsten Start wäre falsch.
+///
+/// Erst ein beantwortetes `GetInfo` gilt als laufender Daemon, nicht schon die
+/// Verbindung: Ein Token, das nach einem Absturz liegen blieb, weckt über den
+/// Socket den Dienst, und der weist das alte Token ab. Die Frage hat eine
+/// Frist ([`REACH_TIMEOUT`]); wer den Socket hält und schweigt, ist kein
+/// laufender Daemon.
 async fn reach(ctx: &Context, file: &Path) -> String {
-    if ctx.connect().await.is_ok() {
+    let answered = async {
+        let mut client = ctx.connect_running().await.ok()?;
+        client.get_info(()).await.ok()
+    };
+    if matches!(
+        tokio::time::timeout(REACH_TIMEOUT, answered).await,
+        Ok(Some(_))
+    ) {
         format!(
             "{} carries the value; the running daemon takes it at its next start",
             file.display()
