@@ -130,6 +130,11 @@ flutter-test-daemon: flutter-codegen ## Sandbox and audit screens against a real
 # starten Prozesse. Wer sie faehrt, prueft damit die Naht, die kein
 # Widget-Test sieht -- was die Oberflaeche zeigt, wenn ein echter Dienst
 # antwortet (HUM-029, HUM-097).
+
+# Wohin `flutter-test-integration` Testausgabe und Daemon-Log legt; der Job
+# `e2e-xvfb` laedt `target/e2e` als Artefakt hoch (HUM-185).
+INTEGRATION_LOGS := $(CURDIR)/target/e2e/integration
+
 flutter-test-integration: flutter-codegen ## The app on a screen, against a real daemon (HUM-097)
 	@test -x daemon/target/debug/humanitld || { echo "daemon/target/debug/humanitld missing: cargo build --manifest-path daemon/Cargo.toml" >&2; exit 1; }
 	@test -n "$$DISPLAY" || { echo "no DISPLAY: start one with 'Xvfb :99 -screen 0 1600x1000x24 &' and export DISPLAY=:99" >&2; exit 1; }
@@ -142,7 +147,15 @@ flutter-test-integration: flutter-codegen ## The app on a screen, against a real
 	@# verlangt Daemon, Agent und drei Dateipfade in der Umgebung; ohne sie
 	@# stirbt er sofort mit "HUMANITL_E2E_HAR is not set". Sein Gate ist der Job
 	@# `e2e-xvfb`, der `run.sh` faehrt. Uebersprungen wird laut, nicht still.
-	cd app && for file in integration_test/*_test.dart; do \
+	@#
+	@# Jede Datei schreibt ihre Ausgabe zusaetzlich nach
+	@# `target/e2e/integration/<datei>.log`, und `queue_freeze_test.dart` legt
+	@# das Log seines Daemons daneben (`HUMANITL_INTEGRATION_LOGS`). Der Job
+	@# `e2e-xvfb` laedt `target/e2e` als Artefakt hoch, auch nach einem roten
+	@# Schritt; sein eigenes Log ist ohne Admin-Rechte nicht lesbar (HUM-185).
+	rm -rf "$(INTEGRATION_LOGS)" && mkdir -p "$(INTEGRATION_LOGS)"
+	cd app && export HUMANITL_INTEGRATION_LOGS="$(INTEGRATION_LOGS)" && \
+	for file in integration_test/*_test.dart; do \
 		case "$$file" in \
 		*/m2_first_decision_test.dart) \
 			if [ -z "$$HUMANITL_E2E_HAR" ]; then \
@@ -151,7 +164,13 @@ flutter-test-integration: flutter-codegen ## The app on a screen, against a real
 			fi ;; \
 		esac; \
 		echo "== $$file"; \
-		flutter test "$$file" -d linux || exit 1; \
+		log="$$HUMANITL_INTEGRATION_LOGS/$$(basename "$$file" .dart).log"; \
+		flutter test "$$file" -d linux 2>&1 | tee "$$log"; \
+		status=$${PIPESTATUS[0]}; \
+		if [ "$$status" -ne 0 ]; then \
+			echo "== $$file failed with $$status; output in $$log, logs in $$HUMANITL_INTEGRATION_LOGS" >&2; \
+			exit "$$status"; \
+		fi; \
 	done
 
 # flutter-analyze and flutter-test depend on this: app/lib/core/ipc/generated/

@@ -644,7 +644,10 @@ jobs:
           name: e2e-artifacts
           # The daemon log, the access log of the target, what the agent got
           # back for every request, the log of the screen driver, the HAR
-          # export and, after a failure, the picture of the screen.
+          # export and, after a failure, the picture of the screen. Under
+          # target/e2e/integration the step "The app on a screen against a
+          # real daemon" leaves the output of every test file and the log of
+          # its fake daemon (HUM-185): the job log itself needs admin rights.
           path: target/e2e
           if-no-files-found: ignore
 
