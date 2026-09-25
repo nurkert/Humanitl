@@ -519,6 +519,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use std::collections::HashMap;
+    use std::io;
     use std::path::Path;
 
     use std::os::fd::{AsRawFd as _, IntoRawFd as _, OwnedFd, RawFd};
@@ -644,24 +645,113 @@ mod tests {
         assert!(is_open(raw), "the refused descriptor is not closed");
     }
 
+    /// Führt `body` auf einem eigenen Faden aus, dessen Deskriptor-Tabelle
+    /// privat ist (`close_range(2)` mit `CLOSE_RANGE_UNSHARE`), und lässt
+    /// dort eine eigene Ein-Faden-`tokio`-Laufzeit über `body` laufen.
+    ///
+    /// Die Test-Harness ist mehrfädig; andere Tests desselben Binaries öffnen
+    /// und schließen Deskriptoren parallel. `is_open(raw)` für „geschlossen“
+    /// ist deshalb ein Wettlauf: Schließt die Übernahme die übergebene
+    /// Nummer, kann ein paralleler Test dieselbe Nummer im selben Moment neu
+    /// vergeben bekommen, und `is_open` sähe dann einen fremden Deskriptor
+    /// statt eines geschlossenen. Gemessen in HUM-233 an
+    /// `a_listening_socket_is_adopted_and_the_passed_number_closed`, CI-Lauf
+    /// 36137925763. Für „offen geblieben“ reicht die Prüfung im eigenen
+    /// Faden, weil dort kein `close` denselben Wettlauf öffnet; diese
+    /// Funktion schützt nur den einen Test, der „geschlossen“ prüft. Das
+    /// Muster stammt aus `daemon/bin/humanitl-shim/src/channel.rs`
+    /// (`in_private_descriptor_table`, HUM-224); anders als dort wird die
+    /// Kopie der Tabelle hier nicht geleert (kein `close_range` über einen
+    /// echten Bereich): `tokio` hält einen Deskriptor für seine
+    /// Prozesssignale prozessweit in einer globalen Registry (`OnceLock` in
+    /// `tokio::runtime::signal::registry`, ein `UnixStream`-Paar), den ein
+    /// anderer, schon gelaufener Test dieses Binaries angelegt haben kann
+    /// (etwa `the_signal_bars_a_new_sandbox_before_the_farewell_task_runs`);
+    /// leerte dieser Faden seine Kopie, verlöre `enable_all()` beim Bau der
+    /// eigenen Laufzeit genau diesen Deskriptor und scheiterte mit `EBADF`.
+    /// Ein Bereich, der nichts Offenes trifft (`u32::MAX..=u32::MAX`), löst
+    /// trotzdem das `CLOSE_RANGE_UNSHARE`: Der Kern verlangt nur einen
+    /// gültigen Bereich, keinen, der etwas Offenes enthält.
+    ///
+    /// Umgekehrt reicht das Nicht-Leeren allein nicht: Läuft dieser Test als
+    /// erster Runtime-Bau des Prozesses (etwa mit einem Testfilter, der ihn
+    /// isoliert, oder bei anderer Reihenfolge), legt ohne ein Aufwärmen vorher
+    /// niemand die globale Registry an, bevor `close_range` läuft. `body`s
+    /// eigenes `enable_all()` liefe dann erst *nach* `close_range`, also in
+    /// der schon privaten Tabelle dieses Fadens — das `UnixStream`-Paar
+    /// entstünde dort und stürbe mit dem Faden, sobald er endet. Jede
+    /// spätere Laufzeit oder jeder Signal-Handler im geteilten Rest des
+    /// Prozesses träfe dann auf `EBADF` oder eine inzwischen fremd vergebene
+    /// Nummer. Deshalb baut die aufrufende Seite vor `close_range` eine
+    /// Wegwerf-Laufzeit und verwirft sie sofort wieder: Sie legt die globale
+    /// Registry, falls nötig, in der noch geteilten Tabelle an, bevor der
+    /// private Faden entsteht, und lebt dort fort, unberührt vom
+    /// `close_range` des privaten Fadens.
+    fn in_private_descriptor_table<F>(body: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        // Wegwerf-Laufzeit in der geteilten Tabelle: legt `tokio`s globale
+        // Signal-Registry an, falls noch kein Test dieses Binaries sie schon
+        // hat. Ohne dieses Aufwärmen könnte `body`s eigene Laufzeit sie in
+        // der privaten Tabelle anlegen, die mit dem Faden gleich wieder
+        // verschwindet (siehe Doc-Kommentar oben).
+        drop(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a throwaway runtime to warm up tokio's signal globals"),
+        );
+        let outcome = std::thread::spawn(move || {
+            let no_open_descriptor_here: libc::c_uint = libc::c_uint::MAX;
+            #[allow(unsafe_code)]
+            // SAFETY: close_range nimmt drei Ganzzahlen; der Bereich trifft
+            // keinen offenen Deskriptor, unshare macht die Kopie trotzdem
+            // privat, und sie ist die frische Kopie dieses Fadens, die sonst
+            // niemand nutzt.
+            let rc = unsafe {
+                libc::syscall(
+                    libc::SYS_close_range,
+                    no_open_descriptor_here,
+                    libc::c_uint::MAX,
+                    libc::CLOSE_RANGE_UNSHARE,
+                )
+            };
+            assert_eq!(rc, 0, "close_range: {}", io::Error::last_os_error());
+            body();
+        })
+        .join();
+        if let Err(panic) = outcome {
+            std::panic::resume_unwind(panic);
+        }
+    }
+
     /// Ein lauschender Socket am richtigen Pfad wird übernommen, und erst dann
     /// geht die übergebene Nummer zu.
-    #[tokio::test]
-    async fn a_listening_socket_is_adopted_and_the_passed_number_closed() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("daemon.sock");
-        // Den Besitz abgeben: Die Nummer gehört ab hier der Übernahme, wie
-        // Deskriptor 3 im Daemon.
-        let raw = std::os::unix::net::UnixListener::bind(&path)
-            .unwrap()
-            .into_raw_fd();
-        let listener = adopt(duplicate(raw).unwrap(), &path).expect("a listening socket");
-        assert!(
-            !is_open(raw),
-            "the passed number is closed after the adoption"
-        );
-        let _client = tokio::net::UnixStream::connect(&path).await.unwrap();
-        let _ = listener.accept().await.unwrap();
+    #[test]
+    fn a_listening_socket_is_adopted_and_the_passed_number_closed() {
+        in_private_descriptor_table(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a current-thread runtime");
+            runtime.block_on(async {
+                let dir = tempfile::tempdir().unwrap();
+                let path = dir.path().join("daemon.sock");
+                // Den Besitz abgeben: Die Nummer gehört ab hier der
+                // Übernahme, wie Deskriptor 3 im Daemon.
+                let raw = std::os::unix::net::UnixListener::bind(&path)
+                    .unwrap()
+                    .into_raw_fd();
+                let listener = adopt(duplicate(raw).unwrap(), &path).expect("a listening socket");
+                assert!(
+                    !is_open(raw),
+                    "the passed number is closed after the adoption"
+                );
+                let _client = tokio::net::UnixStream::connect(&path).await.unwrap();
+                let _ = listener.accept().await.unwrap();
+            });
+        });
     }
 
     /// Ein Unix-Stream-Socket, gebunden an `path`, ohne `listen`.
