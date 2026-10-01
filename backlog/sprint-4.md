@@ -19,6 +19,13 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 > - **Was es spart** (Schätzung, nicht gemessen): der Daemon-Umbau für Live-Neuladen und der Formular-Generator, ungefähr zwei bis drei Arbeitstage.
 
 
+> **Dritte Umfangsentscheidung 2026-10-01: Folgefunde nach 0.1.0.** Der Editor-Kern (HUM-047, HUM-049, HUM-161) ist geliefert. Von den übrigen Einträgen der Tabelle bleibt für M4 und 0.1.0 nur, was ein neuer Nutzer beim ersten Release sieht, was die Sicherheitsaussage betrifft oder was die Definition von M4 verlangt. Der Rest wandert aus der Tabelle nach BACKLOG.md Abschnitt 9, Punkt 19; die Spezifikationen bleiben hier stehen und gelten für die spätere Umsetzung unverändert.
+>
+> - **Bleibt vor 0.1.0:** HUM-069 mit HUM-140 (Einstellungsformular mit Modell-Endpunkt und Schlüssel), HUM-054 (Golden- und Widget-Tests), HUM-055 (Demo M4), HUM-210 und HUM-217 (Befunde des Sicherheitsdurchlaufs, beide als Blocker für M4 geführt), HUM-173 (Absturz beim Rechtsklick in ein Eingabefeld), HUM-188 (`INSTALL.txt` lässt den Socket aktiv), HUM-225 (Release-Notes auf Englisch), HUM-194 (Obergrenze des Audit-Logs in Bytes) und HUM-189 (`DAEMON_001` schlägt beim ersten Kontakt den Vordergrund-Daemon vor).
+> - **Nach 0.1.0 verschoben:** Updates und Installation, die erst ab der zweiten Version zählen: HUM-186, HUM-187, HUM-219, HUM-222, HUM-227, HUM-168. Umbauten ohne Verhaltensänderung: HUM-166, HUM-223. Funktionen und Parität: HUM-169, HUM-170, HUM-172. Kosmetik und Randfälle: HUM-190, HUM-195, HUM-197, HUM-198, HUM-226, HUM-230, HUM-231. Nur Entwicklungsumgebung: HUM-171, HUM-229, HUM-234.
+> - **Was das kostet:** Ein Update des Pakets bietet keinen Neustart des Dienstes an, und ein gescheitertes Update stellt den alten Zustand nicht ganz her (HUM-186, HUM-219); das Paket wird nicht nächtlich auf einem frischen Debian mit systemd-Sitzung geprüft (HUM-187); die Oberfläche ruft `GetConfig` und `GetSessionSummary` nicht auf, und ADR-018 erlaubt dafür eigentlich höchstens einen Sprint Rückstand (HUM-170). HUM-055 prüft nur die Einträge, die in der Tabelle bleiben.
+> - **Was es spart** (Schätzung, nicht gemessen): 21 Einträge mit ihren Review-Runden, ungefähr eine Woche bis zum MVP.
+
 | ID | Titel | Größe | Abhängigkeiten |
 |---|---|---|---|
 | HUM-047 | Pseudonymisierungs-Editor | L | HUM-025, HUM-028, HUM-030 |
@@ -57,18 +64,9 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-163 | Jede Seite der Audit-Tabelle liest die ganze Kette | M | HUM-156 |
 | HUM-164 | Ein Client weckt den Daemon über den Socket nicht | S | HUM-053 |
 | HUM-165 | Der Daemon aus dem AppImage findet Katalog und Sandbox-Profil nicht | S | HUM-053, HUM-070 |
-| HUM-166 | `humanitl_ipc::serve` und `systemd::serve` sind zwei Fassungen desselben Dienstes | S | HUM-053, HUM-156 |
 | HUM-167 | Eine alte Nutzer-Unit verdeckt die Units des Pakets | S | HUM-053 |
-| HUM-168 | Ein Rückfall für Impeller fehlt im Release-Bau | S | HUM-053 |
-| HUM-169 | `flows watch`: der Ereignisstrom auf der Kommandozeile | S | HUM-078 |
-| HUM-170 | `GetConfig` und `GetSessionSummary` haben keinen Ort in der Oberfläche | S | HUM-078 |
-| HUM-171 | Tests lassen ihre Verzeichnisse in `/tmp` liegen | S | — |
 | HUM-185 | Der Bildschirm-Test gegen den echten Daemon fällt in CI zufällig aus | S | HUM-144 |
-| HUM-190 | `AGENT_004` zeigt einen PATH, den der Bildschirm zurückhält | S | HUM-139, HUM-137 |
-| HUM-197 | Im schmalen History-Detail bleibt dem Body weiter kaum Platz | S | HUM-153 |
-| HUM-198 | Die History des Fakes nennt eine Anfragegröße, die ihr Rumpf nicht hat | S | HUM-032 |
 | HUM-194 | Das Audit-Log hat keine Obergrenze in Bytes | S | HUM-157 |
-| HUM-195 | `AuditWarning` nennt im Vertrag nur zwei Arten | S | HUM-157, HUM-160 |
 | HUM-203 | PID 1 der Sandbox trägt keinen Filter und ist für den Agenten beschreibbar | M | — |
 | HUM-204 | Eine Allow-Regel mit Pfad-Glob reicht über `..` aus ihrem Pfad hinaus | M | — |
 | HUM-205 | Jede Änderung einer Regel in der App löscht ihre Pfadpräfixe | M | — |
@@ -86,25 +84,13 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-217 | Unit-Verzeichnis und Rollback nutzen das `XDG_CONFIG_HOME` der CLI, nicht das des systemd-Managers | S | HUM-077 |
 | HUM-218 | Eine Entscheidung aus der Benachrichtigung löscht Notiz, Merk-Entwurf und Findings-Pause eines anderen ausgewählten Flows | S | — |
 | HUM-221 | Die Suche nach LLM-Servern lässt `.0` und `.255` im eigenen Netz aus | S | HUM-076 |
-| HUM-222 | Clients finden das eigene Laufzeitverzeichnis unter dem Heimatverzeichnis nicht von selbst, wenn der `/tmp`-Rückfall fremd ist | S | HUM-212 |
-| HUM-186 | Einrichtung: Versionsabgleich mit „Dienst neu starten" und Fortschritt beim Einrichten | S | HUM-077 |
-| HUM-187 | Nightly: Paket und AppImage auf einem frischen Debian mit systemd-Nutzersitzung | M | HUM-077, HUM-053 |
 | HUM-188 | `INSTALL.txt` im Archiv beschreibt Aktivierung und Entfernen des Pakets veraltet | XS | HUM-053, HUM-077 |
 | HUM-189 | `DAEMON_001` schlägt überall `humanitld` im Vordergrund vor | S | HUM-077 |
-| HUM-219 | Ein gescheitertes Update stellt den Dienst nicht so her, wie er vorher lief | S | HUM-077 |
-| HUM-172 | Die Sprache des Fensters kommt nicht aus `ui.language` | S | HUM-052, HUM-069 |
 | HUM-173 | Das Kontextmenü eines Eingabefelds stürzt ab | S | HUM-035 |
 | HUM-225 | Die Release-Notes der Vorabversionen sind deutsch | S | HUM-053 |
-| HUM-226 | Eine Seite der Audit-Tabelle liest von hinten, solange die Kette heil ist | M | HUM-163 |
-| HUM-223 | `daemon install` ist mit 123 Zeilen eine Funktion zu viel | S | HUM-211 |
 | HUM-224 | Der Kanal-Test des Shims fällt unter Last zufällig aus | S | — |
-| HUM-227 | `humanitl daemon uninstall` löscht Aktivierungsverweise nach Namen | S | HUM-077, HUM-211 |
 | HUM-228 | Der brotli-Test des Parsers wartet auf die Uhr und fällt unter Last aus | S | — |
-| HUM-229 | `xvfb-run make flutter-test-integration` öffnet unter Wayland ein Fenster auf dem echten Bildschirm | XS | HUM-185 |
-| HUM-230 | Verlauf und Tray könnten Anfragen an derselben Lücke verpassen wie die Warteschlange | S | HUM-185 |
-| HUM-231 | Nach dem Entfernen einer Kopfzeile leuchtet und nennt der Editor Ersetzungen an der falschen Zeile | S | HUM-161 |
 | HUM-233 | Der `systemd`-Test auf geschlossene Nummer fällt unter Last zufällig aus | S | — |
-| HUM-234 | Der Socket-Walk des Shims hängt vom Füllstand des Hosts ab | S | — |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -3730,6 +3716,8 @@ Die Kopie ist vollständig: `share/humanitl/catalog/` und `profiles/sandbox/defa
 ## HUM-166 · `humanitl_ipc::serve` und `systemd::serve` sind zwei Fassungen desselben Dienstes
 Sprint: 4 · Größe: S · Abhängigkeiten: HUM-053, HUM-156 · Blockiert: keine
 
+> **Verschoben nach 0.1.0** (dritte Umfangsentscheidung 2026-10-01, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
+
 ### Kontext
 HUM-053 brauchte einen gRPC-Dienst auf einem übergebenen Socket, der die Datei am Ende liegen lässt und nach dem Binden `READY=1` meldet. `humanitl_ipc::serve` bindet selbst und hat dafür keine Naht, und `daemon/crates/ipc/src/server.rs` war zur selben Zeit Arbeitsgebiet von HUM-156. `daemon/bin/humanitld/src/systemd.rs` enthält deshalb eine zweite Fassung von Token, Interceptor, Signal und Frist (`drain`). Zwei Fassungen laufen auseinander.
 
@@ -3770,6 +3758,8 @@ Im Weg des Pakets meldet `daemon install` eine eigene Kopie (erste Zeile ist die
 ## HUM-168 · Ein Rückfall für Impeller fehlt im Release-Bau
 Sprint: 4 · Größe: S · Abhängigkeiten: HUM-053 · Blockiert: keine
 
+> **Verschoben nach 0.1.0** (dritte Umfangsentscheidung 2026-10-01, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
+
 ### Kontext
 HUM-053 verlangt, den Rückfall `--no-enable-impeller` zu dokumentieren. Der Linux-Runner (`app/linux/runner/my_application.cc`) reicht seine Argumente als Dart-Einstiegsargumente weiter, nicht an die Engine, und die Umgebungsvariablen der Engine (`FLUTTER_ENGINE_SWITCHES`) gelten nach ihrem Quelltext nur außerhalb von Release-Bauten. `docs/INSTALL.md` sagt deshalb, dass es heute keinen Rückfall gibt, statt einen Schalter zu nennen, der nichts tut. `DOCTOR_010` erkennt den bekannten schwarzen Bildschirm (NVIDIA unter Wayland) und verweist auf eine Dokumentation, die diesen Weg noch nicht hat. Nicht gemessen in HUM-053.
 
@@ -3788,6 +3778,8 @@ Gemessen, ob der Release-Bau Impeller abschalten kann, und wenn ja wie; der Weg 
 
 ## HUM-171 · Tests lassen ihre Verzeichnisse in `/tmp` liegen
 Sprint: 4 · Größe: S · Abhängigkeiten: — · Blockiert: —
+
+> **Verschoben nach 0.1.0** (dritte Umfangsentscheidung 2026-10-01, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
 
 ### Kontext
 Am 2026-09-19 wurde `tools/verify-commit.sh` über den Merge von HUM-053 rot,
@@ -3852,6 +3844,8 @@ HUM-144; `app/integration_test/`, `.github/workflows/ci.yml` (Job `e2e-xvfb`).
 ## HUM-169 · `flows watch`: der Ereignisstrom auf der Kommandozeile
 Sprint: 4 · Größe: S · Abhängigkeiten: HUM-078 · Blockiert: keine
 
+> **Verschoben nach 0.1.0** (dritte Umfangsentscheidung 2026-10-01, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
+
 ### Kontext
 HUM-078 ordnet jeder RPC ein Unterkommando zu. `Subscribe` hat heute nur `humanitl run --ask terminal` als Client auf der Kommandozeile: die Moderation liest den Strom, zeigt aber nur gehaltene Anfragen. Wer den Strom beobachten will, ohne selbst eine Sitzung zu starten, hat keinen Weg; die Fallstricke von HUM-078 verlangen `flows watch` ausdrücklich.
 
@@ -3893,6 +3887,8 @@ ADR-018; HUM-078; `backlog/CONVENTIONS.md` 4.35.
 ## HUM-170 · `GetConfig` und `GetSessionSummary` haben keinen Ort in der Oberfläche
 Sprint: 4 · Größe: S · Abhängigkeiten: HUM-078 · Blockiert: keine
 
+> **Verschoben nach 0.1.0** (dritte Umfangsentscheidung 2026-10-01, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
+
 ### Kontext
 `cargo xtask docs` warnt seit HUM-078 bei zwei RPCs, die die Oberfläche nicht aufruft: `GetConfig` (die aufgelöste Konfiguration mit Herkunft je Feld) und `GetSessionSummary` (was ein Sandbox-Lauf im Projektverzeichnis hinterlassen hat, HUM-043). ADR-018 gibt der Oberfläche dafür höchstens einen Sprint Rückstand auf die Kommandozeile.
 
@@ -3933,6 +3929,8 @@ ADR-018; HUM-043; HUM-078; `backlog/CONVENTIONS.md` 4.35.
 ## HUM-190 · `AGENT_004` zeigt einen PATH, den der Bildschirm zurückhält
 Sprint: 4 · Größe: S · Abhängigkeiten: HUM-139, HUM-137 · Blockiert: —
 
+> **Verschoben nach 0.1.0** (dritte Umfangsentscheidung 2026-10-01, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
+
 ### Kontext
 Beim Bau von HUM-137 aufgefallen. `AGENT_005` nennt den `PATH` der Sandbox nur, wenn auch die Umgebungstabelle ihn zeigt (`sandbox_path_of` in `daemon/crates/ipc/src/sandbox.rs`, Regel aus `backlog/CONVENTIONS.md` 4.17): Steht er in `sandbox.env` oder in einem eigenen Profil, ersetzt ihn `<withheld>`. `AGENT_004` aus der Vorprüfung (HUM-139, `daemon/crates/sandbox/src/agent/opencode.rs`, `AgentContext::sandbox_path_display`) schreibt denselben Wert ohne diese Prüfung in `why` und in den Vorschlag `ChangeSetting` auf `sandbox.env.PATH`. Zwei Befunde reden über dieselbe Zeile und behandeln sie verschieden; der Bildschirm zeigt einen Wert in der Karte, den er zwei Reiter weiter als zurückgehalten ausweist.
 
@@ -3951,6 +3949,8 @@ HUM-137; HUM-139; `backlog/CONVENTIONS.md` 4.17 und 4.39.
 
 ## HUM-197 · Im schmalen History-Detail bleibt dem Body weiter kaum Platz
 Sprint: 4 · Größe: S · Abhängigkeiten: HUM-153 · Blockiert: nichts; der Body ist erreichbar, nur nicht auf einen Blick
+
+> **Verschoben nach 0.1.0** (dritte Umfangsentscheidung 2026-10-01, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
 
 ### Kontext
 HUM-153 stellt den Rumpf neben Kopf, Tabs und Kopfzeilen, sobald das Detail
@@ -3986,6 +3986,8 @@ HUM-153; `app/lib/features/history/history_detail.dart`, `docs/UX.md` 3.2.
 
 ## HUM-198 · Die History des Fakes nennt eine Anfragegröße, die ihr Rumpf nicht hat
 Sprint: 4 · Größe: S · Abhängigkeiten: HUM-032 · Blockiert: —
+
+> **Verschoben nach 0.1.0** (dritte Umfangsentscheidung 2026-10-01, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
 
 ### Kontext
 Gefunden bei HUM-153. Der Recorder schreibt `request_size` aus der Größe des
@@ -4042,6 +4044,8 @@ HUM-157; `daemon/crates/audit/src/retention.rs` (`find_cut`).
 
 ## HUM-195 · `AuditWarning` nennt im Vertrag nur zwei Arten
 Sprint: 4 · Größe: S · Abhängigkeiten: HUM-157, HUM-160 · Blockiert: —
+
+> **Verschoben nach 0.1.0** (dritte Umfangsentscheidung 2026-10-01, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
 
 ### Kontext
 HUM-157 hat die Warnung `pruned` hinzugefügt. Der Kommentar an
@@ -4577,6 +4581,8 @@ Sicherheitsdurchlauf 2026-09-23, Befund m7; `app/lib/features/intercept/provider
 ## HUM-186 · Einrichtung: Versionsabgleich mit „Dienst neu starten" und Fortschritt beim Einrichten
 Sprint: 4 · Größe: S · Abhängigkeiten: HUM-077 · Blockiert: keine
 
+> **Verschoben nach 0.1.0** (dritte Umfangsentscheidung 2026-10-01, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
+
 ### Kontext
 HUM-077 verlangt drei Dinge in der Oberfläche, die nicht gebaut sind (`backlog/CONVENTIONS.md` 4.38): Die Anwendung vergleicht `GetInfo.daemon_version` mit ihrer eigenen Fassung und bietet bei Abweichung „Dienst neu starten" mit einem Klick an; `InstallService` zeigt die Ausgabe der Kommandozeile als Fortschritt; nach dem Erfolg wird die Karte grün und verschwindet nach 2 s. Der Abgleich ist nach einem Update des Pakets nötig: `apt upgrade` ersetzt `/usr/lib/humanitl/bin/humanitld`, der laufende Dienst bleibt aber der alte, bis sich jemand abmeldet. Beim `AppImage` erledigt das seit HUM-077 `daemon install --refresh`, beim Paket nichts.
 
@@ -4610,6 +4616,8 @@ HUM-077; `backlog/CONVENTIONS.md` 4.34, 4.38; ADR-018.
 
 ## HUM-187 · Nightly: Paket und AppImage auf einem frischen Debian mit systemd-Nutzersitzung
 Sprint: 4 · Größe: M · Abhängigkeiten: HUM-077, HUM-053 · Blockiert: keine
+
+> **Verschoben nach 0.1.0** (dritte Umfangsentscheidung 2026-10-01, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
 
 ### Kontext
 HUM-077 nennt einen nächtlichen Test in einem privilegierten Container mit systemd: `.deb` installieren, Anwendung unter Xvfb starten, einmal klicken, keine Fehlerkarte. Gebaut ist er nicht. `packaging/deb/check-install.sh` prüft das Paket ohne systemd und ruft `daemon install` nur mit `--print` und `--no-start`; `daemon uninstall`, `daemon install --refresh` und `AppRun` sind nur gegen ein `systemctl` gemessen, das Aufrufe protokolliert (`daemon/bin/humanitl/tests/daemon_lifecycle.rs`).
@@ -4671,6 +4679,8 @@ HUM-044, HUM-077; `backlog/CONVENTIONS.md` 4.38.
 
 ## HUM-219 · Ein gescheitertes Update stellt den Dienst nicht so her, wie er vorher lief
 Sprint: 4 · Größe: S · Abhängigkeiten: HUM-077 · Blockiert: —
+
+> **Verschoben nach 0.1.0** (dritte Umfangsentscheidung 2026-10-01, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
 
 ### Kontext
 Aus dem letzten Review von HUM-077 (Ersatzprüfer für Codex, 2026-09-23), zwei
@@ -4734,6 +4744,8 @@ HUM-076 (Suche im lokalen Netz); `daemon/crates/proxy/src/llm_discover.rs`; `dae
 
 ## HUM-172 · Die Sprache des Fensters kommt nicht aus `ui.language`
 Sprint: 4 · Größe: S · Abhängigkeiten: HUM-052, HUM-069 · Blockiert: —
+
+> **Verschoben nach 0.1.0** (dritte Umfangsentscheidung 2026-10-01, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
 
 ### Kontext
 HUM-052 schaltet die Sprache zur Laufzeit um (`languageProvider`, Palette „Sprache wechseln zu …"), und ohne Wahl folgt das Fenster dem Desktop mit Englisch als Rückfall. Die Spezifikation von HUM-052 verlangte darüber hinaus, dass `configProvider.select((c) => c.ui.language)` die Sprache steuert und der erste Start den aus `Platform.localeName` erkannten Wert in die globale Config schreibt. Beides war nicht zu bauen: Dem Client fehlt `GetConfig`, es gibt keinen `configProvider`, und `SetConfig` nimmt bis HUM-069 nur eine Variable unter `sandbox.env` an (`CONFIG_014`). Die Wahl in der Palette gilt deshalb nur bis zum Schließen des Fensters, und ein `ui.language = "de"` in `config.toml` erreicht die Oberfläche nicht, obwohl das Leser-Register des Daemons den Schlüssel als `effective` führt (gelesen wird er nur für die Sandbox).
@@ -4948,6 +4960,8 @@ HUM-053; `.github/workflows/release.yml` (Schritt „Release notes").
 ## HUM-226 · Eine Seite der Audit-Tabelle liest von hinten, solange die Kette heil ist
 Sprint: 4 · Größe: M · Abhängigkeiten: HUM-163 · Blockiert: —
 
+> **Verschoben nach 0.1.0** (dritte Umfangsentscheidung 2026-10-01, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
+
 ### Kontext
 HUM-163 hat eine Seite der Audit-Tabelle über 100 000 Records gemessen: rund 400 ms, solange jede Zeile als JSON gelesen wurde, rund 150 ms, seit jede Zeile nur noch Byte für Byte auf ihre kanonische Form geprüft wird (`daemon/crates/audit/src/query/quick.rs` und `data.rs`, Zahlen unter HUM-163). Die Kosten wachsen weiter linear mit der Datei; bei etwa 130 000 Records liegt eine Seite wieder bei 200 ms. Grund ist, dass die Seite jede Zeile ansehen muss: Ob die Kette heil ist, entscheidet über Gesamtzahl und gemeldetes Ende, und vom Ende aus sieht niemand einen Bruch in der Mitte.
 
@@ -4994,6 +5008,8 @@ HUM-163 (Messung, schneller Weg), HUM-156 (Seiten aus der Datei), HUM-050 (Prüf
 ## HUM-223 · `daemon install` ist mit 123 Zeilen eine Funktion zu viel
 Sprint: 4 · Größe: S · Abhängigkeiten: HUM-211 · Blockiert: —
 
+> **Verschoben nach 0.1.0** (dritte Umfangsentscheidung 2026-10-01, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
+
 ### Kontext
 Im Review von HUM-211 fiel auf, dass `install()` in `daemon/bin/humanitl/src/cmd/daemon.rs` 123 Zeilen hat. Die Grenze des Projekts liegt bei 100 Zeilen je Funktion; diese lag schon vor HUM-211 darüber und bündelt Prüfung, Ankündigung, Kopie aus dem `AppImage`, Schreiben, Aktivierung und Bericht. HUM-211 hat den Weg des Pakets schon nach `cmd/daemon/packaged.rs` ausgelagert; der eigene Weg steht noch in einem Stück.
 
@@ -5038,6 +5054,8 @@ Der Test ist unter Last stabil, und falls der Verdacht stimmt, entsteht das Paar
 ## HUM-227 · `humanitl daemon uninstall` löscht Aktivierungsverweise nach Namen
 Sprint: 4 · Größe: S · Abhängigkeiten: HUM-077, HUM-211 · Blockiert: —
 
+> **Verschoben nach 0.1.0** (dritte Umfangsentscheidung 2026-10-01, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
+
 ### Kontext
 Im Review von HUM-211 fiel auf, dass `daemon uninstall` die Verweise der Aktivierung und die Verweise unter `~/.local/lib/humanitl` per Name entfernt (`daemon/bin/humanitl/src/cmd/daemon/uninstall.rs`, Schleife über `unit::enablement_links` bei Zeile 113 und über die Verweise bei Zeile 338): `std::fs::remove_file(&link)` trifft, was in diesem Augenblick unter dem Namen liegt, auch einen Verweis, der inzwischen woandershin zeigt, oder eine gewöhnliche Datei. HUM-211 hat für `daemon install` dafür `unit::remove_link_if` gebaut: Der Verweis wird mit `renameat2(RENAME_NOREPLACE)` auf einen eigenen Namen gezogen, dort gelesen und nur gelöscht, wenn er auf die erwartete Unit zeigt (`unit::points_at`, auch über einen Verweis im Pfad oder ein relatives Ziel); sonst geht er zurück.
 
@@ -5060,6 +5078,8 @@ Im Review von HUM-211 fiel auf, dass `daemon uninstall` die Verweise der Aktivie
 
 ## HUM-222 · Clients finden das eigene Laufzeitverzeichnis unter dem Heimatverzeichnis nicht von selbst, wenn der `/tmp`-Rückfall fremd ist
 Sprint: 4 · Größe: S · Abhängigkeiten: HUM-212 · Blockiert: —
+
+> **Verschoben nach 0.1.0** (dritte Umfangsentscheidung 2026-10-01, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
 
 ### Kontext
 Seit HUM-212 weisen Daemon, CLI und Oberfläche ein fremdes oder offenes Laufzeitverzeichnis unter `$TMPDIR/humanitl-<uid>` ab. Der Befund schlägt vor, `XDG_RUNTIME_DIR` für die ganze Sitzung auf `~/.cache/humanitl-run` zu setzen, und das gilt erst nach einer neuen Anmeldung. Bis dahin, und für Programme, die die Variable nicht erben, bleibt Humanitl unbenutzbar, solange das fremde Verzeichnis liegt.
@@ -5129,6 +5149,8 @@ HUM-185, HUM-224; Gate-Läufe von HUM-212 und HUM-159 am 2026-09-24.
 ## HUM-229 · `xvfb-run make flutter-test-integration` öffnet unter Wayland ein Fenster auf dem echten Bildschirm
 Sprint: 4 · Größe: XS · Abhängigkeiten: HUM-185 · Blockiert: —
 
+> **Verschoben nach 0.1.0** (dritte Umfangsentscheidung 2026-10-01, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
+
 ### Kontext
 Am 2026-09-25 lief `make flutter-test-integration` unter `xvfb-run` auf einem Rechner mit Wayland-Sitzung. `WAYLAND_DISPLAY` war gesetzt, GTK nimmt Wayland vor X11, und das Fenster der Anwendung ging auf den echten Bildschirm des Nutzers statt auf das Xvfb-Display. Der Makefile-Hinweis „start one with `Xvfb :99 …` and export DISPLAY=:99" führt genau dorthin. In CI gibt es kein Wayland, dort fällt das nicht auf.
 
@@ -5177,6 +5199,8 @@ HUM-185 (Befund beim Lauf vom 2026-09-25); `Makefile` Ziel `flutter-test-integra
 
 ## HUM-230 · Verlauf und Tray könnten Anfragen an derselben Lücke verpassen wie die Warteschlange
 Sprint: 4 · Größe: S · Abhängigkeiten: HUM-185 · Blockiert: —
+
+> **Verschoben nach 0.1.0** (dritte Umfangsentscheidung 2026-10-01, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
 
 ### Kontext
 HUM-185 hat in der Warteschlange (`Flows`, `app/lib/features/intercept/providers/flows.dart`) drei Lücken geschlossen: Ein `Held` für einen Flow, dessen `Received` vor dem Strom lag, fand keine Zeile und die Anfrage fehlte für immer; jetzt löst es einen Abgleich aus. Abgleiche laufen seither einer nach dem anderen. Und was die Warteschlange verlassen hat, ohne dass der Client es je sah, kommt nicht aus einer älteren Seite als Geist zurück. Verlauf und Tray lesen denselben Strom (`core/ipc/flow_events.dart`) und falten ihn selbst; ob sie an denselben Stellen Ereignisse verwerfen, ist nicht geprüft.
@@ -5349,6 +5373,8 @@ HUM-224; CI-Lauf 36137925763, Job `rust-test`; `daemon/bin/humanitl-shim/src/cha
 ## HUM-234 · Der Socket-Walk des Shims hängt vom Füllstand des Hosts ab
 Sprint: 4 · Größe: S · Abhängigkeiten: — · Blockiert: —
 
+> **Verschoben nach 0.1.0** (dritte Umfangsentscheidung 2026-10-01, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
+
 ### Kontext
 Bei der Arbeit an HUM-233 fiel `report::tests::the_socket_walk_finds_a_socket_within_its_bounds` in
 `daemon/bin/humanitl-shim/src/report.rs` lokal mit der Meldung „/tmp/humanitl-shim-walk-….sock" not
@@ -5414,6 +5440,8 @@ HUM-233 (Fund beim Review am 2026-09-25); `daemon/bin/humanitl-shim/src/report.r
 
 ## HUM-231 · Nach dem Entfernen einer Kopfzeile leuchtet und nennt der Editor Ersetzungen an der falschen Zeile
 Sprint: 4 · Größe: S · Abhängigkeiten: HUM-161 · Blockiert: keine
+
+> **Verschoben nach 0.1.0** (dritte Umfangsentscheidung 2026-10-01, siehe Kopf dieser Datei). Die Spezifikation gilt für die spätere Umsetzung unverändert.
 
 ### Kontext
 Aufgefallen bei HUM-161 (2026-09-25). `DraftNotifier.removeHeader` verschiebt seit HUM-161 die Zeilennummern der **Funde** (`_afterRemoval` in `app/lib/features/editor/providers/draft_provider.dart`), nicht aber die der schon angewandten **Ersetzungen**: `Replacement.location.headerIndex` zeigt nach dem Entfernen einer Zeile darüber auf die nächste Zeile oder ins Leere. `DraftLocation.indexIn` fällt dann auf die erste gleichnamige Zeile zurück. Betroffen sind der Diff-Glow und die Mapping-Leiste: Eine Ersetzung in der zweiten von drei `Via` leuchtet danach in der dritten, und das Mapping nennt die falsche Stelle. Was hinausgeht, ändert sich nicht: Der Text der Zeilen ist richtig, und die Pause hängt an den Funden, nicht an den Ersetzungen.
