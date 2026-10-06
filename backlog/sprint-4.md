@@ -4944,9 +4944,9 @@ Die Umstellung des übrigen Projekts auf Englisch (BACKLOG.md Abschnitt 9, Punkt
 - ein Test für das Skript (vorhandenes Testgerüst der Release-Skripte, sonst ein neues neben ihnen)
 
 ### Akzeptanzkriterien
-- [ ] `packaging/release/release-notes.sh 0.0.3 HEAD` gibt nur englische Prosa aus; die Zustände der Meilensteine erscheinen so, wie sie in `README.md` stehen („delivered", „in progress", „planned").
-- [ ] Ein Test prüft Überschriften und einen Satz der Warnung auf Englisch und ist ohne die Änderung rot (Mutationsbeweis).
-- [ ] `make check` grün.
+- [x] `packaging/release/release-notes.sh 0.0.3 HEAD` gibt nur englische Prosa aus; die Zustände der Meilensteine erscheinen so, wie sie in `README.md` stehen („delivered", „in progress", „planned"). Gemessen am 2026-10-06.
+- [x] Ein Test prüft Überschriften und einen Satz der Warnung auf Englisch und ist ohne die Änderung rot (Mutationsbeweis). Gemessen am 2026-10-06: `packaging/release/release-notes-test.sh` (in `make deps-lint`) vergleicht den vollständigen Text der Notes mit dem erwarteten englischen Wortlaut (nur Version und Commit ersetzt), jede Meilenstein-Zeile mit der Tabelle in `README.md` (Beschreibung und Zeilenzahl eingeschlossen), die Überschrift der Commit-Liste bis auf den vorigen Tag, die Liste selbst Zeile für Zeile mit `git log --first-parent` seit dem vorigen Tag (samt Zeile „... and N more“ bei mehr als 300 Commits) und den Titel des Releases in `release.yml`. Der Test braucht die ganze Historie samt Tags (`fetch-depth: 0` im Job `deps-lint` von `ci.yml`) und bricht in einem flachen Klon oder einem Klon ohne `v0.0.*`-Tag mit einer Anweisung ab, statt grün zu werden. Rot mit dem alten Skript (58 Meldungen) und bei Mutationen: deutscher Satz in der Prosa, ein englisches Wort geändert, deutsche Meilenstein-Beschreibung, eine Meilenstein-Zeile fehlt, deutsche Wörter in der Überschrift der Commit-Liste, deutscher Satz nach der Liste, nur die Zeile „... and N more“, eine erfundene Commit-Zeile, falsche Restzahl, falscher vorheriger Tag, unbekannter Zustand in der README, deutscher Titel.
+- [x] `make check` grün. Gemessen am 2026-10-06: `STRICT=1 make check` Exit 0, darin `make deps-lint` mit `release-notes-test.sh`.
 
 ### Fallstricke
 - Kommentare im Skript bleiben deutsch (CLAUDE.md, Sprache), nur die Ausgabe wird englisch.
