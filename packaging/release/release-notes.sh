@@ -3,11 +3,15 @@
 #
 # Aufruf: packaging/release/release-notes.sh <0.0.N> <git-ref>
 #
+# Die Ausgabe ist Englisch (HUM-225): Die Releases lesen Menschen, die kein
+# Deutsch sprechen. Nur diese Kommentare bleiben deutsch.
+#
 # Die Meilensteine kommen aus der Tabelle "Project status and roadmap" in
-# README.md, nicht aus diesem Skript: Was dort als "delivered" steht, steht
-# hier als geliefert, und eine Aenderung der Tabelle aendert die naechsten
-# Notes mit. Die Commit-Liste ist die erste-Eltern-Linie von `main` seit dem
-# vorigen v0.0.*-Tag, also je Issue die eine Merge-Zeile.
+# README.md, nicht aus diesem Skript: Die Zustaende ("delivered", "in
+# progress", "planned") stehen hier so, wie sie dort stehen, und eine
+# Aenderung der Tabelle aendert die naechsten Notes mit. Die Commit-Liste ist
+# die erste-Eltern-Linie von `main` seit dem vorigen v0.0.*-Tag, also je Issue
+# die eine Merge-Zeile.
 #
 # Braucht die ganze Historie samt Tags (`fetch-depth: 0`).
 set -euo pipefail
@@ -45,63 +49,63 @@ for line in text[start:].splitlines()[1:]:
         rows.append(m.groups())
 if not rows:
     sys.exit("error: no milestone rows in the roadmap table of README.md")
-words = {"delivered": "geliefert", "in progress": "in Arbeit", "planned": "geplant"}
 for name, what, status in rows:
     mark = "x" if status == "delivered" else " "
-    print(f"- [{mark}] **{name}** ({words.get(status, status)}): {what}")
+    print(f"- [{mark}] **{name}** ({status}): {what}")
 PY
 )"
 
 cat <<EOF
-> **Vorabversion vor dem MVP. Nicht fuer den produktiven Einsatz.**
-> Humanitl $version ist ein Zwischenstand vor Release 0.1.0. Die Artefakte sind
-> **nicht signiert**; \`SHA256SUMS\` schuetzt vor einem beschaedigten Download,
-> nicht vor einem manipulierten Release. Signierte Pakete, Changelog und
-> AppImage kommen mit 0.1.0 (HUM-060).
+> **Pre-release before the MVP. Not for productive use.**
+> Humanitl $version is an interim state on the way to release 0.1.0. The
+> artefacts are **not signed**; \`SHA256SUMS\` protects against a damaged
+> download, not against a tampered release. Signed packages, a changelog and
+> an AppImage come with 0.1.0 (HUM-060).
 
-Gebaut aus Commit \`$short\` auf \`main\`, nachdem dessen CI-Lauf gruen war.
+Built from commit \`$short\` on \`main\`, after its CI run was green.
 
-## Installieren (amd64)
+## Install (amd64)
 
-Gebaut und im Container geprueft auf Ubuntu 24.04. Neuere Systeme mit
-denselben Bibliotheken (etwa Debian 13) sollten es ebenfalls installieren;
-geprueft ist das nicht.
+Built and checked in a container on Ubuntu 24.04. Newer systems with the same
+libraries (Debian 13, for example) should install it as well; that is not
+checked.
 
 \`\`\`sh
 sha256sum -c SHA256SUMS --ignore-missing
 sudo apt install ./humanitl_${version}_amd64.deb
-systemctl --user enable --now humanitld.service   # startet den Daemon, nur fuer dich
-humanitl sandbox check                             # drei gruene Zeilen?
+humanitl daemon install       # activates the socket of the daemon, for you only
+humanitl daemon status
+humanitl sandbox check        # three green lines?
 humanitl-app
 \`\`\`
 
-Ein frisches Ubuntu 24.04 sperrt unprivilegierte User-Namespaces ueber
-AppArmor; dann meldet die Sandbox \`SANDBOX_003\`, und \`humanitl doctor\` nennt
-die Abhilfe.
+A fresh Ubuntu 24.04 blocks unprivileged user namespaces through AppArmor;
+the sandbox then reports \`SANDBOX_003\`, and \`humanitl doctor\` names the fix.
 
-Das Paket richtet keinen Dienst von selbst ein. Entfernen:
-\`systemctl --user disable --now humanitld.service\`, dann \`sudo apt purge humanitl\`.
-Das Archiv \`humanitl-${version}-linux-x86_64.tar.gz\` laeuft ohne Installation;
-\`INSTALL.txt\` darin beschreibt, wie.
+The package sets nothing up by itself; \`humanitl daemon install\` only
+activates the units it ships. To remove: \`humanitl daemon uninstall\`, then
+\`sudo apt purge humanitl\`. The archive
+\`humanitl-${version}-linux-x86_64.tar.gz\` runs without installation;
+\`INSTALL.txt\` inside it explains how.
 
-## Stand der Meilensteine (aus README.md)
+## Milestone status (from README.md)
 
 $milestones
 
-## Was noch fehlt
+## What is still missing
 
-- Kein AppImage, keine Signatur, keine Man-Pages.
-- Die systemd-Nutzer-Unit \`humanitld.service\` ist weder socket-aktiviert noch
-  gehaertet: Die Schutzzeilen aus HUM-053 (\`ProtectSystem=strict\`,
-  \`ProtectKernel*\`, \`LockPersonality\`, \`MemoryDenyWriteExecute\`,
-  \`SystemCallArchitectures=native\` und weitere) fehlen noch. Beides kommt
-  mit HUM-053, sobald es gegen die Sandbox getestet ist.
-- Getestet ist im Release-Lauf: Bau, Versionsnummer der Programme, Installation
-  und rueckstandsfreies Entfernen des .deb in einem Ubuntu-24.04-Container,
-  ein Start der Anwendung unter Xvfb, lintian. Nicht getestet ist ein Desktop
-  mit echtem Bildschirm.
+- No AppImage in the release assets, no signature, no man pages.
+- The systemd user unit \`humanitld.service\` is hardened as far as the sandbox
+  allows, and the package ships \`humanitld.socket\` for socket activation. Some
+  protections are left out on purpose because the sandbox needs them (see
+  \`docs/INSTALL.md\`, section on hardening); the unit is not as locked down as
+  a service without a sandbox could be.
+- What the release run tests: build, version number of the programs,
+  installation and removal without leftovers of the .deb in an Ubuntu 24.04
+  container, a start of the application under Xvfb, lintian. A desktop with a
+  real screen is not tested.
 
-## Commits seit ${previous:-dem Beginn des Projekts}
+## Commits since ${previous:-the start of the project}
 
 EOF
 
@@ -115,5 +119,5 @@ limit=300
 # shellcheck disable=SC2016 # Die Backticks sind Markdown, keine Ersetzung.
 git -C "$root" log --first-parent --no-decorate --format='- `%h` %s' -n "$limit" "$range"
 if [[ "$count" -gt "$limit" ]]; then
-  echo "- ... und $((count - limit)) weitere"
+  echo "- ... and $((count - limit)) more"
 fi

@@ -412,7 +412,7 @@ jobs:
             --verify-tag \
             --draft \
             --prerelease \
-            --title "Humanitl $VERSION (Vorabversion)" \
+            --title "Humanitl $VERSION (pre-release)" \
             --notes-file ../dist-meta/RELEASE_NOTES.md \
             "humanitl_${VERSION}_amd64.deb" \
             "humanitl-${VERSION}-linux-x86_64.tar.gz" \
