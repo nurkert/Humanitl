@@ -12,18 +12,20 @@ Zum Vergleich: das Paket (.deb)
 ------------------------------
 
     sudo apt install ./humanitl_@VERSION@_amd64.deb
-    systemctl --user enable --now humanitld.service
+    humanitl daemon install
+    humanitl daemon status
     humanitl-app
 
 Entfernen, in dieser Reihenfolge:
 
-    systemctl --user disable --now humanitld.service
+    humanitl daemon uninstall
     sudo apt purge humanitl
 
-Das Paket richtet den Dienst fuer niemanden von selbst ein. Der erste der
-beiden Entfernen-Befehle nimmt den Verweis zurueck, den `enable` im eigenen
-Konfigurationsverzeichnis angelegt hat; das Paket selbst hinterlaesst nach
-`apt purge` keine Datei.
+Das Paket richtet den Dienst fuer niemanden von selbst ein. Der Befehl
+`humanitl daemon install` aktiviert die Socket-Unit des Pakets
+(humanitld.socket); der Daemon startet dann beim ersten Zugriff. Der erste der
+beiden Entfernen-Befehle meldet Socket und Dienst wieder ab; das Paket selbst
+hinterlaesst nach `apt purge` keine Datei.
 
 
 Voraussetzungen fuer dieses Archiv
@@ -50,28 +52,37 @@ Starten
 
 Im entpackten Verzeichnis humanitl-@VERSION@-linux-x86_64/:
 
-1. Den Daemon in einem eigenen Terminal starten und laufen lassen:
+1. Den Daemon als Dienst einrichten und starten:
 
-       ./bin/humanitld
+       ./bin/humanitl daemon install
 
-2. In einem zweiten Terminal pruefen, ob die Sandbox auf diesem Rechner geht:
+   Das legt eine systemd-Nutzer-Unit unter ~/.config/systemd/user/ an. Sie
+   zeigt auf den Daemon in genau diesem Verzeichnis und startet ihn mit jeder
+   Anmeldung. Das gilt fuer ein System ohne installiertes .deb: Ist das Paket
+   da, aktiviert derselbe Befehl dessen Units und nicht den Daemon aus diesem
+   Archiv. Eine Unit unter ~/.config/systemd/user/, die nicht von
+   `humanitl daemon install` stammt, ersetzt der Befehl nie (DAEMON_005); wer
+   sie nicht mehr braucht, raeumt sie selbst weg.
 
+2. Pruefen, ob der Daemon antwortet und die Sandbox auf diesem Rechner geht:
+
+       ./bin/humanitl daemon status
        ./bin/humanitl sandbox check
 
 3. Die Anwendung starten:
 
        ./app/humanitl
 
-Wer den Daemon bei jeder Anmeldung starten will, legt mit
+Entfernen: zuerst den Dienst abmelden, dann das Verzeichnis loeschen. Wer das
+Verzeichnis loescht oder verschiebt, ohne vorher abzumelden, laesst eine Unit
+zurueck, die auf einen Daemon zeigt, den es nicht mehr gibt.
 
-    ./bin/humanitl daemon install
+    ./bin/humanitl daemon uninstall
 
-eine systemd-Nutzer-Unit unter ~/.config/systemd/user/ an. Sie zeigt auf den
-Daemon in genau diesem Verzeichnis; wer das Verzeichnis spaeter verschiebt
-oder loescht, entfernt vorher die Unit wieder:
+Ohne systemd, oder um dem Daemon bei der Fehlersuche zuzusehen, laeuft er auch
+im Vordergrund eines Terminals, das offen bleiben muss:
 
-    systemctl --user disable --now humanitld.service
-    rm ~/.config/systemd/user/humanitld.service
+    ./bin/humanitld
 
 
 Was noch nicht dabei ist
@@ -79,16 +90,19 @@ Was noch nicht dabei ist
 
 - Kein AppImage. Das .deb liegt dem Release bei, dieses Archiv installiert
   nichts.
-- Keine systemd-Unit wird automatisch eingerichtet; der Daemon startet nur,
-  wenn er von Hand oder ueber `humanitl daemon install` gestartet wird.
-- Keine Socket-Aktivierung (humanitld.socket) und kein Menueeintrag.
-- Die Nutzer-Unit (im Paket wie ueber `humanitl daemon install`) ist noch
-  nicht gehaertet: Es fehlen die Schutzzeilen, die HUM-053 vorsieht
-  (ProtectSystem=strict, ProtectKernel*, LockPersonality,
-  MemoryDenyWriteExecute, SystemCallArchitectures=native und weitere). Sie
-  kommen mit HUM-053, sobald sie gegen die Sandbox getestet sind; bis dahin
-  laeuft der Daemon nur mit NoNewPrivileges, PrivateTmp, einem
-  Systemaufruf-Filter und eingeschraenkten Adressfamilien.
+- Nichts wird automatisch aktiviert. Das .deb installiert humanitld.service
+  und humanitld.socket nach /usr/lib/systemd/user/, aktiviert sie aber nicht;
+  das tut erst `humanitl daemon install`. Aus dem Archiv schreibt derselbe
+  Befehl die Unit selbst. Danach startet der Daemon aus dem Archiv mit jeder
+  Anmeldung, der aus dem .deb beim ersten Zugriff ueber den Socket.
+- Keine Socket-Aktivierung (humanitld.socket) und kein Menueeintrag im
+  Archiv; beides bringt nur das .deb mit. Aus dem Archiv bindet der Daemon
+  seinen Socket selbst.
+- Die Nutzer-Unit ist so weit gehaertet, wie die Sandbox es zulaesst
+  (HUM-053). Einzelne Schutzzeilen fehlen mit Absicht, weil die Sandbox oder
+  der Agent in ihr sonst nicht laeuft; welche und warum, steht
+  im Abschnitt zur Haertung der Unit in docs/INSTALL.md im Repository
+  (https://github.com/nurkert/Humanitl/blob/main/docs/INSTALL.md).
 - Keine Signatur. Die Pruefsumme schuetzt vor einem beschaedigten Download,
   nicht vor einem manipulierten Release. Signierte Artefakte kommen mit 0.1.0.
 - Keine automatischen Updates; das Programm telefoniert nicht nach Hause.
