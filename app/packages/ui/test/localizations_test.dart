@@ -3,9 +3,8 @@
 // `hLocalizationsDelegates` bricht `ShadcnLocalizations.of` mit einem
 // Null-Check ab, und mit ihm jede Komponente, die ihre Wörter braucht.
 //
-// Das Kontextmenü eines `HTextField` stürzt zusätzlich in jeder Sprache ab,
-// weil ihm der `KeyboardShortcutDisplayMapper` der Bibliothek fehlt; das ist
-// HUM-173.
+// Das Kontextmenü eines `HTextField` steht in `context_menu_test.dart`
+// (HUM-173).
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
