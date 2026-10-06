@@ -4651,7 +4651,7 @@ Der Text nennt `humanitl daemon install` und `humanitl daemon uninstall`, für d
 - `packaging/release/INSTALL.txt`
 
 ### Akzeptanzkriterien
-- [ ] Die Befehle im Text sind dieselben wie in `docs/INSTALL.md`.
+- [x] Die Befehle im Text sind dieselben wie in `docs/INSTALL.md`. Gemessen am 2026-10-06: `humanitl daemon install`, `daemon status` und `daemon uninstall` für das Paket, `bin/humanitl daemon install` und `daemon uninstall` für das Archiv; `systemctl --user enable/disable` kommt im Text nicht mehr vor.
 
 ---
 
