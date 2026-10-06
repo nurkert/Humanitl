@@ -12,9 +12,9 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shad;
 /// Englisch mit. Ohne diesen Eintrag bricht deshalb unter `de` jede ihrer
 /// Komponenten ab, die ihre Wörter braucht (Kontextmenü, Datumsauswahl,
 /// Formularprüfung); der eigene Delegate der Bibliothek hilft nicht, denn er
-/// erklärt `de` für nicht unterstützt und lädt dann nichts. Das Kontextmenü
-/// eines `HTextField` braucht außerdem den `KeyboardShortcutDisplayMapper`
-/// der Bibliothek und stürzt ohne ihn in jeder Sprache ab (HUM-173).
+/// erklärt `de` für nicht unterstützt und lädt dann nichts. Den
+/// `KeyboardShortcutDisplayMapper`, den dasselbe Kontextmenü braucht, legt
+/// `HTextField` um das Menü (HUM-173).
 ///
 /// Dieser Delegate lädt für jede Sprache, die die Bibliothek nicht kennt, ihre
 /// englischen Wörter. Das ist ein bewusster Rückfall: vier Menüwörter auf

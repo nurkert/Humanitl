@@ -233,7 +233,13 @@ Widget rulesUnderTest({
     child: WidgetsApp(
       color: tokens.colors.bg0,
       debugShowCheckedModeBanner: false,
-      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      // Wie `app.dart`: Die Delegates der Komponentenbibliothek gehören mit
+      // dazu, sonst bricht ihr Kontextmenü an `ShadcnLocalizations` ab
+      // (HUM-052, HUM-173).
+      localizationsDelegates: <LocalizationsDelegate<Object?>>[
+        ...AppLocalizations.localizationsDelegates,
+        ...hLocalizationsDelegates,
+      ],
       supportedLocales: AppLocalizations.supportedLocales,
       builder: (BuildContext context, Widget? _) => MediaQuery(
         data: MediaQueryData(
