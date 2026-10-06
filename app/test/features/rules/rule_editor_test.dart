@@ -2,6 +2,7 @@
 // der Befund des Daemons unter dem Formular und der Weg um eine
 // mitgelieferte Regel herum.
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
@@ -497,5 +498,26 @@ void main() {
     expect(client.updated, hasLength(1));
     expect(client.updated.single.matcher.host, 'api2.example.com');
     expect(client.updated.single.matcher.pathPrefixes, <String>['/v1/']);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+  // HUM-173: Der Baum der Anwendung hat keine `ShadcnApp`; den
+  // `KeyboardShortcutDisplayMapper`, den das Menü braucht, legt `HTextField`
+  // um das Menü. Der Aufbau der echten Anwendung steht in
+  // `context_menu_app_test.dart`.
+  testWidgets('context_menu_opens_on_a_rule_form_field', (
+    WidgetTester tester,
+  ) async {
+    await pumpRules(tester, client: RulesTestClient());
+    await openNew(tester);
+
+    await tester.tap(
+      find.byKey(const Key('rule-host')),
+      buttons: kSecondaryButton,
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('Copy'), findsOneWidget);
+    expect(find.text('Select All'), findsOneWidget);
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 }

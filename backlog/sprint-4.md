@@ -4803,8 +4803,8 @@ Den Mapper dort bereitstellen, wo `HTheme.host` die übrigen Voraussetzungen der
 `context_menu_opens_under_de` und `..._under_en` unter `TargetPlatformVariant.only(TargetPlatform.linux)`: Rechtsklick auf ein `HTextField`, keine Ausnahme, „Copy" sichtbar. Ein App-Test mit Rechtsklick auf ein Feld des Regel-Formulars.
 
 ### Akzeptanzkriterien
-- [ ] Rechtsklick auf ein Eingabefeld öffnet das Menü in beiden Sprachen.
-- [ ] `make check` grün.
+- [x] Rechtsklick auf ein Eingabefeld öffnet das Menü in beiden Sprachen. Gemessen am 2026-10-06: `context_menu_opens_under_de` und `..._under_en` in `app/packages/ui` und `context_menu_opens_on_a_rule_form_field` im Regel-Formular, alle unter `TargetPlatformVariant.only(TargetPlatform.linux)`; vier Tests in `app/packages/ui` (Feld unter `HTheme`, ohne `HTheme` unter einem `Overlay`, `HTheme` unter einem `Overlay`), dazu der echte `HumanitlApp`-Baum (`context_menu_app_test.dart`). Mutationsbeweis: ohne den Mapper in `HTextField` sind alle vier Tests des Pakets, der App-Test und der Regel-Test rot an `displayMapper != null`; ohne das Theme (Mapper bleibt) sind nur die beiden Tests ohne `HTheme` über dem Menü rot, an `No Theme found in context`. Den Mapper legt `HTextField` um das Menü selbst, weil Flutter das Menü in die Overlay-Ebene der Wurzel hängt und nicht unter das Feld.
+- [x] `make check` grün. Gemessen am 2026-10-06: `STRICT=1 make check` Exit 0.
 
 ### Fallstricke
 - `flutter test` läuft als Android; das Desktop-Menü entsteht nur unter der Linux-Variante.
