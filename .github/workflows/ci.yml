@@ -204,6 +204,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # packaging/release/release-notes-test.sh vergleicht die Commit-Liste
+          # der Release-Notes mit `git log` seit dem vorigen Tag und braucht
+          # dafuer die Historie und die Tags (HUM-225).
+          fetch-depth: 0
       - uses: ./.github/actions/setup-rust
         with:
           cache-key: deps-lint
