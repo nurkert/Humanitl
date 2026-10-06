@@ -3,6 +3,7 @@ import 'package:flutter/widgets.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shad;
 
 import '../theme/h_theme.dart';
+import '../theme/shadcn_theme.dart';
 import '../tokens/colors.dart';
 import '../tokens/spacing.dart';
 import '../tokens/tokens.dart';
@@ -151,12 +152,40 @@ class _HTextFieldState extends State<HTextField> {
             ],
             onChanged: _forward,
             onSubmitted: widget.onSubmitted,
+            contextMenuBuilder: (BuildContext _, EditableTextState editable) =>
+                _hostMenu(
+                  tokens,
+                  // Der Builder der Bibliothek liest das Theme schon in dem
+                  // Kontext, den er bekommt (Plattform, schmale Web-Ansicht).
+                  // Der Kontext des Eintrags liegt über unserem Wrapper und
+                  // sieht es nicht (gemessen: „No Theme found in context“),
+                  // also läuft er in einem `Builder` darunter. Die Wahl der
+                  // Plattform bleibt bei der Bibliothek.
+                  Builder(
+                    builder: (BuildContext inner) =>
+                        shad.buildEditableTextContextMenu(inner, editable),
+                  ),
+                ),
           ),
         ),
       ),
     );
   }
 }
+
+/// Legt um das Kontextmenü, was die Bibliothek für es voraussetzt (HUM-173).
+///
+/// Flutter hängt das Menü in die **Overlay-Ebene** der Wurzel und damit nicht
+/// unter das Feld: Alles, was nur über dem Feld steht, sieht das Menü nicht.
+/// Das Menü braucht das Theme der Bibliothek und den
+/// `KeyboardShortcutDisplayMapper` für die Anzeige der Tastenkürzel; ohne ihn
+/// bricht seine `MenuShortcut` an `displayMapper != null` ab. Beides gehört
+/// deshalb in den Eintrag selbst und nicht in `HTheme`, das je nach Aufbau
+/// unter der Ebene stehen kann. Die Farben sind die des Feldes ([tokens]).
+Widget _hostMenu(HTokens tokens, Widget menu) => shad.Theme(
+  data: HShadcnTheme.of(tokens),
+  child: shad.KeyboardShortcutDisplayMapper(child: menu),
+);
 
 /// Merkt sich, was zuletzt ein Mensch getippt hat.
 ///
