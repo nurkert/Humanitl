@@ -63,6 +63,7 @@
       "default": {
         "anchor_every": 100,
         "fsync_every": 50,
+        "max_bytes": 0,
         "retention_days": 0
       },
       "description": "Die Audit-Kette: Anker, Synchronisation, Aufbewahrung.",
@@ -80,6 +81,15 @@
           "default": 50,
           "description": "Nach wie vielen Records der Daemon das Audit-Log auf die Platte zwingt (fsync). Spätestens nach einer Sekunde und vor jedem Anker geschieht es ohnehin.",
           "format": "uint32",
+          "minimum": 0,
+          "type": "integer",
+          "x-project-scope": "denied",
+          "x-tier": "expert"
+        },
+        "max_bytes": {
+          "default": 0,
+          "description": "Obergrenze für die Größe des Audit-Logs in Bytes; 0 heißt keine Grenze, sonst 2097152 (2 MiB) bis 1099511627776 (1 TiB). Derselbe Lauf wie bei `audit.retention_days`, beim Start und danach täglich, löscht ganze Records am Anfang der Kette, das Älteste zuerst, bis die Datei samt dem Record `audit.pruned` und seinem Anker unter der Grenze liegt; zwischen zwei Läufen kann sie darüber wachsen. Der neueste Record bleibt immer stehen; ist er länger als 1 MiB, kann das Log mit ihm über der Grenze bleiben, und der Daemon meldet das im Protokoll. Eine Kette, die nicht hält, wird nicht gekürzt. Der Lauf braucht kurz Platz für eine Kopie des Rests neben der Datei; fehlt er, bleibt das Log, wie es war, und der nächste Lauf versucht es erneut.",
+          "format": "uint64",
           "minimum": 0,
           "type": "integer",
           "x-project-scope": "denied",

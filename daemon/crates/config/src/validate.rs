@@ -289,7 +289,31 @@ fn audit_is_well_formed(audit: &AuditConfig) -> Result<(), Diagnostic> {
         u64::from(audit.retention_days),
         0,
         3650,
-    )
+    )?;
+    audit_max_bytes_is_well_formed(audit.max_bytes)
+}
+
+/// Kleinste Grenze in Bytes für das Audit-Log, die nicht `0` ist: 2 MiB,
+/// doppelt so groß wie die längste Zeile, die der Schreiber noch als Record
+/// liest (`humanitl_audit::writer::MAX_LINE_BYTES`, 1 MiB). Dieselbe Zahl
+/// steht als `humanitl_audit::retention::MIN_MAX_BYTES` im Audit-Log; ein Test
+/// in `humanitld` hält beide gleich.
+const AUDIT_MAX_BYTES_MIN: u64 = 2 * 1024 * 1024;
+/// Größte Grenze in Bytes für das Audit-Log: 1 TiB.
+const AUDIT_MAX_BYTES_MAX: u64 = 1024 * 1024 * 1024 * 1024;
+
+/// `audit.max_bytes` (HUM-194): `0` heißt keine Grenze. Ab 2 MiB passt der
+/// neueste Record (höchstens 1 MiB) samt `audit.pruned` und Anker immer unter
+/// die Grenze; darunter könnte das Log nach dem Lauf über ihr bleiben.
+fn audit_max_bytes_is_well_formed(max_bytes: u64) -> Result<(), Diagnostic> {
+    if max_bytes == 0 || (AUDIT_MAX_BYTES_MIN..=AUDIT_MAX_BYTES_MAX).contains(&max_bytes) {
+        return Ok(());
+    }
+    Err(out_of_range(
+        "audit.max_bytes",
+        &max_bytes.to_string(),
+        &format!("0 (no cap) or {AUDIT_MAX_BYTES_MIN} to {AUDIT_MAX_BYTES_MAX}"),
+    ))
 }
 
 /// Der Resolver: die Frist des Caches und die festen Adressen.
@@ -461,6 +485,25 @@ mod tests {
         assert!(config.validate().is_ok(), "ten years is the limit");
         config.audit.retention_days = 3651;
         assert!(why_of(&config).contains("audit.retention_days = 3651"));
+    }
+
+    #[test]
+    fn audit_max_bytes_is_zero_or_two_mebibytes_to_one_tebibyte() {
+        // HUM-194: Vorgabe 0 (keine Grenze), sonst 2 MiB bis 1 TiB.
+        let mut config = Config::default();
+        assert_eq!(config.audit.max_bytes, 0);
+        assert!(config.validate().is_ok(), "0 means no cap");
+        for allowed in [2_097_152, 1_099_511_627_776] {
+            config.audit.max_bytes = allowed;
+            assert!(config.validate().is_ok(), "{allowed} is allowed");
+        }
+        for refused in [1, 1_048_576, 2_097_151, 1_099_511_627_777] {
+            config.audit.max_bytes = refused;
+            assert!(
+                why_of(&config).contains(&format!("audit.max_bytes = {refused}")),
+                "{refused} is out of range"
+            );
+        }
     }
 
     #[test]

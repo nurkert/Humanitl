@@ -1060,8 +1060,9 @@ Schlüssel fragt, gilt derselbe Aufrufpunkt nach der Entscheidung; ihn belegt de
 Aufgezeichnet wird lokal: Flows, Entscheidungen und Bodies in SQLite unter
 `$XDG_DATA_HOME/humanitl/humanitl.db`, große Bodies inhaltsadressiert unter `blobs/`, und
 zusätzlich ein Protokoll `audit/audit.jsonl` (HUM-050), append-only, solange
-`audit.retention_days = 0` gilt; sonst löscht ein täglicher Lauf den Anfang und vermerkt den
-Schnitt als `audit.pruned` (siehe „Aufbewahrung der Kette" unten). Jeder Eintrag ist eine Zeile
+`audit.retention_days` und `audit.max_bytes` beide `0` sind; sonst löscht ein täglicher Lauf den
+Anfang nach Alter oder Größe und vermerkt den Schnitt als `audit.pruned` (siehe „Aufbewahrung der
+Kette" unten). Jeder Eintrag ist eine Zeile
 kanonisches JSON mit `seq`, `ts`, `session`, `kind`, `data`, dem Hash des Vorgängers (`prev`) und
 dem eigenen `hash`; darüber liegt ein HMAC-SHA256. Bodies, Header, Klartext-Werte von Funden und
 die Notiz einer Blockierung stehen nie im Log, der Pfad einer Anfrage nur als SHA-256; der Host
@@ -1113,10 +1114,11 @@ Für stärkere Garantien braucht es externes Anchoring (nach dem MVP).
 
 ### Aufbewahrung der Kette: löschen, nicht streichen (HUM-157)
 
-`audit.retention_days` wirkt. Vorgabe ist `0`: Die Kette behält jeden Record, und an ihr ändert
-sich nichts. Nennt der Schlüssel Tage (1 bis 3650), löscht ein täglicher Lauf des Daemons die
-Records am **Anfang** der Kette, die älter sind; Löschen einzelner Records oder nach Inhalt gibt
-es nicht.
+`audit.retention_days` wirkt. Vorgabe ist `0`: Solange auch `audit.max_bytes` `0` ist (siehe
+„Grenze in Bytes" unten), behält die Kette jeden Record, und an ihr ändert sich nichts. Nennt der
+Schlüssel Tage (1 bis 3650), löscht ein täglicher Lauf des Daemons die Records am **Anfang** der
+Kette, die älter sind; mit `audit.max_bytes` löscht derselbe Lauf dort auch nach Größe. Löschen
+einzelner Records oder nach Inhalt gibt es nicht.
 
 *Warum löschen und nicht den Schlüssel streichen.* Das Log trägt Hosts im Klartext und Sitzungen,
 also Personenbezogenes, und wächst ohne Löschung ohne Grenze. Für die Aufzeichnung setzt
@@ -1137,6 +1139,30 @@ Kette vollständig behalten will, lässt die Vorgabe `0` stehen.
    `audit.jsonl` umbenennen. Die Datei wird umgeschrieben, nicht rotiert.
 
 `audit_anchors` wird **nicht** gekürzt: Die Anker sind der Beleg gegen das Kürzen der Datei.
+
+*Grenze in Bytes (HUM-194).* `audit.max_bytes` begrenzt die Größe der Datei; Vorgabe ist `0`,
+keine Grenze, sonst 2 MiB bis 1 TiB. Derselbe Lauf liest beide Schlüssel, prüft die Kette einmal
+(auch hier: **eine Kette, die nicht hält, wird nicht gekürzt**, `AUDIT_001`) und schneidet am
+Anfang so viele ganze Records, das Älteste zuerst, dass die Datei samt `audit.pruned` und dessen
+Anker höchstens `audit.max_bytes` groß ist. Gilt zugleich eine Frist, zählt der weitere der beiden
+Schnitte, belegt von einem einzigen `audit.pruned`, der beide Grenzen nennt. Der neueste Record
+geht nach dieser Regel nie. Die Untergrenze von 2 MiB ist doppelt so groß wie die längste Zeile,
+die der Schreiber noch als Record liest (1 MiB); ein so langer neuester Record passt samt Beleg
+also immer darunter. Das Anhängen selbst begrenzt die Länge einer Zeile aber nicht: Ist der
+neueste Record länger als 1 MiB, bleibt die Datei mit ihm und dem Beleg über der Grenze, und der
+Daemon schreibt eine Warnung ins Protokoll, auch wenn der Lauf nichts schneiden konnte. Die Grenze
+wirkt beim Start und danach täglich, nicht bei jedem Record: Dazwischen wächst die Datei weiter.
+Für das Umschreiben braucht der Lauf kurz Platz für den Rest neben der alten Datei; fehlt er,
+bleibt die alte Datei mit ihrem `audit.pruned` stehen (`AUDIT_006`), und der nächste Lauf
+schneidet erneut.
+
+Was das für die Aussage heißt: Mit einer Grenze in Bytes entscheidet die **Menge** der Records
+darüber, wie lange ein Record bleibt, nicht sein Alter. Ein Agent, der viele Anfragen stellt, kann
+damit frühere Records schneller aus der Datei drängen, als eine Frist es täte, auch die Records
+eigener früherer Vorgänge. Er kann damit nichts unbemerkt löschen: Jeder Schnitt steht als
+`audit.pruned` mit Nummer, Hash und Zahl der gelöschten Records in der Kette, und `verify` meldet
+ihn als `pruned`. Wer die Kette als Beleg braucht, lässt `audit.max_bytes` auf `0` oder exportiert
+vor dem nächsten Lauf.
 
 *Was `verify` danach prüft.* Beginnt die Datei nicht bei 1, gilt ihr erster Record als Anfang, wenn
 ein `audit.pruned` in der Kette genau diesen Schnitt nennt (Nummer und Hash, den der erste Record

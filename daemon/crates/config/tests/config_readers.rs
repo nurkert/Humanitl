@@ -81,6 +81,9 @@ const REGISTER: &[(&str, &str)] = &[
     // Gelesen in `humanitld` beim Öffnen des Audit-Schreibers (HUM-050).
     ("audit.anchor_every", "effective"),
     ("audit.fsync_every", "effective"),
+    // Gelesen vom täglichen Lauf der Aufbewahrung in `humanitld`, derselbe
+    // wie für `audit.retention_days` (HUM-194).
+    ("audit.max_bytes", "effective"),
     // Löschen bricht die Kette absichtlich, und im MVP löscht niemand: `0`
     // heißt „für immer" und ist das Einzige, was heute wirkt. Die Löschung
     // mit dokumentierter Lücke ist HUM-157; HUM-051 hat sie nicht gebaut.
