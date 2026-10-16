@@ -59,6 +59,7 @@ use crate::render::{table, tick};
 
 mod image;
 mod packaged;
+mod running;
 mod uninstall;
 
 use packaged::{install_packaged, packaged_units};
@@ -237,11 +238,10 @@ async fn install(ctx: &Context, args: &InstallArgs) -> Result<u8, Failure> {
         );
     }
 
-    let staged = if appimage {
-        Some(stage(ctx, &source).map_err(Failure::new)?)
-    } else {
-        None
-    };
+    let staged = appimage
+        .then(|| stage(ctx, &source))
+        .transpose()
+        .map_err(Failure::new)?;
     let written = UnitOnDisk {
         path: &path,
         plan: &plan,
@@ -257,13 +257,12 @@ async fn install(ctx: &Context, args: &InstallArgs) -> Result<u8, Failure> {
     // geschrieben worden; also zeigt auch `current` wieder dorthin, wohin es
     // vorher zeigte. Sonst startete die alte Unit die neuen Binaries.
     //
-    // Ohne Prüfung des Ergebnisses: Hier startet danach nichts mehr, und der
-    // Befund, der gleich zurückgeht, sagt, warum.
-    let activation = finished.inspect_err(|_| {
-        if let Some(staged) = staged.as_ref() {
-            let _ = staged.restore();
+    let activation = match finished {
+        Ok(activation) => activation,
+        Err(failure) => {
+            return Err(take_back(ctx, systemctl.as_deref(), staged.as_ref(), failure).await);
         }
-    })?;
+    };
 
     let (restarted, ready) = settle(
         ctx,
@@ -283,6 +282,35 @@ async fn install(ctx: &Context, args: &InstallArgs) -> Result<u8, Failure> {
     Ok(EXIT_OK)
 }
 
+/// Nimmt die Kopie nach einer gescheiterten Aktivierung zurück
+/// ([`Staged::restore`]), wenn es eine gibt, und reicht den Befund `failure`
+/// unverändert weiter.
+///
+/// Ohne Prüfung des Ergebnisses: Hier startet danach nichts mehr, und der
+/// Befund, der gleich zurückgeht, sagt, warum.
+///
+/// Was systemd über den Hauptprozess sagt, entscheidet mit, ob die neue Kopie
+/// gehen darf: `enable --now` kann den Daemon aus ihr gestartet haben, bevor
+/// es scheiterte (HUM-210). Ohne `systemctl` hat dieser Lauf systemd nicht
+/// gerufen, also auch nichts aus der Kopie gestartet; dann prüft allein
+/// `/proc`.
+async fn take_back(
+    ctx: &Context,
+    systemctl: Option<&Path>,
+    staged: Option<&Staged>,
+    failure: Failure,
+) -> Failure {
+    let Some(staged) = staged else {
+        return failure;
+    };
+    let main = match systemctl {
+        Some(systemctl) => main_pid(ctx, systemctl).await,
+        None => running::MainPid::Absent,
+    };
+    let _ = staged.restore(main);
+    failure
+}
+
 /// Was nach einer gelungenen Aktivierung noch geschieht: der Neustart, wenn
 /// dieser Lauf geändert hat, was der Dienst startet, und danach das Aufräumen
 /// alter Kopien. Dazu, ob neu gestartet wurde, und was der Daemon danach
@@ -291,12 +319,28 @@ async fn install(ctx: &Context, args: &InstallArgs) -> Result<u8, Failure> {
 /// `enable --now` startet einen Dienst, der nicht läuft, und lässt einen
 /// laufenden in Ruhe. Hat dieser Lauf geändert, was `ExecStart` startet --
 /// eine neue Kopie hinter `current` oder eine ersetzte Unit --, liefe der alte
-/// Daemon sonst weiter, bis sich jemand abmeldet (HUM-077).
+/// Daemon sonst weiter, bis sich jemand abmeldet (HUM-077). Deshalb wird nach
+/// jeder Kopie aus einem `AppImage` neu gestartet (HUM-210), auch nach der
+/// ersten: Lief vorher schon ein Dienst dieses Namens, etwa aus einer Unit
+/// unter `/etc` oder `/usr/lib`, die die neue jetzt verdeckt, ließe
+/// `enable --now` ihn laufen, und das Update wirkte erst nach dem nächsten
+/// Anmelden. Hat `enable --now` den Dienst eben erst aus der neuen Kopie
+/// gestartet, kostet der Neustart nur einen zweiten Start.
 ///
-/// Alte Kopien gehen erst, wenn kein Dienst mehr aus ihnen laufen kann: nach
-/// dem Neustart oder wenn es vor diesem Lauf keine gab. Ohne Aktivierung
-/// (`--no-start`, kein `systemctl`) läuft womöglich noch der alte Daemon aus
-/// der vorigen Kopie, und die bleibt liegen (HUM-077, Fallstricke).
+/// Neu gestartet wird mit `try-restart` (HUM-210): Nach einem gelungenen
+/// `enable --now` läuft der Dienst, und dann tut es dasselbe wie `restart`.
+/// Ist er dazwischen abgestürzt, steht `current` schon auf der neuen Kopie,
+/// und `Restart=on-failure` startet ihn von dort.
+///
+/// Alte Kopien gehen erst, wenn nachweislich niemand mehr aus ihnen läuft
+/// (HUM-210, Befund M8): Die Aktivierung ist gelaufen, der Daemon antwortet mit
+/// genau dieser Fassung, und kein Prozess kann sein Programm aus der Kopie
+/// haben ([`running::runs_from`], im Zweifel bleibt sie). Sonst bleiben sie
+/// liegen, und ein späterer Lauf räumt sie weg ([`Staged::retire_strays`]).
+/// Ohne diese Prüfung verlöre ein Daemon, den der Neustart nicht erreicht hat,
+/// mit seiner Kopie den Shim, und jede Sandbox scheiterte bis zum nächsten
+/// Neustart mit `SANDBOX_011`. Ohne Aktivierung (`--no-start`, kein
+/// `systemctl`) wird ohnehin nichts geräumt (HUM-077, Fallstricke).
 async fn settle(
     ctx: &Context,
     systemctl: Option<&Path>,
@@ -306,24 +350,37 @@ async fn settle(
     enabled_before: &unit::Enablement,
 ) -> Result<(bool, Option<String>), Failure> {
     let enabled = activation == Activation::Enabled;
-    let restart = enabled
-        && (staged.is_some_and(|staged| staged.previous.is_some())
-            || matches!(written.plan, unit::Written::Replaced { .. }));
+    let restart =
+        enabled && (staged.is_some() || matches!(written.plan, unit::Written::Replaced { .. }));
     if restart && let Some(systemctl) = systemctl {
         restart_service(ctx, systemctl, written, staged, enabled_before).await?;
-    }
-    if let Some(staged) = staged
-        && (enabled || staged.previous.is_none())
-    {
-        staged.retire_previous();
-        staged.retire_strays();
     }
     let ready = if enabled {
         Some(wait_for_daemon(ctx).await)
     } else {
         None
     };
+    if let Some(staged) = staged
+        && let Some(systemctl) = systemctl
+        && ready.as_deref() == Some(env!("CARGO_PKG_VERSION"))
+    {
+        let main = main_pid(ctx, systemctl).await;
+        staged.retire_previous(main);
+        staged.retire_strays(main);
+    }
     Ok((restart, ready))
+}
+
+/// Was systemd über den Hauptprozess des Dienstes sagt; [`running::MainPid`].
+///
+/// Geht die Frage nicht durch, bleibt sie offen, und offen heißt beim
+/// Aufräumen: Die Kopien bleiben.
+async fn main_pid(ctx: &Context, systemctl: &Path) -> running::MainPid {
+    let call = ["--user", "show", "-p", "MainPID", unit::UNIT_NAME];
+    match systemctl_capture(ctx, systemctl, &call).await {
+        Ok(output) => running::MainPid::parse(&output),
+        Err(_) => running::MainPid::Unknown,
+    }
 }
 
 /// Startet den Dienst neu, nachdem dieser Lauf geändert hat, was er startet.
@@ -353,7 +410,11 @@ async fn restart_service(
     staged: Option<&Staged>,
     enabled_before: &unit::Enablement,
 ) -> Result<(), Failure> {
-    let call = ["--user", "restart", unit::UNIT_NAME];
+    let call = ["--user", "try-restart", unit::UNIT_NAME];
+    // Der zweite Neustart nach der Rücknahme mit `restart`: Nach dem
+    // gescheiterten ersten steht der Dienst auf `failed`, und `try-restart`
+    // ließe ihn dort liegen.
+    let again = ["--user", "restart", unit::UNIT_NAME];
     let Err(why) = systemctl_run(ctx, systemctl, &call).await else {
         return Ok(());
     };
@@ -366,7 +427,13 @@ async fn restart_service(
     } else {
         None
     };
-    let copy_back = staged.map_or(Ok(()), Staged::restore);
+    // Läuft der Neustart in seine Frist, kann systemd den Daemon aus der neuen
+    // Kopie trotzdem gestartet haben; was es über den Hauptprozess sagt,
+    // entscheidet mit, ob sie gehen darf (HUM-210).
+    let copy_back = match staged {
+        Some(staged) => staged.restore(main_pid(ctx, systemctl).await),
+        None => Ok(()),
+    };
     let links_back = enabled_before
         .rollback(&unit::unit_dir(&ctx.paths), written.path)
         .map_err(|diagnostic| diagnostic.why);
@@ -402,7 +469,7 @@ async fn restart_service(
                 "the previous copy and unit are back in place, but systemctl --user \
                  daemon-reload failed ({error}), so the service was not restarted again"
             ),
-            Ok(()) => match systemctl_run(ctx, systemctl, &call).await {
+            Ok(()) => match systemctl_run(ctx, systemctl, &again).await {
                 Ok(()) => "the previous copy and unit are back in place and the service was \
                            restarted on them"
                     .to_owned(),
@@ -664,7 +731,11 @@ impl Staged {
     ///
     /// Die neue Kopie geht nur, wenn `current` nicht mehr auf sie zeigt:
     /// Misslingt das Zurückhängen, bleibt sie liegen, und `current` zeigt
-    /// weiter auf vollständige Binaries statt ins Leere.
+    /// weiter auf vollständige Binaries statt ins Leere. Sie bleibt auch, wenn
+    /// schon ein Prozess aus ihr laufen kann (HUM-210, `main` aus
+    /// [`main_pid`]): Läuft `systemctl` in seine Frist, kann systemd den
+    /// Daemon aus ihr trotzdem gestartet haben. Ein späterer Lauf räumt sie
+    /// dann weg ([`Staged::retire_strays`]).
     ///
     /// # Errors
     ///
@@ -673,13 +744,14 @@ impl Staged {
     /// Aufrufer darf das nur nach einem `Ok`. Ein Verzeichnis, das nach
     /// gelungenem Zurückhängen nicht weggeht, ist kein Fehler: `current` zeigt
     /// dann schon auf die vorige Fassung.
-    fn restore(&self) -> Result<(), String> {
+    fn restore(&self, main: running::MainPid) -> Result<(), String> {
         let released = match self.previous.as_ref() {
             Some(previous) => repoint(&self.link, previous).map_err(|diagnostic| diagnostic.why),
             None => std::fs::remove_file(&self.link)
                 .map_err(|error| format!("{} cannot be removed: {error}", self.link.display())),
         };
-        if released.is_ok() {
+        let busy = running::runs_from(&self.dir, self.owner, main);
+        if released.is_ok() && !busy {
             let _ = std::fs::remove_dir_all(&self.dir);
         }
         released
@@ -687,9 +759,11 @@ impl Staged {
 
     /// Nach dem Erfolg: Die Fassung, auf die `current` vorher zeigte, geht —
     /// aber nur, wenn sie ein eigenes Verzeichnis unter
-    /// `~/.local/lib/humanitl` ist und nicht dieselbe wie die neue. Ein
-    /// Verweis, der woandershin zeigte, wird nicht verfolgt.
-    fn retire_previous(&self) {
+    /// `~/.local/lib/humanitl` ist, nicht dieselbe wie die neue und kein
+    /// Prozess mehr aus ihr laufen kann (HUM-210, `main` aus
+    /// [`main_pid`]). Ein Verweis, der woandershin zeigte, wird nicht
+    /// verfolgt.
+    fn retire_previous(&self, main: running::MainPid) {
         let Some(previous) = self.previous.as_ref() else {
             return;
         };
@@ -710,6 +784,7 @@ impl Staged {
             && real_dir
             && previous != self.dir
             && Some(&previous) != self.current_target().as_ref()
+            && !running::runs_from(&previous, self.owner, main)
         {
             let _ = std::fs::remove_dir_all(&previous);
         }
@@ -720,16 +795,18 @@ impl Staged {
     /// hat, die [`stage`] vergibt, außer der neuen Kopie (HUM-077).
     ///
     /// Solche Reste entstehen, wenn ein früherer Lauf seine vorige Kopie
-    /// liegen lassen musste, weil der Dienst nicht neu gestartet wurde. Was
-    /// einen anderen Namen trägt, ein Verweis ist oder einem anderen Konto
-    /// gehört, bleibt liegen.
-    fn retire_strays(&self) {
+    /// liegen lassen musste, weil der Dienst nicht neu gestartet wurde oder
+    /// noch etwas aus ihr lief. Was einen anderen Namen trägt, ein Verweis ist,
+    /// einem anderen Konto gehört oder woraus ein Prozess läuft, bleibt liegen
+    /// (HUM-210).
+    fn retire_strays(&self, main: running::MainPid) {
         let Some(base) = self.link.parent() else {
             return;
         };
         let live = self.current_target();
         for stray in own_copies(base, self.owner) {
-            if stray != self.dir && Some(&stray) != live.as_ref() {
+            let busy = || running::runs_from(&stray, self.owner, main);
+            if stray != self.dir && Some(&stray) != live.as_ref() && !busy() {
                 let _ = std::fs::remove_dir_all(&stray);
             }
         }
@@ -1525,7 +1602,10 @@ mod tests {
                 .join(format!("current.tmp-{}", std::process::id())),
         )
         .expect("the blocking directory");
-        assert!(staged.restore().is_err(), "a failed repoint is reported");
+        assert!(
+            staged.restore(super::running::MainPid::Absent).is_err(),
+            "a failed repoint is reported"
+        );
 
         assert!(staged.dir.is_dir(), "the copy current points at stays");
         assert_eq!(
@@ -1547,7 +1627,7 @@ mod tests {
         std::os::unix::fs::symlink(&other, &tmp).expect("a link");
         std::fs::rename(&tmp, &staged.link).expect("current points at the other copy");
 
-        staged.retire_strays();
+        staged.retire_strays(super::running::MainPid::Absent);
         assert!(other.is_dir(), "the copy current points at went");
 
         let previous = staged.previous.clone().expect("a previous copy");
@@ -1564,7 +1644,7 @@ mod tests {
         let tmp = base.path().join("current.swap");
         std::os::unix::fs::symlink(&previous_now, &tmp).expect("a link");
         std::fs::rename(&tmp, &staged.link).expect("current points at the previous copy");
-        staged.retire_previous();
+        staged.retire_previous(super::running::MainPid::Absent);
         assert!(
             previous_now.is_dir(),
             "the previous copy current points at went"
@@ -1578,11 +1658,11 @@ mod tests {
         let (_base, mut staged) = two_copies();
         let previous = staged.previous.clone().expect("a previous copy");
         staged.owner += 1;
-        staged.retire_previous();
+        staged.retire_previous(super::running::MainPid::Absent);
         assert!(previous.is_dir(), "another owner's copy stays");
 
         staged.owner -= 1;
-        staged.retire_previous();
+        staged.retire_previous(super::running::MainPid::Absent);
         assert!(!previous.exists(), "our own older copy goes");
     }
 

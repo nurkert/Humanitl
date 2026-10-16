@@ -19,7 +19,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use common::{BIN, Harness, code, image_data, stderr, stdout};
+use common::{BIN, FakeServer, Harness, code, image_data, stderr, stdout};
 use humanitl_core::shell::shell_path;
 
 /// Was `$APPIMAGE` in diesen Läufen nennt. Den Pfad gibt es nicht; die
@@ -76,7 +76,10 @@ fn set_executable(path: &Path) {
 }
 
 /// Ein `systemctl`, das jeden Aufruf in `systemctl.log` schreibt und bei einem
-/// Aufruf, der auf `fail` passt, mit 1 endet.
+/// Aufruf, der auf `fail` passt, mit 1 endet. Auf `show -p MainPID` antwortet
+/// es `MainPID=0`, wie systemd für einen Dienst ohne Hauptprozess: Eine leere
+/// Antwort ließe offen, ob noch ein Daemon läuft, und keine Kopie ginge
+/// (HUM-210).
 ///
 /// Bei `restart` hält es zusätzlich fest, ob die ältere Kopie in diesem
 /// Augenblick noch da ist: Genau daran hängt die Regel, dass sie erst nach dem
@@ -99,6 +102,7 @@ fn fake_systemctl(harness: &Harness, fail: &str) -> (PathBuf, PathBuf) {
              esac\n\
              case \"$*\" in\n\
              {fail}) echo 'Job for humanitld.service failed' >&2; exit 1 ;;\n\
+             *MainPID*) echo MainPID=0 ;;\n\
              esac\n\
              exit 0\n",
             log = log.display(),
@@ -265,9 +269,13 @@ fn refresh_of_the_same_version_calls_nothing() {
 /// Akzeptanzkriterium 2, zweite Hälfte: Ein neueres `AppImage` erneuert beim
 /// Start die Kopie und startet den Dienst neu, und die ältere Kopie geht erst
 /// nach dem Neustart.
+///
+/// Ein Daemon dieser Fassung antwortet am Socket: Erst dann geht die ältere
+/// Kopie (HUM-210).
 #[test]
 fn refresh_replaces_an_older_copy_restarts_and_only_then_retires_it() {
     let harness = Harness::new();
+    let _daemon = FakeServer::start(&harness);
     let bin = image_tree(&harness);
     let (fakebin, log) = fake_systemctl(&harness, NEVER);
     let path = path_with(&fakebin);
@@ -303,7 +311,7 @@ fn refresh_replaces_an_older_copy_restarts_and_only_then_retires_it() {
         .unwrap_or_else(|| panic!("no enable: {since:?}"));
     let restart = since
         .iter()
-        .position(|line| *line == "--user restart humanitld.service")
+        .position(|line| *line == "--user try-restart humanitld.service")
         .unwrap_or_else(|| panic!("no restart: {since:?}"));
     assert!(enable < restart, "restart before enable: {since:?}");
     assert_eq!(
@@ -321,6 +329,7 @@ fn refresh_replaces_an_older_copy_restarts_and_only_then_retires_it() {
 #[test]
 fn refresh_replaces_a_flat_copy_from_before_hum_165() {
     let harness = Harness::new();
+    let _daemon = FakeServer::start(&harness);
     let bin = image_tree(&harness);
     let (fakebin, _log) = fake_systemctl(&harness, NEVER);
     let path = path_with(&fakebin);
@@ -372,9 +381,12 @@ fn refresh_replaces_a_flat_copy_from_before_hum_165() {
 fn a_failed_restart_puts_the_older_copy_back() {
     let harness = Harness::new();
     let bin = image_tree(&harness);
-    let (fakebin, log) = fake_systemctl(&harness, "*restart*");
+    let (fakebin, _) = fake_systemctl(&harness, NEVER);
     let path = path_with(&fakebin);
     let old = install_an_older_copy(&harness, &bin, &path);
+    // Erst ab hier scheitert jeder Neustart: Seit HUM-210 startet schon die
+    // erste Einrichtung den Dienst mit `try-restart` neu.
+    let (_, log) = fake_systemctl(&harness, "*restart*");
 
     let output = run(
         &harness,
@@ -456,11 +468,509 @@ fn an_install_without_systemctl_keeps_the_older_copy() {
     );
 }
 
+/// Ein Prozess, der beim Aufräumen des Tests beendet wird, auch wenn eine
+/// Prüfung vorher scheitert.
+struct Running(std::process::Child);
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Das `sleep` des Rechners, das in den Tests einen Daemon vertritt.
+fn sleep_program() -> &'static Path {
+    ["/usr/bin/sleep", "/bin/sleep"]
+        .into_iter()
+        .map(Path::new)
+        .find(|candidate| candidate.is_file())
+        .expect("a sleep program")
+}
+
+/// Legt eine Kopie von `sleep` an die Stelle `program` und startet sie für
+/// 60 Sekunden, abgewartet wie in [`run`], solange der Kernel die frisch
+/// kopierte Datei als beschäftigt meldet.
+///
+/// `argv[0]` ist `sleep`: Ein `sleep` aus einem Programm für viele Befehle
+/// (busybox) wählt seinen Befehl nach diesem Namen und nicht nach dem der
+/// Datei. Zurück kommt der Prozess erst, wenn `/proc/<pid>/exe` auf `program`
+/// zeigt, also genau das gilt, was der Test voraussetzt.
+fn stand_in_daemon(program: &Path) -> Running {
+    use std::os::unix::process::CommandExt as _;
+
+    const ATTEMPTS: u32 = 250;
+    const PAUSE: std::time::Duration = std::time::Duration::from_millis(20);
+    let _ = std::fs::remove_file(program);
+    std::fs::copy(sleep_program(), program).expect("sleep stands in for the daemon");
+    set_executable(program);
+    let expected = std::fs::canonicalize(program).expect("the stand-in resolves");
+    let mut running = None;
+    for _ in 0..ATTEMPTS {
+        match Command::new(program)
+            .arg0("sleep")
+            .arg("60")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(child) => {
+                running = Some(Running(child));
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(PAUSE);
+            }
+            Err(error) => panic!("{} starts: {error:?}", program.display()),
+        }
+    }
+    let Some(running) = running else {
+        panic!(
+            "{} stayed busy for {:?}",
+            program.display(),
+            PAUSE * ATTEMPTS
+        )
+    };
+    let exe = format!("/proc/{}/exe", running.0.id());
+    for _ in 0..ATTEMPTS {
+        if std::fs::read_link(&exe).is_ok_and(|target| target == expected) {
+            return running;
+        }
+        std::thread::sleep(PAUSE);
+    }
+    panic!(
+        "{exe} never pointed at {}: {:?}",
+        expected.display(),
+        std::fs::read_link(&exe)
+    )
+}
+
+/// Beendet beim Aufräumen den Prozess, dessen Nummer in der Datei steht; für
+/// Prozesse, die ein falsches `systemctl` im Hintergrund startet.
+struct KillPidFile(PathBuf);
+
+impl Drop for KillPidFile {
+    fn drop(&mut self) {
+        if let Ok(pid) = std::fs::read_to_string(&self.0) {
+            let _ = Command::new("kill").arg(pid.trim()).status();
+        }
+    }
+}
+
+/// HUM-210, Befund M8: Läuft noch ein Prozess aus der vorigen Kopie, lässt
+/// eine Neuinstallation bei aktiver Unit sie stehen, auch wenn der Neustart
+/// durchging und ein Daemon dieser Fassung antwortet. Sonst verlöre er seine
+/// Datei und mit ihr den Shim daneben, und jede Sandbox scheiterte mit
+/// `SANDBOX_011`.
+///
+/// Der Prozess ist ein `sleep`, kopiert an die Stelle von `bin/humanitld`:
+/// So steht in `/proc/<pid>/exe` genau der Pfad, den ein Daemon aus dieser
+/// Kopie hätte. Das `systemctl` hier startet nichts neu, wie ein Neustart,
+/// der diesen Prozess nicht erreicht.
+#[test]
+fn a_reinstall_keeps_the_copy_a_running_daemon_runs_from() {
+    let harness = Harness::new();
+    let _daemon = FakeServer::start(&harness);
+    let bin = image_tree(&harness);
+    let (fakebin, log) = fake_systemctl(&harness, NEVER);
+    let path = path_with(&fakebin);
+    let old = install_an_older_copy(&harness, &bin, &path);
+    let program = old.join("bin/humanitld");
+    let _running = stand_in_daemon(&program);
+
+    let output = run(
+        &harness,
+        &bin.join("humanitl"),
+        &["--json", "daemon", "install"],
+        &path,
+        true,
+    );
+
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let value = json(&output);
+    assert_eq!(value["restarted"], true, "{value}");
+    assert_eq!(value["daemon"], VERSION, "{value}");
+    assert!(
+        current_name(&harness).starts_with(&format!("{VERSION}.")),
+        "current still points at the older copy"
+    );
+    assert!(
+        program.is_file(),
+        "the copy a process still runs from went: {}",
+        calls(&log)
+    );
+}
+
+/// HUM-210: Antwortet nach dem Neustart kein Daemon dieser Fassung, bleibt
+/// die vorige Kopie liegen; womöglich läuft noch der alte Daemon aus ihr. Der
+/// nächste Lauf, nach dem ein Daemon dieser Fassung antwortet, räumt sie weg.
+#[test]
+fn the_older_copy_stays_until_a_daemon_of_this_version_answers() {
+    let harness = Harness::new();
+    let bin = image_tree(&harness);
+    let (fakebin, _log) = fake_systemctl(&harness, NEVER);
+    let path = path_with(&fakebin);
+    let old = install_an_older_copy(&harness, &bin, &path);
+
+    let output = run(
+        &harness,
+        &bin.join("humanitl"),
+        &["--json", "daemon", "install"],
+        &path,
+        true,
+    );
+
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let value = json(&output);
+    assert_eq!(value["restarted"], true, "{value}");
+    assert!(
+        value["daemon"]
+            .as_str()
+            .is_some_and(|daemon| daemon.starts_with("no answer")),
+        "{value}"
+    );
+    assert!(
+        old.join("bin/humanitld").is_file(),
+        "the older copy went while no daemon of this version answered"
+    );
+
+    let _daemon = FakeServer::start(&harness);
+    let again = run(
+        &harness,
+        &bin.join("humanitl"),
+        &["--json", "daemon", "install"],
+        &path,
+        true,
+    );
+    assert_eq!(code(&again), 0, "{}", stderr(&again));
+    assert_eq!(json(&again)["daemon"], VERSION);
+    assert!(!old.exists(), "the next run left the older copy behind");
+}
+
+/// HUM-210: Fehlt `current`, obwohl die Unit schon dasteht, legt der Lauf
+/// eine Kopie an, ohne dass es eine vorige gäbe, und startet den Dienst
+/// trotzdem neu. Lief er noch, dann aus einer Kopie, auf die nichts mehr
+/// zeigt.
+#[test]
+fn a_reinstall_without_current_restarts_the_running_unit() {
+    let harness = Harness::new();
+    let _daemon = FakeServer::start(&harness);
+    let bin = image_tree(&harness);
+    let (fakebin, log) = fake_systemctl(&harness, NEVER);
+    let path = path_with(&fakebin);
+    let first = run(
+        &harness,
+        &bin.join("humanitl"),
+        &["--json", "daemon", "install"],
+        &path,
+        true,
+    );
+    assert_eq!(code(&first), 0, "{}", stderr(&first));
+    std::fs::remove_file(lib_dir(&harness).join("current")).expect("current goes");
+    let before = calls(&log).len();
+
+    let output = run(
+        &harness,
+        &bin.join("humanitl"),
+        &["--json", "daemon", "install"],
+        &path,
+        true,
+    );
+
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let value = json(&output);
+    assert_eq!(value["action"], "unchanged", "{value}");
+    assert_eq!(value["restarted"], true, "{value}");
+    assert!(
+        calls(&log)[before..].contains("--user try-restart humanitld.service"),
+        "{}",
+        calls(&log)
+    );
+}
+
+/// Schreibt `fakebin/systemctl` neu: Jeder Aufruf geht in `log`, dann folgt
+/// `cases` als Zweige eines `case "$*"`, danach `MainPID=0` auf
+/// `show -p MainPID` wie bei [`fake_systemctl`], sonst Exit 0.
+fn rewrite_systemctl(fakebin: &Path, log: &Path, cases: &str) {
+    write_script(
+        &fakebin.join("systemctl"),
+        &format!(
+            "#!/bin/sh\n\
+             PATH=/usr/bin:/bin\n\
+             echo \"$*\" >>'{log}'\n\
+             case \"$*\" in\n\
+             {cases}\n\
+             *MainPID*) echo MainPID=0 ;;\n\
+             esac\n\
+             exit 0\n",
+            log = log.display(),
+        ),
+    );
+}
+
+/// HUM-210, Review: Antwortet nach dem Neustart noch ein Daemon einer
+/// älteren Fassung, läuft er womöglich aus der vorigen Kopie, und sie bleibt.
+#[test]
+fn the_older_copy_stays_while_an_older_daemon_answers() {
+    let harness = Harness::new();
+    let _daemon = FakeServer::start_with_version(&harness, "0.0.0-old");
+    let bin = image_tree(&harness);
+    let (fakebin, _log) = fake_systemctl(&harness, NEVER);
+    let path = path_with(&fakebin);
+    let old = install_an_older_copy(&harness, &bin, &path);
+
+    let output = run(
+        &harness,
+        &bin.join("humanitl"),
+        &["--json", "daemon", "install"],
+        &path,
+        true,
+    );
+
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let value = json(&output);
+    assert_eq!(value["daemon"], "0.0.0-old", "{value}");
+    assert!(
+        old.join("bin/humanitld").is_file(),
+        "the older copy went while an older daemon answered: {value}"
+    );
+}
+
+/// HUM-210, Review: Nennt systemd einen Hauptprozess, den diese
+/// Kommandozeile nicht sieht -- sie läuft etwa in einem anderen
+/// PID-Namensraum --, ist offen, woraus er läuft, und die vorige Kopie bleibt.
+#[test]
+fn an_invisible_main_process_keeps_the_older_copy() {
+    let harness = Harness::new();
+    let _daemon = FakeServer::start(&harness);
+    let bin = image_tree(&harness);
+    let (fakebin, log) = fake_systemctl(&harness, NEVER);
+    // Größer als jede mögliche Prozessnummer (`PID_MAX_LIMIT`, 2^22).
+    rewrite_systemctl(&fakebin, &log, "*show*) echo MainPID=4194304 ;;");
+    let path = path_with(&fakebin);
+    let old = install_an_older_copy(&harness, &bin, &path);
+
+    let output = run(
+        &harness,
+        &bin.join("humanitl"),
+        &["--json", "daemon", "install"],
+        &path,
+        true,
+    );
+
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let value = json(&output);
+    assert_eq!(value["daemon"], VERSION, "{value}");
+    assert!(
+        calls(&log).contains("--user show -p MainPID humanitld.service"),
+        "{}",
+        calls(&log)
+    );
+    assert!(
+        old.join("bin/humanitld").is_file(),
+        "the older copy went although the main process is not visible"
+    );
+}
+
+/// HUM-210, Review: Scheitert der Neustart, nachdem systemd den Daemon aus
+/// der neuen Kopie schon gestartet hat (etwa nach Ablauf der Frist), zeigt
+/// `current` wieder auf die vorige, aber die neue bleibt, solange ein Prozess
+/// aus ihr läuft.
+#[test]
+fn a_failed_restart_keeps_the_new_copy_a_process_already_runs_from() {
+    let harness = Harness::new();
+    let bin = image_tree(&harness);
+    std::fs::copy(sleep_program(), bin.join("humanitld")).expect("a real daemon binary");
+    set_executable(&bin.join("humanitld"));
+    let (fakebin, log) = fake_systemctl(&harness, NEVER);
+    let path = path_with(&fakebin);
+    install_an_older_copy(&harness, &bin, &path);
+    let lib = std::fs::canonicalize(lib_dir(&harness)).expect("the lib directory");
+    let pid_file = harness.path("started.pid");
+    let _started = KillPidFile(pid_file.clone());
+    rewrite_systemctl(
+        &fakebin,
+        &log,
+        &format!(
+            "*try-restart*)\n\
+             python3 -c 'import os,sys; os.execv(sys.argv[1], [\"sleep\", \"60\"])' \
+             '{lib}/current/bin/humanitld' </dev/null >/dev/null 2>&1 &\n\
+             echo $! >'{pid_file}'\n\
+             n=0\n\
+             while :; do\n\
+               case \"$(readlink /proc/$!/exe)\" in '{lib}/{VERSION}.'*) break ;; esac\n\
+               n=$((n + 1))\n\
+               test \"$n\" -le 250 || {{ echo 'the stand-in never ran' >>'{log}'; exit 97; }}\n\
+               sleep 0.02\n\
+             done\n\
+             echo 'Job failed' >&2; exit 1 ;;\n\
+             *restart*) echo 'Job failed' >&2; exit 1 ;;",
+            lib = lib.display(),
+            log = log.display(),
+            pid_file = pid_file.display(),
+        ),
+    );
+
+    let output = run(
+        &harness,
+        &bin.join("humanitl"),
+        &["--json", "daemon", "install"],
+        &path,
+        true,
+    );
+
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    let value = json(&output);
+    assert_eq!(value["code"], "DAEMON_008", "{value}");
+    assert!(
+        !calls(&log).contains("the stand-in never ran"),
+        "{}",
+        calls(&log)
+    );
+    assert_eq!(current_name(&harness), OLD_COPY);
+    let copies: Vec<String> = std::fs::read_dir(lib_dir(&harness))
+        .expect("the lib directory")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    assert!(
+        copies
+            .iter()
+            .any(|name| name.starts_with(&format!("{VERSION}."))),
+        "the new copy a process runs from went: {copies:?} ({})",
+        calls(&log)
+    );
+}
+
+/// Die Namen der Kopien dieser Fassung unter `~/.local/lib/humanitl`.
+fn copies_of_this_version(harness: &Harness) -> Vec<String> {
+    std::fs::read_dir(lib_dir(harness))
+        .expect("the lib directory")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .filter(|name| name.starts_with(&format!("{VERSION}.")))
+        .collect()
+}
+
+/// HUM-210, Review: Scheitert der Neustart, und nennt systemd danach einen
+/// Hauptprozess, den diese Kommandozeile nicht sieht, ist offen, ob er aus
+/// der neuen Kopie läuft. `current` zeigt wieder auf die vorige, die neue
+/// bleibt.
+#[test]
+fn a_failed_restart_keeps_the_new_copy_while_the_main_process_is_invisible() {
+    let harness = Harness::new();
+    let bin = image_tree(&harness);
+    let (fakebin, log) = fake_systemctl(&harness, NEVER);
+    let path = path_with(&fakebin);
+    install_an_older_copy(&harness, &bin, &path);
+    rewrite_systemctl(
+        &fakebin,
+        &log,
+        "*restart*) echo 'Job failed' >&2; exit 1 ;;\n\
+         *MainPID*) echo MainPID=4194304 ;;",
+    );
+
+    let output = run(
+        &harness,
+        &bin.join("humanitl"),
+        &["--json", "daemon", "install"],
+        &path,
+        true,
+    );
+
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    assert_eq!(json(&output)["code"], "DAEMON_008");
+    assert_eq!(current_name(&harness), OLD_COPY);
+    assert_eq!(
+        copies_of_this_version(&harness).len(),
+        1,
+        "the new copy went although the main process is not visible: {}",
+        calls(&log)
+    );
+}
+
+/// HUM-210, Review: Dasselbe, wenn schon `enable --now` scheitert: Es kann
+/// den Daemon aus der neuen Kopie gestartet haben, bevor es aufgab.
+#[test]
+fn a_failed_enable_keeps_the_new_copy_while_the_main_process_is_invisible() {
+    let harness = Harness::new();
+    let bin = image_tree(&harness);
+    let (fakebin, log) = fake_systemctl(&harness, NEVER);
+    let path = path_with(&fakebin);
+    install_an_older_copy(&harness, &bin, &path);
+    rewrite_systemctl(
+        &fakebin,
+        &log,
+        "*enable*) echo 'Job failed' >&2; exit 1 ;;\n\
+         *MainPID*) echo MainPID=4194304 ;;",
+    );
+
+    let output = run(
+        &harness,
+        &bin.join("humanitl"),
+        &["--json", "daemon", "install"],
+        &path,
+        true,
+    );
+
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    assert_eq!(json(&output)["code"], "DAEMON_008");
+    assert_eq!(current_name(&harness), OLD_COPY);
+    assert_eq!(
+        copies_of_this_version(&harness).len(),
+        1,
+        "the new copy went although the main process is not visible: {}",
+        calls(&log)
+    );
+}
+
+/// HUM-210, Review: Auch der erste Lauf, der die Unit anlegt und kein
+/// `current` vorfindet, startet den Dienst mit `try-restart` neu. Lief schon
+/// ein Dienst dieses Namens, etwa aus einer Unit unter `/etc`, die die neue
+/// jetzt verdeckt, ließe `enable --now` ihn sonst laufen.
+#[test]
+fn a_first_install_restarts_a_service_that_was_already_active() {
+    let harness = Harness::new();
+    let _daemon = FakeServer::start(&harness);
+    let bin = image_tree(&harness);
+    let (fakebin, log) = fake_systemctl(&harness, NEVER);
+
+    let output = run(
+        &harness,
+        &bin.join("humanitl"),
+        &["--json", "daemon", "install"],
+        &path_with(&fakebin),
+        true,
+    );
+
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let value = json(&output);
+    assert_eq!(value["action"], "created", "{value}");
+    assert_eq!(value["restarted"], true, "{value}");
+    assert!(
+        calls(&log).contains("--user try-restart humanitld.service"),
+        "{}",
+        calls(&log)
+    );
+}
+
 /// Akzeptanzkriterium 2 über `AppRun`: Das `AppImage` erneuert vor dem Start
 /// der Anwendung, und die Anwendung bekommt ihre Argumente.
 #[test]
 fn the_appimage_entry_refreshes_before_it_starts_the_app() {
     let harness = Harness::new();
+    let _daemon = FakeServer::start(&harness);
     let bin = image_tree(&harness);
     let (fakebin, log) = fake_systemctl(&harness, NEVER);
     let path = path_with(&fakebin);
@@ -481,7 +991,7 @@ fn the_appimage_entry_refreshes_before_it_starts_the_app() {
     );
     assert!(!old.exists(), "the older copy stayed");
     assert!(
-        calls(&log).contains("--user restart humanitld.service"),
+        calls(&log).contains("--user try-restart humanitld.service"),
         "{}",
         calls(&log)
     );
@@ -785,6 +1295,7 @@ fn a_failed_reload_after_a_failed_restart_restarts_nothing() {
              echo \"$*\" >>'{log}.since'\n\
              case \"$*\" in\n\
              *restart*) exit 1 ;;\n\
+             *MainPID*) echo MainPID=0 ;;\n\
              esac\n\
              exit 0\n",
             log = log.display(),
@@ -839,6 +1350,7 @@ fn a_restore_that_fails_restarts_nothing_and_says_so() {
              echo \"$*\" >>'{log}'\n\
              case \"$*\" in\n\
              *restart*) chmod 0555 '{lib}'; echo 'Job failed' >&2; exit 1 ;;\n\
+             *MainPID*) echo MainPID=0 ;;\n\
              esac\n\
              exit 0\n",
             log = log.display(),
@@ -864,7 +1376,7 @@ fn a_restore_that_fails_restarts_nothing_and_says_so() {
     assert!(!why.contains("are back in place"), "{why}");
     let restarts = calls(&log)
         .lines()
-        .filter(|line| *line == "--user restart humanitld.service")
+        .filter(|line| line.ends_with("restart humanitld.service"))
         .count();
     assert_eq!(restarts, 1, "{}", calls(&log));
 }
@@ -897,6 +1409,7 @@ fn a_failed_restart_of_a_created_unit_leaves_no_link_and_restarts_nothing() {
              case \"$*\" in\n\
              *enable*) mkdir -p '{wants}' && ln -sf '{unit}' '{link}' ;;\n\
              *restart*) echo 'Job failed' >&2; exit 1 ;;\n\
+             *MainPID*) echo MainPID=0 ;;\n\
              esac\n\
              exit 0\n",
             log = log.display(),
@@ -927,7 +1440,7 @@ fn a_failed_restart_of_a_created_unit_leaves_no_link_and_restarts_nothing() {
     assert_eq!(
         calls
             .lines()
-            .filter(|line| *line == "--user restart humanitld.service")
+            .filter(|line| line.ends_with("restart humanitld.service"))
             .count(),
         1,
         "{calls}"
