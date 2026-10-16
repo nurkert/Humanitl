@@ -1,0 +1,10 @@
+{
+  "method": "POST",
+  "url": "https://api.example.test/tickets",
+  "body": {
+    "customer": "Müller GmbH",
+    "contact": "anna@mueller.de",
+    "iban": "DE89370400440532013000",
+    "note": "Bitte die Rechnung erneut senden."
+  }
+}

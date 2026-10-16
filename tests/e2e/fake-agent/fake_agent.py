@@ -6,6 +6,7 @@ HTTP-Anfragen über die eine Tür, die es dort gibt, und schreibt auf, was
 zurückkam.
 
     fake_agent.py SCRIPT.json
+    fake_agent.py --request REQUEST.json
 
 `SCRIPT.json` beschreibt die Anfragen mit ihren Zeitpunkten, relativ zum Start
 des Agenten und in Millisekunden:
@@ -15,6 +16,18 @@ des Agenten und in Millisekunden:
       {"at": 4200, "req": {"method": "POST", "url": "http://api.github.com/graphql",
                            "body": "{\\"q\\": \\"…\\"}"}}
     ]}
+
+`--request` (HUM-055) nimmt statt eines Drehbuchs genau eine Anfrage, die
+sofort hinausgeht:
+
+    {"method": "POST", "url": "https://api.example.test/tickets",
+     "body": {"customer": "Müller GmbH"}}
+
+Ein `body`, der ein JSON-Objekt oder eine Liste ist, geht als kompaktes JSON
+in UTF-8 hinaus, Umlaute wörtlich und nicht als `\\u`-Folge: Der Nutzerbegriff
+„Müller GmbH" soll im Rumpf so stehen, wie ein Agent ihn schickt, sonst fände
+der Detektor ihn nicht und das M4-Demo bewiese an einer falschen Anfrage. Ein
+`body`, der ein Text ist, geht unverändert hinaus.
 
 Je Schritt ein Thread: Er wartet bis zu seinem Zeitpunkt und stellt dann die
 Anfrage, gleich ob eine frühere noch hängt. Genau darauf kommt es an — die
@@ -196,10 +209,38 @@ def schedule(index, step, start, out_dir):
     emit(run_request(index, step, out_dir))
 
 
+def script_of_request(request):
+    """Macht aus einer einzelnen Anfrage ein Drehbuch mit einem Schritt (HUM-055).
+
+    Ein JSON-Objekt oder eine Liste als `body` wird kompakt und in UTF-8
+    serialisiert, ohne `\\u`-Folgen; ein Text bleibt, wie er ist.
+    """
+    if not isinstance(request, dict):
+        raise ValueError("expected a JSON object")
+    url = request.get("url")
+    if not isinstance(url, str) or not url:
+        raise ValueError("no url")
+    req = {"method": str(request.get("method", "GET")), "url": url}
+    body = request.get("body")
+    if isinstance(body, (dict, list)):
+        req["body"] = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+    elif isinstance(body, str):
+        req["body"] = body
+    elif body is not None:
+        raise ValueError("body must be an object, a list or a string")
+    return {"steps": [{"at": 0, "req": req}]}
+
+
 def main(argv):
     """Liest das Skript, fährt es ab und wartet auf die letzte Antwort."""
-    if len(argv) != 2:
-        note("usage: fake_agent.py SCRIPT.json")
+    if len(argv) == 3 and argv[1] == "--request":
+        single = True
+        source = argv[2]
+    elif len(argv) == 2 and not argv[1].startswith("--"):
+        single = False
+        source = argv[1]
+    else:
+        note("usage: fake_agent.py SCRIPT.json | fake_agent.py --request REQUEST.json")
         return 2
     if not os.path.isfile(CURL) or not os.access(CURL, os.X_OK):
         note(f"{CURL} is missing in the sandbox; the agent cannot send anything")
@@ -208,15 +249,23 @@ def main(argv):
         note("the sandbox has no /bin/sh; this is not the profile the demo expects")
 
     try:
-        with open(argv[1], "r", encoding="utf-8") as handle:
-            script = json.load(handle)
+        with open(source, "r", encoding="utf-8") as handle:
+            loaded = json.load(handle)
     except (OSError, ValueError) as error:
-        note(f"cannot read {argv[1]}: {error}")
+        note(f"cannot read {source}: {error}")
         return 2
+    if single:
+        try:
+            script = script_of_request(loaded)
+        except ValueError as error:
+            note(f"{source} is not a request: {error}")
+            return 2
+    else:
+        script = loaded
 
     steps = script.get("steps", [])
     if not steps:
-        note(f"{argv[1]} has no steps")
+        note(f"{source} has no steps")
         return 2
 
     out_dir = os.environ.get("HUMANITL_AGENT_OUT", "/tmp/fake-agent")
