@@ -322,6 +322,12 @@ stop_fake_upstream() {
 # Kommandozeile läuft danach im selben Baum und findet ihn deshalb ohne ein
 # einziges Flag. XDG_DIR trägt Daten, Konfiguration und HOME des Laufs.
 #
+# HOLD_TIMEOUT_SECS `config` setzt keine Frist über die Umgebung: Der Daemon
+# nimmt dann die aus `config.toml`. Das M4-Demo braucht das, weil es zeigt,
+# dass `humanitl config set hold.timeout_secs` nach einem Neustart wirkt; eine
+# Umgebungsvariable gewänne über die Datei und machte den Beleg wertlos
+# (HUM-055).
+#
 # Alles ab dem vierten Argument geht unverändert an `humanitld` weiter. Die
 # drei ersten bleiben, wo sie waren: M1 ruft mit genau dreien auf und wird von
 # dieser Erweiterung nicht berührt (HUM-087). Der M2-Lauf übergibt darüber
@@ -369,12 +375,18 @@ start_daemon() {
         e2e_die "cannot put the sandbox profiles where humanitl looks for them"
 
     [ -x "$E2E_DAEMON" ] || e2e_die "no humanitld binary at $E2E_DAEMON"
+    # `env -u` statt einer leeren Zuweisung: Eine leere Frist wäre ein Wert,
+    # den die Konfiguration als Fehler meldete, keine fehlende.
+    if [ "$daemon_hold" = config ]; then
+        set -- env -u HUMANITL_HOLD__TIMEOUT_SECS "$E2E_DAEMON" "$@"
+    else
+        set -- env HUMANITL_HOLD__TIMEOUT_SECS="$daemon_hold" "$E2E_DAEMON" "$@"
+    fi
     XDG_RUNTIME_DIR="$E2E_XDG_RUNTIME" \
         XDG_DATA_HOME="$E2E_XDG_DATA" \
         XDG_CONFIG_HOME="$E2E_XDG_CONFIG" \
         HOME="$E2E_HOME" \
-        HUMANITL_HOLD__TIMEOUT_SECS="$daemon_hold" \
-        "$E2E_DAEMON" "$@" >> "$DAEMON_LOG" 2>&1 &
+        "$@" >> "$DAEMON_LOG" 2>&1 &
     E2E_DAEMON_PID=$!
 
     if ! wait_for_socket "$DAEMON_SOCK" 20 || ! wait_for_socket "$DAEMON_PROXY_SOCK" 20; then
@@ -382,7 +394,7 @@ start_daemon() {
         cat "$DAEMON_LOG" >&2 || true
         e2e_die "no daemon.sock and proxy.sock within twenty seconds (argv: $DAEMON_ARGV)"
     fi
-    e2e_say "daemon up (pid $E2E_DAEMON_PID), hold timeout ${daemon_hold}s, argv \"$DAEMON_ARGV\", log $DAEMON_LOG"
+    e2e_say "daemon up (pid $E2E_DAEMON_PID), hold timeout ${daemon_hold}, argv \"$DAEMON_ARGV\", log $DAEMON_LOG"
 }
 
 # stop_daemon — den Daemon geordnet beenden.

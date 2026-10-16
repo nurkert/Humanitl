@@ -7,11 +7,13 @@ wenn alle bisherigen Demos grün sind (`BACKLOG.md` 8, `CONTRIBUTING.md`
 nicht.
 
 ```
-./tests/e2e/run.sh                      # alle drei, mit Bauen
+./tests/e2e/run.sh                      # alle vier, mit Bauen
 E2E_SKIP_BUILD=1 ./tests/e2e/run.sh     # die Binaries nehmen, wie sie sind
 E2E_ONLY=m1 ./tests/e2e/run.sh          # nur die versiegelte Kiste
 E2E_ONLY=m2 ./tests/e2e/run.sh          # nur die erste Entscheidung
 E2E_ONLY=m3 ./tests/e2e/run.sh          # nur den Agenten in der Sandbox
+E2E_ONLY=m4 ./tests/e2e/run.sh          # nur den Editor, die Audit-Kette und das Paket
+M4_PACKAGE=skip ./tests/e2e/m4_trusted_editor.sh   # M4 ohne den Release-Bau von Schritt 13
 E2E_TRACE=1  ./tests/e2e/run.sh         # zusätzlich `set -x` (die CI setzt es)
 ```
 
@@ -25,16 +27,17 @@ Voraussetzungen auf der Maschine: `bubblewrap`, `curl`, `jq`, `python3`,
 (auf Ubuntu 24.04 `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`).
 Fehlt etwas, sagt der Lauf welches Werkzeug und bricht ab; er hängt nicht.
 
-## Die drei Demos
+## Die vier Demos
 
 | Demo | Skript | Was es belegt |
 |---|---|---|
 | M1 | `m1_sealed_box.sh` | Die Kiste ist dicht, eine einzelne Entscheidung wirkt, ein Neustart verliert nichts |
 | M2 | `m2_first_decision/run.sh` | Ein voller Arbeitsabschnitt eines Menschen: Gruppierung, Stapel-Freigabe mit Sitzungsregel, Block, Zeitüberschreitung, Historie, der MITM-Pfad über TLS |
 | M3 | `m3_agent_inside/run.sh` | Der Agent selbst: `humanitl run`, die Durchreiche zum Sprachmodell, die mitgelieferten Regeln, eine Entscheidung über gRPC, das Terminal mit seinen Hinweiszeilen, die Zusammenfassung des Laufs |
+| M4 | `m4_trusted_editor.sh` | Der Editor auf dem Bildschirm: eine gehaltene Anfrage mit drei Funden wird pseudonymisiert und gesendet, beim Ziel kommt kein Original an; die Audit-Kette hält und bricht bei einer geänderten Zeile; `config set` wirkt nach einem Neustart; das `.deb` besteht lintian |
 
 Jedes Demo schreibt seine Artefakte in ein eigenes Verzeichnis unter
-`target/e2e/` (`m1`, `m2`, `m3`) und räumt vor dem Lauf nur sein eigenes leer.
+`target/e2e/` (`m1`, `m2`, `m3`, `m4`) und räumt vor dem Lauf nur sein eigenes leer.
 Die CI lädt `target/e2e` als Ganzes hoch.
 
 Jedes Demo läuft in einem eigenen Nutzer- und Netz-Namensraum. Der Grund ist
@@ -65,9 +68,11 @@ einem vollständigen unterscheidbar, ohne dass jemand das Protokoll liest.
 | `m1_sealed_box.sh` | Das Demo von M1 |
 | `m2_first_decision/` | Das Demo von M2, mit seiner `config.toml` und dem Drehbuch `script.json` |
 | `m3_agent_inside/` | Das Demo von M3, mit seiner `config.toml` und den beiden Agentenskripten |
+| `m4_trusted_editor.sh` | Das Demo von M4; sein Bildschirm-Treiber ist `app/integration_test/m4_trusted_editor_test.dart` |
+| `fixtures/m4_request.json` | Die Anfrage von M4 mit Kundenname, Mailadresse und IBAN |
 | `fake_upstream.py` | Das Ziel von M1 |
-| `fake-upstream/` | Das Ziel von M2 und M3, im Klartext und über TLS, mit `gen-test-ca.sh` |
-| `fake-agent/` | Der Agent von M2: arbeitet ein Drehbuch aus Zeitpunkten ab |
+| `fake-upstream/` | Das Ziel von M2, M3 und M4, im Klartext und über TLS, mit `gen-test-ca.sh`; `--capture` schreibt mit, was ankam, Rumpf eingeschlossen |
+| `fake-agent/` | Der Agent von M2 und M4: arbeitet ein Drehbuch aus Zeitpunkten ab, oder mit `--request` eine einzelne Anfrage |
 | `mock_llm/` | Das Sprachmodell von M3, mit seinem eigenen Test |
 
 Die Ziele und die Agenten sind Python und keine Rust-Binaries. Der Grund steht
@@ -116,6 +121,11 @@ weiß. Der Kopf jedes Skripts zählt das im Einzelnen auf; in kurz:
   `PATH` der Sandbox. Ein `opencode` unter `~/.local/bin` zählt nicht, und der
   Lauf sagt das, statt drinnen an etwas anderem zu scheitern. `M3_OPENCODE=1`
   macht aus dem Überspringen einen Fehlschlag.
+- **M4 prüft den verkleinerten Umfang von Sprint 4.** Kein Mapping-Panel,
+  keine `pseudonym.created`-Records (HUM-048 nach 0.1.0), der Nutzerbegriff
+  wird `<TERM_1>` statt eines Alias, die Sprache wird nicht live umgeschaltet
+  (HUM-172), und eine Einstellung wirkt erst nach einem Neustart des Daemons.
+  Der Kopf von `m4_trusted_editor.sh` begründet jede Abweichung.
 
 ## Die CI-Jobs
 
@@ -124,6 +134,8 @@ weiß. Der Kopf jedes Skripts zählt das im Einzelnen auf; in kurz:
 | `e2e` | `E2E_ONLY=m1` |
 | `e2e-xvfb` | `E2E_ONLY=m2` (Flutter und xvfb für die spätere Oberflächen-Hälfte) |
 | `e2e-agent` | `E2E_ONLY=m3` |
+| `e2e-m4` | `E2E_ONLY=m4` mit `M4_PACKAGE=skip`, unter `dbus-run-session` |
+| `e2e-m4-package` | `M4_PACKAGE=only`: Schritt 13, Release-Bau, `.deb` und lintian |
 
-Alle drei laden `target/e2e` als Artefakt hoch: Daemon-Protokoll, Transkript
+Alle laden ihr Verzeichnis unter `target/e2e` als Artefakt hoch: Daemon-Protokoll, Transkript
 des Agenten, Zugriffsprotokolle der Ziele und die Flow-Liste des Laufs.
