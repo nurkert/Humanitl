@@ -177,7 +177,14 @@ pub struct FakeServer {
 impl FakeServer {
     /// Startet den Dienst und wartet, bis Socket und Token da sind.
     pub fn start(harness: &Harness) -> Self {
-        Self::start_with(harness, false)
+        Self::start_with(harness, false, None)
+    }
+
+    /// Wie [`FakeServer::start`], aber `GetInfo` nennt `version` als Fassung
+    /// des Daemons (HUM-210): ein älterer Daemon, der nach einem Update noch
+    /// antwortet.
+    pub fn start_with_version(harness: &Harness, version: &str) -> Self {
+        Self::start_with(harness, false, Some(version.to_owned()))
     }
 
     /// Wie [`FakeServer::start`], aber `Audit(Export)` meldet Erfolg und
@@ -185,10 +192,10 @@ impl FakeServer {
     /// schreibt, die der Aufrufer nicht hat, etwa ein eigenes `/tmp` unter
     /// `PrivateTmp`.
     pub fn start_with_silent_export(harness: &Harness) -> Self {
-        Self::start_with(harness, true)
+        Self::start_with(harness, true, None)
     }
 
-    fn start_with(harness: &Harness, silent_export: bool) -> Self {
+    fn start_with(harness: &Harness, silent_export: bool, version: Option<String>) -> Self {
         let paths = harness.paths();
         let socket = paths.daemon_socket();
         let token_path = paths.token_path();
@@ -220,6 +227,7 @@ impl FakeServer {
                         Arc::new(SilentExport {
                             inner: daemon,
                             silent: silent_export,
+                            version,
                         }),
                         token,
                     ));
@@ -342,16 +350,23 @@ impl Drop for AuditServer {
 }
 
 /// Der Fake, bei Bedarf mit einem Export, der Erfolg meldet und nichts
-/// schreibt. Jede andere RPC geht unverändert an den Fake.
+/// schreibt, und mit einer eigenen Fassung in `GetInfo`. Jede andere RPC geht
+/// unverändert an den Fake.
 struct SilentExport {
     inner: FakeDaemon,
     silent: bool,
+    /// Die Fassung, die `GetInfo` statt der des Fakes nennt.
+    version: Option<String>,
 }
 
 #[tonic::async_trait]
 impl DaemonApi for SilentExport {
     async fn info(&self) -> v1::Info {
-        self.inner.info().await
+        let mut info = self.inner.info().await;
+        if let Some(version) = &self.version {
+            info.daemon_version.clone_from(version);
+        }
+        info
     }
     fn subscribe(&self, request: v1::SubscribeRequest) -> BoxStream<v1::FlowEvent> {
         self.inner.subscribe(request)

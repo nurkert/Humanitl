@@ -91,6 +91,7 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-224 | Der Kanal-Test des Shims fällt unter Last zufällig aus | S | — |
 | HUM-228 | Der brotli-Test des Parsers wartet auf die Uhr und fällt unter Last aus | S | — |
 | HUM-233 | Der `systemd`-Test auf geschlossene Nummer fällt unter Last zufällig aus | S | — |
+| HUM-235 | `daemon uninstall --purge-binaries` löscht Kopien, aus denen noch ein Prozess läuft | S | HUM-210 |
 | HUM-236 | `cargo deny` meldet vier rustls-Advisories und `unsafe-libyaml` und ist auf `main` rot | XS | — |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
@@ -4319,12 +4320,12 @@ Der Befund stammt vom Stand vor HUM-077. Zuerst prüfen, ob HUM-077 ihn schon be
 Der Befund ist behoben, und ein Test hält ihn behoben.
 
 ### Akzeptanzkriterien
-- [ ] Nach erfolgreichem `activate` bei `staged.is_some()` `systemctl --user try-restart humanitld.service` ausführen.
-- [ ] `retire_previous()` nur bei `Activation::Enabled` aufrufen und nur, wenn `wait_for_daemon` `env!("CARGO_PKG_VERSION")` meldet und kein `/proc/<pid>/exe` unter dem alten Verzeichnis liegt.
-- [ ] Sonst die Kopie behalten und beim nächsten Install aufräumen.
-- [ ] Test: Eine Neuinstallation bei aktiver Unit lässt das Verzeichnis der laufenden Binärdatei stehen.
-- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
-- [ ] `make check` grün.
+- [x] Nach erfolgreichem `activate` bei `staged.is_some()` `systemctl --user try-restart humanitld.service` ausführen. Gemessen am 2026-10-06: `a_first_install_restarts_a_service_that_was_already_active` und `a_reinstall_without_current_restarts_the_running_unit` werden rot, wenn nur bei einer vorigen Kopie neu gestartet wird; fünf Tests werden rot mit `restart` statt `try-restart`. Der zweite Neustart nach einer Rücknahme bleibt `restart`, weil der Dienst dann auf `failed` steht.
+- [x] `retire_previous()` nur bei `Activation::Enabled` aufrufen und nur, wenn `wait_for_daemon` `env!("CARGO_PKG_VERSION")` meldet und kein `/proc/<pid>/exe` unter dem alten Verzeichnis liegt. Gemessen am 2026-10-06: `settle` räumt erst nach `wait_for_daemon` und nur bei genau dieser Fassung (`the_older_copy_stays_while_an_older_daemon_answers` wird rot, wenn jede Antwort genügt); `running::runs_from` prüft jede Kopie vor `remove_dir_all`, auch die Reste aus `retire_strays` und die neue Kopie in `restore`. Im Zweifel bleibt die Kopie: unlesbares `/proc`, unsichtbarer `MainPID`, verschlossener `humanitld` dieses Kontos.
+- [x] Sonst die Kopie behalten und beim nächsten Install aufräumen. Gemessen am 2026-10-06 mit `the_older_copy_stays_until_a_daemon_of_this_version_answers`.
+- [x] Test: Eine Neuinstallation bei aktiver Unit lässt das Verzeichnis der laufenden Binärdatei stehen. Gemessen am 2026-10-06: `a_reinstall_keeps_the_copy_a_running_daemon_runs_from` in `tests/daemon_lifecycle.rs`.
+- [x] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis). Gemessen am 2026-10-06: Ohne die `/proc`-Prüfung in `retire_previous` wird `a_reinstall_keeps_the_copy_a_running_daemon_runs_from` rot („the copy a process still runs from went").
+- [x] `make check` grün. Gemessen am 2026-10-06 mit `STRICT=1 make check` im Arbeitsbaum des Issues.
 
 ### Referenzen
 Sicherheitsdurchlauf 2026-09-23, Befund M8; `daemon/bin/humanitl/src/cmd/daemon.rs:252`.
@@ -5544,3 +5545,59 @@ Kein neuer Test. Der Nachweis ist `cargo deny` selbst: mit dem alten `Cargo.lock
 
 ### Referenzen
 https://rustsec.org/advisories/RUSTSEC-2026-0346, https://rustsec.org/advisories/RUSTSEC-2026-0347, https://rustsec.org/advisories/RUSTSEC-2026-0348, https://rustsec.org/advisories/RUSTSEC-2026-0349, https://rustsec.org/advisories/RUSTSEC-2024-0449; HUM-142 (RUSTSEC-2026-0285); `daemon/crates/proxy/src/upstream.rs` (`ClientTls::new`), `daemon/crates/proxy/src/ca.rs` (`server_config`).
+
+---
+
+## HUM-235 · `daemon uninstall --purge-binaries` löscht Kopien, aus denen noch ein Prozess läuft
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-210 · Blockiert: —
+
+### Kontext
+Fund aus dem Review von HUM-210 am 2026-10-06 (Codex, Befund B3). `purge_binaries`
+(`daemon/bin/humanitl/src/cmd/daemon/uninstall.rs`) prüft vor dem Löschen nur, ob am Socket
+noch ein Daemon antwortet, und entfernt danach jede eigene Kopie unter `~/.local/lib/humanitl`.
+Ein Daemon, der hängt und nicht mehr antwortet, oder ein anderer Prozess aus einer Kopie
+verliert so seine Dateien. HUM-210 hat für `daemon install` die Prüfung
+`running::runs_from` eingeführt (`/proc/<pid>/exe`, im Zweifel laufend); `uninstall` nutzt sie
+noch nicht. Der Weg ist ein anderer als der des Befunds M8, deshalb ein eigenes Issue.
+
+### Ziel
+`--purge-binaries` entfernt keine Kopie, aus der ein Prozess laufen kann. Solche Kopien bleiben
+liegen und stehen im Befund `DAEMON_014` mit ihrem Pfad; alle anderen gehen wie bisher.
+
+### Nicht-Ziel
+Prozesse beenden. Das bleibt beim Menschen; der Fix im Befund nennt den Befehl.
+
+### Betroffene Pfade
+- `daemon/bin/humanitl/src/cmd/daemon/uninstall.rs`
+- `daemon/bin/humanitl/src/cmd/daemon/running.rs`
+- `daemon/bin/humanitl/tests/daemon_lifecycle.rs`
+- `docs/cli.md`
+
+### Spezifikation
+Vor jedem `remove_dir_all` in `purge_binaries` `running::runs_from(copy, owner, main)` mit
+`main` aus `systemctl --user show -p MainPID humanitld.service`, solange es `systemctl` gibt,
+sonst `MainPid::Absent`. Eine laufende Kopie kommt als `Left` mit Grund in den Befund. Der
+Verweis `current` bleibt, wenn er auf eine solche Kopie zeigt.
+
+### Schritte
+1. `runs_from` in `purge_binaries` einhängen, `current` nur ohne laufende Kopie entfernen.
+2. Test schreiben, Mutationsbeweis.
+3. `docs/cli.md`, Abschnitt `daemon uninstall`, nachziehen.
+
+### Tests
+- `purge_keeps_a_copy_a_process_runs_from`: eine Kopie von `sleep` als `bin/humanitld` läuft,
+  der Socket antwortet nicht; `uninstall --purge-binaries` endet mit `DAEMON_014`, die Kopie
+  und `current` bleiben, andere Kopien gehen.
+
+### Akzeptanzkriterien
+- [ ] Keine Kopie, aus der laut `/proc` ein Prozess läuft oder laufen kann, geht.
+- [ ] Der Befund nennt jede liegengebliebene Kopie.
+- [ ] Der Test ist ohne den Fix rot (Mutationsbeweis).
+- [ ] `make check` grün.
+
+### Fallstricke
+- Im Zweifel bleibt die Kopie (Regel aus HUM-210): unlesbares `/proc`, ein unsichtbarer
+  `MainPID`, ein verschlossener `humanitld` dieses Kontos.
+
+### Referenzen
+HUM-210 (Review 2026-10-06, Befund B3); HUM-077 (`--purge-binaries`).
