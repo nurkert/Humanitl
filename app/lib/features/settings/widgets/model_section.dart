@@ -313,34 +313,37 @@ class _ModelSectionState extends ConsumerState<ModelSection> {
                 ),
               ),
               SizedBox(height: tokens.spacing.x2),
-              Row(
+              SecretField(
+                controller: _key,
+                semanticsLabel: l10n.settingsKeyLabel,
+                hint: widget.status.set
+                    ? l10n.settingsKeyReplaceHint
+                    : l10n.settingsKeyHint,
+                enabled: !_keyBusy,
+                onSubmitted: (String _) => unawaited(_storeKey()),
+              ),
+              SizedBox(height: tokens.spacing.x2),
+              // Die Knöpfe unter dem Feld in einem `Wrap`: Neben dem Feld
+              // liefen „Schlüssel hinterlegen" und „Schlüssel entfernen" im
+              // Deutschen über den Rand des Blatts (`docs/UX.md` 6, gefunden
+              // von HUM-054).
+              Wrap(
+                alignment: WrapAlignment.end,
+                spacing: tokens.spacing.x2,
+                runSpacing: tokens.spacing.x2,
                 children: <Widget>[
-                  Expanded(
-                    child: SecretField(
-                      controller: _key,
-                      semanticsLabel: l10n.settingsKeyLabel,
-                      hint: widget.status.set
-                          ? l10n.settingsKeyReplaceHint
-                          : l10n.settingsKeyHint,
-                      enabled: !_keyBusy,
-                      onSubmitted: (String _) => unawaited(_storeKey()),
-                    ),
-                  ),
-                  SizedBox(width: tokens.spacing.x2),
                   HButton(
                     key: const Key('settings-key-store'),
                     onPressed: _keyBusy ? null : () => unawaited(_storeKey()),
                     child: Text(l10n.settingsKeyStore),
                   ),
-                  if (widget.status.set) ...<Widget>[
-                    SizedBox(width: tokens.spacing.x2),
+                  if (widget.status.set)
                     HButton(
                       key: const Key('settings-key-remove'),
                       variant: HButtonVariant.ghost,
                       onPressed: _keyBusy ? null : () => unawaited(_clearKey()),
                       child: Text(l10n.settingsKeyRemove),
                     ),
-                  ],
                 ],
               ),
             ],

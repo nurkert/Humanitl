@@ -268,34 +268,42 @@ class _SettingsFormState extends ConsumerState<_SettingsForm> {
           help: l10n.settingsWorkDirHelp,
           refusal: _refusals[FormKeys.sandboxWorkDir],
           refusalKey: const Key('settings-workdir-refusal'),
-          child: Row(
+          // Der Pfad auf einer eigenen Zeile, die Knöpfe darunter in einem
+          // `Wrap`: Nebeneinander liefen „Ordner wählen" und „Startordner
+          // verwenden" im Deutschen und bei doppelter Schrift über den Rand
+          // des Blatts (`docs/UX.md` 6, gefunden von HUM-054).
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              Expanded(
-                child: Text(
-                  workDir.isEmpty ? l10n.settingsWorkDirNone : workDir,
-                  key: const Key('settings-workdir'),
-                  style: tokens.typography.mono12.tinted(
-                    workDir.isEmpty ? tokens.colors.fg2 : tokens.colors.fg0,
+              Text(
+                workDir.isEmpty ? l10n.settingsWorkDirNone : workDir,
+                key: const Key('settings-workdir'),
+                style: tokens.typography.mono12.tinted(
+                  workDir.isEmpty ? tokens.colors.fg2 : tokens.colors.fg0,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+              SizedBox(height: tokens.spacing.x2),
+              Wrap(
+                alignment: WrapAlignment.end,
+                spacing: tokens.spacing.x2,
+                runSpacing: tokens.spacing.x2,
+                children: <Widget>[
+                  HButton(
+                    key: const Key('settings-workdir-choose'),
+                    onPressed: () => unawaited(_chooseWorkDir()),
+                    child: Text(l10n.settingsWorkDirChoose),
                   ),
-                  overflow: TextOverflow.ellipsis,
-                ),
+                  if (workDir.isNotEmpty)
+                    HButton(
+                      key: const Key('settings-workdir-reset'),
+                      variant: HButtonVariant.ghost,
+                      onPressed: () =>
+                          unawaited(_write(FormKeys.sandboxWorkDir, '-')),
+                      child: Text(l10n.settingsWorkDirReset),
+                    ),
+                ],
               ),
-              SizedBox(width: tokens.spacing.x2),
-              HButton(
-                key: const Key('settings-workdir-choose'),
-                onPressed: () => unawaited(_chooseWorkDir()),
-                child: Text(l10n.settingsWorkDirChoose),
-              ),
-              if (workDir.isNotEmpty) ...<Widget>[
-                SizedBox(width: tokens.spacing.x2),
-                HButton(
-                  key: const Key('settings-workdir-reset'),
-                  variant: HButtonVariant.ghost,
-                  onPressed: () =>
-                      unawaited(_write(FormKeys.sandboxWorkDir, '-')),
-                  child: Text(l10n.settingsWorkDirReset),
-                ),
-              ],
             ],
           ),
         ),

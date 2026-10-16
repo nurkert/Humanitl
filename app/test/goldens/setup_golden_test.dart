@@ -1,5 +1,7 @@
 // Goldens des Setup-Bildschirms bei 1280×800, dunkel und hell (HUM-044).
-// Erneuern mit `flutter test --update-goldens test/goldens`.
+// Dazu seit HUM-054 `setup_checklist` in den vier Varianten aus
+// `support/golden_variants.dart`: eine Maschine, auf der eine Zeile mit ihrem
+// Befund den Start sperrt. Erneuern mit `make goldens-update`.
 //
 // Drei Lagen, weil sie drei verschiedene Aussagen sind und verschieden
 // aussehen muessen:
@@ -33,6 +35,7 @@ import 'package:humanitl/features/setup/providers/discover_provider.dart';
 import 'package:humanitl/features/shell/section.dart';
 
 import '../harness/ui_state.dart';
+import 'support/golden_variants.dart';
 
 /// Die App über [client], im Theme [mode].
 Widget setup(HThemeMode mode, FakeDaemonClient client) => ProviderScope(
@@ -46,6 +49,21 @@ Widget setup(HThemeMode mode, FakeDaemonClient client) => ProviderScope(
   ],
   child: const HumanitlApp(),
 );
+
+/// Die App über [client] in der Variante [variant]: Theme und Sprache kommen
+/// aus Providern, wie in der echten App.
+Widget setupVariant(GoldenVariant variant, FakeDaemonClient client) =>
+    ProviderScope(
+      overrides: <Override>[
+        uiStateOverride(),
+        daemonClientProvider.overrideWithValue(client),
+        connectionHeartbeatProvider.overrideWithValue(null),
+        connectionReconnectProvider.overrideWithValue(null),
+        ...variant.appOverrides,
+        navigationProvider.overrideWith(() => _FixedSection(Section.setup)),
+      ],
+      child: const HumanitlApp(),
+    );
 
 class _FixedTheme extends ThemeModeSetting {
   _FixedTheme(this.mode);
@@ -101,6 +119,17 @@ void main() {
   FakeDaemonClient unmeasured() => FakeDaemonClient();
 
   FakeDaemonClient ready() => FakeDaemonClient()..doctorReport = fakeDoctorOk();
+
+  // Die Zeilen des Setups, alle gemessen, eine davon rot mit dem Befund
+  // `DOCTOR_001` und seinem Vorschlag; der Start bleibt aus.
+  goldenVariants(
+    'setup_checklist',
+    constraints: window,
+    builder: (GoldenVariant variant) => setupVariant(
+      variant,
+      FakeDaemonClient()..doctorReport = fakeDoctorFailing(),
+    ),
+  );
 
   for (final HThemeMode mode in HThemeMode.values) {
     if (mode == HThemeMode.system) {

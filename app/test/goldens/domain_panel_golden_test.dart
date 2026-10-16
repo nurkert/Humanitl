@@ -1,9 +1,10 @@
 // Goldens des rechten Panes (HUM-031, HUM-094): die Katalog-Karte für ein
 // Ziel, das der Daemon einem Eintrag zugeordnet hat, die Unbekannt-Karte für
 // eines, das er keinem zuordnen konnte, und die Zusammenfassung der Sitzung
-// ohne Auswahl.
+// ohne Auswahl. Die beiden Karten stehen seit HUM-054 in den vier Varianten
+// aus `support/golden_variants.dart`, die Zusammenfassung dunkel und hell.
 //
-// Erneuern mit `flutter test --update-goldens test/goldens`.
+// Erneuern mit `make goldens-update`.
 
 import 'package:alchemist/alchemist.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -23,6 +24,7 @@ import 'package:humanitl/l10n/l10n.dart';
 import '../features/intercept/fixtures.dart';
 import '../harness/ui_state.dart';
 import 'intercept_group_golden_test.dart' show FixedTheme, goldenNow;
+import 'support/golden_variants.dart';
 
 /// Eine gehaltene Anfrage an `registry.npmjs.org`, wie der Daemon sie schickt:
 /// mit registrierbarer Domäne und mit der Kennung des Katalogeintrags.
@@ -85,6 +87,7 @@ Widget pane({
   required HThemeMode mode,
   required Flow? selected,
   List<Flow> queue = const <Flow>[],
+  Locale locale = const Locale('en'),
 }) {
   final TestDaemonClient client = TestDaemonClient();
   final List<Flow> flows = <Flow>[...queue, ?selected];
@@ -105,8 +108,11 @@ Widget pane({
     child: HTheme(
       tokens: mode == HThemeMode.dark ? HTokens.dark : HTokens.light,
       child: Localizations(
-        locale: const Locale('en'),
-        delegates: AppLocalizations.localizationsDelegates,
+        locale: locale,
+        delegates: <LocalizationsDelegate<Object?>>[
+          ...AppLocalizations.localizationsDelegates,
+          ...hLocalizationsDelegates,
+        ],
         child: Directionality(
           textDirection: TextDirection.ltr,
           child: DomainPanel(flow: selected),
@@ -126,24 +132,27 @@ void main() {
     height: 640,
   );
 
+  goldenVariants(
+    'domain_known',
+    constraints: window,
+    builder: (GoldenVariant variant) =>
+        pane(mode: variant.mode, locale: variant.locale, selected: npmFlow()),
+  );
+
+  goldenVariants(
+    'domain_unknown',
+    constraints: window,
+    builder: (GoldenVariant variant) => pane(
+      mode: variant.mode,
+      locale: variant.locale,
+      selected: unknownFlow(),
+    ),
+  );
+
   for (final (String name, HThemeMode mode) in <(String, HThemeMode)>[
     ('dark', HThemeMode.dark),
     ('light', HThemeMode.light),
   ]) {
-    goldenTest(
-      'domain_panel_known_$name',
-      fileName: 'domain_panel_known_$name',
-      constraints: window,
-      builder: () => pane(mode: mode, selected: npmFlow()),
-    );
-
-    goldenTest(
-      'domain_panel_unknown_$name',
-      fileName: 'domain_panel_unknown_$name',
-      constraints: window,
-      builder: () => pane(mode: mode, selected: unknownFlow()),
-    );
-
     goldenTest(
       'domain_panel_session_summary_$name',
       fileName: 'domain_panel_session_summary_$name',

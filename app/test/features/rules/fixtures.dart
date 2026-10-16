@@ -223,6 +223,7 @@ Widget rulesUnderTest({
   TextScaler textScaler = TextScaler.noScaling,
   bool reducedMotion = false,
   List<Override> overrides = const <Override>[],
+  Locale? locale,
 }) {
   final HTokens tokens = mode.resolve(Brightness.dark);
   return ProviderScope(
@@ -233,6 +234,9 @@ Widget rulesUnderTest({
     child: WidgetsApp(
       color: tokens.colors.bg0,
       debugShowCheckedModeBanner: false,
+      // Ohne Angabe die Sprache des Testrechners; die Goldens setzen sie
+      // (HUM-054).
+      locale: locale,
       // Wie `app.dart`: Die Delegates der Komponentenbibliothek gehören mit
       // dazu, sonst bricht ihr Kontextmenü an `ShadcnLocalizations` ab
       // (HUM-052, HUM-173).

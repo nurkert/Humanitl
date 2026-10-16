@@ -1,6 +1,10 @@
 // Goldens der Isolation (HUM-041): der Ring im Header in seinen drei
-// Zuständen und der Reiter darunter. Erneuern mit
-// `flutter test --update-goldens test/goldens`.
+// Zuständen und der Reiter darunter. Seit HUM-054 stehen die drei Ringe
+// nebeneinander in einem Bild und die Panels „bestanden" und „gescheitert" in
+// den vier Varianten aus `support/golden_variants.dart`; der fehlende Bericht
+// bleibt dunkel und hell.
+//
+// Erneuern mit `make goldens-update`.
 //
 // Der Ring steht allein in seinem eigenen Bild, weil er 20 px misst und in
 // einem Fenster von 1280 px kein Golden trägt: eine Farbe, die dort umkippt,
@@ -17,9 +21,9 @@ import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/shell/widgets/header_bar.dart';
-import 'package:humanitl/l10n/l10n.dart';
 
 import '../features/sandbox/harness.dart';
+import 'support/golden_variants.dart';
 
 /// Wie groß der Ring im Golden gezeichnet wird.
 ///
@@ -43,105 +47,114 @@ FakeDaemonClient ringClient(List<IsolationCheckResult> checks) {
   return client;
 }
 
-/// Der Ring allein, über einem Fake mit genau diesen Ergebnissen.
-Widget ringUnderTest({
-  required FakeDaemonClient client,
-  required HThemeMode mode,
-}) {
-  final HTokens tokens = mode.resolve(Brightness.dark);
-  return ProviderScope(
-    overrides: <Override>[daemonClientProvider.overrideWithValue(client)],
-    child: WidgetsApp(
-      color: tokens.colors.bg0,
-      debugShowCheckedModeBanner: false,
-      localizationsDelegates: AppLocalizations.localizationsDelegates,
-      supportedLocales: AppLocalizations.supportedLocales,
-      builder: (BuildContext context, Widget? _) => HTheme(
-        tokens: tokens,
-        child: ColoredBox(
-          color: tokens.colors.bg1,
-          // Wie `app.dart`: ein Overlay für alles, was schwebt; die
-          // Hover-Beschriftung des Rings braucht eines.
-          child: Overlay(
-            initialEntries: <OverlayEntry>[
-              OverlayEntry(
-                builder: (BuildContext context) =>
-                    const Center(child: IsolationRing(size: ringGoldenSize)),
-              ),
-            ],
-          ),
-        ),
-      ),
-    ),
+/// Ein Ring über einem eigenen Container, damit drei Ringe mit drei
+/// verschiedenen Messungen in einem Bild stehen können.
+///
+/// Ein verschachtelter `ProviderScope` reichte nicht: Die Provider, die vom
+/// Client abhängen, nennen keine `dependencies` und würden im inneren Scope
+/// nicht neu gebaut. Der Container gehört dem Widget und geht mit ihm; ein
+/// `addTearDown` käme zu spät, nach der Prüfung auf offene Zeitgeber.
+class IsolatedRing extends StatefulWidget {
+  /// Ein Ring über [client].
+  const IsolatedRing({required this.client, super.key});
+
+  /// Der Fake mit den Ergebnissen dieses Rings.
+  final FakeDaemonClient client;
+
+  @override
+  State<IsolatedRing> createState() => _IsolatedRingState();
+}
+
+class _IsolatedRingState extends State<IsolatedRing> {
+  late final ProviderContainer _container = ProviderContainer(
+    overrides: <Override>[
+      daemonClientProvider.overrideWithValue(widget.client),
+    ],
+  );
+
+  @override
+  void dispose() {
+    _container.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => UncontrolledProviderScope(
+    container: _container,
+    child: const IsolationRing(size: ringGoldenSize),
   );
 }
 
+/// Ein laufender Client, dessen Bericht den LLM-Endpunkt als Ausnahme nennt.
+SandboxTestClient passedWithLlm() {
+  final SandboxTestClient client = checkedClient(isolationGreenChecks);
+  client.sandbox = client.sandbox.copyWith(llmEndpoint: '192.168.1.20:11434');
+  return client;
+}
+
 void main() {
-  const BoxConstraints ringWindow = BoxConstraints.tightFor(
-    width: 160,
-    height: 160,
-  );
   const BoxConstraints window = BoxConstraints.tightFor(
     width: 1280,
     height: 800,
+  );
+  // Höher als das Standardfenster: Der Reiter steht im unteren Teil des
+  // Bildschirms, und erst so passen die drei Garantien, die Zeile mit der
+  // Ausnahme und der Abschnitt der Verweigerungen ganz hinein.
+  const BoxConstraints tall = BoxConstraints.tightFor(
+    width: 1280,
+    height: 1100,
+  );
+
+  // 3/3, 2/3 und 0/3 nebeneinander: drei gemessene Garantien, eine rote in
+  // der Mitte, und der Bericht, der nicht ankam (drei rote mit
+  // `SANDBOX_013`). Rechts daneben der Ring vor jeder Messung: drei graue
+  // Bögen, kein Grün, kein Anteil.
+  goldenVariants(
+    'isolation_ring_states',
+    constraints: const BoxConstraints.tightFor(width: 520, height: 160),
+    pumpBeforeTest: _settle,
+    builder: (GoldenVariant variant) => goldenFrame(
+      variant: variant,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: <Widget>[
+          IsolatedRing(client: ringClient(isolationGreenChecks)),
+          IsolatedRing(client: ringClient(isolationOneRedCheck)),
+          IsolatedRing(client: ringClient(isolationNoReportChecks)),
+          IsolatedRing(client: FakeDaemonClient.empty()),
+        ],
+      ),
+    ),
+  );
+
+  // Drei grüne Garantien und die Zeile, die den LLM-Endpunkt als die eine
+  // Ausnahme nennt.
+  goldenVariants(
+    'isolation_panel_ok',
+    constraints: tall,
+    pumpBeforeTest: _openIsolation,
+    builder: (GoldenVariant variant) => sandboxUnderTest(
+      client: passedWithLlm(),
+      mode: variant.mode,
+      locale: variant.locale,
+    ),
+  );
+
+  goldenVariants(
+    'isolation_panel_failed',
+    constraints: tall,
+    pumpBeforeTest: _openIsolation,
+    builder: (GoldenVariant variant) => sandboxUnderTest(
+      client: checkedClient(isolationOneRedCheck),
+      mode: variant.mode,
+      locale: variant.locale,
+    ),
   );
 
   for (final (String name, HThemeMode mode) in <(String, HThemeMode)>[
     ('dark', HThemeMode.dark),
     ('light', HThemeMode.light),
   ]) {
-    // Nichts gemessen: drei graue Bögen. Kein Grün, kein Anteil, keine Zahl.
-    goldenTest(
-      'isolation_ring_unknown_$name',
-      fileName: 'isolation_ring_unknown_$name',
-      constraints: ringWindow,
-      pumpBeforeTest: _settle,
-      builder: () =>
-          ringUnderTest(client: FakeDaemonClient.empty(), mode: mode),
-    );
-
-    // Drei gemessene Garantien: der Ring schließt.
-    goldenTest(
-      'isolation_ring_passed_$name',
-      fileName: 'isolation_ring_passed_$name',
-      constraints: ringWindow,
-      pumpBeforeTest: _settle,
-      builder: () =>
-          ringUnderTest(client: ringClient(isolationGreenChecks), mode: mode),
-    );
-
-    // Eine rote in der Mitte: der wichtigste Fall, und er muss auffallen.
-    goldenTest(
-      'isolation_ring_failed_$name',
-      fileName: 'isolation_ring_failed_$name',
-      constraints: ringWindow,
-      pumpBeforeTest: _settle,
-      builder: () =>
-          ringUnderTest(client: ringClient(isolationOneRedCheck), mode: mode),
-    );
-
-    goldenTest(
-      'isolation_panel_passed_$name',
-      fileName: 'isolation_panel_passed_$name',
-      constraints: window,
-      pumpBeforeTest: _openIsolation,
-      builder: () => sandboxUnderTest(
-        client: checkedClient(isolationGreenChecks),
-        mode: mode,
-      ),
-    );
-
-    goldenTest(
-      'isolation_panel_failed_$name',
-      fileName: 'isolation_panel_failed_$name',
-      constraints: window,
-      pumpBeforeTest: _openIsolation,
-      builder: () => sandboxUnderTest(
-        client: checkedClient(isolationOneRedCheck),
-        mode: mode,
-      ),
-    );
-
     // Der Bericht kam nicht an. Das ist die Form, die der Daemon dafür
     // wirklich schickt: drei rote Ergebnisse mit `SANDBOX_013`, nicht drei
     // graue und nicht gar keines.

@@ -1,6 +1,9 @@
 // Goldens des History-Screens (HUM-032): die Tabelle, der Detailbereich mit
-// der Anfrage und der abgelehnte Filter, je dunkel und hell. Erneuern mit
-// `flutter test --update-goldens test/goldens`.
+// der Anfrage und der abgelehnte Filter, je dunkel und hell. Die Tabelle mit
+// zwölf Zeilen und das Detail eines bearbeiteten Flusses stehen seit HUM-054
+// in den vier Varianten aus `support/golden_variants.dart`.
+//
+// Erneuern mit `make goldens-update`.
 
 import 'package:alchemist/alchemist.dart';
 import 'package:flutter/widgets.dart' hide Flow;
@@ -17,6 +20,7 @@ import 'package:humanitl/features/history/providers/history_query.dart';
 import 'package:humanitl/l10n/l10n.dart';
 
 import '../features/history/long_body.dart';
+import 'support/golden_variants.dart';
 
 /// The flow the detail golden shows: the fourth recorded one, a POST that was
 /// allowed and answered.
@@ -72,6 +76,7 @@ Widget historyGolden({
   TextScaler textScaler = TextScaler.noScaling,
   bool exportOpen = false,
   FakeDaemonClient? client,
+  Locale? locale,
 }) => ProviderScope(
   overrides: <Override>[
     daemonClientProvider.overrideWithValue(
@@ -85,7 +90,11 @@ Widget historyGolden({
   child: WidgetsApp(
     color: tokens.colors.bg0,
     debugShowCheckedModeBanner: false,
-    localizationsDelegates: AppLocalizations.localizationsDelegates,
+    locale: locale,
+    localizationsDelegates: <LocalizationsDelegate<Object?>>[
+      ...AppLocalizations.localizationsDelegates,
+      ...hLocalizationsDelegates,
+    ],
     supportedLocales: AppLocalizations.supportedLocales,
     // Like `app.dart`: no navigator, one overlay for everything that floats.
     builder: (BuildContext context, Widget? _) => MediaQuery(
@@ -121,31 +130,39 @@ void main() {
     width: 1400,
     height: 900,
   );
+  // Zwölf Zeilen: jede der zwölf Formen des Szenarios einmal, also jede
+  // Zustandsfarbe der Tabelle (`seedHistory`).
+  goldenVariants(
+    'history_table',
+    constraints: window,
+    builder: (GoldenVariant variant) => historyGolden(
+      tokens: variant.tokens,
+      locale: variant.locale,
+      count: 12,
+    ),
+  );
+
+  // Der Kopf eines bearbeitet hinausgegangenen Flusses: der Chip „Edited“
+  // neben dem Zustand, dazu der Reiter „Edited“ (HUM-047).
+  goldenVariants(
+    'history_detail_edited',
+    constraints: window,
+    builder: (GoldenVariant variant) => historyGolden(
+      tokens: variant.tokens,
+      locale: variant.locale,
+      selected: goldenEditedFlow,
+    ),
+  );
+
   for (final (String name, HTokens tokens) in <(String, HTokens)>[
     ('dark', HTokens.dark),
     ('light', HTokens.light),
   ]) {
     goldenTest(
-      'history_table_$name',
-      fileName: 'history_table_$name',
-      constraints: window,
-      builder: () => historyGolden(tokens: tokens),
-    );
-
-    goldenTest(
       'history_detail_request_$name',
       fileName: 'history_detail_request_$name',
       constraints: window,
       builder: () => historyGolden(tokens: tokens, selected: goldenDetailFlow),
-    );
-
-    // Der Kopf eines bearbeitet hinausgegangenen Flusses: der Chip „Edited“
-    // neben dem Zustand, dazu der Reiter „Edited“ (HUM-047).
-    goldenTest(
-      'history_detail_edited_$name',
-      fileName: 'history_detail_edited_$name',
-      constraints: window,
-      builder: () => historyGolden(tokens: tokens, selected: goldenEditedFlow),
     );
 
     goldenTest(

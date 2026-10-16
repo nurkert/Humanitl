@@ -98,6 +98,9 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-239 | Ein Schlüssel im Host von `Referer` und `Origin` steht unmaskiert in der Aufzeichnung | S | HUM-140 |
 | HUM-240 | Die Warnung `pruned` und der Abschnitt Aufbewahrung kennen nur `audit.retention_days` | S | HUM-194 |
 | HUM-241 | Der Audit-Schreiber begrenzt `MAX_LINE_BYTES` beim Anhängen nicht | S | HUM-194 |
+| HUM-242 | Schema-Fixture und Drift-Test für das Einstellungsformular | S | Formular aus dem Schema (BACKLOG.md 9, Punkt 17) |
+| HUM-243 | Tastenkürzel aus CONVENTIONS 3.9 ohne Bindung | S | — |
+| HUM-244 | Das Alter des letzten Audit-Ankers liest die Wanduhr | XS | HUM-051 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -1968,10 +1971,12 @@ Ein Golden-Test-Set für die zentralen Widgets in beiden Themes und beiden Sprac
 Die Goldens und Widget-Tests sind der Inhalt. Meta-Test: `golden_variants_complete` prüft, dass zu jedem Golden-Namen vier Varianten-Dateien existieren.
 
 ### Akzeptanzkriterien
-- [ ] `flutter test --tags golden` grün lokal und in CI (Ahem).
-- [ ] 36 Golden-Namen × 4 Varianten = 144 PNG-Dateien unter `app/test/goldens/**`.
-- [ ] Änderung eines Tokens (z. B. `held`-Farbe) lässt mindestens `tokens_palette` und `queue_row_held` fehlschlagen.
-- [ ] Flutter-Anhebung in `app/.fvmrc`: Golden-Job zeigt die Abweichungen als Diff-Bilder in den CI-Artefakten.
+- [ ] `flutter test --tags golden` grün lokal und in CI (Ahem). *Lokal grün mit dem Skript des CI-Jobs (`make goldens`); der Haken für CI folgt dem Lauf auf dem Issue-Branch.*
+- [x] 36 Golden-Namen × 4 Varianten = 144 PNG-Dateien unter `app/test/goldens/**`. *Angepasst: 34 Namen × 4 = 136 Dateien. `action_bar_edited` entfällt, weil „Editierte Version senden" im Editor steht und `editor_replaced_glow` es zeigt; statt der drei Namen des Schema-Formulars (verschoben mit der zweiten Umfangsentscheidung vom 2026-09-18) stehen die drei Zustände des handgebauten Formulars. Die Liste steht in `app/test/goldens/support/golden_names.dart`, `golden_variants_complete` hält sie gegen die Dateien.*
+- [x] Änderung eines Tokens (z. B. `held`-Farbe) lässt mindestens `tokens_palette` und `queue_row_held` fehlschlagen.
+- [ ] Flutter-Anhebung in `app/.fvmrc`: Golden-Job zeigt die Abweichungen als Diff-Bilder in den CI-Artefakten. *Lokal belegt: Ein roter Vergleich legt Master-, Test- und Differenzbilder unter `app/test/goldens/failures/` ab, genau den Pfad, den der Job hochlädt; der Beleg im CI-Artefakt steht aus.*
+
+> **Umsetzung (HUM-054):** Nicht gebaut sind `fixtures/flows.json`, `fixtures/schema.json`, `FakeDaemonClient.fromFixture()` und der Drift-Test gegen das Daemon-Schema: Das Formular aus dem Schema mit `x-tier` liegt seit der zweiten Umfangsentscheidung vom 2026-09-18 hinter dem MVP, und an die Stelle von `pumpApp` mit Fixtures treten `goldenFrame` (`app/test/goldens/support/golden_variants.dart`) und die Szenario-Fakes der Features; das steht als HUM-242 weiter unten. `make goldens` und `make goldens-update` im `Makefile` ersetzen den `justfile`, den das Repository nicht hat.
 
 ### Fallstricke
 - Ahem rendert alle Glyphen als Blöcke; deutsche Textlängen werden nur über Boxbreiten sichtbar. Für Überlauf-Prüfung zusätzlich einen Widget-Test `no_overflow_in_de` mit echtem Font lokal (`platform goldens`) oder mit `debugCheckHasOverflow`-Assertion: `tester.takeException()` muss null sein.
@@ -5866,3 +5871,51 @@ Wege gilt, entscheidet das Issue zu Beginn und schreibt es in `backlog/CONVENTIO
 
 ### Referenzen
 HUM-194 (`MIN_MAX_BYTES`, `PruneOutcome::over`), HUM-050 (`MAX_LINE_BYTES`, `broken_end`).
+
+---
+
+## HUM-242 · Schema-Fixture und Drift-Test für das Einstellungsformular
+Sprint: 4 (nach 0.1.0) · Größe: S · Abhängigkeiten: Formular aus dem Schema (BACKLOG.md Abschnitt 9, Punkt 17) · Blockiert: —
+
+### Problem
+HUM-054 sah `fixtures/flows.json` (20 Flows in allen Zuständen), `fixtures/schema.json` (eingefrorenes Config-Schema mit `x-tier`), `FakeDaemonClient.fromFixture()` und einen Test vor, der `schema.json` gegen das aktuelle Daemon-Schema hält. Nichts davon ist gebaut: Das Formular, das dieses Schema liest, ist mit der zweiten Umfangsentscheidung vom 2026-09-18 verschoben, und für Flows fehlt ein JSON-Codec der Domain-Typen. Ohne Drift-Test merkt niemand, wenn das Schema des Daemons und das Formular auseinanderlaufen.
+
+### Akzeptanzkriterien
+- [ ] `fixtures/schema.json` wird von `humanitl config schema` erzeugt und eingecheckt; jedes Blatt trägt `x-tier`.
+- [ ] `fixtures/flows.json` mit 20 Flows (alle Zustände, Funde, ein bearbeiteter, eine Durchreiche, ein abgelaufener) aus einem Export des Fake-Daemons.
+- [ ] `FakeDaemonClient.fromFixture()` liefert beides.
+- [ ] Ein Test schlägt fehl, sobald `schema.json` vom Schema des Daemons abweicht, und nennt den Befehl, der es nachzieht.
+
+### Tests
+Drift-Test mit Mutationsprobe: ein Feld im `config`-Crate umbenennen, Test rot.
+
+---
+
+## HUM-243 · Tastenkürzel aus CONVENTIONS 3.9 ohne Bindung
+Sprint: 4 (nach 0.1.0) · Größe: S · Abhängigkeiten: — · Blockiert: —
+
+### Problem
+`backlog/CONVENTIONS.md` 3.9 nennt verbindliche Kürzel, die keine Bindung haben: `ToggleDomainPanelIntent` (`Ctrl+D`) und `FilterIntent` (`/`) sind als Intent da, aber in der Warteschlange nicht gebunden; `AddRuleIntent` (`Ctrl+B`) und `ScopeIntent` (`R`) gibt es nicht. `DurationIntent(n)` und `TargetIntent(n)` heißen im Code `RememberDurationIntent` und `RememberTargetIntent` und gehen bis 4 statt bis 3. `shortcuts_map_to_intents` (HUM-054) prüft die Bindungen, wie sie sind; die Liste in CONVENTIONS sagt etwas anderes.
+
+### Akzeptanzkriterien
+- [ ] Jedes Kürzel aus 3.9 ist gebunden und hat eine Action, oder 3.9 streicht es mit Begründung.
+- [ ] CONVENTIONS 3.9 nennt die Namen und Bereiche, die der Code benutzt.
+- [ ] Die Tabelle in `app/test/core/shortcuts/shortcuts_map_to_intents_test.dart` deckt jede neue Bindung ab.
+
+### Tests
+Neue Zeilen in `shortcuts_map_to_intents` (beide Richtungen), je mit Mutationsprobe.
+
+---
+
+## HUM-244 · Das Alter des letzten Audit-Ankers liest die Wanduhr
+Sprint: 4 (nach 0.1.0) · Größe: XS · Abhängigkeiten: HUM-051 · Blockiert: —
+
+### Problem
+`auditAgeLabel` in `app/lib/features/audit/widgets/chain_status_card.dart` rechnet mit `DateTime.now()`. Ein Golden der Statuskarte mit Anker zeigt deshalb an jedem Tag ein anderes Bild (dieselbe Klasse wie HUM-148); `audit_golden_test.dart` weicht aus, indem der Fake keinen Anker trägt. Die Tabelle darunter zeigt Zeitpunkte in Ortszeit, ein Golden des ganzen Bildschirms hinge an der Zeitzone des Rechners.
+
+### Akzeptanzkriterien
+- [ ] Die Karte liest die Zeit über `nowProvider` (wie Queue und Sandbox).
+- [ ] `audit_status_ok` zeigt einen Anker mit festem Alter.
+
+### Tests
+Widget-Test mit fester Uhr: „vor 3 Stunden" bei Anker 3 h vor `now`; Mutationsprobe: `DateTime.now()` zurück, Test rot.

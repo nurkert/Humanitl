@@ -1,14 +1,15 @@
-// Goldens des Intercept-Screens (HUM-020): Queue-Zeile in drei Zuständen,
-// Request-Karte, leere Queue und drei angehaltene Anfragen, je dunkel und
-// hell. Erneuern mit `flutter test --update-goldens test/goldens`.
+// Goldens des Intercept-Screens (HUM-020): die entschiedene Queue-Zeile,
+// leere Queue, drei angehaltene Anfragen und ein Befund, je dunkel und hell.
+// Queue-Zeile und Request-Karte in vier Varianten stehen seit HUM-054 in
+// `queue_row_golden_test.dart` und `request_card_golden_test.dart`.
+//
+// Erneuern mit `make goldens-update`.
 
 import 'package:alchemist/alchemist.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 // `Override` lebt in riverpod 3 im Nebeneingang `misc.dart`.
 import 'package:flutter_riverpod/misc.dart';
-import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/app.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ui/ui.dart';
@@ -16,7 +17,6 @@ import 'package:humanitl/features/intercept/providers/diagnostics.dart';
 import 'package:humanitl/features/intercept/providers/flows.dart';
 import 'package:humanitl/features/intercept/providers/now.dart';
 import 'package:humanitl/features/intercept/widgets/queue_row.dart';
-import 'package:humanitl/features/intercept/widgets/request_card.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/features/shell/providers/connection.dart';
 import 'package:humanitl/features/shell/providers/theme.dart';
@@ -189,82 +189,14 @@ void main() {
     height: 800,
   );
   const BoxConstraints rowBox = BoxConstraints.tightFor(width: 420, height: 92);
-  const BoxConstraints cardBox = BoxConstraints.tightFor(
-    width: 680,
-    height: 460,
-  );
 
   for (final (String name, HThemeMode mode) in <(String, HThemeMode)>[
     ('dark', HThemeMode.dark),
     ('light', HThemeMode.light),
   ]) {
-    goldenTest(
-      'queue_row_idle_$name',
-      fileName: 'queue_row_idle_$name',
-      constraints: rowBox,
-      builder: () {
-        final List<FlowDetail> details = goldenDetails();
-        return piece(
-          mode: mode,
-          details: details,
-          child: QueueRow(
-            flow: details.first.summary,
-            selected: false,
-            onSelect: () {},
-          ),
-        );
-      },
-    );
-
-    goldenTest(
-      'queue_row_selected_$name',
-      fileName: 'queue_row_selected_$name',
-      constraints: rowBox,
-      builder: () {
-        final List<FlowDetail> details = goldenDetails();
-        return piece(
-          mode: mode,
-          details: details,
-          child: QueueRow(
-            flow: details.first.summary,
-            selected: true,
-            onSelect: () {},
-          ),
-        );
-      },
-    );
-
-    goldenTest(
-      'queue_row_hover_$name',
-      fileName: 'queue_row_hover_$name',
-      constraints: rowBox,
-      pumpBeforeTest: (WidgetTester tester) async {
-        await tester.pumpAndSettle();
-        final TestGesture gesture = await tester.createGesture(
-          kind: PointerDeviceKind.mouse,
-        );
-        await gesture.addPointer(location: Offset.zero);
-        addTearDown(gesture.removePointer);
-        await gesture.moveTo(tester.getCenter(find.byType(QueueRow)));
-        await tester.pumpAndSettle();
-      },
-      builder: () {
-        final List<FlowDetail> details = goldenDetails();
-        return piece(
-          mode: mode,
-          details: details,
-          child: QueueRow(
-            flow: details.first.summary,
-            selected: false,
-            onSelect: () {},
-          ),
-        );
-      },
-    );
-
     // Der Queue-Abgang nach einer bearbeiteten Freigabe: Zustandsfarbe,
-    // Stift-Glyph und der Chip „Edited“ (HUM-047). Keines der Bilder oben
-    // zeigt eine entschiedene Zeile.
+    // Stift-Glyph und der Chip „Edited“ (HUM-047). Die Zeilen in
+    // `queue_row_golden_test.dart` sind alle noch gehalten.
     goldenTest(
       'queue_row_edited_$name',
       fileName: 'queue_row_edited_$name',
@@ -285,20 +217,6 @@ void main() {
             selected: false,
             onSelect: () {},
           ),
-        );
-      },
-    );
-
-    goldenTest(
-      'request_card_basic_$name',
-      fileName: 'request_card_basic_$name',
-      constraints: cardBox,
-      builder: () {
-        final List<FlowDetail> details = goldenDetails();
-        return piece(
-          mode: mode,
-          details: details,
-          child: RequestCard(flow: details.first.summary),
         );
       },
     );
