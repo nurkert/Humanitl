@@ -6,7 +6,7 @@ SHELL := /bin/bash
 
 .PHONY: help check rust-fmt rust-clippy rust-build rust-test rust-doc rust-deny typed-errors-lint \
         flutter-get flutter-analyze flutter-test flutter-test-dbus flutter-test-daemon \
-        flutter-test-integration flutter-build runner-test proto escape e2e \
+        flutter-test-integration flutter-build runner-test proto escape e2e goldens goldens-update \
         deps-lint docs-lint parity-check l10n-lint catalog-assets catalog-lint tools-test clean package
 
 help: ## List targets
@@ -120,6 +120,18 @@ flutter-build: flutter-codegen ## Debug build of the Linux desktop app (CI parit
 flutter-test: flutter-codegen ## Flutter unit and widget tests (app and packages/ui)
 	cd app && flutter test
 	cd app/packages/ui && flutter test
+
+# Die Goldens genau so, wie der CI-Job `goldens` sie vergleicht: dasselbe
+# Skript, dieselben Tags, dieselben Schriften (der CI-Modus von alchemist aus
+# `app/test/flutter_test_config.dart` malt Text als Blöcke, unabhängig von den
+# Schriften des Rechners). `goldens-update` schreibt die Bilder neu; jede
+# geänderte PNG wird vor dem Einchecken angesehen (HUM-054). Bei einem roten
+# Vergleich liegen die Differenzbilder unter `app/test/goldens/failures/`.
+goldens: flutter-codegen ## Golden tests, the way the CI job `goldens` runs them (HUM-054)
+	./scripts/ci/goldens-placeholder.sh
+
+goldens-update: flutter-codegen ## Regenerate the golden images; look at every changed PNG before committing
+	cd app && flutter test --tags golden --update-goldens test/goldens
 
 # Der einzige C++-Test des Repositories. Er haengt an nichts ausser POSIX --
 # kein GTK, kein Flutter, keine Ephemeral-Header --, laeuft in unter einer
