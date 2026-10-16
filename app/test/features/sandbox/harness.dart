@@ -261,6 +261,7 @@ Widget sandboxUnderTest({
   DateTime? now,
   List<Override> overrides = const <Override>[],
   Widget Function(Widget child)? wrap,
+  Locale? locale,
 }) {
   final HTokens tokens = mode.resolve(Brightness.dark);
   return ProviderScope(
@@ -278,7 +279,13 @@ Widget sandboxUnderTest({
     child: WidgetsApp(
       color: tokens.colors.bg0,
       debugShowCheckedModeBanner: false,
-      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      // Ohne Angabe die Sprache des Testrechners; die Goldens setzen sie
+      // (HUM-054).
+      locale: locale,
+      localizationsDelegates: <LocalizationsDelegate<Object?>>[
+        ...AppLocalizations.localizationsDelegates,
+        ...hLocalizationsDelegates,
+      ],
       supportedLocales: AppLocalizations.supportedLocales,
       builder: (BuildContext context, Widget? _) => MediaQuery(
         data: MediaQueryData(textScaler: textScaler),

@@ -1,6 +1,9 @@
 // Goldens des Rules-Screens (HUM-033): die Kette im Tab „Gespeichert", die
 // Kette im Tab „Temporär" und der Editor mit seinem Probelauf, je dunkel und
-// hell. Erneuern mit `flutter test --update-goldens test/goldens`.
+// hell. Die Kette im Tab „Gespeichert" steht seit HUM-054 als `rules_list` in
+// den vier Varianten aus `support/golden_variants.dart`.
+//
+// Erneuern mit `make goldens-update`.
 
 import 'package:alchemist/alchemist.dart';
 import 'package:flutter/widgets.dart' hide Flow;
@@ -13,6 +16,7 @@ import 'package:humanitl/features/rules/providers/rules.dart';
 import 'package:humanitl/core/ui/ui.dart';
 
 import '../features/rules/fixtures.dart';
+import 'support/golden_variants.dart';
 
 /// Der Regelsatz der Goldens: vier eigene Regeln, eine Sitzungsregel und die
 /// mitgelieferte des Fakes. Keine Regel mit Endzeitpunkt, damit dasselbe Bild
@@ -113,21 +117,26 @@ void main() {
     height: 800,
   );
 
+  // Sechs Regeln im Tab „Gespeichert": vier eigene, zwei mitgelieferte mit
+  // ihrem Abzeichen, eine davon abgeschaltet; daneben der Tab „Temporär".
+  goldenVariants(
+    'rules_list',
+    constraints: window,
+    pumpBeforeTest: (WidgetTester tester) async {
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+    },
+    builder: (GoldenVariant variant) => rulesUnderTest(
+      client: goldenClient(),
+      mode: variant.mode,
+      locale: variant.locale,
+    ),
+  );
+
   for (final (String name, HThemeMode mode) in <(String, HThemeMode)>[
     ('dark', HThemeMode.dark),
     ('light', HThemeMode.light),
   ]) {
-    goldenTest(
-      'rules_list_saved_$name',
-      fileName: 'rules_list_saved_$name',
-      constraints: window,
-      pumpBeforeTest: (WidgetTester tester) async {
-        await tester.pump();
-        await tester.pump(const Duration(milliseconds: 600));
-      },
-      builder: () => rulesUnderTest(client: goldenClient(), mode: mode),
-    );
-
     goldenTest(
       'rules_list_temporary_$name',
       fileName: 'rules_list_temporary_$name',

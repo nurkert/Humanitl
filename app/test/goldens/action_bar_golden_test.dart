@@ -1,6 +1,9 @@
-// Goldens der Aktionsleiste (HUM-028): Ruhe, offenes Raster, schmaler Pane,
-// haltende Release Valve und doppelte Textskalierung, je dunkel und hell.
-// Erneuern mit `flutter test --update-goldens test/goldens`.
+// Goldens der Aktionsleiste (HUM-028): schmaler Pane, haltende Release Valve
+// und doppelte Textskalierung, je dunkel und hell. Ruhe, offene Funde, harte
+// Sperre und das offene Raster stehen seit HUM-054 in den vier Varianten aus
+// `support/golden_variants.dart`.
+//
+// Erneuern mit `make goldens-update`.
 
 import 'package:alchemist/alchemist.dart';
 import 'package:flutter/widgets.dart' hide Flow;
@@ -21,6 +24,7 @@ import 'package:humanitl/l10n/l10n.dart';
 
 import '../features/intercept/fixtures.dart';
 import '../harness/ui_state.dart';
+import 'support/golden_variants.dart';
 
 /// Die Uhr aller Goldens: 40 Sekunden nach dem Anhalten.
 final DateTime goldenNow = testStart.add(const Duration(seconds: 40));
@@ -58,6 +62,38 @@ class FixedTheme extends ThemeModeSetting {
 
   @override
   HThemeMode build() => mode;
+}
+
+/// Dieselbe Anfrage mit zwei Funden im Rumpf: einem Schlüssel und einer
+/// Adresse.
+FlowDetail findingsDetail() {
+  final FlowDetail detail = goldenDetail();
+  return detail.copyWith(
+    summary: detail.summary.copyWith(findingCount: 2),
+    findings: <Finding>[
+      testFinding(),
+      testFinding(kind: 'email'),
+    ],
+  );
+}
+
+/// Dieselbe Anfrage unter der harten Sperre (`HOLD_004`, HUM-159): eine
+/// bestätigte Prüfsumme im Rumpf, gesendet wird nur bearbeitet.
+FlowDetail hardBlockDetail() {
+  final FlowDetail detail = findingsDetail();
+  return detail.copyWith(
+    summary: detail.summary.copyWith(
+      findingCount: 1,
+      sendRefusal: const Diagnostic(
+        code: 'HOLD_004',
+        severity: Severity.blocking,
+        why:
+            'the request carries a checksum-confirmed secret and '
+            'hold.hard_block_checksum_secrets is on; nothing was sent',
+      ),
+    ),
+    findings: <Finding>[testFinding()],
+  );
 }
 
 List<Override> overridesFor(FlowDetail detail, {bool gridOpen = false}) {
@@ -112,6 +148,20 @@ Widget piece({
   );
 }
 
+/// Die Leiste über [detail] in der Variante [variant], unten im Bild.
+Widget variantBar(
+  GoldenVariant variant,
+  FlowDetail detail, {
+  bool gridOpen = false,
+}) => goldenFrame(
+  variant: variant,
+  overrides: overridesFor(detail, gridOpen: gridOpen),
+  child: Align(
+    alignment: Alignment.bottomCenter,
+    child: ActionBar(flow: detail.summary),
+  ),
+);
+
 void main() {
   const BoxConstraints wide = BoxConstraints.tightFor(width: 900, height: 160);
   const BoxConstraints narrow = BoxConstraints.tightFor(
@@ -133,27 +183,6 @@ void main() {
     ('dark', HThemeMode.dark),
     ('light', HThemeMode.light),
   ]) {
-    goldenTest(
-      'action_bar_default_$name',
-      fileName: 'action_bar_default_$name',
-      constraints: wide,
-      builder: () => piece(
-        mode: mode,
-        child: ActionBar(flow: goldenDetail().summary),
-      ),
-    );
-
-    goldenTest(
-      'action_bar_grid_open_$name',
-      fileName: 'action_bar_grid_open_$name',
-      constraints: withGrid,
-      builder: () => piece(
-        mode: mode,
-        gridOpen: true,
-        child: ActionBar(flow: goldenDetail().summary),
-      ),
-    );
-
     goldenTest(
       'action_bar_narrow_$name',
       fileName: 'action_bar_narrow_$name',
@@ -187,6 +216,34 @@ void main() {
       ),
     );
   }
+
+  goldenVariants(
+    'action_bar_default',
+    constraints: wide,
+    builder: (GoldenVariant variant) => variantBar(variant, goldenDetail()),
+  );
+
+  // Offene Funde: die Freigabe in Amber, mit eigener Beschriftung und der
+  // Zeile, die sagt, was wohin ginge (`docs/UX.md` 4.7).
+  goldenVariants(
+    'action_bar_findings',
+    constraints: wide,
+    builder: (GoldenVariant variant) => variantBar(variant, findingsDetail()),
+  );
+
+  // Die harte Sperre: „Senden nicht möglich", abgeschaltet (HUM-159).
+  goldenVariants(
+    'action_bar_hard_block',
+    constraints: wide,
+    builder: (GoldenVariant variant) => variantBar(variant, hardBlockDetail()),
+  );
+
+  goldenVariants(
+    'action_bar_remember_open',
+    constraints: withGrid,
+    builder: (GoldenVariant variant) =>
+        variantBar(variant, goldenDetail(), gridOpen: true),
+  );
 
   goldenTest(
     'action_bar_text_scale_2',
