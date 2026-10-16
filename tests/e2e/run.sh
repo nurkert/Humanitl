@@ -4,8 +4,8 @@
 #   ./tests/e2e/run.sh            bauen und die Demos der Meilensteine fahren
 #   E2E_SKIP_BUILD=1 ./tests/e2e/run.sh
 #                                 die Binaries nehmen, wie sie sind
-#   E2E_ONLY=m1|m2|m3 ./tests/e2e/run.sh
-#                                 nur eines der drei fahren
+#   E2E_ONLY=m1|m2|m3|m4 ./tests/e2e/run.sh
+#                                 nur eines der vier fahren
 #
 # Ein Meilenstein, ein Demoskript, und jedes bleibt stehen, wenn das nächste
 # dazukommt: Ein Sprint gilt erst als fertig, wenn alle bisherigen Demos grün
@@ -45,4 +45,14 @@ if [ "$ONLY" = all ] || [ "$ONLY" = m3 ]; then
     # kaputten Testdouble unterscheidbar sein (HUM-046).
     "$HERE/mock_llm/self_test.sh"
     "$HERE/m3_agent_inside/run.sh" "$@"
+    E2E_SKIP_BUILD=1
+    export E2E_SKIP_BUILD
+fi
+
+if [ "$ONLY" = all ] || [ "$ONLY" = m4 ]; then
+    echo
+    echo "== M4: the trusted editor =="
+    # Schritt 13 (Paket und lintian) ist ein Release-Bau; `M4_PACKAGE=skip`
+    # lässt ihn aus, die CI fährt ihn im eigenen Job `e2e-m4-package` (HUM-055).
+    "$HERE/m4_trusted_editor.sh" "$@"
 fi

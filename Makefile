@@ -184,6 +184,8 @@ flutter-test-integration: flutter-codegen ## The app on a screen, against a real
 	@# verlangt Daemon, Agent und drei Dateipfade in der Umgebung; ohne sie
 	@# stirbt er sofort mit "HUMANITL_E2E_HAR is not set". Sein Gate ist der Job
 	@# `e2e-xvfb`, der `run.sh` faehrt. Uebersprungen wird laut, nicht still.
+	@# Dasselbe gilt fuer `m4_trusted_editor_test.dart`, den Treiber von
+	@# `tests/e2e/m4_trusted_editor.sh` (HUM-055); sein Gate ist der Job `e2e-m4`.
 	@#
 	@# Jede Datei schreibt ihre Ausgabe zusaetzlich nach
 	@# `target/e2e/integration/<datei>.log`, und `queue_freeze_test.dart` legt
@@ -197,6 +199,11 @@ flutter-test-integration: flutter-codegen ## The app on a screen, against a real
 		*/m2_first_decision_test.dart) \
 			if [ -z "$$HUMANITL_E2E_HAR" ]; then \
 				echo "== $$file SKIPPED: driven by tests/e2e/m2_first_decision/run.sh (HUMANITL_E2E_HAR is unset)"; \
+				continue; \
+			fi ;; \
+		*/m4_trusted_editor_test.dart) \
+			if [ -z "$$HUMANITL_E2E_M4_HOST" ]; then \
+				echo "== $$file SKIPPED: driven by tests/e2e/m4_trusted_editor.sh (HUMANITL_E2E_M4_HOST is unset)"; \
 				continue; \
 			fi ;; \
 		esac; \
@@ -241,7 +248,7 @@ package: flutter-codegen ## .deb and AppImage from a release build (HUM-053), PA
 escape: ## Run the sandbox escape tests (HUM-006)
 	./tests/escape/run.sh
 
-e2e: ## Run the demo scripts of every milestone reached (E2E_ONLY=m1|m2|m3 picks one)
+e2e: ## Run the demo scripts of every milestone reached (E2E_ONLY=m1|m2|m3|m4 picks one)
 	./tests/e2e/run.sh
 
 # Der Katalog ist eine Quelle, die Kopie unter `app/assets/` ist es nicht

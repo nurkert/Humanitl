@@ -17,7 +17,7 @@ wäre dieselbe Antwort dreimal.
 Aufruf:
 
     fake_upstream.py --address ADRESSE [--http-port N] [--https-port N]
-                     [--cert DATEI --key DATEI]
+                     [--cert DATEI --key DATEI] [--capture DATEI]
 
 Ohne `--cert`/`--key` lauscht nur der Klartext-Port. Sobald alle Listener
 stehen, schreibt der Server eine Zeile `READY http=<port> https=<port|->` auf
@@ -25,6 +25,15 @@ stdout; danach geht dort nichts mehr hinaus. Das Zugriffsprotokoll läuft nach
 stderr, eine Zeile je Anfrage im festen Format
 
     fake-upstream: <schema> <host> <methode> <pfad> <status> <rumpfbytes>
+
+Mit `--capture` (HUM-055) hängt der Server je Anfrage zusätzlich eine Zeile
+JSON an DATEI an: Schema, Methode, Pfad, alle Kopfzeilen (Namen klein
+geschrieben, in der empfangenen Reihenfolge) und den Rumpf, als Text in UTF-8
+(`body`, nicht dekodierbare Bytes ersetzt) und als Base64 (`body_b64`, Byte
+für Byte), dazu seine Länge in Bytes. Ein Rumpf mit `Transfer-Encoding:
+chunked` wird dafür vollständig gelesen und zusammengesetzt; dass er so kam,
+steht in den Kopfzeilen. Das M4-Demo liest darin, was nach der Bearbeitung
+wirklich beim Ziel ankam, und nicht nur, wie viel davon.
 
 Das Demoskript zählt darin, welche Anfrage das Ziel wirklich erreicht hat. Die
 Gegenprobe ist der Kern des Laufs: Was ein Mensch geblockt hat und was in die
@@ -38,6 +47,7 @@ Debian wie auf `ubuntu-latest` bereit. Die Abweichung von der Spezifikation
 """
 
 import argparse
+import base64
 import json
 import ssl
 import sys
@@ -46,6 +56,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Der Name des Schemas im Zugriffsprotokoll, je Listener gesetzt.
 SCHEME_ATTR = "humanitl_scheme"
+
+# Wohin `--capture` schreibt, am Server gesetzt; fehlt das Attribut, wird
+# nichts mitgeschrieben.
+CAPTURE_ATTR = "humanitl_capture"
+
+# Schützt die Capture-Datei: Die Listener bedienen jede Anfrage in einem
+# eigenen Thread.
+CAPTURE_LOCK = threading.Lock()
 
 
 class Echo(BaseHTTPRequestHandler):
@@ -74,10 +92,46 @@ class Echo(BaseHTTPRequestHandler):
 
     def _read_body(self):
         """Liest den Rumpf vollständig und gibt seine Länge zurück."""
-        length = int(self.headers.get("Content-Length") or 0)
-        if length:
-            self.rfile.read(length)
-        return length
+        if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
+            body = self._read_chunked()
+        else:
+            length = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(length) if length else b""
+        self._capture(body)
+        return len(body)
+
+    def _read_chunked(self):
+        """Setzt einen Rumpf mit `Transfer-Encoding: chunked` zusammen."""
+        parts = []
+        while True:
+            size_line = self.rfile.readline().split(b";", 1)[0].strip()
+            size = int(size_line or b"0", 16)
+            if size == 0:
+                # Trailer bis zur leeren Zeile überlesen.
+                while self.rfile.readline() not in (b"\r\n", b"\n", b""):
+                    pass
+                return b"".join(parts)
+            parts.append(self.rfile.read(size))
+            self.rfile.readline()
+
+    def _capture(self, body):
+        """Hängt die Anfrage samt Rumpf an die Capture-Datei an (HUM-055)."""
+        target = getattr(self.server, CAPTURE_ATTR, None)
+        if not target:
+            return
+        record = {
+            "scheme": getattr(self.server, SCHEME_ATTR, "http"),
+            "method": self.command,
+            "path": self.path,
+            "headers": [[name.lower(), value] for name, value in self.headers.items()],
+            "body": body.decode("utf-8", "replace"),
+            "body_b64": base64.b64encode(body).decode("ascii"),
+            "body_bytes": len(body),
+        }
+        line = json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
+        with CAPTURE_LOCK:
+            with open(target, "a", encoding="utf-8") as handle:
+                handle.write(line)
 
     def _echo(self, request_bytes, body_out=True):
         """Schreibt die Antwort und protokolliert die Anfrage."""
@@ -121,10 +175,11 @@ class Echo(BaseHTTPRequestHandler):
         sys.stderr.flush()
 
 
-def make_server(address, port, scheme, context=None):
+def make_server(address, port, scheme, context=None, capture=None):
     """Bindet einen Listener und gibt ihn zurück, noch ohne zu bedienen."""
     server = ThreadingHTTPServer((address, port), Echo)
     setattr(server, SCHEME_ATTR, scheme)
+    setattr(server, CAPTURE_ATTR, capture)
     if context is not None:
         server.socket = context.wrap_socket(server.socket, server_side=True)
     return server
@@ -138,14 +193,17 @@ def main(argv):
     parser.add_argument("--https-port", type=int, default=443)
     parser.add_argument("--cert")
     parser.add_argument("--key")
+    parser.add_argument("--capture")
     args = parser.parse_args(argv[1:])
 
-    servers = [make_server(args.address, args.http_port, "http")]
+    servers = [make_server(args.address, args.http_port, "http", capture=args.capture)]
     https_port = "-"
     if args.cert and args.key:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(args.cert, args.key)
-        servers.append(make_server(args.address, args.https_port, "https", context))
+        servers.append(
+            make_server(args.address, args.https_port, "https", context, args.capture)
+        )
         https_port = str(args.https_port)
 
     for server in servers[1:]:

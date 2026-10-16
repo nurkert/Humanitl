@@ -101,6 +101,8 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-242 | Schema-Fixture und Drift-Test für das Einstellungsformular | S | Formular aus dem Schema (BACKLOG.md 9, Punkt 17) |
 | HUM-243 | Tastenkürzel aus CONVENTIONS 3.9 ohne Bindung | S | — |
 | HUM-244 | Das Alter des letzten Audit-Ankers liest die Wanduhr | XS | HUM-051 |
+| HUM-245 | Das M4-Demo sieht ein Original in Query und Kopfzeilen nicht | S | HUM-055 |
+| HUM-246 | Nach „Replace all" verliert der Editor den Tastaturfokus | S | HUM-047, HUM-161 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -1995,6 +1997,23 @@ Sprint: 4 · Größe: S · Abhängigkeiten: alle Sprint-4-Issues · Blockiert: H
 
 > **Angepasst** (Umfangsentscheidung 2026-09-18, siehe Kopf dieser Datei): Die Prüfungen „Mapping enthält drei Einträge" und „ein Export enthält keine Originale" entfallen mit HUM-048.
 
+> **Umgesetzt 2026-10-16, Abgleich der 14 Schritte mit `main`.** Was `tests/e2e/m4_trusted_editor.sh` prüft und was nicht, steht mit Grund im Kopf des Skripts; hier kurz:
+>
+> - **Schritt 2:** Kein Schlüsselbund und kein `KEYS_001`. Der Audit-Schlüssel ist auf `main` eine Datei (`AuditKey::load_or_create_file`); geprüft werden Ort im Wegwerf-Baum und Rechte `0600`.
+> - **Schritt 3:** `findings.user_terms` ist auf `main` eine Liste von Texten ohne Alias, also `["Müller GmbH"]` statt `{term, alias}`.
+> - **Schritt 5:** Kein `experimental.static_hosts`, kein `extra_upstream_ca` und deshalb auch kein Cargo-Feature `test-hooks`. Seit HUM-087 gibt es `resolver.overrides` und `resolver.test_ca`, die der Daemon nur mit `--allow-test-ca` annimmt; der Lauf nutzt denselben Weg wie M2 und M3 im eigenen Netz-Namensraum mit einer Adresse aus TEST-NET-2 (Loopback wiese der Proxy als privat ab). Ein zweiter Test-Hebel für dieselbe Sache wäre eine zweite Stelle, an der das Vertrauen des Daemons erweitert wird. Schritt 13 prüft trotzdem mit `strings`, dass das Release-Binary weder `static_hosts` noch `extra_upstream_ca` kennt.
+> - **Schritt 6:** `humanitl run -- python3 /work/fake_agent.py --request /work/m4_request.json` statt `--agent fake`; einen Adapter `fake` gibt es nicht, der Befehl hinter `--` ist der Agent. Neu: `fake_agent.py --request`, `fake_upstream.py --capture` (schreibt Kopfzeilen und Rumpf jeder Anfrage mit), `tests/e2e/fixtures/m4_request.json`.
+> - **D-Bus:** Der Bildschirm-Treiber bekommt im Namensraum einen eigenen Sitzungsbus mit Pfad-Socket (`dbus-run-session --config-file`, `unix:dir=` im Wegwerf-Baum). Ein Bus von draußen hört unter dbus 1.14 (Ubuntu 24.04) auf einem abstrakten Socket, und der ist aus einem anderen Netz-Namensraum nicht erreichbar. Der Job loggt `[m4] duration Ns`; das Ziel „unter zehn Minuten" wird nach dem ersten CI-Lauf abgehakt, der Job selbst hat einen großzügigen Deckel.
+> - **Schritt 7:** Der Nutzerbegriff wird `<TERM_1>` statt `Client-A`, weil die Anwendung die Konfiguration des Daemons nicht liest (`editor_host.dart`, HUM-170). Das Mapping-Panel aus HUM-048 gibt es nicht, wohl aber die Leiste aus HUM-047 im Speicher: Der Treiber zählt dort drei Zeilen mit der vorläufigen Maske (`Mü*******bH`, `an***********de`, `DE******************00`) und kein Original im Klartext.
+> - **Schritt 8** beweist: Die eine Anfrage an `/tickets`, die nach der Bearbeitung beim Ziel ankam, enthält Byte für Byte (aus `body_b64` des Captures, also hinter dem Proxy) keinen Anfang eines Originals (`anna@`, `mueller.de`, `DE89`, `0532013000`, `Müller`), dafür `<TERM_1>`, `<EMAIL_1>` und `<IBAN_1>`; `content-length` ist die Bytelänge, `transfer-encoding` fehlt.
+> - **Schritt 9:** Statt dreier `pseudonym.created` (der Daemon schreibt diesen Record auf `main` nie, HUM-048) prüft der Lauf: kein Original und kein `pseudonym.created` im Export, genau ein `flow.decided` mit `edited: true` für den Flow dieses Laufs, mindestens ein `audit.anchor`.
+> - **Schritt 10:** Eine Ziffer im Zeitstempel der dritten Zeile wird an Ort und Stelle geändert (der Daemon schreibt weiter an dieselbe Datei), `audit verify` endet mit 4 und `AUDIT_001`, nach dem Zurücksetzen mit 0.
+> - **Schritt 11 entfällt:** Die Sprache des Fensters kommt nicht aus `ui.language` (HUM-172, nach 0.1.0), und Live-Neuladen über `ConfigChanged` ist mit der zweiten Umfangsentscheidung vom 2026-09-18 verschoben.
+> - **Schritt 12:** Aus demselben Grund wirkt `config set hold.timeout_secs 10` nach einem Neustart des Daemons statt live. Die Uhr läuft ab `received_at` des Flows (ganze Sekunden, abgeschnitten, also eher zu lang als zu kurz gemessen). `start_daemon` in `tests/e2e/lib.sh` nimmt dafür die Frist `config` an und setzt dann keine Umgebungsvariable, die über die Datei gewänne.
+> - **Schritt 13:** Nur das `.deb` (AppImage optional laut Spezifikation). Das Paket wird mit `dpkg-deb -x` ausgepackt: In Units, Profilen, Katalog, Desktop-Eintrag und `/etc` darf weder `allow-test-ca` noch `test_ca` stehen, und `strings` läuft über das `humanitld` aus dem Paket. lintian wie gefordert „ohne `E:`"; die strengere mit Warnungen bleibt im Release-Lauf (`packaging/deb/lintian.sh`). Er läuft im eigenen Job `e2e-m4-package`, weil der Release-Bau allein länger dauert als die zehn Minuten, die `e2e-m4` erreichen soll; `M4_PACKAGE=run|skip|only` wählt.
+> - **Eigenes Issue HUM-246:** Nach „Replace all with pseudonyms" verschwindet der Knopf mit dem letzten offenen Fund und nimmt den Tastaturfokus mit; `Ctrl+Enter` und `Esc` greifen dann nicht, bis jemand in den Editor klickt. Der Treiber klickt deshalb vor `Ctrl+Enter` in den Entwurf.
+> - **Eigenes Issue HUM-245:** Schritt 8 liest nur den Rumpf; ein Original in Query oder Kopfzeilen sähe er nicht.
+
 ### Kontext
 Jeder Sprint endet mit einem grünen Demo-Skript in CI (BACKLOG.md Abschnitt 8). M4 beweist: Editor, Mapping, Audit, Sprache, Settings und Packaging arbeiten zusammen.
 
@@ -2041,10 +2060,12 @@ Der Dart-Integration-Test kommuniziert mit dem Shell-Skript über Dateien in `$T
 ### Tests
 Das Skript ist der Test. Zusätzlich `e2e_m4_fails_when_original_leaks`: ein absichtlich falsch konfigurierter Lauf (Ersetzung übersprungen) muss in Schritt 8 rot werden (Negativprobe des Skripts, einmal manuell dokumentiert, nicht in CI).
 
+> **Negativprobe, gefahren am 2026-10-16:** `M4_SKIP_REPLACE=1 M4_PACKAGE=skip ./tests/e2e/m4_trusted_editor.sh` (unter `dbus-run-session`, `env -u WAYLAND_DISPLAY GDK_BACKEND=x11`). Der Treiber ersetzt dann nur die IBAN (ein offener Fund mit Prüfsumme sperrt „Trotzdem senden") und schickt Kundenname und Mailadresse über „Trotzdem senden" im Klartext. Ergebnis: Schritte 1 bis 7 grün, dann `FAIL  its body holds no beginning of an original (anna@|mueller\.de|DE89|0532013000|Müller|GmbH|u00fcller): expected 0, got 1`, Exit 1; im Artefakt-Ordner liegt `m4-step7.png` (das Bild am Ende von Schritt 7, das der Treiber immer schreibt) neben `humanitld.log`, `audit.jsonl` und `fake-upstream.log`. Beim Ziel stand `{"customer":"Müller GmbH","contact":"anna@mueller.de","iban":"<IBAN_1>",…}`. Derselbe Stand ohne `M4_SKIP_REPLACE` ist grün (`[m4] step 1 ok` bis `[m4] step 14 ok`, 37 Zusicherungen).
+
 ### Akzeptanzkriterien
 - [ ] Job `e2e-m4` grün auf `ubuntu-latest` in unter 10 Minuten.
-- [ ] Bei Fehlschlag liegen Screenshot, `humanitld.log`, `audit.jsonl` und `fake-upstream.log` als Artefakte vor.
-- [ ] Schritte 8, 9 und 10 sind die Sicherheitsbeweise des Sprints und dürfen nicht mit `|| true` abgeschwächt werden (Review-Checkliste).
+- [x] Bei Fehlschlag liegen Screenshot, `humanitld.log`, `audit.jsonl` und `fake-upstream.log` als Artefakte vor.
+- [x] Schritte 8, 9 und 10 sind die Sicherheitsbeweise des Sprints und dürfen nicht mit `|| true` abgeschwächt werden (Review-Checkliste).
 
 ### Fallstricke
 - Der Fake-Upstream muss ein Zertifikat der Daemon-CA für `api.example.test` haben, sonst scheitert die MITM-Upstream-Verbindung; im Test die CA aus `$XDG_DATA_HOME/humanitl/ca/` verwenden und dem Fake-Upstream als Server-Zert ein damit signiertes Leaf geben. Alternativ akzeptiert der Daemon im `test-hooks`-Feature ein zusätzliches Root-Zertifikat für Upstream-Prüfung (`experimental.extra_upstream_ca`). Beides nur im Test-Build.
@@ -5919,3 +5940,69 @@ Sprint: 4 (nach 0.1.0) · Größe: XS · Abhängigkeiten: HUM-051 · Blockiert: 
 
 ### Tests
 Widget-Test mit fester Uhr: „vor 3 Stunden" bei Anker 3 h vor `now`; Mutationsprobe: `DateTime.now()` zurück, Test rot.
+
+---
+
+## HUM-245 · Das M4-Demo sieht ein Original in Query und Kopfzeilen nicht
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-055 · Blockiert: keine
+
+### Problem
+Schritt 8 von `tests/e2e/m4_trusted_editor.sh` prüft, dass beim Ziel kein Original ankommt, liest
+dafür aber nur den Rumpf der Anfrage an `/tickets`. Der Mitschnitt des Ziels
+(`tests/e2e/fake-upstream/fake_upstream.py --capture`) entsteht nur in `do_POST` und `do_PUT`,
+und die Prüfung sieht weder die Query noch die Kopfzeilen. Ein Editor, der den Rumpf
+pseudonymisiert, eine Mailadresse in `?contact=` oder in einem eigenen Kopf aber stehen ließe,
+bestünde das Demo. Gefunden im Review von HUM-055, dort außerhalb des Umfangs.
+
+### Spezifikation
+- Der Mitschnitt entsteht für jede Methode (auch `GET`, `HEAD`, `DELETE`, `PATCH`) und trägt den
+  vollständigen Pfad samt Query.
+- Die Fixture von M4 bekommt ein Original in der Query und eines in einem eigenen Kopf, und der
+  Bildschirm-Treiber ersetzt sie im Editor (Query- und Kopfzeilen-Tab).
+- Schritt 8 prüft Rumpf, Pfad mit Query und alle Kopfzeilen gegen dasselbe Muster
+  `M4_ORIGINALS`, Byte für Byte.
+
+### Tests
+- Der Lauf bleibt grün; die Negativprobe `M4_SKIP_REPLACE=1` wird an jedem der drei Orte rot,
+  wenn nur dort ein Original stehen bleibt (je einmal von Hand, dokumentiert hier).
+
+### Akzeptanzkriterien
+- [ ] Mitschnitt für jede Methode, mit Query.
+- [ ] Schritt 8 prüft Rumpf, Query und Kopfzeilen.
+- [ ] Negativprobe je Ort dokumentiert.
+
+### Referenzen
+HUM-055 (Schritt 8, Negativprobe), HUM-047 (Editor mit Query- und Kopfzeilen-Tab).
+
+---
+
+## HUM-246 · Nach „Replace all" verliert der Editor den Tastaturfokus
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-047, HUM-161 · Blockiert: keine
+
+### Problem
+Der Knopf „Replace all with pseudonyms" (`editor-replace-all` in
+`app/lib/features/editor/widgets/findings_rail.dart`) steht nur, solange ein Fund offen ist. Ein
+Klick darauf ersetzt den letzten offenen Fund, der Knopf verschwindet, und mit ihm der Fokus.
+Danach greifen die Bindungen des Editors (`Ctrl+Enter`, `Esc`, `F3`, `Ctrl+R`) nicht mehr, bis
+jemand in den Editor klickt; `Shortcuts` löst nur von der Fokusstelle nach oben auf. Für das
+Senden mit offenen Funden hat `_requestSend` denselben Griff schon (`_focus.requestFocus()`),
+für „Replace all" fehlt er. Gefunden beim Bildschirm-Treiber von HUM-055, der deshalb vor
+`Ctrl+Enter` in den Entwurf klickt.
+
+### Spezifikation
+Nach „Replace all" (Knopf, Pause und `replaceAllOnOpen`) holt der Editor den Fokus auf seinen
+eigenen Knoten zurück, wie `_requestSend` es tut.
+
+### Tests
+- Widget-Test: „Replace all" per Klick, danach `Ctrl+Enter` ohne weiteren Klick sendet; ohne die
+  Änderung rot (Mutationsprobe).
+- Der Klick in den Entwurf im M4-Treiber (`app/integration_test/m4_trusted_editor_test.dart`)
+  fällt weg.
+
+### Akzeptanzkriterien
+- [ ] `Ctrl+Enter` und `Esc` wirken direkt nach „Replace all".
+- [ ] Widget-Test mit Mutationsprobe.
+- [ ] Der M4-Treiber klickt nicht mehr in den Entwurf.
+
+### Referenzen
+HUM-047, HUM-161 (`_requestSend`), HUM-055.

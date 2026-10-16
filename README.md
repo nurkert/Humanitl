@@ -230,12 +230,15 @@ A milestone counts as delivered when its demo script runs green in CI against a
 real daemon and a real sandbox, not when its code exists. The scripts live in
 `tests/e2e/`, one per milestone from M1 on — M0 is the build itself, gated by
 `rust-check`, `rust-test`, `flutter-analyze-test` and `proto-lint-and-gen` — and
-the jobs that run them are `e2e`, `e2e-xvfb` and `e2e-agent`. M2 drives the app on
+the jobs that run them are `e2e`, `e2e-xvfb`, `e2e-agent`, `e2e-m4` and
+`e2e-m4-package`. M2 drives the app on
 a screen under Xvfb and exports a HAR file. M3 drives an agent inside the sandbox
 against a mock language model in the run's own network namespace; the OpenCode
 variant runs only where the image carries the binary and reports itself as
 skipped otherwise, so what CI proves for M3 is the isolation and the moderation
-path, not OpenCode.
+path, not OpenCode. M4 pseudonymises a held request in the editor on a screen,
+checks that the target received placeholders and no original, verifies and
+tampers with the audit chain, and lints the `.deb` from a release build.
 
 Progress is visible in the commit history, one issue per commit.
 
