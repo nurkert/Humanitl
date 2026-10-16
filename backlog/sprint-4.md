@@ -96,6 +96,8 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-237 | Die CI auf dem Issue-Branch ist das Tor, nicht der lokale Volllauf | M | — |
 | HUM-238 | Zwei schnelle Merges nehmen dem ersten seinen CI-Lauf | XS | HUM-237 |
 | HUM-239 | Ein Schlüssel im Host von `Referer` und `Origin` steht unmaskiert in der Aufzeichnung | S | HUM-140 |
+| HUM-240 | Die Warnung `pruned` und der Abschnitt Aufbewahrung kennen nur `audit.retention_days` | S | HUM-194 |
+| HUM-241 | Der Audit-Schreiber begrenzt `MAX_LINE_BYTES` beim Anhängen nicht | S | HUM-194 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -4038,8 +4040,8 @@ Ein Schlüssel `audit.max_bytes` (Vorgabe 0, keine Grenze), den derselbe Lauf wi
 dass sie darunter liegt, mit demselben `audit.pruned` als Beleg.
 
 ### Akzeptanzkriterien
-- [ ] Ein Log über der Grenze ist nach dem Lauf darunter, und `verify` hält mit der Warnung `pruned`.
-- [ ] Eine Kette, die nicht hält, wird auch hier nicht gekürzt (`AUDIT_001`).
+- [x] Ein Log über der Grenze ist nach dem Lauf darunter, und `verify` hält mit der Warnung `pruned`. Gebaut: `audit.max_bytes` (Vorgabe 0, sonst 2 MiB bis 1 TiB, `expert`, im Register `effective`), gelesen von `AuditRetention` im selben täglichen Lauf wie `audit.retention_days` (`AuditHandle::prune_to` mit `PruneLimits`). Geschnitten wird das Älteste zuerst, nur ganze Records, mit Platz für `audit.pruned` und dessen Anker; es gilt der weitere von Alters- und Größenschnitt. Der neueste Record geht nie; bis `MAX_LINE_BYTES` passt er samt Beleg unter jede zulässige Grenze (`MIN_MAX_BYTES` = 2 MiB), ist er länger, bleibt das Log darüber (`PruneOutcome::size`/`over`, Warnung im Protokoll, auch ohne Schnitt). Verhalten bei fast voller Platte in `docs/SECURITY.md` und `backlog/CONVENTIONS.md` 4.40 (Nachtrag). Tests: `daemon/crates/audit/tests/retention.rs` (neun neue), `humanitld/src/audit_retention.rs` (drei neue), `config/src/validate.rs` (einer); sechzehn Mutationen, jede rot gesehen.
+- [x] Eine Kette, die nicht hält, wird auch hier nicht gekürzt (`AUDIT_001`). `a_broken_chain_is_not_cut_by_size_either`: nur die Grenze in Bytes gesetzt, `AUDIT_001`, Datei Byte für Byte unverändert.
 - [ ] `make check` grün.
 
 ### Referenzen
@@ -5794,3 +5796,73 @@ Datenbank gelesen, mit Mutationsprobe.
 
 ### Referenzen
 HUM-140 (`SecretMasks::apply_host`, `encode_headers`), `docs/SECURITY.md` Abschnitt 3.1.
+
+---
+
+## HUM-240 · Die Warnung `pruned` und der Abschnitt Aufbewahrung kennen nur `audit.retention_days`
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-194 · Blockiert: keine
+
+### Problem
+Seit HUM-194 schneidet derselbe Lauf den Anfang der Kette auch nach Größe (`audit.max_bytes`).
+Die Texte, die einen Schnitt erklären, schreiben ihn aber jedem Fall `audit.retention_days` zu:
+die Kommandozeile (`daemon/bin/humanitl/src/cmd/audit.rs`, `pruned_warning`: „deleted by
+audit.retention_days"), die ARB-Texte `auditWarningPruned` und `auditRetentionChain` (en und de)
+und `app/lib/features/audit/widgets/retention_section.dart`. Der Abschnitt „Aufbewahrung" im
+Audit-Screen nennt `audit.max_bytes` gar nicht. Nach einem Schnitt nach Größe ist die Warnung damit
+sachlich falsch. Gefunden im Review von HUM-194, dort außerhalb des Umfangs.
+
+### Spezifikation
+`audit.pruned` trägt seit HUM-194 `cutoff` nur bei einer Grenze in der Zeit und `max_bytes` nur
+bei einer in Bytes. Die Warnung `pruned` nennt die Grenze, die geschnitten hat (Zeit, Größe oder
+beide); dafür trägt die Prüfung die Grenze aus dem dokumentierenden Record in die Warnung, über
+die Leitung bis zu Kommandozeile und Oberfläche. Der Abschnitt „Aufbewahrung" zeigt neben
+`audit.retention_days` auch `audit.max_bytes`.
+
+### Tests
+- Rust: Warnung nach einem Lauf nur nach Zeit, nur nach Größe und nach beiden, je mit
+  Mutationsprobe (`daemon/crates/audit/tests/retention.rs`, `daemon/bin/humanitl/tests/cli.rs`).
+- Flutter: `audit_screen_test.dart` und `audit_arb_test.dart` für beide Grenzen.
+
+### Akzeptanzkriterien
+- [ ] Die Warnung nennt die Grenze, die geschnitten hat.
+- [ ] Der Abschnitt Aufbewahrung zeigt `audit.max_bytes`.
+- [ ] Gezielte Prüfungen grün.
+
+### Referenzen
+HUM-194 (`AuditPruned`, `PruneLimits`), HUM-157, `backlog/CONVENTIONS.md` 4.40.
+
+---
+
+## HUM-241 · Der Audit-Schreiber begrenzt `MAX_LINE_BYTES` beim Anhängen nicht
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-194 · Blockiert: keine
+
+### Problem
+`MAX_LINE_BYTES` (1 MiB, `daemon/crates/audit/src/writer.rs`) gilt nur beim Lesen: Eine längere
+Zeile am Ende der Datei ist für den Schreiber kein Record. `append` prüft die Länge aber nicht und
+schreibt auch einen Record, der länger als 1 MiB ist. Steht er als letzte Zeile in der Datei,
+meldet die Prüfung des Endes beim Wiederaufnehmen ihn als gebrochen (`broken_end`), obwohl er
+ordentlich geschrieben und versiegelt wurde. Außerdem hält ein solcher neuester Record das Log
+über `audit.max_bytes`: HUM-194 garantiert die Grenze nur für einen neuesten Record bis
+`MAX_LINE_BYTES` (`MIN_MAX_BYTES` = 2 × `MAX_LINE_BYTES`). Gefunden im Review von HUM-194, dort
+außerhalb des Umfangs.
+
+### Spezifikation
+`append` lehnt einen Record ab, dessen Zeile samt Zeilenende länger als `MAX_LINE_BYTES` wäre,
+oder kürzt seine Daten so, dass er darunter passt; in beiden Fällen geht ein `Diagnostic` mit
+`why` (Art, Nummer, Länge) und, wenn möglich, `fix` in den Strom der Befunde. Welcher der beiden
+Wege gilt, entscheidet das Issue zu Beginn und schreibt es in `backlog/CONVENTIONS.md`.
+
+### Tests
+- Ein Record über `MAX_LINE_BYTES` über das Handle: abgelehnt oder gekürzt, mit Befund, die Kette
+  hält.
+- Wiederaufnahme nach dem längsten erlaubten Record als letzter Zeile: kein Befund, die Kette
+  setzt ohne Lücke fort.
+- Je mit Mutationsprobe (`daemon/crates/audit/tests/`).
+
+### Akzeptanzkriterien
+- [ ] `append` lehnt Records über `MAX_LINE_BYTES` ab oder kürzt sie, mit `Diagnostic`.
+- [ ] Ein Test zeigt, dass die Wiederaufnahme nach dem längsten erlaubten Record hält.
+- [ ] Gezielte Prüfungen grün.
+
+### Referenzen
+HUM-194 (`MIN_MAX_BYTES`, `PruneOutcome::over`), HUM-050 (`MAX_LINE_BYTES`, `broken_end`).

@@ -636,7 +636,8 @@ pub enum RecordKind {
     AuditResumed(AuditResumed),
     /// Ein Aufräumlauf der Aufzeichnung hat Altes gelöscht.
     RetentionApplied(RetentionApplied),
-    /// Ein Lauf von `audit.retention_days` hat den Anfang der Kette gelöscht.
+    /// Ein Lauf von `audit.retention_days` oder `audit.max_bytes` hat den
+    /// Anfang der Kette gelöscht.
     AuditPruned(AuditPruned),
 }
 

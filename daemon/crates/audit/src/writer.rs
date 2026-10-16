@@ -79,7 +79,7 @@ use crate::canonical::canonical_json;
 use crate::key::{AuditKey, KEY_LEN};
 use crate::kinds::{AnchorData, AuditResumed, DaemonStopped, RecordKind};
 use crate::record::{AuditRecord, GENESIS_PREV, NO_SESSION, RecordBody, format_ts, mac_matches};
-use crate::retention::{self, PruneReport};
+use crate::retention::{self, AuditPruned, Cut, PruneLimits, PruneOutcome, PruneReport};
 use crate::verify::{AuditVerifier, set_aside_fix};
 
 /// Vorgabe für `audit.anchor_every`.
@@ -148,9 +148,10 @@ enum Command {
         reply: mpsc::Sender<Head>,
     },
     Prune {
-        cutoff: DateTime<Utc>,
+        cutoff: Option<DateTime<Utc>>,
+        max_bytes: u64,
         anchors: Vec<Anchor>,
-        reply: mpsc::Sender<Result<Option<PruneReport>, Diagnostic>>,
+        reply: mpsc::Sender<Result<PruneOutcome, Diagnostic>>,
     },
     Close,
 }
@@ -220,6 +221,39 @@ impl AuditHandle {
         before: SystemTime,
         anchors: Vec<Anchor>,
     ) -> Result<Option<PruneReport>, Diagnostic> {
+        self.prune_to(
+            PruneLimits {
+                before: Some(before),
+                max_bytes: 0,
+            },
+            anchors,
+        )
+        .map(|outcome| outcome.cut)
+    }
+
+    /// Löscht den Anfang der Kette nach beiden Grenzen eines Laufs: was vor
+    /// `limits.before` geschrieben wurde und so viel von vorn, dass die Datei
+    /// danach höchstens `limits.max_bytes` groß ist (HUM-194). Es gilt der
+    /// weitere der beiden Schnitte; dokumentiert wird er mit einem einzigen
+    /// `audit.pruned`. Blockiert, bis der Lauf durch ist.
+    ///
+    /// [`PruneOutcome::cut`] ist `None`, wenn keine Grenze gesetzt ist oder
+    /// keine etwas zu löschen fand; dann steht auch kein Record im Log.
+    /// [`PruneOutcome::size`] nennt die Größe der Datei in beiden Fällen.
+    /// Geprüft wird die Kette auch
+    /// ohne Grenze; wer gar nicht prüfen will, ruft ohne Grenze nicht auf
+    /// ([`PruneLimits::is_bounded`]).
+    ///
+    /// # Errors
+    ///
+    /// Wie [`AuditHandle::prune`]: [`AUDIT_001`], wenn die Kette nicht hält,
+    /// auch wenn nur die Grenze in Bytes gesetzt ist; dann wird nichts
+    /// gelöscht. [`AUDIT_006`] für Lesen, Schreiben und Umbenennen.
+    pub fn prune_to(
+        &self,
+        limits: PruneLimits,
+        anchors: Vec<Anchor>,
+    ) -> Result<PruneOutcome, Diagnostic> {
         let (reply, answer) = mpsc::channel();
         let ended = || {
             Diagnostic::builder(AUDIT_006, Severity::Error)
@@ -233,7 +267,8 @@ impl AuditHandle {
         };
         self.tx
             .send(Command::Prune {
-                cutoff: DateTime::<Utc>::from(before),
+                cutoff: limits.before.map(DateTime::<Utc>::from),
+                max_bytes: limits.max_bytes,
                 anchors,
                 reply,
             })
@@ -499,10 +534,11 @@ impl Chain {
                 }
                 Command::Prune {
                     cutoff,
+                    max_bytes,
                     anchors,
                     reply,
                 } => {
-                    let outcome = self.prune(cutoff, &anchors);
+                    let outcome = self.prune(cutoff, max_bytes, &anchors);
                     if let Err(diagnostic) = &outcome {
                         self.report(diagnostic.clone());
                     }
@@ -649,9 +685,10 @@ impl Chain {
     /// Ein Lauf der Aufbewahrung; die Schritte stehen in [`crate::retention`].
     fn prune(
         &mut self,
-        cutoff: DateTime<Utc>,
+        cutoff: Option<DateTime<Utc>>,
+        max_bytes: u64,
         anchors: &[Anchor],
-    ) -> Result<Option<PruneReport>, Diagnostic> {
+    ) -> Result<PruneOutcome, Diagnostic> {
         self.sync();
         if self.broken {
             return Err(not_writable(
@@ -668,21 +705,23 @@ impl Chain {
         if let Some(broken) = report.diagnostic(&self.path) {
             return Err(Diagnostic::builder(AUDIT_001, Severity::Error)
                 .why(format!(
-                    "{}; audit.retention_days deletes nothing from a chain that does not hold, \
-                     because the deletion would remove the evidence of the break",
+                    "{}; the retention run (audit.retention_days, audit.max_bytes) deletes \
+                     nothing from a chain that does not hold, because the deletion would remove \
+                     the evidence of the break",
                     broken.why
                 ))
                 .fix(set_aside_fix(&self.path))
                 .build());
         }
-        let Some(cut) = retention::find_cut(&self.file, self.len, cutoff)
-            .map_err(|err| unreadable(&self.path, &err))?
-        else {
-            return Ok(None);
+        let Some(cut) = self.find_prune_cut(cutoff, max_bytes)? else {
+            return Ok(PruneOutcome {
+                cut: None,
+                size: self.len,
+            });
         };
         // Über `append` und nicht `record`: Der Anker dahinter kommt immer und
         // hier, damit sein Ergebnis zählt.
-        let data = RecordKind::AuditPruned(cut.record(cutoff)).data();
+        let data = RecordKind::AuditPruned(cut.record(cutoff, max_bytes)).data();
         if self
             .append(NO_SESSION.to_owned(), retention::PRUNED_KIND, data)
             .is_none()
@@ -740,11 +779,78 @@ impl Chain {
                 ),
             ));
         }
-        Ok(Some(PruneReport {
-            through_seq: cut.through_seq,
-            records: cut.records,
-            bytes: cut.offset,
-        }))
+        Ok(PruneOutcome {
+            cut: Some(PruneReport {
+                through_seq: cut.through_seq,
+                records: cut.records,
+                bytes: cut.offset,
+            }),
+            size: self.len,
+        })
+    }
+
+    /// Der Schnitt eines Laufs: der weitere aus dem nach Alter und dem nach
+    /// Größe ([`crate::retention`]). `None`, wenn keine Grenze etwas fand.
+    fn find_prune_cut(
+        &self,
+        cutoff: Option<DateTime<Utc>>,
+        max_bytes: u64,
+    ) -> Result<Option<Cut>, Diagnostic> {
+        let by_age = match cutoff {
+            Some(cutoff) => retention::find_cut(&self.file, self.len, cutoff)
+                .map_err(|err| unreadable(&self.path, &err))?,
+            None => None,
+        };
+        // Die Grenze in Bytes greift, wenn die Datei darüber liegt, und auch,
+        // wenn der Schnitt nach Alter ohnehin einen Record anhängt, der sie
+        // darüber brächte.
+        let by_size = if max_bytes > 0 && (self.len > max_bytes || by_age.is_some()) {
+            let reserve = self.prune_reserve(cutoff, max_bytes);
+            retention::find_byte_cut(&self.file, self.len, max_bytes, reserve)
+                .map_err(|err| unreadable(&self.path, &err))?
+        } else {
+            None
+        };
+        Ok(Cut::further(by_age, by_size))
+    }
+
+    /// Wie viele Bytes der Record eines Laufs und sein Anker höchstens
+    /// belegen: beide mit den längsten Zahlen, die sie tragen können. Der
+    /// Schnitt nach Bytes hält diesen Platz frei, damit die Datei nach dem
+    /// Lauf samt beiden unter `audit.max_bytes` liegt (HUM-194).
+    fn prune_reserve(&self, cutoff: Option<DateTime<Utc>>, max_bytes: u64) -> u64 {
+        let widest_hash = "f".repeat(GENESIS_PREV.len());
+        let pruned = RecordKind::AuditPruned(AuditPruned {
+            through_seq: u64::MAX,
+            through_hash: widest_hash.clone(),
+            records: u64::MAX,
+            cutoff: cutoff.map(format_ts),
+            max_bytes: Some(max_bytes),
+        });
+        let anchor = RecordKind::AuditAnchor(AnchorData {
+            anchored_seq: u64::MAX,
+            anchored_hash: widest_hash.clone(),
+        });
+        [pruned, anchor]
+            .iter()
+            .map(|kind| {
+                let body = RecordBody {
+                    seq: u64::MAX,
+                    ts: format_ts(Utc::now()),
+                    session: NO_SESSION.to_owned(),
+                    kind: kind.name().to_owned(),
+                    data: kind.data(),
+                    prev: widest_hash.clone(),
+                };
+                body.seal(&self.key)
+                    .and_then(|record| record.to_line())
+                    // Eine Zeile samt Zeilenende; scheitert das Versiegeln,
+                    // die größte Zeile, die es gibt.
+                    .map_or(MAX_LINE_BYTES, |line| {
+                        u64::try_from(line.len()).unwrap_or(MAX_LINE_BYTES) + 1
+                    })
+            })
+            .sum()
     }
 
     fn sync(&mut self) {

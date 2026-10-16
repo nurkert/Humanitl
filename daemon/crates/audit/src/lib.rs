@@ -20,7 +20,7 @@
 //! - [`query`] das Ende der Kette und Seiten ihrer Records, ohne Prüfung
 //! - [`export`] der Export als JSONL oder CSV, der nie etwas überschreibt
 //! - [`retention`] das Löschen des Anfangs nach `audit.retention_days` und
-//!   der Record, der es dokumentiert
+//!   `audit.max_bytes` und der Record, der es dokumentiert
 //!
 //! Was die Kette beweist und was nicht, steht in `docs/SECURITY.md` unter „Was
 //! die Audit-Kette beweist". Kurz: Sie zeigt eine Änderung, Löschung oder
@@ -49,7 +49,7 @@ pub use crate::key::AuditKey;
 pub use crate::kinds::{KeyOrigin, RecordKind};
 pub use crate::query::{QueryFilter, TimeRange};
 pub use crate::record::{AuditRecord, GENESIS_PREV, NO_SESSION, RecordBody, format_ts, sha256_hex};
-pub use crate::retention::{AuditPruned, PruneReport};
+pub use crate::retention::{AuditPruned, MIN_MAX_BYTES, PruneLimits, PruneOutcome, PruneReport};
 pub use crate::verify::{
     AuditVerifier, BreakReason, VerifiedHead, VerifyReport, VerifyStatus, VerifyWarning,
 };
