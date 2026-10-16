@@ -94,6 +94,7 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-235 | `daemon uninstall --purge-binaries` löscht Kopien, aus denen noch ein Prozess läuft | S | HUM-210 |
 | HUM-236 | `cargo deny` meldet vier rustls-Advisories und `unsafe-libyaml` und ist auf `main` rot | XS | — |
 | HUM-237 | Die CI auf dem Issue-Branch ist das Tor, nicht der lokale Volllauf | M | — |
+| HUM-238 | Zwei schnelle Merges nehmen dem ersten seinen CI-Lauf | XS | HUM-237 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -5716,3 +5717,48 @@ Warum Umsetzen und erneuter Lauf statt Merge auf das bewegte `main`: Nur wenn `m
 
 ### Referenzen
 Nutzerfreigabe 2026-10-16; HUM-147 (`backlog/sprint-5.md`); `tools/verify-commit.sh`; CI-Lauf 37469218376; GitHub REST API „List workflow runs for a workflow" und „List jobs for a workflow run"; `test_core` `defaultConcurrency`.
+
+---
+
+## HUM-238 · Zwei schnelle Merges nehmen dem ersten seinen CI-Lauf
+Sprint: 4 · Größe: XS · Abhängigkeiten: HUM-237 · Blockiert: —
+
+### Kontext
+Gefunden im Review von HUM-237 (2026-10-16). `.github/workflows/ci.yml` gruppiert Läufe mit `concurrency: group: ci-${{ github.ref }}` und `cancel-in-progress: true`. Auf einem Issue-Branch ist das richtig: Ein neuer Push ist der ergänzte Commit, der alte Lauf ist wertlos. Auf `main` ist es falsch, seit `tools/commit-issue.sh --ci` Merges selbsttätig landet: Kommen zwei Merges kurz hintereinander, bricht der Lauf des zweiten den des ersten ab. Der erste Merge-Commit hat dann nie einen grünen Lauf, und der Release-Wächter (`release.yml`) verweigert genau diesen Commit. `cancel-in-progress` nur auf `main` abzuschalten reicht nicht: Eine Gruppe hält höchstens einen wartenden Lauf und bricht den älteren wartenden ab; bei drei Merges verlöre der zweite seinen Lauf.
+
+### Ziel
+Jeder Commit auf `main` bekommt seinen eigenen Lauf, der nicht abgebrochen wird. Auf Issue-Branches bleibt es bei einem Lauf je Ref.
+
+### Nicht-Ziel
+Läufe auf `main` sparen; die Zahl der Läufe ist die Zahl der Merges.
+
+### Betroffene Pfade
+- `.github/workflows/ci.yml` (Block `concurrency`)
+- `CONTRIBUTING.md` (Abschnitt „Vorabversionen 0.0.x", Schritt 1)
+
+### Spezifikation
+```yaml
+concurrency:
+  group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: true
+```
+Auf `main` ist die Gruppe die SHA, also allein; auf allen anderen Refs der Ref wie bisher.
+
+### Schritte
+1. Block `concurrency` ändern, Kommentar mit Grund.
+2. `CONTRIBUTING.md`: Schritt 1 der Vorabversionen sagt nicht mehr, dass ein neuerer Commit den Lauf eines älteren abbricht.
+
+### Tests
+- `actionlint` über `ci.yml`.
+- Nach dem Merge: zwei Merges kurz hintereinander, beide Läufe enden mit `success` (`tools/ci-gate.sh` auf beide SHAs).
+
+### Akzeptanzkriterien
+- [x] `actionlint` 1.7.7 ohne Befund (2026-10-16).
+- [ ] Zwei aufeinanderfolgende Merges auf `main` haben je einen eigenen, nicht abgebrochenen Lauf (misst der nächste Doppel-Merge).
+
+### Fallstricke
+- `cancel-in-progress: false` allein lässt das Abbrechen wartender Läufe bestehen (siehe Kontext).
+- Der Ausdruck `a && b || c` liefert `c`, wenn `b` leer ist; `github.sha` ist bei einem Push nie leer.
+
+### Referenzen
+HUM-237 (Review 2026-10-16); GitHub-Dokumentation „Control the concurrency of workflows and jobs"; `.github/workflows/release.yml` (Job `guard`).
