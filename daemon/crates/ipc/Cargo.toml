@@ -53,6 +53,7 @@ tonic.workspace = true
 tonic-prost.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+zeroize.workspace = true
 
 [build-dependencies]
 protox.workspace = true

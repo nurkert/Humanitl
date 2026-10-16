@@ -1989,3 +1989,90 @@ async fn the_end_of_the_daemon_ends_the_agent_it_started() {
         "the orderly path removed the socket"
     );
 }
+
+/// Startet das gebaute Binary ohne `HUMANITL_HOLD__TIMEOUT_SECS`: Die Frist
+/// kommt dann aus `config.toml`, so wie bei einem Menschen, der sie im
+/// Formular eingestellt hat.
+fn spawn_from_config(dir: &Path) -> Child {
+    Command::new(env!("CARGO_BIN_EXE_humanitld"))
+        .env("XDG_RUNTIME_DIR", dir.join("run"))
+        .env("XDG_DATA_HOME", dir.join("data"))
+        .env("XDG_CONFIG_HOME", dir.join("config"))
+        .env("HOME", dir.join("home"))
+        .env_remove("HUMANITL_HOLD__TIMEOUT_SECS")
+        .spawn()
+        .expect("the daemon binary must start")
+}
+
+/// Die Frist aus dem Formular wirkt nach dem Neustart (HUM-069).
+///
+/// `SetConfig` schreibt `hold.timeout_secs = 15` in eine `config.toml` mit
+/// Kommentar; der neu gestartete Daemon hält die nächste Anfrage genau so
+/// lange: nicht vor 15 Sekunden beendet, kurz danach mit `504` und
+/// `reason: timeout` blockiert. Die alte Frist von 300 Sekunden hätte den
+/// Agenten über die ganze Wartezeit dieses Tests hinaus gehalten.
+#[tokio::test]
+async fn a_timeout_set_in_the_form_blocks_after_the_restart_at_fifteen_seconds() {
+    const CONFIG: &str = "# mine\n[hold]\ntimeout_secs = 300\n";
+    let dir = tempfile::Builder::new()
+        .prefix("hum")
+        .tempdir_in("/tmp")
+        .expect("a short temporary directory for sun_path");
+    for name in ["run", "data", "config", "home"] {
+        std::fs::create_dir(dir.path().join(name)).unwrap();
+    }
+    let config_path = dir
+        .path()
+        .join("config")
+        .join("humanitl")
+        .join("config.toml");
+    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    std::fs::write(&config_path, CONFIG).unwrap();
+    let mut daemon = Daemon {
+        child: spawn_from_config(dir.path()),
+        dir,
+    };
+    daemon.ready().await;
+
+    let token = auth::read_token(&daemon.token_path()).unwrap();
+    let mut grpc = client::connect_at(&daemon.socket(), &token).await.unwrap();
+    grpc.set_config(v1::SetConfigRequest {
+        key: "hold.timeout_secs".to_owned(),
+        value: "15".to_owned(),
+    })
+    .await
+    .expect("the form setting is accepted");
+    drop(grpc);
+    assert_eq!(
+        std::fs::read_to_string(&config_path).unwrap(),
+        "# mine\n[hold]\ntimeout_secs = 15\n",
+        "the value is written and the comment kept"
+    );
+
+    daemon.terminate();
+    daemon.child = spawn_from_config(daemon.dir.path());
+    daemon.ready().await;
+
+    let mut agent = UnixStream::connect(daemon.proxy_socket()).await.unwrap();
+    let sent = std::time::Instant::now();
+    agent
+        .write_all(b"GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+
+    let mut raw = Vec::new();
+    tokio::time::timeout(Duration::from_secs(40), agent.read_to_end(&mut raw))
+        .await
+        .expect("a 15 second timeout ends the wait well within 40 seconds")
+        .unwrap();
+    let waited = sent.elapsed();
+    let text = String::from_utf8_lossy(&raw);
+    assert!(text.starts_with("HTTP/1.1 504"), "{text}");
+    assert!(text.contains("reason: timeout"), "{text}");
+    assert!(
+        waited >= Duration::from_secs(15),
+        "the request is held for the configured 15 seconds, not ended after {waited:?}"
+    );
+
+    daemon.terminate();
+}

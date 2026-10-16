@@ -1887,3 +1887,194 @@ async fn acknowledged_findings_are_recorded() {
         .unwrap_or_else(|| panic!("flow missing"));
     assert_eq!(revised.summary.unresolved_findings, None);
 }
+
+/// Ein bekannter Schlüssel steht weder im Pfad samt Query noch in einer
+/// Kopfzeile im Klartext in der Aufzeichnung (HUM-140, Review).
+#[tokio::test]
+async fn a_masked_key_is_kept_out_of_path_and_headers() {
+    const KEY: &str = "sk-query-0123456789abcdef";
+    let harness = Harness::open();
+    harness
+        .recorder
+        .mask_secret(KEY, Some("192.168.1.20:11434"));
+    let flow = FlowId::new();
+    harness.recorder.apply(&received(
+        flow,
+        "api.github.com",
+        &format!("/v1/models?api_key={KEY}"),
+        SystemTime::now(),
+    ));
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "authorization",
+        HeaderValue::from_str(&format!("Bearer {KEY}")).unwrap_or_else(|err| panic!("{err}")),
+    );
+    harness
+        .recorder
+        .store_message(flow, Dir::Request, &headers, Bytes::new())
+        .await
+        .unwrap_or_else(|err| panic!("{err}"));
+    harness.recorder.flush().await;
+
+    let detail = harness
+        .recorder
+        .get_flow(flow)
+        .await
+        .unwrap_or_else(|err| panic!("{err}"))
+        .unwrap_or_else(|| panic!("flow missing"));
+    assert_eq!(detail.summary.path, "/v1/models?api_key=••••");
+    assert_eq!(
+        detail.messages[0].headers,
+        vec![("authorization".to_owned(), "Bearer ••••".to_owned())]
+    );
+}
+
+/// Kein Schlüssel im Klartext in irgendeiner Textspalte: `Content-Type` und
+/// `Content-Encoding` stehen in eigenen Spalten neben `headers_json`, für
+/// Anfrage wie Antwort, und ein Schlüssel mit `+/=` steht im Pfad kodiert als
+/// `%2B…` (HUM-140, Review). Gelesen wird die Datenbank selbst, nicht eine
+/// Sicht darauf.
+#[tokio::test]
+async fn a_masked_key_stands_in_no_text_column_of_the_database() {
+    const KEY: &str = "sk+query/0123456789abcdef=";
+    const ENCODED: &str = "sk%2Bquery%2F0123456789abcdef%3D";
+    let harness = Harness::open();
+    harness.recorder.mask_secret(KEY, None);
+    let flow = FlowId::new();
+    harness.recorder.apply(&received(
+        flow,
+        "api.github.com",
+        &format!("/v1/models?k={ENCODED}"),
+        SystemTime::now(),
+    ));
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "content-type",
+        HeaderValue::from_str(&format!("application/json; key={KEY}"))
+            .unwrap_or_else(|err| panic!("{err}")),
+    );
+    headers.insert(
+        "content-encoding",
+        HeaderValue::from_str(&format!("identity, {KEY}")).unwrap_or_else(|err| panic!("{err}")),
+    );
+    harness
+        .recorder
+        .store_message(flow, Dir::Request, &headers, Bytes::new())
+        .await
+        .unwrap_or_else(|err| panic!("{err}"));
+    let sink = harness.recorder.begin_response(flow, &headers);
+    let _response = sink.finish(200).unwrap_or_else(|err| panic!("{err}"));
+    harness.recorder.flush().await;
+
+    let conn = rusqlite::Connection::open(&harness.db).unwrap_or_else(|err| panic!("{err}"));
+    let mut texts: Vec<String> = Vec::new();
+    let mut statement = conn
+        .prepare(
+            "SELECT headers_json, ifnull(content_type, ''), ifnull(content_encoding, '') \
+             FROM messages WHERE flow_id = ?1",
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+    let rows = statement
+        .query_map([flow.to_string()], |row| {
+            Ok([
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ])
+        })
+        .unwrap_or_else(|err| panic!("{err}"));
+    for row in rows {
+        texts.extend(row.unwrap_or_else(|err| panic!("{err}")));
+    }
+    let path: String = conn
+        .query_row(
+            "SELECT path FROM flows WHERE id = ?1",
+            [flow.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+    texts.push(path.clone());
+
+    assert_eq!(
+        texts.len(),
+        7,
+        "request and response, three columns each, and the path"
+    );
+    assert_eq!(path, "/v1/models?k=••••");
+    assert_eq!(
+        texts
+            .iter()
+            .filter(|text| *text == "application/json; key=••••")
+            .count(),
+        2,
+        "content_type of request and response: {texts:?}"
+    );
+    assert_eq!(
+        texts
+            .iter()
+            .filter(|text| *text == "identity, ••••")
+            .count(),
+        2,
+        "content_encoding of request and response: {texts:?}"
+    );
+    for text in &texts {
+        assert!(!text.contains(KEY), "the key stands in the clear: {text}");
+        assert!(
+            !text.contains(ENCODED),
+            "the encoded key stands in the clear: {text}"
+        );
+    }
+}
+
+/// Ein Schlüssel als Label einer Subdomain steht weder in `flows.host` noch
+/// in `flows.host_display`, auch nicht in Mischschreibung; ein Schlüssel im
+/// Pfad, nur teilweise und gemischt kodiert, ebenso wenig (HUM-140, Review).
+#[tokio::test]
+async fn a_masked_key_stands_neither_in_the_host_nor_in_a_mixed_encoded_path() {
+    const KEY: &str = "Local-Key-0123456789abcdef";
+    let harness = Harness::open();
+    harness.recorder.mask_secret(KEY, None);
+    let flow = FlowId::new();
+    harness.recorder.apply(&received(
+        flow,
+        "local-key-0123456789abcdef.evil.example",
+        "/x?k=Local%2dKey-0123456789%61bcdef",
+        SystemTime::now(),
+    ));
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "host",
+        HeaderValue::from_static("LOCAL-KEY-0123456789ABCDEF.evil.example"),
+    );
+    harness
+        .recorder
+        .store_message(flow, Dir::Request, &headers, Bytes::new())
+        .await
+        .unwrap_or_else(|err| panic!("{err}"));
+    harness.recorder.flush().await;
+
+    let conn = rusqlite::Connection::open(&harness.db).unwrap_or_else(|err| panic!("{err}"));
+    let (host, host_display, path): (String, String, String) = conn
+        .query_row(
+            "SELECT host, host_display, path FROM flows WHERE id = ?1",
+            [flow.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(host, "••••.evil.example");
+    assert!(
+        !host_display
+            .to_ascii_lowercase()
+            .contains(&KEY.to_ascii_lowercase()),
+        "{host_display}"
+    );
+    assert_eq!(path, "/x?k=••••");
+    let headers_json: String = conn
+        .query_row(
+            "SELECT headers_json FROM messages WHERE flow_id = ?1",
+            [flow.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(headers_json, r#"[["host","••••.evil.example"]]"#);
+}

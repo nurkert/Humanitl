@@ -154,6 +154,15 @@ pub trait DaemonApi: Send + Sync + 'static {
         &self,
         request: v1::SessionSummaryRef,
     ) -> Result<v1::SessionSummary, Diagnostic>;
+
+    /// Der Zugangsschlüssel des Modells: Stand, setzen, entfernen (HUM-140).
+    /// Keine Antwort trägt den Schlüssel.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`] mit `CONFIG_020`, wenn der Schlüssel keiner ist oder
+    /// sich nicht ablegen lässt.
+    async fn llm_key(&self, request: v1::LlmKeyRequest) -> Result<v1::LlmKeyStatus, Diagnostic>;
 }
 
 /// Der tonic-Dienst über einem beliebigen [`DaemonApi`].
@@ -510,6 +519,18 @@ impl<T: DaemonApi> v1::humanitl_server::Humanitl for DaemonService<T> {
             // keine Zusammenfassung gibt, ist nichts anderes, nur weil die
             // Antwort aus dem Fake kommt.
             .map_err(|diagnostic| missing_status(&diagnostic))
+    }
+
+    async fn llm_key(
+        &self,
+        request: Request<v1::LlmKeyRequest>,
+    ) -> Result<Response<v1::LlmKeyStatus>, Status> {
+        self.check_token(&request)?;
+        self.api
+            .llm_key(request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
     }
 }
 

@@ -104,6 +104,10 @@ const REGISTER: &[(&str, &str)] = &[
     ("limits.max_decompress_ratio", "effective"),
     ("limits.preview_cap_bytes", "effective"),
     ("limits.recorder_max_body_bytes", "effective"),
+    // Gelesen in `SandboxService::agent_key` beim Start einer Sitzung: Der
+    // Schlüssel geht als Datei in die Sandbox, und `IpcServer::probe_key`
+    // gibt ihn der Probe, wenn sie ihn verlangt (HUM-140).
+    ("llm.api_key_ref", "effective"),
     ("llm.endpoint", "effective"),
     ("llm.models", "effective"),
     ("llm.passthrough_paths", "effective"),
@@ -126,16 +130,16 @@ const REGISTER: &[(&str, &str)] = &[
     ("sandbox.work_dir", "effective"),
     ("sandbox.work_mode", "effective"),
     ("ui.language", "effective"),
-    // Die Oberfläche kann die Konfiguration nicht lesen: dem Client fehlt
-    // `GetConfig`, und der Melder antwortet fest mit `true`.
-    ("ui.notifications", "pending(HUM-069)"),
+    // Gelesen in der Oberfläche: `notificationsEnabled` folgt `configProvider`,
+    // der `GetConfig` fragt (HUM-069).
+    ("ui.notifications", "effective"),
     // Gelesen in `SandboxService::launch`, wenn das Terminal der Sitzung
     // entsteht: `TerminalHub::notice` schweigt ohne diesen Schalter
     // (HUM-042).
     ("ui.terminal_notices", "effective"),
-    // Dasselbe wie bei `ui.notifications`: Das Erscheinungsbild steht fest im
-    // Programm, bis der Einstellungs-Bildschirm die Werte holt.
-    ("ui.theme", "pending(HUM-069)"),
+    // Gelesen in der Oberfläche: `themeModeProvider` startet aus dem Wert, den
+    // `configProvider` meldet, und folgt ihm (HUM-069).
+    ("ui.theme", "effective"),
 ];
 
 fn repo_root() -> PathBuf {
@@ -339,9 +343,10 @@ fn the_keys_without_a_reader_are_the_known_ones() {
     // abzüglich `resolver.nameserver`, hinter den HUM-115 den Hickory-Adapter
     // gebaut hat, und zuzüglich `audit.retention_days`, den HUM-050 anlegt,
     // und wieder abzüglich, seit HUM-157 ihn verdrahtet hat (täglicher Lauf im
-    // Daemon, `audit.pruned`). Sie steht hier, damit ein weiterer
-    // Fall nicht unbemerkt dazukommt: Wer einen Schlüssel verdrahtet oder
-    // streicht, zieht ihn hier und im Register zugleich nach.
+    // Daemon, `audit.pruned`), und abzüglich `ui.notifications` und
+    // `ui.theme`, die seit HUM-069 die Oberfläche liest. Sie steht hier, damit
+    // ein weiterer Fall nicht unbemerkt dazukommt: Wer einen Schlüssel
+    // verdrahtet oder streicht, zieht ihn hier und im Register zugleich nach.
     let pending: Vec<&str> = register()
         .iter()
         .filter(|(_, readiness)| readiness.is_pending())
@@ -352,8 +357,6 @@ fn the_keys_without_a_reader_are_the_known_ones() {
         vec![
             "pseudonyms.max_response_bytes",
             "pseudonyms.translate_responses",
-            "ui.notifications",
-            "ui.theme",
         ]
     );
 }

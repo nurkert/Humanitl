@@ -25,6 +25,8 @@
 //! - [`mod@resolve`] welche Profile gelten und woher sie kommen
 //! - [`origin`] die Herkunft je Feld
 //! - [`edit`] der eine Wert, den der Daemon in `config.toml` schreibt
+//! - [`value`] ein Wert aus Text, gelesen und geprüft nach dem Schema
+//! - [`secret`] der Zugangsschlüssel des Modells: Verweis, Schlüsselbund, Datei
 //!
 //! ```
 //! use humanitl_config::{Env, Sources, load};
@@ -56,8 +58,10 @@ pub mod profile;
 pub mod resolve;
 pub mod schema;
 pub mod scope;
+pub mod secret;
 pub mod tier;
 mod validate;
+pub mod value;
 
 pub use crate::validate::loader_variable_refused;
 

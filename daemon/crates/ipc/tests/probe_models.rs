@@ -22,6 +22,7 @@ fn probe(models: Vec<String>) -> ProbeResult {
         latency_ms: 7,
         endpoint_is_private: true,
         diagnostics: Vec::new(),
+        key_sent: false,
     }
 }
 

@@ -4,6 +4,7 @@ Architecture: amd64
 Maintainer: Niko Burkert <humanitl@nurkert.de>
 Installed-Size: @INSTALLED_SIZE@
 Depends: @DEPENDS@
+Recommends: libsecret-tools
 Suggests: opencode
 Section: net
 Priority: optional

@@ -20,6 +20,7 @@ import '../intercept/providers/decision.dart';
 import '../intercept/providers/flows.dart';
 import '../rules/rules_screen.dart';
 import '../sandbox/sandbox_screen.dart';
+import '../settings/settings_sheet.dart';
 import '../setup/providers/setup_provider.dart';
 import 'providers/connection.dart';
 import 'providers/language.dart';
@@ -51,6 +52,11 @@ class ShellScreen extends ConsumerStatefulWidget {
 class _ShellScreenState extends ConsumerState<ShellScreen> {
   final FocusNode _focus = FocusNode(debugLabel: 'shell');
   bool _paletteOpen = false;
+
+  /// Whether the settings sheet is open (HUM-069). A sheet and not a section:
+  /// the rail stays the five places of the work plus setup, and the settings
+  /// lie over whichever of them is showing (`BACKLOG.md` 5, "Sheet").
+  bool _settingsOpen = false;
 
   /// Whether the setup screen has already had its one chance to open itself.
   ///
@@ -84,6 +90,14 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   }
 
   void _togglePalette() => _paletteOpen ? _closePalette() : _openPalette();
+
+  void _openSettings() => setState(() => _settingsOpen = true);
+
+  void _closeSettings() {
+    setState(() => _settingsOpen = false);
+    // The sheet held the focus; without this `Ctrl+K` would reach nobody.
+    _focus.requestFocus();
+  }
 
   /// Die Befehle der Palette, für eine Verbindung, die [live] ist oder nicht.
   ///
@@ -125,6 +139,11 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
         id: 'switch-language',
         label: l10n.shellPaletteSwitchLanguage(otherLanguage.endonym(l10n)),
         run: () => ref.read(languageProvider.notifier).set(otherLanguage),
+      ),
+      PaletteCommand(
+        id: 'open-settings',
+        label: l10n.settingsPaletteOpen,
+        run: _openSettings,
       ),
       PaletteCommand(
         id: 'reconnect',
@@ -327,6 +346,12 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
               return null;
             },
           ),
+          SettingsIntent: CallbackAction<SettingsIntent>(
+            onInvoke: (SettingsIntent intent) {
+              _settingsOpen ? _closeSettings() : _openSettings();
+              return null;
+            },
+          ),
         },
         child: Focus(
           focusNode: _focus,
@@ -361,6 +386,11 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
                   ],
                 ),
               ),
+              if (_settingsOpen)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: SettingsSheet(onClose: _closeSettings),
+                ),
               if (_paletteOpen)
                 CommandPalette(
                   commands: _commands(context, live: live),

@@ -92,6 +92,15 @@ pub const CONFIG_DST: &str = "/etc/humanitl/opencode/opencode.json";
 /// Der mitgelieferte Modellkatalog in der Sandbox.
 pub const MODELS_DST: &str = "/etc/humanitl/opencode/models.json";
 
+/// Der Zugangsschlüssel des Modells in der Sandbox (HUM-140).
+///
+/// Eine Datei und keine Umgebungsvariable: Die Umgebung des Agenten setzt
+/// `bwrap` mit `--setenv NAME WERT`, also über seine eigene Kommandozeile, und
+/// die liest jeder Prozess desselben Nutzers in `/proc/<pid>/cmdline`. Die
+/// Datei kommt aus einem memfd (`--ro-bind-data`); `opencode.json` verweist
+/// mit `{file:…}` darauf, und `OpenCode` liest sie selbst.
+pub const API_KEY_DST: &str = "/etc/humanitl/opencode/llm-api-key";
+
 /// Das Verzeichnis, in dem `OpenCode` seine eigene Konfiguration sucht.
 ///
 /// Unter dem `XDG_CONFIG_HOME`, das der Agent wirklich sieht
@@ -699,7 +708,8 @@ impl AgentAdapter for OpenCodeAdapter {
             || format!("http://127.0.0.1:{}/v1", ctx.proxy_port),
             base_url,
         );
-        let config = render_config(&base, &ctx.llm.models)?;
+        let key_file = ctx.llm_key.is_some().then_some(API_KEY_DST);
+        let config = render_config(&base, &ctx.llm.models, key_file)?;
         let models = render_models(&ctx.llm.models)?;
 
         let config_home = ctx.config_home();
@@ -710,6 +720,11 @@ impl AgentAdapter for OpenCodeAdapter {
             SandboxFile::read_only(keep_dst(&config_home), Vec::new()),
             SandboxFile::read_only(MANAGED_CONFIG_DST, config.into_bytes()),
         ];
+        // Der Schlüssel als eigene Datei, nie in der Konfiguration selbst: Die
+        // steht dreimal in der Sandbox und ist für den Menschen lesbar gedacht.
+        if let Some(dst) = key_file {
+            files.push(SandboxFile::secret(dst, ctx.llm_key.file_content()));
+        }
         // `agent.briefing.enabled = false` unterdrückt die Datei ganz, statt
         // eine leere anzulegen: `OpenCode` überspringt eine fehlende globale
         // Instruktionsdatei, und eine leere stünde als Aussage da, die niemand

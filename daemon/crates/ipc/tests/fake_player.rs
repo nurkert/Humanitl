@@ -899,7 +899,30 @@ async fn config_answers_and_keeps_only_what_the_daemon_accepts() {
         changed.toml
     );
 
-    for (key, value) in [("hold.timeout_secs", "42"), ("hold.no_such_key", "1")] {
+    // Eine Einstellung des Formulars nimmt der Fake an wie der Daemon
+    // (HUM-069), einen Wert außerhalb des Bereichs nicht.
+    let timeout = daemon
+        .set_config(v1::SetConfigRequest {
+            key: "hold.timeout_secs".to_owned(),
+            value: "42".to_owned(),
+        })
+        .await
+        .expect("a form setting");
+    assert!(
+        timeout.toml.contains("timeout_secs = 42"),
+        "{}",
+        timeout.toml
+    );
+    let refused = daemon
+        .set_config(v1::SetConfigRequest {
+            key: "hold.timeout_secs".to_owned(),
+            value: "0".to_owned(),
+        })
+        .await
+        .expect_err("out of range");
+    assert_eq!(refused.code.as_str(), "CONFIG_003", "{refused}");
+
+    for (key, value) in [("sandbox.profile", "llm-only"), ("hold.no_such_key", "1")] {
         let refused = daemon
             .set_config(v1::SetConfigRequest {
                 key: key.to_owned(),
@@ -914,7 +937,9 @@ async fn config_answers_and_keeps_only_what_the_daemon_accepts() {
         .await
         .expect("config");
     assert!(
-        still.toml.contains("CURL_CA_BUNDLE") && !still.toml.contains("timeout_secs = 42"),
+        still.toml.contains("CURL_CA_BUNDLE")
+            && still.toml.contains("timeout_secs = 42")
+            && !still.toml.contains("llm-only"),
         "the refusals changed nothing: {}",
         still.toml
     );

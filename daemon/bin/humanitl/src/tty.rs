@@ -155,6 +155,52 @@ impl Drop for RawMode {
     }
 }
 
+/// Eine Zeile ohne Echo, solange ein Schlüssel eingegeben wird (HUM-140).
+///
+/// Dasselbe Terminal und derselbe Rückweg wie [`RawMode`] — gesicherte
+/// Einstellungen im globalen Platz, `Drop` und der Panik-Hook —, nur dass
+/// allein das Echo ausgeht: Die Zeile bleibt zeilenweise, `Enter` schließt
+/// sie ab, und `Ctrl+C` bricht weiter ab.
+pub struct NoEcho {
+    /// Wahr, solange dieser Rahmen das Echo abgeschaltet hat.
+    entered: bool,
+}
+
+impl NoEcho {
+    /// Schaltet das Echo ab; `None`, wenn die Eingabe kein Terminal ist.
+    #[must_use]
+    pub fn enter() -> Option<Self> {
+        let terminal = stdin_fd();
+        let current = tcgetattr(terminal).ok()?;
+        let owned = terminal.try_clone_to_owned().ok()?;
+        let mut hidden = current.clone();
+        hidden.local_modes.remove(rustix::termios::LocalModes::ECHO);
+        tcsetattr(terminal, OptionalActions::Flush, &hidden).ok()?;
+        {
+            let mut guard = saved()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *guard = Some((owned, current));
+        }
+        install_hooks();
+        Some(Self { entered: true })
+    }
+}
+
+impl Drop for NoEcho {
+    fn drop(&mut self) {
+        if !self.entered {
+            return;
+        }
+        self.entered = false;
+        restore();
+        let mut guard = saved()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = None;
+    }
+}
+
 /// Der Panik-Hook, genau einmal je Prozess.
 fn install_hooks() {
     static ONCE: std::sync::Once = std::sync::Once::new();

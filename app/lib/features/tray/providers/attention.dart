@@ -36,9 +36,11 @@ library;
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/ipc/config_providers.dart';
 import '../desktop_ports.dart';
 
 part 'attention.g.dart';
@@ -56,21 +58,24 @@ const Duration notificationBundle = Duration(seconds: 5);
 /// something they already know (HUM-034).
 const Duration returnAfter = Duration(seconds: 60);
 
-/// Whether desktop notifications are wanted.
+/// Whether desktop notifications are wanted: `ui.notifications` (boolean,
+/// default `true`, tier `advanced`) as the daemon reports it through
+/// `GetConfig` (HUM-069), `true` while it has not answered.
 ///
-/// The setting is registered: `docs/CONFIG.md` lists `ui.notifications`
-/// (boolean, default `true`, tier `advanced`). What is missing is not the key
-/// but the way to read it -- the daemon client has no `GetConfig` -- so this
-/// answers `true` for everybody and a person who switched the setting off
-/// still gets messages. The binding follows as soon as the client can ask;
-/// until then this is the seam it binds to, and the switch the tests use.
+/// The settings form writes the key, and `configProvider` reads it back, so a
+/// person who switched it off gets no message from the next read on. Tests
+/// override this provider to switch notifications without a daemon.
 ///
 /// Its neighbour `ui.sound` stood here until HUM-121 and is gone: it never
 /// played a sound, and a switch without a sound is no setting
 /// (`backlog/CONVENTIONS.md` 4.25). A sound for the notification is a
 /// capability of its own; it would come back together with its reader.
 @Riverpod(keepAlive: true)
-bool notificationsEnabled(Ref ref) => true;
+bool notificationsEnabled(Ref ref) => ref.watch(
+  configProvider.select(
+    (AsyncValue<ConfigValues> config) => config.value?.uiNotifications ?? true,
+  ),
+);
 
 /// The desktop this program talks to.
 ///

@@ -27,14 +27,10 @@ void main() {
       );
       // HUM-034 nennt fuer `ui.notifications` die Stufe `basic`; das Register
       // nennt `advanced` und gewinnt (CONVENTIONS 4.19). Die Spalte des
-      // Registers steht daneben: `offen (HUM-xxx)` heisst, dass kein Code den
-      // Schluessel liest, und nennt das Issue, das ihn wirksam macht. Die
-      // Zusicherung prueft die Spalte und nicht den Satz; sie muss angepasst
-      // werden, sobald HUM-069 die Zeile auf `ja` dreht.
-      expect(
-        config,
-        contains(RegExp(r'`ui\.notifications`.*\| offen \(HUM-[0-9]+\) \|')),
-      );
+      // Registers steht daneben: Seit HUM-069 liest die Oberflaeche den
+      // Schluessel (`configProvider`), und die Spalte steht auf `ja`. Die
+      // Zusicherung prueft die Spalte und nicht den Satz.
+      expect(config, contains(RegExp(r'`ui\.notifications` \|.*\| ja \|')));
       // `ui.sound` stand bis HUM-121 daneben und ist entfallen: Es gab keinen
       // Ton, den er abschalten konnte. Als Einstellung darf die Zeile nicht
       // zurueckkommen, ohne dass ein Leser mit ihr kommt (CONVENTIONS 4.25);
@@ -49,8 +45,8 @@ void main() {
     test('the_provider_names_the_real_reason', () {
       final String source = File('lib/features/tray/providers/attention.dart')
           .readAsStringSync();
-      // Der Grund, warum jeder Meldungen bekommt, ist der fehlende Abruf,
-      // nicht ein fehlender Eintrag im Register.
+      // Der Kommentar nennt den Schluessel, seine Stufe und den Abruf, ueber
+      // den er seit HUM-069 gelesen wird.
       for (final String named in <String>[
         'ui.notifications',
         'advanced',

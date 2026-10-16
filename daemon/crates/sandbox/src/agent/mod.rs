@@ -32,6 +32,7 @@ pub mod opencode_models;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+use humanitl_config::secret::ApiKey;
 use humanitl_config::{AgentBriefing, HoldConfig, Language, LlmConfig};
 use humanitl_core::rule::Rule;
 use humanitl_core::{Diagnostic, SessionId};
@@ -193,6 +194,51 @@ pub struct AgentContext {
     /// `None` heißt „Suchpfad der Sandbox unbekannt", nicht „leer": dann wird
     /// dort nicht gesucht, und es bleibt beim Weg über den Host.
     pub sandbox_path: Option<OsString>,
+    /// Was der Agent vom Zugangsschlüssel des Modells bekommt (HUM-140).
+    ///
+    /// Der Daemon holt den Schlüssel beim Start aus dem Schlüsselbund
+    /// (`humanitl_config::secret`); ein Plan ohne Start bekommt nur die
+    /// Ansage, dass einer käme ([`AgentKey::Withheld`]), damit Dateiliste und
+    /// Kommandozeile dieselben sind wie beim Start, ohne dass für eine Anzeige
+    /// ein Geheimnis gelesen wird.
+    pub llm_key: AgentKey,
+}
+
+/// Der Zugangsschlüssel des Modells, so weit ihn ein Adapter sehen darf
+/// (HUM-140).
+///
+/// Der Adapter legt ihn als Datei in die Sandbox ([`SandboxFile::secret`]) und
+/// verweist in seiner Konfiguration darauf; in `argv` und in der Umgebung, die
+/// `bwrap` über `--setenv` und damit über seine Kommandozeile bekommt, steht er
+/// nie.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum AgentKey {
+    /// Kein Schlüssel konfiguriert.
+    #[default]
+    None,
+    /// Ein Schlüssel ist konfiguriert, aber dieser Kontext baut nur einen
+    /// Plan: Die Datei entsteht leer.
+    Withheld,
+    /// Der Schlüssel selbst, für einen Start.
+    Key(ApiKey),
+}
+
+impl AgentKey {
+    /// Ob überhaupt ein Schlüssel im Spiel ist.
+    #[must_use]
+    pub const fn is_some(&self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    /// Der Inhalt der Datei in der Sandbox: der Schlüssel, oder nichts für
+    /// einen Plan.
+    #[must_use]
+    pub fn file_content(&self) -> Vec<u8> {
+        match self {
+            Self::Key(key) => key.expose().as_bytes().to_vec(),
+            Self::None | Self::Withheld => Vec::new(),
+        }
+    }
 }
 
 impl AgentContext {
@@ -220,7 +266,15 @@ impl AgentContext {
             host_path: None,
             sandbox_view: SandboxView::default(),
             sandbox_path: None,
+            llm_key: AgentKey::None,
         }
+    }
+
+    /// Setzt, was der Agent vom Zugangsschlüssel des Modells bekommt.
+    #[must_use]
+    pub fn with_llm_key(mut self, key: AgentKey) -> Self {
+        self.llm_key = key;
+        self
     }
 
     /// Setzt `llm.models`.
@@ -494,7 +548,11 @@ impl AgentContext {
 /// (`bwrap --file FD DST`), nie über einen Pfad auf dem Host. Damit liegt die
 /// Datei auf einer tmpfs, überlebt die Sitzung nicht und lässt sich vom Agenten
 /// nicht durch einen Symlink umlenken.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Die `Debug`-Form nennt nur die Länge des Inhalts: Eine Datei kann den
+/// Zugangsschlüssel des Modells tragen ([`SandboxFile::secret`]), und ein
+/// `{plan:?}` in einem Log darf ihn nicht zeigen.
+#[derive(Clone, PartialEq, Eq)]
 pub struct SandboxFile {
     /// Der Ort in der Sandbox, immer absolut.
     pub dst: PathBuf,
@@ -502,6 +560,30 @@ pub struct SandboxFile {
     pub content: Vec<u8>,
     /// Die Rechte, üblicherweise [`MODE_READ_ONLY`].
     pub mode: u32,
+    /// Ob der Inhalt ein Geheimnis ist (HUM-140). Eine solche Datei zeigt
+    /// keine Oberfläche mit Inhalt, und ein Test findet sie daran.
+    pub secret: bool,
+}
+
+impl Drop for SandboxFile {
+    /// Der Inhalt einer Datei mit Geheimnis wird beim Fallenlassen
+    /// überschrieben (HUM-140, Review).
+    fn drop(&mut self) {
+        if self.secret {
+            zeroize::Zeroize::zeroize(&mut self.content);
+        }
+    }
+}
+
+impl std::fmt::Debug for SandboxFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SandboxFile")
+            .field("dst", &self.dst)
+            .field("content", &format_args!("<{} bytes>", self.content.len()))
+            .field("mode", &format_args!("{:o}", self.mode))
+            .field("secret", &self.secret)
+            .finish()
+    }
 }
 
 impl SandboxFile {
@@ -512,6 +594,23 @@ impl SandboxFile {
             dst: dst.into(),
             content: content.into(),
             mode: MODE_READ_ONLY,
+            secret: false,
+        }
+    }
+
+    /// Eine nur lesbare Datei mit einem Geheimnis.
+    ///
+    /// Sie kommt wie jede Adapter-Datei aus einem memfd, nie aus einem Pfad
+    /// des Hosts. Wer in der Sandbox lebt, ist der Agent, und der braucht den
+    /// Schlüssel; was die Markierung schützt, ist alles außerhalb: die
+    /// `Debug`-Form, die Momentaufnahme und die Kommandozeile.
+    #[must_use]
+    pub fn secret(dst: impl Into<PathBuf>, content: impl Into<Vec<u8>>) -> Self {
+        Self {
+            dst: dst.into(),
+            content: content.into(),
+            mode: MODE_READ_ONLY,
+            secret: true,
         }
     }
 

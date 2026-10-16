@@ -1069,11 +1069,14 @@ Host-Tabelle aus HUM-022 auf genau diesem Weg.
 
 Fragt einen einzelnen Endpunkt, was er ist. Dieselbe Probe wie hinter dem
 Testknopf im Setup und wie bei `doctor --probe-llm`: zwei GET-Anfragen im
-Daemon, `/api/tags` und dann `/v1/models`, ohne Zugangsdaten und ohne
-Weiterleitung, nichts davon durch die Sandbox.
+Daemon, `/api/tags` und dann `/v1/models`, ohne Weiterleitung, nichts davon
+durch die Sandbox. Zugangsdaten gehen nur mit `--with-key` mit: Dann schickt der
+Daemon den hinterlegten Zugangsschlüssel als `Authorization: Bearer`, und nur,
+wenn `URL` dieselbe Herkunft (Schema, Host, Port) hat wie `llm.endpoint`;
+`key_sent` in `--json` sagt, ob einer ging (HUM-140).
 
 ```
-humanitl llm test <URL> [--timeout-ms N] [--json]
+humanitl llm test <URL> [--timeout-ms N] [--with-key] [--json]
 
 flavor: ollama
 latency: 12 ms
@@ -1095,6 +1098,38 @@ kein Fehlschlag sind, stehen unter der Ausgabe und der Lauf endet mit `0`:
 `LLM_006` für eine Adresse außerhalb des eigenen Netzes, und `LLM_003` für
 einen Server, der antwortet, aber als keine bekannte API — dann steht dort
 `flavor: unknown` und keine Modellliste. Wer geantwortet hat, hat geantwortet.
+
+## `humanitl llm key`
+
+Der Zugangsschlüssel des Endpunkts, für ein Modell, das nur mit Schlüssel
+antwortet (HUM-140). Ein Aufruf der RPC `LlmKey`; dieselbe, die das Feld
+„Zugangsschlüssel" der Einstellungen bedient.
+
+```
+humanitl llm key status [--json]
+humanitl llm key set [--json]        # liest den Schlüssel von stdin
+humanitl llm key remove [--json]
+
+access key: set (secret-service:humanitl/llm, secret-service)
+```
+
+`set` liest den Schlüssel von `stdin`, nie von der Kommandozeile: `argv` steht
+in `/proc/<pid>/cmdline` für jeden Prozess desselben Nutzers und in der
+Historie der Shell. An einem Terminal ist die Eingabe verdeckt; aus einer Pipe
+wird alles bis zum Ende gelesen, ohne den Zeilenumbruch am Schluss
+(`printf '%s' "$KEY" | humanitl llm key set`). Der Daemon legt ihn im
+Schlüsselbund des Systems ab (`secret-tool`, Secret Service), sonst in
+`$XDG_DATA_HOME/humanitl/keys/llm.key` mit `0600` und meldet dann `CONFIG_019`.
+In `config.toml` steht danach nur der Verweis `llm.api_key_ref`. Keine Ausgabe
+trägt den Schlüssel, auch `--json` nicht: Sie nennt `set`, `store`
+(`secret-service`, `file` oder `none`), `key_ref` und die Befunde.
+
+`status` meldet `LLM_009`, wenn `llm.api_key_ref` einen Schlüssel nennt, den
+der Speicher nicht herausgibt. `remove` entfernt Schlüssel und Verweis. Ein
+Schlüssel, der leer ist, Leerraum trägt oder länger als 4096 Bytes ist, wird
+mit `CONFIG_020` abgelehnt, und nichts wird geschrieben. Wie bei jeder
+Einstellung gilt ein neuer Schlüssel für die nächste Sitzung; eine laufende
+behält, womit sie gestartet ist.
 
 ## Die globalen Schalter
 

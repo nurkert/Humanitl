@@ -13,9 +13,14 @@
 //! - **Sie folgt keiner Weiterleitung.** Ein `3xx` ist eine Antwort, die nicht
 //!   die gesuchte API ist, und nichts weiter. Wer der Umleitung folgte, fragte
 //!   eine Adresse, die der Mensch nicht eingetippt hat.
-//! - **Sie schickt keine Zugangsdaten und keine Cookies.** Die einzige
-//!   Kopfzeile, die sie setzt, ist `accept: application/json` (und der
-//!   `Host`-Kopf, den [`Upstream`] ohnehin aus der Authority bildet).
+//! - **Sie schickt keine Cookies und Zugangsdaten nur auf Verlangen.** Sie
+//!   setzt `accept: application/json` (und den `Host`-Kopf, den [`Upstream`]
+//!   ohnehin aus der Authority bildet). Einen Zugangsschlüssel schickt sie nur,
+//!   wenn der Aufrufer ihr einen gibt ([`LlmProbe::probe_with_key`], HUM-140),
+//!   und dann als `Authorization: Bearer` an genau diesen Endpunkt, mit der
+//!   Kopfzeile als empfindlich markiert, damit `hyper` sie nicht in Logs
+//!   zeigt. Wem der Daemon den hinterlegten Schlüssel gibt, entscheidet der
+//!   gRPC-Dienst, nicht die Probe.
 //! - **Sie läuft nie aus der Sandbox.** Sie hängt am gRPC-Dienst des Daemons,
 //!   also am Host, und ihr Ergebnis geht an die Oberfläche, nicht an den
 //!   Agenten.
@@ -52,6 +57,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
+use humanitl_config::secret::ApiKey;
 use humanitl_core::diagnostics::codes::{LLM_001, LLM_002, LLM_003, LLM_006, LLM_007};
 use humanitl_core::{
     Authority, BodyRef, Diagnostic, FixAction, HostName, HttpRequest, Method, Scheme, Severity,
@@ -144,6 +150,8 @@ pub struct ProbeResult {
     /// geantwortet hat, `LLM_006`, wenn der Endpunkt nicht privat ist. Beide
     /// stehen neben einem Ergebnis, nicht an seiner Stelle.
     pub diagnostics: Vec<Diagnostic>,
+    /// Wahr, wenn die Probe einen Zugangsschlüssel mitgeschickt hat.
+    pub key_sent: bool,
 }
 
 /// Die Probe über einem [`Upstream`].
@@ -189,10 +197,46 @@ impl LlmProbe {
         endpoint: &Url,
         timeout: Option<Duration>,
     ) -> Result<ProbeResult, Diagnostic> {
+        self.probe_with_key(endpoint, timeout, None).await
+    }
+
+    /// Wie [`LlmProbe::probe`], mit einem Zugangsschlüssel (HUM-140).
+    ///
+    /// Beide Anfragen tragen dann `Authorization: Bearer <key>`. Antwortet der
+    /// Endpunkt trotzdem mit `401` oder `403`, sagt `LLM_002`, dass er den
+    /// Schlüssel abgelehnt hat, statt dass einer fehlte.
+    ///
+    /// # Errors
+    ///
+    /// Wie [`LlmProbe::probe`].
+    pub async fn probe_with_key(
+        &self,
+        endpoint: &Url,
+        timeout: Option<Duration>,
+        key: Option<&ApiKey>,
+    ) -> Result<ProbeResult, Diagnostic> {
         let timeout = timeout
             .unwrap_or(Duration::from_millis(u64::from(DEFAULT_TIMEOUT_MS)))
             .min(Duration::from_millis(u64::from(MAX_TIMEOUT_MS)));
-        let target = Target::parse(endpoint)?;
+        let mut target = Target::parse(endpoint)?;
+        target.authorization = key
+            .map(|key| HeaderValue::from_str(&format!("Bearer {}", key.expose())))
+            .transpose()
+            .map_err(|_invalid| {
+                // `ApiKey::new` lässt nur sichtbare Zeichen ohne Leerraum zu;
+                // was hier scheitert, wäre kein Wert einer Kopfzeile.
+                Diagnostic::builder(LLM_002, Severity::Error)
+                    .why(
+                        "the stored access key is not a valid header value, so it was not sent"
+                            .to_owned(),
+                    )
+                    .fix(FixAction::CopyCommand("humanitl llm key set".to_owned()))
+                    .build()
+            })?
+            .map(|mut value| {
+                value.set_sensitive(true);
+                value
+            });
         let started = Instant::now();
 
         // Wer schon geantwortet hat, ist nicht unerreichbar. Ohne diese Marke
@@ -228,6 +272,7 @@ impl LlmProbe {
             latency_ms,
             endpoint_is_private: outcome.endpoint_is_private,
             diagnostics,
+            key_sent: target.authorization.is_some(),
         })
     }
 
@@ -376,12 +421,23 @@ impl Failure {
                     target.url(OLLAMA_TAGS_PATH)
                 )))
                 .build(),
+            Self::NeedsAuth(status) if target.authorization.is_some() => {
+                Diagnostic::builder(LLM_002, Severity::Error)
+                    .why(format!(
+                        "the LLM server at {} answered {status} to the access key that was \
+                         sent; it does not accept this key.",
+                        target.authority
+                    ))
+                    .fix(FixAction::CopyCommand("humanitl llm key set".to_owned()))
+                    .build()
+            }
             Self::NeedsAuth(status) => Diagnostic::builder(LLM_002, Severity::Error)
                 .why(format!(
-                    "the LLM server at {} answered {status}. It requires authentication that \
-                     Humanitl does not send in the MVP.",
+                    "the LLM server at {} answered {status}. It requires an access key, and \
+                     none was sent.",
                     target.authority
                 ))
+                .fix(FixAction::CopyCommand("humanitl llm key set".to_owned()))
                 .build(),
         }
     }
@@ -394,6 +450,9 @@ struct Target {
     scheme: Scheme,
     /// Der Pfad der API-Wurzel, ohne abschließenden `/`; leer für die Wurzel.
     root: String,
+    /// `Authorization: Bearer …`, wenn ein Schlüssel mitgeht, als empfindlich
+    /// markiert (HUM-140).
+    authorization: Option<HeaderValue>,
 }
 
 impl Target {
@@ -431,6 +490,7 @@ impl Target {
             authority: Authority::new(host, port),
             scheme,
             root,
+            authorization: None,
         })
     }
 
@@ -475,6 +535,11 @@ impl Target {
             HeaderName::from_static("accept"),
             HeaderValue::from_static("application/json"),
         );
+        if let Some(value) = &self.authorization {
+            request
+                .headers
+                .insert(HeaderName::from_static("authorization"), value.clone());
+        }
         request.body = BodyRef::empty();
         request
     }

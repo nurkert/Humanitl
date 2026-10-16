@@ -85,6 +85,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
+use humanitl_config::secret::{KeyRef, KeyStore};
 use humanitl_config::{Config, WorkMode};
 use humanitl_core::Severity as CoreSeverity;
 use humanitl_core::diagnostics::codes;
@@ -96,7 +97,7 @@ use humanitl_recorder::Recorder;
 use humanitl_sandbox::agent::opencode;
 use humanitl_sandbox::summary::SessionSummary;
 use humanitl_sandbox::{
-    AdapterRegistry, AgentContext, BwrapBackend, CheckResult, IsolationCheck, KILL_GRACE,
+    AdapterRegistry, AgentContext, AgentKey, BwrapBackend, CheckResult, IsolationCheck, KILL_GRACE,
     LaunchInputs, MIN_BWRAP_VERSION, MountPolicy, SANDBOX_SHELL, SandboxBackend, SandboxFile,
     SandboxHandle, SandboxProfile, SessionContext, StdioMode, Termination, shell_line,
 };
@@ -438,6 +439,11 @@ struct Inner {
     /// nachschlagen lässt sie sich später nicht. Das ist der Fall im
     /// Fake-Modus und in Tests.
     recorder: Option<Recorder>,
+    /// Wo der Zugangsschlüssel des Modells liegt (HUM-140).
+    ///
+    /// Ein Start holt ihn hier, gibt ihn dem Adapter und nimmt ihn vorher in
+    /// die Masken der Aufzeichnung auf; ein Plan liest ihn nie.
+    keys: KeyStore,
     /// Ob dieser Dienst seinen Abschied schon begonnen hat (HUM-142).
     ///
     /// Ab da startet nichts Neues mehr: Eine Sandbox, die nach dem Abschied
@@ -474,6 +480,9 @@ pub struct SandboxPorts {
     /// Ohne Aufzeichnung entsteht sie trotzdem und reist als Ereignis; nur
     /// `GetSessionSummary` findet sie später nicht mehr.
     pub recorder: Option<Recorder>,
+    /// Wo der Zugangsschlüssel des Modells liegt (HUM-140). Ohne Angabe der
+    /// Speicher der Pfade des Resolvers; Tests setzen eine Attrappe ein.
+    pub keys: Option<KeyStore>,
 }
 
 impl SandboxPorts {
@@ -512,6 +521,13 @@ impl SandboxPorts {
         self.recorder = Some(recorder);
         self
     }
+
+    /// Dieselben Anschlüsse mit diesem Speicher für den Zugangsschlüssel.
+    #[must_use]
+    pub fn with_keys(mut self, keys: KeyStore) -> Self {
+        self.keys = Some(keys);
+        self
+    }
 }
 
 impl SandboxService {
@@ -524,6 +540,7 @@ impl SandboxService {
     pub fn new(resolver: SessionResolver, session: SessionId, ports: SandboxPorts) -> Self {
         let paths = resolver.paths().clone();
         let config = Arc::new(resolver.base().config.clone());
+        let keys = ports.keys.unwrap_or_else(|| KeyStore::for_paths(&paths));
         Self {
             inner: Arc::new(Inner {
                 config: RwLock::new(config),
@@ -536,6 +553,7 @@ impl SandboxService {
                 settings: ports.settings,
                 notices: ports.notices,
                 recorder: ports.recorder,
+                keys,
                 leaving: std::sync::atomic::AtomicBool::new(false),
             }),
         }
@@ -1707,7 +1725,7 @@ impl Inner {
         command: &[OsString],
         output: Option<humanitl_sandbox::OutputSink>,
     ) -> Result<Launched, Diagnostic> {
-        let prepared = self.prepare_with_command(plan, command)?;
+        let prepared = self.prepare_keyed(plan, command, KeyNeed::Start)?;
         let backend = prepared.backend.clone().with_stdio(StdioMode::Pty {
             cols: DEFAULT_TERMINAL_SIZE.0,
             rows: DEFAULT_TERMINAL_SIZE.1,
@@ -2060,6 +2078,17 @@ impl Inner {
         plan: &v1::sandbox_request::Plan,
         command: &[OsString],
     ) -> Result<Prepared, Diagnostic> {
+        self.prepare_keyed(plan, command, KeyNeed::Plan)
+    }
+
+    /// Wie [`Self::prepare_with_command`], und für einen Start mit dem
+    /// Zugangsschlüssel des Modells ([`KeyNeed::Start`]).
+    fn prepare_keyed(
+        &self,
+        plan: &v1::sandbox_request::Plan,
+        command: &[OsString],
+        need: KeyNeed,
+    ) -> Result<Prepared, Diagnostic> {
         // Eine Aufnahme der Konfiguration für den ganzen Aufbau: Ein Start,
         // der dazwischenkommt, darf nicht die Hälfte einer Kommandozeile
         // ersetzen.
@@ -2082,7 +2111,7 @@ impl Inner {
         let agent = if command.is_empty()
             || humanitl_sandbox::agent::command_is_the_agent(&config, command)
         {
-            self.agent_contribution(&config, &work_src, &profile, command)?
+            self.agent_contribution(&config, &work_src, &profile, command, need)?
         } else {
             AgentContribution::default()
         };
@@ -2157,6 +2186,7 @@ impl Inner {
         work_src: &Path,
         profile: &SandboxProfile,
         command: &[OsString],
+        need: KeyNeed,
     ) -> Result<AgentContribution, Diagnostic> {
         let registry = AdapterRegistry::builtin();
         let adapter = registry.get(&config.agent.adapter).ok_or_else(|| {
@@ -2214,7 +2244,8 @@ impl Inner {
                     .or_else(|| profile.env.get("PATH"))
                     .map(OsString::from),
             )
-            .with_work_dir_sandbox(profile.mounts.work.dst.clone());
+            .with_work_dir_sandbox(profile.mounts.work.dst.clone())
+            .with_llm_key(self.agent_key(config, need)?);
         let ctx = if command.is_empty() {
             ctx.with_command_override(
                 config
@@ -2232,6 +2263,40 @@ impl Inner {
             env: adapter.env(&ctx),
             files: adapter.files(&ctx)?,
         })
+    }
+
+    /// Was der Adapter vom Zugangsschlüssel des Modells bekommt (HUM-140).
+    ///
+    /// Ein Plan bekommt nur die Ansage, ein Start den Schlüssel selbst. Bevor
+    /// ihn der Adapter sieht, steht er in den Masken der Aufzeichnung: Die
+    /// erste Anfrage des Agenten an das Modell trägt ihn schon.
+    ///
+    /// # Errors
+    ///
+    /// `LLM_009`, wenn der Speicher den Schlüssel nicht herausgibt, und
+    /// `CONFIG_003`, wenn `llm.api_key_ref` kein Verweis ist (die Prüfung der
+    /// Konfiguration lässt das nicht zu; ein Resolver ohne sie schon).
+    fn agent_key(&self, config: &Config, need: KeyNeed) -> Result<AgentKey, Diagnostic> {
+        let Some(text) = config.llm.api_key_ref.as_deref() else {
+            return Ok(AgentKey::None);
+        };
+        let key_ref = KeyRef::parse(text).ok_or_else(|| {
+            Diagnostic::builder(codes::CONFIG_003, Severity::Error)
+                .why(format!(
+                    "llm.api_key_ref = {text:?} is not a reference to an access key; it takes \
+                     secret-service:humanitl/NAME or file:NAME"
+                ))
+                .fix(FixAction::CopyCommand("humanitl llm key set".to_owned()))
+                .build()
+        })?;
+        if need == KeyNeed::Plan {
+            return Ok(AgentKey::Withheld);
+        }
+        let key = self.keys.lookup(&key_ref)?;
+        if let Some(recorder) = &self.recorder {
+            recorder.mask_secret(key.expose(), endpoint_authority(config).as_deref());
+        }
+        Ok(AgentKey::Key(key))
     }
 
     /// Der Befehl in der Sandbox: der des Aufrufers, sonst der des Adapters,
@@ -2989,6 +3054,25 @@ fn joined_failed(error: &tokio::task::JoinError) -> Diagnostic {
         .build()
 }
 
+/// `host:port` von `llm.endpoint`, wie `Authority` es schreibt: das Ziel, an
+/// das der Zugangsschlüssel gehört (HUM-140).
+fn endpoint_authority(config: &Config) -> Option<String> {
+    config
+        .llm
+        .endpoint_authority()
+        .map(|authority| authority.to_string())
+}
+
+/// Ob eine Vorbereitung den Zugangsschlüssel des Modells braucht.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyNeed {
+    /// Eine Momentaufnahme oder ein Plan: nichts startet, also wird kein
+    /// Geheimnis gelesen.
+    Plan,
+    /// Ein Start: Der Agent bekommt den Schlüssel.
+    Start,
+}
+
 /// Ein vergifteter Mutex ist kein Grund, den Zustand zu verlieren: Alles
 /// darin sind Werte, kein halb geschriebener Zustand.
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -3142,6 +3226,20 @@ mod tests {
 
     /// Ein Dienst über einem Wegwerf-XDG mit dem mitgelieferten Profil.
     fn service_for(home: &tempfile::TempDir, adapter: &str) -> SandboxService {
+        service_with(home, adapter, None, SandboxPorts::none())
+    }
+
+    /// Der Endpunkt, zu dem der Schlüssel in [`service_with`] gehört.
+    const KEYED_ENDPOINT: &str = "https://api.example.com/v1";
+
+    /// Wie [`service_for`], mit einem Verweis auf den Zugangsschlüssel und
+    /// eigenen Anschlüssen (HUM-140).
+    fn service_with(
+        home: &tempfile::TempDir,
+        adapter: &str,
+        api_key_ref: Option<&str>,
+        ports: SandboxPorts,
+    ) -> SandboxService {
         let config_home = home.path().join("config");
         let profile_dir = config_home.join("humanitl/profiles/sandbox");
         std::fs::create_dir_all(&profile_dir).unwrap();
@@ -3164,13 +3262,250 @@ mod tests {
         "test".clone_into(&mut config.sandbox.profile);
         adapter.clone_into(&mut config.agent.adapter);
         config.sandbox.work_dir = Some(home.path().join("project"));
+        config.llm.api_key_ref = api_key_ref.map(ToOwned::to_owned);
+        // Ein Schlüssel gehört zu einem Endpunkt: An dessen Host und Port ist
+        // er in `Authorization` kein Fund (HUM-140).
+        if api_key_ref.is_some() {
+            config.llm.endpoint = Some(url::Url::parse(KEYED_ENDPOINT).unwrap());
+        }
         std::fs::create_dir_all(home.path().join("project")).unwrap();
 
         SandboxService::new(
             crate::session::SessionResolver::for_config(humanitl_config::Paths::new(env), config),
             SessionId::new(),
-            SandboxPorts::none(),
+            ports,
         )
+    }
+
+    /// Eine Attrappe von `secret-tool`, die ihre Einträge unter `dir/keyring`
+    /// ablegt. Der Schlüsselbund des Menschen bleibt unberührt.
+    fn fake_secret_tool(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+        let store = dir.join("keyring");
+        std::fs::create_dir_all(&store).unwrap();
+        let script = dir.join("secret-tool");
+        let body = format!(
+            "#!/bin/sh\nfor last; do :; done\ncase \"$1\" in\n  store) cat > '{0}'/\"$last\" ;;\n  \
+             lookup) [ -f '{0}'/\"$last\" ] || exit 1; cat '{0}'/\"$last\" ;;\n  clear) rm -f \
+             '{0}'/\"$last\" ;;\nesac\n",
+            store.display()
+        );
+        std::fs::write(&script, body).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        script
+    }
+
+    /// Ein `tracing`-Schreiber in einen geteilten Puffer.
+    #[derive(Clone, Default)]
+    struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogBuffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            lock(&self.0).extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Der Zugangsschlüssel kommt aus der Attrappe des Speichers in eine
+    /// Datei der Sandbox, auf die `opencode.json` verweist, und sonst
+    /// nirgendwohin: nicht in `argv`, nicht in die Umgebung, nicht ins Log und
+    /// nicht im Klartext in die Aufzeichnung (HUM-140).
+    #[tokio::test]
+    async fn the_key_reaches_a_sandbox_file_and_nothing_else() {
+        const KEY: &str = "sk-sandbox-0123456789abcdef";
+        let home = tempfile::TempDir::new().unwrap();
+        let paths = humanitl_config::Paths::new(humanitl_config::Env::from_pairs([(
+            "XDG_DATA_HOME",
+            home.path().join("data").display().to_string(),
+        )]));
+        let keys =
+            KeyStore::for_paths(&paths).with_secret_tool(Some(fake_secret_tool(home.path())));
+        let stored = keys
+            .store(&humanitl_config::secret::ApiKey::new(KEY).unwrap())
+            .unwrap();
+        let recorder = Recorder::open(
+            &home.path().join("data/humanitl.db"),
+            &home.path().join("data/blobs"),
+            humanitl_recorder::RecorderSettings::default(),
+        )
+        .unwrap();
+        let key_ref = stored.key_ref.to_string();
+        let service = service_with(
+            &home,
+            "opencode",
+            Some(&key_ref),
+            SandboxPorts::none()
+                .with_keys(keys)
+                .with_recorder(recorder.clone()),
+        );
+
+        let log = LogBuffer::default();
+        let writer = log.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(move || writer.clone())
+            .finish();
+        let prepared = tracing::subscriber::with_default(subscriber, || {
+            tracing::info!("preparing the sandbox");
+            service
+                .inner
+                .prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Start)
+        })
+        .expect("the session is prepared");
+
+        // In der Sandbox: eine Datei mit dem Schlüssel, und die Konfiguration
+        // des Agenten verweist nur auf sie.
+        let secret = prepared
+            .session
+            .files
+            .iter()
+            .find(|file| file.secret)
+            .expect("the key travels as a file");
+        assert_eq!(secret.dst, Path::new(opencode::API_KEY_DST));
+        assert_eq!(secret.content, KEY.as_bytes());
+        let config = prepared
+            .session
+            .files
+            .iter()
+            .find(|file| file.dst == Path::new(opencode::CONFIG_DST))
+            .expect("opencode.json is there");
+        let config = String::from_utf8_lossy(&config.content);
+        assert!(
+            config.contains("{file:/etc/humanitl/opencode/llm-api-key}"),
+            "{config}"
+        );
+        assert!(!config.contains(KEY), "{config}");
+
+        // Nicht in `argv`, nicht in der Umgebung, nicht in einer Debug-Form.
+        let argv = shell_line(&prepared.argv());
+        assert!(!argv.contains(KEY), "the key reached argv: {argv}");
+        for (name, value) in &prepared.session.session_env {
+            assert!(
+                !value.contains(KEY),
+                "the key reached the environment as {name}"
+            );
+        }
+        let debug = format!("{:?}", prepared.session);
+        assert!(!debug.contains(KEY), "the key shows in a Debug form");
+
+        // Nicht im Log.
+        let logged = String::from_utf8_lossy(&lock(&log.0)).into_owned();
+        assert!(
+            logged.contains("preparing the sandbox"),
+            "the log was captured"
+        );
+        assert!(!logged.contains(KEY), "the key reached the log: {logged}");
+
+        // Nicht im Klartext in der Aufzeichnung: Der Start hat ihn in die
+        // Masken gelegt, bevor der Agent ihn sieht.
+        assert_eq!(
+            recorded_authorization(&recorder, KEY).await,
+            vec![("authorization".to_owned(), "Bearer ••••".to_owned())]
+        );
+
+        // Kein Fund ist er nur an seinem eigenen Ziel: Host und Port von
+        // `llm.endpoint`, mit dem Standardport des Schemas.
+        let hash = humanitl_core::http::sha256(KEY.as_bytes());
+        let masks = recorder.masks();
+        assert!(masks.expected_at(&hash, "api.example.com:443"));
+        assert!(!masks.expected_at(&hash, "evil.example:443"));
+    }
+
+    /// Zeichnet eine Anfrage mit `Authorization: Bearer <key>` auf und liest
+    /// ihre Kopfzeilen aus der Aufzeichnung zurück.
+    async fn recorded_authorization(recorder: &Recorder, key: &str) -> Vec<(String, String)> {
+        recorder.start_session(&humanitl_recorder::SessionMeta {
+            id: SessionId::new(),
+            started_at: SystemTime::now(),
+            sandbox_profile: "test".to_owned(),
+            llm_endpoint: None,
+            work_dir: "/work".to_owned(),
+            agent: "opencode".to_owned(),
+        });
+        let flow = humanitl_core::FlowId::new();
+        let request = humanitl_core::HttpRequest::new(
+            humanitl_core::Method::POST,
+            humanitl_core::Scheme::Http,
+            humanitl_core::Authority::new(
+                humanitl_core::HostName::parse("192.168.1.20").unwrap(),
+                11434,
+            ),
+            "/v1/chat/completions",
+        );
+        recorder.apply(&humanitl_core::FlowEvent::Received {
+            flow_id: flow,
+            at: SystemTime::now(),
+            request: Box::new(request),
+        });
+        let mut headers = humanitl_core::HeaderMap::new();
+        headers.insert(
+            "authorization",
+            humanitl_core::http::HeaderValue::from_str(&format!("Bearer {key}")).unwrap(),
+        );
+        recorder
+            .store_message(
+                flow,
+                humanitl_recorder::Dir::Request,
+                &headers,
+                bytes::Bytes::new(),
+            )
+            .await
+            .unwrap();
+        recorder.flush().await;
+        let detail = recorder.get_flow(flow).await.unwrap().unwrap();
+        detail
+            .messages
+            .first()
+            .expect("the request is recorded")
+            .headers
+            .clone()
+    }
+
+    /// Ein Plan liest den Schlüssel nie: Die Datei steht da, damit Plan und
+    /// Start dieselbe Kommandozeile haben, aber leer (HUM-140). Ein Start ohne
+    /// Schlüssel im Speicher bricht mit `LLM_009` samt Vorschlag ab.
+    #[test]
+    fn a_plan_announces_the_key_file_but_reads_no_key() {
+        let home = tempfile::TempDir::new().unwrap();
+        // Ein Schlüsselbund ohne Eintrag: Läse der Plan, bräche er mit
+        // `LLM_009`.
+        let paths = humanitl_config::Paths::new(humanitl_config::Env::from_pairs([(
+            "XDG_DATA_HOME",
+            home.path().join("data").display().to_string(),
+        )]));
+        let keys =
+            KeyStore::for_paths(&paths).with_secret_tool(Some(fake_secret_tool(home.path())));
+        let service = service_with(
+            &home,
+            "opencode",
+            Some("secret-service:humanitl/llm"),
+            SandboxPorts::none().with_keys(keys),
+        );
+        let prepared = service
+            .inner
+            .prepare_with_command(&v1::sandbox_request::Plan::default(), &[])
+            .expect("a plan needs no key");
+        let secret = prepared
+            .session
+            .files
+            .iter()
+            .find(|file| file.secret)
+            .expect("the plan shows the key file");
+        assert!(secret.content.is_empty());
+
+        let refused = service
+            .inner
+            .prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Start)
+            .expect_err("a start without the key stops");
+        assert_eq!(refused.code, codes::LLM_009);
+        assert_eq!(
+            refused.fix,
+            Some(FixAction::CopyCommand("humanitl llm key set".to_owned()))
+        );
     }
 
     /// Die Namen der Umgebung, die eine Sitzung mit diesem Kommando bekäme.

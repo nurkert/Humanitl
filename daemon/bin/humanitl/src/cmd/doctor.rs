@@ -338,6 +338,7 @@ async fn probe_llm(config: &humanitl_config::Config, client: Option<&mut Client>
     let call = client.probe_llm(v1::ProbeLlmRequest {
         endpoint: endpoint.clone(),
         timeout_ms: 0,
+        ..v1::ProbeLlmRequest::default()
     });
     let facts = match timeout(PROBE_TIMEOUT, call).await {
         Err(_elapsed) => {
