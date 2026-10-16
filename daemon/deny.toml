@@ -4,6 +4,20 @@ all-features = true
 [advisories]
 version = 2
 yanked = "warn"
+# Jede Ausnahme nennt Grund und Prüfdatum. Ist das Datum überschritten, wird
+# sie neu bewertet oder entfernt, nicht stillschweigend verlängert.
+ignore = [
+  # unsafe-libyaml ist archiviert, nicht verwundbar: Es gibt keine bekannte
+  # Lücke, nur keine Pflege mehr. Es kommt über serde_yaml_ng und liest
+  # ausschließlich lokale Dateien des Nutzers und des Pakets (rules.yaml,
+  # Katalog), nie Daten aus dem Netz oder vom Agenten. Regeln aus dem RPC
+  # werden vor dem Schreiben validiert und nur serialisiert (Emitter); geparst
+  # wird nur die lokale Datei. Der Wechsel auf einen Parser in sicherem Rust
+  # (serde-saphyr) ändert Fehlertexte, Fundstellen und die Ausgabe von
+  # `to_string` und ist deshalb ein eigenes Folge-Issue, nicht Teil von
+  # HUM-236. Prüfen bis 2027-01-16.
+  { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml unmaintained, no known vulnerability; parses only local rules and catalog files; RPC rules are validated first and only serialized (emitter); replacement tracked separately, review by 2027-01-16" },
+]
 
 [licenses]
 version = 2
