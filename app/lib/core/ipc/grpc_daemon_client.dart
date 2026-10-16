@@ -425,14 +425,21 @@ class GrpcDaemonClient implements DaemonClient {
   }
 
   @override
-  Future<LlmProbe> probeLlm(String endpoint, {Duration? timeout}) async {
+  Future<LlmProbe> probeLlm(
+    String endpoint, {
+    Duration? timeout,
+    String? apiKey,
+    bool useStoredKey = false,
+  }) async {
     // No deadline of this client's own beyond the daemon's: the probe clamps
     // its own timeout, and a client that gave up earlier would report "no
     // answer" about an endpoint that was still answering.
     final CallOptions options = await _options(timeout: probeCallTimeout);
     final pb.ProbeLlmRequest request = pb.ProbeLlmRequest()
       ..endpoint = endpoint
-      ..timeoutMs = timeout?.inMilliseconds ?? 0;
+      ..timeoutMs = timeout?.inMilliseconds ?? 0
+      ..apiKey = apiKey ?? ''
+      ..useStoredKey = useStoredKey;
     try {
       final pb.ProbeLlmResponse response = await _stub.probeLlm(
         request,
@@ -447,9 +454,38 @@ class GrpcDaemonClient implements DaemonClient {
   }
 
   @override
+  Future<ConfigValues> getConfig() async {
+    final pb.ConfigSnapshot snapshot = await _unary(
+      (CallOptions options) =>
+          _stub.getConfig(pb.GetConfigRequest(), options: options),
+    );
+    return snapshot.toDomain();
+  }
+
+  @override
+  Future<LlmKeyStatus> llmKeyStatus() =>
+      _llmKey(pb.LlmKeyRequest()..status = pb.LlmKeyRequest_Status());
+
+  @override
+  Future<LlmKeyStatus> setLlmKey(String key) =>
+      _llmKey(pb.LlmKeyRequest()..set = (pb.LlmKeyRequest_Set()..key = key));
+
+  @override
+  Future<LlmKeyStatus> clearLlmKey() =>
+      _llmKey(pb.LlmKeyRequest()..remove = pb.LlmKeyRequest_Remove());
+
+  Future<LlmKeyStatus> _llmKey(pb.LlmKeyRequest request) async {
+    final pb.LlmKeyStatus status = await _unary(
+      (CallOptions options) => _stub.llmKey(request, options: options),
+    );
+    return status.toDomain();
+  }
+
+  @override
   Future<void> setConfig(String key, String value) async {
-    // Der `ConfigSnapshot` der Antwort wird verworfen: Es gibt noch keinen
-    // Domänentyp für ihn, und den bringt HUM-069.
+    // Der `ConfigSnapshot` der Antwort wird verworfen: Wer die Konfiguration
+    // zeigt, fragt danach `getConfig`, damit es genau einen Weg gibt, auf dem
+    // ein Bildschirm sie erfährt (HUM-069).
     await _unary(
       (CallOptions options) => _stub.setConfig(
         pb.SetConfigRequest()

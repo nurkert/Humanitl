@@ -155,6 +155,7 @@ Der lokale LLM-Endpunkt und was als Passthrough gilt.
 
 | Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
 |---|---|---|---|---|---|---|
+| `llm.api_key_ref` | string, optional | `-` | advanced | denied | ja | Verweis auf den Zugangsschlüssel des Endpunkts, nie der Schlüssel selbst: `secret-service:humanitl/llm` für den Schlüsselbund des Systems oder `file:llm` für eine Datei mit `0600` unter `$XDG_DATA_HOME/humanitl/keys`. Gesetzt wird er mit `humanitl llm key set` oder in den Einstellungen; der Agent bekommt den Schlüssel als Datei in der Sandbox, nie über die Kommandozeile. Leer heißt: kein Schlüssel. |
 | `llm.endpoint` | string, optional | `-` | basic | denied | ja | OpenAI-kompatibler Endpunkt im LAN. Verkehr dorthin wird nicht angehalten, aber protokolliert. |
 | `llm.models` | list of string | `[]` | basic | denied | ja | Modelle, die der Endpunkt anbietet. Leer heißt: der Agent bekommt ein Platzhalter-Modell und eine Warnung. |
 | `llm.passthrough_paths` | list of string | `["/v1/","/api/"]` | advanced | denied | ja | Pfadpräfixe, die als LLM-Passthrough gelten. Ein Präfix soll einen Endpunkt benennen, keine ganze API-Fläche: Der Agent-Adapter ersetzt `/v1/` und `/api/` deshalb durch die Endpunkte, die Inferenz machen, damit `POST /api/pull` und `POST /v1/files` nicht ungefragt hinausgehen. Ein Pfad, der mehr nennt, bleibt stehen, wie er hier steht. |
@@ -207,9 +208,9 @@ Sprache, Erscheinungsbild und Meldungen der Oberfläche.
 | Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
 |---|---|---|---|---|---|---|
 | `ui.language` | en \| de | `"en"` | basic | allowed | ja | Sprache der Oberfläche. |
-| `ui.notifications` | boolean | `true` | advanced | allowed | offen (HUM-069) | Meldung des Systems, wenn eine Anfrage wartet und das Fenster nicht vorn ist. |
+| `ui.notifications` | boolean | `true` | advanced | allowed | ja | Meldung des Systems, wenn eine Anfrage wartet und das Fenster nicht vorn ist. |
 | `ui.terminal_notices` | boolean | `true` | advanced | allowed | ja | Hinweiszeile des Daemons, wenn eine Anfrage des Agenten auf eine Entscheidung wartet oder entschieden ist. Sie geht als eigener Rahmen an jeden Client, nie in den Bytestrom des Agenten: Wer am Terminal sitzt, bekommt sie zwischen die Bytes geschrieben, und die Oberfläche zeigt sie im Streifen über dem Terminal. Der Streifen bleibt in jedem Fall, weil er aus dem Ereignisstrom kommt; dieser Schalter betrifft nur den Rahmen. |
-| `ui.theme` | dark \| light \| system | `"dark"` | advanced | allowed | offen (HUM-069) | Erscheinungsbild der Oberfläche. |
+| `ui.theme` | dark \| light \| system | `"dark"` | advanced | allowed | ja | Erscheinungsbild der Oberfläche. |
 
 ## Alte Namen
 

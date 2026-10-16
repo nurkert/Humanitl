@@ -419,20 +419,73 @@ impl DaemonApi for FakeDaemon {
         Self::config_snapshot(self.state.config_overrides(), request.include_schema)
     }
 
-    /// `SetConfig` mit derselben Tür wie der Daemon (HUM-151): Was
-    /// [`crate::config_rpc::accepted`] ablehnt, lehnt auch der Fake ab. Er
-    /// schreibt keine Datei, sondern hält den Wert im Speicher; eine Oberfläche,
-    /// die gegen ihn übt, sieht dieselben Antworten wie gegen den echten Dienst.
+    /// `SetConfig` mit derselben Tür wie der Daemon (HUM-151, HUM-069): Was
+    /// [`crate::config_rpc::accepted`] und [`crate::config_rpc::form_value`]
+    /// ablehnen, lehnt auch der Fake ab. Er schreibt keine Datei, sondern hält
+    /// den Wert im Speicher; eine Oberfläche, die gegen ihn übt, sieht dieselben
+    /// Antworten wie gegen den echten Dienst.
     async fn set_config(
         &self,
         request: v1::SetConfigRequest,
     ) -> Result<v1::ConfigSnapshot, Diagnostic> {
-        crate::config_rpc::accepted(&request.key, &request.value)?;
         let mut overrides = self.state.config_overrides();
-        overrides.insert(request.key.clone(), request.value.clone());
+        let stored = if request
+            .key
+            .starts_with(crate::config_rpc::SANDBOX_ENV_PREFIX)
+        {
+            crate::config_rpc::accepted(&request.key, &request.value)?;
+            Some(request.value.clone())
+        } else {
+            let (_field, value) = crate::config_rpc::form_value(&request.key, &request.value)?;
+            match value {
+                serde_json::Value::Null => None,
+                serde_json::Value::String(text) => Some(text),
+                other => Some(other.to_string()),
+            }
+        };
+        match &stored {
+            Some(value) => overrides.insert(request.key.clone(), value.clone()),
+            None => overrides.remove(&request.key),
+        };
         let snapshot = Self::config_snapshot(overrides, false)?;
-        self.state.set_config(request.key, request.value);
+        match stored {
+            Some(value) => self.state.set_config(request.key, value),
+            None => self.state.remove_config(&request.key),
+        }
         Ok(snapshot)
+    }
+
+    /// Der Zugangsschlüssel im Fake: nur die Aussage „gesetzt", nie der
+    /// Schlüssel (HUM-140). Was der echte Dienst an einem Schlüssel ablehnt,
+    /// lehnt auch der Fake ab ([`humanitl_config::secret::ApiKey::new`]).
+    async fn llm_key(&self, request: v1::LlmKeyRequest) -> Result<v1::LlmKeyStatus, Diagnostic> {
+        match request.op {
+            Some(v1::llm_key_request::Op::Status(_)) => {}
+            Some(v1::llm_key_request::Op::Set(set)) => {
+                humanitl_config::secret::ApiKey::new(&set.key)?;
+                self.state.set_llm_key(true);
+            }
+            Some(v1::llm_key_request::Op::Remove(_)) => self.state.set_llm_key(false),
+            None => {
+                return Err(Diagnostic::builder(codes::CONFIG_020, Severity::Error)
+                    .why(
+                        "LlmKey changed nothing: the request names no operation (status, set or \
+                         remove)"
+                            .to_owned(),
+                    )
+                    .build());
+            }
+        }
+        Ok(if self.state.llm_key_set() {
+            v1::LlmKeyStatus {
+                set: true,
+                store: v1::LlmKeyStore::SecretService as i32,
+                key_ref: "secret-service:humanitl/llm".to_owned(),
+                diagnostics: Vec::new(),
+            }
+        } else {
+            v1::LlmKeyStatus::default()
+        })
     }
 
     /// Alle Zeilen des Doctors, keine davon gemessen (HUM-075).
@@ -530,6 +583,9 @@ impl DaemonApi for FakeDaemon {
             latency_ms: 0,
             diagnostics,
             endpoint_is_private,
+            // Der Fake schickt nichts; er sagt nur, was der Daemon täte.
+            key_sent: !request.api_key.is_empty()
+                || (request.use_stored_key && self.state.llm_key_set()),
         })
     }
 
@@ -1119,7 +1175,14 @@ impl FakeDaemon {
         overrides: BTreeMap<String, String>,
         include_schema: bool,
     ) -> Result<v1::ConfigSnapshot, Diagnostic> {
-        let mut resolved = load(&Sources::empty())?;
+        // Die Werte des Formulars gehen als Ebene in die Ladung, damit die
+        // Prüfung der Konfiguration sie sieht wie beim echten Dienst.
+        let form: Vec<(String, String)> = overrides
+            .iter()
+            .filter(|(key, _)| crate::config_rpc::FORM_KEYS.contains(&key.as_str()))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        let mut resolved = load(&Sources::empty().with_cli(form))?;
         for (key, value) in overrides {
             if let Some(name) = key.strip_prefix(crate::config_rpc::SANDBOX_ENV_PREFIX) {
                 resolved.config.sandbox.env.insert(name.to_owned(), value);

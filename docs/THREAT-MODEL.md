@@ -184,10 +184,24 @@ diese Regel ausgeschaltet. Das ist DNS-Rebinding an der einen Stelle, an der ADR
 verhindern kann, weil dort niemand gefragt wird. Abhilfe: eine IP-Adresse statt eines Namens, oder
 ein fester Eintrag unter `resolver.overrides`, der vor jeder Abfrage greift.
 
+Dazu kommt seit HUM-140 der Zugangsschlüssel eines Anbieters. Er liegt im Schlüsselbund des
+Systems (Rückfall: Datei `0600`), in `config.toml` steht nur sein Verweis, und der Agent bekommt
+ihn als Datei aus einem memfd, nie über `argv` oder `--setenv`. Aufgezeichnete Kopfzeilen,
+Pfade und Hosts tragen ihn als `••••`, auch URL-kodiert. Der Detektor `known-secret` findet ihn wörtlich in jeder Kopfzeile,
+in der Query und im Rumpf jeder Anfrage; kein Fund ist er nur in der Kopfzeile `Authorization`
+einer Anfrage an Host und Port von `llm.endpoint`. Der Agent kann ihn lesen und in einer Anfrage an
+ein anderes Ziel verpacken; die trägt dann den Fund `api_key:llm` (nicht im Pfad vor dem `?` und
+nicht im Host, dort maskiert nur die Aufzeichnung), angehalten wird sie an einem
+Host ohne freigebende Regel oder mit `hold.hard_block_checksum_secrets`. Umkodiert (Base64,
+zerlegt) ist er kein Treffer, und ein Rumpf wird nicht maskiert (`docs/SECURITY.md`, Abschnitt 3.1, „Der Zugangsschlüssel des Modells"). Die
+Minderung ist ein Schlüssel mit engen Rechten, den der Anbieter widerrufen kann.
+
 *Status.* Offen (deklariert). Findings-basiertes Halten und Ratenbegrenzung sind nach dem MVP
 vorgesehen.
 
-*Prüfung.* Regel im UI unter „Regeln", `humanitl rules list`, Zeile 4 des Isolations-Panels.
+*Prüfung.* Regel im UI unter „Regeln", `humanitl rules list`, Zeile 4 des Isolations-Panels;
+für den Schlüssel `humanitl llm key status` und der Test
+`the_key_reaches_a_sandbox_file_and_nothing_else` in `daemon/crates/ipc/src/sandbox.rs`.
 
 ### K-03 Socket-Verzeichnis des Proxys
 
@@ -637,6 +651,7 @@ Sitzungs-Historie steht.
 | 2026-09-23 | K-02: Eine `allow`- oder `redact`-Regel mit Pfadmuster oder Präfixen trifft keinen Pfad mit `..`-Segment mehr, auch verschleiert; vorher galt das nur für Präfixe, und ein Glob `/repos/me/**` gab `/repos/me/../../user/keys` frei. `block` und `ask` prüfen zusätzlich den nach RFC 3986 aufgelösten Pfad (Punktsegmente, doppelte Schrägstriche, kodierte nicht reservierte Zeichen); vorher traf ihr Präfix keinen Pfad mit `..`, und eine hostweite Freigabe dahinter entschied | HUM-204, Sicherheitsdurchlauf vom selben Tag |
 | 2026-09-23 | K-13 sichtbar: verweigerte `socket()`-Aufrufe des Agenten gehen über `SECCOMP_RET_USER_NOTIF` an den Elternprozess des Shims, der zählt und `EPERM` antwortet; ohne Zuhörer (`EBUSY`) derselbe Filter wie zuvor und `SANDBOX_019`. K-04: der Elternprozess ist nicht mehr „dumpable", `/proc/<pid>/mem` und `/proc/<pid>/fd` sind dem Agenten verschlossen. Beide Filter verweigern `seccomp()` mit `SECCOMP_FILTER_FLAG_NEW_LISTENER`, damit der Agent nie einen eigenen Zuhörer bekommt, und der Zuhörer des Elternprozesses bleibt bis zum Ende offen. Das Tor von HUM-137 geht auf, sobald der Elternprozess nicht mehr „dumpable" ist, statt wenn er den Bericht schließt | HUM-138 |
 | 2026-09-24 | Passthrough und Regeln unter `hold.hard_block_checksum_secrets`: Eine Anfrage mit prüfsummen-bestätigtem Geheimnis wird gehalten statt sofort geblockt, damit ein Mensch den Wert ersetzen kann. Eine Regel `allow` und die Durchreiche zum Sprachmodell blocken sie weiter als System, die Warteschlange weist jedes `Allow` mit `HOLD_004` zurück, und der Handler leitet ein `Allow` für einen solchen Flow nie weiter. Die Aussage „geht nicht ungeändert hinaus" gilt unverändert | HUM-159 |
+| 2026-10-06 | K-02: Der Zugangsschlüssel eines Anbieters liegt im Schlüsselbund des Systems (Rückfall Datei `0600`), `config.toml` trägt nur den Verweis `llm.api_key_ref`. Der Agent bekommt ihn als Datei aus einem memfd, nie über `argv` oder die Umgebung, die `bwrap` über `--setenv` setzt; aufgezeichnete Kopfzeilen und Pfade tragen ihn als `••••`; kein Fund ist er nur in `Authorization` an Host und Port von `llm.endpoint` (Review-Nachtrag 2026-10-16), anderswo bleibt er einer. Restrisiko: Der Agent kann ihn lesen und anderswohin schicken | HUM-069, HUM-140 |
 
 Geplante Fortschreibung: HUM-059 bringt das Dokument zum Release auf den Stand des Codes. Jede
 sicherheitsrelevante Änderung am Shim, an der Mount-Allowlist, am Filter oder am Passthrough

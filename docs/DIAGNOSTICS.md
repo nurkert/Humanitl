@@ -14,11 +14,11 @@ Entfernen eines Codes.
 |---|---|---|---|---|
 | daemon | `DAEMON` | 001 | 019 | 001-004 Start, Erreichbarkeit, Version des Daemons, 005-008 die Nutzer-Unit von `daemon install` (HUM-044), 009 Abschied (HUM-142), 010 Nutzersitzung, 011 Binaries aus dem `AppImage`, 012 `journalctl` (HUM-070), 013 der von systemd übergebene Socket (HUM-053), 014 `daemon uninstall` (HUM-077) |
 | ipc | `IPC` | 001 | 009 | gRPC-Schnittstelle, Token, Aufrufe gegen den Zustand |
-| config | `CONFIG` | 001 | 019 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), 010-012 Test-Wurzel und ihr Flag (HUM-087), 013 der Projektordner der Einrichtung (HUM-044), 017-018 Editor und Gruppenschlüssel (HUM-070) |
+| config | `CONFIG` | 001 | 029 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), 010-012 Test-Wurzel und ihr Flag (HUM-087), 013 der Projektordner der Einrichtung (HUM-044), 017-018 Editor und Gruppenschlüssel (HUM-070), 019-020 der Zugangsschlüssel des Modells (HUM-140, Bereich dafür bis 029 erweitert) |
 | sandbox | `SANDBOX` | 001 | 029 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 019 verweigerte Versuche ungemeldet (HUM-138), 020-025 /work-Härtung (HUM-043) |
 | proxy | `PROXY` | 001 | 019 | Anfragen, Caps, Protokoll, 010-011 Grenzen der Verbindung (HUM-120) |
 | tls | `TLS` | 001 | 009 | CA, Zertifikate, Handschlag |
-| llm | `LLM` | 001 | 009 | LLM-Endpunkt und seine Antworten |
+| llm | `LLM` | 001 | 009 | LLM-Endpunkt und seine Antworten, 009 der Zugangsschlüssel (HUM-140) |
 | rules | `RULES` | 001 | 019 | 001-008 Regeldatei und Muster, 009-011 Regelspeicher (HUM-027) |
 | findings | `FINDINGS` | 001 | 009 | Detektoren für Secrets und personenbezogene Daten |
 | catalog | `CATALOG` | 001 | 009 | Gebündelter Domain-Katalog und Rangliste |
@@ -309,9 +309,9 @@ Kein Projektordner gewählt
 
 Einstellung nicht über den Daemon setzbar
 
-**Auslöser.** `SetConfig` nimmt bis HUM-069 nur eine Variable unter `sandbox.env` an, deren Wert das Zertifikat in der Sandbox ist.
+**Auslöser.** `SetConfig` bekommt einen Schlüssel außerhalb des Formulars oder eine Variable unter `sandbox.env`, deren Wert nicht das Zertifikat in der Sandbox ist.
 
-**Fix.** Kein Fix: Der Text nennt, was angenommen wird; alles andere steht von Hand in `config.toml`.
+**Fix.** Kein Fix: Der Text nennt, was angenommen wird; alles andere steht von Hand in `config.toml` (`humanitl config edit`).
 
 #### CONFIG_015
 
@@ -344,6 +344,22 @@ Schlüssel ist eine Gruppe
 **Auslöser.** `humanitl config set` bekommt einen Pfad wie `hold`, unter dem weitere Schlüssel stehen, statt eines einzelnen Werts.
 
 **Fix.** `CopyCommand`: `humanitl config get <gruppe>` zeigt die Schlüssel darunter.
+
+#### CONFIG_019
+
+Zugangsschlüssel nicht im Schlüsselbund
+
+**Auslöser.** Beim Hinterlegen des Zugangsschlüssels antwortet der Secret Service nicht, und der Schlüssel liegt im `0600`-Rückfall unter `$XDG_DATA_HOME/humanitl/keys`.
+
+**Fix.** `CopyCommand`: `sudo apt-get install libsecret-tools` bringt `secret-tool`; danach `humanitl llm key set` erneut.
+
+#### CONFIG_020
+
+Zugangsschlüssel nicht gespeichert
+
+**Auslöser.** `LlmKey(Set)` oder `LlmKey(Clear)` bekommt einen Schlüssel, der keiner ist (leer, kürzer als 16 Zeichen, länger als 4096 Bytes, mit Leerraum), eine Anfrage ohne Operation, oder weder Schlüsselbund noch Datei lassen sich schreiben oder löschen.
+
+**Fix.** Bei einem zu kurzen Schlüssel `openssl rand -hex 24` zum Kopieren, für einen lokalen Server mit selbst gewähltem Schlüssel; sonst nennt der Text den Grund, und ein Schlüssel ohne Leerraum oder ein beschreibbares Datenverzeichnis behebt ihn.
 
 ### Bereich sandbox
 
@@ -677,9 +693,9 @@ LLM-Endpoint nicht erreichbar
 
 LLM-Endpoint verlangt eine Anmeldung
 
-**Auslöser.** Der Endpunkt verlangt eine Anmeldung (`401` oder `403`).
+**Auslöser.** Der Endpunkt verlangt eine Anmeldung (`401` oder `403`), ohne Schlüssel oder mit einem, den er ablehnt.
 
-**Fix.** Kein Fix: Humanitl schickt im MVP keine Zugangsdaten.
+**Fix.** `CopyCommand`: `humanitl llm key set` hinterlegt den Zugangsschlüssel; in der Oberfläche das Feld „Zugangsschlüssel“ der Einstellungen.
 
 #### LLM_003
 
@@ -728,6 +744,14 @@ Die Suche im Netz kann nicht stattfinden
 **Auslöser.** Die Suche im Netz kann nicht stattfinden: keine Vorgaberoute, keine lesbare Routing-Tabelle, oder ein Netz jenseits des eigenen `/24`.
 
 **Fix.** Kein Fix: Der Text nennt beide Netze und die Grenze.
+
+#### LLM_009
+
+Zugangsschlüssel nicht verfügbar
+
+**Auslöser.** `llm.api_key_ref` ist gesetzt, aber der Schlüsselbund oder die Datei unter `$XDG_DATA_HOME/humanitl/keys` liefert keinen Schlüssel dazu.
+
+**Fix.** `CopyCommand`: `humanitl llm key set` hinterlegt ihn neu; bei offenen Rechten der Datei ein `chmod 600`.
 
 ### Bereich rules
 

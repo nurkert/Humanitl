@@ -95,6 +95,7 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-236 | `cargo deny` meldet vier rustls-Advisories und `unsafe-libyaml` und ist auf `main` rot | XS | — |
 | HUM-237 | Die CI auf dem Issue-Branch ist das Tor, nicht der lokale Volllauf | M | — |
 | HUM-238 | Zwei schnelle Merges nehmen dem ersten seinen CI-Lauf | XS | HUM-237 |
+| HUM-239 | Ein Schlüssel im Host von `Referer` und `Origin` steht unmaskiert in der Aufzeichnung | S | HUM-140 |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -1579,15 +1580,15 @@ Unit (Dart): `schema_parser_reads_tier_and_security`, `duration_field_parses_1h3
 Widget: `expert_collapsed_by_default`, `search_finds_expert_field`, `env_overridden_field_disabled_with_badge`, `set_calls_daemon_with_json_value`, `reset_visible_only_when_non_default`, `config_changed_event_updates_field`.
 
 ### Akzeptanzkriterien
-- [ ] `humanitl config schema | jq '[.. | objects | select(has("type") and (has("x-tier") | not))] | length'` ergibt 0 für alle Blatt-Properties.
-- [ ] Jedes Feld aus CONVENTIONS.md 3.7 ist im Screen auffindbar (Suche nach dem Schlüssel).
-- [ ] Änderung von `hold.timeout_secs` im UI ⇒ `config.toml` enthält den neuen Wert, Kommentare erhalten, Daemon nutzt ihn für die nächste gehaltene Anfrage (Integrationstest mit Fake-Agent: Timeout 15 s ⇒ Block nach 15 s).
-- [ ] Änderung von `config.toml` im Editor ⇒ UI aktualisiert innerhalb 1 s.
-- [ ] Kaputte `config.toml` ⇒ Diagnostic `CONFIG_002` im Setup-Banner, alte Werte bleiben aktiv.
-- [ ] `HUMANITL_HOLD__TIMEOUT_SECS=42 humanitld` ⇒ Feld im UI deaktiviert mit Badge `env`.
-- [ ] `expert`-Felder mit `x-security` zeigen das Warn-Icon; Änderung erzeugt `config.changed` im Audit-Log.
-- [ ] `ui.notifications = false` unterdrückt die Meldung, und `ui.theme` bestimmt das Erscheinungsbild beim Start; beide Zeilen im Leser-Register stehen auf `effective`, und `docs/CONFIG.md` zeigt für sie in der Spalte „Wirkung" `ja` (HUM-101).
-- [ ] Die Befunde des Ladens erreichen die Oberfläche, nicht nur das Journal: Eine `config.toml` mit einem entfallenen Schlüssel (`alias::RETIRED`, heute `limits.idle_timeout_secs`) zeigt ihre `CONFIG_005`-Warnung im Bildschirm, und ein Test belegt es.
+- [ ] *Verschoben* (zweite Umfangsentscheidung 2026-09-18, BACKLOG.md Abschnitt 9, Punkt 17): `humanitl config schema | jq '[.. | objects | select(has("type") and (has("x-tier") | not))] | length'` ergibt 0 für alle Blatt-Properties.
+- [ ] *Verschoben* (zweite Umfangsentscheidung 2026-09-18, BACKLOG.md Abschnitt 9, Punkt 17): Jedes Feld aus CONVENTIONS.md 3.7 ist im Screen auffindbar (Suche nach dem Schlüssel).
+- [x] Änderung von `hold.timeout_secs` im UI ⇒ `config.toml` enthält den neuen Wert, Kommentare erhalten, Daemon nutzt ihn für die nächste gehaltene Anfrage (Integrationstest mit Fake-Agent: Timeout 15 s ⇒ Block nach 15 s). *Gemessen am 2026-10-16:* `a_timeout_set_in_the_form_blocks_after_the_restart_at_fifteen_seconds` in `daemon/bin/humanitld/tests/daemon_end_to_end.rs` startet das Binary ohne Umgebungsvariable für die Frist, schreibt `15` über `SetConfig` in `# mine\n[hold]\ntimeout_secs = 300\n` (danach Byte für Byte `# mine\n[hold]\ntimeout_secs = 15\n`), startet den Daemon neu und schickt als Agent eine Anfrage in den Proxy-Socket: Antwort `504` mit `reason: timeout`, frühestens nach 15 s (Lauf: 20,9 s Testdauer samt zwei Starts). Mutationsprobe: Frist im Daemon fest auf 300 statt aus der Konfiguration, Test rot an der Frist von 40 s. Davor am 2026-10-06: `set_config_writes_a_form_setting_and_get_config_reads_it` schreibt `15` über gRPC, `GetConfig` meldet 15.
+- [ ] *Verschoben* (zweite Umfangsentscheidung 2026-09-18, BACKLOG.md Abschnitt 9, Punkt 17): Änderung von `config.toml` im Editor ⇒ UI aktualisiert innerhalb 1 s.
+- [ ] *Verschoben* (zweite Umfangsentscheidung 2026-09-18, BACKLOG.md Abschnitt 9, Punkt 17): Kaputte `config.toml` ⇒ Diagnostic `CONFIG_002` im Setup-Banner, alte Werte bleiben aktiv.
+- [ ] *Verschoben* (zweite Umfangsentscheidung 2026-09-18, BACKLOG.md Abschnitt 9, Punkt 17): `HUMANITL_HOLD__TIMEOUT_SECS=42 humanitld` ⇒ Feld im UI deaktiviert mit Badge `env`.
+- [ ] *Verschoben* (zweite Umfangsentscheidung 2026-09-18, BACKLOG.md Abschnitt 9, Punkt 17): `expert`-Felder mit `x-security` zeigen das Warn-Icon; Änderung erzeugt `config.changed` im Audit-Log.
+- [x] `ui.notifications = false` unterdrückt die Meldung, und `ui.theme` bestimmt das Erscheinungsbild beim Start; beide Zeilen im Leser-Register stehen auf `effective`, und `docs/CONFIG.md` zeigt für sie in der Spalte „Wirkung" `ja` (HUM-101). Gemessen am 2026-10-06: Widget-Test `a segment writes through SetConfig, and the app follows ui.theme` (Theme `dark` → `light`, `notificationsEnabled` `true` → `false` nach dem Schreiben), Mutationen D4/D5 rot; `config_readers.rs` grün mit beiden Zeilen `effective`; `docs/CONFIG.md` Zeilen 211 und folgende zeigen `ja`.
+- [ ] *Verschoben* (zweite Umfangsentscheidung 2026-09-18, BACKLOG.md Abschnitt 9, Punkt 17): Die Befunde des Ladens erreichen die Oberfläche, nicht nur das Journal: Eine `config.toml` mit einem entfallenen Schlüssel (`alias::RETIRED`, heute `limits.idle_timeout_secs`) zeigt ihre `CONFIG_005`-Warnung im Bildschirm, und ein Test belegt es.
 
 ### Fallstricke
 - `toml::to_string` verwirft Kommentare und ordnet um. Nur `toml_edit::DocumentMut` verwenden.
@@ -2820,11 +2821,11 @@ Die Oberfläche bekommt im Setup und in den Einstellungen eine Karte „Modell":
 - Ein Test für den fehlenden Schlüssel: `Diagnostic` mit `fix`.
 
 ### Akzeptanzkriterien
-- [ ] Endpunkt, Modell und Schlüssel lassen sich in der Oberfläche setzen, ohne eine Datei zu öffnen.
-- [ ] Der Schlüssel steht nirgends im Klartext: nicht in `config.toml`, nicht in `argv`, nicht im Log, nicht in der Aufzeichnung.
-- [ ] „Prüfen" zeigt die Modelle des Endpunkts oder sagt mit `why` und `fix`, warum nicht.
-- [ ] `docs/SECURITY.md` beschreibt den Weg des Schlüssels.
-- [ ] `make check` grün.
+- [x] Endpunkt, Modell und Schlüssel lassen sich in der Oberfläche setzen, ohne eine Datei zu öffnen. Gemessen am 2026-10-06: `settings_sheet_test.dart` 8 von 8 grün (Modell per Klick ⇒ `SetConfig llm.models`, Schlüssel ⇒ `LlmKey(Set)` mit 24 Zeichen, Feld danach leer), Mutationen D1 bis D7 rot.
+- [x] Der Schlüssel steht nirgends im Klartext: nicht in `config.toml`, nicht in `argv`, nicht im Log, nicht in der Aufzeichnung. Gemessen am 2026-10-06: `the_key_reaches_a_sandbox_file_and_nothing_else` (Datei in der Sandbox, nicht in `argv`, Umgebung, `Debug`, Log; Aufzeichnung `Bearer ••••`), `set_stores_the_key_and_only_the_reference_reaches_the_file`, `llm_key_over_the_wire_never_carries_the_key_back`; Mutationen M1, M2, M4, M9, M10 rot. Abweichung: Datei statt Umgebungsvariable (`backlog/CONVENTIONS.md` 4.44).
+- [x] „Prüfen" zeigt die Modelle des Endpunkts oder sagt mit `why` und `fix`, warum nicht. Gemessen am 2026-10-06: Widget-Tests `"Check" calls ProbeLlm…` und `…LLM_006 beside it`, `probe_sends_the_key_as_bearer_and_only_when_given` (401 ⇒ `LLM_002` mit `humanitl llm key set`); Mutationen M7, D7 rot.
+- [x] `docs/SECURITY.md` beschreibt den Weg des Schlüssels. Gemessen am 2026-10-06: Abschnitt 3.1, „Der Zugangsschlüssel des Modells (HUM-140)", und eine Zeile der Vertrauensbasis; `docs/THREAT-MODEL.md` K-02 und Änderungshistorie nachgezogen.
+- [x] `make check` grün. Gemessen am 2026-10-16: `STRICT=1 make flutter-analyze l10n-lint check` mit Exit 0 (rustfmt und Clippy 1.95 mit `-D warnings`, rustdoc mit `-D warnings`, Rust 2492 Tests in 108 Läufen ohne Fehlschlag, Flutter 1575 plus 131 Tests grün, l10n-lint, docs-lint, parity-check, Linux-Debug-Bau).
 
 ### Fallstricke
 - Ein Schlüssel in einer Umgebungsvariable steht in `/proc/<pid>/environ` des Agenten. Das ist innerhalb der Sandbox und damit für den Agenten ohnehin lesbar -- er braucht ihn ja --, aber er darf nicht in der Momentaufnahme der Oberfläche auftauchen (`EnvEntry.withheld` gibt es dafür schon).
@@ -5762,3 +5763,34 @@ Auf `main` ist die Gruppe die SHA, also allein; auf allen anderen Refs der Ref w
 
 ### Referenzen
 HUM-237 (Review 2026-10-16); GitHub-Dokumentation „Control the concurrency of workflows and jobs"; `.github/workflows/release.yml` (Job `guard`).
+
+---
+
+## HUM-239 · Ein Schlüssel im Host von `Referer` und `Origin` steht unmaskiert in der Aufzeichnung
+Sprint: 4 · Größe: S · Abhängigkeiten: HUM-140 · Blockiert: keine
+
+### Problem
+HUM-140 maskiert den Zugangsschlüssel des Modells in `flows.host`, `flows.host_display` und in der
+Kopfzeile `Host` ohne Rücksicht auf Groß- und Kleinschreibung (`SecretMasks::apply_host`). Die
+Kopfzeilen `Referer` und `Origin` tragen ebenfalls einen Host. Steht der Schlüssel dort als Label
+einer Subdomain in anderer Schreibung als gespeichert (`LOCAL-KEY-….evil.example`), ersetzt die
+gewöhnliche, schreibungsgenaue Maske ihn nicht, und er steht so in `messages.headers_json`.
+Gefunden im Review von HUM-069 mit HUM-140, dort außerhalb des Umfangs.
+
+### Spezifikation
+`encode_headers` behandelt den Host-Teil einer URL in `Referer` und `Origin` wie die Kopfzeile
+`Host`: Der Host der URL geht durch `SecretMasks::apply_host`, Pfad und Query durch
+`SecretMasks::apply`.
+
+### Tests
+`a_masked_key_stands_in_no_host_part_of_referer_or_origin` in `daemon/crates/recorder/tests/recorder.rs`:
+Schlüssel in Mischschreibung als Subdomain in `Referer` und `Origin`, `headers_json` aus der
+Datenbank gelesen, mit Mutationsprobe.
+
+### Akzeptanzkriterien
+- [ ] Ein Schlüssel im Host-Teil von `Referer` und `Origin` ist in der Aufzeichnung maskiert,
+  gleich in welcher Schreibung.
+- [ ] Gezielte Prüfungen grün.
+
+### Referenzen
+HUM-140 (`SecretMasks::apply_host`, `encode_headers`), `docs/SECURITY.md` Abschnitt 3.1.

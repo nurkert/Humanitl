@@ -1472,6 +1472,11 @@ class FakeDaemonClient implements DaemonClient {
     if (setConfigFailure case final Diagnostic failure) {
       throw DaemonException(failure);
     }
+    if (FormKeys.all.contains(key)) {
+      _setFormValue(key, value);
+      configWrites.add((key, value));
+      return;
+    }
     const String prefix = 'sandbox.env.';
     final String name = key.startsWith(prefix)
         ? key.substring(prefix.length)
@@ -1492,10 +1497,10 @@ class FakeDaemonClient implements DaemonClient {
           code: 'CONFIG_014',
           severity: Severity.error,
           why:
-              'SetConfig accepts only sandbox.env.<NAME> set to '
-              '/etc/humanitl/ca.crt for now; "$key" = "$value" is not that '
-              'write. Every other setting comes with the settings screen '
-              '(HUM-069).',
+              'SetConfig did not write this: "$key" is not one of the '
+              'settings of the form, and not sandbox.env.<NAME> set to '
+              '/etc/humanitl/ca.crt. Anything else goes into config.toml by '
+              'hand (humanitl config edit).',
         ),
       );
     }
@@ -1518,9 +1523,23 @@ class FakeDaemonClient implements DaemonClient {
   }
 
   @override
-  Future<LlmProbe> probeLlm(String endpoint, {Duration? timeout}) async {
+  Future<LlmProbe> probeLlm(
+    String endpoint, {
+    Duration? timeout,
+    String? apiKey,
+    bool useStoredKey = false,
+  }) async {
     _check();
     probedEndpoints.add(endpoint);
+    // Nur die Art, nie der Schluessel: Auch ein Fake haelt keinen Wert, den
+    // ein Test aus Versehen zeigen koennte (HUM-140).
+    probeKeyUses.add(
+      apiKey != null && apiKey.isNotEmpty
+          ? ProbeKeyUse.typed
+          : useStoredKey
+          ? ProbeKeyUse.stored
+          : ProbeKeyUse.none,
+    );
     if (llmProbeFailure case final Diagnostic failure) {
       throw DaemonException(failure);
     }
@@ -1540,8 +1559,11 @@ class FakeDaemonClient implements DaemonClient {
         ),
       );
     }
+    final bool keySent =
+        (apiKey != null && apiKey.isNotEmpty) ||
+        (useStoredKey && llmKey.set && endpoint == configValues.llmEndpoint);
     if (llmProbe case final LlmProbe fixed) {
-      return fixed.copyWith(endpoint: endpoint);
+      return fixed.copyWith(endpoint: endpoint, keySent: keySent);
     }
     // Ob der Endpunkt privat ist, wird am Namen entschieden und nicht
     // geraten; alles, was sich nicht als privat lesen laesst, zaehlt als
@@ -1559,6 +1581,7 @@ class FakeDaemonClient implements DaemonClient {
       // Messung aus.
       latencyMs: 0,
       endpointIsPrivate: private,
+      keySent: keySent,
       diagnostics: <Diagnostic>[
         if (!private)
           Diagnostic(
@@ -2419,6 +2442,152 @@ class FakeDaemonClient implements DaemonClient {
             : null;
       }),
     ];
+  }
+
+  // --- Einstellungsformular und Zugangsschluessel (HUM-069, HUM-140) -----
+  //
+  // Der Fake haelt die Werte des Formulars im Speicher und prueft sie so
+  // weit, wie es die Oberflaeche merkt: Aufzaehlungen, Wahrheitswerte und die
+  // Haltefrist in ihrem Bereich, mit `CONFIG_003` wie der Daemon. Den
+  // Zugangsschluessel haelt er nie, nur die Aussage, ob einer gesetzt ist.
+
+  /// What `GetConfig` answers; `SetConfig` on a key of the form changes it.
+  ConfigValues configValues = ConfigValues.empty;
+
+  /// What `LlmKey` answers. `setLlmKey` and `clearLlmKey` change it; the key
+  /// itself is never kept.
+  LlmKeyStatus llmKey = LlmKeyStatus.unset;
+
+  /// The length of every key `LlmKey(set)` received, in call order. The
+  /// length and not the key: a test sees that the typed key arrived without
+  /// the fake holding it.
+  final List<int> setKeyLengths = <int>[];
+
+  /// The finding `LlmKey(set)` fails with; null means it does not fail.
+  Diagnostic? setLlmKeyFailure;
+
+  /// Which kind of key each `ProbeLlm` carried, in call order.
+  final List<ProbeKeyUse> probeKeyUses = <ProbeKeyUse>[];
+
+  @override
+  Future<ConfigValues> getConfig() async {
+    _check();
+    return configValues;
+  }
+
+  @override
+  Future<LlmKeyStatus> llmKeyStatus() async {
+    _check();
+    return llmKey;
+  }
+
+  @override
+  Future<LlmKeyStatus> setLlmKey(String key) async {
+    _check();
+    if (setLlmKeyFailure case final Diagnostic failure) {
+      throw DaemonException(failure);
+    }
+    // Dieselbe Regel wie `ApiKey::new` im Daemon.
+    if (key.isEmpty || key.length > 4096 || RegExp(r'\s').hasMatch(key)) {
+      throw const DaemonException(
+        Diagnostic(
+          code: 'CONFIG_020',
+          severity: Severity.error,
+          why:
+              'the access key was not stored: it is empty, too long, or '
+              'contains white space',
+        ),
+      );
+    }
+    setKeyLengths.add(key.length);
+    llmKey = const LlmKeyStatus(
+      set: true,
+      store: LlmKeyStore.secretService,
+      keyRef: 'secret-service:humanitl/llm',
+    );
+    return llmKey;
+  }
+
+  @override
+  Future<LlmKeyStatus> clearLlmKey() async {
+    _check();
+    llmKey = LlmKeyStatus.unset;
+    return llmKey;
+  }
+
+  /// Prueft und uebernimmt einen Wert des Formulars.
+  void _setFormValue(String key, String text) {
+    Never refuse(String why) => throw DaemonException(
+      Diagnostic(code: 'CONFIG_003', severity: Severity.error, why: why),
+    );
+    const Map<String, List<String>> choices = <String, List<String>>{
+      FormKeys.holdAskMode: <String>['ui', 'terminal', 'none'],
+      FormKeys.uiLanguage: <String>['en', 'de'],
+      FormKeys.uiTheme: <String>['dark', 'light', 'system'],
+    };
+    final Object? value;
+    if (text == '-') {
+      value = null;
+    } else if (choices[key] case final List<String> allowed) {
+      if (!allowed.contains(text)) {
+        refuse(
+          '$text is not a value of $key; it takes one of '
+          '${allowed.join(', ')}',
+        );
+      }
+      value = text;
+    } else if (key == FormKeys.holdTimeoutSecs) {
+      final int? seconds = int.tryParse(text);
+      if (seconds == null || seconds < 1 || seconds > 86400) {
+        refuse(
+          'hold.timeout_secs = $text is out of range; allowed is 1 to 86400',
+        );
+      }
+      value = seconds;
+    } else if (key == FormKeys.uiNotifications) {
+      if (text != 'true' && text != 'false') {
+        refuse('ui.notifications takes true or false, and $text is none');
+      }
+      value = text == 'true';
+    } else if (key == FormKeys.llmModels) {
+      final Object? decoded = jsonDecode(text);
+      if (decoded is! List<Object?>) {
+        refuse('llm.models takes a JSON list of strings');
+      }
+      value = decoded.whereType<String>().toList();
+    } else if (key == FormKeys.llmEndpoint) {
+      if (!_isUsableEndpoint(text)) {
+        refuse(
+          'llm.endpoint = "$text" is out of range; allowed is a URL with the '
+          'scheme http or https',
+        );
+      }
+      value = text;
+    } else {
+      value = text;
+    }
+    final List<String> path = key.split('.');
+    final Map<String, Object?> values = Map<String, Object?>.of(
+      configValues.values,
+    );
+    final Map<String, Object?> group = switch (values[path.first]) {
+      final Map<String, Object?> existing => Map<String, Object?>.of(existing),
+      _ => <String, Object?>{},
+    };
+    if (value == null) {
+      group.remove(path.last);
+    } else {
+      group[path.last] = value;
+    }
+    values[path.first] = group;
+    configValues = ConfigValues(
+      values: values,
+      origins: <String, String>{
+        ...configValues.origins,
+        key: value == null ? 'default' : 'global',
+      },
+      configPath: configValues.configPath,
+    );
   }
 }
 
@@ -4114,4 +4283,16 @@ class FakeAuditExport {
 
   /// Die obere Zeitgrenze, oder null.
   final DateTime? to;
+}
+
+/// Which key a `ProbeLlm` of the fake carried (HUM-140); never the key.
+enum ProbeKeyUse {
+  /// No key.
+  none,
+
+  /// A key typed into the form, sent once.
+  typed,
+
+  /// The stored key, by `use_stored_key`.
+  stored,
 }

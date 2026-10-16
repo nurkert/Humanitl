@@ -50,6 +50,7 @@ fn file_at(adapter: OpenCodeAdapter, ctx: &AgentContext, dst: &str) -> Vec<u8> {
         .find(|file| file.dst == Path::new(dst))
         .unwrap_or_else(|| panic!("no file for {dst}"))
         .content
+        .clone()
 }
 
 #[test]

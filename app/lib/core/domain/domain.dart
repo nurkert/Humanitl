@@ -16,4 +16,5 @@ export 'ids.dart';
 export 'llm.dart';
 export 'rule.dart';
 export 'sandbox.dart';
+export 'settings.dart';
 export 'terminal.dart';

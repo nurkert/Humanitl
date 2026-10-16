@@ -35,7 +35,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use humanitl_core::{BodyRef, Diagnostic, FlowId, HeaderMap};
+use humanitl_core::{BodyRef, Diagnostic, FlowId, HeaderMap, SecretMasks};
 use sha2::{Digest as _, Sha256};
 use tokio::sync::broadcast;
 
@@ -112,6 +112,7 @@ impl ResponseSink {
         diagnostics: broadcast::Sender<Diagnostic>,
         settings: RecorderSettings,
         headers: &HeaderMap,
+        masks: &SecretMasks,
     ) -> Self {
         Self {
             flow,
@@ -119,9 +120,9 @@ impl ResponseSink {
             blobs,
             diagnostics,
             settings,
-            headers_json: encode_headers(headers),
-            content_type: content_type_of(headers),
-            content_encoding: content_encoding_of(headers),
+            headers_json: encode_headers(headers, masks),
+            content_type: content_type_of(headers, masks),
+            content_encoding: content_encoding_of(headers, masks),
             hasher: Sha256::new(),
             buffer: Vec::new(),
             spill: None,

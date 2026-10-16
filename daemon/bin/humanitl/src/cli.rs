@@ -200,7 +200,36 @@ pub enum LlmCmd {
         /// Frist für die ganze Probe; ohne sie die Vorgabe des Daemons.
         #[arg(long = "timeout-ms", value_name = "N")]
         timeout_ms: Option<u32>,
+
+        /// Send the stored access key along, if URL has the origin of
+        /// llm.endpoint; the daemon never gives it to another address.
+        #[arg(long = "with-key")]
+        with_key: bool,
     },
+
+    /// The access key of the LLM endpoint, kept in the system keyring.
+    ///
+    /// The key never stands in config.toml, on a command line, in a log or in
+    /// the recording; the configuration file carries only a reference to it.
+    Key {
+        /// What to do with the key.
+        #[command(subcommand)]
+        cmd: KeyCmd,
+    },
+}
+
+/// Die Unterkommandos von `humanitl llm key` (HUM-140).
+#[derive(Debug, Subcommand)]
+pub enum KeyCmd {
+    /// Whether a key is stored, and where: system keyring or 0600 file.
+    Status,
+
+    /// Store the key. It is read from stdin, never from the command line;
+    /// at a terminal the input is hidden.
+    Set,
+
+    /// Remove the key and its reference from the configuration file.
+    Remove,
 }
 
 /// Die Argumente von `humanitl doctor`.

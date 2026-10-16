@@ -330,13 +330,31 @@ class TestDaemonClient implements DaemonClient {
   Future<DoctorReport> doctor() async => DoctorReport.empty;
 
   @override
-  Future<LlmProbe> probeLlm(String endpoint, {Duration? timeout}) async =>
-      LlmProbe(endpoint: endpoint);
+  Future<LlmProbe> probeLlm(
+    String endpoint, {
+    Duration? timeout,
+    String? apiKey,
+    bool useStoredKey = false,
+  }) async => LlmProbe(endpoint: endpoint);
 
   // Der Schreibweg des Fixes (HUM-151) gehört der Karte, nicht der
   // Warteschlange. Dieser Client schreibt nichts und behauptet nichts.
   @override
   Future<void> setConfig(String key, String value) async {}
+
+  // Das Einstellungsformular (HUM-069, HUM-140) gehört nicht zur
+  // Warteschlange: Die Vorgaben genügen, und ein Schlüssel ist nicht gesetzt.
+  @override
+  Future<ConfigValues> getConfig() async => ConfigValues.empty;
+
+  @override
+  Future<LlmKeyStatus> llmKeyStatus() async => LlmKeyStatus.unset;
+
+  @override
+  Future<LlmKeyStatus> setLlmKey(String key) async => LlmKeyStatus.unset;
+
+  @override
+  Future<LlmKeyStatus> clearLlmKey() async => LlmKeyStatus.unset;
 
   @override
   Stream<LlmServer> discoverLlm({

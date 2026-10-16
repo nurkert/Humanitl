@@ -23,11 +23,12 @@ Eine RPC ohne CLI-Zeile und ohne Ausnahme bricht den CI-Job
 | `Humanitl.DiscoverLlm` | `humanitl llm discover` | `features/setup/widgets/llm_discover_sheet` |
 | `Humanitl.Doctor` | `humanitl doctor` | `features/setup/widgets/doctor_list` |
 | `Humanitl.GetBody` | `humanitl flows show --body` | `features/history/history_detail` |
-| `Humanitl.GetConfig` | Ausnahme | fehlt |
+| `Humanitl.GetConfig` | Ausnahme | `features/settings/settings_sheet` |
 | `Humanitl.GetFlow` | `humanitl flows show` | `features/history/history_detail` |
 | `Humanitl.GetInfo` | `humanitl daemon status` | `features/shell/connection_gate` |
 | `Humanitl.GetSessionSummary` | `humanitl sessions summary` | fehlt |
 | `Humanitl.ListFlows` | `humanitl flows list` | `features/history/history_screen` |
+| `Humanitl.LlmKey` | `humanitl llm key remove`<br>`humanitl llm key set`<br>`humanitl llm key status` | `features/settings/widgets/model_section` |
 | `Humanitl.ProbeLlm` | `humanitl llm test` | `features/setup/widgets/llm_check` |
 | `Humanitl.Rules` | `humanitl rules add`<br>`humanitl rules disable`<br>`humanitl rules dry-run`<br>`humanitl rules enable`<br>`humanitl rules list`<br>`humanitl rules reload`<br>`humanitl rules remove`<br>`humanitl rules reorder`<br>`humanitl rules test`<br>`humanitl rules update` | `features/rules/rules_screen` |
 | `Humanitl.Sandbox` | `humanitl run` | `features/sandbox/sandbox_screen` |
@@ -37,12 +38,11 @@ Eine RPC ohne CLI-Zeile und ohne Ausnahme bricht den CI-Job
 
 ## UI-Lücken
 
-- `Humanitl.GetConfig`
 - `Humanitl.GetSessionSummary`
 
 ## Ausnahmen
 
 | RPC | Begründung |
 |---|---|
-| `Humanitl.GetConfig` | CLI liest und schreibt die Konfiguration lokal über denselben Lader wie der Daemon; eine echte Anbindung an GetConfig/SetConfig folgt mit HUM-069/HUM-170. |
-| `Humanitl.SetConfig` | CLI liest und schreibt die Konfiguration lokal über denselben Lader wie der Daemon; eine echte Anbindung an GetConfig/SetConfig folgt mit HUM-069/HUM-170. |
+| `Humanitl.GetConfig` | CLI liest und schreibt die Konfiguration lokal über denselben Lader wie der Daemon; die Oberfläche nutzt beide RPCs seit HUM-069, die Anbindung der Kommandozeile folgt mit HUM-170. |
+| `Humanitl.SetConfig` | CLI liest und schreibt die Konfiguration lokal über denselben Lader wie der Daemon; die Oberfläche nutzt beide RPCs seit HUM-069, die Anbindung der Kommandozeile folgt mit HUM-170. |

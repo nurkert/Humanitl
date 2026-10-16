@@ -96,6 +96,9 @@ pub struct LlmConfig {
     /// Modelle, die der Endpunkt anbietet. Leer heißt: der Agent bekommt ein Platzhalter-Modell und eine Warnung.
     #[schemars(extend("x-tier" = "basic", "x-project-scope" = "denied"))]
     pub models: Vec<String>,
+    /// Verweis auf den Zugangsschlüssel des Endpunkts, nie der Schlüssel selbst: `secret-service:humanitl/llm` für den Schlüsselbund des Systems oder `file:llm` für eine Datei mit `0600` unter `$XDG_DATA_HOME/humanitl/keys`. Gesetzt wird er mit `humanitl llm key set` oder in den Einstellungen; der Agent bekommt den Schlüssel als Datei in der Sandbox, nie über die Kommandozeile. Leer heißt: kein Schlüssel.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub api_key_ref: Option<String>,
 }
 
 impl Default for LlmConfig {
@@ -104,7 +107,31 @@ impl Default for LlmConfig {
             endpoint: None,
             passthrough_paths: vec!["/v1/".to_owned(), "/api/".to_owned()],
             models: Vec::new(),
+            api_key_ref: None,
         }
+    }
+}
+
+impl LlmConfig {
+    /// Host und Port des Endpunkts, normalisiert wie der Proxy jede Anfrage
+    /// normalisiert ([`humanitl_core::HostName::parse`]), mit dem
+    /// Standardport des Schemas.
+    ///
+    /// Die eine Quelle für das Ziel des Modells: die Statuszeile des
+    /// Meta-Endpunkts und das Ziel des Zugangsschlüssels, an dem er in
+    /// `Authorization` kein Fund ist (HUM-140). Ein Endpunkt mit Punkt am Ende
+    /// (`model.lan.`) oder als IPv6-Literal ergibt damit dieselbe Form wie die
+    /// Anfrage, die der Agent an ihn stellt; ein eigener Weg über `url` hätte
+    /// den Schlüssel dort zu einem Fund gemacht.
+    ///
+    /// `None` ohne Endpunkt, ohne Host oder bei einem Host, den der Proxy
+    /// nicht annähme.
+    #[must_use]
+    pub fn endpoint_authority(&self) -> Option<humanitl_core::Authority> {
+        let endpoint = self.endpoint.as_ref()?;
+        let host = humanitl_core::HostName::parse(endpoint.host_str()?).ok()?;
+        let port = endpoint.port_or_known_default()?;
+        Some(humanitl_core::Authority::new(host, port))
     }
 }
 
@@ -452,18 +479,10 @@ pub struct UiConfig {
     #[schemars(extend("x-tier" = "basic", "x-project-scope" = "allowed"))]
     pub language: Language,
     /// Erscheinungsbild der Oberfläche.
-    #[schemars(extend(
-        "x-tier" = "advanced",
-        "x-project-scope" = "allowed",
-        "x-pending-issue" = "HUM-069"
-    ))]
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
     pub theme: Theme,
     /// Meldung des Systems, wenn eine Anfrage wartet und das Fenster nicht vorn ist.
-    #[schemars(extend(
-        "x-tier" = "advanced",
-        "x-project-scope" = "allowed",
-        "x-pending-issue" = "HUM-069"
-    ))]
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
     pub notifications: bool,
     /// Hinweiszeile des Daemons, wenn eine Anfrage des Agenten auf eine Entscheidung wartet oder entschieden ist. Sie geht als eigener Rahmen an jeden Client, nie in den Bytestrom des Agenten: Wer am Terminal sitzt, bekommt sie zwischen die Bytes geschrieben, und die Oberfläche zeigt sie im Streifen über dem Terminal. Der Streifen bleibt in jedem Fall, weil er aus dem Ereignisstrom kommt; dieser Schalter betrifft nur den Rahmen.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
@@ -510,4 +529,54 @@ pub struct Experimental {
     /// Bietet dem Ziel HTTP/2 an. In M1 spricht der Proxy nach oben nur HTTP/1.1.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub h2_upstream: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use humanitl_core::{Authority, HostName};
+
+    use super::LlmConfig;
+
+    fn authority_of(endpoint: &str) -> Option<String> {
+        LlmConfig {
+            endpoint: Some(url::Url::parse(endpoint).unwrap()),
+            ..LlmConfig::default()
+        }
+        .endpoint_authority()
+        .map(|authority| authority.to_string())
+    }
+
+    /// Das Ziel des Endpunkts steht so da, wie der Proxy die Anfrage des
+    /// Agenten an ihn normalisiert: ohne Punkt am Ende, klein, mit
+    /// Standardport, ein IPv6-Literal wie `HostName` es schreibt (HUM-140,
+    /// Review).
+    #[test]
+    fn the_endpoint_authority_is_normalised_like_a_proxied_request() {
+        let proxied = |host: &str, port: u16| {
+            Authority::new(HostName::parse(host).unwrap(), port).to_string()
+        };
+        assert_eq!(
+            authority_of("http://Model.LAN.:11434/v1"),
+            Some(proxied("model.lan.", 11434))
+        );
+        assert_eq!(
+            authority_of("http://model.lan.:11434/").as_deref(),
+            Some("model.lan:11434")
+        );
+        assert_eq!(
+            authority_of("https://api.example.com/v1").as_deref(),
+            Some("api.example.com:443")
+        );
+        assert_eq!(
+            authority_of("http://192.168.1.20/").as_deref(),
+            Some("192.168.1.20:80")
+        );
+        assert_eq!(
+            authority_of("https://[::ffff:192.168.1.20]/"),
+            Some(proxied("[::ffff:c0a8:114]", 443))
+        );
+        assert_eq!(LlmConfig::default().endpoint_authority(), None);
+    }
 }

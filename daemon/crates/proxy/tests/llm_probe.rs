@@ -400,3 +400,100 @@ async fn probe_and_proxy_resolve_a_lan_name_the_same_way() {
         proxy.resolver.hosts()
     );
 }
+
+/// Ein Server, der nur mit dem richtigen Schlüssel antwortet, und der jede
+/// Kopfzeile `Authorization` mitschreibt, die bei ihm ankommt.
+async fn keyed_server(key: &'static str) -> (u16, Arc<std::sync::Mutex<Vec<String>>>) {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = Arc::clone(&seen);
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let log = Arc::clone(&log);
+            tokio::spawn(async move {
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") {
+                    if stream.read(&mut byte).await.unwrap_or(0) == 0 {
+                        return;
+                    }
+                    head.push(byte[0]);
+                }
+                let head = String::from_utf8_lossy(&head).into_owned();
+                let auth = head
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .starts_with("authorization:")
+                            .then(|| line["authorization:".len()..].trim().to_owned())
+                    })
+                    .unwrap_or_default();
+                log.lock().unwrap().push(auth.clone());
+                let body = r#"{"models":[{"name":"keyed-model"}]}"#;
+                let reply = if auth == format!("Bearer {key}") {
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: \
+                         {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                } else {
+                    "HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                        .to_owned()
+                };
+                let _ignored = stream.write_all(reply.as_bytes()).await;
+            });
+        }
+    });
+    (port, seen)
+}
+
+/// Mit Schlüssel geht er als `Bearer` an genau diesen Endpunkt, und die
+/// Antwort sagt, dass einer ging; ohne Schlüssel geht keiner, und `LLM_002`
+/// schlägt vor, einen zu hinterlegen (HUM-140).
+#[tokio::test(flavor = "multi_thread")]
+async fn probe_sends_the_key_as_bearer_and_only_when_given() {
+    const KEY: &str = "sk-probe-0123456789";
+    let (port, seen) = keyed_server(KEY).await;
+    let key = humanitl_config::secret::ApiKey::new(KEY).unwrap();
+
+    let result = probe()
+        .probe_with_key(&endpoint(port), None, Some(&key))
+        .await
+        .unwrap();
+    assert_eq!(result.models, vec!["keyed-model".to_owned()]);
+    assert!(result.key_sent);
+    assert_eq!(seen.lock().unwrap().as_slice(), [format!("Bearer {KEY}")]);
+
+    let refused = probe().probe(&endpoint(port), None).await.unwrap_err();
+    assert_eq!(refused.code.as_str(), "LLM_002");
+    assert!(refused.why.contains("none was sent"), "{}", refused.why);
+    assert_eq!(
+        refused.fix,
+        Some(humanitl_core::FixAction::CopyCommand(
+            "humanitl llm key set".to_owned()
+        ))
+    );
+    assert_eq!(
+        seen.lock().unwrap().last().map(String::as_str),
+        Some(""),
+        "the probe without a key sends no Authorization"
+    );
+
+    let wrong = humanitl_config::secret::ApiKey::new("sk-wrong-0000000000").unwrap();
+    let rejected = probe()
+        .probe_with_key(&endpoint(port), None, Some(&wrong))
+        .await
+        .unwrap_err();
+    assert!(
+        rejected.why.contains("does not accept this key"),
+        "{}",
+        rejected.why
+    );
+    assert!(!rejected.why.contains("sk-wrong"), "{}", rejected.why);
+}

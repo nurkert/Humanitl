@@ -56,6 +56,9 @@ abstract class LlmProbe with _$LlmProbe {
     @Default(0) int latencyMs,
     @Default(false) bool endpointIsPrivate,
     @Default(<Diagnostic>[]) List<Diagnostic> diagnostics,
+
+    /// True when the probe sent an access key along (HUM-140).
+    @Default(false) bool keySent,
   }) = _LlmProbe;
 
   const LlmProbe._();
