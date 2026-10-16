@@ -3458,7 +3458,9 @@ Aufzeichnung (`recorder.retention_days`); ohne Löschung wächst es ohne Grenze;
 und ein Schnitt lässt sich so belegen, dass `verify` ihn von einem Bruch
 unterscheidet, ohne die Aussage über die übrigen Records zu schwächen. Die
 Vorgabe bleibt `0` (für immer), die Obergrenze 3650 wie bei der Aufzeichnung.
-Mit der Vorgabe bleibt die Datei append-only wie bisher. Begründung und
+Solange `audit.retention_days` und `audit.max_bytes` (HUM-194, Nachtrag unten)
+beide `0` sind, bleibt die Datei append-only wie bisher; sonst löscht der Lauf
+den Anfang nach Alter oder Größe. Begründung und
 Beweisumfang stehen in `docs/SECURITY.md` Abschnitt 8, „Aufbewahrung der Kette".
 
 - **Der Beleg ist ein Record, kein Anker.** `audit.pruned` (`through_seq`,
@@ -3500,7 +3502,41 @@ Beweisumfang stehen in `docs/SECURITY.md` Abschnitt 8, „Aufbewahrung der Kette
   Kette steht. Verdrahtung in `daemon/bin/humanitld/src/audit_retention.rs`,
   weil nur der Daemon Audit-Schreiber und Anker-Tabelle zugleich kennt.
 
-Nicht gebaut: eine Grenze in Bytes (HUM-194).
+**Nachtrag HUM-194 (2026-10-16): die Grenze in Bytes, `audit.max_bytes`.**
+Vorgabe `0` (keine Grenze), sonst 2 MiB bis 1 TiB (`CONFIG_003` dazwischen
+und darüber; 2 MiB ist `humanitl_audit::MIN_MAX_BYTES`, doppelt
+`MAX_LINE_BYTES`, damit der neueste Record samt Beleg immer darunter passt),
+Tier `expert`, im Projekt-Profil gesperrt wie die ganze Gruppe `audit`.
+
+- **Derselbe Lauf.** `AuditRetention` reicht beide Grenzen als
+  `humanitl_audit::PruneLimits` an `AuditHandle::prune_to`; `prune(before, …)`
+  bleibt als Kurzform für die Zeit allein. Sind beide `0`, gibt es keinen Lauf.
+  Eine Kette, die nicht hält, wird auch nach Größe nicht gekürzt (`AUDIT_001`,
+  derselbe Befund, kein neuer Code).
+- **Reihenfolge des Löschens.** Das Älteste zuerst, nur ganze Records, nur am
+  Anfang (`find_byte_cut`). Zeit und Größe ergeben je einen Anfang; es gilt der
+  weitere, belegt von einem einzigen `audit.pruned`.
+- **Unter der Grenze heißt samt Beleg.** Der Schnitt hält Platz für
+  `audit.pruned` und dessen Anker frei, berechnet mit den längsten Zahlen, die
+  beide tragen können. Nach dem Lauf ist die Datei höchstens `audit.max_bytes`
+  groß; `PruneOutcome::size` nennt die Größe, auch wenn nichts geschnitten
+  wurde (`AuditHandle::prune_to` gibt `PruneOutcome { cut, size }` zurück).
+- **Der neueste Record geht nie nach Größe.** Bis `MAX_LINE_BYTES` passt er
+  samt Beleg unter jede zulässige Grenze. Das Anhängen begrenzt die Zeile aber
+  nicht; ist er länger, bleiben er, `audit.pruned` und der Anker, das Log liegt
+  darüber (`PruneOutcome::over`), und der Daemon schreibt eine Warnung ins
+  Protokoll, mit Schnitt oder ohne. Eine Datei genau auf der Grenze ist nicht
+  darüber und bleibt unberührt.
+- **`audit.pruned` trägt die Grenzen des Laufs.** `cutoff` nur bei einer
+  Grenze in der Zeit, `max_bytes` nur bei einer in Bytes. Ein Lauf nach Zeit
+  allein schreibt denselben Record wie vor HUM-194; `verify` liest weiter nur
+  `through_seq` und `through_hash`.
+- **Fast volle Platte.** Das Umschreiben braucht kurz Platz für den Rest neben
+  der alten Datei. Scheitert es, geht die Nebendatei wieder, das Log bleibt mit
+  seinem `audit.pruned` stehen (`AUDIT_006`), und der nächste Lauf schneidet
+  erneut.
+- **Takt.** Die Grenze wirkt beim Start und dann täglich, nicht bei jedem
+  Record; dazwischen wächst die Datei.
 
 ### 4.42 Aus der Umsetzung der verweigerten Versuche (HUM-138, 2026-09-23)
 
