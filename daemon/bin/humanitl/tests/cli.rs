@@ -2453,6 +2453,8 @@ fn fake_systemctl(harness: &Harness, unit_dir: &Path) -> (PathBuf, PathBuf) {
          export PATH\n\
          echo \"$*\" >>'{log}'\n\
          case \"$*\" in\n\
+         *is-enabled*) echo disabled; exit 1 ;;\n\
+         *UnitPath*) echo 'UnitPath={dir}' ;;\n\
          *enable*)\n\
            mkdir -p '{wants}' || exit 90\n\
            ln -sf '{unit}' '{link}' || exit 91\n\
@@ -2468,6 +2470,7 @@ fn fake_systemctl(harness: &Harness, unit_dir: &Path) -> (PathBuf, PathBuf) {
         wants = unit_dir.join("default.target.wants").display(),
         unit = unit_dir.join(UNIT_FILE).display(),
         link = link.display(),
+        dir = unit_dir.display(),
     );
     let path = bin.join("systemctl");
     std::fs::write(&path, script).expect("the fake systemctl");
@@ -3554,9 +3557,18 @@ fn logging_systemctl(harness: &Harness, name: &str) -> (PathBuf, PathBuf) {
     let bin = harness.path(&format!("fakebin-{name}"));
     std::fs::create_dir_all(&bin).expect("the fake bin directory");
     let log = harness.path(&format!("{name}.log"));
+    // Für `systemctl` antwortet es auf `is-enabled` und `show -p UnitPath` wie
+    // systemd, das das Unit-Verzeichnis der Umgebung durchsucht: Ohne diese
+    // Antworten aktivierte `daemon install` nicht (HUM-217).
     let script = format!(
-        "#!/bin/sh\necho \"$*\" >>'{log}'\nexit 0\n",
-        log = log.display()
+        "#!/bin/sh\necho \"$*\" >>'{log}'\n\
+         case \"$*\" in\n\
+         *is-enabled*) echo disabled; exit 1 ;;\n\
+         *UnitPath*) echo 'UnitPath={units}' ;;\n\
+         esac\n\
+         exit 0\n",
+        log = log.display(),
+        units = harness.path("config").join("systemd/user").display(),
     );
     let path = bin.join(name);
     std::fs::write(&path, script).expect("the fake program");

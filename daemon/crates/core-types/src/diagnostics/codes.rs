@@ -296,9 +296,15 @@ registry! {
     /// zurückgenommen: Eine Unit, die systemd nicht annimmt, soll nicht
     /// liegenbleiben und beim nächsten Anmelden von selbst auftauchen
     /// (HUM-044).
+    ///
+    /// Derselbe Code, wenn die Unit aus einem anderen Verzeichnis geladen wird:
+    /// Der systemd-Verwalter sucht unter einem anderen `XDG_CONFIG_HOME` als die
+    /// Kommandozeile, die sie geschrieben hat. Der Satz nennt dann beide
+    /// Verzeichnisse, und der Vorschlag ist `systemctl --user show -p UnitPath`
+    /// (HUM-217).
     DAEMON_008 => "daemon", "systemd hat die Unit nicht übernommen", "#daemon_008",
-        "`systemctl --user` hat die geschriebene Unit nicht übernommen oder nicht gestartet.",
-        "`CopyCommand` mit `systemctl --user status humanitld`, dem Aufruf, der sagt, was systemd stört.";
+        "`systemctl --user` hat die geschriebene Unit nicht übernommen oder nicht gestartet, oder die Unit wird aus einem anderen Verzeichnis geladen als dem, in das `humanitl` sie geschrieben hat.",
+        "`CopyCommand` mit `systemctl --user status humanitld`, dem Aufruf, der sagt, was systemd stört; wird die Unit aus einem anderen Verzeichnis geladen, `systemctl --user show -p UnitPath`.";
 
     /// Das Token aus `$XDG_RUNTIME_DIR/humanitl/token` fehlt oder passt nicht.
     IPC_001 => "ipc", "Ungültiges Token", "#ipc_001",

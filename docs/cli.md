@@ -507,13 +507,35 @@ angehalten (`stop`, `reset-failed`). Der Befund ist `DAEMON_008`.
 
 Zurückgenommen wird dabei auch die Aktivierung. `systemctl --user enable --now`
 ist ein Aufruf mit zwei Schritten: Er legt die Verweise an und startet dann.
-Die Verweise liegen immer im Unit-Verzeichnis des Nutzers, auch für die Units
-des Pakets: `default.target.wants/humanitld.service` und beim Paket statt
-dessen `sockets.target.wants/humanitld.socket`. Misslingt der Start, stünden
-sie ohne diese Rücknahme weiter da, und der Dienst startete beim nächsten
-Anmelden, obwohl der Befehl mit `DAEMON_008` abgebrochen ist. Entfernt werden
-nur die Verweise, die dieser Aufruf angelegt hat: Wer den Dienst schon vorher
+Die Verweise liegen im Unit-Verzeichnis des Nutzers, auch für die Units des
+Pakets: `default.target.wants/humanitld.service` und beim Paket statt dessen
+`sockets.target.wants/humanitld.socket`. Misslingt der Start, stünden sie ohne
+diese Rücknahme weiter da, und der Dienst startete beim nächsten Anmelden,
+obwohl der Befehl mit `DAEMON_008` abgebrochen ist. Entfernt werden nur die
+Verweise, die dieser Aufruf angelegt hat: Wer den Dienst schon vorher
 aktiviert hatte, behält die Aktivierung.
+
+**Maßgeblich ist das Verzeichnis des systemd-Verwalters** (HUM-217). Die
+Kommandozeile schreibt die Unit unter ihr eigenes `XDG_CONFIG_HOME`; steht die
+Variable nur in der Shell-rc, sucht der Verwalter woanders. Deshalb fragt der
+Befehl nach `daemon-reload` mit `systemctl --user show -p FragmentPath
+humanitld.service`, aus welcher Datei systemd die Unit lädt. Ist es nicht die
+geschriebene, geht sie zurück, bevor `enable` einen Verweis anlegt, und
+`DAEMON_008` nennt beide Verzeichnisse; der Vorschlag `systemctl --user show
+-p UnitPath` zeigt, wo der Verwalter sucht. Sagt systemd zu `FragmentPath`
+nichts, entscheiden diese Suchpfade (`systemctl --user show -p UnitPath`):
+Steht das Verzeichnis der Unit nicht darunter, ist das derselbe Befund. Unter
+`--no-start` gilt dieselbe Prüfung über die Suchpfade, ohne dass systemd etwas
+neu liest. Gibt systemd auf beides keine Antwort, gilt die Unit nicht als
+geprüft und geht ebenso zurück; nur wenn `systemctl` den Bus der Sitzung gar
+nicht erreicht, bleibt sie unter `--no-start` liegen, denn dieser Weg braucht
+keine Sitzung. Vor `enable` merkt sich der Befehl mit `systemctl --user
+is-enabled`, welche Units schon dauerhaft aktiviert waren (eine Aktivierung
+nur unter `/run` zählt nicht), und meldet nach einem Fehlschlag die übrigen
+mit `systemctl --user disable` ab, auch nach einem gescheiterten Neustart:
+systemd nimmt die Verweise dort weg, wo der Verwalter sie angelegt hat. Die
+Suche im eigenen Unit-Verzeichnis bleibt als Rückfall. Sagt `is-enabled` zu
+einer Unit nichts, aktiviert der Befehl nicht und nimmt die Unit zurück.
 
 Die Härtung der Unit ist gemessen und nicht behauptet (HUM-044, gehärtet in
 HUM-053). Die Escape-Tests laufen unter genau ihren `[Service]`-Zeilen mit 124

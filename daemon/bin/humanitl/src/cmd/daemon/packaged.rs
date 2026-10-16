@@ -33,7 +33,7 @@ use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
 use super::{
-    Activation, InstallReport, PRINT_ACTION, UnitOnDisk, activate, announce, find_in_path,
+    Activation, InstallReport, PRINT_ACTION, UnitOnDisk, activate, announce, find_in_path, manager,
     planned_commands, report, require_user_session, start, systemctl_capture, systemctl_run,
     unit_fix, wait_for_daemon,
 };
@@ -133,7 +133,9 @@ pub(super) async fn install_packaged(
                 path: &units.service,
                 plan: &unit::Written::Unchanged,
             };
-            result.activation = start(ctx, args, systemctl.as_deref(), &names, &nothing).await?;
+            result.activation = start(ctx, args, systemctl.as_deref(), &names, &nothing)
+                .await?
+                .activation;
             if let Some(shadow) = shadow.as_ref() {
                 ctx.render.note(&shadow.left_in_place());
             }
@@ -194,7 +196,15 @@ async fn activate_packaged(
     // schon weg und kommen über [`Shadow::restore`] zurück, nicht über diese
     // Rücknahme.
     let enabled_before = unit::Enablement::read_for(&dir, names);
-    let socket_enabled_before = !unit::enablement_links(&dir, &[unit::SOCKET_NAME]).is_empty();
+    // Was systemd selbst über die Aktivierung sagt: Der Verwalter legt seine
+    // Verweise unter seinem eigenen Verzeichnis an, das nicht das dieser
+    // Kommandozeile sein muss (HUM-217). Als schon vorher da gilt der Socket,
+    // wenn systemd ihn aktiviert nennt oder im eigenen Verzeichnis an seinem
+    // Verweis schon etwas liegt: Einen Socket anzuhalten, den dieser Lauf
+    // nicht gestartet hat, ist schlimmer als einer, der weiterläuft.
+    let manager_before = manager::ManagerEnablement::read(ctx, systemctl, names).await;
+    let socket_enabled_before = manager_before.state_of(unit::SOCKET_NAME) == Some(true)
+        || !unit::enablement_links(&dir, &[unit::SOCKET_NAME]).is_empty();
     let nothing = UnitOnDisk {
         path: &units.service,
         plan: &unit::Written::Unchanged,
@@ -212,7 +222,7 @@ async fn activate_packaged(
     } else {
         names.to_vec()
     };
-    if let Err(failure) = activate(ctx, systemctl, names, &nothing, &stop).await {
+    if let Err(failure) = activate(ctx, systemctl, names, &nothing, &stop, &manager_before).await {
         return Err(match shadow {
             Some(shadow) => {
                 put_back_after_activation(ctx, systemctl, shadow, was_active, failure).await
@@ -224,6 +234,7 @@ async fn activate_packaged(
         let rollback = Rollback {
             shadow,
             enabled_before: &enabled_before,
+            manager_before: &manager_before,
             dir: &dir,
             package: &units.service,
             stop_socket: socket_is_new,
@@ -362,6 +373,9 @@ struct Rollback<'a> {
     shadow: &'a Shadow,
     /// Die Aktivierung nach dem Beiseitelegen und vor `enable --now`.
     enabled_before: &'a unit::Enablement,
+    /// Was systemd vor `enable --now` über die Aktivierung sagte; über
+    /// `disable` geht zuerst zurück, was neu ist (HUM-217).
+    manager_before: &'a manager::ManagerEnablement,
     /// Das Unit-Verzeichnis des Nutzers.
     dir: &'a Path,
     /// Die Dienst-Unit des Pakets: Nur Verweise auf sie und ihren Socket
@@ -401,6 +415,10 @@ async fn restart_on_package(
         // Räumt nur auf; ein Fehler dabei ist kein eigener Befund.
         let _ = systemctl_run(ctx, systemctl, &["--user", "stop", unit::SOCKET_NAME]).await;
     }
+    // Zuerst über systemd, das die Verweise dort wegnimmt, wo der Verwalter
+    // sie angelegt hat; danach, was diese Kommandozeile selbst findet
+    // (HUM-217).
+    let systemd_back = rollback.manager_before.undo(ctx, systemctl).await;
     let links_back = rollback
         .enabled_before
         .rollback(rollback.dir, rollback.package)
@@ -408,7 +426,7 @@ async fn restart_on_package(
     let restored = rollback.shadow.restore();
     // Verweise, die nicht zurückkamen, stehen im Befund; über den zweiten
     // Neustart entscheidet die Datei: Liegt sie wieder da, lädt systemd sie.
-    let links_note: String = [links_back.err(), restored.links.err()]
+    let links_note: String = [systemd_back.err(), links_back.err(), restored.links.err()]
         .into_iter()
         .flatten()
         .fold(String::new(), |mut note, why| {
