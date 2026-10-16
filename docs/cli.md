@@ -403,9 +403,24 @@ Das Verzeichnis, auf das `current` gerade zeigt, wird nie angefasst, bevor
 also nie einen Verweis ins Leere. `current` wird über einen zweiten Verweis und
 `rename` umgehängt, nie gelöscht und neu angelegt. Zeigte `current` vorher auf
 eine andere Kopie, läuft der Dienst womöglich noch aus ihr; der Befehl startet
-ihn deshalb nach `enable --now` mit `systemctl --user restart
+ihn deshalb nach `enable --now` mit `systemctl --user try-restart
 humanitld.service` neu, und erst danach gehen die vorige Kopie und jede ältere,
-die ein früherer Lauf liegen lassen musste (HUM-077). Ohne Neustart
+die ein früherer Lauf liegen lassen musste (HUM-077). Neu gestartet wird bei
+jeder Kopie, auch beim ersten Lauf und wenn `current` fehlte: Lief schon ein
+Dienst dieses Namens, etwa aus einer Unit unter `/etc`, die die neue verdeckt,
+ließe `enable --now` ihn laufen. Eine Kopie geht nur, wenn danach ein Daemon
+genau dieser Fassung antwortet und kein Prozess sein Programm aus ihr haben
+kann (`/proc/<pid>/exe`, HUM-210): Ein Daemon, der noch aus ihr läuft, fände
+sonst seinen Shim nicht mehr, und jede Sandbox scheiterte mit `SANDBOX_011`.
+Im Zweifel bleibt sie: wenn `/proc` oder einer seiner Einträge sich nicht
+lesen lässt; wenn `systemctl --user show -p MainPID` scheitert, keine Zeile
+`MainPID=` liefert oder keine Zahl (nur `MainPID=0` heißt „kein
+Hauptprozess"); wenn der Hauptprozess, den es nennt, nicht sichtbar ist; wenn
+ein Prozess sein Programm nicht lesen lässt und sein `status` nicht sagt, wem
+er gehört und wie er heißt; oder wenn ein Prozess `humanitld` desselben Kontos
+sein Programm nicht lesen lässt. Eine Kopie, die liegen bleibt, räumt ein späterer Lauf weg. Auch
+die neue Kopie eines gescheiterten Laufs bleibt nach denselben Regeln, solange
+ein Prozess aus ihr laufen kann. Ohne Neustart
 (`--no-start`, kein `systemctl`) bleibt die vorige Kopie liegen. Scheitert der
 Neustart, zeigt `current` wieder auf die vorige Kopie, die Unit bekommt ihren
 alten Text, der alte Daemon wird noch einmal gestartet, und der Befund ist

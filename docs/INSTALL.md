@@ -112,8 +112,9 @@ Anwendung; er ruft dieselbe Kommandozeile.
 **Eine neue Fassung erneuert den Dienst beim Start.** Wer später ein neueres AppImage startet,
 muss nichts tun: `AppRun` ruft vor der Anwendung `daemon install --refresh`. Zeigt `current` auf
 eine andere Fassung, kopiert es Daemon, Shim, Katalog und Profil der neuen heraus, hängt
-`current` um, startet den Dienst mit `systemctl --user restart humanitld.service` neu und
-entfernt erst danach die alte Kopie. Ist der Dienst nicht eingerichtet oder schon diese Fassung, tut der Aufruf nichts. Die erste
+`current` um und startet den Dienst mit `systemctl --user try-restart humanitld.service` neu.
+Die alte Kopie geht erst, wenn danach ein Daemon der neuen Fassung antwortet und kein Prozess
+mehr aus ihr läuft; sonst bleibt sie liegen, und ein späterer Lauf räumt sie weg. Ist der Dienst nicht eingerichtet oder schon diese Fassung, tut der Aufruf nichts. Die erste
 Einrichtung macht ein Programmstart nie von selbst.
 
 Entfernen:

@@ -2351,6 +2351,7 @@ fn fake_systemctl(harness: &Harness, unit_dir: &Path) -> (PathBuf, PathBuf) {
            echo 'Job for humanitld.service failed because the control process exited' >&2\n\
            exit 1\n\
            ;;\n\
+         *MainPID*) echo MainPID=0 ;;\n\
          esac\n\
          exit 0\n",
         log = log.display(),
