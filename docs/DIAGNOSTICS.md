@@ -43,7 +43,7 @@ Daemon nicht erreichbar
 
 **Auslöser.** Der Client findet keinen Socket oder kein Token unter dem Laufzeitpfad, oder die Verbindung dorthin scheitert. Oder Laufzeitverzeichnis und Token gehören nicht dem eigenen Konto, sind ein Symlink oder für Gruppe und Andere offen; dann liest der Client das Token nicht (HUM-212).
 
-**Fix.** `InstallService` richtet die Nutzer-Unit ein; sonst nennt der Befund `humanitld`. Bei offenen Rechten `CopyCommand` mit `chmod go-rwx`; bei fremdem Besitzer oder Symlink kein Fix. Nur im `/tmp`-Rückfall `OpenUrl` auf die Anleitung, wie man ein eigenes `XDG_RUNTIME_DIR` unter dem Heimatverzeichnis für die ganze Sitzung setzt (`docs/INSTALL.md`); es gilt nach einer neuen Anmeldung.
+**Fix.** Ohne Unit richtet `InstallService` sie ein (`humanitl daemon install`); mit der Unit aus `daemon install` startet `CopyCommand` sie (`systemctl --user start humanitld.service`), mit dem Paket (Dienst und Socket, nicht aus einem `AppImage`) seinen Socket (`systemctl --user start humanitld.socket`); liegen Paket und Unit des Nutzers zugleich da, verdeckt diese das Paket, und `InstallService` räumt es auf. `humanitld` im Vordergrund ist der Weg für die Fehlersuche und steht in der Dokumentation, nicht im Vorschlag (HUM-189). Bei offenen Rechten `CopyCommand` mit `chmod go-rwx`; bei fremdem Besitzer oder Symlink kein Fix. Nur im `/tmp`-Rückfall `OpenUrl` auf die Anleitung, wie man ein eigenes `XDG_RUNTIME_DIR` unter dem Heimatverzeichnis für die ganze Sitzung setzt (`docs/INSTALL.md`); es gilt nach einer neuen Anmeldung.
 
 #### DAEMON_002
 

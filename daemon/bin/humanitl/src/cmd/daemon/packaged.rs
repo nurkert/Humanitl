@@ -70,7 +70,7 @@ pub(super) fn packaged_units(
 }
 
 /// `daemon install`, wenn das Paket die Units unter
-/// [`unit::SYSTEM_UNIT_DIR`] abgelegt hat (HUM-053).
+/// `/usr/lib/systemd/user` abgelegt hat (HUM-053).
 ///
 /// Es wird nichts geschrieben: Die Units gehören dem Paket. Übrig bleibt, was
 /// das Paket nicht kann, weil es als root läuft: eine eigene ältere Unit

@@ -4673,8 +4673,8 @@ Ein Vorschlag für „kein Daemon" in allen Clients: `humanitl daemon install`, 
 - `daemon/bin/humanitl/src/cmd/mod.rs`, `daemon/bin/humanitl/src/cmd/doctor.rs`
 
 ### Akzeptanzkriterien
-- [ ] `humanitl daemon status` ohne Daemon schlägt einen Befehl vor, der den Dienst auf Dauer einrichtet oder startet.
-- [ ] `make check` grün.
+- [x] `humanitl daemon status` ohne Daemon schlägt einen Befehl vor, der den Dienst auf Dauer einrichtet oder startet. Gemessen am 2026-10-06: `a_missing_daemon_is_daemon_001_on_stderr_and_exit_two` (`fix: humanitl daemon install`), `a_missing_daemon_with_an_installed_unit_proposes_starting_it`, `a_missing_daemon_with_the_package_proposes_starting_its_socket`; Mutationsbeweis je Test rot.
+- [x] `make check` grün. Gemessen am 2026-10-16: `STRICT=1 make check` im Arbeitsbaum, Exit 0.
 
 ### Referenzen
 HUM-044, HUM-077; `backlog/CONVENTIONS.md` 4.38.

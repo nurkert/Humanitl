@@ -21,8 +21,9 @@
 use std::fs::{self, OpenOptions};
 use std::io::{Read as _, Write as _};
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use humanitl_config::{Env, Paths};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use tonic::metadata::MetadataMap;
@@ -95,6 +96,117 @@ pub fn write_token(path: &Path, token: &str) -> Result<(), Diagnostic> {
         .map_err(|error| io_diagnostic("write the token file", path, &error))
 }
 
+/// Wo das Paket die Units der Nutzer-Ebene ablegt (HUM-053).
+///
+/// Das ist der Ort, den systemd für Nutzer-Units aus Paketen vorsieht
+/// (`systemd.unit(5)`, „User Unit Search Path"). Die Kommandozeile
+/// (`cmd::unit`) und der Vorschlag für „kein Daemon" lesen denselben Wert.
+pub const SYSTEM_UNIT_DIR: &str = "/usr/lib/systemd/user";
+
+/// Die Variable, die [`SYSTEM_UNIT_DIR`] ersetzt (HUM-077).
+///
+/// Für Tests; sie ändert nur, wo die Kommandozeile nach den Units des Pakets
+/// sucht, nicht, was systemd lädt.
+pub const SYSTEM_UNIT_DIR_ENV: &str = "HUMANITL_SYSTEM_UNIT_DIR";
+
+/// Der Name der Dienst-Unit.
+const SERVICE_UNIT: &str = "humanitld.service";
+
+/// Der Name der Socket-Unit, die das Paket mitbringt.
+const SOCKET_UNIT: &str = "humanitld.socket";
+
+/// Wo die Units des Pakets gesucht werden.
+#[must_use]
+pub fn system_unit_dir(env: &Env) -> PathBuf {
+    env.non_empty(SYSTEM_UNIT_DIR_ENV)
+        .map_or_else(|| PathBuf::from(SYSTEM_UNIT_DIR), PathBuf::from)
+}
+
+/// Die Variable, die einen Lauf aus einem `AppImage` anzeigt.
+///
+/// `daemon install` übergeht die Units des Pakets, wenn sie gesetzt ist
+/// (HUM-165): Ein `AppImage` nennt ausdrücklich einen anderen Daemon als den
+/// des Pakets. Der Vorschlag für „kein Daemon" folgt derselben Regel, sonst
+/// startete er neben einem älteren Paket dessen Daemon mit einem anderen
+/// Vertrag.
+pub const APPIMAGE_ENV: &str = "APPIMAGE";
+
+/// Was auf dem Rechner an Units für den Daemon liegt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnitsOnDisk {
+    /// Das Paket hat `humanitld.service` **und** `humanitld.socket` unter
+    /// [`SYSTEM_UNIT_DIR`] abgelegt, und dieser Lauf kommt nicht aus einem
+    /// `AppImage`. Ein Socket allein startet keinen Daemon, und Pakete vor
+    /// HUM-053 bringen keinen Socket mit.
+    pub package_socket: bool,
+    /// `daemon install` hat `humanitld.service` in das Verzeichnis des
+    /// Nutzers geschrieben.
+    pub user_service: bool,
+}
+
+impl UnitsOnDisk {
+    /// Liest nach, was für diese Umgebung an Units liegt.
+    #[must_use]
+    pub fn probe(paths: &Paths) -> Self {
+        // `config_dir()` endet immer auf `humanitl`; die Unit gehört systemd
+        // und liegt daneben unter `systemd/user`.
+        let user_dir = paths
+            .config_dir()
+            .parent()
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+            .join("systemd")
+            .join("user");
+        let system = system_unit_dir(paths.env());
+        let from_appimage = paths.env().non_empty(APPIMAGE_ENV).is_some();
+        Self {
+            package_socket: !from_appimage
+                && system.join(SERVICE_UNIT).is_file()
+                && system.join(SOCKET_UNIT).is_file(),
+            user_service: user_dir.join(SERVICE_UNIT).is_file(),
+        }
+    }
+}
+
+/// Der Vorschlag für „kein Daemon" (HUM-189): ein Befehl, der den Dienst auf
+/// Dauer einrichtet oder startet, nicht `humanitld` im Vordergrund eines
+/// Terminals, das offen bleiben müsste.
+///
+/// - Liegt nur das Paket da, startet `systemctl --user start humanitld.socket`
+///   den Dienst bei der nächsten Verbindung.
+/// - Liegt das Paket **und** eine Unit des Nutzers da, verdeckt diese das Paket;
+///   dann richtet [`FixAction::InstallService`] die Lage her (HUM-167).
+/// - Liegt nur die Unit aus `daemon install` da, startet
+///   `systemctl --user start humanitld.service` sie.
+/// - Liegt nichts da, richtet [`FixAction::InstallService`]
+///   (`humanitl daemon install`) sie ein.
+///
+/// `humanitld` im Vordergrund bleibt ein Weg für die Fehlersuche und steht in
+/// der Dokumentation, nicht im Vorschlag.
+#[must_use]
+pub fn no_daemon_fix(units: UnitsOnDisk) -> FixAction {
+    // Paket und Nutzer-Unit zugleich: Die Unit des Nutzers verdeckt die des
+    // Pakets (`systemd.unit(5)`), und ihr Binary kann fehlen. Ein Start des
+    // Sockets startete dann keinen Daemon. `daemon install` legt die alte
+    // Unit beiseite und aktiviert die des Pakets (HUM-167).
+    if units.package_socket && units.user_service {
+        FixAction::InstallService
+    } else if units.package_socket {
+        // Nur das Paket: Es braucht keine Unit des Nutzers, und der Socket
+        // startet den Dienst bei der ersten Verbindung.
+        FixAction::CopyCommand(format!("systemctl --user start {SOCKET_UNIT}"))
+    } else if units.user_service {
+        FixAction::CopyCommand(format!("systemctl --user start {SERVICE_UNIT}"))
+    } else {
+        FixAction::InstallService
+    }
+}
+
+/// [`no_daemon_fix`] für die Umgebung dieses Prozesses.
+#[must_use]
+pub fn no_daemon_fix_here() -> FixAction {
+    no_daemon_fix(UnitsOnDisk::probe(&Paths::from_process()))
+}
+
 /// Liest die Token-Datei, für Clients (CLI, Oberfläche, Tests).
 ///
 /// # Errors
@@ -102,6 +214,16 @@ pub fn write_token(path: &Path, token: &str) -> Result<(), Diagnostic> {
 /// [`Diagnostic`] mit `DAEMON_001`, wenn die Datei fehlt oder leer ist: dann
 /// läuft kein Daemon, dem dieses Token gehört.
 pub fn read_token(path: &Path) -> Result<String, Diagnostic> {
+    read_token_with(path, &no_daemon_fix_here())
+}
+
+/// Wie [`read_token`], mit einem Vorschlag, den der Aufrufer aus seinen
+/// eigenen [`Paths`] kennt statt aus der Umgebung dieses Prozesses.
+///
+/// # Errors
+///
+/// Wie bei [`read_token`].
+pub fn read_token_with(path: &Path, fix: &FixAction) -> Result<String, Diagnostic> {
     // Erst der Blick auf den Eintrag selbst, ohne einem Symlink zu folgen:
     // Ein untergeschobener Link an dieser Stelle zeigte sonst auf eine fremde
     // Datei, deren Inhalt als Token gelesen wuerde.
@@ -111,7 +233,7 @@ pub fn read_token(path: &Path) -> Result<String, Diagnostic> {
                 "cannot stat the session token {}: {error}",
                 path.display()
             ))
-            .fix(FixAction::CopyCommand("humanitld".to_owned()))
+            .fix(fix.clone())
             .build()
     })?;
     if !meta.is_file() {
@@ -120,7 +242,7 @@ pub fn read_token(path: &Path) -> Result<String, Diagnostic> {
                 "the session token {} is not a regular file (a symlink here is refused, not followed)",
                 path.display()
             ))
-            .fix(FixAction::CopyCommand("humanitld".to_owned()))
+            .fix(fix.clone())
             .build());
     }
     let token = fs::read_to_string(path).map_err(|error| {
@@ -129,14 +251,14 @@ pub fn read_token(path: &Path) -> Result<String, Diagnostic> {
                 "cannot read the session token {}: {error}",
                 path.display()
             ))
-            .fix(FixAction::CopyCommand("humanitld".to_owned()))
+            .fix(fix.clone())
             .build()
     })?;
     let token = token.trim().to_owned();
     if token.is_empty() {
         return Err(Diagnostic::builder(codes::DAEMON_001, Severity::Blocking)
             .why(format!("the session token {} is empty", path.display()))
-            .fix(FixAction::CopyCommand("humanitld".to_owned()))
+            .fix(fix.clone())
             .build());
     }
     Ok(token)
@@ -237,12 +359,16 @@ fn io_diagnostic(what: &str, path: &Path, error: &std::io::Error) -> Diagnostic 
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+    use std::fs;
+
+    use humanitl_config::{Env, Paths};
+    use humanitl_core::FixAction;
     use tonic::metadata::{MetadataMap, MetadataValue};
     use tonic::{Code, Request};
 
     use super::{
-        TOKEN_BYTES, TokenAuth, check_token, constant_time_eq, file_mode, new_token, read_token,
-        write_token,
+        TOKEN_BYTES, TokenAuth, UnitsOnDisk, check_token, constant_time_eq, file_mode, new_token,
+        no_daemon_fix, read_token, write_token,
     };
     use crate::TOKEN_METADATA_KEY;
 
@@ -303,6 +429,129 @@ mod tests {
 
         assert_eq!(file_mode(&path).unwrap(), 0o600);
         assert_eq!(read_token(&path).unwrap(), "new");
+    }
+
+    /// Der Vorschlag für „kein Daemon" folgt den Units auf der Platte
+    /// (HUM-189): Paket vor Nutzer-Unit vor Einrichten, nie `humanitld`.
+    #[test]
+    fn the_no_daemon_fix_follows_the_units_on_disk() {
+        let none = UnitsOnDisk {
+            package_socket: false,
+            user_service: false,
+        };
+        assert_eq!(no_daemon_fix(none), FixAction::InstallService);
+        assert_eq!(
+            no_daemon_fix(UnitsOnDisk {
+                user_service: true,
+                ..none
+            }),
+            FixAction::CopyCommand("systemctl --user start humanitld.service".to_owned())
+        );
+        assert_eq!(
+            no_daemon_fix(UnitsOnDisk {
+                package_socket: true,
+                user_service: false,
+            }),
+            FixAction::CopyCommand("systemctl --user start humanitld.socket".to_owned())
+        );
+        // Die Unit des Nutzers verdeckt das Paket: Der Socket allein startete
+        // womöglich keinen Daemon, also richtet `daemon install` es her.
+        assert_eq!(
+            no_daemon_fix(UnitsOnDisk {
+                package_socket: true,
+                user_service: true,
+            }),
+            FixAction::InstallService
+        );
+    }
+
+    /// `probe` sieht die Dateien dort, wo `daemon install` und das Paket sie
+    /// ablegen, und nirgends sonst. Das Paket zählt nur als Paar aus Dienst und
+    /// Socket und nicht aus einem `AppImage` (HUM-165, HUM-189).
+    #[test]
+    fn probe_reads_the_unit_files_of_this_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config");
+        let system = dir.path().join("system");
+        fs::create_dir_all(config.join("systemd/user")).unwrap();
+        fs::create_dir_all(&system).unwrap();
+        let env = |appimage: bool| {
+            let mut pairs = vec![
+                ("XDG_CONFIG_HOME", config.to_str().unwrap().to_owned()),
+                (
+                    "HUMANITL_SYSTEM_UNIT_DIR",
+                    system.to_str().unwrap().to_owned(),
+                ),
+            ];
+            if appimage {
+                pairs.push(("APPIMAGE", "/tmp/Humanitl.AppImage".to_owned()));
+            }
+            Paths::new(Env::from_pairs(pairs))
+        };
+        let none = UnitsOnDisk {
+            package_socket: false,
+            user_service: false,
+        };
+        assert_eq!(UnitsOnDisk::probe(&env(false)), none);
+
+        // Ein Socket allein ist kein brauchbares Paket.
+        fs::write(system.join("humanitld.socket"), "x").unwrap();
+        assert_eq!(UnitsOnDisk::probe(&env(false)), none, "socket alone");
+        fs::remove_file(system.join("humanitld.socket")).unwrap();
+        // Ein Dienst allein auch nicht: Der Vorschlag ist der Socket.
+        fs::write(system.join("humanitld.service"), "x").unwrap();
+        assert_eq!(UnitsOnDisk::probe(&env(false)), none, "service alone");
+
+        fs::write(system.join("humanitld.socket"), "x").unwrap();
+        fs::write(config.join("systemd/user/humanitld.service"), "x").unwrap();
+        assert_eq!(
+            UnitsOnDisk::probe(&env(false)),
+            UnitsOnDisk {
+                package_socket: true,
+                user_service: true
+            },
+            "complete pair"
+        );
+        // Aus einem AppImage zählt das Paket nicht, die eigene Unit schon.
+        assert_eq!(
+            UnitsOnDisk::probe(&env(true)),
+            UnitsOnDisk {
+                package_socket: false,
+                user_service: true
+            },
+            "appimage next to a package"
+        );
+    }
+
+    /// Jeder Fehlerpfad von `read_token_with` trägt den übergebenen Vorschlag:
+    /// Datei fehlt, Datei leer, Symlink an der Stelle (HUM-189).
+    #[test]
+    fn read_token_with_carries_the_given_fix_on_every_error_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let fix = FixAction::CopyCommand("a marker".to_owned());
+
+        let missing = super::read_token_with(&dir.path().join("token"), &fix).unwrap_err();
+        assert_eq!(missing.fix, Some(fix.clone()), "missing file");
+
+        let empty = dir.path().join("empty");
+        write_token(&empty, "   ").unwrap();
+        let blank = super::read_token_with(&empty, &fix).unwrap_err();
+        assert_eq!(blank.fix, Some(fix.clone()), "empty file");
+
+        let real = dir.path().join("elsewhere");
+        write_token(&real, "cafe").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let linked = super::read_token_with(&link, &fix).unwrap_err();
+        assert_eq!(linked.fix, Some(fix.clone()), "symlink");
+
+        // Eine Datei, die sich nicht als Text lesen lässt (`read_to_string`).
+        let binary = dir.path().join("binary");
+        fs::write(&binary, [0xff, 0xfe, 0x00]).unwrap();
+        let unreadable = super::read_token_with(&binary, &fix).unwrap_err();
+        assert_eq!(unreadable.code.as_str(), "DAEMON_001");
+        assert!(unreadable.why.contains("cannot read"), "{}", unreadable.why);
+        assert_eq!(unreadable.fix, Some(fix), "invalid UTF-8");
     }
 
     #[test]
