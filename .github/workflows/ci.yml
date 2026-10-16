@@ -431,11 +431,16 @@ jobs:
           ./scripts/gen-proto.sh
           make flutter-codegen
       - name: Golden tests
-        # Explicit skip while there is no golden. See the script, which also
-        # runs one test process per core: the pixels stay the same, because
-        # every file renders in its own process with alchemist's CI fonts and
-        # no shared state (HUM-237).
+        # `flutter test --tags golden test/goldens`, one test process per
+        # core: the pixels stay the same, because every file renders in its
+        # own process with alchemist's CI fonts and no shared state (HUM-237).
+        # The set of HUM-054 renders every golden in four variants
+        # (dark/light, en/de); `golden_variants_complete` fails when one of
+        # the four images is missing. `make goldens` runs the same script.
         run: ./scripts/ci/goldens-placeholder.sh
+      # A red comparison leaves the master, the test image and the diffs of
+      # each failed golden under app/test/goldens/failures; a Flutter bump in
+      # app/.fvmrc that moves pixels shows up here (HUM-054).
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
