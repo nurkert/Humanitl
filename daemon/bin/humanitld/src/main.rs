@@ -806,7 +806,11 @@ impl Watchers {
             purge: tokio::spawn(purge_daily(
                 recorder.clone(),
                 audit.handle(),
-                AuditRetention::new(config.audit.retention_days, xdg.db_path()),
+                AuditRetention::new(
+                    config.audit.retention_days,
+                    config.audit.max_bytes,
+                    xdg.db_path(),
+                ),
             )),
         }
     }
@@ -864,8 +868,9 @@ async fn report_diagnostics(
 /// nächsten Tag wird es wieder versucht, und der Befund steht schon im Strom.
 ///
 /// Danach kommt die Audit-Kette an die Reihe (`audit.retention_days`,
-/// HUM-157): nach der Aufzeichnung, damit deren `recorder.retention_applied`
-/// schon in der Kette steht, wenn sie geprüft und gekürzt wird. Befunde des
+/// HUM-157, und `audit.max_bytes`, HUM-194): nach der Aufzeichnung, damit
+/// deren `recorder.retention_applied` schon in der Kette steht, wenn sie
+/// geprüft und gekürzt wird. Befunde des
 /// Schreib-Threads (eine Kette, die nicht hält, `AUDIT_001`; Lesen und
 /// Schreiben, `AUDIT_006`) legt er selbst in den Strom; ein Fehler beim Lesen
 /// der Anker steht nur im Protokoll, und am nächsten Tag wird es wieder
@@ -891,12 +896,31 @@ async fn purge_daily(recorder: Recorder, audit: AuditHandle, audit_retention: Au
         let now = SystemTime::now();
         match tokio::task::spawn_blocking(move || retention.run_once(&handle, now)).await {
             Ok(Ok(None)) => tracing::debug!("the audit chain keeps every record"),
-            Ok(Ok(Some(report))) => tracing::info!(
-                through_seq = report.through_seq,
-                records = report.records,
-                bytes = report.bytes,
-                "audit chain pruned"
-            ),
+            Ok(Ok(Some(outcome))) => {
+                if let Some(report) = &outcome.cut {
+                    tracing::info!(
+                        through_seq = report.through_seq,
+                        records = report.records,
+                        bytes = report.bytes,
+                        size = outcome.size,
+                        "audit chain pruned"
+                    );
+                } else {
+                    tracing::debug!(size = outcome.size, "nothing to prune");
+                }
+                // Der neueste Record geht nie (HUM-194); passt er samt Beleg
+                // nicht unter die Grenze, bleibt das Log darüber, mit Schnitt
+                // oder ohne.
+                let max_bytes = audit_retention.max_bytes();
+                if outcome.over(max_bytes) {
+                    tracing::warn!(
+                        size = outcome.size,
+                        max_bytes,
+                        "the audit log stays above audit.max_bytes: its newest record does not \
+                         fit below the cap together with the record of the cut"
+                    );
+                }
+            }
             Ok(Err(diagnostic)) => tracing::warn!(
                 code = diagnostic.code.as_str(),
                 why = %diagnostic.why,

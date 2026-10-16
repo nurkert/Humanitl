@@ -535,7 +535,11 @@ Daemon den Anfang der Kette selbst und dokumentiert den Schnitt mit einem versie
 `audit.pruned` (HUM-157). Die Prüfung erkennt nur einen so dokumentierten Anfang an; einen anderen
 meldet sie weiter als Bruch. Was in den gelöschten Records stand, belegt die Kette danach nicht
 mehr, und eine Kette, die nicht hält, kürzt der Lauf nicht
-([`SECURITY.md`](SECURITY.md) Abschnitt 8, „Aufbewahrung der Kette").
+([`SECURITY.md`](SECURITY.md) Abschnitt 8, „Aufbewahrung der Kette"). Mit `audit.max_bytes` über
+`0` (HUM-194) schneidet derselbe Lauf auch nach Größe; dann bestimmt die Menge der Records, wie
+lange ein Record bleibt, und ein Agent mit vielen Anfragen kann frühere Records schneller aus der
+Datei drängen. Unbemerkt bleibt das nicht: Jeder Schnitt steht als `audit.pruned` in der Kette.
+Die Vorgabe ist `0`.
 
 *Status.* MVP (Kette, Anker in Datei und SQLite, dokumentierte Löschung am Anfang), externes
 Anchoring später.

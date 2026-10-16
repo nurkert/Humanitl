@@ -456,6 +456,9 @@ pub struct AuditConfig {
     /// Tage, die ein Record im Audit-Log aufgehoben wird; 0 heißt für immer. Ein täglicher Lauf löscht die Records am Anfang der Kette, die älter sind, und dokumentiert den Schnitt mit einem Record `audit.pruned` samt Anker; die Prüfung erkennt den so dokumentierten Anfang an, einen Anfang ohne ihn meldet sie weiter als Bruch. Eine Kette, die nicht hält, wird nicht gekürzt. Was in den gelöschten Records stand, beweist die Kette danach nicht mehr; die Anker in `audit_anchors` bleiben stehen.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub retention_days: u32,
+    /// Obergrenze für die Größe des Audit-Logs in Bytes; 0 heißt keine Grenze, sonst 2097152 (2 MiB) bis 1099511627776 (1 TiB). Derselbe Lauf wie bei `audit.retention_days`, beim Start und danach täglich, löscht ganze Records am Anfang der Kette, das Älteste zuerst, bis die Datei samt dem Record `audit.pruned` und seinem Anker unter der Grenze liegt; zwischen zwei Läufen kann sie darüber wachsen. Der neueste Record bleibt immer stehen; ist er länger als 1 MiB, kann das Log mit ihm über der Grenze bleiben, und der Daemon meldet das im Protokoll. Eine Kette, die nicht hält, wird nicht gekürzt. Der Lauf braucht kurz Platz für eine Kopie des Rests neben der Datei; fehlt er, bleibt das Log, wie es war, und der nächste Lauf versucht es erneut.
+    #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
+    pub max_bytes: u64,
     /// Nach wie vielen Records der Daemon das Audit-Log auf die Platte zwingt (fsync). Spätestens nach einer Sekunde und vor jedem Anker geschieht es ohnehin.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub fsync_every: u32,
@@ -466,6 +469,7 @@ impl Default for AuditConfig {
         Self {
             anchor_every: 100,
             retention_days: 0,
+            max_bytes: 0,
             fsync_every: 50,
         }
     }
