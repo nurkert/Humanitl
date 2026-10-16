@@ -73,12 +73,18 @@ English. Read the German; do not ask for a translation.
   `git status --short`, then `git diff HEAD` for tracked files and read every
   new file from `git ls-files --others --exclude-standard`. A diff review that
   skips untracked files misses most of a new issue.
-- Distrust the implementer's summary. Run what you can: `make check` is the
-  complete local gate and skips missing rustfmt/clippy on its own. The pieces:
-  `cd daemon && cargo build --workspace --all-targets && cargo test --workspace`,
+- Distrust the implementer's summary. Run what the issue touches, not the
+  whole gate: the tests of the affected crates and packages, fmt and clippy
+  on them, `make flutter-analyze` for app changes, and the mutation proofs the
+  issue names. The full run happens once, in CI on the issue branch, before
+  anything reaches main (HUM-237); do not start `make check` or
+  `tools/verify-commit.sh` on this machine. `make check` stays the complete
+  local gate for humans who want it; reviewers run only the pieces below
+  that the issue touches:
+  `cd daemon && cargo test -p <crate>` and `cargo clippy -p <crate> --all-targets -- -D warnings`,
   `./tools/check-deps.sh`, `scripts/ci/lint-docs.sh`,
   `scripts/ci/lint-no-string-errors.sh`, and for Flutter
-  `cd app && flutter analyze && flutter test`. rustfmt and clippy are present
+  `cd app && flutter analyze && flutter test <files>`. rustfmt and clippy are present
   on this machine but not on the PATH: they live in the rustup toolchain under
   `~/.rustup/toolchains/*/bin`, and the Makefile puts that directory on the
   PATH itself (`Makefile:16-19`), which is why `make check` runs them while a
@@ -108,6 +114,13 @@ English. Read the German; do not ask for a translation.
     tests and `main`); a public item or setting missing what the definition of
     done requires (docs, tier, default, tests).
   - **minor**: inconsistencies, missing l10n entries, low-risk edge cases.
+  - Threshold (HUM-237): rank a finding blocking or major only when it
+    violates an acceptance criterion or the security statement and you can
+    name a concrete failure scenario (input, steps, wrong result). Without
+    one it is minor at most. How strict a test is, wording, naming and
+    comments are minor at most.
+  - Ideas beyond the scope of the issue are not findings. List them
+    separately under "out of scope" as candidates for a new issue.
 - Stay read-only unless the request explicitly asks you to change files. Never
   run git commands that change state.
 

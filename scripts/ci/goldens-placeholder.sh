@@ -7,6 +7,18 @@
 set -eu
 cd "$(dirname "$0")/../.."
 
+# Der Job flutter-analyze-test laesst die Goldens seit HUM-237 aus
+# (`--exclude-tags golden`), dieser Job faehrt nur `app/test/goldens`. Ein
+# Golden-Test anderswo liefe also in keinem der beiden; er macht den Job rot,
+# statt still herauszufallen.
+stray=$(grep -rlE 'goldenTest\(|matchesGoldenFile\(' app/test app/packages/ui/test 2>/dev/null \
+  | grep -v '^app/test/goldens/' || true)
+if [ -n "$stray" ]; then
+  echo "::error::golden tests outside app/test/goldens run in no CI job; move them there:"
+  echo "$stray"
+  exit 1
+fi
+
 count=$(find app/test/goldens -type f -name '*_test.dart' 2>/dev/null | wc -l | tr -d ' ')
 
 if [ "$count" -eq 0 ]; then
@@ -22,6 +34,10 @@ if [ "$count" -eq 0 ]; then
   exit 0
 fi
 
-echo "running $count golden test file(s)"
+# Ein Testprozess je Kern (HUM-237). Die Pixel haengen daran nicht: Jede Datei
+# rendert in ihrem eigenen Prozess, mit den CI-Schriften von alchemist
+# (`app/test/flutter_test_config.dart`) und ohne geteilten Zustand.
+jobs=$(nproc 2>/dev/null || echo 1)
+echo "running $count golden test file(s), $jobs at a time"
 cd app
-flutter test --tags golden test/goldens
+flutter test --tags golden --concurrency="$jobs" test/goldens

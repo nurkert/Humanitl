@@ -64,12 +64,25 @@ runs:
         cargo clippy --version
 
     - name: Cache cargo registry and target directory
+      # Why a cache at all: without it every job compiles the more than 300
+      # crates of the dependency tree from scratch, and since HUM-237 every
+      # issue runs the pipeline twice, once on its branch and once on main.
+      # rust-cache keeps only the dependencies, not the workspace crates, so a
+      # restored cache cannot hide a change of ours.
+      #
       # Keyed on daemon/Cargo.lock (tracked) plus the toolchain channel, so a
       # version bump does not resurrect stale artefacts.
+      #
+      # Only main writes the cache. Issue branches `hum-*` read main's entries
+      # (GitHub hands a branch the caches of the default branch) but do not
+      # save their own: eleven jobs times one entry per branch would push
+      # main's entries out of the 10 GB the repository gets, and every later
+      # branch would start cold.
       uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
         workspaces: daemon
         key: ${{ steps.pin.outputs.channel }}-${{ inputs.cache-key }}
+        save-if: ${{ github.ref == 'refs/heads/main' }}
 
     - name: Install cargo-deny
       if: inputs.cargo-deny == 'true'
