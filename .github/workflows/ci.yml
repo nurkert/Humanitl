@@ -29,10 +29,18 @@ on:
     branches: [main, "hum-*"]
   pull_request:
 
-# One run per ref. A new push supersedes the one in flight; on an issue branch
+# One run per ref. On an issue branch a new push supersedes the one in flight;
 # that is the amended commit after a red run.
+#
+# Not on main (HUM-238): every commit there is a merge that the release guard
+# may tag, and it needs a green run of its own. Cancelling the run of the first
+# of two quick merges would leave that merge without a verdict forever. Turning
+# off cancel-in-progress alone is not enough: a concurrency group keeps at most
+# one pending run and cancels the older pending one, so a third merge would
+# still cost the second its run. On main the group therefore is the commit
+# itself, and every merge gets its own run.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 
 # Least privilege: nothing here writes to the repository. Jobs that need more
