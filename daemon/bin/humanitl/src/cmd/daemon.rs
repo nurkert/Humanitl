@@ -58,6 +58,7 @@ use crate::cmd::{Context, EXIT_OK, Failure, status_diagnostic, unit};
 use crate::render::{table, tick};
 
 mod image;
+mod manager;
 mod packaged;
 mod running;
 mod uninstall;
@@ -257,8 +258,8 @@ async fn install(ctx: &Context, args: &InstallArgs) -> Result<u8, Failure> {
     // geschrieben worden; also zeigt auch `current` wieder dorthin, wohin es
     // vorher zeigte. Sonst startete die alte Unit die neuen Binaries.
     //
-    let activation = match finished {
-        Ok(activation) => activation,
+    let started = match finished {
+        Ok(started) => started,
         Err(failure) => {
             return Err(take_back(ctx, systemctl.as_deref(), staged.as_ref(), failure).await);
         }
@@ -267,14 +268,14 @@ async fn install(ctx: &Context, args: &InstallArgs) -> Result<u8, Failure> {
     let (restarted, ready) = settle(
         ctx,
         systemctl.as_deref(),
-        activation,
+        &started,
         &written,
         staged.as_ref(),
         &enabled_before,
     )
     .await?;
     result.action = plan.as_str();
-    result.activation = activation;
+    result.activation = started.activation;
     result.binaries = staged.as_ref().map(|staged| staged.dir.as_path());
     result.restarted = restarted;
     result.ready = ready.as_deref();
@@ -344,16 +345,20 @@ async fn take_back(
 async fn settle(
     ctx: &Context,
     systemctl: Option<&Path>,
-    activation: Activation,
+    started: &Started,
     written: &UnitOnDisk<'_>,
     staged: Option<&Staged>,
     enabled_before: &unit::Enablement,
 ) -> Result<(bool, Option<String>), Failure> {
-    let enabled = activation == Activation::Enabled;
+    let enabled = started.activation == Activation::Enabled;
     let restart =
         enabled && (staged.is_some() || matches!(written.plan, unit::Written::Replaced { .. }));
     if restart && let Some(systemctl) = systemctl {
-        restart_service(ctx, systemctl, written, staged, enabled_before).await?;
+        let before = Before {
+            files: enabled_before,
+            manager: &started.manager_before,
+        };
+        restart_service(ctx, systemctl, written, staged, &before).await?;
     }
     let ready = if enabled {
         Some(wait_for_daemon(ctx).await)
@@ -408,7 +413,7 @@ async fn restart_service(
     systemctl: &Path,
     written: &UnitOnDisk<'_>,
     staged: Option<&Staged>,
-    enabled_before: &unit::Enablement,
+    before: &Before<'_>,
 ) -> Result<(), Failure> {
     let call = ["--user", "try-restart", unit::UNIT_NAME];
     // Der zweite Neustart nach der Rücknahme mit `restart`: Nach dem
@@ -434,14 +439,25 @@ async fn restart_service(
         Some(staged) => staged.restore(main_pid(ctx, systemctl).await),
         None => Ok(()),
     };
-    let links_back = enabled_before
+    // Die Verweise zuerst über systemd, das sie dort wegnimmt, wo der
+    // Verwalter sie angelegt hat; danach, was diese Kommandozeile selbst
+    // findet. Beides vor der Unit: `disable` liest ihren `[Install]`-Abschnitt
+    // (HUM-217).
+    let systemd_back = before.manager.undo(ctx, systemctl).await;
+    let links_back = before
+        .files
         .rollback(&unit::unit_dir(&ctx.paths), written.path)
         .map_err(|diagnostic| diagnostic.why);
     let unit_back = unit::rollback(written.path, written.plan).map_err(|diagnostic| diagnostic.why);
-    let failed: Vec<String> = [copy_back.err(), links_back.err(), unit_back.err()]
-        .into_iter()
-        .flatten()
-        .collect();
+    let failed: Vec<String> = [
+        copy_back.err(),
+        systemd_back.err(),
+        links_back.err(),
+        unit_back.err(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     let reload = systemctl_run(ctx, systemctl, &["--user", "daemon-reload"]).await;
     let undone = if !failed.is_empty() {
         format!(
@@ -607,15 +623,55 @@ async fn start(
     systemctl: Option<&Path>,
     names: &[&str],
     written: &UnitOnDisk<'_>,
-) -> Result<Activation, Failure> {
+) -> Result<Started, Failure> {
+    let unaided = |activation| Started {
+        activation,
+        manager_before: manager::ManagerEnablement::default(),
+    };
+    let own_unit = written.path.starts_with(unit::unit_dir(&ctx.paths));
     match (args.no_start, systemctl) {
-        (true, _) => Ok(Activation::Skipped),
-        (false, None) => Ok(Activation::NoSystemctl),
+        // Auch ohne Aktivierung darf eine eigene Unit nicht dort liegen, wo
+        // systemd nicht sucht: Sonst meldete der Lauf Erfolg für eine Unit,
+        // die nie geladen wird (HUM-217). Gefragt wird nur nach den
+        // Suchpfaden; systemd liest nichts neu.
+        (true, Some(systemctl)) if own_unit => {
+            if let Err(elsewhere) = manager::check_searched(ctx, systemctl, written.path).await {
+                let undone = unit_taken_back(ctx, None, written).await;
+                let finding = manager::not_loaded(written.path, &elsewhere, &undone);
+                return Err(Failure::new(finding));
+            }
+            Ok(unaided(Activation::Skipped))
+        }
+        (true, _) => Ok(unaided(Activation::Skipped)),
+        (false, None) => Ok(unaided(Activation::NoSystemctl)),
         (false, Some(systemctl)) => {
-            activate(ctx, systemctl, names, written, names).await?;
-            Ok(Activation::Enabled)
+            let manager_before = manager::ManagerEnablement::read(ctx, systemctl, names).await;
+            activate(ctx, systemctl, names, written, names, &manager_before).await?;
+            Ok(Started {
+                activation: Activation::Enabled,
+                manager_before,
+            })
         }
     }
+}
+
+/// Was [`start`] hinterlässt: wie weit es kam, und was systemd vor `enable`
+/// über die Aktivierung sagte, für die Rücknahme nach einem gescheiterten
+/// Neustart ([`restart_service`], HUM-217).
+struct Started {
+    /// Was aus der Aktivierung wurde.
+    activation: Activation,
+    /// Was `is-enabled` vor `enable` sagte; leer ohne Aktivierung.
+    manager_before: manager::ManagerEnablement,
+}
+
+/// Der Stand der Aktivierung vor diesem Lauf, aus beiden Quellen: den
+/// Verweisen im eigenen Unit-Verzeichnis und dem, was systemd sagte.
+struct Before<'a> {
+    /// Die Verweise im Unit-Verzeichnis dieser Kommandozeile.
+    files: &'a unit::Enablement,
+    /// Was systemd vor `enable` sagte (HUM-217).
+    manager: &'a manager::ManagerEnablement,
 }
 
 /// `DAEMON_010`, wenn systemd gleich gebraucht wird und es keine
@@ -1116,9 +1172,16 @@ fn no_bus(why: &str) -> bool {
 ///
 /// `names` sind die Units, die `enable --now` bekommt: der Dienst, beim Paket
 /// nur der Socket (HUM-164). Die Verweise der Aktivierung legt
-/// `systemctl --user enable` immer im Unit-Verzeichnis des Nutzers an
-/// ([`unit::unit_dir`]), auch für eine Unit des Pakets; dort sieht die
-/// Rücknahme nach.
+/// `systemctl --user enable` im Unit-Verzeichnis des Verwalters an, auch für
+/// eine Unit des Pakets, und das ist nicht immer [`unit::unit_dir`] dieser
+/// Kommandozeile. Deshalb nimmt zuerst systemd selbst zurück
+/// ([`manager::ManagerEnablement`]), danach die Suche im eigenen Verzeichnis
+/// (HUM-217). `manager_before` fragt der Aufrufer vor diesem Aufruf, damit er
+/// denselben Stand für die Rücknahme nach einem gescheiterten Neustart behält.
+///
+/// Eine eigene Unit unter [`unit::unit_dir`] muss systemd nach
+/// `daemon-reload` genau aus dieser Datei laden ([`manager::check_loaded_from`]);
+/// sonst geht sie zurück, bevor `enable` einen Verweis anlegt (HUM-217).
 ///
 /// `stop` sind die Units, die nach einem gescheiterten `enable --now`
 /// angehalten werden. Im Regelfall dieselben wie `names`; auf dem Weg des
@@ -1130,6 +1193,7 @@ async fn activate(
     names: &[&str],
     written: &UnitOnDisk<'_>,
     stop: &[&str],
+    manager_before: &manager::ManagerEnablement,
 ) -> Result<(), Failure> {
     let UnitOnDisk { path, plan } = *written;
     let dir = unit::unit_dir(&ctx.paths);
@@ -1137,6 +1201,7 @@ async fn activate(
     let mut enable = vec!["--user", "enable", "--now"];
     enable.extend_from_slice(names);
     for step in [vec!["--user", "daemon-reload"], enable] {
+        let enabling = step.contains(&"enable");
         if let Err(why) = systemctl_run(ctx, systemctl, &step).await {
             // Zuerst den Dienst anhalten, aber nur, wenn dieser Lauf ihn
             // gestartet haben kann.
@@ -1156,7 +1221,7 @@ async fn activate(
             // Beide Aufrufe ohne Prüfung des Ergebnisses: Sie räumen auf, und
             // ein Fehler dabei ändert nichts an dem Befund, der gleich
             // zurückgeht.
-            if step.contains(&"enable") && !stop.is_empty() {
+            if enabling && !stop.is_empty() {
                 for verb in ["stop", "reset-failed"] {
                     let mut call = vec!["--user", verb];
                     call.extend_from_slice(stop);
@@ -1165,7 +1230,16 @@ async fn activate(
             }
             // Reihenfolge: erst die Verweise, dann die Unit. Andersherum stünde
             // zwischendurch ein Verweis auf eine Datei, die es nicht mehr gibt.
-            let disabled = before.rollback(&dir, path);
+            // Zuerst über systemd, das seine Verweise dort wegnimmt, wo der
+            // Verwalter sie angelegt hat; danach, was diese Kommandozeile
+            // selbst findet (HUM-217).
+            let mut left: Vec<String> = Vec::new();
+            if enabling && let Err(why) = manager_before.undo(ctx, systemctl).await {
+                left.push(why);
+            }
+            if let Err(diagnostic) = before.rollback(&dir, path) {
+                left.push(diagnostic.why);
+            }
             let taken_back = unit::rollback(path, plan);
             // Der zweite `daemon-reload` gehört zur Rücknahme: Nach dem ersten
             // kennt systemd die Unit, und eine, die es kennt und die nicht
@@ -1177,11 +1251,60 @@ async fn activate(
                 &why,
                 plan,
                 &taken_back,
-                &disabled,
+                &left,
             )));
+        }
+        // Nur eine eigene Unit unter dem Unit-Verzeichnis dieser Kommandozeile
+        // muss genau aus dieser Datei geladen werden; die Unit des Pakets lädt
+        // systemd aus seinen eigenen Verzeichnissen (HUM-211). Geprüft wird
+        // vor `enable`, damit kein Verweis entsteht, der auf eine Unit zeigt,
+        // die systemd nicht lädt (HUM-217).
+        if !enabling
+            && path.starts_with(&dir)
+            && let Err(elsewhere) = manager::check_loaded_from(ctx, systemctl, path).await
+        {
+            let undone = unit_taken_back(ctx, Some(systemctl), written).await;
+            return Err(Failure::new(manager::not_loaded(path, &elsewhere, &undone)));
+        }
+        // Ohne den Stand von `is-enabled` ließe sich nach einem gescheiterten
+        // Start nicht über systemd zurücknehmen, was `enable` anlegt; unter
+        // dem Verzeichnis des Verwalters bliebe womöglich ein Verweis liegen.
+        // Dann wird nicht aktiviert (HUM-217, Review). Erst nach
+        // `daemon-reload` geprüft: Ohne Bus scheitert schon das, und der
+        // Befund sagt es genauer (`DAEMON_010`).
+        let unanswered = manager_before.unanswered();
+        if !enabling && !unanswered.is_empty() {
+            let undone = unit_taken_back(ctx, Some(systemctl), written).await;
+            return Err(Failure::new(manager::not_asked(&unanswered, &undone)));
         }
     }
     Ok(())
+}
+
+/// Nimmt die Unit zurück, bevor `enable` etwas angelegt hat: wenn systemd sie
+/// nicht aus dem Verzeichnis dieser Kommandozeile lädt
+/// ([`manager::not_loaded`]) oder nicht sagt, wie sie aktiviert ist
+/// ([`manager::not_asked`]). Liefert den Satz, was zurückging.
+///
+/// Aktiviert ist an dieser Stelle noch nichts; zurück geht nur die Datei. Hat
+/// dieser Lauf systemd neu laden lassen (`reload` mit dem `systemctl`), gleicht
+/// ein zweites `daemon-reload` dessen Bild wieder an; unter `--no-start` hat
+/// systemd nichts gelesen, und es bleibt dabei.
+async fn unit_taken_back(ctx: &Context, reload: Option<&Path>, written: &UnitOnDisk<'_>) -> String {
+    let UnitOnDisk { path, plan } = *written;
+    let undone = match (plan, unit::rollback(path, plan)) {
+        (unit::Written::Unchanged, _) => "nothing had been written".to_owned(),
+        (_, Ok(())) => format!("{} is back the way it was", path.display()),
+        (_, Err(diagnostic)) => format!(
+            "taking {} back again failed as well: {}",
+            path.display(),
+            diagnostic.why
+        ),
+    };
+    if let Some(systemctl) = reload {
+        let _ = systemctl_run(ctx, systemctl, &["--user", "daemon-reload"]).await;
+    }
+    undone
 }
 
 /// Ein `systemctl`-Aufruf mit Frist und ohne die Umgebung des Nutzers.
@@ -1191,13 +1314,13 @@ async fn systemctl_run(ctx: &Context, systemctl: &Path, args: &[&str]) -> Result
     systemctl_capture(ctx, systemctl, args).await.map(drop)
 }
 
-/// Wie [`systemctl_run`], liefert bei Exit 0 aber `stdout` als Text, für
-/// `systemctl --user show` (HUM-211).
-async fn systemctl_capture(
+/// Ruft `systemctl` mit Frist und ohne die Umgebung des Nutzers; die ganze
+/// Ausgabe, oder ein Satz, warum es keine gibt.
+async fn systemctl_output(
     ctx: &Context,
     systemctl: &Path,
     args: &[&str],
-) -> Result<String, String> {
+) -> Result<std::process::Output, String> {
     let mut command = tokio::process::Command::new(systemctl);
     command.args(args).env_clear().kill_on_drop(true);
     for key in SESSION_ENV_KEYS {
@@ -1212,10 +1335,33 @@ async fn systemctl_capture(
             SYSTEMCTL_TIMEOUT.as_millis()
         )),
         Ok(Err(error)) => Err(error.to_string()),
-        Ok(Ok(output)) if output.status.success() => {
+        Ok(Ok(output)) => Ok(output),
+    }
+}
+
+/// `stdout` eines `systemctl`-Aufrufs, gleich mit welchem Exit; leer, wenn er
+/// nicht lief. Für `is-enabled`, das einen nicht aktivierten Stand mit Exit 1
+/// und dem Wort auf `stdout` meldet (HUM-217).
+async fn systemctl_stdout(ctx: &Context, systemctl: &Path, args: &[&str]) -> String {
+    systemctl_output(ctx, systemctl, args)
+        .await
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        .unwrap_or_default()
+}
+
+/// Wie [`systemctl_run`], liefert bei Exit 0 aber `stdout` als Text, für
+/// `systemctl --user show` (HUM-211).
+async fn systemctl_capture(
+    ctx: &Context,
+    systemctl: &Path,
+    args: &[&str],
+) -> Result<String, String> {
+    match systemctl_output(ctx, systemctl, args).await {
+        Err(why) => Err(why),
+        Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         }
-        Ok(Ok(output)) => {
+        Ok(output) => {
             let text = String::from_utf8_lossy(&output.stderr);
             let first = text
                 .lines()
@@ -1240,7 +1386,7 @@ fn not_taken(
     why: &str,
     plan: &unit::Written,
     taken_back: &Result<(), Diagnostic>,
-    disabled: &Result<(), Diagnostic>,
+    left: &[String],
 ) -> Diagnostic {
     let undone = match (plan, taken_back) {
         (unit::Written::Unchanged, _) => "nothing had been written".to_owned(),
@@ -1253,11 +1399,9 @@ fn not_taken(
     };
     // Eine gelungene Rücknahme der Aktivierung steht nicht im Text: Sie ist der
     // Normalfall und sagt einem Menschen nichts, was er tun müsste. Eine
-    // misslungene steht darin, weil dann etwas liegen bleibt.
-    let enablement = match disabled {
-        Ok(()) => String::new(),
-        Err(diagnostic) => format!("; {}", diagnostic.why),
-    };
+    // misslungene steht darin, weil dann etwas liegen bleibt; über systemd
+    // und über die Dateien je ein Satz (HUM-217).
+    let enablement: String = left.iter().flat_map(|why| ["; ", why.as_str()]).collect();
     if no_bus(why) {
         return no_user_session(&format!(
             "systemctl {} found no user session bus ({why}); {undone}{enablement}",

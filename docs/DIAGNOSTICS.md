@@ -97,9 +97,9 @@ humanitld liegt nicht neben humanitl
 
 systemd hat die Unit nicht übernommen
 
-**Auslöser.** `systemctl --user` hat die geschriebene Unit nicht übernommen oder nicht gestartet.
+**Auslöser.** `systemctl --user` hat die geschriebene Unit nicht übernommen oder nicht gestartet, oder die Unit wird aus einem anderen Verzeichnis geladen als dem, in das `humanitl` sie geschrieben hat.
 
-**Fix.** `CopyCommand` mit `systemctl --user status humanitld`, dem Aufruf, der sagt, was systemd stört.
+**Fix.** `CopyCommand` mit `systemctl --user status humanitld`, dem Aufruf, der sagt, was systemd stört; wird die Unit aus einem anderen Verzeichnis geladen, `systemctl --user show -p UnitPath`.
 
 #### DAEMON_009
 
