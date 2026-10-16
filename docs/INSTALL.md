@@ -154,6 +154,17 @@ Socket selbst. Die Datei trägt in der ersten Zeile die Marke von `daemon instal
 Datei mit dieser Marke ersetzt der Befehl je (`DAEMON_005`). Entfernen:
 `humanitl-<version>-linux-x86_64/bin/humanitl daemon uninstall`, dann das Verzeichnis.
 
+## Daemon nicht erreichbar
+
+Findet die Kommandozeile keinen Daemon, nennt `DAEMON_001` einen Befehl, der den Dienst auf Dauer
+einrichtet oder startet: `humanitl daemon install`, wenn noch keine Unit da ist,
+`systemctl --user start humanitld.service` bei der Unit aus `daemon install` und
+`systemctl --user start humanitld.socket` beim Paket. Liegen Paket und Unit aus `daemon install`
+zugleich da, nennt er wieder `humanitl daemon install`.
+
+Zur Fehlersuche läuft `humanitld` auch im Vordergrund eines Terminals. Es schreibt dann seine
+Meldungen dorthin und endet mit dem Terminal; ein Vorschlag für den Alltag ist das nicht.
+
 ## Einrichtung in der Anwendung
 
 Die erste Zeile der Einrichtung fragt, ob der Daemon antwortet. Antwortet keiner, bietet sie
