@@ -451,9 +451,119 @@ fn a_missing_daemon_is_daemon_001_on_stderr_and_exit_two() {
     assert_eq!(code(&output), 2, "stderr was {text}");
     assert!(text.starts_with("blocking[DAEMON_001]: "), "{text}");
     assert!(text.contains("\n  why: "), "{text}");
-    assert!(text.contains("\n  fix: humanitld\n"), "{text}");
+    // Ohne eingerichtete Unit richtet der Vorschlag den Dienst auf Dauer ein,
+    // statt `humanitld` im Vordergrund eines offenen Terminals anzubieten
+    // (HUM-189).
+    assert!(
+        text.contains("\n  fix: humanitl daemon install\n"),
+        "{text}"
+    );
+    assert!(!text.contains("fix: humanitld"), "{text}");
     assert!(text.contains("\n  docs: https://"), "{text}");
     assert!(stdout(&output).is_empty(), "stdout must stay clean");
+}
+
+/// Liegt die Unit aus `daemon install` schon da, ist sie nur nicht gestartet:
+/// Der Vorschlag startet sie, statt sie noch einmal einzurichten (HUM-189).
+#[test]
+fn a_missing_daemon_with_an_installed_unit_proposes_starting_it() {
+    let harness = Harness::new();
+    let units = harness.path("config/systemd/user");
+    std::fs::create_dir_all(&units).expect("the unit directory");
+    std::fs::write(units.join("humanitld.service"), "[Service]\n").expect("a unit");
+    let output = harness.run(["daemon", "status"]);
+    let text = stderr(&output);
+
+    assert_eq!(code(&output), 2, "stderr was {text}");
+    assert!(
+        text.contains("\n  fix: systemctl --user start humanitld.service\n"),
+        "{text}"
+    );
+}
+
+/// Beim Paket liegen `humanitld.service` und `humanitld.socket` unter den Units
+/// des Systems; der Socket startet den Dienst bei der nächsten Verbindung
+/// (HUM-189).
+#[test]
+fn a_missing_daemon_with_the_package_proposes_starting_its_socket() {
+    let harness = Harness::new();
+    for unit in ["humanitld.service", "humanitld.socket"] {
+        std::fs::write(harness.path("system-units").join(unit), "[Unit]\n").expect("a unit");
+    }
+    let output = harness.run(["--json", "daemon", "status"]);
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("one JSON value");
+
+    assert_eq!(value["code"], "DAEMON_001", "{value}");
+    assert_eq!(
+        value["fix"]["command"], "systemctl --user start humanitld.socket",
+        "{value}"
+    );
+}
+
+/// Paket und Unit des Nutzers zugleich: Die Unit des Nutzers verdeckt die des
+/// Pakets, und ihr Binary kann fehlen. Der Vorschlag ist dann `daemon install`,
+/// der die alte Unit beiseitelegt (HUM-167), nicht ein Start des Sockets.
+#[test]
+fn a_missing_daemon_with_package_and_user_unit_proposes_daemon_install() {
+    let harness = Harness::new();
+    for unit in ["humanitld.service", "humanitld.socket"] {
+        std::fs::write(harness.path("system-units").join(unit), "[Unit]\n").expect("a unit");
+    }
+    let units = harness.path("config/systemd/user");
+    std::fs::create_dir_all(&units).expect("the unit directory");
+    std::fs::write(units.join("humanitld.service"), "[Service]\n").expect("a user unit");
+    let output = harness.run(["--json", "daemon", "status"]);
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("one JSON value");
+
+    assert_eq!(
+        value["fix"]["command"], "humanitl daemon install",
+        "{value}"
+    );
+}
+
+/// Ein Socket allein ist kein Paket: Ihn zu starten startet keinen Daemon.
+#[test]
+fn a_lone_package_socket_does_not_count_as_a_package() {
+    let harness = Harness::new();
+    std::fs::write(
+        harness.path("system-units").join("humanitld.socket"),
+        "[Socket]\n",
+    )
+    .expect("a socket unit");
+    let output = harness.run(["--json", "daemon", "status"]);
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("one JSON value");
+
+    assert_eq!(
+        value["fix"]["command"], "humanitl daemon install",
+        "{value}"
+    );
+}
+
+/// Aus einem `AppImage` gilt das Paket daneben nicht, wie bei `daemon install`
+/// (HUM-165): Der Vorschlag startet nicht dessen Daemon mit einem anderen
+/// Vertrag, sondern richtet den des `AppImage`s ein.
+#[test]
+fn a_missing_daemon_from_an_appimage_ignores_the_package_next_to_it() {
+    let harness = Harness::new();
+    for unit in ["humanitld.service", "humanitld.socket"] {
+        std::fs::write(harness.path("system-units").join(unit), "[Unit]\n").expect("a unit");
+    }
+    let output = harness
+        .command()
+        .env("APPIMAGE", harness.path("Humanitl.AppImage"))
+        .args(["--json", "daemon", "status"])
+        .output()
+        .expect("the binary runs");
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("one JSON value");
+
+    assert_eq!(
+        value["fix"]["command"], "humanitl daemon install",
+        "{value}"
+    );
 }
 
 #[test]
