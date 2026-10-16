@@ -1,5 +1,6 @@
-//! `humanitl llm discover|test`: die Suche nach LLM-Servern im eigenen Netz
-//! (HUM-076) und die Probe eines einzelnen Endpunkts (HUM-114).
+//! `humanitl llm discover|test|key`: die Suche nach LLM-Servern im eigenen
+//! Netz (HUM-076), die Probe eines einzelnen Endpunkts (HUM-114) und der
+//! Zugangsschlüssel des Endpunkts (HUM-140).
 //!
 //! Ein gRPC-Aufruf und sonst nichts (ADR-018): Gesucht wird im Daemon, im
 //! Host-Netz; hier wird angekündigt, gezählt und geschrieben. Die Ankündigung
@@ -14,7 +15,7 @@
 use humanitl_ipc::v1;
 use serde_json::{Value, json};
 
-use crate::cli::LlmCmd;
+use crate::cli::{KeyCmd, LlmCmd};
 use crate::cmd::{Context, EXIT_OK, Failure, status_diagnostic};
 use crate::render::table;
 
@@ -43,8 +44,177 @@ const MODEL_NAME_CHARS: usize = 40;
 pub async fn run(ctx: &Context, cmd: &LlmCmd) -> Result<u8, Failure> {
     match cmd {
         LlmCmd::Discover { subnet, port } => discover(ctx, subnet.as_deref(), port).await,
-        LlmCmd::Test { url, timeout_ms } => test(ctx, url, timeout_ms.unwrap_or_default()).await,
+        LlmCmd::Test {
+            url,
+            timeout_ms,
+            with_key,
+        } => test(ctx, url, timeout_ms.unwrap_or_default(), *with_key).await,
+        LlmCmd::Key { cmd } => key(ctx, cmd).await,
     }
+}
+
+/// Die größte Eingabe, die `llm key set` liest. Ein Schlüssel hat höchstens
+/// [`humanitl_config::secret::MAX_KEY_BYTES`]; was darüber geht, lehnt der
+/// Daemon ab, und mehr muss nicht im Speicher stehen.
+const MAX_KEY_INPUT: u64 = 8 * 1024;
+
+/// `llm key status|set|remove` (HUM-140).
+///
+/// Der Schlüssel kommt nur über `stdin` herein, nie über die Kommandozeile:
+/// `argv` steht in `/proc/<pid>/cmdline` für jeden Prozess desselben Nutzers
+/// und in der Historie der Shell. An einem Terminal ist die Eingabe verdeckt.
+/// Keine Antwort des Daemons trägt den Schlüssel, also auch keine Ausgabe
+/// dieses Befehls.
+async fn key(ctx: &Context, cmd: &KeyCmd) -> Result<u8, Failure> {
+    let op = match cmd {
+        KeyCmd::Status => v1::llm_key_request::Op::Status(v1::llm_key_request::Status {}),
+        KeyCmd::Set => {
+            let Some(key) = read_key_interruptible().await.map_err(Failure::new)? else {
+                // `Ctrl+C` an der verdeckten Eingabe: Das Terminal ist schon
+                // zurückgegeben, gesendet wird nichts.
+                return Ok(EXIT_INTERRUPTED);
+            };
+            v1::llm_key_request::Op::Set(v1::llm_key_request::Set { key })
+        }
+        KeyCmd::Remove => v1::llm_key_request::Op::Remove(v1::llm_key_request::Remove {}),
+    };
+    let mut client = ctx.connect().await?;
+    let status = client
+        .llm_key(v1::LlmKeyRequest { op: Some(op) })
+        .await
+        .map_err(|status| Failure::new(status_diagnostic(&status, "LlmKey")))?
+        .into_inner();
+
+    let store = store_name(status.store);
+    if ctx.render.is_json() {
+        ctx.render.value(&json!({
+            "set": status.set,
+            "store": store,
+            "key_ref": status.key_ref,
+            "diagnostics": status
+                .diagnostics
+                .iter()
+                .filter_map(crate::cmd::from_proto)
+                .map(|diagnostic| crate::render::diagnostic_json(&diagnostic))
+                .collect::<Vec<Value>>(),
+        }));
+        return Ok(EXIT_OK);
+    }
+    if status.set {
+        ctx.render
+            .line(&format!("access key: set ({}, {store})", status.key_ref));
+    } else {
+        ctx.render.line("access key: not set");
+    }
+    for wire in &status.diagnostics {
+        if let Some(diagnostic) = crate::cmd::from_proto(wire) {
+            ctx.render
+                .note(crate::render::diagnostic_block(&diagnostic).trim_end());
+        }
+    }
+    Ok(EXIT_OK)
+}
+
+/// Der Ort eines Schlüssels in einem Wort.
+fn store_name(store: i32) -> &'static str {
+    match v1::LlmKeyStore::try_from(store) {
+        Ok(v1::LlmKeyStore::SecretService) => "secret-service",
+        Ok(v1::LlmKeyStore::File) => "file",
+        _ => "none",
+    }
+}
+
+/// Der Exit-Code nach `Ctrl+C`: `128 + SIGINT`, wie `humanitl run`.
+const EXIT_INTERRUPTED: u8 = 130;
+
+/// [`read_key`] auf einem eigenen Faden, abbrechbar mit `Ctrl+C`.
+///
+/// Solange die Eingabe verdeckt ist, ist das Echo des Terminals aus. Ein
+/// `SIGINT` beendete den Prozess sonst, bevor `NoEcho` das Terminal
+/// zurückgibt, und die Shell des Menschen bliebe ohne Echo (Review zu
+/// HUM-140). Deshalb fängt dieser Befehl das Signal selbst, gibt das Terminal
+/// zurück und endet mit 130. Der Faden ist kein Faden des Laufzeit-Pools:
+/// Der Pool wartete beim Beenden auf ein `read_line`, das nie zurückkommt.
+///
+/// `None` heißt: abgebrochen.
+///
+/// # Errors
+///
+/// Wie [`read_key`].
+async fn read_key_interruptible() -> Result<Option<String>, humanitl_core::Diagnostic> {
+    // **Erst der Empfänger, dann die verdeckte Eingabe.** Ein Strom, der vor
+    // dem Faden steht, puffert ein `SIGINT`, das eintrifft, bevor `select!`
+    // zum ersten Mal wartet; `tokio::signal::ctrl_c()` meldete sich erst
+    // beim ersten Warten an, und in dieser Lücke beendete der Kernel den
+    // Prozess mit abgeschaltetem Echo.
+    let mut interrupt =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).ok();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let _ignored = tx.send(read_key());
+    });
+    let wait_interrupt = async {
+        match interrupt.as_mut() {
+            Some(stream) => {
+                stream.recv().await;
+            }
+            // Ohne Handler gilt das Standardverhalten des Signals, wie ohne
+            // diesen Befehl; der Zweig wartet dann für immer.
+            None => std::future::pending::<()>().await,
+        }
+    };
+    tokio::select! {
+        read = rx => match read {
+            Ok(result) => result.map(Some),
+            Err(_gone) => Ok(None),
+        },
+        () = wait_interrupt => {
+            crate::tty::restore_now();
+            eprintln!();
+            Ok(None)
+        }
+    }
+}
+
+/// Liest den Schlüssel von `stdin`: an einem Terminal eine Zeile ohne Echo,
+/// aus einer Pipe alles bis zum Ende, ohne den Zeilenumbruch am Schluss.
+///
+/// # Errors
+///
+/// `CONFIG_020`, wenn sich `stdin` nicht lesen lässt.
+fn read_key() -> Result<String, humanitl_core::Diagnostic> {
+    use std::io::Read as _;
+
+    let refused = |why: String| {
+        humanitl_core::Diagnostic::builder(
+            humanitl_core::diagnostics::codes::CONFIG_020,
+            humanitl_core::Severity::Error,
+        )
+        .why(format!("the access key was not stored: {why}"))
+        .fix(humanitl_core::FixAction::CopyCommand(
+            "printf '%s' \"$KEY\" | humanitl llm key set".to_owned(),
+        ))
+        .build()
+    };
+    let hidden = crate::tty::NoEcho::enter();
+    if hidden.is_some() {
+        eprint!("access key (input hidden): ");
+    }
+    let mut text = String::new();
+    let read = if hidden.is_some() {
+        std::io::stdin().read_line(&mut text).map(|_| ())
+    } else {
+        std::io::stdin()
+            .take(MAX_KEY_INPUT)
+            .read_to_string(&mut text)
+            .map(|_| ())
+    };
+    if hidden.is_some() {
+        eprintln!();
+    }
+    drop(hidden);
+    read.map_err(|error| refused(format!("stdin could not be read ({error})")))?;
+    Ok(text.trim_end_matches(['\n', '\r']).to_owned())
 }
 
 /// `llm test URL [--timeout-ms N]`.
@@ -53,7 +223,7 @@ pub async fn run(ctx: &Context, cmd: &LlmCmd) -> Result<u8, Failure> {
 /// und der Exit-Code. Ein Endpunkt, der nicht antwortet, ist ein Befund des
 /// Dienstes (`LLM_001`) und keine eigene Erklärung: Was gemessen wurde, weiß
 /// die Stelle, die gemessen hat.
-async fn test(ctx: &Context, url: &str, timeout_ms: u32) -> Result<u8, Failure> {
+async fn test(ctx: &Context, url: &str, timeout_ms: u32, with_key: bool) -> Result<u8, Failure> {
     let mut client = ctx.connect().await?;
     announce_probe(url);
 
@@ -61,6 +231,8 @@ async fn test(ctx: &Context, url: &str, timeout_ms: u32) -> Result<u8, Failure> 
         .probe_llm(v1::ProbeLlmRequest {
             endpoint: url.to_owned(),
             timeout_ms,
+            use_stored_key: with_key,
+            ..v1::ProbeLlmRequest::default()
         })
         .await
         .map_err(|status| Failure::new(status_diagnostic(&status, "ProbeLlm")))?
@@ -73,6 +245,7 @@ async fn test(ctx: &Context, url: &str, timeout_ms: u32) -> Result<u8, Failure> 
             "models": response.models,
             "latency_ms": response.latency_ms,
             "endpoint_is_private": response.endpoint_is_private,
+            "key_sent": response.key_sent,
             "diagnostics": response
                 .diagnostics
                 .iter()

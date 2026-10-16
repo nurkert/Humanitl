@@ -105,8 +105,8 @@ pub mod summary;
 pub mod worktree;
 
 pub use crate::agent::{
-    AdapterRegistry, AgentAdapter, AgentContext, Mount, OpenCodeAdapter, Reach, SandboxFile,
-    SandboxLookup, SandboxView, files_inside_work, find_in_path,
+    AdapterRegistry, AgentAdapter, AgentContext, AgentKey, Mount, OpenCodeAdapter, Reach,
+    SandboxFile, SandboxLookup, SandboxView, files_inside_work, find_in_path,
 };
 pub use crate::agent_exit::{FirstOutput, did_not_start};
 pub use crate::bridge_env::{

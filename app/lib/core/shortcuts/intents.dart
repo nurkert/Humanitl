@@ -25,12 +25,21 @@ class PaletteIntent extends Intent {
   const PaletteIntent();
 }
 
-/// The bindings of HUM-019: one `Ctrl+<digit>` per section, and `Ctrl+K`.
+/// Open the settings. `Ctrl+,` (HUM-069).
+class SettingsIntent extends Intent {
+  /// Creates the intent.
+  const SettingsIntent();
+}
+
+/// The bindings of HUM-019: one `Ctrl+<digit>` per section, `Ctrl+K`, and
+/// `Ctrl+,` for the settings (HUM-069).
 Map<ShortcutActivator, Intent> shellShortcuts() => <ShortcutActivator, Intent>{
   for (int i = 0; i < navigationKeys.length; i++)
     SingleActivator(navigationKeys[i], control: true): NavIntent(i),
   const SingleActivator(LogicalKeyboardKey.keyK, control: true):
       const PaletteIntent(),
+  const SingleActivator(LogicalKeyboardKey.comma, control: true):
+      const SettingsIntent(),
 };
 
 /// The digit keys of the navigation shortcuts, in section order.

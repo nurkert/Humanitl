@@ -144,6 +144,11 @@ pub fn config_snapshot_to_proto(
             .iter()
             .map(diagnostic_to_proto)
             .collect(),
+        // Dieselben Werte noch einmal als JSON, für die Oberfläche, die keinen
+        // TOML-Leser hat (HUM-069). `serde_json` scheitert an diesem Typ nicht;
+        // täte es das, bliebe das Feld leer, und `toml` trüge die Werte.
+        values_json: serde_json::to_string(&resolved.config).unwrap_or_default(),
+        config_path: String::new(),
     })
 }
 
@@ -338,6 +343,7 @@ pub fn probe_result_to_proto(result: &ProbeResult) -> v1::ProbeLlmResponse {
         latency_ms: result.latency_ms,
         diagnostics,
         endpoint_is_private: result.endpoint_is_private,
+        key_sent: result.key_sent,
     }
 }
 

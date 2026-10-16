@@ -51,9 +51,13 @@ abstract final class ProtoVersion {
   /// Minor 15, the time of the audit head (HUM-162), has no reader here yet.
   /// Raised to 16 with the hard block in the row: `FlowSummary.send_refusal`
   /// carries `HOLD_004` while a held request may leave only edited, and the
-  /// release valve reads it after a resync (HUM-159).
+  /// release valve reads it after a resync (HUM-159). Raised to 17 with the
+  /// settings form: `GetConfig` answers with `ConfigSnapshot.values_json` and
+  /// `config_path`, the probe sends `api_key` or `use_stored_key` and reads
+  /// `key_sent`, and `LlmKey` stores, reports and removes the access key
+  /// (HUM-069, HUM-140).
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 16;
+  static const int minor = 17;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

@@ -168,8 +168,12 @@ abstract class DaemonClient {
 
   /// `ProbeLlm`: asks exactly the endpoint the caller names (HUM-039).
   ///
-  /// Two GET requests on two fixed paths, no redirect, no credentials,
-  /// nothing through the sandbox. **This is the one call of the application
+  /// Two GET requests on two fixed paths, no redirect, nothing through the
+  /// sandbox. Credentials go along only when asked for (HUM-140): [apiKey] is
+  /// a key somebody has just typed, sent to this endpoint once and stored
+  /// nowhere; [useStoredKey] asks the daemon to send the stored key, which it
+  /// does only when [endpoint] has the origin of `llm.endpoint`.
+  /// [LlmProbe.keySent] says whether a key went. **This is the one call of the application
   /// that reaches a machine on the network, and it runs only on an explicit
   /// gesture** -- never while somebody types, because the name would go into
   /// DNS before anybody decided on it (HUM-044).
@@ -177,7 +181,12 @@ abstract class DaemonClient {
   /// An endpoint the daemon refuses (`LLM_007`) or one outside a private
   /// network (`LLM_006`) arrives as a finding, in the answer or as a
   /// [DaemonException]; neither is invented here.
-  Future<LlmProbe> probeLlm(String endpoint, {Duration? timeout});
+  Future<LlmProbe> probeLlm(
+    String endpoint, {
+    Duration? timeout,
+    String? apiKey,
+    bool useStoredKey = false,
+  });
 
   /// `DiscoverLlm`: searches the local network for LLM servers (HUM-076).
   ///
@@ -197,19 +206,38 @@ abstract class DaemonClient {
   /// [ports] overrides the four default ports.
   Stream<LlmServer> discoverLlm({String? subnet, List<int> ports});
 
-  /// `SetConfig`: writes one value into `config.toml` (HUM-151).
+  /// `SetConfig`: writes one value into `config.toml` (HUM-151, HUM-069).
   ///
-  /// The daemon accepts exactly one kind of write for now: `sandbox.env.<NAME>`
-  /// set to the certificate path it mounts in the sandbox
+  /// The daemon accepts two kinds of write: a key of the settings form
+  /// ([FormKeys]) with its value as text, the way `humanitl config set KEY
+  /// VALUE` takes it (`-` removes the key, so the default applies), and
+  /// `sandbox.env.<NAME>` set to the certificate path it mounts in the sandbox
   /// (`/etc/humanitl/ca.crt`), which is what a `TLS_001` finding proposes.
-  /// Anything else arrives as a [DaemonException] carrying `CONFIG_014`; the
-  /// settings screen widens the call (HUM-069).
+  /// Anything else arrives as a [DaemonException] carrying `CONFIG_014`, a
+  /// value the schema refuses as `CONFIG_003`.
   ///
-  /// The running session keeps its environment, which stood when it started;
-  /// the value applies to sessions started afterwards. The daemon answers with
-  /// a fresh `ConfigSnapshot`, and this method drops it on purpose: there is no
-  /// domain type for it yet, and HUM-069 brings one.
+  /// The running daemon reads the value at its next start, and a running
+  /// session keeps what stood when it started. The answer's snapshot is
+  /// dropped on purpose: whoever shows the configuration asks [getConfig]
+  /// afterwards, so there is one way a screen learns it.
   Future<void> setConfig(String key, String value);
+
+  /// `GetConfig`: the configuration as the next start loads it, fresh from
+  /// the files (HUM-069).
+  Future<ConfigValues> getConfig();
+
+  /// `LlmKey(status)`: whether an access key is stored and where (HUM-140).
+  ///
+  /// None of the three key methods ever returns the key: the daemon does not
+  /// send it, and [LlmKeyStatus] has no field for it.
+  Future<LlmKeyStatus> llmKeyStatus();
+
+  /// `LlmKey(set)`: stores [key] in the system keyring, or in the 0600
+  /// fallback file, and points `llm.api_key_ref` at it.
+  Future<LlmKeyStatus> setLlmKey(String key);
+
+  /// `LlmKey(clear)`: removes the key and `llm.api_key_ref`.
+  Future<LlmKeyStatus> clearLlmKey();
 
   /// `Terminal`: the output of the running session, and the keys on their way
   /// back (HUM-042).

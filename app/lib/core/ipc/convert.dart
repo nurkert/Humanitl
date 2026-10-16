@@ -11,6 +11,7 @@
 /// that is wrong in the least harmful way and is documented at the site.
 library;
 
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:fixnum/fixnum.dart';
@@ -833,6 +834,54 @@ extension ProbeLlmResponseToDomain on pb.ProbeLlmResponse {
     flavor: flavor.toDomain(),
     latencyMs: latencyMs,
     endpointIsPrivate: endpointIsPrivate,
+    diagnostics: List<Diagnostic>.unmodifiable(
+      diagnostics.map((pb.Diagnostic finding) => finding.toDomain()),
+    ),
+    keySent: keySent,
+  );
+}
+
+/// `ConfigSnapshot` to [ConfigValues] (HUM-069).
+extension ConfigSnapshotToDomain on pb.ConfigSnapshot {
+  /// The domain form. A `values_json` that is not a JSON object becomes an
+  /// empty map, and every getter of [ConfigValues] answers its default: a
+  /// daemon that sends less must not take the form down.
+  ConfigValues toDomain() {
+    Map<String, Object?> parsed = const <String, Object?>{};
+    if (valuesJson.isNotEmpty) {
+      try {
+        final Object? decoded = jsonDecode(valuesJson);
+        if (decoded is Map<String, Object?>) {
+          parsed = decoded;
+        }
+      } on FormatException {
+        parsed = const <String, Object?>{};
+      }
+    }
+    return ConfigValues(
+      values: parsed,
+      origins: <String, String>{
+        for (final pb.FieldOrigin origin in origins) origin.key: origin.origin,
+      },
+      configPath: configPath,
+      diagnostics: List<Diagnostic>.unmodifiable(
+        diagnostics.map((pb.Diagnostic finding) => finding.toDomain()),
+      ),
+    );
+  }
+}
+
+/// `LlmKeyStatus` to its domain form (HUM-140).
+extension LlmKeyStatusToDomain on pb.LlmKeyStatus {
+  /// The domain form; an unknown store reads as [LlmKeyStore.none].
+  LlmKeyStatus toDomain() => LlmKeyStatus(
+    set: set,
+    store: switch (store) {
+      pb.LlmKeyStore.LLM_KEY_STORE_SECRET_SERVICE => LlmKeyStore.secretService,
+      pb.LlmKeyStore.LLM_KEY_STORE_FILE => LlmKeyStore.file,
+      _ => LlmKeyStore.none,
+    },
+    keyRef: keyRef,
     diagnostics: List<Diagnostic>.unmodifiable(
       diagnostics.map((pb.Diagnostic finding) => finding.toDomain()),
     ),

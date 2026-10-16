@@ -15,6 +15,9 @@ sich, mit einem Befehl oder einem Klick in der Einrichtung.
 - Linux mit systemd und einer Benutzersitzung (`systemctl --user` antwortet).
 - bubblewrap 0.8 oder neuer und unprivilegierte Nutzer-Namensräume.
 - Für die Anwendung GTK 3, GLib und eine Grafikanbindung (EGL, GLES 2).
+- Empfohlen: `libsecret-tools` (`secret-tool`), damit ein Zugangsschlüssel für das Modell im
+  Schlüsselbund des Systems liegt; ohne es liegt er in einer Datei mit `0600` (HUM-140). Das
+  Paket empfiehlt es (`Recommends`).
 
 `humanitl doctor` prüft alles davon und nennt zu jedem Befund den Befehl, der ihn behebt.
 

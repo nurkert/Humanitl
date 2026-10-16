@@ -119,11 +119,19 @@ pub fn effective_models(models: &[String]) -> Vec<String> {
 /// Modelle und das voreingestellte Modell. Alles andere bleibt so, wie es in
 /// `agents/opencode/opencode.json.tmpl` steht und dort nachzulesen ist.
 ///
+/// Mit `api_key_file` kommt eine vierte dazu: `options.apiKey` als Verweis
+/// `{file:<pfad>}` auf die Datei mit dem Zugangsschlüssel (HUM-140). Der
+/// Schlüssel selbst steht nie in dieser Datei.
+///
 /// # Errors
 ///
 /// Ein [`Diagnostic`] mit `AGENT_003`, wenn die Vorlage nicht die erwartete
 /// Form hat.
-pub fn render_config(base_url: &str, models: &[String]) -> Result<String, Diagnostic> {
+pub fn render_config(
+    base_url: &str,
+    models: &[String],
+    api_key_file: Option<&str>,
+) -> Result<String, Diagnostic> {
     const FILE: &str = "agents/opencode/opencode.json.tmpl";
 
     let models = effective_models(models);
@@ -134,6 +142,12 @@ pub fn render_config(base_url: &str, models: &[String]) -> Result<String, Diagno
         let provider = object_mut(FILE, providers, PROVIDER_ID)?;
         let options = object_mut(FILE, provider, "options")?;
         options.insert("baseURL".to_owned(), Value::String(base_url.to_owned()));
+        if let Some(path) = api_key_file {
+            options.insert(
+                "apiKey".to_owned(),
+                Value::String(format!("{{file:{path}}}")),
+            );
+        }
 
         let mut entries = Map::new();
         for model in &models {
@@ -254,7 +268,7 @@ mod tests {
     #[test]
     fn a_model_name_with_a_quote_stays_inside_its_string() {
         let evil = "\", \"injected\": {\"name\": \"x\"}, \"a\": \"".to_owned();
-        let text = render_config("http://x:1/v1", std::slice::from_ref(&evil)).unwrap();
+        let text = render_config("http://x:1/v1", std::slice::from_ref(&evil), None).unwrap();
         let doc: Value = serde_json::from_str(&text).unwrap();
         let models = &doc["provider"][PROVIDER_ID]["models"];
         assert_eq!(models.as_object().unwrap().len(), 1);

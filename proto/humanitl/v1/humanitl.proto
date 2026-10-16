@@ -47,6 +47,10 @@ service Humanitl {
   // gespeicherte Zusammenfassung eines Laufs nach seiner Kennung, auch wenn er
   // laengst beendet ist.
   rpc GetSessionSummary(SessionSummaryRef) returns (SessionSummary);
+  // Der Zugangsschluessel des LLM-Endpunkts: Stand abfragen, setzen, entfernen
+  // (HUM-140). Der Schluessel geht nur hinein, nie heraus: Keine Antwort
+  // dieses Dienstes traegt ihn, nur ob einer hinterlegt ist und wo.
+  rpc LlmKey(LlmKeyRequest) returns (LlmKeyStatus);
 }
 
 // ---------- Info ----------
@@ -1472,6 +1476,13 @@ message ConfigSnapshot {
   string json_schema = 2;
   repeated FieldOrigin origins = 3;
   repeated Diagnostic diagnostics = 4;
+  // Dieselbe effektive Config als JSON-Objekt, fuer Clients ohne TOML-Leser
+  // (HUM-069). Leer, wenn die Aufloesung scheiterte; der Grund steht dann in
+  // `diagnostics`.
+  string values_json = 5;
+  // Die globale `config.toml`, in die `SetConfig` schreibt, als absoluter
+  // Pfad. Die Oberflaeche bietet sie zum Oeffnen an.
+  string config_path = 6;
 }
 
 // Woher der Wert eines Feldes stammt.
@@ -1547,14 +1558,25 @@ message DiscoverResult {
 // ---------- Endpunkt-Probe ----------
 
 // Auftrag fuer die Probe eines einzelnen Endpunkts. Der Daemon fragt ihn
-// host-seitig mit zwei GET (`/api/tags`, dann `/v1/models`), folgt keiner
-// Weiterleitung und schickt keine Zugangsdaten. Nichts davon geht durch die
-// Sandbox, und nichts davon aendert etwas am Server.
+// host-seitig mit zwei GET (`/api/tags`, dann `/v1/models`) und folgt keiner
+// Weiterleitung. Zugangsdaten schickt sie nur, wenn der Auftrag es verlangt
+// (`api_key`, `use_stored_key`, HUM-140), und dann nur als `Authorization`
+// an diesen Endpunkt. Nichts davon geht durch die Sandbox, und nichts davon
+// aendert etwas am Server.
 message ProbeLlmRequest {
   // Die Adresse, wie sie in `llm.endpoint` stehen wuerde. Nur http und https.
   string endpoint = 1;
   // Frist fuer die ganze Probe. 0 bedeutet die Voreinstellung 3000 ms.
   uint32 timeout_ms = 2;
+  // Ein Zugangsschluessel nur fuer diese Probe, wie ihn der Mensch gerade
+  // eingetippt hat (HUM-140). Der Daemon schickt ihn als
+  // `Authorization: Bearer` an genau diesen Endpunkt und vergisst ihn danach;
+  // gespeichert wird er nur ueber `LlmKey`. Leer heisst: kein solcher.
+  string api_key = 3;
+  // Den hinterlegten Schluessel mitschicken, wenn `api_key` leer ist. Der
+  // Daemon tut das nur, wenn `endpoint` dieselbe Herkunft (Schema, Host,
+  // Port) hat wie `llm.endpoint`; einem anderen Ziel gibt er ihn nie.
+  bool use_stored_key = 4;
 }
 
 // Was die Probe gemessen hat. Ein leeres `models` bei `flavor = UNKNOWN` ist
@@ -1575,4 +1597,55 @@ message ProbeLlmResponse {
   // Wahr, wenn der Endpunkt im eigenen Netz liegt (RFC 1918, Loopback,
   // Link-Local, CGNAT, oder ein Name unter .local/.lan/.home.arpa/.internal).
   bool endpoint_is_private = 6;
+  // Wahr, wenn die Probe einen Zugangsschluessel mitgeschickt hat (HUM-140).
+  bool key_sent = 7;
+}
+
+// ---------- Zugangsschluessel ----------
+
+// Wo ein Zugangsschluessel liegt (HUM-140).
+enum LlmKeyStore {
+  LLM_KEY_STORE_UNSPECIFIED = 0;
+  // Im Schluesselbund des Systems ueber den Secret Service (`libsecret`).
+  LLM_KEY_STORE_SECRET_SERVICE = 1;
+  // In einer Datei mit `0600` unter `$XDG_DATA_HOME/humanitl/keys`, wenn der
+  // Secret Service auf dieser Maschine nicht antwortet.
+  LLM_KEY_STORE_FILE = 2;
+}
+
+// Auftrag an `LlmKey`. Genau eine Operation.
+message LlmKeyRequest {
+  // Nur den Stand abfragen.
+  message Status {}
+  // Den Schluessel hinterlegen und `llm.api_key_ref` darauf richten.
+  message Set {
+    // Der Schluessel. Er steht danach nie in `config.toml`, in keiner
+    // Antwort, in keinem Log und in keiner Aufzeichnung.
+    string key = 1;
+  }
+  // Den Schluessel entfernen und `llm.api_key_ref` aus `config.toml` nehmen.
+  // `Remove` und nicht `Clear`: Der Dart-Generator benennt ein Feld `clear`
+  // um, weil jede Nachricht schon eine Methode `clear()` hat.
+  message Remove {}
+  oneof op {
+    Status status = 1;
+    Set set = 2;
+    Remove remove = 3;
+  }
+}
+
+// Der Stand des Zugangsschluessels, ohne den Schluessel selbst.
+message LlmKeyStatus {
+  // Wahr, wenn `llm.api_key_ref` gesetzt ist und der Speicher einen
+  // Schluessel dazu haelt.
+  bool set = 1;
+  // Wo er liegt; UNSPECIFIED, wenn keiner hinterlegt ist.
+  LlmKeyStore store = 2;
+  // `llm.api_key_ref`, wie er in der Konfiguration steht, zum Beispiel
+  // `secret-service:humanitl/llm`. Leer, wenn keiner gesetzt ist.
+  string key_ref = 3;
+  // Was dazu zu sagen ist: der Grund fuer den Rueckfall auf die Datei, oder
+  // `LLM_009`, wenn die Konfiguration einen Schluessel nennt, den der
+  // Speicher nicht haelt.
+  repeated Diagnostic diagnostics = 4;
 }

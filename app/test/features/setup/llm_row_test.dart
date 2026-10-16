@@ -26,7 +26,12 @@ import '../../harness/app_harness.dart';
 /// geht an den beiden `on`-Zweigen vorbei.
 class ThrowingProbeClient extends FakeDaemonClient {
   @override
-  Future<LlmProbe> probeLlm(String endpoint, {Duration? timeout}) async {
+  Future<LlmProbe> probeLlm(
+    String endpoint, {
+    Duration? timeout,
+    String? apiKey,
+    bool useStoredKey = false,
+  }) async {
     throw StateError('the answer had no flavor this build knows');
   }
 }

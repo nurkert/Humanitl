@@ -555,6 +555,7 @@ fn table() -> Vec<Case> {
                 v1::ProbeLlmRequest {
                     endpoint: "not a url".to_owned(),
                     timeout_ms: 0,
+                    ..v1::ProbeLlmRequest::default()
                 }
             ),
         },
@@ -566,6 +567,7 @@ fn table() -> Vec<Case> {
                 v1::ProbeLlmRequest {
                     endpoint: String::new(),
                     timeout_ms: 0,
+                    ..v1::ProbeLlmRequest::default()
                 }
             ),
         },

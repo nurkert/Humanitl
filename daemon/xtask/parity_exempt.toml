@@ -14,8 +14,8 @@
 
 [[exempt]]
 rpc = "Humanitl.GetConfig"
-reason = "CLI liest und schreibt die Konfiguration lokal über denselben Lader wie der Daemon; eine echte Anbindung an GetConfig/SetConfig folgt mit HUM-069/HUM-170."
+reason = "CLI liest und schreibt die Konfiguration lokal über denselben Lader wie der Daemon; die Oberfläche nutzt beide RPCs seit HUM-069, die Anbindung der Kommandozeile folgt mit HUM-170."
 
 [[exempt]]
 rpc = "Humanitl.SetConfig"
-reason = "CLI liest und schreibt die Konfiguration lokal über denselben Lader wie der Daemon; eine echte Anbindung an GetConfig/SetConfig folgt mit HUM-069/HUM-170."
+reason = "CLI liest und schreibt die Konfiguration lokal über denselben Lader wie der Daemon; die Oberfläche nutzt beide RPCs seit HUM-069, die Anbindung der Kommandozeile folgt mit HUM-170."
