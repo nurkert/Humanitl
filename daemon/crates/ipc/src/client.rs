@@ -29,7 +29,7 @@ use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, Endpoint};
 use tonic::{Request, Status};
 
-use crate::auth::read_token;
+use crate::auth::{UnitsOnDisk, no_daemon_fix, no_daemon_fix_here, read_token_with};
 use crate::{TOKEN_METADATA_KEY, v1};
 
 /// Der Client, den [`connect`] liefert.
@@ -214,23 +214,37 @@ fn token_state(paths: &Paths) -> TokenState {
     // Fehlt der Pfad, läuft bloß kein Daemon, und der Vorschlag bleibt, ihn zu
     // starten.
     let fallback = paths.runtime_dir().diagnostic.is_some();
+    // Der Vorschlag für „kein Daemon" kommt aus den Units dieser Umgebung
+    // (HUM-189), nicht aus dem Befund der Prüfung: Der schlägt `humanitld` vor.
+    let start = no_daemon_fix(UnitsOnDisk::probe(paths));
     if let Some(dir) = token.parent()
         && let Err(refusal) = check_private(dir, Entry::Dir, uid)
     {
-        return TokenState::Failed(refusal.into_diagnostic(fallback));
+        return TokenState::Failed(match refusal {
+            Refusal::Missing(diagnostic) => with_fix(diagnostic, &start),
+            other @ Refusal::Untrusted(_) => other.into_diagnostic(fallback),
+        });
     }
     match check_private(&token, Entry::File, uid) {
         Ok(()) => {}
-        Err(Refusal::Missing(diagnostic)) => return TokenState::Absent(diagnostic),
+        Err(Refusal::Missing(diagnostic)) => {
+            return TokenState::Absent(with_fix(diagnostic, &start));
+        }
         Err(refusal) => return TokenState::Failed(refusal.into_diagnostic(fallback)),
     }
     // Leer heißt wie in der Oberfläche: nichts außer Leerraum.
     let empty = std::fs::read_to_string(&token).is_ok_and(|text| text.trim().is_empty());
-    match read_token(&token) {
+    match read_token_with(&token, &start) {
         Ok(text) => TokenState::Ready(text),
         Err(diagnostic) if empty => TokenState::Absent(diagnostic),
         Err(diagnostic) => TokenState::Failed(diagnostic),
     }
+}
+
+/// Der Befund mit einem anderen Vorschlag.
+fn with_fix(mut diagnostic: Diagnostic, fix: &FixAction) -> Diagnostic {
+    diagnostic.fix = Some(fix.clone());
+    diagnostic
 }
 
 /// Wie [`connect`], aber mit ausdrücklichem Socket und Token.
@@ -271,7 +285,7 @@ pub async fn channel(socket: &Path) -> Result<Channel, Diagnostic> {
     let unreachable = |why: String| {
         Diagnostic::builder(codes::DAEMON_001, Severity::Blocking)
             .why(why)
-            .fix(FixAction::CopyCommand("humanitld".to_owned()))
+            .fix(no_daemon_fix_here())
             .build()
     };
     Endpoint::from_shared(uri.clone())
@@ -395,12 +409,21 @@ mod tests {
     }
 
     /// Im Rückfall ohne Verzeichnis und ohne Token läuft bloß kein Daemon:
-    /// Der Vorschlag ist `humanitld`, nicht die Anleitung zum eigenen Verzeichnis.
+    /// Der Vorschlag richtet den Dienst ein, nicht die Anleitung zum eigenen
+    /// Verzeichnis und nicht `humanitld` im Vordergrund (HUM-189).
     #[test]
-    fn a_missing_fallback_dir_proposes_starting_the_daemon() {
+    fn a_missing_fallback_dir_proposes_installing_the_service() {
         let tmp = tempfile::tempdir().unwrap();
         let paths = Paths::new(
-            Env::from_pairs([("TMPDIR", tmp.path().to_str().unwrap())]).with_uid(3_999_999_999),
+            Env::from_pairs([
+                ("TMPDIR", tmp.path().to_str().unwrap()),
+                // Ein Paket auf dem Rechner des Tests änderte den Vorschlag.
+                (
+                    "HUMANITL_SYSTEM_UNIT_DIR",
+                    tmp.path().join("system-units").to_str().unwrap(),
+                ),
+            ])
+            .with_uid(3_999_999_999),
         );
         assert!(
             paths.runtime_dir().diagnostic.is_some(),
@@ -408,9 +431,34 @@ mod tests {
         );
         let error = trusted_token(&paths).unwrap_err();
         assert_eq!(error.code, codes::DAEMON_001);
+        assert_eq!(error.fix, Some(FixAction::InstallService));
+    }
+
+    /// Mit der Unit aus `daemon install` auf der Platte startet der Vorschlag
+    /// sie, statt sie noch einmal einzurichten (HUM-189).
+    #[test]
+    fn a_missing_token_with_an_installed_unit_proposes_starting_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tmp.path().join("config");
+        fs::create_dir_all(config.join("systemd/user")).unwrap();
+        fs::write(config.join("systemd/user/humanitld.service"), "[Service]\n").unwrap();
+        let run = tmp.path().join("run");
+        fs::create_dir(&run).unwrap();
+        let paths = Paths::new(Env::from_pairs([
+            ("XDG_CONFIG_HOME", config.to_str().unwrap()),
+            ("XDG_RUNTIME_DIR", run.to_str().unwrap()),
+            (
+                "HUMANITL_SYSTEM_UNIT_DIR",
+                tmp.path().join("system-units").to_str().unwrap(),
+            ),
+        ]));
+        let error = trusted_token(&paths).unwrap_err();
+        assert_eq!(error.code, codes::DAEMON_001);
         assert_eq!(
             error.fix,
-            Some(FixAction::CopyCommand("humanitld".to_owned()))
+            Some(FixAction::CopyCommand(
+                "systemctl --user start humanitld.service".to_owned()
+            ))
         );
     }
 

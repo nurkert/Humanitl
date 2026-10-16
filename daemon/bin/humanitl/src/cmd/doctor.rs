@@ -44,7 +44,7 @@
 
 use std::time::Duration;
 
-use humanitl_core::{Diagnostic, FixAction};
+use humanitl_core::Diagnostic;
 use humanitl_ipc::client::{self, Client};
 use humanitl_ipc::{PROTO_MAJOR, PROTO_MINOR, convert, v1};
 use humanitl_sandbox::doctor::{
@@ -106,7 +106,7 @@ fn timed_out(what: &str, after: Duration) -> Diagnostic {
          contract",
         after.as_millis()
     ))
-    .fix(FixAction::CopyCommand("humanitld".to_owned()))
+    .fix(humanitl_ipc::auth::no_daemon_fix_here())
     .build()
 }
 
@@ -524,7 +524,26 @@ mod tests {
     use humanitl_ipc::{convert, v1};
     use humanitl_sandbox::doctor::{CheckId, CheckOutcome, DaemonFacts};
 
-    use super::{Source, has_failure, mark, replace, status_name, worst};
+    use super::{Source, has_failure, mark, replace, status_name, timed_out, worst};
+
+    /// Ein Weg zum Daemon, der in seine Frist läuft, schlägt denselben
+    /// dauerhaften Start vor wie jeder andere „kein Daemon", nicht
+    /// `humanitld` im Vordergrund (HUM-189).
+    #[test]
+    fn a_timeout_proposes_a_lasting_start_not_the_foreground_daemon() {
+        let diagnostic = timed_out("GetInfo", std::time::Duration::from_secs(3));
+        let fix = diagnostic.fix.expect("a fix");
+        assert_ne!(
+            fix,
+            humanitl_core::FixAction::CopyCommand("humanitld".to_owned())
+        );
+        assert!(
+            matches!(&fix, humanitl_core::FixAction::InstallService)
+                || matches!(&fix, humanitl_core::FixAction::CopyCommand(c)
+                    if c.starts_with("systemctl --user start humanitld.")),
+            "{fix:?}"
+        );
+    }
 
     fn report() -> v1::DoctorReport {
         v1::DoctorReport {

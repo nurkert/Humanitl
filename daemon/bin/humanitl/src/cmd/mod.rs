@@ -333,7 +333,7 @@ pub fn status_diagnostic(status: &Status, what: &str) -> Diagnostic {
             .build(),
         Code::Unavailable => Diagnostic::builder(codes::DAEMON_001, Severity::Blocking)
             .why(format!("{what} failed: {}", status.message()))
-            .fix(FixAction::CopyCommand("humanitld".to_owned()))
+            .fix(humanitl_ipc::auth::no_daemon_fix_here())
             .build(),
         // Der Daemon hat geantwortet, also ist er erreichbar. Ein
         // `InvalidArgument` oder `FailedPrecondition` ist ein Fehler des
@@ -419,7 +419,7 @@ mod tests {
     use humanitl_core::diagnostics::codes::{
         CONFIG_002, DAEMON_001, IPC_001, PROXY_002, SANDBOX_011, SANDBOX_014,
     };
-    use humanitl_core::{Diagnostic, Severity};
+    use humanitl_core::{Diagnostic, FixAction, Severity};
     use humanitl_ipc::diagnostic_to_proto;
     use tonic::{Code, Status};
 
@@ -456,6 +456,25 @@ mod tests {
         let other = status_diagnostic(&Status::internal("boom"), "GetFlow");
         assert_eq!(other.code.as_str(), "CLI_001");
         assert_eq!(other.title, "Aufruf am Daemon abgelehnt");
+    }
+
+    /// Ein `Unavailable` heißt „kein Daemon", und der Vorschlag richtet den
+    /// Dienst ein oder startet ihn, statt `humanitld` im Vordergrund eines
+    /// offenen Terminals anzubieten (HUM-189). Welcher der drei es ist, hängt
+    /// von den Units auf dem Rechner ab; `humanitld` ist keiner davon.
+    #[test]
+    fn an_unavailable_status_proposes_a_lasting_start() {
+        let gone = status_diagnostic(&Status::unavailable("socket closed"), "ListFlows");
+        let fix = gone.fix.expect("a fix");
+        assert_ne!(fix, FixAction::CopyCommand("humanitld".to_owned()));
+        match fix {
+            FixAction::InstallService => {}
+            FixAction::CopyCommand(command) => assert!(
+                command.starts_with("systemctl --user start humanitld."),
+                "{command}"
+            ),
+            other => panic!("unexpected fix {other:?}"),
+        }
     }
 
     #[test]

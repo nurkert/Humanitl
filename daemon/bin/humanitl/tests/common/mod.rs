@@ -128,6 +128,9 @@ impl Harness {
             // Laufs den systemd des Menschen, auch dort nicht, wo ein Test
             // sich das `systemctl` aus dem `PATH` des Rechners holt.
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
+            // Ein gesetztes `APPIMAGE` des Rechners ändert, welche Units
+            // zählen (HUM-165); die Tests setzen es selbst, wo sie es brauchen.
+            .env_remove("APPIMAGE")
             .env_remove("HUMANITL_HOLD__TIMEOUT_SECS");
         command
     }

@@ -11,7 +11,7 @@
 //!    `$XDG_CONFIG_HOME/systemd/user/humanitld.service`, sonst
 //!    `~/.config/systemd/user/humanitld.service`. Keine System-Unit, kein
 //!    `sudo`, keine zweite Datei, kein Socket. Hat das Paket die Units schon
-//!    unter [`SYSTEM_UNIT_DIR`] abgelegt, schreibt der Befehl **gar nichts**
+//!    unter `/usr/lib/systemd/user` abgelegt, schreibt der Befehl **gar nichts**
 //!    und aktiviert nur, was dort liegt ([`SystemUnits`], HUM-053): Eine
 //!    Kopie unter `~/.config` verdeckte die Fassung des Pakets, und jedes
 //!    Update des Pakets liefe an ihr vorbei. Eine solche Kopie aus einer
@@ -56,29 +56,13 @@ pub const UNIT_NAME: &str = "humanitld.service";
 /// Der Name der Socket-Unit, die das Paket neben die Dienst-Unit legt.
 pub const SOCKET_NAME: &str = "humanitld.socket";
 
-/// Wo das Paket die Units ablegt (HUM-053, `packaging/deb/build-deb.sh`).
-///
-/// Das ist der Ort, den systemd für Nutzer-Units aus Paketen vorsieht
-/// (`systemd.unit(5)`, „User Unit Search Path"). `/etc/systemd/user` gehört
-/// dem Verwalter des Rechners und `/usr/local` keinem Paket; beide sind kein
-/// Hinweis auf eine Installation durch das Paket.
-pub const SYSTEM_UNIT_DIR: &str = "/usr/lib/systemd/user";
-
-/// Die Variable, die [`SYSTEM_UNIT_DIR`] ersetzt (HUM-077).
-///
-/// Für Tests: Auf einem Rechner mit installiertem Paket liefen die Tests von
-/// `daemon install` und `daemon uninstall` sonst den Weg des Pakets. Ein
-/// einfacher Unterstrich, also kein Konfigurationsschlüssel; der Lader
-/// übergeht sie (`humanitl_config::load`). Sie ändert nur, wo die
-/// Kommandozeile nach den Units des Pakets sucht, nicht, was systemd lädt.
-pub const SYSTEM_UNIT_DIR_ENV: &str = "HUMANITL_SYSTEM_UNIT_DIR";
-
-/// Wo die Units des Pakets gesucht werden: [`SYSTEM_UNIT_DIR`], außer
-/// [`SYSTEM_UNIT_DIR_ENV`] nennt ein anderes Verzeichnis.
+/// Wo die Units des Pakets gesucht werden: `/usr/lib/systemd/user`, außer
+/// `HUMANITL_SYSTEM_UNIT_DIR` nennt ein anderes Verzeichnis (nur für Tests,
+/// HUM-077). Beides steht in `humanitl_ipc::auth`, weil auch der Vorschlag für
+/// „kein Daemon" (HUM-189) dort nachsieht; ein Wert, nicht zwei.
 #[must_use]
 pub fn system_unit_dir(env: &humanitl_config::Env) -> PathBuf {
-    env.non_empty(SYSTEM_UNIT_DIR_ENV)
-        .map_or_else(|| PathBuf::from(SYSTEM_UNIT_DIR), PathBuf::from)
+    humanitl_ipc::auth::system_unit_dir(env)
 }
 
 /// Der Name des Daemons, wie er neben der Kommandozeile liegt.
@@ -644,7 +628,7 @@ pub fn enablement_links(dir: &Path, names: &[&str]) -> Vec<PathBuf> {
     Enablement::read_for(dir, names).links.into_iter().collect()
 }
 
-/// Die Units, die das Paket unter [`SYSTEM_UNIT_DIR`] abgelegt hat.
+/// Die Units, die das Paket unter `/usr/lib/systemd/user` abgelegt hat.
 ///
 /// Liegen sie da, gibt es für `daemon install` nichts zu schreiben: Die
 /// Dienst-Unit trägt den Pfad des Pakets, und eine Kopie unter `~/.config`
