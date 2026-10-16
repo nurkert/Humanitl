@@ -93,6 +93,7 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-233 | Der `systemd`-Test auf geschlossene Nummer fällt unter Last zufällig aus | S | — |
 | HUM-235 | `daemon uninstall --purge-binaries` löscht Kopien, aus denen noch ein Prozess läuft | S | HUM-210 |
 | HUM-236 | `cargo deny` meldet vier rustls-Advisories und `unsafe-libyaml` und ist auf `main` rot | XS | — |
+| HUM-237 | Die CI auf dem Issue-Branch ist das Tor, nicht der lokale Volllauf | M | — |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -5601,3 +5602,117 @@ Verweis `current` bleibt, wenn er auf eine solche Kopie zeigt.
 
 ### Referenzen
 HUM-210 (Review 2026-10-06, Befund B3); HUM-077 (`--purge-binaries`).
+
+---
+
+## HUM-237 · Die CI auf dem Issue-Branch ist das Tor, nicht der lokale Volllauf
+Sprint: 4 · Größe: M · Abhängigkeiten: — · Blockiert: —
+
+### Kontext
+Bis hierher lief jedes Issue so: `tools/verify-commit.sh` lokal, rund 40 Minuten und über eine Sperre serialisiert, dann Push nach `main`, dann dieselben Prüfungen noch einmal in der CI, rund 10 bis 20 Minuten. Dazu fuhr jeder Agent und jeder Review-Ersatz `make check` im eigenen Arbeitsbaum. Ein Issue wartete damit mehr als eine Stunde auf Prüfungen, von denen die meisten doppelt liefen, und der Rechner, an dem der Nutzer arbeitet, lag dabei oberhalb der Lastgrenze. Der Nutzer hat am 2026-10-16 fünf Punkte des Vorschlags freigegeben (1 bis 4 und 6): CI als Tor, kein doppelter Volllauf durch Agenten, gemeinsamer Build-Cache, klare Schwelle für Review-Befunde, parallele Flutter-Tests. HUM-147 aus `backlog/sprint-5.md` geht in diesem Issue auf.
+
+### Ziel
+Ein Issue geht auf seinen Branch `hum-NNN-kurztitel`, der Branch wird gepusht, die CI prüft genau diesen Commit, und nur bei grüner CI landet er mit `--no-ff` auf `main`. `tools/commit-issue.sh --ci` erledigt das in einem Aufruf, `tools/ci-gate.sh` sagt, ob der Lauf grün ist. Jede Prüfung, die `tools/verify-commit.sh` lokal fuhr, läuft auch in der CI. Agenten und Reviewer fahren nur noch die gezielten Prüfungen ihres Issues. Review-Befunde haben eine Schwelle, ab der sie blockieren.
+
+### Nicht-Ziel
+Pull Requests und Branch-Protection-Regeln auf GitHub (manuell, außerhalb des Repositorys). Sharding der Flutter-Tests in eine Matrix (siehe Spezifikation, Abwägung). Eine eigene Cache-Infrastruktur über sccache hinaus. Punkt 5 des Vorschlags (nicht freigegeben). `tools/verify-commit.sh` abschaffen: Es bleibt als freiwilliges Werkzeug.
+
+### Betroffene Pfade
+- `.github/workflows/ci.yml`
+- `.github/actions/setup-rust/action.yml`
+- `scripts/ci/goldens-placeholder.sh`
+- `tools/ci-gate.sh` (neu)
+- `tools/commit-issue.sh`
+- `tools/verify-commit.sh`
+- `tools/tests/ci_gate_test.sh` (neu)
+- `tools/tests/commit_issue_test.sh` (neu)
+- `Makefile`
+- `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`
+- `backlog/sprint-4.md`, `backlog/sprint-5.md` (HUM-147)
+
+### Spezifikation
+
+**Abgleich verify-commit gegen CI** (Stand `88a3a37`, CI-Lauf 37469218376):
+
+| Prüfung | `tools/verify-commit.sh` | CI vor HUM-237 | nach HUM-237 |
+|---|---|---|---|
+| rustfmt | `make rust-fmt` | rust-check | unverändert |
+| clippy `-D warnings` | `make rust-clippy` | rust-check, zusätzlich `RUSTFLAGS=-D warnings` | unverändert |
+| Bau aller Targets | `make rust-build` | rust-test | unverändert |
+| Rust-Tests | `make rust-test`; fehlende Clients der Konformitätsmatrix überspringen sich | rust-test, alle Clients installiert | unverändert |
+| `cargo doc -D warnings` | Schritt „Dokumentation" | rust-test | unverändert |
+| deps-lint (Richtung, offline, Kopplung, Release-Notes) | `make deps-lint` | deps-lint | unverändert |
+| docs-lint | `make docs-lint`; Katalog-Schema ohne check-jsonschema übersprungen | rust-check, mit check-jsonschema | unverändert |
+| Parität UI/CLI | `make parity-check` | parity-check | unverändert |
+| Lizenzen, cargo-deny | `make rust-deny` | rust-check | unverändert |
+| Flutter analyze, App und `packages/ui` | `make flutter-analyze` | flutter-analyze-test, mit `--fatal-infos` | unverändert |
+| `dart format` | in `make flutter-analyze` | **fehlte** | neu: Schritt „Format" in flutter-analyze-test |
+| Flutter-Tests, App und `packages/ui` | `make flutter-test` | flutter-analyze-test | App mit `--concurrency=$(nproc)`, ohne Goldens |
+| Goldens | in `make flutter-test` | goldens, und ein zweites Mal in flutter-analyze-test | nur goldens, mit `--concurrency=$(nproc)` |
+| Proto-Erzeugung, Codegen | `flutter-codegen` | flutter-analyze-test; proto-lint-and-gen mit Drift und `buf lint` | unverändert |
+| Escape-Tests | `tests/escape/run.sh` mit `ESCAPE_ALLOW_FAIL=1` | escape-tests, ohne Toleranz | unverändert |
+| catalog-lint | nicht in verify (nur `make check`) | **fehlte** | neu: rust-check |
+| typed-errors-lint, `test-report.sh --self-test` | nicht in verify (nur `make check`) | rust-check | unverändert |
+| l10n-lint | nicht in verify | mittelbar: `app/test/tool/l10n_lint_test.dart` „is clean" läuft im Flutter-Test | unverändert |
+| runner-test | nicht in verify | flutter-analyze-test | unverändert |
+| `flutter build linux --debug` | nicht in verify | flutter-analyze-test | unverändert |
+| Shim statisch, unter 2 MB | als Fall der Escape-Tests | rust-test | unverändert |
+| e2e M1, M2 mit Bildschirm, M3, Integrationstests | nicht in verify | e2e, e2e-xvfb, e2e-agent | unverändert |
+| Werkzeuge des Tors | — | — | neu: `make tools-test` in deps-lint, auch in verify |
+
+Die CI war schon vorher strenger als verify (Warnungen als Fehler, keine Toleranz für rote Escape-Proben, vollständige Konformitätsmatrix, e2e). Es fehlten nur `dart format` und `catalog-lint`; beide laufen jetzt in der CI, `catalog-lint` zusätzlich in verify.
+
+**Ablauf.** `tools/commit-issue.sh --ci HUM-NNN slug "subject" <pfade...>` mit dem Commit-Body auf stdin:
+1. `git fetch origin main`. Unterscheidet sich einer der Pfade zwischen `HEAD` und `origin/main`, Abbruch ohne Commit und ohne Push.
+2. Commit der Pfade auf `origin/main` in einem eigenen Index (`GIT_INDEX_FILE`); der Branch `hum-NNN-slug` zeigt darauf. Index, Arbeitsbaum und ausgecheckter Branch des Aufrufers bleiben unberührt.
+3. `git push --force-with-lease` des Branches.
+4. `tools/ci-gate.sh <sha>`: 0 weiter, 1 Abbruch „rot", 3 Abbruch „kein Urteil", sonst Abbruch.
+5. Erneut `git fetch origin main`. Ist `origin/main` nicht mehr der Elternteil des getesteten Commits, wird der eine Commit mit `git merge-tree --write-tree` auf das neue `main` gesetzt und ab Schritt 3 wiederholt, höchstens `HUMANITL_LAND_ATTEMPTS` (3) Mal.
+6. Merge-Commit `merge: HUM-NNN slug` mit dem Baum des getesteten Commits, Push nach `main` (der Server nimmt nur einen Fast-Forward an; bei einem Wettlauf zurück zu Schritt 5), Branch auf `origin` löschen, lokales `main` nachziehen, ohne lokale Änderungen anzufassen: Gleicht für einen vom Merge berührten Pfad der Index-Eintrag oder die Datei im Arbeitsbaum (je Modus, Blob, Stufe) weder dem alten noch dem neuen Stand, also bei jeder lokalen Änderung, gestaged oder nicht, auch an den Rechten, oder ist `main` in einem anderen Arbeitsbaum ausgecheckt, bleibt das lokale `main` stehen, mit Meldung.
+
+`tools/commit-issue.sh --land hum-NNN-slug` fährt die Schritte 3 bis 6 für einen schon vorhandenen Branch, etwa nach roter CI und `--amend`. Ist der Branch in irgendeinem Arbeitsbaum ausgecheckt, verweigert es, bevor es eine Referenz bewegt. `--ci` und `--land` verlangen git 2.40 (`merge-tree --merge-base`). Der Commit trägt `Co-Authored-By: Claude Opus 5.5 (1M context)` und, wenn `CLAUDE_SESSION_URL` gesetzt ist, eine Zeile `Claude-Session:`. Ohne `--ci` bleibt der alte lokale Ablauf.
+
+Warum Umsetzen und erneuter Lauf statt Merge auf das bewegte `main`: Nur wenn `main` der Elternteil des getesteten Commits ist, hat der `--no-ff`-Merge genau den getesteten Baum. Ein Merge auf ein bewegtes `main` landete einen Stand, den keine CI je gesehen hat. Ein Rebase im Arbeitsbaum scheitert an jedem Arbeitsbaum mit fremden Änderungen; `git merge-tree` braucht keinen.
+
+**`tools/ci-gate.sh <sha|branch> [timeout]`** fragt `GET /repos/{owner}/{repo}/actions/workflows/ci.yml/runs?head_sha=<sha>&event=push` ab (nur Push-Läufe), nimmt den Lauf mit der höchsten `run_number` und dem höchsten `run_attempt`, gibt nach dem Ende je Job eine Zeile aus und bei rotem Job die Schritte mit `failure`, `timed_out` oder `cancelled`. Exit 0 `success`, 1 rot, 2 Aufruf oder API, 3 kein Urteil (`cancelled`, `stale`, `skipped`, Frist). Scheitert nach dem Ende des Laufs nur die Jobliste, entscheidet es trotzdem nach dem Ergebnis des Laufs. Ratengrenze: Ohne Token gibt es 60 Anfragen je Stunde; das Skript fragt deshalb alle 60 s, nach einer ersten Abfrage ohne fertigen Lauf erst nach 300 s wieder, nimmt ein optionales Token aus `HUMANITL_CI_TOKEN` oder `GITHUB_TOKEN` als `Authorization`-Kopf mit und schläft bei 429 oder 403 mit `x-ratelimit-remaining: 0` bis `retry-after` oder `x-ratelimit-reset`. Umgebung: `HUMANITL_CI_REPO`, `HUMANITL_CI_API`, `HUMANITL_CI_FETCH`, `HUMANITL_CI_POLL`, `HUMANITL_CI_FIRST_WAIT`, `HUMANITL_CI_TOKEN`, `HUMANITL_CI_WORKFLOW`.
+
+**Cache.** CI: `Swatinem/rust-cache` war schon in `setup-rust`; neu sind der Kommentar mit dem Grund und `save-if: github.ref == 'refs/heads/main'`, damit Issue-Branches den Cache von `main` lesen, aber die 10 GB des Repositorys nicht mit eigenen Einträgen füllen. Lokal: `HUMANITL_SCCACHE=1` im Makefile setzt `RUSTC_WRAPPER`, `SCCACHE_CACHE_SIZE=5G` und `SCCACHE_DIR=~/.cache/sccache`; Rezept in `CONTRIBUTING.md`.
+
+**Flutter.** package:test nimmt ohne `--concurrency` die Hälfte der Kerne, auf dem Runner mit vier Kernen also zwei (`test_core`, `defaultConcurrency`). Beide Jobs fahren jetzt einen Prozess je Kern. Die Goldens laufen nur noch im Job `goldens`; `scripts/ci/goldens-placeholder.sh` scheitert, wenn ein Golden-Test außerhalb von `app/test/goldens` liegt. Kein Sharding: Jeder zusätzliche Job zahlt rund vier Minuten Einrichtung (Flutter, Proto, Codegen) für einen Teil eines Schritts von 5 min 25 s, und eine Matrix benennt den Pflicht-Check `flutter-analyze-test` um. Neu bewerten, wenn der Schritt „Test" allein über sechs Minuten liegt. Die Goldens bleiben deterministisch: jede Datei in eigenem Prozess, CI-Schriften von alchemist, kein geteilter Zustand.
+
+**Review-Schwelle.** blocking/major nur bei verletztem Akzeptanzkriterium oder verletzter Sicherheitsaussage, mit konkretem Fehlerszenario. Strenge eines Tests, Wortlaut, Namen und Kommentare sind minor. Ideen außerhalb des Umfangs werden ein eigenes Issue. Steht im Auftrag an die Reviewer (`CLAUDE.md` Schritt 4) und in `AGENTS.md`.
+
+### Schritte
+1. Abgleich verify gegen CI (Tabelle oben), fehlende Prüfungen in die CI.
+2. `tools/ci-gate.sh` mit Test gegen eine nachgestellte API.
+3. `tools/commit-issue.sh --ci` und `--land` mit Test gegen ein Wegwerf-origin.
+4. Trigger `hum-*`, Cache, Flutter-Nebenläufigkeit in der CI.
+5. `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, HUM-147.
+
+### Tests
+- `tools/tests/ci_gate_test.sh`: `success` gibt 0 und „gruen"; `failure` gibt 1 und nennt Job und Schritt; Warten über `queued` und `in_progress`; kein Lauf und laufender Lauf nach der Frist geben 3; `cancelled` gibt 3; `timed_out` gibt 1; ein erneuter Lauf schlägt seinen roten Vorgänger; ein jüngerer roter Lauf schlägt einen älteren grünen; eine kaputte erste Abfrage gibt 2; eine spätere kaputte Abfrage wird übergangen; eine unbekannte Referenz gibt 2; die URL nennt Repository, Workflow, SHA und `event=push`; eine Ratengrenze wird abgewartet; eine gescheiterte Jobliste ändert das Urteil nicht (grün bleibt 0, rot bleibt 1); nach der ersten Abfrage wartet das Tor die erste Frist ab. Über ein nachgestelltes `curl` im PATH: Token als `Authorization`-Kopf, ohne Token kein Kopf, 403 mit `x-ratelimit-remaining: 0` und 429 mit `retry-after` werden abgewartet, 403 ohne Ratengrenze und 404 geben 2.
+- `tools/tests/commit_issue_test.sh`: Grün landet ein Merge mit dem getesteten Baum, nur den Pfaden des Issues und gelöschtem Branch, das lokale `main` folgt, fremde Dateien bleiben unversioniert; Rot und „kein Urteil" lassen `main` stehen; ein während der CI bewegtes `main` führt zu einem zweiten Lauf und einem Merge auf dem neuen Stand; ein auf `main` geänderter Pfad bricht vor dem Push ab; ist `main` in einem anderen Arbeitsbaum ausgecheckt, bleibt dessen Index stimmig; eine vorgemerkte fremde Datei landet nicht im Commit und bleibt vorgemerkt; eine lokale Änderung an einem Pfad, den der Merge verändert, überlebt mit Inhalt und Rechten, ob vorgemerkt, als vorgemerktes `chmod +x` oder als nicht vorgemerktes `chmod +x`, und das lokale `main` bleibt stehen; benennt der fremde Merge eine Datei um, verschwindet der alte Name aus Index und Arbeitsbaum, und der Status ist sauber; ein Pfad mit Musterzeichen (`f?`) setzt keine vorgemerkte Änderung an `fa` zurück; ein lokal von `old` auf `old\n` gebogener Symlink bleibt; `--land` nach Rot und `--amend` merged den ergänzten Commit; ein ausgecheckter Branch wird verweigert, ohne dass sich eine Referenz bewegt; ein Branch mit zwei Commits wird verweigert; ein abgewiesener Push nach `main` führt zu einem zweiten Lauf; Trailer mit Opus 5.5 und `Claude-Session:`.
+- Mutationsbeweise: siehe Akzeptanzkriterien.
+
+### Akzeptanzkriterien
+- [x] `ci.yml` läuft für Pushes auf `main` und `hum-*`, die Gruppierung je Ref bleibt. `actionlint` 1.7.7 über `ci.yml` und `release.yml` ohne Befund (2026-10-16).
+- [x] Jede Prüfung von `tools/verify-commit.sh` läuft in der CI (Tabelle); `dart format` und `catalog-lint` neu. `dart format` über den heutigen Stand: 419 Dateien, 0 geändert.
+- [x] `tools/ci-gate.sh` gegen die echte API über `88a3a37`: elf Jobs `success`, Exit 0 (2026-10-16).
+- [x] `tools/tests/ci_gate_test.sh` grün; zwölf Mutationen rot (`failure` als grün, `success` als rot, ältester Lauf gewinnt, kein Warten auf `completed`, `cancelled` als rot, Ratengrenze als Fehler, gescheiterte Jobliste bricht ab, keine erste Frist, Token ignoriert, kein `event=push`, `x-ratelimit-remaining: 0` ignoriert, jedes 403 als Ratengrenze).
+- [x] `tools/tests/commit_issue_test.sh` grün; einundzwanzig Mutationen rot (Merge trotz Rot, Merge ohne Urteil, kein zweiter Lauf nach bewegtem `main`, ganzer Arbeitsbaum im Commit, keine Prüfung veralteter Pfade, lokales `main` bleibt stehen, `main` in fremdem Arbeitsbaum wird verschoben, Index-Prüfung aus, Index-Prüfung ohne Modus, Arbeitsbaum-Prüfung aus, Arbeitsbaum ohne Rechte, beide Prüfungen aus, Pfadliste mit Umbenennungserkennung, Pfade als Muster, Symlink-Ziel über Befehlsersetzung, ausgecheckter Branch wird gelandet, alter Trailer, keine Zeile `Claude-Session:`, keine Ein-Commit-Prüfung, abgewiesener Push gibt auf).
+- [x] `CLAUDE.md` Schritte 3 bis 5 und Regeln für Subagenten, `AGENTS.md` Schwelle und gezielte Prüfungen. `CONTRIBUTING.md` ganz auf Deutsch, wie `CLAUDE.md` („Prosa in Dokumenten Deutsch") es für Dokumente verlangt; die Datei war bis auf den Abschnitt zu den Vorabversionen englisch, und nur die neuen Teile deutsch zu schreiben hätte sie zweisprachig gemacht. Die Überschrift „Sprint-Tor (Sprint gate)" behält den alten Namen, auf den `tests/e2e/run.sh` und `tests/e2e/README.md` verweisen.
+- [x] HUM-147: Kriterien erfüllt seit 2026-09-11, heute nachgeprüft, Notiz in `backlog/sprint-5.md`.
+- [x] sccache baut ohne root: `cargo install sccache --locked -j 2` unter `flock --close`, `nice -n 19` und `taskset -c 0-5` ergibt `sccache 0.18.0`, unter 20 Minuten mit zwei Jobs, 822 MB Zielverzeichnis und 316 MB Registry während des Baus (2026-10-16, in ein Wegwerf-Verzeichnis statt `~/.cargo`, weil die Sitzung dort nicht schreiben durfte).
+- [ ] Der erste Lauf auf einem Branch `hum-*` ist grün, und `tools/commit-issue.sh --ci` hat ihn gemergt (misst erst der Merge dieses Issues).
+- [ ] Dauer des Schritts „Test" in flutter-analyze-test nach der Änderung, gegen 5 min 25 s vorher (Lauf 37469218376).
+
+### Fallstricke
+- Die Actions-API erlaubt ohne Token 60 Anfragen je Stunde und Adresse; mehrere wartende Agenten teilen sie sich. Deshalb 60 s zwischen zwei Abfragen, 300 s nach der ersten, Warten bis zum Ende einer Sperre, und ein Fehler nach der ersten Abfrage ist nur eine Warnung.
+- Ein Arbeitsbaum, in dem der Issue-Branch ausgecheckt ist, verliert beim Verschieben oder Löschen der Referenz seinen HEAD oder sieht eine vorgemerkte Rücknahme. `--land` verweigert deshalb jeden ausgecheckten Issue-Branch.
+- `concurrency: cancel-in-progress` auf `main` bricht den Lauf des ersten von zwei schnell aufeinanderfolgenden Merges ab; dieser Merge wird dann nie grün. Das behebt HUM-238.
+- `git merge --ff-only` scheitert, wenn die Dateien des Issues unversioniert im Arbeitsbaum liegen, auch bei gleichem Inhalt. Das lokale `main` wird deshalb gezielt nachgezogen.
+- Der Release-Wächter verlangt einen grünen Push-Lauf des getaggten `main`-Commits. Der Lauf auf `main` nach dem Merge darf deshalb nicht wegfallen, auch wenn er denselben Baum noch einmal prüft.
+- Ein Branch mit mehr als einem Commit wird nicht still zusammengedrückt: `--land` verlangt genau einen Commit auf einem Commit von `main`.
+
+### Referenzen
+Nutzerfreigabe 2026-10-16; HUM-147 (`backlog/sprint-5.md`); `tools/verify-commit.sh`; CI-Lauf 37469218376; GitHub REST API „List workflow runs for a workflow" und „List jobs for a workflow run"; `test_core` `defaultConcurrency`.

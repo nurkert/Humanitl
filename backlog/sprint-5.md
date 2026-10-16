@@ -2705,6 +2705,8 @@ Proxy-Analyse 2026-09-11; RFC 6052, RFC 8215, RFC 3056, RFC 4380; IANA IPv4 und 
 ## HUM-147 · verify-commit baut inkrementell, die CI nicht
 Sprint: 5 · Größe: S · Abhängigkeiten: — · Blockiert: nichts; es hält die Platte des Entwicklungsrechners klein
 
+> **Aufgegangen in HUM-237** (`backlog/sprint-4.md`, 2026-10-16). Die Kriterien unten waren schon am 2026-09-11 erfüllt und gemessen; HUM-237 hat sie gegen den heutigen Stand von `tools/verify-commit.sh` nachgeprüft (`CARGO_INCREMENTAL=0` in `step()`, Löschen von `*/incremental` unter der Sperre des Zielverzeichnisses) und den Satz zum Zielverzeichnis in `CONTRIBUTING.md` ergänzt. Mit HUM-237 ist `tools/verify-commit.sh` freiwillig; das Tor nach `main` ist die CI auf dem Issue-Zweig.
+
 ### Kontext
 Die CI setzt `CARGO_INCREMENTAL: "0"` (`.github/workflows/ci.yml:43`). `tools/verify-commit.sh` fährt dieselben Schritte in einem frischen Worktree, gegen ein gemeinsames Zielverzeichnis (`~/.cache/humanitl/verify-target`, Zeile 59), aber inkrementell. Gemessen am 2026-09-11: Das Zielverzeichnis belegt 62 GB, davon 30 GB in `debug/incremental` mit 830 Einträgen und 32 GB in `debug/deps`. Die Inkrement-Artefakte wachsen mit jedem geprüften Commit und helfen kaum, weil jeder Lauf in einem neuen Worktree beginnt. Zugleich weicht verify dadurch von der CI ab, deren Stand es nachstellen soll.
 

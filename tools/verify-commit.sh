@@ -9,6 +9,11 @@
 #
 # Aufruf: tools/verify-commit.sh [commit-ish]   (Vorgabe: HEAD)
 #
+# Seit HUM-237 freiwillig: Das Tor nach `main` ist die CI auf dem Issue-Zweig
+# (`tools/commit-issue.sh --ci`), die denselben sauberen Commit prueft. Dieses
+# Skript bleibt fuer den Fall, dass die CI nicht erreichbar ist oder jemand
+# vor dem Push alles lokal sehen will.
+#
 # Der Auscheckpfad ist bewusst kurz: Die Escape-Tests legen einen Unix-Socket
 # darunter an, und ein Socket-Pfad darf 108 Zeichen nicht überschreiten.
 set -euo pipefail
@@ -252,6 +257,8 @@ step "Bau und Tests" make rust-build rust-test
 step "Dokumentation" env RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --manifest-path daemon/Cargo.toml
 step "Abhängigkeiten" make deps-lint
 step "Dokumente" make docs-lint
+# Wie die CI seit HUM-237: der gebuendelte Katalog und die Werkzeuge des Tors.
+step "Katalog und Werkzeuge" make catalog-lint tools-test
 # Wie der CI-Job parity-check (HUM-078): jede RPC mit Unterkommando, und die
 # eingecheckte Tabelle ist die erzeugte.
 step "Parität" make parity-check
