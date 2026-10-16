@@ -265,10 +265,10 @@ und nicht für den produktiven Einsatz gedacht.
 
 So wird eine Vorabversion geschnitten:
 
-1. Auf GitHub nachsehen, dass der CI-Lauf des Commits auf `main` grün ist.
-   Am sichersten ist der jüngste Commit von `main`: `ci.yml` bricht den Lauf
-   eines älteren Commits ab, sobald ein neuerer kommt, und ein abgebrochener
-   Lauf zählt nicht als grün.
+1. Auf GitHub nachsehen, dass der CI-Lauf des Commits auf `main` grün ist,
+   etwa mit `tools/ci-gate.sh <sha>`. Seit HUM-238 bekommt jeder Commit auf
+   `main` seinen eigenen Lauf, der nicht abgebrochen wird, wenn ein neuerer
+   kommt; jeder grüne Commit von `main` lässt sich taggen.
 2. Den Tag auf genau diesen Commit setzen und nur den Tag pushen:
 
    ```sh
