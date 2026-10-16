@@ -91,6 +91,7 @@ Voraussetzungen aus früheren Sprints: `humanitl-core` mit `Finding`, `Diagnosti
 | HUM-224 | Der Kanal-Test des Shims fällt unter Last zufällig aus | S | — |
 | HUM-228 | Der brotli-Test des Parsers wartet auf die Uhr und fällt unter Last aus | S | — |
 | HUM-233 | Der `systemd`-Test auf geschlossene Nummer fällt unter Last zufällig aus | S | — |
+| HUM-236 | `cargo deny` meldet vier rustls-Advisories und `unsafe-libyaml` und ist auf `main` rot | XS | — |
 
 Proto-Ergänzungen in diesem Sprint (Minor-Version `humanitl.v1` bleibt, neue RPCs sind additiv): `Pseudonyms`, `Config` (falls nicht schon in HUM-062 definiert, siehe Fallstricke von HUM-069), Erweiterung von `DecideRequest` um `acknowledged_findings` und `ignore_always`.
 
@@ -5476,3 +5477,70 @@ Die Funde (HUM-161); ein neuer Scan im Client; der Diff-Glow im Rumpf (`_reglowe
 
 ### Referenzen
 HUM-161 (Review-Runde 2, `_afterRemoval`), HUM-047 (Diff-Glow, Mapping).
+
+---
+
+## HUM-236 · `cargo deny` meldet vier rustls-Advisories und `unsafe-libyaml` und ist auf `main` rot
+Sprint: 4 · Größe: XS · Abhängigkeiten: keine · Blockiert: keine
+
+### Kontext
+Seit dem 2026-10-16 scheitert `make rust-deny` (Teil von `tools/verify-commit.sh` und der CI, nicht von `make check`) auf `main` mit „advisories FAILED", unabhängig vom Diff. Ursachen in der Advisory-Datenbank, nicht im Code:
+
+- `rustls` 0.23.45 hat vier neue Advisories, alle behoben in 0.23.46: RUSTSEC-2026-0346 (derivierte `Debug`-Ausgabe von `Tls12ClientSessionValue`/`Tls13ClientSessionValue` zeigt Master-Secret bzw. Resumption-PSK), RUSTSEC-2026-0347 (nach abgelehntem ECH gehen gepufferte Anwendungsdaten an den äußeren Server), RUSTSEC-2026-0348 (Brotli-Zertifikatsdekompression kann vor der Authentisierung 1 GiB anfordern), RUSTSEC-2026-0349 (ein nicht authentisierter ServerHello legt die Schlüsselaustausch-Gruppe künftiger Verbindungen auf klassisch fest).
+- `unsafe-libyaml` 0.2.11 ist archiviert und unbetreut (RUSTSEC-2024-0449). Es kommt über `serde_yaml_ng` 0.10 in `humanitl-rules` und `humanitl-catalog`.
+
+Denselben Fall gab es schon einmal mit RUSTSEC-2026-0285 (siehe HUM-142, Akzeptanzkriterium `make check`).
+
+### Ziel
+`make rust-deny` ist wieder grün. Der Proxy läuft auf einer `rustls`-Fassung ohne bekannte Lücke, und die eine Ausnahme für `unsafe-libyaml` ist begründet und trägt ein Prüfdatum.
+
+### Nicht-Ziel
+Der Wechsel von `serde_yaml_ng` auf einen YAML-Parser in sicherem Rust (`serde-saphyr`): Er ändert Fehlertexte von `RULES_001` und `CATALOG_*`, Zeilenangaben und die Ausgabe von `serde_yaml_ng::to_string` beim Export der Regeln und braucht eine neue Abhängigkeit in `daemon/Cargo.toml`. Das ist ein eigenes Folge-Issue mit eigenen Tests, kein Notfix für eine rote Pipeline.
+
+### Betroffene Pfade
+- `daemon/Cargo.lock` (`rustls` 0.23.45 auf 0.23.46, sonst nichts)
+- `daemon/deny.toml` (`[advisories] ignore` mit RUSTSEC-2024-0449)
+- `backlog/sprint-4.md`
+
+### Spezifikation
+`cargo update -p rustls` hebt nur `rustls` an; die Anforderung `rustls = "0.23"` in `daemon/crates/proxy/Cargo.toml` erlaubt 0.23.46, `daemon/Cargo.toml` bleibt unverändert. `tokio-rustls` 0.26.4 und `rustls-webpki` 0.103.15 bleiben, `rcgen` hängt nicht an `rustls`.
+
+```toml
+[advisories]
+ignore = [
+  { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml unmaintained, no known vulnerability; reads only local rules and catalog files; replacement tracked separately, review by 2027-01-16" },
+]
+```
+
+Bewertung der vier Advisories für Humanitl (Stand 0.23.45, also vor dem Update):
+
+- **RUSTSEC-2026-0348, Brotli:** nicht betroffen. `humanitl-proxy` bindet `rustls` mit `default-features = false` und nur `ring`, `std`, `tls12` (über `tokio-rustls` zusätzlich `logging`); `cargo tree -e features -i rustls` zeigt kein Feature `brotli`. Der Brotli-Decoder in `humanitl-findings` (`decode.rs`) ist die Crate `brotli` für HTTP-Rümpfe, nicht die Zertifikatskompression von rustls. Die Server-Seite fordert zudem keine Client-Zertifikate an (`with_no_client_auth`).
+- **RUSTSEC-2026-0347, ECH:** nicht betroffen. Weder `upstream.rs` noch `ca.rs` setzen `EchMode`; der Upstream-Client baut seine `ClientConfig` mit `with_safe_default_protocol_versions` ohne ECH. Ohne `EchMode::Enable` tritt der Fehler nicht auf.
+- **RUSTSEC-2026-0346, `Debug` der Sitzungswerte:** nicht betroffen. Betroffen sind nur eigene `ClientSessionStore`-Implementierungen, die Sitzungswerte mit `Debug` ausgeben. Humanitl hat keine eigene; der Upstream-Client nutzt den eingebauten Speicher, dessen `Debug`-Ausgabe laut Advisory geschwärzt ist. Kein Code im Workspace formatiert `Tls12ClientSessionValue` oder `Tls13ClientSessionValue`.
+- **RUSTSEC-2026-0349, ServerHello-Downgrade:** der Mechanismus greift, der Schaden nicht. Der Upstream-Client hat Resumption an (Standard der `ClientConfig`), also merkt sich der eingebaute Sitzungsspeicher die vom Server gewählte Gruppe je Host. Der Provider ist aber `rustls::crypto::ring::default_provider()`, und `ring` bietet nur `X25519`, `secp256r1` und `secp384r1` an, keine hybride Post-Quanten-Gruppe wie `X25519MLKEM768`. Es gibt also keine Post-Quanten-Vertraulichkeit, die verloren gehen könnte; ein Angreifer kann höchstens zwischen klassischen Gruppen umlenken, die der Client ohnehin anbietet. Keine Schlüsselpreisgabe, keine Umgehung der Authentisierung.
+
+Ergebnis: Keine der vier Lücken ist im Code-Pfad von Humanitl ausnutzbar. Die Sicherheitsaussage in `README.md`, `docs/SECURITY.md` und `docs/THREAT-MODEL.md` ändert sich nicht; das Update schließt die Lücken trotzdem, damit ein späteres Feature (Brotli, ECH, `aws-lc-rs` mit Post-Quanten-Gruppen) nicht auf eine verwundbare Fassung trifft.
+
+`unsafe-libyaml` wird ignoriert statt ersetzt: Das Advisory meldet fehlende Pflege, keine Lücke. Der Parser liest nur lokale Dateien, die der Nutzer oder das Paket liefert (`rules.yaml`, die Kataloge), nie Daten aus dem Netz oder vom Agenten in der Sandbox. Regeln aus dem RPC werden vor dem Schreiben validiert und nur serialisiert (Emitter); geparst wird nur die lokale Datei. Die Ausnahme läuft am 2027-01-16 zur Prüfung ab.
+
+### Schritte
+1. `cargo deny check advisories` mit dem alten `Cargo.lock`: rot mit den fünf Meldungen.
+2. `cargo update -p rustls`: `Cargo.lock` ändert genau zwei Zeilen (Version und Prüfsumme von `rustls`).
+3. Ausnahme in `daemon/deny.toml` mit Grund und Prüfdatum.
+4. `make rust-deny` grün (eigene Messung, denn `make check` enthält `rust-deny` nicht), dann `STRICT=1 make check` grün.
+
+### Tests
+Kein neuer Test. Der Nachweis ist `cargo deny` selbst: mit dem alten `Cargo.lock` rot, mit dem neuen grün.
+
+### Akzeptanzkriterien
+- [x] `make rust-deny` grün. Gemessen am 2026-10-16: „advisories ok, bans ok, licenses ok, sources ok“, Exit 0.
+- [x] Mutationsbeweis: mit dem alten `Cargo.lock` (rustls 0.23.45) und der neuen `deny.toml` ist `make rust-deny` rot und meldet genau die vier rustls-Advisories. Gemessen am 2026-10-16: „advisories FAILED“, Exit 2, gemeldet RUSTSEC-2026-0346 bis -0349, RUSTSEC-2024-0449 nicht mehr.
+- [x] `STRICT=1 make check` grün. Gemessen am 2026-10-16: Exit 0. `make check` enthält `rust-deny` nicht; die Prüfung der Advisories ist das erste Kriterium, eine eigene Messung mit `make rust-deny`.
+
+### Fallstricke
+- `daemon/Cargo.toml` nicht anfassen, solange `cargo update -p rustls` reicht.
+- Die Ausnahme nicht ohne Datum eintragen; sonst bleibt sie für immer.
+- `cargo deny` liest die Advisory-Datenbank aus dem Netz. Eine neue Meldung kann `main` ohne jeden Commit wieder rot machen; das ist gewollt.
+
+### Referenzen
+https://rustsec.org/advisories/RUSTSEC-2026-0346, https://rustsec.org/advisories/RUSTSEC-2026-0347, https://rustsec.org/advisories/RUSTSEC-2026-0348, https://rustsec.org/advisories/RUSTSEC-2026-0349, https://rustsec.org/advisories/RUSTSEC-2024-0449; HUM-142 (RUSTSEC-2026-0285); `daemon/crates/proxy/src/upstream.rs` (`ClientTls::new`), `daemon/crates/proxy/src/ca.rs` (`server_config`).
