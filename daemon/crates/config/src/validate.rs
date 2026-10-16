@@ -128,6 +128,16 @@ fn llm_is_well_formed(llm: &LlmConfig) -> Result<(), Diagnostic> {
             "a URL with the scheme http or https",
         ));
     }
+    if let Some(reference) = &llm.api_key_ref
+        && crate::secret::KeyRef::parse(reference).is_none()
+    {
+        return Err(out_of_range(
+            "llm.api_key_ref",
+            &format!("{reference:?}"),
+            "secret-service:humanitl/NAME or file:NAME, NAME of 1 to 32 characters a-z, 0-9, - \
+             and _",
+        ));
+    }
     if llm.passthrough_paths.is_empty() {
         return Err(out_of_range(
             "llm.passthrough_paths",

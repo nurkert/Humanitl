@@ -30,6 +30,7 @@ pub mod host;
 pub mod http;
 pub mod ids;
 pub mod rule;
+pub mod secret_mask;
 pub mod shell;
 pub mod terminal;
 
@@ -56,4 +57,5 @@ pub use crate::ids::{AskId, FlowId, IdParseError, RuleId, SandboxId, SessionId};
 pub use crate::rule::{
     Action, Expiry, HostPattern, Matcher, PathPattern, Rule, path_prefix_is_valid,
 };
+pub use crate::secret_mask::SecretMasks;
 pub use crate::terminal::{TerminalFilter, TerminalPolicy};

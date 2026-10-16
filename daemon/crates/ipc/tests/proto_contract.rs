@@ -1207,6 +1207,15 @@ const EXPECTED_RPCS: &[(&str, &str, &str, bool, bool)] = &[
         false,
         false,
     ),
+    // HUM-140: der Zugangsschlüssel des Modells. Nicht in BACKLOG.md 3.3; die
+    // Antwort trägt den Schlüssel nie, nur ob einer da ist und wo.
+    (
+        "LlmKey",
+        ".humanitl.v1.LlmKeyRequest",
+        ".humanitl.v1.LlmKeyStatus",
+        false,
+        false,
+    ),
 ];
 
 #[test]

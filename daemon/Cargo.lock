@@ -979,6 +979,7 @@ dependencies = [
  "toml",
  "toml_edit",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -993,6 +994,7 @@ dependencies = [
  "sha2",
  "thiserror",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -1046,6 +1048,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -1131,6 +1134,7 @@ dependencies = [
  "toml",
  "url",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

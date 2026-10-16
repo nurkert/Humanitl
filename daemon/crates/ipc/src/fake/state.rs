@@ -267,6 +267,9 @@ struct Inner {
     blobs: BTreeMap<[u8; 32], Bytes>,
     scripted: BTreeMap<FlowId, StoredResponse>,
     config: BTreeMap<String, String>,
+    /// Ob ein Zugangsschlüssel „hinterlegt" ist (HUM-140). Der Fake hält
+    /// nie den Schlüssel selbst, nur diese Aussage.
+    llm_key_set: bool,
     sandbox_id: SandboxId,
     sandbox_state: v1::SandboxState,
     hold_bytes: u64,
@@ -290,6 +293,7 @@ impl FakeState {
                 blobs: BTreeMap::new(),
                 scripted: BTreeMap::new(),
                 config: BTreeMap::new(),
+                llm_key_set: false,
                 sandbox_id: SandboxId::new(),
                 sandbox_state: v1::SandboxState::Running,
                 hold_bytes: 0,
@@ -546,6 +550,22 @@ impl FakeState {
     /// Setzt einen Konfigurationswert.
     pub fn set_config(&self, key: String, value: String) {
         self.lock().config.insert(key, value);
+    }
+
+    /// Nimmt einen Konfigurationswert heraus; danach gilt die Vorgabe.
+    pub fn remove_config(&self, key: &str) {
+        self.lock().config.remove(key);
+    }
+
+    /// Ob ein Zugangsschlüssel als hinterlegt gilt (HUM-140).
+    #[must_use]
+    pub fn llm_key_set(&self) -> bool {
+        self.lock().llm_key_set
+    }
+
+    /// Setzt die Aussage, ob ein Zugangsschlüssel hinterlegt ist.
+    pub fn set_llm_key(&self, set: bool) {
+        self.lock().llm_key_set = set;
     }
 
     /// Id und Zustand der simulierten Sandbox.

@@ -692,14 +692,8 @@ async fn every_other_rpc_says_which_issue_brings_it() {
     let daemon = Daemon::new().await;
     let mut client = daemon.client().await;
 
-    // `Audit` antwortet seit HUM-156 (`tests/audit_rpc.rs`).
-    let error = client
-        .get_config(v1::GetConfigRequest::default())
-        .await
-        .map(|_| ())
-        .unwrap_err();
-    assert_eq!(error.code(), Code::Unimplemented);
-    assert!(error.message().contains("arrives in"), "{error}");
+    // `Audit` antwortet seit HUM-156 (`tests/audit_rpc.rs`), `GetConfig` seit
+    // HUM-069 (`set_config_writes_a_form_setting_and_get_config_reads_it`).
 
     // `GetFlow` und `GetBody` gibt es seit HUM-026. Dieser Daemon läuft ohne
     // Aufzeichnung: Ein unbekannter Flow ist dann `NOT_FOUND`, und ein Body hat
@@ -843,7 +837,7 @@ async fn set_config_writes_the_ca_variable_and_a_new_resolution_sees_it() {
 }
 
 #[tokio::test]
-async fn set_config_refuses_everything_but_the_ca_path_and_writes_nothing() {
+async fn set_config_refuses_everything_outside_the_form_and_the_ca_path() {
     let dir = tempfile::tempdir().unwrap();
     let paths = scratch_paths(dir.path());
     let daemon = daemon_over(&paths).await;
@@ -851,7 +845,9 @@ async fn set_config_refuses_everything_but_the_ca_path_and_writes_nothing() {
 
     for (key, value) in [
         ("sandbox.env.CURL_CA_BUNDLE", "/tmp/other.crt"),
-        ("hold.timeout_secs", "1"),
+        ("sandbox.profile", "llm-only"),
+        // Den Verweis auf den Zugangsschlüssel schreibt nur `LlmKey` (HUM-140).
+        ("llm.api_key_ref", "file:llm"),
         ("sandbox.env.LD_PRELOAD", "/etc/humanitl/ca.crt"),
         ("sandbox.env.curl_ca_bundle", "/etc/humanitl/ca.crt"),
     ] {
@@ -863,6 +859,91 @@ async fn set_config_refuses_everything_but_the_ca_path_and_writes_nothing() {
         assert_eq!(finding_of(&refused).code, "CONFIG_014", "{key}");
     }
     assert!(!paths.config_path().exists(), "nothing was written");
+
+    drop(client);
+    daemon.shutdown().await;
+}
+
+/// Eine Einstellung des Formulars über den Draht: geschrieben, mit
+/// Kommentar, und `GetConfig` sieht sie danach (HUM-069).
+#[tokio::test]
+async fn set_config_writes_a_form_setting_and_get_config_reads_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = scratch_paths(dir.path());
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    std::fs::write(paths.config_path(), "# mine\n[hold]\ntimeout_secs = 300\n").unwrap();
+    let daemon = daemon_over(&paths).await;
+    let mut client = daemon.client().await;
+
+    client
+        .set_config(set_request("hold.timeout_secs", "15"))
+        .await
+        .unwrap();
+    let refused = client
+        .set_config(set_request("hold.ask_mode", "sometimes"))
+        .await
+        .unwrap_err();
+    assert_eq!(finding_of(&refused).code, "CONFIG_003");
+
+    let text = std::fs::read_to_string(paths.config_path()).unwrap();
+    assert_eq!(text, "# mine\n[hold]\ntimeout_secs = 15\n");
+    let snapshot = client
+        .get_config(v1::GetConfigRequest::default())
+        .await
+        .unwrap()
+        .into_inner();
+    let values: serde_json::Value = serde_json::from_str(&snapshot.values_json).unwrap();
+    assert_eq!(values["hold"]["timeout_secs"], 15);
+    assert_eq!(values["hold"]["ask_mode"], "ui");
+
+    drop(client);
+    daemon.shutdown().await;
+}
+
+/// `LlmKey` über den Draht: Ohne Schlüsselbund (kein `secret-tool` im
+/// Suchpfad dieser Pfade) landet der Schlüssel in der Datei `0600`, die
+/// Antwort sagt es, und weder sie noch `config.toml` trägt ihn (HUM-140).
+#[tokio::test]
+async fn llm_key_over_the_wire_never_carries_the_key_back() {
+    const KEY: &str = "sk-wire-0123456789abcdef";
+    let dir = tempfile::tempdir().unwrap();
+    let paths = scratch_paths(dir.path());
+    let daemon = daemon_over(&paths).await;
+    let mut client = daemon.client().await;
+
+    let stored = client
+        .llm_key(v1::LlmKeyRequest {
+            op: Some(v1::llm_key_request::Op::Set(v1::llm_key_request::Set {
+                key: KEY.to_owned(),
+            })),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(stored.set);
+    assert_eq!(stored.store, v1::LlmKeyStore::File as i32);
+    assert_eq!(stored.diagnostics[0].code, "CONFIG_019");
+    assert!(!format!("{stored:?}").contains(KEY));
+
+    let config = std::fs::read_to_string(paths.config_path()).unwrap();
+    assert!(config.contains("api_key_ref = \"file:llm\""), "{config}");
+    assert!(!config.contains(KEY), "{config}");
+    let file = paths.key_dir().join("llm.key");
+    let mode =
+        std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&file).unwrap().permissions());
+    assert_eq!(mode & 0o777, 0o600);
+
+    let status = client
+        .llm_key(v1::LlmKeyRequest {
+            op: Some(v1::llm_key_request::Op::Status(
+                v1::llm_key_request::Status {},
+            )),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(status.set);
+    assert!(!format!("{status:?}").contains(KEY));
 
     drop(client);
     daemon.shutdown().await;

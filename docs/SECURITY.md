@@ -395,6 +395,97 @@ und nicht den Namen, oder den Namen unter `resolver.overrides` festnageln. Wer k
 Maschine hat, schaltet den Passthrough ab und lässt auch die Inferenz halten — unbequem, aber
 ehrlich. Und: den Endpunkt in Zeile 4 des Panels bei jedem Start einmal ansehen.
 
+#### Der Zugangsschlüssel des Modells (HUM-140)
+
+*Warum es ihn gibt.* Ein Modell eines Anbieters antwortet nur mit Schlüssel. Ohne einen Ort für
+ihn bliebe nur, ihn von Hand in eine Konfiguration des Agenten zu schreiben, und dort stünde er im
+Klartext im Projekt oder in der Kommandozeile.
+
+*Wo er liegt.* Im Schlüsselbund des Systems über den Secret Service (`gnome-keyring`, `kwallet`),
+angesprochen mit `secret-tool` aus `libsecret-tools`, unter den Attributen `service=humanitl` und
+`account=llm`. Der Schlüssel reist dabei über `stdin` hinein und über `stdout` heraus, nie über die
+Kommandozeile von `secret-tool`. Antwortet der Secret Service nicht (kein `secret-tool`, kein
+Sitzungsbus, ein Fehler oder 20 Sekunden ohne Antwort), liegt er in
+`$XDG_DATA_HOME/humanitl/keys/llm.key` mit `0600` in einem Verzeichnis mit `0700`; das meldet
+`CONFIG_019`, und das Formular sagt, welcher der beiden Wege gilt. Gelesen wird die Datei nur,
+wenn sie diesem Konto gehört, kein Symlink ist und für niemanden sonst lesbar ist (sonst
+`LLM_009`). In `config.toml` steht nie der Schlüssel, nur sein Verweis `llm.api_key_ref`
+(`secret-service:humanitl/llm` oder `file:llm`). Gesetzt wird er über die RPC `LlmKey`, aus dem
+Formular oder mit `humanitl llm key set`, das ihn von `stdin` liest; keine Antwort des Daemons
+trägt ihn zurück, nur ob einer da ist und wo.
+
+*Wie er in die Sandbox kommt.* Beim Start einer Sitzung holt der Daemon den Schlüssel und legt ihn
+als Datei `/etc/humanitl/opencode/llm-api-key` in die Sandbox, aus einem memfd über
+`--ro-bind-data`, wie jede andere Datei des Adapters. `opencode.json` verweist mit
+`{file:/etc/humanitl/opencode/llm-api-key}` darauf. Eine Umgebungsvariable ist es mit Absicht
+nicht: Die Umgebung des Agenten setzt `bwrap` mit `--setenv NAME WERT`, also über seine eigene
+Kommandozeile, und die liest jeder Prozess desselben Nutzers in `/proc/<pid>/cmdline`. Fehlt der
+Schlüssel im Speicher, startet die Sitzung nicht und nennt `LLM_009` samt
+`humanitl llm key set`; ein Agent ohne den Schlüssel, den der Mensch eingetragen hat, liefe in
+Fehler, die niemand zuordnen kann. Ein Plan (`Sandbox(Plan)`, die Momentaufnahme) liest den
+Schlüssel nie: Die Datei steht dort leer, damit Plan und Start dieselbe Kommandozeile haben.
+
+*Wo er nicht steht.* Nicht in `argv`, nicht in der Umgebung, nicht in der Momentaufnahme der
+Oberfläche (sie nennt nur den Pfad der Datei), nicht im Log: Der Typ `ApiKey` zeigt sich in jeder
+`Debug`-Form als `••••` und wird beim Fallenlassen überschrieben, eine Datei des Adapters zeigt in
+ihrer `Debug`-Form nur ihre Länge, und die Kopfzeile der Probe ist für `hyper` als empfindlich
+markiert. In der Aufzeichnung steht er als `••••`: Bevor der Agent ihn sieht, trägt der Start ihn
+in die Masken der Aufzeichnung ein, und jede aufgezeichnete Kopfzeile, die Spalten
+`content_type` und `content_encoding`, jeder aufgezeichnete Pfad samt Query, der Host und die Kopfzeile `Host` (ein
+Schlüssel als Label einer Subdomain, ohne Rücksicht auf Groß- und Kleinschreibung; `Referer` und
+`Origin` nur in der gespeicherten Schreibung, HUM-239), gleich an
+welchen Host, tragen danach statt des Werts `••••`, auch URL-kodiert, ganz oder teilweise und in
+jeder Schreibung der Hex-Ziffern (`%2B` neben `%2f`).
+Rümpfe werden nicht maskiert, ihre Prüfsumme ist die Adresse des Blobs. Ein Schlüssel unter 16
+Zeichen wird gar nicht erst gespeichert (`CONFIG_020`): Er ließe sich weder verlässlich maskieren
+noch verlässlich finden.
+
+*Wo er ein Fund ist, und wo nicht.* Derselbe Eintrag macht den Schlüssel zu einem gesuchten Wert:
+Der Detektor `known-secret` sucht ihn wörtlich und URL-kodiert (Byte für Byte, auch gemischt) in
+jeder Kopfzeile, in der Query (roh und dekodiert) und im entpackten Rumpf jeder Anfrage, an jeden
+Host. Jedes Vorkommen ist ein Fund `api_key:llm` der Stufe `checksum`, und kein anderer Fund
+verdrängt ihn beim Aufräumen, auch kein Begriff aus `findings.user_terms`; ein Schlüssel ohne bekanntes Format
+(ein selbst gewählter für vLLM, einer von Groq oder OpenRouter) wird so gefunden, obwohl ihn kein
+Muster kennt. Kein Fund ist er an genau einer Stelle: in der Kopfzeile `Authorization` einer Anfrage
+an das Ziel des Schlüssels, Host und Port von `llm.endpoint`, normalisiert wie jede Anfrage
+(`HostName`); ohne das stünde an jeder Anfrage an das Modell `LLM_005`. Das Ziel wird am Host der
+Anfrage gemessen, wie der Proxy ihn sieht (`CONNECT` bzw. `Host`), nicht an einer aufgelösten
+Adresse.
+
+Ein Fund hält eine Anfrage nicht von selbst an. Geht sie an einen Host, den keine Regel freigibt,
+wird sie ohnehin angehalten, und die Karte zeigt den Fund. Gibt eine Regel den Host frei, geht sie
+mit dem Fund in der Aufzeichnung hinaus, außer `hold.hard_block_checksum_secrets` ist an: Dann hält
+der Fund sie an, weil er die Stufe `checksum` trägt. Im Pfad vor dem `?` und im Host sucht kein
+Detektor; dort maskiert nur die Aufzeichnung.
+
+Der Rumpf wird so weit durchsucht wie jeder andere Scan: bis `limits.preview_cap_bytes` (darüber meldet
+der Scan eine Lücke, `FINDINGS_002`), entpackt nur bei einem `Content-Encoding`, das der Scanner
+kennt, und ohne Rücksicht auf die Syntax des Rumpfs. Ein Schlüssel, den ein JSON-Escape
+(`\u002b` für `+`) oder ein Formular (`+` für ein Leerzeichen, `%2B` im Rumpf) anders schreibt als
+wörtlich oder URL-kodiert, ist dort kein Treffer.
+
+*Die Probe.* „Prüfen" schickt einen eben eingetippten Schlüssel einmal an genau den Endpunkt, der
+im Feld steht, und speichert ihn nicht; danach ist das Feld leer, ebenso nach jeder Änderung des
+Endpunkts (schon beim Tippen, nicht erst beim Speichern), damit ein für einen Endpunkt getippter
+Schlüssel nicht beim nächsten landet. Den hinterlegten Schlüssel schickt der Daemon nur an einen
+Endpunkt mit derselben Herkunft (Schema, Host, Port) wie `llm.endpoint`; nennt ein Client einen
+anderen Host, geht die Probe ohne Schlüssel, und `key_sent` sagt es.
+
+*Was offen bleibt.* Der Agent kann den Schlüssel lesen — er braucht ihn. Ein unterwanderter Agent
+kann ihn deshalb in eine Anfrage an ein anderes Ziel packen. Dort ist er ein Fund, außer im Pfad
+vor dem `?` und im Host; angehalten wird
+die Anfrage aber nur an einem Host ohne freigebende Regel oder mit
+`hold.hard_block_checksum_secrets`, und die Karte der gehaltenen Anfrage zeigt Kopfzeilen und Rumpf,
+wie sie sind. Ein Schlüssel, der umkodiert hinausgeht (Base64, zerlegt, verschlüsselt), ist kein
+wörtlicher Treffer und kein Fund. Rümpfe maskiert die Aufzeichnung nicht: Ihre
+Prüfsumme ist die Adresse des Blobs, und ein Rumpf, der anders gespeichert wäre, als er ging, wäre
+eine falsche Aufzeichnung. Wer denselben Nutzer kontrolliert, liest den Schlüssel mit
+`secret-tool lookup` selbst; der Schlüsselbund schützt gegen andere Nutzer, nicht gegen diesen.
+Die Masken gelten bis zum Ende des Daemons; ein ersetzter Schlüssel bleibt bis dahin mit maskiert.
+
+*Was der Nutzer tun sollte.* Einen Schlüssel mit so wenig Rechten wie möglich anlegen, beim
+Anbieter widerrufbar, und `libsecret-tools` installieren, damit er nicht in der Datei landet.
+
 ### 3.2 Das Projektverzeichnis `/work`
 
 *Warum es ihn gibt.* Ein Agent, der nicht schreiben darf, ist ein Chatfenster.
@@ -596,6 +687,7 @@ andere ebenfalls benutzen.
 | `hyper`/`rustls`/`rcgen` (über `hudsucker`) | TLS-Terminierung und HTTP-Verarbeitung | exakt gepinnt, regelmäßig aktualisiert | Rust-TLS-Stack ohne OpenSSL-Speicherfehlerklasse; Historie von Rapid Reset und CONTINUATION-Flood wird verfolgt |
 | Der Sprachmodell-Host | sieht jeden Prompt | muss dem Nutzer gehören | Erklärter Seitenkanal, keine technische Absicherung (Abschnitt 3.1) |
 | Schlüsseldatei des Audit-Logs | HMAC-Schlüssel der Kette | `$XDG_DATA_HOME/humanitl/keys/audit.key`, `0600` in `0700`; HUM-048 legt ihn in den Keyring (Secret Service: `gnome-keyring`, `kwallet`) | Schutz gegen andere Nutzer, nicht gegen denselben Nutzer |
+| Schlüsselbund des Systems (Secret Service) | Zugangsschlüssel des Modells (HUM-140) | `secret-tool` aus `libsecret-tools`; ohne Antwort `$XDG_DATA_HOME/humanitl/keys/llm.key`, `0600` in `0700` | Schutz gegen andere Nutzer, nicht gegen denselben Nutzer; der Agent liest ihn in der Sandbox, weil er ihn braucht (Abschnitt 3.1) |
 
 **Nicht in der Vertrauensbasis der Isolation:** die Flutter-Anwendung. Sie ist ein gRPC-Client wie
 die CLI und kann die Sandbox nicht schwächen. Sie ist allerdings vertrauenswürdig für die

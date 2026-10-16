@@ -70,7 +70,7 @@ use std::time::SystemTime;
 use bytes::Bytes;
 use humanitl_core::ids::SandboxId;
 use humanitl_core::{
-    BodyRef, Diagnostic, Finding, FlowEvent, FlowId, HeaderMap, RuleId, SessionId,
+    BodyRef, Diagnostic, Finding, FlowEvent, FlowId, HeaderMap, RuleId, SecretMasks, SessionId,
 };
 use tokio::sync::{broadcast, oneshot};
 
@@ -111,6 +111,9 @@ pub struct Recorder {
     settings: RecorderSettings,
     diagnostics: broadcast::Sender<Diagnostic>,
     db: Arc<PathBuf>,
+    /// Geheimnisse, die in Kopfzeilen nie im Klartext gespeichert werden
+    /// (HUM-140).
+    masks: SecretMasks,
 }
 
 impl core::fmt::Debug for Recorder {
@@ -189,7 +192,31 @@ impl Recorder {
             settings,
             diagnostics,
             db: Arc::new(db.to_path_buf()),
+            masks: SecretMasks::default(),
         })
+    }
+
+    /// Nimmt `secret` in die Masken auf: Ab jetzt steht es in keiner
+    /// aufgezeichneten Kopfzeile und keinem aufgezeichneten Pfad mehr im
+    /// Klartext, sondern als `••••` (HUM-140).
+    ///
+    /// Der Daemon ruft das mit dem Zugangsschlüssel des Modells auf, bevor er
+    /// ihn einer Sandbox gibt, und nennt dabei das Ziel (`host:port`), dem er
+    /// gehört; nur dort, in `Authorization`, ist er kein Fund
+    /// ([`SecretMasks::expected_at`]). Die Liste gilt für alle Klone dieser
+    /// Aufzeichnung und bis zum Ende des Prozesses.
+    pub fn mask_secret(&self, secret: &str, authority: Option<&str>) {
+        self.masks.add_for(secret, authority);
+    }
+
+    /// Die Masken dieser Aufzeichnung, als geteilter Wert.
+    ///
+    /// Der Daemon gibt sie dem Scanner der Funde: Ein Schlüssel, den
+    /// [`Recorder::mask_secret`] einträgt, ist in `Authorization` an seinem
+    /// eigenen Ziel kein Fund mehr, überall sonst weiter einer (HUM-140).
+    #[must_use]
+    pub fn masks(&self) -> SecretMasks {
+        self.masks.clone()
     }
 
     /// Die Grenzen, nach denen diese Aufzeichnung arbeitet.
@@ -241,8 +268,27 @@ impl Recorder {
     /// Aufzurufen für jedes Ereignis des Proxys, in der Reihenfolge, in der es
     /// veröffentlicht wird. `ResponseChunk`, `Lagged` und `Diagnostic` ändern
     /// nichts; die Größe der Antwort kommt aus dem [`ResponseSink`].
+    ///
+    /// Der Pfad samt Query und der Host einer angekommenen Anfrage gehen durch
+    /// dieselben Masken wie die Kopfzeilen: Ein Schlüssel als `?api_key=…`
+    /// oder als Subdomain stünde sonst im Klartext in `flows` (HUM-140).
     pub fn apply(&self, event: &FlowEvent) {
-        self.send(WriterCmd::Event(Box::new(event.clone())));
+        let mut event = event.clone();
+        if let FlowEvent::Received { request, .. } = &mut event {
+            let path = self.masks.apply(&request.path_and_query).into_owned();
+            request.path_and_query = path;
+            // Der Host geht in `flows.host` und `flows.host_display`; ein
+            // Schlüssel als Label einer Subdomain stünde dort sonst im
+            // Klartext. Die maskierte Form ist kein gültiger Name mehr und
+            // wird deshalb ohne `HostName::parse` eingesetzt; sie dient nur
+            // der Aufzeichnung (HUM-140, Review).
+            if let humanitl_core::HostName::Dns(name) = &request.authority.host
+                && let std::borrow::Cow::Owned(masked) = self.masks.apply_host(name)
+            {
+                request.authority.host = humanitl_core::HostName::Dns(masked);
+            }
+        }
+        self.send(WriterCmd::Event(Box::new(event)));
     }
 
     /// Zeichnet eine vollständig gepufferte Nachricht auf.
@@ -286,13 +332,13 @@ impl Recorder {
                 })??;
         }
 
-        let content_type = message::content_type_of(headers);
+        let content_type = message::content_type_of(headers, &self.masks);
         self.send(WriterCmd::Message(Box::new(MessageWrite {
             flow,
             dir,
-            headers_json: message::encode_headers(headers),
+            headers_json: message::encode_headers(headers, &self.masks),
             content_type: content_type.clone(),
-            content_encoding: message::content_encoding_of(headers),
+            content_encoding: message::content_encoding_of(headers, &self.masks),
             inline: if inline { Some(stored.clone()) } else { None },
             blob: if inline { None } else { Some(sha256) },
             size,
@@ -323,6 +369,7 @@ impl Recorder {
             self.diagnostics.clone(),
             self.settings,
             headers,
+            &self.masks,
         )
     }
 

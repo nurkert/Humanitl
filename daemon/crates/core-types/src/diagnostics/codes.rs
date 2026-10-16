@@ -78,11 +78,12 @@ pub static AREAS: &[AreaInfo] = &[
         area: "config",
         prefix: "CONFIG",
         first: 1,
-        last: 19,
+        last: 29,
         note: "001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), \
                010-012 Test-Wurzel und ihr Flag (HUM-087), 013 der Projektordner \
                der Einrichtung (HUM-044), 017-018 Editor und Gruppenschlüssel \
-               (HUM-070)",
+               (HUM-070), 019-020 der Zugangsschlüssel des Modells (HUM-140, \
+               Bereich dafür bis 029 erweitert)",
     },
     AreaInfo {
         area: "sandbox",
@@ -111,7 +112,7 @@ pub static AREAS: &[AreaInfo] = &[
         prefix: "LLM",
         first: 1,
         last: 9,
-        note: "LLM-Endpunkt und seine Antworten",
+        note: "LLM-Endpunkt und seine Antworten, 009 der Zugangsschlüssel (HUM-140)",
     },
     AreaInfo {
         area: "rules",
@@ -625,8 +626,9 @@ registry! {
         "Der Endpunkt antwortet nicht, löst nicht auf, oder die Frist läuft ab.",
         "`CopyCommand` mit einem `curl`, das dasselbe versucht.";
     /// Der LLM-Endpunkt antwortet, verlangt aber eine Anmeldung (`401` oder
-    /// `403`). Humanitl schickt im MVP keine Zugangsdaten an das Modell
-    /// (HUM-039).
+    /// `403`). Ohne hinterlegten Zugangsschlüssel schickt Humanitl keine
+    /// Zugangsdaten (HUM-039); mit einem hat der Endpunkt ihn abgelehnt
+    /// (HUM-140).
     ///
     /// **Der Titel hat sich mit HUM-039 geschärft.** Er lautete
     /// „LLM-Endpoint antwortet nicht als OpenAI-kompatible API"; diese
@@ -636,8 +638,8 @@ registry! {
     /// gibt also keine ältere Meldung, keinen Screenshot und keine Zeile in
     /// `audit.jsonl`, die etwas anderes bedeuten könnte.
     LLM_002 => "llm", "LLM-Endpoint verlangt eine Anmeldung", "#llm_002",
-        "Der Endpunkt verlangt eine Anmeldung (`401` oder `403`).",
-        "Kein Fix: Humanitl schickt im MVP keine Zugangsdaten.";
+        "Der Endpunkt verlangt eine Anmeldung (`401` oder `403`), ohne Schlüssel oder mit einem, den er ablehnt.",
+        "`CopyCommand`: `humanitl llm key set` hinterlegt den Zugangsschlüssel; in der Oberfläche das Feld „Zugangsschlüssel“ der Einstellungen.";
     /// Die Verbindung steht, aber weder `/api/tags` (Ollama) noch `/v1/models`
     /// (OpenAI-kompatibel) hat geantwortet. Meist zeigt die Adresse auf eine
     /// Oberfläche statt auf die Wurzel der API (HUM-039).
@@ -1128,13 +1130,15 @@ registry! {
         "`CopyCommand` mit `humanitl doctor --probe-llm`.";
     /// `SetConfig` nimmt diesen Schlüssel oder diesen Wert nicht an.
     ///
-    /// Der Schreibweg ist mit Absicht schmal (HUM-151): Er richtet eine
-    /// Variable unter `sandbox.env` auf das Zertifikat, das Humanitl in der
-    /// Sandbox einhängt, und tut sonst nichts. Alles Weitere kommt mit dem
-    /// Einstellungen-Bildschirm (HUM-069).
+    /// Der Schreibweg ist mit Absicht schmal (HUM-151, geweitet in HUM-069):
+    /// Er nimmt die Einstellungen des Formulars an (`hold.timeout_secs`,
+    /// `hold.ask_mode`, `ui.language`, `ui.theme`, `ui.notifications`,
+    /// `sandbox.work_dir`, `llm.endpoint`, `llm.models`) und eine Variable
+    /// unter `sandbox.env`, deren Wert das Zertifikat ist, das Humanitl in der
+    /// Sandbox einhängt. Alles andere steht von Hand in `config.toml`.
     CONFIG_014 => "config", "Einstellung nicht über den Daemon setzbar", "#config_014",
-        "`SetConfig` nimmt bis HUM-069 nur eine Variable unter `sandbox.env` an, deren Wert das Zertifikat in der Sandbox ist.",
-        "Kein Fix: Der Text nennt, was angenommen wird; alles andere steht von Hand in `config.toml`.";
+        "`SetConfig` bekommt einen Schlüssel außerhalb des Formulars oder eine Variable unter `sandbox.env`, deren Wert nicht das Zertifikat in der Sandbox ist.",
+        "Kein Fix: Der Text nennt, was angenommen wird; alles andere steht von Hand in `config.toml` (`humanitl config edit`).";
     /// `config.toml` wurde nicht geschrieben.
     ///
     /// Entweder steht `sandbox` oder `sandbox.env` dort in einer Form, die sich
@@ -1402,6 +1406,37 @@ registry! {
     SANDBOX_019 => "sandbox", "Verweigerte Verbindungsversuche werden nicht gemeldet", "#sandbox_019",
         "Der Kernel hat dem Filter des Agenten keinen Zuhörer gegeben; verweigert wird weiter mit `EPERM`, gezählt und gemeldet wird nichts.",
         "Kein Fix-Knopf: Der Text nennt den errno; `EBUSY` heißt, dass Humanitl selbst in einer Umgebung mit eigenem seccomp-Zuhörer läuft.";
+    // HUM-069 und HUM-140: Modell-Endpunkt und Zugangsschlüssel im Formular.
+    /// Die Konfiguration nennt einen Zugangsschlüssel (`llm.api_key_ref`), und
+    /// der Speicher gibt ihn nicht heraus.
+    ///
+    /// Der Schlüsselbund hält keinen Eintrag unter dem Namen, `secret-tool`
+    /// fehlt oder antwortet nicht in der Frist, oder die Datei des Rückfalls
+    /// fehlt, ist offen für andere oder gehört einem anderen Konto. Ein Start
+    /// bricht dann ab, statt den Agenten ohne den Schlüssel loszuschicken, den
+    /// der Mensch eingetragen hat; die Probe schickt dann keinen (HUM-140).
+    LLM_009 => "llm", "Zugangsschlüssel nicht verfügbar", "#llm_009",
+        "`llm.api_key_ref` ist gesetzt, aber der Schlüsselbund oder die Datei unter `$XDG_DATA_HOME/humanitl/keys` liefert keinen Schlüssel dazu.",
+        "`CopyCommand`: `humanitl llm key set` hinterlegt ihn neu; bei offenen Rechten der Datei ein `chmod 600`.";
+    /// Der Zugangsschlüssel liegt in einer Datei und nicht im Schlüsselbund.
+    ///
+    /// Der Secret Service hat nicht geantwortet (kein `secret-tool`, kein
+    /// Sitzungsbus, ein Fehler oder die Frist), also liegt der Schlüssel als
+    /// Datei mit `0600` unter `$XDG_DATA_HOME/humanitl/keys`. Eine Warnung, kein
+    /// Fehler: Der Schlüssel wirkt, nur schützt ihn auf dieser Maschine das
+    /// Dateisystem und nicht der Schlüsselbund (HUM-140).
+    CONFIG_019 => "config", "Zugangsschlüssel nicht im Schlüsselbund", "#config_019",
+        "Beim Hinterlegen des Zugangsschlüssels antwortet der Secret Service nicht, und der Schlüssel liegt im `0600`-Rückfall unter `$XDG_DATA_HOME/humanitl/keys`.",
+        "`CopyCommand`: `sudo apt-get install libsecret-tools` bringt `secret-tool`; danach `humanitl llm key set` erneut.";
+    /// Der Zugangsschlüssel wurde nicht hinterlegt oder nicht entfernt.
+    ///
+    /// Der Schlüssel ist leer, länger als 4096 Bytes oder trägt Leerraum oder
+    /// Steuerzeichen, oder weder der Schlüsselbund noch die Datei ließ sich
+    /// schreiben, oder ein vorhandener Eintrag ließ sich nicht löschen. Die
+    /// Konfiguration bleibt dann, wie sie war (HUM-140).
+    CONFIG_020 => "config", "Zugangsschlüssel nicht gespeichert", "#config_020",
+        "`LlmKey(Set)` oder `LlmKey(Clear)` bekommt einen Schlüssel, der keiner ist (leer, kürzer als 16 Zeichen, länger als 4096 Bytes, mit Leerraum), eine Anfrage ohne Operation, oder weder Schlüsselbund noch Datei lassen sich schreiben oder löschen.",
+        "Bei einem zu kurzen Schlüssel `openssl rand -hex 24` zum Kopieren, für einen lokalen Server mit selbst gewähltem Schlüssel; sonst nennt der Text den Grund, und ein Schlüssel ohne Leerraum oder ein beschreibbares Datenverzeichnis behebt ihn.";
 }
 
 /// Sucht einen Code im Register.

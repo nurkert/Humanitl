@@ -32,7 +32,9 @@
 //! - [`server_stub`] mit dem Port [`DaemonApi`] und dem tonic-Dienst darüber,
 //! - [`fake`] mit einem Daemon, der statt eines Proxys eine aufgezeichnete
 //!   Sitzung spielt (`humanitld --fake`, HUM-005),
-//! - [`validate`] mit den Prüfungen, die für beide Dienste dieselben sind.
+//! - [`validate`] mit den Prüfungen, die für beide Dienste dieselben sind,
+//! - [`config_rpc`] und [`llm_key`] mit dem Lesen und Schreiben der
+//!   Einstellungen und des Zugangsschlüssels (HUM-069, HUM-140).
 //!
 //! [`server`] und [`fake`] erfüllen denselben Vertrag (ADR-0003, ADR-0018);
 //! ein Client soll den Unterschied nicht sehen können. Alles, was dafür an
@@ -49,7 +51,14 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `16` seit der harten Sperre in der Zeile (HUM-159):
+/// `17` seit dem Einstellungsformular mit Modell und Zugangsschlüssel
+/// (HUM-069, HUM-140): `GetConfig` antwortet, `ConfigSnapshot.values_json`
+/// und `.config_path` tragen die Werte als JSON und die Datei, die
+/// `SetConfig` schreibt, `ProbeLlmRequest.api_key` und `.use_stored_key`
+/// lassen die Probe einen Schlüssel mitschicken, `ProbeLlmResponse.key_sent`
+/// sagt, ob einer ging, und die RPC `LlmKey` mit `LlmKeyStore` setzt, prüft
+/// und entfernt den Schlüssel, ohne ihn je zurückzugeben.
+/// `16` war die harte Sperre in der Zeile (HUM-159):
 /// `FlowSummary.send_refusal` trägt den Befund `HOLD_004`, solange ein Flow
 /// der laufenden Sitzung nur bearbeitet hinaus darf; ein Client, der nach der
 /// Ansage im Strom startet, liest ihn aus `ListFlows`.
@@ -106,7 +115,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 16;
+pub const PROTO_MINOR: u32 = 17;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
@@ -137,6 +146,7 @@ pub mod config_rpc;
 pub mod convert;
 pub mod domains;
 pub mod fake;
+pub mod llm_key;
 pub mod rules;
 pub mod sandbox;
 pub mod server;

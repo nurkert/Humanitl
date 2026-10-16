@@ -54,7 +54,7 @@ use humanitl_config::private_dir::{ensure_private_dir, with_own_runtime_dir_fix}
 use humanitl_config::{Config, Paths as XdgPaths, ResolverConfig, WorkMode};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::shell::shell_path;
-use humanitl_core::{Diagnostic, FixAction, FlowEvent, SessionId, Severity};
+use humanitl_core::{Diagnostic, FixAction, FlowEvent, SecretMasks, SessionId, Severity};
 use humanitl_ipc::fake::{FakeDaemon, FakeOptions, Gates, Session};
 use humanitl_ipc::sandbox::SandboxPorts;
 use humanitl_ipc::session::{SessionResolver, bundled_rules};
@@ -336,7 +336,9 @@ async fn run_daemon(cli: &Cli, passed: Option<systemd::Passed>) -> Result<(), Di
         Arc::clone(&catalog),
         Some(recorder.clone()),
     ));
-    let scanner = build_scanner(&config)?;
+    // Dieselben Masken wie die Aufzeichnung: Ein Schlüssel, den der Start
+    // einer Sitzung dort einträgt, ist damit auch kein Fund (HUM-140).
+    let scanner = build_scanner(&config, recorder.masks())?;
     let queue = build_queue(&config, &recorder, &domains, &scanner);
 
     // Die Sitzung steht in der Aufzeichnung, bevor der erste Flow kommt:
@@ -1593,13 +1595,15 @@ fn probe_with_roots(
 ///
 /// Ohne `llm.endpoint` und bei einer Adresse ohne Host gibt es nichts zu
 /// zeigen; `/` schreibt dann `llm=none`, statt einen Endpunkt zu erfinden.
+///
+/// Dieselbe Quelle wie das Ziel des Zugangsschlüssels
+/// ([`humanitl_config::LlmConfig::endpoint_authority`]), damit beide Stellen
+/// den Endpunkt gleich schreiben.
 fn llm_authority(config: &Config) -> Option<String> {
-    let endpoint = config.llm.endpoint.as_ref()?;
-    let host = endpoint.host_str()?;
-    Some(match endpoint.port_or_known_default() {
-        Some(port) => format!("{host}:{port}"),
-        None => host.to_owned(),
-    })
+    config
+        .llm
+        .endpoint_authority()
+        .map(|authority| authority.to_string())
 }
 
 /// Die Halte-Warteschlange der Sitzung, mit Aufzeichnung, Domain-Katalog und
@@ -1636,13 +1640,13 @@ fn build_queue(
 /// `FINDINGS_001` aus [`Tier1Scanner::new`], und `CONFIG_003` aus
 /// [`humanitl_ipc::summary::findings_settings`], wenn in
 /// `findings.ignored_hashes` etwas steht, das kein SHA-256 in Hex ist.
-fn build_scanner(config: &Config) -> Result<Arc<dyn Scanner>, Diagnostic> {
+fn build_scanner(config: &Config, masks: SecretMasks) -> Result<Arc<dyn Scanner>, Diagnostic> {
     // Die Ableitung aus der Konfiguration steht in `humanitl_ipc::summary` und
     // nicht hier: Die Zusammenfassung eines Sandbox-Laufs baut daraus dieselben
     // Detektoren (HUM-043), und zwei Ableitungen aus denselben vier Schlüsseln
     // wären zwei Wahrheiten darüber, was als Fund gilt.
     let settings = humanitl_ipc::summary::findings_settings(config)?;
-    let scanner = Tier1Scanner::new(&settings)?;
+    let scanner = Tier1Scanner::new(&settings)?.with_masks(masks);
     tracing::info!(
         enabled = config.findings.enabled,
         detectors = ?scanner.detector_ids(),
@@ -3033,5 +3037,59 @@ mod tests {
         )]));
         let candidates = super::catalog_candidates(&xdg, Some(&bin.join("humanitld")));
         assert_eq!(candidates.get(2), Some(&catalog), "{candidates:?}");
+    }
+}
+
+#[cfg(test)]
+mod scanner_wiring_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use humanitl_core::http::HeaderValue;
+    use humanitl_core::{Authority, HeaderName, HostName, HttpRequest, Method, Scheme};
+    use humanitl_recorder::{Recorder, RecorderSettings};
+
+    use super::{Config, build_scanner};
+
+    /// Der Daemon baut den Scanner mit den Masken der Aufzeichnung. Ein
+    /// Schlüssel, den der Start erst danach mit `mask_secret` einträgt, ist
+    /// damit im selben Scanner ein Fund, sobald er an einen fremden Host geht,
+    /// und an seinem eigenen Ziel in `Authorization` keiner (HUM-140, Review).
+    #[test]
+    fn the_scanner_sees_a_key_the_recorder_masks_after_it_was_built() {
+        const KEY: &str = "local-key-0123456789abcdef";
+        let dir = tempfile::tempdir().unwrap();
+        let recorder = Recorder::open(
+            &dir.path().join("humanitl.db"),
+            &dir.path().join("blobs"),
+            RecorderSettings::default(),
+        )
+        .unwrap();
+        let scanner = build_scanner(&Config::default(), recorder.masks()).unwrap();
+        recorder.mask_secret(KEY, Some("192.168.1.20:11434"));
+
+        let to = |host: &str, port: u16| {
+            let mut request = HttpRequest::new(
+                Method::POST,
+                Scheme::Http,
+                Authority::new(HostName::parse(host).unwrap(), port),
+                "/v1/chat/completions",
+            );
+            request.headers.insert(
+                HeaderName::from_static("authorization"),
+                HeaderValue::from_str(&format!("Bearer {KEY}")).unwrap(),
+            );
+            request
+        };
+        let foreign = scanner.scan(&to("evil.example", 80), &[]).findings;
+        assert!(
+            foreign.iter().any(|f| f.kind.as_str() == "api_key"),
+            "{foreign:?}"
+        );
+        assert!(
+            scanner
+                .scan(&to("192.168.1.20", 11434), &[])
+                .findings
+                .is_empty()
+        );
     }
 }

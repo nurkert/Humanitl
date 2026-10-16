@@ -1,47 +1,179 @@
-//! `SetConfig`, so schmal wie sein Anlass (HUM-151).
+//! `GetConfig` und `SetConfig`: die Konfiguration lesen und die Einstellungen
+//! des Formulars schreiben (HUM-151, geweitet in HUM-069).
 //!
-//! Der RPC im Ganzen wartet auf den Einstellungen-Bildschirm (HUM-069). Bis
-//! dahin nimmt er genau eine Art Auftrag an, die ein `TLS_001` vorschlägt: eine
-//! Variable unter `sandbox.env`, deren Wert das Zertifikat ist, das Humanitl in
-//! der Sandbox einhängt. Ein Client ändert damit keine Einhängung, keinen
-//! Befehl und kein Ziel des Verkehrs — warum das nicht in seine Hand gehört,
-//! steht an [`crate::session::check_override_key`]. Er sagt nur einem Werkzeug,
-//! wo das Zertifikat liegt, das ohnehin dort liegt.
+//! `SetConfig` nimmt zwei Arten Auftrag an, und sonst keinen:
 //!
-//! Die Datei ändert [`humanitl_config::edit::set_sandbox_env`]; hier steht, was
-//! angenommen wird, und woraus die Antwort besteht.
+//! - **Die Einstellungen des Formulars** ([`FORM_KEYS`]): die wenigen Werte,
+//!   die ein Mensch im MVP in der Oberfläche ändert (zweite
+//!   Umfangsentscheidung vom 2026-09-18 in `backlog/sprint-4.md`). Der Wert
+//!   kommt als Text, so wie `humanitl config set KEY VALUE` ihn bekommt, und
+//!   wird mit derselben Lesart gelesen und geprüft
+//!   ([`humanitl_config::value`]). Alles andere bleibt in `config.toml`.
+//! - **Eine CA-Variable unter `sandbox.env`**, deren Wert das Zertifikat ist,
+//!   das Humanitl in der Sandbox einhängt — der Vorschlag eines `TLS_001`
+//!   (HUM-151). Ein Client ändert damit keine Einhängung, keinen Befehl und
+//!   kein Ziel des Verkehrs; warum das nicht in seine Hand gehört, steht an
+//!   [`crate::session::check_override_key`].
+//!
+//! Geschrieben wird in beiden Fällen über [`humanitl_config::edit::set_value`],
+//! den einen Weg in `config.toml`: nur der eine Wert ändert sich, Kommentare und
+//! Reihenfolge bleiben, nie eine halbe Datei. Vor dem Ersetzen lädt die
+//! Gegenprobe die Nebendatei mit allen übrigen Ebenen (`probe`). Der
+//! laufende Daemon liest den neuen Wert erst bei seinem nächsten Start; das
+//! sagt die Oberfläche, und Live-Neuladen ist nach dem MVP verschoben
+//! (BACKLOG.md Abschnitt 9, Punkt 17).
 
-use humanitl_config::{Paths, ProfileSelection};
+use std::path::{Path, PathBuf};
+
+use humanitl_config::value::{check_value, parse_value, to_toml};
+use humanitl_config::{Paths, ProfileSelection, Resolved, schema};
 use humanitl_core::diagnostics::codes::CONFIG_014;
 use humanitl_core::{Diagnostic, Severity};
 use humanitl_sandbox::profile::CA_CERT_DST;
 
 use crate::{convert, v1};
 
-/// Der Anfang jedes Schlüssels, den `SetConfig` heute annimmt.
+/// Der Anfang jedes Schlüssels einer Variable der Sandbox.
 pub const SANDBOX_ENV_PREFIX: &str = "sandbox.env.";
+
+/// Die Schlüssel, die das Formular der Oberfläche schreibt (HUM-069).
+///
+/// Der Zugangsschlüssel steht nicht darin: Er geht nie durch `SetConfig` und
+/// nie in `config.toml`, sondern über `LlmKey` in den Schlüsselbund
+/// ([`crate::llm_key`]); in der Datei steht nur sein Verweis
+/// `llm.api_key_ref`, und den schreibt `LlmKey` selbst.
+pub const FORM_KEYS: &[&str] = &[
+    "hold.timeout_secs",
+    "hold.ask_mode",
+    "ui.language",
+    "ui.theme",
+    "ui.notifications",
+    "sandbox.work_dir",
+    "llm.endpoint",
+    "llm.models",
+];
 
 /// So viele Zeichen eines abgelehnten Schlüssels stehen im Befund. Der Text
 /// reist im Status mit, und ein Client bestimmt die Länge des Schlüssels.
 const SHOWN_KEY_CHARS: usize = 80;
 
-/// Setzt die Variable und antwortet mit der Konfiguration, wie sie danach gilt.
+/// Setzt den Wert und antwortet mit der Konfiguration, wie sie danach gilt.
 ///
 /// Blockiert, weil es eine Datei liest und schreibt; der Dienst ruft es in
 /// [`tokio::task::spawn_blocking`].
 ///
 /// # Errors
 ///
-/// `CONFIG_014` für einen Auftrag, den [`accepted`] ablehnt, und die Befunde von
-/// [`humanitl_config::edit::set_sandbox_env`], wenn die Datei nicht geändert
-/// wurde. Geschrieben ist in keinem der Fälle etwas.
+/// `CONFIG_014` für einen Schlüssel, den `SetConfig` nicht schreibt,
+/// `CONFIG_003` für einen Wert, den das Schema oder die Prüfung ablehnt, und
+/// die Befunde von [`humanitl_config::edit::set_value`], wenn die Datei nicht
+/// geändert wurde. Geschrieben ist in keinem der Fälle etwas.
 pub fn set(paths: &Paths, key: &str, value: &str) -> Result<v1::ConfigSnapshot, Diagnostic> {
-    let name = accepted(key, value)?;
-    humanitl_config::edit::set_sandbox_env(&paths.config_path(), name, value)?;
+    if key.starts_with(SANDBOX_ENV_PREFIX) {
+        let name = accepted(key, value)?;
+        humanitl_config::edit::set_sandbox_env(&paths.config_path(), name, value)?;
+    } else if FORM_KEYS.contains(&key) {
+        set_form_value(paths, key, value)?;
+    } else {
+        return Err(refused(&format!(
+            "{} is not one of the settings of the form",
+            shown(key)
+        )));
+    }
     Ok(snapshot(paths))
 }
 
-/// Der Name der Variable, wenn der Auftrag angenommen wird.
+/// Liest und prüft einen Wert des Formulars nach dem Schema, ohne zu
+/// schreiben.
+///
+/// Der Fake (`humanitld --fake`) nimmt denselben Weg und hält das Ergebnis im
+/// Speicher; so antworten beide Dienste auf denselben falschen Wert mit
+/// demselben Befund.
+///
+/// # Errors
+///
+/// `CONFIG_014`, wenn `key` keine Einstellung des Formulars ist, und
+/// `CONFIG_003` für einen Text, der kein Wert des Feldes ist oder außerhalb
+/// seines Bereichs liegt.
+pub fn form_value(
+    key: &str,
+    text: &str,
+) -> Result<(&'static schema::Field, serde_json::Value), Diagnostic> {
+    if !FORM_KEYS.contains(&key) {
+        return Err(refused(&format!(
+            "{} is not one of the settings of the form",
+            shown(key)
+        )));
+    }
+    let field = schema::field(key)
+        .ok_or_else(|| refused(&format!("{key} is not in the schema of this daemon")))?;
+    let value = parse_value(field, text)?;
+    check_value(field, &value)?;
+    Ok((field, value))
+}
+
+/// Schreibt eine Einstellung des Formulars.
+fn set_form_value(paths: &Paths, key: &str, text: &str) -> Result<(), Diagnostic> {
+    let (field, value) = form_value(key, text)?;
+    let toml_value = to_toml(field, &value)?;
+    let file = paths.config_path();
+    let segments: Vec<String> = key.split('.').map(ToOwned::to_owned).collect();
+    humanitl_config::edit::set_value(&file, &segments, toml_value.as_ref(), |candidate| {
+        probe(paths, &file, candidate, key)
+    })?;
+    Ok(())
+}
+
+/// Lädt die Konfiguration so, wie der nächste Start sie lädt — mit der
+/// Nebendatei an der Stelle von `config.toml` — und entscheidet, ob der Wert
+/// geschrieben werden darf.
+///
+/// Geschrieben wird, wenn die Konfiguration mit dem neuen Wert lädt, oder wenn
+/// sie schon vorher mit genau demselben Befund nicht lud und der Befund den
+/// gesetzten Schlüssel nicht nennt: Ein alter Fehler an anderer Stelle soll
+/// das Formular nicht sperren, ein Wert, der selbst falsch ist, wird nie
+/// geschrieben. Die feinere Zählung über alle Befunde einer Ebenenfolge hat
+/// `humanitl config set` (HUM-070); das Formular schreibt acht Schlüssel mit
+/// festen Typen, und für sie genügt der erste Befund.
+///
+/// # Errors
+///
+/// Der Befund der Ladung, mit dem Pfad der Nebendatei durch den von
+/// `config.toml` ersetzt.
+fn probe(paths: &Paths, file: &Path, candidate: &Path, key: &str) -> Result<(), Diagnostic> {
+    let Err(after) = load_with(paths, Some(candidate.to_path_buf())) else {
+        return Ok(());
+    };
+    let candidate_text = candidate.display().to_string();
+    let file_text = file.display().to_string();
+    let after_why = after.why.replace(&candidate_text, &file_text);
+    let before = load_with(paths, file.is_file().then(|| file.to_path_buf()));
+    if let Err(before) = before
+        && before.code == after.code
+        && before.why == after_why
+        && !after_why.contains(key)
+    {
+        return Ok(());
+    }
+    let mut refusal = after;
+    refusal.why = after_why;
+    Err(refusal)
+}
+
+/// Die Konfiguration ohne Profilwunsch mit dieser Datei als globaler.
+fn load_with(paths: &Paths, global: Option<PathBuf>) -> Result<Resolved, Diagnostic> {
+    let sources = humanitl_config::sources_with_global(
+        &ProfileSelection::default(),
+        None,
+        paths.env(),
+        &[],
+        global,
+    )?;
+    humanitl_config::load(&sources)
+}
+
+/// Der Name der Variable, wenn der Auftrag unter `sandbox.env` angenommen
+/// wird.
 ///
 /// # Errors
 ///
@@ -97,35 +229,42 @@ fn shown(text: &str) -> String {
 fn refused(reason: &str) -> Diagnostic {
     Diagnostic::builder(CONFIG_014, Severity::Error)
         .why(format!(
-            "SetConfig did not write this: {reason}. Until the settings screen arrives (HUM-069) \
-             it writes one kind of setting to config.toml: sandbox.env.NAME set to \
-             {CA_CERT_DST}, the certificate Humanitl mounts in the sandbox. Anything else goes \
-             into config.toml by hand."
+            "SetConfig did not write this: {reason}. It writes the settings of the form ({}) \
+             and sandbox.env.NAME set to {CA_CERT_DST}, the certificate Humanitl mounts in the \
+             sandbox. Anything else goes into config.toml by hand (humanitl config edit).",
+            FORM_KEYS.join(", ")
         ))
         .build()
 }
 
 /// Die Konfiguration ohne Profilwunsch, wie eine Sitzung ohne Wunsch sie
-/// bekäme.
+/// bekäme, samt dem Pfad der Datei, die `SetConfig` schreibt.
 ///
 /// Scheitert die Auflösung — ein Profil, das nicht mehr parst, ein anderer
 /// Wert außerhalb seines Bereichs —, steht ihr Befund in `diagnostics`, und
-/// `toml` bleibt leer. Geschrieben ist dann trotzdem; eine Antwort, die das
-/// als Fehler meldete, sagte dem Menschen, sein Klick sei verloren.
-fn snapshot(paths: &Paths) -> v1::ConfigSnapshot {
+/// `toml` bleibt leer. Nach einem `SetConfig` ist trotzdem geschrieben; eine
+/// Antwort, die das als Fehler meldete, sagte dem Menschen, sein Klick sei
+/// verloren.
+#[must_use]
+pub fn snapshot(paths: &Paths) -> v1::ConfigSnapshot {
     let resolved = humanitl_config::resolve(&ProfileSelection::default(), None, paths.env(), &[]);
-    match resolved.and_then(|resolved| convert::config_snapshot_to_proto(&resolved, false)) {
-        Ok(snapshot) => snapshot,
-        Err(diagnostic) => v1::ConfigSnapshot {
-            diagnostics: vec![convert::diagnostic_to_proto(&diagnostic)],
-            ..v1::ConfigSnapshot::default()
-        },
-    }
+    let mut snapshot =
+        match resolved.and_then(|resolved| convert::config_snapshot_to_proto(&resolved, false)) {
+            Ok(snapshot) => snapshot,
+            Err(diagnostic) => v1::ConfigSnapshot {
+                diagnostics: vec![convert::diagnostic_to_proto(&diagnostic)],
+                ..v1::ConfigSnapshot::default()
+            },
+        };
+    snapshot.config_path = paths.config_path().display().to_string();
+    snapshot
 }
 
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use humanitl_config::Env;
 
     use super::*;
 
@@ -133,6 +272,16 @@ mod tests {
 
     fn refusal(key: &str, value: &str) -> Diagnostic {
         accepted(key, value).expect_err("must be refused")
+    }
+
+    /// Pfade unter einem eigenen Verzeichnis: Kein Test fasst die
+    /// Konfiguration des Menschen an.
+    fn paths_in(dir: &Path) -> Paths {
+        Paths::new(Env::from_pairs([
+            ("HOME", dir.display().to_string()),
+            ("XDG_CONFIG_HOME", dir.join("config").display().to_string()),
+            ("XDG_DATA_HOME", dir.join("data").display().to_string()),
+        ]))
     }
 
     #[test]
@@ -187,5 +336,97 @@ mod tests {
         let key = "x".repeat(10_000);
         let refused = refusal(&key, CA_CERT_DST);
         assert!(refused.why.len() < 1_000, "{} bytes", refused.why.len());
+    }
+
+    /// Jede Einstellung des Formulars landet in `config.toml`, Kommentare und
+    /// Reihenfolge bleiben, und die Antwort trägt den Wert (HUM-069).
+    #[test]
+    fn a_form_setting_is_written_and_the_comment_stays() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let work = dir.path().join("project");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(paths.config_dir()).unwrap();
+        std::fs::write(
+            paths.config_path(),
+            "# mein Kommentar\n[hold]\ntimeout_secs = 300 # fünf Minuten\n",
+        )
+        .unwrap();
+
+        let work_text = work.display().to_string();
+        for (key, value) in [
+            ("hold.timeout_secs", "600"),
+            ("hold.ask_mode", "none"),
+            ("ui.language", "de"),
+            ("ui.theme", "light"),
+            ("ui.notifications", "false"),
+            ("sandbox.work_dir", work_text.as_str()),
+            ("llm.endpoint", "http://192.168.1.20:11434/"),
+            ("llm.models", r#"["qwen2.5-coder:14b"]"#),
+        ] {
+            set(&paths, key, value).unwrap_or_else(|d| panic!("{key}: {}", d.why));
+        }
+        let text = std::fs::read_to_string(paths.config_path()).unwrap();
+        assert!(
+            text.starts_with("# mein Kommentar\n[hold]\ntimeout_secs = 600 # fünf Minuten"),
+            "{text}"
+        );
+        let snapshot = snapshot(&paths);
+        let values: serde_json::Value = serde_json::from_str(&snapshot.values_json).unwrap();
+        assert_eq!(values["hold"]["timeout_secs"], 600);
+        assert_eq!(values["hold"]["ask_mode"], "none");
+        assert_eq!(values["ui"]["language"], "de");
+        assert_eq!(values["ui"]["theme"], "light");
+        assert_eq!(values["ui"]["notifications"], false);
+        assert_eq!(values["sandbox"]["work_dir"], work_text);
+        assert_eq!(values["llm"]["endpoint"], "http://192.168.1.20:11434/");
+        assert_eq!(values["llm"]["models"][0], "qwen2.5-coder:14b");
+        assert_eq!(
+            snapshot.config_path,
+            paths.config_path().display().to_string()
+        );
+    }
+
+    /// Ein Wert außerhalb des Bereichs und ein Wert, den die Prüfung der
+    /// Konfiguration ablehnt, kommen nicht in die Datei (HUM-069).
+    #[test]
+    fn a_wrong_value_is_refused_and_nothing_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        for (key, value) in [
+            ("hold.ask_mode", "sometimes"),
+            ("ui.theme", "pink"),
+            ("hold.timeout_secs", "0"),
+            ("hold.timeout_secs", "soon"),
+            ("llm.endpoint", "ftp://model.lan/"),
+            ("sandbox.work_dir", "relative/dir"),
+        ] {
+            let refused = set(&paths, key, value).expect_err(key);
+            assert_eq!(
+                refused.code.as_str(),
+                "CONFIG_003",
+                "{key} = {value}: {}",
+                refused.why
+            );
+        }
+        assert!(!paths.config_path().exists(), "nothing was written");
+    }
+
+    /// Ein Schlüssel außerhalb des Formulars bleibt `CONFIG_014`, auch der
+    /// Verweis auf den Zugangsschlüssel: Den schreibt nur `LlmKey`.
+    #[test]
+    fn a_key_outside_the_form_is_config_014() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        for key in [
+            "llm.api_key_ref",
+            "sandbox.profile",
+            "agent.command",
+            "audit.anchor_every",
+        ] {
+            let refused = set(&paths, key, "x").expect_err(key);
+            assert_eq!(refused.code, CONFIG_014, "{key}");
+        }
+        assert!(!paths.config_path().exists());
     }
 }

@@ -53,6 +53,9 @@ pub struct ScanReport {
 /// Alle Detektoren, die auf eine Anfrage losgelassen werden.
 pub struct DetectorRegistry {
     detectors: Vec<Box<dyn Detector>>,
+    /// Detektoren, deren Funde das Aufräumen überstehen
+    /// ([`DetectorRegistry::register_protected`]).
+    protected: Vec<Box<dyn Detector>>,
     ignored: HashSet<[u8; 32]>,
     cap_bytes: usize,
     max_decompress_ratio: u32,
@@ -62,6 +65,7 @@ impl core::fmt::Debug for DetectorRegistry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("DetectorRegistry")
             .field("detectors", &self.detector_ids())
+            .field("protected", &self.protected.len())
             .field("ignored", &self.ignored.len())
             .field("cap_bytes", &self.cap_bytes)
             .field("max_decompress_ratio", &self.max_decompress_ratio)
@@ -97,6 +101,7 @@ impl DetectorRegistry {
     pub fn empty(settings: &FindingsSettings) -> Self {
         Self {
             detectors: Vec::new(),
+            protected: Vec::new(),
             ignored: settings.ignored_hashes.iter().copied().collect(),
             cap_bytes: settings.cap_bytes,
             max_decompress_ratio: settings.max_decompress_ratio,
@@ -108,11 +113,26 @@ impl DetectorRegistry {
         self.detectors.push(detector);
     }
 
+    /// Legt einen Detektor dazu, dessen Funde kein anderer verdrängt.
+    ///
+    /// Das Aufräumen behält an einer Stelle nur den stärksten Fund, und ein
+    /// Begriff des Nutzers (`findings.user_terms`, Stufe `user_term`) ist
+    /// stärker als jede Prüfsumme. Ein Begriff `sk` aus einem Projekt-Profil
+    /// verdrängte so den Fund des Zugangsschlüssels `sk-…`, und mit ihm die
+    /// harte Sperre (HUM-140, Review). Die Funde eines solchen Detektors
+    /// laufen deshalb am Aufräumen vorbei: Sie fallen weder einem anderen Fund
+    /// noch `findings.ignored_hashes` zum Opfer, und von gleichen Stellen
+    /// bleibt eine.
+    pub fn register_protected(&mut self, detector: Box<dyn Detector>) {
+        self.protected.push(detector);
+    }
+
     /// Die Kennungen der eingehängten Detektoren.
     #[must_use]
     pub fn detector_ids(&self) -> Vec<&'static str> {
         self.detectors
             .iter()
+            .chain(self.protected.iter())
             .map(|detector| detector.id())
             .collect()
     }
@@ -128,6 +148,7 @@ impl DetectorRegistry {
         let targets =
             ScanTargets::from_request(request, body, self.cap_bytes, self.max_decompress_ratio);
         let mut findings = Vec::new();
+        let mut protected = Vec::new();
         for target in targets.iter() {
             for detector in &self.detectors {
                 for mut finding in detector.scan(&target.input) {
@@ -141,9 +162,18 @@ impl DetectorRegistry {
                     findings.push(finding);
                 }
             }
+            for detector in &self.protected {
+                for mut finding in detector.scan(&target.input) {
+                    let Some(span) = target.map.map(finding.span.clone()) else {
+                        continue;
+                    };
+                    finding.span = span;
+                    protected.push(finding);
+                }
+            }
         }
         ScanReport {
-            findings: tidy(findings),
+            findings: with_protected(tidy(findings), protected),
             truncated: targets.truncated(),
             diagnostics: targets.diagnostics().to_vec(),
         }
@@ -185,7 +215,15 @@ impl DetectorRegistry {
                 findings.push(finding);
             }
         }
-        tidy(findings)
+        // Auch eine Notiz kann den Zugangsschlüssel des Modells tragen, und
+        // sie geht im Klartext an den Agenten und damit womöglich weiter
+        // (HUM-140, Review): Die geschützten Detektoren suchen mit.
+        let protected = self
+            .protected
+            .iter()
+            .flat_map(|detector| detector.scan(&input))
+            .collect();
+        with_protected(tidy(findings), protected)
     }
 }
 
@@ -209,6 +247,49 @@ fn location_key(location: &FindingLocation) -> (u8, &str) {
         FindingLocation::Query => (1, ""),
         FindingLocation::Body => (2, ""),
     }
+}
+
+/// Fügt die geschützten Funde zu den aufgeräumten.
+///
+/// Ein geschützter Fund verdrängt jeden anderen, der ihn am selben Ort
+/// überlappt, so wie es das Aufräumen mit einem stärkeren tut: Sonst stünde
+/// `sk-proj-…` einmal als Muster und einmal als bekannter Schlüssel da.
+/// Selbst verdrängt wird er nie (HUM-140, Review).
+fn with_protected(findings: Vec<Finding>, protected: Vec<Finding>) -> Vec<Finding> {
+    let protected = distinct(protected);
+    let mut merged: Vec<Finding> = findings
+        .into_iter()
+        .filter(|found| {
+            !protected.iter().any(|guard| {
+                guard.location == found.location
+                    && guard.span.start < found.span.end
+                    && found.span.start < guard.span.end
+            })
+        })
+        .collect();
+    merged.extend(protected);
+    merged.sort_by(|left, right| {
+        location_key(&left.location)
+            .cmp(&location_key(&right.location))
+            .then(left.span.start.cmp(&right.span.start))
+            .then(left.span.end.cmp(&right.span.end))
+    });
+    merged
+}
+
+/// Geschützte Funde ohne Doppel: Die rohe und die dekodierte Query zeigen
+/// nach dem Zurückrechnen oft auf dieselbe Stelle.
+fn distinct(mut findings: Vec<Finding>) -> Vec<Finding> {
+    findings.sort_by(|left, right| {
+        location_key(&left.location)
+            .cmp(&location_key(&right.location))
+            .then(left.span.start.cmp(&right.span.start))
+            .then(right.span.end.cmp(&left.span.end))
+    });
+    findings.dedup_by(|later, kept| {
+        later.location == kept.location && later.span.start < kept.span.end
+    });
+    findings
 }
 
 /// Sortiert, dedupliziert und behält je Stelle den stärksten Fund.

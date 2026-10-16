@@ -41,9 +41,9 @@
 use humanitl_core::diagnostics::codes::HOLD_004;
 use humanitl_core::{
     BlockReason, Decision, Diagnostic, Finding, FindingKind, FindingLocation, FixAction,
-    HttpRequest, Severity, Tier,
+    HttpRequest, SecretMasks, Severity, Tier,
 };
-use humanitl_findings::{DetectorRegistry, FindingsSettings, ScanReport};
+use humanitl_findings::{Detector, DetectorRegistry, FindingsSettings, ScanInput, ScanReport};
 
 /// Ob `finding` unter `hold.hard_block_checksum_secrets` hart sperrt.
 ///
@@ -158,6 +158,9 @@ pub trait Scanner: Send + Sync {
 #[derive(Debug)]
 pub struct Tier1Scanner {
     registry: DetectorRegistry,
+    /// Geheimnisse, die der Daemon selbst in den Verkehr gibt: Ein Fund mit
+    /// genau diesem Wert fällt weg (HUM-140).
+    masks: SecretMasks,
 }
 
 impl Tier1Scanner {
@@ -172,7 +175,47 @@ impl Tier1Scanner {
     pub fn new(settings: &FindingsSettings) -> Result<Self, Diagnostic> {
         Ok(Self {
             registry: DetectorRegistry::tier1(settings)?,
+            masks: SecretMasks::default(),
         })
+    }
+
+    /// Derselbe Scanner mit dieser geteilten Liste bekannter Geheimnisse.
+    ///
+    /// Der Daemon reicht die Liste der Aufzeichnung herein
+    /// (`Recorder::masks`). Zweierlei folgt daraus (HUM-140):
+    ///
+    /// - **Jedes Vorkommen ist ein Fund.** Der Detektor [`KNOWN_SECRET_DETECTOR`]
+    ///   sucht jeden bekannten Wert wörtlich, auch in der Schreibweise einer
+    ///   URL, in jeder Kopfzeile, in der Query und im entpackten Rumpf. Ein
+    ///   Schlüssel ohne bekanntes Format (ein selbst gewählter für vLLM, einer
+    ///   von Groq oder `OpenRouter`) fände sonst kein Muster, und der Agent
+    ///   trüge ihn unbemerkt an jeden freigegebenen Host.
+    /// - **Nur an seinem Ziel nicht.** In `Authorization` einer Anfrage an
+    ///   das Ziel des Schlüssels fällt der Fund weg, sonst stünde an jeder
+    ///   Anfrage an das Modell `LLM_005`.
+    ///
+    /// Der Detektor hängt auch dann, wenn `findings.enabled` aus ist: Er sucht
+    /// keine Daten des Menschen, sondern das eine Geheimnis, das der Daemon
+    /// selbst in die Sandbox gibt. Er hängt geschützt
+    /// (`DetectorRegistry::register_protected`): Kein Begriff aus
+    /// `findings.user_terms` verdrängt seinen Fund und damit die harte Sperre.
+    #[must_use]
+    pub fn with_masks(mut self, masks: SecretMasks) -> Self {
+        self.registry.register_protected(Box::new(KnownSecrets {
+            masks: masks.clone(),
+        }));
+        self.masks = masks;
+        self
+    }
+
+    /// Ob `finding` der Zugangsschlüssel des Modells genau dort ist, wo er
+    /// hingehört: in `Authorization` einer Anfrage an sein eigenes Ziel
+    /// (HUM-140). Nur dann fällt der Fund weg.
+    fn expected_key(&self, finding: &Finding, authority: &str) -> bool {
+        matches!(
+            &finding.location,
+            FindingLocation::Header(name) if name.as_str() == "authorization"
+        ) && self.masks.expected_at(&finding.value_hash, authority)
     }
 
     /// Die Kennungen der eingehängten Detektoren, für `humanitl doctor`.
@@ -184,11 +227,57 @@ impl Tier1Scanner {
 
 impl Scanner for Tier1Scanner {
     fn scan(&self, request: &HttpRequest, body: &[u8]) -> ScanReport {
-        self.registry.scan(request, body)
+        let mut report = self.registry.scan(request, body);
+        let authority = request.authority.to_string();
+        report
+            .findings
+            .retain(|finding| !self.expected_key(finding, &authority));
+        report
     }
 
+    /// Eine Notiz geht an den Agenten und nie an das Modell: Ein Schlüssel
+    /// darin ist immer ein Fund.
     fn scan_note(&self, note: &str) -> Vec<Finding> {
         self.registry.scan_note(note)
+    }
+}
+
+/// Die Kennung des Detektors für bekannte Geheimnisse, für `humanitl doctor`.
+pub const KNOWN_SECRET_DETECTOR: &str = "known-secret";
+
+/// Der Name, unter dem ein Fund den Zugangsschlüssel des Modells nennt.
+pub const KNOWN_SECRET_NAME: &str = "llm";
+
+/// Findet jedes bekannte Geheimnis aus [`SecretMasks`] wörtlich.
+///
+/// Ein Treffer ist ein exakter Vergleich mit einem Wert, den der Daemon kennt,
+/// also sicherer als jede Prüfsumme: [`Tier::Checksum`]. Damit sperrt er unter
+/// `hold.hard_block_checksum_secrets` hart wie jeder andere bestätigte
+/// Schlüssel.
+struct KnownSecrets {
+    masks: SecretMasks,
+}
+
+impl Detector for KnownSecrets {
+    fn id(&self) -> &'static str {
+        KNOWN_SECRET_DETECTOR
+    }
+
+    fn scan(&self, input: &ScanInput<'_>) -> Vec<Finding> {
+        self.masks
+            .find_in(input.bytes)
+            .into_iter()
+            .filter_map(|span| {
+                let value = std::str::from_utf8(input.bytes.get(span.clone())?).ok()?;
+                Some(Finding::new(
+                    FindingKind::ApiKey(KNOWN_SECRET_NAME.to_owned()),
+                    span,
+                    input.location.clone(),
+                    Tier::Checksum,
+                    value,
+                ))
+            })
+            .collect()
     }
 }
 
@@ -219,10 +308,12 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use humanitl_core::{
-        Finding, FindingKind, FindingLocation, FixAction, HeaderName, Severity, Tier,
+        Finding, FindingKind, FindingLocation, FixAction, HeaderName, SecretMasks, Severity, Tier,
     };
 
-    use super::{check_allow, hard_blocks};
+    use super::{
+        KNOWN_SECRET_NAME, ScanReport, Scanner as _, Tier1Scanner, check_allow, hard_blocks,
+    };
 
     fn finding(kind: FindingKind, tier: Tier, location: FindingLocation) -> Finding {
         Finding::new(kind, 0..8, location, tier, "value-never-shown")
@@ -336,6 +427,217 @@ mod tests {
             refused.why.contains("credit_card in the x-card header"),
             "{}",
             refused.why
+        );
+    }
+
+    /// Der Zugangsschlüssel des Modells ist nur dort kein Fund, wo er
+    /// hingehört: in `Authorization` einer Anfrage an sein eigenes Ziel. An
+    /// einen anderen Host oder im Rumpf bleibt er einer (HUM-140, Review).
+    #[test]
+    fn a_known_key_is_no_finding_only_in_authorization_at_its_own_target() {
+        const KEY: &str = "sk-proj-abcdefghij0123456789KLMN";
+        let request = |host: &str, header: Option<&str>| {
+            let mut request = humanitl_core::HttpRequest::new(
+                humanitl_core::Method::POST,
+                humanitl_core::Scheme::Http,
+                humanitl_core::Authority::new(humanitl_core::HostName::parse(host).unwrap(), 11434),
+                "/v1/chat/completions",
+            );
+            if let Some(token) = header {
+                request.headers.insert(
+                    HeaderName::from_static("authorization"),
+                    humanitl_core::http::HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+                );
+            }
+            request
+        };
+        let masks = SecretMasks::default();
+        let scanner = Tier1Scanner::new(&humanitl_findings::FindingsSettings::default())
+            .unwrap()
+            .with_masks(masks.clone());
+        let own = "192.168.1.20";
+
+        assert!(
+            !scanner
+                .scan(&request(own, Some(KEY)), &[])
+                .findings
+                .is_empty()
+        );
+        masks.add_for(KEY, Some("192.168.1.20:11434"));
+        assert!(
+            scanner
+                .scan(&request(own, Some(KEY)), &[])
+                .findings
+                .is_empty(),
+            "the key where it belongs is no finding"
+        );
+        assert!(
+            !scanner
+                .scan(&request("10.0.0.9", Some(KEY)), &[])
+                .findings
+                .is_empty(),
+            "the key sent to another host stays a finding"
+        );
+        let body = format!("{{\"note\": \"{KEY}\"}}");
+        assert!(
+            !scanner
+                .scan(&request(own, None), body.as_bytes())
+                .findings
+                .is_empty(),
+            "the key in a body stays a finding, even at its own target"
+        );
+        assert!(
+            !scanner
+                .scan(
+                    &request(own, Some("sk-proj-otherotherother0123456789")),
+                    &[]
+                )
+                .findings
+                .is_empty(),
+            "another key in Authorization stays a finding"
+        );
+    }
+
+    /// Ein Schlüssel ohne bekanntes Format findet kein Muster; der Detektor
+    /// für bekannte Geheimnisse findet ihn trotzdem, im Rumpf, in einer
+    /// eigenen Kopfzeile und in der Query, auch kodiert, an jeden Host. Nur
+    /// `Authorization` an seinem Ziel bleibt frei (HUM-140, Review).
+    #[test]
+    fn a_known_key_without_a_known_format_is_found_wherever_it_leaves() {
+        const KEY: &str = "local-key-0123456789abcdef";
+        let request = |host: &str, path: &str| {
+            humanitl_core::HttpRequest::new(
+                humanitl_core::Method::POST,
+                humanitl_core::Scheme::Https,
+                humanitl_core::Authority::new(humanitl_core::HostName::parse(host).unwrap(), 443),
+                path,
+            )
+        };
+        let found_at = |report: &ScanReport| -> Vec<String> {
+            report
+                .findings
+                .iter()
+                .filter(|f| f.kind == FindingKind::ApiKey(KNOWN_SECRET_NAME.to_owned()))
+                .map(|f| f.location.to_string())
+                .collect()
+        };
+        let masks = SecretMasks::default();
+        let scanner = Tier1Scanner::new(&humanitl_findings::FindingsSettings::default())
+            .unwrap()
+            .with_masks(masks.clone());
+        let body = format!("{{\"prompt\": \"use {KEY}\"}}");
+        let plain = request("allowed.example", "/upload");
+        assert!(
+            found_at(&scanner.scan(&plain, body.as_bytes())).is_empty(),
+            "no pattern knows this format"
+        );
+        masks.add_for(KEY, Some("api.example.com:443"));
+
+        assert_eq!(found_at(&scanner.scan(&plain, body.as_bytes())), ["body"]);
+
+        let mut headed = request("allowed.example", "/upload");
+        headed.headers.insert(
+            HeaderName::from_static("x-api-key"),
+            humanitl_core::http::HeaderValue::from_str(KEY).unwrap(),
+        );
+        assert_eq!(found_at(&scanner.scan(&headed, &[])), ["header:x-api-key"]);
+
+        let queried = request("allowed.example", &format!("/v1?k={KEY}&x=1"));
+        assert_eq!(found_at(&scanner.scan(&queried, &[])), ["query"]);
+
+        let mut own = request("api.example.com", "/v1/chat/completions");
+        own.headers.insert(
+            HeaderName::from_static("authorization"),
+            humanitl_core::http::HeaderValue::from_str(&format!("Bearer {KEY}")).unwrap(),
+        );
+        assert!(
+            scanner.scan(&own, &[]).findings.is_empty(),
+            "the key in Authorization at its own target is no finding"
+        );
+        own.headers.insert(
+            HeaderName::from_static("x-api-key"),
+            humanitl_core::http::HeaderValue::from_str(KEY).unwrap(),
+        );
+        assert_eq!(
+            found_at(&scanner.scan(&own, &[])),
+            ["header:x-api-key"],
+            "at its own target, any other header is still a finding"
+        );
+    }
+
+    /// Ein Begriff des Nutzers ist stärker als jede Prüfsumme und verdrängt
+    /// beim Aufräumen schwächere Funde an derselben Stelle. Den Fund des
+    /// Zugangsschlüssels darf er nicht verdrängen: `sk` aus einem
+    /// Projekt-Profil hebelte sonst die harte Sperre für `sk-…` aus (HUM-140,
+    /// Review).
+    #[test]
+    fn a_user_term_does_not_push_the_known_key_out_of_the_hard_block() {
+        const KEY: &str = "sk-proj-abcdefghij0123456789KLMN";
+        let settings = humanitl_findings::FindingsSettings::default().with_user_terms(["sk"]);
+        let masks = SecretMasks::default();
+        masks.add_for(KEY, Some("api.example.com:443"));
+        let scanner = Tier1Scanner::new(&settings).unwrap().with_masks(masks);
+        let mut request = humanitl_core::HttpRequest::new(
+            humanitl_core::Method::POST,
+            humanitl_core::Scheme::Https,
+            humanitl_core::Authority::new(
+                humanitl_core::HostName::parse("evil.example").unwrap(),
+                443,
+            ),
+            "/collect",
+        );
+        request.headers.insert(
+            HeaderName::from_static("authorization"),
+            humanitl_core::http::HeaderValue::from_str(&format!("Bearer {KEY}")).unwrap(),
+        );
+
+        let findings = scanner.scan(&request, &[]).findings;
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.kind == FindingKind::ApiKey(KNOWN_SECRET_NAME.to_owned())),
+            "{findings:?}"
+        );
+        let refused = check_allow(&findings, true).expect_err("the hard block holds");
+        assert_eq!(refused.code, humanitl_core::diagnostics::codes::HOLD_004);
+    }
+
+    /// Der bekannte Schlüssel steht an einer Stelle genau einmal, nicht als
+    /// Muster und als bekannter Schlüssel nebeneinander; und eine Notiz an
+    /// den Agenten, die ihn trägt, ist ein Fund (HUM-140, Review).
+    #[test]
+    fn a_known_key_is_found_once_per_place_and_in_a_note() {
+        const KEY: &str = "sk-proj-abcdefghij0123456789KLMN";
+        let masks = SecretMasks::default();
+        masks.add_for(KEY, Some("api.example.com:443"));
+        let scanner = Tier1Scanner::new(&humanitl_findings::FindingsSettings::default())
+            .unwrap()
+            .with_masks(masks);
+        let mut request = humanitl_core::HttpRequest::new(
+            humanitl_core::Method::POST,
+            humanitl_core::Scheme::Https,
+            humanitl_core::Authority::new(
+                humanitl_core::HostName::parse("evil.example").unwrap(),
+                443,
+            ),
+            "/collect",
+        );
+        request.headers.insert(
+            HeaderName::from_static("authorization"),
+            humanitl_core::http::HeaderValue::from_str(&format!("Bearer {KEY}")).unwrap(),
+        );
+        let findings = scanner.scan(&request, &[]).findings;
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(
+            findings[0].kind,
+            FindingKind::ApiKey(KNOWN_SECRET_NAME.to_owned())
+        );
+
+        let note = scanner.scan_note(&format!("please use {KEY} instead"));
+        assert!(
+            note.iter()
+                .any(|f| f.kind == FindingKind::ApiKey(KNOWN_SECRET_NAME.to_owned())),
+            "{note:?}"
         );
     }
 }

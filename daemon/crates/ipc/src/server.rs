@@ -39,10 +39,12 @@ use dashmap::DashMap;
 use humanitl_audit::kinds::LlmDiscover;
 use humanitl_audit::{AuditHandle, RecordKind};
 use humanitl_config::Config;
+use humanitl_config::secret::{ApiKey, KeyRef, KeyStore};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::ids::SandboxId;
 use humanitl_core::{
-    BodyRef, Decision, DecisionSource, Diagnostic, FlowEvent, FlowId, HostName, SessionId, Severity,
+    BodyRef, Decision, DecisionSource, Diagnostic, FixAction, FlowEvent, FlowId, HostName,
+    SessionId, Severity,
 };
 use humanitl_proxy::egress::Egress;
 use humanitl_proxy::hold::NotHeld;
@@ -62,13 +64,14 @@ use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::{BroadcastStream, UnixListenerStream};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
+use zeroize::Zeroizing;
 
 use crate::audit::AuditService;
 use crate::domains::DomainTable;
 use crate::rules::RulesService;
 use crate::sandbox::SandboxService;
 use crate::server_stub::{BoxStream, diagnostic_to_status};
-use crate::{PROTO_MAJOR, PROTO_MINOR, auth, config_rpc, convert, rules, v1, validate};
+use crate::{PROTO_MAJOR, PROTO_MINOR, auth, config_rpc, convert, llm_key, rules, v1, validate};
 
 /// Was dieser Daemon in M1 kann.
 ///
@@ -145,6 +148,10 @@ pub struct IpcServer {
     /// Woraus `Doctor` seinen Bericht baut (HUM-075).
     doctor: DoctorSetup,
     bodies: BodyIndex,
+    /// Wo der Zugangsschlüssel des Modells liegt (HUM-140). `None` heißt:
+    /// der Speicher der Pfade dieses Dienstes ([`KeyStore::for_paths`]);
+    /// Tests setzen eine Attrappe ein.
+    keys: Option<KeyStore>,
 }
 
 /// Was der Doctor über diese Installation wissen muss.
@@ -245,7 +252,75 @@ impl IpcServer {
                 llm_endpoint: config.llm.endpoint.as_ref().map(ToString::to_string),
             },
             bodies: BodyIndex::new(),
+            keys: None,
         }
+    }
+
+    /// Derselbe Dienst mit diesem Speicher für den Zugangsschlüssel; für
+    /// Tests, die den Schlüsselbund des Menschen nicht anfassen dürfen.
+    #[must_use]
+    pub fn with_key_store(mut self, keys: KeyStore) -> Self {
+        self.keys = Some(keys);
+        self
+    }
+
+    /// Der Speicher des Zugangsschlüssels, gesetzt oder aus den Pfaden.
+    fn key_store(&self) -> KeyStore {
+        self.keys
+            .clone()
+            .unwrap_or_else(|| KeyStore::for_paths(&self.doctor.paths))
+    }
+
+    /// Der Schlüssel, den eine Probe mitschickt (HUM-140).
+    ///
+    /// Ein Schlüssel im Auftrag geht an genau den Endpunkt des Auftrags: Der
+    /// Mensch hat ihn eben eingetippt, und gespeichert wird er hier nicht. Der
+    /// hinterlegte geht nur an einen Endpunkt mit derselben Herkunft wie
+    /// `llm.endpoint`; ein Client, der einen anderen Host nennt, bekommt die
+    /// Probe ohne Schlüssel, und `key_sent` sagt es.
+    ///
+    /// # Errors
+    ///
+    /// `CONFIG_020` für einen Schlüssel im Auftrag, der keiner ist, und
+    /// `LLM_009`, wenn der hinterlegte Schlüssel verlangt, aber nicht zu holen
+    /// ist.
+    async fn probe_key(
+        &self,
+        endpoint: &url::Url,
+        typed: &str,
+        use_stored_key: bool,
+    ) -> Result<Option<ApiKey>, Diagnostic> {
+        if !typed.is_empty() {
+            return ApiKey::new(typed).map(Some);
+        }
+        if !use_stored_key {
+            return Ok(None);
+        }
+        let paths = self.doctor.paths.clone();
+        let keys = self.key_store();
+        let endpoint = endpoint.clone();
+        tokio::task::spawn_blocking(move || {
+            let Ok(resolved) = humanitl_config::resolve(
+                &humanitl_config::ProfileSelection::default(),
+                None,
+                paths.env(),
+                &[],
+            ) else {
+                return Ok(None);
+            };
+            let llm = resolved.config.llm;
+            let same_origin = llm
+                .endpoint
+                .as_ref()
+                .is_some_and(|configured| configured.origin() == endpoint.origin());
+            let key_ref = llm.api_key_ref.as_deref().and_then(KeyRef::parse);
+            match key_ref {
+                Some(key_ref) if same_origin => keys.lookup(&key_ref).map(Some),
+                _ => Ok(None),
+            }
+        })
+        .await
+        .unwrap_or_else(|error| Err(unfinished("ProbeLlm", &error)))
     }
 
     /// Derselbe Dienst über einer Warteschlange, in der nie etwas hängt.
@@ -998,15 +1073,6 @@ fn body_stream(bytes: &Bytes, encoding_left: &str) -> BoxStream<Result<v1::BodyC
     Box::pin(tokio_stream::iter(chunks))
 }
 
-/// Der Fehler einer RPC, die es noch nicht gibt.
-///
-/// Kein [`Diagnostic`]: das hier ist kein Fehlschlag der Anfrage, sondern der
-/// Stand des Vertrags. Die Meldung nennt das Issue, damit klar ist, worauf
-/// man wartet.
-fn unimplemented(rpc: &str, arrives: &str) -> Status {
-    Status::unimplemented(format!("{rpc} arrives in {arrives}"))
-}
-
 #[tonic::async_trait]
 impl v1::humanitl_server::Humanitl for IpcServer {
     type SubscribeStream = BoxStream<Result<v1::FlowEvent, Status>>;
@@ -1317,18 +1383,30 @@ impl v1::humanitl_server::Humanitl for IpcServer {
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
     }
 
+    /// Die Konfiguration, wie der nächste Start sie lädt, frisch aus den
+    /// Dateien (HUM-069, [`config_rpc::snapshot`]).
+    ///
+    /// Frisch und nicht aus der Auflösung des Daemon-Starts: Das Formular
+    /// zeigt, was in `config.toml` steht, und ein `SetConfig` von eben gehört
+    /// dazu, auch wenn der laufende Daemon den Wert erst nach seinem Neustart
+    /// liest.
     async fn get_config(
         &self,
-        _request: Request<v1::GetConfigRequest>,
+        request: Request<v1::GetConfigRequest>,
     ) -> Result<Response<v1::ConfigSnapshot>, Status> {
-        Err(unimplemented(
-            "GetConfig",
-            "HUM-069 with the settings screen",
-        ))
+        let include_schema = request.into_inner().include_schema;
+        let paths = self.doctor.paths.clone();
+        let mut snapshot = tokio::task::spawn_blocking(move || config_rpc::snapshot(&paths))
+            .await
+            .map_err(|error| diagnostic_to_status(&unfinished("GetConfig", &error)))?;
+        if include_schema {
+            snapshot.json_schema = humanitl_config::json_schema().to_string();
+        }
+        Ok(Response::new(snapshot))
     }
 
-    /// Setzt eine Variable der Sandbox in `config.toml`, und nur diese Art
-    /// Einstellung (HUM-151, [`config_rpc`]). Der Rest wartet auf HUM-069.
+    /// Setzt eine Einstellung des Formulars oder eine CA-Variable der Sandbox
+    /// in `config.toml`, und nur diese (HUM-151, HUM-069, [`config_rpc`]).
     ///
     /// Die Datei wird in [`tokio::task::spawn_blocking`] gelesen und
     /// geschrieben, wie die Prüfungen des Doctors.
@@ -1340,7 +1418,7 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         let paths = self.doctor.paths.clone();
         let snapshot = tokio::task::spawn_blocking(move || config_rpc::set(&paths, &key, &value))
             .await
-            .map_err(|error| Status::internal(format!("SetConfig did not finish: {error}")))?
+            .map_err(|error| diagnostic_to_status(&unfinished("SetConfig", &error)))?
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
         Ok(Response::new(snapshot))
     }
@@ -1487,14 +1565,19 @@ impl v1::humanitl_server::Humanitl for IpcServer {
     /// Prüft genau den Endpunkt, den der Aufrufer nennt (HUM-039).
     ///
     /// Nichts davon läuft in der Sandbox, nichts davon ändert etwas: zwei
-    /// `GET` auf zwei feste Pfade, keine Weiterleitung, keine Zugangsdaten.
-    /// Was der Endpunkt nicht beantwortet hat, steht als Befund in der Antwort
-    /// und nie als erfundene Modellliste.
+    /// `GET` auf zwei feste Pfade, keine Weiterleitung, und ein
+    /// Zugangsschlüssel nur, wenn der Auftrag ihn verlangt
+    /// (`IpcServer::probe_key`, HUM-140). Was der Endpunkt nicht beantwortet
+    /// hat, steht als Befund in der Antwort und nie als erfundene Modellliste.
     async fn probe_llm(
         &self,
         request: Request<v1::ProbeLlmRequest>,
     ) -> Result<Response<v1::ProbeLlmResponse>, Status> {
-        let request = request.into_inner();
+        let mut request = request.into_inner();
+        // Der eingetippte Schlüssel verlässt die Nachricht sofort in eine
+        // Hülle, die beim Fallenlassen überschrieben wird, auch auf jedem
+        // frühen Rückweg unten (HUM-140, Review).
+        let typed = Zeroizing::new(std::mem::take(&mut request.api_key));
         // Dieselbe Reihenfolge wie beim Fake und wie bei `GetBody` und `Rules`:
         // erst die Anfrage lesen, dann fragen, ob dieser Daemon sie beantworten
         // kann. Ein Endpunkt, der keine URL ist, bleibt auch mit Probe keine;
@@ -1512,11 +1595,31 @@ impl v1::humanitl_server::Humanitl for IpcServer {
             0 => None,
             ms => Some(Duration::from_millis(u64::from(ms))),
         };
+        let key = self
+            .probe_key(&endpoint, &typed, request.use_stored_key)
+            .await
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
         let result = probe
-            .probe(&endpoint, timeout)
+            .probe_with_key(&endpoint, timeout, key.as_ref())
             .await
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
         Ok(Response::new(convert::probe_result_to_proto(&result)))
+    }
+
+    /// Der Zugangsschlüssel des Modells: Stand, setzen, entfernen (HUM-140,
+    /// [`llm_key`]). Keine Antwort trägt den Schlüssel.
+    async fn llm_key(
+        &self,
+        request: Request<v1::LlmKeyRequest>,
+    ) -> Result<Response<v1::LlmKeyStatus>, Status> {
+        let request = request.into_inner();
+        let paths = self.doctor.paths.clone();
+        let keys = self.key_store();
+        let status = tokio::task::spawn_blocking(move || llm_key::answer(&paths, &keys, request))
+            .await
+            .map_err(|error| diagnostic_to_status(&unfinished("LlmKey", &error)))?
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        Ok(Response::new(status))
     }
 
     /// Was ein Sandbox-Lauf im Projektverzeichnis hinterlassen hat.
@@ -1548,6 +1651,20 @@ impl v1::humanitl_server::Humanitl for IpcServer {
             .map(Response::new)
             .map_err(|diagnostic| crate::server_stub::missing_status(&diagnostic))
     }
+}
+
+/// Der Befund, wenn der Arbeitsfaden einer RPC nicht zu Ende kam (Panik oder
+/// Abbruch beim Beenden des Daemons). Geschrieben ist dann nichts, oder es ist
+/// nicht bekannt; der Befund sagt das, statt einen nackten `INTERNAL` zu
+/// schicken (HUM-069, Review).
+fn unfinished(rpc: &str, error: &tokio::task::JoinError) -> Diagnostic {
+    Diagnostic::builder(codes::IPC_006, Severity::Error)
+        .why(format!(
+            "{rpc} did not finish: its worker thread ended early ({error}); nothing it did can \
+             be relied on, so read the state again or repeat the call"
+        ))
+        .fix(FixAction::CopyCommand("humanitl daemon status".to_owned()))
+        .build()
 }
 
 /// Baut den Verbindungsstapel der Endpunkt-Probe aus der Konfiguration.
@@ -1749,7 +1866,7 @@ mod tests {
     use humanitl_proxy::{ConnMeta, FlowRegistry, HoldQueue};
     use tonic::Request;
 
-    use super::{CAPABILITIES, IpcServer};
+    use super::{CAPABILITIES, IpcServer, unfinished};
     use crate::v1;
     use crate::v1::humanitl_server::Humanitl as _;
 
@@ -1964,26 +2081,61 @@ mod tests {
         );
     }
 
+    /// Ein Arbeitsfaden, der nicht zu Ende kam, ist ein Befund mit Grund und
+    /// nicht ein nackter `INTERNAL` (HUM-069, Review).
     #[tokio::test]
-    async fn every_rpc_of_sprint_two_and_later_is_unimplemented() {
+    async fn an_unfinished_worker_is_a_diagnostic_with_why() {
+        let error = tokio::task::spawn_blocking(|| panic!("the worker panics"))
+            .await
+            .expect_err("the worker panicked");
+        let diagnostic = unfinished("SetConfig", &error);
+        assert_eq!(diagnostic.code, codes::IPC_006);
+        assert!(
+            diagnostic.why.contains("SetConfig did not finish"),
+            "{}",
+            diagnostic.why
+        );
+        assert!(diagnostic.fix.is_some());
+    }
+
+    /// `GetConfig` antwortet seit HUM-069 mit den Werten der Datei, als
+    /// JSON, und mit der Datei selbst; das Schema nur auf Wunsch.
+    #[tokio::test]
+    async fn get_config_answers_with_the_values_and_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = humanitl_config::Paths::new(humanitl_config::Env::from_pairs([
+            ("HOME", dir.path().display().to_string()),
+            (
+                "XDG_CONFIG_HOME",
+                dir.path().join("config").display().to_string(),
+            ),
+        ]));
+        std::fs::create_dir_all(paths.config_dir()).unwrap();
+        std::fs::write(paths.config_path(), "[ui]\ntheme = \"light\"\n").unwrap();
         let queue = queue();
-        let server = server(&queue);
-        // `Audit` antwortet seit HUM-156; ohne Audit-Log mit `IPC_006`, was
-        // `a_daemon_without_an_audit_log_says_so` in `tests/audit_rpc.rs` misst.
-        let codes = [
-            server
-                .get_config(Request::new(v1::GetConfigRequest::default()))
-                .await
-                .err()
-                .map(|status| (status.code(), status.message().to_owned())),
-            // `SetConfig` antwortet seit HUM-151, mit einer schmalen Tür; was
-            // sie annimmt und was nicht, prüft `tests/ipc_server.rs`.
-        ];
-        for entry in codes {
-            let (code, message) = entry.expect("the rpc must refuse, not answer");
-            assert_eq!(code, tonic::Code::Unimplemented);
-            assert!(message.contains("arrives in"), "{message}");
-        }
+        let server = server(&queue).with_paths(paths.clone());
+
+        let snapshot = server
+            .get_config(Request::new(v1::GetConfigRequest::default()))
+            .await
+            .unwrap()
+            .into_inner();
+        let values: serde_json::Value = serde_json::from_str(&snapshot.values_json).unwrap();
+        assert_eq!(values["ui"]["theme"], "light");
+        assert_eq!(
+            snapshot.config_path,
+            paths.config_path().display().to_string()
+        );
+        assert!(snapshot.json_schema.is_empty());
+
+        let with_schema = server
+            .get_config(Request::new(v1::GetConfigRequest {
+                include_schema: true,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(with_schema.json_schema.contains("api_key_ref"));
     }
 
     /// Ein Netz, das weiter ist als ein `/24`, wird abgelehnt, bevor irgendein
@@ -2084,6 +2236,7 @@ mod tests {
             .probe_llm(Request::new(v1::ProbeLlmRequest {
                 endpoint: "not a url".to_owned(),
                 timeout_ms: 0,
+                ..v1::ProbeLlmRequest::default()
             }))
             .await
         else {
@@ -2109,6 +2262,7 @@ mod tests {
                 .probe_llm(Request::new(v1::ProbeLlmRequest {
                     endpoint: endpoint.to_owned(),
                     timeout_ms: 50,
+                    ..v1::ProbeLlmRequest::default()
                 }))
                 .await
             else {
@@ -2145,6 +2299,7 @@ mod tests {
             .probe_llm(Request::new(v1::ProbeLlmRequest {
                 endpoint: format!("http://127.0.0.1:{port}"),
                 timeout_ms: 2_000,
+                ..v1::ProbeLlmRequest::default()
             }))
             .await
         else {

@@ -19,6 +19,7 @@ toml.workspace = true
 # Passthrough-Regel traegt eine feste UUID-Literal-Id.
 url.workspace = true
 uuid.workspace = true
+zeroize.workspace = true
 # Sichere Huellen um memfd_create(2), fcntl(2) und kill(2): der Launcher legt
 # die Maskendatei als versiegeltes memfd an, vererbt Deskriptoren ohne
 # CLOEXEC an bwrap und beendet die Sandbox mit SIGTERM. Ohne rustix braeuchte
