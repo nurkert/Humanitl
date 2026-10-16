@@ -7,12 +7,12 @@ SHELL := /bin/bash
 .PHONY: help check rust-fmt rust-clippy rust-build rust-test rust-doc rust-deny typed-errors-lint \
         flutter-get flutter-analyze flutter-test flutter-test-dbus flutter-test-daemon \
         flutter-test-integration flutter-build runner-test proto escape e2e \
-        deps-lint docs-lint parity-check l10n-lint catalog-assets catalog-lint clean package
+        deps-lint docs-lint parity-check l10n-lint catalog-assets catalog-lint tools-test clean package
 
 help: ## List targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | sort | awk -F':.*?## ' '{printf "  %-18s %s\n", $$1, $$2}'
 
-check: rust-fmt rust-clippy rust-build rust-test rust-doc deps-lint docs-lint parity-check typed-errors-lint catalog-lint l10n-lint flutter-analyze flutter-test runner-test flutter-build ## Full local gate (same steps as CI)
+check: rust-fmt rust-clippy rust-build rust-test rust-doc deps-lint tools-test docs-lint parity-check typed-errors-lint catalog-lint l10n-lint flutter-analyze flutter-test runner-test flutter-build ## Full local gate (same steps as CI)
 
 # A rustup toolchain may exist without rustup on PATH (this machine): put its
 # bin directory first so `cargo fmt` and `cargo clippy` find their components.
@@ -23,6 +23,23 @@ RUSTUP_BIN := $(firstword $(wildcard $(HOME)/.rustup/toolchains/*/bin))
 # dem Stand von gestern (Befund des Reviews zu HUM-091).
 PUB_CACHE_BIN := $(HOME)/.pub-cache/bin
 TOOLS_PATH := $(if $(RUSTUP_BIN),$(RUSTUP_BIN):)$(PUB_CACHE_BIN):$(PATH)
+
+# Gemeinsamer Compiler-Cache, nur auf Wunsch: `make ... HUMANITL_SCCACHE=1`
+# (oder die Variable in der Umgebung). Jeder Arbeitsbaum eines Agenten hat sein
+# eigenes Zielverzeichnis und uebersetzt sonst alle Abhaengigkeiten neu; sccache
+# teilt sie ueber die Arbeitsbaeume hinweg. Die Obergrenze von 5G haelt den
+# Cache klein (Plattensparsamkeit); wer mehr will, setzt SCCACHE_CACHE_SIZE
+# selbst. Rezept und Installation ohne root: CONTRIBUTING.md, Abschnitt
+# „Gemeinsamer Build-Cache" (HUM-237).
+ifeq ($(HUMANITL_SCCACHE),1)
+SCCACHE_BIN := $(firstword $(shell command -v sccache 2>/dev/null) $(wildcard $(HOME)/.cargo/bin/sccache))
+ifeq ($(SCCACHE_BIN),)
+$(error HUMANITL_SCCACHE=1, but sccache is not installed: cargo install sccache --locked)
+endif
+export RUSTC_WRAPPER := $(SCCACHE_BIN)
+export SCCACHE_CACHE_SIZE ?= 5G
+export SCCACHE_DIR ?= $(HOME)/.cache/sccache
+endif
 
 rust-fmt: ## cargo fmt --check (skipped when rustfmt is absent)
 	@export PATH="$(TOOLS_PATH)"; if cd daemon && cargo fmt --version >/dev/null 2>&1; then cargo fmt --all -- --check; \
@@ -50,6 +67,13 @@ typed-errors-lint: ## Typed errors (HUM-063) and the test reporter (HUM-133) che
 	scripts/ci/lint-no-string-errors.sh --self-test
 	scripts/ci/lint-no-string-errors.sh
 	scripts/ci/test-report.sh --self-test
+
+# Die Werkzeuge, die entscheiden, ob ein Issue-Zweig nach main kommt (HUM-237):
+# das CI-Tor gegen eine nachgestellte API, der Commit-Ablauf gegen ein
+# Wegwerf-origin. Beide brauchen nur bash, git und python3.
+tools-test: ## Tests of tools/ci-gate.sh and tools/commit-issue.sh --ci (HUM-237)
+	./tools/tests/ci_gate_test.sh
+	./tools/tests/commit_issue_test.sh
 
 deps-lint: ## Enforce the dependency direction (HUM-074) and the coupling ratchet (HUM-145)
 	./tools/check-deps.sh

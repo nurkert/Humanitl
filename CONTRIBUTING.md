@@ -1,153 +1,258 @@
-# Contributing
+# Mitarbeit
 
-## Toolchain
+## Werkzeuge
 
-| Tool | Version | Note |
+| Werkzeug | Version | Hinweis |
 |---|---|---|
-| Rust | 1.88+ (pinned 1.95.0 in `daemon/rust-toolchain.toml`) | needs `rustfmt` and `clippy` |
-| Flutter | 3.47.2 (pinned in `app/.fvmrc`) | Dart 3.13+ |
-| bubblewrap | 0.8+ | runtime dependency of the sandbox |
-| socat | not required | the shim carries its own bridge |
+| Rust | 1.88+ (festgelegt auf 1.95.0 in `daemon/rust-toolchain.toml`) | braucht `rustfmt` und `clippy` |
+| Flutter | 3.47.2 (festgelegt in `app/.fvmrc`) | Dart 3.13+ |
+| bubblewrap | 0.8+ | Laufzeitabhängigkeit der Sandbox |
+| socat | nicht nötig | der Shim bringt seine eigene Brücke mit |
 
-A local toolchain installed without `rustup` has no `rustfmt` and no `clippy`.
-If a rustup toolchain exists under `~/.rustup/toolchains/` (even without
-`rustup` itself on PATH), the Makefile puts its `bin` directory first for the
-fmt and clippy targets. Otherwise `make check` skips those two steps and says
-so. Continuous integration installs both and runs with `STRICT=1`, so nothing
-merges unformatted or with clippy warnings.
+Eine ohne `rustup` installierte Toolchain hat weder `rustfmt` noch `clippy`.
+Liegt eine rustup-Toolchain unter `~/.rustup/toolchains/` (auch ohne `rustup`
+selbst im PATH), stellt das Makefile deren `bin`-Verzeichnis für die Ziele fmt
+und clippy nach vorn. Sonst überspringt `make check` diese beiden Schritte und
+sagt das. Die CI installiert beide und läuft mit `STRICT=1`; nichts wird
+unformatiert oder mit clippy-Warnungen gemergt.
 
-`make proto` generates the Dart side of the contract only when `protoc` and
-`protoc-gen-dart` (`dart pub global activate protoc_plugin`, exact version
-pinned in `scripts/gen-proto.sh`) are on PATH; without them the Flutter gate
-cannot resolve the generated code. Add `~/.pub-cache/bin` to PATH.
+`make proto` erzeugt die Dart-Seite des Vertrags nur, wenn `protoc` und
+`protoc-gen-dart` (`dart pub global activate protoc_plugin`, genaue Version in
+`scripts/gen-proto.sh`) im PATH stehen; ohne sie findet die Flutter-Prüfung den
+erzeugten Code nicht. `~/.pub-cache/bin` gehört in den PATH.
 
-Optional: `cargo install cargo-deny` for `make rust-deny`.
+Optional: `cargo install cargo-deny` für `make rust-deny`.
 
-## When CI is red
+## Wenn die CI rot ist
 
-The `rust-test` job pipes its output to a file. A red run therefore names the
-tests that failed as annotations on the run — one line per test, at most ten
-lines in all, and from the eleventh test on the tenth line collects the rest —
-and uploads the whole output as the artifact `rust-test-log`. Both are
-visible without write access to the repository; the job log itself is not.
+Der Job `rust-test` leitet seine Ausgabe in eine Datei. Ein roter Lauf nennt
+deshalb die gefallenen Tests als Annotationen am Lauf, eine Zeile je Test,
+höchstens zehn Zeilen, und ab dem elften Test sammelt die zehnte Zeile den
+Rest. Die ganze Ausgabe liegt als Artefakt `rust-test-log` bei. Beides ist ohne
+Schreibrechte am Repository sichtbar, das Job-Log selbst nicht.
 
-`scripts/ci/test-report.sh <log>` is the same evaluation, and
-`scripts/ci/test-report.sh --self-test` (part of `make check`) keeps it honest.
+`scripts/ci/test-report.sh <log>` ist dieselbe Auswertung, und
+`scripts/ci/test-report.sh --self-test` (Teil von `make check`) hält sie
+ehrlich.
 
-## Disk
+`tools/ci-gate.sh <sha>` fasst einen Lauf von außen zusammen: je Job das
+Ergebnis, bei Rot der Schritt, der fiel (HUM-237).
 
-A fresh build tree of the daemon weighs about 6 GiB after
-`cargo build --workspace --all-targets`, and it grows with every change of a
-dependency or a feature set: Cargo writes a new set of artefacts and never
-removes an old one. On 2026-09-06 the tree of this repository stood at 103 GiB
-after roughly a week of work. The dev profile therefore carries
-`debug = "line-tables-only"` (`daemon/Cargo.toml`, measured there), which halves
-each set while keeping file and line in every backtrace.
+## Platte
 
-When the tree has grown past what the machine can spare, reset it:
+Ein frischer Bauordner des Daemons wiegt nach
+`cargo build --workspace --all-targets` rund 6 GiB, und er wächst mit jeder
+Änderung einer Abhängigkeit oder eines Feature-Satzes: Cargo schreibt einen
+neuen Satz Artefakte und entfernt nie einen alten. Am 2026-09-06 stand der
+Ordner dieses Repositorys nach etwa einer Woche Arbeit bei 103 GiB. Das
+Dev-Profil trägt deshalb `debug = "line-tables-only"` (`daemon/Cargo.toml`,
+dort gemessen); das halbiert jeden Satz und behält Datei und Zeile in jedem
+Backtrace.
+
+Ist der Ordner größer geworden, als der Rechner hergeben kann, wird er
+zurückgesetzt:
 
 ```sh
 cargo clean --manifest-path daemon/Cargo.toml
 ```
 
-The Flutter side is small by comparison (`app/build`, a few hundred MiB);
-`flutter clean` resets it.
+Die Flutter-Seite ist dagegen klein (`app/build`, einige hundert MiB);
+`flutter clean` setzt sie zurück.
 
-## Working on an issue
+## Arbeit an einem Issue
 
-One issue, one branch, named `hum-042-short-title`. The specification of every
-issue is in `backlog/sprint-N.md`; read `BACKLOG.md` sections 2 to 6 and
-`backlog/CONVENTIONS.md` before the first one.
+Ein Issue, ein Branch, benannt `hum-042-kurztitel`. Die Spezifikation jedes
+Issues steht in `backlog/sprint-N.md`; vor dem ersten `BACKLOG.md` Abschnitte 2
+bis 6 und `backlog/CONVENTIONS.md` lesen.
 
-`make check` has to pass before every push.
+Vor dem Commit genügen die gezielten Prüfungen des Issues: Tests der berührten
+Crates und Pakete, `cargo fmt`, `cargo clippy` auf den berührten Crates,
+`make flutter-analyze` bei App-Änderungen und die Mutationsbeweise. Den vollen
+Lauf macht die CI auf dem Issue-Branch (nächster Abschnitt). `make check` bleibt
+der volle lokale Lauf für alle, die ihn wollen.
 
-`make flutter-test-dbus` is not part of it: the D-Bus protocol tests
-(`app/test/features/tray/dbus_live_test.dart`) need a session bus that CI does
-not have, and only on the private bus of `dbus-run-session` are the names
-`org.kde.StatusNotifierWatcher` and `org.freedesktop.Notifications` free, so
-that the test can hold them itself and read what its adapters put on the wire.
-Run it after touching the tray or the notification adapter. On the bus of a
-real desktop the same tests skip with a reason instead of registering against
-the panel of the person sitting there.
+Drei Ziele gehören nicht zu `make check`:
 
-`make flutter-test-integration` is not part of it either: it runs the real
-application on a screen (`Xvfb :99` is enough) against a real daemon, one file
-at a time -- several files in one invocation start the app twice on the same
-device and the second start fails. Run it after touching the shell, the queue
-or anything the app shows while a daemon answers.
+- `make flutter-test-dbus`: Die D-Bus-Protokolltests
+  (`app/test/features/tray/dbus_live_test.dart`) brauchen einen Session-Bus,
+  den die CI nicht hat, und nur auf dem privaten Bus von `dbus-run-session`
+  sind die Namen `org.kde.StatusNotifierWatcher` und
+  `org.freedesktop.Notifications` frei, sodass der Test sie selbst halten und
+  lesen kann, was seine Adapter auf die Leitung legen. Nach Änderungen am Tray
+  oder am Benachrichtigungsadapter fahren. Auf dem Bus eines echten Desktops
+  überspringen sich dieselben Tests mit Grund, statt sich beim Panel des
+  Menschen davor einzutragen.
+- `make flutter-test-integration`: die echte Anwendung auf einem Bildschirm
+  (`Xvfb :99` genügt) gegen einen echten Daemon, eine Datei nach der anderen;
+  mehrere Dateien in einem Aufruf starten die App zweimal auf demselben Gerät,
+  und der zweite Start scheitert. Nach Änderungen an der Shell, der
+  Warteschlange oder allem fahren, was die App zeigt, während ein Daemon
+  antwortet.
+- `make flutter-test-daemon`: der Sandbox-Bildschirm gegen einen echten Daemon
+  (`app/test/features/sandbox/daemon_live_test.dart`) startet einen echten
+  `humanitld` in eigener XDG-Wurzel und eine echte Sandbox mit `bwrap`, und
+  beides gehört nicht in eine Prüfung, die auf jedem Rechner in Sekunden grün
+  sein muss. Nach Änderungen am Sandbox-Bildschirm, seinen Providern oder der
+  RPC `Sandbox` fahren. Ohne `HUMANITL_DAEMON_TESTS=1` meldet die Datei einen
+  einzigen übersprungenen Test mit Grund, ein normaler `flutter test`-Lauf
+  bleibt unberührt.
 
-`make flutter-test-daemon` is not part of it either: the sandbox screen against
-a real daemon (`app/test/features/sandbox/daemon_live_test.dart`) starts a real
-`humanitld` in its own XDG root and a real sandbox with `bwrap`, and neither
-belongs in a gate that has to be green in seconds on every machine. Run it
-after touching the sandbox screen, its providers or the `Sandbox` RPC. Without
-`HUMANITL_DAEMON_TESTS=1` the file registers a single skipped test with the
-reason, so a normal `flutter test` run is unaffected.
+### Vom Arbeitsbaum nach `main` (HUM-237)
 
-## Sprint gate
+Das Tor nach `main` ist die CI auf dem Issue-Branch, nicht mehr ein lokaler
+Volllauf. `.github/workflows/ci.yml` läuft auch für Pushes auf `hum-*`, und
+`tools/commit-issue.sh --ci` führt den ganzen Weg:
 
-Every milestone ends with a demo script, and the scripts of the milestones
-already reached stay green (`BACKLOG.md` section 8). From the end of sprint 2
-on, nothing merges unless both are green in continuous integration:
+1. Commit aus genau den genannten Pfaden auf der Spitze von `origin/main`,
+   gebaut in einem eigenen Index, ohne Arbeitsbaum und Index des Aufrufers
+   anzufassen.
+2. Push des Branches `hum-NNN-kurztitel`.
+3. `tools/ci-gate.sh <sha>` wartet über die öffentliche Actions-API auf den
+   Push-Lauf genau dieses Commits (ohne `gh`; ein Token in
+   `HUMANITL_CI_TOKEN` oder `GITHUB_TOKEN` hebt nur die Ratengrenze) und nennt
+   je Job das Ergebnis und bei Rot den Schritt, der fiel. Exit 0 grün, 1 rot,
+   2 Aufruf oder API kaputt, 3 kein Urteil (Frist abgelaufen oder Lauf
+   abgebrochen).
+4. Nur bei Grün: Merge mit `--no-ff` nach `main`, Push, Branch auf `origin`
+   löschen.
 
-| Milestone | Script | CI job |
+Hat sich `main` während des Laufs bewegt, setzt das Skript den einen Commit
+auf das neue `main` um und lässt die CI erneut laufen. Gemergt wird nur, wenn
+`main` der Elternteil des getesteten Commits ist; ein `--no-ff`-Merge auf
+dieser Grundlage hat genau den Baum des Branches, also landet auf `main`, was
+die CI geprüft hat. Ein Merge auf ein bewegtes `main` ohne neuen Lauf wäre
+schneller, prüfte aber einen Stand, den es so nie gab. Ein Rebase des
+Arbeitsbaums vor dem Push wäre die andere Möglichkeit; sie scheitert an jedem
+Arbeitsbaum, der mehr enthält als das Issue, und das ist der Normalfall.
+
+Nach roter CI bleibt der Branch liegen: nachbessern, Commit ergänzen, zurück
+auf einen anderen Branch wechseln (der Issue-Branch darf nirgends ausgecheckt
+sein), dann `tools/commit-issue.sh --land hum-NNN-kurztitel`.
+
+Das lokale `main` zieht das Skript nur nach, wenn dabei nichts verloren gehen
+kann. Hat einer der Pfade, die der Merge verändert, lokale Änderungen (auch
+Rechte, gestaged oder nicht), oder ist `main` in einem anderen Arbeitsbaum
+ausgecheckt, bleibt es stehen, und das Skript sagt es; der Merge liegt dann
+schon auf `origin`, der Abgleich ist `git merge --ff-only origin/main`.
+
+Der Grund für das Ganze bleibt derselbe wie bei `tools/verify-commit.sh`: Der
+Arbeitsbaum enthält fast immer mehr als der Commit, und `make check` im
+Arbeitsbaum ist grün, während der Commit allein nicht baut. Die CI checkt den
+sauberen Commit aus. `tools/verify-commit.sh` ist damit freiwillig; es fährt
+dieselben Prüfungen lokal, etwa wenn die CI nicht erreichbar ist. Sein
+Zielverzeichnis (`~/.cache/humanitl/verify-target`) baut wie die CI nicht
+inkrementell und räumt alte `incremental`-Verzeichnisse bei jedem Lauf weg
+(HUM-147).
+
+### Gemeinsamer Build-Cache (sccache)
+
+Jeder Arbeitsbaum eines Agenten hat ein eigenes Zielverzeichnis und übersetzt
+die Abhängigkeiten des Workspace neu. `sccache` teilt die übersetzten
+Abhängigkeiten über alle Arbeitsbäume. Es ist freiwillig, und weder die Shell
+noch `~/.cargo/config.toml` werden dafür geändert.
+
+Installation ohne root, nach `~/.cargo/bin`, gedrosselt wie jeder schwere
+Lauf auf diesem Rechner:
+
+```sh
+flock --close -w 3600 /tmp/humanitl-verify.lock \
+  nice -n 19 taskset -c 0-5 cargo install sccache --locked -j 2
+```
+
+Benutzung, je Aufruf:
+
+```sh
+make rust-test HUMANITL_SCCACHE=1          # Makefile-Ziele
+RUSTC_WRAPPER=sccache SCCACHE_CACHE_SIZE=5G \
+  cargo test -p humanitl-rules              # direkter cargo-Aufruf
+sccache --show-stats                        # Trefferquote
+```
+
+`HUMANITL_SCCACHE=1` setzt im Makefile `RUSTC_WRAPPER`, `SCCACHE_CACHE_SIZE=5G`
+und `SCCACHE_DIR=~/.cache/sccache`, wenn sie nicht schon gesetzt sind, und
+bricht mit einer Meldung ab, wenn `sccache` fehlt. Die Obergrenze von 5 GB
+gilt für den ganzen Cache; sccache wirft das am längsten Ungenutzte hinaus.
+Inkrementell übersetzte Crates (die eigenen im Dev-Profil) cacht sccache
+nicht; der Gewinn liegt bei den Abhängigkeiten, und die machen den größten
+Teil der Bauzeit aus.
+
+In der CI übernimmt `Swatinem/rust-cache` diese Rolle
+(`.github/actions/setup-rust/action.yml`); nur Läufe auf `main` schreiben den
+Cache, Issue-Branches lesen ihn.
+
+## Sprint-Tor (Sprint gate)
+
+Jeder Meilenstein endet mit einem Demo-Skript, und die Skripte der schon
+erreichten Meilensteine bleiben grün (`BACKLOG.md` Abschnitt 8). Ab dem Ende
+von Sprint 2 wird nichts gemergt, solange nicht beide in der CI grün sind:
+
+| Meilenstein | Skript | CI-Job |
 |---|---|---|
-| M1, the sealed box | `tests/e2e/m1_sealed_box.sh` | `e2e` |
-| M2, the first decision | `tests/e2e/m2_first_decision/run.sh` | `e2e-xvfb` |
+| M1, die versiegelte Box | `tests/e2e/m1_sealed_box.sh` | `e2e` |
+| M2, die erste Entscheidung | `tests/e2e/m2_first_decision/run.sh` | `e2e-xvfb` |
 
-`make e2e` runs both, in that order; `E2E_ONLY=m1` or `E2E_ONLY=m2` picks one.
-Both scripts print one line per assertion they checked, whether it held or not.
-The M2 script also counts them and fails when fewer ran than it expects, so a
-run that skipped a branch cannot report success; the M1 script carries the same
-counter but does not yet check it.
+`make e2e` fährt beide in dieser Reihenfolge; `E2E_ONLY=m1` oder `E2E_ONLY=m2`
+wählt eines. Beide Skripte geben je geprüfter Zusicherung eine Zeile aus, ob
+sie hielt oder nicht. Das M2-Skript zählt sie außerdem und scheitert, wenn
+weniger liefen als erwartet; ein Lauf, der einen Zweig übersprang, kann also
+keinen Erfolg melden. Das M1-Skript trägt denselben Zähler, prüft ihn aber noch
+nicht.
 
-**The M2 gate runs the whole loop.** HUM-036 asks for real daemon, real
-sandbox **and the real screen under xvfb**, ending in a valid HAR file, and
-since HUM-097 that is what happens: the screen driver
-(`app/integration_test/m2_first_decision_test.dart`) starts before the agent
-and takes the decisions of sections 2 to 4 while the requests are held — the
-batch release with a session rule, the block, the single allow — then filters
-the history and writes the HAR file that step 10 reads back. A green
-`e2e-xvfb` means "M2 holds".
+**Das M2-Tor fährt die ganze Schleife.** HUM-036 verlangt echten Daemon, echte
+Sandbox **und den echten Bildschirm unter xvfb**, am Ende eine gültige
+HAR-Datei, und seit HUM-097 passiert genau das: Der Bildschirmtreiber
+(`app/integration_test/m2_first_decision_test.dart`) startet vor dem Agenten
+und trifft die Entscheidungen der Abschnitte 2 bis 4, während die Anfragen
+gehalten werden (die Sammelfreigabe mit Sitzungsregel, die Sperre, die einzelne
+Freigabe), filtert dann den Verlauf und schreibt die HAR-Datei, die Schritt 10
+zurückliest. Ein grünes `e2e-xvfb` heißt „M2 hält".
 
-Two paths used to be on the list of things a green run did not vouch for and
-no longer are. HUM-087 gave the daemon `--allow-test-ca`; every one of the
-seventeen requests now goes over `https://`, so leaf minting from Humanitl's
-own CA, the handshake with the agent and the upstream TLS session run for
-every released and blocked flow, and both findings are made in bodies the
-proxy decrypted itself. HUM-097 added the screen half.
+Zwei Wege standen früher auf der Liste dessen, wofür ein grüner Lauf nicht
+bürgte, und stehen dort nicht mehr. HUM-087 gab dem Daemon `--allow-test-ca`;
+jede der siebzehn Anfragen geht jetzt über `https://`, also laufen das Ausgeben
+von Blattzertifikaten aus Humanitls eigener CA, der Handshake mit dem Agenten
+und die TLS-Sitzung nach oben für jeden freigegebenen und gesperrten Fluss, und
+beide Funde entstehen in Bodies, die der Proxy selbst entschlüsselt hat.
+HUM-097 brachte die Bildschirmhälfte.
 
-`M2_UI=0` switches the screen off, for a machine without `flutter` or
-`xvfb-run`. Such a run says nothing about the screen and nothing about the HAR
-format, and it says so in its own output; CI never takes that branch.
+`M2_UI=0` schaltet den Bildschirm ab, für einen Rechner ohne `flutter` oder
+`xvfb-run`. Ein solcher Lauf sagt nichts über den Bildschirm und nichts über
+das HAR-Format, und er sagt das in seiner eigenen Ausgabe; die CI nimmt diesen
+Zweig nie.
 
-## Commit messages
+## Commit-Nachrichten
 
-Prefix with `feat`, `fix`, `test`, `docs`, `chore` or `refactor`, followed by the
-scope in parentheses:
+Englisch, mit einem Präfix `feat`, `fix`, `test`, `docs`, `chore` oder
+`refactor` und dem Bereich in Klammern:
 
 ```
 feat(rules): label glob matching
 fix(proxy): answer 100-continue before buffering
 ```
 
-## Definition of done
+## Definition of Done
 
-From `backlog/CONVENTIONS.md` section 3.12, in short:
+Aus `backlog/CONVENTIONS.md` Abschnitt 3.12, kurz:
 
-- Acceptance criteria of the issue ticked, its tests present and green.
-- New error paths return a `Diagnostic` with `why` and, where possible, `fix`.
-- New settings carry tier, description and default in the schema.
-- New user-visible strings exist in `app/l10n/app_en.arb` and `app_de.arb`.
-- No `unwrap()` or `expect()` outside tests and `main`, no `Err(String)`.
-- Every public type and function has a documentation comment.
+- Akzeptanzkriterien des Issues abgehakt, seine Tests vorhanden und grün.
+- Neue Fehlerpfade liefern ein `Diagnostic` mit `why` und wo möglich `fix`.
+- Neue Einstellungen tragen Tier, Beschreibung und Vorgabe im Schema.
+- Neue sichtbare Texte stehen in `app/l10n/app_en.arb` und `app_de.arb`.
+- Kein `unwrap()` oder `expect()` außerhalb von Tests und `main`, kein
+  `Err(String)`.
+- Jeder öffentliche Typ und jede öffentliche Funktion hat einen
+  Doc-Kommentar.
+- Die CI ist auf dem Issue-Branch grün, bevor der Merge nach `main` geht
+  (`tools/commit-issue.sh --ci`, HUM-237). Sie prüft den sauberen Commit,
+  nicht den Arbeitsbaum, und ersetzt damit den Pflichtlauf von
+  `tools/verify-commit.sh`.
 
-## Architecture rules
+## Architekturregeln
 
-Dependencies point inward only; `make deps-lint` enforces it. The core crates
-carry no IO, no async and no protobuf. Every capability is an RPC first: the
-desktop application and the command line are thin clients of the same service.
-Details in `docs/ARCHITECTURE.md`.
+Abhängigkeiten zeigen nur nach innen; `make deps-lint` erzwingt das. Die
+Kern-Crates tragen kein IO, kein async und kein Protobuf. Jede Fähigkeit ist
+zuerst eine RPC: Desktop-Anwendung und Kommandozeile sind dünne Clients
+desselben Dienstes. Einzelheiten in `docs/ARCHITECTURE.md`.
 
 ## Vorabversionen 0.0.x
 
@@ -193,7 +298,7 @@ scheitert sonst.
 Version wie `0.0.3` baut alles, prüft das Paket im Container und lädt die
 Dateien als Workflow-Artefakt `humanitl-dry-run-<commit>` hoch (ein Tag-Lauf
 nennt sein Artefakt `humanitl-release`), legt aber kein Release
-an. Der Probelauf darf auch einen Zweig bauen; dass der Commit nicht auf
+an. Der Probelauf darf auch einen Branch bauen; dass der Commit nicht auf
 `main` liegt oder CI nicht grün ist, steht dann als Warnung im Lauf statt als
 Fehler. Die Schritte lassen sich lokal einzeln nachfahren, die Skripte liegen
 unter `packaging/release/` und `packaging/deb/`. Das Paket wird dabei nie auf

@@ -21,10 +21,16 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    # Issue branches `hum-NNN-slug` run the full pipeline before they are
+    # merged: tools/commit-issue.sh --ci pushes the branch, waits for this run
+    # through tools/ci-gate.sh and merges into main only on green (HUM-237).
+    # main keeps its own run, because the release guard (release.yml) asks for
+    # a green push run of exactly the tagged main commit.
+    branches: [main, "hum-*"]
   pull_request:
 
-# One run per ref. A new push supersedes the one in flight.
+# One run per ref. A new push supersedes the one in flight; on an issue branch
+# that is the amended commit after a red run.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -67,6 +73,11 @@ jobs:
         # Both documents complete, no TODO/TBD line, every referenced ESC-N is a
         # real escape test. Needs no toolchain, rides along in this job.
         run: make docs-lint
+      - name: Bundled catalog matches its source (HUM-094)
+        # Part of `make check` and of the old local verify, but no CI job ran
+        # it until HUM-237 made CI the only full gate. A byte comparison, so it
+        # rides along here.
+        run: make catalog-lint
       - name: Typed errors in public signatures (HUM-063)
         # Public functions of the library crates return Diagnostic or a
         # thiserror type, never String, anyhow::Error or Box<dyn Error>. The
@@ -215,6 +226,11 @@ jobs:
       - name: Dependency direction, missing_docs, single egress point
         # tools/check-deps.sh reads `cargo metadata`, hence the Rust setup.
         run: make deps-lint
+      - name: Tests of the pipeline tools (HUM-237)
+        # tools/ci-gate.sh against a faked Actions API and
+        # tools/commit-issue.sh --ci against a throwaway origin: the tools that
+        # decide whether a branch reaches main.
+        run: make tools-test
 
   proto-lint-and-gen:
     name: proto-lint-and-gen
@@ -333,8 +349,27 @@ jobs:
         # --fatal-infos is the Dart counterpart of RUSTFLAGS=-D warnings: strict
         # here, not enforced by `make flutter-analyze` locally.
         run: cd app && flutter analyze --fatal-infos
+      - name: Format
+        # The third half of `make flutter-analyze`, which no CI job ran until
+        # HUM-237 made CI the only full gate. Same paths as the Makefile.
+        run: cd app && dart format --output=none --set-exit-if-changed lib test packages/ui/lib packages/ui/test
       - name: Test
-        run: cd app && flutter test --coverage
+        # --concurrency: package:test defaults to half the cores, two on the
+        # four-core runner, so half of it sat idle while 130 test files ran in
+        # two lanes. One process per core instead (HUM-237); every file still
+        # runs in its own process, so no state is shared between them.
+        #
+        # --exclude-tags golden: the golden tests are the required `goldens`
+        # job and ran here a second time. scripts/ci/goldens-placeholder.sh
+        # fails when a golden test lives outside app/test/goldens, so none can
+        # drop out of both jobs.
+        #
+        # No sharding into a matrix: every extra job pays about four minutes
+        # of setup (Flutter, proto, code generation) to save part of a five
+        # minute step, and the matrix would rename the required check
+        # `flutter-analyze-test`. Worth revisiting when this step alone passes
+        # six minutes.
+        run: cd app && flutter test --coverage --concurrency="$(nproc)" --exclude-tags golden
       - name: Design system package
         # `flutter test` in app/ does not descend into the path dependency, so
         # the tokens and widgets of packages/ui (HUM-005) get the same gate here.
@@ -388,7 +423,10 @@ jobs:
           ./scripts/gen-proto.sh
           make flutter-codegen
       - name: Golden tests
-        # Explicit skip until HUM-054 adds the first golden. See the script.
+        # Explicit skip while there is no golden. See the script, which also
+        # runs one test process per core: the pixels stay the same, because
+        # every file renders in its own process with alchemist's CI fonts and
+        # no shared state (HUM-237).
         run: ./scripts/ci/goldens-placeholder.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
