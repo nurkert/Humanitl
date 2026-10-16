@@ -4544,10 +4544,10 @@ Der Befund stammt vom Stand vor HUM-077. Zuerst prüfen, ob HUM-077 ihn schon be
 Der Befund ist behoben, und ein Test hält ihn behoben.
 
 ### Akzeptanzkriterien
-- [ ] `systemctl --user show -p UnitPath` nutzen, oder nach `daemon-reload` `show -p FragmentPath humanitld.service` mit dem geschriebenen Pfad vergleichen. Bei Abweichung eine eigene Diagnose, die beide Verzeichnisse nennt.
-- [ ] Rollback über systemd: Vorher `is-enabled` merken, bei Fehlschlag `disable` für die Namen, die vorher nicht aktiv waren. Oder die Zeilen „Created symlink“ parsen. Die Datei-Suche bleibt nur als Rückfall.
-- [ ] Test mit einem abweichenden `XDG_CONFIG_HOME`.
-- [ ] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis).
+- [x] `systemctl --user show -p UnitPath` nutzen, oder nach `daemon-reload` `show -p FragmentPath humanitld.service` mit dem geschriebenen Pfad vergleichen. Bei Abweichung eine eigene Diagnose, die beide Verzeichnisse nennt. Gemessen am 2026-10-16: `a_unit_systemd_loads_from_elsewhere_is_taken_back_and_names_both_directories`; die Unit geht vor `enable` zurück, der Befund nennt beide Verzeichnisse und schlägt `systemctl --user show -p UnitPath` vor. Code bleibt `DAEMON_008` mit eigenem Satz und eigenem Vorschlag; ein neuer Code bräuchte ARB- und Dart-Einträge in `app/`. Nach dem Review: Ohne Antwort zu `FragmentPath` und unter `--no-start` entscheidet `show -p UnitPath` (`without_a_fragment_path_the_search_path_decides`, `no_start_takes_back_a_unit_systemd_does_not_search`); der Erfolgsfall ist mit `a_unit_systemd_loads_from_here_is_enabled` gemessen.
+- [x] Rollback über systemd: Vorher `is-enabled` merken, bei Fehlschlag `disable` für die Namen, die vorher nicht aktiv waren. Oder die Zeilen „Created symlink“ parsen. Die Datei-Suche bleibt nur als Rückfall. Gemessen am 2026-10-16: `a_failed_package_enable_is_taken_back_where_the_manager_put_its_links` und `a_failed_package_enable_keeps_an_enablement_that_was_there_before`. Nach dem Review auch nach einem gescheiterten Neustart: `a_failed_restart_disables_through_systemd_what_enable_created`, `a_failed_restart_on_the_package_disables_the_socket_through_systemd` und `a_failed_restart_on_the_package_leaves_a_socket_systemd_had_enabled`.
+- [x] Test mit einem abweichenden `XDG_CONFIG_HOME`. Gemessen am 2026-10-16: Alle drei Tests legen das Verzeichnis des Verwalters unter `manager-config/` und das der Kommandozeile unter `config/`.
+- [x] Ein Test deckt den Weg des Befunds ab und ist ohne den Fix rot (Mutationsbeweis). Gemessen am 2026-10-16: Ohne `disable` über systemd bleibt der Verweis unter dem Verzeichnis des Verwalters, und `a_failed_package_enable_is_taken_back_where_the_manager_put_its_links` wird rot.
 - [ ] `make check` grün.
 
 ### Referenzen

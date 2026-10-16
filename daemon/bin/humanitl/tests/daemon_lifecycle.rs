@@ -79,7 +79,9 @@ fn set_executable(path: &Path) {
 /// Aufruf, der auf `fail` passt, mit 1 endet. Auf `show -p MainPID` antwortet
 /// es `MainPID=0`, wie systemd für einen Dienst ohne Hauptprozess: Eine leere
 /// Antwort ließe offen, ob noch ein Daemon läuft, und keine Kopie ginge
-/// (HUM-210).
+/// (HUM-210). `is-enabled` sagt `disabled`, `show -p UnitPath` nennt das
+/// Unit-Verzeichnis der Umgebung: Ohne Antwort darauf aktivierte der Befehl
+/// nicht (HUM-217).
 ///
 /// Bei `restart` hält es zusätzlich fest, ob die ältere Kopie in diesem
 /// Augenblick noch da ist: Genau daran hängt die Regel, dass sie erst nach dem
@@ -102,11 +104,14 @@ fn fake_systemctl(harness: &Harness, fail: &str) -> (PathBuf, PathBuf) {
              esac\n\
              case \"$*\" in\n\
              {fail}) echo 'Job for humanitld.service failed' >&2; exit 1 ;;\n\
+             *is-enabled*) echo disabled; exit 1 ;;\n\
+             *UnitPath*) echo 'UnitPath={units}' ;;\n\
              *MainPID*) echo MainPID=0 ;;\n\
              esac\n\
              exit 0\n",
             log = log.display(),
             old = old.display(),
+            units = harness.path("config").join("systemd/user").display(),
         ),
     );
     (dir, log)
@@ -690,8 +695,8 @@ fn a_reinstall_without_current_restarts_the_running_unit() {
 }
 
 /// Schreibt `fakebin/systemctl` neu: Jeder Aufruf geht in `log`, dann folgt
-/// `cases` als Zweige eines `case "$*"`, danach `MainPID=0` auf
-/// `show -p MainPID` wie bei [`fake_systemctl`], sonst Exit 0.
+/// `cases` als Zweige eines `case "$*"`, danach die Antworten von
+/// [`fake_systemctl`] auf `is-enabled`, `UnitPath` und `MainPID`, sonst Exit 0.
 fn rewrite_systemctl(fakebin: &Path, log: &Path, cases: &str) {
     write_script(
         &fakebin.join("systemctl"),
@@ -701,10 +706,14 @@ fn rewrite_systemctl(fakebin: &Path, log: &Path, cases: &str) {
              echo \"$*\" >>'{log}'\n\
              case \"$*\" in\n\
              {cases}\n\
+             *is-enabled*) echo disabled; exit 1 ;;\n\
+             *UnitPath*) echo 'UnitPath={units}' ;;\n\
              *MainPID*) echo MainPID=0 ;;\n\
              esac\n\
              exit 0\n",
             log = log.display(),
+            // `log` liegt in der Wurzel der Umgebung, neben `config/`.
+            units = log.with_file_name("config").join("systemd/user").display(),
         ),
     );
 }
@@ -747,7 +756,7 @@ fn an_invisible_main_process_keeps_the_older_copy() {
     let bin = image_tree(&harness);
     let (fakebin, log) = fake_systemctl(&harness, NEVER);
     // Größer als jede mögliche Prozessnummer (`PID_MAX_LIMIT`, 2^22).
-    rewrite_systemctl(&fakebin, &log, "*show*) echo MainPID=4194304 ;;");
+    rewrite_systemctl(&fakebin, &log, "*MainPID*) echo MainPID=4194304 ;;");
     let path = path_with(&fakebin);
     let old = install_an_older_copy(&harness, &bin, &path);
 
@@ -912,7 +921,8 @@ fn a_failed_enable_keeps_the_new_copy_while_the_main_process_is_invisible() {
     rewrite_systemctl(
         &fakebin,
         &log,
-        "*enable*) echo 'Job failed' >&2; exit 1 ;;\n\
+        "*is-enabled*) echo disabled; exit 1 ;;\n\
+         *enable*) echo 'Job failed' >&2; exit 1 ;;\n\
          *MainPID*) echo MainPID=4194304 ;;",
     );
 
@@ -1295,10 +1305,13 @@ fn a_failed_reload_after_a_failed_restart_restarts_nothing() {
              echo \"$*\" >>'{log}.since'\n\
              case \"$*\" in\n\
              *restart*) exit 1 ;;\n\
+             *is-enabled*) echo disabled; exit 1 ;;\n\
+             *UnitPath*) echo 'UnitPath={units}' ;;\n\
              *MainPID*) echo MainPID=0 ;;\n\
              esac\n\
              exit 0\n",
             log = log.display(),
+            units = harness.path("config").join("systemd/user").display(),
         ),
     );
 
@@ -1350,11 +1363,14 @@ fn a_restore_that_fails_restarts_nothing_and_says_so() {
              echo \"$*\" >>'{log}'\n\
              case \"$*\" in\n\
              *restart*) chmod 0555 '{lib}'; echo 'Job failed' >&2; exit 1 ;;\n\
+             *is-enabled*) echo disabled; exit 1 ;;\n\
+             *UnitPath*) echo 'UnitPath={units}' ;;\n\
              *MainPID*) echo MainPID=0 ;;\n\
              esac\n\
              exit 0\n",
             log = log.display(),
             lib = lib_dir(&harness).display(),
+            units = harness.path("config").join("systemd/user").display(),
         ),
     );
 
@@ -1407,6 +1423,8 @@ fn a_failed_restart_of_a_created_unit_leaves_no_link_and_restarts_nothing() {
              PATH=/usr/bin:/bin\n\
              echo \"$*\" >>'{log}'\n\
              case \"$*\" in\n\
+             *is-enabled*) echo disabled; exit 1 ;;\n\
+             *UnitPath*) echo \"UnitPath=$(dirname '{unit}')\" ;;\n\
              *enable*) mkdir -p '{wants}' && ln -sf '{unit}' '{link}' ;;\n\
              *restart*) echo 'Job failed' >&2; exit 1 ;;\n\
              *MainPID*) echo MainPID=0 ;;\n\
@@ -1620,6 +1638,8 @@ fn packaged_systemctl(
              target() {{ case $1 in \
              *.socket) echo '{socket_link}' ;; *) echo '{link}' ;; esac; }}\n\
              case \"$*\" in\n\
+             *is-enabled*) test -L '{socket_link}' && {{ echo enabled; exit 0; }}\n\
+               echo disabled; exit 1 ;;\n\
              *enable*)\n\
                for n in humanitld.socket humanitld.service; do\n\
                  case \" $* \" in *\" $n \"*) ;; *) continue ;; esac\n\
@@ -2220,6 +2240,7 @@ fn a_failed_socket_enable_stops_the_new_socket_and_never_the_running_service() {
              PATH=/usr/bin:/bin\n\
              echo \"$*\" >>'{log}'\n\
              case \"$*\" in\n\
+             *is-enabled*) echo disabled; exit 1 ;;\n\
              *enable*)\n\
                mkdir -p \"$(dirname '{socket_link}')\"\n\
                ln -sfn '{pkgdir}/humanitld.socket' '{socket_link}'\n\
@@ -2262,6 +2283,448 @@ fn a_failed_socket_enable_stops_the_new_socket_and_never_the_running_service() {
         calls
             .lines()
             .any(|line| line == "--user start humanitld.service"),
+        "{calls}"
+    );
+}
+
+/// Das Unit-Verzeichnis eines systemd-Verwalters, der ein anderes
+/// `XDG_CONFIG_HOME` hat als die Kommandozeile (HUM-217): `XDG_CONFIG_HOME`
+/// steht nur in der Shell-rc, der Verwalter sucht unter seinem eigenen.
+fn manager_unit_dir(harness: &Harness) -> PathBuf {
+    harness.path("manager-config").join("systemd/user")
+}
+
+/// Legt die Units des Pakets in das Verzeichnis, das
+/// `HUMANITL_SYSTEM_UNIT_DIR` in diesen Läufen nennt; liefert es.
+fn package_units(harness: &Harness) -> PathBuf {
+    let system = harness.path("system-units");
+    std::fs::write(
+        system.join("humanitld.service"),
+        "[Service]\nExecStart=/opt/pkg/humanitld\n",
+    )
+    .expect("the package unit");
+    std::fs::write(system.join("humanitld.socket"), "[Socket]\n").expect("the package socket");
+    system
+}
+
+/// HUM-217, Akzeptanzkriterium 1: Lädt systemd die Unit nach `daemon-reload`
+/// nicht aus der Datei, die die Kommandozeile unter ihrem `XDG_CONFIG_HOME`
+/// geschrieben hat, endet der Lauf mit einem Befund, der beide Verzeichnisse
+/// nennt. Die Unit geht zurück, und `enable` wird nie gerufen: Sonst stünde
+/// ein Verweis auf eine Unit da, die systemd nicht lädt.
+#[test]
+fn a_unit_systemd_loads_from_elsewhere_is_taken_back_and_names_both_directories() {
+    let harness = Harness::new();
+    let bin = image_tree(&harness);
+    let (fakebin, log) = fake_systemctl(&harness, NEVER);
+    let manager = manager_unit_dir(&harness);
+    rewrite_systemctl(
+        &fakebin,
+        &log,
+        &format!(
+            "*FragmentPath*) echo 'FragmentPath={}' ;;",
+            manager.join("humanitld.service").display()
+        ),
+    );
+
+    let output = run(
+        &harness,
+        &bin.join("humanitl"),
+        &["--json", "daemon", "install"],
+        &path_with(&fakebin),
+        true,
+    );
+
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    let value = json(&output);
+    assert_eq!(value["code"], "DAEMON_008", "{value}");
+    let why = value["why"].as_str().unwrap_or_default();
+    let unit = unit_path(&harness);
+    let ours = unit.parent().expect("the unit directory");
+    assert!(why.contains(&ours.display().to_string()), "{why}");
+    assert!(why.contains(&manager.display().to_string()), "{why}");
+    assert_eq!(
+        value["fix"]["command"], "systemctl --user show -p UnitPath",
+        "{value}"
+    );
+    assert!(!unit.exists(), "the unit stayed");
+    let calls = calls(&log);
+    assert!(
+        !calls.lines().any(|line| line.contains("enable --now")),
+        "{calls}"
+    );
+}
+
+/// HUM-217, Akzeptanzkriterium 2, der Weg des Befunds: Mit dem Paket legt
+/// `enable` seine Verweise unter dem Verzeichnis des Verwalters an, nicht
+/// unter dem der Kommandozeile. Scheitert der Start, meldet `disable` über
+/// systemd ab, was vorher nicht aktiviert war, und der Verweis ist weg. Die
+/// Suche im Verzeichnis der Kommandozeile allein ließe ihn liegen, und der
+/// Socket startete bei jedem Anmelden trotz `DAEMON_008`.
+#[test]
+fn a_failed_package_enable_is_taken_back_where_the_manager_put_its_links() {
+    let harness = Harness::new();
+    let system = package_units(&harness);
+    let (fakebin, log) = fake_systemctl(&harness, NEVER);
+    let link = manager_unit_dir(&harness).join("sockets.target.wants/humanitld.socket");
+    rewrite_systemctl(
+        &fakebin,
+        &log,
+        &format!(
+            "*is-enabled*)\n\
+             if test -L '{link}'; then echo enabled; exit 0; fi\n\
+             echo disabled; exit 1 ;;\n\
+             *disable*) rm -f '{link}' ;;\n\
+             *enable*)\n\
+             mkdir -p \"$(dirname '{link}')\"\n\
+             ln -sfn '{socket}' '{link}'\n\
+             echo 'Job for humanitld.socket failed' >&2; exit 1 ;;",
+            link = link.display(),
+            socket = system.join("humanitld.socket").display(),
+        ),
+    );
+
+    let output = packaged_install(&harness, &fakebin, &[]);
+
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    assert_eq!(json(&output)["code"], "DAEMON_008");
+    let calls = calls(&log);
+    assert!(
+        calls
+            .lines()
+            .any(|line| line == "--user disable humanitld.socket"),
+        "{calls}"
+    );
+    assert!(
+        std::fs::symlink_metadata(&link).is_err(),
+        "the link under the manager's directory stayed: {calls}"
+    );
+}
+
+/// HUM-217: War der Socket vor dem Lauf schon aktiviert, meldet ein
+/// gescheiterter Start ihn nicht ab; zurück geht nur, was dieser Lauf
+/// angelegt hat.
+#[test]
+fn a_failed_package_enable_keeps_an_enablement_that_was_there_before() {
+    let harness = Harness::new();
+    let system = package_units(&harness);
+    let (fakebin, log) = fake_systemctl(&harness, NEVER);
+    let link = manager_unit_dir(&harness).join("sockets.target.wants/humanitld.socket");
+    std::fs::create_dir_all(link.parent().expect("a directory")).expect("the wants directory");
+    std::os::unix::fs::symlink(system.join("humanitld.socket"), &link).expect("an earlier link");
+    rewrite_systemctl(
+        &fakebin,
+        &log,
+        &format!(
+            "*is-enabled*)\n\
+             if test -L '{link}'; then echo enabled; exit 0; fi\n\
+             echo disabled; exit 1 ;;\n\
+             *disable*) rm -f '{link}' ;;\n\
+             *enable*) echo 'Job for humanitld.socket failed' >&2; exit 1 ;;",
+            link = link.display(),
+        ),
+    );
+
+    let output = packaged_install(&harness, &fakebin, &[]);
+
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    let calls = calls(&log);
+    assert!(
+        !calls.lines().any(|line| line.contains("disable")),
+        "{calls}"
+    );
+    assert!(link.is_symlink(), "the earlier link went: {calls}");
+}
+
+/// Ein `systemctl`-Zweig wie systemd für `is-enabled` und `disable` einer
+/// Unit, deren Verweis `link` unter dem Verzeichnis des Verwalters liegt.
+fn manager_link_cases(link: &Path) -> String {
+    format!(
+        "*is-enabled*)\n\
+         if test -L '{link}'; then echo enabled; exit 0; fi\n\
+         echo disabled; exit 1 ;;\n\
+         *disable*) rm -f '{link}' ;;",
+        link = link.display(),
+    )
+}
+
+/// HUM-217, Review: Lädt systemd die Unit aus genau der Datei, die die
+/// Kommandozeile geschrieben hat, geht die Einrichtung durch.
+#[test]
+fn a_unit_systemd_loads_from_here_is_enabled() {
+    let harness = Harness::new();
+    let bin = image_tree(&harness);
+    let (fakebin, log) = fake_systemctl(&harness, NEVER);
+    rewrite_systemctl(
+        &fakebin,
+        &log,
+        &format!(
+            "*FragmentPath*) echo 'FragmentPath={}' ;;",
+            unit_path(&harness).display()
+        ),
+    );
+
+    let output = run(
+        &harness,
+        &bin.join("humanitl"),
+        &["--json", "daemon", "install"],
+        &path_with(&fakebin),
+        true,
+    );
+
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let calls = calls(&log);
+    assert!(
+        calls
+            .lines()
+            .any(|line| line == "--user enable --now humanitld.service"),
+        "{calls}"
+    );
+}
+
+/// HUM-217, Review: Sagt systemd zu `FragmentPath` nichts, entscheiden die
+/// Suchpfade des Verwalters. Steht das Verzeichnis der Kommandozeile nicht
+/// darunter, geht die Unit zurück, und der Befund nennt beide.
+#[test]
+fn without_a_fragment_path_the_search_path_decides() {
+    let harness = Harness::new();
+    let bin = image_tree(&harness);
+    let (fakebin, log) = fake_systemctl(&harness, NEVER);
+    let manager = manager_unit_dir(&harness);
+    rewrite_systemctl(
+        &fakebin,
+        &log,
+        &format!("*UnitPath*) echo 'UnitPath={}' ;;", manager.display()),
+    );
+
+    let output = run(
+        &harness,
+        &bin.join("humanitl"),
+        &["--json", "daemon", "install"],
+        &path_with(&fakebin),
+        true,
+    );
+
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    let value = json(&output);
+    assert_eq!(value["code"], "DAEMON_008", "{value}");
+    let why = value["why"].as_str().unwrap_or_default();
+    assert!(why.contains(&manager.display().to_string()), "{why}");
+    assert!(!unit_path(&harness).exists(), "the unit stayed");
+}
+
+/// HUM-217, Review: Auch unter `--no-start` geht eine Unit zurück, die dort
+/// liegt, wo der Verwalter nicht sucht. systemd liest dabei nichts neu.
+#[test]
+fn no_start_takes_back_a_unit_systemd_does_not_search() {
+    let harness = Harness::new();
+    let bin = image_tree(&harness);
+    let (fakebin, log) = fake_systemctl(&harness, NEVER);
+    let manager = manager_unit_dir(&harness);
+    rewrite_systemctl(
+        &fakebin,
+        &log,
+        &format!("*UnitPath*) echo 'UnitPath={}' ;;", manager.display()),
+    );
+
+    let output = run(
+        &harness,
+        &bin.join("humanitl"),
+        &["--json", "daemon", "install", "--no-start"],
+        &path_with(&fakebin),
+        true,
+    );
+
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    let value = json(&output);
+    assert_eq!(value["code"], "DAEMON_008", "{value}");
+    assert!(!unit_path(&harness).exists(), "the unit stayed");
+    let calls = calls(&log);
+    assert!(
+        !calls.lines().any(|line| line.contains("daemon-reload")),
+        "{calls}"
+    );
+}
+
+/// HUM-217, Review: Scheitert nach einem gelungenen `enable` der Neustart,
+/// meldet die Rücknahme über systemd ab, was vorher nicht aktiviert war; der
+/// Verweis unter dem Verzeichnis des Verwalters geht.
+#[test]
+fn a_failed_restart_disables_through_systemd_what_enable_created() {
+    let harness = Harness::new();
+    let bin = image_tree(&harness);
+    let (fakebin, log) = fake_systemctl(&harness, NEVER);
+    let path = path_with(&fakebin);
+    install_an_older_copy(&harness, &bin, &path);
+    let link = manager_unit_dir(&harness).join("default.target.wants/humanitld.service");
+    rewrite_systemctl(
+        &fakebin,
+        &log,
+        &format!(
+            "{cases}\n\
+             *enable*) mkdir -p \"$(dirname '{link}')\" && ln -sfn '{unit}' '{link}' ;;\n\
+             *restart*) echo 'Job failed' >&2; exit 1 ;;",
+            cases = manager_link_cases(&link),
+            link = link.display(),
+            unit = unit_path(&harness).display(),
+        ),
+    );
+
+    let output = run(
+        &harness,
+        &bin.join("humanitl"),
+        &["--json", "daemon", "install"],
+        &path,
+        true,
+    );
+
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    let calls = calls(&log);
+    assert!(
+        calls
+            .lines()
+            .any(|line| line == "--user disable humanitld.service"),
+        "{calls}"
+    );
+    assert!(
+        std::fs::symlink_metadata(&link).is_err(),
+        "the link under the manager's directory stayed: {calls}"
+    );
+}
+
+/// HUM-217, Review: Mit dem Paket und einer eigenen älteren Unit, die
+/// beiseiteging, scheitert der Neustart. Die Rücknahme meldet den Socket über
+/// systemd ab, und sein Verweis unter dem Verzeichnis des Verwalters geht.
+#[test]
+fn a_failed_restart_on_the_package_disables_the_socket_through_systemd() {
+    let harness = Harness::new();
+    let units = upgraded(&harness, &own_old_unit());
+    let (fakebin, log) = fake_systemctl(&harness, NEVER);
+    let link = manager_unit_dir(&harness).join("sockets.target.wants/humanitld.socket");
+    rewrite_systemctl(
+        &fakebin,
+        &log,
+        &format!(
+            "{cases}\n\
+             *is-active*) exit 0 ;;\n\
+             *enable*) mkdir -p \"$(dirname '{link}')\" && ln -sfn '{socket}' '{link}' ;;\n\
+             *restart*) echo 'Job failed' >&2; exit 1 ;;",
+            cases = manager_link_cases(&link),
+            link = link.display(),
+            socket = units.package.with_file_name("humanitld.socket").display(),
+        ),
+    );
+
+    let output = packaged_install(&harness, &fakebin, &[]);
+
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    let calls = calls(&log);
+    assert!(
+        calls
+            .lines()
+            .any(|line| line == "--user disable humanitld.socket"),
+        "{calls}"
+    );
+    assert!(
+        std::fs::symlink_metadata(&link).is_err(),
+        "the socket link under the manager's directory stayed: {calls}"
+    );
+}
+
+/// HUM-217, Review: Sagt systemd, der Socket war schon aktiviert, auch wenn
+/// im Verzeichnis der Kommandozeile kein Verweis liegt, hält ein gescheiterter
+/// Neustart ihn nicht an und meldet ihn nicht ab.
+#[test]
+fn a_failed_restart_on_the_package_leaves_a_socket_systemd_had_enabled() {
+    let harness = Harness::new();
+    let units = upgraded(&harness, &own_old_unit());
+    let (fakebin, log) = fake_systemctl(&harness, NEVER);
+    let link = manager_unit_dir(&harness).join("sockets.target.wants/humanitld.socket");
+    let socket = units.package.with_file_name("humanitld.socket");
+    std::fs::create_dir_all(link.parent().expect("a directory")).expect("the wants directory");
+    std::os::unix::fs::symlink(&socket, &link).expect("an earlier socket link");
+    rewrite_systemctl(
+        &fakebin,
+        &log,
+        &format!(
+            "{cases}\n\
+             *is-active*) exit 0 ;;\n\
+             *restart*) echo 'Job failed' >&2; exit 1 ;;",
+            cases = manager_link_cases(&link),
+        ),
+    );
+
+    let output = packaged_install(&harness, &fakebin, &[]);
+
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    let calls = calls(&log);
+    assert!(
+        !calls
+            .lines()
+            .any(|line| line == "--user stop humanitld.socket" || line.contains("disable")),
+        "{calls}"
+    );
+    assert!(link.is_symlink(), "the earlier socket link went: {calls}");
+}
+
+/// HUM-217, Review: Beantwortet systemd weder `FragmentPath` noch
+/// `UnitPath`, ist offen, wo es sucht, und die Unit gilt nicht als geprüft.
+/// Unter `--no-start` geht sie zurück, ohne dass systemd etwas neu liest.
+#[test]
+fn a_silent_search_path_takes_the_unit_back() {
+    let harness = Harness::new();
+    let bin = image_tree(&harness);
+    let (fakebin, log) = fake_systemctl(&harness, NEVER);
+    rewrite_systemctl(&fakebin, &log, "*UnitPath*) ;;");
+
+    let output = run(
+        &harness,
+        &bin.join("humanitl"),
+        &["--json", "daemon", "install", "--no-start"],
+        &path_with(&fakebin),
+        true,
+    );
+
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    let value = json(&output);
+    assert_eq!(value["code"], "DAEMON_008", "{value}");
+    let why = value["why"].as_str().unwrap_or_default();
+    assert!(why.contains("did not say where it looks"), "{why}");
+    assert!(!unit_path(&harness).exists(), "the unit stayed");
+    let calls = calls(&log);
+    assert!(
+        !calls.lines().any(|line| line.contains("daemon-reload")),
+        "{calls}"
+    );
+}
+
+/// HUM-217, Review: Sagt `is-enabled` zu einer Unit nichts, ließe sich nach
+/// einem gescheiterten Start nicht über systemd zurücknehmen, was `enable`
+/// anlegt. Dann wird nicht aktiviert, und die Unit geht zurück.
+#[test]
+fn without_an_is_enabled_answer_nothing_is_enabled() {
+    let harness = Harness::new();
+    let bin = image_tree(&harness);
+    let (fakebin, log) = fake_systemctl(&harness, NEVER);
+    rewrite_systemctl(&fakebin, &log, "*is-enabled*) ;;");
+
+    let output = run(
+        &harness,
+        &bin.join("humanitl"),
+        &["--json", "daemon", "install"],
+        &path_with(&fakebin),
+        true,
+    );
+
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    let value = json(&output);
+    assert_eq!(value["code"], "DAEMON_008", "{value}");
+    let why = value["why"].as_str().unwrap_or_default();
+    assert!(why.contains("is-enabled gave no answer"), "{why}");
+    assert!(!unit_path(&harness).exists(), "the unit stayed");
+    let calls = calls(&log);
+    assert!(
+        !calls.lines().any(|line| line.contains("enable --now")),
         "{calls}"
     );
 }
