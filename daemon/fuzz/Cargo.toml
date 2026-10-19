@@ -1,0 +1,89 @@
+# Die Fuzz-Targets des Daemons (HUM-056).
+#
+# Ein eigener Workspace, kein Mitglied von `daemon/Cargo.toml`: libFuzzer und
+# die Sanitizer brauchen Nightly, und `cargo build --workspace` und
+# `cargo test --workspace` müssen auf Stable bleiben. Die leere Tabelle
+# `[workspace]` unten macht dieses Verzeichnis zu seiner eigenen Wurzel; Cargo
+# sucht deshalb nie nach `daemon/Cargo.toml`.
+#
+# Jedes Target bindet die Prüfung aus `daemon/crates/<crate>/tests/regressions/
+# check.rs` über `#[path]` ein. Fuzzer und Regressionstest rufen damit dieselbe
+# Funktion auf, und eine neue Invariante gilt sofort an beiden Stellen.
+#
+# Ablauf und Triage: README.md.
+
+[package]
+name = "humanitl-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "GPL-3.0-only"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+humanitl-core = { path = "../crates/core-types" }
+humanitl-proxy = { path = "../crates/proxy" }
+humanitl-rules = { path = "../crates/rules" }
+humanitl-findings = { path = "../crates/findings" }
+humanitl-recorder = { path = "../crates/recorder" }
+humanitl-audit = { path = "../crates/audit" }
+# Was die Prüfung des Proxys braucht: hyper genau so gebaut wie im Handler,
+# über einem `tokio::io::duplex` statt einem Socket.
+bytes = "1.12"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+http-body-util = "0.1"
+hyper = { version = "1.11", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+tokio = { version = "1", features = ["rt", "time", "io-util", "macros"] }
+
+[[bin]]
+name = "http_request_path"
+path = "fuzz_targets/http_request_path.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "body_decoder"
+path = "fuzz_targets/body_decoder.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "chunked_decoder"
+path = "fuzz_targets/chunked_decoder.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rules_yaml"
+path = "fuzz_targets/rules_yaml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "flow_filter"
+path = "fuzz_targets/flow_filter.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "audit_verify"
+path = "fuzz_targets/audit_verify.rs"
+test = false
+doc = false
+bench = false
+
+# Wie cargo-fuzz es anlegt: Zeilentabellen genügen für einen lesbaren
+# Backtrace eines Funds.
+[profile.release]
+debug = 1
