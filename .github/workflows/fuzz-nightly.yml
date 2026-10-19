@@ -1,0 +1,89 @@
+# Nächtliches Fuzzing der Parser und Decoder (HUM-056, BACKLOG.md 4.4).
+#
+# Der einzige Ort, an dem ein Nightly-Toolchain gebraucht wird: libFuzzer und
+# AddressSanitizer verlangen `-Z`-Optionen. Die Fuzz-Crate unter
+# `daemon/fuzz/` ist ein eigener Workspace und steht nicht in
+# `daemon/Cargo.toml`; ci.yml baut und testet weiter nur auf Stable.
+#
+# Je Target zehn Minuten. Ein Absturz, ein Hänger über zehn Sekunden
+# (`-timeout=10`) oder mehr als 512 MiB Speicher (`-rss_limit_mb=512`) färbt
+# den Job rot, und die auslösende Eingabe liegt danach als Artefakt
+# `fuzz-artifacts-<target>` bereit. Triage: daemon/fuzz/README.md.
+#
+# Jede Action ist auf einen Commit-SHA festgelegt, wie in ci.yml. Den
+# Nightly-Toolchain installiert rustup selbst, das auf dem Runner vorhanden
+# ist; eine weitere Action bräuchte nur einen weiteren SHA.
+
+name: fuzz-nightly
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-nightly
+  cancel-in-progress: false
+
+jobs:
+  # Der Speichertest der Gzip-Bombe (HUM-056, `decode_ratio_bomb_peak_rss`).
+  # Er misst den Höchststand des ganzen Prozesses über `/proc/self`, ist
+  # deshalb `#[ignore]` und läuft hier allein, auf Linux, mit dem Stable-
+  # Toolchain des Runners. ci.yml ruft ihn nicht auf.
+  peak-rss:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Measure the peak memory of the decompression bomb
+        working-directory: daemon
+        run: >-
+          cargo test --locked -p humanitl-findings --test regressions --
+          decode_ratio_bomb_peak_rss --exact --ignored --test-threads=1
+
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - http_request_path
+          - body_decoder
+          - chunked_decoder
+          - rules_yaml
+          - flow_filter
+          - audit_verify
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install the nightly toolchain
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup run nightly rustc --version
+      - name: Install cargo-fuzz
+        run: cargo +nightly install cargo-fuzz --locked
+      # fuzz_targets_compile: alle sechs Targets bauen, bevor eines läuft. Ein
+      # Target, das nicht baut, fällt damit in jedem Matrix-Job auf, nicht nur
+      # in seinem eigenen.
+      - name: Build all fuzz targets
+        working-directory: daemon
+        run: cargo +nightly fuzz build
+      - name: List the fuzz targets
+        working-directory: daemon
+        run: cargo +nightly fuzz list
+      - name: Fuzz ${{ matrix.target }} for ten minutes
+        working-directory: daemon
+        run: >-
+          cargo +nightly fuzz run ${{ matrix.target }} --
+          -max_total_time=600 -timeout=10 -rss_limit_mb=512
+      - name: Upload the crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: daemon/fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
+          retention-days: 30

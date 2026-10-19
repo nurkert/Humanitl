@@ -1,0 +1,6 @@
+# Erzeugt von `cargo fuzz`; nie eingecheckt. Der Corpus unter `corpus/`
+# ist eingecheckt, aber nur die Seeds: Ein lokaler Lauf schreibt neue
+# Eingaben dorthin, die vor einem Commit wieder weg muessen (README.md).
+target/
+artifacts/
+coverage/

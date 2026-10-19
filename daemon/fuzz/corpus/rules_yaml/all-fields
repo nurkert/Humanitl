@@ -1,0 +1,18 @@
+version: 1
+rules:
+  - id: 018f6c1e-7a2b-7c3d-8e4f-0123456789ab
+    action: allow
+    match:
+      host: "*.example.com"
+      method: [GET, HEAD]
+      path: "/repos/**"
+      scheme: https
+      port: 443
+      upgrade: websocket
+    expires: never
+    stream: false
+    allow_private: false
+    created_from: 018f6c1e-7a2b-7c3d-8e4f-0123456789ac
+    note: "all fields at once"
+disabled_bundled:
+  - 018f6c1e-7a2b-7c3d-8e4f-0123456789ad
