@@ -1,0 +1,5 @@
+GET /pfad?x=1 HTTP/1.1
+Host: München.Example.
+Upgrade: websocket
+Connection: Upgrade
+
