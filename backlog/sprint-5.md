@@ -18,6 +18,8 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-086 | Repository auf Englisch | M | HUM-059 |
 | HUM-060 | Release 0.1.0 | S | HUM-053, HUM-059 |
 | HUM-061 | Puffer | L | keine |
+| HUM-247 | Der Findings-Scan liest nur das erste gzip-Member | S | HUM-025 |
+| HUM-248 | Nächtliche Fuzz-Funde selbst minimieren und den Corpus behalten | S | HUM-056 |
 
 ---
 
@@ -160,14 +162,27 @@ Triage-Prozess (`daemon/fuzz/README.md`):
 - `audit_flip_one_byte`: Für jede Byteposition einer 5-Zeilen-Kette einmal flippen, immer `Err`.
 
 ### Akzeptanzkriterien
-- [ ] `cargo +nightly fuzz list` im Verzeichnis `daemon/` zeigt genau: `audit_verify`, `body_decoder`, `chunked_decoder`, `flow_filter`, `http_request_path`, `rules_yaml`.
-- [ ] `cargo build --workspace` mit stabilem Toolchain läuft ohne Nightly.
-- [ ] Jedes Target hat mindestens fünf Seed-Dateien unter `daemon/fuzz/corpus/<target>/`.
+- [x] `cargo +nightly fuzz list` im Verzeichnis `daemon/` zeigt genau: `audit_verify`, `body_decoder`, `chunked_decoder`, `flow_filter`, `http_request_path`, `rules_yaml`.
+- [x] `cargo build --workspace` mit stabilem Toolchain läuft ohne Nightly.
+- [x] Jedes Target hat mindestens fünf Seed-Dateien unter `daemon/fuzz/corpus/<target>/`.
 - [ ] Der Workflow `fuzz-nightly` wurde einmal manuell ausgelöst und alle sechs Jobs sind grün (Link im PR).
-- [ ] `daemon/fuzz/README.md` enthält den sechsstufigen Triage-Prozess.
-- [ ] Mindestens ein Regressionstest pro Target existiert und ist grün.
+- [x] `daemon/fuzz/README.md` enthält den sechsstufigen Triage-Prozess.
+- [x] Mindestens ein Regressionstest pro Target existiert und ist grün.
 - [ ] Alle in Schritt 3 bis 5 gefundenen Abstürze sind behoben und als Regressionstest abgelegt (Liste im PR).
-- [ ] `cargo clippy --workspace -- -D warnings` sauber, auch für die freigelegten Funktionen.
+- [x] `cargo clippy --workspace -- -D warnings` sauber, auch für die freigelegten Funktionen.
+
+> **Abgleich bei der Umsetzung (2026-10-19).** Die Spezifikation stammt aus der Zeit vor HUM-015 bis HUM-050 und nennt Namen, die der Code nicht hat. Gebaut ist, was der Code hergibt:
+>
+> - **Kein eigener Parser für Anfragen und `chunked`.** Der Proxy liest Kopf und Body mit hyper; ein `request_parse.rs` mit `parse_request_head` über `httparse` und ein `ChunkedDecoder` wären genau der zweite Parser, vor dem der letzte Fallstrick warnt. `http_request_path` und `chunked_decoder` füttern deshalb hyper, gebaut wie in `handler::serve_connection`, über `tokio::io::duplex` und rufen danach die Produktionsfunktionen `connect::check_authority`, `connect::requested_upgrade`, `RuleSet::evaluate` und `body::buffer`. Einzige Abweichung vom Handler ist `half_close(true)`, weil der Test-Client nach der Eingabe seine Richtung schließt. Ohne IO im Sinn von Netz, aber mit tokio: Der Pfad ist asynchron.
+> - **`decode_body` liegt in `humanitl-findings::decode`**, nicht im Proxy, war schon öffentlich und entpackt schon streamend durch ein Budget (HUM-025). Die Ratio-Grenze meldet keinen `Err(DecodeError::RatioExceeded)`, sondern einen gekürzten Body mit `FINDINGS_002`; daran prüft das Target. Ein Umbau nach Schritt 4 war nicht nötig.
+> - **`parse_filter`** ist `humanitl_recorder::filter::parse`, jetzt als `humanitl_recorder::{parse_filter, Filter, FilterParam}` freigegeben, ohne Verhaltensänderung. Ein `to_sql()` gibt es nicht; das SQL steht in `Filter::sql`. Der Seed `host:*.npmjs.org size:>1mb` trifft den Fehlerpfad: einen Schlüssel `size` kennt die Filtersprache nicht.
+> - **`AuditChain::verify_bytes` und `Key::test()`** sind `AuditVerifier::verify_reader` über `&[u8]` und der feste Testschlüssel `[7; 32]` aus `tests/common`. Ohne Feature `fuzzing`: Der Prüfer nimmt den Schlüssel als `&[u8; 32]`, und kein Produktions-Build trägt einen Testschlüssel.
+> - **`RuleSet::parse_yaml`** ist `parse_rules_for_session` mit `SessionId::nil()`, `to_yaml` ist `serialize_rules`.
+> - **Eingabeform.** Alle sechs Targets nehmen `&[u8]`; `body_decoder` liest die Kodierung aus dem ersten Byte statt über `arbitrary`. So spielt der Regressionstest jede Datei ohne Übersetzung ab, und `rules_yaml` und `flow_filter` treffen auch ungültiges UTF-8.
+> - **Eine Prüfung, zwei Aufrufer.** Jede Invariante steht einmal, in `daemon/crates/<crate>/tests/regressions/check.rs`; das Target bindet die Datei über `#[path]` ein, `tests/regressions/main.rs` der Crate ebenso. `regressions_replay_<target>` spielt jede `<target>-*.bin` dort ab. Damit bleibt `hyper` und `humanitl_proxy` auch im Fuzz-Code im Proxy-Crate, und die Kopplungs-Grundlinie (`tools/check_coupling.py`) steigt nicht.
+> - **Workspace.** `daemon/fuzz/Cargo.toml` trägt eine eigene leere `[workspace]`-Tabelle und ein eigenes `Cargo.lock`; ein `exclude` in `daemon/Cargo.toml` ist dafür nicht nötig.
+> - **Tests.** `decode_ratio_bomb` prüft gegen 2 s statt 200 ms, weil `cargo test` im Dev-Profil ohne Optimierung läuft; der Abbruch am Budget ist trotzdem um eine Größenordnung schneller als das Entpacken der 200 MiB. Der Speichertest heißt `decode_ratio_bomb_peak_rss`, ist `#[ignore]` und misst `VmHWM` nach `clear_refs`. `chunked_huge_size_no_alloc` erwartet `BufferError::Read` oder `Cap`, `filter_never_interpolates` prüft zwanzig Nutzlasten in vier Stellungen, `audit_flip_one_byte` kippt jedes Bit jedes Bytes.
+> - **Offen.** Die Kästchen „Workflow einmal manuell ausgelöst" und „gefundene Abstürze behoben" schließt der erste Lauf von `fuzz-nightly`. Lokal gab es keinen Nightly-Toolchain; die Targets liefen nur als Stable-Build ohne Coverage je 60 s, ohne Fund.
 
 ### Fallstricke
 - Ein Target, das nur auf Panics prüft, findet keine Hänger. Immer `-timeout=10` mitgeben, sonst blockiert libFuzzer ewig auf einer quadratischen Eingabe. Der Chunked-Decoder und der Regex-Compiler sind die typischen Kandidaten.
@@ -2786,3 +2801,60 @@ Ein neuer Port. Der Schreiber bleibt der einzige Adapter, und die Aufrufer im Da
 
 ### Referenzen
 HUM-050 (`backlog/sprint-4.md`), Review von Codex vom 2026-09-11; `docs/ARCHITECTURE.md` 1 und 2.
+
+## HUM-247 · Der Findings-Scan liest nur das erste gzip-Member
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-025 · Blockiert: nichts
+
+### Kontext
+`inflate` in `daemon/crates/findings/src/decode.rs` entpackt `Content-Encoding: gzip` mit `flate2::read::GzDecoder`. Dieser Leser hört nach dem ersten gzip-Member auf und meldet das Ende des Stroms; RFC 1952 erlaubt aber beliebig viele Member hintereinander, und verbreitete Entpacker auf der Gegenseite (Go `compress/gzip`, `zlib` mit `inflateReset`, `gzip -d`) lesen sie alle. Ein unterwanderter Agent kann so zwei verkettete gzip-Ströme schicken, das Geheimnis im zweiten. Der Scan sieht nur das erste Member, hält den Body für vollständig durchsucht (`truncated: false`, kein `FINDINGS_002`), und das Ziel entpackt den ganzen Body.
+
+Das ist genau die stille Lücke, die `backlog/CONVENTIONS.md` 4.13 und `docs/SECURITY.md` („der Scan meldet eine Lücke, `FINDINGS_002`") ausschließen: Die Funde sind keine Garantie, aber wo der Scan nicht hinsieht, muss er es sagen. Die drei Garantien aus `README.md` berührt der Fall nicht; er betrifft die Aussage, dass ein nicht durchsuchter Teil des Bodys sichtbar gemacht wird. Gefunden beim Lesen des Decoders in HUM-056, nicht vom Fuzzer.
+
+### Ziel
+Ein gzip-Body wird über alle Member entpackt, durch dasselbe Budget aus `limits.preview_cap_bytes` und `limits.max_decompress_ratio`. Daten hinter dem Ende eines Stroms, die kein weiteres Member sind, bleiben nicht still liegen, sondern führen zu `FINDINGS_002`.
+
+### Nicht-Ziel
+Ein Entpacker für `zstd` (heute `ContentEncoding::Other`, also nicht durchsucht und mit `FINDINGS_002` gemeldet; dort gibt es keine stille Lücke).
+
+### Betroffene Pfade
+- `daemon/crates/findings/src/decode.rs` (`inflate`, `read_limited`)
+- `daemon/crates/findings/tests/regressions/` (Regressionseingabe für `body_decoder`)
+
+### Spezifikation
+- `ContentEncoding::Gzip` liest mit `flate2::read::MultiGzDecoder`. Cap und Ratio-Budget gelten über alle Member zusammen, nicht je Member; `read_limited` bleibt der eine Weg.
+- Die anderen Kodierungen werden mitgeprüft, weil sie dieselbe Frage haben:
+  - **deflate** (`zlib`-Rahmen oder nackter Strom) kennt keine Member; der Strom endet mit dem letzten Block. Bytes dahinter ignoriert `ZlibDecoder`/`DeflateDecoder` heute still. Sie werden als Lücke gemeldet (`FINDINGS_002`), weil ein nachsichtiger Entpacker auf der Gegenseite sie anders deuten kann.
+  - **br** kennt ebenfalls nur einen Strom. Was `brotli::Decompressor` mit Bytes hinter dem Ende macht, wird mit einem Test festgestellt; ignoriert er sie, gilt dasselbe wie bei deflate.
+  - **zstd** erlaubt nach RFC 8878 mehrere verkettete Frames und überspringbare Frames, und ein Entpacker muss alle lesen. Solange `zstd` nicht entpackt wird, ist das kein Fall; das Issue, das einen `zstd`-Entpacker einführt, muss alle Frames lesen und bekommt den Test aus diesem Issue mit.
+
+### Tests
+- `gzip_second_member_is_scanned`: zwei verkettete gzip-Member, ein IBAN im zweiten. `decode_body` liefert beide Klartexte, `truncated: false`; der Scan meldet den Fund. Mutation: zurück auf `GzDecoder` macht den Test rot.
+- `gzip_members_share_the_budget`: zwei Member, zusammen über dem Ratio-Budget, jedes für sich darunter: `truncated: true`, `FINDINGS_002`.
+- `trailing_bytes_after_deflate_are_a_gap` und dasselbe für `br`: ein gültiger Strom plus angehängte Bytes ergibt `FINDINGS_002`.
+- Die Eingabe aus dem ersten Test liegt als `body_decoder-gzip-two-members.bin` unter `tests/regressions/` und im Corpus von `body_decoder`.
+
+### Akzeptanzkriterien
+- [ ] Ein Geheimnis im zweiten gzip-Member wird gefunden; Mutationsbeweis mit `GzDecoder`.
+- [ ] Cap und Ratio gelten über alle Member zusammen.
+- [ ] Bytes hinter dem Ende eines deflate- oder br-Stroms führen zu `FINDINGS_002`, nie zu einem still als vollständig gemeldeten Body.
+- [ ] `docs/SECURITY.md` nennt im Abschnitt zum Scan, dass mehrere gzip-Member gelesen werden.
+
+### Referenzen
+HUM-025 (`backlog/sprint-2.md`), HUM-056 (Abgleich oben), RFC 1952 §2.2, RFC 8878 §3.1, `backlog/CONVENTIONS.md` 4.13.
+
+## HUM-248 · Nächtliche Fuzz-Funde selbst minimieren und den Corpus behalten
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-056 · Blockiert: nichts · Priorität: niedrig (Kandidat)
+
+### Kontext
+Zwei Vorschläge aus dem Review von Antigravity zu HUM-056, außerhalb seines Umfangs. Erstens endet ein roter Job von `fuzz-nightly` heute mit einem Artefakt, und der Mensch fängt mit Schritt 1 und 2 der Triage (`daemon/fuzz/README.md`) von Hand an. Zweitens beginnt jeder nächtliche Lauf wieder bei den eingecheckten Seeds: Was libFuzzer in zehn Minuten an neuer Abdeckung findet, ist am nächsten Morgen weg.
+
+### Ziel
+- Ein roter Matrix-Job ruft `cargo fuzz tmin` auf die auslösende Eingabe auf, legt die minimierte Datei mit ins Artefakt und eröffnet ein GitHub-Issue mit Target, Fehlerausgabe und Link zum Lauf (einmal je Target und Ursache, nicht je Nacht).
+- Der gewachsene Corpus jedes Targets wird zwischen den Läufen über `actions/cache` behalten, mit Obergrenze und Ablauf (`cargo fuzz cmin` vor dem Speichern), damit er nicht unbegrenzt wächst. Eingecheckt bleiben nur die Seeds.
+
+### Akzeptanzkriterien
+- [ ] Ein absichtlich eingebauter Absturz erzeugt ein Issue mit minimierter Eingabe; ein zweiter Lauf mit demselben Absturz erzeugt kein zweites.
+- [ ] Ein Lauf beginnt mit dem Corpus des vorigen; der Cache bleibt unter einer im Workflow genannten Größe.
+
+### Referenzen
+HUM-056, `.github/workflows/fuzz-nightly.yml`, Review von Antigravity zu HUM-056.

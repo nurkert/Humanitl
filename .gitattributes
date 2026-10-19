@@ -4,3 +4,7 @@ app/lib/core/ipc/generated/** linguist-generated
 *.png binary
 *.jpg binary
 *.binpb binary
+# Fuzz-Seeds und Regressionseingaben sind Bytes, keine Texte (HUM-056): eine
+# Normalisierung der Zeilenenden wuerde sie still veraendern.
+daemon/fuzz/corpus/** binary
+daemon/crates/*/tests/regressions/*.bin binary

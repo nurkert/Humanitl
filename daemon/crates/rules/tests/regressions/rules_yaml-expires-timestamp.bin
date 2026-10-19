@@ -1,0 +1,10 @@
+version: 1
+rules:
+  - action: ask
+    match:
+      host: "cidr:192.168.0.0/16"
+    expires: "2026-09-03T10:00:00Z"
+  - action: redact
+    match:
+      host: "ip:192.168.1.50"
+    expires: session

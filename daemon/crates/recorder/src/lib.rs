@@ -78,6 +78,9 @@ pub use crate::anchors::{AnchorStore, AuditAnchor, read_anchors};
 pub use crate::blob::{BlobStore, ORPHAN_GRACE};
 pub use crate::error::RecorderError;
 pub use crate::filter::KEYS as FILTER_KEYS;
+// Der reine Einstieg der Filtersprache, ohne Datenbank: `ListFlows` ruft ihn
+// über `query::list_flows`, das Fuzz-Target `flow_filter` direkt (HUM-056).
+pub use crate::filter::{Filter, Param as FilterParam, parse as parse_filter};
 pub use crate::hostkey::{host_key, suffix_range};
 pub use crate::query::ReadPool;
 pub use crate::retention::{DAY_SECS, RETENTION_INTERVAL, Retention};

@@ -1,0 +1,1 @@
+apex:example.com decision:allow reason:user rule:018f6c1e-7a2b-7c3d-8e4f-0123456789ab status:>=400 since:10m until:2026-09-03T10:00:00Z findings:>0 session:x edited:true passthrough:no upgrade:websocket meta:false
