@@ -22,6 +22,15 @@ abstract final class ClientDiagnostics {
   /// rather type it reads it in the cause (HUM-044, diagnostic table).
   static const String startUnitCommand = 'systemctl --user start humanitld';
 
+  /// Command that restarts the installed user unit, offered as the fix for
+  /// [tokenRejected] (HUM-058, row 4).
+  ///
+  /// A daemon writes a fresh token into the runtime directory every time it
+  /// starts, so a token that does not match belongs to another daemon or to
+  /// an earlier run. A restart of the one the app talks to writes the pair
+  /// anew; the next attempt of the connection reads it.
+  static const String restartUnitCommand = 'systemctl --user restart humanitld';
+
   /// Where a matching pair of app and daemon is downloaded, offered as the
   /// fix for [protoIncompatible].
   ///
@@ -132,13 +141,45 @@ abstract final class ClientDiagnostics {
   }
 
   /// `IPC_001`: the daemon rejected the token from [tokenPath].
-  static Diagnostic tokenRejected({required String tokenPath, String? detail}) {
-    return Diagnostic(
-      code: DiagnosticCodes.tokenInvalid,
-      severity: Severity.error,
-      why: detail == null || detail.isEmpty
-          ? 'the daemon rejected the token from $tokenPath'
-          : 'the daemon rejected the token from $tokenPath: $detail',
+  ///
+  /// The fix is [restartUnitCommand] on the ordinary path. Was this app
+  /// pointed at a daemon by hand ([byHand]: `--fake` or `--socket`), the unit
+  /// is not the daemon that refused, and restarting it would answer a question
+  /// nobody asked; there the finding carries no fix, the same split
+  /// [daemonUnreachable] makes.
+  static Diagnostic tokenRejected({
+    required String tokenPath,
+    String? detail,
+    bool byHand = false,
+  }) {
+    return withTokenFix(
+      Diagnostic(
+        code: DiagnosticCodes.tokenInvalid,
+        severity: Severity.error,
+        why: detail == null || detail.isEmpty
+            ? 'the daemon rejected the token from $tokenPath'
+            : 'the daemon rejected the token from $tokenPath: $detail',
+      ),
+      byHand: byHand,
+    );
+  }
+
+  /// [diagnostic] with [restartUnitCommand] as its fix when it is an
+  /// `IPC_001` without one, otherwise unchanged.
+  ///
+  /// The daemon ships its own `IPC_001` in the status details, and that one
+  /// wins over the client's sentence (`diagnosticFromGrpcError`); it carries
+  /// no fix, because the daemon cannot know how it was started. The client
+  /// does: on the ordinary path it talks to the user unit. A fix the daemon
+  /// did send stays as it is.
+  static Diagnostic withTokenFix(Diagnostic diagnostic, {bool byHand = false}) {
+    if (diagnostic.code != DiagnosticCodes.tokenInvalid ||
+        diagnostic.fix != null ||
+        byHand) {
+      return diagnostic;
+    }
+    return diagnostic.copyWith(
+      fix: const FixAction.copyCommand(command: restartUnitCommand),
     );
   }
 

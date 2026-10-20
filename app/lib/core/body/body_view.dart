@@ -35,6 +35,7 @@ import '../text/finding_text.dart';
 import '../text/format.dart';
 import '../ui/h_collapsible.dart';
 import '../ui/ui.dart';
+import 'binary_facts.dart';
 import 'body_decode.dart';
 import 'body_kind.dart';
 import 'body_marks.dart';
@@ -276,6 +277,7 @@ class _Panes extends ConsumerWidget {
       bytes.length,
       l10n,
       recordedPrefix: body.truncated ? (raw?.bytes ?? bytes).length : null,
+      contentType: body.contentType,
     );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -479,16 +481,32 @@ String bodyPaneLabel(BodyPane pane, AppLocalizations l10n) => switch (pane) {
 /// Rumpfs gespeichert hat (`BodyRef.truncated`), und nennt dessen Bytes. Das
 /// ist kein [BodyProblem]: der Präfix ist vollständig angekommen und kann
 /// zugleich gepackt, zu groß oder kein JSON sein.
+///
+/// [contentType] ist der `Content-Type` des Rumpfs, wie die Anfrage ihn
+/// nennt (leer ohne). Ist er übergeben, bekommt ein binärer Rumpf zwei Sätze
+/// mehr (HUM-058, Zeile 10): die Vermutung aus den ersten Bytes und, wo der
+/// Daemon nur druckbare Läufe durchsucht hat, genau das
+/// (`binary_facts.dart`).
 List<String> bodyNotes(
   ParsedBody parsed,
   BodyPane pane,
   int byteCount,
   AppLocalizations l10n, {
   int? recordedPrefix,
+  String? contentType,
 }) {
   final List<String> notes = <String>[];
   if (recordedPrefix != null) {
     notes.add(l10n.interceptBodyRecorderStopped(formatBytes(recordedPrefix)));
+  }
+  if (contentType != null && parsed.kind == BodyKind.binary) {
+    final String? guess = guessMimeFromMagic(parsed.bytes);
+    if (guess != null) {
+      notes.add(l10n.interceptBodyMimeGuess(guess));
+    }
+    if (scannedAsStrings(contentType, parsed.bytes)) {
+      notes.add(l10n.interceptBodyScannedAsStrings);
+    }
   }
   if (parsed.disputedType) {
     notes.add(l10n.interceptBodyTypeDisputed);

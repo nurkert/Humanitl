@@ -106,9 +106,15 @@ sealed class ConnectionStatus with _$ConnectionStatus {
   /// is a field of the failure and not a state of its own, and the reason is
   /// the whole of `_breakOrElse`: the screen keeps standing with its finding
   /// on it while the attempt runs.
+  ///
+  /// [attempts] counts the attempts that failed since this run started, the
+  /// two-second ones included. The first row of the setup screen shows it, so
+  /// that somebody who starts the service in a terminal sees the window keep
+  /// trying instead of a red line that might have given up (HUM-058, row 1).
   const factory ConnectionStatus.failed({
     required Diagnostic diagnostic,
     @Default(false) bool retrying,
+    @Default(1) int attempts,
   }) = ConnectionFailed;
 
   /// A connection that stood and broke: the shell stays, and the queue in it
@@ -120,11 +126,12 @@ sealed class ConnectionStatus with _$ConnectionStatus {
   ///
   /// [retrying] means the same as it does on [ConnectionFailed]: an attempt
   /// somebody asked for is in flight, and the banner keeps standing while it
-  /// runs.
+  /// runs. [attempts] counts the failed attempts since the connection broke.
   const factory ConnectionStatus.frozen({
     required Diagnostic diagnostic,
     required DaemonInfo info,
     @Default(false) bool retrying,
+    @Default(1) int attempts,
   }) = ConnectionFrozen;
 
   const ConnectionStatus._();
@@ -170,6 +177,10 @@ class DaemonConnection extends _$DaemonConnection {
   /// probe that is meant to be invisible (see the comment on that provider).
   bool _requested = false;
 
+  /// How many attempts failed since the connection last stood, or since the
+  /// start of this run while none ever did. Reset by [_connected].
+  int _attempts = 0;
+
   @override
   ConnectionStatus build() {
     ref.onDispose(_stopTimers);
@@ -214,6 +225,7 @@ class DaemonConnection extends _$DaemonConnection {
     _known = info;
     _broke = null;
     _requested = false;
+    _attempts = 0;
     return ConnectionStatus.connected(info: info);
   }
 
@@ -222,13 +234,21 @@ class DaemonConnection extends _$DaemonConnection {
     _startReconnect();
     _broke = diagnostic;
     _requested = false;
+    _attempts++;
     final DaemonInfo? known = _known;
     if (known == null) {
       // Kaltstart: Es gibt keine Shell, die stehen bleiben könnte, und der
       // Setup-Bildschirm ist der ganze Bildschirm (`docs/UX.md` 4.2, Fall 2).
-      return ConnectionStatus.failed(diagnostic: diagnostic);
+      return ConnectionStatus.failed(
+        diagnostic: diagnostic,
+        attempts: _attempts,
+      );
     }
-    return ConnectionStatus.frozen(diagnostic: diagnostic, info: known);
+    return ConnectionStatus.frozen(
+      diagnostic: diagnostic,
+      info: known,
+      attempts: _attempts,
+    );
   }
 
   /// Der Zustand, den ein bereits gemeldeter Fehlschlag festhält, sonst
@@ -270,11 +290,16 @@ class DaemonConnection extends _$DaemonConnection {
     }
     final DaemonInfo? known = _known;
     return known == null
-        ? ConnectionStatus.failed(diagnostic: broke, retrying: _requested)
+        ? ConnectionStatus.failed(
+            diagnostic: broke,
+            retrying: _requested,
+            attempts: _attempts,
+          )
         : ConnectionStatus.frozen(
             diagnostic: broke,
             info: known,
             retrying: _requested,
+            attempts: _attempts,
           );
   }
 
@@ -389,7 +414,7 @@ class DaemonConnection extends _$DaemonConnection {
 /// Ereignisstrom einzufrieren, obwohl der Daemon antwortet. Statt dessen folgt
 /// der Strom dieser Antwort: `flowEventsProvider` horcht auf diesen Provider
 /// und verbindet sich sofort neu, sobald er ja sagt, damit „lebendig" nicht
-/// eine halbe Minute lang „lebendig und taub" bedeutet.
+/// bis zu zehn Sekunden lang „lebendig und taub" bedeutet.
 @Riverpod(keepAlive: true)
 bool linkLive(Ref ref) =>
     ref.watch(connectionStateProvider) is ConnectionConnected;

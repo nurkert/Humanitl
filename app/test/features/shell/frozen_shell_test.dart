@@ -81,6 +81,7 @@ import 'package:humanitl/features/shell/widgets/setup_host.dart';
 import 'package:humanitl/features/shell/widgets/splash.dart';
 
 import '../../harness/app_harness.dart';
+import '../tray/fixtures.dart' show trayDetail;
 
 /// Der Augenblick, an dem alles in diesen Tests hängt.
 final DateTime testStart = DateTime.utc(2026, 9, 6, 12);
@@ -259,7 +260,7 @@ class LingeringEvents extends FakeDaemonClient {
       heldAt: testStart,
     );
     state.flows[id] = flow;
-    state.details[id] = FlowDetail(summary: flow);
+    state.details[id] = trayDetail(flow);
     _events
       ..add(FlowEvent.received(at: testStart, flow: flow))
       ..add(FlowEvent.held(at: testStart, flowId: id, deadline: deadline));

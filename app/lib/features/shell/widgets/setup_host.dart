@@ -49,6 +49,11 @@ class SetupHost extends ConsumerWidget {
       }
     });
     final SetupState state = ref.watch(setupStateProvider);
+    final int attempts = switch (ref.watch(connectionStateProvider)) {
+      ConnectionFailed(:final int attempts) ||
+      ConnectionFrozen(:final int attempts) => attempts,
+      _ => 0,
+    };
     final AsyncValue<SandboxStatus> sandbox = ref.watch(sandboxStatusProvider);
     final SandboxStatus status = sandbox.value ?? const SandboxStatus();
     // Ein Start laeuft schon, oder eine Sandbox steht. Beides sperrt den
@@ -60,6 +65,7 @@ class SetupHost extends ConsumerWidget {
     final bool sandboxBusy = status.isUp || status.isBusy;
     return SetupScreen(
       state: state,
+      daemonAttempts: attempts,
       report: ref.watch(setupDoctorProvider).value ?? DoctorReport.empty,
       probe: ref.watch(setupLlmProbeProvider),
       llmEndpoint: status.llmEndpoint,

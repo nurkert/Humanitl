@@ -171,6 +171,21 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
     final TerminalSessionState session = ref.watch(
       terminalSessionProvider(widget.sandboxId),
     );
+    // Der Abriss steht als letzte Zeile im Terminal selbst, dort, wo der
+    // Blick ist (HUM-058, Zeile 19): einmal je Abriss, in der gedämpften
+    // Farbe der Palette (SGR 90), und der Rücklauf darüber bleibt. Er ist
+    // eine Zeile dieser Anwendung und kein Byte des Agenten; der Agent sieht
+    // sie nie.
+    ref.listen<TerminalSessionState>(
+      terminalSessionProvider(widget.sandboxId),
+      (TerminalSessionState? previous, TerminalSessionState next) {
+        if (next.reconnecting && !(previous?.reconnecting ?? false)) {
+          next.terminal.write(
+            '\r\n\x1b[90m${l10n.sandboxTerminalReconnecting}\x1b[0m\r\n',
+          );
+        }
+      },
+    );
     final TerminalNotice? notice = ref.watch(heldNoticeProvider);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
