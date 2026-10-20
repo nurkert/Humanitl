@@ -178,7 +178,7 @@ pub enum AskMode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Limits {
-    /// Größte Anfrage, deren Body für die Entscheidung im Speicher gehalten wird. Darüber antwortet der Proxy mit 413.
+    /// Größte Anfrage, deren Body für die Entscheidung im Speicher gehalten wird. Darüber antwortet der Proxy mit 413, außer eine Regel `allow` oder `ask` mit `stream: true` trifft die Anfrage und `hold.hard_block_checksum_secrets` ist aus: Dann geht der Body gestreamt und ungeprüft hinaus.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
     pub hold_body_cap_bytes: u64,
     /// Größte Menge Body, die die Oberfläche als Vorschau bekommt.

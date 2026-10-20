@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use http_body_util::{BodyExt as _, Full};
 use humanitl_config::{IpPreference, Limits};
-use humanitl_core::diagnostics::codes::PROXY_005;
+use humanitl_core::diagnostics::codes::{LIMIT_002, PROXY_005};
 use humanitl_core::{
     Authority, BlockReason, BodyRef, Decision, DecisionSource, Flow, FlowEvent, FlowId, FlowState,
     HostName, HttpRequest, InvalidTransition, Method, RuleId, Scheme, SessionId, Severity,
@@ -318,8 +318,12 @@ async fn budget_refuses_by_flows_and_never_evicts() {
     );
 
     let events = drain(&mut rx);
-    assert_eq!(names(&events), ["decided"], "a refused flow is never Held");
-    match &events[0] {
+    assert_eq!(
+        names(&events),
+        ["diagnostic", "decided"],
+        "a refused flow is never Held"
+    );
+    match &events[1] {
         FlowEvent::Decided {
             flow_id, source, ..
         } => {
@@ -386,7 +390,15 @@ async fn budget_refuses_by_bytes() {
     let events = drain(&mut rx);
     assert_eq!(
         names(&events),
-        ["held", "decided", "held", "decided", "held"]
+        [
+            "held",
+            "diagnostic",
+            "decided",
+            "held",
+            "diagnostic",
+            "decided",
+            "held"
+        ]
     );
 
     queue.decide(big_id, Decision::Allow).unwrap();
@@ -396,6 +408,135 @@ async fn budget_refuses_by_bytes() {
     queue.decide(empty_id, Decision::Allow).unwrap();
     assert_eq!(held_empty.await, Decision::Allow);
     assert_eq!((queue.queue_count(), queue.queue_bytes()), (0, 0));
+}
+
+/// Der Befund `LIMIT_002` zu einer abgelehnten Anfrage, aus dem Strom.
+fn queue_full_diagnostic(events: &[FlowEvent], flow: FlowId) -> humanitl_core::Diagnostic {
+    events
+        .iter()
+        .find_map(|event| match event {
+            FlowEvent::Diagnostic {
+                flow_id: Some(id),
+                diagnostic,
+                ..
+            } if *id == flow => Some((**diagnostic).clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no diagnostic for {flow} in {:?}", names(events)))
+}
+
+/// `hold_memory_cap_bytes = 1 MiB`, drei Anfragen zu 400 KiB: zwei werden
+/// gehalten, die dritte mit `Block{HoldMemory}` und `LIMIT_002` abgelehnt, und
+/// nach der Entscheidung über die erste passt eine vierte wieder (HUM-057).
+#[tokio::test]
+async fn hold_rejects_over_memory() {
+    const KIB_400: u64 = 400 * 1024;
+    let queue = HoldQueue::new(&limits(200, 1024 * 1024, 64));
+    let mut rx = queue.subscribe();
+    let far = in_(Duration::from_secs(60));
+
+    let mut first = analyzed_flow(KIB_400);
+    let first_id = first.id;
+    let held_first = queue.hold(&mut first, far).unwrap();
+    let mut second = analyzed_flow(KIB_400);
+    let second_id = second.id;
+    let held_second = queue.hold(&mut second, far).unwrap();
+    assert_eq!((queue.queue_count(), queue.queue_bytes()), (2, 2 * KIB_400));
+
+    let mut third = analyzed_flow(KIB_400);
+    let third_id = third.id;
+    let decision = queue.hold(&mut third, far).unwrap().await;
+    assert_eq!(decision, block(BlockReason::HoldMemory));
+    assert_eq!(decision.http_status(), Some(503));
+
+    let events = drain(&mut rx);
+    let diagnostic = queue_full_diagnostic(&events, third_id);
+    assert_eq!(diagnostic.code, LIMIT_002);
+    assert!(
+        diagnostic.why.contains("holds 2 of 200 requests"),
+        "{}",
+        diagnostic.why
+    );
+    assert!(
+        diagnostic
+            .why
+            .contains(&format!("{} of 1048576 bytes", 2 * KIB_400)),
+        "{}",
+        diagnostic.why
+    );
+    assert!(
+        diagnostic.why.contains("limits.hold_max_bytes"),
+        "{}",
+        diagnostic.why
+    );
+    assert!(diagnostic.fix.is_none(), "the answer is to work the queue");
+    assert_eq!(
+        (queue.queue_count(), queue.queue_bytes()),
+        (2, 2 * KIB_400),
+        "the refusal changes nothing"
+    );
+
+    queue.decide(first_id, Decision::Allow).unwrap();
+    assert_eq!(held_first.await, Decision::Allow);
+    let mut fourth = analyzed_flow(KIB_400);
+    let fourth_id = fourth.id;
+    let held_fourth = queue.hold(&mut fourth, far).unwrap();
+    assert_eq!(
+        (queue.queue_count(), queue.queue_bytes()),
+        (2, 2 * KIB_400),
+        "the decision made room for the fourth"
+    );
+
+    queue.decide(second_id, block(BlockReason::User)).unwrap();
+    queue.decide(fourth_id, block(BlockReason::User)).unwrap();
+    assert_eq!(held_second.await, block(BlockReason::User));
+    assert_eq!(held_fourth.await, block(BlockReason::User));
+    assert_eq!((queue.queue_count(), queue.queue_bytes()), (0, 0));
+}
+
+/// `hold_max_flows = 2`: die dritte Anfrage endet mit `Block{HoldMaxFlows}`
+/// und `LIMIT_002`, der die Zahlgrenze nennt (HUM-057).
+#[tokio::test]
+async fn hold_rejects_over_count() {
+    let queue = HoldQueue::new(&limits(2, u64::MAX, 64));
+    let mut rx = queue.subscribe();
+    let far = in_(Duration::from_secs(60));
+    let mut first = analyzed_flow(10);
+    let mut second = analyzed_flow(10);
+    let held_first = queue.hold(&mut first, far).unwrap();
+    let held_second = queue.hold(&mut second, far).unwrap();
+
+    let mut third = analyzed_flow(10);
+    let third_id = third.id;
+    let decision = queue.hold(&mut third, far).unwrap().await;
+    assert_eq!(decision, block(BlockReason::HoldMaxFlows));
+
+    let events = drain(&mut rx);
+    let position = |name: &str| {
+        events
+            .iter()
+            .position(|event| event.name() == name && event.flow_id() == Some(third_id))
+    };
+    assert!(
+        position("diagnostic") < position("decided"),
+        "the reason comes before the refusal: {:?}",
+        names(&events)
+    );
+    let diagnostic = queue_full_diagnostic(&events, third_id);
+    assert_eq!(diagnostic.code, LIMIT_002);
+    assert!(
+        diagnostic.why.contains("holds 2 of 2 requests"),
+        "{}",
+        diagnostic.why
+    );
+    assert!(
+        diagnostic.why.contains("by limits.hold_max_flows"),
+        "{}",
+        diagnostic.why
+    );
+
+    drop(held_first);
+    drop(held_second);
 }
 
 #[tokio::test]

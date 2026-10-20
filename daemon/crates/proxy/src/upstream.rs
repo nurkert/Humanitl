@@ -26,12 +26,13 @@
 //! geschieht.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
-use http_body_util::Full;
 use humanitl_config::IpPreference;
-use humanitl_core::{Diagnostic, HostName, HttpRequest, UpstreamError, ip_is_private};
+use humanitl_core::{
+    Diagnostic, FlowEvent, FlowId, HostName, HttpRequest, UpstreamError, ip_is_private,
+};
 use hyper::body::Incoming;
 use hyper::header::{HeaderName, HeaderValue};
 use hyper::{Request, Response, Version};
@@ -41,7 +42,9 @@ use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
+use crate::body::{self, ResponseBody, Stall, StreamProgress};
 use crate::egress::Egress;
+use crate::hold::HoldQueue;
 use crate::resolver::{self, AddressRefusal, Resolver};
 
 /// Kopfzeilen von Verbindungsrang (RFC 9110 §7.6.1); sie gehören der einen
@@ -148,6 +151,84 @@ pub fn roots_from_pem(pem: &[u8]) -> Vec<CertificateDer<'static>> {
     CertificateDer::pem_slice_iter(pem).flatten().collect()
 }
 
+/// Der Rumpf, der zum Ziel geht.
+///
+/// Fast immer [`Outgoing::Buffered`]: Der Rumpf liegt vollständig vor, weil
+/// über ihn entschieden wurde (ADR-005), und die Länge steht damit fest. Nur
+/// eine Anfrage über `limits.hold_body_cap_bytes`, die eine Regel mit
+/// `stream: true` hinauslässt, geht als [`Outgoing::Streamed`] hinaus
+/// (HUM-057): Ihr Rumpf wird nie gepuffert, entschieden wurde nur über ihren
+/// Kopf.
+pub enum Outgoing {
+    /// Ein vollständig gepufferter Rumpf.
+    Buffered(Bytes),
+    /// Ein Rumpf, der beim Senden erst vom Client gelesen wird.
+    Streamed {
+        /// Der Strom, schon mit Uhr und Mitschnitt umwickelt
+        /// ([`crate::body::streamed_request`]).
+        body: ResponseBody,
+        /// Die angekündigte Länge (`Content-Length` des Clients), falls es
+        /// eine gab. Ohne sie geht der Rumpf mit `Transfer-Encoding: chunked`
+        /// hinaus.
+        length: Option<u64>,
+        /// Die Fristen, über die der Weiterleiter wacht, solange er auf die
+        /// Antwort wartet.
+        watch: StreamWatch,
+    },
+}
+
+/// Worüber der Weiterleiter bei einem gestreamten Upload wacht (HUM-057).
+///
+/// Zwei Spannen, die sonst unbegrenzt wären: Das Ziel liest den Rumpf nicht
+/// mehr weiter (dann fragt hyper nicht mehr nach Stücken, und die Uhr im
+/// Strom steht), oder es nimmt den ganzen Rumpf und schickt nie
+/// Kopfzeilen. Endet eine davon, scheitert die Weiterleitung mit
+/// [`UpstreamError::Timeout`]. Eine Grenze der Gesamtdauer ist keine von
+/// beiden: Ein langer Upload, den das Ziel stetig liest, läuft durch.
+#[derive(Debug, Clone)]
+pub struct StreamWatch {
+    /// Was der Strom über sich mitschreibt.
+    pub progress: Arc<StreamProgress>,
+    /// `limits.body_timeout_secs`: so lange darf das Ziel kein Stück annehmen.
+    pub idle: Duration,
+    /// `limits.header_timeout_secs`: so lange darf das Ziel nach dem Ende des
+    /// Rumpfs ohne Antwort-Kopfzeilen bleiben.
+    pub head: Duration,
+    /// Wohin ein Stillstand nach den Antwort-Kopfzeilen gemeldet wird: an
+    /// diesen Fluss, über diese Warteschlange. Vorher meldet ihn der Handler
+    /// selbst, weil er die Weiterleitung dann noch in der Hand hat.
+    pub report: Option<(FlowId, Arc<HoldQueue>)>,
+}
+
+impl StreamWatch {
+    /// Woran der Upload gerade hängt, falls er hängt.
+    #[must_use]
+    pub fn stalled(&self) -> Option<Stall> {
+        self.progress.stalled(self.idle, self.head)
+    }
+}
+
+/// Wie oft der Weiterleiter auf einen hängenden Upload schaut.
+const WATCH_TICK: Duration = Duration::from_millis(100);
+
+impl core::fmt::Debug for Outgoing {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Buffered(bytes) => f.debug_tuple("Buffered").field(&bytes.len()).finish(),
+            Self::Streamed { length, .. } => f
+                .debug_struct("Streamed")
+                .field("length", length)
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
+impl From<Bytes> for Outgoing {
+    fn from(bytes: Bytes) -> Self {
+        Self::Buffered(bytes)
+    }
+}
+
 /// Leitet erlaubte Anfragen zum Ziel.
 pub struct Upstream {
     egress: Arc<dyn Egress>,
@@ -198,7 +279,7 @@ impl Upstream {
     pub async fn forward(
         &self,
         request: &HttpRequest,
-        body: Bytes,
+        body: impl Into<Outgoing>,
         allow_private: bool,
     ) -> Result<Response<Incoming>, UpstreamError> {
         let ip = self.resolve(&request.authority, allow_private).await?;
@@ -271,9 +352,10 @@ impl Upstream {
     pub async fn forward_to(
         &self,
         request: &HttpRequest,
-        body: Bytes,
+        body: impl Into<Outgoing>,
         ip: std::net::IpAddr,
     ) -> Result<Response<Incoming>, UpstreamError> {
+        let body = body.into();
         let authority = &request.authority;
         let stream = self
             .egress
@@ -301,7 +383,7 @@ impl Upstream {
     async fn send<S>(
         &self,
         request: &HttpRequest,
-        body: Bytes,
+        body: Outgoing,
         stream: S,
     ) -> Result<Response<Incoming>, UpstreamError>
     where
@@ -314,13 +396,55 @@ impl Upstream {
         .await
         .map_err(|_elapsed| UpstreamError::Timeout)?
         .map_err(|_err| UpstreamError::Connect)?;
-        tokio::spawn(async move {
+        let connection = tokio::spawn(async move {
             if let Err(err) = conn.await {
                 tracing::debug!(%err, "upstream connection ended");
             }
         });
 
+        let watch = match &body {
+            Outgoing::Streamed { watch, .. } => Some(watch.clone()),
+            Outgoing::Buffered(_) => None,
+        };
         let outgoing = build_outgoing(request, body).map_err(|_err| UpstreamError::Connect)?;
+        if let Some(watch) = watch {
+            // Ein gestreamter Rumpf kann beliebig groß sein, und das Ziel
+            // antwortet meist erst nach dem ganzen Rumpf. Eine Frist über die
+            // ganze Spanne wäre eine Grenze der Gesamtdauer des Uploads, und
+            // die gibt es nicht (`backlog/CONVENTIONS.md` 4.4). Gewacht wird
+            // stattdessen über Fortschritt und, nach dem Ende des Rumpfs, über
+            // die Antwort ([`StreamWatch`]).
+            let send = sender.send_request(outgoing);
+            tokio::pin!(send);
+            let mut tick = tokio::time::interval(WATCH_TICK);
+            loop {
+                tokio::select! {
+                    response = &mut send => {
+                        let response = response.map_err(|_err| UpstreamError::Connect)?;
+                        // Das Ziel kann antworten, bevor es den Upload gelesen
+                        // hat. Dann hält die Verbindung den Rest des Rumpfs
+                        // noch, und die Wache läuft weiter, bis er zu Ende ist
+                        // oder das Ziel aufhört zu lesen; dann bricht sie die
+                        // Verbindung ab, und mit ihr fallen Rumpf und Budget.
+                        if !watch.progress.is_ended() {
+                            tokio::spawn(watch_after_head(watch, connection));
+                        }
+                        return Ok(response);
+                    }
+                    _ = tick.tick() => {
+                        if let Some(stall) = watch.stalled() {
+                            tracing::debug!(?stall, "the streamed upload stalled");
+                            // Die Verbindung zum Ziel wird abgebrochen, nicht
+                            // stehen gelassen: Sie hielte sonst den Rest des
+                            // Client-Rumpfs und einen Deskriptor, solange das
+                            // Ziel schweigt, also unbegrenzt.
+                            connection.abort();
+                            return Err(UpstreamError::Timeout);
+                        }
+                    }
+                }
+            }
+        }
         tokio::time::timeout(self.handshake_timeout, sender.send_request(outgoing))
             .await
             .map_err(|_elapsed| UpstreamError::Timeout)?
@@ -328,9 +452,43 @@ impl Upstream {
     }
 }
 
+/// Wacht über einen gestreamten Upload, dessen Antwort schon da ist
+/// (HUM-057): Nimmt das Ziel länger als `limits.body_timeout_secs` kein Stück
+/// mehr an, wird die Verbindung abgebrochen. Endet der Rumpf oder die
+/// Verbindung, endet auch die Wache.
+async fn watch_after_head(watch: StreamWatch, connection: tokio::task::JoinHandle<()>) {
+    let mut tick = tokio::time::interval(WATCH_TICK);
+    loop {
+        tick.tick().await;
+        if connection.is_finished() || watch.progress.is_ended() {
+            return;
+        }
+        if watch.stalled() == Some(Stall::NotReading) {
+            tracing::debug!("the target stopped reading a streamed upload after its answer");
+            connection.abort();
+            // Der Befund steht am Fluss, auch wenn dessen Antwort schon durch
+            // ist: Ohne ihn sähe die Historie eine vollständige Antwort und
+            // keinen Grund, warum der Upload nie ankam.
+            if let Some((flow, queue)) = &watch.report {
+                queue.publish(FlowEvent::Diagnostic {
+                    flow_id: Some(*flow),
+                    at: SystemTime::now(),
+                    diagnostic: Box::new(crate::limits::upload_stalled(
+                        Stall::NotReading,
+                        watch.idle,
+                        watch.head,
+                    )),
+                });
+            }
+            return;
+        }
+    }
+}
+
 /// Baut die Anfrage, die zum Ziel geht: Origin-Form-URI, Host-Kopf gesetzt,
-/// Verbindungs-Kopfzeilen entfernt, Body als bekannter Puffer.
-fn build_outgoing(request: &HttpRequest, body: Bytes) -> Result<Request<Full<Bytes>>, ()> {
+/// Verbindungs-Kopfzeilen entfernt, Body als bekannter Puffer oder, bei
+/// [`Outgoing::Streamed`], als Strom mit der angekündigten Länge.
+fn build_outgoing(request: &HttpRequest, body: Outgoing) -> Result<Request<ResponseBody>, ()> {
     let mut builder = Request::builder()
         .method(request.method.clone())
         .uri(request.path_and_query.as_str())
@@ -357,7 +515,15 @@ fn build_outgoing(request: &HttpRequest, body: Bytes) -> Result<Request<Full<Byt
         // Rumpf trägt, `Content-Length: 0` (SHOULD), und HUM-047 legt es für
         // die bearbeitete Anfrage fest. Der Wert steht damit auf dem Draht
         // genau so wie in der Aufzeichnung (`edit::apply_edit`).
-        if let Some(length) = wire_content_length(request.method.as_str(), body.len()) {
+        let length = match &body {
+            Outgoing::Buffered(bytes) => wire_content_length(request.method.as_str(), bytes.len())
+                .map(|n| u64::try_from(n).unwrap_or(u64::MAX)),
+            // Die Länge, die der Client angekündigt hat; hyper bricht ab, wenn
+            // der Strom davon abweicht. Ohne Ankündigung schreibt hyper
+            // `Transfer-Encoding: chunked`.
+            Outgoing::Streamed { length, .. } => *length,
+        };
+        if let Some(length) = length {
             headers.insert(
                 HeaderName::from_static("content-length"),
                 HeaderValue::from(length),
@@ -365,7 +531,11 @@ fn build_outgoing(request: &HttpRequest, body: Bytes) -> Result<Request<Full<Byt
         }
     }
 
-    builder.body(Full::new(body)).map_err(|_err| ())
+    let body = match body {
+        Outgoing::Buffered(bytes) => body::full(bytes),
+        Outgoing::Streamed { body, .. } => body,
+    };
+    builder.body(body).map_err(|_err| ())
 }
 
 /// Der `content-length`, den eine Anfrage mit `body_len` Bytes Rumpf trägt,

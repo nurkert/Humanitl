@@ -291,6 +291,12 @@ impl ProxyBuilder {
         self
     }
 
+    /// `limits.hold_max_bytes`: das Byte-Budget für Rümpfe in Arbeit (HUM-057).
+    pub fn hold_max_bytes(mut self, bytes: u64) -> Self {
+        self.limits.hold_max_bytes = bytes;
+        self
+    }
+
     pub fn allow_private(mut self, allow: bool) -> Self {
         self.allow_private = allow;
         self

@@ -365,8 +365,28 @@ impl Recorder {
     /// [`ResponseSink::abort`].
     #[must_use]
     pub fn begin_response(&self, flow: FlowId, headers: &HeaderMap) -> ResponseSink {
+        self.begin(flow, Dir::Response, headers)
+    }
+
+    /// Beginnt den Mitschnitt eines gestreamten Anfrage-Rumpfs (HUM-057).
+    ///
+    /// Eine Anfrage über `limits.hold_body_cap_bytes`, die eine Regel mit
+    /// `stream: true` hinauslässt, wird nie gepuffert und kann deshalb nicht
+    /// über [`Recorder::store_message`] gehen. Sie läuft durch denselben
+    /// Mitschnitt wie eine Antwort, mit denselben Grenzen
+    /// (`limits.recorder_max_body_bytes`, Temp-Datei ab
+    /// `recorder.inline_max_bytes`) und denselben drei Enden; abgeschlossen
+    /// wird sie mit [`ResponseSink::finish_request`].
+    #[must_use]
+    pub fn begin_request(&self, flow: FlowId, headers: &HeaderMap) -> ResponseSink {
+        self.begin(flow, Dir::Request, headers)
+    }
+
+    /// Der gemeinsame Anfang beider Mitschnitte.
+    fn begin(&self, flow: FlowId, dir: Dir, headers: &HeaderMap) -> ResponseSink {
         ResponseSink::new(
             flow,
+            dir,
             Arc::clone(&self.writer),
             Arc::clone(&self.blobs),
             self.diagnostics.clone(),

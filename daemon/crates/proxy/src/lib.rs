@@ -46,6 +46,9 @@
 //! - [`meta`]: der reservierte Host `humanitl.internal`, den der Proxy selbst
 //!   beantwortet — ohne Namensauflösung, ohne Upstream, ohne Regelauswertung
 //!   (HUM-073, ADR-014). Die Weiche dorthin liegt im [`handler`], vor beidem.
+//! - [`limits`]: die Befunde der Grenzen aus `limits.*` (`LIMIT_001`,
+//!   `LIMIT_004`, `LIMIT_005`) und der Regelvorschlag mit `stream: true`
+//!   (HUM-057).
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
@@ -58,6 +61,7 @@ pub mod egress;
 pub mod findings;
 pub mod handler;
 pub mod hold;
+pub mod limits;
 pub mod listener;
 pub mod llm_discover;
 pub mod llm_probe;
@@ -92,7 +96,9 @@ pub use crate::meta::{
     META_HOST, MetaClock, MetaEndpoint, MetaOutcome, MetaReply, MetaRequest, MetaStatus,
     SuggestedTarget, SystemClock, is_meta_host, suggested_target,
 };
-pub use crate::pipeline::{AskPipeline, FlowPipeline, PassthroughPipeline, RulesPipeline};
+pub use crate::pipeline::{
+    AskPipeline, FlowPipeline, PassthroughPipeline, RulesPipeline, StreamGrant,
+};
 pub use crate::registry::{FlowFilter, FlowRecord, FlowRegistry, FlowSummary};
 pub use crate::resolver::{
     AddressRefusal, CachingResolver, HickoryResolver, OverrideResolver, ResolveError, Resolver,
@@ -103,7 +109,7 @@ pub use crate::session::{SessionSettings, SessionState};
 pub use crate::tls_observe::{
     HandshakeWatch, TlsFailure, ToolHint, classify, diagnostic_for, tool_hint,
 };
-pub use crate::upstream::{ClientTls, Upstream, roots_from_pem};
+pub use crate::upstream::{ClientTls, Outgoing, Upstream, roots_from_pem};
 /// Ein Zertifikat in DER-Form, der Typ der zusätzlichen Wurzeln von
 /// [`ClientTls::new`].
 ///

@@ -839,21 +839,54 @@ beliebige Daten schicken könnte, und die Aufzeichnung wäre eine Lüge. Der Nut
 `Diagnostic` mit dem Hostnamen und der Empfehlung, das Werkzeug host-seitig zu betreiben.
 
 **Grenzen und Zeitlimits.** Der Anfrage-Body wird vollständig gepuffert, bevor gefragt wird — wer
-nur Header zeigt und den Body streamt, zeigt genau den Teil nicht, in dem exfiltriert wird. Daraus
-folgt eine Reihe harter Grenzen:
+nur Header zeigt und den Body streamt, zeigt genau den Teil nicht, in dem exfiltriert wird. Die
+einzige Ausnahme ist eine Regel mit `stream: true`, die der Mensch selbst schreibt (unten). Daraus
+folgt eine Reihe harter Grenzen; die vollständige Liste mit Codes steht in
+[`docs/reference/limits.md`](reference/limits.md):
 
 | Grenze | Default | Verhalten beim Überschreiten |
 |---|---|---|
-| `limits.hold_body_cap_bytes` | 32 MiB | `413`, `BlockReason::BodyCap`, auch wenn eine Regel den Host erlaubt (ESC-4 `rule_body_over_cap`); die Ausnahme `stream: true` beachtet der Proxy erst mit HUM-057 |
+| `limits.hold_body_cap_bytes` | 32 MiB | `413`, `BlockReason::BodyCap` und `LIMIT_001` mit dem Vorschlag einer Regel `ask` + `stream: true`, auch wenn eine Regel den Host erlaubt (ESC-4 `rule_body_over_cap`); ausgenommen nur eine Regel `allow` oder `ask` mit `stream: true` (HUM-057, unten) |
 | `limits.preview_cap_bytes` | 8 MiB | Vorschau wird abgeschnitten, Entscheidung bleibt möglich |
-| `limits.max_decompress_ratio` | 100 | Dekompression bricht ab (Schutz gegen Zip-Bomben) |
-| `limits.hold_max_bytes` | 256 MiB | neue Anfrage `503`, `BlockReason::HoldMemory`; gehaltene werden nie verworfen |
-| `limits.hold_max_flows` | 200 | neue Anfrage `503`, `BlockReason::HoldMaxFlows` |
+| `limits.max_decompress_ratio` | 100 | Dekompression bricht während des Entpackens ab (Schutz gegen Zip-Bomben), `LIMIT_003` |
+| `limits.hold_max_bytes` | 256 MiB | Summe aller Rümpfe in Arbeit: beim Puffern Stück für Stück reserviert und gehalten, bis die Anfrage geblockt ist oder die Antwort-Kopfzeilen des Ziels da sind; bei einem gestreamten Upload (`stream: true`) bis zum Ende des Bodys oder seinem Abbruch, auch wenn das Ziel schon geantwortet hat (HUM-057). Dieselbe Zahl steht als `queue_bytes` im `Held`-Ereignis und in der Statusleiste. Passt eine Anfrage nicht mehr hinein, `503`, `BlockReason::HoldMemory` und `LIMIT_002`, auch mitten im Puffern; gehaltene werden nie verworfen |
+| `limits.hold_max_flows` | 200 | neue Anfrage `503`, `BlockReason::HoldMaxFlows` und `LIMIT_002` |
 | `hold.timeout_secs` | 300 | `504`, `BlockReason::Timeout` — Ablauf bedeutet **block**, nie `allow` |
 | `limits.connect_timeout_secs` | 10 s | Verbindungsaufbau zum Ziel bricht ab, Flow wird `Failed` |
-| `limits.header_timeout_secs` | 30 s | Anfrage-Kopf des Clients und Lücke bis zur nächsten Anfrage; danach schließt die Verbindung. Speist zusätzlich den Handschlag zum Ziel bis zu dessen Antwort-Kopfzeilen |
-| `limits.body_timeout_secs` | 300 s | Stille **zwischen zwei Stücken** eines Rumpfs, in beide Richtungen. Anfrage-Rumpf: `408` mit `Connection: close` und `PROXY_011` im Ereignisstrom; gestreamter Antwort-Rumpf: der Strom bricht ab, die Aufzeichnung vermerkt ihn als gekürzt. Nie eine Grenze der Gesamtdauer |
+| `limits.header_timeout_secs` | 30 s | Anfrage-Kopf des Clients und Lücke bis zur nächsten Anfrage; danach schließt die Verbindung. Speist zusätzlich den Handschlag zum Ziel bis zu dessen Antwort-Kopfzeilen, und bei einem gestreamten Upload (`stream: true`) die Frist vom Ende des Rumpfs bis zu den Antwort-Kopfzeilen; danach scheitert er mit `LIMIT_004` |
+| `limits.body_timeout_secs` | 300 s | Stille **zwischen zwei Stücken** eines Rumpfs, in beide Richtungen. Anfrage-Rumpf: `408` mit `Connection: close` und `PROXY_011` im Ereignisstrom; gestreamter Antwort-Rumpf: der Strom bricht ab, die Aufzeichnung vermerkt ihn als gekürzt (`LIMIT_004`); gestreamter Upload, den das Ziel nicht mehr liest: er scheitert mit `LIMIT_004`. Nie eine Grenze der Gesamtdauer |
 | `limits.max_client_connections` | 256 | Der Accept-Loop antwortet `503` mit `Connection: close` und schließt, statt anzunehmen und liegen zu lassen; `PROXY_010` im Ereignisstrom, zusammengefasst je Minute |
+
+**`stream: true`: die eine Ausnahme vom Puffern (HUM-057).** Eine Anfrage über
+`limits.hold_body_cap_bytes` lässt sich nicht so halten wie jede andere: Ihr Body passt nicht in
+den Puffer, und ohne Body gibt es keinen Scan und keine Vorschau. Sie wird deshalb geblockt,
+außer eine Regel trifft sie, die `stream: true` trägt und `allow` oder `ask` sagt, **und**
+`hold.hard_block_checksum_secrets` ist aus. Steht die harte Sperre an, greift `stream: true` nie:
+Ein ungeprüfter Strom kann sie nicht einhalten, und keine Regel hebt sie auf (unten). Die Anfrage
+wird dann geblockt wie ohne Regel (`413`, `BlockReason::BodyCap`), `LIMIT_001` nennt den Grund und
+schlägt `limits.hold_body_cap_bytes` vor, nie eine Regel. Bei ausgeschalteter Sperre gilt:
+
+- Entschieden wird über den Kopf. `allow` lässt die Anfrage ohne Rückfrage hinaus; `ask` hält sie,
+  und der Mensch sieht Methode, Ziel und Header, aber keinen Body. Erst die Freigabe liest den Rest
+  der Leitung; ein Block lässt kein Byte des Bodys zum Ziel.
+- Kopf, Query und Kopfzeilen werden gescannt wie bei jeder Anfrage; ihre Funde stehen an der
+  Karte. Ein gehaltener Kopf reserviert im Byte-Budget nur das schon gelesene Präfix, nicht die
+  angekündigte Größe.
+- Der Body geht **ungeprüft** hinaus: keine Suche nach Geheimnissen und keine Bearbeitung. Am
+  Fluss steht `LIMIT_001` als `Info`, damit das in der Historie zu sehen ist und nicht nur in der
+  Regel.
+- Aufgezeichnet wird er wie eine gestreamte Antwort, bis `limits.recorder_max_body_bytes`, darüber
+  als gekürzt vermerkt. Zwischen zwei Stücken wacht `limits.body_timeout_secs`.
+- Eine Regel `block` oder `redact` mit `stream: true` streamt nicht; es bleibt beim Block.
+
+Der Vorschlag, den `LIMIT_001` am Block anbietet, ist bei ausgeschalteter Sperre eine Regel `ask`
+mit `stream: true`,
+zugeschnitten auf Host, Port, Schema, Methode und Pfad der geblockten Anfrage, nie `allow`: Der
+Mensch hat die Anfrage nicht gesehen, und ein `allow` machte aus einem Klick eine dauerhafte,
+ungeprüfte Freigabe. Belegt in `daemon/crates/proxy/tests/limits.rs`
+(`body_cap_blocks_with_diagnostic`, `body_cap_stream_rule_passes`,
+`a_stream_rule_with_ask_holds_the_head_and_streams_only_after_allow`,
+`the_hard_block_overrides_a_stream_rule`).
 
 **Die drei Spannen ohne Uhr sind mit HUM-120 geschlossen.** Bis dahin standen sie hier als
 erklärte Lücke; was an ihre Stelle tritt, steht in der Tabelle oben. Zur Erinnerung, was es war und
@@ -878,7 +911,10 @@ Wer in einer Spanne stehenbleibt und dafür nach der Frist bezahlt, öffnet einf
 Verbindungen, und jede einzelne bleibt innerhalb ihrer Frist. Fünfhundert solche Verbindungen
 standen vorher gleichzeitig offen; `limits.hold_max_flows` griff dabei nicht, weil kein Fluss
 entstand, und die schon gepufferten Bytes zählten gegen `limits.hold_body_cap_bytes`, aber nicht
-gegen `limits.hold_max_bytes`, dessen Buchführung erst mit dem Halten beginnt.
+gegen `limits.hold_max_bytes`, dessen Buchführung erst mit dem Halten begann. Seit HUM-057
+reserviert der Handler jeden Rumpf schon beim Puffern in demselben Budget und gibt ihn bei
+Abschluss, Zeitüberschreitung oder Abbruch frei; viele pausierende Clients stoßen damit an
+`limits.hold_max_bytes` und bekommen `503` mit `LIMIT_002`, statt gemeinsam Gigabytes zu binden.
 
 Über der Grenze wird abgelehnt und nicht liegen gelassen: `503`, `Connection: close`, und der
 Befund `PROXY_010` im Ereignisstrom. Der Befund kommt **zusammengefasst**, höchstens einer je
@@ -892,7 +928,12 @@ ist es erschöpft, schließt die Verbindung ohne Antwort.
 **Was diese Grenzen nicht fangen, und das gehört gesagt.** Sie messen Stille, nicht Langsamkeit.
 Ein Gegenüber, das kurz vor Ablauf ein Byte schickt, ist nicht untätig — begrenzt wird es beim
 Anfrage-Rumpf durch `limits.hold_body_cap_bytes` und die Verbindungsgrenze, beim gestreamten
-Antwort-Rumpf allein durch die Verbindungsgrenze. Ein langsamer, aber nie stiller Antwort-Strom
+Antwort-Rumpf allein durch die Verbindungsgrenze. Für das Puffern heißt das seit HUM-057 auch:
+Ein Client, der knapp unter `limits.body_timeout_secs` tröpfelt, hält seinen Anteil an
+`limits.hold_max_bytes` so lange, wie er tröpfelt; einige solcher Clients mit großen Rümpfen
+können das Budget füllen, und andere Anfragen mit Body bekommen dann `503` statt Speicher zu
+binden. Begrenzter Speicher ist hier gegen Aushungern getauscht; eine Gesamtfrist für das Puffern
+gibt es noch nicht (HUM-258). Ein langsamer, aber nie stiller Antwort-Strom
 läuft also weiterhin unbegrenzt lange; was ihn deckelt, ist einzig die Zahl der Verbindungen, die
 ein Prozess gleichzeitig dafür halten darf. Eine Grenze über die Gesamtdauer wäre der falsche Weg
 dorthin: Sie träfe zuerst den erklärten Seitenkanal zum Sprachmodell. Eine Grenze über die
@@ -924,8 +965,8 @@ Welche Schlüssel heute wirken und welche auf ein Issue warten, sagt die Spalte 
 
 Die Zahlen sind die Defaults aus `BACKLOG.md` (Abschnitt 3 und 4.4) und Sprint 1; verbindlich ist
 die Ausgabe von `humanitl config schema`, gegen die HUM-059 diese Tabelle vor dem Release
-abgleicht. Für `limits.hold_max_flows` nennt HUM-057 abweichend 500; welcher Wert gilt, legt
-`CONVENTIONS.md` 4.4 fest.
+abgleicht. Für `limits.hold_max_flows` gilt 200 (`CONVENTIONS.md` 4.11); HUM-057 nannte früher
+500.
 
 `Expect: 100-continue` beantwortet der Proxy sofort selbst; der Body landet im Hold-Puffer und
 nicht beim Ziel. Vor der Entscheidung erreicht kein Byte den Upstream.
@@ -1019,7 +1060,8 @@ getroffene Entscheidung sofort gilt. Die Fallen sind alle bekannt und alle getes
   als System (`BlockReason::Secret`, `403`); ohne passende Regel wird sie gehalten, und ein
   `Decide(Allow)` endet mit `HOLD_004`, auch mit bestätigten Funden, auch in einer Sammelanfrage.
   Hinaus geht sie nur bearbeitet, und nur wenn der zweite Scan über die bearbeitete Fassung kein
-  solches Geheimnis mehr findet (HUM-049, HUM-159). Die Prüfung sitzt im Daemon, nicht in der
+  solches Geheimnis mehr findet (HUM-049, HUM-159). Auch `stream: true` hebt sie nicht auf: Unter
+  der Sperre streamt keine Anfrage über `limits.hold_body_cap_bytes`, sie wird geblockt (HUM-057). Die Prüfung sitzt im Daemon, nicht in der
   Oberfläche: gesetzt wird der Befund im Handler nach dem Scan, geprüft in Pipeline und
   Warteschlange, und dahinter noch einmal im Handler, bevor weitergeleitet wird.
 

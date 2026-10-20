@@ -91,6 +91,33 @@ fn decode_ratio_bomb() {
     );
 }
 
+/// Eine Bombe, bei der das Verhältnis und nicht das Cap zieht, meldet
+/// `LIMIT_003` und hört genau am Verhältnis auf (HUM-057).
+///
+/// 4 MiB Nullbytes packen auf wenige KiB; mal 100 bleibt das unter dem Cap
+/// von 8 MiB, also ist das Verhältnis die engere Grenze. Die Bombe oben
+/// (200 MiB) packt auf so viel, dass mal 100 über dem Cap liegt, und bleibt
+/// deshalb bei `FINDINGS_002`.
+#[test]
+fn decode_ratio_bomb_reports_limit_003() {
+    let bomb = zero_bomb(4);
+    let relative = bomb.len() * 100;
+    assert!(
+        relative < check::CAP,
+        "the bomb packs to {} bytes",
+        bomb.len()
+    );
+    let decoded = decode_body(&bomb, &ContentEncoding::Gzip, check::CAP, check::RATIO);
+    assert!(decoded.truncated);
+    assert_eq!(decoded.bytes.len(), relative);
+    let diagnostic = decoded
+        .diagnostic
+        .expect("a truncated body explains itself");
+    assert_eq!(diagnostic.code.as_str(), "LIMIT_003");
+    assert!(diagnostic.fix.is_none(), "no advice to raise the ratio");
+    check::body_decoder(&[&[1u8][..], &bomb].concat());
+}
+
 /// Der Speicherzuwachs beim Entpacken der Bombe bleibt unter 16 MiB.
 ///
 /// Gemessen über den Höchststand des residenten Speichers (`VmHWM`), der

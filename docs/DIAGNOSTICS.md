@@ -939,6 +939,56 @@ Blob-Speicher nicht benutzbar
 
 **Fix.** `CopyCommand` mit `ls -ld` und `df -h` auf das Verzeichnis — Rechte oder Platz.
 
+### Bereich limits
+
+#### LIMIT_001
+
+Rumpf über der Haltegrenze
+
+**Auslöser.** Eine Anfrage ist größer als `limits.hold_body_cap_bytes`: angekündigt über `Content-Length` oder beim Puffern bemerkt.
+
+**Fix.** `AddRule` mit `action: ask` und `stream: true` für Host, Methode und Pfad der Anfrage; ohne wirksame Regel oder unter `hold.hard_block_checksum_secrets` (dort greift `stream: true` nie) `ChangeSetting` auf `limits.hold_body_cap_bytes`.
+
+#### LIMIT_002
+
+Warteschlange voll
+
+**Auslöser.** Eine neue Anfrage sollte gehalten werden, während die Warteschlange schon `limits.hold_max_flows` Flüsse oder `limits.hold_max_bytes` Bytes hält, oder ein Rumpf passt beim Puffern nicht mehr in `limits.hold_max_bytes`.
+
+**Fix.** Kein Fix-Knopf: Die Warteschlange abarbeiten. Eine höhere Grenze hilft nur, wenn die gehaltenen Anfragen wirklich gebraucht werden.
+
+#### LIMIT_003
+
+Entpack-Verhältnis überschritten
+
+**Auslöser.** Ein gepackter Rumpf hätte beim Entpacken mehr als `limits.max_decompress_ratio` mal so viele Bytes ergeben, wie er gepackt groß ist.
+
+**Fix.** Kein Fix: Ein solches Verhältnis ist das Merkmal einer Entpack-Bombe, und eine höhere Grenze wäre der falsche Rat.
+
+#### LIMIT_004
+
+Antwort des Ziels verstummt
+
+**Auslöser.** Das Ziel hat nach den Antwort-Kopfzeilen länger als `limits.body_timeout_secs` kein Stück des Rumpfs mehr geschickt, oder bei einem gestreamten Upload kein Stück mehr angenommen (`limits.body_timeout_secs`) beziehungsweise nach dem ganzen Rumpf keine Kopfzeilen geschickt (`limits.header_timeout_secs`).
+
+**Fix.** `ChangeSetting` auf die Grenze, die ablief, mit dem doppelten Wert.
+
+#### LIMIT_005
+
+Anfrage-Kopf zu spät
+
+**Auslöser.** Ein Client hat eine Verbindung geöffnet und den Kopf seiner Anfrage nicht innerhalb von `limits.header_timeout_secs` geschickt.
+
+**Fix.** Kein Fix-Knopf: `limits.header_timeout_secs` nur erhöhen, wenn ein Werkzeug auf einer langsamen Leitung wirklich so lange braucht.
+
+#### LIMIT_006
+
+Ereignis-Puffer übergelaufen
+
+**Auslöser.** Ein Abonnent des Ereignisstroms hat mehr als `limits.event_buffer` Ereignisse nicht abgeholt.
+
+**Fix.** Kein Fix: Die Oberfläche lädt über `ListFlows` nach.
+
 ### Bereich audit
 
 #### AUDIT_001
