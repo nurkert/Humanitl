@@ -22,6 +22,7 @@ import 'shell_screen.dart';
 import 'widgets/setup_host.dart';
 import 'widgets/splash.dart';
 import 'widgets/tray_host.dart';
+import 'widgets/window_frame.dart';
 
 /// The gate.
 class ConnectionGate extends ConsumerWidget {
@@ -37,12 +38,16 @@ class ConnectionGate extends ConsumerWidget {
     // held requests is unknown (HUM-034).
     return TrayHost(
       child: switch (status) {
-        ConnectionConnecting() => const Splash(),
+        // Splash und Setup fuellen das Fenster ohne Shell und damit ohne
+        // deren Kopfleiste. Seit das Toolkit keine Titelleiste mehr zeichnet
+        // (HUM-255), traegt die `WindowBar` darueber Griff und Fensterknoepfe;
+        // die Shell bringt beides in ihrer eigenen Kopfleiste mit.
+        ConnectionConnecting() => const WindowFramed(child: Splash()),
         // Ohne Daemon gibt es keine Shell, in die der Bildschirm passte:
         // jeder Abschnitt waere eine Fehlerkarte. Die erste Zeile traegt dann
         // den Befund mit seinem Vorschlag, und der Rest der Liste sagt, dass
         // nichts davon gemessen werden konnte.
-        ConnectionFailed() => const SetupHost(),
+        ConnectionFailed() => const WindowFramed(child: SetupHost()),
         // Eine Verbindung, die stand und brach: Die Shell bleibt stehen, mit
         // dem letzten `GetInfo` in der Statuszeile, und das Banner darin sagt,
         // dass alles darunter ein Schnappschuss ist (`docs/UX.md` 4.2,

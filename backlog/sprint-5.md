@@ -30,6 +30,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-254 | Die Seitenleiste klappt auf und zu | S | HUM-019, HUM-054 |
 | HUM-259 | Neues App-Icon: die Faust | S | HUM-034, HUM-053 |
 | HUM-257 | Der Daemon vertraut der Zertifikatsablage des Systems (vor HUM-060) | S | HUM-015, HUM-039, HUM-087 |
+| HUM-255 | Das Fenster trägt keine doppelte Titelleiste | S | HUM-019, HUM-034, HUM-054 |
 
 ---
 
@@ -3555,3 +3556,86 @@ und wenn eine Stelle fehlt, sagt er das und wie sie dazukommt. Wer das nicht wil
 
 ### Referenzen
 HUM-015, HUM-039, HUM-087, `docs/SECURITY.md` 5, `docs/THREAT-MODEL.md` 2.2.
+
+---
+
+## HUM-255 · Das Fenster trägt keine doppelte Titelleiste
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-019, HUM-034, HUM-054 · Blockiert: nichts
+
+### Kontext
+Befund des Projekteigentümers vom 2026-10-20 unter sway: Über der App liegt eine GTK-Kopfleiste mit „humanitl" und ×, und darüber zeichnet sway seine eigene Titelzeile. Zwei Titelleisten übereinander, mit der Kopfleiste der App drei Zeilen, bevor der erste Inhalt kommt.
+
+Ausgangslage, die die Spezifikation bindet:
+- Die GTK-Leiste stammt aus dem Standard-Runner von Flutter. `app/linux/runner/my_application.cc` baut auf jeder Wayland-Sitzung und unter X11 bei GNOME Shell eine sichtbare `GtkHeaderBar` als `titlebar`; unter X11 mit einem anderen Fenstermanager setzt er nur den Titel und überlässt die Dekoration dem Fenstermanager.
+- `window_manager` 0.5.2 ist schon Abhängigkeit (`app/lib/main.dart` setzt Titel und Mindestgröße, `app/lib/features/tray/platform/window_port.dart` ist der Port aus HUM-034). `WindowPort` in `app/lib/features/tray/desktop_ports.dart` ist die eine Naht zum Fenster; Tests ersetzen ihn über `desktopPortsProvider` durch `FakeWindow` (`app/test/features/tray/fixtures.dart`).
+- Schließen über den Fenstermanager löst heute `delete-event` aus. `window_manager` hängt sich dort ein, meldet das Ereignis `close` und verhindert das Schließen nur, wenn `setPreventClose(true)` gesetzt ist. Das ist es nirgends: Das Fenster geht, die `GtkApplication` verliert ihr letztes Fenster, das Programm endet. Ein „ins Tray verstecken" gibt es nicht. Der Menüpunkt „Beenden" des Trays geht einen anderen Weg (`DesktopPorts.dispose`, dann `WindowPort.quit`).
+
+### Ziel
+- **Keine Kopfleiste des Toolkits mehr, auf Wayland wie auf X11.** Der Runner baut die `GtkHeaderBar` weiter dort, wo er sie heute baut, zeigt sie aber nie (`gtk_widget_show` entfällt), und setzt den Fenstertitel in beiden Zweigen mit `gtk_window_set_title`, damit der Compositor schon vor dem ersten Dart-Frame einen Namen hat.
+  Begründung der Wahl:
+  - Eine gesetzte, aber unsichtbare `titlebar` hält GTK 3 in clientseitiger Dekoration: Unter GNOME (Wayland und X11 mit Compositor) bleiben Schatten und die unsichtbare Randzone, an der der Zeiger die Größe ändert; ohne Compositor bleibt der schmale Rahmen von `.solid-csd`. Es fehlt nur die Leiste. Das ist derselbe Zustand, den `window_manager` mit `TitleBarStyle.hidden` herstellt (`gtk_widget_set_visible(header_bar, false)`).
+  - `gtk_window_set_decorated(FALSE)` wäre unter GNOME auf Wayland das Ende jedes Rahmens: kein Schatten, keine Randzone, kein Ändern der Größe ohne einen selbst gebauten Ziehrand.
+  - Gar keine `titlebar` ist auf Wayland kein Ausweg. GTK 3 fragt dann den Compositor nach serverseitiger Dekoration; sway und KDE geben sie, Mutter (GNOME) nicht, und dort zeichnet GTK ersatzweise seine eigene Standard-Titelleiste, also wieder eine GTK-Leiste.
+  - `windowManager.setTitleBarStyle(TitleBarStyle.hidden)` aus Dart erreicht auf Wayland und unter GNOME dasselbe, ruft aber im X11-Zweig ohne Kopfleiste `gtk_window_set_decorated(false)` und nimmt einem schwebenden X11-Fenstermanager seinen Rahmen samt Randzone. Außerdem liefe es erst, wenn Dart läuft; der Runner entscheidet, bevor das Fenster je sichtbar ist.
+  - Der X11-Zweig ohne GNOME Shell bleibt, wie er ist: Dort zeichnet der Fenstermanager seine Dekoration selbst, wie sway unter Wayland, und GTK zeichnet keine.
+- **Die Kopfleiste der App wird zur Griff-Fläche.** `HeaderBar` (`app/lib/features/shell/widgets/header_bar.dart`, „Humanitl · <Bereich> … Ctrl+K") liegt über einer Fläche, die auf Ziehen `WindowPort.startDragging` und auf Doppelklick `WindowPort.toggleMaximize` ruft. Die anzeigenden Teile (Wortmarke, Bereichstitel, die beiden Badges) lassen den Zeiger durch, die Bedienelemente (Isolationsring, Palettenknopf, Fensterknöpfe) fangen ihn selbst: Ein Klick auf sie löst nur sie aus, und der Doppelklick-Erkenner der Fläche verzögert ihren Klick nicht.
+- **Eigene Fensterknöpfe rechts in der Kopfleiste**, nach dem Palettenknopf: Minimieren (`HGlyph.minus`, neu), Maximieren oder Wiederherstellen (`HGlyph.square`, neu), Schließen (`HGlyph.close`). Je ein `HIconButton` mit `HoverLabel` und Semantik-Label aus ARB, per `Tab` erreichbar und mit `Enter` und `Leertaste` auslösbar (`docs/UX.md` 5.1). Farbe wie jeder Ghost-Knopf; kein rotes Schließen, weil Farbe in diesem Programm Zustand bedeutet (`docs/UX.md` 3.3).
+- **Schließen ist der Weg des Fenstermanagers.** Der Knopf ruft `WindowPort.close`, und `WindowManagerPort.close` ruft `windowManager.close()`, also `gtk_window_close`: dasselbe `delete-event`, das der Fenstermanager schickt, mit derselben Behandlung durch `window_manager` und GTK. Nicht `quit`: Das ist der Weg des Tray-Menüs. Kommt eines Tages „Schließen versteckt ins Tray", setzt es `setPreventClose` an einer Stelle und gilt dann für Knopf und Fenstermanager zugleich.
+- **Der Port wächst um vier Methoden:** `close`, `minimize`, `toggleMaximize` (fragt `isMaximized` und ruft `maximize` oder `unmaximize`) und `startDragging`. Die träge Fassung tut nichts, `FakeWindow` zählt mit, `WindowManagerPort` schluckt wie bisher `MissingPluginException`.
+- **Kein Raten nach Kachel-Fenstermanagern.** Unter sway und anderen Kachel-Managern bleiben Minimieren und Maximieren oft wirkungslos. Sauber erkennen lässt sich das nicht: GTK 3, auf dem der Linux-Embedder von Flutter steht, gibt die Fähigkeiten des Compositors nicht heraus (`xdg_toplevel.wm_capabilities` aus xdg-shell v5 erreicht erst GTK 4), und Umgebungsvariablen wie `SWAYSOCK`, `I3SOCK` oder `XDG_CURRENT_DESKTOP` sind eine Namensliste, die jeden weiteren Kachel-Manager verfehlt und in verschachtelte Sitzungen und dort gestartete Kindprozesse durchsickert. Die Knöpfe bleiben deshalb überall stehen; ein wirkungsloser Knopf schadet nicht, ein fälschlich versteckter schon.
+- **Jeder Bildschirm, der das ganze Fenster füllt, ist greifbar und schließbar.** Splash und der eigenständige Setup-Bildschirm eines Kaltstarts ohne Daemon stehen ohne Shell und damit ohne deren Kopfleiste. `ConnectionGate` stellt sie deshalb unter eine schmale `WindowBar` (Griff-Fläche, rechts die drei Knöpfe); die Shell bekommt keine, weil ihre Kopfleiste beides schon trägt. So gibt es nirgends eine doppelte Leiste und nirgends ein Fenster, das sich mit der Maus weder verschieben noch schließen lässt.
+- **Texte** über ARB, `en` Quelle, `de` Übersetzung, nur angehängt: `shellWindowMinimize`, `shellWindowMaximize`, `shellWindowClose`.
+- **`docs/UX.md` 4.9** bekommt einen Absatz zum Fenster: keine Toolkit-Leiste, Kopfleiste als Griff, eigene Knöpfe, Schließen wie beim Fenstermanager.
+
+### Nicht-Ziel
+- Kein „Schließen versteckt ins Tray", kein `setPreventClose`. Heute beendet Schließen das Programm, und dieses Issue ändert kein Verhalten, nur den Ort des Knopfs.
+- Kein eigener Ziehrand zum Ändern der Größe (`DragToResizeArea`); die Randzone liefert die clientseitige Dekoration von GTK oder der Fenstermanager.
+- Kein Umschalten des Maximieren-Glyphs nach Zustand. Dafür müsste der Port Maximieren-Ereignisse melden, die unter Kachel-Managern nie kommen; das Label nennt beides.
+- Keine Erkennung von Kachel-Managern (siehe Ziel), kein Wechsel auf GTK 4.
+
+### Betroffene Pfade
+- `app/linux/runner/my_application.cc` (Kopfleiste unsichtbar, Titel in beiden Zweigen)
+- `app/lib/features/tray/desktop_ports.dart` (`WindowPort` um vier Methoden, träge Fassung)
+- `app/lib/features/tray/platform/window_port.dart` (`WindowManagerPort`: die vier Aufrufe)
+- `app/lib/features/shell/widgets/window_frame.dart` (neu: `WindowDragArea`, `WindowButtons`, `WindowBar`, `WindowFramed`)
+- `app/lib/features/shell/connection_gate.dart` (Splash und Setup unter `WindowFramed`)
+- `app/lib/features/shell/widgets/header_bar.dart` (Griff-Fläche, Knöpfe, anzeigende Teile ohne Zeiger)
+- `app/packages/ui/lib/src/tokens/flow_state.dart`, `app/packages/ui/lib/src/widgets/h_glyph.dart` (`HGlyph.minus`, `HGlyph.square`, angehängt)
+- `app/l10n/app_en.arb`, `app/l10n/app_de.arb` (nur angehängt)
+- `docs/UX.md` 4.9
+- `app/test/features/shell/window_frame_test.dart` (neu), `app/test/features/tray/fixtures.dart` (`FakeWindow` zählt die vier neuen Aufrufe), `app/packages/ui/test/gaps_test.dart` (die zwei neuen Glyphen)
+
+### Tests
+- `app/test/features/shell/window_frame_test.dart`, in der ganzen App über `pumpApp` mit `FakeDesktop`:
+  - `the header carries minimize, maximize and close`: drei Knöpfe, je ein Semantik-Knoten mit dem ARB-Label, in Englisch und Deutsch.
+  - `close takes the window manager's way, not the tray's`: Tipp auf Schließen, `FakeWindow.closes == 1`, `quits == 0`, kein `window.dispose` im Protokoll.
+  - `minimize and maximize reach the port`: je ein Tipp, je ein Zähler auf 1.
+  - `the window buttons answer the keyboard`: Fokus auf Schließen, `Enter` ruft `close`, `Leertaste` auf Minimieren ruft `minimize`.
+  - `dragging the header moves the window`: Ziehen auf dem Bereichstitel und auf der freien Fläche zwischen Titel und Badges ruft `startDragging`.
+  - `a control in the header does not drag`: Tipp auf den Palettenknopf öffnet die Palette, `startDragging` bleibt 0; ein Ziehen, das auf dem Palettenknopf beginnt, ebenfalls 0.
+  - `a double click on the header toggles maximize`: zwei Tipps im Abstand unter `kDoubleTapTimeout` auf freier Fläche, `toggleMaximize == 1`.
+  - `the setup screen of a cold start can be moved and closed`: ohne Daemon steht der Setup-Bildschirm, die drei Knöpfe sind da, Schließen ruft `close`, Ziehen auf der Leiste ruft `startDragging`.
+  - `the shell shows one set of window buttons`: in der Shell genau ein Schließen-Knopf und keine `WindowBar`.
+  - `a control's click is not held back by the double click`: Tipp auf den Palettenknopf und ein einziges `pump()` ohne Wartezeit; die Palette steht schon.
+- `app/packages/ui/test/gaps_test.dart`: die zwei neuen Glyphen in der Liste von `every glyph paints`.
+- Mutationsbeweis je Test: Knopf entfernt; Schließen ruft `quit` statt `close`; `onPressed` von Minimieren und Maximieren vertauscht; Knopf in `ExcludeFocus`; Griff-Fläche ohne `onPanStart`; Bereichstitel ohne `IgnorePointer`; Griff-Fläche als Elternteil der Zeile statt als Geschwister darunter; `onDoubleTap` entfernt; `WindowFramed` um das Setup entfernt; die Shell zusätzlich gerahmt.
+- `make runner-test` bleibt grün; `my_application.cc` wird zusätzlich mit `g++ -fsyntax-only` gegen `gtk+-3.0` und die Header von `flutter_linux` übersetzt, soweit sie vorliegen.
+- Goldens: Jedes Bild, das die Kopfleiste zeigt, ändert sich durch die drei Knöpfe und wird beim Landen mit `make goldens-update` neu erzeugt und einzeln angesehen.
+
+### Akzeptanzkriterien
+- [ ] Unter Wayland (sway, GNOME) und X11 zeigt GTK keine Kopfleiste mehr; unter GNOME lässt sich die Größe an den Rändern weiter ändern.
+- [ ] Ziehen auf freier Fläche oder auf anzeigenden Teilen der Kopfleiste verschiebt das Fenster, Doppelklick maximiert oder stellt wieder her; Bedienelemente darin reagieren auf Klick wie vorher und ohne Verzögerung.
+- [ ] Minimieren, Maximieren und Schließen stehen rechts in der Kopfleiste, mit Hover-Label, Semantik-Label und Tastaturbedienung.
+- [ ] Schließen ruft `windowManager.close()` und verhält sich damit genau wie das Schließen über den Fenstermanager.
+- [ ] Alle `window_manager`-Aufrufe der Shell laufen über `WindowPort`; kein Widget importiert `window_manager`.
+- [ ] Neue Texte in beiden ARB-Dateien, nur angehängt; `make l10n-lint` grün.
+- [ ] `docs/UX.md` 4.9 beschreibt das Fensterverhalten.
+
+### Fallstricke
+- **Doppelklick-Erkenner verzögern Klicks.** Ein `GestureDetector(onDoubleTap: …)` als Elternteil der ganzen Leiste hält jeden Klick auf einen Knopf darin bis `kDoubleTapTimeout` in der Arena fest. Die Griff-Fläche liegt deshalb als Geschwister unter der Zeile (`Stack`), nicht über ihr, und bekommt nur, was die Zeile durchlässt.
+- **Text fängt den Zeiger.** `RenderParagraph` meldet sich selbst als getroffen; ohne `IgnorePointer` ist der Bereichstitel ein toter Fleck in der Griff-Fläche.
+- **Schließen ist nicht Beenden.** `quit` räumt die Ports ab und zerstört das Fenster; das ist der Weg des Tray-Menüs. Der Knopf nimmt den Weg des Fenstermanagers, sonst ändert ein späteres `setPreventClose` nur die halbe App.
+- **Unsichtbar heißt nicht fehlend.** Ohne `titlebar` zeichnet GTK unter GNOME auf Wayland eine Ersatzleiste; die Kopfleiste muss gesetzt bleiben und nur unsichtbar sein.
+
+### Referenzen
+HUM-019 (`backlog/sprint-1.md`, Shell und Kopfleiste), HUM-034 (`backlog/sprint-2.md`, `WindowPort`), HUM-054 (`backlog/sprint-4.md`, Goldens), `docs/UX.md` 3.3, 4.9 und 5.1, `window_manager` 0.5.2 `linux/window_manager_plugin.cc` (`set_title_bar_style`, `close`, `start_dragging`).

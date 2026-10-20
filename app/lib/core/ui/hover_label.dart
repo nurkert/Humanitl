@@ -10,7 +10,17 @@ import 'package:flutter/widgets.dart';
 
 import 'ui.dart';
 
-/// Shows [label] to the right of [child] after a short hover.
+/// Where a [HoverLabel] appears relative to its child.
+enum HoverLabelSide {
+  /// To the right, vertically centred: the icon rail.
+  right,
+
+  /// Below, flush with the right edge: controls at the right end of the
+  /// window, where a label to the right would leave the screen (HUM-255).
+  below,
+}
+
+/// Shows [label] beside [child] after a short hover.
 ///
 /// Needs an [Overlay] ancestor; the app provides one below its theme.
 class HoverLabel extends StatefulWidget {
@@ -20,8 +30,12 @@ class HoverLabel extends StatefulWidget {
     required this.child,
     this.delay = HMotion.hoverLabel,
     this.enabled = true,
+    this.side = HoverLabelSide.right,
     super.key,
   });
+
+  /// Where the label appears; to the right by default.
+  final HoverLabelSide side;
 
   /// The text to show, already localised.
   final String label;
@@ -93,6 +107,7 @@ class _HoverLabelState extends State<HoverLabel> {
   @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
+    final bool below = widget.side == HoverLabelSide.below;
     return CompositedTransformTarget(
       link: _link,
       child: MouseRegion(
@@ -103,11 +118,17 @@ class _HoverLabelState extends State<HoverLabel> {
           overlayChildBuilder: (BuildContext context) =>
               CompositedTransformFollower(
                 link: _link,
-                targetAnchor: Alignment.centerRight,
-                followerAnchor: Alignment.centerLeft,
-                offset: Offset(tokens.spacing.x2, 0),
+                targetAnchor: below
+                    ? Alignment.bottomRight
+                    : Alignment.centerRight,
+                followerAnchor: below
+                    ? Alignment.topRight
+                    : Alignment.centerLeft,
+                offset: below
+                    ? Offset(0, tokens.spacing.x1)
+                    : Offset(tokens.spacing.x2, 0),
                 child: Align(
-                  alignment: Alignment.centerLeft,
+                  alignment: below ? Alignment.topRight : Alignment.centerLeft,
                   child: IgnorePointer(
                     child: DecoratedBox(
                       decoration: BoxDecoration(
