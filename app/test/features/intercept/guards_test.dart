@@ -65,11 +65,14 @@ class FailingClient extends FakeDaemonClient {
   @override
   Future<Rule?> decide(FlowId id, Decision decision, {Rule? remember}) async {
     if (decisions.length >= failAfter) {
+      // Ein Abbruch, der den Stapel wirklich stoppt: Ein `FLOW_NOT_HELD`
+      // überspringt seit HUM-058 nur die eine Anfrage, die die Warteschlange
+      // verlassen hat, und die übrigen gehen weiter.
       throw DaemonException(
         const Diagnostic(
-          code: DiagnosticCodes.flowNotHeld,
+          code: DiagnosticCodes.daemonUnreachable,
           severity: Severity.error,
-          why: 'the flow is no longer held',
+          why: 'the daemon stopped answering',
         ),
       );
     }

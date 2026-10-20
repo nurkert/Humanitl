@@ -16,10 +16,14 @@ import '../../../core/domain/domain.dart';
 import '../../../core/text/format.dart';
 import '../../../core/ui/flow_visual_state.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/websocket_notice.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/decision.dart';
 import '../providers/flows.dart';
 import '../providers/now.dart';
+import '../providers/timeout_rule.dart';
+import '../rule_sentence.dart';
+import '../../../core/domain/websocket.dart';
 import 'countdown_ring.dart';
 import 'section_headers.dart';
 import 'section_query.dart';
@@ -59,6 +63,14 @@ class RequestCard extends ConsumerWidget {
                 child: _CardHeader(flow: flow),
               ),
               _CardBanner(flow: flow),
+              if (flow.decision == DecisionKind.timedOut)
+                _TimeoutRule(flow: flow),
+              if (request != null && requestOpensWebSocket(request.headers))
+                _WebSocketNotice(flow: flow),
+              if (flow.isHeld &&
+                  detail.value != null &&
+                  !requestIsReadable(detail.value))
+                const _UnreadableNotice(),
               const HHairline(),
               Expanded(
                 child: SingleChildScrollView(
@@ -169,7 +181,7 @@ class _CardBanner extends StatelessWidget {
     final HFlowState state = flow.visualState;
     final Color color = tokens.stateColor(state);
     final String text = decision == DecisionKind.timedOut
-        ? l10n.interceptTimedOutBanner
+        ? _timedOut(l10n)
         : l10n.interceptDecidedBanner(l10n.flowStateLabel(state));
     return Padding(
       padding: EdgeInsets.fromLTRB(
@@ -195,6 +207,147 @@ class _CardBanner extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+extension on _CardBanner {
+  /// Der Satz zu einer abgelaufenen Anfrage: wie lange sie wartete und was der
+  /// Agent jetzt tun kann (HUM-058, Zeile 7).
+  ///
+  /// Die Frist steht am Flow, solange die Warteschlange ihn hält; die Spanne
+  /// vom Eintreffen bis zu ihr ist die Wartezeit, nach der der Daemon
+  /// blockiert hat. Fehlt eine der beiden, sagt der Satz nur, was geschah, und
+  /// erfindet keine Zahl.
+  String _timedOut(AppLocalizations l10n) {
+    final DateTime? deadline = flow.deadline;
+    if (deadline == null || !deadline.isAfter(flow.receivedAt)) {
+      return l10n.interceptTimedOutBanner;
+    }
+    return l10n.interceptTimedOutAfter(
+      deadline.difference(flow.receivedAt).inSeconds,
+    );
+  }
+}
+
+/// „Als Regel übernehmen" unter dem Band einer abgelaufenen Anfrage (HUM-058,
+/// Zeile 7): der Satz der Regel, die der Entwurf ergäbe, und der Knopf, der
+/// sie anlegt. Vor „Merken" steht die Regel als Satz, damit sie geprüft
+/// werden kann (`docs/UX.md` 4.6).
+class _TimeoutRule extends ConsumerWidget {
+  const _TimeoutRule({required this.flow});
+
+  final Flow flow;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final HTokens tokens = HTheme.of(context);
+    final AppLocalizations l10n = context.l10n;
+    // Der Entwurf wird beobachtet, damit Satz und Regel dem Raster folgen.
+    ref.watch(rememberDraftProvider);
+    final TimeoutRuleState saving = ref.watch(timeoutRuleProvider);
+    final TimeoutRule notifier = ref.read(timeoutRuleProvider.notifier);
+    final String sentence = ruleSentence(
+      notifier.draftFor(flow),
+      l10n,
+      apexOf: ref.watch(apexResolverProvider),
+    );
+    if (sentence.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final TextStyle note = tokens.typography.ui12.tinted(tokens.colors.fg1);
+    return Padding(
+      key: const Key('intercept-timeout-rule'),
+      padding: EdgeInsets.fromLTRB(
+        tokens.spacing.x3,
+        0,
+        tokens.spacing.x3,
+        tokens.spacing.x3,
+      ),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: tokens.spacing.x3,
+        runSpacing: tokens.spacing.x1,
+        children: <Widget>[
+          if (saving.savedFor(flow.id) != null)
+            Text(
+              l10n.interceptTimedOutRuleSaved,
+              key: const Key('intercept-timeout-rule-saved'),
+              style: note,
+            )
+          else
+            HButton(
+              key: const Key('intercept-timeout-rule-save'),
+              size: HButtonSize.sm,
+              onPressed: saving.saving != null
+                  ? null
+                  : () => notifier.save(flow),
+              child: Text(l10n.interceptTimedOutSaveRule),
+            ),
+          Text(
+            sentence,
+            style: tokens.typography.mono12.tinted(tokens.colors.fg1),
+          ),
+          if (saving.failureFor(flow.id) case final Diagnostic diagnostic)
+            Text(
+              l10n.interceptTimedOutRuleFailed(diagnostic.why),
+              key: const Key('intercept-timeout-rule-failed'),
+              style: tokens.typography.ui12.tinted(
+                tokens.stateTextColor(HFlowState.error),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Die Zeile über einer gehaltenen Anfrage, deren Detail ohne Kopfzeilen
+/// kam (HUM-058, Review): Es sagt nichts darüber, ob die Anfrage eine
+/// WebSocket-Verbindung öffnet, also ist die Freigabe aus, und hier steht,
+/// warum.
+class _UnreadableNotice extends StatelessWidget {
+  const _UnreadableNotice();
+
+  @override
+  Widget build(BuildContext context) {
+    final HTokens tokens = HTheme.of(context);
+    return Padding(
+      key: const Key('intercept-card-unreadable'),
+      padding: EdgeInsets.fromLTRB(
+        tokens.spacing.x3,
+        0,
+        tokens.spacing.x3,
+        tokens.spacing.x3,
+      ),
+      child: Text(
+        context.l10n.interceptCardUnreadable,
+        style: tokens.typography.ui12.tinted(tokens.colors.fg1),
+      ),
+    );
+  }
+}
+
+/// The line under the header of a request that opens a WebSocket (HUM-058,
+/// row 11): a chip that names the protocol and the sentence that says what an
+/// allow lets through after it.
+class _WebSocketNotice extends StatelessWidget {
+  const _WebSocketNotice({required this.flow});
+
+  final Flow flow;
+
+  @override
+  Widget build(BuildContext context) {
+    final HTokens tokens = HTheme.of(context);
+    return Padding(
+      key: const Key('intercept-card-websocket'),
+      padding: EdgeInsets.fromLTRB(
+        tokens.spacing.x3,
+        0,
+        tokens.spacing.x3,
+        tokens.spacing.x3,
+      ),
+      child: WebSocketNotice(host: flow.authority.shownHost),
     );
   }
 }

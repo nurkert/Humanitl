@@ -10,6 +10,11 @@
 /// retries every two seconds (`core/ipc/connection.dart`), so
 /// a service that starts in a terminal turns this row green without anybody
 /// touching the window.
+///
+/// The line under the title counts those attempts (HUM-058, row 1). A red row
+/// that stands still reads as a window that gave up; a number that grows says
+/// the window is still asking, without a spinner for a wait nobody can
+/// measure (`docs/UX.md` 2.11).
 library;
 
 import 'package:flutter/widgets.dart';
@@ -23,10 +28,18 @@ import 'setup_check_row.dart';
 /// The daemon row.
 class DaemonCheck extends StatelessWidget {
   /// Creates the row for [check].
-  const DaemonCheck({required this.check, required this.onRetry, super.key});
+  const DaemonCheck({
+    required this.check,
+    required this.onRetry,
+    this.attempts = 0,
+    super.key,
+  });
 
   /// What the row says.
   final SetupCheck check;
+
+  /// How many attempts failed so far; 0 hides the line.
+  final int attempts;
 
   /// Tries the connection again, now.
   final VoidCallback onRetry;
@@ -34,9 +47,18 @@ class DaemonCheck extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final AppLocalizations l10n = context.l10n;
+    final HTokens tokens = HTheme.of(context);
+    final bool down = check.state != SetupCheckState.ok;
     return SetupCheckRow(
       check: check,
       title: setupCheckTitle(l10n, SetupCheckKind.daemon),
+      detail: down && attempts > 0
+          ? Text(
+              l10n.setupDaemonAttempts(attempts),
+              key: const Key('setup-daemon-attempts'),
+              style: tokens.typography.mono12.tinted(tokens.colors.fg1),
+            )
+          : null,
       control: check.state == SetupCheckState.ok
           ? null
           : HButton(

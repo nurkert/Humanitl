@@ -19,11 +19,13 @@ import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/ipc/client_providers.dart';
 import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/flow_events.dart';
 import '../../../l10n/l10n.dart';
 import '../../intercept/providers/decision.dart';
 import '../../intercept/providers/flows.dart';
+import '../../../core/domain/websocket.dart';
 import '../../tray/attention_text.dart';
 import '../../tray/desktop_ports.dart';
 import '../../tray/providers/attention.dart';
@@ -240,6 +242,14 @@ class _TrayHostState extends ConsumerState<TrayHost> {
   ///   finding arrives. The button does not send it; sending a request that
   ///   carries a secret asks for the held confirmation and a sentence naming
   ///   what goes where (`docs/UX.md` 4.7), and neither fits in a message.
+  /// * The request opens a WebSocket connection, or its request could not be
+  ///   read (HUM-058, row 11, review). The card warns that an allow lets the
+  ///   connection run on, recorded but no longer held, and a message cannot
+  ///   say that. The detail is asked for at the press, and only a request
+  ///   that demonstrably asks for no upgrade is allowed from here; anything
+  ///   else brings the window forward on the request, the same way a finding
+  ///   does. The same rule holds in the window: no allow before the detail
+  ///   (`InterceptDecision.allow`).
   Future<void> _decide(FlowId id, Decision decision) async {
     if (!ref.read(linkLiveProvider)) {
       _attention.notificationAnswered();
@@ -265,12 +275,65 @@ class _TrayHostState extends ConsumerState<TrayHost> {
       await _reveal(id);
       return;
     }
+    final AllowHold? hold = decision is DecisionAllow
+        ? await _holdOf(id)
+        : null;
+    if (hold != null) {
+      if (!mounted) {
+        return;
+      }
+      _attention.notificationAnswered();
+      // Der Grund wählt den Satz: Ein Detail, das nicht kam oder ohne
+      // Kopfzeilen kam, ist kein WebSocket (Review).
+      ref
+          .read(attentionNoticeProvider.notifier)
+          .show(
+            hold == AllowHold.upgrade
+                ? TrayDiagnostics.connectionNeedsTheWindow(id)
+                : TrayDiagnostics.detailNeedsTheWindow(id),
+          );
+      await _reveal(id);
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    // Während das Detail unterwegs war, kann die Anfrage entschieden oder die
+    // Verbindung gerissen sein; dann gilt, was oben für diese Fälle steht.
+    if (!ref.read(linkLiveProvider) ||
+        !(ref.read(flowsProvider)[id]?.isHeld ?? false)) {
+      ref
+          .read(attentionNoticeProvider.notifier)
+          .show(TrayDiagnostics.decidedAlready(id));
+      await _reveal();
+      return;
+    }
     _attention.notificationAnswered();
     // No `reveal`: answering from the message is the whole point, and the
     // window stays where it is (HUM-034 acceptance).
     await ref
         .read(interceptDecisionProvider.notifier)
         .send(id, decision, flow: flow);
+  }
+
+  /// Why the request [id] may not be allowed from here, or null when it may.
+  ///
+  /// Null when the detail of [id] suffices for an allow from here
+  /// ([detailSufficesForAllow] without a card): readable, with its headers,
+  /// and asking for no protocol upgrade. False for a WebSocket, for a detail
+  /// without headers and for one that did not arrive within
+  /// [batchDetailTimeout].
+  Future<AllowHold?> _holdOf(FlowId id) async {
+    FlowDetail? detail;
+    try {
+      detail = await ref
+          .read(daemonClientProvider)
+          .getFlow(id)
+          .timeout(batchDetailTimeout);
+    } on Object {
+      detail = null;
+    }
+    return allowHoldOf(detail, cardSeen: false);
   }
 
   /// Brings the window forward, on [id] when one is named.

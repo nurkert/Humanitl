@@ -20,6 +20,11 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-061 | Puffer | L | keine |
 | HUM-247 | Der Findings-Scan liest nur das erste gzip-Member | S | HUM-025 |
 | HUM-248 | Nächtliche Fuzz-Funde selbst minimieren und den Corpus behalten | S | HUM-056 |
+| HUM-250 | Ein Ausfall der Aufzeichnung bleibt in der Oberfläche unsichtbar (vor HUM-060) | M | HUM-026, HUM-058 |
+| HUM-251 | Ein unerreichbares Modell färbt die Zeile „LLM“ nicht | S | HUM-039, HUM-058 |
+| HUM-252 | Eine neue Regel, die nie an die Reihe kommt, wird nicht gemeldet | M | HUM-033, HUM-058 |
+| HUM-253 | Folgen aus HUM-058: Protokollwechsel im Vertrag, Drosselung | S | HUM-058 |
+| HUM-249 | Ein Tastenkürzel speichert eine andere Regel, als die Leiste zeigt (vor HUM-060) | S | HUM-028, HUM-058 |
 
 ---
 
@@ -308,6 +313,7 @@ Backpressure: Der IPC-Server erzeugt pro `Subscribe` einen `broadcast::Receiver`
 - [ ] `docs/reference/limits.md` existiert mit Tabelle aller elf Limits.
 - [ ] Sechs neue Diagnostic-Codes `LIMIT_001` bis `LIMIT_006` im Code-Register (HUM-063) mit `why`-Text in `en` und `de`.
 - [ ] Der Header der UI zeigt nach HUM-058 die Queue-Auslastung; hier reicht, dass `Held`-Events die Felder `queue_bytes`, `queue_count` tragen (Proto-Test).
+- [ ] Übernimmt aus HUM-058: Tabellenzeilen 9 und 16 samt Tests `history_detail_test: body_cap_row_has_fix` und `status_bar_test: queue_pressure_colors` (Umplanung vom 2026-10-19).
 
 ### Fallstricke
 - Ratio-Prüfung erst nach vollständigem Dekomprimieren ist falsch, siehe HUM-056. Auch eine Prüfung über den `Content-Length`-Header ist falsch, weil der bei chunked fehlt und bei Lügen des Servers nichts hilft.
@@ -419,17 +425,17 @@ Alle in der Tabelle genannten Tests. Zusätzlich:
 - Goldens unter `app/test/goldens/states/`: `daemon_missing`, `incompatible`, `sandbox_failed`, `isolation_failed`, `timeout_banner`, `large_body`, `binary_body`, `websocket_card`, `tls_rejected`, `queue_pressure`, `recorder_failure`, je dark und light.
 
 ### Akzeptanzkriterien
-- [ ] Jede der 20 Tabellenzeilen hat einen grünen Test (Liste im PR mit Zeilennummer und Testname).
-- [ ] `grep -r "showDialog\|AlertDialog" app/lib/` findet nur die drei destruktiven Stellen (Block-all, Forever-Regel löschen, Sandbox stoppen) und die Regel-Sheet-Implementierung nutzt `Sheet`, nicht `Dialog`.
-- [ ] `flutter run -d linux --dart-define=HUMANITL_FAKE=daemon_missing` zeigt den Setup-Screen mit Diagnostic-Karte und laufendem Verbindungszähler.
-- [ ] Alle 22 Goldens (11 Zustände × dark/light) eingecheckt und in CI grün.
-- [ ] Bei `Disconnected` ist `heldFlowsProvider` leer (Test `providers_reset_on_disconnect`).
-- [ ] Jeder Diagnostic-Code aus der Tabelle hat `why` in `app_en.arb` und `app_de.arb` (Schlüssel `diag_<code>_why`), Lint-Skript `tool/check_diag_l10n.dart` prüft Vollständigkeit gegen `daemon/crates/core-types/src/diagnostics/codes.rs` und läuft in CI.
-- [ ] `flutter analyze` sauber.
+- [x] Jede der 20 Tabellenzeilen hat einen grünen Test (Liste im PR mit Zeilennummer und Testname). *Neu gefasst am 2026-10-19: 15 von 20 hier, grün, Liste in der Umsetzung unten; 9 und 16 an HUM-057, 15, 17 und 20 an HUM-251, HUM-252 und HUM-250.*
+- [ ] `grep -r "showDialog\|AlertDialog" app/lib/` findet nur die drei destruktiven Stellen (Block-all, Forever-Regel löschen, Sandbox stoppen) und die Regel-Sheet-Implementierung nutzt `Sheet`, nicht `Dialog`. *Das Regel-Blatt ist ein `HSheet`. Der grep findet außerdem `showDialog` für „Über Humanitl“ (HUM-031, `app/lib/features/about/about_dialog.dart`), und `HModal` tragen außer den drei destruktiven auch Palette, Modell-Suche und Export-Menü. Keins davon ist ein Fehlerzustand; dass keiner als Modal aufgeht, belegt `no_modal_for_diagnostics`.*
+- [x] `flutter run -d linux --dart-define=HUMANITL_FAKE=daemon_missing` zeigt den Setup-Screen mit Diagnostic-Karte und laufendem Verbindungszähler. *Belegt ohne sichtbares Fenster: `start_without_daemon_shows_setup` löst dieselben Startoptionen auf (`LaunchOptions.resolve(fakeDefine: 'daemon_missing')`) und sieht Karte und Zähler von 1 auf 3 steigen.*
+- [ ] Alle 22 Goldens (11 Zustände × dark/light) eingecheckt und in CI grün. *Angepasst an den Standard von HUM-054: fünf neue Namen `states_*` × vier Varianten = 20 Bilder, vier Zustände über bestehende Goldens, zwei fehlen mit ihren Zeilen. Lokal grün mit `scripts/ci/goldens-placeholder.sh`; der Haken für CI folgt dem Lauf auf dem Issue-Branch.*
+- [x] ~~Bei `Disconnected` ist `heldFlowsProvider` leer (Test `providers_reset_on_disconnect`).~~ *Umformuliert, Entscheidung Projekteigentümer 2026-10-19 (`docs/UX.md` 4.2, Fall 4):* Bei `Disconnected` bleibt die Queue als eingefrorener Schnappschuss stehen, keine Entscheidung geht hinaus, und nach dem Wiederanschluss gleicht `ListFlows` ab. Tests: `frozen_shell_test` `a_break_keeps_the_shell`, `nothing_is_decided_while_the_connection_is_down`, `reconnect_from_the_banner_thaws_the_queue`; `flows_test` `resync_on_lagged`, `reconnect_resyncs_after_the_stream_broke`; `stream_done_test` `a_stream_that_ends_cleanly_reconnects_and_resyncs`.
+- [x] Jeder Diagnostic-Code aus der Tabelle hat `why` in `app_en.arb` und `app_de.arb` (Schlüssel `diag_<code>_why`), Lint-Skript `tool/check_diag_l10n.dart` prüft Vollständigkeit gegen `daemon/crates/core-types/src/diagnostics/codes.rs` und läuft in CI. *Seit HUM-052: Schlüssel `diag<CODE>Why`, geprüft von der Prüfung `diagnostic` in `app/tool/l10n_lint.dart` (`make l10n-lint`, CI) für jeden Code des Registers.*
+- [x] `flutter analyze` sauber.
 
 ### Fallstricke
 - Reconnect-Backoff ohne Obergrenze führt nach Stunden zu Minuten-Wartezeiten. Max 10 s.
-- Bei `Disconnected` die Provider nicht leeren heißt, dass eine Karte „held" bleibt, obwohl der Daemon sie längst per Timeout geblockt hat. Der Nutzer klickt Allow ins Leere. Deshalb ist Leeren Pflicht, auch wenn es kurz flackert.
+- *Überholt durch die Entscheidung des Projekteigentümers vom 2026-10-19 (einfrieren statt leeren, `docs/UX.md` 4.2, Fall 4); der Klick ins Leere ist dort verhindert, weil keine Entscheidung hinausgeht und nach dem Wiederanschluss abgeglichen wird:* Bei `Disconnected` die Provider nicht leeren heißt, dass eine Karte „held" bleibt, obwohl der Daemon sie längst per Timeout geblockt hat. Der Nutzer klickt Allow ins Leere. Deshalb ist Leeren Pflicht, auch wenn es kurz flackert.
 - Rückkehr-Banner darf nicht bei jedem Fokuswechsel erscheinen, nur wenn zwischen Fokusverlust und Rückkehr mindestens ein Flow angekommen ist oder älter als 60 s wurde.
 - Hex-Ansicht für 50 MiB Body darf nicht den ganzen Body rendern. Nur den Vorschau-Ausschnitt, virtualisiert.
 - `find.byType(Dialog)` findet shadcn-Dialoge nicht zwingend, weil shadcn eigene Overlay-Typen nutzt. Den Wrapper in `packages/ui` so bauen, dass jeder Dialog über `HModal` geht, und im Test `find.byType(HModal)` prüfen.
@@ -440,6 +446,37 @@ Alle in der Tabelle genannten Tests. Zusätzlich:
 - BACKLOG.md Prinzip 7, ADR-012, Abschnitt 5 (Modal-Regel), Usability-Review 6 (Fehler und Randfälle)
 - CONVENTIONS.md 3.2 (`Diagnostic`, `FixAction`), 3.9 (Provider-Namen)
 - HUM-034 (Notification, Tray), HUM-045, HUM-047, HUM-049, HUM-063, HUM-068
+
+> **Umsetzung (HUM-058, 2026-10-19).** Als dieses Issue begann, stand der größte Teil der Tabelle schon: HUM-019 und HUM-044 hatten Verbindungszustand, Setup-Bildschirm und eingefrorene Shell gebaut, HUM-030 die Rumpf-Ansichten, HUM-034 das Rückkehr-Banner, HUM-047 den Editor, HUM-136 das Ende des Terminals. Gebaut wurde, was fehlte; was es schon gab, ist unten mit seinen Tests genannt. Pfade und Namen folgen dem Code, nicht der Liste „Betroffene Pfade": `ConnectionStatus` und `connectionStateProvider` stehen in `app/lib/core/ipc/connection.dart`, die Karte heißt `HDiagnosticCard` (`app/lib/core/ui/h_diagnostic_card.dart`), der Knopf der Abhilfe `FixControl` (`app/lib/core/ui/fix_control.dart`).
+>
+> **Codes.** Das Register belegt die Nummern anders als die Tabelle: Verbindung verloren ist `DAEMON_001` (die Tabelle sagt `DAEMON_002`), der unverträgliche Vertrag `DAEMON_002` (Tabelle `DAEMON_003`, im Register „Socket bereits belegt"), das zurückgewiesene Token `IPC_001` (Tabelle `DAEMON_004`, im Register das Laufzeitverzeichnis), der zweite Schreiber im Terminal `TERM_001`. Die Bereiche `LIMIT` und die Codes `LIMIT_001` bis `LIMIT_006` gibt es noch nicht; sie gehören HUM-057.
+>
+> | Nr | Stand | Test |
+> |---|---|---|
+> | 1 | Gebaut: Die Zeile des Dienstes zählt die gescheiterten Versuche („3 attempts failed · trying again", `ConnectionStatus.failed.attempts`), Szenario `daemon_missing`. Karte und Abhilfe (`InstallService`, bei `--fake`/`--socket` der Startbefehl) gab es seit HUM-044. | `connection_state_test`: `start_without_daemon_shows_setup` (über `LaunchOptions.resolve(fakeDefine: 'daemon_missing')`, also derselbe Weg wie `--dart-define`), `the attempts line goes once the daemon answers`; Golden `states_daemon_missing` |
+> | 2 | Bestand, **Entscheidung Projekteigentümer 2026-10-19**: Die Shell bleibt stehen und friert ein (`docs/UX.md` 4.2, Fall 4, HUM-044), statt nach 5 s zum Setup zu wechseln und die Warteschlange zu leeren. Keine Entscheidung geht hinaus, solange die Verbindung fehlt, und nach dem Wiederanschluss gleicht ein `ListFlows` die gehaltenen Zeilen ab, so dass eine längst abgelaufene verschwindet. Neu: Der Rückfall des Ereignisstroms ist auf 10 s gedeckelt statt auf 30 s, und ein Strom, der sauber endet, wird wie ein abgerissener neu aufgebaut (vorher blieb die Warteschlange danach taub; Review). | `frozen_shell_test`: `a_break_keeps_the_shell`, `nothing_is_decided_while_the_connection_is_down`, `reconnect_from_the_banner_thaws_the_queue`; `flows_test`: `resync_on_lagged`, `reconnect_resyncs_after_the_stream_broke`; `stream_done_test`: `a_stream_that_ends_cleanly_reconnects_and_resyncs` |
+> | 3 | Gebaut: Kein `Subscribe`, bevor `GetInfo` angenommen ist (`flowEventsProvider` wartet auf `linkLiveProvider`, wo es die Verbindung gibt). Karte und Abhilfe `OpenUrl` gab es. | `connection_state_test`: `major_mismatch_incompatible`; Golden `states_incompatible` |
+> | 4 | Gebaut: `IPC_001` trägt `CopyCommand("systemctl --user restart humanitld")`, auch der Befund, den der Daemon selbst schickt (`ClientDiagnostics.withTokenFix`); bei `--fake` oder `--socket` keinen, weil dann nicht die Unit gemeint ist. Szenario `unauthenticated` (als Daemon von Hand, also ohne Vorschlag). | `connection_state_test`: Gruppe `unauthenticated` |
+> | 5 | Bestand (HUM-068). | Golden `states_sandbox_failed` (vier Varianten; das alte `sandbox_header_failed` hat nur zwei) |
+> | 6 | Bestand (HUM-041, HUM-054). | Golden `isolation_panel_failed` |
+> | 7 | Gebaut: Das Band nennt die Wartezeit und die Folge („Blocked (timed out after 300 s). The agent may retry.“). Darunter steht der Satz der Regel aus dem erhaltenen Entwurf des Rasters und „Als Regel übernehmen“; der Knopf legt sie über `Rules(add)` an (offenes Raster: seine Dauer, sonst die Session). Die Zeile bleibt 3 s statt 5 s stehen (`docs/UX.md` 4.8, HUM-029). | `flow_card_states_test`: `timeout_banner_names_the_wait`, `timeout_banner_keeps_draft`; Golden `request_card_timed_out` (neu erzeugt) |
+> | 8 | Bestand (HUM-030, HUM-047) mit Abweichung: „Bearbeiten" bleibt an, weil Methode, Pfad und Kopfzeilen auch bei einem zu großen Rumpf bearbeitbar sind; der Editor sagt, dass der Rumpf es nicht ist. | `detect_too_large`, `hex_first_64k_only`, `binary_body_disables_editor`; Golden `request_card_large` |
+> | 9 | **An HUM-057** (Umplanung 2026-10-19): `LIMIT_001` steht nicht im Register. | dort: `history_detail_test: body_cap_row_has_fix` |
+> | 10 | Bestand (HUM-030, HUM-047) plus gebaut: über einem binären Rumpf die Vermutung aus den ersten Bytes („The first bytes look like image/png …“) und, wo der Detektor nur druckbare Läufe durchsucht, genau dieser Satz (`app/lib/core/body/binary_facts.dart`, Spiegel von `is_textual` in `daemon/crates/findings/src/input.rs`). | `binary_facts_test`: `binary_body_hex_view`, `magic bytes`, `the strings line mirrors the detector`; `detect_binary_ratio`, `the hex view`, `binary_body_disables_editor`; Goldens `request_card_binary`, `history_detail_body_hex_*` (neu erzeugt) |
+> | 11 | Gebaut: Abzeichen „WebSocket“, Satz über die dauerhafte Verbindung, Knopf „Allow connection“ / „Verbindung öffnen“ (bestätigt vom Projekteigentümer 2026-10-19). Bis das Detail geladen ist, ist die Freigabe aus, auch über `Enter`, `A` und jede Gültigkeit (Review): Erst das Detail sagt, ob gewarnt werden muss. Die Freigabe aus der Benachrichtigung fragt beim Druck nach dem Detail und gibt einen WebSocket-Aufbau nie frei; das Fenster kommt dann auf der Anfrage nach vorn. Eine Freigabe über mehrere Anfragen (Gruppe, Auswahl, „Allow all“) fragt in `_many` nach jedem Detail; ein WebSocket-Aufbau oder eine Anfrage ohne Detail bleibt gehalten, der Cursor springt auf sie, und die Leiste sagt warum. Durch den Sammelpfad darf nur die eine Anfrage, deren Karte mit geladenem Detail entschieden wurde (`BatchRequest.cardSeen`, etwa hinter dem Modal für eine Regel „für immer“). Ein Detail ohne Kopfzeilen gilt auf allen Wegen als nicht verfügbar (`requestIsReadable`, `detailSufficesForAllow`), und die Karte sagt es. Ein Stapel überspringt eine Anfrage, die die Warteschlange inzwischen verlassen hat, statt abzubrechen, und wartet auf jedes Detail höchstens 5 s. Trägt ein Stapel eine Regel, ist sie das Objekt, das beim Öffnen des Modals beziehungsweise für den Satz der Leiste einmal gebaut wurde (`ShownRule` im `BatchRequest`, samt Quelle); `_many` baut keine eigene, und die Regel reist nur an der Entscheidung ihrer Quelle, die zuerst geht. Ist die Quelle zurückgehalten, verlassen, gesperrt oder mit `FLOW_NOT_HELD` beantwortet, geht nichts hinaus und keine Regel entsteht. Die Leiste und die Benachrichtigung nennen den wirklichen Grund (WebSocket, unlesbar, Detail kam nicht, Warteschlange verlassen). Der Editor zeigt über dem Senden dieselbe Zeile wie die Karte. Die Erkennung spiegelt `requested_upgrade` in `daemon/crates/proxy/src/connect.rs` (nur die Kopfzeile `Upgrade`, das Schema zählt dort nicht; nach dem Review angeglichen). `FlowSummary.upgrade` im Vertrag ist HUM-253. | `flow_card_states_test`: `websocket_card_copy`, `requestOpensWebSocket mirrors the daemon`; `allow_waits_for_detail_test`: `allow_waits_for_the_detail`; `tray_websocket_test`: `a_notification_allows_no_websocket_unseen`; `batch_websocket_test`: `a_group_allow_leaves_the_websocket_held`, `a request whose detail does not arrive stays held too`; `allow_paths_test` (12 Tests); `editor_websocket_test`; Golden `states_websocket_card` |
+> | 12 | Bestand (HUM-032): laufende Summe mit „still arriving", danach die Gesamtgröße. Nicht gebaut: Drosselung auf 10 Hz. | `history_streaming_test`: `streaming_counter_updates` |
+> | 13 | Bestand (HUM-034). | `attention_test`: `banner_after_60s_on_focus`, `banner_stays_away_below_the_threshold`, `banner_goes_when_the_queue_empties`; `return_banner_test`: `the_banner_says_one_line_and_offers_two_ways_out` |
+> | 14 | Bestand (HUM-045). | Golden `states_tls_rejected` (vier Varianten; `intercept_diagnostic_tls` hat zwei) |
+> | 15 | **An HUM-251**: Der Daemon meldet ein unerreichbares Modell im Lauf nicht als `LLM_001`, und ein gescheiterter Verbindungsaufbau ist nach CONVENTIONS 4.10 `Failed`, nie `Responded{502}`. | — |
+> | 16 | **An HUM-057** (Umplanung 2026-10-19): `LIMIT_002` fehlt, und die Oberfläche kennt `limits.hold_max_flows` nicht. | dort: `status_bar_test: queue_pressure_colors` |
+> | 17 | **An HUM-252**: Der Dry-Run zählt nur die Treffer einer Regel; welche frühere Regel jeden Testfall fängt, kann nur der Daemon sagen (ADR-018). | — |
+> | 18 | Bestand (HUM-049). | `findings_pause_test`, Golden `findings_pause` |
+> | 19 | Gebaut: Endet der Terminal-Strom ohne Exit-Code oder bricht die Leitung (`DAEMON_001`), schreibt das Fenster „[Humanitl] Verbindung zum Terminal verloren, verbinde neu …“ als letzte Zeile ins Terminal (gedämpft, SGR 90) und hängt sich nach 1 s, 2 s, 4 s bis höchstens 10 s wieder an; das `Open` trägt die Geometrie von jetzt, Emulator und Rücklauf bleiben. Eine Absage und ein Ende des Agenten planen nichts. `TERM_001` heißt im Register „zweiter Schreiber“; kommt er beim Wiederanschluss, hängt sich das Fenster wie seit HUM-067 lesend an. Der Streifen von HUM-136 bleibt. | `terminal_reconnect_test`: `reconnect_keeps_buffer`, `an agent that ended is not attached again`, `a refusal of the daemon is not tried again`; `terminal_end_test` (HUM-136) |
+> | 20 | **An HUM-250** (vor HUM-060): Der Daemon schreibt einen Fehler der Aufzeichnung nur ins Log (`daemon/crates/recorder/src/writer.rs`, `report`). | — |
+>
+> **Goldens.** Seit HUM-054 hat jedes Golden vier Varianten (dunkel und hell, Englisch und Deutsch) und steht in `app/test/goldens/support/golden_names.dart`. Neu sind fünf Namen mit dem Präfix `states_` statt eines Ordners `states/` (`app/test/goldens/states_golden_test.dart`), 20 Bilder; vier weitere Zustände hält HUM-054 schon in derselben Form fest, zwei fehlen mit ihren Zeilen.
+>
+> **Weitere Tests.** `diagnostic_card_all_fix_actions` steht in `app/test/core/ui/fix_action_verbs_test.dart`; die ARB-Schlüssel der Verben heißen seit HUM-044 `setupFix…`, nicht `fix_set_env`. `no_modal_for_diagnostics` steht in `app/test/features/shell/no_modal_test.dart`, mit einer Gegenprobe, dass der Finder ein `HModal` überhaupt sieht.
 
 ---
 
@@ -2858,3 +2895,102 @@ Zwei Vorschläge aus dem Review von Antigravity zu HUM-056, außerhalb seines Um
 
 ### Referenzen
 HUM-056, `.github/workflows/fuzz-nightly.yml`, Review von Antigravity zu HUM-056.
+
+---
+
+## HUM-250 · Ein Ausfall der Aufzeichnung bleibt in der Oberfläche unsichtbar
+Sprint: 5 · Größe: M · Abhängigkeiten: HUM-026, HUM-058 · Blockiert: HUM-060 (vor HUM-060 zu erledigen)
+
+### Kontext
+HUM-058, Zeile 20: Ist die Platte voll oder die Datenbank gesperrt, schreibt der Recorder den Befund nur ins Log (`daemon/crates/recorder/src/writer.rs`, `report`, `tracing::warn!`). Kein Client erfährt davon. Die Oberfläche sagt weiter „alles wird aufgezeichnet“, während nichts mehr ankommt; die Sicherheitsaussage in `README.md` hängt an dieser Aufzeichnung (CONVENTIONS 4.10, letzter Punkt).
+
+### Ziel
+Ein Fehler der Aufzeichnung erreicht jeden Client als `FlowEvent.Diagnostic` mit `RECORDER_001` (öffnen) beziehungsweise `RECORDER_003` (schreiben), höchstens einmal je Ursache, und die Oberfläche zeigt ihn: Statusleiste rot „Aufzeichnung gestört“, jede neue Karte trägt den Hinweis „wird nicht aufgezeichnet“, und die Freigabe bekommt einmal je Sitzung eine Bestätigungs-Pause (kein Modal, `docs/UX.md` 5.4). Kehrt die Aufzeichnung zurück, sagt ein zweiter Befund das, und die Hinweise verschwinden.
+
+### Nicht-Ziel
+Ein Puffer, der verlorene Flows nachträglich schreibt.
+
+### Dazu (aus dem Review von HUM-058, Runde 3)
+`GetFlow` liefert für einen gehaltenen Flow die Anfrage aus der Live-Registry des Proxys, bevor es auf eine unvollständige Aufzeichnung zurückfällt. Eine aus der Aufzeichnung nachgebaute Anfrage ohne Kopfzeilen verschweigt sonst ein `Upgrade: websocket` der gehaltenen. Die Oberfläche hält eine solche Anfrage seit HUM-058 auf allen drei Wegen gehalten (`requestIsReadable` in `app/lib/core/domain/websocket.dart`); mit diesem Punkt wird sie wieder entscheidbar.
+
+### Akzeptanzkriterien
+- [ ] Daemon: ein Test, der den Schreiber scheitern lässt und genau ein `FlowEvent.Diagnostic` mit `RECORDER_003` auf dem Strom sieht.
+- [ ] Oberfläche: `status_bar_test: recorder_failure_marks_cards` (Statusleiste, Hinweis auf neuen Karten, einmalige Pause) und ein Golden `states_recorder_failure` in vier Varianten.
+- [ ] Mutationsbeweise für beide Hälften.
+
+### Referenzen
+HUM-058 (Zeile 20 und Umsetzung), HUM-026, `docs/SECURITY.md`.
+
+## HUM-251 · Ein unerreichbares Modell färbt die Zeile „LLM“ nicht
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-039, HUM-058 · Blockiert: nichts
+
+### Kontext
+HUM-058, Zeile 15: Scheitert die Durchreiche zum Modell an der Verbindung, entsteht ein `Failed`-Flow (CONVENTIONS 4.10), aber kein Befund `LLM_001`. Die Zeile „LLM“ im Isolation-Panel bleibt eine neutrale Ausnahme-Zeile. Sie aus den Flows abzuleiten wäre Fachlogik in der Oberfläche (ADR-018).
+
+### Ziel
+Der Daemon meldet ein im Lauf unerreichbares Modell als `LLM_001` mit Fix `ChangeSetting{llm.endpoint}` am Sandbox-Status, und die Zeile „LLM“ wird rot, bis eine Durchreiche wieder gelingt.
+
+### Akzeptanzkriterien
+- [ ] Daemon-Test: Connect-Fehler der Durchreiche setzt `LLM_001` am Status, ein Erfolg nimmt ihn weg.
+- [ ] `sandbox_screen_test: llm_unreachable_row` mit Mutationsbeweis.
+
+### Referenzen
+HUM-058 (Zeile 15), HUM-039, HUM-041.
+
+## HUM-252 · Eine neue Regel, die nie an die Reihe kommt, wird nicht gemeldet
+Sprint: 5 · Größe: M · Abhängigkeiten: HUM-033, HUM-058 · Blockiert: nichts
+
+### Kontext
+HUM-058, Zeile 17: Das Regel-Blatt warnt nicht, wenn eine frühere Regel jeden Fall der neuen schon fängt. Der Dry-Run zählt nur die Treffer der einen Regel. Die Prüfung „überdeckt“ gehört in den Daemon, der die Reihenfolge der Ränge kennt (CONVENTIONS 4.5).
+
+### Ziel
+`Rules(dry_run)` meldet für die neue Regel an ihrer Position, ob eine frühere Regel jeden erzeugten Testfall fängt, und nennt sie; das Blatt zeigt vor dem Speichern amber „Wird von Regel #3 (`block **.example.com`) überdeckt“, Speichern bleibt erlaubt. Der Befund bekommt einen eigenen Code im Register (`RULES_001` heißt dort „rules.yaml unlesbar“). Heuristik, kein Beweis: Bei einem einzigen nicht gefangenen Testfall schweigt die Warnung.
+
+### Akzeptanzkriterien
+- [ ] Daemon-Test über die Ränge, `rule_sheet_test: shadowed_rule_warning`, Mutationsbeweise.
+
+### Referenzen
+HUM-058 (Zeile 17, Fallstrick zur Heuristik), HUM-033, HUM-104.
+
+## HUM-253 · Folgen aus HUM-058: Protokollwechsel im Vertrag, Drosselung
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-058 · Blockiert: nichts
+
+### Kontext
+Kleine Reste aus HUM-058, gebündelt (die letzten beiden Kriterien kamen aus Runde 3 des Reviews):
+
+1. **`FlowSummary.upgrade` im Vertrag.** Die Oberfläche spiegelt heute `requested_upgrade` aus `daemon/crates/proxy/src/connect.rs` über die Kopfzeilen des Details (`app/lib/features/intercept/websocket.dart`), und die Freigabe wartet deshalb auf `GetFlow`. Mit dem Feld in der Zeile entfällt der Spiegel, und die Karte warnt ab der ersten Zeile.
+2. **Drosselung des Streaming-Zählers auf 10 Hz** (Fallstrick zu Zeile 12): Heute faltet `HistoryPageNotifier` jedes `ResponseChunk` sofort in die Zeile.
+3. ~~**Die Freigabe aus der Benachrichtigung** (HUM-034) entscheidet ohne die Karte, also auch über einen WebSocket-Aufbau, dessen Warnung niemand gesehen hat.~~ *Erledigt in HUM-058 (2026-10-19): Der Knopf fragt beim Druck nach dem Detail und gibt nur frei, was nachweislich keinen Wechsel verlangt; sonst kommt das Fenster auf der Anfrage nach vorn (`tray_websocket_test`). Mit Punkt 1 kann die Meldung den Knopf später gleich weglassen.*
+
+### Akzeptanzkriterien
+- [ ] Proto-Feld mit Minor-Erhöhung, Spiegel in der Oberfläche entfernt, Test der Karte ohne Detail.
+- [ ] Drosselung mit Test über viele Chunks in kurzer Zeit.
+- [ ] Eine Regel aus einer WebSocket-Anfrage trägt kein `upgrade` und trifft sie deshalb nie (`daemon/crates/rules/src/eval.rs`, Zeile 378 zum Stand vom 2026-10-19): Der Regelvorschlag aus Raster, Gruppenkopf und „Als Regel übernehmen“ übernimmt den Protokollwechsel der Anfrage, wie es `PROXY_008` schon tut (CONVENTIONS 4.10). Kandidat aus dem Review von HUM-058.
+- [ ] Randfall leerer `Content-Type`: Der Daemon durchsucht einen Rumpf mit vorhandener, aber leerer Kopfzeile im Modus `printable_only`, die Oberfläche (`scannedAsStrings`) prüft dann wie ohne Kopfzeile auf UTF-8. Angleichen, damit der Satz über den Scan stimmt.
+- [ ] „Allow all“ fragt das Detail jeder Anfrage zugleich ab (`_holds` in `decision.dart`); bei einer langen Warteschlange fehlt eine Obergrenze für die gleichzeitigen `GetFlow`. Kandidat aus Runde 4 des Reviews von HUM-058.
+- [ ] `TimeoutRuleState.failure` hält nur einen Befund; scheitern zwei Regeln nacheinander, verliert die erste Anfrage ihren Grund. Kandidat aus Runde 4 des Reviews von HUM-058.
+- [ ] Bricht ein Stapel in `_abortAfter` ab, fehlt in der Leiste der Satz zu den Anfragen, die er zurückgehalten hatte. Kandidat aus Runde 5 des Reviews von HUM-058.
+- [x] ~~Benachrichtigung ohne Freigabe für einen WebSocket-Aufbau, Test in `attention_test`.~~ *Erledigt in HUM-058, Test `tray_websocket_test: a_notification_allows_no_websocket_unseen`.*
+
+### Referenzen
+HUM-058 (Zeilen 11 und 12, Review vom 2026-10-19), HUM-034, HUM-091.
+
+## HUM-249 · Ein Tastenkürzel speichert eine andere Regel, als die Leiste zeigt
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-028, HUM-058 · Blockiert: HUM-060 (vor HUM-060 zu erledigen)
+
+### Kontext
+Aus Runde 6 des Reviews von HUM-058 (Codex). Die Aktionsleiste zeigt den Satz der Regel für die Aktion, die gerade hervorgehoben ist (`app/lib/features/intercept/widgets/action_bar.dart`, `blockHighlighted`). Ein Tastenkürzel kann aber die andere Aktion auslösen: Steht die Maus über „Blockieren“, heißt der Satz „block …“, und ein Druck auf `A` speichert eine Allow-Regel, die niemand gelesen hat. Vor „Merken“ soll die Regel als Satz stehen, damit sie geprüft werden kann (`docs/UX.md` 4.6). Das Verhalten war schon vor HUM-058 so; HUM-058 hat nur den Weg über mehrere Anfragen geschlossen (`ShownRule`).
+
+### Ziel
+Keine Entscheidung speichert eine Regel, deren Satz nicht auf dem Schirm stand. Mögliche Wege, im Issue zu entscheiden:
+- beide Sätze zeigen, den für Senden und den für Blockieren;
+- ein Kürzel, das eine Regel anlegen würde, zeigt zuerst ihren Satz und verlangt einen zweiten Druck;
+- ein neutraler Satz ohne Aktion, und die Aktion steht am Knopf.
+
+### Akzeptanzkriterien
+- [ ] Widget-Test: Raster offen mit Gültigkeit Session, Maus über „Blockieren“ (der Satz sagt „block …“), Druck auf `A`. Erwartet: Es wird keine Allow-Regel gespeichert, deren Satz nicht stand, oder der Satz der Allow-Regel stand vor dem Speichern sichtbar da. Mit Mutationsbeweis.
+- [ ] Dasselbe umgekehrt: Fokus auf dem Ventil, Satz „allow …“, Kürzel für Blockieren.
+- [ ] `docs/UX.md` 4.6 nennt den gewählten Weg.
+
+### Referenzen
+HUM-058 (Review Runde 6), HUM-028, `docs/UX.md` 4.6 und 5.4.

@@ -20,6 +20,7 @@ import '../../../core/domain/domain.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/decision.dart';
+import '../../../core/text/rule_sentence.dart' as sentence;
 import '../rule_sentence.dart';
 
 /// How many paths the modal lists before it counts the rest.
@@ -85,6 +86,17 @@ class _BatchModalState extends ConsumerState<BatchModal>
     );
   }
 
+  /// Der Satz zu [rule], dem Objekt, das das Bestätigen speichert.
+  ///
+  /// Eine Regel für eine Stunde läuft ab dem Öffnen des Modals; der Satz
+  /// nennt deshalb die genaue Uhrzeit ihres Endes und nicht nur „1 Stunde",
+  /// die beim Bestätigen schon weniger wäre (Review Runde 6).
+  String _shownSentence(Rule rule, AppLocalizations l10n) {
+    final String text = sentence.ruleSentence(rule, l10n, now: DateTime.now());
+    final String exact = sentence.ruleExpiryExact(rule.expires, l10n);
+    return exact.isEmpty ? text : '$text ($exact)';
+  }
+
   @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
@@ -104,7 +116,16 @@ class _BatchModalState extends ConsumerState<BatchModal>
     // before it is saved (`docs/UX.md` 4.6). Eine Frage, die nicht aus der
     // Auswahl kommt, speichert keine Regel, also nennt sie auch keine: Der
     // Merk-Entwurf gehört der ausgewählten Anfrage (HUM-218).
-    final String rule = request.fromSelection ? _ruleSentence(request) : '';
+    // Der Satz der Regel, die das Bestätigen speichert: das Objekt aus der
+    // Anfrage, beim Öffnen einmal gebaut (HUM-058, Review Runde 5). Nur die
+    // Regel aus einer abgelaufenen Anfrage entsteht erst beim Bestätigen und
+    // wird hier noch aus dem Entwurf gelesen.
+    final ShownRule? shown = request.shownRule;
+    final String rule = shown != null
+        ? _shownSentence(shown.rule, l10n)
+        : request.ruleOnly
+        ? _ruleSentence(request)
+        : '';
     return CallbackShortcuts(
       bindings: _bindings,
       child: FocusScope(
@@ -144,6 +165,10 @@ class _BatchModalState extends ConsumerState<BatchModal>
                   forever
                       ? (blocking
                             ? l10n.interceptForeverConfirmBlock
+                            // Eine Regel aus einer abgelaufenen Anfrage
+                            // sendet nichts (HUM-058, Zeile 7).
+                            : request.ruleOnly
+                            ? l10n.interceptForeverConfirmRuleOnly
                             : l10n.interceptForeverConfirm)
                       : blocking
                       ? l10n.interceptBlockGroup(flows.length)

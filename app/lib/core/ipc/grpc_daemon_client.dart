@@ -896,7 +896,7 @@ Diagnostic diagnosticFromGrpcError(
 }) {
   final Diagnostic? shipped = diagnosticFromTrailers(error.trailers);
   if (shipped != null) {
-    return shipped;
+    return ClientDiagnostics.withTokenFix(shipped, byHand: fake || socketFlag);
   }
   final String detail = <String>[
     grpcStatusName(error.code),
@@ -907,6 +907,7 @@ Diagnostic diagnosticFromGrpcError(
     return ClientDiagnostics.tokenRejected(
       tokenPath: tokenPath,
       detail: detail,
+      byHand: fake || socketFlag,
     );
   }
   return ClientDiagnostics.daemonUnreachable(

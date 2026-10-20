@@ -271,7 +271,7 @@ List<ScriptedEvent> trayHoldScript(
             path: '/graphql',
             state: FlowState.received,
           );
-          state.details[id] = FlowDetail(summary: flow);
+          state.details[id] = trayDetail(flow);
           return FlowEvent.received(at: now, flow: flow);
         }),
       )
@@ -314,7 +314,7 @@ List<ScriptedEvent> trayLateFindingScript() {
         path: '/graphql',
         state: FlowState.received,
       );
-      state.details[id] = FlowDetail(summary: flow);
+      state.details[id] = trayDetail(flow);
       return FlowEvent.received(at: now, flow: flow);
     }),
     ScriptedEvent(
@@ -377,7 +377,7 @@ FakeDaemonClient trayDaemonAlreadyHolding(int count) {
       heldAt: now,
     );
     client.state.flows[id] = flow;
-    client.state.details[id] = FlowDetail(summary: flow);
+    client.state.details[id] = trayDetail(flow);
   }
   return client;
 }
@@ -393,3 +393,22 @@ class TrayFixedNow extends Now {
   @override
   DateTime build() => _at;
 }
+
+/// Das Detail zu [flow], mit der Kopfzeile `Host`, die jede HTTP/1.1-Anfrage
+/// trägt. Ein Detail ohne Anfrage oder ohne Kopfzeilen gilt der Oberfläche
+/// als nicht lesbar, und die Benachrichtigung gibt es dann nicht frei
+/// (HUM-058).
+FlowDetail trayDetail(Flow flow) => FlowDetail(
+  summary: flow,
+  request: HttpRequest(
+    method: flow.method,
+    scheme: flow.scheme,
+    authority: flow.authority,
+    pathAndQuery: flow.path,
+    headers: <Header>[
+      Header(name: 'host', value: flow.authority.host.codeUnits),
+    ],
+    body: const BodyRef(sha256: <int>[], size: 0),
+    version: 'HTTP/1.1',
+  ),
+);

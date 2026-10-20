@@ -49,6 +49,9 @@ Future<(ProviderContainer, Flow, Flow)> modalOverTwo(
     deadline: testStart.add(const Duration(minutes: 5)),
   );
   for (final Flow flow in <Flow>[first, second]) {
+    // Eine Freigabe über mehrere Anfragen fragt nach jedem Detail; ohne
+    // Detail bliebe die Anfrage gehalten (HUM-058).
+    client.details[flow.id] = detailFor(flow);
     client
       ..emit(FlowEvent.received(at: testStart, flow: flow))
       ..emit(

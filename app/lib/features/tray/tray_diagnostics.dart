@@ -81,4 +81,44 @@ abstract final class TrayDiagnostics {
             '${findings == 1 ? 'finding' : 'findings'}; '
             'allowing it needs the confirmation in the window',
       );
+
+  /// `IPC_004`: `Allow` was pressed on a message for a request that opens a
+  /// WebSocket connection, or whose request could not be read (HUM-058).
+  ///
+  /// An allow there lets the connection run on, recorded but no longer held;
+  /// the card says so, and a notification button cannot. The decision is
+  /// refused here rather than sent, and the window comes forward on the
+  /// request instead.
+  ///
+  /// It shares `IPC_004` with [findingsNeedTheWindow], and the notice tells
+  /// the two apart by [connectionTitle]: the register has one code for "this
+  /// decision cannot be sent as asked", and the reason differs.
+  static Diagnostic connectionNeedsTheWindow(FlowId flowId) => Diagnostic(
+    code: DiagnosticCodes.decideRequestInvalid,
+    severity: Severity.info,
+    title: connectionTitle,
+    why:
+        'flow ${flowId.value} may open a lasting WebSocket connection; '
+        'allowing it needs the window, where the card says what stays open',
+  );
+
+  /// The title that marks [connectionNeedsTheWindow]; the notice replaces it
+  /// with the localised one.
+  static const String connectionTitle = 'WebSocket connection needs the window';
+
+  /// `IPC_004`: `Allow` was pressed on a message for a request whose detail
+  /// did not arrive in time or came without its headers (HUM-058, review).
+  /// Nothing tells whether it opens a lasting connection; the window comes
+  /// forward on the request instead.
+  static Diagnostic detailNeedsTheWindow(FlowId flowId) => Diagnostic(
+    code: DiagnosticCodes.decideRequestInvalid,
+    severity: Severity.info,
+    title: detailTitle,
+    why:
+        'the request of flow ${flowId.value} could not be read in full; '
+        'allowing it needs the window',
+  );
+
+  /// The title that marks [detailNeedsTheWindow].
+  static const String detailTitle = 'Request detail needs the window';
 }
