@@ -195,6 +195,26 @@ abstract interface class WindowPort {
   /// Ends the program the way the tray menu asks for it.
   Future<void> quit();
 
+  /// Closes the window the way the close button of the window manager does
+  /// (HUM-255).
+  ///
+  /// Not [quit]: this is the request the window manager sends, so whatever
+  /// answers that request -- today GTK, which closes the window and with it
+  /// the program -- answers this one as well.
+  Future<void> close();
+
+  /// Hands the window to the desktop as an icon. A tiling window manager may
+  /// ignore it.
+  Future<void> minimize();
+
+  /// Maximizes the window, or restores it when it is maximized. A tiling
+  /// window manager may ignore it.
+  Future<void> toggleMaximize();
+
+  /// Lets the window manager move the window with the pointer that is down
+  /// right now; the header bar calls it when a drag starts on it.
+  Future<void> startDragging();
+
   /// Releases whatever the port holds.
   Future<void> dispose();
 }
@@ -288,6 +308,18 @@ class _InertWindow implements WindowPort {
 
   @override
   Future<void> quit() async {}
+
+  @override
+  Future<void> close() async {}
+
+  @override
+  Future<void> minimize() async {}
+
+  @override
+  Future<void> toggleMaximize() async {}
+
+  @override
+  Future<void> startDragging() async {}
 
   @override
   Future<void> dispose() async {}
