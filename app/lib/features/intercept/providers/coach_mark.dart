@@ -94,11 +94,18 @@ class UiStateFile {
   }
 
   /// Writes [key] as true. Answers whether it went through.
-  bool setFlag(String key) {
+  bool setFlag(String key) => setBool(key, true);
+
+  /// Writes [key] as [value], leaving every other key as it was. Answers
+  /// whether it went through.
+  ///
+  /// The shell keeps the width of its rail here as well (HUM-254); a flag
+  /// that can be switched back needs `false` as much as `true`.
+  bool setBool(String key, bool value) {
     try {
       final Map<String, Object?> object = <String, Object?>{
         ...read(),
-        key: true,
+        key: value,
       };
       final File file = File(path);
       file.parent.createSync(recursive: true);

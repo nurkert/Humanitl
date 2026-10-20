@@ -25,6 +25,7 @@ import '../setup/providers/setup_provider.dart';
 import 'providers/connection.dart';
 import 'providers/language.dart';
 import 'providers/navigation.dart';
+import 'providers/rail.dart';
 import 'providers/setup_state.dart';
 import 'providers/theme.dart';
 import 'section.dart';
@@ -139,6 +140,13 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
         id: 'switch-language',
         label: l10n.shellPaletteSwitchLanguage(otherLanguage.endonym(l10n)),
         run: () => ref.read(languageProvider.notifier).set(otherLanguage),
+      ),
+      PaletteCommand(
+        id: 'toggle-rail',
+        label: ref.read(railExpandedProvider)
+            ? l10n.shellPaletteRailCollapse
+            : l10n.shellPaletteRailExpand,
+        run: ref.read(railExpandedProvider.notifier).toggle,
       ),
       PaletteCommand(
         id: 'open-settings',
@@ -329,6 +337,8 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
     final ConnectionStatus link = ref.watch(connectionStateProvider);
     final Section section = ref.watch(navigationProvider);
     final Navigation navigation = ref.read(navigationProvider.notifier);
+    final bool railExpanded = ref.watch(railExpandedProvider);
+    final RailExpanded rail = ref.read(railExpandedProvider.notifier);
     final HTokens tokens = HTheme.of(context);
     return Shortcuts(
       shortcuts: shellShortcuts(),
@@ -343,6 +353,12 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
           PaletteIntent: CallbackAction<PaletteIntent>(
             onInvoke: (PaletteIntent intent) {
               _togglePalette();
+              return null;
+            },
+          ),
+          ToggleRailIntent: CallbackAction<ToggleRailIntent>(
+            onInvoke: (ToggleRailIntent intent) {
+              rail.toggle();
               return null;
             },
           ),
@@ -377,7 +393,12 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
                     Expanded(
                       child: Row(
                         children: <Widget>[
-                          IconRail(active: section, onSelect: navigation.go),
+                          IconRail(
+                            active: section,
+                            onSelect: navigation.go,
+                            expanded: railExpanded,
+                            onToggle: rail.toggle,
+                          ),
                           Expanded(child: _sections(section, frozen: !live)),
                         ],
                       ),

@@ -31,8 +31,22 @@ class SettingsIntent extends Intent {
   const SettingsIntent();
 }
 
-/// The bindings of HUM-019: one `Ctrl+<digit>` per section, `Ctrl+K`, and
-/// `Ctrl+,` for the settings (HUM-069).
+/// Expand or collapse the icon rail. `Ctrl+0` (HUM-254).
+class ToggleRailIntent extends Intent {
+  /// Creates the intent.
+  const ToggleRailIntent();
+}
+
+/// The key that expands and collapses the rail, with `Ctrl` (HUM-254).
+///
+/// Not `Ctrl+B`: CONVENTIONS 3.9 keeps that for `AddRuleIntent`, and a plain
+/// `B` blocks a held request, so a chord whose `Ctrl` came a moment late
+/// would decide instead of changing the layout. The zero belongs to the key
+/// family of the rail and is unbound without `Ctrl` in every section.
+const LogicalKeyboardKey railToggleKey = LogicalKeyboardKey.digit0;
+
+/// The bindings of HUM-019: one `Ctrl+<digit>` per section, `Ctrl+K`,
+/// `Ctrl+,` for the settings (HUM-069) and `Ctrl+0` for the rail (HUM-254).
 Map<ShortcutActivator, Intent> shellShortcuts() => <ShortcutActivator, Intent>{
   for (int i = 0; i < navigationKeys.length; i++)
     SingleActivator(navigationKeys[i], control: true): NavIntent(i),
@@ -40,12 +54,14 @@ Map<ShortcutActivator, Intent> shellShortcuts() => <ShortcutActivator, Intent>{
       const PaletteIntent(),
   const SingleActivator(LogicalKeyboardKey.comma, control: true):
       const SettingsIntent(),
+  const SingleActivator(railToggleKey, control: true): const ToggleRailIntent(),
 };
 
 /// The digit keys of the navigation shortcuts, in section order.
 ///
 /// One key per entry of `Section`; the list grows at the end when a section
-/// does, so every digit somebody has learned keeps its meaning (HUM-044).
+/// does, so every digit somebody has learned keeps its meaning (HUM-044). It
+/// ends at nine at the latest: the zero is [railToggleKey].
 const List<LogicalKeyboardKey> navigationKeys = <LogicalKeyboardKey>[
   LogicalKeyboardKey.digit1,
   LogicalKeyboardKey.digit2,
