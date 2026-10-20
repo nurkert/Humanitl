@@ -3105,5 +3105,13 @@
   "@shellStatusQueue": {
     "description": "Status bar, from 80 % of a hold limit on (HUM-057): held requests, limits.hold_max_flows and the bytes they hold together. Amber from 80 %, red at 100 %.",
     "placeholders": {"count": {"type": "int"}, "max": {"type": "int"}, "size": {"type": "String"}}
-  }
+  },
+  "shellRailExpand": "Expand sidebar ({shortcut})",
+  "@shellRailExpand": {"description": "Hover and screen-reader label of the button at the foot of the collapsed icon rail (HUM-254). The shortcut comes from shellNavShortcutKey(0).", "placeholders": {"shortcut": {"type": "String"}}},
+  "shellRailCollapse": "Collapse sidebar ({shortcut})",
+  "@shellRailCollapse": {"description": "Hover and screen-reader label of the button at the foot of the expanded icon rail (HUM-254). The shortcut comes from shellNavShortcutKey(0).", "placeholders": {"shortcut": {"type": "String"}}},
+  "shellPaletteRailExpand": "Expand sidebar",
+  "@shellPaletteRailExpand": {"description": "Command palette entry while the icon rail is collapsed: shows the name and shortcut of every section beside its glyph (HUM-254)."},
+  "shellPaletteRailCollapse": "Collapse sidebar",
+  "@shellPaletteRailCollapse": {"description": "Command palette entry while the icon rail is expanded: back to glyphs only (HUM-254)."}
 }
