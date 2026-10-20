@@ -310,9 +310,9 @@ class _StartRow extends StatelessWidget {
   /// one that carries the first, and it is never green while one of its
   /// folded lines was not measured. That is why four green rows are enough for
   /// this sentence: [SetupState.unmeasuredLines] counts exactly the lines the
-  /// machine row would have gone amber over, so a count above zero and a green
+  /// machine row would have gone yellow (warning) over, so a count above zero and a green
   /// machine row cannot happen together. The number is asked separately one
-  /// state further up, where the row is amber and the sentence has to say how
+  /// state further up, where the row wears the warning and the sentence has to say how
   /// many lines that was (HUM-044).
   ///
   /// The last call is the one thing the four rows cannot say. A `Sandbox` call

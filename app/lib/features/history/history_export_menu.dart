@@ -190,9 +190,7 @@ class _HistoryExportModalState extends ConsumerState<HistoryExportModal> {
           Text(
             key: const Key('history-export-contents'),
             l10n.historyExportContents,
-            style: tokens.typography.ui13.tinted(
-              tokens.stateTextColor(HFlowState.held),
-            ),
+            style: tokens.typography.ui13.tinted(tokens.colors.warningText),
           ),
           // The curl format writes a second file beside the chosen one. An
           // irreversible action says so beforehand (`docs/UX.md` 5.4).
@@ -201,9 +199,7 @@ class _HistoryExportModalState extends ConsumerState<HistoryExportModal> {
             Text(
               key: const Key('history-export-beside'),
               l10n.historyExportBesideFile(curlBodyFileName),
-              style: tokens.typography.ui13.tinted(
-                tokens.stateTextColor(HFlowState.held),
-              ),
+              style: tokens.typography.ui13.tinted(tokens.colors.warningText),
             ),
           ],
           SizedBox(height: tokens.spacing.x3),

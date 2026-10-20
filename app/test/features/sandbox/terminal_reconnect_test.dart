@@ -22,6 +22,8 @@ import 'dart:typed_data';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
+import 'package:humanitl/core/ipc/client_diagnostics.dart';
+import 'package:humanitl/core/ipc/daemon_client.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/features/sandbox/providers/terminal_provider.dart';
 import 'package:humanitl/features/sandbox/widgets/terminal_pane.dart';
@@ -178,4 +180,57 @@ void main() {
     expect(client.opens, hasLength(1));
     expect(sessionOf(tester, client).phase, TerminalPhase.refused);
   });
+
+  // Ein Client, der den Fehlschlag beim Aufruf wirft, statt ihn in den Strom
+  // zu legen (der Fake ohne Verbindung tut das), nimmt denselben Weg wie ein
+  // Strom, der mit `DAEMON_001` abbricht: Befund und Wiederanschluss, keine
+  // ungefangene Ausnahme aus dem Post-Frame-Callback (HUM-260, Landung).
+  testWidgets('a client that throws at the call is a lost line, not a crash', (
+    WidgetTester tester,
+  ) async {
+    final ThrowingClient client = ThrowingClient();
+    client.sandbox = client.sandbox.copyWith(
+      state: SandboxState.running,
+      agentRunning: true,
+      startedAt: sandboxTestNow,
+      sandboxId: FakeDaemonClient.defaultSandbox,
+    );
+    await pumpSandbox(tester, client: client);
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    expect(client.calls, 1);
+    final TerminalSessionState lost = sessionOf(tester, client);
+    expect(lost.phase, TerminalPhase.detached);
+    expect(lost.diagnostic?.code, DiagnosticCodes.daemonUnreachable);
+    expect(lost.reconnecting, isTrue);
+
+    // Der Wiederanschluss läuft; der zweite Aufruf gibt einen Strom.
+    await waitOut(tester);
+    expect(client.calls, 2, reason: 'attached again');
+    client.frames.add(const TerminalGeometry(cols: 80, rows: 24));
+    await tester.pump();
+    expect(sessionOf(tester, client).phase, TerminalPhase.attached);
+  });
+}
+
+/// Ein Client, dessen erster Terminal-Aufruf wirft, wie der Fake ohne
+/// Verbindung.
+class ThrowingClient extends ReconnectClient {
+  /// Wie oft `terminal` aufgerufen wurde.
+  int calls = 0;
+
+  @override
+  Stream<TerminalFrame> terminal(Stream<TerminalCommand> input) {
+    calls++;
+    if (calls == 1) {
+      throw DaemonException(
+        ClientDiagnostics.daemonUnreachable(
+          socketPath: FakeDaemonClient.defaultSocket,
+          detail: 'connection refused',
+          fake: true,
+        ),
+      );
+    }
+    return super.terminal(input);
+  }
 }

@@ -226,9 +226,21 @@ class TerminalSession extends _$TerminalSession {
       ),
     );
     final DaemonClient client = ref.read(daemonClientProvider);
-    _frames = client
-        .terminal(input.stream)
-        .listen(_onFrame, onError: _onError, onDone: _onDone);
+    // Ein Client darf den Fehlschlag auch werfen, statt ihn in den Strom zu
+    // legen: `GrpcDaemonClient.terminal` ist ein `async*`-Erzeuger und meldet
+    // jeden Fehler im Strom, ein anderer Client (der Fake, ein künftiger
+    // Transport) wirft ihn womöglich gleich beim Aufruf. Beides nimmt
+    // denselben Weg über [_onError] -- bei `DAEMON_001` also den
+    // Wiederanschluss aus HUM-058 --, statt als ungefangene Ausnahme aus
+    // einem Post-Frame-Callback zu fallen.
+    final Stream<TerminalFrame> frames;
+    try {
+      frames = client.terminal(input.stream);
+    } on Object catch (error) {
+      _onError(error);
+      return;
+    }
+    _frames = frames.listen(_onFrame, onError: _onError, onDone: _onDone);
   }
 
   /// Hängt sich neu an, lesend, nachdem der Daemon den Schreibplatz vergeben

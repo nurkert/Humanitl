@@ -116,7 +116,7 @@ class FindingsRail extends StatelessWidget {
                 // Ersetzung weiter warnte, hielte den Menschen an einer
                 // Stelle fest, die er schon geräumt hat (`docs/UX.md` 3.3).
                 color: group.open > 0
-                    ? tokens.state.held
+                    ? tokens.colors.warning
                     : tokens.state.allowedEdited,
               ),
             if (open > 0) ...<Widget>[

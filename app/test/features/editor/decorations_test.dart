@@ -24,7 +24,7 @@ void main() {
       );
       expect(
         HEditorDecorations.colorOf(tokens, HEditorDecorationKind.pii),
-        tokens.state.held,
+        tokens.colors.warning,
       );
       expect(
         HEditorDecorations.colorOf(tokens, HEditorDecorationKind.replaced),
@@ -32,10 +32,18 @@ void main() {
       );
       // Drei verschiedene Farben, nicht dreimal dieselbe: Der Fund, das
       // Geheimnis und die erledigte Stelle sagen drei verschiedene Dinge.
+      // Seit HUM-260 ist der Fund gelb wie die Warnung, und die Warnung
+      // fällt im Wert mit dem Akzent der Ersetzung zusammen. Die beiden
+      // trennt die Form: Welle gegen gerade Linie mit Fläche (nächster Test).
+      // Das Geheimnis bleibt eine eigene Farbe.
       expect(<Color>{
         for (final HEditorDecorationKind kind in HEditorDecorationKind.values)
           HEditorDecorations.colorOf(tokens, kind),
-      }, hasLength(3));
+      }, hasLength(2));
+      expect(
+        HEditorDecorations.colorOf(tokens, HEditorDecorationKind.pii),
+        isNot(tokens.state.held),
+      );
     });
 
     test('the glow carries the accent area, a finding does not', () {

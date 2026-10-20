@@ -96,21 +96,22 @@ void main() {
       );
     });
 
-    test('$theme: the amber valve of a finding stays readable', () {
-      // Eine Anfrage mit offenem Fund färbt das Ventil amber (docs/UX.md 4.7);
-      // Label und Taste stehen dann auf dem Amber-Tint statt auf dem Akzent.
-      final Color amber = tokens.tint(tokens.state.held);
+    test('$theme: the warning valve of a finding stays readable', () {
+      // Eine Anfrage mit offenem Fund färbt das Ventil in der Warnfarbe
+      // (docs/UX.md 4.7, seit HUM-260 `warning` statt `held`); Label und Taste
+      // stehen dann auf deren Tint.
+      final Color warned = tokens.tint(tokens.colors.warning);
       expect(
-        contrastOn(tokens.colors.fg0, <Color>[amber], bar),
+        contrastOn(tokens.colors.fg0, <Color>[warned], bar),
         greaterThanOrEqualTo(4.5),
       );
       expect(
-        contrastOn(tokens.colors.fg1, <Color>[amber], bar),
+        contrastOn(tokens.colors.fg1, <Color>[warned], bar),
         greaterThanOrEqualTo(4.5),
       );
       expect(
         contrastOn(tokens.colors.fg0, <Color>[
-          amber,
+          warned,
           holdFill(tokens.state.allowed),
         ], bar),
         greaterThanOrEqualTo(4.5),

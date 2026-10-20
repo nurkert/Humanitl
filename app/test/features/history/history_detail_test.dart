@@ -388,25 +388,21 @@ void main() {
 
     test('the label of a filled control, and who owns it', () {
       // `docs/UX.md` 6 asks 4,5:1 of text against the surface it really
-      // stands on, the accent fill included. The dark theme holds; the light
-      // one does not, and the colours belong to `packages/ui`, not to this
-      // screen. Written down rather than waved through, so that fixing
-      // `HSurfaceColors.light` fails this test and removes the exception.
-      expect(
-        HColorDerivation.contrast(
-          HTokens.dark.colors.onAccent,
-          HTokens.dark.colors.accent,
-        ),
-        greaterThanOrEqualTo(4.5),
-      );
-      expect(
-        HColorDerivation.contrast(
-          HTokens.light.colors.onAccent,
-          HTokens.light.colors.accent,
-        ),
-        closeTo(3.73, 0.01),
-        reason: 'known: `lBg1` on `lAccent`, a token of packages/ui',
-      );
+      // stands on, the accent fill included. Bis HUM-260 hielt das helle
+      // Theme das nicht (Weiß auf dem blauen `lAccent`, 3,73:1), und diese
+      // Ausnahme stand hier. Seit der Akzent gelb ist und das Wort darauf
+      // dunkel (`HColors.onAccent`), halten beide Themes die Grenze, und die
+      // Ausnahme ist gestrichen.
+      for (final HTokens tokens in <HTokens>[HTokens.dark, HTokens.light]) {
+        expect(
+          HColorDerivation.contrast(
+            tokens.colors.onAccent,
+            tokens.colors.accent,
+          ),
+          greaterThanOrEqualTo(4.5),
+          reason: tokens.brightness.name,
+        );
+      }
     });
 
     test('the area palette really is the one that would fail', () {

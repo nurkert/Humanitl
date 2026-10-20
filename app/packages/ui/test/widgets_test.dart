@@ -185,25 +185,21 @@ void main() {
         final Color rest = buttonFill(tester, 'rest');
         final Color hover = buttonFill(tester, 'hovered');
         final Color pressed = buttonFill(tester, 'pressed');
-        // Die Füllung, nicht der Akzent: Weiß auf dem hellen Akzent misst
-        // 3,73:1, und der Ruhezustand ist der Normalfall des einen gefüllten
-        // Controls je Bildschirm (`docs/UX.md` 6).
+        // Die Füllung ist seit HUM-260 in beiden Themes der Akzent selbst:
+        // das dunkle Wort (`onAccent`) erreicht Gelb und Ocker ohne
+        // Rückweichen (`docs/UX.md` 6).
         expect(rest, tokens.colors.accentFill);
-        if (brightness == Brightness.light) {
-          expect(rest, isNot(tokens.colors.accent));
-        }
+        expect(rest, tokens.colors.accent);
         expect(hover, isNot(rest));
         expect(pressed, isNot(rest));
         expect(pressed, isNot(hover));
 
-        // Dark lightens on hover, light darkens: each theme moves the accent
-        // away from the surfaces it sits on.
+        // Der Hover hellt in beiden Themes auf, weg vom dunklen Wort. Im
+        // hellen Theme darf er dabei die Flächengrenze nicht verlassen.
         final double restLightness = HSLColor.fromColor(rest).lightness;
         final double hoverLightness = HSLColor.fromColor(hover).lightness;
-        if (brightness == Brightness.dark) {
-          expect(hoverLightness, greaterThan(restLightness));
-        } else {
-          expect(hoverLightness, lessThan(restLightness));
+        expect(hoverLightness, greaterThan(restLightness));
+        if (brightness == Brightness.light) {
           // The case the review named: the light hover fill on the highest
           // light surface.
           expect(

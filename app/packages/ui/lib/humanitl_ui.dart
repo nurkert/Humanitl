@@ -45,6 +45,7 @@ export 'src/tokens/typography.dart';
 export 'src/widgets/h_animated_fill.dart';
 export 'src/widgets/h_badge.dart';
 export 'src/widgets/h_button.dart';
+export 'src/widgets/h_caution_tape.dart';
 export 'src/widgets/h_checkbox.dart';
 export 'src/widgets/h_context_menu.dart';
 export 'src/widgets/h_focus_ring.dart';

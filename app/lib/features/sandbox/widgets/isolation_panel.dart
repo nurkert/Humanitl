@@ -217,7 +217,7 @@ class _CheckLine extends StatelessWidget {
                 IsolationCheckResult.socketWalkEntries,
                 IsolationCheckResult.socketWalkDepth,
               ),
-              color: tokens.stateText.held,
+              color: tokens.colors.warningText,
             ),
           if (diagnostic != null && text != null)
             Padding(
@@ -312,7 +312,7 @@ class _ExceptionLine extends StatelessWidget {
         Padding(
           padding: EdgeInsets.only(top: tokens.spacing.x1),
           child: _Dot(
-            color: configured ? tokens.state.held : tokens.colors.fg2,
+            color: configured ? tokens.colors.warning : tokens.colors.fg2,
             filled: configured,
           ),
         ),
@@ -324,7 +324,7 @@ class _ExceptionLine extends StatelessWidget {
                 : l10n.isolationExceptionNone,
             key: const Key('sandbox-isolation-exception'),
             style: tokens.typography.ui13.tinted(
-              configured ? tokens.stateText.held : tokens.colors.fg2,
+              configured ? tokens.colors.warningText : tokens.colors.fg2,
             ),
           ),
         ),
@@ -370,9 +370,10 @@ class _Note extends StatelessWidget {
 /// rather than three answers. Nothing else on the line moves, and the text is
 /// readable throughout (`docs/UX.md` 2.8).
 ///
-/// While the sandbox starts, the dot breathes in amber: a flag that says
+/// While the sandbox starts, the dot breathes in the warning yellow: a flag
+/// that says
 /// "this is being measured", ending with the state it belongs to, and a
-/// steady amber under reduced motion (2.7, 2.10).
+/// steady yellow under reduced motion (2.7, 2.10).
 class IsolationDot extends StatefulWidget {
   /// Creates the dot of the guarantee at [index].
   const IsolationDot({required this.segment, this.index = 0, super.key});
@@ -438,7 +439,7 @@ class _IsolationDotState extends State<IsolationDot>
   }
 
   /// The breath runs only while the guarantee is being measured, and never
-  /// under reduced motion; there the amber stands still and says the same
+  /// under reduced motion; there the yellow stands still and says the same
   /// thing.
   void _syncBreath() {
     final bool wanted =
@@ -482,7 +483,7 @@ class _IsolationDotState extends State<IsolationDot>
 
   /// The colour of the dot at this point of the fade.
   ///
-  /// Two state colours are never interpolated into one another: amber lerped
+  /// Two state colours are never interpolated into one another: yellow lerped
   /// towards red runs through the orange that means "error" and would show a
   /// state that never happened (`docs/UX.md` 3.3, rule 3). The fade therefore
   /// goes out through the grey of "unknown" and back in on the other side,

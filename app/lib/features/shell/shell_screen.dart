@@ -64,7 +64,7 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   /// It gets exactly one: at startup, as soon as the four checks have settled,
   /// and only when they are not all green. After that the section belongs to
   /// the person -- a screen that pulled somebody out of the queue because a
-  /// check went amber ten minutes later would take the work away to show a
+  /// check went yellow ten minutes later would take the work away to show a
   /// checklist (`docs/UX.md` 2.8).
   bool _setupOffered = false;
 
@@ -294,9 +294,19 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   /// jedem Bruch eine Pille „+6 neu" über sechs Zeilen, die das Pane gerade
   /// selbst zugelassen hat, und ein Klick darauf täte nichts
   /// (`docs/UX.md` 2.8 und 5.3).
+  ///
+  /// **Jeder Abschnitt steht in einem eigenen `TickerMode`, an nur für den
+  /// sichtbaren.** `IndexedStack` malt die verdeckten Abschnitte nicht, hält
+  /// ihre Ticker aber nicht an (es setzt nur `Visibility.of` und
+  /// `ExcludeFocus`). Ohne das plante etwa das Absperrband über der
+  /// Warteschlange (HUM-260) nach einem Wechsel in einen anderen Abschnitt
+  /// weiter jeden Frame für Pixel, die niemand sieht, und
+  /// `TickerMode.valuesOf` in der History gäbe nicht die Antwort, auf die sie
+  /// sich verlässt. Der `TickerMode` steht immer da, auch eingeschaltet,
+  /// damit die Form des Baums beim Wechsel gleich bleibt.
   Widget _sections(Section section, {required bool frozen}) => IndexedStack(
     index: section.index,
-    children: <Widget>[
+    children: _tickingOnlyAt(section.index, <Widget>[
       // Der Editor von HUM-047 wird hier eingehaengt und nicht in der
       // Warteschlange: Kein Feature importiert ein anderes, und die Shell ist
       // die eine Stelle, die beide kennen darf (`docs/ARCHITECTURE.md` 5).
@@ -310,8 +320,15 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
       _snapshot(frozen, _keys[3], const SandboxScreen()),
       _snapshot(frozen, _keys[4], const AuditScreen()),
       const SetupHost(),
-    ],
+    ]),
   );
+
+  /// [sections], jeder in einem `TickerMode`, der nur bei [visible] an ist.
+  static List<Widget> _tickingOnlyAt(int visible, List<Widget> sections) =>
+      <Widget>[
+        for (int i = 0; i < sections.length; i++)
+          TickerMode(enabled: i == visible, child: sections[i]),
+      ];
 
   /// [section] unter [key], als Schnappschuss, solange [frozen] gilt.
   static Widget _snapshot(bool frozen, GlobalKey key, Widget section) {

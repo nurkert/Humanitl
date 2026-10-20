@@ -25,6 +25,10 @@ class HSurfaceColors {
     required this.accentText,
     required this.accentFill,
     required this.onAccent,
+    required this.warning,
+    required this.warningText,
+    required this.info,
+    required this.infoText,
   });
 
   /// The dark ladder of BACKLOG.md 5.
@@ -46,8 +50,18 @@ class HSurfaceColors {
       HColors.accent,
       surfaces: HColorDerivation.darkSurfaces,
     ),
-    accentFill: HColorDerivation.readableFill(HColors.accent, HColors.bg0),
-    onAccent: HColors.bg0,
+    accentFill: HColorDerivation.readableFill(HColors.accent, HColors.onAccent),
+    onAccent: HColors.onAccent,
+    warning: HColors.warning,
+    warningText: HColorDerivation.textVariant(
+      HColors.warning,
+      surfaces: HColorDerivation.darkSurfaces,
+    ),
+    info: HColors.info,
+    infoText: HColorDerivation.textVariant(
+      HColors.info,
+      surfaces: HColorDerivation.darkSurfaces,
+    ),
   );
 
   /// The light ladder: the dark one inverted.
@@ -66,8 +80,21 @@ class HSurfaceColors {
       HColors.lAccent,
       surfaces: HColorDerivation.lightSurfaces,
     ),
-    accentFill: HColorDerivation.readableFill(HColors.lAccent, HColors.lBg1),
-    onAccent: HColors.lBg1,
+    accentFill: HColorDerivation.readableFill(
+      HColors.lAccent,
+      HColors.onAccent,
+    ),
+    onAccent: HColors.onAccent,
+    warning: HColors.lWarning,
+    warningText: HColorDerivation.textVariant(
+      HColors.lWarning,
+      surfaces: HColorDerivation.lightSurfaces,
+    ),
+    info: HColors.lInfo,
+    infoText: HColorDerivation.textVariant(
+      HColors.lInfo,
+      surfaces: HColorDerivation.lightSurfaces,
+    ),
   );
 
   /// Application background.
@@ -103,8 +130,9 @@ class HSurfaceColors {
 
   /// Der Akzent, wie er ein Wort tragen darf.
   ///
-  /// [accent] ist auf 3:1 geklemmt wie jede Fläche: hell misst er 3,16:1 bis
-  /// 3,73:1 auf den vier Flächen und 2,63:1 auf seiner eigenen Tönung. Ein
+  /// [accent] ist auf 3:1 geklemmt wie jede Fläche: hell misst der Ocker
+  /// 3,29:1 bis 3,89:1 auf den vier Flächen und weniger auf seiner eigenen
+  /// Tönung. Ein
   /// Link, ein Pfad in einer Diagnose und die Beschriftung eines Fix-Controls
   /// stehen deshalb in dieser Farbe hier, die auf allen Flächen und auf jeder
   /// Füllung aus [HColorDerivation.fillAlphas] 4,5:1 erreicht
@@ -113,13 +141,37 @@ class HSurfaceColors {
 
   /// Der Akzent als Füllung eines Controls, das [onAccent] darauf schreibt.
   ///
-  /// Weiß auf dem hellen Akzent misst 3,73:1; die Füllung weicht deshalb
-  /// zurück, bis das Wort 4,5:1 erreicht. Im dunklen Theme ist sie der Akzent
-  /// selbst, weil [onAccent] dort schon 7,14:1 misst.
+  /// In beiden Themes der Akzent selbst: [onAccent] misst auf dem Gelb
+  /// 9,81:1 und auf dem Ocker 4,65:1 (HUM-260). Verfehlte ein künftiger
+  /// Akzent die 4,5:1, wiche die Füllung zurück, nicht das Wort
+  /// ([HColorDerivation.readableFill]).
   final Color accentFill;
 
-  /// Text and glyphs drawn on top of [accentFill].
+  /// Text and glyphs drawn on top of [accentFill] or [accent]: dunkel in
+  /// beiden Themes, [HColors.onAccent]. Wer auf Gelb schreibt, schreibt
+  /// schwarz, wie die Marke.
   final Color onAccent;
+
+  /// Achtung, die kein Zustand eines Flows ist: eine Warnung, offene Funde,
+  /// ein beschreibbarer Mount, ein Vorgang, der noch nicht steht (HUM-260).
+  ///
+  /// Das Gelb der Marke, im Wert gleich [accent]. Eine Fläche, keine
+  /// Textfarbe; Wörter stehen in [warningText]. Weil der Wert mit dem Akzent
+  /// zusammenfällt, steht eine Warnung nie als Farbe allein, sondern immer
+  /// mit Glyph oder Text (`docs/UX.md` 3.3, Regel 12). `held` ist sie nie:
+  /// `held` heißt ausschließlich „gehalten".
+  final Color warning;
+
+  /// [warning], wie sie ein Wort tragen darf: 4,5:1 auf allen Flächen und
+  /// auf jeder Füllung aus [HColorDerivation.fillAlphas].
+  final Color warningText;
+
+  /// Information, die weder Zustand noch Warnung ist, etwa ein Diagnostic
+  /// der Stufe `info`. Das Blau, das bis HUM-260 der Akzent war.
+  final Color info;
+
+  /// [info], wie sie ein Wort tragen darf.
+  final Color infoText;
 
   /// The ladder from [bg0] to [bg3], darkest surface first in dark mode.
   List<Color> get ladder => <Color>[bg0, bg1, bg2, bg3];
@@ -364,6 +416,18 @@ class HTokens {
           HStateColors.light.resolve(flowState) == color) {
         return stateText.resolve(flowState);
       }
+    }
+    // Die Warnfarbe fällt im Wert mit dem Akzent zusammen und hat deshalb
+    // dieselbe Textvariante; die Information hat eine eigene.
+    if (color == colors.warning ||
+        color == HColors.warning ||
+        color == HColors.lWarning) {
+      return colors.warningText;
+    }
+    if (color == colors.info ||
+        color == HColors.info ||
+        color == HColors.lInfo) {
+      return colors.infoText;
     }
     if (color == colors.accent ||
         color == HColors.accent ||
