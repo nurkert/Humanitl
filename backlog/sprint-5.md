@@ -28,6 +28,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-249 | Ein Tastenkürzel speichert eine andere Regel, als die Leiste zeigt (vor HUM-060) | S | HUM-028, HUM-058 |
 | HUM-258 | Tröpfelnde Uploads hungern das Byte-Budget aus | S | HUM-057 |
 | HUM-254 | Die Seitenleiste klappt auf und zu | S | HUM-019, HUM-054 |
+| HUM-259 | Neues App-Icon: die Faust | S | HUM-034, HUM-053 |
 
 ---
 
@@ -3366,3 +3367,75 @@ Ausgangslage, die die Spezifikation bindet:
 
 ### Referenzen
 HUM-019 (`backlog/sprint-1.md`, Icon-Rail), HUM-044 (`backlog/sprint-3.md`, `UiStateFile`), HUM-054 (`backlog/sprint-4.md`, Goldens), HUM-243 (`Ctrl+B`), `docs/UX.md` 2.2, 2.10 und 5.1.
+
+## HUM-259 · Neues App-Icon: die Faust
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-034, HUM-053 · Blockiert: nichts
+
+### Kontext
+Der Projekteigentümer hat am 2026-10-20 ein neues App-Icon freigegeben: eine schwarze Faust (`#14161C`) auf einer gelben, abgerundeten Kachel mit senkrechtem Verlauf (`#EBC05A` oben, `#D49E34` unten). Die Faust folgt „hand-fist“ aus Font Awesome Free 6.6.0 (CC BY 4.0, <https://fontawesome.com/license/free>), Zeige- und Mittelfinger sind umgeformt. Bisher trug die Anwendung den Amber-Chip aus HUM-034 (`packaging/deb/humanitl.svg`) und im Kopf der Oberfläche ein blaues Akzent-Quadrat vor dem Namen (`Wordmark` in `header_bar.dart`).
+
+Ausgangslage, die die Spezifikation bindet:
+- Das Paket installiert das SVG unter `scalable` und drei eingecheckte PNGs (64, 128, 256) unter `hicolor` (`build-deb.sh`); das AppImage nimmt dasselbe SVG als `.DirIcon`. Beide Wege lesen die Dateien aus `packaging/deb/`.
+- Der Linux-Runner setzt kein eigenes Fenster-Icon; das Fenster bekommt sein Symbol über die Desktop-Datei (`Icon=humanitl`). Flutter-Assets enthalten kein Icon.
+- Die Zuordnung von Fenster und Desktop-Datei war gebrochen. Der Runner setzt `APPLICATION_ID` (`dev.humanitl.humanitl`) als `GApplication`-ID und mit `g_set_prgname`; GTK 3 bildet daraus unter Wayland die `app_id` des Fensters und unter X11 den Instanznamen in `WM_CLASS` (die Klasse ist derselbe Name mit großem Anfangsbuchstaben). Die Desktop-Datei hieß aber `humanitl.desktop` mit `StartupWMClass=humanitl`. Ein Wayland-Compositor sucht `<app_id>.desktop` und fand nichts, die Fensterleiste zeigte ein Ersatzsymbol.
+- Die App hat kein SVG-Paket, und es kommt keines dazu.
+- CC BY 4.0 verlangt Namensnennung mit Herkunft, Lizenz und Hinweis auf Änderungen, auch im ausgelieferten Paket.
+
+### Ziel
+- `packaging/deb/humanitl.svg` ist die freigegebene Datei, nur aufgeräumt: gültiges XML, `<title>`, Herkunftskommentar. Die PNGs sind daraus neu gerechnet, mit einem Skript, das jeder wieder fahren kann.
+- Der Kopf der Oberfläche zeigt dieselbe Faust auf der Kachel statt des Akzent-Quadrats, als eigenes Widget `AppMark`, das die Geometrie des SVG als Pfad zeichnet.
+- Herkunft und Lizenz stehen in `THIRD_PARTY.md` und im Paket in `/usr/share/doc/humanitl/copyright`.
+- Die Fensterleiste des Fenstermanagers zeigt das Icon: Die Desktop-Datei heißt wie die Anwendungs-ID.
+
+### Nicht-Ziel
+- Kein Neuentwurf des Icons, keine weiteren Größen, kein Icon für macOS oder Windows.
+- Kein Fenster-Icon im Runner (`gtk_window_set_icon`); das Symbol kommt weiter aus der Desktop-Datei.
+- Der Tray bleibt in diesem Issue unverändert, siehe „Folge“.
+
+### Betroffene Pfade
+- `packaging/deb/humanitl.svg`, `packaging/deb/icons/humanitl-{64,128,256}.png`, `packaging/deb/icons/render.sh` (neu)
+- `packaging/deb/copyright` (Abschnitt für die Symbole), `packaging/deb/build-deb.sh` (Kommentar, Name der Desktop-Datei)
+- `packaging/deb/humanitl.desktop` umbenannt in `packaging/deb/dev.humanitl.humanitl.desktop`, `packaging/appimage/build-appimage.sh`, `packaging/deb/check-install.sh`
+- `THIRD_PARTY.md` (neu), `docs/INSTALL.md` (Abschnitt „Paket bauen“)
+- `app/lib/core/ui/app_mark.dart` (neu), `app/lib/features/shell/widgets/header_bar.dart` (nur `Wordmark`)
+- `app/test/core/ui/app_mark_test.dart` (neu)
+
+### Spezifikation
+- **SVG.** Geometrie und Farben unverändert aus der freigegebenen Datei. Kopf: XML-Deklaration, Kommentar mit Herkunft, Lizenz, Änderung und Verweis auf `THIRD_PARTY.md`, `<title>Humanitl</title>`. Der Kommentar reist mit dem SVG auch ins AppImage, das keine Copyright-Datei trägt.
+- **PNGs.** `packaging/deb/icons/render.sh` rechnet die drei Größen mit `inkscape FILE -w N -h N -o OUT`. Die Bilder bleiben eingecheckt; der Paketbau braucht kein Grafikprogramm. Inkscape schreibt keinen Zeitstempel in die PNGs.
+- **`AppMark`.** `StatelessWidget` mit `size` (Vorgabe 16), darunter `AppMarkPainter`: Kachel als `RRect` mit `LinearGradient`, Faust als vier `RRect` und ein `Path`, dessen Befehle die des SVG sind, relativ aufgelöst. Farben als Konstanten im Widget, nicht als Theme-Token: Ein App-Icon sieht auf dunkler und heller Fläche gleich aus. Keine Semantik, der Name steht daneben.
+- **`Wordmark`.** Das Akzent-Quadrat wird `AppMark(size: markSize)`. Sonst bleibt der Kopf unberührt; HUM-255 arbeitet parallel an derselben Leiste.
+- **Desktop-Datei.** Ausgeliefert als `dev.humanitl.humanitl.desktop` (Reverse-DNS wie die Freedesktop-Spezifikation empfiehlt, gleich `APPLICATION_ID`), `StartupWMClass=dev.humanitl.humanitl`. Verworfen: die ID im Runner auf `humanitl` zurückzunehmen. Das bräche die Reverse-DNS-Form der `GApplication`-ID, die GLib für die Einmal-Instanz über D-Bus verlangt, und kein Ort außer der Desktop-Datei hängt am alten Namen. `Icon=humanitl` bleibt; das Symbol wird über die gefundene Desktop-Datei aufgelöst. Paket und AppImage nehmen dieselbe Datei, `check-install.sh` prüft sie unter dem neuen Namen mit `desktop-file-validate`.
+- **Lizenz.** `THIRD_PARTY.md` nennt Datei, Vorlage mit Urheber (Fonticons, Inc.), Lizenz mit Link, Änderungen und die Lizenz des Icons als Ganzes (CC BY 4.0). `packaging/deb/copyright` bekommt einen `Files`-Abschnitt für `usr/share/icons/hicolor/*/apps/humanitl.png` und `usr/share/icons/hicolor/scalable/apps/humanitl.svg` mit `License: CC-BY-4.0` und derselben Angabe.
+
+### Tests
+- `app/test/core/ui/app_mark_test.dart`:
+  - `the_fist_is_black_on_the_yellow_tile`: Der Painter in 256 px (eine Einheit der View-Box je Pixel); die Ecke außerhalb der Rundung ist durchsichtig, ein Punkt im Handballen ist `#14161C`, die Kachel ist oben heller als unten und liegt nahe an den beiden Verlaufsfarben.
+  - `the_wordmark_carries_the_app_mark`: `Wordmark(markSize: 24)` enthält genau ein `AppMark` in 24 px und den Namen.
+- `packaging/deb/copyright` parst als DEP-5 (`python3-debian`, strikt) und ordnet beide Symbolpfade `CC-BY-4.0` zu; lintian läuft in der Release-Pipeline (`packaging/deb/lintian.sh`).
+- Mutationsbeweis: Faust in Akzentfarbe statt `appMarkFist` lässt den ersten Test fallen; Verlauf umgedreht ebenso; `Wordmark` mit dem alten Quadrat lässt den zweiten fallen.
+- Goldens werden beim Landen neu erzeugt: Jedes Bild, das den Kopf oder den Splash zeigt (`shell_*`, `intercept_*`, `queue_grouped_*`, `queue_new_pill_*`, `action_bar_note_*`, `setup_*`, `states_*`, soweit sie die ganze App zeigen), ändert sich in den 16 px des Zeichens.
+
+### Akzeptanzkriterien
+- [ ] `packaging/deb/humanitl.svg` ist die freigegebene Faust, gültiges SVG mit `<title>` und Herkunftskommentar.
+- [ ] Die drei PNGs sind aus dem SVG gerechnet und haben ihre Größe (`check-install.sh`); `render.sh` erzeugt sie neu.
+- [ ] Der Kopf der Oberfläche und der Splash zeigen die Faust auf der Kachel statt des Akzent-Quadrats.
+- [ ] `THIRD_PARTY.md` und `/usr/share/doc/humanitl/copyright` nennen Herkunft, Lizenz und Änderung des Icons.
+- [ ] Die Desktop-Datei heißt `dev.humanitl.humanitl.desktop`, `StartupWMClass` ist dieselbe ID, `desktop-file-validate` grün; unter Wayland und X11 zeigt die Fensterleiste die Faust.
+- [ ] lintian ohne neue Warnung.
+
+### Fallstricke
+- **Namensnennung im AppImage.** Das AppImage liefert keine Copyright-Datei. Die Angabe steht deshalb im SVG selbst, das als einziges Symbol mitreist.
+- **Zwei Zeichnungen derselben Faust.** SVG und `AppMark` müssen gleich bleiben; der Kommentar beider Dateien verlangt, sie im selben Commit zu ändern.
+- **Ein Name für Fenster und Desktop-Datei.** Wer `APPLICATION_ID` in `app/linux/CMakeLists.txt` ändert, benennt die Desktop-Datei im selben Commit um; sonst verliert die Fensterleiste das Icon ohne jede Fehlermeldung.
+- **`s` im Pfad.** Der glatte Bogen übernimmt den gespiegelten Kontrollpunkt des vorigen; wer den Pfad von Hand überträgt und ihn als einfachen Bogen liest, verbiegt Daumen und Handballen.
+
+### Folge: Tray-Icon als Faust
+Der Tray (`app/lib/features/tray/tray_icon.dart`) zeichnet heute einen Chip in der Zustandsfarbe: gefüllt mit Zahl bei `held` und `alert` (Kreuz bei `alert` ohne Zahl), als Umriss bei `idle` und `offline` (`?`). Ziel ist dieselbe Faust als Silhouette ohne Kachel, weil sie in 22 px klarer ist als Faust auf Kachel; den Zustand trägt die Farbe, die Zahl ein Abzeichen. Das ist größer als S und kommt in ein eigenes Issue, weil es neue Entscheidungen verlangt:
+- Wie „Umriss heißt: nichts wartet“ (`docs/UX.md` 3.3) mit einer Faust aussieht; eine umrissene Faust in 22 px ist kaum lesbar, eine gefüllte in `fg2` sagt dasselbe wie eine gefüllte in Amber.
+- Wo das Abzeichen mit Zahl, `9+` und `?` sitzt und wie groß es sein darf, ohne die Faust zu verdecken; „A tray icon carries no text of its own“ (`sni_tray.dart`) bleibt, die Zahl ist Teil des Bildes.
+- Das Kreuz bei `alert` ohne Zahl.
+- `tray_icon_test.dart` prüft heute die Mitte des Bildes (gefüllt in Amber bei `held`, leer bei `idle`); beide Tests werden neu formuliert. Den Pfad liefert `AppMarkPainter` schon, ohne Kachel.
+
+### Referenzen
+HUM-034 (`backlog/sprint-2.md`, Tray-Icon und Amber-Chip), HUM-053 (`backlog/sprint-4.md`, Paket), HUM-255 (Kopfleiste, parallel), Font Awesome Free License <https://fontawesome.com/license/free>, CC BY 4.0 <https://creativecommons.org/licenses/by/4.0/>.

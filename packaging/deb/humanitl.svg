@@ -1,11 +1,24 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Humanitl application icon. Drawn for Humanitl, GPL-3.0-only like the rest
-     of the project. The shape follows the tray icon of HUM-034: a rounded chip
-     in the held amber (HColors.held) on the darkest surface (HColors.bg0),
-     with an opening in the frame, the one place a request may pass. -->
+<!-- Humanitl application icon (HUM-259): a black fist (#14161C) on a yellow
+     rounded tile with a vertical gradient (#EBC05A to #D49E34).
+     Fist after Font Awesome Free 6.6.0 "hand-fist" by Fonticons, Inc.
+     (CC BY 4.0, https://fontawesome.com/license/free), index and middle
+     finger reshaped. Credits in /THIRD_PARTY.md. The PNG sizes under icons/
+     are rendered from this file with icons/render.sh. -->
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-  <rect x="8" y="8" width="240" height="240" rx="48" fill="#0F1115"/>
-  <path d="M112 56 H84 A28 28 0 0 0 56 84 V172 A28 28 0 0 0 84 200 H172 A28 28 0 0 0 200 172 V84 A28 28 0 0 0 172 56 H144"
-        fill="none" stroke="#E0B24A" stroke-width="20" stroke-linecap="round"/>
-  <circle cx="128" cy="128" r="26" fill="#E0B24A"/>
+  <title>Humanitl</title>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#EBC05A"/>
+      <stop offset="1" stop-color="#D49E34"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#tile)"/>
+  <g transform="translate(128 130) scale(0.34) translate(-224 -256)" fill="#14161C">
+    <rect x="64" y="32" width="64" height="124" rx="32"/>
+    <rect x="160" y="0" width="64" height="156" rx="32"/>
+    <rect x="256" y="32" width="64" height="160" rx="32"/>
+    <rect x="352" y="96" width="64" height="128" rx="32"/>
+    <path d="M256 216l0-.6c9.4 5.4 20.3 8.6 32 8.6c13.2 0 25.4-4 35.6-10.8c8.7 24.9 32.5 42.8 60.4 42.8c11.7 0 22.6-3.1 32-8.6l0 8.6c0 52.3-25.1 98.8-64 128l0 96c0 17.7-14.3 32-32 32l-160 0c-17.7 0-32-14.3-32-32l0-78.4c-17.3-7.9-33.2-18.8-46.9-32.5L69.5 357.5C45.5 333.5 32 300.9 32 267l0-27c0-35.3 28.7-64 64-64l88 0c22.1 0 40 17.9 40 40s-17.9 40-40 40l-56 0c-8.8 0-16 7.2-16 16s7.2 16 16 16l56 0c39.8 0 72-32.2 72-72z"/>
+  </g>
 </svg>
