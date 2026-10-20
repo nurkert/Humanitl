@@ -181,8 +181,21 @@ class FakeDaemonClient implements DaemonClient {
       return FakeDaemonClient.history(count: count ?? 200);
     }
     return switch (key) {
-      'unavailable' || 'missing' || 'down' => FakeDaemonClient.unavailable(),
+      'unavailable' ||
+      'missing' ||
+      'down' ||
+      'daemon_missing' => FakeDaemonClient.unavailable(),
       'mismatch' || 'incompatible' => FakeDaemonClient.incompatible(),
+      // HUM-058, Zeile 4: Der Daemon weist das Token zurück.
+      'unauthenticated' || 'token_invalid' => FakeDaemonClient(
+        infoFailure: ClientDiagnostics.tokenRejected(
+          tokenPath: '/run/user/1000/humanitl/token',
+          detail: 'UNAUTHENTICATED',
+          // Ein Fake ist immer ein Daemon von Hand: Die Unit neu zu starten,
+          // hülfe ihm nicht (`ClientDiagnostics.tokenRejected`).
+          byHand: true,
+        ),
+      ),
       'empty' => FakeDaemonClient.empty(),
       'rules:broken' || 'broken-rules' => FakeDaemonClient.brokenRules(),
       'big_body' || 'big-body' => FakeDaemonClient.bigBody(),
@@ -2684,7 +2697,18 @@ class _ScriptedFlow {
             scheme: scheme,
             authority: flow.authority,
             pathAndQuery: path,
-            headers: headers,
+            // Eine HTTP/1.1-Anfrage trägt immer `Host`, und eine ohne jede
+            // Kopfzeile gilt der Oberfläche als nicht lesbar und bleibt
+            // gehalten (HUM-058). Der Fake schickt deshalb, wie der Daemon,
+            // `Host` mit, wo ein Skript keine eigene Kopfzeile nennt.
+            headers: headers.isEmpty
+                ? <Header>[
+                    Header(
+                      name: 'host',
+                      value: utf8.encode(flow.authority.display(scheme)),
+                    ),
+                  ]
+                : headers,
             body: bodyRef,
             version: 'HTTP/1.1',
           ),

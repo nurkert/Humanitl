@@ -20,8 +20,10 @@ import '../../../core/ipc/client_diagnostics.dart';
 import '../../../core/ipc/client_providers.dart';
 import '../../../core/ipc/daemon_client.dart';
 import '../rule_sentence.dart';
+import '../../../core/domain/websocket.dart';
 import 'findings_pause.dart';
 import 'flows.dart';
+import 'timeout_rule.dart';
 import 'note.dart';
 import 'selection.dart';
 
@@ -57,6 +59,66 @@ enum RefusalReason {
   /// unresolved in one of several selected requests (`docs/UX.md` 4.7). A
   /// single request opens the findings pause instead (HUM-049).
   holdToSend,
+
+  /// Over several requests, one that may open a WebSocket connection -- or
+  /// whose request could not be read -- stayed held; it is decided on its
+  /// own card, where the warning stands (HUM-058, row 11).
+  connectionLeftHeld,
+
+  /// The detail of the request arrived without its headers, so it says
+  /// nothing about an upgrade; nothing is sent unedited (HUM-058, review).
+  requestUnreadable,
+
+  /// Over several requests, one had left the queue meanwhile -- decided
+  /// elsewhere or timed out -- and was skipped; the rest went (HUM-058).
+  someLeftQueue,
+
+  /// Every request of a batch had left the queue meanwhile; nothing went.
+  allLeftQueue,
+
+  /// One request of a batch stays held for its own card, and another had
+  /// left the queue meanwhile; both are said in one line.
+  heldAndSomeLeftQueue,
+
+  /// The detail of a request of a batch did not arrive in time; it stays
+  /// held (HUM-058).
+  detailMissing,
+
+  /// The batch carries a rule, and the request the rule comes from stays
+  /// held; nothing went and no rule was saved (HUM-058, review).
+  ruleSourceHeld,
+
+  /// The batch carries a rule, and the request the rule comes from left the
+  /// queue or was locked; nothing went and no rule was saved (HUM-058).
+  ruleSourceGone,
+}
+
+/// How long a batch waits for the detail of one of its requests before it
+/// treats the detail as unavailable and leaves the request held (HUM-058).
+const Duration batchDetailTimeout = Duration(seconds: 5);
+
+/// A rule as it was shown, with the request it was generalised from.
+///
+/// Built once, where its sentence comes onto the screen, and saved
+/// unchanged; nothing downstream builds a rule of its own (HUM-058, review
+/// round 5).
+@immutable
+class ShownRule {
+  /// Creates the pair.
+  const ShownRule({required this.source, required this.rule});
+
+  /// The request the rule comes from; the rule travels on its decision only.
+  final FlowId source;
+
+  /// The rule, exactly as shown.
+  final Rule rule;
+
+  @override
+  bool operator ==(Object other) =>
+      other is ShownRule && other.source == source && other.rule == rule;
+
+  @override
+  int get hashCode => Object.hash(source, rule);
 }
 
 /// Above how many requests a decision asks in a modal first.
@@ -96,6 +158,9 @@ class BatchRequest {
     this.withheld = 0,
     this.locked = 0,
     this.findingsConfirmed = false,
+    this.cardSeen,
+    this.ruleOnly = false,
+    this.shownRule,
   });
 
   /// Allow or block; nothing else reaches a group.
@@ -142,6 +207,26 @@ class BatchRequest {
   /// Anfragen ohne Fund hinaus (HUM-207).
   final bool findingsConfirmed;
 
+  /// The one request whose card was on screen with its detail loaded when
+  /// the decision was taken, or null (HUM-058, row 11).
+  ///
+  /// Only the single path of [InterceptDecision.allow] sets it -- directly,
+  /// through the forever modal or through "Send anyway". There the warning
+  /// about a WebSocket stood, and [InterceptDecision.confirmBatch] lets this
+  /// one request through even if it opens one; every other request of a
+  /// batch still has to prove that it does not.
+  final FlowId? cardSeen;
+
+  /// True when confirming saves the rule of a timed-out request and decides
+  /// nothing: the forever modal guards "Save as rule" as it guards a
+  /// decision (`docs/UX.md` 5.4, HUM-058 row 7).
+  final bool ruleOnly;
+
+  /// The rule the modal names, built once when it opened, and the request it
+  /// comes from (HUM-058, review round 5). Confirming saves exactly this
+  /// object, on the decision of its source, or nothing.
+  final ShownRule? shownRule;
+
   /// The one host of the batch, or an empty string when it spans several.
   ///
   /// Never a registrable domain worked out here: the public suffix list lives
@@ -166,6 +251,9 @@ class BatchRequest {
       other.withheld == withheld &&
       other.locked == locked &&
       other.findingsConfirmed == findingsConfirmed &&
+      other.cardSeen == cardSeen &&
+      other.ruleOnly == ruleOnly &&
+      other.shownRule == shownRule &&
       listEquals(other.flows, flows) &&
       listEquals(other.acknowledgedFindings, acknowledgedFindings);
 
@@ -178,6 +266,9 @@ class BatchRequest {
     withheld,
     locked,
     findingsConfirmed,
+    cardSeen,
+    ruleOnly,
+    shownRule,
     Object.hashAll(flows),
     Object.hashAll(acknowledgedFindings),
   );
@@ -470,6 +561,25 @@ class InterceptDecision extends _$InterceptDecision {
       ref.read(openFindingsPauseProvider.notifier).open(flow.id);
       return;
     }
+    // Ohne Detail keine Freigabe (HUM-058, Zeile 11, Review): Erst das
+    // Detail sagt, ob die Anfrage eine WebSocket-Verbindung öffnet, und die
+    // Karte warnt erst dann davor. Eine Freigabe davor gäbe ein Upgrade frei,
+    // dessen Warnung niemand gesehen hat. Das gilt für jeden Weg hierher:
+    // Klick, `Enter`, `A`, „Trotzdem senden" und jede Gültigkeit. Die
+    // Leiste zeigt den Knopf so lange aus. Die Pause mit den offenen Funden
+    // darf davor aufgehen: Sie sendet nichts und wartet selbst auf das
+    // Detail (`sendAnyway`).
+    final FlowDetail? detail = ref.read(flowDetailProvider(flow.id)).value;
+    if (detail == null) {
+      _refuse(RefusalReason.notArmed);
+      return;
+    }
+    // Ein Detail ohne Kopfzeilen sagt nichts über einen Protokollwechsel; die
+    // Karte nennt den Grund, und die Freigabe bleibt zu (Review).
+    if (!detailSufficesForAllow(detail, cardSeen: true)) {
+      _refuse(RefusalReason.requestUnreadable);
+      return;
+    }
     final RememberState draft = ref.read(rememberDraftProvider);
     final RememberDuration duration = remember && !draft.open
         ? RememberDuration.session
@@ -487,6 +597,10 @@ class InterceptDecision extends _$InterceptDecision {
         // oder das Detail kennt keinen offenen Fund. Der Zähler der Zeile kann
         // noch Funde nennen, die inzwischen aufgelöst sind (HUM-207).
         findingsConfirmed: true,
+        // Die Karte stand mit geladenem Detail auf dem Schirm, samt der
+        // Warnung vor einem WebSocket-Aufbau: Diese eine Anfrage darf durch
+        // den Sammelpfad, auch wenn sie einen öffnet (HUM-058, Review).
+        cardSeen: flow.id,
       );
       return;
     }
@@ -539,6 +653,11 @@ class InterceptDecision extends _$InterceptDecision {
   }
 
   /// Puts a decision in front of the modal.
+  ///
+  /// The rule the modal names is built here, once, and travels in the request
+  /// as the object that is saved (HUM-058, review round 5): from the first
+  /// request, the one the sentence names, and only for a decision out of the
+  /// selection, which alone owns the draft (HUM-218).
   void _ask(
     DecisionKind kind,
     List<Flow> flows,
@@ -549,6 +668,7 @@ class InterceptDecision extends _$InterceptDecision {
     int withheld = 0,
     int locked = 0,
     bool findingsConfirmed = false,
+    FlowId? cardSeen,
   }) => ref
       .read(batchConfirmProvider.notifier)
       .ask(
@@ -562,6 +682,10 @@ class InterceptDecision extends _$InterceptDecision {
           withheld: withheld,
           locked: locked,
           findingsConfirmed: findingsConfirmed,
+          cardSeen: cardSeen,
+          shownRule: fromSelection && flows.isNotEmpty
+              ? _shownRuleOf(flows.first, kind, remember)
+              : null,
         ),
       );
 
@@ -635,7 +759,13 @@ class InterceptDecision extends _$InterceptDecision {
       );
       return;
     }
-    await _many(sendable, DecisionKind.allow, remember: remember);
+    // Die Regel des Satzes in der Leiste, gebaut aus derselben Anfrage wie
+    // er (`ruleFlowProvider`: die erste der Auswahl), und zwar jetzt, einmal.
+    await _many(
+      sendable,
+      DecisionKind.allow,
+      shownRule: _shownRuleOf(flows.first, DecisionKind.allow, remember),
+    );
   }
 
   /// Refuses [flows], as one act.
@@ -666,7 +796,14 @@ class InterceptDecision extends _$InterceptDecision {
       );
       return;
     }
-    await _many(flows, DecisionKind.block, fromSelection: fromSelection);
+    await _many(
+      flows,
+      DecisionKind.block,
+      fromSelection: fromSelection,
+      shownRule: fromSelection
+          ? _shownRuleOf(flows.first, DecisionKind.block, false)
+          : null,
+    );
   }
 
   /// Why this decision has to be asked about first, or null.
@@ -714,6 +851,13 @@ class InterceptDecision extends _$InterceptDecision {
     _draftDuration(remember),
     kind == DecisionKind.block ? RuleAction.block : RuleAction.allow,
   );
+
+  /// The rule a decision over [flow] would save, as the object that is shown
+  /// and later saved unchanged, or null when the draft makes none.
+  ShownRule? _shownRuleOf(Flow flow, DecisionKind kind, bool remember) {
+    final Rule? rule = _draftRule(flow, kind, remember);
+    return rule == null ? null : ShownRule(source: flow.id, rule: rule);
+  }
 
   /// Asks about sending every held request (`Queue: allow all…`).
   ///
@@ -773,6 +917,14 @@ class InterceptDecision extends _$InterceptDecision {
       return;
     }
     ref.read(batchConfirmProvider.notifier).cancel();
+    if (request.ruleOnly) {
+      // „Als Regel übernehmen" mit der Gültigkeit „für immer": Das Modal hat
+      // die Regel bestätigt, entschieden wird nichts (HUM-058, Zeile 7).
+      await ref
+          .read(timeoutRuleProvider.notifier)
+          .save(request.flows.first, confirmed: true);
+      return;
+    }
     // Das Modal bestätigt Reichweite, nie einen Fund: Eine Anfrage mit Fund
     // geht nur hinaus, wenn Ventil oder Fundpause sie vor dem Modal bestätigt
     // haben (HUM-207). Jeder andere Weg zu einem Batch unterliegt dem auch.
@@ -791,6 +943,14 @@ class InterceptDecision extends _$InterceptDecision {
         : request.findingsConfirmed
         ? _unlocked(current)
         : _unlocked(_withoutFindings(current));
+    // Die Quelle der gezeigten Regel zuerst: Lief sie ab oder wurde sie
+    // gesperrt, während das Modal stand, ist das der Grund, und nicht ein
+    // offener Fund (Review Runde 6). `_many` sagte dasselbe, käme es dazu.
+    final ShownRule? shown = request.fromSelection ? request.shownRule : null;
+    if (shown != null && !flows.any((Flow flow) => flow.id == shown.source)) {
+      _refuse(RefusalReason.ruleSourceGone);
+      return;
+    }
     if (flows.isEmpty) {
       _refuse(RefusalReason.holdToSend);
       return;
@@ -798,9 +958,10 @@ class InterceptDecision extends _$InterceptDecision {
     await _many(
       flows,
       request.kind,
-      remember: request.remember,
       fromSelection: request.fromSelection,
       acknowledgedFindings: request.acknowledgedFindings,
+      cardSeen: request.cardSeen,
+      shownRule: request.shownRule,
     );
   }
 
@@ -822,12 +983,23 @@ class InterceptDecision extends _$InterceptDecision {
   /// Sequentially and not with `Future.wait`: the rule has to exist before the
   /// decisions that follow it, and a daemon that answers out of order would
   /// otherwise hold what the rule already covers (HUM-029, pitfall).
+  ///
+  /// # Die Regel ist die gezeigte, unverändert
+  ///
+  /// [shownRule] wurde genau einmal gebaut, als ihr Satz auf den Schirm kam:
+  /// beim Öffnen des Modals ([_ask]) oder für die Leiste beim Senden ohne
+  /// Modal ([allowMany], [blockMany]). Hier entsteht keine Regel, und die eine
+  /// reist nur an der Entscheidung ihrer Quelle (HUM-058, Review Runde 5).
+  /// Ist die Quelle nicht mehr sendbar -- verlassen, gesperrt, zurückgehalten
+  /// oder mit `FLOW_NOT_HELD` beantwortet --, geht nichts hinaus, und keine
+  /// Regel wird gespeichert; die Quelle geht deshalb als erste.
   Future<void> _many(
     List<Flow> flows,
     DecisionKind kind, {
-    bool remember = false,
     bool fromSelection = true,
     List<int> acknowledgedFindings = const <int>[],
+    FlowId? cardSeen,
+    ShownRule? shownRule,
   }) async {
     if (flows.isEmpty || state.isSending) {
       return;
@@ -835,16 +1007,78 @@ class InterceptDecision extends _$InterceptDecision {
     // Aus einer Zeile gehört der Merk-Entwurf der ausgewählten Anfrage, nicht
     // dieser Gruppe: Er wird weder zur Regel noch verbraucht (HUM-218).
     final _DraftsKey? drafts = fromSelection ? _draftsKey() : null;
-    final Rule? rule = drafts == null
+    final ShownRule? shown = fromSelection ? shownRule : null;
+    final String? note = kind == DecisionKind.block && fromSelection
+        ? ref.read(blockNoteProvider).outgoing
+        : null;
+    ref.read(lastRefusalProvider.notifier).clear();
+    state = DecisionProgress.sending(flowId: flows.first.id, kind: kind);
+    final DaemonClient client = ref.read(daemonClientProvider);
+    final List<Flow> asked = flows;
+    final Flow? source = shown == null
         ? null
-        : _draftRule(flows.first, kind, remember);
+        : flows.where((Flow flow) => flow.id == shown.source).firstOrNull;
+    if (shown != null && (source == null || !_isHeldNow(source.id))) {
+      // Die Quelle der gezeigten Regel hat die Warteschlange verlassen oder
+      // ist gesperrt: Eine Regel aus einer anderen Anfrage wäre nicht die
+      // gezeigte, und ohne sie zu senden hieße, das Gezeigte zu brechen.
+      _ruleSourceGone();
+      return;
+    }
+    // Jede Freigabe über mehrere Anfragen geht hier durch: die Gruppe, die
+    // Auswahl, „Allow all" über das Modal und die eine Anfrage hinter dem
+    // Modal für eine Regel „für immer" (HUM-058, Zeile 11, Review). Die
+    // Karte einer Mehrfachauswahl warnt vor keinem WebSocket-Aufbau, also
+    // geht keiner mit: Was einen Protokollwechsel verlangt oder dessen Detail
+    // nicht ausreicht, bleibt gehalten und wird auf seiner eigenen Karte
+    // entschieden. Durch darf allein [cardSeen], deren Karte mit Warnung auf
+    // dem Schirm stand. Die übrigen gehen hinaus, und die Leiste sagt danach,
+    // warum eine stehen blieb.
+    Map<FlowId, AllowHold> holds = const <FlowId, AllowHold>{};
+    if (kind == DecisionKind.allow) {
+      holds = await _holds(client, flows, cardSeen);
+      if (!ref.mounted) {
+        return;
+      }
+      final AllowHold? sourceHold = source == null ? null : holds[source.id];
+      if (source != null && sourceHold != null) {
+        final AllowHold hold = sourceHold;
+        // Trägt der Stapel eine Regel, und ihre Quelle bleibt gehalten, geht
+        // nichts hinaus und keine Regel entsteht; entschieden wird die
+        // Quelle auf ihrer eigenen Karte. Stand diese Karte schon auf dem
+        // Schirm, nennt die Leiste den eigentlichen Grund.
+        state = const DecisionProgress.idle();
+        _leaveHeld(
+          source,
+          source.id == cardSeen
+              ? _reasonOf(hold)
+              : RefusalReason.ruleSourceHeld,
+        );
+        return;
+      }
+      final List<Flow> sendable = <Flow>[
+        for (final Flow flow in flows)
+          if (!holds.containsKey(flow.id)) flow,
+      ];
+      if (sendable.isEmpty) {
+        state = const DecisionProgress.idle();
+        _afterBatch(asked, holds, gone: 0, sentAny: false);
+        return;
+      }
+      flows = sendable;
+    }
+    if (source != null) {
+      flows = <Flow>[
+        source,
+        for (final Flow flow in flows)
+          if (flow.id != source.id) flow,
+      ];
+    }
     final Decision decision = kind == DecisionKind.block
         // A block out of a row acts on the row under the pointer, not on the
         // selection; the note of the selected request has nothing to do with
         // it and does not travel (HUM-072).
-        ? Decision.block(
-            note: fromSelection ? ref.read(blockNoteProvider).outgoing : null,
-          )
+        ? Decision.block(note: note)
         // The indices name the findings of one request; over a group there
         // are none to carry (HUM-160).
         : Decision.allow(
@@ -852,48 +1086,195 @@ class InterceptDecision extends _$InterceptDecision {
                 ? acknowledgedFindings
                 : const <int>[],
           );
-    ref.read(lastRefusalProvider.notifier).clear();
-    state = DecisionProgress.sending(flowId: flows.first.id, kind: kind);
-    final DaemonClient client = ref.read(daemonClientProvider);
     Rule? created;
     int size = 0;
-    int done = 0;
-    try {
-      for (int i = 0; i < flows.length; i++) {
+    final List<Flow> sent = <Flow>[];
+    int gone = 0;
+    for (final Flow flow in flows) {
+      final bool isSource = flow.id == source?.id;
+      // Während der Details oder der vorigen Entscheidungen kann eine Anfrage
+      // die Warteschlange verlassen haben -- entschieden anderswo oder
+      // abgelaufen. Sie wird übersprungen, und die übrigen gehen trotzdem
+      // (Review): Vorher brach ihr `FLOW_NOT_HELD` den Rest des Stapels ab.
+      // Die Quelle der Regel ist die Ausnahme: Ohne sie geht nichts.
+      if (!_isHeldNow(flow.id)) {
+        if (isSource) {
+          _ruleSourceGone();
+          return;
+        }
+        gone++;
+        continue;
+      }
+      try {
         final Rule? back = await client.decide(
-          flows[i].id,
+          flow.id,
           decision,
-          remember: i == 0 ? rule : null,
+          remember: isSource ? shown!.rule : null,
         );
         if (!ref.mounted) {
           return;
         }
         created ??= back;
-        size += flows[i].requestSize;
-        done++;
+        size += flow.requestSize;
+        sent.add(flow);
+      } on DaemonException catch (error) {
+        if (error.diagnostic.code == DiagnosticCodes.flowNotHeld) {
+          if (isSource) {
+            _ruleSourceGone();
+            return;
+          }
+          gone++;
+          continue;
+        }
+        _abortAfter(
+          flows,
+          flow,
+          sent,
+          kind,
+          size,
+          created,
+          drafts,
+          error.diagnostic,
+        );
+        return;
+      } on Object catch (error) {
+        _abortAfter(
+          flows,
+          flow,
+          sent,
+          kind,
+          size,
+          created,
+          drafts,
+          ClientDiagnostics.daemonUnreachable(
+            socketPath: '?',
+            detail: error.toString(),
+          ),
+        );
+        return;
       }
-    } on DaemonException catch (error) {
-      _abort(flows, done, kind, size, created, drafts, error.diagnostic);
-      return;
-    } on Object catch (error) {
-      _abort(
-        flows,
-        done,
-        kind,
-        size,
-        created,
-        drafts,
-        ClientDiagnostics.daemonUnreachable(
-          socketPath: '?',
-          detail: error.toString(),
-        ),
-      );
-      return;
     }
     state = const DecisionProgress.idle();
-    _record(flows, kind, size, created);
-    _consumeDraftsOf(drafts);
+    if (sent.isNotEmpty) {
+      _record(sent, kind, size, created);
+      _consumeDraftsOf(drafts);
+    }
     ref.read(selectionProvider.notifier).clear();
+    _afterBatch(asked, holds, gone: gone, sentAny: sent.isNotEmpty);
+  }
+
+  /// Ob [id] gerade noch gehalten wird.
+  bool _isHeldNow(FlowId id) => ref.read(flowsProvider)[id]?.isHeld ?? false;
+
+  /// Der Stapel endet, bevor etwas hinausging, weil die Quelle der gezeigten
+  /// Regel nicht mehr gehalten wird (HUM-058, Review Runde 5).
+  void _ruleSourceGone() {
+    state = const DecisionProgress.idle();
+    _refuse(RefusalReason.ruleSourceGone);
+  }
+
+  /// Sagt nach einem Stapel, was nicht mitging, und stellt den Cursor auf
+  /// eine zurückgehaltene Anfrage, die noch gehalten ist (Review).
+  ///
+  /// Gewählt wird unter den Anfragen, die jetzt noch in der Warteschlange
+  /// stehen; eine, die während der Details gegangen ist, bekäme sonst den
+  /// Cursor und den Satz. Sind zurückgehaltene und gegangene Anfragen
+  /// beisammen, nennt die Leiste beides in einem Satz; sind alle gegangen,
+  /// sagt sie, dass nichts hinausging.
+  void _afterBatch(
+    List<Flow> asked,
+    Map<FlowId, AllowHold> holds, {
+    required int gone,
+    required bool sentAny,
+  }) {
+    final Map<FlowId, Flow> queue = ref.read(flowsProvider);
+    final Flow? leftHeld = asked
+        .where(
+          (Flow flow) =>
+              holds.containsKey(flow.id) && (queue[flow.id]?.isHeld ?? false),
+        )
+        .firstOrNull;
+    final int vanished =
+        gone +
+        holds.keys.where((FlowId id) => !(queue[id]?.isHeld ?? false)).length;
+    if (leftHeld != null) {
+      _leaveHeld(
+        leftHeld,
+        vanished > 0
+            ? RefusalReason.heldAndSomeLeftQueue
+            : _reasonOf(holds[leftHeld.id]!),
+      );
+    } else if (vanished > 0) {
+      _refuse(
+        sentAny ? RefusalReason.someLeftQueue : RefusalReason.allLeftQueue,
+      );
+    }
+  }
+
+  /// Der Satz der Leiste zu [hold].
+  static RefusalReason _reasonOf(AllowHold hold) => switch (hold) {
+    AllowHold.upgrade => RefusalReason.connectionLeftHeld,
+    AllowHold.unreadable => RefusalReason.requestUnreadable,
+    AllowHold.missing => RefusalReason.detailMissing,
+  };
+
+  /// Wie [_abort], für den Stapel, der bei [failed] stehen blieb, nachdem
+  /// [sent] schon hinaus ist.
+  void _abortAfter(
+    List<Flow> flows,
+    Flow failed,
+    List<Flow> sent,
+    DecisionKind kind,
+    int size,
+    Rule? rule,
+    _DraftsKey? drafts,
+    Diagnostic diagnostic,
+  ) {
+    final List<Flow> order = <Flow>[...sent, failed];
+    _abort(order, sent.length, kind, size, rule, drafts, diagnostic);
+  }
+
+  /// Stellt den Cursor auf [flow], die Anfrage, die aus einer Freigabe über
+  /// mehrere herausgenommen wurde, und sagt in der Leiste, warum.
+  ///
+  /// Auf ihrer Karte steht die Warnung vor dem WebSocket-Aufbau, und dort
+  /// wird sie einzeln entschieden. Der Grund kommt nach dem Wechsel des
+  /// Cursors, weil jeder Wechsel die Absage der vorigen Anfrage räumt.
+  void _leaveHeld(Flow flow, RefusalReason reason) {
+    ref.read(selectedFlowIdProvider.notifier).select(flow.id);
+    _refuse(reason);
+  }
+
+  /// Die Anfragen aus [flows], deren Detail für eine Freigabe nicht reicht,
+  /// mit dem Grund ([allowHoldOf]); [cardSeen] darf einen WebSocket öffnen.
+  ///
+  /// Gefragt wird beim Senden und nicht aus dem Zwischenspeicher der Karte:
+  /// Die Details einer Gruppe hat niemand geholt. Alle zugleich und jede mit
+  /// der Frist [batchDetailTimeout]: Ein Daemon, der eine Antwort schuldig
+  /// bleibt, hielte die Leiste sonst für immer auf „sending", und ein
+  /// Detail, das nicht kommt, reicht für keine Freigabe.
+  static Future<Map<FlowId, AllowHold>> _holds(
+    DaemonClient client,
+    List<Flow> flows,
+    FlowId? cardSeen,
+  ) async {
+    Future<FlowDetail?> fetch(Flow flow) async {
+      try {
+        return await client.getFlow(flow.id).timeout(batchDetailTimeout);
+      } on Object {
+        return null;
+      }
+    }
+
+    final List<FlowDetail?> details = await Future.wait(<Future<FlowDetail?>>[
+      for (final Flow flow in flows) fetch(flow),
+    ]);
+    return <FlowId, AllowHold>{
+      for (int i = 0; i < flows.length; i++)
+        if (allowHoldOf(details[i], cardSeen: flows[i].id == cardSeen)
+            case final AllowHold hold)
+          flows[i].id: hold,
+    };
   }
 
   /// Records what a run of decisions did, for the strip and the announcement.

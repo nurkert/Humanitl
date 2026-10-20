@@ -19,7 +19,11 @@ import 'connection.dart';
 import 'daemon_client.dart';
 
 /// The longest wait between two reconnect attempts.
-const Duration maxReconnectBackoff = Duration(seconds: 30);
+///
+/// Ten seconds, not thirty, since HUM-058: a doubling without a low ceiling
+/// leaves a stream that broke an hour ago half a minute behind a daemon that
+/// is back, and the shell would show live rows that hear nothing.
+const Duration maxReconnectBackoff = Duration(seconds: 10);
 
 /// The first wait after the event stream failed; it doubles up to
 /// [maxReconnectBackoff]. Tests override it to keep themselves short.
@@ -49,7 +53,7 @@ final Provider<Duration> reconnectBackoffProvider = Provider<Duration>(
 /// that went away breaks both. The first one comes back through
 /// [connectionStateProvider]'s two-second retry, and [linkLiveProvider] says
 /// so; this stream would still be sitting on a wait that has doubled its way
-/// up to [maxReconnectBackoff], and for up to half a minute the shell would
+/// up to [maxReconnectBackoff], and for up to ten seconds the shell would
 /// claim to be live while no event reaches it -- countdowns running on
 /// requests that are already forwarded, a second `Enter` answered with
 /// `FLOW_NOT_HELD`. The listener below therefore drops the pending wait and
@@ -59,6 +63,13 @@ final Provider<Duration> reconnectBackoffProvider = Provider<Duration>(
 /// asking a second question of its own. It is also set up only once the stream
 /// is down, because that is the only state in which the answer changes
 /// anything here.
+///
+/// **No stream before `GetInfo` was accepted (HUM-058, row 3).** Where the
+/// connection exists, the first `Subscribe` and every retry wait until
+/// [linkLiveProvider] says yes. A daemon with another major of the contract
+/// never gets one: the app would read its events in a shape it does not know.
+/// A tree without the connection -- the unit tests of the queue -- subscribes
+/// at once, as before.
 final StreamProvider<FlowEvent> flowEventsProvider = StreamProvider<FlowEvent>((
   Ref ref,
 ) {
@@ -75,6 +86,7 @@ final StreamProvider<FlowEvent> flowEventsProvider = StreamProvider<FlowEvent>((
   // Rückfall; eine der beiden muss deshalb eine Variable sein, die erst nach
   // der anderen gefüllt wird.
   late final void Function() scheduleReconnect;
+  late final bool Function() gated;
 
   void connect() => connectFlowEvents(
     client: client,
@@ -115,9 +127,20 @@ final StreamProvider<FlowEvent> flowEventsProvider = StreamProvider<FlowEvent>((
       retry = null;
       final Duration doubled = wait * 2;
       wait = doubled > maxReconnectBackoff ? maxReconnectBackoff : doubled;
-      connect();
+      if (!gated()) {
+        connect();
+      }
     });
   };
+
+  // Ein Strom nur zu einem Daemon, dessen `GetInfo` diese App angenommen
+  // hat (HUM-058, Zeile 3). Spricht er einen anderen Vertrag, liest sie
+  // seine Ereignisse nicht, und die Verbindung steht nie. Gefragt wird nur,
+  // wo es die Verbindung schon gibt: Ein Baum, der allein Ereignisse liest,
+  // baute sie sonst samt Herzschlag, ohne ihn bestellt zu haben (siehe
+  // `watchTheLink`).
+  gated = () =>
+      ref.exists(connectionStateProvider) && !ref.read(linkLiveProvider);
 
   ref.onDispose(() {
     disposed = true;
@@ -127,7 +150,12 @@ final StreamProvider<FlowEvent> flowEventsProvider = StreamProvider<FlowEvent>((
     unawaited(events.close());
   });
 
-  connect();
+  if (gated()) {
+    // Der Horcher verbindet, sobald `GetInfo` gelungen ist.
+    watchTheLink();
+  } else {
+    connect();
+  }
   return events.stream;
 });
 
@@ -164,9 +192,14 @@ void connectFlowEvents({
         // Why the stream broke is the connection gate's business; the queue
         // only has to come back.
         onError: (Object error, StackTrace stack) => onBroken(),
+        // Ein sauberes Ende ist kein Abschied für immer (HUM-058, Review):
+        // Ein Daemon, der neu startet, schließt seinen Strom ordentlich, und
+        // vorher blieb die Warteschlange danach für den Rest des Laufs taub.
+        // Es geht denselben Weg wie ein Fehler: Rückfall, neuer `Subscribe`,
+        // und das `Lagged` am Anfang gleicht ab, was dazwischen geschah.
         onDone: () {
           if (!isDisposed() && !events.isClosed) {
-            events.close();
+            onBroken();
           }
         },
         cancelOnError: true,

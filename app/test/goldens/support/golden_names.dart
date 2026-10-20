@@ -16,6 +16,10 @@
 //    `settings_env_overridden` gehören zum Formular aus dem Schema, das die
 //    zweite Umfangsentscheidung vom 2026-09-18 hinter das MVP verschoben hat.
 //    An ihrer Stelle stehen die drei Zustände des handgebauten Formulars.
+//
+// Die Namen mit `states_` gehören zu HUM-058 und stehen in derselben Form;
+// welche Zustände dort fehlen, weil HUM-054 sie schon festhält, sagt
+// `states_golden_test.dart`.
 library;
 
 /// Jeder Golden-Name dieses Satzes, nach Widget-Familie.
@@ -67,4 +71,10 @@ const List<String> goldenNames = <String>[
   'setup_checklist',
   // ui_gallery_golden_test.dart
   'tokens_palette',
+  // states_golden_test.dart (HUM-058)
+  'states_daemon_missing',
+  'states_incompatible',
+  'states_sandbox_failed',
+  'states_tls_rejected',
+  'states_websocket_card',
 ];

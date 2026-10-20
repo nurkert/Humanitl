@@ -23,17 +23,21 @@
 /// `draftProvider(flowId)` und überlebt jedes Schließen mit `Esc`.
 library;
 
+import 'dart:convert';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/domain/domain.dart';
 import '../../core/domain/http_request.dart';
+import '../../core/domain/websocket.dart';
 import '../../core/ui/diagnostic_severity.dart';
 import '../../core/ui/findings_pause.dart';
 import '../../core/ui/fix_control.dart';
 import '../../core/ui/h_diagnostic_card.dart';
 import '../../core/ui/h_resizable_panes.dart';
 import '../../core/ui/ui.dart';
+import '../../core/ui/websocket_notice.dart';
 import '../../l10n/l10n.dart';
 import 'editor_intents.dart';
 import 'model/draft.dart';
@@ -744,6 +748,20 @@ class _ActionBar extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
+            // Der Editor geht mit `E` auch auf, bevor die Karte ihre Zeile
+            // über den WebSocket-Aufbau zeigen konnte; über dem Senden steht
+            // deshalb dieselbe Zeile (HUM-058, Zeile 11, Review).
+            if (requestOpensWebSocket(<Header>[
+              for (final HeaderEntry entry in draft.headers)
+                Header(name: entry.name, value: utf8.encode(entry.value)),
+            ])) ...<Widget>[
+              Align(
+                key: const Key('editor-websocket'),
+                alignment: AlignmentDirectional.centerStart,
+                child: WebSocketNotice(host: draft.authority.shownHost),
+              ),
+              SizedBox(height: tokens.spacing.x2),
+            ],
             Wrap(
               crossAxisAlignment: WrapCrossAlignment.center,
               spacing: tokens.spacing.x3,

@@ -94,8 +94,8 @@ class Selection extends _$Selection {
 
 /// The request a rule is generalised from.
 ///
-/// The first of the reach, and the same one the notifier writes the rule from
-/// (`InterceptDecision._many`): with a group of several hosts the cursor is
+/// The first of the reach, and the same one the notifier builds the shown rule
+/// from (`InterceptDecision._shownRuleOf`, HUM-058): with a group of several hosts the cursor is
 /// not necessarily that request, and a sentence that named the cursor while
 /// the rule named the first row would guard an irreversible act with the wrong
 /// host (`backlog/CONVENTIONS.md` 4.13).
