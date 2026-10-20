@@ -19,7 +19,7 @@ const double bodyFindingUnderline = 1;
 /// Die Farbe, in der ein Fund markiert wird.
 Color bodyFindingColor(HTokens tokens, BodyFindingTone tone) => switch (tone) {
   BodyFindingTone.secret => tokens.stateColor(HFlowState.error),
-  BodyFindingTone.personal => tokens.stateColor(HFlowState.held),
+  BodyFindingTone.personal => tokens.colors.warning,
 };
 
 /// Zu jeder Zeile die Funde, die sie berührt.

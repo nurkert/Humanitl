@@ -81,7 +81,7 @@ class RefusalsSection extends StatelessWidget {
             (refusals?.offReason.isEmpty ?? true) ? '?' : refusals!.offReason,
           ),
           key: const Key('sandbox-refusals-off'),
-          style: tokens.typography.ui13.tinted(tokens.stateText.held),
+          style: tokens.typography.ui13.tinted(tokens.colors.warningText),
         )
       else if (entries.isEmpty)
         Text(

@@ -172,6 +172,24 @@ abstract final class HMotion {
   /// Animationen abgeschaltet hat.
   static const double reducedRingAlpha = 0.4;
 
+  /// Wie lange das Absperrband braucht, um sich um eine Streifenbreite
+  /// (gelb plus schwarz, [cautionTapePeriod]) weiterzuschieben.
+  ///
+  /// Das Band ist die einzige Dauerbewegung neben dem begrenzten Atem
+  /// (`docs/UX.md` 2.9 und 3.6). Es läuft deshalb langsam und gleichmäßig,
+  /// rund 13 px je Sekunde: schnell genug, dass man sieht, dass es läuft,
+  /// langsam genug, dass es im Augenwinkel nicht zieht. Linear, ohne Kurve —
+  /// eine Kurve hätte am Ende jeder Periode einen Halt, und das liest das
+  /// Auge als Ruckeln.
+  static const Duration cautionTape = Duration(milliseconds: 1200);
+
+  /// Die Länge einer Periode des Absperrbands in logischen Pixeln, gemessen
+  /// waagerecht: ein gelber und ein schwarzer Streifen, je halb so breit.
+  ///
+  /// Eine Strecke und keine Zeit, aber sie gehört zur Bewegung des Bands und
+  /// steht deshalb neben [cautionTape].
+  static const double cautionTapePeriod = 16;
+
   /// Vertical offset of an arriving row.
   static const double arriveOffset = 8;
 

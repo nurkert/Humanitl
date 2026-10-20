@@ -59,8 +59,11 @@ class NewArrivalsPill extends StatelessWidget {
                 children: <Widget>[
                   Text(
                     l10n.interceptNewSinceReading(count),
+                    // Die Textvariante, nicht die Fläche: der Ocker des
+                    // hellen Akzents misst als Wort auf Weiß nur 3,89:1
+                    // (HUM-260, `docs/UX.md` 6).
                     style: tokens.typography.ui11.medium.tinted(
-                      tokens.colors.accent,
+                      tokens.colors.accentText,
                     ),
                   ),
                   SizedBox(width: tokens.spacing.x2),

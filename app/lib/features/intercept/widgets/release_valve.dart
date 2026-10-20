@@ -44,6 +44,7 @@ class ReleaseValve extends StatefulWidget {
     this.onShortPress,
     this.holdRequired = false,
     this.accent,
+    this.warned = false,
     this.enabled = true,
     this.pressed = false,
     this.optionsOpen = false,
@@ -98,10 +99,18 @@ class ReleaseValve extends StatefulWidget {
   /// why, and the hold sends.
   final bool holdRequired;
 
-  /// The hue of the control. The accent of the theme when null; amber while a
-  /// finding is unresolved, because that request must not look like a routine
-  /// one (`docs/UX.md` 4.7).
+  /// The hue of the control. The accent of the theme when null; the warning
+  /// hue while a finding is unresolved (`docs/UX.md` 4.7).
   final Color? accent;
+
+  /// True while a finding is unresolved: the valve then carries the warning
+  /// glyph before its label.
+  ///
+  /// Since HUM-260 the warning hue is the brand yellow and equal to the
+  /// accent, so the colour alone no longer tells a valve with a finding from a
+  /// routine one. The glyph does, together with the label that names the
+  /// findings (`docs/UX.md` 3.3, rule 12, and 4.7).
+  final bool warned;
 
   /// False greys the control out; the request is no longer decidable.
   final bool enabled;
@@ -268,6 +277,20 @@ class _ReleaseValveState extends State<ReleaseValve> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
+                if (widget.warned) ...<Widget>[
+                  // Excluded from semantics: the label already says "with n
+                  // findings", and a second announcement of the same fact
+                  // would only be longer.
+                  ExcludeSemantics(
+                    child: HGlyphIcon(
+                      HGlyph.triangleAlert,
+                      key: const Key('intercept-valve-warning'),
+                      size: 14,
+                      color: tokens.colors.warningText,
+                    ),
+                  ),
+                  SizedBox(width: tokens.spacing.x2),
+                ],
                 Flexible(
                   child: ExcludeSemantics(
                     child: Text(

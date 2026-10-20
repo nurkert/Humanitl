@@ -11,7 +11,7 @@
 /// 2. **Was sie trägt.** Zahl der Records, Zahl der Anker, Alter des letzten
 ///    Ankers — alles aus `Audit(head)`.
 /// 3. **Was sie nicht beweist.** Die Warnungen der Prüfung stehen als eigene
-///    Zeile in Bernstein, nicht versteckt hinter einem Haken: Ohne Schlüssel
+///    Zeile in der Warnfarbe, nicht versteckt hinter einem Haken: Ohne Schlüssel
 ///    sind die MACs ungeprüft, und Records hinter dem letzten Anker könnten
 ///    fehlen, ohne dass es auffiele (`docs/SECURITY.md`, „Was die Audit-Kette
 ///    beweist").
@@ -384,7 +384,7 @@ class _AuditExportMenuState extends ConsumerState<AuditExportMenu> {
   }
 }
 
-/// Eine Warnung der Prüfung, in Bernstein.
+/// Eine Warnung der Prüfung, in der Warnfarbe (`colors.warning`).
 class _WarningLine extends StatelessWidget {
   const _WarningLine({required this.warning});
 
@@ -407,14 +407,14 @@ class _WarningLine extends StatelessWidget {
         HGlyphIcon(
           HGlyph.triangleAlert,
           size: HType.ui12.fontSize!,
-          color: tokens.state.held,
+          color: tokens.colors.warning,
           semanticsLabel: text,
         ),
         SizedBox(width: tokens.spacing.x2),
         Expanded(
           child: Text(
             text,
-            style: tokens.typography.ui12.tinted(tokens.state.held),
+            style: tokens.typography.ui12.tinted(tokens.colors.warningText),
           ),
         ),
       ],

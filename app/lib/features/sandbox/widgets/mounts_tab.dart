@@ -74,7 +74,9 @@ class MountsTab extends StatelessWidget {
                       SizedBox(height: tokens.spacing.x2),
                       Text(
                         l10n.sandboxMountsExtra(extra.length),
-                        style: tokens.typography.ui12.tinted(tokens.state.held),
+                        style: tokens.typography.ui12.tinted(
+                          tokens.colors.warningText,
+                        ),
                       ),
                       SizedBox(height: tokens.spacing.x1),
                       for (final MountEntry mount in extra)

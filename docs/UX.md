@@ -53,6 +53,7 @@ Jede Dauer, jede Kurve und jede Strecke kommt aus `HMotion`. Eine `Duration`, ei
 | Auswahl wechselt | „Ich sehe jetzt diese Zeile an" | ein Frame | — | — | Füllungswechsel, keine Höhenänderung |
 | Abschnitt oder Gruppe klappt auf | „Darunter liegt mehr" | 180 ms | `enter` | `HMotion.arrive` | Höhe |
 | Seitenleiste klappt auf oder zu | „Hier stehen die Namen" bzw. „wieder nur die Zeichen" | 180 ms | `enter` auf, `exit` zu | `HMotion.arrive` | Breite der Icon-Rail von 48 auf 200 px; die Beschriftung wird in voller Breite gesetzt, nur aufgedeckt und ab halber Breite eingeblendet. Unter reduzierter Bewegung springt die Breite, das Einblenden behält seine Dauer (2.10, HUM-254). |
+| Absperrband läuft | „Hier steht die Absperrung" bzw. „die Suche läuft" | 1200 ms je Periode, endlos, solange der Anlass besteht | linear | `HMotion.cautionTape`, `HMotion.cautionTapePeriod` | Streifenmuster seitwärts um 16 px je Periode; das Widget selbst steht. Unter reduzierter Bewegung stehen die Streifen still (3.6, HUM-260). |
 | Sheet fährt von rechts ein | „Das gehört zu dem, was links steht" | 180 ms | `enter` | `HMotion.arrive` | 8 px von rechts (`HMotion.arriveOffset`) plus Einblenden; der Hintergrund bleibt stehen |
 | Modal erscheint | „Hier musst du erst antworten" | 180 ms | `enter` | `HMotion.arrive` | kein Weg, nur Einblenden des Modals und Abdunkeln des Hintergrunds; ein Modal, das hereinfliegt, behauptet eine Richtung, die es nicht hat |
 | Command Palette öffnet | „Das Handbuch ist da" | ein Frame | — | — | keine Bewegung. Wer sie ruft, tippt bereits. |
@@ -64,7 +65,7 @@ Jede Dauer, jede Kurve und jede Strecke kommt aus `HMotion`. Eine `Duration`, ei
 
 ### 2.3 Richtung ist Bedeutung
 
-Erlaubt und erlaubt-nach-Bearbeitung gleiten nach rechts, blockiert, abgelaufen und Fehler nach links. Sonst bewegt sich nirgends im Programm ein Widget waagerecht — außer dem Sheet, das aus der Kante kommt, an der es hängt.
+Erlaubt und erlaubt-nach-Bearbeitung gleiten nach rechts, blockiert, abgelaufen und Fehler nach links. Sonst bewegt sich nirgends im Programm ein Widget waagerecht — außer dem Sheet, das aus der Kante kommt, an der es hängt. Das Absperrband (3.6) ist keine Ausnahme: es steht, nur sein Streifenmuster läuft, und ein Muster ist eine Füllung, keine Position (nächster Absatz).
 
 Die Achsenregel bindet die **Position** eines Widgets, nicht seine **Füllung**. Eine Füllung, die von links wächst, ist Fortschritt und keine Richtung: sie sagt „so weit bin ich", nicht „dorthin geht es". Deshalb dürfen beide Halte-Füllungen von links laufen, ohne die Regel zu brechen, und deshalb füllt nichts im Programm von rechts, von oben oder aus der Mitte — eine zweite Füllrichtung wäre eine zweite Bedeutung für dieselbe Geste.
 
@@ -119,7 +120,7 @@ Höchstens drei entschiedene Zeilen ruhen gleichzeitig. Trifft eine vierte Entsc
 - **Zeilenhöhen.** Eine Zeile wechselt ihre Höhe nicht, weil sich ihr Zustand ändert: 36 px als Mindesthöhe in jedem Zustand, siehe 3.4. Dass dieselbe Zeile bei größerer Textskalierung höher ist, ist keine Animation, sondern Layout.
 - **Direkte Manipulation.** Splitter, Scrollen, Textauswahl und Drag-Reorder folgen dem Zeiger eins zu eins. Nur die freigewordene Lücke animiert. Jede Dämpfung zwischen Hand und Pixel liest sich, als widerspräche das Programm der Hand.
 - **Hover.** Hover färbt (`HMotion.press`) und deckt Affordanzen in bereits reserviertem Platz auf. Hover verschiebt nichts und ändert keine Größe.
-- **Leerlauf.** Es gibt keine Ambient-, Idle- oder Dauerbewegung außer dem begrenzten Atem aus 2.7. Kein Spinner, nirgends (2.11).
+- **Leerlauf.** Es gibt keine Ambient-, Idle- oder Dauerbewegung außer dem begrenzten Atem aus 2.7 und dem Absperrband aus 3.6, das nur läuft, solange sein Anlass besteht. Kein Spinner, nirgends (2.11).
 
 ### 2.9b Der geteilte Übergang
 
@@ -201,13 +202,13 @@ Das Maß steht als Zeichenzahl, nicht als Pixelbreite, weil die Breite von der i
 
 ### 3.3 Farbe bedeutet Zustand
 
-Der Akzent markiert, was Fokus nehmen oder geklickt werden kann: `HColors.accent` (#7C9CF5) und `HColors.lAccent` (#5B7FE6). Inerter Text ist nie Akzent — eine akzentfarbene URL, die niemand öffnen kann, bringt dem Auge bei, dass Akzent nichts bedeutet, und dann bricht Fokus, Auswahl und Primärbutton gleich mit.
+Der Akzent markiert, was Fokus nehmen oder geklickt werden kann: `HColors.accent` (#E8B84B) und `HColors.lAccent` (#A57A1C). Seit HUM-260 ist er das Gelb der Marke — das App-Icon ist eine schwarze Faust auf einer gelben Kachel (#EBC05A bis #D49E34) —, im hellen Theme als Ocker, weil Gelb auf Weiß unlesbar ist. Was auf dem Akzent steht, Text wie Glyph, ist dunkel: `HColors.onAccent` (#14161C), in beiden Themes, nie Weiß. Die Zahlen: Akzent auf `bg0` bis `bg3` mindestens 7,95:1, Ocker auf `lBg0` bis `lBg3` mindestens 3,29:1 (Flächengrenze), `onAccent` auf dem Akzent 9,81:1, auf dem Ocker 4,65:1. Ein Wort in Akzentfarbe steht in `accentText`, nie in `accent`. Inerter Text ist nie Akzent — eine akzentfarbene URL, die niemand öffnen kann, bringt dem Auge bei, dass Akzent nichts bedeutet, und dann bricht Fokus, Auswahl und Primärbutton gleich mit.
 
 Zustandsfarben stehen nur an Zustand, aus `HStateColors` über `HTheme.of(context).state` bzw. `tokens.stateColor(state)`:
 
 | Zustand | Token | Dunkel | Hell |
 |---|---|---|---|
-| `held` | `HColors.held` | #E0B24A | abgeleitet, `HStateColors.light` |
+| `held` | `HColors.held` | #79C9EC (bis HUM-260 #E0B24A) | abgeleitet, `HStateColors.light` (#1C91C5) |
 | `allowed` | `HColors.allowed` | #4FBF8C | abgeleitet |
 | `allowedEdited` | `HColors.allowedEdited` | #57B99F plus Akzentpunkt | abgeleitet |
 | `blocked` | `HColors.blocked` | #E5646E | abgeleitet |
@@ -216,18 +217,29 @@ Zustandsfarben stehen nur an Zustand, aus `HStateColors` über `HTheme.of(contex
 | `passthroughLlm` | `HColors.passthrough` | #B48AF0 | abgeleitet |
 | `error` und Secret | `HColors.secret` | #F0784F | abgeleitet |
 
+Neben den Zuständen gibt es seit HUM-260 zwei Töne, die kein Zustand eines Flows sind und deshalb nicht in `HStateColors`, sondern in `HSurfaceColors` stehen:
+
+| Bedeutung | Token | Dunkel | Hell |
+|---|---|---|---|
+| Achtung: Warnung, offene Funde, beschreibbarer Mount, ein Vorgang, der noch nicht steht | `colors.warning`, Wort `colors.warningText` | #E8B84B (gleich dem Akzent) | #A57A1C (gleich dem Akzent) |
+| Auskunft: Diagnostic der Stufe `info` | `colors.info`, Wort `colors.infoText` | #7C9CF5 | #5B7FE6 |
+
 Regeln dazu:
 
-1. **Volle Sättigung nur, wo zwei Zustände nebeneinander stehen.** In der Intercept-Queue steht per Konstruktion nur `held`; fünfzehn volle Amber-Rails wiederholen eine Tatsache und werden das Lauteste auf dem Schirm, während die eigentliche Entscheidung neutral bleibt. Dort trägt die Rail `tokens.tint(tokens.stateColor(state))` (10 % Alpha). Im Augenblick der Entscheidung wischt sie auf volle Sättigung — dann ist sie die einzige gesättigte Fläche im Pane. History behält volle Sättigung, weil dort acht Zustände gemischt stehen.
+1. **Volle Sättigung nur, wo zwei Zustände nebeneinander stehen.** In der Intercept-Queue steht per Konstruktion nur `held`; fünfzehn volle `held`-Rails wiederholen eine Tatsache und werden das Lauteste auf dem Schirm, während die eigentliche Entscheidung neutral bleibt. Dort trägt die Rail `tokens.tint(tokens.stateColor(state))` (10 % Alpha). Im Augenblick der Entscheidung wischt sie auf volle Sättigung — dann ist sie die einzige gesättigte Fläche im Pane. History behält volle Sättigung, weil dort acht Zustände gemischt stehen.
 2. **Farbe ist nie der einzige Kanal.** Jede Zeile, die Zustand trägt, trägt Glyph und Farbe. Im hellen Theme messen `allowed` und `blocked` unter Deuteranopie 1,01:1; eine 4 px breite Farbe allein sagt dort nichts. Die Glyph-Tabelle existiert bereits in `flow_state.dart` und wird bisher nicht benutzt.
-3. **Kein Farbwechsel durch Interpolation.** `held` #E0B24A nach `blocked` #E5646E gelerpt liefe durch das Orange, das `error` und `secret` gehört, und zeigte einen Zustand, den es nie gab. Deshalb wischt der Rail, statt zu überblenden.
+3. **Kein Farbwechsel durch Interpolation.** `held` #79C9EC nach `blocked` #E5646E gelerpt liefe durch ein fahles Mauve (#AF96AD), das zwischen `timedOut` und `passthrough` liegt, und zeigte einen Zustand, den es nie gab. Deshalb wischt der Rail, statt zu überblenden.
 4. **Method-Badges sind in Listen neutral** (`fg1` auf `bg2`). Die Methoden-Hues borgen sich Zustandsfarben (PUT/PATCH ist `held`, DELETE ist `blocked` bei 70 %, POST ist `passthrough`); in einer Liste liest das Auge ein rötliches Badge neben einer roten Rail als zwei Blöcke, nicht als ein Verb und einen Zustand. Hue bekommt nur das eine Badge im Kartenkopf.
 5. **Chrome, das sich nicht ändern kann, trägt `fg1` oder `fg2`.** Ein Zustandsanzeiger hat mindestens zwei Werte, sonst ist er keiner. „Intercept an" und der Verbindungspunkt sind heute immer grün, weil die Shell nur im verbundenen Zustand baut; zwei dauerhaft grüne Marken bringen dem Auge bei, Grün zu übersehen, und Grün ist die Farbe der einen Handlung, auf die es ankommt. Entweder verdrahten oder entfernen.
 6. **Rot heißt blockiert.** Fehler und Findings sind Orange (`HColors.secret`). Rot als Ambiente gibt es nicht.
 7. **In Body-Ansichten sind Findings die einzige Chroma.** JSON-Schlüssel, Werte und Hex bleiben auf der `fg`-Leiter. Ein Body ist der Ort, an dem ein Secret in Sekunden auffallen muss; drei Farben für Datentypen lassen die Fundstelle mit der Syntax konkurrieren. Das weicht von HUM-030 ab, siehe Abschnitt 8.
 8. **Ein Control, das Zustand zählt, ist trotzdem Akzent.** `+n neu`, der Findings-Chip, der Gruppenzähler und der Batch-Button tragen alle eine Zahl über gehaltene Anfragen — und sie bleiben Akzent, weil man sie anfassen kann. Der Zustand, den sie zählen, steht als Glyph darin, nie als Füllung. Sonst zerfällt der Akzent in so viele Bedeutungen, wie es Zähler gibt.
-9. **Was nur anzeigt und nichts auslöst, trägt Zustandsfarbe.** Das Tray-Icon ist kein Control, sondern der einzige Zustandsanzeiger der Sitzung, solange das Fenster nicht sichtbar ist; sein Zähler steht deshalb in `held`-Amber, nicht im Akzent (Abweichung von HUM-034, siehe Abschnitt 8). Regel 8 und Regel 9 zusammen: Fläche zum Anfassen ist Akzent, Fläche zum Ablesen ist Zustand.
-10. **Die ruhende `held`-Rail ist von der 3:1-Regel ausgenommen.** Eine 10-%-Tönung von `held` auf `bg1` misst gemessene 1,19:1; auf 3:1 käme sie erst bei knapp 50 % Alpha, und bei 50 % ist sie keine Tönung mehr, sondern die gesättigte Fläche, die Regel 1 der Entscheidung vorbehält. Die Rail gruppiert dort nur; Zustand und Frist tragen Glyph, Label und Semantik. Die Ausnahme gilt namentlich für die ruhende Zustands-Rail in der Queue und für nichts sonst — die gewischte Rail, die Auswahl-Rail und jede Rail in History erreichen 3:1. `HColorDerivation.tint` deckelt bei `HColors.tintAlpha`; eine stärkere Rail wäre kein Aufruf, sondern ein neues Token (Abschnitt 9).
+9. **Was nur anzeigt und nichts auslöst, trägt Zustandsfarbe.** Das Tray-Icon ist kein Control, sondern der einzige Zustandsanzeiger der Sitzung, solange das Fenster nicht sichtbar ist; sein Zähler steht deshalb in der Farbe von `held`, nicht im Akzent (Abweichung von HUM-034, siehe Abschnitt 8). Regel 8 und Regel 9 zusammen: Fläche zum Anfassen ist Akzent, Fläche zum Ablesen ist Zustand.
+10. **Die ruhende `held`-Rail ist von der 3:1-Regel ausgenommen.** Eine 10-%-Tönung von `held` auf `bg1` misst gemessene 1,21:1; auf 3:1 käme sie erst bei 46 % Alpha, und bei 50 % ist sie keine Tönung mehr, sondern die gesättigte Fläche, die Regel 1 der Entscheidung vorbehält. Die Rail gruppiert dort nur; Zustand und Frist tragen Glyph, Label und Semantik. Die Ausnahme gilt namentlich für die ruhende Zustands-Rail in der Queue und für nichts sonst — die gewischte Rail, die Auswahl-Rail und jede Rail in History erreichen 3:1. `HColorDerivation.tint` deckelt bei `HColors.tintAlpha`; eine stärkere Rail wäre kein Aufruf, sondern ein neues Token (Abschnitt 9).
+
+11. **Akzent und `held` sind nie dieselbe Farbfamilie.** Bis HUM-260 war `held` Amber und der Akzent Blau; seit der Akzent das Gelb der Marke ist, trägt `held` ein kühles Himmelscyan. Ein gelber Zähler, der „hier anfassen" heißt, und eine gelbe Rail, die „wartet" heißt, wären genau die Verwechslung, die Regel 8 und 9 ausschließen. Der Abstand von `held` zu jeder anderen Zustandsfarbe und zum Akzent ist in `tokens_test.dart` gemessen, in OKLab, normal und unter simulierter Protanopie und Deuteranopie (Machado 2009), und liegt überall bei mindestens 0,08; das alte Amber läge neben dem neuen Akzent bei 0,02. Unter Deuteranopie fallen Cyan und das Violett von `passthrough` auf dasselbe Blau; dort trennt sie nur die Helligkeit, und `held` ist deshalb heller als `passthrough`.
+
+12. **Gelb heißt Achtung, Blau heißt Auskunft, Cyan heißt gehalten.** Warnungen tragen `warning`, das Gelb der Marke, wie das Absperrband (3.6); Diagnostics der Stufe `info` tragen `info`, das Blau, das bis HUM-260 der Akzent war; `held` steht nur noch an einer gehaltenen Anfrage. Vorher trugen Warnungen das Amber von `held`, und nach dem Wechsel von `held` auf Cyan hätte eine cyanfarbene Warnung neben einer gelben Information verkehrt herum gelesen. Weil `warning` im Wert mit dem Akzent zusammenfällt, steht eine Warnung **nie als Farbe allein**: immer mit Glyph (`triangleAlert`) oder Text, eine Fundstelle im Text mit der Welle statt der geraden Linie der Ersetzung. Ein gelbes Control mit Warnung ist trotzdem ein Control (Regel 8); die Release Valve mit offenem Fund ist es, und Beschriftung und Glyph sagen, warum sie anders aussieht.
 
 ### 3.4 Die Queue-Zeile, ausgeschrieben
 
@@ -256,6 +268,29 @@ Die Mehrfachauswahl ist zugleich eine Einfrierbedingung (2.8) und eine Schutzstu
 - **Es erscheint kein zweites gefülltes Control.** Bei einer Auswahl größer eins beschriftet sich die Release Valve um („Allow 5 selected" / „5 ausgewählte senden") und bleibt das eine gefüllte Control des Screens (3.1). Ein zusätzlicher Batch-Button neben ihr wäre der zweite.
 
 Der Gruppenkopf ist eine Zeile und hält die Zeilenregel ein: er zeigt im 28-px-Aktionsslot nur `Block {n}`. `Allow {n}` steht dort nicht — dieselbe Begründung wie in 3.4, verstärkt um den Faktor n. Sobald eine Gruppe ausgewählt ist, übernimmt die Aktionsleiste das Erlauben, und die Karte daneben zeigt, worüber entschieden wird: Host, Methodenmix, Pfade, Findings-Summe. Das weicht von HUM-029 ab, siehe Abschnitt 8.
+
+### 3.6 Das Absperrband
+
+Humanitl ist die Absperrung, an der der Verkehr hält. Ihr Zeichen ist ein gelb-schwarzes Absperrband: diagonale Streifen in Markengelb (`HColors.accent`) und `HColors.onAccent`, die gleichmäßig seitwärts laufen (`HCautionTape`, HUM-260). Es ist das einzige Element des Programms, das endlos läuft, und darf deshalb nur dort stehen, wo es etwas bedeutet.
+
+**Wo es steht.** An genau zwei Stellen:
+
+1. **Über der Warteschlange, solange mindestens eine Anfrage gehalten ist.** Vier Pixel hoch (`HSize.cautionTape`) unter dem Kopf des Queue-Panes. Es kommt mit der ersten gehaltenen Anfrage und geht mit der letzten. Die Absperrung steht, solange jemand an ihr wartet.
+2. **Als unbestimmte Fortschrittsanzeige der Netzsuche im Setup** („Suche läuft"), solange die Suche läuft. Dort ersetzt es die Haarlinie, die vorher hin- und herlief, und sagt dasselbe: es arbeitet, ohne einen Stand zu behaupten.
+
+**Wo es nie steht.**
+
+- Nie in einer Zeile, auf einer Karte, in einem Body oder über Text, den jemand liest (2.8, 2.9). Es ist Rand, nie Inhalt.
+- Nie als Zustandsanzeiger. Das Band zeigt nicht an, *wie viele* warten oder *welche*; das tun Zähler, Rail und Glyph. Es darf nie der einzige Kanal einer Aussage sein: wer es nicht sieht, verliert nichts, was nicht im Zähler im Queue-Kopf steht.
+- Nie als Control. Es nimmt keinen Fokus, hat keine Semantik (`ExcludeSemantics`) und reagiert auf keinen Zeiger. Dass es gelb ist wie der Akzent, ist die Marke, nicht die Aufforderung zum Anfassen (3.3, Regel 8); deshalb trägt es immer die schwarzen Streifen dazu und nie eine Akzentfläche allein.
+- Nie in einer Zustandsfarbe und nie in einer Farbe, die je Theme wechselt. Es ist ein Band, kein Token der Leiter; im hellen Theme ist es dasselbe Gelb und Schwarz wie im dunklen.
+- Nie als dritte Stelle, ohne dass dieser Abschnitt sie nennt. Ein Band an jeder Ecke ist Tapete.
+
+**Wie es läuft.** Linear, eine Periode (16 px, ein gelber und ein schwarzer Streifen) in `HMotion.cautionTape` (1200 ms), also rund 13 px je Sekunde: man sieht, dass es läuft, und es zieht nicht. Nahtlos: eine Periode Verschiebung zeichnet dasselbe Bild wie keine. Sein Platz ist immer reserviert, auch ohne Band — dort steht dann die Haarlinie —, damit nichts darunter springt, wenn es kommt oder geht (2.8). Es baut beim Laufen nicht neu, sondern zeichnet hinter einer `RepaintBoundary` nur seine eigenen Pixel; ohne Anlass ist es nicht im Baum und hat keinen Ticker, und in einer unsichtbaren Sektion schweigt sein Ticker über `TickerMode`.
+
+**Reduzierte Bewegung** (2.10): die Streifen stehen still, das Band bleibt. Der Weg fällt weg, die Aussage bleibt.
+
+**Tests und Goldens** halten das Band über `HCautionTape.debugFreeze` an, gesetzt in `app/test/flutter_test_config.dart`; ein endloses Band liefe sonst in jede Zeitgrenze von `pumpAndSettle`, und ein Golden zeigt es als Standbild bei Phase null.
 
 ---
 
@@ -351,7 +386,7 @@ Vor „Merken" steht die Regel als Satz, damit sie geprüft werden kann, die Vor
 Eine Anfrage, die wegen eines Findings gehalten wird, ist der eine Fall, der nicht ruhig sein darf. Sie darf nicht aussehen wie eine Routine-Anfrage, und sie bekommt deshalb vier Abweichungen vom Normalfall — und nur diese vier:
 
 - **In der Zeile** steht der Findings-Chip in `HColors.secret` statt in `fg2`. Das ist die einzige Chroma, die eine ruhende Queue-Zeile tragen darf; der Rest der Zeile bleibt neutral.
-- **In der Aktionsleiste** nennt der Haltegrund Art und Fundort in Klartext (4.3), und die Release Valve wechselt auf Amber und beschriftet sich um: en „Send with 2 findings", de „Senden mit 2 Funden" (so bereits in HUM-049 vorgesehen).
+- **In der Aktionsleiste** nennt der Haltegrund Art und Fundort in Klartext (4.3), und die Release Valve wechselt auf `warning`, trägt das Warnglyph (`triangleAlert`) vor ihrer Beschriftung und beschriftet sich um. Das Glyph ist seit HUM-260 nötig, weil `warning` im Wert dem Akzent gleicht und die Farbe allein ein Ventil mit Fund nicht mehr von einer Routineanfrage unterscheidet: en „Send with 2 findings", de „Senden mit 2 Funden" (so bereits in HUM-049 vorgesehen).
 - **Erlauben verlangt dieselbe Halte-Bestätigung wie Blockieren**, solange mindestens ein Finding ungelöst ist, plus einen Satz, der die Folge benennt: en „An AWS access key goes to api.example.com", de „Ein AWS-Zugangsschlüssel geht an api.example.com". Erst wer weiß, was wohin geht, hält gedrückt.
 - **Ein Klick, `Enter` oder `A` öffnen bei einer einzelnen Anfrage die Pause mit den offenen Funden** (HUM-049), statt nur abzuweisen. Sie ersetzt den unteren Teil der Karte, wächst in 200 ms auf und listet je Fund Art, gekürzten Wert und Ort; am Fuß stehen „Trotzdem senden" (`S`), „Pseudonymisieren" (`P`, öffnet den Editor mit allen Funden ersetzt) und „Blockieren" (`B`), `Esc` schließt sie. Die Halte-Bestätigung bleibt der Weg ohne Pause. Über eine Gruppe gibt es keine Pause: Dort fehlt die Liste der Funde, und es bleibt beim Halten oder einer Taste.
 
@@ -376,7 +411,7 @@ Das ist die einzige Oberfläche, die der Mensch sieht, während der Agent hängt
 | Zustand | Icon | Farbe |
 |---|---|---|
 | nichts wartet | `idle` | `fg2`, neutral |
-| 1 bis 9 warten, 10 und mehr | `held_n`, `held_9plus` | `held`-Amber mit Ziffer |
+| 1 bis 9 warten, 10 und mehr | `held_n`, `held_9plus` | Farbe von `held` mit Ziffer |
 | seit dem letzten Fokus hat ein Timeout blockiert | `alert` | `blocked` |
 
 **Das Fenster** trägt keine Titelleiste des Toolkits (HUM-255). Die Kopfleiste der App ist die Titelleiste: Ziehen auf ihrer freien Fläche, auf Wortmarke, Bereichstitel oder Badges verschiebt das Fenster, ein Doppelklick maximiert oder stellt wieder her, und ihre Bedienelemente bleiben Bedienelemente. Rechts stehen Minimieren, Maximieren und Schließen als Ghost-Knöpfe mit Hover- und Semantik-Label, auch auf Splash und Setup eines Kaltstarts (dort in einer schmalen Leiste, die ebenfalls Griff ist), auch unter Kachel-Fenstermanagern, die die ersten beiden womöglich überhören. Schließen tut genau, was das Schließen über den Fenstermanager tut; es ist nicht das „Beenden" des Tray-Menüs.
@@ -557,7 +592,8 @@ Damit die Abweichung prüfbar bleibt, steht sie hier und nicht zwischen den Zeil
 - **HUM-029:** Die eingefrorene Reihenfolge lebt im `State` des Queue-Panes, nicht in einem `queueFreezeProvider`; nur der Zähler der ausstehenden Ankünfte ist ein Provider (Abschnitt 7).
 - **HUM-029 und Abschnitt 7:** Die Intercept-Queue behält `AnimatedList` und verzichtet auf `itemExtent`; die Extent-Pflicht gilt in History und in den Body-Ansichten (2.4).
 - **HUM-030:** Werte im JSON-Baum bleiben auf der `fg`-Leiter; einzige Chroma sind Findings.
-- **HUM-034:** Der Tray-Zähler steht in `held`-Amber, nicht als Akzentpunkt. Das Tray-Icon ist ein Zustandsanzeiger, kein Control (3.3, Regel 9).
+- **2.9, Leerlauf:** Das Absperrband (3.6) läuft endlos, solange sein Anlass besteht. Es ist die einzige Dauerbewegung neben dem begrenzten Atem; der Projekteigentümer hat es am 2026-10-20 als Zeichen der Marke entschieden (HUM-260). Es steht nur an den zwei Stellen, die 3.6 nennt.
+- **HUM-034:** Der Tray-Zähler steht in der Farbe von `held`, nicht als Akzentpunkt. Das Tray-Icon ist ein Zustandsanzeiger, kein Control (3.3, Regel 9).
 - **HUM-049:** Erlauben verlangt bei mindestens einem ungelösten Finding dieselbe Halte-Bestätigung wie Blockieren, plus einen Satz, der Secret-Typ und Zielhost benennt — aber kein Modal (4.7).
 - **`BACKLOG.md` 5:** Das Glyph atmet begrenzt (zwei Schwellen, je drei Züge) statt dauerhaft, es hellt auf, statt zu verblassen, und ein Glyph, das eine Schwelle überschreitet, startet seinen ersten Zug bei voller Deckkraft (2.7).
 - **`packages/ui`:** Die ruhende `held`-Rail in der Queue ist namentlich von der 3:1-Regel ausgenommen (3.3, Regel 10). Jede andere Fläche und jede andere Rail erreicht sie.
@@ -622,7 +658,7 @@ Damit die Abweichung prüfbar bleibt, steht sie hier und nicht zwischen den Zeil
 > 4,5:1 erreicht sie nur dicht an Weiß (dunkel) oder Schwarz (hell) —, und das
 > Glyph ist der Kanal, der die Farbe für Farbenblinde verdoppelt (3.3).
 
-Gewachsen sind `motion.dart` (`leaveOffset`, `stagger`, `staggerMax`, `leaveGlideFraction`, `holdToBlock`, `rearm`, `confirm`, `undoWindow`, `freezeAfterKey`, `freezeAfterPointer`, `clockTick`, `waitVisible`, `waitMinVisible`, `ringSmoothBelow`, `breatheBelowUrgent`, `breatheCycles`, `breatheMinOpacity`, `reducedRingAlpha`, `hoverLabel`, `copyFeedback` sowie `HReducedMotion`), `colors.dart` (`fillHoverAlpha`, `fillPressedAlpha`, `fillHoldAlpha`, `textMinContrast`, `areaMinContrast`, `fillAlphas`, `textBackgrounds`, `textVariant`, `readableFill`), `spacing.dart` (`rowHistory`, `rowBody`, `rowActionSlot`, `hitDecision`, `measureChars`, `splitterActive`, `splitterStep`), `flow_state.dart` (Glyph und ARB-Schlüssel je Zustand) und `tokens.dart` (`stateText`, `methodText`, `accentText`, `accentFill`, `stateTextOf`). Alles Folgende ist offen und wird in eigenen Issues entschieden, nie beiläufig.
+Gewachsen sind `motion.dart` (`leaveOffset`, `stagger`, `staggerMax`, `leaveGlideFraction`, `holdToBlock`, `rearm`, `confirm`, `undoWindow`, `freezeAfterKey`, `freezeAfterPointer`, `clockTick`, `waitVisible`, `waitMinVisible`, `ringSmoothBelow`, `breatheBelowUrgent`, `breatheCycles`, `breatheMinOpacity`, `reducedRingAlpha`, `hoverLabel`, `copyFeedback` sowie `HReducedMotion`), `colors.dart` (`fillHoverAlpha`, `fillPressedAlpha`, `fillHoldAlpha`, `textMinContrast`, `areaMinContrast`, `fillAlphas`, `textBackgrounds`, `textVariant`, `readableFill`), `spacing.dart` (`rowHistory`, `rowBody`, `rowActionSlot`, `hitDecision`, `measureChars`, `splitterActive`, `splitterStep`), `flow_state.dart` (Glyph und ARB-Schlüssel je Zustand) und `tokens.dart` (`stateText`, `methodText`, `accentText`, `accentFill`, `stateTextOf`). Mit HUM-260 kamen `HColors.onAccent`, `HColors.warning`, `HColors.info` (samt hellen Varianten und `colors.warningText`, `colors.infoText`), `HMotion.cautionTape`, `HMotion.cautionTapePeriod`, `HSize.cautionTape` und das Widget `HCautionTape` dazu. Alles Folgende ist offen und wird in eigenen Issues entschieden, nie beiläufig.
 
 **Token:**
 
