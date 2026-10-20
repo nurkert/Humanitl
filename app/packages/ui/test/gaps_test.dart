@@ -1125,6 +1125,9 @@ void main() {
         HGlyph.plus,
         HGlyph.lock,
         HGlyph.redactBar,
+        // HUM-255: die Fensterknöpfe der Kopfleiste.
+        HGlyph.minus,
+        HGlyph.square,
       ]) {
         expect(HGlyph.values, contains(glyph));
       }

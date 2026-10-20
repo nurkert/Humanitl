@@ -379,6 +379,8 @@ Das ist die einzige Oberfläche, die der Mensch sieht, während der Agent hängt
 | 1 bis 9 warten, 10 und mehr | `held_n`, `held_9plus` | `held`-Amber mit Ziffer |
 | seit dem letzten Fokus hat ein Timeout blockiert | `alert` | `blocked` |
 
+**Das Fenster** trägt keine Titelleiste des Toolkits (HUM-255). Die Kopfleiste der App ist die Titelleiste: Ziehen auf ihrer freien Fläche, auf Wortmarke, Bereichstitel oder Badges verschiebt das Fenster, ein Doppelklick maximiert oder stellt wieder her, und ihre Bedienelemente bleiben Bedienelemente. Rechts stehen Minimieren, Maximieren und Schließen als Ghost-Knöpfe mit Hover- und Semantik-Label, auch auf Splash und Setup eines Kaltstarts (dort in einer schmalen Leiste, die ebenfalls Griff ist), auch unter Kachel-Fenstermanagern, die die ersten beiden womöglich überhören. Schließen tut genau, was das Schließen über den Fenstermanager tut; es ist nicht das „Beenden" des Tray-Menüs.
+
 **Die Rückkehr** spielt nichts nach. Wer nach fünfzehn Ankünften zurückkommt, sieht die Queue, wie sie ist, ohne Ankunftsanimationen für Dinge, die vor Minuten passiert sind — eine Animation beantwortet „was ist gerade angekommen", und nichts davon ist gerade angekommen (2.1). Was in der Abwesenheit geschah, steht in zwei ruhigen Formen: das Rückkehr-Banner nennt die längste Wartezeit und führt zum ältesten Flow, der Timeout-Zähler in der Statusleiste nennt die Abweisungen (4.8).
 
 ---

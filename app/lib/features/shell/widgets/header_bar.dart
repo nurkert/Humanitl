@@ -1,5 +1,6 @@
 /// The 40 px header: wordmark, section title, intercept pill, hold count,
-/// isolation ring and the palette button.
+/// isolation ring, the palette button and the window buttons. It is the
+/// title bar of the window as well (HUM-255).
 library;
 
 import 'dart:math' as math;
@@ -19,6 +20,7 @@ import '../../intercept/providers/flows.dart';
 import '../../sandbox/providers/sandbox_status_provider.dart';
 import '../../sandbox/sandbox_text.dart';
 import '../section.dart';
+import 'window_frame.dart';
 
 /// The header.
 ///
@@ -49,45 +51,72 @@ class HeaderBar extends ConsumerWidget {
           color: tokens.colors.bg1,
           border: Border(bottom: BorderSide(color: tokens.colors.line)),
         ),
-        child: Padding(
-          padding: EdgeInsets.symmetric(horizontal: tokens.spacing.x3),
-          child: Row(
-            children: <Widget>[
-              const Wordmark(),
-              SizedBox(width: tokens.spacing.x4),
-              Text(
-                section.label(l10n),
-                key: const Key('header-section-title'),
-                style: tokens.typography.ui13.medium.tinted(tokens.colors.fg1),
-              ),
-              const Spacer(),
-              // Ohne Daemon faengt niemand etwas ab, und eine gruene Pille,
-              // die „Intercept ON" sagt, behauptet dann das Gegenteil. Sie
-              // wird grau und sagt, warum -- dieselbe Behandlung wie der Ring
-              // daneben und der Punkt in der Statuszeile (`docs/UX.md` 3.3:
-              // jede Zustandsfarbe traegt ein Klartext-Label).
-              HBadge(
-                key: const Key('header-intercept-badge'),
-                text: live ? l10n.shellInterceptOn : l10n.shellInterceptUnknown,
-                color: live ? tokens.state.allowed : tokens.colors.fg1,
-              ),
-              SizedBox(width: tokens.spacing.x2),
-              HBadge(
-                key: const Key('header-held-badge'),
-                text: l10n.shellHeldCount(heldCount),
-                color: heldCount > 0 ? tokens.state.held : tokens.colors.fg1,
-              ),
-              SizedBox(width: tokens.spacing.x3),
-              const IsolationRing(),
-              SizedBox(width: tokens.spacing.x3),
-              HButton(
-                key: const Key('header-palette-button'),
-                variant: HButtonVariant.ghost,
-                onPressed: onPalette,
-                semanticsLabel: l10n.shellPaletteTitle,
-                child: Text(l10n.shellPaletteHint),
-              ),
-            ],
+        // Die Kopfleiste ist die Titelleiste des Fensters (HUM-255): Wer auf
+        // ihr zieht, verschiebt das Fenster. Was nur anzeigt, laesst den
+        // Zeiger deshalb zur Griff-Flaeche darunter durch; ein Text meldet
+        // sich sonst selbst als getroffen und waere ein toter Fleck. Was
+        // bedient wird, faengt ihn selbst.
+        child: WindowDragArea(
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: tokens.spacing.x3),
+            child: Row(
+              children: <Widget>[
+                const IgnorePointer(child: Wordmark()),
+                SizedBox(width: tokens.spacing.x4),
+                // Der Titel nimmt den freien Platz und kuerzt sich als
+                // Erstes, damit Abzeichen und Fensterknoepfe auch bei
+                // doppelter Schriftgroesse in die Leiste passen.
+                Expanded(
+                  child: IgnorePointer(
+                    child: Text(
+                      section.label(l10n),
+                      key: const Key('header-section-title'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: tokens.typography.ui13.medium.tinted(
+                        tokens.colors.fg1,
+                      ),
+                    ),
+                  ),
+                ),
+                // Ohne Daemon faengt niemand etwas ab, und eine gruene Pille,
+                // die „Intercept ON" sagt, behauptet dann das Gegenteil. Sie
+                // wird grau und sagt, warum -- dieselbe Behandlung wie der Ring
+                // daneben und der Punkt in der Statuszeile (`docs/UX.md` 3.3:
+                // jede Zustandsfarbe traegt ein Klartext-Label).
+                IgnorePointer(
+                  child: HBadge(
+                    key: const Key('header-intercept-badge'),
+                    text: live
+                        ? l10n.shellInterceptOn
+                        : l10n.shellInterceptUnknown,
+                    color: live ? tokens.state.allowed : tokens.colors.fg1,
+                  ),
+                ),
+                SizedBox(width: tokens.spacing.x2),
+                IgnorePointer(
+                  child: HBadge(
+                    key: const Key('header-held-badge'),
+                    text: l10n.shellHeldCount(heldCount),
+                    color: heldCount > 0
+                        ? tokens.state.held
+                        : tokens.colors.fg1,
+                  ),
+                ),
+                SizedBox(width: tokens.spacing.x3),
+                const IsolationRing(),
+                SizedBox(width: tokens.spacing.x3),
+                HButton(
+                  key: const Key('header-palette-button'),
+                  variant: HButtonVariant.ghost,
+                  onPressed: onPalette,
+                  semanticsLabel: l10n.shellPaletteTitle,
+                  child: Text(l10n.shellPaletteHint),
+                ),
+                SizedBox(width: tokens.spacing.x3),
+                const WindowButtons(),
+              ],
+            ),
           ),
         ),
       ),

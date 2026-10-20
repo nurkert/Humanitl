@@ -2,7 +2,9 @@
 ///
 /// The plugin is already a dependency of this app; it carries the title, the
 /// minimum size and the two events this feature turns on: the window came to
-/// the front, the window left it.
+/// the front, the window left it. Since HUM-255 it also carries what the
+/// header bar of the app does in place of a toolkit title bar: close,
+/// minimize, maximize and move.
 library;
 
 import 'dart:async';
@@ -48,6 +50,26 @@ class WindowManagerPort with WindowListener implements WindowPort {
 
   @override
   Future<void> quit() => _quietly(windowManager.destroy());
+
+  /// `gtk_window_close`, which sends the same `delete-event` as the close
+  /// button of the window manager (HUM-255).
+  @override
+  Future<void> close() => _quietly(windowManager.close());
+
+  @override
+  Future<void> minimize() => _quietly(windowManager.minimize());
+
+  @override
+  Future<void> toggleMaximize() => _quietly(() async {
+    if (await windowManager.isMaximized()) {
+      await windowManager.unmaximize();
+    } else {
+      await windowManager.maximize();
+    }
+  }());
+
+  @override
+  Future<void> startDragging() => _quietly(windowManager.startDragging());
 
   @override
   Future<void> dispose() async {
