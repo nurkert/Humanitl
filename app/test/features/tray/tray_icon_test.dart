@@ -3,6 +3,7 @@
 
 import 'dart:typed_data';
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/tray/desktop_ports.dart';
@@ -48,6 +49,37 @@ void main() {
       expect(trayIconIsFilled(TrayIconState.idle), isFalse);
       expect(trayIconIsFilled(TrayIconState.offline), isFalse);
     });
+
+    test('the digit reads on the cyan chip', () {
+      // Seit HUM-260 ist `held` Himmelscyan. Die Ziffer darauf ist Text und
+      // braucht 4,5:1, auf dem Cyan wie auf dem Rot einer Warnung.
+      for (final TrayIconState state in <TrayIconState>[
+        TrayIconState.held,
+        TrayIconState.alert,
+      ]) {
+        final double ratio = HColorDerivation.contrast(
+          trayIconInk(state),
+          trayIconColor(state),
+        );
+        expect(
+          ratio,
+          greaterThanOrEqualTo(HColorDerivation.textMinContrast),
+          reason: '${state.name} digit is ${ratio.toStringAsFixed(2)}',
+        );
+      }
+      // Gemessen: dunkle Ziffer auf Cyan. Weiß wäre dort unlesbar.
+      expect(
+        HColorDerivation.contrast(
+          trayIconInk(TrayIconState.held),
+          HColors.held,
+        ),
+        greaterThan(9),
+      );
+      expect(
+        HColorDerivation.contrast(const Color(0xFFFFFFFF), HColors.held),
+        lessThan(HColorDerivation.textMinContrast),
+      );
+    });
   });
 
   testWidgets('the_icon_is_argb_in_both_sizes', (WidgetTester tester) async {
@@ -60,7 +92,7 @@ void main() {
     for (final TrayPixmap pixmap in pixmaps) {
       expect(pixmap.argb.length, pixmap.width * pixmap.height * 4);
     }
-    // Alpha first, then the held amber: a chip that fills its own area.
+    // Alpha first, then the held cyan: a chip that fills its own area.
     final (int a, int r, int g, int b) = centre(pixmaps.first);
     expect(a, 255);
     expect(r, (HColors.held.r * 255).round());

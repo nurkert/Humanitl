@@ -99,7 +99,7 @@ class StatusBar extends ConsumerWidget {
 /// The load of the hold queue, once it gets close to a limit (HUM-057).
 ///
 /// Unter 80 % beider Grenzen zeichnet es nichts: Eine Zahl, die immer dasteht,
-/// liest niemand mehr, wenn sie einmal wichtig wird. Ab 80 % steht sie amber
+/// liest niemand mehr, wenn sie einmal wichtig wird. Ab 80 % steht sie in der Warnfarbe
 /// da, etwa „Queue 412/500 · 210 MB", ab 100 % rot und mit dem Code
 /// `LIMIT_002` samt Titel, denn dann blockt der Daemon jede neue Anfrage.
 class QueuePressureLabel extends ConsumerWidget {
@@ -121,7 +121,7 @@ class QueuePressureLabel extends ConsumerWidget {
     final AppLocalizations l10n = context.l10n;
     final Color color = pressure == QueuePressure.full
         ? tokens.stateTextColor(HFlowState.blocked)
-        : tokens.stateTextColor(HFlowState.held);
+        : tokens.colors.warningText;
     return Padding(
       padding: EdgeInsets.only(right: tokens.spacing.x3),
       child: Row(

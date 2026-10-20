@@ -223,7 +223,7 @@ void main() {
     builder: (GoldenVariant variant) => variantBar(variant, goldenDetail()),
   );
 
-  // Offene Funde: die Freigabe in Amber, mit eigener Beschriftung und der
+  // Offene Funde: die Freigabe in der Warnfarbe mit Warnglyph, mit eigener Beschriftung und der
   // Zeile, die sagt, was wohin ginge (`docs/UX.md` 4.7).
   goldenVariants(
     'action_bar_findings',

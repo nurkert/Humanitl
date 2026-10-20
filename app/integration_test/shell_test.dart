@@ -26,7 +26,19 @@ void main() {
         child: const HumanitlApp(),
       ),
     );
-    await tester.pumpAndSettle();
+    // Kein `pumpAndSettle`: Der Fake hält Anfragen an, und solange eine
+    // gehalten ist, läuft über der Warteschlange das Absperrband (HUM-260,
+    // `docs/UX.md` 3.6). Es läuft endlos, also käme `pumpAndSettle` nie zur
+    // Ruhe. Die Tests unter `app/test` halten das Band über
+    // `HCautionTape.debugFreeze` an; dieser hier läuft auf dem echten Gerät
+    // und zeigt es so, wie es ist. Gewartet wird deshalb begrenzt, bis die
+    // Shell steht, wie in `queue_freeze_test.dart`.
+    final Stopwatch boot = Stopwatch()..start();
+    while (find.byType(IconRail).evaluate().isEmpty &&
+        boot.elapsed < const Duration(seconds: 20)) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    await tester.pump(const Duration(milliseconds: 500));
 
     expect(find.byType(IconRail), findsOneWidget);
     // So viele Einträge, wie es Abschnitte gibt, und nicht fünf: Die Zahl hier

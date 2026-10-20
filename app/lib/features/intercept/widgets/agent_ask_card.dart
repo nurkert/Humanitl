@@ -515,7 +515,7 @@ class _AgentAskRuleSheetState extends ConsumerState<AgentAskRuleSheet> {
             _Note(
               key: const Key('intercept-agent-ask-rule-whole-host'),
               text: l10n.interceptAgentAskRuleWholeHost(draft.host.trim()),
-              color: tokens.stateTextColor(HFlowState.held),
+              color: tokens.colors.warningText,
             ),
           ],
           SizedBox(height: tokens.spacing.x3),

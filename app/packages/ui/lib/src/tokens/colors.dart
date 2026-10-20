@@ -40,7 +40,42 @@ abstract final class HColors {
   static const Color fg2 = Color(0xFF6B7186);
 
   /// The single accent: focus, primary button, selection, links. Nothing else.
-  static const Color accent = Color(0xFF7C9CF5);
+  ///
+  /// Seit HUM-260 das Gelb der Marke: das App-Icon ist eine schwarze Faust auf
+  /// einer gelben Kachel (#EBC05A bis #D49E34), und die Oberfläche übernimmt
+  /// dieses Gelb als Akzent, mit dunklem Vordergrund ([onAccent]). Der Wert
+  /// liegt zwischen den beiden Enden des Verlaufs der Kachel, eine Spur
+  /// gesättigter als #EBC05A, damit er auf `bg0` bis `bg3` nicht ins Beige
+  /// kippt. Er misst auf der hellsten dunklen Fläche (`bg3`) 7,95:1 und trägt
+  /// [onAccent] mit 9,81:1.
+  static const Color accent = Color(0xFFE8B84B);
+
+  /// Text und Glyphen auf dem Akzent, in beiden Themes.
+  ///
+  /// Auf Gelb ist Weiß unlesbar (1,85:1 auf [accent]); die Marke stellt
+  /// deshalb Schwarz auf Gelb, und die Oberfläche tut es ihr nach. Ein
+  /// eigenes Token und nicht `bg0`, weil der Wert in beiden Themes derselbe
+  /// ist: das helle Theme schreibt auf seinem Ocker [lAccent] ebenfalls dunkel
+  /// (4,65:1); Weiß erreichte dort nur 3,89:1.
+  static const Color onAccent = Color(0xFF14161C);
+
+  /// Achtung: Warnungen, die kein Zustand eines Flows sind.
+  ///
+  /// Das Gelb der Marke, also derselbe Wert wie [accent]: Gelb heißt
+  /// Achtung, wie beim Absperrband. Bis HUM-260 trugen Warnungen das Amber
+  /// von `held`; seit `held` cyan ist, wäre eine cyanfarbene Warnung neben
+  /// einer gelben Information verkehrt herum gelesen worden. Weil der Wert
+  /// mit dem Akzent zusammenfällt, steht eine Warnung nie als Farbe allein:
+  /// immer mit Glyph (`triangleAlert`) oder Text, und ein Control in
+  /// Warnfarbe ist trotzdem eines, das man anfassen kann (`docs/UX.md` 3.3,
+  /// Regel 12).
+  static const Color warning = accent;
+
+  /// Information: der Ton, der bis HUM-260 der Akzent war.
+  ///
+  /// Ein Blau, das keine andere Farbe des Systems trägt; eine Information in
+  /// Gelb hätte neben einer Warnung in Gelb nichts mehr unterschieden.
+  static const Color info = Color(0xFF7C9CF5);
 
   // --- Light neutral ladder --------------------------------------------------
 
@@ -71,13 +106,39 @@ abstract final class HColors {
   /// Light tertiary text.
   static const Color lFg2 = Color(0xFF7C8294);
 
-  /// Light accent.
-  static const Color lAccent = Color(0xFF5B7FE6);
+  /// Light accent: das Gelb der Marke als Ocker.
+  ///
+  /// Gelb auf Weiß ist unlesbar — [accent] misst auf `lBg3` 1,56:1 und
+  /// verfehlt selbst die Flächengrenze. Der helle Akzent behält deshalb den
+  /// Ton der Marke (41°) und geht in der Helligkeit so weit herunter, dass er
+  /// zwei Grenzen zugleich hält: 3,29:1 als Fläche auf der dunkelsten hellen
+  /// Fläche (`lBg3`) und 4,65:1 für [onAccent] auf ihm. Das Fenster dafür ist
+  /// schmal (relative Leuchtdichte zwischen rund 0,211 und 0,243), und dieser
+  /// Wert sitzt in seiner Mitte; damit ist die Füllung des Primärbuttons im
+  /// hellen Theme der Akzent selbst, wie im dunklen.
+  static const Color lAccent = Color(0xFFA57A1C);
+
+  /// Light warning: der Ocker des hellen Akzents, aus demselben Grund wie
+  /// [warning].
+  static const Color lWarning = lAccent;
+
+  /// Light information: das Blau, das bis HUM-260 der helle Akzent war.
+  static const Color lInfo = Color(0xFF5B7FE6);
 
   // --- Dark state colours ----------------------------------------------------
 
   /// A request waits for a human decision.
-  static const Color held = Color(0xFFE0B24A);
+  ///
+  /// Bis HUM-260 Amber (#E0B24A). Seit Gelb der Akzent ist, trägt `held` ein
+  /// kühles Himmelscyan, damit Akzent und Zustand nie verwechselt werden: die
+  /// Fläche zum Anfassen ist gelb, die Fläche zum Ablesen nicht
+  /// (`docs/UX.md` 3.3, Regel 8 und 9). Der Ton (198°) liegt zwischen dem
+  /// Teal von [allowedEdited] und dem Violett von [passthrough], die Helligkeit
+  /// über beiden: unter Deuteranopie fallen Cyan und Violett auf dasselbe
+  /// Blau, und nur die Helligkeit hält sie dann auseinander. Der Abstand zu
+  /// jeder anderen Zustandsfarbe und zum Akzent, normal und unter Protanopie
+  /// und Deuteranopie simuliert, steht in `tokens_test.dart`.
+  static const Color held = Color(0xFF79C9EC);
 
   /// A request was allowed unchanged.
   static const Color allowed = Color(0xFF4FBF8C);
@@ -85,13 +146,12 @@ abstract final class HColors {
   /// A request was allowed after editing: green carrying the accent pencil.
   ///
   /// BACKLOG.md describes the state as "green plus an accent pencil dot". The
-  /// dot is drawn by [HColors.accent]; the surface colour is [allowed] pulled
-  /// [allowedEditedBlend] of the way towards the accent so that the rail of an
-  /// edited flow is distinguishable from an untouched one.
+  /// dot is drawn by [HColors.accent]. Die Fläche entstand bis HUM-260 als
+  /// [allowed], 18 Prozent zum damaligen blauen Akzent (#7C9CF5) gezogen; seit
+  /// der Akzent gelb ist, steht sie als fester Wert. Zum Gelb gezogen läge sie
+  /// näher an `allowed`, und die Rail einer bearbeiteten Anfrage wäre von
+  /// einer unberührten kaum noch zu unterscheiden.
   static const Color allowedEdited = Color(0xFF57B99F);
-
-  /// How far [allowedEdited] sits between [allowed] and [accent].
-  static const double allowedEditedBlend = 0.18;
 
   /// A request was blocked. Red means blocked, never anything else.
   static const Color blocked = Color(0xFFE5646E);
@@ -350,13 +410,13 @@ abstract final class HColorDerivation {
   /// Die Füllung, auf der [text] seine [minContrast] erreicht.
   ///
   /// Ein gefülltes Control trägt sein Wort in einer festen Farbe — der
-  /// Primärbutton das [HSurfaceColors.onAccent] seines Themes. Erreicht das
-  /// Wort auf der Füllung die Grenze nicht, weicht die **Füllung** zurück,
-  /// nicht das Wort: [fill] ist ein Akzent und behält Ton, Sättigung und
-  /// Alpha, damit der Button dieselbe Farbe *ist* und nicht eine zweite. Im
-  /// hellen Theme misst Weiß auf dem Akzent 3,73:1, also wird der Akzent dort
-  /// als Füllung dunkler; im dunklen misst die dunkelste Fläche auf ihm
-  /// 7,14:1, und er kommt unverändert zurück (`docs/UX.md` 6).
+  /// Primärbutton [HColors.onAccent]. Erreicht das Wort auf der Füllung die
+  /// Grenze nicht, weicht die **Füllung** zurück, nicht das Wort: [fill] ist
+  /// ein Akzent und behält Ton, Sättigung und Alpha, damit der Button
+  /// dieselbe Farbe *ist* und nicht eine zweite. Seit HUM-260 erreicht der
+  /// dunkle Vordergrund beide Akzente schon (9,81:1 dunkel, 4,65:1 hell), und
+  /// beide kommen unverändert zurück; die Ableitung bleibt als Sicherung für
+  /// den Tag, an dem jemand den Akzent verschiebt (`docs/UX.md` 6).
   static Color readableFill(
     Color fill,
     Color text, {

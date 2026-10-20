@@ -123,8 +123,8 @@ void main() {
       };
 
       expect(byCode['SANDBOX_013'], tokens.state.error);
-      expect(byCode['SANDBOX_020'], tokens.state.held);
-      expect(byCode['SANDBOX_021'], tokens.colors.accent);
+      expect(byCode['SANDBOX_020'], tokens.colors.warning);
+      expect(byCode['SANDBOX_021'], tokens.colors.info);
       // Die eine Farbe, die keine davon sein darf.
       for (final Color used in byCode.values) {
         expect(

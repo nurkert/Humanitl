@@ -1,5 +1,5 @@
 // Die Auslastung der Warteschlange in der Statusleiste (HUM-058, Zeile 16,
-// übernommen von HUM-057): unter 80 % nichts, ab 80 % amber, ab 100 % rot mit
+// übernommen von HUM-057): unter 80 % nichts, ab 80 % Warnfarbe, ab 100 % rot mit
 // `LIMIT_002`.
 
 import 'package:flutter/widgets.dart' hide Flow;
@@ -105,10 +105,10 @@ void main() {
     await _pump(tester, _held(7));
     expect(find.byKey(const Key('status-queue-pressure')), findsNothing);
 
-    // 8 von 10: ab 80 % amber, mit Zahl, Grenze und der Belegung des Daemons.
+    // 8 von 10: ab 80 % Warnfarbe, mit Zahl, Grenze und der Belegung des Daemons.
     await _pump(tester, _held(8), poolBytes: 8000);
     expect(find.text('Queue 8/10 · 8.0 kB'), findsOneWidget);
-    expect(_colorOf(tester), tokens.stateTextColor(HFlowState.held));
+    expect(_colorOf(tester), tokens.colors.warningText);
     expect(find.byKey(const Key('status-queue-limit')), findsNothing);
 
     // 10 von 10: voll, rot, mit `LIMIT_002` und dem Titel aus ARB.
@@ -119,13 +119,13 @@ void main() {
     expect(find.text('Queue full'), findsOneWidget);
 
     // Auch die Bytes zählen, und zwar die des Daemons: 850 kB von 1 MB im
-    // Budget sind amber, auch wenn die gehaltenen Flüsse wenig ankündigen
+    // Budget tragen die Warnfarbe, auch wenn die gehaltenen Flüsse wenig ankündigen
     // (gerade gepufferte Rümpfe anderer Anfragen zählen mit).
     await _pump(tester, _held(1), poolBytes: 850000);
-    expect(_colorOf(tester), tokens.stateTextColor(HFlowState.held));
+    expect(_colorOf(tester), tokens.colors.warningText);
 
     // Ein gehaltener Stream-Kopf kündigt viel an und belegt fast nichts: kein
-    // Amber, kein Rot (HUM-057, Review 2).
+    // Warnfarbe, kein Rot (HUM-057, Review 2).
     await _pump(tester, _held(1, size: 900000), poolBytes: 1000);
     expect(find.byKey(const Key('status-queue-pressure')), findsNothing);
   });

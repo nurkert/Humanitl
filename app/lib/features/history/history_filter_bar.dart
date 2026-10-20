@@ -291,8 +291,8 @@ String historySeverityLabel(AppLocalizations l10n, Severity severity) =>
 /// tint of it, and the area palette is clamped to 3:1 (`docs/UX.md` 6).
 Color historySeverityColor(HTokens tokens, Severity severity) =>
     switch (severity) {
-      Severity.info => tokens.colors.accentText,
-      Severity.warning => tokens.stateTextColor(HFlowState.held),
+      Severity.info => tokens.colors.infoText,
+      Severity.warning => tokens.colors.warningText,
       Severity.error ||
       Severity.blocking => tokens.stateTextColor(HFlowState.error),
     };

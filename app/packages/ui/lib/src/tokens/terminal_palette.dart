@@ -7,11 +7,14 @@
 /// percent of the sandbox screen and would otherwise be the one surface with
 /// somebody else's palette on it.
 ///
-/// The eight base colours are therefore **not** invented here. Six of them are
-/// the state colours this program already uses for exactly that meaning:
-/// `blocked` is red, `allowed` is green, `held` is yellow, the accent is blue,
-/// `passthroughLlm` is magenta, `allowedEdited` is cyan. What a human learns
-/// on the queue screen holds in the terminal.
+/// The eight base colours are therefore **not** invented here. Five of them
+/// are colours this program already uses for exactly that hue: `blocked` is
+/// red, `allowed` is green, the accent is yellow, `passthroughLlm` is magenta,
+/// `held` is cyan. Seit HUM-260 ist der Akzent das Gelb der Marke und `held`
+/// ein Himmelscyan; vorher lag der Akzent auf Blau und `held` auf Gelb. Blau
+/// ist damit der eine Ton, den keine Farbe des Programms trägt, und steht als
+/// eigene Konstante unten. What a human learns on the queue screen holds in
+/// the terminal.
 ///
 /// This file holds no dependency on a terminal package. It carries colours;
 /// the pane that renders them maps them to whatever its emulator wants
@@ -74,20 +77,20 @@ class HTerminalPalette {
       HColors.bg2,
       HColors.blocked,
       HColors.allowed,
-      HColors.held,
       HColors.accent,
+      _blue,
       HColors.passthrough,
-      _cyan,
+      HColors.held,
       HColors.fg1,
     ],
     bright: <Color>[
       HColors.fg2,
       _lift(HColors.blocked),
       _lift(HColors.allowed),
-      _lift(HColors.held),
       _lift(HColors.accent),
+      _lift(_blue),
       _lift(HColors.passthrough),
-      _lift(_cyan),
+      _lift(HColors.held),
       HColors.fg0,
     ],
   );
@@ -104,10 +107,10 @@ class HTerminalPalette {
       HColors.lLineStrong,
       HColorDerivation.lightState(HColors.blocked),
       HColorDerivation.lightState(HColors.allowed),
-      HColorDerivation.lightState(HColors.held),
       HColors.lAccent,
+      HColorDerivation.lightState(_blue),
       HColorDerivation.lightState(HColors.passthrough),
-      HColorDerivation.lightState(_cyan),
+      HColorDerivation.lightState(HColors.held),
       HColors.lFg1,
     ],
     bright: <Color>[
@@ -120,16 +123,16 @@ class HTerminalPalette {
         HColorDerivation.lightState(HColors.allowed),
         _brightStep,
       ),
-      HColorDerivation.darken(
-        HColorDerivation.lightState(HColors.held),
-        _brightStep,
-      ),
       HColorDerivation.darken(HColors.lAccent, _brightStep),
+      HColorDerivation.darken(HColorDerivation.lightState(_blue), _brightStep),
       HColorDerivation.darken(
         HColorDerivation.lightState(HColors.passthrough),
         _brightStep,
       ),
-      HColorDerivation.darken(HColorDerivation.lightState(_cyan), _brightStep),
+      HColorDerivation.darken(
+        HColorDerivation.lightState(HColors.held),
+        _brightStep,
+      ),
       HColors.lFg0,
     ],
   );
@@ -143,10 +146,12 @@ class HTerminalPalette {
   List<Color> get ramp => <Color>[...normal, ...bright];
 }
 
-/// Cyan. The one hue the state colours do not cover: `allowedEdited` is a
-/// teal that reads as green next to `allowed`, and a terminal that answers
-/// `ESC [ 36 m` with green loses a distinction the agent made.
-const Color _cyan = Color(0xFF4FB6D6);
+/// Blau. Der eine Ton, den seit HUM-260 keine Farbe des Programms trägt: der
+/// Akzent ist gelb, `held` cyan, `passthroughLlm` violett. Ein Terminal, das
+/// `ESC [ 34 m` mit Cyan oder Violett beantwortete, verlöre eine
+/// Unterscheidung, die der Agent gemacht hat. Gleiche Helligkeit wie die
+/// übrigen Grundfarben, damit kein Ton lauter ist als ein anderer.
+const Color _blue = Color(0xFF6F8FEF);
 
 /// How far a bright colour moves from its base.
 ///

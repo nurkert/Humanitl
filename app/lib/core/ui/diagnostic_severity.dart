@@ -29,7 +29,7 @@ String severityLabel(AppLocalizations l10n, Severity severity) =>
 /// Nie das Rot des Blockierens: Rot bedeutet in diesem Programm „diese Anfrage
 /// ist nicht hinausgegangen", und ein Befund ist keine Entscheidung.
 Color severityColor(HTokens tokens, Severity severity) => switch (severity) {
-  Severity.info => tokens.colors.accent,
-  Severity.warning => tokens.state.held,
+  Severity.info => tokens.colors.info,
+  Severity.warning => tokens.colors.warning,
   Severity.error || Severity.blocking => tokens.state.error,
 };

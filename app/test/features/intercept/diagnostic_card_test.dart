@@ -111,14 +111,14 @@ void main() {
     await tester.pump();
   });
 
-  /// `LLM_005` steht im Streifen als bernsteinfarbene Zeile (HUM-039).
+  /// `LLM_005` steht im Streifen als Zeile in der Warnfarbe (HUM-039).
   ///
   /// Der Befund entsteht, wenn eine durchgereichte Anfrage an das Sprachmodell
   /// Funde trägt: Sie ist schon gesendet, niemand hat über sie entschieden,
-  /// und der Streifen ist der Ort, an dem der Mensch davon erfährt. Bernstein
+  /// und der Streifen ist der Ort, an dem der Mensch davon erfährt. Die Warnfarbe
   /// und nicht Rot: Rot heißt in diesem Programm „blockiert", und diese
   /// Anfrage war das Gegenteil (`docs/UX.md` Regel 6).
-  testWidgets('llm_005_is_an_amber_line_in_the_strip', (
+  testWidgets('llm_005_is_a_warning_line_in_the_strip', (
     WidgetTester tester,
   ) async {
     const String why =
@@ -144,7 +144,8 @@ void main() {
     final HTokens tokens = HTheme.of(
       tester.element(find.byType(HDiagnosticCard)),
     );
-    expect(card.color, tokens.state.held, reason: 'amber, the held hue');
+    expect(card.color, tokens.colors.warning, reason: 'the warning yellow');
+    expect(card.color, isNot(tokens.state.held));
     expect(card.color, isNot(tokens.state.blocked));
   });
 

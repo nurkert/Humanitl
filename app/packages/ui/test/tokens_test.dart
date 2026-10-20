@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl_ui/humanitl_ui.dart';
@@ -32,7 +34,7 @@ const List<Color> darkSurfaces = <Color>[
 /// values, so a test that recomputed them could not fail. A change to the
 /// derivation shows up here as a diff to review, not as a silent re-statement.
 const Map<HFlowState, int> frozenLightStates = <HFlowState, int>{
-  HFlowState.held: 0xFFAC801D,
+  HFlowState.held: 0xFF1C91C5,
   HFlowState.allowed: 0xFF36956A,
   HFlowState.allowedEdited: 0xFF3E957E,
   HFlowState.blocked: 0xFFDC303D,
@@ -47,7 +49,7 @@ const Map<HFlowState, int> frozenLightStates = <HFlowState, int>{
 /// also könnte ein Test, der sie nachrechnet, nicht fehlschlagen. Eine
 /// geänderte Ableitung erscheint hier als Diff, den jemand ansieht.
 const Map<HFlowState, int> frozenDarkStateText = <HFlowState, int>{
-  HFlowState.held: 0xFFE0B24A,
+  HFlowState.held: 0xFF79C9EC,
   HFlowState.allowed: 0xFF56C291,
   HFlowState.allowedEdited: 0xFF62BEA5,
   HFlowState.blocked: 0xFFEB878F,
@@ -59,7 +61,7 @@ const Map<HFlowState, int> frozenDarkStateText = <HFlowState, int>{
 
 /// Dasselbe für das helle Theme.
 const Map<HFlowState, int> frozenLightStateText = <HFlowState, int>{
-  HFlowState.held: 0xFF735613,
+  HFlowState.held: 0xFF136386,
   HFlowState.allowed: 0xFF26684A,
   HFlowState.allowedEdited: 0xFF2B6656,
   HFlowState.blocked: 0xFFA81C27,
@@ -95,6 +97,81 @@ Color galleryBackground(WidgetTester tester) => tester
           .first,
     )
     .color;
+
+/// The HSL hue of [color] in degrees.
+double hueOf(Color color) => HSLColor.fromColor(color).hue;
+
+/// sRGB channel to linear light.
+double _linear(double c) =>
+    c <= 0.04045 ? c / 12.92 : math.pow((c + 0.055) / 1.055, 2.4).toDouble();
+
+/// Die Simulation einer Farbsehschwäche nach Machado, Oliveira und Fernandes
+/// (2009), volle Schwere, auf linearem RGB. Hier ausgeschrieben und nicht aus
+/// dem Paket geholt: der Test soll die Palette messen, nicht sich selbst.
+const Map<String, List<List<double>>> machado = <String, List<List<double>>>{
+  'protanopia': <List<double>>[
+    <double>[0.152286, 1.052583, -0.204868],
+    <double>[0.114503, 0.786281, 0.099216],
+    <double>[-0.003882, -0.048116, 1.051998],
+  ],
+  'deuteranopia': <List<double>>[
+    <double>[0.367322, 0.860646, -0.227968],
+    <double>[0.280085, 0.672501, 0.047413],
+    <double>[-0.011820, 0.042940, 0.968881],
+  ],
+};
+
+/// [color] in linear RGB, so wie ein Auge mit [vision] es sieht; `null` ist
+/// normales Sehen.
+List<double> seenAs(Color color, String? vision) {
+  final List<double> rgb = <double>[
+    _linear(color.r),
+    _linear(color.g),
+    _linear(color.b),
+  ];
+  if (vision == null) {
+    return rgb;
+  }
+  final List<List<double>> m = machado[vision]!;
+  return <double>[
+    for (int i = 0; i < 3; i++)
+      (m[i][0] * rgb[0] + m[i][1] * rgb[1] + m[i][2] * rgb[2]).clamp(0.0, 1.0),
+  ];
+}
+
+/// Linear RGB nach OKLab (Björn Ottosson, 2020).
+List<double> oklab(List<double> rgb) {
+  double cbrt(double x) => math.pow(x, 1 / 3).toDouble();
+  final double l = cbrt(
+    0.4122214708 * rgb[0] + 0.5363325363 * rgb[1] + 0.0514459929 * rgb[2],
+  );
+  final double m = cbrt(
+    0.2119034982 * rgb[0] + 0.6806995451 * rgb[1] + 0.1073969566 * rgb[2],
+  );
+  final double s = cbrt(
+    0.0883024619 * rgb[0] + 0.2817188376 * rgb[1] + 0.6299787005 * rgb[2],
+  );
+  return <double>[
+    0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+    1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+    0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
+  ];
+}
+
+/// Der Abstand zweier Farben in OKLab, so wie ein Auge mit [vision] sie sieht.
+///
+/// Rund 0,02 ist die kleinste Differenz, die man nebeneinander noch sieht.
+/// Zum Vergleich: `allowed` und `allowedEdited` liegen 0,037 auseinander,
+/// `allowed` und `blocked` unter Deuteranopie 0,057.
+double perceivedDistance(Color a, Color b, String? vision) {
+  final List<double> pa = oklab(seenAs(a, vision));
+  final List<double> pb = oklab(seenAs(b, vision));
+  double sum = 0;
+  for (int i = 0; i < 3; i++) {
+    sum += (pa[i] - pb[i]) * (pa[i] - pb[i]);
+  }
+  return math.sqrt(sum);
+}
 
 void main() {
   group('state colours', () {
@@ -222,15 +299,18 @@ void main() {
       expect(HColors.autoRule.b, closeTo(HColors.allowed.b, 1e-9));
     });
 
-    test('allowed edited is allowed pulled towards the accent', () {
-      final Color expected = Color.lerp(
+    test('allowed edited stays the teal it was before the accent turned', () {
+      // Bis HUM-260 war die Fläche `allowed`, 18 % zum blauen Akzent gezogen.
+      // Seit der Akzent gelb ist, steht sie als fester Wert: zum Gelb gezogen
+      // rückte sie zum Grün hin statt vom Grün weg.
+      expect(HColors.allowedEdited.toARGB32(), 0xFF57B99F);
+      final Color towardsYellow = Color.lerp(
         HColors.allowed,
         HColors.accent,
-        HColors.allowedEditedBlend,
+        0.18,
       )!;
-      expect((HColors.allowedEdited.r - expected.r).abs(), lessThan(0.005));
-      expect((HColors.allowedEdited.g - expected.g).abs(), lessThan(0.005));
-      expect((HColors.allowedEdited.b - expected.b).abs(), lessThan(0.005));
+      expect(hueOf(towardsYellow), lessThan(hueOf(HColors.allowed)));
+      expect(hueOf(HColors.allowedEdited), greaterThan(hueOf(HColors.allowed)));
       expect(HFlowState.allowedEdited.hasAccentDot, isTrue);
       expect(HFlowState.allowed.hasAccentDot, isFalse);
     });
@@ -316,9 +396,10 @@ void main() {
       }
       // Die gemessenen Zahlen, damit ein Rückschritt hier auffällt und nicht
       // erst auf dem Schirm. Der schlechteste Fall ist seit der Aufnahme der
-      // Haltefüllung in `fillAlphas` diese Füllung: `held` misst auf ihr
-      // 2,49:1 statt der 2,54:1 auf der Tönung (`docs/UX.md` 6).
-      expect(lightArea[HFlowState.held]!, closeTo(2.49, 0.01));
+      // Haltefüllung in `fillAlphas` diese Füllung (`docs/UX.md` 6). Das
+      // Cyan, das `held` seit HUM-260 trägt, misst auf ihr 2,44:1; das alte
+      // Amber kam auf 2,49:1.
+      expect(lightArea[HFlowState.held]!, closeTo(2.44, 0.01));
       expect(lightArea[HFlowState.blocked]!, closeTo(2.95, 0.01));
       expect(lightArea[HFlowState.error]!, closeTo(2.49, 0.01));
     });
@@ -394,9 +475,11 @@ void main() {
           greaterThanOrEqualTo(HColorDerivation.areaMinContrast),
         );
       }
-      // Hell weicht die Füllung zurück, dunkel steht sie schon weit genug.
+      // Seit HUM-260 steht die Füllung in beiden Themes schon weit genug: der
+      // dunkle Vordergrund erreicht Gelb und Ocker ohne Rückweichen. Weiß
+      // erreichte den Ocker nicht; deshalb ist das Wort dunkel.
       expect(HTokens.dark.colors.accentFill, HColors.accent);
-      expect(HTokens.light.colors.accentFill, isNot(HColors.lAccent));
+      expect(HTokens.light.colors.accentFill, HColors.lAccent);
       expect(
         wcagContrast(HColors.lBg1, HColors.lAccent),
         lessThan(HColorDerivation.textMinContrast),
@@ -633,6 +716,275 @@ void main() {
     });
   });
 
+  group('HUM-260: yellow accent and a held that is not yellow', () {
+    // Die drei Sehweisen, unter denen `held` von jeder anderen Farbe des
+    // Systems unterscheidbar bleiben muss: normal und die beiden
+    // Rot-Grün-Schwächen.
+    const List<String?> visions = <String?>[null, 'protanopia', 'deuteranopia'];
+    // Unter diesem Abstand gilt eine Farbe als zu nah an `held`: rund das
+    // Doppelte des Abstands zwischen `allowed` und `allowedEdited` (0,037),
+    // die das Glyph trennt. `held` steht oft ohne Nachbarn und muss allein
+    // erkennbar sein.
+    const double heldMinDistance = 0.08;
+
+    test('the accent clears 3:1 on bg0 and bg1 in both themes', () {
+      for (final (Color accent, List<Color> surfaces, String name)
+          in <(Color, List<Color>, String)>[
+            (HColors.accent, <Color>[HColors.bg0, HColors.bg1], 'dark'),
+            (HColors.lAccent, <Color>[HColors.lBg0, HColors.lBg1], 'light'),
+          ]) {
+        for (final Color surface in surfaces) {
+          final double ratio = wcagContrast(accent, surface);
+          expect(
+            ratio,
+            greaterThanOrEqualTo(HColorDerivation.areaMinContrast),
+            reason:
+                '$name accent on ${HColorDerivation.toHex(surface)} is '
+                '${ratio.toStringAsFixed(2)}',
+          );
+        }
+      }
+      // Die gemessenen Zahlen, damit eine Verschiebung als Diff auffällt.
+      expect(worstOf(HColors.accent, darkSurfaces), closeTo(7.95, 0.02));
+      expect(wcagContrast(HColors.lAccent, HColors.lBg1), closeTo(3.89, 0.02));
+      expect(worstOf(HColors.lAccent, lightSurfaces), closeTo(3.29, 0.02));
+    });
+
+    test('text on the accent is dark, never white, in both themes', () {
+      for (final Brightness brightness in Brightness.values) {
+        final HSurfaceColors c = HTokens.forBrightness(brightness).colors;
+        expect(c.onAccent, HColors.onAccent, reason: brightness.name);
+        for (final Color fill in <Color>[c.accent, c.accentFill]) {
+          final double ratio = wcagContrast(c.onAccent, fill);
+          expect(
+            ratio,
+            greaterThanOrEqualTo(HColorDerivation.textMinContrast),
+            reason:
+                '${brightness.name} onAccent on '
+                '${HColorDerivation.toHex(fill)} is '
+                '${ratio.toStringAsFixed(2)}',
+          );
+          // Weiß wäre dort unlesbar: das ist der Grund für das Token.
+          expect(
+            wcagContrast(const Color(0xFFFFFFFF), fill),
+            lessThan(HColorDerivation.textMinContrast),
+            reason: brightness.name,
+          );
+        }
+        expect(c.onAccent.computeLuminance(), lessThan(0.02));
+      }
+      expect(
+        wcagContrast(HColors.onAccent, HColors.accent),
+        closeTo(9.81, 0.02),
+      );
+      expect(
+        wcagContrast(HColors.onAccent, HColors.lAccent),
+        closeTo(4.65, 0.02),
+      );
+    });
+
+    test('both accents carry the hue of the brand', () {
+      // Die Kachel des App-Icons läuft von #EBC05A nach #D49E34, 40 bis 42
+      // Grad. Der helle Akzent ist dunkler, nicht anders getönt.
+      for (final Color accent in <Color>[HColors.accent, HColors.lAccent]) {
+        expect(hueOf(accent), inInclusiveRange(38.0, 46.0));
+      }
+      expect(hueOf(HColors.held), inInclusiveRange(185.0, 205.0));
+    });
+
+    test('held is far from every other state colour and the accent', () {
+      for (final Brightness brightness in Brightness.values) {
+        final HTokens tokens = HTokens.forBrightness(brightness);
+        final Color panel = tokens.colors.bg1;
+        // Durchscheinende Farben (`autoRule`) so, wie sie auf dem Panel
+        // stehen.
+        Color onPanel(Color color) => Color.alphaBlend(color, panel);
+        final Color held = onPanel(tokens.state.held);
+        final Map<String, Color> others = <String, Color>{
+          for (final HFlowState state in HFlowState.values)
+            if (state != HFlowState.held)
+              state.name: onPanel(tokens.stateColor(state)),
+          'accent': onPanel(tokens.colors.accent),
+        };
+        for (final String? vision in visions) {
+          for (final MapEntry<String, Color> other in others.entries) {
+            final double d = perceivedDistance(held, other.value, vision);
+            expect(
+              d,
+              greaterThanOrEqualTo(heldMinDistance),
+              reason:
+                  '${brightness.name} held vs ${other.key} under '
+                  '${vision ?? 'normal vision'} is ${d.toStringAsFixed(3)}',
+            );
+          }
+        }
+      }
+    });
+
+    test('the old amber held would fail the distance check', () {
+      // Der Gegenbeweis, ohne den die Prüfung oben nichts bewiese: das alte
+      // `held` (#E0B24A) liegt neben dem neuen Akzent in jeder Sehweise unter
+      // der Grenze.
+      for (final String? vision in visions) {
+        expect(
+          perceivedDistance(const Color(0xFFE0B24A), HColors.accent, vision),
+          lessThan(heldMinDistance),
+          reason: vision ?? 'normal vision',
+        );
+      }
+      // Und die Simulation tut etwas: unter Deuteranopie rücken `allowed` und
+      // `blocked` sichtbar zusammen.
+      expect(
+        perceivedDistance(HColors.allowed, HColors.blocked, 'deuteranopia'),
+        lessThan(perceivedDistance(HColors.allowed, HColors.blocked, null) / 2),
+      );
+    });
+
+    test('the primary button moves away from its dark word', () {
+      // Ruhe, Hover und Druck sind drei verschiedene Farben, und auf jeder
+      // steht das dunkle Wort bei 4,5:1. Die alte Regel dunkelte im hellen
+      // Theme beim Hover ab und nahm dem Wort damit die Grenze (3,84:1).
+      for (final Brightness brightness in Brightness.values) {
+        final HTokens tokens = HTokens.forBrightness(brightness);
+        final List<Color> fills =
+            <Set<WidgetState>>[
+                  const <WidgetState>{},
+                  const <WidgetState>{WidgetState.hovered},
+                  const <WidgetState>{WidgetState.pressed},
+                ]
+                .map(
+                  (Set<WidgetState> states) => HShadcnButtonStyle.fillOf(
+                    tokens,
+                    HShadcnButtonRole.primary,
+                    states,
+                  ),
+                )
+                .toList();
+        expect(fills.toSet(), hasLength(3), reason: brightness.name);
+        for (final Color fill in fills) {
+          expect(
+            wcagContrast(tokens.colors.onAccent, fill),
+            greaterThanOrEqualTo(HColorDerivation.textMinContrast),
+            reason: '${brightness.name} ${HColorDerivation.toHex(fill)}',
+          );
+        }
+        // Hover hellt auf, weg vom dunklen Wort.
+        expect(
+          fills[1].computeLuminance(),
+          greaterThan(fills[0].computeLuminance()),
+          reason: brightness.name,
+        );
+      }
+    });
+
+    test('warning is the brand yellow, info the old blue', () {
+      expect(HColors.warning, HColors.accent);
+      expect(HColors.lWarning, HColors.lAccent);
+      expect(HColors.info.toARGB32(), 0xFF7C9CF5);
+      expect(HColors.lInfo.toARGB32(), 0xFF5B7FE6);
+      expect(HTokens.dark.colors.warning, HColors.warning);
+      expect(HTokens.light.colors.warning, HColors.lWarning);
+      expect(HTokens.dark.colors.info, HColors.info);
+      expect(HTokens.light.colors.info, HColors.lInfo);
+      // Eine Warnung ist nie `held`: `held` heißt ausschließlich „gehalten".
+      for (final Brightness brightness in Brightness.values) {
+        final HTokens tokens = HTokens.forBrightness(brightness);
+        expect(tokens.colors.warning, isNot(tokens.state.held));
+        expect(tokens.colors.info, isNot(tokens.colors.accent));
+      }
+    });
+
+    test('warning and info carry area and word like every state colour', () {
+      for (final Brightness brightness in Brightness.values) {
+        final HTokens tokens = HTokens.forBrightness(brightness);
+        final HSurfaceColors c = tokens.colors;
+        for (final (String name, Color area, Color text)
+            in <(String, Color, Color)>[
+              ('warning', c.warning, c.warningText),
+              ('info', c.info, c.infoText),
+            ]) {
+          final double areaRatio = worstOf(area, c.ladder);
+          expect(
+            areaRatio,
+            greaterThanOrEqualTo(HColorDerivation.areaMinContrast),
+            reason:
+                '${brightness.name} $name area is '
+                '${areaRatio.toStringAsFixed(2)}',
+          );
+          // Das Wort auf allen Flächen und auf der eigenen Tönung und
+          // Füllung, wie bei jeder Zustandsfarbe (`docs/UX.md` 6).
+          final double textRatio = worstOf(
+            text,
+            HColorDerivation.textBackgrounds(area, c.ladder),
+          );
+          expect(
+            textRatio,
+            greaterThanOrEqualTo(HColorDerivation.textMinContrast),
+            reason:
+                '${brightness.name} $name text is '
+                '${textRatio.toStringAsFixed(2)}',
+          );
+          // Ein Badge, dem jemand die Fläche reicht, schreibt von selbst in
+          // der Textvariante.
+          expect(tokens.stateTextOf(area), text, reason: name);
+        }
+      }
+    });
+
+    test('info, warning and held never share a family', () {
+      // Gelb heißt Achtung, Blau heißt Auskunft, Cyan heißt gehalten. Info
+      // und Warnung stehen immer mit ihrem Wort da (`HDiagnosticCard`); der
+      // Abstand sorgt dafür, dass die Farbe dem Wort nicht widerspricht.
+      for (final Brightness brightness in Brightness.values) {
+        final HSurfaceColors c = HTokens.forBrightness(brightness).colors;
+        final Color held = HTokens.forBrightness(brightness).state.held;
+        for (final String? vision in visions) {
+          for (final (String name, Color a, Color b)
+              in <(String, Color, Color)>[
+                ('info/warning', c.info, c.warning),
+                ('info/accent', c.info, c.accent),
+                ('warning/held', c.warning, held),
+              ]) {
+            final double d = perceivedDistance(a, b, vision);
+            expect(
+              d,
+              greaterThanOrEqualTo(heldMinDistance),
+              reason:
+                  '${brightness.name} $name under '
+                  '${vision ?? 'normal vision'} is ${d.toStringAsFixed(3)}',
+            );
+          }
+        }
+      }
+    });
+
+    test('the methods that borrow held and the accent follow them', () {
+      expect(HColors.methodPutPatch, HColors.held);
+      expect(HColors.methodGet, HColors.accent);
+      expect(HTokens.light.method.putPatch, HStateColors.light.held);
+      expect(HTokens.light.method.get, HColors.lAccent);
+    });
+
+    test('the terminal answers yellow with yellow and cyan with cyan', () {
+      // ANSI: schwarz, rot, grün, gelb, blau, magenta, cyan, weiß.
+      for (final HTerminalPalette palette in <HTerminalPalette>[
+        HTerminalPalette.dark,
+        HTerminalPalette.light,
+      ]) {
+        for (final List<Color> ramp in <List<Color>>[
+          palette.normal,
+          palette.bright,
+        ]) {
+          expect(hueOf(ramp[3]), inInclusiveRange(38.0, 60.0));
+          expect(hueOf(ramp[4]), inInclusiveRange(210.0, 240.0));
+          expect(hueOf(ramp[6]), inInclusiveRange(180.0, 205.0));
+        }
+      }
+      expect(HTerminalPalette.dark.normal[3], HColors.accent);
+      expect(HTerminalPalette.dark.normal[6], HColors.held);
+    });
+  });
+
   group('token tables', () {
     test('BACKLOG hexes are literal', () {
       expect(HColors.bg0.toARGB32(), 0xFF0F1115);
@@ -644,8 +996,11 @@ void main() {
       expect(HColors.fg0.toARGB32(), 0xFFE6E8EE);
       expect(HColors.fg1.toARGB32(), 0xFFA3A9B8);
       expect(HColors.fg2.toARGB32(), 0xFF6B7186);
-      expect(HColors.accent.toARGB32(), 0xFF7C9CF5);
-      expect(HColors.held.toARGB32(), 0xFFE0B24A);
+      // Seit HUM-260: Gelb der Marke als Akzent, `held` Himmelscyan, und ein
+      // dunkler Vordergrund auf dem Akzent in beiden Themes.
+      expect(HColors.accent.toARGB32(), 0xFFE8B84B);
+      expect(HColors.onAccent.toARGB32(), 0xFF14161C);
+      expect(HColors.held.toARGB32(), 0xFF79C9EC);
       expect(HColors.allowed.toARGB32(), 0xFF4FBF8C);
       expect(HColors.blocked.toARGB32(), 0xFFE5646E);
       expect(HColors.timedOut.toARGB32(), 0xFF8A90A2);
@@ -660,7 +1015,7 @@ void main() {
       expect(HColors.lFg0.toARGB32(), 0xFF16181F);
       expect(HColors.lFg1.toARGB32(), 0xFF4B5162);
       expect(HColors.lFg2.toARGB32(), 0xFF7C8294);
-      expect(HColors.lAccent.toARGB32(), 0xFF5B7FE6);
+      expect(HColors.lAccent.toARGB32(), 0xFFA57A1C);
       expect(HColors.tintAlpha, 0.10);
       expect(HColors.fillHoverAlpha, 0.14);
       expect(HColors.fillPressedAlpha, 0.18);

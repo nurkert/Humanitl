@@ -364,7 +364,21 @@ class _QueuePaneState extends ConsumerState<QueuePane> {
               ],
             ),
           ),
-          const HHairline(),
+          // Die Absperrung steht: solange mindestens eine Anfrage gehalten
+          // ist, läuft unter dem Kopf das Absperrband der Marke, und es geht,
+          // sobald nichts mehr hält (HUM-260, `docs/UX.md` 3.6). Der Platz
+          // ist immer reserviert, damit keine Zeile darunter springt, wenn es
+          // kommt oder geht (2.8); ohne Band steht dort die Haarlinie wie
+          // vorher. Ohne Band im Baum läuft auch kein Ticker.
+          SizedBox(
+            height: HSize.cautionTape,
+            child: held > 0
+                ? const HCautionTape(key: Key('intercept-caution-tape'))
+                : const Align(
+                    alignment: Alignment.bottomCenter,
+                    child: HHairline(),
+                  ),
+          ),
           // What the agent asked for stands above the queue, not in it: it is
           // not a request that waits for a decision, and it must never take a
           // place in the list that a held flow could be mistaken for

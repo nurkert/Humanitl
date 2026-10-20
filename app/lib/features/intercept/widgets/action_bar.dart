@@ -192,7 +192,9 @@ class _ActionBarState extends ConsumerState<ActionBar> {
     // one filled control of the screen; a second batch button beside it would
     // be the second (`docs/UX.md` 3.5).
     // A request with an unresolved finding must not look like a routine one:
-    // amber, its own label, and the same hold that blocking asks for
+    // the warning hue with the warning glyph (the hue alone equals the
+    // accent since HUM-260), its own label, and the same hold that blocking
+    // asks for
     // (`docs/UX.md` 4.7). Over a group the row counts stand in for the details
     // nobody fetched.
     final int findingReach = reach > 1
@@ -249,7 +251,8 @@ class _ActionBarState extends ConsumerState<ActionBar> {
           : reach > 1
           ? l10n.interceptAllowSelected(reach)
           : allowLabel(holdDuration, l10n),
-      accent: anyFinding && !refused ? tokens.state.held : null,
+      accent: anyFinding && !refused ? tokens.colors.warning : null,
+      warned: anyFinding && !refused,
       holdRequired: anyFinding,
       holdToken: _reachToken(chosen),
       // One request with a finding: a click opens the pause, which lists what
@@ -580,11 +583,30 @@ class _ActionBarState extends ConsumerState<ActionBar> {
   /// im Abstand zwischen den beiden Entscheidungen.
   Widget _wide(HTokens tokens, Widget valve, Widget edit, Widget decisions) =>
       Row(
+        // Kein `Spacer`: Neben einem `Flexible` teilte er sich den freien
+        // Platz mit dem Ventil zur Hälfte, und bei 900 px stand das Ventil auf
+        // 52 px gequetscht (gemessen, `action_bar_test`). Der Abstand entsteht
+        // hier durch `spaceBetween`, nachdem das Ventil seine volle Breite
+        // genommen hat.
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: <Widget>[
-          valve,
-          SizedBox(width: tokens.spacing.x3),
-          edit,
-          const Spacer(),
+          // Das Ventil darf als Einziges schrumpfen: Seit HUM-260 traegt es bei
+          // offenem Fund ein Warn-Glyph, und mit der deutschen Beschriftung
+          // fehlten knapp ueber der Umbruchbreite zwei Pixel. Die beiden
+          // Entscheidungen behalten ihre volle Groesse. Es schrumpft nur, wenn
+          // der Platz wirklich fehlt: ein loses `Flexible` als einziges in der
+          // Zeile bekommt allen freien Platz angeboten und nimmt davon nur,
+          // was es braucht.
+          Flexible(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Flexible(child: valve),
+                SizedBox(width: tokens.spacing.x3),
+                edit,
+              ],
+            ),
+          ),
           const SizedBox(width: decisionGap),
           decisions,
         ],

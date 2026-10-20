@@ -4,7 +4,7 @@
 /// Der Daemon hält höchstens `limits.hold_max_flows` Anfragen mit zusammen
 /// höchstens `limits.hold_max_bytes` Bytes; wer darüber kommt, wird mit `503`
 /// geblockt und bekommt `LIMIT_002`. Die Statusleiste sagt das vorher: ab 80 %
-/// einer der beiden Grenzen amber, ab 100 % rot. Rot ist hier richtig und
+/// einer der beiden Grenzen in der Warnfarbe, ab 100 % rot. Rot ist hier richtig und
 /// keine Warnfarbe: Bei voller Warteschlange werden neue Anfragen tatsächlich
 /// geblockt (`docs/UX.md` 3.3, Rot heißt blockiert).
 ///
