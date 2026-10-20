@@ -16,6 +16,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-220 | Das Terminal der Oberfläche zeigt OpenCode nicht sauber an | L | HUM-042, HUM-067, HUM-136 |
 | HUM-059 | Dokumentation | M | alle vorherigen |
 | HUM-086 | Repository auf Englisch | M | HUM-059 |
+| HUM-256 | Befunde eines Flusses überleben den Neustart des Daemons | S | HUM-026, HUM-057, HUM-250 |
 | HUM-060 | Release 0.1.0 | S | HUM-053, HUM-059 |
 | HUM-061 | Puffer | L | keine |
 | HUM-247 | Der Findings-Scan liest nur das erste gzip-Member | S | HUM-025 |
@@ -25,6 +26,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-252 | Eine neue Regel, die nie an die Reihe kommt, wird nicht gemeldet | M | HUM-033, HUM-058 |
 | HUM-253 | Folgen aus HUM-058: Protokollwechsel im Vertrag, Drosselung | S | HUM-058 |
 | HUM-249 | Ein Tastenkürzel speichert eine andere Regel, als die Leiste zeigt (vor HUM-060) | S | HUM-028, HUM-058 |
+| HUM-258 | Tröpfelnde Uploads hungern das Byte-Budget aus | S | HUM-057 |
 
 ---
 
@@ -211,6 +213,8 @@ Triage-Prozess (`daemon/fuzz/README.md`):
 ## HUM-057 · Ressourcen-Limits und Backpressure
 Sprint: 5 · Größe: S · Abhängigkeiten: HUM-015, HUM-016, HUM-018, HUM-026, HUM-062 · Blockiert: HUM-060
 
+Übernimmt aus HUM-058: Tabellenzeilen 9 und 16
+
 ### Kontext
 Der Daemon hält Requests im Speicher, dekomprimiert fremde Bodies für die Vorschau und sendet Events an eine UI, die langsamer sein kann als der Proxy. Ohne harte Grenzen kann ein einziger Agent-Lauf (etwa ein `npm install` mit hunderten Requests oder ein 2-GB-Download) den Daemon zum Absturz bringen. BACKLOG.md 4.4 nennt Body-Caps, Dekompressions-Ratio und Timeouts. CONVENTIONS.md 3.5 legt die Defaults fest. Dieses Issue setzt alle Grenzen an einer Stelle um, macht sie konfigurierbar und beweist mit einem Lasttest, dass Proxy und UI sich nicht gegenseitig blockieren.
 
@@ -305,15 +309,15 @@ Backpressure: Der IPC-Server erzeugt pro `Subscribe` einen `broadcast::Receiver`
 - `backpressure_1000_flows` (Integration, `#[ignore]` lokal, in CI aktiv): Fake-Agent (in-process, `reqwest` mit Proxy) sendet 1000 GET an axum-Upstream über den Proxy in 10 s (100/s), Regel `allow` für den Host, ein gRPC-Subscriber verarbeitet jedes Event mit `sleep(20 ms)`. Messung: pro Flow Zeit von Proxy-Eingang bis `Held` bzw. `Decided`-Event im Daemon (nicht beim Subscriber), RSS über `/proc/self/status` alle Sekunde. Erwartung: alle 1000 Flows in DB mit `state = recorded`, p95 unter 50 ms, max RSS unter 300 MiB, Subscriber hat mindestens ein `Lagged` erhalten und danach per `ListFlows(since)` alle 1000 gesehen.
 
 ### Akzeptanzkriterien
-- [ ] `humanitl config schema | jq '.properties.limits.properties | keys'` liefert genau die elf Feldnamen.
-- [ ] `humanitl config get limits.hold_body_cap_bytes` liefert `33554432` bei Default.
-- [ ] Alte Schlüssel `hold.body_cap_bytes`, `preview.cap_bytes`, `ipc.event_buffer` in einer `config.toml` werden weiterhin gelesen (Test `legacy_alias_keys`).
-- [ ] Alle acht Tests oben grün, `backpressure_1000_flows` in CI mit ausgegebenen Messwerten im Job-Log.
-- [ ] Fuzz-Target `body_decoder` läuft 5 min ohne Fund (Nachweis im PR).
-- [ ] `docs/reference/limits.md` existiert mit Tabelle aller elf Limits.
-- [ ] Sechs neue Diagnostic-Codes `LIMIT_001` bis `LIMIT_006` im Code-Register (HUM-063) mit `why`-Text in `en` und `de`.
-- [ ] Der Header der UI zeigt nach HUM-058 die Queue-Auslastung; hier reicht, dass `Held`-Events die Felder `queue_bytes`, `queue_count` tragen (Proto-Test).
-- [ ] Übernimmt aus HUM-058: Tabellenzeilen 9 und 16 samt Tests `history_detail_test: body_cap_row_has_fix` und `status_bar_test: queue_pressure_colors` (Umplanung vom 2026-10-19).
+- [x] `humanitl config schema | jq '.properties.limits.properties | keys'` liefert genau die elf Feldnamen. *Die Namen aus `backlog/CONVENTIONS.md` 4.4, nicht die der Spezifikation oben (siehe Umsetzung); am 2026-10-19 mit dem gebauten `humanitl` in einem abgeschotteten Zuhause nachgezählt: 11.*
+- [x] `humanitl config get limits.hold_body_cap_bytes` liefert `33554432` bei Default.
+- [x] Alte Schlüssel `hold.body_cap_bytes`, `preview.cap_bytes`, `ipc.event_buffer` in einer `config.toml` werden weiterhin gelesen (Test `legacy_alias_keys`). *Belegt durch den vorhandenen Test `the_old_key_names_still_work` (`daemon/crates/config/tests/precedence.rs`), der alle sechs Aliasse liest; kein zweiter Test unter dem Namen der Spezifikation.*
+- [ ] Alle acht Tests oben grün, `backpressure_1000_flows` in CI mit ausgegebenen Messwerten im Job-Log. *Alle acht lokal grün (Namen in der Umsetzung). Der Job-Log-Nachweis steht aus, bis die CI den neuen Schritt „Backpressure load test with measurements (HUM-057)" auf dem Issue-Branch gefahren hat; lokal gemessen: p95 151 µs, max RSS 30 MiB, 400 `Lagged` beim langsamen Zuhörer.*
+- [ ] Fuzz-Target `body_decoder` läuft 5 min ohne Fund (Nachweis im PR). *Offen: Nachweis über `.github/workflows/fuzz-nightly.yml` (workflow_dispatch) nach dem Merge. Lokal gibt es keine Nightly-Toolchain; die Prüfung des Targets (`daemon/crates/findings/tests/regressions/check.rs`) kennt `LIMIT_003` und läuft als Regressionstest mit.*
+- [x] `docs/reference/limits.md` existiert mit Tabelle aller elf Limits.
+- [x] Sechs neue Diagnostic-Codes `LIMIT_001` bis `LIMIT_006` im Code-Register (HUM-063) mit `why`-Text in `en` und `de`.
+- [x] Der Header der UI zeigt nach HUM-058 die Queue-Auslastung; hier reicht, dass `Held`-Events die Felder `queue_bytes`, `queue_count` tragen (Proto-Test). *Proto-Test seit HUM-016 (`daemon/crates/ipc/tests/proto_roundtrip.rs`); die Anzeige selbst (HUM-058 Zeile 16) hat dieses Issue übernommen.*
+- [x] Übernimmt aus HUM-058: Tabellenzeilen 9 und 16 samt Tests `history_detail_test: body_cap_row_has_fix` und `status_bar_test: queue_pressure_colors` (Umplanung vom 2026-10-19).
 
 ### Fallstricke
 - Ratio-Prüfung erst nach vollständigem Dekomprimieren ist falsch, siehe HUM-056. Auch eine Prüfung über den `Content-Length`-Header ist falsch, weil der bei chunked fehlt und bei Lügen des Servers nichts hilft.
@@ -330,6 +334,190 @@ Backpressure: Der IPC-Server erzeugt pro `Subscribe` einen `broadcast::Receiver`
 - hyper Timeouts: https://docs.rs/hyper-util/latest/hyper_util/rt/tokio/index.html und `hyper::server::conn::http1::Builder::header_read_timeout`
 - tokio broadcast Lagged: https://docs.rs/tokio/latest/tokio/sync/broadcast/error/enum.RecvError.html
 - flate2 MultiGzDecoder: https://docs.rs/flate2/latest/flate2/read/struct.MultiGzDecoder.html
+
+### Umsetzung (HUM-057)
+
+Vieles aus der Spezifikation stand schon: die Gruppe `limits` mit elf Feldern und Aliassen
+(HUM-016, HUM-120), die Zähler der Warteschlange samt `queue_bytes`/`queue_count` im `Held`-Ereignis
+(HUM-016), die Uhren über Kopf und Rumpf (HUM-120), `Lagged` im Strom (HUM-018), der Entpacker mit
+Budget (HUM-025, HUM-056). Dieses Issue hat die Lücken geschlossen: die sechs Codes und wo sie
+entstehen, `stream: true`, den Lasttest, die Referenzseite und die zwei Zeilen aus HUM-058.
+
+**Was gebaut wurde.**
+- `LIMIT_001` bis `LIMIT_006` im Register (`codes.rs`), `docs/DIAGNOSTICS.md` neu erzeugt, Titel und
+  Grund in `app_en.arb`/`app_de.arb`, Eintrag in `diagnostic_l10n.dart`.
+- `LIMIT_001` am Block über `limits.hold_body_cap_bytes` (angekündigt und `chunked`), mit dem
+  Vorschlag einer Regel `ask` + `stream: true`, zugeschnitten wie der Vorschlag von `PROXY_008`
+  (`handler::request_matcher`, aus `private_address_rule` herausgelöst); ohne wirksame Regel
+  `ChangeSetting`. Neues Modul `daemon/crates/proxy/src/limits.rs`.
+- `stream: true` im Proxy: `FlowPipeline::stream_rule` (Vorgabe `None`, `RulesPipeline` nur für
+  `allow` und `ask`), `FlowHandler::over_cap` und `stream_out`, `body::buffer_request` gibt einen
+  Rumpf über dem Cap als Präfix plus Rest zurück, `body::streamed_request` streamt ihn mit Uhr und
+  Mitschnitt, `upstream::Outgoing` trägt gepuffert oder gestreamt, `Recorder::begin_request`
+  schneidet den gestreamten Anfrage-Rumpf mit (derselbe Mitschnitt wie für Antworten, jetzt mit
+  Richtung).
+- `LIMIT_002` vor der Ablehnung in `HoldQueue::admit`, mit beiden Zählern und Grenzen im `why`.
+- `LIMIT_003` im Entpacker, wenn das Verhältnis die engere Grenze war (`Budget::limited_by_ratio`),
+  ohne Fix; zog das Vorschau-Cap, bleibt es `FINDINGS_002`, dessen Fix jetzt auf
+  `limits.preview_cap_bytes` zeigt statt auf das Verhältnis.
+- `LIMIT_004` am Fluss, wenn ein gestreamter Antwort-Rumpf verstummt (`TeeBody`).
+- `LIMIT_005` als Protokollzeile einer abgelaufenen Kopf-Frist (`info` ohne Anfrage, `debug` für
+  eine ruhende Keep-Alive-Verbindung), `LIMIT_006` als Protokollzeile bei `Lagged` im IPC-Strom.
+- Befunde am Fluss bleiben: `FlowRecord::diagnostics` (höchstens `MAX_FLOW_DIAGNOSTICS` = 8), und
+  `GetFlow` liefert sie in `FlowDetail.diagnostics`, auch zu einem Detail aus der Aufzeichnung.
+- CI-Schritt „Backpressure load test with measurements (HUM-057)" in `.github/workflows/ci.yml`.
+- `docs/reference/limits.md`; `docs/SECURITY.md` (Tabelle, Absatz `stream: true`) und
+  `docs/THREAT-MODEL.md` (Schutzziel 1, Änderungshistorie) im selben Stand.
+- App: `features/history/widgets/history_diagnostics.dart` (kompakte Zeile je Befund unter den
+  Fakten des Details: Code, Titel aus ARB, `FixControl`), `features/shell/queue_pressure.dart` und
+  `QueuePressureLabel` in der Statusleiste (ab 80 % amber, ab 100 % rot mit `LIMIT_002`),
+  `DiagnosticCodes.queueFull`, ARB `shellStatusQueue`.
+
+**Tests (Namen der Spezifikation fett).**
+- `daemon/crates/proxy/tests/hold.rs`: **`hold_rejects_over_memory`**, **`hold_rejects_over_count`**;
+  angepasst `budget_refuses_by_flows_and_never_evicts`, `budget_refuses_by_bytes` (der Befund steht
+  jetzt im Strom).
+- `daemon/crates/proxy/tests/limits.rs` (neu): **`body_cap_blocks_with_diagnostic`**,
+  **`body_cap_stream_rule_passes`** (angekündigt und `chunked`), **`upstream_idle_timeout`**,
+  **`client_header_timeout`**, `a_chunked_body_over_the_cap_is_blocked_with_limit_001`,
+  `a_stream_rule_with_ask_holds_the_head_and_streams_only_after_allow`,
+  `the_hard_block_overrides_a_stream_rule`.
+- `daemon/crates/proxy/tests/backpressure.rs` (neu): **`backpressure_1000_flows`** (`#[ignore]`,
+  in CI mit `--ignored --nocapture`).
+- `daemon/crates/ipc/src/server.rs`: **`subscriber_lag_gets_lagged_event`**,
+  `the_detail_carries_the_diagnostics_of_its_flow`; `daemon/crates/ipc/tests/ipc_server.rs`:
+  `get_flow_carries_the_diagnostics_of_the_flow` (mit und ohne Aufzeichnung).
+- `daemon/crates/proxy/src/limits.rs`: Vorschlag passt durch `parse_rules` und trifft die
+  Anfrage, Rückfall auf `ChangeSetting`, `Info` beim Streamen, `LIMIT_004` mit doppeltem Wert.
+- `daemon/crates/proxy/src/registry.rs`: `a_record_keeps_the_diagnostics_of_its_flow_up_to_the_cap`.
+- `daemon/crates/findings`: `decode_ratio_bomb` (HUM-056, unverändert grün),
+  `decode_ratio_bomb_reports_limit_003`, `a_bomb_stopped_by_the_cap_keeps_findings_002_with_the_cap_as_fix`,
+  `the_budget_knows_which_limit_is_the_narrower_one`; angepasst `gzip_bomb_truncated` und
+  `a_gzip_bomb_is_scanned_only_as_far_as_the_budget_reaches` (Verhältnis-Bombe jetzt `LIMIT_003`).
+- `daemon/crates/proxy/tests/proxy.rs`: angepasst `body_over_the_cap_returns_413_without_holding`,
+  `exhausted_hold_budget_returns_503` (Befund im Strom).
+- `app/test/features/history/history_detail_test.dart`: **`body_cap_row_has_fix`**,
+  `a detail without diagnostics draws no diagnostic row`.
+- `app/test/features/shell/status_bar_test.dart` (neu): **`queue_pressure_colors`**,
+  `QueueLoad.pressure` (zwei Fälle), `the status bar itself shows a full queue`.
+
+**Mutationen (jede rot, danach zurückgespielt und per `cmp` geprüft).**
+`LIMIT_002` nicht veröffentlicht (beide `hold_rejects_*`); Zähler im `why` um eins verschoben
+(beide); `LIMIT_001` nicht an den Block gehängt (`body_cap_blocks_with_diagnostic`); `stream_rule`
+ignoriert `stream` (`body_cap_stream_rule_passes`, `a_stream_rule_with_ask_…`); Präfix eines
+`chunked` Rumpfs verworfen und gestreamter Mitschnitt nie vollständig geschlossen (je
+`body_cap_stream_rule_passes`); `LIMIT_004` nicht veröffentlicht (`upstream_idle_timeout`);
+`LIMIT_005` nur noch auf `debug` (`client_header_timeout`); `Lagged{n}` halbiert
+(`subscriber_lag_gets_lagged_event`); Registry vergisst Befunde (Registry- und IPC-Test); Detail aus
+der Aufzeichnung ohne Befunde der Registry (`get_flow_carries_the_diagnostics_of_the_flow`);
+Vorschlag mit `stream: false` (Unit-Test in `limits.rs`); 60 ms Verzögerung in
+`RulesPipeline::decide` (`backpressure_1000_flows` an p95); `limited_by_ratio` nie wahr (drei
+Tests), Gleichstand als Verhältnis (`the_budget_knows_…`); App: Befunde im Detail verworfen
+(`body_cap_row_has_fix`), Schwelle 90 % statt 80 % und Rot als Amber (`queue_pressure_colors`),
+Etikett aus der Leiste entfernt (`the status bar itself shows a full queue`).
+
+**Abweichungen von der Spezifikation, mit Grund.**
+- Namen der Felder nach `backlog/CONVENTIONS.md` 4.4: `hold_max_bytes` statt
+  `hold_memory_cap_bytes`, `connect_timeout_secs`, `header_timeout_secs`, `body_timeout_secs` (ein
+  Schlüssel für beide Rumpf-Richtungen, HUM-120), dazu `recorder_max_body_bytes`. Elf bleiben es.
+- Block am Cap ist `413`, nicht `403` (`BlockReason::BodyCap`, CONVENTIONS 3.2).
+- Ein verstummter Antwort-Rumpf wird abgeschnitten und als gekürzt aufgezeichnet, kein
+  `Responded{504}`: Die Kopfzeilen mit dem Status des Ziels sind dann schon beim Client
+  (HUM-120). `LIMIT_004` gilt nur dieser Spanne; ein Connect-Timeout bleibt `Failed` mit
+  `PROXY_003` (CONVENTIONS 4.10), ein stehender Anfrage-Rumpf `PROXY_011` (HUM-120).
+- Der Entpacker bleibt beim Budget `min(cap, gepackt × Verhältnis)` aus HUM-025 statt der
+  Prüfung je Block gegen die bisher gelesene Eingabe: Er bricht ebenso während des Entpackens ab
+  und hält den Speicher am Cap; geändert hat sich nur, welcher Befund entsteht.
+- „Flow trägt `streamed = true`": kein neues Feld am Fluss. Gestreamt erkennt man am Rumpf ohne
+  Inhalt und mit `truncated`, an `findings_truncated` und am `LIMIT_001` als `Info` daneben.
+- `stream: true` gilt für `allow` und `ask` (Halten mit Kopf, Rumpf nach Freigabe); der Vorschlag
+  ist `ask`, aus demselben Grund wie bei `PROXY_008`. Unter `hold.hard_block_checksum_secrets`
+  greift `stream: true` nie, und `LIMIT_001` schlägt dann das Cap vor statt einer Regel: „Keine
+  Regel hebt die harte Sperre auf" (`docs/SECURITY.md`) gilt unverändert
+  (`the_hard_block_overrides_a_stream_rule`, `under_the_hard_block_the_fix_is_the_cap_never_a_stream_rule`;
+  Mutation: Prüfung der Sperre in `over_cap` entfernt, beziehungsweise in `body_over_cap`, je rot).
+- Die Statusleiste nimmt die Zahl der Flüsse aus den gehaltenen Flüssen der Oberfläche und die
+  Bytes aus dem letzten `Held.queue_bytes` des Daemons (Belegung des Byte-Budgets, siehe „Nach
+  Review 2"); ohne gehaltene Flüsse und nach einem Neuverbinden gilt 0. Die Grenzen kommen aus
+  `GetConfig`, ohne Wert die Vorgaben des Daemons. Eine laufende Belegung gehört zu HUM-258.
+- Die kompakte Zeile im History-Detail ist ein eigenes Widget, nicht `HDiagnosticCard(compact)`:
+  Die kompakte Karte und der `FixActionButton` gehören HUM-058; `FixControl` zeigt `AddRule` heute
+  als Abzeichen „Add rule".
+
+**Nach dem Review (Codex, Opus als Ersatz für Antigravity).**
+- Erlaubnis zum Streamen und Entscheidung aus **einem** Schnappschuss der Regeln:
+  `FlowPipeline::stream_grant` liefert eine `StreamGrant` (Regel, `ask`/`allow`, `allow_private`,
+  Durchreiche) aus einem Lesezugriff, `decide_streamed` entscheidet nur daraus. Vorher werteten
+  `stream_rule` und `decide` getrennt aus, und ein Neuladen dazwischen konnte einen ungeprüften
+  Rumpf unter einer Regel ohne `stream` hinauslassen
+  (`the_stream_grant_and_the_decision_come_from_one_snapshot`; Mutation: `decide_streamed` fragt
+  wieder `decide`, rot).
+- Byte-Budget für Rümpfe in Arbeit: `HoldQueue::in_flight` gibt einen Anteil an
+  `limits.hold_max_bytes`, der beim Puffern Stück für Stück wächst (`InFlight::grow`) und beim
+  Fallenlassen frei wird; ein daran gebundener Fluss (`InFlight::cover`) reserviert beim Halten
+  keine Bytes ein zweites Mal. Voll heißt `503`, `Block{HoldMemory}`, `LIMIT_002`
+  (`the_byte_budget_counts_bodies_while_they_are_buffered`; Mutationen: keine Freigabe, kein
+  Zählen beim Puffern, je rot). Kein zwölftes Feld: derselbe Topf wie `limits.hold_max_bytes`.
+- Ein gehaltener Kopf unter `ask` + `stream: true` reserviert nur sein Präfix
+  (`a_held_head_reserves_only_what_is_in_memory`, 1 MiB angekündigt gegen 512 KiB Budget; Mutation:
+  Bindung ignoriert, rot).
+- Gestreamter Upload mit Fristen: `upstream::StreamWatch` prüft alle 100 ms, ob das Ziel länger als
+  `limits.body_timeout_secs` kein Stück angenommen hat oder nach dem ganzen Rumpf länger als
+  `limits.header_timeout_secs` ohne Kopfzeilen bleibt; dann bricht die Verbindung zum Ziel ab,
+  der Fluss wird `Failed` mit `LIMIT_004` (`a_stalled_streamed_upload_ends_with_limit_004`;
+  Mutation: keine Wache, rot).
+- Kopf, Query und Kopfzeilen eines gestreamten Flusses werden gescannt
+  (`the_head_of_a_streamed_flow_is_scanned`; Mutation: Funde verworfen, rot).
+- Schema-Text von `limits.hold_body_cap_bytes` nennt die Ausnahme `stream: true`; Schnappschuss
+  und `docs/CONFIG.md` neu erzeugt.
+
+**Nach Review 2.**
+- Antwortet das Ziel vor dem Ende eines gestreamten Uploads, bleibt der Upload gezählt und bewacht:
+  Der `InFlight`-Anteil wandert in den Rumpf (`body::streamed_request`) und fällt erst mit dessen
+  Ende oder Drop; `upstream::watch_after_head` bricht die Verbindung ab, wenn das Ziel danach
+  länger als `limits.body_timeout_secs` kein Stück annimmt
+  (`an_early_answer_keeps_the_upload_counted_and_watched`; Mutationen: Anteil im Handler
+  fallen gelassen, keine Wache nach der Antwort, je rot).
+- Das Präfix geht in Scheiben zu 64 KiB hinaus (`PREFIX_SLICE`, `split_to` ohne Kopie)
+  (`a_large_prefix_over_a_slow_line_is_not_a_stall`: 16 MiB Präfix, Ziel liest gut 2 MiB/s,
+  Frist 1 s; Mutation: keine Scheiben, rot).
+- Die Fortschrittsuhr beginnt mit dem ersten Stück, nicht vor Verbindungsaufbau und Handschlag
+  (`the_progress_clock_starts_with_the_first_chunk`; Mutation: Uhr ab Erzeugung, rot).
+- Ein schweigender Client in einem gestreamten Upload bekommt `408` und `PROXY_011` am Fluss statt
+  `502` (`a_silent_client_in_a_streamed_upload_gets_408`; Mutation: Ursache ignoriert, rot).
+- `Held.queue_bytes` ist als Belegung des Byte-Budgets dokumentiert (gehaltene plus gepufferte
+  und gestreamte Rümpfe, Stream-Kopf nur mit Präfix); die Statusleiste zeigt diese Zahl des
+  Daemons in ihrem letzten Stand (`daemonQueueBytesProvider`) statt die angekündigten Größen zu
+  summieren (`queue_pressure_colors` mit Stream-Kopf-Fall, `the occupancy follows the last Held
+  event of the daemon`; Mutationen: wieder `requestSize` summiert, Ereignis ignoriert, je rot).
+  Kein neues Proto-Feld.
+- Gesamtfrist für das Puffern (Review 2, Punkt 5): nicht in diesem Issue. CONVENTIONS 4.4 und die
+  elf Felder bleiben; ein tröpfelnder Client kann den Topf belegen, das Ergebnis ist fail-closed
+  (`503`, kein Egress), und der Angreifer ist der eigene Agent in der Sandbox. Benannt in
+  `docs/SECURITY.md`, weiter in HUM-258.
+
+**Nach Review 3.**
+- Bricht die Wache einen Upload nach einer frühen Antwort ab, steht `LIMIT_004` am Fluss
+  (`StreamWatch::report`; Test `an_early_answer_keeps_the_upload_counted_and_watched`; Mutation:
+  kein Veröffentlichen, rot).
+- Client-Stille und „Ziel liest nicht" hängen nicht mehr an derselben Uhr: Jede Frage von hyper
+  zählt als Fortschritt, und solange der Strom auf den Client wartet, gibt es keinen Stillstand des
+  Ziels (`waiting_for_the_client_is_never_a_stall_of_the_target`; Mutation: Wartezustand
+  ignoriert, rot).
+- Ein schweigender Client in einem gestreamten Upload bekommt einen eigenen Satz
+  (`idle_streamed_request_body`: ein Teil war schon beim Ziel), und der Fluss wird mit der `408`
+  verbucht, die der Client bekam, nicht als Fehler des Ziels (`a_silent_client_in_a_streamed_upload_gets_408`;
+  Mutationen: alter Satz, `Fail` statt `Respond{408}`, je rot).
+- Statusleiste: Beim Neuverbinden gilt 0 (`the occupancy follows the last Held event of the
+  daemon`; Mutation: Verbindung nicht beobachtet, rot). Laufende Belegung und gepufferter Body nach
+  früher Antwort stehen in HUM-258.
+
+**Kandidaten für neue Issues (außerhalb des Umfangs).**
+- Befunde eines Flusses in der Aufzeichnung ablegen: aufgenommen als HUM-256 (vor HUM-060).
+- HTTP/2-Streams: Ein Client kann über eine Verbindung viele Streams öffnen, und
+  `limits.max_client_connections` deckelt dann nicht mehr, wie viele Präfixe gleichzeitig gelesen
+  werden (das Byte-Budget deckelt die Summe, aber nicht die Zahl der Aufgaben). War schon vor
+  HUM-057 so; in M1 spricht der Proxy nach unten nur HTTP/1.1.
 
 ---
 
@@ -687,6 +875,49 @@ Eine Website oder ein Doku-Generator (mdBook, Docusaurus). Markdown im Repo reic
 - GitHub Security Policy: https://docs.github.com/en/code-security/getting-started/adding-a-security-policy-to-your-repository
 - clap Markdown-Rendering: https://docs.rs/clap-markdown
 - lychee: https://github.com/lycheeverse/lychee
+
+---
+
+## HUM-256 · Befunde eines Flusses überleben den Neustart des Daemons
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-026, HUM-057, HUM-250 · Blockiert: —
+
+### Kontext
+Seit HUM-057 hängt jeder Befund, den der Proxy einem Fluss zuordnet (`LIMIT_001` mit dem
+Regelvorschlag `stream: true`, `FINDINGS_002`, `LIMIT_003`, `LIMIT_004`, `PROXY_008` …), am
+Datensatz der Registry (`FlowRecord::diagnostics`), und `GetFlow` liefert ihn in
+`FlowDetail.diagnostics`, auch zu einem Detail aus der Aufzeichnung. Die Registry lebt aber nur im
+Prozess: Nach einem Neustart des Daemons steht ein am Cap geblockter Fluss in der Historie ohne
+`LIMIT_001`, ohne Grund und ohne den Weg hinaus. Die Aufzeichnung führt keine Befunde; dafür
+braucht sie eine Schema-Migration. Herausgelöst aus dem Review zu HUM-057; die Anzeige im
+History-Detail stammt aus HUM-058 (Zeile 9) und HUM-250.
+
+### Ziel
+Die Aufzeichnung legt die Befunde eines Flusses ab, und `GetFlow` liefert sie auch nach einem
+Neustart des Daemons in derselben Reihenfolge und mit demselben `fix`.
+
+### Nicht-Ziel
+Befunde ohne Fluss (sitzungsweite, `flow_id: None`). Neue Codes. Eine Suche über Befunde in der
+Filtersprache.
+
+### Betroffene Pfade
+- `daemon/crates/recorder/src/schema.rs` (Migration: Tabelle `diagnostics` je Fluss)
+- `daemon/crates/recorder/src/writer.rs` (`FlowEvent::Diagnostic` mit `flow_id` schreiben)
+- `daemon/crates/recorder/src/lib.rs`, `types.rs` (`FlowDetail.diagnostics`)
+- `daemon/crates/ipc/src/convert.rs`, `server.rs` (Detail aus der Aufzeichnung trägt sie; die
+  Registry bleibt der Rückfall für die laufende Sitzung)
+- `daemon/crates/recorder/src/retention.rs` (Befunde fallen mit ihrem Fluss)
+
+### Akzeptanzkriterien
+- [ ] Ein am Cap geblockter Fluss zeigt nach einem Neustart des Daemons `LIMIT_001` mit dem
+  Regelvorschlag im History-Detail (Integrationstest über `restart_of`).
+- [ ] Höchstens `MAX_FLOW_DIAGNOSTICS` Befunde je Fluss, wie in der Registry.
+- [ ] Die Retention entfernt sie mit dem Fluss; kein verwaister Eintrag.
+- [ ] Geheimnisse im `why` sind maskiert wie Kopfzeilen und Pfade (`SecretMasks`).
+
+### Fallstricke
+- Ein `fix` mit `AddRule` trägt eine ganze Regel; abgelegt wird die Wire-Form, nicht ein eigenes
+  Format, sonst laufen zwei Serialisierungen auseinander.
+- Migration vorwärts, alte Datenbanken bleiben lesbar.
 
 ---
 
@@ -2994,3 +3225,68 @@ Keine Entscheidung speichert eine Regel, deren Satz nicht auf dem Schirm stand. 
 
 ### Referenzen
 HUM-058 (Review Runde 6), HUM-028, `docs/UX.md` 4.6 und 5.4.
+
+---
+
+## HUM-258 · Tröpfelnde Uploads hungern das Byte-Budget aus
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-057 · Blockiert: — · nach 0.1.0
+
+### Kontext
+Seit HUM-057 reserviert der Handler jeden Anfrage-Body schon beim Puffern im Byte-Budget
+`limits.hold_max_bytes` (`HoldQueue::in_flight`, `InFlight::grow`). Gegen den Speicher ist das dicht,
+aber `limits.body_timeout_secs` misst nur die Stille zwischen zwei Stücken, nie die Gesamtdauer
+(`backlog/CONVENTIONS.md` 4.4). Ein Client, der knapp unter der Frist ein Byte nachschiebt, hält
+seinen Anteil beliebig lange. Acht Verbindungen mit je knapp 32 MiB füllen die Vorgabe von 256 MiB,
+und jede weitere Anfrage mit Body bekommt `503` mit `LIMIT_002`. Das Ergebnis ist fail-closed (kein
+Egress), und der Angreifer ist der eigene Agent in der Sandbox; trotzdem legt er so den Proxy für
+alle anderen Anfragen mit Body lahm. Benannt in `docs/SECURITY.md` (Grenzen und Zeitlimits);
+herausgelöst aus Review 2 zu HUM-057.
+
+### Ziel
+Ein einzelner langsamer Client kann das Byte-Budget nicht dauerhaft belegen, ohne dass ein langer,
+stetiger Upload über eine langsame Leitung dabei abbricht.
+
+### Zwei Wege (einer wird gewählt, die Entscheidung steht im Commit)
+1. **Gesamtfrist für das Puffern bis zum Cap.** Ein Schlüssel wie
+   `limits.client_body_timeout_secs` (Vorgabe etwa 120), der die Zeit vom ersten Byte bis zum
+   vollständigen Body begrenzt, solange er gepuffert wird; gestreamte Bodies (`stream: true`)
+   bleiben bei der Stille-Frist. Verlangt den Abgleich in `backlog/CONVENTIONS.md` 4.4 (dort ist
+   der Name mit HUM-120 entfallen) und ein Kriterium „zwölf Felder" statt „elf".
+2. **Mindestrate oder Anteil je Verbindung, ohne neues Feld.** Entweder muss das Puffern nach einer
+   Anlaufzeit im Mittel eine feste Mindestrate halten (etwa `hold_body_cap_bytes / body_timeout`),
+   oder eine Verbindung darf höchstens einen festen Bruchteil von `limits.hold_max_bytes` belegen
+   (etwa ein Viertel), sodass auch bei `max_client_connections` gleichzeitigen Tröpflern Platz für
+   andere bleibt. Kein Abgleich in CONVENTIONS, aber eine Konstante, die im Schema nicht sichtbar
+   ist und deshalb in `docs/reference/limits.md` steht.
+
+### Tests
+- `trickling_uploads_cannot_starve_the_budget`: Acht Clients schicken je knapp den Cap an
+  Ankündigung und danach ein Byte je `body_timeout - 1 s` (im Test kleine Werte, `start_paused` wo
+  möglich). Erwartung: Nach der Gesamtfrist bzw. bei Unterschreiten der Rate ist ihr Anteil frei
+  (`queue_bytes() == 0`), und eine neunte Anfrage mit Body wird gehalten statt mit `503` geblockt.
+- `a_steady_slow_upload_still_completes`: Ein Upload mit konstanter, niedriger Rate über mehrere
+  Fristen läuft durch (Gegenprobe gegen eine zu scharfe Grenze).
+- Mutation: Grenze entfernt, der erste Test wird rot; Grenze verschärft, der zweite wird rot.
+
+### Akzeptanzkriterien
+- [ ] Beide Tests grün, Mutationsbeweis im Commit.
+- [ ] `docs/SECURITY.md` beschreibt die neue Grenze statt des Tauschs „begrenzter Speicher gegen
+  Aushungern".
+- [ ] Bei Weg 1: CONVENTIONS 4.4, Schema-Schnappschuss, `docs/CONFIG.md` und das Kriterium der
+  Feldzahl in HUM-057 im selben Commit angepasst.
+
+### Weitere Punkte (aus Review 3 zu HUM-057)
+- **Laufende Belegung für die Oberfläche.** Die Statusleiste kennt die Belegung des Byte-Budgets
+  nur aus dem letzten `Held.queue_bytes`; nach einer Entscheidung, nach dem Ende eines Puffervorgangs
+  und bei reinem Puffern ohne gehaltene Flüsse veraltet sie. Lösung: die Belegung laufend melden
+  (eigenes Ereignis oder eine RPC) und zusätzlich in `Decided` mitgeben; die Statusleiste nimmt dann
+  diesen Wert statt des letzten `Held`.
+- **Gepufferter Body nach einer frühen Antwort.** Auf dem gepufferten Pfad fällt `in_flight`, wenn
+  der Handler mit den Antwort-Kopfzeilen zurückkehrt (`FlowHandler::handle_request`). Antwortet ein
+  Ziel früh und liest den gepufferten Body nie, hält die Verbindung zum Ziel bis zu
+  `limits.hold_body_cap_bytes` je Verbindung außerhalb des Budgets und ohne Wache. Lösung wie im
+  Stream-Fall aus HUM-057: Der Anteil wandert in den ausgehenden Body und fällt mit ihm, und eine
+  Wache bricht die Verbindung ab, wenn das Ziel länger als `limits.body_timeout_secs` nicht liest.
+
+### Referenzen
+HUM-057 (Umsetzung, Review 2 und 3), HUM-120, `backlog/CONVENTIONS.md` 4.4, `docs/SECURITY.md`.

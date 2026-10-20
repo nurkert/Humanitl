@@ -34,8 +34,9 @@ pub fn encoding(selector: u8) -> ContentEncoding {
 ///   `Eingabe * RATIO`; das ist die Ratio-Grenze, die greift, während
 ///   entpackt wird, nicht danach.
 /// - Ein Body, der nicht als gekürzt gemeldet wird, trägt keinen Befund.
-/// - Ein gekürzter Body trägt immer den Befund `FINDINGS_002`; eine Lücke
-///   ohne Erklärung gibt es nicht.
+/// - Ein gekürzter Body trägt immer einen Befund; eine Lücke ohne Erklärung
+///   gibt es nicht. Es ist `LIMIT_003`, wenn das Verhältnis die engere Grenze
+///   war und die Ausgabe genau dort endet, sonst `FINDINGS_002` (HUM-057).
 pub fn body_decoder(data: &[u8]) {
     let Some((&selector, raw)) = data.split_first() else {
         return;
@@ -55,11 +56,23 @@ pub fn body_decoder(data: &[u8]) {
     );
     if decoded.truncated {
         let code = decoded.diagnostic.as_ref().map(|found| found.code.as_str());
-        assert_eq!(
-            code,
-            Some("FINDINGS_002"),
-            "a truncated body without FINDINGS_002"
-        );
+        match code {
+            // Das Verhältnis zog: Es muss die engere Grenze gewesen sein, und
+            // die Ausgabe endet genau an ihr.
+            Some("LIMIT_003") => {
+                assert!(
+                    relative < CAP,
+                    "LIMIT_003 although the cap {CAP} was the narrower limit ({relative})"
+                );
+                assert_eq!(
+                    decoded.bytes.len(),
+                    relative,
+                    "LIMIT_003 before the ratio was reached"
+                );
+            }
+            Some("FINDINGS_002") => {}
+            other => panic!("a truncated body without FINDINGS_002 or LIMIT_003: {other:?}"),
+        }
     } else {
         assert!(
             decoded.diagnostic.is_none(),

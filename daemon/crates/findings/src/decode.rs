@@ -19,7 +19,7 @@ use core::fmt;
 use std::io::Read;
 
 use flate2::read::{DeflateDecoder, GzDecoder, ZlibDecoder};
-use humanitl_core::diagnostics::codes::FINDINGS_002;
+use humanitl_core::diagnostics::codes::{FINDINGS_002, LIMIT_003};
 use humanitl_core::{Diagnostic, Severity};
 
 /// So viel liest der Entpacker auf einmal.
@@ -96,6 +96,8 @@ impl ContentEncoding {
 pub struct Budget {
     allowance: usize,
     produced: usize,
+    /// Wahr, wenn das Verhältnis die engere Grenze ist und nicht das Cap.
+    by_ratio: bool,
 }
 
 impl Budget {
@@ -107,7 +109,19 @@ impl Budget {
         Self {
             allowance: cap_bytes.min(relative),
             produced: 0,
+            by_ratio: relative < cap_bytes,
         }
+    }
+
+    /// Wahr, wenn `limits.max_decompress_ratio` die Grenze zieht und nicht
+    /// `limits.preview_cap_bytes`.
+    ///
+    /// Bei Gleichstand gilt das Cap: Dann hätte auch ein größeres
+    /// Verhältnis nicht mehr Bytes erlaubt, und der Befund soll nicht auf
+    /// eine Bombe zeigen, wo nur die Vorschau-Grenze erreicht ist (HUM-057).
+    #[must_use]
+    pub const fn limited_by_ratio(&self) -> bool {
+        self.by_ratio
     }
 
     /// So viele Bytes dürfen insgesamt entstehen.
@@ -195,8 +209,11 @@ impl fmt::Debug for Bytes {
 /// der Funde zeigen danach auf die entpackten Bytes.
 ///
 /// Drei Fälle melden `FINDINGS_002` und setzen `truncated`: der Body liegt über
-/// dem Cap, das Budget hat das Entpacken abgebrochen, oder der Body ließ sich
+/// dem Cap, das Cap hat das Entpacken abgebrochen, oder der Body ließ sich
 /// nicht entpacken (unbekannte Kodierung, abgeschnittener oder kaputter Strom).
+/// Ein vierter meldet stattdessen `LIMIT_003`: Das Entpacken brach am
+/// Verhältnis ab, `limits.max_decompress_ratio` war die engere Grenze
+/// ([`Budget::limited_by_ratio`], HUM-057).
 /// Im letzten Fall wird gar nichts durchsucht, statt in gepackten Bytes nach
 /// Mustern zu suchen und Bereiche zu liefern, die auf niemanden zeigen.
 #[must_use]
@@ -246,6 +263,17 @@ pub fn decode_body(
         Ok(Inflated {
             bytes,
             stopped: true,
+        }) if budget.limited_by_ratio() => {
+            let produced = bytes.len();
+            DecodedBody {
+                bytes,
+                truncated: true,
+                diagnostic: Some(ratio_exceeded(encoding, raw.len(), produced, max_ratio)),
+            }
+        }
+        Ok(Inflated {
+            bytes,
+            stopped: true,
         }) => {
             let produced = bytes.len();
             DecodedBody {
@@ -261,9 +289,11 @@ pub fn decode_body(
                             encoding.as_str(),
                             raw.len()
                         ))
+                        // Hier zog das Cap und nicht das Verhältnis (das
+                        // meldet `LIMIT_003`), also zeigt der Rat auf das Cap.
                         .fix(humanitl_core::FixAction::ChangeSetting {
-                            key: "limits.max_decompress_ratio".to_owned(),
-                            value: max_ratio.saturating_mul(2).to_string(),
+                            key: "limits.preview_cap_bytes".to_owned(),
+                            value: cap_bytes.saturating_mul(2).to_string(),
                         })
                         .build(),
                 ),
@@ -414,6 +444,28 @@ fn read_limited<R: Read>(mut reader: R, budget: &mut Budget) -> Result<Inflated,
 /// Der Abbruch eines Stroms samt dem, was bis dahin entstanden ist.
 fn broken(source: std::io::Error, partial: Vec<u8>) -> InflateError {
     InflateError::BrokenStream { source, partial }
+}
+
+/// Der Befund [`LIMIT_003`] für einen Body, dessen Entpacken an
+/// `limits.max_decompress_ratio` abgebrochen wurde (HUM-057).
+///
+/// Ohne `fix`: Ein Verhältnis über der Grenze ist das Merkmal einer
+/// Entpack-Bombe, und der Rat, die Grenze anzuheben, wäre der falsche. Bis
+/// HUM-057 stand hier `FINDINGS_002` mit genau diesem Rat.
+fn ratio_exceeded(
+    encoding: &ContentEncoding,
+    packed: usize,
+    produced: usize,
+    max_ratio: u32,
+) -> Diagnostic {
+    Diagnostic::builder(LIMIT_003, Severity::Warning)
+        .why(format!(
+            "der Body ist mit \"{}\" kodiert und wäre beim Entpacken über das Verhältnis \
+             {max_ratio}:1 gewachsen (limits.max_decompress_ratio); aus {packed} gepackten Bytes \
+             wurden die ersten {produced} entpackt und durchsucht, dann brach das Entpacken ab",
+            encoding.as_str(),
+        ))
+        .build()
 }
 
 /// Der Befund für einen Body über `limits.preview_cap_bytes`.
@@ -660,9 +712,39 @@ mod tests {
         let decoded = decode_body(&bomb, &ContentEncoding::Gzip, 8 * 1024 * 1024, 100);
         assert!(decoded.truncated);
         assert_eq!(decoded.bytes.len(), bomb.len() * 100);
+        // Das Verhältnis zog, nicht das Cap: `LIMIT_003`, mit dem Verhältnis im
+        // Text und ohne den Rat, die Grenze anzuheben (HUM-057).
+        let diagnostic = decoded.diagnostic.unwrap();
+        assert_eq!(diagnostic.code.as_str(), "LIMIT_003");
+        assert!(diagnostic.why.contains("100:1"), "{}", diagnostic.why);
+        assert!(diagnostic.why.contains("max_decompress_ratio"));
+        assert!(diagnostic.fix.is_none());
+    }
+
+    #[test]
+    fn a_bomb_stopped_by_the_cap_keeps_findings_002_with_the_cap_as_fix() {
+        // Dasselbe Archiv, aber das Cap ist enger als das Verhältnis: Das ist
+        // keine Aussage über eine Bombe, nur über die Vorschau-Grenze.
+        let bomb = gzip(&vec![0u8; 1024 * 1024]);
+        let decoded = decode_body(&bomb, &ContentEncoding::Gzip, 4096, 100);
+        assert!(decoded.truncated);
         let diagnostic = decoded.diagnostic.unwrap();
         assert_eq!(diagnostic.code.as_str(), "FINDINGS_002");
-        assert!(diagnostic.why.contains("max_decompress_ratio"));
+        assert_eq!(
+            diagnostic.fix,
+            Some(humanitl_core::FixAction::ChangeSetting {
+                key: "limits.preview_cap_bytes".to_owned(),
+                value: "8192".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn the_budget_knows_which_limit_is_the_narrower_one() {
+        assert!(Budget::new(1024, 1024 * 1024, 100).limited_by_ratio());
+        assert!(!Budget::new(1024, 4096, 100).limited_by_ratio());
+        // Gleichstand: das Cap.
+        assert!(!Budget::new(1024, 102_400, 100).limited_by_ratio());
     }
 
     #[test]

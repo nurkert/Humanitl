@@ -83,9 +83,13 @@ pub enum FlowEvent {
         at: SystemTime,
         /// Bis wann gewartet wird.
         deadline: Instant,
-        /// Wie viele Bytes gerade insgesamt gehalten werden.
+        /// Die Belegung des Byte-Budgets `limits.hold_max_bytes` in diesem
+        /// Augenblick: die Rümpfe der gehaltenen Flows **und** die, die gerade
+        /// gepuffert oder gestreamt werden (HUM-057). Ein gehaltener Kopf unter
+        /// `stream: true` zählt nur sein schon gelesenes Präfix. Das ist genau
+        /// die Zahl, an der eine neue Anfrage mit `503` und `LIMIT_002` scheitert.
         queue_bytes: u64,
-        /// Wie viele Flows gerade insgesamt gehalten werden.
+        /// Wie viele Flows gerade gehalten werden (`limits.hold_max_flows`).
         queue_count: u32,
     },
     /// Es ist entschieden.

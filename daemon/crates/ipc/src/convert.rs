@@ -1199,7 +1199,10 @@ pub fn record_to_detail(record: &FlowRecord, domains: Option<&DomainTable>) -> v
             FlowState::Analyzed { findings } => findings.iter().map(finding_to_proto).collect(),
             _ => Vec::new(),
         },
-        diagnostics: Vec::new(),
+        // Die Befunde, die am Fluss stehen (HUM-057): `LIMIT_001` mit seinem
+        // Regelvorschlag, `FINDINGS_002`, `LIMIT_004` und alle anderen, die
+        // der Proxy diesem Fluss zugeordnet hat.
+        diagnostics: record.diagnostics.iter().map(diagnostic_to_proto).collect(),
         domain: Some(
             domains
                 .map(|domains| {

@@ -1443,6 +1443,64 @@ registry! {
     CONFIG_020 => "config", "Zugangsschlüssel nicht gespeichert", "#config_020",
         "`LlmKey(Set)` oder `LlmKey(Clear)` bekommt einen Schlüssel, der keiner ist (leer, kürzer als 16 Zeichen, länger als 4096 Bytes, mit Leerraum), eine Anfrage ohne Operation, oder weder Schlüsselbund noch Datei lassen sich schreiben oder löschen.",
         "Bei einem zu kurzen Schlüssel `openssl rand -hex 24` zum Kopieren, für einen lokalen Server mit selbst gewähltem Schlüssel; sonst nennt der Text den Grund, und ein Schlüssel ohne Leerraum oder ein beschreibbares Datenverzeichnis behebt ihn.";
+    // HUM-057: Ressourcen-Limits. Jede Grenze aus `limits.*`, die eine Anfrage
+    // ablehnt, abschneidet oder einen Zuhörer überholt, sagt das mit einem
+    // eigenen Code. Neue Einträge des Bereichs `limits` stehen am Ende dieser
+    // Gruppe.
+    /// Der Rumpf einer Anfrage liegt über `limits.hold_body_cap_bytes`.
+    ///
+    /// Zwei Fälle unter einem Code, getrennt über die Severity: **`Warning`**
+    /// heißt geblockt (`BlockReason::BodyCap`, `413`), weil keine Regel mit
+    /// `stream: true` die Anfrage trifft; **`Info`** heißt, eine solche Regel
+    /// hat sie getroffen, und der Rumpf geht gestreamt hinaus, ohne Suche nach
+    /// Geheimnissen und ohne Vorschau. Am Block hängt der Vorschlag einer
+    /// Regel mit `action: ask` und `stream: true` für genau diese Anfrage
+    /// (HUM-057). Unter `hold.hard_block_checksum_secrets` greift `stream: true`
+    /// nie, und der `fix` zeigt auf das Cap.
+    LIMIT_001 => "limits", "Rumpf über der Haltegrenze", "#limit_001",
+        "Eine Anfrage ist größer als `limits.hold_body_cap_bytes`: angekündigt über `Content-Length` oder beim Puffern bemerkt.",
+        "`AddRule` mit `action: ask` und `stream: true` für Host, Methode und Pfad der Anfrage; ohne wirksame Regel oder unter `hold.hard_block_checksum_secrets` (dort greift `stream: true` nie) `ChangeSetting` auf `limits.hold_body_cap_bytes`.";
+    /// Die Warteschlange ist voll: `limits.hold_max_flows` gehaltene Flüsse
+    /// oder `limits.hold_max_bytes` gehaltene Bytes. Die neue Anfrage wird mit
+    /// `503` geblockt (`BlockReason::HoldMaxFlows` oder `HoldMemory`); keine
+    /// gehaltene wird verdrängt. Der `why` nennt, wie viele Flüsse mit wie
+    /// vielen Bytes gerade warten (HUM-057).
+    LIMIT_002 => "limits", "Warteschlange voll", "#limit_002",
+        "Eine neue Anfrage sollte gehalten werden, während die Warteschlange schon `limits.hold_max_flows` Flüsse oder `limits.hold_max_bytes` Bytes hält, oder ein Rumpf passt beim Puffern nicht mehr in `limits.hold_max_bytes`.",
+        "Kein Fix-Knopf: Die Warteschlange abarbeiten. Eine höhere Grenze hilft nur, wenn die gehaltenen Anfragen wirklich gebraucht werden.";
+    /// Das Entpacken eines Rumpfs für die Suche lief gegen
+    /// `limits.max_decompress_ratio`: Aus wenigen gepackten Bytes wären mehr
+    /// entpackte entstanden, als das Verhältnis erlaubt. Abgebrochen wird
+    /// während des Entpackens, nicht danach; durchsucht ist nur der Anfang.
+    /// Der `why` nennt das Verhältnis (HUM-057).
+    LIMIT_003 => "limits", "Entpack-Verhältnis überschritten", "#limit_003",
+        "Ein gepackter Rumpf hätte beim Entpacken mehr als `limits.max_decompress_ratio` mal so viele Bytes ergeben, wie er gepackt groß ist.",
+        "Kein Fix: Ein solches Verhältnis ist das Merkmal einer Entpack-Bombe, und eine höhere Grenze wäre der falsche Rat.";
+    /// Ein gestreamter Antwort-Rumpf des Ziels hat länger als
+    /// `limits.body_timeout_secs` geschwiegen. Der Strom wird abgebrochen, der
+    /// Client sieht eine abgeschnittene Antwort, und die Aufzeichnung vermerkt
+    /// sie als gekürzt. Gemessen wird die Stille zwischen zwei Stücken, nie
+    /// die Gesamtdauer (HUM-057, Spanne aus HUM-120).
+    LIMIT_004 => "limits", "Antwort des Ziels verstummt", "#limit_004",
+        "Das Ziel hat nach den Antwort-Kopfzeilen länger als `limits.body_timeout_secs` kein Stück des Rumpfs mehr geschickt, oder bei einem gestreamten Upload kein Stück mehr angenommen (`limits.body_timeout_secs`) beziehungsweise nach dem ganzen Rumpf keine Kopfzeilen geschickt (`limits.header_timeout_secs`).",
+        "`ChangeSetting` auf die Grenze, die ablief, mit dem doppelten Wert.";
+    /// Ein Client der Sandbox hat seinen Anfrage-Kopf nicht innerhalb von
+    /// `limits.header_timeout_secs` vollständig geschickt. Die Verbindung wird
+    /// geschlossen; ein Fluss entsteht nicht, weil es keinen Kopf gibt. Der
+    /// Befund steht nur in der Protokollzeile des Daemons, nicht im
+    /// Ereignisstrom: Ein Ereignis je stummer Verbindung wäre ein Hebel gegen
+    /// die Oberfläche (HUM-057).
+    LIMIT_005 => "limits", "Anfrage-Kopf zu spät", "#limit_005",
+        "Ein Client hat eine Verbindung geöffnet und den Kopf seiner Anfrage nicht innerhalb von `limits.header_timeout_secs` geschickt.",
+        "Kein Fix-Knopf: `limits.header_timeout_secs` nur erhöhen, wenn ein Werkzeug auf einer langsamen Leitung wirklich so lange braucht.";
+    /// Ein Abonnent des Ereignisstroms war langsamer als der Proxy und hat
+    /// mehr als `limits.event_buffer` Ereignisse verpasst. Er bekommt
+    /// `Lagged` und lädt mit `ListFlows` nach; der Proxy hat auf ihn nicht
+    /// gewartet, keine Anfrage wurde verzögert. Nur `Info`, und nur in der
+    /// Protokollzeile (HUM-057).
+    LIMIT_006 => "limits", "Ereignis-Puffer übergelaufen", "#limit_006",
+        "Ein Abonnent des Ereignisstroms hat mehr als `limits.event_buffer` Ereignisse nicht abgeholt.",
+        "Kein Fix: Die Oberfläche lädt über `ListFlows` nach.";
 }
 
 /// Sucht einen Code im Register.

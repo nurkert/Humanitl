@@ -121,4 +121,10 @@ abstract final class DiagnosticCodes {
   /// daemon announces it on the held flow and answers an allow with it
   /// (HUM-159); the client never works it out from the configuration.
   static const String sendRefused = 'HOLD_004';
+
+  /// The hold queue is full: `limits.hold_max_flows` requests or
+  /// `limits.hold_max_bytes` bytes are held, and the daemon blocks every new
+  /// one with 503. The status bar shows it at 100 % of either limit, from the
+  /// held flows it already has (HUM-057).
+  static const String queueFull = 'LIMIT_002';
 }

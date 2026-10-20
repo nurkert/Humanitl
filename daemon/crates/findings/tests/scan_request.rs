@@ -173,7 +173,8 @@ fn a_gzip_bomb_is_scanned_only_as_far_as_the_budget_reaches() {
     let report = registry(&settings).scan(&request, &bomb);
     assert!(report.truncated);
     assert_eq!(report.diagnostics.len(), 1);
-    assert_eq!(report.diagnostics[0].code.as_str(), "FINDINGS_002");
+    // Das Verhältnis zog, nicht das Cap: seit HUM-057 `LIMIT_003`.
+    assert_eq!(report.diagnostics[0].code.as_str(), "LIMIT_003");
 }
 
 #[test]

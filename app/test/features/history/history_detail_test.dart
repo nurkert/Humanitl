@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
+import 'package:humanitl/core/ui/fix_control.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/history/history_view.dart';
 import 'package:humanitl/features/history/history_metrics.dart';
@@ -534,5 +535,85 @@ void main() {
         HistorySort.values.toSet(),
       );
     });
+  });
+
+  // HUM-058, Zeile 9 (übernommen von HUM-057): Ein am Cap geblockter Fluss
+  // erscheint nur in der History, und sein Detail trägt den Befund des Daemons
+  // `LIMIT_001` als kompakte Zeile mit dem Vorschlag einer Regel
+  // `stream: true`. Die Oberfläche baut weder Befund noch Regel; beides kommt
+  // in `FlowDetail.diagnostics`.
+  testWidgets('body_cap_row_has_fix', (WidgetTester tester) async {
+    final FakeDaemonClient client = FakeDaemonClient.history(count: 24);
+    final ProviderContainer container = await pumpHistory(
+      tester,
+      client: client,
+    );
+    final Flow flow = container
+        .read(historyPageProvider)
+        .rows
+        .firstWhere((Flow flow) => flow.method == Method.post);
+    const Rule suggested = Rule(
+      action: RuleAction.ask,
+      matcher: RuleMatcher(host: 'upload.example.com', path: '/v1/files'),
+      stream: true,
+    );
+    client.state.details[flow.id] = FlowDetail(
+      summary: flow.copyWith(
+        decision: DecisionKind.block,
+        blockReason: BlockReason.bodyCap,
+      ),
+      diagnostics: const <Diagnostic>[
+        Diagnostic(
+          code: 'LIMIT_001',
+          severity: Severity.warning,
+          why: 'the request body is 41943040 bytes, over the cap',
+          fix: FixAction.addRule(rule: suggested),
+        ),
+      ],
+    );
+    await _select(tester, container, flow);
+
+    final Finder row = find.byKey(
+      const ValueKey<String>('history-diagnostic-0'),
+    );
+    expect(row, findsOneWidget);
+    expect(
+      find.descendant(of: row, matching: find.text('LIMIT_001')),
+      findsOneWidget,
+    );
+    // Der Titel kommt aus ARB, nicht aus dem deutschen Register des Daemons.
+    expect(
+      find.descendant(
+        of: row,
+        matching: find.text('Request body over the hold limit'),
+      ),
+      findsOneWidget,
+    );
+    final FixControl control = tester.widget<FixControl>(
+      find.descendant(of: row, matching: find.byType(FixControl)),
+    );
+    final FixAction? fix = control.fix;
+    expect(fix, isA<FixActionAddRule>());
+    expect((fix! as FixActionAddRule).rule.stream, isTrue);
+    expect(
+      find.descendant(of: row, matching: find.text('Add rule')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('a detail without diagnostics draws no diagnostic row', (
+    WidgetTester tester,
+  ) async {
+    final FakeDaemonClient client = FakeDaemonClient.history(count: 24);
+    final ProviderContainer container = await pumpHistory(
+      tester,
+      client: client,
+    );
+    final Flow flow = container.read(historyPageProvider).rows.first;
+    await _select(tester, container, flow);
+    expect(
+      find.byKey(const ValueKey<String>('history-diagnostic-0')),
+      findsNothing,
+    );
   });
 }
