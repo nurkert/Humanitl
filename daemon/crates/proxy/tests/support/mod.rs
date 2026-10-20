@@ -51,7 +51,7 @@ use humanitl_proxy::{
     AskPipeline, AsyncStream, ClientTls, ConnectionContext, Direct, Egress, FlowHandler,
     FlowPipeline, HandlerPorts, HoldQueue, MetaEndpoint, MetaStatus, PassthroughPipeline,
     ProxyCore, ProxyLimits, ResolveError, Resolver, ResolverPort, RulesPipeline, Scanner,
-    SecondScan, Upstream,
+    SecondScan, TrustAnchors, Upstream,
 };
 use humanitl_recorder::{Recorder, RecorderSettings, SessionMeta};
 use hyper::body::Incoming;
@@ -66,7 +66,7 @@ use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tokio_rustls::TlsConnector;
 
-pub use self::upstream::{ECHO_BODY, FakeUpstream, UpstreamCa};
+pub use self::upstream::{ECHO_BODY, FakeUpstream, ForeignCa, UpstreamCa};
 
 /// So lange wartet ein Test höchstens auf ein Ereignis oder eine Antwort.
 pub const WAIT: Duration = Duration::from_secs(10);
@@ -521,7 +521,7 @@ impl ProxyBuilder {
         let egress = Arc::new(CountingEgress::default());
         let mut roots = vec![ca.cert_der().clone()];
         roots.extend(self.extra_roots);
-        let tls = ClientTls::new(&roots, false).unwrap();
+        let tls = ClientTls::new(&TrustAnchors::bundled(), &roots, false).unwrap();
         let upstream = Upstream::new(
             Arc::clone(&egress) as Arc<dyn Egress>,
             Arc::clone(&port) as Arc<dyn Resolver>,

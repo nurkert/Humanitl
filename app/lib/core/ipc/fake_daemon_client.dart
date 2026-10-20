@@ -2557,9 +2557,10 @@ class FakeDaemonClient implements DaemonClient {
         );
       }
       value = seconds;
-    } else if (key == FormKeys.uiNotifications) {
+    } else if (key == FormKeys.uiNotifications ||
+        key == FormKeys.tlsTrustSystemStore) {
       if (text != 'true' && text != 'false') {
-        refuse('ui.notifications takes true or false, and $text is none');
+        refuse('$key takes true or false, and $text is none');
       }
       value = text == 'true';
     } else if (key == FormKeys.llmModels) {

@@ -71,7 +71,7 @@ pub use crate::load::{DEFAULT_ENV_PREFIX, ENV_SEPARATOR, PROFILE_SECTION, Source
 pub use crate::model::{
     AgentBriefing, AgentRef, AskMode, AuditConfig, Config, Experimental, FindingsConfig,
     HoldConfig, IpPreference, Language, Limits, LlmConfig, PseudonymConfig, RecorderConfig,
-    ResolverConfig, SandboxRef, Theme, UiConfig, WorkMode,
+    ResolverConfig, SandboxRef, Theme, TlsConfig, UiConfig, WorkMode,
 };
 pub use crate::origin::{Origin, Resolved};
 pub use crate::paths::{APP_DIR, DIR_MODE, FILE_MODE, Paths, RuntimeDir};
