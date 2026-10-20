@@ -25,7 +25,7 @@ use humanitl_proxy::handler::serve_connection;
 use humanitl_proxy::hold::{HoldError, HoldQueue, NotHeld, next_event};
 use humanitl_proxy::{
     AsyncStream, ClientTls, ConnMeta, Egress, FlowFilter, FlowHandler, FlowPipeline, FlowRecord,
-    FlowRegistry, ProxyLimits, ResolveError, Resolver, Upstream,
+    FlowRegistry, ProxyLimits, ResolveError, Resolver, TrustAnchors, Upstream,
 };
 use hyper::Request;
 use hyper_util::rt::TokioIo;
@@ -1131,7 +1131,7 @@ async fn invalid_transition_blocks() {
     let upstream = Upstream::new(
         Arc::new(NoEgress) as Arc<dyn Egress>,
         Arc::new(NoResolver) as Arc<dyn Resolver>,
-        ClientTls::new(&[], false).unwrap(),
+        ClientTls::new(&TrustAnchors::bundled(), &[], false).unwrap(),
         IpPreference::Ipv4,
         Duration::from_secs(10),
     );

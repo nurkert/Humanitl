@@ -22,10 +22,11 @@ mod support;
 use std::net::{IpAddr, Ipv4Addr};
 
 use bytes::Bytes;
-use humanitl_proxy::{ClientTls, roots_from_pem};
+use humanitl_core::{FixAction, FlowEvent};
+use humanitl_proxy::{ClientTls, TrustAnchors, roots_from_pem};
 use hyper::{Request, StatusCode};
 
-use support::{ECHO_BODY, FakeUpstream, ProxyBuilder, UpstreamCa, body_string};
+use support::{ECHO_BODY, FakeUpstream, ForeignCa, ProxyBuilder, UpstreamCa, body_string};
 
 /// Der Name, auf den das Blatt des Fake-Upstreams ausgestellt wird.
 ///
@@ -96,6 +97,59 @@ async fn the_same_target_without_the_root_is_a_gateway_error() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unknown_authority_is_named_to_the_human_and_not_to_the_agent() {
+    // HUM-257: Scheitert der Handschlag an einer unbekannten Stelle, steht
+    // das im `why` von `PROXY_003`, mit dem nächsten Schritt. Der Stapel des
+    // Builders hat nur die öffentlichen Wurzeln (`TrustAnchors::bundled`,
+    // wie bei `tls.trust_system_store = false`), also schlägt der Befund vor,
+    // die Ablage einzuschalten. Der Agent sieht weiter nur `upstream_tls`.
+    //
+    // Das Ziel hat ein Blatt aus einer `ForeignCa` und nicht aus einer
+    // `UpstreamCa`: Diese trüge denselben Namen wie die Humanitl-CA, die der
+    // Builder dem Stapel mitgibt, und rustls meldete eine falsche Unterschrift
+    // statt einer unbekannten Stelle.
+    let upstream = FakeUpstream::tls_foreign(&ForeignCa::new(), HOST).await;
+    let proxy = ProxyBuilder::new()
+        .rules(&allow_rule(HOST))
+        .resolve_host(HOST, vec![loopback()])
+        .start()
+        .await;
+    let mut events = proxy.events();
+
+    let (status, body) = fetch_echo(&proxy, upstream.port()).await;
+    events.wait_for("recorded").await;
+
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+    assert!(!body.contains("does not trust"), "{body}");
+    let found: Vec<_> = events
+        .seen
+        .iter()
+        .filter_map(|event| match event {
+            FlowEvent::Diagnostic { diagnostic, .. } if diagnostic.code.as_str() == "PROXY_003" => {
+                Some(diagnostic.as_ref().clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(found.len(), 1, "exactly one PROXY_003: {:?}", events.seen);
+    let diagnostic = &found[0];
+    assert!(
+        diagnostic.why.contains(HOST) && diagnostic.why.contains("does not trust"),
+        "{}",
+        diagnostic.why
+    );
+    assert!(
+        matches!(
+            &diagnostic.fix,
+            Some(FixAction::ChangeSetting { key, value })
+                if key == "tls.trust_system_store" && value == "true"
+        ),
+        "{:?}",
+        diagnostic.fix
+    );
+}
+
 #[test]
 fn a_test_root_changes_nothing_but_the_root_list() {
     // Der Normalfall bleibt der Normalfall: Das ALPN-Angebot hängt allein an
@@ -103,12 +157,15 @@ fn a_test_root_changes_nothing_but_the_root_list() {
     let upstream_ca = UpstreamCa::new();
     let root = upstream_ca.cert_der();
     for h2 in [false, true] {
-        let plain = ClientTls::new(&[], h2).unwrap();
-        let with_root = ClientTls::new(std::slice::from_ref(&root), h2).unwrap();
+        let plain = ClientTls::new(&TrustAnchors::bundled(), &[], h2).unwrap();
+        let with_root =
+            ClientTls::new(&TrustAnchors::bundled(), std::slice::from_ref(&root), h2).unwrap();
         assert_eq!(plain.alpn(), with_root.alpn(), "h2 = {h2}");
     }
     assert_eq!(
-        ClientTls::new(&[], false).unwrap().alpn(),
+        ClientTls::new(&TrustAnchors::bundled(), &[], false)
+            .unwrap()
+            .alpn(),
         vec![b"http/1.1".to_vec()],
         "http/1.1 only, as long as experimental.h2_upstream is off"
     );

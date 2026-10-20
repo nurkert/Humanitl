@@ -19,7 +19,8 @@ use async_trait::async_trait;
 use humanitl_config::ResolverConfig;
 use humanitl_core::{Authority, Diagnostic, HostName};
 use humanitl_proxy::{
-    AsyncStream, ClientTls, Direct, Egress, LlmFlavor, LlmProbe, Resolver, ResolverPort, Upstream,
+    AsyncStream, ClientTls, Direct, Egress, LlmFlavor, LlmProbe, Resolver, ResolverPort,
+    TrustAnchors, Upstream,
 };
 use support::{FakeUpstream, MockResolver};
 use url::Url;
@@ -63,7 +64,7 @@ fn probe_with(answers: Vec<(&str, Vec<IpAddr>)>, egress: Arc<dyn Egress>) -> Llm
     let upstream = Upstream::new(
         egress,
         resolver as Arc<dyn Resolver>,
-        ClientTls::new(&[], false).unwrap(),
+        ClientTls::new(&TrustAnchors::bundled(), &[], false).unwrap(),
         config.prefer,
         Duration::from_secs(5),
     );
@@ -340,7 +341,7 @@ async fn probe_and_proxy_resolve_a_lan_name_the_same_way() {
             inner: Direct::default(),
         }),
         resolver as Arc<dyn Resolver>,
-        ClientTls::new(&[], false).unwrap(),
+        ClientTls::new(&TrustAnchors::bundled(), &[], false).unwrap(),
         config.prefer,
         Duration::from_secs(5),
     ));
@@ -496,4 +497,57 @@ async fn probe_sends_the_key_as_bearer_and_only_when_given() {
         rejected.why
     );
     assert!(!rejected.why.contains("sk-wrong"), "{}", rejected.why);
+}
+
+/// HUM-257: Ein Endpunkt, dessen Zertifikat von einer Stelle stammt, der
+/// dieser Rechner nicht vertraut, ist `LLM_001` mit genau dieser Ursache im
+/// `why` und dem Weg, die CA ins System zu bringen — nicht „nicht
+/// erreichbar" mit einem `curl`, der dasselbe Scheitern noch einmal zeigt.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_endpoint_signed_by_an_unknown_authority_says_so() {
+    let ca = support::UpstreamCa::new();
+    let endpoint_server = FakeUpstream::tls(ca.store()).await;
+    // Die Ablage enthält eine CA, nur nicht die des Endpunkts.
+    let dir = tempfile::tempdir().unwrap();
+    let other = dir.path().join("other.pem");
+    std::fs::write(&other, support::ForeignCa::new().pem()).unwrap();
+    let anchors = TrustAnchors::from_paths(Some(&other), None);
+    let config = ResolverConfig {
+        cache_ttl_secs: 0,
+        ..ResolverConfig::default()
+    };
+    let resolver = Arc::new(
+        ResolverPort::over(
+            Arc::new(MockResolver::answering(IpAddr::V4(Ipv4Addr::LOCALHOST))) as Arc<dyn Resolver>,
+            &config,
+        )
+        .unwrap(),
+    );
+    let probe = LlmProbe::new(Upstream::new(
+        Arc::new(Direct::default()),
+        resolver as Arc<dyn Resolver>,
+        ClientTls::new(&anchors, &[], false).unwrap(),
+        config.prefer,
+        Duration::from_secs(5),
+    ));
+    let url = Url::parse(&format!("https://localhost:{}", endpoint_server.port())).unwrap();
+
+    let diagnostic = probe.probe(&url, None).await.unwrap_err();
+
+    assert_eq!(diagnostic.code.as_str(), "LLM_001");
+    assert!(
+        diagnostic
+            .why
+            .contains("signed by an authority this machine does not trust"),
+        "{}",
+        diagnostic.why
+    );
+    assert!(diagnostic.why.contains("localhost"), "{}", diagnostic.why);
+    match diagnostic.fix {
+        Some(humanitl_core::FixAction::CopyCommand(command)) => {
+            assert_eq!(command, "sudo update-ca-certificates");
+        }
+        other => panic!("expected the command that installs the CA, got {other:?}"),
+    }
+    assert_eq!(endpoint_server.hits(), 0, "the handshake failed first");
 }

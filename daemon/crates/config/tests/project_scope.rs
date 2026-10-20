@@ -39,6 +39,7 @@ const DENIED_BY_CONVENTION: &[&str] = &[
     "findings.email_allow_domains",
     "pseudonyms.*",
     "resolver.*",
+    "tls.*",
     "experimental.*",
     "recorder.retention_days",
     "limits.recorder_max_body_bytes",

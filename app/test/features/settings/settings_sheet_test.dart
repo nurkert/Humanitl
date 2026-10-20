@@ -320,4 +320,51 @@ void main() {
     },
     variant: TargetPlatformVariant.only(TargetPlatform.linux),
   );
+
+  testWidgets(
+    'the system certificate switch is on when tls.trust_system_store is unset',
+    (WidgetTester tester) async {
+      // HUM-257: Ohne Wert gilt die Vorgabe des Schemas, und die ist an.
+      await openSettings(tester, configured());
+      expect(
+        tester
+            .widget<HCheckbox>(
+              find.byKey(const Key('settings-trust-system-store')),
+            )
+            .value,
+        isTrue,
+      );
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.linux),
+  );
+
+  testWidgets(
+    'the system certificate switch reads tls.trust_system_store and writes it',
+    (WidgetTester tester) async {
+      // HUM-257: Das Opt-out steht im Formular. Ohne Wert gilt die Vorgabe
+      // des Schemas (an); gesetzt auf `false` zeigt der Schalter aus, und ein
+      // Klick schreibt den neuen Wert über SetConfig.
+      final Finder toggle = find.byKey(
+        const Key('settings-trust-system-store'),
+      );
+      final FakeDaemonClient client = configured();
+      client.configValues = ConfigValues(
+        values: <String, Object?>{
+          ...client.configValues.values,
+          'tls': <String, Object?>{'trust_system_store': false},
+        },
+        configPath: client.configValues.configPath,
+      );
+      await openSettings(tester, client);
+      expect(tester.widget<HCheckbox>(toggle).value, isFalse);
+
+      await tester.ensureVisible(toggle);
+      await tester.pumpAndSettle();
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      expect(client.configWrites.last, ('tls.trust_system_store', 'true'));
+      expect(tester.widget<HCheckbox>(toggle).value, isTrue);
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.linux),
+  );
 }

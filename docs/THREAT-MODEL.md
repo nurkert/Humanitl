@@ -74,7 +74,20 @@ kontrolliert, sieht alles, was der Agent ihm zeigt. Humanitl reduziert diesen An
 Diese Angreifer werden nicht abgewehrt, und Humanitl behauptet nicht, es zu tun.
 
 - **Root auf dem Host.** Wer root ist, liest den CA-Schlüssel, den Keyring und den Speicher des
-  Daemons. Es gibt keine Verteidigung darunter.
+  Daemons. Es gibt keine Verteidigung darunter. Dazu gehört seit HUM-257 auch die
+  Zertifikatsablage des Systems (`/etc/ssl/certs`), der der Daemon auf dem Weg zum Ziel vertraut,
+  solange `tls.trust_system_store` an ist: Eine CA, die root dort ablegt, nimmt der Daemon an, wie
+  `curl` und der Browser. Das gibt root nichts, was er nicht schon hatte.
+- **Prozesse des eigenen Kontos außerhalb der Sandbox**, die die Einrichtung des Daemons ändern
+  (`docs/SECURITY.md` 11). Das ist nicht Angreifer (d): Der liest und verändert die
+  Aufzeichnungen, und dagegen hilft die HMAC-Kette. Wer dagegen die Umgebung des Daemons oder
+  `config.toml` schreibt, richtet ihn ein. Seit HUM-257 gehört dazu, ihm `SSL_CERT_FILE` oder
+  `SSL_CERT_DIR` in die Umgebung zu legen. Diese Variablen dürfen nie auf einen Pfad zeigen, den
+  die Sandbox beschreiben kann, etwa den Projektordner: Sonst legt der Agent dort eine Wurzel ab,
+  der der Daemon beim nächsten Start vertraut. Der Daemon warnt beim Start, wenn ein solcher Pfad
+  dem Konto gehört oder für andere schreibbar ist, und die Startzeile nennt die Umlenkung
+  (`env`). Ohne diese Fehleinrichtung erreicht der Agent (a) bis (c) weder die Ablage noch die
+  Umgebung des Daemons, und ein Projekt-Profil kann `tls.*` nicht setzen.
 - **Kernel-Exploits.** Ein Fehler in der Namespace- oder seccomp-Implementierung hebt die
   Garantien auf. Die Gegenmaßnahme ist die Wahl bewährter, weit benutzter Bausteine
   (`bubblewrap`, seccomp-BPF) statt eigener Konstruktionen, plus zeitnahe Kernel-Updates.
@@ -667,6 +680,7 @@ Sitzungs-Historie steht.
 | 2026-09-24 | Passthrough und Regeln unter `hold.hard_block_checksum_secrets`: Eine Anfrage mit prüfsummen-bestätigtem Geheimnis wird gehalten statt sofort geblockt, damit ein Mensch den Wert ersetzen kann. Eine Regel `allow` und die Durchreiche zum Sprachmodell blocken sie weiter als System, die Warteschlange weist jedes `Allow` mit `HOLD_004` zurück, und der Handler leitet ein `Allow` für einen solchen Flow nie weiter. Die Aussage „geht nicht ungeändert hinaus" gilt unverändert | HUM-159 |
 | 2026-10-06 | K-02: Der Zugangsschlüssel eines Anbieters liegt im Schlüsselbund des Systems (Rückfall Datei `0600`), `config.toml` trägt nur den Verweis `llm.api_key_ref`. Der Agent bekommt ihn als Datei aus einem memfd, nie über `argv` oder die Umgebung, die `bwrap` über `--setenv` setzt; aufgezeichnete Kopfzeilen und Pfade tragen ihn als `••••`; kein Fund ist er nur in `Authorization` an Host und Port von `llm.endpoint` (Review-Nachtrag 2026-10-16), anderswo bleibt er einer. Restrisiko: Der Agent kann ihn lesen und anderswohin schicken | HUM-069, HUM-140 |
 | 2026-10-19 | Schutzziel 1: `stream: true` als zweite erklärte Ausnahme. Eine Anfrage über `limits.hold_body_cap_bytes` wurde bis dahin immer geblockt, auch wenn eine Regel `stream: true` trug; jetzt geht sie unter einer solchen Regel (`allow` oder `ask`) gestreamt hinaus, entschieden über den Kopf, der Body ohne Scan und ohne Vorschau, aufgezeichnet bis `limits.recorder_max_body_bytes`. Unter `hold.hard_block_checksum_secrets` greift `stream: true` nicht, und `LIMIT_001` schlägt dann das Cap vor statt einer Regel. Der Vorschlag am Block (`LIMIT_001`) ist sonst eine Regel mit `ask`, nie `allow`. Restrisiko: Wer eine solche Regel anlegt, gibt für diese Anfragen den Blick auf den Body auf | HUM-057 |
+| 2026-10-20 | Vertrauen zum Ziel: Der Daemon prüft Zertifikate von Zielen und vom LLM-Endpunkt gegen die Zertifikatsablage des Systems statt nur gegen `webpki-roots`, damit eine Firmen-CA oder eine selbst installierte CA wirkt wie bei `curl`. Opt-out `tls.trust_system_store = false` (im Projekt-Profil gesperrt), Rückfall auf `webpki-roots` bei leerer Ablage. Kein neuer Angreifer: Die Ablage schreibt nur root (2.2), die Umgebung des Daemons nur das eigene Konto. Die Humanitl-CA für die Sandbox und die Entscheidung vor jeder Verbindung bleiben unverändert | HUM-257 |
 
 Geplante Fortschreibung: HUM-059 bringt das Dokument zum Release auf den Stand des Codes. Jede
 sicherheitsrelevante Änderung am Shim, an der Mount-Allowlist, am Filter oder am Passthrough

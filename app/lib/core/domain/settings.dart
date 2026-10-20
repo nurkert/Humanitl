@@ -38,6 +38,10 @@ abstract final class FormKeys {
   /// The models the endpoint offers; the first is the agent's default.
   static const String llmModels = 'llm.models';
 
+  /// Whether the daemon trusts the certificate store of the system on its
+  /// way to a target, such as a company CA (HUM-257).
+  static const String tlsTrustSystemStore = 'tls.trust_system_store';
+
   /// All of them.
   static const List<String> all = <String>[
     holdTimeoutSecs,
@@ -48,6 +52,7 @@ abstract final class FormKeys {
     sandboxWorkDir,
     llmEndpoint,
     llmModels,
+    tlsTrustSystemStore,
   ];
 }
 
@@ -117,6 +122,12 @@ final class ConfigValues {
 
   /// `ui.notifications`, default true.
   bool get uiNotifications => switch (at(FormKeys.uiNotifications)) {
+    final bool on => on,
+    _ => true,
+  };
+
+  /// `tls.trust_system_store`, default true (HUM-257).
+  bool get tlsTrustSystemStore => switch (at(FormKeys.tlsTrustSystemStore)) {
     final bool on => on,
     _ => true,
   };

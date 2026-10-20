@@ -73,6 +73,7 @@ pub mod rules_store;
 pub mod session;
 pub mod tls;
 pub mod tls_observe;
+pub mod trust;
 pub mod upstream;
 
 pub use crate::connect::{
@@ -109,7 +110,8 @@ pub use crate::session::{SessionSettings, SessionState};
 pub use crate::tls_observe::{
     HandshakeWatch, TlsFailure, ToolHint, classify, diagnostic_for, tool_hint,
 };
-pub use crate::upstream::{ClientTls, Outgoing, Upstream, roots_from_pem};
+pub use crate::trust::{TrustAnchors, TrustSource};
+pub use crate::upstream::{ClientTls, ForwardError, Outgoing, Upstream, roots_from_pem};
 /// Ein Zertifikat in DER-Form, der Typ der zusätzlichen Wurzeln von
 /// [`ClientTls::new`].
 ///

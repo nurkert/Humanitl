@@ -129,6 +129,82 @@ impl UpstreamCa {
     }
 }
 
+/// Eine CA mit eigenem, zufälligem Namen, unabhängig von [`CaStore`]
+/// (HUM-257).
+///
+/// [`UpstreamCa`] taugt nicht als „fremde" CA: Jede [`CaStore`] auf demselben
+/// Rechner trägt denselben Namen (der `CN` kommt aus der `machine-id`), auch
+/// die Humanitl-CA des Proxys. webpki prüft die Unterschrift eines Blatts dann
+/// gegen die gleichnamige falsche CA und meldet `BadSignature` statt einer
+/// unbekannten Stelle (`UnknownIssuer`). Wer genau diesen Fall braucht, nimmt
+/// diese CA.
+pub struct ForeignCa {
+    issuer: rcgen::Issuer<'static, rcgen::KeyPair>,
+    pem: String,
+}
+
+/// Zählt die [`ForeignCa`] dieses Prozesses, damit keine zwei denselben Namen
+/// tragen.
+static FOREIGN_CAS: AtomicUsize = AtomicUsize::new(0);
+
+impl Default for ForeignCa {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ForeignCa {
+    /// Eine frische CA, deren Name niemand sonst trägt.
+    #[must_use]
+    pub fn new() -> Self {
+        let key = rcgen::KeyPair::generate().unwrap();
+        let mut params = rcgen::CertificateParams::default();
+        params.distinguished_name.push(
+            rcgen::DnType::CommonName,
+            format!(
+                "HUM-257 foreign test root {}-{}",
+                std::process::id(),
+                FOREIGN_CAS.fetch_add(1, Ordering::SeqCst)
+            ),
+        );
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        params.key_usages = vec![
+            rcgen::KeyUsagePurpose::KeyCertSign,
+            rcgen::KeyUsagePurpose::CrlSign,
+        ];
+        let pem = params.self_signed(&key).unwrap().pem();
+        Self {
+            issuer: rcgen::Issuer::new(params, key),
+            pem,
+        }
+    }
+
+    /// Ihr Zertifikat als PEM, etwa für eine Zertifikatsablage.
+    #[must_use]
+    pub fn pem(&self) -> &str {
+        &self.pem
+    }
+
+    /// Eine Serverkonfiguration mit einem Blatt für `name` aus dieser CA.
+    fn server_config(&self, name: &str) -> ServerConfig {
+        let key = rcgen::KeyPair::generate().unwrap();
+        let params = rcgen::CertificateParams::new(vec![name.to_owned()]).unwrap();
+        let leaf = params.signed_by(&key, &self.issuer).unwrap();
+        let mut config =
+            ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(
+                    vec![leaf.der().clone()],
+                    rustls::pki_types::PrivateKeyDer::Pkcs8(key.serialize_der().into()),
+                )
+                .unwrap();
+        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+        config
+    }
+}
+
 /// Ein axum-Server auf Loopback, Klartext oder TLS.
 pub struct FakeUpstream {
     /// Adresse, auf der der Server lauscht.
@@ -219,6 +295,18 @@ impl FakeUpstream {
         .unwrap()
     }
 
+    /// TLS mit einem Leaf für `name` aus einer [`ForeignCa`], Karte
+    /// [`Routes::Legacy`], auf `127.0.0.1` (HUM-257).
+    pub async fn tls_foreign(ca: &ForeignCa, name: &str) -> Self {
+        Self::bind_config(
+            Routes::Legacy,
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            Some(ca.server_config(name)),
+        )
+        .await
+        .unwrap()
+    }
+
     async fn bind(routes: Routes, ip: IpAddr, ca: Option<&CaStore>) -> io::Result<Self> {
         Self::bind_named(routes, ip, ca, "localhost").await
     }
@@ -229,19 +317,27 @@ impl FakeUpstream {
         ca: Option<&CaStore>,
         name: &str,
     ) -> io::Result<Self> {
+        Self::bind_config(routes, ip, ca.map(|ca| server_config(ca, name))).await
+    }
+
+    async fn bind_config(
+        routes: Routes,
+        ip: IpAddr,
+        tls: Option<ServerConfig>,
+    ) -> io::Result<Self> {
         let hits = Arc::new(AtomicUsize::new(0));
         let alpn = Arc::new(Mutex::new(None));
         let listener = TcpListener::bind(SocketAddr::new(ip, 0)).await?;
         let addr = listener.local_addr()?;
         let app = router(Arc::clone(&hits), routes);
-        let task = match ca {
+        let task = match tls {
             None => tokio::spawn(async move {
                 axum::serve(listener, app).await.unwrap();
             }),
-            Some(ca) => {
+            Some(config) => {
                 let tls = TlsListener {
                     inner: listener,
-                    acceptor: TlsAcceptor::from(Arc::new(server_config(ca, name))),
+                    acceptor: TlsAcceptor::from(Arc::new(config)),
                     alpn: Arc::clone(&alpn),
                 };
                 tokio::spawn(async move {
