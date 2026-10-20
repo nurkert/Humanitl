@@ -60,8 +60,14 @@ class SetupScreen extends StatefulWidget {
     required this.onPickWorkDir,
     required this.onWorkMode,
     required this.onStart,
+    this.daemonAttempts = 0,
     super.key,
   });
+
+  /// How many attempts to reach the daemon failed so far, or 0 while it
+  /// answers. The first row shows the count, so a screen that keeps trying
+  /// says so (HUM-058, row 1).
+  final int daemonAttempts;
 
   /// The four rows.
   final SetupState state;
@@ -205,6 +211,7 @@ class _SetupScreenState extends State<SetupScreen> {
                 DaemonCheck(
                   check: state[SetupCheckKind.daemon],
                   onRetry: widget.onRetry,
+                  attempts: widget.daemonAttempts,
                 ),
                 const HHairline(),
                 LlmCheck(

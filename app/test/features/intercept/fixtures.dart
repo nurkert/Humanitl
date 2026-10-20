@@ -82,7 +82,7 @@ Finding testFinding({
 /// die der Detektor gemeldet hat.
 FlowDetail detailFor(
   Flow flow, {
-  List<Header> headers = const <Header>[],
+  List<Header>? headers,
   String bodyPreview = '',
   String contentType = '',
   String apex = '',
@@ -96,7 +96,9 @@ FlowDetail detailFor(
     scheme: flow.scheme,
     authority: flow.authority,
     pathAndQuery: flow.path,
-    headers: headers,
+    // Ohne Angabe nur `Host`, wie jede HTTP/1.1-Anfrage: Eine Anfrage ganz
+    // ohne Kopfzeilen gilt der Oberfläche als nicht lesbar (HUM-058).
+    headers: headers ?? <Header>[header('host', flow.authority.host)],
     body: BodyRef(
       sha256: List<int>.filled(32, 7),
       size: utf8.encode(bodyPreview).length,

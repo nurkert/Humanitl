@@ -17,6 +17,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter_riverpod/flutter_riverpod.dart' show Provider;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:xterm2/core.dart';
 
@@ -42,6 +43,17 @@ const int terminalScrollback = 10000;
 /// (`limits.hold_max_flows`) and small enough that a long session does not
 /// turn this into a second history.
 const int heldNoticeMemory = 64;
+
+/// Die erste Wartezeit, bevor ein abgerissener Terminal-Strom neu verbunden
+/// wird, oder null für nie (HUM-058, Zeile 19). Sie verdoppelt sich bis
+/// [terminalReconnectMax]. Tests setzen null und fahren den Anschluss selbst.
+final Provider<Duration?> terminalReconnectProvider = Provider<Duration?>(
+  (Ref ref) => const Duration(seconds: 1),
+);
+
+/// Die längste Wartezeit zwischen zwei Versuchen, das Terminal neu zu
+/// verbinden: dieselbe Obergrenze wie beim Ereignisstrom.
+const Duration terminalReconnectMax = Duration(seconds: 10);
 
 /// Where a terminal session stands.
 enum TerminalPhase {
@@ -94,6 +106,7 @@ class TerminalSessionState {
     this.cols = 0,
     this.rows = 0,
     this.readOnly = false,
+    this.reconnecting = false,
   });
 
   /// The emulator. It survives a rebuild, so the screen keeps its scrollback.
@@ -121,6 +134,12 @@ class TerminalSessionState {
   /// nowhere. The emulator is told, so that it stops asking.
   final bool readOnly;
 
+  /// True while this client tries to attach again after the stream broke
+  /// without an exit code (HUM-058, row 19). The emulator, its scrollback and
+  /// the choice of keyboard stay; the pane writes one line into the terminal
+  /// when this turns true.
+  final bool reconnecting;
+
   /// The same state at another phase.
   TerminalSessionState copyWith({
     TerminalPhase? phase,
@@ -129,6 +148,7 @@ class TerminalSessionState {
     int? cols,
     int? rows,
     bool? readOnly,
+    bool? reconnecting,
   }) => TerminalSessionState(
     terminal: terminal,
     phase: phase ?? this.phase,
@@ -137,6 +157,7 @@ class TerminalSessionState {
     cols: cols ?? this.cols,
     rows: rows ?? this.rows,
     readOnly: readOnly ?? this.readOnly,
+    reconnecting: reconnecting ?? this.reconnecting,
   );
 }
 
@@ -146,6 +167,12 @@ class TerminalSession extends _$TerminalSession {
   StreamController<TerminalCommand>? _input;
   StreamSubscription<TerminalFrame>? _frames;
   ByteConversionSink? _decoder;
+
+  /// Der geplante neue Anschluss nach einem Abriss, oder null.
+  Timer? _retry;
+
+  /// Die nächste Wartezeit vor einem neuen Anschluss; null heißt die erste.
+  Duration? _backoff;
 
   @override
   TerminalSessionState build(String sandboxId) {
@@ -160,7 +187,10 @@ class TerminalSession extends _$TerminalSession {
       int pixelWidth,
       int pixelHeight,
     ) => _send(TerminalResize(cols: width, rows: height));
-    ref.onDispose(_detach);
+    ref.onDispose(() {
+      _stopRetry();
+      unawaited(_detach());
+    });
     return TerminalSessionState(terminal: terminal);
   }
 
@@ -222,8 +252,52 @@ class TerminalSession extends _$TerminalSession {
 
   /// Detaches this client. The session keeps running.
   Future<void> detach() async {
+    _stopRetry();
+    if (state.reconnecting) {
+      // Kein Versuch läuft mehr; der nächste Abriss bekommt wieder seine
+      // Zeile im Terminal (Review).
+      state = state.copyWith(reconnecting: false);
+    }
     _input?.add(const TerminalDetach());
     await _detach();
+  }
+
+  /// Plant den nächsten Anschluss nach einem Abriss ohne Exit-Code (HUM-058,
+  /// Zeile 19).
+  ///
+  /// Der neue Anschluss geht durch [attach], und das `Open` trägt die
+  /// Geometrie, die das Fenster jetzt hat: Das ist die Größenänderung, die der
+  /// Daemon nach dem Abriss braucht. Der Emulator mit seinem Rücklauf bleibt
+  /// derselbe, also auch alles, was schon auf dem Schirm stand. Die Wartezeit
+  /// verdoppelt sich bis [terminalReconnectMax] und fällt auf die erste
+  /// zurück, sobald der Daemon wieder eine Geometrie schickt.
+  ///
+  /// Eine Absage des Daemons (`refused`) und ein Ende des Agenten (`ended`)
+  /// planen nichts: Die erste käme beim nächsten Versuch wieder, das zweite
+  /// hat nichts mehr, woran sich jemand hängen könnte.
+  void _scheduleReconnect() {
+    final Duration? first = ref.read(terminalReconnectProvider);
+    if (first == null || _retry != null || !ref.mounted) {
+      return;
+    }
+    final Duration wait = _backoff ?? first;
+    final Duration doubled = wait * 2;
+    _backoff = doubled > terminalReconnectMax ? terminalReconnectMax : doubled;
+    state = state.copyWith(reconnecting: true);
+    _retry = Timer(wait, () {
+      _retry = null;
+      if (!ref.mounted ||
+          state.phase == TerminalPhase.refused ||
+          state.phase == TerminalPhase.ended) {
+        return;
+      }
+      unawaited(attach(readOnly: state.readOnly));
+    });
+  }
+
+  void _stopRetry() {
+    _retry?.cancel();
+    _retry = null;
   }
 
   void _send(TerminalCommand command) {
@@ -263,10 +337,12 @@ class TerminalSession extends _$TerminalSession {
                 readOnly: state.readOnly,
               )
             : state;
+        _backoff = null;
         state = answered.copyWith(
           phase: TerminalPhase.attached,
           cols: cols,
           rows: rows,
+          reconnecting: false,
         );
       case TerminalFinding(diagnostic: final Diagnostic diagnostic):
         // `TERM_001` heißt: Jemand anders schreibt schon -- die
@@ -285,9 +361,14 @@ class TerminalSession extends _$TerminalSession {
         state = state.copyWith(
           phase: TerminalPhase.refused,
           diagnostic: diagnostic,
+          reconnecting: false,
         );
       case TerminalExit(code: final int code):
-        state = state.copyWith(phase: TerminalPhase.ended, exitCode: code);
+        state = state.copyWith(
+          phase: TerminalPhase.ended,
+          exitCode: code,
+          reconnecting: false,
+        );
     }
   }
 
@@ -313,12 +394,17 @@ class TerminalSession extends _$TerminalSession {
       state = state.copyWith(
         phase: transport ? TerminalPhase.detached : TerminalPhase.refused,
         diagnostic: error.diagnostic,
+        reconnecting: transport ? null : false,
       );
+      unawaited(_detach());
+      if (transport) {
+        _scheduleReconnect();
+      }
       return;
     }
     // Ein Fehler, den kein Client von heute wirft. Er steht hier, weil ein
     // Strom, der ohne Befund abbricht, dieselbe Frage stellt wie einer mit.
-    state = state.copyWith(phase: TerminalPhase.detached);
+    state = state.copyWith(phase: TerminalPhase.detached, reconnecting: false);
   }
 
   void _onDone() {
@@ -327,11 +413,20 @@ class TerminalSession extends _$TerminalSession {
     // Übergang allein an `attached`, bliebe genau der früheste Fehlschlag
     // stumm, und still zu sein ist das, wogegen dieses Issue gebaut ist.
     // `refused` und `ended` bleiben stehen: Die haben schon eine Antwort.
-    if (state.phase == TerminalPhase.attached ||
-        state.phase == TerminalPhase.idle) {
+    final bool broke =
+        state.phase == TerminalPhase.attached ||
+        state.phase == TerminalPhase.idle ||
+        // Ein neuer Anschluss, der endet, bevor er eine Geometrie bekam,
+        // versucht es wieder; sonst bliebe ein einziger Fehlversuch für immer
+        // das letzte Wort.
+        (state.phase == TerminalPhase.detached && state.reconnecting);
+    if (broke) {
       state = state.copyWith(phase: TerminalPhase.detached);
     }
     unawaited(_detach());
+    if (broke) {
+      _scheduleReconnect();
+    }
   }
 
   /// Gives up the stream. Never waited on.

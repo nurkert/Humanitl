@@ -34,10 +34,12 @@ import '../../../l10n/l10n.dart';
 import '../providers/decision.dart';
 import '../providers/diagnostics.dart' show sanitizeDiagnostic;
 import '../providers/findings_pause.dart';
+import '../providers/flows.dart' show flowDetailProvider;
 import '../providers/note.dart';
 import '../providers/now.dart';
 import '../providers/selection.dart';
 import '../rule_sentence.dart';
+import '../../../core/domain/websocket.dart';
 import 'block_button.dart';
 import 'note_field.dart';
 import 'release_valve.dart';
@@ -209,12 +211,35 @@ class _ActionBarState extends ConsumerState<ActionBar> {
         ? chosen.firstOrNull?.sendRefusal
         : null;
     final bool refused = sendRefusal != null;
+    // Eine einzelne Freigabe, die eine WebSocket-Verbindung öffnet, sagt das
+    // auf dem Knopf: Sie lässt mehr hinaus als diese eine Anfrage
+    // (HUM-058, Zeile 11). Mit einer Gültigkeit darüber hinaus bleibt die
+    // Beschriftung die der Regel, denn dann ist die Dauer das Neue.
+    final FlowDetail? detail = reach == 1 && flow != null
+        ? ref.watch(flowDetailProvider(flow.id)).value
+        : null;
+    final HttpRequest? request = detail?.request;
+    // Solange das Detail einer einzelnen Anfrage fehlt, ist die Freigabe aus:
+    // Erst das Detail sagt, ob sie eine WebSocket-Verbindung öffnet
+    // (`InterceptDecision.allow`, HUM-058).
+    final bool detailPending = reach == 1 && flow != null && detail == null;
+    // Ein Detail ohne Kopfzeilen sagt nichts über einen Protokollwechsel; die
+    // Karte nennt den Grund (Review).
+    final bool unreadable =
+        reach == 1 && detail != null && !requestIsReadable(detail);
+    final bool websocket =
+        flow != null &&
+        request != null &&
+        remember.effective == RememberDuration.once &&
+        requestOpensWebSocket(request.headers);
     final String sendLabel = refused
         ? l10n.interceptSendRefused
         : anyFinding
         ? l10n.interceptSendWithFindings(findingReach)
         : reach > 1
         ? l10n.interceptAllowSelected(reach)
+        : websocket
+        ? l10n.interceptAllowConnection
         : allowLabel(remember.effective, l10n);
     final Widget bareValve = ReleaseValve(
       key: const Key('intercept-allow'),
@@ -239,7 +264,7 @@ class _ActionBarState extends ConsumerState<ActionBar> {
       shortcutHint: l10n.interceptKeyAllow,
       semanticsValue: countdown,
       optionsLabel: l10n.interceptAllowOptions,
-      enabled: enabled && !refused,
+      enabled: enabled && !refused && !detailPending && !unreadable,
       optionsOpen: remember.open,
       pressed:
           acting == DecisionKind.allow || acting == DecisionKind.allowEdited,
@@ -654,6 +679,16 @@ String refusalText(RefusalReason reason, AppLocalizations l10n) =>
       RefusalReason.holdIt => l10n.interceptHoldToBlock,
       RefusalReason.holdToSend => l10n.interceptHoldToSend,
       RefusalReason.apexUnknown => l10n.interceptRefusedApexUnknown,
+      RefusalReason.connectionLeftHeld =>
+        l10n.interceptRefusedConnectionLeftHeld,
+      RefusalReason.requestUnreadable => l10n.interceptRefusedRequestUnreadable,
+      RefusalReason.someLeftQueue => l10n.interceptRefusedSomeLeftQueue,
+      RefusalReason.allLeftQueue => l10n.interceptRefusedAllLeftQueue,
+      RefusalReason.heldAndSomeLeftQueue =>
+        l10n.interceptRefusedHeldAndSomeLeftQueue,
+      RefusalReason.detailMissing => l10n.interceptRefusedDetailMissing,
+      RefusalReason.ruleSourceHeld => l10n.interceptRefusedRuleSourceHeld,
+      RefusalReason.ruleSourceGone => l10n.interceptRefusedRuleSourceGone,
     };
 
 /// What sending this request would give away, and to whom.

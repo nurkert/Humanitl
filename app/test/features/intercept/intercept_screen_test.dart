@@ -100,20 +100,19 @@ Future<void> pressCtrl(WidgetTester tester, LogicalKeyboardKey key) async {
   await tester.pump();
 }
 
-FlowDetail github({int n = 1, List<Header> headers = const <Header>[]}) =>
-    detailFor(
-      heldFlow(
-        n: n,
-        deadline: testStart.add(const Duration(minutes: 5)),
-        method: Method.post,
-        host: 'api.github.com',
-        path: '/graphql?first=20',
-        requestSize: 42,
-      ),
-      headers: headers,
-      bodyPreview: '{"query": "mutation { createIssue }"}',
-      contentType: 'application/json',
-    );
+FlowDetail github({int n = 1, List<Header>? headers}) => detailFor(
+  heldFlow(
+    n: n,
+    deadline: testStart.add(const Duration(minutes: 5)),
+    method: Method.post,
+    host: 'api.github.com',
+    path: '/graphql?first=20',
+    requestSize: 42,
+  ),
+  headers: headers,
+  bodyPreview: '{"query": "mutation { createIssue }"}',
+  contentType: 'application/json',
+);
 
 FlowDetail pypi({int n = 2}) => detailFor(
   heldFlow(
@@ -304,7 +303,11 @@ void main() {
 
     final Finder banner = find.byKey(const Key('intercept-card-banner'));
     expect(banner, findsOneWidget);
-    expect(tester.widget<Text>(banner).data, 'Held, then blocked (timeout)');
+    // Seit HUM-058 nennt das Band die Wartezeit und die Folge für den Agenten.
+    expect(
+      tester.widget<Text>(banner).data,
+      allOf(startsWith('Blocked (timed out after '), endsWith('may retry.')),
+    );
 
     final ReleaseValve allow = tester.widget<ReleaseValve>(
       find.byKey(const Key('intercept-allow')),

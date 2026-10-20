@@ -14,6 +14,7 @@ import '../../../core/ui/fix_control.dart';
 import '../../../core/ui/h_diagnostic_card.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
+import '../tray_diagnostics.dart';
 
 /// The notice.
 class AttentionNoticeCard extends StatelessWidget {
@@ -80,6 +81,13 @@ class AttentionNoticeCard extends StatelessWidget {
           l10n.trayNoticeDecidedTitle,
           l10n.trayNoticeDecidedWhy,
         ),
+        // Derselbe Code, ein anderer Grund: der WebSocket-Aufbau (HUM-058).
+        DiagnosticCodes.decideRequestInvalid
+            when diagnostic.title == TrayDiagnostics.connectionTitle =>
+          (l10n.trayNoticeConnectionTitle, l10n.trayNoticeConnectionWhy),
+        DiagnosticCodes.decideRequestInvalid
+            when diagnostic.title == TrayDiagnostics.detailTitle =>
+          (l10n.trayNoticeDetailTitle, l10n.trayNoticeDetailWhy),
         DiagnosticCodes.decideRequestInvalid => (
           l10n.trayNoticeFindingsTitle,
           l10n.trayNoticeFindingsWhy,
