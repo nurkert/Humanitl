@@ -15,6 +15,20 @@ License: CC-BY-3.0
  https://creativecommons.org/licenses/by/3.0/. Origin, checksums and the
  changes made are described in /usr/share/humanitl/catalog/RANKS-LICENSE.
 
+Files: usr/share/icons/hicolor/*/apps/humanitl.png
+ usr/share/icons/hicolor/scalable/apps/humanitl.svg
+Copyright: 2024 Fonticons, Inc.
+ 2026 Niko Burkert and the Humanitl contributors
+License: CC-BY-4.0
+ The application icon. The fist follows "hand-fist" from Font Awesome Free
+ 6.6.0, https://fontawesome.com/icons/hand-fist, licensed under the Creative
+ Commons Attribution 4.0 International licence,
+ https://creativecommons.org/licenses/by/4.0/ (overview of the Font Awesome
+ Free licences: https://fontawesome.com/license/free). Changes: index and
+ middle finger reshaped, the fist scaled down, filled in #14161C and set on
+ a yellow rounded tile with a vertical gradient drawn for Humanitl. The
+ icon as a whole is licensed under CC BY 4.0.
+
 Files: usr/lib/humanitl/lib/libflutter_linux_gtk.so
 Copyright: The Flutter Authors
 License: BSD-3-Clause

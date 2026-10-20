@@ -299,14 +299,15 @@ AppImage (`packaging/appimage/check-appimage.sh`). Gebraucht werden `dpkg-dev`, 
 `curl` und für den statischen Shim `musl-tools`. `appimagetool` und die Laufzeit des AppImage lädt
 das Skript in festgelegter Fassung und prüft ihre SHA-256-Summe, bevor es sie ausführt.
 
-Die PNG-Symbole unter `packaging/deb/icons/` sind aus `packaging/deb/humanitl.svg` gerechnet:
+Die PNG-Symbole unter `packaging/deb/icons/` sind aus `packaging/deb/humanitl.svg` gerechnet, mit
+Inkscape 1.x. Wer das SVG ändert, rechnet sie neu und checkt die drei Bilder im selben Commit ein:
 
 ```sh
-for s in 64 128 256; do
-  inkscape packaging/deb/humanitl.svg --export-type=png --export-width=$s \
-    --export-height=$s --export-filename=packaging/deb/icons/humanitl-$s.png
-done
+packaging/deb/icons/render.sh
 ```
+
+Herkunft und Lizenz des Icons (Font Awesome Free, CC BY 4.0) stehen in `THIRD_PARTY.md` und im
+Paket in `/usr/share/doc/humanitl/copyright`.
 
 Das `.deb` wird nie auf einem Arbeitsrechner installiert, sondern in einem Wegwerf-Container
 geprüft, mit `packaging/deb/check-install.sh` (Installation, Bibliotheken, Start der Anwendung

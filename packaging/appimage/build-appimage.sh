@@ -14,7 +14,7 @@
 # Der Baum im Bild ist derselbe wie im Archiv, nur unter `usr/lib/humanitl/`:
 #
 #   AppRun                                 packaging/appimage/AppRun
-#   humanitl.desktop, humanitl.svg, .DirIcon
+#   dev.humanitl.humanitl.desktop, humanitl.svg, .DirIcon
 #   usr/lib/humanitl/                      Flutter-Bundle (humanitl, lib/, data/)
 #   usr/lib/humanitl/bin/                  humanitld, humanitl, humanitl-shim
 #   usr/lib/humanitl/share/humanitl/catalog/   Katalog (`catalog_dir` in humanitld)
@@ -93,7 +93,7 @@ install -m 0755 "$here/AppRun" "$appdir/AppRun"
 # Dieselbe Desktop-Datei wie im Paket: Eine zweite Fassung liefe ihr davon.
 # `Exec` nennt `humanitl-app`; Werkzeuge, die ein AppImage ins Menue holen,
 # ersetzen die Zeile ohnehin durch den Pfad des Bildes.
-install -m 0644 "$root/packaging/deb/humanitl.desktop" "$appdir/humanitl.desktop"
+install -m 0644 "$root/packaging/deb/dev.humanitl.humanitl.desktop" "$appdir/dev.humanitl.humanitl.desktop"
 install -m 0644 "$root/packaging/deb/humanitl.svg" "$appdir/humanitl.svg"
 ln -s humanitl.svg "$appdir/.DirIcon"
 

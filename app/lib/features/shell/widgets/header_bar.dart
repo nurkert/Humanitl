@@ -11,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/domain/domain.dart';
 import '../../../core/ipc/connection.dart';
 import '../../../core/shortcuts/intents.dart';
+import '../../../core/ui/app_mark.dart';
 import '../../../core/ui/hover_label.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
@@ -94,12 +95,12 @@ class HeaderBar extends ConsumerWidget {
   }
 }
 
-/// The accent mark and the product name.
+/// The application icon and the product name.
 class Wordmark extends StatelessWidget {
   /// Creates the wordmark.
   const Wordmark({this.markSize = 16, this.style, super.key});
 
-  /// Edge length of the accent mark.
+  /// Edge length of the application icon ([AppMark]).
   final double markSize;
 
   /// Text style of the name; 13/600 when null.
@@ -111,22 +112,7 @@ class Wordmark extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        SizedBox.square(
-          dimension: markSize,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: tokens.colors.accent,
-              borderRadius: BorderRadius.circular(tokens.radii.control),
-            ),
-            child: Center(
-              child: SizedBox(
-                width: markSize * 0.375,
-                height: markSize * 0.125,
-                child: ColoredBox(color: tokens.colors.onAccent),
-              ),
-            ),
-          ),
-        ),
+        AppMark(size: markSize),
         SizedBox(width: tokens.spacing.x2),
         Text(
           context.l10n.appTitle,

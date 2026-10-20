@@ -2,6 +2,13 @@
 # meldet dazu zwei Hinweise: Development und Network sind beide Hauptkategorien,
 # der Eintrag erschiene zweimal im Menue, und Security verlangt Settings oder
 # System daneben. Deshalb nur Development; Netz und Sicherheit stehen in Keywords.
+#
+# Dateiname und StartupWMClass sind die Anwendungs-ID `dev.humanitl.humanitl`
+# (APPLICATION_ID in app/linux/CMakeLists.txt, HUM-259). Der Runner setzt sie
+# als GApplication-ID und mit g_set_prgname; GTK macht daraus unter Wayland die
+# app_id des Fensters und unter X11 den Instanznamen in WM_CLASS. Der
+# Compositor findet die Desktop-Datei unter Wayland nur über diesen Namen
+# (app_id plus .desktop), und erst darüber das Symbol `Icon=humanitl`.
 [Desktop Entry]
 Type=Application
 Name=Humanitl
@@ -14,4 +21,4 @@ Icon=humanitl
 Terminal=false
 Categories=Development;
 Keywords=agent;proxy;sandbox;llm;network;security;
-StartupWMClass=humanitl
+StartupWMClass=dev.humanitl.humanitl
