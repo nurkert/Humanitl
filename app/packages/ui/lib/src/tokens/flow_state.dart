@@ -87,6 +87,12 @@ enum HGlyph {
   /// Fundstellen durchlässt. Lucide hat dafür keine Form, und `eye-off` sagt
   /// „versteckt", was etwas anderes ist.
   redactBar,
+
+  /// Lucide `minus`: das Fenster minimieren (HUM-255).
+  minus,
+
+  /// Lucide `square`: das Fenster maximieren oder wiederherstellen (HUM-255).
+  square,
 }
 
 /// The eight state colours of one theme.

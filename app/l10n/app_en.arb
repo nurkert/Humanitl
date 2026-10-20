@@ -3121,5 +3121,11 @@
   "settingsTrustSystemStoreHint": "Trust the certificates of this system, for example a company CA",
   "@settingsTrustSystemStoreHint": {"description": "Text of the checkbox of tls.trust_system_store (HUM-257)."},
   "settingsTrustSystemStoreHelp": "Off: only the public roots built into Humanitl count, and a server with a company or self-installed certificate is refused. The sandbox is not affected.",
-  "@settingsTrustSystemStoreHelp": {"description": "Help under tls.trust_system_store: what switching it off means (HUM-257)."}
+  "@settingsTrustSystemStoreHelp": {"description": "Help under tls.trust_system_store: what switching it off means (HUM-257)."},
+  "shellWindowMinimize": "Minimize",
+  "@shellWindowMinimize": {"description": "Hover and screen-reader label of the window button in the header bar that minimizes the window (HUM-255). A tiling window manager may ignore it."},
+  "shellWindowMaximize": "Maximize or restore",
+  "@shellWindowMaximize": {"description": "Hover and screen-reader label of the window button in the header bar that maximizes the window, or restores it when it is maximized (HUM-255). One label for both, because the button does not track the state."},
+  "shellWindowClose": "Close",
+  "@shellWindowClose": {"description": "Hover and screen-reader label of the window button in the header bar that closes the window, exactly like the close button of the window manager (HUM-255)."}
 }

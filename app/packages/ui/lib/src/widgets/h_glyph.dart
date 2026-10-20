@@ -269,6 +269,16 @@ class _HGlyphPainter extends CustomPainter {
           ..drawLine(const Offset(4, 6), const Offset(20, 6), stroke)
           ..drawRect(const Rect.fromLTWH(4, 10, 16, 5), fill)
           ..drawLine(const Offset(4, 19), const Offset(14, 19), stroke);
+      case HGlyph.minus:
+        canvas.drawLine(const Offset(5, 12), const Offset(19, 12), stroke);
+      case HGlyph.square:
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            const Rect.fromLTWH(3, 3, 18, 18),
+            const Radius.circular(2),
+          ),
+          stroke,
+        );
     }
     canvas.restore();
   }

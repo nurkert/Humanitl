@@ -25,13 +25,20 @@ static void my_application_activate(GApplication* application) {
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
 
-  // Use a header bar when running in GNOME as this is the common style used
-  // by applications and is the setup most users will be using (e.g. Ubuntu
-  // desktop).
-  // If running on X and not using GNOME then just use a traditional title bar
-  // in case the window manager does more exotic layout, e.g. tiling.
-  // If running on Wayland assume the header bar will work (may need changing
-  // if future cases occur).
+  // Die Kopfleiste der App ist die Titelleiste (HUM-255): Sie trägt den
+  // Namen, ist Griff zum Verschieben und hat eigene Fensterknöpfe. GTK
+  // zeichnet deshalb keine eigene Leiste mehr.
+  //
+  // Wo der Standard-Runner eine GtkHeaderBar setzt (Wayland, X11 unter GNOME
+  // Shell), wird sie weiter gesetzt, aber nie gezeigt. Eine gesetzte
+  // Titelleiste hält GTK in clientseitiger Dekoration: Schatten und die
+  // unsichtbare Randzone zum Ändern der Größe bleiben, nur die Leiste fehlt.
+  // Ganz ohne Titelleiste zeichnete GTK unter GNOME auf Wayland eine
+  // Ersatzleiste, weil Mutter keine serverseitige Dekoration anbietet, und
+  // gtk_window_set_decorated(FALSE) nähme dort jede Randzone mit.
+  //
+  // Unter X11 mit einem anderen Fenstermanager bleibt dessen Dekoration, wie
+  // im Standard-Runner: Er zeichnet sie selbst, GTK zeichnet keine.
   gboolean use_header_bar = TRUE;
 #ifdef GDK_WINDOWING_X11
   GdkScreen* screen = gtk_window_get_screen(window);
@@ -43,14 +50,15 @@ static void my_application_activate(GApplication* application) {
   }
 #endif
   if (use_header_bar) {
-    GtkHeaderBar* header_bar = GTK_HEADER_BAR(gtk_header_bar_new());
-    gtk_widget_show(GTK_WIDGET(header_bar));
-    gtk_header_bar_set_title(header_bar, "humanitl");
-    gtk_header_bar_set_show_close_button(header_bar, TRUE);
-    gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
-  } else {
-    gtk_window_set_title(window, "humanitl");
+    // Absichtlich nie gezeigt: gtk_widget_show() darauf brächte die Leiste
+    // zurück. Widgets beginnen unsichtbar, und first_frame_cb zeigt das
+    // Fenster mit gtk_widget_show(), nicht mit gtk_widget_show_all().
+    GtkWidget* header_bar = gtk_header_bar_new();
+    gtk_window_set_titlebar(window, header_bar);
   }
+  // Der Compositor kennt den Namen schon vor dem ersten Dart-Frame; main.dart
+  // setzt denselben Titel noch einmal über window_manager.
+  gtk_window_set_title(window, "Humanitl");
 
   gtk_window_set_default_size(window, 1280, 720);
 

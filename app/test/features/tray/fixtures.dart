@@ -102,6 +102,33 @@ class FakeWindow implements WindowPort {
     log.add('window.quit');
   }
 
+  /// Wie oft das Fenster auf dem Weg des Fenstermanagers geschlossen wurde.
+  int closes = 0;
+
+  /// Wie oft das Fenster minimiert werden sollte.
+  int minimizes = 0;
+
+  /// Wie oft Maximieren umgeschaltet werden sollte.
+  int maximizeToggles = 0;
+
+  /// Wie oft ein Ziehen das Fenster verschieben sollte.
+  int drags = 0;
+
+  @override
+  Future<void> close() async {
+    closes++;
+    log.add('window.close');
+  }
+
+  @override
+  Future<void> minimize() async => minimizes++;
+
+  @override
+  Future<void> toggleMaximize() async => maximizeToggles++;
+
+  @override
+  Future<void> startDragging() async => drags++;
+
   @override
   Future<void> dispose() async {
     disposed = true;

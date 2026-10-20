@@ -1258,5 +1258,8 @@
   "settingsSectionConnections": "Verbindungen",
   "settingsTrustSystemStoreLabel": "Zertifikate des Systems",
   "settingsTrustSystemStoreHint": "Zertifikaten dieses Systems vertrauen, z. B. einer Firmen-CA",
-  "settingsTrustSystemStoreHelp": "Aus: Es gelten nur die öffentlichen Wurzeln, die Humanitl mitbringt, und ein Server mit einem Firmen- oder selbst installierten Zertifikat wird abgelehnt. Die Sandbox ist davon nicht betroffen."
+  "settingsTrustSystemStoreHelp": "Aus: Es gelten nur die öffentlichen Wurzeln, die Humanitl mitbringt, und ein Server mit einem Firmen- oder selbst installierten Zertifikat wird abgelehnt. Die Sandbox ist davon nicht betroffen.",
+  "shellWindowMinimize": "Minimieren",
+  "shellWindowMaximize": "Maximieren oder wiederherstellen",
+  "shellWindowClose": "Schließen"
 }
