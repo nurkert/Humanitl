@@ -19,6 +19,7 @@ class HoverLabel extends StatefulWidget {
     required this.label,
     required this.child,
     this.delay = HMotion.hoverLabel,
+    this.enabled = true,
     super.key,
   });
 
@@ -34,6 +35,14 @@ class HoverLabel extends StatefulWidget {
   /// (`docs/UX.md` 2.1).
   final Duration delay;
 
+  /// Whether the label appears at all.
+  ///
+  /// A switch rather than leaving the widget out: dropping it would change
+  /// the parent of [child], and Flutter would rebuild the subtree below with
+  /// fresh state. The expanded icon rail turns its labels off this way and
+  /// keeps the fade of its names running (HUM-254).
+  final bool enabled;
+
   @override
   State<HoverLabel> createState() => _HoverLabelState();
 }
@@ -45,6 +54,9 @@ class _HoverLabelState extends State<HoverLabel> {
 
   void _enter(PointerEnterEvent _) {
     _timer?.cancel();
+    if (!widget.enabled) {
+      return;
+    }
     _timer = Timer(widget.delay, () {
       if (mounted) {
         _portal.show();
@@ -57,6 +69,18 @@ class _HoverLabelState extends State<HoverLabel> {
     _timer = null;
     if (_portal.isShowing) {
       _portal.hide();
+    }
+  }
+
+  @override
+  void didUpdateWidget(HoverLabel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.enabled) {
+      _timer?.cancel();
+      _timer = null;
+      if (_portal.isShowing) {
+        _portal.hide();
+      }
     }
   }
 

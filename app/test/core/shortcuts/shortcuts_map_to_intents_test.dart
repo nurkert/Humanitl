@@ -61,7 +61,7 @@ KeyRow ctrlShift(LogicalKeyboardKey key, String intent) =>
 KeyRow alt(LogicalKeyboardKey key, String intent) =>
     (key: key, control: false, shift: false, alt: true, intent: intent);
 
-/// Die Shell: `Ctrl+1..6`, `Ctrl+K`, `Ctrl+,`.
+/// Die Shell: `Ctrl+1..6`, `Ctrl+K`, `Ctrl+,`, `Ctrl+0` (HUM-254).
 final List<KeyRow> shellTable = <KeyRow>[
   ctrl(LogicalKeyboardKey.digit1, 'Nav(0)'),
   ctrl(LogicalKeyboardKey.digit2, 'Nav(1)'),
@@ -71,6 +71,7 @@ final List<KeyRow> shellTable = <KeyRow>[
   ctrl(LogicalKeyboardKey.digit6, 'Nav(5)'),
   ctrl(LogicalKeyboardKey.keyK, 'PaletteIntent'),
   ctrl(LogicalKeyboardKey.comma, 'SettingsIntent'),
+  ctrl(LogicalKeyboardKey.digit0, 'ToggleRailIntent'),
 ];
 
 /// Die Warteschlange (CONVENTIONS 3.9 und die Bindungen von HUM-029, HUM-072).

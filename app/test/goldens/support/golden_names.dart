@@ -77,4 +77,7 @@ const List<String> goldenNames = <String>[
   'states_sandbox_failed',
   'states_tls_rejected',
   'states_websocket_card',
+  // icon_rail_golden_test.dart (HUM-254)
+  'icon_rail_collapsed',
+  'icon_rail_expanded',
 ];
