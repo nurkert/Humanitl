@@ -792,7 +792,7 @@ class _ActionBar extends StatelessWidget {
                   l10n.editorOpenFindings(open),
                   key: const Key('editor-open-findings'),
                   style: tokens.typography.ui12.tinted(
-                    open > 0 ? tokens.stateText.held : tokens.colors.fg1,
+                    open > 0 ? tokens.colors.warningText : tokens.colors.fg1,
                   ),
                 ),
               ],
@@ -821,7 +821,7 @@ class _ActionBar extends StatelessWidget {
               Text(
                 note ?? disabledReason,
                 key: const Key('editor-note'),
-                style: tokens.typography.ui12.tinted(tokens.stateText.held),
+                style: tokens.typography.ui12.tinted(tokens.colors.warningText),
               ),
             ],
           ],

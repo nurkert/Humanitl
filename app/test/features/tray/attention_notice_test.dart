@@ -151,8 +151,9 @@ void main() {
     });
 
     test('$theme: the two badges and the rail reach their floor', () {
-      // Der Schweregrad `info` färbt Rail und Badges im Akzent.
-      final Color accent = tokens.colors.accent;
+      // Der Schweregrad `info` färbt Rail und Badges in `info`, seit
+      // HUM-260 nicht mehr im Akzent.
+      final Color accent = tokens.colors.info;
       // Die Rail ist Fläche: 3:1.
       expect(
         contrastOn(accent, const <Color>[], surface),
@@ -168,7 +169,7 @@ void main() {
       );
       // Und die beiden anderen Schweregrade, die dieselbe Karte tragen kann.
       for (final Color state in <Color>[
-        tokens.state.held,
+        tokens.colors.warning,
         tokens.state.error,
       ]) {
         expect(

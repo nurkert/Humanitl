@@ -40,12 +40,14 @@ String setupStateLabel(AppLocalizations l10n, SetupCheckState state) =>
 /// The hue of one state, as a surface: dots and marks.
 ///
 /// Colour means state and nothing else (`docs/UX.md` 3.3). A check that could
-/// not run wears the resting grey and not the amber of a warning: amber says
-/// "something is off", and nobody knows whether anything is off.
+/// not run wears the resting grey and not the yellow of a warning: yellow says
+/// "something is off", and nobody knows whether anything is off. A check that
+/// is still running wears the warning too: it is not settled yet. Neither is
+/// `held`, which since HUM-260 means a held request and nothing else.
 Color setupStateColor(HTokens tokens, SetupCheckState state) => switch (state) {
-  SetupCheckState.checking => tokens.state.held,
+  SetupCheckState.checking => tokens.colors.warning,
   SetupCheckState.ok => tokens.state.allowed,
-  SetupCheckState.warn => tokens.state.held,
+  SetupCheckState.warn => tokens.colors.warning,
   SetupCheckState.unmeasured => tokens.colors.fg2,
   SetupCheckState.failed => tokens.state.error,
 };
@@ -57,9 +59,9 @@ Color setupStateColor(HTokens tokens, SetupCheckState state) => switch (state) {
 /// (`docs/UX.md` 6).
 Color setupStateTextColor(HTokens tokens, SetupCheckState state) =>
     switch (state) {
-      SetupCheckState.checking => tokens.stateText.held,
+      SetupCheckState.checking => tokens.colors.warningText,
       SetupCheckState.ok => tokens.stateText.allowed,
-      SetupCheckState.warn => tokens.stateText.held,
+      SetupCheckState.warn => tokens.colors.warningText,
       SetupCheckState.unmeasured => tokens.colors.fg1,
       SetupCheckState.failed => tokens.stateText.error,
     };

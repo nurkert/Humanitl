@@ -3,7 +3,7 @@
 /// HUM-034 proposes a set of PNG files plus a script that renders them from
 /// SVG. Drawing them here instead removes the generator, the assets and the
 /// risk that icon and design token drift apart: the icon takes its colours
-/// from `HColors`, so a change to the held amber reaches the tray with
+/// from `HColors`, so a change to the held hue (sky cyan since HUM-260) reaches the tray with
 /// everything else.
 ///
 /// The colours are the dark ones. The tray is not part of the themed widget
@@ -82,6 +82,15 @@ Color trayIconColor(TrayIconState state) => switch (state) {
   TrayIconState.offline => HColors.timedOut,
 };
 
+/// The colour of the digit, the question mark and the cross on the icon.
+///
+/// On a filled chip the darkest surface, so the digit reads on the chip's
+/// colour: since HUM-260 `held` is sky cyan, and `bg0` on it measures well
+/// over 4.5:1, as it does on the red of an alert. On an outline the digit
+/// takes the outline's own colour.
+Color trayIconInk(TrayIconState state) =>
+    trayIconIsFilled(state) ? HColors.bg0 : trayIconColor(state);
+
 /// True while the icon is a filled chip rather than an outlined one.
 ///
 /// Filled means "something is waiting for you". Idle and offline are outlines:
@@ -134,10 +143,15 @@ Future<TrayPixmap> _render({
       canvas: canvas,
       label: label,
       box: chip,
-      color: filled ? HColors.bg0 : color,
+      color: trayIconInk(state),
     );
   } else if (state == TrayIconState.alert) {
-    _drawCross(canvas: canvas, box: chip, color: HColors.bg0, width: stroke);
+    _drawCross(
+      canvas: canvas,
+      box: chip,
+      color: trayIconInk(state),
+      width: stroke,
+    );
   }
 
   final ui.Picture picture = recorder.endRecording();

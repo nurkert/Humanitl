@@ -136,7 +136,7 @@ class _QueueRowState extends ConsumerState<QueueRow> {
     return HRow(
       state: flow.visualState,
       // Only `held` stands in this queue, by construction: fifteen full
-      // amber rails repeat one fact and become the loudest thing on the
+      // `held` rails repeat one fact and become the loudest thing on the
       // screen (`docs/UX.md` 3.3, rule 1).
       tintedRail: true,
       selected: widget.selected,

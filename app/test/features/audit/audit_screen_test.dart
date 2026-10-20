@@ -294,7 +294,9 @@ void main() {
     expect(clipboard, <String>[fakeAuditHash(fakeAuditRecordCount)]);
   }, variant: _linux);
 
-  testWidgets('warnings_are_shown_in_amber', (WidgetTester tester) async {
+  testWidgets('warnings_are_shown_in_the_warning_hue', (
+    WidgetTester tester,
+  ) async {
     final FakeDaemonClient client = FakeDaemonClient()
       ..auditWarnings = const <AuditWarning>[
         AuditWarning(kind: 'no_hmac_key'),
@@ -316,8 +318,8 @@ void main() {
     for (final Finder finder in <Finder>[noKey, tail, pruned]) {
       expect(
         tester.widget<Text>(finder).style?.color,
-        HTokens.dark.state.held,
-        reason: 'what the check could not prove is amber, not green',
+        HTokens.dark.colors.warningText,
+        reason: 'what the check could not prove is a warning, not green',
       );
     }
     // Die Kette hält trotzdem; die Warnungen machen sie nicht rot.

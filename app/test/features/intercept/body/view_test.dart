@@ -903,15 +903,24 @@ void main() {
   });
 
   test('the two tones are the two the design allows', () {
-    final HTokens tokens = HTokens.dark;
-    expect(
-      bodyFindingColor(tokens, BodyFindingTone.secret),
-      tokens.stateColor(HFlowState.error),
-    );
-    expect(
-      bodyFindingColor(tokens, BodyFindingTone.personal),
-      tokens.stateColor(HFlowState.held),
-    );
+    // Seit HUM-260 trägt ein persönlicher Fund die Warnfarbe und nicht mehr
+    // `held`: `held` heißt ausschließlich „gehalten". Das Geheimnis bleibt
+    // Orange, und die beiden Töne bleiben zwei.
+    for (final HTokens tokens in <HTokens>[HTokens.dark, HTokens.light]) {
+      final Color secret = bodyFindingColor(tokens, BodyFindingTone.secret);
+      final Color personal = bodyFindingColor(tokens, BodyFindingTone.personal);
+      expect(secret, tokens.stateColor(HFlowState.error));
+      expect(personal, tokens.colors.warning);
+      expect(personal, isNot(tokens.stateColor(HFlowState.held)));
+      expect(personal, isNot(secret));
+      // Und man sieht sie auseinander, nicht nur im Hexwert.
+      expect(
+        (HSLColor.fromColor(personal).hue - HSLColor.fromColor(secret).hue)
+            .abs(),
+        greaterThan(15),
+        reason: tokens.brightness.name,
+      );
+    }
   });
 
   test('a pane the kind does not offer falls back, it does not stick', () {

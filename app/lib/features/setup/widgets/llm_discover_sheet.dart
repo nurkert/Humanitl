@@ -12,13 +12,14 @@
 /// # The motion is the progress
 ///
 /// The daemon streams answers, not percentages, so this sheet does not show
-/// one. While the search runs, a hairline sweeps under the headline: enough
-/// motion to say "this is working", too little to claim a position. Every
-/// found server arrives the way a request arrives in the queue — eight pixels
-/// from above in 180 ms — and it stays where it landed. Both movements run
-/// through [HReducedMotion] and become still when the system asks for less
-/// motion; the sweep then does not run at all, because a loop is the one
-/// thing reduced motion is about.
+/// one. While the search runs, the caution tape of the brand runs under the
+/// headline (`HCautionTape`, HUM-260): enough motion to say "this is
+/// working", none that claims a position — the stripes run evenly and the
+/// tape never fills. Every found server arrives the way a request arrives in
+/// the queue — eight pixels from above in 180 ms — and it stays where it
+/// landed. Both movements run through [HReducedMotion]; under reduced motion
+/// the tape stands still and still says "searching" (`docs/UX.md` 2.10 and
+/// 3.6).
 ///
 /// # Everything in a row came from the network
 ///
@@ -67,35 +68,7 @@ class LlmDiscoverSheet extends ConsumerStatefulWidget {
   ConsumerState<LlmDiscoverSheet> createState() => _LlmDiscoverSheetState();
 }
 
-class _LlmDiscoverSheetState extends ConsumerState<LlmDiscoverSheet>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _sweep = AnimationController(
-    vsync: this,
-    duration: HMotion.breathe,
-  );
-
-  @override
-  void dispose() {
-    _sweep.dispose();
-    super.dispose();
-  }
-
-  /// Starts and stops the sweep with the search.
-  ///
-  /// A controller that keeps ticking behind a finished search would burn a
-  /// frame budget for a state that no longer exists (`docs/UX.md` 6.4), and a
-  /// loop under reduced motion is exactly what that setting asks us not to
-  /// run: the line then stays still and the count next to the button carries
-  /// the progress alone.
-  void _follow({required bool running, required bool reduced}) {
-    if (running && !reduced && !_sweep.isAnimating) {
-      _sweep.repeat();
-    } else if ((!running || reduced) && _sweep.isAnimating) {
-      _sweep.stop();
-      _sweep.value = 0;
-    }
-  }
-
+class _LlmDiscoverSheetState extends ConsumerState<LlmDiscoverSheet> {
   void _close() {
     ref.read(setupLlmDiscoverProvider.notifier).stop();
     widget.onClose();
@@ -106,7 +79,6 @@ class _LlmDiscoverSheetState extends ConsumerState<LlmDiscoverSheet>
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     final LlmDiscoverState state = ref.watch(setupLlmDiscoverProvider);
-    _follow(running: state.running, reduced: HReducedMotion.of(context));
 
     return HModal(
       title: Text(l10n.setupLlmDiscoverTitle),
@@ -140,7 +112,7 @@ class _LlmDiscoverSheetState extends ConsumerState<LlmDiscoverSheet>
             style: tokens.typography.ui13.tinted(tokens.colors.fg1),
           ),
           SizedBox(height: tokens.spacing.x3),
-          _Sweep(controller: _sweep, running: state.running),
+          _Searching(running: state.running),
           SizedBox(height: tokens.spacing.x3),
           Row(
             children: <Widget>[
@@ -235,41 +207,27 @@ class _Failure extends StatelessWidget {
   }
 }
 
-/// The hairline that says "this is working".
+/// The tape that says "this is working".
 ///
 /// Not a percentage: the daemon streams answers, and a bar that filled itself
-/// on a timer would be a claim nobody measured. A short segment sweeps across
-/// the full width and starts again, so the movement carries no position.
-class _Sweep extends StatelessWidget {
-  const _Sweep({required this.controller, required this.running});
+/// on a timer would be a claim nobody measured. While the search runs, the
+/// caution tape runs; it carries no position, only "the search stands here".
+/// When nothing runs, a hairline holds the same height, so the rows below do
+/// not move when a search starts or ends (`docs/UX.md` 2.8). A finished
+/// search takes the tape out of the tree, and with it its ticker: nothing
+/// keeps drawing for a state that no longer exists (`docs/UX.md` 7).
+class _Searching extends StatelessWidget {
+  const _Searching({required this.running});
 
-  final AnimationController controller;
   final bool running;
 
   @override
-  Widget build(BuildContext context) {
-    final HTokens tokens = HTheme.of(context);
-    return SizedBox(
-      height: 2,
-      child: DecoratedBox(
-        decoration: BoxDecoration(color: tokens.colors.line),
-        child: running
-            ? AnimatedBuilder(
-                animation: controller,
-                builder: (BuildContext context, Widget? child) =>
-                    FractionallySizedBox(
-                      widthFactor: 0.25,
-                      alignment: Alignment(controller.value * 2 - 1, 0),
-                      child: child,
-                    ),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(color: tokens.colors.accent),
-                ),
-              )
-            : null,
-      ),
-    );
-  }
+  Widget build(BuildContext context) => SizedBox(
+    height: HSize.cautionTape,
+    child: running
+        ? const HCautionTape(key: Key('setup-discover-tape'))
+        : const Center(child: HHairline()),
+  );
 }
 
 /// The servers, in the order they answered.

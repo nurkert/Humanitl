@@ -214,4 +214,44 @@ void main() {
     expect(find.byKey(const Key('setup-discover-empty')), findsOneWidget);
     expect(find.byKey(const Key('setup-discover-servers')), findsNothing);
   });
+
+  /// Das Absperrband ist die unbestimmte Fortschrittsanzeige der Suche
+  /// (HUM-260, `docs/UX.md` 3.6): Es steht genau, solange gesucht wird, und
+  /// sein Platz bleibt reserviert, damit nichts darunter springt.
+  testWidgets('the_caution_tape_runs_only_while_searching', (
+    WidgetTester tester,
+  ) async {
+    // Zwei Antworten, damit der Strom eine Weile läuft: der Fake versetzt
+    // jede um 30 ms.
+    final FakeDaemonClient client = FakeDaemonClient()
+      ..llmServers = <LlmServer>[
+        for (int i = 20; i < 22; i++)
+          LlmServer(
+            host: '192.168.2.$i',
+            port: 11434,
+            flavor: LlmFlavor.ollama,
+            models: const <String>['llama3.1:8b'],
+            latencyMs: 14,
+          ),
+      ];
+    await openSetup(tester, client);
+    await openSheet(tester);
+    const Key tape = Key('setup-discover-tape');
+    expect(find.byKey(tape), findsNothing);
+    final double startTop = tester
+        .getTopLeft(find.byKey(const Key('setup-discover-start')))
+        .dy;
+
+    await tester.tap(find.byKey(const Key('setup-discover-start')));
+    await tester.pump();
+    expect(find.byKey(tape), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.byKey(const Key('setup-discover-start'))).dy,
+      startTop,
+    );
+
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byKey(tape), findsNothing);
+  });
 }

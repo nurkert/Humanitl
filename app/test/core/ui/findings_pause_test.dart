@@ -1,7 +1,7 @@
 // Die Pause beim Senden mit offenen Funden (HUM-049).
 //
 // Eine gehaltene Anfrage mit einer E-Mail-Adresse im Rumpf: Die Freigabe ist
-// amber und heißt „Send with 1 finding", und weder ein Klick noch `Enter`
+// in der Warnfarbe und heißt „Send with 1 finding", und weder ein Klick noch `Enter`
 // schickt sie hinaus. Beide öffnen die Pause in der Karte; erst dort
 // entscheidet der Mensch zwischen Senden, Pseudonymisieren und Blockieren.
 // Gezählt wird am Fake-Daemon: Was er nicht als Entscheidung gesehen hat, ist

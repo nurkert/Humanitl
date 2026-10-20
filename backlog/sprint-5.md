@@ -31,6 +31,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-259 | Neues App-Icon: die Faust | S | HUM-034, HUM-053 |
 | HUM-257 | Der Daemon vertraut der Zertifikatsablage des Systems (vor HUM-060) | S | HUM-015, HUM-039, HUM-087 |
 | HUM-255 | Das Fenster trägt keine doppelte Titelleiste | S | HUM-019, HUM-034, HUM-054 |
+| HUM-260 | Gelb wird die Akzentfarbe der Oberfläche | M | HUM-008, HUM-254 |
 
 ---
 
@@ -3639,3 +3640,95 @@ Ausgangslage, die die Spezifikation bindet:
 
 ### Referenzen
 HUM-019 (`backlog/sprint-1.md`, Shell und Kopfleiste), HUM-034 (`backlog/sprint-2.md`, `WindowPort`), HUM-054 (`backlog/sprint-4.md`, Goldens), `docs/UX.md` 3.3, 4.9 und 5.1, `window_manager` 0.5.2 `linux/window_manager_plugin.cc` (`set_title_bar_style`, `close`, `start_dragging`).
+
+---
+
+## HUM-260 · Gelb wird die Akzentfarbe der Oberfläche
+Sprint: 5 · Größe: M · Abhängigkeiten: HUM-008, HUM-254 · Blockiert: nichts
+
+### Kontext
+Entscheidung des Projekteigentümers vom 2026-10-20. Das neue App-Icon ist eine schwarze Faust auf einer gelben Kachel (#EBC05A bis #D49E34, HUM-259). Die Oberfläche übernimmt diese Corporate Identity: gelbe Akzente, dunkler Vordergrund darauf. Heute ist der Akzent blau (`HColors.accent` #7C9CF5, `HColors.lAccent` #5B7FE6 in `app/packages/ui/lib/src/tokens/colors.dart`), und der Zustand `held` ist Amber (#E0B24A). Ein gelber Akzent neben einer amberfarbenen `held`-Rail wäre genau die Verwechslung, die `docs/UX.md` 3.3 (Regel 8 und 9: Fläche zum Anfassen ist Akzent, Fläche zum Ablesen ist Zustand) ausschließt. `held` bekommt deshalb auf Wunsch des Projekteigentümers eine eigene, klar andere Farbe, ein kühles Cyan.
+
+Ergänzung vom selben Tag: Zur Marke gehört ein gelb-schwarzes Absperrband, diagonale Streifen, die endlos durchlaufen. Humanitl ist die Absperrung, an der der Verkehr hält. Es kommt als wiederverwendbares Widget in `packages/ui` und wird sparsam eingesetzt.
+
+Ausgangslage, die die Spezifikation bindet:
+- Die Token-Schicht trennt Fläche und Wort: `accent` (Fläche, 3:1), `accentText` (Wort, 4,5:1, abgeleitet), `accentFill` (Füllung des Primärbuttons, weicht zurück, bis `onAccent` darauf 4,5:1 erreicht). Die hellen Zustandsfarben werden abgeleitet (`HColorDerivation.lightState`), nie von Hand geschrieben; `tokens_test.dart` friert die Ableitungen ein.
+- Die Methoden-Badges borgen ihre Farbe: `GET` den Akzent, `PUT`/`PATCH` `held` (`HColors.methodGet`, `HColors.methodPutPatch`).
+- Das Terminal-Farbschema (`terminal_palette.dart`) legt die ANSI-Grundfarben auf die Zustandsfarben: bisher Gelb auf `held`, Blau auf den Akzent.
+- `docs/UX.md` 2.9 verbietet Dauerbewegung außer dem begrenzten Atem, 2.10 verlangt für jede Schleife einen ruhenden Ersatz unter reduzierter Bewegung, 2.8 verbietet Verschieben unter dem lesenden Auge.
+
+### Ziel
+- **Akzent dunkel:** #E8B84B, aus der Marke abgeleitet. Auf `bg0` bis `bg3` mindestens 7,95:1.
+- **Akzent hell:** Ocker #A57A1C, Ton der Marke (41°), so dunkel, dass er als Fläche auf der dunkelsten hellen Fläche `lBg3` 3,29:1 erreicht und `onAccent` auf ihm 4,65:1. Das Fenster für beide Bedingungen ist schmal (relative Leuchtdichte rund 0,211 bis 0,243); der Wert sitzt in seiner Mitte. Damit ist die Füllung des Primärbuttons in beiden Themes der Akzent selbst.
+- **Vordergrund auf dem Akzent:** neues Token `HColors.onAccent` #14161C, in beiden Themes; `HSurfaceColors.onAccent` zeigt darauf. Weiß misst auf dem Akzent 1,85:1 und auf dem Ocker 3,89:1 und ist deshalb ausgeschlossen. Auf dem Gelb misst `onAccent` 9,81:1.
+- **`held`:** Himmelscyan #79C9EC (hell abgeleitet #1C91C5, als Wort hell #136386). Abstand zu jeder anderen Zustandsfarbe und zum Akzent in OKLab mindestens 0,08, normal und unter simulierter Protanopie und Deuteranopie (Machado 2009), in beiden Themes. Unter Deuteranopie fallen Cyan und das Violett von `passthrough` auf dasselbe Blau; die Helligkeit trennt sie, deshalb ist `held` heller als `passthrough`. Zum Vergleich: `allowed` und `allowedEdited` liegen 0,037 auseinander, das alte Amber läge neben dem neuen Akzent bei 0,02.
+- **`allowedEdited`** bleibt #57B99F, jetzt als fester Wert statt als Mischung mit dem Akzent; zum Gelb gezogen rückte es ans Grün heran.
+- **Terminal:** ANSI-Gelb ist der Akzent, ANSI-Cyan ist `held`, ANSI-Blau eine eigene Konstante, weil keine Farbe des Programms mehr blau ist.
+- **Warnung und Information** (Nachtrag vom selben Tag, Koordination): neues Token `warning` im Gelb der Marke (Wert gleich dem Akzent, Wort `warningText`) und `info` im bisherigen Blau (#7C9CF5 dunkel, #5B7FE6 hell, Wort `infoText`). Alle Stellen, die `held` als Warnfarbe benutzten, nehmen `warning`: `Severity.warning`, Setup `warn` und `checking`, Sandbox `starting`/`stopping`, laufende Isolationsprüfung, beschreibbarer Mount, Ausnahme der Isolation, Hinweise im Isolations- und Mount-Tab, abgeschaltete Verweigerungsmeldung, Warnungen der Audit-Kette, Hinweis „ganzer Host" der Agentenbitte, offene Funde im Editor und in der Fundleiste, Hinweise im Export, Füllstand der Warteschlange in der Statusleiste, Release Valve mit Funden, `FindingsPause`, PII-Markierung in Body und Editor. `Severity.info` nimmt `info`. `held` bleibt ausschließlich der Zustand „gehalten" (Queue, Kopfzähler, Tray, Rückkehr-Banner, Terminal-Streifen „wartet"). Eine Warnung steht nie als Farbe allein, sondern mit Glyph oder Text (`docs/UX.md` 3.3, Regel 12).
+- **Tray-Zähler:** Ziffer auf dem Cyan-Chip bleibt `bg0`, gemessen über 9:1; die Farbe steht als `trayIconInk` und ist getestet.
+- **Absperrband:** `HCautionTape` in `packages/ui`, diagonale Streifen in `HColors.accent` und `HColors.onAccent`, Höhe frei wählbar (Vorgabe `HSize.cautionTape`, 4 px), läuft linear und nahtlos mit `HMotion.cautionTape` (1200 ms je Periode von `HMotion.cautionTapePeriod`, 16 px), steht unter `HReducedMotion` still. Eingesetzt an zwei Stellen: über der Intercept-Warteschlange, solange mindestens eine Anfrage gehalten ist, und als unbestimmte Fortschrittsanzeige der Netzsuche im Setup an Stelle der laufenden Haarlinie.
+
+### Nicht-Ziel
+- Kein neues App-Icon, kein Tray-Icon, kein Logo im Shell-Kopf (HUM-259). `packaging/deb/humanitl.svg` bleibt unberührt.
+- Keine Änderung an der Titelleiste (HUM-255).
+- Goldens werden nicht in diesem Arbeitsbaum erzeugt; das geschieht beim Landen auf dem aktuellen `main`.
+
+### Betroffene Pfade
+- `app/packages/ui/lib/src/tokens/colors.dart` (Akzent, `onAccent`, `held`, `allowedEdited`, Doku von `readableFill`)
+- `app/packages/ui/lib/src/tokens/tokens.dart` (`onAccent` in beiden Leitern, `accentFill` gegen `onAccent`)
+- `app/packages/ui/lib/src/tokens/terminal_palette.dart` (ANSI-Zuordnung)
+- `app/packages/ui/lib/src/tokens/motion.dart`, `spacing.dart` (Tokens des Bands)
+- `app/packages/ui/lib/src/theme/shadcn_theme.dart` (Hover und Druck des Primärbuttons rücken vom Wort weg)
+- `app/packages/ui/lib/src/widgets/h_caution_tape.dart` (neu), `app/packages/ui/lib/humanitl_ui.dart` (Export)
+- `app/packages/ui/lib/src/h_editor_decorations.dart` (Kommentar mit altem Hex)
+- `app/lib/features/intercept/widgets/queue_pane.dart` (Band unter dem Queue-Kopf)
+- `app/lib/features/intercept/widgets/new_arrivals_pill.dart` (Wort in `accentText` statt `accent`)
+- `app/lib/features/setup/widgets/llm_discover_sheet.dart` (Band als Fortschritt der Suche)
+- `app/test/flutter_test_config.dart` (`HCautionTape.debugFreeze`)
+- `app/packages/ui/test/tokens_test.dart`, `app/packages/ui/test/caution_tape_test.dart` (neu), `app/test/features/intercept/caution_tape_queue_test.dart` (neu), `app/test/features/setup/llm_discover_test.dart` (ein Test angehängt)
+- Warnung und Information: `app/lib/core/ui/{diagnostic_severity,findings_pause}.dart`, `app/lib/core/body/body_marks.dart`, `app/lib/features/setup/setup_text.dart`, `app/lib/features/sandbox/sandbox_text.dart`, `app/lib/features/sandbox/widgets/{isolation_panel,mounts_tab,refusals_section}.dart`, `app/lib/features/audit/widgets/chain_status_card.dart`, `app/lib/features/intercept/widgets/{agent_ask_card,action_bar}.dart`, `app/lib/features/editor/editor_screen.dart`, `app/lib/features/editor/widgets/findings_rail.dart`, `app/lib/features/history/{history_export_menu,history_filter_bar}.dart`, `app/lib/features/shell/widgets/status_bar.dart` (eine Zeile), `app/lib/features/tray/tray_icon.dart` (`trayIconInk`)
+- Tests dazu: `app/test/core/ui/warning_info_test.dart` (neu), `app/test/features/tray/tray_icon_test.dart`, angepasst `audit_screen_test`, `action_bar_contrast_test`, `diagnostic_card_test`, `decorations_test`, `diagnostics_place_test`, `attention_notice_test`
+- `docs/UX.md` 2.2, 2.3, 2.9, 3.3 (Regel 3, 9, 10, neue Regeln 11 und 12, Tabelle für `warning` und `info`), 3.6 (neu), 4.7, 4.9, 8, 9; `BACKLOG.md` 5 (Farbzeile)
+
+### Spezifikation
+- **Kontrast.** Akzent dunkel als Fläche auf allen vier dunklen Flächen mindestens 3:1 (gemessen mindestens 7,95:1), Ocker auf allen vier hellen mindestens 3:1 (gemessen mindestens 3,29:1). `onAccent` auf `accent` und `accentFill` beider Themes mindestens 4,5:1. Ein Wort in Akzentfarbe steht in `accentText`; der Ocker misst als Wort auf Weiß nur 3,89:1.
+- **Primärbutton.** Hover und Druck verschieben die Füllung nie zum dunklen Wort hin, wenn es dort unter 4,5:1 fiele. Hover hellt auf; der Druck dunkelt ab, solange das Wort lesbar bleibt (dunkles Theme), sonst hellt er eine Stufe weiter auf als der Hover (helles Theme), damit Hover und Druck nie dieselbe Farbe tragen.
+- **Absperrband.** Ein `AnimationController` treibt einen `CustomPainter` über `repaint`; das Widget baut beim Laufen nicht neu. `RepaintBoundary` um das Band. Ticker aus `SingleTickerProviderStateMixin`, also still unter `TickerMode(enabled: false)`. Ohne Anlass ist das Band nicht im Baum. Sein Platz ist immer reserviert (sonst Haarlinie), damit nichts springt. `ExcludeSemantics`: das Band ist weder Control noch Zustand. Unter reduzierter Bewegung Phase null, kein Ticker. `HCautionTape.debugFreeze` hält es in den Tests der Anwendung und in den Goldens an; sonst liefe jedes `pumpAndSettle` über einer gehaltenen Anfrage in seine Zeitgrenze.
+- **Regel in `docs/UX.md` 3.6:** wo das Band steht (die zwei Stellen), wo nie (in Zeilen, Karten, über Text, als Zustand, als Control, in Zustandsfarbe), dass es nie der einzige Kanal einer Aussage ist und nie mit einem Zustand verwechselt werden darf; Abweichung von 2.9 in Abschnitt 8.
+
+### Tests
+- `tokens_test.dart`: eingefrorene Tabellen und Literale nachgezogen; neue Gruppe „HUM-260": Akzent auf `bg0`/`bg1` und `lBg0`/`lBg1` mindestens 3:1 mit eingefrorenen Messwerten; `onAccent` auf Akzent und Füllung beider Themes mindestens 4,5:1, Weiß dort darunter; Ton beider Akzente im Bereich der Marke; Abstand von `held` zu allen Zustandsfarben und zum Akzent in OKLab mindestens 0,08 unter normalem Sehen, Protanopie und Deuteranopie, beide Themes; Gegenbeweis, dass das alte Amber die Prüfung nicht bestünde und die Simulation `allowed`/`blocked` zusammenrückt; Methoden folgen; Terminal-Töne an ANSI 3, 4 und 6.
+- `caution_tape_test.dart`: läuft gleichmäßig und läuft über das Ende vorwärts weiter; eine volle Periode zeichnet dieselben Streifen wie keine; steht unter reduzierter Bewegung ohne geplanten Frame; plant unter `TickerMode(enabled: false)` keinen Frame; baut beim Laufen nicht neu und hat eine eigene `RepaintBoundary`; `debugFreeze` hält es an; trägt Marke, nicht Zustand.
+- `caution_tape_queue_test.dart`: kein Band ohne gehaltene Anfrage, Band mit der ersten, weg nach dem Timeout der letzten; die Liste darunter verschiebt sich dabei nicht.
+- `llm_discover_test.dart`: `the_caution_tape_runs_only_while_searching`.
+- Mutationsbeweise: `held` zurück auf #E0B24A; `onAccent` auf Weiß; `lAccent` auf ein helleres Gelb; Hover des Primärbuttons wieder abdunkelnd; `repeat()` entfernt bzw. `repeat(reverse: true)`; Periode der Verschiebung verfälscht; Prüfung auf `HReducedMotion` entfernt; Maler über `AnimatedBuilder` statt `repaint`; Bedingung `held > 0` entfernt; reservierter Platz entfernt.
+
+### Akzeptanzkriterien
+- [ ] Akzent dunkel #E8B84B, hell #A57A1C, `onAccent` #14161C in beiden Themes; alle Kontrastzahlen oben in `tokens_test.dart` belegt.
+- [ ] Kein weißer oder heller Text auf einer Akzentfläche; Wörter in Akzentfarbe stehen in `accentText`.
+- [ ] `warning` (Gelb der Marke) und `info` (#7C9CF5 / #5B7FE6) sind eigene Tokens mit Textvariante; keine Warnung und kein Info trägt mehr `held` oder den Akzent als Zuordnung; Kontraste getestet.
+- [ ] `held` #79C9EC, Abstand zu allen Zustandsfarben und zum Akzent auch unter Rot-Grün-Schwäche nachgerechnet; `PUT`/`PATCH` folgen.
+- [ ] Kein hart kodiertes #E0B24A, #7C9CF5 oder #5B7FE6 mehr außerhalb historischer Backlog-Texte und des App-Icons.
+- [ ] `HCautionTape` läuft, steht unter reduzierter Bewegung, zeichnet unsichtbar nichts; erscheint und verschwindet mit gehaltenen Anfragen; je Test ein Mutationsbeweis.
+- [ ] `docs/UX.md` beschreibt neue Farben und die Regel des Bands; `BACKLOG.md` 5 nennt die neuen Werte.
+- [ ] Goldens beim Landen neu erzeugt und angesehen; das Band steht darin als Standbild.
+
+### Fallstricke
+- **Gelb auf Weiß.** Ein heller Akzent, der als Fläche 3:1 hält, ist zu dunkel für weißen Text und zu hell für schwarzen, wenn man ihn nicht in das schmale Fenster legt. Der Ocker sitzt mittig; wer ihn verschiebt, prüft beide Grenzen.
+- **Richtung der Hover-Füllung.** Die alte Regel „hell abdunkeln, dunkel aufhellen" setzte weißen Text im hellen Theme voraus. Mit dunklem Text bricht sie das Wort (gemessen 3,84:1).
+- **`held` als „Warnung".** Viele Stellen benutzten `held` als Warnfarbe. Mit Cyan hätte sich eine Warnung neben einer gelben Information verkehrt herum gelesen; deshalb `warning` und `info` als eigene Tokens. Weil `warning` dem Akzent gleicht, unterscheidet sich die Release Valve mit Funden nur noch über Beschriftung und Glyph von der ohne, und die PII-Welle von der Ersetzung über die Form.
+- **Endlose Bewegung in Tests.** Ein laufendes Band plant endlos Frames; ohne `debugFreeze` in `flutter_test_config.dart` hängt jedes `pumpAndSettle` über gehaltenen Anfragen und jedes Golden der Warteschlange.
+- **Terminal.** Die ANSI-Zuordnung hing an den alten Tönen; ohne Umstellung hätte `ESC [ 33 m` Cyan und `ESC [ 34 m` Gelb gezeigt.
+
+### Referenzen
+HUM-008 (Tokens), HUM-034 (Tray), HUM-042 (Terminal), HUM-076 (Netzsuche), HUM-254, HUM-255, HUM-259, `docs/UX.md` 2.2, 2.9, 2.10, 3.3, 3.6, 6.
+
+### Umsetzung, Nachträge aus dem Review
+- Die History schreibt `Severity.info` in `infoText`, nicht mehr in `accentText` (`historySeverityColor`).
+- Die Shell setzt um jeden Abschnitt ihres `IndexedStack` einen `TickerMode`, an nur für den sichtbaren. `IndexedStack` hält die Ticker verdeckter Abschnitte nicht an; ohne das plante das Absperrband nach einem Abschnittswechsel weiter Frames, und `TickerMode.valuesOf` in der History antwortete nicht, wie sie annimmt.
+- Die Release Valve trägt bei offenem Fund das Warnglyph vor der Beschriftung (`docs/UX.md` 4.7).
+- Kommentare und Testnamen sprechen von der Warnfarbe statt von Amber.
+
+### Kandidaten für ein neues Issue
+- Terminal: Cursor und ANSI-Gelb sind beide der Akzent; ein gelber Cursor auf gelber Ausgabe verschwindet. Eigener Cursorton oder Invertierung prüfen.
+- `info` liegt unter Deuteranopie nah an `passthrough` (OKLab 0,019) und im hellen Theme nah an `held` (0,063). Heute trägt `info` immer sein Wort; ein eigener Ton wäre robuster.

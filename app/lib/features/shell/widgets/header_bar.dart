@@ -159,7 +159,7 @@ class Wordmark extends StatelessWidget {
 /// This is the product promise where it can always be seen (BACKLOG.md 5,
 /// signature element 2). Each arc carries the state of one guarantee, and the
 /// three states it can be in are the three the panel shows: grey when nothing
-/// was measured, amber while the sandbox starts, green when the guarantee
+/// was measured, the warning yellow while the sandbox starts, green when the guarantee
 /// holds and red when it does not. Grey is never a claim, and a closed green
 /// ring is only ever three measured results.
 ///
@@ -171,7 +171,7 @@ class Wordmark extends StatelessWidget {
 /// dann grau, den Zustand `IsolationSegment.unknown`, und der Atem hört auf.
 /// Der Kopf steht außerhalb der eingefrorenen Fläche, also greift weder das
 /// `TickerMode` darin noch der stehengebliebene Uhrenersatz; ohne diesen
-/// Zweig malte der Ring die letzte Messung weiter grün und atmete bernstein
+/// Zweig malte der Ring die letzte Messung weiter grün und atmete gelb
 /// vor sich hin, während das Banner darunter sagt, dass niemand antwortet.
 /// Grün heißt „gemessen und hält" und ist nach `docs/UX.md` 4.2 Fall 4 nicht
 /// mehr zu haben; grau ist keine Behauptung in beide Richtungen
@@ -195,7 +195,7 @@ class _IsolationRingState extends ConsumerState<IsolationRing>
   );
 
   /// The breath runs while a guarantee is being measured and stops with it:
-  /// a flag, not a scale (`docs/UX.md` 2.7). Under reduced motion the amber
+  /// a flag, not a scale (`docs/UX.md` 2.7). Under reduced motion the yellow
   /// stands still and says the same thing (2.10).
   void _syncBreath(bool measuring) {
     final bool wanted = measuring && !HReducedMotion.of(context);

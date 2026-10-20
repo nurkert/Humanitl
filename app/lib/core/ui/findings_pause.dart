@@ -128,7 +128,7 @@ class FindingsPause extends StatelessWidget {
         key: const Key('intercept-findings-pause'),
         decoration: BoxDecoration(
           color: tokens.colors.bg2,
-          border: Border.all(color: tokens.state.held),
+          border: Border.all(color: tokens.colors.warning),
           borderRadius: BorderRadius.circular(tokens.radii.card),
         ),
         child: Padding(
@@ -249,7 +249,10 @@ class _FindingRow extends StatelessWidget {
         runSpacing: tokens.spacing.x1,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: <Widget>[
-          HBadge(text: findingName(finding, l10n), color: tokens.state.held),
+          HBadge(
+            text: findingName(finding, l10n),
+            color: tokens.colors.warning,
+          ),
           if (prefix.isNotEmpty)
             Text(
               prefix,

@@ -1,6 +1,6 @@
 /// Über welcher Anfrage die Pause mit offenen Funden steht (HUM-049).
 ///
-/// Ein Klick auf die amberfarbene Freigabe, `Enter` oder `A` senden eine
+/// Ein Klick auf die Freigabe in Warnfarbe, `Enter` oder `A` senden eine
 /// Anfrage mit einem offenen Fund nicht. Sie öffnen in der Karte eine Pause,
 /// die aufzählt, was hinausginge, und drei Wege weiter anbietet: trotzdem
 /// senden, pseudonymisieren, blockieren. Dieser Provider sagt nur, über

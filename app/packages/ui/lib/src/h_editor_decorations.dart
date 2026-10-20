@@ -15,7 +15,9 @@
 ///   `error/secret` (`#F0784F`). Orange und nicht rot, weil Rot in diesem
 ///   Programm ausschließlich „blockiert" heißt.
 /// * [HEditorDecorationKind.pii] — ein Regex-Treffer oder ein Begriff des
-///   Nutzers, in `held` (`#E0B24A`).
+///   Nutzers, in `warning` (seit HUM-260 das Gelb der Marke; vorher
+///   `held`). Die Welle trennt ihn von der Ersetzung, die ebenfalls gelb ist,
+///   aber gerade unterstrichen und hinterlegt.
 /// * [HEditorDecorationKind.replaced] — der Diff-Glow, in der Akzentfarbe.
 ///
 /// # Warum ein Controller und kein `spanBuilder`
@@ -104,7 +106,7 @@ abstract final class HEditorDecorations {
   static Color colorOf(HTokens tokens, HEditorDecorationKind kind) =>
       switch (kind) {
         HEditorDecorationKind.secret => tokens.state.error,
-        HEditorDecorationKind.pii => tokens.state.held,
+        HEditorDecorationKind.pii => tokens.colors.warning,
         HEditorDecorationKind.replaced => tokens.colors.accent,
       };
 

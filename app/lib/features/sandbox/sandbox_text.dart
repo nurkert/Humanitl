@@ -26,12 +26,13 @@ String sandboxStateLabel(AppLocalizations l10n, SandboxState state) =>
 ///
 /// Colour means state and nothing else (`docs/UX.md` 3.3). Running is the
 /// green of an allowed request, because both mean "this is through and it is
-/// as it should be"; starting and stopping are the amber of a hold, because
-/// both mean "wait, this is not settled"; failed is the hue of an error and
+/// as it should be"; starting and stopping wear the warning yellow, because
+/// both mean "wait, this is not settled" (since HUM-260 no longer the hue of a
+/// hold, which means a held request only); failed is the hue of an error and
 /// deliberately not the red of a block, which means a request was refused.
 Color sandboxStateColor(HTokens tokens, SandboxState state) => switch (state) {
   SandboxState.stopped => tokens.colors.fg2,
-  SandboxState.starting || SandboxState.stopping => tokens.state.held,
+  SandboxState.starting || SandboxState.stopping => tokens.colors.warning,
   SandboxState.running => tokens.state.allowed,
   SandboxState.failed => tokens.state.error,
 };
@@ -76,7 +77,7 @@ String sandboxMountModeText(AppLocalizations l10n, MountEntry mount) =>
 /// Colouring the other six would turn a table into a decoration and make the
 /// one that matters harder to find (`docs/UX.md` 3.3).
 Color sandboxMountModeColor(HTokens tokens, MountMode mode) =>
-    mode.isWritable ? tokens.stateText.held : tokens.colors.fg1;
+    mode.isWritable ? tokens.colors.warningText : tokens.colors.fg1;
 
 /// The label of an origin.
 String sandboxOriginLabel(AppLocalizations l10n, ValueOrigin origin) =>
@@ -146,7 +147,7 @@ String isolationSegmentLabel(AppLocalizations l10n, IsolationSegment segment) =>
 Color isolationSegmentColor(HTokens tokens, IsolationSegment segment) =>
     switch (segment) {
       IsolationSegment.unknown => tokens.colors.fg2,
-      IsolationSegment.running => tokens.state.held,
+      IsolationSegment.running => tokens.colors.warning,
       IsolationSegment.passed => tokens.state.allowed,
       IsolationSegment.failed => tokens.state.blocked,
     };
@@ -170,7 +171,7 @@ bool isolationSegmentFilled(IsolationSegment segment) =>
 Color isolationSegmentTextColor(HTokens tokens, IsolationSegment segment) =>
     switch (segment) {
       IsolationSegment.unknown => tokens.colors.fg2,
-      IsolationSegment.running => tokens.stateText.held,
+      IsolationSegment.running => tokens.colors.warningText,
       IsolationSegment.passed => tokens.stateText.allowed,
       IsolationSegment.failed => tokens.stateText.blocked,
     };

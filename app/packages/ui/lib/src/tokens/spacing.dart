@@ -135,6 +135,13 @@ abstract final class HSize {
   /// zu überlagern (`docs/UX.md` 3.4 und 9, Punkt 2).
   static const double selectionRail = 2;
 
+  /// Höhe des schmalen Absperrbands über der Warteschlange (HUM-260).
+  ///
+  /// Vier Pixel: dick genug für die Diagonale der Streifen, dünn genug, dass
+  /// es Rand bleibt und nicht Inhalt wird. Breiter als die Akzent-Rail der
+  /// Auswahl ([selectionRail]), damit niemand es für eine hält.
+  static const double cautionTape = 4;
+
   /// Thickness of a hairline.
   static const double hairline = 1;
 
