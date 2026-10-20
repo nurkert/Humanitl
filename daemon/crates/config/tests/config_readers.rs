@@ -132,6 +132,9 @@ const REGISTER: &[(&str, &str)] = &[
     ("sandbox.profile", "effective"),
     ("sandbox.work_dir", "effective"),
     ("sandbox.work_mode", "effective"),
+    // Gelesen in `humanitld` und `build_llm_probe` über
+    // `TrustAnchors::configured`, bevor ein Verbindungsstapel steht (HUM-257).
+    ("tls.trust_system_store", "effective"),
     ("ui.language", "effective"),
     // Gelesen in der Oberfläche: `notificationsEnabled` folgt `configProvider`,
     // der `GetConfig` fragt (HUM-069).

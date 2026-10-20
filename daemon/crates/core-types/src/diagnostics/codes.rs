@@ -548,9 +548,13 @@ registry! {
     /// Die Verbindung zum Ziel scheiterte (Auflösung, TCP, TLS, private Adresse
     /// oder Zeitüberschreitung); der Proxy antwortet dem Client mit `502` und
     /// verbucht den Flow als `Failed` (HUM-015, HUM-024).
+    ///
+    /// Scheitert der TLS-Handschlag daran, dass das Zertifikat des Ziels von
+    /// einer Stelle stammt, der dieser Rechner nicht vertraut, steht der Befund
+    /// am Fluss, mit dieser Ursache im `why` und dem nächsten Schritt (HUM-257).
     PROXY_003 => "proxy", "Upstream-Verbindung fehlgeschlagen", "#proxy_003",
-        "Die Verbindung zum Ziel kommt nicht zustande, oder es ist keine Adresse angeheftet.",
-        "Kein Fix: Der Text nennt Ziel und Ursache.";
+        "Die Verbindung zum Ziel kommt nicht zustande, oder es ist keine Adresse angeheftet. Am Fluss: das Zertifikat des Ziels stammt von einer Stelle, der dieser Rechner nicht vertraut.",
+        "Bei unbekannter Stelle `CopyCommand` mit `sudo update-ca-certificates` (die CA vorher als `.crt` nach `/usr/local/share/ca-certificates/`), bei `tls.trust_system_store = false` `ChangeSetting` auf `true`; sonst kein Fix, der Text nennt Ziel und Ursache.";
     /// Der Zustandsautomat hat einen Übergang abgelehnt, den der Proxy versucht
     /// hat: ein Fehler im Daemon, kein Zustand des Clients. Der Flow wird
     /// fail-closed mit `Block` beendet und der Befund geht in den Ereignisstrom
@@ -627,10 +631,12 @@ registry! {
     /// Der LLM-Endpunkt aus `llm.endpoint` antwortet nicht: die TCP-Verbindung
     /// kam nicht zustande, der Name löste nicht auf, oder die Frist der Probe
     /// lief ab. Blockierend, weil der Agent ohne Modell nichts tun kann
-    /// (HUM-039).
+    /// (HUM-039). Derselbe Code, wenn das Zertifikat des Endpunkts von einer
+    /// Stelle stammt, der dieser Rechner nicht vertraut; das `why` sagt das
+    /// (HUM-257).
     LLM_001 => "llm", "LLM-Endpoint nicht erreichbar", "#llm_001",
-        "Der Endpunkt antwortet nicht, löst nicht auf, oder die Frist läuft ab.",
-        "`CopyCommand` mit einem `curl`, das dasselbe versucht.";
+        "Der Endpunkt antwortet nicht, löst nicht auf, die Frist läuft ab, oder sein Zertifikat stammt von einer Stelle, der dieser Rechner nicht vertraut.",
+        "`CopyCommand` mit einem `curl`, das dasselbe versucht; bei unbekannter Stelle wie `PROXY_003`.";
     /// Der LLM-Endpunkt antwortet, verlangt aber eine Anmeldung (`401` oder
     /// `403`). Ohne hinterlegten Zugangsschlüssel schickt Humanitl keine
     /// Zugangsdaten (HUM-039); mit einem hat der Endpunkt ihn abgelehnt

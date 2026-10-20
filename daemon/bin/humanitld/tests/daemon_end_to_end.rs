@@ -950,6 +950,33 @@ fn a_test_ca_is_only_trusted_with_the_flag() {
     );
 }
 
+/// Die Vertrauensanker zum Ziel stehen genau einmal im Protokoll des Starts
+/// (HUM-257), obwohl der Daemon mehrere Verbindungsstapel baut (Proxy und
+/// Endpunkt-Probe). Gemessen am echten Binary, damit eine zweite Lesung der
+/// Ablage, etwa in einem neuen Stapel, auffällt.
+#[test]
+fn the_trust_anchors_are_logged_once_at_start() {
+    let (_ca, root) = a_root();
+    let dir = tree_with_test_ca(&root);
+    let (status, log) = run_daemon(dir.path(), &["--allow-test-ca"], true);
+    assert!(
+        ran_until_the_signal(status),
+        "the daemon has to run until the signal, not end on its own: {status}\n{log}"
+    );
+    let lines: Vec<&str> = log
+        .lines()
+        .filter(|line| line.contains("upstream trust anchors loaded"))
+        .collect();
+    assert_eq!(lines.len(), 1, "one line, not one per stack: {log}");
+    assert!(
+        lines[0].contains("\"anchors\":")
+            && lines[0].contains("\"source\":")
+            && lines[0].contains("\"env\":"),
+        "the line names how many anchors and where from: {}",
+        lines[0]
+    );
+}
+
 /// Ein relativer Pfad in `resolver.test_ca` beendet den Start, auch wenn genau
 /// dort eine tadellose Wurzel liegt.
 ///

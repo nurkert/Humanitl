@@ -37,15 +37,16 @@ use hyper::body::Incoming;
 use hyper::header::{HeaderName, HeaderValue};
 use hyper::{Request, Response, Version};
 use hyper_util::rt::TokioIo;
+use rustls::ClientConfig;
 use rustls::pki_types::pem::PemObject as _;
 use rustls::pki_types::{CertificateDer, ServerName};
-use rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
 use crate::body::{self, ResponseBody, Stall, StreamProgress};
 use crate::egress::Egress;
 use crate::hold::HoldQueue;
 use crate::resolver::{self, AddressRefusal, Resolver};
+use crate::trust::{TrustAnchors, TrustSource};
 
 /// Kopfzeilen von Verbindungsrang (RFC 9110 §7.6.1); sie gehören der einen
 /// Verbindung und werden weder zum Ziel noch zurück zum Client durchgereicht.
@@ -63,14 +64,18 @@ const HOP_BY_HOP: &[&str] = &[
 
 /// Die rustls-Client-Konfiguration für Verbindungen zum Ziel.
 ///
-/// Die Vertrauensanker sind die von Mozilla gepflegten Wurzeln
-/// (`webpki-roots`), damit der Proxy das echte Zertifikat des Ziels prüft;
-/// Tests reichen zusätzlich ihre eigene CA herein. ALPN bietet dem Ziel in M1
-/// nur `http/1.1`; `experimental.h2_upstream` schaltet `h2` davor (der
-/// Handshake bleibt in M1 dennoch HTTP/1.1, das Flag ist für M6 vorbereitet).
+/// Die Vertrauensanker kommen aus [`TrustAnchors`]: per Vorgabe die
+/// Zertifikatsablage des Systems, mit `tls.trust_system_store = false` nur die
+/// von Mozilla gepflegten Wurzeln (`webpki-roots`). So prüft der Proxy das
+/// echte Zertifikat des Ziels gegen dieselben Stellen wie `curl` auf diesem
+/// Rechner (HUM-257). Tests und `--allow-test-ca` reichen zusätzlich ihre
+/// eigene CA herein. ALPN bietet dem Ziel in M1 nur `http/1.1`;
+/// `experimental.h2_upstream` schaltet `h2` davor (der Handshake bleibt in M1
+/// dennoch HTTP/1.1, das Flag ist für M6 vorbereitet).
 #[derive(Clone)]
 pub struct ClientTls {
     config: Arc<ClientConfig>,
+    source: TrustSource,
 }
 
 impl std::fmt::Debug for ClientTls {
@@ -80,14 +85,22 @@ impl std::fmt::Debug for ClientTls {
 }
 
 impl ClientTls {
-    /// Baut die Client-Konfiguration mit den System-Wurzeln und optional
+    /// Baut die Client-Konfiguration aus den Ankern `anchors` und optional
     /// zusätzlichen Wurzeln (Test-CA aus `resolver.test_ca`).
+    ///
+    /// Der Daemon reicht [`TrustAnchors::configured`] herein. Tests nehmen
+    /// meist [`TrustAnchors::bundled`], damit die Ablage der Maschine, auf der
+    /// sie laufen, nichts an ihrem Ergebnis ändert.
     ///
     /// # Errors
     ///
     /// [`Diagnostic`] mit [`PROXY_003`](humanitl_core::diagnostics::codes::PROXY_003),
     /// wenn rustls die Protokollversionen oder eine zusätzliche Wurzel ablehnt.
-    pub fn new(extra_roots: &[CertificateDer<'static>], h2: bool) -> Result<Self, Diagnostic> {
+    pub fn new(
+        anchors: &TrustAnchors,
+        extra_roots: &[CertificateDer<'static>],
+        h2: bool,
+    ) -> Result<Self, Diagnostic> {
         let why = |msg: String| {
             Diagnostic::builder(
                 humanitl_core::diagnostics::codes::PROXY_003,
@@ -97,9 +110,7 @@ impl ClientTls {
             .build()
         };
 
-        let mut roots = RootCertStore {
-            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-        };
+        let mut roots = anchors.roots();
         for cert in extra_roots {
             roots
                 .add(cert.clone())
@@ -119,7 +130,26 @@ impl ClientTls {
         };
         Ok(Self {
             config: Arc::new(config),
+            source: anchors.source(),
         })
+    }
+
+    /// Wie [`ClientTls::new`], mit den Ankern, die `tls.trust_system_store`
+    /// verlangt ([`TrustAnchors::configured`]): der Weg des Daemons.
+    ///
+    /// # Errors
+    ///
+    /// Wie [`ClientTls::new`].
+    pub fn configured(
+        trust_system_store: bool,
+        extra_roots: &[CertificateDer<'static>],
+        h2: bool,
+    ) -> Result<Self, Diagnostic> {
+        Self::new(
+            &TrustAnchors::configured(trust_system_store),
+            extra_roots,
+            h2,
+        )
     }
 
     /// Die ALPN-Liste, die dem Ziel angeboten wird, in Reihenfolge.
@@ -229,6 +259,66 @@ impl From<Bytes> for Outgoing {
     }
 }
 
+/// Ein gescheiterter Weg zum Ziel.
+///
+/// [`UpstreamError`] ist das, was der Automat verbucht und der Client in der
+/// `502` sieht. Dazu kommt, was nur der Mensch erfahren soll: ob der
+/// TLS-Handschlag daran scheiterte, dass das Zertifikat des Ziels von einer
+/// Stelle stammt, der dieser Rechner nicht vertraut, und aus welchen Ankern
+/// geprüft wurde (HUM-257). Daraus bauen Handler und Endpunkt-Probe ein `why`
+/// mit dem nächsten Schritt; die Antwort an den Agenten bleibt
+/// `reason: upstream_tls`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ForwardError {
+    /// Was der Automat verbucht.
+    pub error: UpstreamError,
+    /// Gesetzt, wenn das Zertifikat des Ziels von einer unbekannten Stelle
+    /// unterschrieben ist (`UnknownIssuer`), mit der Herkunft der Anker.
+    pub untrusted_issuer: Option<TrustSource>,
+}
+
+impl ForwardError {
+    /// Ordnet einen gescheiterten TLS-Handschlag ein.
+    ///
+    /// `tokio-rustls` reicht den Fehler von rustls als innere Ursache eines
+    /// `io::Error` herauf. Nur `UnknownIssuer` zählt als unbekannte Stelle;
+    /// ein abgelaufenes Zertifikat oder ein falscher Name ist etwas anderes
+    /// und bekäme mit dem Rat, eine CA zu installieren, einen falschen Weg.
+    fn tls(err: &std::io::Error, source: TrustSource) -> Self {
+        tracing::debug!(%err, "upstream TLS handshake failed");
+        let unknown_issuer = err
+            .get_ref()
+            .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+            .is_some_and(|inner| {
+                matches!(
+                    inner,
+                    rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer)
+                )
+            });
+        Self {
+            error: UpstreamError::Tls,
+            untrusted_issuer: unknown_issuer.then_some(source),
+        }
+    }
+}
+
+impl From<UpstreamError> for ForwardError {
+    fn from(error: UpstreamError) -> Self {
+        Self {
+            error,
+            untrusted_issuer: None,
+        }
+    }
+}
+
+impl std::fmt::Display for ForwardError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.error, f)
+    }
+}
+
+impl std::error::Error for ForwardError {}
+
 /// Leitet erlaubte Anfragen zum Ziel.
 pub struct Upstream {
     egress: Arc<dyn Egress>,
@@ -272,16 +362,17 @@ impl Upstream {
     ///
     /// # Errors
     ///
-    /// [`UpstreamError`]: `Dns`, wenn kein Name auflösbar ist; `PrivateAddress`,
-    /// wenn die Adresse privat ist und nicht erlaubt; `Connect`, wenn TCP oder
-    /// der HTTP/1.1-Handschlag scheitert; `Tls`, wenn der TLS-Handschlag
-    /// scheitert.
+    /// [`ForwardError`] mit dem [`UpstreamError`]: `Dns`, wenn kein Name
+    /// auflösbar ist; `PrivateAddress`, wenn die Adresse privat ist und nicht
+    /// erlaubt; `Connect`, wenn TCP oder der HTTP/1.1-Handschlag scheitert;
+    /// `Tls`, wenn der TLS-Handschlag scheitert, bei einer unbekannten Stelle
+    /// mit [`ForwardError::untrusted_issuer`].
     pub async fn forward(
         &self,
         request: &HttpRequest,
         body: impl Into<Outgoing>,
         allow_private: bool,
-    ) -> Result<Response<Incoming>, UpstreamError> {
+    ) -> Result<Response<Incoming>, ForwardError> {
         let ip = self.resolve(&request.authority, allow_private).await?;
         self.forward_to(request, body, ip).await
     }
@@ -354,7 +445,7 @@ impl Upstream {
         request: &HttpRequest,
         body: impl Into<Outgoing>,
         ip: std::net::IpAddr,
-    ) -> Result<Response<Incoming>, UpstreamError> {
+    ) -> Result<Response<Incoming>, ForwardError> {
         let body = body.into();
         let authority = &request.authority;
         let stream = self
@@ -372,10 +463,10 @@ impl Upstream {
             let tls = tokio::time::timeout(self.handshake_timeout, connector.connect(name, stream))
                 .await
                 .map_err(|_elapsed| UpstreamError::Timeout)?
-                .map_err(|_err| UpstreamError::Tls)?;
-            self.send(request, body, tls).await
+                .map_err(|err| ForwardError::tls(&err, self.client_tls.source))?;
+            Ok(self.send(request, body, tls).await?)
         } else {
-            self.send(request, body, stream).await
+            Ok(self.send(request, body, stream).await?)
         }
     }
 

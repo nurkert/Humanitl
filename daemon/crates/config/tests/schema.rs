@@ -168,6 +168,7 @@ fn every_key_of_the_conventions_is_reachable() {
         "resolver.cache_ttl_secs",
         "resolver.prefer",
         "resolver.test_ca",
+        "tls.trust_system_store",
         "findings.enabled",
         "findings.user_terms",
         "findings.email_allow_domains",

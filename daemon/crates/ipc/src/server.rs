@@ -1719,10 +1719,11 @@ fn unfinished(rpc: &str, error: &tokio::task::JoinError) -> Diagnostic {
 /// die Probe gegenüber `ollama.lan` genauso wie später der Proxy.
 ///
 /// Die Vertrauensanker sind die des Upstreams, nicht die Humanitl-CA: Die
-/// Probe redet mit dem Endpunkt, nicht mit dem Agenten.
+/// Probe redet mit dem Endpunkt, nicht mit dem Agenten. Welche das sind,
+/// entscheidet `tls.trust_system_store` wie im Proxy (HUM-257).
 fn build_llm_probe(config: &Config) -> Result<LlmProbe, Diagnostic> {
     let resolver = Arc::new(ResolverPort::from_config(&config.resolver)?);
-    let client_tls = ClientTls::new(&[], false)?;
+    let client_tls = ClientTls::configured(config.tls.trust_system_store, &[], false)?;
     let upstream = Upstream::new(
         Arc::new(Direct::new(Duration::from_secs(
             config.limits.connect_timeout_secs,

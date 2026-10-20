@@ -277,6 +277,15 @@ const GROUP_OVERRIDES: &[GroupOverride] = &[
         after_higher: "20",
     },
     GroupOverride {
+        group: "tls",
+        path: "tls.trust_system_store",
+        lower: "false",
+        higher: "true",
+        read: |config| config.tls.trust_system_store.to_string(),
+        after_lower: "false",
+        after_higher: "true",
+    },
+    GroupOverride {
         group: "findings",
         path: "findings.email_allow_domains",
         lower: "[\"a.example\"]",

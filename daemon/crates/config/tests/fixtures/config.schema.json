@@ -610,6 +610,25 @@
       "x-project-scope": "denied",
       "x-tier": "basic"
     },
+    "tls": {
+      "additionalProperties": false,
+      "default": {
+        "trust_system_store": true
+      },
+      "description": "Wem der Daemon auf dem Weg zum Ziel vertraut.",
+      "properties": {
+        "trust_system_store": {
+          "default": true,
+          "description": "Vertraut beim Ziel den Wurzeln aus der Zertifikatsablage des Systems (`/etc/ssl/certs`), wie `curl` und der Browser: Eine Firmen-CA oder eine mit `update-ca-certificates` installierte CA wird angenommen. Aus gelten nur die öffentlichen Wurzeln aus `webpki-roots`. Wirkt nach dem Neustart des Daemons; das Projekt-Profil kann den Schlüssel nicht setzen.",
+          "type": "boolean",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        }
+      },
+      "type": "object",
+      "x-project-scope": "denied",
+      "x-tier": "advanced"
+    },
     "ui": {
       "additionalProperties": false,
       "default": {

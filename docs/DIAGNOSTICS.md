@@ -585,9 +585,9 @@ Authority-Mismatch
 
 Upstream-Verbindung fehlgeschlagen
 
-**Auslöser.** Die Verbindung zum Ziel kommt nicht zustande, oder es ist keine Adresse angeheftet.
+**Auslöser.** Die Verbindung zum Ziel kommt nicht zustande, oder es ist keine Adresse angeheftet. Am Fluss: das Zertifikat des Ziels stammt von einer Stelle, der dieser Rechner nicht vertraut.
 
-**Fix.** Kein Fix: Der Text nennt Ziel und Ursache.
+**Fix.** Bei unbekannter Stelle `CopyCommand` mit `sudo update-ca-certificates` (die CA vorher als `.crt` nach `/usr/local/share/ca-certificates/`), bei `tls.trust_system_store = false` `ChangeSetting` auf `true`; sonst kein Fix, der Text nennt Ziel und Ursache.
 
 #### PROXY_005
 
@@ -685,9 +685,9 @@ CA-Dateien unbrauchbar
 
 LLM-Endpoint nicht erreichbar
 
-**Auslöser.** Der Endpunkt antwortet nicht, löst nicht auf, oder die Frist läuft ab.
+**Auslöser.** Der Endpunkt antwortet nicht, löst nicht auf, die Frist läuft ab, oder sein Zertifikat stammt von einer Stelle, der dieser Rechner nicht vertraut.
 
-**Fix.** `CopyCommand` mit einem `curl`, das dasselbe versucht.
+**Fix.** `CopyCommand` mit einem `curl`, das dasselbe versucht; bei unbekannter Stelle wie `PROXY_003`.
 
 #### LLM_002
 

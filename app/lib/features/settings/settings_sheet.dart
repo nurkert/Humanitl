@@ -5,8 +5,9 @@
 /// scope decision of 2026-09-18 (`backlog/sprint-4.md`) moves the generator,
 /// search, tiers, origins, reset per field and live reload behind the MVP. The
 /// form shows `hold.timeout_secs`, `hold.ask_mode`, `ui.language`, `ui.theme`,
-/// `ui.notifications`, `sandbox.work_dir`, the endpoint, the model and the
-/// access key; everything else stays in `config.toml`, one click away.
+/// `ui.notifications`, `sandbox.work_dir`, the endpoint, the model, the
+/// access key and `tls.trust_system_store` (HUM-257); everything else stays
+/// in `config.toml`, one click away.
 ///
 /// Every value comes from `GetConfig` and goes back through `SetConfig` and
 /// `LlmKey`; the form decides nothing about what a value means (ADR-018). A
@@ -305,6 +306,22 @@ class _SettingsFormState extends ConsumerState<_SettingsForm> {
                 ],
               ),
             ],
+          ),
+        ),
+        // Das Opt-out des Vertrauens in die Zertifikatsablage des Systems
+        // (HUM-257). Vorgabe an; was aus bedeutet, steht in der Hilfe.
+        SettingGroupTitle(l10n.settingsSectionConnections),
+        SettingRow(
+          label: l10n.settingsTrustSystemStoreLabel,
+          help: l10n.settingsTrustSystemStoreHelp,
+          refusal: _refusals[FormKeys.tlsTrustSystemStore],
+          refusalKey: const Key('settings-trust-system-store-refusal'),
+          child: HCheckbox(
+            key: const Key('settings-trust-system-store'),
+            label: l10n.settingsTrustSystemStoreHint,
+            value: config.tlsTrustSystemStore,
+            onChanged: (bool on) =>
+                unawaited(_write(FormKeys.tlsTrustSystemStore, '$on')),
           ),
         ),
         SettingGroupTitle(l10n.settingsSectionFile),

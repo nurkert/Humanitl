@@ -202,6 +202,14 @@ Welches Sandbox-Profil mit welchem Arbeitsverzeichnis startet.
 | `sandbox.work_dir` | string, optional | `-` | basic | denied | ja | Projektverzeichnis, das als `/work` eingehängt wird. Leer bedeutet: das aktuelle Verzeichnis. |
 | `sandbox.work_mode` | ro \| rw | `"rw"` | basic | denied | ja | Ob der Agent im Projektverzeichnis schreiben darf. |
 
+### `tls`
+
+Wem der Daemon auf dem Weg zum Ziel vertraut.
+
+| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
+|---|---|---|---|---|---|---|
+| `tls.trust_system_store` | boolean | `true` | advanced | denied | ja | Vertraut beim Ziel den Wurzeln aus der Zertifikatsablage des Systems (`/etc/ssl/certs`), wie `curl` und der Browser: Eine Firmen-CA oder eine mit `update-ca-certificates` installierte CA wird angenommen. Aus gelten nur die öffentlichen Wurzeln aus `webpki-roots`. Wirkt nach dem Neustart des Daemons; das Projekt-Profil kann den Schlüssel nicht setzen. |
+
 ### `ui`
 
 Sprache, Erscheinungsbild und Meldungen der Oberfläche.
