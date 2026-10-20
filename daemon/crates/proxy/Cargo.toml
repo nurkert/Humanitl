@@ -71,3 +71,7 @@ hyper-util = { version = "0.1", features = ["tokio", "server", "server-graceful"
 http-body-util = "0.1"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 tokio-stream.workspace = true
+# Nur im Test: `tests/limits.rs` liest die Protokollzeile `LIMIT_005` einer
+# abgelaufenen Kopf-Frist (HUM-057). Es gibt keinen Fluss, an dem der Befund
+# sonst hinge, also ist die Zeile die Aussage.
+tracing-subscriber.workspace = true

@@ -21,7 +21,17 @@ dass eine Regel oder ein Mensch die konkrete Anfrage freigegeben hat. Ohne passe
 Mensch sie vorher: Methode, Ziel, Header, Parameter und der vollständige Anfrage-Body, nicht nur der
 Hostname. Eine Ausnahme ist erklärt und sichtbar: der Passthrough zum lokalen Sprachmodell wird
 gestreamt, vollständig protokolliert und auf Findings geprüft, aber nicht angehalten (Abschnitt 3,
-Kanal LLM). Ebenso offen bleibt das Projektverzeichnis `/work`.
+Kanal LLM). Ebenso offen bleibt das Projektverzeichnis `/work`. Eine zweite Ausnahme schreibt der
+Mensch selbst in seine Regeln: Eine Regel mit `stream: true` lässt eine Anfrage, deren Body über
+`limits.hold_body_cap_bytes` liegt, gestreamt hinaus. Entschieden wird dann über den Kopf (`allow`
+ohne Rückfrage, `ask` von einem Menschen, der Methode, Ziel und Header sieht), und der Body geht
+ungeprüft (Kopf und Kopfzeilen werden gescannt, der Body nicht): keine Suche nach Geheimnissen im
+Body, keine Vorschau, aufgezeichnet bis
+`limits.recorder_max_body_bytes`. Das gilt nur bei ausgeschaltetem
+`hold.hard_block_checksum_secrets`: Steht die harte Sperre an, greift `stream: true` nie, denn ein
+ungeprüfter Strom kann sie nicht einhalten, und die Aussage „keine Regel hebt die harte Sperre
+auf" bleibt unverändert. Ohne eine solche Regel oder unter der Sperre wird jede Anfrage über dem
+Cap geblockt (`docs/SECURITY.md`, Grenzen und Zeitlimits; HUM-057).
 
 **Integrität der Entscheidungshistorie.** Was entschieden wurde, wann und mit welcher Begründung,
 lässt sich später nicht unbemerkt umschreiben. Das ist die Grundlage dafür, gegenüber einem
@@ -656,6 +666,7 @@ Sitzungs-Historie steht.
 | 2026-09-23 | K-13 sichtbar: verweigerte `socket()`-Aufrufe des Agenten gehen über `SECCOMP_RET_USER_NOTIF` an den Elternprozess des Shims, der zählt und `EPERM` antwortet; ohne Zuhörer (`EBUSY`) derselbe Filter wie zuvor und `SANDBOX_019`. K-04: der Elternprozess ist nicht mehr „dumpable", `/proc/<pid>/mem` und `/proc/<pid>/fd` sind dem Agenten verschlossen. Beide Filter verweigern `seccomp()` mit `SECCOMP_FILTER_FLAG_NEW_LISTENER`, damit der Agent nie einen eigenen Zuhörer bekommt, und der Zuhörer des Elternprozesses bleibt bis zum Ende offen. Das Tor von HUM-137 geht auf, sobald der Elternprozess nicht mehr „dumpable" ist, statt wenn er den Bericht schließt | HUM-138 |
 | 2026-09-24 | Passthrough und Regeln unter `hold.hard_block_checksum_secrets`: Eine Anfrage mit prüfsummen-bestätigtem Geheimnis wird gehalten statt sofort geblockt, damit ein Mensch den Wert ersetzen kann. Eine Regel `allow` und die Durchreiche zum Sprachmodell blocken sie weiter als System, die Warteschlange weist jedes `Allow` mit `HOLD_004` zurück, und der Handler leitet ein `Allow` für einen solchen Flow nie weiter. Die Aussage „geht nicht ungeändert hinaus" gilt unverändert | HUM-159 |
 | 2026-10-06 | K-02: Der Zugangsschlüssel eines Anbieters liegt im Schlüsselbund des Systems (Rückfall Datei `0600`), `config.toml` trägt nur den Verweis `llm.api_key_ref`. Der Agent bekommt ihn als Datei aus einem memfd, nie über `argv` oder die Umgebung, die `bwrap` über `--setenv` setzt; aufgezeichnete Kopfzeilen und Pfade tragen ihn als `••••`; kein Fund ist er nur in `Authorization` an Host und Port von `llm.endpoint` (Review-Nachtrag 2026-10-16), anderswo bleibt er einer. Restrisiko: Der Agent kann ihn lesen und anderswohin schicken | HUM-069, HUM-140 |
+| 2026-10-19 | Schutzziel 1: `stream: true` als zweite erklärte Ausnahme. Eine Anfrage über `limits.hold_body_cap_bytes` wurde bis dahin immer geblockt, auch wenn eine Regel `stream: true` trug; jetzt geht sie unter einer solchen Regel (`allow` oder `ask`) gestreamt hinaus, entschieden über den Kopf, der Body ohne Scan und ohne Vorschau, aufgezeichnet bis `limits.recorder_max_body_bytes`. Unter `hold.hard_block_checksum_secrets` greift `stream: true` nicht, und `LIMIT_001` schlägt dann das Cap vor statt einer Regel. Der Vorschlag am Block (`LIMIT_001`) ist sonst eine Regel mit `ask`, nie `allow`. Restrisiko: Wer eine solche Regel anlegt, gibt für diese Anfragen den Blick auf den Body auf | HUM-057 |
 
 Geplante Fortschreibung: HUM-059 bringt das Dokument zum Release auf den Stand des Codes. Jede
 sicherheitsrelevante Änderung am Shim, an der Mount-Allowlist, am Filter oder am Passthrough

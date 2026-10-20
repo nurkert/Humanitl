@@ -26,6 +26,7 @@ import 'history_filter_bar.dart';
 import 'history_metrics.dart';
 import 'history_view.dart';
 import 'providers/history_detail.dart';
+import 'widgets/history_diagnostics.dart';
 
 /// Which side of one flow the detail shows.
 enum HistoryDetailTab {
@@ -134,9 +135,23 @@ class _HistoryDetailState extends ConsumerState<HistoryDetail> {
         // the pane: the split can be dragged small, and at
         // `TextScaler.linear(2.0)` the six facts alone are taller than a
         // short pane (`docs/UX.md` 6, no fixed height around text).
+        //
+        // Unter den Fakten stehen die Befunde, die der Daemon an das Detail
+        // hängt, eine Zeile je Befund (HUM-057); sie scrollen mit dem Kopf.
+        final List<Diagnostic> diagnostics =
+            detail.value?.diagnostics ?? const <Diagnostic>[];
         final Widget head = ConstrainedBox(
           constraints: BoxConstraints(maxHeight: constraints.maxHeight * 0.5),
-          child: SingleChildScrollView(child: _Head(flow: flow)),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                _Head(flow: flow),
+                HistoryDiagnostics(diagnostics: diagnostics),
+              ],
+            ),
+          ),
         );
         final Widget tabs = Padding(
           padding: EdgeInsets.symmetric(

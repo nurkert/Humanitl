@@ -1,13 +1,18 @@
-/// The 24 px status bar: connection dot, daemon version, session.
+/// The 24 px status bar: connection dot, daemon version, queue pressure,
+/// session.
 library;
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/ipc/config_providers.dart';
 import '../../../core/ipc/connection.dart';
+import '../../../core/text/format.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
+import '../../intercept/providers/flows.dart';
+import '../queue_pressure.dart';
 
 /// The status bar.
 ///
@@ -76,6 +81,7 @@ class StatusBar extends ConsumerWidget {
                 ),
               ],
               const Spacer(),
+              const QueuePressureLabel(),
               Text(
                 info.hasSession
                     ? l10n.shellStatusSession(SessionId(info.sessionId).short)
@@ -85,6 +91,66 @@ class StatusBar extends ConsumerWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// The load of the hold queue, once it gets close to a limit (HUM-057).
+///
+/// Unter 80 % beider Grenzen zeichnet es nichts: Eine Zahl, die immer dasteht,
+/// liest niemand mehr, wenn sie einmal wichtig wird. Ab 80 % steht sie amber
+/// da, etwa „Queue 412/500 · 210 MB", ab 100 % rot und mit dem Code
+/// `LIMIT_002` samt Titel, denn dann blockt der Daemon jede neue Anfrage.
+class QueuePressureLabel extends ConsumerWidget {
+  /// Creates the label.
+  const QueuePressureLabel({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final QueueLoad load = QueueLoad.of(
+      ref.watch(heldFlowsProvider),
+      ref.watch(configProvider).value ?? ConfigValues.empty,
+      ref.watch(daemonQueueBytesProvider),
+    );
+    final QueuePressure pressure = load.pressure;
+    if (pressure == QueuePressure.normal) {
+      return const SizedBox.shrink();
+    }
+    final HTokens tokens = HTheme.of(context);
+    final AppLocalizations l10n = context.l10n;
+    final Color color = pressure == QueuePressure.full
+        ? tokens.stateTextColor(HFlowState.blocked)
+        : tokens.stateTextColor(HFlowState.held);
+    return Padding(
+      padding: EdgeInsets.only(right: tokens.spacing.x3),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          if (pressure == QueuePressure.full) ...<Widget>[
+            HBadge(
+              key: const Key('status-queue-limit'),
+              text: DiagnosticCodes.queueFull,
+              color: color,
+              mono: true,
+            ),
+            SizedBox(width: tokens.spacing.x2),
+            Text(
+              l10n.diagLIMIT002Title,
+              style: tokens.typography.ui11.tinted(color),
+            ),
+            SizedBox(width: tokens.spacing.x2),
+          ],
+          Text(
+            l10n.shellStatusQueue(
+              load.count,
+              load.maxFlows,
+              formatBytes(load.bytes),
+            ),
+            key: const Key('status-queue-pressure'),
+            style: tokens.typography.mono11.tinted(color),
+          ),
+        ],
       ),
     );
   }

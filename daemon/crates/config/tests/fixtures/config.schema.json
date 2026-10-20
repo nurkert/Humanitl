@@ -288,7 +288,7 @@
         },
         "hold_body_cap_bytes": {
           "default": 33554432,
-          "description": "Größte Anfrage, deren Body für die Entscheidung im Speicher gehalten wird. Darüber antwortet der Proxy mit 413.",
+          "description": "Größte Anfrage, deren Body für die Entscheidung im Speicher gehalten wird. Darüber antwortet der Proxy mit 413, außer eine Regel `allow` oder `ask` mit `stream: true` trifft die Anfrage und `hold.hard_block_checksum_secrets` ist aus: Dann geht der Body gestreamt und ungeprüft hinaus.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer",

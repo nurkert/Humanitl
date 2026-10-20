@@ -365,7 +365,9 @@ impl LlmProbe {
             // Ein Körper über dem Cap, ein abgerissener oder ein
             // stehengebliebener Strom ist keine Modellliste. Die Probe zählt
             // ihn wie eine fremde Antwort.
-            Err(BufferError::Cap | BufferError::Read | BufferError::Idle) => Ok(None),
+            Err(BufferError::Cap | BufferError::Read | BufferError::Idle | BufferError::Budget) => {
+                Ok(None)
+            }
         }
     }
 }

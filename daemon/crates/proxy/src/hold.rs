@@ -63,9 +63,10 @@ use std::time::{Duration, Instant, SystemTime};
 use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
 use humanitl_config::Limits;
+use humanitl_core::diagnostics::codes::LIMIT_002;
 use humanitl_core::{
     BlockReason, DecidedFindings, Decision, DecisionSource, Diagnostic, Flow, FlowEvent, FlowId,
-    FlowState, HostName, HttpRequest, InvalidTransition, Transition, TransitionInput,
+    FlowState, HostName, HttpRequest, InvalidTransition, Severity, Transition, TransitionInput,
 };
 use humanitl_recorder::Recorder;
 use tokio::sync::{broadcast, oneshot};
@@ -269,6 +270,10 @@ pub struct HoldQueue {
     recorder: Option<Recorder>,
     domains: Option<Arc<dyn DomainSink>>,
     edits: Option<Arc<dyn EditCount>>,
+    /// Flüsse, deren Bytes schon ein [`InFlight`] des Handlers im Budget
+    /// trägt (HUM-057). Ihr Halten reserviert nur den Platz in der Zählung,
+    /// keine Bytes ein zweites Mal.
+    covered: DashMap<FlowId, ()>,
 }
 
 impl fmt::Debug for HoldQueue {
@@ -320,6 +325,7 @@ impl HoldQueue {
             recorder: None,
             domains: None,
             edits: None,
+            covered: DashMap::new(),
         }
     }
 
@@ -650,7 +656,9 @@ impl HoldQueue {
         self.held_flows.load(Ordering::Acquire)
     }
 
-    /// Wie viele Body-Bytes gerade insgesamt gehalten werden.
+    /// Die Belegung des Byte-Budgets `limits.hold_max_bytes`: gehaltene Rümpfe
+    /// plus die, die gerade gepuffert oder gestreamt werden ([`InFlight`],
+    /// HUM-057). Derselbe Wert steht im `Held`-Ereignis.
     #[must_use]
     pub fn queue_bytes(&self) -> u64 {
         self.held_bytes.load(Ordering::Acquire)
@@ -722,9 +730,26 @@ impl HoldQueue {
             Entry::Occupied(_) => return Err(HoldError::AlreadyHeld { id }),
             Entry::Vacant(entry) => entry,
         };
-        match self.reserve(flow.request.body.size) {
+        // Trägt ein `InFlight` die Bytes dieses Flusses schon (der Handler
+        // hat sie beim Puffern reserviert, HUM-057), zählt das Halten nur den
+        // Platz. Sonst zählten sie doppelt, und ein gestreamter Kopf brächte
+        // seine angekündigte Größe mit, obwohl kein Byte davon im Speicher
+        // liegt.
+        let bytes = if self.covered.contains_key(&id) {
+            0
+        } else {
+            flow.request.body.size
+        };
+        match self.reserve(bytes) {
             Err(reason) => {
                 drop(entry);
+                // Erst der Befund, dann die Entscheidung: Wer die Ablehnung im
+                // Strom sieht, hat den Grund schon in der Hand (HUM-057).
+                self.publish(FlowEvent::Diagnostic {
+                    flow_id: Some(id),
+                    at: now,
+                    diagnostic: Box::new(self.queue_full(reason, flow.request.body.size)),
+                });
                 let decision = Decision::Block { reason, note: None };
                 let event = flow.apply(
                     TransitionInput::Decide {
@@ -778,6 +803,67 @@ impl HoldQueue {
                 })
             }
         }
+    }
+
+    /// Der Befund [`LIMIT_002`] zu einer Anfrage, die nicht mehr in die
+    /// Warteschlange passt (HUM-057).
+    ///
+    /// Der `why` nennt beide Zähler mit ihren Grenzen, denn erst beide
+    /// zusammen sagen dem Menschen, was voll ist: viele kleine Anfragen oder
+    /// wenige große. Ein `fix` fehlt mit Absicht. Die Antwort auf eine volle
+    /// Warteschlange ist, sie abzuarbeiten; eine höhere Grenze verschöbe nur,
+    /// wie viele Anfragen gleichzeitig auf einen Menschen warten.
+    fn queue_full(&self, reason: BlockReason, request_bytes: u64) -> Diagnostic {
+        let limit = match reason {
+            BlockReason::HoldMaxFlows => "limits.hold_max_flows",
+            _ => "limits.hold_max_bytes",
+        };
+        Diagnostic::builder(LIMIT_002, Severity::Warning)
+            .why(format!(
+                "the queue already holds {count} of {max_flows} requests \
+                 (limits.hold_max_flows) with {bytes} of {max_bytes} bytes \
+                 (limits.hold_max_bytes), so this request of {request_bytes} bytes was blocked \
+                 with 503 by {limit}. No waiting request was dropped for it. Decide the waiting \
+                 requests to make room.",
+                count = self.queue_count(),
+                max_flows = self.max_flows,
+                bytes = self.queue_bytes(),
+                max_bytes = self.max_bytes,
+            ))
+            .build()
+    }
+
+    /// Ein leerer Anteil am Byte-Budget für eine Anfrage, deren Rumpf der
+    /// Handler gerade liest (HUM-057).
+    ///
+    /// `limits.hold_max_bytes` gilt damit nicht erst ab dem Halten, sondern
+    /// für jeden Rumpf, der im Speicher liegt: beim Puffern, während des
+    /// Haltens und bis die Anfrage weitergeleitet oder geblockt ist. Ohne das
+    /// belegten 256 Clients mit je knapp 32 MiB, die mitten im Rumpf pausieren,
+    /// rund 8 GiB, bevor irgendein Zähler stieg.
+    #[must_use]
+    pub fn in_flight(self: &Arc<Self>) -> InFlight {
+        InFlight {
+            queue: Arc::clone(self),
+            bytes: 0,
+            flow: None,
+        }
+    }
+
+    /// Der Befund [`LIMIT_002`] zu einer Anfrage, deren Rumpf beim Puffern
+    /// nicht mehr ins Byte-Budget passte (HUM-057).
+    #[must_use]
+    pub fn buffer_full(&self, buffered: u64) -> Diagnostic {
+        Diagnostic::builder(LIMIT_002, Severity::Warning)
+            .why(format!(
+                "the request bodies in work already take {bytes} of {max_bytes} bytes \
+                 (limits.hold_max_bytes: bodies being received, held and sent), so this request \
+                 was blocked with 503 after {buffered} bytes of its body. Requests that are held \
+                 count as well; deciding them makes room.",
+                bytes = self.queue_bytes(),
+                max_bytes = self.max_bytes,
+            ))
+            .build()
     }
 
     /// Reserviert einen Flow und `bytes` im Budget, oder nennt den Grund.
@@ -850,6 +936,77 @@ impl Drop for Reservation<'_> {
             .held_bytes
             .fetch_sub(self.bytes, Ordering::AcqRel);
         self.queue.held_flows.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Das Budget für Rümpfe in Arbeit ist erschöpft ([`InFlight::grow`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BudgetFull;
+
+/// Der Anteil einer Anfrage am Byte-Budget `limits.hold_max_bytes`, solange
+/// ihr Rumpf im Speicher liegt (HUM-057).
+///
+/// Wächst Stück für Stück beim Puffern ([`InFlight::grow`]) und gibt beim
+/// Fallenlassen alles zurück: nach dem Weiterleiten, nach einem Block, nach
+/// einer Zeitüberschreitung, nach einem Abbruch des Clients. Ist ein Fluss
+/// daran gebunden ([`InFlight::cover`]), reserviert sein Halten keine Bytes
+/// mehr, nur den Platz in `limits.hold_max_flows`.
+pub struct InFlight {
+    queue: Arc<HoldQueue>,
+    bytes: u64,
+    flow: Option<FlowId>,
+}
+
+impl fmt::Debug for InFlight {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InFlight")
+            .field("bytes", &self.bytes)
+            .field("flow", &self.flow)
+            .finish_non_exhaustive()
+    }
+}
+
+impl InFlight {
+    /// Nimmt `bytes` mehr ins Budget, nie über `limits.hold_max_bytes`.
+    ///
+    /// # Errors
+    ///
+    /// [`BudgetFull`], wenn sie nicht mehr hineinpassen; dann ist nichts
+    /// reserviert, und der Aufrufer liest nicht weiter.
+    pub fn grow(&mut self, bytes: u64) -> Result<(), BudgetFull> {
+        let max = self.queue.max_bytes;
+        self.queue
+            .held_bytes
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |held| {
+                held.checked_add(bytes).filter(|next| *next <= max)
+            })
+            .map_err(|_full| BudgetFull)?;
+        self.bytes = self.bytes.saturating_add(bytes);
+        Ok(())
+    }
+
+    /// Wie viele Bytes dieser Anteil gerade trägt.
+    #[must_use]
+    pub const fn bytes(&self) -> u64 {
+        self.bytes
+    }
+
+    /// Bindet den Anteil an `flow`: Hält die Warteschlange ihn, reserviert sie
+    /// keine Bytes ein zweites Mal.
+    pub fn cover(&mut self, flow: FlowId) {
+        self.queue.covered.insert(flow, ());
+        self.flow = Some(flow);
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.queue
+            .held_bytes
+            .fetch_sub(self.bytes, Ordering::AcqRel);
+        if let Some(flow) = self.flow {
+            self.queue.covered.remove(&flow);
+        }
     }
 }
 

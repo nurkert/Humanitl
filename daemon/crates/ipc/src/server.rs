@@ -461,6 +461,29 @@ impl IpcServer {
         &self.info
     }
 
+    /// Hängt an ein aufgezeichnetes Detail die Befunde, die die Registry zu
+    /// diesem Fluss kennt (HUM-057, HUM-058 Zeile 9).
+    ///
+    /// Die Aufzeichnung führt keine Befunde; der Befund im Ereignisstrom ist
+    /// flüchtig. Ohne diesen Schritt sähe, wer einen am Cap geblockten Fluss
+    /// in der Historie öffnet, nur „geblockt, `body_cap`", ohne Grund und
+    /// ohne den Vorschlag einer Regel `stream: true` aus `LIMIT_001`. Die
+    /// Registry kennt die Befunde, solange der Daemon läuft
+    /// ([`humanitl_proxy::registry::FlowRecord::diagnostics`]); ein Fluss von
+    /// vor einem Neustart des Daemons kommt ohne sie.
+    fn with_live_diagnostics(&self, id: FlowId, mut detail: v1::FlowDetail) -> v1::FlowDetail {
+        if detail.diagnostics.is_empty()
+            && let Some(record) = self.registry.get(id)
+        {
+            detail.diagnostics = record
+                .diagnostics
+                .iter()
+                .map(convert::diagnostic_to_proto)
+                .collect();
+        }
+        detail
+    }
+
     /// Der Ereignisstrom eines Abonnenten.
     ///
     /// Ein zu langsamer Zuhörer verliert die ältesten Ereignisse; der
@@ -478,7 +501,10 @@ impl IpcServer {
         let live = BroadcastStream::new(self.registry.subscribe()).filter_map(move |item| {
             let event = match item {
                 Ok(event) => event,
-                Err(BroadcastStreamRecvError::Lagged(n)) => FlowEvent::Lagged { n },
+                Err(BroadcastStreamRecvError::Lagged(n)) => {
+                    log_lagged(n);
+                    FlowEvent::Lagged { n }
+                }
             };
             // Ereignisse eines Durchreich-Flows (LLM-Passthrough) sieht nur,
             // wer sie ausdruecklich verlangt; `ListFlows` und der Rueckstand
@@ -828,6 +854,22 @@ impl IpcServer {
 /// der Fake sie nicht ein zweites Mal beschreiben muss.
 fn unknown_flow(id: FlowId) -> Status {
     crate::server_stub::get_flow_status(&not_held(&NotHeld::Unknown { id }))
+}
+
+/// Die Protokollzeile zu einem Abonnenten, den der Rundfunk überholt hat:
+/// `LIMIT_006`, nur `info` (HUM-057).
+///
+/// Der Abonnent selbst bekommt `Lagged` und lädt mit `ListFlows` nach; der
+/// Proxy hat auf ihn nicht gewartet. Die Zeile sagt nur, dass es geschah und
+/// wie viele Ereignisse fehlten, damit eine dauerhaft zu langsame Oberfläche
+/// im Protokoll auffällt und nicht nur als flackernde Liste.
+fn log_lagged(dropped: u64) {
+    tracing::info!(
+        code = codes::LIMIT_006.as_str(),
+        dropped,
+        "a subscriber fell behind the event stream (limits.event_buffer) and reloads with \
+         ListFlows; no request was delayed"
+    );
 }
 
 /// Ein Befund für einen Lauf, zu dem keine Zusammenfassung vorliegt.
@@ -1219,7 +1261,7 @@ impl v1::humanitl_server::Humanitl for IpcServer {
                 .await
                 .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?
         {
-            return Ok(Response::new(detail));
+            return Ok(Response::new(self.with_live_diagnostics(id, detail)));
         }
         self.registry
             .get(id)
@@ -2493,6 +2535,123 @@ mod tests {
             server.page(&v1::ListFlowsRequest::default(), true).total,
             20
         );
+    }
+
+    /// `event_buffer = 8`, der Abonnent liest nicht, 50 Flüsse entstehen: Das
+    /// erste gelesene Ereignis ist `Lagged` mit mindestens 42 verlorenen, danach
+    /// kommen die aktuellen (HUM-057).
+    #[tokio::test]
+    async fn subscriber_lag_gets_lagged_event() {
+        use tokio_stream::StreamExt as _;
+
+        let limits = Limits {
+            event_buffer: 8,
+            ..Limits::default()
+        };
+        let queue = Arc::new(HoldQueue::with_registry(
+            &limits,
+            Arc::new(FlowRegistry::new(&limits)),
+        ));
+        let config = Config {
+            limits,
+            ..Config::default()
+        };
+        let server = IpcServer::new(Arc::clone(&queue), &config, None);
+        let mut stream = server.event_stream(&v1::SubscribeRequest::default());
+
+        let session = SessionId::new();
+        let mut ids = Vec::new();
+        for _ in 0..50 {
+            let flow = analyzed(session, "example.com");
+            ids.push(flow.id.to_string());
+            queue
+                .registry()
+                .insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+            queue.publish(flow.received_event());
+        }
+
+        let first = stream.next().await.expect("the stream stays open").unwrap();
+        let Some(v1::flow_event::Event::Lagged(lagged)) = first.event else {
+            panic!("the first event after the overrun is Lagged, got {first:?}");
+        };
+        assert!(lagged.dropped >= 42, "dropped {}", lagged.dropped);
+
+        // Danach die aktuellen: die Flüsse, die nach dem Überlauf noch im
+        // Puffer standen, bis zum letzten.
+        let dropped = usize::try_from(lagged.dropped).unwrap();
+        for expected in &ids[dropped..] {
+            let event = stream.next().await.expect("the stream stays open").unwrap();
+            let Some(v1::flow_event::Event::Received(received)) = event.event else {
+                panic!("a current Received after Lagged, got {event:?}");
+            };
+            let id = received
+                .summary
+                .as_ref()
+                .map(|summary| summary.flow_id.clone())
+                .unwrap_or_default();
+            assert_eq!(&id, expected);
+        }
+    }
+
+    /// Das Detail trägt die Befunde, die am Fluss stehen: ein am Cap
+    /// geblockter Fluss `LIMIT_001` mit dem Regelvorschlag `stream: true`, ein
+    /// anderer keinen (HUM-057, HUM-058 Zeile 9).
+    #[tokio::test]
+    async fn the_detail_carries_the_diagnostics_of_its_flow() {
+        let queue = queue();
+        let server = server(&queue);
+        let session = SessionId::new();
+        let at_cap = analyzed(session, "upload.example.com");
+        let quiet = analyzed(session, "upload.example.com");
+        for flow in [&at_cap, &quiet] {
+            queue
+                .registry()
+                .insert(FlowRecord::new(flow, &ConnMeta::plain(session)));
+        }
+        let rule = humanitl_core::Rule::new(
+            humanitl_core::RuleId::new(),
+            humanitl_core::Action::Ask,
+            humanitl_core::Matcher::host(humanitl_core::HostPattern::Exact(HostName::Dns(
+                "upload.example.com".to_owned(),
+            ))),
+        )
+        .with_stream(true);
+        queue.publish(FlowEvent::Diagnostic {
+            flow_id: Some(at_cap.id),
+            at: SystemTime::now(),
+            diagnostic: Box::new(
+                Diagnostic::builder(codes::LIMIT_001, Severity::Warning)
+                    .why("the request body is 41943040 bytes".to_owned())
+                    .fix(humanitl_core::FixAction::AddRule(Box::new(rule)))
+                    .build(),
+            ),
+        });
+
+        let detail = |id: FlowId| {
+            let server = &server;
+            async move {
+                server
+                    .get_flow(Request::new(v1::FlowRef {
+                        flow_id: id.to_string(),
+                    }))
+                    .await
+                    .unwrap()
+                    .into_inner()
+            }
+        };
+        let blocked = detail(at_cap.id).await;
+        assert_eq!(blocked.diagnostics.len(), 1, "{:?}", blocked.diagnostics);
+        let limit = &blocked.diagnostics[0];
+        assert_eq!(limit.code, "LIMIT_001");
+        let Some(v1::fix_action::Action::AddRule(suggested)) =
+            limit.fix.as_ref().and_then(|fix| fix.action.clone())
+        else {
+            panic!("the fix is a rule, got {:?}", limit.fix);
+        };
+        assert!(suggested.stream, "the suggestion streams");
+        assert_eq!(suggested.action, v1::RuleAction::Ask as i32);
+
+        assert!(detail(quiet.id).await.diagnostics.is_empty());
     }
 
     /// Ein durchgereichter Fluss ist eingeklappt, seine Warnung nicht.

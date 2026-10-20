@@ -51,6 +51,9 @@ use crate::writer::{MessageWrite, WriterCmd, WriterHandle};
 /// Erzeugt von [`Recorder::begin_response`](crate::Recorder::begin_response).
 pub struct ResponseSink {
     flow: FlowId,
+    /// Welche Nachricht mitgeschnitten wird: die Antwort, oder seit HUM-057
+    /// der gestreamte Rumpf einer Anfrage über `limits.hold_body_cap_bytes`.
+    dir: Dir,
     writer: Arc<WriterHandle>,
     blobs: Arc<BlobStore>,
     diagnostics: broadcast::Sender<Diagnostic>,
@@ -72,6 +75,7 @@ impl core::fmt::Debug for ResponseSink {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ResponseSink")
             .field("flow", &self.flow)
+            .field("dir", &self.dir.as_str())
             .field("size", &self.size)
             .field("stored", &self.stored)
             .field("truncated", &self.truncated)
@@ -104,9 +108,11 @@ impl Drop for ResponseSink {
 }
 
 impl ResponseSink {
-    /// Beginnt den Mitschnitt einer Antwort.
+    /// Beginnt den Mitschnitt einer Nachricht in Richtung `dir`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         flow: FlowId,
+        dir: Dir,
         writer: Arc<WriterHandle>,
         blobs: Arc<BlobStore>,
         diagnostics: broadcast::Sender<Diagnostic>,
@@ -116,6 +122,7 @@ impl ResponseSink {
     ) -> Self {
         Self {
             flow,
+            dir,
             writer,
             blobs,
             diagnostics,
@@ -244,6 +251,19 @@ impl ResponseSink {
         self.close(None)
     }
 
+    /// Schließt den Mitschnitt eines gestreamten Anfrage-Rumpfs ab, der
+    /// vollständig durchlief (HUM-057).
+    ///
+    /// Wie [`ResponseSink::finish`], nur ohne Status: Eine Anfrage hat keinen,
+    /// und `flows.status` gehört der Antwort.
+    ///
+    /// # Errors
+    ///
+    /// Wie [`ResponseSink::finish`].
+    pub fn finish_request(mut self) -> Result<BodyRef, RecorderError> {
+        self.close(None)
+    }
+
     /// Der gemeinsame Abschluss aller drei Enden, siehe Modulkommentar.
     fn close(&mut self, status: Option<u16>) -> Result<BodyRef, RecorderError> {
         if self.done {
@@ -277,7 +297,7 @@ impl ResponseSink {
 
         let write = MessageWrite {
             flow: self.flow,
-            dir: Dir::Response,
+            dir: self.dir,
             headers_json: core::mem::take(&mut self.headers_json),
             content_type: self.content_type.clone(),
             content_encoding: self.content_encoding.take(),
