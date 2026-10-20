@@ -27,7 +27,9 @@ use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
 use humanitl_config::{HoldConfig, Limits, RecorderConfig};
-use humanitl_core::diagnostics::codes::{FINDINGS_003, LIMIT_005, PROXY_005, PROXY_008, PROXY_011};
+use humanitl_core::diagnostics::codes::{
+    FINDINGS_003, LIMIT_005, PROXY_003, PROXY_005, PROXY_008, PROXY_011,
+};
 use humanitl_core::{
     Action, AnswerRefused, Authority, BlockReason, BodyRef, Decision, DecisionSource, Diagnostic,
     Finding, FixAction, Flow, FlowEvent, FlowId, FlowState, HeaderMap, HostName, HostPattern,
@@ -54,6 +56,7 @@ use crate::meta::{self, ArchivedFlow, MetaEndpoint, MetaReply, MetaRequest};
 use crate::pipeline::FlowPipeline;
 use crate::registry::FlowRecord;
 use crate::tls_observe::{self, HandshakeWatch};
+use crate::trust::{self, TrustSource};
 use crate::upstream::{self, Outgoing, Upstream};
 use crate::{connect, tls};
 
@@ -1614,7 +1617,17 @@ impl FlowHandler {
                 );
                 Response::from_parts(parts, body)
             }
-            Err(error) => {
+            Err(failure) => {
+                let error = failure.error;
+                // Ein Ziel mit einem Zertifikat einer unbekannten Stelle: Der
+                // Mensch erfährt, welche Stelle fehlt und wie sie dazukommt
+                // (HUM-257). Der Agent bekommt weiter nur `upstream_tls`.
+                if let Some(source) = failure.untrusted_issuer {
+                    self.publish_diagnostic(
+                        flow.id,
+                        untrusted_upstream_certificate(&flow.request, source),
+                    );
+                }
                 // Ein gestreamter Upload, der hängen blieb: Das Ziel las nicht
                 // mehr oder antwortete nie. Der Befund sagt, welche Frist
                 // ablief (HUM-057).
@@ -2117,6 +2130,21 @@ pub enum NoRule {
     /// unbekannten Methode trifft überhaupt keine Regel, die vorgeschlagene
     /// also auch nicht.
     UnknownMethod,
+}
+
+/// Der Befund zu einem Ziel, dessen Zertifikat von einer unbekannten Stelle
+/// unterschrieben ist (HUM-257): [`PROXY_003`] mit einem `why`, das die Stelle
+/// als Ursache nennt, und dem nächsten Schritt, der von der Herkunft der Anker
+/// abhängt (CA ins System installieren oder `tls.trust_system_store`
+/// einschalten). Geht nur an die Oberfläche; die `502` an den Agenten bleibt
+/// `reason: upstream_tls`.
+#[must_use]
+pub fn untrusted_upstream_certificate(request: &HttpRequest, source: TrustSource) -> Diagnostic {
+    let (why, fix) = trust::untrusted_issuer(&request.authority.to_string(), source);
+    Diagnostic::builder(PROXY_003, Severity::Error)
+        .why(why)
+        .fix(fix)
+        .build()
 }
 
 /// Der Befund [`PROXY_008`] zu einer abgelehnten privaten Zieladresse.

@@ -1521,9 +1521,14 @@ fn build_handler(
         settings,
     } = wiring;
     // `extra_roots` ist leer, außer der Start trug `--allow-test-ca` und
-    // `resolver.test_ca` (HUM-087). Der Normalfall geht damit durch dieselbe
-    // Zeile wie vorher: die Wurzeln von `webpki-roots` und sonst nichts.
-    let client_tls = ClientTls::new(extra_roots, config.experimental.h2_upstream)?;
+    // `resolver.test_ca` (HUM-087). Der Normalfall sind damit genau die Anker
+    // aus `tls.trust_system_store`: die Zertifikatsablage des Systems, oder
+    // nur `webpki-roots`, wenn der Schlüssel aus ist (HUM-257).
+    let client_tls = ClientTls::configured(
+        config.tls.trust_system_store,
+        extra_roots,
+        config.experimental.h2_upstream,
+    )?;
     let upstream = Upstream::new(
         Arc::new(Direct::new(Duration::from_secs(
             config.limits.connect_timeout_secs,
@@ -1607,7 +1612,7 @@ fn probe_with_roots(
             config.limits.connect_timeout_secs,
         ))),
         resolver as Arc<dyn Resolver>,
-        ClientTls::new(extra_roots, false)?,
+        ClientTls::configured(config.tls.trust_system_store, extra_roots, false)?,
         config.resolver.prefer,
         Duration::from_secs(config.limits.header_timeout_secs),
     );
@@ -2896,14 +2901,26 @@ mod tests {
             .split_once("\n#[cfg(test)]\nmod tests {")
             .map_or(source, |(head, _)| head);
 
+        // Ohne Leerraum verglichen, damit es egal ist, wie `rustfmt` einen
+        // Aufruf umbricht.
+        let compact: String = production.split_whitespace().collect();
+
         assert!(
-            !production.contains("ClientTls::new(&[]"),
+            !compact.contains("trust_system_store,&[]"),
             "a stack with a hard-coded empty root list ignores --allow-test-ca"
         );
         assert_eq!(
-            production.matches("ClientTls::new(").count(),
+            compact
+                .matches("ClientTls::configured(config.tls.trust_system_store,")
+                .count(),
             2,
-            "this binary builds exactly two stacks: the proxy handler and the endpoint probe"
+            "this binary builds exactly two stacks, the proxy handler and the endpoint probe, \
+             and both take their anchors from tls.trust_system_store (HUM-257)"
+        );
+        assert_eq!(
+            production.matches("ClientTls::new(").count(),
+            0,
+            "a stack with fixed anchors would ignore the opt-out or the system store (HUM-257)"
         );
         assert_eq!(
             production.matches("with_llm_probe(").count(),

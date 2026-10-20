@@ -67,6 +67,7 @@ use hyper::header::{HeaderName, HeaderValue};
 use url::Url;
 
 use crate::body::{self, BufferError};
+use crate::trust::{self, TrustSource};
 use crate::upstream::Upstream;
 
 /// Der Pfad, unter dem Ollama seine Modelle auflistet.
@@ -340,11 +341,15 @@ impl LlmProbe {
             .upstream
             .forward_to(&request, Bytes::new(), ip)
             .await
-            .map_err(|error| {
-                Failure::Unreachable(format!(
-                    "{}{suffix} did not answer: {error}",
+            .map_err(|failure| match failure.untrusted_issuer {
+                // Der Server war da, nur seinem Zertifikat traut dieser
+                // Rechner nicht. Das `why` sagt das, statt „nicht erreichbar"
+                // zu behaupten (HUM-257).
+                Some(source) => Failure::Untrusted(source),
+                None => Failure::Unreachable(format!(
+                    "{}{suffix} did not answer: {failure}",
                     target.authority
-                ))
+                )),
             })?;
 
         answered.store(true, Ordering::SeqCst);
@@ -387,6 +392,9 @@ enum Failure {
     Incomplete(String),
     /// Der Server verlangt eine Anmeldung.
     NeedsAuth(u16),
+    /// Das Zertifikat des Servers stammt von einer Stelle, der dieser Rechner
+    /// nicht vertraut (HUM-257).
+    Untrusted(TrustSource),
 }
 
 impl Failure {
@@ -423,6 +431,19 @@ impl Failure {
                     target.url(OLLAMA_TAGS_PATH)
                 )))
                 .build(),
+            // Derselbe Code wie „nicht erreichbar", weil der Agent so oder so
+            // nicht mit dem Modell reden kann; das `why` nennt die Ursache, und
+            // der Vorschlag ist der Weg, die CA ins System zu bringen, nicht
+            // ein `curl`, der dasselbe Scheitern noch einmal zeigt.
+            Self::Untrusted(source) => {
+                let (why, fix) = trust::untrusted_issuer(&target.authority.to_string(), source);
+                Diagnostic::builder(LLM_001, Severity::Blocking)
+                    .why(format!(
+                        "{why}. The agent will not be able to talk to the model."
+                    ))
+                    .fix(fix)
+                    .build()
+            }
             Self::NeedsAuth(status) if target.authorization.is_some() => {
                 Diagnostic::builder(LLM_002, Severity::Error)
                     .why(format!(

@@ -26,7 +26,7 @@ use humanitl_config::ResolverConfig;
 use humanitl_core::{Authority, Diagnostic};
 use humanitl_proxy::{
     AsyncStream, CONNECT_TIMEOUT, ClientTls, DEFAULT_PORTS, Direct, Egress, Found, LlmFlavor,
-    LlmProbe, PARALLEL, Resolver, ResolverPort, Scan, Subnet, Upstream, discover,
+    LlmProbe, PARALLEL, Resolver, ResolverPort, Scan, Subnet, TrustAnchors, Upstream, discover,
 };
 use support::{FakeUpstream, MockResolver};
 use tokio::sync::mpsc;
@@ -72,7 +72,7 @@ fn probe() -> LlmProbe {
     LlmProbe::new(Upstream::new(
         Arc::new(Direct::default()),
         resolver as Arc<dyn Resolver>,
-        ClientTls::new(&[], false).unwrap(),
+        ClientTls::new(&TrustAnchors::bundled(), &[], false).unwrap(),
         config.prefer,
         Duration::from_secs(5),
     ))

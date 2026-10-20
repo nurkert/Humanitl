@@ -19,7 +19,7 @@
 //! `agent.adapter`, `agent.command`, `hold.ask_mode`,
 //! `hold.hard_block_checksum_secrets`, `findings.enabled`,
 //! `findings.ignored_hashes`, `findings.email_allow_domains`, `pseudonyms.*`,
-//! `limits.recorder_max_body_bytes`, `resolver.*`, `experimental.*`,
+//! `limits.recorder_max_body_bytes`, `resolver.*`, `tls.*`, `experimental.*`,
 //! `recorder.retention_days`, `audit.*`. Eine Gruppe ist `denied`, wenn jedes
 //! Blatt darunter es ist.
 //!
@@ -57,6 +57,9 @@ pub struct Config {
     /// Namensauflösung nach der Entscheidung.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub resolver: ResolverConfig,
+    /// Wem der Daemon auf dem Weg zum Ziel vertraut.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub tls: TlsConfig,
     /// Erkennung von Geheimnissen und persönlichen Daten.
     #[schemars(extend("x-tier" = "basic", "x-project-scope" = "allowed"))]
     pub findings: FindingsConfig,
@@ -268,6 +271,26 @@ impl Default for ResolverConfig {
             cache_ttl_secs: 300,
             prefer: IpPreference::Ipv4,
             test_ca: None,
+        }
+    }
+}
+
+/// Vertrauen auf dem Weg zum Ziel (HUM-257).
+///
+/// Betrifft nur die Verbindungen des Daemons zum Ziel und zum LLM-Endpunkt.
+/// Die CA, die der Proxy für die Sandbox ausstellt, ist davon unberührt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct TlsConfig {
+    /// Vertraut beim Ziel den Wurzeln aus der Zertifikatsablage des Systems (`/etc/ssl/certs`), wie `curl` und der Browser: Eine Firmen-CA oder eine mit `update-ca-certificates` installierte CA wird angenommen. Aus gelten nur die öffentlichen Wurzeln aus `webpki-roots`. Wirkt nach dem Neustart des Daemons; das Projekt-Profil kann den Schlüssel nicht setzen.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub trust_system_store: bool,
+}
+
+impl Default for TlsConfig {
+    fn default() -> Self {
+        Self {
+            trust_system_store: true,
         }
     }
 }

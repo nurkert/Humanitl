@@ -51,6 +51,9 @@ pub const FORM_KEYS: &[&str] = &[
     "sandbox.work_dir",
     "llm.endpoint",
     "llm.models",
+    // Das Opt-out des Vertrauens in die Zertifikatsablage des Systems
+    // (HUM-257). Im Projekt-Profil gesperrt, hier schreibt nur der Mensch.
+    "tls.trust_system_store",
 ];
 
 /// So viele Zeichen eines abgelehnten Schlüssels stehen im Befund. Der Text
@@ -363,6 +366,7 @@ mod tests {
             ("sandbox.work_dir", work_text.as_str()),
             ("llm.endpoint", "http://192.168.1.20:11434/"),
             ("llm.models", r#"["qwen2.5-coder:14b"]"#),
+            ("tls.trust_system_store", "false"),
         ] {
             set(&paths, key, value).unwrap_or_else(|d| panic!("{key}: {}", d.why));
         }
@@ -381,6 +385,7 @@ mod tests {
         assert_eq!(values["sandbox"]["work_dir"], work_text);
         assert_eq!(values["llm"]["endpoint"], "http://192.168.1.20:11434/");
         assert_eq!(values["llm"]["models"][0], "qwen2.5-coder:14b");
+        assert_eq!(values["tls"]["trust_system_store"], false);
         assert_eq!(
             snapshot.config_path,
             paths.config_path().display().to_string()
@@ -400,6 +405,7 @@ mod tests {
             ("hold.timeout_secs", "soon"),
             ("llm.endpoint", "ftp://model.lan/"),
             ("sandbox.work_dir", "relative/dir"),
+            ("tls.trust_system_store", "maybe"),
         ] {
             let refused = set(&paths, key, value).expect_err(key);
             assert_eq!(

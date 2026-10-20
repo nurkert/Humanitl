@@ -29,6 +29,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-258 | Tröpfelnde Uploads hungern das Byte-Budget aus | S | HUM-057 |
 | HUM-254 | Die Seitenleiste klappt auf und zu | S | HUM-019, HUM-054 |
 | HUM-259 | Neues App-Icon: die Faust | S | HUM-034, HUM-053 |
+| HUM-257 | Der Daemon vertraut der Zertifikatsablage des Systems (vor HUM-060) | S | HUM-015, HUM-039, HUM-087 |
 
 ---
 
@@ -3203,6 +3204,9 @@ Kleine Reste aus HUM-058, gebündelt (die letzten beiden Kriterien kamen aus Run
 - [ ] „Allow all“ fragt das Detail jeder Anfrage zugleich ab (`_holds` in `decision.dart`); bei einer langen Warteschlange fehlt eine Obergrenze für die gleichzeitigen `GetFlow`. Kandidat aus Runde 4 des Reviews von HUM-058.
 - [ ] `TimeoutRuleState.failure` hält nur einen Befund; scheitern zwei Regeln nacheinander, verliert die erste Anfrage ihren Grund. Kandidat aus Runde 4 des Reviews von HUM-058.
 - [ ] Bricht ein Stapel in `_abortAfter` ab, fehlt in der Leiste der Satz zu den Anfragen, die er zurückgehalten hatte. Kandidat aus Runde 5 des Reviews von HUM-058.
+- [ ] `PROXY_003` mit unbekannter Stelle (HUM-257) erscheint je Fluss und ohne Drosselung; ein
+  Agent, der dasselbe Ziel mit fremder CA in einer Schleife fragt, füllt den Strom der Befunde.
+  Zusammenfassen wie `PressureWatch` bei `PROXY_011`. Kandidat aus dem Review von HUM-257.
 - [x] ~~Benachrichtigung ohne Freigabe für einen WebSocket-Aufbau, Test in `attention_test`.~~ *Erledigt in HUM-058, Test `tray_websocket_test: a_notification_allows_no_websocket_unseen`.*
 
 ### Referenzen
@@ -3439,3 +3443,115 @@ Der Tray (`app/lib/features/tray/tray_icon.dart`) zeichnet heute einen Chip in d
 
 ### Referenzen
 HUM-034 (`backlog/sprint-2.md`, Tray-Icon und Amber-Chip), HUM-053 (`backlog/sprint-4.md`, Paket), HUM-255 (Kopfleiste, parallel), Font Awesome Free License <https://fontawesome.com/license/free>, CC BY 4.0 <https://creativecommons.org/licenses/by/4.0/>.
+
+---
+
+## HUM-257 · Der Daemon vertraut der Zertifikatsablage des Systems
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-015, HUM-039, HUM-087 · Blockiert: HUM-060 (vor HUM-060 zu erledigen)
+
+### Kontext
+Am 2026-10-20 trägt der Projekteigentümer in der Oberfläche den Modellserver
+`https://llm.hzo.schutzwerk.net/api/v1/` ein (10.100.50.177, privat). Die Probe scheitert mit
+`LLM_001` und `upstream_tls`. Das Zertifikat stammt von der Firmen-CA „SCHUTZWERK Service CA 3",
+die unter `/usr/local/share/ca-certificates/` liegt und mit `update-ca-certificates` in
+`/etc/ssl/certs` installiert ist; `curl` vertraut ihr. Der Daemon vertraute dagegen nur
+`webpki-roots` (`daemon/crates/proxy/src/upstream.rs`, `ClientTls::new`). Damit scheiterte jede
+Firmen-CA: bei der Probe (`llm_probe.rs`), beim Verkehr des Agenten zum Modell und zu internen
+Zielen. Das `why` sagte dazu nur „could not reach … (… did not answer: upstream_tls)", als wäre der
+Server nicht da.
+
+### Ziel
+Der Daemon prüft Zertifikate von Zielen gegen dieselben Stellen wie `curl` auf demselben Rechner,
+und wenn eine Stelle fehlt, sagt er das und wie sie dazukommt. Wer das nicht will, schaltet es ab.
+
+### Entscheidungen
+- **`rustls-native-certs`, nicht `rustls-platform-verifier`.** `rustls-native-certs` liest die
+  Ablage einmal als Liste von Zertifikaten, die als `RootCertStore` in das vorhandene
+  `ClientConfig::builder_with_provider(ring)` geht; Test-CA und Rückfall auf `webpki-roots` sind
+  damit gewöhnliche Wurzeln derselben Ablage. `rustls-platform-verifier` bringt einen eigenen
+  Verifier mit eigenem Provider-Pfad, unter Linux ohnehin auf `rustls-native-certs` gebaut, und
+  ein Rückfall auf `webpki-roots` bei leerer Ablage ließe sich nur daneben bauen.
+- **Einstellung `tls.trust_system_store`**, Vorgabe `true`, Stufe `advanced`,
+  `x-project-scope = denied`: Ein geklontes Projekt kann das Vertrauen weder erweitern noch
+  verengen. Aus gilt nur `webpki-roots` wie vor diesem Issue. Setzbar mit
+  `humanitl config set tls.trust_system_store false` und im Einstellungsformular (HUM-069),
+  wirkt nach dem Neustart des Daemons. Eine eigene Gruppe `tls` statt eines Schlüssels unter
+  `resolver`, weil es nicht um Namensauflösung geht; `resolver.test_ca` bleibt, wo es ist.
+- **Im Formular** als neunter Schlüssel von `config_rpc::FORM_KEYS` und `FormKeys.all`: eine
+  Gruppe „Verbindungen" mit einem Schalter „Zertifikaten dieses Systems vertrauen, z. B. einer
+  Firmen-CA" und einer Hilfe, was aus bedeutet. Das Formular hat keinen Bereich „Erweitert"
+  (Stufen sind mit HUM-069 verschoben); die Stufe ist deshalb `advanced` wie bei
+  `ui.notifications`, nicht `expert`, denn `expert` heißt „nur in `config.toml`".
+- **Rückfall:** Liefert die Ablage keine Wurzel, die rustls annimmt (leer, unlesbar), gelten die
+  Wurzeln aus `webpki-roots`. Ein Eintrag, den rustls oder der PEM-Leser ablehnt, kostet eine
+  zusammengefasste Warnung, nie den Start.
+- **Einmal je Prozess:** `TrustAnchors::configured` liest beim ersten Aufruf und hält das Ergebnis
+  in einem `OnceLock`. Proxy-Stapel, Endpunkt-Probe in `humanitl-ipc` und die Probe mit Testwurzel
+  teilen sich die Lesung; die Startzeile `upstream trust anchors loaded` (`anchors`, `source`,
+  `skipped`) steht genau einmal im Protokoll. `humanitl doctor` hat keinen TLS-Abschnitt, also
+  keine Zeile dort.
+- **Diagnose:** `Upstream::forward`/`forward_to` liefern `ForwardError` (`UpstreamError` plus
+  `untrusted_issuer: Option<TrustSource>`). Nur `CertificateError::UnknownIssuer` zählt; ein
+  abgelaufenes Zertifikat oder ein falscher Name bekäme sonst den falschen Rat. Die Probe macht
+  daraus `LLM_001` mit „the certificate of X is signed by an authority this machine does not
+  trust …" und `CopyCommand("sudo update-ca-certificates")`, bei ausgeschaltetem Schlüssel
+  `ChangeSetting tls.trust_system_store = true`. Der Proxy-Pfad meldet dasselbe als `PROXY_003` am
+  Fluss, nur an die Oberfläche; der Agent bekommt weiter `502` mit `reason: upstream_tls`.
+  Vorher stand im `why` nur `upstream_tls`.
+- **Die Test-CA** (`resolver.test_ca`, `--allow-test-ca`) kommt unverändert zusätzlich hinzu.
+- **Umlenkung über die Umgebung** (Review, Codex): `rustls-native-certs` liest statt der Ablage
+  `SSL_CERT_FILE` und `SSL_CERT_DIR`. Kein Umbau, denn wer die Umgebung des Daemons setzt, richtet
+  ihn ein (`docs/SECURITY.md` 11). Aber die Startzeile nennt die Umlenkung (`env`), und der
+  Daemon warnt, wenn ein solcher Pfad oder bei einer Datei ihr Verzeichnis dem Besitzer von
+  `$HOME` gehört oder für andere schreibbar ist; „gehört nicht root" wäre unter
+  `PrivateUsers=yes` immer wahr, root erscheint dort als `nobody`.
+- **systemd-Unit:** keine Änderung. `ProtectSystem=strict` macht `/etc` und `/usr` nur
+  schreibgeschützt, nicht unlesbar; `ProtectHome`, `TemporaryFileSystem` und
+  `InaccessiblePaths` stehen nicht in `packaging/systemd/humanitld.service`. `/etc/ssl/certs` und
+  die Ziele seiner Symlinks unter `/usr/share/ca-certificates` und
+  `/usr/local/share/ca-certificates` sind `0644` und unter `PrivateUsers=yes` weiter lesbar.
+
+### Betroffene Pfade
+- `daemon/crates/proxy/src/trust.rs` (neu: `TrustAnchors`, `TrustSource`, `untrusted_issuer`)
+- `daemon/crates/proxy/src/upstream.rs` (`ClientTls::new(anchors, …)`, `ClientTls::configured`, `ForwardError`)
+- `daemon/crates/proxy/src/handler.rs` (`untrusted_upstream_certificate`, `PROXY_003` am Fluss)
+- `daemon/crates/proxy/src/llm_probe.rs` (`Failure::Untrusted`)
+- `daemon/crates/proxy/src/lib.rs`, `daemon/crates/proxy/Cargo.toml`, `daemon/Cargo.lock`
+- `daemon/crates/config/src/model.rs` (`TlsConfig`), Schema-Schnappschuss, `docs/CONFIG.md`
+- `daemon/bin/humanitld/src/main.rs`, `daemon/crates/ipc/src/server.rs`, `daemon/crates/ipc/src/config_rpc.rs` (`FORM_KEYS`)
+- `app/lib/core/domain/settings.dart`, `app/lib/features/settings/settings_sheet.dart`, `app/lib/core/ipc/fake_daemon_client.dart` (Wahrheitswert im Fake), `app/l10n/app_{en,de}.arb` (angehängt), `app/test/features/settings/settings_sheet_test.dart`
+- `daemon/crates/core-types/src/diagnostics/codes.rs` (Texte `PROXY_003`, `LLM_001`), `docs/DIAGNOSTICS.md`
+- `docs/SECURITY.md` (Abschnitt 4 und 5), `docs/THREAT-MODEL.md` (2.2, Änderungshistorie)
+
+### Akzeptanzkriterien
+- [x] Eine eigene CA, per `SSL_CERT_FILE` als Ablage hineingereicht, macht ein lokales TLS-Ziel
+  erreichbar; mit einer Ablage ohne sie wird es abgelehnt, ohne Treffer beim Ziel
+  (`tests/system_trust.rs`, der Testprozess startet sich dafür mit der Umgebung neu).
+- [x] Mit `tls.trust_system_store = false` wird dieselbe CA trotz Ablage abgelehnt.
+- [x] Ein kaputter Eintrag in der Ablage verhindert den Stapel nicht; die gültige CA wirkt weiter.
+- [x] Leere oder unlesbare Ablage: Rückfall auf `webpki-roots`.
+- [x] `LLM_001` und `PROXY_003` nennen die unbekannte Stelle im `why` und den nächsten Schritt.
+- [x] Die Startzeile steht genau einmal im Protokoll des echten Binary.
+- [x] Beide Stapel des Daemons und der Stapel in `humanitl-ipc` nehmen ihre Anker aus
+  `tls.trust_system_store`.
+- [x] `docs/SECURITY.md` und `docs/THREAT-MODEL.md` beschreiben, was die Ablage bedeutet, das
+  Opt-out, warum root nichts Neues gewinnt und dass die Humanitl-CA der Sandbox unberührt bleibt.
+- [x] Der Schalter im Formular zeigt den Wert (ohne Wert an) und schreibt ihn über `SetConfig`;
+  `SetConfig` nimmt den Schlüssel an und lehnt einen Text ab, der kein Wahrheitswert ist.
+- [x] Mutationsbeweis für jeden neuen Test.
+
+### Fallstricke
+- Jede `CaStore` auf demselben Rechner trägt denselben Namen (der `CN` kommt aus der
+  `machine-id`), auch die Humanitl-CA des Proxys. Eine zweite `UpstreamCa` als „fremde" CA lässt
+  webpki die Unterschrift gegen die gleichnamige falsche CA prüfen und `BadSignature` statt
+  `UnknownIssuer` melden. Tests mit unbekannter Stelle nehmen deshalb `ForeignCa`
+  (`tests/support/upstream.rs`).
+- `SSL_CERT_FILE` im laufenden Testprozess zu setzen ist in Rust 2024 `unsafe` und mit
+  parallelen Tests ein Wettlauf; die Tests starten sich deshalb als Kindprozess neu.
+- Das Feld der Startzeile heißt `anchors`, nicht `roots`: `roots` ist schon das Feld der
+  Warnzeile zu `--allow-test-ca`, nach dem `a_test_ca_is_only_trusted_with_the_flag` sucht.
+- Der Zähler in `tools/check_coupling.py` zählt jeden Namen aus `humanitl_proxy` außerhalb des
+  Crates. Der Daemon ruft deshalb `ClientTls::configured(bool, …)` und nennt `TrustAnchors` nicht.
+
+### Referenzen
+HUM-015, HUM-039, HUM-087, `docs/SECURITY.md` 5, `docs/THREAT-MODEL.md` 2.2.

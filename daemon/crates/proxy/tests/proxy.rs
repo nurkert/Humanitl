@@ -18,7 +18,7 @@ use http_body_util::BodyExt as _;
 use humanitl_core::{
     Authority, BlockReason, BodyRef, Decision, FlowEvent, HostName, HttpRequest, Method, Scheme,
 };
-use humanitl_proxy::ClientTls;
+use humanitl_proxy::{ClientTls, TrustAnchors};
 use hyper::{Request, StatusCode};
 
 use support::{ECHO_BODY, FakeUpstream, ProxyBuilder, body_bytes, body_string, get, header, post};
@@ -628,9 +628,9 @@ async fn a_request_without_a_host_is_400_before_any_flow() {
 
 #[test]
 fn h2_upstream_flag_switches_the_alpn_offer() {
-    let h1 = ClientTls::new(&[], false).unwrap();
+    let h1 = ClientTls::new(&TrustAnchors::bundled(), &[], false).unwrap();
     assert_eq!(h1.alpn(), vec![b"http/1.1".to_vec()]);
-    let h2 = ClientTls::new(&[], true).unwrap();
+    let h2 = ClientTls::new(&TrustAnchors::bundled(), &[], true).unwrap();
     assert_eq!(h2.alpn(), vec![b"h2".to_vec(), b"http/1.1".to_vec()]);
 }
 

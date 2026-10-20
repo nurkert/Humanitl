@@ -685,6 +685,7 @@ andere ebenfalls benutzen.
 | `humanitl-shim` | Brücke halten, forken, im Kind Filter setzen und `exec` | Rust, ohne tokio, nur `libc` + `seccompiler` | Wenige hundert Zeilen; das Prozessmodell ist der ganze Inhalt |
 | `humanitld` | Proxy, Hold-Queue, Regeln, Aufzeichnung, Sandbox-Steuerung | Rust, `#![forbid(unsafe_code)]` in allen Bibliotheks-Crates | Speichersicher, ein statisches Binary, keine 40 transitiven Laufzeit-Pakete |
 | `hyper`/`rustls`/`rcgen` (über `hudsucker`) | TLS-Terminierung und HTTP-Verarbeitung | exakt gepinnt, regelmäßig aktualisiert | Rust-TLS-Stack ohne OpenSSL-Speicherfehlerklasse; Historie von Rapid Reset und CONTINUATION-Flood wird verfolgt |
+| Zertifikatsablage des Systems | Vertrauensanker für Verbindungen des Daemons zum Ziel (HUM-257), abschaltbar mit `tls.trust_system_store` | `/etc/ssl/certs`, geschrieben nur von root (`update-ca-certificates`); ohne brauchbare Wurzel `webpki-roots` | Dieselbe Ablage, der `curl`, `apt` und der Browser vertrauen; wer sie ändert, ist root und damit außerhalb des Modells (Abschnitt 5) |
 | Der Sprachmodell-Host | sieht jeden Prompt | muss dem Nutzer gehören | Erklärter Seitenkanal, keine technische Absicherung (Abschnitt 3.1) |
 | Schlüsseldatei des Audit-Logs | HMAC-Schlüssel der Kette | `$XDG_DATA_HOME/humanitl/keys/audit.key`, `0600` in `0700`; HUM-048 legt ihn in den Keyring (Secret Service: `gnome-keyring`, `kwallet`) | Schutz gegen andere Nutzer, nicht gegen denselben Nutzer |
 | Schlüsselbund des Systems (Secret Service) | Zugangsschlüssel des Modells (HUM-140) | `secret-tool` aus `libsecret-tools`; ohne Antwort `$XDG_DATA_HOME/humanitl/keys/llm.key`, `0600` in `0700` | Schutz gegen andere Nutzer, nicht gegen denselben Nutzer; der Agent liest ihn in der Sandbox, weil er ihn braucht (Abschnitt 3.1) |
@@ -735,13 +736,61 @@ beim Beenden verworfen wird.
 `trust list | grep -i humanitl` (beziehungsweise `ls /usr/local/share/ca-certificates/`) liefert
 nichts.
 
+**Vertrauen zum Ziel: die Zertifikatsablage des Systems (HUM-257).** Die Gegenrichtung zur
+Humanitl-CA ist die Frage, wem der Daemon glaubt, wenn er selbst zum Ziel verbindet: im
+Weiterleitungspfad des Proxys und in der Endpunkt-Probe hinter `ProbeLlm`. Seit HUM-257 sind das
+per Vorgabe die Wurzeln aus der Zertifikatsablage des Systems (`/etc/ssl/certs`, gepflegt mit
+`update-ca-certificates`), gelesen mit `rustls-native-certs`. Damit gilt für den Daemon dasselbe wie
+für `curl` und den Browser auf demselben Rechner: Eine Firmen-CA oder eine CA, die der Mensch
+selbst installiert hat, wird für den Weg zum Ziel angenommen, etwa für einen Modellserver im
+Firmennetz. Vorher galten nur die öffentlichen Wurzeln aus `webpki-roots`, und jede solche CA
+scheiterte mit `upstream_tls`.
+
+- *Opt-out.* `tls.trust_system_store = false` (Schalter „Zertifikate des Systems" im
+  Einstellungsformular oder `humanitl config set tls.trust_system_store false`, wirkt nach dem
+  Neustart des Daemons) stellt den alten Stand her: nur `webpki-roots`. Der Schlüssel
+  ist im Projekt-Profil gesperrt (`x-project-scope = denied`); ein geklontes Repository kann das
+  Vertrauen also weder ein- noch ausschalten.
+- *Rückfall.* Liefert die Ablage keine einzige brauchbare Wurzel (leer, unlesbar, kein Paket
+  `ca-certificates`), nimmt der Daemon `webpki-roots`, statt jede Verbindung scheitern zu lassen.
+  Ein einzelnes Zertifikat, das rustls ablehnt, kostet eine Warnung im Protokoll und nie den Start.
+  Wie viele Wurzeln woher kamen, steht einmal beim Start im Protokoll
+  (`upstream trust anchors loaded`, mit `anchors`, `source`, `skipped` und `env`, das eine
+  Umlenkung über `SSL_CERT_FILE` oder `SSL_CERT_DIR` nennt, sonst `none`).
+- *Was ein Mensch sieht, wenn eine CA fehlt.* Scheitert der Handschlag an einer unbekannten Stelle,
+  nennt das `why` von `LLM_001` (Probe) beziehungsweise `PROXY_003` (Fluss, nur an die Oberfläche)
+  genau das und schlägt vor, die CA mit `update-ca-certificates` ins System zu bringen, oder bei
+  ausgeschaltetem Schlüssel, ihn einzuschalten. Der Agent bekommt weiterhin nur `502` mit
+  `reason: upstream_tls`.
+- *Was sich für einen Angreifer ändert.* Wer eine CA in die Ablage des Systems legen kann, ist
+  root, und root ist außerhalb des Modells (Abschnitt 11, `THREAT-MODEL.md` 2.2): Er liest ohnehin
+  den CA-Schlüssel und den Speicher des Daemons. Ein Prozess desselben Kontos außerhalb der
+  Sandbox kann dem Daemon über `SSL_CERT_FILE` oder `SSL_CERT_DIR` in dessen Umgebung (etwa
+  `systemctl --user set-environment`) eine eigene Ablage unterschieben; er kann aber genauso
+  `config.toml` ändern, und wer den Daemon einrichtet, ist nicht abgedeckt (Abschnitt 11). Das
+  ist ein anderer Fall als der lokale Leser der Protokolle (`THREAT-MODEL.md` 2.1, Angreifer
+  d). **Diese Variablen dürfen nie auf einen Pfad zeigen, den die Sandbox beschreiben kann**,
+  etwa den Projektordner: Dort legte der Agent eine Wurzel ab, der der Daemon beim nächsten Start
+  vertraut. Der Daemon warnt beim Start, wenn ein solcher Pfad (oder bei einer Datei ihr
+  Verzeichnis) dem Konto gehört oder für andere schreibbar ist, und die Startzeile nennt die
+  Umlenkung im Feld `env`. Ohne diese Fehleinrichtung erreicht der Agent in der Sandbox weder
+  `/etc/ssl/certs` noch die Umgebung des Daemons.
+- *Was sich nicht ändert.* Die Humanitl-CA für die Sandbox ist davon unberührt: In die Sandbox geht
+  weiterhin nur `ca.crt`, und welche Wurzeln der Daemon zum Ziel prüft, ändert nichts daran, wem
+  der Agent glaubt. Die Entscheidung über eine Anfrage fällt vor jeder Verbindung; eine zusätzliche
+  vertraute CA öffnet kein Ziel, das keine Regel und kein Mensch freigegeben hat.
+
+*Prüfung.* `journalctl --user -u humanitld.service | grep 'upstream trust anchors'` zeigt Zahl und
+Herkunft der Wurzeln; `humanitl config get tls.trust_system_store` den Schalter.
+
 **Die Testwurzel und ihr Flag (`--allow-test-ca`).** Für Testläufe und Vorführungen steht das Ziel
 oft auf demselben Rechner und weist ein selbst ausgestelltes Zertifikat vor. Damit der Proxy es
 annehmen kann, gibt es genau einen Hebel, und er ist eng gefasst.
 
 *Was das Flag tut.* `humanitld --allow-test-ca` liest die Datei aus `resolver.test_ca` als PEM und
 nimmt jedes darin gefundene Zertifikat als zusätzlichen Vertrauensanker **für Verbindungen des
-Proxys zum Ziel** an, neben den Wurzeln von `webpki-roots`. Der Pfad muss absolut sein; ein
+Proxys zum Ziel** an, neben den Ankern aus `tls.trust_system_store` (Zertifikatsablage des Systems
+oder `webpki-roots`, siehe oben). Der Pfad muss absolut sein; ein
 relativer beendet den Start mit `CONFIG_012`, bevor die Datei angefasst wird. Dieselben Anker bekommt die
 Endpunkt-Probe hinter dem RPC `ProbeLlm`, die `llm.endpoint` prüft; zwei verschiedene
 Vertrauensentscheidungen in einem Prozess wären eine Überraschung, die niemand erwartet. Lehnt
