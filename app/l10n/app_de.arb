@@ -1250,5 +1250,9 @@
   "diagLIMIT005Why": "Ein Client hat eine Verbindung geöffnet und den Kopf seiner Anfrage nicht rechtzeitig geschickt; die Verbindung wurde geschlossen.",
   "diagLIMIT006Title": "Ereignis-Puffer übergelaufen",
   "diagLIMIT006Why": "Das Fenster kam dem Ereignisstrom nicht hinterher; es lädt die Liste neu, und keine Anfrage wurde verzögert.",
-  "shellStatusQueue": "Warteschlange {count}/{max} · {size}"
+  "shellStatusQueue": "Warteschlange {count}/{max} · {size}",
+  "shellRailExpand": "Seitenleiste ausklappen ({shortcut})",
+  "shellRailCollapse": "Seitenleiste einklappen ({shortcut})",
+  "shellPaletteRailExpand": "Seitenleiste ausklappen",
+  "shellPaletteRailCollapse": "Seitenleiste einklappen"
 }

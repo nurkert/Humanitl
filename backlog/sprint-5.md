@@ -27,6 +27,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-253 | Folgen aus HUM-058: Protokollwechsel im Vertrag, Drosselung | S | HUM-058 |
 | HUM-249 | Ein Tastenkürzel speichert eine andere Regel, als die Leiste zeigt (vor HUM-060) | S | HUM-028, HUM-058 |
 | HUM-258 | Tröpfelnde Uploads hungern das Byte-Budget aus | S | HUM-057 |
+| HUM-254 | Die Seitenleiste klappt auf und zu | S | HUM-019, HUM-054 |
 
 ---
 
@@ -3290,3 +3291,78 @@ stetiger Upload über eine langsame Leitung dabei abbricht.
 
 ### Referenzen
 HUM-057 (Umsetzung, Review 2 und 3), HUM-120, `backlog/CONVENTIONS.md` 4.4, `docs/SECURITY.md`.
+
+---
+
+## HUM-254 · Die Seitenleiste klappt auf und zu
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-019, HUM-054 · Blockiert: nichts
+
+### Kontext
+Wunsch des Projekteigentümers vom 2026-10-20. Die Icon-Rail links (`app/lib/features/shell/widgets/icon_rail.dart`, HUM-019) ist eine feste Leiste von 48 px (`railWidth`): nur Glyphen, der Name eines Bereichs erscheint erst, wenn der Zeiger `HMotion.hoverLabel` lang auf dem Eintrag ruht (`HoverLabel`), und das Tastenkürzel steht nur in diesem Hover-Text. Wer die Anwendung neu kennenlernt, muss sechs Glyphen einzeln abfahren. Die Leiste soll sich deshalb aufklappen lassen und dann Name und Kürzel jedes Bereichs dauerhaft zeigen, animiert auf und zu.
+
+Ausgangslage, die die Spezifikation bindet:
+- Bewegung läuft über `HMotion` und `HReducedMotion` in `app/packages/ui/lib/src/tokens/motion.dart`; kein Widget entscheidet selbst, ob es sich bewegen darf (`docs/UX.md` 2.2 und 2.10). Die nächste Zeile der Tabelle in 2.2 ist „Abschnitt oder Gruppe klappt auf": 180 ms, `enter`, `HMotion.arrive`, Höhe.
+- Für Oberflächenzustand, der einen Neustart überleben soll, gibt es seit HUM-044 genau einen Ort: `UiStateFile` in `app/lib/features/intercept/providers/coach_mark.dart`, eine JSON-Datei unter `$XDG_STATE_HOME/humanitl/ui-state.json`. `shared_preferences` ist keine Abhängigkeit (siehe `pane_layout.dart`) und kommt auch nicht dazu.
+- `Ctrl+B` ist nicht frei. `backlog/CONVENTIONS.md` 3.9 reserviert es für `AddRuleIntent` (offen in HUM-243), und `B` allein blockiert in der Warteschlange: Ein `Ctrl+B`, bei dem die Strg-Taste einen Hauch zu spät kommt, blockierte eine gehaltene Anfrage, statt die Leiste umzuschalten. Neben einer Entscheidungstaste liegt keine Layout-Taste.
+
+### Ziel
+- Die Leiste hat zwei Zustände: **eingeklappt** (Vorgabe, wie heute 48 px, nur Glyphen, Name per `HoverLabel`) und **ausgeklappt** (200 px, `railExpandedWidth`): Glyph, Name des Bereichs und dezent rechtsbündig sein Kürzel (`Ctrl+1` bzw. `Strg+1`). Der aktive Bereich ist in beiden Zuständen gleich markiert (Füllung `bg3`, Akzent-Rail `HSize.selectionRail` am linken Rand).
+- Umgeschaltet wird über einen Knopf am unteren Ende der Leiste (Chevron, zeigt nach rechts zum Aufklappen und nach links zum Zuklappen, mit Hover-Label und Semantik-Label samt Kürzel), über `Ctrl+0` und über einen Befehl der Command Palette („Seitenleiste ausklappen" bzw. „einklappen"; die Palette ist das Handbuch, `docs/UX.md` 5.1).
+- Der Zustand überlebt einen Neustart, im selben `UiStateFile` unter dem Schlüssel `shellRailExpanded`.
+
+### Nicht-Ziel
+- Kein Ziehen der Breite mit der Maus, keine dritte Breite, kein automatisches Ein- oder Ausklappen nach Fensterbreite.
+- Kein Umzug von `UiStateFile` nach `core/`. Der Speicher liegt heute in einer Feature-Datei der Warteschlange, und die Shell ist die eine Stelle, die Features zusammensetzen darf (`docs/ARCHITECTURE.md` 5). Der Umzug ist ein eigenes Issue, sobald ein zweites Feature außer der Shell ihn braucht.
+- `Ctrl+B` und `AddRuleIntent` bleiben bei HUM-243.
+
+### Betroffene Pfade
+- `app/lib/features/shell/widgets/icon_rail.dart` (Breite, Beschriftung, Umschaltknopf)
+- `app/lib/features/shell/providers/rail.dart` (neu: `railExpandedProvider`)
+- `app/lib/features/shell/shell_screen.dart` (Provider lesen, `ToggleRailIntent` binden, Palettenbefehl)
+- `app/lib/core/shortcuts/intents.dart` (`ToggleRailIntent`, `Ctrl+0` in `shellShortcuts`)
+- `app/lib/features/intercept/providers/coach_mark.dart` (`UiStateFile.setBool`, `setFlag` delegiert dorthin)
+- `app/l10n/app_en.arb`, `app/l10n/app_de.arb` (nur angehängt)
+- `docs/UX.md` 2.2 (eine Zeile der Bewegungstabelle), `backlog/CONVENTIONS.md` 3.9 (`ToggleRailIntent` Ctrl+0)
+- `app/test/features/shell/icon_rail_test.dart` (neu), `app/test/core/shortcuts/shortcuts_map_to_intents_test.dart` (eine Zeile)
+- `app/test/goldens/icon_rail_golden_test.dart` (neu), `app/test/goldens/support/golden_names.dart`, die neuen Bilder unter `app/test/goldens/goldens/ci/` und die bestehenden Bilder der ganzen App, die die Leiste zeigen (der Knopf kommt hinzu)
+
+### Spezifikation
+- **Breite.** `railWidth` (48) bleibt der eingeklappte Wert, `railExpandedWidth` (200) kommt daneben. Die Breite animiert über `HMotion.arrive` (180 ms), mit `HMotion.enter` beim Aufklappen und `HMotion.exit` beim Zuklappen. Das entspricht der Zeile „Abschnitt oder Gruppe klappt auf" in `docs/UX.md` 2.2 mit der Breite als Achse; die Tabelle bekommt dafür eine eigene Zeile „Seitenleiste klappt auf oder zu".
+- **Beschriftung ohne Umbruch und ohne Überlauf.** Die Beschriftung (Name und Kürzel) wird in der Breite des ausgeklappten Zustands gesetzt und von der wachsenden Leiste nur aufgedeckt (`ClipRect` um eine feste innere Breite), nie in der Zwischenbreite neu umbrochen; sie ist einzeilig und kürzt mit Ellipse, falls ein Name länger ist als der Platz. Sie blendet über `HMotion.arrive` ein, sobald die Leiste die halbe Breite überschritten hat (`railLabelRevealWidth`), und beim Zuklappen über dieselbe Dauer aus, während die Leiste schrumpft. Das Kürzel nimmt höchstens die halbe Breite des Streifens ein und kürzt bei großer Textskalierung, statt den Namen hinauszuschieben. In keinem Frame der Animation entsteht ein `RenderFlex`-Überlauf.
+- **Reduzierte Bewegung** (`docs/UX.md` 2.10: der Weg fällt weg, nicht die Rückmeldung). Unter `HReducedMotion.of(context)` springt die Breite im nächsten Frame auf den Endwert (`HReducedMotion.displace`), ohne Zwischenbreite. Das Einblenden der Beschriftung behält seine Dauer (`AnimationBehavior.preserve`), denn Einblenden ist Rückmeldung und kein Weg; dieselbe Regel wie beim Abgang einer Zeile, deren Kollaps entfällt und deren Ausblenden bleibt. Beim Zuklappen verschwindet die Beschriftung unter reduzierter Bewegung mit der Breite im selben Frame; die gesprungene Leiste ist dort die Rückmeldung.
+- **Umschaltknopf.** Unten in der Leiste, 48 px hoch wie ein Eintrag, in der Glyph-Spalte, damit er dem Zeiger nach dem Klick nicht davonläuft; `HIconButton` mit `HGlyph.chevronRight`, ausgeklappt gespiegelt. Er ist mit `Tab` erreichbar und mit `Enter` und `Leertaste` auslösbar (`docs/UX.md` 5.1), trägt `Semantics(button: true, expanded: …)` mit dem Label „Seitenleiste ausklappen (Strg+0)" bzw. „einklappen" und dasselbe als `HoverLabel`.
+- **Hover-Label der Einträge.** Eingeklappt wie heute. Ausgeklappt steht der Name schon in der Zeile; das `HoverLabel` entfällt dann, damit derselbe Text nicht zweimal nebeneinander steht. Das Semantik-Label bleibt in beiden Zuständen gleich.
+- **Kürzel `Ctrl+0`.** `ToggleRailIntent` in `app/lib/core/shortcuts/intents.dart`, in `shellShortcuts` gebunden, Action in `ShellScreen`. Gründe: Es gehört zur Tastenfamilie der Leiste (`Ctrl+1` bis `Ctrl+6`), ist in keiner Tabelle gebunden, liegt auf deutscher und englischer Tastatur ohne Umschalttaste, und ohne Strg ist `0` in der Warteschlange ungebunden (`1` bis `4` sind `RememberDurationIntent`); ein verrutschter Griff entscheidet also nichts. `navigationKeys` endet damit spätestens bei `digit9`; die `0` ist kein künftiger zehnter Bereich.
+- **Zustand.** `railExpandedProvider` (Riverpod, `keepAlive`) liest beim Start `UiStateFile.read()['shellRailExpanded'] == true` und schreibt bei jedem Umschalten mit `UiStateFile.setBool`. Ein Schreibfehler lässt den Zustand nur im Speicher, wie beim Hinweis aus HUM-044: Es ist eine Bequemlichkeit, und sie scheitert wie eine.
+- **Texte.** Alles über ARB, `en` Quelle, `de` Übersetzung, nur angehängt: Label des Knopfs für beide Richtungen und die beiden Palettenbefehle. Das Kürzel kommt aus `shellNavShortcutKey(0)`, damit es im Deutschen `Strg` heißt.
+
+### Tests
+- `app/test/features/shell/icon_rail_test.dart`:
+  - `toggle button expands and collapses the rail`: Breite 48, Tipp auf den Knopf, nach dem Ende der Animation 200, erneuter Tipp, wieder 48.
+  - `Ctrl+0 and the palette toggle the rail in the shell`: in der ganzen App über `pumpApp`, Breite vorher und nachher, dazu der Palettenbefehl `toggle-rail`.
+  - `labels show only when expanded`: eingeklappt steht kein Name als `Text` in der Leiste, ausgeklappt stehen alle sechs mit ihrem Kürzel.
+  - `reduced motion: the width jumps, the names still fade`: unter reduzierter Bewegung der Plattform hat die Leiste nach einem einzigen `pump()` schon 200 px, kein Frame danach zeigt eine andere Breite, und die Beschriftung steht nach `HMotion.arrive / 2` zwischen 0 und 1.
+  - `no overflow mid-animation`: in Schritten von 8 ms durch beide Richtungen pumpen, in Englisch und Deutsch und bei `TextScaler` 2.0; `tester.takeException()` bleibt `null`, und die Zeile der Beschriftung hat in jedem Frame die volle Breite (ein Überlauf unter durchsichtiger Beschriftung zeichnet sonst keinen Fehler).
+  - `the state survives a restart`: Umschalten schreibt `shellRailExpanded` in eine Testdatei (`uiStateOverride`), ein neuer `ProviderScope` über derselben Datei startet ausgeklappt.
+- `shortcuts_map_to_intents_test.dart`: Zeile `ctrl(digit0, 'ToggleRailIntent')`.
+- Goldens nach HUM-054: `icon_rail_collapsed` und `icon_rail_expanded` in `golden_names.dart`, je vier Varianten (dunkel/hell, en/de) über `goldenVariants`; `scripts/ci/goldens-placeholder.sh` fährt sie mit. Die bestehenden Bilder der ganzen App werden neu erzeugt, weil der Knopf hinzukommt, und jedes geänderte Bild wird angesehen.
+- Mutationsbeweis je neuem Test: Knopf ohne `onToggle`; Intent ohne Bindung; Palettenbefehl fehlt; Beschriftung unabhängig vom Zustand; Dauer ohne `HReducedMotion.displace`; Einblenden ohne `AnimationBehavior.preserve`; Beschriftung ohne feste innere Breite; Provider ohne Schreiben.
+
+### Akzeptanzkriterien
+- [ ] Eingeklappt ist die Leiste 48 px breit und sieht bis auf den Knopf aus wie vor diesem Issue; ausgeklappt 200 px mit Glyph, Name und Kürzel je Bereich.
+- [ ] Knopf, `Ctrl+0` und Palettenbefehl schalten um; der Knopf ist per Tastatur bedienbar und hat Semantik- und Hover-Label.
+- [ ] Die Breite animiert über `HMotion.arrive` mit `enter`/`exit`; unter reduzierter Bewegung springt sie ohne Zwischenframe.
+- [ ] Kein Overflow und kein Umbruch in einem Frame der Animation, in beiden Sprachen.
+- [ ] Der Zustand überlebt einen Neustart über `UiStateFile`, ohne neue Abhängigkeit.
+- [ ] Alle neuen Texte stehen in beiden ARB-Dateien; `make l10n-lint` grün.
+- [ ] Goldens `icon_rail_collapsed` und `icon_rail_expanded` in vier Varianten; die übrigen Goldens sind nachgezogen.
+- [ ] `docs/UX.md` 2.2 und `backlog/CONVENTIONS.md` 3.9 nennen die neue Bewegung und das neue Kürzel.
+
+### Fallstricke
+- **Überlauf in der Zwischenbreite.** Eine `Row` aus Glyph, `Expanded(Text)` und Kürzel läuft über, sobald die Restbreite kleiner ist als das Kürzel, also in fast jedem Frame der Animation. Die Beschriftung wird deshalb in fester Breite gesetzt und abgeschnitten, nicht in die Zwischenbreite gequetscht.
+- **Bestehende Goldens.** Der Knopf ändert jedes Bild, das die ganze App zeigt. Die neuen Bilder entstehen mit `make goldens-update` und werden einzeln angesehen, nicht blind übernommen.
+- **Tests schreiben nicht ins Heimatverzeichnis.** Der Provider schreibt in `UiStateFile`; jeder Test läuft mit `uiStateOverride()` (`app/test/harness/ui_state.dart`).
+- **Fokus.** Der Knopf ist fokussierbar. Er darf `Ctrl+1` und die übrigen Kürzel der Shell nicht verbrauchen, wenn er den Fokus hat; sie hängen am `Shortcuts` über dem Baum und erreichen ihn entlang der Fokuskette.
+
+### Referenzen
+HUM-019 (`backlog/sprint-1.md`, Icon-Rail), HUM-044 (`backlog/sprint-3.md`, `UiStateFile`), HUM-054 (`backlog/sprint-4.md`, Goldens), HUM-243 (`Ctrl+B`), `docs/UX.md` 2.2, 2.10 und 5.1.

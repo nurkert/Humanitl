@@ -52,6 +52,7 @@ Jede Dauer, jede Kurve und jede Strecke kommt aus `HMotion`. Eine `Duration`, ei
 | Entschiedene Zeile geht | „Diese Anfrage ist erlaubt bzw. blockiert draußen" | 220 ms | `exit` | `HMotion.leave` | 12 px zur Seite (`HMotion.leaveOffset`), dann Höhe auf null |
 | Auswahl wechselt | „Ich sehe jetzt diese Zeile an" | ein Frame | — | — | Füllungswechsel, keine Höhenänderung |
 | Abschnitt oder Gruppe klappt auf | „Darunter liegt mehr" | 180 ms | `enter` | `HMotion.arrive` | Höhe |
+| Seitenleiste klappt auf oder zu | „Hier stehen die Namen" bzw. „wieder nur die Zeichen" | 180 ms | `enter` auf, `exit` zu | `HMotion.arrive` | Breite der Icon-Rail von 48 auf 200 px; die Beschriftung wird in voller Breite gesetzt, nur aufgedeckt und ab halber Breite eingeblendet. Unter reduzierter Bewegung springt die Breite, das Einblenden behält seine Dauer (2.10, HUM-254). |
 | Sheet fährt von rechts ein | „Das gehört zu dem, was links steht" | 180 ms | `enter` | `HMotion.arrive` | 8 px von rechts (`HMotion.arriveOffset`) plus Einblenden; der Hintergrund bleibt stehen |
 | Modal erscheint | „Hier musst du erst antworten" | 180 ms | `enter` | `HMotion.arrive` | kein Weg, nur Einblenden des Modals und Abdunkeln des Hintergrunds; ein Modal, das hereinfliegt, behauptet eine Richtung, die es nicht hat |
 | Command Palette öffnet | „Das Handbuch ist da" | ein Frame | — | — | keine Bewegung. Wer sie ruft, tippt bereits. |
