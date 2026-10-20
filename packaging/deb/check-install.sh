@@ -188,7 +188,7 @@ rm -rf "$smoke_dir"
 echo "humanitl-app ran for 20 s under Xvfb (exit 124), showed its window \"Humanitl\" after ${window_after} s, Impeller started, no fatal error"
 
 echo "== desktop entry"
-desktop-file-validate /usr/share/applications/humanitl.desktop
+desktop-file-validate /usr/share/applications/dev.humanitl.humanitl.desktop
 echo "desktop-file-validate: ok"
 
 echo "== units"

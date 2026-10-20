@@ -14,7 +14,7 @@
 #   /usr/bin/humanitl-app              Symlink auf die Anwendung
 #   /usr/lib/systemd/user/humanitld.service
 #   /usr/lib/systemd/user/humanitld.socket
-#   /usr/share/applications/humanitl.desktop
+#   /usr/share/applications/dev.humanitl.humanitl.desktop
 #   /usr/share/icons/hicolor/scalable/apps/humanitl.svg
 #   /usr/share/icons/hicolor/{64x64,128x128,256x256}/apps/humanitl.png
 #   /usr/share/humanitl/catalog/       Domain-Katalog (PACKAGED_CATALOG in humanitld)
@@ -32,7 +32,7 @@
 #   root, und `systemctl --user` geht dort nicht).
 #
 # Die PNG-Symbole liegen fertig gerechnet unter `packaging/deb/icons/`, aus
-# `humanitl.svg` mit Inkscape (`docs/INSTALL.md`, Abschnitt Paket). Eingecheckt
+# `humanitl.svg` mit Inkscape (`packaging/deb/icons/render.sh`). Eingecheckt
 # statt beim Bau gerechnet: Der Bau braucht dann kein Grafikprogramm, und
 # dasselbe SVG ergibt nicht auf jedem Rechner dieselben Bytes.
 set -euo pipefail
@@ -100,7 +100,10 @@ if grep -q '{humanitld}' "$pkg/usr/lib/systemd/user/"*; then
   exit 1
 fi
 
-install -m 0644 "$here/humanitl.desktop" "$pkg/usr/share/applications/humanitl.desktop"
+# Der Name der Desktop-Datei ist die Anwendungs-ID, damit Fensterleiste und
+# Dock das Fenster ihr zuordnen (Begruendung in der Datei selbst, HUM-259).
+install -m 0644 "$here/dev.humanitl.humanitl.desktop" \
+  "$pkg/usr/share/applications/dev.humanitl.humanitl.desktop"
 install -m 0644 "$here/humanitl.svg" "$pkg/usr/share/icons/hicolor/scalable/apps/humanitl.svg"
 for size in 64 128 256; do
   install -d -m 0755 "$pkg/usr/share/icons/hicolor/${size}x${size}/apps"
