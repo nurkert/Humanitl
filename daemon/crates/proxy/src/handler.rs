@@ -27,7 +27,7 @@ use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
 use humanitl_config::{HoldConfig, Limits, RecorderConfig};
-use humanitl_core::diagnostics::codes::{FINDINGS_003, PROXY_005, PROXY_008, PROXY_011};
+use humanitl_core::diagnostics::codes::{FINDINGS_003, LIMIT_005, PROXY_005, PROXY_008, PROXY_011};
 use humanitl_core::{
     Action, AnswerRefused, Authority, BlockReason, BodyRef, Decision, DecisionSource, Diagnostic,
     Finding, FixAction, Flow, FlowEvent, FlowId, FlowState, HeaderMap, HostName, HostPattern,
@@ -49,11 +49,12 @@ use crate::connect::{AuthorityError, AuthorityRefusal, ConnectionContext, Reques
 use crate::edit;
 use crate::findings::{self, NoScan, Scanner};
 use crate::hold::HoldQueue;
+use crate::limits;
 use crate::meta::{self, ArchivedFlow, MetaEndpoint, MetaReply, MetaRequest};
 use crate::pipeline::FlowPipeline;
 use crate::registry::FlowRecord;
 use crate::tls_observe::{self, HandshakeWatch};
-use crate::upstream::{self, Upstream};
+use crate::upstream::{self, Outgoing, Upstream};
 use crate::{connect, tls};
 
 /// Der Grund, mit dem ein abgelehnter Übergang den Flow beendet.
@@ -784,56 +785,61 @@ impl FlowHandler {
         }
         let (parts, incoming) = req.into_parts();
         let cap = self.inner.limits.body_cap_bytes;
-        let content_type =
-            header_string(&parts.headers, hyper::header::CONTENT_TYPE).map(str::to_owned);
-
-        // Ein bekanntes Content-Length über dem Cap wird geblockt, ohne den
-        // Body zu lesen: der Client bekommt schnell `413`, und es fließt keine
-        // Bandbreite (Fallstrick HUM-015).
-        if let Some(declared) = content_length(&parts.headers)
-            && declared > cap
-        {
-            let request = Self::build_request(
-                parts.method.clone(),
-                scheme,
-                authority,
-                path_and_query,
-                parts.headers,
-                placeholder_body(declared, content_type.as_deref()),
-            );
-            return self.refuse_before_pipeline(&meta, request, BlockReason::BodyCap, None);
-        }
-
-        let body_bytes = match body::buffer(incoming, cap, self.inner.limits.body_timeout).await {
-            Ok(bytes) => bytes,
-            Err(BufferError::Idle) => {
-                return self.refuse_idle_request_body();
-            }
-            Err(BufferError::Cap) => {
-                let request = Self::build_request(
-                    parts.method.clone(),
-                    scheme,
-                    authority,
-                    path_and_query,
-                    parts.headers,
-                    placeholder_body(cap, content_type.as_deref()),
-                );
-                return self.refuse_before_pipeline(&meta, request, BlockReason::BodyCap, None);
-            }
-            Err(BufferError::Read) => {
-                return text_response(StatusCode::BAD_REQUEST, "request body read error");
-            }
-        };
-
-        let body_ref = self.body_ref(&body_bytes, content_type.as_deref());
-        let request = Self::build_request(
-            parts.method,
+        let head = RequestHead {
+            content_type: header_string(&parts.headers, hyper::header::CONTENT_TYPE)
+                .map(str::to_owned),
+            method: parts.method,
             scheme,
             authority,
             path_and_query,
-            parts.headers,
-            body_ref,
-        );
+            headers: parts.headers,
+        };
+
+        // Der Anteil dieser Anfrage am Byte-Budget `limits.hold_max_bytes`:
+        // Er wächst beim Puffern und wird erst frei, wenn die Funktion endet,
+        // also nach Weiterleitung, Block, Abbruch oder Zeitüberschreitung
+        // (HUM-057). Solange er lebt, trägt er die Bytes auch beim Halten.
+        let mut in_flight = self.inner.queue.in_flight();
+        // Ein bekanntes Content-Length über dem Cap wird geblockt, ohne den
+        // Body zu lesen: der Client bekommt schnell `413`, und es fließt keine
+        // Bandbreite (Fallstrick HUM-015). Ausgenommen ist eine Anfrage, die
+        // eine Regel mit `stream: true` trifft (HUM-057, [`Self::over_cap`]).
+        if let Some(declared) = content_length(&head.headers)
+            && declared > cap
+        {
+            let request = head.placeholder(declared);
+            let size = limits::OverCap::Declared(declared);
+            return self
+                .over_cap(&meta, request, size, (Bytes::new(), incoming), in_flight)
+                .await;
+        }
+
+        let idle = self.inner.limits.body_timeout;
+        let buffered = match body::buffer_request(incoming, cap, idle, &mut in_flight).await {
+            Ok(buffered) => buffered,
+            Err(BufferError::Idle) => {
+                return self.refuse_idle_request_body();
+            }
+            Err(BufferError::Budget) => {
+                return self.refuse_over_budget(&meta, head, in_flight);
+            }
+            Err(BufferError::Cap | BufferError::Read) => {
+                return text_response(StatusCode::BAD_REQUEST, "request body read error");
+            }
+        };
+        let body_bytes = match buffered {
+            body::Buffered::Whole(bytes) => bytes,
+            body::Buffered::Over { prefix, rest } => {
+                let request = head.placeholder(cap);
+                let size = limits::OverCap::AtLeast(cap);
+                return self
+                    .over_cap(&meta, request, size, (prefix, rest), in_flight)
+                    .await;
+            }
+        };
+
+        let body_ref = self.body_ref(&body_bytes, head.content_type.as_deref());
+        let request = head.into_request(body_ref);
 
         let mut flow = Flow::new(
             FlowId::new(),
@@ -841,6 +847,7 @@ impl FlowHandler {
             SystemTime::now(),
             request.clone(),
         );
+        in_flight.cover(flow.id);
         self.inner.queue.publish(flow.received_event());
         // Der Body ist gepuffert und die Zeile des Flows steht (das `Received`
         // oben ging durch die Aufzeichnung): jetzt, und nicht später, wird die
@@ -853,8 +860,172 @@ impl FlowHandler {
         }
 
         let decision = self.inner.pipeline.decide(&mut flow, &meta).await;
-        self.carry_out(decision, flow, request, body_bytes, &meta)
+        let response = self
+            .carry_out(decision, flow, request, body_bytes, &meta)
+            .await;
+        drop(in_flight);
+        response
+    }
+
+    /// Lehnt eine Anfrage ab, deren Rumpf beim Puffern nicht mehr ins
+    /// Byte-Budget `limits.hold_max_bytes` passte: `503`,
+    /// [`BlockReason::HoldMemory`] und `LIMIT_002` (HUM-057).
+    fn refuse_over_budget(
+        &self,
+        meta: &ConnectionContext,
+        head: RequestHead,
+        in_flight: crate::hold::InFlight,
+    ) -> Response<ResponseBody> {
+        let read = in_flight.bytes();
+        let size = content_length(&head.headers).unwrap_or(read);
+        let diagnostic = self.inner.queue.buffer_full(read);
+        // Erst freigeben, dann ablehnen: Die Antwort braucht die gelesenen
+        // Bytes nicht mehr.
+        drop(in_flight);
+        self.refuse_before_pipeline(
+            meta,
+            head.placeholder(size),
+            BlockReason::HoldMemory,
+            Some(diagnostic),
+        )
+    }
+
+    /// Eine Anfrage, deren Rumpf über `limits.hold_body_cap_bytes` liegt
+    /// (HUM-057).
+    ///
+    /// Ohne Regel mit `stream: true` wird sie wie bisher vor der Pipeline
+    /// geblockt (`413`, [`BlockReason::BodyCap`]), jetzt mit dem Befund
+    /// `LIMIT_001` und dem Vorschlag einer solchen Regel. Trifft sie eine,
+    /// läuft sie durch die Pipeline wie jede Anfrage, nur ohne Rumpf: Die
+    /// Regel entscheidet über den Kopf (`allow` sofort, `ask` über einen
+    /// Menschen), und erst eine Freigabe liest den Rest der Leitung und
+    /// streamt ihn hinaus ([`Self::stream_out`]).
+    ///
+    /// Ohne Rumpf gibt es keinen Scan. Der Fluss steht deshalb mit leeren
+    /// Funden und `findings_truncated` in der Registry, und ein `LIMIT_001`
+    /// als `Info` sagt am Fluss, dass der Rumpf ungeprüft hinausgeht.
+    ///
+    /// **Unter `hold.hard_block_checksum_secrets` streamt nichts.** Die harte
+    /// Sperre verlangt, dass ein bestätigtes Geheimnis nie ungeändert
+    /// hinausgeht, und ein ungeprüfter Strom kann das nicht einhalten. Keine
+    /// Regel hebt die Sperre auf (`docs/SECURITY.md`), also auch keine mit
+    /// `stream: true`: Die Anfrage wird geblockt wie ohne Regel.
+    ///
+    /// `in_flight` trägt das schon gelesene Präfix im Byte-Budget, und nur
+    /// das: Ein gehaltener Kopf reserviert keine Bytes für seine angekündigte
+    /// Größe, denn die liegt nicht im Speicher.
+    ///
+    /// Kopf, Query und Kopfzeilen liegen vor und werden gescannt; die Funde
+    /// stehen an der Karte wie bei jeder anderen Anfrage. Nur der Rumpf bleibt
+    /// ungeprüft.
+    async fn over_cap(
+        &self,
+        meta: &ConnectionContext,
+        request: HttpRequest,
+        size: limits::OverCap,
+        (prefix, rest): (Bytes, Incoming),
+        mut in_flight: crate::hold::InFlight,
+    ) -> Response<ResponseBody> {
+        let cap = self.inner.limits.body_cap_bytes;
+        let hard_block = self.inner.limits.hard_block_checksum_secrets;
+        let mut flow = Flow::new(FlowId::new(), meta.session, SystemTime::now(), request);
+        let grant = if hard_block {
+            None
+        } else {
+            self.inner.pipeline.stream_grant(&flow)
+        };
+        let Some(grant) = grant else {
+            let diagnostic = limits::body_over_cap(&flow.request, size, cap, hard_block);
+            return self.refuse_before_pipeline(
+                meta,
+                flow.request,
+                BlockReason::BodyCap,
+                Some(diagnostic),
+            );
+        };
+        let request = flow.request.clone();
+        in_flight.cover(flow.id);
+        self.inner.queue.publish(flow.received_event());
+        // Der Scan sieht Kopf, Query und Kopfzeilen, nicht den Rumpf.
+        let report = self.inner.scanner.scan(&request, &[]);
+        log_findings(&flow, &report.findings, true);
+        if let Some(recorder) = self.inner.recorder.as_ref()
+            && !report.findings.is_empty()
+        {
+            recorder.store_findings(flow.id, &report.findings);
+        }
+        if self
+            .apply(
+                &mut flow,
+                TransitionInput::Analyze {
+                    findings: report.findings,
+                },
+            )
+            .is_err()
+        {
+            return self.fail_closed(&mut flow);
+        }
+        let mut record = FlowRecord::new(&flow, meta);
+        record.findings_truncated = true;
+        self.inner.queue.registry().insert(record);
+        self.publish_diagnostic(
+            flow.id,
+            limits::body_streamed(&request, size, cap, grant.rule()),
+        );
+
+        match self
+            .inner
+            .pipeline
+            .decide_streamed(&mut flow, meta, grant)
             .await
+        {
+            // Der Anteil am Budget wandert in den Rumpf und lebt so lange wie
+            // er, nicht wie dieser Aufruf.
+            Decision::Allow => {
+                self.stream_out(flow, request, size, (prefix, rest), in_flight, meta)
+                    .await
+            }
+            // Eine Bearbeitung setzt einen Rumpf voraus, den es hier nie gab.
+            Decision::AllowEdited { .. } => self.revise_to_block(&mut flow, BlockReason::BodyCap),
+            decision => {
+                self.carry_out(decision, flow, request, Bytes::new(), meta)
+                    .await
+            }
+        }
+    }
+
+    /// Streamt eine freigegebene Anfrage über dem Cap zum Ziel (HUM-057).
+    ///
+    /// Der Rumpf geht durch [`body::streamed_request`]: erst das schon
+    /// Gelesene, dann der Rest der Leitung, mit derselben Uhr wie beim Puffern
+    /// und mitgeschnitten über [`Recorder::begin_request`].
+    async fn stream_out(
+        &self,
+        flow: Flow,
+        request: HttpRequest,
+        size: limits::OverCap,
+        (prefix, rest): (Bytes, Incoming),
+        in_flight: crate::hold::InFlight,
+        meta: &ConnectionContext,
+    ) -> Response<ResponseBody> {
+        let sink = self
+            .inner
+            .recorder
+            .as_ref()
+            .map(|recorder| recorder.begin_request(flow.id, &request.headers));
+        let idle = self.inner.limits.body_timeout;
+        let (body, progress) = body::streamed_request(prefix, rest, sink, idle, Some(in_flight));
+        let outgoing = Outgoing::Streamed {
+            body,
+            length: size.declared(),
+            watch: upstream::StreamWatch {
+                progress,
+                idle,
+                head: self.inner.limits.header_timeout,
+                report: Some((flow.id, Arc::clone(&self.inner.queue))),
+            },
+        };
+        self.forward(flow, request, outgoing, meta).await
     }
 
     /// Führt aus, was entschieden wurde.
@@ -1029,7 +1200,9 @@ impl FlowHandler {
                 Err(BufferError::Idle) => {
                     return self.refuse_idle_request_body();
                 }
-                Err(BufferError::Read) => {
+                // `buffer` kennt kein Budget; der Zweig ist nur der
+                // Vollständigkeit halber da.
+                Err(BufferError::Read | BufferError::Budget) => {
                     return text_response(StatusCode::BAD_REQUEST, "request body read error");
                 }
             }
@@ -1388,7 +1561,7 @@ impl FlowHandler {
         &self,
         mut flow: Flow,
         request: HttpRequest,
-        body: Bytes,
+        body: impl Into<Outgoing>,
         meta: &ConnectionContext,
     ) -> Response<ResponseBody> {
         // Fail-closed vor dem Egress: kann der Flow nicht nach `Forwarded`, geht
@@ -1396,6 +1569,11 @@ impl FlowHandler {
         if self.apply(&mut flow, TransitionInput::Forward).is_err() {
             return self.fail_closed(&mut flow);
         }
+        let body = body.into();
+        let watch = match &body {
+            Outgoing::Streamed { watch, .. } => Some(watch.clone()),
+            Outgoing::Buffered(_) => None,
+        };
         match self
             .inner
             .upstream
@@ -1436,7 +1614,42 @@ impl FlowHandler {
                 );
                 Response::from_parts(parts, body)
             }
-            Err(error) => self.record_failure(&mut flow, error),
+            Err(error) => {
+                // Ein gestreamter Upload, der hängen blieb: Das Ziel las nicht
+                // mehr oder antwortete nie. Der Befund sagt, welche Frist
+                // ablief (HUM-057).
+                // Schwieg der Client, ist es kein Fehler des Ziels: dieselbe
+                // Antwort wie beim Puffern, `408` und `PROXY_011` (HUM-120),
+                // nur am Fluss, weil es hier einen gibt.
+                if let Some(watch) = watch.as_ref()
+                    && watch.progress.client_went_silent()
+                {
+                    let idle = self.inner.limits.body_timeout;
+                    self.publish_diagnostic(flow.id, idle_streamed_request_body(idle));
+                    // Verbucht wird, was der Client bekam: `408` vom Proxy,
+                    // nicht ein Fehler des Ziels. Die Ursache steht im Befund.
+                    if self
+                        .apply(&mut flow, TransitionInput::Respond { status: 408 })
+                        .is_ok()
+                    {
+                        let _ = self.apply(&mut flow, TransitionInput::Record);
+                    }
+                    return text_response(
+                        StatusCode::REQUEST_TIMEOUT,
+                        "request body timed out between two chunks",
+                    );
+                }
+                if matches!(error, UpstreamError::Timeout)
+                    && let Some(watch) = watch.as_ref()
+                    && let Some(stall) = watch.stalled()
+                {
+                    self.publish_diagnostic(
+                        flow.id,
+                        limits::upload_stalled(stall, watch.idle, watch.head),
+                    );
+                }
+                self.record_failure(&mut flow, error)
+            }
         }
     }
 
@@ -1737,12 +1950,45 @@ where
         Ok(()) => true,
         Err(err) => went_away(err),
     };
+    let requests = requests.load(Ordering::Relaxed);
     if let Err(err) = result {
-        tracing::debug!(%err, "connection ended with an error");
+        if err.is_timeout() {
+            log_header_timeout(header_timeout, requests);
+        } else {
+            tracing::debug!(%err, "connection ended with an error");
+        }
     }
     Served {
-        requests: requests.load(Ordering::Relaxed),
+        requests,
         quiet_close,
+    }
+}
+
+/// Die Protokollzeile zu einer abgelaufenen Kopf-Frist, mit `LIMIT_005`
+/// (HUM-057).
+///
+/// Nur eine Zeile, kein Ereignis: Es gibt keinen Kopf, also keinen Fluss, an
+/// dem ein Befund hängen könnte, und ein Ereignis je stummer Verbindung wäre
+/// ein Hebel gegen die Oberfläche (dieselbe Überlegung wie bei `PROXY_010`).
+/// Eine Verbindung, die nie eine Anfrage geschickt hat, steht auf `info`; eine
+/// Keep-Alive-Verbindung, die nach ihrer letzten Antwort schweigt, ist der
+/// Normalfall und steht auf `debug`.
+fn log_header_timeout(timeout: Duration, requests: u64) {
+    let secs = timeout.as_secs();
+    if requests == 0 {
+        tracing::info!(
+            code = LIMIT_005.as_str(),
+            timeout_secs = secs,
+            "a client did not send its request head within limits.header_timeout_secs; \
+             the connection was closed and no flow was created"
+        );
+    } else {
+        tracing::debug!(
+            code = LIMIT_005.as_str(),
+            timeout_secs = secs,
+            requests,
+            "an idle keep-alive connection reached limits.header_timeout_secs and was closed"
+        );
     }
 }
 
@@ -1809,6 +2055,40 @@ fn content_length(headers: &humanitl_core::HeaderMap) -> Option<u64> {
         .get(hyper::header::CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok())
         .and_then(|text| text.trim().parse::<u64>().ok())
+}
+
+/// Der Kopf einer gewöhnlichen Anfrage, bevor ihr Rumpf feststeht (HUM-057).
+///
+/// Aus ihm entsteht die [`HttpRequest`] eines Flusses: mit dem gepufferten
+/// Rumpf oder, wo es keinen gibt (über dem Cap, Budget erschöpft), mit einem
+/// Platzhalter der bekannten Größe.
+struct RequestHead {
+    method: Method,
+    scheme: Scheme,
+    authority: Authority,
+    path_and_query: String,
+    headers: humanitl_core::HeaderMap,
+    content_type: Option<String>,
+}
+
+impl RequestHead {
+    /// Die Anfrage mit `body`.
+    fn into_request(self, body: BodyRef) -> HttpRequest {
+        HttpRequest::new(
+            self.method,
+            self.scheme,
+            self.authority,
+            self.path_and_query,
+        )
+        .with_headers(self.headers)
+        .with_body(body)
+    }
+
+    /// Die Anfrage mit einem Platzhalter von `size` Bytes statt des Rumpfs.
+    fn placeholder(self, size: u64) -> HttpRequest {
+        let body = placeholder_body(size, self.content_type.as_deref());
+        self.into_request(body)
+    }
 }
 
 /// Ein Body-Verweis für eine Anfrage, deren Inhalt der Proxy nie liest (Body
@@ -1923,6 +2203,30 @@ pub fn private_address_refused(request: &HttpRequest, ip: IpAddr) -> Diagnostic 
         diagnostic = diagnostic.fix(FixAction::AddRule(Box::new(rule)));
     }
     diagnostic.build()
+}
+
+/// Der Befund [`PROXY_011`] zu einem Client, der mitten in einem gestreamten
+/// Anfrage-Rumpf (`stream: true`) verstummt ist (HUM-057).
+///
+/// Anders als beim Puffern ist hier schon ein Teil des Rumpfs beim Ziel; der
+/// Satz sagt das, statt zu behaupten, nichts habe den Rechner verlassen. Er
+/// hängt am Fluss, den es hier gibt.
+#[must_use]
+pub fn idle_streamed_request_body(idle: Duration) -> Diagnostic {
+    let secs = idle.as_secs();
+    let why = format!(
+        "a client inside the sandbox went silent in the middle of a streamed request body \
+         (stream: true) for more than {secs}s (limits.body_timeout_secs). Part of the body had \
+         already gone to the target; the upload was cut there and the request was answered with \
+         408. The limit measures the silence between two chunks, never the total duration."
+    );
+    Diagnostic::builder(PROXY_011, Severity::Warning)
+        .why(why)
+        .fix(FixAction::ChangeSetting {
+            key: "limits.body_timeout_secs".to_owned(),
+            value: secs.saturating_mul(2).to_string(),
+        })
+        .build()
 }
 
 /// Der Befund [`PROXY_011`] zu einem stehengebliebenen Anfrage-Rumpf
@@ -2075,6 +2379,30 @@ pub fn idle_request_body(idle: Duration, since_last: u64) -> Diagnostic {
 /// [`NoRule`], wenn sich zu dieser Anfrage keine Regel bauen lässt, die
 /// `parse_rules` annimmt und die die Anfrage danach auch trifft.
 pub fn private_address_rule(request: &HttpRequest) -> Result<Rule, NoRule> {
+    let matcher = request_matcher(request)?;
+    Ok(Rule::new(RuleId::new(), Action::Ask, matcher)
+        .with_allow_private(true)
+        .with_note(format!(
+            "suggested after Humanitl refused a private target address for {host}; \
+             the request is still held for a decision, and this rule has to stand in front of \
+             any other rule for the same host to take effect",
+            host = request.authority.host.display(),
+        )))
+}
+
+/// Der Zuschnitt einer vorgeschlagenen Regel auf genau diese Anfrage.
+///
+/// Die Tabelle der Wertebereiche und die Gründe für jedes Feld stehen an
+/// [`private_address_rule`]; dieselben gelten für jeden Vorschlag, der aus
+/// einer Anfrage eine Regel baut, auch für den mit `stream: true` aus
+/// [`crate::limits::body_over_cap`] (HUM-057). Zwei Vorschläge mit zwei
+/// eigenen Zuschnitten liefen auseinander, und einer von beiden träfe
+/// irgendwann die Anfrage nicht mehr, aus der er entstand.
+///
+/// # Errors
+///
+/// [`NoRule`], wie an [`private_address_rule`] beschrieben.
+pub(crate) fn request_matcher(request: &HttpRequest) -> Result<Matcher, NoRule> {
     // Reihenfolge nach Schwere: Der Port zerrisse die Datei, die Methode
     // erzeugte nur eine wirkungslose Regel.
     if request.authority.port == 0 {
@@ -2102,14 +2430,7 @@ pub fn private_address_rule(request: &HttpRequest) -> Result<Rule, NoRule> {
     {
         matcher = matcher.with_path_prefixes(prefixes);
     }
-    Ok(Rule::new(RuleId::new(), Action::Ask, matcher)
-        .with_allow_private(true)
-        .with_note(format!(
-            "suggested after Humanitl refused a private target address for {host}; \
-             the request is still held for a decision, and this rule has to stand in front of \
-             any other rule for the same host to take effect",
-            host = request.authority.host.display(),
-        )))
+    Ok(matcher)
 }
 
 /// Womit eine abgelehnte Bearbeitung geblockt wird.

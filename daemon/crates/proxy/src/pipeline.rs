@@ -70,6 +70,58 @@ pub use crate::connect::{ConnMeta, ConnectionContext};
 pub trait FlowPipeline: Send + Sync {
     /// Entscheidet und lässt den Flow in `Decided` zurück.
     async fn decide(&self, flow: &mut Flow, meta: &ConnMeta) -> Decision;
+
+    /// Die Erlaubnis zu streamen, falls eine Regel mit `stream: true` diesen
+    /// Flow trifft (HUM-057).
+    ///
+    /// Gefragt wird nur für eine Anfrage über `limits.hold_body_cap_bytes`,
+    /// bevor der Handler sie blockt. Ohne Regelsatz gibt es keine solche
+    /// Regel, deshalb ist die Vorgabe `None`: Eine Pipeline, die keine Regeln
+    /// kennt, streamt nie.
+    fn stream_grant(&self, _flow: &Flow) -> Option<StreamGrant> {
+        None
+    }
+
+    /// Entscheidet über einen Flow, dem [`FlowPipeline::stream_grant`] das
+    /// Streamen erlaubt hat, und zwar aus genau dieser Erlaubnis.
+    ///
+    /// Der Regelsatz wird dabei nicht noch einmal ausgewertet. Lädt ein
+    /// anderer Task dazwischen einen neuen, entschiede sonst eine andere Regel
+    /// über einen Rumpf, den die erste zum Streamen freigegeben hat, und ein
+    /// ungeprüfter Rumpf ginge unter einer Entscheidung ohne `stream`
+    /// hinaus. Die Vorgabe fragt [`FlowPipeline::decide`]; sie wird nie
+    /// erreicht, weil ohne eigenes `stream_grant` keine Erlaubnis entsteht.
+    async fn decide_streamed(
+        &self,
+        flow: &mut Flow,
+        meta: &ConnMeta,
+        _grant: StreamGrant,
+    ) -> Decision {
+        self.decide(flow, meta).await
+    }
+}
+
+/// Die Erlaubnis zu streamen, aus einem einzigen Schnappschuss des
+/// Regelsatzes (HUM-057).
+///
+/// Sie trägt alles, was die Entscheidung danach braucht: die Regel, ob sie
+/// `ask` oder `allow` sagt, ob sie private Ziele öffnet und ob sie die
+/// Durchreiche zum Sprachmodell ist. Entstehen kann sie nur in einer Pipeline
+/// ([`FlowPipeline::stream_grant`]); die Felder sind nicht öffentlich.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StreamGrant {
+    rule: RuleId,
+    ask: bool,
+    allow_private: bool,
+    passthrough: bool,
+}
+
+impl StreamGrant {
+    /// Die Regel, die das Streamen erlaubt und über den Flow entscheidet.
+    #[must_use]
+    pub const fn rule(&self) -> RuleId {
+        self.rule
+    }
 }
 
 /// Hält jeden Flow, bis ein Mensch entscheidet oder die Frist abläuft.
@@ -314,19 +366,25 @@ impl RulesPipeline {
         &self.rules
     }
 
-    /// Wertet den Regelsatz für diesen Flow aus.
-    fn evaluate(&self, flow: &Flow) -> Verdict {
+    /// Der Schlüssel, unter dem der Regelsatz diesen Flow auswertet.
+    fn key(flow: &Flow) -> RequestKey<'_> {
         let request = &flow.request;
-        let mut key = RequestKey::new(
+        let key = RequestKey::new(
             &request.authority.host,
             &request.method,
             &request.path_and_query,
             request.scheme,
             request.authority.port,
         );
-        if let Some(upgrade) = requested_upgrade(&request.headers) {
-            key = key.with_upgrade(upgrade);
+        match requested_upgrade(&request.headers) {
+            Some(upgrade) => key.with_upgrade(upgrade),
+            None => key,
         }
+    }
+
+    /// Wertet den Regelsatz für diesen Flow aus.
+    fn evaluate(&self, flow: &Flow) -> Verdict {
+        let key = Self::key(flow);
         // Ein vergifteter Regelsatz (Lock durch eine Panik in einem anderen
         // Task zerbrochen) darf nicht zu einer stillen Freigabe führen, aber
         // auch nicht den Proxy anhalten: Die Regeln werden nur gelesen, und
@@ -429,6 +487,57 @@ impl RulesPipeline {
 
 #[async_trait]
 impl FlowPipeline for RulesPipeline {
+    /// Nur `allow` und `ask` streamen. Eine `block`-Regel blockt ohnehin, und
+    /// `redact` braucht den Rumpf, den es hier nicht gibt; beide bleiben beim
+    /// Block am Cap, auch mit `stream: true`.
+    ///
+    /// Auswertung und alle Eigenschaften der Regel kommen aus **einem**
+    /// Lesezugriff, also aus demselben Regelsatz.
+    fn stream_grant(&self, flow: &Flow) -> Option<StreamGrant> {
+        let key = Self::key(flow);
+        let rules = self.rules.read().ok()?;
+        let Verdict::Matched { rule, action } =
+            rules.evaluate(&key, chrono::Utc::now(), flow.session)
+        else {
+            return None;
+        };
+        let ask = match action {
+            Action::Allow => false,
+            Action::Ask => true,
+            Action::Block | Action::Redact => return None,
+        };
+        let found = rules.get(rule).filter(|found| found.stream)?;
+        Some(StreamGrant {
+            rule,
+            ask,
+            allow_private: found.allow_private,
+            passthrough: rules.is_passthrough_llm(rule),
+        })
+    }
+
+    /// Entscheidet aus der Erlaubnis, ohne den Regelsatz noch einmal zu
+    /// lesen: `ask` hält den Kopf über die innere Pipeline, `allow`
+    /// entscheidet sofort im Namen der Regel aus der Erlaubnis.
+    async fn decide_streamed(
+        &self,
+        flow: &mut Flow,
+        meta: &ConnectionContext,
+        grant: StreamGrant,
+    ) -> Decision {
+        flow.allow_private |= grant.allow_private;
+        if grant.ask {
+            return self.inner.decide(flow, meta).await;
+        }
+        if flow.send_refusal.is_some() {
+            return self.decide_by_rule(flow, hard_block_decision(), DecisionSource::System);
+        }
+        if grant.passthrough {
+            self.warn_about_findings(flow);
+            return self.decide_by_rule(flow, Decision::Allow, DecisionSource::Passthrough);
+        }
+        self.decide_by_rule(flow, Decision::Allow, DecisionSource::Rule(grant.rule))
+    }
+
     async fn decide(&self, flow: &mut Flow, meta: &ConnectionContext) -> Decision {
         let verdict = self.evaluate(flow);
         let Verdict::Matched { rule, action } = verdict else {

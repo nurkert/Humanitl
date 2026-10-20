@@ -127,7 +127,24 @@ pub struct FlowRecord {
     /// Prüfung vor einer Freigabe liest ihn nicht hier, sondern in der
     /// Warteschlange, denn die Registry darf einen Datensatz vergessen.
     pub send_refusal: Option<humanitl_core::Diagnostic>,
+    /// Die Befunde, die am Fluss stehen, in der Reihenfolge ihres Eintreffens
+    /// (aus [`FlowEvent::Diagnostic`], HUM-057).
+    ///
+    /// Hier holt das Detail sie ab (`FlowDetail.diagnostics`): Ein Befund im
+    /// Strom ist flüchtig, und wer den Fluss später in der Historie öffnet,
+    /// sähe sonst „geblockt, `body_cap`" ohne Grund und ohne den Vorschlag,
+    /// der dazu gehört (`LIMIT_001`). Höchstens [`MAX_FLOW_DIAGNOSTICS`]; was
+    /// darüber kommt, fällt weg, damit ein Fluss mit vielen Befunden die
+    /// Registry nicht wachsen lässt.
+    pub diagnostics: Vec<humanitl_core::Diagnostic>,
 }
+
+/// So viele Befunde behält ein [`FlowRecord`] höchstens.
+///
+/// Ein Fluss bekommt heute zwei oder drei (Scan, Grenze, Aufzeichnung); acht
+/// lassen Luft, und die Grenze steht da, weil jede Liste in der Registry eine
+/// braucht.
+pub const MAX_FLOW_DIAGNOSTICS: usize = 8;
 
 impl FlowRecord {
     /// Der Datensatz zu einem Flow, so wie er gerade steht.
@@ -149,6 +166,7 @@ impl FlowRecord {
             findings_truncated: false,
             unresolved_findings: None,
             send_refusal: flow.send_refusal.clone(),
+            diagnostics: Vec::new(),
         };
         record.refresh_deadline();
         record
@@ -199,6 +217,11 @@ impl FlowRecord {
                 self.response_bytes = self.response_bytes.saturating_add(*len);
             }
             FlowEvent::Recorded { at, .. } => self.finished = Some(*at),
+            FlowEvent::Diagnostic { diagnostic, .. }
+                if self.diagnostics.len() < MAX_FLOW_DIAGNOSTICS =>
+            {
+                self.diagnostics.push((**diagnostic).clone());
+            }
             _ => {}
         }
         self.refresh_deadline();
@@ -399,7 +422,7 @@ impl FlowRegistry {
     /// unbekannten Flow ändern nichts. Ereignisse ohne Übergang lassen den
     /// Zustand stehen, tragen aber bei, was sie an Zahlen mitbringen: ein
     /// [`FlowEvent::ResponseChunk`] erhöht [`FlowRecord::response_bytes`], ein
-    /// [`FlowEvent::Diagnostic`] ändert nichts.
+    /// [`FlowEvent::Diagnostic`] landet in [`FlowRecord::diagnostics`].
     pub fn record(&self, event: &FlowEvent) {
         let Some(id) = event.flow_id() else {
             return;
@@ -548,7 +571,7 @@ mod tests {
         HttpRequest, Method, Scheme, SessionId, TransitionInput,
     };
 
-    use super::{FlowFilter, FlowRecord, FlowRegistry, UNREGISTERED};
+    use super::{FlowFilter, FlowRecord, FlowRegistry, MAX_FLOW_DIAGNOSTICS, UNREGISTERED};
     use crate::connect::ConnectionContext;
 
     fn flow(session: SessionId, host: &str) -> Flow {
@@ -591,6 +614,51 @@ mod tests {
             registry.get(id).unwrap().state,
             FlowState::Analyzed { .. }
         ));
+    }
+
+    /// Ein Befund am Fluss landet im Datensatz, in Reihenfolge und höchstens
+    /// [`MAX_FLOW_DIAGNOSTICS`] (HUM-057); ein Befund ohne Fluss nirgends.
+    #[test]
+    fn a_record_keeps_the_diagnostics_of_its_flow_up_to_the_cap() {
+        use humanitl_core::diagnostics::codes::{LIMIT_001, LIMIT_004};
+        use humanitl_core::{Diagnostic, Severity};
+
+        let registry = FlowRegistry::new(&Limits::default());
+        let session = SessionId::new();
+        let flow = analyzed(session, "example.com");
+        registry.insert(FlowRecord::new(&flow, &ConnectionContext::plain(session)));
+        let event = |flow_id, code| FlowEvent::Diagnostic {
+            flow_id,
+            at: SystemTime::now(),
+            diagnostic: Box::new(
+                Diagnostic::builder(code, Severity::Warning)
+                    .why("a finding".to_owned())
+                    .build(),
+            ),
+        };
+        registry.record(&event(Some(flow.id), LIMIT_001));
+        registry.record(&event(None, LIMIT_004));
+        registry.record(&event(Some(flow.id), LIMIT_004));
+        let codes: Vec<_> = registry
+            .get(flow.id)
+            .unwrap()
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect();
+        assert_eq!(codes, [LIMIT_001, LIMIT_004]);
+
+        for _ in 0..2 * MAX_FLOW_DIAGNOSTICS {
+            registry.record(&event(Some(flow.id), LIMIT_004));
+        }
+        assert_eq!(
+            registry.get(flow.id).unwrap().diagnostics.len(),
+            MAX_FLOW_DIAGNOSTICS
+        );
+        assert_eq!(
+            registry.get(flow.id).unwrap().diagnostics[0].code,
+            LIMIT_001
+        );
     }
 
     #[test]

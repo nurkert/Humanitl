@@ -210,9 +210,10 @@ async fn body_over_the_cap_returns_413_without_holding() {
     assert_eq!(upstream.hits(), 0);
 
     events.wait_for("recorded").await;
+    // Der Befund `LIMIT_001` steht seit HUM-057 am Fluss, vor der Sperre.
     assert_eq!(
         events.names(),
-        vec!["received", "analyzed", "decided", "recorded"],
+        vec!["received", "diagnostic", "analyzed", "decided", "recorded"],
         "over the cap the flow is refused by the system, never held"
     );
     let request = events.received_request();
@@ -569,9 +570,10 @@ async fn exhausted_hold_budget_returns_503() {
     assert_eq!(upstream.hits(), 0);
 
     events.wait_for("recorded").await;
+    // `LIMIT_002` steht seit HUM-057 vor der Ablehnung (`hold_rejects_over_count`).
     assert_eq!(
         events.names(),
-        vec!["received", "analyzed", "decided", "recorded"]
+        vec!["received", "analyzed", "diagnostic", "decided", "recorded"]
     );
 }
 

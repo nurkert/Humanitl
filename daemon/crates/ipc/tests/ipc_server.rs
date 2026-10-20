@@ -1253,3 +1253,78 @@ async fn list_flows_carries_the_hard_block_of_a_held_flow() {
         daemon.shutdown().await;
     }
 }
+
+/// Das Detail eines Flusses trägt die Befunde, die der Proxy ihm zugeordnet
+/// hat (HUM-057, HUM-058 Zeile 9), mit Aufzeichnung (Detail aus der Datenbank,
+/// Befunde aus der Registry) und ohne (alles aus der Registry). Die
+/// Aufzeichnung führt keine Befunde; ohne die Registry stünde ein am Cap
+/// geblockter Fluss in der Historie ohne `LIMIT_001` und ohne den Vorschlag
+/// einer Regel `stream: true`.
+#[tokio::test]
+async fn get_flow_carries_the_diagnostics_of_the_flow() {
+    use humanitl_core::diagnostics::codes::LIMIT_001;
+    use humanitl_core::{Diagnostic, FlowEvent, Severity};
+    use humanitl_recorder::{Recorder, RecorderSettings, SessionMeta};
+
+    let dir = tempfile::tempdir().unwrap();
+    let recorder = Recorder::open(
+        &dir.path().join("humanitl.db"),
+        &dir.path().join("blobs"),
+        RecorderSettings::default(),
+    )
+    .unwrap();
+    let session = SessionId::new();
+    recorder.start_session(&SessionMeta {
+        id: session,
+        started_at: SystemTime::now(),
+        sandbox_profile: "default".to_owned(),
+        llm_endpoint: None,
+        work_dir: "/work".to_owned(),
+        agent: "opencode".to_owned(),
+    });
+    let with_recording = {
+        let recorder = recorder.clone();
+        Daemon::start_with(&Limits::default(), move |server| {
+            server.with_recorder(recorder)
+        })
+        .await
+    };
+    for (daemon, recorded) in [(with_recording, true), (Daemon::new().await, false)] {
+        let flow = analyzed(session, "upload.example.com");
+        if recorded {
+            recorder.apply(&flow.received_event());
+            recorder.flush().await;
+        }
+        daemon
+            .queue
+            .registry()
+            .insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+        daemon.queue.publish(FlowEvent::Diagnostic {
+            flow_id: Some(flow.id),
+            at: SystemTime::now(),
+            diagnostic: Box::new(
+                Diagnostic::builder(LIMIT_001, Severity::Warning)
+                    .why("the request body is 41943040 bytes".to_owned())
+                    .build(),
+            ),
+        });
+
+        let mut client = daemon.client().await;
+        let detail = client
+            .get_flow(v1::FlowRef {
+                flow_id: flow.id.to_string(),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        let codes: Vec<&str> = detail
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect();
+        assert_eq!(codes, ["LIMIT_001"], "recorded={recorded}");
+
+        drop(client);
+        daemon.shutdown().await;
+    }
+}

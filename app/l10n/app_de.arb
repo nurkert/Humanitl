@@ -1237,5 +1237,18 @@
   "interceptRefusedRuleSourceHeld": "Die Regel stammt aus einer Anfrage, die auf ihrer eigenen Karte entschieden wird · gesendet wurde nichts",
   "trayNoticeDetailTitle": "Diese Anfrage wird im Fenster entschieden",
   "trayNoticeDetailWhy": "Die Anfrage ließ sich nicht vollständig lesen, also ist nicht bekannt, ob sie eine dauerhafte Verbindung öffnet. Gesendet wurde nichts.",
-  "interceptRefusedRuleSourceGone": "Die Anfrage, aus der die Regel stammt, hat die Warteschlange verlassen · gesendet wurde nichts"
+  "interceptRefusedRuleSourceGone": "Die Anfrage, aus der die Regel stammt, hat die Warteschlange verlassen · gesendet wurde nichts",
+  "diagLIMIT001Title": "Body über der Haltegrenze",
+  "diagLIMIT001Why": "Der Body der Anfrage ist größer als limits.hold_body_cap_bytes und konnte deshalb nicht für eine Entscheidung gehalten werden.",
+  "diagLIMIT002Title": "Warteschlange voll",
+  "diagLIMIT002Why": "Die Warteschlange hält schon so viele Anfragen oder Bytes wie erlaubt; neue Anfragen werden geblockt, bis die wartenden entschieden sind.",
+  "diagLIMIT003Title": "Entpack-Verhältnis überschritten",
+  "diagLIMIT003Why": "Entpackt hätte der Body weit mehr Bytes ergeben, als er gepackt hat; durchsucht wurde nur sein Anfang.",
+  "diagLIMIT004Title": "Antwort des Ziels verstummt",
+  "diagLIMIT004Why": "Das Ziel hat seinen Antwort-Body länger als die Frist nicht weitergeschickt; die Antwort wurde abgeschnitten und als gekürzt aufgezeichnet.",
+  "diagLIMIT005Title": "Anfrage-Kopf zu spät",
+  "diagLIMIT005Why": "Ein Client hat eine Verbindung geöffnet und den Kopf seiner Anfrage nicht rechtzeitig geschickt; die Verbindung wurde geschlossen.",
+  "diagLIMIT006Title": "Ereignis-Puffer übergelaufen",
+  "diagLIMIT006Why": "Das Fenster kam dem Ereignisstrom nicht hinterher; es lädt die Liste neu, und keine Anfrage wurde verzögert.",
+  "shellStatusQueue": "Warteschlange {count}/{max} · {size}"
 }
