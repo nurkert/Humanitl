@@ -27,6 +27,7 @@
 //! - [`edit`] der eine Wert, den der Daemon in `config.toml` schreibt
 //! - [`value`] ein Wert aus Text, gelesen und geprüft nach dem Schema
 //! - [`secret`] der Zugangsschlüssel des Modells: Verweis, Schlüsselbund, Datei
+//! - [`llm_endpoint`] die eine Lesart von `llm.endpoint`: Basis, Präfix, Pfade
 //!
 //! ```
 //! use humanitl_config::{Env, Sources, load};
@@ -48,6 +49,7 @@
 pub mod alias;
 pub mod edit;
 pub mod env;
+pub mod llm_endpoint;
 pub mod load;
 pub mod model;
 pub mod origin;

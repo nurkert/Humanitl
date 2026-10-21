@@ -92,6 +92,27 @@ void main() {
         'Erlauben · ∗ · api.example.com · Präfix /v1/, /v2/admin · immer',
       );
     });
+
+    test('an exact entry is named as an exact path, not as a prefix', () {
+      // HUM-261: `/v1/models?` trifft genau `/v1/models`. Die Zeile nennt
+      // ihn ohne `?` und nicht als Präfix.
+      const Rule rule = Rule(
+        action: RuleAction.allow,
+        matcher: RuleMatcher(
+          host: 'api.example.com',
+          pathPrefixes: <String>['/v1/models?', '/v1/files'],
+        ),
+        expires: RuleExpiry.never(),
+      );
+      expect(
+        ruleMatchSummary(rule, en),
+        '∗ · api.example.com · prefix /v1/files · exact /v1/models',
+      );
+      expect(
+        ruleSentence(rule, de, now: rulesTestNow),
+        'Erlauben · ∗ · api.example.com · Präfix /v1/files · genau /v1/models · immer',
+      );
+    });
   });
 
   group('rule_sentence', () {

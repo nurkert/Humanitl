@@ -701,9 +701,9 @@ LLM-Endpoint verlangt eine Anmeldung
 
 LLM-Endpoint antwortet nicht als bekannte API
 
-**Auslöser.** Die Verbindung steht, aber weder `/api/tags` noch `/v1/models` antwortet als bekannte API.
+**Auslöser.** Die Verbindung steht, aber die Modellliste des Endpunkts antwortet nicht als bekannte API.
 
-**Fix.** `ChangeSetting` auf die Adresse der API-Wurzel.
+**Fix.** `ChangeSetting` auf die Basis-Adresse der OpenAI-kompatiblen API.
 
 #### LLM_004
 

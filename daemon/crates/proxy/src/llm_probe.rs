@@ -1,15 +1,25 @@
 //! Die Probe des LLM-Endpunkts: läuft auf dem Host, ändert nichts (HUM-039).
 //!
 //! Der Setup-Bildschirm hat ein Feld für `llm.endpoint` und daneben einen
-//! Knopf. Was der Knopf auslöst, steht hier: zwei `GET`-Anfragen an die Adresse,
-//! die der Mensch gerade eingetippt hat, und daraus die Antwort auf drei
-//! Fragen — ist da etwas, was ist es, und welche Modelle bietet es an.
+//! Knopf. Was der Knopf auslöst, steht hier: höchstens zwei `GET`-Anfragen an
+//! die Adresse, die der Mensch gerade eingetippt hat, und daraus die Antwort
+//! auf drei Fragen — ist da etwas, was ist es, und welche Modelle bietet es an.
+//!
+//! # Welche Adressen sie fragt
+//!
+//! Der Endpunkt ist die Basis der OpenAI-kompatiblen API, gelesen wie
+//! `OpenCode` eine `baseURL` liest ([`humanitl_config::llm_endpoint`],
+//! HUM-261). Die Probe fragt `<Basis>`[`OPENAI_MODELS`] — bei
+//! `http://host:11434` also `/v1/models`, bei `https://host/api/v1/` also
+//! `/api/v1/models`. Davor fragt sie [`OLLAMA_TAGS_PATH`], aber nur, wenn der
+//! Endpunkt an der Wurzel des Servers sitzt: Unter einem Pfad-Präfix gibt es
+//! die native Ollama-API nicht, und die Wurzel des Hosts hat der Mensch nicht
+//! eingetragen.
 //!
 //! # Was die Probe nicht tut
 //!
-//! - **Sie ändert nichts.** Nur `GET`, nur auf zwei feste Pfade
-//!   ([`OLLAMA_TAGS_PATH`], [`OPENAI_MODELS_PATH`]). Beide sind Auskunft;
-//!   keiner legt etwas an, lädt etwas nach oder löscht etwas.
+//! - **Sie ändert nichts.** Nur `GET`, nur auf diese beiden Pfade. Beide sind
+//!   Auskunft; keiner legt etwas an, lädt etwas nach oder löscht etwas.
 //! - **Sie folgt keiner Weiterleitung.** Ein `3xx` ist eine Antwort, die nicht
 //!   die gesuchte API ist, und nichts weiter. Wer der Umleitung folgte, fragte
 //!   eine Adresse, die der Mensch nicht eingetippt hat.
@@ -57,8 +67,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
+use humanitl_config::llm_endpoint;
 use humanitl_config::secret::ApiKey;
 use humanitl_core::diagnostics::codes::{LLM_001, LLM_002, LLM_003, LLM_006, LLM_007};
+use humanitl_core::shell::shell_word;
 use humanitl_core::{
     Authority, BodyRef, Diagnostic, FixAction, HostName, HttpRequest, Method, Scheme, Severity,
     UpstreamError, ip_is_private,
@@ -70,11 +82,13 @@ use crate::body::{self, BufferError};
 use crate::trust::{self, TrustSource};
 use crate::upstream::Upstream;
 
-/// Der Pfad, unter dem Ollama seine Modelle auflistet.
-pub const OLLAMA_TAGS_PATH: &str = "/api/tags";
+/// Der Pfad, unter dem Ollama seine Modelle auflistet, immer an der Wurzel
+/// des Servers ([`llm_endpoint::OLLAMA_TAGS_PATH`]).
+pub const OLLAMA_TAGS_PATH: &str = llm_endpoint::OLLAMA_TAGS_PATH;
 
-/// Der Pfad, unter dem eine OpenAI-kompatible API ihre Modelle auflistet.
-pub const OPENAI_MODELS_PATH: &str = "/v1/models";
+/// Der Endpunkt, unter dem eine OpenAI-kompatible API ihre Modelle auflistet,
+/// relativ zu ihrer Basis ([`llm_endpoint::OPENAI_MODELS`]).
+pub const OPENAI_MODELS: &str = llm_endpoint::OPENAI_MODELS;
 
 /// Die Frist der Probe, wenn der Aufrufer keine nennt (`3000` ms).
 pub const DEFAULT_TIMEOUT_MS: u32 = 3_000;
@@ -110,10 +124,10 @@ const PRIVATE_SUFFIXES: &[&str] = &[".local", ".lan", ".home.arpa", ".internal"]
 pub enum LlmFlavor {
     /// Ollama: `GET /api/tags` hat mit `models[].name` geantwortet.
     Ollama,
-    /// Eine OpenAI-kompatible API: `GET /v1/models` hat mit `data[].id`
+    /// Eine OpenAI-kompatible API: `GET <Basis>/models` hat mit `data[].id`
     /// geantwortet.
     OpenAiCompatible,
-    /// Die Verbindung steht, aber keiner der beiden Pfade hat geantwortet.
+    /// Die Verbindung steht, aber kein gefragter Pfad hat geantwortet.
     Unknown,
 }
 
@@ -179,8 +193,9 @@ impl LlmProbe {
     /// Fragt den Endpunkt, was er ist und welche Modelle er kennt.
     ///
     /// Die Reihenfolge ist Ollama zuerst: Ollama beantwortet auch
-    /// [`OPENAI_MODELS_PATH`], und wer danach zuerst fragte, bekäme für einen
+    /// `/v1/models`, und wer danach zuerst fragte, bekäme für einen
     /// Ollama-Server die Antwort „OpenAI-kompatibel" (HUM-039, Fallstricke).
+    /// Ein Endpunkt mit Pfad-Präfix bekommt nur die zweite Frage (HUM-261).
     ///
     /// `timeout` gilt für die Probe als Ganzes, nicht je Anfrage. `None` heißt
     /// [`DEFAULT_TIMEOUT_MS`].
@@ -244,17 +259,27 @@ impl LlmProbe {
         // meldete eine Frist, die beim zweiten Pfad ablief, „konnte nicht
         // erreicht werden" — über einen Server, der nachweislich geantwortet
         // hat (`backlog/CONVENTIONS.md` 4.13: nie mehr behaupten als bewiesen).
-        let answered = Arc::new(AtomicBool::new(false));
-        let outcome = tokio::time::timeout(timeout, self.run(&target, &answered))
+        // Dazu der Pfad, der gerade gefragt wird: Läuft die Frist ab, nennt
+        // der Befund genau ihn und keinen, der nie gefragt wurde (HUM-261).
+        let progress = Arc::new(Progress::default());
+        let outcome = tokio::time::timeout(timeout, self.run(&target, &progress))
             .await
             .unwrap_or_else(|_elapsed| {
                 let millis = timeout.as_millis();
-                Err(if answered.load(Ordering::SeqCst) {
-                    Failure::Incomplete(format!(
-                        "the server answered, but the probe was not finished within {millis} ms"
-                    ))
+                let path = progress.attempted();
+                Err(if progress.answered.load(Ordering::SeqCst) {
+                    Failure::Incomplete {
+                        detail: format!(
+                            "the server answered, but the probe was not finished within {millis} \
+                             ms"
+                        ),
+                        path,
+                    }
                 } else {
-                    Failure::Unreachable(format!("no answer within {millis} ms"))
+                    Failure::Unreachable {
+                        detail: format!("no answer within {millis} ms"),
+                        path,
+                    }
                 })
             })
             .map_err(|failure| failure.into_diagnostic(&target))?;
@@ -265,7 +290,7 @@ impl LlmProbe {
             diagnostics.push(not_private(endpoint));
         }
         if outcome.flavor == LlmFlavor::Unknown {
-            diagnostics.push(unknown_api(endpoint));
+            diagnostics.push(unknown_api(&target));
         }
         Ok(ProbeResult {
             flavor: outcome.flavor,
@@ -278,7 +303,7 @@ impl LlmProbe {
     }
 
     /// Die zwei Anfragen, ohne Frist und ohne Zeitmessung.
-    async fn run(&self, target: &Target, answered: &AtomicBool) -> Result<Outcome, Failure> {
+    async fn run(&self, target: &Target, progress: &Progress) -> Result<Outcome, Failure> {
         // Genau eine Auflösung für die ganze Probe, und die Adresse wird für
         // beide Anfragen angeheftet: Der Endpunkt, über den die Oberfläche
         // gleich etwas behauptet, ist derselbe, der geantwortet hat.
@@ -286,25 +311,32 @@ impl LlmProbe {
             .upstream
             .resolve(&target.authority, true)
             .await
-            .map_err(|error| match error {
-                UpstreamError::Dns => Failure::Unreachable(format!(
-                    "{} does not resolve on this machine",
-                    target.authority.host
-                )),
-                other => Failure::Unreachable(other.to_string()),
+            .map_err(|error| Failure::Unreachable {
+                detail: match error {
+                    UpstreamError::Dns => {
+                        format!("{} does not resolve on this machine", target.authority.host)
+                    }
+                    other => other.to_string(),
+                },
+                // Vor jeder Anfrage gescheitert: Kein Pfad wurde gefragt.
+                path: None,
             })?;
         let endpoint_is_private = target.is_private(ip);
 
-        let tags = self.get(target, OLLAMA_TAGS_PATH, ip, answered).await?;
-        if let Some(models) = tags.as_ref().and_then(|body| ollama_models(body)) {
-            return Ok(Outcome {
-                flavor: LlmFlavor::Ollama,
-                models,
-                endpoint_is_private,
-            });
+        // Ein `404` von hier ist kein Abbruch: `get` gibt dann `None`, und die
+        // Probe fragt weiter nach der OpenAI-kompatiblen Liste.
+        if target.native_ollama {
+            let tags = self.get(target, OLLAMA_TAGS_PATH, ip, progress).await?;
+            if let Some(models) = tags.as_ref().and_then(|body| ollama_models(body)) {
+                return Ok(Outcome {
+                    flavor: LlmFlavor::Ollama,
+                    models,
+                    endpoint_is_private,
+                });
+            }
         }
 
-        let models_body = self.get(target, OPENAI_MODELS_PATH, ip, answered).await?;
+        let models_body = self.get(target, &target.models_path, ip, progress).await?;
         if let Some(models) = models_body.as_ref().and_then(|body| openai_models(body)) {
             return Ok(Outcome {
                 flavor: LlmFlavor::OpenAiCompatible,
@@ -323,7 +355,8 @@ impl LlmProbe {
         })
     }
 
-    /// Ein `GET` auf einen der beiden Pfade.
+    /// Ein `GET` auf einen der beiden Pfade, `path` absolut ab der Wurzel des
+    /// Servers.
     ///
     /// `Ok(Some(body))` heißt `200` mit einem gelesenen Körper, `Ok(None)`
     /// jede andere Antwort, die der Server geschickt hat (`404`, `3xx`, `5xx`).
@@ -332,11 +365,12 @@ impl LlmProbe {
     async fn get(
         &self,
         target: &Target,
-        suffix: &str,
+        path: &str,
         ip: std::net::IpAddr,
-        answered: &AtomicBool,
+        progress: &Progress,
     ) -> Result<Option<Bytes>, Failure> {
-        let request = target.request(suffix);
+        progress.attempt(path);
+        let request = target.request(path);
         let response = self
             .upstream
             .forward_to(&request, Bytes::new(), ip)
@@ -346,16 +380,19 @@ impl LlmProbe {
                 // Rechner nicht. Das `why` sagt das, statt „nicht erreichbar"
                 // zu behaupten (HUM-257).
                 Some(source) => Failure::Untrusted(source),
-                None => Failure::Unreachable(format!(
-                    "{}{suffix} did not answer: {failure}",
-                    target.authority
-                )),
+                None => Failure::Unreachable {
+                    detail: format!("{} did not answer: {failure}", target.url(path)),
+                    path: Some(path.to_owned()),
+                },
             })?;
 
-        answered.store(true, Ordering::SeqCst);
+        progress.answered.store(true, Ordering::SeqCst);
         let status = response.status().as_u16();
         if status == 401 || status == 403 {
-            return Err(Failure::NeedsAuth(status));
+            return Err(Failure::NeedsAuth {
+                status,
+                url: target.url(path),
+            });
         }
         if status != 200 {
             return Ok(None);
@@ -377,6 +414,32 @@ impl LlmProbe {
     }
 }
 
+/// Wie weit die Probe gekommen ist, geteilt mit der Frist um sie herum.
+#[derive(Default)]
+struct Progress {
+    /// Wahr, sobald der Server auf irgendeine Anfrage geantwortet hat.
+    answered: AtomicBool,
+    /// Der Pfad der Anfrage, die zuletzt begonnen hat; `None` vor der ersten.
+    attempted: std::sync::Mutex<Option<String>>,
+}
+
+impl Progress {
+    /// Merkt sich, dass jetzt dieser Pfad gefragt wird.
+    fn attempt(&self, path: &str) {
+        if let Ok(mut attempted) = self.attempted.lock() {
+            *attempted = Some(path.to_owned());
+        }
+    }
+
+    /// Der zuletzt gefragte Pfad.
+    fn attempted(&self) -> Option<String> {
+        self.attempted
+            .lock()
+            .ok()
+            .and_then(|attempted| attempted.clone())
+    }
+}
+
 /// Das Ergebnis der zwei Anfragen, noch ohne Zeit und Befunde.
 struct Outcome {
     flavor: LlmFlavor,
@@ -387,11 +450,28 @@ struct Outcome {
 /// Was die Probe abbrechen lässt.
 enum Failure {
     /// Nichts geantwortet: kein Name, keine Verbindung, keine Zeit mehr.
-    Unreachable(String),
+    Unreachable {
+        /// Was genau fehlte.
+        detail: String,
+        /// Der Pfad, der dabei gefragt wurde; `None`, wenn es gar nicht erst
+        /// zu einer Anfrage kam (Auflösung).
+        path: Option<String>,
+    },
     /// Es kam eine Antwort, aber die Probe wurde nicht fertig.
-    Incomplete(String),
+    Incomplete {
+        /// Was genau fehlte.
+        detail: String,
+        /// Der Pfad, der beim Ablauf der Frist gefragt wurde.
+        path: Option<String>,
+    },
     /// Der Server verlangt eine Anmeldung.
-    NeedsAuth(u16),
+    NeedsAuth {
+        /// `401` oder `403`.
+        status: u16,
+        /// Die Adresse, die so geantwortet hat, wie sie ein `curl` fragen
+        /// würde.
+        url: String,
+    },
     /// Das Zertifikat des Servers stammt von einer Stelle, der dieser Rechner
     /// nicht vertraut (HUM-257).
     Untrusted(TrustSource),
@@ -403,33 +483,30 @@ impl Failure {
     /// Der Vorschlag zu `LLM_001` ist der `curl`, mit dem sich dieselbe Frage
     /// von Hand stellen lässt: Ein Endpunkt, der schweigt, ist kein Fehler des
     /// Nutzers, und die nächste sinnvolle Handlung ist nachzusehen, ob er von
-    /// diesem Rechner aus überhaupt erreichbar ist.
+    /// diesem Rechner aus überhaupt erreichbar ist. Der `curl` fragt genau den
+    /// Pfad, an dem die Probe scheiterte, nie einen, den sie nicht gefragt hat
+    /// (HUM-261). Scheiterte sie vor jeder Anfrage, an der Auflösung, ist der
+    /// Vorschlag die Auflösung von Hand.
     fn into_diagnostic(self, target: &Target) -> Diagnostic {
         match self {
-            Self::Unreachable(detail) => Diagnostic::builder(LLM_001, Severity::Blocking)
+            Self::Unreachable { detail, path } => Diagnostic::builder(LLM_001, Severity::Blocking)
                 .why(format!(
                     "Humanitl could not reach {} from this machine ({detail}). The agent will \
                      not be able to talk to the model.",
                     target.authority
                 ))
-                .fix(FixAction::CopyCommand(format!(
-                    "curl -sS {}",
-                    target.url(OLLAMA_TAGS_PATH)
-                )))
+                .fix(target.retry(path.as_deref()))
                 .build(),
             // Erreichbar war der Server; nur fertig wurde die Probe nicht.
             // Derselbe Code, weil der Agent so oder so nicht arbeiten kann,
             // aber ein `why`, das die Beobachtung nicht überzeichnet.
-            Self::Incomplete(detail) => Diagnostic::builder(LLM_001, Severity::Blocking)
+            Self::Incomplete { detail, path } => Diagnostic::builder(LLM_001, Severity::Blocking)
                 .why(format!(
                     "{} answered, but not in time ({detail}). Raise the timeout or check what \
                      the server is doing.",
                     target.authority
                 ))
-                .fix(FixAction::CopyCommand(format!(
-                    "curl -sS {}",
-                    target.url(OLLAMA_TAGS_PATH)
-                )))
+                .fix(target.retry(path.as_deref()))
                 .build(),
             // Derselbe Code wie „nicht erreichbar", weil der Agent so oder so
             // nicht mit dem Modell reden kann; das `why` nennt die Ursache, und
@@ -444,21 +521,19 @@ impl Failure {
                     .fix(fix)
                     .build()
             }
-            Self::NeedsAuth(status) if target.authorization.is_some() => {
+            Self::NeedsAuth { status, url } if target.authorization.is_some() => {
                 Diagnostic::builder(LLM_002, Severity::Error)
                     .why(format!(
-                        "the LLM server at {} answered {status} to the access key that was \
-                         sent; it does not accept this key.",
-                        target.authority
+                        "the LLM server answered {status} at {url} to the access key that was \
+                         sent; it does not accept this key."
                     ))
                     .fix(FixAction::CopyCommand("humanitl llm key set".to_owned()))
                     .build()
             }
-            Self::NeedsAuth(status) => Diagnostic::builder(LLM_002, Severity::Error)
+            Self::NeedsAuth { status, url } => Diagnostic::builder(LLM_002, Severity::Error)
                 .why(format!(
-                    "the LLM server at {} answered {status}. It requires an access key, and \
-                     none was sent.",
-                    target.authority
+                    "the LLM server answered {status} at {url}. It requires an access key, and \
+                     none was sent."
                 ))
                 .fix(FixAction::CopyCommand("humanitl llm key set".to_owned()))
                 .build(),
@@ -471,8 +546,13 @@ impl Failure {
 struct Target {
     authority: Authority,
     scheme: Scheme,
-    /// Der Pfad der API-Wurzel, ohne abschließenden `/`; leer für die Wurzel.
-    root: String,
+    /// Der Pfad der Modellliste unter der OpenAI-kompatiblen Basis, etwa
+    /// `/v1/models` oder `/api/v1/models` ([`llm_endpoint::openai_path`]).
+    models_path: String,
+    /// Wahr, wenn der Endpunkt an der Wurzel des Servers sitzt und die Probe
+    /// deshalb zuerst [`OLLAMA_TAGS_PATH`] fragt
+    /// ([`llm_endpoint::serves_native_ollama`]).
+    native_ollama: bool,
     /// `Authorization: Bearer …`, wenn ein Schlüssel mitgeht, als empfindlich
     /// markiert (HUM-140).
     authorization: Option<HeaderValue>,
@@ -481,18 +561,19 @@ struct Target {
 impl Target {
     /// Liest den Endpunkt.
     ///
-    /// Ein abschließendes `/v1` gehört zur OpenAI-kompatiblen Oberfläche und
-    /// nicht zur Wurzel der API: `http://host:1/v1` und `http://host:1` meinen
-    /// denselben Server, und die Probe fragt beide Male `…/api/tags` und
-    /// `…/v1/models`. So passt sie zu `OpenCodeAdapter::base_url`, das an
-    /// dieselbe Wurzel wieder ein `/v1` hängt.
+    /// Über dieselben Funktionen, aus denen `OpenCode` seine `baseURL`
+    /// bekommt ([`llm_endpoint`]): `http://host:1/v1` und `http://host:1`
+    /// meinen denselben Server, die Probe fragt beide Male `/api/tags` und
+    /// `/v1/models`. `https://host/api/v1/` ist ein Server hinter dem Präfix
+    /// `/api`; dort fragt sie nur `/api/v1/models` (HUM-261).
     fn parse(endpoint: &Url) -> Result<Self, Diagnostic> {
         let scheme = match endpoint.scheme() {
             "http" => Scheme::Http,
             "https" => Scheme::Https,
             other => {
                 return Err(unreadable_endpoint(format!(
-                    "{endpoint} uses the scheme {other:?}; the probe speaks http and https only"
+                    "{} uses the scheme {other:?}; the probe speaks http and https only",
+                    llm_endpoint::display(endpoint)
                 )));
             }
         };
@@ -501,18 +582,20 @@ impl Target {
             .ok_or(())
             .and_then(|text| HostName::parse(text).map_err(|_err| ()))
             .map_err(|()| {
-                unreadable_endpoint(format!("{endpoint} has no host that Humanitl can read"))
+                unreadable_endpoint(format!(
+                    "{} has no host that Humanitl can read",
+                    llm_endpoint::display(endpoint)
+                ))
             })?;
         let port = endpoint.port_or_known_default().unwrap_or(match scheme {
             Scheme::Https => 443,
             _ => 80,
         });
-        let root = endpoint.path().trim_end_matches('/');
-        let root = root.strip_suffix("/v1").unwrap_or(root).to_owned();
         Ok(Self {
             authority: Authority::new(host, port),
             scheme,
-            root,
+            models_path: llm_endpoint::openai_path(endpoint, OPENAI_MODELS),
+            native_ollama: llm_endpoint::serves_native_ollama(endpoint),
             authorization: None,
         })
     }
@@ -536,23 +619,47 @@ impl Target {
         }
     }
 
-    /// Die Adresse, die die Probe fragt, als Text — für den `curl` im Vorschlag.
-    fn url(&self, suffix: &str) -> String {
-        format!(
-            "{}://{}{}{suffix}",
-            self.scheme.as_str(),
-            self.authority,
-            self.root
-        )
+    /// Die Adresse, die die Probe fragt, als Text — für den `curl` im
+    /// Vorschlag und für das `why`. `path` ist absolut.
+    fn url(&self, path: &str) -> String {
+        format!("{}://{}{path}", self.scheme.as_str(), self.authority)
     }
 
-    /// Die Anfrage an einen der beiden Pfade.
-    fn request(&self, suffix: &str) -> HttpRequest {
+    /// Der Vorschlag, dieselbe Frage von Hand zu stellen.
+    ///
+    /// Mit Pfad der `curl` auf genau diese Adresse; ohne, weil die Probe vor
+    /// jeder Anfrage scheiterte, die Auflösung des Namens.
+    ///
+    /// Die Adresse geht als ein Wort der Shell hinein
+    /// ([`humanitl_core::shell::shell_word`]): Ein Pfad wie `/api;id;/v1`
+    /// führte sonst beim Einfügen `id` als eigenen Befehl aus.
+    fn retry(&self, path: Option<&str>) -> FixAction {
+        FixAction::CopyCommand(match path {
+            Some(path) => format!("curl -sS {}", shell_word(&self.url(path))),
+            None => format!(
+                "getent hosts {}",
+                shell_word(&self.authority.host.to_string())
+            ),
+        })
+    }
+
+    /// Die Pfade, die die Probe fragt, in ihrer Reihenfolge.
+    fn asked_paths(&self) -> Vec<&str> {
+        let mut paths = Vec::with_capacity(2);
+        if self.native_ollama {
+            paths.push(OLLAMA_TAGS_PATH);
+        }
+        paths.push(self.models_path.as_str());
+        paths
+    }
+
+    /// Die Anfrage an einen der beiden Pfade, `path` absolut.
+    fn request(&self, path: &str) -> HttpRequest {
         let mut request = HttpRequest::new(
             Method::GET,
             self.scheme,
             self.authority.clone(),
-            format!("{}{suffix}", self.root),
+            path.to_owned(),
         );
         request.headers.insert(
             HeaderName::from_static("accept"),
@@ -598,10 +705,11 @@ pub fn not_private_by_name(endpoint: &Url) -> Option<Diagnostic> {
     Some(
         Diagnostic::builder(LLM_006, Severity::Info)
             .why(format!(
-                "{endpoint} is not one of the private forms — neither an address in a private \
+                "{} is not one of the private forms — neither an address in a private \
                  network nor localhost or a name under {}. Judged from the name alone; nothing \
                  was resolved. Traffic to this address bypasses the queue, so only put a machine \
                  you control here.",
+                llm_endpoint::display(endpoint),
                 PRIVATE_SUFFIXES.join(", ")
             ))
             .fix(FixAction::ChangeSetting {
@@ -616,8 +724,9 @@ pub fn not_private_by_name(endpoint: &Url) -> Option<Diagnostic> {
 fn not_private(endpoint: &Url) -> Diagnostic {
     Diagnostic::builder(LLM_006, Severity::Info)
         .why(format!(
-            "{endpoint} is not on a private network. Traffic to this address bypasses the queue, \
-             so only put a machine you control here."
+            "{} is not on a private network. Traffic to this address bypasses the queue, \
+             so only put a machine you control here.",
+            llm_endpoint::display(endpoint)
         ))
         .fix(FixAction::ChangeSetting {
             key: "llm.endpoint".to_owned(),
@@ -642,11 +751,28 @@ fn unreadable_endpoint(why: String) -> Diagnostic {
 }
 
 /// Der Befund für einen Endpunkt, der antwortet, aber keine bekannte API ist.
-fn unknown_api(endpoint: &Url) -> Diagnostic {
+///
+/// Das `why` nennt genau die Pfade, die gefragt wurden, nicht eine feste
+/// Liste: Bei einem Endpunkt mit Pfad-Präfix war `/api/tags` nicht dabei.
+///
+/// Gebaut aus dem Ziel der Anfragen und den gefragten Pfaden, nie aus dem
+/// eingetragenen Text: Dessen Query oder Fragment ging nicht hinaus und kann
+/// ein Geheimnis tragen (HUM-261).
+fn unknown_api(target: &Target) -> Diagnostic {
+    let urls: Vec<String> = target
+        .asked_paths()
+        .into_iter()
+        .map(|path| target.url(path))
+        .collect();
+    let asked = match urls.as_slice() {
+        [only] => format!("{only} did not answer"),
+        many => format!("neither {} answered", many.join(" nor ")),
+    };
     Diagnostic::builder(LLM_003, Severity::Warning)
         .why(format!(
-            "connected to {endpoint}, but neither {OLLAMA_TAGS_PATH} nor {OPENAI_MODELS_PATH} \
-             answered. Check that the URL points at the API root, not at a chat UI."
+            "connected to {}, but {asked} with a model list. Check that the URL is the base URL \
+             of the OpenAI-compatible API (as in OpenCode), not a chat UI.",
+            target.authority
         ))
         .fix(FixAction::ChangeSetting {
             key: "llm.endpoint".to_owned(),
@@ -670,7 +796,7 @@ fn ollama_models(body: &[u8]) -> Option<Vec<String>> {
     )
 }
 
-/// Die Modell-Ids aus einer Antwort von `GET /v1/models`.
+/// Die Modell-Ids aus einer Antwort von `GET <Basis>/models`.
 fn openai_models(body: &[u8]) -> Option<Vec<String>> {
     let value: serde_json::Value = serde_json::from_slice(body).ok()?;
     let data = value.get("data")?.as_array()?;
@@ -691,28 +817,53 @@ mod tests {
 
     use super::{LlmFlavor, Target, ollama_models, openai_models};
 
+    /// Der Endpunkt ist die Basis der OpenAI-kompatiblen API (HUM-261): Ein
+    /// abschließendes `/v1` wird nicht verdoppelt, ein Pfad-Präfix bleibt vor
+    /// `/v1/models`, und `/api/tags` gilt nur an der Wurzel des Servers.
     #[test]
-    fn the_api_root_drops_a_trailing_v1() {
-        for (endpoint, expected) in [
-            ("http://192.168.1.50:11434", ""),
-            ("http://192.168.1.50:11434/", ""),
-            ("http://host:1/v1", ""),
-            ("http://host:1/v1/", ""),
-            ("http://host:1/openai", "/openai"),
-            ("http://host:1/openai/v1", "/openai"),
+    fn the_models_path_lies_under_the_base_and_tags_only_at_the_root() {
+        for (endpoint, models, native_ollama) in [
+            ("http://192.168.1.50:11434", "/v1/models", true),
+            ("http://192.168.1.50:11434/", "/v1/models", true),
+            ("http://host:1/v1", "/v1/models", true),
+            ("http://host:1/v1/", "/v1/models", true),
+            ("http://host:1/openai", "/openai/v1/models", false),
+            ("http://host:1/openai/v1", "/openai/v1/models", false),
+            ("https://llm.example.net/api/v1/", "/api/v1/models", false),
+            ("https://llm.example.net/api/v1", "/api/v1/models", false),
         ] {
             let target = Target::parse(&Url::parse(endpoint).unwrap()).unwrap();
-            assert_eq!(target.root, expected, "for {endpoint}");
+            assert_eq!(target.models_path, models, "for {endpoint}");
+            assert_eq!(target.native_ollama, native_ollama, "for {endpoint}");
+            assert!(
+                target
+                    .asked_paths()
+                    .iter()
+                    .all(|path| !path.contains("/api/api/")),
+                "for {endpoint}: {:?}",
+                target.asked_paths()
+            );
+            // Die Ankündigung der Kommandozeile liest dieselben Pfade aus
+            // `llm_endpoint::probe_paths`; die Probe fragt genau diese.
+            assert_eq!(
+                target.asked_paths(),
+                humanitl_config::llm_endpoint::probe_paths(&Url::parse(endpoint).unwrap()),
+                "for {endpoint}"
+            );
         }
     }
 
     #[test]
     fn the_probe_only_ever_gets_two_fixed_paths() {
         let target = Target::parse(&Url::parse("http://host:1").unwrap()).unwrap();
-        for suffix in [super::OLLAMA_TAGS_PATH, super::OPENAI_MODELS_PATH] {
-            let request = target.request(suffix);
+        assert_eq!(
+            target.asked_paths(),
+            [super::OLLAMA_TAGS_PATH, "/v1/models"]
+        );
+        for path in target.asked_paths() {
+            let request = target.request(path);
             assert_eq!(request.method, humanitl_core::Method::GET);
-            assert_eq!(request.path_and_query, suffix);
+            assert_eq!(request.path_and_query, path);
             assert_eq!(request.body.size, 0);
             assert!(
                 request.headers.get("cookie").is_none()
@@ -752,7 +903,10 @@ mod tests {
     #[test]
     fn no_fix_proposes_an_empty_endpoint() {
         let url = Url::parse("http://model.example:11434").unwrap();
-        for diagnostic in [super::not_private(&url), super::unknown_api(&url)] {
+        for diagnostic in [
+            super::not_private(&url),
+            super::unknown_api(&Target::parse(&url).unwrap()),
+        ] {
             match diagnostic.fix {
                 Some(humanitl_core::FixAction::ChangeSetting { key, value }) => {
                     assert_eq!(key, "llm.endpoint");
@@ -760,6 +914,51 @@ mod tests {
                 }
                 other => panic!("expected a setting change, got {other:?}"),
             }
+        }
+    }
+
+    /// Der Kopier-Befehl nennt die Adresse als ein Wort der Shell (HUM-261):
+    /// `;`, `$(…)` und ein Leerzeichen im Pfad führen beim Einfügen keinen
+    /// zweiten Befehl aus.
+    #[test]
+    fn the_copied_command_quotes_the_address() {
+        let target =
+            Target::parse(&Url::parse("http://127.0.0.1:1/a b;id;$(id)/v1").unwrap()).unwrap();
+        assert_eq!(
+            target.retry(Some(&target.models_path)),
+            humanitl_core::FixAction::CopyCommand(
+                "curl -sS 'http://127.0.0.1:1/a%20b;id;$(id)/v1/models'".to_owned()
+            )
+        );
+        let plain = Target::parse(&Url::parse("http://127.0.0.1:1").unwrap()).unwrap();
+        assert_eq!(
+            plain.retry(Some(super::OLLAMA_TAGS_PATH)),
+            humanitl_core::FixAction::CopyCommand(
+                "curl -sS http://127.0.0.1:1/api/tags".to_owned()
+            ),
+            "a plain address stays readable"
+        );
+    }
+
+    /// Benutzer, Passwort, Query und Fragment des Endpunkts stehen in keinem
+    /// Befund (HUM-261): Sie gehen mit keiner Anfrage hinaus und können ein
+    /// Geheimnis tragen.
+    #[test]
+    fn no_diagnostic_repeats_a_secret_from_the_endpoint() {
+        let url =
+            Url::parse("https://user:pw-geheim@model.example.com/v1/?token=geheim#frag-geheim")
+                .unwrap();
+        let target = Target::parse(&url).unwrap();
+        let mut texts = vec![
+            super::not_private(&url).why,
+            super::not_private_by_name(&url).unwrap().why,
+            super::unknown_api(&target).why,
+        ];
+        let ftp = Url::parse("ftp://user:pw-geheim@model.example.com/?token=geheim").unwrap();
+        texts.push(Target::parse(&ftp).unwrap_err().why);
+        for why in texts {
+            assert!(!why.contains("geheim"), "{why}");
+            assert!(!why.contains("user"), "{why}");
         }
     }
 

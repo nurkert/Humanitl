@@ -32,6 +32,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-257 | Der Daemon vertraut der Zertifikatsablage des Systems (vor HUM-060) | S | HUM-015, HUM-039, HUM-087 |
 | HUM-255 | Das Fenster trägt keine doppelte Titelleiste | S | HUM-019, HUM-034, HUM-054 |
 | HUM-260 | Gelb wird die Akzentfarbe der Oberfläche | M | HUM-008, HUM-254 |
+| HUM-261 | Die Probe versteht Endpunkte mit Pfad-Präfix (vor HUM-060) | S | HUM-037, HUM-039, HUM-076 |
 
 ---
 
@@ -3732,3 +3733,215 @@ HUM-008 (Tokens), HUM-034 (Tray), HUM-042 (Terminal), HUM-076 (Netzsuche), HUM-2
 ### Kandidaten für ein neues Issue
 - Terminal: Cursor und ANSI-Gelb sind beide der Akzent; ein gelber Cursor auf gelber Ausgabe verschwindet. Eigener Cursorton oder Invertierung prüfen.
 - `info` liegt unter Deuteranopie nah an `passthrough` (OKLab 0,019) und im hellen Theme nah an `held` (0,063). Heute trägt `info` immer sein Wort; ein eigener Ton wäre robuster.
+
+---
+
+## HUM-261 · Die Probe versteht Endpunkte mit Pfad-Präfix
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-037, HUM-039, HUM-076 · Blockiert: HUM-060 (vor HUM-060 zu erledigen)
+
+### Kontext
+Am 2026-10-20 trägt der Projekteigentümer mit v0.0.4 den Endpunkt
+`https://llm.hzo.schutzwerk.net/api/v1/` ein, einen OpenAI-kompatiblen Server hinter dem
+Pfad-Präfix `/api`. `OpenCode` benutzt genau diese `baseURL` mit `@ai-sdk/openai-compatible`
+erfolgreich. Die Diagnose der Probe schlägt dagegen zum Kopieren
+`curl -sS https://llm.hzo.schutzwerk.net:443/api/api/tags` vor, und der Server antwortet darauf
+`{"detail":"Not Found"}`. Der Mensch bekommt damit den Hinweis auf einen Pfad, den es nicht gibt.
+
+Ursache in `daemon/crates/proxy/src/llm_probe.rs`: `Target::parse` nahm als Wurzel den Pfad ohne
+abschließendes `/v1`, hier `/api`. Die Ollama-Frage hängte `/api/tags` daran (`/api/api/tags`),
+die OpenAI-Frage `/v1/models` (`/api/v1/models`, richtig). Der Ablauf der Probe am alten Code:
+
+- Ein `404` von `/api/tags` bricht nicht ab; `get` gibt `None`, und die Probe fragt danach
+  `/api/v1/models`.
+- `models` mit `401` (ohne Schlüssel): `LLM_002`, `why` „the LLM server at host:443 answered 401
+  …", Vorschlag `humanitl llm key set`. Kein `curl`, kein falscher Pfad.
+- `models` mit `200` (mit Schlüssel): Erfolg als `openai_compatible`, kein Befund außer
+  gegebenenfalls `LLM_006`.
+- Den `curl` gibt es nur bei `LLM_001` aus „nicht erreichbar" oder „nicht fertig geworden" (Frist,
+  Verbindungsfehler, der keine unbekannte Zertifikatsstelle ist). Dort stand **fest**
+  `target.url(OLLAMA_TAGS_PATH)`, gleich welche der beiden Anfragen scheiterte. Bei einem
+  Endpunkt mit Präfix war das immer `/api/api/tags`. Welche Anfrage im Befund vom 2026-10-20
+  scheiterte, nennt das `why` des damaligen Befunds (`… did not answer: …` oder
+  `no answer within … ms`); der Vorschlag war in jedem Fall falsch.
+
+Dieselbe Lücke hatte die Durchreichregel (`OpenCodeAdapter::llm_passthrough`): Sie zählt die
+Inferenz-Endpunkte als `/v1/chat/completions` und so fort ab der Wurzel des Hosts auf. Hinter
+einem Präfix schickt der Agent an `/api/v1/chat/completions`; keine Durchreiche trifft das, und
+jede Inferenz ginge in die Warteschlange. Die `baseURL` in `opencode.json`
+(`OpenCodeAdapter::base_url`) war dagegen schon richtig, nur eine zweite, eigene Lesart.
+
+### Ziel
+`llm.endpoint` ist die Basis-Adresse der OpenAI-kompatiblen API, wie `OpenCode` eine `baseURL`
+liest. Probe, Agent-Konfiguration, Durchreichregel und jeder Vorschlag zum Abschreiben lesen ihn
+über dieselbe Funktion, und kein Befund nennt eine Adresse, die es nicht gibt.
+
+### Entscheidungen
+- **Eine Lesart, in `humanitl-config`.** Neues Modul `humanitl_config::llm_endpoint` neben
+  `LlmConfig`: `openai_base_path`, `openai_base_url`, `openai_path`, `path_prefix`,
+  `serves_native_ollama`. Endet der Pfad auf `/v1` (mit oder ohne Schrägstrich), ist er die
+  Basis; sonst kommt `/v1` dazu. `humanitl-config` ist die eine Crate, die Proxy und Sandbox
+  beide schon kennen; eine eigene Crate oder ein Port wären Abstraktion ohne zweiten Nutzer.
+  `OpenCodeAdapter::base_url` entfällt, die Aufrufer nehmen `llm_endpoint::openai_base_url`.
+- **Die Ollama-Frage nur an der Wurzel des Servers, mit Präfix gar nicht.** Die native
+  Ollama-API (`/api/tags`) gibt es nur an der Wurzel eines Ollama-Servers. Mit dem Präfix
+  verkettet ergibt sie Pfade wie `/api/api/tags`, die kein Server kennt. An die Wurzel des Hosts
+  (`<scheme://host:port>/api/tags`) geht sie auch nicht: Ein Präfix heißt Reverse-Proxy mit
+  Verteilung nach Pfaden, die Wurzel gehört womöglich einem anderen Dienst, und ein Ollama dort
+  wäre nicht der Server, mit dem der Agent später redet (`OpenCode` fragt `<Basis>/…`). Die
+  Probe fragte damit eine Adresse, die der Mensch nicht eingetragen hat. Ein Ollama hinter einem
+  Präfix wird trotzdem erkannt, als `openai_compatible` über seine `/v1/models`, und das ist die
+  Oberfläche, die der Agent benutzt. `…/v1` ohne weiteres Präfix ist kein Präfix: Dort fragt die
+  Probe wie bisher erst `/api/tags`, dann `/v1/models`.
+- **Der `curl` nennt die Modellliste unter der Basis.** `LLM_001` (nicht erreichbar, nicht fertig)
+  schlägt `curl -sS <scheme://host:port><Basis>/models` vor: die Adresse, an der die Probe
+  entscheidet und die der Agent benutzt. Ollama beantwortet sie auch, der Vorschlag passt also
+  für beide Arten. Das `why` nennt bei einem Verbindungsfehler die volle Adresse, die nicht
+  antwortete.
+- **`LLM_002` nennt die Adresse, die `401`/`403` sagte**, mit Vorschlag `humanitl llm key set`
+  wie bisher. Ein `401` ist nie „nicht erreichbar".
+- **`LLM_003` nennt genau die gefragten Pfade**, bei einem Endpunkt mit Präfix also nur
+  `<Basis>/models`, und rät, die Basis-Adresse der OpenAI-kompatiblen API einzutragen.
+- **Durchreiche nach derselben Regel.** `passthrough_prefixes(endpoint, prefixes)`: Das nackte
+  `/v1/` wird zu den fünf Inferenz-Endpunkten **unter der Basis** (`/api/v1/chat/completions`
+  …), das nackte `/api/` zu den acht Ollama-Endpunkten nur bei einem Endpunkt an der Wurzel;
+  hinter einem Präfix fällt es weg. Der Rückfall bei leerer Liste folgt derselben Regel. Ein
+  ausdrücklich geschriebener Pfad (`/v1/files`) bleibt wörtlich. Für einen Endpunkt ohne Präfix
+  ändert sich nichts. Die Regel wird nicht breiter, sie zählt dieselben Endpunkte dort auf, wo
+  der Server sie anbietet; `docs/SECURITY.md` 3.1 sagt das.
+- **Erzeugte Inferenz-Endpunkte gelten genau** (Review Codex). Bis hierher waren sie Präfixe,
+  `POST /v1/models/delete` (und hinter dem Präfix `/api/v1/models/delete`) ging ungehalten
+  durch. Ein Eintrag in `Matcher::path_prefixes`, der auf `?` endet
+  (`humanitl_core::EXACT_PATH_MARK`), trifft nur genau seinen Pfad, mit beliebiger Query; kein
+  Unterpfad, kein abschließender `/`, keine kodierte Schreibweise (`%2F`), nichts wird dekodiert.
+  Das Zeichen taugt, weil der verglichene Pfad (vor dem ersten `?`) es nie enthält: Ein solcher
+  Eintrag traf vorher nichts; einzig ein solcher handgeschriebener, bisher toter Eintrag trifft
+  jetzt genau seinen Pfad, und der Parser von `rules.yaml` warnt davor (`RULES_005`, Warnung).
+  Proto, YAML und
+  Oberfläche tragen ihn ohne neues Feld. Ein neues Feld neben `path_prefixes` hätte Proto,
+  Dart-Bindungen, Parser und Konvertierung berührt, und ein vergessener Rückweg hätte die Grenze
+  still verloren. `passthrough_prefixes` erzeugt alle dreizehn Endpunkte als genaue Einträge;
+  was der Mensch selbst schreibt, bleibt Präfix, ein Eintrag mit `?` fällt dort weg.
+  `GET /v1/models/<id>` geht damit durch die Warteschlange; `OpenCode` fragt nur die Liste.
+- **Der `curl` nennt den Pfad, an dem die Probe scheiterte** (Review Codex). Fällt an der Wurzel
+  schon `/api/tags` aus, wurde `/v1/models` nie gefragt; der Befund nennt dann `/api/tags`.
+  Scheitert die Probe vor jeder Anfrage (Auflösung), nennt er keinen Pfad und schlägt
+  `getent hosts <host>` vor.
+- **Kein Teil des eingetragenen Textes, der nicht hinausging, steht im Befund** (Review Codex).
+  `LLM_003` baut seine Adressen aus dem Ziel und den gefragten Pfaden; `LLM_006` und `LLM_007`
+  zeigen den Endpunkt über `llm_endpoint::display`, ohne Benutzer, Passwort, Query und Fragment.
+- **Kopier-Befehle als Wörter der Shell** (Review Codex, Runde 2). Der `curl` von `LLM_001` und
+  `LLM_004` und `getent hosts` gehen durch `humanitl_core::shell::shell_word`; ein Pfad wie
+  `/api;id;/v1` oder `/$(id)/v1` führt beim Einfügen keinen zweiten Befehl aus.
+- **Keine Zugangsdaten in Notiz und `LLM_004`** (Review Opus, Runde 2): Die Notiz der
+  Durchreichregel nennt `llm_endpoint::display`, der `curl` von `LLM_004` die Basis aus
+  `llm_endpoint::without_secrets`. In `opencode.json` bleibt die Basis, wie sie eingetragen ist.
+- **Oberfläche** (Review Codex, Runde 2): `ruleMatchSummary` und der Regel-Editor zeigen einen
+  genauen Eintrag als „exact `/v1/models`" beziehungsweise in der Zeile „Exact paths", ohne `?`
+  und nicht als Präfix; die Daten bleiben unverändert. Drei neue ARB-Texte, angehängt.
+- **Discover** (`llm_discover.rs`) fragt nur `http://<adresse>:<port>` ohne Pfad und geht über
+  dieselbe Probe; dort ändert sich nichts.
+
+### Betroffene Pfade
+- `daemon/crates/config/src/llm_endpoint.rs` (neu), `daemon/crates/config/src/lib.rs`
+- `daemon/crates/core-types/src/rule.rs`, `daemon/crates/core-types/src/lib.rs`
+  (`EXACT_PATH_MARK`, `exact_path_entry`, `exact_path_of`)
+- `daemon/crates/rules/src/path.rs` (`prefix_matches` mit genauen Einträgen)
+- `daemon/crates/proxy/src/meta.rs` (genauer Eintrag als Pfad, nicht als `**`)
+- `daemon/crates/core-types/src/diagnostics/codes.rs` (nur `LLM_003`), `docs/DIAGNOSTICS.md`
+  (erzeugt), `app/l10n/app_{en,de}.arb` (nur `diagLLM003Why`), `docs/cli.md`,
+  `docs/THREAT-MODEL.md` (K-02, Änderungshistorie)
+- `daemon/crates/rules/src/parse.rs`, `daemon/crates/rules/tests/parse.rs` (Warnung `RULES_005`)
+- `app/lib/core/text/rule_sentence.dart`, `app/lib/features/rules/widgets/rule_editor.dart`,
+  `app/test/features/rules/rule_text_test.dart`, `app/test/features/rules/rule_editor_test.dart`
+- `daemon/crates/proxy/src/llm_probe.rs` (`Target`, `Failure::NeedsAuth`, `unknown_api`,
+  `OPENAI_MODELS` statt `OPENAI_MODELS_PATH`)
+- `daemon/crates/proxy/tests/llm_probe.rs`
+- `daemon/crates/sandbox/src/agent/opencode.rs` (`base_url` entfällt, `passthrough_prefixes`)
+- `daemon/crates/sandbox/tests/opencode_adapter.rs`
+- `daemon/bin/humanitl/src/cli.rs`, `daemon/bin/humanitl/src/cmd/llm.rs`,
+  `daemon/bin/humanitl/src/cmd/doctor.rs` (Ankündigung und Hilfetexte der Probe)
+- `docs/SECURITY.md` 3.1
+
+### Tests
+- `config/src/llm_endpoint.rs`: Basis und Basis-Adresse für Wurzel, `/`, `/v1`, `/v1/`,
+  `/openai`, `/api/v1`, `/api/v1/`; Query und Fragment gehören nicht zur Basis; Präfix und
+  `serves_native_ollama` je Form.
+- `proxy/src/llm_probe.rs`: `the_models_path_lies_under_the_base_and_tags_only_at_the_root`
+  (kein gefragter Pfad enthält `/api/api/`), `the_probe_only_ever_gets_two_fixed_paths`.
+- `proxy/tests/llm_probe.rs` mit einem Fake hinter `/api` (alles außer `/api/v1/models` ist `404`
+  mit `{"detail":"Not Found"}`):
+  - `a_prefixed_endpoint_is_asked_under_its_base`: `/api/v1/` und `/api/v1` mit Schlüssel,
+    `openai_compatible`, genau eine Anfrage `/api/v1/models`.
+  - `a_prefixed_endpoint_without_a_key_asks_for_the_key`: `LLM_002`, `why` mit der models-Adresse
+    und „none was sent", kein „could not reach", kein `/api/api/`, Vorschlag
+    `humanitl llm key set`.
+  - `a_silent_prefixed_endpoint_gets_a_curl_on_its_model_list`: `LLM_001`, `curl` genau auf
+    `/api/v1/models`.
+  - `an_unknown_prefixed_endpoint_names_only_the_path_it_asked`: `LLM_003` nennt
+    `/other/v1/models`, nicht `/api/tags`.
+  - `a_trailing_v1_without_a_slash_is_no_prefix`: OpenAI-Fake unter `…/v1` wird erkannt.
+  - `probe_timeout_llm_001` erwartet jetzt `curl … /v1/models`; die Tests für Ollama, OpenAI,
+    `401` und `…/v1` mit Ollama ohne Präfix bleiben unverändert grün.
+- `sandbox/tests/opencode_adapter.rs`: `opencode_keeps_the_path_prefix_of_the_endpoint`
+  (`baseURL` und `curl` von `LLM_004` je Form), `opencode_passthrough_follows_the_path_prefix`
+  (Inferenz unter `/api/v1/` frei, `/api/v1/files`, `/v1/chat/completions`, `/api/chat`,
+  `/api/api/tags` gehalten); in `opencode.rs`
+  `behind_a_path_prefix_inference_lies_under_the_base`.
+- `rules/src/path.rs`: `an_exact_entry_matches_only_its_own_path` (Query ja; Unterpfad, `/` am
+  Ende, `%2F`, `%2f`, `//`, Großschreibung nein; Präfix daneben bleibt Präfix).
+- Durchreiche: `/v1/models/delete`, `/v1/models%2Fdelete`, `/v1/chat/completions/` und unter
+  dem Präfix `/api/v1/models/delete`, `/api/v1/models/m`, `/api/v1/models/./delete` gehalten,
+  `/api/v1/chat/completions?x=1` und `/v1/chat/completions?x=1` frei;
+  `a_written_entry_with_a_question_mark_is_dropped`.
+- Probe: `the_curl_names_the_path_that_went_unanswered` (tags `404`, models schweigt: `curl` auf
+  `/v1/models`), `probe_timeout_llm_001` (tags schweigt: `curl` auf `/api/tags`),
+  `a_name_that_does_not_resolve_names_no_path` (`getent hosts`),
+  `a_token_in_the_endpoint_appears_in_no_diagnostic` und
+  `no_diagnostic_repeats_a_secret_from_the_endpoint` (`?token=geheim`, `user:pw@`, Fragment).
+- Mutationsbeweis je Test, siehe Akzeptanzkriterien.
+
+### Akzeptanzkriterien
+- [ ] Endet der Pfad des Endpunkts auf `/v1` (mit oder ohne `/`), ist `<Endpunkt>/models` die
+  Probe, sonst `<Endpunkt>/v1/models`; Probe und `OpenCode`-Konfiguration benutzen dieselbe
+  Funktion.
+- [ ] Bei einem Endpunkt mit Präfix fragt die Probe `/api/tags` weder mit dem Präfix noch an der
+  Wurzel des Hosts.
+- [ ] Kopier-Befehl und `why` nennen die Adresse, die entscheidet; nie `/api/api/`.
+- [ ] Die Ankündigung der Kommandozeile vor der Probe nennt genau die Pfade, die die Probe
+  fragt; die Hilfetexte stimmen für Endpunkte mit und ohne Präfix.
+- [ ] `401`/`403` ist `LLM_002` mit Hinweis auf `humanitl llm key set`, nicht „nicht erreichbar".
+- [ ] Die Durchreiche deckt hinter einem Präfix die Inferenz unter der Basis, und nichts sonst
+  zusätzlich; ohne Präfix bleibt sie unverändert.
+- [ ] Endpunkte ohne Präfix (Ollama, OpenAI-kompatibel, `…/v1`) verhalten sich wie vorher.
+- [ ] Die erzeugten Inferenz-Endpunkte der Durchreiche gelten genau; `/api/v1/models/delete` und
+  `/v1/models/delete` werden gehalten, `/api/v1/chat/completions?x=1` geht durch. Vom Menschen
+  eingetragene Pfade bleiben Präfixe.
+- [ ] Der `curl` von `LLM_001` fragt den Pfad, an dem die Probe scheiterte; vor jeder Anfrage
+  keinen.
+- [ ] Kein Befund der Probe enthält Benutzer, Passwort, Query oder Fragment des Endpunkts.
+- [ ] Mutationsbeweis je neuem Test.
+
+### Fallstricke
+- Ollama beantwortet auch `/v1/models`. Die Reihenfolge „erst `/api/tags`" bleibt deshalb an der
+  Wurzel erhalten, sonst erschiene ein Ollama als `openai_compatible`.
+- `Url::path()` liefert bei `https://host` den Pfad `/`; erst nach dem Abschneiden der
+  Schrägstriche ist das die Wurzel. `https://host:443` verliert beim Serialisieren den
+  Vorgabeport, `openai_base_url` ebenso wie vorher `base_url`.
+- Die Ankündigung von `humanitl llm test` und `humanitl doctor --probe-llm` sagte fest „two GET
+  requests, /api/tags then /v1/models"; bei einem Endpunkt mit Präfix war das falsch. Sie kommt
+  jetzt aus `llm_endpoint::probe_plan`, also aus denselben Pfaden wie die Probe
+  (`llm_endpoint::probe_paths`; ein Unit-Test der Probe hält beide gleich): „one GET request,
+  /api/v1/models" hinter einem Präfix. Die Hilfetexte in `cli.rs` sind statisch und deshalb
+  neutral gefasst (Modellliste des Endpunkts, davor `/api/tags` nur bei einem Ollama ohne
+  Präfix).
+
+### Kandidaten für neue Issues
+- Ein Pfad, den der Mensch wörtlich gleich der Basis in `llm.passthrough_paths` schreibt
+  (`/api/v1/` bei einem Endpunkt hinter `/api`), wird nicht wie das nackte `/v1/` auf die
+  Inferenz-Endpunkte verengt, sondern bleibt ein Präfix über die ganze Fläche darunter, mit
+  `POST /api/v1/files` und Co. Sinnvoll: jedes Präfix gleich `llm_endpoint::openai_base_path`
+  (mit oder ohne `/`) wie `/v1/` behandeln.
+
+### Referenzen
+HUM-037 (`OpenCodeAdapter::base_url`), HUM-039 (Probe), HUM-076 (Discover), HUM-257 (Befund
+vom 2026-10-20, Zertifikat), `docs/SECURITY.md` 3.1.

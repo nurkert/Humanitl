@@ -375,6 +375,32 @@ pub fn path_prefix_is_valid(prefix: &str) -> bool {
     prefix.starts_with('/') && prefix.chars().count() >= 2
 }
 
+/// Das Zeichen am Ende eines Eintrags von [`Matcher::path_prefixes`], der
+/// einen Pfad **genau** meint statt als Präfix (HUM-261).
+///
+/// `/v1/models?` trifft `/v1/models` und `/v1/models?x=1`, aber weder
+/// `/v1/models/delete` noch `/v1/models%2Fdelete`. Das Zeichen taugt dafür,
+/// weil es im verglichenen Pfad nie vorkommt: Verglichen wird der Pfad ohne
+/// Query, also alles vor dem ersten `?`. Ein Eintrag mit `?` am Ende hat
+/// deshalb vor HUM-261 nie etwas getroffen. Eine Ausnahme von „nichts wird
+/// breiter" gibt es: Ein solcher handgeschriebener, bisher toter Eintrag
+/// trifft jetzt genau seinen Pfad. Der Parser von `rules.yaml` warnt
+/// deshalb vor jedem Eintrag mit `?` am Ende (`RULES_005`, Warnung).
+pub const EXACT_PATH_MARK: char = '?';
+
+/// Der Eintrag für [`Matcher::path_prefixes`], der genau diesen Pfad meint.
+#[must_use]
+pub fn exact_path_entry(path: &str) -> String {
+    format!("{path}{EXACT_PATH_MARK}")
+}
+
+/// Der genau gemeinte Pfad, wenn der Eintrag einer ist
+/// ([`EXACT_PATH_MARK`]); sonst `None`, und der Eintrag ist ein Präfix.
+#[must_use]
+pub fn exact_path_of(entry: &str) -> Option<&str> {
+    entry.strip_suffix(EXACT_PATH_MARK)
+}
+
 /// Bedingung einer Regel.
 ///
 /// Ein Feld auf `None` heißt „egal". Der Host ist immer gesetzt: eine Regel
@@ -390,8 +416,10 @@ pub struct Matcher {
     /// Pfadpräfixe; eine leere Liste heißt „egal".
     ///
     /// Die Bedingung ist erfüllt, wenn der Pfad (ohne Query) mit einem der
-    /// Präfixe beginnt. Steht daneben auch `path`, müssen beide zutreffen: Jede
-    /// weitere Bedingung schränkt ein, keine erweitert.
+    /// Präfixe beginnt. Ein Eintrag, der auf [`EXACT_PATH_MARK`] endet, trifft
+    /// dagegen nur genau seinen Pfad (HUM-261). Steht daneben auch `path`,
+    /// müssen beide zutreffen: Jede weitere Bedingung schränkt ein, keine
+    /// erweitert.
     ///
     /// Jeder Präfix beginnt mit `/` und ist mindestens zwei Zeichen lang
     /// ([`path_prefix_is_valid`]). Ein leeres Präfix träfe jeden Pfad und höbe

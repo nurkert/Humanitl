@@ -732,7 +732,9 @@ async fn the_configured_llm_endpoint_becomes_a_passthrough_rule() {
     assert_eq!(matcher.host, "192.168.1.50");
     assert_eq!(matcher.port, 11434);
     assert!(
-        matcher.path_prefixes.iter().any(|p| p == "/api/chat"),
+        // Seit HUM-261 erzeugt der Daemon die Inferenz-Endpunkte als genaue
+        // Eintraege (`?` am Ende, `humanitl_core::EXACT_PATH_MARK`).
+        matcher.path_prefixes.iter().any(|p| p == "/api/chat?"),
         "{:?}",
         matcher.path_prefixes
     );

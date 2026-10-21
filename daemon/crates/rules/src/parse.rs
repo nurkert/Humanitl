@@ -679,6 +679,21 @@ fn parse_path_prefixes(
     let mut prefixes = Vec::with_capacity(raw.len());
     for prefix in raw {
         if humanitl_core::path_prefix_is_valid(prefix) {
+            if let Some(exact) = humanitl_core::exact_path_of(prefix) {
+                // Bis HUM-261 traf ein solcher Eintrag nichts; jetzt trifft er
+                // genau einen Pfad. Wer ein Präfix meinte, soll es erfahren.
+                let line = source.field(index, "path_prefixes");
+                diagnostics.push(
+                    Diagnostic::builder(RULES_005, Severity::Warning)
+                        .why(format!(
+                            "{}: {prefix:?} ends in `?`, so it matches exactly the path {exact:?} \
+                             (with any query) and nothing below it; drop the `?` if you meant \
+                             a prefix",
+                            at(index, "match.path_prefixes", line)
+                        ))
+                        .build(),
+                );
+            }
             prefixes.push(prefix.clone());
         } else {
             let line = source.field(index, "path_prefixes");
