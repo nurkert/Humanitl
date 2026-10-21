@@ -141,10 +141,9 @@ pub struct FlowRecord {
 
 /// So viele Befunde behält ein [`FlowRecord`] höchstens.
 ///
-/// Ein Fluss bekommt heute zwei oder drei (Scan, Grenze, Aufzeichnung); acht
-/// lassen Luft, und die Grenze steht da, weil jede Liste in der Registry eine
-/// braucht.
-pub const MAX_FLOW_DIAGNOSTICS: usize = 8;
+/// Dieselbe Zahl hält die Aufzeichnung ein (HUM-256); sie steht deshalb im
+/// Kern und hier nur unter ihrem alten Namen.
+pub use humanitl_core::MAX_FLOW_DIAGNOSTICS;
 
 impl FlowRecord {
     /// Der Datensatz zu einem Flow, so wie er gerade steht.

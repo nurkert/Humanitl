@@ -509,15 +509,22 @@ impl IpcServer {
     ///
     /// Mit Aufzeichnung verlässt es den Daemon in derselben Form, in der es
     /// aus der Aufzeichnung käme: Ziel, Pfad, Kopfzeilen und die Angaben zum
-    /// Body gehen durch die Masken (HUM-140). Ohne Aufzeichnung gibt es keine
+    /// Body gehen durch die Masken (HUM-140), ebenso das `why` jedes Befunds
+    /// (HUM-256). Ohne Aufzeichnung gibt es keine
     /// Masken, und das Detail bleibt, wie die Registry es kennt.
     fn registry_detail(
         &self,
         mut detail: v1::FlowDetail,
         request: &humanitl_core::HttpRequest,
+        diagnostics: &[Diagnostic],
     ) -> v1::FlowDetail {
         if let Some(recorder) = self.recorder.as_ref() {
             detail.request = Some(masked_request(recorder, request));
+            // Die Befunde wie aus der Aufzeichnung, `why` maskiert (HUM-256).
+            detail.diagnostics = diagnostics
+                .iter()
+                .map(|diagnostic| masked_diagnostic(recorder, diagnostic))
+                .collect();
             let masks = recorder.masks();
             if let Some(summary) = detail.summary.as_mut() {
                 summary.path = masks.apply(&summary.path).into_owned();
@@ -535,25 +542,40 @@ impl IpcServer {
         detail
     }
 
-    /// Hängt an ein aufgezeichnetes Detail die Befunde, die die Registry zu
-    /// diesem Fluss kennt (HUM-057, HUM-058 Zeile 9).
+    /// Führt die Befunde der Aufzeichnung mit denen der Registry zusammen
+    /// (HUM-057, HUM-256).
     ///
-    /// Die Aufzeichnung führt keine Befunde; der Befund im Ereignisstrom ist
-    /// flüchtig. Ohne diesen Schritt sähe, wer einen am Cap geblockten Fluss
-    /// in der Historie öffnet, nur „geblockt, `body_cap`", ohne Grund und
-    /// ohne den Vorschlag einer Regel `stream: true` aus `LIMIT_001`. Die
-    /// Registry kennt die Befunde, solange der Daemon läuft
-    /// ([`humanitl_proxy::registry::FlowRecord::diagnostics`]); ein Fluss von
-    /// vor einem Neustart des Daemons kommt ohne sie.
-    fn with_live_diagnostics(&self, id: FlowId, mut detail: v1::FlowDetail) -> v1::FlowDetail {
-        if detail.diagnostics.is_empty()
-            && let Some(record) = self.registry.get(id)
-        {
-            detail.diagnostics = record
+    /// Seit HUM-256 stehen die Befunde eines Flusses in der Aufzeichnung und
+    /// kommen nach einem Neustart des Daemons von dort. Die Registry bleibt
+    /// der Rückfall für die laufende Sitzung: Der Schreib-Thread bündelt, eine
+    /// Zeile kann scheitern, und ein Befund kann in der einen Liste stehen und
+    /// in der anderen nicht. Die Länge allein sagt deshalb nicht, welche
+    /// Liste die vollständige ist; zwei gleich lange Listen können
+    /// Verschiedenes enthalten. Zusammengeführt wird nach Gleichheit der
+    /// Befunde in der Wire-Form ([`merge_diagnostics`]).
+    ///
+    /// Aus der Registry verlassen sie den Daemon in der Form, in der sie aus
+    /// der Aufzeichnung kämen: `why` maskiert ([`Recorder::masked_why`]).
+    fn with_live_diagnostics(
+        &self,
+        recorder: &Recorder,
+        id: FlowId,
+        mut detail: v1::FlowDetail,
+    ) -> v1::FlowDetail {
+        // Die Masken von jetzt auch über die aufgezeichneten Befunde: Ein
+        // Schlüssel, der nach dem Schreiben dazukam, stünde sonst dort im
+        // Klartext, und dieselbe Meldung aus der Registry wäre nicht mehr
+        // gleich und erschiene doppelt (HUM-256, Review).
+        for diagnostic in &mut detail.diagnostics {
+            diagnostic.why = humanitl_core::sanitize_note(&recorder.masked_why(&diagnostic.why));
+        }
+        if let Some(record) = self.registry.get(id) {
+            let live: Vec<v1::Diagnostic> = record
                 .diagnostics
                 .iter()
-                .map(convert::diagnostic_to_proto)
+                .map(|diagnostic| masked_diagnostic(recorder, diagnostic))
                 .collect();
+            detail.diagnostics = merge_diagnostics(&detail.diagnostics, &live);
         }
         detail
     }
@@ -1058,6 +1080,50 @@ fn masked_request(recorder: &Recorder, request: &humanitl_core::HttpRequest) -> 
     wire
 }
 
+/// Zwei Listen von Befunden desselben Flusses als eine, in der Reihenfolge
+/// ihres Eintreffens, jeder Befund einmal, höchstens
+/// [`humanitl_core::MAX_FLOW_DIAGNOSTICS`] (HUM-256, Review).
+///
+/// Beide Listen sind Teilfolgen derselben Folge: `HoldQueue::publish` schreibt
+/// Registry und Aufzeichnung unter einer Sperre in derselben Reihenfolge, nur
+/// kann in jeder ein Befund fehlen. Gleich heißt gleich in der Wire-Form
+/// (Code, Schwere, Überschrift, maskiertes `why`, Vorschlag, Adresse); eine
+/// eigene laufende Nummer je Befund gibt es nicht. Stehen beide Köpfe gleich
+/// da, ist es derselbe Befund; sonst kommt zuerst der Kopf der Aufzeichnung,
+/// wenn er in der Registry nicht mehr folgt, und andernfalls der Kopf der
+/// Registry, der in der Aufzeichnung fehlt.
+fn merge_diagnostics(recorded: &[v1::Diagnostic], live: &[v1::Diagnostic]) -> Vec<v1::Diagnostic> {
+    let mut merged = Vec::with_capacity(recorded.len().max(live.len()));
+    let (mut i, mut j) = (0, 0);
+    while i < recorded.len() && j < live.len() {
+        if recorded[i] == live[j] {
+            merged.push(recorded[i].clone());
+            i += 1;
+            j += 1;
+        } else if !live[j..].contains(&recorded[i]) {
+            merged.push(recorded[i].clone());
+            i += 1;
+        } else {
+            merged.push(live[j].clone());
+            j += 1;
+        }
+    }
+    merged.extend_from_slice(&recorded[i..]);
+    merged.extend_from_slice(&live[j..]);
+    merged.truncate(humanitl_core::MAX_FLOW_DIAGNOSTICS);
+    merged
+}
+
+/// Ein Befund aus der Registry in seiner Wire-Form, mit dem `why`, das die
+/// Aufzeichnung schriebe (HUM-256): Ein Schlüssel im Host oder Pfad, den der
+/// Satz nennt, verließe den Daemon sonst im Klartext, während derselbe Befund
+/// aus der Aufzeichnung maskiert käme.
+fn masked_diagnostic(recorder: &Recorder, diagnostic: &Diagnostic) -> v1::Diagnostic {
+    let mut wire = convert::diagnostic_to_proto(diagnostic);
+    wire.why = humanitl_core::sanitize_note(&recorder.masked_why(&diagnostic.why));
+    wire
+}
+
 /// Ziel und Anzeigename durch die Masken, wie `flows.host` und
 /// `flows.host_display` in der Aufzeichnung (HUM-140).
 fn mask_authority(masks: &humanitl_core::SecretMasks, authority: &mut v1::Authority) {
@@ -1479,13 +1545,15 @@ impl v1::humanitl_server::Humanitl for IpcServer {
                 .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?
         {
             let detail = self.with_live_request(recorder, id, detail);
-            return Ok(Response::new(self.with_live_diagnostics(id, detail)));
+            return Ok(Response::new(
+                self.with_live_diagnostics(recorder, id, detail),
+            ));
         }
         self.registry
             .get(id)
             .map(|record| {
                 let detail = convert::record_to_detail(&record, self.domains.as_deref());
-                Response::new(self.registry_detail(detail, &record.request))
+                Response::new(self.registry_detail(detail, &record.request, &record.diagnostics))
             })
             .ok_or_else(|| unknown_flow(id))
     }
@@ -2929,6 +2997,293 @@ mod tests {
         assert_eq!(suggested.action, v1::RuleAction::Ask as i32);
 
         assert!(detail(quiet.id).await.diagnostics.is_empty());
+    }
+
+    /// Eine Aufzeichnung in `dir` mit laufender Sitzung `session`.
+    fn recording_in(dir: &std::path::Path, session: SessionId) -> humanitl_recorder::Recorder {
+        let recorder = humanitl_recorder::Recorder::open(
+            &dir.join("humanitl.db"),
+            &dir.join("blobs"),
+            humanitl_recorder::RecorderSettings::default(),
+        )
+        .unwrap();
+        recorder.start_session(&humanitl_recorder::SessionMeta {
+            id: session,
+            started_at: SystemTime::now(),
+            sandbox_profile: "default".to_owned(),
+            llm_endpoint: None,
+            work_dir: "/w".to_owned(),
+            agent: "opencode".to_owned(),
+        });
+        recorder
+    }
+
+    /// `GetFlow` über eine Anfrage.
+    async fn get_flow(server: &IpcServer, id: FlowId) -> v1::FlowDetail {
+        server
+            .get_flow(Request::new(v1::FlowRef {
+                flow_id: id.to_string(),
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+    }
+
+    /// Nach einem Neustart des Daemons kommen die Befunde eines Flusses aus
+    /// der Aufzeichnung: dieselben, in derselben Reihenfolge, mit demselben
+    /// `fix` in der Wire-Form wie aus der Registry vorher (HUM-256).
+    #[tokio::test]
+    async fn get_flow_after_a_restart_takes_the_diagnostics_from_the_recording() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = SessionId::new();
+        let flow = analyzed(session, "upload.example.com");
+        let rule = humanitl_core::Rule::new(
+            humanitl_core::RuleId::new(),
+            humanitl_core::Action::Ask,
+            humanitl_core::Matcher::host(humanitl_core::HostPattern::Exact(HostName::Dns(
+                "upload.example.com".to_owned(),
+            )))
+            .with_path_prefixes(vec!["/v1".to_owned()]),
+        )
+        .with_stream(true)
+        .with_expiry(humanitl_core::Expiry::Session(session))
+        .created_from(flow.id);
+        let offered = [
+            Diagnostic::builder(codes::LIMIT_001, Severity::Warning)
+                .why("the request body is 41943040 bytes".to_owned())
+                .fix(humanitl_core::FixAction::AddRule(Box::new(rule)))
+                .build(),
+            Diagnostic::builder(codes::LIMIT_004, Severity::Warning)
+                .why("the response went silent".to_owned())
+                .fix(humanitl_core::FixAction::ChangeSetting {
+                    key: "limits.body_timeout_secs".to_owned(),
+                    value: "60".to_owned(),
+                })
+                .build(),
+        ];
+        let before = {
+            let recorder = recording_in(dir.path(), session);
+            let queue = Arc::new(
+                HoldQueue::with_registry(
+                    &Limits::default(),
+                    Arc::new(FlowRegistry::new(&Limits::default())),
+                )
+                .recording(recorder.clone()),
+            );
+            queue
+                .registry()
+                .insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+            queue.publish(flow.received_event());
+            for diagnostic in &offered {
+                queue.publish(FlowEvent::Diagnostic {
+                    flow_id: Some(flow.id),
+                    at: SystemTime::now(),
+                    diagnostic: Box::new(diagnostic.clone()),
+                });
+            }
+            let server = server(&queue).with_recorder(recorder);
+            get_flow(&server, flow.id).await.diagnostics
+        };
+        assert_eq!(before.len(), 2, "{before:?}");
+
+        // Der neue Daemon: dieselbe Datei, eine leere Registry.
+        let queue = queue();
+        let server = server(&queue).with_recorder(recording_in(dir.path(), SessionId::new()));
+        assert!(queue.registry().get(flow.id).is_none());
+        let after = get_flow(&server, flow.id).await.diagnostics;
+        let expected: Vec<v1::Diagnostic> = offered
+            .iter()
+            .map(crate::convert::diagnostic_to_proto)
+            .collect();
+        assert_eq!(after, expected, "the same diagnostics, order and fix");
+        assert_eq!(before, after, "and what the running daemon showed");
+    }
+
+    /// Die Registry bleibt der Rückfall der laufenden Sitzung: Kennt sie mehr
+    /// Befunde als die Aufzeichnung, gelten ihre, und ihr `why` verlässt den
+    /// Daemon maskiert wie aus der Aufzeichnung (HUM-256).
+    #[tokio::test]
+    async fn the_registry_stays_the_fallback_and_is_masked_like_the_recording() {
+        const SECRET: &str = "sk-live-0123456789abcdef";
+        let dir = tempfile::tempdir().unwrap();
+        let session = SessionId::new();
+        let recorder = recording_in(dir.path(), session);
+        recorder.mask_secret(SECRET, None);
+        let queue = Arc::new(
+            HoldQueue::with_registry(
+                &Limits::default(),
+                Arc::new(FlowRegistry::new(&Limits::default())),
+            )
+            .recording(recorder.clone()),
+        );
+        let flow = analyzed(session, "upload.example.com");
+        queue
+            .registry()
+            .insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+        queue.publish(flow.received_event());
+        // Der erste Befund geht in beide, der zweite nur in die Registry, wie
+        // bei einer Zeile, deren Schreiben scheiterte.
+        queue.publish(FlowEvent::Diagnostic {
+            flow_id: Some(flow.id),
+            at: SystemTime::now(),
+            diagnostic: Box::new(
+                Diagnostic::builder(codes::FINDINGS_002, Severity::Warning)
+                    .why("the scan stopped early".to_owned())
+                    .build(),
+            ),
+        });
+        queue.registry().record(&FlowEvent::Diagnostic {
+            flow_id: Some(flow.id),
+            at: SystemTime::now(),
+            diagnostic: Box::new(
+                Diagnostic::builder(codes::LIMIT_001, Severity::Warning)
+                    .why(format!("the request to /v1?key={SECRET} is too large"))
+                    .build(),
+            ),
+        });
+        let server = server(&queue).with_recorder(recorder);
+
+        let shown = get_flow(&server, flow.id).await.diagnostics;
+        let codes: Vec<&str> = shown.iter().map(|d| d.code.as_str()).collect();
+        assert_eq!(
+            codes,
+            ["FINDINGS_002", "LIMIT_001"],
+            "the registry knows more"
+        );
+        assert_eq!(shown[1].why, "the request to /v1?key=•••• is too large");
+
+        // Ein Fluss ohne Zeile, den nur die Registry kennt: derselbe Schutz.
+        let unrecorded = analyzed(session, "upload.example.com");
+        queue
+            .registry()
+            .insert(FlowRecord::new(&unrecorded, &ConnMeta::plain(session)));
+        queue.registry().record(&FlowEvent::Diagnostic {
+            flow_id: Some(unrecorded.id),
+            at: SystemTime::now(),
+            diagnostic: Box::new(
+                Diagnostic::builder(codes::LIMIT_001, Severity::Warning)
+                    .why(format!("key {SECRET}"))
+                    .build(),
+            ),
+        });
+        let shown = get_flow(&server, unrecorded.id).await.diagnostics;
+        assert_eq!(shown.len(), 1, "{shown:?}");
+        assert_eq!(shown[0].why, "key ••••");
+    }
+
+    /// Gleich lange Listen mit verschiedenem Inhalt: Ein Befund steht nur in
+    /// der Aufzeichnung, ein anderer nur in der Registry. `GetFlow` zeigt
+    /// beide, in Reihenfolge, statt einen nach der Länge zu verwerfen (HUM-256,
+    /// Review).
+    #[tokio::test]
+    async fn equal_length_lists_are_merged_by_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = SessionId::new();
+        let recorder = recording_in(dir.path(), session);
+        let queue = Arc::new(
+            HoldQueue::with_registry(
+                &Limits::default(),
+                Arc::new(FlowRegistry::new(&Limits::default())),
+            )
+            .recording(recorder.clone()),
+        );
+        let flow = analyzed(session, "upload.example.com");
+        queue
+            .registry()
+            .insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+        queue.publish(flow.received_event());
+        let scan = Diagnostic::builder(codes::FINDINGS_002, Severity::Warning)
+            .why("the scan stopped early".to_owned())
+            .build();
+        let blocking = Diagnostic::builder(codes::LIMIT_001, Severity::Warning)
+            .why("the request body is 41943040 bytes".to_owned())
+            .build();
+        // Nur in der Aufzeichnung, wie ein Befund vor dem Datensatz.
+        recorder.store_diagnostic(flow.id, &scan, |_| String::new());
+        // Nur in der Registry, wie eine Zeile, deren Schreiben scheiterte.
+        queue.registry().record(&FlowEvent::Diagnostic {
+            flow_id: Some(flow.id),
+            at: SystemTime::now(),
+            diagnostic: Box::new(blocking),
+        });
+        let server = server(&queue).with_recorder(recorder);
+
+        let shown = get_flow(&server, flow.id).await.diagnostics;
+        let codes: Vec<&str> = shown.iter().map(|d| d.code.as_str()).collect();
+        assert_eq!(codes, ["FINDINGS_002", "LIMIT_001"]);
+    }
+
+    /// Ein Schlüssel, der erst nach dem Schreiben eines Befunds zu den Masken
+    /// kommt, steht auch im aufgezeichneten `why` maskiert, und der Befund
+    /// erscheint einmal, nicht als zwei verschiedene Fassungen (HUM-256,
+    /// Review).
+    #[tokio::test]
+    async fn a_mask_added_after_recording_applies_and_keeps_one_copy() {
+        const SECRET: &str = "sk-live-0123456789abcdef";
+        let dir = tempfile::tempdir().unwrap();
+        let session = SessionId::new();
+        let recorder = recording_in(dir.path(), session);
+        let queue = Arc::new(
+            HoldQueue::with_registry(
+                &Limits::default(),
+                Arc::new(FlowRegistry::new(&Limits::default())),
+            )
+            .recording(recorder.clone()),
+        );
+        let flow = analyzed(session, "upload.example.com");
+        queue
+            .registry()
+            .insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+        queue.publish(flow.received_event());
+        queue.publish(FlowEvent::Diagnostic {
+            flow_id: Some(flow.id),
+            at: SystemTime::now(),
+            diagnostic: Box::new(
+                Diagnostic::builder(codes::LIMIT_001, Severity::Warning)
+                    .why(format!("key {SECRET}"))
+                    .build(),
+            ),
+        });
+        recorder.flush().await;
+        recorder.mask_secret(SECRET, None);
+        let server = server(&queue).with_recorder(recorder);
+
+        let shown = get_flow(&server, flow.id).await.diagnostics;
+        let whys: Vec<&str> = shown.iter().map(|d| d.why.as_str()).collect();
+        assert_eq!(whys, ["key ••••"]);
+    }
+
+    /// Das Zusammenführen hält die Reihenfolge, nimmt jeden Befund einmal und
+    /// hält die Grenze ein.
+    #[test]
+    fn merging_keeps_order_drops_duplicates_and_caps() {
+        let d = |why: &str| v1::Diagnostic {
+            code: "LIMIT_004".to_owned(),
+            why: why.to_owned(),
+            ..v1::Diagnostic::default()
+        };
+        let whys = |list: Vec<v1::Diagnostic>| -> Vec<String> {
+            list.into_iter().map(|diagnostic| diagnostic.why).collect()
+        };
+        assert_eq!(
+            whys(super::merge_diagnostics(
+                &[d("a"), d("c"), d("d")],
+                &[d("b"), d("c"), d("e")]
+            )),
+            ["a", "b", "c", "d", "e"]
+        );
+        assert_eq!(
+            whys(super::merge_diagnostics(
+                &[d("a"), d("b")],
+                &[d("a"), d("b")]
+            )),
+            ["a", "b"]
+        );
+        let many: Vec<v1::Diagnostic> = (0..20).map(|n| d(&n.to_string())).collect();
+        assert_eq!(
+            super::merge_diagnostics(&many, &[]).len(),
+            humanitl_core::MAX_FLOW_DIAGNOSTICS
+        );
     }
 
     /// Ein durchgereichter Fluss ist eingeklappt, seine Warnung nicht.

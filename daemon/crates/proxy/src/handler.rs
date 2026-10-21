@@ -1432,13 +1432,6 @@ impl FlowHandler {
         {
             return Err(self.fail_closed(flow));
         }
-        // Erst `Analyzed`, dann die Befunde des Scans: Sie erklären eine Lücke
-        // in der Suche (`FINDINGS_002`) und gehören deshalb an den Fund, nicht
-        // davor.
-        for diagnostic in report.diagnostics {
-            self.publish_diagnostic(flow.id, diagnostic);
-        }
-
         // `hold.hard_block_checksum_secrets`: Ein Fund, den eine Prüfsumme
         // bestätigt, ist kein Verdacht. Wer den Schalter setzt, hat im Voraus
         // entschieden, dass so etwas den Rechner nicht ungeändert verlässt.
@@ -1455,6 +1448,15 @@ impl FlowHandler {
         let mut record = FlowRecord::new(flow, meta);
         record.findings_truncated = truncated;
         self.inner.queue.registry().insert(record);
+
+        // Erst `Analyzed`, dann die Befunde des Scans: Sie erklären eine Lücke
+        // in der Suche (`FINDINGS_002`) und gehören deshalb an den Fund, nicht
+        // davor. Und erst nach dem Datensatz: Vorher fände die Registry keinen
+        // Fluss, an den sie den Befund hängt, und er stünde nur in der
+        // Aufzeichnung (HUM-256, Review).
+        for diagnostic in report.diagnostics {
+            self.publish_diagnostic(flow.id, diagnostic);
+        }
 
         // Derselbe Befund im Strom sagt der Oberfläche vor dem `Held`, dass
         // „Senden" nicht geht und warum (ADR-018: der Client liest dafür keine

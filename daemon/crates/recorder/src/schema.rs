@@ -17,7 +17,8 @@
 //! `journal_mode=WAL` muss vor der ersten Transaktion stehen, sonst blockiert
 //! ein Schreibvorgang jeden Leser (`https://www.sqlite.org/wal.html`).
 //! `synchronous=NORMAL` ist die für WAL empfohlene Stufe,
-//! `foreign_keys=ON` hält `messages` und `findings` an ihren Flow gebunden, und
+//! `foreign_keys=ON` hält `messages`, `findings` und `diagnostics` an ihren
+//! Flow gebunden, und
 //! `busy_timeout=5000` lässt einen Leser warten statt `SQLITE_BUSY` zu melden.
 
 use std::fs;
@@ -94,6 +95,11 @@ pub static MIGRATIONS: &[Migration] = &[
         version: 9,
         name: "unresolved_findings",
         sql: include_str!("../migrations/V9__unresolved_findings.sql"),
+    },
+    Migration {
+        version: 10,
+        name: "flow_diagnostics",
+        sql: include_str!("../migrations/V10__flow_diagnostics.sql"),
     },
 ];
 
@@ -406,12 +412,12 @@ mod tests {
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN \
                  ('sessions', 'flows', 'messages', 'findings', 'rules_snapshot', \
-                 'session_summaries')",
+                 'session_summaries', 'diagnostics')",
                 [],
                 |row| row.get(0),
             )
             .unwrap_or(0);
-        assert_eq!(tables, 6);
+        assert_eq!(tables, 7);
     }
 
     #[test]

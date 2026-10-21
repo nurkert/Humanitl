@@ -27,8 +27,8 @@ use rusqlite::{Connection, Row};
 use crate::error::{RecorderError, cursor_mismatch, storage_failed};
 use crate::filter::{self, Param};
 use crate::types::{
-    COUNT_CEILING, Cursor, CursorKey, Dir, FindingRecord, FlowDetail, FlowPage, FlowQuery,
-    FlowSummary, MessageRecord, SessionSummaryRow, SortKey, at_millis,
+    COUNT_CEILING, Cursor, CursorKey, DiagnosticRecord, Dir, FindingRecord, FlowDetail, FlowPage,
+    FlowQuery, FlowSummary, MessageRecord, SessionSummaryRow, SortKey, at_millis,
 };
 
 /// So viele Nur-Lese-Verbindungen bleiben zwischen zwei Abfragen offen.
@@ -182,10 +182,12 @@ pub fn get_flow(pool: &ReadPool, id: FlowId) -> Result<Option<FlowDetail>, Recor
 
         let messages = messages_of(conn, &key)?;
         let findings = findings_of(conn, &key)?;
+        let diagnostics = diagnostics_of(conn, &key)?;
         Ok(Some(FlowDetail {
             summary,
             messages,
             findings,
+            diagnostics,
         }))
     })
 }
@@ -336,6 +338,40 @@ fn findings_of(conn: &Connection, flow: &str) -> Result<Vec<FindingRecord>, Reco
         out.push(row.map_err(|err| {
             storage_failed(format!(
                 "could not read a finding of the flow {flow} ({err})"
+            ))
+        })?);
+    }
+    Ok(out)
+}
+
+/// Die Befunde eines Flows in der Reihenfolge ihres Eintreffens (HUM-256).
+fn diagnostics_of(conn: &Connection, flow: &str) -> Result<Vec<DiagnosticRecord>, RecorderError> {
+    let mut statement = conn
+        .prepare(
+            "SELECT idx, code, severity, title, why, docs, fix_kind, fix_key, fix_value \
+             FROM diagnostics WHERE flow_id = ? ORDER BY idx",
+        )
+        .map_err(|err| storage_failed(format!("could not prepare the diagnostics ({err})")))?;
+    let rows = statement
+        .query_map([flow], |row| {
+            Ok(DiagnosticRecord {
+                idx: u32::try_from(row.get::<_, i64>(0)?).unwrap_or(0),
+                code: row.get(1)?,
+                severity: row.get(2)?,
+                title: row.get(3)?,
+                why: row.get(4)?,
+                docs: row.get(5)?,
+                fix_kind: row.get(6)?,
+                fix_key: row.get(7)?,
+                fix_value: row.get(8)?,
+            })
+        })
+        .map_err(|err| storage_failed(format!("could not run the diagnostics ({err})")))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|err| {
+            storage_failed(format!(
+                "could not read a diagnostic of the flow {flow} ({err})"
             ))
         })?);
     }
