@@ -183,7 +183,11 @@ Inferenz deckt. Aufgezählt werden dort dreizehn Endpunkte (`/v1/chat/completion
 `/api/embed`, `/api/embeddings`, `/api/tags`, `/api/show`, `/api/ps`, `/api/version`); die nackten
 Flächen `/api/` und `/v1/` fehlen mit Absicht, weil sie auch `POST /api/pull`, `DELETE /api/delete`,
 `POST /v1/files` und `POST /v1/load_lora_adapter` deckten und einen Agenten ungefragt am Bestand
-des Servers arbeiten ließen. Alles andere an denselben Host wird
+des Servers arbeiten ließen. Jeder dieser Endpunkte gilt genau, nicht als Präfix: `/v1/models`
+trifft `/v1/models?x=1`, aber nicht `/v1/models/delete` oder `/v1/models%2Fdelete` (HUM-261).
+Hinter einem Pfad-Präfix in `llm.endpoint` (`https://host/api/v1/`) liegen die fünf
+OpenAI-kompatiblen unter dessen Basis, und die Ollama-Endpunkte entfallen. Was der Mensch selbst in
+`llm.passthrough_paths` schreibt, bleibt ein Präfix. Alles andere an denselben Host wird
 normal gehalten, auch ein Pfad mit `..`-Segment (offen, `%2e%2e` oder `..;`), weil erst der Server
 ihn auflöst. Dieselbe Grenze gilt für jede Nutzerregel, die durchlässt und ein Pfadmuster oder
 Präfixe trägt. Eine Regel, die blockt oder fragt, prüft dagegen zusätzlich den aufgelösten Pfad
@@ -681,6 +685,7 @@ Sitzungs-Historie steht.
 | 2026-10-06 | K-02: Der Zugangsschlüssel eines Anbieters liegt im Schlüsselbund des Systems (Rückfall Datei `0600`), `config.toml` trägt nur den Verweis `llm.api_key_ref`. Der Agent bekommt ihn als Datei aus einem memfd, nie über `argv` oder die Umgebung, die `bwrap` über `--setenv` setzt; aufgezeichnete Kopfzeilen und Pfade tragen ihn als `••••`; kein Fund ist er nur in `Authorization` an Host und Port von `llm.endpoint` (Review-Nachtrag 2026-10-16), anderswo bleibt er einer. Restrisiko: Der Agent kann ihn lesen und anderswohin schicken | HUM-069, HUM-140 |
 | 2026-10-19 | Schutzziel 1: `stream: true` als zweite erklärte Ausnahme. Eine Anfrage über `limits.hold_body_cap_bytes` wurde bis dahin immer geblockt, auch wenn eine Regel `stream: true` trug; jetzt geht sie unter einer solchen Regel (`allow` oder `ask`) gestreamt hinaus, entschieden über den Kopf, der Body ohne Scan und ohne Vorschau, aufgezeichnet bis `limits.recorder_max_body_bytes`. Unter `hold.hard_block_checksum_secrets` greift `stream: true` nicht, und `LIMIT_001` schlägt dann das Cap vor statt einer Regel. Der Vorschlag am Block (`LIMIT_001`) ist sonst eine Regel mit `ask`, nie `allow`. Restrisiko: Wer eine solche Regel anlegt, gibt für diese Anfragen den Blick auf den Body auf | HUM-057 |
 | 2026-10-20 | Vertrauen zum Ziel: Der Daemon prüft Zertifikate von Zielen und vom LLM-Endpunkt gegen die Zertifikatsablage des Systems statt nur gegen `webpki-roots`, damit eine Firmen-CA oder eine selbst installierte CA wirkt wie bei `curl`. Opt-out `tls.trust_system_store = false` (im Projekt-Profil gesperrt), Rückfall auf `webpki-roots` bei leerer Ablage. Kein neuer Angreifer: Die Ablage schreibt nur root (2.2), die Umgebung des Daemons nur das eigene Konto. Die Humanitl-CA für die Sandbox und die Entscheidung vor jeder Verbindung bleiben unverändert | HUM-257 |
+| 2026-10-20 | K-02: Die Endpunkte, die Humanitl aus `/v1/` und `/api/` in `llm.passthrough_paths` macht, gelten genau statt als Präfix; `POST /v1/models/delete` ging vorher ungehalten durch und wird jetzt gehalten. Ein Eintrag mit `?` am Ende ist in jeder Regel ein genauer Pfad; vorher traf er nie etwas, weil der verglichene Pfad kein `?` enthält. Ein solcher handgeschriebener, bisher toter Eintrag trifft jetzt genau seinen Pfad; `rules.yaml` warnt beim Laden davor (`RULES_005`, Warnung). Hinter einem Pfad-Präfix des Endpunkts liegen die Inferenz-Endpunkte unter dessen Basis, die Ollama-Endpunkte entfallen. Die Durchreichregel wird an keiner Stelle breiter | HUM-261 |
 
 Geplante Fortschreibung: HUM-059 bringt das Dokument zum Release auf den Stand des Codes. Jede
 sicherheitsrelevante Änderung am Shim, an der Mount-Allowlist, am Filter oder am Passthrough

@@ -492,6 +492,37 @@ rules:
     assert!(written.contains("path_prefixes:"));
 }
 
+/// HUM-261: Ein Präfix mit `?` am Ende ist ein genauer Pfad. Bis dahin traf
+/// es nichts; die Datei lädt weiter, aber der Mensch erfährt es.
+#[test]
+fn a_written_prefix_ending_in_a_question_mark_warns() {
+    let yaml = "version: 1
+rules:
+  - action: allow
+    match:
+      host: \"api.example.com\"
+      path_prefixes: [\"/v1/models?\", \"/v1/files\"]
+";
+    let (set, warnings) = parse_rules(yaml).unwrap_or_else(|d| panic!("must parse: {d:?}"));
+    let rule = set.iter().next().expect("one rule");
+    assert_eq!(
+        rule.matcher.path_prefixes,
+        vec!["/v1/models?".to_owned(), "/v1/files".to_owned()],
+        "the entry stays as written"
+    );
+    let warning = warnings
+        .iter()
+        .find(|warning| warning.code == RULES_005)
+        .unwrap_or_else(|| panic!("the exact entry has to be named: {warnings:?}"));
+    assert_eq!(warning.severity, Severity::Warning);
+    assert!(warning.why.contains("/v1/models"), "{}", warning.why);
+    assert_eq!(
+        warnings.iter().filter(|w| w.code == RULES_005).count(),
+        1,
+        "the plain prefix gets no warning: {warnings:?}"
+    );
+}
+
 /// Eine Datei kann sich den Vermerk `bundled` nicht selbst ausstellen.
 ///
 /// Der Vermerk sagt, woher eine Regel kommt; seit HUM-104 entscheidet er mit

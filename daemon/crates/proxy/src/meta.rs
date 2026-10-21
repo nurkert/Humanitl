@@ -783,13 +783,18 @@ fn host_of(matcher: &Matcher) -> String {
 ///
 /// Ein Präfix wird als `<präfix>**` geschrieben, weil es genau das bedeutet
 /// und weil ein Agent die Schreibweise aus `rules.yaml` wiedererkennt.
+/// Ein genauer Eintrag (HUM-261) steht als der Pfad selbst.
 fn path_of(matcher: &Matcher) -> String {
     let mut parts = Vec::new();
     if let Some(path) = &matcher.path {
         parts.push(path.to_string());
     }
     for prefix in &matcher.path_prefixes {
-        parts.push(format!("{prefix}**"));
+        // Ein genauer Eintrag (HUM-261) ist genau dieser Pfad, kein Präfix.
+        match humanitl_core::exact_path_of(prefix) {
+            Some(exact) => parts.push(exact.to_owned()),
+            None => parts.push(format!("{prefix}**")),
+        }
     }
     if parts.is_empty() {
         "*".to_owned()

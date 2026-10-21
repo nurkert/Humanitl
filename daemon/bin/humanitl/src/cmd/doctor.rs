@@ -378,9 +378,11 @@ async fn probe_llm(config: &humanitl_config::Config, client: Option<&mut Client>
 /// dass nichts unbemerkt hinausgeht (BACKLOG.md Prinzip 1). `stdout` bleibt
 /// dabei unberührt, ein einziger JSON-Wert also weiterhin ein einziger.
 fn announce(endpoint: &str) {
+    // Die Pfade kommen aus derselben Regel wie die Probe (HUM-261): hinter
+    // einem Pfad-Präfix ist es eine Anfrage, nie eine an `/api/tags`.
     eprintln!(
-        "contacting {endpoint} now: two GET requests, /api/tags then /v1/models, \
-         no credentials, no redirects"
+        "contacting {endpoint} now: {}, no credentials, no redirects",
+        humanitl_config::llm_endpoint::probe_plan(endpoint)
     );
 }
 

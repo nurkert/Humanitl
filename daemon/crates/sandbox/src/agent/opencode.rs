@@ -60,6 +60,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use humanitl_config::LlmConfig;
+use humanitl_config::llm_endpoint;
 use humanitl_core::diagnostics::codes::{AGENT_001, AGENT_002, AGENT_004, LLM_004};
 use humanitl_core::rule::{Action, HostPattern, Matcher, Rule};
 use humanitl_core::shell::shell_path;
@@ -238,12 +239,18 @@ pub const OPENAI_PREFIX: &str = "/v1/";
 /// Inferenz braucht.
 ///
 /// `chat/completions` und `completions` rechnen, `responses` ist die neuere
-/// Form davon, `embeddings` bettet ein, `models` gibt Auskunft und deckt über
-/// das Präfix auch `models/<id>` ab. Nicht dabei: alles, was auf dem Server
+/// Form davon, `embeddings` bettet ein, `models` gibt Auskunft. Jeder gilt
+/// genau, nicht als Präfix (HUM-261): `models/<id>` und `models/delete` gehen
+/// durch die Warteschlange. Nicht dabei: alles, was auf dem Server
 /// etwas anlegt, ablegt oder umbaut — Dateien, Uploads, Vektorspeicher,
 /// Feinabstimmung, LoRA-Adapter. Auch Bild- und Audio-Endpunkte fehlen; sie
 /// erzeugen Artefakte und gehören nicht zu dem, wofür die Durchreiche da ist.
 /// Wer sie braucht, schreibt ihren Pfad selbst in `llm.passthrough_paths`.
+///
+/// Die Pfade stehen hier in der Form für einen Endpunkt an der Wurzel des
+/// Servers. Hat der Endpunkt ein Pfad-Präfix (`https://host/api/v1/`), liegen
+/// sie unter dessen Basis, also `/api/v1/chat/completions` und so fort
+/// ([`passthrough_prefixes`], HUM-261).
 pub const OPENAI_INFERENCE_PATHS: &[&str] = &[
     "/v1/chat/completions",
     "/v1/completions",
@@ -296,21 +303,6 @@ impl OpenCodeAdapter {
     }
 }
 
-/// Die Basis-Adresse, die in `opencode.json` steht.
-///
-/// `llm.endpoint` plus `/v1`, es sei denn, der Endpunkt endet schon darauf.
-/// Der Pfadanteil des Endpunkts bleibt erhalten; im Matcher der
-/// Passthrough-Regel wird er dagegen ignoriert (HUM-039, Fallstricke).
-#[must_use]
-pub fn base_url(endpoint: &Url) -> String {
-    let text = endpoint.as_str().trim_end_matches('/');
-    if text.ends_with("/v1") {
-        text.to_owned()
-    } else {
-        format!("{text}/v1")
-    }
-}
-
 /// Die Pfadpräfixe der Durchreichregel aus `llm.passthrough_paths`.
 ///
 /// Drei Schritte, in dieser Reihenfolge:
@@ -338,34 +330,77 @@ pub fn base_url(endpoint: &Url) -> String {
 ///    [`OPENAI_INFERENCE_PATHS`] und [`OLLAMA_INFERENCE_PATHS`]. Eine engere
 ///    Regel ist ein erklärbarer Zustand, eine unbegrenzte nicht.
 ///
+/// Die Endpunkte, die an die Stelle von `/v1/` und `/api/` treten, sind
+/// genaue Einträge ([`humanitl_core::EXACT_PATH_MARK`], HUM-261): Sie treffen
+/// genau ihren Pfad mit beliebiger Query, aber keinen Unterpfad wie
+/// `/v1/models/delete`. Was der Mensch selbst in `llm.passthrough_paths`
+/// schreibt, bleibt ein Präfix; ein Eintrag mit `?` fällt weg.
+///
+/// Die Endpunkte, die an die Stelle von `/v1/` treten, liegen unter der Basis
+/// des Endpunkts, gelesen wie die `baseURL` von `OpenCode`
+/// ([`llm_endpoint::openai_path`], HUM-261): bei `https://host/api/v1/` also
+/// `/api/v1/chat/completions`, denn dorthin schickt der Agent. Die
+/// Ollama-Endpunkte für `/api/` gibt es nur bei einem Endpunkt an der Wurzel
+/// des Servers ([`llm_endpoint::serves_native_ollama`]); hinter einem
+/// Pfad-Präfix fallen sie weg, statt an der Wurzel eines Hosts zu gelten, die
+/// womöglich einem anderen Dienst gehört.
+///
 /// Doppelte Einträge fallen weg, die Reihenfolge der Konfiguration bleibt.
 #[must_use]
-pub fn passthrough_prefixes(prefixes: &[String]) -> Vec<String> {
+pub fn passthrough_prefixes(endpoint: &Url, prefixes: &[String]) -> Vec<String> {
     fn push(out: &mut Vec<String>, prefix: &str) {
         if !out.iter().any(|existing| existing == prefix) {
             out.push(prefix.to_owned());
         }
     }
 
-    /// Die Endpunkte, die an die Stelle eines Flächen-Präfixes treten.
-    ///
-    /// Mit und ohne abschließenden `/` ist dasselbe gemeint, und ohne ihn ist
-    /// es sogar breiter: `/api` träfe auch `/apifoo`.
-    fn expansion_of(prefix: &str) -> Option<&'static [&'static str]> {
+    // Die Inferenz-Endpunkte dieses Endpunkts: die OpenAI-kompatiblen unter
+    // seiner Basis, die von Ollama nur an der Wurzel des Servers. Jeder als
+    // genauer Eintrag (HUM-261): `/v1/models` trifft nicht
+    // `/v1/models/delete`.
+    let openai: Vec<String> = OPENAI_INFERENCE_PATHS
+        .iter()
+        .map(|path| {
+            let relative = path
+                .strip_prefix(llm_endpoint::OPENAI_SURFACE)
+                .unwrap_or(path);
+            humanitl_core::exact_path_entry(&llm_endpoint::openai_path(endpoint, relative))
+        })
+        .collect();
+    let ollama: Vec<String> = if llm_endpoint::serves_native_ollama(endpoint) {
+        OLLAMA_INFERENCE_PATHS
+            .iter()
+            .map(|path| humanitl_core::exact_path_entry(path))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    // Die Endpunkte, die an die Stelle eines Flächen-Präfixes treten.
+    //
+    // Mit und ohne abschließenden `/` ist dasselbe gemeint, und ohne ihn ist
+    // es sogar breiter: `/api` träfe auch `/apifoo`.
+    let expansion_of = |prefix: &str| -> Option<&[String]> {
         let bare = prefix.trim_end_matches('/');
         if bare == OLLAMA_API_PREFIX.trim_end_matches('/') {
-            return Some(OLLAMA_INFERENCE_PATHS);
+            return Some(&ollama);
         }
         if bare == OPENAI_PREFIX.trim_end_matches('/') {
-            return Some(OPENAI_INFERENCE_PATHS);
+            return Some(&openai);
         }
         None
-    }
+    };
 
     let mut out: Vec<String> = Vec::new();
     for prefix in prefixes {
         let prefix = prefix.trim();
-        if !humanitl_core::path_prefix_is_valid(prefix) {
+        // Ein `?` kommt im verglichenen Pfad nie vor; ein solcher Eintrag hat
+        // vor HUM-261 nichts getroffen und trifft auch jetzt nichts, statt
+        // als genauer Eintrag zu gelten. Genau sind nur die Endpunkte, die
+        // der Adapter selbst erzeugt.
+        if !humanitl_core::path_prefix_is_valid(prefix)
+            || prefix.contains(humanitl_core::EXACT_PATH_MARK)
+        {
             continue;
         }
         match expansion_of(prefix) {
@@ -379,7 +414,7 @@ pub fn passthrough_prefixes(prefixes: &[String]) -> Vec<String> {
     }
 
     if out.is_empty() {
-        for path in OPENAI_INFERENCE_PATHS.iter().chain(OLLAMA_INFERENCE_PATHS) {
+        for path in openai.iter().chain(&ollama) {
             push(&mut out, path);
         }
     }
@@ -706,7 +741,7 @@ impl AgentAdapter for OpenCodeAdapter {
     fn files(&self, ctx: &AgentContext) -> Result<Vec<SandboxFile>, Diagnostic> {
         let base = ctx.llm.endpoint.as_ref().map_or_else(
             || format!("http://127.0.0.1:{}/v1", ctx.proxy_port),
-            base_url,
+            llm_endpoint::openai_base_url,
         );
         let key_file = ctx.llm_key.is_some().then_some(API_KEY_DST);
         let config = render_config(&base, &ctx.llm.models, key_file)?;
@@ -761,7 +796,7 @@ impl AgentAdapter for OpenCodeAdapter {
             // `GET` ist dabei, weil OpenCode die Modellliste über
             // `GET /v1/models` holt.
             .with_methods(vec![Method::POST, Method::GET])
-            .with_path_prefixes(passthrough_prefixes(&llm.passthrough_paths))
+            .with_path_prefixes(passthrough_prefixes(url, &llm.passthrough_paths))
             .with_scheme(scheme)
             .with_port(port);
 
@@ -779,7 +814,12 @@ impl AgentAdapter for OpenCodeAdapter {
             // Der Proxy hält solche Flüsse nicht, zeichnet sie vollständig auf
             // und warnt vor Funden, statt sie aufzuhalten (`LLM_005`).
             .passthrough_llm(true)
-            .with_note(format!("LLM passthrough for {url}. Logged, never held.")),
+            // Ohne Benutzer, Passwort und Query: Die Notiz steht in der
+            // Oberfläche und in `rules.yaml` (HUM-261).
+            .with_note(format!(
+                "LLM passthrough for {}. Logged, never held.",
+                llm_endpoint::display(url)
+            )),
         )
     }
 
@@ -796,7 +836,14 @@ impl AgentAdapter for OpenCodeAdapter {
                     value: EXAMPLE_ENDPOINT.to_owned(),
                 },
                 |endpoint| {
-                    FixAction::CopyCommand(format!("curl -sS {}/models", base_url(endpoint)))
+                    // Ohne Zugangsdaten aus `llm.endpoint` und als ein Wort
+                    // der Shell (HUM-261).
+                    let base =
+                        llm_endpoint::openai_base_url(&llm_endpoint::without_secrets(endpoint));
+                    FixAction::CopyCommand(format!(
+                        "curl -sS {}",
+                        humanitl_core::shell::shell_word(&format!("{base}/models"))
+                    ))
                 },
             );
             diagnostics.push(
@@ -846,9 +893,19 @@ mod tests {
     use url::Url;
 
     use super::{
-        OLLAMA_INFERENCE_PATHS, OPENAI_INFERENCE_PATHS, base_url, chmod_fix, install_fix,
-        passthrough_prefixes,
+        OLLAMA_INFERENCE_PATHS, OPENAI_INFERENCE_PATHS, chmod_fix, install_fix,
+        passthrough_prefixes as prefixes_for,
     };
+
+    /// Ein Endpunkt an der Wurzel des Servers, wie bis HUM-261 jeder Test.
+    fn root() -> Url {
+        Url::parse("http://192.168.1.50:11434").unwrap()
+    }
+
+    /// Die Durchreiche für einen Endpunkt an der Wurzel.
+    fn passthrough_prefixes(prefixes: &[String]) -> Vec<String> {
+        prefixes_for(&root(), prefixes)
+    }
 
     /// Die Vorschläge nennen das Binary aus seinen Bytes (HUM-215): Ein Name
     /// mit Leerzeichen bleibt ein Wort, und ein Byte, das kein UTF-8 ist,
@@ -874,13 +931,23 @@ mod tests {
         );
     }
 
-    /// Die Vorgabe, so wie sie aus `llm.passthrough_paths` entsteht.
+    /// Die Vorgabe, so wie sie aus `llm.passthrough_paths` entsteht: jeder
+    /// Endpunkt als genauer Eintrag (HUM-261).
     fn default_prefixes() -> Vec<String> {
-        OPENAI_INFERENCE_PATHS
-            .iter()
-            .chain(OLLAMA_INFERENCE_PATHS)
-            .map(|path| (*path).to_owned())
+        exact(OPENAI_INFERENCE_PATHS.iter().chain(OLLAMA_INFERENCE_PATHS))
+    }
+
+    /// Die genauen Einträge zu diesen Pfaden.
+    fn exact<'a>(paths: impl IntoIterator<Item = &'a &'a str>) -> Vec<String> {
+        paths
+            .into_iter()
+            .map(|path| humanitl_core::exact_path_entry(path))
             .collect()
+    }
+
+    /// Wahr, wenn die Einträge den Pfad treffen, mit dem Vergleich der Engine.
+    fn covers(entries: &[String], path: &str) -> bool {
+        humanitl_rules::path::prefix_matches(entries, path)
     }
 
     /// Pfade, die keine Inferenz sind und den Server verändern oder belegen.
@@ -903,19 +970,58 @@ mod tests {
         "/v1/assistants",
         "/v1/load_lora_adapter",
         "/v1/unload_lora_adapter",
+        // Unter einem erlaubten Endpunkt, aber nicht er selbst (HUM-261).
+        "/v1/models/delete",
+        "/v1/models/m",
+        "/v1/chat/completions/x",
+        "/api/tags/x",
     ];
 
+    /// Ein Endpunkt hinter einem Pfad-Präfix (HUM-261): Die Inferenz liegt
+    /// unter seiner Basis, dorthin schickt der Agent; die Ollama-Endpunkte an
+    /// der Wurzel des Hosts fallen weg, und die Wurzel-Form `/v1/…` gilt auch
+    /// nicht, weil der Agent sie nie fragt.
     #[test]
-    fn v1_is_appended_once() {
-        for (endpoint, expected) in [
-            ("http://192.168.1.50:11434", "http://192.168.1.50:11434/v1"),
-            ("http://192.168.1.50:11434/", "http://192.168.1.50:11434/v1"),
-            ("http://x:1/v1", "http://x:1/v1"),
-            ("http://x:1/v1/", "http://x:1/v1"),
+    fn behind_a_path_prefix_inference_lies_under_the_base() {
+        let defaults = ["/v1/".to_owned(), "/api/".to_owned()];
+        for endpoint in [
+            "https://llm.example.net/api/v1/",
+            "https://llm.example.net/api/v1",
+            "https://llm.example.net/api",
         ] {
-            let url = Url::parse(endpoint).unwrap();
-            assert_eq!(base_url(&url), expected, "for {endpoint}");
+            let endpoint = Url::parse(endpoint).unwrap();
+            let expected = exact(&[
+                "/api/v1/chat/completions",
+                "/api/v1/completions",
+                "/api/v1/responses",
+                "/api/v1/embeddings",
+                "/api/v1/models",
+            ]);
+            assert_eq!(
+                prefixes_for(&endpoint, &defaults),
+                expected,
+                "for {endpoint}"
+            );
+            assert_eq!(
+                prefixes_for(&endpoint, &[]),
+                expected,
+                "the fallback follows the same rule, for {endpoint}"
+            );
+            assert_eq!(
+                prefixes_for(&endpoint, &["/api/".to_owned()]),
+                expected,
+                "the Ollama surface alone gives nothing behind a prefix and falls back, \
+                 for {endpoint}"
+            );
         }
+        // Ein abschließendes `/v1` ist kein Präfix: dieselbe Regel wie ohne.
+        assert_eq!(
+            prefixes_for(
+                &Url::parse("http://192.168.1.50:11434/v1").unwrap(),
+                &defaults
+            ),
+            passthrough_prefixes(&defaults)
+        );
     }
 
     /// Beide Flächen-Präfixe der Vorgabe werden zu Endpunkten.
@@ -924,11 +1030,11 @@ mod tests {
         let prefixes = passthrough_prefixes(&["/v1/".to_owned(), "/api/".to_owned()]);
         assert_eq!(prefixes, default_prefixes());
         assert!(
-            prefixes.iter().any(|p| p == "/v1/chat/completions"),
+            covers(&prefixes, "/v1/chat/completions?x=1"),
             "inference stays: {prefixes:?}"
         );
         assert!(
-            prefixes.iter().any(|p| p == "/api/chat"),
+            covers(&prefixes, "/api/chat"),
             "inference stays: {prefixes:?}"
         );
     }
@@ -947,7 +1053,7 @@ mod tests {
         ] {
             for path in MUTATING {
                 assert!(
-                    !prefixes.iter().any(|prefix| path.starts_with(prefix)),
+                    !covers(&prefixes, path),
                     "{path} is covered by {prefixes:?}"
                 );
             }
@@ -965,8 +1071,7 @@ mod tests {
             ("/v1/", OPENAI_INFERENCE_PATHS),
         ] {
             let prefixes = passthrough_prefixes(&[written.to_owned()]);
-            let expected: Vec<String> = expected.iter().map(|p| (*p).to_owned()).collect();
-            assert_eq!(prefixes, expected, "for {written}");
+            assert_eq!(prefixes, exact(expected), "for {written}");
         }
     }
 
@@ -981,6 +1086,21 @@ mod tests {
         assert_eq!(
             passthrough_prefixes(&["/v1/files".to_owned()]),
             vec!["/v1/files".to_owned()]
+        );
+    }
+
+    /// Ein Eintrag des Menschen mit `?` hat nie etwas getroffen und wird auch
+    /// nicht zum genauen Eintrag (HUM-261); genau sind nur die erzeugten.
+    #[test]
+    fn a_written_entry_with_a_question_mark_is_dropped() {
+        assert_eq!(
+            passthrough_prefixes(&["/v1/files?".to_owned(), "/v1/files".to_owned()]),
+            vec!["/v1/files".to_owned()]
+        );
+        assert_eq!(
+            passthrough_prefixes(&["/x?".to_owned()]),
+            default_prefixes(),
+            "nothing usable is left, so the fallback applies"
         );
     }
 

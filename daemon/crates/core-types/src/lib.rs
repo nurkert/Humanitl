@@ -55,7 +55,8 @@ pub use crate::http::{
 };
 pub use crate::ids::{AskId, FlowId, IdParseError, RuleId, SandboxId, SessionId};
 pub use crate::rule::{
-    Action, Expiry, HostPattern, Matcher, PathPattern, Rule, path_prefix_is_valid,
+    Action, EXACT_PATH_MARK, Expiry, HostPattern, Matcher, PathPattern, Rule, exact_path_entry,
+    exact_path_of, path_prefix_is_valid,
 };
 pub use crate::secret_mask::SecretMasks;
 pub use crate::terminal::{TerminalFilter, TerminalPolicy};

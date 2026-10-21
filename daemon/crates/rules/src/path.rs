@@ -97,9 +97,15 @@ pub fn strip_query(path_and_query: &str) -> &str {
     }
 }
 
-/// Wahr, wenn der Pfad mit einem der Präfixe beginnt.
+/// Wahr, wenn der Pfad mit einem der Präfixe beginnt oder einem der genauen
+/// Einträge gleicht.
 ///
 /// Verglichen wird nur der Pfad, nie die Query — wie bei [`PathMatcher`].
+/// Ein Eintrag, der auf [`humanitl_core::EXACT_PATH_MARK`] endet, trifft nur
+/// genau seinen Pfad, Zeichen für Zeichen (HUM-261): `/v1/models?` trifft
+/// `/v1/models?x=1`, aber nicht `/v1/models/delete`, `/v1/models/` oder
+/// `/v1/models%2Fdelete`. Kodiert wird dabei nichts aufgelöst; jede andere
+/// Schreibweise ist ein anderer Pfad und trifft nicht.
 /// `prefixes` ist bereits geprüft: Jeder Eintrag hat
 /// [`path_prefix_is_valid`](humanitl_core::path_prefix_is_valid) bestanden.
 /// Eine leere Liste ist hier kein „egal", sondern ein „nichts": Diese Funktion
@@ -118,7 +124,12 @@ pub fn strip_query(path_and_query: &str) -> &str {
 #[must_use]
 pub fn prefix_matches(prefixes: &[String], path_and_query: &str) -> bool {
     let path = strip_query(path_and_query);
-    prefixes.iter().any(|prefix| path.starts_with(prefix))
+    prefixes
+        .iter()
+        .any(|entry| match humanitl_core::exact_path_of(entry) {
+            Some(exact) => path == exact,
+            None => path.starts_with(entry.as_str()),
+        })
 }
 
 /// Wahr, wenn der Pfad ein `..`-Segment enthält, auch verschleiert.
@@ -260,6 +271,35 @@ mod tests {
 
     fn prefixes() -> Vec<String> {
         vec!["/v1/".to_owned(), "/api/chat".to_owned()]
+    }
+
+    /// Ein genauer Eintrag trifft nur seinen Pfad, mit oder ohne Query
+    /// (HUM-261). Kein Unterpfad, kein abschließender `/`, keine kodierte
+    /// Schreibweise; ein gewöhnliches Präfix daneben bleibt ein Präfix.
+    #[test]
+    fn an_exact_entry_matches_only_its_own_path() {
+        let entries = vec![
+            humanitl_core::exact_path_entry("/api/v1/models"),
+            "/v1/files".to_owned(),
+        ];
+        assert!(prefix_matches(&entries, "/api/v1/models"));
+        assert!(prefix_matches(&entries, "/api/v1/models?x=1"));
+        for other in [
+            "/api/v1/models/delete",
+            "/api/v1/models/",
+            "/api/v1/models%2Fdelete",
+            "/api/v1/models%2fdelete",
+            "/api/v1/modelsx",
+            "/api/v1/model",
+            "//api/v1/models",
+            "/API/V1/MODELS",
+        ] {
+            assert!(!prefix_matches(&entries, other), "{other}");
+        }
+        assert!(
+            prefix_matches(&entries, "/v1/files/abc"),
+            "a plain prefix keeps its prefix behaviour"
+        );
     }
 
     #[test]

@@ -1004,9 +1004,9 @@ fn opencode_passthrough_rule_matches_only_the_endpoint() {
         OPENAI_INFERENCE_PATHS
             .iter()
             .chain(OLLAMA_INFERENCE_PATHS)
-            .map(|path| (*path).to_owned())
+            .map(|path| humanitl_core::exact_path_entry(path))
             .collect::<Vec<_>>(),
-        "both surface prefixes of llm.passthrough_paths are narrowed to inference endpoints"
+        "both surface prefixes of llm.passthrough_paths are narrowed to exact inference endpoints"
     );
 
     let set = RuleSet::from_rules([rule]);
@@ -1070,6 +1070,172 @@ fn opencode_passthrough_rule_matches_only_the_endpoint() {
             allowed, expected_allow,
             "{method} http://{host}:{port}{path} came out as {verdict:?}"
         );
+    }
+}
+
+/// HUM-261: Der `curl` von `LLM_004` und die Notiz der Durchreiche tragen
+/// weder Benutzer noch Passwort aus `llm.endpoint`, und der `curl` nennt die
+/// Adresse als ein Wort der Shell: `;` und `$(…)` im Pfad führen beim
+/// Einfügen keinen zweiten Befehl aus.
+#[test]
+fn opencode_fixes_carry_no_credentials_and_quote_the_address() {
+    let adapter = OpenCodeAdapter::new();
+    let endpoint = "http://user:pw-geheim@llm.example.net:8080/a;id;$(id)/v1?token=geheim";
+    let fix = adapter
+        .preflight(&context(Some(endpoint)))
+        .into_iter()
+        .find(|diagnostic| diagnostic.code.as_str() == "LLM_004")
+        .and_then(|diagnostic| diagnostic.fix);
+    assert_eq!(
+        fix,
+        Some(humanitl_core::FixAction::CopyCommand(
+            "curl -sS 'http://llm.example.net:8080/a;id;$(id)/v1/models'".to_owned()
+        ))
+    );
+
+    let llm = LlmConfig {
+        endpoint: Some(url::Url::parse(endpoint).unwrap()),
+        ..LlmConfig::default()
+    };
+    let note = adapter
+        .llm_passthrough(&llm)
+        .expect("a rule for an endpoint")
+        .note
+        .unwrap_or_default();
+    assert!(note.contains("llm.example.net"), "{note}");
+    assert!(!note.contains("geheim") && !note.contains("user"), "{note}");
+}
+
+/// HUM-261: Die erzeugten Inferenz-Endpunkte gelten genau. Eine Query
+/// ändert daran nichts; ein Pfad darunter, ein `/` am Ende oder eine kodierte
+/// Schreibweise ist ein anderer Pfad und wird gehalten.
+#[test]
+fn opencode_passthrough_endpoints_match_exactly() {
+    let llm = LlmConfig {
+        endpoint: Some(url::Url::parse("http://192.168.1.50:11434").unwrap()),
+        ..LlmConfig::default()
+    };
+    let rule = OpenCodeAdapter::new()
+        .llm_passthrough(&llm)
+        .expect("a rule for an endpoint");
+    let set = RuleSet::from_rules([rule]);
+    let host = HostName::parse("192.168.1.50").unwrap();
+    for (method, path, expected_allow) in [
+        (Method::POST, "/v1/chat/completions?x=1", true),
+        (Method::GET, "/api/tags?x=1", true),
+        (Method::POST, "/v1/models/delete", false),
+        (Method::POST, "/v1/models%2Fdelete", false),
+        (Method::POST, "/v1/chat/completions/", false),
+        (Method::POST, "/api/chat/x", false),
+    ] {
+        let key = RequestKey::new(&host, &method, path, Scheme::Http, 11434);
+        let allowed = matches!(
+            set.evaluate(&key, chrono::Utc::now(), SessionId::nil()),
+            Verdict::Matched {
+                action: Action::Allow,
+                ..
+            }
+        );
+        assert_eq!(allowed, expected_allow, "{method} {path}");
+    }
+}
+
+/// HUM-261: Ein Endpunkt hinter einem Pfad-Präfix ist die Basis der
+/// OpenAI-kompatiblen API, wie `OpenCode` seine `baseURL` liest. Der Agent
+/// bekommt genau diese Basis, und der Vorschlag zu `LLM_004` fragt die
+/// Modellliste darunter, nie eine zusammengesetzte Adresse wie `/api/api/…`.
+#[test]
+fn opencode_keeps_the_path_prefix_of_the_endpoint() {
+    let adapter = OpenCodeAdapter::new();
+    for (endpoint, base) in [
+        (
+            "https://llm.example.net/api/v1/",
+            "https://llm.example.net/api/v1",
+        ),
+        (
+            "https://llm.example.net/api/v1",
+            "https://llm.example.net/api/v1",
+        ),
+        (
+            "https://llm.example.net/api",
+            "https://llm.example.net/api/v1",
+        ),
+    ] {
+        let ctx = context(Some(endpoint)).with_models(vec!["m".to_owned()]);
+        let doc: Value = serde_json::from_slice(&file_at(adapter, &ctx, CONFIG_DST)).unwrap();
+        assert_eq!(
+            doc["provider"][PROVIDER_ID]["options"]["baseURL"],
+            Value::String(base.to_owned()),
+            "for {endpoint}"
+        );
+
+        let placeholder = context(Some(endpoint));
+        let fix = adapter
+            .preflight(&placeholder)
+            .into_iter()
+            .find(|diagnostic| diagnostic.code.as_str() == "LLM_004")
+            .and_then(|diagnostic| diagnostic.fix);
+        assert_eq!(
+            fix,
+            Some(humanitl_core::FixAction::CopyCommand(format!(
+                "curl -sS {base}/models"
+            ))),
+            "for {endpoint}"
+        );
+    }
+}
+
+/// HUM-261: Hinter einem Pfad-Präfix gilt die Durchreiche für die
+/// Inferenz-Endpunkte unter der Basis, denn dorthin schickt der Agent. Die
+/// Wurzel-Formen `/v1/…` und die Ollama-Endpunkte `/api/chat` und so fort
+/// gelten dort nicht; was den Server verändert, bleibt gehalten.
+#[test]
+fn opencode_passthrough_follows_the_path_prefix() {
+    let adapter = OpenCodeAdapter::new();
+    let llm = LlmConfig {
+        endpoint: Some(url::Url::parse("https://llm.example.net/api/v1/").unwrap()),
+        ..LlmConfig::default()
+    };
+    let rule = adapter
+        .llm_passthrough(&llm)
+        .expect("a rule for an endpoint");
+    assert_eq!(rule.matcher.port, Some(443));
+    assert_eq!(rule.matcher.scheme, Some(Scheme::Https));
+
+    let set = RuleSet::from_rules([rule]);
+    let now = chrono::Utc::now();
+    let host = HostName::parse("llm.example.net").unwrap();
+    for (method, path, expected_allow) in [
+        (Method::POST, "/api/v1/chat/completions", true),
+        (Method::POST, "/api/v1/chat/completions?x=1", true),
+        (Method::POST, "/api/v1/completions", true),
+        (Method::POST, "/api/v1/responses", true),
+        (Method::POST, "/api/v1/embeddings", true),
+        (Method::GET, "/api/v1/models", true),
+        // Genau der Endpunkt, kein Pfad darunter (HUM-261).
+        (Method::GET, "/api/v1/models/m", false),
+        (Method::POST, "/api/v1/models/delete", false),
+        (Method::POST, "/api/v1/models%2Fdelete", false),
+        (Method::POST, "/api/v1/models/./delete", false),
+        // Was den Server verändert, bleibt gehalten, auch unter dem Präfix.
+        (Method::POST, "/api/v1/files", false),
+        (Method::POST, "/api/v1/fine_tuning/jobs", false),
+        (Method::POST, "/api/v1/models/../files", false),
+        // Die Wurzel-Formen fragt der Agent bei diesem Endpunkt nie.
+        (Method::POST, "/v1/chat/completions", false),
+        (Method::POST, "/api/chat", false),
+        (Method::GET, "/api/tags", false),
+        (Method::GET, "/api/api/tags", false),
+    ] {
+        let key = RequestKey::new(&host, &method, path, Scheme::Https, 443);
+        let allowed = matches!(
+            set.evaluate(&key, now, SessionId::nil()),
+            Verdict::Matched {
+                action: Action::Allow,
+                ..
+            }
+        );
+        assert_eq!(allowed, expected_allow, "{method} {path}");
     }
 }
 
