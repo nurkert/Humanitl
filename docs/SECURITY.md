@@ -354,7 +354,18 @@ unter `/v1/` `POST /v1/files`, `/v1/uploads`, `/v1/vector_stores`, `/v1/fine_tun
 vLLM `POST /v1/load_lora_adapter`. Der Default zählt stattdessen die dreizehn Endpunkte auf, die
 Inferenz machen oder Auskunft geben: `/v1/chat/completions`, `/v1/completions`, `/v1/responses`,
 `/v1/embeddings`, `/v1/models` sowie `/api/chat`, `/api/generate`, `/api/embed`, `/api/embeddings`,
-`/api/tags`, `/api/show`, `/api/ps` und `/api/version`. Genauso wenig trifft ein Pfad mit einem
+`/api/tags`, `/api/show`, `/api/ps` und `/api/version`. Hat `llm.endpoint` ein Pfad-Präfix
+(`https://host/api/v1/`), liegen die fünf OpenAI-kompatiblen Endpunkte unter dessen Basis
+(`/api/v1/chat/completions` und so fort), denn nur dorthin schickt der Agent; die acht
+Ollama-Endpunkte entfallen dann, weil es die native Ollama-API nur an der Wurzel eines Servers
+gibt (HUM-261). Die Regel wird dadurch nicht breiter, sie zählt dieselben Endpunkte an der Stelle
+auf, an der der Server sie anbietet. Jeder dieser erzeugten Endpunkte gilt genau, nicht als
+Präfix: `/v1/models` trifft `/v1/models` und `/v1/models?x=1`, aber nicht `/v1/models/delete`,
+`/v1/models/` oder `/v1/models%2Fdelete`; kodiert wird dabei nichts aufgelöst, jede andere
+Schreibweise wird gehalten. Ein Pfad, den der Mensch selbst in `llm.passthrough_paths` schreibt,
+bleibt ein Präfix und deckt alles darunter. In einer Regel steht ein genauer Eintrag mit `?` am
+Ende (`/v1/models?`); ein solcher Eintrag traf vorher nie etwas, weil der verglichene Pfad kein
+`?` enthält, und in `llm.passthrough_paths` fällt er weg. Genauso wenig trifft ein Pfad mit einem
 `..`-Segment ein Präfix, denn erst der Server löst es auf. Dasselbe gilt für jede Regel, die
 durchlässt (`allow`, `redact`) und ein Pfadmuster oder Präfixe trägt, auch verschleiert als `%2e%2e`
 oder `..;`: Eine Freigabe für `/repos/me/**` trifft `/repos/me/../../user/keys` nicht, die Anfrage

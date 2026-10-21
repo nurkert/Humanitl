@@ -976,7 +976,7 @@
   "diagLLM002Title": "LLM-Endpunkt verlangt eine Anmeldung",
   "diagLLM002Why": "Der Endpunkt antwortet mit 401 oder 403.",
   "diagLLM003Title": "LLM-Endpunkt antwortet nicht als bekannte API",
-  "diagLLM003Why": "Die Verbindung steht, aber weder /api/tags noch /v1/models antwortet als bekannte API.",
+  "diagLLM003Why": "Die Verbindung steht, aber die Modellliste des Endpunkts antwortet nicht als bekannte API.",
   "diagLLM004Title": "Kein Modell eingetragen",
   "diagLLM004Why": "llm.models ist leer; der Agent bekommt einen Platzhalter statt eines Modells.",
   "diagLLM005Title": "Funde in einer durchgeleiteten Anfrage",
@@ -1261,5 +1261,8 @@
   "settingsTrustSystemStoreHelp": "Aus: Es gelten nur die öffentlichen Wurzeln, die Humanitl mitbringt, und ein Server mit einem Firmen- oder selbst installierten Zertifikat wird abgelehnt. Die Sandbox ist davon nicht betroffen.",
   "shellWindowMinimize": "Minimieren",
   "shellWindowMaximize": "Maximieren oder wiederherstellen",
-  "shellWindowClose": "Schließen"
+  "shellWindowClose": "Schließen",
+  "rulesMatchExactPaths": "genau {paths}",
+  "rulesFieldExactPaths": "Genaue Pfade",
+  "rulesExactPathsReadOnly": "Nur genau diese Pfade treffen, mit beliebiger Query, nichts darunter. Der Editor ändert sie nicht; Speichern behält sie."
 }

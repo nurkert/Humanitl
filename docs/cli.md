@@ -260,8 +260,8 @@ Mit `--probe-llm` wird gemessen. Vorher steht auf `stderr` eine Zeile, die
 sagt, wohin es geht und was geschickt wird, **bevor** die Verbindung aufgebaut
 wird; sie lässt sich weder mit `--json` noch mit `-q` abstellen, weil sie zur
 Handlung gehört und nicht zur Ausgabe. Gemessen wird über die RPC `ProbeLlm`
-im Daemon (zwei `GET` auf
-`/api/tags` und `/v1/models`, keine Zugangsdaten, keine Weiterleitungen); ohne
+im Daemon (`GET` auf die Modellliste des Endpunkts, bei einem Ollama ohne
+Pfad-Präfix vorher auf `/api/tags`; keine Zugangsdaten, keine Weiterleitungen); ohne
 laufenden Daemon gibt es die Probe nicht, und die Zeile bleibt ehrlich
 ungemessen. Der Schalter heißt nicht `--llm`: Das ist der Zweitname von
 `--llm-endpoint` und **setzt** die Adresse, statt sie zu prüfen.
@@ -1090,9 +1090,10 @@ Host-Tabelle aus HUM-022 auf genau diesem Weg.
 ## `humanitl llm test`
 
 Fragt einen einzelnen Endpunkt, was er ist. Dieselbe Probe wie hinter dem
-Testknopf im Setup und wie bei `doctor --probe-llm`: zwei GET-Anfragen im
-Daemon, `/api/tags` und dann `/v1/models`, ohne Weiterleitung, nichts davon
-durch die Sandbox. Zugangsdaten gehen nur mit `--with-key` mit: Dann schickt der
+Testknopf im Setup und wie bei `doctor --probe-llm`: GET-Anfragen im Daemon
+auf die Modellliste des Endpunkts (`<Basis>/models`, bei einem Ollama ohne
+Pfad-Präfix vorher `/api/tags`), ohne Weiterleitung, nichts davon durch die
+Sandbox. Zugangsdaten gehen nur mit `--with-key` mit: Dann schickt der
 Daemon den hinterlegten Zugangsschlüssel als `Authorization: Bearer`, und nur,
 wenn `URL` dieselbe Herkunft (Schema, Host, Port) hat wie `llm.endpoint`;
 `key_sent` in `--json` sagt, ob einer ging (HUM-140).

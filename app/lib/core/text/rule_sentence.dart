@@ -47,6 +47,25 @@ String ruleActionWord(RuleAction action, AppLocalizations l10n) =>
       RuleAction.redact => l10n.rulesActionRedact,
     };
 
+/// Das Zeichen am Ende eines Eintrags in [RuleMatcher.pathPrefixes], der einen
+/// Pfad genau meint statt als Präfix (HUM-261), wie `EXACT_PATH_MARK` im
+/// Daemon. `/v1/models?` trifft `/v1/models` mit beliebiger Query, aber nicht
+/// `/v1/models/delete`.
+const String exactPathMark = '?';
+
+/// Die genau gemeinten Pfade unter den Einträgen, ohne [exactPathMark].
+List<String> exactPathsOf(List<String> entries) => <String>[
+  for (final String entry in entries)
+    if (entry.endsWith(exactPathMark))
+      entry.substring(0, entry.length - exactPathMark.length),
+];
+
+/// Die Einträge, die Präfixe sind.
+List<String> prefixPathsOf(List<String> entries) => <String>[
+  for (final String entry in entries)
+    if (!entry.endsWith(exactPathMark)) entry,
+];
+
 /// Was [rule] trifft, in einer Zeile: Methoden, Host, Pfad und was der Matcher
 /// sonst festnagelt.
 ///
@@ -57,6 +76,8 @@ String ruleActionWord(RuleAction action, AppLocalizations l10n) =>
 /// geschrieben, weil „welche Verben" die erste Frage an jede Regel ist.
 String ruleMatchSummary(Rule rule, AppLocalizations l10n) {
   final RuleMatcher matcher = rule.matcher;
+  final List<String> prefixes = prefixPathsOf(matcher.pathPrefixes);
+  final List<String> exact = exactPathsOf(matcher.pathPrefixes);
   final List<String> parts = <String>[
     matcher.methods.isEmpty
         ? l10n.rulesAnyMethod
@@ -65,8 +86,9 @@ String ruleMatchSummary(Rule rule, AppLocalizations l10n) {
     if (matcher.path.isNotEmpty) matcher.path,
     // Die Präfixe verengen die Regel. Eine Zeile ohne sie läse sich wie die
     // weitere Regel, und genau so blieb ihr Verlust unbemerkt (HUM-205).
-    if (matcher.pathPrefixes.isNotEmpty)
-      l10n.rulesMatchPathPrefixes(matcher.pathPrefixes.join(', ')),
+    if (prefixes.isNotEmpty) l10n.rulesMatchPathPrefixes(prefixes.join(', ')),
+    // Ein genauer Eintrag ist kein Präfix und wird nicht so genannt (HUM-261).
+    if (exact.isNotEmpty) l10n.rulesMatchExactPaths(exact.join(', ')),
     if (matcher.scheme case final Scheme scheme) scheme.name,
     if (matcher.port != 0) ':${matcher.port}',
     if (matcher.upgrade == Upgrade.websocket) l10n.rulesUpgradeWebsocketShort,

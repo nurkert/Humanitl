@@ -500,6 +500,53 @@ void main() {
     expect(client.updated.single.matcher.pathPrefixes, <String>['/v1/']);
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 
+  testWidgets('exact paths show as paths and survive a save unchanged', (
+    WidgetTester tester,
+  ) async {
+    // HUM-261: Ein genauer Eintrag steht als Pfad ohne `?` da, nicht als
+    // Präfix; gespeichert wird er unverändert.
+    final RulesTestClient client = RulesTestClient();
+    await client.addRule(
+      const Rule(
+        action: RuleAction.allow,
+        matcher: RuleMatcher(
+          host: 'api.example.com',
+          pathPrefixes: <String>['/v1/models?'],
+        ),
+        expires: RuleExpiry.never(),
+      ),
+    );
+    await pumpRules(tester, client: client);
+
+    final Finder row = find.ancestor(
+      of: find.textContaining('exact /v1/models', findRichText: true),
+      matching: find.byType(RuleRow),
+    );
+    expect(row, findsOneWidget);
+    expect(find.textContaining('prefix', findRichText: true), findsNothing);
+    await tester.tap(row);
+    await tester.pump();
+
+    await tester.enterText(
+      find.byKey(const Key('rule-host')),
+      'api2.example.com',
+    );
+    await tester.pump();
+
+    final Finder shown = find.byKey(const Key('rule-exact-paths'));
+    await reveal(tester, shown);
+    expect(tester.widget<Text>(shown).data, '/v1/models');
+    expect(find.byKey(const Key('rule-path-prefixes')), findsNothing);
+    expect(find.text(l10n.rulesExactPathsReadOnly), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('rule-save')));
+    await tester.pump();
+    await tester.pump();
+
+    expect(client.updated, hasLength(1));
+    expect(client.updated.single.matcher.pathPrefixes, <String>['/v1/models?']);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
   // HUM-173: Der Baum der Anwendung hat keine `ShadcnApp`; den
   // `KeyboardShortcutDisplayMapper`, den das Menü braucht, legt `HTextField`
   // um das Menü. Der Aufbau der echten Anwendung steht in

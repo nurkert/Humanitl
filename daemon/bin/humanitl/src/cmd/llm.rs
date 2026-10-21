@@ -324,9 +324,11 @@ fn flavor(flavor: i32) -> &'static str {
 /// Grund wie [`announce`] und wie im Doctor: Ein Ausgabeschalter darf nicht
 /// bestimmen, ob ein Mensch von einer Verbindung erfährt.
 fn announce_probe(endpoint: &str) {
+    // Die Pfade kommen aus derselben Regel wie die Probe (HUM-261): hinter
+    // einem Pfad-Präfix ist es eine Anfrage, nie eine an `/api/tags`.
     eprintln!(
-        "contacting {endpoint} now: two GET requests, /api/tags then /v1/models, \
-         no credentials, no redirects"
+        "contacting {endpoint} now: {}, no credentials, no redirects",
+        humanitl_config::llm_endpoint::probe_plan(endpoint)
     );
 }
 

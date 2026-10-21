@@ -652,12 +652,13 @@ registry! {
     LLM_002 => "llm", "LLM-Endpoint verlangt eine Anmeldung", "#llm_002",
         "Der Endpunkt verlangt eine Anmeldung (`401` oder `403`), ohne Schlüssel oder mit einem, den er ablehnt.",
         "`CopyCommand`: `humanitl llm key set` hinterlegt den Zugangsschlüssel; in der Oberfläche das Feld „Zugangsschlüssel“ der Einstellungen.";
-    /// Die Verbindung steht, aber weder `/api/tags` (Ollama) noch `/v1/models`
-    /// (OpenAI-kompatibel) hat geantwortet. Meist zeigt die Adresse auf eine
-    /// Oberfläche statt auf die Wurzel der API (HUM-039).
+    /// Die Verbindung steht, aber die Modellliste des Endpunkts antwortet
+    /// nicht als bekannte API (an der Wurzel eines Servers zuvor auch
+    /// `/api/tags` nicht). Meist zeigt die Adresse auf eine Oberfläche statt
+    /// auf die Basis der API (HUM-039, HUM-261).
     LLM_003 => "llm", "LLM-Endpoint antwortet nicht als bekannte API", "#llm_003",
-        "Die Verbindung steht, aber weder `/api/tags` noch `/v1/models` antwortet als bekannte API.",
-        "`ChangeSetting` auf die Adresse der API-Wurzel.";
+        "Die Verbindung steht, aber die Modellliste des Endpunkts antwortet nicht als bekannte API.",
+        "`ChangeSetting` auf die Basis-Adresse der OpenAI-kompatiblen API.";
 
     /// `rules.yaml` ließ sich nicht lesen: die Datei fehlt, ist nicht lesbar,
     /// ist kein gültiges YAML oder passt nicht zum Schema. Der Befund nennt

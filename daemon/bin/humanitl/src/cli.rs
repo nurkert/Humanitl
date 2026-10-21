@@ -190,7 +190,8 @@ pub enum LlmCmd {
 
     /// Ask one endpoint what it is: which API answered, its models, how long.
     ///
-    /// Two GET requests in the daemon, /api/tags then /v1/models, no
+    /// GET requests in the daemon for the model list of the endpoint (and
+    /// /api/tags first on a plain Ollama server without a path prefix), no
     /// credentials and no redirects. Nothing goes through the sandbox.
     Test {
         /// Die Adresse, wie sie in `llm.endpoint` stünde.
@@ -246,8 +247,9 @@ pub struct DoctorArgs {
     /// no connection at all.
     ///
     /// The endpoint is named on stderr before it is contacted. The probe runs
-    /// in the daemon (ProbeLlm): two GET requests, /api/tags then /v1/models,
-    /// no credentials, no redirects.
+    /// in the daemon (ProbeLlm): GET requests for the model list of the
+    /// endpoint (and /api/tags first on a plain Ollama server without a path
+    /// prefix), no credentials, no redirects.
     #[arg(long)]
     pub probe_llm: bool,
 }
