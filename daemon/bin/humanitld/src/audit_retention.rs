@@ -17,7 +17,8 @@
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use humanitl_audit::{Anchor, AuditHandle, PruneLimits, PruneOutcome};
+use humanitl_audit::{Anchor, PruneLimits, PruneOutcome};
+use humanitl_audit_log::AuditHandle;
 use humanitl_core::Diagnostic;
 use humanitl_recorder::{Retention, read_anchors};
 
@@ -94,9 +95,9 @@ mod tests {
 
     use humanitl_audit::kinds::DaemonStopped;
     use humanitl_audit::{
-        Anchor, AnchorMirror, AuditKey, AuditRecord, AuditVerifier, AuditWriter, KeyOrigin,
-        RecordKind, VerifyWarning, WriterOptions,
+        Anchor, AuditKey, AuditRecord, AuditVerifier, KeyOrigin, RecordKind, VerifyWarning,
     };
+    use humanitl_audit_log::{AnchorMirror, AuditWriter, VerifyFile as _, WriterOptions};
     use humanitl_recorder::{AnchorStore, AuditAnchor, Recorder, RecorderSettings, read_anchors};
 
     use super::AuditRetention;

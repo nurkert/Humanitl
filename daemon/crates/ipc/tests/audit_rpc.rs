@@ -10,9 +10,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use humanitl_audit::kinds::{ConfigChanged, PseudonymCreated};
-use humanitl_audit::{
-    Anchor, AnchorMirror, AuditKey, AuditRecord, AuditWriter, KeyOrigin, RecordKind, WriterOptions,
-};
+use humanitl_audit::{Anchor, AuditKey, AuditRecord, KeyOrigin, RecordKind};
+use humanitl_audit_log::{AnchorMirror, AuditWriter, WriterOptions};
 use humanitl_config::Config;
 use humanitl_core::SessionId;
 use humanitl_ipc::v1::audit_request::{Export, Op, Query};

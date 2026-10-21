@@ -36,8 +36,9 @@ use std::time::Duration;
 use base64::Engine as _;
 use bytes::Bytes;
 use dashmap::DashMap;
+use humanitl_audit::RecordKind;
 use humanitl_audit::kinds::LlmDiscover;
-use humanitl_audit::{AuditHandle, RecordKind};
+use humanitl_audit_log::AuditHandle;
 use humanitl_config::Config;
 use humanitl_config::secret::{ApiKey, KeyRef, KeyStore};
 use humanitl_core::diagnostics::codes;
@@ -1915,13 +1916,13 @@ mod tests {
 
     /// Ein Audit-Log in einem Wegwerf-Verzeichnis und seine Zeilen der Art
     /// `llm.discover`.
-    fn discover_log() -> (tempfile::TempDir, humanitl_audit::AuditWriter) {
+    fn discover_log() -> (tempfile::TempDir, humanitl_audit_log::AuditWriter) {
         let dir = tempfile::tempdir().unwrap();
         let key = humanitl_audit::AuditKey::from_bytes([1; 32], humanitl_audit::KeyOrigin::File);
-        let (writer, _) = humanitl_audit::AuditWriter::open(
+        let (writer, _) = humanitl_audit_log::AuditWriter::open(
             &dir.path().join("audit.jsonl"),
             &key,
-            humanitl_audit::WriterOptions::default(),
+            humanitl_audit_log::WriterOptions::default(),
             &[],
             None,
         )
@@ -1929,7 +1930,7 @@ mod tests {
         (dir, writer)
     }
 
-    fn discover_lines(writer: humanitl_audit::AuditWriter) -> Vec<String> {
+    fn discover_lines(writer: humanitl_audit_log::AuditWriter) -> Vec<String> {
         writer.handle().sync().unwrap();
         let path = writer.path().to_path_buf();
         drop(writer);

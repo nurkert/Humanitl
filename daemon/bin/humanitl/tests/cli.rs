@@ -5057,9 +5057,8 @@ fn config_set_is_not_refused_by_a_value_that_looks_like_a_key() {
 /// in Datei und Tabelle, und gibt den letzten Record zurück.
 fn anchored_chain(harness: &Harness, records: usize) -> humanitl_audit::AuditRecord {
     use humanitl_audit::kinds::ConfigChanged;
-    use humanitl_audit::{
-        Anchor, AnchorMirror, AuditKey, AuditWriter, KeyOrigin, RecordKind, WriterOptions,
-    };
+    use humanitl_audit::{Anchor, AuditKey, KeyOrigin, RecordKind};
+    use humanitl_audit_log::{AnchorMirror, AuditWriter, WriterOptions};
     use humanitl_recorder::{AnchorStore, AuditAnchor};
 
     let paths = harness.paths();

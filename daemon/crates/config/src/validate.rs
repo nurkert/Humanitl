@@ -295,7 +295,7 @@ fn audit_is_well_formed(audit: &AuditConfig) -> Result<(), Diagnostic> {
 
 /// Kleinste Grenze in Bytes für das Audit-Log, die nicht `0` ist: 2 MiB,
 /// doppelt so groß wie die längste Zeile, die der Schreiber noch als Record
-/// liest (`humanitl_audit::writer::MAX_LINE_BYTES`, 1 MiB). Dieselbe Zahl
+/// liest (`humanitl_audit::record::MAX_LINE_BYTES`, 1 MiB). Dieselbe Zahl
 /// steht als `humanitl_audit::retention::MIN_MAX_BYTES` im Audit-Log; ein Test
 /// in `humanitld` hält beide gleich.
 const AUDIT_MAX_BYTES_MIN: u64 = 2 * 1024 * 1024;

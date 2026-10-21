@@ -1,0 +1,41 @@
+[package]
+name = "humanitl-audit-log"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+humanitl-audit.workspace = true
+humanitl-core.workspace = true
+
+chrono.workspace = true
+# Der Zufall des Kerns für einen neuen Dateischlüssel.
+getrandom.workspace = true
+hex.workspace = true
+# Der Code nutzt nur `O_NOFOLLOW` beim Anlegen des Schlüssels, wie `ca.rs`.
+libc.workspace = true
+rustix.workspace = true
+serde_json.workspace = true
+# Der Export schreibt in eine Nebendatei mit zufälligem Namen und gibt ihr
+# erst fertig den Zielnamen (HUM-156, vorher in der Kommandozeile).
+tempfile.workspace = true
+# Nur `tokio::sync::broadcast` für den Strom der Befunde, wie in der
+# Aufzeichnung; der Schreiber selbst ist ein Thread ohne Laufzeit.
+tokio.workspace = true
+tracing.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+bytes.workspace = true
+# Die Tests schreiben die Anker in dieselbe SQLite-Tabelle wie der Daemon.
+# Eine Test-Abhängigkeit zeigt nicht nach außen (`tools/check_deps.py`
+# überspringt `kind = "dev"`); im Bibliothekscode bleibt die Crate bei
+# `humanitl-core` und `humanitl-audit`.
+humanitl-recorder.workspace = true
+# Nur für `anchor_tampered_detected`: Der Test ändert einen Anker in SQLite.
+rusqlite.workspace = true
