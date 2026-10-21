@@ -33,6 +33,8 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-255 | Das Fenster trägt keine doppelte Titelleiste | S | HUM-019, HUM-034, HUM-054 |
 | HUM-260 | Gelb wird die Akzentfarbe der Oberfläche | M | HUM-008, HUM-254 |
 | HUM-261 | Die Probe versteht Endpunkte mit Pfad-Präfix (vor HUM-060) | S | HUM-037, HUM-039, HUM-076 |
+| HUM-262 | Ein Projektordner, der die eigene Konfiguration enthält, fällt erst beim Start auf (vor HUM-060) | S | HUM-040, HUM-044 |
+| HUM-263 | Zwischen Prüfung und Mount kann der Projektordner getauscht werden (vor HUM-060) | M | HUM-011, HUM-262 |
 
 ---
 
@@ -3945,3 +3947,181 @@ liest. Probe, Agent-Konfiguration, Durchreichregel und jeder Vorschlag zum Absch
 ### Referenzen
 HUM-037 (`OpenCodeAdapter::base_url`), HUM-039 (Probe), HUM-076 (Discover), HUM-257 (Befund
 vom 2026-10-20, Zertifikat), `docs/SECURITY.md` 3.1.
+
+---
+
+## HUM-262 · Ein Projektordner, der die eigene Konfiguration enthält, fällt erst beim Start auf
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-040, HUM-044 · Blockiert: HUM-060 (vor HUM-060 zu erledigen)
+
+### Kontext
+Am 2026-10-20 zeigt das Setup von v0.0.4 dem Projekteigentümer „Project folder ok
+/home/nburkert" samt Auswahl „read only / read and write". Der Start im Sandbox-Bereich scheitert
+danach mit `SANDBOX_006` „Mount not allowed": „sandbox.work_dir names /home/nburkert:
+/home/nburkert contains /home/nburkert/.config/humanitl, Humanitl's own configuration directory:
+config.toml, rules.yaml and the profiles". Die Weigerung ist richtig und bleibt; der Agent darf die
+eigene Konfiguration nie lesen oder schreiben (`README.md`, Sicherheitsaussage). Falsch ist, dass
+das Setup den Ordner grün meldete und dass die Karte keinen Ausweg anbot.
+
+Ursache: Ohne `sandbox.work_dir` nahm der Daemon sein eigenes Arbeitsverzeichnis als Vorgabe
+(`daemon/crates/ipc/src/sandbox.rs`, `work_dir`). Als Nutzerdienst startet systemd ihn im
+Heimatverzeichnis, eine Anwendung aus dem Menü des Desktops ebenso. `Sandbox(Status)` und
+`Sandbox(Plan)` prüften nur einen Ordner, der über die RPC hereinkam (`check_work_dir`); die
+Vorgabe und ein Ordner aus `config.toml` liefen ungeprüft bis zum Start, wo
+`MountPolicy::check_work_dir` im Sandbox-Backend sie ablehnte. Der Befund trug außerdem keine
+Abhilfe (`deny` in `daemon/crates/sandbox/src/profile.rs`).
+
+### Ziel
+Das Setup meldet einen Projektordner, den der Start ablehnt, schon vor dem Druck auf Start, mit
+demselben Befund und mit einer Abhilfe, die direkt einen anderen Ordner wählen lässt. Die Vorgabe
+ist nie ein Ordner, den der Start ablehnt.
+
+### Entscheidungen
+- **Eine Regel, eine Quelle.** `MountPolicy::check_work_dir` ist die Regel des Starts und wird
+  jetzt auch im Plan angewandt (`prepare_keyed`), für jeden nicht leeren Ordner und bei einem Start
+  immer. Damit melden `Sandbox(Status)` und `Sandbox(Plan)` denselben `SANDBOX_006` wie der Start,
+  und der Client urteilt weiter über nichts (ADR-018).
+- **Die Vorgabe geht durch dieselbe Regel.** Ohne `sandbox.work_dir` bleibt das Arbeitsverzeichnis
+  des Daemons die Vorgabe, aber nur, wenn `MountPolicy::check_work_dir` es annimmt und es ein
+  Verzeichnis ist; sonst gibt es keine Vorgabe. Der leere Ordner ist die bekannte offene Wahl: Die
+  Momentaufnahme nennt keinen, und das Setup zeigt `CONFIG_013` und verlangt eine Auswahl. Bewusst
+  nicht die drei Stufen von `check_work_dir` im IPC-Crate (die dritte verlangt einen Ordner unter
+  dem Heimatverzeichnis): Eine neue Regel ist kein Ziel, nur dieselbe früher.
+- **Ein Ordner aus `config.toml`** bleibt sichtbar, wenn er abgelehnt wird: Der Befund steht über
+  der Momentaufnahme `failed`, die ihn weiter nennt, damit die Karte einen Bezug hat.
+- **Satz und Abhilfe am Befund.** `MountPolicy::check_work_dir` hängt an das `why` „choose the
+  folder of a single project instead, such as ~/projects/xyz" und setzt
+  `ChangeSetting { key: "sandbox.work_dir", value: "" }`, wie es `work_dir_refused` für die übrigen
+  Stufen schon tat. Eine Quelle aus dem Profil (`MountPolicy::check`) bekommt weder Satz noch
+  Abhilfe; sie ändert sich im Profil.
+- **Die Abhilfe im Client.** `FixControl` bekommt `onChooseFolder`. Ein `ChangeSetting` auf
+  `sandbox.work_dir` wird dort, wo ein Bildschirm den Picker hat, ein Knopf „Choose another
+  folder", der denselben Dialog öffnet wie der Picker (`chooseWorkDir` in
+  `app/lib/core/ui/work_dir_picker.dart`, aus `WorkDirPicker._choose` herausgezogen). Das gilt
+  im Setup und im Sandbox-Bereich, der im Kopf denselben Picker hat; dort plant der Knopf den
+  gewählten Ordner über `sandboxStatusProvider.notifier.plan`. Ohne Picker bleibt das Abzeichen.
+  Solange eine Sandbox läuft oder ein Start oder Stopp unterwegs ist, gibt es den Knopf nicht, wie
+  beim Picker.
+- **Andere sensible Elternordner** deckt die Regel schon ab: Ein Ordner, der `~/.ssh`, `~/.gnupg`,
+  `~/.gitconfig`, `~/.netrc`, `$XDG_CONFIG_HOME/humanitl`, `$XDG_DATA_HOME/humanitl` oder das
+  Laufzeitverzeichnis enthält, ist abgelehnt, ebenso das Heimatverzeichnis selbst und alles
+  darüber (`FORBIDDEN_IN_HOME`, `FORBIDDEN_MOUNTS`, `with_protected_dir`). `~/.config` enthält
+  `~/.config/humanitl` und fällt damit darunter. Mit diesem Issue meldet das Setup jeden dieser
+  Fälle genauso früh, weil Plan und Vorgabe durch dieselbe Prüfung gehen.
+
+### Tests
+- `daemon/crates/sandbox/src/profile.rs`: `the_work_dir_may_live_under_home_but_not_be_it` prüft
+  zusätzlich Satz und Abhilfe für jeden abgelehnten Ordner;
+  `a_home_that_holds_the_config_dir_is_refused_for_that_reason` (Fall vom Bildschirmfoto);
+  `a_profile_source_carries_no_folder_fix`.
+- `daemon/crates/ipc/tests/sandbox_rpc.rs`:
+  `a_configured_folder_that_holds_the_config_is_refused_by_the_plan`: `Sandbox(Status)` und
+  `Sandbox(Plan)` melden für ein `sandbox.work_dir`, das die Konfiguration enthält, `SANDBOX_006`
+  mit Satz und `ChangeSetting` auf `sandbox.work_dir`, und der Zustand `failed` nennt den Ordner.
+- `daemon/crates/ipc/src/sandbox.rs`: `the_default_folder_is_never_one_the_start_refuses`: das
+  Heimatverzeichnis, `/`, ein Ordner, der das Konfigurationsverzeichnis ist, kein und ein fehlendes
+  Arbeitsverzeichnis ergeben keine Vorgabe; ein Projektordner bleibt die Vorgabe. Das
+  Arbeitsverzeichnis ist über `work_dir_with_cwd` eingespeist, damit der Test nicht vom
+  Arbeitsverzeichnis von `cargo test` abhängt.
+- `app/test/features/setup/project_refused_test.dart` mit einem Fake, der wie der Daemon antwortet:
+  Setup mit Heimatverzeichnis zeigt `SANDBOX_006`, sperrt den Start und trägt den Knopf; der Knopf
+  öffnet die Ordnerauswahl und plant den gewählten Ordner, die Zeile wird grün; ein abgebrochener
+  Dialog ändert nichts; das Heimatverzeichnis über den Picker gewählt ergibt dieselbe Karte; bei
+  laufender Sandbox gibt es keinen Knopf, nur das Abzeichen.
+- `app/test/features/sandbox/workdir_fix_test.dart`: Im Sandbox-Bereich öffnet der Knopf die
+  Ordnerauswahl und plant den gewählten Ordner; bei laufender Sandbox fehlt er.
+- Mutationsbeweise: Prüfung in `prepare_keyed` entfernt; Vorgabe wieder ungeprüft; Abhilfe oder
+  Satz in `MountPolicy::check_work_dir` entfernt; `FixControl` zeigt immer das Abzeichen;
+  `SetupCheckRow` reicht `onChooseFolder` nicht weiter; der Knopf ruft `onPick` nicht; der
+  Sandbox-Bereich übergibt keinen Callback; Sperre im Sandbox-Bereich oder im Setup entfernt;
+  `work_dir_with_cwd` nimmt das Arbeitsverzeichnis ungeprüft. Jede Mutation macht mindestens
+  einen der Tests rot.
+
+### Akzeptanzkriterien
+- [ ] Ein Projektordner, den der Start mit `SANDBOX_006` ablehnt, steht im Setup schon vor dem
+  Start als `SANDBOX_006` in der Projektzeile, und der Start-Knopf ist aus.
+- [ ] Die Karte trägt ein `why`, das in einem Satz sagt, warum der Ordner nicht geht und was
+  stattdessen, und einen Knopf, der die Ordnerauswahl öffnet.
+- [ ] Ohne `sandbox.work_dir` ist die Vorgabe nie ein Ordner, den der Start ablehnt; ohne gültige
+  Vorgabe zeigt das Setup `CONFIG_013` statt „ok".
+- [ ] Die Prüfung liegt nur im Daemon; der Client urteilt nicht über den Ordner.
+- [ ] Neue Texte in beiden ARB-Dateien, nur angehängt; `make l10n-lint` grün.
+
+### Fallstricke
+- **Ein leerer Ordner ist im Plan kein Befund.** Wer ihn im Plan als `SANDBOX_006` meldet, ersetzt
+  die Karte „Kein Projektordner gewählt" durch eine Weigerung über einen Ordner, den niemand
+  gewählt hat. Nur ein Start ohne Ordner ist ein Befund.
+- **Nicht die dritte Stufe für die Vorgabe.** `check_work_dir` im IPC-Crate verlangt für einen
+  Wunsch über die RPC einen Ordner unter dem Heimatverzeichnis. Für die Vorgabe wäre das eine neue
+  Regel, die Abläufe mit einem Arbeitsverzeichnis außerhalb von `$HOME` brechen ließe.
+- **`ChangeSetting` auf `sandbox.work_dir` schreibt nichts.** `SetConfig` lehnt den Schlüssel bis
+  HUM-069 mit `CONFIG_014` ab; die Abhilfe wird deshalb über die Ordnerauswahl und
+  `Sandbox(Plan)` ausgeführt, nie über `SetConfig`.
+- **Gemeinsame Dateien:** ARB nur angehängt. In `codes.rs` ändert sich nur die Spalte „Fix" von
+  `SANDBOX_006`, die seit `work_dir_refused` „Kein Fix" behauptete; `docs/DIAGNOSTICS.md` ist mit
+  `UPDATE_DIAG_DOCS=1` neu erzeugt.
+
+### Nicht-Ziele
+- Neue Regeln für Projektordner.
+- Die Prüfsumme des Arbeitsverzeichnisses in `session.started` (`humanitld`, `work_dir_of`), die
+  ohne `sandbox.work_dir` weiter das Arbeitsverzeichnis des Daemons nimmt; Kandidat für ein
+  eigenes Issue.
+
+### Referenzen
+HUM-040 (`Sandbox(Plan)`, Picker), HUM-044 (Setup, `CONFIG_013`), HUM-011 (`MountPolicy`),
+`docs/UX.md` 4.4, ADR-018, `daemon/crates/sandbox/src/profile.rs`
+(`MountPolicy::check_work_dir`), `daemon/crates/ipc/src/sandbox.rs` (`prepare_keyed`,
+`default_work_dir`).
+
+## HUM-263 · Zwischen Prüfung und Mount kann der Projektordner getauscht werden
+Sprint: 5 · Größe: M · Abhängigkeiten: HUM-011, HUM-262 · Blockiert: HUM-060 (vor HUM-060 zu erledigen)
+
+### Kontext
+Gefunden im Review von HUM-262 (Codex, Opus). Das Sandbox-Backend prüft den Projektordner per Pfad
+(`daemon/crates/sandbox/src/bwrap.rs`, `policy.check_work_dir(&session.work_src)` vor dem Start)
+und bindet ihn danach erneut per Pfad (`daemon/crates/sandbox/src/bwrap_args.rs`,
+`args.bind(work_flag, &ctx.work_src, work_dst)`); `bwrap` löst den Pfad erst beim Einhängen auf.
+Wer den Elternordner kontrolliert, kann ihn zwischen Prüfung und Mount gegen einen Symlink auf
+`~/.config/humanitl` oder `~/.ssh` tauschen: ein anderer lokaler Nutzer mit Schreibrecht auf den
+Elternordner (Angreifer (d) im Threat Model), oder der Agent selbst, wenn der neue Projektordner in
+einem Ordner liegt, den eine frühere Sitzung beschreibbar eingehängt hatte. Die Sandbox sähe dann
+genau das, was die Prüfung ausschließen soll. Das berührt die Sicherheitsaussage in `README.md`.
+
+### Ziel
+Eingehängt wird genau das Verzeichnis, das geprüft wurde, nicht ein Pfad, der zur Zeit der Prüfung
+auf es zeigte.
+
+### Fix-Idee
+- Den Ordner nach der Auflösung einmal öffnen (`O_PATH | O_DIRECTORY | O_NOFOLLOW` auf jeder
+  Komponente, etwa über `openat2` mit `RESOLVE_NO_SYMLINKS` oder schrittweise) und den Deskriptor
+  halten.
+- Die Prüfung auf dem geöffneten Deskriptor fahren: den echten Pfad aus `/proc/self/fd/N` lesen
+  und gegen `MountPolicy::check_work_dir` prüfen.
+- Genau diesen Deskriptor binden: `bwrap --bind-fd`/`--ro-bind-fd`, falls die Mindestversion es
+  trägt, sonst `/proc/self/fd/N` als Quelle mit vererbtem Deskriptor.
+- `docs/SECURITY.md` und `docs/THREAT-MODEL.md` nennen die Lücke und ihren Abschluss im selben
+  Commit.
+
+### Tests
+- Ein Test-Hook zwischen Prüfung und Start tauscht den geprüften Ordner gegen einen Symlink auf
+  ein geschütztes Verzeichnis; die Sandbox sieht danach das alte Verzeichnis oder startet nicht,
+  nie das geschützte.
+- Mutationsbeweis: Bindung wieder per Pfad, der Test wird rot.
+
+### Akzeptanzkriterien
+- [ ] Der Projektordner wird per Deskriptor geprüft und gebunden; ein Tausch zwischen Prüfung und
+  Mount erreicht kein geschütztes Verzeichnis.
+- [ ] `docs/SECURITY.md` und `docs/THREAT-MODEL.md` beschreiben den Fall.
+
+### Kandidaten aus demselben Review
+- **Status meldet `failed` bei laufender Sitzung.** Seit HUM-262 prüft `prepare_keyed` auch den
+  Ordner einer laufenden Sandbox. Wird er währenddessen zum Symlink auf ein geschütztes
+  Verzeichnis, meldet `Sandbox(Status)` `SANDBOX_006` und `failed`, obwohl die Sitzung weiter
+  läuft. Zu klären: Zustand aus dem Handle, Befund nur als Warnung an der laufenden Sitzung.
+- **Plan-Vorschau mit leerem `work_src`.** Ohne Ordner baut der Plan trotzdem eine Kommandozeile
+  mit leerer Quelle für `/work`; `Path::starts_with("")` ist für jeden Pfad wahr, und Prüfungen,
+  die einen leeren Ordner als Präfix lesen, sagen dann Falsches. Die Vorschau sollte ohne Ordner
+  keine Einhängung für `/work` zeigen.
+
+### Referenzen
+HUM-011 (`MountPolicy`), HUM-262, `daemon/crates/sandbox/src/bwrap.rs`,
+`daemon/crates/sandbox/src/bwrap_args.rs`, `docs/THREAT-MODEL.md` (Angreifer (d)).

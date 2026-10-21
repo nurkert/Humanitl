@@ -394,6 +394,10 @@ typedef ServiceInstaller = Future<Diagnostic?> Function();
 final Provider<ServiceInstaller> serviceInstallerProvider =
     Provider<ServiceInstaller>((Ref ref) => runInstallService);
 
+/// The configuration key of the project folder, as the daemon names it in a
+/// `ChangeSetting` fix (`SANDBOX_006`, HUM-262).
+const String workDirSettingKey = 'sandbox.work_dir';
+
 /// The control for a [FixAction].
 class FixControl extends ConsumerStatefulWidget {
   /// Creates the control for [fix]; renders nothing for null.
@@ -402,11 +406,23 @@ class FixControl extends ConsumerStatefulWidget {
     this.copyKey,
     this.installService,
     this.writeEnv,
+    this.onChooseFolder,
     super.key,
   });
 
   /// The proposed fix.
   final FixAction? fix;
+
+  /// Opens the folder chooser of the screen that draws this control.
+  ///
+  /// A `ChangeSetting` on [workDirSettingKey] is the daemon's way of saying
+  /// "this project folder cannot be used, take another one" (`SANDBOX_006`,
+  /// HUM-262). `SetConfig` does not write that key, but this client can still
+  /// carry the fix out: the project folder is chosen in the folder picker and
+  /// travels in `Sandbox(Plan)`. A screen that has the picker passes it here
+  /// and the fix becomes a button that opens it; a screen without one keeps
+  /// the badge that names the setting.
+  final VoidCallback? onChooseFolder;
 
   /// Was der Knopf „In config.toml schreiben" eines `SetEnv` tut.
   ///
@@ -547,6 +563,13 @@ class _FixControlState extends ConsumerState<FixControl> {
         value: value,
         style: mono,
       ),
+      FixActionChangeSetting(:final key)
+          when key == workDirSettingKey && widget.onChooseFolder != null =>
+        HButton(
+          key: const Key('fix-choose-folder'),
+          onPressed: widget.onChooseFolder,
+          child: Text(l10n.setupFixChooseFolder),
+        ),
       FixActionChangeSetting(:final key) => HBadge(
         text: l10n.setupFixChangeSetting(key),
       ),

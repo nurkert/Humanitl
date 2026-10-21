@@ -34,8 +34,14 @@ class SetupCheckRow extends StatelessWidget {
     this.control,
     this.detail,
     this.showDiagnostic = true,
+    this.onChooseFolder,
     super.key,
   });
+
+  /// Opens the folder chooser, for a finding whose fix is another folder
+  /// ([FixControl.onChooseFolder], HUM-262). Null on every row but the
+  /// project row.
+  final VoidCallback? onChooseFolder;
 
   /// What this row says.
   final SetupCheck check;
@@ -140,6 +146,7 @@ class SetupCheckRow extends StatelessWidget {
                 fix: FixControl(
                   fix: diagnostic.fix,
                   copyKey: Key('setup-fix-copy-${check.kind.name}'),
+                  onChooseFolder: onChooseFolder,
                 ),
                 docsUrl: diagnostic.docsUrl,
                 width: setupCardWidth,

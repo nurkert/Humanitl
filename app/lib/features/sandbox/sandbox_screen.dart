@@ -20,6 +20,7 @@ import '../../core/ui/fix_control.dart';
 import '../../core/ui/h_diagnostic_card.dart';
 import '../../core/ui/diagnostic_severity.dart';
 import '../../core/ui/ui.dart';
+import '../../core/ui/work_dir_picker.dart';
 import '../../l10n/l10n.dart';
 import 'providers/sandbox_status_provider.dart';
 import 'sandbox_text.dart';
@@ -241,18 +242,32 @@ class _Body extends ConsumerWidget {
 /// genug, dass der Reiter darunter noch ein Reiter ist.
 const double _diagnosticsShare = 1 / 3;
 
-class _Diagnostics extends StatelessWidget {
+class _Diagnostics extends ConsumerWidget {
   const _Diagnostics({required this.status});
 
   final SandboxStatus status;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     if (status.diagnostics.isEmpty) {
       return const SizedBox.shrink();
     }
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
+    // Die Abhilfe eines abgelehnten Projektordners ist ein anderer Ordner
+    // (`SANDBOX_006`, HUM-262). Der Knopf öffnet dieselbe Auswahl wie der
+    // Picker im Kopf und ist gesperrt wie er: Solange die Sandbox läuft oder
+    // ein Start oder Stopp unterwegs ist, ändert sich der Ordner nicht.
+    final VoidCallback? chooseFolder = status.isUp || status.isBusy
+        ? null
+        : () => unawaited(
+            chooseWorkDir(
+              ref,
+              (String dir) => unawaited(
+                ref.read(sandboxStatusProvider.notifier).plan(workDir: dir),
+              ),
+            ),
+          );
     return Padding(
       padding: EdgeInsets.all(tokens.spacing.x3),
       child: Column(
@@ -280,7 +295,10 @@ class _Diagnostics extends StatelessWidget {
                     // title, never the reason (`docs/UX.md` 4.4).
                     why: text.cause,
                     docsUrl: diagnostic.docsUrl,
-                    fix: FixControl(fix: diagnostic.fix),
+                    fix: FixControl(
+                      fix: diagnostic.fix,
+                      onChooseFolder: chooseFolder,
+                    ),
                     width: double.infinity,
                   ),
                 ),
