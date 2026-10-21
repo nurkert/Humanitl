@@ -37,6 +37,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-263 | Zwischen Prüfung und Mount kann der Projektordner getauscht werden (vor HUM-060) | M | HUM-011, HUM-262 |
 | HUM-265 | Shim, CA und Proxy-Socket werden weiter per Pfad gebunden (nach HUM-060) | S | HUM-263 |
 | HUM-266 | Ein deflate-Body, der als zlib und als nackter Strom Verschiedenes sagt | S | HUM-247 |
+| HUM-267 | Ein Test scheitert zufällig an „Text file busy" | S | HUM-134 |
 
 ---
 
@@ -4389,3 +4390,63 @@ vollständig durchsucht gemeldet.
 
 ### Referenzen
 HUM-025, HUM-247, RFC 1950 §2.2, RFC 1951 §3.2.4, `backlog/CONVENTIONS.md` 4.13.
+
+---
+
+## HUM-267 · Ein Test scheitert zufällig an „Text file busy"
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-134 · Blockiert: —
+
+### Kontext
+Die CI ist auf den Branches von HUM-255 und HUM-247 an einem Test gescheitert, der mit beiden
+Issues nichts zu tun hat:
+`secret::tests::without_a_keyring_the_key_lands_in_a_0600_file_and_says_so` meldet
+„secret-tool-broken could not be started (Text file busy (os error 26))". Die Attrappen von
+`secret-tool` in `daemon/crates/config/src/secret.rs` (`fake_tool`, `broken_tool`, das Skript in
+`a_tool_that_never_answers_runs_into_the_deadline`) schreiben ihr Skript mit `fs::write` und
+starten es gleich danach. Ein anderer Test-Faden desselben Prozesses kann in genau dem Fenster
+`fork` aufrufen, in dem das Skript zum Schreiben offen ist. Das Kind erbt den Deskriptor und hält
+ihn bis zu seinem eigenen `exec`; das `execve` des Skripts scheitert in dieser Zeit mit
+`ETXTBSY`. `O_CLOEXEC` hilft nicht, weil das Fenster zwischen `fork` und `exec` liegt. Dieselbe
+Ursache hat HUM-134 in der Sandbox-Crate behoben; `humanitl-config` und `humanitl-ipc` haben
+die Lösung nie bekommen. In `humanitl-ipc` haben `fake_tool` in `llm_key.rs` und
+`fake_secret_tool` in `sandbox.rs` dasselbe Muster.
+
+### Ziel
+Kein Test in `humanitl-config` und `humanitl-ipc` hält beim Start eines selbst geschriebenen
+Skripts einen Schreib-Deskriptor darauf in einem Prozess, der parallel `fork` aufruft. Der
+Produktionscode bleibt unverändert; ein Wiederholen bei `ETXTBSY` gehört nicht dorthin.
+
+### Akzeptanzkriterien
+- [ ] Jede Test-Attrappe in `daemon/crates/config/src/secret.rs`, `daemon/crates/ipc/src/llm_key.rs`
+  und `daemon/crates/ipc/src/sandbox.rs`, die ein Skript schreibt und ausführt, legt es über
+  `test_support::write_executable` an.
+- [ ] `write_executable` öffnet das ausführbare Ziel im Testprozess nie zum Schreiben.
+- [ ] Ein Belastungslauf zeigt den Fehler vor dem Fix und nicht danach.
+
+### Umsetzung
+> **Umsetzung (HUM-267, 2026-10-21).** Neues Modul `test_support` (nur unter `cfg(test)`) in
+> `humanitl-config` und `humanitl-ipc` mit `write_executable(path, body)`, nach dem Vorbild von
+> `write_program` in `daemon/crates/sandbox/src/test_support.rs`: Der Inhalt geht in eine
+> Quelldatei `<name>.source`, die nie ausgeführt wird; ein vorhandenes Ziel wird entfernt, `cp`
+> legt das Skript als neue Inode an, danach `chmod 0755` und die Quelle wird gelöscht. Den einzigen
+> Schreib-Deskriptor auf das Skript hat der Prozess `cp`; der ist beendet, bevor ein Test das
+> Skript startet. Erbt ein anderer Faden beim `fork` den Deskriptor der Quelldatei, schadet das
+> nicht, denn die Quelle wird nie ausgeführt und ist eine andere Inode. Umbenennen oder ein harter
+> Link der Quelle hätte nicht geholfen, weil es dieselbe Inode bliebe. Die drei Attrappen in
+> `secret.rs`, `fake_tool` in `llm_key.rs` und `fake_secret_tool` in `sandbox.rs` nutzen die
+> Funktion. Belastungslauf (`humanitl_config-* secret --test-threads=16`, `taskset -c 0-5`,
+> `nice -n 19`, Last um 15): vor dem Fix 1 Fehlschlag mit `ETXTBSY` in 500 Läufen, danach
+> keiner in 2000.
+>
+> Kandidaten mit demselben Muster außerhalb dieses Issues (Skript per `fs::write` oder
+> `fs::copy` geschrieben und im selben Testprozess gestartet): `write_script` in
+> `daemon/bin/humanitl/tests/daemon_lifecycle.rs` (dort fängt `run` `ETXTBSY` mit Wiederholen
+> ab), die Skripte in `daemon/bin/humanitl/tests/cli.rs` (ebenfalls mit Wiederholen über
+> `output_when_not_busy`). Nur geschrieben und als ausführbar markiert, nach erstem Blick aber
+> nicht gestartet: `daemon/bin/humanitl/src/cmd/unit.rs` um Zeile 1201,
+> `program` in `daemon/crates/sandbox/src/agent/mod.rs` um Zeile 1308 und
+> `daemon/crates/sandbox/tests/opencode_adapter.rs` um Zeile 366, 441 und 1274. Ob eine davon
+> das Skript doch startet, ist je Stelle zu prüfen.
+
+### Referenzen
+HUM-134, `daemon/crates/sandbox/src/test_support.rs`, `daemon/crates/sandbox/tests/common/mod.rs`.

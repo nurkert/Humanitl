@@ -3323,7 +3323,6 @@ mod tests {
     /// Eine Attrappe von `secret-tool`, die ihre Einträge unter `dir/keyring`
     /// ablegt. Der Schlüsselbund des Menschen bleibt unberührt.
     fn fake_secret_tool(dir: &Path) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt as _;
         let store = dir.join("keyring");
         std::fs::create_dir_all(&store).unwrap();
         let script = dir.join("secret-tool");
@@ -3333,8 +3332,7 @@ mod tests {
              '{0}'/\"$last\" ;;\nesac\n",
             store.display()
         );
-        std::fs::write(&script, body).unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_support::write_executable(&script, &body);
         script
     }
 

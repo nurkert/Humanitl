@@ -61,6 +61,9 @@ pub mod resolve;
 pub mod schema;
 pub mod scope;
 pub mod secret;
+/// Werkzeug, das nur die Unit-Tests dieser Crate benutzen (HUM-267).
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod tier;
 mod validate;
 pub mod value;
