@@ -1,4 +1,7 @@
 # ADR-0006 · DNS-Auflösung erst nach der Freigabe
+
+Applies to: Humanitl 0.1
+
 Status: Accepted
 Datum: 2026-09-02
 

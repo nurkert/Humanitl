@@ -36,6 +36,8 @@ fn render() -> String {
 /// Titel, Sichtbarkeitsstufen, Projekt-Profil und Reihenfolge der Quellen.
 fn render_preamble(out: &mut String) {
     out.push_str("# Konfiguration\n\n");
+    // HUM-059: jede Seite unter `docs/` nennt den Stand, für den sie gilt.
+    out.push_str("Applies to: Humanitl 0.1\n\n");
     out.push_str(
         "<!-- Erzeugt aus daemon/crates/config/src/model.rs.\n     \
          Nicht von Hand ändern: `UPDATE_CONFIG_DOCS=1 cargo test -p humanitl-config --test config_docs` \

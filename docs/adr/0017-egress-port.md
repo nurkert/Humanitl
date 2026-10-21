@@ -1,4 +1,7 @@
 # ADR-0017 · Ein Egress-Port für Direktverbindung, Upstream-Proxy und Tor
+
+Applies to: Humanitl 0.1
+
 Status: Accepted
 Datum: 2026-09-02
 

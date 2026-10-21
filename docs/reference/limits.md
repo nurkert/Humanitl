@@ -1,48 +1,50 @@
-# Ressourcen-Limits
+# Resource limits
 
-Alle harten Grenzen des Daemons stehen in der Gruppe `limits` von `config.toml`
-(`backlog/CONVENTIONS.md` 4.4, HUM-057). Jede hat eine Vorgabe, die für einen
-Coding-Agenten auf einem Laptop passt, und jede Überschreitung endet in einem
-festen Zustand mit einem Befund, nie in einem stillen Abbruch.
+Applies to: Humanitl 0.1
 
-Verbindlich für Namen, Vorgaben und Stufen ist die Ausgabe von
-`humanitl config schema`; diese Seite erklärt, was die Grenze bewirkt. Werte
-setzt `humanitl config set limits.<schlüssel> <wert>` oder der
-Einstellungsdialog (ab Stufe `advanced` beziehungsweise `expert`).
+Every hard limit of the daemon lives in the group `limits` of `config.toml`
+(`backlog/CONVENTIONS.md` 4.4, HUM-057). Each has a default that fits a coding
+agent on a laptop, and exceeding any of them ends in a fixed state with a
+diagnostic, never in a silent abort.
 
-## Die elf Grenzen
+Names, defaults and tiers are defined by the output of `humanitl config schema`
+(and the generated [`CONFIG.md`](../CONFIG.md)); this page explains what each
+limit does. Values are set with `humanitl config set limits.<key> <value>` or in
+the settings dialog (tiers `advanced` and `expert`).
 
-| Schlüssel | Vorgabe | Stufe | Wirkung beim Überschreiten | Befund |
+## The eleven limits
+
+| Key | Default | Tier | When exceeded | Diagnostic |
 |---|---|---|---|---|
-| `limits.hold_body_cap_bytes` (Alias `hold.body_cap_bytes`) | 32 MiB | advanced | Die Anfrage wird mit `413` geblockt (`BlockReason::BodyCap`), auch wenn eine Regel den Host erlaubt. Ausnahme: Eine Regel `allow` oder `ask` mit `stream: true` lässt sie gestreamt hinaus, ungeprüft, aber nur bei ausgeschaltetem `hold.hard_block_checksum_secrets` (siehe unten). | `LIMIT_001` (`Warning` beim Block mit Regelvorschlag, `Info` beim Streamen) |
-| `limits.preview_cap_bytes` (Alias `preview.cap_bytes`) | 8 MiB | expert | Suche nach Geheimnissen und Vorschau sehen nur den Anfang; die Entscheidung bleibt möglich, die Funde gelten als unvollständig. | `FINDINGS_002` |
-| `limits.event_buffer` (Alias `ipc.event_buffer`) | 1024 | expert | Ein Abonnent des Ereignisstroms, der mehr Ereignisse verpasst, bekommt `Lagged` und lädt über `ListFlows` nach. Der Proxy wartet nie auf ihn. | `LIMIT_006` (nur Protokoll, `Info`) |
-| `limits.max_decompress_ratio` (Alias `preview.max_decompress_ratio`) | 100 | expert | Das Entpacken eines Bodys für Suche und Vorschau bricht ab, sobald mehr entstünde als Verhältnis mal gepackte Größe; geprüft während des Entpackens, nicht danach. | `LIMIT_003` (ohne Fix), `FINDINGS_002`, wenn statt des Verhältnisses das Vorschau-Cap zog |
-| `limits.hold_max_flows` | 200 | advanced | Eine neue Anfrage, die gehalten werden müsste, wird mit `503` geblockt (`BlockReason::HoldMaxFlows`); keine gehaltene wird verdrängt. Ab 80 % zeigt die Statusleiste die Auslastung amber, bei 100 % rot. | `LIMIT_002` |
-| `limits.hold_max_bytes` | 256 MiB | advanced | Summe aller Bodies in Arbeit: reserviert schon beim Puffern, frei nach Weiterleitung, Block, Zeitüberschreitung oder Abbruch. Passt eine Anfrage nicht mehr hinein, `503` (`BlockReason::HoldMemory`), auch mitten im Puffern. Ein gehaltener Kopf unter `stream: true` zählt nur sein schon gelesenes Präfix. | `LIMIT_002` |
-| `limits.connect_timeout_secs` (Alias `upstream.connect_timeout_secs`) | 10 s | advanced | Der Verbindungsaufbau zum Ziel bricht ab; der Fluss wird `Failed`, der Client bekommt `502`. | `PROXY_003` |
-| `limits.header_timeout_secs` | 30 s | expert | Ein Client, der seinen Anfrage-Kopf nicht in dieser Zeit schickt, wird getrennt; ein Fluss entsteht nicht. Gilt auch für die Lücke bis zur nächsten Anfrage einer Keep-Alive-Verbindung und für den TLS-Handschlag nach `CONNECT`, nie während eine Anfrage gehalten wird. Bei einem gestreamten Upload zusätzlich die Frist vom Ende des Bodys bis zu den Antwort-Kopfzeilen des Ziels. | `LIMIT_005` (nur Protokoll), `LIMIT_004` (Upload ohne Antwort) |
-| `limits.body_timeout_secs` | 300 s | expert | Stille **zwischen zwei Stücken** eines Bodys, nie die Gesamtdauer. Anfrage-Body: `408` mit `Connection: close`. Gestreamter Antwort-Body: Der Strom wird abgeschnitten und als gekürzt aufgezeichnet. Gestreamter Upload, den das Ziel nicht mehr liest: Er scheitert. | `PROXY_011` (Anfrage), `LIMIT_004` (Antwort, Upload) |
-| `limits.recorder_max_body_bytes` (Alias `recorder.max_body_bytes`) | 32 MiB | expert | Was darüber liegt, legt die Aufzeichnung nicht ab; die Zeile trägt `truncated` und die volle Größe. | keiner, Vermerk `truncated` am Body |
-| `limits.max_client_connections` | 256 | expert | Der Accept-Loop antwortet `503` mit `Connection: close`, statt anzunehmen und liegen zu lassen. | `PROXY_010` (zusammengefasst je Minute) |
+| `limits.hold_body_cap_bytes` (alias `hold.body_cap_bytes`) | 32 MiB | advanced | The request is blocked with `413` (`BlockReason::BodyCap`), even if a rule allows the host. Exception: an `allow` or `ask` rule with `stream: true` lets it out streamed and unscanned, but only while `hold.hard_block_checksum_secrets` is off (see below). | `LIMIT_001` (`Warning` at the block with a rule suggestion, `Info` when streaming) |
+| `limits.preview_cap_bytes` (alias `preview.cap_bytes`) | 8 MiB | expert | The secret scan and the preview see only the beginning; the decision stays possible, the findings count as incomplete. | `FINDINGS_002` |
+| `limits.event_buffer` (alias `ipc.event_buffer`) | 1024 | expert | A subscriber of the event stream that misses more events gets `Lagged` and reloads through `ListFlows`. The proxy never waits for it. | `LIMIT_006` (log only, `Info`) |
+| `limits.max_decompress_ratio` (alias `preview.max_decompress_ratio`) | 100 | expert | Decoding a body for scan and preview stops as soon as more would come out than ratio times the packed size; checked while decoding, not afterwards. | `LIMIT_003` (no fix), `FINDINGS_002` when the preview cap hit instead of the ratio |
+| `limits.hold_max_flows` | 200 | advanced | A new request that would have to be held is blocked with `503` (`BlockReason::HoldMaxFlows`); no held request is pushed out. From 80 % the status bar shows the load amber, at 100 % red. | `LIMIT_002` |
+| `limits.hold_max_bytes` | 256 MiB | advanced | Sum of all bodies in progress: reserved while buffering, released after forwarding, block, timeout or abort. A request that no longer fits gets `503` (`BlockReason::HoldMemory`), also in the middle of buffering. A held head under `stream: true` counts only the prefix already read. | `LIMIT_002` |
+| `limits.connect_timeout_secs` (alias `upstream.connect_timeout_secs`) | 10 s | advanced | Connecting to the destination stops; the flow becomes `Failed`, the client gets `502`. | `PROXY_003` |
+| `limits.header_timeout_secs` | 30 s | expert | A client that does not send its request head in this time is disconnected; no flow is created. Also covers the gap before the next request on a keep-alive connection and the TLS handshake after `CONNECT`, never while a request is held. For a streamed upload, also the time from the end of the body to the destination's response headers. | `LIMIT_005` (log only), `LIMIT_004` (upload without answer) |
+| `limits.body_timeout_secs` | 300 s | expert | Silence **between two chunks** of a body, never the total duration. Request body: `408` with `Connection: close`. Streamed response body: the stream is cut and recorded as truncated. Streamed upload the destination no longer reads: it fails. | `PROXY_011` (request), `LIMIT_004` (response, upload) |
+| `limits.recorder_max_body_bytes` (alias `recorder.max_body_bytes`) | 32 MiB | expert | What lies beyond is not stored by the recording; the row carries `truncated` and the full size. | none, `truncated` mark on the body |
+| `limits.max_client_connections` | 256 | expert | The accept loop answers `503` with `Connection: close` instead of accepting and leaving the connection lying. | `PROXY_010` (summarised once per minute) |
 
-Die Spezifikation von HUM-057 nannte drei Schlüssel anders
+The specification of HUM-057 named three keys differently
 (`limits.hold_memory_cap_bytes`, `limits.upstream_connect_timeout_secs`,
-`limits.client_header_timeout_secs`) und zwei weitere
-(`limits.client_body_timeout_secs`, `limits.response_idle_timeout_secs`), die
-HUM-120 zu `limits.body_timeout_secs` zusammengelegt hat. Es gelten die Namen
-dieser Tabelle (`backlog/CONVENTIONS.md` 4.4).
+`limits.client_header_timeout_secs`) and two more
+(`limits.client_body_timeout_secs`, `limits.response_idle_timeout_secs`) that
+HUM-120 merged into `limits.body_timeout_secs`. The names in this table apply
+(`backlog/CONVENTIONS.md` 4.4).
 
 ## `stream: true`
 
-Der Anfrage-Body wird vor jeder Entscheidung vollständig gepuffert, weil ein
-Mensch sonst genau den Teil nicht sieht, in dem exfiltriert wird. Eine Anfrage
-über `limits.hold_body_cap_bytes` passt nicht in diesen Puffer und wird
-geblockt. Eine Regel mit `stream: true` ist die einzige Ausnahme, und der
-Mensch schreibt sie selbst:
+The request body is fully buffered before any decision, because otherwise a
+human does not see exactly the part where data leaves. A request above
+`limits.hold_body_cap_bytes` does not fit into that buffer and is blocked. A
+rule with `stream: true` is the only exception, and the human writes it
+themselves:
 
 ```yaml
-- action: ask          # oder allow
+- action: ask          # or allow
   match:
     host: uploads.example.com
     method: [POST]
@@ -50,26 +52,27 @@ Mensch schreibt sie selbst:
   stream: true
 ```
 
-Mit `ask` hält der Proxy die Anfrage mit ihrem Kopf, und erst eine Freigabe
-lässt den Body fließen. Mit `allow` geht er sofort. In beiden Fällen gibt es
-keine Suche nach Geheimnissen und keine Vorschau; aufgezeichnet wird der Body
-bis `limits.recorder_max_body_bytes`. Den Vorschlag einer solchen Regel trägt
-`LIMIT_001` am Block, immer mit `ask`. Steht `hold.hard_block_checksum_secrets`
-an, greift `stream: true` nie: Ein ungeprüfter Strom kann die harte Sperre nicht
-einhalten. Die Anfrage wird dann geblockt wie ohne Regel, und `LIMIT_001`
-schlägt das Cap vor statt einer Regel. Die Sicherheitsaussage dazu steht in
-`docs/SECURITY.md` (Grenzen und Zeitlimits).
+With `ask` the proxy holds the request with its head, and only an approval lets
+the body flow. With `allow` it goes at once. In both cases there is no secret
+scan and no preview; the body is recorded up to
+`limits.recorder_max_body_bytes`. `LIMIT_001` at the block carries the
+suggestion of such a rule, always with `ask`. With
+`hold.hard_block_checksum_secrets` on, `stream: true` never applies: an unscanned
+stream cannot keep the hard block. The request is then blocked as without a
+rule, and `LIMIT_001` suggests the cap instead of a rule. The security statement
+is in [`SECURITY.md`](../SECURITY.md#6-the-proxy); the rule field in
+[`rules.md`](rules.md).
 
-## Belegt durch
+## Proven by
 
-- `daemon/crates/proxy/tests/limits.rs`: Block am Cap mit `LIMIT_001`,
-  Streamen unter `stream: true`, verstummte Antwort mit `LIMIT_004`, Kopf-Frist
-  mit `LIMIT_005`.
+- `daemon/crates/proxy/tests/limits.rs`: block at the cap with `LIMIT_001`,
+  streaming under `stream: true`, a silent response with `LIMIT_004`, the head
+  deadline with `LIMIT_005`.
 - `daemon/crates/proxy/tests/hold.rs`: `hold_rejects_over_memory`,
   `hold_rejects_over_count`.
-- `daemon/crates/proxy/tests/timeouts.rs`: die Spannen aus HUM-120.
-- `daemon/crates/findings/tests/regressions/main.rs`: Entpack-Bomben,
-  `LIMIT_003` gegen `FINDINGS_002`.
+- `daemon/crates/proxy/tests/timeouts.rs`: the spans of HUM-120.
+- `daemon/crates/findings/tests/regressions/main.rs`: decompression bombs,
+  `LIMIT_003` versus `FINDINGS_002`.
 - `daemon/crates/ipc/src/server.rs`: `subscriber_lag_gets_lagged_event`.
-- `daemon/crates/proxy/tests/backpressure.rs`: 1000 Flüsse in 10 s gegen einen
-  langsamen Abonnenten, in der CI mit Messwerten im Job-Log.
+- `daemon/crates/proxy/tests/backpressure.rs`: 1000 flows in 10 s against a
+  slow subscriber, in CI with measurements in the job log.

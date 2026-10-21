@@ -1,4 +1,7 @@
 # ADR-0005 · Request-Body vollständig puffern, bevor der Mensch entscheidet
+
+Applies to: Humanitl 0.1
+
 Status: Accepted
 Datum: 2026-09-02
 
