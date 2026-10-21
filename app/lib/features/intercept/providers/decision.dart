@@ -91,6 +91,16 @@ enum RefusalReason {
   /// The batch carries a rule, and the request the rule comes from left the
   /// queue or was locked; nothing went and no rule was saved (HUM-058).
   ruleSourceGone,
+
+  /// The valve was held to save the rule shown under it, and what that rule
+  /// is built from changed during the hold; nothing went and no rule was
+  /// saved (HUM-249).
+  ruleChanged,
+
+  /// The rule sentences under the controls are longer than the room the bar
+  /// gives them, and they were not scrolled to their end; nothing went and no
+  /// rule was saved (HUM-249).
+  ruleNotInView,
 }
 
 /// How long a batch waits for the detail of one of its requests before it
@@ -414,6 +424,26 @@ class LastRefusal extends _$LastRefusal {
   void clear() => state = null;
 }
 
+/// True while the rule sentences of the action bar stood on screen in full:
+/// they fit, or they were scrolled to their end since they last changed.
+///
+/// The bar sets it after every layout; a decision that would save a rule
+/// straight from the bar asks it first (HUM-249). True by default, so that
+/// a screen without the bar decides as before; the modal guards its own
+/// sentence.
+@Riverpod(keepAlive: true)
+class RuleSentenceSeen extends _$RuleSentenceSeen {
+  @override
+  bool build() => true;
+
+  /// Records what the bar just measured.
+  void set(bool seen) {
+    if (state != seen) {
+      state = seen;
+    }
+  }
+}
+
 /// The draft of the rule behind the next decision.
 ///
 /// Resets with every new selection: a rule drafted for one request must never
@@ -604,11 +634,25 @@ class InterceptDecision extends _$InterceptDecision {
       );
       return;
     }
+    final Rule? rule = _rule(flow, draft, duration, RuleAction.allow);
+    if (!_ruleInView(rule)) {
+      return;
+    }
     await _send(
       flow,
       Decision.allow(acknowledgedFindings: acknowledgedFindings),
-      _rule(flow, draft, duration, RuleAction.allow),
+      rule,
     );
+  }
+
+  /// False, after refusing, while [rule] would be saved although its
+  /// sentence under the controls was not seen in full (HUM-249).
+  bool _ruleInView(Rule? rule) {
+    if (rule == null || ref.read(ruleSentenceSeenProvider)) {
+      return true;
+    }
+    _refuse(RefusalReason.ruleNotInView);
+    return false;
   }
 
   /// "Send anyway" in the findings pause: sends the request unchanged and
@@ -645,10 +689,14 @@ class InterceptDecision extends _$InterceptDecision {
       _ask(DecisionKind.block, <Flow>[flow], false, ConfirmReason.forever);
       return;
     }
+    final Rule? rule = _rule(flow, draft, draft.effective, RuleAction.block);
+    if (!_ruleInView(rule)) {
+      return;
+    }
     await _send(
       flow,
       Decision.block(note: ref.read(blockNoteProvider).outgoing),
-      _rule(flow, draft, draft.effective, RuleAction.block),
+      rule,
     );
   }
 
@@ -761,11 +809,15 @@ class InterceptDecision extends _$InterceptDecision {
     }
     // Die Regel des Satzes in der Leiste, gebaut aus derselben Anfrage wie
     // er (`ruleFlowProvider`: die erste der Auswahl), und zwar jetzt, einmal.
-    await _many(
-      sendable,
+    final ShownRule? shown = _shownRuleOf(
+      flows.first,
       DecisionKind.allow,
-      shownRule: _shownRuleOf(flows.first, DecisionKind.allow, remember),
+      remember,
     );
+    if (!_ruleInView(shown?.rule)) {
+      return;
+    }
+    await _many(sendable, DecisionKind.allow, shownRule: shown);
   }
 
   /// Refuses [flows], as one act.
@@ -796,13 +848,17 @@ class InterceptDecision extends _$InterceptDecision {
       );
       return;
     }
+    final ShownRule? shown = fromSelection
+        ? _shownRuleOf(flows.first, DecisionKind.block, false)
+        : null;
+    if (!_ruleInView(shown?.rule)) {
+      return;
+    }
     await _many(
       flows,
       DecisionKind.block,
       fromSelection: fromSelection,
-      shownRule: fromSelection
-          ? _shownRuleOf(flows.first, DecisionKind.block, false)
-          : null,
+      shownRule: shown,
     );
   }
 

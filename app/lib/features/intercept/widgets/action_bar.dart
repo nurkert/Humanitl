@@ -72,6 +72,7 @@ class ActionBar extends ConsumerStatefulWidget {
     required this.flow,
     this.onEdit,
     this.onPseudonymize,
+    this.ruleMaxHeight,
     super.key,
   });
 
@@ -92,6 +93,11 @@ class ActionBar extends ConsumerStatefulWidget {
   /// ohne Editor; die Pause laesst den Knopf dann weg.
   final VoidCallback? onPseudonymize;
 
+  /// How tall the rule sentences may grow before they scroll; half the
+  /// window when null (HUM-249). The inspector passes a third of its own
+  /// height, so that card and decisions keep their room.
+  final double? ruleMaxHeight;
+
   @override
   ConsumerState<ActionBar> createState() => _ActionBarState();
 }
@@ -99,6 +105,67 @@ class ActionBar extends ConsumerStatefulWidget {
 class _ActionBarState extends ConsumerState<ActionBar> {
   bool _blockHighlighted = false;
   bool _noteSlotFocused = false;
+
+  /// True while the pointer holds the left half of the valve down.
+  bool _valveHeld = false;
+
+  /// What the rule of the running hold was built from when it started.
+  ///
+  /// A hold confirms in an animation callback, before the frame that would
+  /// paint a changed draft: `3` pressed in the last frame of the hold would
+  /// otherwise save a rule for one hour under the sentence for the session.
+  /// The hold therefore saves only while these inputs are still the ones it
+  /// started on, and refuses with a reason otherwise (HUM-249, review
+  /// round 2).
+  _HoldInputs? _heldOn;
+
+  /// Scrolls the rule sentences once they are taller than the room the bar
+  /// gives them (HUM-249).
+  final ScrollController _sentences = ScrollController();
+
+  /// What the sentences were built from, and how they were laid out, when
+  /// they were last seen to their end; null while the current ones were not.
+  Object? _sentencesSeenFor;
+
+  /// What the sentences on screen are built from, from the last build.
+  Object? _sentencesNow;
+
+  @override
+  void dispose() {
+    _sentences.dispose();
+    super.dispose();
+  }
+
+  /// Measures after the layout whether the sentences stand in full, and
+  /// tells the notifier (`ruleSentenceSeenProvider`).
+  ///
+  /// They do when they fit, or once they were scrolled to their end since
+  /// they last changed. A decision that would save one of them straight from
+  /// the bar is refused until then: a sentence whose end is scrolled out of
+  /// view is one nobody has read, and at its end stands the duration.
+  ///
+  /// Their layout belongs to what was seen: a pane that shrinks after the
+  /// sentences were read in full pushes their end out of view again, and
+  /// the end has to be seen anew (HUM-249, review round 3).
+  void _measureSentences() {
+    if (!mounted) {
+      return;
+    }
+    bool seen = true;
+    if (_sentences.hasClients && _sentences.position.hasContentDimensions) {
+      final ScrollPosition position = _sentences.position;
+      final Object laidOut = (
+        _sentencesNow,
+        position.maxScrollExtent.round(),
+        position.viewportDimension.round(),
+      );
+      if (position.pixels >= position.maxScrollExtent - 0.5) {
+        _sentencesSeenFor = laidOut;
+      }
+      seen = _sentencesSeenFor == laidOut;
+    }
+    ref.read(ruleSentenceSeenProvider.notifier).set(seen);
+  }
 
   /// Every decision goes through the notifier, from the pointer as from the
   /// keyboard: the arming, the refusals, the rule and the reach are decided in
@@ -131,13 +198,48 @@ class _ActionBarState extends ConsumerState<ActionBar> {
   String _reachToken(List<Flow> flows) =>
       <String>[for (final Flow flow in flows) flow.id.value].join(',');
 
-  /// The pointer or the focus is on the block half of the bar: the sentence
-  /// above shows the rule Block would create, and the note slot uncovers
-  /// itself (`docs/UX.md` 3.4).
+  /// The pointer or the focus is on the block half of the bar: the note slot
+  /// uncovers itself (`docs/UX.md` 3.4). The rule sentences do not follow it;
+  /// both stand while the grid remembers (HUM-249).
   void _highlightBlock(bool value) {
     if (_blockHighlighted != value) {
       setState(() => _blockHighlighted = value);
     }
+  }
+
+  /// The valve's hold started or ended. While it runs, the first line shows
+  /// the rule the hold would save (HUM-249).
+  void _holdValve(bool value) {
+    if (value) {
+      _heldOn = _holdInputs();
+    }
+    if (mounted && _valveHeld != value) {
+      setState(() => _valveHeld = value);
+    }
+  }
+
+  /// Everything the rule of a hold is built from, read now and not from the
+  /// last build: the draft (open, duration, target), the request the rule is
+  /// generalised from and the registrable domain the daemon named for it --
+  /// the inputs of `InterceptDecision._draftRule`.
+  _HoldInputs _holdInputs() {
+    final Flow? source = ref.read(ruleFlowProvider);
+    return (
+      draft: ref.read(rememberDraftProvider),
+      source: source?.id,
+      apex: source == null ? '' : ref.read(apexResolverProvider)(source.host),
+    );
+  }
+
+  /// The hold completed: saves the rule it showed, or nothing.
+  void _allowHeld(List<Flow> chosen) {
+    final _HoldInputs? started = _heldOn;
+    _heldOn = null;
+    if (started == null || started != _holdInputs()) {
+      ref.read(lastRefusalProvider.notifier).refuse(RefusalReason.ruleChanged);
+      return;
+    }
+    _allow(remember: true, flows: chosen);
   }
 
   @override
@@ -286,7 +388,8 @@ class _ActionBarState extends ConsumerState<ActionBar> {
       // die Pause, über eine Gruppe gilt sie als Bestätigung (HUM-206).
       onActivate: () =>
           _allow(remember: remember.remembers, flows: chosen, confirmed: true),
-      onAllowRemembered: () => _allow(remember: true, flows: chosen),
+      onAllowRemembered: () => _allowHeld(chosen),
+      onHoldChanged: _holdValve,
       onToggleOptions: () => ref.read(rememberDraftProvider.notifier).toggle(),
     );
     final Widget valve = _withRefusal(sendRefusal, l10n, bareValve);
@@ -419,6 +522,19 @@ class _ActionBarState extends ConsumerState<ActionBar> {
           )
         : null;
 
+    // Das Halten des Ventils legt bei geschlossenem Raster eine Regel für die
+    // Sitzung an (`onAllowRemembered`); ihr Satz steht, solange der Finger
+    // unten ist, also bevor sie gespeichert wird (HUM-249). Mit einem Fund
+    // ist das Halten nur Senden und legt keine Regel an.
+    final bool holdRule =
+        _valveHeld && enabled && !refused && !anyFinding && !remember.open;
+    // Woraus die Sätze unter den Controls gebaut sind; ändert sich das,
+    // gelten sie als ungelesen, bis ihr Ende zu sehen war.
+    _sentencesNow = (remember, ref.watch(ruleFlowProvider)?.id, holdRule);
+    WidgetsBinding.instance.addPostFrameCallback(
+      (Duration _) => _measureSentences(),
+    );
+
     return DecoratedBox(
       decoration: BoxDecoration(
         color: tokens.colors.bg1,
@@ -507,11 +623,24 @@ class _ActionBarState extends ConsumerState<ActionBar> {
             // secret and its destination, in one sentence (`docs/UX.md` 4.7).
             if (findings.isNotEmpty && flow != null)
               _FindingLine(flow: flow, findings: findings),
-            _FirstLine(
-              flow: flow,
-              remember: remember,
-              blockHighlighted: _blockHighlighted,
-              findings: findings,
+            // Scrollen und jede neue Ausdehnung der Sätze, auch wenn der Pane
+            // schrumpft, ohne dass die Leiste neu baut.
+            NotificationListener<Notification>(
+              onNotification: (Notification notification) {
+                if (notification is ScrollNotification ||
+                    notification is ScrollMetricsNotification) {
+                  _measureSentences();
+                }
+                return false;
+              },
+              child: _FirstLine(
+                flow: flow,
+                remember: remember,
+                findings: findings,
+                controller: _sentences,
+                holdRule: holdRule,
+                maxHeight: widget.ruleMaxHeight,
+              ),
             ),
             _SecondLine(refusal: refusal),
             if (progress is DecisionFailed) ...<Widget>[
@@ -691,6 +820,9 @@ class _ActionBarState extends ConsumerState<ActionBar> {
   }
 }
 
+/// The inputs of the rule a hold of the valve saves (HUM-249).
+typedef _HoldInputs = ({RememberState draft, FlowId? source, String apex});
+
 /// Why an input did nothing, in the person's language.
 String refusalText(RefusalReason reason, AppLocalizations l10n) =>
     switch (reason) {
@@ -711,6 +843,8 @@ String refusalText(RefusalReason reason, AppLocalizations l10n) =>
       RefusalReason.detailMissing => l10n.interceptRefusedDetailMissing,
       RefusalReason.ruleSourceHeld => l10n.interceptRefusedRuleSourceHeld,
       RefusalReason.ruleSourceGone => l10n.interceptRefusedRuleSourceGone,
+      RefusalReason.ruleChanged => l10n.interceptRefusedRuleChanged,
+      RefusalReason.ruleNotInView => l10n.interceptRefusedRuleNotInView,
     };
 
 /// What sending this request would give away, and to whom.
@@ -747,20 +881,58 @@ class _FindingLine extends StatelessWidget {
   }
 }
 
-/// The first reserved line: the rule that is about to be created, the warning
-/// that the budget runs out, or why this request waits.
+/// The first reserved line: the rules that are about to be created, the
+/// warning that the budget runs out, or why this request waits.
+///
+/// # Beide Sätze, solange das Raster merkt (HUM-249)
+///
+/// Früher stand hier ein Satz, und welcher, entschied der Zeiger: Über
+/// „Blockieren" hieß er „block …", sonst „allow …". Ein Tastenkürzel fragt den
+/// Zeiger aber nicht. Mit der Maus über „Blockieren" speicherte `A` eine
+/// Allow-Regel, deren Satz niemand gesehen hatte, und mit dem Fokus auf dem
+/// Ventil speicherte `Ctrl+L` eine Block-Regel ebenso ungelesen. Jetzt stehen
+/// beide Sätze da, untereinander, der für Senden zuerst: Welche Taste, welcher
+/// Klick auch entscheidet, der Satz der Regel, die gespeichert wird, stand
+/// schon auf dem Schirm (`docs/UX.md` 4.6). Ein zweiter Druck, der den Satz
+/// erst zeigt, hätte den Rhythmus der Queue gebrochen und einen Zustand
+/// gebraucht, den Zeiger, Fokus und Tasten gemeinsam pflegen; zwei Sätze
+/// brauchen keinen.
+///
+/// Die Sätze entstehen aus denselben Eingaben wie die Regel, die
+/// `InterceptDecision` beim Entscheiden einmal baut und unverändert speichert
+/// (`ShownRule`, HUM-058): Entwurf, Gültigkeit und die Anfrage aus
+/// [ruleFlowProvider]. Die Sätze brechen um und werden nie gekürzt: Ein
+/// abgeschnittener Satz ist einer, dessen Ende niemand gelesen hat. Die Zeile
+/// wächst dabei, aber nur zusammen mit dem Raster, das ohnehin eine eigene
+/// Zeile nimmt; der Zeiger, der zwischen den Knöpfen wandert, ändert keinen
+/// Text (`docs/UX.md` 2.8).
+///
+/// Bei geschlossenem Raster legt das Halten des Ventils eine Regel für die
+/// Sitzung an. Ihr Satz steht von dem Moment an, in dem der Finger das Ventil
+/// drückt, bis er loslässt, also 400 ms vor dem Speichern
+/// (`HMotion.holdToConfirm`, [holdRule]).
 class _FirstLine extends ConsumerWidget {
   const _FirstLine({
     required this.flow,
     required this.remember,
-    required this.blockHighlighted,
     required this.findings,
+    required this.holdRule,
+    required this.controller,
+    required this.maxHeight,
   });
 
   final Flow? flow;
   final RememberState remember;
-  final bool blockHighlighted;
   final FindingSet findings;
+
+  /// True while a hold of the valve runs that will save a session rule.
+  final bool holdRule;
+
+  /// Scrolls the sentences when they are taller than their room.
+  final ScrollController controller;
+
+  /// Their room; half the window when null.
+  final double? maxHeight;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -785,30 +957,75 @@ class _FirstLine extends ConsumerWidget {
     AppLocalizations l10n,
     Flow flow,
   ) {
-    if (remember.remembers) {
-      // Whoever reaches for Block reads the rule Block would create.
-      final RuleAction action = blockHighlighted
-          ? RuleAction.block
-          : RuleAction.allow;
+    if (remember.remembers || holdRule) {
       // The request the rule is generalised from, not the cursor: with a
       // group of several hosts those are two different requests, and the
       // sentence has to name the one that ends up in the rule (major 2).
       final Flow source = ref.watch(ruleFlowProvider) ?? flow;
-      return Text(
-        ruleSentence(
-          RuleDraft(
-            duration: remember.effective,
-            target: remember.target,
-            flow: source,
-            action: action,
+      final String Function(String host) apexOf = ref.watch(
+        apexResolverProvider,
+      );
+      // Die Dauer, die `InterceptDecision._draftDuration` der Regel gibt:
+      // die des Rasters, oder bei geschlossenem Raster die Sitzung, die das
+      // Halten des Ventils anlegt.
+      final RememberDuration duration = remember.remembers
+          ? remember.effective
+          : RememberDuration.session;
+      // Umbrechen, nie kürzen: Gespeichert wird die ganze Regel, also steht
+      // auch der ganze Satz da, bei 480 px und doppelter Schrift wie bei
+      // voller Breite (HUM-249, Review).
+      Widget sentence(RuleAction action, Key key) => ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: actionBarLineHeight),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            ruleSentence(
+              RuleDraft(
+                duration: duration,
+                target: remember.target,
+                flow: source,
+                action: action,
+              ),
+              l10n,
+              apexOf: apexOf,
+            ),
+            key: key,
+            softWrap: true,
+            style: tokens.typography.mono12.tinted(tokens.colors.fg1),
           ),
-          l10n,
-          apexOf: ref.watch(apexResolverProvider),
         ),
-        key: const Key('intercept-rule-sentence'),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: tokens.typography.mono12.tinted(tokens.colors.fg1),
+      );
+      // Beide Regeln, nie nur die, nach der der Zeiger gerade greift: Ein
+      // Tastenkürzel kann jede der beiden anlegen (HUM-249). Beim Halten mit
+      // geschlossenem Raster entsteht nur die eine Allow-Regel.
+      // Höchstens ein Drittel des Panes: Ein Pfad, den der Agent beliebig
+      // lang machen kann, darf die Entscheidungen nicht aus dem Pane
+      // schieben. Was darüber hinausgeht, scrollt, und entschieden wird erst,
+      // wenn das Ende zu sehen war (`ruleSentenceSeenProvider`).
+      return ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: maxHeight ?? _windowHeight(context) / 2,
+        ),
+        child: SingleChildScrollView(
+          key: const Key('intercept-rule-sentence-scroll'),
+          controller: controller,
+          child: Column(
+            key: const Key('intercept-rule-sentence'),
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              sentence(
+                RuleAction.allow,
+                const Key('intercept-rule-sentence-allow'),
+              ),
+              if (remember.remembers)
+                sentence(
+                  RuleAction.block,
+                  const Key('intercept-rule-sentence-block'),
+                ),
+            ],
+          ),
+        ),
       );
     }
     final DateTime now = ref.watch(nowProvider);
@@ -835,6 +1052,20 @@ class _FirstLine extends ConsumerWidget {
       overflow: TextOverflow.ellipsis,
       style: tokens.typography.ui12.tinted(tokens.colors.fg1),
     );
+  }
+
+  /// The height of the window in logical pixels.
+  ///
+  /// From the `MediaQuery` when it carries a size, otherwise from the view:
+  /// a `MediaQuery` set up for text scale alone -- tests, goldens -- reports
+  /// a size of zero, and a bound of zero would scroll every sentence away.
+  static double _windowHeight(BuildContext context) {
+    final double height = MediaQuery.sizeOf(context).height;
+    if (height > 0) {
+      return height;
+    }
+    final FlutterView view = View.of(context);
+    return view.physicalSize.height / view.devicePixelRatio;
   }
 
   /// Why this request waits, built from the flow and never from a constant
