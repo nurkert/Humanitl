@@ -25,8 +25,8 @@ use std::time::{Duration, Instant};
 use humanitl_config::{Env, Paths, WorkMode};
 use humanitl_core::ids::SessionId;
 use humanitl_sandbox::{
-    BwrapBackend, ENV_REPORT_FD, IsolationCheck, LaunchPlan, SandboxBackend, SandboxFile,
-    SandboxHandle, SandboxProfile, SessionContext, StdioMode, Version,
+    BIND_FD_VERSION, BwrapBackend, ENV_REPORT_FD, IsolationCheck, LaunchPlan, MIN_BWRAP_VERSION,
+    SandboxBackend, SandboxFile, SandboxHandle, SandboxProfile, SessionContext, StdioMode, Version,
 };
 
 /// Kein Test wartet länger: eine Sandbox, die nach einer Minute noch läuft,
@@ -353,7 +353,8 @@ fn plan_renders_the_shim_and_the_three_binds() {
 /// in der Liste, und keine kommt doppelt vor: `--ro-bind-data` schließt seinen
 /// Deskriptor nach dem Lesen.
 fn assert_descriptors(plan: &LaunchPlan, args: &[String]) {
-    assert_eq!(plan.fds.len(), 2 + 3 + 2, "{:?}", plan.fds);
+    // Zwei Pipes, drei Identitätsdateien, zwei Masken, der Projektordner.
+    assert_eq!(plan.fds.len(), 2 + 3 + 2 + 1, "{:?}", plan.fds);
     for (host, target) in &plan.fds {
         assert_eq!(host, target, "inherited under its own number");
     }
@@ -389,7 +390,12 @@ fn assert_descriptors(plan: &LaunchPlan, args: &[String]) {
         );
         args[at - 1].clone()
     };
-    let mut used = vec![status_fd, report_fd];
+    // Der Projektordner kommt als Deskriptor (HUM-263), nie als Pfad.
+    let work_at = window_at(args, &["--bind-fd"])
+        .filter(|at| args.get(at + 2).is_some_and(|dst| dst == "/work"))
+        .expect("--bind-fd FD /work");
+    let work_fd = args[work_at + 1].clone();
+    let mut used = vec![status_fd, report_fd, work_fd];
     for dst in [
         "/etc/passwd",
         "/etc/group",
@@ -1021,4 +1027,201 @@ fn the_sandbox_outlives_the_calling_thread() {
     let output = handle.output().expect("captured");
     assert!(status.success(), "{status}: {}", text(&output.stderr));
     assert_eq!(text(&output.stdout).trim(), "alive");
+}
+
+// --- HUM-263: geprüft wird, was eingehängt wird --------------------------------
+
+/// Der Projektordner der Fixture und ein geschütztes Verzeichnis daneben,
+/// jedes mit einer eigenen Markierung.
+fn swap_fixture() -> (Fixture, PathBuf) {
+    let fx = fixture();
+    std::fs::write(fx.work.join("marker"), "checked\n").expect("marker");
+    // Das Laufzeitverzeichnis ist geschützt (`MountPolicy::from_paths`); als
+    // Projektordner lehnt der Plan es ab.
+    let protected = fx.paths.runtime_dir().path;
+    std::fs::create_dir_all(&protected).expect("runtime dir");
+    std::fs::write(protected.join("marker"), "protected\n").expect("protected marker");
+    (fx, protected)
+}
+
+/// Plant, tauscht den Projektordner gegen einen Symlink auf das geschützte
+/// Verzeichnis und startet dann; liefert, was `/work/marker` in der Sandbox
+/// sagt.
+fn swap_between_plan_and_launch(fx: &Fixture, protected: &Path, backend: &BwrapBackend) -> String {
+    let plan = backend
+        .plan(
+            &profile("default"),
+            &fx.context(&["sh", "-c", "cat /work/marker"]),
+        )
+        .expect("the folder passes the check while it is still a folder");
+
+    // Der Angriff: zwischen Prüfung und Einhängen wird aus dem Ordner ein
+    // Symlink auf ein Verzeichnis, das die Politik verbietet.
+    std::fs::rename(&fx.work, fx.state.join("work.checked")).expect("move the folder away");
+    std::os::unix::fs::symlink(protected, &fx.work).expect("plant the symlink");
+
+    let handle = backend.launch(&plan).expect("bwrap starts");
+    let status = wait(&handle);
+    let output = handle.output().expect("captured");
+    assert!(status.success(), "{status}: {}", text(&output.stderr));
+    text(&output.stdout)
+}
+
+/// Mit `--bind-fd` (bubblewrap ab 0.10) sieht die Sandbox den geprüften
+/// Ordner, nicht das Ziel des Symlinks, der danach an seine Stelle trat.
+#[test]
+fn a_folder_swapped_after_the_check_stays_the_checked_folder() {
+    let (fx, protected) = swap_fixture();
+    let Some(backend) = fx.real() else { return };
+    if backend.version() < BIND_FD_VERSION {
+        eprintln!("skipping: bwrap {} has no --bind-fd", backend.version());
+        return;
+    }
+    let seen = swap_between_plan_and_launch(&fx, &protected, &backend);
+    assert_eq!(seen, "checked\n", "the sandbox mounts what was checked");
+}
+
+/// Dasselbe über `/proc/self/fd/N`, den Weg für bubblewrap vor 0.10.
+#[test]
+fn a_folder_swapped_after_the_check_stays_the_checked_folder_without_bind_fd() {
+    let (fx, protected) = swap_fixture();
+    let Some(real) = fx.real() else { return };
+    let backend = BwrapBackend::unchecked(real.program(), MIN_BWRAP_VERSION, fx.paths.clone())
+        .with_stdio(StdioMode::Capture);
+    let plan_args = strings(
+        &backend
+            .plan(&profile("default"), &fx.context(&["true"]))
+            .expect("plan")
+            .argv,
+    );
+    assert!(
+        !plan_args.iter().any(|arg| arg == "--bind-fd"),
+        "bwrap 0.8 does not know --bind-fd: {plan_args:?}"
+    );
+    let seen = swap_between_plan_and_launch(&fx, &protected, &backend);
+    assert_eq!(seen, "checked\n", "the sandbox mounts what was checked");
+}
+
+/// `--bind-fd` schließt den Deskriptor in `bwrap`: Der Befehl erbt keinen
+/// Deskriptor auf einen Ordner des Hosts, über den er mit `..` hinausfände.
+#[test]
+fn the_folder_descriptor_does_not_reach_the_command() {
+    let fx = fixture();
+    let Some(backend) = fx.real() else { return };
+    if backend.version() < BIND_FD_VERSION {
+        eprintln!("skipping: bwrap {} has no --bind-fd", backend.version());
+        return;
+    }
+    let plan = backend
+        .plan(
+            &profile("default"),
+            &fx.context(&["sh", "-c", "ls -l /proc/self/fd/ 2>&1; exit 0"]),
+        )
+        .expect("plan");
+    let handle = backend.launch(&plan).expect("bwrap starts");
+    let status = wait(&handle);
+    let output = handle.output().expect("captured");
+    assert!(status.success(), "{status}: {}", text(&output.stderr));
+    let links = text(&output.stdout);
+    let host_work = fx.work.to_string_lossy().into_owned();
+    assert!(
+        links.contains("-> /dev/null") || links.contains("-> pipe:"),
+        "the listing shows the descriptors at all: {links}"
+    );
+    assert!(
+        !links.contains(&host_work) && !links.lines().any(|line| line.ends_with("-> /work")),
+        "an inherited descriptor names the project folder: {links}"
+    );
+}
+
+/// Die Einträge aus `mounts.extra_ro` und `mounts.extra_rw` gehen denselben
+/// Weg: geöffnet, geprüft, per Deskriptor gebunden. Was beim Planen fehlt,
+/// wird nicht eingehängt.
+#[test]
+fn extra_mounts_are_bound_by_descriptor_and_must_exist() {
+    let fx = fixture();
+    let backend = fx.unchecked();
+    let tools = fx.state.join("tools");
+    std::fs::create_dir_all(&tools).expect("tools");
+    let data = fx.state.join("data");
+    std::fs::create_dir_all(&data).expect("data");
+    let extras = probe(&format!(
+        "[mounts]\nextra_ro = [{:?}]\nextra_rw = [{:?}]\n",
+        tools.to_str().unwrap(),
+        data.to_str().unwrap()
+    ));
+    let plan = backend.plan(&extras, &fx.context(&["true"])).expect("plan");
+    let args = strings(&plan.argv);
+    let planned: Vec<String> = plan.fds.iter().map(|(fd, _)| fd.to_string()).collect();
+    for (flag, dst) in [
+        ("--ro-bind-fd", tools.to_str().unwrap()),
+        ("--bind-fd", data.to_str().unwrap()),
+    ] {
+        let at = args
+            .windows(3)
+            .position(|w| w[0] == flag && w[2] == dst)
+            .unwrap_or_else(|| panic!("{flag} FD {dst} is missing: {args:?}"));
+        assert!(
+            planned.contains(&args[at + 1]),
+            "{} is inherited",
+            args[at + 1]
+        );
+        assert_eq!(
+            args.iter().filter(|arg| *arg == dst).count(),
+            1,
+            "{dst} only as the destination: {args:?}"
+        );
+    }
+
+    let missing = probe(&format!(
+        "[mounts]\nextra_ro = [{:?}]\n",
+        fx.state.join("missing").to_str().unwrap()
+    ));
+    let err = backend
+        .plan(&missing, &fx.context(&["true"]))
+        .expect_err("a source that is not there is not mounted");
+    assert_eq!(err.code.as_str(), "SANDBOX_006");
+    assert!(err.why.contains("mounts.extra_ro"), "{}", err.why);
+}
+
+/// Ein nur lesbarer Bind des Aufrufers (`--tests-dir`) geht denselben Weg
+/// wie die Erweiterungen: geöffnet, am Ort des Deskriptors gegen die Politik
+/// geprüft, per Deskriptor gebunden, direkt vor dem Projektordner.
+#[test]
+fn a_read_only_bind_of_the_caller_is_pinned_and_checked() {
+    let fx = fixture();
+    let tests = fx.state.join("tests-escape");
+    std::fs::create_dir_all(&tests).expect("tests dir");
+    let plan = fx
+        .unchecked()
+        .with_read_only_bind(&tests, "/tests/escape")
+        .plan(&profile("default"), &fx.context(&["true"]))
+        .expect("plan");
+    let args = strings(&plan.argv);
+    let at = args
+        .windows(3)
+        .position(|w| w[0] == "--ro-bind-fd" && w[2] == "/tests/escape")
+        .unwrap_or_else(|| panic!("--ro-bind-fd FD /tests/escape is missing: {args:?}"));
+    assert_eq!(args[at + 3], "--bind-fd", "right before the project folder");
+    assert_eq!(args[at + 5], "/work");
+    let planned: Vec<String> = plan.fds.iter().map(|(fd, _)| fd.to_string()).collect();
+    assert!(
+        planned.contains(&args[at + 1]),
+        "{} is inherited",
+        args[at + 1]
+    );
+    assert!(
+        !args.iter().any(|arg| Path::new(arg) == tests),
+        "never by path: {args:?}"
+    );
+
+    let protected = fx.paths.runtime_dir().path;
+    std::fs::create_dir_all(&protected).expect("runtime dir");
+    let err = fx
+        .unchecked()
+        .with_read_only_bind(&protected, "/tests/escape")
+        .plan(&profile("default"), &fx.context(&["true"]))
+        .expect_err("a protected directory is refused");
+    assert_eq!(err.code.as_str(), "SANDBOX_006");
+    assert!(err.why.contains("/tests/escape"), "{}", err.why);
 }
