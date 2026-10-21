@@ -409,7 +409,7 @@ Mount verboten
 
 **Auslöser.** Ein Profil, der Proxy-Socket oder ein Agent-Adapter will einen Pfad einhängen, den die Mount-Regeln verbieten.
 
-**Fix.** Kein Fix: Der Text nennt Pfad und Regel.
+**Fix.** Beim Projektordner `ChangeSetting` auf `sandbox.work_dir`, die Oberfläche bietet die Ordnerauswahl an; sonst kein Fix, der Text nennt Pfad und Regel.
 
 #### SANDBOX_007
 

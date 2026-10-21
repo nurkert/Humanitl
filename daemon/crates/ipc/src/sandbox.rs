@@ -2099,6 +2099,16 @@ impl Inner {
         let profile = SandboxProfile::load_validated(&profile_path, &policy)?;
 
         let work_src = self.work_dir(&config, plan);
+        // Dieselbe Regel, die das Sandbox-Backend beim Start anlegt (HUM-262),
+        // und schon hier, damit `Sandbox(Plan)` und `Sandbox(Status)` einen Ordner nie
+        // grün zeigen, den der Start danach verweigert. Ein Wunsch über die
+        // RPC ist in `check_work_dir` schon geprüft; ein Ordner aus
+        // `config.toml` kam bisher ungeprüft bis zum Start durch. Kein Ordner
+        // ist für einen Plan kein Befund, sondern eine offene Wahl: Die
+        // Momentaufnahme nennt dann keinen, und das Setup verlangt einen.
+        if need == KeyNeed::Start || !work_src.as_os_str().is_empty() {
+            policy.check_work_dir(&work_src)?;
+        }
         let work_mode = self.work_mode(&config, plan);
         // Entschieden wird am wirksamen Kommando und nicht daran, ob eines
         // genannt wurde: `humanitl run -- opencode` startet denselben Agenten
@@ -2344,8 +2354,21 @@ impl Inner {
     }
 
     /// Das Projektverzeichnis dieses Wunsches, sonst das der laufenden
-    /// Sandbox, sonst das zuletzt gewählte, sonst das der Konfiguration.
+    /// Sandbox, sonst das zuletzt gewählte, sonst das der Konfiguration,
+    /// sonst [`Self::default_work_dir`].
     fn work_dir(&self, config: &Config, plan: &v1::sandbox_request::Plan) -> PathBuf {
+        self.work_dir_with_cwd(config, plan, std::env::current_dir().ok().as_deref())
+    }
+
+    /// [`Self::work_dir`] mit dem Arbeitsverzeichnis als Argument statt aus dem
+    /// Prozess, damit ein Test die Vorgabe mit einem abgelehnten Verzeichnis
+    /// prüfen kann, ohne das Arbeitsverzeichnis aller Tests zu verstellen.
+    fn work_dir_with_cwd(
+        &self,
+        config: &Config,
+        plan: &v1::sandbox_request::Plan,
+        cwd: Option<&Path>,
+    ) -> PathBuf {
         // Der Wunsch dieses Aufrufs, aber in der Fassung, die `check_work_dir`
         // aufgelöst hat: `remember` hat ihn unmittelbar davor abgelegt. Die
         // rohe Zeichenkette der Leitung wird nie eingehängt — sonst prüfte
@@ -2366,7 +2389,27 @@ impl Inner {
             .sandbox
             .work_dir
             .clone()
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+            .unwrap_or_else(|| self.default_work_dir(cwd))
+    }
+
+    /// Die Vorgabe, wenn niemand einen Ordner genannt hat: das
+    /// Arbeitsverzeichnis des Daemons, aber nur, wenn ein Start es annähme.
+    ///
+    /// Der Daemon läuft als Nutzerdienst, und systemd startet ihn im
+    /// Heimatverzeichnis; eine Anwendung aus dem Menü des Desktops ebenso.
+    /// Ungeprüft wurde daraus der Projektordner `$HOME`, das Setup zeigte ihn
+    /// grün, und erst der Start verweigerte ihn mit `SANDBOX_006` (HUM-262).
+    /// Die Vorgabe geht deshalb durch dieselbe Regel, die der Start anlegt
+    /// ([`MountPolicy::check_work_dir`]), und keine strengere: Eine neue Regel
+    /// ist nicht das Ziel, nur dieselbe früher. Hält sie nicht, gibt es keine
+    /// Vorgabe: Der leere Pfad heißt „niemand hat gewählt", und das Setup
+    /// verlangt eine Auswahl (`CONFIG_013`), statt einen Ordner anzubieten,
+    /// den der Start ablehnt.
+    fn default_work_dir(&self, cwd: Option<&Path>) -> PathBuf {
+        let policy = MountPolicy::from_paths(&self.paths);
+        cwd.filter(|dir| dir.is_dir() && policy.check_work_dir(dir).is_ok())
+            .map(Path::to_path_buf)
+            .unwrap_or_default()
     }
 
     /// Der Modus dieses Wunsches, sonst der der laufenden Sandbox, sonst der
@@ -3505,6 +3548,50 @@ mod tests {
         assert_eq!(
             refused.fix,
             Some(FixAction::CopyCommand("humanitl llm key set".to_owned()))
+        );
+    }
+
+    /// HUM-262: Die Vorgabe ist nie ein Ordner, den der Start ablehnt.
+    ///
+    /// Der Daemon läuft als Nutzerdienst im Heimatverzeichnis. Das enthält die
+    /// Konfiguration von Humanitl, also gibt es dann keine Vorgabe, und das
+    /// Setup verlangt eine Auswahl. Ein Arbeitsverzeichnis, das die Regel
+    /// annimmt, bleibt die Vorgabe wie bisher.
+    #[test]
+    fn the_default_folder_is_never_one_the_start_refuses() {
+        let home = tempfile::TempDir::new().unwrap();
+        let service = service_for(&home, "opencode");
+        let inner = &service.inner;
+        for refused in [home.path(), Path::new("/"), &home.path().join("config")] {
+            assert_eq!(
+                inner.default_work_dir(Some(refused)),
+                PathBuf::new(),
+                "{}",
+                refused.display()
+            );
+        }
+        assert_eq!(inner.default_work_dir(None), PathBuf::new());
+        assert_eq!(
+            inner.default_work_dir(Some(&home.path().join("missing"))),
+            PathBuf::new(),
+            "a folder that is not there is no default"
+        );
+        let project = home.path().join("project");
+        assert_eq!(inner.default_work_dir(Some(&project)), project);
+
+        // Und ohne `sandbox.work_dir` landet genau diese Vorgabe im Plan: Ein
+        // Daemon, der im Heimatverzeichnis läuft, nennt keinen Ordner, einer
+        // in einem Projektordner diesen.
+        let mut config = (*inner.config()).clone();
+        config.sandbox.work_dir = None;
+        let plan = v1::sandbox_request::Plan::default();
+        assert_eq!(
+            inner.work_dir_with_cwd(&config, &plan, Some(home.path())),
+            PathBuf::new()
+        );
+        assert_eq!(
+            inner.work_dir_with_cwd(&config, &plan, Some(&project)),
+            project
         );
     }
 
