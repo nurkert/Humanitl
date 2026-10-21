@@ -207,14 +207,17 @@ async fn start(
         .await
         .map_err(|status| Failure::new(status_diagnostic(&status, "GetInfo")))?;
 
-    let setup = prepare(ctx, &config, Wiring::Daemon, command)?;
-    let mut plan = setup
+    let mut setup = prepare(ctx, &config, Wiring::Daemon, command)?;
+    if let Some(dir) = tests_dir {
+        let src = take_tests_placeholder(ctx, &mut setup.profile, dir)?;
+        ctx.render
+            .detail(&format!("tests dir {} -> {TESTS_DIR_DST}", src.display()));
+        setup.backend = setup.backend.with_read_only_bind(src, TESTS_DIR_DST);
+    }
+    let plan = setup
         .backend
         .plan(&setup.profile, &setup.session)
         .map_err(Failure::new)?;
-    if let Some(dir) = tests_dir {
-        bind_tests_dir(ctx, &mut plan.argv, dir)?;
-    }
     ctx.render.detail(&format!("argv: {}", plan.argv_line()));
 
     // Die Quelle für `SIGINT` steht, bevor die Sandbox läuft. Erst das Anmelden
@@ -444,28 +447,47 @@ fn enforce_isolation(
 // [`MountPolicy`]). Derselbe Eingriff steht in
 // `daemon/crates/sandbox/src/bin/escape-launch.rs`; mit der `Sandbox`-RPC
 // (HUM-040) wandert er hinter sie, als Feld der Sitzung.
+//
+// Seit HUM-263 öffnet der Plan jede Quelle aus `mounts.extra_ro` und bindet
+// sie per Deskriptor; einen Platzhalter, den es auf dem Host nicht gibt, lehnt
+// er ab. Deshalb nimmt `--tests-dir` den Platzhalter vor dem Planen aus dem
+// Profil und gibt das Verzeichnis dem Backend als nur lesbaren Bind der
+// Sitzung (`with_read_only_bind` des Backends): geöffnet, gegen die
+// `MountPolicy` geprüft und per Deskriptor gebunden wie die Erweiterungen,
+// an derselben Stelle der Zeile.
 
 /// Der Platzhalter, den `profiles/sandbox/test.toml` in `mounts.extra_ro` nennt.
 const TESTS_DIR_DST: &str = "/tests/escape";
 
-/// Zieht die Quelle des Binds nach [`TESTS_DIR_DST`] auf `dir`.
+/// Nimmt [`TESTS_DIR_DST`] aus `mounts.extra_ro` und liefert die Quelle, die
+/// an seine Stelle tritt.
 ///
 /// # Errors
 ///
 /// `SANDBOX_010`, wenn das Profil den Platzhalter nicht nennt: dann zeigt
 /// `--tests-dir` auf nichts, und ein Lauf, der die Skripte nicht sieht,
 /// bewiese nichts.
-fn bind_tests_dir(ctx: &Context, argv: &mut [OsString], dir: &Path) -> Result<(), Failure> {
+fn take_tests_placeholder(
+    ctx: &Context,
+    profile: &mut SandboxProfile,
+    dir: &Path,
+) -> Result<PathBuf, Failure> {
     let src = if dir.is_absolute() {
         dir.to_path_buf()
     } else {
         ctx.cwd.join(dir)
     };
-    if !rebind_source(argv, Path::new(TESTS_DIR_DST), &src) {
+    let before = profile.mounts.extra_ro.len();
+    profile
+        .mounts
+        .extra_ro
+        .retain(|path| path.as_path() != Path::new(TESTS_DIR_DST));
+    if profile.mounts.extra_ro.len() == before {
         return Err(Failure::new(
             Diagnostic::builder(codes::SANDBOX_010, Severity::Blocking)
                 .why(format!(
-                    "the sandbox profile does not name {TESTS_DIR_DST} in mounts.extra_ro, so                      --tests-dir {} has nothing to point at",
+                    "the sandbox profile does not name {TESTS_DIR_DST} in mounts.extra_ro, so \
+                     --tests-dir {} has nothing to point at",
                     src.display()
                 ))
                 .fix(FixAction::ChangeSetting {
@@ -475,24 +497,7 @@ fn bind_tests_dir(ctx: &Context, argv: &mut [OsString], dir: &Path) -> Result<()
                 .build(),
         ));
     }
-    ctx.render
-        .detail(&format!("tests dir {} -> {TESTS_DIR_DST}", src.display()));
-    Ok(())
-}
-
-/// Setzt die Quelle des ersten Binds nach `dst` auf `src`; `false`, wenn es
-/// ihn nicht gibt.
-fn rebind_source(args: &mut [OsString], dst: &Path, src: &Path) -> bool {
-    let bind = std::ffi::OsStr::new("--bind");
-    let ro_bind = std::ffi::OsStr::new("--ro-bind");
-    for index in 0..args.len().saturating_sub(2) {
-        let flag = args[index].as_os_str();
-        if (flag == bind || flag == ro_bind) && Path::new(&args[index + 2]) == dst {
-            args[index + 1] = src.as_os_str().to_os_string();
-            return true;
-        }
-    }
-    false
+    Ok(src)
 }
 
 /// Wartet auf das Ende der Sandbox und reicht `SIGINT` weiter.
@@ -1057,8 +1062,8 @@ mod tests {
     use humanitl_config::Config;
 
     use super::{
-        CHECK_COMMAND, RefusalNotes, TESTS_DIR_DST, agent_command, exit_code_of, placeholder,
-        rebind_source, refusal_notes, with_sandbox_view,
+        CHECK_COMMAND, RefusalNotes, agent_command, exit_code_of, placeholder, refusal_notes,
+        with_sandbox_view,
     };
 
     /// „Nichts verweigert" steht nur, wenn die Sandbox gesagt hat, dass sie
@@ -1222,50 +1227,6 @@ mod tests {
             "only without any adapter is the shell the answer"
         );
         assert_eq!(CHECK_COMMAND[0], "/bin/sh");
-    }
-
-    #[test]
-    fn the_tests_directory_moves_the_source_of_that_one_bind() {
-        let mut argv: Vec<OsString> = [
-            "bwrap",
-            "--ro-bind",
-            "/usr",
-            "/usr",
-            "--ro-bind",
-            TESTS_DIR_DST,
-            TESTS_DIR_DST,
-            "--bind",
-            "/home/agent/project",
-            "/work",
-        ]
-        .iter()
-        .map(OsString::from)
-        .collect();
-
-        assert!(rebind_source(
-            &mut argv,
-            Path::new(TESTS_DIR_DST),
-            Path::new("/src/tests/escape"),
-        ));
-        assert_eq!(argv[5], OsString::from("/src/tests/escape"));
-        assert_eq!(argv[6], OsString::from(TESTS_DIR_DST));
-        // Kein anderer Bind wurde angefasst.
-        assert_eq!(argv[2], OsString::from("/usr"));
-        assert_eq!(argv[8], OsString::from("/home/agent/project"));
-    }
-
-    #[test]
-    fn a_profile_without_the_placeholder_has_nothing_to_rebind() {
-        let mut argv: Vec<OsString> = ["bwrap", "--ro-bind", "/usr", "/usr"]
-            .iter()
-            .map(OsString::from)
-            .collect();
-
-        assert!(!rebind_source(
-            &mut argv,
-            Path::new(TESTS_DIR_DST),
-            Path::new("/src/tests/escape"),
-        ));
     }
 
     #[test]

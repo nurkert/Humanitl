@@ -512,6 +512,37 @@ auf dem Host **ausgeführt** würden, werden überdeckt (die vollständige Liste
   `.yarnrc`, `.yarnrc.yml`, `.pypirc`, `.gitlab-ci.yml`, `Jenkinsfile`,
   `.pre-commit-config.yaml`.
 
+**Eingehängt wird, was geprüft wurde (HUM-263).** Der Projektordner und jeder Eintrag aus
+`mounts.extra_ro` und `mounts.extra_rw` werden beim Planen genau einmal geöffnet
+(`O_PATH | O_NOFOLLOW`, der Projektordner zusätzlich mit `O_DIRECTORY`). Die Mount-Politik prüft
+danach den Ort, den `/proc/self/fd/N` für das Geöffnete nennt, und `bwrap` bindet genau diesen
+Deskriptor: ab bubblewrap 0.10 mit `--bind-fd` und `--ro-bind-fd`, darunter über
+`/proc/self/fd/N` mit vererbtem Deskriptor. Vorher prüfte der Launcher den Pfad, und `bwrap` löste
+ihn beim Einhängen ein zweites Mal auf. Wer einen Elternordner beschreiben konnte, tauschte den
+Ordner dazwischen gegen einen Symlink auf `~/.ssh` oder `~/.config/humanitl`, und die Sandbox sah
+genau das, was die Prüfung ausschließen sollte. Das konnte ein anderes Konto mit Schreibrecht auf
+den Elternordner sein, oder der Agent einer anderen Sitzung, wenn der neue Projektordner in deren
+beschreibbarem `/work` liegt. Ein Tausch nach dem Öffnen erreicht die Sandbox jetzt nicht mehr;
+ein Tausch zwischen Auflösen und Öffnen fällt am Vergleich auf und bricht den Start mit
+`SANDBOX_006` ab. Fehlt eine Quelle aus dem Profil beim Planen, lehnt der Plan mit `SANDBOX_006`
+ab, und die Sandbox startet nicht. Das Testverzeichnis der Escape-Tests (`--tests-dir`) geht
+denselben Weg und wird geprüft wie der Projektordner.
+
+Der Deskriptor selbst darf den Agenten nie erreichen: `openat(fd, "..")` liefe von einem
+Verzeichnis-Deskriptor des Hosts aus im Dateibaum des Hosts nach oben, an jedem Mount-Namensraum
+vorbei. `--bind-fd` schließt ihn in `bwrap`. Beim Rückfall über `/proc/self/fd/N` schließt ihn der
+Shim, bevor er den Agenten startet, zusammen mit allem anderen, was er ohne `CLOEXEC` geerbt hat;
+der Starter des Escape-Harness (`escape-launch`) verweigert deshalb den Start ohne brauchbaren
+Shim, wenn `bwrap` älter als 0.10 ist. Im Daemon selbst trägt der Deskriptor die ganze Zeit
+`FD_CLOEXEC`; nur das `bwrap`-Kind verliert es, zwischen `fork` und `exec`, damit kein anderer
+Prozess, den der Daemon im selben Augenblick startet, ihn miterbt. Dasselbe gilt für die Pipes
+und memfds, die `bwrap` erbt. Die Vorschau (`humanitl sandbox argv`) hat keine Deskriptoren und
+zeigt weiter die Pfade; die Startzeile zeigt ab bubblewrap 0.10 `--bind-fd N /work`, darunter
+`--bind /proc/self/fd/N /work`. Was **im** Ordner liegt, kann sich nach dem Öffnen weiter
+ändern, wenn jemand anderes in ihm schreiben darf; dagegen hilft kein Deskriptor, und es erreicht
+kein geschütztes Verzeichnis, weil Symlinks im Projekt in der Sandbox aufgelöst werden (K-08 in
+`docs/THREAT-MODEL.md`).
+
 Die Maske ist ein `--ro-bind-data` aus einem versiegelten, leeren `memfd`, nicht `/dev/null`: Der
 Bind eines Gerätes auf einen `nodev`-Mount antwortet `EACCES`. Der Agent sieht also eine leere
 Datei, und Schreibversuche enden in `EROFS`, weil der Bind schreibgeschützt ist. Werkzeuge, die

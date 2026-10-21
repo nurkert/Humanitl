@@ -36,10 +36,18 @@
 //! 1. **Das Testverzeichnis.** `profiles/sandbox/test.toml` nennt in
 //!    `mounts.extra_ro` den Pfad `/tests/escape`. Der ist ein Platzhalter: er
 //!    steht für den Ort in der Sandbox, nicht für einen Ort auf dem Host. Mit
-//!    `--tests-dir` wird die Quelle dieses einen Binds auf das echte Verzeichnis
-//!    des Arbeitsbaums gezogen. Das umgeht die Mount-Allowlist bewusst, genau
+//!    `--tests-dir` wird dieser eine Bind auf das echte Verzeichnis des
+//!    Arbeitsbaums gezogen. Das umgeht die Mount-Allowlist bewusst, genau
 //!    wie das Projektverzeichnis: beides kommt aus der Sitzung, nicht aus dem
-//!    Profil (siehe [`humanitl_sandbox::MountPolicy`]).
+//!    Profil (siehe [`humanitl_sandbox::MountPolicy`]). Seit HUM-263 öffnet
+//!    der Plan jede Quelle aus `mounts.extra_ro` und lehnt einen Platzhalter
+//!    ab, den es auf dem Host nicht gibt; deshalb kommt der Platzhalter vor dem
+//!    Planen aus dem Profil, und das Verzeichnis geht als nur lesbarer Bind der
+//!    Sitzung an das Backend (`BwrapBackend::with_read_only_bind`): geöffnet,
+//!    gegen die `MountPolicy` geprüft und per Deskriptor gebunden, an
+//!    derselben Stelle der Zeile, vor dem Bind des Projektordners. Ohne
+//!    brauchbaren Shim und mit `bwrap` vor 0.10 startet der Starter nicht,
+//!    weil dann niemand den Deskriptor des Projektordners schließt.
 //! 2. **Ohne Shim.** Fehlt ein brauchbarer Shim (nicht gebaut, oder ein
 //!    Platzhalter), bekommt der Plan einen Platzhalter-Shim, und Bind und Präfix
 //!    werden anschließend aus der Liste entfernt, sodass der Befehl direkt
@@ -96,8 +104,8 @@ use humanitl_core::diagnostics::codes::{SANDBOX_010, SANDBOX_011, SANDBOX_012, S
 use humanitl_core::ids::SessionId;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_sandbox::{
-    BwrapBackend, EXIT_USAGE as SHIM_EXIT_USAGE, MIN_BWRAP_VERSION, MountPolicy, SandboxBackend,
-    SandboxHandle, SandboxProfile, SessionContext, StdioMode,
+    BIND_FD_VERSION, BwrapBackend, EXIT_USAGE as SHIM_EXIT_USAGE, MIN_BWRAP_VERSION, MountPolicy,
+    SandboxBackend, SandboxHandle, SandboxProfile, SessionContext, StdioMode, Version,
 };
 
 /// Exit-Code, wenn die Kommandozeile des Starters selbst unbrauchbar ist.
@@ -254,7 +262,7 @@ fn run() -> Result<ExitCode, LaunchError> {
     let runtime = state.join("runtime");
     let paths = Paths::new(Env::from_process().with("XDG_RUNTIME_DIR", runtime.to_string_lossy()));
     let policy = MountPolicy::from_paths(&paths);
-    let profile = SandboxProfile::load_validated(&args.profile, &policy)?;
+    let mut profile = SandboxProfile::load_validated(&args.profile, &policy)?;
 
     let work = args
         .work
@@ -306,17 +314,24 @@ fn run() -> Result<ExitCode, LaunchError> {
     }
     .with_stdio(StdioMode::Inherit);
 
+    let backend = match args.tests_dir.as_deref().map(absolute) {
+        None => backend,
+        Some(tests_dir) => {
+            if !take_tests_placeholder(&mut profile) {
+                return Err(unexpected_argv(format!(
+                    "{}: mounts.extra_ro does not name {TESTS_DIR_DST}, so --tests-dir has nothing to point at",
+                    args.profile.display()
+                )));
+            }
+            backend.with_read_only_bind(tests_dir, TESTS_DIR_DST)
+        }
+    };
+    if !args.print_argv {
+        refuse_unclosed_descriptors(matches!(shim, Shim::Placeholder(_)), backend.version())?;
+    }
+
     let mut plan = backend.plan(&profile, &context)?;
 
-    if let Some(tests_dir) = args.tests_dir.as_deref() {
-        let tests_dir = absolute(tests_dir);
-        if !rebind_source(&mut plan.argv, Path::new(TESTS_DIR_DST), &tests_dir) {
-            return Err(unexpected_argv(format!(
-                "{}: mounts.extra_ro does not name {TESTS_DIR_DST}, so --tests-dir has nothing to point at",
-                args.profile.display()
-            )));
-        }
-    }
     if let Shim::Placeholder(path) = &shim {
         eprintln!(
             "escape-launch: no usable {SHIM_BINARY} (pass --shim FILE or build HUM-012); running without the shim, every seccomp probe stays red"
@@ -523,21 +538,38 @@ fn bind_placeholder_socket(path: &Path) -> Result<UnixListener, LaunchError> {
     Ok(listener)
 }
 
-/// Zieht die Quelle eines Binds auf einen anderen Host-Pfad.
+/// Nimmt [`TESTS_DIR_DST`] aus `mounts.extra_ro`; `false`, wenn das Profil
+/// ihn nicht nennt.
+fn take_tests_placeholder(profile: &mut SandboxProfile) -> bool {
+    let before = profile.mounts.extra_ro.len();
+    profile
+        .mounts
+        .extra_ro
+        .retain(|path| path.as_path() != Path::new(TESTS_DIR_DST));
+    profile.mounts.extra_ro.len() != before
+}
+
+/// Ohne Shim und mit `bwrap` vor [`BIND_FD_VERSION`] startet der Starter
+/// nicht (HUM-263).
 ///
-/// Sucht `--ro-bind`/`--bind` mit dem Ziel `dst` und ersetzt die Quelle.
-/// Liefert `false`, wenn es den Bind nicht gibt.
-fn rebind_source(args: &mut [OsString], dst: &Path, src: &Path) -> bool {
-    let bind = OsStr::new("--bind");
-    let ro_bind = OsStr::new("--ro-bind");
-    for index in 0..args.len().saturating_sub(2) {
-        let flag = args[index].as_os_str();
-        if (flag == bind || flag == ro_bind) && Path::new(&args[index + 2]) == dst {
-            args[index + 1] = src.as_os_str().to_os_string();
-            return true;
-        }
+/// Der Projektordner kommt dann als `/proc/self/fd/N` in die Sandbox, und
+/// `bwrap` lässt den Deskriptor offen. Geschlossen hätte ihn der Shim; ohne
+/// ihn erbte der Testbefehl einen Verzeichnis-Deskriptor des Hosts, von dem
+/// aus `openat(fd, "..")` aus der Sandbox hinausführt.
+///
+/// # Errors
+///
+/// [`LaunchError::Harness`] mit `SANDBOX_010` in genau diesem Fall.
+fn refuse_unclosed_descriptors(without_shim: bool, version: Version) -> Result<(), LaunchError> {
+    if without_shim && version < BIND_FD_VERSION {
+        return Err(unexpected_argv(format!(
+            "bubblewrap {version} has no --bind-fd, so the project folder reaches the sandbox as an \
+             open descriptor that only {SHIM_BINARY} closes; without a usable shim the test command \
+             would inherit it. Build {SHIM_BINARY} (or pass --shim FILE), or use bubblewrap \
+             {BIND_FD_VERSION} or newer"
+        )));
     }
-    false
+    Ok(())
 }
 
 /// Nimmt den Shim aus der Argumentliste: den Bind und das Präfix vor dem Befehl.
@@ -743,52 +775,24 @@ mod tests {
         test_profile().to_bwrap_args(&context(), &LaunchInputs::preview())
     }
 
-    /// Der Schnappschuss aus HUM-010, um `--tests-dir` erweitert: dieselbe
-    /// Liste, nur zeigt die Quelle des einen Binds jetzt in den Arbeitsbaum.
+    /// Ohne Shim und ohne `--bind-fd` startet nichts; mit einem der beiden
+    /// schon (HUM-263).
     #[test]
-    fn tests_dir_only_moves_the_source_of_that_one_bind() {
-        let before = argv();
-        let mut after = before.clone();
-
-        assert!(rebind_source(
-            &mut after,
-            Path::new(TESTS_DIR_DST),
-            Path::new("/home/u/humanitl/tests/escape"),
-        ));
-
-        assert_eq!(
-            before.len(),
-            after.len(),
-            "no argument was added or removed"
-        );
-        let changed: Vec<usize> = (0..before.len())
-            .filter(|&i| before[i] != after[i])
-            .collect();
-        assert_eq!(
-            changed.len(),
-            1,
-            "exactly one argument changed: {changed:?}"
-        );
-
-        let at = changed[0];
-        let after = strings(&after);
-        assert_eq!(after[at - 1], "--ro-bind");
-        assert_eq!(after[at], "/home/u/humanitl/tests/escape");
-        assert_eq!(after[at + 1], TESTS_DIR_DST);
+    fn without_a_shim_an_old_bwrap_is_refused() {
+        let old = Version(0, 9, 0);
+        let err = refuse_unclosed_descriptors(true, old).expect_err("no shim, no --bind-fd");
+        assert!(err.to_string().contains("--bind-fd"), "{err}");
+        refuse_unclosed_descriptors(false, old).expect("the shim closes the descriptor");
+        refuse_unclosed_descriptors(true, BIND_FD_VERSION).expect("bwrap closes it");
     }
 
     #[test]
     fn tests_dir_reports_a_profile_that_does_not_declare_it() {
         let path =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../profiles/sandbox/default.toml");
-        let profile = SandboxProfile::load(&path).expect("the default profile loads");
-        let mut argv = profile.to_bwrap_args(&context(), &LaunchInputs::preview());
+        let mut profile = SandboxProfile::load(&path).expect("the default profile loads");
         assert!(
-            !rebind_source(
-                &mut argv,
-                Path::new(TESTS_DIR_DST),
-                Path::new("/home/u/humanitl/tests/escape")
-            ),
+            !take_tests_placeholder(&mut profile),
             "the default profile has no /tests/escape and must say so"
         );
     }
@@ -926,15 +930,29 @@ mod tests {
             command: words(&["/bin/sh", "-c", "true"]),
             files: Vec::new(),
         };
-        let backend = BwrapBackend::unchecked("/usr/bin/bwrap", Version(0, 11, 0), paths);
+        let tests_dir = state.join("tests-escape");
+        make_dir(&tests_dir).expect("tests dir");
+        let backend = BwrapBackend::unchecked("/usr/bin/bwrap", Version(0, 11, 0), paths)
+            .with_read_only_bind(&tests_dir, TESTS_DIR_DST);
+        let mut profile = profile;
+        assert!(take_tests_placeholder(&mut profile));
         let mut plan = backend.plan(&profile, &context).expect("plan");
         assert_eq!(argv_of(&plan)[0], "/usr/bin/bwrap");
 
-        assert!(rebind_source(
-            &mut plan.argv,
-            Path::new(TESTS_DIR_DST),
-            Path::new("/home/u/humanitl/tests/escape")
-        ));
+        // Das Testverzeichnis kommt wie die Erweiterungen als Deskriptor,
+        // direkt vor dem Projektordner, und nie als Pfad.
+        let edited = argv_of(&plan);
+        assert!(
+            edited.windows(6).any(|w| w[0] == "--ro-bind-fd"
+                && w[2] == TESTS_DIR_DST
+                && w[3] == "--bind-fd"
+                && w[5] == "/work"),
+            "the tests bind sits right before the project folder: {edited:?}"
+        );
+        assert!(
+            !edited.iter().any(|arg| Path::new(arg) == tests_dir),
+            "the tests dir is not bound by path: {edited:?}"
+        );
         strip_shim(
             &mut plan.argv,
             &shim,

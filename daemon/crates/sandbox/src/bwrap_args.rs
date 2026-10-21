@@ -60,6 +60,15 @@
 //! und je Identitätsdatei einen eigenen Deskriptor, und der Launcher legt
 //! genauso viele memfds an, wie [`SandboxProfile::masks_to_render`] Masken
 //! nennt.
+//!
+//! # Verzeichnisse per Deskriptor (HUM-263)
+//!
+//! Beim Start bindet `bwrap` den Projektordner und die Einträge aus
+//! `mounts.extra_ro` und `mounts.extra_rw` nicht über ihren Pfad, sondern über
+//! einen Deskriptor, den der Launcher geöffnet und geprüft hat
+//! ([`LaunchInputs::work_dir`], [`SourceFd`]). So hängt `bwrap` genau das ein,
+//! was geprüft wurde, auch wenn der Pfad inzwischen woanders hinzeigt. Die
+//! Vorschau hat keine Deskriptoren und zeigt die Pfade.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
@@ -142,6 +151,34 @@ impl MaskFds {
     }
 }
 
+/// Wie `bwrap` eine Verzeichnisquelle bekommt, die der Launcher schon
+/// geöffnet hat (HUM-263).
+///
+/// Der Deskriptor ist ein `O_PATH`-Deskriptor auf genau das Objekt, das die
+/// [`crate::MountPolicy`] geprüft hat. Er darf den Agenten nie erreichen:
+/// `openat(fd, "..")` liefe von dort im Dateibaum des Hosts nach oben.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceFd {
+    /// `--bind-fd FD DST` oder `--ro-bind-fd FD DST`, ab bubblewrap 0.10.
+    /// `bwrap` schließt den Deskriptor nach dem Einhängen selbst.
+    BindFd(RawFd),
+    /// `--bind /proc/self/fd/FD DST` oder `--ro-bind …` für ältere
+    /// Fassungen. `bwrap` löst den Pfad in seinem eigenen `/proc` auf, also
+    /// über den geerbten Deskriptor, und lässt ihn offen; der Shim schließt
+    /// ihn, bevor der Agent startet.
+    ProcSelf(RawFd),
+}
+
+impl SourceFd {
+    /// Die Nummer des Deskriptors.
+    #[must_use]
+    pub const fn raw(self) -> RawFd {
+        match self {
+            Self::BindFd(fd) | Self::ProcSelf(fd) => fd,
+        }
+    }
+}
+
 /// Die Deskriptoren der drei Identitätsdateien, jeder mit dem Inhalt aus
 /// [`SandboxProfile::identity_files`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,9 +207,8 @@ pub struct IdentityFiles {
 /// Das Profil sagt, was in der Sandbox liegt; der [`SessionContext`] sagt,
 /// woher es kommt; hier steht, mit welchen Deskriptoren `bwrap` es bekommt.
 /// Die Nummern sind die, unter denen `bwrap` die Deskriptoren erbt: der
-/// Launcher legt sie ohne `FD_CLOEXEC` an und schreibt ihre Nummer in die
-/// Zeile, es gibt keine Umnummerierung im Kind (die bräuchte `pre_exec`, also
-/// `unsafe`, und diese Crate verbietet das).
+/// Launcher schreibt ihre Nummer in die Zeile und nimmt `FD_CLOEXEC` erst im
+/// Kind weg (`inherit.rs`); es gibt keine Umnummerierung im Kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchInputs {
     /// Die Deskriptoren der Masken (`--ro-bind-data`), einer je Maske.
@@ -198,6 +234,21 @@ pub struct LaunchInputs {
     /// nicht, und das ist die richtige Antwort — eine Konfiguration, die der
     /// Agent nicht vorfindet, wäre schlimmer als kein Start.
     pub agent_files: Vec<(RawFd, PathBuf)>,
+    /// Der geöffnete Projektordner (HUM-263). `None` bindet
+    /// [`SessionContext::work_src`] per Pfad; das ist die Vorschau, nicht der
+    /// Start.
+    pub work_dir: Option<SourceFd>,
+    /// Die geöffneten Quellen aus `mounts.extra_ro`, eine je Eintrag in
+    /// dessen Reihenfolge. Fehlt ein Eintrag, wird per Pfad gebunden; das ist
+    /// die Vorschau, nicht der Start.
+    pub extra_ro: Vec<SourceFd>,
+    /// Dasselbe für `mounts.extra_rw`.
+    pub extra_rw: Vec<SourceFd>,
+    /// Nur lesbare Binds, die der Aufrufer zur Sitzung beiträgt
+    /// (`crate::BwrapBackend::with_read_only_bind`), je Deskriptor und Ziel.
+    /// Gerendert hinter den Erweiterungen des Profils und vor dem
+    /// Projektordner; leer heißt: kein Argument.
+    pub session_ro: Vec<(SourceFd, PathBuf)>,
 }
 
 impl LaunchInputs {
@@ -217,6 +268,10 @@ impl LaunchInputs {
             status_fd: Some(11),
             present_under_work: None,
             agent_files: Vec::new(),
+            work_dir: None,
+            extra_ro: Vec::new(),
+            extra_rw: Vec::new(),
+            session_ro: Vec::new(),
         }
     }
 
@@ -315,18 +370,22 @@ impl SandboxProfile {
         // Die Erweiterungen des Nutzers kommen vor dem, was die Sitzung
         // einhängt: was danach kommt, liegt obenauf und kann nicht verdeckt
         // werden.
-        for path in &self.mounts.extra_ro {
-            args.bind("--ro-bind", path, path);
+        // Beim Start kommen sie aus den Deskriptoren, die der Launcher
+        // geöffnet und geprüft hat (HUM-263); ein Pfad würde erst beim
+        // Einhängen wieder aufgelöst.
+        for (index, path) in self.mounts.extra_ro.iter().enumerate() {
+            args.bind_source(false, path, inputs.extra_ro.get(index).copied(), path);
         }
-        for path in &self.mounts.extra_rw {
-            args.bind("--bind", path, path);
+        for (index, path) in self.mounts.extra_rw.iter().enumerate() {
+            args.bind_source(true, path, inputs.extra_rw.get(index).copied(), path);
         }
 
-        let work_flag = match self.effective_work_mode(ctx.work_mode) {
-            WorkMode::Ro => "--ro-bind",
-            WorkMode::Rw => "--bind",
-        };
-        args.bind(work_flag, &ctx.work_src, work_dst);
+        for (fd, dst) in &inputs.session_ro {
+            args.bind_source(false, dst, Some(*fd), dst);
+        }
+
+        let writable = self.effective_work_mode(ctx.work_mode) == WorkMode::Rw;
+        args.bind_source(writable, &ctx.work_src, inputs.work_dir, work_dst);
         for path in under_work {
             if inputs.renders(path) {
                 args.path("--tmpfs", path);
@@ -576,6 +635,27 @@ impl Args {
         self.push(dst);
     }
 
+    /// Ein Bind einer Host-Quelle: per Deskriptor, wenn der Launcher sie
+    /// geöffnet hat, sonst per Pfad (die Vorschau).
+    fn bind_source(&mut self, writable: bool, src: &Path, opened: Option<SourceFd>, dst: &Path) {
+        let (path_flag, fd_flag) = if writable {
+            ("--bind", "--bind-fd")
+        } else {
+            ("--ro-bind", "--ro-bind-fd")
+        };
+        match opened {
+            None => self.bind(path_flag, src, dst),
+            Some(SourceFd::BindFd(fd)) => {
+                self.push(fd_flag);
+                self.push(fd.to_string());
+                self.push(dst);
+            }
+            Some(SourceFd::ProcSelf(fd)) => {
+                self.bind(path_flag, Path::new(&format!("/proc/self/fd/{fd}")), dst);
+            }
+        }
+    }
+
     /// `--ro-bind-data FD DST`: eine Datei aus einem Deskriptor des Launchers.
     fn data(&mut self, fd: RawFd, dst: &Path) {
         self.push("--ro-bind-data");
@@ -600,7 +680,7 @@ mod tests {
     use humanitl_config::WorkMode;
     use humanitl_core::ids::SessionId;
 
-    use super::{IdentityFds, LaunchInputs, MaskFds, PREVIEW_MASK_FD_FIRST, shell_quote};
+    use super::{IdentityFds, LaunchInputs, MaskFds, PREVIEW_MASK_FD_FIRST, SourceFd, shell_quote};
     use crate::profile::{SandboxProfile, SessionContext};
 
     #[test]
@@ -734,6 +814,10 @@ mod tests {
                 status_fd: None,
                 present_under_work: None,
                 agent_files: Vec::new(),
+                work_dir: None,
+                extra_ro: Vec::new(),
+                extra_rw: Vec::new(),
+                session_ro: Vec::new(),
             },
         );
         assert!(with.windows(2).any(|w| w == ["--json-status-fd", "11"]));
@@ -825,6 +909,10 @@ mod tests {
                 status_fd: None,
                 present_under_work: None,
                 agent_files: Vec::new(),
+                work_dir: None,
+                extra_ro: Vec::new(),
+                extra_rw: Vec::new(),
+                session_ro: Vec::new(),
             },
         );
         assert!(window_at(&args, &["--ro-bind-data", "40", "/work/.envrc"]).is_some());
@@ -901,5 +989,67 @@ mod tests {
         assert_eq!(profile.user_name(), "agent");
         assert_eq!(profile.home_dir(), "/home/agent");
         assert!(!profile.identity_files(1, 1).passwd.contains("root"));
+    }
+
+    /// Beim Start bindet `bwrap` die geöffneten Deskriptoren, nie den Pfad
+    /// (HUM-263); ohne Deskriptor, in der Vorschau, steht der Pfad da.
+    #[test]
+    fn opened_sources_are_bound_by_descriptor_and_the_preview_by_path() {
+        let profile = SandboxProfile::parse(
+            "version = 1\nname = \"x\"\n[mounts]\nextra_ro = [\"/opt/tools\"]\nextra_rw = [\"/srv/data\"]\n",
+            Path::new("<t>"),
+        )
+        .expect("parses");
+        let preview = strings(&profile, &LaunchInputs::preview());
+        assert!(window_at(&preview, &["--bind", "/home/u/proj", "/work"]).is_some());
+        assert!(window_at(&preview, &["--ro-bind", "/opt/tools", "/opt/tools"]).is_some());
+        assert!(window_at(&preview, &["--bind", "/srv/data", "/srv/data"]).is_some());
+
+        let by_fd = strings(
+            &profile,
+            &LaunchInputs {
+                work_dir: Some(SourceFd::BindFd(50)),
+                extra_ro: vec![SourceFd::BindFd(51)],
+                extra_rw: vec![SourceFd::BindFd(52)],
+                ..LaunchInputs::preview()
+            },
+        );
+        assert!(
+            window_at(&by_fd, &["--bind-fd", "50", "/work"]).is_some(),
+            "{by_fd:?}"
+        );
+        assert!(window_at(&by_fd, &["--ro-bind-fd", "51", "/opt/tools"]).is_some());
+        assert!(window_at(&by_fd, &["--bind-fd", "52", "/srv/data"]).is_some());
+        for path in ["/home/u/proj", "/opt/tools", "/srv/data"] {
+            assert_eq!(
+                by_fd.iter().filter(|arg| *arg == path).count(),
+                usize::from(path != "/home/u/proj"),
+                "{path} appears only as a destination: {by_fd:?}"
+            );
+        }
+
+        let mut ctx = context();
+        ctx.work_mode = WorkMode::Ro;
+        let proc_self: Vec<String> = profile
+            .to_bwrap_args(
+                &ctx,
+                &LaunchInputs {
+                    work_dir: Some(SourceFd::ProcSelf(50)),
+                    extra_ro: vec![SourceFd::ProcSelf(51)],
+                    ..LaunchInputs::preview()
+                },
+            )
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            window_at(&proc_self, &["--ro-bind", "/proc/self/fd/50", "/work"]).is_some(),
+            "{proc_self:?}"
+        );
+        assert!(window_at(&proc_self, &["--ro-bind", "/proc/self/fd/51", "/opt/tools"]).is_some());
+        assert!(
+            window_at(&proc_self, &["--bind", "/srv/data", "/srv/data"]).is_some(),
+            "a missing descriptor falls back to the path, as in the preview"
+        );
     }
 }
