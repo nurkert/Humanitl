@@ -8,9 +8,9 @@ use std::path::PathBuf;
 
 use humanitl_audit::kinds::FlowDecided;
 use humanitl_audit::{
-    Anchor, AnchorMirror, AuditKey, AuditRecord, AuditVerifier, AuditWriter, KeyOrigin, RecordKind,
-    VerifyReport, WriterOptions,
+    Anchor, AuditKey, AuditRecord, AuditVerifier, KeyOrigin, RecordKind, VerifyReport,
 };
+use humanitl_audit_log::{AnchorMirror, AuditWriter, VerifyFile as _, WriterOptions};
 use humanitl_core::{Decision, DecisionSource, Diagnostic, FlowId};
 use humanitl_recorder::{AnchorStore, AuditAnchor, read_anchors};
 

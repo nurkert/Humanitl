@@ -13,6 +13,8 @@ workspace = true
 # Regel-RPC und Netzsuche schreiben ins Audit-Log (HUM-050);
 # `tools/deps-allow.toml` erlaubt die Kante seit Sprint 0.
 humanitl-audit.workspace = true
+# Der Schreiber und die Datei der Kette (seit HUM-155 ein eigener Adapter).
+humanitl-audit-log.workspace = true
 humanitl-catalog.workspace = true
 humanitl-config.workspace = true
 humanitl-core.workspace = true

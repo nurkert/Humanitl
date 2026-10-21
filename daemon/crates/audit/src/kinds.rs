@@ -18,7 +18,7 @@
 //! `llm_discover`, geschrieben, bevor es die Tabelle gab. `audit.resumed`
 //! kommt aus dem Review von HUM-050 dazu: der erste Record hinter einer
 //! Lücke, die ein gekürztes oder ersetztes Log hinterlässt (siehe
-//! [`crate::writer`]). `recorder.retention_applied` kommt aus HUM-051 dazu:
+//! `humanitl_audit_log::writer`). `recorder.retention_applied` kommt aus HUM-051 dazu:
 //! die dokumentierte Löschung eines Aufräumlaufs der Aufzeichnung.
 //! `audit.pruned` kommt aus HUM-157 dazu: die dokumentierte Löschung am Anfang
 //! der Kette selbst; die Struktur steht in [`crate::retention`].
@@ -497,7 +497,7 @@ pub struct FindingAllowlisted {
 /// `audit.anchor`: Der Record, der selbst der Anker ist.
 ///
 /// Er nennt seinen Vorgänger; sein eigener Hash steht mit seiner Nummer in
-/// `audit_anchors` (siehe [`crate::writer`]).
+/// `audit_anchors` (siehe `humanitl_audit_log::writer`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnchorData {
     /// Die Nummer des Vorgängers.

@@ -30,14 +30,9 @@ mod data;
 mod quick;
 
 use std::collections::VecDeque;
-use std::fs::File;
-use std::io::{self, BufRead, BufReader};
-use std::path::Path;
+use std::io::{self, BufRead};
 
 use chrono::{DateTime, DurationRound as _, TimeDelta, Utc};
-use humanitl_core::diagnostics::codes::AUDIT_006;
-use humanitl_core::shell::shell_path;
-use humanitl_core::{Diagnostic, FixAction, Severity};
 
 use crate::record::{AuditRecord, format_ts};
 
@@ -152,49 +147,57 @@ pub struct Tail {
     pub last: Option<AuditRecord>,
 }
 
-/// Liest eine Seite aus `path`.
+/// Liest eine Seite aus der Kette, die `open` liefert.
+///
+/// `open` gibt jedes Mal einen neuen Leser vom Anfang der Kette oder `None`,
+/// wenn es sie nicht gibt; eine fehlende Kette ist eine leere. Gerufen wird es
+/// höchstens zweimal: einmal für den festen Teil der Zeilen und, wenn die
+/// Kette dafür nicht heil ist, noch einmal für jede Zeile als JSON (siehe
+/// Modulkommentar). Die Datei öffnet `humanitl-audit-log` (HUM-155).
 ///
 /// `limit` null heißt [`DEFAULT_PAGE`], mehr als [`MAX_PAGE`] heißt
 /// [`MAX_PAGE`]. `before` ist der Cursor: nur Records mit kleinerer Nummer.
-/// `until` ist das gemeldete Ende (siehe Modulkommentar). Eine fehlende Datei
-/// ist eine leere Kette.
+/// `until` ist das gemeldete Ende (siehe Modulkommentar).
 ///
 /// # Errors
 ///
-/// [`AUDIT_006`], wenn sich die Datei nicht lesen lässt.
-pub fn query(
-    path: &Path,
+/// Der Fehler von `open` oder vom Leser.
+pub fn query_from<R: BufRead>(
+    mut open: impl FnMut() -> io::Result<Option<R>>,
     filter: &QueryFilter,
     limit: usize,
     before: Option<u64>,
     until: Option<u64>,
-) -> Result<Page, Diagnostic> {
+) -> io::Result<Page> {
     let limit = match limit {
         0 => DEFAULT_PAGE,
         n => n.min(MAX_PAGE),
     };
-    if let Some(page) = quick::page(path, filter, limit, before, until)
-        .map_err(|err| unreadable(path, "list", &err))?
+    if let Some(reader) = open()?
+        && let Some(page) = quick::page(reader, filter, limit, before, until)?
     {
         return Ok(page);
     }
-    every_line(path, filter, limit, before, until)
+    match open()? {
+        Some(reader) => every_line(reader, filter, limit, before, until),
+        None => Ok(Page::default()),
+    }
 }
 
 /// Eine Seite aus jeder Zeile als JSON, für jede Kette.
 fn every_line(
-    path: &Path,
+    reader: impl BufRead,
     filter: &QueryFilter,
     limit: usize,
     before: Option<u64>,
     until: Option<u64>,
-) -> Result<Page, Diagnostic> {
+) -> io::Result<Page> {
     // Die Datei steht aufsteigend. Behalten werden die jüngsten `limit + 1`
     // Treffer unter dem Cursor; der eine zu viel sagt, dass noch eine Seite
     // kommt, und wird nicht geliefert.
     let mut window: VecDeque<Entry> = VecDeque::with_capacity(limit + 1);
     let mut total = 0_u64;
-    for_each_record(path, "list", until, |record, line| {
+    for_each_record(reader, until, |record, line| {
         if !filter.matches(&record) {
             return;
         }
@@ -225,68 +228,46 @@ fn every_line(
     })
 }
 
-/// Zählt die Records in `path` bis zum gemeldeten Ende `until` und liefert den
-/// letzten.
+/// Zählt die Records, die `reader` liefert, bis zum gemeldeten Ende `until`
+/// und liefert den letzten.
 ///
 /// # Errors
 ///
-/// [`AUDIT_006`], wenn sich die Datei nicht lesen lässt.
-pub fn tail(path: &Path, until: Option<u64>) -> Result<Tail, Diagnostic> {
+/// Der Fehler des Lesers.
+pub fn tail_from(reader: impl BufRead, until: Option<u64>) -> io::Result<Tail> {
     let mut tail = Tail::default();
-    for_each_record(path, "read the head of", until, |record, _| {
+    for_each_record(reader, until, |record, _| {
         tail.records += 1;
         tail.last = Some(record);
     })?;
     Ok(tail)
 }
 
-/// Ruft `visit` für jede Zeile von `path`, die ein Record ist, in der
-/// Reihenfolge der Datei, bis zum Record mit der Nummer `until`. `doing` steht
-/// im Befund, falls das Lesen scheitert.
+/// Ruft `visit` für jede Zeile von `reader`, die ein Record ist, in der
+/// Reihenfolge der Kette, bis zum Record mit der Nummer `until`.
 fn for_each_record(
-    path: &Path,
-    doing: &str,
+    mut reader: impl BufRead,
     until: Option<u64>,
     mut visit: impl FnMut(AuditRecord, &[u8]),
-) -> Result<(), Diagnostic> {
-    let result = (|| -> io::Result<()> {
-        let file = match File::open(path) {
-            Ok(file) => file,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(err) => return Err(err),
-        };
-        let mut reader = BufReader::new(file);
-        let mut buffer = Vec::with_capacity(1024);
-        if until == Some(0) {
+) -> io::Result<()> {
+    let mut buffer = Vec::with_capacity(1024);
+    if until == Some(0) {
+        return Ok(());
+    }
+    loop {
+        buffer.clear();
+        if reader.read_until(b'\n', &mut buffer)? == 0 {
             return Ok(());
         }
-        loop {
-            buffer.clear();
-            if reader.read_until(b'\n', &mut buffer)? == 0 {
+        let line = buffer.strip_suffix(b"\n").unwrap_or(&buffer);
+        if let Ok(record) = AuditRecord::from_line(line) {
+            let last = until.is_some_and(|until| record.body.seq >= until);
+            visit(record, line);
+            if last {
                 return Ok(());
             }
-            let line = buffer.strip_suffix(b"\n").unwrap_or(&buffer);
-            if let Ok(record) = AuditRecord::from_line(line) {
-                let last = until.is_some_and(|until| record.body.seq >= until);
-                visit(record, line);
-                if last {
-                    return Ok(());
-                }
-            }
         }
-    })();
-    result.map_err(|err| unreadable(path, doing, &err))
-}
-
-/// Der Befund, wenn sich `path` nicht lesen lässt; `doing` sagt, wobei.
-fn unreadable(path: &Path, doing: &str, err: &io::Error) -> Diagnostic {
-    Diagnostic::builder(AUDIT_006, Severity::Error)
-        .why(format!("cannot {doing} {}: {err}", path.display()))
-        .fix(FixAction::CopyCommand(format!(
-            "ls -ln {}",
-            shell_path(path)
-        )))
-        .build()
+    }
 }
 
 #[cfg(test)]

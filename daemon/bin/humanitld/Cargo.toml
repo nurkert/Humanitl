@@ -13,6 +13,7 @@ workspace = true
 # Das Audit-Log: Schlüssel, Schreiber, und der Sink, der den Ereignisstrom in
 # Records übersetzt (HUM-050).
 humanitl-audit.workspace = true
+humanitl-audit-log.workspace = true
 humanitl-config.workspace = true
 humanitl-core.workspace = true
 humanitl-ipc.workspace = true

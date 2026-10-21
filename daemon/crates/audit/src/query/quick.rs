@@ -25,9 +25,7 @@
 //! Zeit, nie Genauigkeit.
 
 use std::collections::VecDeque;
-use std::fs::File;
-use std::io::{self, BufReader};
-use std::path::Path;
+use std::io;
 
 use super::data::is_canonical_object;
 use super::{Entry, Page, QueryFilter};
@@ -37,16 +35,15 @@ use crate::record::AuditRecord;
 const LINE_START: &[u8] = b"{\"data\":{";
 /// Das Ende von `data` und der erste Schlüssel dahinter.
 const HASH_KEY: &[u8] = b"},\"hash\":\"";
-/// So viel liest ein Aufruf von `read` auf einmal.
-const READ_BUFFER: usize = 256 * 1024;
 
 /// Die Seite aus dem festen Teil der Zeilen, oder `None`, wenn die Kette dafür
 /// nicht heil ist (siehe Modulkommentar) und der Aufrufer jede Zeile lesen
 /// muss.
 ///
-/// `limit` ist schon begrenzt, `before` und `until` wie in [`super::query`].
+/// `limit` ist schon begrenzt, `before` und `until` wie in
+/// [`super::query_from`].
 pub(super) fn page(
-    path: &Path,
+    reader: impl io::BufRead,
     filter: &QueryFilter,
     limit: usize,
     before: Option<u64>,
@@ -55,12 +52,6 @@ pub(super) fn page(
     if until == Some(0) {
         return Ok(None);
     }
-    let file = match File::open(path) {
-        Ok(file) => file,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err),
-    };
-    let reader = BufReader::with_capacity(READ_BUFFER, file);
     let scan = scan(reader, filter, limit, before, until)?;
     Ok(scan.and_then(|scan| scan.into_page(limit)))
 }
@@ -276,12 +267,12 @@ impl<'a> Tail<'a> {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-    use std::path::{Path, PathBuf};
+    use std::io::{self, Cursor};
 
     use chrono::{TimeZone as _, Utc};
 
-    use super::{Fields, page};
-    use crate::query::{Page, QueryFilter, TimeRange, every_line, query};
+    use super::Fields;
+    use crate::query::{Page, QueryFilter, TimeRange};
     use crate::record::{GENESIS_PREV, RecordBody};
 
     const SESSION: &str = "0190d8a4-8f9c-7c3e-9a1b-3c4d5e6f7a8b";
@@ -313,10 +304,46 @@ mod tests {
             .collect()
     }
 
-    fn write(dir: &Path, text: &str) -> PathBuf {
-        let path = dir.join("audit.jsonl");
-        std::fs::write(&path, text).unwrap();
-        path
+    /// Die Kette als Bytes; die Tests lesen sie über einen Leser statt aus
+    /// einer Datei (HUM-155).
+    fn write(text: &str) -> Vec<u8> {
+        text.as_bytes().to_vec()
+    }
+
+    fn page(
+        chain: &[u8],
+        filter: &QueryFilter,
+        limit: usize,
+        before: Option<u64>,
+        until: Option<u64>,
+    ) -> io::Result<Option<Page>> {
+        super::page(Cursor::new(chain), filter, limit, before, until)
+    }
+
+    fn query(
+        chain: &[u8],
+        filter: &QueryFilter,
+        limit: usize,
+        before: Option<u64>,
+        until: Option<u64>,
+    ) -> io::Result<Page> {
+        crate::query::query_from(
+            || Ok(Some(Cursor::new(chain))),
+            filter,
+            limit,
+            before,
+            until,
+        )
+    }
+
+    fn every_line(
+        chain: &[u8],
+        filter: &QueryFilter,
+        limit: usize,
+        before: Option<u64>,
+        until: Option<u64>,
+    ) -> io::Result<Page> {
+        crate::query::every_line(Cursor::new(chain), filter, limit, before, until)
     }
 
     fn joined(lines: &[String]) -> String {
@@ -356,7 +383,7 @@ mod tests {
 
     /// Jeder Filter, jeder Cursor und jedes gemeldete Ende liefert über
     /// `query` dasselbe wie das Lesen jeder Zeile.
-    fn assert_same_as_every_line(path: &Path, label: &str) {
+    fn assert_same_as_every_line(path: &[u8], label: &str) {
         for filter in filters() {
             for until in [None, Some(1), Some(4), Some(6), Some(9), Some(40)] {
                 for before in [None, Some(1), Some(2), Some(5), Some(8), Some(40)] {
@@ -376,8 +403,7 @@ mod tests {
     /// so wie das Lesen jeder Zeile.
     #[test]
     fn a_whole_chain_pages_from_the_fixed_part_alone() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = write(dir.path(), &joined(&chain(9)));
+        let path = write(&joined(&chain(9)));
         for filter in filters() {
             for until in [None, Some(1), Some(5), Some(9), Some(20)] {
                 for before in [None, Some(1), Some(2), Some(6), Some(10)] {
@@ -393,7 +419,7 @@ mod tests {
                 }
             }
         }
-        let empty = write(dir.path(), "");
+        let empty = write("");
         let open = QueryFilter::default();
         assert_eq!(
             page(&empty, &open, 5, None, None).unwrap(),
@@ -404,7 +430,6 @@ mod tests {
     /// Eine gebrochene Kette gibt dieselben Seiten wie vor HUM-163.
     #[test]
     fn a_broken_chain_pages_exactly_as_before() {
-        let dir = tempfile::tempdir().unwrap();
         let lines = chain(9);
         // Hinter `data` kanonisch, `data` selbst kein JSON: kein Record.
         let broken_data = |line: &str| line.replacen(r#"{"data":{"#, r#"{"data":{"n":tru,"#, 1);
@@ -447,14 +472,14 @@ mod tests {
         cases.push(("an empty line", blank));
 
         for (label, lines) in &cases {
-            let path = write(dir.path(), &joined(lines));
+            let path = write(&joined(lines));
             assert_same_as_every_line(&path, label);
         }
         let torn = format!("{}{}", joined(&lines), &lines[0][..20]);
-        assert_same_as_every_line(&write(dir.path(), &torn), "a torn last line");
+        assert_same_as_every_line(&write(&torn), "a torn last line");
         let unterminated = joined(&lines);
         let unterminated = unterminated.trim_end_matches('\n');
-        assert_same_as_every_line(&write(dir.path(), unterminated), "no final newline");
+        assert_same_as_every_line(&write(unterminated), "no final newline");
     }
 
     /// Eine Zeile mitten in der Kette, deren Teil hinter `data` stimmt, deren
@@ -462,7 +487,6 @@ mod tests {
     /// schnelle Seite gibt auf, und die volle zählt.
     #[test]
     fn a_line_with_a_broken_data_part_counts_as_before() {
-        let dir = tempfile::tempdir().unwrap();
         let lines = chain(9);
         let fourth = lines[3].as_bytes();
         let start = br#"{"data":{"#;
@@ -487,8 +511,7 @@ mod tests {
                 text.extend_from_slice(if index == 3 { &fourth } else { line.as_bytes() });
                 text.push(b'\n');
             }
-            let path = dir.path().join("audit.jsonl");
-            std::fs::write(&path, &text).unwrap();
+            let path = text;
             assert_eq!(page(&path, &open, 3, None, None).unwrap(), None, "{label}");
             assert_same_as_every_line(&path, label);
         }
@@ -498,7 +521,6 @@ mod tests {
     /// die schnelle Seite aufgeben, auch wenn jede Zeile für sich stimmt.
     #[test]
     fn a_gap_or_a_twin_in_the_numbers_gives_up() {
-        let dir = tempfile::tempdir().unwrap();
         let lines = chain(9);
         let mut gap = lines.clone();
         gap.remove(4);
@@ -506,7 +528,7 @@ mod tests {
         twin.insert(5, lines[4].clone());
         let open = QueryFilter::default();
         for (label, lines) in [("a missing record", gap), ("a twin", twin)] {
-            let path = write(dir.path(), &joined(&lines));
+            let path = write(&joined(&lines));
             assert_eq!(page(&path, &open, 3, None, None).unwrap(), None, "{label}");
             assert_same_as_every_line(&path, label);
         }
