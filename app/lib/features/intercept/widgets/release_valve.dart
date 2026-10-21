@@ -40,6 +40,7 @@ class ReleaseValve extends StatefulWidget {
     required this.onAllow,
     required this.onActivate,
     required this.onAllowRemembered,
+    this.onHoldChanged,
     required this.onToggleOptions,
     this.onShortPress,
     this.holdRequired = false,
@@ -86,6 +87,11 @@ class ReleaseValve extends StatefulWidget {
 
   /// Sends the request and creates the rule the label names.
   final VoidCallback onAllowRemembered;
+
+  /// True while the pointer holds the left half down, false once it lets go
+  /// or the hold ends otherwise. The bar shows the rule of
+  /// [onAllowRemembered] for exactly that time (HUM-249).
+  final ValueChanged<bool>? onHoldChanged;
 
   /// Shows or hides the grid.
   final VoidCallback onToggleOptions;
@@ -257,6 +263,7 @@ class _ReleaseValveState extends State<ReleaseValve> {
           enabled: widget.enabled,
           token: widget.holdToken,
           previewProgress: widget.previewHold,
+          onHoldChanged: widget.onHoldChanged,
           // While a finding is unresolved the hold *is* the send, and a click
           // only says why it did nothing (`docs/UX.md` 4.7). Otherwise the
           // click sends and the hold sends and remembers.

@@ -1265,5 +1265,8 @@
   "rulesMatchExactPaths": "genau {paths}",
   "rulesFieldExactPaths": "Genaue Pfade",
   "rulesExactPathsReadOnly": "Nur genau diese Pfade treffen, mit beliebiger Query, nichts darunter. Der Editor ändert sie nicht; Speichern behält sie.",
-  "setupFixChooseFolder": "Anderen Ordner wählen"
+  "setupFixChooseFolder": "Anderen Ordner wählen",
+  "interceptRefusedRuleChanged": "Die Regel hat sich beim Halten geändert · gesendet wurde nichts, bitte erneut halten",
+  "interceptBatchScrollToRead": "Bis zum Ende scrollen und alles lesen, dann bestätigen.",
+  "interceptRefusedRuleNotInView": "Erst die Regel unter den Knöpfen bis zum Ende scrollen · gesendet wurde nichts"
 }

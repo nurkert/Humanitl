@@ -38,6 +38,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-265 | Shim, CA und Proxy-Socket werden weiter per Pfad gebunden (nach HUM-060) | S | HUM-263 |
 | HUM-266 | Ein deflate-Body, der als zlib und als nackter Strom Verschiedenes sagt | S | HUM-247 |
 | HUM-267 | Ein Test scheitert zufällig an „Text file busy" | S | HUM-134 |
+| HUM-268 | Zwei Tasten in einem Frame speichern eine nicht gezeichnete Regel (nach 0.1.0) | S | HUM-249 |
 
 ---
 
@@ -3367,6 +3368,119 @@ Keine Entscheidung speichert eine Regel, deren Satz nicht auf dem Schirm stand. 
 ### Referenzen
 HUM-058 (Review Runde 6), HUM-028, `docs/UX.md` 4.6 und 5.4.
 
+### Umsetzung (HUM-249)
+
+Gewählt ist der erste Weg: Solange das Raster merkt, stehen beide Sätze unter den Controls,
+untereinander, der für Senden zuerst, darunter der für Blockieren. Welcher Satz dasteht, hängt nicht
+mehr an Zeiger oder Fokus. Der zweite Weg (Kürzel zeigt den Satz, zweiter Druck speichert) bräche den
+Rhythmus der Queue und bräuchte einen Zustand, den Zeiger, Fokus und Tasten gemeinsam pflegen; der
+dritte (neutraler Satz ohne Aktion) machte die Regel unprüfbar, denn ihre Aktion ist ihre Politik
+(`docs/UX.md` 4.6, Tabelle der Verben).
+
+**Was gebaut wurde.**
+- `_FirstLine` in `app/lib/features/intercept/widgets/action_bar.dart` zeigt bei `remember.remembers`
+  zwei Zeilen mit je `actionBarLineHeight` (Schlüssel `intercept-rule-sentence-allow` und
+  `intercept-rule-sentence-block`, die Spalte behält `intercept-rule-sentence`). Der Parameter
+  `blockHighlighted` ist weg; `_blockHighlighted` deckt nur noch die Notiz neben „Blockieren" auf.
+- Die Sätze entstehen aus denselben Eingaben wie die Regel, die `InterceptDecision` beim Entscheiden
+  einmal baut (`ShownRule`, HUM-058): Entwurf, Gültigkeit, `ruleFlowProvider`.
+- Die Sätze brechen um, keiner wird mehr mit `maxLines: 1` und Auslassungspunkten gekürzt (Review,
+  Codex): bei 480 px und doppelter Schrift stand von einer deutschen Sitzungsregel sonst nur der
+  Anfang da. Dasselbe im Modal (`batch_modal.dart`, `intercept-batch-rule`, vorher `maxLines: 2`).
+- Das Halten des Ventils bei geschlossenem Raster legt eine Sitzungsregel an (`onAllowRemembered`,
+  `_draftDuration`). Ihr Satz steht jetzt vom Druck an, solange der Finger unten ist, also 400 ms vor
+  dem Speichern: `HoldToConfirm.onHoldChanged` (neu, optional) meldet Beginn und Ende eines Haltens,
+  `ReleaseValve.onHoldChanged` reicht es durch, `_FirstLine.holdRule` zeigt den Allow-Satz mit der
+  Dauer Sitzung. Nicht bei offenem Fund, dort ist das Halten nur Senden.
+- Das Halten speichert nur die Regel, deren Satz es zeigte (Review Runde 2, Codex): Es schließt im
+  Animations-Callback ab, vor dem Build, und `3` im letzten Frame hätte sonst eine Stundenregel unter
+  dem Satz für die Sitzung gespeichert. Beim Beginn merkt sich die Leiste die Eingaben der Regel
+  (`_HoldInputs`: Entwurf, Quelle aus `ruleFlowProvider`, registrierbare Domain), beim Abschluss liest
+  sie sie frisch; weichen sie ab, geht nichts hinaus, und die Leiste sagt warum
+  (`RefusalReason.ruleChanged`).
+- Die Regelsätze der Leiste nehmen höchstens ein Drittel des Inspektor-Panes (ohne Pane die Hälfte
+  des Fensters) und scrollen darüber hinaus (Review Runde 2): Ein Pfad, den der Agent beliebig lang
+  machen kann, schob sonst die Entscheidungen aus dem Pane. Eine Entscheidung, die eine Regel direkt
+  aus der Leiste speichern würde, fragt `ruleSentenceSeenProvider` (neu); solange die Sätze nicht
+  passen und nicht bis zum Ende gescrollt wurden, seit sie sich zuletzt änderten, geht nichts hinaus
+  (`RefusalReason.ruleNotInView`). Geprüft in `allow`, `block`, `allowMany`, `blockMany` vor dem
+  Senden; der Weg über das Modal bewacht sich selbst. Zum Gesehenen gehört das Layout (Review
+  Runde 3): Schrumpft der Pane, nachdem die Sätze ganz zu sehen waren, und ihr Ende rutscht aus dem
+  Bild, ist das Tor wieder zu, bis das Ende erneut zu sehen war (Schlüssel aus Eingaben,
+  `maxScrollExtent` und Höhe des Ausschnitts; gemessen auch bei `ScrollMetricsNotification`).
+- Das Modal (`batch_modal.dart`) ist auf das Fenster begrenzt, sein Rumpf scrollt
+  (`HModal.bodyScrollController`, neu und optional; ohne Controller bleibt jedes andere Modal wie es
+  war, die Befehlspalette mit eigener Liste eingeschlossen). Bestätigen ist abgeschaltet, bis der
+  Rumpf bis zum Ende zu sehen war, und ein Hinweis oben sagt das; solange ist der Rumpf ein
+  Fokusstopp, damit Pfeile und Bild-ab ihn ohne Maus scrollen. Gewählt, weil es die einfachste Regel
+  ist, die ohne Messung einzelner Zeilen hält: Wer das Ende gesehen hat, hat jeden Teil gesehen.
+  Bewusst so (Review Runde 3, verworfen): Auch ein Sprung ans Ende, etwa mit `Ende` oder einem Zug
+  am Scrollbalken, zählt als gesehen. Die Regel heißt „bis zum Ende zu sehen", nicht „jede Zeile
+  einmal im Bild"; was dazwischen steht, lässt sich zurückscrollen, und das Modal schließt nicht.
+  Bestätigen liest die Scrollposition beim Klick und nicht ein Flag, das erst der Frame nach dem
+  Öffnen setzt: Ein Rumpf, der passt, gilt sofort als gesehen, und der Knopf ist nur aus, sobald
+  feststeht, dass der Rumpf nicht passt. Mit dem Flag verschluckte das Modal einen Klick im ersten
+  Frame, und die M2-Demo (`app/integration_test/m2_first_decision_test.dart`) blieb beim Stapel der
+  zwölf npm-Anfragen stehen.
+- `docs/UX.md` 4.6 nennt den Weg, die verworfenen beiden, das Umbrechen, das Halten, die Grenze der
+  Leiste und das Modal.
+- Drei ARB-Einträge, am Ende angehängt: `interceptRefusedRuleChanged`,
+  `interceptBatchScrollToRead`, `interceptRefusedRuleNotInView`.
+- Goldens: `action_bar_remember_open` (vier Varianten) und `action_bar_text_scale_2` neu; der Rahmen
+  `withGrid` in `action_bar_golden_test.dart` ist eine Zeile höher (244 statt 220 px), der Rahmen von
+  `action_bar_text_scale_2` 400 statt 320 px, weil beide Sätze dort umbrechen.
+
+**Tests.** `app/test/features/intercept/rule_sentence_shortcut_test.dart`. Ein Satz zählt nur als
+sichtbar, wenn sein `RenderParagraph` nicht gekürzt ist (`didExceedMaxLines`); gelesen wird jeder
+gezeichnete Absatz, auch aus `Text.rich`.
+- Raster offen mit Session, Maus über „Blockieren" (Notiz aufgedeckt, Satz „block …" steht), `A`.
+  Geprüft wird, dass der Satz der gespeicherten Allow-Regel, vorgelesen vom Generator des
+  Regel-Bildschirms, schon vor dem Druck auf dem Schirm stand.
+- Raster offen, Fokus auf dem Ventil (geprüft), Satz „allow …" steht, Blockier-Kürzel, gespeichert wird
+  eine Block-Regel, deren Satz vorher dastand. Das Kürzel ist `Ctrl+L`: Ein einzelnes `B` gibt ein
+  fokussiertes Control an sich selbst weiter (`docs/UX.md` 5.2, `focusedControlHandlesActivate`) und
+  entscheidet dann gar nicht.
+- Leiste allein bei 480 px, doppelter Schrift, Deutsch, langem Host und Ziel Domain: Beide Sätze
+  stehen ganz da, gleich dem Satz der Regel, die gespeichert würde, umgebrochen, nicht gekürzt, ohne
+  Überlauf. Am ganzen Bildschirm geht das nicht: Dort laufen bei diesen Maßen schon vorher
+  „Bearbeiten + Senden" (`action_bar.dart`, Zeile mit `interceptEditAllow`) und der Kopf der Karte
+  (`request_card.dart`) über, beides nicht Teil dieses Issues.
+- Raster zu, Finger auf dem Ventil: nach 100 ms steht „allow · ∗ · registry.npmjs.org · this
+  session", noch nichts gespeichert; nach dem Halten ist genau die Regel mit diesem Satz gespeichert.
+- Raster zu, Finger auf dem Ventil, dann `3` ohne Frame dazwischen: nichts gespeichert, die Leiste
+  nennt den Grund.
+- Fenster 1400 × 600, URL-Regel „für immer" mit einem Pfad aus 160 Segmenten: Der Satz reicht über
+  das Fenster, der Hinweis steht, ein Klick auf Bestätigen tut nichts; nach dem Scrollen bis zum Ende
+  speichert er genau die Regel des Satzes.
+- Dasselbe Fenster, Sitzung über die URL: `A` geht nicht, solange die Sätze der Leiste nicht bis zum
+  Ende gescrollt sind, danach speichert es die Regel des gezeigten Satzes.
+- Fenster 900 hoch, Sätze passen; dann 600 hoch, ihr Ende ist außer Sicht: `A` speichert nichts.
+- Modal mit passendem Rumpf, Klick auf Bestätigen im ersten Frame: Die Regel wird gespeichert
+  (rot mit dem Knopf, der erst nach dem ersten Frame angeht).
+
+**Mutationsbeweise.**
+- `action_bar.dart` auf den Stand vor dem Issue (ein Satz nach Hervorhebung): beide Tests rot, der
+  erste mit „does not contain 'allow · ∗ · registry.npmjs.org · this session'", der zweite mit
+  „does not contain 'block · …'".
+- Die zweite Zeile wiederholt `RuleAction.allow` statt `RuleAction.block`: beide Tests rot.
+- Die Sätze wieder mit `maxLines: 1` und `TextOverflow.ellipsis`: der Test bei 480 px rot
+  (`didExceedMaxLines` true).
+- `holdRule` immer falsch: der Halte-Test rot („does not contain 'allow · ∗ · registry.npmjs.org ·
+  this session'").
+- Vergleich der Eingaben in `_allowHeld` aus: nur der Test mit `3` im letzten Frame rot.
+- Bestätigen im Modal immer an: nur der Modal-Test rot.
+- `_ruleInView` immer wahr: nur der Test mit der Leiste im kurzen Fenster rot.
+- Schlüssel des Gesehenen ohne Layout (nur die Eingaben): der Test mit dem schrumpfenden Fenster rot.
+
+**Nicht übernommen, eigenes Issue.** Zwei Tasten in einem Frame (`3`, dann `A` vor dem Layout)
+speichern eine Regel, deren Satz nie gezeichnet wurde. Das Fenster bestand schon vor diesem Issue
+und ist kein Szenario seiner Kriterien; HUM-268.
+
+**Offen, als Kandidat für ein eigenes Issue.** Bei 480 px Pane-Breite und doppelter Schrift laufen
+auf Deutsch „Bearbeiten + Senden" (92 px nach rechts) und, bei niedrigem Fenster, der Kopf der Karte
+über, weil nur ihr Rumpf scrollt. Seit diesem Issue ist die Leiste mit offenem Raster dort höher,
+der Kopf der Karte wird also früher eng.
+
 ---
 
 ## HUM-258 · Tröpfelnde Uploads hungern das Byte-Budget aus
@@ -4511,3 +4625,41 @@ Produktionscode bleibt unverändert; ein Wiederholen bei `ETXTBSY` gehört nicht
 
 ### Referenzen
 HUM-134, `daemon/crates/sandbox/src/test_support.rs`, `daemon/crates/sandbox/tests/common/mod.rs`.
+
+---
+
+## HUM-268 · Zwei Tasten in einem Frame speichern eine nicht gezeichnete Regel
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-249 · Blockiert: — · nach 0.1.0
+
+### Kontext
+Aus Runde 3 des Reviews von HUM-249 (Codex). Die Leiste zeigt die Regelsätze, und seit HUM-249
+geht eine Entscheidung, die eine Regel direkt aus der Leiste speichert, nur hinaus, wenn die Sätze
+ganz zu sehen waren (`ruleSentenceSeenProvider`). Gemessen wird nach dem Layout. Kommen zwei Tasten
+im selben Frame an, etwa `3` (eine Stunde) und gleich danach `A`, liest die Entscheidung den neuen
+Entwurf, während auf dem Schirm noch der Satz des alten steht und das Tor noch vom alten Layout
+offen ist. Gespeichert wird dann eine Regel, deren Satz nie gezeichnet wurde. Für das Halten des
+Ventils hat HUM-249 dieses Fenster geschlossen (`_HoldInputs`); für Tasten bestand es schon vor
+HUM-249.
+
+### Ziel
+Keine Taste speichert eine Regel, deren Satz nicht in einem gezeichneten Frame stand, auch wenn
+mehrere Tasten zwischen zwei Frames ankommen.
+
+### Fix-Idee
+- Das Tor synchron schließen, sobald sich eine Eingabe der Regel ändert (Entwurf, Quelle, Domain),
+  nicht erst nach dem nächsten Layout.
+- Die zu speichernde Regel mit der zuletzt gezeichneten vergleichen: die Leiste hält nach jedem
+  Frame die `ShownRule` fest, deren Satz sie gemalt hat, und die Entscheidung speichert nur genau
+  diese, sonst nichts und mit Grund.
+
+### Tests
+- Widget-Test: Raster offen mit Sitzung, `3` und `A` ohne Frame dazwischen; gespeichert wird
+  nichts oder genau die Regel des gezeichneten Satzes.
+- Mutationsbeweis: Vergleich mit der gezeichneten Regel aus, der Test wird rot.
+
+### Akzeptanzkriterien
+- [ ] Zwei Tasten in einem Frame speichern keine Regel, deren Satz nicht gezeichnet war.
+- [ ] Der Weg über das Modal und das Halten des Ventils bleiben unverändert.
+
+### Referenzen
+HUM-249 (Review Runde 3), HUM-058 (`ShownRule`), `docs/UX.md` 4.6.

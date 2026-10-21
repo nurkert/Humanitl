@@ -49,6 +49,61 @@ class _BatchModalState extends ConsumerState<BatchModal>
     curve: HMotion.enter,
   );
   final FocusScopeNode _scope = FocusScopeNode(debugLabel: 'intercept-batch');
+
+  /// Scrolls the body when it does not fit the window (HUM-249).
+  final ScrollController _body = ScrollController();
+
+  /// True once the body stood on screen to its end: it fits, or it was
+  /// scrolled there.
+  ///
+  /// Until then confirming does nothing. The body carries the rule sentence
+  /// and the paths, and a rule whose sentence was cut off by a short window
+  /// would be saved without anybody having read it (`docs/UX.md` 4.6,
+  /// `backlog/CONVENTIONS.md` 4.13). Once seen, it stays seen: scrolling
+  /// back up does not take the confirmation away again.
+  bool _seenAll = false;
+
+  /// True while the body is taller than the room the window leaves it and
+  /// was not yet seen to its end; the hint above it says why confirming
+  /// waits.
+  bool _overflows = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Erst nach dem ersten Layout weiß die Scrollposition, ob der Rumpf
+    // passt.
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) => _check());
+  }
+
+  /// Marks the body as seen when its end is on screen, and says whether it
+  /// was seen.
+  ///
+  /// Read from the scroll position as it is laid out now, so that a click in
+  /// the very frame the modal appears in is judged by what stands on screen
+  /// and not by a flag the frame after sets: a body that fits counts as seen
+  /// at once, and its confirm button never flickers from off to on.
+  bool _check() {
+    if (!mounted) {
+      return false;
+    }
+    if (_seenAll) {
+      return true;
+    }
+    if (!_body.hasClients || !_body.position.hasContentDimensions) {
+      return false;
+    }
+    final ScrollPosition position = _body.position;
+    final bool atEnd = position.pixels >= position.maxScrollExtent - 0.5;
+    if (atEnd || !_overflows) {
+      setState(() {
+        _seenAll = atEnd;
+        _overflows = !atEnd;
+      });
+    }
+    return atEnd;
+  }
+
   late final Map<ShortcutActivator, VoidCallback> _bindings =
       <ShortcutActivator, VoidCallback>{
         const SingleActivator(LogicalKeyboardKey.escape): _cancel,
@@ -59,13 +114,18 @@ class _BatchModalState extends ConsumerState<BatchModal>
     _curve.dispose();
     _fade.dispose();
     _scope.dispose();
+    _body.dispose();
     super.dispose();
   }
 
   void _cancel() => ref.read(batchConfirmProvider.notifier).cancel();
 
-  void _confirm() =>
-      unawaited(ref.read(interceptDecisionProvider.notifier).confirmBatch());
+  void _confirm() {
+    if (!_check()) {
+      return;
+    }
+    unawaited(ref.read(interceptDecisionProvider.notifier).confirmBatch());
+  }
 
   /// The rule the draft of the selection would save with [request].
   String _ruleSentence(BatchRequest request) {
@@ -132,110 +192,143 @@ class _BatchModalState extends ConsumerState<BatchModal>
         node: _scope,
         child: FadeTransition(
           opacity: _curve,
-          child: HModal(
-            key: const Key('intercept-batch-modal'),
-            width: 480,
-            onDismiss: _cancel,
-            scrimSemanticsLabel: l10n.interceptCancel,
-            title: Text(
-              forever
-                  ? l10n.interceptForeverTitle(where)
-                  : blocking
-                  ? l10n.interceptBlockManyTitle(flows.length, where)
-                  : l10n.interceptAllowManyTitle(flows.length, where),
-            ),
-            actions: <Widget>[
-              HButton(
-                key: const Key('intercept-batch-cancel'),
-                // The harmless action carries the focus: a modal that opens on
-                // the irreversible one turns `Enter` into the decision
-                // (`docs/UX.md` 5.4).
-                autofocus: true,
-                onPressed: _cancel,
-                child: Text(l10n.interceptCancel),
+          child: NotificationListener<Notification>(
+            onNotification: (Notification notification) {
+              if (notification is ScrollNotification ||
+                  notification is ScrollMetricsNotification) {
+                _check();
+              }
+              return false;
+            },
+            child: HModal(
+              key: const Key('intercept-batch-modal'),
+              width: 480,
+              bodyScrollController: _body,
+              onDismiss: _cancel,
+              scrimSemanticsLabel: l10n.interceptCancel,
+              title: Text(
+                forever
+                    ? l10n.interceptForeverTitle(where)
+                    : blocking
+                    ? l10n.interceptBlockManyTitle(flows.length, where)
+                    : l10n.interceptAllowManyTitle(flows.length, where),
               ),
-              HButton(
-                key: const Key('intercept-batch-confirm'),
-                variant: blocking
-                    ? HButtonVariant.danger
-                    : HButtonVariant.primary,
-                size: HButtonSize.md,
-                onPressed: _confirm,
-                child: Text(
-                  forever
-                      ? (blocking
-                            ? l10n.interceptForeverConfirmBlock
-                            // Eine Regel aus einer abgelaufenen Anfrage
-                            // sendet nichts (HUM-058, Zeile 7).
-                            : request.ruleOnly
-                            ? l10n.interceptForeverConfirmRuleOnly
-                            : l10n.interceptForeverConfirm)
-                      : blocking
-                      ? l10n.interceptBlockGroup(flows.length)
-                      : l10n.interceptAllowGroup(flows.length),
+              actions: <Widget>[
+                HButton(
+                  key: const Key('intercept-batch-cancel'),
+                  // The harmless action carries the focus: a modal that opens on
+                  // the irreversible one turns `Enter` into the decision
+                  // (`docs/UX.md` 5.4).
+                  autofocus: true,
+                  onPressed: _cancel,
+                  child: Text(l10n.interceptCancel),
                 ),
-              ),
-            ],
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                Text(
-                  forever
-                      ? l10n.interceptForeverBody
-                      : blocking
-                      ? l10n.interceptBlockManyBody
-                      : l10n.interceptAllowManyBody,
+                HButton(
+                  key: const Key('intercept-batch-confirm'),
+                  variant: blocking
+                      ? HButtonVariant.danger
+                      : HButtonVariant.primary,
+                  size: HButtonSize.md,
+                  // Aus erst, wenn feststeht, dass der Rumpf nicht passt;
+                  // bis dahin prüft `_confirm` selbst, was gerade dasteht.
+                  onPressed: _overflows && !_seenAll ? null : _confirm,
+                  child: Text(
+                    forever
+                        ? (blocking
+                              ? l10n.interceptForeverConfirmBlock
+                              // Eine Regel aus einer abgelaufenen Anfrage
+                              // sendet nichts (HUM-058, Zeile 7).
+                              : request.ruleOnly
+                              ? l10n.interceptForeverConfirmRuleOnly
+                              : l10n.interceptForeverConfirm)
+                        : blocking
+                        ? l10n.interceptBlockGroup(flows.length)
+                        : l10n.interceptAllowGroup(flows.length),
+                  ),
                 ),
-                if (rule.isNotEmpty) ...<Widget>[
-                  SizedBox(height: tokens.spacing.x2),
-                  Text(
-                    rule,
-                    key: const Key('intercept-batch-rule'),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: tokens.typography.mono12.tinted(tokens.colors.fg0),
-                  ),
-                ],
-                SizedBox(height: tokens.spacing.x3),
-                // The paths, so that nobody decides over a list they never
-                // saw (`backlog/CONVENTIONS.md` 4.13).
-                for (final Flow flow in flows.take(modalPathSample))
-                  Padding(
-                    padding: EdgeInsets.only(bottom: tokens.spacing.x1),
-                    child: Text(
-                      '${flow.methodLabel} ${flow.host}${flow.path}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: tokens.typography.mono12.tinted(tokens.colors.fg1),
-                    ),
-                  ),
-                if (rest > 0)
-                  Text(
-                    l10n.interceptBatchMore(rest),
-                    style: tokens.typography.ui12.tinted(tokens.colors.fg1),
-                  ),
-                // Was nicht mitgeht, steht hier: Ein Fund braucht das Ventil
-                // oder die Pause, kein Modal (HUM-207, `docs/UX.md` 4.7).
-                if (request.withheld > 0) ...<Widget>[
-                  SizedBox(height: tokens.spacing.x2),
-                  Text(
-                    l10n.interceptBatchWithheld(request.withheld),
-                    key: const Key('intercept-batch-withheld'),
-                    style: tokens.typography.ui12.tinted(tokens.colors.fg0),
-                  ),
-                ],
-                // Was unter der harten Sperre steht, geht nur bearbeitet
-                // hinaus und bleibt deshalb stehen (HUM-159).
-                if (request.locked > 0) ...<Widget>[
-                  SizedBox(height: tokens.spacing.x2),
-                  Text(
-                    l10n.interceptBatchLocked(request.locked),
-                    key: const Key('intercept-batch-locked'),
-                    style: tokens.typography.ui12.tinted(tokens.colors.fg0),
-                  ),
-                ],
               ],
+              // Solange der Rumpf nicht ganz zu sehen war, ist er ein Fokusstopp:
+              // Pfeile und Bild-ab scrollen ihn dann auch ohne Maus
+              // (`docs/UX.md` 5.1). Danach fällt der Stopp weg, und `Tab` geht
+              // wie vorher nur über die beiden Knöpfe.
+              child: Focus(
+                canRequestFocus: !_seenAll,
+                skipTraversal: _seenAll,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    if (!_seenAll && _overflows) ...<Widget>[
+                      Text(
+                        l10n.interceptBatchScrollToRead,
+                        key: const Key('intercept-batch-scroll-hint'),
+                        style: tokens.typography.ui12.tinted(tokens.colors.fg0),
+                      ),
+                      SizedBox(height: tokens.spacing.x2),
+                    ],
+                    Text(
+                      forever
+                          ? l10n.interceptForeverBody
+                          : blocking
+                          ? l10n.interceptBlockManyBody
+                          : l10n.interceptAllowManyBody,
+                    ),
+                    if (rule.isNotEmpty) ...<Widget>[
+                      SizedBox(height: tokens.spacing.x2),
+                      Text(
+                        rule,
+                        key: const Key('intercept-batch-rule'),
+                        // Ganz, nie gekürzt: Bestätigt wird genau diese Regel,
+                        // und ein abgeschnittener Satz ist einer, den niemand
+                        // ganz gelesen hat (HUM-249, `docs/UX.md` 4.6).
+                        style: tokens.typography.mono12.tinted(
+                          tokens.colors.fg0,
+                        ),
+                      ),
+                    ],
+                    SizedBox(height: tokens.spacing.x3),
+                    // The paths, so that nobody decides over a list they never
+                    // saw (`backlog/CONVENTIONS.md` 4.13).
+                    for (final Flow flow in flows.take(modalPathSample))
+                      Padding(
+                        padding: EdgeInsets.only(bottom: tokens.spacing.x1),
+                        child: Text(
+                          '${flow.methodLabel} ${flow.host}${flow.path}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: tokens.typography.mono12.tinted(
+                            tokens.colors.fg1,
+                          ),
+                        ),
+                      ),
+                    if (rest > 0)
+                      Text(
+                        l10n.interceptBatchMore(rest),
+                        style: tokens.typography.ui12.tinted(tokens.colors.fg1),
+                      ),
+                    // Was nicht mitgeht, steht hier: Ein Fund braucht das Ventil
+                    // oder die Pause, kein Modal (HUM-207, `docs/UX.md` 4.7).
+                    if (request.withheld > 0) ...<Widget>[
+                      SizedBox(height: tokens.spacing.x2),
+                      Text(
+                        l10n.interceptBatchWithheld(request.withheld),
+                        key: const Key('intercept-batch-withheld'),
+                        style: tokens.typography.ui12.tinted(tokens.colors.fg0),
+                      ),
+                    ],
+                    // Was unter der harten Sperre steht, geht nur bearbeitet
+                    // hinaus und bleibt deshalb stehen (HUM-159).
+                    if (request.locked > 0) ...<Widget>[
+                      SizedBox(height: tokens.spacing.x2),
+                      Text(
+                        l10n.interceptBatchLocked(request.locked),
+                        key: const Key('intercept-batch-locked'),
+                        style: tokens.typography.ui12.tinted(tokens.colors.fg0),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
             ),
           ),
         ),
