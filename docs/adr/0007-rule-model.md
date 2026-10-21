@@ -1,4 +1,7 @@
 # ADR-0007 · Regel-Modell: geordnete Liste, first match wins, Default `ask`
+
+Applies to: Humanitl 0.1
+
 Status: Accepted
 Datum: 2026-09-02
 

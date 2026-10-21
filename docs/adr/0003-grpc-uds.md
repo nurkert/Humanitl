@@ -1,4 +1,7 @@
 # ADR-0003 · gRPC über Unix Domain Socket als einzige Schnittstelle zum Daemon
+
+Applies to: Humanitl 0.1
+
 Status: Accepted
 Datum: 2026-09-02
 

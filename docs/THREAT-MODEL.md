@@ -1,713 +1,361 @@
-# Humanitl — Bedrohungsmodell
+# Threat model
 
-> Stand: 2026-09-02 (Entwurf, HUM-007). Verbindliche Kurzfassung: `BACKLOG.md` Abschnitt 4.
-> Die Mechanismen und ihre Prüfbefehle stehen in [`SECURITY.md`](SECURITY.md); dieses Dokument
-> beschreibt, gegen wen sie wirken und wo sie nicht wirken.
+Applies to: Humanitl 0.1
 
-Dieses Dokument ist für zwei Leser geschrieben. Wer kein Sicherheitsfachmann ist, soll nach
-Abschnitt 1 bis 3 wissen, was Humanitl verhindert und was nicht. Wer ein Review macht, soll
-jede Behauptung nachprüfen können: zu jedem Kanal steht der Mechanismus, die Datei, in der er
-implementiert wird, und der Test, der ihn beobachtet.
+This document says against whom the mechanisms of [`SECURITY.md`](SECURITY.md) work and where
+they do not. A reader without a security background should know after the first three sections
+what Humanitl prevents and what it does not. A reviewer should be able to check every claim: for
+each channel the mechanism, the file that implements it and the test that observes it are named.
 
----
+Humanitl protects two things. **Confidentiality of project data and credentials:** nothing from
+the project directory, the agent's environment or the agent's memory leaves the machine over the
+network unless a rule or a human approved that concrete request; without a matching rule a human
+sees it first, method, destination, headers, parameters and the full request body. **Integrity of
+the decision history:** what was decided, when and why cannot be rewritten later unnoticed by
+anyone who lacks the HMAC key of the audit chain. A process running as the same user can read that
+key and rebuild chain and anchors; against it the chain proves nothing (K-14).
+**Availability of the agent is explicitly not a goal:** when an isolation or decision mechanism
+fails, the agent stops, and a timeout ends in `block`, never in `allow`. One failure does not stop
+the agent at all: a recording outage stops the recording, not the traffic (HUM-250, K-16). And a
+red isolation check does stop the agent, but only after it has started, not before (K-15).
 
-## 1. Schutzziel
+Two exceptions are declared and visible: the passthrough to the language model (streamed, fully
+recorded, scanned, not held) and the project directory `/work`. A third the human writes into
+their own rules: a rule with `stream: true` lets a request whose body is above
+`limits.hold_body_cap_bytes` leave streamed, decided on its head, the body unscanned; it never
+applies while `hold.hard_block_checksum_secrets` is on.
 
-Humanitl schützt genau zwei Dinge.
+## Assets
 
-**Vertraulichkeit von Projektdaten und Zugangsdaten.** Nichts aus dem Projektverzeichnis, aus der
-Umgebung des Agenten oder aus dem Gedächtnis des Agenten verlässt die Maschine über das Netz, ohne
-dass eine Regel oder ein Mensch die konkrete Anfrage freigegeben hat. Ohne passende Regel sieht ein
-Mensch sie vorher: Methode, Ziel, Header, Parameter und der vollständige Anfrage-Body, nicht nur der
-Hostname. Eine Ausnahme ist erklärt und sichtbar: der Passthrough zum lokalen Sprachmodell wird
-gestreamt, vollständig protokolliert und auf Findings geprüft, aber nicht angehalten (Abschnitt 3,
-Kanal LLM). Ebenso offen bleibt das Projektverzeichnis `/work`. Eine zweite Ausnahme schreibt der
-Mensch selbst in seine Regeln: Eine Regel mit `stream: true` lässt eine Anfrage, deren Body über
-`limits.hold_body_cap_bytes` liegt, gestreamt hinaus. Entschieden wird dann über den Kopf (`allow`
-ohne Rückfrage, `ask` von einem Menschen, der Methode, Ziel und Header sieht), und der Body geht
-ungeprüft (Kopf und Kopfzeilen werden gescannt, der Body nicht): keine Suche nach Geheimnissen im
-Body, keine Vorschau, aufgezeichnet bis
-`limits.recorder_max_body_bytes`. Das gilt nur bei ausgeschaltetem
-`hold.hard_block_checksum_secrets`: Steht die harte Sperre an, greift `stream: true` nie, denn ein
-ungeprüfter Strom kann sie nicht einhalten, und die Aussage „keine Regel hebt die harte Sperre
-auf" bleibt unverändert. Ohne eine solche Regel oder unter der Sperre wird jede Anfrage über dem
-Cap geblockt (`docs/SECURITY.md`, Grenzen und Zeitlimits; HUM-057).
+| Asset | Where it lives | Why it matters | Protected by |
+|---|---|---|---|
+| Project data | the project directory, mounted at `/work` | client code and data under confidentiality and GDPR obligations | the three guarantees; no egress except approved requests and the declared LLM host |
+| Credentials | the host's environment, `~/.ssh`, `~/.netrc`, keyrings, tokens in other processes | a stolen token opens systems far beyond the project | PID namespace, mount allowlist, clean environment (`--clearenv`), the LLM key only as a sandbox file |
+| LLM prompts | in flight to the LLM host, in the recording | they carry whatever code the agent shows the model | declared side channel; full recording and findings scan; the user chooses the host |
+| Audit log | `$XDG_DATA_HOME/humanitl/audit/audit.jsonl`, anchors in `humanitl.db` | evidence of what an agent actually sent out | hash chain with HMAC, anchors in file and database |
+| CA key | `$XDG_DATA_HOME/humanitl/ca/ca.key`, `0600` | whoever has it can forge TLS for every connection that trusts the Humanitl CA | never in the sandbox, never in the host trust store; trusted only inside the sandbox |
 
-**Integrität der Entscheidungshistorie.** Was entschieden wurde, wann und mit welcher Begründung,
-lässt sich später nicht unbemerkt umschreiben. Das ist die Grundlage dafür, gegenüber einem
-Kunden oder einer Aufsichtsbehörde zu belegen, was ein Agent tatsächlich nach draußen gegeben
-hat.
+## Attacker
 
-**Ausdrücklich kein Schutzziel: Verfügbarkeit des Agenten.** Wenn ein Mechanismus versagt, hört
-der Agent auf zu arbeiten. Ein Timeout endet in `block`, nie in `allow`. Ein fehlgeschlagener
-Isolations-Check verhindert den Start, statt ihn mit einer Warnung zuzulassen. Ein Agent, der
-steht, ist ein akzeptabler Ausgang; ein Agent, der ungesehen sendet, nicht.
+In every case the attacker is **code running as the agent, with subverted intent**. It has the
+agent's rights: it can read and write in `/work`, start processes and talk to the proxy. It does
+not have the kernel's rights and not the host's.
 
----
-
-## 2. Angreifer
-
-### 2.1 Wer im Modell ist
-
-Der Angreifer ist in allen Fällen **Code, der als der Agent läuft, mit unterwanderter Absicht**.
-Er hat die Rechte des Agenten: er kann in `/work` lesen und schreiben, Prozesse starten und den
-Proxy ansprechen. Er hat nicht die Rechte des Kernels und nicht die des Hosts.
-
-| ID | Angreifer | Wie er hineinkommt | Was er kann | Was er nicht kann |
+| ID | Attacker | How they get in | What they can do | What they cannot do |
 |---|---|---|---|---|
-| **a** | **Prompt Injection** über geladene Inhalte | Ein README, ein Issue-Text, eine Webseite, eine Fehlermeldung eines Paket-Servers enthält Anweisungen, die das Modell als Auftrag liest | Werkzeugaufrufe des Agenten steuern: Dateien lesen, Anfragen formulieren, Text ans Modell schicken | Keine eigenen Binaries mitbringen; er arbeitet mit den Werkzeugen, die der Agent hat |
-| **b** | **Bösartige Abhängigkeit** | Ein Paket, das der Agent installiert oder ausführt (`npm install`, `pip install`, ein Build-Skript) | Beliebiger Code als der Agent-Benutzer in der Sandbox: Syscalls, eigene Netzwerkversuche, Lesen aller sichtbaren Dateien | Nichts, was der Kernel ihm verweigert; keine neuen Mounts, keine Capabilities |
-| **c** | **Kompromittiertes Modell** | Das lokale Modell selbst ist manipuliert (vergiftete Gewichte, untergeschobener Endpunkt) | Alles von (a), und es sieht zusätzlich jeden Prompt, also potenziell den gesamten Quelltext, den der Agent ihm zeigt | Nichts an der Sandbox ändern; es kann nur den Agenten steuern |
-| **d** | **Lokaler Leser der Protokolle** | Ein anderer Prozess oder ein anderer Mensch mit Dateizugriff auf `$XDG_DATA_HOME/humanitl` | Aufzeichnungen lesen, Einträge löschen oder verändern, die Datei kürzen | Die Kette unbemerkt neu bauen, solange er den HMAC-Schlüssel aus dem Keyring nicht hat |
-
-Angreifer (a) und (b) unterscheiden sich in der Mächtigkeit erheblich: (a) muss durch den Agenten
-hindurch arbeiten, (b) führt Code aus. Alle Aussagen dieses Dokuments gelten für (b), außer sie
-sagen ausdrücklich etwas anderes; damit gelten sie erst recht für (a).
-
-Angreifer (c) ist der unangenehmste, weil der Modell-Kanal in Humanitl offen ist. Wer das Modell
-kontrolliert, sieht alles, was der Agent ihm zeigt. Humanitl reduziert diesen Angreifer auf
-„der Nutzer hat sich entschieden, diesem Host zu vertrauen" und macht die Entscheidung sichtbar
-(Abschnitt 4, K-02).
-
-### 2.2 Ausdrücklich außerhalb des Modells
-
-Diese Angreifer werden nicht abgewehrt, und Humanitl behauptet nicht, es zu tun.
-
-- **Root auf dem Host.** Wer root ist, liest den CA-Schlüssel, den Keyring und den Speicher des
-  Daemons. Es gibt keine Verteidigung darunter. Dazu gehört seit HUM-257 auch die
-  Zertifikatsablage des Systems (`/etc/ssl/certs`), der der Daemon auf dem Weg zum Ziel vertraut,
-  solange `tls.trust_system_store` an ist: Eine CA, die root dort ablegt, nimmt der Daemon an, wie
-  `curl` und der Browser. Das gibt root nichts, was er nicht schon hatte.
-- **Prozesse des eigenen Kontos außerhalb der Sandbox**, die die Einrichtung des Daemons ändern
-  (`docs/SECURITY.md` 11). Das ist nicht Angreifer (d): Der liest und verändert die
-  Aufzeichnungen, und dagegen hilft die HMAC-Kette. Wer dagegen die Umgebung des Daemons oder
-  `config.toml` schreibt, richtet ihn ein. Seit HUM-257 gehört dazu, ihm `SSL_CERT_FILE` oder
-  `SSL_CERT_DIR` in die Umgebung zu legen. Diese Variablen dürfen nie auf einen Pfad zeigen, den
-  die Sandbox beschreiben kann, etwa den Projektordner: Sonst legt der Agent dort eine Wurzel ab,
-  der der Daemon beim nächsten Start vertraut. Der Daemon warnt beim Start, wenn ein solcher Pfad
-  dem Konto gehört oder für andere schreibbar ist, und die Startzeile nennt die Umlenkung
-  (`env`). Ohne diese Fehleinrichtung erreicht der Agent (a) bis (c) weder die Ablage noch die
-  Umgebung des Daemons, und ein Projekt-Profil kann `tls.*` nicht setzen.
-- **Kernel-Exploits.** Ein Fehler in der Namespace- oder seccomp-Implementierung hebt die
-  Garantien auf. Die Gegenmaßnahme ist die Wahl bewährter, weit benutzter Bausteine
-  (`bubblewrap`, seccomp-BPF) statt eigener Konstruktionen, plus zeitnahe Kernel-Updates.
-- **Physischer Zugriff**, laufende Sitzung am entsperrten Rechner, Cold-Boot-Angriffe.
-- **Manipulierte Humanitl-Binaries.** Wer das Paket austauscht, bevor es startet, kontrolliert
-  alles. Gegenmaßnahme ist Paketsignatur (HUM-060), nicht dieses Modell.
-- **Der Mensch selbst.** Wer eine Anfrage freigibt, gibt sie frei. Humanitl macht die Entscheidung
-  informiert, es trifft sie nicht.
-- **Mikroarchitektur-Seitenkanäle** (Spectre-Klasse), Timing-Angriffe auf den Host, elektro-
-  magnetische Abstrahlung.
-- **Denial of Service** gegen den Agenten oder den Daemon (siehe Abschnitt 1, kein Schutzziel).
-
----
-
-## 3. Angriffsflächen im Überblick
-
-Ein „•" bedeutet: dieser Angreifer kann diesen Kanal nutzen. Die Kanal-IDs sind dieselben wie in
-Abschnitt 4. Die Spalte „Escape-Test" nennt den automatisierten Test, der den Kanal beobachtet
-(`tests/escape/`, Definition in `BACKLOG.md` 4.5).
-
-| ID | Kanal | a | b | c | d | Gestoppt durch | Restrisiko | Escape-Test |
-|---|---|:-:|:-:|:-:|:-:|---|---|---|
-| K-01 | Projektverzeichnis `/work` | • | • | • | | nichts — der Kanal ist gewollt offen | vollständig: was der Agent schreibt, steht auf der Platte | ESC-5 |
-| K-02 | LLM-Passthrough | • | • | • | | enge Regel (Host, Port, Schema, Pfadpräfixe der Inferenz, POST und GET), vollständige Aufzeichnung | vollständig: der Modell-Host sieht jeden Prompt | — |
-| K-03 | Socket-Verzeichnis des Proxys | | • | | | Bind der Socket-**Datei**, nie des Verzeichnisses | Fehler im Proxy selbst | ESC-2 |
-| K-04 | Von seccomp erlaubte TCP-Sockets | | • | | | leeres Netz-Namespace, leere Routing-Tabelle | Loopback-Dienste innerhalb der Sandbox | ESC-1 |
-| K-05 | Unix-Sockets des Hosts (X11, Wayland, D-Bus, Docker) | | • | | | Mount-Allowlist im Profil | eine falsche Zeile im Profil öffnet ihn | ESC-2 |
-| K-06 | PID- und IPC-Namespace | | • | | | `--unshare-pid --unshare-ipc`, eigenes `/proc` | — | ESC-2 |
-| K-07 | `/proc` und `/sys` | | • | | | eigenes `procfs`, `/sys` nicht gebunden | Kernel-Informationslecks | ESC-2 |
-| K-08 | Symlinks aus `/work` heraus | | • | | | Mount-Namespace; Markierung in der Sitzungs-Zusammenfassung | der Nutzer übersieht die Markierung | ESC-5 |
-| K-09 | Terminal-Escapes (OSC 52, OSC 8, Titel) | • | • | • | | Filter im Daemon (Erlaubnisliste), Escapes im Widget abgeschaltet | Fehler im Filter oder im Widget | ESC-5 |
-| K-10 | DNS und Auflösungs-Zeitpunkt | • | • | • | | Auflösung erst nach Freigabe (ADR-006) | Zeitpunkt der Freigabe bleibt beobachtbar | ESC-3 |
-| K-11 | Queue- und Regel-Metadaten | • | • | • | | `humanitl.internal` ist lesend, `/ask` erzeugt nie eine Regel | Entscheidungs-Orakel bleibt | ESC-4 |
-| K-12 | Package-Caches | | • | | | Cache pro Projekt, nicht pro Vertrauensstufe | geteilter Cache trägt Daten zwischen Projekten | — |
-| K-13 | Direkter Netzwerk-Egress | • | • | • | | Netz-Namespace + seccomp + Capability-Drop | Kernel-Fehler | ESC-1, ESC-3 |
-| K-14 | Audit-Datei auf dem Host | | | | • | Hash-Kette mit HMAC | Kürzen am Ende, Angreifer mit Schlüssel | ESC-5 |
-| K-15 | Fenster zwischen `exec` und `SIGKILL` | | • | | | Bericht sofort nach dem Start, `SIGKILL` ohne Gnadenfrist | offen: der Proxy kennt die Isolation der Sitzung noch nicht | — |
-
-K-01 bis K-12 sind die zwölf Kanäle der Sicherheits-Review vom 2026-09-02. K-13 steht dabei, weil
-ein Modell ohne den offensichtlichsten Kanal unvollständig wäre — er ist der einzige, der als
-geschlossen gilt. K-14 steht dabei, weil sonst Angreifer (d) in keiner Zeile vorkäme. K-15 kam am
-2026-09-04 mit HUM-041 dazu: Die Prüfung, die die drei Garantien belegt, läuft erst, wenn der Agent
-schon gestartet ist.
-
----
-
-## 4. Die Kanäle im Einzelnen
-
-Schwere ist die Wirkung, **wenn** der Kanal genutzt wird, nicht die Wahrscheinlichkeit.
-Status ist entweder **MVP** (die beschriebene Minderung ist Teil von 0.1), **später** (geplant,
-mit Issue) oder **offen** (deklarierter Seitenkanal, wird nicht geschlossen, sondern gezeigt).
-
-### K-01 Projektverzeichnis `/work`
-
-*Was er ist.* Der Agent braucht Schreibzugriff auf das Projekt, sonst kann er nicht arbeiten. Alles,
-was er dort ablegt, liegt danach auf der Platte des Nutzers: auch eine Datei, die Zugangsdaten in
-Klartext enthält, oder ein Commit, der Daten in ein fremdes Repository schiebt, sobald der Mensch
-das nächste Mal pusht.
-
-*Schwere.* Hoch. Dies ist der breiteste offene Kanal.
-
-*Minderung im MVP.* Nur ein Unterpfad wird gebunden, nie `$HOME`. `work_mode = "ro"` ist möglich
-und für Analyse-Sitzungen der Vorschlag. Verzeichnisse wie `.git/hooks`, `.vscode`, `.idea` und
-`.github/workflows` werden mit einem leeren `tmpfs` überdeckt, Dateien wie `.envrc`, `.env`,
-`.git/config`, `.npmrc` und `Jenkinsfile` mit einer leeren, nur lesbaren Datei aus einem
-versiegelten `memfd` (`--ro-bind-data`, nicht `/dev/null`: der Bind eines Gerätes auf einen
-`nodev`-Mount antwortet `EACCES`). Die vollständige Liste steht in
-`profiles/sandbox/default.toml`; damit läuft ein geschriebener Hook nicht beim nächsten Commit auf
-dem Host. Zum Ende eines Sandbox-Laufs zeigt Humanitl eine Zusammenfassung der berührten Dateien,
-markiert Symlinks mit Ziel außerhalb von `/work` und führt den Findings-Scan über den Diff, nicht
-nur über die Netzwerk-Anfragen.
-
-Eingehängt wird genau das Verzeichnis, das geprüft wurde (HUM-263). Der Launcher öffnet den
-Projektordner und die Einträge aus `mounts.extra_ro` und `mounts.extra_rw` einmal als
-`O_PATH`-Deskriptor, prüft den Ort aus `/proc/self/fd/N` gegen die Mount-Politik und übergibt
-`bwrap` den Deskriptor statt des Pfades (`--bind-fd` ab bubblewrap 0.10, sonst `/proc/self/fd/N`).
-Vorher genügte Schreibrecht auf einen Elternordner, um den Ordner zwischen Prüfung und Mount gegen
-einen Symlink auf `~/.ssh` oder `~/.config/humanitl` zu tauschen: für ein anderes Konto auf dem
-Rechner oder für Angreifer (b) in einer anderen Sitzung, deren beschreibbares `/work` den neuen
-Projektordner enthält. Der Deskriptor erreicht den Agenten nicht, denn von einem
-Verzeichnis-Deskriptor des Hosts führte `openat(fd, "..")` aus der Sandbox hinaus: Mit
-`--bind-fd` schließt ihn `bwrap`, beim Rückfall der Shim vor dem Start des Agenten, und
-`escape-launch` startet ohne brauchbaren Shim nur mit `--bind-fd`. Im Daemon trägt er durchgehend
-`FD_CLOEXEC`, nur das `bwrap`-Kind verliert es zwischen `fork` und `exec`.
-
-*Restrisiko.* Ein Agent kann Daten im Projekt umschichten, verschleiern oder in einer Datei
-ablegen, die der Mensch später selbst nach außen trägt. Humanitl sieht das nur, wenn der Mensch
-den Diff liest.
-
-*Status.* Offen (deklariert). Git-Operationen host-seitig aus dem UI sind nach dem MVP vorgesehen.
-
-*Prüfung.* `profiles/sandbox/default.toml` (`[mounts]`), Escape-Test `tests/escape/esc-5-filesystem.sh`.
-
-### K-02 LLM-Passthrough
-
-*Was er ist.* Der Agent muss Code an das Sprachmodell schicken, sonst gibt es kein Produkt. Diese
-Anfragen werden nicht angehalten, sonst müsste der Mensch jede Inferenz bestätigen. Damit ist der
-Modell-Host der zweite offene Kanal — und, anders als `/work`, ein Kanal über das Netz.
-
-*Schwere.* Hoch. Wer den Modell-Host kontrolliert, sieht alles, was der Agent ihm zeigt.
-
-*Minderung im MVP.* Die Passthrough-Regel ist so eng wie möglich: exakt ein Host, ein Port, ein
-Schema, die Methoden `POST` und `GET` und eine Liste von Pfadpräfixen, die im Default nur die
-Inferenz deckt. Aufgezählt werden dort dreizehn Endpunkte (`/v1/chat/completions`,
-`/v1/completions`, `/v1/responses`, `/v1/embeddings`, `/v1/models`, `/api/chat`, `/api/generate`,
-`/api/embed`, `/api/embeddings`, `/api/tags`, `/api/show`, `/api/ps`, `/api/version`); die nackten
-Flächen `/api/` und `/v1/` fehlen mit Absicht, weil sie auch `POST /api/pull`, `DELETE /api/delete`,
-`POST /v1/files` und `POST /v1/load_lora_adapter` deckten und einen Agenten ungefragt am Bestand
-des Servers arbeiten ließen. Jeder dieser Endpunkte gilt genau, nicht als Präfix: `/v1/models`
-trifft `/v1/models?x=1`, aber nicht `/v1/models/delete` oder `/v1/models%2Fdelete` (HUM-261).
-Hinter einem Pfad-Präfix in `llm.endpoint` (`https://host/api/v1/`) liegen die fünf
-OpenAI-kompatiblen unter dessen Basis, und die Ollama-Endpunkte entfallen. Was der Mensch selbst in
-`llm.passthrough_paths` schreibt, bleibt ein Präfix. Alles andere an denselben Host wird
-normal gehalten, auch ein Pfad mit `..`-Segment (offen, `%2e%2e` oder `..;`), weil erst der Server
-ihn auflöst. Dieselbe Grenze gilt für jede Nutzerregel, die durchlässt und ein Pfadmuster oder
-Präfixe trägt. Eine Regel, die blockt oder fragt, prüft dagegen zusätzlich den aufgelösten Pfad
-und fängt so auch den Umweg (HUM-204). Der Verkehr wird vollständig aufgezeichnet und durch die Findings-Detektoren
-geschickt; ein Treffer erzeugt eine Warnung (`LLM_005`), hält aber nicht an. Eine Ausnahme gibt
-es: Steht `hold.hard_block_checksum_secrets` an, blockt die Durchreiche eine Anfrage mit einem
-prüfsummen-bestätigten Geheimnis (API-Schlüssel, JWT, IBAN, Kreditkarte) als System mit `HOLD_004`,
-statt sie durchzulassen (HUM-159). Im Isolations-Panel
-steht der Kanal als vierte, bernsteinfarbene Zeile mit dem konkreten Endpunkt.
-
-*Restrisiko.* Vollständig. Ein Angreifer, der über Prompt Injection den Agenten steuert, kann
-Projektinhalte in einen Prompt packen; der Prompt geht an den Modell-Host, ohne Rückfrage. Der
-Satz „der LLM-Host ist Teil der Vertrauensbasis" ist keine Floskel, sondern die Bedingung, unter
-der das restliche Modell gilt.
-
-Dazu kommt der Name. Steht in `llm.endpoint` ein DNS-Name, entscheidet der Resolver bei jeder
-Anfrage neu, wohin die Durchreiche führt. Wer diesen einen Namen kontrolliert, lenkt sie zwischen
-zwei Anfragen auf einen anderen Rechner — und weil die Regel `allow_private` trägt, ist auch der
-Router oder `169.254.169.254` ein gültiges Ziel; die Prüfung auf private Adressen ist für genau
-diese Regel ausgeschaltet. Das ist DNS-Rebinding an der einen Stelle, an der ADR-0006 es nicht
-verhindern kann, weil dort niemand gefragt wird. Abhilfe: eine IP-Adresse statt eines Namens, oder
-ein fester Eintrag unter `resolver.overrides`, der vor jeder Abfrage greift.
-
-Dazu kommt seit HUM-140 der Zugangsschlüssel eines Anbieters. Er liegt im Schlüsselbund des
-Systems (Rückfall: Datei `0600`), in `config.toml` steht nur sein Verweis, und der Agent bekommt
-ihn als Datei aus einem memfd, nie über `argv` oder `--setenv`. Aufgezeichnete Kopfzeilen,
-Pfade und Hosts tragen ihn als `••••`, auch URL-kodiert. Der Detektor `known-secret` findet ihn wörtlich in jeder Kopfzeile,
-in der Query und im Rumpf jeder Anfrage; kein Fund ist er nur in der Kopfzeile `Authorization`
-einer Anfrage an Host und Port von `llm.endpoint`. Der Agent kann ihn lesen und in einer Anfrage an
-ein anderes Ziel verpacken; die trägt dann den Fund `api_key:llm` (nicht im Pfad vor dem `?` und
-nicht im Host, dort maskiert nur die Aufzeichnung), angehalten wird sie an einem
-Host ohne freigebende Regel oder mit `hold.hard_block_checksum_secrets`. Umkodiert (Base64,
-zerlegt) ist er kein Treffer, und ein Rumpf wird nicht maskiert (`docs/SECURITY.md`, Abschnitt 3.1, „Der Zugangsschlüssel des Modells"). Die
-Minderung ist ein Schlüssel mit engen Rechten, den der Anbieter widerrufen kann.
-
-*Status.* Offen (deklariert). Findings-basiertes Halten und Ratenbegrenzung sind nach dem MVP
-vorgesehen.
-
-*Prüfung.* Regel im UI unter „Regeln", `humanitl rules list`, Zeile 4 des Isolations-Panels;
-für den Schlüssel `humanitl llm key status` und der Test
-`the_key_reaches_a_sandbox_file_and_nothing_else` in `daemon/crates/ipc/src/sandbox.rs`.
-
-### K-03 Socket-Verzeichnis des Proxys
-
-*Was er ist.* Die eine Tür ist ein Unix-Socket. Würde Humanitl das Verzeichnis binden, in dem der
-Socket liegt, dann wäre jede Datei, die dort später entsteht, ebenfalls in der Sandbox sichtbar —
-und der Agent könnte dort selbst Sockets anlegen, über die zwei Sandbox-Prozesse an der
-Aufzeichnung vorbei sprechen.
-
-*Schwere.* Mittel.
-
-*Minderung im MVP.* Gebunden wird die Socket-**Datei**, nicht ihr Verzeichnis. Auf dem Host liegt
-der Socket in einem eigenen Verzeichnis mit Modus 0700, getrennt vom gRPC-Socket des Daemons;
-letzterer ist in der Sandbox nicht vorhanden. Der Isolations-Check zählt die Sockets in der
-Sandbox und besteht nur bei genau einem erwarteten Pfad.
-
-*Restrisiko.* Fehler im Proxy selbst. Wer den Proxy-Prozess übernimmt, hat den Netzzugang des
-Hosts — deshalb ist der Daemon in Rust geschrieben und systemd-seitig gehärtet.
-
-*Status.* MVP.
-
-*Prüfung.* `find / -xdev -type s` in der Sandbox (ESC-2), `humanitl sandbox check`.
-
-### K-04 Von seccomp erlaubte TCP-Sockets („die seccomp-Lücke")
-
-*Was er ist.* Der Filter verbietet nicht alle Sockets. Er **muss** `socket(AF_INET|AF_INET6,
-SOCK_STREAM)` erlauben, weil genau darüber der Agent den Proxy auf `127.0.0.1:3128` erreicht. Die
-dritte Garantie ist also nicht „keine Sockets", sondern „keine anderen als diese".
-
-*Schwere.* Niedrig, solange das Netz-Namespace leer bleibt — und mittel, sobald jemand die
-Reihenfolge im Shim durcheinanderbringt.
-
-*Minderung im MVP.* Die Sicherheit dieses erlaubten Sockets trägt nicht der Filter, sondern das
-Namespace: darin existiert nur `lo`, die Routing-Tabelle ist leer, alle Capabilities sind
-gedroppt (`--cap-drop ALL`), also gibt es keine Adresse, zu der eine TCP-Verbindung aufgebaut
-werden könnte, außer der Loopback-Adresse. Ein `connect()` auf eine LAN-Adresse endet in
-`ENETUNREACH`. Zusätzlich sperrt der Filter `ptrace`, `io_uring_*`, `process_vm_*`, `pidfd_getfd`, `keyctl`,
-`add_key`, `request_key`, die Standard-Härtung `kexec_load`, `kexec_file_load`, `init_module`,
-`finit_module`, `delete_module`, `bpf`, `perf_event_open`, `userfaultfd` und alle x32-Syscalls
-und setzt `PR_SET_NO_NEW_PRIVS` vor der Anwendung.
-
-*Restrisiko.* Zwei benannte Punkte und ein behobener. Erstens: Der Elternprozess des Shims, der die Brücke hält,
-darf als einziger Prozess in der Sandbox `AF_UNIX` öffnen; sonst käme er nicht an den
-Proxy-Socket. Er trägt seit HUM-012 selbst einen Filter mit derselben Sperrliste, um genau diese
-eine Familie weiter (`SandboxSeccomp::for_bridge`), denn `TSYNC` erfasst Threads und keine
-Kinder. Der Agent kann ihn nicht per `ptrace` übernehmen, und seit HUM-138 auch nicht über
-`/proc/<pid>/mem`, `/proc/<pid>/fd` oder `pidfd_getfd(2)`: Der Elternprozess setzt nach dem
-`fork` `PR_SET_DUMPABLE` auf 0, und `ptrace_may_access` lässt dann niemanden ohne
-`CAP_SYS_PTRACE` zu, auch nicht bei gleicher UID und `kernel.yama.ptrace_scope = 0`. Das ist
-nötig geworden, weil der Elternprozess jetzt den Zuhörer des Filters hält, der verweigerte
-`socket()`-Aufrufe zählt und beantwortet; wer ihn hätte, könnte seine eigenen Aufrufe mit „weiter"
-beantworten. Einen eigenen Zuhörer bekommt der Agent ebenso wenig: Beide Filter verweigern
-`seccomp()` mit `SECCOMP_FILTER_FLAG_NEW_LISTENER`, und der Zuhörer des Elternprozesses bleibt bis
-zum Ende des Prozesses offen. Gewonnen wäre auch mit dem Elternprozess wenig: die Bridge kennt genau einen
-Zielsocket, den Proxy, und der zeichnet auf. Zweitens:
-ein Loopback-Dienst, den der Agent selbst in der Sandbox startet, ist für ihn erreichbar. Das ist
-kein Egress, sondern nur Kommunikation zwischen zwei Prozessen, die ohnehin beide dem Angreifer
-gehören.
-
-Behoben mit HUM-203 (Sicherheitsdurchlauf vom 2026-09-23, Befund M1): PID 1 der Sandbox war das
-Init von bwrap. Es trug keinen Filter, war „dumpable" und lief unter derselben UID wie der
-Agent. Bei `kernel.yama.ptrace_scope = 0` (Debian-Standard) öffnete der Agent `/proc/1/mem` mit
-`O_RDWR`, schrieb Code in PID 1 und führte ihn ohne Filter aus; `io_uring`, `keyctl`, `bpf`,
-`userfaultfd` und `perf_event_open` wären wieder erreichbar gewesen, Satz 3 gefallen. Die leere
-Netz-Namespace und die Mount-Allowlist blieben stehen. Seither startet bwrap mit `--as-pid-1`, der
-Shim-Elternprozess ist PID 1, trägt den Filter der Brücke und setzt `PR_SET_DUMPABLE` auf 0, bevor
-der Agent startet; `pidfd_getfd` steht im Boden. Die Proben `pid1_mem_rdwr`,
-`pid1_pidfd_getfd` und `pid1_not_dumpable` in ESC-1 halten das fest. Was bleibt: Die Wand
-gegen `/proc/1/mem` ist allein das Flag „nicht dumpable" (Yama ≥ 1 kommt auf manchen Hosts
-hinzu). Setzt der Shim es nicht, startet der Agent nicht: Der Shim liest das Flag vor dem Tor
-zurück und meldet sonst `CHECK seccomp_applied fail dumpable:…`, der Launcher bricht ab.
-
-*Status.* MVP.
-
-*Prüfung.* `daemon/bin/humanitl-shim/src/seccomp.rs` (die Filtertabelle ist dort die einzige
-Quelle), `grep Seccomp /proc/self/status` in der Sandbox, ESC-1.
-
-### K-05 Unix-Sockets des Hosts
-
-*Was er ist.* Ein einziger falscher Mount macht die ganze Konstruktion wertlos: `/tmp/.X11-unix`
-gibt Tastatur und Bildschirm, der Wayland-Socket dasselbe, der D-Bus-Socket erlaubt das Starten
-von Host-Prozessen, `/var/run/docker.sock` ist root auf dem Host.
-
-*Schwere.* Kritisch, wenn er eintritt.
-
-*Minderung im MVP.* Das Sandbox-Profil kennt eine Allowlist, keine Denylist: gebunden wird nur,
-was in der `bwrap`-Argumentliste steht, und die ist vollständig in `humanitl sandbox argv`
-sichtbar (Reihenfolge verbindlich in HUM-011). Im Auszug: lesend `/usr`, `/etc/ssl`,
-`/etc/alternatives`, `/etc/ld.so.cache`, die CA-Dateien, generierte `/etc/passwd`, `/etc/group`,
-`/etc/hosts` und der Shim; das Projekt unter `/work` mit `tmpfs` über `.git/hooks`, `.vscode`,
-`.idea` und den weiteren Verzeichnissen der Liste sowie leeren, nur lesbaren Dateien über `.envrc`,
-`.git/config` und den weiteren Masken; frisch angelegt `/proc`, ein minimales
-`/dev`, `tmpfs` für `/tmp` und `/dev/shm`, ein leeres `/home/agent`; dazu die Proxy-Socket-Datei.
-`$XDG_RUNTIME_DIR`, `/tmp`, `/run`, `/home`, `~/.ssh`, `~/.gitconfig`, `~/.netrc` und die
-genannten Sockets sind nicht enthalten; der Argv-Builder lehnt ein Profil mit einem dieser Pfade
-ab (`SANDBOX_006`), und der Isolations-Check sucht in der laufenden Sandbox zusätzlich nach ihnen.
-Nach dem Filter kann der Agent ohnehin kein `AF_UNIX`-Socket mehr öffnen; der Mount-Schutz ist die
-erste, der Filter die zweite Linie.
-
-*Restrisiko.* Ein Nutzer, der ein eigenes Profil schreibt und einen dieser Pfade einträgt, hebt
-den Schutz auf. Deshalb schlägt der Isolations-Check bei einem unerwarteten Socket fehl und
-verhindert den Start, statt zu warnen.
-
-*Status.* MVP.
-
-*Prüfung.* `humanitl sandbox argv` zeigt die vollständige Kommandozeile; ESC-2 liest
-`/proc/self/mountinfo` in der Sandbox.
-
-### K-06 PID- und IPC-Namespace
-
-*Was er ist.* Ohne eigenen PID-Namespace sieht der Agent alle Prozesse des Nutzers und liest über
-`/proc/<pid>/environ` deren Umgebungsvariablen — dort stehen typischerweise Tokens. Ohne eigenen
-IPC-Namespace erreicht er SysV-Shared-Memory und POSIX-Message-Queues anderer Prozesse.
-
-*Schwere.* Hoch.
-
-*Minderung im MVP.* `--unshare-pid --unshare-ipc --unshare-uts`, ein frisch gemountetes `/proc`
-für das neue Namespace, `--new-session` (kein gemeinsames Controlling-Terminal, damit
-`TIOCSTI`-Einschleusung ausscheidet) und `--die-with-parent`. PID 1 in der Sandbox ist seit
-HUM-203 der Shim selbst (`--as-pid-1`), nicht das Init von bwrap; kein Host-Prozess ist sichtbar.
-Der Shim erntet als PID 1 jede Waise (`waitpid(-1)`), sodass ein Agent die Prozesstabelle nicht
-mit Zombies füllt, und reicht `SIGTERM` und `SIGHUP` weiter. PID 1 ist nicht „dumpable":
-`/proc/1/environ` und `/proc/1/mem` gehören root (vom Host aus gesehen; in der Sandbox die Überlauf-UID 65534) und sind für den Agenten nicht
-lesbar.
-
-*Restrisiko.* Bis HUM-203 war PID 1 das ungefilterte, beschreibbare Init von bwrap (K-04,
-Befund M1); das ist behoben. Endet der Shim, endet mit ihm als Namensraum-Init die ganze
-Sandbox — gewollt, denn ohne ihn gibt es weder Brücke noch Zuhörer. Signale des Agenten an
-PID 1 treffen nur einen Prozess, der `SIGINT` ignoriert und `SIGTERM` und `SIGHUP` an den Agenten
-selbst zurückreicht; `SIGKILL` aus dem eigenen Namensraum stellt der Kernel einem Init nicht zu.
-Darüber hinaus keines bekannt, solange bwrap die Optionen wie dokumentiert umsetzt.
-
-*Status.* MVP.
-
-*Prüfung.* In der Sandbox: `ls /proc` zeigt nur Sandbox-Prozesse, `cat /proc/1/environ` scheitert
-mit `Permission denied` (PID 1 ist der nicht-dumpable Shim, HUM-203), `hostname` liefert `sandbox`
-(ESC-2, ESC-1 `pid1_not_dumpable`).
-
-### K-07 `/proc` und `/sys`
-
-*Was er ist.* Auch ein eigenes `procfs` verrät Kernel-Version, geladene Module, CPU-Details und
-über `/proc/net/*` den Zustand des Namespace. `/sys` verrät Hardware und, wenn es gebunden wäre,
-Schreibpfade in den Kernel.
-
-*Schwere.* Niedrig bis mittel: Informationsleck, kein Egress.
-
-*Minderung im MVP.* `/proc` ist das des neuen Namespace, `/sys` wird nicht gebunden. Der
-Isolations-Check liest bewusst `/sys/class/net` und `/proc/net/dev` **in** der Sandbox, damit der
-Beweis aus der Sandbox stammt und nicht vom Host behauptet wird; fehlt `/sys`, genügt
-`/proc/net/dev`.
-
-*Restrisiko.* Kernel-Informationen bleiben lesbar. Für einen Angreifer, der ohnehin Code
-ausführt, ist das kein Zugewinn.
-
-*Status.* MVP.
-
-*Prüfung.* ESC-2, Abschnitt „mountinfo".
-
-### K-08 Symlinks aus `/work` heraus
-
-*Was er ist.* Der Agent legt `/work/x -> /home/nutzer/.ssh` an und liest anschließend über den
-Pfad. In der Sandbox scheitert das, weil `/home` dort nicht existiert. Gefährlich wird der Symlink
-**nach** der Sitzung, auf dem Host, wenn ein Werkzeug des Nutzers ihm folgt.
-
-*Schwere.* Mittel.
-
-*Minderung im MVP.* Der Mount-Namespace löst Symlinks nur innerhalb der Sandbox auf, ein Ausbruch
-über den Pfad ist also nicht möglich. Zum Sitzungsende markiert die Zusammenfassung jeden neuen
-Symlink, dessen Ziel außerhalb von `/work` liegt.
-
-*Restrisiko.* Der Nutzer übersieht die Markierung.
-
-*Status.* MVP (Markierung), die host-seitige Auflösung bleibt Sache des Nutzers.
-
-*Prüfung.* ESC-5 legt `/work/x -> /home` an und erwartet den Eintrag in der Zusammenfassung.
-
-### K-09 Terminal-Escapes
-
-*Was er ist.* Der Mensch liest die Ausgabe des Agenten. Diese Ausgabe ist vom Angreifer
-kontrolliert. Mit OSC 52 schreibt sie in die Zwischenablage des Hosts, mit OSC 8 versteckt sie
-eine fremde URL hinter harmlosem Text, mit dem Titel-Escape verändert sie das Fenster.
-
-*Schwere.* Mittel: Der Weg führt über den Menschen, nicht über den Kernel.
-
-*Minderung im MVP.* **Der Daemon filtert, bevor ein Byte einen Client erreicht**, und das Widget
-registriert zusätzlich keinen OSC-Handler. Der Filter ist `humanitl_core::TerminalFilter` und hat
-zwei Politiken: `ColourOnly` für einen Strom ohne PTY (`humanitl run`, `SandboxEvent.output`),
-`FullScreen` für das Terminal der Sitzung. `FullScreen` lässt einen Vollbild-Agenten zeichnen —
-Cursor, Löschen, Scrollbereiche, Alternativschirm, Maus — und lässt von den Zeichenkettenfolgen
-nur eine kurze Erlaubnisliste von OSC-Nummern hinaus (Farbe 4, 10, 11, 104, 110, 111 und die
-Prompt-Marken 133), deren Nutzlast druckbares ASCII sein muss. Damit geht keine OSC-52-Folge
-hinaus, kein OSC 8, kein Fenstertitel (auch nicht über `CSI 22/23 t`), kein `ESC c` und keine
-DCS-, APC-, PM- oder SOS-Folge. Der Ringpuffer, aus dem ein später anhängender Client seinen
-Rückstand bekommt, hält **gefilterte** Bytes; sonst spielte ein zweiter Client genau die Folgen
-ab, die dem ersten herausgenommen wurden. Über dem Terminal steht dauerhaft der Hinweis, dass die
-Ausgabe des Agenten nicht vertrauenswürdig ist.
-
-*Restrisiko.* Fehler im Filter oder im Widget; Kopieren per Maus bleibt möglich und ist gewollt.
-Der Agent kann Text ausgeben, der wie eine Meldung von Humanitl aussieht — ein Absender in einem
-Bytestrom ist keine Beglaubigung. Deshalb steht die Aussage, auf die es ankommt („eine Anfrage
-wartet auf dich"), im Streifen **über** dem Terminal, den die Oberfläche aus dem Ereignisstrom
-zeichnet. Der Daemon schickt sie zusätzlich als eigenen Rahmen (`TerminalOutput.notice`) und nie
-im Bytestrom des Agenten: Wer am Terminal sitzt, schreibt sie sich selbst zwischen die Bytes, wer
-eine eigene Fläche hat, benutzt sie. Der eckigen Klammer des Absenders `[humanitl]` wird in allem,
-was aus dem Agenten stammt, die Klammer genommen (HUM-042).
-
-*Status.* MVP.
-
-*Prüfung.* ESC-5 lässt einen Agenten an einem echten Pseudoterminal OSC 52, OSC 8 und einen
-Fenstertitel schreiben und prüft, dass keine der Folgen einen Client erreicht
-(`osc52_does_not_reach_host`, `osc8_and_title_are_inert`).
-
-### K-10 DNS und Auflösungs-Zeitpunkt
-
-*Was er ist.* Ein Hostname trägt bis zu 63 Byte pro Label. Wer `<63 Byte kodierte Daten>.attacker.com`
-anfragt, hat exfiltriert, sobald irgendjemand diesen Namen auflöst — der autoritative Server des
-Angreifers sieht die Anfrage, auch wenn die HTTP-Verbindung nie zustande kommt. Ein Proxy, der
-vor der Entscheidung auflöst, ist damit selbst der Exfiltrationskanal.
-
-*Schwere.* Hoch.
-
-*Minderung im MVP.* Aufgelöst wird ausschließlich **nach** einer Freigabe, genau einmal, über den
-`Resolver`-Port, nie über den System-Resolver eines HTTP-Connectors. Die gefundene IP wird an die
-Verbindung gepinnt (`Egress::connect(authority, Some(ip))`), damit ein zweiter Lookup keine andere
-Adresse liefern kann (DNS-Rebinding). Löst der Name auf eine private, Loopback-, Link-Local- oder
-CGNAT-Adresse auf, wird die Verbindung verweigert, außer die Regel trägt `allow_private: true`.
-
-*Restrisiko.* Nach der Freigabe fließt der Name naturgemäß ab. Außerdem bleibt der *Zeitpunkt*
-einer Freigabe für einen Beobachter im Netz sichtbar; ein Angreifer kann daraus ein langsames
-Ein-Bit-Signal bauen, wenn der Mensch bereitwillig freigibt.
-
-*Status.* MVP (ADR-006, umgesetzt in HUM-024).
-
-*Prüfung.* ESC-3 beobachtet host-seitig, dass vor der Entscheidung kein Lookup für den
-angefragten Namen stattfindet. `tests/escape/run.sh` setzt den Daemon des Laufs mit
-`resolver.nameserver` auf einen aufzeichnenden Nameserver (`tests/escape/dns-stub.py`); an dessen
-Protokoll belegen `dns_not_before_decision`, `dns_after_allow_once` und `meta_no_dns_lookup`: kein
-gehaltener Name wird gefragt, ein freigegebener genau einmal und erst nach der Freigabe,
-`humanitl.internal` nie (HUM-115). Beobachtet wird dabei der Adapter hinter `resolver.nameserver`;
-der Namensdienst des Systems, den der Alltag benutzt, hängt am selben einzigen Aufrufpunkt nach der
-Entscheidung und ist dafür im Daemon belegt (`daemon/crates/proxy/tests/dns_after_allow.rs`).
-
-### K-11 Queue- und Regel-Metadaten
-
-*Was er ist.* Der Agent erfährt aus dem Verhalten des Systems, was erlaubt ist: eine sofortige
-Antwort bedeutet „Regel greift", ein `403` mit `reason: rule` bedeutet „ausdrücklich verboten",
-eine lange Verzögerung bedeutet „ein Mensch schaut hin". Zusätzlich beantwortet der Proxy den
-virtuellen Host `humanitl.internal` mit Status und geltenden Regeln.
-
-*Schwere.* Niedrig. Es ist ein Orakel über die Policy, kein Datenabfluss.
-
-*Minderung im MVP.* `humanitl.internal` ist absichtlich lesend gehalten und wird ohne Upstream
-beantwortet; `/ask` erzeugt eine Karte im UI und niemals eine Regel. Der Agent bekommt damit nur
-das, was ihm ohnehin durch Ausprobieren zugänglich wäre, aber ohne die Queue mit Rateversuchen zu
-fluten. Blockmeldungen enthalten optional eine Notiz des Menschen, was Rateversuche unnötig macht.
-
-*Restrisiko.* Das Orakel bleibt bestehen und ist gewollt: ein Agent, der weiß, dass PyPI erlaubt
-und GitHub gesperrt ist, belästigt den Menschen seltener.
-
-*Status.* MVP.
-
-*Prüfung.* ESC-4 prüft die Regel-Tabelle; `curl http://humanitl.internal/` in der Sandbox zeigt
-die Antwort.
-
-### K-12 Package-Caches
-
-*Was er ist.* Ein zwischen Projekten geteilter Cache (`~/.npm`, `~/.cache/pip`, `~/.cargo`) trägt
-Daten aus einem Projekt in ein anderes: ein präpariertes Paket, eine untergeschobene Datei, oder
-schlicht Quelltext, den ein Post-Install-Skript dort ablegt.
-
-*Schwere.* Mittel.
-
-*Minderung im MVP.* Caches werden pro Projekt gehalten, nicht pro Vertrauensstufe geteilt. Wer
-keinen Cache konfiguriert, bekommt keinen; dann kostet jede Installation Netz und damit eine
-Freigabe.
-
-*Restrisiko.* Wer einen gemeinsamen Cache einträgt, um Zeit zu sparen, baut den Kanal wieder auf.
-
-*Status.* MVP (Trennung), später schreibgeschützte Seed-Caches.
-
-*Prüfung.* `humanitl sandbox argv` zeigt jeden Cache-Mount namentlich.
-
-### K-13 Direkter Netzwerk-Egress
-
-*Was er ist.* Der Kanal, den man erwartet: eine TCP-Verbindung ins Internet, ein UDP-Paket, ein
-QUIC-Handshake, ein ICMP-Tunnel, ein Raw-Socket.
-
-*Schwere.* Kritisch, wenn er bestünde.
-
-*Minderung im MVP.* Er besteht nicht. Es gibt kein Interface außer `lo`, keine Route, keine
-Capability, um eines anzulegen, und der Filter verweigert `SOCK_DGRAM` und `SOCK_RAW` ebenso wie
-jede Familie außer `AF_INET`/`AF_INET6`. Abstrakte Unix-Sockets sind an das Netz-Namespace
-gebunden und damit ebenfalls tot.
-
-*Restrisiko.* Ein Kernel-Fehler. Nichts, was Humanitl abfangen könnte.
-
-*Sichtbarkeit (HUM-138).* Verweigert war der Kanal schon immer; seit HUM-138 wird der Versuch
-auch gezeigt. Jeder `socket()`-Aufruf, den der Filter verweigert, wird im Shim gezählt, je Paar
-aus Familie und Typ, und erscheint im `Sandbox`-Strom und im Isolations-Reiter. Nicht gezählt
-wird ein `connect()`, der an der leeren Routing-Tabelle scheitert (kein verweigerter Aufruf),
-und ein Angreifer (b), der vor seinen Aufrufen einen eigenen Filter lädt, kann seine Versuche
-unsichtbar machen, aber nicht erfolgreich. Die Sichtbarkeit ist ein Bericht und trägt keine der drei
-Garantien ([`SECURITY.md`](SECURITY.md) Abschnitt 2, „Was sichtbar wird und was nicht").
-
-*Status.* MVP.
-
-*Prüfung.* ESC-1 (Sockets, Interfaces, Routing, und `refusals_reported` für den Bericht) und
-ESC-3 (Egress ohne Proxy).
-
-### K-14 Audit-Datei auf dem Host
-
-*Was er ist.* Die Entscheidungshistorie liegt als JSONL-Datei im Datenverzeichnis. Wer sie ändert,
-ändert die Antwort auf die Frage „was ist damals rausgegangen".
-
-*Schwere.* Hoch für das zweite Schutzziel.
-
-*Minderung im MVP.* Jeder Eintrag trägt `seq`, `ts`, den Hash des Vorgängers und den eigenen
-Hash über kanonischem JSON; darüber liegt ein HMAC mit einem Schlüssel, der bis HUM-048 als Datei
-`keys/audit.key` (`0600`) im Datenverzeichnis liegt und danach im Keyring. Alle
-`audit.anchor_every` Records und beim Beenden steht ein Anker in der Datei und in SQLite
-(`audit_anchors`). Der Daemon prüft die Kette mit `AuditVerifier` (HUM-050); `humanitl audit
-verify` gibt es seit HUM-070. Es fragt zuerst den Daemon; antwortet der nicht, prüft es die Datei
-ohne Schlüssel und ohne Anker und schreibt das in seine Ausgabe
-([`SECURITY.md`](SECURITY.md) Abschnitt 8).
-
-*Restrisiko.* Ausführlich in [`SECURITY.md`](SECURITY.md) Abschnitt 8. Kurz: Erkannt wird das
-nachträgliche Ändern, Löschen oder Umordnen durch jemanden, der Dateizugriff hat, aber den
-Schlüssel nicht. Nicht erkannt wird ein Angreifer, der als derselbe Nutzer läuft und damit
-Schlüssel, Datei **und** Datenbank besitzt — er baut Kette und Anker neu. Ebenso wenig erkannt wird
-das Kürzen des Endes hinter dem letzten Anker. Mit `audit.retention_days` über `0` löscht der
-Daemon den Anfang der Kette selbst und dokumentiert den Schnitt mit einem versiegelten
-`audit.pruned` (HUM-157). Die Prüfung erkennt nur einen so dokumentierten Anfang an; einen anderen
-meldet sie weiter als Bruch. Was in den gelöschten Records stand, belegt die Kette danach nicht
-mehr, und eine Kette, die nicht hält, kürzt der Lauf nicht
-([`SECURITY.md`](SECURITY.md) Abschnitt 8, „Aufbewahrung der Kette"). Mit `audit.max_bytes` über
-`0` (HUM-194) schneidet derselbe Lauf auch nach Größe; dann bestimmt die Menge der Records, wie
-lange ein Record bleibt, und ein Agent mit vielen Anfragen kann frühere Records schneller aus der
-Datei drängen. Unbemerkt bleibt das nicht: Jeder Schnitt steht als `audit.pruned` in der Kette.
-Die Vorgabe ist `0`.
-
-*Status.* MVP (Kette, Anker in Datei und SQLite, dokumentierte Löschung am Anfang), externes
-Anchoring später.
-
-*Prüfung.* ESC-5 (`audit_delete_is_detected`, `audit_truncate_is_detected`) löscht in der Kette
-eines echten Daemons einen Eintrag und kürzt ihr verankertes Ende und erwartet in beiden Fällen
-einen Bruch. `daemon/crates/audit/tests/retention.rs` kürzt den Anfang ohne dokumentierenden
-Record, weiter als der Record sagt, und mit einem ohne Schlüssel gefälschten `audit.pruned`, und
-erwartet jedes Mal `SeqGap`.
-
----
-
-### K-15 Das Fenster zwischen `exec` und `SIGKILL`
-
-*Was er ist.* Der Shim meldet die drei Garantien und startet den Agenten unmittelbar danach; er
-erzwingt nichts (`CONVENTIONS.md` 4.12). Der Wirt liest den Bericht erst danach. Zwischen dem
-`exec` des Agenten und dem `SIGKILL` des Daemons läuft der Agent in einer Sandbox, deren Isolation
-noch nicht belegt ist: Die Brücke steht, der Proxy nimmt an, eine `allow`-Regel leitet ohne
-Menschen weiter, und die Durchreiche zum Modell streamt.
-
-*Schwere.* Hoch. Im Fall `SANDBOX_015` ist genau der zweite Socket, den die Prüfung beanstandet, in
-diesem Fenster benutzbar.
-
-*Minderung im MVP.* Das Fenster ist so kurz wie es ohne den Proxy geht: Der Bericht wird sofort
-nach dem Start gelesen, und der Daemon beendet die Sandbox ohne Gnadenfrist (`SIGKILL` statt
-`SIGTERM` plus fünf Sekunden) und wartet nur einmal. Im Normalfall sind das Millisekunden.
-Zusätzlich hält jede Anfrage, die keine Regel entscheidet, ohnehin an einem Menschen — das Fenster
-wirkt nur über Regeln, die schon `allow` sagen, und über die erklärte Durchreiche.
-
-*Obere Schranke.* Nicht eine Frist, sondern ihre Summe: `REPORT_TIMEOUT` (5 s), bis ein
-ausbleibender Bericht als ausgeblieben gilt, plus `KILL_GRACE` (5 s) für das Einsammeln nach dem
-`SIGKILL` — im Daemon zusammen **bis zu 10 s**. Auf den Wegen `humanitl sandbox run` und
-`escape-launch` kommt eine weitere `KILL_GRACE` dazu, weil sie mit `SIGTERM` beginnen: **bis zu
-15 s**.
-
-*Restrisiko.* Ein Agent, der in dieser Zeit gezielt eine erlaubte Verbindung aufbaut.
-
-*Status.* Offen, und auf **jedem** Weg in die Sandbox gleich: `escape-launch` und `humanitl sandbox
-run` starten ebenso erst und prüfen danach. Keiner von ihnen ist fail-closed in dem Sinn, dass der
-Befehl nicht liefe. Es zu schließen heißt, dass der Proxy Verbindungen ablehnt, solange die
-Isolation der laufenden Sitzung nicht belegt ist; das ist ein eigenes Issue (`humanitl-proxy` liegt
-innerhalb von `humanitl-ipc`, die Naht gehört deshalb in eine innere Crate). Bis dahin gilt: Ein
-roter Isolations-Check **beendet** die Sitzung, er **verhindert** sie nicht.
-
-*Prüfung.* `daemon/crates/ipc/tests/sandbox_start.rs`
-(`a_second_socket_in_the_project_stops_the_start`) belegt, dass die Sitzung beendet wird und nie
-`running` meldet. Dass in dem Fenster nichts hinausgeht, ist **nicht** belegt. Die Escape-Tests
-belegen es auch nicht: Sie laufen selbst in dieser Sandbox und messen von innen, was dort gilt —
-über die Zeit zwischen `exec` und `SIGKILL` sagen sie nichts.
-
-## 5. Annahmen
-
-Die Argumentation dieses Dokuments steht und fällt mit sechs Annahmen. Die ersten vier sind die
-tragenden, die letzten beiden die selbstverständlichen, die trotzdem jemand aufschreiben muss.
-
-| ID | Annahme | Wie man sie prüft |
+| **a** | **Prompt injection** through loaded content | a README, an issue text, a web page, an error message of a package server contains instructions the model reads as a task | steer the agent's tool calls: read files, formulate requests, send text to the model | bring their own binaries; they work with the tools the agent has |
+| **b** | **Malicious dependency** | a package the agent installs or runs (`npm install`, `pip install`, a build script) | arbitrary code as the agent user in the sandbox: syscalls, own network attempts, reading every visible file | anything the kernel refuses; no new mounts, no capabilities |
+| **c** | **Compromised model** | the local model itself is manipulated (poisoned weights, a substituted endpoint) | everything of (a), and it sees every prompt, potentially the whole source the agent shows it | change anything about the sandbox; it can only steer the agent |
+| **d** | **Local reader of the records** | another process or person with file access to `$XDG_DATA_HOME/humanitl` | read recordings, delete or change entries, truncate the file | rebuild the chain unnoticed without the HMAC key |
+
+(a) and (b) differ a lot in power: (a) has to work through the agent, (b) runs code. Every
+statement here holds for (b) unless it says otherwise, and therefore for (a) as well. (c) is the
+most unpleasant, because the model channel is open; Humanitl reduces it to "the user chose to trust
+this host" and makes that choice visible (K-02).
+
+## Trust boundaries
+
+```
+ +--------------------------- host, one user account -----------------------------+
+ |                                                                                 |
+ |  +------------------------+   gRPC over UDS    +------------------------------+ |
+ |  | humanitl app / CLI     | <----------------> | humanitld (systemd --user)   | |
+ |  | shows, decides         |   daemon.sock 0600 | proxy, rules, recorder,      | |
+ |  | (trusted for the       |   + token          | audit, sandbox control       | |
+ |  |  decision, not for     |                    | CA key, audit key            | |
+ |  |  isolation)            |                    +---------+---------+----------+ |
+ |  +------------------------+                       (B2)    |         |  (B3)      |
+ |                                       proxy.sock (file)   |         |            |
+ |  - - - - - - - - - - - - - - - - - - - - - - - - - - - - -|- - - - -|- - - - - - |
+ |  (B1) sandbox: bwrap, own net/pid/ipc/uts/user/cgroup ns  |         |            |
+ |  +--------------------------------------------------------v--+      |            |
+ |  | shim (PID 1): bridge 127.0.0.1:3128 -> proxy.sock          |      |            |
+ |  | agent: seccomp filter, no interface but lo                 |      |            |
+ |  | /work (project, ro|rw) <---- shared with the host --------------------- (B4)   |
+ |  +------------------------------------------------------------+      |            |
+ +----------------------------------------------------------------------|------------+
+                                                                        |
+                     LLM host (LAN, passthrough rule, recorded)  <------+------>  internet
+                                                                   (only after approval)
+```
+
+- **B1, sandbox to host.** The kernel boundary: namespaces, seccomp, no capabilities. Everything
+  inside is attacker-controlled.
+- **B2, the one door.** The proxy socket file. Every byte through it is parsed by the daemon,
+  which is why the daemon is memory-safe Rust and hardened by systemd.
+- **B3, daemon to the network.** Only after a rule or a human allowed the request, resolved once
+  after the decision, pinned to the address found.
+- **B4, `/work`.** Shared by design. What the agent writes there, the host's tools may later run
+  or a human may carry out.
+- **The window and the CLI** sit on the host side. They cannot weaken the sandbox, but they show
+  the human what they decide about.
+
+## Attack surface
+
+The twelve channels of the security review of 2026-09-02. Severity is the impact **if** the
+channel is used, not its likelihood. Status is `mitigated` (a mechanism in 0.1 closes or contains
+it), `declared` (deliberately open, shown in the application, not closed) or `open` (a known gap
+without a mechanism yet).
+
+| ID | Channel | Attackers | Severity | Mitigation in 0.1 | Status | Test |
+|---|---|---|---|---|---|---|
+| K-01 | project directory `/work` | a, b, c | high | only a subpath; hooks, CI and editor directories and secret files masked; session summary with touched files, outward symlinks and a secret scan | declared | ESC-5 |
+| K-02 | LLM passthrough | a, b, c | high | exact rule on host, port, scheme, methods and exact inference endpoints; full recording; findings warn | declared | - |
+| K-03 | socket directory of the proxy | b | medium | the socket **file** is bound, never its directory | mitigated | ESC-2 |
+| K-04 | TCP sockets allowed by seccomp | b | low | empty network namespace and routing table; parent filtered and not dumpable | mitigated | ESC-1 |
+| K-05 | host Unix sockets (X11, Wayland, D-Bus, Docker) | b | critical | mount allowlist, denylist in the argument builder (`SANDBOX_006`), `AF_UNIX` refused | mitigated | ESC-2 |
+| K-06 | PID and IPC namespace | b | high | own PID, IPC and UTS namespaces, own `/proc`, `--new-session`, shim as non-dumpable PID 1 | mitigated | ESC-1, ESC-2 |
+| K-07 | `/proc` and `/sys` | b | low | the namespace's own `procfs`, `/sys` not bound | mitigated | ESC-2 |
+| K-08 | symlinks out of `/work` | b | medium | resolved inside the mount namespace; marked in the session summary (`SANDBOX_022`) | mitigated | ESC-5 |
+| K-09 | terminal escapes (OSC 52, OSC 8, titles) | a, b, c | medium | allowlist filter in the daemon before any client; no OSC handler in the widget | mitigated | ESC-5 |
+| K-10 | DNS and the time of resolution | a, b, c | high | resolution only after approval (ADR-006), pinned address | mitigated | ESC-3 |
+| K-11 | queue and rule metadata | a, b, c | low | `humanitl.internal` is read-only, `/ask` never creates a rule; the policy oracle stays | declared | ESC-4 |
+| K-12 | package caches | b | medium | caches per project, not per trust level; none unless configured | declared | - |
+
+Four further channels complete the model:
+
+| ID | Channel | Attackers | Severity | Mitigation in 0.1 | Status | Test |
+|---|---|---|---|---|---|---|
+| K-13 | direct network egress | a, b, c | critical | network namespace, seccomp, no capabilities | mitigated | ESC-1, ESC-3 |
+| K-14 | audit file on the host | d | high | hash chain with HMAC, anchors in file and SQLite; mitigated only against an attacker without the HMAC key: not against a same-user process that has the key, not a cut behind the last anchor | declared | ESC-5 |
+| K-15 | the window between `exec` and `SIGKILL` | b | high | report read at once, `SIGKILL` without grace | open | - |
+| K-16 | recording outage | a, b, c | medium | outage reported to every client once per cause, cards marked "not recorded", first approval paused | declared | `daemon/crates/recorder` health tests, golden `states_recorder_failure` |
+
+K-13 is the obvious channel and the only one considered closed outright. K-14 is here so that
+attacker (d) appears in a row. K-15 came with HUM-041: the check that proves the guarantees runs
+when the agent has already started. K-16 came with HUM-250: an attacker who can fill the disk can
+make approved traffic leave without a record.
+
+### K-01 The project directory `/work`
+
+The agent needs write access to the project. Whatever it leaves there is on the user's disk
+afterwards: a file with credentials in plain text, or a commit that pushes data into a foreign
+repository the next time the human pushes. Only a subpath is bound, never `$HOME`;
+`work_mode = "ro"` is the suggestion for analysis sessions. Directories like `.git/hooks`,
+`.vscode`, `.idea` and `.github/workflows` are covered with an empty `tmpfs`, files like `.envrc`,
+`.env`, `.git/config`, `.npmrc` and `Jenkinsfile` with an empty read-only file from a sealed memfd
+(full list in `profiles/sandbox/default.toml`), so a written hook does not run on the host at the
+next commit. The project directory and `mounts.extra_ro`/`mounts.extra_rw` are opened once as
+descriptors, checked at the location `/proc/self/fd/N` names and bound by descriptor (HUM-263), so
+swapping a directory for a symlink between check and mount no longer works; the descriptor never
+reaches the agent. *Residual risk:* the agent can rearrange, disguise or plant data in the project
+that a human later carries out; Humanitl sees that only if the human reads the diff.
+
+### K-02 The LLM passthrough
+
+The agent must send code to the model; these requests are not held. The model host is therefore
+the second open channel and, unlike `/work`, one over the network. The rule is as narrow as
+possible: one host, one port, one scheme, `POST` and `GET`, and thirteen exact inference endpoints
+instead of the surfaces `/v1/` and `/api/` (HUM-261); a path with `..` segments is held (HUM-204).
+Traffic is recorded and scanned (`LLM_005`), and with `hold.hard_block_checksum_secrets` a
+checksum-confirmed secret is blocked (`HOLD_004`). The access key of a provider (HUM-140) lives in
+the system keyring and reaches the agent only as a sandbox file; it is masked in the recording and a
+finding everywhere except in `Authorization` towards `llm.endpoint`. *Residual risk:* complete.
+Whoever steers the agent through prompt injection can put project content into a prompt. If
+`llm.endpoint` is a name, whoever controls that name can redirect the passthrough between two
+requests, and because the rule carries `allow_private`, the router or `169.254.169.254` are valid
+targets; use an address or `resolver.overrides`. The agent can read the key and send it elsewhere,
+where it is a finding but held only at a host without an allowing rule.
+
+### K-03 The socket directory of the proxy
+
+If Humanitl bound the directory holding the socket, every file created there later would be visible
+in the sandbox, and the agent could create sockets there through which two sandbox processes talk
+past the recording. The socket **file** is bound, the host directory has mode `0700` and is
+separate from the daemon's gRPC socket, which does not exist in the sandbox. The isolation check
+counts the sockets in the sandbox. *Residual risk:* a bug in the proxy itself; whoever takes over
+the proxy process has the host's network, which is why the daemon is Rust and hardened.
+
+### K-04 TCP sockets allowed by seccomp
+
+The filter must allow `socket(AF_INET|AF_INET6, SOCK_STREAM)`, because that is how the agent
+reaches the proxy. Guarantee 3 is therefore not "no sockets" but "no others". The safety of this
+socket is carried by the namespace: only `lo`, an empty routing table, no capabilities, so
+`connect()` to a LAN address ends in `ENETUNREACH`. The shim parent holding the bridge is the only
+process allowed `AF_UNIX`; it carries a filter with the same deny list plus that one family, and is
+not dumpable since HUM-138, so `ptrace`, `/proc/<pid>/mem`, `/proc/<pid>/fd` and `pidfd_getfd(2)`
+are refused to the agent even with the same UID. Both filters refuse `seccomp()` with
+`SECCOMP_FILTER_FLAG_NEW_LISTENER`. Fixed with HUM-203 (finding M1 of 2026-09-23): PID 1 used to be
+bwrap's unfiltered, dumpable init, writable through `/proc/1/mem` at `ptrace_scope = 0`; the shim is
+now PID 1, filtered and non-dumpable, and refuses to start the agent if the flag cannot be set.
+*Residual risk:* a loopback service the agent starts itself is reachable for it; that is
+communication between two processes that both belong to the attacker, not egress.
+
+### K-05 Host Unix sockets
+
+One wrong mount voids everything: `/tmp/.X11-unix` gives keyboard and screen, the Wayland socket
+the same, D-Bus starts host processes, `/var/run/docker.sock` is root on the host. The profile is an
+allowlist; the full bwrap line is visible in `humanitl sandbox argv`; the argument builder refuses
+`$XDG_RUNTIME_DIR`, `/tmp`, `/run`, `/home`, `~/.ssh`, `~/.gitconfig`, `~/.netrc` and these sockets
+(`SANDBOX_006`); the isolation check looks for unexpected sockets in the running sandbox; and after
+the filter `AF_UNIX` is refused anyway. *Residual risk:* a user writing their own profile that adds
+a file mount (not a socket) such as `~/.ssh` read-only; the check does not see file mounts.
+
+### K-06 PID and IPC namespace
+
+Without its own PID namespace the agent would see every process of the user and read tokens from
+`/proc/<pid>/environ`; without its own IPC namespace it would reach shared memory and message
+queues. The sandbox has its own PID, IPC and UTS namespaces, a fresh `/proc`, `--new-session` (no
+shared controlling terminal, so no `TIOCSTI` injection) and `--die-with-parent`. PID 1 is the shim
+(HUM-203), which reaps orphans and relays `SIGTERM` and `SIGHUP`; it is not dumpable, so
+`/proc/1/environ` and `/proc/1/mem` are unreadable for the agent. *Residual risk:* none known, as
+long as bwrap implements the options as documented.
+
+### K-07 `/proc` and `/sys`
+
+Even an own `procfs` reveals kernel version, modules and CPU details; `/sys` would reveal hardware
+and, if bound, write paths into the kernel. `/proc` is the new namespace's, `/sys` is not bound.
+*Residual risk:* kernel information stays readable; for an attacker who already runs code that is
+no gain.
+
+### K-08 Symlinks out of `/work`
+
+The agent creates `/work/x -> /home/user/.ssh`. Inside the sandbox it leads nowhere, because `/home`
+does not exist there. It becomes dangerous **after** the session, on the host, when a tool of the
+user follows it. The session summary marks every new symlink whose target lies outside `/work`
+(`SANDBOX_022`), and the daemon reads the tree with `openat2` and `RESOLVE_BENEATH |
+RESOLVE_NO_SYMLINKS`, never following a link. *Residual risk:* the user overlooks the mark.
+
+### K-09 Terminal escapes
+
+The agent's output is attacker-controlled. OSC 52 writes to the host clipboard, OSC 8 hides a
+foreign URL behind harmless text, title escapes change the window. The daemon filters before any
+byte reaches a client (`humanitl_core::TerminalFilter`, policies `ColourOnly` and `FullScreen`), in
+three spellings of every introducer and only as well-formed UTF-8; the ring buffer for late clients
+holds filtered bytes; the widget registers no OSC handler. *Residual risk:* a bug in filter or
+widget, and text that merely looks like a Humanitl message, which is why the "a request waits"
+statement stands in a strip above the terminal drawn from the event stream.
+
+### K-10 DNS and the time of resolution
+
+A host name carries up to 63 bytes per label. Whoever asks for `<encoded data>.attacker.example`
+has exfiltrated as soon as anyone resolves it. Humanitl resolves only **after** approval, once,
+through the `Resolver` port, and pins the address; private, loopback, link-local and CGNAT
+addresses are refused unless the rule carries `allow_private`. *Residual risk:* after approval the
+name leaves by nature, and the *time* of an approval stays observable, a slow one-bit signal if the
+human approves readily.
+
+### K-11 Queue and rule metadata
+
+The agent learns from behaviour what is allowed: an immediate answer means a rule, a `403` with
+`reason: rule` an explicit block, a long delay a human looking. The proxy also answers the virtual
+host `humanitl.internal` with status and rules. That host is read-only and answered without
+upstream; `/ask` creates a card in the window, never a rule. *Residual risk:* the oracle stays, by
+design: an agent that knows PyPI is allowed and GitHub blocked bothers the human less.
+
+### K-12 Package caches
+
+A cache shared across projects (`~/.npm`, `~/.cache/pip`, `~/.cargo`) carries data from one project
+into another. Caches are per project, and whoever configures none gets none. *Residual risk:*
+whoever adds a shared cache to save time rebuilds the channel.
+
+### K-13 Direct network egress
+
+A TCP connection to the internet, a UDP packet, a QUIC handshake, an ICMP tunnel, a raw socket: none
+exists. There is no interface but `lo`, no route, no capability to create one, and the filter
+refuses `SOCK_DGRAM`, `SOCK_RAW` and every family except `AF_INET`/`AF_INET6`. Refused `socket()`
+calls are counted and shown since HUM-138; a `connect()` failing at the empty routing table is not.
+*Residual risk:* a kernel bug.
+
+### K-14 The audit file on the host
+
+Whoever changes the JSONL file changes the answer to "what went out back then". Every record
+carries `seq`, `ts`, the predecessor's hash and its own over canonical JSON, sealed with HMAC; every
+`audit.anchor_every` records and at shutdown an anchor stands in the file and in `audit_anchors`.
+*Residual risk:* an attacker running as the same user has key, file and database and can rebuild
+everything; truncating behind the last anchor is not detected; retention deletes the start of the
+chain, documented by a sealed `audit.pruned` (details in
+[`SECURITY.md`](SECURITY.md#8-the-audit-log)).
+
+### K-15 The window between `exec` and `SIGKILL`
+
+The shim reports the three guarantees and starts the agent right after; it enforces nothing
+(`CONVENTIONS.md` 4.12). Between the agent's `exec` and the daemon's `SIGKILL` the agent runs in a
+sandbox whose isolation is not proven yet: the bridge stands, the proxy accepts, an `allow` rule
+forwards without a human, the passthrough streams. In the case of `SANDBOX_015` the second socket
+the check complains about is usable in that window. The daemon reads the report at once and kills
+without grace; the upper bound is 10 s in the daemon and 15 s for `humanitl sandbox run` and
+`escape-launch`. Every request no rule decides still waits for a human. Closing it means the proxy
+refuses connections until the isolation is proven, a separate issue. `a_second_socket_in_the_project_stops_the_start`
+in `daemon/crates/ipc/tests/sandbox_start.rs` proves the session is stopped and never reported as
+running; that nothing leaves in the window is **not** proven.
+
+### K-16 Recording outage
+
+If the recorder cannot open or write its database (disk full, database locked, read-only file),
+approved requests and the passthrough still leave, but are not recorded. Attackers (a) to (c) can
+provoke this by filling the disk from `/work`. The daemon sends `RECORDER_001` or `RECORDER_003` to
+every client once per cause, and first to a client that connects during the outage; the status bar
+turns red, every new card says "not recorded", and the first approval of the session pauses for a
+confirmation. `RECORDER_005` ends the outage. Lost flows are not written afterwards. *Residual
+risk:* traffic during the outage, above all through `allow` rules and the passthrough, which no
+human sees, has no record; the claim "both are recorded" is visibly false for that time.
+
+## Assumptions
+
+| ID | Assumption | How to check it | If it breaks |
+|---|---|---|---|
+| A-1 | `bubblewrap` 0.8 or newer is installed and may create unprivileged user namespaces | `bwrap --version`; `sysctl kernel.unprivileged_userns_clone` or `/proc/sys/kernel/apparmor_restrict_unprivileged_userns` | no session starts; no weaker fallback, a diagnostic with the fixing command |
+| A-2 | the kernel is 5.4 or newer (the minimum `humanitl doctor` checks, tested from 5.10) with seccomp-BPF | `uname -r`; `grep Seccomp /proc/self/status` | the shim child cannot install the filter and stops before `exec` (`SANDBOX_016`, or `SANDBOX_013` without a report) |
+| A-3 | the human reads what they approve | not technically checkable; the window makes reading cheap: findings first, full body, destination as identity | Humanitl is a recorder, not a protection; the history still shows what was approved |
+| A-4 | the LLM host is under the user's control | `humanitl config get llm.endpoint`; line 4 of the isolation panel | the model channel is full access to everything the agent sends the model |
+| A-5 | the host is not compromised | package signature, `systemctl --user status humanitld` | every statement here is void |
+| A-6 | the sandbox profiles are the shipped ones or deliberately changed ones | `humanitl sandbox argv` | an extra socket fails the isolation check; an extra file mount is visible only in the bwrap line |
+
+## Out of scope
+
+These attackers are not defended against, and Humanitl does not claim to:
+
+- **Host compromise.** Root on the host reads the CA key, the keyring and the daemon's memory, and
+  can place a CA in the system store the daemon trusts towards destinations (HUM-257). Kernel
+  exploits that break namespaces or seccomp belong here too; the countermeasure is the choice of
+  well-used components and timely kernel updates.
+- **Processes of the same account outside the sandbox** that change the daemon's setup: its
+  environment (for example `SSL_CERT_FILE`, `SSL_CERT_DIR`) or `config.toml`. That is not attacker
+  (d), who changes records; whoever configures the daemon is trusted.
+- **Physical access**, an unlocked session, cold-boot attacks, memory dumps.
+- **A malicious user.** Whoever approves a request approves it. Humanitl informs the decision, it
+  does not make or overrule it. Manipulated Humanitl binaries belong here too; their
+  countermeasure is the package signature (HUM-060).
+- **Microarchitectural and timing side channels**, electromagnetic emanation.
+- **Denial of service** against the agent or the daemon.
+
+## Residual risks
+
+- **Unrecorded traffic during a recording outage** (K-16). Traffic continues while the recorder
+  cannot write; the window says so, but what leaves through rules and the passthrough in that time
+  has no record.
+- **The audit chain against the same user** (K-14). A process of the same account has the HMAC key
+  and the database and can rewrite history; only external anchoring (post-MVP) would change that.
+
+- **The LLM host is shared trust.** Everything the agent shows the model, the model host sees. If
+  the host is shared, foreign or compromised, no sandbox helps; the channel is open by design.
+  Whoever has no machine of their own switches the passthrough off and lets inference be held.
+- **Exfiltration through `/work`.** All three attackers can write into the project. Humanitl shows
+  the touched files, symlinks and secrets at the end of a run, but whatever a human later commits,
+  pushes or mails leaves without Humanitl.
+- **The human as classifier.** A base64 body to `api.github.com` looks legitimate. Humanitl puts
+  findings first, groups by host, removes noise with rules, asks back before approving whole
+  groups and lets a timeout end in `block`. It cannot read the human's attention.
+
+## Change history
+
+| Date | Change | Reason |
 |---|---|---|
-| A-1 | `bubblewrap` ≥ 0.8 ist installiert und darf nicht-privilegierte User-Namespaces anlegen | `bwrap --version`; `sysctl kernel.unprivileged_userns_clone` beziehungsweise `/proc/sys/kernel/apparmor_restrict_unprivileged_userns` |
-| A-2 | Der Kernel ist ein 5.x oder neuer (getestete Untergrenze 5.10) und hat seccomp-BPF mit `SECCOMP_FILTER_FLAG_TSYNC` | `uname -r`; `grep CONFIG_SECCOMP_FILTER /boot/config-$(uname -r)`; `grep Seccomp /proc/self/status` |
-| A-3 | Der Mensch liest, was er freigibt | Nicht technisch prüfbar. Das UI ist darauf ausgelegt, das Lesen billig zu machen: Findings zuerst, Body vollständig, Ziel als Klartext-Identität |
-| A-4 | Der LLM-Host ist unter Kontrolle des Nutzers | `humanitl config get llm.endpoint`; Zeile 4 des Isolations-Panels |
-| A-5 | Der Host ist nicht kompromittiert (kein Root-Angreifer, kein manipuliertes Humanitl-Binary) | Paketsignatur, `systemctl --user status humanitld` |
-| A-6 | Die Sandbox-Profile sind die ausgelieferten oder vom Nutzer bewusst geänderten | `humanitl sandbox argv` zeigt die vollständige Kommandozeile, `git diff` auf `profiles/` |
+| 2026-09-02 | First version: four attackers, fourteen channels, six assumptions | HUM-007, security review of the same day |
+| 2026-09-04 | K-15 added: a red isolation check stops the session instead of preventing it | HUM-041 |
+| 2026-09-23 | K-02: `allow`/`redact` path patterns never match `..` segments; `block`/`ask` also check the resolved path | HUM-204 |
+| 2026-09-23 | K-04, K-06: the shim is PID 1, filtered and not dumpable; `pidfd_getfd` in the floor | HUM-203 |
+| 2026-09-23 | K-13 visible: refused `socket()` calls counted through a seccomp listener in the shim parent | HUM-138 |
+| 2026-09-24 | Hard block: a checksum-confirmed secret is held for editing; `Allow` refused with `HOLD_004` | HUM-159 |
+| 2026-10-06 | K-02: the provider access key in the system keyring, to the agent only as a sandbox file, masked in the recording | HUM-140 |
+| 2026-10-19 | `stream: true` as the declared exception to buffering, never under the hard block | HUM-057 |
+| 2026-10-20 | The daemon trusts the system certificate store towards destinations; opt-out `tls.trust_system_store` | HUM-257 |
+| 2026-10-20 | K-02: generated passthrough endpoints match exactly, not as prefixes | HUM-261 |
+| 2026-10-21 | K-01: project and extra mounts bound by descriptor | HUM-263 |
+| 2026-10-21 | Recording outage reaches every client and the window | HUM-250 |
+| 2026-10-21 | Translated to English and brought to the state of the code for 0.1 | HUM-059 |
 
----
-
-## 6. Wenn eine Annahme bricht
-
-**A-1 bricht** (bwrap fehlt, ist zu alt oder User-Namespaces sind gesperrt). Dann startet keine
-Sitzung. Humanitl fällt nicht auf eine schwächere Isolation zurück und bietet auch kein „trotzdem
-starten" an; es liefert ein `Diagnostic` mit dem konkreten Befehl, der das Problem behebt
-(Paket installieren, `apparmor_restrict_unprivileged_userns` setzen). Der Ausfall ist laut und
-vollständig, weil ein stiller Rückfall genau die Behauptung zerstören würde, für die es das
-Programm gibt.
-
-**A-2 bricht** (Kernel zu alt oder seccomp deaktiviert). Das Shim-Kind kann den Filter nicht
-setzen und bricht vor dem `exec` des Agenten ab, Exit-Code 3, Diagnostic `SANDBOX_016` (`SANDBOX_013`, falls kein Prüfbericht übermittelt wurde). Die
-erste und zweite Garantie stünden weiterhin, doch die dritte fehlt, und die dritte ist die, die den Fall abdeckt,
-in dem eine Abhängigkeit eigenen Code ausführt. Darum ist das ein Startabbruch und keine Warnung.
-
-**A-3 bricht** (der Mensch klickt durch). Dann ist Humanitl ein Aufzeichnungsgerät und kein
-Schutz. Technisch bleibt nur die Historie: Es ist danach nachvollziehbar, was freigegeben wurde.
-Gegenmaßnahmen sind Ergonomie, nicht Kryptographie: Gruppierung nach Host, Findings vor dem Body,
-Regeln, die den Lärm wegnehmen, damit die verbleibenden Fragen Aufmerksamkeit bekommen, und eine
-Rückfrage beim pauschalen Freigeben ganzer Gruppen. Der Timeout endet in `block`, damit
-Unaufmerksamkeit auf der sicheren Seite landet.
-
-**A-4 bricht** (der LLM-Host ist fremd, geteilt oder kompromittiert). Dann ist der Modell-Kanal
-ein Vollzugriff auf alles, was der Agent an das Modell schickt, und keine Sandbox der Welt hilft
-dagegen: Der Kanal ist gewollt offen. Der Setup-Text sagt deshalb „nur eine Maschine, die du
-kontrollierst". Wer kein solches Gerät hat, sollte den Passthrough abschalten und auch die
-Inferenz halten lassen — das ist unbequem und ehrlich.
-
-**A-5 bricht** (Root-Angreifer oder manipuliertes Binary). Alle Aussagen dieses Dokuments sind
-hinfällig. CA-Schlüssel, Audit-Schlüssel und der Speicher des Daemons liegen offen. Es gibt keine
-Teil-Verteidigung, die hier noch etwas trägt.
-
-**A-6 bricht** (ein Profil enthält einen zusätzlichen Mount oder eine zusätzliche Socket-Familie).
-Der Isolations-Check schlägt beim Start an, wenn ein unerwarteter Socket in der Sandbox auftaucht,
-und verhindert den Start. Mounts, die nur Dateien öffnen (etwa `~/.ssh` lesend), erkennt er nicht;
-dagegen hilft nur, dass die vollständige `bwrap`-Zeile im UI sichtbar ist und in der
-Sitzungs-Historie steht.
-
----
-
-## 7. Änderungshistorie
-
-| Datum | Änderung | Anlass |
-|---|---|---|
-| 2026-09-02 | Erstfassung: vier Angreifer, vierzehn Kanäle, sechs Annahmen | HUM-007, Sicherheits-Review vom selben Tag |
-| 2026-09-02 | Review-Korrekturen: Shim-Prozessmodell (Brücke im Elternprozess, Filter im Kind), CA-Schlüssel bleibt auf dem Host, kein Loopback-Port auf dem Host, Mount-Allowlist als Auszug der Argv-Tabelle, `socketpair()` bleibt unberührt und erlaubt (CONVENTIONS.md 4.11) | HUM-007 Review |
-| 2026-09-04 | K-15 aufgenommen: der Isolations-Check läuft, nachdem der Shim den Agenten gestartet hat, also beendet ein roter Check die Sitzung, statt sie zu verhindern. Der Halbsatz „Check 3 prüft, dass `socketpair` gelingt" gestrichen — `probe_families` probt es nicht | HUM-041, externer Review |
-| 2026-09-23 | K-02: Eine `allow`- oder `redact`-Regel mit Pfadmuster oder Präfixen trifft keinen Pfad mit `..`-Segment mehr, auch verschleiert; vorher galt das nur für Präfixe, und ein Glob `/repos/me/**` gab `/repos/me/../../user/keys` frei. `block` und `ask` prüfen zusätzlich den nach RFC 3986 aufgelösten Pfad (Punktsegmente, doppelte Schrägstriche, kodierte nicht reservierte Zeichen); vorher traf ihr Präfix keinen Pfad mit `..`, und eine hostweite Freigabe dahinter entschied | HUM-204, Sicherheitsdurchlauf vom selben Tag |
-| 2026-09-23 | K-13 sichtbar: verweigerte `socket()`-Aufrufe des Agenten gehen über `SECCOMP_RET_USER_NOTIF` an den Elternprozess des Shims, der zählt und `EPERM` antwortet; ohne Zuhörer (`EBUSY`) derselbe Filter wie zuvor und `SANDBOX_019`. K-04: der Elternprozess ist nicht mehr „dumpable", `/proc/<pid>/mem` und `/proc/<pid>/fd` sind dem Agenten verschlossen. Beide Filter verweigern `seccomp()` mit `SECCOMP_FILTER_FLAG_NEW_LISTENER`, damit der Agent nie einen eigenen Zuhörer bekommt, und der Zuhörer des Elternprozesses bleibt bis zum Ende offen. Das Tor von HUM-137 geht auf, sobald der Elternprozess nicht mehr „dumpable" ist, statt wenn er den Bericht schließt | HUM-138 |
-| 2026-09-24 | Passthrough und Regeln unter `hold.hard_block_checksum_secrets`: Eine Anfrage mit prüfsummen-bestätigtem Geheimnis wird gehalten statt sofort geblockt, damit ein Mensch den Wert ersetzen kann. Eine Regel `allow` und die Durchreiche zum Sprachmodell blocken sie weiter als System, die Warteschlange weist jedes `Allow` mit `HOLD_004` zurück, und der Handler leitet ein `Allow` für einen solchen Flow nie weiter. Die Aussage „geht nicht ungeändert hinaus" gilt unverändert | HUM-159 |
-| 2026-10-06 | K-02: Der Zugangsschlüssel eines Anbieters liegt im Schlüsselbund des Systems (Rückfall Datei `0600`), `config.toml` trägt nur den Verweis `llm.api_key_ref`. Der Agent bekommt ihn als Datei aus einem memfd, nie über `argv` oder die Umgebung, die `bwrap` über `--setenv` setzt; aufgezeichnete Kopfzeilen und Pfade tragen ihn als `••••`; kein Fund ist er nur in `Authorization` an Host und Port von `llm.endpoint` (Review-Nachtrag 2026-10-16), anderswo bleibt er einer. Restrisiko: Der Agent kann ihn lesen und anderswohin schicken | HUM-069, HUM-140 |
-| 2026-10-19 | Schutzziel 1: `stream: true` als zweite erklärte Ausnahme. Eine Anfrage über `limits.hold_body_cap_bytes` wurde bis dahin immer geblockt, auch wenn eine Regel `stream: true` trug; jetzt geht sie unter einer solchen Regel (`allow` oder `ask`) gestreamt hinaus, entschieden über den Kopf, der Body ohne Scan und ohne Vorschau, aufgezeichnet bis `limits.recorder_max_body_bytes`. Unter `hold.hard_block_checksum_secrets` greift `stream: true` nicht, und `LIMIT_001` schlägt dann das Cap vor statt einer Regel. Der Vorschlag am Block (`LIMIT_001`) ist sonst eine Regel mit `ask`, nie `allow`. Restrisiko: Wer eine solche Regel anlegt, gibt für diese Anfragen den Blick auf den Body auf | HUM-057 |
-| 2026-10-20 | Vertrauen zum Ziel: Der Daemon prüft Zertifikate von Zielen und vom LLM-Endpunkt gegen die Zertifikatsablage des Systems statt nur gegen `webpki-roots`, damit eine Firmen-CA oder eine selbst installierte CA wirkt wie bei `curl`. Opt-out `tls.trust_system_store = false` (im Projekt-Profil gesperrt), Rückfall auf `webpki-roots` bei leerer Ablage. Kein neuer Angreifer: Die Ablage schreibt nur root (2.2), die Umgebung des Daemons nur das eigene Konto. Die Humanitl-CA für die Sandbox und die Entscheidung vor jeder Verbindung bleiben unverändert | HUM-257 |
-| 2026-10-20 | K-02: Die Endpunkte, die Humanitl aus `/v1/` und `/api/` in `llm.passthrough_paths` macht, gelten genau statt als Präfix; `POST /v1/models/delete` ging vorher ungehalten durch und wird jetzt gehalten. Ein Eintrag mit `?` am Ende ist in jeder Regel ein genauer Pfad; vorher traf er nie etwas, weil der verglichene Pfad kein `?` enthält. Ein solcher handgeschriebener, bisher toter Eintrag trifft jetzt genau seinen Pfad; `rules.yaml` warnt beim Laden davor (`RULES_005`, Warnung). Hinter einem Pfad-Präfix des Endpunkts liegen die Inferenz-Endpunkte unter dessen Basis, die Ollama-Endpunkte entfallen. Die Durchreichregel wird an keiner Stelle breiter | HUM-261 |
-| 2026-10-21 | K-01: Projektordner und `mounts.extra_ro`/`mounts.extra_rw` werden einmal als Deskriptor geöffnet, am Ort aus `/proc/self/fd/N` gegen die Mount-Politik geprüft und per Deskriptor gebunden (`--bind-fd` ab bubblewrap 0.10, sonst `/proc/self/fd/N`). Vorher löste `bwrap` den geprüften Pfad beim Einhängen neu auf, und wer einen Elternordner beschreiben konnte (ein anderes Konto, oder Angreifer (b) aus einer Sitzung, deren `/work` den Ordner enthält), tauschte ihn dazwischen gegen einen Symlink auf ein geschütztes Verzeichnis. Fehlt eine Profilquelle beim Planen, lehnt der Plan mit `SANDBOX_006` ab, und die Sandbox startet nicht; `--tests-dir` geht denselben Weg. Der Deskriptor erreicht den Agenten nicht: `bwrap` (bei `--bind-fd`) oder der Shim schließt ihn vor dessen Start, `escape-launch` verweigert die Kombination aus fehlendem Shim und `bwrap` vor 0.10, und im Daemon fällt `FD_CLOEXEC` nur im `bwrap`-Kind | HUM-263 |
-
-Geplante Fortschreibung: HUM-059 bringt das Dokument zum Release auf den Stand des Codes. Jede
-sicherheitsrelevante Änderung am Shim, an der Mount-Allowlist, am Filter oder am Passthrough
-bekommt eine Zeile in dieser Tabelle.
-
----
-
-## Schwachstellen melden
-
-Bitte keine öffentlichen Issues für Sicherheitsprobleme. Der Meldeweg und die Frist stehen in
-[`SECURITY.md`](SECURITY.md) im Abschnitt „Schwachstellen melden".
+Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
+a line here. Vulnerabilities are reported as described in
+[`SECURITY.md`](SECURITY.md#10-reporting-a-vulnerability).

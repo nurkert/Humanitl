@@ -1,4 +1,7 @@
 # ADR-0001 · Daemon in Rust auf hudsucker, nicht mitmproxy
+
+Applies to: Humanitl 0.1
+
 Status: Accepted
 Datum: 2026-09-02
 

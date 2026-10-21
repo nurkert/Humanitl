@@ -1,4 +1,7 @@
 # ADR-0014 · Agent-Bewusstsein und Feedback über den einen vorhandenen Kanal
+
+Applies to: Humanitl 0.1
+
 Status: Accepted
 Datum: 2026-09-02
 

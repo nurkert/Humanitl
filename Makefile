@@ -91,7 +91,7 @@ l10n-lint: flutter-get ## Localization lint: ARB parity, literals, diagnostic co
 docs-lint: ## Check the security documents (HUM-007)
 	./scripts/ci/lint-docs.sh
 
-parity-check: ## Every RPC has a CLI subcommand; docs/reference/parity.md is current (HUM-078)
+parity-check: ## Every RPC has a CLI subcommand; generated reference pages are current (HUM-078, HUM-059)
 	./scripts/ci/parity-check.sh
 
 flutter-get: ## Fetch Dart packages (app and packages/ui)

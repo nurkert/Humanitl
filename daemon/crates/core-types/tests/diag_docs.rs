@@ -17,6 +17,8 @@ fn docs_path() -> PathBuf {
 fn render() -> String {
     let mut out = String::new();
     out.push_str("# Diagnose-Codes\n\n");
+    // HUM-059: jede Seite unter `docs/` nennt den Stand, für den sie gilt.
+    out.push_str("Applies to: Humanitl 0.1\n\n");
     out.push_str(
         "<!-- Erzeugt aus daemon/crates/core-types/src/diagnostics/codes.rs.\n     \
          Nicht von Hand ändern: `UPDATE_DIAG_DOCS=1 cargo test -p humanitl-core --test diag_docs` \

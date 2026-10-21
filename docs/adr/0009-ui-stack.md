@@ -1,4 +1,7 @@
 # ADR-0009 · UI-Stack: Flutter mit eigener Wrapper-Schicht `packages/ui`
+
+Applies to: Humanitl 0.1
+
 Status: Accepted
 Datum: 2026-09-02, zweimal revidiert am 2026-09-04 (HUM-035, dann der Projekteigentümer)
 

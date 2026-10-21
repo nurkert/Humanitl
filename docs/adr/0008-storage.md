@@ -1,4 +1,7 @@
 # ADR-0008 · Speicherung: SQLite, Blob-Store, Audit-Kette, getrenntes Pseudonym-Mapping
+
+Applies to: Humanitl 0.1
+
 Status: Accepted
 Datum: 2026-09-02
 

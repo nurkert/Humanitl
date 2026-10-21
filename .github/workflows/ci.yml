@@ -920,5 +920,7 @@ jobs:
         # HUM-078: runs the CLI parity tests against clap, then
         # `cargo xtask docs --check`; fails on an RPC without a CLI subcommand,
         # on a stale entry and on a table that moved. RPCs without a UI
-        # location show up as warnings.
+        # location show up as warnings. Since HUM-059 the same check covers
+        # every generated reference page (docs/CONFIG.md, docs/DIAGNOSTICS.md,
+        # docs/reference/cli.md): this job is the `docs-check` of the spec.
         run: ./scripts/ci/parity-check.sh

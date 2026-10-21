@@ -1,5 +1,7 @@
 # Architektur-Entscheidungen (ADRs)
 
+Applies to: Humanitl 0.1
+
 Jede Entscheidung, die die Architektur von Humanitl trägt, hat hier eine eigene
 Datei. Die Kurzfassungen in `BACKLOG.md` Abschnitt 2 sind der Ursprung; die
 Dateien hier sind die ausgearbeitete, verbindliche Fassung. Wer eine Entscheidung

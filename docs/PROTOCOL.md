@@ -1,5 +1,7 @@
 # Der Vertrag `humanitl.v1`
 
+Applies to: Humanitl 0.1
+
 > Die gRPC-Proto unter `proto/humanitl/v1/` ist die einzige Art, mit dem Daemon zu reden. UI, CLI, Tests und spätere Plugins sind gleichberechtigte Clients (ADR-003, `docs/ARCHITECTURE.md` 1.3 und 3b). Wer eine Fähigkeit hinzufügt, fügt sie hier hinzu, nicht daneben.
 
 ## 1. Die Dateien
