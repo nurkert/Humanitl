@@ -158,21 +158,18 @@ mod tests {
 
     /// Eine Attrappe von `secret-tool` mit einem Ablageort im Testverzeichnis.
     fn fake_tool(dir: &Path) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt as _;
         let store = dir.join("keyring");
         std::fs::create_dir_all(&store).unwrap();
         let script = dir.join("secret-tool");
-        std::fs::write(
+        crate::test_support::write_executable(
             &script,
-            format!(
+            &format!(
                 "#!/bin/sh\nfor last; do :; done\ncase \"$1\" in\n  store) cat > '{0}'/\"$last\" \
                  ;;\n  lookup) [ -f '{0}'/\"$last\" ] || exit 1; cat '{0}'/\"$last\" ;;\n  \
                  clear) rm -f '{0}'/\"$last\" ;;\nesac\n",
                 store.display()
             ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
         script
     }
 

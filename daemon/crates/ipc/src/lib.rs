@@ -154,6 +154,9 @@ pub mod server_stub;
 pub mod session;
 pub mod summary;
 pub mod terminal;
+/// Werkzeug, das nur die Unit-Tests dieser Crate benutzen (HUM-267).
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod validate;
 
 /// Die Ports, die `DiscoverLlm` ohne eigene Angabe fragt (HUM-076).

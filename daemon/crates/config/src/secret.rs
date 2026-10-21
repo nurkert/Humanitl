@@ -765,6 +765,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt as _;
 
     use super::*;
+    use crate::test_support::write_executable;
 
     /// Eine Attrappe von `secret-tool`, die ihre Einträge als Dateien in
     /// `dir/store` ablegt. Der Schlüsselbund des Menschen bleibt unberührt.
@@ -772,9 +773,9 @@ mod tests {
         let store = dir.join("store");
         fs::create_dir_all(&store).unwrap();
         let script = dir.join("secret-tool");
-        fs::write(
+        write_executable(
             &script,
-            format!(
+            &format!(
                 "#!/bin/sh\nstore='{}'\nfor last; do :; done\nprintf '%s\\n' \"$*\" >> '{}'\n\
                  case \"$1\" in\n  store) cat > \"$store/$last\" ;;\n  \
                  lookup) [ -f \"$store/$last\" ] || exit 1; cat \"$store/$last\" ;;\n  \
@@ -782,21 +783,17 @@ mod tests {
                 store.display(),
                 dir.join("argv.log").display()
             ),
-        )
-        .unwrap();
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        );
         script
     }
 
     /// Eine Attrappe, deren Sitzungsbus nie antwortet: Sie scheitert immer.
     fn broken_tool(dir: &Path) -> PathBuf {
         let script = dir.join("secret-tool-broken");
-        fs::write(
+        write_executable(
             &script,
             "#!/bin/sh\necho 'Cannot autolaunch D-Bus without X11 $DISPLAY' >&2\nexit 1\n",
-        )
-        .unwrap();
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        );
         script
     }
 
@@ -993,8 +990,7 @@ mod tests {
     fn a_tool_that_never_answers_runs_into_the_deadline() {
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("secret-tool-hangs");
-        fs::write(&script, "#!/bin/sh\nexec sleep 30\n").unwrap();
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        write_executable(&script, "#!/bin/sh\nexec sleep 30\n");
         let store = store_in(dir.path(), Some(script)).with_timeout(Duration::from_millis(200));
         let started = Instant::now();
         let diagnostic = store
