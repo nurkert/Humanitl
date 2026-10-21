@@ -59,6 +59,13 @@ bool requestOpensWebSocket(List<Header> headers) {
 /// Kopfzeilen ist eine nachgebaute, etwa aus einer unvollständigen
 /// Aufzeichnung, während die gehaltene `Upgrade: websocket` tragen kann.
 /// Dann gilt das Detail als nicht verfügbar, und die Anfrage bleibt gehalten.
+///
+/// Seit HUM-250 nimmt der Daemon die Kopfzeilen einer noch nicht
+/// entschiedenen Anfrage aus seiner Live-Registry, bevor er auf die
+/// Aufzeichnung zurückfällt; eine gehaltene Anfrage, deren Aufzeichnung
+/// unvollständig ist, ist damit wieder entscheidbar. Die Prüfung bleibt für
+/// den Rest: einen Daemon älterer Fassung und eine Anfrage, die die Registry
+/// nicht mehr kennt.
 bool requestIsReadable(FlowDetail? detail) =>
     detail?.request?.headers.isNotEmpty ?? false;
 

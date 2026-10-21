@@ -8,9 +8,9 @@
 // schon in dieser Form festgehalten, und sie stehen hier nicht ein zweites
 // Mal: `isolation_failed` ist `isolation_panel_failed`, `timeout_banner` ist
 // `request_card_timed_out`, `large_body` ist `request_card_large`,
-// `binary_body` ist `request_card_binary`. `queue_pressure` und
-// `recorder_failure` fehlen mit ihren Zeilen 16 und 20 (siehe
-// `backlog/sprint-5.md`, HUM-058).
+// `binary_body` ist `request_card_binary`. `queue_pressure` fehlt mit seiner
+// Zeile 16 (siehe `backlog/sprint-5.md`, HUM-058); `recorder_failure` kam mit
+// HUM-250.
 //
 // Erneuern mit `make goldens-update`.
 
@@ -26,6 +26,7 @@ import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/intercept/providers/diagnostics.dart';
 import 'package:humanitl/features/intercept/providers/flows.dart';
 import 'package:humanitl/features/intercept/providers/now.dart';
+import 'package:humanitl/features/intercept/providers/recorder_health.dart';
 import 'package:humanitl/features/intercept/widgets/action_bar.dart';
 import 'package:humanitl/features/intercept/widgets/request_card.dart';
 import 'package:humanitl/features/shell/providers/connection.dart';
@@ -167,4 +168,64 @@ void main() {
       );
     },
   );
+
+  // Zeile 20: Die Aufzeichnung schreibt nicht (HUM-250). Statusleiste in der
+  // Farbe des Fehlers, der Hinweis auf der Karte und die Pause vor der
+  // ersten Freigabe an der Stelle der Entscheidungsleiste.
+  goldenVariants(
+    'states_recorder_failure',
+    constraints: window,
+    builder: (GoldenVariant variant) {
+      final List<FlowDetail> details = intercept.goldenDetails();
+      final TestDaemonClient client = TestDaemonClient();
+      for (final FlowDetail detail in details) {
+        client.details[detail.summary.id] = detail;
+      }
+      return app(
+        variant,
+        client,
+        overrides: <Override>[
+          nowProvider.overrideWith(() => FixedNow(intercept.goldenNow)),
+          flowsProvider.overrideWith(
+            () => FixedFlows(<FlowId, Flow>{
+              for (final FlowDetail detail in details)
+                detail.summary.id: detail.summary,
+            }),
+          ),
+          recorderHealthProvider.overrideWith(
+            () => _FixedOutage(
+              RecorderOutage(
+                since: testStart,
+                diagnostic: const Diagnostic(
+                  code: 'RECORDER_003',
+                  severity: Severity.error,
+                  title: 'Aufzeichnung konnte nicht schreiben',
+                  why:
+                      'could not commit a recorder transaction (database or '
+                      'disk is full); the rows of this batch are lost',
+                ),
+              ),
+            ),
+          ),
+          recorderPauseProvider.overrideWith(_OpenPause.new),
+        ],
+      );
+    },
+  );
+}
+
+/// Eine Störung der Aufzeichnung, die steht, statt aus dem Strom zu kommen.
+class _FixedOutage extends RecorderHealth {
+  _FixedOutage(this.outage);
+
+  final RecorderOutage outage;
+
+  @override
+  RecorderOutage? build() => outage;
+}
+
+/// Die Pause der Aufzeichnung, offen und bereit.
+class _OpenPause extends RecorderPause {
+  @override
+  RecorderPauseState build() => RecorderPauseState.armed;
 }

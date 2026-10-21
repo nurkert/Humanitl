@@ -1508,6 +1508,15 @@ registry! {
     LIMIT_006 => "limits", "Ereignis-Puffer übergelaufen", "#limit_006",
         "Ein Abonnent des Ereignisstroms hat mehr als `limits.event_buffer` Ereignisse nicht abgeholt.",
         "Kein Fix: Die Oberfläche lädt über `ListFlows` nach.";
+
+    /// Die Aufzeichnung schreibt wieder, nachdem sie mit `RECORDER_001` oder
+    /// `RECORDER_003` als gestört gemeldet war. Nur `Info`: Er sagt den
+    /// Clients, dass die Hinweise „wird nicht aufgezeichnet" fallen können,
+    /// und erinnert daran, dass die Flows dazwischen in der History fehlen
+    /// (HUM-250).
+    RECORDER_005 => "recorder", "Aufzeichnung läuft wieder", "#recorder_005",
+        "Der Schreib-Thread hat nach einer gemeldeten Störung wieder eine Transaktion ohne Fehler geschrieben.",
+        "Kein Fix: Was während der Störung geschah, fehlt in der History und wird nicht nachgetragen.";
 }
 
 /// Sucht einen Code im Register.

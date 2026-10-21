@@ -52,6 +52,7 @@ mod anchors;
 mod blob;
 mod error;
 mod filter;
+mod health;
 mod hostkey;
 mod message;
 mod query;
@@ -78,6 +79,7 @@ pub use crate::anchors::{AnchorStore, AuditAnchor, read_anchors};
 pub use crate::blob::{BlobStore, ORPHAN_GRACE};
 pub use crate::error::RecorderError;
 pub use crate::filter::KEYS as FILTER_KEYS;
+pub use crate::health::{OutageEntry, is_outage};
 // Der reine Einstieg der Filtersprache, ohne Datenbank: `ListFlows` ruft ihn
 // über `query::list_flows`, das Fuzz-Target `flow_filter` direkt (HUM-056).
 pub use crate::filter::{Filter, Param as FilterParam, parse as parse_filter};
@@ -95,6 +97,7 @@ pub use crate::types::{
 pub use crate::writer::{BATCH_COMMANDS, BATCH_INTERVAL, RESERVATION_GRACE};
 
 use crate::error::storage_failed;
+use crate::health::Reporter;
 use crate::writer::{MessageWrite, Writer, WriterCmd, WriterHandle};
 
 /// So viele Befunde warten höchstens im Strom, bevor der langsamste Zuhörer
@@ -112,7 +115,7 @@ pub struct Recorder {
     read: Arc<ReadPool>,
     blobs: Arc<BlobStore>,
     settings: RecorderSettings,
-    diagnostics: broadcast::Sender<Diagnostic>,
+    diagnostics: Reporter,
     db: Arc<PathBuf>,
     /// Geheimnisse, die in Kopfzeilen nie im Klartext gespeichert werden
     /// (HUM-140).
@@ -179,6 +182,7 @@ impl Recorder {
         }
 
         let (diagnostics, _idle) = broadcast::channel(DIAGNOSTIC_BUFFER);
+        let diagnostics = Reporter::new(diagnostics);
         let (tx, rx) = mpsc::channel::<WriterCmd>();
         let writer = Writer::new(conn, db, Arc::clone(&store), diagnostics.clone());
         let join = std::thread::Builder::new()
@@ -222,6 +226,18 @@ impl Recorder {
         self.masks.clone()
     }
 
+    /// `headers` als Paare aus Name und Text, so wie diese Aufzeichnung sie
+    /// schreiben würde: Originalreihenfolge, jedes Geheimnis der Masken als
+    /// `••••` (HUM-140).
+    ///
+    /// Für `GetFlow` über einen gehaltenen Flow, dessen Kopfzeilen aus der
+    /// Live-Registry kommen (HUM-250): Sie verlassen den Daemon in derselben
+    /// Form, in der sie aus der Aufzeichnung kämen.
+    #[must_use]
+    pub fn masked_headers(&self, headers: &HeaderMap) -> Vec<[String; 2]> {
+        crate::message::masked_pairs(headers, &self.masks)
+    }
+
     /// Die Grenzen, nach denen diese Aufzeichnung arbeitet.
     #[must_use]
     pub const fn settings(&self) -> RecorderSettings {
@@ -245,9 +261,25 @@ impl Recorder {
     /// Der Daemon hängt ihn an den Ereignisstrom (`FlowEvent::Diagnostic`),
     /// damit eine Lücke in der Aufzeichnung an derselben Stelle sichtbar wird
     /// wie der Flow, um den es geht.
+    ///
+    /// Ein Befund, der die Aufzeichnung als gestört meldet ([`is_outage`]),
+    /// kommt einmal je Ursache; schreibt der Thread wieder ohne Fehler, folgt
+    /// `RECORDER_005` (HUM-250).
     #[must_use]
     pub fn diagnostics(&self) -> broadcast::Receiver<Diagnostic> {
         self.diagnostics.subscribe()
+    }
+
+    /// Die Befunde der laufenden Störung, ältester zuerst, je mit dem
+    /// Zeitpunkt ihres ersten Auftretens; leer, solange die Aufzeichnung
+    /// schreibt.
+    ///
+    /// Für einen Client, der sich während der Störung verbindet: Er hat den
+    /// Befund im Strom verpasst, und der Dienst liefert ihn ihm nach
+    /// (HUM-250).
+    #[must_use]
+    pub fn outage(&self) -> Vec<OutageEntry> {
+        self.diagnostics.outage()
     }
 
     /// Trägt eine Sitzung ein und macht sie zur laufenden.
@@ -681,7 +713,9 @@ impl Recorder {
         if let Err(err) = self.writer.send(cmd) {
             let diagnostic = err.into_diagnostic();
             tracing::error!(code = diagnostic.code.as_str(), why = %diagnostic.why, "recorder");
-            let _ignored = self.diagnostics.send(diagnostic);
+            // Ein toter Thread scheitert bei jedem Kommando; der Befund geht
+            // einmal hinaus, nicht einmal je Anfrage (HUM-250).
+            let _sent = self.diagnostics.report(diagnostic);
         }
     }
 }

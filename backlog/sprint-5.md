@@ -39,6 +39,8 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-266 | Ein deflate-Body, der als zlib und als nackter Strom Verschiedenes sagt | S | HUM-247 |
 | HUM-267 | Ein Test scheitert zufällig an „Text file busy" | S | HUM-134 |
 | HUM-268 | Zwei Tasten in einem Frame speichern eine nicht gezeichnete Regel (nach 0.1.0) | S | HUM-249 |
+| HUM-269 | Das Senden aus dem Editor übergeht die Pause einer gestörten Aufzeichnung | S | HUM-250, HUM-047 |
+| HUM-270 | Flüsse aus einer Störung tragen keine eigene Markierung (nach 0.1.0) | S | HUM-250 |
 
 ---
 
@@ -3291,6 +3293,105 @@ Ein Puffer, der verlorene Flows nachträglich schreibt.
 ### Referenzen
 HUM-058 (Zeile 20 und Umsetzung), HUM-026, `docs/SECURITY.md`.
 
+### Umsetzung (HUM-250)
+
+Der Weg vom Schreib-Thread in den Ereignisstrom stand schon (HUM-026:
+`Recorder::diagnostics`, im Daemon `report_diagnostics`), aber ohne Grenze
+und ohne Ende: Jede gescheiterte Zeile war ein Befund, ein toter Thread einer
+je Kommando, und nichts sagte, wann es vorbei war. Ein Client, der sich
+während der Störung verband, erfuhr gar nichts.
+
+- **Daemon, einmal je Ursache.** `humanitl-recorder` hat einen Melder
+  (`src/health.rs`, `Reporter`), über den Schreib-Thread, Handle und jeder
+  Mitschnitt melden. Ein Befund mit `RECORDER_001` oder `RECORDER_003` und
+  mindestens `Error` beginnt eine Störung und geht je Code einmal hinaus; die
+  erste Transaktion danach, in der nichts scheiterte, beendet sie mit dem
+  neuen `RECORDER_005` („Aufzeichnung läuft wieder“, `Info`). Scheitert
+  schon `BEGIN` oder `COMMIT` an einer gesperrten, nur lesbaren oder fremden
+  Datei, heißt der Befund `RECORDER_001` (`Error`, Fix mit dem Pfad), sonst
+  `RECORDER_003`. Die Warnung über die Rechte von `-wal` und `-shm` ist jetzt
+  `Warning` und beginnt keine Störung.
+- **Späte Clients.** `Recorder::outage` nennt die Befunde der laufenden
+  Störung; `Subscribe` liefert sie vor allem anderen nach.
+- **`GetFlow` über einen noch nicht entschiedenen Flow** nimmt die
+  Kopfzeilen aus der Live-Registry des Proxys (`with_live_request`), maskiert
+  wie in der Aufzeichnung (`Recorder::masked_headers`, HUM-140); ein
+  fehlender Body-Verweis kommt ebenfalls von dort. Eine Anfrage, deren
+  Aufzeichnung nur die Zeile trägt, verschweigt damit kein
+  `Upgrade: websocket` mehr und ist in der Oberfläche wieder entscheidbar
+  (`requestIsReadable` bleibt als Riegel für den Rest).
+- **Oberfläche.** `recorderHealthProvider` (`providers/recorder_health.dart`)
+  liest Beginn und Ende aus dem Strom und vergisst den Stand beim
+  künstlichen `Lagged` jeder neuen Verbindung, nach dem der Daemon eine
+  laufende Störung nachliefert. Die Statusleiste zeigt Code und
+  „Aufzeichnung gestört“, jede gehaltene und jede seit Beginn angekommene
+  Karte „Wird nicht aufgezeichnet“, beides in der Fehlerfarbe und nicht im
+  Rot des Blockierens (`docs/UX.md` 3.3). Die erste Freigabe der Sitzung hält
+  an `RecorderPause`, an der Stelle der Leiste wie die Pause mit offenen
+  Funden; „Unaufgezeichnet senden“ (`S`) nimmt erst nach `HMotion.rearm` an
+  und setzt genau die angehaltene Freigabe fort, `Esc` schließt. Gilt für
+  Klick, `Enter`, `A`, Gruppe, Auswahl, „Allow all“ und die Benachrichtigung
+  (dort kommt das Fenster mit offener Pause nach vorn).
+- **Tests.** `recorder_outage_tests` in `humanitld` (Schreiber scheitert
+  dreimal, genau ein `RECORDER_003` auf dem Strom, danach genau ein
+  `RECORDER_005`), `a_write_failure_reports_once_and_its_end_once` (Trigger
+  statt voller Platte), `health::tests`, die Einordnung nach `SQLite`-Code,
+  `get_flow_of_a_held_flow_takes_the_request_from_the_registry`,
+  `a_late_subscriber_hears_of_a_running_recorder_outage`,
+  `status_bar_test: recorder_failure_marks_cards`, Golden
+  `states_recorder_failure` in vier Varianten.
+- **Mutationsbeweise.** Daemon: ohne die Entstörung in `Reporter::report`
+  scheitern `a_write_failure_reports_once_and_its_end_once` und der Test in
+  `humanitld`; ohne `recovered()` im Commit beide am fehlenden
+  `RECORDER_005`; ohne `with_live_request` und mit ungeleerten Masken
+  scheitert der Test zu `GetFlow`, ohne die Nachlieferung der Störung der zu
+  späten Abonnenten. Oberfläche: `recorder_failure_marks_cards` scheitert,
+  wenn der Beginn der Störung nicht erkannt wird, die Pause nicht aufgeht,
+  die Bestätigung nicht für die Sitzung gilt, der Knopf vor `HMotion.rearm`
+  annimmt oder der Hinweis auf der Karte fehlt.
+- **Offen.** Das Senden aus dem Editor (HUM-047) geht an der Pause vorbei,
+  siehe HUM-269. Eine eigene Markierung der Flüsse aus einer Störung:
+  HUM-270.
+- **Review, Runde 1** (Codex 6 blockierend, Opus 1 major, alle übernommen):
+  Der Rückfall von `GetFlow` auf die Registry (`registry_detail`) maskiert
+  jetzt Ziel, Pfad, Kopfzeilen und Body-Angaben wie die Aufzeichnung, ebenso
+  `content_type` und `content_encoding` in `with_live_request`
+  (`masked_request`). Nach einem `Lagged` liefern Daemon-Brücke
+  (`report_diagnostics`) und Ereignisstrom (`event_stream`, über `Flatten`)
+  die laufende Störung erneut; die Oberfläche löscht ihren Stand nach einem
+  echten `Lagged` erst, wenn das nächste Ereignis keine Störung ist.
+  `_send` und `_many` prüfen die Pause unmittelbar vor dem Senden, die
+  Benachrichtigung nach dem Detail noch einmal. Die Bestätigung gilt erst,
+  wenn die fortgesetzte Freigabe hinausging, und nur für die Sitzung des
+  Daemons. Kleinere: Ein toter Schreib-Thread ersetzt den früheren Befund
+  (Fix „neu starten“ für späte Clients), die Brücke protokolliert auf der
+  Stufe der Schwere, Kommentare zur Reihenfolge der Pausen berichtigt.
+  Tests: `get_flow_from_the_registry_alone_is_masked_like_the_recording`,
+  `a_lag_during_a_recorder_outage_repeats_the_outage`,
+  `a_lagging_bridge_repeats_the_running_outage`,
+  `a_dead_writer_replaces_the_earlier_write_error`, `recorder_pause_test`
+  (Überlauf, Sitzung, abgewiesene Fortsetzung, Modal nach Beginn der
+  Störung, Blockieren unberührt), je mit Mutationsbeweis.
+- **Review, Runde 2** (Codex, vier Punkte): Der Rückfall maskiert auch
+  `summary.apex` und `domain.apex` (Test mit dem Schlüssel als
+  registrierbarem Hostnamen). Der Ereignisstrom löst die Listen erst nach dem
+  Zusammenführen mit den Regeländerungen auf, sodass die nachgelieferte
+  Störung unmittelbar hinter `Lagged` steht; die Oberfläche lässt eine
+  Regeländerung nach einem Überlauf ohnehin nicht entscheiden. Die Pause
+  steht nur noch an den beiden Stellen, an denen eine Freigabe hinausgeht
+  (`_send`, `_many`): Eine Freigabe mit Modal hält einmal, nach dem Modal.
+  Nicht übernommen: Die Wiederholung nach `Lagged` kann einen noch
+  gepufferten ersten Befund doppelt liefern. Das ist harmlos, weil die
+  Oberfläche die Störung als Zustand hält und ein zweites `RECORDER_003` ihn
+  nicht ändert (Test in `recorder_pause_test`).
+- **Nachtrag aus der Kurzprüfung:** `_many` fragt die Pause vor jedem
+  einzelnen `Decide`. Beginnt die Störung mitten im Stapel, ist das schon
+  Gesendete verbucht, und die Pause setzt mit genau den übrigen Anfragen
+  fort. Die Pause eines Stapels gehört nicht zur Auswahl und bleibt stehen,
+  wenn der Cursor nach der ersten Freigabe weiterrückt
+  (`RecorderPause.selectionMoved`). Test: Störung nach der ersten von drei
+  Freigaben, danach genau die zwei übrigen, mit Mutationsbeweis.
+
 ## HUM-251 · Ein unerreichbares Modell färbt die Zeile „LLM“ nicht
 Sprint: 5 · Größe: S · Abhängigkeiten: HUM-039, HUM-058 · Blockiert: nichts
 
@@ -4663,3 +4764,32 @@ mehrere Tasten zwischen zwei Frames ankommen.
 
 ### Referenzen
 HUM-249 (Review Runde 3), HUM-058 (`ShownRule`), `docs/UX.md` 4.6.
+
+## HUM-269 · Das Senden aus dem Editor übergeht die Pause einer gestörten Aufzeichnung
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-250, HUM-047 · Blockiert: nichts
+
+### Kontext
+HUM-250 hält die erste Freigabe einer Sitzung während einer Störung der Aufzeichnung an einer Pause an: Klick, `Enter`, `A`, Gruppe, Auswahl, „Allow all“ und die Benachrichtigung. Der Editor (`app/lib/features/editor/editor_host.dart`, `_decide`) ruft `Decide` mit `AllowEdited` direkt am Client und geht an `InterceptDecision` vorbei; eine bearbeitete Anfrage geht damit ohne die Pause hinaus. Kandidat aus der Umsetzung von HUM-250.
+
+### Akzeptanzkriterien
+- [ ] Während einer Störung hält auch das Senden aus dem Editor einmal je Sitzung an derselben Pause, ohne dass ein Feature das andere importiert (Pause nach `core`, oder der Editor fragt über einen gemeinsamen Provider).
+- [ ] Test im Editor mit Mutationsbeweis.
+
+### Referenzen
+HUM-250 (Umsetzung), HUM-047, `docs/UX.md` 5.4.
+
+## HUM-270 · Flüsse aus einer Störung tragen keine eigene Markierung
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-250 · Blockiert: nichts · nach 0.1.0
+
+### Kontext
+HUM-250 zeigt „Wird nicht aufgezeichnet“ auf jeder Karte, solange die Aufzeichnung gestört ist, und nimmt den Hinweis mit `RECORDER_005` überall zurück. Danach sieht ein Fluss, der während der Störung ankam und dessen Entscheidung in der History fehlt, aus wie jeder andere; die Oberfläche merkt sich nicht, welche Flüsse betroffen waren. Kandidat aus dem Review von HUM-250.
+
+### Ziel
+Ein Fluss, der während einer Störung ankam, trägt eine eigene Markierung „nicht aufgezeichnet“, die die Störung überdauert: in der Zeile, auf der Karte und, soweit der Daemon ihn noch kennt, im Detail. Die Zuordnung kommt vom Daemon (ADR-018), nicht aus einem Zeitvergleich in der Oberfläche.
+
+### Akzeptanzkriterien
+- [ ] Daemon: Flüsse aus einer Störung sind als solche erkennbar (Feld oder Befund am Fluss), Test.
+- [ ] Oberfläche: Markierung bleibt nach `RECORDER_005` stehen, Test mit Mutationsbeweis.
+
+### Referenzen
+HUM-250 (Umsetzung, Review), HUM-026.
