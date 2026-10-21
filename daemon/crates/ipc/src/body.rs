@@ -45,6 +45,11 @@ pub const BODY_CHUNK_BYTES: usize = 64 * 1024;
 /// steht schon in `truncated`. Ein Strom, der vollständig sein müsste und
 /// trotzdem bricht, bekommt diese Nachsicht nicht — dort ist etwas anderes
 /// falsch, und die rohen Bytes sind die ehrlichere Antwort.
+///
+/// Liegen hinter dem Ende eines vollständigen Stroms weitere Bytes, kommt der
+/// entpackte Strom zurück, wieder mit leerem `encoding_left`: Genau diese Bytes
+/// hat der Scan durchsucht, und dass dahinter etwas lag, meldet er selbst mit
+/// `FINDINGS_002` (HUM-247).
 #[must_use]
 pub fn deliver(
     wire: &v1::BodyRef,
@@ -71,6 +76,17 @@ pub fn deliver(
                 "GetBody returns the prefix that could be unpacked from a truncated body"
             );
             (Bytes::from(partial), String::new())
+        }
+        // Hinter dem Ende des Stroms lagen weitere Bytes (HUM-247). Der Scan
+        // hat den entpackten Teil davor durchsucht, und seine Fundstellen
+        // zeigen in genau diese Bytes; also kommen sie zurück. Die Lücke steht
+        // im Befund `FINDINGS_002` am Fluss.
+        Err(InflateError::TrailingBytes { decoded }) => {
+            tracing::debug!(
+                encoding = encoding.as_str(),
+                "GetBody returns the unpacked stream; bytes behind its end were not unpacked"
+            );
+            (Bytes::from(decoded), String::new())
         }
         Err(why) => {
             tracing::debug!(
@@ -175,6 +191,18 @@ mod tests {
         let (bytes, left) = deliver(&reference("gzip", true), broken.clone(), 4096, 100);
         assert_eq!(bytes, broken);
         assert_eq!(left, "gzip");
+    }
+
+    #[test]
+    fn bytes_behind_the_end_of_the_stream_leave_the_unpacked_part() {
+        // Dieselben Bytes, die der Scan durchsucht hat (HUM-247): der
+        // entpackte Strom ohne den Rest dahinter, ohne `encoding_left`.
+        let plain = b"iban GB82 WEST 1234 5698 7654 32";
+        let mut body = gzip(plain).to_vec();
+        body.extend_from_slice(b"rest");
+        let (bytes, left) = deliver(&reference("gzip", true), Bytes::from(body), 4096, 100);
+        assert_eq!(&bytes[..], plain);
+        assert_eq!(left, "");
     }
 
     #[test]

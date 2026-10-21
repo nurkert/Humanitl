@@ -18,7 +18,7 @@
 use core::fmt;
 use std::io::Read;
 
-use flate2::read::{DeflateDecoder, GzDecoder, ZlibDecoder};
+use flate2::bufread::{DeflateDecoder, GzDecoder, ZlibDecoder};
 use humanitl_core::diagnostics::codes::{FINDINGS_002, LIMIT_003};
 use humanitl_core::{Diagnostic, Severity};
 
@@ -208,14 +208,18 @@ impl fmt::Debug for Bytes {
 /// ein, damit eine Bombe nicht den Speicher des Daemons füllt. Alle Bereiche
 /// der Funde zeigen danach auf die entpackten Bytes.
 ///
-/// Drei Fälle melden `FINDINGS_002` und setzen `truncated`: der Body liegt über
-/// dem Cap, das Cap hat das Entpacken abgebrochen, oder der Body ließ sich
-/// nicht entpacken (unbekannte Kodierung, abgeschnittener oder kaputter Strom).
-/// Ein vierter meldet stattdessen `LIMIT_003`: Das Entpacken brach am
+/// Vier Fälle melden `FINDINGS_002` und setzen `truncated`: der Body liegt über
+/// dem Cap, das Cap hat das Entpacken abgebrochen, der Body ließ sich nicht
+/// entpacken (unbekannte Kodierung, abgeschnittener oder kaputter Strom), oder
+/// hinter dem Ende des Stroms liegen weitere Bytes (HUM-247). Im letzten Fall
+/// wird durchsucht, was vor dem Ende stand; der Rest bleibt eine benannte
+/// Lücke, weil ein anderer Entpacker ihn anders lesen kann.
+/// Ein fünfter meldet stattdessen `LIMIT_003`: Das Entpacken brach am
 /// Verhältnis ab, `limits.max_decompress_ratio` war die engere Grenze
 /// ([`Budget::limited_by_ratio`], HUM-057).
-/// Im letzten Fall wird gar nichts durchsucht, statt in gepackten Bytes nach
-/// Mustern zu suchen und Bereiche zu liefern, die auf niemanden zeigen.
+/// Bei einem Body, der sich nicht entpacken ließ, wird gar nichts durchsucht,
+/// statt in gepackten Bytes nach Mustern zu suchen und Bereiche zu liefern, die
+/// auf niemanden zeigen.
 #[must_use]
 pub fn decode_body(
     raw: &[u8],
@@ -299,6 +303,14 @@ pub fn decode_body(
                 ),
             }
         }
+        Err(InflateError::TrailingBytes { decoded }) => {
+            let scanned = decoded.len();
+            DecodedBody {
+                bytes: decoded,
+                truncated: true,
+                diagnostic: Some(trailing_gap(encoding, raw.len(), scanned)),
+            }
+        }
         Err(why) => DecodedBody {
             bytes: Vec::new(),
             truncated: true,
@@ -339,6 +351,18 @@ pub enum InflateError {
         /// Was bis zum Abbruch entpackt wurde.
         partial: Vec<u8>,
     },
+    /// Der Strom endet sauber, aber dahinter liegen noch Bytes (HUM-247).
+    ///
+    /// Weder `deflate` noch `br` kennen ein zweites Stück; was hinter dem
+    /// Ende steht, ignorieren die Entpacker dieser Crate. Ein nachsichtiger
+    /// Entpacker auf der Gegenseite kann es aber als weiteren Inhalt lesen.
+    /// `decoded` trägt den vollständig entpackten Teil davor; der Scan
+    /// durchsucht ihn und meldet den Rest als Lücke (`FINDINGS_002`).
+    #[error("hinter dem Ende des Stroms liegen weitere Bytes")]
+    TrailingBytes {
+        /// Was bis zum Ende des Stroms entpackt wurde.
+        decoded: Vec<u8>,
+    },
 }
 
 /// Was beim Entpacken herauskam.
@@ -377,18 +401,25 @@ pub fn inflate(
             bytes: raw.to_vec(),
             stopped: false,
         }),
-        ContentEncoding::Gzip => read_limited(GzDecoder::new(raw), budget),
+        // RFC 1952 erlaubt beliebig viele Member hintereinander, und `gzip -d`
+        // oder Go `compress/gzip` auf der Gegenseite lesen sie alle. Deshalb
+        // liest der Scan sie auch alle, durch ein einziges Budget (HUM-247).
+        ContentEncoding::Gzip => read_limited(GzipMembers::new(raw), budget),
         // "deflate" ist im Netz zweideutig: die meisten Server schicken den
         // zlib-Rahmen aus RFC 1950, manche den nackten Strom aus RFC 1951.
-        // Erst der Rahmen, dann der nackte Strom.
+        // Erst der Rahmen, dann der nackte Strom. Nur ein kaputter Rahmen
+        // führt zum zweiten Versuch; ein sauberer Rahmen mit Bytes dahinter
+        // bleibt eine Lücke und wird nicht anders gedeutet.
         ContentEncoding::Deflate => {
             let mut framed = *budget;
             match read_limited(ZlibDecoder::new(raw), &mut framed) {
-                Ok(result) => {
-                    *budget = framed;
-                    Ok(result)
+                Err(InflateError::BrokenStream { .. }) => {
+                    read_limited(DeflateDecoder::new(raw), budget)
                 }
-                Err(_) => read_limited(DeflateDecoder::new(raw), budget),
+                other => {
+                    *budget = framed;
+                    other
+                }
             }
         }
         ContentEncoding::Brotli => {
@@ -398,8 +429,127 @@ pub fn inflate(
     }
 }
 
+/// Ein Entpacker, der nach dem Ende seines Stroms sagt, ob dahinter noch
+/// Eingabe liegt (HUM-247).
+///
+/// Die Prüfung entpackt nichts: Sie schaut nur, ob von der gepackten Eingabe
+/// etwas übrig ist. Deshalb kann sie das [`Budget`] nicht umgehen.
+trait StreamEnd: Read {
+    /// Wahr, wenn hinter dem Ende des Stroms noch Bytes liegen.
+    ///
+    /// Gilt nur, nachdem `read` das Ende mit `0` gemeldet hat.
+    fn has_trailing_input(&mut self) -> bool;
+}
+
+/// Liest gzip-Member nacheinander, bis die Eingabe zu Ende ist (HUM-247).
+///
+/// Dasselbe, was `flate2::bufread::MultiGzDecoder` tut, mit einem
+/// Unterschied: Dieser Leser weiß, ob schon ein Member vollständig gelesen
+/// war, als ein Fehler kam. Scheitert erst ein späteres Member (Bytes nach dem
+/// letzten Member, die kein Member sind, oder ein kaputtes zweites Member),
+/// ist der Anfang echt entpackt; er wird durchsucht, und der Rest wird zur
+/// Lücke statt den ganzen Body unlesbar zu machen. `MultiGzDecoder` meldet in
+/// diesem Fall nur den Fehler, und der Scan sähe gar nichts.
+///
+/// Alle Member laufen durch denselben Aufrufer von [`read_limited`] und damit
+/// durch dasselbe [`Budget`].
+struct GzipMembers<'a> {
+    member: GzDecoder<&'a [u8]>,
+    /// Wahr, sobald ein Member samt Prüfsumme vollständig gelesen ist.
+    complete: bool,
+    /// Wahr, wenn nach einem vollständigen Member etwas folgte, das sich nicht
+    /// als Member lesen ließ.
+    broken_tail: bool,
+}
+
+impl<'a> GzipMembers<'a> {
+    fn new(raw: &'a [u8]) -> Self {
+        Self {
+            member: GzDecoder::new(raw),
+            complete: false,
+            broken_tail: false,
+        }
+    }
+}
+
+impl Read for GzipMembers<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() || self.broken_tail {
+            return Ok(0);
+        }
+        loop {
+            match self.member.read(buf) {
+                // Das Member ist zu Ende und seine Prüfsumme stimmt. Jedes
+                // Member verbraucht mindestens seinen Kopf, die Schleife endet
+                // also mit der Eingabe.
+                Ok(0) => {
+                    self.complete = true;
+                    let rest = *self.member.get_ref();
+                    if rest.is_empty() {
+                        return Ok(0);
+                    }
+                    self.member = GzDecoder::new(rest);
+                }
+                Ok(read) => return Ok(read),
+                Err(_) if self.complete => {
+                    self.broken_tail = true;
+                    return Ok(0);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+}
+
+// Die `bufread`-Entpacker von flate2 verbrauchen von ihrer Eingabe genau die
+// Bytes, die zum Strom gehören (`consume` mit `total_in`). Was nach dem Ende im
+// Slice steht, liegt also hinter dem Strom. Beim gzip-Leser bleibt dort nach
+// einem sauberen Ende nie etwas stehen; ein Rest, der kein Member ist, steht
+// in `broken_tail`.
+impl StreamEnd for GzipMembers<'_> {
+    fn has_trailing_input(&mut self) -> bool {
+        self.broken_tail || !self.member.get_ref().is_empty()
+    }
+}
+
+impl StreamEnd for ZlibDecoder<&[u8]> {
+    fn has_trailing_input(&mut self) -> bool {
+        !self.get_ref().is_empty()
+    }
+}
+
+impl StreamEnd for DeflateDecoder<&[u8]> {
+    fn has_trailing_input(&mut self) -> bool {
+        !self.get_ref().is_empty()
+    }
+}
+
+// Der brotli-Leser puffert seine Eingabe selbst. Das erste `read` nach dem Ende
+// liefert `0`, auch wenn im Puffer noch Bytes liegen (der Test
+// `brotli_reader_ignores_trailing_bytes` hält das fest). Erst ein zweites
+// `read` meldet einen Rest im Puffer als Fehler; was er noch nicht aus dem
+// Slice geholt hat, steht in `get_ref`. Beides zusammen ist der Rest. Liefert
+// das zweite `read` wider Erwarten Bytes, gilt auch das als Rest; sie werden
+// nicht angehängt.
+impl StreamEnd for brotli::Decompressor<&[u8]> {
+    fn has_trailing_input(&mut self) -> bool {
+        let mut probe = [0u8; 1];
+        match self.read(&mut probe) {
+            Ok(0) => !self.get_ref().is_empty(),
+            Ok(_) | Err(_) => true,
+        }
+    }
+}
+
 /// Liest einen Strom, bis er endet oder das Budget zumacht.
-fn read_limited<R: Read>(mut reader: R, budget: &mut Budget) -> Result<Inflated, InflateError> {
+///
+/// Der eine Weg für alle Kodierungen: Die Ausgabe aller gzip-Member läuft
+/// durch dasselbe Budget, und nach dem Ende eines Stroms prüft
+/// [`StreamEnd::has_trailing_input`], ob dahinter noch etwas liegt.
+fn read_limited<R: StreamEnd>(
+    mut reader: R,
+    budget: &mut Budget,
+) -> Result<Inflated, InflateError> {
     let mut bytes = Vec::new();
     let mut chunk = [0u8; DECOMPRESS_CHUNK];
     loop {
@@ -410,10 +560,13 @@ fn read_limited<R: Read>(mut reader: R, budget: &mut Budget) -> Result<Inflated,
                 Ok(more) => more,
                 Err(source) => return Err(broken(source, bytes)),
             };
-            return Ok(Inflated {
-                stopped: more > 0,
-                bytes,
-            });
+            if more > 0 {
+                return Ok(Inflated {
+                    stopped: true,
+                    bytes,
+                });
+            }
+            return finish(reader, bytes);
         }
         // Ein Byte über das Budget hinaus anfragen: kommt es, war der Strom
         // länger als erlaubt, und der Scan ist unvollständig.
@@ -423,10 +576,7 @@ fn read_limited<R: Read>(mut reader: R, budget: &mut Budget) -> Result<Inflated,
             Err(source) => return Err(broken(source, bytes)),
         };
         if read == 0 {
-            return Ok(Inflated {
-                bytes,
-                stopped: false,
-            });
+            return finish(reader, bytes);
         }
         if read > left {
             bytes.extend_from_slice(&chunk[..left]);
@@ -439,6 +589,17 @@ fn read_limited<R: Read>(mut reader: R, budget: &mut Budget) -> Result<Inflated,
         bytes.extend_from_slice(&chunk[..read]);
         budget.take(read);
     }
+}
+
+/// Das Ende eines Stroms: vollständig, oder mit Bytes dahinter (HUM-247).
+fn finish<R: StreamEnd>(mut reader: R, bytes: Vec<u8>) -> Result<Inflated, InflateError> {
+    if reader.has_trailing_input() {
+        return Err(InflateError::TrailingBytes { decoded: bytes });
+    }
+    Ok(Inflated {
+        bytes,
+        stopped: false,
+    })
 }
 
 /// Der Abbruch eines Stroms samt dem, was bis dahin entstanden ist.
@@ -463,6 +624,22 @@ fn ratio_exceeded(
             "der Body ist mit \"{}\" kodiert und wäre beim Entpacken über das Verhältnis \
              {max_ratio}:1 gewachsen (limits.max_decompress_ratio); aus {packed} gepackten Bytes \
              wurden die ersten {produced} entpackt und durchsucht, dann brach das Entpacken ab",
+            encoding.as_str(),
+        ))
+        .build()
+}
+
+/// Der Befund `FINDINGS_002` für Bytes hinter dem Ende eines Stroms (HUM-247).
+///
+/// Ohne `fix`: Kein Wert einer Einstellung macht den Rest lesbar, er gehört
+/// zu keinem Strom, den der Scan kennt.
+fn trailing_gap(encoding: &ContentEncoding, packed: usize, scanned: usize) -> Diagnostic {
+    Diagnostic::builder(FINDINGS_002, Severity::Warning)
+        .why(format!(
+            "der Body ist mit \"{}\" kodiert, und hinter dem Ende des Stroms liegen weitere \
+             Bytes; durchsucht wurden die {scanned} entpackten Bytes davor, der Rest nicht \
+             (gepackt {packed} Bytes). Ein anderer Entpacker kann den Rest als weiteren Inhalt \
+             lesen",
             encoding.as_str(),
         ))
         .build()
@@ -595,14 +772,42 @@ mod tests {
     use flate2::Compression;
     use flate2::write::{DeflateEncoder, GzEncoder, ZlibEncoder};
 
+    use std::io::Read as _;
+
     use super::{
-        Budget, ContentEncoding, MIN_PRINTABLE_RUN, decode_body, percent_decode, printable_only,
+        Budget, ContentEncoding, DECOMPRESS_CHUNK, DecodedBody, InflateError, MIN_PRINTABLE_RUN,
+        decode_body, percent_decode, printable_only, read_limited,
     };
 
     fn gzip(bytes: &[u8]) -> Vec<u8> {
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(bytes).unwrap();
         encoder.finish().unwrap()
+    }
+
+    fn zlib(bytes: &[u8]) -> Vec<u8> {
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn raw_deflate(bytes: &[u8]) -> Vec<u8> {
+        let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn brotli(bytes: &[u8]) -> Vec<u8> {
+        let mut packed = Vec::new();
+        {
+            let mut encoder = brotli::CompressorWriter::new(&mut packed, 4096, 5, 22);
+            encoder.write_all(bytes).unwrap();
+        }
+        packed
+    }
+
+    fn code(decoded: &DecodedBody) -> Option<&str> {
+        decoded.diagnostic.as_ref().map(|found| found.code.as_str())
     }
 
     #[test]
@@ -670,34 +875,171 @@ mod tests {
     #[test]
     fn deflate_is_read_with_and_without_the_zlib_frame() {
         let plain = b"AKIAIOSFODNN7EXAMPLE steht hier drin, mehrfach AKIAIOSFODNN7EXAMPLE";
-        let mut framed = ZlibEncoder::new(Vec::new(), Compression::default());
-        framed.write_all(plain).unwrap();
-        let framed = framed.finish().unwrap();
-        assert_eq!(
-            decode_body(&framed, &ContentEncoding::Deflate, 4096, 100).bytes,
-            plain
-        );
-
-        let mut bare = DeflateEncoder::new(Vec::new(), Compression::default());
-        bare.write_all(plain).unwrap();
-        let bare = bare.finish().unwrap();
-        assert_eq!(
-            decode_body(&bare, &ContentEncoding::Deflate, 4096, 100).bytes,
-            plain
-        );
+        // Ein Strom, der genau endet, ist vollständig: Die Prüfung auf Bytes
+        // hinter dem Ende meldet hier nichts (HUM-247).
+        for packed in [zlib(plain), raw_deflate(plain)] {
+            let decoded = decode_body(&packed, &ContentEncoding::Deflate, 4096, 100);
+            assert_eq!(decoded.bytes, plain);
+            assert!(!decoded.truncated);
+            assert!(decoded.diagnostic.is_none());
+        }
     }
 
     #[test]
     fn a_brotli_body_is_decoded_whole() {
         let plain = b"Kontakt: vorname.nachname@kunde.de, bitte antworten";
-        let mut packed = Vec::new();
-        {
-            let mut encoder = brotli::CompressorWriter::new(&mut packed, 4096, 5, 22);
-            encoder.write_all(plain).unwrap();
-        }
-        let decoded = decode_body(&packed, &ContentEncoding::Brotli, 4096, 100);
+        let decoded = decode_body(&brotli(plain), &ContentEncoding::Brotli, 4096, 100);
         assert_eq!(decoded.bytes, plain);
         assert!(!decoded.truncated);
+        assert!(decoded.diagnostic.is_none());
+    }
+
+    #[test]
+    fn gzip_members_share_the_budget() {
+        // Jedes Member für sich bleibt unter dem Budget, beide zusammen
+        // nicht. Mit einem Budget je Member käme der Body vollständig durch.
+        let len = 64 * 1024;
+        let member = gzip(&vec![0u8; len]);
+        let body = [member.clone(), member].concat();
+
+        // Das Verhältnis ist die engere Grenze, irgendwo zwischen einem und
+        // zwei Membern Ausgabe. Seit HUM-057 meldet das `LIMIT_003`.
+        let ratio = u32::try_from(len * 3 / 2 / body.len()).unwrap();
+        let allowance = body.len() * usize::try_from(ratio).unwrap();
+        assert!(len < allowance && allowance < 2 * len, "{allowance}");
+        let decoded = decode_body(&body, &ContentEncoding::Gzip, 8 * 1024 * 1024, ratio);
+        assert!(decoded.truncated);
+        assert_eq!(decoded.bytes.len(), allowance);
+        assert_eq!(code(&decoded), Some("LIMIT_003"));
+
+        // Das Cap ist die engere Grenze: `FINDINGS_002`.
+        let cap = len * 3 / 2;
+        let decoded = decode_body(&body, &ContentEncoding::Gzip, cap, 1_000_000);
+        assert!(decoded.truncated);
+        assert_eq!(decoded.bytes.len(), cap);
+        assert_eq!(code(&decoded), Some("FINDINGS_002"));
+
+        // Gegenprobe: Mit genug Budget kommen beide Member vollständig durch.
+        let decoded = decode_body(&body, &ContentEncoding::Gzip, 2 * len, 1_000_000);
+        assert!(!decoded.truncated);
+        assert_eq!(decoded.bytes.len(), 2 * len);
+    }
+
+    #[test]
+    fn gzip_garbage_after_the_last_member_is_a_gap() {
+        // Bytes nach einem Member, die kein weiteres Member sind, liegen nicht
+        // still, und sie machen das vollständige Member davor nicht unlesbar:
+        // Es wird durchsucht, der Rest wird zur Lücke.
+        let plain = b"iban GB82 WEST 1234 5698 7654 32";
+        let mut broken_member = gzip(b"zweites Member");
+        broken_member.truncate(broken_member.len() - 3);
+        for tail in [&b"x"[..], &[0x1f][..], &[0u8; 4][..], &broken_member[..]] {
+            let body = [gzip(plain), tail.to_vec()].concat();
+            let decoded = decode_body(&body, &ContentEncoding::Gzip, 4096, 100);
+            assert!(decoded.truncated, "{tail:?}");
+            assert_eq!(code(&decoded), Some("FINDINGS_002"), "{tail:?}");
+            assert!(decoded.bytes.starts_with(plain), "{tail:?}");
+            let why = &decoded.diagnostic.as_ref().unwrap().why;
+            assert!(why.contains("hinter dem Ende des Stroms"), "{why}");
+        }
+    }
+
+    #[test]
+    fn trailing_bytes_after_deflate_are_a_gap() {
+        let plain = b"AKIAIOSFODNN7EXAMPLE und dahinter noch etwas";
+        let hidden = zlib(b"versteckt");
+        for packed in [zlib(plain), raw_deflate(plain)] {
+            for tail in [&b"x"[..], &[0u8; 4][..], &hidden[..]] {
+                let body = [packed.clone(), tail.to_vec()].concat();
+                let decoded = decode_body(&body, &ContentEncoding::Deflate, 4096, 100);
+                assert!(decoded.truncated, "{tail:?}");
+                assert_eq!(code(&decoded), Some("FINDINGS_002"), "{tail:?}");
+                // Was vor dem Ende stand, ist entpackt und wird durchsucht.
+                assert_eq!(decoded.bytes, plain);
+                let why = &decoded.diagnostic.as_ref().unwrap().why;
+                assert!(why.contains("hinter dem Ende des Stroms"), "{why}");
+            }
+        }
+    }
+
+    #[test]
+    fn brotli_reader_ignores_trailing_bytes() {
+        // Festgestellt für HUM-247: `brotli::Decompressor` meldet das Ende
+        // eines Stroms mit `Ok(0)`, auch wenn dahinter noch Bytes liegen. Wer
+        // nur bis zum ersten `0` liest, bekommt einen still vollständigen Body.
+        let plain = b"Kontakt: vorname.nachname@kunde.de";
+        let body = [brotli(plain), b"und noch etwas".to_vec()].concat();
+        let mut reader = brotli::Decompressor::new(&body[..], DECOMPRESS_CHUNK);
+        let mut out = Vec::new();
+        reader.read_to_end(&mut out).unwrap();
+        assert_eq!(out, plain);
+    }
+
+    #[test]
+    fn trailing_bytes_after_br_are_a_gap() {
+        let plain = b"Kontakt: vorname.nachname@kunde.de, bitte antworten";
+        let packed = brotli(plain);
+        for tail in [
+            b"x".to_vec(),
+            brotli(b"versteckt"),
+            // Länger als der Puffer des Lesers: Ein Teil bleibt im Slice.
+            vec![b'y'; 2 * DECOMPRESS_CHUNK],
+        ] {
+            let body = [packed.clone(), tail].concat();
+            let decoded = decode_body(&body, &ContentEncoding::Brotli, 4096, 100);
+            assert!(decoded.truncated);
+            assert_eq!(code(&decoded), Some("FINDINGS_002"));
+            assert_eq!(decoded.bytes, plain);
+        }
+    }
+
+    #[test]
+    fn trailing_bytes_behind_the_brotli_buffer_are_a_gap() {
+        // Der Puffer des Lesers ist genau so groß wie der Strom: Nach dem Ende
+        // ist der Puffer leer, und der Rest steht nur noch im Slice.
+        let plain = b"Kontakt: vorname.nachname@kunde.de, bitte antworten";
+        let packed = brotli(plain);
+        let body = [packed.clone(), b"rest".to_vec()].concat();
+
+        let reader = brotli::Decompressor::new(&body[..], packed.len());
+        let mut budget = Budget::new(body.len(), 4096, 100);
+        match read_limited(reader, &mut budget) {
+            Err(InflateError::TrailingBytes { decoded }) => assert_eq!(decoded, plain),
+            Err(other) => panic!("expected trailing bytes, got {other}"),
+            Ok(inflated) => panic!("expected trailing bytes, got {inflated:?}"),
+        }
+
+        let reader = brotli::Decompressor::new(&packed[..], packed.len());
+        let mut budget = Budget::new(packed.len(), 4096, 100);
+        let inflated = read_limited(reader, &mut budget).unwrap();
+        assert_eq!(inflated.bytes, plain);
+        assert!(!inflated.stopped);
+    }
+
+    #[test]
+    fn trailing_bytes_are_seen_at_an_exactly_full_budget() {
+        // Der Strom füllt das Budget genau. Ohne Rest ist der Body vollständig,
+        // mit Rest eine Lücke; die Prüfung entpackt dabei kein Byte mehr.
+        let plain = b"genau so lang wie das Cap, kein Byte mehr";
+        let cap = plain.len();
+        let encodings = [
+            (ContentEncoding::Gzip, gzip(plain)),
+            (ContentEncoding::Deflate, zlib(plain)),
+            (ContentEncoding::Deflate, raw_deflate(plain)),
+            (ContentEncoding::Brotli, brotli(plain)),
+        ];
+        for (encoding, packed) in encodings {
+            let decoded = decode_body(&packed, &encoding, cap, 1_000_000);
+            assert!(!decoded.truncated, "{encoding:?}");
+            assert!(decoded.diagnostic.is_none(), "{encoding:?}");
+            assert_eq!(decoded.bytes, plain);
+
+            let body = [packed, b"rest".to_vec()].concat();
+            let decoded = decode_body(&body, &encoding, cap, 1_000_000);
+            assert!(decoded.truncated, "{encoding:?}");
+            assert_eq!(code(&decoded), Some("FINDINGS_002"), "{encoding:?}");
+            assert!(decoded.bytes.len() <= cap);
+        }
     }
 
     #[test]
