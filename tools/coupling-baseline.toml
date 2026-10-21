@@ -18,7 +18,7 @@
 "daemon/bin/humanitl/src/cli.rs" = 2
 "daemon/bin/humanitl/src/cmd/mod.rs" = 3
 "daemon/bin/humanitl/src/cmd/run.rs" = 1
-"daemon/bin/humanitl/src/cmd/sandbox.rs" = 13
+"daemon/bin/humanitl/src/cmd/sandbox.rs" = 11
 "daemon/bin/humanitl/src/cmd/unit.rs" = 1
 "daemon/bin/humanitl/src/main.rs" = 2
 "daemon/bin/humanitl/src/render.rs" = 7

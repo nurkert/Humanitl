@@ -160,6 +160,19 @@ dem Host. Zum Ende eines Sandbox-Laufs zeigt Humanitl eine Zusammenfassung der b
 markiert Symlinks mit Ziel außerhalb von `/work` und führt den Findings-Scan über den Diff, nicht
 nur über die Netzwerk-Anfragen.
 
+Eingehängt wird genau das Verzeichnis, das geprüft wurde (HUM-263). Der Launcher öffnet den
+Projektordner und die Einträge aus `mounts.extra_ro` und `mounts.extra_rw` einmal als
+`O_PATH`-Deskriptor, prüft den Ort aus `/proc/self/fd/N` gegen die Mount-Politik und übergibt
+`bwrap` den Deskriptor statt des Pfades (`--bind-fd` ab bubblewrap 0.10, sonst `/proc/self/fd/N`).
+Vorher genügte Schreibrecht auf einen Elternordner, um den Ordner zwischen Prüfung und Mount gegen
+einen Symlink auf `~/.ssh` oder `~/.config/humanitl` zu tauschen: für ein anderes Konto auf dem
+Rechner oder für Angreifer (b) in einer anderen Sitzung, deren beschreibbares `/work` den neuen
+Projektordner enthält. Der Deskriptor erreicht den Agenten nicht, denn von einem
+Verzeichnis-Deskriptor des Hosts führte `openat(fd, "..")` aus der Sandbox hinaus: Mit
+`--bind-fd` schließt ihn `bwrap`, beim Rückfall der Shim vor dem Start des Agenten, und
+`escape-launch` startet ohne brauchbaren Shim nur mit `--bind-fd`. Im Daemon trägt er durchgehend
+`FD_CLOEXEC`, nur das `bwrap`-Kind verliert es zwischen `fork` und `exec`.
+
 *Restrisiko.* Ein Agent kann Daten im Projekt umschichten, verschleiern oder in einer Datei
 ablegen, die der Mensch später selbst nach außen trägt. Humanitl sieht das nur, wenn der Mensch
 den Diff liest.
@@ -686,6 +699,7 @@ Sitzungs-Historie steht.
 | 2026-10-19 | Schutzziel 1: `stream: true` als zweite erklärte Ausnahme. Eine Anfrage über `limits.hold_body_cap_bytes` wurde bis dahin immer geblockt, auch wenn eine Regel `stream: true` trug; jetzt geht sie unter einer solchen Regel (`allow` oder `ask`) gestreamt hinaus, entschieden über den Kopf, der Body ohne Scan und ohne Vorschau, aufgezeichnet bis `limits.recorder_max_body_bytes`. Unter `hold.hard_block_checksum_secrets` greift `stream: true` nicht, und `LIMIT_001` schlägt dann das Cap vor statt einer Regel. Der Vorschlag am Block (`LIMIT_001`) ist sonst eine Regel mit `ask`, nie `allow`. Restrisiko: Wer eine solche Regel anlegt, gibt für diese Anfragen den Blick auf den Body auf | HUM-057 |
 | 2026-10-20 | Vertrauen zum Ziel: Der Daemon prüft Zertifikate von Zielen und vom LLM-Endpunkt gegen die Zertifikatsablage des Systems statt nur gegen `webpki-roots`, damit eine Firmen-CA oder eine selbst installierte CA wirkt wie bei `curl`. Opt-out `tls.trust_system_store = false` (im Projekt-Profil gesperrt), Rückfall auf `webpki-roots` bei leerer Ablage. Kein neuer Angreifer: Die Ablage schreibt nur root (2.2), die Umgebung des Daemons nur das eigene Konto. Die Humanitl-CA für die Sandbox und die Entscheidung vor jeder Verbindung bleiben unverändert | HUM-257 |
 | 2026-10-20 | K-02: Die Endpunkte, die Humanitl aus `/v1/` und `/api/` in `llm.passthrough_paths` macht, gelten genau statt als Präfix; `POST /v1/models/delete` ging vorher ungehalten durch und wird jetzt gehalten. Ein Eintrag mit `?` am Ende ist in jeder Regel ein genauer Pfad; vorher traf er nie etwas, weil der verglichene Pfad kein `?` enthält. Ein solcher handgeschriebener, bisher toter Eintrag trifft jetzt genau seinen Pfad; `rules.yaml` warnt beim Laden davor (`RULES_005`, Warnung). Hinter einem Pfad-Präfix des Endpunkts liegen die Inferenz-Endpunkte unter dessen Basis, die Ollama-Endpunkte entfallen. Die Durchreichregel wird an keiner Stelle breiter | HUM-261 |
+| 2026-10-21 | K-01: Projektordner und `mounts.extra_ro`/`mounts.extra_rw` werden einmal als Deskriptor geöffnet, am Ort aus `/proc/self/fd/N` gegen die Mount-Politik geprüft und per Deskriptor gebunden (`--bind-fd` ab bubblewrap 0.10, sonst `/proc/self/fd/N`). Vorher löste `bwrap` den geprüften Pfad beim Einhängen neu auf, und wer einen Elternordner beschreiben konnte (ein anderes Konto, oder Angreifer (b) aus einer Sitzung, deren `/work` den Ordner enthält), tauschte ihn dazwischen gegen einen Symlink auf ein geschütztes Verzeichnis. Fehlt eine Profilquelle beim Planen, lehnt der Plan mit `SANDBOX_006` ab, und die Sandbox startet nicht; `--tests-dir` geht denselben Weg. Der Deskriptor erreicht den Agenten nicht: `bwrap` (bei `--bind-fd`) oder der Shim schließt ihn vor dessen Start, `escape-launch` verweigert die Kombination aus fehlendem Shim und `bwrap` vor 0.10, und im Daemon fällt `FD_CLOEXEC` nur im `bwrap`-Kind | HUM-263 |
 
 Geplante Fortschreibung: HUM-059 bringt das Dokument zum Release auf den Stand des Codes. Jede
 sicherheitsrelevante Änderung am Shim, an der Mount-Allowlist, am Filter oder am Passthrough

@@ -35,6 +35,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-261 | Die Probe versteht Endpunkte mit Pfad-Präfix (vor HUM-060) | S | HUM-037, HUM-039, HUM-076 |
 | HUM-262 | Ein Projektordner, der die eigene Konfiguration enthält, fällt erst beim Start auf (vor HUM-060) | S | HUM-040, HUM-044 |
 | HUM-263 | Zwischen Prüfung und Mount kann der Projektordner getauscht werden (vor HUM-060) | M | HUM-011, HUM-262 |
+| HUM-265 | Shim, CA und Proxy-Socket werden weiter per Pfad gebunden (nach HUM-060) | S | HUM-263 |
 
 ---
 
@@ -4108,9 +4109,82 @@ auf es zeigte.
 - Mutationsbeweis: Bindung wieder per Pfad, der Test wird rot.
 
 ### Akzeptanzkriterien
-- [ ] Der Projektordner wird per Deskriptor geprüft und gebunden; ein Tausch zwischen Prüfung und
+- [x] Der Projektordner wird per Deskriptor geprüft und gebunden; ein Tausch zwischen Prüfung und
   Mount erreicht kein geschütztes Verzeichnis.
-- [ ] `docs/SECURITY.md` und `docs/THREAT-MODEL.md` beschreiben den Fall.
+- [x] `docs/SECURITY.md` und `docs/THREAT-MODEL.md` beschreiben den Fall.
+
+> **Umsetzung (HUM-263, 2026-10-21).** Neues Modul `daemon/crates/sandbox/src/pinned.rs`:
+> `PinnedSource::open` löst den Pfad auf, öffnet das Ergebnis mit `O_PATH | O_NOFOLLOW |
+> O_CLOEXEC` (Projektordner zusätzlich `O_DIRECTORY`), prüft per `fstat` die Art (ein Symlink an
+> der Stelle ist ein Tausch) und vergleicht den Ort aus `/proc/self/fd/N` mit dem aufgelösten
+> Pfad; weicht er ab, bricht der Plan mit `SANDBOX_006` ab. `BwrapBackend::plan` prüft wie bisher
+> den geschriebenen Pfad, öffnet dann den Ordner, prüft `MountPolicy::check_work_dir` auf dem Ort
+> des Deskriptors und rechnet auch `present_under_work` über `/proc/self/fd/N`, damit die Masken
+> zum eingehängten Verzeichnis passen. Der Deskriptor kommt in die vererbte Liste;
+> `LaunchInputs::work_dir` rendert `--bind-fd`/`--ro-bind-fd` ab bubblewrap 0.10
+> (`BIND_FD_VERSION`, eingeführt gegen CVE-2024-42472; lokal 0.13.1, Mindestversion bleibt 0.8),
+> darunter `--bind /proc/self/fd/N` (`SourceFd::ProcSelf`). Nach dem Start schließt
+> `supervise` die eigene Kopie wie jeden geerbten Deskriptor. Vorschau und Schnappschuss
+> (`LaunchInputs::preview`) zeigen weiter die Pfade.
+>
+> **Der Deskriptor darf den Agenten nie erreichen.** Gemessen: Ein geerbter
+> Verzeichnis-Deskriptor des Hosts öffnet in der Sandbox mit `cat /proc/self/fd/9/../x` Dateien
+> neben dem Projektordner. `--bind-fd` schließt ihn in `bwrap`; beim Rückfall über
+> `/proc/self/fd/N` lässt `bwrap` ihn offen, und der Shim schließt ihn vor dem Start des Agenten
+> (`close_inherited`, Test `the_parent_drops_what_the_launcher_leaked` im Shim-Crate).
+>
+> **Weitere Mounts, die der Nutzer wählt.** `mounts.extra_ro` und `mounts.extra_rw` hatten
+> dieselbe Lücke (Quelle außerhalb von `$HOME`, Elternordner etwa unter `/srv` oder im
+> beschreibbaren `extra_rw` einer anderen Sitzung) und gehen denselben Weg, als Verzeichnis oder
+> gewöhnliche Datei, geprüft mit `MountPolicy::check` auf dem Ort des Deskriptors. Eine solche
+> Quelle, die beim Planen fehlt, lehnt der Plan jetzt mit `SANDBOX_006` ab; vorher scheiterte
+> `bwrap` erst beim Start. Deshalb nehmen `humanitl sandbox run --tests-dir` und `escape-launch
+> --tests-dir` den Platzhalter `/tests/escape` vor dem Planen aus dem Profil und geben das
+> Verzeichnis dem Backend als nur lesbaren Bind der Sitzung (`BwrapBackend::with_read_only_bind`):
+> geöffnet, mit `MountPolicy::check_session_dir` (Regeln des Projektordners, ohne dessen Abhilfe)
+> geprüft und per Deskriptor gebunden, hinter den Erweiterungen, vor dem Projektordner.
+> `mounts.ro` (Systemverzeichnisse, Elternordner gehört root) bleibt per Pfad.
+>
+> **Nachtrag aus dem Review (Codex, Opus).** `escape-launch` verweigert den Start ohne brauchbaren
+> Shim, wenn `bwrap` älter als 0.10 ist (`refuse_unclosed_descriptors`): Dann schlösse niemand den
+> Deskriptor. `supervise` nimmt `FD_CLOEXEC` nicht mehr im eigenen Prozess unter einem Riegel weg,
+> sondern nur im Kind, zwischen `fork` und `exec` (`daemon/crates/sandbox/src/inherit.rs`,
+> `CommandExt::pre_exec`); das gilt für alle vererbten Deskriptoren, Pipes und memfds eingeschlossen.
+> Andere Starts im Daemon (Doctor-Proben, Secret-Helper, Werkzeuge der Zusammenfassung) erben sie
+> damit nicht mehr. Dafür ist `#![forbid(unsafe_code)]` der Crate `#![deny(unsafe_code)]` geworden,
+> mit `#![allow(unsafe_code)]` nur in `inherit.rs`, nach dem Vorbild von `humanitld/systemd.rs`
+> (CONVENTIONS 4.34); `command-fds` täte an derselben Stelle dasselbe. Jeder vererbte Deskriptor
+> liegt über den Standardströmen (`above_stdio`, `F_DUPFD_CLOEXEC` ab 3), weil die stdio des Kindes
+> 0 bis 2 vor dem Hook per `dup2` ersetzt; `inherit_in_child` nimmt `BorrowedFd` und lehnt
+> Nummern unter 3 ab. Scheitert der Hook (`EBADF`, das `execve` nie liefert), meldet der Start
+> `SANDBOX_012` statt „cannot execute“ mit Installationshinweis. Test
+> `a_closed_standard_stream_is_never_handed_on` (im Kindprozess mit geschlossenem Deskriptor 0);
+> Mutation ohne `above_stdio` in `PinnedSource::open` macht ihn rot („pinned on 0“).
+>
+> Tests: `pinned::tests` (Tausch nach dem Öffnen, Symlink-Ordner, fehlend, Datei, Socket),
+> `bwrap_args::tests::opened_sources_are_bound_by_descriptor_and_the_preview_by_path`,
+> in `tests/launcher.rs` `a_folder_swapped_after_the_check_stays_the_checked_folder` (echtes
+> `bwrap`, `--bind-fd`), `…_without_bind_fd` (dasselbe über `/proc/self/fd/N`),
+> `the_folder_descriptor_does_not_reach_the_command` und
+> `extra_mounts_are_bound_by_descriptor_and_must_exist`,
+> `a_read_only_bind_of_the_caller_is_pinned_and_checked`, `inherit::tests` (das Kind erbt, der
+> Elternprozess behält `FD_CLOEXEC`) und `without_a_shim_an_old_bwrap_is_refused` in
+> `escape-launch.rs`; die Swap-Tests planen, ersetzen den
+> Ordner durch einen Symlink auf das geschützte Laufzeitverzeichnis und starten dann. Dazu die
+> Harness-Tests in `escape-launch.rs` und `cmd/sandbox.rs`. Mutationsbeweise: Bind wieder per
+> Pfad (`bind_source` ignoriert den Deskriptor) macht beide Swap-Tests rot, die Sandbox liest
+> `protected` statt `checked`; immer `/proc/self/fd/N` statt `--bind-fd` macht
+> `the_folder_descriptor_does_not_reach_the_command` rot, der Befehl erbt den Deskriptor;
+> `FD_CLOEXEC` wieder im Elternprozess löschen macht
+> `inherit::tests::the_child_inherits_and_the_parent_keeps_cloexec` rot.
+>
+> Die beiden Kandidaten oben fallen nicht billig mit und bleiben stehen. Shim, CA und
+> Proxy-Socket per Deskriptor: HUM-265. Neue Kandidaten:
+> **Schnappschuss per Pfad.** `SummaryWatch::start` liest `work_src` zwischen Plan und Start per
+> Pfad; ein Tausch in diesem Fenster ließe die Zusammenfassung einen anderen Baum vergleichen
+> (Anzeige, kein Zugriff der Sandbox). Der Plan könnte den Deskriptor dafür hergeben.
+> **`sandbox run --profile test` ohne `--tests-dir`** scheitert jetzt beim Planen statt beim Start,
+> weil `/tests/escape` auf dem Host fehlt; der Befund könnte `--tests-dir` als Abhilfe nennen.
 
 ### Kandidaten aus demselben Review
 - **Status meldet `failed` bei laufender Sitzung.** Seit HUM-262 prüft `prepare_keyed` auch den
@@ -4125,3 +4199,66 @@ auf es zeigte.
 ### Referenzen
 HUM-011 (`MountPolicy`), HUM-262, `daemon/crates/sandbox/src/bwrap.rs`,
 `daemon/crates/sandbox/src/bwrap_args.rs`, `docs/THREAT-MODEL.md` (Angreifer (d)).
+
+## HUM-265 · Shim, CA und Proxy-Socket werden weiter per Pfad gebunden
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-263 · Sicherheit · nach HUM-060
+
+### Kontext
+Gefunden im Review von HUM-263. Seit HUM-263 bindet der Launcher den Projektordner, die
+Erweiterungen des Profils und `--tests-dir` per Deskriptor. Per Pfad bleiben die Quellen, die die
+Sitzung selbst mitbringt: `shim_src`, `ca_cert_src`, `ca_bundle_src` und `proxy_socket_src`
+(`daemon/crates/sandbox/src/bwrap_args.rs`, die vier `args.bind("--ro-bind", …)` nach dem
+Projektordner). Die Dateien des Agent-Adapters sind nicht betroffen: Sie kommen als versiegelte
+memfds (`--ro-bind-data`), nie als Pfad.
+
+Geprüft am 2026-10-21:
+- **CA, Bundle, Proxy-Socket** liegen unter `$XDG_DATA_HOME/humanitl` und dem
+  Laufzeitverzeichnis, beide von der `MountPolicy` geschützt und vom Daemon mit `0700` angelegt.
+  Ein anderes Konto kann dort nichts tauschen, der Agent erreicht beide Bäume nie (ein
+  Projektordner darin wird abgelehnt). Ein Tausch setzt ein Konto voraus, das ohnehin die
+  Einrichtung des Daemons ändert (`docs/THREAT-MODEL.md` 2.2).
+- **Der Shim** wird zuerst neben dem eigenen Binary gesucht (`shim_path` in
+  `daemon/crates/ipc/src/sandbox.rs` und `daemon/bin/humanitl/src/cmd/sandbox.rs`), dann unter
+  `/usr/lib/humanitl` und Verwandten. Im Paket liegt er root-eigen unter `/usr/lib/humanitl`;
+  dort tauscht ihn niemand ohne root. Im Entwicklungsfall liegt er in `daemon/target/debug/` eines
+  Repos. Hatte eine frühere Sitzung dieses Repo beschreibbar als `/work` eingehängt, kann ihr Agent
+  `target/debug/humanitl-shim` ersetzen, und die nächste Sitzung startet seinen Shim als PID 1.
+  Der setzt dann weder den seccomp-Filter noch berichtet er ehrlich an den Isolations-Check
+  (er kann `CHECK … ok` fälschen). Die Namensräume von `bwrap` bleiben: kein Netz-Interface, kein
+  Mount außer den gebundenen, nur der Proxy-Socket als Tür.
+
+### Ziel
+Die Quellen der Sitzung kommen genauso per Deskriptor in die Sandbox wie der Projektordner, und
+ein Shim, den die Sandbox schreiben konnte, startet nicht.
+
+### Fix-Idee
+- `shim_src`, `ca_cert_src`, `ca_bundle_src`, `proxy_socket_src` über `PinnedSource` öffnen
+  (der Socket als `O_PATH` ohne `O_DIRECTORY`, Art per `fstat`) und per `--ro-bind-fd` binden.
+- Den Shim zusätzlich prüfen: Eigentümer root oder das eigene Konto, nicht für Gruppe oder Andere
+  schreibbar, und kein Vorfahr, den die `MountPolicy` als beschreibbaren Projektordner zuließe,
+  oder einfacher: Das Shim-Binary wird vor dem Start in ein versiegeltes memfd kopiert und von dort
+  gebunden (`--ro-bind-data` geht für ausführbare Dateien nicht, also `--file` plus `--chmod` oder
+  der Bind des memfd über `/proc/self/fd/N`; zu messen).
+
+### Warum nach HUM-060
+Das Release liefert den Shim root-eigen unter `/usr/lib/humanitl`, und das Archiv legt ihn
+außerhalb jedes Projektordners ab; der Angriff braucht einen Entwicklungsbau in einem Repo, das
+eine frühere Sitzung beschreibbar eingehängt hatte. Selbst dann bleiben Netz- und
+Mount-Namensraum der Sandbox stehen; verloren geht der seccomp-Filter und die Ehrlichkeit des
+Isolations-Berichts. CA und Socket sind schon heute nur für das eigene Konto erreichbar. Das
+rechtfertigt keinen Aufschub des Releases, wohl aber ein eigenes Issue direkt danach.
+
+### Tests
+- Plan-Test: Shim, CA, Bundle und Socket erscheinen als `--ro-bind-fd FD DST`, nie als Pfad.
+- Swap-Test wie in HUM-263: nach dem Plan wird `shim_src` durch ein anderes Skript ersetzt; die
+  Sandbox startet den geprüften Shim.
+- Mutationsbeweis: Bind wieder per Pfad, der Swap-Test wird rot.
+
+### Akzeptanzkriterien
+- [ ] Shim, CA, Bundle und Proxy-Socket werden per Deskriptor gebunden; ein Tausch nach dem Plan
+  erreicht die Sandbox nicht.
+- [ ] Ein Shim in einem Verzeichnis, das eine Sandbox beschreiben konnte, wird erkannt oder kann
+  nicht mehr getauscht werden; `docs/SECURITY.md` und `docs/THREAT-MODEL.md` nennen den Fall.
+
+### Referenzen
+HUM-263, HUM-012 (Shim), HUM-013 (Proxy-Socket), `daemon/crates/sandbox/src/pinned.rs`.

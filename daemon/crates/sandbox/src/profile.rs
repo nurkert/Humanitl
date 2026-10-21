@@ -1041,6 +1041,19 @@ impl MountPolicy {
         })
     }
 
+    /// Prüft eine Quelle, die der Aufrufer zur Sitzung beiträgt, nach den
+    /// Regeln des Projektverzeichnisses, aber ohne dessen Abhilfe: das
+    /// Testverzeichnis der Escape-Tests (HUM-263). Es darf unter dem
+    /// Heimatverzeichnis liegen; das Heimatverzeichnis selbst, seine
+    /// Schlüsselverzeichnisse, die Denylist und alles darüber nicht.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`] mit `SANDBOX_006` und dem beanstandeten Pfad.
+    pub fn check_session_dir(&self, source: &Path, whence: &str) -> Result<(), Diagnostic> {
+        self.check_scope(source, whence, Scope::WorkDir)
+    }
+
     fn check_scope(&self, source: &Path, whence: &str, scope: Scope) -> Result<(), Diagnostic> {
         if !source.is_absolute() {
             return Err(deny(
