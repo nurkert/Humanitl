@@ -16,12 +16,11 @@
 //! - **Geerbte Deskriptoren, keine Umnummerierung.** Die Masken und die drei
 //!   Identitätsdateien kommen aus versiegelten memfds, einer je Datei
 //!   (`bwrap` schließt jeden nach dem Lesen); der Bericht des Shims und der
-//!   Status von `bwrap` über je eine Pipe. Die Deskriptoren werden
-//!   unmittelbar vor dem Start von `FD_CLOEXEC` befreit und unter ihrer
-//!   eigenen Nummer vererbt; ein `dup2` im Kind bräuchte `pre_exec`, also
-//!   `unsafe`, und das ist in dieser Crate verboten. Ein prozessweiter Riegel
-//!   hält das Fenster, in dem ein fremder `spawn` sie miterben könnte, so
-//!   kurz wie möglich.
+//!   Status von `bwrap` über je eine Pipe; dazu die geöffneten Verzeichnisse
+//!   (HUM-263). Sie werden unter ihrer eigenen Nummer vererbt, und
+//!   `FD_CLOEXEC` fällt nur im Kind, zwischen `fork` und `exec`
+//!   (`inherit.rs`). Im eigenen Prozess bleibt es die ganze Zeit
+//!   stehen, sodass kein anderer Start im selben Augenblick sie miterbt.
 //! - **Ein Thread je Sandbox.** `--die-with-parent` ist `PR_SET_PDEATHSIG`,
 //!   und das Signal kommt, wenn der *Thread* endet, der `bwrap` gestartet
 //!   hat. Ein Thread aus einem Pool, der nach zehn Sekunden Leerlauf stirbt,
@@ -39,13 +38,13 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, PipeReader, Read, Seek, SeekFrom, Write};
-use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStringExt as _;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex, PoisonError, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -57,7 +56,6 @@ use humanitl_core::diagnostics::codes::{
 use humanitl_core::ids::SandboxId;
 use humanitl_core::{Diagnostic, DiagnosticCode, FixAction, Severity};
 use rustix::fs::{Access, MemfdFlags, SealFlags, access, fcntl_add_seals, memfd_create};
-use rustix::io::{FdFlags, fcntl_setfd};
 use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
 use rustix::termios::{Winsize, tcsetwinsize};
 
@@ -65,12 +63,14 @@ use crate::bridge_env::{
     CHECK_BRIDGE_LISTENING, CHECK_FAMILIES, CHECK_NO_INTERFACES, CHECK_SECCOMP_APPLIED,
     CHECK_SINGLE_SOCKET, parse_check_line, parse_exec_line,
 };
-use crate::bwrap_args::{IdentityFds, LaunchInputs, MaskFds};
+use crate::bwrap_args::{IdentityFds, LaunchInputs, MaskFds, SourceFd};
 use crate::handle::{OutputSink, ReportSnapshot, SandboxHandle, Shared};
+use crate::inherit::{HOOK_ERRNO, above_stdio, inherit_in_child};
 use crate::launcher::{
     CheckResult, IsolationCheck, LaunchOnce, LaunchPlan, SandboxBackend, StdioMode,
 };
 use crate::os_release::install_command;
+use crate::pinned::{PinnedSource, SourceKind};
 use crate::profile::{MountPolicy, SandboxProfile, SessionContext, WORK_DST, normalize};
 
 /// Die kleinste `bwrap`-Fassung, mit der der Launcher arbeitet.
@@ -79,6 +79,15 @@ use crate::profile::{MountPolicy, SandboxProfile, SessionContext, WORK_DST, norm
 /// `--ro-bind-data` länger; 0.8 ist, was Debian 12 und Ubuntu 24.04
 /// ausliefern, und was das Profil als Untergrenze nennt.
 pub const MIN_BWRAP_VERSION: Version = Version(0, 8, 0);
+
+/// Ab dieser `bwrap`-Fassung gibt es `--bind-fd` und `--ro-bind-fd`
+/// (bubblewrap 0.10.0, eingeführt gegen CVE-2024-42472 in Flatpak).
+///
+/// Darunter bindet der Launcher einen geöffneten Ordner über
+/// `/proc/self/fd/N` (HUM-263, [`SourceFd::ProcSelf`]). Beides hängt genau
+/// das Verzeichnis ein, das geprüft wurde; der Unterschied ist, wer den
+/// Deskriptor schließt: mit `--bind-fd` `bwrap` selbst, sonst der Shim.
+pub const BIND_FD_VERSION: Version = Version(0, 10, 0);
 
 /// Wie lange [`BwrapBackend::launch`] nach dem Start auf ein frühes Ende von
 /// `bwrap` wartet, bevor es die Sandbox als laufend meldet (HUM-011: 500 ms).
@@ -111,10 +120,6 @@ const MASK_MEMFD_NAME: &str = "humanitl-mask";
 
 /// Wenn `PATH` fehlt: wo `bwrap` üblicherweise liegt.
 const DEFAULT_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
-
-/// Hält das Fenster zwischen „CLOEXEC entfernt" und „gestartet" prozessweit
-/// exklusiv, siehe Modulbeschreibung.
-static SPAWN_LOCK: Mutex<()> = Mutex::new(());
 
 /// Eine `bwrap`-Fassung als Zahlentripel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -153,6 +158,9 @@ pub struct BwrapBackend {
     report_timeout: Duration,
     /// Wohin die gesammelte Ausgabe zusätzlich geht, während sie läuft.
     output_sink: Option<OutputSink>,
+    /// Nur lesbare Binds, die der Aufrufer zur Sitzung beiträgt, als
+    /// `(Quelle, Ziel)`; siehe [`BwrapBackend::with_read_only_bind`].
+    read_only_binds: Vec<(PathBuf, PathBuf)>,
 }
 
 impl BwrapBackend {
@@ -200,6 +208,7 @@ impl BwrapBackend {
             stdio: StdioMode::default(),
             report_timeout: REPORT_TIMEOUT,
             output_sink: None,
+            read_only_binds: Vec::new(),
         }
     }
 
@@ -219,6 +228,23 @@ impl BwrapBackend {
     #[must_use]
     pub fn with_output_sink(mut self, sink: OutputSink) -> Self {
         self.output_sink = Some(sink);
+        self
+    }
+
+    /// Ein nur lesbarer Bind von `src` nach `dst`, den der Aufrufer zur
+    /// Sitzung beiträgt, nicht das Profil: das Testverzeichnis der
+    /// Escape-Tests (`--tests-dir`).
+    ///
+    /// Er geht denselben Weg wie die Einträge aus `mounts.extra_ro` (HUM-263):
+    /// [`SandboxBackend::plan`] öffnet die Quelle einmal, prüft den Ort ihres
+    /// Deskriptors mit [`MountPolicy::check_session_dir`] und bindet den
+    /// Deskriptor, hinter den Erweiterungen des Profils und vor dem
+    /// Projektordner. Geprüft wird wie beim Projektordner, denn auch diese
+    /// Quelle kommt aus dem Aufruf und darf unter dem Heimatverzeichnis
+    /// liegen; das Heimatverzeichnis selbst und die geschützten Bäume nicht.
+    #[must_use]
+    pub fn with_read_only_bind(mut self, src: impl Into<PathBuf>, dst: impl Into<PathBuf>) -> Self {
+        self.read_only_binds.push((src.into(), dst.into()));
         self
     }
 
@@ -389,6 +415,34 @@ impl BwrapBackend {
                 .build());
         }
         Ok(())
+    }
+
+    /// Öffnet eine Mount-Quelle einmal und hält sie als Deskriptor (HUM-263).
+    ///
+    /// `whence` nennt die Quelle im `why`, zum Beispiel `sandbox.work_dir`.
+    ///
+    /// # Errors
+    ///
+    /// `SANDBOX_006`, wenn die Quelle fehlt, nicht von der verlangten Art ist
+    /// oder zwischen Auflösen und Öffnen getauscht wurde.
+    fn pin(source: &Path, kind: SourceKind, whence: &str) -> Result<PinnedSource, Diagnostic> {
+        PinnedSource::open(source, kind).map_err(|why| {
+            Diagnostic::builder(SANDBOX_006, Severity::Blocking)
+                .why(format!(
+                    "{whence}: {why}; a mount source is opened once and mounted as opened, \
+                     so a source that cannot be opened is not mounted"
+                ))
+                .build()
+        })
+    }
+
+    /// Wie `bwrap` einen geöffneten Deskriptor bekommt, nach seiner Fassung.
+    fn source_fd(&self, pinned: &PinnedSource) -> SourceFd {
+        if self.version >= BIND_FD_VERSION {
+            SourceFd::BindFd(pinned.raw_fd())
+        } else {
+            SourceFd::ProcSelf(pinned.raw_fd())
+        }
     }
 
     fn check_proxy_socket(&self, session: &SessionContext) -> Result<(), Diagnostic> {
@@ -598,7 +652,10 @@ impl BwrapBackend {
         file.write_all(content)
             .and_then(|()| file.seek(SeekFrom::Start(0)))
             .map_err(|err| placeholder_diagnostic(format!("cannot fill memfd {name}: {err}")))?;
-        let fd = OwnedFd::from(file);
+        // Nie auf 0, 1 oder 2: Dort ersetzte die stdio des Kindes ihn, bevor
+        // er vererbt wird (`inherit.rs`).
+        let fd = above_stdio(OwnedFd::from(file))
+            .map_err(|err| placeholder_diagnostic(format!("cannot place memfd {name}: {err}")))?;
         fcntl_add_seals(
             &fd,
             SealFlags::SHRINK | SealFlags::GROW | SealFlags::WRITE | SealFlags::SEAL,
@@ -627,7 +684,10 @@ impl SandboxBackend for BwrapBackend {
     /// # Errors
     ///
     /// - `SANDBOX_006`: eine Quelle des Profils, das Projektverzeichnis oder
-    ///   der Proxy-Socket verletzt die [`MountPolicy`],
+    ///   der Proxy-Socket verletzt die [`MountPolicy`], oder das
+    ///   Projektverzeichnis oder ein Eintrag aus `mounts.extra_ro` und
+    ///   `mounts.extra_rw` lässt sich nicht als Deskriptor öffnen, fehlt oder
+    ///   wurde beim Öffnen getauscht (HUM-263),
     /// - `SANDBOX_002`: `bwrap` ist älter als `sandbox.min_bwrap_version`,
     /// - `SANDBOX_005`: das Projektverzeichnis fehlt, ist keines oder ist bei
     ///   `rw` nicht beschreibbar,
@@ -657,6 +717,12 @@ impl SandboxBackend for BwrapBackend {
 
         Self::check_work_dir(profile, session)?;
         policy.check_work_dir(&session.work_src)?;
+        // Ab hier zählt der Deskriptor, nicht mehr der Pfad (HUM-263): Die
+        // Politik prüft den Ort, an dem das Geöffnete liegt, und `bwrap`
+        // bindet genau diesen Deskriptor. Ein Tausch des Pfades zwischen hier
+        // und dem Einhängen erreicht die Sandbox nicht mehr. Die Prüfung oben
+        // bleibt für den geschriebenen Pfad und für die genaueren Befunde.
+        let pinned = PinnedMounts::open(self, &policy, profile, session)?;
         self.check_proxy_socket(session)?;
         Self::check_regular_file(&session.ca_cert_src, "CA certificate")?;
         Self::check_regular_file(&session.ca_bundle_src, "CA bundle")?;
@@ -664,12 +730,21 @@ impl SandboxBackend for BwrapBackend {
 
         // Die Deskriptoren, in der Reihenfolge, in der sie vererbt werden:
         // die zwei Pipes, die drei Identitätsdateien, dann eine Maske je
-        // Eintrag von `masks_to_render`, jede mit ihrem eigenen memfd.
+        // Eintrag von `masks_to_render`, jede mit ihrem eigenen memfd, die
+        // Adapter-Dateien und zuletzt die geöffneten Verzeichnisse (HUM-263).
         let (report_reader, report_writer) = std::io::pipe().map_err(|err| {
             placeholder_diagnostic(format!("cannot create the report pipe: {err}"))
         })?;
         let (status_reader, status_writer) = std::io::pipe().map_err(|err| {
             placeholder_diagnostic(format!("cannot create the status pipe: {err}"))
+        })?;
+        // Die Schreibseiten erbt `bwrap`; sie liegen deshalb über den
+        // Standardströmen (`inherit.rs`).
+        let report_writer = above_stdio(OwnedFd::from(report_writer)).map_err(|err| {
+            placeholder_diagnostic(format!("cannot place the report pipe: {err}"))
+        })?;
+        let status_writer = above_stdio(OwnedFd::from(status_writer)).map_err(|err| {
+            placeholder_diagnostic(format!("cannot place the status pipe: {err}"))
         })?;
         let identity = profile.identity_files(
             rustix::process::getuid().as_raw(),
@@ -679,7 +754,9 @@ impl SandboxBackend for BwrapBackend {
         let group = Self::sealed_memfd("humanitl-group", identity.group.as_bytes())?;
         let hosts = Self::sealed_memfd("humanitl-hosts", identity.hosts.as_bytes())?;
         let mut warnings = profile.unmask_diagnostics();
-        let present = Self::present_under_work(profile, &session.work_src);
+        // Über den Deskriptor, nicht über den Pfad: Gerendert werden Masken
+        // für das Verzeichnis, das eingehängt wird.
+        let present = Self::present_under_work(profile, &pinned.work.proc_path());
         let unprotected = Self::unprotected_under_work(profile, &present);
         if let Some(diagnostic) = crate::worktree::resolution_diagnostic() {
             warnings.push(diagnostic);
@@ -691,6 +768,7 @@ impl SandboxBackend for BwrapBackend {
             .collect::<Result<Vec<OwnedFd>, Diagnostic>>()?;
 
         let (agent_fds, agent_files) = Self::agent_file_fds(session)?;
+        let (work_dir, read_only, writable) = pinned.sources(self);
 
         let inputs = LaunchInputs {
             masks: MaskFds::Each(masks.iter().map(AsRawFd::as_raw_fd).collect()),
@@ -703,20 +781,19 @@ impl SandboxBackend for BwrapBackend {
             status_fd: Some(status_writer.as_raw_fd()),
             present_under_work: Some(present),
             agent_files,
+            work_dir: Some(work_dir),
+            extra_ro: read_only,
+            extra_rw: writable,
+            session_ro: pinned.session_sources(self),
         };
         let env = profile.effective_env(session, inputs.report_fd);
         let mut argv = vec![self.program.clone().into_os_string()];
         argv.extend(profile.to_bwrap_args(session, &inputs));
 
-        let mut inherit = vec![
-            OwnedFd::from(report_writer),
-            OwnedFd::from(status_writer),
-            passwd,
-            group,
-            hosts,
-        ];
+        let mut inherit = vec![report_writer, status_writer, passwd, group, hosts];
         inherit.extend(masks);
         inherit.extend(agent_fds);
+        inherit.extend(pinned.into_fds());
         let fds = inherit
             .iter()
             .map(|fd| (fd.as_raw_fd(), fd.as_raw_fd()))
@@ -749,7 +826,8 @@ impl SandboxBackend for BwrapBackend {
     /// - `SANDBOX_003`: der Kernel erlaubt keinen Nutzer-Namensraum,
     /// - `SANDBOX_012`: `bwrap` endete innerhalb des Fensters, ohne den Befehl
     ///   gestartet zu haben (mit seiner Fehlerausgabe, wenn sie gesammelt
-    ///   wurde), die Leser-Threads ließen sich nicht starten, oder der Plan
+    ///   wurde), die Leser-Threads ließen sich nicht starten, die geerbten
+    ///   Deskriptoren ließen sich nicht übergeben (HUM-263), oder der Plan
     ///   war schon gestartet.
     fn launch(&self, plan: &LaunchPlan) -> Result<SandboxHandle, Diagnostic> {
         let once = plan
@@ -908,6 +986,94 @@ fn check_from(
     }
 }
 
+/// Die Quellen eines Plans, die als Deskriptor gebunden werden (HUM-263):
+/// der Projektordner und die Einträge aus `mounts.extra_ro` und
+/// `mounts.extra_rw`, jede geöffnet und am Ort ihres Deskriptors geprüft.
+struct PinnedMounts {
+    work: PinnedSource,
+    read_only: Vec<PinnedSource>,
+    writable: Vec<PinnedSource>,
+    /// Die Binds aus [`BwrapBackend::with_read_only_bind`], mit ihrem Ziel.
+    session: Vec<(PinnedSource, PathBuf)>,
+}
+
+impl PinnedMounts {
+    /// Öffnet und prüft alle Quellen.
+    ///
+    /// # Errors
+    ///
+    /// `SANDBOX_006` aus [`BwrapBackend::pin`], aus
+    /// [`MountPolicy::check_work_dir`] oder aus [`MountPolicy::check`].
+    fn open(
+        backend: &BwrapBackend,
+        policy: &MountPolicy,
+        profile: &SandboxProfile,
+        session: &SessionContext,
+    ) -> Result<Self, Diagnostic> {
+        let work = BwrapBackend::pin(&session.work_src, SourceKind::Directory, "sandbox.work_dir")?;
+        policy.check_work_dir(work.resolved())?;
+        let session_binds = backend
+            .read_only_binds
+            .iter()
+            .map(|(src, dst)| {
+                let whence = format!("the read-only bind onto {}", dst.display());
+                let pinned = BwrapBackend::pin(src, SourceKind::DirectoryOrFile, &whence)?;
+                policy.check_session_dir(pinned.resolved(), &whence)?;
+                Ok((pinned, dst.clone()))
+            })
+            .collect::<Result<Vec<_>, Diagnostic>>()?;
+        Ok(Self {
+            work,
+            read_only: Self::open_list(policy, &profile.mounts.extra_ro, "mounts.extra_ro")?,
+            writable: Self::open_list(policy, &profile.mounts.extra_rw, "mounts.extra_rw")?,
+            session: session_binds,
+        })
+    }
+
+    fn open_list(
+        policy: &MountPolicy,
+        sources: &[PathBuf],
+        whence: &str,
+    ) -> Result<Vec<PinnedSource>, Diagnostic> {
+        sources
+            .iter()
+            .map(|source| {
+                let pinned = BwrapBackend::pin(source, SourceKind::DirectoryOrFile, whence)?;
+                policy.check(pinned.resolved(), whence)?;
+                Ok(pinned)
+            })
+            .collect()
+    }
+
+    /// Wie `bwrap` die Deskriptoren bekommt: Projektordner, `extra_ro`,
+    /// `extra_rw`.
+    fn sources(&self, backend: &BwrapBackend) -> (SourceFd, Vec<SourceFd>, Vec<SourceFd>) {
+        let each = |list: &[PinnedSource]| list.iter().map(|p| backend.source_fd(p)).collect();
+        (
+            backend.source_fd(&self.work),
+            each(&self.read_only),
+            each(&self.writable),
+        )
+    }
+
+    /// Die Binds des Aufrufers, mit ihrem Ziel.
+    fn session_sources(&self, backend: &BwrapBackend) -> Vec<(SourceFd, PathBuf)> {
+        self.session
+            .iter()
+            .map(|(pinned, dst)| (backend.source_fd(pinned), dst.clone()))
+            .collect()
+    }
+
+    /// Die Deskriptoren zum Vererben, in derselben Reihenfolge.
+    fn into_fds(self) -> impl Iterator<Item = OwnedFd> {
+        std::iter::once(self.work)
+            .chain(self.read_only)
+            .chain(self.writable)
+            .chain(self.session.into_iter().map(|(pinned, _)| pinned))
+            .map(PinnedSource::into_fd)
+    }
+}
+
 /// Der Thread, der `bwrap` startet und auf es wartet; siehe Modulbeschreibung.
 fn supervise(
     program: &Path,
@@ -917,9 +1083,8 @@ fn supervise(
     shared: &Arc<Shared>,
     tx: &Sender<Result<u32, Diagnostic>>,
 ) {
-    // Das Pseudoterminal steht vor dem Riegel: Es hat mit den geerbten
-    // Deskriptoren nichts zu tun, und ein Fehler dabei soll nicht den Riegel
-    // halten.
+    // Das Pseudoterminal zuerst: Ein Fehler dabei endet, bevor ein Kommando
+    // gebaut ist.
     let pty = match stdio.pty_size() {
         None => None,
         Some((cols, rows)) => match open_pty(cols, rows) {
@@ -931,7 +1096,6 @@ fn supervise(
         },
     };
     let spawned = {
-        let _guard = SPAWN_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
         let mut command = BwrapBackend::scrubbed_command(program);
         command.args(args);
         if stdio == StdioMode::Capture {
@@ -944,8 +1108,8 @@ fn supervise(
         if let Some(pty) = pty.as_ref() {
             // Die Untertanenseite wird für jeden der drei Deskriptoren
             // verdoppelt; `Stdio::from` verbraucht sie. Ein `dup2` im Kind
-            // bräuchte `pre_exec` und damit `unsafe`, und das ist in dieser
-            // Crate verboten.
+            // bräuchte einen weiteren `pre_exec`-Hook, und `unsafe` steht in
+            // dieser Crate nur in `inherit.rs`.
             match pty.stdio() {
                 Ok((input, output, errors)) => {
                     command.stdin(input).stdout(output).stderr(errors);
@@ -960,16 +1124,13 @@ fn supervise(
                 }
             }
         }
-        for fd in &inherit {
-            if let Err(err) = fcntl_setfd(fd.as_fd(), FdFlags::empty()) {
-                let _ = tx.send(Err(Diagnostic::builder(SANDBOX_012, Severity::Blocking)
-                    .why(format!(
-                        "cannot hand descriptor {} to bwrap: {err}",
-                        fd.as_raw_fd()
-                    ))
-                    .build()));
-                return;
-            }
+        // `FD_CLOEXEC` fällt nur im Kind, zwischen `fork` und `exec`; im
+        // eigenen Prozess bleibt es stehen, damit kein anderer Start im
+        // selben Augenblick die Deskriptoren miterbt (HUM-263).
+        let borrowed: Vec<BorrowedFd<'_>> = inherit.iter().map(AsFd::as_fd).collect();
+        if let Err(err) = inherit_in_child(&mut command, &borrowed) {
+            let _ = tx.send(Err(handover_failed(&err)));
+            return;
         }
         let spawned = command.spawn();
         // Die Kopien des Kindes bleiben; die eigenen gehen zu, damit die
@@ -979,6 +1140,12 @@ fn supervise(
     };
     let mut child = match spawned {
         Ok(child) => child,
+        // Der Hook zwischen `fork` und `exec` ist gescheitert, nicht das
+        // Programm: kein Installationshinweis (siehe `HOOK_ERRNO`).
+        Err(err) if err.raw_os_error() == Some(HOOK_ERRNO) => {
+            let _ = tx.send(Err(handover_failed(&err)));
+            return;
+        }
         Err(err) => {
             let _ = tx.send(Err(Diagnostic::builder(SANDBOX_001, Severity::Blocking)
                 .why(format!("cannot execute {}: {err}", program.display()))
@@ -1089,8 +1256,8 @@ impl Pty {
 ///
 /// Der Weg ist der von POSIX: `posix_openpt`, `grantpt`, `unlockpt`, den Namen
 /// der Untertanenseite holen und sie öffnen. `rustix` kapselt jeden Schritt,
-/// deshalb braucht keiner davon `unsafe` — das wäre in dieser Crate verboten
-/// (`#![forbid(unsafe_code)]`).
+/// deshalb braucht keiner davon `unsafe` — das steht in dieser Crate nur in
+/// `inherit.rs` (`#![deny(unsafe_code)]`).
 ///
 /// Die Herrscherseite bekommt `CLOEXEC`: Sie darf nicht in die Sandbox
 /// vererbt werden. Ein Agent mit ihr in der Hand läse mit, was ein Mensch
@@ -1247,6 +1414,15 @@ pub(crate) fn userns_diagnostic(stderr: &str) -> Diagnostic {
         ))
         .fix(FixAction::CopyCommand(USERNS_SYSCTL_COMMAND.to_owned()))
         .docs(USERNS_DOCS_URL)
+        .build()
+}
+
+/// Die Deskriptoren ließen sich `bwrap` nicht übergeben (HUM-263).
+fn handover_failed(err: &std::io::Error) -> Diagnostic {
+    Diagnostic::builder(SANDBOX_012, Severity::Blocking)
+        .why(format!(
+            "cannot hand the inherited descriptors to bwrap: {err}; the sandbox was not started"
+        ))
         .build()
 }
 

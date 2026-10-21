@@ -83,7 +83,10 @@
 //! assert!(profile.argv_line(&ctx, &LaunchInputs::preview()).contains("--unshare-net"));
 //! # Ok::<(), humanitl_core::Diagnostic>(())
 //! ```
-#![forbid(unsafe_code)]
+// `unsafe` ist verboten, außer in `inherit.rs`: Dort nimmt der Hook zwischen
+// `fork` und `exec` `FD_CLOEXEC` von den Deskriptoren, die `bwrap` erben soll
+// (HUM-263). Die Standardbibliothek hat dafür keinen sicheren Weg.
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
 
 /// Werkzeug, das nur die Unit-Tests dieser Crate benutzen (HUM-134).
@@ -97,8 +100,10 @@ pub mod bwrap;
 pub mod bwrap_args;
 pub mod doctor;
 pub mod handle;
+mod inherit;
 pub mod launcher;
 pub mod os_release;
+mod pinned;
 pub mod profile;
 pub mod refusals;
 pub mod summary;
@@ -117,13 +122,13 @@ pub use crate::bridge_env::{
     shim_env,
 };
 pub use crate::bwrap::{
-    BwrapBackend, EARLY_EXIT_WINDOW, MIN_BWRAP_VERSION, REPORT_TIMEOUT, USERNS_DOCS_URL,
-    USERNS_SYSCTL_COMMAND, Version, is_userns_failure,
+    BIND_FD_VERSION, BwrapBackend, EARLY_EXIT_WINDOW, MIN_BWRAP_VERSION, REPORT_TIMEOUT,
+    USERNS_DOCS_URL, USERNS_SYSCTL_COMMAND, Version, is_userns_failure,
 };
 pub use crate::bwrap_args::{
     DEFAULT_HOME, DEFAULT_USER, GROUP_DST, HOSTS_DST, IdentityFds, IdentityFiles, LaunchInputs,
-    MaskFds, PASSWD_DST, PREVIEW_AGENT_FD_FIRST, PREVIEW_MASK_FD_FIRST, SANDBOX_SHELL, shell_line,
-    shell_quote,
+    MaskFds, PASSWD_DST, PREVIEW_AGENT_FD_FIRST, PREVIEW_MASK_FD_FIRST, SANDBOX_SHELL, SourceFd,
+    shell_line, shell_quote,
 };
 pub use crate::handle::{
     CAPTURE_MAX_BYTES, CapturedOutput, INTERRUPT_GRACE, KILL_GRACE, OutputChunk, OutputSink,
