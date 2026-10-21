@@ -471,7 +471,13 @@ Detektor; dort maskiert nur die Aufzeichnung.
 
 Der Rumpf wird so weit durchsucht wie jeder andere Scan: bis `limits.preview_cap_bytes` (darüber meldet
 der Scan eine Lücke, `FINDINGS_002`), entpackt nur bei einem `Content-Encoding`, das der Scanner
-kennt, und ohne Rücksicht auf die Syntax des Rumpfs. Ein Schlüssel, den ein JSON-Escape
+kennt, und ohne Rücksicht auf die Syntax des Rumpfs. Ein gzip-Rumpf wird über alle Member
+entpackt (RFC 1952 erlaubt mehrere hintereinander, und das Ziel liest sie alle), durch ein
+gemeinsames Budget aus `limits.preview_cap_bytes` und `limits.max_decompress_ratio`. Liegen hinter
+dem Ende eines `deflate`- oder `br`-Stroms oder hinter dem letzten vollständigen gzip-Member Bytes,
+die sich nicht als weiteres Member lesen lassen, durchsucht der Scan den entpackten Teil davor und
+meldet den Rest als Lücke (`FINDINGS_002`), statt den Rumpf als vollständig durchsucht auszugeben
+(HUM-247). Ein Schlüssel, den ein JSON-Escape
 (`\u002b` für `+`) oder ein Formular (`+` für ein Leerzeichen, `%2B` im Rumpf) anders schreibt als
 wörtlich oder URL-kodiert, ist dort kein Treffer.
 

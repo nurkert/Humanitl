@@ -13,6 +13,7 @@ use humanitl_core::http::{HeaderMap, HeaderName, HeaderValue};
 use humanitl_core::{
     Authority, Finding, FindingKind, FindingLocation, HostName, HttpRequest, Method, Scheme, Tier,
 };
+use humanitl_findings::decode::{ContentEncoding, decode_body};
 use humanitl_findings::{DetectorRegistry, FindingsSettings};
 
 fn request(path_and_query: &str, headers: &[(&'static str, &str)]) -> HttpRequest {
@@ -160,6 +161,59 @@ fn a_gzip_body_is_decoded_and_scanned() {
     assert_eq!(found.location, FindingLocation::Body);
     // Der Bereich zeigt in den entpackten Body, nicht in den gepackten.
     assert_eq!(&plain[found.span.clone()], b"AKIAIOSFODNN7EXAMPLE");
+}
+
+/// Zwei verkettete gzip-Member, das Geheimnis im zweiten (HUM-247).
+///
+/// Die Eingabe ist die Regressionsdatei des Fuzz-Targets `body_decoder`; ihr
+/// erstes Byte wählt dort die Kodierung (`1` für gzip), der Rest ist der Body.
+#[test]
+fn gzip_second_member_is_scanned() {
+    let file = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/regressions/body_decoder-gzip-two-members.bin"
+    ))
+    .unwrap();
+    let (&selector, body) = file.split_first().unwrap();
+    assert_eq!(selector, 1, "the selector picks gzip");
+    let first: &[u8] = b"Rechnung an den Kunden, Betrag folgt im zweiten Teil.\n";
+    let second: &[u8] = b"iban GB82 WEST 1234 5698 7654 32\n";
+
+    let decoded = decode_body(body, &ContentEncoding::Gzip, 4096, 100);
+    assert_eq!(decoded.bytes, [first, second].concat());
+    assert!(!decoded.truncated);
+    assert!(decoded.diagnostic.is_none());
+
+    let request = request(
+        "/v1",
+        &[("content-type", "text/plain"), ("content-encoding", "gzip")],
+    );
+    let report = registry(&FindingsSettings::default()).scan(&request, body);
+    assert!(!report.truncated);
+    assert!(report.diagnostics.is_empty());
+    assert_eq!(report.findings.len(), 1);
+    let found = &report.findings[0];
+    assert_eq!(found.location, FindingLocation::Body);
+    // Der Bereich zeigt in das zweite Member des entpackten Bodys.
+    assert_eq!(found.span.start, first.len() + 5);
+    assert_eq!(found.display_prefix, "GB82 …");
+}
+
+/// Ein vollständiges gzip-Member mit Müll dahinter: Das Member wird
+/// durchsucht, der Müll ist eine benannte Lücke (HUM-247).
+#[test]
+fn a_gzip_member_with_junk_behind_it_is_scanned_and_reported() {
+    let body = [gzip(b"iban GB82 WEST 1234 5698 7654 32"), b"x".to_vec()].concat();
+    let request = request(
+        "/v1",
+        &[("content-type", "text/plain"), ("content-encoding", "gzip")],
+    );
+    let report = registry(&FindingsSettings::default()).scan(&request, &body);
+    assert!(report.truncated);
+    assert_eq!(report.diagnostics.len(), 1);
+    assert_eq!(report.diagnostics[0].code.as_str(), "FINDINGS_002");
+    assert_eq!(report.findings.len(), 1);
+    assert_eq!(report.findings[0].display_prefix, "GB82 …");
 }
 
 #[test]
