@@ -36,6 +36,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-262 | Ein Projektordner, der die eigene Konfiguration enthält, fällt erst beim Start auf (vor HUM-060) | S | HUM-040, HUM-044 |
 | HUM-263 | Zwischen Prüfung und Mount kann der Projektordner getauscht werden (vor HUM-060) | M | HUM-011, HUM-262 |
 | HUM-265 | Shim, CA und Proxy-Socket werden weiter per Pfad gebunden (nach HUM-060) | S | HUM-263 |
+| HUM-266 | Ein deflate-Body, der als zlib und als nackter Strom Verschiedenes sagt | S | HUM-247 |
 
 ---
 
@@ -3119,6 +3120,72 @@ Ein Entpacker für `zstd` (heute `ContentEncoding::Other`, also nicht durchsucht
 ### Referenzen
 HUM-025 (`backlog/sprint-2.md`), HUM-056 (Abgleich oben), RFC 1952 §2.2, RFC 8878 §3.1, `backlog/CONVENTIONS.md` 4.13.
 
+### Umsetzung (HUM-247)
+
+**Was gebaut wurde.**
+- `decode.rs` liest alle drei Kodierungen über die `bufread`-Entpacker von flate2 bzw.
+  `brotli::Decompressor` auf dem Slice des Bodys. gzip läuft statt über `read::GzDecoder` über
+  den neuen Leser `GzipMembers`: Er reiht `bufread::GzDecoder` Member für Member aneinander, wie
+  es `MultiGzDecoder` intern tut, weiß aber zusätzlich, ob schon ein Member vollständig gelesen
+  war, als ein Fehler kam (Abweichung von der Spezifikation, die `MultiGzDecoder` nennt; der
+  Grund steht im gzip-Punkt unten). Alle Member laufen durch das eine `Budget` in
+  `read_limited`; einen zweiten Weg gibt es nicht.
+- Neuer privater Trait `StreamEnd` mit `has_trailing_input`, aufgerufen in `read_limited`, sobald
+  der Strom mit `0` endet (auch am genau vollen Budget). Für flate2 ist das der Rest im Slice:
+  Die `bufread`-Leser verbrauchen genau die Bytes des Stroms. Die Prüfung entpackt nichts und
+  kann das Budget deshalb nicht umgehen; ein Strom, der genau endet, meldet nichts.
+- Neue Variante `InflateError::TrailingBytes { decoded }`. `decode_body` durchsucht den
+  entpackten Teil vor dem Ende, setzt `truncated` und meldet `FINDINGS_002` ohne Fix
+  (`trailing_gap`). `GetBody` (`ipc/src/body.rs`) liefert in diesem Fall den entpackten Teil mit
+  leerem `encoding_left`, also genau die Bytes, auf die die Fundstellen des Scans zeigen.
+- deflate: Nur ein kaputter zlib-Rahmen (`BrokenStream`) führt zum zweiten Versuch mit dem
+  nackten Strom. Ein sauberer Rahmen mit Bytes dahinter bleibt eine Lücke und wird nicht anders
+  gedeutet.
+- gzip: Bytes hinter dem letzten vollständigen Member, die kein Member sind (oder ein kaputtes
+  späteres Member), führen ebenfalls zu `TrailingBytes`: Das Member davor wird durchsucht, der
+  Rest ist die Lücke. `MultiGzDecoder` hätte hier nur den Fehler gemeldet, und der Scan hätte
+  gar nichts gesehen; der alte `GzDecoder` hatte den Rest still ignoriert. Ein Fehler im ersten
+  Member bleibt `BrokenStream`.
+
+**Was der Test zu br festgestellt hat.** `brotli::Decompressor` meldet das Ende mit `Ok(0)`, auch
+wenn dahinter Bytes liegen (`brotli_reader_ignores_trailing_bytes`); bis hierher war ein
+angehängter Rest also eine stille Lücke. Erst ein zweites `read` meldet einen Rest im eigenen
+Puffer als `InvalidData`; was der Leser noch nicht aus dem Slice geholt hat, steht in `get_ref`.
+`has_trailing_input` prüft beides.
+
+**Tests.** `gzip_second_member_is_scanned` (in `tests/scan_request.rs`, liest die
+Regressionsdatei `body_decoder-gzip-two-members.bin`, die auch als `gzip-two-members` im Corpus
+von `body_decoder` liegt), `gzip_members_share_the_budget`, `gzip_garbage_after_the_last_member_is_a_gap`,
+`trailing_bytes_after_deflate_are_a_gap`, `trailing_bytes_after_br_are_a_gap`,
+`trailing_bytes_behind_the_brotli_buffer_are_a_gap`, `trailing_bytes_are_seen_at_an_exactly_full_budget`;
+`a_gzip_member_with_junk_behind_it_is_scanned_and_reported` (Scan findet die IBAN im Member,
+meldet `FINDINGS_002`), in `ipc/src/body.rs` `bytes_behind_the_end_of_the_stream_leave_the_unpacked_part`;
+`deflate_is_read_with_and_without_the_zlib_frame` und `a_brotli_body_is_decoded_whole` prüfen
+jetzt auch, dass ein genau endender Strom keinen Befund trägt.
+
+**Abweichung von der Spezifikation.** `gzip_members_share_the_budget` erwartet bei zwei Membern
+über dem Ratio-Budget `LIMIT_003`, nicht `FINDINGS_002`: Seit HUM-057 meldet das Entpacken so
+den Abbruch am Verhältnis. `FINDINGS_002` prüft derselbe Test für den Fall, dass das Cap die
+engere Grenze ist.
+
+**Mutationsbeweise.**
+- `GzipMembers` liest nur das erste Member, wie `GzDecoder` (nach dem ersten Member immer
+  Ende): `gzip_second_member_is_scanned` rot (der zweite Klartext fehlt), ebenso
+  `gzip_members_share_the_budget`.
+- Fehler nach einem vollständigen Member wieder als Fehler durchgereicht, wie bei
+  `MultiGzDecoder`: `gzip_garbage_after_the_last_member_is_a_gap`,
+  `a_gzip_member_with_junk_behind_it_is_scanned_and_reported` und
+  `bytes_behind_the_end_of_the_stream_leave_the_unpacked_part` rot.
+- Prüfung auf den Rest entfernt (`finish` ohne `has_trailing_input`):
+  `trailing_bytes_after_deflate_are_a_gap`, `trailing_bytes_after_br_are_a_gap`,
+  `trailing_bytes_behind_the_brotli_buffer_are_a_gap` und
+  `trailing_bytes_are_seen_at_an_exactly_full_budget` rot.
+- br nur mit `get_ref`, ohne zweites `read`: `trailing_bytes_after_br_are_a_gap` und
+  `trailing_bytes_are_seen_at_an_exactly_full_budget` rot. br nur mit zweitem `read`, ohne
+  `get_ref`: `trailing_bytes_behind_the_brotli_buffer_are_a_gap` rot.
+- Ein Budget je Member (jedes Member mit einer frischen Kopie des Budgets entpackt):
+  `gzip_members_share_the_budget` rot, `gzip_second_member_is_scanned` bleibt grün.
+
 ## HUM-248 · Nächtliche Fuzz-Funde selbst minimieren und den Corpus behalten
 Sprint: 5 · Größe: S · Abhängigkeiten: HUM-056 · Blockiert: nichts · Priorität: niedrig (Kandidat)
 
@@ -4262,3 +4329,63 @@ rechtfertigt keinen Aufschub des Releases, wohl aber ein eigenes Issue direkt da
 
 ### Referenzen
 HUM-263, HUM-012 (Shim), HUM-013 (Proxy-Socket), `daemon/crates/sandbox/src/pinned.rs`.
+
+---
+
+## HUM-266 · Ein deflate-Body, der als zlib und als nackter Strom Verschiedenes sagt
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-247 · Blockiert: — · nach 0.1.0
+
+### Kontext
+Gefunden im Review von HUM-247 (Opus). `Content-Encoding: deflate` ist im Netz zweideutig, und
+`inflate` in `daemon/crates/findings/src/decode.rs` liest deshalb erst den zlib-Rahmen aus
+RFC 1950 und nur, wenn der scheitert, den nackten Strom aus RFC 1951. Ein Body lässt sich so
+bauen, dass beide Lesarten gültig sind und Verschiedenes ergeben: Der Kopf `08 1d` ist ein
+gültiger zlib-Kopf (Prüfsumme über CMF und FLG stimmt) und zugleich der Anfang eines nackten
+Stroms mit einem Stored-Block. Nackt gelesen folgt ein Stored-Block mit `LEN` `0x011d` und danach
+ein letzter Block mit festen Huffman-Codes, der ein Geheimnis trägt. Als zlib gelesen ist
+dasselbe ein Stored-Block von 65250 Bytes mit gültiger Adler-32-Summe dahinter.
+
+`decode_body(Deflate)` nimmt die zlib-Lesart, meldet `truncated: false` und findet nichts. Ein
+Empfänger, der nur den nackten Strom kennt (Python `zlib.decompressobj(-15)`, Node
+`zlib.inflateRaw`), bekommt das Geheimnis. Das ist dieselbe Art stiller Lücke, die HUM-247 für
+gzip-Member und angehängte Bytes schließt, und `backlog/CONVENTIONS.md` 4.13 schließt sie aus:
+Wo der Scan nicht hinsieht, muss er es sagen. Die Lücke bestand schon vor HUM-247; sie liegt an
+der Mehrdeutigkeit des Rahmens, nicht an einer Änderung dort. Die drei Garantien aus `README.md`
+berührt sie nicht, die Funde sind keine Garantie.
+
+### Ziel
+Ein deflate-Body, den zlib-Rahmen und nackter Strom unterschiedlich lesen, wird nicht still als
+vollständig durchsucht gemeldet.
+
+### Fix-Idee
+- Gelingt die zlib-Lesart, zusätzlich den nackten Strom durch dasselbe Budget lesen (eine Kopie,
+  wie heute für den ersten Versuch). Gelingt auch er und ist das Ergebnis ein anderes, meldet der
+  Scan `FINDINGS_002` und durchsucht beide Ergebnisse oder das längere; scheitert der nackte
+  Strom, bleibt es bei der zlib-Lesart.
+- Das Budget gilt für beide Lesarten zusammen oder je Lesart mit derselben Grenze; zu
+  entscheiden ist, ob eine Bombe in zwei Lesarten das doppelte Entpacken wert ist. Ein Vorschlag:
+  die zweite Lesart nur bis zum Ende der ersten Ausgabe vergleichen und beim ersten
+  abweichenden Byte abbrechen.
+
+### Tests
+- Ein Polyglott wie oben (Kopf `08 1d`, Stored-Block, Geheimnis im festen Huffman-Block):
+  `decode_body(Deflate)` meldet `truncated: true` und `FINDINGS_002`. Mutation: ohne die zweite
+  Lesart wird der Test rot.
+- Ein gewöhnlicher zlib-Body und ein gewöhnlicher nackter Strom bleiben vollständig und ohne
+  Befund.
+- Der Polyglott liegt als `body_decoder-deflate-polyglot.bin` unter
+  `daemon/crates/findings/tests/regressions/` und im Corpus von `body_decoder`.
+
+### Akzeptanzkriterien
+- [ ] Ein deflate-Body mit zwei gültigen, verschiedenen Lesarten führt zu `FINDINGS_002`.
+- [ ] Das Budget aus `limits.preview_cap_bytes` und `limits.max_decompress_ratio` bleibt
+  eingehalten, auch über beide Lesarten.
+
+### Kandidaten aus demselben Review
+- **Den Anfang eines kaputten Stroms durchsuchen.** Bei `BrokenStream` wirft der Scan heute alles
+  weg, was bis zum Abbruch entpackt wurde (`partial`), und meldet nur `FINDINGS_002`. Ein
+  Empfänger, der nachsichtig liest, verarbeitet diesen Anfang trotzdem. Den Anfang zu durchsuchen
+  und die Lücke weiter zu melden wäre strenger, ohne einen Fund zu erfinden.
+
+### Referenzen
+HUM-025, HUM-247, RFC 1950 §2.2, RFC 1951 §3.2.4, `backlog/CONVENTIONS.md` 4.13.
