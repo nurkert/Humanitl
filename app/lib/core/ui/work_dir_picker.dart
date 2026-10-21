@@ -101,7 +101,9 @@ class WorkDirPicker extends ConsumerWidget {
             key: buttonKey,
             variant: HButtonVariant.ghost,
             size: HButtonSize.sm,
-            onPressed: locked ? null : () => unawaited(_choose(ref)),
+            onPressed: locked
+                ? null
+                : () => unawaited(chooseWorkDir(ref, onPick)),
             semanticsLabel: chooseLabel,
             child: Text(
               dir == null || dir.isEmpty ? noneLabel : dir,
@@ -127,16 +129,25 @@ class WorkDirPicker extends ConsumerWidget {
     }
     return row;
   }
+}
 
-  Future<void> _choose(WidgetRef ref) async {
-    final DirectoryChooser chooser = ref.read(directoryChooserProvider);
-    final String? chosen = await chooser();
-    // Under a Wayland portal a cancelled dialog answers null. That is an
-    // answer, not a failure: nothing changes and nothing is reported
-    // (HUM-040 Fallstricke).
-    if (chosen == null || chosen.isEmpty) {
-      return;
-    }
-    onPick(chosen);
+/// Asks the desktop for a folder and hands a chosen one to [onPick].
+///
+/// The one way this client chooses a project folder. The button of
+/// [WorkDirPicker] takes it, and so does the fix of a refused folder on the
+/// setup screen (HUM-262): a second chooser beside it would be a second place
+/// where a cancelled dialog could be read differently.
+Future<void> chooseWorkDir(
+  WidgetRef ref,
+  void Function(String workDir) onPick,
+) async {
+  final DirectoryChooser chooser = ref.read(directoryChooserProvider);
+  final String? chosen = await chooser();
+  // Under a Wayland portal a cancelled dialog answers null. That is an
+  // answer, not a failure: nothing changes and nothing is reported
+  // (HUM-040 Fallstricke).
+  if (chosen == null || chosen.isEmpty) {
+    return;
   }
+  onPick(chosen);
 }

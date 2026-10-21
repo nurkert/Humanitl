@@ -8,7 +8,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use humanitl_config::{Config, Env, Paths};
 use humanitl_core::ids::SessionId;
@@ -64,6 +64,13 @@ GITHUB_TOKEN = "{needle}"
 
 /// Ein Dienst über einem Wegwerf-XDG mit genau diesem Profil.
 fn service(home: &TempDir) -> SandboxService {
+    std::fs::create_dir_all(home.path().join("project")).unwrap();
+    service_with_work_dir(home, Some(home.path().join("project")))
+}
+
+/// Wie [`service`], mit dem Projektordner, der in `config.toml` steht, oder
+/// ohne einen (HUM-262).
+fn service_with_work_dir(home: &TempDir, work_dir: Option<PathBuf>) -> SandboxService {
     let config_home = home.path().join("config");
     let profile_dir = config_home.join("humanitl/profiles/sandbox");
     std::fs::create_dir_all(&profile_dir).unwrap();
@@ -83,8 +90,7 @@ fn service(home: &TempDir) -> SandboxService {
     ]);
     let mut config = Config::default();
     "test".clone_into(&mut config.sandbox.profile);
-    config.sandbox.work_dir = Some(home.path().join("project"));
-    std::fs::create_dir_all(home.path().join("project")).unwrap();
+    config.sandbox.work_dir = work_dir;
 
     SandboxService::new(
         SessionResolver::for_config(Paths::new(env), config),
@@ -550,6 +556,55 @@ async fn a_project_directory_under_the_home_is_accepted() {
     let resolved = other.canonicalize().unwrap().display().to_string();
     assert_eq!(status.work_dir, resolved);
     assert!(status.argv_preview.contains(&resolved));
+}
+
+/// Ein `Sandbox(Status)`, wie ihn das Setup beim Öffnen schickt.
+fn status_request() -> v1::SandboxRequest {
+    v1::SandboxRequest {
+        op: Some(v1::sandbox_request::Op::Status(())),
+    }
+}
+
+/// HUM-262: Ein Projektordner aus `config.toml`, der Humanitls eigene
+/// Konfiguration enthält, ist schon im Plan ein `SANDBOX_006`, nicht erst beim
+/// Start.
+///
+/// Der Fall vom Bildschirmfoto: `sandbox.work_dir` ist das Heimatverzeichnis,
+/// darin liegt `$XDG_CONFIG_HOME/humanitl`. Früher sagten `Status` und `Plan`
+/// dazu nichts, das Setup zeigte „ok", und erst `Start` lehnte ab. Beide
+/// Fragen, die das Setup stellt, melden jetzt denselben Befund wie der Start,
+/// mit der Abhilfe, einen anderen Ordner zu wählen.
+#[tokio::test]
+async fn a_configured_folder_that_holds_the_config_is_refused_by_the_plan() {
+    let home = TempDir::new().unwrap();
+    let service = service_with_work_dir(&home, Some(home.path().to_path_buf()));
+
+    for request in [status_request(), plan_work_dir("")] {
+        let (diagnostics, status) = answer(&service, request).await;
+        let refused = diagnostics
+            .iter()
+            .find(|d| d.code == "SANDBOX_006")
+            .unwrap_or_else(|| panic!("the home is refused, got {diagnostics:?}"));
+        assert!(
+            refused.why.contains("humanitl"),
+            "the reason names the configuration directory: {}",
+            refused.why
+        );
+        assert!(
+            refused.why.contains("~/projects/xyz"),
+            "the reason says what to choose instead: {}",
+            refused.why
+        );
+        let fix = refused.fix.as_ref().expect("the finding carries a fix");
+        let Some(v1::fix_action::Action::ChangeSetting(change)) = &fix.action else {
+            panic!("the fix is a choice of another folder, got {fix:?}");
+        };
+        assert_eq!(change.key, "sandbox.work_dir");
+        let status = status.expect("the state is still answered");
+        assert_eq!(status.state, v1::SandboxState::Failed as i32);
+        // Der Ordner bleibt sichtbar, damit der Befund einen Bezug hat.
+        assert_eq!(status.work_dir, home.path().display().to_string());
+    }
 }
 
 /// Das mitgelieferte Profil im Arbeitsbaum.

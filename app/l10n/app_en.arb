@@ -3136,5 +3136,7 @@
   "rulesFieldExactPaths": "Exact paths",
   "@rulesFieldExactPaths": {"description": "Label of the read-only line in the rule editor that shows the paths a rule matches exactly, not as prefixes (HUM-261)."},
   "rulesExactPathsReadOnly": "Only exactly these paths match, with any query; nothing below them. The editor cannot change them; saving keeps them.",
-  "@rulesExactPathsReadOnly": {"description": "Hint under the exact paths in the rule editor: they match only themselves, cannot be edited here, and survive a save (HUM-261)."}
+  "@rulesExactPathsReadOnly": {"description": "Hint under the exact paths in the rule editor: they match only themselves, cannot be edited here, and survive a save (HUM-261)."},
+  "setupFixChooseFolder": "Choose another folder",
+  "@setupFixChooseFolder": {"description": "Fix button on the card of a refused project folder (SANDBOX_006, HUM-262). Opens the same folder chooser as the project row of the setup screen, because the only way out of a folder the sandbox will not mount is another folder."}
 }

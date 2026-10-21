@@ -450,7 +450,7 @@ registry! {
     /// Ein Mount im Profil zeigt auf eine Host-Quelle, die nie in die Sandbox darf.
     SANDBOX_006 => "sandbox", "Mount verboten", "#sandbox_006",
         "Ein Profil, der Proxy-Socket oder ein Agent-Adapter will einen Pfad einhängen, den die Mount-Regeln verbieten.",
-        "Kein Fix: Der Text nennt Pfad und Regel.";
+        "Beim Projektordner `ChangeSetting` auf `sandbox.work_dir`, die Oberfläche bietet die Ordnerauswahl an; sonst kein Fix, der Text nennt Pfad und Regel.";
     /// Eine Bridge im Profil hat eine Richtung, die es nicht gibt.
     SANDBOX_007 => "sandbox", "Bridge-Richtung unbekannt", "#sandbox_007",
         "Ein Profil nennt eine Brücken-Richtung, die es nicht gibt.",

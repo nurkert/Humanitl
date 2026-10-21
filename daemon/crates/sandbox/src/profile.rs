@@ -86,7 +86,7 @@ use humanitl_core::diagnostics::codes::{
     CONFIG_001, CONFIG_002, CONFIG_003, SANDBOX_006, SANDBOX_007, SANDBOX_020,
 };
 use humanitl_core::ids::SessionId;
-use humanitl_core::{Diagnostic, Severity};
+use humanitl_core::{Diagnostic, FixAction, Severity};
 use serde::{Deserialize, Serialize};
 
 /// Das Projektverzeichnis in der Sandbox.
@@ -854,6 +854,15 @@ const CONFIG_DIR_REASON: &str =
 const DATA_DIR_REASON: &str =
     "Humanitl's own data directory: the database, the blobs, the audit log and the CA key";
 
+/// Was statt eines abgelehnten Projektordners geht; hängt am `why` von
+/// [`MountPolicy::check_work_dir`].
+///
+/// Der Satz nennt einen Unterordner als Beispiel, weil der häufigste Fall das
+/// Heimatverzeichnis selbst ist: Es enthält Schlüssel und die Konfiguration
+/// von Humanitl, ein einzelnes Projekt darunter nicht.
+pub const WORK_DIR_INSTEAD: &str =
+    "; choose the folder of a single project instead, such as ~/projects/xyz";
+
 /// Ob eine Quelle aus dem Profil oder das Projektverzeichnis geprüft wird.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Scope {
@@ -1010,11 +1019,26 @@ impl MountPolicy {
     /// Sache des Isolation-Checks (HUM-041), nicht ein Grund, die Sitzung zu
     /// verweigern.
     ///
+    /// Der Befund sagt, was stattdessen geht, und trägt die Abhilfe
+    /// `ChangeSetting` auf `sandbox.work_dir` (HUM-262): Ein Projektordner,
+    /// der abgelehnt wird, lässt sich nur durch einen anderen ersetzen, und
+    /// die Oberfläche bietet dafür die Ordnerauswahl an. Dieselbe Prüfung
+    /// läuft beim Planen (`Sandbox(Plan)`, `Sandbox(Status)`) und beim Start,
+    /// damit das Setup nie einen Ordner grün zeigt, den der Start verweigert.
+    ///
     /// # Errors
     ///
     /// [`Diagnostic`] mit `SANDBOX_006` und dem beanstandeten Pfad.
     pub fn check_work_dir(&self, source: &Path) -> Result<(), Diagnostic> {
-        self.check_scope(source, "sandbox.work_dir", Scope::WorkDir)
+        let checked = self.check_scope(source, "sandbox.work_dir", Scope::WorkDir);
+        checked.map_err(|mut diagnostic| {
+            diagnostic.why.push_str(WORK_DIR_INSTEAD);
+            diagnostic.fix = Some(FixAction::ChangeSetting {
+                key: "sandbox.work_dir".to_owned(),
+                value: String::new(),
+            });
+            diagnostic
+        })
     }
 
     fn check_scope(&self, source: &Path, whence: &str, scope: Scope) -> Result<(), Diagnostic> {
@@ -1893,10 +1917,12 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use humanitl_config::Env;
+    use humanitl_core::FixAction;
 
     use super::{
         BridgeDirection, DEFAULT_DENY_SYSCALLS, MANDATORY_MASKED_FILES, MountPolicy, Namespace,
-        SandboxProfile, SocketFamily, SocketFloor, SocketType, WorkMode, normalize,
+        SandboxProfile, SocketFamily, SocketFloor, SocketType, WORK_DIR_INSTEAD, WorkMode,
+        normalize,
     };
 
     const MINIMAL: &str = r#"
@@ -2256,7 +2282,51 @@ name = "minimal"
                 panic!("{bad} must not be a project directory");
             };
             assert_eq!(err.code.as_str(), "SANDBOX_006", "{bad}");
+            // HUM-262: Der Befund sagt, was stattdessen geht, und trägt die
+            // Abhilfe, mit der die Oberfläche die Ordnerauswahl anbietet.
+            assert!(err.why.ends_with(WORK_DIR_INSTEAD), "{bad}: {}", err.why);
+            assert_eq!(
+                err.fix,
+                Some(FixAction::ChangeSetting {
+                    key: "sandbox.work_dir".to_owned(),
+                    value: String::new(),
+                }),
+                "{bad}"
+            );
         }
+    }
+
+    #[test]
+    fn a_home_that_holds_the_config_dir_is_refused_for_that_reason() {
+        // HUM-262: Der Befund vom Bildschirmfoto. Das Heimatverzeichnis
+        // enthält `$XDG_CONFIG_HOME/humanitl`, und genau das steht im Grund.
+        let policy = MountPolicy::from_dirs(
+            "/home/u",
+            "/run/user/1000",
+            "/home/u/.config/humanitl",
+            "/home/u/.local/share/humanitl",
+        );
+        let err = policy
+            .check_work_dir(Path::new("/home/u"))
+            .expect_err("home holds the configuration");
+        assert_eq!(err.code.as_str(), "SANDBOX_006");
+        assert!(
+            err.why.contains("contains /home/u/.config/humanitl"),
+            "{}",
+            err.why
+        );
+        assert!(err.why.contains("~/projects/xyz"), "{}", err.why);
+    }
+
+    #[test]
+    fn a_profile_source_carries_no_folder_fix() {
+        // Die Abhilfe gehört dem Projektordner allein: Eine Quelle aus dem
+        // Profil ändert sich im Profil, nicht über die Ordnerauswahl.
+        let err = MountPolicy::new("/home/u")
+            .check(Path::new("/home/u"), "mounts.extra_ro")
+            .expect_err("home is no profile source");
+        assert_eq!(err.fix, None);
+        assert!(!err.why.contains(WORK_DIR_INSTEAD), "{}", err.why);
     }
 
     #[test]

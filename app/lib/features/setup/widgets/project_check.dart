@@ -13,7 +13,10 @@
 /// `CONFIG_014` until HUM-069 (CONVENTIONS 4.17).
 library;
 
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
 import '../../../core/ui/work_dir_picker.dart';
@@ -23,7 +26,12 @@ import '../setup_text.dart';
 import 'setup_check_row.dart';
 
 /// The project row.
-class ProjectCheck extends StatelessWidget {
+///
+/// A folder the daemon refuses (`SANDBOX_006`) carries the fix "choose another
+/// folder", and the card under this row turns it into a button that opens the
+/// same chooser as the picker above it (HUM-262). Which folder is refused, and
+/// why, is the daemon's sentence; the row only offers the way out.
+class ProjectCheck extends ConsumerWidget {
   /// Creates the row for [check].
   const ProjectCheck({
     required this.check,
@@ -50,11 +58,17 @@ class ProjectCheck extends StatelessWidget {
   final void Function(WorkMode mode) onMode;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final AppLocalizations l10n = context.l10n;
     return SetupCheckRow(
       check: check,
       title: setupCheckTitle(l10n, SetupCheckKind.project),
+      // Gesperrt wie der Picker: Solange eine Sandbox läuft, ändert sich der
+      // Ordner nicht, und ein Knopf, der dann trotzdem wählen ließe, täte
+      // nichts.
+      onChooseFolder: locked
+          ? null
+          : () => unawaited(chooseWorkDir(ref, onPick)),
       // Der Pfad steht im Knopf des Pickers und ist zugleich der Beleg dieser
       // Zeile; ihn daneben ein zweites Mal zu zeigen, wäre dieselbe Aussage
       // zweimal. Deshalb ersetzt der Picker die Belegzeile, statt neben ihr
