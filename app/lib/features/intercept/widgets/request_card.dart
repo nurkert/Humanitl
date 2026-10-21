@@ -21,6 +21,7 @@ import '../../../l10n/l10n.dart';
 import '../providers/decision.dart';
 import '../providers/flows.dart';
 import '../providers/now.dart';
+import '../providers/recorder_health.dart';
 import '../providers/timeout_rule.dart';
 import '../rule_sentence.dart';
 import '../../../core/domain/websocket.dart';
@@ -50,6 +51,7 @@ class RequestCard extends ConsumerWidget {
         ? _stateOf(progress.kind)
         : flow.visualState;
     final HttpRequest? request = detail.value?.request;
+    final RecorderOutage? outage = ref.watch(recorderHealthProvider);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
@@ -63,6 +65,13 @@ class RequestCard extends ConsumerWidget {
                 child: _CardHeader(flow: flow),
               ),
               _CardBanner(flow: flow),
+              // Während einer Störung der Aufzeichnung trägt jede Karte, deren
+              // Anfrage oder Entscheidung jetzt nicht aufgezeichnet wird, den
+              // Hinweis: jede gehaltene und jede, die seit Beginn der Störung
+              // kam (HUM-250). Er geht mit `RECORDER_005`.
+              if (outage != null &&
+                  (flow.isHeld || !flow.receivedAt.isBefore(outage.since)))
+                const _NotRecordedNotice(),
               if (flow.decision == DecisionKind.timedOut)
                 _TimeoutRule(flow: flow),
               if (request != null && requestOpensWebSocket(request.headers))
@@ -323,6 +332,35 @@ class _UnreadableNotice extends StatelessWidget {
       child: Text(
         context.l10n.interceptCardUnreadable,
         style: tokens.typography.ui12.tinted(tokens.colors.fg1),
+      ),
+    );
+  }
+}
+
+/// Die Zeile auf einer Karte, deren Anfrage gerade nicht aufgezeichnet wird
+/// (HUM-250): Sie und ihre Entscheidung fehlen später in der History.
+///
+/// In der Farbe des Fehlers, wie die Statusleiste und die Pause vor der
+/// ersten Freigabe; Rot heißt blockiert (`docs/UX.md` 3.3).
+class _NotRecordedNotice extends StatelessWidget {
+  const _NotRecordedNotice();
+
+  @override
+  Widget build(BuildContext context) {
+    final HTokens tokens = HTheme.of(context);
+    return Padding(
+      key: const Key('intercept-card-not-recorded'),
+      padding: EdgeInsets.fromLTRB(
+        tokens.spacing.x3,
+        0,
+        tokens.spacing.x3,
+        tokens.spacing.x3,
+      ),
+      child: Text(
+        context.l10n.interceptCardNotRecorded,
+        style: tokens.typography.ui12.medium.tinted(
+          tokens.stateTextColor(HFlowState.error),
+        ),
       ),
     );
   }

@@ -100,6 +100,21 @@ pub(crate) fn open_failed_at(path: &std::path::Path, why: impl Into<String>) -> 
     open_failed(why, Some(inspect_path(path)))
 }
 
+/// `RECORDER_001` im laufenden Betrieb: Die Datenbank ist gesperrt, nicht zu
+/// öffnen oder nicht mehr beschreibbar (HUM-250).
+///
+/// `Error` und nicht `Blocking` wie beim Start: Der Daemon läuft weiter und
+/// hält Anfragen an, nur zeichnet er sie nicht auf, bis die Datenbank wieder
+/// schreibt. Der Fix nennt den Pfad, an dem man Rechte und Platz prüft.
+pub(crate) fn unavailable_at(path: &std::path::Path, why: impl Into<String>) -> RecorderError {
+    RecorderError::Open(
+        Diagnostic::builder(RECORDER_001, Severity::Error)
+            .why(why)
+            .fix(inspect_path(path))
+            .build(),
+    )
+}
+
 /// `RECORDER_002`: der Filterausdruck ließ sich nicht lesen.
 pub(crate) fn filter_failed(why: impl Into<String>) -> RecorderError {
     RecorderError::Filter(

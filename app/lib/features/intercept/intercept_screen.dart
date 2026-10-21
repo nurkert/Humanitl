@@ -34,6 +34,7 @@ import 'providers/held_groups.dart';
 import 'providers/note.dart';
 import 'providers/pane_layout.dart';
 import 'providers/queue_freeze.dart';
+import 'providers/recorder_health.dart';
 import 'providers/selection.dart';
 import 'rule_sentence.dart';
 import 'widgets/action_bar.dart';
@@ -60,7 +61,8 @@ final Set<LogicalKeyboardKey> decisionKeys = <LogicalKeyboardKey>{
   LogicalKeyboardKey.keyB,
   LogicalKeyboardKey.keyF,
   LogicalKeyboardKey.keyL,
-  // `S` sends from the findings pause (HUM-049).
+  // `S` sends from the findings pause (HUM-049) and from the recorder pause
+  // (HUM-250).
   LogicalKeyboardKey.keyS,
 };
 
@@ -391,6 +393,7 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
       return;
     }
     ref.read(openFindingsPauseProvider.notifier).close();
+    ref.read(recorderPauseProvider.notifier).close();
     setState(() {
       _editorOpen = true;
       _editorReplaceAll = replaceAll;
@@ -419,9 +422,21 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
   bool _pauseOpen() =>
       !_editorShown() && ref.read(findingsPauseVisibleProvider);
 
-  /// `S` in der Pause: senden, wie die Anfrage ist.
+  /// Wahr, solange die Pause vor der ersten Freigabe während einer Störung
+  /// der Aufzeichnung steht (HUM-250). Die Pause mit offenen Funden kommt
+  /// zuerst; diese geht erst nach ihr auf und schließt sie dabei, beide
+  /// stehen nie zugleich.
+  bool _recorderPauseOpen() =>
+      !_editorShown() && ref.read(recorderPauseProvider).isOpen;
+
+  /// `S` in der Pause: senden, wie die Anfrage ist. In der Pause der
+  /// Aufzeichnung heißt das „Unaufgezeichnet senden" (HUM-250).
   void _sendAnyway() {
     _lockPressedKeys();
+    if (_recorderPauseOpen()) {
+      unawaited(ref.read(recorderPauseProvider.notifier).confirm());
+      return;
+    }
     unawaited(ref.read(interceptDecisionProvider.notifier).sendAnyway());
   }
 
@@ -448,7 +463,7 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
     // keine Pause offen ist; die Taste faellt dann an die Bindungen darunter.
     SendAnywayIntent: _ScreenAction<SendAnywayIntent>(
       active: ({required bool chord}) =>
-          _keysActive(chord: chord) && _pauseOpen(),
+          _keysActive(chord: chord) && (_pauseOpen() || _recorderPauseOpen()),
       onAct: (SendAnywayIntent intent) => _sendAnyway(),
     ),
     PseudonymizeIntent: _ScreenAction<PseudonymizeIntent>(
@@ -460,9 +475,11 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
     ),
     CloseFindingsPauseIntent: _ScreenAction<CloseFindingsPauseIntent>(
       active: ({required bool chord}) =>
-          _keysActive(chord: chord) && _pauseOpen(),
-      onAct: (CloseFindingsPauseIntent intent) =>
-          ref.read(openFindingsPauseProvider.notifier).close(),
+          _keysActive(chord: chord) && (_pauseOpen() || _recorderPauseOpen()),
+      onAct: (CloseFindingsPauseIntent intent) {
+        ref.read(openFindingsPauseProvider.notifier).close();
+        ref.read(recorderPauseProvider.notifier).close();
+      },
     ),
     AllowIntent: _DecisionAction<AllowIntent>(
       chord: (AllowIntent intent) => intent.chord,
@@ -574,6 +591,9 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
       ref.read(lastRefusalProvider.notifier).clear();
       // Die Pause gehoert zu der Anfrage, ueber der sie aufging (HUM-049).
       ref.read(openFindingsPauseProvider.notifier).close();
+      // Ebenso die Pause der Aufzeichnung, wenn sie eine einzelne Freigabe
+      // der alten Auswahl anhaelt; die eines Stapels bleibt (HUM-250).
+      ref.read(recorderPauseProvider.notifier).selectionMoved();
     });
     // Der Griff nach der Tastatur, wenn die Leitung zurückkommt.
     //

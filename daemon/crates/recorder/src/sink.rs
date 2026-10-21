@@ -26,8 +26,9 @@
 //! angefangener Antwortkörper spurlos: keine Zeile, kein `truncated`, kein
 //! Befund — und die Zusage „alles wird aufgezeichnet" wäre still gebrochen
 //! (`backlog/CONVENTIONS.md` 4.13). Weil `Drop` nichts zurückgeben kann, geht
-//! ein Fehler dort als [`Diagnostic`] in denselben Strom wie die Fehler des
-//! Schreib-Threads.
+//! ein Fehler dort als [`Diagnostic`](humanitl_core::Diagnostic) in denselben
+//! Strom wie die Fehler des Schreib-Threads, über denselben Melder: Ein toter
+//! Schreib-Thread meldet sich einmal, nicht je Mitschnitt (HUM-250).
 
 use std::fs::File;
 use std::io::Write as _;
@@ -35,12 +36,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use humanitl_core::{BodyRef, Diagnostic, FlowId, HeaderMap, SecretMasks};
+use humanitl_core::{BodyRef, FlowId, HeaderMap, SecretMasks};
 use sha2::{Digest as _, Sha256};
-use tokio::sync::broadcast;
 
 use crate::blob::BlobStore;
 use crate::error::{RecorderError, blob_failed};
+use crate::health::Reporter;
 use crate::message::{content_encoding_of, content_type_of, encode_headers};
 use crate::settings::RecorderSettings;
 use crate::types::Dir;
@@ -56,7 +57,7 @@ pub struct ResponseSink {
     dir: Dir,
     writer: Arc<WriterHandle>,
     blobs: Arc<BlobStore>,
-    diagnostics: broadcast::Sender<Diagnostic>,
+    diagnostics: Reporter,
     settings: RecorderSettings,
     headers_json: String,
     content_type: Option<String>,
@@ -102,7 +103,7 @@ impl Drop for ResponseSink {
                 why = %diagnostic.why,
                 "recorder lost a response body"
             );
-            let _ignored = self.diagnostics.send(diagnostic);
+            let _sent = self.diagnostics.report(diagnostic);
         }
     }
 }
@@ -115,7 +116,7 @@ impl ResponseSink {
         dir: Dir,
         writer: Arc<WriterHandle>,
         blobs: Arc<BlobStore>,
-        diagnostics: broadcast::Sender<Diagnostic>,
+        diagnostics: Reporter,
         settings: RecorderSettings,
         headers: &HeaderMap,
         masks: &SecretMasks,

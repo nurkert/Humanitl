@@ -25,6 +25,7 @@ import '../../../core/ipc/flow_events.dart';
 import '../../../l10n/l10n.dart';
 import '../../intercept/providers/decision.dart';
 import '../../intercept/providers/flows.dart';
+import '../../intercept/providers/recorder_health.dart';
 import '../../../core/domain/websocket.dart';
 import '../../tray/attention_text.dart';
 import '../../tray/desktop_ports.dart';
@@ -275,6 +276,13 @@ class _TrayHostState extends ConsumerState<TrayHost> {
       await _reveal(id);
       return;
     }
+    // Während einer Störung der Aufzeichnung hält die erste Freigabe der
+    // Sitzung an der Pause, die sagt, dass nichts davon in der History landet
+    // (HUM-250). Eine Meldung kann sie nicht zeigen: Das Fenster kommt auf
+    // der Anfrage nach vorn, mit der Pause schon offen.
+    if (decision is DecisionAllow && await _pausedForRecorder(id)) {
+      return;
+    }
     final AllowHold? hold = decision is DecisionAllow
         ? await _holdOf(id)
         : null;
@@ -308,12 +316,34 @@ class _TrayHostState extends ConsumerState<TrayHost> {
       await _reveal();
       return;
     }
+    // Die Störung kann begonnen haben, während das Detail unterwegs war;
+    // dann gilt, was oben für sie steht (HUM-250, Review).
+    if (decision is DecisionAllow && await _pausedForRecorder(id)) {
+      return;
+    }
     _attention.notificationAnswered();
     // No `reveal`: answering from the message is the whole point, and the
     // window stays where it is (HUM-034 acceptance).
     await ref
         .read(interceptDecisionProvider.notifier)
         .send(id, decision, flow: flow);
+  }
+
+  /// True, after bringing the window forward on [id] with the recorder pause
+  /// open, while the recording is disrupted and this session has not
+  /// confirmed that yet (HUM-250). A message cannot show the pause.
+  Future<bool> _pausedForRecorder(FlowId id) async {
+    if (!ref.read(recorderPauseProvider.notifier).owed) {
+      return false;
+    }
+    _attention.notificationAnswered();
+    await _reveal(id);
+    if (mounted) {
+      ref
+          .read(recorderPauseProvider.notifier)
+          .open(() => ref.read(interceptDecisionProvider.notifier).allow());
+    }
+    return true;
   }
 
   /// Why the request [id] may not be allowed from here, or null when it may.

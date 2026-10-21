@@ -1268,5 +1268,12 @@
   "setupFixChooseFolder": "Anderen Ordner wählen",
   "interceptRefusedRuleChanged": "Die Regel hat sich beim Halten geändert · gesendet wurde nichts, bitte erneut halten",
   "interceptBatchScrollToRead": "Bis zum Ende scrollen und alles lesen, dann bestätigen.",
-  "interceptRefusedRuleNotInView": "Erst die Regel unter den Knöpfen bis zum Ende scrollen · gesendet wurde nichts"
+  "interceptRefusedRuleNotInView": "Erst die Regel unter den Knöpfen bis zum Ende scrollen · gesendet wurde nichts",
+  "shellStatusRecorderDisrupted": "Aufzeichnung gestört",
+  "interceptCardNotRecorded": "Wird nicht aufgezeichnet: Die Aufzeichnung ist gestört, diese Anfrage und ihre Entscheidung fehlen später in der History.",
+  "interceptRecorderPauseTitle": "Die Aufzeichnung ist gestört",
+  "interceptRecorderPauseBody": "Was jetzt gesendet wird, hinterlässt keine Spur in der History. Einmal bestätigen, danach sendet diese Sitzung wie gewohnt.",
+  "interceptRecorderPauseSend": "Unaufgezeichnet senden",
+  "diagRECORDER005Title": "Aufzeichnung läuft wieder",
+  "diagRECORDER005Why": "Die Aufzeichnung schreibt wieder; was während der Störung geschah, fehlt in der History."
 }

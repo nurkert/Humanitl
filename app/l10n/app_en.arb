@@ -3144,5 +3144,19 @@
   "interceptBatchScrollToRead": "Scroll to the end to read everything before confirming.",
   "@interceptBatchScrollToRead": {"description": "Hint at the top of the confirmation modal while its body does not fit the window: the confirm button stays disabled until the body was scrolled to its end, so that the rule sentence and the paths were on screen in full (HUM-249)."},
   "interceptRefusedRuleNotInView": "Scroll the rule under the controls to its end first · nothing was sent",
-  "@interceptRefusedRuleNotInView": {"description": "Refusal line: a decision would save a rule whose sentence under the controls is longer than the room the bar gives it and was not scrolled to its end; nothing went and no rule was saved (HUM-249)."}
+  "@interceptRefusedRuleNotInView": {"description": "Refusal line: a decision would save a rule whose sentence under the controls is longer than the room the bar gives it and was not scrolled to its end; nothing went and no rule was saved (HUM-249)."},
+  "shellStatusRecorderDisrupted": "Recording disrupted",
+  "@shellStatusRecorderDisrupted": {"description": "Status bar, in red, while the daemon reports that the recording cannot write (RECORDER_001 or RECORDER_003 as a session finding) and until it reports RECORDER_005: nothing that is decided now ends up in the history (HUM-250)."},
+  "interceptCardNotRecorded": "Not being recorded: the recording is disrupted, so this request and its decision will be missing from the history.",
+  "@interceptCardNotRecorded": {"description": "Line on the request card while the recording is disrupted (HUM-250). Stands on every held request and on every request that arrived during the disruption; it goes away when the daemon reports that the recording writes again."},
+  "interceptRecorderPauseTitle": "The recording is disrupted",
+  "@interceptRecorderPauseTitle": {"description": "Title of the pause that stands in place of the decision controls before the first allow of a session while the recording is disrupted (HUM-250, docs/UX.md 5.4). Not a modal."},
+  "interceptRecorderPauseBody": "What you send now leaves no trace in the history. Confirm once, and sending works as usual for the rest of this session.",
+  "@interceptRecorderPauseBody": {"description": "Body of the recorder pause (HUM-250): names the consequence of sending while nothing is recorded and that the confirmation holds for the rest of the session."},
+  "interceptRecorderPauseSend": "Send unrecorded",
+  "@interceptRecorderPauseSend": {"description": "Button in the recorder pause that confirms for the session and carries out the allow that was stopped (HUM-250). Accepts only after the pause has stood for a moment, so a second Enter cannot skip it unread."},
+  "diagRECORDER005Title": "Recording works again",
+  "@diagRECORDER005Title": {"description": "Title of the diagnostic RECORDER_005 (docs/DIAGNOSTICS.md). Shown instead of the daemon's register title, which is German (DiagnosticL10n.resolve, HUM-052)."},
+  "diagRECORDER005Why": "The recording writes again; what happened while it was disrupted is missing from the history.",
+  "@diagRECORDER005Why": {"description": "Generic cause of RECORDER_005. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own; the daemon's measured sentence always wins there (docs/UX.md 4.4, HUM-052, HUM-250)."}
 }
